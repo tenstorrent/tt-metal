@@ -44,9 +44,9 @@ void HostBuffer::swap(HostBuffer& other) noexcept {
     swap(is_borrowed_, other.is_borrowed_);
 }
 
-tt::stl::Span<std::byte> HostBuffer::view_bytes() noexcept { return view_; }
+tt::stl::Span<std::byte> HostBuffer::view_bytes() & noexcept { return view_; }
 
-tt::stl::Span<const std::byte> HostBuffer::view_bytes() const noexcept { return view_; }
+tt::stl::Span<const std::byte> HostBuffer::view_bytes() const& noexcept { return view_; }
 
 bool HostBuffer::is_allocated() const { return pin_ != nullptr; }
 

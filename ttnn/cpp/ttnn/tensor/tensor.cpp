@@ -813,9 +813,11 @@ void memcpy(CommandQueue& queue, Tensor& dst, const Tensor& src, const std::opti
     TT_ASSERT(dst.get_layout() == src.get_layout());
 
     if (is_cpu_tensor(dst) && is_device_tensor(src)) {
-        memcpy(queue, host_buffer::get_host_buffer(dst).view_bytes().data(), src, region);
+        auto dst_buffer = host_buffer::get_host_buffer(dst);
+        memcpy(queue, dst_buffer.view_bytes().data(), src, region);
     } else if (is_device_tensor(dst) && is_cpu_tensor(src)) {
-        memcpy(queue, dst, host_buffer::get_host_buffer(src).view_bytes().data(), region);
+        auto src_buffer = host_buffer::get_host_buffer(src);
+        memcpy(queue, dst, src_buffer.view_bytes().data(), region);
     } else {
         TT_THROW("Unsupported memcpy");
     }
@@ -827,9 +829,11 @@ void memcpy(
     TT_ASSERT(dst.get_layout() == src.get_layout());
 
     if (is_cpu_tensor(dst) && is_device_tensor(src)) {
-        memcpy(queue, host_buffer::get_host_buffer(dst).view_bytes().data(), src, region);
+        auto dst_buffer = host_buffer::get_host_buffer(dst);
+        memcpy(queue, dst_buffer.view_bytes().data(), src, region);
     } else if (is_device_tensor(dst) && is_cpu_tensor(src)) {
-        memcpy(queue, dst, host_buffer::get_host_buffer(src).view_bytes().data(), region);
+        auto src_buffer = host_buffer::get_host_buffer(src);
+        memcpy(queue, dst, src_buffer.view_bytes().data(), region);
     } else {
         TT_THROW("Unsupported memcpy");
     }
@@ -925,7 +929,8 @@ void write_tensor(const Tensor& host_tensor, Tensor device_tensor, QueueId cq_id
                                     TT_ASSERT(
                                         host_storage.num_buffers() == 1,
                                         "Cannot copy multi-buffer host storage to a single device");
-                                    return host_storage.get_buffer(0).view_bytes().data();
+                                    auto buffer = host_storage.get_buffer(0);
+                                    return buffer.view_bytes().data();
                                 },
                                 [](auto&&) -> const void* { TT_THROW("Unreachable"); },
                             },

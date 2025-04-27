@@ -46,14 +46,22 @@ public:
     HostBuffer& operator=(HostBuffer&& other) noexcept;
     void swap(HostBuffer& other) noexcept;
 
-    tt::stl::Span<std::byte> view_bytes() noexcept;
-    tt::stl::Span<const std::byte> view_bytes() const noexcept;
+    tt::stl::Span<std::byte> view_bytes() & noexcept;
+    tt::stl::Span<const std::byte> view_bytes() const& noexcept;
+    tt::stl::Span<std::byte> view_bytes() && noexcept = delete;
+    tt::stl::Span<const std::byte> view_bytes() const&& noexcept = delete;
 
     template <typename T>
-    tt::stl::Span<T> view_as();
+    tt::stl::Span<T> view_as() &;
 
     template <typename T>
-    tt::stl::Span<const T> view_as() const;
+    tt::stl::Span<const T> view_as() const&;
+
+    template <typename T>
+    tt::stl::Span<T> view_as() && = delete;
+
+    template <typename T>
+    tt::stl::Span<const T> view_as() const&& = delete;
 
     // Returns true if the data buffer is allocated.
     bool is_allocated() const;
@@ -104,13 +112,13 @@ HostBuffer::HostBuffer(tt::stl::Span<T> borrowed_data, MemoryPin pin) :
     is_borrowed_(true) {}
 
 template <typename T>
-tt::stl::Span<T> HostBuffer::view_as() {
+tt::stl::Span<T> HostBuffer::view_as() & {
     TT_FATAL(type_info_ == &typeid(T), "Requested type T does not match the underlying buffer type.");
     return tt::stl::Span<T>(reinterpret_cast<T*>(view_.data()), view_.size() / sizeof(T));
 }
 
 template <typename T>
-tt::stl::Span<const T> HostBuffer::view_as() const {
+tt::stl::Span<const T> HostBuffer::view_as() const& {
     TT_FATAL(type_info_ == &typeid(T), "Requested type T does not match the underlying buffer type.");
     return tt::stl::Span<const T>(reinterpret_cast<const T*>(view_.data()), view_.size() / sizeof(T));
 }
