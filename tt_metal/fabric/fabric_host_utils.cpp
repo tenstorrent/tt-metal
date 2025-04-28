@@ -12,7 +12,7 @@
 #include <set>
 #include <vector>
 #include <algorithm>
-#include "tt_metal/fabric/fabric_routing_mode.h"
+#include "tt_metal/hostdevcommon/api/hostdevcommon/fabric_routing_mode.h"
 
 namespace tt::tt_fabric {
 

@@ -51,7 +51,7 @@
 #include <umd/device/tt_xy_pair.h>
 #include <umd/device/types/xy_pair.h>
 #include "utils.hpp"
-#include "tt_metal/fabric/fabric_routing_mode.h"
+#include "tt_metal/hostdevcommon/api/hostdevcommon/fabric_routing_mode.h"
 
 namespace tt {
 

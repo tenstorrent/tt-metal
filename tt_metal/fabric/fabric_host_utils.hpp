@@ -6,7 +6,7 @@
 
 #include <stdint.h>
 #include <tt-metalium/fabric_edm_types.hpp>
-#include "tt_metal/fabric/fabric_routing_mode.h"
+#include "tt_metal/hostdevcommon/api/hostdevcommon/fabric_routing_mode.h"
 #include <umd/device/types/cluster_descriptor_types.h>  // chip_id_t
 #include <set>
 #include <vector>
