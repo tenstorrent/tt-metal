@@ -425,8 +425,8 @@ def measure_op_accuracy_bf16(operation_name, dest_dir, group_size=None):
 
 
 def main(args):
-    dest_dir = "accuracy_results"
-    if not os.path.exists(dest_dir):
+    dest_dir = "accuracy_results/results/"
+    if not os.path.exists(dest_dir):  # TODO: Check if recursive
         os.makedirs(dest_dir)
 
     # Set numpy floating point warning to reduce stdout clutter
