@@ -10,7 +10,9 @@
 
 #include "debug/dprint.h"
 #include "dataflow_api.h"
+#if defined(COMPILE_FOR_ERISC)
 #include "tt_metal/hw/inc/ethernet/tunneling.h"
+#endif
 #include "tt_metal/hw/inc/utils/utils.h"
 #include "risc_attribs.h"
 #include "fabric_edm_packet_header.hpp"
@@ -79,9 +81,11 @@ public:
 
     [[nodiscard]] FORCE_INLINE size_t get_id() const { return this->channel_id; }
 
+#if defined(COMPILE_FOR_ERISC)
     [[nodiscard]] FORCE_INLINE bool eth_is_acked_or_completed(const BufferIndex& buffer_index) const {
         return eth_is_receiver_channel_send_acked(buffer_index) || eth_is_receiver_channel_send_done(buffer_index);
     }
+#endif
 
     FORCE_INLINE bool needs_to_send_channel_sync() const { return this->need_to_send_channel_sync; }
 
