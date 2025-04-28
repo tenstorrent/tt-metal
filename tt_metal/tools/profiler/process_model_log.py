@@ -21,7 +21,7 @@ def get_latest_ops_log_filename(output_logs_subdir):
     return filename
 
 
-def post_process_ops_log(output_logs_subdir, columns, sum_vals=True, op_name="", has_signposts=False):
+def post_process_ops_log(output_logs_subdir, columns=None, sum_vals=True, op_name="", has_signposts=False):
     filename = get_latest_ops_log_filename(output_logs_subdir)
     df = pd.read_csv(filename)
 
@@ -35,12 +35,18 @@ def post_process_ops_log(output_logs_subdir, columns, sum_vals=True, op_name="",
         df = df[df["OP CODE"] == op_name]
 
     results = {}
-    for col in columns:
-        df_filtered = df[df[col] != "-"]
-        if sum_vals:
-            results[col] = df_filtered[col].astype(float).sum()
-        else:
-            results[col] = df_filtered[col].astype(float).to_numpy()
+    if columns:
+        assert (
+            type(columns) == list
+        ), f"Bad columns name type, requested columns should be of type list but {type(columns)} was provided"
+        for col in columns:
+            df_filtered = df[df[col] != "-"]
+            if sum_vals:
+                results[col] = df_filtered[col].astype(float).sum()
+            else:
+                results[col] = df_filtered[col].astype(float).to_numpy()
+    else:
+        results = df
     return results
 
 
