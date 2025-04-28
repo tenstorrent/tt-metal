@@ -63,8 +63,8 @@ test_bounds = {
             "riscv_0": {"latency": {"lower": 400, "upper": 500}, "bandwidth": 0.30},
         },
         3: {
-            "riscv_1": {"latency": {"lower": 42000, "upper": 44000}, "bandwidth": 9},
-            "riscv_0": {"latency": {"lower": 42000, "upper": 43000}, "bandwidth": 16},
+            "riscv_1": {"latency": {"lower": 42000, "upper": 44000}, "bandwidth": 33},
+            "riscv_0": {"latency": {"lower": 42000, "upper": 43000}, "bandwidth": 34},
         },
         4: {
             "riscv_1": {"latency": {"lower": 4000, "upper": 12000}, "bandwidth": 0.007},
