@@ -120,7 +120,7 @@ TEST_F(CrossEntropyForwardTest, CrossEntropyForward_Batch) {
     const auto shape = ttnn::SmallVector<uint32_t>{N, C, H, W};
 
     std::random_device rd;
-    std::mt19937 gen(rd());  // or fixed seed: std::mt19937 gen(42);
+    std::mt19937 gen(42);
     xt::xarray<float> input_tensor = xt::random::rand<float>({N, C, H, W}, -10.0F, 10.0F, gen);
     xt::xarray<uint32_t> target_tensor = xt::zeros<uint32_t>({N, H});
 
@@ -164,7 +164,7 @@ TEST_F(CrossEntropyForwardTest, CrossEntropyForward_Large_Batch) {
     const auto shape = ttnn::SmallVector<uint32_t>{N, C, H, W};
 
     std::random_device rd;
-    std::mt19937 gen(rd());  // or fixed seed: std::mt19937 gen(42);
+    std::mt19937 gen(42);
     xt::xarray<float> input_tensor = xt::random::rand<float>({N, C, H, W}, -10.0F, 10.0F, gen);
     xt::xarray<uint32_t> target_tensor = xt::zeros<uint32_t>({N, H});
 
@@ -207,7 +207,7 @@ TEST_F(CrossEntropyForwardTest, CrossEntropyForward_Large_Forward) {
     const auto shape = ttnn::SmallVector<size_t>{N, C, H, W};
 
     std::random_device rd;
-    std::mt19937 gen(rd());  // or fixed seed: std::mt19937 gen(42);
+    std::mt19937 gen(42);
     xt::xarray<float> input_tensor = xt::random::rand<float>({N, C, H, W}, -10.0F, 10.0F, gen);
     xt::xarray<uint32_t> target_tensor = xt::zeros<uint32_t>({N, H});
 
@@ -250,7 +250,7 @@ TEST_F(CrossEntropyForwardTest, CrossEntropyForward_Huge_Forward) {
     const auto shape = ttnn::SmallVector<size_t>{N, C, H, W};
 
     std::random_device rd;
-    std::mt19937 gen(rd());  // or fixed seed: std::mt19937 gen(42);
+    std::mt19937 gen(42);
     xt::xarray<float> input_tensor = xt::random::rand<float>({N, C, H, W}, -10.0F, 10.0F, gen);
     xt::xarray<uint32_t> target_tensor = xt::zeros<uint32_t>({N, H});
 

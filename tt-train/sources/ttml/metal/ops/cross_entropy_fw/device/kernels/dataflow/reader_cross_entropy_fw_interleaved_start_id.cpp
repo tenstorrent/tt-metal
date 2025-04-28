@@ -26,14 +26,9 @@ float bfloat16_to_float(uint16_t bf16_bits) {
 
 // calculate page and offset for target indexes
 std::pair<uint32_t, uint32_t> get_page_and_offset(uint32_t tiled_row, uint32_t tiled_H) {
-    // tasks number = N * C * (H / 32)
-    // tiled_row = start_row + i
-    // tiled_H = (H + 31) / 32
-    // tiled_row -> [0, tasks_number)
     uint32_t n = tiled_row / tiled_H;
     uint32_t h = (tiled_row % tiled_H) * 32;
 
-    // real_page_size = H * sizeof(uint32_t)
     uint32_t page = n;
     uint32_t offset = h * sizeof(uint32_t);
     return {page, offset};

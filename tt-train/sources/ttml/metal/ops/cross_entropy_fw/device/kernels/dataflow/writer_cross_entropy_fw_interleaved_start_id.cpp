@@ -26,12 +26,11 @@ void kernel_main() {
     uint32_t end_row = start_row + num_rows_to_process;
 
     for (uint32_t r = start_row; r < end_row; r++) {
-        cb_wait_front(cb_output_idx, onetile);                // wait until cb has block_size tiles(1 tile)
-        uint32_t l1_read_addr = get_read_ptr(cb_output_idx);  // get the address output buffer
+        cb_wait_front(cb_output_idx, onetile);
+        uint32_t l1_read_addr = get_read_ptr(cb_output_idx);
 
-        // write block_size tiles to output buffer
-        noc_async_write_tile(r, output_addr_generator, l1_read_addr);  // write the tile to the output buffer
-        noc_async_write_barrier();                                     // wait until all tiles are written
-        cb_pop_front(cb_output_idx, onetile);                          // pop the tiles from the cb
+        noc_async_write_tile(r, output_addr_generator, l1_read_addr);
+        noc_async_write_barrier();
+        cb_pop_front(cb_output_idx, onetile);
     }
 }

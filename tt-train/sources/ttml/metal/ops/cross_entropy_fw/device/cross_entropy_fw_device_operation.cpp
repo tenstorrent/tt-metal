@@ -26,40 +26,37 @@ void CrossEntropyForwardDeviceOperation::validate_on_program_cache_miss(
                            const tt::tt_metal::DataType required_dtype) {
         TT_FATAL(
             tensor.device()->arch() == tt::ARCH::WORMHOLE_B0,
-            "CrossEntropyForward operation is only supported on Wormhole. Device arch: {}. Tensor name {}",
+            "CrossEntropyForward operation is only supported on Wormhole. Device arch: {}. Tensor name: {}",
             magic_enum::enum_name(tensor.device()->arch()),
             name);
 
         TT_FATAL(
             tensor.storage_type() == tt::tt_metal::StorageType::DEVICE,
-            "CrossEntropyForward operation requires {} to be on Device. Input storage type: {}",
+            "CrossEntropyForward operation requires '{}' to be on DEVICE. Got storage type: '{}'",
             name,
-            static_cast<int>(tensor.storage_type()));
+            magic_enum::enum_name(tensor.storage_type()));
 
-        TT_FATAL(
-            tensor.buffer() != nullptr,
-            "Operands to CrossEntropyForward need to be allocated in buffers on the device. Buffer is null. Tensor "
-            "name {}",
-            name);
+        TT_FATAL(tensor.buffer() != nullptr, "Tensor '{}' must be allocated on device (buffer is null).", name);
 
         TT_FATAL(
             tensor.get_layout() == required_layout,
-            "CrossEntropyForward operation requires tensor to be in Tile layout. {} tensor layout: {}",
+            "Tensor '{}' must have layout '{}', but got '{}'",
             name,
-            static_cast<int>(tensor.get_layout()));
+            magic_enum::enum_name(required_layout),
+            magic_enum::enum_name(tensor.get_layout()));
 
         TT_FATAL(
             tensor.get_dtype() == required_dtype,
-            "CrossEntropyForward operation requires tensor to be of BFLOAT16 data type. {} tensor data type: {}",
+            "Tensor '{}' must have data type '{}', but got '{}'",
             name,
-            static_cast<int>(tensor.get_dtype()));
+            magic_enum::enum_name(required_dtype),
+            magic_enum::enum_name(tensor.get_dtype()));
 
         TT_FATAL(
             tensor.memory_config().memory_layout == ttnn::TensorMemoryLayout::INTERLEAVED,
-            "CrossEntropyForward operation requires Interleaved memory layout. {} "
-            "memory layout: `{}`",
+            "Tensor '{}' must use INTERLEAVED memory layout, but got '{}'",
             name,
-            static_cast<int>(tensor.memory_config().memory_layout));
+            magic_enum::enum_name(tensor.memory_config().memory_layout));
     };
 
     const auto& input_tensor = tensor_args.input;
@@ -82,7 +79,7 @@ CrossEntropyForwardDeviceOperation::spec_return_value_t CrossEntropyForwardDevic
         return tensor_args.preallocated_output->get_tensor_spec();
     }
     auto input_logical_shape = tensor_args.input.get_logical_shape();
-    input_logical_shape[-1] = 1;
+    input_logical_shape[-1] = 1U;
     return ttnn::TensorSpec(
         ttnn::Shape(input_logical_shape),
         tt::tt_metal::TensorLayout(
@@ -109,7 +106,7 @@ tt::stl::hash::hash_t CrossEntropyForwardDeviceOperation::compute_program_hash(
     const auto& input_tensor = tensor_args.input;
     const auto& input_logical_shape = input_tensor.get_logical_shape();
     auto program_factory = select_program_factory(args, tensor_args);
-    tt::tt_metal::operation::Hash hash = tt::tt_metal::operation::hash_operation<CrossEntropyForwardDeviceOperation>(
+    auto hash = tt::tt_metal::operation::hash_operation<CrossEntropyForwardDeviceOperation>(
         args, program_factory.index(), input_tensor.dtype(), input_logical_shape);
 
     return hash;

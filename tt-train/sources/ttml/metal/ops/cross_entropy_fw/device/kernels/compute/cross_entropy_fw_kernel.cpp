@@ -71,8 +71,9 @@ void find_max_value_in_row() {
                 // mask tile currently does not work for mask register that is not next to data register
                 const uint32_t mask_register = working_register + 1U;  // mask register should be next to data register
 
-                // NEXT 4 LINES ARE IMPORTANT AS WE FLASH WHAT IS INSIDE TRASH PADDING. IT CAN HAPPEN THAT VALUE INSIDE
-                // IS NAN, SO NAN+(-INF)=NAN AND NOT -INF AS WE EXPECTED. AS WELL AS -INF * 0 = NAN
+                // the next 4 lines are important because we overwrite what's in the trash padding.
+                // it's possible that the padding contains a NaN, and operations like NaN + (-inf) = NaN,
+                // instead of the expected -inf. similarly, -inf * 0 = NaN.
                 copy_tile_init(cb_mask);
                 copy_tile(cb_mask, /* tile_idx */ 0, /* register idx */ mask_register);
                 mask_tile_init();
@@ -121,8 +122,9 @@ void find_max_value_in_row() {
                     const uint32_t mask_register =
                         working_register + 1U;  // mask register should be next to data register
 
-                    // NEXT 4 LINES ARE IMPORTANT AS WE FLASH WHAT IS INSIDE TRASH PADDING. IT CAN HAPPEN THAT VALUE
-                    // INSIDE IS NAN, SO NAN+(-INF)=NAN AND NOT -INF AS WE EXPECTED. AS WELL AS -INF * 0 = NAN
+                    // the next 4 lines are important because we overwrite what's in the trash padding.
+                    // it's possible that the padding contains a NaN, and operations like NaN + (-inf) = NaN,
+                    // instead of the expected -inf. similarly, -inf * 0 = NaN.
                     copy_tile_init(cb_mask);
                     copy_tile(cb_mask, /* tile_idx */ 0, /* register idx */ mask_register);
                     mask_tile_init();
