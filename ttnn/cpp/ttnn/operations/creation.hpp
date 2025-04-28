@@ -262,7 +262,7 @@ inline ttnn::Tensor full_like_impl(
                                                               : dtype.value_or(tensor.get_dtype());
     auto arch = tensor.device()->arch();
     bool is_TILE = (tensor.get_layout() == Layout::TILE) && (layout_value == Layout::TILE);
-    if (ttnn::is_tensor_on_device_or_multidevice(tensor)) {
+    if (tt::tt_metal::is_device_tensor(tensor)) {
         // requires reference tensor to be in TILE for device operation fill - this will be changed later
         if (is_TILE &&
             (dtype_value == DataType::BFLOAT8_B || dtype_value == DataType::BFLOAT16 ||

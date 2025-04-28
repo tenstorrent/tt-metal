@@ -238,8 +238,6 @@ public:
     //                                      Extra Helper Functions
     // ======================================================================================
     StorageType storage_type() const;
-    bool is_host_tensor() const;
-    bool is_device_tensor() const;
     ttnn::Shape strides() const;
     uint32_t volume() const;
 

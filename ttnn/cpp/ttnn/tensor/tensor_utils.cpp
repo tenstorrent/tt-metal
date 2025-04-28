@@ -13,7 +13,6 @@
 #include <tracy/Tracy.hpp>
 
 namespace tt {
-
 namespace tt_metal {
 
 ttnn::Shape infer_dims_for_reshape(const Tensor& tensor, tt::stl::Span<const int32_t> shape) {
@@ -60,17 +59,48 @@ ttnn::Shape infer_dims_for_reshape(const Tensor& tensor, tt::stl::Span<const int
     return ttnn::Shape(std::move(new_shape));
 }
 
+int compute_flat_indices(tt::stl::Span<const int> indices, tt::stl::Span<const uint32_t> strides) {
+    int flat_index = 0;
+    for (auto i = 0; i < indices.size(); i++) {
+        flat_index += indices[i] * strides[i];
+    }
+    return flat_index;
+};
+
+std::size_t compute_buffer_size(const ttnn::Shape& shape, DataType data_type, const Tile& tile) {
+    const size_t volume = shape.volume();
+    auto tile_hw = tile.get_tile_hw();
+    if (data_type == DataType::BFLOAT8_B) {
+        auto tile_size_bytes = tile.get_tile_size(DataFormat::Bfp8_b);
+        TT_ASSERT(volume % tile_hw == 0);
+        const auto bfloat8_b_volume = volume / tile_hw * tile_size_bytes;
+        TT_ASSERT(volume % sizeof(std::uint32_t) == 0);
+        return bfloat8_b_volume / sizeof(std::uint32_t);
+    }
+    if (data_type == DataType::BFLOAT4_B) {
+        auto tile_size_bytes = tile.get_tile_size(DataFormat::Bfp4_b);
+        TT_ASSERT(volume % tile_hw == 0);
+        const auto bfloat4_b_volume = volume / tile_hw * tile_size_bytes;
+        TT_ASSERT(volume % sizeof(std::uint32_t) == 0);
+        return bfloat4_b_volume / sizeof(std::uint32_t);
+    }
+    return volume;
+}
+
 bool is_arch_gs(const tt::ARCH& arch) { return arch == tt::ARCH::GRAYSKULL; }
 
 bool is_arch_whb0(const tt::ARCH& arch) { return arch == tt::ARCH::WORMHOLE_B0; }
 
 bool is_cpu_tensor(const Tensor& tensor) { return tensor.storage_type() == StorageType::HOST; }
 
+bool is_multi_device_host_tensor(const Tensor& tensor) {
+    return tensor.storage_type() == StorageType::MULTI_DEVICE_HOST;
+}
+
 bool is_device_tensor(const Tensor& tensor) { return tensor.storage_type() == StorageType::DEVICE; }
 
 Tensor transform(const Tensor& tensor, const std::function<Tensor(const Tensor&)>& transform_func) {
-    TT_FATAL(
-        ttnn::distributed::is_multi_device_host_tensor(tensor), "transform only supports multi-device host tensors");
+    TT_FATAL(is_multi_device_host_tensor(tensor), "transform only supports multi-device host tensors");
     auto input_tensors = ttnn::distributed::get_device_tensors(tensor);
     std::vector<Tensor> output_tensors;
     output_tensors.reserve(input_tensors.size());
@@ -83,7 +113,7 @@ Tensor transform(const Tensor& tensor, const std::function<Tensor(const Tensor&)
 }
 
 void apply(const Tensor& tensor, const std::function<void(const Tensor&)>& callable) {
-    TT_FATAL(ttnn::distributed::is_multi_device_host_tensor(tensor), "apply only supports multi-device host tensors");
+    TT_FATAL(is_multi_device_host_tensor(tensor), "apply only supports multi-device host tensors");
     auto input_tensors = ttnn::distributed::get_device_tensors(tensor);
     for (const auto& device_tensor : input_tensors) {
         callable(device_tensor);
