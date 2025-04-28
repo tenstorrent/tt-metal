@@ -177,14 +177,13 @@ void MAIN {
 
                     /* QK -= cb_cur_max */
                     /* QK = exp(QK)*/
-                    sub_exp_block_bcast_cols_inplace<cb_qk_im, Sq_chunk_t, Sk_chunk_t>(alias_cur_max);
+                    sub_exp_block_bcast_cols_inplace<cb_qk_im, Sq_chunk_t, Sk_chunk_t>(alias_cur_max, alias_cur_sum);
 
                     /* cb_cur_sum = sum(cb_qk_im, dim=-1) */
                     /**
                      * DEBUG: Use matml_reduce instead of reduce_sum for 6µs speedup. Still experimental, not robust.
                      * matmul_reduce has a hardcoded matmul config for the performance test case shapes.
                      */
-                    matmul_reduce<cb_qk_im, cb_col_identity, Sq_chunk_t, Sk_chunk_t>(alias_cur_sum);
 
                     // reduce_c<
                     //     PoolType::SUM,
@@ -221,11 +220,11 @@ void MAIN {
                         cb_pop_front(alias_prev_max, Sq_chunk_t);
 
                         /* cb_prev_sum *= cb_exp_max_diff */
-                        mul_block_inplace(alias_prev_sum, cb_exp_max_diff, Sq_chunk_t);
+                        mul_block_bcast_cols_inplace(alias_prev_sum, cb_exp_max_diff, Sq_chunk_t);
                         /* cb_cur_sum += cb_prev_sum */
                         add_block_inplace(alias_cur_sum, alias_prev_sum, Sq_chunk_t);
 
-                        mul_block_bcast_cols_inplace<Sq_chunk_t, DHt>(
+                        mul_block_bcast_cols<Sq_chunk_t, DHt>(
                             alias_mm2_prev_out, cb_exp_max_diff, alias_mm2_cur_out, true);
                     }
 
@@ -235,13 +234,15 @@ void MAIN {
                     std::swap(alias_prev_max, alias_cur_max);
                 }
 
+                matmul_reduce<cb_qk_im, cb_col_identity, Sq_chunk_t, Sk_chunk_t>(alias_prev_sum);
+
                 /* cb_cur_sum = 1.0 / cb_cur_sum */
                 recip_block_inplace(alias_prev_sum, Sq_chunk_t);
 
                 /* cb_out_accumulate_im *= cb_cur_sum */
                 // NOTE: PCC bug if we modify below function to directy output to cb_out.
                 pack_reconfig_data_format(cb_out);
-                mul_block_bcast_cols_inplace<Sq_chunk_t, DHt>(alias_mm2_prev_out, alias_prev_sum, cb_out, false);
+                mul_block_bcast_cols<Sq_chunk_t, DHt>(alias_mm2_prev_out, alias_prev_sum, cb_out, false);
 
                 cb_pop_front(cb_q_in, q_chunk_tiles);
                 // free up cb_prev_max after K chunks
