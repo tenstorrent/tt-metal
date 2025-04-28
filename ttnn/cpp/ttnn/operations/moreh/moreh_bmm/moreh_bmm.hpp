@@ -19,6 +19,5 @@ struct MorehBMM {
 }  // namespace ttnn::operations::moreh::moreh_bmm
 
 namespace ttnn {
-constexpr auto moreh_bmm =
-    ttnn::register_operation_with_auto_launch_op<"ttnn::moreh_bmm", ttnn::operations::moreh::moreh_bmm::MorehBMM>();
+constexpr auto moreh_bmm = ttnn::register_operation<"ttnn::moreh_bmm", ttnn::operations::moreh::moreh_bmm::MorehBMM>();
 }  // namespace ttnn

@@ -24,8 +24,7 @@ struct ExecutePrefixScan {
 
 namespace ttnn::experimental {
 
-constexpr auto prefix_scan = ttnn::register_operation_with_auto_launch_op<
-    "ttnn::experimental::prefix_scan",
-    ttnn::operations::experimental::ssm::ExecutePrefixScan>();
+constexpr auto prefix_scan = ttnn::
+    register_operation<"ttnn::experimental::prefix_scan", ttnn::operations::experimental::ssm::ExecutePrefixScan>();
 
 }  // namespace ttnn::experimental

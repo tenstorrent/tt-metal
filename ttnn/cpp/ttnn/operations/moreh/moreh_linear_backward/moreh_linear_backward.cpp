@@ -180,29 +180,4 @@ std::vector<std::optional<Tensor>> MorehLinearBackward::invoke(
     return result;
 }
 
-OptionalTensors MorehLinearBackward::create_async_optional_output_tensors(
-    const Tensor& output_grad,
-    const Tensor& input,
-    const Tensor& weight,
-    const std::vector<bool>& are_required_outputs,
-    const std::optional<Tensor>& bias,
-    const std::optional<Tensor>& input_grad,
-    const std::optional<Tensor>& weight_grad,
-    const std::optional<Tensor>& bias_grad,
-    const std::optional<ttnn::MemoryConfig>& input_grad_memory_config,
-    const std::optional<ttnn::MemoryConfig>& weight_grad_memory_config,
-    const std::optional<ttnn::MemoryConfig>& bias_grad_memory_config,
-    const DeviceComputeKernelConfig compute_kernel_config) {
-    return {
-        are_required_outputs.at(0)
-            ? std::optional<Tensor>(operation::get_workers_for_op_output({output_grad, input, weight}))
-            : std::nullopt,
-        are_required_outputs.at(1)
-            ? std::optional<Tensor>(operation::get_workers_for_op_output({output_grad, input, weight}))
-            : std::nullopt,
-        are_required_outputs.at(2)
-            ? std::optional<Tensor>(operation::get_workers_for_op_output({output_grad, input, weight}))
-            : std::nullopt};
-}
-
 }  // namespace ttnn::operations::moreh::moreh_linear_backward

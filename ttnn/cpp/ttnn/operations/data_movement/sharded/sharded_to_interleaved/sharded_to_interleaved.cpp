@@ -19,7 +19,6 @@ ttnn::Tensor ShardedToInterleavedOperation::invoke(
         return input_tensor;
     }
 
-    std::vector<Tensor> output_tensors = {Tensor(tt::tt_metal::operation::get_workers_for_op_output({input_tensor}))};
     auto shard_spec = input_tensor.shard_spec().value();
     return tt::tt_metal::operation::run(
                ShardedToInterleavedDeviceOperation{
