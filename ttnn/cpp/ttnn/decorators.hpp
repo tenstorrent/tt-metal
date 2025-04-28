@@ -240,16 +240,8 @@ constexpr auto register_operation() {
     return register_operation_impl<cpp_fully_qualified_name, operation_t>();
 }
 
-// TODO: This can just get replaced with register_operation(), but opting to defer this until after the migration
-// to minimize blast radius.
-template <reflect::fixed_string cpp_fully_qualified_name, typename operation_t>
-constexpr auto register_operation_with_auto_launch_op() {
-    return register_operation_impl<cpp_fully_qualified_name, operation_t>();
-}
-
 }  // namespace decorators
 
 using ttnn::decorators::register_operation;
-using ttnn::decorators::register_operation_with_auto_launch_op;
 
 }  // namespace ttnn
