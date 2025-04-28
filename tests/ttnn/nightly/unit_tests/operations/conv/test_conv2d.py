@@ -3495,3 +3495,86 @@ def test_conv_sharded_non_tile(device):
 
     passing, _ = check_with_pcc_without_tensor_printout(torch_output_tensor, torch_out_golden_tensor, pcc=0.99)
     assert passing
+
+
+@pytest.mark.parametrize("enable_act_double_buffer", [True, False])
+@pytest.mark.parametrize("enable_split_reader", [True, False])
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
+def test_segformer_channel_padding(device, enable_act_double_buffer, enable_split_reader):
+    if device.core_grid.y != 8 and is_wormhole_b0():
+        pytest.skip("Needs 8x8 grid for wormhole_b0")
+
+    patch_size = 7
+    stride = 4
+    num_channels = 3
+    hidden_size = 32
+    batch_size = 1
+    height = 512
+    width = 512
+    torch.manual_seed(20250416)
+    torch_input_tensor = torch.randn(batch_size, num_channels, height, width)
+
+    torch_weights = torch.randn((hidden_size, num_channels, patch_size, patch_size), dtype=torch.bfloat16).float()
+    torch_bias = torch.randn((1, 1, 1, hidden_size), dtype=torch.bfloat16).float()
+
+    torch_output_tensor = (
+        torch.nn.functional.conv2d(
+            torch_input_tensor,
+            torch_weights,
+            bias=torch_bias.reshape(-1),
+            stride=(stride, stride),
+            padding=(patch_size // 2, patch_size // 2),
+            dilation=(1, 1),
+            groups=1,
+        )
+        .flatten(start_dim=2, end_dim=3)
+        .transpose(1, 2)
+    )
+
+    torch_input_tensor = torch.permute(torch_input_tensor, (0, 2, 3, 1))
+    ttnn_input_tensor = ttnn.from_torch(
+        torch_input_tensor,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+    )
+
+    ttnn_weights = ttnn.from_torch(
+        torch_weights,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+    )
+    ttnn_bias = ttnn.from_torch(
+        torch_bias,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+    )
+
+    conv_config = ttnn.Conv2dConfig(
+        dtype=ttnn.bfloat8_b,
+        shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        enable_act_double_buffer=enable_act_double_buffer,
+        enable_split_reader=enable_split_reader,
+        input_channels_alignment=8,
+    )
+
+    ttnn_output_tensor = ttnn.conv2d(
+        input_tensor=ttnn_input_tensor,
+        weight_tensor=ttnn_weights,
+        bias_tensor=ttnn_bias,
+        in_channels=num_channels,
+        out_channels=hidden_size,
+        batch_size=batch_size,
+        input_height=height,
+        input_width=width,
+        kernel_size=(patch_size, patch_size),
+        stride=(stride, stride),
+        device=device,
+        padding=(patch_size // 2, patch_size // 2),
+        conv_config=conv_config,
+    )
+    ttnn_output_tensor = ttnn.to_torch(ttnn_output_tensor)
+
+    _, pcc_message = assert_with_pcc(torch_output_tensor, ttnn_output_tensor[0], pcc=0.99)
+    print(pcc_message)
