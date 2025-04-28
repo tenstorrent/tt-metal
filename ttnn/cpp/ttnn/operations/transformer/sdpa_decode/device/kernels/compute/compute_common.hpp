@@ -383,8 +383,5 @@ ALWI void cb_matmul_blocks(
         }
         in0_index_offset += subblock_h * in0_block_w;
     }
-#ifndef BLACKHOLE
-    cb_pop_front(in0_cb, M * K);  // #19201 BH hang workaround
-#endif
     cb_pop_front(in1_cb, K * N);
 }
