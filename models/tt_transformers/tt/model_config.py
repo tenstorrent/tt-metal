@@ -744,6 +744,14 @@ class ModelArgs:
                 use_height_and_width_as_shard_shape=True,
             )
 
+            self.model_config["CREATE_QKV_DECODE_SHARD"] = ttnn.create_sharded_memory_config(
+                shape=(32, 128),
+                core_grid=ttnn.CoreGrid(y=4, x=8),
+                strategy=ttnn.ShardStrategy.HEIGHT,
+                orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                use_height_and_width_as_shard_shape=True,
+            )
+
             self.model_config["SDPA_DECODE_PROGCFG"] = ttnn.SDPAProgramConfig(
                 compute_with_storage_grid_size=(8, 8),
                 exp_approx_mode=False,

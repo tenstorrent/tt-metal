@@ -52,6 +52,7 @@ class Attention(LightweightModule):
         self.n_local_heads = self.n_heads // self.num_devices_per_group
         self.n_local_kv_heads = self.n_kv_heads // self.num_devices_per_group
 
+        self.arch_name = configuration.arch_name
         # TODO: Fix this once all-gather supports < tile_size
         if self.TG:
             weight = torch.zeros(1, 32, 8, 32)
@@ -396,6 +397,7 @@ class Attention(LightweightModule):
             xqkv_fused,
             num_heads=self.n_local_heads,
             num_kv_heads=self.n_local_kv_heads,
+            # memory_config=self.model_config["CREATE_QKV_DECODE_SHARD"] if self.arch_name == "blackhole" else ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG,
             memory_config=ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG,
         )
 
