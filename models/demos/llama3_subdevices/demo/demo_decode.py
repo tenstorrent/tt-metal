@@ -472,10 +472,11 @@ def run_llama3_demo(
             #         text = text.replace("\n", " ")
             #         logger.info("[User {}] {}".format(user, text))
 
-        # Always print perf at every iteration
-        logger.info(
-            f"Iteration {iteration}: {1000*iteration_time:.0f}ms @ {tokens_per_second_per_user:.1f} tok/s/user ({batch_size*tokens_per_second_per_user:.1f} tok/s throughput)"
-        )
+        if not is_ci_env or iteration % 1000 == 0:
+            # Always print perf at every iteration if not in CI
+            logger.info(
+                f"Iteration {iteration}: {1000*iteration_time:.0f}ms @ {tokens_per_second_per_user:.1f} tok/s/user ({batch_size*tokens_per_second_per_user:.1f} tok/s throughput)"
+            )
 
         if is_ci_env and iteration == 127:
             tokens_per_second_per_user_token127 = tokens_per_second_per_user
