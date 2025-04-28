@@ -146,6 +146,7 @@ class Conv:
         shard_layout=None,
         activation="",
         deallocate_activation=False,
+        activation_dtype=ttnn.bfloat8_b,
     ):
         self.enable_identity = enable_identity
         self.enable_act = enable_act
@@ -163,6 +164,7 @@ class Conv:
             shard_layout=shard_layout,
             activation=activation,
             deallocate_activation=deallocate_activation,
+            activation_dtype=activation_dtype,
         )
 
     def __call__(self, x):
