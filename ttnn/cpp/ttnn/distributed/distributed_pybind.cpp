@@ -231,17 +231,6 @@ void py_module(py::module& module) {
                Arch: The arch of the first device in the device mesh.
        )doc")
         .def(
-            "enable_async",
-            &MeshDevice::enable_async,
-            py::arg("enable"),
-            R"doc(
-               Enable or disable async mode across all devices in the mesh.
-
-
-               Args:
-                   enable (bool): True to enable async mode, False to disable it.
-           )doc")
-        .def(
             "enable_program_cache",
             &MeshDevice::enable_program_cache,
             R"doc(

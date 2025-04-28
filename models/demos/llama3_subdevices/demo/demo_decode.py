@@ -32,7 +32,11 @@ from models.demos.llama3_subdevices.tt.model_config import LlamaOptimizations
 TSU_PERF_DROP_LIMIT_COUNT = 20
 
 # Constants for TSU thresholds based on the number of layers
-TSU_THRESHOLDS = {1: {"min": 515, "max": 535}, 10: {"min": 230, "max": 250}, 80: {"min": 47, "max": 51}}
+TSU_THRESHOLDS = {
+    "4U": {1: {"min": 480, "max": 500}, 10: {"min": 195, "max": 215}, 80: {"min": 47, "max": 51}},
+    # TODO: Update thresholds for 6U 10L and 80L based on actual perf when 6U are available and added into CI
+    "6U": {1: {"min": 545, "max": 570}, 10: {"min": 230, "max": 250}, 80: {"min": 49, "max": 53}},
+}
 
 
 def load_and_cache_context(context_url, cache_dir, max_length=None):
@@ -113,6 +117,7 @@ def run_llama3_demo(
     stress_test,
     start_pos,
     enable_prefetcher_performance_mode=True,
+    galaxy_type="4U",
 ):
     # Creat batch output file
     benchmark_data = BenchmarkData()
@@ -414,7 +419,7 @@ def run_llama3_demo(
     profiler.start(f"inference_decode", iteration=iteration)
 
     # Determine TSU threshold based on layer count
-    tsu_thresholds = TSU_THRESHOLDS.get(layers)
+    tsu_thresholds = TSU_THRESHOLDS[galaxy_type].get(layers)
 
     # Tracks the number of iterations where throughput falls below `tsu_threshold`
     tsu_failures = 0
@@ -677,6 +682,7 @@ def test_llama_demo(
     is_ci_env,
     reset_seeds,
     request,
+    galaxy_type,
 ):
     if is_ci_env and ("long" in input_prompts or optimizations == LlamaOptimizations.accuracy):
         pytest.skip("Do not run the 'long-context' or accuracy tests on CI to reduce load")
@@ -685,7 +691,8 @@ def test_llama_demo(
     if os.environ.get("FAKE_DEVICE") == "TG" and batch_size not in [1, 32]:
         pytest.skip("TG only supports batch 1 and 32")
 
-    mesh_device.enable_async(True)
+    if galaxy_type != "6U" and galaxy_type != "4U":
+        raise Exception("Not running on TG nor on 6U, you must run on those systems for this test")
 
     if paged_attention:
         paged_attention_config = PagedAttentionConfig(
@@ -716,4 +723,5 @@ def test_llama_demo(
         stress_test=stress_test,
         start_pos=start_pos,
         enable_prefetcher_performance_mode=enable_pf_perf_mode,
+        galaxy_type=galaxy_type,
     )

@@ -313,9 +313,7 @@ class UNetUpblock:
             x.shape, core_grid, ttnn.ShardStrategy.HEIGHT, orientation=ttnn.ShardOrientation.ROW_MAJOR
         )
 
-        if x.is_sharded():
-            x = ttnn.reshard(x, shardspec)
-        else:
+        if not x.is_sharded():
             x = ttnn.interleaved_to_sharded(x, shardspec)
 
         upsampled = ttnn.upsample(x, (2, 2), memory_config=x.memory_config())

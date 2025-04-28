@@ -126,9 +126,9 @@ endif()
 include(CPM)
 if(CMAKE_VERSION VERSION_LESS 3.25)
     # FIXME(14681): `SYSTEM` was introduced in v3.25; remove this when we can require v3.25
-    add_subdirectory(third_party EXCLUDE_FROM_ALL)
+    add_subdirectory(third_party)
 else()
-    add_subdirectory(third_party EXCLUDE_FROM_ALL SYSTEM)
+    add_subdirectory(third_party SYSTEM)
 endif()
 
 if(WITH_PYTHON_BINDINGS)
@@ -310,4 +310,7 @@ if(BUILD_TT_TRAIN)
     add_subdirectory(tt-train)
 endif()
 
-include(packaging)
+# If we've been asked to build static libs, packaging is left up to them to sort out.
+if(TT_INSTALL)
+    include(packaging)
+endif()

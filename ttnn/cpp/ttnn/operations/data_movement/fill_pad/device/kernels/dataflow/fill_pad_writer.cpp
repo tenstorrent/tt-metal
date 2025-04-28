@@ -31,15 +31,14 @@ void kernel_main() {
     uint32_t num_2d_tensors = get_arg_val<uint32_t>(rt_arg_ind++);
 
 #ifdef SHARDED
-    typedef ShardedInfo<
-        get_compile_time_arg_val(12),  // Memory layout
-        get_compile_time_arg_val(13),  // The number of sharding cores
-        get_compile_time_arg_val(14),  // The page size we offset each write to
-        get_compile_time_arg_val(15),  // The number of pages in each sharding row not including padding pages
-        get_compile_time_arg_val(16),  // This defines times when contiguous pages can't be calculated
-        get_compile_time_arg_val(17),  // pages_per_shard_x
-        get_compile_time_arg_val(18)>  // pages_per_shard_y
-        tensor_shard_info;
+    using tensor_shard_info = ShardedInfo<
+        get_compile_time_arg_val(12),   // Memory layout
+        get_compile_time_arg_val(13),   // The number of sharding cores
+        get_compile_time_arg_val(14),   // The page size we offset each write to
+        get_compile_time_arg_val(15),   // The number of pages in each sharding row not including padding pages
+        get_compile_time_arg_val(16),   // This defines times when contiguous pages can't be calculated
+        get_compile_time_arg_val(17),   // pages_per_shard_x
+        get_compile_time_arg_val(18)>;  // pages_per_shard_y
 
     const auto [mapping_table, rt_increment] =
         experimental::shard_addr_gen_utils::get_shard_map<tensor_shard_info>(get_arg_addr(rt_arg_ind));

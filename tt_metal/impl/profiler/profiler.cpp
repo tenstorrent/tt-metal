@@ -721,6 +721,7 @@ DeviceProfiler::DeviceProfiler(const bool new_logs) {
     }
 
     this->current_zone_it = device_events.begin();
+    device_sync_info = std::make_tuple(0.0, 0.0, 0.0);
 #endif
 }
 
@@ -861,9 +862,28 @@ void DeviceProfiler::dumpResults(
 #endif
 }
 
+bool isSyncInfoNewer(std::tuple<double, double, double> old_info, std::tuple<double, double, double> new_info) {
+    double old_cpu_time = get<0>(old_info);
+    double old_device_time = get<1>(old_info);
+    double old_frequency = get<2>(old_info);
+    double new_cpu_time = get<0>(new_info);
+    double new_device_time = get<1>(new_info);
+    double new_frequency = get<2>(new_info);
+    return (old_cpu_time < new_cpu_time && old_device_time / old_frequency < new_device_time / new_frequency);
+}
+
 void DeviceProfiler::pushTracyDeviceResults() {
 #if defined(TRACY_ENABLE)
     ZoneScoped;
+
+    // If this device is root, it may have new sync info updated with syncDeviceHost
+    // called during DumpDeviceProfilerResults
+    for (auto& [core, info] : device_core_sync_info) {
+        if (isSyncInfoNewer(device_sync_info, info)) {
+            setSyncInfo(info);
+        }
+    }
+
     std::set<std::pair<uint32_t, CoreCoord>> device_cores_set;
     std::vector<std::pair<uint32_t, CoreCoord>> device_cores;
     for (auto& event : device_events) {
@@ -874,53 +894,8 @@ void DeviceProfiler::pushTracyDeviceResults() {
         }
     }
 
-    static double delay = 0;
-    static double frequency = 0;
-    static uint64_t cpuTime = 0;
-
     for (auto& device_core : device_cores) {
-        chip_id_t device_id = device_core.first;
-        CoreCoord worker_core = device_core.second;
-
-        if (device_core_sync_info.find(worker_core) != device_core_sync_info.end()) {
-            cpuTime = get<0>(device_core_sync_info.at(worker_core));
-            delay = get<1>(device_core_sync_info.at(worker_core));
-            frequency = get<2>(device_core_sync_info.at(worker_core));
-            log_info(
-                "Device {} sync info are, frequency {} GHz,  delay {} cycles and, sync point {} seconds",
-                device_id,
-                frequency,
-                delay,
-                cpuTime);
-        }
-    }
-
-    for (auto& device_core : device_cores) {
-        chip_id_t device_id = device_core.first;
-        CoreCoord worker_core = device_core.second;
-
-        if (delay == 0.0 || frequency == 0.0) {
-            delay = smallest_timestamp;
-            frequency = device_core_frequency / 1000.0;
-            cpuTime = TracyGetCpuTime();
-            log_warning(
-                "For device {}, core {},{} default frequency was used and its zones will be out of sync",
-                device_id,
-                worker_core.x,
-                worker_core.y);
-        }
-
-        if (device_tracy_contexts.find(device_core) == device_tracy_contexts.end()) {
-            auto tracyCtx = TracyTTContext();
-            std::string tracyTTCtxName =
-                fmt::format("Device: {}, Core ({},{})", device_id, worker_core.x, worker_core.y);
-
-            TracyTTContextPopulate(tracyCtx, cpuTime, delay, frequency);
-
-            TracyTTContextName(tracyCtx, tracyTTCtxName.c_str(), tracyTTCtxName.size());
-
-            device_tracy_contexts.emplace(device_core, tracyCtx);
-        }
+        updateTracyContext(device_core);
     }
 
     for (auto event : device_events) {
@@ -933,6 +908,72 @@ void DeviceProfiler::pushTracyDeviceResults() {
         }
     }
     device_events.clear();
+#endif
+}
+
+void DeviceProfiler::setSyncInfo(std::tuple<double, double, double> sync_info) { device_sync_info = sync_info; }
+
+void DeviceProfiler::updateTracyContext(std::pair<uint32_t, CoreCoord> device_core) {
+#if defined(TRACY_ENABLE)
+    chip_id_t device_id = device_core.first;
+    CoreCoord worker_core = device_core.second;
+
+    if (device_tracy_contexts.find(device_core) == device_tracy_contexts.end()) {
+        // Create a new tracy context for this device core
+        auto tracyCtx = TracyTTContext();
+        std::string tracyTTCtxName = fmt::format("Device: {}, Core ({},{})", device_id, worker_core.x, worker_core.y);
+
+        double cpu_time = get<0>(device_sync_info);
+        double device_time = get<1>(device_sync_info);
+        double frequency = get<2>(device_sync_info);
+
+        if (frequency == 0) {
+            cpu_time = TracyGetCpuTime();
+            device_time = smallest_timestamp;
+            frequency = device_core_frequency / 1000.0;
+            device_sync_info = std::make_tuple(cpu_time, device_time, frequency);
+            log_debug(
+                "For device {}, core {},{} default frequency was used and its zones will be out of sync",
+                device_id,
+                worker_core.x,
+                worker_core.y);
+        } else {
+            log_debug(
+                "Device {}, core {},{} sync info are, frequency {} GHz,  delay {} cycles and, sync point {} seconds",
+                device_id,
+                worker_core.x,
+                worker_core.y,
+                frequency,
+                device_time,
+                cpu_time);
+        }
+
+        TracyTTContextPopulate(tracyCtx, cpu_time, device_time, frequency);
+
+        TracyTTContextName(tracyCtx, tracyTTCtxName.c_str(), tracyTTCtxName.size());
+
+        device_tracy_contexts.emplace(device_core, tracyCtx);
+        core_sync_info[worker_core] = std::make_tuple(cpu_time, device_time, frequency);
+    } else {
+        // Update the existing tracy context for this device core
+        if (isSyncInfoNewer(core_sync_info[worker_core], device_sync_info)) {
+            core_sync_info[worker_core] = device_sync_info;
+            double cpu_time = get<0>(device_sync_info);
+            double device_time = get<1>(device_sync_info);
+            double frequency = get<2>(device_sync_info);
+            auto tracyCtx = device_tracy_contexts.at(device_core);
+            TracyTTContextCalibrate(tracyCtx, cpu_time, device_time, frequency);
+            log_debug(
+                "Device {}, core {},{} calibration info are, frequency {} GHz,  delay {} cycles and, sync point {} "
+                "seconds",
+                device_id,
+                worker_core.x,
+                worker_core.y,
+                frequency,
+                device_time,
+                cpu_time);
+        }
+    }
 #endif
 }
 

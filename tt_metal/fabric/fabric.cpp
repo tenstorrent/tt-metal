@@ -78,7 +78,10 @@ void append_fabric_connection_rt_args(
     }
 
     TT_FATAL(
-        candidate_ethernet_cores.has_value(), "Could not find any fabric ethernet cores between src and dst chips");
+        candidate_ethernet_cores.has_value(),
+        "Could not find any fabric ethernet cores between src {} and dst {} chips",
+        src_chip_id,
+        dst_chip_id);
 
     TT_FATAL(link_idx < candidate_ethernet_cores.value().size(), "link idx out of bounds");
 

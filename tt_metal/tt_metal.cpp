@@ -938,23 +938,6 @@ void CompileProgram(IDevice* device, Program& program, bool force_slow_dispatch)
     program.compile(device, force_slow_dispatch);
 }
 
-void SynchronizeWorkerThreads(const std::vector<IDevice*>& workers) {
-    if (tt::tt_metal::detail::InWorkerThread()) {
-        // Early exit if in a worker thread, since waiting for the worker
-        // queue to become empty inside a worker thread leads to a deadlock
-        // Synchronizing in a worker thread should be a nop by definition
-        return;
-    }
-    // Push empty work to threads and ensure its been picked up
-    for (auto target_device : workers) {
-        target_device->push_work([]() {});
-    }
-    // Block until work has been picked up, to flush the queue
-    for (auto target_device : workers) {
-        while (not target_device->is_worker_queue_empty());
-    }
-}
-
 }  // namespace detail
 
 size_t GetNumAvailableDevices() {

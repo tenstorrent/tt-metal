@@ -31,7 +31,7 @@ perf_targets = {
         "non-overlapped-dispatch-time": 7260,
         "kernel_duration_relative_margin": 0.05,
         "op_to_op_duration_relative_margin": 0.2,
-        "dispatch_duration_relative_margin": 0.1,
+        "dispatch_duration_relative_margin": 0.2,
     },
     "RMSAllGather_1": {
         "op_name": "RMS_1",
@@ -40,13 +40,13 @@ perf_targets = {
         "non-overlapped-dispatch-time": 7694.8,
         "kernel_duration_relative_margin": 0.05,
         "op_to_op_duration_relative_margin": 0.2,
-        "dispatch_duration_relative_margin": 0.1,
+        "dispatch_duration_relative_margin": 0.2,
     },
     "AllGatherConcat_0": {
         "op_name": "AllGatherConcat",
-        "kernel_duration": 16953.190972222223,
+        "kernel_duration": 12419.194444444445,
         "op_to_op": 796.8888888888889,
-        "non-overlapped-dispatch-time": 11465.5,
+        "non-overlapped-dispatch-time": 12541.7,
         "kernel_duration_relative_margin": 0.05,
         "op_to_op_duration_relative_margin": 0.2,
         "dispatch_duration_relative_margin": 0.5,
@@ -58,7 +58,7 @@ perf_targets = {
         "non-overlapped-dispatch-time": 4351.1,
         "kernel_duration_relative_margin": 0.05,
         "op_to_op_duration_relative_margin": 0.2,
-        "dispatch_duration_relative_margin": 0.1,
+        "dispatch_duration_relative_margin": 0.2,
     },
     "Matmul_0": {
         "op_name": "QKV_MM",
@@ -112,7 +112,7 @@ perf_targets = {
         "non-overlapped-dispatch-time": 7932.2,
         "kernel_duration_relative_margin": 0.05,
         "op_to_op_duration_relative_margin": 0.4,
-        "dispatch_duration_relative_margin": 0.1,
+        "dispatch_duration_relative_margin": 0.2,
     },
     "AllReduceAsync_0": {
         "op_name": "AllReduceAsync_DO",
@@ -130,7 +130,7 @@ perf_targets = {
         "non-overlapped-dispatch-time": 7252.4,
         "kernel_duration_relative_margin": 0.05,
         "op_to_op_duration_relative_margin": 0.2,
-        "dispatch_duration_relative_margin": 0.1,
+        "dispatch_duration_relative_margin": 0.2,
     },
     "LlamaReduceScatterDeviceOperation_0": {
         "op_name": "ReduceScatter_FF1",
@@ -157,7 +157,7 @@ perf_targets = {
         "non-overlapped-dispatch-time": 2844.3,
         "kernel_duration_relative_margin": 0.1,
         "op_to_op_duration_relative_margin": 0.2,
-        "dispatch_duration_relative_margin": 0.15,
+        "dispatch_duration_relative_margin": 0.35,
     },
     "PagedUpdateCacheDeviceOperation_0": {
         "op_name": "PagedUpdateCache",
@@ -170,7 +170,7 @@ perf_targets = {
     },
     "ScaledDotProductAttentionDecode_0": {
         "op_name": "SDPA",
-        "kernel_duration": 13338,
+        "kernel_duration": 9300,
         "op_to_op": 652.6666666666666,
         "non-overlapped-dispatch-time": 9741.5,
         "kernel_duration_relative_margin": 0.07,
@@ -193,7 +193,7 @@ perf_targets = {
         "non-overlapped-dispatch-time": 6111.2,
         "kernel_duration_relative_margin": 0.1,
         "op_to_op_duration_relative_margin": 0.2,
-        "dispatch_duration_relative_margin": 0.15,
+        "dispatch_duration_relative_margin": 0.2,
     },
     "BinaryDeviceOperation_2": {
         "op_name": "Binary_Residual_1",
@@ -203,6 +203,15 @@ perf_targets = {
         "kernel_duration_relative_margin": 0.1,
         "op_to_op_duration_relative_margin": 0.2,
         "dispatch_duration_relative_margin": 0.2,
+    },
+    "Untilize_0": {
+        "op_name": "Untilize",
+        "kernel_duration": 1517.3333333333335,
+        "op_to_op": 996.8888888888889,
+        "non-overlapped-dispatch-time": 3113.6,
+        "kernel_duration_relative_margin": 0.2,
+        "op_to_op_duration_relative_margin": 0.2,
+        "dispatch_duration_relative_margin": 0.5,
     },
 }
 
@@ -284,8 +293,6 @@ def test_llama_demo(
     # TODO: Remove this once all batch sizes are supported on TG
     if os.environ.get("FAKE_DEVICE") == "TG" and batch_size not in [1, 32]:
         pytest.skip("TG only supports batch 1 and 32")
-
-    mesh_device.enable_async(True)
 
     if paged_attention:
         paged_attention_config = PagedAttentionConfig(

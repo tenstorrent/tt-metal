@@ -1412,7 +1412,7 @@ Tracing doesn’t work with prefill; sequence length and matmul row counts will 
 Async mode allows the host to continuously send commands to the device without blocking until data is read back from device, improving performance. Enable async mode with:
 
 ```python
-mesh_device.enable_async(True)
+
 ```
 
 Without async mode each python call to TT-NN will block until the device has finished and results are available. This is good for debugging, any crash or error will show you the offending line of code. With async mode enabled your python thread keeps on running while the host and device handle background calls, only blocking when data needs to be read back from device.

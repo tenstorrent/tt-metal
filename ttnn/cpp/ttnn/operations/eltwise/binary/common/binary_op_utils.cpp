@@ -251,7 +251,11 @@ std::map<std::string, std::string> get_defines_fp32(
             break;
         case BinaryOpType::MINIMUM:
             new_defines.insert({"BINOP_INIT", fmt::format("binary_min_tile_init();")});
-            op_name = "binary_min_tile";
+            if (input_a_dtype == DataType::INT32 && input_b_dtype == DataType::INT32) {
+                op_name = "binary_min_int32_tile";
+            } else {
+                op_name = "binary_min_tile";
+            }
             break;
         case BinaryOpType::LOGADDEXP:
             // PRE_IN0_0 ===> Applies prescaling for first input
@@ -301,27 +305,51 @@ std::map<std::string, std::string> get_defines_fp32(
             break;
         // applied on A-B
         case BinaryOpType::GT:
-            op_name = "sub_binary_tile";
+            if (input_a_dtype == DataType::INT32 && input_b_dtype == DataType::INT32) {
+                op_name = "sub_int32_tile";
+            } else {
+                op_name = "sub_binary_tile";
+            }
             new_defines.merge(get_defines(UnaryOpType::GTZ, std::nullopt, "0", idst1, input_a_dtype));
             break;
         case BinaryOpType::LT:
-            op_name = "sub_binary_tile";
+            if (input_a_dtype == DataType::INT32 && input_b_dtype == DataType::INT32) {
+                op_name = "sub_int32_tile";
+            } else {
+                op_name = "sub_binary_tile";
+            }
             new_defines.merge(get_defines(UnaryOpType::LTZ, std::nullopt, "0", idst1, input_a_dtype));
             break;
         case BinaryOpType::GTE:
-            op_name = "sub_binary_tile";
+            if (input_a_dtype == DataType::INT32 && input_b_dtype == DataType::INT32) {
+                op_name = "sub_int32_tile";
+            } else {
+                op_name = "sub_binary_tile";
+            }
             new_defines.merge(get_defines(UnaryOpType::GEZ, std::nullopt, "0", idst1, input_a_dtype));
             break;
         case BinaryOpType::LTE:
-            op_name = "sub_binary_tile";
+            if (input_a_dtype == DataType::INT32 && input_b_dtype == DataType::INT32) {
+                op_name = "sub_int32_tile";
+            } else {
+                op_name = "sub_binary_tile";
+            }
             new_defines.merge(get_defines(UnaryOpType::LEZ, std::nullopt, "0", idst1, input_a_dtype));
             break;
         case BinaryOpType::EQ:
-            op_name = "sub_binary_tile";
+            if (input_a_dtype == DataType::INT32 && input_b_dtype == DataType::INT32) {
+                op_name = "sub_int32_tile";
+            } else {
+                op_name = "sub_binary_tile";
+            }
             new_defines.merge(get_defines(UnaryOpType::EQZ, std::nullopt, "0", idst1, input_a_dtype));
             break;
         case BinaryOpType::NE:
-            op_name = "sub_binary_tile";
+            if (input_a_dtype == DataType::INT32 && input_b_dtype == DataType::INT32) {
+                op_name = "sub_int32_tile";
+            } else {
+                op_name = "sub_binary_tile";
+            }
             new_defines.merge(get_defines(UnaryOpType::NEZ, std::nullopt, "0", idst1, input_a_dtype));
             break;
         default:

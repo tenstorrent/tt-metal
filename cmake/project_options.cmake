@@ -18,6 +18,7 @@ option(ENABLE_TTNN_SHARED_SUBLIBS "Use shared libraries for ttnn to speed up inc
 option(TT_ENABLE_LIGHT_METAL_TRACE "Enable Light Metal Trace" ON)
 option(ENABLE_COVERAGE "Enable code coverage instrumentation" OFF)
 option(TT_UMD_BUILD_SIMULATION "Force UMD to include its simulation harnessing" ON)
+option(TT_INSTALL "Define installation rules" ON)
 
 ###########################################################################################
 
@@ -38,4 +39,8 @@ if(TT_UNITY_BUILDS)
         message(STATUS "CMake 3.20 or newer is required for Unity builds, disabling")
         set(TT_UNITY_BUILDS OFF)
     endif()
+endif()
+
+if(TT_INSTALL AND NOT BUILD_SHARED_LIBS)
+    message(FATAL_ERROR "Shared libs are required for installation rules.  Set TT_INSTALL=OFF or BUILD_SHARED_LIBS=ON.")
 endif()

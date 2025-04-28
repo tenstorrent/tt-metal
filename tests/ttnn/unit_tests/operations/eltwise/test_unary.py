@@ -10,7 +10,7 @@ import ttnn
 
 from tests.ttnn.utils_for_testing import assert_with_pcc, assert_equal
 from tests.ttnn.unit_tests.operations.eltwise.backward.utility_funcs import data_gen_with_range, compare_pcc
-from models.utility_functions import torch_random, skip_for_grayskull, is_wormhole_b0, is_blackhole
+from models.utility_functions import torch_random, is_wormhole_b0, is_blackhole
 
 
 def run_unary_test(device, h, w, ttnn_function, pcc=0.9999):
@@ -157,7 +157,6 @@ def run_identity_test(device, h, w, data_type, pcc=0.9999):
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.uint8, ttnn.uint32, ttnn.int32, ttnn.float32])
-@skip_for_grayskull("Grayskull doesn't support uint32 / fp32 formats and fp32 dest")
 def test_fp32_uint32(device, h, w, dtype):
     run_identity_test(device, h, w, dtype, pcc=0.9998)
 
@@ -319,14 +318,12 @@ def test_signbit(device, h, w):
 
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
-@skip_for_grayskull("Op not supported for Grayskull, supported for wormhole_b0")
 def test_floor(device, h, w):
     run_unary_test_range(device, h, w, ttnn.floor, pcc=0.99)
 
 
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
-@skip_for_grayskull("Op not supported for Grayskull, supported for wormhole_b0")
 def test_ceil(device, h, w):
     run_unary_test_range(device, h, w, ttnn.ceil, pcc=0.99)
 
@@ -429,7 +426,6 @@ def test_relu_max(device, h, w, upper_limit):
 @pytest.mark.parametrize("scalar", [1.5, 2.0])
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
-@skip_for_grayskull("Op not supported for Grayskull, supported for wormhole_b0")
 def test_remainder(device, h, w, scalar):
     run_unary_test_with_float_remainder(device, h, w, scalar, ttnn.remainder)
 
@@ -437,7 +433,6 @@ def test_remainder(device, h, w, scalar):
 @pytest.mark.parametrize("scalar", [1.5, 2.0])
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
-@skip_for_grayskull("Op not supported for Grayskull, supported for wormhole_b0")
 def test_fmod(device, h, w, scalar):
     run_unary_test_with_float(device, h, w, scalar, ttnn.fmod)
 
@@ -477,7 +472,6 @@ def test_bitwise_not(device, h, w, fill_value):
     run_unary_test_bitwise_not(device, h, w, fill_value, ttnn.bitwise_not)
 
 
-@skip_for_grayskull()
 @pytest.mark.parametrize(
     "input_shapes",
     (
@@ -496,7 +490,6 @@ def test_unary_floor(input_shapes, device):
     assert_with_pcc(golden_tensor, output_tensor, 0.999)
 
 
-@skip_for_grayskull()
 @pytest.mark.parametrize(
     "input_shapes",
     (
@@ -610,25 +603,25 @@ def test_unary_zero_comp_edge_case(input_shapes, ttnn_function, device):
     ),
 )
 @pytest.mark.parametrize("scalar", [-100, -54, -1, 0, 1, 13, 29])
-def test_unary_ne(input_shapes, scalar, device):
+@pytest.mark.parametrize("ttnn_op", [ttnn.ne, ttnn.eq])
+def test_unary_comp_ops(input_shapes, scalar, ttnn_op, device):
     torch.manual_seed(213919)
 
     # Generate a uniform range of values across the valid int32 range
     num_elements = int(torch.prod(torch.tensor(input_shapes)).item())
     uniform_values = torch.linspace(-2147483647, 2147483647, num_elements, dtype=torch.int32)
 
-    corner_cases = torch.tensor([0, 1, -1, 2147483647, -2147483647], dtype=torch.int32)
+    corner_cases = torch.tensor([0, 1, -1, 2147483647, -2147483647, -100, -54, 13, 29], dtype=torch.int32)
     in_data = torch.cat([uniform_values, corner_cases])
 
     in_data = in_data[-num_elements:].reshape(input_shapes)
 
     input_tensor = ttnn.from_torch(in_data, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
 
-    output_tensor = ttnn.ne(input_tensor, scalar)
-    golden_function = ttnn.get_golden_function(ttnn.ne)
+    output_tensor = ttnn_op(input_tensor, scalar)
+    golden_function = ttnn.get_golden_function(ttnn_op)
     golden_tensor = golden_function(in_data, scalar)
 
     output_tensor = ttnn.to_torch(output_tensor)
 
-    pcc = ttnn.pearson_correlation_coefficient(golden_tensor, output_tensor)
-    assert pcc == 1
+    assert torch.equal(golden_tensor, output_tensor)

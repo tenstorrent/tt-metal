@@ -31,6 +31,7 @@ struct ProgramCommandSequence {
     std::vector<HostMemDeviceCommand> runtime_args_command_sequences;
     uint32_t runtime_args_fetch_size_bytes;
     HostMemDeviceCommand device_command_sequence;
+    HostMemDeviceCommand launch_msg_command_sequence;
     HostMemDeviceCommand go_msg_command_sequence;
     std::vector<uint32_t*> cb_configs_payloads;
     std::vector<std::vector<std::shared_ptr<CircularBuffer>>> circular_buffers_on_core_ranges;
@@ -38,6 +39,7 @@ struct ProgramCommandSequence {
     // sequence. They won't be listed in rta_updates.
     std::vector<RtaUpdate> rta_updates;
     std::vector<launch_msg_t*> go_signals;
+    // Includes batched transfers (CB, RTA, CRTA), semaphores, and program binary
     uint32_t program_config_buffer_data_size_bytes;
     std::vector<CQDispatchWritePackedCmd*> launch_msg_write_packed_cmd_ptrs;
     std::vector<CQDispatchWritePackedCmd*> unicast_launch_msg_write_packed_cmd_ptrs;

@@ -120,7 +120,6 @@ def run_test_FalconCausalLM_end_to_end(
     e2e_perf=False,
     expected_inference_time=None,
     device_perf=False,
-    async_mode=False,
 ):
     assert not (e2e_perf and device_perf), "Cannot run both e2e and device perf test at the same time"
     if e2e_perf:
@@ -398,7 +397,7 @@ def run_test_FalconCausalLM_end_to_end(
     if e2e_perf:
         profiler.print()
 
-        comment = f"num_devices={num_devices}_kv_cache_len={kv_cache_len}_seq_len={seq_len}_num_layers={num_layers}_config={model_config_str}_async={async_mode}"
+        comment = f"num_devices={num_devices}_kv_cache_len={kv_cache_len}_seq_len={seq_len}_num_layers={num_layers}_config={model_config_str}"
         cpu_time = profiler.get("hugging_face_reference_model")
         first_iter_time = profiler.get("first_model_run_with_compile")
         second_iter_time = profiler.get("model_run_for_inference")
