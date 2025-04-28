@@ -190,6 +190,9 @@ void run_single_core_tilize_matmul(
     /*for (size_t i = 0; i < in0.size(); i++)
     {
         in0[i] = bfloat16((float)i);
+        int x = i % 32;
+        int y = i / 32;
+        in1[i] = x == y ? bfloat16(1.0f) : bfloat16(0.0f);
     }*/
 
     std::vector<bfloat16> golden = gold_matmul(in0, in1, {32 * rt_dim, 32 * ct_dim, 32 * kt_dim});
@@ -230,6 +233,9 @@ TEST_P(TilizeMatmulParameterizedDeviceFixture, TensixComputeTilizeMatmul) {
     if (std::get<0>(test_params) == 4 && std::get<1>(test_params) == 4) {
         GTEST_SKIP();
     }
+    std::cout << "rt_dim:" << std::get<0>(test_params) << " ct_dim:" << std::get<1>(test_params)
+              << " kt_dim:" << std::get<2>(test_params) << " fused:" << std::get<3>(test_params)
+              << " loops:" << std::get<4>(test_params) << " reuse_a:" << std::get<5>(test_params) << std::endl;
     unit_tests::compute::tilize_matmul::run_single_core_tilize_matmul(
         this->devices_.at(0),
         std::get<0>(test_params),
