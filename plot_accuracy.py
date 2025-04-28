@@ -176,6 +176,26 @@ def plot_values(data, dest, opname, op_dtype, plot_override_fun=None):
     plt.close()
 
 
+class PlotBasic:
+    def __init__(self, zoomed_in_xrange=None, zoomed_in_yrange=None):
+        self.zoomed_in_xrange = zoomed_in_xrange
+        self.zoomed_in_yrange = zoomed_in_yrange
+
+    def override_accuracy(self, ax):
+        pass
+
+    def override_accuracy_zoom(self, ax):
+        if self.zoomed_in_xrange is not None:
+            ax.set_xlim(self.zoomed_in_xrange[0], self.zoomed_in_xrange[1])
+        if self.zoomed_in_yrange is not None:
+            ax.set_ylim(self.zoomed_in_yrange[0], self.zoomed_in_yrange[1])
+
+        ax.set_xscale("symlog", base=2)
+
+    def override_values(self, ax):
+        pass
+
+
 class PlotExp:
     def override_accuracy(self, ax):
         pass
@@ -206,8 +226,6 @@ class PlotTanh:
         custom_ticks = [-10, -2, -1, 0, 1, 2, 10]
         ax.set_xticks(custom_ticks)
         ax.set_xticklabels([f"{x:g}" for x in custom_ticks])
-
-        pass
 
     def override_values(self, ax):
         pass
@@ -369,14 +387,18 @@ class PlotTan:
         pass
 
     def override_accuracy_zoom(self, ax):
-        xmax = 24
-        ax.set_xlim(0, xmax)
+        xmax = math.pi
+        ax.set_xlim(-2, 2)
+        ax.set_ylim(-0.5, 100)  # Offsets graph so that tan(x)=0 values are visible
         ax.set_xscale("linear")
         kpi = math.pi / 2
+
         k = 0
         while kpi < xmax:
             ax.axvline(x=kpi, color="k", linewidth=3, linestyle="--")
-            plt.text(kpi + 0.1, 50, f"{2*k+1}pi/2", fontsize=30)
+            ax.axvline(x=-kpi, color="k", linewidth=3, linestyle="--")
+            plt.text(kpi + 0.1, 50, f"$\\frac{{{2*k+1}\\pi}}{{2}}$", fontsize=50)
+            plt.text(-kpi - 0.1, 50, f"$-\\frac{{{2*k+1}\\pi}}{{2}}$", fontsize=50)
 
             k += 1
             kpi = k * math.pi + math.pi / 2.0
@@ -409,7 +431,7 @@ all_override_plot_funs = {
     # Exponential functions
     "exp": PlotExp(),
     "tanh": PlotTanh(),  # reuse exp settings
-    "cosh": PlotExp(),  # reuse exp settings
+    "cosh": PlotMish(),  # reuse exp settings
     "sinh": PlotMish(),  # reuse exp settings
     # Logarithmic functions
     "log": PlotLog(math.e),
@@ -422,13 +444,13 @@ all_override_plot_funs = {
     "gelu": PlotSiLU(),  # reuse silu settings
     "swish": PlotSiLU(),  # reuse silu settings
     "mish": PlotMish(),  # reuse silu settings
-    "elu": PlotSiLU(),  # reuse silu settings
+    "elu": PlotMish(),  # reuse silu settings
     "selu": PlotSiLU(),  # reuse silu settings
-    "softplus": PlotSiLU(),  # reuse silu settings
-    "softsign": PlotSiLU(),  # reuse silu settings
+    "softplus": PlotBasic(zoomed_in_xrange=[-5, 5], zoomed_in_yrange=[-0.5, 100]),  # reuse silu settings
+    "softsign": PlotBasic(zoomed_in_xrange=[-3, 3], zoomed_in_yrange=[-0.5, 100]),  # reuse silu settings
     # Trigonometric functions
     "tan": PlotTan(),  # reuse tan settings
-    "atan": None,
+    "atan": PlotBasic(zoomed_in_xrange=[-3, 3], zoomed_in_yrange=[-0.5, 100]),
     "sin": PlotCos(is_sin=True),
     "cos": PlotCos(),
     # Miscellaneous functions
@@ -437,8 +459,66 @@ all_override_plot_funs = {
     "rsqrt_approx": None,
     "digamma": None,
     "lgamma": None,
-    "tanhshrink": None,
+    "tanhshrink": PlotBasic(zoomed_in_xrange=[-3, 3], zoomed_in_yrange=[-0.5, 10000]),
 }
+
+
+def plot_hist_accuracy(data, dest, threshold):
+    # Filter to only bfloat16 and group_size=1 entries
+    filtered_data = [df for (op, dtype, group_size), df in data.items() if dtype == "bfloat16" and group_size == 1]
+
+    print(f"FILTERED DATA = {filtered_data}")
+    filtered_data = [df for df in filtered_data]
+
+    # Concatenate all DataFrames
+    combined_df = pd.concat(filtered_data)
+
+    print(f"COMBINED DF = {combined_df}")
+
+    # If base_y and base_yref are the same then set max_rel_error to 0
+    combined_df["max_rel_error"] = np.where(
+        combined_df["base_y"] == combined_df["base_yref"], 0, combined_df["max_rel_error"]
+    )
+
+    # Filter NaN and infinite values
+    combined_df = combined_df[combined_df["max_rel_error"].notna()]
+    combined_df = combined_df[combined_df["max_rel_error"] != float("inf")]
+
+    # Filter values > threshold and group by operation
+    exceeding_threshold = combined_df[combined_df["max_rel_error"] > threshold]
+    counts = exceeding_threshold.groupby("operation").size()
+
+    # Calculate proportions
+    total_counts = combined_df.groupby("operation").size()
+    proportions = counts / total_counts
+
+    # Create bar plot
+    fig, ax = plt.subplots(figsize=(35, 25))
+
+    bars = ax.bar(proportions.index, proportions.values)
+
+    ax.set_ylim(0, 1)
+
+    # Customize plot
+    ax.set_xlabel("Operation")
+    ax.set_ylabel(f"Proportion of relative errors > {threshold}")
+    ax.set_title(f"Relative Error Analysis\n(threshold = {threshold})")
+
+    # Rotate x-axis labels for better readability
+    plt.xticks(rotation=45, ha="right")
+
+    # Add percentage labels on top of bars
+    for bar in bars:
+        height = bar.get_height()
+        ax.text(bar.get_x() + bar.get_width() / 2.0, height, f"{height*100:.1f}%", ha="center", va="bottom")
+
+    # Adjust layout to prevent label cutoff
+    plt.tight_layout()
+
+    # Save plot
+    plt.savefig(f"{dest}.png", bbox_inches="tight", pad_inches=0.0)
+    # plt.savefig(f"{dest}.svg", bbox_inches="tight", pad_inches=0.0)
+    plt.close()
 
 
 def plot_all_ops(accuracy_dir, ops_list, dest_dir, highres=False):
@@ -522,6 +602,10 @@ def plot_all_ops(accuracy_dir, ops_list, dest_dir, highres=False):
 
         plot_accuracy_op(data, dest_file, op, dtype, override_plot_fun, plot_mean=plot_mean)
 
+    if highres:
+        # Plot recap (histogram of relative error)
+        plot_hist_accuracy(all_op_data, f"{dest_dir}/hist-rel-error", 0.01)
+
 
 def main():
     sns.set(
@@ -548,7 +632,7 @@ def main():
         # ("log", "bfloat16", 32),
         # ("tanh", "bfloat16", 32),
         # ("cosh", "bfloat16", 32),
-        ("sinh", "bfloat16", 32),
+        # ("sinh", "bfloat16", 32),
         # ("log10", "bfloat16", 32),
         # ("log2", "bfloat16", 32),
         # ("log1p", "bfloat16", 32),
@@ -556,7 +640,7 @@ def main():
         # ("gelu", "bfloat16", 32),
         # ("logit", "bfloat16", 32),
         # ("swish", "bfloat16", 32),
-        ("mish", "bfloat16", 32),
+        # ("mish", "bfloat16", 32),
         # ("elu", "bfloat16", 32),
         # ("selu", "bfloat16", 32),
         # ("softplus", "bfloat16", 32),
@@ -574,30 +658,35 @@ def main():
     ]
 
     highres_operations = [
-        # ("exp", "bfloat16", 1),
-        # ("exp_approx", "bfloat16", 1),
-        # ("tanh", "bfloat16", 1),
-        # ("cosh", "bfloat16", 1),
+        ("exp", "bfloat16", 1),
+        ("exp_approx", "bfloat16", 1),
+        ("tanh", "bfloat16", 1),
+        ("cosh", "bfloat16", 1),
         ("sinh", "bfloat16", 1),
-        # ("log", "bfloat16", 1),
-        # ("log10", "bfloat16", 1),
-        # ("log2", "bfloat16", 1),
-        # ("log1p", "bfloat16", 1),
-        # ("tan", "bfloat16", 1),
-        # ("cos", "bfloat16", 1),
-        # ("sin", "bfloat16", 1),
-        # ("silu", "bfloat16", 1),
-        # ("gelu", "bfloat16", 1),
-        # ("logit", "bfloat16", 1),
-        # ("swish", "bfloat16", 1),
+        ("log", "bfloat16", 1),
+        ("log10", "bfloat16", 1),
+        ("log2", "bfloat16", 1),
+        ("log1p", "bfloat16", 1),
+        ("tan", "bfloat16", 1),
+        ("atan", "bfloat16", 1),
+        ("cos", "bfloat16", 1),
+        ("sin", "bfloat16", 1),
+        ("silu", "bfloat16", 1),
+        ("selu", "bfloat16", 1),
+        ("softplus", "bfloat16", 1),
+        ("softsign", "bfloat16", 1),
+        ("gelu", "bfloat16", 1),
+        ("logit", "bfloat16", 1),
+        ("swish", "bfloat16", 1),
         ("mish", "bfloat16", 1),
-        # ("elu", "bfloat16", 1),
-        # ("sqrt", "bfloat16", 1),
-        # ("rsqrt_approx", "bfloat16", 1),
-        # ("rsqrt", "bfloat16", 1),
+        ("elu", "bfloat16", 1),
+        ("sqrt", "bfloat16", 1),
+        ("rsqrt_approx", "bfloat16", 1),
+        ("rsqrt", "bfloat16", 1),
+        ("tanhshrink", "bfloat16", 1),
     ]
 
-    accuracy_dir = "accuracy_results"
+    accuracy_dir = "accuracy_results/results/"
     dest_dir = "accuracy_results/plots"
 
     if not os.path.exists(dest_dir):
