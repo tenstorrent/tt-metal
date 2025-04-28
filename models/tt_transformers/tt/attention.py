@@ -397,8 +397,9 @@ class Attention(LightweightModule):
             xqkv_fused,
             num_heads=self.n_local_heads,
             num_kv_heads=self.n_local_kv_heads,
-            # memory_config=self.model_config["CREATE_QKV_DECODE_SHARD"] if self.arch_name == "blackhole" else ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG,
-            memory_config=ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG,
+            memory_config=self.model_config["CREATE_QKV_DECODE_SHARD"]
+            if self.arch_name == "blackhole"
+            else ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG,
         )
 
         ttnn.deallocate(xqkv_fused)

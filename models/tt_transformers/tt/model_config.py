@@ -745,7 +745,7 @@ class ModelArgs:
             )
 
             self.model_config["CREATE_QKV_DECODE_SHARD"] = ttnn.create_sharded_memory_config(
-                shape=(32, 128),
+                shape=(ttnn.TILE_SIZE, self.head_dim),
                 core_grid=ttnn.CoreGrid(y=4, x=8),
                 strategy=ttnn.ShardStrategy.HEIGHT,
                 orientation=ttnn.ShardOrientation.ROW_MAJOR,
