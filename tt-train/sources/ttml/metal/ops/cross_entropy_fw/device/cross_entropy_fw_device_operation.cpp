@@ -112,12 +112,10 @@ tt::stl::hash::hash_t CrossEntropyForwardDeviceOperation::compute_program_hash(
     return hash;
 }
 
-std::
-    tuple<CrossEntropyForwardDeviceOperation::operation_attributes_t, CrossEntropyForwardDeviceOperation::tensor_args_t>
-    CrossEntropyForwardDeviceOperation::invoke(
-        const ttnn::Tensor& input_tensor,
-        const ttnn::Tensor& target_tensor,
-        const std::optional<ttnn::Tensor>& preallocated_output) {
+std::tuple<operation_attributes_t, tensor_args_t> CrossEntropyForwardDeviceOperation::invoke(
+    const ttnn::Tensor& input_tensor,
+    const ttnn::Tensor& target_tensor,
+    const std::optional<ttnn::Tensor>& preallocated_output) {
     return {
         operation_attributes_t{},
         tensor_args_t{

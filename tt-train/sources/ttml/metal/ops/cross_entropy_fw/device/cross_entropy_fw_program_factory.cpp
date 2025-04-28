@@ -234,9 +234,6 @@ CrossEntropyForwardProgramFactory::cached_program_t CrossEntropyForwardProgramFa
     uint32_t target_indexes_inner_dim_size = target.get_logical_shape()[-1] * target.element_size();
     // read target indexes by pages(32 indexes in page)
     uint32_t uint32_read_page_size = tt::datum_size(tt::DataFormat::UInt32) * kPageElementsNumber;
-    // tiled height of target indexes
-    uint32_t tiled_H =
-        (target.get_logical_shape()[-1] + 31) / tt::constants::TILE_HEIGHT;  // round up to nearest tile height
 
     // get number of free cores
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
@@ -392,7 +389,7 @@ CrossEntropyForwardProgramFactory::cached_program_t CrossEntropyForwardProgramFa
         program,
         all_cores,
         /* reader_compile_args */
-        {block_size, Wt, mask_w, target_indexes_inner_dim_size, tiled_H, uint32_read_page_size},
+        {block_size, Wt, mask_w, target_indexes_inner_dim_size, Ht, uint32_read_page_size},
         defines,
         kReaderKernelPath);
 
