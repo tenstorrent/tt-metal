@@ -5,7 +5,7 @@
 
 SFPI_VERSION=$(cat sfpi_version.txt)
 
-SFPI_RELEASE_URL="https://github.com/tenstorrent/sfpi/releases/download/${SFPI_VERSION}/sfpi-release.tgz"
+SFPI_RELEASE_URL="https://github.com/tenstorrent/sfpi/releases/download/${SFPI_VERSION}/sfpi-x86_64-Linux.tgz"
 
 if [ ! -d "sfpi" ]; then
     echo "sfpi directory not found. Downloading and extracting SFPI ${SFPI_VERSION} release..."
