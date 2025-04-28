@@ -7,7 +7,6 @@
 #include <array>
 
 #include "dataflow_api.h"
-#include "hw/inc/grayskull/tensix_types.h"
 
 // #define DEBUG
 
