@@ -430,8 +430,7 @@ def test_tg_trace_rms_fuse(
 )
 @pytest.mark.parametrize("num_links", [1])
 @pytest.mark.parametrize("num_iters", [20])
-@pytest.mark.parametrize("enable_async", [True])
-@pytest.mark.parametrize("fused_add", [True])
+@pytest.mark.parametrize("fused_add", [True, False])
 @pytest.mark.parametrize("mesh_device", [pytest.param((8, 4), id="8x4_grid")], indirect=True)
 @pytest.mark.parametrize("input_dtype", [ttnn.bfloat8_b, ttnn.bfloat16])
 @pytest.mark.parametrize("residual_dtype", [ttnn.bfloat8_b, ttnn.bfloat16])
@@ -466,7 +465,6 @@ def test_rms_fuse(
         ttnn.Topology.Linear,
         fused_add,
         num_iters=num_iters,
-        enable_async=enable_async,
         input_dtype=input_dtype,
         residual_dtype=residual_dtype,
     )
