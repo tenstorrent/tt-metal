@@ -317,34 +317,7 @@ std::vector<ShardBoundary> generate_shard_boundaries(
 }
 
 std::vector<PixelMetadata> generate_tensor_metadata(
-    const std::vector<bool>& pad_metadata,
-    const SlidingWindowConfig& config,
-    uint32_t reshard_num_cores_nhw,
-    bool is_in_tiled) {
-    ttnn::Shape input_shape = config.get_input_shape();
-    uint32_t input_nhw = input_shape[0] * input_shape[1] * input_shape[2];
-    uint32_t input_nhw_padded;
-    if (is_in_tiled) {
-        input_nhw_padded = tt::round_up(input_nhw, config.num_cores_nhw * tt::constants::TILE_HEIGHT);
-    } else {
-        input_nhw_padded = tt::round_up(input_nhw, config.num_cores_nhw);
-    }
-    uint32_t input_shard_height = input_nhw_padded / config.num_cores_nhw;
-    uint32_t input_reshard_height =
-        reshard_num_cores_nhw == 0
-            ? input_shard_height
-            : tt::round_up(input_nhw, reshard_num_cores_nhw * tt::constants::TILE_HEIGHT) / reshard_num_cores_nhw;
-
-    auto remap = [input_shard_height, input_reshard_height](
-                     uint32_t core_id, uint32_t local_idx) -> std::pair<uint32_t, uint32_t> {
-        if (input_shard_height == input_reshard_height) {
-            return std::make_pair(core_id, local_idx);
-        } else {
-            uint32_t global_idx = core_id * input_shard_height + local_idx;
-            return std::make_pair(global_idx / input_reshard_height, global_idx % input_reshard_height);
-        }
-    };
-
+    const std::vector<bool>& pad_metadata, const SlidingWindowConfig& config, uint32_t shard_height) {
     std::vector<PixelMetadata> tensor_metadata;
     tensor_metadata.reserve(pad_metadata.size());
 
@@ -355,11 +328,10 @@ std::vector<PixelMetadata> generate_tensor_metadata(
         if (is_pad_flag) {
             tensor_metadata.push_back(PixelMetadata{true, 0, 0});
         } else {
-            auto [new_core_id, new_local_idx] = remap(core_id, input_reshard_local_idx);
-            tensor_metadata.push_back(PixelMetadata{false, new_core_id, new_local_idx});
+            tensor_metadata.push_back(PixelMetadata{false, core_id, input_reshard_local_idx});
 
             input_reshard_local_idx++;
-            if (input_reshard_local_idx == input_shard_height) {
+            if (input_reshard_local_idx == shard_height) {
                 core_id++;
                 input_reshard_local_idx = 0;
             }

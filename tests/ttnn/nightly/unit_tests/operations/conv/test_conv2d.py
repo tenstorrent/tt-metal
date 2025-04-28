@@ -3427,3 +3427,71 @@ def test_conv2d_ws_program_cache(
             enable_split_reader=enable_split_reader,
             run_twice=False,
         )
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
+def test_conv_sharded_non_tile(device):
+    batch = 1
+    input_channels = 32
+    output_channels = 32
+    input_height = 528
+    input_width = 80
+    filter = 3
+    stride = 1
+    padding = 0
+    shard_height = 671
+    shard_width = 32
+    input_shape = (batch, input_channels, input_height, input_width)
+    weights_shape = (output_channels, input_channels, filter, filter)
+
+    torch.manual_seed(0)
+    torch_input = torch.randn(input_shape, dtype=torch.bfloat16)
+
+    torch_input_nhwc = torch.permute(torch_input, (0, 2, 3, 1))
+
+    input_mem_cfg = ttnn.create_sharded_memory_config(
+        shape=(shard_height, shard_width),
+        core_grid=ttnn.CoreRangeSet(
+            [
+                ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 6)),
+                ttnn.CoreRange(ttnn.CoreCoord(0, 7), ttnn.CoreCoord(6, 7)),
+            ]
+        ),
+        strategy=ttnn.ShardStrategy.HEIGHT,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+    tt_input = ttnn.from_torch(torch_input_nhwc, dtype=ttnn.bfloat16, device=device, memory_config=input_mem_cfg)
+
+    torch_weights = torch.randn(weights_shape, dtype=torch.bfloat16)
+    tt_weights = ttnn.from_torch(torch_weights, dtype=ttnn.bfloat16)
+    [tt_out, [oh, ow]] = ttnn.conv2d(
+        input_tensor=tt_input,
+        weight_tensor=tt_weights,
+        in_channels=input_channels,
+        out_channels=output_channels,
+        device=device,
+        kernel_size=(filter, filter),
+        stride=(stride, stride),
+        padding=(padding, padding),
+        batch_size=batch,
+        input_height=input_height,
+        input_width=input_width,
+        return_output_dim=True,
+    )
+
+    torch_output_tensor = ttnn.to_torch(tt_out)
+
+    # torch_output_tensor is in row major layout and NHWC shape
+    # NHWC to NCHW
+    torch_output_tensor = torch_output_tensor.reshape(batch, oh, ow, torch_output_tensor.shape[-1])
+    torch_output_tensor = torch_output_tensor[:, :, :, :output_channels]
+
+    torch_output_tensor = torch.permute(torch_output_tensor, (0, 3, 1, 2))
+
+    torch_out_golden_tensor = torch.nn.functional.conv2d(
+        torch_input, torch_weights, bias=None, stride=stride, padding=padding, groups=1
+    )
+
+    passing, _ = check_with_pcc_without_tensor_printout(torch_output_tensor, torch_out_golden_tensor, pcc=0.99)
+    assert passing
