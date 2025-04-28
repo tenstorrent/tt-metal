@@ -15,7 +15,7 @@ jobs:
     name: 🔧 LLK unit tests
     env:
       DOCKER_IMAGE: ghcr.io/tenstorrent/tt-metal/tt-metalium/ubuntu-22.04-ci-build-amd64
-      IMAGE_HASH: ec366e61ff1989d6650d8ee0fc636189b3c08c13
+      IMAGE_HASH: a2e6e2031c340fdbeea0fe88b36a54ddfbf75031
     runs-on: ${{ inputs.runs_on }}
     timeout-minutes: 40
     steps:
@@ -26,6 +26,8 @@ jobs:
           token: ${{ secrets.GITHUB_TOKEN }}
           path: tt-metal
           submodules: recursive
+          fetch-depth: 500 # Need enough history for `git describe`
+          fetch-tags: true # Need tags for `git describe`
 
       - name: Override LLK submodule branch
         run: |
