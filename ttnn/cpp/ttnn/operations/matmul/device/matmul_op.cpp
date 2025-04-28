@@ -1622,10 +1622,12 @@ void Matmul::validate(
                              input_tensor_b.buffer()->buffer_type() == tt_metal::BufferType::DRAM),
                         "Input tensor B must be width sharded or DRAM interleaved when using gather_in0.");
                     if (!this->global_cb.has_value() && input_tensor_b.is_sharded()) {
-                        TT_FATAL(
-                            input_tensor_a.shard_spec().value().grid == input_tensor_b.shard_spec().value().grid,
-                            "Input tensor A and B must be sharded on the same cores "
-                            "when using gather_in0.");
+                        if (input_tensor_b.buffer()->buffer_type() == tt_metal::BufferType::L1) {
+                            TT_FATAL(
+                                input_tensor_a.shard_spec().value().grid == input_tensor_b.shard_spec().value().grid,
+                                "Input tensor A and B must be sharded on the same cores "
+                                "when using gather_in0.");
+                        }
                     }
                     TT_FATAL(
                         this->output_mem_config.is_sharded(), "Output tensor must be sharded when using gather_in0.");
