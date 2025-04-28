@@ -15,7 +15,7 @@
 #include <umd/device/tt_xy_pair.h>
 #include <umd/device/types/cluster_descriptor_types.h>
 
-typedef struct prefetch_static_config {
+struct prefetch_static_config_t {
     std::optional<uint32_t> my_downstream_cb_sem_id;
 
     std::optional<uint32_t> pcie_base;
@@ -50,9 +50,9 @@ typedef struct prefetch_static_config {
 
     // Populated if fabric is being used to talk to downstream
     std::optional<uint32_t> client_interface_addr;
-} prefetch_static_config_t;
+};
 
-typedef struct prefetch_dependent_config {
+struct prefetch_dependent_config_t {
     std::optional<tt_cxy_pair> upstream_logical_core;
     std::optional<tt_cxy_pair> downstream_logical_core;
     std::optional<tt_cxy_pair> downstream_s_logical_core;
@@ -73,7 +73,7 @@ typedef struct prefetch_dependent_config {
     std::optional<uint32_t> downstream_mesh_id;
     std::optional<uint32_t> downstream_dev_id;
     std::optional<uint32_t> outbound_eth_chan;
-} prefetch_dependent_config_t;
+};
 
 class PrefetchKernel : public FDKernel {
 public:

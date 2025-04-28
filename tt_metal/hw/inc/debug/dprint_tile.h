@@ -35,14 +35,14 @@
 // MAXCOUNT is the size of reserved space in the print buffer
 // if the total element data_count produced by the slice spec exceeds MAXCOUNT, it will be truncated
 //
-typedef bool dprint_tslice_ptr_t;
+using dprint_tslice_ptr_t = bool;
 #define TSLICE_RD_PTR true
 #define TSLICE_WR_PTR false
-typedef bool dprint_tslice_cb_t;
+using dprint_tslice_cb_t = bool;
 #define TSLICE_INPUT_CB true
 #define TSLICE_OUTPUT_CB false
 
-typedef struct {
+struct tile_info_t {
     uint32_t tile_dim_r;
     uint32_t tile_dim_c;
     uint32_t tile_size;
@@ -51,7 +51,7 @@ typedef struct {
     uint32_t num_faces;
     uint32_t cb_ptr;
     uint8_t data_format;
-} tile_info_t;
+};
 
 #if defined(DEBUG_PRINT_ENABLED)
 // Helper function to get a single datum, whose indexing depends on DataFormat

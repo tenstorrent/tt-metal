@@ -10,7 +10,7 @@
 #include "impl/context/metal_context.hpp"
 #include <umd/device/tt_xy_pair.h>
 
-typedef struct dispatch_s_static_config {
+struct dispatch_s_static_config_t {
     std::optional<uint32_t> cb_base;
     std::optional<uint32_t> cb_log_page_size;
     std::optional<uint32_t> cb_size;
@@ -23,13 +23,13 @@ typedef struct dispatch_s_static_config {
     std::optional<uint32_t> first_stream_used;
     std::optional<uint32_t> max_num_worker_sems;
     std::optional<uint32_t> max_num_go_signal_noc_data_entries;
-} dispatch_s_static_config_t;
+};
 
-typedef struct dispatch_s_dependent_config {
+struct dispatch_s_dependent_config_t {
     std::optional<tt_cxy_pair> upstream_logical_core;     // Dependant
     std::optional<tt_cxy_pair> downstream_logical_core;   // Dependant
     std::optional<uint32_t> upstream_dispatch_cb_sem_id;  // Dependent
-} dispatch_s_dependent_config_t;
+};
 
 class DispatchSKernel : public FDKernel {
 public:

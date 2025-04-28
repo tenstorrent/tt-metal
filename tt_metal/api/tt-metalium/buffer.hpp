@@ -146,7 +146,7 @@ struct BufferConfig {
     TensorMemoryLayout buffer_layout = TensorMemoryLayout::INTERLEAVED;
 };
 
-typedef BufferConfig InterleavedBufferConfig;
+using InterleavedBufferConfig = BufferConfig;
 
 // copied from above instead of using inheritance such that we can use
 // designator constructor

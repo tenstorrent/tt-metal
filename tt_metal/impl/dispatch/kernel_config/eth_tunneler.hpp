@@ -11,7 +11,7 @@
 #include "system_memory_manager.hpp"
 #include <umd/device/tt_core_coordinates.h>
 
-typedef struct eth_tunneler_static_config {
+struct eth_tunneler_static_config_t {
     std::optional<uint32_t> endpoint_id_start_index;
     std::optional<uint32_t> vc_count;  // Set from arch level
     std::optional<uint32_t> in_queue_start_addr_words;
@@ -20,9 +20,9 @@ typedef struct eth_tunneler_static_config {
     std::optional<uint32_t> kernel_status_buf_addr_arg;
     std::optional<uint32_t> kernel_status_buf_size_bytes;
     std::optional<uint32_t> timeout_cycles;
-} eth_tunneler_static_config_t;
+};
 
-typedef struct eth_tunneler_dependent_config {
+struct eth_tunneler_dependent_config_t {
     std::array<std::optional<uint32_t>, tt::packet_queue::MAX_TUNNEL_LANES> remote_receiver_x;  // [4:13], dependent
     std::array<std::optional<uint32_t>, tt::packet_queue::MAX_TUNNEL_LANES> remote_receiver_y;  // [4:13], dependent
     std::array<std::optional<uint32_t>, tt::packet_queue::MAX_TUNNEL_LANES>
@@ -41,7 +41,7 @@ typedef struct eth_tunneler_dependent_config {
         remote_sender_network_type;  // [34:43], dependent
 
     std::optional<uint32_t> inner_stop_mux_d_bypass;  // Dependent
-} eth_tunneler_dependent_config_t;
+};
 
 class EthTunnelerKernel : public FDKernel {
 public:

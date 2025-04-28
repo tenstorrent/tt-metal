@@ -116,7 +116,7 @@ static_assert(test_object2.number_of_cores > 0, "Misconfigured sharded addrgen f
 static_assert(test_object2.page_size_jump > 0, "Misconfigured sharded addrgen fields for tensor1. Field \"page_size_jump\" was resolved to 0 but it must not be 0.");
 static_assert(test_object2.pages_per_tensor_row > 0, "Misconfigured sharded addrgen fields for tensor1. Field \"pages_per_tensor_row\" was resolved to 0 but it must not be 0.");
 #else
-typedef ShardedInfo<0,0,0,0,0,0,0> Tensor1ShardInfo;
+using Tensor1ShardInfo = ShardedInfo<0,0,0,0,0,0,0>;
 #endif
 #endif
 
