@@ -25,7 +25,7 @@ void Prod_op::validate(const std::vector<tt::tt_metal::Tensor>& input_tensors) c
     TT_FATAL(input_tensor_a.memory_config().memory_layout == tt::tt_metal::TensorMemoryLayout::INTERLEAVED, "Error");
     TT_FATAL(
         input_tensor_a.get_dtype() == tt::tt_metal::DataType::BFLOAT16,
-        "Error - unsupported data type for prod, expected BFLOAT16 but got {}",
+        "Error - unsupported data type for prod, expected BFLOAT16 but got {}.",
         input_tensor_a.get_dtype());
 }
 
