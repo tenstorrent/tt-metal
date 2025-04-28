@@ -368,7 +368,7 @@ def _golden_function(
 
     # this is done because torch doesn't support different padding for height and width (e.g. padding = (1, 2, 3, 4))
     torch_padded_input = torch.nn.functional.pad(
-        input_tensor,
+        input_tensor.float(),
         (pad_left, pad_right, pad_top, pad_bottom),
         mode="constant",
         value=0,
@@ -376,7 +376,7 @@ def _golden_function(
 
     # padding is (0, 0) because the padding is already applied to the input tensor above
     output_tensor = torch.nn.functional.conv2d(
-        torch_padded_input.float(),
+        torch_padded_input,
         weight_tensor.float(),
         bias=bias_tensor.float(),
         stride=stride,
