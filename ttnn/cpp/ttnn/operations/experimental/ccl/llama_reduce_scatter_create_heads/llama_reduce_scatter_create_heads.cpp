@@ -15,7 +15,7 @@
 namespace ttnn::operations::experimental::ccl {
 namespace detail {}  // namespace detail
 
-std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ExecuteLlamaReduceScatterCreateHeads::invoke(
+std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ExecuteLlamaReduceScatterCreateHeads::invoke(
     QueueId queue_id,
     const ttnn::Tensor& input_tensor,
     ttnn::Tensor& intermediate_packet_buffer,
@@ -115,7 +115,7 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ExecuteLlamaR
         },
         {input_tensor, intermediate_packet_buffer},
         output_tensors);
-    return {output_tensors.at(0), output_tensors.at(1), output_tensors.at(2), output_tensors.at(3)};
+    return {output_tensors.at(0), output_tensors.at(1), output_tensors.at(2)};
 }
 
 }  // namespace ttnn::operations::experimental::ccl

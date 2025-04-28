@@ -72,8 +72,8 @@ LlamaReduceScatterCreateHeadsDeviceOperation::compute_output_specs(
     // tiles (3840). this should be changed to use unpadded output in the future.
     const auto& input_tensor = tensor_args.input_tensor;
     const auto& input_shape = input_tensor.get_logical_shape();
-    auto batch = attributes.slice_size;
-    auto head_dim = attributes.head_dim;
+    const auto batch = attributes.slice_size;
+    const auto head_dim = attributes.head_dim;
     const Shape q_output_shape({input_shape[0], batch, attributes.num_heads, head_dim});
     const Shape v_output_shape({input_shape[0], batch, attributes.num_kv_heads, head_dim});
     const Shape k_output_shape = v_output_shape;
