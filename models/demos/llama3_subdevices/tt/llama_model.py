@@ -31,6 +31,7 @@ class TtTransformer(LightweightModule):
         use_paged_kv_cache=False,
         enable_prefetcher_performance_mode=False,
         mode="decode",
+        allocate_prefill_buffers=True,
     ):
         super().__init__()
         self.args = args
@@ -43,6 +44,7 @@ class TtTransformer(LightweightModule):
         self.grid_size = self.args.max_grid_size
         self.enable_prefetcher_performance_mode = enable_prefetcher_performance_mode
         state_dict_prefix = args.get_state_dict_prefix("", None)
+        self.allocate_prefill_buffers = allocate_prefill_buffers
 
         self.embd = TtLlamaEmbedding(
             mesh_device=mesh_device,
@@ -138,7 +140,11 @@ class TtTransformer(LightweightModule):
         self.mesh_device.set_sub_device_stall_group([self.prefetcher_setup.worker_sub_device_id])
         if mesh_sub_device_manager_id_prefill is None:
             self.tt_ccl = TT_CCL(
-                self.mesh_device, self.args, self.prefetcher_setup.worker_sub_device_id, mode="prefill"
+                self.mesh_device,
+                self.args,
+                self.prefetcher_setup.worker_sub_device_id,
+                mode="prefill",
+                allocate_prefill_buffers=self.allocate_prefill_buffers,
             )
         else:
             self.tt_ccl = self.tt_ccl_prefill

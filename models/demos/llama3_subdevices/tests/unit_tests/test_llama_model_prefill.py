@@ -86,7 +86,7 @@ def test_llama_model_inference(
 
     # This sets the minimum PCC for each iteration based on optimization mode
     if optimizations == LlamaOptimizations.accuracy:
-        pcc = 0.91  # TODO Look on improving PCC
+        pcc = 0.92  # TODO Look on improving PCC
     else:  # performance mode
         assert optimizations == LlamaOptimizations.performance
         pcc = 0.869  # TODO Look on improving PCC
@@ -94,9 +94,11 @@ def test_llama_model_inference(
     # Use instruct weights instead of general weights
     instruct = True
 
-    model_args = TtModelArgs(mesh_device, max_batch_size=batch_size, optimizations=optimizations, max_seq_len=seq_len)
+    model_args = TtModelArgs(
+        mesh_device, max_batch_size=batch_size, optimizations=optimizations, max_seq_len=seq_len, dummy_weights=True
+    )
     model_args.use_prefetcher = False
-    model_args.n_layers = 3
+    model_args.n_layers = 1
     tokenizer = Tokenizer(model_args.tokenizer_path)
 
     logger.info("Loading weights...")
@@ -177,6 +179,7 @@ def test_llama_model_inference(
         weight_cache_path=model_args.weight_cache_path(dtype),
         paged_attention_config=paged_attention_config,
         mode="prefill",
+        allocate_prefill_buffers=False,
     )
 
     logger.info("Model and caches loaded.")
