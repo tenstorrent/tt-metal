@@ -70,8 +70,60 @@ LlamaReduceScatterCreateHeadsDeviceOperation::compute_output_specs(
 
     // input is unpadded, output is padded. Ex, input: 3584, 112 tiles, padded to 5 tiles per core, total width is 120
     // tiles (3840). this should be changed to use unpadded output in the future.
-    auto input_tensor = tensor_args.input_tensor;
-    auto tile_shape = input_tensor.get_tensor_spec().tile().get_tile_shape();
+    const auto& input_tensor = tensor_args.input_tensor;
+    const auto& input_shape = input_tensor.get_logical_shape();
+    auto batch = attributes.slice_size;
+    auto head_dim = attributes.head_dim;
+    const Shape q_output_shape({input_shape[0], batch, attributes.num_heads, head_dim});
+    const Shape v_output_shape({input_shape[0], batch, attributes.num_kv_heads, head_dim});
+    const Shape k_output_shape = v_output_shape;
+    CoreRangeSet q_shard_grid, k_shard_grid, v_shard_grid;
+    auto sub_core_grid = attributes.qkv_memory_config->shard_spec->grid;
+    auto start_core_coord = sub_core_grid.bounding_box().start_coord;
+    auto next_core_coord = start_core_coord;
+
+    q_shard_grid =
+        tt::tt_metal::num_cores_to_corerangeset_in_subcoregrids(start_core_coord, batch, sub_core_grid, true);
+
+    CoreRangeSet q_batch_grid =
+        tt::tt_metal::num_cores_to_corerangeset_in_subcoregrids(start_core_coord, batch + 1, sub_core_grid, true);
+    if (!q_batch_grid.ranges().empty()) {
+        next_core_coord = q_batch_grid.ranges().back().end_coord;
+    }
+    k_shard_grid = tt::tt_metal::num_cores_to_corerangeset_in_subcoregrids(next_core_coord, batch, sub_core_grid, true);
+
+    CoreRangeSet q_two_batch_grid =
+        tt::tt_metal::num_cores_to_corerangeset_in_subcoregrids(start_core_coord, 2 * batch + 1, sub_core_grid, true);
+    if (!q_two_batch_grid.ranges().empty()) {
+        next_core_coord = q_two_batch_grid.ranges().back().end_coord;
+    }
+    v_shard_grid = tt::tt_metal::num_cores_to_corerangeset_in_subcoregrids(next_core_coord, batch, sub_core_grid, true);
+
+    tt::tt_metal::MemoryConfig q_mem_config = attributes.qkv_memory_config.value();
+    tt::tt_metal::MemoryConfig k_mem_config = attributes.qkv_memory_config.value();
+    tt::tt_metal::MemoryConfig v_mem_config = attributes.qkv_memory_config.value();
+    tt::tt_metal::ShardSpec q_shard_spec{q_shard_grid, {attributes.num_heads, head_dim}};
+    q_mem_config.shard_spec = q_shard_spec;
+    tt::tt_metal::ShardSpec k_shard_spec{k_shard_grid, {attributes.num_kv_heads, head_dim}};
+    k_mem_config.shard_spec = k_shard_spec;
+    tt::tt_metal::ShardSpec v_shard_spec{v_shard_grid, {attributes.num_kv_heads, head_dim}};
+    v_mem_config.shard_spec = v_shard_spec;
+
+    return {
+        TensorSpec(
+            q_output_shape,
+            tt::tt_metal::TensorLayout(
+                input_tensor.get_dtype(), tt::tt_metal::PageConfig(input_tensor.get_layout()), q_mem_config)),
+        TensorSpec(
+            k_output_shape,
+            tt::tt_metal::TensorLayout(
+                input_tensor.get_dtype(), tt::tt_metal::PageConfig(input_tensor.get_layout()), k_mem_config)),
+        TensorSpec(
+            v_output_shape,
+            tt::tt_metal::TensorLayout(
+                input_tensor.get_dtype(), tt::tt_metal::PageConfig(input_tensor.get_layout()), v_mem_config))};
+
+    /* auto tile_shape = input_tensor.get_tensor_spec().tile().get_tile_shape();
     auto input_spec = input_tensor.get_tensor_spec();
     auto input_shard_spec = input_tensor.shard_spec().value();
     auto input_grid = input_shard_spec.grid;
@@ -116,15 +168,20 @@ LlamaReduceScatterCreateHeadsDeviceOperation::compute_output_specs(
     return {TensorSpec(
         Shape(output_shape),
         TensorLayout(input_tensor.get_dtype(), PageConfig(input_tensor.get_layout()), out_memory_config))};
+    */
 }
 
 LlamaReduceScatterCreateHeadsDeviceOperation::tensor_return_value_t
 LlamaReduceScatterCreateHeadsDeviceOperation::create_output_tensors(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    auto output_spec = compute_output_specs(operation_attributes, tensor_args);
-
-    auto tensor = create_device_tensor(output_spec[0], tensor_args.input_tensor.device());
-    return {tensor};
+    auto output_specs = compute_output_specs(operation_attributes, tensor_args);
+    auto tensors = std::vector<ttnn::Tensor>();
+    for (auto& output_spec : output_specs) {
+        auto tensor = create_device_tensor(output_spec, tensor_args.input_tensor.device());
+        tensors.push_back(tensor);
+    }
+    // auto tensor = create_device_tensor(output_spec[0], tensor_args.input_tensor.device());
+    return tensors;
 }
 
 std::tuple<
