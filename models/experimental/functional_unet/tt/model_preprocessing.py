@@ -57,11 +57,11 @@ def create_unet_model_parameters(
     for key in parameters.keys():
         parameters[key].module = getattr(model, key)
 
-    parameters.c1["conv_blocking_and_parallelization_config_override"] = {"act_block_h": 8 * 32}
+    parameters.c1["conv_blocking_and_parallelization_config_override"] = None
     parameters.c1["use_split_reader"] = True
     parameters.c1["use_activation_double_buffer"] = True
     parameters.c1["input_channels_alignment"] = 8
-    parameters.c1_2["conv_blocking_and_parallelization_config_override"] = {"act_block_h": 8 * 32}
+    parameters.c1_2["conv_blocking_and_parallelization_config_override"] = {"act_block_h": 12 * 32}
     parameters.c1_2["use_split_reader"] = True
     parameters.c1_2["use_activation_double_buffer"] = True
     parameters.c1_2["input_channels_alignment"] = 16
@@ -71,7 +71,6 @@ def create_unet_model_parameters(
     parameters.c2["use_activation_double_buffer"] = True
     parameters.c2["input_channels_alignment"] = 16
     parameters.c2_2["conv_blocking_and_parallelization_config_override"] = None
-    parameters.c2_2["use_activation_double_buffer"] = True
     parameters.c2_2["use_split_reader"] = True
     parameters.c2_2["use_activation_double_buffer"] = True
     parameters.c2_2["input_channels_alignment"] = 16
@@ -93,10 +92,10 @@ def create_unet_model_parameters(
     parameters.c4_2["input_channels_alignment"] = 16
 
     parameters.bnc["conv_blocking_and_parallelization_config_override"] = None
-    parameters.bnc["use_activation_double_buffer"] = True
+    parameters.bnc["use_activation_double_buffer"] = False
     parameters.bnc["input_channels_alignment"] = 16
     parameters.bnc_2["conv_blocking_and_parallelization_config_override"] = None
-    parameters.bnc_2["use_activation_double_buffer"] = True
+    parameters.bnc_2["use_activation_double_buffer"] = False
     parameters.bnc_2["input_channels_alignment"] = 16
 
     parameters.c5["conv_blocking_and_parallelization_config_override"] = None
@@ -122,9 +121,9 @@ def create_unet_model_parameters(
     parameters.c6_3["use_activation_double_buffer"] = True
     parameters.c6_3["input_channels_alignment"] = 16
 
-    parameters.c7["conv_blocking_and_parallelization_config_override"] = {"act_block_h": 2 * 32}
+    parameters.c7["conv_blocking_and_parallelization_config_override"] = {"act_block_h": 3 * 32}
     parameters.c7["use_activation_double_buffer"] = True
-    parameters.c7["use_split_reader"] = True
+    parameters.c7["use_split_reader"] = False
     parameters.c7["input_channels_alignment"] = 16
     parameters.c7_2["conv_blocking_and_parallelization_config_override"] = None
     parameters.c7_2["use_split_reader"] = True
@@ -136,21 +135,20 @@ def create_unet_model_parameters(
     parameters.c7_3["input_channels_alignment"] = 16
 
     parameters.c8["conv_blocking_and_parallelization_config_override"] = {"act_block_h": 4 * 32}
-    parameters.c8["use_activation_double_buffer"] = False
-    parameters.c8["use_split_reader"] = True
+    parameters.c8["use_activation_double_buffer"] = True
+    parameters.c8["use_split_reader"] = False
     parameters.c8["input_channels_alignment"] = 8
-    parameters.c8["in_place"] = True
-    parameters.c8_2["conv_blocking_and_parallelization_config_override"] = {"act_block_h": 4 * 32}
+    parameters.c8_2["conv_blocking_and_parallelization_config_override"] = {"act_block_h": 12 * 32}
     parameters.c8_2["use_activation_double_buffer"] = True
     parameters.c8_2["use_split_reader"] = True
     parameters.c8_2["input_channels_alignment"] = 16
-    parameters.c8_2["in_place"] = False
-    parameters.c8_3["conv_blocking_and_parallelization_config_override"] = {"act_block_h": 8 * 32}
+    parameters.c8_3["conv_blocking_and_parallelization_config_override"] = {"act_block_h": 12 * 32}
+
     parameters.c8_3["use_activation_double_buffer"] = True
     parameters.c8_3["use_split_reader"] = True
     parameters.c8_3["input_channels_alignment"] = 16
 
-    parameters.output_layer["conv_blocking_and_parallelization_config_override"] = {"act_block_h": 16 * 32}
+    parameters.output_layer["conv_blocking_and_parallelization_config_override"] = {"act_block_h": 42 * 32}
     parameters.output_layer["use_activation_double_buffer"] = True
     parameters.output_layer["use_split_reader"] = True
     parameters.output_layer["input_channels_alignment"] = 16
