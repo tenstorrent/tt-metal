@@ -14,6 +14,7 @@ from models.utility_functions import torch_random
     "input_shape, module_path, num_channels", [((1,), "time_proj", 320), ((6,), "add_time_proj", 256)]
 )
 def test_timesteps(device, input_shape, module_path, num_channels, use_program_cache):
+    torch.manual_seed(2025)
     pipe = DiffusionPipeline.from_pretrained(
         "stabilityai/stable-diffusion-xl-base-1.0", torch_dtype=torch.float32, use_safetensors=True, variant="fp16"
     )

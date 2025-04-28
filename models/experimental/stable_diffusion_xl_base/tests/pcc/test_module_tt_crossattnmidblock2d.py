@@ -20,6 +20,7 @@ from models.utility_functions import torch_random
 def test_crossattnmid(
     device, input_shape, temb_shape, encoder_shape, query_dim, num_attn_heads, out_dim, use_program_cache
 ):
+    torch.manual_seed(2025)
     pipe = DiffusionPipeline.from_pretrained(
         "stabilityai/stable-diffusion-xl-base-1.0", torch_dtype=torch.float32, use_safetensors=True, variant="fp16"
     )
