@@ -463,7 +463,10 @@ all_override_plot_funs = {
 }
 
 
-def plot_hist_accuracy(data, dest, threshold):
+def plot_hist_accuracy(data, dest, threshold, xrange=None):
+    # Assign xmin and xmax from xrange
+    xmin, xmax = xrange if xrange is not None else (None, None)
+
     # Filter to only bfloat16 and group_size=1 entries
     filtered_data = [df for (op, dtype, group_size), df in data.items() if dtype == "bfloat16" and group_size == 1]
 
@@ -484,6 +487,12 @@ def plot_hist_accuracy(data, dest, threshold):
     combined_df = combined_df[combined_df["max_rel_error"].notna()]
     combined_df = combined_df[combined_df["max_rel_error"] != float("inf")]
 
+    # Apply x-range filter if provided
+    if xmin is not None:
+        combined_df = combined_df[combined_df["base_x"] >= xmin]
+    if xmax is not None:
+        combined_df = combined_df[combined_df["base_x"] <= xmax]
+
     # Filter values > threshold and group by operation
     exceeding_threshold = combined_df[combined_df["max_rel_error"] > threshold]
     counts = exceeding_threshold.groupby("operation").size()
@@ -502,10 +511,16 @@ def plot_hist_accuracy(data, dest, threshold):
     # Customize plot
     ax.set_xlabel("Operation")
     ax.set_ylabel(f"Proportion of relative errors > {threshold}")
-    ax.set_title(f"Relative Error Analysis\n(threshold = {threshold})")
 
-    # Rotate x-axis labels for better readability
+    xmin_str = f"{xmin}" if xmin is not None else "-inf"
+    xmax_str = f"{xmax}" if xmax is not None else "+inf"
+    xrange_str = f"[{xmin_str}, {xmax_str}]"
+
+    ax.set_title(f"Proportion of bad values on {xrange_str}\n(threshold = {threshold})")
+
+    # Rotate x-axis labels for better readability and format y-axis as percentage
     plt.xticks(rotation=45, ha="right")
+    plt.gca().yaxis.set_major_formatter(plt.FuncFormatter(lambda y, _: "{:.0%}".format(y)))
 
     # Add percentage labels on top of bars
     for bar in bars:
@@ -563,6 +578,13 @@ def plot_all_ops(accuracy_dir, ops_list, dest_dir, highres=False):
 
             all_op_data[(op, dtype, group_size)] = data
 
+    if highres:
+        # Plot recap (histogram of relative error)
+        plot_hist_accuracy(all_op_data, f"{dest_dir}/hist-rel-error", 0.01)
+        plot_hist_accuracy(all_op_data, f"{dest_dir}/hist-rel-error[-10,10]", 0.01, xrange=[-10, 10])
+
+    return
+
     # Concatenate exp and exp_approx (semi-generic)
     # (write both into all_op_data[exp] and remove all_op_data[exp_approx])
     for opkey in list(all_op_data.keys()):
@@ -601,10 +623,6 @@ def plot_all_ops(accuracy_dir, ops_list, dest_dir, highres=False):
                 override_plot_fun = all_override_plot_funs[op].override_accuracy_zoom
 
         plot_accuracy_op(data, dest_file, op, dtype, override_plot_fun, plot_mean=plot_mean)
-
-    if highres:
-        # Plot recap (histogram of relative error)
-        plot_hist_accuracy(all_op_data, f"{dest_dir}/hist-rel-error", 0.01)
 
 
 def main():
