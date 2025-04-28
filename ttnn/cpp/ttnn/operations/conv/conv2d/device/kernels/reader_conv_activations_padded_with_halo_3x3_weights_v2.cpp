@@ -3,36 +3,33 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "dataflow_api.h"
-constexpr uint32_t DILATION_W = get_compile_time_arg_val(3);
+#include "height_sharded_reader_common.hpp"
+
+constexpr uint32_t DILATION_W = get_compile_time_arg_val(1);
 void kernel_main() {
-    constexpr uint32_t stride_h = get_compile_time_arg_val(0);
-    constexpr uint32_t stride_w = get_compile_time_arg_val(1);
-    constexpr uint32_t dilation_h = get_compile_time_arg_val(2);
-    constexpr uint32_t dilation_w = get_compile_time_arg_val(3);
-    constexpr uint32_t conv_act_size_w_ = get_compile_time_arg_val(4);
-    constexpr uint32_t conv_output_w_last_index = get_compile_time_arg_val(5) - 1;
-    constexpr uint32_t conv_act_c_read_bytes = get_compile_time_arg_val(6);
+    constexpr uint32_t dilation_h = get_compile_time_arg_val(0);
+    constexpr uint32_t dilation_w = get_compile_time_arg_val(1);
+    constexpr uint32_t conv_act_c_read_bytes = get_compile_time_arg_val(2);
     // need to have these as compile-time, they are inner loop bouds / unroll loops / constexpr conditionals based on
     // them
-    constexpr uint32_t window_outer = get_compile_time_arg_val(7);
-    constexpr uint32_t window_inner = get_compile_time_arg_val(8);
-    constexpr uint32_t act_block_h_datums = get_compile_time_arg_val(9);
-    constexpr uint32_t act_block_num_tiles = get_compile_time_arg_val(10);
-    constexpr uint32_t weight_size_w = get_compile_time_arg_val(11);
-    constexpr uint32_t conv_act_size_w_padded = get_compile_time_arg_val(12);
-    constexpr uint32_t act_block_w_extra_align_bytes = get_compile_time_arg_val(13);
-    constexpr uint32_t weight_size_h = get_compile_time_arg_val(14);
-    constexpr uint32_t act_num_blocks_h = get_compile_time_arg_val(15);
-    constexpr uint32_t act_block_h_datums_last_block = get_compile_time_arg_val(24);
+    constexpr uint32_t window_outer = get_compile_time_arg_val(3);
+    constexpr uint32_t window_inner = get_compile_time_arg_val(4);
+    constexpr uint32_t act_block_h_datums = get_compile_time_arg_val(5);
+    constexpr uint32_t act_block_num_tiles = get_compile_time_arg_val(6);
+    constexpr uint32_t weight_size_w = get_compile_time_arg_val(8);
+    constexpr uint32_t conv_act_size_w_padded = get_compile_time_arg_val(9);
+    constexpr uint32_t act_block_w_extra_align_bytes = get_compile_time_arg_val(10);
+    constexpr uint32_t act_num_blocks_h = get_compile_time_arg_val(11);
+    constexpr uint32_t act_block_h_datums_last_block = get_compile_time_arg_val(20);
 
     constexpr uint32_t act_block_h_datums_read_last_block =
         act_block_h_datums_last_block > act_block_h_datums ? act_block_h_datums / 2 : act_block_h_datums_last_block / 2;
-    constexpr uint32_t act_block_h_datums_second_reader = get_compile_time_arg_val(25);
+    constexpr uint32_t act_block_h_datums_second_reader = get_compile_time_arg_val(21);
     constexpr uint32_t act_block_h_datums_second_reader_read = act_block_h_datums_second_reader / 2;
-
-    constexpr uint32_t cb_id_act = get_compile_time_arg_val(26);
-    constexpr uint32_t cb_id_sharded_act = get_compile_time_arg_val(27);
-    constexpr uint32_t cb_reader_indices = get_compile_time_arg_val(28);
+    constexpr bool needs_act_block_zero_out = get_compile_time_arg_val(22) == 1;
+    constexpr uint32_t cb_id_act = get_compile_time_arg_val(23);
+    constexpr uint32_t cb_id_sharded_act = get_compile_time_arg_val(24);
+    constexpr uint32_t cb_reader_indices = get_compile_time_arg_val(25);
 
     uint32_t i = 0;
     uint32_t noop = get_arg_val<uint32_t>(i);
@@ -42,10 +39,13 @@ void kernel_main() {
         return;
     }
 
+    if constexpr (needs_act_block_zero_out) {
+        zero_out_tiles<cb_id_act>();
+    }
+
     constexpr uint32_t window_outer_offset = conv_act_size_w_padded * conv_act_c_read_bytes * dilation_h;
 
     constexpr uint32_t act_block_h_datums_read = act_block_h_datums / 2;  // Extra /2 because of packed uint16 reads
-    constexpr uint32_t act_block_num_tiles_read = act_block_num_tiles;
 
     // LOOP TO FILL READER INDICES
     volatile tt_l1_ptr uint32_t* packed_reader_indices_ptr =
@@ -74,7 +74,6 @@ void kernel_main() {
     noc_async_read_one_packet_set_state(get_noc_addr(act_l1_read_addr), coalesced_read_bytes);
 
     constexpr uint32_t stride_w_bytes = dilation_w * conv_act_c_read_bytes;
-
     uint32_t start_reader_idx = 0;
     for (uint32_t bh = 0; bh < act_num_blocks_h; bh++) {
         uint32_t reader_offset = act_l1_read_addr;
@@ -82,7 +81,7 @@ void kernel_main() {
             // Reset reader_idx to finish act_block_h_datums
             reader_idx = start_reader_idx;
 
-            cb_reserve_back(cb_id_act, act_block_num_tiles_read);
+            cb_reserve_back(cb_id_act, act_block_num_tiles);
             uint32_t l1_write_addr_act = get_write_ptr(cb_id_act);
 
             // #pragma GCC unroll 4 // unroll didn't help, but act_block_h_datums (loop bound) being const does help
@@ -124,7 +123,7 @@ void kernel_main() {
             }
             noc_async_read_barrier();
 
-            cb_push_back(cb_id_act, act_block_num_tiles_read);
+            cb_push_back(cb_id_act, act_block_num_tiles);
 
             reader_offset += window_outer_offset;
         }
