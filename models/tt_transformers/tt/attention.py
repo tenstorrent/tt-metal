@@ -303,19 +303,31 @@ class Attention(LightweightModule):
 
         self.layer_past = [
             ttnn.as_tensor(
-                k_or_v,
-                dtype=self.kv_cache_dtype,
+                cache_k,
+                dtype=ttnn.bfloat4_b,
                 layout=self.model_config["ATTN_W_LAYOUT_TILE"],
                 device=self.mesh_device,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
                 cache_file_name=(
-                    f"{weight_cache_path}/kvcache_{k_or_v.shape}"
+                    f"{weight_cache_path}/kvcache_k_{cache_k.shape}"
                     if weight_cache_path and not configuration.dummy_weights
                     else None
                 ),
-            )
-            for k_or_v in [cache_k, cache_v]
+            ),
+            ttnn.as_tensor(
+                cache_v,
+                dtype=ttnn.bfloat8_b,
+                layout=self.model_config["ATTN_W_LAYOUT_TILE"],
+                device=self.mesh_device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+                cache_file_name=(
+                    f"{weight_cache_path}/kvcache_v_{cache_v.shape}"
+                    if weight_cache_path and not configuration.dummy_weights
+                    else None
+                ),
+            ),
         ]
 
     def forward_decode(
@@ -343,7 +355,7 @@ class Attention(LightweightModule):
             memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
             program_config=self.model_config["XQKV_DECODE_PROGCFG"],
             compute_kernel_config=self.li_qkv_decode_compute_kernel_cfg,
-            dtype=xself.ccl_dtype if self.TG else self.activation_dtype or ttnn.bfloat16,
+            dtype=self.ccl_dtype if self.TG else self.activation_dtype or ttnn.bfloat16,
         )
         # FIXME: File bug against dram-sharded matmuls with bias
         if self.wqkv_bias_decode:
@@ -659,24 +671,24 @@ class Attention(LightweightModule):
         else:
             keys_BKSD, values_BKSD = self.layer_past[0], self.layer_past[1]
 
-        k_heads_1KSD_8b = ttnn.typecast(k_heads_1KSD, dtype=self.kv_cache_dtype)
-        ttnn.deallocate(k_heads_1KSD)
+        self.k_cache_dtype = ttnn.bfloat4_b
+        self.v_cache_dtype = ttnn.bfloat8_b
 
-        # sharding k_fill to deal with update_cache memory limitation
+        # ---- K ----
+        k_heads_1KSD = ttnn.typecast(k_heads_1KSD, dtype=self.k_cache_dtype)
+
         if seq_len >= self.min_kv_prefill_shard_seqlen and not self.TG and not page_table:
-            k_fill = ttnn.interleaved_to_sharded(k_heads_1KSD_8b, self.model_config["KV_PREFILL_MEM_CFG"](seq_len))
+            k_fill = ttnn.interleaved_to_sharded(k_heads_1KSD, self.model_config["KV_PREFILL_MEM_CFG"](seq_len))
         else:
-            k_fill = k_heads_1KSD_8b
+            k_fill = k_heads_1KSD
 
-        v_heads_1VSD_8b = ttnn.typecast(v_heads_1VSD, dtype=self.kv_cache_dtype)
+        # ---- V ----
+        v_heads_1VSD = ttnn.typecast(v_heads_1VSD, dtype=self.v_cache_dtype)
 
-        ttnn.deallocate(v_heads_1VSD)
-
-        # sharding v_fill to deal with update_cache memory limitation
         if seq_len >= self.min_kv_prefill_shard_seqlen and not self.TG and not page_table:
-            v_fill = ttnn.interleaved_to_sharded(v_heads_1VSD_8b, self.model_config["KV_PREFILL_MEM_CFG"](seq_len))
+            v_fill = ttnn.interleaved_to_sharded(v_heads_1VSD_casted, self.model_config["KV_PREFILL_MEM_CFG"](seq_len))
         else:
-            v_fill = v_heads_1VSD_8b
+            v_fill = v_heads_1VSD
 
         if self.TG:
             k_fill = self.prefill_prepare_tensor_for_kv_cache(k_fill, user_id)
@@ -724,6 +736,8 @@ class Attention(LightweightModule):
                 program_config=self.model_config["SDPA_PROGCFG"](seq_len),
             )
         else:
+            k_heads_1KSD_8b = ttnn.typecast(k_heads_1KSD, dtype=self.k_cache_dtype)
+            v_heads_1VSD_8b = ttnn.typecast(v_heads_1VSD, dtype=self.v_cache_dtype)
             attn_output_84SD = ttnn.transformer.scaled_dot_product_attention(
                 q_heads_1QSD_8b,
                 k_heads_1KSD_8b,

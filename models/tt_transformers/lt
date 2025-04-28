@@ -70,7 +70,7 @@ test_cache_seq_lens = [
     (16384, 512, 16896),
 ]
 
-setting_test_cache = "precision_cfg = {kv_cache: bfp4}, fidelity_cfg = {li_ff1_3: hifi2fp16}"
+setting_test_cache = "precision_cfg = {kv_cache: bfp8}, fidelity_cfg = {li_ff1_3: hifi2fp16}"
 
 test_cache_commands = {
     f"test-cache-len-{i}": (
