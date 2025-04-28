@@ -110,7 +110,10 @@ void sub_exp_block_bcast_cols_inplace(uint32_t in1_cb) {
     // Postcondition: in0_cb has rows*cols produced
     // Postcondition: in1_cb has rows produced
     sub_bcast_cols_init_short(in0_cb, in1_cb);
-    exp_tile_init<true, true>();
+    constexpr uint32_t scale = 0x3DB504F3;  // 1/sqrt(dhead=128) // NOT: Not general to scale yet!
+    // constexpr uint32_t scale = 0x3F800000; // 1.0
+    // constexpr uint32_t scale = 0x40000000; // 2.0
+    exp_tile_init<true, true, scale>();
     cb_wait_front(in0_cb, rows * cols);
     cb_wait_front(in1_cb, rows);
 
@@ -271,12 +274,16 @@ void sub_exp_block(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t n
     cb_wait_front(in1_cb, num_tiles);
     cb_reserve_back(out_cb, num_tiles);
 
+    // constexpr uint16_t scale = 0x3C00; // 1.0
+    // constexpr uint16_t scale = 0x4000; // 2.0
+    constexpr uint16_t scale = 0x2DA8;  // 1/sqrt(dhead=128) NOTE: Not general to scale yet!
+
     for (uint32_t i = 0; i < num_tiles; i++) {
         acquire_dst();
 
         sub_tiles(in0_cb, in1_cb, i, i, 0);
 
-        exp_tile<true, false>(0, (int)VectorMode::C);
+        exp_tile<true, false, 8, true>(0, (int)VectorMode::C, scale);
 
         pack_tile(0, out_cb);
 
