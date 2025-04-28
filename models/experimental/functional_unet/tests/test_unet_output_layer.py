@@ -27,8 +27,20 @@ def test_unet_output_layer(batch, groups, device, reset_seeds):
     torch_input, ttnn_input = create_unet_input_tensors(batch, groups, input_channels=16)
     torch_output = model.output_layer(torch_input)
 
-    ttnn_input = ttnn.to_device(ttnn_input, device=device)
-    ttnn_input = ttnn.to_layout(ttnn_input, ttnn.TILE_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)
+    # TODO: Either infer these for get them from the model implementation
+    core_grid = ttnn.CoreRangeSet(
+        {
+            ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 6)),
+            ttnn.CoreRange(ttnn.CoreCoord(0, 7), ttnn.CoreCoord(6, 7)),
+        }
+    )
+    input_shard_shape = (2688, 16 * groups)
+    input_shard_spec = ttnn.ShardSpec(core_grid, input_shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
+    input_memory_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, input_shard_spec
+    )
+    ttnn_input = ttnn.to_device(ttnn_input, device=device, memory_config=input_memory_config)
+
     ttnn_output = ttnn_model.output_layer(ttnn_input)
     ttnn_output = ttnn_model.postprocess_output_tensor(ttnn_output)
 
