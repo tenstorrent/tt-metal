@@ -10,8 +10,6 @@ run_tg_llama3_tests() {
   # Llama3.3-70B
   llama70b=/mnt/MLPerf/tt_dnn-models/llama/Llama3.3-70B-Instruct/
 
-  # Run all Llama3 tests for 1B, 3B, 8B, 11B and 70B weights
-  # for llama_dir in "$llama1b" "$llama3b" "$llama8b" "$llama11b" "$llama70b"; do
   for llama_dir in "$llama70b"; do
     LLAMA_DIR=$llama_dir TT_METAL_ENABLE_ERISC_IRAM=1 FAKE_DEVICE=TG pytest -n auto models/demos/llama3_subdevices/demo/demo_decode.py -k "full" --timeout 1000; fail+=$?;
     LLAMA_DIR=$llama_dir TT_METAL_ENABLE_ERISC_IRAM=1 FAKE_DEVICE=TG pytest -n auto models/demos/llama3_subdevices/demo/text_demo.py -k "repeat" --timeout 1000; fail+=$?;
@@ -24,6 +22,30 @@ run_tg_llama3_tests() {
   end_time=$(date +%s)
   duration=$((end_time - start_time))
   echo "LOG_METAL: run_tg_llama3_tests $duration seconds to complete"
+  if [[ $fail -ne 0 ]]; then
+    exit 1
+  fi
+}
+
+run_tg_llama3_dp_tests() {
+  fail=0
+  start_time=$(date +%s)
+
+  echo "LOG_METAL: Running run_tg_llama3_dp_tests"
+
+  # Llama3.1-8B
+  llama8b=/mnt/MLPerf/tt_dnn-models/llama/Meta-Llama-3.1-8B-Instruct/
+  # Llama3.3-70B
+  llama70b=/mnt/MLPerf/tt_dnn-models/llama/Llama3.3-70B-Instruct/
+
+  for llama_dir in "$llama8b" "$llama70b"; do
+    LLAMA_DIR=$llama_dir MESH_DEVICE=TG pytest -n auto models/tt_transformers/demo/simple_text_demo.py --timeout 1000; fail+=$?
+    echo "LOG_METAL: Llama3 tests for $llama_dir completed"
+  done
+
+  end_time=$(date +%s)
+  duration=$((end_time - start_time))
+  echo "LOG_METAL: run_tg_llama3_dp_tests $duration seconds to complete"
   if [[ $fail -ne 0 ]]; then
     exit 1
   fi
@@ -45,8 +67,10 @@ run_tg_demo_tests() {
 
   if [[ "$1" == "falcon7b" ]]; then
     run_tg_falcon7b_tests
-  elif  [[ "$1" == "llama3" ]]; then
+  elif [[ "$1" == "llama3" ]]; then
     run_tg_llama3_tests
+  elif [[ "$1" == "llama3-dp" ]]; then
+    run_tg_llama3_dp_tests
   else
     echo "LOG_METAL: Unknown model type: $1"
     return 1
