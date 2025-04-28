@@ -121,6 +121,7 @@ TEST(MemoryPinTest, MoveConstruction) {
         MemoryPin pin2(std::move(pin1));
         EXPECT_EQ(inc_count, 1);
         EXPECT_EQ(dec_count, 0);
+        // NOLINTNEXTLINE(bugprone-use-after-move)
         EXPECT_EQ(pin1, nullptr);
     }
     EXPECT_EQ(inc_count, 1);
@@ -147,6 +148,7 @@ TEST(MemoryPinTest, MoveAssignment) {
         EXPECT_EQ(dec_count1, 0);
         EXPECT_EQ(inc_count2, 1);
         EXPECT_EQ(dec_count2, 1);
+        // NOLINTNEXTLINE(bugprone-use-after-move)
         EXPECT_EQ(pin1, nullptr);
     }
     EXPECT_EQ(inc_count1, 1);
@@ -171,6 +173,7 @@ TEST(MemoryPinTest, MoveAssignmentToEmpty) {
 
         EXPECT_EQ(inc_count, 1);
         EXPECT_EQ(dec_count, 0);
+        // NOLINTNEXTLINE(bugprone-use-after-move)
         EXPECT_EQ(pin1, nullptr);
         EXPECT_NE(pin2, nullptr);
     }
