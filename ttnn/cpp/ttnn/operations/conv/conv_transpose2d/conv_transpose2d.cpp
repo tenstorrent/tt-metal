@@ -236,7 +236,6 @@ Result conv_transpose2d(
             0,
             false,
             parallel_config.shard_orientation == ShardOrientation::COL_MAJOR,
-            0,
             input_tensor_post_tm.memory_config());
 
         if (conv_config.deallocate_activation) {

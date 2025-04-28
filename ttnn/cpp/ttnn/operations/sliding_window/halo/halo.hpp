@@ -18,7 +18,6 @@ struct HaloOperation {
         uint32_t pad_val = 0x0,
         bool remote_read = false,
         bool transpose_mcast = true,
-        uint32_t reshard_num_cores_nhw = 0,
         const tt::tt_metal::MemoryConfig& output_memory_config = tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
         bool is_out_tiled = true,
         bool in_place = false);
