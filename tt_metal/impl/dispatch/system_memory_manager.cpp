@@ -16,7 +16,6 @@
 #include "assert.hpp"
 #include "core_coord.hpp"
 #include "dispatch_settings.hpp"
-#include "hal.hpp"
 #include "hal_types.hpp"
 #include "memcpy.hpp"
 #include "system_memory_cq_interface.hpp"
@@ -310,6 +309,7 @@ void SystemMemoryManager::issue_queue_push_back(uint32_t push_size_B, const uint
         cq_interface.issue_fifo_wr_ptr += push_size_16B;
     }
 
+#ifdef DEBUG
     // Also store this data in hugepages, so if a hang happens we can see what was written by host.
     chip_id_t mmio_device_id =
         tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(this->device_id);
@@ -321,6 +321,7 @@ void SystemMemoryManager::issue_queue_push_back(uint32_t push_size_B, const uint
         issue_q_wr_ptr + get_relative_cq_offset(cq_id, this->cq_size),
         mmio_device_id,
         channel);
+#endif
 }
 
 void SystemMemoryManager::send_completion_queue_read_ptr(const uint8_t cq_id) const {
@@ -329,6 +330,7 @@ void SystemMemoryManager::send_completion_queue_read_ptr(const uint8_t cq_id) co
     uint32_t read_ptr_and_toggle = cq_interface.completion_fifo_rd_ptr | (cq_interface.completion_fifo_rd_toggle << 31);
     this->fast_write_callable(this->completion_byte_addrs[cq_id], 4, (uint8_t*)&read_ptr_and_toggle);
 
+#ifdef DEBUG
     // Also store this data in hugepages in case we hang and can't get it from the device.
     chip_id_t mmio_device_id =
         tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(this->device_id);
@@ -342,6 +344,7 @@ void SystemMemoryManager::send_completion_queue_read_ptr(const uint8_t cq_id) co
         completion_q_rd_ptr + get_relative_cq_offset(cq_id, this->cq_size),
         mmio_device_id,
         channel);
+#endif
 }
 
 void SystemMemoryManager::fetch_queue_reserve_back(const uint8_t cq_id) {
