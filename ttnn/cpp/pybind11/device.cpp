@@ -106,12 +106,6 @@ void py_device_module_types(py::module& m_device) {
             py::arg("type"),
             py::arg("axis"));
 
-    py::class_<IDevice, std::unique_ptr<IDevice, py::nodelete>>(
-        m_device, "IDevice", "Base class describing a Tenstorrent accelerator device.");
-
-    py::class_<tt::tt_metal::Device, IDevice, std::unique_ptr<Device, py::nodelete>>(
-        m_device, "Device", "Class describing a Tenstorrent accelerator device.");
-
     py::class_<SubDevice>(m_device, "SubDevice", "Class describing a sub-device of a Tenstorrent accelerator device.");
 
     py::class_<SubDeviceId>(m_device, "SubDeviceId", "ID of a sub-device.");
@@ -155,18 +149,6 @@ void device_module(py::module& m_device) {
             [](const SubDeviceId& self) { return "SubDeviceId(" + std::to_string(static_cast<int>(*self)) + ")"; })
         .def(py::self == py::self)
         .def(py::self != py::self);
-
-    auto pyDevice = static_cast<py::class_<tt::tt_metal::Device, IDevice, std::unique_ptr<tt::tt_metal::Device, py::nodelete>>>(m_device.attr("Device"));
-    pyDevice.def(
-        py::init<>([](int device_id, size_t l1_small_size, size_t trace_region_size, size_t worker_l1_size) {
-            return tt::tt_metal::Device(device_id, 1, l1_small_size, trace_region_size, {}, {}, worker_l1_size);
-        }),
-        "Create device.",
-        py::arg("device_id"),
-        py::arg("l1_small_size") = DEFAULT_L1_SMALL_SIZE,
-        py::arg("trace_region_size") = DEFAULT_TRACE_REGION_SIZE,
-        py::kw_only(),
-        py::arg("worker_l1_size") = DEFAULT_WORKER_L1_SIZE);
 
     m_device.def(
         "CreateDevice",

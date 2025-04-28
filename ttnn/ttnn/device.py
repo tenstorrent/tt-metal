@@ -15,7 +15,7 @@ def get_device_core_grid(device):
 
 
 # TODO: Device = ttnn._ttnn.Device
-Device = ttnn._ttnn.device.Device
+Device = ttnn._ttnn.multi_device.MeshDevice
 Device.core_grid = property(get_device_core_grid)
 DispatchCoreType = ttnn._ttnn.device.DispatchCoreType
 DispatchCoreAxis = ttnn._ttnn.device.DispatchCoreAxis
