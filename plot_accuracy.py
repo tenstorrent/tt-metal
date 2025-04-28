@@ -446,7 +446,7 @@ all_override_plot_funs = {
     "mish": PlotMish(),  # reuse silu settings
     "elu": PlotMish(),  # reuse silu settings
     "selu": PlotSiLU(),  # reuse silu settings
-    "softplus": PlotBasic(zoomed_in_xrange=[-5, 5], zoomed_in_yrange=[-0.5, 100]),  # reuse silu settings
+    "softplus": PlotBasic(zoomed_in_xrange=[-9, 9], zoomed_in_yrange=[-0.5, 100]),  # reuse silu settings
     "softsign": PlotBasic(zoomed_in_xrange=[-3, 3], zoomed_in_yrange=[-0.5, 100]),  # reuse silu settings
     # Trigonometric functions
     "tan": PlotTan(),  # reuse tan settings
@@ -455,15 +455,87 @@ all_override_plot_funs = {
     "cos": PlotCos(),
     # Miscellaneous functions
     "sqrt": PlotSqrt(),
-    "rsqrt": None,
+    "rsqrt": PlotBasic(zoomed_in_xrange=[0, 3], zoomed_in_yrange=[0, 100]),
     "rsqrt_approx": None,
-    "digamma": None,
-    "lgamma": None,
+    "digamma": PlotBasic(zoomed_in_xrange=[0, 10], zoomed_in_yrange=[-0.5, 1000]),
+    "lgamma": PlotBasic(zoomed_in_xrange=[0, 10], zoomed_in_yrange=[-0.5, 1000]),
     "tanhshrink": PlotBasic(zoomed_in_xrange=[-3, 3], zoomed_in_yrange=[-0.5, 10000]),
 }
 
 
-def plot_hist_accuracy(data, dest, threshold, xrange=None):
+def plot_hist_accuracy(data, dest, threshold=0.1, xrange=None):
+    thresholds = [0.005, 0.01, 0.05, 0.1]
+    # Assign xmin and xmax from xrange
+    xmin, xmax = xrange if xrange is not None else (None, None)
+
+    # Filter to only bfloat16 and group_size=1 entries
+    filtered_data = [df for (op, dtype, group_size), df in data.items() if dtype == "bfloat16" and group_size == 1]
+
+    # Concatenate all DataFrames
+    combined_df = pd.concat(filtered_data)
+
+    # If base_y and base_yref are the same then set max_rel_error to 0
+    combined_df["max_rel_error"] = np.where(
+        combined_df["base_y"] == combined_df["base_yref"], 0, combined_df["max_rel_error"]
+    )
+
+    # Filter NaN and infinite values
+    combined_df = combined_df[combined_df["max_rel_error"].notna()]
+    combined_df = combined_df[combined_df["max_rel_error"] != float("inf")]
+
+    # Apply x-range filter if provided
+    if xmin is not None:
+        combined_df = combined_df[combined_df["base_x"] >= xmin]
+    if xmax is not None:
+        combined_df = combined_df[combined_df["base_x"] <= xmax]
+
+    # Calculate proportions for each threshold
+    all_proportions = []
+    for threshold in thresholds:
+        exceeding_threshold = combined_df[combined_df["max_rel_error"] > threshold]
+        counts = exceeding_threshold.groupby("operation").size()
+        total_counts = combined_df.groupby("operation").size()
+        proportions = (counts / total_counts).reset_index()
+        proportions.columns = ["operation", "proportion"]
+        proportions["error_margin"] = f"ε > {100*threshold}%"  # Format as percent
+        all_proportions.append(proportions)
+
+    # Combine all proportions into a single dataframe
+    plot_df = pd.concat(all_proportions, ignore_index=True)
+
+    # Create figure
+    fig, ax = plt.subplots(figsize=(50, 25))
+
+    # Plot using seaborn's barplot
+    sns.barplot(x="operation", y="proportion", hue="error_margin", data=plot_df, ax=ax)
+
+    # Customize plot
+    ax.set_xlabel("Operation")
+    ax.set_ylabel("Proportion of bad values")
+    ax.set_xticklabels(ax.get_xticklabels(), rotation=45, ha="right")
+    ax.legend(title="Error Margin")
+    ax.set_ylim(0, 1)
+
+    plt.gca().yaxis.set_major_formatter(plt.FuncFormatter(lambda y, _: "{:.0%}".format(y)))
+    xmin_str = f"{xmin}" if xmin is not None else "-inf"
+    xmax_str = f"{xmax}" if xmax is not None else "+inf"
+    xrange_str = f"[{xmin_str}, {xmax_str}]"
+
+    threshold_percent_str = ", ".join([f"{100*t}%" for t in thresholds])
+    ax.set_title(f"Proportion of bad values on {xrange_str}\n(threshold $\\in$ [{threshold_percent_str}])")
+
+    # Add grid
+    ax.grid(True, axis="y", linestyle="--", alpha=0.7)
+
+    # Adjust layout to prevent label cutoff
+    plt.tight_layout()
+
+    # Save plot
+    plt.savefig(dest, bbox_inches="tight", pad_inches=0.0)
+    plt.close()
+
+
+def plot_hist_accuracy_bis(data, dest, threshold, xrange=None):
     # Assign xmin and xmax from xrange
     xmin, xmax = xrange if xrange is not None else (None, None)
 
@@ -578,12 +650,13 @@ def plot_all_ops(accuracy_dir, ops_list, dest_dir, highres=False):
 
             all_op_data[(op, dtype, group_size)] = data
 
-    if highres:
-        # Plot recap (histogram of relative error)
-        plot_hist_accuracy(all_op_data, f"{dest_dir}/hist-rel-error", 0.01)
-        plot_hist_accuracy(all_op_data, f"{dest_dir}/hist-rel-error[-10,10]", 0.01, xrange=[-10, 10])
+    # if highres:
+    #     # Plot recap (histogram of relative error)
+    #     plot_hist_accuracy(all_op_data, f"{dest_dir}/hist-rel-error", 0.01)
+    #     plot_hist_accuracy(all_op_data, f"{dest_dir}/hist-rel-error[-10,10]", 0.01, xrange=[-10, 10])
+    #     plot_hist_accuracy(all_op_data, f"{dest_dir}/hist-rel-error[-1,1]", 0.01, xrange=[-1, 1])
 
-    return
+    # return
 
     # Concatenate exp and exp_approx (semi-generic)
     # (write both into all_op_data[exp] and remove all_op_data[exp_approx])
@@ -636,7 +709,8 @@ def main():
             "xtick.labelsize": 60,
             "ytick.labelsize": 60,
             "font.size": 60,
-            "legend.fontsize": 30,
+            "legend.title_fontsize": 50,
+            "legend.fontsize": 40,
             "lines.linewidth": 4,
             "axes.linewidth": 4,
             "axes.edgecolor": "black",
@@ -701,6 +775,8 @@ def main():
         ("sqrt", "bfloat16", 1),
         ("rsqrt_approx", "bfloat16", 1),
         ("rsqrt", "bfloat16", 1),
+        ("digamma", "bfloat16", 1),
+        ("lgamma", "bfloat16", 1),
         ("tanhshrink", "bfloat16", 1),
     ]
 
