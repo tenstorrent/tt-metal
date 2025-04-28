@@ -221,7 +221,7 @@ def run_all_gather_impl(
         tt_input_tensors = []
         for i, t in enumerate(input_tensors):
             tt_input_tensors.append(ttnn.Tensor(t, input_dtype).to(layout))
-            logger.info(f"using device {mesh_device.get_devices()[i].id()}")
+            logger.info(f"using device {mesh_device.get_device_ids()[i]}")
 
         input_tensor_mesh = ttnn.aggregate_as_tensor(tt_input_tensors).to(mesh_device, input_mem_config)
 
@@ -587,7 +587,7 @@ def test_line_all_gather_async_on_T3K_cols_persistent_fabric_post_commit(
     replication_factor,
     num_iters=1,
 ):
-    if len(mesh_device.get_devices()) < 8:
+    if mesh_device.get_num_devices() < 8:
         pytest.skip("Not T3K!")
     run_line_all_gather_on_TG_with_mesh_tensor_along_rows(
         mesh_device,
@@ -651,7 +651,7 @@ def test_line_all_gather_async_on_T3K_rows_persistent_fabric_post_commit(
     replication_factor,
     num_iters=1,
 ):
-    if len(mesh_device.get_devices()) < 8:
+    if mesh_device.get_num_devices() < 8:
         pytest.skip("Not T3K!")
     run_line_all_gather_on_TG_with_mesh_tensor_along_rows(
         mesh_device,
@@ -729,7 +729,7 @@ def test_line_all_gather_async_on_T3K_back_to_back_cols_and_rows_persistent_fabr
     replication_factor2,
     num_iters=1,
 ):
-    if len(mesh_device.get_devices()) < 8:
+    if mesh_device.get_num_devices() < 8:
         pytest.skip("Not T3K!")
     run_line_all_gather_on_TG_with_mesh_tensor_along_rows(
         mesh_device,

@@ -26,17 +26,14 @@ class UNetPerformanceStatistics:
 
 
 def is_n300_with_eth_dispatch_cores(mesh_device) -> bool:
-    all_devices_using_full_grid = all(
-        [(8 == device.core_grid.x and 8 == device.core_grid.y) for device in mesh_device.get_devices()]
-    )
-    return all_devices_using_full_grid and (len(mesh_device.get_devices()) == 2)
+    all_devices_using_full_grid = 8 == mesh_device.core_grid.x and 8 == mesh_device.core_grid.y
+
+    return all_devices_using_full_grid and (mesh_device.get_num_devices() == 2)
 
 
 def is_t3k_with_eth_dispatch_cores(mesh_device) -> bool:
-    all_devices_using_full_grid = all(
-        [(8 == device.core_grid.x and 8 == device.core_grid.y) for device in mesh_device.get_devices()]
-    )
-    return all_devices_using_full_grid and (len(mesh_device.get_devices()) == 8)
+    all_devices_using_full_grid = 8 == mesh_device.core_grid.x and 8 == mesh_device.core_grid.y
+    return all_devices_using_full_grid and (mesh_device.get_num_devices() == 8)
 
 
 def verify_with_pcc(torch_tensor, ttnn_tensor, pcc):

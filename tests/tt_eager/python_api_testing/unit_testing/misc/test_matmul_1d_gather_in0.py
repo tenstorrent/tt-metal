@@ -32,9 +32,6 @@ def num_cores_to_rectangle_grid(num_cores, device):
 
     Return None if rectangle grid is not possible.
     """
-    is_mesh_device = isinstance(device, ttnn._ttnn.multi_device.MeshDevice)
-    if is_mesh_device:
-        device = device.get_device(device.get_device_ids()[0])
     x = device.compute_with_storage_grid_size().x
     while x > 0 and num_cores % x != 0:
         x -= 1
@@ -990,7 +987,7 @@ def test_matmul_1d_ring_llama_lm_head(
     function_level_defaults,
 ):
     # Only run these tests on unharvested TG
-    device_grid = (device.compute_with_storage_grid_size().x, device.compute_with_storage_grid_size().y)
+    device_grid = (mesh_device.compute_with_storage_grid_size().x, mesh_device.compute_with_storage_grid_size().y)
     if device_grid != (7, 10):
         pytest.skip("Skipping test_run_prefetcher because it only works with a 7x10 grid")
 
@@ -1002,7 +999,7 @@ def test_matmul_1d_ring_llama_lm_head(
         ]
 
     run_multi_core_matmul_1d(
-        device,
+        mesh_device,
         in0_dtype,
         in1_dtype,
         fidelity,
