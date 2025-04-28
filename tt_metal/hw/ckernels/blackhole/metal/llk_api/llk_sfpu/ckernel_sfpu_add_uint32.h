@@ -19,12 +19,12 @@ inline void add_uint32(const uint dst_offset) {
     for (int d = 0; d < ITERATIONS; d++) {
         constexpr uint dst_tile_size = 64;
         // operand A - uint32
-        TTI_SFPLOAD(p_sfpu::LREG0, 4, ADDR_MOD_7, 0);
+        TTI_SFPLOAD(p_sfpu::LREG0, INT32, ADDR_MOD_7, 0);
         // operand B - uint32
-        TT_SFPLOAD(p_sfpu::LREG1, 4, ADDR_MOD_7, dst_offset * dst_tile_size);
+        TT_SFPLOAD(p_sfpu::LREG1, INT32, ADDR_MOD_7, dst_offset * dst_tile_size);
 
-        TTI_SFPIADD(0, p_sfpu::LREG1, p_sfpu::LREG0, 4);
-        TTI_SFPSTORE(p_sfpu::LREG0, 4, ADDR_MOD_7, 0);
+        TTI_SFPIADD(0, p_sfpu::LREG1, p_sfpu::LREG0, INT32);
+        TTI_SFPSTORE(p_sfpu::LREG0, INT32, ADDR_MOD_7, 0);
 
         dst_reg++;
     }
