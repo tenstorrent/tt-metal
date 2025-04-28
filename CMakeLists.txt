@@ -310,4 +310,7 @@ if(BUILD_TT_TRAIN)
     add_subdirectory(tt-train)
 endif()
 
-include(packaging)
+# If we've been asked to build static libs, packaging is left up to them to sort out.
+if(TT_INSTALL)
+    include(packaging)
+endif()
