@@ -54,6 +54,7 @@ def prepare_conv_weights(
     groups,
     device,
     conv_config=None,
+    slice_config=None,
 ):
     """
     TTNN Conv2D applies preprocessing to the weights tensors before performing the convolution operation, to convert the weights into a format suitable for the operation.
@@ -99,6 +100,7 @@ def prepare_conv_weights(
         groups=groups,
         device=device,
         conv_config=conv_config,
+        slice_config=slice_config,
     )
 
 

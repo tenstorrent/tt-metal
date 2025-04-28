@@ -5,7 +5,6 @@
 #include "ttnn/operations/conv/conv2d/prepare_conv2d_weights.hpp"
 #include "tt-metalium/logger.hpp"
 #include "tt-metalium/shape.hpp"
-#include "ttnn/operations/conv/conv2d/device/conv2d_op.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/sliding_window/sliding_window.hpp"
 #include <optional>
@@ -17,7 +16,6 @@
 #include "ttnn/operations/data_movement/permute/permute.hpp"
 #include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
 #include "ttnn/operations/data_movement/tilize/tilize.hpp"
-#include "ttnn/operations/conv/conv2d/conv2d_utils.hpp"
 namespace ttnn {
 namespace operations::conv {
 using namespace tt;
@@ -1370,7 +1368,8 @@ template ttnn::Tensor prepare_conv_weights<IDevice>(
     uint32_t groups,
     IDevice* device,
     const std::optional<const Conv2dConfig>& conv_config_,
-    const std::optional<const DeviceComputeKernelConfig>& compute_config_);
+    const std::optional<const DeviceComputeKernelConfig>& compute_config_,
+    const std::optional<const Conv2dSliceConfig>& dram_slice_config_);
 
 template ttnn::Tensor prepare_conv_weights<MeshDevice>(
     const ttnn::Tensor& weight_tensor,
@@ -1390,7 +1389,8 @@ template ttnn::Tensor prepare_conv_weights<MeshDevice>(
     uint32_t groups,
     MeshDevice* device,
     const std::optional<const Conv2dConfig>& conv_config_,
-    const std::optional<const DeviceComputeKernelConfig>& compute_config_);
+    const std::optional<const DeviceComputeKernelConfig>& compute_config_,
+    const std::optional<const Conv2dSliceConfig>& dram_slice_config_);
 
 template std::pair<ttnn::Tensor, std::optional<ttnn::Tensor>> prepare_conv_weights_biases_on_device<IDevice>(
     const ttnn::Tensor& weight_tensor,
