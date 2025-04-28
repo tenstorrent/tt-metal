@@ -14,7 +14,7 @@ void kernel_main() {
     constexpr uint32_t page_size_bytes = get_compile_time_arg_val(4);
     constexpr uint32_t test_id = get_compile_time_arg_val(5);
 
-    auto sem_addr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(get_arg_val<uint32_t>(0)));
+    auto sem_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(get_arg_val<uint32_t>(0)));
 
     constexpr uint32_t transaction_size_bytes = transaction_num_pages * page_size_bytes;
 
@@ -24,6 +24,6 @@ void kernel_main() {
 
     {
         DeviceZoneScopedN("RISCV1");
-        noc_semaphore_wait(sem_addr, 1);
+        noc_semaphore_wait(sem_ptr, 1);
     }
 }

@@ -21,19 +21,19 @@ void kernel_main() {
     DeviceTimestampedData("Transaction size in bytes", transaction_size_bytes);
     DeviceTimestampedData("Test id", test_id);
 
-    cb_wait_front(cb_id_out0, total_num_pages);
+    cb_wait_front(cb_id_out0, 1);
+    uint32_t l1_read_addr = get_read_ptr(cb_id_out0);
     {
         DeviceZoneScopedN("RISCV0");
         for (uint32_t i = 0; i < num_of_transactions; i++) {
-            // TODO: Change dst address to change DRAM/core locations (single/multiple core)
             uint64_t dst_noc_addr = get_noc_addr_from_bank_id<true>(bank_id, dst_addr);
-            uint32_t l1_read_addr = get_read_ptr(cb_id_out0);
 
             noc_async_write(l1_read_addr, dst_noc_addr, transaction_size_bytes);
-            noc_async_write_barrier();
 
-            cb_pop_front(cb_id_out0, transaction_num_pages);
+            l1_read_addr += transaction_size_bytes;
             dst_addr += transaction_size_bytes;
         }
+        noc_async_write_barrier();
     }
+    cb_pop_front(cb_id_out0, 1);
 }

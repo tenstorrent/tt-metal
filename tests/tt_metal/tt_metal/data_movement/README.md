@@ -5,8 +5,8 @@ This test suite addresses the functionality and performance (i.e. bandwidth) of 
 ## Tests in the Test Suite
 | Name       | ID(s) | Description                                          |
 | ---------- | ----- | ---------------------------------------------------- |
-| DRAM Unary | 0-2   | Transactions between DRAM and a single Tensix core.  |
-| One to One | 3     | Transactions between two Tensix cores.               |
+| DRAM Unary | 0-3   | Transactions between DRAM and a single Tensix core.  |
+| One to One | 4     | Transactions between two Tensix cores.               |
 
 ## Running Tests
 Before running any tests, build the repo with tests: ```./build_metal.sh --build-tests```
