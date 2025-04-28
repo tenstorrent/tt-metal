@@ -2,11 +2,26 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <chrono>
+#include <fmt/base.h>
+#include <gtest/gtest.h>
+#include <stdint.h>
+#include <string>
+#include <thread>
+#include <unordered_set>
+#include <vector>
+
+#include <tt-metalium/core_coord.hpp>
 #include "debug_tools_fixture.hpp"
 #include "debug_tools_test_utils.hpp"
-
-// TODO: ARCH_NAME specific, must remove
-#include "eth_l1_address_map.h"
+#include "impl/context/metal_context.hpp"
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/host_api.hpp>
+#include "llrt.hpp"
+#include <tt-metalium/logger.hpp>
+#include "umd/device/types/arch.h"
+#include "umd/device/types/xy_pair.h"
+#include <tt-metalium/utils.hpp>
 
 //////////////////////////////////////////////////////////////////////////////////////////
 // A test for checking watcher polling the eth link training counter.
@@ -28,12 +43,13 @@ TEST_F(WatcherFixture, ActiveEthTestWatcherEthLinkCheck) {
     // Just try forcing an eth retrain on Device 0
     IDevice* device = this->devices_[0];
     vector<uint32_t> reset_val = {0x1};
+    uint32_t retrain_force_addr = tt::tt_metal::MetalContext::instance().hal().get_dev_addr(
+        tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::RETRAIN_FORCE);
     for (const CoreCoord &eth_core : device->get_active_ethernet_cores()) {
         // Only force a retrain on odd-numbered eth cores
         if (eth_core.y % 2) {
             CoreCoord virtual_core = device->ethernet_core_from_logical_core(eth_core);
-            tt::llrt::write_hex_vec_to_core(
-                device->id(), virtual_core, reset_val, eth_l1_mem::address_map::RETRAIN_FORCE_ADDR);
+            tt::llrt::write_hex_vec_to_core(device->id(), virtual_core, reset_val, retrain_force_addr);
         }
     }
 

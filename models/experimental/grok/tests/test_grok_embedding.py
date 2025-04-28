@@ -3,7 +3,6 @@
 # SPDX-License-Identifier: Apache-2.0
 import os
 import torch
-import pytest
 from loguru import logger
 
 # Set Grok flags for CI, if CI environment is setup
@@ -32,7 +31,6 @@ class Emb(torch.nn.Module):
 
 
 def test_grok_embedding(device, use_program_cache, reset_seeds):
-    t3k_mesh_device.enable_async(True)
     dtype = ttnn.bfloat16
 
     model_args = TtModelArgs(device, dummy_weights=os.getenv("CI") == "true")

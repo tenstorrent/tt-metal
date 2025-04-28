@@ -4,6 +4,7 @@
 
 #include "cpu_initializers.hpp"
 
+#include <cmath>
 #include <random>
 
 #include "autograd/auto_context.hpp"
@@ -15,7 +16,15 @@ xt::xarray<float> uniform_init(const ttnn::Shape& shape, UniformRange range) {
     uniform_init(data, range);
     std::vector<uint32_t> shape_vec(shape.cbegin(), shape.cend());
     // adapt creates view of the vector, but return will copy this data anyway (by creation of xt::array)
-    return xt::adapt(std::move(data), shape_vec);
+    return xt::adapt(data, shape_vec);
+}
+
+xt::xarray<float> normal_init(const ttnn::Shape& shape, NormalParams params) {
+    std::vector<float> data(shape.volume());
+    normal_init(data, params);
+    std::vector<uint32_t> shape_vec(shape.cbegin(), shape.cend());
+    // adapt creates view of the vector, but return will copy this data anyway (by creation of xt::array)
+    return xt::adapt(data, shape_vec);
 }
 
 void uniform_init(std::vector<float>& vec, UniformRange range) {
@@ -54,7 +63,7 @@ void xavier_uniform_init(std::vector<float>& vec, FanParams params) {
 
 void xavier_normal_init(std::vector<float>& vec, FanParams params) {
     auto& [fan_in, fan_out] = params;
-    float stddev = std::sqrtf(2.0F / (float)(fan_in + fan_out));
+    float stddev = std::sqrt(2.0F / (float)(fan_in + fan_out));
 
     // Random number generator with a seed
     // Mersenne Twister generator

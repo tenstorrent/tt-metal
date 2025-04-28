@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -25,120 +25,63 @@
 #include "risc_attribs.h"
 #include "utils/utils.h"
 #include "debug/assert.h"
+#include "compile_time_args.h"
 #include "dev_msgs.h"
+#include "dataflow_api_common.h"
+#include "dataflow_api_addrgen.h"
+#include "tools/profiler/kernel_profiler.hpp"
 
-#if defined(COMPILE_FOR_BRISC)
-constexpr uint8_t proc_type = static_cast<std::underlying_type_t<TensixProcessorTypes>>(TensixProcessorTypes::DM0);
-#else
-constexpr uint8_t proc_type = static_cast<std::underlying_type_t<TensixProcessorTypes>>(TensixProcessorTypes::DM1);
-#endif
-#if defined(KERNEL_BUILD)
-constexpr uint8_t noc_index = NOC_INDEX;
-constexpr uint8_t noc_mode = NOC_MODE;
-#else
-
-extern uint8_t noc_index;
-constexpr uint8_t noc_mode = DM_DEDICATED_NOC;
-#endif
-extern uint16_t dram_bank_to_noc_xy[NUM_NOCS][NUM_DRAM_BANKS];
-extern int32_t bank_to_dram_offset[NUM_DRAM_BANKS];
-extern uint16_t l1_bank_to_noc_xy[NUM_NOCS][NUM_L1_BANKS];
-extern int32_t bank_to_l1_offset[NUM_L1_BANKS];
-
-extern uint32_t tt_l1_ptr* rta_l1_base;
-extern uint32_t tt_l1_ptr* crta_l1_base;
-extern uint32_t tt_l1_ptr* sem_l1_base[];
-
-/** @file */
-
+// clang-format off
 /**
- * \private
+ * Returns the absolute logical X coordinate value that this kernel is running on. The absolute coordinate
+ * is the one relative to the origin of the physical grid.
+ *
+ * Return value: X coordinate value.
  */
-
-// Use VC 1 for unicast writes, and VC 4 for mcast writes
-#define NOC_UNICAST_WRITE_VC 1
-#define NOC_MULTICAST_WRITE_VC 4
-#define NOC_DISPATCH_MULTICAST_WRITE_VC 5  // Only to be used by the dispatch cores
-
-#define EXCLUDE_ENABLED 1
-#define EXCLUDE_ENABLED_OFFSET 22
-#define EXCLUDE_DIRECTION_Y_OFFSET 21
-#define EXCLUDE_DIRECTION_X_OFFSET 20
-#define EXCLUDE_START_Y_OFFSET 14
-#define EXCLUDE_START_X_OFFSET 8
-#define DYNAMIC_NOC_DIRECTION(noc, direction) (noc == 1 ? 1 - direction : direction)
-
-static_assert(NUM_NOCS == 2);
-// "Scratch" in L1 has space allocated for 256 DRAM and L1 enteries, to store offsets and NOC XY data.
-// (MEM_BANK_TO_NOC_XY_SCRATCH and MEM_BANK_OFFSET_SCRATCH)
-static_assert((NUM_DRAM_BANKS + NUM_L1_BANKS) <= 256);
-
-namespace interleaved_addr_gen {
-
-template <bool DRAM>
-FORCE_INLINE uint32_t get_bank_offset_index(uint32_t id) {
-    if constexpr (DRAM) {  // DRAM
-#ifdef IS_NOT_POW2_NUM_DRAM_BANKS
-        return udivsi3_const_divisor<NUM_DRAM_BANKS>(id);
-#else
-        return id >> LOG_BASE_2_OF_NUM_DRAM_BANKS;
-#endif
-    } else {  // L1
-#ifdef IS_NOT_POW2_NUM_L1_BANKS
-        return udivsi3_const_divisor<NUM_L1_BANKS>(id);
-#else
-        return id >> LOG_BASE_2_OF_NUM_L1_BANKS;
-#endif
-    }
+// clang-format on
+inline uint8_t get_absolute_logical_x() {
+    extern uint8_t my_logical_x_;  // Set in FW
+    return my_logical_x_;
 }
 
-template <bool DRAM>
-FORCE_INLINE uint32_t get_bank_index(uint32_t id, uint32_t bank_offset_index) {
-    if constexpr (DRAM) {  // DRAM
-        return id - bank_offset_index * NUM_DRAM_BANKS;
-    } else {  // L1
-        return id - bank_offset_index * NUM_L1_BANKS;
-    }
+// clang-format off
+/**
+ * Returns the absolute logical Y coordinate value that this kernel is running on. The absolute coordinate
+ * is the one relative to the origin of the physical grid.
+ *
+ * Return value: Y coordinate value.
+ */
+// clang-format on
+inline uint8_t get_absolute_logical_y() {
+    extern uint8_t my_logical_y_;  // Set in FW
+    return my_logical_y_;
 }
 
-template <bool DRAM>
-FORCE_INLINE uint32_t get_noc_xy(uint32_t bank_index, uint8_t noc = noc_index) {
-    if constexpr (DRAM) {  // DRAM
-        return dram_bank_to_noc_xy[noc][bank_index];
-    } else {  // L1
-        return l1_bank_to_noc_xy[noc][bank_index];
-    }
+// clang-format off
+/**
+ * Returns the relative logical X coordinate value that this kernel is running on. The relative coordinate
+ * is with respect to the origin of the sub device for this core type.
+ *
+ * Return value: X coordinate value.
+ */
+// clang-format on
+inline uint8_t get_relative_logical_x() {
+    extern uint8_t my_relative_x_;  // Set in FW
+    return my_relative_x_;
 }
 
-template <bool DRAM>
-FORCE_INLINE uint32_t get_bank_offset(uint32_t bank_index) {
-    if constexpr (DRAM) {  // DRAM
-        return bank_to_dram_offset[bank_index];
-    } else {  // L1
-        return bank_to_l1_offset[bank_index];
-    }
+// clang-format off
+/**
+ * Returns the relative logical Y coordinate value that this kernel is running on. The relative coordinate
+ * is with respect to the origin of the sub device for this core type.
+ *
+ * Return value: Y coordinate value.
+ */
+// clang-format on
+inline uint8_t get_relative_logical_y() {
+    extern uint8_t my_relative_y_;  // Set in FW
+    return my_relative_y_;
 }
-
-template <bool DRAM>
-FORCE_INLINE
-constexpr uint32_t get_allocator_alignment() {
-    if constexpr (DRAM) {
-        return DRAM_ALIGNMENT;
-    } else {
-        return L1_ALIGNMENT;
-    }
-}
-
-template <bool DRAM>
-FORCE_INLINE
-constexpr uint32_t get_log_base2_of_allocator_alignment() {
-    if constexpr (DRAM) {
-        return LOG_BASE_2_OF_DRAM_ALIGNMENT;
-    } else {
-        return LOG_BASE_2_OF_L1_ALIGNMENT;
-    }
-}
-}  // namespace interleaved_addr_gen
 
 // clang-format off
 /**
@@ -153,6 +96,7 @@ constexpr uint32_t get_log_base2_of_allocator_alignment() {
  */
 // clang-format on
 static FORCE_INLINE uint32_t get_arg_addr(int arg_idx) { return (uint32_t)&rta_l1_base[arg_idx]; }
+
 // clang-format off
 /**
  * Returns the address in L1 for a given runtime argument index for common (all cores) runtime arguments set via
@@ -205,58 +149,6 @@ FORCE_INLINE T get_common_arg_val(int arg_idx) {
     // only 4B args are supported (eg int32, uint32)
     static_assert("Error: only 4B args are supported" && sizeof(T) == 4);
     return *((tt_l1_ptr T*)(get_common_arg_addr(arg_idx)));
-}
-
-// clang-format off
-/**
- * Returns the value of a constexpr argument from kernel_compile_time_args array provided during kernel creation using
- * CreateKernel calls.
- *
- * Return value: constexpr uint32_t
- *
- * | Argument              | Description                        | Type                  | Valid Range | Required |
- * |-----------------------|------------------------------------|-----------------------|-------------|----------|
- * | arg_idx               | The index of the argument          | uint32_t              | 0 to 31     | True     |
- */
-// clang-format on
-#define get_compile_time_arg_val(arg_idx) KERNEL_COMPILE_TIME_ARG_##arg_idx
-
-template <uint32_t tile_hw = 1024>
-FORCE_INLINE constexpr static std::uint32_t MUL_WITH_TILE_SIZE(uint format, uint index) {
-    constexpr uint8_t datum_shift = (tile_hw == 1024)  ? 10
-                                    : (tile_hw == 512) ? 9
-                                    : (tile_hw == 256) ? 8
-                                    : (tile_hw == 128) ? 7
-                                    : (tile_hw == 64)  ? 6
-                                    : (tile_hw == 32)  ? 5
-                                    : (tile_hw == 16)  ? 4
-                                                       : 10;
-
-    constexpr uint8_t exp_shift = (tile_hw == 1024)  ? 6
-                                  : (tile_hw == 512) ? 5
-                                  : (tile_hw == 256) ? 4
-                                  : (tile_hw == 128) ? 4
-                                  : (tile_hw == 64)  ? 4
-                                  : (tile_hw == 32)  ? 4
-                                  : (tile_hw == 16)  ? 4
-                                                     : 6;
-    switch (format & 0x1F) {
-        case ((uint8_t)DataFormat::UInt8): return (index << datum_shift);
-        case ((uint8_t)DataFormat::UInt16):
-        case ((uint8_t)DataFormat::Float16):
-        case ((uint8_t)DataFormat::Float16_b): return (index << (datum_shift + 1));
-        case ((uint8_t)DataFormat::Int32):
-        case ((uint8_t)DataFormat::UInt32):
-        case ((uint8_t)DataFormat::Float32): return (index << (datum_shift + 2));
-        case ((uint8_t)DataFormat::Bfp2):
-        case ((uint8_t)DataFormat::Bfp2_b): return ((index << (datum_shift - 2)) + (index << (exp_shift)));
-        case ((uint8_t)DataFormat::Bfp4):
-        case ((uint8_t)DataFormat::Bfp4_b): return ((index << (datum_shift - 1)) + (index << (exp_shift)));
-        case ((uint8_t)DataFormat::Bfp8):
-        case ((uint8_t)DataFormat::Bfp8_b):
-        // Keep default as Bfp8?
-        default: return ((index << datum_shift) + (index << (exp_shift)));
-    };
 }
 
 // clang-format off
@@ -453,12 +345,6 @@ bool cb_pages_reservable_at_back(int32_t operand, int32_t num_pages) {
     // uint16_t's here because Tensix updates the val at tiles_acked_ptr as uint16 in llk_pop_tiles
     // TODO: I think we could have TRISC update tiles_acked_ptr, and we wouldn't need uint16 here
     uint16_t pages_acked = (uint16_t)reg_read(pages_acked_ptr);
-#ifdef ARCH_GRAYSKULL
-    // The following test slows down by 5% when removing the barrier
-    // TODO(pgk) investigate GS arbiter WAR in compiler, is this fixing an issue there?
-    // models/experimental/stable_diffusion/tests/test_perf_unbatched_stable_diffusion.py::test_perf_bare_metal
-    volatile uint32_t local_mem_barrier = pages_acked;
-#endif
     uint16_t free_space_pages_wrap = get_local_cb_interface(operand).fifo_num_pages - (pages_received - pages_acked);
     return num_pages <= static_cast<int32_t>(free_space_pages_wrap);
 }
@@ -492,12 +378,6 @@ void cb_reserve_back(int32_t operand, int32_t num_pages) {
         // uint16_t's here because Tensix updates the val at tiles_acked_ptr as uint16 in llk_pop_tiles
         // TODO: I think we could have TRISC update tiles_acked_ptr, and we wouldn't need uint16 here
         uint16_t pages_acked = (uint16_t)reg_read(pages_acked_ptr);
-#ifdef ARCH_GRAYSKULL
-        // The following test slows down by 5% when removing the barrier
-        // TODO(pgk) investigate GS arbiter WAR in compiler, is this fixing an issue there?
-        // models/experimental/stable_diffusion/tests/test_perf_unbatched_stable_diffusion.py::test_perf_bare_metal
-        volatile uint32_t local_mem_barrier = pages_acked;
-#endif
         uint16_t free_space_pages_wrap =
             get_local_cb_interface(operand).fifo_num_pages - (pages_received - pages_acked);
         free_space_pages = (int32_t)free_space_pages_wrap;
@@ -580,121 +460,6 @@ void cb_wait_front(int32_t operand, int32_t num_pages) {
 
 // simple APIs
 
-FORCE_INLINE
-std::uint64_t get_noc_multicast_addr(
-    std::uint32_t noc_x_start,
-    std::uint32_t noc_y_start,
-    std::uint32_t noc_x_end,
-    std::uint32_t noc_y_end,
-    std::uint32_t addr,
-    uint8_t noc = noc_index) {
-    /*
-        Get an encoding which contains tensix core and address you want to
-        read from/write to via the noc
-    */
-    return NOC_MULTICAST_ADDR(
-        DYNAMIC_NOC_X(noc, noc_x_start),
-        DYNAMIC_NOC_Y(noc, noc_y_start),
-        DYNAMIC_NOC_X(noc, noc_x_end),
-        DYNAMIC_NOC_Y(noc, noc_y_end),
-        addr);
-}
-
-FORCE_INLINE
-std::uint64_t get_noc_addr(std::uint32_t noc_x, std::uint32_t noc_y, std::uint32_t addr, uint8_t noc = noc_index) {
-    /*
-        Get an encoding which contains tensix core and address you want to
-        write to via the noc multicast
-    */
-
-    return NOC_XY_ADDR(DYNAMIC_NOC_X(noc, noc_x), DYNAMIC_NOC_Y(noc, noc_y), addr);
-}
-
-/*
-    Need an alias to get_noc_addr so that the structs below don't confuse the above get_noc_addr with
-    the struct variant
-*/
-FORCE_INLINE
-std::uint64_t get_noc_addr_helper(std::uint32_t noc_xy, std::uint32_t addr) {
-    /*
-        Get an encoding which contains tensix core and address you want to
-        write to via the noc multicast
-    */
-    return ((uint64_t)(noc_xy) << NOC_ADDR_COORD_SHIFT) | addr;
-}
-
-FORCE_INLINE
-std::uint32_t get_noc_exclude_region(
-    std::uint32_t exclude_start_x,
-    std::uint32_t exclude_start_y,
-    std::uint32_t exclude_dir_x,
-    std::uint32_t exclude_dir_y,
-    uint8_t noc = noc_index) {
-    /*
-        Get an encoding which contians the definition of the exclusion area
-    */
-    return (
-        EXCLUDE_ENABLED << EXCLUDE_ENABLED_OFFSET |
-        DYNAMIC_NOC_DIRECTION(noc, exclude_dir_y) << EXCLUDE_DIRECTION_Y_OFFSET |
-        DYNAMIC_NOC_DIRECTION(noc, exclude_dir_x) << EXCLUDE_DIRECTION_X_OFFSET |
-        DYNAMIC_NOC_Y(noc, exclude_start_y) << EXCLUDE_START_Y_OFFSET |
-        DYNAMIC_NOC_X(noc, exclude_start_x) << EXCLUDE_START_X_OFFSET);
-}
-
-uint64_t get_dram_noc_addr(
-    const uint32_t id,
-    const uint32_t page_size,
-    const uint32_t bank_base_address,
-    const uint32_t offset = 0,
-    uint8_t noc = noc_index) {
-    uint32_t bank_offset_index = interleaved_addr_gen::get_bank_offset_index<true>(id);
-    uint32_t bank_index = interleaved_addr_gen::get_bank_index<true>(id, bank_offset_index);
-    uint32_t addr =
-        (bank_offset_index * align_power_of_2(page_size, interleaved_addr_gen::get_allocator_alignment<true>())) +
-        bank_base_address + offset + bank_to_dram_offset[bank_index];
-    uint32_t noc_xy = interleaved_addr_gen::get_noc_xy<true>(bank_index, noc);
-    uint64_t noc_addr = get_noc_addr_helper(noc_xy, addr);
-    return noc_addr;
-}
-
-uint64_t get_l1_noc_addr(
-    const uint32_t id,
-    const uint32_t page_size,
-    const uint32_t bank_base_address,
-    const uint32_t offset = 0,
-    uint8_t noc = noc_index) {
-    uint32_t bank_offset_index = interleaved_addr_gen::get_bank_offset_index<false>(id);
-    uint32_t bank_index = interleaved_addr_gen::get_bank_index<false>(id, bank_offset_index);
-    uint32_t addr =
-        (bank_offset_index * align_power_of_2(page_size, interleaved_addr_gen::get_allocator_alignment<false>())) +
-        bank_base_address + offset + bank_to_dram_offset[bank_index];
-    uint32_t noc_xy = interleaved_addr_gen::get_noc_xy<false>(bank_index, noc);
-    uint64_t noc_addr = get_noc_addr_helper(noc_xy, addr);
-    return noc_addr;
-}
-
-uint64_t get_system_memory_noc_addr(
-    const uint32_t id,
-    const uint32_t page_size,
-    const uint32_t base_addr,
-    const uint32_t offset = 0,
-    uint8_t noc = noc_index) {
-    uint64_t pcie_core_noc_encoding =
-        uint64_t(NOC_XY_PCIE_ENCODING(DYNAMIC_NOC_X(noc, PCIE_NOC_X), DYNAMIC_NOC_Y(noc, PCIE_NOC_Y)));
-    uint32_t addr = base_addr + page_size * id + offset;
-    uint64_t noc_addr = pcie_core_noc_encoding | addr;
-    return noc_addr;
-}
-
-FORCE_INLINE
-std::uint64_t get_noc_addr(std::uint32_t addr, uint8_t noc = noc_index) {
-    /*
-        Get an encoding which contains the address in L1 on the current core that you want to
-        read from/write to via the noc
-    */
-    return NOC_XY_ADDR(my_x[noc], my_y[noc], addr);
-}
-
 // TODO: write docs
 // this issues only a single packet with size <= NOC_MAX_BURST_SIZE (ie maximum packet size)
 FORCE_INLINE
@@ -704,6 +469,9 @@ void noc_async_read_one_packet(
         Read requests - use static VC
         Read responses - assigned VCs dynamically
     */
+    if constexpr (noc_mode == DM_DYNAMIC_NOC) {
+        inc_noc_counter_val<proc_type, NocBarrierType::READS_NUM_ISSUED>(noc, 1);
+    }
 
     WAYPOINT("RP2W");
     while (!noc_cmd_buf_ready(noc, read_cmd_buf));
@@ -712,6 +480,11 @@ void noc_async_read_one_packet(
     WAYPOINT("NAOW");
     DEBUG_SANITIZE_NOC_READ_TRANSACTION(noc, src_noc_addr, dst_local_l1_addr, size);
 
+    if constexpr (noc_mode == DM_DYNAMIC_NOC) {
+        uint32_t noc_rd_cmd_field =
+            NOC_CMD_CPY | NOC_CMD_RD | NOC_CMD_RESP_MARKED | NOC_CMD_VC_STATIC | NOC_CMD_STATIC_VC(1);
+        NOC_CMD_BUF_WRITE_REG(noc, read_cmd_buf, NOC_CTRL, noc_rd_cmd_field);
+    }
     NOC_CMD_BUF_WRITE_REG(noc, read_cmd_buf, NOC_RET_ADDR_LO, dst_local_l1_addr);
     NOC_CMD_BUF_WRITE_REG(noc, read_cmd_buf, NOC_TARG_ADDR_LO, (uint32_t)src_noc_addr);
 #ifdef ARCH_BLACKHOLE
@@ -725,7 +498,9 @@ void noc_async_read_one_packet(
         (uint32_t)(src_noc_addr >> NOC_ADDR_COORD_SHIFT) & NOC_COORDINATE_MASK);
     NOC_CMD_BUF_WRITE_REG(noc, read_cmd_buf, NOC_AT_LEN_BE, size);
     NOC_CMD_BUF_WRITE_REG(noc, read_cmd_buf, NOC_CMD_CTRL, NOC_CTRL_SEND_REQ);
-    noc_reads_num_issued[noc] += 1;
+    if constexpr (noc_mode == DM_DEDICATED_NOC) {
+        noc_reads_num_issued[noc] += 1;
+    }
 
     WAYPOINT("NAOD");
 }
@@ -748,19 +523,21 @@ void noc_async_read_one_packet(
  * | size              | Size of data transfer in bytes                     | uint32_t  | 0..1MB                                   | Yes      |
  */
 // clang-format on
-template <uint32_t max_page_size = NOC_MAX_BURST_SIZE + 1>
+template <uint32_t max_page_size>
 inline void noc_async_read(
-    std::uint64_t src_noc_addr, std::uint32_t dst_local_l1_addr, std::uint32_t size, uint8_t noc = noc_index) {
+    std::uint64_t src_noc_addr, std::uint32_t dst_local_l1_addr, std::uint32_t size, uint8_t noc) {
     /*
         Read requests - use static VC
         Read responses - assigned VCs dynamically
     */
+    RECORD_NOC_EVENT_WITH_ADDR(NocEventType::READ,src_noc_addr,size, -1);
+
     if constexpr (max_page_size <= NOC_MAX_BURST_SIZE) {
         noc_async_read_one_packet(src_noc_addr, dst_local_l1_addr, size, noc);
     } else {
         WAYPOINT("NARW");
         DEBUG_SANITIZE_NOC_READ_TRANSACTION(noc, src_noc_addr, dst_local_l1_addr, size);
-        ncrisc_noc_fast_read_any_len(noc, read_cmd_buf, src_noc_addr, dst_local_l1_addr, size);
+        ncrisc_noc_fast_read_any_len<noc_mode>(noc, read_cmd_buf, src_noc_addr, dst_local_l1_addr, size);
         WAYPOINT("NARD");
     }
 }
@@ -773,6 +550,7 @@ void noc_async_read_one_packet_set_state(std::uint64_t src_noc_addr, std::uint32
         Read requests - use static VC
         Read responses - assigned VCs dynamically
     */
+    RECORD_NOC_EVENT_WITH_ADDR(NocEventType::READ_SET_STATE, src_noc_addr, size, -1);
 
     WAYPOINT("RP3W");
     while (!noc_cmd_buf_ready(noc, read_cmd_buf));
@@ -780,6 +558,11 @@ void noc_async_read_one_packet_set_state(std::uint64_t src_noc_addr, std::uint32
 
     WAYPOINT("NASW");
 
+    if constexpr (noc_mode == DM_DYNAMIC_NOC) {
+        uint32_t noc_rd_cmd_field =
+            NOC_CMD_CPY | NOC_CMD_RD | NOC_CMD_RESP_MARKED | NOC_CMD_VC_STATIC | NOC_CMD_STATIC_VC(1);
+        NOC_CMD_BUF_WRITE_REG(noc, read_cmd_buf, NOC_CTRL, noc_rd_cmd_field);
+    }
 #ifdef ARCH_BLACKHOLE
     // Handles reading from PCIe
     NOC_CMD_BUF_WRITE_REG(noc, read_cmd_buf, NOC_TARG_ADDR_MID, (uint32_t)(src_noc_addr >> 32) & 0x1000000F);
@@ -803,6 +586,12 @@ FORCE_INLINE void noc_async_read_one_packet_with_state(
         Read requests - use static VC
         Read responses - assigned VCs dynamically
     */
+    RECORD_NOC_EVENT_WITH_ADDR(NocEventType::READ_WITH_STATE, static_cast<uint64_t>(src_noc_addr), 0, -1);
+    if constexpr (inc_num_issued) {
+        if constexpr (noc_mode == DM_DYNAMIC_NOC) {
+            inc_noc_counter_val<proc_type, NocBarrierType::READS_NUM_ISSUED>(noc, 1);
+        }
+    }
 
     WAYPOINT("RP4W");
     while (!noc_cmd_buf_ready(noc, read_cmd_buf));
@@ -818,7 +607,9 @@ FORCE_INLINE void noc_async_read_one_packet_with_state(
     NOC_CMD_BUF_WRITE_REG(noc, read_cmd_buf, NOC_CMD_CTRL, NOC_CTRL_SEND_REQ);
 
     if constexpr (inc_num_issued) {
-        noc_reads_num_issued[noc] += 1;
+        if constexpr (noc_mode == DM_DEDICATED_NOC) {
+            noc_reads_num_issued[noc] += 1;
+        }
     }
 
     WAYPOINT("NATD");
@@ -831,6 +622,7 @@ void noc_async_read_set_state(std::uint64_t src_noc_addr, uint8_t noc = noc_inde
         Read requests - use static VC
         Read responses - assigned VCs dynamically
     */
+    RECORD_NOC_EVENT_WITH_ADDR(NocEventType::READ_SET_STATE,src_noc_addr,0,-1);
 
     WAYPOINT("RP5W");
     while (!noc_cmd_buf_ready(noc, read_cmd_buf));
@@ -838,6 +630,11 @@ void noc_async_read_set_state(std::uint64_t src_noc_addr, uint8_t noc = noc_inde
 
     WAYPOINT("NAUW");
 
+    if constexpr (noc_mode == DM_DYNAMIC_NOC) {
+        uint32_t noc_rd_cmd_field =
+            NOC_CMD_CPY | NOC_CMD_RD | NOC_CMD_RESP_MARKED | NOC_CMD_VC_STATIC | NOC_CMD_STATIC_VC(1);
+        NOC_CMD_BUF_WRITE_REG(noc, read_cmd_buf, NOC_CTRL, noc_rd_cmd_field);
+    }
 #ifdef ARCH_BLACKHOLE
     // Handles reading from PCIe
     NOC_CMD_BUF_WRITE_REG(noc, read_cmd_buf, NOC_TARG_ADDR_MID, (uint32_t)(src_noc_addr >> 32) & 0x1000000F);
@@ -859,12 +656,19 @@ FORCE_INLINE void noc_async_read_with_state(
         Read requests - use static VC
         Read responses - assigned VCs dynamically
     */
+    RECORD_NOC_EVENT_WITH_ADDR(NocEventType::READ_WITH_STATE,src_noc_addr,size,-1);
+
     WAYPOINT("NAVW");
 
     // In order to sanitize, need to grab full noc addr + xfer size from state.
     DEBUG_SANITIZE_NOC_READ_TRANSACTION_WITH_ADDR_STATE(noc, src_noc_addr, dst_local_l1_addr, size);
 
     while (size > NOC_MAX_BURST_SIZE) {
+        if constexpr (inc_num_issued) {
+            if constexpr (noc_mode == DM_DYNAMIC_NOC) {
+                inc_noc_counter_val<proc_type, NocBarrierType::READS_NUM_ISSUED>(noc, 1);
+            }
+        }
         WAYPOINT("RP6W");
         while (!noc_cmd_buf_ready(noc, read_cmd_buf));
         WAYPOINT("RP6D");
@@ -877,10 +681,17 @@ FORCE_INLINE void noc_async_read_with_state(
         src_noc_addr += NOC_MAX_BURST_SIZE;
         dst_local_l1_addr += NOC_MAX_BURST_SIZE;
         if constexpr (inc_num_issued) {
-            noc_reads_num_issued[noc] += 1;
+            if constexpr (noc_mode == DM_DEDICATED_NOC) {
+                noc_reads_num_issued[noc] += 1;
+            }
         }
     }
 
+    if constexpr (inc_num_issued) {
+        if constexpr (noc_mode == DM_DYNAMIC_NOC) {
+            inc_noc_counter_val<proc_type, NocBarrierType::READS_NUM_ISSUED>(noc, 1);
+        }
+    }
     // left-over packet
     WAYPOINT("RP7W");
     while (!noc_cmd_buf_ready(noc, read_cmd_buf));
@@ -891,7 +702,9 @@ FORCE_INLINE void noc_async_read_with_state(
     NOC_CMD_BUF_WRITE_REG(noc, read_cmd_buf, NOC_AT_LEN_BE, size);
     NOC_CMD_BUF_WRITE_REG(noc, read_cmd_buf, NOC_CMD_CTRL, NOC_CTRL_SEND_REQ);
     if constexpr (inc_num_issued) {
-        noc_reads_num_issued[noc] += 1;
+        if constexpr (noc_mode == DM_DEDICATED_NOC) {
+            noc_reads_num_issued[noc] += 1;
+        }
     }
 
     WAYPOINT("NAVD");
@@ -899,7 +712,11 @@ FORCE_INLINE void noc_async_read_with_state(
 
 FORCE_INLINE
 void noc_async_read_inc_num_issued(std::uint32_t num_issued_reads_inc, uint8_t noc = noc_index) {
-    noc_reads_num_issued[noc] += num_issued_reads_inc;
+    if constexpr (noc_mode == DM_DYNAMIC_NOC) {
+        inc_noc_counter_val<proc_type, NocBarrierType::READS_NUM_ISSUED>(noc, num_issued_reads_inc);
+    } else {
+        noc_reads_num_issued[noc] += num_issued_reads_inc;
+    }
 }
 
 // TODO: write docs
@@ -907,6 +724,12 @@ void noc_async_read_inc_num_issued(std::uint32_t num_issued_reads_inc, uint8_t n
 FORCE_INLINE
 void noc_async_write_one_packet(
     std::uint32_t src_local_l1_addr, std::uint64_t dst_noc_addr, std::uint32_t size, uint8_t noc = noc_index) {
+    RECORD_NOC_EVENT_WITH_ADDR(NocEventType::WRITE_,dst_noc_addr,size,NOC_UNICAST_WRITE_VC);
+
+    if constexpr (noc_mode == DM_DYNAMIC_NOC) {
+        inc_noc_counter_val<proc_type, NocBarrierType::NONPOSTED_WRITES_NUM_ISSUED>(noc, 1);
+        inc_noc_counter_val<proc_type, NocBarrierType::NONPOSTED_WRITES_ACKED>(noc, 1);
+    }
     WAYPOINT("NWPW");
     DEBUG_SANITIZE_NOC_WRITE_TRANSACTION(noc, dst_noc_addr, src_local_l1_addr, size);
     while (!noc_cmd_buf_ready(noc, write_cmd_buf));
@@ -931,9 +754,7 @@ void noc_async_write_one_packet(
         (uint32_t)(dst_noc_addr >> NOC_ADDR_COORD_SHIFT) & NOC_COORDINATE_MASK);
     NOC_CMD_BUF_WRITE_REG(noc, write_cmd_buf, NOC_AT_LEN_BE, size);
     NOC_CMD_BUF_WRITE_REG(noc, write_cmd_buf, NOC_CMD_CTRL, NOC_CTRL_SEND_REQ);
-    if constexpr (noc_mode == DM_DYNAMIC_NOC) {
-        inc_noc_nonposted_writes_acked<proc_type>(noc);
-    } else {
+    if constexpr (noc_mode == DM_DEDICATED_NOC) {
         noc_nonposted_writes_num_issued[noc] += 1;
         noc_nonposted_writes_acked[noc] += 1;  // num_dests
     }
@@ -950,6 +771,12 @@ void noc_async_write_multicast_one_packet(
     bool linked = false,
     bool multicast_path_reserve = true,
     uint8_t noc = noc_index) {
+    RECORD_NOC_EVENT_WITH_ADDR(NocEventType::WRITE_MULTICAST,dst_noc_addr_multicast,size, NOC_MULTICAST_WRITE_VC);
+
+    if constexpr (noc_mode == DM_DYNAMIC_NOC) {
+        inc_noc_counter_val<proc_type, NocBarrierType::NONPOSTED_WRITES_NUM_ISSUED>(noc, 1);
+        inc_noc_counter_val<proc_type, NocBarrierType::NONPOSTED_WRITES_ACKED>(noc, num_dests);
+    }
     WAYPOINT("NWPW");
     DEBUG_SANITIZE_NOC_MULTI_WRITE_TRANSACTION(noc, dst_noc_addr_multicast, src_local_l1_addr, size);
     while (!noc_cmd_buf_ready(noc, write_cmd_buf));
@@ -974,9 +801,7 @@ void noc_async_write_multicast_one_packet(
         (uint32_t)(dst_noc_addr_multicast >> NOC_ADDR_COORD_SHIFT) & NOC_COORDINATE_MASK);
     NOC_CMD_BUF_WRITE_REG(noc, write_cmd_buf, NOC_AT_LEN_BE, size);
     NOC_CMD_BUF_WRITE_REG(noc, write_cmd_buf, NOC_CMD_CTRL, NOC_CTRL_SEND_REQ);
-    if constexpr (noc_mode == DM_DYNAMIC_NOC) {
-        inc_noc_nonposted_writes_acked<proc_type>(noc, num_dests);
-    } else {
+    if constexpr (noc_mode == DM_DEDICATED_NOC) {
         noc_nonposted_writes_num_issued[noc] += 1;
         noc_nonposted_writes_acked[noc] += num_dests;
     }
@@ -987,6 +812,8 @@ void noc_async_write_multicast_one_packet(
 template <bool non_posted = true>
 FORCE_INLINE void noc_async_write_one_packet_set_state(
     std::uint64_t dst_noc_addr, std::uint32_t size, uint8_t noc = noc_index, uint8_t vc = NOC_UNICAST_WRITE_VC) {
+    RECORD_NOC_EVENT_WITH_ADDR(NocEventType::WRITE_SET_STATE, dst_noc_addr, size, vc);
+
     WAYPOINT("NWPW");
     while (!noc_cmd_buf_ready(noc, write_cmd_buf));
     WAYPOINT("NWPD");
@@ -1014,6 +841,14 @@ FORCE_INLINE void noc_async_write_one_packet_set_state(
 template <bool non_posted = true>
 FORCE_INLINE void noc_async_write_one_packet_with_state(
     std::uint32_t src_local_l1_addr, std::uint32_t dst_noc_addr, uint8_t noc = noc_index) {
+    RECORD_NOC_EVENT_WITH_ADDR(NocEventType::WRITE_WITH_STATE, 0ull, 0, -1);
+
+    if constexpr (non_posted) {
+        if constexpr (noc_mode == DM_DYNAMIC_NOC) {
+            inc_noc_counter_val<proc_type, NocBarrierType::NONPOSTED_WRITES_NUM_ISSUED>(noc, 1);
+            inc_noc_counter_val<proc_type, NocBarrierType::NONPOSTED_WRITES_ACKED>(noc, 1);
+        }
+    }
     WAYPOINT("NWPW");
     while (!noc_cmd_buf_ready(noc, write_cmd_buf));
     WAYPOINT("NWPD");
@@ -1026,351 +861,11 @@ FORCE_INLINE void noc_async_write_one_packet_with_state(
     NOC_CMD_BUF_WRITE_REG(noc, write_cmd_buf, NOC_CMD_CTRL, NOC_CTRL_SEND_REQ);
 
     if constexpr (non_posted) {
-        if constexpr (noc_mode == DM_DYNAMIC_NOC) {
-            inc_noc_nonposted_writes_acked<proc_type>(noc);
-        } else {
+        if constexpr (noc_mode == DM_DEDICATED_NOC) {
             noc_nonposted_writes_num_issued[noc] += 1;
             noc_nonposted_writes_acked[noc] += 1;  // num_dests
         }
     }
-}
-
-template <bool DRAM>
-struct InterleavedAddrGen {
-    uint32_t bank_base_address;  // Base address for the whole tensor.
-    const uint32_t page_size;    // Num bytes in page.
-    const uint32_t aligned_page_size = align_power_of_2(page_size, interleaved_addr_gen::get_allocator_alignment<DRAM>());
-
-    FORCE_INLINE
-    uint32_t get_addr(
-        const uint32_t id,
-        const uint32_t bank_offset_index,
-        const uint32_t bank_index,
-        const uint32_t offset = 0) const {
-        return (bank_offset_index * this->aligned_page_size) + this->bank_base_address + offset +
-               interleaved_addr_gen::get_bank_offset<DRAM>(bank_index);
-    }
-
-    FORCE_INLINE
-    std::uint64_t get_noc_addr(const uint32_t id, const uint32_t offset = 0, uint8_t noc = noc_index) const {
-        uint32_t bank_offset_index = interleaved_addr_gen::get_bank_offset_index<DRAM>(id);
-        uint32_t bank_index = interleaved_addr_gen::get_bank_index<DRAM>(id, bank_offset_index);
-        uint32_t addr = this->get_addr(id, bank_offset_index, bank_index, offset);
-        uint32_t noc_xy = interleaved_addr_gen::get_noc_xy<DRAM>(bank_index, noc);
-
-        uint64_t noc_addr = get_noc_addr_helper(noc_xy, addr);
-        return noc_addr;
-    }
-
-    FORCE_INLINE
-    void noc_async_read_page(
-        const uint32_t id, const uint32_t dest_addr, const uint32_t offset = 0, uint8_t noc = noc_index) const {
-        noc_async_read(this->get_noc_addr(id, offset), dest_addr, page_size, noc);
-    }
-};
-
-template <bool DRAM>
-struct InterleavedPow2AddrGen {
-    const uint32_t bank_base_address;
-    const uint32_t log_base_2_of_page_size;  // WARNING: This struct is used for optimized get_noc_addr in which case
-                                             // you know that bank_unit_size is a power of 2
-    static constexpr uint32_t log_base_2_of_allocator_alignment =
-        interleaved_addr_gen::get_log_base2_of_allocator_alignment<DRAM>();
-    const uint32_t aligned_log_base_2_of_page_size = this->log_base_2_of_page_size > log_base_2_of_allocator_alignment
-                                                         ? this->log_base_2_of_page_size
-                                                         : log_base_2_of_allocator_alignment;
-
-    FORCE_INLINE
-    uint32_t get_addr(
-        const uint32_t id,
-        const uint32_t bank_offset_index,
-        const uint32_t bank_index,
-        const uint32_t offset = 0) const {
-        return (bank_offset_index << this->aligned_log_base_2_of_page_size) + this->bank_base_address + offset +
-               interleaved_addr_gen::get_bank_offset<DRAM>(bank_index);
-    }
-
-    FORCE_INLINE
-    std::uint64_t get_noc_addr(const uint32_t id, const uint32_t offset = 0, uint8_t noc = noc_index) const {
-        uint32_t bank_offset_index = interleaved_addr_gen::get_bank_offset_index<DRAM>(id);
-        uint32_t bank_index = interleaved_addr_gen::get_bank_index<DRAM>(id, bank_offset_index);
-        uint32_t addr = this->get_addr(id, bank_offset_index, bank_index, offset);
-        uint32_t noc_xy = interleaved_addr_gen::get_noc_xy<DRAM>(bank_index, noc);
-
-        uint64_t noc_addr = get_noc_addr_helper(noc_xy, addr);
-        return noc_addr;
-    }
-};
-
-template <bool DRAM, uint32_t tile_hw = 1024>
-struct InterleavedAddrGenFast {
-    uint32_t bank_base_address;  // Base address for the whole tensor.
-    // TODO: Remove page_size from argument list. This can be derived from data_format
-    uint32_t page_size;      // Num bytes in bank unit.
-    DataFormat data_format;  // Data format
-
-    FORCE_INLINE
-    uint32_t get_addr(
-        const uint32_t id,
-        const uint32_t bank_offset_index,
-        const uint32_t bank_index,
-        const uint32_t offset = 0) const {
-        return MUL_WITH_TILE_SIZE<tile_hw>((uint)this->data_format, bank_offset_index) + this->bank_base_address +
-               offset + interleaved_addr_gen::get_bank_offset<DRAM>(bank_index);
-    }
-
-    FORCE_INLINE
-    std::uint64_t get_noc_addr(const uint32_t id, const uint32_t offset = 0, uint8_t noc = noc_index) const {
-        uint32_t bank_offset_index = interleaved_addr_gen::get_bank_offset_index<DRAM>(id);
-        uint32_t bank_index = interleaved_addr_gen::get_bank_index<DRAM>(id, bank_offset_index);
-        uint32_t addr = this->get_addr(id, bank_offset_index, bank_index, offset);
-        uint32_t noc_xy = interleaved_addr_gen::get_noc_xy<DRAM>(bank_index, noc);
-
-        uint64_t noc_addr = get_noc_addr_helper(noc_xy, addr);
-        return noc_addr;
-    }
-
-    FORCE_INLINE
-    void noc_async_read_tile(
-        const uint32_t id, uint32_t dest_addr, const uint32_t offset = 0, uint8_t noc = noc_index) const {
-        uint32_t bank_offset_index = interleaved_addr_gen::get_bank_offset_index<DRAM>(id);
-        uint32_t bank_index = interleaved_addr_gen::get_bank_index<DRAM>(id, bank_offset_index);
-        uint32_t src_addr = this->get_addr(id, bank_offset_index, bank_index, offset);
-        uint32_t src_noc_xy = interleaved_addr_gen::get_noc_xy<DRAM>(bank_index, noc);
-
-        WAYPOINT("NRTW");
-        DEBUG_SANITIZE_NOC_READ_TRANSACTION(noc, get_noc_addr_helper(src_noc_xy, src_addr), dest_addr, this->page_size);
-        while (!noc_cmd_buf_ready(noc, read_cmd_buf));
-        WAYPOINT("NRTD");
-
-        NOC_CMD_BUF_WRITE_REG(noc, read_cmd_buf, NOC_RET_ADDR_LO, dest_addr);
-        NOC_CMD_BUF_WRITE_REG(noc, read_cmd_buf, NOC_TARG_ADDR_LO, src_addr);            // (uint32_t)src_addr
-        NOC_CMD_BUF_WRITE_REG(noc, read_cmd_buf, NOC_TARG_ADDR_COORDINATE, src_noc_xy);  // src_addr >> 32
-        NOC_CMD_BUF_WRITE_REG(noc, read_cmd_buf, NOC_AT_LEN_BE, this->page_size);        // len_bytes
-        NOC_CMD_BUF_WRITE_REG(noc, read_cmd_buf, NOC_CMD_CTRL, NOC_CTRL_SEND_REQ);
-        noc_reads_num_issued[noc] += 1;
-    }
-
-    FORCE_INLINE
-    void noc_async_write_tile(const uint32_t id, uint32_t src_addr, uint8_t noc = noc_index) const {
-        uint32_t bank_offset_index = interleaved_addr_gen::get_bank_offset_index<DRAM>(id);
-        uint32_t bank_index = interleaved_addr_gen::get_bank_index<DRAM>(id, bank_offset_index);
-        uint32_t dest_addr = this->get_addr(id, bank_offset_index, bank_index);
-        uint32_t dest_noc_xy = interleaved_addr_gen::get_noc_xy<DRAM>(bank_index, noc);
-
-        WAYPOINT("NWTW");
-        DEBUG_SANITIZE_NOC_WRITE_TRANSACTION(
-            noc, get_noc_addr_helper(dest_noc_xy, dest_addr), src_addr, this->page_size);
-        while (!noc_cmd_buf_ready(noc, write_cmd_buf));
-        WAYPOINT("NWTD");
-
-        constexpr uint32_t noc_cmd_field = NOC_CMD_CPY | NOC_CMD_WR | NOC_CMD_VC_STATIC |
-                                           NOC_CMD_STATIC_VC(NOC_UNICAST_WRITE_VC) |
-                                           0x0 |  // (linked ? NOC_CMD_VC_LINKED : 0x0)
-                                           0x0 |  // (mcast ? (NOC_CMD_PATH_RESERVE | NOC_CMD_BRCST_PACKET) : 0x0)
-                                           NOC_CMD_RESP_MARKED;
-
-        NOC_CMD_BUF_WRITE_REG(noc, write_cmd_buf, NOC_CTRL, noc_cmd_field);
-        NOC_CMD_BUF_WRITE_REG(noc, write_cmd_buf, NOC_TARG_ADDR_LO, src_addr);
-        NOC_CMD_BUF_WRITE_REG(noc, write_cmd_buf, NOC_RET_ADDR_LO, dest_addr);            // (uint32_t)dest_addr
-        NOC_CMD_BUF_WRITE_REG(noc, write_cmd_buf, NOC_RET_ADDR_COORDINATE, dest_noc_xy);  // dest_addr >> 32
-        NOC_CMD_BUF_WRITE_REG(noc, write_cmd_buf, NOC_AT_LEN_BE, this->page_size);        // len_bytes
-        NOC_CMD_BUF_WRITE_REG(noc, write_cmd_buf, NOC_CMD_CTRL, NOC_CTRL_SEND_REQ);
-        if constexpr (noc_mode == DM_DYNAMIC_NOC) {
-            inc_noc_nonposted_writes_acked<proc_type>(noc);
-        } else {
-            noc_nonposted_writes_num_issued[noc] += 1;
-            noc_nonposted_writes_acked[noc] += 1;  // num_dests
-        }
-    }
-};
-
-// TODO: add noc_async_write_page
-// TODO: need static assert + host assert that page size <= 8192, hard constraint
-template <bool DRAM>
-struct InterleavedPow2AddrGenFast {
-    uint32_t bank_base_address;              // Base address for the whole tensor.
-    const uint32_t log_base_2_of_page_size;  // Num bytes in bank unit.
-    static constexpr uint32_t log_base_2_of_allocator_alignment =
-        interleaved_addr_gen::get_log_base2_of_allocator_alignment<DRAM>();
-    const uint32_t aligned_log_base_2_of_page_size = this->log_base_2_of_page_size > log_base_2_of_allocator_alignment
-                                                         ? this->log_base_2_of_page_size
-                                                         : log_base_2_of_allocator_alignment;
-
-    FORCE_INLINE
-    uint32_t get_addr(
-        const uint32_t id,
-        const uint32_t bank_offset_index,
-        const uint32_t bank_index,
-        const uint32_t offset = 0) const {
-        return (bank_offset_index << this->aligned_log_base_2_of_page_size) + this->bank_base_address + offset +
-               interleaved_addr_gen::get_bank_offset<DRAM>(bank_index);
-    }
-
-    FORCE_INLINE
-    std::uint64_t get_noc_addr(const uint32_t id, const uint32_t offset = 0, uint8_t noc = noc_index) const {
-        uint32_t bank_offset_index = interleaved_addr_gen::get_bank_offset_index<DRAM>(id);
-        uint32_t bank_index = interleaved_addr_gen::get_bank_index<DRAM>(id, bank_offset_index);
-        uint32_t addr = this->get_addr(id, bank_offset_index, bank_index, offset);
-        uint32_t noc_xy = interleaved_addr_gen::get_noc_xy<DRAM>(bank_index, noc);
-
-        uint64_t noc_addr = get_noc_addr_helper(noc_xy, addr);
-        return noc_addr;
-    }
-
-    FORCE_INLINE
-    void noc_async_read_page(
-        const uint32_t id, uint32_t dest_addr, const uint32_t offset = 0, uint8_t noc = noc_index) const {
-        uint32_t bank_offset_index = interleaved_addr_gen::get_bank_offset_index<DRAM>(id);
-        uint32_t bank_index = interleaved_addr_gen::get_bank_index<DRAM>(id, bank_offset_index);
-        uint32_t src_addr = this->get_addr(id, bank_offset_index, bank_index, offset);
-        uint32_t src_noc_xy = interleaved_addr_gen::get_noc_xy<DRAM>(bank_index, noc);
-
-        WAYPOINT("NRPW");
-        DEBUG_SANITIZE_NOC_READ_TRANSACTION(
-            noc, get_noc_addr_helper(src_noc_xy, src_addr), dest_addr, 1 << this->aligned_log_base_2_of_page_size);
-        while (!noc_cmd_buf_ready(noc, read_cmd_buf));
-        WAYPOINT("NRPD");
-
-        NOC_CMD_BUF_WRITE_REG(noc, read_cmd_buf, NOC_RET_ADDR_LO, dest_addr);
-        NOC_CMD_BUF_WRITE_REG(noc, read_cmd_buf, NOC_TARG_ADDR_LO, src_addr);            // (uint32_t)src_addr
-        NOC_CMD_BUF_WRITE_REG(noc, read_cmd_buf, NOC_TARG_ADDR_COORDINATE, src_noc_xy);  // src_addr >> 32
-        NOC_CMD_BUF_WRITE_REG(
-            noc, read_cmd_buf, NOC_AT_LEN_BE, 1 << this->aligned_log_base_2_of_page_size);  // len_bytes
-        NOC_CMD_BUF_WRITE_REG(noc, read_cmd_buf, NOC_CMD_CTRL, NOC_CTRL_SEND_REQ);
-        noc_reads_num_issued[noc] += 1;
-    }
-
-    FORCE_INLINE
-    void noc_async_read_partial_page(
-        const uint32_t id,
-        uint32_t dest_addr,
-        const uint32_t size,
-        const uint32_t offset,
-        uint8_t noc = noc_index) const {
-        uint32_t bank_offset_index = interleaved_addr_gen::get_bank_offset_index<DRAM>(id);
-        uint32_t bank_index = interleaved_addr_gen::get_bank_index<DRAM>(id, bank_offset_index);
-        uint32_t src_addr = this->get_addr(id, bank_offset_index, bank_index, offset);
-        uint32_t src_noc_xy = interleaved_addr_gen::get_noc_xy<DRAM>(bank_index, noc);
-
-        WAYPOINT("RP1W");
-        while (!noc_cmd_buf_ready(noc, read_cmd_buf));
-        WAYPOINT("RP1D");
-        DEBUG_SANITIZE_NOC_READ_TRANSACTION(noc, get_noc_addr_helper(src_noc_xy, src_addr), dest_addr, size);
-
-        NOC_CMD_BUF_WRITE_REG(noc, read_cmd_buf, NOC_RET_ADDR_LO, dest_addr);
-        NOC_CMD_BUF_WRITE_REG(noc, read_cmd_buf, NOC_TARG_ADDR_LO, src_addr);            // (uint32_t)src_addr
-        NOC_CMD_BUF_WRITE_REG(noc, read_cmd_buf, NOC_TARG_ADDR_COORDINATE, src_noc_xy);  // src_addr >> 32
-        NOC_CMD_BUF_WRITE_REG(noc, read_cmd_buf, NOC_AT_LEN_BE, size);                   // len_bytes
-        NOC_CMD_BUF_WRITE_REG(noc, read_cmd_buf, NOC_CMD_CTRL, NOC_CTRL_SEND_REQ);
-        noc_reads_num_issued[noc] += 1;
-    }
-
-    FORCE_INLINE
-    void noc_async_write_page(
-        const uint32_t id,
-        uint32_t src_addr,
-        const uint32_t write_size_bytes,
-        const uint32_t offset = 0,
-        uint8_t noc = noc_index) const {
-        uint32_t bank_offset_index = interleaved_addr_gen::get_bank_offset_index<DRAM>(id);
-        uint32_t bank_index = interleaved_addr_gen::get_bank_index<DRAM>(id, bank_offset_index);
-        uint32_t dest_addr = this->get_addr(id, bank_offset_index, bank_index, offset);
-        uint32_t dest_noc_xy = interleaved_addr_gen::get_noc_xy<DRAM>(bank_index, noc);
-
-        WAYPOINT("NWPW");
-        DEBUG_SANITIZE_NOC_WRITE_TRANSACTION(
-            noc, get_noc_addr_helper(dest_noc_xy, dest_addr), src_addr, write_size_bytes);
-        while (!noc_cmd_buf_ready(noc, write_cmd_buf));
-        WAYPOINT("NWPD");
-
-        constexpr uint32_t noc_cmd_field = NOC_CMD_CPY | NOC_CMD_WR | NOC_CMD_VC_STATIC |
-                                           NOC_CMD_STATIC_VC(NOC_UNICAST_WRITE_VC) |
-                                           0x0 |  // (linked ? NOC_CMD_VC_LINKED : 0x0)
-                                           0x0 |  // (mcast ? (NOC_CMD_PATH_RESERVE | NOC_CMD_BRCST_PACKET) : 0x0)
-                                           NOC_CMD_RESP_MARKED;
-
-        NOC_CMD_BUF_WRITE_REG(noc, write_cmd_buf, NOC_CTRL, noc_cmd_field);
-        NOC_CMD_BUF_WRITE_REG(noc, write_cmd_buf, NOC_TARG_ADDR_LO, src_addr);
-        NOC_CMD_BUF_WRITE_REG(noc, write_cmd_buf, NOC_RET_ADDR_LO, dest_addr);            // (uint32_t)dest_addr
-        NOC_CMD_BUF_WRITE_REG(noc, write_cmd_buf, NOC_RET_ADDR_COORDINATE, dest_noc_xy);  // dest_addr >> 32
-        NOC_CMD_BUF_WRITE_REG(noc, write_cmd_buf, NOC_AT_LEN_BE, write_size_bytes);       // len_bytes
-        NOC_CMD_BUF_WRITE_REG(noc, write_cmd_buf, NOC_CMD_CTRL, NOC_CTRL_SEND_REQ);
-        if constexpr (noc_mode == DM_DYNAMIC_NOC) {
-            inc_noc_nonposted_writes_acked<proc_type>(noc);
-        } else {
-            noc_nonposted_writes_num_issued[noc] += 1;
-            noc_nonposted_writes_acked[noc] += 1;  // num_dests
-        }
-    }
-};
-
-template <bool DRAM>
-FORCE_INLINE std::uint64_t get_noc_addr(
-    const uint32_t id, const InterleavedAddrGen<DRAM>& s, uint32_t offset = 0, uint8_t noc = noc_index) {
-    /*
-        Alternative API for getting the noc address when we are reading using a swizzled
-        layout. This version assumes bank unit size can be arbitrary size. Use
-        get_noc_addr(const uint32_t id, InterleavedPow2AddrGen s) for optimized algorithm in which stick size
-        is a power of 2.
-
-        id: Unique id for the bank_unit you want to read, assuming row major order. We use this to compute the
-        bank for this unit of data.
-
-        InterleavedAddrGen: Check struct for attribute definitions.
-    */
-    return s.get_noc_addr(id, offset, noc);
-}
-
-template <bool DRAM>
-FORCE_INLINE std::uint64_t get_noc_addr(
-    const uint32_t id, const InterleavedPow2AddrGen<DRAM>& s, uint32_t offset = 0, uint8_t noc = noc_index) {
-    /*
-        Alternative API for getting the noc address when we are reading using a swizzled
-        layout. This version assumes bank unit size is a power of 2. For arbitrary bank
-        unit size, use get_noc_addr(const uint32_t id, const InterleavedOffset s)
-
-        id: Unique id for the bank_unit you want to read, assuming row major order. We use this to compute the
-        bank for this unit of data.
-
-        InterleavedPow2AddrGen: Check struct for attribute definitions.
-    */
-
-    return s.get_noc_addr(id, offset, noc);
-}
-
-template <bool DRAM, uint32_t tile_hw>
-FORCE_INLINE std::uint64_t get_noc_addr(
-    const uint32_t id, const InterleavedAddrGenFast<DRAM, tile_hw>& s, uint32_t offset = 0, uint8_t noc = noc_index) {
-    /*
-        Alternative API for getting the noc address when we are reading using a swizzled
-        layout. This version assumes bank unit size can be arbitrary size. Use
-        get_noc_addr(const uint32_t id, InterleavedPow2AddrGen s) for optimized algorithm in which stick size
-        is a power of 2.
-
-        id: Unique id for the bank_unit you want to read, assuming row major order. We use this to compute the
-        bank for this unit of data.
-
-        InterleavedAddrGen: Check struct for attribute definitions.
-    */
-    return s.get_noc_addr(id, offset, noc);
-}
-
-template <bool DRAM>
-FORCE_INLINE std::uint64_t get_noc_addr(
-    const uint32_t id, const InterleavedPow2AddrGenFast<DRAM>& s, uint32_t offset = 0, uint8_t noc = noc_index) {
-    /*
-        Alternative API for getting the noc address when we are reading using a swizzled
-        layout. This version assumes bank unit size is a power of 2 and less than or equal to NOC_MAX_BURST_SIZE.
-        For arbitrary bank unit size, use get_noc_addr(const uint32_t id, const InterleavedOffset s)
-
-        id: Unique id for the bank_unit you want to read, assuming row major order. We use this to compute the
-        bank for this unit of data.
-
-        InterleavedPow2AddrGenFast: Check struct for attribute definitions.
-    */
-
-    return s.get_noc_addr(id, offset, noc);
 }
 
 template <bool DRAM>
@@ -1384,6 +879,8 @@ FORCE_INLINE void noc_async_read_page(
         Read requests - use static VC
         Read responses - assigned VCs dynamically
     */
+    RECORD_NOC_EVENT_WITH_ID(NocEventType::READ, id, s.page_size, -1);
+
     s.noc_async_read_page(id, dst_local_l1_addr, offset, noc);
 }
 
@@ -1398,6 +895,8 @@ FORCE_INLINE void noc_async_read_tile(
         Read requests - use static VC
         Read responses - assigned VCs dynamically
     */
+    RECORD_NOC_EVENT_WITH_ID(NocEventType::READ, id, s.page_size, -1);
+
     s.noc_async_read_tile(id, dst_local_l1_addr, offset, noc);
 }
 
@@ -1427,9 +926,11 @@ inline void noc_async_write(
     if constexpr (max_page_size <= NOC_MAX_BURST_SIZE) {
         noc_async_write_one_packet(src_local_l1_addr, dst_noc_addr, size, noc);
     } else {
+        RECORD_NOC_EVENT_WITH_ADDR(NocEventType::WRITE_, dst_noc_addr, size, NOC_UNICAST_WRITE_VC);
+
         WAYPOINT("NAWW");
         DEBUG_SANITIZE_NOC_WRITE_TRANSACTION(noc, dst_noc_addr, src_local_l1_addr, size);
-        ncrisc_noc_fast_write_any_len<proc_type, noc_mode>(
+        ncrisc_noc_fast_write_any_len<noc_mode>(
             noc, write_cmd_buf, src_local_l1_addr, dst_noc_addr, size, NOC_UNICAST_WRITE_VC, false, false, 1, true);
         WAYPOINT("NAWD");
     }
@@ -1441,6 +942,8 @@ FORCE_INLINE void noc_async_write_tile(
     const InterleavedAddrGenFast<DRAM, tile_hw>& s,
     std::uint32_t src_local_l1_addr,
     uint8_t noc = noc_index) {
+    RECORD_NOC_EVENT_WITH_ID(NocEventType::WRITE_, id, s.page_size, NOC_UNICAST_WRITE_VC);
+
     s.noc_async_write_tile(id, src_local_l1_addr, noc);
 }
 
@@ -1453,7 +956,7 @@ inline void noc_semaphore_set_remote(
     std::uint32_t src_local_l1_addr, std::uint64_t dst_noc_addr, uint8_t noc = noc_index) {
     WAYPOINT("NSSW");
     DEBUG_SANITIZE_NOC_WRITE_TRANSACTION(noc, dst_noc_addr, src_local_l1_addr, 4);
-    ncrisc_noc_fast_write_any_len<proc_type, noc_mode>(
+    ncrisc_noc_fast_write_any_len<noc_mode>(
         noc,
         write_reg_cmd_buf,
         src_local_l1_addr,
@@ -1516,7 +1019,8 @@ inline void noc_async_write_multicast(
     } else {
         WAYPOINT("NMWW");
         DEBUG_SANITIZE_NOC_MULTI_WRITE_TRANSACTION(noc, dst_noc_addr_multicast, src_local_l1_addr, size);
-        ncrisc_noc_fast_write_any_len<proc_type, noc_mode>(
+        RECORD_NOC_EVENT_WITH_ADDR(NocEventType::WRITE_MULTICAST, dst_noc_addr_multicast, size, NOC_MULTICAST_WRITE_VC);
+        ncrisc_noc_fast_write_any_len<noc_mode>(
             noc,
             write_cmd_buf,
             src_local_l1_addr,
@@ -1566,7 +1070,7 @@ inline void noc_semaphore_set_multicast(
     uint8_t noc = noc_index) {
     WAYPOINT("NSNW");
     DEBUG_SANITIZE_NOC_MULTI_WRITE_TRANSACTION(noc, dst_noc_addr_multicast, src_local_l1_addr, 4);
-    ncrisc_noc_fast_write_any_len<proc_type, noc_mode>(
+    ncrisc_noc_fast_write_any_len<noc_mode>(
         noc,
         write_reg_cmd_buf,
         src_local_l1_addr,
@@ -1614,7 +1118,7 @@ inline void noc_semaphore_set_multicast_loopback_src(
     uint8_t noc = noc_index) {
     WAYPOINT("NSLW");
     DEBUG_SANITIZE_NOC_MULTI_WRITE_TRANSACTION(noc, dst_noc_addr_multicast, src_local_l1_addr, 4);
-    ncrisc_noc_fast_write_any_len_loopback_src<proc_type, noc_mode>(
+    ncrisc_noc_fast_write_any_len_loopback_src<noc_mode>(
         noc,
         write_reg_cmd_buf,
         src_local_l1_addr,
@@ -1638,7 +1142,7 @@ inline void noc_async_write_multicast_loopback_src(
     uint8_t noc = noc_index) {
     WAYPOINT("NMLW");
     DEBUG_SANITIZE_NOC_MULTI_WRITE_TRANSACTION(noc, dst_noc_addr_multicast, src_local_l1_addr, size);
-    ncrisc_noc_fast_write_any_len_loopback_src<proc_type, noc_mode>(
+    ncrisc_noc_fast_write_any_len_loopback_src<noc_mode>(
         noc,
         write_cmd_buf,
         src_local_l1_addr,
@@ -1703,7 +1207,7 @@ inline void noc_async_write_multicast_exclude_region(
     uint8_t noc = noc_index) {
     WAYPOINT("NMEW");
     DEBUG_SANITIZE_NOC_MULTI_WRITE_TRANSACTION(noc, dst_noc_addr_multicast, src_local_l1_addr, size);
-    ncrisc_noc_fast_write_any_len_exclude_region<proc_type, noc_mode>(
+    ncrisc_noc_fast_write_any_len_exclude_region<noc_mode>(
         noc,
         write_cmd_buf,
         src_local_l1_addr,
@@ -1728,10 +1232,20 @@ inline void noc_async_write_multicast_exclude_region(
  * Return value: None
  */
 void noc_async_read_barrier(uint8_t noc = noc_index) {
+    RECORD_NOC_EVENT(NocEventType::READ_BARRIER_START);
+
     WAYPOINT("NRBW");
-    while (!ncrisc_noc_reads_flushed(noc));
+    if constexpr (noc_mode == DM_DYNAMIC_NOC) {
+        while (!ncrisc_dynamic_noc_reads_flushed(noc)) {
+            invalidate_l1_cache();
+        }
+    } else {
+        while (!ncrisc_noc_reads_flushed(noc));
+    }
     invalidate_l1_cache();
     WAYPOINT("NRBD");
+
+    RECORD_NOC_EVENT(NocEventType::READ_BARRIER_END);
 }
 
 /**
@@ -1744,13 +1258,20 @@ void noc_async_read_barrier(uint8_t noc = noc_index) {
  */
 FORCE_INLINE
 void noc_async_write_barrier(uint8_t noc = noc_index) {
+    RECORD_NOC_EVENT(NocEventType::WRITE_BARRIER_START);
+
     WAYPOINT("NWBW");
     if constexpr (noc_mode == DM_DYNAMIC_NOC) {
-        while (!ncrisc_dynamic_noc_nonposted_writes_flushed<proc_type>(noc));
+        while (!ncrisc_dynamic_noc_nonposted_writes_flushed(noc)) {
+            invalidate_l1_cache();
+        }
     } else {
         while (!ncrisc_noc_nonposted_writes_flushed(noc));
     }
+    invalidate_l1_cache();
     WAYPOINT("NWBD");
+
+    RECORD_NOC_EVENT(NocEventType::WRITE_BARRIER_END);
 }
 
 /**
@@ -1760,8 +1281,17 @@ void noc_async_write_barrier(uint8_t noc = noc_index) {
  */
 FORCE_INLINE
 void noc_async_writes_flushed(uint8_t noc = noc_index) {
+    RECORD_NOC_EVENT(NocEventType::WRITE_FLUSH);
+
     WAYPOINT("NWFW");
-    while (!ncrisc_noc_nonposted_writes_sent(noc));
+    if constexpr (noc_mode == DM_DYNAMIC_NOC) {
+        while (!ncrisc_dynamic_noc_nonposted_writes_sent(noc)) {
+            invalidate_l1_cache();
+        }
+    } else {
+        while (!ncrisc_noc_nonposted_writes_sent(noc));
+    }
+    invalidate_l1_cache();
     WAYPOINT("NWFD");
 }
 
@@ -1773,7 +1303,14 @@ void noc_async_writes_flushed(uint8_t noc = noc_index) {
 FORCE_INLINE
 void noc_async_posted_writes_flushed(uint8_t noc = noc_index) {
     WAYPOINT("NPWW");
-    while (!ncrisc_noc_posted_writes_sent(noc));
+    if constexpr (noc_mode == DM_DYNAMIC_NOC) {
+        while (!ncrisc_dynamic_noc_posted_writes_sent(noc)) {
+            invalidate_l1_cache();
+        }
+    } else {
+        while (!ncrisc_noc_posted_writes_sent(noc));
+    }
+    invalidate_l1_cache();
     WAYPOINT("NPWD");
 }
 
@@ -1787,8 +1324,17 @@ void noc_async_posted_writes_flushed(uint8_t noc = noc_index) {
  */
 FORCE_INLINE
 void noc_async_atomic_barrier(uint8_t noc_idx = noc_index) {
+    RECORD_NOC_EVENT(NocEventType::ATOMIC_BARRIER);
+
     WAYPOINT("NABW");
-    while (!ncrisc_noc_nonposted_atomics_flushed(noc_idx));
+    if constexpr (noc_mode == DM_DYNAMIC_NOC) {
+        while (!ncrisc_dynamic_noc_nonposted_atomics_flushed(noc_idx)) {
+            invalidate_l1_cache();
+        }
+    } else {
+        while (!ncrisc_noc_nonposted_atomics_flushed(noc_idx));
+    }
+    invalidate_l1_cache();
     WAYPOINT("NABD");
 }
 
@@ -1802,19 +1348,33 @@ void noc_async_atomic_barrier(uint8_t noc_idx = noc_index) {
  */
 FORCE_INLINE
 void noc_async_full_barrier(uint8_t noc_idx = noc_index) {
-    WAYPOINT("NFBW");
-    do {
-        invalidate_l1_cache();
-    } while (!ncrisc_noc_reads_flushed(noc_idx));
-    WAYPOINT("NFCW");
-    while (!ncrisc_noc_nonposted_writes_sent(noc_idx));
-    WAYPOINT("NFDW");
-    while (!ncrisc_noc_nonposted_writes_flushed(noc_idx));
-    WAYPOINT("NFEW");
-    while (!ncrisc_noc_nonposted_atomics_flushed(noc_idx));
-    WAYPOINT("NFFW");
-    while (!ncrisc_noc_posted_writes_sent(noc_idx));
-    WAYPOINT("NFBD");
+    invalidate_l1_cache();
+    RECORD_NOC_EVENT(NocEventType::FULL_BARRIER);
+    if constexpr (noc_mode == DM_DYNAMIC_NOC) {
+        WAYPOINT("NFBW");
+        while (!ncrisc_dynamic_noc_reads_flushed(noc_idx));
+        WAYPOINT("NFCW");
+        while (!ncrisc_dynamic_noc_nonposted_writes_sent(noc_idx));
+        WAYPOINT("NFDW");
+        while (!ncrisc_dynamic_noc_nonposted_writes_flushed(noc_idx));
+        WAYPOINT("NFEW");
+        while (!ncrisc_dynamic_noc_nonposted_atomics_flushed(noc_idx));
+        WAYPOINT("NFFW");
+        while (!ncrisc_dynamic_noc_posted_writes_sent(noc_idx));
+        WAYPOINT("NFBD");
+    } else {
+        WAYPOINT("NFBW");
+        while (!ncrisc_noc_reads_flushed(noc_idx));
+        WAYPOINT("NFCW");
+        while (!ncrisc_noc_nonposted_writes_sent(noc_idx));
+        WAYPOINT("NFDW");
+        while (!ncrisc_noc_nonposted_writes_flushed(noc_idx));
+        WAYPOINT("NFEW");
+        while (!ncrisc_noc_nonposted_atomics_flushed(noc_idx));
+        WAYPOINT("NFFW");
+        while (!ncrisc_noc_posted_writes_sent(noc_idx));
+        WAYPOINT("NFBD");
+    }
 }
 
 // clang-format off
@@ -1834,6 +1394,8 @@ void noc_async_full_barrier(uint8_t noc_idx = noc_index) {
 // clang-format on
 FORCE_INLINE
 void noc_semaphore_wait(volatile tt_l1_ptr uint32_t* sem_addr, uint32_t val) {
+    RECORD_NOC_EVENT(NocEventType::SEMAPHORE_WAIT);
+
     WAYPOINT("NSW");
     do {
         invalidate_l1_cache();
@@ -1858,6 +1420,8 @@ void noc_semaphore_wait(volatile tt_l1_ptr uint32_t* sem_addr, uint32_t val) {
 // clang-format on
 FORCE_INLINE
 void noc_semaphore_wait_min(volatile tt_l1_ptr uint32_t* sem_addr, uint32_t val) {
+    RECORD_NOC_EVENT(NocEventType::SEMAPHORE_WAIT);
+
     WAYPOINT("NSMW");
     do {
         invalidate_l1_cache();
@@ -1882,6 +1446,8 @@ void noc_semaphore_wait_min(volatile tt_l1_ptr uint32_t* sem_addr, uint32_t val)
 // clang-format on
 FORCE_INLINE
 void noc_semaphore_set(volatile tt_l1_ptr uint32_t* sem_addr, uint32_t val) {
+    RECORD_NOC_EVENT(NocEventType::SEMAPHORE_SET);
+
     // set semaphore value to val
     (*sem_addr) = val;
 }
@@ -1896,7 +1462,7 @@ void noc_semaphore_set(volatile tt_l1_ptr uint32_t* sem_addr, uint32_t val) {
  * Unlike using \a noc_async_write, there are also no address alignment concerns.
  * Also, see \a noc_async_write_barrier.
  *
- * The destination node can be either a DRAM bank, Tensix core+L1 memory
+ * The destination node can be either a Tensix core+L1 memory
  * address or a PCIe controller.
  *
  * Return value: None
@@ -1908,11 +1474,55 @@ void noc_semaphore_set(volatile tt_l1_ptr uint32_t* sem_addr, uint32_t val) {
  * | be        | Byte-enable                                            | uint8_t  | 0x1-0xF                                                       | False    |
  */
 // clang-format on
-FORCE_INLINE
-void noc_inline_dw_write(uint64_t addr, uint32_t val, uint8_t be = 0xF, uint8_t noc = noc_index) {
+template <bool write_to_stream_reg = false, bool posted = false>
+FORCE_INLINE void noc_inline_dw_write(uint64_t addr, uint32_t val, uint8_t be = 0xF, uint8_t noc = noc_index) {
     WAYPOINT("NWIW");
     DEBUG_SANITIZE_NOC_ADDR(noc, addr, 4);
-    noc_fast_write_dw_inline<proc_type, noc_mode>(
+    // This API does not support DRAM addresses
+    DEBUG_SANITIZE_NO_DRAM_ADDR(noc, addr, 4);
+#ifdef ARCH_BLACKHOLE
+    // On Blackhole issuing inline writes and atomics requires all 4 memory ports to accept the transaction at the same
+    // time. If one port on the receipient has no back-pressure then the transaction will hang because there is no
+    // mechanism to allow one memory port to move ahead of another. To workaround this hang, we emulate inline writes on
+    // Blackhole by writing the value to be written to local L1 first and then issue a noc async write.
+    ASSERT((addr & 0x3) == 0);
+    if constexpr (write_to_stream_reg) {
+        noc_fast_write_dw_inline<noc_mode>(
+            noc,
+            write_at_cmd_buf,
+            val,
+            addr,
+            be,  // byte-enable
+            NOC_UNICAST_WRITE_VC,
+            false,  // mcast
+            false   // posted
+        );
+        WAYPOINT("NWID");
+        return;
+    }
+
+    ASSERT(be == 0xF);
+    uint32_t src_addr = noc_get_interim_inline_value_addr(noc, addr);
+    DEBUG_SANITIZE_NOC_WRITE_TRANSACTION(noc, addr, src_addr, 4);
+    noc_async_writes_flushed(noc);
+    volatile tt_l1_ptr uint32_t* interim_addr_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(src_addr);
+    *interim_addr_ptr = val;
+    ncrisc_noc_fast_write_any_len<noc_mode>(
+        noc,
+        write_cmd_buf,
+        src_addr,
+        addr,
+        4,
+        NOC_UNICAST_WRITE_VC,
+        false,  // mcast
+        false,  // linked
+        1,      // num_dests
+        true,   // multicast_path_reserve
+        false   // posted
+    );
+    noc_async_writes_flushed(noc);
+#else
+    noc_fast_write_dw_inline<noc_mode>(
         noc,
         write_at_cmd_buf,
         val,
@@ -1920,8 +1530,72 @@ void noc_inline_dw_write(uint64_t addr, uint32_t val, uint8_t be = 0xF, uint8_t 
         be,  // byte-enable
         NOC_UNICAST_WRITE_VC,
         false,  // mcast
-        false   // posted
+        posted  // posted
     );
+#endif
+    WAYPOINT("NWID");
+}
+
+// on BH this api can only write to stream register, writing to L1 will cause hangs!
+template <bool posted = false>
+FORCE_INLINE void noc_inline_dw_write_set_state(
+    uint64_t addr, uint8_t be = 0xF, uint8_t cmd_buf = write_at_cmd_buf, uint8_t noc = noc_index) {
+    WAYPOINT("NWIW");
+    // DEBUG_SANITIZE_NOC_ADDR is not needed here because it doesn't send out the request
+    // The address could be set here or later in noc_inline_dw_write_with_state
+
+    uint32_t noc_cmd_field = NOC_CMD_VC_STATIC | NOC_CMD_STATIC_VC(NOC_UNICAST_WRITE_VC) | NOC_CMD_CPY | NOC_CMD_WR |
+                             NOC_CMD_WR_INLINE | 0x0 | (posted ? 0x0 : NOC_CMD_RESP_MARKED);
+
+    uint32_t be32 = be;
+    uint32_t be_shift = (addr & (NOC_WORD_BYTES - 1));
+    // If we're given a misaligned address, don't write to the bytes in the word below the address
+    be32 = (be32 << be_shift);
+
+    while (!noc_cmd_buf_ready(noc, cmd_buf));
+    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CTRL, noc_cmd_field);
+    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_TARG_ADDR_LO, addr & 0xFFFFFFFF);
+    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_TARG_ADDR_COORDINATE, (uint32_t)(addr >> NOC_ADDR_COORD_SHIFT));
+    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_AT_LEN_BE, be32);
+    WAYPOINT("NWID");
+}
+
+// on BH this api can only write to stream register, writing to L1 will cause hangs!
+template <bool update_addr_lo = false, bool update_counter = true, bool posted = false, bool update_addr_hi = false>
+FORCE_INLINE void noc_inline_dw_write_with_state(
+    uint32_t val, uint32_t addr = 0, uint8_t cmd_buf = write_at_cmd_buf, uint8_t noc = noc_index) {
+    // only either hi or lo address should be getting updated
+    static_assert("Error: Only High or Low address update is supported" && (update_addr_lo && update_addr_hi) == 0);
+
+    if constexpr (noc_mode == DM_DYNAMIC_NOC) {
+        if constexpr (update_counter) {
+            if constexpr (posted) {
+                inc_noc_counter_val<proc_type, NocBarrierType::POSTED_WRITES_NUM_ISSUED>(noc, 1);
+            } else {
+                inc_noc_counter_val<proc_type, NocBarrierType::NONPOSTED_WRITES_NUM_ISSUED>(noc, 1);
+                inc_noc_counter_val<proc_type, NocBarrierType::NONPOSTED_WRITES_ACKED>(noc, 1);
+            }
+        }
+    }
+    WAYPOINT("NWIW");
+    while (!noc_cmd_buf_ready(noc, cmd_buf));
+    if constexpr (update_addr_lo) {
+        NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_TARG_ADDR_LO, addr);
+    } else if constexpr (update_addr_hi) {
+        NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_TARG_ADDR_COORDINATE, addr);
+    }
+    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_AT_DATA, val);
+    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CMD_CTRL, NOC_CTRL_SEND_REQ);
+    if constexpr (noc_mode == DM_DEDICATED_NOC) {
+        if constexpr (update_counter) {
+            if constexpr (posted) {
+                noc_posted_writes_num_issued[noc] += 1;
+            } else {
+                noc_nonposted_writes_num_issued[noc] += 1;
+                noc_nonposted_writes_acked[noc] += 1;
+            }
+        }
+    }
     WAYPOINT("NWID");
 }
 
@@ -1940,12 +1614,14 @@ void noc_inline_dw_write(uint64_t addr, uint32_t val, uint8_t be = 0xF, uint8_t 
  * | incr      | The value to increment by                                      | uint32_t | Any uint32_t value                                            | True     |
  */
 // clang-format on
-FORCE_INLINE
-void noc_semaphore_inc(uint64_t addr, uint32_t incr, uint8_t noc_id = noc_index) {
+template <bool posted = false>
+FORCE_INLINE void noc_semaphore_inc(uint64_t addr, uint32_t incr, uint8_t noc_id = noc_index) {
     /*
     [REFER TO grayskull/noc/noc.h for the documentation of noc_atomic_increment()]
     Generic increment with 32-bit wrap.
   */
+    RECORD_NOC_EVENT_WITH_ADDR(NocEventType::SEMAPHORE_INC,addr,0, NOC_UNICAST_WRITE_VC);
+
     WAYPOINT("NSIW");
     DEBUG_SANITIZE_NOC_ADDR(noc_id, addr, 4);
     DEBUG_INSERT_DELAY(TransactionAtomic);
@@ -1957,7 +1633,7 @@ void noc_semaphore_inc(uint64_t addr, uint32_t incr, uint8_t noc_id = noc_index)
         incr,
         31 /*wrap*/,
         false /*linked*/,
-        false /*posted*/,
+        posted /*posted*/,
         MEM_NOC_ATOMIC_RET_VAL_ADDR);
     WAYPOINT("NSID");
 }
@@ -1985,6 +1661,9 @@ FORCE_INLINE uint32_t noc_async_read_tile_dram_sharded_set_state(
     src_addr_ = bank_base_address + bank_to_dram_offset[bank_id];
     src_noc_xy = dram_bank_to_noc_xy[noc][bank_id];
 
+    RECORD_NOC_EVENT_WITH_ADDR(
+        NocEventType::READ_DRAM_SHARDED_SET_STATE, uint64_t(src_noc_xy) << 32, page_size, (use_vc) ? vc : -1);
+
     WAYPOINT("NRTW");
     while (!noc_cmd_buf_ready(noc, read_cmd_buf));
     WAYPOINT("NRTD");
@@ -2004,8 +1683,12 @@ FORCE_INLINE uint32_t noc_async_read_tile_dram_sharded_set_state(
 FORCE_INLINE
 void noc_async_read_tile_dram_sharded_with_state(
     uint32_t src_base_addr, uint32_t src_addr, uint32_t dest_addr, uint32_t trid = 0, uint8_t noc = noc_index) {
-    uint32_t src_addr_;
+    RECORD_NOC_EVENT(NocEventType::READ_DRAM_SHARDED_WITH_STATE);
 
+    uint32_t src_addr_;
+    if constexpr (noc_mode == DM_DYNAMIC_NOC) {
+        inc_noc_counter_val<proc_type, NocBarrierType::READS_NUM_ISSUED>(noc, 1);
+    }
     src_addr_ = src_base_addr + src_addr;
 
     WAYPOINT("NRTW");
@@ -2015,21 +1698,28 @@ void noc_async_read_tile_dram_sharded_with_state(
     NOC_CMD_BUF_WRITE_REG(noc, read_cmd_buf, NOC_RET_ADDR_LO, dest_addr);
     NOC_CMD_BUF_WRITE_REG(noc, read_cmd_buf, NOC_TARG_ADDR_LO, src_addr_);  // (uint32_t)src_addr
     NOC_CMD_BUF_WRITE_REG(noc, read_cmd_buf, NOC_CMD_CTRL, NOC_CTRL_SEND_REQ);
-    noc_reads_num_issued[noc] += 1;
+    if constexpr (noc_mode == DM_DEDICATED_NOC) {
+        noc_reads_num_issued[noc] += 1;
+    }
 }
 
-FORCE_INLINE
-void noc_async_read_tile_dram_sharded_with_state_with_trid(
+template <bool skip_ptr_update = false>
+FORCE_INLINE void noc_async_read_tile_dram_sharded_with_state_with_trid(
     uint32_t src_base_addr, uint32_t src_addr, uint32_t dest_addr, uint32_t trid = 0, uint8_t noc = noc_index) {
+    RECORD_NOC_EVENT(NocEventType::READ_DRAM_SHARDED_WITH_STATE);
+
     WAYPOINT("NRDW");
 #ifndef ARCH_GRAYSKULL
-    ncrisc_noc_fast_read_with_transaction_id(noc, read_cmd_buf, src_base_addr, src_addr, dest_addr, trid);
+    ncrisc_noc_fast_read_with_transaction_id<noc_mode, skip_ptr_update>(
+        noc, read_cmd_buf, src_base_addr, src_addr, dest_addr, trid);
 #endif
     WAYPOINT("NRDD");
 }
 
 FORCE_INLINE
 void noc_async_read_tile_dram_sharded_set_trid(uint32_t trid = 0, uint8_t noc = noc_index) {
+    RECORD_NOC_EVENT(NocEventType::READ_SET_TRID);
+
     WAYPOINT("NSTW");
 #ifndef ARCH_GRAYSKULL
     ncrisc_noc_set_transaction_id(noc, read_cmd_buf, trid);
@@ -2040,6 +1730,7 @@ void noc_async_read_tile_dram_sharded_set_trid(uint32_t trid = 0, uint8_t noc = 
 FORCE_INLINE
 void noc_async_read_barrier_with_trid(uint32_t trid, uint8_t noc = noc_index) {
     WAYPOINT("NBTW");
+    RECORD_NOC_EVENT(NocEventType::READ_BARRIER_WITH_TRID);
 #ifndef ARCH_GRAYSKULL
     while (!ncrisc_noc_read_with_transaction_id_flushed(noc, trid));
 #endif
@@ -2047,75 +1738,120 @@ void noc_async_read_barrier_with_trid(uint32_t trid, uint8_t noc = noc_index) {
     WAYPOINT("NBTD");
 }
 
-inline void noc_async_write_one_packet_with_trid_set_state(std::uint64_t dst_noc_addr, uint8_t noc = noc_index) {
-#ifndef ARCH_GRAYSKULL
+template <bool posted = false>
+FORCE_INLINE void noc_async_write_one_packet_with_trid_set_state(
+    std::uint64_t dst_noc_addr, uint8_t cmd_buf = write_cmd_buf, uint8_t noc = noc_index) {
     WAYPOINT("NAWW");
-    while (!noc_cmd_buf_ready(noc, write_cmd_buf));
+    RECORD_NOC_EVENT_WITH_ADDR(NocEventType::WRITE_WITH_TRID_SET_STATE, dst_noc_addr, 0, NOC_UNICAST_WRITE_VC);
+    while (!noc_cmd_buf_ready(noc, cmd_buf));
     WAYPOINT("NAWD");
     uint32_t noc_cmd_field = NOC_CMD_CPY | NOC_CMD_WR | NOC_CMD_VC_STATIC | NOC_CMD_STATIC_VC(NOC_UNICAST_WRITE_VC) |
                              0x0 |  // (linked ? NOC_CMD_VC_LINKED : 0x0)
                              0x0 |  // (mcast ? (NOC_CMD_PATH_RESERVE | NOC_CMD_BRCST_PACKET) : 0x0)
-                             NOC_CMD_RESP_MARKED;
+                             (posted ? 0 : NOC_CMD_RESP_MARKED);
 
-    NOC_CMD_BUF_WRITE_REG(noc, write_cmd_buf, NOC_CTRL, noc_cmd_field);
+    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CTRL, noc_cmd_field);
 #ifdef ARCH_BLACKHOLE
     // Handles writing to PCIe
-    NOC_CMD_BUF_WRITE_REG(noc, write_cmd_buf, NOC_RET_ADDR_MID, (uint32_t)(dst_noc_addr >> 32) & 0x1000000F);
+    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_RET_ADDR_MID, (uint32_t)(dst_noc_addr >> 32) & 0x1000000F);
 #endif
     NOC_CMD_BUF_WRITE_REG(
-        noc,
-        write_cmd_buf,
-        NOC_RET_ADDR_COORDINATE,
-        (uint32_t)(dst_noc_addr >> NOC_ADDR_COORD_SHIFT) & NOC_COORDINATE_MASK);
-#endif
+        noc, cmd_buf, NOC_RET_ADDR_COORDINATE, (uint32_t)(dst_noc_addr >> NOC_ADDR_COORD_SHIFT) & NOC_COORDINATE_MASK);
 }
 
+template <bool update_counter = true, bool posted = false>
 FORCE_INLINE void noc_async_write_one_packet_with_trid_with_state(
     std::uint32_t src_local_l1_addr,
     std::uint32_t dst_noc_addr,
     std::uint32_t size,
     std::uint32_t trid,
+    uint8_t cmd_buf = write_cmd_buf,
     uint8_t noc = noc_index) {
-#ifndef ARCH_GRAYSKULL
+    if constexpr (noc_mode == DM_DYNAMIC_NOC) {
+        if constexpr (update_counter) {
+            if constexpr (posted) {
+                inc_noc_counter_val<proc_type, NocBarrierType::POSTED_WRITES_NUM_ISSUED>(noc, 1);
+            } else {
+                inc_noc_counter_val<proc_type, NocBarrierType::NONPOSTED_WRITES_NUM_ISSUED>(noc, 1);
+                inc_noc_counter_val<proc_type, NocBarrierType::NONPOSTED_WRITES_ACKED>(noc, 1);
+            }
+        }
+    }
     WAYPOINT("NWPW");
-    while (!noc_cmd_buf_ready(noc, write_cmd_buf));
+    RECORD_NOC_EVENT_WITH_ADDR(NocEventType::WRITE_WITH_TRID_WITH_STATE, 0ull, size, -1);
+    while (!noc_cmd_buf_ready(noc, cmd_buf));
     WAYPOINT("NWPD");
 
     // In order to sanitize, need to grab full noc addr + xfer size from state.
-    DEBUG_SANITIZE_NOC_WRITE_TRANSACTION_WITH_ADDR_AND_SIZE_STATE(noc, dst_noc_addr, src_local_l1_addr);
-
-    NOC_CMD_BUF_WRITE_REG(noc, write_cmd_buf, NOC_PACKET_TAG, NOC_PACKET_TAG_TRANSACTION_ID(trid));
-    NOC_CMD_BUF_WRITE_REG(noc, write_cmd_buf, NOC_TARG_ADDR_LO, src_local_l1_addr);
-    NOC_CMD_BUF_WRITE_REG(noc, write_cmd_buf, NOC_RET_ADDR_LO, dst_noc_addr);
-    NOC_CMD_BUF_WRITE_REG(noc, write_cmd_buf, NOC_AT_LEN_BE, size);
-    NOC_CMD_BUF_WRITE_REG(noc, write_cmd_buf, NOC_CMD_CTRL, NOC_CTRL_SEND_REQ);
-#endif
+    DEBUG_SANITIZE_NOC_WRITE_TRANSACTION_WITH_ADDR_STATE(noc, dst_noc_addr, src_local_l1_addr, size);
+    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_PACKET_TAG, NOC_PACKET_TAG_TRANSACTION_ID(trid));
+    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_TARG_ADDR_LO, src_local_l1_addr);
+    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_RET_ADDR_LO, (uint32_t)dst_noc_addr);
+    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_AT_LEN_BE, size);
+    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CMD_CTRL, NOC_CTRL_SEND_REQ);
+    if constexpr (noc_mode == DM_DEDICATED_NOC) {
+        if constexpr (update_counter) {
+            if constexpr (posted) {
+                noc_posted_writes_num_issued[noc] += 1;
+            } else {
+                noc_nonposted_writes_num_issued[noc] += 1;
+                noc_nonposted_writes_acked[noc] += 1;
+            }
+        }
+    }
 }
 
-inline void noc_async_write_one_packet_with_trid(
+template <bool update_counter = true, bool posted = false>
+FORCE_INLINE void noc_async_write_one_packet_with_trid(
     std::uint32_t src_local_l1_addr,
     std::uint64_t dst_noc_addr,
     std::uint32_t size,
     std::uint32_t trid,
+    uint8_t cmd_buf = write_cmd_buf,
     uint8_t noc = noc_index) {
+    if constexpr (noc_mode == DM_DYNAMIC_NOC) {
+        if constexpr (update_counter) {
+            if constexpr (posted) {
+                inc_noc_counter_val<proc_type, NocBarrierType::POSTED_WRITES_NUM_ISSUED>(noc, 1);
+            } else {
+                inc_noc_counter_val<proc_type, NocBarrierType::NONPOSTED_WRITES_NUM_ISSUED>(noc, 1);
+                inc_noc_counter_val<proc_type, NocBarrierType::NONPOSTED_WRITES_ACKED>(noc, 1);
+            }
+        }
+    }
     WAYPOINT("NAWW");
+    RECORD_NOC_EVENT_WITH_ADDR(NocEventType::WRITE_WITH_TRID, dst_noc_addr, size, -1);
     DEBUG_SANITIZE_NOC_WRITE_TRANSACTION(noc, dst_noc_addr, src_local_l1_addr, size);
-#ifndef ARCH_GRAYSKULL
-    ncrisc_noc_fast_write_any_len<proc_type, noc_mode, true, true>(
-        noc,
-        write_cmd_buf,
-        src_local_l1_addr,
-        dst_noc_addr,
-        size,
-        NOC_UNICAST_WRITE_VC,
-        false /*mcast*/,
-        false /*linked*/,
-        1 /*num_dests*/,
-        false /*multicast_path_reserve*/,
-        false /*posted*/,
-        trid /*trid*/);
+    while (!noc_cmd_buf_ready(noc, cmd_buf));
+    WAYPOINT("NWPD");
+
+    uint32_t noc_cmd_field = NOC_CMD_CPY | NOC_CMD_WR | NOC_CMD_VC_STATIC | NOC_CMD_STATIC_VC(NOC_UNICAST_WRITE_VC) |
+                             0x0 |  // (linked ? NOC_CMD_VC_LINKED : 0x0)
+                             0x0 |  // (mcast ? (NOC_CMD_PATH_RESERVE | NOC_CMD_BRCST_PACKET) : 0x0)
+                             (posted ? 0 : NOC_CMD_RESP_MARKED);
+
+    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CTRL, noc_cmd_field);
+#ifdef ARCH_BLACKHOLE
+    // Handles writing to PCIe
+    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_RET_ADDR_MID, (uint32_t)(dst_noc_addr >> 32) & 0x1000000F);
 #endif
-    WAYPOINT("NAWD");
+    NOC_CMD_BUF_WRITE_REG(
+        noc, cmd_buf, NOC_RET_ADDR_COORDINATE, (uint32_t)(dst_noc_addr >> NOC_ADDR_COORD_SHIFT) & NOC_COORDINATE_MASK);
+    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_PACKET_TAG, NOC_PACKET_TAG_TRANSACTION_ID(trid));
+    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_TARG_ADDR_LO, src_local_l1_addr);
+    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_RET_ADDR_LO, (uint32_t)dst_noc_addr);
+    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_AT_LEN_BE, size);
+    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CMD_CTRL, NOC_CTRL_SEND_REQ);
+    if constexpr (noc_mode == DM_DEDICATED_NOC) {
+        if constexpr (update_counter) {
+            if constexpr (posted) {
+                noc_posted_writes_num_issued[noc] += 1;
+            } else {
+                noc_nonposted_writes_num_issued[noc] += 1;
+                noc_nonposted_writes_acked[noc] += 1;
+            }
+        }
+    }
 }
 
 FORCE_INLINE
@@ -2126,35 +1862,4 @@ void noc_async_write_barrier_with_trid(uint32_t trid, uint8_t noc = noc_index) {
 #endif
     invalidate_l1_cache();
     WAYPOINT("NWTD");
-}
-
-template <bool DRAM>
-FORCE_INLINE uint64_t
-get_noc_addr_from_bank_id(uint32_t bank_id, uint32_t bank_address_offset, uint8_t noc = noc_index) {
-    // Use addrgen tables to convert bank_ids to physical NOC coordinates
-    uint64_t noc_addr = 0;
-    if constexpr (DRAM) {
-        noc_addr = dram_bank_to_noc_xy[noc_index][bank_id];
-        bank_address_offset += bank_to_dram_offset[bank_id];
-    } else {
-        noc_addr = l1_bank_to_noc_xy[noc_index][bank_id];
-    }
-    return (noc_addr << NOC_ADDR_COORD_SHIFT) | (bank_address_offset);
-}
-
-template <bool DRAM, uint32_t page_size>
-FORCE_INLINE auto get_interleaved_addr_gen(uint32_t base_addr) {
-    constexpr bool is_pow_2 = is_power_of_2(page_size);
-    if constexpr (is_pow_2) {
-        constexpr uint32_t log2_page_size = __builtin_ctz(page_size);
-        if constexpr (page_size <= NOC_MAX_BURST_SIZE) {
-            return InterleavedPow2AddrGenFast<DRAM>{
-                .bank_base_address = base_addr, .log_base_2_of_page_size = log2_page_size};
-        } else {
-            return InterleavedPow2AddrGen<DRAM>{
-                .bank_base_address = base_addr, .log_base_2_of_page_size = log2_page_size};
-        }
-    } else {
-        return InterleavedAddrGen<DRAM>{.bank_base_address = base_addr, .page_size = page_size};
-    }
 }

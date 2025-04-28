@@ -17,6 +17,7 @@ from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_utility_functions
     preprocess_and_push_input_to_device,
     post_process_output_and_move_to_host,
 )
+from models.demos.wormhole.stable_diffusion.tests.parameterizations import DOWN_MID_UP_BLOCKS_HIDDEN_STATES_INFO
 from models.utility_functions import skip_for_grayskull, torch_random
 from ttnn.model_preprocessing import preprocess_model_parameters
 from tests.ttnn.utils_for_testing import assert_with_pcc
@@ -25,13 +26,12 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 @skip_for_grayskull()
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
 @pytest.mark.parametrize(
-    "hidden_states, shard_end_core, shard_shape",
-    [
-        ([2, 1280, 8, 8], (7, 3), (32, 160)),
-    ],
+    "hidden_states, shard_layout, shard_end_core, shard_shape", (DOWN_MID_UP_BLOCKS_HIDDEN_STATES_INFO,)
 )
 @pytest.mark.parametrize("temb", [[1, 1, 2, 1280]])
-def test_cross_attention_midblock_512x512(reset_seeds, device, hidden_states, shard_end_core, shard_shape, temb):
+def test_cross_attention_midblock_512x512(
+    reset_seeds, device, hidden_states, shard_layout, shard_end_core, shard_shape, temb, use_program_cache
+):
     # Initialize PyTorch component
     pipe = StableDiffusionPipeline.from_pretrained("CompVis/stable-diffusion-v1-4", torch_dtype=torch.float32)
     unet = pipe.unet
@@ -39,7 +39,6 @@ def test_cross_attention_midblock_512x512(reset_seeds, device, hidden_states, sh
     torch_midblock = unet.mid_block
 
     # Initialize ttnn component
-    reader_patterns_cache = {}
     parameters = preprocess_model_parameters(
         initialize_model=lambda: unet, custom_preprocessor=custom_preprocessor, device=device
     )
@@ -47,9 +46,7 @@ def test_cross_attention_midblock_512x512(reset_seeds, device, hidden_states, sh
     N, _, H, W = hidden_states
     compute_kernel_config = get_default_compute_config(device)
 
-    ttnn_midblock = unet_mid_block_2d_cross_attn(
-        device, parameters, reader_patterns_cache, N, H, W, compute_kernel_config
-    )
+    ttnn_midblock = unet_mid_block_2d_cross_attn(device, parameters, N, H, W, compute_kernel_config)
 
     # Prepare inputs
     in_channels = hidden_states[1]
@@ -70,7 +67,7 @@ def test_cross_attention_midblock_512x512(reset_seeds, device, hidden_states, sh
         device,
         hidden_states,
         memory_config=ttnn.MemoryConfig(
-            ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+            shard_layout,
             ttnn.BufferType.L1,
             ttnn.ShardSpec(
                 ttnn.CoreRangeSet(

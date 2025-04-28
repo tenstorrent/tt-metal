@@ -1,15 +1,13 @@
 # SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
-import os
 import torch
-import json
 import pytest
 from loguru import logger
 from time import time
 
 import ttnn
-from ttnn import ReplicateTensorToMesh, ConcatMeshToTensor
+from ttnn import ConcatMeshToTensor
 from models.demos.t3000.mixtral8x7b.tt.mixtral_common import (
     load_inputs,
     preprocess_inputs,
@@ -272,8 +270,6 @@ def run_mixtral_demo(user_input, batch_size, mesh_device, instruct_mode, is_ci_e
 def test_mixtral8x7b_demo(t3k_mesh_device, use_program_cache, input_prompts, instruct_weights, is_ci_env):
     if is_ci_env and instruct_weights == True:
         pytest.skip("CI demo test only runs general weights to reduce CI pipeline load (both are supported)")
-
-    t3k_mesh_device.enable_async(True)
 
     return run_mixtral_demo(
         user_input=input_prompts,

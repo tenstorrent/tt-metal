@@ -1,13 +1,10 @@
 set(PERF_MICROBENCH_TESTS_SRCS
     dispatch/test_pgm_dispatch.cpp
-    dispatch/test_bw_and_latency.cpp
-    dispatch/test_dispatcher.cpp
-    dispatch/test_prefetcher.cpp
     ethernet/test_ethernet_read_and_send_data.cpp
     ethernet/test_workers_and_erisc_datamover_unidirectional.cpp
     ethernet/test_ethernet_bidirectional_bandwidth_no_edm.cpp
     ethernet/test_ethernet_link_ping_latency_no_edm.cpp
-    ethernet/test_ethernet_write_worker_latency_no_edm.cpp
+    ethernet/test_all_ethernet_links.cpp
     ethernet/test_ethernet_hop_latencies_no_edm.cpp
     routing/test_tx_rx.cpp
     routing/test_mux_demux.cpp
@@ -33,7 +30,6 @@ set(PERF_MICROBENCH_TESTS_SRCS
     2_noc_adjacent/test_noc_adjacent.cpp
     2_noc_rtor/test_noc_rtor.cpp
     3_pcie_transfer/test_rw_buffer.cpp
-    3_pcie_transfer/test_pull_from_pcie.cpp
     6_dram_offchip/test_dram_offchip.cpp
     7_kernel_launch/test_kernel_launch.cpp
     8_dram_adjacent_core_read/test_dram_read.cpp
@@ -42,8 +38,20 @@ set(PERF_MICROBENCH_TESTS_SRCS
     11_remote_cb_sync_matmul_single_core/test_remote_cb_sync_matmul.cpp
 )
 
+# These tests use SIMD intrinsics and are not portable.
+set(X86_64_ONLY_TESTS
+    dispatch/test_prefetcher.cpp
+    dispatch/test_bw_and_latency.cpp
+    dispatch/test_dispatcher.cpp
+    3_pcie_transfer/test_pull_from_pcie.cpp
+)
+
+# Add x86_64 tests only on appropriate platforms.
+if(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64")
+    list(APPEND PERF_MICROBENCH_TESTS_SRCS ${X86_64_ONLY_TESTS})
+endif()
+
 set(ARCHITECTURES
-    "grayskull"
     "wormhole"
     "blackhole"
 )
@@ -66,7 +74,7 @@ foreach(arch ${ARCHITECTURES})
                 test_metal_common_libs
             PRIVATE
                 yaml-cpp::yaml-cpp
-                tt_fabric
+                fabric
         )
         if(${TEST_SRC} STREQUAL "dispatch/test_pgm_dispatch.cpp")
             target_link_libraries(${TEST_TARGET} PRIVATE benchmark::benchmark)
@@ -77,9 +85,9 @@ foreach(arch ${ARCHITECTURES})
             PRIVATE
                 ${PROJECT_SOURCE_DIR}/tt_metal/hw/inc/${arch}
                 "$<TARGET_PROPERTY:Metalium::Metal,INCLUDE_DIRECTORIES>"
-                ${PROJECT_SOURCE_DIR}/tt_fabric
                 ${PROJECT_SOURCE_DIR}/ttnn/cpp/ttnn/deprecated # this all should go away and be replaced with link to ttnn
                 ${PROJECT_SOURCE_DIR}/tests
+                ${PROJECT_SOURCE_DIR}/tests/tt_metal/test_utils
                 ${CMAKE_CURRENT_SOURCE_DIR}
         )
         set_target_properties(

@@ -1,4 +1,4 @@
-# Best Practices for C++20 Repository
+# Best Practices for Contributing to TT Metal
 
 ## 1. Pass Complex Types by Const References
 
@@ -319,7 +319,7 @@ struct PadDimension {
 ```
 Motivation
 - **Bug Prevention:** Reduces the risk of bugs due to uninitialized variables.
-- **Code Safety:** Ensures that all variables have a known value, leading to safer and more predictable code.
+- **Safety:** Ensures that all variables have a known value, leading to safer and more predictable code.
 - **Ease of Review:** Simplifies code reviews by making initialization explicit.
 
 ## 16. Use Early Exit for Contract Checks
@@ -354,3 +354,54 @@ void doSomething(...) {
 - **Code Clarity:** Improves code clarity by reducing unnecessary nesting.
 - **Maintainability:** Makes the code easier to maintain by focusing on the main logic once preconditions are validated.
 - **Efficiency:** Potentially improves performance by avoiding unnecessary processing when contract conditions aren't met.
+
+## 17. Avoid `static` variables with non-trivial destructors
+### Practice
+Avoid using `static` variables with non-trivial destructors. When applicable, use `tt::stl::Indestructible<T>` to create static objects with disabled destructor.
+
+### Explanation
+Objects with static storage duration (globals, static class members, or function-local statics) live from initialization until program termination.
+
+A non-trivial destructor (i.e., one that is user-defined or virtual) may depend on the state of other objects, which might have already been destroyed by the time it is invoked. This can lead to undefined behavior or subtle bugs, especially in the multi-threaded environments.
+
+An object is considered trivially destructible if it has no custom or virtual destructor and all its bases and non-static members are also trivially destructible. Examples include: fundamental types (pointers, int, float, etc.), arrays of trivially destructible types, variables marked with `constexpr`.
+
+To ensure safe and predictable program termination, static objects should meet these criteria. If dynamic initialization is required, consider using function-local statics with `tt::stl::Indestructible<T>` that disables destruction.
+
+### Motivation
+- **Safety:** Prevents accessing objects after they have been destroyed.
+- **Maintainability:** Simplifies tracking the lifetime of objects and helps avoid errors related to destruction ordering.
+
+### Example
+**Avoid:**
+```cpp
+// Bad: Using a static object with a non-trivial destructor.
+static const std::map<int, std::string> kDeviceConfigFiles = {
+    {1, "n150.yaml"},
+    {2, "n300.yaml"},
+    {8, "t3000.yaml"}
+};
+```
+
+**Prefer:**
+```cpp
+// Option 1: Use a trivial type for static data when possible.
+constexpr std::string_view kData = "Trivial destructor! Good!";
+
+constexpr uint32_t kMaxNumberOfCommandQueues = 2;
+
+// Using array of trivially destructible types is OK.
+constexpr std::array<int, 3> kDeviceIds = {1, 2, 8};
+
+// Option 2: If dynamic initialization is required, use function-local statics with `Indestructible`.
+const auto& get_device_configs() {
+    static tt::stl::Indestructible<std::map<int, std::string_view>> configs{
+        std::map<int, std::string_view>{
+            {1, "n150.yaml"},
+            {2, "n300.yaml"},
+            {8, "t3000.yaml"}
+        }
+    };
+    return configs.get();
+}
+```

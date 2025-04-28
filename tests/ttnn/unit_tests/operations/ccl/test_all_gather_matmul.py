@@ -49,8 +49,6 @@ def run_all_gather_matmul_on_t3000_impl(
     if is_known_failure:
         pytest.skip(f"Skipping unsupported case {message}.")
 
-    devices = t3k_mesh_device.get_devices()
-
     logger.info(f"All Gather output shape: {ag_output_shape}")
     logger.info(f"dim: {dim}")
 
@@ -60,10 +58,8 @@ def run_all_gather_matmul_on_t3000_impl(
     input_tensors = torch.chunk(input_tensor, num_devices, dim)
     tt_input_tensors = []
     for i, t in enumerate(input_tensors):
-        tt_input_tensors.append(
-            ttnn.Tensor(t, ag_input_dtype, {}, ttnn.Tile(tile)).to(layout).to(devices[i], mem_config_input)
-        )
-    input_tensor_mesh = ttnn.aggregate_as_tensor(tt_input_tensors)
+        tt_input_tensors.append(ttnn.Tensor(t, ag_input_dtype, {}, ttnn.Tile(tile)).to(layout))
+    input_tensor_mesh = ttnn.aggregate_as_tensor(tt_input_tensors).to(t3k_mesh_device, mem_config_input)
 
     ##### Create the weight matrix for the matmul #####
     weights_tensor = torch.randn([1, 1, hidden_dim, matmul_output_dim * num_devices]).float()
@@ -167,15 +163,13 @@ def run_all_gather_matmul_on_t3000_impl(
         logger.info(f"Done executing trace")
 
         # Synchronize the devices
-        for d in devices:
-            ttnn.synchronize_device(d)
+        ttnn.synchronize_device(t3k_mesh_device)
     else:
         for i in range(num_iters):
             tt_all_gather_out_tensor, tt_matmul_out_tensor, tt_datacopy_out_tensor = run_op()
 
             # Synchronize the devices
-            for d in devices:
-                ttnn.synchronize_device(d)
+            ttnn.synchronize_device(t3k_mesh_device)
 
             logger.info(f"Done iteration {i}")
 
@@ -302,13 +296,6 @@ def run_all_gather_matmul_on_t3000_impl(
         )
     ],
 )
-@pytest.mark.parametrize(
-    "enable_async",
-    [
-        True,
-        False,
-    ],
-)
 def test_all_gather_matmul_on_t3000_post_commit(
     t3k_mesh_device,
     num_devices,
@@ -326,7 +313,6 @@ def test_all_gather_matmul_on_t3000_post_commit(
     mem_config_mm,
     use_program_cache,
     function_level_defaults,
-    enable_async,
 ):
     run_all_gather_matmul_on_t3000_impl(
         t3k_mesh_device,
@@ -404,13 +390,6 @@ def test_all_gather_matmul_on_t3000_post_commit(
         )
     ],
 )
-@pytest.mark.parametrize(
-    "enable_async",
-    [
-        True,
-        False,
-    ],
-)
 def test_all_gather_matmul_1d_on_t3000_post_commit(
     t3k_mesh_device,
     num_devices,
@@ -428,7 +407,6 @@ def test_all_gather_matmul_1d_on_t3000_post_commit(
     mem_config_mm,
     use_program_cache,
     function_level_defaults,
-    enable_async,
 ):
     run_all_gather_matmul_on_t3000_impl(
         t3k_mesh_device,
@@ -535,13 +513,6 @@ def test_all_gather_matmul_1d_on_t3000_post_commit(
     ids=("llama_selfout",),
 )
 @pytest.mark.parametrize(
-    "enable_async",
-    [
-        True,
-        False,
-    ],
-)
-@pytest.mark.parametrize(
     "device_params", [{"trace_region_size": 90112}], indirect=True
 )  # TODO: Update once trace fails
 def test_all_gather_matmul_1d_llama_selfout_on_t3000_post_commit(
@@ -562,7 +533,6 @@ def test_all_gather_matmul_1d_llama_selfout_on_t3000_post_commit(
     mem_config_weights,
     use_program_cache,
     function_level_defaults,
-    enable_async,
 ):
     run_all_gather_matmul_on_t3000_impl(
         t3k_mesh_device,

@@ -44,18 +44,18 @@ void MAIN {
     constexpr uint32_t cb_eps = tt::CBIndex::c_4;
     constexpr uint32_t cb_reduce = tt::CBIndex::c_5;
 
-    constexpr uint32_t cb_out = tt::CBIndex::c_16;
+    constexpr uint32_t cb_out = tt::CBIndex::c_14;
 
-    constexpr uint32_t cb_stats_reduced = tt::CBIndex::c_24;   // [E(x**2), E(x)]
-    constexpr uint32_t cb_var_eps = tt::CBIndex::c_27;         // var + epsilon (or E(x**2) + epsilon)
-    constexpr uint32_t cb_recip_sqrt_var = tt::CBIndex::c_28;  // 1/sqrt(var+eps)
-    constexpr uint32_t cb_x_normed = tt::CBIndex::c_30;  // (x - E(x)) * 1/sqrt(var+eps) or x * 1/sqrt(E(x**2) + eps)
+    constexpr uint32_t cb_stats_reduced = tt::CBIndex::c_6;    // [E(x**2), E(x)]
+    constexpr uint32_t cb_var_eps = tt::CBIndex::c_9;          // var + epsilon (or E(x**2) + epsilon)
+    constexpr uint32_t cb_recip_sqrt_var = tt::CBIndex::c_10;  // 1/sqrt(var+eps)
+    constexpr uint32_t cb_x_normed = tt::CBIndex::c_12;  // (x - E(x)) * 1/sqrt(var+eps) or x * 1/sqrt(E(x**2) + eps)
 
-    constexpr uint32_t cb_var = tt::CBIndex::c_26;  // E(x**2) - E(x)**2 or E(x**2)
+    constexpr uint32_t cb_var = tt::CBIndex::c_8;  // E(x**2) - E(x)**2 or E(x**2)
 #ifndef RMSNORM
     // Layernorm-specific CBs
-    constexpr uint32_t cb_mean_squared = tt::CBIndex::c_25;  // E(x)**2
-    constexpr uint32_t cb_x_minus_mean = tt::CBIndex::c_29;  // x - E(x)
+    constexpr uint32_t cb_mean_squared = tt::CBIndex::c_7;   // E(x)**2
+    constexpr uint32_t cb_x_minus_mean = tt::CBIndex::c_11;  // x - E(x)
 
     constexpr uint32_t cb_norm_x_input = cb_x_minus_mean;
     constexpr uint32_t stats_tile_stride = 2;
@@ -68,7 +68,7 @@ void MAIN {
     constexpr uint32_t cb_beta = tt::CBIndex::c_3;
     uint32_t cb_times_gamma_out = cb_out;
     if constexpr (do_gamma and do_beta) {
-        cb_times_gamma_out = tt::CBIndex::c_31;
+        cb_times_gamma_out = tt::CBIndex::c_13;
     }
 
     binary_op_init_common(cb_inp, cb_inp, cb_stats_reduced);

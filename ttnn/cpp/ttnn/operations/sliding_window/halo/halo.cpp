@@ -14,17 +14,17 @@ Tensor HaloOperation::invoke(
     uint32_t pad_val,
     bool remote_read,
     bool transpose_mcast,
-    uint32_t reshard_num_cores_nhw,
     const MemoryConfig& output_memory_config,
-    bool is_out_tiled) {
+    bool is_out_tiled,
+    bool in_place) {
     return halo_op(
         input_tensor,
         config,
         pad_val,
         remote_read,
         transpose_mcast,
-        reshard_num_cores_nhw,
         std::move(output_memory_config),
-        is_out_tiled);
+        is_out_tiled,
+        in_place);
 }
 };  // namespace ttnn::operations::sliding_window::halo

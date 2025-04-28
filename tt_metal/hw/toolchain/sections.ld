@@ -8,13 +8,21 @@
   any modifications should be made to tensix-sections-pre-proc.ld, tensix-sections.ld is a generated file
 */
 
-#if defined(TYPE_FIRMWARE)
+#if defined(TYPE_FIRMWARE) || (defined(NCRISC_FIRMWARE_KERNEL_SPLIT) && defined(COMPILE_FOR_NCRISC))
 /* Start of the appropriate region. */
 #define TEXT_START ORIGIN(REGION_CODE)
-#define DATA_START ORIGIN(REGION_DATA)
 #elif defined(TYPE_KERNEL)
 /* Where firmware ended. */
 #define TEXT_START __fw_export_end_text
+#else
+#error "Neither TYPE_FIRMARE nor TYPE_KERNEL defined, what am I to be?"
+#endif
+
+#if defined(TYPE_FIRMWARE)
+/* Start of the appropriate region. */
+#define DATA_START ORIGIN(REGION_DATA)
+#elif defined(TYPE_KERNEL)
+/* Where firmware ended. */
 #define DATA_START __fw_export_ldm_end
 #else
 #error "Neither TYPE_FIRMARE nor TYPE_KERNEL defined, what am I to be?"
@@ -51,8 +59,15 @@ PHDRS {
 
 SECTIONS
 {
+#if defined(TYPE_FIRMWARE)
+  .firmware_text TEXT_START : ALIGN(4)
+#else
   .text TEXT_START : ALIGN(4)
+#endif
   {
+    #if defined(TYPE_KERNEL)
+    __kernel_text_start = ABSOLUTE(.);
+    #endif
     /* Because TEXT_START might not be the start of a region, we
        need to force this section to be emitted so that following sections
        do not restart the region, if this one is empty.  */
@@ -67,11 +82,11 @@ SECTIONS
     *(.gnu.warning)
     . = ALIGN(4);
   } > REGION_CODE :text
-  .init.fini :
+  .empty.init.fini :
   {
-    /* We don't use .init/.fini (this isn't the '90s), make sure there aren't any.  */
+    /* Out elf loader checks that .empty* sections are empty, and
+       can give a helpful error, rather than an ASSERT here.  */
     KEEP (*(.init .fini))
-    ASSERT(SIZEOF(.init.fini) == 0, ".init/.fini sections have contents");
   } > REGION_CODE :text
 
 #if defined(TYPE_KERNEL)
@@ -82,7 +97,11 @@ SECTIONS
 #if defined(TYPE_FIRMWARE)
   __fw_export_end_text = ABSOLUTE(.);
 #if defined(TARGET_NCRISC)
+#if !defined(NCRISC_FIRMWARE_KERNEL_SPLIT)
   PROVIDE (KERNEL_ENTRY_SYMBOL = ABSOLUTE(__fw_export_end_text));
+#else
+  PROVIDE (KERNEL_ENTRY_SYMBOL = MEM_NCRISC_KERNEL_BASE);
+#endif
 #endif
 #endif
 
@@ -118,13 +137,12 @@ SECTIONS
     . = ALIGN(4);
     __ldm_data_end = .;
   } > REGION_DATA :data
-  .ctors.dtors :
+  .empty.ctors.dtors :
   {
     /* We don't use .ctors/.dtors either (this still isn't the '90s), make sure there aren't any.  */
     KEEP (*(.ctors .ctors.* .dtors .dtors.*))
-    ASSERT(SIZEOF(.ctors.dtors) == 0, ".ctors/.dtors sections have contents");
   } > REGION_DATA :data
-  .init_array.fini_array :
+  .empty.init_array.fini_array :
   {
     /* We don't support global static constructors or destructors. make sure there aren't any.  */
     KEEP (*(.preinit_array))
@@ -132,7 +150,6 @@ SECTIONS
     KEEP (*(.init_array))
     KEEP (*(SORT_BY_INIT_PRIORITY(.fini_array.*)))
     KEEP (*(.fini_array))
-    ASSERT(SIZEOF(.init_array.fini_array) == 0, ".{preinit,init,fini}_array sections have contents");
   } > REGION_DATA :data
   .bss : ALIGN(4)
   {

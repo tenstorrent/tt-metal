@@ -4,32 +4,49 @@
 
 #pragma once
 
-#include "mesh_buffer.hpp"
-#include "mesh_command_queue.hpp"
-#include "mesh_event.hpp"
+#include <stdint.h>
+#include <memory>
+#include <optional>
+#include <vector>
+
+#include <tt_stl/span.hpp>
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/mesh_buffer.hpp>
+#include <tt-metalium/mesh_command_queue.hpp>
+#include <tt-metalium/mesh_coord.hpp>
+#include <tt-metalium/mesh_event.hpp>
+#include <tt-metalium/mesh_trace_id.hpp>
+#include <tt-metalium/mesh_workload.hpp>
+#include <tt-metalium/sub_device_types.hpp>
+
+namespace tt {
+namespace tt_metal {
+class Program;
+namespace distributed {
+class MeshDevice;
+}  // namespace distributed
+}  // namespace tt_metal
+}  // namespace tt
 
 namespace tt::tt_metal {
 
-inline namespace v0 {
-
 class IDevice;
-
-}  // namespace v0
 
 namespace distributed {
 
 MeshWorkload CreateMeshWorkload();
 
-void AddProgramToMeshWorkload(MeshWorkload& mesh_workload, Program& program, const LogicalDeviceRange& device_range);
+void AddProgramToMeshWorkload(MeshWorkload& mesh_workload, Program&& program, const MeshCoordinateRange& device_range);
 
 void EnqueueMeshWorkload(MeshCommandQueue& mesh_cq, MeshWorkload& mesh_workload, bool blocking);
 
 template <typename DType>
 void WriteShard(
     MeshCommandQueue& mesh_cq,
-    std::shared_ptr<MeshBuffer>& mesh_buffer,
+    const std::shared_ptr<MeshBuffer>& mesh_buffer,
     std::vector<DType>& src,
-    const Coordinate& coord,
+    const MeshCoordinate& coord,
     bool blocking = false) {
     std::vector<MeshCommandQueue::ShardDataTransfer> shard_data_transfers = {{
         .shard_coord = coord,
@@ -43,8 +60,8 @@ template <typename DType>
 void ReadShard(
     MeshCommandQueue& mesh_cq,
     std::vector<DType>& dst,
-    std::shared_ptr<MeshBuffer>& mesh_buffer,
-    const Coordinate& coord,
+    const std::shared_ptr<MeshBuffer>& mesh_buffer,
+    const MeshCoordinate& coord,
     bool blocking = true) {
     auto shard = mesh_buffer->get_device_buffer(coord);
     dst.resize(shard->page_size() * shard->num_pages() / sizeof(DType));
@@ -78,21 +95,30 @@ void EnqueueReadMeshBuffer(
     mesh_cq.enqueue_read_mesh_buffer(dst.data(), mesh_buffer, blocking);
 }
 
-void EnqueueRecordEvent(
+MeshEvent EnqueueRecordEvent(
     MeshCommandQueue& mesh_cq,
-    const std::shared_ptr<MeshEvent>& event,
     tt::stl::Span<const SubDeviceId> sub_device_ids = {},
-    const std::optional<LogicalDeviceRange>& device_range = std::nullopt);
+    const std::optional<MeshCoordinateRange>& device_range = std::nullopt);
 
-void EnqueueRecordEventToHost(
+MeshEvent EnqueueRecordEventToHost(
     MeshCommandQueue& mesh_cq,
-    const std::shared_ptr<MeshEvent>& event,
     tt::stl::Span<const SubDeviceId> sub_device_ids = {},
-    const std::optional<LogicalDeviceRange>& device_range = std::nullopt);
+    const std::optional<MeshCoordinateRange>& device_range = std::nullopt);
 
-void EnqueueWaitForEvent(MeshCommandQueue& mesh_cq, const std::shared_ptr<MeshEvent>& event);
+void EnqueueWaitForEvent(MeshCommandQueue& mesh_cq, const MeshEvent& event);
 
-void EventSynchronize(const std::shared_ptr<MeshEvent>& event);
+void EventSynchronize(const MeshEvent& event);
+
+MeshTraceId BeginTraceCapture(MeshDevice* device, uint8_t cq_id);
+
+void EndTraceCapture(MeshDevice* device, uint8_t cq_id, const MeshTraceId& trace_id);
+
+void ReplayTrace(MeshDevice* device, uint8_t cq_id, const MeshTraceId& trace_id, bool blocking);
+
+void ReleaseTrace(MeshDevice* device, const MeshTraceId& trace_id);
+
+void Synchronize(
+    MeshDevice* device, std::optional<uint8_t> cq_id, tt::stl::Span<const SubDeviceId> sub_device_ids = {});
 
 void Finish(MeshCommandQueue& mesh_cq, tt::stl::Span<const SubDeviceId> sub_device_ids = {});
 

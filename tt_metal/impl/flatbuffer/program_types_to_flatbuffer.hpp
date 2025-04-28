@@ -5,18 +5,25 @@
 #pragma once
 
 #include "flatbuffer/base_types_to_flatbuffer.hpp"
+#include "lightmetal/host_api_capture_helpers.hpp"
 #include "program_types_generated.h"
 #include <core_coord.hpp>
 #include <kernel_types.hpp>
 #include <sub_device_types.hpp>
 #include <buffer.hpp>
-#include <types.hpp>
 
 namespace tt::tt_metal {
 
 using FlatbufferCoreCoordVector = flatbuffers::Offset<flatbuffers::Vector<flatbuffers::Offset<flatbuffer::CoreCoord>>>;
 using FlatbufferUInt32VecOfVec =
     flatbuffers::Offset<flatbuffers::Vector<flatbuffers::Offset<flatbuffer::UInt32Vector>>>;
+
+flatbuffers::Offset<flatbuffer::CoreCoord> to_flatbuffer(
+    flatbuffers::FlatBufferBuilder& builder, const CoreCoord& coord);
+flatbuffers::Offset<flatbuffer::CoreRange> to_flatbuffer(
+    flatbuffers::FlatBufferBuilder& builder, const CoreRange& range);
+flatbuffers::Offset<flatbuffer::CoreRangeSet> to_flatbuffer(
+    flatbuffers::FlatBufferBuilder& builder, const CoreRangeSet& range_set);
 
 std::pair<flatbuffer::CoreSpec, ::flatbuffers::Offset<void>> to_flatbuffer(
     flatbuffers::FlatBufferBuilder& builder, const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec);

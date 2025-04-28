@@ -9,8 +9,7 @@
 #include "ttnn/common/queue_id.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include <utility>
-
-using namespace tt::tt_metal;
+#include "cpp/ttnn/operations/copy.hpp"
 
 namespace ttnn::operations::data_movement {
 
@@ -27,10 +26,14 @@ ttnn::Tensor FillPadOperation::invoke(
     if (padded_width == input_tensor.get_logical_shape()[-1] && padded_height == input_tensor.get_logical_shape()[-2]) {
         return input_tensor;
     }
+    auto mutable_input_tensor = input_tensor;
     auto output_memory_config = memory_config.value_or(input_tensor.memory_config());
+    if (input_tensor.get_dtype() == DataType::BFLOAT8_B) {
+        mutable_input_tensor = ttnn::typecast(mutable_input_tensor, DataType::BFLOAT16);
+    }
     // if input_tensor is rank > 3, then we need to reshape it to rank 3 such that the last 2 dims are the same
-    if (input_tensor.get_logical_shape().rank() > 3) {
-        ttnn::Shape original_shape = input_tensor.get_logical_shape();
+    if (mutable_input_tensor.get_logical_shape().rank() > 3) {
+        ttnn::Shape original_shape = mutable_input_tensor.get_logical_shape();
 
         uint32_t third_dim = 1;
         for (uint32_t i = 0; i < original_shape.rank() - 2; i++) {
@@ -38,16 +41,20 @@ ttnn::Tensor FillPadOperation::invoke(
         }
 
         ttnn::Shape new_shape = ttnn::Shape{std::array<uint32_t, 3>{third_dim, original_shape[-2], original_shape[-1]}};
-        auto reshaped_tensor = ttnn::reshape(input_tensor, new_shape);
+        auto reshaped_tensor = ttnn::reshape(mutable_input_tensor, new_shape);
 
-        reshaped_tensor = operation::run_without_autoformat(
+        reshaped_tensor = tt::tt_metal::operation::run_without_autoformat(
                               FillPad{fill_value, output_memory_config}, {reshaped_tensor}, {}, {}, queue_id)
                               .at(0);
         return ttnn::reshape(reshaped_tensor, original_shape);
     }
-    return operation::run_without_autoformat(
-               FillPad{fill_value, output_memory_config}, {input_tensor}, {}, {}, queue_id)
-        .at(0);
+    auto output_tensor = tt::tt_metal::operation::run_without_autoformat(
+                             FillPad{fill_value, output_memory_config}, {mutable_input_tensor}, {}, {}, queue_id)
+                             .at(0);
+    if (input_tensor.get_dtype() == DataType::BFLOAT8_B) {
+        return ttnn::typecast(output_tensor, DataType::BFLOAT8_B);
+    }
+    return output_tensor;
 }
 
 }  // namespace ttnn::operations::data_movement

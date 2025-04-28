@@ -4,6 +4,7 @@
 
 import dataclasses
 import pathlib
+import shutil
 import sys
 import time
 import traceback
@@ -538,6 +539,9 @@ class Operation:
                     logger.debug(f"Started {self.python_fully_qualified_name:50}")
 
                     if ttnn.CONFIG.report_path is not None:
+                        cluster_descriptor_path = pathlib.Path(ttnn.CONFIG.report_path) / "cluster_descriptor.yaml"
+                        if not cluster_descriptor_path.exists():
+                            save_cluster_descriptor(str(cluster_descriptor_path))
                         ttnn.database.insert_operation(ttnn.CONFIG.report_path, operation_id, self, None)
                         ttnn.database.insert_stack_trace(
                             ttnn.CONFIG.report_path, operation_id, traceback.format_stack()
@@ -598,9 +602,9 @@ class Operation:
                         )
                         if global_golden_function_output is not None:
                             ttnn.database.store_tensors(ttnn.CONFIG.report_path, global_golden_function_output)
-                        ttnn.database.insert_buffers(ttnn.CONFIG.report_path, operation_id)
+                        ttnn.database.insert_buffers(ttnn.CONFIG.report_path, operation_id, devices)
                         if ttnn.CONFIG.enable_detailed_buffer_report:
-                            ttnn.database.insert_buffer_pages(ttnn.CONFIG.report_path, operation_id)
+                            ttnn.database.insert_buffer_pages(ttnn.CONFIG.report_path, operation_id, devices)
 
                         if ttnn.CONFIG.enable_graph_report:
                             ttnn.tracer.visualize(
@@ -803,8 +807,9 @@ def register_python_operation(
 
         if is_cpp_operation:
             raise RuntimeError(f"{function} is a C++ operation, but it is being registered as a Python operation")
-        elif not is_experimental and not is_method:
-            logger.debug(f"Should {python_fully_qualified_name} be migrated to C++?")
+        # Disabling for now (See GH issue #18386)
+        # elif not is_experimental and not is_method:
+        #     logger.debug(f"Should {python_fully_qualified_name} be migrated to C++?")
 
         operation_class = FastOperation if ttnn.CONFIG.enable_fast_runtime_mode else Operation
 
@@ -871,3 +876,12 @@ def register_ttl_operation_as_ttnn_operation(python_fully_qualified_name, functi
         is_experimental=True,
     )(function)
     return function
+
+
+def save_cluster_descriptor(dest_path):
+    temp_path = ttnn._ttnn.cluster.serialize_cluster_descriptor()
+
+    if not temp_path:
+        return None
+
+    shutil.copy(temp_path, dest_path)

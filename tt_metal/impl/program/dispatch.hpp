@@ -7,12 +7,34 @@
 #include <circular_buffer.hpp>
 #include <device.hpp>
 #include <kernel.hpp>
-#include <program_impl.hpp>
+#include <tt-metalium/program.hpp>
+#include <stdint.h>
+#include <vector_aligned.hpp>
 #include <worker_config_buffer.hpp>
+#include <array>
+#include <memory>
+#include <unordered_map>
+#include <utility>
+#include <vector>
+
+#include "core_coord.hpp"
+#include "dev_msgs.h"
+#include "dispatch_settings.hpp"
+#include "kernel_types.hpp"
+#include "sub_device_types.hpp"
+
+enum class CoreType;
 
 namespace tt {
 
 namespace tt_metal {
+class IDevice;
+class Program;
+class Semaphore;
+class SystemMemoryManager;
+enum class ProgramBinaryStatus : uint8_t;
+struct KernelGroup;
+struct ProgramCommandSequence;
 
 namespace program_dispatch {
 
@@ -36,11 +58,6 @@ uint32_t configure_crta_offsets_for_kernel_groups(
     uint32_t crta_base_offset,
     std::array<uint32_t, DISPATCH_CLASS_MAX>& crta_offsets,
     std::array<uint32_t, DISPATCH_CLASS_MAX>& crta_sizes);
-
-// Compute relative offsets (wrt the start of the kernel config ring buffer) and sizes of all
-// program data structures in L1. Will be used when assembling dispatch commands for this program
-template <typename T>
-void finalize_program_offsets(T& workload_type, IDevice* device);
 
 uint32_t finalize_rt_args(
     std::unordered_map<KernelHandle, std::shared_ptr<Kernel>>& kernels,
@@ -79,12 +96,6 @@ void insert_empty_program_dispatch_preamble_cmd(ProgramCommandSequence& program_
 
 void insert_stall_cmds(ProgramCommandSequence& program_command_sequence, SubDeviceId sub_device_id, IDevice* device);
 
-void assemble_runtime_args_commands(
-    ProgramCommandSequence& program_command_sequence, Program& program, IDevice* device);
-
-void assemble_device_commands(
-    ProgramCommandSequence& program_command_sequence, Program& program, IDevice* device, SubDeviceId sub_device_id);
-
 void initialize_worker_config_buf_mgr(WorkerConfigBufferMgr& config_buffer_mgr);
 
 void reserve_space_in_kernel_config_buffer(
@@ -119,30 +130,24 @@ void write_program_command_sequence(
 KernelHandle get_device_local_kernel_handle(KernelHandle kernel_handle);
 
 void reset_config_buf_mgrs_and_expected_workers(
-    std::array<WorkerConfigBufferMgr, DispatchSettings::DISPATCH_MESSAGE_ENTRIES>& config_buffer_mgrs,
-    std::array<uint32_t, DispatchSettings::DISPATCH_MESSAGE_ENTRIES>& expected_num_workers_completed,
-    uint32_t num_entries_to_reset);
+    DispatchArray<WorkerConfigBufferMgr>& config_buffer_mgrs,
+    DispatchArray<uint32_t>& expected_num_workers_completed,
+    uint32_t num_entries_to_reset,
+    uint32_t worker_l1_unreserved_start);
 
 void reset_worker_dispatch_state_on_device(
     IDevice* device,
     SystemMemoryManager& manager,
     uint8_t cq_id,
     CoreCoord dispatch_core,
-    const std::array<uint32_t, DispatchSettings::DISPATCH_MESSAGE_ENTRIES>& expected_num_workers_completed,
+    const DispatchArray<uint32_t>& expected_num_workers_completed,
     bool reset_launch_msg_state);
 
 void set_num_worker_sems_on_dispatch(
     IDevice* device, SystemMemoryManager& manager, uint8_t cq_id, uint32_t num_worker_sems);
 
 void set_go_signal_noc_data_on_dispatch(
-    IDevice* device,
-    const vector_memcpy_aligned<uint32_t>& go_signal_noc_data,
-    SystemMemoryManager& manager,
-    uint8_t cq_id);
-
-template <typename WorkloadType, typename DeviceType>
-uint32_t program_base_addr_on_core(
-    WorkloadType& workload, DeviceType generic_device, HalProgrammableCoreType programmable_core_type);
+    IDevice* device, const vector_aligned<uint32_t>& go_signal_noc_data, SystemMemoryManager& manager, uint8_t cq_id);
 
 }  // namespace program_dispatch
 

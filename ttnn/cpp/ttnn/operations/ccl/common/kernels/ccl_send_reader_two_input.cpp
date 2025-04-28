@@ -6,18 +6,18 @@
 //       that don't require macros to function
 
 #include "dataflow_api.h"
-#include <tt-metalium/buffer_constants.hpp>
+#include <tt-metalium/buffer_types.hpp>
 #include "cpp/ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
-#include <tt-metalium/buffer_constants.hpp>
+#include <tt-metalium/buffer_types.hpp>
 #include "cpp/ttnn/operations/ccl/shared_with_host/sharded_tensor_addr_gen.hpp"
 #include "cpp/ttnn/operations/ccl/all_gather/device/kernels/dataflow/worker_ring_gather_utils.hpp"
 
 #include "cpp/ttnn/operations/ccl/common/kernels/command_processor.hpp"
 
-#include "cpp/ttnn/operations/ccl/kernels/edm_fabric/edm_fabric_worker_adapters.hpp"
-#include "cpp/ttnn/operations/ccl/kernels/edm_fabric/fabric_edm_packet_header.hpp"
+#include "tt_metal/api/tt-metalium/fabric_edm_packet_header.hpp"
+#include "tt_metal/fabric/hw/inc/edm_fabric/edm_fabric_worker_adapters.hpp"
 
-#include "cpp/ttnn/operations/ccl/common/interpreter_backends/kernel_common/fabric_connection_manager.hpp"
+#include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
 #include "cpp/ttnn/operations/ccl/common/interpreter_backends/kernel_common/io_descriptors.hpp"
 #include "cpp/ttnn/operations/ccl/common/interpreter_backends/kernel_common/noc_addr.hpp"
 #include "cpp/ttnn/tensor/enum_types.hpp"
@@ -116,7 +116,7 @@ static_assert(test_object2.number_of_cores > 0, "Misconfigured sharded addrgen f
 static_assert(test_object2.page_size_jump > 0, "Misconfigured sharded addrgen fields for tensor1. Field \"page_size_jump\" was resolved to 0 but it must not be 0.");
 static_assert(test_object2.pages_per_tensor_row > 0, "Misconfigured sharded addrgen fields for tensor1. Field \"pages_per_tensor_row\" was resolved to 0 but it must not be 0.");
 #else
-typedef ShardedInfo<0,0,0,0,0,0,0> Tensor1ShardInfo;
+using Tensor1ShardInfo = ShardedInfo<0,0,0,0,0,0,0>;
 #endif
 #endif
 
@@ -437,15 +437,15 @@ void try_advance_inline_write_or_atomic_inc(command_context_t<Addrgen>& cmd_ctx)
         ASSERT(cmd_ctx.core_desc_type == ttnn::ccl::cmd::CclCommandCoreDescriptorType::NOC_XY);
 
         ASSERT(cmd_ctx.packet_header_buffer_addr != 0);
-        auto* pkt_hdr = reinterpret_cast<tt::fabric::PacketHeader*>(cmd_ctx.packet_header_buffer_addr);
+        auto* pkt_hdr = reinterpret_cast<PACKET_HEADER_TYPE *>(cmd_ctx.packet_header_buffer_addr);
 
         uint64_t dest_noc_addr_for_pkt = safe_get_noc_addr(dest_noc0_x, dest_noc0_y, dest_bank_addr, 0);
         if (cmd_ctx.current_cmd_header.code == ttnn::ccl::cmd::CclCommandCode::ATOMIC_INC) {
             pkt_hdr->to_noc_unicast_atomic_inc(
-                tt::fabric::NocUnicastAtomicIncCommandHeader{dest_noc_addr_for_pkt, static_cast<uint16_t>(value), 32});
+                tt::tt_fabric::NocUnicastAtomicIncCommandHeader{dest_noc_addr_for_pkt, static_cast<uint16_t>(value), 32});
         } else {
             pkt_hdr->to_noc_unicast_inline_write(
-                tt::fabric::NocUnicastInlineWriteCommandHeader{dest_noc_addr_for_pkt, static_cast<uint16_t>(value)});
+                tt::tt_fabric::NocUnicastInlineWriteCommandHeader{dest_noc_addr_for_pkt, static_cast<uint16_t>(value)});
         }
 
         switch (cmd_ctx.current_cmd_header.dest_type) {
@@ -457,26 +457,26 @@ void try_advance_inline_write_or_atomic_inc(command_context_t<Addrgen>& cmd_ctx)
                                               : cmd_ctx.fabric_connection.get_backward_connection();
                 fabric_connection.wait_for_empty_write_slot();
                 fabric_connection.send_payload_flush_blocking_from_address(
-                    cmd_ctx.packet_header_buffer_addr, sizeof(tt::fabric::PacketHeader));
+                    cmd_ctx.packet_header_buffer_addr, sizeof(PACKET_HEADER_TYPE));
             } break;
             case ttnn::ccl::cmd::CclCommandDestType::CHIP_MULTICAST: {
                 write_local = true;
                 const auto& mcast_args = cmd_ctx.current_cmd_header.get_multicast_dest_args();
                 if (cmd_ctx.fabric_connection.has_forward_connection()) {
-                    pkt_hdr->to_chip_multicast(tt::fabric::MulticastRoutingCommandHeader{
+                    pkt_hdr->to_chip_multicast(tt::tt_fabric::MulticastRoutingCommandHeader{
                         1, static_cast<uint8_t>(mcast_args.num_targets_forward_direction)});
                     cmd_ctx.fabric_connection.get_forward_connection().wait_for_empty_write_slot();
                     cmd_ctx.fabric_connection.get_forward_connection().send_payload_flush_blocking_from_address(
-                        cmd_ctx.packet_header_buffer_addr, sizeof(tt::fabric::PacketHeader));
+                        cmd_ctx.packet_header_buffer_addr, sizeof(PACKET_HEADER_TYPE));
                 }
 
                 // Write the mcast packet (backward)
                 if (cmd_ctx.fabric_connection.has_backward_connection()) {
-                    pkt_hdr->to_chip_multicast(tt::fabric::MulticastRoutingCommandHeader{
+                    pkt_hdr->to_chip_multicast(tt::tt_fabric::MulticastRoutingCommandHeader{
                         1, static_cast<uint8_t>(mcast_args.num_targets_backward_direction)});
                     cmd_ctx.fabric_connection.get_backward_connection().wait_for_empty_write_slot();
                     cmd_ctx.fabric_connection.get_backward_connection().send_payload_non_blocking_from_address(
-                        cmd_ctx.packet_header_buffer_addr, sizeof(tt::fabric::PacketHeader));
+                        cmd_ctx.packet_header_buffer_addr, sizeof(PACKET_HEADER_TYPE));
                 }
 
             } break;
@@ -559,9 +559,9 @@ void write_and_advance_local_read_address_for_fabric_write(
     uint32_t payload_size_bytes) {
     const size_t payload_l1_address = l1_read_addr;
 
-    auto pkt_hdr = reinterpret_cast<volatile tt::fabric::PacketHeader*>(packet_header_buffer_addr);
+    auto pkt_hdr = reinterpret_cast<volatile PACKET_HEADER_TYPE *>(packet_header_buffer_addr);
 
-    pkt_hdr->to_noc_unicast_write(tt::fabric::NocUnicastCommandHeader{noc0_dest_noc_addr}, payload_size_bytes);
+    pkt_hdr->to_noc_unicast_write(tt::tt_fabric::NocUnicastCommandHeader{noc0_dest_noc_addr}, payload_size_bytes);
 
     switch (current_cmd_header.dest_type) {
         case ttnn::ccl::cmd::CclCommandDestType::CHIP_UNICAST: {
@@ -573,7 +573,7 @@ void write_and_advance_local_read_address_for_fabric_write(
 
             fabric_conn.wait_for_empty_write_slot();
             fabric_conn.send_payload_without_header_non_blocking_from_address(l1_read_addr, payload_size_bytes);
-            fabric_conn.send_payload_flush_blocking_from_address((uint32_t)pkt_hdr, sizeof(tt::fabric::PacketHeader));
+            fabric_conn.send_payload_flush_blocking_from_address((uint32_t)pkt_hdr, sizeof(PACKET_HEADER_TYPE));
         } break;
         case ttnn::ccl::cmd::CclCommandDestType::CHIP_MULTICAST: {
             const auto [dest_noc_xy, dest_addr] = get_noc_address_components(noc0_dest_noc_addr);
@@ -582,23 +582,23 @@ void write_and_advance_local_read_address_for_fabric_write(
                 payload_l1_address, dest_noc_addr, payload_size_bytes);
             const auto& mcast_args = current_cmd_header.get_multicast_dest_args();
             if (fabric_connection.has_forward_connection()) {
-                pkt_hdr->to_chip_multicast(tt::fabric::MulticastRoutingCommandHeader{
+                pkt_hdr->to_chip_multicast(tt::tt_fabric::MulticastRoutingCommandHeader{
                     1, static_cast<uint8_t>(mcast_args.num_targets_forward_direction)});
                 fabric_connection.get_forward_connection().wait_for_empty_write_slot();
                 fabric_connection.get_forward_connection().send_payload_without_header_non_blocking_from_address(
                     l1_read_addr, payload_size_bytes);
                 fabric_connection.get_forward_connection().send_payload_flush_blocking_from_address(
-                    (uint32_t)pkt_hdr, sizeof(tt::fabric::PacketHeader));
+                    (uint32_t)pkt_hdr, sizeof(PACKET_HEADER_TYPE));
             }
 
             if (fabric_connection.has_backward_connection()) {
-                pkt_hdr->to_chip_multicast(tt::fabric::MulticastRoutingCommandHeader{
+                pkt_hdr->to_chip_multicast(tt::tt_fabric::MulticastRoutingCommandHeader{
                     1, static_cast<uint8_t>(mcast_args.num_targets_backward_direction)});
                 fabric_connection.get_backward_connection().wait_for_empty_write_slot();
                 fabric_connection.get_backward_connection().send_payload_without_header_non_blocking_from_address(
                     l1_read_addr, payload_size_bytes);
                 fabric_connection.get_backward_connection().send_payload_flush_blocking_from_address(
-                    (uint32_t)pkt_hdr, sizeof(tt::fabric::PacketHeader));
+                    (uint32_t)pkt_hdr, sizeof(PACKET_HEADER_TYPE));
             }
         } break;
         default: {
@@ -618,8 +618,8 @@ FORCE_INLINE void write_payload_then_advance_read_address(
     size_t& l1_read_addr,
     size_t payload_size_bytes) {
     static_assert(
-        ((sizeof(tt::fabric::PacketHeader) - 1) & sizeof(tt::fabric::PacketHeader)) == 0,
-        "sizeof(sizeof(tt::fabric::PacketHeader)) is not a power of two which violates the below assertion");
+        is_power_of_2(sizeof(PACKET_HEADER_TYPE)),
+        "sizeof(PACKET_HEADER_TYPE) is not a power of two which violates the below assertion");
 
     switch (current_cmd_header.dest_type) {
         case ttnn::ccl::cmd::CclCommandDestType::CHIP_UNICAST: [[fallthrough]];
@@ -933,7 +933,7 @@ void kernel_main() {
     cb_reserve_back(reserved_packet_header_cb_id, num_packet_headers_storable);
     auto packet_header_buffer_addr0 = get_write_ptr(reserved_packet_header_cb_id);
     auto packet_header_buffer_addr1 =
-        packet_header_buffer_addr0 + (num_packet_headers_storable >> 2) * sizeof(tt::fabric::PacketHeader);
+        packet_header_buffer_addr0 + (num_packet_headers_storable >> 2) * sizeof(PACKET_HEADER_TYPE);
 
     auto operand_0_cmd_ctx = command_context_t(
         fabric_connection,

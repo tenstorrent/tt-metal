@@ -4,7 +4,8 @@
 
 #pragma once
 
-#include <strong_type.hpp>
+#include <tt_stl/strong_type.hpp>
+#include <cstdint>
 
 namespace ttnn {
 /*
@@ -16,12 +17,14 @@ namespace ttnn {
     are 0 and 1.
 */
 using QueueId = tt::stl::StrongType<uint8_t, struct QueueIdTag>;
-static const QueueId DefaultQueueId = QueueId(0);
+constexpr QueueId DefaultQueueId = QueueId(0);
 
 }  // namespace ttnn
 
 // Exporting to tt::tt_metal namespace because ttnn
 // defines some of its own types (think Tensor) in tt::tt_metal namespace.
 namespace tt::tt_metal {
+
 using QueueId = ttnn::QueueId;
-}
+
+}  // namespace tt::tt_metal

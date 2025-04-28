@@ -42,6 +42,9 @@ inline void llk_unpack_untilize_init(std::uint32_t operand = 0) {
     const std::uint32_t face_r_dim = 1;
     const std::uint32_t num_faces = get_operand_num_faces(operand_id);
 
+    // Disable transpose when unused
+    cfg_reg_rmw_tensix<THCON_SEC0_REG2_Haloize_mode_RMW>(0);
+
     // Save state of unpacker config for quick restore
     TTI_RDCFG(
         p_gpr_unpack::SR_UNPACK_UNTILIZER_STATE_0,

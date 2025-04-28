@@ -58,7 +58,7 @@ ttnn::Tensor EmbeddingOperation::invoke(
         }
     }
 
-    auto embeddings = operation::run(
+    auto embeddings = tt::tt_metal::operation::run(
                           Embeddings{
                               .output_mem_config = memory_config.value_or(input_tensor.memory_config()),
                               .tilized = fused_tilized,

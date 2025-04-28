@@ -3,18 +3,64 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import os
-import re
-import sys
-import sysconfig
-import platform
+import glob
+import shutil
 import subprocess
 from dataclasses import dataclass
 from functools import partial
 from collections import namedtuple
 
 from pathlib import Path
-from setuptools import setup, Extension, find_namespace_packages
+from setuptools import setup, Extension, find_packages
 from setuptools.command.build_ext import build_ext
+
+
+BUNDLE_SFPI = False
+
+
+def expand_patterns(patterns):
+    """
+    Given a list of glob patterns with brace expansion (e.g. `*.{h,hpp}`),
+    return a flat list of glob patterns with the braces expanded.
+    """
+    expanded = []
+
+    for pattern in patterns:
+        if "{" in pattern and "}" in pattern:
+            pre = pattern[: pattern.find("{")]
+            post = pattern[pattern.find("}") + 1 :]
+            options = pattern[pattern.find("{") + 1 : pattern.find("}")].split(",")
+
+            for opt in options:
+                expanded.append(f"{pre}{opt}{post}")
+        else:
+            expanded.append(pattern)
+
+    return expanded
+
+
+def copy_tree_with_patterns(src_dir, dst_dir, patterns, exclude_files=[]):
+    """Copy only files matching glob patterns from src_dir into dst_dir, excluding specified files"""
+    # Convert exclude_files to a set for faster lookups if there are files to exclude
+    exclude_files = set(exclude_files) if exclude_files else None
+
+    for pattern in expand_patterns(patterns):
+        full_pattern = os.path.join(src_dir, pattern)
+        matched_files = glob.glob(full_pattern, recursive=True)
+        print(f"copying matched_files: {matched_files}")
+        for src_path in matched_files:
+            if os.path.isdir(src_path):
+                continue
+            rel_path = os.path.relpath(src_path, src_dir)
+            # Only check for exclusions if we have files to exclude
+            if exclude_files is not None:
+                filename = os.path.basename(rel_path)
+                if filename in exclude_files:
+                    print(f"excluding file: {rel_path}")
+                    continue
+            dst_path = os.path.join(dst_dir, rel_path)
+            os.makedirs(os.path.dirname(dst_path), exist_ok=True)
+            shutil.copy2(src_path, dst_path)
 
 
 class EnvVarNotFoundException(Exception):
@@ -34,39 +80,27 @@ def get_is_srcdir_build():
     return git_dir.exists()
 
 
-def get_arch_name():
-    return "any"
-
-
 def get_metal_local_version_scheme(metal_build_config, version):
-    from setuptools_scm.version import ScmVersion, guess_next_version
-
-    arch_name = metal_build_config.arch_name
-
     if version.dirty:
-        return f"+g{version.node}.{arch_name}"
+        return f"+g{version.node}"
     else:
         return ""
 
 
 def get_metal_main_version_scheme(metal_build_config, version):
-    from setuptools_scm.version import ScmVersion, guess_next_version
-
     is_release_version = version.distance is None or version.distance == 0
     is_dirty = version.dirty
     is_clean_prod_build = (not is_dirty) and is_release_version
 
-    arch_name = metal_build_config.arch_name
-
     if is_clean_prod_build:
-        return version.format_with("{tag}+{arch_name}", arch_name=arch_name)
+        return version.format_with("{tag}")
     elif is_dirty and not is_release_version:
-        return version.format_with("{tag}.dev{distance}", arch_name=arch_name)
+        return version.format_with("{tag}.dev{distance}")
     elif is_dirty and is_release_version:
-        return version.format_with("{tag}", arch_name=arch_name)
+        return version.format_with("{tag}")
     else:
         assert not is_dirty and not is_release_version
-        return version.format_with("{tag}.dev{distance}+{arch_name}", arch_name=arch_name)
+        return version.format_with("{tag}.dev{distance}")
 
 
 def get_version(metal_build_config):
@@ -84,7 +118,6 @@ def get_from_precompiled_dir():
 
 @dataclass(frozen=True)
 class MetalliumBuildConfig:
-    arch_name = get_arch_name()
     from_precompiled_dir = get_from_precompiled_dir()
 
 
@@ -140,15 +173,74 @@ class CMakeBuild(build_ext):
         subprocess.check_call(["ls", "-hal", "runtime"], cwd=source_dir, env=build_env)
 
         # Copy needed C++ shared libraries and runtime assets into wheel (sfpi, FW etc)
-        dest_ttnn_build_dir = self.build_lib + "/ttnn/build"
-        os.makedirs(dest_ttnn_build_dir, exist_ok=True)
-        self.copy_tree(build_dir / "lib", dest_ttnn_build_dir + "/lib")
-        self.copy_tree(source_dir / "runtime", self.build_lib + "/runtime")
-
-        # Encode ARCH_NAME into package for later use so user doesn't have to provide
-        arch_name_file = self.build_lib + "/ttnn/.ARCH_NAME"
-        # should probably change to Python calls to write to a file descriptor instead of calling Linux tools
-        subprocess.check_call(f"echo {metal_build_config.arch_name} > {arch_name_file}", shell=True)
+        lib_patterns = [
+            "_ttnn.so",
+            "libtt_metal.so",
+            "libdevice.so",
+        ]
+        runtime_patterns = [
+            "hw/**/*",
+        ]
+        runtime_exclude_files = []
+        if BUNDLE_SFPI:
+            runtime_patterns.append("sfpi/**/*")
+            runtime_exclude_files = [
+                "riscv32-unknown-elf-lto-dump",
+                "riscv32-unknown-elf-gdb",
+                "riscv32-unknown-elf-objdump",
+                "riscv32-unknown-elf-run",
+                "riscv32-unknown-elf-ranlib",
+                "riscv32-unknown-elf-gprof",
+                "riscv32-unknown-elf-strings",
+                "riscv32-unknown-elf-size",
+                "riscv32-unknown-elf-readelf",
+                "riscv32-unknown-elf-nm",
+                "riscv32-unknown-elf-c++filt",
+                "riscv32-unknown-elf-addr2line",
+                "riscv32-unknown-elf-gcov",
+                "riscv32-unknown-elf-gcov-tool",
+                "riscv32-unknown-elf-gcov-dump",
+                "riscv32-unknown-elf-elfedit",
+                "riscv32-unknown-elf-gcc-ranlib",
+                "riscv32-unknown-elf-gcc-nm",
+                "riscv32-unknown-elf-gdb-add-index",
+            ]
+        ttnn_cpp_patterns = [
+            "ttnn/tensor/**/*",
+            "ttnn/deprecated/**/kernels/**/*",
+            "ttnn/operations/**/kernels/**/*",
+            "ttnn/operations/ccl/**/*",
+            "ttnn/operations/data_movement/**/*",
+            "ttnn/operations/moreh/**/*",
+        ]
+        tt_metal_patterns = [
+            "api/tt-metalium/buffer_constants.hpp",
+            "api/tt-metalium/buffer_types.hpp",
+            "api/tt-metalium/circular_buffer_constants.h",
+            "api/tt-metalium/constants.hpp",
+            "api/tt-metalium/dev_msgs.h",
+            "api/tt-metalium/fabric_host_interface.h",
+            "api/tt-metalium/fabric_edm_types.hpp",
+            "api/tt-metalium/fabric_edm_packet_header.hpp",
+            "core_descriptors/*.yaml",
+            "fabric/hw/**/*",
+            "fabric/mesh_graph_descriptors/*.yaml",
+            "hw/**/*",
+            "hostdevcommon/api/hostdevcommon/**/*",
+            "impl/dispatch/kernels/**/*",
+            "include/**/*",
+            "kernels/**/*",
+            "third_party/tt_llk/**/*",
+            "tools/profiler/*",
+            "soc_descriptors/*.yaml",
+        ]
+        copy_tree_with_patterns(build_dir / "lib", self.build_lib + "/ttnn/build/lib", lib_patterns)
+        copy_tree_with_patterns(build_dir, self.build_lib + "/ttnn/build/lib", ["sfpi-version.json"])
+        copy_tree_with_patterns(
+            source_dir / "runtime", self.build_lib + "/ttnn/runtime", runtime_patterns, runtime_exclude_files
+        )
+        copy_tree_with_patterns(source_dir / "ttnn/cpp", self.build_lib + "/ttnn/cpp", ttnn_cpp_patterns)
+        copy_tree_with_patterns(source_dir / "tt_metal", self.build_lib + "/ttnn/tt_metal", tt_metal_patterns)
 
         # Move built final built _ttnn SO into appropriate location in ttnn Python tree in wheel
         assert len(self.extensions) == 1, f"Detected {len(self.extensions)} extensions, but should be only 1: ttnn"
@@ -163,6 +255,7 @@ class CMakeBuild(build_ext):
         if not os.path.exists(dir_path):
             os.makedirs(dir_path)
 
+        dest_ttnn_build_dir = self.build_lib + "/ttnn/build"
         src = os.path.join(dest_ttnn_build_dir, build_constants_lookup[ext].so_src_location)
         self.copy_file(src, full_lib_path)
         os.remove(src)
@@ -171,10 +264,7 @@ class CMakeBuild(build_ext):
         return self.inplace
 
 
-packages = find_namespace_packages(where="ttnn")
-packages = [item for item in packages if not item.startswith("cpp")]
-packages.append("tt_metal")
-packages.append("ttnn.cpp")
+packages = find_packages(where="ttnn", exclude=["ttnn.examples", "ttnn.examples.*"])
 
 print(("packaging: ", packages))
 
@@ -189,20 +279,14 @@ build_constants_lookup = {
     ttnn_lib_C: BuildConstants(so_src_location="lib/_ttnn.so"),
 }
 
+
 setup(
     url="http://www.tenstorrent.com",
     use_scm_version=get_version(metal_build_config),
     packages=packages,
     package_dir={
-        "": "ttnn",  # only this is relevant in case of editable install mode
-        "tt_metal": "tt_metal",  # kernels depend on headers here
-        "ttnn.cpp": "ttnn/cpp",
-        "tt_lib.models": "models",  # make sure ttnn does not depend on model and remove!!!
+        "": "ttnn",
     },
-    package_data={
-        "ttnn.cpp": ["*.cpp", "*.hpp", "*.cc", "*.h"],
-    },
-    include_package_data=True,
     long_description_content_type="text/markdown",
     ext_modules=ext_modules,
     cmdclass=dict(build_ext=CMakeBuild),

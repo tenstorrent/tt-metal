@@ -13,6 +13,7 @@
 
 using uint32_t = std::uint32_t;
 using namespace tt::constants;
+using namespace tt::tt_metal;
 
 namespace ttnn::operations::normalization {
 
@@ -32,9 +33,7 @@ void LayerNorm::validate(
         a.get_dtype() == DataType::FLOAT32 or a.get_dtype() == DataType::BFLOAT16 or
             a.get_dtype() == DataType::BFLOAT8_B,
         "Error");
-    TT_FATAL(
-        a.storage_type() == StorageType::DEVICE || a.storage_type() == StorageType::MULTI_DEVICE,
-        "Operands to layernorm need to be on device!");
+    TT_FATAL(a.storage_type() == StorageType::DEVICE, "Operands to layernorm need to be on device!");
     TT_FATAL(a.buffer() != nullptr, "Operands to layernorm need to be allocated in buffers on device!");
 
     if (b.has_value()) {
@@ -124,10 +123,7 @@ void LayerNorm::validate(
         TT_FATAL(stats.value().is_sharded(), "Stats must be sharded");
         TT_FATAL(stats.value().get_layout() == Layout::TILE, "Only tile layout is supported for stats");
         TT_FATAL(stats.value().get_dtype() == DataType::BFLOAT16, "Only bfloat16 is supported for stats");
-        TT_FATAL(
-            stats.value().storage_type() == StorageType::DEVICE ||
-                stats.value().storage_type() == StorageType::MULTI_DEVICE,
-            "Operands to layernorm need to be on device!");
+        TT_FATAL(stats.value().storage_type() == StorageType::DEVICE, "Operands to layernorm need to be on device!");
         TT_FATAL(stats.value().buffer() != nullptr, "Operands to layernorm need to be allocated in buffers on device!");
         if (this->norm_type == LayerNormType::LAYERNORM) {
             TT_FATAL(
@@ -306,7 +302,7 @@ operation::ProgramWithCallbacks LayerNorm::create_program(
     auto& output_tensor = output_tensors.at(0);
 
     return std::visit(
-        [&](const auto& program_config) -> operation::ProgramWithCallbacks {
+        [&](const auto& program_config) -> tt::tt_metal::operation::ProgramWithCallbacks {
             using ProgramConfigType = std::decay_t<decltype(program_config)>;
             if constexpr (std::is_same_v<ProgramConfigType, LayerNormShardedMultiCoreProgramConfig>) {
                 uint32_t num_cores_x = program_config.compute_with_storage_grid_size.x;

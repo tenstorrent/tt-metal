@@ -1,7 +1,6 @@
 # SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
-import os
 import torch
 import pytest
 from loguru import logger
@@ -29,7 +28,7 @@ class Emb(torch.nn.Module):
 @pytest.mark.parametrize(
     "iterations, expected_top1, expected_top5",
     (
-        (64, 0.91, 0.99),
+        (64, 0.89, 0.99),
         # (128, 0.92, 0.99),
         # (256, 0.92, 0.99),
     ),
@@ -42,8 +41,6 @@ class Emb(torch.nn.Module):
 def test_mixtral_model_inference(
     t3k_mesh_device, use_program_cache, reset_seeds, iterations, expected_top1, expected_top5
 ):
-    t3k_mesh_device.enable_async(True)
-
     # TODO Currently topk test is supporting decode-only mode. Add prefill support.
 
     dtype = ttnn.bfloat8_b

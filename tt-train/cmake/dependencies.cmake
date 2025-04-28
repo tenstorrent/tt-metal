@@ -58,7 +58,7 @@ CPMAddPackage(NAME reflect GITHUB_REPOSITORY boost-ext/reflect GIT_TAG v1.1.1)
 # fmt : https://github.com/fmtlib/fmt
 ############################################################################################################################
 
-CPMAddPackage(NAME fmt GITHUB_REPOSITORY fmtlib/fmt GIT_TAG 11.0.1)
+CPMAddPackage(NAME fmt GITHUB_REPOSITORY fmtlib/fmt GIT_TAG 11.1.4)
 
 ############################################################################################################################
 # magic_enum : https://github.com/Neargye/magic_enum
@@ -83,11 +83,6 @@ CPMAddPackage(
     OPTIONS
         "XTENSOR_ENABLE_TESTS OFF"
 )
-
-CPMAddPackage(NAME Taskflow GITHUB_REPOSITORY taskflow/taskflow GIT_TAG v3.7.0 OPTIONS "TF_BUILD_TESTS OFF")
-if(Taskflow_ADDED AND NOT TARGET Taskflow::Taskflow)
-    add_library(Taskflow::Taskflow ALIAS Taskflow)
-endif()
 
 include(${PROJECT_SOURCE_DIR}/cmake/fetch_cli11.cmake)
 

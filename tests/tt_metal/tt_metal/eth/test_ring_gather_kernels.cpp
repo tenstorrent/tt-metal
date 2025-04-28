@@ -2,25 +2,42 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <fmt/base.h>
 #include <gtest/gtest.h>
-
-#include <algorithm>
-#include <functional>
-#include <random>
-#include <utility>
-
-#include "device_fixture.hpp"
-#include "multi_device_fixture.hpp"
-#include <tt-metalium/tt_metal.hpp>
+#include <stddef.h>
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/kernel.hpp>
-#include "tt_metal/test_utils/comparison.hpp"
-#include "tt_metal/test_utils/df/df.hpp"
-#include "tt_metal/test_utils/print_helpers.hpp"
-#include "tt_metal/test_utils/stimulus.hpp"
+#include <tt-metalium/tt_metal.hpp>
+#include <algorithm>
+#include <cstdint>
+#include <map>
+#include <memory>
+#include <string>
+#include <thread>
+#include <tuple>
+#include <unordered_set>
+#include <utility>
+#include <variant>
+#include <vector>
 
-// TODO: ARCH_NAME specific, must remove
-#include "eth_l1_address_map.h"
+#include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/buffer_types.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/data_types.hpp>
+#include <tt-metalium/device.hpp>
+#include "device_fixture.hpp"
+#include "hostdevcommon/common_values.hpp"
+#include <tt-metalium/kernel_types.hpp>
+#include "llrt.hpp"
+#include <tt-metalium/logger.hpp>
+#include <tt-metalium/program.hpp>
+#include <tt_stl/span.hpp>
+#include <tt-metalium/system_memory_manager.hpp>
+#include <tt-metalium/tt_backend_api_types.hpp>
+#include "impl/context/metal_context.hpp"
+#include "tt_metal/test_utils/df/float32.hpp"
+#include "tt_metal/test_utils/stimulus.hpp"
+#include "umd/device/types/xy_pair.h"
 
 using std::vector;
 using namespace tt;
@@ -28,15 +45,13 @@ using namespace tt::test_utils;
 using namespace tt::test_utils::df;
 
 constexpr std::int32_t WORD_SIZE = 16;  // 16 bytes per eth send packet
-constexpr std::int32_t MAX_NUM_WORDS =
-    (eth_l1_mem::address_map::MAX_L1_LOADING_SIZE - eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE) / WORD_SIZE;
 
 struct BankedConfig {
     size_t num_pages = 1;
     size_t size_bytes = 1 * 2 * 32 * 32;
     size_t page_size_bytes = 2 * 32 * 32;
-    BufferType input_buffer_type = BufferType::L1;
-    BufferType output_buffer_type = BufferType::L1;
+    tt_metal::BufferType input_buffer_type = tt_metal::BufferType::L1;
+    tt_metal::BufferType output_buffer_type = tt_metal::BufferType::L1;
     tt::DataFormat l1_data_format = tt::DataFormat::Float16_b;
 };
 
@@ -81,11 +96,12 @@ std::vector<int> get_hamiltonian_cycle(vector<vector<int>>& adj, int N, int s = 
     return {};
 }
 
-std::vector<IDevice* > get_device_ring(std::vector<tt::tt_metal::IDevice*> devices) {
+std::vector<tt_metal::IDevice*> get_device_ring(std::vector<tt::tt_metal::IDevice*> devices) {
     std::vector<std::vector<int>> adj(devices.size(), std::vector<int>(devices.size(), 0));
     for (uint32_t i = 0; i < devices.size(); ++i) {
         const auto& device = devices[i];
-        auto ethernet_connected_device_ids = tt::Cluster::instance().get_ethernet_connected_device_ids(device->id());
+        auto ethernet_connected_device_ids =
+            tt::tt_metal::MetalContext::instance().get_cluster().get_ethernet_connected_device_ids(device->id());
         for (const auto& connected_device_id : ethernet_connected_device_ids) {
             for (uint32_t j = 0; j < devices.size(); ++j) {
                 if (devices[j]->id() == connected_device_id) {
@@ -96,7 +112,7 @@ std::vector<IDevice* > get_device_ring(std::vector<tt::tt_metal::IDevice*> devic
     }
 
     const auto& device_ring_idx = get_hamiltonian_cycle(adj, devices.size(), 0);
-    std::vector<IDevice* > device_ring;
+    std::vector<tt_metal::IDevice*> device_ring;
     device_ring.reserve(device_ring_idx.size());
     for (const auto& device_idx : device_ring_idx) {
         device_ring.push_back(devices[device_idx]);
@@ -104,9 +120,9 @@ std::vector<IDevice* > get_device_ring(std::vector<tt::tt_metal::IDevice*> devic
     return device_ring;
 }
 
-std::vector<std::tuple<IDevice*, IDevice*, CoreCoord, CoreCoord>> get_sender_receiver_cores(
-    std::vector<tt::tt_metal::IDevice* > device_ring) {
-    std::vector<std::tuple<IDevice*, IDevice*, CoreCoord, CoreCoord>> sender_receivers;
+std::vector<std::tuple<tt_metal::IDevice*, tt_metal::IDevice*, CoreCoord, CoreCoord>> get_sender_receiver_cores(
+    std::vector<tt::tt_metal::IDevice*> device_ring) {
+    std::vector<std::tuple<tt_metal::IDevice*, tt_metal::IDevice*, CoreCoord, CoreCoord>> sender_receivers;
     sender_receivers.reserve(device_ring.size() - 1);
 
     // Special case for 2 devices to ensure core pairs are not the same for send and receive
@@ -117,7 +133,7 @@ std::vector<std::tuple<IDevice*, IDevice*, CoreCoord, CoreCoord>> get_sender_rec
         for (const auto& first_eth_core : first_device->get_active_ethernet_cores(true)) {
             auto [device_id, second_eth_core] = first_device->get_connected_ethernet_core(first_eth_core);
             if (second_device->id() == device_id) {
-                IDevice* sender_device, *receiver_device;
+                tt_metal::IDevice *sender_device, *receiver_device;
                 CoreCoord sender_eth_core, receiver_eth_core;
                 if (i == 0) {
                     sender_device = first_device, receiver_device = second_device;
@@ -337,7 +353,7 @@ bool eth_interleaved_ring_gather_sender_receiver_kernels(
     std::vector<uint32_t> full_input;
     full_input.reserve(numel * sender_receivers.size());
 
-    std::vector<std::shared_ptr<Buffer>> output_buffers;
+    std::vector<std::shared_ptr<tt_metal::Buffer>> output_buffers;
     output_buffers.reserve(sender_receivers.size());
 
     for (uint32_t i = 0; i < sender_receivers.size(); ++i) {
@@ -357,11 +373,11 @@ bool eth_interleaved_ring_gather_sender_receiver_kernels(
 
         auto& program = programs[device->id()];
 
-        auto input_buffer =
-            CreateBuffer(InterleavedBufferConfig{device, cfg.size_bytes, cfg.page_size_bytes, cfg.input_buffer_type});
-        bool input_is_dram = cfg.input_buffer_type == BufferType::DRAM;
+        auto input_buffer = CreateBuffer(
+            tt_metal::InterleavedBufferConfig{device, cfg.size_bytes, cfg.page_size_bytes, cfg.input_buffer_type});
+        bool input_is_dram = cfg.input_buffer_type == tt_metal::BufferType::DRAM;
         tt_metal::detail::WriteToBuffer(input_buffer, inputs[i]);
-        output_buffers.emplace_back(CreateBuffer(InterleavedBufferConfig{
+        output_buffers.emplace_back(CreateBuffer(tt_metal::InterleavedBufferConfig{
             device, cfg.size_bytes * sender_receivers.size(), cfg.page_size_bytes, cfg.output_buffer_type}));
         tt_metal::detail::WriteToBuffer(output_buffers[i], all_zeros);
 
@@ -376,8 +392,8 @@ bool eth_interleaved_ring_gather_sender_receiver_kernels(
                     uint32_t(num_bytes_per_send >> 4),
                     uint32_t(device->ethernet_core_from_logical_core(eth_receiver_core).x),
                     uint32_t(device->ethernet_core_from_logical_core(eth_receiver_core).y),
-                    uint32_t(input_buffer->buffer_type() == BufferType::DRAM),
-                    uint32_t(output_buffers[i]->buffer_type() == BufferType::DRAM)}});
+                    uint32_t(input_buffer->buffer_type() == tt_metal::BufferType::DRAM),
+                    uint32_t(output_buffers[i]->buffer_type() == tt_metal::BufferType::DRAM)}});
 
         tt_metal::SetRuntimeArgs(
             program,
@@ -415,7 +431,8 @@ bool eth_interleaved_ring_gather_sender_receiver_kernels(
                     uint32_t(device->ethernet_core_from_logical_core(eth_sender_core).x),
                     uint32_t(device->ethernet_core_from_logical_core(eth_sender_core).y),
                     uint32_t(
-                        output_buffers[i]->buffer_type() == BufferType::DRAM)}});  // probably want to use NOC_1 here
+                        output_buffers[i]->buffer_type() ==
+                        tt_metal::BufferType::DRAM)}});  // probably want to use NOC_1 here
 
         tt_metal::SetRuntimeArgs(
             program,
@@ -463,10 +480,14 @@ bool eth_interleaved_ring_gather_sender_receiver_kernels(
 
 }  // namespace unit_tests::erisc::kernels
 
+namespace tt::tt_metal {
+
 TEST_F(DeviceFixture, ActiveEthKernelsDirectRingGatherAllChips) {
-    const size_t src_eth_l1_byte_address = eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE + 32;
-    const size_t dst_eth_l1_byte_address = eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE + 32;
-    const size_t sem_l1_byte_address = eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE;
+    auto erisc_unreserved_base_addr =
+        MetalContext::instance().hal().get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::UNRESERVED);
+    const size_t src_eth_l1_byte_address = erisc_unreserved_base_addr + 32;
+    const size_t dst_eth_l1_byte_address = erisc_unreserved_base_addr + 32;
+    const size_t sem_l1_byte_address = erisc_unreserved_base_addr;
     const auto& device_ring = get_device_ring(devices_);
     if (device_ring.empty()) {
         GTEST_SKIP();
@@ -476,9 +497,11 @@ TEST_F(DeviceFixture, ActiveEthKernelsDirectRingGatherAllChips) {
 }
 
 TEST_F(DeviceFixture, ActiveEthKernelsInterleavedRingGatherAllChips) {
-    const size_t src_eth_l1_byte_address = eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE + 32;
-    const size_t dst_eth_l1_byte_address = eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE + 32;
-    const size_t sem_l1_byte_address = eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE;
+    auto erisc_unreserved_base_addr =
+        MetalContext::instance().hal().get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::UNRESERVED);
+    const size_t src_eth_l1_byte_address = erisc_unreserved_base_addr + 32;
+    const size_t dst_eth_l1_byte_address = erisc_unreserved_base_addr + 32;
+    const size_t sem_l1_byte_address = erisc_unreserved_base_addr;
     BankedConfig test_config =
         BankedConfig{.num_pages = 10, .size_bytes = 10 * 2 * 32 * 32, .page_size_bytes = 2 * 32 * 32};
     const auto& device_ring = get_device_ring(devices_);
@@ -488,3 +511,5 @@ TEST_F(DeviceFixture, ActiveEthKernelsInterleavedRingGatherAllChips) {
     ASSERT_TRUE(unit_tests::erisc::kernels::eth_interleaved_ring_gather_sender_receiver_kernels(
         device_ring, test_config, src_eth_l1_byte_address, dst_eth_l1_byte_address, sem_l1_byte_address));
 }
+
+}  // namespace tt::tt_metal

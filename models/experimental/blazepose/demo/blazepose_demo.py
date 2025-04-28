@@ -5,8 +5,6 @@
 import numpy as np
 import torch
 import cv2
-import os
-import sys
 from pathlib import Path
 
 from models.experimental.blazepose.demo.blazebase import resize_pad, denormalize_detections

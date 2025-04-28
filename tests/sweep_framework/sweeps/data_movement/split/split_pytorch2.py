@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+from math import ceil
 from typing import Optional, Tuple
 
 import torch
@@ -15,6 +16,7 @@ TIMEOUT = 10
 # seed for random
 random.seed(0)
 
+# !TODO amorrison changed ttnn.split API to match torch.split. in #17461. Use chunk size when these params are updated
 parameters = {
     "nightly": {
         "split_specs": [
@@ -32,6 +34,12 @@ parameters = {
             {"shape": [1, 7, 2304], "split_size": 768, "dim": 2},
             {"shape": [768, 256], "split_size": 256, "dim": -1},
             {"shape": [768], "split_size": 256, "dim": -1},
+            {"shape": [1, 163206, 4], "split_size": [122400, 30600, 7650, 1989, 567], "dim": 1},
+            {"shape": [1, 163206, 91], "split_size": [122400, 30600, 7650, 1989, 567], "dim": 1},
+            {"shape": [1, 3, 16, 16, 85], "split_size": [2, 2, 81], "dim": 4},
+            {"shape": [1, 3, 32, 32, 85], "split_size": [2, 2, 81], "dim": 4},
+            {"shape": [1, 3, 64, 64, 85], "split_size": [2, 2, 81], "dim": 4},
+            {"shape": [163206, 4], "split_size": [122400, 30600, 7650, 1989, 567]},
         ],
         "dtype": [ttnn.bfloat16],
         "layout": [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT],
@@ -57,18 +65,20 @@ def run(
     *,
     device,
 ):
-    device.enable_async(False)
-
     # Extract the shape and split_size from split_specs
     shape = split_specs["shape"]
     dim = split_specs.get("dim", 0)  # Get the dimension to split, default to 0 if unspecified
     split_size = split_specs["split_size"]  # Number of splits
 
+    # !TODO amorrison changed ttnn.split API to match torch.split. in #17461. Remove this when sweep params are updated
+    if not isinstance(split_size, list):
+        split_size = ceil(shape[dim] / split_size)
+
     # Create a random tensor of the specified shape
     tensor = torch_random(shape, -0.1, 0.1, dtype=torch.bfloat16)
 
     # Apply split using torch's chunk function
-    torch_output_tensors = torch.chunk(tensor, split_size, dim)
+    torch_output_tensors = torch.split(tensor, split_size, dim)
 
     # Convert the tensor to the ttnn tensor format
     ttnn_tensor = ttnn.from_torch(tensor, device=device, layout=layout, dtype=dtype)

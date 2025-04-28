@@ -12,7 +12,7 @@
 
 namespace ttnn::operations::experimental::transformer {
 
-operation::ProgramWithCallbacks multi_core_nlp_kv_cache_load_slice(
+tt::tt_metal::operation::ProgramWithCallbacks multi_core_nlp_kv_cache_load_slice(
     const Tensor& a, Tensor& output, const ttnn::Shape& output_tensor_start, const ttnn::Shape& output_tensor_end);
 
 struct NlpKVCacheLoadSliceDeviceOperation {
@@ -23,7 +23,7 @@ struct NlpKVCacheLoadSliceDeviceOperation {
 
     void validate(const std::vector<Tensor>& input_tensors) const;
     std::vector<ttnn::TensorSpec> compute_output_specs(const std::vector<Tensor>& input_tensors) const;
-    operation::ProgramWithCallbacks create_program(
+    tt::tt_metal::operation::ProgramWithCallbacks create_program(
         const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const;
 };
 

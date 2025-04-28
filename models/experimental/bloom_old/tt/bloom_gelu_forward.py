@@ -2,17 +2,9 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from abc import abstractmethod
 import torch
-import math
-from torch.nn import functional as F
 
 import ttnn
-from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
-    comp_allclose,
-    comp_pcc,
-)
-import numpy as np
 import models.experimental.bloom_old.bloom_utils as bloom_utils
 
 

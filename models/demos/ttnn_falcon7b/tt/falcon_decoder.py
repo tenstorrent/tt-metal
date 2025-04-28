@@ -61,6 +61,7 @@ class TtFalconDecoderLayer:
             hidden_states,
             epsilon=self.layernorm_eps,
             memory_config=self.model_config["INPUT_LAYERNORM_OUTPUT_MEMCFG"],
+            compute_kernel_config=ttnn.WormholeComputeKernelConfig(math_fidelity=ttnn.MathFidelity.HiFi4),
         )
         layernorm_output = ttnn.mul(
             layernorm_output,

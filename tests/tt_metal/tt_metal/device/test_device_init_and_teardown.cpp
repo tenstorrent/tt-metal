@@ -3,13 +3,33 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <gtest/gtest.h>
-
-#include <tt-metalium/tt_metal.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/command_queue.hpp>
-#include "tt_metal/test_utils/env_vars.hpp"
+#include <stdlib.h>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/device_pool.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tt_metal.hpp>
+#include <map>
+#include <variant>
+#include <vector>
+
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/data_types.hpp>
+#include "hostdevcommon/common_values.hpp"
+#include <tt-metalium/kernel_types.hpp>
+#include <tt-metalium/program.hpp>
+#include "impl/context/metal_context.hpp"
+#include <tt-metalium/system_memory_manager.hpp>
+#include <tt-metalium/tt_backend_api_types.hpp>
+#include "tt_metal/test_utils/env_vars.hpp"
+#include "umd/device/types/arch.h"
+
+namespace tt {
+namespace tt_metal {
+class CommandQueue;
+}  // namespace tt_metal
+}  // namespace tt
+
+namespace tt::tt_metal {
 
 using std::vector;
 using namespace tt;
@@ -26,7 +46,7 @@ void launch_program(tt_metal::IDevice* device, tt_metal::Program& program) {
     if (getenv("TT_METAL_SLOW_DISPATCH_MODE")) {
         tt_metal::detail::LaunchProgram(device, program);
     } else {
-        CommandQueue& cq = device->command_queue();
+        tt::tt_metal::CommandQueue& cq = device->command_queue();
         EnqueueProgram(cq, program, false);
         Finish(cq);
     }
@@ -44,15 +64,17 @@ bool load_all_blank_kernels(tt_metal::IDevice* device) {
         program,
         "tt_metal/kernels/dataflow/blank.cpp",
         all_cores,
-        DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
+        tt::tt_metal::DataMovementConfig{
+            .processor = tt::tt_metal::DataMovementProcessor::RISCV_1, .noc = tt::tt_metal::NOC::RISCV_1_default});
 
     CreateKernel(
         program,
         "tt_metal/kernels/dataflow/blank.cpp",
         all_cores,
-        DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
+        tt::tt_metal::DataMovementConfig{
+            .processor = tt::tt_metal::DataMovementProcessor::RISCV_0, .noc = tt::tt_metal::NOC::RISCV_0_default});
 
-    CreateKernel(program, "tt_metal/kernels/compute/blank.cpp", all_cores, ComputeConfig{});
+    CreateKernel(program, "tt_metal/kernels/compute/blank.cpp", all_cores, tt::tt_metal::ComputeConfig{});
 
     unit_tests_common::basic::test_device_init::launch_program(device, program);
     return pass;
@@ -72,7 +94,7 @@ TEST_P(DeviceParamFixture, DeviceInitializeAndTeardown) {
     for (unsigned int id = 0; id < num_devices; id++) {
         ids.push_back(id);
     }
-    const auto& dispatch_core_config = tt::llrt::RunTimeOptions::get_instance().get_dispatch_core_config();
+    const auto& dispatch_core_config = tt::tt_metal::MetalContext::instance().rtoptions().get_dispatch_core_config();
     tt::DevicePool::initialize(ids, 1, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, dispatch_core_config);
     const auto devices = tt::DevicePool::instance().get_all_active_devices();
     for (auto device : devices) {
@@ -91,7 +113,7 @@ TEST_P(DeviceParamFixture, TensixDeviceLoadBlankKernels) {
     for (unsigned int id = 0; id < num_devices; id++) {
         ids.push_back(id);
     }
-    const auto& dispatch_core_config = tt::llrt::RunTimeOptions::get_instance().get_dispatch_core_config();
+    const auto& dispatch_core_config = tt::tt_metal::MetalContext::instance().rtoptions().get_dispatch_core_config();
     tt::DevicePool::initialize(ids, 1, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, dispatch_core_config);
     const auto devices = tt::DevicePool::instance().get_all_active_devices();
     for (auto device : devices) {
@@ -101,3 +123,5 @@ TEST_P(DeviceParamFixture, TensixDeviceLoadBlankKernels) {
         ASSERT_TRUE(tt::tt_metal::CloseDevice(device));
     }
 }
+
+}  // namespace tt::tt_metal

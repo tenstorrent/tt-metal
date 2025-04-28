@@ -16,7 +16,7 @@ def format_tensor(x, target_layout, device, output_mem_config, pad_value=0.0):
         return x
 
     if x.get_layout() == ttnn.ROW_MAJOR_LAYOUT and target_layout == ttnn.TILE_LAYOUT:
-        x_padded_shape = ttnn.pad_to_tile_shape(x.padded_shape, False, False, True, True)
+        x_padded_shape = ttnn.pad_to_tile_shape(x.padded_shape)
         if x.padded_shape != x_padded_shape:
             return ttnn.format_input_tensor(x, device, x_padded_shape, pad_value, target_layout, output_mem_config)
         else:

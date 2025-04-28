@@ -51,6 +51,11 @@ public:
     void eval();
     void set_run_mode(RunMode mode);
     [[nodiscard]] RunMode get_run_mode() const;
+
+    // Forward pass for the module. All posible overloads
+    [[nodiscard]] virtual autograd::TensorPtr operator()(const autograd::TensorPtr& tensor);
+    [[nodiscard]] virtual autograd::TensorPtr operator()(
+        const autograd::TensorPtr& tensor, const autograd::TensorPtr& other);
 };
 
 }  // namespace ttml::autograd

@@ -1,7 +1,6 @@
 # SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
-import os
 import torch
 import pytest
 from loguru import logger
@@ -12,7 +11,7 @@ from models.demos.t3000.mixtral8x7b.tt.mixtral_decoder import TtTransformerBlock
 from models.demos.t3000.mixtral8x7b.reference.model import TransformerBlock, precompute_freqs_cis
 from models.demos.t3000.mixtral8x7b.tt.model_config import TtModelArgs
 from models.utility_functions import comp_pcc, comp_allclose
-from ttnn import ReplicateTensorToMesh, ConcatMeshToTensor
+from ttnn import ConcatMeshToTensor
 
 
 @pytest.mark.parametrize(
@@ -28,7 +27,6 @@ def test_mixtral_decoder_inference(t3k_mesh_device, use_program_cache, reset_see
     s: sequence length
     h: hidden size
     """
-    t3k_mesh_device.enable_async(True)
 
     pcc = 0.99
     dtype = ttnn.bfloat8_b

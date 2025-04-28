@@ -6,10 +6,12 @@
 
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/global_semaphore.hpp>
-#include <tt-metalium/hal.hpp>
+#include "impl/context/metal_context.hpp"
+
+namespace tt::tt_metal {
 
 inline std::tuple<Program, CoreCoord, GlobalSemaphore> create_single_sync_program(
-    IDevice* device, SubDevice sub_device) {
+    IDevice* device, const SubDevice& sub_device) {
     auto syncer_coord = sub_device.cores(HalProgrammableCoreType::TENSIX).ranges().at(0).start_coord;
     auto syncer_core = CoreRangeSet(CoreRange(syncer_coord, syncer_coord));
     auto global_sem = CreateGlobalSemaphore(device, sub_device.cores(HalProgrammableCoreType::TENSIX), INVALID);
@@ -100,7 +102,7 @@ inline std::tuple<Program, Program, Program, GlobalSemaphore> create_basic_eth_s
         syncer_core_physical.y,
         tensix_waiter_core_physical.x,
         tensix_waiter_core_physical.y,
-        hal.get_dev_addr(tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::UNRESERVED)
+        MetalContext::instance().hal().get_dev_addr(tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::UNRESERVED)
     };
     SetRuntimeArgs(waiter_program, waiter_kernel, waiter_core, waiter_rt_args);
 
@@ -128,3 +130,5 @@ inline std::tuple<Program, Program, Program, GlobalSemaphore> create_basic_eth_s
     return {
         std::move(waiter_program), std::move(syncer_program), std::move(incrementer_program), std::move(global_sem)};
 }
+
+} // namespace tt::tt_metal

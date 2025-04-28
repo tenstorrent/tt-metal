@@ -3,17 +3,28 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <gtest/gtest.h>
-
 #include <algorithm>
+#include <iterator>
+#include <map>
+#include <set>
+#include <tuple>
+#include <unordered_set>
+#include <vector>
 
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/device.hpp>
 #include "multi_device_fixture.hpp"
-#include <tt-metalium/tt_metal.hpp>
-#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/system_memory_manager.hpp>
+#include "tt_metal/test_utils/env_vars.hpp"
+#include "umd/device/tt_core_coordinates.h"
+#include "umd/device/types/xy_pair.h"
+
+namespace tt::tt_metal {
+
+namespace unit_tests::multichip::cluster {
 
 using namespace tt;
 using namespace tt::test_utils;
-
-namespace unit_tests::multichip::cluster {
 
 // Run this on Nebula X2 only, validate etherent core apis are correct
 // Known connectivity: chip 0 (x=9, y=6) <--> chip 1 (x=9, y=0)
@@ -154,3 +165,5 @@ TEST_F(N300DeviceFixture, ActiveEthValidateEthernetSockets) {
     EXPECT_ANY_THROW(device_0->get_ethernet_sockets(2));
 }
 }  // namespace unit_tests::multichip::cluster
+
+}  // namespace tt::tt_metal

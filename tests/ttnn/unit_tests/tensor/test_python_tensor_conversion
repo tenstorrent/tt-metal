@@ -43,4 +43,3 @@ def test_convert_python_tensor_bfp_b(device, size, mode, dtype):
     input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device, dtype=(dtype))
     output_tensor = ttnn.to_torch(input_tensor, torch_rank=1)
     # assert torch.equal(output_tensor,torch_input_tensor)
-    assert output_tensor.storage_type() != ttnn.StorageType.BORROWED

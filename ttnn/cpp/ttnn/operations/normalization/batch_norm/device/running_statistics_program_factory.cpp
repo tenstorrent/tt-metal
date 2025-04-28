@@ -13,7 +13,7 @@ namespace CMAKE_UNIQUE_NAMESPACE {
 
 using namespace ttnn::operations::normalization;
 
-std::tuple<uint32_t, uint32_t, uint32_t, uint32_t> extract_shape_dims(const Tensor& x) {
+std::tuple<uint32_t, uint32_t, uint32_t, uint32_t> extract_shape_dims(const tt::tt_metal::Tensor& x) {
     const auto& shape = x.padded_shape();
     const auto& tile = x.tensor_spec().tile();
     return {shape[-4], shape[-3], shape[-2] / tile.get_height(), shape[-1] / tile.get_width()};
@@ -21,10 +21,10 @@ std::tuple<uint32_t, uint32_t, uint32_t, uint32_t> extract_shape_dims(const Tens
 
 template <typename F>
 void set_or_update_runtime_arguments(
-    Program& program,
-    KernelHandle reader_kernel_id,
-    KernelHandle writer_kernel_id,
-    KernelHandle compute_kernel_id,
+    tt::tt_metal::Program& program,
+    tt::tt_metal::KernelHandle reader_kernel_id,
+    tt::tt_metal::KernelHandle writer_kernel_id,
+    tt::tt_metal::KernelHandle compute_kernel_id,
     CoreCoord compute_with_storage_grid_size,
     const RunningStatistics::operation_attributes_t& operation_attributes,
     const RunningStatistics::tensor_args_t& tensor_args,
@@ -75,7 +75,7 @@ void set_or_update_runtime_arguments(
 
         uint32_t cHtWt = cHt * cWt;
         const auto scalar = momentum;
-        const auto packed_scalar_momentum = batch_mean_tensor.get_dtype() == DataType::FLOAT32
+        const auto packed_scalar_momentum = batch_mean_tensor.get_dtype() == tt::tt_metal::DataType::FLOAT32
                                                 ? std::bit_cast<uint32_t>(scalar)
                                                 : pack_two_bfloat16_into_uint32({scalar, scalar});
         std::array reader_runtime_args = {
@@ -360,11 +360,12 @@ void RunningStatistics::RunningStatisticsProgramFactory::override_runtime_argume
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& output) {
-    auto update_args = [](Program& program, KernelHandle kernel_id, CoreCoord core, auto&& args) {
-        auto& all_args = GetRuntimeArgs(program, kernel_id);
-        auto& core_args = all_args.at(core.x).at(core.y);
-        std::copy(args.begin(), args.end(), core_args.data());
-    };
+    auto update_args =
+        [](tt::tt_metal::Program& program, tt::tt_metal::KernelHandle kernel_id, CoreCoord core, auto&& args) {
+            auto& all_args = GetRuntimeArgs(program, kernel_id);
+            auto& core_args = all_args.at(core.x).at(core.y);
+            std::copy(args.begin(), args.end(), core_args.data());
+        };
 
     CMAKE_UNIQUE_NAMESPACE::set_or_update_runtime_arguments(
         cached_program.program,

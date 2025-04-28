@@ -41,10 +41,7 @@ constexpr MeasurementType measurement_type = static_cast<MeasurementType>(get_co
 constexpr uint32_t NUM_BUFFER_SLOTS = get_compile_time_arg_val(2);
 constexpr uint32_t MAX_NUM_TRANSACTION_ID =
     NUM_BUFFER_SLOTS / 2;  // the algorithm only works for NUM_BUFFER_SLOTS divisible by MAX_NUM_TRANSACTION_ID
-constexpr uint32_t worker_noc_x = get_compile_time_arg_val(3);
-constexpr uint32_t worker_noc_y = get_compile_time_arg_val(4);
-constexpr uint32_t worker_buffer_addr = get_compile_time_arg_val(5);
-constexpr uint32_t disable_trid = get_compile_time_arg_val(6);
+constexpr uint32_t disable_trid = get_compile_time_arg_val(3);
 
 // ******************************* Sender APIs ***************************************************
 
@@ -172,7 +169,7 @@ FORCE_INLINE bool has_incoming_packet(volatile eth_buffer_slot_sync_t* buffer_sl
 }
 
 FORCE_INLINE bool write_worker_done(uint32_t trid) {
-    return ncrisc_noc_nonposted_write_with_transaction_id_flushed(noc_index, trid);
+    return ncrisc_noc_nonposted_write_with_transaction_id_sent(noc_index, trid);
 }
 
 FORCE_INLINE void ack_complete(
@@ -206,7 +203,7 @@ FORCE_INLINE void write_worker(
     noc_async_write(buffer_slot_addr, worker_noc_addr, message_size);
     noc_async_writes_flushed();
 #else
-    noc_async_write_one_packet_with_trid_with_state(
+    noc_async_write_one_packet_with_trid_with_state<false, false>(
         buffer_slot_addr, worker_noc_addr, message_size, curr_trid_to_write);
 #endif
     // reset sync

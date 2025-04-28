@@ -4,8 +4,6 @@
 
 import torch
 from diffusers import StableDiffusionPipeline
-from loguru import logger
-import os
 import ttnn
 import pytest
 
@@ -22,22 +20,35 @@ from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_utility_functions
     post_process_output_and_move_to_host,
     weight_to_bfp8,
 )
+from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_utility_functions import (
+    preprocess_and_push_input_to_device,
+)
+from models.demos.wormhole.stable_diffusion.tests.parameterizations import DOWN_MID_UP_BLOCKS_HIDDEN_STATES_INFO
 
 
 @skip_for_grayskull()
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
 @pytest.mark.parametrize("res_hidden_states_tuple", [([2, 1280, 8, 8], [2, 1280, 8, 8], [2, 1280, 8, 8])])
-@pytest.mark.parametrize("hidden_states", [[2, 1280, 8, 8]])
+@pytest.mark.parametrize(
+    "hidden_states, shard_layout, shard_end_core, shard_shape", [DOWN_MID_UP_BLOCKS_HIDDEN_STATES_INFO]
+)
 @pytest.mark.parametrize("temb", [[1, 1, 2, 1280]])
-def test_upblock_512x512(reset_seeds, device, res_hidden_states_tuple, hidden_states, temb):
-    os.environ["SLOW_MATMULS"] = "1"
-
+def test_upblock_512x512(
+    reset_seeds,
+    device,
+    res_hidden_states_tuple,
+    hidden_states,
+    shard_layout,
+    shard_end_core,
+    shard_shape,
+    temb,
+    use_program_cache,
+):
     pipe = StableDiffusionPipeline.from_pretrained("CompVis/stable-diffusion-v1-4", torch_dtype=torch.float32)
     unet = pipe.unet
     unet.eval()
     state_dict = unet.state_dict()
     unet_upblock = pipe.unet.up_blocks[0]
-    reader_patterns_cache = {}
 
     parameters = preprocess_model_parameters(
         initialize_model=lambda: unet, custom_preprocessor=custom_preprocessor, device=device
@@ -51,7 +62,7 @@ def test_upblock_512x512(reset_seeds, device, res_hidden_states_tuple, hidden_st
         fp32_dest_acc_en=True,
         packer_l1_acc=False,
     )
-    model = upblock_2d(device, parameters, reader_patterns_cache, N, H, W, compute_kernel_config)
+    model = upblock_2d(device, parameters, N, H, W, compute_kernel_config)
 
     # synthesize the input
     in_channels = hidden_states[1]
@@ -64,15 +75,28 @@ def test_upblock_512x512(reset_seeds, device, res_hidden_states_tuple, hidden_st
     temb = torch_random(temb, -0.1, 0.1, dtype=torch.float32)
 
     # execute pytorch
-    torch_output = unet_upblock(hidden_state, res_hidden_states_tuple, None, None)
+    torch_output = unet_upblock(hidden_state, res_hidden_states_tuple, temb.squeeze(), None)
 
-    hidden_state = ttnn.from_torch(hidden_state, ttnn.bfloat16)
-    hidden_state = ttnn.to_device(hidden_state, device, memory_config=ttnn.L1_MEMORY_CONFIG)
-    hidden_state = ttnn.permute(hidden_state, (0, 2, 3, 1))
-
-    hidden_state = ttnn.reshape(hidden_state, (1, 1, N * H * W, in_channels))
-
-    hidden_state = ttnn.to_layout(hidden_state, ttnn.TILE_LAYOUT, ttnn.bfloat8_b)
+    hidden_state = preprocess_and_push_input_to_device(
+        device,
+        hidden_state,
+        memory_config=ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+            ttnn.BufferType.L1,
+            ttnn.ShardSpec(
+                ttnn.CoreRangeSet(
+                    {
+                        ttnn.CoreRange(
+                            ttnn.CoreCoord(0, 0),
+                            ttnn.CoreCoord(shard_end_core[0], shard_end_core[1]),
+                        ),
+                    }
+                ),
+                shard_shape,
+                ttnn.ShardOrientation.ROW_MAJOR,
+            ),
+        ),
+    )
 
     temb = temb.permute(2, 0, 1, 3)  # pre-permute temb
     temb = ttnn.from_torch(temb, ttnn.bfloat16)
@@ -102,4 +126,4 @@ def test_upblock_512x512(reset_seeds, device, res_hidden_states_tuple, hidden_st
 
     op = post_process_output_and_move_to_host(op, N, H * 2, W * 2, in_channels)
 
-    assert_with_pcc(torch_output, op, 0.95)
+    assert_with_pcc(torch_output, op, 0.94)

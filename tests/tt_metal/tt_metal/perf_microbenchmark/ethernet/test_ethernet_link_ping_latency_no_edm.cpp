@@ -3,32 +3,41 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <algorithm>
-#include <functional>
-#include <limits>
-#include <random>
-#include <tuple>
-#include <map>
-
-#include "umd/device/types/arch.h"
-#include <tt-metalium/device_impl.hpp>
-#include <tt-metalium/kernel_types.hpp>
-#include "tt_backend_api_types.hpp"
+#include <assert.h>
+#include <fmt/base.h>
+#include <stdint.h>
 #include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/math.hpp>
-#include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/kernel.hpp>
-#include "tt_metal/test_utils/comparison.hpp"
-#include "tt_metal/test_utils/df/df.hpp"
+#include <tt-metalium/kernel_types.hpp>
+#include <tt-metalium/tt_metal.hpp>
+#include <algorithm>
+#include <cstdlib>
+#include <exception>
+#include <iostream>
+#include <limits>
+#include <map>
+#include <numeric>
+#include <string>
+#include <thread>
+#include <tuple>
+#include <unordered_set>
+#include <utility>
+#include <variant>
+#include <vector>
+
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/data_types.hpp>
+#include <tt-metalium/device.hpp>
+#include "df/float32.hpp"
+#include <tt-metalium/logger.hpp>
+#include <tt-metalium/program.hpp>
+#include <tt_stl/span.hpp>
+#include <tt-metalium/system_memory_manager.hpp>
+#include <tt-metalium/tt_backend_api_types.hpp>
 #include "tt_metal/test_utils/env_vars.hpp"
-#include "tt_metal/test_utils/print_helpers.hpp"
-#include "tt_metal/test_utils/stimulus.hpp"
-
-#include <tt-metalium/persistent_kernel_cache.hpp>
-
-// TODO: ARCH_NAME specific, must remove
-#include "eth_l1_address_map.h"
+#include "umd/device/tt_xy_pair.h"
+#include "umd/device/types/arch.h"
+#include "umd/device/types/xy_pair.h"
 
 using namespace tt;
 using namespace tt::test_utils;
@@ -64,7 +73,7 @@ public:
         }
     }
 
-    std::map<chip_id_t, IDevice*> devices_;
+    std::map<chip_id_t, tt_metal::IDevice*> devices_;
     tt::ARCH arch_;
     size_t num_devices_;
 
@@ -77,28 +86,27 @@ struct ChipSenderReceiverEthCore {
     CoreCoord receiver_core;
 };
 
-std::tuple<Program, Program> build(
-    IDevice* device0,
-    IDevice* device1,
+std::tuple<tt_metal::Program, tt_metal::Program> build(
+    tt_metal::IDevice* device0,
+    tt_metal::IDevice* device1,
     CoreCoord eth_sender_core,
     CoreCoord eth_receiver_core,
     std::size_t num_samples,
     std::size_t sample_page_size,
     std::size_t num_channels,
-    KernelHandle& local_kernel,
-    KernelHandle& remote_kernel) {
-    Program program0;
-    Program program1;
+    tt_metal::KernelHandle& local_kernel,
+    tt_metal::KernelHandle& remote_kernel) {
+    tt_metal::Program program0;
+    tt_metal::Program program1;
 
     std::vector<uint32_t> const& ct_args = {num_channels};
 
     // Kernel Setup
-
+    uint32_t erisc_unreserved_base = tt::tt_metal::MetalContext::instance().hal().get_dev_addr(
+        tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::UNRESERVED);
     auto rt_args = [&]() -> std::vector<uint32_t> {
         return std::vector<uint32_t>{
-            eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE,
-            static_cast<uint32_t>(num_samples),
-            static_cast<uint32_t>(sample_page_size)};
+            erisc_unreserved_base, static_cast<uint32_t>(num_samples), static_cast<uint32_t>(sample_page_size)};
     };
 
     local_kernel = tt_metal::CreateKernel(
@@ -124,27 +132,27 @@ std::tuple<Program, Program> build(
         throw e;
     }
 
-    return std::tuple<Program, Program>{std::move(program0), std::move(program1)};
+    return std::tuple<tt_metal::Program, tt_metal::Program>{std::move(program0), std::move(program1)};
 }
 
 void run(
-    IDevice* device0,
-    IDevice* device1,
-    Program& program0,
-    Program& program1,
-    KernelHandle local_kernel,
-    KernelHandle remote_kernel,
+    tt_metal::IDevice* device0,
+    tt_metal::IDevice* device1,
+    tt_metal::Program& program0,
+    tt_metal::Program& program1,
+    tt_metal::KernelHandle local_kernel,
+    tt_metal::KernelHandle remote_kernel,
 
     CoreCoord eth_sender_core,
     CoreCoord eth_receiver_core,
     std::size_t num_samples,
     std::size_t sample_page_size,
     std::size_t max_channels_per_direction) {
+    uint32_t erisc_unreserved_base = tt::tt_metal::MetalContext::instance().hal().get_dev_addr(
+        tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::UNRESERVED);
     auto rt_args = [&]() -> std::vector<uint32_t> {
         return std::vector<uint32_t>{
-            eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE,
-            static_cast<uint32_t>(num_samples),
-            static_cast<uint32_t>(sample_page_size)};
+            erisc_unreserved_base, static_cast<uint32_t>(num_samples), static_cast<uint32_t>(sample_page_size)};
     };
     log_trace(tt::LogTest, "Running...");
 
@@ -254,8 +262,8 @@ int main(int argc, char** argv) {
                         num_samples,
                         sample_page_size,
                         max_channels_per_direction);
-                    KernelHandle local_kernel;
-                    KernelHandle remote_kernel;
+                    tt_metal::KernelHandle local_kernel;
+                    tt_metal::KernelHandle remote_kernel;
                     try {
                         auto [program0, program1] = build(
                             device_0,

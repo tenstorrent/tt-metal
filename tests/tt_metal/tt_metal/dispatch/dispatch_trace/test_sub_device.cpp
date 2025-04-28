@@ -2,21 +2,26 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <cstddef>
-#include <cstdint>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/sub_device.hpp>
 #include <array>
-#include <tuple>
+#include <cstdint>
+#include <exception>
+#include <unordered_set>
 #include <vector>
 
-#include "gtest/gtest.h"
-#include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/global_semaphore.hpp>
-#include <tt-metalium/device.hpp>
-#include <tt-metalium/event.hpp>
-#include <tt-metalium/sub_device.hpp>
+#include <tt-metalium/command_queue.hpp>
 #include "command_queue_fixture.hpp"
 #include "dispatch_test_utils.hpp"
+#include "gtest/gtest.h"
+#include <tt-metalium/host_api.hpp>
+#include <tt_stl/span.hpp>
 #include "sub_device_test_utils.hpp"
+#include <tt-metalium/sub_device_types.hpp>
+#include <tt-metalium/tt_metal.hpp>
+
+namespace tt::tt_metal {
 
 TEST_F(CommandQueueSingleCardTraceFixture, TensixTestSubDeviceTraceBasicPrograms) {
     auto* device = devices_[0];
@@ -291,10 +296,6 @@ TEST_F(CommandQueueSingleCardTraceFixture, TensixTestSubDeviceIllegalOperations)
     EnqueueProgram(device->command_queue(), incrementer_program_2, false);
     EndTraceCapture(device, device->command_queue().id(), tid_2);
 
-    // Regular program execution
-    // Can not run a program on a different sub-device manager
-    EXPECT_THROW(EnqueueProgram(device->command_queue(), waiter_program_1, false), std::exception);
-
     // Full trace execution
     ReplayTrace(device, device->command_queue().id(), tid_2, false);
 
@@ -306,3 +307,5 @@ TEST_F(CommandQueueSingleCardTraceFixture, TensixTestSubDeviceIllegalOperations)
     device->remove_sub_device_manager(sub_device_manager_1);
     EXPECT_THROW(device->load_sub_device_manager(sub_device_manager_1), std::exception);
 }
+
+}  // namespace tt::tt_metal

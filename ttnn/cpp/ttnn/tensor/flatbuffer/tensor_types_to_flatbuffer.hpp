@@ -18,20 +18,20 @@ flatbuffers::Offset<flatbuffer::CoreRange> to_flatbuffer(
 flatbuffers::Offset<flatbuffer::CoreRangeSet> to_flatbuffer(
     flatbuffers::FlatBufferBuilder& builder, const CoreRangeSet& core_range_set);
 
-flatbuffer::ShardOrientation to_flatbuffer(ShardOrientation orientation);
-flatbuffer::ShardMode to_flatbuffer(ShardMode shard_mode);
+flatbuffer::ShardOrientation to_flatbuffer(tt::tt_metal::ShardOrientation orientation);
+flatbuffer::ShardMode to_flatbuffer(tt::tt_metal::ShardMode shard_mode);
 flatbuffers::Offset<flatbuffer::ShardSpec> to_flatbuffer(
-    const ShardSpec& spec, flatbuffers::FlatBufferBuilder& builder);
+    const tt::tt_metal::ShardSpec& spec, flatbuffers::FlatBufferBuilder& builder);
 
-flatbuffer::TensorMemoryLayout to_flatbuffer(TensorMemoryLayout layout);
-flatbuffer::BufferType to_flatbuffer(BufferType type);
-flatbuffer::DataType to_flatbuffer(DataType type);
+flatbuffer::TensorMemoryLayout to_flatbuffer(tt::tt_metal::TensorMemoryLayout layout);
+flatbuffer::BufferType to_flatbuffer(tt::tt_metal::BufferType type);
+flatbuffer::DataType to_flatbuffer(tt::tt_metal::DataType type);
 
 flatbuffers::Offset<flatbuffer::MemoryConfig> to_flatbuffer(
-    const MemoryConfig& config, flatbuffers::FlatBufferBuilder& builder);
+    const tt::tt_metal::MemoryConfig& config, flatbuffers::FlatBufferBuilder& builder);
 flatbuffers::Offset<flatbuffer::TensorLayout> to_flatbuffer(
-    const TensorLayout& layout, flatbuffers::FlatBufferBuilder& builder);
+    const tt::tt_metal::TensorLayout& layout, flatbuffers::FlatBufferBuilder& builder);
 flatbuffers::Offset<flatbuffer::TensorSpec> to_flatbuffer(
-    const TensorSpec& spec, flatbuffers::FlatBufferBuilder& builder);
+    const tt::tt_metal::TensorSpec& spec, flatbuffers::FlatBufferBuilder& builder);
 
 }  // namespace ttnn

@@ -47,7 +47,6 @@ from ttnn import ShardTensorToMesh
         ttnn.MemoryConfig(buffer_type=ttnn.BufferType.L1),
     ],
 )
-@pytest.mark.parametrize("enable_async", [True, False])
 @pytest.mark.parametrize("tile_h", [32])
 def test_line_all_gather_on_t3000_nightly(
     t3k_mesh_device,
@@ -60,7 +59,6 @@ def test_line_all_gather_on_t3000_nightly(
     mem_config,
     use_program_cache,
     function_level_defaults,
-    enable_async,
     tile_h,
     num_iters=1,
 ):
@@ -76,7 +74,6 @@ def test_line_all_gather_on_t3000_nightly(
         use_program_cache,
         function_level_defaults,
         all_gather_topology=ttnn.Topology.Linear,
-        enable_async=enable_async,
         num_iters=num_iters,
         tile=(tile_h, 32),
     )
@@ -109,7 +106,6 @@ def test_line_all_gather_on_t3000_nightly(
         ttnn.MemoryConfig(buffer_type=ttnn.BufferType.L1),
     ],
 )
-@pytest.mark.parametrize("enable_async", [True, False])
 def test_line_all_gather_on_t3000_nightly_two_link(
     pcie_mesh_device,
     num_devices,
@@ -121,7 +117,6 @@ def test_line_all_gather_on_t3000_nightly_two_link(
     mem_config,
     use_program_cache,
     function_level_defaults,
-    enable_async,
     num_iters=1,
 ):
     run_all_gather_on_t3000_impl(
@@ -137,7 +132,6 @@ def test_line_all_gather_on_t3000_nightly_two_link(
         function_level_defaults,
         all_gather_topology=ttnn.Topology.Linear,
         num_iters=num_iters,
-        enable_async=enable_async,
     )
 
 
@@ -153,14 +147,11 @@ def run_line_all_gather_instances(
     mem_config,
     use_program_cache,
     function_level_defaults,
-    enable_async,
     num_iters=1,
     tile=(32, 32),
 ):
     if t3k_mesh_device.get_num_devices() != 8:
         pytest.skip("Not T3000!")
-
-    t3k_mesh_device.enable_async(enable_async)
 
     logger.info(f"Input shape: {input_shape}")
     logger.info(f"dim: {dim}")
@@ -200,9 +191,7 @@ def run_line_all_gather_instances(
 
     for loop in range(num_iters):
         ## Wait for completion
-        for i, devices in enumerate(t3000_device_rows):
-            for d in devices:
-                ttnn.synchronize_device(d)
+        ttnn.synchronize_device(t3k_mesh_device)
 
         for tt_out_tensor in result_mesh_tensors:
             for i, t in enumerate(ttnn.get_device_tensors(tt_out_tensor)):
@@ -242,7 +231,6 @@ def run_line_all_gather_instances(
         ttnn.MemoryConfig(buffer_type=ttnn.BufferType.L1),
     ],
 )
-@pytest.mark.parametrize("enable_async", [True, False])
 def test_line_all_gather_on_t3000_nightly_instances(
     t3k_mesh_device,
     num_devices,
@@ -255,7 +243,6 @@ def test_line_all_gather_on_t3000_nightly_instances(
     mem_config,
     use_program_cache,
     function_level_defaults,
-    enable_async,
     num_iters=1,
 ):
     run_line_all_gather_instances(
@@ -270,6 +257,5 @@ def test_line_all_gather_on_t3000_nightly_instances(
         mem_config,
         use_program_cache,
         function_level_defaults,
-        enable_async,
         num_iters,
     )

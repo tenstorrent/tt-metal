@@ -11,7 +11,8 @@ from typing import Optional, Union
 
 from loguru import logger
 
-from infra.data_collection.models import InfraErrorV1
+from infra.data_collection.github.workflows import is_job_hanging_from_job_log
+from infra.data_collection.models import InfraErrorV1, TestErrorV1
 from infra.data_collection.pydantic_models import CompleteBenchmarkRun
 
 
@@ -65,6 +66,8 @@ def get_pipeline_row_from_github_info(github_runner_environment, github_pipeline
 
     github_pipeline_link = github_pipeline_json["html_url"]
 
+    pipeline_status = github_pipeline_json["conclusion"]
+
     return {
         "github_pipeline_id": github_pipeline_id,
         "repository_url": repository_url,
@@ -80,6 +83,7 @@ def get_pipeline_row_from_github_info(github_runner_environment, github_pipeline
         "git_author": git_author,
         "orchestrator": orchestrator,
         "github_pipeline_link": github_pipeline_link,
+        "pipeline_status": pipeline_status,
     }
 
 
@@ -90,9 +94,9 @@ def return_first_string_starts_with(starting_string, strings):
     raise Exception(f"{strings} do not have any that match {starting_string}")
 
 
-def get_job_failure_signature_(github_job, failure_description) -> Optional[Union[InfraErrorV1]]:
+def get_job_failure_signature_(github_job, failure_description, workflow_outputs_dir) -> Optional[Union[InfraErrorV1]]:
     error_snippet_to_signature_mapping = {
-        "timed out": str(InfraErrorV1.JOB_UNIT_TIMEOUT_FAILURE),
+        "has timed out": str(InfraErrorV1.JOB_UNIT_TIMEOUT_FAILURE),
         "exceeded the maximum execution time": str(InfraErrorV1.JOB_CUMULATIVE_TIMEOUT_FAILURE),
         "lost communication with the server": str(InfraErrorV1.RUNNER_COMM_FAILURE),
         "runner has received a shutdown signal": str(InfraErrorV1.RUNNER_SHUTDOWN_FAILURE),
@@ -104,7 +108,19 @@ def get_job_failure_signature_(github_job, failure_description) -> Optional[Unio
     # Check the mapping dictionary for specific failure signature types
     for error_snippet in error_snippet_to_signature_mapping:
         if error_snippet in failure_description:
-            return error_snippet_to_signature_mapping[error_snippet]
+            error_signature = error_snippet_to_signature_mapping[error_snippet]
+            # Determine if timeout is a hang
+            if error_signature in [
+                str(InfraErrorV1.JOB_CUMULATIVE_TIMEOUT_FAILURE),
+                str(InfraErrorV1.JOB_UNIT_TIMEOUT_FAILURE),
+            ] and is_job_hanging_from_job_log(
+                error_snippet,
+                workflow_outputs_dir=workflow_outputs_dir,
+                workflow_run_id=github_job["run_id"],
+                workflow_job_id=github_job["id"],
+            ):
+                error_signature = str(InfraErrorV1.JOB_HANG)
+            return error_signature
 
     # If failure occurred in runner setup, classify as set up failure
     for step in github_job["steps"]:
@@ -122,7 +138,9 @@ def get_job_failure_signature_(github_job, failure_description) -> Optional[Unio
     return str(InfraErrorV1.GENERIC_FAILURE)
 
 
-def get_failure_signature_and_description_from_annotations(github_job, github_job_id_to_annotations):
+def get_failure_signature_and_description_from_annotations(
+    github_job, github_job_id_to_annotations, workflow_outputs_dir
+):
     failure_signature, failure_description = None, None
 
     # Don't return any failure info if job passed
@@ -134,14 +152,30 @@ def get_failure_signature_and_description_from_annotations(github_job, github_jo
     if job_id in github_job_id_to_annotations:
         annotation_info = github_job_id_to_annotations[job_id]
 
-        # Iterate over list of job annotation's until first failure-level annotation message
-        failure_description = next((d["message"] for d in annotation_info if d["annotation_level"] == "failure"), None)
-        if failure_description:
-            failure_signature = get_job_failure_signature_(github_job, failure_description)
+        for _annot in annotation_info:
+            if _annot["annotation_level"] == "failure":
+                # Unit test failure: a failure exists where the annotation path is not .github
+                if _annot["path"] != ".github":
+                    failure_description = _annot["path"]
+                    if ".py" in failure_description:
+                        failure_signature = str(TestErrorV1.PY_TEST_FAILURE)
+                    elif ".cpp" in failure_description:
+                        failure_signature = str(TestErrorV1.CPP_TEST_FAILURE)
+                    else:
+                        failure_signature = str(TestErrorV1.UNKNOWN_TEST_FAILURE)
+                    return failure_signature, failure_description
+                else:
+                    # Infrastructure error
+                    failure_description = _annot.get("message")
+                    if failure_description:
+                        failure_signature = get_job_failure_signature_(
+                            github_job, failure_description, workflow_outputs_dir
+                        )
+                        return failure_signature, failure_description
     return failure_signature, failure_description
 
 
-def get_job_row_from_github_job(github_job, github_job_id_to_annotations):
+def get_job_row_from_github_job(github_job, github_job_id_to_annotations, workflow_outputs_dir):
     github_job_id = github_job["id"]
 
     logger.info(f"Processing github job with ID {github_job_id}")
@@ -178,7 +212,9 @@ def get_job_row_from_github_job(github_job, github_job_id_to_annotations):
 
     name = github_job["name"]
 
-    assert github_job["status"] == "completed", f"{github_job_id} is not completed"
+    if github_job["status"] != "completed":
+        logger.warning(f"{github_job_id} is not completed, skipping this job")
+        return None
 
     # Best effort card type getting
 
@@ -194,7 +230,7 @@ def get_job_row_from_github_job(github_job, github_job_id_to_annotations):
 
     if labels_have_overlap(["E150", "grayskull", "arch-grayskull"], labels):
         detected_arch = "grayskull"
-    elif labels_have_overlap(["N150", "N300", "wormhole_b0", "arch-wormhole_b0"], labels):
+    elif labels_have_overlap(["N150", "N300", "wormhole_b0", "arch-wormhole_b0", "config-t3000"], labels):
         detected_arch = "wormhole_b0"
     elif labels_have_overlap(["BH", "arch-blackhole"], labels):
         detected_arch = "blackhole"
@@ -207,8 +243,11 @@ def get_job_row_from_github_job(github_job, github_job_id_to_annotations):
     # In order of preference
     if detected_config:
         if not detected_arch:
-            raise Exception(f"There must be an arch detected for config {detected_config}")
-        card_type = f"{detected_config}-{detected_arch}"
+            # This will occur for jobs where runs-on: has a config-* label but doesn't have an arch-* or card-specific label
+            logger.warning(f"No arch label found for config {detected_config} in job label, unable to infer card type")
+            card_type = None
+        else:
+            card_type = f"{detected_config}-{detected_arch}"
     elif single_cards_overlap:
         logger.info(f"Detected overlap in single cards: {single_cards_overlap}")
         card_type = list(single_cards_overlap)[0]
@@ -234,6 +273,7 @@ def get_job_row_from_github_job(github_job, github_job_id_to_annotations):
 
     # skipped jobs are considered passing jobs (nothing was run)
     job_success = github_job["conclusion"] in ["success", "skipped"]
+    job_status = github_job["conclusion"]
 
     is_build_job = "build" in name or "build" in labels
 
@@ -246,7 +286,7 @@ def get_job_row_from_github_job(github_job, github_job_id_to_annotations):
     github_job_link = github_job["html_url"]
 
     failure_signature, failure_description = get_failure_signature_and_description_from_annotations(
-        github_job, github_job_id_to_annotations
+        github_job, github_job_id_to_annotations, workflow_outputs_dir
     )
 
     return {
@@ -260,19 +300,25 @@ def get_job_row_from_github_job(github_job, github_job_id_to_annotations):
         "job_start_ts": job_start_ts,
         "job_end_ts": job_end_ts,
         "job_success": job_success,
+        "job_status": job_status,
         "is_build_job": is_build_job,
         "job_matrix_config": job_matrix_config,
         "docker_image": docker_image,
         "github_job_link": github_job_link,
         "failure_signature": failure_signature,
         "failure_description": failure_description,
+        "job_label": ",".join(labels),
     }
 
 
-def get_job_rows_from_github_info(github_pipeline_json, github_jobs_json, github_job_id_to_annotations):
-    return list(
-        map(lambda job: get_job_row_from_github_job(job, github_job_id_to_annotations), github_jobs_json["jobs"])
+def get_job_rows_from_github_info(workflow_outputs_dir, github_jobs_json, github_job_id_to_annotations):
+    job_rows = list(
+        map(
+            lambda job: get_job_row_from_github_job(job, github_job_id_to_annotations, workflow_outputs_dir),
+            github_jobs_json["jobs"],
+        )
     )
+    return [x for x in job_rows if x is not None]
 
 
 def get_github_partial_benchmark_json_filenames():

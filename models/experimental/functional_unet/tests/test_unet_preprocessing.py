@@ -11,12 +11,10 @@ from loguru import logger
 
 from models.experimental.functional_unet.tt.model_preprocessing import (
     create_unet_input_tensors,
-    create_unet_model_parameters,
 )
 
-from models.experimental.functional_unet.tt import unet_shallow_torch
 from models.experimental.functional_unet.tt import unet_shallow_ttnn
-from models.experimental.functional_unet.tests.common import verify_with_pcc, UNET_FULL_MODEL_PCC
+from models.experimental.functional_unet.tests.common import verify_with_pcc
 
 
 def nearest_16(x):

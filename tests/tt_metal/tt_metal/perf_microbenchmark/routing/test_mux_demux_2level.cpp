@@ -2,19 +2,37 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <tt-metalium/host_api.hpp>
+#include <chrono>
+#include <fmt/base.h>
+#include <stdint.h>
 #include <tt-metalium/device.hpp>
+#include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
-#include <tt-metalium/rtoptions.hpp>
-#include "tt_metal/impl/dispatch/kernels/packet_queue_ctrl.hpp"
-#include "test_common.hpp"
+#include <exception>
+#include <map>
+#include <optional>
+#include <string>
+#include <string_view>
+#include <variant>
+#include <vector>
+
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/data_types.hpp>
+#include <tt-metalium/kernel_types.hpp>
 #include "llrt.hpp"
-
-using std::vector;
-using namespace tt;
-
+#include <tt-metalium/logger.hpp>
+#include <tt-metalium/program.hpp>
+#include "routing_test_common.hpp"
+#include "impl/context/metal_context.hpp"
+#include "test_common.hpp"
+#include "tt_metal/impl/dispatch/kernels/packet_queue_ctrl.hpp"
+#include "umd/device/types/xy_pair.h"
+#include <tt-metalium/utils.hpp>
 
 int main(int argc, char **argv) {
+    using std::vector;
+    using namespace tt;
+    using namespace tt::packet_queue;
 
     constexpr uint32_t default_prng_seed = 0x100;
     constexpr uint32_t default_data_kb_per_tx = 64*1024;
@@ -596,7 +614,7 @@ int main(int argc, char **argv) {
         log_fatal(e.what());
     }
 
-    tt::llrt::RunTimeOptions::get_instance().set_kernels_nullified(false);
+    tt::tt_metal::MetalContext::instance().rtoptions().set_kernels_nullified(false);
 
     if (pass) {
         log_info(LogTest, "Test Passed");

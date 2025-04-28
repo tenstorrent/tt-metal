@@ -1,0 +1,222 @@
+# TT-Transformers
+
+This code can run large language models that are similar to the Llama3 family and other similar models such as Qwen2.5, Mistral and DeepSeek-R1-Distill variants. Tensor-parallelism is automatically used to parallelize workloads across all available chips.
+
+The current version is verified to work with the following models:
+- Llama3.2-1B
+- Llama3.2-3B
+- Llama3.1-8B
+- Llama3.2-11B
+- Llama3.1-70B (LoudBox / QuietBox and Galaxy)
+- Qwen2.5-7B (N300)
+- Qwen2.5-72B (LoudBox / QuietBox)
+- DeepSeek R1 Distill Llama 3.3 70B (LoudBox / QuietBox and Galaxy)
+
+## Dependencies
+TT-Transformers has some additional python dependencies. Install them from:
+
+```
+pip install -r models/tt_transformers/requirements.txt
+```
+
+## Run a demo
+
+### 1. Specify which model you want to run
+
+The easiest way to do this is to set the `HF_MODEL` environment variable to the Huggingface org/name of the model you want to run:
+
+```
+export HF_MODEL=deepseek-ai/DeepSeek-R1-Distill-Llama-70B
+```
+
+This will automatically download the weights into your HuggingFace cache directory and run the model directly. If you wish, you can manually download the weights either from Huggingface or from Meta as described by the two following sections:
+
+#### Option 1: download Llama weights from Meta
+
+You can download Llama models [directly from Meta](https://llama.meta.com/llama-downloads/), this will mean accepting their license terms.
+
+The downloaded directories include weight files (e.g. `consolidated.00.pth`), the tokenizer `tokenizer.model` and configuration file `params.json`.
+
+If using Meta-provided weights you should set `LLAMA_DIR` to the path of the downloaded directory instead of setting `HF_MODEL`:
+
+```
+export LLAMA_DIR=<path_to_meta_downloaded_model_directory>
+```
+
+##### Repack weights (Llama3.1-70B from Meta only)
+Meta's Llama3.1-70B requires repacked weights. We provide a script to facilitate this in `models/tt_transformers/scripts/repack_weights_70b.py`.
+
+The repacked output directory can be same as the checkpoint directory, since the new files will have different names.
+If providing a different path, please make sure that you keep the string `3.1-70B` in the new path name, since the Llama3 codebase relies on the weights directory name to identify the correct model.
+
+Note: Use the default value of `10` for `chunk_size`.
+
+```
+# This concatenates the sharded checkpoints and makes it easier for us to load.
+python models/tt_transformers/scripts/repack_weights_70b.py <path_to_checkpoint_dir> <repacked_output_dir>
+```
+
+If providing a different output directory, please copy the `params.json` and the `tokenizer.model` files to the new directory.
+
+#### Option 2: download weights from HuggingFace
+
+If you wish to download the weights from [HuggingFace](https://huggingface.co/deepseek-ai/DeepSeek-R1-Distill-Llama-70B) ensure your model directory has the following structure:
+
+```
+/path/to/deepseek-ai/DeepSeek-R1-Distill-Llama-70B/
+    config.json
+    generation_config.json
+    model-00001-of-00062.safetensors
+    ...
+```
+
+Set `HF_MODEL` to the directory of the downloaded weights:
+
+```
+export HF_MODEL=<path_to_downloaded_directory>
+```
+
+### Extra compatibility settings for non-Llama models
+
+If you are bringing up a new model that is similar to these but is not listed above, you may also need to set additional environment variables:
+- `MAX_PREFILL_CHUNK_SIZE` - this determines how many thousands of tokens are prefilled in one go. For optimal performance pick 128. Depending on the model dimensions and hardware you're running on, there may not be enough L1 to prefill 128K tokens at once, in which case you can reduce this in powers of 2 down to 4.
+- `PAD_MLP_CORES` - models with a hidden_dim that is not a nice power of 2 may not have a valid layout or may run with lower performance. You can set this to a multiple of 8 between 8 and 64; `16` and `32` commonly work well if this is required.
+
+You should also watch out for:
+- RoPE encoding style. `llama3` and of course none are both supported. We have a [branch](https://github.com/tenstorrent/tt-metal/tree/llama-yarn) with `yarn` support in progress.
+- Our [accuracy test](tests/test_accuracy.py) will require you to [generate some reference logits](tests/generate_reference_hf.py) and perhaps update the test to use them.
+- We parallelise attention over the number of heads. If this number is e.g. 14 then you will not be able to run it on more than 2 chips (because 14/2=7, a prime number). We do not support head-padding or similar mitigations at this time but a PR would be cool.
+
+Huggingface models specify their architecture in the `config.json` file. The following architectures are known to work:
+
+- LlamaForCausalLM
+- Qwen2ForCausalLM
+- MistralForCausalLM
+- Phi3ForCausalLM
+
+At the time of writing this covers the majority of popular HuggingFace text-generation models. If you find another architecture that works or extend TT-Transformers to support one we would love to accept a PR!
+
+### 2. Set environment variables
+
+For completeness by now you should have set either `HF_MODEL` or `LLAMA_DIR` as decribed above:
+
+```
+export HF_MODEL=<hf_model_name or hf_downlaoded_directory>
+```
+
+or
+
+```
+export LLAMA_DIR=<path_to_meta_downloaded_model_directory>
+```
+
+On N150, N300 and LoudBox / QuietBox you should also set:
+
+```
+export WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml
+```
+
+Description of these environment variables:
+- `HF_MODEL` is the HuggingFace org/name of the model you want to run or the path to the downloaded Huggingface weights.
+- `LLAMA_DIR` sets the path for Meta-provided Llama3 model weights if you are not using HuggingFace.
+- `WH_ARCH_YAML` sets the dispatch over ethernet cores. This is optional for N150 and required for N300 and LoudBox / QuietBox, enabling a full core grid utilization (8x8), allowing for maximum performance of LLama3 models. Do not set this for TG.
+- `TT_CACHE_PATH` is optional. It sets the path for ttnn's weight cache files. See below for more details.
+- `MESH_DEVICE` is optional. It allows you to use fewer devices than are available. See below for more details.
+
+On the first execution of each model, TTNN will create weight cache files for that model, to speed up future runs. These cache files only need to be created once for each model and device. These files are stored in one of three places:
+
+1. `TT_CACHE_PATH` if you have set it.
+2. `HF_MODEL/device_name` if a path to downloaded weights was specified using `HF_MODEL`.
+3. `LLAMA_DIR/device_name` if a path to downloaded Meta-provided weights was specified using `LLAMA_DIR`.
+4. `model_cache/HF_MODEL/device_name` if a HuggingFace model name was specified using `HF_MODEL`.
+
+The device name used is:
+
+- `N150` for N150
+- `N300` for N300
+- `T3K` for LoudBox / QuietBox
+- `TG` for Galaxy
+
+By default tensor parallelism is used to run the model over all available chips. You can instead run on a smaller mesh either for testing or for performance reasons (for very small models the communication overhead of tensor parallelism may be larger than the performance gained). To use a smaller mesh, set `MESH_DEVICE` to one of the supported devices: `N150`, `N300`, `T3K` or `TG`.
+
+Example: `export MESH_DEVICE=N150`, will enable running one a single chip of a multi-chip system.
+
+### 3. Run the demo
+
+The `simple_text_demo.py` script includes the following main modes of operation and is parametrized to support other configurations.
+
+- `batch-1`: Runs a small prompt (128 tokens) for a single user
+- `batch-32`: Runs a small prompt (128 tokens) for a a batch of 32 users
+- `long-context`: Runs a large prompt (64k tokens) for a single user
+- `reasoning-1`: Runs a reasoning prompt for a single user (generates up to 15k tokens)
+
+If you want to provide your own demo configuration, please take a look at the pytest parametrize calls in `models/tt_transformers/demo/simple_text_demo.py`. For convenience we list all the supported params below:
+
+- `input_prompts (string)`: input json file with prompts to process. See `models/tt_transformers/demo/*.json` for a list of input files
+- `instruct (bool)`: Whether to use Llama instruct weights or general weights
+- `repeat_batches (int)`: Number of consecutive batches of users to run (default: 1)
+- `max_seq_len (int)`: Maximum context length supported by the model (refer to the table above)
+- `batch_size (int)`: Number of users in a batch (Supports 1/2/4/8/16/32 batches)
+- `max_generated_tokens (int)`: Maximum number of tokens to generate for each user (Note that the users will stop generation before this limit if they reach a eos token)
+- `paged_attention (bool)`: Whether to use paged attention or default attention (vLLM support (WIP) requires paged attention)
+- `page_params (dict)`: Page parameters for paged attention - [`block_size`, `max_num_blocks`]. For smaller context lengths use `block_size=32` and `max_num_blocks=1024`, for larger context use block_size=64 and max_num_blocks=2048
+- `sampling_params (dict)`: Sampling parameters for decoding -[`temperature`, `top_p`]. If temperature is set to 0, argmax (greedy decode) is used.
+- `stop_at_eos (bool)`: Flag to stop decoding when the model generates an EoS token
+- `optimizations (ModelOptimizations)`: Optimization level to use for the model [`accuracy`, `performance`]
+
+Please note that using `argmax` with `batch_size > 1` or using `top-p` sampling with any batch size, these ops will be run on host. This is because those ops are not yet fully supported on device. A decrease in performance is expected when these configurations are enabled.
+
+```
+# Examples of how to run the demo:
+
+# Batch-1
+pytest models/tt_transformers/demo/simple_text_demo.py -k "performance and batch-1"
+
+# Batch-32
+pytest models/tt_transformers/demo/simple_text_demo.py -k "performance and batch-32"
+
+# Long-context
+pytest models/tt_transformers/demo/simple_text_demo.py -k "performance and long"
+```
+
+The above examples are run in `ModelOptimizations.performance` mode. You can override this by setting the `optimizations` argument in the demo. To use instead the accuracy mode you can call the above tests with `-k "accuracy and ..."` instead of performance.
+
+#### Custom input arguments
+To facilitate testing different configurations, `simple_text_demo.py` supports argument overrides. The full list of overrides is included in `models/tt_transformers/demo/conftest.py`.
+
+An example usage where the `batch-1` test is modified to run with 16 users and keep generating tokens until 1024 are generated:
+
+```
+pytest models/tt_transformers/demo/simple_text_demo.py -k "performance and batch-1" --batch_size 16 --max_generated_tokens 1024 --stop_at_eos 0
+```
+
+#### Custom optimizations
+`optimizations` offers a wide range of configurations for precision and math fidelity. The user can override the configurations of the data types of the weight tensors and activation tensors and the math fidelity of the kernels that works on those tensors, using the `--optimizations` argument on the command line. For example:
+
+```
+pytest models/tt_transformers/demo/simple_text_demo.py -k "accuracy and batch-1" --optimizations 'precision_cfg = {ff1_3: bfp4, ff2: bfp4, wqkv: bfp8, wo: bfp8, kv_cache: bfp8, activation: mixed}, fidelity_cfg = {li_ff1_3: hifi2, li_ff2: lofi, li_qkv_decode: hifi2, li_o_decode: hifi2, sdpa_decode: hifi2na, li_qkv_prefill: hifi2, li_o_prefill: hifi2fp16, sdpa_prefill: hifi4}'
+```
+
+Please refer to [model_config.py](models/tt_transformers/tt/model_config.py) for the full list of supported key-value pairs in the `--optimizations` argument. Also, please refer to the [PERF.md](PERF.md) file for performance and accuracy across a select range of configurations for an example Pareto front analysis.
+
+### Expected performance and accuracy
+
+See [PERF.md](PERF.md) for expected performance and accuracy across different configurations.
+
+### Implementation notes
+
+**Chunked prefill (text-only)**: All of the compatible model/device combinations support a max prefill context-length of 128k, with the exception of Llama3.1-8B and Llama3.2-11B on N150 which have a max of 64k (due to a lack of memory). To support these large max context-lengths, chunked prefill is performed with different max chunk sizes as shown in the table below.
+
+Max Prefill Chunk Sizes (text-only):
+|              |      N150     |      N300     |      T3K       |      TG     |
+|--------------|---------------|---------------|----------------|-------------|
+| Llama3.2-1B  | 128k tokens   | 128k tokens   | 128k tokens    | 128k tokens |
+| Llama3.2-3B  | 8k tokens     | 128k tokens   | 128k tokens    | 128k tokens |
+| Llama3.1-8B  | 4k tokens     | 64k tokens    | 128k tokens    | 128k tokens |
+| Llama3.2-11B | 4k tokens     | 64k tokens    | 128k tokens    | 128k tokens |
+| Llama3.1-70B | Not supported | Not supported | 32k tokens     | 128k tokens |
+| DeepSeek-R1-Distill-Llama3.3-70B | Not supported | Not supported | 32k tokens     | 128k tokens |
+
+- These max chunk sizes are specific to max context length 128k and are configured via `MAX_PREFILL_CHUNK_SIZES_DIV1024` in [model_config.py](https://github.com/tenstorrent/tt-metal/blob/main/models/demos/llama3/tt/model_config.py). If the max context length is set to a smaller value using the `max_seq_len` flag (see [Run the demo](#run-the-demo)), these chunk sizes can possibly be increased due to using a smaller KV cache.
+
+**Chunked prefill (Llama3.2-11B multimodal)**: Llama3.2-11B multimodal is currently only supported on N300 and T3000. On N300, a max prefill context length of 8k is supported, while T3000 supports a max context length of 128k.

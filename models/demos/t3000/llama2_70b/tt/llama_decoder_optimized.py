@@ -2,9 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from loguru import logger
 from typing import List
-import torch
 import ttnn
 from ttnn import ReplicateTensorToMesh, ShardTensorToMesh
 

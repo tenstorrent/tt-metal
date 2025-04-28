@@ -17,9 +17,9 @@ void kernel_main() {
     uint32_t beta_addr = get_arg_val<uint32_t>(7);
     uint32_t b_addr = get_arg_val<uint32_t>(8);
 
-    constexpr uint32_t cb_id_in0 = 0, cb_id_in1 = 1;
-    constexpr uint32_t cb_id_gamma = 5;
-    constexpr uint32_t cb_id_beta = 6;
+    constexpr uint32_t cb_id_in0 = tt::CBIndex::c_0, cb_id_in1 = tt::CBIndex::c_1;
+    constexpr uint32_t cb_id_gamma = tt::CBIndex::c_5;
+    constexpr uint32_t cb_id_beta = tt::CBIndex::c_6;
 
     // ublocks size defined in tiles
     const uint32_t src0_tile_bytes = get_tile_size(cb_id_in0);
@@ -34,28 +34,15 @@ void kernel_main() {
     const InterleavedAddrGenFast<src0_is_dram> src_a = {
         .bank_base_address = src_addr, .page_size = src0_tile_bytes, .data_format = src0_data_format};
 
-#define stick_size_is_pow2 get_compile_time_arg_val(5) == 1
-#if (stick_size_is_pow2)
-    const uint32_t log_base_2_of_page_size = get_compile_time_arg_val(6);
-#else
-    const uint32_t page_size = get_compile_time_arg_val(6);
-#endif
+    constexpr bool stick_size_is_pow2 = get_compile_time_arg_val(5) == 1;
+    constexpr uint32_t size = get_compile_time_arg_val(6);
+
 #ifdef FUSE_GAMMA
-#if (stick_size_is_pow2)
-    const InterleavedPow2AddrGen<gamma_is_dram> addrg = {
-        .bank_base_address = gamma_addr, .log_base_2_of_page_size = log_base_2_of_page_size};
-#else
-    const InterleavedAddrGen<gamma_is_dram> addrg = {.bank_base_address = gamma_addr, .page_size = page_size};
-#endif
+    const auto addrg = get_interleaved_addr_gen<gamma_is_dram, stick_size_is_pow2>(gamma_addr, size);
     const uint32_t gamma_tile_bytes = get_tile_size(cb_id_gamma);
 #endif
 #ifdef FUSE_BETA
-#if (stick_size_is_pow2)
-    const InterleavedPow2AddrGen<beta_is_dram> addrb = {
-        .bank_base_address = beta_addr, .log_base_2_of_page_size = log_base_2_of_page_size};
-#else
-    const InterleavedAddrGen<beta_is_dram> addrb = {.bank_base_address = beta_addr, .page_size = page_size};
-#endif
+    const auto addrb = get_interleaved_addr_gen<beta_is_dram, stick_size_is_pow2>(beta_addr, size);
     const uint32_t beta_tile_bytes = get_tile_size(cb_id_beta);
 #endif
 #ifdef FUSE_PRE_ADD
@@ -67,7 +54,7 @@ void kernel_main() {
 
     // Generate constant tiles for layernorm compute
     {
-        constexpr uint32_t cb_in_2 = 2;
+        constexpr uint32_t cb_in_2 = tt::CBIndex::c_2;
         uint32_t scaler = get_arg_val<uint32_t>(4);
         generate_reduce_scaler(cb_in_2, scaler);
     }

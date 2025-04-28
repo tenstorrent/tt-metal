@@ -24,7 +24,6 @@ enum class UnaryCompositeOpType {
     COSH,
     DIGAMMA,
     LGAMMA,
-    LOG1P,
     MULTIGAMMALN,
     SINH,
     SOFTSIGN,
@@ -44,7 +43,6 @@ enum class UnaryCompositeOpType {
     POW,
     TRIL,
     TRIU,
-    ROUND,
     POLYGAMMA,
     HARDSHRINK,
     SOFTSHRINK,
@@ -63,7 +61,6 @@ Tensor _cbrt(const Tensor&, const std::optional<MemoryConfig>&);
 Tensor _cosh(const Tensor&, const std::optional<MemoryConfig>&);
 Tensor _digamma(const Tensor&, const std::optional<MemoryConfig>&);
 Tensor _lgamma(const Tensor&, const std::optional<MemoryConfig>&);
-Tensor _log1p(const Tensor&, const std::optional<MemoryConfig>&);
 Tensor _multigammaln(const Tensor&, const std::optional<MemoryConfig>&);
 Tensor _sinh(const Tensor&, const std::optional<MemoryConfig>&);
 Tensor _softsign(const Tensor&, const std::optional<MemoryConfig>&);
@@ -100,7 +97,6 @@ Tensor _geglu(const Tensor&, int32_t, const std::optional<MemoryConfig>&);
 Tensor _swiglu(const Tensor&, int32_t, const std::optional<MemoryConfig>&);
 Tensor _tril(const Tensor&, int32_t diag = 0, const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 Tensor _triu(const Tensor&, int32_t diag = 0, const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
-Tensor _round(const Tensor&, int32_t decimal = 0, const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 Tensor _polygamma(const Tensor&, int32_t, const std::optional<MemoryConfig>&);
 Tensor _hardshrink(
     const Tensor& a, float lambd = 0.5f, const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
@@ -174,11 +170,6 @@ struct OpHandler<UnaryCompositeOpType::DIGAMMA> {
 template <>
 struct OpHandler<UnaryCompositeOpType::LGAMMA> {
     static Tensor handle(const Tensor& t1, const std::optional<MemoryConfig>& mem_cfg) { return _lgamma(t1, mem_cfg); }
-};
-
-template <>
-struct OpHandler<UnaryCompositeOpType::LOG1P> {
-    static Tensor handle(const Tensor& t1, const std::optional<MemoryConfig>& mem_cfg) { return _log1p(t1, mem_cfg); }
 };
 
 template <>
@@ -273,13 +264,6 @@ template <>
 struct OpHandler<UnaryCompositeOpType::TRIU> {
     static Tensor handle(const Tensor& t1, int32_t param1, const std::optional<MemoryConfig>& mem_cfg) {
         return _triu(t1, param1, mem_cfg);
-    }
-};
-
-template <>
-struct OpHandler<UnaryCompositeOpType::ROUND> {
-    static Tensor handle(const Tensor& t1, int32_t param1, const std::optional<MemoryConfig>& mem_cfg) {
-        return _round(t1, param1, mem_cfg);
     }
 };
 

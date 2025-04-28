@@ -2,26 +2,18 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from loguru import logger
 import math
 import torch
 import ttnn
 from ttnn import ShardTensorToMesh, ReplicateTensorToMesh
 from models.demos.t3000.llama2_70b.tt.llama_common import (
     ShardTensor2dMesh,
-    ConcatMesh2DToTensor,
-)
-from models.demos.t3000.llama2_70b.tt.llama_common import (
-    num_to_corerange,
 )
 from models.demos.tg.llama3_70b.tt.llama_common import (
     tt_all_reduce,
     tt_sharded_all_reduce,
     tt_composite_sharded_all_reduce,
     tt_sharded_all_gather,
-)
-from models.demos.t3000.falcon40b.tt.model_utils import (
-    matmul_2d_config_from_tensor_shapes as get_matmul_2d_config_from_tensor_shapes,
 )
 
 

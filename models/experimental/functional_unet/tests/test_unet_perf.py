@@ -12,12 +12,14 @@ from models.utility_functions import (
     skip_for_grayskull,
 )
 
+from models.experimental.functional_unet.tests.common import UNET_TRACE_REGION_SIZE
+
 
 @skip_for_grayskull("UNet not currently supported on GS")
 @pytest.mark.models_device_performance_bare_metal
 @pytest.mark.parametrize(
     "batch, groups, expected_device_perf_fps",
-    ((1, 2, 1035.0),),
+    ((1, 4, 1358.0),),
 )
 def test_unet_perf_device(batch: int, groups: int, expected_device_perf_fps: float):
     command = f"pytest models/experimental/functional_unet/tests/test_unet_model.py::test_unet_model[device_params0-{groups}-{batch}]"
@@ -45,11 +47,13 @@ def test_unet_perf_device(batch: int, groups: int, expected_device_perf_fps: flo
 @skip_for_grayskull("UNet not currently supported on GS")
 @pytest.mark.models_performance_bare_metal
 @pytest.mark.parametrize(
-    "device_params", [{"l1_small_size": 68864, "trace_region_size": 424960, "num_command_queues": 2}], indirect=True
+    "device_params",
+    [{"l1_small_size": 68864, "trace_region_size": UNET_TRACE_REGION_SIZE, "num_command_queues": 2}],
+    indirect=True,
 )
 @pytest.mark.parametrize(
     "batch, groups, iterations, expected_compile_time, expected_throughput",
-    ((1, 2, 128, 25.0, 830.0),),
+    ((1, 4, 256, 30.0, 1205.0),),
 )
 def test_unet_trace_perf(
     batch: int,
@@ -87,14 +91,12 @@ def test_unet_trace_perf(
 @skip_for_grayskull("UNet not currently supported on GS")
 @pytest.mark.models_performance_bare_metal
 @pytest.mark.parametrize(
-    "device_params", [{"l1_small_size": 68864, "trace_region_size": 424960, "num_command_queues": 2}], indirect=True
+    "device_params",
+    [{"l1_small_size": 68864, "trace_region_size": UNET_TRACE_REGION_SIZE, "num_command_queues": 2}],
+    indirect=True,
 )
 @pytest.mark.parametrize(
-    "batch, groups, iterations, expected_compile_time, expected_throughput, use_async_mode",
-    (
-        (1, 2, 128, 25.0, 1220.0, True),
-        (1, 2, 128, 25.0, 1650.0, False),
-    ),
+    "batch, groups, iterations, expected_compile_time, expected_throughput", ((1, 4, 256, 30.0, 2400.0),)
 )
 def test_unet_trace_perf_multi_device(
     batch: int,
@@ -102,7 +104,6 @@ def test_unet_trace_perf_multi_device(
     iterations: int,
     expected_compile_time: float,
     expected_throughput: float,
-    use_async_mode: bool,
     mesh_device,
     use_program_cache,
     reset_seeds,
@@ -111,13 +112,11 @@ def test_unet_trace_perf_multi_device(
         test_unet_trace_2cq_same_io_multi_device,
     )
 
-    mesh_device.enable_async(use_async_mode)
     model_name = "unet_shallow-trace_2cq_same_io-multi_device"
-    model_name += "-async" if use_async_mode else "-no_async"
 
     logger.info(f"Invoking underlying model test for {iterations} iterations...")
     result = test_unet_trace_2cq_same_io_multi_device(
-        batch, groups, iterations, mesh_device, use_async_mode, use_program_cache, reset_seeds
+        batch, groups, iterations, mesh_device, use_program_cache, reset_seeds
     )
 
     total_num_samples = result.batch * result.groups * result.num_devices

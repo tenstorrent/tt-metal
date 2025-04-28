@@ -4,6 +4,11 @@
 
 #include "device_command_calculator.hpp"
 
+#include <algorithm>
+
+#include "dispatch/kernels/cq_commands.hpp"
+#include "hal.hpp"
+
 namespace tt::tt_metal {
 
 template <typename PackedSubCmd>
@@ -45,7 +50,7 @@ void DeviceCommandCalculator::insert_write_packed_payloads(
     const uint32_t max_prefetch_command_size,
     const uint32_t packed_write_max_unicast_sub_cmds,
     std::vector<std::pair<uint32_t, uint32_t>>& packed_cmd_payloads) {
-    uint32_t l1_alignment = hal.get_alignment(HalMemType::L1);
+    uint32_t l1_alignment = MetalContext::instance().hal().get_alignment(HalMemType::L1);
     const uint32_t aligned_sub_cmd_sizeB = tt::align(sub_cmd_sizeB, l1_alignment);
     const uint32_t max_packed_sub_cmds_per_cmd = get_max_write_packed_sub_cmds<PackedSubCmd>(
         aligned_sub_cmd_sizeB, max_prefetch_command_size, packed_write_max_unicast_sub_cmds, false);

@@ -1,4 +1,6 @@
 .cache
+.clangd
+.devcontainer/
 .vscode
 .idea
 runtime

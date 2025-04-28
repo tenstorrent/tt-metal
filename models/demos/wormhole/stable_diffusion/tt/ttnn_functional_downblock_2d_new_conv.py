@@ -3,10 +3,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
-import torch
 from typing import Optional
 from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_resnetblock2d_new_conv import resnetBlock2D
-from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_downsample_2d_new_conv import downsample_2d
 
 
 class downblock2d:
@@ -14,7 +12,6 @@ class downblock2d:
         self,
         device,
         parameters,
-        reader_patterns_cache,
         batch_size,
         input_height,
         input_width,
@@ -26,7 +23,6 @@ class downblock2d:
             resnetBlock2D(
                 device,
                 resnet,
-                reader_patterns_cache,
                 batch_size,
                 input_height,
                 input_width,
@@ -34,7 +30,7 @@ class downblock2d:
             )
             for resnet in parameters.resnets
         ]
-        # self.downsample_2d = downsample_2d(device, parameters.downsamplers[0], reader_patterns_cache, batch_size, input_height, input_width)
+        # self.downsample_2d = downsample_2d(device, parameters.downsamplers[0], batch_size, input_height, input_width)
 
         self.output_height = self.resnets[-1].output_height
         self.output_width = self.resnets[-1].output_width

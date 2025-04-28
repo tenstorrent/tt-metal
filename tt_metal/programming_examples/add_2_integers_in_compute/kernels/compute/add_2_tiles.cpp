@@ -19,8 +19,6 @@ void MAIN {
     cb_wait_front(cb_in0, 1);
     cb_wait_front(cb_in1, 1);
 
-    // cb_reserve_back(cb_out0, 1);
-
     tile_regs_acquire();  // acquire 8 tile registers
 
     add_tiles(cb_in0, cb_in1, 0, 0, 0);
@@ -35,23 +33,5 @@ void MAIN {
     cb_pop_front(cb_in1, 1);
 
     cb_push_back(cb_out0, 1);
-
-    /*
-    acquire_dst();
-
-    cb_wait_front(tt::CBIndex::c_0, 1);
-    cb_wait_front(tt::CBIndex::c_1, 1);
-
-    add_tiles(tt::CBIndex::c_0, tt::CBIndex::c_1, 0, 0, 0);
-
-    cb_pop_front(tt::CBIndex::c_0, 1);
-    cb_pop_front(tt::CBIndex::c_1, 1);
-
-    cb_reserve_back(tt::CBIndex::c_16, 1);
-    pack_tile(0, tt::CBIndex::c_16);
-    cb_push_back(tt::CBIndex::c_16, 1);
-
-    release_dst();
-    */
 }
 }  // namespace NAMESPACE

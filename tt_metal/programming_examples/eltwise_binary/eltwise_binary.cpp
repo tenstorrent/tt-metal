@@ -32,13 +32,13 @@ using namespace tt::tt_metal;
 
 struct BinaryOpType {
     enum Enum { ADD = 0, SUB = 1, MUL = 2 };
-    static const auto all() { return magic_enum::enum_values<Enum>(); }
+    static auto all() { return magic_enum::enum_values<Enum>(); }
 };
 
-std::map<string, string> get_defines(BinaryOpType::Enum op_type) {
-    std::map<string, string> defines;
+std::map<std::string, std::string> get_defines(BinaryOpType::Enum op_type) {
+    std::map<std::string, std::string> defines;
     // TODO(AP): remove duplication
-    string op_name, op_binary_type;
+    std::string op_name, op_binary_type;
     switch (op_type) {
         case BinaryOpType::ADD:
             op_name = "add_tiles";
@@ -59,7 +59,7 @@ std::map<string, string> get_defines(BinaryOpType::Enum op_type) {
     return defines;
 }
 
-int main(int argc, char** argv) {
+int main() {
     if (getenv("TT_METAL_SLOW_DISPATCH_MODE") != nullptr) {
         TT_THROW("Test not supported w/ slow dispatch, exiting");
     }

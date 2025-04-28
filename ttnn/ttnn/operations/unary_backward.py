@@ -6,18 +6,19 @@ import sys
 
 import ttnn
 
-import torch
-
 THIS_MODULE = sys.modules[__name__]
 
 __all__ = []
 
 
 def _golden_function_unary_backward(torch_op, grad_tensor, input_tensor, *args, **kwargs):
+    import torch
+
     if torch_op == "softsign":
         pyt_y = torch.nn.functional.softsign(input_tensor)
     else:
-        pyt_y = torch_op(input_tensor)
+        pyt_fn = getattr(torch, torch_op)
+        pyt_y = pyt_fn(input_tensor)
     input_tensor.retain_grad()
     pyt_y.backward(gradient=grad_tensor)
     golden_tensor = [input_tensor.grad]
@@ -25,6 +26,8 @@ def _golden_function_unary_backward(torch_op, grad_tensor, input_tensor, *args, 
 
 
 def _golden_function_div_no_nan(torch_op, grad_tensor, input_tensor, alpha, *args, **kwargs):
+    import torch
+
     pyt_y = torch.where(torch.tensor(alpha) == 0, torch.zeros_like(input_tensor), torch.div(input_tensor, alpha))
     input_tensor.retain_grad()
     pyt_y.backward(gradient=grad_tensor)
@@ -34,7 +37,13 @@ def _golden_function_div_no_nan(torch_op, grad_tensor, input_tensor, alpha, *arg
 
 
 def _golden_function_unary_backward_with_float(torch_op, grad_tensor, input_tensor, *args, **kwargs):
-    pyt_y = torch_op(input_tensor, *args, **kwargs)
+    import torch
+
+    if torch_op in ["hardshrink", "softshrink", "leaky_relu", "elu", "celu"]:
+        pyt_fn = getattr(torch.nn.functional, torch_op)
+    else:
+        pyt_fn = getattr(torch, torch_op)
+    pyt_y = pyt_fn(input_tensor, *args, **kwargs)
     input_tensor.retain_grad()
     pyt_y.backward(gradient=grad_tensor)
     golden_tensor = [input_tensor.grad]
@@ -44,10 +53,13 @@ def _golden_function_unary_backward_with_float(torch_op, grad_tensor, input_tens
 def _golden_function_unary_backward_with_two_float(
     torch_op, grad_tensor, input_tensor, a=None, b=None, *args, **kwargs
 ):
-    if torch_op == torch.clamp:
+    import torch
+
+    pyt_fn = getattr(torch, torch_op)
+    if pyt_fn == torch.clamp:
         pyt_y = torch.clamp(input_tensor, min=a, max=b)
     else:
-        pyt_y = torch_op(input_tensor, a, b)
+        pyt_y = pyt_fn(input_tensor, a, b)
     input_tensor.retain_grad()
     pyt_y.backward(gradient=grad_tensor)
     golden_tensor = [input_tensor.grad]
@@ -57,10 +69,13 @@ def _golden_function_unary_backward_with_two_float(
 def _golden_function_backward_with_reverse_string(
     torch_op, grad_tensor, input_tensor_a, input_tensor_b, value=None, *args, **kwargs
 ):
-    if torch_op == torch.div:
-        pyt_y = torch_op(input_tensor_b, input_tensor_a, rounding_mode=value)
+    import torch
+
+    pyt_fn = getattr(torch, torch_op)
+    if pyt_fn == torch.div:
+        pyt_y = pyt_fn(input_tensor_b, input_tensor_a, rounding_mode=value)
     else:
-        pyt_y = torch_op(input_tensor_b, input_tensor_a)
+        pyt_y = pyt_fn(input_tensor_b, input_tensor_a)
     input_tensor_a.retain_grad()
     pyt_y.backward(gradient=grad_tensor)
     golden_tensor = [input_tensor_a.grad]
@@ -70,70 +85,70 @@ def _golden_function_backward_with_reverse_string(
 ttnn.attach_golden_function(
     ttnn.atanh_bw,
     golden_function=lambda grad, input, *args, **kwargs: _golden_function_unary_backward(
-        torch.atanh, grad, input, *args, **kwargs
+        "atanh", grad, input, *args, **kwargs
     ),
 )
 
 ttnn.attach_golden_function(
     ttnn.rdiv_bw,
     golden_function=lambda grad, input, value=None, *args, **kwargs: _golden_function_backward_with_reverse_string(
-        torch.div, grad, input, value, *args, **kwargs
+        "div", grad, input, value, *args, **kwargs
     ),
 )
 
 ttnn.attach_golden_function(
     ttnn.asin_bw,
     golden_function=lambda grad, input, *args, **kwargs: _golden_function_unary_backward(
-        torch.asin, grad, input, *args, **kwargs
+        "asin", grad, input, *args, **kwargs
     ),
 )
 
 ttnn.attach_golden_function(
     ttnn.asinh_bw,
     golden_function=lambda grad, input, *args, **kwargs: _golden_function_unary_backward(
-        torch.asinh, grad, input, *args, **kwargs
+        "asinh", grad, input, *args, **kwargs
     ),
 )
 
 ttnn.attach_golden_function(
     ttnn.sin_bw,
     golden_function=lambda grad, input, *args, **kwargs: _golden_function_unary_backward(
-        torch.sin, grad, input, *args, **kwargs
+        "sin", grad, input, *args, **kwargs
     ),
 )
 
 ttnn.attach_golden_function(
     ttnn.sinh_bw,
     golden_function=lambda grad, input, *args, **kwargs: _golden_function_unary_backward(
-        torch.sinh, grad, input, *args, **kwargs
+        "sinh", grad, input, *args, **kwargs
     ),
 )
 
 ttnn.attach_golden_function(
     ttnn.log10_bw,
     golden_function=lambda grad, input, *args, **kwargs: _golden_function_unary_backward(
-        torch.log10, grad, input, *args, **kwargs
+        "log10", grad, input, *args, **kwargs
     ),
 )
 
 ttnn.attach_golden_function(
     ttnn.log1p_bw,
     golden_function=lambda grad, input, *args, **kwargs: _golden_function_unary_backward(
-        torch.log1p, grad, input, *args, **kwargs
+        "log1p", grad, input, *args, **kwargs
     ),
 )
 
 ttnn.attach_golden_function(
     ttnn.erfc_bw,
     golden_function=lambda grad, input, *args, **kwargs: _golden_function_unary_backward(
-        torch.erfc, grad, input, *args, **kwargs
+        "erfc", grad, input, *args, **kwargs
     ),
 )
 
 ttnn.attach_golden_function(
     ttnn.ceil_bw,
     golden_function=lambda grad, input, *args, **kwargs: _golden_function_unary_backward(
-        torch.ceil, grad, input, *args, **kwargs
+        "ceil", grad, input, *args, **kwargs
     ),
 )
 
@@ -147,70 +162,70 @@ ttnn.attach_golden_function(
 ttnn.attach_golden_function(
     ttnn.hardshrink_bw,
     golden_function=lambda grad, input, alpha=0.5, *args, **kwargs: _golden_function_unary_backward_with_float(
-        torch.hardshrink, grad, input, lambd=alpha, *args, **kwargs
+        "hardshrink", grad, input, lambd=alpha, *args, **kwargs
     ),
 )
 
 ttnn.attach_golden_function(
     ttnn.softshrink_bw,
     golden_function=lambda grad, input, alpha=0.5, *args, **kwargs: _golden_function_unary_backward_with_float(
-        torch.nn.functional.softshrink, grad, input, lambd=alpha, *args, **kwargs
+        "softshrink", grad, input, lambd=alpha, *args, **kwargs
     ),
 )
 
 ttnn.attach_golden_function(
     ttnn.leaky_relu_bw,
     golden_function=lambda grad, input, alpha=1e-2, *args, **kwargs: _golden_function_unary_backward_with_float(
-        torch.nn.functional.leaky_relu, grad, input, negative_slope=alpha, *args, **kwargs
+        "leaky_relu", grad, input, negative_slope=alpha, *args, **kwargs
     ),
 )
 
 ttnn.attach_golden_function(
     ttnn.elu_bw,
     golden_function=lambda grad, input, alpha=1.0, *args, **kwargs: _golden_function_unary_backward_with_float(
-        torch.nn.functional.elu, grad, input, alpha=alpha, *args, **kwargs
+        "elu", grad, input, alpha=alpha, *args, **kwargs
     ),
 )
 
 ttnn.attach_golden_function(
     ttnn.celu_bw,
     golden_function=lambda grad, input, alpha=1.0, *args, **kwargs: _golden_function_unary_backward_with_float(
-        torch.nn.functional.celu, grad, input, alpha=alpha, *args, **kwargs
+        "celu", grad, input, alpha=alpha, *args, **kwargs
     ),
 )
 
 ttnn.attach_golden_function(
     ttnn.rpow_bw,
     golden_function=lambda grad, input, alpha, *args, **kwargs: _golden_function_unary_backward_with_float(
-        torch.pow, grad, input, alpha, *args, **kwargs
+        "pow", grad, input, alpha, *args, **kwargs
     ),
 )
 
 ttnn.attach_golden_function(
     ttnn.logiteps_bw,
     golden_function=lambda grad, input, alpha=None, *args, **kwargs: _golden_function_unary_backward_with_float(
-        torch.logit, grad, input, eps=alpha, *args, **kwargs
+        "logit", grad, input, eps=alpha, *args, **kwargs
     ),
 )
 
 ttnn.attach_golden_function(
     ttnn.cosh_bw,
     golden_function=lambda grad, input, *args, **kwargs: _golden_function_unary_backward(
-        torch.cosh, grad, input, *args, **kwargs
+        "cosh", grad, input, *args, **kwargs
     ),
 )
 
 ttnn.attach_golden_function(
     ttnn.sign_bw,
     golden_function=lambda grad, input, *args, **kwargs: _golden_function_unary_backward(
-        torch.sign, grad, input, *args, **kwargs
+        "sign", grad, input, *args, **kwargs
     ),
 )
 
 ttnn.attach_golden_function(
     ttnn.log2_bw,
     golden_function=lambda grad, input, *args, **kwargs: _golden_function_unary_backward(
-        torch.log2, grad, input, *args, **kwargs
+        "log2", grad, input, *args, **kwargs
     ),
 )
 
@@ -224,14 +239,14 @@ ttnn.attach_golden_function(
 ttnn.attach_golden_function(
     ttnn.clamp_bw,
     golden_function=lambda grad, input, a, b, *args, **kwargs: _golden_function_unary_backward_with_two_float(
-        torch.clamp, grad, input, a, b, *args, **kwargs
+        "clamp", grad, input, a, b, *args, **kwargs
     ),
 )
 
 ttnn.attach_golden_function(
     ttnn.clip_bw,
     golden_function=lambda grad, input, a, b, *args, **kwargs: _golden_function_unary_backward_with_two_float(
-        torch.clamp, grad, input, a, b, *args, **kwargs
+        "clamp", grad, input, a, b, *args, **kwargs
     ),
 )
 
@@ -313,13 +328,15 @@ def _golden_function(grad_tensor, input_tensor, *args, **kwargs):
 ttnn.attach_golden_function(ttnn.acos_bw, golden_function=_golden_function)
 
 
-def _golden_function_acosh(grad_tensor, input_tensor, *args, **kwargs):
+def _golden_function_acosh(grad_tensor, input_tensor, *args, device, **kwargs):
     import torch
 
     input_tensor.retain_grad()
     pyt_y = torch.acosh(input_tensor)
     pyt_y.backward(gradient=grad_tensor)
-    return [input_tensor.grad]
+    return [
+        torch.nan_to_num(input_tensor.grad, nan=device.sfpu_nan(), posinf=device.sfpu_inf(), neginf=-device.sfpu_inf())
+    ]
 
 
 ttnn.attach_golden_function(ttnn.acosh_bw, golden_function=_golden_function_acosh)
@@ -467,6 +484,7 @@ def _golden_function_gelu(grad_tensor, input_tensor, *args, **kwargs):
 
 
 ttnn.attach_golden_function(ttnn.gelu_bw, golden_function=_golden_function_gelu)
+ttnn.attach_golden_function(ttnn.experimental.gelu_bw, golden_function=_golden_function_gelu)
 
 
 def _golden_function_hardsigmoid(grad_tensor, input_tensor, *args, **kwargs):

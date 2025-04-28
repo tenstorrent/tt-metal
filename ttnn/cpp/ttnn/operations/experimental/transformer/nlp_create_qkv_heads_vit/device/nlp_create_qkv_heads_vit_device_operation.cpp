@@ -6,8 +6,6 @@
 
 #include <tt-metalium/work_split.hpp>
 
-using namespace tt::tt_metal;
-
 namespace ttnn::operations::experimental::transformer {
 
 // Hard-coded for Vit
@@ -39,11 +37,12 @@ std::vector<ttnn::TensorSpec> NlpCreateHeadsVitDeviceOperation::compute_output_s
     const auto input_shape = input_tensor.get_padded_shape();
     TensorSpec spec(
         Shape({input_shape[0], 12, input_shape[2], 64}),
-        TensorLayout(input_tensor.get_dtype(), PageConfig(Layout::TILE), output_mem_config));
+        tt::tt_metal::TensorLayout(
+            input_tensor.get_dtype(), tt::tt_metal::PageConfig(Layout::TILE), output_mem_config));
     return {spec, spec, spec};
 }
 
-operation::ProgramWithCallbacks NlpCreateHeadsVitDeviceOperation::create_program(
+tt::tt_metal::operation::ProgramWithCallbacks NlpCreateHeadsVitDeviceOperation::create_program(
     const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
     auto& output_tensor = output_tensors.at(0);

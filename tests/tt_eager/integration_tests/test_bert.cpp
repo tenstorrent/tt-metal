@@ -2,33 +2,54 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <chrono>
-
-#include "ttnn/tensor/host_buffer/types.hpp"
-#include "ttnn/tensor/tensor.hpp"
-#include "ttnn/operation.hpp"
-#include "ttnn/operations/normalization/softmax/softmax.hpp"
+#include <fmt/base.h>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/host_api.hpp>
-#include "ttnn/operations/functions.hpp"
-#include "ttnn/operations/matmul/matmul.hpp"
-#include "ttnn/operations/normalization/layernorm/layernorm.hpp"
-#include "ttnn/operations/eltwise/binary/binary.hpp"
-#include "ttnn/operations/experimental/transformer/split_query_key_value_and_split_heads/split_query_key_value_and_split_heads.hpp"
-#include "ttnn/operations/experimental/transformer/concatenate_heads/concatenate_heads.hpp"
+#include <chrono>
+#include <cmath>
+#include <cstddef>
+#include <cstdint>
+#include <map>
+#include <optional>
+#include <string>
+#include <utility>
 
-using Parameters = std::map<std::string, Tensor>;
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/buffer_types.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/logger.hpp>
+#include <tt-metalium/shape.hpp>
+#include <tt-metalium/shape_base.hpp>
+#include <tt-metalium/tile.hpp>
+#include "ttnn/decorators.hpp"
+#include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
+#include "ttnn/operations/eltwise/binary/binary.hpp"
+#include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
+#include "ttnn/operations/experimental/transformer/concatenate_heads/concatenate_heads.hpp"
+#include "ttnn/operations/experimental/transformer/split_query_key_value_and_split_heads/split_query_key_value_and_split_heads.hpp"
+#include "ttnn/operations/functions.hpp"
+#include "ttnn/operations/matmul/device/matmul_op.hpp"
+#include "ttnn/operations/normalization/layernorm/layernorm.hpp"
+#include "ttnn/operations/normalization/softmax/softmax.hpp"
+#include "ttnn/tensor/enum_types.hpp"
+#include "ttnn/tensor/shape/shape.hpp"
+#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/tensor/types.hpp"
+
+using Parameters = std::map<std::string, ttnn::Tensor>;
 using ttnn::operations::unary::UnaryOpType;
 using ttnn::operations::unary::UnaryWithParam;
 
-MemoryConfig l1_memory_config = tt::tt_metal::MemoryConfig{
+ttnn::MemoryConfig l1_memory_config = ttnn::MemoryConfig{
     .memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED, .buffer_type = tt::tt_metal::BufferType::L1};
-MemoryConfig dram_memory_config = tt::tt_metal::MemoryConfig{
+ttnn::MemoryConfig dram_memory_config = ttnn::MemoryConfig{
     .memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED, .buffer_type = tt::tt_metal::BufferType::DRAM};
 
-Tensor encoder(
-    Tensor&& hidden_states,
-    const Tensor& attention_mask,
+ttnn::Tensor encoder(
+    ttnn::Tensor&& hidden_states,
+    const ttnn::Tensor& attention_mask,
     const Parameters& parameters,
     std::size_t encoder_index,
     const std::uint32_t head_size) {
@@ -192,7 +213,7 @@ Tensor encoder(
     return feedforward_layernorm_output;
 }
 
-Tensor qa_head(Tensor&& hidden_states, const Parameters& parameters) {
+ttnn::Tensor qa_head(ttnn::Tensor&& hidden_states, const Parameters& parameters) {
     auto output = ttnn::operations::matmul::matmul(
         hidden_states, parameters.at("qa_head_weight"), /*bias=*/std::nullopt, ttnn::operations::matmul::Matmul{});
     hidden_states.deallocate();
@@ -210,7 +231,8 @@ void test_bert() {
     using tt::tt_metal::Tensor;
 
     int device_id = 0;
-    auto device = tt::tt_metal::CreateDevice(device_id);
+    auto device_owner = tt::tt_metal::distributed::MeshDevice::create_unit_mesh(device_id);
+    auto device = device_owner.get();
     CoreCoord compute_grid_size = device->compute_with_storage_grid_size();
 
     if (compute_grid_size.x * compute_grid_size.y == 88) {
@@ -340,8 +362,6 @@ void test_bert() {
     run_bert();
     run_loop();
     device->disable_and_clear_program_cache();
-
-    TT_FATAL(tt::tt_metal::CloseDevice(device), "Error");
 }
 
 int main(int argc, char** argv) {

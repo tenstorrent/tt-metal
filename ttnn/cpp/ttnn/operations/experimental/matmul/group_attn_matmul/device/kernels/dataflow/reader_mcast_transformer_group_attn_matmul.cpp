@@ -58,7 +58,7 @@ void kernel_main() {
     i += in1_mcast_sender_num_y;
 
     constexpr bool src1_is_dram = get_compile_time_arg_val(1) == 1;
-#define transpose_hw_bool get_compile_time_arg_val(2) == 1
+    constexpr bool transpose_hw_bool = get_compile_time_arg_val(2) == 1;
     constexpr bool row_major = (bool)get_compile_time_arg_val(3);
     constexpr uint32_t out_subblock_w = get_compile_time_arg_val(4);
 

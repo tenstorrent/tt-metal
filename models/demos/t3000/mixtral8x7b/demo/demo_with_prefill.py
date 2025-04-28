@@ -3,7 +3,6 @@
 # SPDX-License-Identifier: Apache-2.0
 import os
 import torch
-import json
 import pytest
 from loguru import logger
 from time import time
@@ -26,7 +25,7 @@ from models.demos.t3000.mixtral8x7b.tt.mixtral_embedding import TtMixtralEmbeddi
 from models.demos.t3000.mixtral8x7b.reference.tokenizer import Tokenizer
 
 from models.perf.benchmarking_utils import BenchmarkProfiler
-from models.demos.utils.llm_demo_utils import create_benchmark_data, verify_perf
+from models.demos.utils.llm_demo_utils import create_benchmark_data
 
 
 class Emb(torch.nn.Module):
@@ -223,8 +222,7 @@ def run_mixtral_demo(user_input, batch_size, mesh_device, instruct_mode, test_pr
             profiler.end(f"compile_prefill")
 
     # Device synchrozization ensures profiler is accurate in end-to-end timing
-    for dev in mesh_device.get_devices():
-        ttnn.device.synchronize_device(dev)
+    ttnn.synchronize_device(mesh_device)
 
     profiler.end(f"inference_prefill")
     logger.info(f"Prefill finished")
@@ -508,8 +506,6 @@ def test_mixtral8x7b_demo(t3k_mesh_device, use_program_cache, input_prompts, ins
         batch_size = 16
     else:
         batch_size = 32
-
-    t3k_mesh_device.enable_async(True)
 
     return run_mixtral_demo(
         user_input=input_prompts,

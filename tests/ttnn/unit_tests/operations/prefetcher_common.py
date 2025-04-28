@@ -19,10 +19,11 @@ from models.utility_functions import is_grayskull, is_wormhole_b0, is_blackhole
 
 from tests.tt_eager.python_api_testing.unit_testing.misc.test_matmul_1d_gather_in0 import (
     run_multi_core_matmul_1d,
-    PREFETCHER_NOC1_GRID,
     num_cores_to_rectangle_grid,
     round_up,
 )
+from tracy import signpost
+from models.demos.llama3_subdevices.tt.prefetcher_common import get_core_ranges
 
 
 def get_buffer_address(tensor):
@@ -37,120 +38,6 @@ def get_buffer_address(tensor):
     return buffer_addr
 
 
-def get_core_ranges(num_reader_cores, num_global_cb_receivers, is_functional_test):
-    """
-    Helper function to get all the relevant core ranges for dram prefetcher + matmul configuration
-    """
-
-    all_dram_cores = [ttnn.CoreCoord(idx, 0) for idx in range(12)]  # 12 DRAM banks
-
-    all_sender_cores = [
-        ttnn.CoreCoord(0, 9),
-        ttnn.CoreCoord(0, 0),
-        ttnn.CoreCoord(0, 4),
-        ttnn.CoreCoord(0, 5),
-        ttnn.CoreCoord(4, 0),
-        ttnn.CoreCoord(4, 9),
-        ttnn.CoreCoord(4, 1),
-        ttnn.CoreCoord(4, 7),
-        ttnn.CoreCoord(4, 6),
-        ttnn.CoreCoord(4, 2),
-        ttnn.CoreCoord(4, 4),
-        ttnn.CoreCoord(4, 5),
-    ]
-
-    all_receiver_cores_list = [
-        (1, 9),
-        (2, 9),
-        (1, 0),
-        (2, 0),
-        (1, 4),
-        (2, 4),
-        (1, 5),
-        (2, 5),
-        (5, 0),
-        (6, 0),
-        (5, 9),
-        (6, 9),
-        (5, 1),
-        (6, 1),
-        (5, 7),
-        (6, 7),
-        (5, 6),
-        (6, 6),
-        (5, 2),
-        (6, 2),
-        (5, 4),
-        (6, 4),
-        (5, 5),
-        (6, 5),
-    ]
-
-    all_receiver_cores = [
-        ttnn.CoreRangeSet(
-            [
-                ttnn.CoreRange(
-                    ttnn.CoreCoord(*all_receiver_cores_list[idx]),
-                    ttnn.CoreCoord(*all_receiver_cores_list[idx + 1 if num_global_cb_receivers == 2 else idx]),
-                ),
-            ]
-        )
-        for idx in range(0, len(all_receiver_cores_list), 2)
-    ]
-
-    dram_cores = all_dram_cores[:num_reader_cores]
-    hop_grid = []
-    mm_optimised_ring_cores = []
-    if not is_functional_test:
-        sender_cores = all_sender_cores[:num_reader_cores]
-        receiver_cores_list = all_receiver_cores_list[: num_reader_cores * num_global_cb_receivers]
-        receiver_cores = all_receiver_cores[:num_reader_cores]
-
-        worker_cores_range_set = ttnn.CoreRangeSet(
-            [
-                ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(3, 9)),
-                ttnn.CoreRange(ttnn.CoreCoord(5, 0), ttnn.CoreCoord(6, 9)),
-            ]
-        )
-
-        mm_optimised_ring_cores = PREFETCHER_NOC1_GRID
-        hop_grid = [
-            (3, 6),
-        ]
-    else:
-        sender_cores = [ttnn.CoreCoord(0, y) for y in range(num_reader_cores)]
-
-        receiver_cores_list = [(x, y) for y in range(num_reader_cores) for x in range(1, num_global_cb_receivers + 1)]
-
-        receiver_cores = [
-            ttnn.CoreRangeSet(
-                [
-                    ttnn.CoreRange(
-                        ttnn.CoreCoord(*receiver_cores_list[idx * num_global_cb_receivers]),
-                        ttnn.CoreCoord(*receiver_cores_list[(idx + 1) * num_global_cb_receivers - 1]),
-                    )
-                ]
-            )
-            for idx in range(num_reader_cores)
-        ]
-
-        worker_cores_range_set = ttnn.CoreRangeSet(
-            [
-                ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(2, 1)),
-            ]
-        )
-
-    return (
-        dram_cores,
-        sender_cores,
-        receiver_cores_list,
-        receiver_cores,
-        worker_cores_range_set,
-        mm_optimised_ring_cores,
-        hop_grid,
-    )
-
-
 def run_prefetcher_mm(
     device,
     num_tensors,
@@ -159,6 +46,7 @@ def run_prefetcher_mm(
     num_reader_cores,
     dtypes,
     is_functional_test=False,
+    enable_performance_mode=False,
 ):
     logger.info(f"Running test_run_prefetcher with num_tensors={num_tensors}, num_layers={num_layers}")
     assert len(input_shapes) == len(dtypes)
@@ -169,17 +57,23 @@ def run_prefetcher_mm(
     K, N = input_shapes[0]
 
     (
+        active_sender_cores,
         dram_cores,
-        sender_cores,
-        receiver_cores_list,
-        receiver_cores,
+        all_sender_cores,
+        active_receiver_cores_list,
+        all_receiver_cores,
         worker_cores_range_set,
         mm_optimised_ring_cores,
         hop_grid,
     ) = get_core_ranges(num_reader_cores, num_global_cb_receivers, is_functional_test)
 
+    logger.info(f"active_sender_cores: {active_sender_cores}")
+    logger.info(f"all_sender_cores: {all_sender_cores}")
+    logger.info(f"active_receiver_cores_list: {active_receiver_cores_list}")
+    logger.info(f"all_receiver_cores: {all_receiver_cores}")
+
     if num_reader_cores != 12:
-        mm_optimised_ring_cores = receiver_cores_list
+        mm_optimised_ring_cores = active_receiver_cores_list
 
     max_tile_size = 0
     for dtype in dtypes:
@@ -203,18 +97,20 @@ def run_prefetcher_mm(
     # Total: 1470
 
     # global_cb_size = 1000 * max_tile_size # works without profiler, fails with profiler, 900 doesn't provide tracy info
-    global_cb_size = 750 * max_tile_size
-    sender_receiver_mapping = list(zip(sender_cores, receiver_cores))
+    global_cb_size = 600 * max_tile_size
+    sender_receiver_mapping = list(zip(all_sender_cores, all_receiver_cores))
     global_circular_buffer = ttnn.create_global_circular_buffer(device, sender_receiver_mapping, global_cb_size)
     logger.info(f"global cb size {global_cb_size}")
 
     ##### Set up the input tensors #####
     dram_core_range_set = ttnn.CoreRangeSet([ttnn.CoreRange(core_coord, core_coord) for core_coord in dram_cores])
-    sender_core_range_set = ttnn.CoreRangeSet([ttnn.CoreRange(core_coord, core_coord) for core_coord in sender_cores])
+    sender_core_range_set = ttnn.CoreRangeSet(
+        [ttnn.CoreRange(core_coord, core_coord) for core_coord in active_sender_cores]
+    )
 
     padded_shapes, shard_shapes = [], []
     for K, N in input_shapes:
-        num_cores = len(receiver_cores_list)
+        num_cores = len(active_receiver_cores_list)
         K_per_shard = round_up(math.ceil(K / num_cores), ttnn.TILE_SIZE)
         K_padded = K_per_shard * num_cores
         N_per_shard = round_up(math.ceil(N / num_cores), ttnn.TILE_SIZE)
@@ -290,7 +186,7 @@ def run_prefetcher_mm(
     worker_sub_device_id = ttnn.SubDeviceId(1)  # Can we parameterize this?
 
     max_dst_tiles = 8
-    grid = receiver_cores_list
+    grid = active_receiver_cores_list
     num_cores = grid[0] * grid[1] if isinstance(grid, tuple) else len(grid)
     storage_grid = num_cores_to_rectangle_grid(num_cores, device)
     M = 32
@@ -442,6 +338,7 @@ def run_prefetcher_mm(
             tt_tensors,
             num_layers,
             global_cb=global_circular_buffer,
+            enable_performance_mode=enable_performance_mode,
         )
         device.set_sub_device_stall_group([worker_sub_device_id])
 
@@ -458,6 +355,7 @@ def run_prefetcher_mm(
                     memory_config=output_mem_configs[t],
                     compute_kernel_config=compute_kernel_config,
                     global_cb=global_circular_buffer,
+                    sub_device_id=worker_sub_device_id,
                 )
                 outputs_l1.append(output_t)
 
@@ -480,7 +378,9 @@ def run_prefetcher_mm(
 
     ##### Run Trace #####
     logger.info("Running trace")
+    signpost("start")
     ttnn.execute_trace(device, trace_id, cq_id=0, blocking=True)
+    signpost("stop")
 
     ##### Check Results #####
     all_passing = True

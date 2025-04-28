@@ -56,7 +56,7 @@ cached_program_t fold_multi_core(const Tensor& input, const Tensor& output, uint
         program,
         "ttnn/cpp/ttnn/operations/data_movement/fold/device/kernels/dataflow/writer_cb2s_row_major.cpp",
         all_cores,
-        WriterDataMovementConfig({cb_src0_index, cb_dst0_index}));
+        WriterDataMovementConfig({cb_src0_index, cb_dst0_index}, {}, tt::tt_metal::KernelBuildOptLevel::Os));
 
     // Writer run-time args
     SetRuntimeArgs(

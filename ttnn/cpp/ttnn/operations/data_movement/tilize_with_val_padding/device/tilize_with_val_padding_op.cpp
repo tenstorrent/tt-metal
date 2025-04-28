@@ -19,9 +19,9 @@ void TilizeWithValPadding::validate(const std::vector<Tensor>& input_tensors) co
     TT_FATAL(input_tensor_a.buffer() != nullptr, "Operands need to be allocated in buffers on device!");
     TT_FATAL(input_tensor_a.get_layout() == Layout::ROW_MAJOR, "Can only tilize row major data");
     TT_FATAL(
-        input_tensor_a.get_dtype() == DataType::BFLOAT16 or input_tensor_a.get_dtype() == DataType::UINT32 or
-            input_tensor_a.get_dtype() == DataType::FLOAT32,
-        "Can only tilize bfloat16/float32 or uint32 tensors");
+        input_tensor_a.get_dtype() == DataType::BFLOAT16 or input_tensor_a.get_dtype() == DataType::INT32 or
+            input_tensor_a.get_dtype() == DataType::UINT32 or input_tensor_a.get_dtype() == DataType::FLOAT32,
+        "Can only tilize bfloat16/float32 or int32/uint32 tensors");
 
     TT_FATAL(input_shape.rank() >= 1, "Input tensor must be of rank >= 1, but its shape is {}", input_shape);
 
@@ -87,10 +87,18 @@ operation::ProgramWithCallbacks TilizeWithValPadding::create_program(
     const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const {
     const auto& input_tensor_a = input_tensors.at(0);
     auto& output_tensor = output_tensors.at(0);
-    if (input_tensor_a.memory_config().is_sharded() || this->use_multicore) {
-        return detail::tilize_with_val_padding_multi_core(input_tensor_a, output_tensor, this->pad_value);
+    if (input_tensor_a.memory_config().is_sharded()) {
+        return detail::tilize_with_val_padding_multi_core_sharded(input_tensor_a, output_tensor, this->pad_value);
     }
-    return detail::tilize_with_val_padding_single_core(input_tensor_a, output_tensor, this->pad_value);
+    if (!this->enough_space_height) {
+        return detail::tilize_with_val_padding_multi_core_block_interleaved(
+            input_tensor_a, output_tensor, this->pad_value);
+    }
+    if (!this->use_multicore) {
+        return detail::tilize_with_val_padding_single_core(input_tensor_a, output_tensor, this->pad_value);
+    }
+
+    return detail::tilize_with_val_padding_multi_core_interleaved(input_tensor_a, output_tensor, this->pad_value);
 }
 
 }  // namespace ttnn::operations::data_movement

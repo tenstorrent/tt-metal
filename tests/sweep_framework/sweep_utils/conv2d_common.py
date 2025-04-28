@@ -220,7 +220,6 @@ def run_conv2d_short_sweep(
             dilation_w,
             has_bias,
         ] = input_specs
-    print(input_specs)
 
     if is_forge_suite:
         torch_input_dtype = torch.bfloat16 if input_dtype == ttnn.DataType(ttnn.bfloat16) else torch.float32
@@ -276,6 +275,7 @@ def run_conv2d_short_sweep(
             dtype=output_dtype,
             weights_dtype=weights_dtype,
             output_layout=output_layout,
+            preprocess_weights_on_device=True,
         )
     else:
         tt_weight_tensor = ttnn.from_torch(torch_weight_tensor, ttnn.bfloat16)
@@ -283,7 +283,9 @@ def run_conv2d_short_sweep(
             tt_bias_tensor = ttnn.from_torch(torch_bias_tensor, ttnn.bfloat16)
 
         tt_input_tensor = ttnn.from_torch(torch_input_tensor, ttnn.bfloat16, device=device)
-        conv_config = ttnn.Conv2dConfig()
+        conv_config = ttnn.Conv2dConfig(
+            preprocess_weights_on_device=True,
+        )
 
     start_time = start_measuring_time()
     [tt_output_tensor_on_device, [out_height, out_width], [weights_device, bias_device]] = ttnn.conv2d(
@@ -317,7 +319,6 @@ def run_conv2d_short_sweep(
 
     torch_output_tensor = torch.permute(torch_output_tensor, (0, 3, 1, 2))
 
-    print("End of test case")
     return [check_with_pcc(torch_output_tensor, torch_out_golden_tensor, pcc=0.985), e2e_perf]
 
 
@@ -365,7 +366,7 @@ def run_conv1d_short_sweep(
     tt_input_tensor = ttnn.from_torch(torch_input_tensor, ttnn.bfloat16, device=device)
 
     start_time = start_measuring_time()
-    [tt_output_tensor_on_device, out_length, [weights_device, bias_device]] = ttnn.Conv1d(
+    [tt_output_tensor_on_device, out_length, [weights_device, bias_device]] = ttnn.conv1d(
         input_tensor=tt_input_tensor,
         weight_tensor=tt_weight_tensor,
         in_channels=input_channels,

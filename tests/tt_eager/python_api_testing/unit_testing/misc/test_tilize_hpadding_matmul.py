@@ -49,7 +49,7 @@ def run_tilize_matmul_test(M, K, N, device):
     print("Shape of B_t - " + str(b_t.padded_shape))
     t2 = ttnn.matmul(a_t, b_t)
     assert list(t2.padded_shape) == output_shape
-    tt_host_rm = t2.cpu().to_torch()
+    tt_host_rm = t2.cpu().to_torch_with_padded_shape()
     pyt_got_back = tt_host_rm.reshape(output_shape)
     # TODO: add support to remove padding in untilize
     pyt_got_back_rm = untilize(pyt_got_back)

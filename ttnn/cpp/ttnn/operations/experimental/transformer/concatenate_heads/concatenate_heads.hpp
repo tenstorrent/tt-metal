@@ -18,7 +18,7 @@ struct ConcatenateHeadsOperation {
         const CoreCoord& compute_with_storage_grid_size,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         std::optional<Tensor> optional_output_tensor = std::nullopt) {
-        return operation::run(
+        return tt::tt_metal::operation::run(
                    ConcatenateHeadsDeviceOperation{
                        compute_with_storage_grid_size, memory_config.value_or(input_tensor.memory_config())},
                    {input_tensor},
@@ -42,7 +42,7 @@ struct ConcatenateHeadsOperation {
 
 namespace experimental {
 
-constexpr auto concatenate_heads = ttnn::register_operation_with_auto_launch_op<
+constexpr auto concatenate_heads = ttnn::register_operation<
     "ttnn::experimental::concatenate_heads",
     ttnn::operations::experimental::transformer::ConcatenateHeadsOperation>();
 

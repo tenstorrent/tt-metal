@@ -16,51 +16,33 @@ from models.demos.wormhole.stable_diffusion.custom_preprocessing import custom_p
 
 from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_transformer_2d_new_conv import transformer_2d_model
 from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_utility_functions import (
-    pre_process_input,
     post_process_output_and_move_to_host,
+    preprocess_and_push_input_to_device,
 )
+from models.demos.wormhole.stable_diffusion.tests.parameterizations import TRANSFORMER_PARAMETERIZATIONS
 
 
 @skip_for_grayskull()
 @pytest.mark.parametrize(
-    "input_shape, index1, index2, attention_head_dim, block ",
-    [
-        (
-            (2, 320, 64, 64),
-            3,
-            2,
-            40,
-            "up",
-        ),
-        (
-            (2, 640, 32, 32),
-            1,
-            1,
-            80,
-            "down",
-        ),
-        (
-            (2, 1280, 16, 16),
-            2,
-            1,
-            160,
-            "down",
-        ),
-        (
-            (2, 1280, 8, 8),
-            2,
-            1,
-            160,
-            "down",
-        ),
-    ],
+    "input_shape, shard_layout, shard_end_core, shard_shape, attention_head_dim, block, block_index, attention_index",
+    TRANSFORMER_PARAMETERIZATIONS,
 )
 @pytest.mark.parametrize("model_name", ["CompVis/stable-diffusion-v1-4"])
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
 def test_transformer_2d_model_512x512(
-    input_shape, index1, index2, block, attention_head_dim, model_name, device, reset_seeds
+    device,
+    model_name,
+    input_shape,
+    shard_layout,
+    shard_end_core,
+    shard_shape,
+    attention_head_dim,
+    block,
+    block_index,
+    attention_index,
+    reset_seeds,
+    use_program_cache,
 ):
-    # TODO
     torch.manual_seed(0)
     encoder_hidden_states = [1, 2, 77, 768]
     timestep = (None,)
@@ -90,11 +72,11 @@ def test_transformer_2d_model_512x512(
     )
 
     if block == "up":
-        parameters = parameters.up_blocks[index1].attentions[index2]
-        transformer = pipe.unet.up_blocks[index1].attentions[index2]
+        parameters = parameters.up_blocks[block_index].attentions[attention_index]
+        transformer = pipe.unet.up_blocks[block_index].attentions[attention_index]
     elif block == "down":
-        parameters = parameters.down_blocks[index1].attentions[index2]
-        transformer = pipe.unet.down_blocks[index1].attentions[index2]
+        parameters = parameters.down_blocks[block_index].attentions[attention_index]
+        transformer = pipe.unet.down_blocks[block_index].attentions[attention_index]
     elif block == "mid":
         parameters = parameters.mid_block.attentions[0]
         transformer = pipe.unet.mid_block.attentions[0]
@@ -117,14 +99,25 @@ def test_transformer_2d_model_512x512(
     model = transformer_2d_model(
         device, parameters, input_shape[0], input_shape[2], input_shape[3], compute_kernel_config
     )
-    ttnn_hidden_state = pre_process_input(ttnn_hidden_state)
-    ttnn_hidden_state = ttnn.reshape(
-        ttnn_hidden_state,
-        (
-            1,
-            1,
-            ttnn_hidden_state.shape[0] * ttnn_hidden_state.shape[1] * ttnn_hidden_state.shape[2],
-            ttnn_hidden_state.shape[-1],
+
+    ttnn_hidden_state = preprocess_and_push_input_to_device(
+        device,
+        input,
+        memory_config=ttnn.MemoryConfig(
+            shard_layout,
+            ttnn.BufferType.L1,
+            ttnn.ShardSpec(
+                ttnn.CoreRangeSet(
+                    {
+                        ttnn.CoreRange(
+                            ttnn.CoreCoord(0, 0),
+                            ttnn.CoreCoord(shard_end_core[0], shard_end_core[1]),
+                        ),
+                    }
+                ),
+                shard_shape,
+                ttnn.ShardOrientation.ROW_MAJOR,
+            ),
         ),
     )
 

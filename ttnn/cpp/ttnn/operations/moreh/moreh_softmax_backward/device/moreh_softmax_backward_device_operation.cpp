@@ -26,7 +26,7 @@ bool is_moreh_softmax_backward_w_small_available(const Tensor& tensor) {
     cb_usage += 1 * tile_size;   // reduce
     cb_usage += 1 * tile_size;   // dy - sum
 
-    return (tensor.device()->allocator()->get_base_allocator_addr(HalMemType::L1) + cb_usage <= L1_512KB);
+    return (tensor.device()->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1) + cb_usage <= L1_512KB);
 }
 
 bool is_moreh_softmax_backward_h_small_available(const Tensor& tensor) {
@@ -47,7 +47,7 @@ bool is_moreh_softmax_backward_h_small_available(const Tensor& tensor) {
     cb_usage += 1 * tile_size;   // reduce
     cb_usage += 1 * tile_size;   // dy - sum
 
-    return (tensor.device()->allocator()->get_base_allocator_addr(HalMemType::L1) + cb_usage <= L1_512KB);
+    return (tensor.device()->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1) + cb_usage <= L1_512KB);
 }
 
 MorehSoftmaxBackwardOperation::program_factory_t MorehSoftmaxBackwardOperation::select_program_factory(
@@ -102,9 +102,9 @@ MorehSoftmaxBackwardOperation::spec_return_value_t MorehSoftmaxBackwardOperation
     }
     return TensorSpec(
         tensor_args.output_tensor.get_logical_shape(),
-        TensorLayout(
+        tt::tt_metal::TensorLayout(
             tensor_args.output_tensor.get_dtype(),
-            PageConfig(tensor_args.output_tensor.get_layout()),
+            tt::tt_metal::PageConfig(tensor_args.output_tensor.get_layout()),
             operation_attributes.memory_config));
 }
 

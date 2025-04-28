@@ -19,8 +19,7 @@ def test_multi_device_events(t3k_mesh_device, shape):
     if t3k_mesh_device.get_num_devices() <= 1:
         pytest.skip("This test requires multiple devices")
 
-    # Enable Program Cache and Async Mode
-    t3k_mesh_device.enable_async(True)
+    # Enable Program Cache
     t3k_mesh_device.enable_program_cache()
 
     # Preallocate activation tensors.
@@ -36,9 +35,6 @@ def test_multi_device_events(t3k_mesh_device, shape):
         return ttnn.neg(ttnn.add(ttnn.mul(input_1, ttnn.neg(ttnn.gelu(input_0))), ttnn.relu(input_1)))
 
     for i in range(10):
-        # Create events to synchronize data movement with workload execution.
-        write_event = ttnn.create_event(t3k_mesh_device)
-        workload_event = ttnn.create_event(t3k_mesh_device)
         # Create torch inputs, for validation
         torch_input_tensor_0 = torch.rand(
             (t3k_mesh_device.get_num_devices(), shape[1], shape[2], shape[3]), dtype=torch.bfloat16
@@ -66,13 +62,13 @@ def test_multi_device_events(t3k_mesh_device, shape):
         ttnn.copy_host_to_device_tensor(ttnn_input_tensor_0, input_0_dev, cq_id=data_movement_cq)
         ttnn.copy_host_to_device_tensor(ttnn_input_tensor_1, input_1_dev, cq_id=data_movement_cq)
         # Wait for write to be completed before issuing workload
-        ttnn.record_event(data_movement_cq, write_event)
+        write_event = ttnn.record_event(t3k_mesh_device, data_movement_cq)
         ttnn.wait_for_event(workload_cq, write_event)
         logger.info("Execute Workload")
         # Execute workload
         ttnn_output = run_op_chain(input_0_dev, input_1_dev, workload_cq)
         # Wait for workload to be completed before issuing read
-        ttnn.record_event(workload_cq, workload_event)
+        workload_event = ttnn.record_event(t3k_mesh_device, workload_cq)
         ttnn.wait_for_event(data_movement_cq, workload_event)
         logger.info("Read Back Workload Outputs")
         # Read device outputs and validate
@@ -83,5 +79,3 @@ def test_multi_device_events(t3k_mesh_device, shape):
             cq_id=data_movement_cq,
         )
         assert_with_pcc(ttnn_torch_output_tensor, torch_output_golden, pcc=0.96)
-
-    t3k_mesh_device.enable_async(False)

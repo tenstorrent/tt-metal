@@ -2,6 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#pragma once
+
 #include "autograd/tensor.hpp"
 #include "dropout_module.hpp"
 #include "linear_module.hpp"
@@ -19,7 +21,8 @@ class SingleHeadAttention : public ttml::autograd::ModuleBase {
 public:
     explicit SingleHeadAttention(uint32_t embedding_dim, float dropout_prob);
 
-    autograd::TensorPtr operator()(const autograd::TensorPtr& x, const autograd::TensorPtr& mask);
+    [[nodiscard]] autograd::TensorPtr operator()(
+        const autograd::TensorPtr& x, const autograd::TensorPtr& mask) override;
 };
 
 }  // namespace ttml::modules

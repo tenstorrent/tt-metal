@@ -2,6 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import math
+
 import pytest
 
 import torch
@@ -340,32 +342,71 @@ def test_reshape_tile_layout_only_change_shape(device):
     assert_with_pcc(torch_result, output, 0.9999)
 
 
-# Reshape in Tile layout with shapes that are not divisible by 32
 @pytest.mark.parametrize(
     "input_shape, output_shape",
     [
-        ((1, 256, 16), (16, 256)),
+        ((1, 8, 8), (1, 16, 4)),
+        ((1, 17, 1), (1, 1, 17)),
+        ((1, 32, 17), (1, 17, 32)),
+        ((2, 32, 17), (2, 17, 32)),
+        ((2, 2, 1), (1, 4, 1)),
+        ((16, 1, 5), (4, 2, 10)),
+        ((1, 256, 1), (1, 256)),
+        ((1, 256, 1), (1, 256, 1, 1)),
+        ((1, 180, 1), (1, 180, 1, 1)),
         ((1, 256, 1024), (1, 256, 16, 64)),
-        ((16, 16), (32, 8)),
         ((1, 1445, 192), (1445, 192)),
         ((1, 256), (1, 1, 256)),
         ((16, 1, 32), (16, 1, 32)),
         ((1, 32, 4608), (1, 32, 16, 3, 96)),  # issue 13889
-        ((2888, 49, 96), (8, 19, 19, 7, 7, 96)),  # issue 12153
         ((128, 1, 1, 128), (128, 128)),  # issue 14676
+        ((16, 33, 1), (176, 3, 1)),
+        ((2888, 49, 96), (8, 19, 19, 7, 7, 96)),  # issue 12153
         ((5, 4, 208, 156), (3, 13, 8, 2080)),  # issue 14513
+        ((22, 23, 1), (1, 22, 23)),
+        ((1, 1500, 1, 512), (1, 1500, 8, 64)),
+        ((32, 1, 96, 64), (1, 32, 96, 64)),  # issue 20238
     ],
 )
-@pytest.mark.parametrize("layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
-def test_reshape_tile_with_padding(input_shape, output_shape, layout, device):
-    torch_input_tensor = torch.randn(input_shape, dtype=torch.bfloat16)
-    torch_result = torch_input_tensor.reshape(output_shape)
+@pytest.mark.parametrize("memory_config", [ttnn.L1_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG])
+@pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT])
+@pytest.mark.parametrize(
+    "dtype", [(torch.bfloat16, ttnn.bfloat16), (torch.int32, ttnn.uint32), (torch.float32, ttnn.float32)]
+)
+def test_reshape_tile(device, input_shape, output_shape, layout, memory_config, dtype):
+    if memory_config == ttnn.L1_MEMORY_CONFIG and input_shape in [(2888, 49, 96), (1, 1500, 1, 512)]:
+        pytest.xfail("Test case is too big for L1")
 
-    input_tensor = ttnn.from_torch(torch_input_tensor, layout=layout, dtype=ttnn.bfloat16, device=device)
+    torch_dtype, ttnn_dtype = dtype
+
+    size = math.prod(input_shape)
+    torch_input_tensor = torch.linspace(1, size, size, dtype=torch_dtype).reshape(input_shape)
+
+    if torch_dtype == torch.int32:
+        torch_input_tensor = torch_input_tensor.abs()
+
+    torch_result = torch_input_tensor.reshape(output_shape)
+    input_tensor = ttnn.from_torch(
+        torch_input_tensor, layout=layout, dtype=ttnn_dtype, device=device, memory_config=memory_config
+    )
     ttnn_output = ttnn.reshape(input_tensor, output_shape)
-    assert layout == ttnn_output.layout
     output = ttnn.to_torch(ttnn_output)
     assert_with_pcc(torch_result, output, 0.9999)
+
+
+def test_reshape_tile_program_cache(device, use_program_cache):
+    for input_shape, output_shape in ((1, 8, 8), (1, 16, 4)), ((16, 1, 5), (4, 2, 10)):
+        for _ in range(3):
+            torch_input_tensor = torch.randn(input_shape, dtype=torch.bfloat16)
+            torch_result = torch_input_tensor.reshape(output_shape)
+
+            input_tensor = ttnn.from_torch(
+                torch_input_tensor, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=device
+            )
+            ttnn_output = ttnn.reshape(input_tensor, output_shape)
+
+            output = ttnn.to_torch(ttnn_output)
+            assert_with_pcc(torch_result, output, 0.9999)
 
 
 # issue 15048
@@ -533,3 +574,25 @@ def test_reshape_zero_element(input_shape, output_shape, layout, ttnn_reshape, u
     tt_output_tensor = ttnn.from_device(tt_output_tensor)
     tt_output_tensor = ttnn.to_torch(tt_output_tensor)
     assert tt_output_tensor.shape == torch.Size(output_shape)
+
+
+@pytest.mark.xfail(
+    reason="Test that the previously supported reshape accounting for the physical shape is no longer possible"
+)
+@pytest.mark.parametrize(
+    "input_shape, output_shape",
+    [
+        ([32, 256], [1, 256]),
+    ],
+)
+def test_reshape_replicated_tensor(mesh_device, input_shape, output_shape):
+    torch_input_tensor = torch.randn(input_shape)
+    mesh_mapper = ttnn.ReplicateTensorToMesh(mesh_device)
+    tt_input_tensor = ttnn.from_torch(
+        torch_input_tensor, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, mesh_mapper=mesh_mapper, device=mesh_device
+    )
+    tt_output_tensor = ttnn.reshape(tt_input_tensor, ttnn.Shape(output_shape))
+
+    for tensor_shard in ttnn.get_device_tensors(tt_output_tensor):
+        tt_output_tensor = ttnn.to_torch(tensor_shard)
+        assert tt_output_tensor.shape == torch.Size(output_shape)

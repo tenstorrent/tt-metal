@@ -3,10 +3,18 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "circular_buffer_types.hpp"
-#include <global_circular_buffer_impl.hpp>
+
+#include <unordered_map>
+
+#include "assert.hpp"
+#include "buffer.hpp"
+#include "logger.hpp"
+
+namespace tt {
+enum class DataFormat : uint8_t;
+}  // namespace tt
 
 namespace tt::tt_metal {
-inline namespace v0 {
 
 // Static circular buffer spec
 CircularBufferConfig::CircularBufferConfig(
@@ -25,6 +33,46 @@ CircularBufferConfig::CircularBufferConfig(
     total_size_(total_size) {
     this->set_globally_allocated_address(buffer);
     this->set_config(data_format_spec);
+}
+
+CircularBufferConfig::CircularBufferConfig(const CBDescriptor& descriptor) : total_size_(descriptor.total_size) {
+    if (descriptor.buffer) {
+        this->set_globally_allocated_address(*descriptor.buffer);
+    }
+
+    auto process_format_descriptor = [this](const CBFormatDescriptor& format_descriptor) {
+        if (format_descriptor.buffer_index > NUM_CIRCULAR_BUFFERS - 1) {
+            TT_THROW(
+                "Buffer index ({}) exceeds max number of circular buffers per core ({})",
+                format_descriptor.buffer_index,
+                NUM_CIRCULAR_BUFFERS);
+        }
+        this->data_formats_[format_descriptor.buffer_index] = format_descriptor.data_format;
+        if (this->total_size_ % format_descriptor.page_size != 0) {
+            TT_THROW(
+                "Total circular buffer size {} B must be divisible by page size {} B",
+                this->total_size_,
+                format_descriptor.page_size);
+        }
+        this->page_sizes_[format_descriptor.buffer_index] = format_descriptor.page_size;
+        if (format_descriptor.tile) {
+            this->tiles_[format_descriptor.buffer_index] = Tile(
+                {format_descriptor.tile->height, format_descriptor.tile->width}, format_descriptor.tile->transpose);
+        }
+    };
+    this->buffer_indices_.reserve(descriptor.format_descriptors.size() + descriptor.remote_format_descriptors.size());
+    this->local_buffer_indices_.reserve(descriptor.format_descriptors.size());
+    this->remote_buffer_indices_.reserve(descriptor.remote_format_descriptors.size());
+    for (const auto& format_descriptor : descriptor.format_descriptors) {
+        process_format_descriptor(format_descriptor);
+        this->buffer_indices_.insert(format_descriptor.buffer_index);
+        this->local_buffer_indices_.insert(format_descriptor.buffer_index);
+    }
+    for (const auto& format_descriptor : descriptor.remote_format_descriptors) {
+        process_format_descriptor(format_descriptor);
+        this->buffer_indices_.insert(format_descriptor.buffer_index);
+        this->remote_buffer_indices_.insert(format_descriptor.buffer_index);
+    }
 }
 
 // For flatbuffer deserialization, set all private members.
@@ -100,9 +148,6 @@ CircularBufferConfig& CircularBufferConfig::set_total_size(uint32_t total_size) 
 #endif
         }
     }
-    if (total_size == 0) {
-        TT_THROW("Total size for circular buffer must be non-zero!");
-    }
     this->total_size_ = total_size;
     return *this;
 }
@@ -142,9 +187,6 @@ CircularBufferConfig& CircularBufferConfig::set_globally_allocated_address_and_t
                 this->buffer_size_);
         }
 #endif
-    }
-    if (total_size == 0) {
-        TT_THROW("Total size for circular buffer must be non-zero!");
     }
     this->total_size_ = total_size;
     return *this;
@@ -281,5 +323,4 @@ bool operator==(const CircularBufferConfig& lhs, const CircularBufferConfig& rhs
 
 bool operator!=(const CircularBufferConfig& lhs, const CircularBufferConfig& rhs) { return !(lhs == rhs); }
 
-}  // namespace v0
 }  // namespace tt::tt_metal

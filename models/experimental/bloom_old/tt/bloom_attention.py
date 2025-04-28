@@ -9,11 +9,9 @@ from torch.nn import functional as F
 import ttnn
 import models.experimental.bloom_old.bloom_utils as bloom_utils
 import models.experimental.bloom_old.tt.baddbmm as baddbmm
-import models.experimental.bloom_old.tt.bloom_attention_merge_heads as bloom_attention_merge_heads
 
 from fused_ops.linear import Linear as TtLinear
-from fused_ops.softmax import softmax as TtSoftmax
-from typing import Optional, Tuple, Union
+from typing import Tuple
 
 
 def split_heads(fused_qkv: torch.Tensor, num_heads, head_dim) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:

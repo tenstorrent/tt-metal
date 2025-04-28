@@ -75,7 +75,7 @@ void MAIN {
     const uint32_t ndst = get_arg_val<uint32_t>(3);
     const uint32_t start_ht = get_arg_val<uint32_t>(4);
     const uint32_t mask_padded_data = get_arg_val<uint32_t>(5);
-    binary_op_init_common(tt::CBIndex::c_0, tt::CBIndex::c_2, tt::CBIndex::c_24);
+    binary_op_init_common(tt::CBIndex::c_0, tt::CBIndex::c_2, tt::CBIndex::c_6);
 
     constexpr uint32_t onetile = 1;
     // reserve one tile for zeros on cb_in2
@@ -86,14 +86,14 @@ void MAIN {
     constexpr auto cb_fused_scale = tt::CBIndex::c_3;
     constexpr auto cb_fused_attn = tt::CBIndex::c_4;
     constexpr auto cb_mask_padded = tt::CBIndex::c_5;
-    constexpr auto cb_exps = tt::CBIndex::c_24;
-    constexpr auto cb_scale_mask = tt::CBIndex::c_27;
-    constexpr auto cb_recipsumexps = tt::CBIndex::c_25;
+    constexpr auto cb_exps = tt::CBIndex::c_6;
+    constexpr auto cb_scale_mask = tt::CBIndex::c_9;
+    constexpr auto cb_recipsumexps = tt::CBIndex::c_7;
     constexpr auto cb_in0 = tt::CBIndex::c_0;
-    constexpr auto cb_out0 = tt::CBIndex::c_16;
+    constexpr auto cb_out0 = tt::CBIndex::c_11;
 #ifdef NUMERIC_STABLE
-    constexpr auto cb_max = tt::CBIndex::c_26;
-    constexpr auto cb_x = tt::CBIndex::c_28;
+    constexpr auto cb_max = tt::CBIndex::c_8;
+    constexpr auto cb_x = tt::CBIndex::c_10;
 #else
     constexpr auto cb_x = cb_exps;
 #endif

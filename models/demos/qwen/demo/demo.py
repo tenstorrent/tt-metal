@@ -17,17 +17,13 @@ import hashlib
 
 from models.demos.qwen.tt.qwen_common import (
     get_single_rot_mat,
-    get_prefill_rot_mat,
     get_rot_transformation_mat,
-    precompute_freqs,
     HostEmbedding,
 )
 from models.demos.qwen.tt.qwen_model import TtTransformer
 from models.demos.qwen.tt.qwen_embedding import TtQwenEmbedding
-from models.demos.qwen.reference.tokenizer import Tokenizer
 
 from models.perf.benchmarking_utils import BenchmarkProfiler
-from models.demos.utils.llm_demo_utils import create_benchmark_data, verify_perf
 from transformers import AutoTokenizer
 
 
@@ -378,8 +374,7 @@ def run_qwen_demo(
             pt_out.append(ttnn.to_torch(tt_out, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=-1))[0, 0, 0, :])
             ttnn.deallocate(tt_out)
         # Synchronize devices to ensure the profile captures the correct timing of all devices
-        for i in range(model_args.num_devices):
-            ttnn.synchronize_device(mesh_device.get_devices()[i])
+        ttnn.synchronize_device(mesh_device)
         profiler.end(f"inference_prefill", iteration=batch_idx)
         logger.info(f"Prefill finished")
 
@@ -416,8 +411,6 @@ def run_qwen_demo(
 
         # Create events
         profiler.start(f"compile_trace_{batch_idx}")
-        op_event = ttnn.create_event(mesh_device)
-        write_event = ttnn.create_event(mesh_device)
 
         current_pos = ttnn.from_torch(
             torch.tensor(decoding_pos, dtype=torch.int32),
@@ -437,7 +430,7 @@ def run_qwen_demo(
             tt_out_gathered = tt_out
         tt_out_rm = ttnn.untilize(tt_out_gathered, use_multicore=True)
         ttnn.deallocate(tt_out_gathered)
-        tt_out_tok = ttnn.argmax(tt_out_rm, dim=3, use_multicore=True, output_tensor=tt_out_tok)
+        tt_out_tok = ttnn.argmax(tt_out_rm, dim=3, keepdim=True, use_multicore=True, output_tensor=tt_out_tok)
         ttnn.deallocate(tt_out_rm)
         new_rot_mat = ttnn.linear(rot_matrix, current_rot_mat)
         current_rot_mat = ttnn.copy(new_rot_mat, current_rot_mat)
@@ -458,7 +451,7 @@ def run_qwen_demo(
             tt_out_gathered = tt_out
         tt_out_rm = ttnn.untilize(tt_out_gathered, use_multicore=True)
         ttnn.deallocate(tt_out_gathered)
-        tt_out_tok = ttnn.argmax(tt_out_rm, dim=3, use_multicore=True, output_tensor=tt_out_tok)
+        tt_out_tok = ttnn.argmax(tt_out_rm, dim=3, keepdim=True, use_multicore=True, output_tensor=tt_out_tok)
         ttnn.deallocate(tt_out_rm)
         new_rot_mat = ttnn.linear(rot_matrix, current_rot_mat)
         current_rot_mat = ttnn.copy(new_rot_mat, current_rot_mat)
@@ -492,7 +485,7 @@ def run_qwen_demo(
         logger.info(f"Starting decode loop...")
         profiler.start(f"inference_decode", iteration=batch_idx)
 
-        ttnn.record_event(1, write_event)
+        write_event = ttnn.record_event(mesh_device, 1)
         while users_decoding:
             if iteration == 0:  # First iteration also accounts for compile time
                 profiler.start(f"compile_decode", iteration=batch_idx)
@@ -501,14 +494,14 @@ def run_qwen_demo(
             # Execute trace
             ttnn.wait_for_event(0, write_event)
             ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=True)
-            ttnn.record_event(0, op_event)
+            op_event = ttnn.record_event(mesh_device, 0)
 
             # Write to host
             ttnn.wait_for_event(1, op_event)
             tt_output_torch = ttnn.to_torch(
                 tt_out_tok.cpu(blocking=True, cq_id=1), mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=1)
             )[0, 0, 0, :batch_size]
-            ttnn.record_event(1, write_event)
+            write_event = ttnn.record_event(mesh_device, 1)
 
             # Save output token to print out later
             for user in range(batch_size):
@@ -703,8 +696,6 @@ def test_qwen_demo(
 ):
     if is_ci_env and (instruct_weights == False or "long" in input_prompts or single_layer == True):
         pytest.skip("CI demo test only runs instruct weights to reduce CI pipeline load (both are supported)")
-
-    mesh_device.enable_async(True)
 
     return run_qwen_demo(
         user_input=input_prompts,

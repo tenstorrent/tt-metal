@@ -38,6 +38,6 @@ struct CorePageStride {
     PageStride page_stride;
 };
 
-operation::ProgramWithCallbacks reshard_multi_core(const Tensor& input, Tensor& output);
+tt::tt_metal::operation::ProgramWithCallbacks reshard_multi_core(const Tensor& input, Tensor& output);
 
 }  // namespace ttnn::operations::data_movement::detail

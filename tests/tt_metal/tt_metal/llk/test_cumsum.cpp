@@ -2,18 +2,51 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <chrono>
+#include <fmt/base.h>
 #include <gtest/gtest.h>
+#include <stdint.h>
+#include <functional>
+#include <map>
+#include <memory>
+#include <string>
+#include <utility>
+#include <variant>
+#include <vector>
 
+#include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/buffer_types.hpp>
+#include <tt-metalium/circular_buffer_types.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/data_types.hpp>
 #include "device_fixture.hpp"
-#include "tt_metal/test_utils/comparison.hpp"
-#include "tt_metal/test_utils/df/df.hpp"
-#include "tt_metal/test_utils/stimulus.hpp"
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/kernel_types.hpp>
+#include <tt-metalium/logger.hpp>
+#include <tt-metalium/program.hpp>
+#include <tt_stl/span.hpp>
 #include "test_golden_impls.hpp"
+#include <tt-metalium/tt_backend_api_types.hpp>
+#include <tt-metalium/tt_metal.hpp>
+#include "tt_metal/test_utils/comparison.hpp"
+#include "tt_metal/test_utils/df/float32.hpp"
+#include "tt_metal/test_utils/packing.hpp"
+#include "tt_metal/test_utils/stimulus.hpp"
+#include "umd/device/types/arch.h"
+#include <tt-metalium/utils.hpp>
+
+namespace tt {
+namespace tt_metal {
+class IDevice;
+}  // namespace tt_metal
+}  // namespace tt
+
+namespace tt::tt_metal {
 
 using namespace tt;
 using namespace tt::test_utils;
 using namespace tt::test_utils::df;
-using namespace tt::tt_metal;
 
 namespace unit_tests::compute::cumsum {
 
@@ -154,7 +187,7 @@ void run_single_core_cumsum(tt_metal::IDevice* device, const CumsumConfig& test_
 
     auto input_packed = pack_vector<uint32_t, bfloat16>(input);
     auto input_packed_tilized =
-        unit_tests::compute::gold_standard_tilize(input_packed, {test_config.N * test_config.Ht, test_config.Wt});
+        ::unit_tests::compute::gold_standard_tilize(input_packed, {test_config.N * test_config.Ht, test_config.Wt});
 
     tt_metal::detail::WriteToBuffer(src_dram_buffer, input_packed_tilized);
 
@@ -162,7 +195,7 @@ void run_single_core_cumsum(tt_metal::IDevice* device, const CumsumConfig& test_
 
     std::vector<uint32_t> output_packed_tilized;
     tt_metal::detail::ReadFromBuffer(dst_dram_buffer, output_packed_tilized);
-    auto output_packed = unit_tests::compute::gold_standard_untilize(
+    auto output_packed = ::unit_tests::compute::gold_standard_untilize(
         output_packed_tilized, {test_config.N * test_config.Ht, test_config.Wt});
 
     log_info(tt::LogTest, "Running test for N = {}, Wt = {}, Ht = {}", test_config.N, test_config.Wt, test_config.Ht);
@@ -204,3 +237,5 @@ TEST_F(DeviceFixture, TensixComputeCumsumRowwise) {
         }
     }
 }
+
+}  // namespace tt::tt_metal

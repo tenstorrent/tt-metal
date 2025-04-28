@@ -62,6 +62,23 @@ class BenchmarkProfiler:
     def _get_str_ts(self, timestamp):
         return timestamp.strftime("%Y-%m-%dT%H:%M:%S%z")
 
+    def _get_step_durations(self, step_name: str, start_iteration: int = 0):
+        """Helper method to collect all durations for a given step across iterations."""
+        durations = []
+        iteration = start_iteration
+        while self.contains_step(step_name, iteration):
+            durations.append(self.get_duration(step_name, iteration))
+            iteration += 1
+        return durations
+
+    def get_duration_average(self, step_name: str, start_iteration: int = 0):
+        durations = self._get_step_durations(step_name, start_iteration)
+        return sum(durations) / len(durations)
+
+    def get_duration_sum(self, step_name: str, start_iteration: int = 0):
+        durations = self._get_step_durations(step_name, start_iteration)
+        return sum(durations)
+
 
 class BenchmarkData:
     def __init__(self):

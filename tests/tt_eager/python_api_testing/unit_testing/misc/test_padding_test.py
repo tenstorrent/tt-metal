@@ -29,7 +29,7 @@ def test_run_padding_test(input_tensor_shape, output_tensor_shape, input_tensor_
 
     # Pad inputs on host
     a_pad = a.pad(output_tensor_shape, input_tensor_start, pad_value)
-    a_pt = a_pad.to_torch()
+    a_pt = a_pad.to_torch_with_padded_shape()
 
     # Pytorch reference
     input_tensor_end = tuple(input_tensor_start[i] + input_tensor_shape[i] for i in range(len(input_tensor_shape)))
@@ -172,7 +172,7 @@ def test_run_tile_padding_test(input_tensor_shape, pad_value):
 
     # Pad inputs on host
     a_pad = a.pad_to_tile(pad_value)
-    a_pt = a_pad.to_torch()
+    a_pt = a_pad.to_torch_with_padded_shape()
 
     # Pytorch reference
     input_tensor_end = tuple(input_tensor_shape[i] for i in range(len(input_tensor_shape)))

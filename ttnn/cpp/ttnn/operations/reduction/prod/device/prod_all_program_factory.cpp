@@ -12,8 +12,9 @@ using namespace constants;
 namespace operations {
 namespace primary {
 
-operation::ProgramWithCallbacks prod_single_core(const Tensor& a, const Tensor& output) {
-    Program program{};
+tt::tt_metal::operation::ProgramWithCallbacks prod_single_core(
+    const tt::tt_metal::Tensor& a, const tt::tt_metal::Tensor& output) {
+    tt::tt_metal::Program program{};
 
     CoreRange core({0, 0}, {0, 0});
 
@@ -25,19 +26,18 @@ operation::ProgramWithCallbacks prod_single_core(const Tensor& a, const Tensor& 
     // This should allocate a DRAM buffer on the device
     tt_metal::IDevice* device = a.device();
 
-    uint32_t src0_cb_index = 0;
     uint32_t num_input_tiles = 2;
     tt_metal::CircularBufferConfig cb_src0_config =
-        tt_metal::CircularBufferConfig(num_input_tiles * single_tile_size, {{src0_cb_index, cb_data_format}})
-            .set_page_size(src0_cb_index, single_tile_size);
+        tt_metal::CircularBufferConfig(num_input_tiles * single_tile_size, {{tt::CBIndex::c_0, cb_data_format}})
+            .set_page_size(tt::CBIndex::c_0, single_tile_size);
     auto cb_src0 = tt_metal::CreateCircularBuffer(program, core, cb_src0_config);
 
     tt_metal::CircularBufferConfig cb_inter_config =
-        tt_metal::CircularBufferConfig(num_input_tiles * single_tile_size, {{tt::CBIndex::c_24, cb_data_format}})
-            .set_page_size(tt::CBIndex::c_24, single_tile_size);
+        tt_metal::CircularBufferConfig(num_input_tiles * single_tile_size, {{tt::CBIndex::c_2, cb_data_format}})
+            .set_page_size(tt::CBIndex::c_2, single_tile_size);
     auto cb_interm = tt_metal::CreateCircularBuffer(program, core, cb_inter_config);
 
-    uint32_t output_cb_index = tt::CBIndex::c_16;
+    uint32_t output_cb_index = tt::CBIndex::c_3;
     uint32_t num_output_tiles = 2;
     tt_metal::CircularBufferConfig cb_output_config =
         tt_metal::CircularBufferConfig(num_output_tiles * single_tile_size, {{output_cb_index, cb_data_format}})
@@ -47,9 +47,9 @@ operation::ProgramWithCallbacks prod_single_core(const Tensor& a, const Tensor& 
     auto src_buffer = a.buffer();
     auto dst_buffer = output.buffer();
 
-    bool src_is_dram = src_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
+    bool src_is_dram = src_buffer->buffer_type() == tt_metal::BufferType::DRAM;
     std::vector<uint32_t> reader_compile_time_args = {(uint32_t)src_is_dram};
-    bool dst_is_dram = dst_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
+    bool dst_is_dram = dst_buffer->buffer_type() == tt_metal::BufferType::DRAM;
     std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)output_cb_index, (std::uint32_t)dst_is_dram};
 
     tt_metal::KernelHandle unary_reader_kernel_id = tt_metal::CreateKernel(
@@ -83,15 +83,17 @@ operation::ProgramWithCallbacks prod_single_core(const Tensor& a, const Tensor& 
 
     SetRuntimeArgs(program, unary_reader_kernel_id, core, {src_buffer->address(), num_tiles, 0});
 
-    SetRuntimeArgs(program, unary_writer_kernel_id, core, {dst_buffer->address(), num_tiles, 0});
+    SetRuntimeArgs(program, unary_writer_kernel_id, core, {dst_buffer->address(), /*num_tiles=*/1, 0});
 
     auto override_runtime_args_callback = [unary_reader_kernel_id, unary_writer_kernel_id](
-                                              const Program& program,
-                                              const std::vector<Buffer*>& input_buffers,
-                                              const std::vector<Buffer*>& output_buffers) {
-        auto src_buffer = input_buffers.at(0);
+                                              const void* operation,
+                                              const tt::tt_metal::Program& program,
+                                              const std::vector<tt::tt_metal::Tensor>& input_tensors,
+                                              const std::vector<std::optional<const tt::tt_metal::Tensor>>&,
+                                              const std::vector<tt::tt_metal::Tensor>& output_tensors) {
+        auto src_buffer = input_tensors.at(0).buffer();
 
-        auto dst_buffer = output_buffers.at(0);
+        auto dst_buffer = output_tensors.at(0).buffer();
 
         CoreCoord core = {0, 0};
 
@@ -105,7 +107,6 @@ operation::ProgramWithCallbacks prod_single_core(const Tensor& a, const Tensor& 
             runtime_args[0] = dst_buffer->address();
         }
     };
-
     return {std::move(program), override_runtime_args_callback};
 }
 

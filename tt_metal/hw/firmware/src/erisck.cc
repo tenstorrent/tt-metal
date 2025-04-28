@@ -16,6 +16,7 @@
 #include "stream_io_map.h"
 #include "tdma_xmov.h"
 #include "debug/dprint.h"
+#include "dataflow_api.h"
 #include "tools/profiler/kernel_profiler.hpp"
 #include <kernel_includes.hpp>
 #include <stdint.h>
@@ -34,5 +35,7 @@ extern "C" [[gnu::section(".start")]] void _start(uint32_t) {
 
     rtos_context_switch_ptr = (void (*)())RtosTable[0];
 
+    WAYPOINT("K");
     kernel_main();
+    WAYPOINT("KD");
 }

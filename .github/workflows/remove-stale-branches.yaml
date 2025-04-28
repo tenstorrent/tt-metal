@@ -7,6 +7,7 @@ on:
 
 jobs:
   remove-stale-branches:
+    if: github.repository == 'tenstorrent/tt-metal'
     runs-on: ubuntu-latest
     steps:
       - uses: blozano-tt/remove-stale-branches@379c5b1430ca2951a1365427e7eb6574cfc4c7dd

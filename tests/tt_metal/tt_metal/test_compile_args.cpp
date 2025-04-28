@@ -69,7 +69,9 @@ int main(int argc, char** argv) {
         // Remove old compiled kernels
         static const std::string kernel_name = "test_compile_args";
         auto binary_path_str =
-            kernel->binaries(BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_env)
+            kernel
+                ->binaries(
+                    tt::tt_metal::BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_env)
                 .get_out_kernel_root_path() +
             kernel_name;
         std::filesystem::remove_all(binary_path_str);
@@ -84,7 +86,7 @@ int main(int argc, char** argv) {
             std::distance(std::filesystem::directory_iterator(binary_path), std::filesystem::directory_iterator{});
         TT_FATAL(num_built_kernels == 2, "Expected compute kernel test_compile_args to be compiled twice!");
 
-        if (tt::llrt::RunTimeOptions::get_instance().get_watcher_enabled()) {
+        if (tt::tt_metal::MetalContext::instance().rtoptions().get_watcher_enabled()) {
             // Test that the kernel_args.csv file was generated for both kernels
             log_info(LogTest, "Test kernel args logging");
             auto kernel_args_path = binary_path.parent_path() / "kernel_args.csv";

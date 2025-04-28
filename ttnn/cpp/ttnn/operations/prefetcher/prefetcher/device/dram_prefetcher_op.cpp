@@ -21,18 +21,18 @@ void DramPrefetcher::validate(const std::vector<Tensor>& input_tensors) const {
     TT_FATAL(global_cb.has_value(), "Global circular buffer must be provided");
     ttnn::Tensor tensor_addrs = input_tensors.back();  // Last tensor is tensor_addrs
 
-    auto global_cb = get_global_circular_buffer(*this->global_cb, input_tensors[0].device()->id());
-    uint32_t num_receiver_cores = global_cb.receiver_cores().num_cores();
-    uint32_t num_sender_cores = global_cb.sender_cores().num_cores();
+    auto global_cb = *this->global_cb;
 
     // Check that global_cb sender_receiver_core_mapping has same number of receivers for each sender core
     const auto& sender_receiver_core_mapping = global_cb.sender_receiver_core_mapping();
-    for (const auto& [sender_core, receiver_core_range] : sender_receiver_core_mapping) {
+    uint32_t num_readers = input_tensors[0].shard_spec()->grid.num_cores();
+    for (uint32_t i = 0; i < num_readers; ++i) {
+        const auto& [sender_core, receiver_core_range] = sender_receiver_core_mapping[i];
         TT_FATAL(
             receiver_core_range.size() == sender_receiver_core_mapping.begin()->second.size(),
             "Global circular buffer must have same number of receivers for each sender core");
     }
-    const uint32_t num_receivers_per_sender = num_receiver_cores / num_sender_cores;
+    uint32_t num_receivers_per_sender = sender_receiver_core_mapping[0].second.num_cores();
 
     for (size_t i = 0; i < input_tensors.size() - 1; ++i) {
         const auto& tensor = input_tensors[i];
@@ -75,12 +75,12 @@ void DramPrefetcher::validate(const std::vector<Tensor>& input_tensors) const {
 std::vector<ttnn::TensorSpec> DramPrefetcher::compute_output_specs(const std::vector<Tensor>& input_tensors) const {
     return {TensorSpec(
         ttnn::Shape{32, 32},
-        TensorLayout(input_tensors[0].get_dtype(), PageConfig(input_tensors[0].get_layout()), MemoryConfig{}))};
+        tt::tt_metal::TensorLayout(
+            input_tensors[0].get_dtype(), tt::tt_metal::PageConfig(input_tensors[0].get_layout()), MemoryConfig{}))};
 }
-operation::ProgramWithCallbacks DramPrefetcher::create_program(
+tt::tt_metal::operation::ProgramWithCallbacks DramPrefetcher::create_program(
     const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const {
-    auto global_cb = get_global_circular_buffer(*this->global_cb, input_tensors[0].device()->id());
-    return dram_prefetcher_multi_core(input_tensors, this->num_layers, global_cb);
+    return dram_prefetcher_multi_core(input_tensors, this->num_layers, *this->global_cb, this->enable_performance_mode);
 }
 
 }  // namespace ttnn::operations::dram_prefetcher

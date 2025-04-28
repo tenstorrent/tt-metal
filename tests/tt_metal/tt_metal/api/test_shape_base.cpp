@@ -2,10 +2,14 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <exception>
-#include "gtest/gtest.h"
-
 #include <tt-metalium/shape_base.hpp>
+#include <exception>
+#include <memory>
+
+#include "gtest/gtest.h"
+#include <tt_stl/span.hpp>
+
+namespace tt::tt_metal {
 
 TEST(TensorShapeBaseTests, General4D) {
     tt::tt_metal::ShapeBase vec({20, 30, 40, 50});
@@ -79,3 +83,5 @@ TEST(TensorShapeBaseTests, TwoElements) {
     EXPECT_EQ(vec[-4], 1);
     EXPECT_THROW(vec[-5], std::exception);
 }
+
+}  // namespace tt::tt_metal

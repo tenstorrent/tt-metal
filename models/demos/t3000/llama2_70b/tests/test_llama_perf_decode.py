@@ -2,33 +2,26 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+from collections import defaultdict
+
 import pytest
-from loguru import logger
 import torch
+from loguru import logger
+
 import ttnn
-from ttnn import ConcatMeshToTensor
-import time
-
 from models.demos.t3000.llama2_70b.reference.llama.llama import Llama
-
-from models.demos.t3000.llama2_70b.tt.llama_model_optimized import TtLlamaModel_optimized
 from models.demos.t3000.llama2_70b.tt.llama_common import (
-    setup_llama_env,
-    check_mesh_device,
-    MAX_SEQ_LEN,
     BASE_URL,
+    check_mesh_device,
     load_llama_state_dict,
+    setup_llama_env,
     should_skip_model_load,
 )
-from models.utility_functions import (
-    profiler,
-    disable_compilation_reports,
-    skip_for_grayskull,
-    is_wormhole_b0,
+from models.demos.t3000.llama2_70b.tt.llama_model_optimized import (
+    TtLlamaModel_optimized,
 )
 from models.perf.perf_utils import prep_perf_report
-
-from collections import defaultdict
+from models.utility_functions import profiler, skip_for_grayskull
 
 
 def get_decode_time(profiler, start_token, end_token):
@@ -119,9 +112,7 @@ def run_test_LlamaModel_end_to_end(
         read_cache=True,
     )
 
-    for i in mesh_device.get_device_ids():
-        device = mesh_device.get_device(i)
-        ttnn.synchronize_device(device)
+    ttnn.synchronize_device(mesh_device)
 
     profiler.end("TT_llama_model_setup")
 
@@ -204,11 +195,12 @@ def run_test_LlamaModel_end_to_end(
         (128, 10000, 0.0655 + 0.01, 32, 1, 4096),
         (2048, 10000, 0.0771 + 0.01, 32, 1, 4096),
         (8192, 10000, 0.0825 + 0.01, 16, 1, 8192),
-        (128 * 1024, 10000, 0.0918 + 0.01, 1, 1, 128 * 1024),
+        (128 * 1024, 10000, 0.1518 + 0.01, 1, 1, 128 * 1024),
     ),
     ids=["gen32", "gen128", "gen2k", "gen8k", "gen128k"],
 )
 @pytest.mark.parametrize("device_params", [{"trace_region_size": 20000000}], indirect=True)
+@pytest.mark.parametrize("mesh_device", [pytest.param((2, 4), id="2x4_grid")], indirect=True)
 def test_Llama_perf_host(
     generation_length,
     expected_compile_time,
@@ -216,26 +208,24 @@ def test_Llama_perf_host(
     batch,
     seq_len,
     max_context_len,
-    t3k_mesh_device,
+    mesh_device,
     llama_version,
     use_program_cache,
     n_layers=80,
     n_devices=8,
 ):
+    mesh_device.reshape(ttnn.MeshShape(1, 8))
+
     model_config, ckpt_dir, tokenizer_path, cache_path = setup_llama_env(
         llama_version=llama_version,
         max_batch_size=batch,
         max_context_len=max_context_len,
     )
 
-    check_mesh_device(t3k_mesh_device, model_config)
-
-    t3k_mesh_device.enable_async(True)
-
-    disable_compilation_reports()
+    check_mesh_device(mesh_device, model_config)
 
     run_test_LlamaModel_end_to_end(
-        t3k_mesh_device,
+        mesh_device,
         llama_version,
         batch,
         seq_len,
@@ -312,9 +302,7 @@ def run_test_LlamaModel_end_to_end_hybrid_data_tensor_parallel(
             read_cache=True,
         )
 
-        for i in submesh.get_device_ids():
-            device = submesh.get_device(i)
-            ttnn.synchronize_device(device)
+        ttnn.synchronize_device(submesh)
 
         profiler.end("TT_llama_model_setup")
 
@@ -442,9 +430,6 @@ def test_Llama_perf_hybrid_data_tensor_parallel(
     )
 
     check_mesh_device(mesh_device, model_config)
-    mesh_device.enable_async(True)
-
-    disable_compilation_reports()
 
     run_test_LlamaModel_end_to_end_hybrid_data_tensor_parallel(
         mesh_device,

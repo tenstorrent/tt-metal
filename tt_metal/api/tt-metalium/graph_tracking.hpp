@@ -4,20 +4,30 @@
 
 #pragma once
 
-#include <string>
+#include <nlohmann/json.hpp>
+#include <stdint.h>
 #include <any>
+#include <array>
+#include <functional>
+#include <memory>
 #include <span>
+#include <string>
 #include <string_view>
+#include <vector>
 
-#include "core_coord.hpp"
-#include "buffer.hpp"
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/core_coord.hpp>
+
+namespace tt {
+namespace tt_metal {
+class Buffer;
+class IDevice;
+}  // namespace tt_metal
+}  // namespace tt
 
 namespace tt::tt_metal {
-inline namespace v0 {
 
 class Program;
-
-}  // namespace v0
 
 class IGraphProcessor {
 public:

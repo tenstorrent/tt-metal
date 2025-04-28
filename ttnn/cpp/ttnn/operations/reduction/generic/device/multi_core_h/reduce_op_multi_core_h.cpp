@@ -96,7 +96,7 @@ operation::ProgramWithCallbacks reduce_multi_core_h(
             .set_page_size(scaler_cb_index, scaler_single_tile_size);
     auto cb_scaler = tt_metal::CreateCircularBuffer(program, all_cores, cb_scaler_config);
 
-    uint32_t output_cb_index = CBIndex::c_16;  // output operands start at index 16
+    uint32_t output_cb_index = CBIndex::c_3;
     CBHandle cb_output;
     if (out_sharded) {
         uint32_t num_output_tiles = output.shard_spec().value().numel() / TILE_HW;
@@ -133,7 +133,7 @@ operation::ProgramWithCallbacks reduce_multi_core_h(
             all_cores,
             tt_metal::ReaderDataMovementConfig(reader_compile_time_args, reader_defines));
     } else {
-        bool src0_is_dram = src0_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
+        bool src0_is_dram = src0_buffer->buffer_type() == tt_metal::BufferType::DRAM;
         std::vector<uint32_t> reader_compile_time_args = {
             (std::uint32_t)src0_is_dram, Ht, Wt, HtWt, chunk_size, packed_scaler_value};
 
@@ -161,7 +161,7 @@ operation::ProgramWithCallbacks reduce_multi_core_h(
             all_cores,
             WriterDataMovementConfig(writer_ct_args));
     } else {
-        bool dst_is_dram = dst_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
+        bool dst_is_dram = dst_buffer->buffer_type() == tt_metal::BufferType::DRAM;
         std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)output_cb_index, (std::uint32_t)dst_is_dram};
 
         writer_kernel_id = tt_metal::CreateKernel(

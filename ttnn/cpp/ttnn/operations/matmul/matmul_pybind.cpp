@@ -211,14 +211,15 @@ void py_module(py::module& module) {
         R"doc(
         Returns the matrix product of two tensors.
 
-        The input tensors need to be tiled. Therefore, the input tensors have to be
-        at least 2-dimensional.
+        The input tensors need to be tiled and at least 1-dimensional.
 
-        If the input tensors have more than two dimensions, the additional, front,
-        dimensions may be used for batched matrix multiply.
-        These front dimensions may also be referred to as batch dimensions.
-        E.g. a tensor with dimensions (`a` x `b` x `c` x `d`)
-        has batch dimensions `a` and `b`.
+        - If both input tensors are 1-dimensional, then the operation is a dot product.
+        - If first input tensor is 1-dimensional and the other input tensor is at least 2-dimensional,
+          the batched vector-matrix multiplication is performed.
+        - If the first input tensor is at least 2-dimensional and the second input tensor is 1-dimensional,
+          the batched matrix-vector multiplication is performed.
+        - If both input tensors are at least 2-dimensional, then a batched matrix multiply is performed.
+
         The following are the allowed possibilities for batch dimensions.
         Examples below show concrete operations and tensor sizes.
 
@@ -237,8 +238,6 @@ void py_module(py::module& module) {
         - Matrix multiplication will not work if the first input has batch
           dimensions that are all of size 1 and the second input has batch dimensions
           that are not all of size 1.
-
-        - Note: Dimensions of size 0 are not supported.
 
         - Note: In general, the number of dimensions between the two inputs should
           match. There may be cases where they don't. In that case, if the inputs
@@ -344,9 +343,10 @@ void py_module(py::module& module) {
                const std::optional<const std::string>& activation,
                const std::optional<const DeviceComputeKernelConfig> compute_kernel_config,
                const std::optional<const ttnn::CoreGrid> core_grid,
-               const std::optional<const Tile>& output_tile,
+               const std::optional<const tt::tt_metal::Tile>& output_tile,
                std::optional<Tensor>& optional_output_tensor,
-               const std::optional<const DeviceGlobalCircularBuffer>& global_cb) -> ttnn::Tensor {
+               const std::optional<const GlobalCircularBuffer>& global_cb,
+               const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) -> ttnn::Tensor {
                 return self(
                     input_tensor_a,
                     input_tensor_b,
@@ -360,7 +360,8 @@ void py_module(py::module& module) {
                     core_grid,
                     output_tile,
                     optional_output_tensor,
-                    global_cb);
+                    global_cb,
+                    sub_device_id);
             },
             py::arg("input_tensor_a"),
             py::arg("input_tensor_b"),
@@ -376,6 +377,7 @@ void py_module(py::module& module) {
             py::arg("output_tile") = std::nullopt,
             py::arg("optional_output_tensor") = std::nullopt,
             py::arg("global_cb") = std::nullopt,
+            py::arg("sub_device_id") = std::nullopt,
         });
 
     bind_registered_operation(
@@ -428,9 +430,10 @@ void py_module(py::module& module) {
                const std::optional<const std::string>& activation,
                const std::optional<const DeviceComputeKernelConfig> compute_kernel_config,
                const std::optional<const ttnn::CoreGrid> core_grid,
-               const std::optional<const Tile>& output_tile,
+               const std::optional<const tt::tt_metal::Tile>& output_tile,
                std::optional<Tensor>& optional_output_tensor,
-               const std::optional<const DeviceGlobalCircularBuffer>& global_cb) -> ttnn::Tensor {
+               const std::optional<const GlobalCircularBuffer>& global_cb,
+               const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) -> ttnn::Tensor {
                 return self(
                     input_tensor_a,
                     input_tensor_b,
@@ -445,7 +448,8 @@ void py_module(py::module& module) {
                     core_grid,
                     output_tile,
                     optional_output_tensor,
-                    global_cb);
+                    global_cb,
+                    sub_device_id);
             },
             py::arg("input_tensor_a"),
             py::arg("input_tensor_b"),
@@ -462,6 +466,7 @@ void py_module(py::module& module) {
             py::arg("output_tile") = std::nullopt,
             py::arg("optional_output_tensor") = std::nullopt,
             py::arg("global_cb") = std::nullopt,
+            py::arg("sub_device_id") = std::nullopt,
         });
 }
 

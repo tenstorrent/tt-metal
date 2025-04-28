@@ -9,7 +9,7 @@
 #include "ttnn/operations/ccl/barrier/barrier_pybind.hpp"
 
 #include "ttnn/operations/ccl/ccl_host_datastructures.hpp"
-#include "cpp/ttnn/operations/ccl/erisc_datamover_builder.hpp"
+#include "cpp/ttnn/operations/ccl/erisc_datamover_builder_helper.hpp"
 
 namespace ttnn::operations::ccl {
 
@@ -23,9 +23,17 @@ void py_bind_common(pybind11::module& module) {
         &ttnn::ccl::initialize_edm_fabric,
         py::arg("mesh_device"),
         py::kw_only(),
-        py::arg("wrap_fabric_around_mesh") = false);
+        py::arg("wrap_fabric_around_mesh") = false,
+        py::arg("context_switch_interval_override") = std::nullopt,
+        py::arg("topology") = ttnn::ccl::Topology::Linear);
 
-    module.def("teardown_edm_fabric", &ttnn::ccl::teardown_edm_fabric, py::arg("mesh_device"), py::kw_only());
+    module.def(
+        "teardown_edm_fabric",
+        &ttnn::ccl::teardown_edm_fabric,
+        py::arg("mesh_device"),
+        py::kw_only(),
+        py::arg("wrap_fabric_around_mesh") = false,
+        py::arg("topology") = ttnn::ccl::Topology::Linear);
 }
 
 void py_module(py::module& module) {

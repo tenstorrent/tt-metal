@@ -121,8 +121,8 @@ void read_ttnn_tensor(MsgPackFile& file, std::string_view name, tt::tt_metal::Te
     } else if (data_type == tt::tt_metal::DataType::UINT32) {
         std::vector<uint32_t> data;
         file.get(std::string(name) + "/data", data);
-        tensor =
-            core::from_vector<uint32_t, DataType::UINT32>(data, shape, &ttml::autograd::ctx().get_device(), layout);
+        tensor = core::from_vector<uint32_t, tt::tt_metal::DataType::UINT32>(
+            data, shape, &ttml::autograd::ctx().get_device(), layout);
     } else {
         throw std::runtime_error(fmt::format("Unsupported data type: {}", magic_enum::enum_name(data_type)));
     }

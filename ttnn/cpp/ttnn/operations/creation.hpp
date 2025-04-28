@@ -79,28 +79,37 @@ static Tensor arange_impl(
     const MemoryConfig& output_mem_config = MemoryConfig{
         .memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED}) {
     constexpr DataType data_type = tt::tt_metal::convert_to_data_type<T>();
-    // Current implementation restrictions
-    TT_ASSERT(step > 0, "Step must be greater than 0");
-    TT_ASSERT(start < stop, "Start must be less than step");
-    auto size = tt::div_up((stop - start), step);
-    if (size % 2 != 0) {
-        size++;
-    }
-    auto owned_buffer = tt::tt_metal::owned_buffer::create<T>(size);
+
+    TT_FATAL(step != 0, "Step must be nonzero");
+    TT_FATAL(
+        !((step > 0 && start > stop) || (step < 0 && start < stop)),
+        "Invalid range: Step direction does not match range bounds");
+
+    auto size = std::max<int64_t>(0, tt::div_up(std::abs(stop - start), std::abs(step)));
+    auto owned_buffer = std::vector<T>(size);
 
     auto index = 0;
-    for (auto value = start; value < stop; value += step) {
+    for (auto value = start; (step > 0) ? (value < stop) : (value > stop); value += step) {
         if constexpr (std::is_same_v<T, ::bfloat16>) {
             owned_buffer[index++] = T(static_cast<float>(value));
         } else {
             owned_buffer[index++] = static_cast<T>(value);
         }
     }
-    auto output =
-        Tensor(
-            OwnedStorage{owned_buffer}, ttnn::Shape{1, 1, 1, static_cast<uint32_t>(size)}, data_type, Layout::ROW_MAJOR)
-            .to_layout(layout);
+    auto output = Tensor(
+                      tt::tt_metal::HostStorage{tt::tt_metal::host_buffer::create(std::move(owned_buffer))},
+                      ttnn::Shape{static_cast<uint32_t>(size)},
+                      data_type,
+                      Layout::ROW_MAJOR)
+                      .to_layout(layout);
     if (device.has_value()) {
+        auto devices = device->get_devices();
+        if (devices.size() == 1) {
+            // TODO #20966: Remove single device support and branches + dynamic_cast
+            if (auto mesh_device = dynamic_cast<MeshDevice*>(devices[0])) {
+                return output.to_device(mesh_device, output_mem_config);
+            }
+        }
         output = output.to_device(device->get_devices(), output_mem_config);
     }
     return output;
@@ -117,31 +126,28 @@ static Tensor full_impl(
     std::optional<Tensor> optional_output_tensor) {
     constexpr DataType data_type = tt::tt_metal::convert_to_data_type<T>();
     TensorSpec tensor_spec(shape, TensorLayout(data_type, PageConfig(layout), MemoryConfig{}));
-    auto owned_buffer = tt::tt_metal::owned_buffer::create<T>(
-        tensor_spec.physical_shape().height() * tensor_spec.physical_shape().width());
+    auto owned_buffer = std::vector<T>(tensor_spec.physical_shape().height() * tensor_spec.physical_shape().width());
     // TODO: 15061 - Generalize the header to support generic vector / view types.
     std::fill(std::begin(owned_buffer), std::end(owned_buffer), value);
 
-    if (!optional_output_tensor.has_value()) {
-        auto output = Tensor(OwnedStorage{owned_buffer}, shape, data_type, layout);
-        if (!devices.empty()) {
-            output = output.to_device(devices, output_mem_config);
-        }
-        return output;
+    Tensor host_tensor(
+        tt::tt_metal::HostStorage{tt::tt_metal::host_buffer::create(std::move(owned_buffer))},
+        shape,
+        data_type,
+        layout);
+    if (optional_output_tensor.has_value()) {
+        tt::tt_metal::write_tensor(host_tensor, *optional_output_tensor, queue_id);
+        return *optional_output_tensor;
+    } else if (devices.empty()) {
+        return host_tensor;
     } else {
-        const auto buffers = optional_output_tensor->buffers();
-        const bool using_fast_dispatch = (std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr);
-
-        for (auto* buffer : buffers) {
-            if (using_fast_dispatch) {
-                auto& cmd_queue = buffer->device()->command_queue(*queue_id);
-                tt::tt_metal::EnqueueWriteBuffer(cmd_queue, *buffer, owned_buffer.data(), /*blocking=*/false);
-            } else {
-                tt::tt_metal::detail::WriteToBuffer(*buffer, owned_buffer.get());
+        if (devices.size() == 1) {
+            // TODO #20966: Remove single device support and branches + dynamic_cast
+            if (auto mesh_device = dynamic_cast<MeshDevice*>(devices[0])) {
+                return host_tensor.to_device(mesh_device, output_mem_config);
             }
         }
-
-        return *optional_output_tensor;
+        return host_tensor.to_device(devices, output_mem_config);
     }
 }
 
@@ -160,10 +166,15 @@ inline ttnn::Tensor full_impl(
     const std::vector<IDevice*>& workers_to_use =
         optional_output_tensor.has_value() ? optional_output_tensor->get_workers(/*blocking=*/true) : workers;
 
-    Layout layout_value = optional_output_tensor.has_value() ? optional_output_tensor.value().get_layout()
-                                                             : layout.value_or(ttnn::ROW_MAJOR_LAYOUT);
     DataType dtype_value = optional_output_tensor.has_value() ? optional_output_tensor.value().get_dtype()
                                                               : dtype.value_or(DataType::BFLOAT16);
+    auto get_default_layout = [dtype_value]() {
+        return (dtype_value == DataType::BFLOAT4_B || dtype_value == DataType::BFLOAT8_B) ? ttnn::TILE_LAYOUT
+                                                                                          : ttnn::ROW_MAJOR_LAYOUT;
+    };
+
+    Layout layout_value = optional_output_tensor.has_value() ? optional_output_tensor.value().get_layout()
+                                                             : layout.value_or(get_default_layout());
     ttnn::Shape shape_value =
         optional_output_tensor.has_value() ? optional_output_tensor.value().get_logical_shape() : shape;
     MemoryConfig mem_cfg = optional_output_tensor.has_value() ? optional_output_tensor.value().memory_config()
@@ -180,6 +191,16 @@ inline ttnn::Tensor full_impl(
         case DataType::UINT32: return concrete_full.template operator()<uint32_t>(fill_value);
         case DataType::FLOAT32: return concrete_full.template operator()<float>(fill_value);
         case DataType::BFLOAT16: return concrete_full.template operator()<::bfloat16>(static_cast<float>(fill_value));
+        case DataType::BFLOAT4_B:
+        case DataType::BFLOAT8_B: {
+            TensorSpec tensor_spec(shape_value, TensorLayout(dtype_value, PageConfig(layout_value), mem_cfg));
+            std::vector<float> fill_value_vec(shape_value.volume(), static_cast<float>(fill_value));
+            auto output = tt::tt_metal::Tensor::from_vector(std::move(fill_value_vec), tensor_spec);
+            if (!workers_to_use.empty()) {
+                output = output.to_device(workers_to_use, mem_cfg);
+            }
+            return output;
+        }
         default: TT_THROW("Unsupported DataType!");
     }
 }
@@ -324,6 +345,10 @@ struct Empty {
         const Layout& layout,
         ttnn::AnyDevice device,
         const MemoryConfig& memory_config) {
+        if (auto mesh_device = device.get_mesh_device()) {
+            return allocate_tensor_on_mesh(
+                TensorSpec(shape, TensorLayout(dtype, PageConfig(layout), memory_config)), mesh_device);
+        }
         return allocate_tensor_on_devices(
             TensorSpec(shape, TensorLayout(dtype, PageConfig(layout), memory_config)), device.get_devices());
     }
@@ -336,11 +361,23 @@ struct EmptyLike {
         const std::optional<Layout>& layout = std::nullopt,
         detail::OptionalAnyDevice device_arg = std::nullopt,
         const std::optional<MemoryConfig>& memory_config = std::nullopt) {
-        const std::vector<IDevice*>& devices =
-            device_arg.has_value() ? device_arg->get_devices() : tensor.get_workers(/*blocking=*/true);
         Layout layout_value = layout.value_or(tensor.get_layout());
         DataType dtype_value = dtype.value_or(tensor.get_dtype());
         MemoryConfig mem_cfg = memory_config.value_or(tensor.memory_config());
+        std::vector<IDevice*> devices;
+        if (device_arg.has_value()) {
+            devices = device_arg->get_devices();
+        } else {
+            auto tensor_device = tensor.device();
+            // TODO #20966: Remove single device support and branches + dynamic_cast
+            if (auto mesh_device = dynamic_cast<MeshDevice*>(tensor_device)) {
+                return allocate_tensor_on_mesh(
+                    TensorSpec(
+                        tensor.get_logical_shape(), TensorLayout(dtype_value, PageConfig(layout_value), mem_cfg)),
+                    mesh_device);
+            }
+            devices = tensor.get_workers(/*blocking=*/true);
+        }
         return allocate_tensor_on_devices(
             TensorSpec(tensor.get_logical_shape(), TensorLayout(dtype_value, PageConfig(layout_value), mem_cfg)),
             devices);
@@ -471,7 +508,6 @@ constexpr auto ones_like =
 constexpr auto empty_like =
     ttnn::decorators::register_operation<"ttnn::empty_like", ttnn::operations::creation::EmptyLike>();
 
-constexpr auto arange =
-    ttnn::decorators::register_operation_with_auto_launch_op<"ttnn::arange", ttnn::operations::creation::Arange>();
+constexpr auto arange = ttnn::decorators::register_operation<"ttnn::arange", ttnn::operations::creation::Arange>();
 
 }  // namespace ttnn

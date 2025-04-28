@@ -76,12 +76,13 @@ def run_test_update_cache_decode(
         tt_updated_slice.append(tt_slice)
     tt_updated_slice = torch.stack(tt_updated_slice, dim=0).permute(2, 0, 1, 3)
 
+    expected_pcc = 0.98 if cache_dtype == ttnn.bfloat4_b else 0.99
     if input_dtype == ttnn.bfloat16 and cache_dtype == input_dtype:
         eq_cache, output_cache = comp_equal(cache, tt_got_back)  # checks the entire kv cache
         eq_update, output_update = comp_equal(x, tt_updated_slice)  # checks the updated parts
     else:
-        eq_cache, output_cache = comp_pcc(cache, tt_got_back)  # checks the entire kv cache
-        eq_update, output_update = comp_pcc(x, tt_updated_slice)  # checks the updated parts
+        eq_cache, output_cache = comp_pcc(cache, tt_got_back, pcc=expected_pcc)  # checks the entire kv cache
+        eq_update, output_update = comp_pcc(x, tt_updated_slice, pcc=expected_pcc)  # checks the updated parts
     logger.debug(output_cache)
     logger.debug(output_update)
 
@@ -95,7 +96,7 @@ def run_test_update_cache_decode(
                     logger.info(f"cache at {i}: {cache[:, :, i, :]}")
                     logger.info(f"tt_got_back at {i}: {tt_got_back[:, :, i, :]}")
             else:
-                eq, pcc = comp_pcc(cache[:, :, i, :], tt_got_back[:, :, i, :])
+                eq, pcc = comp_pcc(cache[:, :, i, :], tt_got_back[:, :, i, :], pcc=expected_pcc)
                 if not eq:
                     logger.error(f"cache_delta {pcc} pcc at {i}: {cache_delta[:, :, i, :]}")
                     logger.info(f"cache at {i}: {cache[:, :, i, :]}")
@@ -113,7 +114,7 @@ def run_test_update_cache_decode(
 @pytest.mark.parametrize("num_heads", [8])
 @pytest.mark.parametrize("input_dtype", [ttnn.bfloat16])
 @pytest.mark.parametrize("cache_idx_tensor", [True, False])
-@pytest.mark.parametrize("cache_dtype", [ttnn.bfloat8_b, ttnn.bfloat16])
+@pytest.mark.parametrize("cache_dtype", [ttnn.bfloat4_b, ttnn.bfloat8_b, ttnn.bfloat16])
 def test_update_cache_decode(
     check_memory,
     share_cache,
@@ -127,6 +128,9 @@ def test_update_cache_decode(
     device,
     use_program_cache,
 ):
+    if cache_dtype == ttnn.bfloat4_b and (share_cache or max_seq_len == 2048 or not cache_idx_tensor):
+        pytest.skip("just need to sanity-check a select test case for bfp4")
+
     torch.manual_seed(0)
 
     if check_memory:

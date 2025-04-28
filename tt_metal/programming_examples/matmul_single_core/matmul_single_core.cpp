@@ -6,10 +6,9 @@
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/util.hpp>
 #include <tt-metalium/bfloat16.hpp>
-#include <tt-metalium/test_tiles.hpp>
+#include <tt-metalium/tilize_utils.hpp>
 #include <tt-metalium/command_queue.hpp>
 #include <matmul_common/bmm_op.hpp>
-#include <tt-metalium/tilize_untilize.hpp>
 #include <tt-metalium/device_impl.hpp>
 
 using namespace tt::constants;
@@ -24,7 +23,7 @@ void golden_matmul(
     uint32_t M,
     uint32_t N,
     uint32_t K,
-    uint32_t B) {
+    uint32_t /*B*/) {
     std::uint32_t idx_c = 0;
     std::uint32_t idx_a = 0;
     std::uint32_t idx_b = 0;
@@ -147,11 +146,11 @@ void matmul_single_core(
     /*
      * Compile time arguments
      */
-    bool src0_is_dram = src0_dram_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
-    bool src1_is_dram = src1_dram_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
+    bool src0_is_dram = src0_dram_buffer->buffer_type() == tt_metal::BufferType::DRAM;
+    bool src1_is_dram = src1_dram_buffer->buffer_type() == tt_metal::BufferType::DRAM;
     std::vector<uint32_t> reader_compile_time_args = {(uint32_t)src0_is_dram, (uint32_t)src1_is_dram};
 
-    bool dst_is_dram = dst_dram_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
+    bool dst_is_dram = dst_dram_buffer->buffer_type() == tt_metal::BufferType::DRAM;
     std::vector<uint32_t> writer_compile_time_args = {(uint32_t)dst_is_dram};
 
     /*
@@ -207,7 +206,7 @@ void matmul_single_core(
 
 ///////////////////////////////////////
 
-int main(int argc, char** argv) {
+int main() {
     bool pass = true;
 
     if (getenv("TT_METAL_SLOW_DISPATCH_MODE") != nullptr) {
@@ -243,13 +242,13 @@ int main(int argc, char** argv) {
         golden_matmul(src0_vec, src1_vec, golden_vec, M, N, K, B);
 
         /* Input vector tilizing */
-        tilize(src0_vec, M, K);
-        tilize(src1_vec, K, N);
+        src0_vec = tilize_nfaces(src0_vec, M, K);
+        src1_vec = tilize_nfaces(src1_vec, K, N);
 
         /* Calling the MatMul host program. Read in result into a host vector */
         std::vector<bfloat16> result_vec(dram_buffer_C_size / sizeof(bfloat16));
         matmul_single_core(src0_vec, src1_vec, result_vec, false, M, N, K, B, device);
-        untilize(result_vec, M, N);
+        result_vec = untilize_nfaces(result_vec, M, N);
 
         log_info(tt::LogVerif, "Output vector of size {}", result_vec.size());
 

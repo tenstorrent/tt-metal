@@ -42,10 +42,10 @@ struct MorehAdamOperation {
 
     struct ProgramFactory {
         struct shared_variables_t {
-            KernelHandle unary_reader_kernel_id;
-            KernelHandle unary_writer_kernel_id;
-            KernelHandle compute_kernel_group1_id;
-            KernelHandle compute_kernel_group2_id;
+            tt::tt_metal::KernelHandle unary_reader_kernel_id;
+            tt::tt_metal::KernelHandle unary_writer_kernel_id;
+            tt::tt_metal::KernelHandle compute_kernel_group1_id;
+            tt::tt_metal::KernelHandle compute_kernel_group2_id;
             CoreRangeSet core_group_1;
             CoreRangeSet core_group_2;
             std::size_t num_cores;
@@ -102,7 +102,6 @@ struct MorehAdamOperation {
 }  // namespace ttnn::operations::moreh::moreh_adam
 
 namespace ttnn::prim {
-constexpr auto moreh_adam = ttnn::register_operation_with_auto_launch_op<
-    "ttnn::prim::moreh_adam",
-    ttnn::operations::moreh::moreh_adam::MorehAdamOperation>();
+constexpr auto moreh_adam =
+    ttnn::register_operation<"ttnn::prim::moreh_adam", ttnn::operations::moreh::moreh_adam::MorehAdamOperation>();
 }

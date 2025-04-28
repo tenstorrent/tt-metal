@@ -4,12 +4,12 @@
 
 #include "tt_memory.h"
 
-#include <cstddef>
+#include <assert.hpp>
+#include <algorithm>
 #include <cstdint>
-#include <limits>
+#include <span>
 
 #include "tt_elffile.hpp"
-#include <assert.hpp>
 
 namespace ll_api {
 
@@ -21,7 +21,7 @@ memory::memory() {
     link_spans_.reserve(initial_span_space_);
 }
 
-memory::memory(std::string const& path, Loading loading) : loading_(loading) {
+memory::memory(std::string_view path, Loading loading) : loading_(loading) {
     ElfFile elf;
 
     elf.ReadImage(path);
@@ -97,6 +97,12 @@ void memory::process_spans(
         std::vector<uint32_t>::iterator it = data_.begin() + offset;
         callback(it, span.addr, span.len);
         offset += span.len;
+    }
+}
+
+void memory::update_spans(std::function<void(uint64_t& addr)>& callback) {
+    for (auto& span : link_spans_) {
+        callback(span.addr);
     }
 }
 

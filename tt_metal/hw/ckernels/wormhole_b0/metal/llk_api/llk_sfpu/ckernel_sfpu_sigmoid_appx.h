@@ -13,7 +13,7 @@ using namespace sfpi;
 namespace ckernel {
 namespace sfpu {
 
-template <bool APPROXIMATION_MODE, int ITERATIONS>
+template <int ITERATIONS = 8>
 inline void calculate_sigmoid_appx() {
     vUInt l0 = l_reg[LRegs::LReg0];
     vUInt l1 = l_reg[LRegs::LReg1];
@@ -33,7 +33,6 @@ inline void calculate_sigmoid_appx() {
     l_reg[LRegs::LReg2] = l2;
 }
 
-template <bool APPROXIMATION_MODE>
 inline void sigmoid_appx_init() {
     uint imm0;
     uint imm1;

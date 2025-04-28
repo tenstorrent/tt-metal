@@ -2,13 +2,37 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "device_fixture.hpp"
-#include "gtest/gtest.h"
-#include "circular_buffer_test_utils.hpp"
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/tt_metal.hpp>
+#include <chrono>
+#include <stdint.h>
+#include <tt-metalium/allocator.hpp>
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/circular_buffer_constants.h>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tt_metal.hpp>
+#include <algorithm>
+#include <map>
+#include <memory>
+#include <utility>
+#include <variant>
+#include <vector>
+
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/buffer_types.hpp>
+#include "circular_buffer_test_utils.hpp"
+#include <tt-metalium/circular_buffer_types.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/data_types.hpp>
+#include <tt-metalium/device.hpp>
+#include "device_fixture.hpp"
+#include "gtest/gtest.h"
+#include <tt-metalium/hal_types.hpp>
+#include <tt-metalium/kernel_types.hpp>
+#include <tt-metalium/program.hpp>
+#include <tt_stl/span.hpp>
+#include <tt-metalium/tt_backend_api_types.hpp>
+#include "umd/device/tt_core_coordinates.h"
+#include "umd/device/types/xy_pair.h"
+#include <tt-metalium/util.hpp>
 
 using std::vector;
 using namespace tt::tt_metal;
@@ -179,7 +203,7 @@ TEST_F(DeviceFixture, TensixTestCircularBuffersAndL1BuffersCollision) {
         auto l1_buffer = CreateBuffer(buff_config);
 
         // L1 buffer is entirely in bank 0
-        auto core = l1_buffer->logical_core_from_bank_id(0);
+        auto core = l1_buffer->allocator()->get_logical_core_from_bank_id(0);
         CoreRange cr(core, core);
         CoreRangeSet cr_set({cr});
         initialize_program(program, cr_set);

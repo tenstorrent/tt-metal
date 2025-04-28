@@ -2,12 +2,15 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <memory>
 #include <tt-metalium/buffer.hpp>
-#include <tt-metalium/buffer_constants.hpp>
-#include "gtest/gtest.h"
+#include <tt-metalium/buffer_types.hpp>
+#include <memory>
 
 #include "device_fixture.hpp"
+#include "gtest/gtest.h"
+#include <tt-metalium/host_api.hpp>
+
+namespace tt::tt_metal {
 
 TEST_F(DeviceSingleCardBufferFixture, TestInvalidBufferRegion) {
     const InterleavedBufferConfig& buffer_config{
@@ -65,3 +68,5 @@ TEST_F(DeviceSingleCardBufferFixture, TestFullBufferRegion) {
     const BufferRegion buffer_region(0, 2048);
     EXPECT_FALSE(buffer.get()->is_valid_partial_region(buffer_region));
 }
+
+}  // namespace tt::tt_metal

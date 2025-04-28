@@ -34,7 +34,6 @@ TILE_LAYOUT = Layout.TILE
 
 StorageType = ttnn._ttnn.tensor.StorageType
 DEVICE_STORAGE_TYPE = StorageType.DEVICE
-MULTI_DEVICE_STORAGE_TYPE = StorageType.MULTI_DEVICE
 
 TILE_SIZE = 32
 
@@ -65,7 +64,9 @@ class ShardStrategy(Enum):
 
 
 MeshShape = ttnn._ttnn.multi_device.MeshShape
-MeshOffset = ttnn._ttnn.multi_device.MeshOffset
+MeshCoordinate = ttnn._ttnn.multi_device.MeshCoordinate
+MeshCoordinateRange = ttnn._ttnn.multi_device.MeshCoordinateRange
+MeshCoordinateRangeSet = ttnn._ttnn.multi_device.MeshCoordinateRangeSet
 ShardOrientation = ttnn._ttnn.tensor.ShardOrientation
 ShardMode = ttnn._ttnn.tensor.ShardMode
 ShardSpec = ttnn._ttnn.tensor.ShardSpec
@@ -73,6 +74,7 @@ CoreRangeSet = ttnn._ttnn.tensor.CoreRangeSet
 CoreRange = ttnn._ttnn.tensor.CoreRange
 CoreCoord = ttnn._ttnn.tensor.CoreCoord
 
+QueueId = ttnn._ttnn.types.QueueId
 
 UnaryWithParam = ttnn._ttnn.activation.UnaryWithParam
 UnaryOpType = ttnn._ttnn.activation.UnaryOpType

@@ -934,7 +934,7 @@ def lerp_ternary(x, y, z, *args, **kwargs):
 
 
 ## Binary Ops
-def atan2(x, y, *args, **kwargs):
+def atan2(y, x, *args, **kwargs):
     return torch.atan2(y, x)
 
 
@@ -976,8 +976,8 @@ def xlogy(x, y, *args, **kwargs):
 
 def prod(x, *args, all_dimensions, dim, **kwargs):
     if all_dimensions:
-        result = torch.prod(x)
-        return result.view(1, 1, 1, 1)
+        return torch.prod(x)
+
     return torch.prod(x, dim, keepdim=kwargs["keepdim"])
 
 

@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <algorithm>
+#include <math.h>
 
 #include "ttnn/operations/data_movement/indexed_fill/device/indexed_fill_op.hpp"
 #include <tt-metalium/work_split.hpp>
@@ -53,10 +54,10 @@ operation::ProgramWithCallbacks indexed_fill_multi_core(
             .set_page_size(batch_cb_index, batch_page_size);
     auto batch_cb = tt::tt_metal::CreateCircularBuffer(program, all_cores, batch_cb_config);
 
-    bool in0_is_dram = input_a.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
-    bool in1_is_dram = input_b.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
-    bool out_is_dram = output.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
-    bool batch_ids_is_dram = batch_ids.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
+    bool in0_is_dram = input_a.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM;
+    bool in1_is_dram = input_b.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM;
+    bool out_is_dram = output.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM;
+    bool batch_ids_is_dram = batch_ids.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM;
     bool stick_size_is_power_of_two = is_power_of_two_at_least_32(page_size);
     uint32_t log2_stick_size = stick_size_is_power_of_two ? (std::uint32_t)log2(page_size) : 0;
 

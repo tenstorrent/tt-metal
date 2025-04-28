@@ -8,6 +8,8 @@
 #include "interleaved_to_sharded_partial.hpp"
 #include <tt-metalium/work_split.hpp>
 
+using namespace tt::tt_metal;
+
 namespace ttnn::operations::data_movement {
 
 ttnn::Tensor InterleavedToShardedPartialOperation::invoke(
@@ -20,8 +22,6 @@ ttnn::Tensor InterleavedToShardedPartialOperation::invoke(
     tt::tt_metal::TensorMemoryLayout shard_scheme,
     tt::tt_metal::ShardOrientation shard_orientation,
     const std::optional<DataType>& data_type_arg) {
-    std::vector<Tensor> output_tensors = {Tensor(tt::tt_metal::operation::get_workers_for_op_output({input_tensor}))};
-
     bool row_wise = shard_orientation == tt::tt_metal::ShardOrientation::ROW_MAJOR;
     CoreCoord grid_size;
     CoreRangeSet grid_set;

@@ -221,7 +221,9 @@ void py_module(py::module& module) {
 
     module.def(
         "allocate_tensor_on_device",
-        py::overload_cast<const ttnn::TensorSpec&, MeshDevice*>(&ttnn::operations::core::allocate_tensor_on_device),
+        [](const ttnn::TensorSpec& spec, MeshDevice* device) {
+            return tt::tt_metal::allocate_tensor_on_mesh(spec, device);
+        },
         py::arg("tensor_spec"),
         py::arg("mesh_device"));
 
@@ -241,12 +243,18 @@ void py_module(py::module& module) {
 
     module.def(
         "allocate_tensor_on_device",
-        py::overload_cast<
-            const ttnn::Shape&,
-            ttnn::DataType,
-            ttnn::Layout,
-            MeshDevice*,
-            const std::optional<ttnn::MemoryConfig>&>(&ttnn::operations::core::allocate_tensor_on_device),
+        [](const ttnn::Shape& shape,
+           ttnn::DataType dtype,
+           ttnn::Layout layout,
+           MeshDevice* device,
+           const std::optional<ttnn::MemoryConfig>& mem_config) {
+            return tt::tt_metal::allocate_tensor_on_mesh(
+                TensorSpec(
+                    shape,
+                    tt::tt_metal::TensorLayout(
+                        dtype, tt::tt_metal::PageConfig(layout), mem_config.value_or(MemoryConfig{}))),
+                device);
+        },
         py::arg("shape"),
         py::arg("dtype"),
         py::arg("layout"),
@@ -255,76 +263,14 @@ void py_module(py::module& module) {
 
     module.def(
         "copy_host_to_device_tensor",
-        &ttnn::operations::core::copy_host_to_device_tensor,
+        [](const ttnn::Tensor& host_tensor, ttnn::Tensor device_tensor, QueueId cq_id = ttnn::DefaultQueueId) {
+            // Copies `device_tensor`, to be able to asynchronously populate metadata in tensor attributes, stored as a
+            // shared pointer.
+            tt::tt_metal::write_tensor(host_tensor, std::move(device_tensor), cq_id);
+        },
         py::arg("host_tensor"),
         py::arg("device_tensor"),
         py::arg("cq_id") = ttnn::DefaultQueueId);
-
-    module.def(
-        "begin_trace_capture",
-        py::overload_cast<IDevice*, const QueueId>(&ttnn::operations::core::begin_trace_capture),
-        py::arg("device"),
-        py::kw_only(),
-        py::arg("cq_id") = ttnn::DefaultQueueId);
-
-    module.def(
-        "end_trace_capture",
-        py::overload_cast<IDevice*, const uint32_t, const QueueId>(&ttnn::operations::core::end_trace_capture),
-        py::arg("device"),
-        py::arg("trace_id"),
-        py::kw_only(),
-        py::arg("cq_id") = ttnn::DefaultQueueId);
-
-    module.def(
-        "execute_trace",
-        py::overload_cast<IDevice*, const uint32_t, const QueueId, bool>(&ttnn::operations::core::execute_trace),
-        py::arg("device"),
-        py::arg("trace_id"),
-        py::kw_only(),
-        py::arg("cq_id") = ttnn::DefaultQueueId,
-        py::arg("blocking") = true);
-
-    module.def(
-        "release_trace",
-        py::overload_cast<IDevice*, const uint32_t>(&ttnn::operations::core::release_trace),
-        py::arg("device"),
-        py::arg("trace_id"));
-
-    module.def(
-        "begin_trace_capture",
-        [](MeshDevice* device, const QueueId cq_id) {
-            return ttnn::operations::core::begin_trace_capture(device, cq_id);
-        },
-        py::arg("mesh_device"),
-        py::kw_only(),
-        py::arg("cq_id") = ttnn::DefaultQueueId);
-
-    module.def(
-        "end_trace_capture",
-        [](MeshDevice* device, const uint32_t tid, const QueueId cq_id) {
-            return ttnn::operations::core::end_trace_capture(device, tid, cq_id);
-        },
-        py::arg("mesh_device"),
-        py::arg("trace_id"),
-        py::kw_only(),
-        py::arg("cq_id") = ttnn::DefaultQueueId);
-
-    module.def(
-        "execute_trace",
-        [](MeshDevice* device, const uint32_t tid, const QueueId cq_id, const bool blocking) {
-            return ttnn::operations::core::execute_trace(device, tid, cq_id, blocking);
-        },
-        py::arg("mesh_device"),
-        py::arg("trace_id"),
-        py::kw_only(),
-        py::arg("cq_id") = ttnn::DefaultQueueId,
-        py::arg("blocking") = true);
-
-    module.def(
-        "release_trace",
-        [](MeshDevice* device, const uint32_t tid) { return ttnn::operations::core::release_trace(device, tid); },
-        py::arg("mesh_device"),
-        py::arg("trace_id"));
 
     bind_registered_operation(
         module,

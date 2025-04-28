@@ -4,10 +4,24 @@
 
 #include "tlb_config.hpp"
 
-#include "umd/device/blackhole_implementation.h"
-#include "umd/device/grayskull_implementation.h"
-#include "umd/device/wormhole_implementation.h"
 #include <assert.hpp>
+#include <algorithm>
+#include <cstdint>
+#include <string>
+#include <unordered_map>
+#include <vector>
+
+#include "core_coord.hpp"
+#include "metal_soc_descriptor.h"
+#include "tt_backend_api_types.hpp"
+#include <umd/device/blackhole_implementation.h>
+#include <umd/device/cluster.h>
+#include <umd/device/grayskull_implementation.h>
+#include <umd/device/tt_core_coordinates.h>
+#include <umd/device/tt_xy_pair.h>
+#include <umd/device/types/arch.h>
+#include <umd/device/types/xy_pair.h>
+#include <umd/device/wormhole_implementation.h>
 
 namespace ll_api {
 
@@ -172,20 +186,21 @@ void configure_static_tlbs(
         default: TT_THROW("Configuring static TLBs is not supported for {}", tt::get_string(arch));
     }
 
-    auto statically_mapped_cores = sdesc.workers;
-    statically_mapped_cores.insert(
-        statically_mapped_cores.end(), sdesc.ethernet_cores.begin(), sdesc.ethernet_cores.end());
     std::int32_t address = 0;
-
     // Setup static TLBs for all worker cores
-    for (auto& core : statically_mapped_cores) {
-        auto tlb_index = get_static_tlb_index(core);
+    for (const CoreCoord& core : sdesc.get_cores(CoreType::TENSIX, sdesc.get_umd_coord_system())) {
+        auto tlb_index = get_static_tlb_index({core.x, core.y});
         // TODO
         // Note: see issue #10107
         // Strict is less performant than Posted, however, metal doesn't presently
         // use this on a perf path and the launch_msg "kernel config" needs to
         // arrive prior to the "go" message during device init and slow dispatch
         // Revisit this when we have a more flexible UMD api
+        device_driver.configure_tlb(mmio_device_id, core, tlb_index, address, TLB_DATA::Strict);
+    }
+    // Setup static TLBs for all eth cores
+    for (const CoreCoord& core : sdesc.get_cores(CoreType::ETH, sdesc.get_umd_coord_system())) {
+        auto tlb_index = get_static_tlb_index({core.x, core.y});
         device_driver.configure_tlb(mmio_device_id, core, tlb_index, address, TLB_DATA::Strict);
     }
 

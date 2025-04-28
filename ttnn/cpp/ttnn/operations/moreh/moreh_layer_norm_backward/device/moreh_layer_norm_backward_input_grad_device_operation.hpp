@@ -31,8 +31,8 @@ struct MorehLayerNormBackwardInputGradOperation {
 
     struct ProgramFactory {
         struct shared_variables_t {
-            KernelHandle unary_reader_kernel_id;
-            KernelHandle unary_writer_kernel_id;
+            tt::tt_metal::KernelHandle unary_reader_kernel_id;
+            tt::tt_metal::KernelHandle unary_writer_kernel_id;
             std::size_t num_cores;
             std::size_t num_cores_y;
         };
@@ -73,7 +73,7 @@ struct MorehLayerNormBackwardInputGradOperation {
 }  // namespace ttnn::operations::moreh::moreh_layer_norm_backward_input_grad
 
 namespace ttnn::prim {
-constexpr auto moreh_layer_norm_backward_input_grad = ttnn::register_operation_with_auto_launch_op<
+constexpr auto moreh_layer_norm_backward_input_grad = ttnn::register_operation<
     "ttnn::prim::moreh_layer_norm_backward_input_grad",
     operations::moreh::moreh_layer_norm_backward_input_grad::MorehLayerNormBackwardInputGradOperation>();
 }  // namespace ttnn::prim

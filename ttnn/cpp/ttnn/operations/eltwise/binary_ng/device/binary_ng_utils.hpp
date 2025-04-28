@@ -54,7 +54,12 @@ struct OpConfig {
         RIGHT_SHIFT,
         BITWISE_AND,
         BITWISE_OR,
-        BITWISE_XOR
+        BITWISE_XOR,
+        QUANT,
+        REQUANT,
+        DEQUANT,
+        MAXIMUM,
+        MINIMUM
     };
 
     template <class EnumT>
@@ -72,6 +77,11 @@ struct OpConfig {
 void add_activation_defines(
     std::map<std::string, std::string>& defines,
     tt::stl::Span<const unary::UnaryWithParam> activations,
-    std::string_view operand);
+    std::string_view operand,
+    std::optional<DataType> dtype = std::nullopt);
+
+uint32_t pack_scalar_runtime_arg(const float scalar, const DataType dtype, const bool is_quant_op);
+
+std::map<std::string, std::string> make_dataflow_defines(const DataType dtype, const bool is_sfpu_op);
 
 }  // namespace ttnn::operations::binary_ng

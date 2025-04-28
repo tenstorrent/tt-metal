@@ -7,7 +7,6 @@ import os
 import json
 import re
 import torch
-import torch.nn.functional as F
 
 from time import time
 import datasets
@@ -378,8 +377,6 @@ def test_LlamaModel_demo(
     )
 
     check_mesh_device(t3k_mesh_device, model_config)
-
-    t3k_mesh_device.enable_async(True)
 
     args = construct_arg(
         implementation=implementation,

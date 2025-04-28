@@ -2,26 +2,60 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <fmt/base.h>
 #include <gtest/gtest.h>
-#include <math.h>
-
-#include <algorithm>
-#include <functional>
-#include <random>
-
-#include "device_fixture.hpp"
-#include <tt-metalium/tt_metal.hpp>
+#include <magic_enum/magic_enum.hpp>
+#include <stdint.h>
+#include <sys/types.h>
 #include <tt-metalium/host_api.hpp>
-#include "tt_metal/test_utils/comparison.hpp"
-#include "tt_metal/test_utils/df/df.hpp"
-#include "tt_metal/test_utils/print_helpers.hpp"
-#include "tt_metal/test_utils/stimulus.hpp"
+#include <tt-metalium/tt_metal.hpp>
+#include <algorithm>
+#include <bit>
+#include <cctype>
+#include <functional>
+#include <initializer_list>
+#include <iostream>
+#include <map>
+#include <memory>
+#include <optional>
+#include <string>
+#include <string_view>
+#include <type_traits>
+#include <utility>
+#include <variant>
+#include <vector>
+
+#include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/buffer_types.hpp>
+#include <tt-metalium/circular_buffer_types.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/data_types.hpp>
+#include "device_fixture.hpp"
+#include "hostdevcommon/kernel_structs.h"
+#include <tt-metalium/kernel_types.hpp>
+#include <tt-metalium/logger.hpp>
+#include <tt-metalium/program.hpp>
+#include <tt_stl/span.hpp>
 #include "test_golden_impls.hpp"
+#include <tt-metalium/tt_backend_api_types.hpp>
+#include "tt_metal/test_utils/comparison.hpp"
+#include "tt_metal/test_utils/packing.hpp"
+#include "tt_metal/test_utils/print_helpers.hpp"
+#include "umd/device/types/arch.h"
+#include <tt-metalium/utils.hpp>
+
+namespace tt {
+namespace tt_metal {
+class IDevice;
+}  // namespace tt_metal
+}  // namespace tt
+
+namespace tt::tt_metal {
 
 using std::vector;
 using namespace tt;
 using namespace tt::test_utils;
-using namespace tt::tt_metal;
 
 namespace unit_tests::compute::tilize {
 
@@ -34,9 +68,12 @@ enum TilizeType : uint8_t {
 
 // TilizeA_B takes 2 input source vectors instead of one
 using GoldenFunc = std::variant<
-    std::function<std::vector<uint32_t>(const std::vector<uint32_t>&, const GoldenConfig& config)>,
     std::function<std::vector<uint32_t>(
-        const std::vector<uint32_t>&, const std::vector<uint32_t>&, const GoldenConfig& config)>>;
+        const std::vector<uint32_t>&, const ::unit_tests::compute::GoldenConfig& config)>,
+    std::function<std::vector<uint32_t>(
+        const std::vector<uint32_t>&,
+        const std::vector<uint32_t>&,
+        const ::unit_tests::compute::GoldenConfig& config)>>;
 
 struct TestConfig {
     // Whether or not to use *_init_short LLK API calls:
@@ -230,7 +267,7 @@ void run_single_core_tilize_program(tt_metal::IDevice* device, const TestConfig&
     tt_metal::detail::ReadFromBuffer(dst_dram_buffer, result_vec);
 
     vector<uint32_t> golden;
-    GoldenConfig config = {
+    ::unit_tests::compute::GoldenConfig config = {
         .num_tiles_r_dim = test_config.num_tiles_r,
         .num_tiles_c_dim = test_config.num_tiles_c,
         .face_r_dim = test_config.face_r_dim,
@@ -246,13 +283,14 @@ void run_single_core_tilize_program(tt_metal::IDevice* device, const TestConfig&
             if constexpr (std::is_same_v<
                               FuncType,
                               std::function<std::vector<uint32_t>(
-                                  const std::vector<uint32_t>&, const GoldenConfig& config)>>) {
+                                  const std::vector<uint32_t>&, const ::unit_tests::compute::GoldenConfig& config)>>) {
                 golden = func(src0_vec, config);
-            } else if constexpr (
-                std::is_same_v<
-                    FuncType,
-                    std::function<std::vector<uint32_t>(
-                        const std::vector<uint32_t>&, const std::vector<uint32_t>&, const GoldenConfig& config)>>) {
+            } else if constexpr (std::is_same_v<
+                                     FuncType,
+                                     std::function<std::vector<uint32_t>(
+                                         const std::vector<uint32_t>&,
+                                         const std::vector<uint32_t>&,
+                                         const ::unit_tests::compute::GoldenConfig& config)>>) {
                 golden = func(src0_vec, src1_vec, config);
             } else {
                 log_fatal("Invalid golden function type");
@@ -308,7 +346,7 @@ TEST_F(DeviceFixture, TensixComputeUnpackTilize) {
     for (auto num_tile : num_tiles) {
         for (bool fp32_dest_acc_en : {true, false}) {
             // FP32 dest acc not possible for GS
-            if ((fp32_dest_acc_en == true) && (this->arch_ == tt::ARCH::GRAYSKULL)) {
+            if ((fp32_dest_acc_en) && (this->arch_ == tt::ARCH::GRAYSKULL)) {
                 continue;
             }
             for (bool dst_full_sync_en : {true, false}) {
@@ -320,7 +358,7 @@ TEST_F(DeviceFixture, TensixComputeUnpackTilize) {
                     .num_tiles_r = num_tile[0],
                     .num_tiles_c = num_tile[1],
                     .tilize_type = unit_tests::compute::tilize::TilizeType::UNPACK_A,
-                    .golden_function = unit_tests::compute::gold_standard_tilize};
+                    .golden_function = ::unit_tests::compute::gold_standard_tilize};
                 unit_tests::compute::tilize::run_single_core_tilize_program(this->devices_.at(0), test_config);
             }
         }
@@ -340,7 +378,7 @@ TEST_F(DeviceFixture, TensixComputeUnpackTilizeA_B) {
             .num_tiles_r = 2,
             .num_tiles_c = 8,
             .tilize_type = unit_tests::compute::tilize::TilizeType::UNPACK_A_B,
-            .golden_function = unit_tests::compute::gold_standard_tilize_w_elwadd};
+            .golden_function = ::unit_tests::compute::gold_standard_tilize_w_elwadd};
         unit_tests::compute::tilize::run_single_core_tilize_program(this->devices_.at(0), test_config);
     }
 }
@@ -350,7 +388,7 @@ TEST_F(DeviceFixture, TensixComputeUnpackTilizeShortInit) {
     for (auto num_tile : num_tiles) {
         for (bool fp32_dest_acc_en : {true, false}) {
             // FP32 dest acc not possible for GS
-            if ((fp32_dest_acc_en == true) && (this->arch_ == tt::ARCH::GRAYSKULL)) {
+            if ((fp32_dest_acc_en) && (this->arch_ == tt::ARCH::GRAYSKULL)) {
                 continue;
             }
             for (bool dst_full_sync_en : {true, false}) {
@@ -363,7 +401,7 @@ TEST_F(DeviceFixture, TensixComputeUnpackTilizeShortInit) {
                     .num_tiles_r = num_tile[0],
                     .num_tiles_c = num_tile[1],
                     .tilize_type = unit_tests::compute::tilize::TilizeType::UNPACK_A,
-                    .golden_function = unit_tests::compute::gold_standard_tilize};
+                    .golden_function = ::unit_tests::compute::gold_standard_tilize};
                 unit_tests::compute::tilize::run_single_core_tilize_program(this->devices_.at(0), test_config);
             }
         }
@@ -379,7 +417,7 @@ TEST_F(DeviceFixture, TensixComputeUnpackUntilize) {
     for (auto num_tile : num_tiles) {
         for (bool fp32_dest_acc_en : {true, false}) {
             // FP32 dest acc not possible for GS
-            if ((fp32_dest_acc_en == true) && (this->arch_ == tt::ARCH::GRAYSKULL)) {
+            if ((fp32_dest_acc_en) && (this->arch_ == tt::ARCH::GRAYSKULL)) {
                 continue;
             }
             for (bool dst_full_sync_en : {true, false}) {
@@ -391,7 +429,7 @@ TEST_F(DeviceFixture, TensixComputeUnpackUntilize) {
                     .num_tiles_r = num_tile[0],
                     .num_tiles_c = num_tile[1],
                     .untilize_type = unit_tests::compute::tilize::UntilizeType::UNPACK,
-                    .golden_function = unit_tests::compute::gold_standard_untilize};
+                    .golden_function = ::unit_tests::compute::gold_standard_untilize};
                 unit_tests::compute::tilize::run_single_core_tilize_program(this->devices_.at(0), test_config);
             }
         }
@@ -403,7 +441,7 @@ TEST_F(DeviceFixture, TensixComputeUnpackUntilizeShortInit) {
     for (auto num_tile : num_tiles) {
         for (bool fp32_dest_acc_en : {true, false}) {
             // FP32 dest acc not possible for GS
-            if ((fp32_dest_acc_en == true) && (this->arch_ == tt::ARCH::GRAYSKULL)) {
+            if ((fp32_dest_acc_en) && (this->arch_ == tt::ARCH::GRAYSKULL)) {
                 continue;
             }
             for (bool dst_full_sync_en : {true, false}) {
@@ -416,7 +454,7 @@ TEST_F(DeviceFixture, TensixComputeUnpackUntilizeShortInit) {
                     .num_tiles_r = num_tile[0],
                     .num_tiles_c = num_tile[1],
                     .untilize_type = unit_tests::compute::tilize::UntilizeType::UNPACK,
-                    .golden_function = unit_tests::compute::gold_standard_untilize};
+                    .golden_function = ::unit_tests::compute::gold_standard_untilize};
                 unit_tests::compute::tilize::run_single_core_tilize_program(this->devices_.at(0), test_config);
             }
         }
@@ -431,7 +469,7 @@ TEST_F(DeviceFixture, TensixComputePackUntilize) {
     for (auto num_tile : num_tiles) {
         for (bool fp32_dest_acc_en : {true, false}) {
             // FP32 dest acc not possible for GS
-            if ((fp32_dest_acc_en == true) && (this->arch_ == tt::ARCH::GRAYSKULL)) {
+            if ((fp32_dest_acc_en) && (this->arch_ == tt::ARCH::GRAYSKULL)) {
                 continue;
             }
             for (bool dst_full_sync_en : {true, false}) {
@@ -443,7 +481,7 @@ TEST_F(DeviceFixture, TensixComputePackUntilize) {
                     .num_tiles_r = num_tile[0],
                     .num_tiles_c = num_tile[1],
                     .untilize_type = unit_tests::compute::tilize::UntilizeType::PACK,
-                    .golden_function = unit_tests::compute::gold_standard_untilize};
+                    .golden_function = ::unit_tests::compute::gold_standard_untilize};
                 unit_tests::compute::tilize::run_single_core_tilize_program(this->devices_.at(0), test_config);
             }
         }
@@ -455,7 +493,7 @@ TEST_F(DeviceFixture, TensixComputePackUntilizeShortInit) {
     for (auto num_tile : num_tiles) {
         for (bool fp32_dest_acc_en : {true, false}) {
             // FP32 dest acc not possible for GS
-            if ((fp32_dest_acc_en == true) && (this->arch_ == tt::ARCH::GRAYSKULL)) {
+            if ((fp32_dest_acc_en) && (this->arch_ == tt::ARCH::GRAYSKULL)) {
                 continue;
             }
             for (bool dst_full_sync_en : {true, false}) {
@@ -468,7 +506,7 @@ TEST_F(DeviceFixture, TensixComputePackUntilizeShortInit) {
                     .num_tiles_r = num_tile[0],
                     .num_tiles_c = num_tile[1],
                     .untilize_type = unit_tests::compute::tilize::UntilizeType::PACK,
-                    .golden_function = unit_tests::compute::gold_standard_untilize};
+                    .golden_function = ::unit_tests::compute::gold_standard_untilize};
                 unit_tests::compute::tilize::run_single_core_tilize_program(this->devices_.at(0), test_config);
             }
         }
@@ -486,7 +524,7 @@ TEST_F(DeviceFixture, TensixComputePackUntilizeDst) {
                 .num_tiles_r = num_tile[0],
                 .num_tiles_c = num_tile[1],
                 .untilize_type = unit_tests::compute::tilize::UntilizeType::DST,
-                .golden_function = unit_tests::compute::gold_standard_untilize};
+                .golden_function = ::unit_tests::compute::gold_standard_untilize};
             unit_tests::compute::tilize::run_single_core_tilize_program(this->devices_.at(0), test_config);
         }
     }
@@ -512,8 +550,10 @@ TEST_F(DeviceFixture, TensixComputePackUntilizeDstTinyTile) {
                 .num_faces_per_tile = num_faces_per_tile,
                 .face_r_dim = face_r_dim,
                 .untilize_type = unit_tests::compute::tilize::UntilizeType::DST,
-                .golden_function = unit_tests::compute::gold_standard_untilize};
+                .golden_function = ::unit_tests::compute::gold_standard_untilize};
             unit_tests::compute::tilize::run_single_core_tilize_program(this->devices_.at(0), test_config);
         }
     }
 }
+
+}  // namespace tt::tt_metal

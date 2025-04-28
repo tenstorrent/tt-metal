@@ -3,11 +3,9 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
-from torch import nn
 
 from typing import List, Tuple, Union, Optional
 from packaging import version
-from collections import OrderedDict
 from PIL import Image
 import os
 import glob

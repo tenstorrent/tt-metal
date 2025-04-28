@@ -1,9 +1,8 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
-import math
 from models.demos.segformer.tt.common import Conv
 
 
@@ -27,14 +26,13 @@ class TtSegformerEfficientSelfAttention:
 
     def __call__(
         self,
+        device,
         hidden_states: ttnn.Tensor,
         height: int,
         width: int,
         parameters,
         output_attentions=False,
     ):
-        device = hidden_states.device()
-
         if len(hidden_states.shape) == 4:
             batch_size, __, seq_len, hidden_size = hidden_states.shape
         elif len(hidden_states.shape) == 3:
@@ -128,6 +126,7 @@ class TtSegformerEfficientSelfAttention:
                 weight=parameters.layer_norm.weight,
                 bias=parameters.layer_norm.bias,
                 memory_config=ttnn.L1_MEMORY_CONFIG,
+                compute_kernel_config=ttnn.WormholeComputeKernelConfig(math_fidelity=ttnn.MathFidelity.HiFi4),
             )
 
         hidden_states = ttnn.to_layout(hidden_states, ttnn.TILE_LAYOUT)

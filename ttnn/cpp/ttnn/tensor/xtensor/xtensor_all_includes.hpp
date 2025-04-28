@@ -4,7 +4,6 @@
 
 #pragma once
 
-#include <xtensor-blas/xlinalg.hpp>
 #include <xtensor/xadapt.hpp>
 #include <xtensor/xarray.hpp>
 #include <xtensor/xbuffer_adaptor.hpp>
@@ -16,3 +15,5 @@
 #include <xtensor/xstrided_view.hpp>
 #include <xtensor/xtensor.hpp>
 #include <xtensor/xview.hpp>
+#include <xtensor/xmanipulation.hpp>
+#include <xtensor/xtensor_forward.hpp>

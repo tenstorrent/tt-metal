@@ -16,7 +16,7 @@ ttnn::Tensor TypecastOperation::invoke(
     const DataType& dtype,
     const std::optional<MemoryConfig>& output_mem_config,
     const std::optional<Tensor>& optional_output_tensor) {
-    return operation::run(
+    return tt::tt_metal::operation::run(
                ttnn::operations::data_movement::CopyDeviceOperation{
                    output_mem_config.value_or(input_tensor.memory_config()), dtype},
                {input_tensor},

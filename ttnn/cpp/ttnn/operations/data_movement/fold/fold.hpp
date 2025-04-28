@@ -27,7 +27,7 @@ struct FoldOperation {
         uint32_t pad_c = 0,
         uint32_t pad_h = 0,
         uint32_t pad_w = 0,
-        const std::optional<CoreCoord> grid_size = std::nullopt,
+        const std::optional<CoreRangeSet>& core_grid = std::nullopt,
         const std::optional<MemoryConfig>& override_memory_config = std::nullopt);
     static ttnn::Tensor invoke(
         QueueId queue_id,
@@ -39,12 +39,12 @@ struct FoldOperation {
         uint32_t pad_c = 0,
         uint32_t pad_h = 0,
         uint32_t pad_w = 0,
-        const std::optional<CoreCoord> grid_size = std::nullopt,
+        const std::optional<CoreRangeSet>& core_grid = std::nullopt,
         const std::optional<MemoryConfig>& override_memory_config = std::nullopt);
 };
 
 }  // namespace operations::data_movement
 
-constexpr auto fold = register_operation_with_auto_launch_op<"ttnn::fold", operations::data_movement::FoldOperation>();
+constexpr auto fold = register_operation<"ttnn::fold", operations::data_movement::FoldOperation>();
 
 }  // namespace ttnn

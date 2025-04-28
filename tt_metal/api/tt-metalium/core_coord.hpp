@@ -4,17 +4,32 @@
 
 #pragma once
 
+#include <fmt/base.h>
+#include <nlohmann/json.hpp>
+#include <stdint.h>
+#include <tt_stl/reflection.hpp>
+#include <tt_stl/span.hpp>
 #include <algorithm>
-#include <mutex>
+#include <cstddef>
+#include <functional>
 #include <optional>
 #include <set>
 #include <string>
 #include <vector>
 
-#include <nlohmann/json.hpp>
-#include "umd/device/tt_xy_pair.h"
-#include "reflection.hpp"
-#include "span.hpp"
+#include <umd/device/tt_xy_pair.h>
+#include <umd/device/types/xy_pair.h>
+
+namespace tt {
+namespace stl {
+namespace json {
+template <typename T>
+struct from_json_t;
+template <typename T>
+struct to_json_t;
+}  // namespace json
+}  // namespace stl
+}  // namespace tt
 
 using CoreCoord = tt_xy_pair;
 
@@ -132,11 +147,11 @@ public:
 
     CoreRangeSet(const CoreRangeSet& other);
 
-    CoreRangeSet& operator=(const CoreRangeSet& other);
+    CoreRangeSet& operator=(const CoreRangeSet& other) noexcept = default;
 
     CoreRangeSet(CoreRangeSet&& other) noexcept;
 
-    CoreRangeSet& operator=(CoreRangeSet&& other) noexcept;
+    CoreRangeSet& operator=(CoreRangeSet&& other) noexcept = default;
 
     CoreRangeSet(std::vector<CoreRange>&& core_ranges);
 
@@ -175,10 +190,12 @@ public:
     // code that uses this CoreRangeSet.
     CoreRangeSet merge_ranges() const;
 
+    // Subtract the common CoreRanges between this CoreRangeSet.
+    // A - (A n B)
+    CoreRangeSet subtract(const CoreRangeSet& other) const;
+
 private:
     void validate_no_overlap();
-
-    mutable std::mutex ranges_guard;
     std::vector<CoreRange> ranges_;
 };
 

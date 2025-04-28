@@ -28,15 +28,16 @@ MultiLayerPerceptron::MultiLayerPerceptron(const MultiLayerPerceptronParameters&
         register_module(m_layers[idx], "layer_" + std::to_string(idx));
     }
 }
-autograd::TensorPtr MultiLayerPerceptron::operator()(autograd::TensorPtr tensor) {
+autograd::TensorPtr MultiLayerPerceptron::operator()(const autograd::TensorPtr& tensor) {
+    auto x = tensor;
     for (size_t index = 0; index < m_layers.size(); ++index) {
-        tensor = (*m_layers[index])(tensor);
+        x = (*m_layers[index])(x);
         if (index + 1 != m_layers.size()) {
-            tensor = ops::relu(tensor);
+            x = ops::relu(x);
         }
     }
 
-    return tensor;
+    return x;
 }
 
 }  // namespace ttml::modules

@@ -22,10 +22,9 @@ from models.experimental.grok.tt.grok_common import (
     prepare_rotation_mat_ttnn,
 )
 from models.experimental.grok.tt.grok_model import TtTransformer
-from models.experimental.grok.reference.tokenizer import Tokenizer
 from models.experimental.grok.tt.model_config import TtModelArgs
 from models.perf.perf_utils import prep_perf_report
-from models.utility_functions import profiler, enable_persistent_kernel_cache
+from models.utility_functions import profiler
 from transformers import AutoTokenizer
 
 
@@ -48,7 +47,6 @@ def test_grok_model_perf(
     reset_seeds,
 ):
     dtype = ttnn.bfloat8_b
-    t3k_mesh_device.enable_async(True)
 
     # Can use dummy_weights=True correctness is not tested, but it is much slower
     model_args = TtModelArgs(t3k_mesh_device.get_device(0), dummy_weights=False)

@@ -2,11 +2,26 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "debug_tools_fixture.hpp"
-#include "gtest/gtest.h"
-#include "debug_tools_test_utils.hpp"
-#include <tt-metalium/tt_metal.hpp>
+#include <fmt/base.h>
 #include <tt-metalium/host_api.hpp>
+#include <functional>
+#include <string>
+#include <unordered_set>
+#include <variant>
+#include <vector>
+
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/data_types.hpp>
+#include "debug_tools_fixture.hpp"
+#include "debug_tools_test_utils.hpp"
+#include <tt-metalium/device.hpp>
+#include "dprint_server.hpp"
+#include "gtest/gtest.h"
+#include <tt-metalium/kernel_types.hpp>
+#include <tt-metalium/logger.hpp>
+#include <tt-metalium/program.hpp>
+#include "umd/device/types/arch.h"
+#include "umd/device/types/xy_pair.h"
 
 ////////////////////////////////////////////////////////////////////////////////
 // A test for printing from ethernet cores.
@@ -32,7 +47,7 @@ SETW:
 HEX/OCT/DEC:
 1e240361100123456)";
 
-static void RunTest(
+void RunTest(
     DPrintFixture* fixture,
     IDevice* device,
     bool active,
@@ -79,13 +94,17 @@ static void RunTest(
         );
 
         // Clear the log file for the next core's test
-        tt::DPrintServerClearLogFile();
+        DPrintServerClearLogFile();
     }
 }
 }
 }
 
 TEST_F(DPrintFixture, ActiveEthTestPrint) {
+    if (this->arch_ == ARCH::BLACKHOLE) {  // TODO: Re-enable when this is supported on BH
+        log_info(tt::LogTest, "DPrint on BH active eth not yet supported");
+        GTEST_SKIP();
+    }
     for (IDevice* device : this->devices_) {
         // Skip if no ethernet cores on this device
         if (device->get_active_ethernet_cores(true).size() == 0) {

@@ -7,12 +7,34 @@ on:
         required: true
         type: choice
         options:
-          - grayskull
           - wormhole_b0
           - blackhole
+      tracy:
+        required: true
+        type: boolean
+        default: false
+        description: "Build with tracy enabled"
+      build-wheel:
+        required: true
+        type: boolean
+        default: false
+        description: "Build Python Wheel"
       runner-label:
         required: true
+        type: choice
+        options:
+          - E150
+          - N150
+          - N300
+          - P150
+          - config-t3000
+          - config-tg
+        description: "Runner Type Label"
+      extra-label:
+        required: true
         type: string
+        default: "in-service"
+        description: "Secondary tag to filter runners"
       good-commit:
         required: true
         type: string
@@ -22,39 +44,54 @@ on:
       command:
         required: true
         type: string
-      description:
+      timeout:
+        required: true
         type: string
-        default: "Git bisect dispatch"
+        description: "Timeout (eg: 5m, 1h)"
+      patch:
         required: false
+        type: string
+        description: "Commit-ish to cherry-pick for each step"
 
-run-name: ${{ inputs.description }}
+run-name: "Bisect on ${{ inputs.runner-label }}"
 jobs:
   build-artifact:
     uses: ./.github/workflows/build-artifact.yaml
     secrets: inherit
+    with:
+      tracy: ${{ inputs.tracy }}
+      build-wheel: ${{ inputs.build-wheel }}
   test-dispatch:
     needs: build-artifact
     timeout-minutes: 1440
     env:
-      TT_METAL_ENV: ${{ vars.TT_METAL_ENV }}
       ARCH_NAME: ${{ inputs.arch }}
     runs-on:
       - ${{ inputs.runner-label }}
-      - "in-service"
+      - ${{ inputs.extra-label }}
     steps:
-      - uses: tenstorrent/tt-metal/.github/actions/checkout-with-submodule-lfs@main
+      - name: ⬇️ Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
       - name: Set up dyanmic env vars for build
         run: |
           echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
       - uses: actions/download-artifact@v4
+        timeout-minutes: 10
         with:
-          name: TTMetal_build_any
+          name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       - name: Extract files
         run: tar -xvf ttm_any.tar
       - uses: ./.github/actions/install-python-deps
-      - name: Run pre/post regression tests in a loop
+      - name: Run Git Bisect
+        shell: bash
+        env:
+          GIT_COMMITTER_NAME: "GitHub Actions"
+          GIT_COMMITTER_EMAIL: "actions@github.com"
         run: |
           source ${{ github.workspace }}/python_env/bin/activate
           cd $TT_METAL_HOME
           export PYTHONPATH=$TT_METAL_HOME
-          ./tests/scripts/tt_bisect.sh -f "${{ inputs.command }}" -b ${{ inputs.bad-commit }} -g ${{ inputs.good-commit }}
+          ./tests/scripts/tt_bisect.sh -t ${{ inputs.timeout }} -f "${{ inputs.command }}" -b ${{ inputs.bad-commit }} -g ${{ inputs.good-commit }} -p "${{ inputs.patch }}"

@@ -5,13 +5,18 @@
 #pragma once
 
 #include "ttnn/operations/core/core.hpp"
+#include "ttnn/operations/embedding/device/embedding_device_operation.hpp"
+#include "ttnn/operations/math.hpp"
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/util.hpp>
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/tt_log.h>
+#include <tt-metalium/work_split.hpp>
+
+#include <tracy/Tracy.hpp>
 
 using namespace tt;
+using namespace tt::tt_metal;
 
 struct CoreSplitResult {
     uint32_t required_cores = 0;
@@ -70,7 +75,7 @@ CoreSplitResult split_work_to_cores_aligned(
 
 namespace ttnn::operations::embedding::detail {
 
-operation::ProgramWithCallbacks embeddings_fused(
+tt::tt_metal::operation::ProgramWithCallbacks embeddings_fused(
     const Tensor& a,
     const Tensor& weights,
     Tensor& output,
@@ -368,7 +373,7 @@ operation::ProgramWithCallbacks embeddings_fused(
     return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_arguments_callback};
 }
 
-operation::ProgramWithCallbacks embeddings_rm(
+tt::tt_metal::operation::ProgramWithCallbacks embeddings_rm(
     const Tensor& a,
     const Tensor& weights,
     Tensor& output,
@@ -590,7 +595,7 @@ operation::ProgramWithCallbacks embeddings_rm(
     return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_arguments_callback};
 }
 
-operation::ProgramWithCallbacks embeddings_tilized_indices(
+tt::tt_metal::operation::ProgramWithCallbacks embeddings_tilized_indices(
     const Tensor& a,
     const Tensor& weights,
     Tensor& output,
@@ -834,7 +839,7 @@ operation::ProgramWithCallbacks embeddings_tilized_indices(
     return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_arguments_callback};
 }
 
-operation::ProgramWithCallbacks embeddings_(
+tt::tt_metal::operation::ProgramWithCallbacks embeddings_(
     const Tensor& a,
     const Tensor& weights,
     Tensor& output,

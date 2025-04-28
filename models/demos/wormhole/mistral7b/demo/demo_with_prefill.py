@@ -25,7 +25,7 @@ from models.demos.wormhole.mistral7b.tt.mistral_embedding import TtMistralEmbedd
 from models.demos.wormhole.mistral7b.reference.tokenizer import Tokenizer
 
 from models.perf.benchmarking_utils import BenchmarkProfiler
-from models.demos.utils.llm_demo_utils import create_benchmark_data, verify_perf
+from models.demos.utils.llm_demo_utils import create_benchmark_data
 
 
 class Emb(torch.nn.Module):

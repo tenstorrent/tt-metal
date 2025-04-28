@@ -2,37 +2,44 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <algorithm>
-#include <functional>
-#include <limits>
-#include <random>
-#include <tuple>
-
-#include <tt-metalium/mesh_device_view.hpp>
-#include <tt-metalium/logger.hpp>
-#include "umd/device/types/arch.h"
-#include <tt-metalium/device_impl.hpp>
-#include <tt-metalium/data_types.hpp>
-#include <tt-metalium/kernel_types.hpp>
-#include "tt_backend_api_types.hpp"
+#include <assert.h>
+#include <fmt/base.h>
+#include <stdint.h>
 #include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/math.hpp>
-#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/data_types.hpp>
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/kernel.hpp>
-#include "tt_metal/test_utils/comparison.hpp"
-#include "tt_metal/test_utils/df/df.hpp"
-#include "tt_metal/test_utils/env_vars.hpp"
-#include "tt_metal/test_utils/print_helpers.hpp"
-#include "tt_metal/test_utils/stimulus.hpp"
-
-#include <tt-metalium/persistent_kernel_cache.hpp>
+#include <tt-metalium/kernel_types.hpp>
+#include <tt-metalium/logger.hpp>
+#include <tt-metalium/math.hpp>
 #include <tt-metalium/mesh_device.hpp>
+#include <tt-metalium/mesh_device_view.hpp>
+#include <tt-metalium/tt_metal.hpp>
+#include <algorithm>
+#include <cstdlib>
+#include <exception>
+#include <map>
+#include <memory>
+#include <string>
+#include <unordered_map>
+#include <unordered_set>
+#include <variant>
+#include <vector>
 
-// TODO: ARCH_NAME specific, must remove
-#include "eth_l1_address_map.h"
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/mesh_config.hpp>
+#include <tt-metalium/mesh_coord.hpp>
+#include <tt-metalium/program.hpp>
+#include <tt_stl/span.hpp>
+#include <tt-metalium/system_memory_manager.hpp>
+#include <tt-metalium/tt_backend_api_types.hpp>
+#include "tt_metal/test_utils/env_vars.hpp"
+#include "umd/device/tt_core_coordinates.h"
+#include "umd/device/types/arch.h"
+#include "umd/device/types/xy_pair.h"
 
 using tt::tt_metal::IDevice;
+using tt::tt_metal::distributed::MeshCoordinate;
 using tt::tt_metal::distributed::MeshDevice;
 using tt::tt_metal::distributed::MeshDeviceConfig;
 using tt::tt_metal::distributed::MeshDeviceView;
@@ -50,7 +57,7 @@ public:
         num_devices_ = tt::tt_metal::GetNumAvailableDevices();
         if (arch_ == tt::ARCH::WORMHOLE_B0 and tt::tt_metal::GetNumAvailableDevices() == 8 and
             tt::tt_metal::GetNumPCIeDevices() == 4) {
-            mesh_device_ = MeshDevice::create(MeshDeviceConfig{.mesh_shape = MeshShape{2, 4}});
+            mesh_device_ = MeshDevice::create(MeshDeviceConfig(MeshShape{2, 4}));
 
         } else {
             TT_THROW("This suite can only be run on T3000 Wormhole devices");
@@ -92,12 +99,12 @@ std::vector<uint32_t> get_eth_receiver_rt_args(
     uint32_t init_handshake_core_y,
     uint32_t init_handshake_semaphore_id) {
     constexpr std::size_t semaphore_size = 16;
-    std::vector<uint32_t> erisc_semaphore_addresses(
-        max_concurrent_samples, eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE + 16 + 16);
+    uint32_t erisc_unreserved_base = tt::tt_metal::MetalContext::instance().hal().get_dev_addr(
+        tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::UNRESERVED);
+    std::vector<uint32_t> erisc_semaphore_addresses(max_concurrent_samples, erisc_unreserved_base + 16 + 16);
     std::vector<uint32_t> erisc_buffer_addresses(
         max_concurrent_samples,
-        eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE + 16 + 16 +
-            round_up(semaphore_size * max_concurrent_samples, 16));
+        erisc_unreserved_base + 16 + 16 + round_up(semaphore_size * max_concurrent_samples, 16));
     for (std::size_t i = 0; i < max_concurrent_samples; i++) {
         erisc_semaphore_addresses.at(i) += i * semaphore_size;
         erisc_buffer_addresses.at(i) += i * sample_page_size;
@@ -105,7 +112,7 @@ std::vector<uint32_t> get_eth_receiver_rt_args(
 
     std::vector<uint32_t> rt_args = {
         static_cast<uint32_t>(is_starting_core ? 1 : 0),
-        eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE,
+        erisc_unreserved_base,
         num_samples,
         max_concurrent_samples,
         sample_page_size,
@@ -133,12 +140,12 @@ std::vector<uint32_t> get_eth_sender_rt_args(
     uint32_t receiver_y,
     uint32_t receiver_start_semaphore_id) {
     constexpr std::size_t semaphore_size = 16;
-    std::vector<uint32_t> erisc_semaphore_addresses(
-        max_concurrent_samples, eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE + 16 + 16);
+    uint32_t erisc_unreserved_base = tt::tt_metal::MetalContext::instance().hal().get_dev_addr(
+        tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::UNRESERVED);
+    std::vector<uint32_t> erisc_semaphore_addresses(max_concurrent_samples, erisc_unreserved_base + 16 + 16);
     std::vector<uint32_t> erisc_buffer_addresses(
         max_concurrent_samples,
-        eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE + 16 + 16 +
-            round_up(semaphore_size * max_concurrent_samples, 16));
+        erisc_unreserved_base + 16 + 16 + round_up(semaphore_size * max_concurrent_samples, 16));
     for (std::size_t i = 0; i < max_concurrent_samples; i++) {
         erisc_buffer_addresses.at(i) += i * sample_page_size;
         erisc_semaphore_addresses.at(i) += i * semaphore_size;
@@ -146,7 +153,7 @@ std::vector<uint32_t> get_eth_sender_rt_args(
 
     std::vector<uint32_t> rt_args = {
         static_cast<uint32_t>(is_starting_core ? 1 : 0),
-        eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE,
+        erisc_unreserved_base,
         num_samples,
         max_concurrent_samples,
         sample_page_size,
@@ -196,6 +203,9 @@ void build_and_run_roundtrip_latency_test(
         }
     }
 
+    uint32_t erisc_unreserved_base = tt::tt_metal::MetalContext::instance().hal().get_dev_addr(
+        tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::UNRESERVED);
+
     std::unordered_map<IDevice*, uint32_t> device_visits;
 
     for (std::size_t i = 0; i < n_hops; i++) {
@@ -213,8 +223,8 @@ void build_and_run_roundtrip_latency_test(
         std::vector<uint32_t> const& receiver_eth_ct_args = {};
         std::vector<uint32_t> const& sender_eth_ct_args = {};
         bool is_starting_core = i == 0;
-        uint32_t receiver_start_semaphore = eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE +
-                                            16;  // CreateSemaphore(program, eth_receiver_core, 0, CoreType::ETH);
+        uint32_t receiver_start_semaphore =
+            erisc_unreserved_base + 16;  // CreateSemaphore(program, eth_receiver_core, 0, CoreType::ETH);
         log_trace(tt::LogTest, "is_starting_core: {}", (is_starting_core ? 1 : 0));
         std::vector<uint32_t> const& receiver_eth_rt_args = get_eth_receiver_rt_args(
             device,
@@ -344,8 +354,8 @@ void build_and_run_roundtrip_latency_test(
 
 auto is_device_pcie_connected(chip_id_t device_id) { return device_id < 4; }
 
-std::vector<hop_eth_sockets> build_eth_sockets_list(std::vector<IDevice*> const& devices) {
-    std::vector<hop_eth_sockets> sockets;
+std::vector<tt::tt_metal::hop_eth_sockets> build_eth_sockets_list(const std::vector<IDevice*>& devices) {
+    std::vector<tt::tt_metal::hop_eth_sockets> sockets;
     std::unordered_map<uint64_t, std::size_t> n_edge_visits;
     for (std::size_t i = 0; i < devices.size(); i++) {
         IDevice* curr_device = devices.at(i);
@@ -453,44 +463,44 @@ int main(int argc, char** argv) {
         switch (n_hops) {
             case 2:
                 return std::vector<IDevice*>{
-                    view.get_device(0, 0),
-                    view.get_device(0, 1),
+                    view.get_device(MeshCoordinate(0, 0)),
+                    view.get_device(MeshCoordinate(0, 1)),
                 };
 
             case 4:
                 return std::vector<IDevice*>{
-                    view.get_device(1, 1),
-                    view.get_device(0, 1),
-                    view.get_device(0, 2),
-                    view.get_device(1, 2),
+                    view.get_device(MeshCoordinate(1, 1)),
+                    view.get_device(MeshCoordinate(0, 1)),
+                    view.get_device(MeshCoordinate(0, 2)),
+                    view.get_device(MeshCoordinate(1, 2)),
                 };
 
             case 8:
                 return std::vector<IDevice*>{
-                    view.get_device(1, 1),
-                    view.get_device(1, 0),
-                    view.get_device(0, 0),
-                    view.get_device(0, 1),
-                    view.get_device(0, 2),
-                    view.get_device(0, 3),
-                    view.get_device(1, 3),
-                    view.get_device(1, 2),
+                    view.get_device(MeshCoordinate(1, 1)),
+                    view.get_device(MeshCoordinate(1, 0)),
+                    view.get_device(MeshCoordinate(0, 0)),
+                    view.get_device(MeshCoordinate(0, 1)),
+                    view.get_device(MeshCoordinate(0, 2)),
+                    view.get_device(MeshCoordinate(0, 3)),
+                    view.get_device(MeshCoordinate(1, 3)),
+                    view.get_device(MeshCoordinate(1, 2)),
                 };
 
             case 12:  // Does an extra loop through the inner ring
                 return std::vector<IDevice*>{
-                    view.get_device(1, 1),
-                    view.get_device(1, 0),
-                    view.get_device(0, 0),
-                    view.get_device(0, 1),
-                    view.get_device(0, 2),
-                    view.get_device(1, 2),
-                    view.get_device(1, 1),
-                    view.get_device(0, 1),
-                    view.get_device(0, 2),
-                    view.get_device(0, 3),
-                    view.get_device(1, 3),
-                    view.get_device(1, 2),
+                    view.get_device(MeshCoordinate(1, 1)),
+                    view.get_device(MeshCoordinate(1, 0)),
+                    view.get_device(MeshCoordinate(0, 0)),
+                    view.get_device(MeshCoordinate(0, 1)),
+                    view.get_device(MeshCoordinate(0, 2)),
+                    view.get_device(MeshCoordinate(1, 2)),
+                    view.get_device(MeshCoordinate(1, 1)),
+                    view.get_device(MeshCoordinate(0, 1)),
+                    view.get_device(MeshCoordinate(0, 2)),
+                    view.get_device(MeshCoordinate(0, 3)),
+                    view.get_device(MeshCoordinate(1, 3)),
+                    view.get_device(MeshCoordinate(1, 2)),
                 };
 
             default: TT_THROW("Unsupported hop_count"); return std::vector<IDevice*>{};
@@ -501,7 +511,7 @@ int main(int argc, char** argv) {
         constexpr std::size_t placeholder_arg_value = 1;
         for (auto n_hops : hop_counts) {
             auto devices = get_device_list(view, n_hops);
-            std::vector<hop_eth_sockets> hop_eth_sockets = build_eth_sockets_list(devices);
+            std::vector<tt::tt_metal::hop_eth_sockets> hop_eth_sockets = build_eth_sockets_list(devices);
 
             for (auto max_concurrent_samples : max_concurrent_samples) {
                 for (auto num_samples : sample_counts) {
@@ -515,9 +525,9 @@ int main(int argc, char** argv) {
                             sample_page_size,
                             max_concurrent_samples,
                             n_hops);
-                        std::vector<Program> programs = {};
-                        std::vector<KernelHandle> receiver_kernel_ids;
-                        std::vector<KernelHandle> sender_kernel_ids;
+                        std::vector<tt::tt_metal::Program> programs = {};
+                        std::vector<tt::tt_metal::KernelHandle> receiver_kernel_ids;
+                        std::vector<tt::tt_metal::KernelHandle> sender_kernel_ids;
                         tt::tt_metal::build_and_run_roundtrip_latency_test(
                             devices,
                             hop_eth_sockets,

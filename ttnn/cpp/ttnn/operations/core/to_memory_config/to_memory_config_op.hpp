@@ -6,6 +6,7 @@
 
 #include <optional>
 
+#include "ttnn/core.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/run_operation.hpp"
 #include "cpp/ttnn/operations/data_movement/sharded/reshard/device/reshard_op.hpp"
@@ -26,6 +27,7 @@ struct ToMemoryConfig {
         const ttnn::Tensor& tensor,
         const ttnn::MemoryConfig& memory_config,
         std::optional<ttnn::DataType> dtype = std::nullopt) {
+        using namespace tt::tt_metal;
         // Temporary until we see why buffer data not being populated
         const auto& original_shape = tensor.get_logical_shape();
         const auto original_memory_config = ttnn::get_memory_config(tensor);
@@ -46,7 +48,7 @@ struct ToMemoryConfig {
                         throw std::runtime_error(
                             "dtype cannot be specified when converting sharded tensor to sharded tensor");
                     }
-                    return operation::run(
+                    return tt::tt_metal::operation::run(
                                data_movement::ReshardDeviceOperation{
                                    .output_mem_config = memory_config,
                                },
@@ -58,13 +60,13 @@ struct ToMemoryConfig {
                     // for row-major tensors where shard-spec[1] is different for input shard and output shard
 
                     TT_FATAL(memory_config.is_sharded(), "Error");
-                    Tensor temp = operation::run(
+                    Tensor temp = tt::tt_metal::operation::run(
                                       data_movement::ShardedToInterleavedDeviceOperation{
                                           .output_mem_config = ttnn::DRAM_MEMORY_CONFIG,
                                           .output_dtype = dtype.value_or(tensor.get_dtype())},
                                       {tensor})
                                       .at(0);
-                    return operation::run(
+                    return tt::tt_metal::operation::run(
                                data_movement::InterleavedToShardedDeviceOperation{
                                    .output_mem_config = memory_config,
                                    .output_dtype = dtype.value_or(temp.get_dtype())},
@@ -74,7 +76,7 @@ struct ToMemoryConfig {
             } else {
                 auto bbox = memory_config.shard_spec.value().grid.bounding_box();
                 CoreCoord grid_size(bbox.end_coord.x + 1, bbox.end_coord.y + 1);
-                return operation::run(
+                return tt::tt_metal::operation::run(
                            data_movement::InterleavedToShardedDeviceOperation{
                                .output_mem_config = memory_config, .output_dtype = dtype.value_or(tensor.get_dtype())},
                            {tensor})
@@ -83,14 +85,14 @@ struct ToMemoryConfig {
         } else {
             // to_interleaved path
             if (tensor.is_sharded()) {
-                return operation::run(
+                return tt::tt_metal::operation::run(
                            data_movement::ShardedToInterleavedDeviceOperation{
                                .output_mem_config = memory_config, .output_dtype = dtype.value_or(tensor.get_dtype())},
                            {tensor})
                     .at(0);
             } else {
                 // L1 to DRAM or DRAM to L1
-                return operation::run(
+                return tt::tt_metal::operation::run(
                            ttnn::operations::data_movement::CopyDeviceOperation{
                                memory_config, dtype.value_or(tensor.get_dtype())},
                            {tensor})

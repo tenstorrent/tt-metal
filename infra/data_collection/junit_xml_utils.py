@@ -13,7 +13,8 @@ def get_xml_file_root_element_tree(filepath):
     root_element_tree = XMLParse(filepath)
     root_element = root_element_tree.getroot()
 
-    assert root_element.tag == "testsuites"
+    # For ctest, the junit XML root element tag is <testsuite> instead of <testsuites>
+    assert root_element.tag in ["testsuite", "testsuites"]
 
     return root_element_tree
 
@@ -31,7 +32,7 @@ def sanity_check_test_xml_(root_element, is_pytest=True):
 
 
 def is_pytest_junit_xml(root_element):
-    is_pytest = root_element[0].get("name") == "pytest"
+    is_pytest = len(root_element) > 0 and root_element[0].get("name") == "pytest"
 
     if is_pytest:
         sanity_check_test_xml_(root_element)
@@ -40,7 +41,7 @@ def is_pytest_junit_xml(root_element):
 
 
 def is_gtest_xml(root_element):
-    is_gtest = root_element[0].get("name") != "pytest"
+    is_gtest = len(root_element) > 0 and root_element[0].get("name") != "pytest"
 
     if is_gtest:
         sanity_check_test_xml_(root_element, is_pytest=False)

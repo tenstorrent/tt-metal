@@ -2,13 +2,16 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <algorithm>
-
-#include "test_golden_impls.hpp"
-#include <tt-metalium/test_tiles.hpp>
+#include <fmt/base.h>
+#include <math.h>
 #include <tt-metalium/bfloat16.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/tilize_utils.hpp>
+#include <algorithm>
+#include <limits>
+#include <set>
+
+#include <tt-metalium/assert.hpp>
+#include "test_golden_impls.hpp"
 #include "tests/tt_metal/test_utils/packing.hpp"
 
 using std::vector;
@@ -29,8 +32,8 @@ std::vector<uint32_t> gold_standard_untilize(const std::vector<uint32_t>& src_ve
     int num_c_dim = config.face_c_dim / 2;
     // Untilize outputs correct number of r_dim & num_faces
     // But assumes increments are still default 16x16 faces
-    int face_size = 16 * 8;
-    int tile_size = face_size * 4;
+    int face_size = 16 * 16 / 2;
+    int tile_size = face_size * (config.tiny_tile ? config.num_faces : 4);
 
     std::set<int> ind;
 
@@ -38,7 +41,7 @@ std::vector<uint32_t> gold_standard_untilize(const std::vector<uint32_t>& src_ve
     for (int t = 0; t < num_tile_rows; t++) {
         int tile_start_index = t * num_tile_cols;
 
-        int physical_start_for_tile_row = tile_start_index * 32 * 16;
+        int physical_start_for_tile_row = tile_start_index * tile_size;
 
         // Iterate over tile columns 32 times (naive, but simple for validation)
         uint32_t num_iterations = (config.num_faces > 2) ? 2 : 1;
@@ -94,14 +97,16 @@ std::vector<uint32_t> gold_standard_tilize(const std::vector<uint32_t>& src_vec,
                 }
             }
 
-            // Bottom faces
-            start += 16 * num_cols;
-            for (int j = 0; j < 2; j++) {
-                int start_ = start + 8 * j;
-                for (int k = 0; k < 16; k++) {
-                    for (int i = 0; i < 8; i++) {
-                        int idx = start_ + num_cols * k + i;
-                        dst_vec.push_back(src_vec.at(idx));
+            if (config.num_faces > 2) {
+                // Bottom faces
+                start += 16 * num_cols;
+                for (int j = 0; j < 2; j++) {
+                    int start_ = start + 8 * j;
+                    for (int k = 0; k < 16; k++) {
+                        for (int i = 0; i < 8; i++) {
+                            int idx = start_ + num_cols * k + i;
+                            dst_vec.push_back(src_vec.at(idx));
+                        }
                     }
                 }
             }

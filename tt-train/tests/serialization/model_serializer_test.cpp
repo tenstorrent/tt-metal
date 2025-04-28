@@ -6,9 +6,9 @@
 
 #include <vector>
 
+#include "autograd/auto_context.hpp"
 #include "models/gpt2.hpp"
 #include "models/mlp.hpp"
-
 class MultiLayerPerceptronParametersTest : public ::testing::Test {
 protected:
     void SetUp() override {

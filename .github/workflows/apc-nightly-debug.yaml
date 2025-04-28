@@ -14,9 +14,11 @@ permissions:
   pages: write
   id-token: write
   packages: write
+  checks: write
 
 jobs:
   nightly-debug:
     uses: ./.github/workflows/all-post-commit-workflows.yaml
+    secrets: inherit
     with:
       build-type: RelWithDebInfo

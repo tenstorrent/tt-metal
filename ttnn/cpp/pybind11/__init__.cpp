@@ -8,8 +8,10 @@
 #include <pybind11/stl.h>
 
 #include "activation.hpp"
+#include "cluster.hpp"
 #include "core.hpp"
 #include "device.hpp"
+#include "fabric.hpp"
 #include "profiler.hpp"
 #include "events.hpp"
 #include "global_circular_buffer.hpp"
@@ -41,6 +43,7 @@ PYBIND11_MODULE(_ttnn, module) {
     auto m_graph = module.def_submodule("graph", "Contains graph capture functions");
     auto m_types = module.def_submodule("types", "ttnn Types");
     auto m_activation = module.def_submodule("activation", "ttnn Activation");
+    auto m_cluster = module.def_submodule("cluster", "ttnn cluster");
     auto m_core = module.def_submodule("core", "core functions");
     auto m_device = module.def_submodule("device", "ttnn devices");
     auto m_multi_device = module.def_submodule("multi_device", "ttnn multi_device");
@@ -50,6 +53,7 @@ PYBIND11_MODULE(_ttnn, module) {
     auto m_profiler = module.def_submodule("profiler", "Submodule defining the profiler");
     auto m_reports = module.def_submodule("reports", "ttnn reports");
     auto m_operations = module.def_submodule("operations", "ttnn Operations");
+    auto m_fabric = module.def_submodule("fabric", "Fabric instantiation APIs");
 
     // TYPES
     ttnn::tensor::tensor_mem_config_module_types(m_tensor);
@@ -60,6 +64,7 @@ PYBIND11_MODULE(_ttnn, module) {
     ttnn::activation::py_module_types(m_activation);
     ttnn::core::py_module_types(m_core);
     ttnn::device::py_device_module_types(m_device);
+    ttnn::fabric::py_bind_fabric_api(m_fabric);
     ttnn::distributed::py_module_types(m_multi_device);
     ttnn::events::py_module_types(m_events);
     ttnn::global_circular_buffer::py_module_types(m_global_circular_buffer);
@@ -82,6 +87,7 @@ PYBIND11_MODULE(_ttnn, module) {
 
     ttnn::types::py_module(m_types);
     ttnn::activation::py_module(m_activation);
+    ttnn::cluster::py_cluster_module(m_cluster);
     ttnn::device::py_device_module(m_device);
     ttnn::distributed::py_module(m_multi_device);
     ttnn::events::py_module(m_events);

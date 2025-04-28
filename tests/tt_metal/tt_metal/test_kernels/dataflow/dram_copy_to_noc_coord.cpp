@@ -1,26 +1,29 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
-
+#include "dataflow_api.h"
+#include "debug/dprint.h"
 /**
  * NOC APIs are prefixed w/ "ncrisc" (legacy name) but there's nothing NCRISC specific, they can be used on BRISC or
  * other RISCs Any two RISC processors cannot use the same CMD_BUF non_blocking APIs shouldn't be mixed with slow noc.h
  * APIs explicit flushes need to be used since the calls are non-blocking
  * */
 void kernel_main() {
-    std::uint32_t local_l1_buffer_addr = get_arg_val<uint32_t>(0);
+    std::uint32_t local_buffer_addr = get_arg_val<uint32_t>(0);
 
-    std::uint32_t l1_buffer_src_addr = get_arg_val<uint32_t>(1);
-    std::uint32_t l1_src_noc_x = get_arg_val<uint32_t>(2);
-    std::uint32_t l1_src_noc_y = get_arg_val<uint32_t>(3);
+    std::uint32_t buffer_src_addr = get_arg_val<uint32_t>(1);
+    std::uint32_t src_noc_x = get_arg_val<uint32_t>(2);
+    std::uint32_t src_noc_y = get_arg_val<uint32_t>(3);
 
-    std::uint32_t l1_buffer_dst_addr = get_arg_val<uint32_t>(4);
-    std::uint32_t l1_dst_noc_x = get_arg_val<uint32_t>(5);
-    std::uint32_t l1_dst_noc_y = get_arg_val<uint32_t>(6);
+    std::uint32_t buffer_dst_addr = get_arg_val<uint32_t>(4);
+    std::uint32_t dst_noc_x = get_arg_val<uint32_t>(5);
+    std::uint32_t dst_noc_y = get_arg_val<uint32_t>(6);
 
-    std::uint32_t l1_buffer_size = get_arg_val<uint32_t>(7);
+    std::uint32_t buffer_size = get_arg_val<uint32_t>(7);
+
+    bool use_inline_dw_write = static_cast<bool>(get_arg_val<uint32_t>(8));
 
 #if defined(SIGNAL_COMPLETION_TO_DISPATCHER)
     // We will assert later. This kernel will hang.
@@ -35,17 +38,32 @@ void kernel_main() {
     uint64_t dispatch_addr = NOC_XY_ADDR(
         NOC_X(mailboxes->go_message.master_x),
         NOC_Y(mailboxes->go_message.master_y),
-        DISPATCH_MESSAGE_ADDR + mailboxes->go_message.dispatch_message_offset);
-    noc_fast_atomic_increment(noc_index, NCRISC_AT_CMD_BUF, dispatch_addr, NOC_UNICAST_WRITE_VC, 1, 31, false);
+        DISPATCH_MESSAGE_ADDR + NOC_STREAM_REG_SPACE_SIZE * mailboxes->go_message.dispatch_message_offset);
+    noc_fast_write_dw_inline<DM_DEDICATED_NOC>(
+        noc_index,
+        NCRISC_AT_CMD_BUF,
+        1 << REMOTE_DEST_BUF_WORDS_FREE_INC,
+        dispatch_addr,
+        0xF,  // byte-enable
+        NOC_UNICAST_WRITE_VC,
+        false,  // mcast
+        true    // posted
+    );
 #endif
 
-    // DRAM NOC src address
-    std::uint64_t l1_buffer_src_noc_addr = get_noc_addr(l1_src_noc_x, l1_src_noc_y, l1_buffer_src_addr);
-    noc_async_read(l1_buffer_src_noc_addr, local_l1_buffer_addr, l1_buffer_size);
+    // NOC src address
+    std::uint64_t buffer_src_noc_addr = get_noc_addr(src_noc_x, src_noc_y, buffer_src_addr);
+    noc_async_read(buffer_src_noc_addr, local_buffer_addr, buffer_size);
     noc_async_read_barrier();
 
-    // DRAM NOC dst address
-    std::uint64_t l1_buffer_dst_noc_addr = get_noc_addr(l1_dst_noc_x, l1_dst_noc_y, l1_buffer_dst_addr);
-    noc_async_write(local_l1_buffer_addr, l1_buffer_dst_noc_addr, l1_buffer_size);
-    noc_async_write_barrier();
+    // NOC dst address
+    std::uint64_t buffer_dst_noc_addr = get_noc_addr(dst_noc_x, dst_noc_y, buffer_dst_addr);
+    if (use_inline_dw_write) {
+        auto src_data = reinterpret_cast<volatile uint32_t*>(local_buffer_addr);
+        // Just write something to trigger the watcher assertion. Result data doesn't matter.
+        noc_inline_dw_write(buffer_dst_noc_addr, src_data[0] /*val*/);
+    } else {
+        noc_async_write(local_buffer_addr, buffer_dst_noc_addr, buffer_size);
+        noc_async_write_barrier();
+    }
 }

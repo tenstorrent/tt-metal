@@ -1,7 +1,6 @@
 # SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
-import os
 import torch
 import pytest
 from loguru import logger
@@ -30,8 +29,6 @@ from models.utility_functions import (
     ),
 )
 def test_mixtral_moe_inference(t3k_mesh_device, use_program_cache, reset_seeds, seq_len):
-    t3k_mesh_device.enable_async(True)
-
     pcc = 0.99
     iterations = 1
     dtype = ttnn.bfloat8_b

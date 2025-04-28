@@ -63,12 +63,15 @@ Fold::spec_return_value_t Fold::compute_output_specs(
         mem_config.shard_spec->shape[1] *= op_attr.stride_h * op_attr.stride_w;
 
         return {TensorSpec(
-            output_shape, TensorLayout(input_tensor.get_dtype(), PageConfig(input_tensor.get_layout()), mem_config))};
+            output_shape,
+            tt::tt_metal::TensorLayout(
+                input_tensor.get_dtype(), tt::tt_metal::PageConfig(input_tensor.get_layout()), mem_config))};
     }
 
     return {TensorSpec(
         output_shape,
-        TensorLayout(input_tensor.get_dtype(), PageConfig(Layout::ROW_MAJOR), input_tensor.memory_config()))};
+        tt::tt_metal::TensorLayout(
+            input_tensor.get_dtype(), tt::tt_metal::PageConfig(Layout::ROW_MAJOR), input_tensor.memory_config()))};
 }
 
 Fold::tensor_return_value_t Fold::create_output_tensors(

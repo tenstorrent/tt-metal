@@ -11,7 +11,7 @@
 
 namespace ttnn::operations::experimental::transformer {
 
-operation::ProgramWithCallbacks multi_core_create_q_and_kv_heads_sharded(
+tt::tt_metal::operation::ProgramWithCallbacks multi_core_create_q_and_kv_heads_sharded(
     const Tensor& input_tensor_q,
     const Tensor& input_tensor_kv,
     const uint32_t num_q_heads,
@@ -29,7 +29,7 @@ struct CreateQKVHeadsSeparateTensorsDeviceOperation {
     MemoryConfig output_mem_config;
     void validate(const std::vector<Tensor>& input_tensors) const;
     std::vector<ttnn::TensorSpec> compute_output_specs(const std::vector<Tensor>& input_tensors) const;
-    operation::ProgramWithCallbacks create_program(
+    tt::tt_metal::operation::ProgramWithCallbacks create_program(
         const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const;
 };
 }  // namespace ttnn::operations::experimental::transformer

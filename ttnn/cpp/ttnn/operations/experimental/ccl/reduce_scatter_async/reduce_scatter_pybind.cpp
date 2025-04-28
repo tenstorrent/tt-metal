@@ -28,13 +28,13 @@ void bind_reduce_scatter(pybind11::module& module, const ccl_operation_t& operat
             [](const ccl_operation_t& self,
                const ttnn::Tensor& input_tensor,
                const int32_t dim,
-               const global_semaphore::MultiDeviceGlobalSemaphore& from_remote_multi_device_global_semaphore,
-               const global_semaphore::MultiDeviceGlobalSemaphore& to_remote_multi_device_global_semaphore,
+               const GlobalSemaphore& from_remote_multi_device_global_semaphore,
+               const GlobalSemaphore& to_remote_multi_device_global_semaphore,
                ttnn::operations::reduction::ReduceType math_op,
                const ttnn::MemoryConfig& memory_config,
                ttnn::ccl::Topology topology,
                const std::optional<size_t> num_links,
-               std::optional<SubDeviceId> worker_subdevice_id_opt) -> ttnn::Tensor {
+               std::optional<tt::tt_metal::SubDeviceId> worker_subdevice_id_opt) -> ttnn::Tensor {
                 return self(
                     input_tensor,
                     dim,
@@ -63,13 +63,14 @@ void bind_reduce_scatter(pybind11::module& module, const ccl_operation_t& operat
                const int32_t dim,
                const uint32_t cluster_axis,
                const MeshDevice& mesh_device,
-               const global_semaphore::MultiDeviceGlobalSemaphore& from_remote_multi_device_global_semaphore,
-               const global_semaphore::MultiDeviceGlobalSemaphore& to_remote_multi_device_global_semaphore,
+               const GlobalSemaphore& from_remote_multi_device_global_semaphore,
+               const GlobalSemaphore& to_remote_multi_device_global_semaphore,
+               const std::optional<std::vector<ttnn::Tensor>>& persistent_output_tensors,
                ttnn::operations::reduction::ReduceType math_op,
                const ttnn::MemoryConfig& memory_config,
                ttnn::ccl::Topology topology,
                const std::optional<size_t> num_links,
-               std::optional<SubDeviceId> worker_subdevice_id_opt) -> ttnn::Tensor {
+               std::optional<tt::tt_metal::SubDeviceId> worker_subdevice_id_opt) -> ttnn::Tensor {
                 return self(
                     input_tensor,
                     dim,
@@ -77,6 +78,7 @@ void bind_reduce_scatter(pybind11::module& module, const ccl_operation_t& operat
                     mesh_device,
                     from_remote_multi_device_global_semaphore,
                     to_remote_multi_device_global_semaphore,
+                    persistent_output_tensors,
                     math_op,
                     memory_config,
                     topology,
@@ -89,8 +91,9 @@ void bind_reduce_scatter(pybind11::module& module, const ccl_operation_t& operat
             py::arg("mesh_device"),
             py::arg("from_remote_multi_device_global_semaphore"),
             py::arg("to_remote_multi_device_global_semaphore"),
-            py::arg("math_op"),
             py::kw_only(),
+            py::arg("persistent_output_tensors") = std::nullopt,
+            py::arg("math_op") = ttnn::operations::reduction::ReduceType::Sum,
             py::arg("memory_config") = std::nullopt,
             py::arg("topology") = ttnn::ccl::Topology::Linear,
             py::arg("num_links") = std::nullopt,

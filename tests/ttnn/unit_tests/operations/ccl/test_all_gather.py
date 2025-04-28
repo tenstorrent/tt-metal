@@ -88,8 +88,7 @@ def run_with_trace(
         num_buffers_per_channel=n_buffer,
         topology=all_gather_topology,
     )
-    for d in mesh_device.get_devices():
-        ttnn.synchronize_device(d)
+    ttnn.synchronize_device(mesh_device)
 
     # Capture trace
     logger.info("Capturing trace")
@@ -105,15 +104,13 @@ def run_with_trace(
             topology=all_gather_topology,
         )
     ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
-    for d in mesh_device.get_devices():
-        ttnn.synchronize_device(d)
+    ttnn.synchronize_device(mesh_device)
 
     # Run the op
     logger.info("Starting Trace perf test...")
     ttnn.execute_trace(mesh_device, trace_id, blocking=False)
     ttnn.release_trace(mesh_device, trace_id)
-    for d in mesh_device.get_devices():
-        ttnn.synchronize_device(d)
+    ttnn.synchronize_device(mesh_device)
 
     return tt_out_tensor
 
@@ -131,17 +128,12 @@ def run_all_gather_impl(
     function_level_defaults,
     all_gather_topology,
     num_iters=1,
-    enable_async=False,
     trace_mode=False,
     tile=(32, 32),
 ):
     if num_iters < 1:
         pytest.fail("num_iters must be >= 1")
-    # Use Async mode based on test input config
-    mesh_device.enable_async(enable_async)
 
-    if enable_async:
-        logger.info(f"Using Async Mode for All Gather Op Dispatch")
     logger.info(f"Input shape: {input_shape}")
     logger.info(f"dim: {dim}")
 
@@ -172,8 +164,7 @@ def run_all_gather_impl(
                 input_tensor_mesh, dim, num_links=num_links, memory_config=mem_config, topology=all_gather_topology
             )
 
-            for d in mesh_device.get_devices():
-                ttnn.synchronize_device(d)
+            ttnn.synchronize_device(mesh_device)
             logger.info(f"Done iteration {i}")
 
     for i, t in enumerate(ttnn.get_device_tensors(tt_out_tensor)):
@@ -200,7 +191,6 @@ def run_all_gather_on_n300_impl(
     function_level_defaults,
     all_gather_topology,
     num_iters=1,
-    enable_async=False,
     trace_mode=False,
     tile=(32, 32),
 ):
@@ -212,7 +202,6 @@ def run_all_gather_on_n300_impl(
     )
     if is_known_failure:
         pytest.skip(f"Skipping unsupported case {message}.")
-
     return run_all_gather_impl(
         mesh_device,
         num_devices,
@@ -226,7 +215,6 @@ def run_all_gather_on_n300_impl(
         function_level_defaults,
         all_gather_topology=all_gather_topology,
         num_iters=num_iters,
-        enable_async=enable_async,
         trace_mode=trace_mode,
         tile=tile,
     )
@@ -245,7 +233,6 @@ def run_all_gather_on_t3000_impl(
     function_level_defaults,
     all_gather_topology,
     num_iters=1,
-    enable_async=False,
     trace_mode=False,
     tile=(32, 32),
 ):
@@ -257,7 +244,6 @@ def run_all_gather_on_t3000_impl(
     )
     if is_known_failure:
         pytest.skip(f"Skipping unsupported case {message}.")
-
     return run_all_gather_impl(
         mesh_device,
         num_devices,
@@ -271,7 +257,6 @@ def run_all_gather_on_t3000_impl(
         function_level_defaults,
         all_gather_topology=all_gather_topology,
         num_iters=num_iters,
-        enable_async=enable_async,
         trace_mode=trace_mode,
         tile=tile,
     )
@@ -290,7 +275,6 @@ def run_all_gather_on_t3000_impl_tight_loop(
     function_level_defaults,
     all_gather_topology,
     num_iters,
-    enable_async=False,
     trace_mode=False,
     tile=(32, 32),
 ):
@@ -307,7 +291,6 @@ def run_all_gather_on_t3000_impl_tight_loop(
         function_level_defaults,
         all_gather_topology=all_gather_topology,
         num_iters=num_iters,
-        enable_async=enable_async,
         trace_mode=trace_mode,
         tile=tile,
     )
@@ -347,7 +330,6 @@ def run_all_gather_on_t3000_impl_tight_loop(
     ],
 )
 @pytest.mark.parametrize("num_iters", [1000])  # restore to 500: https://github.com/tenstorrent/tt-metal/issues/9686
-@pytest.mark.parametrize("enable_async", [True])
 def test_all_gather_on_t3000_post_commit_looping(
     t3k_mesh_device,
     num_devices,
@@ -360,7 +342,6 @@ def test_all_gather_on_t3000_post_commit_looping(
     num_iters,
     use_program_cache,
     function_level_defaults,
-    enable_async,
 ):
     run_all_gather_on_t3000_impl_tight_loop(
         t3k_mesh_device,
@@ -375,7 +356,6 @@ def test_all_gather_on_t3000_post_commit_looping(
         function_level_defaults,
         all_gather_topology=ttnn.Topology.Ring,
         num_iters=num_iters,
-        enable_async=enable_async,
     )
 
 
@@ -405,7 +385,6 @@ def test_all_gather_on_t3000_post_commit_looping(
     ],
 )
 @pytest.mark.parametrize("num_iters", [1000])  # TODO: restore to 500
-@pytest.mark.parametrize("enable_async", [True, False])
 def test_all_gather_on_t3000_nightly_commit_looping(
     t3k_mesh_device,
     num_devices,
@@ -418,7 +397,6 @@ def test_all_gather_on_t3000_nightly_commit_looping(
     num_iters,
     use_program_cache,
     function_level_defaults,
-    enable_async,
 ):
     run_all_gather_on_t3000_impl_tight_loop(
         t3k_mesh_device,
@@ -433,7 +411,6 @@ def test_all_gather_on_t3000_nightly_commit_looping(
         function_level_defaults,
         all_gather_topology=ttnn.Topology.Ring,
         num_iters=num_iters,
-        enable_async=enable_async,
     )
 
 
@@ -463,7 +440,6 @@ def test_all_gather_on_t3000_nightly_commit_looping(
     ],
 )
 @pytest.mark.parametrize("num_iters", [1000])  # TODO: restore to 500
-@pytest.mark.parametrize("enable_async", [True, False])
 def test_all_gather_on_t3000_nightly_commit_looping_4chip_ring(
     pcie_mesh_device,
     num_devices,
@@ -476,7 +452,6 @@ def test_all_gather_on_t3000_nightly_commit_looping_4chip_ring(
     num_iters,
     use_program_cache,
     function_level_defaults,
-    enable_async,
 ):
     run_all_gather_on_t3000_impl_tight_loop(
         pcie_mesh_device,
@@ -491,7 +466,6 @@ def test_all_gather_on_t3000_nightly_commit_looping_4chip_ring(
         function_level_defaults,
         all_gather_topology=ttnn.Topology.Ring,
         num_iters=num_iters,
-        enable_async=enable_async,
     )
 
 
@@ -714,7 +688,6 @@ def test_all_gather_on_t3000_post_commit_4chip_ring(
         # ttnn.MemoryConfig(buffer_type=ttnn.BufferType.L1),
     ],
 )
-@pytest.mark.parametrize("enable_async", [True, False])
 def test_line_all_gather_on_t3000_post_commit(
     t3k_mesh_device,
     num_devices,
@@ -726,7 +699,6 @@ def test_line_all_gather_on_t3000_post_commit(
     mem_config,
     use_program_cache,
     function_level_defaults,
-    enable_async,
     num_iters=1,
 ):
     if t3k_mesh_device.get_num_devices() < num_devices:
@@ -744,7 +716,6 @@ def test_line_all_gather_on_t3000_post_commit(
         use_program_cache,
         function_level_defaults,
         all_gather_topology=ttnn.Topology.Linear,
-        enable_async=enable_async,
         num_iters=num_iters,
     )
 
@@ -777,7 +748,6 @@ def test_line_all_gather_on_t3000_post_commit(
         # ttnn.MemoryConfig(buffer_type=ttnn.BufferType.L1),
     ],
 )
-@pytest.mark.parametrize("enable_async", [True, False])
 def test_line_all_gather_on_t3000_post_commit_4chip_ring(
     pcie_mesh_device,
     num_devices,
@@ -789,7 +759,6 @@ def test_line_all_gather_on_t3000_post_commit_4chip_ring(
     mem_config,
     use_program_cache,
     function_level_defaults,
-    enable_async,
     num_iters=1,
 ):
     if pcie_mesh_device.get_num_devices() < num_devices:
@@ -807,7 +776,6 @@ def test_line_all_gather_on_t3000_post_commit_4chip_ring(
         use_program_cache,
         function_level_defaults,
         all_gather_topology=ttnn.Topology.Linear,
-        enable_async=enable_async,
         num_iters=num_iters,
     )
 
@@ -844,7 +812,6 @@ def test_line_all_gather_on_t3000_post_commit_4chip_ring(
         ttnn.MemoryConfig(buffer_type=ttnn.BufferType.L1),
     ],
 )
-@pytest.mark.parametrize("enable_async", [True, False])
 def test_line_all_gather_on_t3000_nightly(
     t3k_mesh_device,
     num_devices,
@@ -856,7 +823,6 @@ def test_line_all_gather_on_t3000_nightly(
     mem_config,
     use_program_cache,
     function_level_defaults,
-    enable_async,
     num_iters=1,
 ):
     if t3k_mesh_device.get_num_devices() < num_devices:
@@ -874,7 +840,6 @@ def test_line_all_gather_on_t3000_nightly(
         use_program_cache,
         function_level_defaults,
         all_gather_topology=ttnn.Topology.Linear,
-        enable_async=enable_async,
         num_iters=num_iters,
     )
 
@@ -1138,7 +1103,6 @@ def run_all_gather_sharded(
     use_program_cache,
     function_level_defaults,
     all_gather_topology,
-    enable_async,
     n_worker=None,
     n_buffer=None,
     num_iter=1,
@@ -1210,21 +1174,11 @@ def run_all_gather_sharded(
     ):
         pytest.skip("Unsupported test case")
 
-    tt_input_tensors_dups = []
     tt_input_tensors = []
     for i, t in enumerate(input_tensors):
-        tt_input_tensors_dups.append(
-            ttnn.Tensor(t, input_dtype, {}, ttnn.Tile(tile))
-            .to(tensor_layout)
-            .to(mesh_device.get_devices()[i], input_mem_config)
-        )
-        tt_input_tensors.append(
-            ttnn.Tensor(t, input_dtype, {}, ttnn.Tile(tile))
-            .to(tensor_layout)
-            .to(mesh_device.get_devices()[i], input_mem_config)
-        )
+        tt_input_tensors.append(ttnn.Tensor(t, input_dtype, {}, ttnn.Tile(tile)).to(tensor_layout))
 
-    input_tensor_mesh = ttnn.aggregate_as_tensor(tt_input_tensors)
+    input_tensor_mesh = ttnn.aggregate_as_tensor(tt_input_tensors).to(mesh_device, input_mem_config)
 
     if trace_mode:
         tt_out_tensor = run_with_trace(
@@ -1251,8 +1205,7 @@ def run_all_gather_sharded(
                 topology=all_gather_topology,
             )
         ## Wait for completion
-        for d in mesh_device.get_devices():
-            ttnn.synchronize_device(d)
+        ttnn.synchronize_device(mesh_device)
 
     torch.set_printoptions(sci_mode=False)
     all_eq = True
@@ -1300,7 +1253,6 @@ def run_all_gather_sharded_t3k(
     use_program_cache,
     function_level_defaults,
     all_gather_topology,
-    enable_async,
     n_worker=None,
     n_buffer=None,
     num_iter=1,
@@ -1309,8 +1261,6 @@ def run_all_gather_sharded_t3k(
 ):
     if t3k_mesh_device.get_num_devices() < num_devices:
         pytest.skip("Not T3000!")
-
-    t3k_mesh_device.enable_async(enable_async)
 
     return run_all_gather_sharded(
         t3k_mesh_device,
@@ -1328,7 +1278,6 @@ def run_all_gather_sharded_t3k(
         use_program_cache,
         function_level_defaults,
         all_gather_topology,
-        enable_async,
         n_worker,
         n_buffer,
         num_iter,
@@ -1353,7 +1302,6 @@ def run_all_gather_sharded_n300(
     use_program_cache,
     function_level_defaults,
     all_gather_topology,
-    enable_async,
     n_worker=None,
     n_buffer=None,
     num_iter=1,
@@ -1361,8 +1309,6 @@ def run_all_gather_sharded_n300(
 ):
     if mesh_device.get_num_devices() != 2:
         pytest.skip("Not N300!")
-
-    mesh_device.enable_async(enable_async)
 
     return run_all_gather_sharded(
         mesh_device,
@@ -1380,7 +1326,6 @@ def run_all_gather_sharded_n300(
         use_program_cache,
         function_level_defaults,
         all_gather_topology,
-        enable_async,
         n_worker,
         n_buffer,
         num_iter,
@@ -1437,7 +1382,6 @@ def run_all_gather_sharded_n300(
         ),
     ),
 )
-@pytest.mark.parametrize("enable_async", [True])
 def test_all_gather_sharded_post_commit(
     t3k_mesh_device,
     num_devices,
@@ -1453,7 +1397,6 @@ def test_all_gather_sharded_post_commit(
     # num_cores,
     use_program_cache,
     function_level_defaults,
-    enable_async,
 ):
     run_all_gather_sharded_t3k(
         t3k_mesh_device,
@@ -1471,7 +1414,6 @@ def test_all_gather_sharded_post_commit(
         use_program_cache,
         function_level_defaults,
         all_gather_topology=ttnn.Topology.Ring,
-        enable_async=enable_async,
     )
 
 
@@ -1527,7 +1469,6 @@ def test_all_gather_sharded_post_commit(
         ),
     ),
 )
-@pytest.mark.parametrize("enable_async", [True])
 def test_all_gather_height_sharded_post_commit(
     t3k_mesh_device,
     num_devices,
@@ -1543,7 +1484,6 @@ def test_all_gather_height_sharded_post_commit(
     # num_cores,
     use_program_cache,
     function_level_defaults,
-    enable_async,
 ):
     run_all_gather_sharded_t3k(
         t3k_mesh_device,
@@ -1561,7 +1501,6 @@ def test_all_gather_height_sharded_post_commit(
         use_program_cache,
         function_level_defaults,
         all_gather_topology=ttnn.Topology.Ring,
-        enable_async=enable_async,
     )
 
 
@@ -1611,7 +1550,6 @@ def test_all_gather_height_sharded_post_commit(
         ),
     ),
 )
-@pytest.mark.parametrize("enable_async", [True])
 def test_all_gather_block_sharded_post_commit(
     t3k_mesh_device,
     num_devices,
@@ -1627,7 +1565,6 @@ def test_all_gather_block_sharded_post_commit(
     # num_cores,
     use_program_cache,
     function_level_defaults,
-    enable_async,
 ):
     run_all_gather_sharded_t3k(
         t3k_mesh_device,
@@ -1645,7 +1582,6 @@ def test_all_gather_block_sharded_post_commit(
         use_program_cache,
         function_level_defaults,
         all_gather_topology=ttnn.Topology.Ring,
-        enable_async=enable_async,
     )
 
 
@@ -1703,7 +1639,6 @@ def test_all_gather_block_sharded_post_commit(
         ),
     ),
 )
-@pytest.mark.parametrize("enable_async", [True])
 def test_line_all_gather_sharded_post_commit(
     t3k_mesh_device,
     num_devices,
@@ -1719,7 +1654,6 @@ def test_line_all_gather_sharded_post_commit(
     # num_cores,
     use_program_cache,
     function_level_defaults,
-    enable_async,
 ):
     run_all_gather_sharded_t3k(
         t3k_mesh_device,
@@ -1737,7 +1671,6 @@ def test_line_all_gather_sharded_post_commit(
         use_program_cache,
         function_level_defaults,
         all_gather_topology=ttnn.Topology.Linear,
-        enable_async=enable_async,
     )
 
 
@@ -1865,7 +1798,6 @@ def test_line_all_gather_sharded_post_commit(
         ),
     ),
 )
-@pytest.mark.parametrize("enable_async", [True])
 @pytest.mark.parametrize("all_gather_topology", [ttnn.Topology.Ring, ttnn.Topology.Linear])
 def test_sharded_all_gather_nightly(
     t3k_mesh_device,
@@ -1883,7 +1815,6 @@ def test_sharded_all_gather_nightly(
     use_program_cache,
     function_level_defaults,
     all_gather_topology,
-    enable_async,
 ):
     run_all_gather_sharded_t3k(
         t3k_mesh_device,
@@ -1901,7 +1832,6 @@ def test_sharded_all_gather_nightly(
         use_program_cache,
         function_level_defaults,
         all_gather_topology=all_gather_topology,
-        enable_async=enable_async,
     )
 
 
@@ -1986,7 +1916,6 @@ def test_all_gather_fp32(  # https://github.com/tenstorrent/tt-metal/issues/9686
     ),
 )
 @pytest.mark.parametrize("tile_h", [2])
-@pytest.mark.parametrize("enable_async", [True])
 def test_tiny_all_gather_sharded_post_commit(
     t3k_mesh_device,
     num_devices,
@@ -2002,7 +1931,6 @@ def test_tiny_all_gather_sharded_post_commit(
     # num_cores,
     use_program_cache,
     function_level_defaults,
-    enable_async,
     tile_h,
 ):
     run_all_gather_sharded_t3k(
@@ -2021,7 +1949,6 @@ def test_tiny_all_gather_sharded_post_commit(
         use_program_cache,
         function_level_defaults,
         all_gather_topology=ttnn.Topology.Ring,
-        enable_async=enable_async,
         tile=(tile_h, 32),
     )
 
@@ -2045,7 +1972,6 @@ def test_tiny_all_gather_sharded_post_commit(
         ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM),
     ],
 )
-@pytest.mark.parametrize("enable_async", [True])
 @pytest.mark.parametrize("tile_h", [1, 4, 8, 16])
 def test_tiny_line_all_gather_post_commit(
     t3k_mesh_device,
@@ -2058,7 +1984,6 @@ def test_tiny_line_all_gather_post_commit(
     mem_config,
     use_program_cache,
     function_level_defaults,
-    enable_async,
     tile_h,
     num_iters=1,
 ):
@@ -2077,7 +2002,6 @@ def test_tiny_line_all_gather_post_commit(
         use_program_cache,
         function_level_defaults,
         all_gather_topology=ttnn.Topology.Linear,
-        enable_async=enable_async,
         num_iters=num_iters,
         tile=(tile_h, 32),
     )

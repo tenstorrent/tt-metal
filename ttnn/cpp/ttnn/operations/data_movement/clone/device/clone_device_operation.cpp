@@ -41,7 +41,10 @@ CloneOperation::spec_return_value_t CloneOperation::compute_output_specs(
     const auto& input = tensor_args.input;
     return TensorSpec(
         input.get_logical_shape(),
-        TensorLayout(operation_attributes.dtype, PageConfig(input.get_layout()), operation_attributes.memory_config));
+        tt::tt_metal::TensorLayout(
+            operation_attributes.dtype,
+            tt::tt_metal::PageConfig(input.get_layout()),
+            operation_attributes.memory_config));
 };
 
 CloneOperation::tensor_return_value_t CloneOperation::create_output_tensors(

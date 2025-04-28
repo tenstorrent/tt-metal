@@ -2,21 +2,57 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <type_traits>
+#include <chrono>
+#include <fmt/base.h>
 #include <gtest/gtest.h>
-
-#include "device_fixture.hpp"
+#include <stdint.h>
 #include <tt-metalium/bfloat8.hpp>
-#include "tt_metal/test_utils/comparison.hpp"
-#include "tt_metal/test_utils/df/df.hpp"
-#include "tt_metal/test_utils/stimulus.hpp"
+#include <cmath>
+#include <functional>
+#include <initializer_list>
+#include <map>
+#include <memory>
+#include <string>
+#include <type_traits>
+#include <utility>
+#include <variant>
+#include <vector>
+
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/buffer_types.hpp>
+#include <tt-metalium/circular_buffer_types.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/data_types.hpp>
+#include "device_fixture.hpp"
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/kernel_types.hpp>
+#include <tt-metalium/logger.hpp>
+#include <tt-metalium/program.hpp>
+#include <tt_stl/span.hpp>
 #include "test_golden_impls.hpp"
+#include <tt-metalium/tt_backend_api_types.hpp>
+#include <tt-metalium/tt_metal.hpp>
+#include "tt_metal/test_utils/comparison.hpp"
+#include "tt_metal/test_utils/df/float32.hpp"
+#include "tt_metal/test_utils/packing.hpp"
+#include "tt_metal/test_utils/stimulus.hpp"
+#include "umd/device/types/arch.h"
+#include <tt-metalium/utils.hpp>
+
+namespace tt {
+namespace tt_metal {
+class IDevice;
+}  // namespace tt_metal
+}  // namespace tt
+
+namespace tt::tt_metal {
 
 using std::map;
 using namespace tt;
 using namespace tt::test_utils;
 using namespace tt::test_utils::df;
-using namespace tt::tt_metal;
 
 namespace unit_tests::compute::broadcast {
 
@@ -93,12 +129,12 @@ std::vector<uint32_t> get_tilized_packed_golden_broadcast(
         std::is_same<bfloat16, T_in>::value || std::is_same<float, T_in>::value,
         "Only float & Float_16b type as input allowed");
     std::vector<uint32_t> tilized_packed_res;
-    unit_tests::compute::GoldenConfig config = {.num_tiles_r_dim = shape.at(0), .num_tiles_c_dim = 1};
+    ::unit_tests::compute::GoldenConfig config = {.num_tiles_r_dim = shape.at(0), .num_tiles_c_dim = 1};
     std::vector<T_in> vBroadcast = get_broadcasted_vec(src, shape, dim);
     if constexpr (std::is_same<bfloat16, T_in>::value) {
         if (T_out == tt::DataFormat::Float16_b) {
             auto packed_vec = pack_vector<uint32_t, bfloat16>(vBroadcast);
-            tilized_packed_res = unit_tests::compute::gold_standard_tilize(packed_vec, config);
+            tilized_packed_res = ::unit_tests::compute::gold_standard_tilize(packed_vec, config);
         } else if (T_out == tt::DataFormat::Bfp8_b) {
             std::vector<float> tempfp32v;
             tempfp32v.resize(vBroadcast.size());
@@ -117,7 +153,7 @@ std::vector<uint32_t> get_tilized_packed_golden_broadcast(
                 tempfp16bv[i] = vBroadcast[i];
             }
             auto packed_vec = pack_vector<uint32_t, bfloat16>(tempfp16bv);
-            tilized_packed_res = unit_tests::compute::gold_standard_tilize(packed_vec, config);
+            tilized_packed_res = ::unit_tests::compute::gold_standard_tilize(packed_vec, config);
         } else if (T_out == tt::DataFormat::Bfp8_b) {
             tilized_packed_res = pack_fp32_vec_as_bfp8_tiles(vBroadcast, true, false);
         } else {
@@ -192,9 +228,9 @@ void get_packed_tilized_input_output_pair(
         std::vector<bfloat16> input = generate_uniform_random_vector<bfloat16>(
             1.0f, 2.0f, num_tiles * num_single_tile_elem, std::chrono::system_clock::now().time_since_epoch().count());
 
-        unit_tests::compute::GoldenConfig config = {.num_tiles_r_dim = num_tiles, .num_tiles_c_dim = 1};
+        ::unit_tests::compute::GoldenConfig config = {.num_tiles_r_dim = num_tiles, .num_tiles_c_dim = 1};
         auto packed_input = pack_vector<uint32_t, bfloat16>(input);
-        packed_tilized_input = unit_tests::compute::gold_standard_tilize(packed_input, config);
+        packed_tilized_input = ::unit_tests::compute::gold_standard_tilize(packed_input, config);
         packed_tilized_output =
             get_tilized_packed_golden_broadcast(input, {num_tiles, tile_width, tile_height}, bcast_dim, out_t);
     } else if (in_t == tt::DataFormat::Bfp8_b) {
@@ -330,3 +366,5 @@ TEST_F(DeviceFixture, TensixComputeSingleTileUnaryBroadcast) {
         }
     }
 }
+
+}  // namespace tt::tt_metal

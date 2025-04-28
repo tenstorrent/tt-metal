@@ -19,8 +19,6 @@ from models.demos.t3000.llama2_70b.tt.model_config import (
 )
 from models.demos.t3000.llama2_70b.tt.llama_common import get_llama_path, MAX_SEQ_LEN, BASE_URL, load_llama_state_dict
 from models.utility_functions import (
-    enable_persistent_kernel_cache,
-    disable_persistent_kernel_cache,
     skip_for_grayskull,
 )
 from tqdm import tqdm
@@ -84,9 +82,7 @@ def run_test_LlamaModel_stress_test(
         cache_path=cache_path,
         read_cache=True,
     )
-    for i in mesh_device.get_device_ids():
-        device = mesh_device.get_device(i)
-        ttnn.synchronize_device(device)
+    ttnn.synchronize_device(mesh_device)
 
     del state_dict
 
@@ -145,7 +141,6 @@ def test_Llama_stress_test(
         pytest.skip(f"Requires grid size of at least {model_config['MAX_GRID_SIZE']} to run")
 
     t3k_mesh_device.enable_program_cache()
-    disable_compilation_reports()
     run_test_LlamaModel_stress_test(
         devices,
         batch,

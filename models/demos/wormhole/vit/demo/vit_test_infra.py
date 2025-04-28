@@ -2,26 +2,18 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from loguru import logger
-import os
 import torch
-import torchvision
 
 import ttnn
 from ttnn.model_preprocessing import (
     preprocess_model_parameters,
 )
 from models.utility_functions import (
-    is_wormhole_b0,
-    is_grayskull,
     divup,
-    _nearest_y,
 )
 
-from tests.ttnn.utils_for_testing import assert_with_pcc
-from models.demos.ttnn_resnet.tt.custom_preprocessing import create_custom_mesh_preprocessor
-from models.experimental.functional_vit.tt import ttnn_optimized_sharded_vit_wh
-from models.experimental.vit.vit_helper_funcs import get_data_loader, get_batch
+from models.demos.vit.tt import ttnn_optimized_sharded_vit_wh
+from models.demos.wormhole.vit.demo.vit_helper_funcs import get_data_loader, get_batch
 import transformers
 from transformers import AutoImageProcessor
 

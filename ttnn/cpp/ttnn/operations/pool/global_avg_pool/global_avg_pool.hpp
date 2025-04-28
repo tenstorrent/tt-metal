@@ -15,7 +15,7 @@ enum class PoolType { AVG };
 
 Tensor global_avg_pool2d(
     const Tensor& input,
-    const MemoryConfig& memory_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+    const MemoryConfig& memory_config = tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
     const std::optional<DataType>& output_dtype = std::nullopt);
 
 }  // namespace tt_metal
@@ -42,7 +42,7 @@ struct GlobalAveragePool2D {
 }  // namespace pool
 }  // namespace operations
 
-constexpr auto global_avg_pool2d = ttnn::
-    register_operation_with_auto_launch_op<"ttnn::global_avg_pool2d", ttnn::operations::pool::GlobalAveragePool2D>();
+constexpr auto global_avg_pool2d =
+    ttnn::register_operation<"ttnn::global_avg_pool2d", ttnn::operations::pool::GlobalAveragePool2D>();
 
 }  // namespace ttnn

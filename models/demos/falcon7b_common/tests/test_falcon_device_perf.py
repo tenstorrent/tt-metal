@@ -12,7 +12,7 @@ from models.demos.falcon7b_common.tests.run_falcon_end_to_end import (
 )
 from models.demos.falcon7b_common.tt.model_config import get_model_config
 from models.perf.device_perf_utils import check_device_perf, prep_device_perf_report, run_device_perf
-from models.utility_functions import disable_compilation_reports, disable_persistent_kernel_cache, skip_for_grayskull
+from models.utility_functions import disable_persistent_kernel_cache, skip_for_grayskull
 
 
 @pytest.mark.parametrize(
@@ -58,7 +58,6 @@ def test_device_perf_wh_bare_metal(
     )
 
     disable_persistent_kernel_cache()
-    disable_compilation_reports()
 
     if llm_mode == "prefill":
         expected_output_pcc, expected_k_cache_pcc, expected_v_cache_pcc = PREFILL_CONFIG_TO_PCC[
@@ -90,12 +89,12 @@ def test_device_perf_wh_bare_metal(
 @pytest.mark.parametrize(
     "llm_mode, batch, seq_len, kv_cache_len, model_config_str, samples",
     (
-        ("prefill", 1, 128, 0, "BFLOAT16-DRAM", 2060),
-        ("prefill", 1, 1024, 0, "BFLOAT16-DRAM", 2890),
-        ("prefill", 1, 2048, 0, "BFLOAT16-DRAM", 2680),
-        ("decode", 32, 1, 128, "BFLOAT16-L1_SHARDED", 625),
-        ("decode", 32, 1, 1024, "BFLOAT16-L1_SHARDED", 568),
-        ("decode", 32, 1, 2047, "BFLOAT16-L1_SHARDED", 550),
+        ("prefill", 1, 128, 0, "BFLOAT16-DRAM", 2068),
+        ("prefill", 1, 1024, 0, "BFLOAT16-DRAM", 2895),
+        ("prefill", 1, 2048, 0, "BFLOAT16-DRAM", 2684),
+        ("decode", 32, 1, 128, "BFLOAT16-L1_SHARDED", 629),
+        ("decode", 32, 1, 1024, "BFLOAT16-L1_SHARDED", 572),
+        ("decode", 32, 1, 2047, "BFLOAT16-L1_SHARDED", 553),
     ),
 )
 @skip_for_grayskull()

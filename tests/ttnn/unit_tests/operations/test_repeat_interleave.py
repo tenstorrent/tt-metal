@@ -16,7 +16,7 @@ from models.utility_functions import (
 )
 
 
-@pytest.mark.parametrize("repeats", [1, 2, 3])
+@pytest.mark.parametrize("repeats", [1, 2, 3, 58])
 @pytest.mark.parametrize("dim", [0, 1, 2, 3])
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.uint16])
 def test_repeat_interleave(device, repeats, dim, dtype):

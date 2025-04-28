@@ -20,8 +20,8 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> NLPCreateHeadsVitOperation:
     } else {
         optional_outputs = {};
     }
-    auto outputs =
-        operation::run(NlpCreateHeadsVitDeviceOperation{output_mem_config}, {input_tensor_q}, {}, optional_outputs);
+    auto outputs = tt::tt_metal::operation::run(
+        NlpCreateHeadsVitDeviceOperation{output_mem_config}, {input_tensor_q}, {}, optional_outputs);
     return {outputs[0], outputs[1], outputs[2]};
 };
 

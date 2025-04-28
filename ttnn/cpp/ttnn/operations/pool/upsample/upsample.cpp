@@ -53,7 +53,8 @@ ttnn::Tensor ExecuteUpSample::invoke(
     }
 
     // return ttnn::upsample(input_tensor, scale_h, scale_w, mem_config);
-    auto output_tensor = operation::run(UpSample{scale_h, scale_w, mode, mem_config, config}, {input_tensor}).front();
+    auto output_tensor =
+        tt::tt_metal::operation::run(UpSample{scale_h, scale_w, mode, mem_config, config}, {input_tensor}).front();
     return output_tensor;
 }
 

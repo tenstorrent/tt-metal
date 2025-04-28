@@ -44,7 +44,8 @@ void move_common_entries(std::vector<CoreCoord>& v1, std::vector<CoreCoord>& v2,
     }
 }
 
-void get_optimal_dram_bank_to_reader_assignment(IDevice* device, std::vector<CoreCoord>& all_worker_cores_ordered, CoreRangeSet& all_worker_cores) {
+void get_optimal_dram_bank_to_reader_assignment(
+    tt::tt_metal::IDevice* device, std::vector<CoreCoord>& all_worker_cores_ordered, CoreRangeSet& all_worker_cores) {
     all_worker_cores_ordered = device->get_optimal_dram_bank_to_logical_worker_assignment();
     std::set<CoreRange> all_cores_set;
     for (const auto& worker_core : all_worker_cores_ordered) {
@@ -53,7 +54,7 @@ void get_optimal_dram_bank_to_reader_assignment(IDevice* device, std::vector<Cor
     all_worker_cores = CoreRangeSet(all_cores_set);
 }
 
-operation::ProgramWithCallbacks create_program_dram_sharded(
+tt::tt_metal::operation::ProgramWithCallbacks create_program_dram_sharded(
     tt::tt_metal::IDevice* device,
     const CoreRangeSet& all_storage_cores,
     MathFidelity math_fidelity,
@@ -282,12 +283,12 @@ operation::ProgramWithCallbacks create_program_dram_sharded(
     uint32_t in0_block_num_tiles = out_subblock_h * in0_block_w * in0_num_subblocks;
 
     // in1 is the reader of weights/output writer, and we choose to make it use the optimized reader noc
-    tt_metal::NOC in0_noc = detail::GetPreferredNOCForDRAMWrite(device->arch());
-    tt_metal::NOC in1_noc = detail::GetPreferredNOCForDRAMRead(device->arch());
+    tt_metal::NOC in0_noc = tt::tt_metal::detail::GetPreferredNOCForDRAMWrite(device->arch());
+    tt_metal::NOC in1_noc = tt::tt_metal::detail::GetPreferredNOCForDRAMRead(device->arch());
 
     CoreCoord start_core_noc = top_left_core_physical;
     CoreCoord end_core_noc = bottom_right_core_physical;
-    if (in0_noc == NOC::NOC_1) {
+    if (in0_noc == tt::tt_metal::NOC::NOC_1) {
         std::swap(start_core_noc, end_core_noc);
     }
 
@@ -564,8 +565,8 @@ operation::ProgramWithCallbacks create_program_dram_sharded(
             in3_CB_size);
     }
 
-    std::vector<KernelHandle> reader_kernel_ids;
-    std::vector<KernelHandle> writer_kernel_ids;
+    std::vector<tt::tt_metal::KernelHandle> reader_kernel_ids;
+    std::vector<tt::tt_metal::KernelHandle> writer_kernel_ids;
 
     std::vector<uint32_t> in0_mcast_sender_noc_x;
     std::vector<uint32_t> in0_mcast_sender_noc_y;
@@ -850,10 +851,10 @@ operation::ProgramWithCallbacks create_program_dram_sharded(
     auto override_runtime_arguments_callback =
         [writer_kernel_ids, all_worker_cores_ordered, cb_src2, cb_output_reshard](
             const void* operation,
-            Program& program,
-            const std::vector<Tensor>& input_tensors,
-            const std::vector<std::optional<const Tensor>>& optional_input_tensors,
-            const std::vector<Tensor>& output_tensors) {
+            tt::tt_metal::Program& program,
+            const std::vector<tt::tt_metal::Tensor>& input_tensors,
+            const std::vector<std::optional<const tt::tt_metal::Tensor>>& optional_input_tensors,
+            const std::vector<tt::tt_metal::Tensor>& output_tensors) {
             TT_FATAL(input_tensors.size() + optional_input_tensors.size() == 3, "Error");
             TT_FATAL(output_tensors.size() == 1, "Error");
 
@@ -889,7 +890,8 @@ namespace operations {
 
 namespace matmul {
 
-operation::ProgramWithCallbacks matmul_multi_core_reuse_dram_sharded_optimized_(
+tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse_dram_sharded_optimized_(
+    const ttnn::MeshCoordinate& mesh_coord,
     const Tensor& a,
     const Tensor& b,
     const std::optional<const Tensor>& bias,
@@ -929,7 +931,7 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_dram_sharded_optimized_(
         bias_data_format = tt_metal::datatype_to_dataformat_converter(c.get_dtype());
     }
 
-    tt::tt_metal::IDevice* device = a.device();
+    tt::tt_metal::IDevice* device = a.mesh_device()->get_device(mesh_coord);
 
     TT_FATAL(a.shard_spec().has_value() && output.shard_spec().has_value(), "Error");
     CoreRangeSet all_cores_storage = a.shard_spec().value().grid;
@@ -1006,7 +1008,8 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_dram_sharded_optimized_(
         skip_write_back);
 }
 
-operation::ProgramWithCallbacks matmul_multi_core_reuse_dram_sharded_optimized(
+tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse_dram_sharded_optimized(
+    const ttnn::MeshCoordinate& mesh_coord,
     const Tensor& a,
     const Tensor& b,
     const std::optional<const Tensor>& bias,
@@ -1021,6 +1024,7 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_dram_sharded_optimized(
     bool skip_in0_mcast,
     bool skip_write_back) {
     return matmul_multi_core_reuse_dram_sharded_optimized_(
+        mesh_coord,
         a,
         b,
         bias,

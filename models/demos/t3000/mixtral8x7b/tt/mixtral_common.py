@@ -6,7 +6,6 @@ from loguru import logger
 import torch
 import ttnn
 from ttnn import ReplicateTensorToMesh
-from models.utility_functions import nearest_32
 import json
 import math
 
