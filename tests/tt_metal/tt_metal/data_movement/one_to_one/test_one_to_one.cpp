@@ -142,19 +142,23 @@ bool run_dm(IDevice* device, const OneToOneConfig& test_config) {
     detail::LaunchProgram(device, program);
     detail::ReadFromBuffer(slave_l1_buffer, packed_output);
 
-    // Print output and golden vectors
-    log_info("Golden vector");
-    print_vector<uint32_t>(packed_golden);
-    log_info("Output vector");
-    print_vector<uint32_t>(packed_output);
-
-    // Return comparison
-    return is_close_packed_vectors<bfloat16, uint32_t>(
+    // Results comparison
+    bool pcc = is_close_packed_vectors<bfloat16, uint32_t>(
         packed_output, packed_golden, [&](const bfloat16& a, const bfloat16& b) { return is_close(a, b); });
+
+    if (!pcc) {
+        log_error("PCC Check failed");
+        log_info("Golden vector");
+        print_vector<uint32_t>(packed_golden);
+        log_info("Output vector");
+        print_vector<uint32_t>(packed_output);
+    }
+
+    return pcc;
 }
 }  // namespace unit_tests::dm::core_to_core
 
-/* ========== Test case for one to one data movement; Test id = 3 ========== */
+/* ========== Test case for one to one data movement; Test id = 4 ========== */
 TEST_F(DeviceFixture, TensixDataMovementOneToOnePacketSizes) {
     // Parameters
     uint32_t max_transactions = 64;
@@ -173,7 +177,7 @@ TEST_F(DeviceFixture, TensixDataMovementOneToOnePacketSizes) {
              transaction_size_pages *= 2) {
             // Test config
             unit_tests::dm::core_to_core::OneToOneConfig test_config = {
-                .test_id = 3,
+                .test_id = 4,
                 .master_core_coord = master_core_coord,
                 .slave_core_coord = slave_core_coord,
                 .num_of_transactions = num_of_transactions,
