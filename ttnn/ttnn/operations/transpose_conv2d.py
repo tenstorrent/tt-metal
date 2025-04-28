@@ -5,7 +5,6 @@
 from loguru import logger
 
 from typing import Tuple, Union, Dict, Optional
-import torch
 import warnings
 import math
 import ttnn
