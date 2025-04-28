@@ -251,8 +251,7 @@ class TtTransformer(LightweightModule):
         """
         host_inputs = self.prepare_decode_inputs_host(*inputs)
         device_inputs = copy_host_to_device(host_inputs, mesh_device=self.mesh_device)  # Helper function
-        transformed_device_inputs = self.transform_decode_inputs_device(*device_inputs)
-        return transformed_device_inputs
+        return device_inputs
 
     def prepare_decode_inputs_host(self, tokens, current_pos, page_table=None):
         """
@@ -314,11 +313,6 @@ class TtTransformer(LightweightModule):
         # print("tokens", tokens.shape, tokens.memory_config)
         tt_rot_mats = self.rope_setup.get_rot_mats(rope_idxs)
         tt_tokens = self.embd(tokens)
-        # tt_tokens = ttnn.unsqueeze_to_4D(tt_tokens)
-        # tt_tokens = ttnn.to_memory_config(
-        #     tt_tokens,
-        #     self.args.model_config["DECODE_RESIDUAL_MEMCFG"],
-        # )
         return tt_tokens, current_pos, tt_rot_mats, page_table
 
     def process_output_prefill(self, tt_out, last_token_idx):
@@ -343,6 +337,12 @@ class TtTransformer(LightweightModule):
         )
 
         tt_logits = ttnn.untilize(tt_logits, use_multicore=True)
+        tt_logits = ttnn.reshape(
+            tt_logits,
+            ttnn.Shape([1, 1, 1, tt_logits.shape[-1]]),
+            ttnn.Shape([1, 1, tt_logits.shape[-2], tt_logits.shape[-1]]),
+        )
+
         tt_out = ttnn.argmax(
             tt_logits, dim=3, keepdim=True, use_multicore=True
         )  # TODO Add multicore support to batch > 1
@@ -358,15 +358,9 @@ class TtTransformer(LightweightModule):
         """
         if isinstance(tt_out, list):
             tt_out = tt_out[0]
+        tt_out_cpu = tt_out.cpu(blocking=True, cq_id=0)
         if is_tokens:
-            tt_out = ttnn.to_torch(
-                tt_out,  # tt_out.cpu(blocking=True, cq_id=1),
-                mesh_composer=ttnn.ConcatMesh2dToTensor(
-                    self.mesh_device,
-                    dims=(3, 1) if self.args.is_galaxy else (1, -1),
-                    mesh_shape=self.args.cluster_shape,
-                ),
-            )[0, 0, :B, 0]
+            tt_out = ttnn.to_torch(ttnn.get_device_tensors(tt_out_cpu)[0])[0, 0, 0, :]
             return tt_out
 
         if self.args.num_devices > 1:
@@ -409,7 +403,7 @@ class TtTransformer(LightweightModule):
         self,
         x,
         current_pos,
-        rot_mats,
+        rot_mat_idxs,
         page_table=None,
         kv_cache=None,
         argmax_on_device=False,
@@ -418,8 +412,10 @@ class TtTransformer(LightweightModule):
         This method will take device tensors and any other args to run forward.
         It returns ttnn device tensors.
         """
+        rot_mats = self.rope_setup.get_rot_mats(rot_mat_idxs)
+        x_embd = self.embd(x)
         tt_logits = self.forward(
-            x,
+            x_embd,
             current_pos,
             rot_mats=rot_mats,
             mode="decode",
@@ -444,20 +440,29 @@ class TtTransformer(LightweightModule):
         )
 
         tt_logits = ttnn.untilize(tt_logits, use_multicore=True, sub_core_grids=sub_core_grids)
+        tt_logits = ttnn.reshape(
+            tt_logits,
+            ttnn.Shape([1, 1, 1, tt_logits.shape[-1]]),
+            ttnn.Shape([1, 1, tt_logits.shape[-2], tt_logits.shape[-1]]),
+        )
 
         if argmax_on_device:
             tt_logits = ttnn.argmax(  # TODO Add multicore support to batch > 1
-                tt_logits,
-                dim=3,
-                keepdim=True,
-                use_multicore=True,
-                sub_core_grids=sub_core_grids,  # ,output_tensor=tokens
+                tt_logits, dim=3, keepdim=True, use_multicore=True, sub_core_grids=sub_core_grids, output_tensor=x
             )
         else:
             # Send output logits to DRAM so L1 is not reserved for ttnn tracing and can be used by subsequent operations
             if not self.args.is_galaxy:
                 tt_logits = ttnn.to_memory_config(tt_logits, ttnn.DRAM_MEMORY_CONFIG)
 
+        ttnn.plus_one(
+            current_pos,
+            sub_core_grids=ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(1, 0))]),
+        )
+        ttnn.plus_one(
+            rot_mat_idxs,
+            sub_core_grids=ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(1, 0))]),
+        )
         return tt_logits
 
     def switch_mode(self, mode):
