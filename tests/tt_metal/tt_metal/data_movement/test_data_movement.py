@@ -63,8 +63,8 @@ test_bounds = {
             "riscv_0": {"latency": {"lower": 400, "upper": 500}, "bandwidth": 0.30},
         },
         3: {
-            "riscv_1": {"latency": {"lower": 149000, "upper": 150000}, "bandwidth": 9},
-            "riscv_0": {"latency": {"lower": 90000, "upper": 91000}, "bandwidth": 16},
+            "riscv_1": {"latency": {"lower": 42000, "upper": 44000}, "bandwidth": 9},
+            "riscv_0": {"latency": {"lower": 42000, "upper": 43000}, "bandwidth": 16},
         },
         4: {
             "riscv_1": {"latency": {"lower": 4000, "upper": 12000}, "bandwidth": 0.007},
@@ -302,16 +302,10 @@ def performance_check(dm_stats, arch="blackhole", verbose=False):
             else:
                 logger.info(f"RISCV 0 bandwidth within perf bounds.\n")
 
-        logger.info(f"Performance check for test id: {test_id}")
-        logger.info(f"  RISCV 1 cycles within bounds: {riscv1_cycles_within_bounds}")
-        logger.info(f"  RISCV 0 cycles within bounds: {riscv0_cycles_within_bounds}")
-        logger.info(f"  RISCV 1 bandwidth within bounds: {riscv1_bw_within_bounds}")
-        logger.info(f"  RISCV 0 bandwidth within bounds: {riscv0_bw_within_bounds}")
-
-        # assert riscv1_cycles_within_bounds
-        # assert riscv0_cycles_within_bounds
-        # assert riscv1_bw_within_bounds
-        # assert riscv0_bw_within_bounds
+        assert riscv1_cycles_within_bounds
+        assert riscv0_cycles_within_bounds
+        assert riscv1_bw_within_bounds
+        assert riscv0_bw_within_bounds
 
 
 def print_stats(dm_stats):
