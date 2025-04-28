@@ -56,6 +56,9 @@ class TestProd:
         dst_mem_config,
         device,
     ):
+        if keepdim and all_dimensions:
+            pytest.skip("keepdim=True with all_dimensions=True is not a valid configuration")
+
         datagen_func = [
             generation_funcs.gen_func_with_cast(partial(generation_funcs.gen_rand, low=1, high=1.5), torch.bfloat16)
         ]

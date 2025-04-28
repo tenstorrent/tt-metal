@@ -52,7 +52,7 @@ def test_bw_prod(input_shapes, all_dimensions, dim, device):
     if all_dimensions == False:
         pyt_y = torch.prod(in_data, dim=dim, keepdim=True)
     else:
-        pyt_y = torch.prod(in_data).view(1, 1, 1, 1)
+        pyt_y = torch.prod(in_data)
     tt_output_tensor_on_device = ttnn.prod_bw(grad_tensor, input_tensor, all_dimensions=all_dimensions, dim=dim)
     in_data.retain_grad()
     pyt_y.backward(gradient=grad_data)
@@ -75,7 +75,7 @@ def test_bw_prod(input_shapes, all_dimensions, dim, device):
 def test_bw_prod_default_both(input_shapes, device):
     in_data, input_tensor = data_gen_pt_tt(input_shapes, device, True)
     grad_data, grad_tensor = data_gen_pt_tt_prod(input_shapes, device)
-    pyt_y = torch.prod(in_data).view(1, 1, 1, 1)
+    pyt_y = torch.prod(in_data)
     tt_output_tensor_on_device = ttnn.prod_bw(grad_tensor, input_tensor)
     in_data.retain_grad()
     pyt_y.backward(gradient=grad_data)
@@ -102,7 +102,7 @@ def test_bw_prod_default_dim(input_shapes, all_dimensions, device):
     if all_dimensions == False:
         pyt_y = torch.prod(in_data, dim=0, keepdim=True)
     else:
-        pyt_y = torch.prod(in_data).view(1, 1, 1, 1)
+        pyt_y = torch.prod(in_data)
     tt_output_tensor_on_device = ttnn.prod_bw(grad_tensor, input_tensor, all_dimensions=all_dimensions)
     in_data.retain_grad()
     pyt_y.backward(gradient=grad_data)
