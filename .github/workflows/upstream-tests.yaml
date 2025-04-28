@@ -32,10 +32,10 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       image-tag-suffix: ${{ steps.set-image-tag-suffix.outputs.image-tag-suffix }}
-      wh-6u-image-tag: ${{ steps.set-wh-6u-image-tag.outputs.wh-6u-image-tag }}
-      wh-6u-base-image-name: ${{ steps.set-wh-6u-image-tag.outputs.wh-6u-base-image-name }}
-      wh-6u-profiler-image-tag: ${{ steps.set-wh-6u-image-tag.outputs.wh-6u-profiler-image-tag }}
-      wh-6u-profiler-base-image-name: ${{ steps.set-wh-6u-image-tag.outputs.wh-6u-profiler-base-image-name }}
+      wh-6u-image-tag: ${{ steps.set-image-tags.outputs.wh-6u-image-tag }}
+      wh-6u-base-image-name: ${{ steps.set-image-tags.outputs.wh-6u-base-image-name }}
+      wh-6u-profiler-image-tag: ${{ steps.set-image-tags.outputs.wh-6u-profiler-image-tag }}
+      wh-6u-profiler-base-image-name: ${{ steps.set-image-tags.outputs.wh-6u-profiler-base-image-name }}
     steps:
       - uses: actions/checkout@v4
         with:
