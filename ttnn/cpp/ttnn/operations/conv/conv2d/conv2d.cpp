@@ -509,7 +509,6 @@ Result conv2d_L1(
                 0,
                 false,
                 parallel_config.shard_orientation == ShardOrientation::COL_MAJOR,
-                0,
                 input_tensor_post_tm.memory_config(),
                 true,
                 conv_config.in_place);
