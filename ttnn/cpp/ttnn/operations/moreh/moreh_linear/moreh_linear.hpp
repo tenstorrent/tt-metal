@@ -20,6 +20,6 @@ struct MorehLinear {
 }  // namespace ttnn::operations::moreh::moreh_linear
 
 namespace ttnn {
-constexpr auto moreh_linear = ttnn::
-    register_operation_with_auto_launch_op<"ttnn::moreh_linear", ttnn::operations::moreh::moreh_linear::MorehLinear>();
+constexpr auto moreh_linear =
+    ttnn::register_operation<"ttnn::moreh_linear", ttnn::operations::moreh::moreh_linear::MorehLinear>();
 }

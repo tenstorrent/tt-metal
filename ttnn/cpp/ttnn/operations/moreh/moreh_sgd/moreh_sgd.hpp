@@ -24,26 +24,9 @@ struct MorehSgd {
         const std::optional<MemoryConfig>& param_out_memory_config,
         const std::optional<MemoryConfig>& momentum_buffer_out_memory_config,
         const std::optional<DeviceComputeKernelConfig>& compute_kernel_config);
-
-    static OptionalTensors create_async_optional_output_tensors(
-        const Tensor& param_in,
-        const Tensor& grad,
-        const std::optional<Tensor>& momentum_buffer_in,
-        const std::optional<Tensor>& param_out,
-        const std::optional<Tensor>& momentum_buffer_out,
-        float lr,
-        float momentum,
-        float dampening,
-        float weight_decay,
-        bool nesterov,
-        bool momentum_initialized,
-        const std::optional<MemoryConfig>& param_out_memory_config,
-        const std::optional<MemoryConfig>& momentum_buffer_out_memory_config,
-        const std::optional<DeviceComputeKernelConfig>& compute_kernel_config);
 };
 }  // namespace ttnn::operations::moreh::moreh_sgd
 
 namespace ttnn {
-constexpr auto moreh_sgd =
-    ttnn::register_operation_with_auto_launch_op<"ttnn::moreh_sgd", ttnn::operations::moreh::moreh_sgd::MorehSgd>();
+constexpr auto moreh_sgd = ttnn::register_operation<"ttnn::moreh_sgd", ttnn::operations::moreh::moreh_sgd::MorehSgd>();
 }

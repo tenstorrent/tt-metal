@@ -19,6 +19,5 @@ struct Uniform {
 }  // namespace ttnn::operations::uniform
 
 namespace ttnn {
-constexpr auto uniform =
-    ttnn::register_operation_with_auto_launch_op<"ttnn::uniform", ttnn::operations::uniform::Uniform>();
+constexpr auto uniform = ttnn::register_operation<"ttnn::uniform", ttnn::operations::uniform::Uniform>();
 }  // namespace ttnn

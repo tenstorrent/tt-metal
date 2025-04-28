@@ -52,11 +52,8 @@ struct DequantOp {
 }  // namespace ttnn::operations::quantization
 
 namespace ttnn {
-constexpr auto quantize =
-    ttnn::register_operation_with_auto_launch_op<"ttnn::quantize", operations::quantization::QuantOp>();
-constexpr auto requantize =
-    ttnn::register_operation_with_auto_launch_op<"ttnn::requantize", operations::quantization::RequantOp>();
-constexpr auto dequantize =
-    ttnn::register_operation_with_auto_launch_op<"ttnn::dequantize", operations::quantization::DequantOp>();
+constexpr auto quantize = ttnn::register_operation<"ttnn::quantize", operations::quantization::QuantOp>();
+constexpr auto requantize = ttnn::register_operation<"ttnn::requantize", operations::quantization::RequantOp>();
+constexpr auto dequantize = ttnn::register_operation<"ttnn::dequantize", operations::quantization::DequantOp>();
 
 }  // namespace ttnn

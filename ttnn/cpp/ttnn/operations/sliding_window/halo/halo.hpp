@@ -34,7 +34,7 @@ namespace ttnn {
 constexpr auto halo = ttnn::register_operation<"ttnn::halo", operations::sliding_window::halo::HaloOperation>();
 
 // Alternatively, the operation can be registered as asynchronous
-// constexpr auto example = ttnn::register_operation_with_auto_launch_op<"ttnn::example",
+// constexpr auto example = ttnn::register_operation<"ttnn::example",
 // operations::examples::ExampleOperation>();
 
 }  // namespace ttnn

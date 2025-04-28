@@ -20,13 +20,4 @@ std::vector<std::optional<ttnn::Tensor>> RMSNormForwardOperation::invoke(
     return {result[0], result[1]};
 }
 
-std::vector<std::optional<ttnn::Tensor>> RMSNormForwardOperation::create_async_optional_output_tensors(
-    const ttnn::Tensor& input_tensor, const ttnn::Tensor& gamma_tensor, bool return_intermediates, float epsilon) {
-    return {
-        ttnn::Tensor(tt::tt_metal::operation::get_workers_for_op_output({input_tensor})),
-        return_intermediates ? std::optional<ttnn::Tensor>(
-                                   ttnn::Tensor(tt::tt_metal::operation::get_workers_for_op_output({input_tensor})))
-                             : std::nullopt};
-}
-
 }  // namespace ttml::metal::ops::rmsnorm_fw

@@ -1404,37 +1404,19 @@ Tensor matmul(
     const QueueId queue_id,
     const std::optional<Tensor>& optional_output_tensor) {
     std::vector<std::optional<const Tensor>> optional_input_tensors = {};
-    std::vector<Tensor> output_tensors;
-
     if (bias.has_value()) {
         optional_input_tensors.push_back(bias.value());
-        output_tensors = {
-            Tensor(operation::get_workers_for_op_output({input_tensor_a, input_tensor_b}, {bias.value()}))};
     } else {
         optional_input_tensors.push_back(std::nullopt);
-        output_tensors = {Tensor(operation::get_workers_for_op_output({input_tensor_a, input_tensor_b}))};
     }
 
-    operation::launch_op(
-        [parameters, queue_id](
-            const std::vector<Tensor>& input_tensors,
-            const std::vector<std::optional<const Tensor>>& optional_input_tensors,
-            const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
-            const auto& input_tensor_a = input_tensors.at(0);
-            const auto& input_tensor_b = input_tensors.at(1);
-
-            return operation::run(
-                create_matmul_struct(input_tensor_a, input_tensor_b, parameters, optional_output_tensors),
-                {input_tensor_a, input_tensor_b},
-                optional_input_tensors,
-                optional_output_tensors,
-                queue_id);
-        },
-        {input_tensor_a, input_tensor_b},
-        output_tensors,
-        optional_input_tensors,
-        {optional_output_tensor});
-    return output_tensors.at(0);
+    return operation::run(
+               create_matmul_struct(input_tensor_a, input_tensor_b, parameters, {optional_output_tensor}),
+               {input_tensor_a, input_tensor_b},
+               optional_input_tensors,
+               {optional_output_tensor},
+               queue_id)
+        .at(0);
 }
 
 void check_tensor_in_grid(const Tensor& tensor, const CoreCoord& grid_size) {

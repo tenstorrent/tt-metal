@@ -27,7 +27,6 @@ struct ConcatOperation {
 }  // namespace data_movement
 }  // namespace operations
 
-constexpr auto concat =
-    ttnn::register_operation_with_auto_launch_op<"ttnn::concat", ttnn::operations::data_movement::ConcatOperation>();
+constexpr auto concat = ttnn::register_operation<"ttnn::concat", ttnn::operations::data_movement::ConcatOperation>();
 
 }  // namespace ttnn

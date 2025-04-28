@@ -19,6 +19,5 @@ struct Full {
 }  // namespace ttnn::operations::full
 
 namespace ttnn {
-constexpr auto moreh_full =
-    ttnn::register_operation_with_auto_launch_op<"ttnn::moreh_full", ttnn::operations::full::Full>();
+constexpr auto moreh_full = ttnn::register_operation<"ttnn::moreh_full", ttnn::operations::full::Full>();
 }  // namespace ttnn

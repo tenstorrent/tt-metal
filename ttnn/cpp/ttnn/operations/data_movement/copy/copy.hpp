@@ -37,9 +37,7 @@ struct AssignOperation {
 
 }  // namespace operations::data_movement
 
-constexpr auto copy =
-    ttnn::register_operation_with_auto_launch_op<"ttnn::copy", ttnn::operations::data_movement::CopyOperation>();
-constexpr auto assign =
-    ttnn::register_operation_with_auto_launch_op<"ttnn::assign", ttnn::operations::data_movement::AssignOperation>();
+constexpr auto copy = ttnn::register_operation<"ttnn::copy", ttnn::operations::data_movement::CopyOperation>();
+constexpr auto assign = ttnn::register_operation<"ttnn::assign", ttnn::operations::data_movement::AssignOperation>();
 
 }  // namespace ttnn
