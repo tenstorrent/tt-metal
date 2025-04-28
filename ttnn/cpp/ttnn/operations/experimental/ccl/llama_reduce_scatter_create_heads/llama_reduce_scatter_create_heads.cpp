@@ -53,7 +53,8 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ExecuteLlamaR
             tensor.device()->id(),
             first_address);
     }
-
+    uint32_t head_dim = input_tensor.get_padded_shape()[-1] / (num_heads + 2 * num_kv_heads);
+    uint32_t slice_size = input_tensor.get_padded_shape()[-2] / ring_devices;
     std::vector<GlobalSemaphore> semaphores = cross_device_semaphore.global_semaphores;
     tt::tt_metal::operation::launch_op(
         [dim,
@@ -66,6 +67,8 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ExecuteLlamaR
          num_links,
          num_heads,
          num_kv_heads,
+         head_dim,
+         slice_size,
          qkv_memory_config](
             const std::vector<Tensor>& input_tensors,
             const std::vector<std::optional<const Tensor>>& optional_input_tensors,
@@ -105,6 +108,8 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ExecuteLlamaR
                 num_links,
                 num_heads,
                 num_kv_heads,
+                head_dim,
+                slice_size,
                 memory_config,
                 qkv_memory_config)};
         },

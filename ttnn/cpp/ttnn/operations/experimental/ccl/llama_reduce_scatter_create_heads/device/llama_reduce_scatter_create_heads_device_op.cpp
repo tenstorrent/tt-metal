@@ -144,6 +144,8 @@ LlamaReduceScatterCreateHeadsDeviceOperation::invoke(
     const uint32_t num_links,
     const uint32_t num_heads,
     const uint32_t num_kv_heads,
+    const uint32_t head_dim,
+    const uint32_t slice_size,
     const std::optional<ttnn::MemoryConfig>& memory_config,
     const std::optional<ttnn::MemoryConfig>& qkv_memory_config) {
     return {
@@ -158,6 +160,8 @@ LlamaReduceScatterCreateHeadsDeviceOperation::invoke(
             .num_links = num_links,
             .num_heads = num_heads,
             .num_kv_heads = num_kv_heads,
+            .head_dim = head_dim,
+            .slice_size = slice_size,
             .qkv_memory_config = qkv_memory_config,
             .forward_device = forward_device,
             .backward_device = backward_device,

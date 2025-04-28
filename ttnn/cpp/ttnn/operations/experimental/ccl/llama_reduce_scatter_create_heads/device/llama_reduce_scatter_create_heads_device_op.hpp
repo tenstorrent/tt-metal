@@ -29,6 +29,8 @@ struct LlamaReduceScatterCreateHeadsDeviceOperation {
         const uint32_t num_links;
         const uint32_t num_heads;
         const uint32_t num_kv_heads;
+        const uint32_t head_dim;
+        const uint32_t slice_size;
         const std::optional<MemoryConfig> qkv_memory_config;
         std::optional<IDevice*> forward_device;
         std::optional<IDevice*> backward_device;
@@ -100,6 +102,8 @@ struct LlamaReduceScatterCreateHeadsDeviceOperation {
         const uint32_t num_links,
         const uint32_t num_heads,
         const uint32_t num_kv_heads,
+        const uint32_t head_dim,
+        const uint32_t slice_size,
         const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt,
         const std::optional<ttnn::MemoryConfig>& qkv_memory_config = std::nullopt);
 };
