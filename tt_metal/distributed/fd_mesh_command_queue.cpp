@@ -39,6 +39,7 @@
 #include "tt_metal/impl/program/dispatch.hpp"
 #include "tt_metal/impl/trace/dispatch.hpp"
 #include "tt_metal/impl/program/program_command_sequence.hpp"
+#include "tt_metal/impl/device/dispatch.hpp"
 #include <umd/device/types/xy_pair.h>
 
 namespace tt {
