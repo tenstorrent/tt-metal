@@ -30,6 +30,11 @@ def report(request):
     return request.config.getoption("--report")
 
 
+@pytest.fixture
+def arch(request):
+    return request.config.getoption("--arch")
+
+
 # These inputs override the default inputs used in data movement tests.
 def pytest_addoption(parser):
     parser.addoption(
@@ -46,3 +51,9 @@ def pytest_addoption(parser):
     )
     parser.addoption("--plot", action="store_true", help="Export profiling plots to a .png file.")
     parser.addoption("--report", action="store_true", help="Export profiling results to a .csv file.")
+    parser.addoption(
+        "--arch",
+        action="store",
+        default=None,
+        help="Architecture the tests are run on.",
+    )
