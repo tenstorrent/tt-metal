@@ -31,17 +31,25 @@ jobs:
   get-image-tags:
     runs-on: ubuntu-latest
     outputs:
+      image-tag-suffix: ${{ steps.set-image-tag-suffix.outputs.image-tag-suffix }}
       wh-6u-image-tag: ${{ steps.set-wh-6u-image-tag.outputs.wh-6u-image-tag }}
       wh-6u-base-image-name: ${{ steps.set-wh-6u-image-tag.outputs.wh-6u-base-image-name }}
       wh-6u-profiler-image-tag: ${{ steps.set-wh-6u-image-tag.outputs.wh-6u-profiler-image-tag }}
       wh-6u-profiler-base-image-name: ${{ steps.set-wh-6u-image-tag.outputs.wh-6u-profiler-base-image-name }}
     steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+      - name: Get tag to use everywhere
+        id: set-image-tag-suffix
+        run: echo "image-tag-suffix=$(git describe)" >> "$GITHUB_OUTPUT"
       - name: Set image tags
-        id: set-wh-6u-image-tag
+        id: set-image-tags
         run: |
-          echo "wh-6u-image-tag=${{ env.WH_6U_IMAGE_NAME }}:${{ github.run_number }}" >> "$GITHUB_OUTPUT"
+          echo "wh-6u-image-tag=${{ env.WH_6U_IMAGE_NAME }}:${{ steps.set-image-tag-suffix.outputs.image-tag-suffix }}" >> "$GITHUB_OUTPUT"
           echo "wh-6u-base-image-name=${{ env.WH_6U_IMAGE_NAME }}" >> "$GITHUB_OUTPUT"
-          echo "wh-6u-profiler-image-tag=${{ env.WH_6U_PROFILER_IMAGE_NAME }}:${{ github.run_number }}" >> "$GITHUB_OUTPUT"
+          echo "wh-6u-profiler-image-tag=${{ env.WH_6U_PROFILER_IMAGE_NAME }}:${{ steps.set-image-tag-suffix.outputs.image-tag-suffix }}" >> "$GITHUB_OUTPUT"
           echo "wh-6u-profiler-base-image-name=${{ env.WH_6U_PROFILER_IMAGE_NAME }}" >> "$GITHUB_OUTPUT"
   build-wh-6u-image:
     needs:
@@ -111,8 +119,6 @@ jobs:
             TT_METAL_DEV_VERSION=latest
             TT_METAL_COMMIT_SHA=${{ github.sha }}
             TEST_COMMAND=${{ matrix.image-config.test-command }}
-          # Use run_number as it should be unique for every run, can trace to a commit, and is a
-          # static counter managed by GitHub
           tags: ${{ matrix.image-config.image-tag }}
           context: ${{ github.workspace }}
       - name: Tag and push latest
