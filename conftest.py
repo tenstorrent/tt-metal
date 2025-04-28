@@ -54,6 +54,27 @@ def is_single_card_n300(device):
     return num_pcie == 1 and num_devices == 2 and device.arch().name == "WORMHOLE_B0"
 
 
+@pytest.fixture(scope="function")
+def galaxy_type():
+    if is_6u():
+        return "6U"
+    elif is_tg_cluster():
+        return "4U"
+    else:
+        return None
+
+
+# TODO: Remove this when TG clusters are deprecated.
+def is_6u():
+    import ttnn
+
+    num_pcie = ttnn.GetNumPCIeDevices()
+    num_devices = ttnn.GetNumAvailableDevices()
+    NUM_PCIE_DEVICES = 32
+    NUM_DEVICES = 32
+    return num_pcie == NUM_PCIE_DEVICES and num_devices == NUM_DEVICES
+
+
 # TODO: Remove this when TG clusters are deprecated.
 def is_tg_cluster():
     import ttnn
