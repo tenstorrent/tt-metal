@@ -5,6 +5,7 @@
 #include "ttnn/operations/conv/conv2d/prepare_conv2d_weights.hpp"
 #include "tt-metalium/logger.hpp"
 #include "tt-metalium/shape.hpp"
+#include "ttnn/operations/conv/conv2d/device/conv2d_op.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/sliding_window/sliding_window.hpp"
 #include <optional>
@@ -1110,7 +1111,8 @@ ttnn::Tensor prepare_conv_weights(
     uint32_t groups,
     T* device,
     const std::optional<const Conv2dConfig>& conv_config_,
-    const std::optional<const DeviceComputeKernelConfig>& compute_config_) {
+    const std::optional<const DeviceComputeKernelConfig>& compute_config_,
+    const std::optional<const Conv2dSliceConfig>& dram_slice_config_) {
     Conv2dConfig conv_config = conv_config_.value_or(Conv2dConfig());
 
     DeviceComputeKernelConfig compute_config = compute_config_.value_or(get_conv_default_compute_kernel_config(device));
@@ -1120,6 +1122,30 @@ ttnn::Tensor prepare_conv_weights(
     auto [output_height, output_width] =
         calculate_output_image_size({input_height, input_width}, kernel_size, stride, padding_n4, dilation);
 
+    if (dram_slice_config_.has_value()) {
+        Conv2dSliceConfig dram_slice_config = dram_slice_config_.value();
+        const uint32_t output_sliced_dim =
+            dram_slice_config.slice_type == Conv2dSliceConfig::SliceType::HEIGHT ? output_height : output_width;
+        TT_FATAL(
+            dram_slice_config.num_slices > 1, " Number of slices should be greater than 1 for Conv2D DRAM Slicing");
+        TT_FATAL(
+            dram_slice_config.num_slices < output_sliced_dim,
+            " Number of slices should be less than the dimension being sliced in Conv2D DRAM Slicing");
+
+        const uint32_t min_output_slice_size = output_sliced_dim / dram_slice_config.num_slices;
+        const uint32_t output_slice_rem = output_sliced_dim % dram_slice_config.num_slices;
+        const uint32_t max_output_slice_size = min_output_slice_size + (output_slice_rem > 0);
+
+        if (dram_slice_config.slice_type == Conv2dSliceConfig::SliceType::HEIGHT) {
+            output_height = max_output_slice_size;
+            input_height =
+                ((output_height - 1) * stride[0]) + ((kernel_size[0] - 1) * (dilation[0] - 1)) + kernel_size[0];
+        } else {
+            output_width = max_output_slice_size;
+            input_width =
+                ((output_width - 1) * stride[1]) + ((kernel_size[1] - 1) * (dilation[1] - 1)) + kernel_size[1];
+        }
+    }
     auto opt_conv_op_block_config = get_opt_block_config(
         mm_conv,
         in_channels,
