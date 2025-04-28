@@ -116,7 +116,6 @@ private:
     std::shared_ptr<ThreadPool> dispatch_thread_pool_;
     std::shared_ptr<ThreadPool> reader_thread_pool_;
 
-    std::recursive_mutex push_work_mutex_;
     std::unique_ptr<program_cache::detail::ProgramCache> program_cache_;
     // This is a reference device used to query properties that are the same for all devices in the mesh.
     IDevice* reference_device() const;
@@ -231,7 +230,6 @@ public:
     void init_command_queue_device() override;
     void init_fabric() override;
     bool close() override;
-    void push_work(std::function<void()> work, bool blocking = false) override;
     void enable_program_cache() override;
     void disable_and_clear_program_cache() override;
     program_cache::detail::ProgramCache& get_program_cache() override;
@@ -308,6 +306,8 @@ public:
 
     std::vector<std::shared_ptr<MeshDevice>> create_submeshes(const MeshShape& submesh_shape);
 
+    // This method will get removed once in favour of the ones in IDevice* and TT-Mesh bringup
+    // These are prefixed with "mesh_" to avoid conflicts with the IDevice* methods
     MeshCommandQueue& mesh_command_queue(std::size_t cq_id = 0) const;
 
     // Currently expose users to the dispatch thread pool through the MeshDevice

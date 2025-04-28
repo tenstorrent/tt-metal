@@ -182,8 +182,6 @@ public:
     // Puts device into reset
     virtual bool close() = 0;
 
-    virtual void push_work(std::function<void()> work, bool blocking = false) = 0;
-
     // Program cache interface. Syncrhonize with worker worker threads before querying or
     // modifying this structure, since worker threads use this for compiling ops
     virtual void enable_program_cache() = 0;
