@@ -37,6 +37,7 @@ void MAIN {
     copy_tile(input_cb, 0, 0);  // copy from c_in[0] to DST[0]
 
     cb_pop_front(input_cb, one_tile);
+    mul_tiles_init(input_cb, partial_prod_cb);
 
     // When we have more than one tile, we can do the tile-wise multiplication of them all to yield one final tile
     for (uint32_t t = 1; t < num_tiles; t++) {
@@ -55,7 +56,6 @@ void MAIN {
 
         tile_regs_acquire();
 
-        mul_tiles_init(input_cb, partial_prod_cb);
         mul_tiles(input_cb, partial_prod_cb, /*tile0=*/0, /*tile1=*/0, /*dst_tile=*/0);
 
         cb_pop_front(input_cb, one_tile);
