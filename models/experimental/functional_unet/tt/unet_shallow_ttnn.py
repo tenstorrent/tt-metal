@@ -518,7 +518,7 @@ class UNet:
         output_memory_config = ttnn.MemoryConfig(
             ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, output_shard_spec
         )
-        return ttnn.experimental.convert_to_chw(x, memory_config=output_memory_config)
+        return ttnn.experimental.convert_to_chw(x, memory_config=output_memory_config, dtype=ttnn.bfloat16)
 
     def __call__(self, x, move_input_tensor_to_device=True):
         assert len(x.shape) == 4, f"Expected UNet input tensors to be rank 4 (was {len(x.shape)})"
