@@ -21,12 +21,12 @@ TEST_F(CommandQueueSingleCardFixture, TestBasicReadWriteL1) {
 
     for (IDevice* device : this->devices_) {
         const CoreCoord virtual_core = device->worker_core_from_logical_core(logical_core);
-        device->command_queue().enqueue_write_to_core_l1(
-            virtual_core, src_data.data(), address, num_elements * sizeof(uint32_t), false);
+        dynamic_cast<HWCommandQueue&>(device->command_queue())
+            .enqueue_write_to_core_l1(virtual_core, src_data.data(), address, num_elements * sizeof(uint32_t), false);
 
         std::vector<uint32_t> dst_data(num_elements, 0);
-        device->command_queue().enqueue_read_from_core_l1(
-            virtual_core, dst_data.data(), address, num_elements * sizeof(uint32_t), false);
+        dynamic_cast<HWCommandQueue&>(device->command_queue())
+            .enqueue_read_from_core_l1(virtual_core, dst_data.data(), address, num_elements * sizeof(uint32_t), false);
 
         Finish(device->command_queue());
 
@@ -47,8 +47,8 @@ TEST_F(CommandQueueSingleCardFixture, TestBasicReadL1) {
         tt::llrt::write_hex_vec_to_core(device->id(), virtual_core, src_data, address);
 
         std::vector<uint32_t> dst_data(num_elements, 0);
-        device->command_queue().enqueue_read_from_core_l1(
-            virtual_core, dst_data.data(), address, num_elements * sizeof(uint32_t), false);
+        dynamic_cast<HWCommandQueue&>(device->command_queue())
+            .enqueue_read_from_core_l1(virtual_core, dst_data.data(), address, num_elements * sizeof(uint32_t), false);
 
         Finish(device->command_queue());
 
@@ -66,8 +66,8 @@ TEST_F(CommandQueueSingleCardFixture, TestBasicWriteL1) {
 
     for (IDevice* device : this->devices_) {
         const CoreCoord virtual_core = device->worker_core_from_logical_core(logical_core);
-        device->command_queue().enqueue_write_to_core_l1(
-            virtual_core, src_data.data(), address, num_elements * sizeof(uint32_t), false);
+        dynamic_cast<HWCommandQueue&>(device->command_queue())
+            .enqueue_write_to_core_l1(virtual_core, src_data.data(), address, num_elements * sizeof(uint32_t), false);
 
         Finish(device->command_queue());
 
@@ -92,14 +92,16 @@ TEST_F(CommandQueueSingleCardFixture, TestInvalidReadWriteAddressL1) {
     for (IDevice* device : this->devices_) {
         const CoreCoord virtual_core = device->worker_core_from_logical_core(logical_core);
         EXPECT_THROW(
-            device->command_queue().enqueue_write_to_core_l1(
-                virtual_core, src_data.data(), address, num_elements * sizeof(uint32_t), false),
+            dynamic_cast<HWCommandQueue&>(device->command_queue())
+                .enqueue_write_to_core_l1(
+                    virtual_core, src_data.data(), address, num_elements * sizeof(uint32_t), false),
             std::runtime_error);
 
         std::vector<uint32_t> dst_data(num_elements, 0);
         EXPECT_THROW(
-            device->command_queue().enqueue_read_from_core_l1(
-                virtual_core, dst_data.data(), address, num_elements * sizeof(uint32_t), false),
+            dynamic_cast<HWCommandQueue&>(device->command_queue())
+                .enqueue_read_from_core_l1(
+                    virtual_core, dst_data.data(), address, num_elements * sizeof(uint32_t), false),
             std::runtime_error);
     }
 }
@@ -114,8 +116,8 @@ TEST_F(CommandQueueSingleCardFixture, TestReadWriteMultipleTensixCoresL1) {
         for (uint32_t core_x = 0; core_x < device->compute_with_storage_grid_size().x; ++core_x) {
             for (uint32_t core_y = 0; core_y < device->compute_with_storage_grid_size().y; ++core_y) {
                 const CoreCoord core = device->worker_core_from_logical_core({core_x, core_y});
-                device->command_queue().enqueue_write_to_core_l1(
-                    core, src_data.data(), address, num_elements * sizeof(uint32_t), false);
+                dynamic_cast<HWCommandQueue&>(device->command_queue())
+                    .enqueue_write_to_core_l1(core, src_data.data(), address, num_elements * sizeof(uint32_t), false);
             }
         }
 
@@ -126,8 +128,9 @@ TEST_F(CommandQueueSingleCardFixture, TestReadWriteMultipleTensixCoresL1) {
         for (uint32_t core_x = 0; core_x < device->compute_with_storage_grid_size().x; ++core_x) {
             for (uint32_t core_y = 0; core_y < device->compute_with_storage_grid_size().y; ++core_y) {
                 const CoreCoord core = device->worker_core_from_logical_core({core_x, core_y});
-                device->command_queue().enqueue_read_from_core_l1(
-                    core, all_cores_dst_data[i].data(), address, num_elements * sizeof(uint32_t), false);
+                dynamic_cast<HWCommandQueue&>(device->command_queue())
+                    .enqueue_read_from_core_l1(
+                        core, all_cores_dst_data[i].data(), address, num_elements * sizeof(uint32_t), false);
                 i++;
             }
         }
@@ -148,10 +151,12 @@ TEST_F(CommandQueueSingleCardFixture, TestReadWriteZeroElementsL1) {
 
     for (IDevice* device : this->devices_) {
         const CoreCoord virtual_core = device->worker_core_from_logical_core(logical_core);
-        device->command_queue().enqueue_write_to_core_l1(virtual_core, src_data.data(), address, 0, false);
+        dynamic_cast<HWCommandQueue&>(device->command_queue())
+            .enqueue_write_to_core_l1(virtual_core, src_data.data(), address, 0, false);
 
         std::vector<uint32_t> dst_data;
-        device->command_queue().enqueue_read_from_core_l1(virtual_core, dst_data.data(), address, 0, false);
+        dynamic_cast<HWCommandQueue&>(device->command_queue())
+            .enqueue_read_from_core_l1(virtual_core, dst_data.data(), address, 0, false);
 
         Finish(device->command_queue());
 
@@ -170,10 +175,12 @@ TEST_F(CommandQueueSingleCardFixture, TestReadWriteEntireL1) {
 
     for (IDevice* device : this->devices_) {
         const CoreCoord virtual_core = device->worker_core_from_logical_core(logical_core);
-        device->command_queue().enqueue_write_to_core_l1(virtual_core, src_data.data(), address, size, false);
+        dynamic_cast<HWCommandQueue&>(device->command_queue())
+            .enqueue_write_to_core_l1(virtual_core, src_data.data(), address, size, false);
 
         std::vector<uint32_t> dst_data(num_elements, 0);
-        device->command_queue().enqueue_read_from_core_l1(virtual_core, dst_data.data(), address, size, false);
+        dynamic_cast<HWCommandQueue&>(device->command_queue())
+            .enqueue_read_from_core_l1(virtual_core, dst_data.data(), address, size, false);
 
         Finish(device->command_queue());
 

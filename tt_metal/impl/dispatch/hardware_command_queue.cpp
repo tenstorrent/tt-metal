@@ -221,6 +221,8 @@ void HWCommandQueue::enqueue_read_buffer(
     Buffer& buffer_obj = get_buffer_object(buffer);
     sub_device_ids = buffer_dispatch::select_sub_device_ids(this->device_, sub_device_ids);
 
+    // TODO: When reading from L1, modify this function to use enqueue_read_from_core_l1
+
     if (is_sharded(buffer_obj.buffer_layout())) {
         // Forward data from each core to the completion queue.
         // Then have the completion queue reader thread copy this data to user space.

@@ -18,7 +18,7 @@
 #include <iostream>
 
 #include "assert.hpp"
-#include "command_queue.hpp"
+#include "dispatch/hardware_command_queue.hpp"
 #include "dispatch/device_command.hpp"
 #include "dispatch/kernels/cq_commands.hpp"
 #include "hal_types.hpp"
@@ -113,12 +113,13 @@ std::vector<uint32_t> read_control_buffer_from_core(
             }
         } else {
             control_buffer.resize(kernel_profiler::PROFILER_L1_CONTROL_VECTOR_SIZE);
-            device->command_queue().enqueue_read_from_core_l1(
-                core,
-                control_buffer.data(),
-                reinterpret_cast<DeviceAddr>(profiler_msg->control_vector),
-                kernel_profiler::PROFILER_L1_CONTROL_BUFFER_SIZE,
-                true);
+            dynamic_cast<HWCommandQueue&>(device->command_queue())
+                .enqueue_read_from_core_l1(
+                    core,
+                    control_buffer.data(),
+                    reinterpret_cast<DeviceAddr>(profiler_msg->control_vector),
+                    kernel_profiler::PROFILER_L1_CONTROL_BUFFER_SIZE,
+                    true);
         }
     } else {
         control_buffer = tt::llrt::read_hex_vec_from_core(
@@ -155,12 +156,13 @@ void write_control_buffer_to_core(
                     device->id(), core, control_buffer, reinterpret_cast<DeviceAddr>(profiler_msg->control_vector));
             }
         } else {
-            device->command_queue().enqueue_write_to_core_l1(
-                core,
-                control_buffer.data(),
-                reinterpret_cast<DeviceAddr>(profiler_msg->control_vector),
-                kernel_profiler::PROFILER_L1_CONTROL_BUFFER_SIZE,
-                true);
+            dynamic_cast<HWCommandQueue&>(device->command_queue())
+                .enqueue_write_to_core_l1(
+                    core,
+                    control_buffer.data(),
+                    reinterpret_cast<DeviceAddr>(profiler_msg->control_vector),
+                    kernel_profiler::PROFILER_L1_CONTROL_BUFFER_SIZE,
+                    true);
         }
     } else {
         tt::llrt::write_hex_vec_to_core(

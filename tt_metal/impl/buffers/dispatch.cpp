@@ -741,6 +741,8 @@ void write_to_device_buffer(
     const BufferDispatchConstants buf_dispatch_constants =
         generate_buffer_dispatch_constants(sysmem_manager, dispatch_core_type, cq_id);
 
+    // TODO: When writing to L1, modify this function to use enqueue_write_to_core_l1
+
     if (is_sharded(buffer.buffer_layout())) {
         ShardedBufferWriteDispatchParams dispatch_params = initialize_sharded_buf_dispatch_params(
             buffer, cq_id, expected_num_workers_completed, buf_dispatch_constants, region);
