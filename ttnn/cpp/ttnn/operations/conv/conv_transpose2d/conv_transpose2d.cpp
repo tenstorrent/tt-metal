@@ -35,7 +35,7 @@ Tensor _transform_weights_for_conv_transpose2d(const Tensor& conv_weight_tensor,
         auto kernel_height = in_w_shape[2];
         auto kernel_width = in_w_shape[3];
         ttnn::Shape output_shape{out_channels, in_channels, kernel_height, kernel_width};
-        auto output_buffer = tt::tt_metal::owned_buffer::create<T>(output_shape.volume());
+        auto owned_buffer = std::vector<T>(output_shape.volume());
 
         for (auto out_channels_index = 0; out_channels_index < out_channels; out_channels_index++) {
             auto output_weight_out_channel_base_idx = out_channels_index * in_channels * kernel_height * kernel_width;
@@ -60,30 +60,36 @@ Tensor _transform_weights_for_conv_transpose2d(const Tensor& conv_weight_tensor,
                         auto out_idx = output_weight_out_channel_base_idx + output_weight_in_channel_base_idx +
                                        out_height_offset + out_buffer_kw_index;
 
-                        output_buffer[out_idx] = input_buffer[in_idx];
+                        owned_buffer[out_idx] = input_buffer[in_idx];
                     }
                 }
             }
         }
         return Tensor(
-            std::move(tt::tt_metal::OwnedStorage{std::move(output_buffer)}), output_shape, dtype, Layout::ROW_MAJOR);
+            tt::tt_metal::HostStorage{tt::tt_metal::host_buffer::create(std::move(owned_buffer))},
+            output_shape,
+            dtype,
+            Layout::ROW_MAJOR);
     };
     auto convert_tensor = [&compute](const auto& conv_weight_tensor) {
         return std::visit(
             [&compute](auto&& storage) -> Tensor {
                 using StorageType = std::decay_t<decltype(storage)>;
-                if constexpr (std::is_same_v<StorageType, tt::tt_metal::OwnedStorage>) {
-                    return compute(tt::tt_metal::owned_buffer::get_as<T>(storage.buffer));
-                } else if constexpr (std::is_same_v<StorageType, tt::tt_metal::BorrowedStorage>) {
-                    return compute(tt::tt_metal::borrowed_buffer::get_as<T>(storage.buffer));
+                if constexpr (std::is_same_v<StorageType, tt::tt_metal::HostStorage>) {
+                    return compute(tt::tt_metal::host_buffer::get_as<T>(storage.buffer));
                 } else {
                     TT_THROW("Unsupported storage type");
                 }
             },
             conv_weight_tensor.get_storage());
     };
-    return ttnn::distributed::is_multi_device_tensor(conv_weight_tensor) ? transform(conv_weight_tensor, convert_tensor)
-                                                                         : convert_tensor(conv_weight_tensor);
+    TT_FATAL(
+        !is_device_tensor(conv_weight_tensor), "transform_weights_for_conv_transpose2d only supports host tensors");
+
+    // TODO: #15840 - Treat multi-device host vs owned/borrowed tensors uniformly.
+    return ttnn::distributed::is_multi_device_host_tensor(conv_weight_tensor)
+               ? transform(conv_weight_tensor, convert_tensor)
+               : convert_tensor(conv_weight_tensor);
 }
 
 Tensor transform_weights_for_conv_transpose2d(const Tensor& conv_weight_tensor, bool mirror_kernel) {
@@ -231,7 +237,6 @@ Result conv_transpose2d(
             0,
             false,
             parallel_config.shard_orientation == ShardOrientation::COL_MAJOR,
-            0,
             input_tensor_post_tm.memory_config());
 
         if (conv_config.deallocate_activation) {

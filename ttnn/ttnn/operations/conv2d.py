@@ -5,7 +5,6 @@
 from loguru import logger
 
 from typing import Tuple, Union, Dict, Optional
-import torch
 import warnings
 import math
 import ttnn
@@ -311,6 +310,8 @@ def conv2d(
 
 
 def get_activation_function(name: str):
+    import torch
+
     if name == "relu":
         return torch.nn.functional.relu
     elif name == "":
@@ -329,7 +330,7 @@ def _golden_function(
     input_width: int,
     kernel_size: Union[int, Tuple[int, int]],
     stride: Union[int, Tuple[int, int]],
-    padding: Union[int, Tuple[int, int]],
+    padding: Union[int, Tuple[int, int], Tuple[int, int, int, int]],
     dilation: Union[int, Tuple[int, int]] = (1, 1),
     groups: int = 1,
     bias_tensor=None,
@@ -346,12 +347,40 @@ def _golden_function(
 
     bias_tensor = bias_tensor.reshape(-1)  # torch expected 1D bias
 
-    output_tensor = torch.nn.functional.conv2d(
+    if hasattr(padding, "__len__"):
+        if len(padding) == 2:
+            pad_top = padding[0]
+            pad_bottom = padding[0]
+            pad_left = padding[1]
+            pad_right = padding[1]
+        elif len(padding) == 4:
+            pad_top = padding[0]
+            pad_bottom = padding[1]
+            pad_left = padding[2]
+            pad_right = padding[3]
+        else:
+            raise ValueError("Padding should be a scalar or a list of 2 or 4 elements")
+    else:
+        pad_top = padding
+        pad_bottom = padding
+        pad_left = padding
+        pad_right = padding
+
+    # this is done because torch doesn't support different padding for height and width (e.g. padding = (1, 2, 3, 4))
+    torch_padded_input = torch.nn.functional.pad(
         input_tensor.float(),
+        (pad_left, pad_right, pad_top, pad_bottom),
+        mode="constant",
+        value=0,
+    )
+
+    # padding is (0, 0) because the padding is already applied to the input tensor above
+    output_tensor = torch.nn.functional.conv2d(
+        torch_padded_input,
         weight_tensor.float(),
         bias=bias_tensor.float(),
         stride=stride,
-        padding=padding,
+        padding=(0, 0),
         dilation=dilation,
         groups=groups,
     )

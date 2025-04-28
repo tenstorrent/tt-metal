@@ -18,7 +18,7 @@ void py_bind_llama_reduce_scatter(py::module& module) {
                 input_tensor (ttnn.Tensor): the input tensor.
                 intermediate_packet_buffer (ttnn.Tensor): the intermediate packet buffer tensor.
                 dim (number): the reduce dimension
-                cross_device_semaphore (ttnn.MultiDeviceGlobalSemaphore): the cross device semaphore.
+                cross_device_semaphore (ttnn.GlobalSemaphore): the cross device semaphore.
                 subdevice_id (ttnn.SubDeviceId): the subdevice id.
                 cluster_axis (number): the cluster axis.
                 mesh_device (ttnn.MeshDevice): the mesh device.
@@ -54,7 +54,7 @@ void py_bind_llama_reduce_scatter(py::module& module) {
                const ttnn::Tensor& input_tensor,
                ttnn::Tensor& intermediate_packet_buffer,
                uint32_t dim,
-               const global_semaphore::MultiDeviceGlobalSemaphore& cross_device_semaphore,
+               const GlobalSemaphore& cross_device_semaphore,
                const tt::tt_metal::SubDeviceId& subdevice_id,
                const uint32_t cluster_axis,
                const MeshDevice& mesh_device,

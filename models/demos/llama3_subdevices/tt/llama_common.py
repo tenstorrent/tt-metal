@@ -23,6 +23,21 @@ class PagedAttentionConfig:
         self.max_num_blocks = max_num_blocks
 
 
+def check_mesh_tensor_alloc(tensor):
+    """
+    Check if the tensor has the same address for all devices.
+    """
+    device_tensors = ttnn.get_device_tensors(tensor)
+    buffer_addr = device_tensors[0].buffer_address()
+
+    if len(device_tensors) > 1:
+        for i in range(1, len(device_tensors)):
+            addr = device_tensors[i].buffer_address()
+            if not addr == buffer_addr:
+                return False
+    return True
+
+
 def encode_prompt_llama_instruct(tokenizer, prompt_text, system_prompt_text=None):
     """<|begin_of_text|><|start_header_id|>system<|end_header_id|>
     {{ system_prompt }}<|eot_id|><|start_header_id|>user<|end_header_id|>

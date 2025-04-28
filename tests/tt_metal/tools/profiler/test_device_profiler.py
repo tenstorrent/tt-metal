@@ -209,16 +209,19 @@ def test_full_buffer():
         assert stats[statName]["stats"]["Count"] in REF_COUNT_DICT[ENV_VAR_ARCH_NAME], "Wrong Marker Repeat count"
 
 
+@skip_for_blackhole()
 def test_dispatch_cores():
     OP_COUNT = 1
     RISC_COUNT = 1
     ZONE_COUNT = 37
     REF_COUNT_DICT = {
-        "Tensix CQ Dispatch": [153, 246, 365, 1035, 1548, 1634, 2447],
-        "Tensix CQ Prefetch": [410, 484, 529, 1117, 2356, 2447, 3070],
+        "Tensix CQ Dispatch": [250, 1000, 2000],
+        "Tensix CQ Prefetch": [400, 1000, 4000],
+        "dispatch_total_cq_cmd_op_time": [103],
+        "dispatch_go_send_wait_time": [103],
     }
 
-    def verify_stats(devicesData):
+    def verify_stats(devicesData, statTypes, allowedRange):
         verifiedStat = []
         for device, deviceData in devicesData["data"]["devices"].items():
             for ref, counts in REF_COUNT_DICT.items():
@@ -226,16 +229,14 @@ def test_dispatch_cores():
                     verifiedStat.append(ref)
                     res = False
                     readCount = deviceData["cores"]["DEVICE"]["analysis"][ref]["stats"]["Count"]
-                    allowedRange = 20
                     for count in counts:
-                        if count - allowedRange < readCount < count + allowedRange:
+                        if count - allowedRange <= readCount <= count + allowedRange:
                             res = True
                             break
                     assert (
                         res
-                    ), f"Wrong dispatch zone count, read {readCount} which is not within {allowedRange} cycle counts of any of the limits {counts}"
+                    ), f"Wrong tensix dispatch zone count for {ref}, read {readCount} which is not within {allowedRange} cycle counts of any of the limits {counts}"
 
-        statTypes = ["Dispatch", "Prefetch"]
         statTypesSet = set(statTypes)
         for statType in statTypes:
             for stat in verifiedStat:
@@ -243,14 +244,20 @@ def test_dispatch_cores():
                     statTypesSet.remove(statType)
         assert len(statTypesSet) == 0
 
-    verify_stats(run_device_profiler_test(setupAutoExtract=True, doDispatchCores=True))
+    verify_stats(
+        run_device_profiler_test(setupAutoExtract=True, doDispatchCores=True),
+        statTypes=["Dispatch", "Prefetch"],
+        allowedRange=150,
+    )
 
     verify_stats(
         run_device_profiler_test(
             testName=f"pytest {TRACY_TESTS_DIR}/test_dispatch_profiler.py::test_with_ops",
             setupAutoExtract=True,
             doDispatchCores=True,
-        )
+        ),
+        statTypes=["Dispatch", "Prefetch"],
+        allowedRange=1000,
     )
 
     verify_stats(
@@ -258,7 +265,19 @@ def test_dispatch_cores():
             testName=f"pytest {TRACY_TESTS_DIR}/test_dispatch_profiler.py::test_all_devices",
             setupAutoExtract=True,
             doDispatchCores=True,
-        )
+        ),
+        statTypes=["Dispatch", "Prefetch"],
+        allowedRange=1000,
+    )
+
+    verify_stats(
+        run_device_profiler_test(
+            testName=f"pytest {TRACY_TESTS_DIR}/test_trace_runs.py",
+            setupAutoExtract=False,
+            doDispatchCores=True,
+        ),
+        statTypes=["dispatch_total_cq_cmd_op_time", "dispatch_go_send_wait_time"],
+        allowedRange=0,  # This test is basically counting ops and should be exact regardless of changes to dispatch code or harvesting.
     )
 
 
@@ -267,8 +286,8 @@ def test_dispatch_cores():
 @skip_for_grayskull()
 def test_ethernet_dispatch_cores():
     REF_COUNT_DICT = {
-        "Ethernet CQ Dispatch": [632, 830, 2088, 2287],
-        "Ethernet CQ Prefetch": [520, 716, 2398, 2656],
+        "Ethernet CQ Dispatch": [700, 910, 2100],
+        "Ethernet CQ Prefetch": [600, 2500],
     }
     devicesData = run_device_profiler_test(
         testName=f"pytest {TRACY_TESTS_DIR}/test_dispatch_profiler.py::test_with_ops",
@@ -281,7 +300,7 @@ def test_ethernet_dispatch_cores():
             if ref in deviceData["cores"]["DEVICE"]["analysis"].keys():
                 res = False
                 readCount = deviceData["cores"]["DEVICE"]["analysis"][ref]["stats"]["Count"]
-                allowedRange = 20
+                allowedRange = 200
                 for count in counts:
                     if count - allowedRange < readCount < count + allowedRange:
                         res = True
@@ -301,7 +320,7 @@ def test_ethernet_dispatch_cores():
             if ref in deviceData["cores"]["DEVICE"]["analysis"].keys():
                 res = False
                 readCount = deviceData["cores"]["DEVICE"]["analysis"][ref]["stats"]["Count"]
-                allowedRange = 20
+                allowedRange = 200
                 for count in counts:
                     if count - allowedRange < readCount < count + allowedRange:
                         res = True

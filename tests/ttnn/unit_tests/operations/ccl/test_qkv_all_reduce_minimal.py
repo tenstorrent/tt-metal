@@ -10,19 +10,21 @@ from loguru import logger
 import ttnn
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal, comp_pcc
 from models.utility_functions import skip_for_grayskull
-from tests.ttnn.unit_tests.operations.ccl.test_ccl_common import (
-    create_global_semaphore_with_same_address,
-)
 from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
 from tracy import signpost
 
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 from tests.tt_eager.python_api_testing.unit_testing.misc.test_matmul_1d_gather_in0 import (
-    PREFETCHER_NOC1_GRID,
     round_up,
 )
+from models.demos.llama3_subdevices.tt.model_config import (
+    PREFETCHER_NOC1_GRID,
+)
 from models.demos.llama3_subdevices.tt.model_config import set_tg_attention_config
+from models.demos.llama3_subdevices.tt.llama_common import (
+    check_mesh_tensor_alloc,
+)
 
 LINEAR_TOPOLOGY = True
 if LINEAR_TOPOLOGY:
@@ -43,18 +45,6 @@ RING_CRS = ttnn.CoreRangeSet(
 )
 
 
-def check_mesh_tensor_alloc(tensor):
-    device_tensors = ttnn.get_device_tensors(tensor)
-    buffer_addr = device_tensors[0].buffer_address()
-
-    if len(device_tensors) > 1:
-        for i in range(1, len(device_tensors)):
-            addr = device_tensors[i].buffer_address()
-            if not addr == buffer_addr:
-                return False
-    return True
-
-
 def run_all_reduce_qkv_heads_fuse_perf_impl(
     mesh_device,
     output_shape,
@@ -65,7 +55,6 @@ def run_all_reduce_qkv_heads_fuse_perf_impl(
     input_num_cores,
     output_num_cores,
     use_program_cache=False,
-    enable_async=False,
     num_iters=1,
     warmup_iters=0,
     trace_mode=True,
@@ -76,9 +65,6 @@ def run_all_reduce_qkv_heads_fuse_perf_impl(
 
     if num_iters < 1:
         pytest.fail("num_iters must be >= 1")
-
-    # Use Async mode based on test input config
-    mesh_device.enable_async(enable_async)
 
     ##################################
     ##### Set up fabric stuff
@@ -100,7 +86,7 @@ def run_all_reduce_qkv_heads_fuse_perf_impl(
     # create global semaphore handles
     num_buffers = 2
     ccl_semaphore_handles = [
-        create_global_semaphore_with_same_address(mesh_device, ccl_sub_device_crs, i) for i in range(num_buffers)
+        ttnn.create_global_semaphore(mesh_device, ccl_sub_device_crs, i) for i in range(num_buffers)
     ]
 
     logger.info(f"Output shape: {output_shape}")
@@ -357,7 +343,6 @@ def run_all_reduce_qkv_heads_fuse_perf_impl(
 @skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.parametrize("num_iters, warmup_iters", [[1, 0]])
 @pytest.mark.parametrize("trace_mode", [False])
-@pytest.mark.parametrize("enable_async", [True])
 @pytest.mark.parametrize("validate_all", [True])
 @pytest.mark.parametrize(
     "output_shape, cluster_axis, num_links, input_num_cores, output_num_cores",
@@ -404,7 +389,6 @@ def test_all_reduce_qkv_heads_fuse(
     num_links,
     input_num_cores,
     output_num_cores,
-    enable_async,
     use_program_cache,
     num_iters,
     warmup_iters,
@@ -424,7 +408,6 @@ def test_all_reduce_qkv_heads_fuse(
         input_num_cores,
         output_num_cores,
         use_program_cache,
-        enable_async=enable_async,
         num_iters=num_iters,
         warmup_iters=warmup_iters,
         trace_mode=trace_mode,
@@ -437,7 +420,6 @@ def test_all_reduce_qkv_heads_fuse(
 @skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.parametrize("num_iters, warmup_iters", [[30, 10]])
 @pytest.mark.parametrize("trace_mode", [True])
-@pytest.mark.parametrize("enable_async", [True])
 @pytest.mark.parametrize("validate_all", [True])
 @pytest.mark.parametrize(
     "output_shape, cluster_axis, num_links, input_num_cores, output_num_cores",
@@ -484,7 +466,6 @@ def test_all_reduce_qkv_heads_fuse_perf(
     num_links,
     input_num_cores,
     output_num_cores,
-    enable_async,
     use_program_cache,
     num_iters,
     warmup_iters,
@@ -504,7 +485,6 @@ def test_all_reduce_qkv_heads_fuse_perf(
         input_num_cores,
         output_num_cores,
         use_program_cache,
-        enable_async=enable_async,
         num_iters=num_iters,
         warmup_iters=warmup_iters,
         trace_mode=trace_mode,

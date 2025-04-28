@@ -142,7 +142,12 @@ struct MeshDeviceOperationAdapter {
         tt::tt_metal::distributed::MeshDevice* mesh_device,
         const operation_attributes_t& attrs,
         const tensor_args_t& tensor_args) {
-        return compute_program_hash(attrs, tensor_args);
+        // Hash the program hash and the tensor coordinates the workload is targeting.
+        auto hash = compute_program_hash(attrs, tensor_args);
+        for (const auto& coord : mesh_device_operation_utils::extract_tensor_coordinates(tensor_args)) {
+            tt::utils::hash_combine(hash, coord);
+        }
+        return hash;
     }
 };
 

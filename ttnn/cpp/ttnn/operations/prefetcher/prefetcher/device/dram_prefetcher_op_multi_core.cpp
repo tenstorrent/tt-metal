@@ -37,7 +37,8 @@ std::pair<uint32_t, uint32_t> get_max_page_size_and_num_pages(
 operation::ProgramWithCallbacks dram_prefetcher_multi_core(
     const std::vector<Tensor>& input_tensors,
     const uint32_t num_layers,
-    const tt::tt_metal::experimental::GlobalCircularBuffer& global_cb) {
+    const tt::tt_metal::experimental::GlobalCircularBuffer& global_cb,
+    const bool enable_performance_mode) {
     /* Buffers */
     const Buffer& global_cb_buffer = global_cb.cb_buffer();
     // tensors that with addresses
@@ -171,6 +172,9 @@ operation::ProgramWithCallbacks dram_prefetcher_multi_core(
         tensor_addrs_cb_index,
     };
 
+    // Configs to enable for performance mode
+    reader_ct_args.push_back((uint32_t)enable_performance_mode /* skip_ptr_update */);
+
     auto reader_kernel_id = CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/prefetcher/prefetcher/device/kernels/reader_dram.cpp",
@@ -191,6 +195,9 @@ operation::ProgramWithCallbacks dram_prefetcher_multi_core(
         reader_cb_index,
         remote_cb_index,
     };
+
+    // Configs to enable for performance mode
+    writer_ct_args.push_back((uint32_t)enable_performance_mode /* skip_ptr_update */);
 
     auto writer_kernel_id = CreateKernel(
         program,

@@ -15,7 +15,7 @@ namespace ttnn::operations::binary {
 
 namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {
-static BcastOpMath binary_op_type_to_bcast_op_math(const BinaryOpType binary_op_type) {
+BcastOpMath binary_op_type_to_bcast_op_math(const BinaryOpType binary_op_type) {
     switch (binary_op_type) {
         case BinaryOpType::ADD: return BcastOpMath::ADD;
         case BinaryOpType::SUB: return BcastOpMath::SUB;

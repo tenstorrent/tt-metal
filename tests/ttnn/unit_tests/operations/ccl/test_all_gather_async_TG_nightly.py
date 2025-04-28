@@ -8,9 +8,6 @@ from loguru import logger
 import ttnn
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal, comp_pcc
 from models.utility_functions import skip_for_grayskull
-from tests.ttnn.unit_tests.operations.ccl.test_ccl_common import (
-    create_global_semaphore_with_same_address,
-)
 
 from tests.ttnn.unit_tests.operations.ccl.test_all_gather_TG_post_commit import (
     run_line_all_gather_on_TG_with_mesh_tensor_along_rows,
@@ -60,7 +57,6 @@ from tests.ttnn.unit_tests.operations.ccl.test_new_all_gather import (
 )
 @pytest.mark.parametrize("use_persistent_output", [True, False])
 @pytest.mark.parametrize("replication_factor", [8])
-@pytest.mark.parametrize("enable_async", [True])
 @pytest.mark.parametrize("mesh_device", [pytest.param((8, 4), id="8x4_grid")], indirect=True)
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
 def test_line_all_gather_sharded_on_TG_rows_post_commit(
@@ -78,7 +74,6 @@ def test_line_all_gather_sharded_on_TG_rows_post_commit(
     use_persistent_output,
     use_program_cache,
     function_level_defaults,
-    enable_async,
     replication_factor,
     num_iters=1,
 ):
@@ -103,7 +98,6 @@ def test_line_all_gather_sharded_on_TG_rows_post_commit(
         ttnn.BufferType.L1,
         use_program_cache,
         function_level_defaults,
-        enable_async=enable_async,
         input_shard_spec=input_shard_spec,
         num_iters=num_iters,
         num_all_gather_instances=replication_factor,
@@ -201,7 +195,6 @@ def test_line_all_gather_sharded_on_TG_rows_post_commit(
 )
 @pytest.mark.parametrize("use_persistent_output", [True, False])
 @pytest.mark.parametrize("replication_factor", [4])
-@pytest.mark.parametrize("enable_async", [True])
 @pytest.mark.parametrize("mesh_device", [pytest.param((8, 4), id="8x4_grid")], indirect=True)
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
 def test_line_all_gather_sharded_on_TG_cols_post_commit(
@@ -219,7 +212,6 @@ def test_line_all_gather_sharded_on_TG_cols_post_commit(
     use_persistent_output,
     use_program_cache,
     function_level_defaults,
-    enable_async,
     replication_factor,
     num_iters=1,
 ):
@@ -245,7 +237,6 @@ def test_line_all_gather_sharded_on_TG_cols_post_commit(
         ttnn.BufferType.L1,
         use_program_cache,
         function_level_defaults,
-        enable_async=enable_async,
         num_iters=num_iters,
         input_shard_spec=input_shard_spec,
         num_all_gather_instances=replication_factor,
@@ -289,7 +280,6 @@ def test_line_all_gather_sharded_on_TG_cols_post_commit(
 )
 @pytest.mark.parametrize("use_persistent_output", [True, False])
 @pytest.mark.parametrize("replication_factor", [4])
-@pytest.mark.parametrize("enable_async", [True])
 @pytest.mark.parametrize("mesh_device", [pytest.param((8, 4), id="8x4_grid")], indirect=True)
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
 def test_line_all_gather_on_TG_cols_nightly(
@@ -304,7 +294,6 @@ def test_line_all_gather_on_TG_cols_nightly(
     buffer_type,
     use_program_cache,
     function_level_defaults,
-    enable_async,
     replication_factor,
     num_iters=1,
 ):
@@ -322,7 +311,6 @@ def test_line_all_gather_on_TG_cols_nightly(
         buffer_type,
         use_program_cache,
         function_level_defaults,
-        enable_async=enable_async,
         num_iters=num_iters,
         num_all_gather_instances=replication_factor,
         cluster_axis=0,

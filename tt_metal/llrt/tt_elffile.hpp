@@ -68,7 +68,7 @@ public:
 
     // Read an elf file, populate segments vector.
     // Path must remain live throughout processing.
-    void ReadImage(std::string const& path);
+    void ReadImage(std::string_view path);
 
     // Write the (now-processed) elf file.
     void WriteImage(std::string const& path);

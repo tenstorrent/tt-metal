@@ -32,11 +32,9 @@ def run_global_circular_buffer(device):
     global_circular_buffer = ttnn.create_global_circular_buffer(device, sender_receiver_mapping, 3200)
 
 
-@pytest.mark.parametrize("enable_async_mode", (False, True), indirect=True)
-def test_global_circular_buffer(device, enable_async_mode):
+def test_global_circular_buffer(device):
     run_global_circular_buffer(device)
 
 
-@pytest.mark.parametrize("enable_async_mode", (False, True), indirect=True)
-def test_global_circular_buffer_mesh(mesh_device, enable_async_mode):
+def test_global_circular_buffer_mesh(mesh_device):
     run_global_circular_buffer(mesh_device)

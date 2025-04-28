@@ -162,7 +162,7 @@ void JitBuildEnv::init(
     switch (arch) {
         case ARCH::GRAYSKULL: common_flags = "-mcpu=tt-gs "; break;
         case ARCH::WORMHOLE_B0: common_flags = "-mcpu=tt-wh "; break;
-        case ARCH::BLACKHOLE: common_flags = "-mcpu=tt-bh "; break;
+        case ARCH::BLACKHOLE: common_flags = "-mcpu=tt-bh -fno-rvtt-sfpu-replay "; break;
         default: TT_ASSERT(false, "Invalid arch"); break;
     }
     common_flags += "-std=c++17 -flto -ffast-math ";
@@ -240,6 +240,10 @@ void JitBuildEnv::init(
 
     if (rtoptions.get_hw_cache_invalidation_enabled()) {
         this->defines_ += "-DENABLE_HW_CACHE_INVALIDATION ";
+    }
+
+    if (tt::tt_metal::MetalContext::instance().get_cluster().is_base_routing_fw_enabled()) {
+        this->defines_ += "-DROUTING_FW_ENABLED ";
     }
 
     // Includes
