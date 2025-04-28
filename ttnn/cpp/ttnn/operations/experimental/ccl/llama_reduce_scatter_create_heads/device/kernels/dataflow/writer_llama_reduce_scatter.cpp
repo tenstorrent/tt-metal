@@ -53,18 +53,18 @@ void kernel_main() {
     constexpr uint32_t packet_header_cb_id = get_compile_time_arg_val(2);
     constexpr uint32_t fabric_receiver_cb_id = get_compile_time_arg_val(3);
     constexpr uint32_t accumulator_cb_id = get_compile_time_arg_val(4);
-    constexpr uint32_t output_tensor_cb_id = get_compile_time_arg_val(5);
-    constexpr uint32_t chip_id = get_compile_time_arg_val(6);
-    constexpr uint32_t tiles_per_core_width = get_compile_time_arg_val(7);
-    constexpr uint32_t tiles_per_core_width_output = get_compile_time_arg_val(8);
-    constexpr uint32_t num_pages_per_packet = get_compile_time_arg_val(9);
-    constexpr uint32_t input_shard_cores_per_device = get_compile_time_arg_val(10);
-    constexpr uint32_t num_devices = get_compile_time_arg_val(11);
-    constexpr uint32_t page_size_bytes = get_compile_time_arg_val(12);
-    constexpr uint32_t output_cores_per_device = get_compile_time_arg_val(13);
-    constexpr uint32_t packet_receiver_core_x = get_compile_time_arg_val(14);
-    constexpr uint32_t packet_receiver_core_y = get_compile_time_arg_val(15);
-    constexpr uint32_t num_packet_worker_cores = get_compile_time_arg_val(16);
+    // constexpr uint32_t output_tensor_cb_id = get_compile_time_arg_val(5);
+    constexpr uint32_t chip_id = get_compile_time_arg_val(5);
+    constexpr uint32_t tiles_per_core_width = get_compile_time_arg_val(6);
+    constexpr uint32_t tiles_per_core_width_output = get_compile_time_arg_val(7);
+    constexpr uint32_t num_pages_per_packet = get_compile_time_arg_val(8);
+    constexpr uint32_t input_shard_cores_per_device = get_compile_time_arg_val(9);
+    constexpr uint32_t num_devices = get_compile_time_arg_val(10);
+    constexpr uint32_t page_size_bytes = get_compile_time_arg_val(11);
+    constexpr uint32_t output_cores_per_device = get_compile_time_arg_val(12);
+    constexpr uint32_t packet_receiver_core_x = get_compile_time_arg_val(13);
+    constexpr uint32_t packet_receiver_core_y = get_compile_time_arg_val(14);
+    constexpr uint32_t num_packet_worker_cores = get_compile_time_arg_val(15);
 
     // DPRINT the selected compile-time arguments
     DPRINT << ENDL();
@@ -74,7 +74,7 @@ void kernel_main() {
     DPRINT << "packet_header_cb_id: " << packet_header_cb_id << ENDL();
     DPRINT << "fabric_receiver_cb_id: " << fabric_receiver_cb_id << ENDL();
     DPRINT << "accumulator_cb_id: " << accumulator_cb_id << ENDL();
-    DPRINT << "output_tensor_cb_id: " << output_tensor_cb_id << ENDL();
+    // DPRINT << "output_tensor_cb_id: " << output_tensor_cb_id << ENDL();
     DPRINT << "chip_id: " << chip_id << ENDL();
     DPRINT << "tiles_per_core_width: " << tiles_per_core_width << ENDL();
     DPRINT << "tiles_per_core_width_output: " << tiles_per_core_width_output << ENDL();
@@ -204,35 +204,35 @@ void kernel_main() {
     } else if (worker_core) {
         DPRINT << "worker_core writer" << ENDL();
         // #ifndef SKIP_WRITE_BACK
-        constexpr uint8_t output_core_xy[output_cores_per_device][2] = OUTPUT_CORE_XY;
-        uint64_t noc_addresses[num_pages_per_packet];
-        uint32_t accumulator_l1_addresses[num_pages_per_packet];
-        uint32_t output_tensor_base_addr = get_read_ptr(output_tensor_cb_id);
-        auto accumulator_l1_addr = get_read_ptr(accumulator_cb_id);
-        uint32_t num_packets = num_pages_per_packet;
-        for (uint32_t i = 0; i < num_pages_per_packet; i++) {
-            uint32_t rem = linear_output_page_start_idx + i;
-            uint32_t linear_output_core_idcs = rem / tiles_per_core_width_output;
-            if (linear_output_core_idcs >= output_cores_per_device) {
-                num_packets = i;
-                break;
-            }
-            uint32_t linear_output_tile_offsets = rem % tiles_per_core_width_output;
-            noc_addresses[i] = get_noc_addr(
-                output_core_xy[linear_output_core_idcs][x_index],
-                output_core_xy[linear_output_core_idcs][y_index],
-                output_tensor_base_addr + (linear_output_tile_offsets * page_size_bytes));
-            accumulator_l1_addresses[i] = accumulator_l1_addr + i * page_size_bytes;
-        }
+        // constexpr uint8_t output_core_xy[output_cores_per_device][2] = OUTPUT_CORE_XY;
+        // uint64_t noc_addresses[num_pages_per_packet];
+        // uint32_t accumulator_l1_addresses[num_pages_per_packet];
+        // uint32_t output_tensor_base_addr = get_read_ptr(output_tensor_cb_id);
+        // auto accumulator_l1_addr = get_read_ptr(accumulator_cb_id);
+        // uint32_t num_packets = num_pages_per_packet;
+        // for (uint32_t i = 0; i < num_pages_per_packet; i++) {
+        //     uint32_t rem = linear_output_page_start_idx + i;
+        //     uint32_t linear_output_core_idcs = rem / tiles_per_core_width_output;
+        //     if (linear_output_core_idcs >= output_cores_per_device) {
+        //         num_packets = i;
+        //         break;
+        //     }
+        //     uint32_t linear_output_tile_offsets = rem % tiles_per_core_width_output;
+        //     noc_addresses[i] = get_noc_addr(
+        //         output_core_xy[linear_output_core_idcs][x_index],
+        //         output_core_xy[linear_output_core_idcs][y_index],
+        //         output_tensor_base_addr + (linear_output_tile_offsets * page_size_bytes));
+        //     accumulator_l1_addresses[i] = accumulator_l1_addr + i * page_size_bytes;
+        // }
 
         cb_wait_front(accumulator_cb_id, num_pages_per_packet);
 
-        // Process all tiles
-        for (uint32_t tile = 0; tile < num_packets; tile++) {
-            noc_async_write(accumulator_l1_addresses[tile], noc_addresses[tile], page_size_bytes);
-            // print_bf16_pages(accumulator_l1_addresses[tile], page_size_bytes / 2, 1);
-        }
-        noc_async_write_barrier();
+        // // Process all tiles
+        // for (uint32_t tile = 0; tile < num_packets; tile++) {
+        //     noc_async_write(accumulator_l1_addresses[tile], noc_addresses[tile], page_size_bytes);
+        //     // print_bf16_pages(accumulator_l1_addresses[tile], page_size_bytes / 2, 1);
+        // }
+        // noc_async_write_barrier();
         cb_pop_front(accumulator_cb_id, num_pages_per_packet);
         // #else
         //         cb_wait_front(output_tensor_cb_id, num_pages_per_packet);

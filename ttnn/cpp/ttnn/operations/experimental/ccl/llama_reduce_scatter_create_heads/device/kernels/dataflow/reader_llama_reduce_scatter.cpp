@@ -48,21 +48,21 @@ void kernel_main() {
     constexpr uint32_t packet_header_cb_id = get_compile_time_arg_val(2);
     constexpr uint32_t fabric_receiver_cb_id = get_compile_time_arg_val(3);
     constexpr uint32_t accumulator_cb_id = get_compile_time_arg_val(4);
-    constexpr uint32_t output_tensor_cb_id = get_compile_time_arg_val(5);
-    constexpr uint32_t chip_id = get_compile_time_arg_val(6);
-    constexpr uint32_t tiles_per_core_width = get_compile_time_arg_val(7);
-    constexpr uint32_t tiles_per_core_width_output = get_compile_time_arg_val(8);
-    constexpr uint32_t num_pages_per_packet = get_compile_time_arg_val(9);
-    constexpr uint32_t input_shard_cores_per_device = get_compile_time_arg_val(10);
-    constexpr uint32_t num_devices = get_compile_time_arg_val(11);
-    constexpr uint32_t page_size_bytes = get_compile_time_arg_val(12);
-    constexpr uint32_t output_cores_per_device = get_compile_time_arg_val(13);
-    constexpr uint32_t packet_worker_start_x = get_compile_time_arg_val(14);
-    constexpr uint32_t packet_worker_start_y = get_compile_time_arg_val(15);
-    constexpr uint32_t packet_worker_end_x = get_compile_time_arg_val(16);
-    constexpr uint32_t packet_worker_end_y = get_compile_time_arg_val(17);
-    constexpr uint32_t num_sender_cores = get_compile_time_arg_val(18);
-    constexpr uint32_t total_num_read_txns = get_compile_time_arg_val(19);
+    // constexpr uint32_t output_tensor_cb_id = get_compile_time_arg_val(5);
+    constexpr uint32_t chip_id = get_compile_time_arg_val(5);
+    constexpr uint32_t tiles_per_core_width = get_compile_time_arg_val(6);
+    constexpr uint32_t tiles_per_core_width_output = get_compile_time_arg_val(7);
+    constexpr uint32_t num_pages_per_packet = get_compile_time_arg_val(8);
+    constexpr uint32_t input_shard_cores_per_device = get_compile_time_arg_val(9);
+    constexpr uint32_t num_devices = get_compile_time_arg_val(10);
+    constexpr uint32_t page_size_bytes = get_compile_time_arg_val(11);
+    constexpr uint32_t output_cores_per_device = get_compile_time_arg_val(12);
+    constexpr uint32_t packet_worker_start_x = get_compile_time_arg_val(13);
+    constexpr uint32_t packet_worker_start_y = get_compile_time_arg_val(14);
+    constexpr uint32_t packet_worker_end_x = get_compile_time_arg_val(15);
+    constexpr uint32_t packet_worker_end_y = get_compile_time_arg_val(16);
+    constexpr uint32_t num_sender_cores = get_compile_time_arg_val(17);
+    constexpr uint32_t total_num_read_txns = get_compile_time_arg_val(18);
 
     // DPRINT the selected compile-time arguments
     DPRINT << ENDL();
@@ -72,7 +72,7 @@ void kernel_main() {
     DPRINT << "packet_header_cb_id: " << packet_header_cb_id << ENDL();
     DPRINT << "fabric_receiver_cb_id: " << fabric_receiver_cb_id << ENDL();
     DPRINT << "accumulator_cb_id: " << accumulator_cb_id << ENDL();
-    DPRINT << "output_tensor_cb_id: " << output_tensor_cb_id << ENDL();
+    // DPRINT << "output_tensor_cb_id: " << output_tensor_cb_id << ENDL();
     DPRINT << "chip_id: " << chip_id << ENDL();
     DPRINT << "tiles_per_core_width: " << tiles_per_core_width << ENDL();
     DPRINT << "tiles_per_core_width_output: " << tiles_per_core_width_output << ENDL();
