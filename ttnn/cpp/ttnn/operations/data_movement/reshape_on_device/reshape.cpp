@@ -8,6 +8,7 @@
 #include <tt-metalium/constants.hpp>
 #include <ttnn/operations/functions.hpp>
 #include "ttnn/operations/experimental/auto_format/auto_format.hpp"
+#include "ttnn/tensor/host_buffer/functions.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "device/reshape_op.hpp"
 
@@ -29,10 +30,11 @@ static Tensor manual_insertion(
         "Required shape volume ({}) must match old shape volume ({})",
         logical_shape.volume(),
         input_tensor.get_logical_volume());
-    auto owned_buffer = ttnn::detail::to_host_buffer<uint16_t>(input_tensor);
+    auto cpu_tensor = input_tensor.cpu();
+    auto host_buffer = tt::tt_metal::host_buffer::get_host_buffer(cpu_tensor);
     auto output =
         Tensor(
-            OwnedStorage{owned_buffer},
+            tt::tt_metal::HostStorage{std::move(host_buffer)},
             TensorSpec(
                 logical_shape,
                 TensorLayout::fromPaddedShape(

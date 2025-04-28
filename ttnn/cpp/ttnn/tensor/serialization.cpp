@@ -12,6 +12,7 @@
 #include <flatbuffers/flatbuffers.h>
 
 #include "ttnn/tensor/host_buffer/functions.hpp"
+#include "ttnn/tensor/storage.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/distributed/types.hpp"
@@ -118,30 +119,33 @@ TensorSpec load_tensor_spec(FILE* input_file) {
     return ttnn::from_flatbuffer(spec);
 }
 
-void dump_owned_storage(FILE* output_file, const OwnedStorage& storage) {
-    std::visit(
-        [output_file]<typename T>(const owned_buffer::Buffer<T>& generic_buffer) {
-            const auto buffer = owned_buffer::get_as<T>(generic_buffer);
-            uint64_t size = buffer.size();
-            safe_fwrite(&size, sizeof(size), 1, output_file);
-            safe_fwrite(buffer.data(), sizeof(T) * size, 1, output_file);
-        },
-        storage.buffer);
-}
+void dump_host_storage(FILE* output_file, const HostStorage& storage, DataType dtype) {
+    // TODO: #16067 - When dumping storage, we should not care about dtype.
+    // We should dump the `size` of raw bytes, not the size of logical elements.
+    const size_t element_size = [dtype]() {
+        switch (dtype) {
+            case DataType::BFLOAT16: return sizeof(::bfloat16);
+            case DataType::FLOAT32: return sizeof(float);
+            case DataType::UINT8: return sizeof(uint8_t);
+            case DataType::UINT16: return sizeof(uint16_t);
+            case DataType::INT32: return sizeof(int32_t);
+            // Block float types are encoded as uint32_t.
+            case DataType::BFLOAT8_B:
+            case DataType::BFLOAT4_B:
+            case DataType::UINT32: return sizeof(uint32_t);
+            case DataType::INVALID: TT_THROW("Unsupported DataType");
+        }
+        TT_THROW("Unreachable");
+    }();
 
-void dump_borrowed_storage(FILE* output_file, const BorrowedStorage& storage) {
-    std::visit(
-        [output_file]<typename T>(const borrowed_buffer::Buffer<T>& generic_buffer) {
-            const auto buffer = borrowed_buffer::get_as<T>(generic_buffer);
-            uint64_t size = buffer.size();
-            safe_fwrite(&size, sizeof(size), 1, output_file);
-            safe_fwrite(buffer.data(), sizeof(T) * size, 1, output_file);
-        },
-        storage.buffer);
+    auto raw_bytes = storage.buffer.view_bytes();
+    uint64_t size = raw_bytes.size() / element_size;
+    safe_fwrite(&size, sizeof(size), 1, output_file);
+    safe_fwrite(raw_bytes.data(), raw_bytes.size(), 1, output_file);
 }
 
 void dump_multi_device_host_storage(
-    FILE* output_file, const MultiDeviceHostStorage& storage, const DistributedTensorConfig& strategy) {
+    FILE* output_file, const MultiDeviceHostStorage& storage, const DistributedTensorConfig& strategy, DataType dtype) {
     uint64_t num_buffers = storage.num_buffers();
     safe_fwrite(&num_buffers, sizeof(num_buffers), 1, output_file);
 
@@ -149,26 +153,12 @@ void dump_multi_device_host_storage(
     safe_fwrite(&strategy, sizeof(strategy), 1, output_file);
 
     if (std::holds_alternative<ReplicateTensor>(strategy)) {
-        std::visit(
-            [output_file]<typename T>(const owned_buffer::Buffer<T>& generic_buffer) {
-                const auto buffer = owned_buffer::get_as<T>(generic_buffer);
-                uint64_t size = buffer.size();
-                safe_fwrite(&size, sizeof(size), 1, output_file);
-                safe_fwrite(buffer.begin(), sizeof(T) * size, 1, output_file);
-            },
-            storage.get_buffer(0));
+        dump_host_storage(output_file, storage.get_buffer(0), dtype);
         auto spec = storage.specs.at(0);
         dump_tensor_spec(spec, output_file);
     } else {
         for (int i = 0; i < num_buffers; i++) {
-            std::visit(
-                [output_file]<typename T>(const owned_buffer::Buffer<T>& generic_buffer) {
-                    const auto buffer = owned_buffer::get_as<T>(generic_buffer);
-                    uint64_t size = buffer.size();
-                    safe_fwrite(&size, sizeof(size), 1, output_file);
-                    safe_fwrite(buffer.begin(), sizeof(T) * size, 1, output_file);
-                },
-                storage.get_buffer(i));
+            dump_host_storage(output_file, storage.get_buffer(i), dtype);
         }
         for (const auto& spec : storage.specs) {
             dump_tensor_spec(spec, output_file);
@@ -177,11 +167,12 @@ void dump_multi_device_host_storage(
 }
 
 template <typename T>
-OwnedStorage load_owned_storage(FILE* input_file) {
+HostStorage load_host_storage(FILE* input_file) {
     uint64_t size = 0;
     safe_fread(&size, sizeof(size), 1, input_file);
-    auto buffer = owned_buffer::create<T>(size);
-    safe_fread(buffer.begin(), sizeof(T) * size, 1, input_file);
+    std::vector<T> data(size);
+    safe_fread(data.data(), sizeof(T) * size, 1, input_file);
+    auto buffer = host_buffer::create<T>(std::move(data));
     return {buffer};
 }
 
@@ -193,14 +184,16 @@ MultiDeviceHostStorage load_multi_device_host_storage(
     safe_fread(&num_buffers, sizeof(num_buffers), 1, input_file);
     safe_fread(&strategy, sizeof(strategy), 1, input_file);
 
-    std::vector<OwnedBuffer> buffers;
+    std::vector<HostBuffer> buffers;
     std::vector<ttnn::TensorSpec> specs;
     if (std::holds_alternative<ReplicateTensor>(strategy)) {
         uint64_t size = 0;
         safe_fread(&size, sizeof(size), 1, input_file);
-        auto buffer = owned_buffer::create<T>(size);
-        safe_fread(buffer.begin(), sizeof(T) * size, 1, input_file);
-        buffers.push_back(buffer);
+        std::vector<T> data(size);
+        safe_fread(data.data(), sizeof(T) * size, 1, input_file);
+        HostBuffer buffer = host_buffer::create<T>(std::move(data));
+        buffers.push_back(std::move(buffer));
+
         auto spec = [&] {
             if (version_id >= 5) {
                 return load_tensor_spec(input_file);
@@ -216,7 +209,7 @@ MultiDeviceHostStorage load_multi_device_host_storage(
 
         auto num_devices = mesh_device ? mesh_device->num_devices() : 1;
         for (std::size_t i = 1; i < num_devices; ++i) {
-            buffers.push_back(owned_buffer::Buffer<T>{buffer.get_ptr()});
+            buffers.push_back(buffers[0]);
             specs.push_back(spec);
         }
 
@@ -224,8 +217,9 @@ MultiDeviceHostStorage load_multi_device_host_storage(
         for (std::size_t i = 0; i < num_buffers; ++i) {
             uint64_t size = 0;
             safe_fread(&size, sizeof(size), 1, input_file);
-            auto buffer = owned_buffer::create<T>(size);
-            safe_fread(buffer.begin(), sizeof(T) * size, 1, input_file);
+            std::vector<T> data(size);
+            safe_fread(data.data(), sizeof(T) * size, 1, input_file);
+            auto buffer = host_buffer::create<T>(std::move(data));
             buffers.push_back(std::move(buffer));
         }
         for (std::size_t i = 0; i < num_buffers; ++i) {
@@ -246,25 +240,25 @@ MultiDeviceHostStorage load_multi_device_host_storage(
     return {strategy, buffers, specs};
 }
 
-OwnedStorage load_owned_storage(FILE* input_file, DataType data_type) {
+HostStorage load_host_storage(FILE* input_file, DataType data_type) {
     if (data_type == DataType::UINT32 or data_type == DataType::BFLOAT8_B or data_type == DataType::BFLOAT4_B) {
         using T = std::uint32_t;
-        return load_owned_storage<T>(input_file);
+        return load_host_storage<T>(input_file);
     } else if (data_type == DataType::INT32) {
         using T = std::int32_t;
-        return load_owned_storage<T>(input_file);
+        return load_host_storage<T>(input_file);
     } else if (data_type == DataType::UINT8) {
         using T = std::uint8_t;
-        return load_owned_storage<T>(input_file);
+        return load_host_storage<T>(input_file);
     } else if (data_type == DataType::UINT16) {
         using T = std::uint16_t;
-        return load_owned_storage<T>(input_file);
+        return load_host_storage<T>(input_file);
     } else if (data_type == DataType::FLOAT32) {
         using T = float;
-        return load_owned_storage<T>(input_file);
+        return load_host_storage<T>(input_file);
     } else if (data_type == DataType::BFLOAT16) {
         using T = bfloat16;
-        return load_owned_storage<T>(input_file);
+        return load_host_storage<T>(input_file);
     } else {
         TT_THROW("Unsupported DataType");
     }
@@ -297,7 +291,7 @@ Storage load_storage(
             return load_multi_device_host_storage(input_file, data_type, layout, device, version_id);
         }
     }
-    return load_owned_storage(input_file, data_type);
+    return load_host_storage(input_file, data_type);
 }
 
 template <typename T>
@@ -348,7 +342,7 @@ Tensor load_tensor_helper_very_legacy_impl(FILE* input_file, T device) {
     safe_fread(&data_type, sizeof(data_type), 1, input_file);
     safe_fread(&layout, sizeof(layout), 1, input_file);
 
-    auto storage = load_owned_storage(input_file, data_type);
+    auto storage = load_host_storage(input_file, data_type);
     auto tensor = Tensor(
         std::move(storage),
         TensorSpec(
@@ -425,7 +419,7 @@ Tensor load_tensor_helper(const std::string& file_name, T device) {
     }
 
     auto spec = load_tensor_spec(input_file);
-    StorageType storage_type = StorageType::OWNED;
+    StorageType storage_type = StorageType::HOST;
     safe_fread(&storage_type, sizeof(storage_type), 1, input_file);
     auto storage = load_storage(input_file, spec.data_type(), spec.layout(), storage_type, device, version_id);
     Tensor tensor(std::move(storage), spec);
@@ -460,17 +454,15 @@ void dump_tensor(
     }
 
     std::visit(
-        [output_file, &strategy](const auto& storage) {
+        [output_file, &strategy, dtype = tensor.get_dtype()](const auto& storage) {
             using StorageType = std::decay_t<decltype(storage)>;
-            if constexpr (std::is_same_v<StorageType, OwnedStorage>) {
-                dump_owned_storage(output_file, storage);
-            } else if constexpr (std::is_same_v<StorageType, BorrowedStorage>) {
-                dump_borrowed_storage(output_file, storage);
+            if constexpr (std::is_same_v<StorageType, HostStorage>) {
+                dump_host_storage(output_file, storage, dtype);
             } else if constexpr (std::is_same_v<StorageType, DeviceStorage>) {
                 TT_THROW("Device storage isn't supported");
             } else if constexpr (std::is_same_v<StorageType, MultiDeviceHostStorage>) {
                 auto distribute_config = get_distributed_tensor_config(strategy);
-                dump_multi_device_host_storage(output_file, storage, distribute_config);
+                dump_multi_device_host_storage(output_file, storage, distribute_config, dtype);
             } else {
                 raise_unsupported_storage<StorageType>();
             }
