@@ -49,6 +49,16 @@ using std::chrono::duration_cast;
 using std::chrono::nanoseconds;
 using std::chrono::steady_clock;
 
+template <typename T1, typename T2>
+struct pair_hash {
+    size_t operator()(const std::pair<T1, T2>& p) const {
+        auto h1 = std::hash<T1>{}(p.first);
+        auto h2 = std::hash<T2>{}(p.second);
+        // The magic number 0x9e3779b9 is from Boost's hash_combine
+        return h1 ^ (h2 + 0x9e3779b9 + (h1 << 6) + (h1 >> 2));
+    }
+};
+
 namespace tt {
 
 namespace tt_metal {
@@ -63,6 +73,15 @@ struct DisptachMetaData {
     // dispatch command subtype.
     std::string cmd_subtype = "";
 };
+
+struct ZoneDetails {
+    std::string zone_name;
+    std::string source_file;
+    uint64_t source_line_num;
+    bool is_zone_in_brisc_or_erisc;
+};
+
+const ZoneDetails InvalidZoneDetails = ZoneDetails{"", "", 0, false};
 
 class DeviceProfiler {
 private:
@@ -79,16 +98,17 @@ private:
     std::filesystem::path output_dir;
 
     // Device-Core tracy context
-    std::map<std::pair<uint16_t, CoreCoord>, TracyTTCtx> device_tracy_contexts;
+    std::unordered_map<std::pair<uint16_t, CoreCoord>, TracyTTCtx, pair_hash<uint16_t, CoreCoord>>
+        device_tracy_contexts;
 
     // Hash to zone source locations
-    std::unordered_map<uint16_t, std::string> hash_to_zone_src_locations;
+    std::unordered_map<uint16_t, ZoneDetails> hash_to_zone_src_locations;
 
     // Zone sourece locations
     std::unordered_set<std::string> zone_src_locations;
 
     // Iterator on the current zone being processed
-    std::set<tracy::TTDeviceEvent>::iterator current_zone_it;
+    std::unordered_set<tracy::TTDeviceEvent>::iterator current_zone_it;
 
     // Holding current data collected for dispatch command queue zones
     DisptachMetaData current_dispatch_meta_data;
@@ -183,7 +203,7 @@ private:
     void updateTracyContext(std::pair<uint32_t, CoreCoord> device_core);
 
 public:
-    DeviceProfiler(const bool new_logs);
+    DeviceProfiler(const IDevice* device, const bool new_logs);
 
     DeviceProfiler() = delete;
 
@@ -194,13 +214,13 @@ public:
     std::shared_ptr<tt::tt_metal::Program> sync_program = nullptr;
 
     // Device-core Syncdata
-    std::map<CoreCoord, std::tuple<double, double, double>> device_core_sync_info;
+    std::unordered_map<CoreCoord, std::tuple<double, double, double>> device_core_sync_info;
 
     // DRAM Vector
     std::vector<uint32_t> profile_buffer;
 
     // Device events
-    std::set<tracy::TTDeviceEvent> device_events;
+    std::unordered_set<tracy::TTDeviceEvent> device_events;
 
     std::set<tracy::TTDeviceEvent> device_sync_events;
 

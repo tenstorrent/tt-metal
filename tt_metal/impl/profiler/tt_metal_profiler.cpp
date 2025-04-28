@@ -111,6 +111,7 @@ constexpr CoreCoord SYNC_CORE = {0, 0};
 
 void setControlBuffer(IDevice* device, std::vector<uint32_t>& control_buffer) {
 #if defined(TRACY_ENABLE)
+    ZoneScoped;
     chip_id_t device_id = device->id();
     const metal_SocDescriptor& soc_d = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(device_id);
 
@@ -371,6 +372,7 @@ void setShift(int device_id, int64_t shift, double scale, std::tuple<double, dou
 
 void peekDeviceData(IDevice* device, std::vector<CoreCoord>& worker_cores) {
     ZoneScoped;
+    tt::log_info("peekDeviceData");
     auto device_id = device->id();
     std::string zoneName = fmt::format("peek {}", device_id);
     ZoneName(zoneName.c_str(), zoneName.size());
@@ -702,9 +704,9 @@ void InitDeviceProfiler(IDevice* device) {
 
         if (tt_metal_device_profiler_map.find(device_id) == tt_metal_device_profiler_map.end()) {
             if (firstInit.exchange(false)) {
-                tt_metal_device_profiler_map.emplace(device_id, DeviceProfiler(true));
+                tt_metal_device_profiler_map.emplace(device_id, DeviceProfiler(device, true));
             } else {
-                tt_metal_device_profiler_map.emplace(device_id, DeviceProfiler(false));
+                tt_metal_device_profiler_map.emplace(device_id, DeviceProfiler(device, false));
             }
         }
 

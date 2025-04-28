@@ -117,6 +117,7 @@ void write_control_buffer_to_core(
     const HalProgrammableCoreType core_type,
     const ProfilerDumpState state,
     const std::vector<uint32_t>& control_buffer) {
+    ZoneScoped;
     profiler_msg_t* profiler_msg =
         MetalContext::instance().hal().get_dev_addr<profiler_msg_t*>(core_type, HalL1MemAddrType::PROFILER);
     if (device->dispatch_firmware_active()) {
@@ -400,23 +401,20 @@ void DeviceProfiler::logPacketData(
     std::string zone_name = "";
     std::string source_file = "";
     uint64_t source_line = 0;
-
+    bool is_zone_in_brisc_or_erisc = false;
     nlohmann::json metaData;
 
-    if (hash_to_zone_src_locations.find((uint16_t)timer_id) != hash_to_zone_src_locations.end()) {
+    {
         ZoneScopedN("hash_to_zone_src_locations.find");
-        std::stringstream source_info(hash_to_zone_src_locations[timer_id]);
-        {
-            ZoneScopedN("getline first 2");
-            getline(source_info, zone_name, ',');
-            getline(source_info, source_file, ',');
-        }
-
-        {
-            ZoneScopedN("final getline and stoi");
-            std::string source_line_str;
-            getline(source_info, source_line_str, ',');
-            source_line = stoi(source_line_str);
+        if (hash_to_zone_src_locations.find((uint16_t)timer_id) != hash_to_zone_src_locations.end()) {
+            auto details_iter = hash_to_zone_src_locations.find((uint16_t)timer_id);
+            if (details_iter != hash_to_zone_src_locations.end()) {
+                const ZoneDetails& details = details_iter->second;
+                zone_name = details.zone_name;
+                source_file = details.source_file;
+                source_line = details.source_line_num;
+                is_zone_in_brisc_or_erisc = details.is_zone_in_brisc_or_erisc;
+            }
         }
     }
 
@@ -432,7 +430,7 @@ void DeviceProfiler::logPacketData(
         uint32_t tracy_run_host_id = run_host_id;
         {
             ZoneScopedN("zone name find");
-            if (zone_name.find("BRISC-FW") == std::string::npos && zone_name.find("ERISC-FW") == std::string::npos) {
+            if (!is_zone_in_brisc_or_erisc) {
                 tracy_run_host_id = 0;
             }
         }
@@ -635,7 +633,7 @@ void DeviceProfiler::logNocTracePacketDataToJson(
     uint64_t /*source_line*/,
     const std::string_view /*source_file*/) {
     ZoneScopedN("logNocTracePacketDataToJson");
-    if (!tt::llrt::RunTimeOptions::get_instance().get_profiler_noc_events_enabled()) {
+    if (!MetalContext::instance().rtoptions().get_profiler_noc_events_enabled()) {
         return;
     }
 
@@ -795,7 +793,7 @@ CoreCoord DeviceProfiler::getPhysicalAddressFromVirtual(chip_id_t device_id, con
     return c;
 }
 
-DeviceProfiler::DeviceProfiler(const bool new_logs) {
+DeviceProfiler::DeviceProfiler(const IDevice* device, const bool new_logs) {
 #if defined(TRACY_ENABLE)
     ZoneScopedC(tracy::Color::Green);
     output_dir = std::filesystem::path(get_profiler_logs_dir());
@@ -808,6 +806,10 @@ DeviceProfiler::DeviceProfiler(const bool new_logs) {
 
     this->current_zone_it = device_events.begin();
     device_sync_info = std::make_tuple(0.0, 0.0, 0.0);
+    device_events.reserve(
+        (MAX_RISCV_PER_CORE * PROFILER_FULL_HOST_VECTOR_SIZE_PER_RISC * device->compute_with_storage_grid_size().x *
+         device->compute_with_storage_grid_size().y) /
+        kernel_profiler::PROFILER_L1_MARKER_UINT32_SIZE);
 #endif
 }
 
@@ -851,9 +853,11 @@ uint16_t DeviceProfiler::hash16CT(const std::string& str) {
 }
 
 void DeviceProfiler::generateZoneSourceLocationsHashes() {
+    ZoneScopedN("generateZoneSourceLocationsHashes");
     std::ifstream log_file(tt::tt_metal::PROFILER_ZONE_SRC_LOCATIONS_LOG);
     std::string line;
     while (std::getline(log_file, line)) {
+        ZoneScopedN("getline");
         std::string delimiter = "'#pragma message: ";
         int delimiter_index = line.find(delimiter) + delimiter.length();
         std::string zone_src_location = line.substr(delimiter_index, line.length() - delimiter_index - 1);
@@ -864,8 +868,19 @@ void DeviceProfiler::generateZoneSourceLocationsHashes() {
         if (did_insert.second && (hash_to_zone_src_locations.find(hash_16bit) != hash_to_zone_src_locations.end())) {
             log_warning("Source location hashes are colliding, two different locations are having the same hash");
         }
-        // hold a struct with the detailed info
-        hash_to_zone_src_locations.emplace(hash_16bit, zone_src_location);
+
+        ZoneDetails details;
+        std::stringstream ss(zone_src_location);
+        std::getline(ss, details.zone_name, ',');
+        std::getline(ss, details.source_file, ',');
+        std::string line_num_str;
+        std::getline(ss, line_num_str, ',');
+        details.source_line_num = std::stoull(line_num_str);
+        details.is_zone_in_brisc_or_erisc =
+            (details.zone_name.find("BRISC-FW") != std::string::npos ||
+             details.zone_name.find("ERISC-FW") != std::string::npos);
+
+        hash_to_zone_src_locations.emplace(hash_16bit, details);
     }
 }
 
@@ -952,6 +967,7 @@ void DeviceProfiler::dumpResults(
 }
 
 bool isSyncInfoNewer(std::tuple<double, double, double> old_info, std::tuple<double, double, double> new_info) {
+    ZoneScoped;
     double old_cpu_time = get<0>(old_info);
     double old_device_time = get<1>(old_info);
     double old_frequency = get<2>(old_info);
@@ -959,6 +975,43 @@ bool isSyncInfoNewer(std::tuple<double, double, double> old_info, std::tuple<dou
     double new_device_time = get<1>(new_info);
     double new_frequency = get<2>(new_info);
     return (old_cpu_time < new_cpu_time && old_device_time / old_frequency < new_device_time / new_frequency);
+}
+
+void parallel_sort(std::vector<tracy::TTDeviceEvent>& device_events) {
+    std::array<std::thread, 3> threads;
+    uint32_t chunk_size = device_events.size() / 4;
+    for (uint32_t i = 0; i < 3; i++) {
+        uint32_t start_idx = i * chunk_size;
+        uint32_t end_idx = (i + 1) * chunk_size;
+        threads[i] = std::thread([&device_events, start_idx, end_idx]() {
+            std::sort(device_events.begin() + start_idx, device_events.begin() + end_idx);
+        });
+    }
+
+    std::sort(device_events.begin() + 3 * chunk_size, device_events.end());
+
+    for (auto& thread : threads) {
+        thread.join();
+    }
+
+    // First level merges in parallel
+    threads[0] = std::thread([&device_events, chunk_size]() {
+        std::inplace_merge(
+            device_events.begin(), device_events.begin() + chunk_size, device_events.begin() + 2 * chunk_size);
+    });
+
+    threads[1] = std::thread([&device_events, chunk_size]() {
+        std::inplace_merge(
+            device_events.begin() + 2 * chunk_size, device_events.begin() + 3 * chunk_size, device_events.end());
+    });
+
+    // Wait for first level merges to complete
+    threads[0].join();
+    threads[1].join();
+
+    std::inplace_merge(device_events.begin(), device_events.begin() + 2 * chunk_size, device_events.end());
+
+    TT_ASSERT(std::is_sorted(device_events.begin(), device_events.end()));
 }
 
 void DeviceProfiler::pushTracyDeviceResults() {
@@ -975,7 +1028,15 @@ void DeviceProfiler::pushTracyDeviceResults() {
 
     std::set<std::pair<uint32_t, CoreCoord>> device_cores_set;
     std::vector<std::pair<uint32_t, CoreCoord>> device_cores;
-    for (auto& event : device_events) {
+    tt::log_info("device_events size: {}", device_events.size());
+    std::vector<tracy::TTDeviceEvent> device_events_vec;
+    {
+        ZoneScopedN("sort device_events");
+        device_events_vec.assign(device_events.begin(), device_events.end());
+        // std::sort(device_events_vec.begin(), device_events_vec.end());
+        parallel_sort(device_events_vec);
+    }
+    for (auto& event : device_events_vec) {
         std::pair<uint32_t, CoreCoord> device_core = {event.chip_id, (CoreCoord){event.core_x, event.core_y}};
         auto ret = device_cores_set.insert(device_core);
         if (ret.second) {
@@ -987,7 +1048,7 @@ void DeviceProfiler::pushTracyDeviceResults() {
         updateTracyContext(device_core);
     }
 
-    for (auto event : device_events) {
+    for (auto event : device_events_vec) {
         std::pair<uint32_t, CoreCoord> device_core = {event.chip_id, (CoreCoord){event.core_x, event.core_y}};
         event.timestamp = event.timestamp * this->freqScale + this->shift;
         if (event.zone_phase == tracy::TTDeviceEventPhase::begin) {
@@ -1004,6 +1065,7 @@ void DeviceProfiler::setSyncInfo(std::tuple<double, double, double> sync_info) {
 
 void DeviceProfiler::updateTracyContext(std::pair<uint32_t, CoreCoord> device_core) {
 #if defined(TRACY_ENABLE)
+    ZoneScoped;
     chip_id_t device_id = device_core.first;
     CoreCoord worker_core = device_core.second;
 
