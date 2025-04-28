@@ -9,6 +9,9 @@ endif()
 # Project setup
 ############################################
 
+set(Python3_EXECUTABLE "/root/miniforge3/envs/tt-metal/bin/python")
+set(Python_EXECUTABLE "/root/miniforge3/envs/tt-metal/bin/python")
+
 # For single-config generators, default to RelWithDebInfo if unspecified
 get_property(isMultiConfig GLOBAL PROPERTY GENERATOR_IS_MULTI_CONFIG)
 if(NOT isMultiConfig)
@@ -132,7 +135,6 @@ else()
 endif()
 
 if(WITH_PYTHON_BINDINGS)
-    set(Python3_FIND_STRATEGY LOCATION)
     find_package(
         Python3
         COMPONENTS
@@ -140,6 +142,8 @@ if(WITH_PYTHON_BINDINGS)
             Development
     )
     message(STATUS "Python3 include dirs: ${Python3_INCLUDE_DIRS}")
+    message(STATUS "Python3 version: ${Python3_VERSION}")
+    message(STATUS "Python3 libraries: ${Python3_LIBRARIES}")
 endif()
 
 find_library(NUMA_LIBRARY NAMES numa)
