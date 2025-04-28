@@ -1404,37 +1404,19 @@ Tensor matmul(
     const QueueId queue_id,
     const std::optional<Tensor>& optional_output_tensor) {
     std::vector<std::optional<const Tensor>> optional_input_tensors = {};
-    std::vector<Tensor> output_tensors;
-
     if (bias.has_value()) {
         optional_input_tensors.push_back(bias.value());
-        output_tensors = {
-            Tensor(operation::get_workers_for_op_output({input_tensor_a, input_tensor_b}, {bias.value()}))};
     } else {
         optional_input_tensors.push_back(std::nullopt);
-        output_tensors = {Tensor(operation::get_workers_for_op_output({input_tensor_a, input_tensor_b}))};
     }
 
-    operation::launch_op(
-        [parameters, queue_id](
-            const std::vector<Tensor>& input_tensors,
-            const std::vector<std::optional<const Tensor>>& optional_input_tensors,
-            const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
-            const auto& input_tensor_a = input_tensors.at(0);
-            const auto& input_tensor_b = input_tensors.at(1);
-
-            return operation::run(
-                create_matmul_struct(input_tensor_a, input_tensor_b, parameters, optional_output_tensors),
-                {input_tensor_a, input_tensor_b},
-                optional_input_tensors,
-                optional_output_tensors,
-                queue_id);
-        },
-        {input_tensor_a, input_tensor_b},
-        output_tensors,
-        optional_input_tensors,
-        {optional_output_tensor});
-    return output_tensors.at(0);
+    return operation::run(
+               create_matmul_struct(input_tensor_a, input_tensor_b, parameters, {optional_output_tensor}),
+               {input_tensor_a, input_tensor_b},
+               optional_input_tensors,
+               {optional_output_tensor},
+               queue_id)
+        .at(0);
 }
 
 void check_tensor_in_grid(const Tensor& tensor, const CoreCoord& grid_size) {
@@ -1640,10 +1622,12 @@ void Matmul::validate(
                              input_tensor_b.buffer()->buffer_type() == tt_metal::BufferType::DRAM),
                         "Input tensor B must be width sharded or DRAM interleaved when using gather_in0.");
                     if (!this->global_cb.has_value() && input_tensor_b.is_sharded()) {
-                        TT_FATAL(
-                            input_tensor_a.shard_spec().value().grid == input_tensor_b.shard_spec().value().grid,
-                            "Input tensor A and B must be sharded on the same cores "
-                            "when using gather_in0.");
+                        if (input_tensor_b.buffer()->buffer_type() == tt_metal::BufferType::L1) {
+                            TT_FATAL(
+                                input_tensor_a.shard_spec().value().grid == input_tensor_b.shard_spec().value().grid,
+                                "Input tensor A and B must be sharded on the same cores "
+                                "when using gather_in0.");
+                        }
                     }
                     TT_FATAL(
                         this->output_mem_config.is_sharded(), "Output tensor must be sharded when using gather_in0.");
