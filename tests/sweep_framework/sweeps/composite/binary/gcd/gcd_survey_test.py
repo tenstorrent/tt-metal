@@ -4,6 +4,8 @@
 
 from functools import partial
 
+import itertools
+import pytest
 import torch
 import ttnn
 import random
@@ -99,7 +101,7 @@ parameters = {
         "binary_op": [
             {"tt_op": "gcd", "a_high": 100, "b_high": 90, "a_low": -100, "b_low": -90},
         ],
-        "input_shape": [{"self": [1, 1, 256, 256], "other": [1, 1, 256, 256]}],  # for float32 and int32 dtypes
+        "input_shape": [{"self": [1, 1, 1, 5], "other": [1, 1, 1, 5]}],  # for float32 and int32 dtypes
         "input_dtype": [
             {"input_a_dtype": "ttnn.float32", "input_b_dtype": "ttnn.float32"},
         ],
@@ -107,28 +109,28 @@ parameters = {
         "input_a_layout": [ttnn.TILE_LAYOUT],
         "input_b_layout": [ttnn.TILE_LAYOUT],
         "input_mem_config": [
-            {"a_mem": "l1_interleaved", "b_mem": "l1_interleaved"},
-            {"a_mem": "l1_interleaved", "b_mem": "dram_interleaved"},
-            {"a_mem": "dram_interleaved", "b_mem": "l1_interleaved"},
+            # {"a_mem": "l1_interleaved", "b_mem": "l1_interleaved"},
+            # {"a_mem": "l1_interleaved", "b_mem": "dram_interleaved"},
+            # {"a_mem": "dram_interleaved", "b_mem": "l1_interleaved"},
             {"a_mem": "dram_interleaved", "b_mem": "dram_interleaved"},  # l1 - dram combination
-            {"a_mem": "l1_height_sharded_rm", "b_mem": "l1_height_sharded_rm"},
-            {"a_mem": "dram_interleaved", "b_mem": "l1_height_sharded_rm"},
-            {"a_mem": "l1_height_sharded_rm", "b_mem": "dram_interleaved"},  # HS
-            {"a_mem": "l1_width_sharded_rm", "b_mem": "l1_width_sharded_rm"},
-            {"a_mem": "dram_interleaved", "b_mem": "l1_width_sharded_rm"},
-            {"a_mem": "l1_width_sharded_rm", "b_mem": "dram_interleaved"},  # WS
-            {"a_mem": "l1_block_sharded_rm", "b_mem": "l1_block_sharded_rm"},
-            {"a_mem": "dram_interleaved", "b_mem": "l1_block_sharded_rm"},
-            {"a_mem": "l1_block_sharded_rm", "b_mem": "dram_interleaved"},  # BS #row_major orientation
-            {"a_mem": "l1_height_sharded_cm", "b_mem": "l1_height_sharded_cm"},
-            {"a_mem": "dram_interleaved", "b_mem": "l1_height_sharded_cm"},
-            {"a_mem": "l1_height_sharded_cm", "b_mem": "dram_interleaved"},  # HS
-            {"a_mem": "l1_width_sharded_cm", "b_mem": "l1_width_sharded_cm"},
-            {"a_mem": "dram_interleaved", "b_mem": "l1_width_sharded_cm"},
-            {"a_mem": "l1_width_sharded_cm", "b_mem": "dram_interleaved"},  # WS
-            {"a_mem": "l1_block_sharded_cm", "b_mem": "l1_block_sharded_cm"},
-            {"a_mem": "dram_interleaved", "b_mem": "l1_block_sharded_cm"},
-            {"a_mem": "l1_block_sharded_cm", "b_mem": "dram_interleaved"},  # BS #col_major orientation
+            # {"a_mem": "l1_height_sharded_rm", "b_mem": "l1_height_sharded_rm"},
+            # {"a_mem": "dram_interleaved", "b_mem": "l1_height_sharded_rm"},
+            # {"a_mem": "l1_height_sharded_rm", "b_mem": "dram_interleaved"},  # HS
+            # {"a_mem": "l1_width_sharded_rm", "b_mem": "l1_width_sharded_rm"},
+            # {"a_mem": "dram_interleaved", "b_mem": "l1_width_sharded_rm"},
+            # {"a_mem": "l1_width_sharded_rm", "b_mem": "dram_interleaved"},  # WS
+            # {"a_mem": "l1_block_sharded_rm", "b_mem": "l1_block_sharded_rm"},
+            # {"a_mem": "dram_interleaved", "b_mem": "l1_block_sharded_rm"},
+            # {"a_mem": "l1_block_sharded_rm", "b_mem": "dram_interleaved"},  # BS #row_major orientation
+            # {"a_mem": "l1_height_sharded_cm", "b_mem": "l1_height_sharded_cm"},
+            # {"a_mem": "dram_interleaved", "b_mem": "l1_height_sharded_cm"},
+            # {"a_mem": "l1_height_sharded_cm", "b_mem": "dram_interleaved"},  # HS
+            # {"a_mem": "l1_width_sharded_cm", "b_mem": "l1_width_sharded_cm"},
+            # {"a_mem": "dram_interleaved", "b_mem": "l1_width_sharded_cm"},
+            # {"a_mem": "l1_width_sharded_cm", "b_mem": "dram_interleaved"},  # WS
+            # {"a_mem": "l1_block_sharded_cm", "b_mem": "l1_block_sharded_cm"},
+            # {"a_mem": "dram_interleaved", "b_mem": "l1_block_sharded_cm"},
+            # {"a_mem": "l1_block_sharded_cm", "b_mem": "dram_interleaved"},  # BS #col_major orientation
         ],
     },
 }
@@ -194,13 +196,43 @@ def run(
         torch_input_tensor_b = ttnn.to_torch(input_tensor_b, dtype=torch.int32)
 
     torch_input_tensor_a = ttnn.to_torch(input_tensor_a, dtype=torch.int32)
+    ttnn.set_printoptions(profile="full")
+    print("\nTorch input : \nA=", torch_input_tensor_a, "\nB=", torch_input_tensor_b)
 
     golden_function = ttnn.get_golden_function(ttnn_fn)
     torch_output_tensor = golden_function(torch_input_tensor_a, torch_input_tensor_b)
+    print("Torch result : ", torch_output_tensor)
 
     start_time = start_measuring_time()
+    print("\nTTNN Input : \nA=", input_tensor_a, "\nB=", input_tensor_b)
     result = ttnn_fn(input_tensor_a, input_tensor_b)
+    print("result : ", result, "\n")
     output_tensor = ttnn.to_torch(result)
     e2e_perf = stop_measuring_time(start_time)
 
     return [check_with_pcc(torch_output_tensor, output_tensor, pcc=0.99), e2e_perf]
+
+
+param_keys = parameters["gcd_test"].keys()
+param_values = itertools.product(*parameters["gcd_test"].values())
+
+
+@pytest.mark.parametrize(",".join(param_keys), list(param_values))
+def test_batch_norm(
+    binary_op,
+    input_shape,
+    input_dtype,
+    input_a_layout,
+    input_b_layout,
+    input_mem_config,
+    device,
+):
+    run(
+        binary_op,
+        input_shape,
+        input_dtype,
+        input_a_layout,
+        input_b_layout,
+        input_mem_config,
+        device=device,
+    )

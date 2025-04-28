@@ -1,6 +1,8 @@
 # SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
 
+
 # SPDX-License-Identifier: Apache-2.0
+
 
 import argparse
 import sys
@@ -22,6 +24,7 @@ import framework.tt_smi_util as tt_smi_util
 from elasticsearch import Elasticsearch, NotFoundError
 from framework.elastic_config import *
 from framework.sweeps_logger import sweeps_logger as logger
+
 
 ARCH = os.getenv("ARCH_NAME")
 
@@ -70,8 +73,8 @@ def gather_single_test_perf(device, test_passed):
 
 def run(test_module, input_queue, output_queue, suite_name=""):
     device_generator = get_devices(test_module)
-    log_file = f"binary_ng_WH/output_log_{suite_name}.csv"
-    log_file_full = f"binary_ng_WH/binary_ng_WH_full/output_log_{suite_name}.csv"
+    log_file = f"binary_ng_BH/output_log_{suite_name}.csv"
+    log_file_full = f"binary_ng_BH/binary_ng_BH_full/output_log_{suite_name}.csv"
 
     # Open the file in write mode to clear its contents
     os.makedirs(os.path.dirname(log_file), exist_ok=True)
@@ -114,8 +117,6 @@ def run(test_module, input_queue, output_queue, suite_name=""):
             print(log_file)
             # log_file = "/home/ubuntu/tt-metal/output_log.csv"
             data = {
-                "input_a_shape": test_vector["input_shape"]["self"],
-                "input_b_shape": test_vector["input_shape"]["other"],
                 "input_a_dtype": test_vector["input_dtype"]["input_a_dtype"],
                 "input_b_dtype": test_vector["input_dtype"]["input_b_dtype"],
                 "a_mem": test_vector["input_mem_config"]["a_mem"],
@@ -123,8 +124,6 @@ def run(test_module, input_queue, output_queue, suite_name=""):
                 "status": status,
             }
             data_full = {
-                "input_a_shape": test_vector["input_shape"]["self"],
-                "input_b_shape": test_vector["input_shape"]["other"],
                 "input_a_dtype": test_vector["input_dtype"]["input_a_dtype"],
                 "input_b_dtype": test_vector["input_dtype"]["input_b_dtype"],
                 "a_mem": test_vector["input_mem_config"]["a_mem"],
