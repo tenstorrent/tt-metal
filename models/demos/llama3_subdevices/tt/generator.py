@@ -412,12 +412,6 @@ class Generator:
             self.trace_inputs_text = device_inputs
             self.trace_output_text = tt_out_trace
 
-            # host_inputs = self.model.prepare_decode_inputs_host(tokens, current_pos, page_table)
-
-            # device_inputs = copy_host_to_device(
-            #     host_tensors=host_inputs,
-            #     device_tensors=device_inputs,
-            # )
         if reset_inputs:
             host_inputs = self.model.prepare_decode_inputs_host(tokens, current_pos, page_table)
             device_inputs = copy_host_to_device(
