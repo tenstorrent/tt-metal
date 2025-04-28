@@ -60,13 +60,13 @@ jobs:
         image-config:
           - image-tag: ${{ needs.get-image-tags.outputs.wh-6u-image-tag }}
             image-base-name: ${{ needs.get-image-tags.outputs.wh-6u-base-image-name }}
-            dockerfile: dockerfile/upstream_test_images/Dockerfile.wh-6u
+            dockerfile: dockerfile/upstream_test_images/Dockerfile
             test-command: tests/scripts/wh_6u/run_wh_6u_upstream_tests.sh
             build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
             wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
           - image-tag: ${{ needs.get-image-tags.outputs.wh-6u-profiler-image-tag }}
             image-base-name: ${{ needs.get-image-tags.outputs.wh-6u-profiler-base-image-name }}
-            dockerfile: dockerfile/upstream_test_images/Dockerfile.wh-6u
+            dockerfile: dockerfile/upstream_test_images/Dockerfile
             test-command: tests/scripts/wh_6u/run_wh_6u_upstream_profiler_tests.sh
             build-artifact-name: ${{ needs.build-artifact-profiler.outputs.build-artifact-name }}
             wheel-artifact-name: ${{ needs.build-artifact-profiler.outputs.wheel-artifact-name }}
