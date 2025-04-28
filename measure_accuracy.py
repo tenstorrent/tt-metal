@@ -481,6 +481,7 @@ def main(args):
             "cosh",
             "sinh",
             "tan",
+            "atan",
             "cos",
             "sin",
             "silu",
@@ -492,9 +493,12 @@ def main(args):
             "selu",
             "softplus",
             "softsign",
+            "digamma",
+            "lgamma",
             "tanhshrink",
             "sqrt",
             "rsqrt",
+            "rsqrt_approx",
         ]
     )
     success_count = 0
