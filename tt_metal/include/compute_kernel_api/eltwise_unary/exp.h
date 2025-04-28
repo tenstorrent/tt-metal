@@ -18,9 +18,9 @@ namespace ckernel {
 /**
  * Please refer to documentation for any_init.
  */
-template <bool approx = true, bool fast_and_approx = true>
+template <bool approx = true, bool fast_and_approx = true, uint32_t scale = 0x3F800000>
 ALWI void exp_tile_init() {
-    MATH((llk_math_eltwise_unary_sfpu_exponential_init<approx, fast_and_approx>()));
+    MATH((llk_math_eltwise_unary_sfpu_exponential_init<approx, fast_and_approx, scale>()));
 }
 
 // clang-format off
@@ -38,9 +38,10 @@ ALWI void exp_tile_init() {
  * | fast_and_approx | Computation to be done faster and approximate                              | bool     |                                                       | False    |
  */
 // clang-format on
-template <bool approx = true, bool fast_and_approx = true>
-ALWI void exp_tile(uint32_t idst, int vector_mode = (int)VectorMode::RC) {
-    MATH((llk_math_eltwise_unary_sfpu_exponential<approx, fast_and_approx>(idst, vector_mode)));
+template <bool approx = true, bool fast_and_approx = true, int iterations = 8, bool scale_en = false>
+ALWI void exp_tile(uint32_t idst, int vector_mode = (int)VectorMode::RC, uint16_t scale = 0) {
+    MATH((llk_math_eltwise_unary_sfpu_exponential<approx, fast_and_approx, iterations, scale_en>(
+        idst, vector_mode, iterations, scale)));
 }
 
 }  // namespace ckernel

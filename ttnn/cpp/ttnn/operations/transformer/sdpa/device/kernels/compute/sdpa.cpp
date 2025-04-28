@@ -140,7 +140,7 @@ void MAIN {
                         true /*transpose*/);
 
                     /* QK *= SCALE */
-                    mul_block_bcast_scalar_inplace<cb_qk_im, cb_scale_in, qk_chunk_tiles>();
+                    // mul_block_bcast_scalar_inplace<cb_qk_im, cb_scale_in, qk_chunk_tiles>();
 
                     // Finding the diagonal is harder now that q_chunk_size and k_chunk_size can differ
                     // Q-range = [q_low, q_high)
@@ -216,6 +216,7 @@ void MAIN {
                     /* OUT_ACC += OUT_IM */
                     if (k_chunk > 0) {
                         /* cb_exp_max_diff = torch.exp(cb_prev_max - cb_cur_max) */
+                        // sub_exp_block(alias_prev_max, alias_cur_max, cb_scale_in, cb_exp_max_diff, Sq_chunk_t);
                         sub_exp_block(alias_prev_max, alias_cur_max, cb_exp_max_diff, Sq_chunk_t);
                         cb_pop_front(alias_prev_max, Sq_chunk_t);
 
