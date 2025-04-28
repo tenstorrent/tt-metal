@@ -38,7 +38,7 @@ on:
           - composite.binary.bitwise_and.bitwise_and_survey_test
           - composite.binary.gcd.gcd
           - composite.binary.gcd.gcd_survey_test
-          - composite.binary.lcm.lcm
+          - composite.binary.lcm.lcm_survey_test
           - composite.binary.lcm.lcm
           - eltwise.unary.abs.abs_pytorch2
           - eltwise.unary.relu.relu
