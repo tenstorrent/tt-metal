@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -8,16 +8,13 @@
 
 #include "ttnn/operations/math.hpp"
 #include "ttnn/operations/data_movement/transpose/transpose.hpp"
-#include "ttnn/operations/data_movement/permute/permute.hpp"
-
 #include "ttnn/operations/data_movement/permute/device/permute_device_operation.hpp"
-#include "cpp/ttnn/operations/data_movement/reshape_view/reshape.hpp"
 #include "cpp/ttnn/operations/data_movement/slice/slice.hpp"
 #include "cpp/ttnn/operations/data_movement/reshape_on_device/reshape.hpp"
 #include "cpp/ttnn/operations/data_movement/pad/pad.hpp"
 #include <tt-metalium/constants.hpp>
 
-#include "cpp/ttnn/operations/data_movement/reshape_view/reshape.hpp"
+#include "cpp/ttnn/operations/experimental/reshape/view.hpp"
 
 #include "fold.hpp"
 
@@ -168,8 +165,6 @@ std::vector<Tensor> fold_with_transpose_sharded_(
         device = input.device();
     }
 
-    const auto& input_shape = input.get_logical_shape();
-
     uint32_t n = input.get_logical_shape()[0], c = input.get_logical_shape()[1], h = input.get_logical_shape()[2],
              w = input.get_logical_shape()[3];
     auto padded_c = c + pad_c;      // end padding only
@@ -195,14 +190,13 @@ std::vector<Tensor> fold_with_transpose_sharded_(
     auto shard_spec = input.shard_spec().value();
 
     // pad input tensor
-
-    tt::tt_metal::Array4D padded_shape = {n, padded_c, padded_h32, padded_w32};
+    tt::tt_metal::Array4D padded_shape = {n, padded_c, padded_h32, w};
     auto pad_mem_config = create_sharded_memory_config(ttnn::Shape(padded_shape), grid_size, shard_spec.orientation);
     auto tt_output_tensor = ttnn::pad(
         input, padded_shape, tt::tt_metal::Array4D({0, 0, pad_h, 0}), 0, /*use_multicore*/ false, pad_mem_config);
 
     tt::log_debug("pad_output: {}", tt_output_tensor.get_logical_shape());
-#if 0
+
     // transpose
     auto tphw_mem_config =
         create_sharded_memory_config(tt_output_tensor.get_logical_shape(), grid_size, shard_spec.orientation);
@@ -227,19 +221,13 @@ std::vector<Tensor> fold_with_transpose_sharded_(
     auto tphc_mem_config =
         create_sharded_memory_config(tt_output_tensor.get_logical_shape(), grid_size, shard_spec.orientation);
     tt_output_tensor = ttnn::transpose(tt_output_tensor, 1, 2, tphc_mem_config);
-#endif
-
-    const ttnn::Shape permute_shape{input_shape[0], input_shape[3], input_shape[1], input_shape[2]};
-    auto tphc_mem_config = create_sharded_memory_config(permute_shape, grid_size, shard_spec.orientation);
-    const ttnn::SmallVector<int64_t> permute_dims = {0, 3, 1, 2};
-    tt_output_tensor = ttnn::permute(tt_output_tensor, permute_dims, tphc_mem_config);
 
     tt::log_debug("transpose_hc_output: {}", tt_output_tensor.get_logical_shape());
 
     // reshape
     n = tt_output_tensor.get_logical_shape()[0], w = tt_output_tensor.get_logical_shape()[1],
     c = tt_output_tensor.get_logical_shape()[2], h = tt_output_tensor.get_logical_shape()[3];
-    tt_output_tensor = ttnn::reshape(tt_output_tensor, ttnn::Shape{n, (w / stride_w), (c * stride_w), h});
+    tt_output_tensor = ttnn::experimental::view(tt_output_tensor, ttnn::Shape{n, (w / stride_w), (c * stride_w), h});
 
     tt::log_debug("reshape_hc_output: {}", tt_output_tensor.get_logical_shape());
 
@@ -253,15 +241,14 @@ std::vector<Tensor> fold_with_transpose_sharded_(
     // reshape
     n = tt_output_tensor.get_logical_shape()[0], w = tt_output_tensor.get_logical_shape()[1],
     h = tt_output_tensor.get_logical_shape()[2], c = tt_output_tensor.get_logical_shape()[3];
-
-    ttnn::Shape reshape2{n, w, (h / stride_h), (c * stride_h)};
-    auto tphc_mem_config2 = create_sharded_memory_config(reshape2, grid_size, shard_spec.orientation);
-    tt_output_tensor = ttnn::reshape(tt_output_tensor, reshape2, tphc_mem_config2);
+    tt_output_tensor = ttnn::experimental::view(tt_output_tensor, ttnn::Shape{n, w, (h / stride_h), (c * stride_h)});
 
     tt::log_debug("reshape_hw_output: {}", tt_output_tensor.get_logical_shape());
 
     // transpose
-    tt_output_tensor = ttnn::transpose(tt_output_tensor, 1, 2);
+    auto tphc_mem_config2 =
+        create_sharded_memory_config(tt_output_tensor.get_logical_shape(), grid_size, shard_spec.orientation);
+    tt_output_tensor = ttnn::transpose(tt_output_tensor, 1, 2, tphc_mem_config2);
 
     tt::log_debug("transpose_hc_output2: {}", tt_output_tensor.get_logical_shape());
 
