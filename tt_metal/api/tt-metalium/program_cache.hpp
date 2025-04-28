@@ -72,11 +72,11 @@ struct CachedMeshWorkload {
 template <typename shared_variables_t>
 struct AdaptedCachedMeshWorkload {
     tt::tt_metal::distributed::MeshWorkload workload;
-    std::unordered_map<distributed::MeshCoordinateRange, shared_variables_t> shared_variables;
+    std::unordered_map<distributed::MeshCoordinateRangeSet, shared_variables_t> shared_variables;
 
     AdaptedCachedMeshWorkload(
         tt::tt_metal::distributed::MeshWorkload&& workload,
-        std::unordered_map<distributed::MeshCoordinateRange, shared_variables_t>&& shared_variables) :
+        std::unordered_map<distributed::MeshCoordinateRangeSet, shared_variables_t>&& shared_variables) :
         workload{std::move(workload)}, shared_variables{std::move(shared_variables)} {}
 };
 

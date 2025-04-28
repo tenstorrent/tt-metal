@@ -106,12 +106,10 @@ struct MeshDeviceOperationAdapter {
             ProgramFactory program_factory;
 
             tt::tt_metal::distributed::MeshWorkload mesh_workload;
-            std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_variables;
-            for (const auto& range : tensor_coords.ranges()) {
-                auto cached_program = program_factory.create(attrs, tensor_args, tensor_return_value);
-                mesh_workload.add_program(range, std::move(cached_program.program));
-                shared_variables[range] = std::move(cached_program.shared_variables);
-            }
+            std::unordered_map<ttnn::MeshCoordinateRangeSet, shared_variables_t> shared_variables;
+            auto cached_program = program_factory.create(attrs, tensor_args, tensor_return_value);
+            mesh_workload.add_program(tensor_coords, std::move(cached_program.program));
+            shared_variables[tensor_coords] = std::move(cached_program.shared_variables);
 
             return AdaptedCachedMeshWorkload<shared_variables_t>{std::move(mesh_workload), std::move(shared_variables)};
         }
@@ -123,17 +121,11 @@ struct MeshDeviceOperationAdapter {
             tensor_return_value_t& tensor_return_value) {
             ProgramFactory program_factory;
 
-            for (auto& [coordinate_range, program] : cached_workload.workload.get_programs()) {
-                auto& shared_variables = cached_workload.shared_variables.at(coordinate_range);
+            for (auto& [coordinate_range_set, program] : cached_workload.workload.get_programs()) {
+                auto& shared_variables = cached_workload.shared_variables.at(coordinate_range_set);
 
                 mesh_device_operation_utils::apply_override_runtime_arguments(
-                    program_factory,
-                    program,
-                    shared_variables,
-                    attrs,
-                    *(coordinate_range.begin()),
-                    tensor_args,
-                    tensor_return_value);
+                    program_factory, program, shared_variables, attrs, tensor_args, tensor_return_value);
             }
         }
     };

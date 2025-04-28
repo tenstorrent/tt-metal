@@ -258,7 +258,8 @@ void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
                 device_range_set,
                 program_cmd_seq,
                 dispatch_metadata.stall_first,
-                dispatch_metadata.stall_before_program);
+                dispatch_metadata.stall_before_program,
+                program.get_runtime_id());
             active_sub_grids.push_back(device_range_set);
         } else {
             this->write_program_cmds_to_subgrid(
@@ -426,7 +427,7 @@ MeshEvent FDMeshCommandQueue::enqueue_record_event_helper(
         device_range_set.value_or(MeshCoordinateRangeSet(MeshCoordinateRange(mesh_device_->shape()))));
 
     sub_device_ids = buffer_dispatch::select_sub_device_ids(mesh_device_, sub_device_ids);
-    for (const auto& coord : event.device_range_set().coords()) {
+    auto dispatch_lambda = [this, &event, &sub_device_ids, notify_host](const MeshCoordinate& coord) {
         event_dispatch::issue_record_event_commands(
             mesh_device_,
             event.id(),
@@ -446,7 +447,7 @@ MeshEvent FDMeshCommandQueue::enqueue_record_event_helper(
     return event;
 }
 
-MeshEvent MeshCommandQueue::enqueue_record_event(
+MeshEvent FDMeshCommandQueue::enqueue_record_event(
     tt::stl::Span<const SubDeviceId> sub_device_ids, const std::optional<MeshCoordinateRangeSet>& device_range_set) {
     TT_FATAL(
         !device_range_set.has_value() || !device_range_set->empty(),
@@ -454,7 +455,7 @@ MeshEvent MeshCommandQueue::enqueue_record_event(
     return this->enqueue_record_event_helper(sub_device_ids, /*notify_host=*/false, device_range_set);
 }
 
-MeshEvent MeshCommandQueue::enqueue_record_event_to_host(
+MeshEvent FDMeshCommandQueue::enqueue_record_event_to_host(
     tt::stl::Span<const SubDeviceId> sub_device_ids, const std::optional<MeshCoordinateRangeSet>& device_range_set) {
     TT_FATAL(
         !device_range_set.has_value() || !device_range_set->empty(),
@@ -551,7 +552,7 @@ void FDMeshCommandQueue::copy_buffer_data_to_user_space(MeshBufferReadDescriptor
     }
 }
 
-void MeshCommandQueue::read_completion_queue_event(MeshReadEventDescriptor& read_event_descriptor) {
+void FDMeshCommandQueue::read_completion_queue_event(MeshReadEventDescriptor& read_event_descriptor) {
     const auto& device_range_set = read_event_descriptor.device_range_set;
     for (const auto& coord : device_range_set.coords()) {
         auto device = mesh_device_->get_device(coord);
@@ -594,7 +595,7 @@ void FDMeshCommandQueue::reset_worker_state(
     }
 }
 
-void MeshCommandQueue::write_program_cmds_to_subgrid(
+void FDMeshCommandQueue::write_program_cmds_to_subgrid(
     const MeshCoordinateRangeSet& sub_grid,
     ProgramCommandSequence& program_cmd_seq,
     bool stall_first,
@@ -605,6 +606,8 @@ void MeshCommandQueue::write_program_cmds_to_subgrid(
     CoreType dispatch_core_type = dispatch_core_config.get_core_type();
 
     for (const auto& coord : sub_grid.coords()) {
+        auto device = this->mesh_device_->get_device(coord);
+        this->update_launch_messages_for_device_profiler(program_cmd_seq, program_runtime_id, device);
         program_dispatch::write_program_command_sequence(
             program_cmd_seq, device->sysmem_manager(), id_, dispatch_core_type, stall_first, stall_before_program);
         chip_ids_in_workload.insert(device->id());
@@ -633,7 +636,7 @@ void FDMeshCommandQueue::write_go_signal_to_unused_sub_grids(
 }
 
 void FDMeshCommandQueue::capture_program_trace_on_subgrid(
-    const MeshCoordinateRange& sub_grid,
+    const MeshCoordinateRangeSet& sub_grid,
     ProgramCommandSequence& program_cmd_seq,
     bool stall_first,
     bool stall_before_program,
@@ -645,7 +648,7 @@ void FDMeshCommandQueue::capture_program_trace_on_subgrid(
     // Host Memory Intensive Path (when profiler is enabled): The launch messages across devices are unique, since
     // the host_assigned_field in the launch_msg contains the physical device id (required by the performance profiler).
     // Hence the trace per device must be uniquely captured.
-    for (const auto& coord : sub_grid) {
+    for (const auto& coord : sub_grid.coords()) {
         auto& sysmem_manager_for_trace = mesh_device_->get_device(coord)->sysmem_manager();
         uint32_t sysmem_manager_offset = sysmem_manager_for_trace.get_issue_queue_write_ptr(id_);
 
@@ -663,28 +666,31 @@ void FDMeshCommandQueue::capture_program_trace_on_subgrid(
 #else
     // Optimized Path (generic use-cases): Program dispatch commands across the entire sub-grid are identical.
     // Capture once.
-    auto& sysmem_manager_for_trace = mesh_device_->get_device(sub_grid.start_coord())->sysmem_manager();
-    uint32_t sysmem_manager_offset = sysmem_manager_for_trace.get_issue_queue_write_ptr(id_);
+    for (const auto& range : sub_grid.ranges()) {
+        const auto sysmem_manager_coord = range.start_coord();
+        auto& sysmem_manager_for_trace = mesh_device_->get_device(sysmem_manager_coord)->sysmem_manager();
+        uint32_t sysmem_manager_offset = sysmem_manager_for_trace.get_issue_queue_write_ptr(id_);
 
-    program_dispatch::write_program_command_sequence(
-        program_cmd_seq, sysmem_manager_for_trace, id_, dispatch_core_type, stall_first, stall_before_program);
-    auto mesh_trace_md = MeshTraceStagingMetadata(
-        sub_grid,
-        sub_grid.start_coord(),
-        sysmem_manager_offset,
-        sysmem_manager_for_trace.get_issue_queue_write_ptr(id_) - sysmem_manager_offset);
-    ordered_mesh_trace_md_.push_back(mesh_trace_md);
+        program_dispatch::write_program_command_sequence(
+            program_cmd_seq, sysmem_manager_for_trace, id_, dispatch_core_type, stall_first, stall_before_program);
+        auto mesh_trace_md = MeshTraceStagingMetadata(
+            range,
+            sysmem_manager_coord,
+            sysmem_manager_offset,
+            sysmem_manager_for_trace.get_issue_queue_write_ptr(id_) - sysmem_manager_offset);
+        ordered_mesh_trace_md_.push_back(mesh_trace_md);
+    }
 #endif
 }
 
 void FDMeshCommandQueue::capture_go_signal_trace_on_unused_subgrids(
-    const MeshCoordinateRange& active_grid,
+    const MeshCoordinateRangeSet& unused_grid,
     const SubDeviceId& sub_device_id,
     uint32_t expected_num_workers_completed,
     bool mcast_go_signals,
     bool unicast_go_signals) {
-    for (const auto& range : unused_grid.ranges()) {
-        auto& sysmem_manager_for_trace = mesh_device_->get_device(range.start_coord())->sysmem_manager();
+    for (const auto& unused_range : unused_grid.ranges()) {
+        auto& sysmem_manager_for_trace = mesh_device_->get_device(unused_range.start_coord())->sysmem_manager();
         uint32_t sysmem_manager_offset = sysmem_manager_for_trace.get_issue_queue_write_ptr(id_);
         write_go_signal(
             id_,
@@ -694,13 +700,12 @@ void FDMeshCommandQueue::capture_go_signal_trace_on_unused_subgrids(
             expected_num_workers_completed,
             this->virtual_program_dispatch_core(),
             mcast_go_signals,
-            unicast_go_signals,
-            mesh_device_->num_worker_cores(HalProgrammableCoreType::ACTIVE_ETH, sub_device_id));
-        auto mesh_trace_md = MeshTraceStagingMetadata(
-            range,
-            range.start_coord(),
+            unicast_go_signals);
+        auto mesh_trace_md = MeshTraceStagingMetadata{
+            unused_range,
+            unused_range.start_coord(),
             sysmem_manager_offset,
-            sysmem_manager_for_trace.get_issue_queue_write_ptr(id_) - sysmem_manager_offset);
+            sysmem_manager_for_trace.get_issue_queue_write_ptr(id_) - sysmem_manager_offset};
         ordered_mesh_trace_md_.push_back(mesh_trace_md);
     }
 }

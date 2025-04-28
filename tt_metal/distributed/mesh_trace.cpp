@@ -181,9 +181,9 @@ void MeshTrace::populate_mesh_buffer(MeshCommandQueue& mesh_cq, std::shared_ptr<
     trace_buffer->mesh_buffer =
         MeshBuffer::create(global_trace_buf_config, device_local_trace_buf_config, mesh_cq.device());
 
-    std::unordered_map<MeshCoordinateRange, uint32_t> write_offset_per_device_range = {};
+    std::unordered_map<MeshCoordinateRange, uint32_t> write_offset_per_device_range;
     for (auto& mesh_trace_data : trace_buffer->desc->ordered_trace_data) {
-        const auto& device_range = mesh_trace_data.device_range();
+        auto& device_range = mesh_trace_data.device_range();
         std::vector<uint32_t> write_data = mesh_trace_data.data();
         auto unpadded_data_size = write_data.size() * sizeof(uint32_t);
         auto padded_data_size = round_up(unpadded_data_size, page_size);

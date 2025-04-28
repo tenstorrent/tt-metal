@@ -244,11 +244,12 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create_mesh_workload(
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value) {
     tt::tt_metal::distributed::MeshWorkload workload;
-    std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_variables;
+    std::unordered_map<ttnn::MeshCoordinateRangeSet, shared_variables_t> shared_variables;
     for (const auto& coord : tensor_coords.coords()) {
+        const auto coord_range_set = ttnn::MeshCoordinateRangeSet(coord);
         auto cached_program = create_at(operation_attributes, coord, tensor_args, tensor_return_value);
-        workload.add_program(ttnn::MeshCoordinateRange(coord), std::move(cached_program.program));
-        shared_variables.emplace(coord, std::move(cached_program.shared_variables));
+        workload.add_program(coord_range_set, std::move(cached_program.program));
+        shared_variables.emplace(coord_range_set, std::move(cached_program.shared_variables));
     }
     return cached_mesh_workload_t(std::move(workload), std::move(shared_variables));
 }

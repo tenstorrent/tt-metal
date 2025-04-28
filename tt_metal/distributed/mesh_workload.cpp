@@ -290,9 +290,7 @@ std::vector<uint32_t> MeshWorkload::get_program_config_sizes() {
 std::unordered_set<SubDeviceId> MeshWorkload::determine_sub_device_ids(MeshDevice* mesh_device) {
     // Get the sub device ids for all program across all devices in the Workload
     std::unordered_set<SubDeviceId> sub_devices_;
-    for (auto& [device_range_set, program] : programs_) {
-        TT_ASSERT(!device_range_set.empty());  // validated in `add_program`
-        IDevice* device = mesh_device->get_device(device_range_set.ranges().front().start_coord());
+    for (auto& [_, program] : programs_) {
         auto sub_devs_for_program = program.determine_sub_device_ids(mesh_device);
         for (auto& sub_dev : sub_devs_for_program) {
             sub_devices_.insert(sub_dev);

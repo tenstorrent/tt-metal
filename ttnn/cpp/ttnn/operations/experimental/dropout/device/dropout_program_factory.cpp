@@ -357,15 +357,13 @@ DropoutMeshWorkloadFactory::cached_mesh_workload_t DropoutMeshWorkloadFactory::c
     TT_ASSERT(args.use_per_device_seed, "DropoutMeshWorkloadFactory should only be used if per-device seed is used.");
 
     tt::tt_metal::distributed::MeshWorkload workload;
-    std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_variables;
-    for (const auto& mesh_coord_range : tensor_coords.ranges()) {
-        for (const auto& mesh_coord : mesh_coord_range) {
-            const ttnn::MeshCoordinateRange mesh_coord_range{mesh_coord, mesh_coord};
-            auto single_device_program = DropoutProgramFactory::create(
-                override_per_device_seed(args, mesh_coord, tensor_args.input), tensor_args, output);
-            shared_variables[mesh_coord_range] = std::move(single_device_program.shared_variables);
-            workload.add_program(mesh_coord_range, std::move(single_device_program.program));
-        }
+    std::unordered_map<ttnn::MeshCoordinateRangeSet, shared_variables_t> shared_variables;
+    for (const auto& coord : tensor_coords.coords()) {
+        const auto coord_range_set = ttnn::MeshCoordinateRangeSet(coord);
+        auto single_device_program = DropoutProgramFactory::create(
+            override_per_device_seed(args, coord, tensor_args.input), tensor_args, output);
+        shared_variables[coord_range_set] = std::move(single_device_program.shared_variables);
+        workload.add_program(coord_range_set, std::move(single_device_program.program));
     }
     return cached_mesh_workload_t{std::move(workload), std::move(shared_variables)};
 }
@@ -377,12 +375,13 @@ void DropoutMeshWorkloadFactory::override_runtime_arguments(
     tensor_return_value_t& tensor_return_value) {
     TT_ASSERT(args.use_per_device_seed, "DropoutMeshWorkloadFactory should only be used if per-device seed is used.");
 
-    for (auto& [mesh_coord_range, program] : cached_workload.workload.get_programs()) {
+    for (auto& [mesh_coord_range_set, program] : cached_workload.workload.get_programs()) {
         auto cached_program_proxy = DropoutProgramFactory::cached_program_t::proxy(
-            program, cached_workload.shared_variables.at(mesh_coord_range));
+            program, cached_workload.shared_variables.at(mesh_coord_range_set));
+        const auto coord = mesh_coord_range_set.coords().front();
         DropoutProgramFactory::override_runtime_arguments(
             cached_program_proxy,
-            override_per_device_seed(args, mesh_coord_range.start_coord(), tensor_args.input),
+            override_per_device_seed(args, coord, tensor_args.input),
             tensor_args,
             tensor_return_value);
     }

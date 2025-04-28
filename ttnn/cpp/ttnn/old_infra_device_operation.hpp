@@ -47,7 +47,7 @@ struct OldInfraDeviceOperation {
     struct MeshWorkloadFactory {
         struct shared_variables_t {
             std::optional<operation::OverrideRuntimeArgumentsWorkloadCallback<OutputTensors>> workload_callback;
-            std::unordered_map<ttnn::MeshCoordinateRange, operation::OverrideRuntimeArgumentsCallback<OutputTensors>>
+            std::unordered_map<ttnn::MeshCoordinateRangeSet, operation::OverrideRuntimeArgumentsCallback<OutputTensors>>
                 per_program_callbacks;
         };
         using cached_mesh_workload_t = ttnn::device_operation::CachedMeshWorkload<shared_variables_t>;

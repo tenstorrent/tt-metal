@@ -7,6 +7,7 @@
 #include <mesh_device.hpp>
 #include <mesh_event.hpp>
 #include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/mesh_coord.hpp>
 
 namespace tt::tt_metal::distributed {
 
@@ -43,8 +44,8 @@ void SDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
         log_warning(
             tt::LogMetal, "Using Slow Dispatch for {}. This leads to blocking workload exection.", __FUNCTION__);
     }
-    for (auto& [coord_range, program] : mesh_workload.get_programs()) {
-        for (const auto& coord : coord_range) {
+    for (auto& [coord_range_set, program] : mesh_workload.get_programs()) {
+        for (const auto& coord : coord_range_set.coords()) {
             auto device = mesh_device_->get_device(coord);
             tt_metal::detail::LaunchProgram(device, program);
         }
@@ -52,15 +53,23 @@ void SDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
 }
 
 MeshEvent SDMeshCommandQueue::enqueue_record_event(
-    tt::stl::Span<const SubDeviceId>, const std::optional<MeshCoordinateRange>& device_range) {
+    tt::stl::Span<const SubDeviceId>, const std::optional<MeshCoordinateRangeSet>& device_range_set) {
     // No synchronization is needed for slow dispatch, returning a dummy value
-    return MeshEvent(0, mesh_device_, id_, device_range.value_or(MeshCoordinateRange(mesh_device_->shape())));
+    return MeshEvent(
+        /*id=*/0,
+        mesh_device_,
+        /*mesh_cq_id=*/id_,
+        device_range_set.value_or(MeshCoordinateRangeSet(MeshCoordinateRange(mesh_device_->shape()))));
 }
 
 MeshEvent SDMeshCommandQueue::enqueue_record_event_to_host(
-    tt::stl::Span<const SubDeviceId>, const std::optional<MeshCoordinateRange>& device_range) {
+    tt::stl::Span<const SubDeviceId>, const std::optional<MeshCoordinateRangeSet>& device_range_set) {
     // No synchronization is needed for slow dispatch, returning a dummy value
-    return MeshEvent(0, mesh_device_, id_, device_range.value_or(MeshCoordinateRange(mesh_device_->shape())));
+    return MeshEvent(
+        /*id=*/0,
+        mesh_device_,
+        /*mesh_cq_id=*/id_,
+        device_range_set.value_or(MeshCoordinateRangeSet(MeshCoordinateRange(mesh_device_->shape()))));
 }
 
 void SDMeshCommandQueue::enqueue_wait_for_event(const MeshEvent&) {}
