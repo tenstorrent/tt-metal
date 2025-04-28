@@ -112,7 +112,8 @@ void kernel_main() {
                     in1_single_tile_size_bytes);
                 cb_push_back(cb_id_in1, in1_block_num_tiles);
             }
-        } else if (in1_is_dram_sharded) {
+        } else if constexpr (in1_is_dram_sharded) {  // when in1 is sharded in DRAM, each core reads from its own bank,
+                                                     // two cores on the same row share one bank.
             for (uint32_t block = 0; block < num_blocks; ++block) {
                 uint32_t block_idx = (ring_idx + block) % num_blocks;
                 l1_read_addr_in1 = block_idx * in1_dram_shard_block_size_bytes + dram_read_offset_bytes;

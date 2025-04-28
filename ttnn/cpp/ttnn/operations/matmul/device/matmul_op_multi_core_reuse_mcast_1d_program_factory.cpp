@@ -1808,17 +1808,13 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_gather_in0(
     uint32_t in1_CB_tiles = 0;
     uint32_t in1_tensor_width_in_tiles = b.get_padded_shape()[-1] / in1_tile.get_tile_shape()[1];
 
-    if (!in1_is_dram_interleaved) {
-        if (in1_is_dram_sharded) {                                     // read from dram sharded
-            in1_CB_tiles = 2 * in0_shard_width_in_tiles * per_core_N;  // Double buffered
-        } else {
-            in1_shard_height_in_tiles = in1_buffer->shard_spec().shape()[0] / in1_tile.get_tile_shape()[0];
-            in1_shard_width_in_tiles =
-                in1_buffer->shard_spec().shape()[1] / in1_tile.get_tile_shape()[1] / num_global_cb_receivers;
-            in1_CB_tiles = in1_shard_height_in_tiles * in1_shard_width_in_tiles;
-        }
-    } else {                                                       // in1_is_dram_interleaved
+    if (in1_is_dram_sharded || in1_is_dram_interleaved) {
         in1_CB_tiles = 2 * in0_shard_width_in_tiles * per_core_N;  // Double buffered
+    } else {
+        in1_shard_height_in_tiles = in1_buffer->shard_spec().shape()[0] / in1_tile.get_tile_shape()[0];
+        in1_shard_width_in_tiles =
+            in1_buffer->shard_spec().shape()[1] / in1_tile.get_tile_shape()[1] / num_global_cb_receivers;
+        in1_CB_tiles = in1_shard_height_in_tiles * in1_shard_width_in_tiles;
     }
     uint32_t in1_CB_size = in1_CB_tiles * in1_single_tile_size;
 
