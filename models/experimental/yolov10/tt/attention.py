@@ -19,17 +19,9 @@ class TtnnAttention:
         nh_kd = self.key_dim * num_heads
         h = dim + nh_kd * 2
 
-        self.qkv = Conv(
-            device,
-            parameters.qkv,
-            self.conv_pt.qkv,
-            enable_identity=True,
-        )
+        self.qkv = Conv(device, parameters.qkv, self.conv_pt.qkv, enable_identity=True, activation_dtype=ttnn.bfloat16)
         self.proj = Conv(
-            device,
-            parameters.proj,
-            self.conv_pt.proj,
-            enable_identity=True,
+            device, parameters.proj, self.conv_pt.proj, enable_identity=True, activation_dtype=ttnn.bfloat16
         )
 
         self.pe = Conv(

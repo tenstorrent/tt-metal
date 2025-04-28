@@ -466,11 +466,7 @@ Result conv2d_L1(
                 bias_tensor.has_value());
         }
     }
-    // if 1x1 conv w/ stride 1, convert input tensor to tile layout if required
-    if (mm_conv) {
-        input_tensor_post_tm = ttnn::to_layout(
-            input_tensor_post_tm, Layout::TILE, conv_config.dtype, input_tensor_post_tm.memory_config(), device);
-    }
+
     // call optimized conv op or matmul micro op
     bool input_is_on_device = ttnn::is_tensor_on_device_or_multidevice(input_tensor_post_tm);
     TT_ASSERT(input_is_on_device);
@@ -549,6 +545,11 @@ Result conv2d_L1(
         }
         return {conv_output, output_height, output_width, weight_tensor_on_device, bias_tensor_on_device};
     } else {
+        if (input_tensor_post_tm.layout() != Layout::TILE) {
+            input_tensor_post_tm =
+                ttnn::to_layout(input_tensor_post_tm, Layout::TILE, std::nullopt, std::nullopt, device);
+        }
+
         // run conv as matmul
         std::optional<ttnn::operations::matmul::MatmulProgramConfig> program_config = std::nullopt;
         std::optional<MemoryConfig> mm_output_memory_config = std::nullopt;
@@ -576,7 +577,7 @@ Result conv2d_L1(
             false,
             false,
             mm_output_memory_config,
-            std::nullopt,
+            conv_config.dtype,
             program_config,
             activation);
 
