@@ -97,7 +97,7 @@ bool run_dm(IDevice* device, const DramConfig& test_config) {
     // Create circular buffers
     CircularBufferConfig l1_cb_config =
         CircularBufferConfig(total_size_bytes, {{l1_cb_index, test_config.l1_data_format}})
-            .set_page_size(l1_cb_index, test_config.page_size_bytes);
+            .set_page_size(l1_cb_index, total_size_bytes);
     auto l1_cb = CreateCircularBuffer(program, test_config.cores, l1_cb_config);
 
     // Kernels
@@ -126,18 +126,23 @@ bool run_dm(IDevice* device, const DramConfig& test_config) {
     // Launch program and record outputs
     vector<uint32_t> packed_output;
     detail::WriteToBuffer(input_dram_buffer, packed_input);
+    MetalContext::instance().get_cluster().dram_barrier(device->id());
     detail::LaunchProgram(device, program);
     detail::ReadFromBuffer(output_dram_buffer, packed_output);
 
-    // Print output and golden vectors
-    log_info("Golden vector");
-    print_vector<uint32_t>(packed_golden);
-    log_info("Output vector");
-    print_vector<uint32_t>(packed_output);
-
-    // Return comparison
-    return is_close_packed_vectors<bfloat16, uint32_t>(
+    // Results comparison
+    bool pcc = is_close_packed_vectors<bfloat16, uint32_t>(
         packed_output, packed_golden, [&](const bfloat16& a, const bfloat16& b) { return is_close(a, b); });
+
+    if (!pcc) {
+        log_error("PCC Check failed");
+        log_info("Golden vector");
+        print_vector<uint32_t>(packed_golden);
+        log_info("Output vector");
+        print_vector<uint32_t>(packed_output);
+    }
+
+    return pcc;
 }
 }  // namespace unit_tests::dm::dram
 
@@ -228,6 +233,7 @@ TEST_F(DeviceFixture, TensixDataMovementDRAMSharded) {
     // So 1024 * 1024 / 64 = x * x = 128 * 128 => x = 128
 
     // Fails: (when num dram banks isnt 1, 1), possibly due to the noc_addr_from_bank_id function in kernel
+    // TODO: Expand test case to cover multiple dram banks
 
     // Cores
     CoreRange core_range({0, 0}, {0, 0});
@@ -263,8 +269,35 @@ TEST_F(DeviceFixture, TensixDataMovementDRAMSharded) {
     }
 }
 
-// TODO: Extend sharded DRAM buffer test with (?)
-//  1. different transaction numbers and sizes
-//  2. different core locations
+/* ========== Directed ideal test case; Test id = 3 ========== */
+TEST_F(DeviceFixture, TensixDataMovementDRAMDirectedIdeal) {
+    // Parameters
+    uint32_t num_of_transactions = 180;
+    uint32_t transaction_size_pages = 4 * 32;
+    uint32_t page_size_bytes = 32;  // (=flit size): 32 bytes for WH, 64 for BH
+    if (arch_ == tt::ARCH::BLACKHOLE) {
+        page_size_bytes *= 2;
+    }
+    // Max transaction size = 4 * 32 pages = 128 * 32 bytes = 4096 bytes for WH; 8192 bytes for BH
+    // Max total transaction size = 180 * 8192 bytes = 1474560 bytes = 1.4 MB = L1 capacity
+
+    // Cores
+    CoreRange core_range({0, 0}, {0, 0});
+    CoreRangeSet core_range_set({core_range});
+
+    // Test config
+    unit_tests::dm::dram::DramConfig test_config = {
+        .test_id = 3,
+        .num_of_transactions = num_of_transactions,
+        .transaction_size_pages = transaction_size_pages,
+        .page_size_bytes = page_size_bytes,
+        .l1_data_format = DataFormat::Float16_b,
+        .cores = core_range_set};
+
+    // Run
+    for (unsigned int id = 0; id < num_devices_; id++) {
+        EXPECT_TRUE(run_dm(devices_.at(id), test_config));
+    }
+}
 
 }  // namespace tt::tt_metal
