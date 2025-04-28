@@ -40,8 +40,6 @@ from models.utility_functions import skip_for_grayskull
 def test_image_transformer_inference(batch, num_chunks, mesh_device, is_global):
     pcc_required = 0.75
 
-    mesh_device.enable_async(True)
-
     model_args = ModelArgs(mesh_device)
     dtype = ttnn.bfloat16
 

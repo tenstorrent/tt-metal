@@ -42,8 +42,6 @@ def test_cross_attention_transformer_block_inference(
     dtype = ttnn.bfloat16
     pcc_required = 0.99
 
-    mesh_device.enable_async(True)
-
     model_args = ModelArgs(mesh_device, max_batch_size=batch)
     # Limit the max seqlen to 4k to avoid OOM on host
     model_args.max_seq_len = 4096

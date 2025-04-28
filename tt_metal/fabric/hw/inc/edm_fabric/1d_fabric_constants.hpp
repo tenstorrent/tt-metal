@@ -6,7 +6,6 @@
 
 #include "dataflow_api.h"
 
-#include "tt_metal/fabric/hw/inc/edm_fabric/edm_fabric_utils.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/compile_time_arg_tmp.hpp"
 
 #include <array>
@@ -150,7 +149,11 @@ static_assert(
     "Special marker 0 not found. This implies some arguments were misaligned between host and device. Double check the "
     "CT args.");
 
-constexpr size_t SENDER_CHANNEL_ACK_NOC_IDS_START_IDX = SPECIAL_MARKER_0_IDX + SPECIAL_MARKER_CHECK_ENABLED;
+constexpr size_t SKIP_LIVENESS_CHECK_ARG_IDX = SPECIAL_MARKER_0_IDX + SPECIAL_MARKER_CHECK_ENABLED;
+constexpr std::array<bool, NUM_SENDER_CHANNELS> sender_ch_live_check_skip =
+    fill_array_with_next_n_args<bool, SKIP_LIVENESS_CHECK_ARG_IDX, NUM_SENDER_CHANNELS>();
+
+constexpr size_t SENDER_CHANNEL_ACK_NOC_IDS_START_IDX = SKIP_LIVENESS_CHECK_ARG_IDX + NUM_SENDER_CHANNELS;
 constexpr size_t SENDER_CHANNEL_ACK_CMD_BUF_IDS_START_IDX = SENDER_CHANNEL_ACK_NOC_IDS_START_IDX + NUM_SENDER_CHANNELS;
 constexpr std::array<size_t, NUM_SENDER_CHANNELS> sender_channel_ack_noc_ids =
     fill_array_with_next_n_args<size_t, SENDER_CHANNEL_ACK_NOC_IDS_START_IDX, NUM_SENDER_CHANNELS>();
@@ -199,7 +202,8 @@ constexpr size_t VC1_RECEIVER_CHANNEL = 1;
 constexpr size_t receiver_channel_base_id = NUM_SENDER_CHANNELS;
 
 // TRANSACTION IDS
-constexpr uint8_t NUM_TRANSACTION_IDS = 4;
+// TODO: Pass this value from host
+constexpr uint8_t NUM_TRANSACTION_IDS = enable_ring_support ? 8 : 4;
 
 constexpr std::array<uint8_t, MAX_NUM_RECEIVER_CHANNELS> RX_CH_TRID_STARTS =
     initialize_receiver_channel_trid_starts<MAX_NUM_RECEIVER_CHANNELS, NUM_TRANSACTION_IDS>();
@@ -226,10 +230,12 @@ constexpr size_t DEFAULT_HANDSHAKE_CONTEXT_SWITCH_TIMEOUT = 0;
 
 namespace tt::tt_fabric {
 static_assert(
-    receiver_channel_forwarding_noc_ids[0] == edm_to_local_chip_noc,
-    "edm_to_local_chip_noc must be 1 otherwise packet header setup must be modified to account for the final fabric "
-    "router not necessarily using noc1 for writing");
-
+    receiver_channel_local_write_noc_ids[0] == edm_to_local_chip_noc,
+    "edm_to_local_chip_noc must equal to receiver_channel_local_write_noc_ids");
+static constexpr uint8_t edm_to_downstream_noc = receiver_channel_forwarding_noc_ids[0];
+static constexpr uint8_t worker_handshake_noc = sender_channel_ack_noc_ids[0];
+constexpr bool local_chip_noc_equals_downstream_noc =
+    receiver_channel_forwarding_noc_ids[0] == receiver_channel_local_write_noc_ids[0];
 static constexpr uint8_t local_chip_data_cmd_buf = receiver_channel_local_write_cmd_buf_ids[0];
 
 }  // namespace tt::tt_fabric

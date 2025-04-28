@@ -21,7 +21,6 @@
 #include "ttnn/operations/reduction/generic/generic_reductions.hpp"
 #include "ttnn/run_operation.hpp"
 #include "ttnn/types.hpp"
-#include "ttnn/operations/data_movement/bcast/bcast.hpp"
 #include <tt-metalium/hal.hpp>
 #include "ttnn/operations/data_movement/fill_pad/fill_pad.hpp"
 namespace ttnn::operations::unary {
@@ -293,14 +292,6 @@ Tensor _lgamma(const Tensor& x, const std::optional<MemoryConfig>& output_mem_co
     return result;
 }
 
-// log1p 1
-// use transformation y = log(1.0 + x) by broadcast
-Tensor _log1p(const Tensor& x, const std::optional<MemoryConfig>& output_mem_config) {
-    Tensor x_1 = ttnn::add(x, 1.0f, std::nullopt, output_mem_config);
-    Tensor result_log1p = ttnn::log(x_1, output_mem_config);
-    return result_log1p;
-}
-
 // multivariate log-gamma function
 // Ref : https://pytorch.org/docs/stable/special.html#torch.special.multigammaln
 Tensor _multigammaln(const Tensor& x, const std::optional<MemoryConfig>& output_mem_config) {
@@ -502,11 +493,11 @@ Tensor ExecuteUnaryCompositeClamp::invoke(
     } else if (min.value() > max.value()) {
         return full_like(a, max.value());
     }
-    Tensor a_max = ttnn::minimum(a, max.value(), output_memory_config);
+    Tensor a_max = ttnn::minimum(ttnn::DefaultQueueId, a, max.value(), std::nullopt, output_memory_config);
     if (min.value() == 0.0f) {
         return ttnn::relu(a_max, output_memory_config);
     } else {
-        return ttnn::maximum(a_max, min.value(), output_memory_config);
+        return ttnn::maximum(ttnn::DefaultQueueId, a_max, min.value(), std::nullopt, output_memory_config);
     }
 }
 
@@ -524,11 +515,11 @@ Tensor ExecuteUnaryCompositeClamp::invoke(
         return ttnn::where(
             ttnn::le(a, max.value(), std::nullopt, output_memory_config), a, max.value(), output_memory_config);
     }
-    Tensor a_max = ttnn::minimum(a, max.value(), output_memory_config);
+    Tensor a_max = ttnn::minimum(ttnn::DefaultQueueId, a, max.value(), std::nullopt, output_memory_config);
     Tensor temp = ttnn::where(
         ttnn::eq(min.value(), 0.0f, std::nullopt, output_memory_config),
         ttnn::relu(a_max, output_memory_config),
-        ttnn::maximum(a_max, min.value(), output_memory_config),
+        ttnn::maximum(ttnn::DefaultQueueId, a_max, min.value(), std::nullopt, output_memory_config),
         output_memory_config);
     return ttnn::where(
         ttnn::gt(min.value(), max.value(), std::nullopt, output_memory_config),
@@ -564,11 +555,11 @@ Tensor _selu(
     Tensor x_Exp_minus_1 = ttnn::expm1(x);
     Tensor result_t2_ = ttnn::multiply(x_Exp_minus_1, alpha, std::nullopt, output_mem_config);
     x_Exp_minus_1.deallocate();
-    Tensor result_term2 = ttnn::minimum(result_t2_, 0.0f, output_mem_config);
+    Tensor result_term2 = ttnn::minimum(ttnn::DefaultQueueId, result_t2_, 0.0f, std::nullopt, output_mem_config);
     result_t2_.deallocate();
 
     // term 1
-    Tensor x_max = ttnn::maximum(x, 0.0f, output_mem_config);
+    Tensor x_max = ttnn::maximum(ttnn::DefaultQueueId, x, 0.0f, std::nullopt, output_mem_config);
     Tensor result_term1 = ttnn::multiply(x_max, scale, std::nullopt, output_mem_config);
     x_max.deallocate();
     Tensor result_selu = ttnn::add(result_term1, result_term2, std::nullopt, output_mem_config);
@@ -611,7 +602,8 @@ Tensor _glu(const Tensor& input_a, int32_t dim, const std::optional<MemoryConfig
         dim = 3;
     }
     std::vector<Tensor> ab = split_tensor_for_glu(input_a, dim, output_mem_config);
-    Tensor sigmoid_b = ttnn::sigmoid(ab[1], false, output_mem_config);
+    bool approximate_mode = false;
+    Tensor sigmoid_b = ttnn::sigmoid(ab[1], (int)VecMode::RC, approximate_mode, output_mem_config);
     Tensor glu_result = ttnn::multiply(ab[0], sigmoid_b, std::nullopt, output_mem_config);
     return glu_result;
 }

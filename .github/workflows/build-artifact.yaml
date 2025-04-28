@@ -52,6 +52,11 @@ on:
         type: boolean
         default: false
         description: "Profile the compilation"
+      build-umd-tests:
+        required: false
+        type: boolean
+        default: false
+        description: "Build UMD tests"
     outputs:
       ci-build-docker-image:
         description: "Docker tag for the CI Build Docker image for building TT-Metalium et al"
@@ -62,6 +67,9 @@ on:
       dev-docker-image:
         description: "Docker tag for the dev Docker image for developing TT-Metalium et al"
         value: ${{ jobs.build-docker-image.outputs.dev-tag }}
+      basic-dev-docker-image:
+        description: "Docker tag for the basic dev Docker image for basic development"
+        value: ${{ jobs.build-docker-image.outputs.basic-dev-tag }}
       packages-artifact-name:
         description: "Name to give download-artifact to get the packages"
         value: ${{ jobs.build-artifact.outputs.packages-artifact-name }}
@@ -110,6 +118,11 @@ on:
         type: boolean
         default: false
         description: "Profile the compilation"
+      build-umd-tests:
+        required: false
+        type: boolean
+        default: false
+        description: "Build UMD tests"
 
 
 jobs:
@@ -188,14 +201,6 @@ jobs:
           fetch-tags: true # Need tags for `git describe`
           path: docker-job # Here be dragons; keep it scoped to our desired volume, yet must be under github.workspace and be sure to clean up at the end
 
-      - name: Sanity check
-        run: |
-          set -eu # basic shell hygiene
-          if find . -maxdepth 1 -type d -name 'build*' -print -quit | grep -q .; then
-            echo "!!! ALERT !!! This should never happen, but does explain an issue we've been hunting. Please send a link to this job to Metal Infra.  kthxbye."
-            exit 42
-          fi
-
       - name: Create ccache tmpdir
         run: |
           mkdir -p /tmp/ccache
@@ -220,6 +225,9 @@ jobs:
           if [ "${{ inputs.profile }}" = "true" ]; then
             build_command="$build_command --enable-time-trace --disable-unity-builds"
           fi
+          if [ "${{ inputs.build-umd-tests }}" = "true" ]; then
+            build_command="$build_command --build-umd-tests"
+          fi
 
           nice -n 19 $build_command
 
@@ -243,7 +251,7 @@ jobs:
       - name: 🐍 Build wheel
         if: ${{ inputs.build-wheel }}
         run: |
-          nice -n 19 python3 -m build
+          nice -n 19 python3 -m build --wheel
 
       - name: Publish ccache summary
         run: |
@@ -303,6 +311,3 @@ jobs:
           name: ${{ env.build_artifact_name }}
           path: /work/ttm_any.tar
           if-no-files-found: error
-
-      - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
-        if: always()

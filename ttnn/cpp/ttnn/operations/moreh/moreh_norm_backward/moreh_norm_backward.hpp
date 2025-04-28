@@ -23,7 +23,6 @@ struct MorehNormBackward {
 }  // namespace ttnn::operations::moreh::moreh_norm_backward
 
 namespace ttnn {
-constexpr auto moreh_norm_backward = ttnn::register_operation_with_auto_launch_op<
-    "ttnn::moreh_norm_backward",
-    ttnn::operations::moreh::moreh_norm_backward::MorehNormBackward>();
+constexpr auto moreh_norm_backward = ttnn::
+    register_operation<"ttnn::moreh_norm_backward", ttnn::operations::moreh::moreh_norm_backward::MorehNormBackward>();
 }

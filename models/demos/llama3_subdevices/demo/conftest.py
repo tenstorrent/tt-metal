@@ -21,3 +21,6 @@ def pytest_addoption(parser):
     parser.addoption(
         "--stop_at_eos", action="store", type=int, help="Whether to stop decoding when the model generates an EoS token"
     )
+    parser.addoption(
+        "--disable_pf_perf_mode", action="store_true", default=False, help="Enable performance mode for prefetcher"
+    )

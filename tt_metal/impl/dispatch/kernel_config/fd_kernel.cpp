@@ -18,12 +18,13 @@
 #include "dprint_server.hpp"
 #include "eth_router.hpp"
 #include "eth_tunneler.hpp"
+#include "fabric_types.hpp"
 #include "hal.hpp"
 #include "hal_types.hpp"
 #include "kernel_types.hpp"
 #include "mux.hpp"
 #include "prefetch.hpp"
-#include "rtoptions.hpp"
+#include "impl/context/metal_context.hpp"
 #include <umd/device/tt_core_coordinates.h>
 
 using namespace tt::tt_metal;
@@ -124,9 +125,11 @@ void FDKernel::configure_kernel_variant(
     KernelBuildOptLevel opt_level) {
     // TODO: just pass in the programmable index
     uint32_t programmable_core_type_index =
-        (GetCoreType() == CoreType::WORKER) ? hal_ref.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX)
-        : is_active_eth_core ? hal_ref.get_programmable_core_type_index(HalProgrammableCoreType::ACTIVE_ETH)
-                             : hal_ref.get_programmable_core_type_index(HalProgrammableCoreType::IDLE_ETH);
+        (GetCoreType() == CoreType::WORKER)
+            ? MetalContext::instance().hal().get_programmable_core_type_index(HalProgrammableCoreType::TENSIX)
+        : is_active_eth_core
+            ? MetalContext::instance().hal().get_programmable_core_type_index(HalProgrammableCoreType::ACTIVE_ETH)
+            : MetalContext::instance().hal().get_programmable_core_type_index(HalProgrammableCoreType::IDLE_ETH);
 
     std::map<string, string> defines = {
         {"DISPATCH_KERNEL", "1"},
@@ -135,8 +138,12 @@ void FDKernel::configure_kernel_variant(
     if (force_watcher_no_inline) {
         defines.insert({"WATCHER_NOINLINE", std::to_string(force_watcher_no_inline)});
     }
-    if (tt::llrt::RunTimeOptions::get_instance().watcher_dispatch_disabled()) {
+    auto& rt_options = tt::tt_metal::MetalContext::instance().rtoptions();
+    if (rt_options.watcher_dispatch_disabled()) {
         defines["FORCE_WATCHER_OFF"] = "1";
+    }
+    if (tt::tt_metal::MetalContext::instance().get_cluster().get_fabric_config() != FabricConfig::FABRIC_2D_PUSH) {
+        defines["FVC_MODE_PULL"] = "1";
     }
     if (!DPrintServerReadsDispatchCores(device_->id())) {
         defines["FORCE_DPRINT_OFF"] = "1";

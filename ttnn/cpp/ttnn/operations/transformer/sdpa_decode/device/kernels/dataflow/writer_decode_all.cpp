@@ -122,6 +122,7 @@ void kernel_main() {
     constexpr uint32_t cb_out_l = tt::CBIndex::c_18;
 
     // generate and send scaler to compute
+    // These helper functions respect tile size of CBs (ie. no need for special handling of tiny tiles)
     generate_bcast_unary_scalar(cb_scale_in, scale_val);
     generate_reduce_scaler(cb_identity_scale_in, identity_scalar_packed);
     if (is_worker) {
@@ -129,6 +130,7 @@ void kernel_main() {
                                           // should not be more than one head per core
         worker_compute<out_chunk_tiles, cb_out_worker, cb_out_m, cb_out_l, cb_intermed_out, PNHt>(
             in0_sender_semaphore_noc_addr, worker_id_for_reduce, reduce_core_noc_x, reduce_core_noc_y);
+        noc_async_atomic_barrier();
         return;
     }
 
@@ -150,9 +152,11 @@ void kernel_main() {
 
     // generate and send mask to compute if causal
     if constexpr (is_causal) {
+        // These helper functions respect tile size of CBs (ie. no need for special handling of tiny tiles)
         generate_mask<cb_mask_in, PNHt>(k_num_chunks, Sk_chunk_t_dynamic, cur_pos);
     }
 
+    noc_async_write_barrier();  // #19201 BH hang workaround
     for (uint32_t cur_head = cur_head_group * num_heads_per_core;
          cur_head < cur_head_group * num_heads_per_core + num_heads_per_core;
          ++cur_head) {
@@ -199,6 +203,7 @@ void kernel_main() {
         // Write entire out into its corresponding batch
         uint32_t out_tile_id = out_batch_offset;
         cb_wait_front(cb_out, out_chunk_tiles);
+        noc_async_writes_flushed();
 
         if constexpr (num_kv_heads > 1) {
             // if gqa, we will need to write partial outputs for each head

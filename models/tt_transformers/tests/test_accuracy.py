@@ -81,8 +81,8 @@ def get_accuracy_thresholds(model_args, optimizations):
 @pytest.mark.parametrize(
     "optimizations",
     [
-        lambda model_args: DecodersPrecision.performance(model_args.n_layers),
-        lambda model_args: DecodersPrecision.accuracy(model_args.n_layers),
+        lambda model_args: DecodersPrecision.performance(model_args.n_layers, model_args.model_name),
+        lambda model_args: DecodersPrecision.accuracy(model_args.n_layers, model_args.model_name),
     ],
     ids=["performance", "accuracy"],
 )
@@ -132,8 +132,6 @@ def test_tt_model_acc(
         pytest.skip("CI test only runs vs reference file")
 
     dtype = ttnn.bfloat8_b
-
-    mesh_device.enable_async(True)
 
     json_config_file = request.config.getoption("--decoder_config_file")
     if json_config_file:
@@ -339,6 +337,7 @@ def test_tt_model_acc(
         tt_out_tok = ttnn.argmax(
             tt_out_rm,
             dim=3,
+            keepdim=True,
             use_multicore=True if model_args.max_batch_size == 1 else False,
         )
         if not use_reference_file:
@@ -442,7 +441,10 @@ def test_tt_model_acc(
         logger.info("\nError Summary (only showing errors where reference top-1 matches true token):")
         logger.info("-" * 120)
         for error in errors:
-            true_token = input_ids[0, error["position"] + 1].item()
+            if error["position"] + 1 < input_ids.shape[1]:
+                true_token = input_ids[0, error["position"] + 1].item()
+            else:
+                true_token = None
             if error["expected_ids"][0] == true_token:
                 sanitize = lambda x: repr(x)[1:-1]  # Use repr() and remove the outer quotes
                 context = sanitize(error["context"])

@@ -75,7 +75,7 @@ class MathFidelitySetting(Enum):
 
 class ModelOptimizations:
     @classmethod
-    def accuracy(cls, model_name=None):
+    def accuracy(cls, model_name):
         """Configuration optimized for accuracy
         Only 70B models uses bfp4 MLPs in this configuration
         """
@@ -87,7 +87,7 @@ class ModelOptimizations:
         return inst
 
     @classmethod
-    def performance(cls, model_name=None):
+    def performance(cls, model_name):
         """Configuration optimized for performance
         All models use bfp4 in FF1 and FF3 MLPs in this configuration
         """
@@ -238,7 +238,7 @@ def parse_optimizations(string):
     model_opt = ModelOptimizations(settings)
 
     def apply_settings(model_args):
-        return DecodersPrecision(model_args.n_layers, model_opt)
+        return DecodersPrecision(model_args.n_layers, model_args.model_name, model_opt)
 
     apply_settings.__name__ = model_opt.__name__
     return apply_settings
@@ -263,7 +263,7 @@ def parse_decoder_json(json_file_path):
             raise ValueError("Invalid JSON format: Missing 'decoders' key")
 
         num_decoders = max(int(decoder_id) for decoder_id in config_data["decoders"].keys()) + 1
-        decoders_precision = DecodersPrecision(num_decoders)
+        decoders_precision = DecodersPrecision(num_decoders, "model")
 
         for decoder_id, settings in config_data["decoders"].items():
             decoder_id = int(decoder_id)
@@ -564,7 +564,7 @@ class ModelArgs:
 
             # Configure data precision and math fidelity for tensors and kernels
             if self.optimizations is None:
-                self.optimizations = DecodersPrecision(num_decoders=self.n_layers)
+                self.optimizations = DecodersPrecision.accuracy(num_decoders=self.n_layers, model_name=self.model_name)
             self.model_config["DECODERS_OPTIMIZATIONS"] = self.optimizations
 
             # Create memory config for sharded tensors
@@ -2093,18 +2093,20 @@ class HfModelWrapper:
 
 class DecodersPrecision:
     @classmethod
-    def accuracy(cls, num_decoders):
-        inst = cls(num_decoders, ModelOptimizations.accuracy())
+    def accuracy(cls, num_decoders, model_name):
+        inst = cls(num_decoders, model_name, ModelOptimizations.accuracy(model_name))
         inst.__name__ = "accuracy"
         return inst
 
     @classmethod
-    def performance(cls, num_decoders):
-        inst = cls(num_decoders, ModelOptimizations.performance())
+    def performance(cls, num_decoders, model_name):
+        inst = cls(num_decoders, model_name, ModelOptimizations.performance(model_name))
         inst.__name__ = "performance"
         return inst
 
-    def __init__(self, num_decoders, decoder_conf: dict = ModelOptimizations.accuracy()):
+    def __init__(self, num_decoders, model_name, decoder_conf: dict = None):
+        if decoder_conf is None:
+            decoder_conf = ModelOptimizations.accuracy(model_name)
         self.decoder_optimizations = {decoder_id: decoder_conf for decoder_id in range(num_decoders)}
         self._update_full_name()
 

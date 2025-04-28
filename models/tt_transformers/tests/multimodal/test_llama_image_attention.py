@@ -37,8 +37,6 @@ def test_attention_inference(batch, num_chunks, mesh_device, use_program_cache, 
     dtype = ttnn.bfloat16
     pcc_required = 0.99
 
-    mesh_device.enable_async(True)
-
     model_args = ModelArgs(mesh_device)
     state_dict = model_args.load_state_dict()
 

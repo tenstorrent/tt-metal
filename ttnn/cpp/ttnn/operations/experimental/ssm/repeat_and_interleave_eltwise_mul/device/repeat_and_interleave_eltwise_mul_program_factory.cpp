@@ -105,9 +105,9 @@ operation::ProgramWithCallbacks multi_core_ssm_eltwise_mul(
     auto cb_intermed3 = tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_intermed3_config);
 
     // Compile time args
-    bool in0_is_dram = src0_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
-    bool in1_is_dram = src1_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
-    bool out_is_dram = out_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
+    bool in0_is_dram = src0_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
+    bool in1_is_dram = src1_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
+    bool out_is_dram = out_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
     std::vector<uint32_t> reader_compile_time_args = {
         (std::uint32_t)src0_cb_index,
         (std::uint32_t)src1_cb_index,

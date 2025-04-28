@@ -19,12 +19,10 @@
 #include "dispatch.hpp"
 #include "dispatch/kernel_config/fd_kernel.hpp"
 #include "dispatch_core_common.hpp"
-#include "dispatch_mem_map.hpp"
 #include "dispatch_s.hpp"
 #include "eth_router.hpp"
 #include "hal.hpp"
 #include "hal_types.hpp"
-#include "rtoptions.hpp"
 #include "impl/context/metal_context.hpp"
 #include <umd/device/tt_core_coordinates.h>
 #include <umd/device/types/xy_pair.h>
@@ -36,7 +34,7 @@ void PrefetchKernel::GenerateStaticConfigs() {
     uint16_t channel =
         tt::tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(device_->id());
     uint8_t cq_id_ = this->cq_id_;
-    auto& my_dispatch_constants = DispatchMemMap::get(GetCoreType());
+    auto& my_dispatch_constants = MetalContext::instance().dispatch_mem_map(GetCoreType());
 
     if (static_config_.is_h_variant.value() && this->static_config_.is_d_variant.value()) {
         uint32_t cq_start = my_dispatch_constants.get_host_command_queue_addr(CommandQueueHostAddrType::UNRESERVED);
@@ -160,7 +158,7 @@ void PrefetchKernel::GenerateStaticConfigs() {
         static_config_.cmddat_q_base = my_dispatch_constants.dispatch_buffer_base();
         static_config_.cmddat_q_size = my_dispatch_constants.prefetch_d_buffer_size();
 
-        uint32_t pcie_alignment = hal_ref.get_alignment(HalMemType::HOST);
+        uint32_t pcie_alignment = MetalContext::instance().hal().get_alignment(HalMemType::HOST);
         static_config_.scratch_db_base = (my_dispatch_constants.dispatch_buffer_base() +
                                           my_dispatch_constants.prefetch_d_buffer_size() + pcie_alignment - 1) &
                                          (~(pcie_alignment - 1));
@@ -175,8 +173,7 @@ void PrefetchKernel::GenerateStaticConfigs() {
         static_config_.cmddat_q_blocks = DispatchSettings::PREFETCH_D_BUFFER_BLOCKS;
 
         uint32_t dispatch_s_buffer_base = 0xff;
-        if (MetalContext::instance().get_dispatch_query_manager().dispatch_s_enabled() ||
-            true) {  // Just to make it match previous implementation
+        {  // Just to make it match previous implementation
             uint32_t dispatch_buffer_base = my_dispatch_constants.dispatch_buffer_base();
             if (GetCoreType() == CoreType::WORKER) {
                 // dispatch_s is on the same Tensix core as dispatch_d. Shared resources. Offset CB start idx.
@@ -385,15 +382,16 @@ void PrefetchKernel::CreateKernel() {
         static_config_.dispatch_s_buffer_size.value(),
         static_config_.dispatch_s_cb_log_page_size.value(),
         dependent_config_.downstream_mesh_id.value_or(0),
-        dependent_config_.downstream_chip_id.value_or(0),
+        dependent_config_.downstream_dev_id.value_or(0),
         dependent_config_.upstream_mesh_id.value_or(0),
-        dependent_config_.upstream_chip_id.value_or(0),
+        dependent_config_.upstream_dev_id.value_or(0),
         dependent_config_.fabric_router_noc_xy.value_or(0),
+        dependent_config_.outbound_eth_chan.value_or(0),
         static_config_.client_interface_addr.value_or(0),
         static_config_.is_d_variant.value(),
         static_config_.is_h_variant.value(),
     };
-    TT_ASSERT(compile_args.size() == 34);
+    TT_ASSERT(compile_args.size() == 35);
     auto my_virtual_core = device_->virtual_core_from_logical_core(logical_core_, GetCoreType());
     auto upstream_virtual_core =
         device_->virtual_core_from_logical_core(dependent_config_.upstream_logical_core.value(), GetCoreType());
@@ -431,8 +429,8 @@ void PrefetchKernel::CreateKernel() {
         true,
         // TEMP: Disable function inlining on Prefetcher when watcher is enabled but no_inline is not specified to
         // respect code space
-        tt::llrt::RunTimeOptions::get_instance().get_watcher_enabled() &&
-            (not tt::llrt::RunTimeOptions::get_instance().get_watcher_noinline()),
+        tt::tt_metal::MetalContext::instance().rtoptions().get_watcher_enabled() &&
+            (not tt::tt_metal::MetalContext::instance().rtoptions().get_watcher_noinline()),
         optimization_level);
 }
 
@@ -442,7 +440,7 @@ void PrefetchKernel::ConfigureCore() {
         // Initialize the FetchQ
         uint16_t channel =
             tt::tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(device_->id());
-        auto& my_dispatch_constants = DispatchMemMap::get(GetCoreType());
+        auto& my_dispatch_constants = MetalContext::instance().dispatch_mem_map(GetCoreType());
         uint32_t cq_start = my_dispatch_constants.get_host_command_queue_addr(CommandQueueHostAddrType::UNRESERVED);
         uint32_t cq_size = device_->sysmem_manager().get_cq_size();
         std::vector<uint32_t> prefetch_q(my_dispatch_constants.prefetch_q_entries(), 0);
@@ -473,18 +471,20 @@ void PrefetchKernel::ConfigureCore() {
 
 void PrefetchKernel::UpdateArgsForFabric(
     const CoreCoord& fabric_router_virtual,
+    uint32_t outbound_eth_chan,
     tt::tt_fabric::mesh_id_t upstream_mesh_id,
-    chip_id_t upstream_chip_id,
+    chip_id_t upstream_dev_id,
     tt::tt_fabric::mesh_id_t downstream_mesh_id,
-    chip_id_t downstream_chip_id) {
+    chip_id_t downstream_dev_id) {
     dependent_config_.fabric_router_noc_xy =
-        tt::tt_metal::hal_ref.noc_xy_encoding(fabric_router_virtual.x, fabric_router_virtual.y);
+        tt::tt_metal::MetalContext::instance().hal().noc_xy_encoding(fabric_router_virtual.x, fabric_router_virtual.y);
     dependent_config_.upstream_mesh_id = upstream_mesh_id;
-    dependent_config_.upstream_chip_id = upstream_chip_id;
+    dependent_config_.upstream_dev_id = upstream_dev_id;
     dependent_config_.downstream_mesh_id = downstream_mesh_id;
-    dependent_config_.downstream_chip_id = downstream_chip_id;
+    dependent_config_.downstream_dev_id = downstream_dev_id;
+    dependent_config_.outbound_eth_chan = outbound_eth_chan;
 
-    auto& my_dispatch_constants = DispatchMemMap::get(GetCoreType());
+    auto& my_dispatch_constants = MetalContext::instance().dispatch_mem_map(GetCoreType());
     static_config_.client_interface_addr =
         my_dispatch_constants.get_device_command_queue_addr(CommandQueueDeviceAddrType::FABRIC_INTERFACE);
 }

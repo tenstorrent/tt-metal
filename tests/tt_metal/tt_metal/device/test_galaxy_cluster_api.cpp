@@ -18,7 +18,6 @@
 #include "impl/context/metal_context.hpp"
 #include "umd/device/types/cluster_descriptor_types.h"
 #include "umd/device/types/xy_pair.h"
-#include "impl/context/metal_context.hpp"
 #include <tt-metalium/host_api.hpp>
 
 namespace tt::tt_metal {

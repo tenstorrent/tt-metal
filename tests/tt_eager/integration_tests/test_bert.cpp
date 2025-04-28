@@ -16,10 +16,9 @@
 
 #include <tt-metalium/assert.hpp>
 #include <tt-metalium/bfloat16.hpp>
-#include <tt-metalium/buffer_constants.hpp>
+#include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/device.hpp>
-#include "fmt/base.h"
 #include <tt-metalium/logger.hpp>
 #include <tt-metalium/shape.hpp>
 #include <tt-metalium/shape_base.hpp>
@@ -232,7 +231,8 @@ void test_bert() {
     using tt::tt_metal::Tensor;
 
     int device_id = 0;
-    auto device = tt::tt_metal::CreateDevice(device_id);
+    auto device_owner = tt::tt_metal::distributed::MeshDevice::create_unit_mesh(device_id);
+    auto device = device_owner.get();
     CoreCoord compute_grid_size = device->compute_with_storage_grid_size();
 
     if (compute_grid_size.x * compute_grid_size.y == 88) {
@@ -362,8 +362,6 @@ void test_bert() {
     run_bert();
     run_loop();
     device->disable_and_clear_program_cache();
-
-    TT_FATAL(tt::tt_metal::CloseDevice(device), "Error");
 }
 
 int main(int argc, char** argv) {

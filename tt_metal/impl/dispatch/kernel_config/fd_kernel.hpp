@@ -15,7 +15,6 @@
 #include "mesh_graph.hpp"
 #include "system_memory_manager.hpp"
 #include "impl/context/metal_context.hpp"
-#include "impl/context/metal_context.hpp"
 #include "tt_metal/impl/dispatch/kernels/packet_queue_ctrl.hpp"
 #include <umd/device/tt_xy_pair.h>
 #include "utils.hpp"
@@ -33,11 +32,11 @@ enum NOC : uint8_t;
 #define UNUSED_LOGICAL_CORE tt_cxy_pair(device_->id(), 0, 0)
 #define UNUSED_SEM_ID 0
 
-typedef struct {
+struct noc_selection_t {
     tt::tt_metal::NOC non_dispatch_noc;  // For communicating with workers/DRAM/host
     tt::tt_metal::NOC upstream_noc;      // For communicating with upstream dispatch modules
     tt::tt_metal::NOC downstream_noc;    // For communicating with downstream dispatch modules
-} noc_selection_t;
+};
 
 static std::vector<string> dispatch_kernel_file_names = {
     "tt_metal/impl/dispatch/kernels/cq_prefetch.cpp",        // PREFETCH
@@ -93,6 +92,7 @@ public:
     // an intermediary FDKernel for indicating a fabric router path needs to be found.
     virtual void UpdateArgsForFabric(
         const CoreCoord& fabric_router_virtual,
+        uint32_t outbound_eth_chan,
         tt::tt_fabric::mesh_id_t upstream_mesh_id,
         chip_id_t upstream_chip_id,
         tt::tt_fabric::mesh_id_t downstream_mesh_id,

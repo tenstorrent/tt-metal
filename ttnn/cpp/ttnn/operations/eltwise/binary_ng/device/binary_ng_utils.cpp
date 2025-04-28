@@ -265,6 +265,20 @@ OpConfig::OpConfig(BinaryOpType binary_op_type, std::in_place_type_t<EnumT>) : b
                 TT_THROW("Unsupported binary op for FPU {}", binary_op_type);
             }
             break;
+        case BinaryOpType::MAXIMUM:
+            if (is_sfpu_op()) {
+                binary_op = SfpuBinaryOp::MAXIMUM;
+            } else {
+                TT_THROW("Unsupported binary op for FPU {}", binary_op_type);
+            }
+            break;
+        case BinaryOpType::MINIMUM:
+            if (is_sfpu_op()) {
+                binary_op = SfpuBinaryOp::MINIMUM;
+            } else {
+                TT_THROW("Unsupported binary op for FPU {}", binary_op_type);
+            }
+            break;
         default: TT_THROW("Unsupported binary op {}", binary_op_type);
     }
 }
@@ -275,6 +289,8 @@ std::pair<std::string, std::string> get_sfpu_init_fn(OpConfig::SfpuBinaryOp sfpu
         case ADD:
             if (dtype == DataType::INT32) {
                 return {"add_int32_tile_init();", "add_int32_tile"};
+            } else if (dtype == DataType::UINT16) {
+                return {"add_uint16_tile_init();", "add_uint16_tile"};
             } else {
                 return {"add_binary_tile_init();", "add_binary_tile"};
             }
@@ -293,6 +309,18 @@ std::pair<std::string, std::string> get_sfpu_init_fn(OpConfig::SfpuBinaryOp sfpu
         case BITWISE_AND: return {"binary_bitwise_tile_init();", "and_binary_tile"};
         case BITWISE_OR: return {"binary_bitwise_tile_init();", "or_binary_tile"};
         case BITWISE_XOR: return {"binary_bitwise_tile_init();", "xor_binary_tile"};
+        case MAXIMUM:
+            if (dtype == DataType::INT32) {
+                return {"binary_max_tile_init();", "binary_max_int32_tile"};
+            } else {
+                return {"binary_max_tile_init();", "binary_max_tile"};
+            }
+        case MINIMUM:
+            if (dtype == DataType::INT32) {
+                return {"binary_min_tile_init();", "binary_min_int32_tile"};
+            } else {
+                return {"binary_min_tile_init();", "binary_min_tile"};
+            }
         case QUANT: return {"quant_tile_init(get_arg_val<uint32_t>(QUANT_ZERO_POINT_RT_ARGS_IDX));", "quant_tile"};
         case REQUANT:
             return {"requant_tile_init(get_arg_val<uint32_t>(QUANT_ZERO_POINT_RT_ARGS_IDX));", "requant_tile"};
@@ -322,13 +350,14 @@ std::map<std::string, std::string> OpConfig::as_defines(DataType dtype) const {
 void add_activation_defines(
     std::map<std::string, std::string>& defines,
     tt::stl::Span<const unary::UnaryWithParam> activations,
-    std::string_view operand) {
+    std::string_view operand,
+    std::optional<DataType> dtype) {
     defines[fmt::format("PROCESS_{}_ACTIVATIONS(i)", operand)] = std::accumulate(
         activations.begin(),
         activations.end(),
         std::string{},
         [&](std::string&& process, const unary::UnaryWithParam& a) {
-            const auto& [op_init, op_func] = unary::utils::get_op_init_and_func(a.op_type, a.params, "i");
+            const auto& [op_init, op_func] = unary::utils::get_op_init_and_func(a.op_type, a.params, "i", dtype);
             process += op_init;
             process += op_func;
             unary::utils::update_macro_defines(a.op_type, defines);

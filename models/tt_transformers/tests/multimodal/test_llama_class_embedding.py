@@ -84,8 +84,6 @@ def test_class_embedding_inference(
     dtype = ttnn.bfloat16
     pcc_required = 0.9999
 
-    mesh_device.enable_async(True)
-
     model_args = ModelArgs(mesh_device)
     state_dict = model_args.load_state_dict()
     first_layer_prefix = "vision_model.vision_encoder."

@@ -152,15 +152,15 @@ operation::ProgramWithCallbacks multi_core_attn_matmul(
             .set_page_size(output_cb_index, output_single_tile_size);
     auto cb_output = tt::tt_metal::CreateCircularBuffer(program, all_device_cores, cb_output_config);
 
-    const bool src0_is_dram = src0_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
-    const bool src1_is_dram = src1_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
+    const bool src0_is_dram = src0_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
+    const bool src1_is_dram = src1_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
     std::vector<uint32_t> reader_compile_time_args = {
         (uint32_t)src0_is_dram,
         (uint32_t)src1_is_dram,
         (uint32_t)transpose_hw_bool,
         (uint32_t)(fp32_dest_acc_en and in0_data_format == tt::DataFormat::Float32)};
 
-    bool dst_is_dram = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
+    bool dst_is_dram = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
     std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)output_cb_index, (std::uint32_t)dst_is_dram};
 
     auto reader_id = tt::tt_metal::CreateKernel(

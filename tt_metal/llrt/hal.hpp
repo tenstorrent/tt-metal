@@ -51,7 +51,8 @@ private:
     std::vector<std::vector<HalJitBuildConfig>> processor_classes_;
     std::vector<DeviceAddr> mem_map_bases_;
     std::vector<uint32_t> mem_map_sizes_;
-    bool supports_cbs_;
+    bool supports_cbs_ = false;
+    bool supports_receiving_multicast_cmds_ = false;
 
 public:
     HalCoreInfoType(
@@ -60,7 +61,8 @@ public:
         const std::vector<std::vector<HalJitBuildConfig>>& processor_classes,
         const std::vector<DeviceAddr>& mem_map_bases,
         const std::vector<uint32_t>& mem_map_sizes,
-        bool supports_cbs);
+        bool supports_cbs,
+        bool supports_receiving_multicast_cmds);
 
     template <typename T = DeviceAddr>
     T get_dev_addr(HalL1MemAddrType addr_type) const;
@@ -132,7 +134,7 @@ private:
     float nan_ = 0.0f;
     float inf_ = 0.0f;
 
-    void initialize_wh();
+    void initialize_wh(bool is_base_routing_fw_enabled);
     void initialize_bh();
 
     // Functions where implementation varies by architecture
@@ -151,7 +153,7 @@ private:
     StackSizeFunc stack_size_func_;
 
 public:
-    Hal();
+    Hal(tt::ARCH arch, bool is_base_routing_fw_enabled);
 
     tt::ARCH get_arch() const { return arch_; }
 
@@ -206,7 +208,6 @@ public:
     uint32_t get_programmable_core_type_index(HalProgrammableCoreType programmable_core_type_index) const;
     CoreType get_core_type(uint32_t programmable_core_type_index) const;
     uint32_t get_processor_classes_count(std::variant<HalProgrammableCoreType, uint32_t> programmable_core_type) const;
-    uint32_t get_processor_class_type_index(HalProcessorClassType processor_class);
     uint32_t get_processor_types_count(
         std::variant<HalProgrammableCoreType, uint32_t> programmable_core_type, uint32_t processor_class_idx) const;
 
@@ -227,20 +228,22 @@ public:
 
     bool get_supports_cbs(uint32_t programmable_core_type_index) const;
 
+    bool get_supports_receiving_multicasts(uint32_t programmable_core_type_index) const;
+
     uint32_t get_num_risc_processors() const;
 
     const HalJitBuildConfig& get_jit_build_config(
         uint32_t programmable_core_type_index, uint32_t processor_class_idx, uint32_t processor_type_idx) const;
 
-    uint64_t relocate_dev_addr(uint64_t addr, uint64_t local_init_addr = 0) {
+    uint64_t relocate_dev_addr(uint64_t addr, uint64_t local_init_addr = 0) const {
         return relocate_func_(addr, local_init_addr);
     }
 
-    uint64_t erisc_iram_relocate_dev_addr(uint64_t addr) { return erisc_iram_relocate_func_(addr); }
+    uint64_t erisc_iram_relocate_dev_addr(uint64_t addr) const { return erisc_iram_relocate_func_(addr); }
 
-    uint32_t valid_reg_addr(uint32_t addr) { return valid_reg_addr_func_(addr); }
+    uint32_t valid_reg_addr(uint32_t addr) const { return valid_reg_addr_func_(addr); }
 
-    uint32_t get_stack_size(uint32_t type) { return stack_size_func_(type); }
+    uint32_t get_stack_size(uint32_t type) const { return stack_size_func_(type); }
 };
 
 inline uint32_t Hal::get_programmable_core_type_count() const { return core_info_.size(); }
@@ -346,50 +349,35 @@ inline bool Hal::get_supports_cbs(uint32_t programmable_core_type_index) const {
     return this->core_info_[programmable_core_type_index].supports_cbs_;
 }
 
+inline bool Hal::get_supports_receiving_multicasts(uint32_t programmable_core_type_index) const {
+    return this->core_info_[programmable_core_type_index].supports_receiving_multicast_cmds_;
+}
+
 inline const HalJitBuildConfig& Hal::get_jit_build_config(
     uint32_t programmable_core_type_index, uint32_t processor_class_idx, uint32_t processor_type_idx) const {
     TT_ASSERT(programmable_core_type_index < this->core_info_.size());
     return this->core_info_[programmable_core_type_index].get_jit_build_config(processor_class_idx, processor_type_idx);
 }
 
-class HalSingleton : public Hal {
-private:
-    HalSingleton() = default;
-    HalSingleton(const HalSingleton&) = delete;
-    HalSingleton(HalSingleton&&) = delete;
-    ~HalSingleton() = default;
-
-    HalSingleton& operator=(const HalSingleton&) = delete;
-    HalSingleton& operator=(HalSingleton&&) = delete;
-
-public:
-    static inline HalSingleton& getInstance() {
-        static HalSingleton instance;
-        return instance;
-    }
-};
-
-inline auto& hal_ref = HalSingleton::getInstance();  // inline variable requires C++17
-
 uint32_t generate_risc_startup_addr(uint32_t firmware_base);  // used by Tensix initializers to build HalJitBuildConfig
 
 }  // namespace tt_metal
 }  // namespace tt
 
-#define HAL_MEM_L1_BASE                 \
-    tt::tt_metal::hal_ref.get_dev_addr( \
+#define HAL_MEM_L1_BASE                                        \
+    tt::tt_metal::MetalContext::instance().hal().get_dev_addr( \
         tt::tt_metal::HalProgrammableCoreType::TENSIX, tt::tt_metal::HalL1MemAddrType::BASE)
-#define HAL_MEM_L1_SIZE                 \
-    tt::tt_metal::hal_ref.get_dev_size( \
+#define HAL_MEM_L1_SIZE                                        \
+    tt::tt_metal::MetalContext::instance().hal().get_dev_size( \
         tt::tt_metal::HalProgrammableCoreType::TENSIX, tt::tt_metal::HalL1MemAddrType::BASE)
 
-#define HAL_MEM_ETH_BASE                                       \
-    ((tt::tt_metal::hal_ref.get_arch() == tt::ARCH::GRAYSKULL) \
-         ? 0                                                   \
-         : tt::tt_metal::hal_ref.get_dev_addr(                 \
+#define HAL_MEM_ETH_BASE                                                              \
+    ((tt::tt_metal::MetalContext::instance().hal().get_arch() == tt::ARCH::GRAYSKULL) \
+         ? 0                                                                          \
+         : tt::tt_metal::MetalContext::instance().hal().get_dev_addr(                 \
                tt::tt_metal::HalProgrammableCoreType::IDLE_ETH, tt::tt_metal::HalL1MemAddrType::BASE))
-#define HAL_MEM_ETH_SIZE                                       \
-    ((tt::tt_metal::hal_ref.get_arch() == tt::ARCH::GRAYSKULL) \
-         ? 0                                                   \
-         : tt::tt_metal::hal_ref.get_dev_size(                 \
+#define HAL_MEM_ETH_SIZE                                                              \
+    ((tt::tt_metal::MetalContext::instance().hal().get_arch() == tt::ARCH::GRAYSKULL) \
+         ? 0                                                                          \
+         : tt::tt_metal::MetalContext::instance().hal().get_dev_size(                 \
                tt::tt_metal::HalProgrammableCoreType::IDLE_ETH, tt::tt_metal::HalL1MemAddrType::BASE))

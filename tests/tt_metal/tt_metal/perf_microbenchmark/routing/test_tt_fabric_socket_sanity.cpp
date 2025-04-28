@@ -36,12 +36,10 @@
 #include <tt-metalium/metal_soc_descriptor.h>
 #include <tt-metalium/program.hpp>
 #include "routing_test_common.hpp"
-#include "rtoptions.hpp"
-#include "span.hpp"
+#include <tt_stl/span.hpp>
 #include <tt-metalium/system_memory_manager.hpp>
 #include "test_common.hpp"
 #include "impl/context/metal_context.hpp"
-#include "tt_metal/fabric/hw/inc/tt_fabric_interface.h"
 // #include "tt_metal/impl/dispatch/kernels/packet_queue_ctrl.hpp"
 #include "tt_metal/fabric/hw/inc/tt_fabric_status.h"
 #include "umd/device/types/xy_pair.h"
@@ -263,7 +261,7 @@ int main(int argc, char** argv) {
 
     try {
         const std::filesystem::path tg_mesh_graph_desc_path =
-            std::filesystem::path(tt::llrt::RunTimeOptions::get_instance().get_root_dir()) /
+            std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
             "tt_fabric/mesh_graph_descriptors/tg_mesh_graph_descriptor.yaml";
         auto control_plane = std::make_unique<tt::tt_fabric::ControlPlane>(tg_mesh_graph_desc_path.string());
 
@@ -333,8 +331,8 @@ int main(int argc, char** argv) {
             device_map[test_device_id_l]->allocator()->get_base_allocator_addr(tt_metal::HalMemType::L1);
         uint32_t gk_interface_addr = routing_table_addr + sizeof(fabric_router_l1_config_t) * 4;
         uint32_t client_interface_addr = routing_table_addr + sizeof(fabric_router_l1_config_t) * 4;
-        uint32_t client_pull_req_buf_addr = client_interface_addr + sizeof(fabric_pull_client_interface_t);
-        uint32_t socket_info_addr = gk_interface_addr + sizeof(gatekeeper_info_t);
+        uint32_t client_pull_req_buf_addr = client_interface_addr + PULL_CLIENT_INTERFACE_SIZE;
+        uint32_t socket_info_addr = gk_interface_addr + GATEKEEPER_INFO_SIZE;
         log_info(LogTest, "GK Routing Table Addr = 0x{:08X}", routing_table_addr);
         log_info(LogTest, "GK Info Addr = 0x{:08X}", gk_interface_addr);
         log_info(LogTest, "GK Socket Info Addr = 0x{:08X}", socket_info_addr);
@@ -381,7 +379,8 @@ int main(int argc, char** argv) {
             device_router_map[device.first] = device_router_phys_cores;
 
             gk_phys_core = (device.second->worker_core_from_logical_core(gk_core));
-            uint32_t gk_noc_offset = tt_metal::hal_ref.noc_xy_encoding(gk_phys_core.x, gk_phys_core.y);
+            uint32_t gk_noc_offset =
+                tt_metal::MetalContext::instance().hal().noc_xy_encoding(gk_phys_core.x, gk_phys_core.y);
 
             std::vector<uint32_t> router_compile_args = {
                 (tunneler_queue_size_bytes >> 4),  // 0: rx_queue_size_words
@@ -554,9 +553,10 @@ int main(int argc, char** argv) {
         // increment once handshake with ethernet peer has been completed.
         std::vector<uint32_t> zero_buf(1, 0);
         std::vector<uint32_t> gk_zero_buf(12, 0);
+        auto fabric_router_sync_sem_addr = tt::tt_metal::hal::get_erisc_l1_unreserved_base();
         for (auto [device_id, router_phys_cores] : device_router_map) {
             for (auto phys_core : router_phys_cores) {
-                tt::llrt::write_hex_vec_to_core(device_id, phys_core, zero_buf, FABRIC_ROUTER_SYNC_SEM);
+                tt::llrt::write_hex_vec_to_core(device_id, phys_core, zero_buf, fabric_router_sync_sem_addr);
             }
             tt::llrt::write_hex_vec_to_core(device_id, gk_phys_core, gk_zero_buf, gk_interface_addr);
         }
@@ -581,7 +581,7 @@ int main(int argc, char** argv) {
         }
 
         // Wait for tx to return non-zero status.
-        while (1) {
+        while (true) {
             auto tx_status = tt::llrt::read_hex_vec_from_core(test_device_id_l, tx_phys_core[0], test_results_addr, 4);
             if ((tx_status[0] & 0xFFFF) != 0) {
                 break;
@@ -682,7 +682,7 @@ int main(int argc, char** argv) {
         log_fatal(e.what());
     }
 
-    tt::llrt::RunTimeOptions::get_instance().set_kernels_nullified(false);
+    tt::tt_metal::MetalContext::instance().rtoptions().set_kernels_nullified(false);
 
     if (pass) {
         log_info(LogTest, "Test Passed");

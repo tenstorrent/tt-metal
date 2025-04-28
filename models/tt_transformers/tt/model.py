@@ -237,11 +237,11 @@ class Transformer(LightweightModule):
         )[0, 0, last_token_idx, : self.vocab_size]
         return logits
 
-    def process_output_decode(self, tt_out, B, S=1, argmax_on_device=False):
+    def process_output_decode(self, tt_out, B, S=1, is_tokens=False):
         """
-        Input is ttnn device tensor of logits. Output is torch logits tensor or the generated token if argmax on device
+        Input is ttnn device tensor of logits if is_tokens=False, otherwise tokens. Output is the corresponding torch tensor.
         """
-        if argmax_on_device:
+        if is_tokens:
             tt_out = ttnn.to_torch(
                 tt_out,  # tt_out.cpu(blocking=True, cq_id=1),
                 mesh_composer=ttnn.ConcatMesh2dToTensor(
@@ -326,7 +326,10 @@ class Transformer(LightweightModule):
 
         if argmax_on_device:
             tt_logits = ttnn.argmax(  # TODO Add multicore support to batch > 1
-                tt_logits, dim=3, use_multicore=False if self.args.max_batch_size > 1 else True  # ,output_tensor=tokens
+                tt_logits,
+                dim=3,
+                keepdim=True,
+                use_multicore=False if self.args.max_batch_size > 1 else True,  # ,output_tensor=tokens
             )
         else:
             # Send output logits to DRAM so L1 is not reserved for ttnn tracing and can be used by subsequent operations

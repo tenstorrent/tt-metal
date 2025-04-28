@@ -19,14 +19,14 @@
 
 #include <tt-metalium/assert.hpp>
 #include <tt-metalium/base_types.hpp>
-#include <tt-metalium/buffer_constants.hpp>
+#include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/device.hpp>
 #include "gtest/gtest.h"
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/shape.hpp>
 #include <tt-metalium/shape2d.hpp>
-#include "span.hpp"
+#include <tt_stl/span.hpp>
 #include <tt-metalium/sub_device_types.hpp>
 #include <tt-metalium/tile.hpp>
 #include "impl/context/metal_context.hpp"
@@ -309,8 +309,7 @@ TEST_P(Matmul2DHostPerfTestFixture, Matmul2DHostPerfTest) {
             input_tensor_1,
             /*bias=*/std::nullopt,
             /*parameters=*/matmul_params);
-        device->push_work([device]() mutable { Synchronize(device, std::nullopt, std::vector<SubDeviceId>()); });
-        device->synchronize();
+        Synchronize(device, std::nullopt, std::vector<SubDeviceId>());
         output_tensor.deallocate();
     }
 
@@ -335,8 +334,7 @@ TEST_P(Matmul2DHostPerfTestFixture, Matmul2DHostPerfTest) {
         {
             ZoneScopedN("Matmul trace iterations");
             ttnn::operations::trace::execute_trace(device, tid, ttnn::DefaultQueueId, false);
-            device->push_work([device]() mutable { Synchronize(device, std::nullopt, std::vector<SubDeviceId>()); });
-            device->synchronize();
+            Synchronize(device, std::nullopt, std::vector<SubDeviceId>());
         }
 
         auto end_time = std::chrono::high_resolution_clock::now();
@@ -353,9 +351,7 @@ TEST_P(Matmul2DHostPerfTestFixture, Matmul2DHostPerfTest) {
                     input_tensor_1,
                     /*bias=*/std::nullopt,
                     /*parameters=*/matmul_params);
-                device->push_work(
-                    [device]() mutable { Synchronize(device, std::nullopt, std::vector<SubDeviceId>()); });
-                device->synchronize();
+                Synchronize(device, std::nullopt, std::vector<SubDeviceId>());
                 auto end_time = std::chrono::high_resolution_clock::now();
                 total_time += end_time - start_time;
                 output_tensor.deallocate();

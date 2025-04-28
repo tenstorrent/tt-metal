@@ -6,7 +6,8 @@
 
 #include <cstdlib>  // std::strtoul
 #include <string>
-#include <cstdlib>  // std::strtoul
+
+#include <nlohmann/json.hpp>
 
 #include "graph_consts.hpp"
 #include "graph_processor.hpp"

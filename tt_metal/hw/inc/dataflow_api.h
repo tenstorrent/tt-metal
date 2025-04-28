@@ -1462,7 +1462,7 @@ void noc_semaphore_set(volatile tt_l1_ptr uint32_t* sem_addr, uint32_t val) {
  * Unlike using \a noc_async_write, there are also no address alignment concerns.
  * Also, see \a noc_async_write_barrier.
  *
- * The destination node can be either a DRAM bank, Tensix core+L1 memory
+ * The destination node can be either a Tensix core+L1 memory
  * address or a PCIe controller.
  *
  * Return value: None
@@ -1478,6 +1478,8 @@ template <bool write_to_stream_reg = false, bool posted = false>
 FORCE_INLINE void noc_inline_dw_write(uint64_t addr, uint32_t val, uint8_t be = 0xF, uint8_t noc = noc_index) {
     WAYPOINT("NWIW");
     DEBUG_SANITIZE_NOC_ADDR(noc, addr, 4);
+    // This API does not support DRAM addresses
+    DEBUG_SANITIZE_NO_DRAM_ADDR(noc, addr, 4);
 #ifdef ARCH_BLACKHOLE
     // On Blackhole issuing inline writes and atomics requires all 4 memory ports to accept the transaction at the same
     // time. If one port on the receipient has no back-pressure then the transaction will hang because there is no
@@ -1539,7 +1541,8 @@ template <bool posted = false>
 FORCE_INLINE void noc_inline_dw_write_set_state(
     uint64_t addr, uint8_t be = 0xF, uint8_t cmd_buf = write_at_cmd_buf, uint8_t noc = noc_index) {
     WAYPOINT("NWIW");
-    DEBUG_SANITIZE_NOC_ADDR(noc, addr, 4);
+    // DEBUG_SANITIZE_NOC_ADDR is not needed here because it doesn't send out the request
+    // The address could be set here or later in noc_inline_dw_write_with_state
 
     uint32_t noc_cmd_field = NOC_CMD_VC_STATIC | NOC_CMD_STATIC_VC(NOC_UNICAST_WRITE_VC) | NOC_CMD_CPY | NOC_CMD_WR |
                              NOC_CMD_WR_INLINE | 0x0 | (posted ? 0x0 : NOC_CMD_RESP_MARKED);
@@ -1700,14 +1703,15 @@ void noc_async_read_tile_dram_sharded_with_state(
     }
 }
 
-FORCE_INLINE
-void noc_async_read_tile_dram_sharded_with_state_with_trid(
+template <bool skip_ptr_update = false>
+FORCE_INLINE void noc_async_read_tile_dram_sharded_with_state_with_trid(
     uint32_t src_base_addr, uint32_t src_addr, uint32_t dest_addr, uint32_t trid = 0, uint8_t noc = noc_index) {
     RECORD_NOC_EVENT(NocEventType::READ_DRAM_SHARDED_WITH_STATE);
 
     WAYPOINT("NRDW");
 #ifndef ARCH_GRAYSKULL
-    ncrisc_noc_fast_read_with_transaction_id<noc_mode>(noc, read_cmd_buf, src_base_addr, src_addr, dest_addr, trid);
+    ncrisc_noc_fast_read_with_transaction_id<noc_mode, skip_ptr_update>(
+        noc, read_cmd_buf, src_base_addr, src_addr, dest_addr, trid);
 #endif
     WAYPOINT("NRDD");
 }
@@ -1779,7 +1783,7 @@ FORCE_INLINE void noc_async_write_one_packet_with_trid_with_state(
     WAYPOINT("NWPD");
 
     // In order to sanitize, need to grab full noc addr + xfer size from state.
-    DEBUG_SANITIZE_NOC_WRITE_TRANSACTION_WITH_ADDR_AND_SIZE_STATE(noc, dst_noc_addr, src_local_l1_addr);
+    DEBUG_SANITIZE_NOC_WRITE_TRANSACTION_WITH_ADDR_STATE(noc, dst_noc_addr, src_local_l1_addr, size);
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_PACKET_TAG, NOC_PACKET_TAG_TRANSACTION_ID(trid));
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_TARG_ADDR_LO, src_local_l1_addr);
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_RET_ADDR_LO, (uint32_t)dst_noc_addr);

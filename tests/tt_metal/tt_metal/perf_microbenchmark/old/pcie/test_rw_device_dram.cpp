@@ -21,7 +21,6 @@
 #include <vector>
 
 #include <tt-metalium/assert.hpp>
-#include "fmt/base.h"
 #include <tt-metalium/logger.hpp>
 #include "test_common.hpp"
 
