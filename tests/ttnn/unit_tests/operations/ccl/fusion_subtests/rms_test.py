@@ -27,8 +27,10 @@ def run_rms_trace(
     input_shard_grid,
     output_shard_grid,
     all_gather_topology,
+    fused_add,
     num_iters=1,
     input_dtype=ttnn.bfloat8_b,
+    residual_dtype=ttnn.bfloat16,
     layout=ttnn.TILE_LAYOUT,
     topology=ttnn.Topology.Linear,
     epsilon=1e-05,
@@ -114,6 +116,7 @@ def run_rms_trace(
         use_height_and_width_as_shard_shape=True,
     )
     input_tensor_torch = torch.randn(input_shape)
+    residual_torch = torch.randn(input_shape)
     gamma_torch = torch.randn((1, 1, 1, input_shape[3]))
     input_tensor = ttnn.as_tensor(
         input_tensor_torch,
@@ -125,6 +128,19 @@ def run_rms_trace(
         layout=layout,
         memory_config=input_memory_config,
     )
+    if fused_add:
+        residual_tensor = ttnn.as_tensor(
+            residual_torch,
+            dtype=residual_dtype,
+            device=mesh_device,
+            mesh_mapper=ttnn.ShardTensor2dMesh(
+                mesh_device=mesh_device, dims=(None, 3), mesh_shape=list(ttnn.MeshShape(1, num_devices))
+            ),
+            layout=layout,
+            memory_config=input_memory_config,
+        )
+    else:
+        residual_tensor = None
     gamma_tensor = ttnn.as_tensor(
         gamma_torch.reshape(
             [
@@ -152,6 +168,7 @@ def run_rms_trace(
             ccl_semaphore_handles,
             dtype=ttnn.bfloat8_b,
             memory_config=output_memory_config,
+            residual_input_tensor=residual_tensor,
             epsilon=epsilon,
             weight=gamma_tensor,
             stats=tt_stats,
@@ -169,6 +186,7 @@ def run_rms_trace(
                     ccl_semaphore_handles,
                     dtype=ttnn.bfloat8_b,
                     memory_config=output_memory_config,
+                    residual_input_tensor=residual_tensor,
                     epsilon=epsilon,
                     weight=gamma_tensor,
                     stats=tt_stats,
@@ -186,6 +204,7 @@ def run_rms_trace(
                 ccl_semaphore_handles,
                 dtype=ttnn.bfloat8_b,
                 memory_config=output_memory_config,
+                residual_input_tensor=residual_tensor,
                 epsilon=epsilon,
                 weight=gamma_tensor,
                 stats=tt_stats,

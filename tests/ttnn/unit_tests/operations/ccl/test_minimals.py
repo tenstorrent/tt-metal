@@ -357,6 +357,7 @@ def test_all_gather_only(
 @pytest.mark.parametrize("use_new_version", [True])
 @pytest.mark.parametrize("num_iters, warmup_iters", [[20, 5]])
 @pytest.mark.parametrize("trace_mode", [True])
+@pytest.mark.parametrize("fused_add", [True])
 @pytest.mark.parametrize(
     "device_params",
     [
@@ -381,6 +382,7 @@ def test_tg_trace_rms_fuse(
     output_shard_grid,
     trace_mode,
     use_new_version,
+    fused_add,
 ):
     profiler = BenchmarkProfiler()
     run_rms_trace(
@@ -393,6 +395,7 @@ def test_tg_trace_rms_fuse(
         input_shard_grid,
         output_shard_grid,
         ttnn.Topology.Linear,
+        fused_add,
         num_iters=num_iters,
         warmup_iters=warmup_iters,
         profiler=profiler,
