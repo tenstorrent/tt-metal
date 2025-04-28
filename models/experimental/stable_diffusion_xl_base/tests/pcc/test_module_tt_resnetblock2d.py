@@ -29,9 +29,18 @@ from models.utility_functions import torch_random
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 def test_resnetblock2d(
-    device, temb_shape, input_shape, down_block_id, resnet_id, conv_shortcut, split_in, block, pcc, use_program_cache
+    device,
+    temb_shape,
+    input_shape,
+    down_block_id,
+    resnet_id,
+    conv_shortcut,
+    split_in,
+    block,
+    pcc,
+    use_program_cache,
+    reset_seeds,
 ):
-    torch.manual_seed(2025)
     pipe = DiffusionPipeline.from_pretrained(
         "stabilityai/stable-diffusion-xl-base-1.0", torch_dtype=torch.float32, use_safetensors=True, variant="fp16"
     )

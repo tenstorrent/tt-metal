@@ -78,6 +78,7 @@ def test_unet(
     temb_shape,
     time_ids_shape,
     use_program_cache,
+    reset_seeds,
 ):
     pipe = DiffusionPipeline.from_pretrained(
         "stabilityai/stable-diffusion-xl-base-1.0", torch_dtype=torch.float32, use_safetensors=True, variant="fp16"
