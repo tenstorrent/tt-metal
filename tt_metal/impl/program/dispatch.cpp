@@ -1810,6 +1810,10 @@ void assemble_device_commands(
         program_command_sequence, program_command_sequence.program_config_buffer_command_sequence);
     semaphore_command_generator.assemble_unicast_commands(
         program_command_sequence.program_config_buffer_command_sequence, program, constants);
+    // Ensure that we use the correct amount of space for each command sequence
+    TT_ASSERT(
+        program_command_sequence.program_config_buffer_command_sequence.size_bytes() ==
+        program_command_sequence.program_config_buffer_command_sequence.write_offset_bytes());
 
     // Assemble binary
     const auto& program_transfer_info = program.get_program_transfer_info();
@@ -1829,6 +1833,9 @@ void assemble_device_commands(
     program_command_sequence.program_binary_command_sequence =
         HostMemDeviceCommand(program_binary_calculator.write_offset_bytes());
     program_binary_command_generator.assemble_commands(program_command_sequence.program_binary_command_sequence);
+    TT_ASSERT(
+        program_command_sequence.program_binary_command_sequence.size_bytes() ==
+        program_command_sequence.program_binary_command_sequence.write_offset_bytes());
 
     // Assemble launch message
     LaunchMessageGenerator launch_message_generator;
@@ -1838,6 +1845,9 @@ void assemble_device_commands(
         HostMemDeviceCommand(launch_message_calculator.write_offset_bytes());
     launch_message_generator.assemble_commands(
         program_command_sequence, program_command_sequence.launch_msg_command_sequence, constants);
+    TT_ASSERT(
+        program_command_sequence.launch_msg_command_sequence.size_bytes() ==
+        program_command_sequence.launch_msg_command_sequence.write_offset_bytes());
 
     // Assemble go signal
     GoSignalGenerator go_signal_generator;
@@ -1853,6 +1863,9 @@ void assemble_device_commands(
         program_transfer_info,
         launch_message_generator.has_multicast_launch_cmds(),
         launch_message_generator.has_unicast_launch_cmds());
+    TT_ASSERT(
+        program_command_sequence.go_msg_command_sequence.size_bytes() ==
+        program_command_sequence.go_msg_command_sequence.write_offset_bytes());
 }
 
 void initialize_worker_config_buf_mgr(WorkerConfigBufferMgr& config_buffer_mgr, uint32_t worker_l1_unreserved_start) {
