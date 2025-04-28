@@ -47,14 +47,14 @@
 using namespace tt;
 using namespace tt::tt_metal;
 
-typedef enum sanitization_features {
+enum watcher_features_t {
     SanitizeAddress,
     SanitizeAlignmentL1Write,
     SanitizeAlignmentL1Read,
     SanitizeZeroL1Write,
     SanitizeMailboxWrite,
     SanitizeInlineWriteDram,
-} watcher_features_t;
+};
 
 tt::tt_metal::HalMemType get_buffer_mem_type_for_test(watcher_features_t feature) {
     return feature == watcher_features_t::SanitizeInlineWriteDram ? tt_metal::HalMemType::DRAM

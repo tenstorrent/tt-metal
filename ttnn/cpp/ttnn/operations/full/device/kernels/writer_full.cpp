@@ -6,10 +6,10 @@
 
 #include "dataflow_api.h"
 
-typedef union {
+union value {
     float f;
     uint32_t u;
-} u;
+};
 constexpr uint32_t onetile = 1;
 
 void kernel_main() {
@@ -22,7 +22,7 @@ void kernel_main() {
     const uint32_t cb_page_size = get_tile_size(cb_value);
     const auto cb_data_format = get_dataformat(cb_value);
 
-    u val;
+    value val;
     val.u = fill_value;
 
     cb_reserve_back(cb_value, onetile);

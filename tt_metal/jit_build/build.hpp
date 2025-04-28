@@ -149,7 +149,7 @@ public:
 
 // Set of build states
 // Used for parallel builds, builds all members in one call
-typedef std::vector<std::shared_ptr<JitBuildState>> JitBuildStateSet;
+using JitBuildStateSet = std::vector<std::shared_ptr<JitBuildState>>;
 
 // Exracts a slice of builds from a JitBuildState
 // Used for parallel building a subset of the builds in a JitBuildStateSet

@@ -14,8 +14,8 @@ namespace ll_api {
 
 class memory {
 public:
-    typedef std::uint64_t address_t;
-    typedef std::uint32_t word_t;
+    using address_t = std::uint64_t;
+    using word_t = std::uint32_t;
     enum class Loading : std::uint8_t { DISCRETE, CONTIGUOUS, CONTIGUOUS_XIP };
 
 private:

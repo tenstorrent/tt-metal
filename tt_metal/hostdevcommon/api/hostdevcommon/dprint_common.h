@@ -15,10 +15,10 @@
 // different name here so that this header can be included in both.
 #if !defined(KERNEL_BUILD) && !defined(FW_BUILD)  // SW
 #include <tt-metalium/tt_backend_api_types.hpp>
-typedef tt::DataFormat CommonDataFormat;
+using CommonDataFormat = tt::DataFormat;
 #else  // HW already includes tensix_types.h
 #include "core_config.h"
-typedef DataFormat CommonDataFormat;
+using CommonDataFormat = DataFormat;
 #endif
 
 #include <cstddef>

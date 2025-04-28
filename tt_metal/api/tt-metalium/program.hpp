@@ -72,7 +72,7 @@ std::shared_ptr<CircularBuffer> GetCircularBuffer(const Program& program, CBHand
 class Internal_;
 }  // namespace detail
 
-typedef std::array<std::optional<KernelHandle>, DISPATCH_CLASS_MAX> kernel_id_array_t;
+using kernel_id_array_t = std::array<std::optional<KernelHandle>, DISPATCH_CLASS_MAX>;
 
 struct KernelGroup {
     uint32_t programmable_core_type_index;

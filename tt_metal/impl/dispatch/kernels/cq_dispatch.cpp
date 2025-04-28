@@ -125,10 +125,10 @@ constexpr uint32_t l1_cache_elements_rounded =
 
 // Used to send go signals asynchronously. Currently unused but this is a prototype for a GoSignalState
 // ring buffer that can be used to store and then asynchronously send Go Signals.
-typedef struct GoSignalState {
+struct GoSignalState {
     uint32_t go_signal;
     uint32_t wait_count;
-} GoSignalState;
+};
 
 static GoSignalState go_signal_state_ring_buf[4];
 static uint8_t go_signal_state_wr_ptr = 0;

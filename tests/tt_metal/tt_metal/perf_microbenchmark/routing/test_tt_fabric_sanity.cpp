@@ -123,7 +123,7 @@ inline std::vector<uint32_t> get_random_numbers_from_range(uint32_t start, uint3
     return std::vector<uint32_t>(range.begin(), range.begin() + count);
 }
 
-typedef struct test_board {
+struct test_board_t {
     std::vector<chip_id_t> available_chip_ids;
     std::vector<chip_id_t> physical_chip_ids;
     std::vector<std::pair<chip_id_t, std::vector<chip_id_t>>> tx_rx_map;
@@ -133,7 +133,7 @@ typedef struct test_board {
     uint32_t num_chips_to_use;
     std::string mesh_graph_descriptor;
 
-    test_board(std::string& board_type_) {
+    test_board_t(std::string& board_type_) {
         if ("n300" == board_type_) {
             mesh_graph_descriptor = "n300_mesh_graph_descriptor.yaml";
             num_chips_to_use = 2;
@@ -509,10 +509,9 @@ typedef struct test_board {
     }
 
     inline void close_devices() { tt::tt_metal::detail::CloseDevices(device_handle_map); }
+};
 
-} test_board_t;
-
-typedef struct test_device {
+struct test_device_t {
     chip_id_t physical_chip_id;
     test_board_t* board_handle;
     tt_metal::IDevice* device_handle;
@@ -531,7 +530,7 @@ typedef struct test_device {
     std::unordered_map<chan_id_t, std::vector<std::pair<uint32_t, CoreCoord>>>
         router_worker_map;  // router chan to worker logical cores
 
-    test_device(chip_id_t chip_id_, test_board_t* board_handle_) {
+    test_device_t(chip_id_t chip_id_, test_board_t* board_handle_) {
         physical_chip_id = chip_id_;
         board_handle = board_handle_;
 
@@ -663,7 +662,7 @@ typedef struct test_device {
 
     void get_available_router_cores(
         uint32_t num_hops,
-        std::shared_ptr<test_device>& rx_device,
+        std::shared_ptr<test_device_t>& rx_device,
         std::vector<chan_id_t>& src_routers,
         std::vector<chan_id_t>& dest_routers) {
         // shortest route possible with least number of internal noc hops
@@ -817,10 +816,9 @@ typedef struct test_device {
     inline stl::Span<const chip_id_t> get_intra_chip_neighbors(RoutingDirection routing_direction) {
         return board_handle->get_intra_chip_neighbors(mesh_id, logical_chip_id, routing_direction);
     }
+};
 
-} test_device_t;
-
-typedef struct test_traffic {
+struct test_traffic_t {
     std::shared_ptr<test_device_t> tx_device;
     std::vector<std::shared_ptr<test_device_t>> rx_devices;
     uint32_t num_tx_workers;
@@ -847,7 +845,7 @@ typedef struct test_traffic {
     std::optional<uint32_t> remote_controller_noc_encoding;
     std::optional<uint32_t> remote_controller_mesh_chip_id;
 
-    test_traffic(
+    test_traffic_t(
         std::shared_ptr<test_device_t>& tx_device_,
         std::vector<std::shared_ptr<test_device_t>>& rx_devices_,
         uint32_t num_src_endpoints,
@@ -904,7 +902,7 @@ typedef struct test_traffic {
         }
     }
 
-    void set_remote_controller(test_traffic& reverse_traffic) {
+    void set_remote_controller(test_traffic_t& reverse_traffic) {
         sync_with_remote_controller_kernel = true;
         auto remote_tx_device = reverse_traffic.tx_device;
         controller_outbound_eth_chan = std::get<0>(tx_workers[0]);
@@ -1326,8 +1324,7 @@ typedef struct test_traffic {
             }
         }
     }
-
-} test_traffic_t;
+};
 
 int main(int argc, char **argv) {
 

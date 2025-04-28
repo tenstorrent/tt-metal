@@ -21,10 +21,10 @@ constexpr uint32_t CQ_PREFETCH_CMD_BARE_MIN_SIZE = PCIE_ALIGNMENT;  // for NOC P
 struct CQPrefetchHToPrefetchDHeader_s {
     uint32_t length;
 };
-typedef union {
-    struct CQPrefetchHToPrefetchDHeader_s header;
+union CQPrefetchHToPrefetchDHeader {
+    CQPrefetchHToPrefetchDHeader_s header;
     unsigned char padding[CQ_PREFETCH_CMD_BARE_MIN_SIZE];
-} CQPrefetchHToPrefetchDHeader;
+};
 static_assert((sizeof(CQPrefetchHToPrefetchDHeader) & (CQ_PREFETCH_CMD_BARE_MIN_SIZE - 1)) == 0);
 
 using prefetch_q_entry_type = uint16_t;
@@ -159,13 +159,13 @@ struct DispatchSRelayInlineState {
     static constexpr uint32_t downstream_cb_end_addr = dispatch_s_buffer_end;
 };
 
-typedef struct PrefetchExecBufState {
+struct PrefetchExecBufState {
     uint32_t page_id;
     uint32_t base_addr;
     uint32_t log_page_size;
     uint32_t pages;
     uint32_t length;
-} PrefetchExecBufState;
+};
 
 // Global Variables
 static uint32_t pcie_read_ptr = pcie_base;

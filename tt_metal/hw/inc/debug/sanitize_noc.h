@@ -37,13 +37,13 @@
 // A couple defines for specifying read/write and multi/unicast
 #define DEBUG_SANITIZE_NOC_READ true
 #define DEBUG_SANITIZE_NOC_WRITE false
-typedef bool debug_sanitize_noc_dir_t;
+using debug_sanitize_noc_dir_t = bool;
 #define DEBUG_SANITIZE_NOC_MULTICAST true
 #define DEBUG_SANITIZE_NOC_UNICAST false
-typedef bool debug_sanitize_noc_cast_t;
+using debug_sanitize_noc_cast_t = bool;
 #define DEBUG_SANITIZE_NOC_TARGET true
 #define DEBUG_SANITIZE_NOC_LOCAL false
-typedef bool debug_sanitize_noc_which_core_t;
+using debug_sanitize_noc_which_core_t = bool;
 
 // Helper function to get the core type from noc coords.
 AddressableCoreType get_core_type(uint8_t noc_id, uint8_t x, uint8_t y, bool& is_virtual_coord) {
