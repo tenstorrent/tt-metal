@@ -292,7 +292,7 @@ class Generator:
         enable_trace=True,
         read_from_device=True,
         sampling_params: SamplingParams = None,  # Should be None if not greedy decoding / sampling on device.
-        reset_inputs=False,
+        reset_inputs=True,
     ):
         assert (
             sampling_params is None or sampling_params.temperature == 0
@@ -388,13 +388,6 @@ class Generator:
         """
         Executes the trace for the decode_forward method but does not read back outputs.
         """
-        # host_inputs = self.model.prepare_decode_inputs_host(tokens, current_pos, page_table)
-
-        # device_inputs = copy_host_to_device(
-        #     host_tensors=host_inputs,
-        #     device_tensors=device_inputs,
-        # )
-
         ttnn.execute_trace(self.mesh_device, trace_id, cq_id=0, blocking=False)
 
         return tt_out_trace

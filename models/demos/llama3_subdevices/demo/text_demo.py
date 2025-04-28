@@ -511,29 +511,7 @@ def test_demo_text(
             else:
                 profiler.end(f"inference_decode_time_{iteration}", iteration=batch_idx)
                 decode_iteration_time = profiler.get_duration(f"inference_decode_time_{iteration}", iteration=batch_idx)
-            tt_output_torch = ttnn.to_torch(
-                out_tok_cpu,  # tt_out.cpu(blocking=True, cq_id=1),
-                mesh_composer=ttnn.ConcatMesh2dToTensor(
-                    mesh_device,
-                    dims=(3, 1),
-                    mesh_shape=model_args.cluster_shape,
-                ),
-            )[0, 0, 0, :batch_size]
-
-            # tt_out = tt_out[:, :, :B, : self.vocab_size].reshape(B, S, -1)
-            # Get the next token
-            # if argmax_on_device:
-            #     out_tok = logits.unsqueeze(1)
-            #     for b in range(1, 32):
-            #         out_tok[b][0] = 0
-            # else:
-            #     # TODO Fix use case with temperature > 0
-            #     _, out_tok = sample_host(
-            #         logits,
-            #         temperature=sampling_params["temperature"],
-            #         top_p=sampling_params["top_p"],
-            #         on_host=True,
-            #     )
+            tt_output_torch = out_tok_cpu
 
             # Always print perf after every iteration
             tokens_per_second_per_user = 1 / decode_iteration_time
