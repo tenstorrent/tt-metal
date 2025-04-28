@@ -1269,10 +1269,8 @@ def prod(
     output_tensor = ttnn.from_device(t1)
     output_tensor = ttnn.to_layout(output_tensor, ttnn.ROW_MAJOR_LAYOUT)
     output_tensor = ttnn.to_torch(output_tensor)
-    if all_dimensions:
-        return output_tensor[:1, :1, :1, :1]
-    else:
-        return output_tensor
+
+    return output_tensor
 
 
 @setup_host_and_device

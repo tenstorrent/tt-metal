@@ -289,54 +289,6 @@ static Tensor fill_first_val_into_tensor(
 }
 
 template <typename T>
-static Tensor prod_result_computation_GS(
-    const Tensor& input_tensor,
-    DataType data_type,
-    const Layout layout,
-    IDevice* device = nullptr,
-    const MemoryConfig& output_mem_config = MemoryConfig{
-        .memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED}) {
-    const ttnn::Shape& s_a = input_tensor.get_padded_shape();
-    auto owned_buffer = tt::tt_metal::owned_buffer::create<T>(input_tensor.volume());  // ouput
-    auto input_buffer = detail::to_host_buffer<T>(input_tensor);
-    const ttnn::Shape input_tensor_strides = input_tensor.strides();
-    auto result = static_cast<T>(1.0f);
-    for (uint32_t i = s_a[0] - 1; i < s_a[0]; i++) {
-        for (int32_t j = s_a[1] - 1; j < s_a[1]; j++) {
-            for (int32_t k = s_a[2] - 32; k < s_a[2]; k++) {  // access last tile
-                for (int32_t l = s_a[3] - 32; l < s_a[3]; l++) {
-                    auto input_index =
-                        l + input_tensor_strides[2] * k + input_tensor_strides[1] * j + input_tensor_strides[0] * i;
-                    if (k >= s_a[2] - 2 && l >= s_a[3] - 32) {  // to access 2*32 in TILE layout
-                        result = result * static_cast<T>(input_buffer[input_index]);
-                        owned_buffer[input_index] = static_cast<T>(0.0f);
-                    } else {
-                        owned_buffer[input_index] = static_cast<T>(0.0f);
-                    }
-                }
-            }
-        }
-    }
-    owned_buffer[0] = result;  // store the result at the first position of the tensor,and the rest of the values as
-                               // 0.0f
-    auto output = Tensor(
-                      OwnedStorage{owned_buffer},
-                      TensorSpec(
-                          input_tensor.get_logical_shape(),
-                          TensorLayout::fromPaddedShape(
-                              data_type,
-                              Layout::ROW_MAJOR,
-                              MemoryConfig{},
-                              input_tensor.get_logical_shape(),
-                              input_tensor.get_padded_shape())))
-                      .to_layout(layout);
-    if (device != nullptr) {
-        output = output.to_device(device, output_mem_config);
-    }
-    return output;
-}
-
-template <typename T>
 static Tensor prod_result_computation_WH_B0(
     const Tensor& input_tensor,
     DataType data_type,
@@ -344,43 +296,27 @@ static Tensor prod_result_computation_WH_B0(
     IDevice* device = nullptr,
     const MemoryConfig& output_mem_config = MemoryConfig{
         .memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED}) {
-    const auto& s_a = input_tensor.get_padded_shape();
-    auto owned_buffer = tt::tt_metal::owned_buffer::create<T>(s_a.volume());  // ouput
-    auto input_buffer = detail::to_host_buffer<T>(input_tensor);
+    auto owned_buffer = tt::tt_metal::owned_buffer::create<T>(tt::constants::TILE_HW);
+    const auto input_buffer = detail::to_host_buffer<T>(input_tensor);
     const ttnn::Shape input_tensor_strides = input_tensor.strides();
-    auto result = static_cast<T>(1.0f);
-    // need to access the last 4 rows and alternating columns of index 17 ,19, 21, 23, 25, 27, 29, 31
-    for (uint32_t i = s_a[0] - 1; i < s_a[0]; i++) {
-        for (int32_t j = s_a[1] - 1; j < s_a[1]; j++) {
-            for (int32_t k = s_a[2] - 32; k < s_a[2]; k++) {  // access last tile
-                for (int32_t l = s_a[3] - 32; l < s_a[3]; l++) {
-                    auto input_index =
-                        l + input_tensor_strides[2] * k + input_tensor_strides[1] * j + input_tensor_strides[0] * i;
-                    if (k >= s_a[2] - 4 && (l == s_a[3] - 15 || l == s_a[3] - 13 || l == s_a[3] - 11 ||
-                                            l == s_a[3] - 9 || l == s_a[3] - 7 || l == s_a[3] - 5 || l == s_a[3] - 3 ||
-                                            l == s_a[3] - 1)) {  // to access 4*16 elements placed alternatively
-                                                                 // starting from index 17W in TILE layout
-                        result = result * static_cast<T>(input_buffer[input_index]);
-                        owned_buffer[input_index] = static_cast<T>(0.0f);
-                    } else {
-                        owned_buffer[input_index] = static_cast<T>(0.0f);
-                    }
-                }
-            }
-        }
+    T result = static_cast<T>(1.0f);
+
+    // Calculate the product of all elements in the last tile
+    for (int i = 0; i < tt::constants::TILE_HW; ++i) {
+        result = result * static_cast<T>(input_buffer[i]);
     }
-    owned_buffer[0] = result;  // store the result at the first position of the tensor,and the rest of the values as
-                               // 0.0f
+    owned_buffer[0] = result;
     auto output = Tensor(
                       OwnedStorage{owned_buffer},
                       TensorSpec(
-                          input_tensor.get_logical_shape(),
+                          ttnn::Shape({}),
                           TensorLayout::fromPaddedShape(
                               data_type,
                               PageConfig(Layout::ROW_MAJOR),
                               MemoryConfig{},
-                              input_tensor.get_logical_shape(),
-                              input_tensor.get_padded_shape())))
+                              /*logical_shape=*/ttnn::Shape({}),
+                              /*padded_shape=*/ttnn::Shape({tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH}))))
+
                       .to_layout(layout);
     if (device != nullptr) {
         output = output.to_device(device, output_mem_config);

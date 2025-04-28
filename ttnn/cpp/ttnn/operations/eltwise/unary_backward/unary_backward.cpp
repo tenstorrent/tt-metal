@@ -1805,7 +1805,8 @@ std::vector<Tensor> ExecuteUnaryBackwardProd::invoke(
     std::vector<Tensor> grad_tensor;
     auto output_memory_config = output_mem_config.value_or(
         input.memory_config());  // TODO: Remove after ternary forward ops migration is completed
-    Tensor prod_result = ttnn::prod(input, all_dimensions, dim, true, output_memory_config);
+    const bool keepdim = !all_dimensions;
+    Tensor prod_result = ttnn::prod(input, all_dimensions, dim, keepdim, output_memory_config);
     if (prod_result.get_layout() == Layout::ROW_MAJOR && prod_result.storage_type() == StorageType::DEVICE) {
         prod_result = ttnn::operations::unary_backward::change_layout_to_tile(prod_result, output_memory_config);
     }
