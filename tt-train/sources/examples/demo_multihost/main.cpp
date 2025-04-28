@@ -204,7 +204,7 @@ int main(int argc, char** argv) {
     CLI::App app{"NanoGPT Example"};
     argv = app.ensure_utf8(argv);
 
-    bool print_tt_smi_output = false;
+    bool print_tt_smi_output = true;
     bool run_test_send_recv_tensor = false;
     bool run_regression_training = false;
 

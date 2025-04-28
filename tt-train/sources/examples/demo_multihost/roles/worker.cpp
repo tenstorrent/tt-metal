@@ -4,11 +4,15 @@
 
 #include "worker.hpp"
 
+#include <string>
+
+#include "core/distributed/distributed.hpp"
 #include "ops/losses.hpp"
 namespace roles {
 
-RemoteOptimizer::RemoteOptimizer(ttml::serialization::NamedParameters parameters) :
-    OptimizerBase(std::move(parameters)) {
+RemoteOptimizer::RemoteOptimizer(ttml::serialization::NamedParameters parameters, int aggregator_rank) :
+    OptimizerBase(std::move(parameters)), m_aggregator_rank(aggregator_rank) {
+    m_sorted_parameters = get_sorted_parameters();
 }
 
 void RemoteOptimizer::zero_grad() {
@@ -20,6 +24,8 @@ void RemoteOptimizer::zero_grad() {
 }
 
 void RemoteOptimizer::step() {
+    send_gradients();
+    receive_weights();
 }
 
 ttml::serialization::StateDict RemoteOptimizer::get_state_dict() const {
@@ -40,26 +46,49 @@ void RemoteOptimizer::set_steps(size_t steps) {
     this->m_steps = steps;
 }
 
-Worker::Worker(DataLoader train_dataloader, std::shared_ptr<ttml::modules::LinearLayer> model) :
-    m_train_dataloader(std::move(train_dataloader)), m_model(std::move(model)) {
+SortedParameters RemoteOptimizer::get_sorted_parameters() const {
+    return {m_parameters.begin(), m_parameters.end()};
+}
+
+void RemoteOptimizer::send_gradients() {
+    for (auto& it : m_sorted_parameters) {
+        auto& [name, tensor_ptr] = it;
+        if (tensor_ptr->get_requires_grad() && tensor_ptr->is_grad_initialized()) {
+            auto grad = tensor_ptr->get_grad();
+            ttml::core::distributed::send_tensor(grad, m_aggregator_rank);
+        }
+    }
+}
+
+void RemoteOptimizer::receive_weights() {
+    for (auto& it : m_sorted_parameters) {
+        auto& [name, tensor_ptr] = it;
+        {
+            auto tensor = tensor_ptr->get_value();
+            ttml::core::distributed::recv_tensor(tensor, m_aggregator_rank);
+        }
+    }
+}
+
+Worker::Worker(DataLoader train_dataloader, std::shared_ptr<ttml::modules::LinearLayer> model, int aggregator_rank) :
+    m_train_dataloader(std::move(train_dataloader)), m_model(std::move(model)), m_aggregator_rank(aggregator_rank) {
+    m_optimizer = std::make_shared<RemoteOptimizer>(m_model->parameters(), m_aggregator_rank);
 }
 void Worker::training_step() {
     auto& ctx = ttml::autograd::ctx();
+    auto& mpi_ctx = ctx.get_mpi_context();
     auto& device = ctx.get_device();
 
     m_model->train();
 
     for (auto [features, target] : m_train_dataloader) {
+        m_optimizer->zero_grad();
         auto output = (*m_model)(features);
         auto loss = ttml::ops::mse_loss(output, target);
         loss->backward();
+        m_optimizer->step();
+        m_training_step++;
     }
-}
-
-void Worker::send_gradients(int aggregator_rank) {
-}
-
-void receive_weights(int aggregator_rank) {
 }
 
 }  // namespace roles

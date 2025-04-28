@@ -8,7 +8,7 @@ namespace roles {
 class Optimizer {
 public:
     void optimization_step();
-    void send_weights(int aggregator_rank);
+    void send_weights();
 };
 
 }  // namespace roles

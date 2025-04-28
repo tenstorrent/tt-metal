@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
+#include <memory>
 #include <span>
 
 #include "core/tt_tensor_utils.hpp"
@@ -20,9 +21,10 @@ using DataLoader = ttml::datasets::DataLoader<
     std::function<BatchType(std::vector<DatasetSample>&& samples)>,
     BatchType>;
 
+using SortedParameters = std::map<std::string, ttml::autograd::TensorPtr>;
 class RemoteOptimizer : public ttml::optimizers::OptimizerBase {
 public:
-    explicit RemoteOptimizer(ttml::serialization::NamedParameters parameters);
+    explicit RemoteOptimizer(ttml::serialization::NamedParameters parameters, int aggregator_rank = 0);
 
     void zero_grad() override;
 
@@ -34,22 +36,27 @@ public:
     [[nodiscard]] size_t get_steps() const override;
     void set_steps(size_t steps) override;
 
+    SortedParameters get_sorted_parameters() const;
+    void send_gradients();
+    void receive_weights();
+
 private:
     size_t m_steps{0};
+    int m_aggregator_rank{0};
+    SortedParameters m_sorted_parameters;
 };
 class Worker {
 public:
-    Worker(DataLoader train_dataloader, std::shared_ptr<ttml::modules::LinearLayer> model);
+    Worker(DataLoader train_dataloader, std::shared_ptr<ttml::modules::LinearLayer> model, int aggregator_rank);
     void training_step();
-
-    void send_gradients(int aggregator_rank);
-    void receive_weights(int aggregator_rank);
 
 private:
     DataLoader m_train_dataloader;
 
     std::shared_ptr<ttml::modules::LinearLayer> m_model;
+    std::shared_ptr<RemoteOptimizer> m_optimizer;
 
+    int m_aggregator_rank = 0;
     int m_training_step = 0;
 };
 
