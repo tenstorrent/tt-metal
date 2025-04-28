@@ -215,35 +215,17 @@ std::vector<Tensor> chunk_impl(
                                tensor.tensor_spec().physical_shape() == tensor.tensor_spec().logical_2d_shape() &&
                                tensor.tensor_spec().data_type() == tt::tt_metal::convert_to_data_type<T>();
     if (dim == 0 && data_viewable) {
-        auto buffer = std::visit(
-            tt::stl::overloaded{
-                []<tt::tt_metal::OwnedOrBorrowedStorage StorageType>(const StorageType& storage) {
-                    auto buffer = tt::tt_metal::host_buffer::get_as<T>(storage.buffer);
-                    return tt::stl::Span<T>(buffer.data(), buffer.size());
-                },
-                [](const auto& s) {
-                    TT_THROW("Unexpected storage type {}", tt::stl::get_type_name(s));
-                    return tt::stl::Span<T>();
-                }},
-            tensor.get_storage());
+        tt::tt_metal::HostBuffer buffer = tt::tt_metal::host_buffer::get_host_buffer(tensor);
 
-        auto chunk_spans = chunk(buffer, tensor.tensor_spec().logical_shape(), num_chunks);
-
-        auto make_tensor = [&tensor](tt::stl::Span<T> data, const TensorSpec& spec) {
-            if (tensor.storage_type() == tt::tt_metal::StorageType::BORROWED) {
-                const auto& storage = std::get<tt::tt_metal::BorrowedStorage>(tensor.get_storage());
-                return Tensor::from_borrowed_data<T>(
-                    data, spec.logical_shape(), storage.on_creation_callback, storage.on_destruction_callback);
-            } else {
-                return Tensor::from_span<T>(data, spec);
-            }
-        };
+        auto chunk_spans = chunk(buffer.view_as<T>(), tensor.tensor_spec().logical_shape(), num_chunks);
 
         std::vector<Tensor> tensors;
         tensors.reserve(chunk_spans.size());
-        std::transform(chunk_spans.begin(), chunk_spans.end(), std::back_inserter(tensors), [&](const auto& chunk) {
-            const auto& [data, shape] = chunk;
-            return make_tensor(data, TensorSpec(shape, layout));
+        std::transform(chunk_spans.begin(), chunk_spans.end(), std::back_inserter(tensors), [&](auto& chunk) {
+            // Create chunks pinned to the original buffer.
+            auto& [data, shape] = chunk;
+            tt::tt_metal::HostBuffer chunk_buffer(data, buffer.pin());
+            return Tensor(tt::tt_metal::HostStorage(std::move(chunk_buffer)), TensorSpec(shape, layout));
         });
         return tensors;
     } else {

@@ -253,28 +253,21 @@ TEST_F(TensorDistributionT3000Test, ShardBorrowedTensor) {
     int num_references_created = 0;
     Tensor input_tensor = Tensor::from_borrowed_data(
         tt::stl::Span(test_data),
-        ttnn::Shape{kNumRows, kNumCols, 1024},
+        ttnn::Shape{num_devices, 1024},
         /*on_creation_callback=*/[&num_references_created]() { num_references_created++; },
         /*on_destruction_callback=*/[]() {});
     EXPECT_EQ(num_references_created, 1);  // self
 
-    auto mapper = shard_tensor_to_2d_mesh_mapper(
-        *mesh_device_,
-        MeshShape{kNumRows, kNumCols},
-        Shard2dConfig{
-            .row_dim = 0,
-            .col_dim = 2,
-        });
-    Tensor sharded_tensor = distribute_tensor(input_tensor, *mapper, *mesh_device_);
-    // Self + sharding across rows; sharding across cols is non-contiguous and thus makes a copy.
-    EXPECT_EQ(num_references_created, 1 + kNumRows);
+    auto mapper = shard_tensor_to_mesh_mapper(*mesh_device_, 0);
+    Tensor sharded_tensor = distribute_tensor(input_tensor, *mapper);
 
-    auto composer = concat_2d_mesh_to_tensor_composer(
-        *mesh_device_,
-        Concat2dConfig{
-            .row_dim = 0,
-            .col_dim = 2,
-        });
+    // Validate that we didn't make any copies by updating `test_data`.
+    // Borrowed shards should reflect the changes.
+    for (int i = 0; i < test_data.size(); i++) {
+        test_data[i] = i * 7;
+    }
+
+    auto composer = concat_mesh_to_tensor_composer(/*dim=*/0);
     Tensor concatenated_tensor = aggregate_tensor(sharded_tensor, *composer);
     EXPECT_THAT(concatenated_tensor.to_vector<float>(), Pointwise(FloatEq(), test_data));
 }

@@ -16,7 +16,6 @@
 #include "ttnn/operations/functions.hpp"
 #include "ttnn/tensor/enum_types.hpp"
 #include "ttnn/tensor/host_buffer/functions.hpp"
-#include "ttnn/tensor/host_buffer/owned_buffer.hpp"
 #include "ttnn/tensor/shape/shape.hpp"
 #include "ttnn/tensor/storage.hpp"
 #include "ttnn/tensor/tensor.hpp"
@@ -24,23 +23,22 @@
 
 using tt::tt_metal::DataType;
 using tt::tt_metal::Layout;
-using tt::tt_metal::OwnedStorage;
 using tt::tt_metal::Tensor;
 using tt::tt_metal::distributed::MeshDevice;
 
 template <typename BinaryFunction>
 Tensor host_function(const Tensor& input_tensor_a, const Tensor& input_tensor_b) {
-    auto input_a_buffer = tt::tt_metal::owned_buffer::get_as<bfloat16>(input_tensor_a);
-    auto input_b_buffer = tt::tt_metal::owned_buffer::get_as<bfloat16>(input_tensor_b);
+    auto input_a_buffer = tt::tt_metal::host_buffer::get_as<bfloat16>(input_tensor_a);
+    auto input_b_buffer = tt::tt_metal::host_buffer::get_as<bfloat16>(input_tensor_b);
 
-    auto output_buffer = tt::tt_metal::owned_buffer::create<bfloat16>(input_tensor_a.volume());
+    auto output_buffer = std::vector<bfloat16>(input_tensor_a.volume());
 
     for (auto index = 0; index < output_buffer.size(); index++) {
         auto value = BinaryFunction{}(input_a_buffer[index].to_float(), input_b_buffer[index].to_float());
         output_buffer[index] = bfloat16(value);
     }
     return Tensor(
-        OwnedStorage{output_buffer},
+        tt::tt_metal::HostStorage{tt::tt_metal::host_buffer::create(std::move(output_buffer))},
         input_tensor_a.get_logical_shape(),
         input_tensor_a.get_dtype(),
         input_tensor_a.get_layout());

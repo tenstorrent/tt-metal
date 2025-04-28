@@ -29,7 +29,7 @@ std::vector<uint32_t> pack_fp32_vec_as_bfp8_tiles(
 }
 
 std::vector<float> unpack_bfp8_tiles_into_float_vec(
-    const std::vector<uint32_t>& bfp8_tiles,
+    tt::stl::Span<const uint32_t> bfp8_tiles,
     bool row_major_output,
     bool is_exp_a,
     const std::optional<tt::tt_metal::Tile>& tile) {
@@ -93,9 +93,10 @@ std::vector<float> unpack_bfp8_tiles_into_float_vec(
                         int tile_and_data_index = data_index + (num_bfp8_in_tile * tile_index);
 
                         int exponent_index = (data_index >> 4) + (num_bfp8_in_tile * tile_index);
-                        exp_word = bfp8_tiles.at(
-                            exponent_index);  // Extract the uint32_t value that stores the shared exponent for this set
-                                              // of data. Each 32 bit word is shared amongst 64 datums
+
+                        // Extract the uint32_t value that stores the shared exponent for this set
+                        // of data. Each 32 bit word is shared amongst 64 datums
+                        exp_word = bfp8_tiles[exponent_index];
 
                         int num_exponent_words_skip = tile_index * num_exp_words;
                         sub_word_index = ((tile_and_data_index - num_exponent_words_skip) >> 2) &
@@ -104,11 +105,10 @@ std::vector<float> unpack_bfp8_tiles_into_float_vec(
                         simde__m256i exp_vector = simde_mm256_set1_epi32(
                             get_byte(exp_word, sub_word_index));  // Replicate exp scalar in a vector
                         // Take 2 uint32_t values. These are 8 BFP8 values
-                        simde__m128i first = simde_mm_set1_epi32(bfp8_tiles.at(
-                            num_exp_words +
-                            tile_and_data_index));  // Replicate first uint32_t 4 times (one for each BFP8 value)
-                        simde__m128i second = simde_mm_set1_epi32(bfp8_tiles.at(
-                            num_exp_words + tile_and_data_index + 1));  //  Replicate second uint32_t 4 times
+                        // Replicate first uint32_t 4 times (one for each BFP8 value)
+                        simde__m128i first = simde_mm_set1_epi32(bfp8_tiles[num_exp_words + tile_and_data_index]);
+                        // Replicate second uint32_t 4 times
+                        simde__m128i second = simde_mm_set1_epi32(bfp8_tiles[num_exp_words + tile_and_data_index + 1]);
                         first = simde_mm_srlv_epi32(
                             simde_mm_and_si128(first, mask), shift);  // Extract each BFP8 from the first uint32_t
                         second = simde_mm_srlv_epi32(

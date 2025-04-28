@@ -80,7 +80,7 @@ Tensor tensor_to_device(
         worker->push_work(
             [worker, input_tensor, device_tensor, mem_config, num_workers, worker_index, cq_id]() mutable {
                 auto shard = get_shard_for_device(input_tensor, worker, worker_index);
-                if (shard.storage_type() == StorageType::OWNED) {
+                if (shard.storage_type() == StorageType::HOST) {
                     shard = tensor_impl::to_device_wrapper(shard, worker, mem_config, cq_id);
                 }
                 insert_buffer_and_shape_for_device(worker, shard, device_tensor, worker_index);
@@ -97,7 +97,7 @@ Tensor tensor_to_device(
 }
 
 Tensor tensor_cpu(const Tensor& input_tensor, bool blocking, QueueId cq_id) {
-    if (input_tensor.storage_type() == StorageType::OWNED || input_tensor.storage_type() == StorageType::BORROWED) {
+    if (input_tensor.storage_type() == StorageType::HOST) {
         return input_tensor;
     }
 
