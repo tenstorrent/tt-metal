@@ -26,5 +26,14 @@ Use the following command to run the demo :
 pytest --disable-warnings models/experimental/functional_yolov9c/demo/demo.py
 ```
 
-## Outputs
-The Demo outputs are saved inside this directory: `models/experimental/functional_yolov9c/demo/runs`
+#### Outputs
+- The Demo outputs are saved inside this directory: `models/experimental/functional_yolov9c/demo/runs`
+
+### Model performant running with Trace+2CQ
+
+#### For 640x640:
+- end-2-end perf is 2 FPS
+
+  ```bash
+  pytest models/experimental/functional_yolov9c/tests/perf/test_e2e_performant.py::test_e2e_performant[resolution0-True-1-act_dtype0-weight_dtype0-device_params0]
+  ```

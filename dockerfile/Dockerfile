@@ -33,20 +33,21 @@ RUN mkdir -p /tmp/boost \
     && ./b2 install --prefix=/usr/local \
     && rm -rf /tmp/boost
 
-ARG FMT_VERSION=11.1.4
-RUN mkdir -p /tmp/fmt \
-    && wget -O /tmp/fmt/fmt-${FMT_VERSION}.tar.gz "https://github.com/fmtlib/fmt/archive/${FMT_VERSION}.tar.gz" \
-    && tar -xzf /tmp/fmt/fmt-${FMT_VERSION}.tar.gz -C /tmp/fmt --strip-components=1 \
-    && cmake \
-         -S /tmp/fmt \
-         -B /tmp/fmt/build \
-         -DCMAKE_BUILD_TYPE=Release \
-         -DFMT_TEST=OFF \
-         -DFMT_DOC=OFF \
-         -DFMT_INSTALL=ON \
-    && make -C /tmp/fmt/build -j$(nproc) \
-    && make -C /tmp/fmt/build install \
-    && rm -rf /tmp/fmt
+# Problematic with packaging
+# ARG FMT_VERSION=11.1.4
+# RUN mkdir -p /tmp/fmt \
+#     && wget -O /tmp/fmt/fmt-${FMT_VERSION}.tar.gz "https://github.com/fmtlib/fmt/archive/${FMT_VERSION}.tar.gz" \
+#     && tar -xzf /tmp/fmt/fmt-${FMT_VERSION}.tar.gz -C /tmp/fmt --strip-components=1 \
+#     && cmake \
+#          -S /tmp/fmt \
+#          -B /tmp/fmt/build \
+#          -DCMAKE_BUILD_TYPE=Release \
+#          -DFMT_TEST=OFF \
+#          -DFMT_DOC=OFF \
+#          -DFMT_INSTALL=ON \
+#     && make -C /tmp/fmt/build -j$(nproc) \
+#     && make -C /tmp/fmt/build install \
+#     && rm -rf /tmp/fmt
 
 ARG PYBIND11_VERSION=2.13.6
 RUN mkdir -p /tmp/pybind11 \
@@ -95,34 +96,36 @@ RUN mkdir -p /tmp/range-v3 \
 #    && make -C /tmp/yaml/build install \
 #    && rm -rf /tmp/yaml
 
-ARG JSON_VERSION=3.11.3
-RUN mkdir -p /tmp/json \
-    && wget -O /tmp/json/json-${JSON_VERSION}.tar.gz "https://github.com/nlohmann/json/archive/refs/tags/v${JSON_VERSION}.tar.gz" \
-    && tar -xzf /tmp/json/json-${JSON_VERSION}.tar.gz -C /tmp/json --strip-components=1 \
-    && cmake \
-         -S /tmp/json \
-         -B /tmp/json/build \
-         -DCMAKE_BUILD_TYPE=Release \
-         -DJSON_BuildTests=OFF \
-         -DJSON_Install=ON \
-    && make -C /tmp/json/build -j$(nproc) \
-    && make -C /tmp/json/build install \
-    && rm -rf /tmp/json
+# Problematic with packaging
+# ARG JSON_VERSION=3.11.3
+# RUN mkdir -p /tmp/json \
+#     && wget -O /tmp/json/json-${JSON_VERSION}.tar.gz "https://github.com/nlohmann/json/archive/refs/tags/v${JSON_VERSION}.tar.gz" \
+#     && tar -xzf /tmp/json/json-${JSON_VERSION}.tar.gz -C /tmp/json --strip-components=1 \
+#     && cmake \
+#          -S /tmp/json \
+#          -B /tmp/json/build \
+#          -DCMAKE_BUILD_TYPE=Release \
+#          -DJSON_BuildTests=OFF \
+#          -DJSON_Install=ON \
+#     && make -C /tmp/json/build -j$(nproc) \
+#     && make -C /tmp/json/build install \
+#     && rm -rf /tmp/json
 
-ARG MAGIC_ENUM_VERSION=0.9.7
-RUN mkdir -p /tmp/magic_enum \
-    && wget -O /tmp/magic_enum/magic_enum-${MAGIC_ENUM_VERSION}.tar.gz "https://github.com/Neargye/magic_enum/archive/refs/tags/v${MAGIC_ENUM_VERSION}.tar.gz" \
-    && tar -xzf /tmp/magic_enum/magic_enum-${MAGIC_ENUM_VERSION}.tar.gz -C /tmp/magic_enum --strip-components=1 \
-    && cmake \
-         -S /tmp/magic_enum \
-         -B /tmp/magic_enum/build \
-         -DCMAKE_BUILD_TYPE=Release \
-         -DMAGIC_ENUM_OPT_BUILD_TESTS=OFF \
-         -DMAGIC_ENUM_OPT_BUILD_EXAMPLES=OFF \
-         -DMAGIC_ENUM_OPT_INSTALL=ON \
-    && make -C /tmp/magic_enum/build -j$(nproc) \
-    && make -C /tmp/magic_enum/build install \
-    && rm -rf /tmp/magic_enum
+# Problematic with packaging
+# ARG MAGIC_ENUM_VERSION=0.9.7
+# RUN mkdir -p /tmp/magic_enum \
+#     && wget -O /tmp/magic_enum/magic_enum-${MAGIC_ENUM_VERSION}.tar.gz "https://github.com/Neargye/magic_enum/archive/refs/tags/v${MAGIC_ENUM_VERSION}.tar.gz" \
+#     && tar -xzf /tmp/magic_enum/magic_enum-${MAGIC_ENUM_VERSION}.tar.gz -C /tmp/magic_enum --strip-components=1 \
+#     && cmake \
+#          -S /tmp/magic_enum \
+#          -B /tmp/magic_enum/build \
+#          -DCMAKE_BUILD_TYPE=Release \
+#          -DMAGIC_ENUM_OPT_BUILD_TESTS=OFF \
+#          -DMAGIC_ENUM_OPT_BUILD_EXAMPLES=OFF \
+#          -DMAGIC_ENUM_OPT_INSTALL=ON \
+#     && make -C /tmp/magic_enum/build -j$(nproc) \
+#     && make -C /tmp/magic_enum/build install \
+#     && rm -rf /tmp/magic_enum
 
 ARG TAKSFLOW_VERSION=3.7.0
 RUN mkdir -p /tmp/taskflow \

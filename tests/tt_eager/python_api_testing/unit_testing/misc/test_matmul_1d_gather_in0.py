@@ -18,6 +18,10 @@ import math
 from models.utility_functions import is_wormhole_b0, is_grayskull, is_wormhole_b0, is_blackhole
 from tracy import signpost
 
+from models.demos.llama3_subdevices.tt.model_config import (
+    PREFETCHER_NOC1_GRID,
+)
+
 
 random.seed(10)
 
@@ -90,34 +94,6 @@ PREFETCHER_GRID = [
     (2, 5),
     (2, 7),
     (2, 11),
-]
-
-# logical coords
-PREFETCHER_NOC1_GRID = [
-    (6, 6),
-    (6, 7),
-    (6, 9),
-    (6, 0),
-    (6, 1),
-    (6, 2),
-    (6, 4),
-    (6, 5),
-    (5, 5),
-    (5, 6),
-    (5, 7),
-    (5, 9),
-    (5, 0),
-    (5, 1),
-    (5, 2),
-    (5, 4),
-    (1, 4),
-    (1, 5),
-    (1, 9),
-    (1, 0),
-    (2, 0),
-    (2, 4),
-    (2, 5),
-    (2, 9),
 ]
 
 LM_HEAD_32_GRID = list(
@@ -848,9 +824,8 @@ def test_multi_core_matmul_1d_gs(
     [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL}],
     indirect=True,
 )
-@pytest.mark.parametrize("mesh_device", [pytest.param((2, 2), id="2x2_grid")], indirect=True)
 def test_matmul_1d_ring_llama_perf(
-    mesh_device,
+    device,
     in0_dtype,
     in1_dtype,
     output_dtype,
@@ -868,7 +843,6 @@ def test_matmul_1d_ring_llama_perf(
     use_program_cache,
     function_level_defaults,
 ):
-    device = mesh_device.get_device(mesh_device.get_device_ids()[0])
     # Only run these tests on unharvested TG
     device_grid = (device.compute_with_storage_grid_size().x, device.compute_with_storage_grid_size().y)
     if device_grid != (7, 10):

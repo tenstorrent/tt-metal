@@ -12,7 +12,6 @@
 #include <algorithm>
 #include <cstddef>
 #include <functional>
-#include <mutex>
 #include <optional>
 #include <set>
 #include <string>
@@ -148,11 +147,11 @@ public:
 
     CoreRangeSet(const CoreRangeSet& other);
 
-    CoreRangeSet& operator=(const CoreRangeSet& other);
+    CoreRangeSet& operator=(const CoreRangeSet& other) noexcept = default;
 
     CoreRangeSet(CoreRangeSet&& other) noexcept;
 
-    CoreRangeSet& operator=(CoreRangeSet&& other) noexcept;
+    CoreRangeSet& operator=(CoreRangeSet&& other) noexcept = default;
 
     CoreRangeSet(std::vector<CoreRange>&& core_ranges);
 
@@ -197,8 +196,6 @@ public:
 
 private:
     void validate_no_overlap();
-
-    mutable std::mutex ranges_guard;
     std::vector<CoreRange> ranges_;
 };
 

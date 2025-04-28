@@ -40,7 +40,6 @@
 #include "impl/context/metal_context.hpp"
 #include "dispatch/kernels/cq_commands.hpp"
 #include "dispatch_core_common.hpp"
-#include "dispatch_mem_map.hpp"
 #include "hal_types.hpp"
 #include "kernel.hpp"
 #include "math.hpp"
@@ -496,8 +495,6 @@ void insert_empty_program_dispatch_preamble_cmd(ProgramCommandSequence& program_
 void insert_stall_cmds(
     ProgramCommandSequence& program_command_sequence, SubDeviceId sub_device_id, IDevice* /*device*/) {
     // Initialize stall command sequences for this program.
-    auto dispatch_core_config = MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_config();
-    auto dispatch_core_type = dispatch_core_config.get_core_type();
     tt::tt_metal::DeviceCommandCalculator calculator;
     calculator.add_dispatch_wait_with_prefetch_stall();
     const uint32_t uncached_stall_cmd_sizeB = calculator.write_offset_bytes();
@@ -512,7 +509,7 @@ void insert_stall_cmds(
     program_command_sequence.stall_command_sequences[UncachedStallSequenceIdx].add_dispatch_wait_with_prefetch_stall(
         CQ_DISPATCH_CMD_WAIT_FLAG_BARRIER | CQ_DISPATCH_CMD_WAIT_FLAG_WAIT_STREAM,
         0,
-        DispatchMemMap::get(dispatch_core_type).get_dispatch_stream_index(*sub_device_id),
+        MetalContext::instance().dispatch_mem_map().get_dispatch_stream_index(*sub_device_id),
         0);
     // Empty wait command initialized here. Will get updated when program is enqueued.
     program_command_sequence.stall_command_sequences[CachedStallSequenceIdx] =
@@ -520,7 +517,7 @@ void insert_stall_cmds(
     program_command_sequence.stall_command_sequences[CachedStallSequenceIdx].add_dispatch_wait(
         CQ_DISPATCH_CMD_WAIT_FLAG_WAIT_STREAM,
         0,
-        DispatchMemMap::get(dispatch_core_type).get_dispatch_stream_index(*sub_device_id),
+        MetalContext::instance().dispatch_mem_map().get_dispatch_stream_index(*sub_device_id),
         0);
 }
 
@@ -1212,7 +1209,8 @@ public:
         const CommandConstants& constants,
         DeviceCommandCalculator& calculator) {
         const auto& hal = MetalContext::instance().hal();
-        const uint32_t max_length_per_sub_cmd = DispatchMemMap::get(constants.dispatch_core_type).scratch_db_size() / 2;
+        const uint32_t max_length_per_sub_cmd =
+            MetalContext::instance().dispatch_mem_map(constants.dispatch_core_type).scratch_db_size() / 2;
         const uint32_t max_paged_length_per_sub_cmd =
             max_length_per_sub_cmd / HostMemDeviceCommand::PROGRAM_PAGE_SIZE * HostMemDeviceCommand::PROGRAM_PAGE_SIZE;
         for (const auto& [cores, num_mcast_dests, kg_transfer_info] : program_transfer_info.kernel_bins) {
@@ -1759,14 +1757,17 @@ public:
         // Dispatch X/Y resolved when the program is enqueued
         run_program_go_signal.master_x = 0;
         run_program_go_signal.master_y = 0;
-        run_program_go_signal.dispatch_message_offset =
-            DispatchMemMap::get(constants.dispatch_core_type).get_dispatch_message_update_offset(sub_device_index);
+        run_program_go_signal.dispatch_message_offset = MetalContext::instance()
+                                                            .dispatch_mem_map(constants.dispatch_core_type)
+                                                            .get_dispatch_message_update_offset(sub_device_index);
         uint32_t write_offset_bytes = device_command_sequence.write_offset_bytes();
         // Num Workers Resolved when the program is enqueued
         device_command_sequence.add_dispatch_go_signal_mcast(
             0,
             *reinterpret_cast<uint32_t*>(&run_program_go_signal),
-            DispatchMemMap::get(constants.dispatch_core_type).get_dispatch_stream_index(sub_device_index),
+            MetalContext::instance()
+                .dispatch_mem_map(constants.dispatch_core_type)
+                .get_dispatch_stream_index(sub_device_index),
             num_noc_mcast_txns,
             num_noc_unicast_txns,
             noc_data_start_idx,
@@ -1784,7 +1785,8 @@ void assemble_device_commands(
     auto dispatch_core_config = MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_config();
     constants.dispatch_core_type = dispatch_core_config.get_core_type();
     constants.noc_index = k_dispatch_downstream_noc;
-    constants.max_prefetch_command_size = DispatchMemMap::get(constants.dispatch_core_type).max_prefetch_command_size();
+    constants.max_prefetch_command_size =
+        MetalContext::instance().dispatch_mem_map(constants.dispatch_core_type).max_prefetch_command_size();
     constants.packed_write_max_unicast_sub_cmds = get_packed_write_max_unicast_sub_cmds(device);
     BatchedTransfers batched_transfers =
         assemble_runtime_args_commands(program_command_sequence, program, device, constants);
@@ -1814,14 +1816,6 @@ void assemble_device_commands(
     program_binary_command_generator.size_commands(
         device, program, program_transfer_info, kernels_buffer, constants, calculator);
 
-    LaunchMessageGenerator launch_message_generator;
-    launch_message_generator.construct_commands(device, program, calculator, constants, sub_device_id);
-
-    GoSignalGenerator go_signal_generator;
-    go_signal_generator.size_commands(calculator, device, sub_device_id, program_transfer_info);
-
-    // Start assembling commands into the device_command_sequence.
-
     program_command_sequence.device_command_sequence = HostMemDeviceCommand(calculator.write_offset_bytes());
 
     auto& device_command_sequence = program_command_sequence.device_command_sequence;
@@ -1830,16 +1824,27 @@ void assemble_device_commands(
 
     semaphore_command_generator.assemble_unicast_commands(device_command_sequence, program, constants);
 
+    // Capture the size of the config buffer
     // All Previous Cmds Up to This Point Go Into the Kernel Config Buffer
     program_command_sequence.program_config_buffer_data_size_bytes = device_command_sequence.write_offset_bytes();
 
     program_binary_command_generator.assemble_commands(device_command_sequence);
 
-    launch_message_generator.assemble_commands(program_command_sequence, device_command_sequence, constants);
+    LaunchMessageGenerator launch_message_generator;
+    DeviceCommandCalculator launch_message_calculator;
+    launch_message_generator.construct_commands(device, program, launch_message_calculator, constants, sub_device_id);
+    program_command_sequence.launch_msg_command_sequence =
+        HostMemDeviceCommand(launch_message_calculator.write_offset_bytes());
+    launch_message_generator.assemble_commands(
+        program_command_sequence, program_command_sequence.launch_msg_command_sequence, constants);
 
+    GoSignalGenerator go_signal_generator;
+    DeviceCommandCalculator go_signal_calculator;
+    go_signal_generator.size_commands(go_signal_calculator, device, sub_device_id, program_transfer_info);
+    program_command_sequence.go_msg_command_sequence = HostMemDeviceCommand(go_signal_calculator.write_offset_bytes());
     go_signal_generator.assemble_commands(
         program_command_sequence,
-        device_command_sequence,
+        program_command_sequence.go_msg_command_sequence,
         constants,
         device,
         sub_device_id,
@@ -2054,8 +2059,9 @@ void update_program_dispatch_commands(
     run_program_go_signal.signal = RUN_MSG_GO;
     run_program_go_signal.master_x = (uint8_t)dispatch_core.x;
     run_program_go_signal.master_y = (uint8_t)dispatch_core.y;
-    run_program_go_signal.dispatch_message_offset =
-        DispatchMemMap::get(dispatch_core_type).get_dispatch_message_update_offset(*sub_device_id);
+    run_program_go_signal.dispatch_message_offset = MetalContext::instance()
+                                                        .dispatch_mem_map(dispatch_core_type)
+                                                        .get_dispatch_message_update_offset(*sub_device_id);
     cached_program_command_sequence.mcast_go_signal_cmd_ptr->go_signal =
         *reinterpret_cast<uint32_t*>(&run_program_go_signal);
     cached_program_command_sequence.mcast_go_signal_cmd_ptr->wait_count = expected_num_workers_completed;
@@ -2079,6 +2085,17 @@ void write_program_command_sequence(
     CoreType dispatch_core_type,
     bool stall_first,
     bool stall_before_program) {
+    // Generic function to write data to cq
+    auto write_data_to_cq = [&](void* data, uint32_t size_bytes) {
+        if (!size_bytes) return;
+        manager.issue_queue_reserve(size_bytes, command_queue_id);
+        const uint32_t write_ptr = manager.get_issue_queue_write_ptr(command_queue_id);
+        manager.cq_write(data, size_bytes, write_ptr);
+        manager.issue_queue_push_back(size_bytes, command_queue_id);
+        manager.fetch_queue_reserve_back(command_queue_id);
+        manager.fetch_queue_write(size_bytes, command_queue_id);
+    };
+
     uint32_t preamble_fetch_size_bytes = program_command_sequence.preamble_command_sequence.size_bytes();
     auto& curr_stall_seq_idx = program_command_sequence.current_stall_seq_idx;
     uint32_t stall_fetch_size_bytes =
@@ -2088,19 +2105,21 @@ void write_program_command_sequence(
 
     uint32_t runtime_args_fetch_size_bytes = program_command_sequence.runtime_args_fetch_size_bytes;
 
-    uint32_t program_fetch_size_bytes = program_command_sequence.device_command_sequence.size_bytes();
-
     uint32_t program_config_buffer_data_size_bytes = program_command_sequence.program_config_buffer_data_size_bytes;
+    uint8_t* program_config_buffer_data = (uint8_t*)program_command_sequence.device_command_sequence.data();
 
-    uint32_t program_rem_fetch_size_bytes = program_fetch_size_bytes - program_config_buffer_data_size_bytes;
+    uint32_t program_binary_size_bytes = program_command_sequence.device_command_sequence.size_bytes() -
+                                         program_command_sequence.program_config_buffer_data_size_bytes;
+    uint8_t* program_binary_data =
+        (uint8_t*)((uint64_t)program_config_buffer_data + program_config_buffer_data_size_bytes);
 
-    uint8_t* program_command_sequence_data = (uint8_t*)program_command_sequence.device_command_sequence.data();
+    uint32_t one_shot_fetch_size_bytes = stall_fetch_size_bytes + preamble_fetch_size_bytes +
+                                         runtime_args_fetch_size_bytes + program_config_buffer_data_size_bytes +
+                                         program_binary_size_bytes;
 
-    uint32_t total_fetch_size_bytes =
-        stall_fetch_size_bytes + preamble_fetch_size_bytes + runtime_args_fetch_size_bytes + program_fetch_size_bytes;
-
-    if (total_fetch_size_bytes <= DispatchMemMap::get(dispatch_core_type).max_prefetch_command_size()) {
-        manager.issue_queue_reserve(total_fetch_size_bytes, command_queue_id);
+    if (one_shot_fetch_size_bytes <=
+        MetalContext::instance().dispatch_mem_map(dispatch_core_type).max_prefetch_command_size()) {
+        manager.issue_queue_reserve(one_shot_fetch_size_bytes, command_queue_id);
         uint32_t write_ptr = manager.get_issue_queue_write_ptr(command_queue_id);
 
         manager.cq_write(
@@ -2121,110 +2140,66 @@ void write_program_command_sequence(
             write_ptr += cmds.size_bytes();
         }
 
-        if (stall_before_program) {
-            if (program_config_buffer_data_size_bytes > 0) {
-                manager.cq_write(program_command_sequence_data, program_config_buffer_data_size_bytes, write_ptr);
-                program_command_sequence_data += program_config_buffer_data_size_bytes;
-                write_ptr += program_config_buffer_data_size_bytes;
-            }
+        // Write kernel config data
+        if (program_config_buffer_data_size_bytes > 0) {
+            manager.cq_write(program_config_buffer_data, program_config_buffer_data_size_bytes, write_ptr);
+            write_ptr += program_config_buffer_data_size_bytes;
+        }
 
-            // Didn't stall before kernel config data, stall before remaining commands
+        // Didn't stall before kernel config data, stall before remaining commands
+        if (stall_before_program) {
             manager.cq_write(
                 program_command_sequence.stall_command_sequences[curr_stall_seq_idx].data(),
                 stall_fetch_size_bytes,
                 write_ptr);
             write_ptr += stall_fetch_size_bytes;
-
-            manager.cq_write(program_command_sequence_data, program_rem_fetch_size_bytes, write_ptr);
-        } else {
-            manager.cq_write(program_command_sequence_data, program_fetch_size_bytes, write_ptr);
         }
 
-        manager.issue_queue_push_back(total_fetch_size_bytes, command_queue_id);
+        if (program_binary_size_bytes > 0) {
+            manager.cq_write(program_binary_data, program_binary_size_bytes, write_ptr);
+            write_ptr += program_binary_size_bytes;
+        }
+
+        manager.issue_queue_push_back(one_shot_fetch_size_bytes, command_queue_id);
 
         // One fetch queue entry for entire program
         manager.fetch_queue_reserve_back(command_queue_id);
-        manager.fetch_queue_write(total_fetch_size_bytes, command_queue_id);
-
-        // TODO: We are making a lot of fetch queue entries here, we can pack multiple commands into one fetch q entry
+        manager.fetch_queue_write(one_shot_fetch_size_bytes, command_queue_id);
     } else {
-        manager.issue_queue_reserve(preamble_fetch_size_bytes, command_queue_id);
-        uint32_t write_ptr = manager.get_issue_queue_write_ptr(command_queue_id);
-        manager.cq_write(
-            program_command_sequence.preamble_command_sequence.data(), preamble_fetch_size_bytes, write_ptr);
-        manager.issue_queue_push_back(preamble_fetch_size_bytes, command_queue_id);
-        // One fetch queue entry for just the wait and stall, very inefficient
-        manager.fetch_queue_reserve_back(command_queue_id);
-        manager.fetch_queue_write(preamble_fetch_size_bytes, command_queue_id);
+        // Not enough space to do it in one prefetch entry. write multiple times.
+        write_data_to_cq(program_command_sequence.preamble_command_sequence.data(), preamble_fetch_size_bytes);
 
         if (stall_first) {
             // Must stall before writing kernel config data
-            manager.issue_queue_reserve(stall_fetch_size_bytes, command_queue_id);
-            write_ptr = manager.get_issue_queue_write_ptr(command_queue_id);
-            manager.cq_write(
-                program_command_sequence.stall_command_sequences[curr_stall_seq_idx].data(),
-                stall_fetch_size_bytes,
-                write_ptr);
-            manager.issue_queue_push_back(stall_fetch_size_bytes, command_queue_id);
-            // One fetch queue entry for just the wait and stall, very inefficient
-            manager.fetch_queue_reserve_back(command_queue_id);
-            manager.fetch_queue_write(stall_fetch_size_bytes, command_queue_id);
+            write_data_to_cq(program_command_sequence.stall_command_sequences[curr_stall_seq_idx].data(), stall_fetch_size_bytes);
         }
 
         // TODO: We can pack multiple RT args into one fetch q entry
         for (const auto& cmds : program_command_sequence.runtime_args_command_sequences) {
-            uint32_t fetch_size_bytes = cmds.size_bytes();
-            manager.issue_queue_reserve(fetch_size_bytes, command_queue_id);
-            write_ptr = manager.get_issue_queue_write_ptr(command_queue_id);
-            manager.cq_write(cmds.data(), fetch_size_bytes, write_ptr);
-            manager.issue_queue_push_back(fetch_size_bytes, command_queue_id);
-            // One fetch queue entry for each runtime args write location, e.g. BRISC/NCRISC/TRISC/ERISC
-            manager.fetch_queue_reserve_back(command_queue_id);
-            manager.fetch_queue_write(fetch_size_bytes, command_queue_id);
+            write_data_to_cq(cmds.data(), cmds.size_bytes());
         }
 
         // Insert a stall between program data that goes on the ring buffer and the rest of the data
-        // Otherwise write all data in 1 prefetch entry
+        write_data_to_cq(program_config_buffer_data, program_config_buffer_data_size_bytes);
+
         if (stall_before_program) {
-            if (program_config_buffer_data_size_bytes > 0) {
-                manager.issue_queue_reserve(program_config_buffer_data_size_bytes, command_queue_id);
-                write_ptr = manager.get_issue_queue_write_ptr(command_queue_id);
-                manager.cq_write(program_command_sequence_data, program_config_buffer_data_size_bytes, write_ptr);
-                manager.issue_queue_push_back(program_config_buffer_data_size_bytes, command_queue_id);
-                manager.fetch_queue_reserve_back(command_queue_id);
-                manager.fetch_queue_write(program_config_buffer_data_size_bytes, command_queue_id);
-                program_command_sequence_data += program_config_buffer_data_size_bytes;
-            }
-
             // Didn't stall before kernel config data, stall before remaining commands
-            manager.issue_queue_reserve(stall_fetch_size_bytes, command_queue_id);
-            write_ptr = manager.get_issue_queue_write_ptr(command_queue_id);
-            manager.cq_write(
-                program_command_sequence.stall_command_sequences[curr_stall_seq_idx].data(),
-                stall_fetch_size_bytes,
-                write_ptr);
-            manager.issue_queue_push_back(stall_fetch_size_bytes, command_queue_id);
-            // One fetch queue entry for just the wait and stall, very inefficient
-            manager.fetch_queue_reserve_back(command_queue_id);
-            manager.fetch_queue_write(stall_fetch_size_bytes, command_queue_id);
-
-            manager.issue_queue_reserve(program_rem_fetch_size_bytes, command_queue_id);
-            write_ptr = manager.get_issue_queue_write_ptr(command_queue_id);
-            manager.cq_write(program_command_sequence_data, program_rem_fetch_size_bytes, write_ptr);
-            manager.issue_queue_push_back(program_rem_fetch_size_bytes, command_queue_id);
-            // One fetch queue entry for rest of program commands
-            manager.fetch_queue_reserve_back(command_queue_id);
-            manager.fetch_queue_write(program_rem_fetch_size_bytes, command_queue_id);
-        } else {
-            manager.issue_queue_reserve(program_fetch_size_bytes, command_queue_id);
-            write_ptr = manager.get_issue_queue_write_ptr(command_queue_id);
-            manager.cq_write(program_command_sequence_data, program_fetch_size_bytes, write_ptr);
-            manager.issue_queue_push_back(program_fetch_size_bytes, command_queue_id);
-            // One fetch queue entry for rest of program commands
-            manager.fetch_queue_reserve_back(command_queue_id);
-            manager.fetch_queue_write(program_fetch_size_bytes, command_queue_id);
+            write_data_to_cq(
+                program_command_sequence.stall_command_sequences[curr_stall_seq_idx].data(), stall_fetch_size_bytes);
         }
+
+        write_data_to_cq(program_binary_data, program_binary_size_bytes);
     }
+
+    // Write the launch message
+    uint32_t launch_msg_fetch_size_bytes = program_command_sequence.launch_msg_command_sequence.size_bytes();
+    uint8_t* launch_msg_command_sequence_data = (uint8_t*)program_command_sequence.launch_msg_command_sequence.data();
+    write_data_to_cq(launch_msg_command_sequence_data, launch_msg_fetch_size_bytes);
+
+    // Write the go signal
+    uint32_t go_msg_fetch_size_bytes = program_command_sequence.go_msg_command_sequence.size_bytes();
+    uint8_t* go_msg_command_sequence_data = (uint8_t*)program_command_sequence.go_msg_command_sequence.data();
+    write_data_to_cq(go_msg_command_sequence_data, go_msg_fetch_size_bytes);
 }
 
 KernelHandle get_device_local_kernel_handle(KernelHandle kernel_handle) {
@@ -2296,8 +2271,6 @@ void reset_worker_dispatch_state_on_device(
     void* cmd_region = manager.issue_queue_reserve(cmd_sequence_sizeB, cq_id);
     HugepageDeviceCommand command_sequence(cmd_region, cmd_sequence_sizeB);
     DispatcherSelect dispatcher_for_go_signal = DispatcherSelect::DISPATCH_MASTER;
-    const auto& dispatch_core_config = MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_config();
-    CoreType dispatch_core_type = dispatch_core_config.get_core_type();
     if (reset_launch_msg_state) {
         if (MetalContext::instance().get_dispatch_query_manager().dispatch_s_enabled()) {
             uint16_t index_bitmask = 0;
@@ -2313,13 +2286,13 @@ void reset_worker_dispatch_state_on_device(
         reset_launch_message_read_ptr_go_signal.master_y = (uint8_t)dispatch_core.y;
         for (uint32_t i = 0; i < num_sub_devices; ++i) {
             reset_launch_message_read_ptr_go_signal.dispatch_message_offset =
-                DispatchMemMap::get(dispatch_core_type).get_dispatch_message_update_offset(i);
+                MetalContext::instance().dispatch_mem_map().get_dispatch_message_update_offset(i);
             // Wait to ensure that all kernels have completed. Then send the reset_rd_ptr go_signal.
             SubDeviceId sub_device_id(static_cast<uint8_t>(i));
             command_sequence.add_dispatch_go_signal_mcast(
                 expected_num_workers_completed[i],
                 *reinterpret_cast<uint32_t*>(&reset_launch_message_read_ptr_go_signal),
-                DispatchMemMap::get(dispatch_core_type).get_dispatch_stream_index(i),
+                MetalContext::instance().dispatch_mem_map().get_dispatch_stream_index(i),
                 device->num_noc_mcast_txns(sub_device_id),
                 device->num_noc_unicast_txns(sub_device_id),
                 device->noc_data_start_index(sub_device_id),
@@ -2340,14 +2313,14 @@ void reset_worker_dispatch_state_on_device(
             command_sequence.add_dispatch_wait(
                 CQ_DISPATCH_CMD_WAIT_FLAG_WAIT_STREAM | CQ_DISPATCH_CMD_WAIT_FLAG_CLEAR_STREAM,
                 0,
-                DispatchMemMap::get(dispatch_core_type).get_dispatch_stream_index(i),
+                MetalContext::instance().dispatch_mem_map().get_dispatch_stream_index(i),
                 expected_num_workers,
                 1);
         }
         command_sequence.add_dispatch_wait(
             CQ_DISPATCH_CMD_WAIT_FLAG_WAIT_STREAM | CQ_DISPATCH_CMD_WAIT_FLAG_CLEAR_STREAM,
             0,
-            DispatchMemMap::get(dispatch_core_type).get_dispatch_stream_index(i),
+            MetalContext::instance().dispatch_mem_map().get_dispatch_stream_index(i),
             expected_num_workers);
     }
     manager.issue_queue_push_back(cmd_sequence_sizeB, cq_id);

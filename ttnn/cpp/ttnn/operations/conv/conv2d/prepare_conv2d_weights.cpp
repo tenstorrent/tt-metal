@@ -42,8 +42,11 @@ Tensor convert_tensor(const Tensor& input_tensor, compute_& compute) {
             input_tensor.get_storage());
     };
 
-    return ttnn::distributed::is_multi_device_tensor(input_tensor) ? transform(input_tensor, convert_tensor)
-                                                                   : convert_tensor(input_tensor);
+    TT_FATAL(!is_device_tensor(input_tensor), "convert_tensor only supports host tensors");
+
+    // TODO: #15840 - Treat multi-device host vs owned/borrowed tensors uniformly.
+    return ttnn::distributed::is_multi_device_host_tensor(input_tensor) ? transform(input_tensor, convert_tensor)
+                                                                        : convert_tensor(input_tensor);
 }
 
 template <typename Func, typename... Args>
@@ -414,7 +417,6 @@ static Tensor conv_depthwise_weight_bcast_helper(
                     }
                 }
             }
-            log_info("Weights Shape = {}", output_weight_shape);
             auto output_tensor = Tensor(
                 std::move(tt::tt_metal::OwnedStorage{std::move(output_buffer)}),
                 output_weight_shape,

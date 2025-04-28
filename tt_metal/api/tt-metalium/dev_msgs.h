@@ -31,6 +31,21 @@
 #else
 #define GET_MAILBOX_ADDRESS_DEV(x) (&(((mailboxes_t tt_l1_ptr*)MEM_MAILBOX_BASE)->x))
 #endif
+// TODO: when device specific headers specify number of processors
+// (and hal abstracts them on host), get these from there (same as above for dprint)
+#if defined(COMPILE_FOR_ERISC) || defined(COMPILE_FOR_IDLE_ERISC)
+// TODO: Review if this should  be 2 for BH (the number of eth processors)
+// Hardcode to 1 to keep size as before
+#ifdef ARCH_BLACKHOLE
+static constexpr uint32_t PROFILER_RISC_COUNT = 1;
+#else
+static constexpr uint32_t PROFILER_RISC_COUNT = static_cast<uint32_t>(EthProcessorTypes::COUNT);
+#endif
+#else
+static constexpr uint32_t PROFILER_RISC_COUNT = static_cast<uint32_t>(TensixProcessorTypes::COUNT);
+#endif
+#else
+static constexpr uint32_t PROFILER_RISC_COUNT = 5;
 #endif
 
 // Messages for host to tell brisc to go
@@ -119,7 +134,7 @@ struct kernel_config_msg_t {
     rta_offset_t rta_offset[DISPATCH_CLASS_MAX];
     volatile uint32_t kernel_text_offset[NUM_PROCESSORS_PER_CORE_TYPE];
 
-    volatile uint16_t host_assigned_id;
+    volatile uint8_t pad1[2];
 
     volatile uint8_t mode;  // dispatch mode host/dev
     volatile uint8_t brisc_noc_id;
@@ -130,7 +145,14 @@ struct kernel_config_msg_t {
     volatile uint8_t enables;
     volatile uint8_t sub_device_origin_x;  // Logical X coordinate of the sub device origin
     volatile uint8_t sub_device_origin_y;  // Logical Y coordinate of the sub device origin
-    volatile uint8_t pad2[6];
+    // 32 bit program/launch_msg_id used by the performance profiler
+    // [9:0]: physical device id
+    // [30:10]: program id
+    // [31:31]: 0 (specifies that this id corresponds to a program running on device)
+    volatile uint32_t host_assigned_id;
+
+    volatile uint8_t pad2[2];
+
     volatile uint8_t preload;  // Must be at end, so it's only written when all other data is written.
 } __attribute__((packed));
 
@@ -199,7 +221,8 @@ enum debug_sanitize_noc_return_code_enum {
     DebugSanitizeNocMulticastInvalidRange = 8,
     DebugSanitizeNocAlignment = 9,
     DebugSanitizeNocMixedVirtualandPhysical = 10,
-    DebugSanitizeNocAddrMailbox = 11,
+    DebugSanitizeInlineWriteDramUnsupported = 11,
+    DebugSanitizeNocAddrMailbox = 12,
 };
 
 struct debug_assert_msg_t {
@@ -214,7 +237,7 @@ enum debug_assert_tripped_enum {
 };
 
 // XXXX TODO(PGK): why why why do we not have this standardized
-typedef enum debug_sanitize_which_riscv {
+enum riscv_id_t {
     DebugBrisc = 0,
     DebugNCrisc = 1,
     DebugTrisc0 = 2,
@@ -224,14 +247,9 @@ typedef enum debug_sanitize_which_riscv {
     DebugIErisc = 6,
     DebugSlaveIErisc = 7,
     DebugNumUniqueRiscs
-} riscv_id_t;
+};
 
-typedef enum debug_transaction_type {
-    TransactionRead = 0,
-    TransactionWrite = 1,
-    TransactionAtomic = 2,
-    TransactionNumTypes
-} debug_transaction_type_t;
+enum debug_transaction_type_t { TransactionRead = 0, TransactionWrite = 1, TransactionAtomic = 2, TransactionNumTypes };
 
 struct debug_pause_msg_t {
     volatile uint8_t flags[DebugNumUniqueRiscs];
@@ -279,18 +297,6 @@ struct dprint_buf_msg_t {
 
 // NOC aligment max from BH
 static constexpr uint32_t TT_ARCH_MAX_NOC_WRITE_ALIGNMENT = 16;
-
-// TODO: when device specific headers specify number of processors
-// (and hal abstracts them on host), get these from there (same as above for dprint)
-#if defined(COMPILE_FOR_ERISC) || defined(COMPILE_FOR_IDLE_ERISC)
-#ifdef ARCH_BLACKHOLE
-static constexpr uint32_t PROFILER_RISC_COUNT = 1;
-#else
-static constexpr uint32_t PROFILER_RISC_COUNT = 1;
-#endif
-#else
-static constexpr uint32_t PROFILER_RISC_COUNT = 5;
-#endif
 
 static constexpr uint32_t PROFILER_NOC_ALIGNMENT_PAD_COUNT = 2;
 
@@ -351,9 +357,10 @@ struct mailboxes_t {
     volatile struct go_msg_t go_message;
     struct watcher_msg_t watcher;
     struct dprint_buf_msg_t dprint_buf;
+    struct core_info_msg_t core_info;
+    // Keep profiler last since it's size is dynamic per core type
     uint32_t pads_2[PROFILER_NOC_ALIGNMENT_PAD_COUNT];
     struct profiler_msg_t profiler;
-    struct core_info_msg_t core_info;
 };
 
 // Watcher struct needs to be 32b-divisible, since we need to write it from host using write_hex_vec_to_core().

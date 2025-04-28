@@ -13,8 +13,8 @@
 #include <sub_device_manager_tracker.hpp>
 #include <sub_device_types.hpp>
 #include <trace.hpp>
-#include <tt-metalium/dispatch_mem_map.hpp>
 #include <tt-metalium/program_cache.hpp>
+#include <tt-metalium/hal.hpp>
 #include <tt_align.hpp>
 #include <tt_metal.hpp>
 #include <tt_stl/span.hpp>
@@ -133,6 +133,10 @@ bool Device::is_inactive_ethernet_core(CoreCoord logical_core) const {
     auto inactive_ethernet_cores =
         tt::tt_metal::MetalContext::instance().get_cluster().get_inactive_ethernet_cores(this->id_);
     return inactive_ethernet_cores.find(logical_core) != inactive_ethernet_cores.end();
+}
+
+uint32_t Device::num_virtual_eth_cores(SubDeviceId sub_device_id) {
+    return this->num_worker_cores(HalProgrammableCoreType::ACTIVE_ETH, sub_device_id);
 }
 
 std::tuple<chip_id_t, CoreCoord> Device::get_connected_ethernet_core(CoreCoord eth_core) const {
@@ -959,28 +963,16 @@ void Device::clear_l1_state() {
         }
     }
 
-    // These L1 ranges are restricted becase UMD base routing FW uses L1 below FIRMWARE_BASE and
-    // between TILE_HEADER_BUFFER_BASE to COMMAND_Q_BASE
-    // Clear erisc sync info
-    const auto& hal = MetalContext::instance().hal();
+    // Clear erisc unreserved L1
     for (const auto& eth_core : this->get_active_ethernet_cores()) {
-        static const uint32_t max_l1_loading_size =
-            hal.get_dev_size(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::UNRESERVED);
-
-        static uint32_t zero_vec_size = max_l1_loading_size;
-        auto zero_vec_addr = HalL1MemAddrType::UNRESERVED;
-        if (hal.get_eth_fw_is_cooperative()) {
-            zero_vec_size -=
-                hal.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::TILE_HEADER_BUFFER);
-            zero_vec_addr = HalL1MemAddrType::TILE_HEADER_BUFFER;
-        }
+        static uint32_t zero_vec_size = tt::tt_metal::hal::get_erisc_l1_unreserved_size();
+        auto zero_vec_addr = tt::tt_metal::hal::get_erisc_l1_unreserved_base();
 
         static std::vector<uint32_t> zero_vec(zero_vec_size / sizeof(uint32_t), 0);
 
         CoreCoord virtual_core = this->ethernet_core_from_logical_core(eth_core);
 
-        llrt::write_hex_vec_to_core(
-            this->id(), virtual_core, zero_vec, hal.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, zero_vec_addr));
+        llrt::write_hex_vec_to_core(this->id(), virtual_core, zero_vec, zero_vec_addr);
     }
     // TODO: clear idle eriscs as well
     tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(this->id());
@@ -1035,19 +1027,16 @@ void Device::configure_command_queue_programs() {
              tt::tt_metal::MetalContext::instance().get_cluster().get_devices_controlled_by_mmio_device(device_id)) {
             uint16_t channel = tt::tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(
                 serviced_device_id);
-            CoreType dispatch_core_type = MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_type();
-            uint32_t host_issue_q_rd_ptr = DispatchMemMap::get(dispatch_core_type)
-                                               .get_host_command_queue_addr(CommandQueueHostAddrType::ISSUE_Q_RD);
-            uint32_t host_issue_q_wr_ptr = DispatchMemMap::get(dispatch_core_type)
-                                               .get_host_command_queue_addr(CommandQueueHostAddrType::ISSUE_Q_WR);
-            uint32_t host_completion_q_wr_ptr =
-                DispatchMemMap::get(dispatch_core_type)
-                    .get_host_command_queue_addr(CommandQueueHostAddrType::COMPLETION_Q_WR);
-            uint32_t host_completion_q_rd_ptr =
-                DispatchMemMap::get(dispatch_core_type)
-                    .get_host_command_queue_addr(CommandQueueHostAddrType::COMPLETION_Q_RD);
-            uint32_t cq_start = DispatchMemMap::get(dispatch_core_type)
-                                    .get_host_command_queue_addr(CommandQueueHostAddrType::UNRESERVED);
+            uint32_t host_issue_q_rd_ptr = MetalContext::instance().dispatch_mem_map().get_host_command_queue_addr(
+                CommandQueueHostAddrType::ISSUE_Q_RD);
+            uint32_t host_issue_q_wr_ptr = MetalContext::instance().dispatch_mem_map().get_host_command_queue_addr(
+                CommandQueueHostAddrType::ISSUE_Q_WR);
+            uint32_t host_completion_q_wr_ptr = MetalContext::instance().dispatch_mem_map().get_host_command_queue_addr(
+                CommandQueueHostAddrType::COMPLETION_Q_WR);
+            uint32_t host_completion_q_rd_ptr = MetalContext::instance().dispatch_mem_map().get_host_command_queue_addr(
+                CommandQueueHostAddrType::COMPLETION_Q_RD);
+            uint32_t cq_start = MetalContext::instance().dispatch_mem_map().get_host_command_queue_addr(
+                CommandQueueHostAddrType::UNRESERVED);
             pointers.resize(cq_start/sizeof(uint32_t));
             for (uint8_t cq_id = 0; cq_id < num_hw_cqs; cq_id++) {
                 // Reset the host manager's pointer for this command queue
@@ -1478,39 +1467,6 @@ CommandQueue& Device::command_queue(size_t cq_id) {
     return *command_queues_[cq_id];
 }
 
-void Device::synchronize() {
-    if (not this->initialized_) {
-        log_warning("Attempting to synchronize Device {} which is not initialized. Ignoring...", this->id_);
-        return;
-    }
-    this->work_executor_->synchronize();
-}
-
-void Device::set_worker_mode(const WorkExecutorMode& mode) { this->work_executor_->set_worker_mode(mode); }
-
-void Device::enable_async(bool enable) {
-    if (enable) {
-        tt::log_warning("Async mode is always disabled for a single device, ignoring enable_async call");
-    } else {
-        force_enable_async(false);
-    }
-}
-
-void Device::force_enable_async(bool enable) {
-    auto mode = enable ? WorkExecutorMode::ASYNCHRONOUS : WorkExecutorMode::SYNCHRONOUS;
-    this->set_worker_mode(mode);
-    // If a worker thread is spawned for a device, register/track it in a runtime structure.
-    // If a worker thread is destroyed, remove it from the structure.
-    // This is required for checking if a call is made from an application thread or a worker thread.
-    // See InWorkerThread().
-    if (enable) {
-        tt::DevicePool::instance().register_worker_thread_for_device(
-            this, this->work_executor_->get_worker_thread_id());
-    } else {
-        tt::DevicePool::instance().unregister_worker_thread_for_device(this);
-    }
-}
-
 bool Device::using_slow_dispatch() const {
     return !using_fast_dispatch();
 }
@@ -1641,21 +1597,16 @@ std::shared_ptr<TraceBuffer> Device::get_trace(uint32_t tid) {
 
 void Device::enable_program_cache() {
     log_info(tt::LogMetal, "Enabling program cache on device {}", this->id_);
-    this->synchronize();
     program_cache_.enable();
 }
 void Device::disable_and_clear_program_cache() {
     log_info(tt::LogMetal, "Disabling and clearing program cache on device {}", this->id_);
-    this->synchronize();
     if (this->program_cache_.is_enabled()) {
         program_cache_.disable();
     }
     program_cache_.clear();
 }
-std::size_t Device::num_program_cache_entries() {
-    this->synchronize();
-    return program_cache_.num_entries();
-}
+std::size_t Device::num_program_cache_entries() { return program_cache_.num_entries(); }
 
 void Device::mark_allocations_unsafe() { this->allocator()->mark_allocations_unsafe(); }
 
@@ -1856,8 +1807,13 @@ std::vector<std::pair<transfer_info_cores, uint32_t>> Device::extract_dst_noc_mu
     return dst_noc_multicast_info;
 }
 
-tt::WorkExecutorMode Device::get_worker_mode() { return work_executor_->get_worker_mode(); }
-bool Device::is_worker_queue_empty() const { return work_executor_->worker_queue.empty(); }
+std::shared_ptr<distributed::MeshDevice> Device::get_mesh_device() { return mesh_device.lock(); }
+
+void Device::set_ethernet_core_count_on_dispatcher(uint32_t num_ethernet_cores) {
+    ethernet_core_count_on_dispatcher_ = num_ethernet_cores;
+}
+
+uint32_t Device::get_ethernet_core_count_on_dispatcher() const { return ethernet_core_count_on_dispatcher_; }
 
 }  // namespace tt_metal
 

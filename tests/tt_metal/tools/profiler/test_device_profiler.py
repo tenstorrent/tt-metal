@@ -209,6 +209,7 @@ def test_full_buffer():
         assert stats[statName]["stats"]["Count"] in REF_COUNT_DICT[ENV_VAR_ARCH_NAME], "Wrong Marker Repeat count"
 
 
+@skip_for_blackhole()
 def test_dispatch_cores():
     OP_COUNT = 1
     RISC_COUNT = 1
