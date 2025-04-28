@@ -510,7 +510,8 @@ Convolution
    ttnn.conv2d
    ttnn.experimental.conv3d
    ttnn.conv_transpose2d
-.. removed ttnn.prepare_conv_weights and ttnn.prepare_conv_bias until #21040
+   ttnn.prepare_conv_weights
+   ttnn.prepare_conv_bias
 
 .. autosummary::
    :toctree: api

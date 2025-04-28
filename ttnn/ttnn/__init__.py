@@ -346,10 +346,10 @@ from ttnn.operations.conv2d import (
     Conv2dSliceConfig,
     Conv2dSliceHeight,
     Conv2dSliceWidth,
-)
-from ttnn._ttnn.operations.conv import (
     prepare_conv_weights,
     prepare_conv_bias,
+)
+from ttnn._ttnn.operations.conv import (
     convert_conv_weight_tensor_to_tiled_layout,
     convert_conv_weight_tensor_to_special_padding_tiled_layout,
     convert_conv_weight_tensor_to_grouped_layout,
