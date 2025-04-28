@@ -38,10 +38,9 @@ namespace tensor_impl {
 // ======================================================================================
 //                        Data type converters, packers, and unpackers
 // ======================================================================================
-// TODO(arakhmati): Should cast_vec be a generator?
 
-template <typename OutputDataType, template <typename> typename BufferType, typename InputDataType>
-std::vector<OutputDataType> cast_vec(const BufferType<InputDataType>& data_to_convert) {
+template <typename OutputDataType, typename InputDataType>
+std::vector<OutputDataType> cast_vec(tt::stl::Span<const InputDataType> data_to_convert) {
     std::vector<OutputDataType> converted_data;
     for (auto datum : data_to_convert) {
         if constexpr (std::is_same_v<OutputDataType, float> and std::is_same_v<InputDataType, bfloat16>) {
@@ -58,34 +57,34 @@ std::vector<OutputDataType> cast_vec(const BufferType<InputDataType>& data_to_co
 uint32_t element_size_bytes(DataType dtype);
 
 template <typename T>
-constexpr inline size_t packed_buffer_size_bytes(size_t volume_unpacked_data) {
+constexpr size_t packed_buffer_size_bytes(size_t volume_unpacked_data) {
     auto num_type_in_u32 = sizeof(uint32_t) / sizeof(T);
     return (volume_unpacked_data / num_type_in_u32) * sizeof(uint32_t);
 }
 
 // Specialization for float because it gets converted to bfloat16 before being packed
 template <>
-constexpr inline size_t packed_buffer_size_bytes<float>(size_t volume_unpacked_data) {
+constexpr size_t packed_buffer_size_bytes<float>(size_t volume_unpacked_data) {
     auto num_type_in_u32 = sizeof(uint32_t) / sizeof(float);
     return (volume_unpacked_data / num_type_in_u32) * sizeof(uint32_t);
 }
 
 template <>
-constexpr inline size_t packed_buffer_size_bytes<bfloat8_b>(size_t volume_unpacked_data) {
+constexpr size_t packed_buffer_size_bytes<bfloat8_b>(size_t volume_unpacked_data) {
     return packed_buffer_size_bytes<uint32_t>(volume_unpacked_data);
 }
 
 template <>
-constexpr inline size_t packed_buffer_size_bytes<bfloat4_b>(size_t volume_unpacked_data) {
+constexpr size_t packed_buffer_size_bytes<bfloat4_b>(size_t volume_unpacked_data) {
     return packed_buffer_size_bytes<uint32_t>(volume_unpacked_data);
 }
 
 // ======================================================================================
 //                                  Layout converters
 // ======================================================================================
-template <typename T, template <typename...> typename BufferType>
+template <typename T>
 inline std::vector<T> convert_layout_row_major_to_tile(
-    const Shape2D& shape, const Tile& tile, const BufferType<T>& data_to_convert) {
+    const Shape2D& shape, const Tile& tile, tt::stl::Span<const T> data_to_convert) {
     if (shape.width() * shape.height() == 0) {
         return std::vector<T>();
     }
@@ -103,7 +102,7 @@ inline std::vector<T> convert_layout_row_major_to_tile(
     auto transpose_of_faces = tile.get_transpose_of_faces();
 
     return convert_layout(
-        tt::stl::MakeConstSpan(data_to_convert),
+        data_to_convert,
         shape,
         TensorLayoutType::LIN_ROW_MAJOR,
         TensorLayoutType::TILED_NFACES,
@@ -113,16 +112,16 @@ inline std::vector<T> convert_layout_row_major_to_tile(
         transpose_of_faces);
 }
 
-template <typename T, template <typename...> typename BufferType>
+template <typename T>
 inline std::vector<T> convert_layout_tile_to_row_major(
-    const Shape2D& shape, const Tile& tile, const BufferType<T>& data_to_convert) {
+    const Shape2D& shape, const Tile& tile, tt::stl::Span<const T> data_to_convert) {
     auto tile_shape = tile.get_tile_shape();
     auto face_shape = tile.get_face_shape();
     auto transpose_within_face = tile.get_transpose_within_face();
     auto transpose_of_faces = tile.get_transpose_of_faces();
 
     return convert_layout(
-        tt::stl::MakeConstSpan(data_to_convert),
+        data_to_convert,
         shape,
         TensorLayoutType::TILED_NFACES,
         TensorLayoutType::LIN_ROW_MAJOR,
