@@ -21,6 +21,9 @@ void kernel_main() {
     const uint32_t Wt = get_arg_val<uint32_t>(11);
     const uint32_t cND = get_arg_val<uint32_t>(12);  // collapsed dims > 4
     const uint32_t src_addr_b = get_arg_val<uint32_t>(13);
+    const uint32_t nD_stride_b = get_arg_val<uint32_t>(14);
+    const uint32_t n_stride_b = get_arg_val<uint32_t>(15);
+    const uint32_t c_stride_b = get_arg_val<uint32_t>(16);
 
     constexpr auto cb_id_src = tt::CBIndex::c_0;
     constexpr auto cb_id_src_b = tt::CBIndex::c_1;
@@ -78,11 +81,17 @@ void kernel_main() {
     uint32_t next_batch_shift = n_stride - c_stride * C;
     uint32_t next_depth_shift = nD_stride - (n_stride * N);
 
+    uint32_t tile_offset_b = start_d * nD_stride_b + start_n * n_stride_b + start_c * c_stride_b + start_th * Wt;
+    uint32_t next_channel_shift_b = c_stride_b - HtWt;
+    uint32_t next_batch_shift_b = n_stride_b - c_stride_b * C;
+    uint32_t next_depth_shift_b = nD_stride_b - (n_stride_b * N);
+
     uint32_t num_tiles_read = 0;
     for (uint32_t nd = start_d; nd < cND && num_tiles_read < dst_num_tiles; ++nd, start_n = 0) {
         for (uint32_t n = start_n; n < N && num_tiles_read < dst_num_tiles; ++n, start_c = 0) {
             for (uint32_t c = start_c; c < C && num_tiles_read < dst_num_tiles; ++c, start_th = 0) {
-                for (uint32_t th = start_th; th < Ht && num_tiles_read < dst_num_tiles; ++th, tile_offset += Wt) {
+                for (uint32_t th = start_th; th < Ht && num_tiles_read < dst_num_tiles;
+                     ++th, tile_offset += Wt, tile_offset_b += Wt) {
                     for (uint32_t tw = start_tw; tw < end_tw && num_tiles_read < dst_num_tiles;
                          ++tw, ++num_tiles_read) {
 #if !SRC_SHARDED
@@ -94,7 +103,7 @@ void kernel_main() {
                         // read a tile from src_b
                         cb_reserve_back(cb_id_src_b, onetile);
                         uint32_t l1_write_addr_b = get_write_ptr(cb_id_src_b);
-                        noc_async_read_tile(tile_offset + tw, src_b, l1_write_addr_b);
+                        noc_async_read_tile(tile_offset_b + tw, src_b, l1_write_addr_b);
 #endif
 #if !SRC_SHARDED || !SRC_SHARDED_B
                         noc_async_read_barrier();
@@ -112,10 +121,13 @@ void kernel_main() {
                     }
                 }
                 tile_offset += next_channel_shift;
+                tile_offset_b += next_channel_shift_b;
             }
             tile_offset += next_batch_shift;
+            tile_offset_b += next_batch_shift_b;
         }
         tile_offset += next_depth_shift;
+        tile_offset_b += next_depth_shift_b;
     }
 #endif
 }
