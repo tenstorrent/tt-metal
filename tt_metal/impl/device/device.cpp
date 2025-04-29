@@ -1712,10 +1712,8 @@ uint8_t Device::num_noc_unicast_txns(SubDeviceId sub_device_id) const {
     return sub_device_manager_tracker_->get_active_sub_device_manager()->num_noc_unicast_txns(sub_device_id);
 }
 
-uint8_t Device::noc_data_start_index(SubDeviceId sub_device_id, bool mcast_data, bool unicast_data) const {
-    if (mcast_data) {
-        return sub_device_manager_tracker_->get_active_sub_device_manager()->noc_mcast_data_start_index(sub_device_id);
-    } else if (unicast_data) {
+uint8_t Device::noc_data_start_index(SubDeviceId sub_device_id, bool unicast_data) const {
+    if (unicast_data) {
         return sub_device_manager_tracker_->get_active_sub_device_manager()->noc_unicast_data_start_index(
             sub_device_id);
     } else {

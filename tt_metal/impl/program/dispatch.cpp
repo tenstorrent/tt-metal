@@ -1583,8 +1583,7 @@ public:
         const ProgramTransferInfo& program_transfer_info,
         bool has_multicast_launch_cmds,
         bool has_unicast_launch_cmds) {
-        const auto& noc_data_start_idx =
-            device->noc_data_start_index(sub_device_id, has_multicast_launch_cmds, has_unicast_launch_cmds);
+        const auto& noc_data_start_idx = device->noc_data_start_index(sub_device_id, has_unicast_launch_cmds);
         const auto& num_noc_unicast_txns = has_unicast_launch_cmds ? device->num_noc_unicast_txns(sub_device_id) : 0;
         DispatcherSelect dispatcher_for_go_signal = DispatcherSelect::DISPATCH_MASTER;
         auto sub_device_index = *sub_device_id;
@@ -2192,7 +2191,7 @@ void set_go_signal_noc_data_on_dispatch(
 
 static_assert(
     DispatchSettings::DISPATCH_MESSAGE_ENTRIES + 1 == go_message_num_entries,
-    "Max number of dispatch message entriies + 1 must be equal to the number of go message entries");
+    "Max number of dispatch message entries + 1 must be equal to the number of go message entries");
 
 void set_core_go_message_mapping_on_device(
     IDevice* device,
