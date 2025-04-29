@@ -54,27 +54,27 @@ void print_tensor_stats_(const tt::tt_metal::Tensor& tensor, const std::string& 
 }
 
 // copypaste from deprecated tensor pybinds ttnn
-tt::tt_metal::OwnedBuffer create_owned_buffer_from_vector_of_floats(
+tt::tt_metal::HostBuffer create_owned_buffer_from_vector_of_floats(
     const std::vector<float>& data, ttnn::DataType data_type) {
     switch (data_type) {
         case ttnn::DataType::BFLOAT8_B: {
             auto uint32_vector = pack_fp32_vec_as_bfp8_tiles(data, /*row_major_input=*/false, /*is_exp_a=*/false);
-            return tt::tt_metal::owned_buffer::create<uint32_t>(std::move(uint32_vector));
+            return tt::tt_metal::host_buffer::create<uint32_t>(std::move(uint32_vector));
         }
         case ttnn::DataType::BFLOAT4_B: {
             auto uint32_vector = pack_fp32_vec_as_bfp4_tiles(data, /*row_major_input=*/false, /*is_exp_a=*/false);
-            return tt::tt_metal::owned_buffer::create<uint32_t>(std::move(uint32_vector));
+            return tt::tt_metal::host_buffer::create<uint32_t>(std::move(uint32_vector));
         }
         case ttnn::DataType::FLOAT32: {
             auto data_copy = data;
-            return tt::tt_metal::owned_buffer::create<float>(std::move(data_copy));
+            return tt::tt_metal::host_buffer::create<float>(std::move(data_copy));
         }
         case ttnn::DataType::BFLOAT16: {
             std::vector<bfloat16> bfloat16_data(data.size());
             std::transform(std::begin(data), std::end(data), std::begin(bfloat16_data), [](float value) {
                 return bfloat16(value);
             });
-            return tt::tt_metal::owned_buffer::create<bfloat16>(std::move(bfloat16_data));
+            return tt::tt_metal::host_buffer::create<bfloat16>(std::move(bfloat16_data));
         }
         default: {
             throw std::runtime_error("Cannot create a host buffer!");
@@ -85,8 +85,8 @@ tt::tt_metal::OwnedBuffer create_owned_buffer_from_vector_of_floats(
 template <typename T>
 tt::tt_metal::Tensor ttml_create_owned_tensor(
     std::vector<T>&& data, const ttnn::Shape& shape, tt::tt_metal::DataType data_type, tt::tt_metal::Layout layout) {
-    auto buffer = tt::tt_metal::owned_buffer::create(std::move(data));
-    auto storage = ttnn::OwnedStorage{std::move(buffer)};
+    auto buffer = tt::tt_metal::host_buffer::create(std::move(data));
+    auto storage = tt::tt_metal::HostStorage{std::move(buffer)};
     return {std::move(storage), shape, data_type, layout};
 }
 
@@ -122,7 +122,7 @@ tt::tt_metal::Tensor ones(const ttnn::Shape& shape, ttnn::distributed::MeshDevic
 template <class T, ttnn::DataType TensorType>
 [[nodiscard]] tt::tt_metal::Tensor from_xtensors_to_host(
     const std::vector<xt::xarray<T>>& buffers, const std::unordered_map<std::string, std::string>& config) {
-    std::vector<tt::tt_metal::OwnedBuffer> host_owned_buffers;
+    std::vector<tt::tt_metal::HostBuffer> host_owned_buffers;
     std::vector<ttnn::TensorSpec> host_owned_specs;
     host_owned_buffers.reserve(buffers.size());
     host_owned_specs.reserve(buffers.size());
@@ -146,7 +146,7 @@ template <class T, ttnn::DataType TensorType>
                 create_owned_buffer_from_vector_of_floats(std::vector<T>(buffer.begin(), buffer.end()), TensorType);
             host_owned_buffers.push_back(owned_buffer);
         } else {
-            auto owned_buffer = tt::tt_metal::owned_buffer::create(std::vector<T>(buffer.begin(), buffer.end()));
+            auto owned_buffer = tt::tt_metal::host_buffer::create(std::vector<T>(buffer.begin(), buffer.end()));
             host_owned_buffers.push_back(owned_buffer);
         }
 
@@ -185,7 +185,8 @@ tt::tt_metal::Tensor from_vector<float, ttnn::DataType::BFLOAT16>(
     }
     auto owned_buffer = create_owned_buffer_from_vector_of_floats(buffer, data_type);
     // remove possible paddings from the shape (it conflicts with ROW MAJOR)
-    auto output = tt::tt_metal::Tensor(ttnn::OwnedStorage{owned_buffer}, shape, data_type, ttnn::Layout::ROW_MAJOR);
+    auto output =
+        tt::tt_metal::Tensor(tt::tt_metal::HostStorage{owned_buffer}, shape, data_type, ttnn::Layout::ROW_MAJOR);
 
     const size_t MAX_TILE_DIMENSION = 16384;
     // Temporary workaround for the issue with tilize for large size

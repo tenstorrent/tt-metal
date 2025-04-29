@@ -20,7 +20,6 @@
 #include <tt_stl/reflection.hpp>
 #include <tt_stl/span.hpp>
 #include "ttnn/distributed/distributed_tensor_config.hpp"
-#include "ttnn/tensor/host_buffer/types.hpp"
 #include "cpp/ttnn/tensor/enum_types.hpp"
 
 #include "ttnn/tensor/shape/shape.hpp"
@@ -71,9 +70,8 @@ bool is_block_float(DataType dtype);
 // Enums are explicitly enumerated due to serialization dependency
 // TODO: #16067 - This shouldn't be needed. Serialize this enum to flatbuffer.
 enum class StorageType {
-    OWNED = 0,
+    HOST = 0,
     DEVICE = 1,
-    BORROWED = 2,           // for storing torch/numpy/etc tensors
     MULTI_DEVICE_HOST = 4,  // host storage for multi-device context
 };
 

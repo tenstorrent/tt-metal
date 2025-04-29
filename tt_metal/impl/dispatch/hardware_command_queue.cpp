@@ -23,12 +23,12 @@
 
 #include "assert.hpp"
 #include "buffers/dispatch.hpp"
+#include "device/dispatch.hpp"
 #include "dispatch/device_command.hpp"
 #include "impl/context/metal_context.hpp"
 #include "dispatch/host_runtime_commands.hpp"
 #include "dprint_server.hpp"
 #include "event/dispatch.hpp"
-#include "hal.hpp"
 #include "hal_types.hpp"
 #include "logger.hpp"
 #include "program_device_map.hpp"
@@ -221,6 +221,8 @@ void HWCommandQueue::enqueue_read_buffer(
     Buffer& buffer_obj = get_buffer_object(buffer);
     sub_device_ids = buffer_dispatch::select_sub_device_ids(this->device_, sub_device_ids);
 
+    // TODO: When reading from L1, modify this function to use enqueue_read_from_core_l1
+
     if (is_sharded(buffer_obj.buffer_layout())) {
         // Forward data from each core to the completion queue.
         // Then have the completion queue reader thread copy this data to user space.
@@ -299,6 +301,88 @@ void HWCommandQueue::enqueue_write_buffer(
 
 CoreType HWCommandQueue::get_dispatch_core_type() {
     return MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_type();
+}
+
+void HWCommandQueue::enqueue_read_from_core_l1(
+    const CoreCoord& virtual_core,
+    void* dst,
+    DeviceAddr address,
+    uint32_t size_bytes,
+    bool blocking,
+    tt::stl::Span<const SubDeviceId> sub_device_ids) {
+    ZoneScopedN("HWCommandQueue_enqueue_read_from_core_l1");
+
+    const HalProgrammableCoreType core_type = this->device_->get_programmable_core_type(virtual_core);
+    TT_FATAL(
+        address + size_bytes <= MetalContext::instance().hal().get_dev_addr(core_type, HalL1MemAddrType::BASE) +
+                                    MetalContext::instance().hal().get_dev_size(core_type, HalL1MemAddrType::BASE),
+        "Region to read from in L1 is out of bounds");
+
+    sub_device_ids = buffer_dispatch::select_sub_device_ids(this->device_, sub_device_ids);
+
+    if (size_bytes > 0) {
+        device_dispatch::L1ReadDispatchParams dispatch_params(
+            virtual_core,
+            address,
+            size_bytes,
+            this->device_,
+            this->id_,
+            this->get_dispatch_core_type(),
+            this->expected_num_workers_completed_,
+            sub_device_ids);
+        device_dispatch::issue_l1_read_command_sequence(dispatch_params);
+
+        this->issued_completion_q_reads_.push(
+            std::make_shared<CompletionReaderVariant>(std::in_place_type<ReadL1DataDescriptor>, dst, size_bytes));
+        this->increment_num_entries_in_completion_q();
+    }
+
+    if (blocking) {
+        this->finish(sub_device_ids);
+    }
+}
+
+void HWCommandQueue::enqueue_write_to_core_l1(
+    const CoreCoord& virtual_core,
+    const void* src,
+    DeviceAddr address,
+    uint32_t size_bytes,
+    bool blocking,
+    tt::stl::Span<const SubDeviceId> sub_device_ids) {
+    ZoneScopedN("HWCommandQueue_enqueue_write_to_core_l1");
+
+    const HalProgrammableCoreType core_type = this->device_->get_programmable_core_type(virtual_core);
+    TT_FATAL(
+        address + size_bytes <= MetalContext::instance().hal().get_dev_addr(core_type, HalL1MemAddrType::BASE) +
+                                    MetalContext::instance().hal().get_dev_size(core_type, HalL1MemAddrType::BASE),
+        "Region to write to in L1 is out of bounds");
+
+    sub_device_ids = buffer_dispatch::select_sub_device_ids(this->device_, sub_device_ids);
+
+    while (size_bytes > 0) {
+        const uint32_t size_bytes_to_write =
+            std::min(size_bytes, calculate_max_prefetch_data_size_bytes(this->get_dispatch_core_type()));
+
+        device_dispatch::L1WriteDispatchParams dispatch_params{
+            virtual_core,
+            address,
+            size_bytes_to_write,
+            this->device_,
+            this->id_,
+            this->get_dispatch_core_type(),
+            this->expected_num_workers_completed_,
+            sub_device_ids,
+            src};
+        device_dispatch::issue_l1_write_command_sequence(dispatch_params);
+
+        size_bytes -= size_bytes_to_write;
+        address += size_bytes_to_write;
+        src = (uint8_t*)src + size_bytes_to_write;
+    }
+
+    if (blocking) {
+        this->finish(sub_device_ids);
+    }
 }
 
 void HWCommandQueue::enqueue_program(Program& program, bool blocking) {
@@ -531,6 +615,15 @@ void HWCommandQueue::read_completion_queue() {
                             ZoneScopedN("CompletionQueueReadEvent");
                             event_dispatch::read_events_from_completion_queue(
                                 read_descriptor, mmio_device_id, channel, this->id_, this->manager_);
+                        } else if constexpr (std::is_same_v<T, ReadL1DataDescriptor>) {
+                            ZoneScopedN("CompletionQueueReadL1Data");
+                            device_dispatch::read_l1_data_from_completion_queue(
+                                read_descriptor,
+                                mmio_device_id,
+                                channel,
+                                this->id_,
+                                this->manager_,
+                                this->exit_condition_);
                         }
                     },
                     read_descriptor);

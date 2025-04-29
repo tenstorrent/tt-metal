@@ -67,7 +67,7 @@ TEST_F(MeshTensorTest, ToHostNonMeshTensor) {
     const TensorSpec tensor_spec =
         TensorSpec(shape, TensorLayout(DataType::FLOAT32, Layout::ROW_MAJOR, MemoryConfig{}));
     Tensor input_host_tensor = Tensor::from_vector(std::vector<float>(shape.volume()), tensor_spec);
-    EXPECT_TRUE(input_host_tensor.storage_type() == StorageType::OWNED);
+    EXPECT_TRUE(input_host_tensor.storage_type() == StorageType::HOST);
 
     EXPECT_ANY_THROW(tensor_impl::to_host_mesh_tensor_wrapper(input_host_tensor));
 }
@@ -82,7 +82,7 @@ TEST_F(MeshTensorTest, ReplicateOwnedTensor) {
 
     // Prepare host tensor to offload on device.
     Tensor input_host_tensor = Tensor::from_vector(host_data, tensor_spec);
-    EXPECT_TRUE(input_host_tensor.storage_type() == StorageType::OWNED);
+    EXPECT_TRUE(input_host_tensor.storage_type() == StorageType::HOST);
     EXPECT_EQ(input_host_tensor.get_tensor_spec().logical_shape(), shape);
 
     // Write host tensor to device.

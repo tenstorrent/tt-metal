@@ -143,22 +143,8 @@ void setControlBuffer(IDevice* device, std::vector<uint32_t>& control_buffer) {
         profiler_msg_t* profiler_msg = hal.get_dev_addr<profiler_msg_t*>(CoreType, HalL1MemAddrType::PROFILER);
 
         control_buffer[kernel_profiler::FLAT_ID] = core.second;
-        if (device->dispatch_firmware_active() && CoreType == HalProgrammableCoreType::TENSIX) {
-            // TODO: Currently only using FD reads on worker cores. Use FD reads across all core types, once we have a
-            // generic API to read from an address instead of a buffer. (#15015)
 
-            auto logical_worker_core =
-                soc_d.translate_coord_to(curr_core, CoordSystem::TRANSLATED, CoordSystem::LOGICAL);
-            auto control_buffer_view = get_control_buffer_view(
-                device,
-                reinterpret_cast<uint64_t>(profiler_msg->control_vector),
-                kernel_profiler::PROFILER_L1_CONTROL_BUFFER_SIZE,
-                CoreCoord(logical_worker_core.x, logical_worker_core.y));
-            issue_fd_write_to_profiler_buffer(control_buffer_view, device, control_buffer);
-        } else {
-            tt::llrt::write_hex_vec_to_core(
-                device_id, curr_core, control_buffer, reinterpret_cast<uint64_t>(profiler_msg->control_vector));
-        }
+        write_control_buffer_to_core(device, curr_core, CoreType, ProfilerDumpState::NORMAL, control_buffer);
     }
 #endif
 }
