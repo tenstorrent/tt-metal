@@ -111,7 +111,7 @@ For information on initial model procedures, please see [Model Bring-Up and Test
 
 <div align="center">
 
-<img src="./docs/source/common/images/TT-Metalium_GitHub_Logo.png" alt="TT-Metalium logo" height="180"/>
+<img src="./docs/source/common/images/tt_refresh_metalium_w_icon.png" alt="TT-Metalium logo" height="180"/>
 
 **TT-Metalium** is our low-level programming model, enabling kernel development for Tenstorrent hardware.
 
