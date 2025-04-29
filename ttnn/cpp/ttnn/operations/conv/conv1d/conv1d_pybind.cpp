@@ -26,10 +26,10 @@ void py_bind_conv1d(py::module& module) {
         :param ttnn.Tensor weight_tensor: The weight tensor. The weights can be passed in the same format as PyTorch, [out_channels, in_channels, kernel_height, kernel_width]. The op w
         :param ttnn.Tensor, None bias_tensor:   Optional bias tensor. Default: None
         :param ttnn.IDevice device:  The device to use.
-        :param int: in_channels:  Number of input channels.
-        :param int: out_channels:  Number of output channels.
-        :param int: batch_size:  Batch size.
-        :param int: input_length:  Length of the input signal.
+        :param int in_channels:  Number of input channels.
+        :param int out_channels:  Number of output channels.
+        :param int batch_size:  Batch size.
+        :param int input_length:  Length of the input signal.
         :param int kernel_size: Size of the convolving kernel.
         :param int stride: Stride of the cross-correlation.
         :param int or tuple[int, int]) padding: Zero-padding added to both sides of the input. pad_length or [pad_left, pad_right].
