@@ -11,7 +11,8 @@
 
 #include <flatbuffers/flatbuffers.h>
 
-#include "tt_stl/overloaded.hpp"
+#include <tt_stl/overloaded.hpp>
+
 #include "ttnn/tensor/host_buffer/functions.hpp"
 #include "ttnn/tensor/storage.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
