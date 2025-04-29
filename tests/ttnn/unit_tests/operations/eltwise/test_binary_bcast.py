@@ -1888,3 +1888,29 @@ def test_binary_sharded_row_major_layout(
     out_tt_sharded = ttnn.add(a_tt, b_tt, memory_config=a_sharded_config, use_legacy=False)
     out_tt_sharded = ttnn.to_torch(out_tt_sharded)
     torch.testing.assert_close(out_tt_sharded, out_pt)
+
+
+@pytest.mark.parametrize(
+    "a_shape, b_shape",
+    [
+        [[1, 1, 7, 7], [1, 1, 7, 7]],
+        [[1, 71, 7, 7], [1, 71, 7, 7]],
+        [[71, 1, 7, 7], [71, 1, 7, 7]],
+        [[7, 71, 7, 7], [7, 71, 7, 7]],
+        [[7, 71, 7, 7], [7, 7]],
+        [[920, 1, 256], [256]],
+    ],
+)
+def test_binary_no_bcast(a_shape, b_shape, device):
+    torch.manual_seed(0)
+
+    torch_input_tensor_a, input_tensor_a = rand_bf16_gen(a_shape, device)
+    torch_input_tensor_b, input_tensor_b = rand_bf16_gen(b_shape, device)
+
+    torch_output_tensor = torch_input_tensor_a + torch_input_tensor_b
+
+    output_tensor = ttnn.add(input_tensor_a, input_tensor_b, memory_config=ttnn.DRAM_MEMORY_CONFIG, use_legacy=False)
+    output_tensor = ttnn.to_torch(output_tensor)
+
+    assert output_tensor.shape == torch_output_tensor.shape
+    assert ttnn.pearson_correlation_coefficient(torch_output_tensor, output_tensor) >= 0.99988

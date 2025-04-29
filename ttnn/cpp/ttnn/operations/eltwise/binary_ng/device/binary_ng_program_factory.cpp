@@ -156,7 +156,6 @@ public:
         auto current_shape = shard_shape;
         // for uneven shard, HEIGHT, WIDTH, and BLOCK handling order should be all different in kernel
         // only HEIGHT sharding works naturally
-        // for eltwise, it should be insignificant to process the padded tile although it is a waste
         if (core == end_core) {
             if (memory_layout == TensorMemoryLayout::HEIGHT_SHARDED) {
                 current_shape[majorDim] = last_shard_shape[majorDim];
@@ -319,7 +318,8 @@ void set_or_update_runtime_arguments(
             cC,
             cHt,
             cWt,
-            cND};
+            cND,
+            b.has_value() ? b->buffer()->address() : 0u};
         handle_args(program, reader_kernel_id, core, reader_runtime_args);
 
         const bool is_quant_op = operation_attributes.is_quant_op;
@@ -550,17 +550,6 @@ BinaryNgDeviceOperation::ProgramFactory::cached_program_t BinaryNgDeviceOperatio
     uint32_t c_is_dram = c_buffer->buffer_type() == tt_metal::BufferType::DRAM;
 
     auto kernel_config = CMAKE_UNIQUE_NAMESPACE::BinaryNgKernelConfig(operation_attributes.subtile_broadcast_type);
-
-    // READER KERNEL
-    auto reader_defines = make_dataflow_defines(a_dtype, is_sfpu_op);
-    reader_defines["SRC_SHARDED"] = a_sharded ? "1" : "0";
-
-    auto reader_kernel_id = tt_metal::CreateKernel(
-        program,
-        get_kernel_file_path(kernel_config.reader_kernel, is_sfpu_op),
-        all_device_cores,
-        tt_metal::ReaderDataMovementConfig({a_is_dram, has_sharding}, std::move(reader_defines)));
-
     // WRITER KERNEL
     auto writer_kernel = CMAKE_UNIQUE_NAMESPACE::KernelName::WriterScalar;
     auto compute_kernel = CMAKE_UNIQUE_NAMESPACE::KernelName::ComputeScalar;
@@ -573,11 +562,26 @@ BinaryNgDeviceOperation::ProgramFactory::cached_program_t BinaryNgDeviceOperatio
     writer_defines["SRC_SHARDED"] = b_sharded ? "1" : "0";
     writer_defines["DST_SHARDED"] = c_sharded ? "1" : "0";
 
+    if (b.has_value() && a.get_logical_shape() == b->get_logical_shape()) {
+        kernel_config.reader_kernel = KernelName::ReaderNoBcastSplit;
+        writer_kernel = KernelName::WriterNoBcastSplit;
+    }
     auto writer_kernel_id = tt_metal::CreateKernel(
         program,
         get_kernel_file_path(writer_kernel, is_sfpu_op),
         all_device_cores,
         tt_metal::WriterDataMovementConfig({b_is_dram, c_is_dram, has_sharding}, std::move(writer_defines)));
+
+    // READER KERNEL
+    auto reader_defines = make_dataflow_defines(a_dtype, is_sfpu_op);
+    reader_defines["SRC_SHARDED"] = a_sharded ? "1" : "0";
+    reader_defines["SRC_SHARDED_B"] = b_sharded ? "1" : "0";
+
+    auto reader_kernel_id = tt_metal::CreateKernel(
+        program,
+        get_kernel_file_path(kernel_config.reader_kernel, is_sfpu_op),
+        all_device_cores,
+        tt_metal::ReaderDataMovementConfig({a_is_dram, has_sharding, b_is_dram}, std::move(reader_defines)));
 
     // COMPUTE KERNEL
     bool fp32_dest_acc_en = c_data_format == tt::DataFormat::UInt32 || c_data_format == tt::DataFormat::Int32 ||
