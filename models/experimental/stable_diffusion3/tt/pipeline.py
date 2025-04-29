@@ -67,9 +67,7 @@ class TtStableDiffusion3Pipeline:
 
         num_devices = device.get_num_devices()
         ## heads padding for T3K TP
-        pad_embedding_dim = False
         if os.environ["FAKE_DEVICE"] == "T3K" and embedding_dim == 2432:
-            pad_embedding_dim = True
             hidden_dim_padding = (
                 ((embedding_dim // num_devices // TILE_SIZE) + 1) * TILE_SIZE
             ) * num_devices - embedding_dim

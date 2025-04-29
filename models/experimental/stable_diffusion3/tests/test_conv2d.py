@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import os
+
 import pytest
 import torch
 import ttnn
@@ -69,9 +70,7 @@ def test_conv2d(
     torch_model.eval()
 
     num_devices = mesh_device.get_num_devices()
-    pad_embedding_dim = False
     if os.environ["FAKE_DEVICE"] == "T3K" and out_channels == 2432:
-        pad_embedding_dim = True
         hidden_dim_padding = (((out_channels // num_devices // TILE_SIZE) + 1) * TILE_SIZE) * num_devices - out_channels
     else:
         hidden_dim_padding = 0
