@@ -285,7 +285,7 @@ def test_max_pool2d_localrun(device, dtype, in_place, input_spec):
         pytest.skip("this case runs out of memory due to combination of large remote temp CB and large untilize out CB")
     if input_spec[:4] == [1, 512, 10, 10] and in_place and dtype == ttnn.bfloat8_b and is_blackhole():
         pytest.skip(
-            "this case runs out of memory on blackhole due to combination of large remote temp CB and large untilize out CB"
+            "this case runs out of memory on blackhole due to large remote temp CB, this is only an issue on blackhole since the larger number of cores results in a smaller nhe per core which results in more remote references and hence a larger remote temp CB"
         )
     run_max_pool2d(
         batch_size,
