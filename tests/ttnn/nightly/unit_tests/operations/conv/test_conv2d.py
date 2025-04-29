@@ -12,6 +12,7 @@ from models.utility_functions import (
 )
 from tests.ttnn.utils_for_testing import assert_with_pcc, check_with_pcc_without_tensor_printout
 import ttnn
+from ttnn.operations.conv2d import get_torch_act_func_from_string
 
 HS = ttnn.TensorMemoryLayout.HEIGHT_SHARDED
 BS = ttnn.TensorMemoryLayout.BLOCK_SHARDED
@@ -55,26 +56,6 @@ def randomize_torch_tensor(torch_tensor_map, tensor_shape):
         torch_tensor_map[tensor_shape] = torch_tensor
 
     return torch_tensor
-
-
-def get_torch_act_func_from_string(act_string):
-    act_func_map = {
-        "relu": torch.nn.functional.relu,
-        "silu": torch.nn.functional.silu,
-        "mish": torch.nn.functional.mish,
-        "sigmoid": torch.nn.functional.sigmoid,
-        "sigmoid_approx": torch.nn.functional.sigmoid,
-        "tanh": torch.nn.functional.tanh,
-        "log": torch.log,
-        "softplus": torch.nn.functional.softplus,
-        "gelu": torch.nn.functional.gelu,
-        "sqrt": torch.sqrt,
-    }
-    if act_string == "":
-        return None
-    if act_string in act_func_map:
-        return act_func_map[act_string]
-    raise RuntimeError(f"Activation function {act_string} not supported")
 
 
 def run_conv(
@@ -3228,33 +3209,33 @@ def test_conv2d_sdxl(
 
 
 @pytest.mark.parametrize(
-    "batch, input_channels, output_channels, input_height, input_width, weights_dtype, activations_dtype, groups, kernel, stride, padding, dilation, auto_shard, use_shallow_conv_variant, act_block_h_override, act_block_w_div, deallocate_activation, math_fidelity, fp32_accum, packer_l1_acc, enable_split_reader, split_factor_input_channels, split_factor_output_channels",
+    "batch, input_channels, output_channels, input_height, input_width, weights_dtype, activations_dtype, groups, kernel, stride, padding, dilation, auto_shard, use_shallow_conv_variant, deallocate_activation, split_factor_input_channels, split_factor_output_channels, slice_type, num_slices",
     (
         # 1024x1024 resolution
 
         # VAE
         # kernel 3x3
-        # (1, 128, 128, 1024, 1024, ttnn.bfloat8_b, ttnn.bfloat8_b, 1, (3, 3), (1, 1), (1, 1), (1, 1), True, False,  0, 1, False, ttnn.MathFidelity.LoFi, False, False, False, 1, 1), # OOM
-        # (1, 256, 128, 1024, 1024, ttnn.bfloat8_b, ttnn.bfloat8_b, 1, (3, 3), (1, 1), (1, 1), (1, 1), True, False,  0, 1, False, ttnn.MathFidelity.LoFi, False, False, False, 1, 1), # OOM
-        # (1, 256, 256, 1024, 1024, ttnn.bfloat8_b, ttnn.bfloat8_b, 1, (3, 3), (1, 1), (1, 1), (1, 1), True, False,  0, 1, False, ttnn.MathFidelity.LoFi, False, False, False, 1, 1), # OOM
-        (1, 256, 256, 512, 512, ttnn.bfloat8_b, ttnn.bfloat8_b, 1, (3, 3), (1, 1), (1, 1), (1, 1), True, False,  0, 1, False, ttnn.MathFidelity.LoFi, False, False, False, 8, 2),
-        (1, 512, 512, 128, 128, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), True, False,  0, 1, False, ttnn.MathFidelity.LoFi, False, False, False, 1, 1),
-        (1, 512, 512, 256, 256, ttnn.bfloat8_b, ttnn.bfloat8_b, 1, (3, 3), (1, 1), (1, 1), (1, 1), True, False,  0, 1, False, ttnn.MathFidelity.LoFi, False, False, False, 8, 1),
-        (1, 512, 256, 512, 512, ttnn.bfloat8_b, ttnn.bfloat8_b, 1, (3, 3), (1, 1), (1, 1), (1, 1), True, False,  0, 1, False, ttnn.MathFidelity.LoFi, False, False, False, 16, 2),
-        (1, 512, 512, 512, 512, ttnn.bfloat8_b, ttnn.bfloat8_b, 1, (3, 3), (1, 1), (1, 1), (1, 1), True, False,  0, 1, False, ttnn.MathFidelity.LoFi, False, False, False, 16, 4),
+        (1, 128, 128, 1024, 1024, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), True, False, False, 1, 1, ttnn.Conv2dSliceWidth, 8),
+        (1, 256, 128, 1024, 1024, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), True, False, False, 1, 1, ttnn.Conv2dSliceWidth, 16),
+        (1, 256, 256, 1024, 1024, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), True, False, False, 1, 1, ttnn.Conv2dSliceWidth, 16),
+        (1, 256, 256, 512, 512, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), True, False, False, 1, 1, ttnn.Conv2dSliceWidth, 4),
+        (1, 512, 512, 128, 128, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), True, False, False, 1, 1, None, 1),
+        (1, 512, 512, 256, 256, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), True, False, False, 1, 1, ttnn.Conv2dSliceWidth, 2),
+        (1, 512, 256, 512, 512, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), True, False, False, 1, 1, ttnn.Conv2dSliceWidth, 8),
+        (1, 512, 512, 512, 512, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), True, False, False, 1, 1, ttnn.Conv2dSliceWidth, 8),
 
         # output_channels 3
-        # (1, 128, 3, 1024, 1024, ttnn.bfloat8_b, ttnn.bfloat8_b, 1, (3, 3), (1, 1), (1, 1), (1, 1), True, False,  0, 1, False, ttnn.MathFidelity.LoFi, False, False, False, 1, 1), # OOM
+        # (1, 128, 3, 1024, 1024, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), True, False, False, 1, 1, ttnn.Conv2dSliceWidth, 16), #  pcc: 0.0
 
         # input_channels 4
-        (1, 4, 512, 128, 128, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), True, False,  0, 1, False, ttnn.MathFidelity.LoFi, False, False, False, 1, 1),
+        (1, 4, 512, 128, 128, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), True, False, False, 1, 1, None, 1),
 
         # kernel 1x1
-        (1, 256, 128, 1024, 1024, ttnn.bfloat8_b, ttnn.bfloat8_b, 1, (1, 1), (1, 1), (0, 0), (1, 1), True, False,  0, 1, False, ttnn.MathFidelity.LoFi, False, False, False, 1, 1),
-        (1, 512, 256, 512, 512, ttnn.bfloat8_b, ttnn.bfloat16, 1, (1, 1), (1, 1), (0, 0), (1, 1), True, False,  0, 1, False, ttnn.MathFidelity.LoFi, False, False, False, 1, 1),
+        (1, 256, 128, 1024, 1024, ttnn.bfloat8_b, ttnn.bfloat16, 1, (1, 1), (1, 1), (0, 0), (1, 1), True, False, False, 1, 1, None, 1),
+        (1, 512, 256, 512, 512, ttnn.bfloat8_b, ttnn.bfloat16, 1, (1, 1), (1, 1), (0, 0), (1, 1), True, False, False, 1, 1, None, 1),
 
         # channels 4
-        (1, 4, 4, 128, 128, ttnn.bfloat8_b, ttnn.bfloat16, 1, (1, 1), (1, 1), (0, 0), (1, 1), True, False,  0, 1, False, ttnn.MathFidelity.LoFi, False, False, False, 1, 1),
+        (1, 4, 4, 128, 128, ttnn.bfloat8_b, ttnn.bfloat16, 1, (1, 1), (1, 1), (0, 0), (1, 1), True, False, False, 1, 1, None, 1),
     ),
 )
 
@@ -3276,20 +3257,21 @@ def test_conv2d_vae_sdxl(
     dilation,
     auto_shard,
     use_shallow_conv_variant,
-    act_block_h_override,
-    act_block_w_div,
     deallocate_activation,
-    math_fidelity,
-    fp32_accum,
-    packer_l1_acc,
-    enable_split_reader,
     split_factor_input_channels,
-    split_factor_output_channels
+    split_factor_output_channels,
+    slice_type,
+    num_slices
 ):
 
     config_override = {}
-    config_override["act_block_h"] = act_block_h_override
-    config_override["act_block_w_div"] = act_block_w_div
+    config_override["act_block_h"] = 0
+    config_override["act_block_w_div"] = 1
+
+    slice_config = ttnn.Conv2dSliceConfig(
+        slice_type=slice_type,
+        num_slices=num_slices,
+    ) if num_slices > 1 and slice_type is not None else None
 
     if split_factor_input_channels > 1 or split_factor_output_channels > 1:
         run_conv_with_split(
@@ -3319,7 +3301,7 @@ def test_conv2d_vae_sdxl(
         run_conv(
             device=device,
             torch_tensor_map=torch_tensor_map,
-            math_fidelity=math_fidelity,
+            math_fidelity=ttnn.MathFidelity.LoFi,
             activations_dtype=activations_dtype,
             weights_dtype=weights_dtype,
             batch_size=batch,
@@ -3336,8 +3318,8 @@ def test_conv2d_vae_sdxl(
             dilation_h=dilation[0],
             dilation_w=dilation[1],
             use_shallow_conv_variant=use_shallow_conv_variant,
-            fp32_accum=fp32_accum,
-            packer_l1_acc=packer_l1_acc,
+            fp32_accum=False,
+            packer_l1_acc=False,
             output_layout=ttnn.TILE_LAYOUT,
             deallocate_activation=deallocate_activation,
             groups=groups,
@@ -3348,7 +3330,8 @@ def test_conv2d_vae_sdxl(
             input_mesh_mapper=None,
             weight_mesh_mapper=None,
             output_mesh_composer=None,
-            enable_split_reader=enable_split_reader,
+            enable_split_reader=False,
+            slice_config=slice_config,
         )
 
 
