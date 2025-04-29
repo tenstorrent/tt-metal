@@ -4,13 +4,17 @@
 
 #pragma once
 
+#include <cstdint>
 #include <optional>
 #include <string>
 
 #include <nlohmann/json.hpp>
 #include <tt-metalium/logger.hpp>
+#include <tuple>
+#include <variant>
 #include "ttnn/graph/graph_processor.hpp"
 #include "ttnn/graph/graph_trace_utils.hpp"
+#include "ttnn/tensor/tensor.hpp"
 
 namespace ttnn::graph {
 
@@ -24,11 +28,17 @@ namespace detail {
 inline Tensor extract_output_tensor(const Tensor& result) { return result; }
 
 // conv2d output
-template <typename... Args>
-Tensor extract_output_tensor(const std::tuple<Tensor, Args...>& result) {
-    return std::get<0>(result);
+template <typename... Args1, typename... Args2>
+Tensor extract_output_tensor(const std::variant<
+                             ttnn::Tensor,
+                             std::tuple<ttnn::Tensor, Args1...>,
+                             std::tuple<ttnn::Tensor, Args2...>,
+                             std::tuple<ttnn::Tensor, Args1..., Args2...>>& result) {
+    return std::visit<Tensor>(
+        tt::stl::overloaded{
+            [](const ttnn::Tensor& arg) { return arg; }, [](const auto& arg) { return std::get<0>(arg); }},
+        result);
 }
-
 }  // namespace detail
 
 struct ResourceUsage {

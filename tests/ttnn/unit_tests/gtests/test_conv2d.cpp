@@ -2,13 +2,17 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <array>
 #include <cstdint>
 #include <iostream>
+#include <tuple>
 #include <vector>
 #include <tt-metalium/assert.hpp>
 #include <tt-metalium/logger.hpp>
 #include <tt-metalium/small_vector.hpp>
+#include "ttnn/common/queue_id.hpp"
 #include "ttnn/tensor/tensor.hpp"
+#include "ttnn/operations/conv/conv.hpp"
 #include "ttnn/operations/conv/conv2d/conv2d.hpp"
 #include "ttnn/operations/data_movement/permute/permute.hpp"
 #include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
@@ -155,28 +159,28 @@ TEST_P(Conv2DFixture, Conv2DCalculateCorrectly) {
         input_tensor = ttnn::permute(input_tensor, SmallVector<int64_t>{0, 2, 3, 1});
 
         // Run Conv2D
-        auto [output_tensor, output_height, output_width, weight_tensor_on_device, bias_tensor_on_device] =
-            conv2d::conv2d(
-                DefaultQueueId,
-                input_tensor,
-                weight_tensor,
-                device,
-                param.input_channels,
-                param.output_channels,
-                param.batch_size,
-                param.input_height,
-                param.input_width,
-                param.kernel_size,
-                param.stride,
-                param.padding,
-                {1, 1},        // dilation
-                1,             // groups
-                std::nullopt,  // bias tensor
-                std::nullopt,  // conv config
-                std::nullopt,  // compute config
-                std::nullopt,  // memory config
-                std::nullopt   // slice config
-            );
+        auto [output_tensor, output_dimensions] = std::get<OUTPUT_DIM>(ttnn::conv2d(
+            DefaultQueueId,
+            input_tensor,
+            weight_tensor,
+            device,
+            param.input_channels,
+            param.output_channels,
+            param.batch_size,
+            param.input_height,
+            param.input_width,
+            param.kernel_size,
+            param.stride,
+            param.padding,
+            std::array<uint32_t, 2>{1, 1},  // dilation
+            1,                              // groups
+            std::nullopt,                   // bias tensor
+            std::nullopt,                   // conv config
+            std::nullopt,                   // compute config
+            std::nullopt,                   // memory config
+            std::nullopt,                   // slice config
+            true                            // return_output_dim
+            ));
 
         // move output tensor to dram
         output_tensor = ttnn::to_memory_config(output_tensor, dram_mem_config);
@@ -184,8 +188,13 @@ TEST_P(Conv2DFixture, Conv2DCalculateCorrectly) {
         // H'  - output_height
         // W'  - output_width
         // (1,1,NH'W',Co) -> (N,H',W',Co)
-        output_tensor =
-            ttnn::reshape(output_tensor, Shape({param.batch_size, output_height, output_width, param.output_channels}));
+        output_tensor = ttnn::reshape(
+            output_tensor,
+            Shape(
+                {param.batch_size,
+                 std::get<0>(output_dimensions),
+                 std::get<1>(output_dimensions),
+                 param.output_channels}));
 
         // (N,H',W',Co) -> (N,Co,H',W')
         output_tensor = ttnn::permute(output_tensor, SmallVector<int64_t>{0, 3, 1, 2});
