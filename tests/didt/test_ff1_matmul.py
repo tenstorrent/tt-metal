@@ -216,16 +216,22 @@ def test_specific_chip_ff1_matmul(
     ids=GELU_FIDELITY_PARAMETRIZATION_IDS,
 )
 @pytest.mark.parametrize(
-    "board_mesh_device",
+    "t3k_single_board_mesh_device",
     range(4),
     ids=[f"board_id_{i}" for i in range(4)],
-    indirect=["board_mesh_device"],
+    indirect=["t3k_single_board_mesh_device"],
 )
 def test_specific_board_ff1_matmul(
-    board_mesh_device, gelu, math_fidelity, iterations, determinism_check_iterations, use_program_cache
+    t3k_single_board_mesh_device, gelu, math_fidelity, iterations, determinism_check_iterations, use_program_cache
 ):
     test_ff1_matmul(
-        board_mesh_device, gelu, math_fidelity, iterations, determinism_check_iterations, use_program_cache, False
+        t3k_single_board_mesh_device,
+        gelu,
+        math_fidelity,
+        iterations,
+        determinism_check_iterations,
+        use_program_cache,
+        False,
     )
 
 

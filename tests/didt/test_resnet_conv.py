@@ -283,11 +283,13 @@ def test_specific_chip_resnet_conv(
 
 @skip_for_blackhole("Multi-board Blackhole has not been tested")
 @pytest.mark.parametrize(
-    "board_mesh_device",
+    "t3k_single_board_mesh_device",
     range(4),
     ids=[f"board_id_{i}" for i in range(4)],
-    indirect=["board_mesh_device"],
+    indirect=["t3k_single_board_mesh_device"],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
-def test_specific_board_resnet_conv(board_mesh_device, iterations, determinism_check_iterations, use_program_cache):
-    test_resnet_conv(board_mesh_device, iterations, determinism_check_iterations, use_program_cache, False)
+def test_specific_board_resnet_conv(
+    t3k_single_board_mesh_device, iterations, determinism_check_iterations, use_program_cache
+):
+    test_resnet_conv(t3k_single_board_mesh_device, iterations, determinism_check_iterations, use_program_cache, False)

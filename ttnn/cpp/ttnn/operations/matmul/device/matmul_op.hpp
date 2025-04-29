@@ -277,9 +277,6 @@ std::tuple<uint32_t, uint32_t> get_matmul_subblock_params(
 
 void add_stagger_defines_if_needed(
     const tt::ARCH arch, const int num_cores, std::map<string, string>& mm_kernel_defines);
-void add_mm_throttle_defines_if_needed(
-    const tt::ARCH arch, MathFidelity fidelity, std::map<string, string>& mm_kernel_defines);
-void add_precision_defines_if_needed(const tt::ARCH arch, std::map<string, string>& mm_kernel_defines);
 void add_dram_skip_defines_if_needed(const tt::ARCH arch, std::map<string, string>& mm_in1_sender_writer_defines);
 bool should_sync_after_in1_dram(const tt::ARCH arch);
 
@@ -287,7 +284,7 @@ bool should_sync_after_in1_dram(const tt::ARCH arch);
  * Optionally limit matmul compute throughput by inserting NOP instructions between MVMUL instructions of matmul kernel
  * This will slow down the OP if UNPACK/PACK threads are capable of feeding data sufficiently fast (MATH compute bound)
  *
- * Enabled by setting env var TT_THROTTLE_MM_PERF to value in range {1,2,3,4,5}
+ * Enabled by setting env var TT_MM_THROTTLE_PERF to value in range {1,2,3,4,5}
  * Each value corresponds to level of throttling as:
  * Level 1: throttle to 73% of max
  * Level 2: throttle to 67% of max

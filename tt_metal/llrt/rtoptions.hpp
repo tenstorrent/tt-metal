@@ -153,6 +153,7 @@ class RunTimeOptions {
     // This option will disable the relaxed ordering
     bool disable_relaxed_memory_ordering = false;
 
+    // Buffer in DRAM to store various ARC processor samples. Feature not ready yet
     uint32_t arc_debug_buffer_size = 0;
 
 public:

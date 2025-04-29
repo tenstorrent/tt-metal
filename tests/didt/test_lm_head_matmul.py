@@ -184,13 +184,17 @@ def test_specific_chip_lm_head_matmul(
 
 @skip_for_blackhole("Multi-board Blackhole has not been tested")
 @pytest.mark.parametrize(
-    "board_mesh_device",
+    "t3k_single_board_mesh_device",
     range(4),
     ids=[f"board_id_{i}" for i in range(4)],
-    indirect=["board_mesh_device"],
+    indirect=["t3k_single_board_mesh_device"],
 )
-def test_specific_board_lm_head_matmul(board_mesh_device, iterations, determinism_check_iterations, use_program_cache):
-    test_lm_head_matmul(board_mesh_device, iterations, determinism_check_iterations, use_program_cache, False)
+def test_specific_board_lm_head_matmul(
+    t3k_single_board_mesh_device, iterations, determinism_check_iterations, use_program_cache
+):
+    test_lm_head_matmul(
+        t3k_single_board_mesh_device, iterations, determinism_check_iterations, use_program_cache, False
+    )
 
 
 @skip_for_blackhole("Use test_blackhole_grid_size_lm_head_matmul test for blackhole!")

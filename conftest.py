@@ -286,7 +286,7 @@ def mesh_device(request, silicon_arch_name, device_params):
 
 
 @pytest.fixture(scope="function")
-def board_mesh_device(request, silicon_arch_name, silicon_arch_wormhole_b0, device_params):
+def t3k_single_board_mesh_device(request, silicon_arch_name, silicon_arch_wormhole_b0, device_params):
     import ttnn
 
     device_ids = ttnn.get_device_ids()
@@ -312,7 +312,6 @@ def board_mesh_device(request, silicon_arch_name, silicon_arch_wormhole_b0, devi
     ttnn.DumpDeviceProfiler(mesh_device)
 
     ttnn.close_mesh_device(mesh_device)
-    reset_fabric(fabric_config)
     del mesh_device
 
 
@@ -442,8 +441,8 @@ def get_devices(request):
         devices = [request.getfixturevalue("t3k_mesh_device")]
     elif "pcie_mesh_device" in request.fixturenames:
         devices = [request.getfixturevalue("pcie_mesh_device")]
-    elif "board_mesh_device" in request.fixturenames:
-        devices = request.getfixturevalue("board_mesh_device").get_devices()
+    elif "t3k_single_board_mesh_device" in request.fixturenames:
+        devices = request.getfixturevalue("t3k_single_board_mesh_device").get_devices()
     else:
         devices = []
     return devices
