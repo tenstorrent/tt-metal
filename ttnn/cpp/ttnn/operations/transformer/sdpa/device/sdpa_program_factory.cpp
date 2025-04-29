@@ -439,7 +439,7 @@ operation::ProgramWithCallbacks sdpa_multi_core(
                                  ? tt::tt_metal::datatype_to_dataformat_converter(attn_mask.value().get_dtype())
                                  : tt::DataFormat::Bfp4_b;
     tt::DataFormat out_df = tt::tt_metal::datatype_to_dataformat_converter(output_tensor.get_dtype());
-    // tt::DataFormat out_df = tt::DataFormat::Float16_b;
+
     tt::DataFormat identity_df = tt::DataFormat::Float16_b;
     tt::DataFormat scalar_df = tt::DataFormat::Float16_b;
 

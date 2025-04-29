@@ -216,7 +216,6 @@ void MAIN {
                         false /*transpose*/);
 
                     cb_pop_front(cb_qk_im, qk_chunk_tiles);
-                    // reconfig_data_format(alias_prev_max, alias_cur_max);
 
                     /* OUT_ACC += OUT_IM */
                     if (k_chunk > 0) {
