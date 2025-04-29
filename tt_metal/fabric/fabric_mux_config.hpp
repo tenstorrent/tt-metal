@@ -46,16 +46,16 @@ enum class FabricMuxChannelType : uint8_t { FULL_SIZE_CHANNEL = 0, HEADER_ONLY_C
     -> Number of buffers/slots in a full size channel
     -> Number of buffers/slots in a header only channel
     -> Buffer size in bytes for a full size channel (for a header only channel its equal to the pre-determined packet
-   header size)
+        header size)
     -> Base address where the channels start in the mux's L1
 
     Advanced configuation parameters:
     -> Number of full size channel iters
         This determines the number of full size channel iters to run per iter of header only channels.
         By default its set to 1, which indicates that the full size channels and header only channels are processed
-   equally. This can be incremented in cases where the full size channels are not big enough compared to the buffers on
-   the receiver. In such cases, the receiver can also accumulate credits and send them back in one shot instead of
-   sending back one-by-one which may not always be the most efficient.
+        equally. This can be incremented in cases where the full size channels are not big enough compared to the
+        buffers on the receiver. In such cases, the receiver can also accumulate credits and send them back in one shot
+        instead of sending back one-by-one which may not always be the most efficient.
     -> Number of iters between teardown checks
         This determines how frequently the mux kernel checks for the termination signal. The larger this value, the less
         frequently mux kernel will check for the termination signal. Can be used to optimize performance, but very large

@@ -87,6 +87,7 @@ void kernel_main() {
     bool match = true;
     uint32_t seed = time_seed ^ sender_id;
     uint32_t slot_id = 0;
+    uint32_t num_packets_processed = 0;
     for (uint32_t packet_id = 0; packet_id < num_packets; packet_id++) {
         seed = prng_next(seed);
         expected_val = seed + (packet_payload_size_bytes / 16) - 1;
@@ -111,6 +112,7 @@ void kernel_main() {
         // send credit back
         // can also accumulate and then send credits back instead of sending back one at a time
         tt::tt_fabric::fabric_mux_atomic_inc<fabric_mux_num_buffers_per_channel>(mux_connection_handle, packet_header);
+        num_packets_processed++;
     }
 
     tt::tt_fabric::fabric_mux_client_disconnect<fabric_mux_num_buffers_per_channel>(mux_connection_handle);
@@ -123,4 +125,5 @@ void kernel_main() {
         test_results[TT_FABRIC_MISC_INDEX + 13] = mismatch_val;
         test_results[TT_FABRIC_MISC_INDEX + 14] = expected_val;
     }
+    test_results[TX_TEST_IDX_NPKT] = num_packets_processed;
 }

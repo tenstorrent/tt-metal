@@ -95,6 +95,7 @@ void kernel_main() {
 
         // decrement local credits
         noc_semaphore_inc(local_credit_handshake_noc_address, -1);
+        noc_async_atomic_barrier();
 
         // update the slot id for next packet
         if (++dest_payload_slot_id == num_credits) {

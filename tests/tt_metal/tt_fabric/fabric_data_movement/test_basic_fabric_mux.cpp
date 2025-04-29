@@ -109,20 +109,10 @@ void run_two_chip_test_variant(FabricMuxFixture* fixture, TestConfig test_config
 
     // address to load the mux status into
     const uint32_t local_mux_status_address = test_results_address + test_results_size_bytes;
-
-    // address which will be used for flow control b/w sender and fabric mux kernel
     const uint32_t local_flow_control_address = local_mux_status_address + noc_address_padding_bytes;
-
-    // address which will be used for connection teardown signalling
     const uint32_t local_teardown_address = local_flow_control_address + noc_address_padding_bytes;
-
-    // address to sync buffer index
     const uint32_t local_buffer_index_address = local_teardown_address + noc_address_padding_bytes;
-
-    // address to send the credits back to the sender
     const uint32_t credit_handshake_address = local_buffer_index_address + noc_address_padding_bytes;
-
-    // address for packet headers' buffer
     const uint32_t packet_header_buffer_address = credit_handshake_address + noc_address_padding_bytes;
 
     // address at which the sender will write packets to in the receiver's L1
@@ -371,6 +361,13 @@ void run_two_chip_test_variant(FabricMuxFixture* fixture, TestConfig test_config
                 test_results_address,
                 test_results_size_bytes,
                 receiver_status);
+            log_info(
+                LogTest,
+                "[Device: Phys: {}] Receiver id: {}, status: {}, num packets processed: {}",
+                devices[i]->id(),
+                j,
+                tt_fabric_status_to_string(receiver_status[TT_FABRIC_STATUS_INDEX]),
+                receiver_status[TX_TEST_IDX_NPKT]);
             EXPECT_EQ(receiver_status[TT_FABRIC_STATUS_INDEX], TT_FABRIC_STATUS_PASS);
         }
     }
@@ -436,6 +433,20 @@ TEST_F(FabricMuxFixture, TestFabricMuxTwoChipVariant5) {
     TestConfig test_config = {
         .num_sender_clients = 8,
         .num_packets = 5000,
+        .num_credits = 16,
+        .packet_payload_size_bytes = 4096,
+        .num_full_size_channels = 8,
+        .num_header_only_channels = 8,
+        .num_buffers_full_size_channel = 8,
+        .num_buffers_header_only_channel = 8,
+    };
+    run_two_chip_test_variant(this, test_config);
+}
+
+TEST_F(FabricMuxFixture, TestFabricMuxTwoChipVariant6) {
+    TestConfig test_config = {
+        .num_sender_clients = 8,
+        .num_packets = 50000,
         .num_credits = 16,
         .packet_payload_size_bytes = 4096,
         .num_full_size_channels = 8,
