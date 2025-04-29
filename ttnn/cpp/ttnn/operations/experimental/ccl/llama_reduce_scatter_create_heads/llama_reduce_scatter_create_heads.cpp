@@ -36,7 +36,10 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ExecuteLlamaReduceScatterCr
 
     ttnn::ccl::Topology ccl_topology = ttnn::ccl::Topology::Linear;
 
-    std::vector<Tensor> output_tensors = {Tensor(tt::tt_metal::operation::get_workers_for_op_output({input_tensor}))};
+    std::vector<Tensor> output_tensors = {
+        Tensor(tt::tt_metal::operation::get_workers_for_op_output({input_tensor})),
+        Tensor(tt::tt_metal::operation::get_workers_for_op_output({input_tensor})),
+        Tensor(tt::tt_metal::operation::get_workers_for_op_output({input_tensor}))};
     uint32_t input_tensor_index = 0;
     for (const auto& tensor : {input_tensor, intermediate_packet_buffer}) {
         auto buffers = tensor.buffers();

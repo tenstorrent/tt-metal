@@ -103,7 +103,7 @@ void kernel_main() {
     constexpr uint8_t device_order[other_devices] =
         DEVICE_ORDER;  // this is code gen'd in the program factory using the defines
     constexpr uint8_t input_core_xy[input_tensor_cores][2] = INPUT_CORE_XY;
-    constexpr uint8_t output_core_xy[output_cores_per_device][2] = OUTPUT_CORE_XY;
+    // constexpr uint8_t output_core_xy[output_cores_per_device][2] = OUTPUT_CORE_XY;
     constexpr uint8_t schedule[total_num_read_txns][3] = SCHEDULE;
     constexpr uint32_t total_senders = num_sender_cores * other_devices;
 

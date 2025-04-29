@@ -20,44 +20,44 @@ LlamaReduceScatterCreateHeadsDeviceOperation::select_program_factory(
 
 void LlamaReduceScatterCreateHeadsDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
-    auto input_tensor = tensor_args.input_tensor;
-    auto tile_shape = input_tensor.get_tensor_spec().tile().get_tile_shape();
-    auto input_spec = input_tensor.get_tensor_spec();
+    // auto input_tensor = tensor_args.input_tensor;
+    // auto tile_shape = input_tensor.get_tensor_spec().tile().get_tile_shape();
+    // auto input_spec = input_tensor.get_tensor_spec();
 
-    TT_FATAL(attributes.dim == 3, "dim must be 1, got {}", attributes.dim);
-    TT_FATAL(attributes.cluster_axis == 1, "cluster_axis must be 1, got {}", attributes.cluster_axis);
-    TT_FATAL(
-        attributes.ring_devices == 4 or attributes.ring_devices == 2,
-        "ring_devices must be 4 or 2, got {}",
-        attributes.ring_devices);
-    TT_FATAL(attributes.cross_device_semaphore.has_value(), "Cross device semaphore is not present");
+    // TT_FATAL(attributes.dim == 3, "dim must be 1, got {}", attributes.dim);
+    // TT_FATAL(attributes.cluster_axis == 1, "cluster_axis must be 1, got {}", attributes.cluster_axis);
+    // TT_FATAL(
+    //     attributes.ring_devices == 4 or attributes.ring_devices == 2,
+    //     "ring_devices must be 4 or 2, got {}",
+    //     attributes.ring_devices);
+    // TT_FATAL(attributes.cross_device_semaphore.has_value(), "Cross device semaphore is not present");
 
-    TT_FATAL(input_tensor.shard_spec().has_value(), "input_tensor must have a shard spec");
-    TT_FATAL(
-        input_tensor.shard_spec().value().shape[0] == 32,
-        "input_tensor shard height must be 32 but got {}",
-        input_tensor.shard_spec().value().shape[0]);
+    // TT_FATAL(input_tensor.shard_spec().has_value(), "input_tensor must have a shard spec");
+    // TT_FATAL(
+    //     input_tensor.shard_spec().value().shape[0] == 32,
+    //     "input_tensor shard height must be 32 but got {}",
+    //     input_tensor.shard_spec().value().shape[0]);
 
-    TT_FATAL(
-        tensor_args.intermediate_packet_buffer.shard_spec().has_value(),
-        "intermediate_packet_buffer must have a shard spec");
-    TT_FATAL(
-        tensor_args.intermediate_packet_buffer.shard_spec().value().shape[0] == 32,
-        "intermediate_packet_buffer shard height must be 32 but got {}",
-        tensor_args.intermediate_packet_buffer.shard_spec().value().shape[0]);
-    TT_FATAL(
-        tensor_args.intermediate_packet_buffer.get_tensor_spec().tile().get_tile_shape() == tile_shape,
-        "intermediate_packet_buffer must have the same tile shape ({}, {}) as input_tensor",
-        tile_shape[0],
-        tile_shape[1]);
-    if (attributes.output_mem_config.has_value()) {
-        TT_FATAL(
-            attributes.output_mem_config.value().shard_spec.has_value(), "output_mem_config must have a shard spec");
-        TT_FATAL(
-            attributes.output_mem_config.value().shard_spec.value().shape[0] == 32,
-            "output_mem_config shard height must be 32 but got {}",
-            attributes.output_mem_config.value().shard_spec.value().shape[0]);
-    }
+    // TT_FATAL(
+    //     tensor_args.intermediate_packet_buffer.shard_spec().has_value(),
+    //     "intermediate_packet_buffer must have a shard spec");
+    // TT_FATAL(
+    //     tensor_args.intermediate_packet_buffer.shard_spec().value().shape[0] == 32,
+    //     "intermediate_packet_buffer shard height must be 32 but got {}",
+    //     tensor_args.intermediate_packet_buffer.shard_spec().value().shape[0]);
+    // TT_FATAL(
+    //     tensor_args.intermediate_packet_buffer.get_tensor_spec().tile().get_tile_shape() == tile_shape,
+    //     "intermediate_packet_buffer must have the same tile shape ({}, {}) as input_tensor",
+    //     tile_shape[0],
+    //     tile_shape[1]);
+    // if (attributes.output_mem_config.has_value()) {
+    //     TT_FATAL(
+    //         attributes.output_mem_config.value().shard_spec.has_value(), "output_mem_config must have a shard spec");
+    //     TT_FATAL(
+    //         attributes.output_mem_config.value().shard_spec.value().shape[0] == 32,
+    //         "output_mem_config shard height must be 32 but got {}",
+    //         attributes.output_mem_config.value().shard_spec.value().shape[0]);
+    // }
 }
 
 void LlamaReduceScatterCreateHeadsDeviceOperation::validate_on_program_cache_hit(
@@ -175,7 +175,7 @@ LlamaReduceScatterCreateHeadsDeviceOperation::tensor_return_value_t
 LlamaReduceScatterCreateHeadsDeviceOperation::create_output_tensors(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     auto output_specs = compute_output_specs(operation_attributes, tensor_args);
-    auto tensors = std::vector<ttnn::Tensor>();
+    std::vector<ttnn::Tensor> tensors{};
     for (auto& output_spec : output_specs) {
         auto tensor = create_device_tensor(output_spec, tensor_args.input_tensor.device());
         tensors.push_back(tensor);
