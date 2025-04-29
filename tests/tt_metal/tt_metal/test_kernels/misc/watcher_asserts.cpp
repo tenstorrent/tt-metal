@@ -19,6 +19,7 @@ void MAIN {
 
     uint32_t a = get_arg_val<uint32_t>(0);
     uint32_t b = get_arg_val<uint32_t>(1);
+    uint32_t assert_type = get_arg_val<uint32_t>(2);
 
     // Conditionally enable using defines for each trisc
 #if (defined(UCK_CHLKC_UNPACK) and defined(TRISC0)) or \
@@ -63,7 +64,7 @@ void MAIN {
 #endif
 #endif
 
-    ASSERT(a != b);
+    ASSERT(a != b, static_cast<debug_assert_type_t>(assert_type));
 #endif
 
 #if defined(COMPILE_FOR_BRISC) || defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_ERISC)
