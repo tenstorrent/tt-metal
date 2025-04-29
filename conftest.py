@@ -64,6 +64,14 @@ def galaxy_type():
         return None
 
 
+def is_galaxy():
+    import ttnn
+
+    num_devices = ttnn.GetNumAvailableDevices()
+    # Galaxy systems have 32 devices
+    return num_devices == 32
+
+
 # TODO: Remove this when TG clusters are deprecated.
 def is_6u():
     import ttnn
@@ -697,6 +705,10 @@ def pytest_handlecrashitem(crashitem, report, sched):
 
 def reset_tensix(tt_open_devices=None):
     import shutil
+
+    if is_galaxy():
+        logger.info("Skipping reset for Galaxy systems, need a new reset.json scheme")
+        return
 
     # Check if tt-smi exists
     if not shutil.which("tt-smi"):
