@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/operations/generic/generic_op/generic_op.hpp"
+#include "generic_op.hpp"
 #include "device/generic_op_device_operation.hpp"
 
 namespace ttnn::operations::generic {

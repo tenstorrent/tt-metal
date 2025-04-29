@@ -8,7 +8,6 @@ namespace ttnn::operations::generic {
 
 GenericOpDeviceOperation::program_factory_t GenericOpDeviceOperation::select_program_factory(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-
     return GenericProgram{};
 }
 

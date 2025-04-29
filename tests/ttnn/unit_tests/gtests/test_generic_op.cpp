@@ -14,7 +14,7 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/operations/functions.hpp"
-#include "ttnn/operations/generic/generic_op/generic_op.hpp"
+#include "ttnn/operations/generic/generic_op.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/operations/matmul/matmul.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
@@ -132,13 +132,15 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpUnaryReluSharded) {
     CoreRange all_cores_range = {
         CoreCoord(0, 0), CoreCoord(compute_with_storage_grid_size.x - 1, compute_with_storage_grid_size.y - 1)};
     CoreRangeSet all_cores = std::set<CoreRange>({all_cores_range});
+    uint32_t num_cores_x = compute_with_storage_grid_size.x;
+    uint32_t num_cores_y = compute_with_storage_grid_size.y;
 
     ttnn::MemoryConfig mem_config = ttnn::MemoryConfig{
         .memory_layout = tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED,
         .buffer_type = tt::tt_metal::BufferType::L1,
         .shard_spec = tt::tt_metal::ShardSpec(
             all_cores,
-            {16 * tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH},
+            {(num_cores_x + num_cores_y) * tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH},
             tt::tt_metal::ShardOrientation::ROW_MAJOR),
     };
 
@@ -163,6 +165,7 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpUnaryReluSharded) {
     uint32_t num_tile_per_core = 0;
     size_t shard_height = shard_spec.shape[0];
     size_t shard_width = shard_spec.shape[1];
+    tt::log_info(tt::LogTest, "shard height: {}, shard width: {}", shard_height, shard_width);
     size_t shard_size_in_bytes = shard_height * shard_width * datum_size(act_df);
     TT_FATAL(shard_size_in_bytes % input_tile_size == 0, "Shard Size must be multiple of input_tile_size");
     num_tile_per_core = (shard_size_in_bytes + input_tile_size - 1) / input_tile_size;  // ceil value
@@ -202,8 +205,6 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpUnaryReluSharded) {
     const KernelDescriptor::CompileTimeArgs compute_ct_args = {1, num_tile_per_core};
 
     // calculate data movement runtime arguments: every core has the same runtime args
-    uint32_t num_cores_x = compute_with_storage_grid_size.x;
-    uint32_t num_cores_y = compute_with_storage_grid_size.y;
     KernelDescriptor::RuntimeArgs reader_rt_args_per_core(
         num_cores_x, std::vector<KernelDescriptor::CoreRuntimeArgs>(num_cores_y));
     for (uint32_t i = 0; i < num_cores_x * num_cores_y; i++) {
