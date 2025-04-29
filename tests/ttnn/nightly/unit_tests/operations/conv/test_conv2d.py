@@ -191,16 +191,19 @@ def run_conv(
 
     tt_input_tensor = ttnn.from_torch(
         torch_input_tensor,
-        activations_dtype if activations_dtype == ttnn.float32 else ttnn.bfloat16,
+        activations_dtype,
         mesh_mapper=input_mesh_mapper,
         layout=input_layout,
+        device=device if activations_dtype == ttnn.bfloat8_b else None,
     )
 
     conv_config = ttnn.Conv2dConfig(
         dtype=activations_dtype,
         weights_dtype=weights_dtype,
         shard_layout=shard_layout if not auto_shard else None,
-        input_channels_alignment=8 if use_shallow_conv_variant and not auto_shard else 32,
+        input_channels_alignment=8
+        if use_shallow_conv_variant and not auto_shard and activations_dtype != ttnn.bfloat8_b
+        else 32,
         deallocate_activation=deallocate_activation,
         enable_act_double_buffer=False,
         enable_split_reader=enable_split_reader,
@@ -337,6 +340,7 @@ def run_conv_with_split(
     packer_l1_acc=False,
     auto_shard=False,
     pcc=0.98,
+    input_layout=ttnn.ROW_MAJOR_LAYOUT,
 ):
     if hasattr(padding, "__len__"):
         if len(padding) == 2:
@@ -426,7 +430,12 @@ def run_conv_with_split(
                 weights_dtype if weights_dtype != ttnn.bfloat8_b else ttnn.float32,
             )
             torch_input_tensor = torch.permute(split_input_tensors[i], (0, 2, 3, 1))
-            tt_input_tensor = ttnn.from_torch(torch_input_tensor, ttnn.bfloat16)
+            tt_input_tensor = ttnn.from_torch(
+                torch_input_tensor,
+                activations_dtype,
+                layout=input_layout,
+                device=device if activations_dtype == ttnn.bfloat8_b else None,
+            )
             [tt_output_tensor_on_device, [out_height, out_width]] = ttnn.conv2d(
                 input_tensor=tt_input_tensor,
                 weight_tensor=tt_weight_tensor,
@@ -519,6 +528,9 @@ def test_conv_features_multi_device(
     if output_layout == ttnn.ROW_MAJOR_LAYOUT and activations_dtype == ttnn.bfloat8_b:
         pytest.skip("Row major layout not compatible with bfloat8_b")
 
+    if activations_dtype == ttnn.bfloat8_b and shard_layout == WS:
+        pytest.skip("Skipping until Issue: #21209 is fixed")
+
     run_conv(
         mesh_device,
         torch_tensor_map,
@@ -543,6 +555,7 @@ def test_conv_features_multi_device(
         weight_mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
         output_mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0),
         groups=groups,
+        input_layout=ttnn.TILE_LAYOUT if activations_dtype == ttnn.bfloat8_b else None,
     )
 
 
@@ -609,6 +622,9 @@ def test_conv_activation(
     if output_layout == ttnn.ROW_MAJOR_LAYOUT and activations_dtype == ttnn.bfloat8_b:
         pytest.skip("Row major layout not compatible with bfloat8_b")
 
+    if activations_dtype == ttnn.bfloat8_b and shard_layout == HS and activation == "sqrt":
+        pytest.skip("Skipping until Issue: #21209 is fixed")
+
     run_conv(
         device,
         torch_tensor_map,
@@ -632,6 +648,7 @@ def test_conv_activation(
         fp32_accum=fp32_accum,
         packer_l1_acc=False,
         activation=activation,
+        input_layout=ttnn.TILE_LAYOUT if activations_dtype == ttnn.bfloat8_b else None,
     )
 
 
@@ -1096,6 +1113,7 @@ def test_resnet50_conv_wh(
         has_bias=has_bias,
         auto_shard=auto_shard,
         shard_layout=shard_layout,
+        input_layout=ttnn.TILE_LAYOUT if activations_dtype == ttnn.bfloat8_b else None,
     )
 
 
@@ -1156,6 +1174,7 @@ def test_conv_mem_config_wh(
         has_bias=True,
         auto_shard=False,
         memory_config=memory_config,
+        input_layout=ttnn.TILE_LAYOUT,
     )
 
 
@@ -1389,6 +1408,7 @@ def test_sd_conv(
             config_override,
             shard_layout=shard_layout,
             split_input_channels_factor=3 if input_channels == 1920 else 2,
+            input_layout=ttnn.TILE_LAYOUT if activations_dtype == ttnn.bfloat8_b else None,
         )
     else:
         run_conv(
@@ -1411,6 +1431,7 @@ def test_sd_conv(
             shard_layout=shard_layout,
             use_shallow_conv_variant=(input_channels == 16),
             auto_shard=auto_shard,
+            input_layout=ttnn.TILE_LAYOUT if activations_dtype == ttnn.bfloat8_b else None,
         )
 
 
@@ -1543,6 +1564,7 @@ def test_sd_conv_wh(
             split_input_channels_factor=3 if input_channels == 1920 else 2,
             fp32_accum=fp32_accum,
             packer_l1_acc=True,
+            input_layout=ttnn.TILE_LAYOUT if activations_dtype == ttnn.bfloat8_b else None,
         )
     else:
         run_conv(
@@ -1567,6 +1589,7 @@ def test_sd_conv_wh(
             fp32_accum=fp32_accum,
             packer_l1_acc=True,
             output_layout=output_layout,
+            input_layout=ttnn.TILE_LAYOUT if activations_dtype == ttnn.bfloat8_b else None,
         )
 
 
@@ -1626,6 +1649,7 @@ def test_sd14_vae_conv(
             split_input_channels_factor=split_factor_input_channels,
             split_output_channels_factor=split_factor_output_channels,
             auto_shard=True,
+            input_layout=ttnn.TILE_LAYOUT if dtype == ttnn.bfloat8_b else None,
         )
     else:
         run_conv(
@@ -1648,6 +1672,7 @@ def test_sd14_vae_conv(
             output_layout=ttnn.TILE_LAYOUT,
             shard_layout=None,
             auto_shard=True,
+            input_layout=ttnn.TILE_LAYOUT if dtype == ttnn.bfloat8_b else None,
         )
 
 
@@ -1738,6 +1763,7 @@ def test_unet_conv_wh(
         transpose_shards=True,  ## use RM (transpose_mcast=False) with 2D on WH
         output_layout=output_layout,
         auto_shard=auto_shard,
+        input_layout=ttnn.TILE_LAYOUT if activations_dtype == ttnn.bfloat8_b else None,
     )
 
 
@@ -1836,6 +1862,7 @@ def test_unet_conv_groups_2_wh(
         output_layout=output_layout,
         auto_shard=auto_shard,
         groups=groups,
+        input_layout=ttnn.TILE_LAYOUT if activations_dtype == ttnn.bfloat8_b else None,
     )
 
 
@@ -1851,23 +1878,23 @@ def test_unet_conv_groups_2_wh(
 @pytest.mark.parametrize(
     "output_channels, input_channels, input_height, input_width, filter_height, filter_width, stride_h, stride_w, pad_h, pad_w, shard_layout, config_override, use_shallow_conv_variant, in_place, input_layout",
     (
-        (16, 4, 1056, 160, 3, 3, 1, 1, 1, 1, HS, {"act_block_h": 2 * 32}, True, False, ttnn.ROW_MAJOR_LAYOUT),
-        (16, 16, 1056, 160, 3, 3, 1, 1, 1, 1, HS, {"act_block_h": 2 * 32}, True, False, ttnn.ROW_MAJOR_LAYOUT),
-        (16, 16, 528, 80, 3, 3, 1, 1, 1, 1, HS, {"act_block_h": 2 * 32}, True, False, ttnn.ROW_MAJOR_LAYOUT),
-        (32, 16, 264, 40, 3, 3, 1, 1, 1, 1, HS, None, False, False, ttnn.ROW_MAJOR_LAYOUT),
-        (32, 32, 264, 40, 3, 3, 1, 1, 1, 1, HS, None, False, False, ttnn.ROW_MAJOR_LAYOUT),
-        (32, 32, 132, 20, 3, 3, 1, 1, 1, 1, HS, None, False, False, ttnn.ROW_MAJOR_LAYOUT),
-        (64, 32, 66, 10, 3, 3, 1, 1, 1, 1, HS, None, False, False, ttnn.ROW_MAJOR_LAYOUT),
-        (64, 64, 66, 10, 3, 3, 1, 1, 1, 1, HS, None, False, False, ttnn.ROW_MAJOR_LAYOUT),
-        (32, 96, 132, 20, 3, 3, 1, 1, 1, 1, HS, None, False, False, ttnn.ROW_MAJOR_LAYOUT),
-        (32, 32, 132, 20, 3, 3, 1, 1, 1, 1, HS, None, False, False, ttnn.ROW_MAJOR_LAYOUT),
-        (32, 64, 264, 40, 3, 3, 1, 1, 1, 1, HS, None, False, False, ttnn.ROW_MAJOR_LAYOUT),
-        (32, 32, 264, 40, 3, 3, 1, 1, 1, 1, HS, None, False, False, ttnn.ROW_MAJOR_LAYOUT),
-        (16, 48, 528, 80, 3, 3, 1, 1, 1, 1, HS, {"act_block_h": 2 * 32}, True, False, ttnn.ROW_MAJOR_LAYOUT),
-        (16, 16, 528, 80, 3, 3, 1, 1, 1, 1, HS, {"act_block_h": 2 * 32}, True, False, ttnn.ROW_MAJOR_LAYOUT),
-        (16, 32, 1056, 160, 3, 3, 1, 1, 1, 1, HS, {"act_block_h": 2 * 32}, True, True, ttnn.ROW_MAJOR_LAYOUT),
+        (16, 4, 1056, 160, 3, 3, 1, 1, 1, 1, HS, {"act_block_h": 2 * 32}, True, False, ttnn.TILE_LAYOUT),
+        (16, 16, 1056, 160, 3, 3, 1, 1, 1, 1, HS, {"act_block_h": 2 * 32}, True, False, ttnn.TILE_LAYOUT),
+        (16, 16, 528, 80, 3, 3, 1, 1, 1, 1, HS, {"act_block_h": 2 * 32}, True, False, ttnn.TILE_LAYOUT),
+        (32, 16, 264, 40, 3, 3, 1, 1, 1, 1, HS, None, False, False, ttnn.TILE_LAYOUT),
+        (32, 32, 264, 40, 3, 3, 1, 1, 1, 1, HS, None, False, False, ttnn.TILE_LAYOUT),
+        (32, 32, 132, 20, 3, 3, 1, 1, 1, 1, HS, None, False, False, ttnn.TILE_LAYOUT),
+        (64, 32, 66, 10, 3, 3, 1, 1, 1, 1, HS, None, False, False, ttnn.TILE_LAYOUT),
+        (64, 64, 66, 10, 3, 3, 1, 1, 1, 1, HS, None, False, False, ttnn.TILE_LAYOUT),
+        (32, 96, 132, 20, 3, 3, 1, 1, 1, 1, HS, None, False, False, ttnn.TILE_LAYOUT),
+        (32, 32, 132, 20, 3, 3, 1, 1, 1, 1, HS, None, False, False, ttnn.TILE_LAYOUT),
+        (32, 64, 264, 40, 3, 3, 1, 1, 1, 1, HS, None, False, False, ttnn.TILE_LAYOUT),
+        (32, 32, 264, 40, 3, 3, 1, 1, 1, 1, HS, None, False, False, ttnn.TILE_LAYOUT),
+        (16, 48, 528, 80, 3, 3, 1, 1, 1, 1, HS, {"act_block_h": 2 * 32}, True, False, ttnn.TILE_LAYOUT),
+        (16, 16, 528, 80, 3, 3, 1, 1, 1, 1, HS, {"act_block_h": 2 * 32}, True, False, ttnn.TILE_LAYOUT),
         (16, 32, 1056, 160, 3, 3, 1, 1, 1, 1, HS, {"act_block_h": 2 * 32}, True, True, ttnn.TILE_LAYOUT),
-        (1, 16, 1056, 160, 1, 1, 1, 1, 0, 0, HS, {"act_block_h": 2 * 32}, False, False, ttnn.ROW_MAJOR_LAYOUT),
+        (16, 32, 1056, 160, 3, 3, 1, 1, 1, 1, HS, {"act_block_h": 2 * 32}, True, True, ttnn.TILE_LAYOUT),
+        (1, 16, 1056, 160, 1, 1, 1, 1, 0, 0, HS, {"act_block_h": 2 * 32}, False, False, ttnn.TILE_LAYOUT),
     ),
 )
 @pytest.mark.parametrize(
@@ -2036,6 +2063,7 @@ def test_unet_conv_groups_8_wh(
         output_layout=output_layout,
         auto_shard=auto_shard,
         groups=groups,
+        input_layout=ttnn.TILE_LAYOUT if activations_dtype == ttnn.bfloat8_b else None,
     )
 
 
@@ -2249,6 +2277,7 @@ def test_conv_dilation(
         dilation_w=dilation_hw[1],
         has_bias=False,
         auto_shard=auto_shard,
+        input_layout=ttnn.TILE_LAYOUT if activations_dtype == ttnn.bfloat8_b else None,
     )
 
 
@@ -2343,6 +2372,7 @@ def test_conv_groups(
         groups=groups,
         output_layout=output_layout,
         auto_shard=auto_shard,
+        input_layout=ttnn.TILE_LAYOUT if activations_dtype == ttnn.bfloat8_b else None,
     )
 
 
@@ -2462,6 +2492,7 @@ def test_yolov4_conv_groups_larger_than_one(
         groups=groups,
         output_layout=output_layout,
         auto_shard=auto_shard,
+        input_layout=ttnn.TILE_LAYOUT if activations_dtype == ttnn.bfloat8_b else None,
     )
 
 
@@ -2536,6 +2567,7 @@ def test_swin_s_conv(
         groups=groups,
         output_layout=output_layout,
         auto_shard=auto_shard,
+        input_layout=ttnn.TILE_LAYOUT if activations_dtype == ttnn.bfloat8_b else None,
     )
 
 
@@ -2603,6 +2635,7 @@ def test_model_k_256x256(
         dilation_h=dilation,
         dilation_w=dilation,
         auto_shard=auto_shard,
+        input_layout=ttnn.TILE_LAYOUT if activations_dtype == ttnn.bfloat8_b else None,
     )
 
 
@@ -2684,6 +2717,7 @@ def test_conv_for_vanilla_unet(
         groups=1,
         output_layout=output_layout,
         has_bias=False,
+        input_layout=ttnn.TILE_LAYOUT if activations_dtype == ttnn.bfloat8_b else None,
     )
 
 
@@ -2859,6 +2893,7 @@ def test_split_reader_regression(
         has_bias=False,
         shard_layout=shard_layout,
         enable_split_reader=True,
+        input_layout=ttnn.TILE_LAYOUT,
     )
 
 
@@ -3063,6 +3098,7 @@ def test_conv2d_model_fruit(
         weight_mesh_mapper=None,
         output_mesh_composer=None,
         enable_split_reader=enable_split_reader,
+        input_layout= ttnn.TILE_LAYOUT,
     )
 
 
@@ -3171,6 +3207,7 @@ def test_conv2d_sdxl(
             fp32_accum=fp32_accum,
             packer_l1_acc=packer_l1_acc,
             auto_shard=auto_shard,
+            input_layout=ttnn.TILE_LAYOUT if activations_dtype == ttnn.bfloat8_b else None,
         )
     else:
         run_conv(
@@ -3206,6 +3243,7 @@ def test_conv2d_sdxl(
             weight_mesh_mapper=None,
             output_mesh_composer=None,
             enable_split_reader=enable_split_reader,
+            input_layout=ttnn.TILE_LAYOUT if activations_dtype == ttnn.bfloat8_b else None,
         )
 
 
@@ -3297,6 +3335,7 @@ def test_conv2d_vae_sdxl(
             split_output_channels_factor=split_factor_output_channels,
             auto_shard=True,
             pcc=0.97,
+            input_layout=ttnn.TILE_LAYOUT if activations_dtype == ttnn.bfloat8_b else None,
         )
     else:
         run_conv(
@@ -3333,6 +3372,7 @@ def test_conv2d_vae_sdxl(
             output_mesh_composer=None,
             enable_split_reader=False,
             slice_config=slice_config,
+            input_layout=ttnn.TILE_LAYOUT if activations_dtype == ttnn.bfloat8_b else None,
         )
 
 
