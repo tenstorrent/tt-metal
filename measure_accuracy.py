@@ -10,6 +10,8 @@ import os
 device_id = 0
 device = ttnn.open_device(device_id=device_id)
 
+EPSILON = 2**-6
+
 ttnn.enable_program_cache(device)  # Useful: we are going to call the same kernel several times
 
 
@@ -42,90 +44,117 @@ datatypes_parameters = {
 
 operations_dict = {
     # Exponential functions
-    "exp": (torch.exp, ttnn.exp, math.exp),
+    "exp": (torch.exp, ttnn.exp, math.exp, "exp"),
     "exp_approx": (
         torch.exp,
         lambda x, output_tensor: ttnn.exp(x, fast_and_approximate_mode=True, output_tensor=output_tensor),
         None,
+        "exp",
     ),
     "tanh": (
         torch.tanh,
         lambda x, output_tensor: ttnn.tanh(x),
         math.tanh,
+        "tanh",
     ),  # ttnn.tanh() does not support output_tensor ?
     "cosh": (
         torch.cosh,
         lambda x, output_tensor: ttnn.cosh(x),
         math.cosh,
+        "cosh",
     ),  # ttnn.cosh() does not support output_tensor ?
     "sinh": (
         torch.sinh,
         lambda x, output_tensor: ttnn.sinh(x),
         math.sinh,
+        "sinh",
     ),  # ttnn.sinh() does not support output_tensor ?
     # Logarithmic functions
-    "log": (torch.log, ttnn.log, math.log),
-    "log10": (torch.log10, ttnn.log10, math.log10),
-    "log2": (torch.log2, ttnn.log2, math.log2),
-    "log1p": (torch.log1p, ttnn.log1p, math.log1p),
-    "logaddexp": (torch.logaddexp, ttnn.logaddexp, None),
-    "logaddexp2": (torch.logaddexp2, ttnn.logaddexp2, None),
+    "log": (torch.log, ttnn.log, math.log, "log"),
+    "log10": (torch.log10, ttnn.log10, math.log10, "log10"),
+    "log2": (torch.log2, ttnn.log2, math.log2, "log2"),
+    "log1p": (torch.log1p, ttnn.log1p, math.log1p, "log1p"),
+    "logaddexp": (torch.logaddexp, ttnn.logaddexp, None, "logaddexp"),
+    "logaddexp2": (torch.logaddexp2, ttnn.logaddexp2, None, "logaddexp2"),
     # Activation functions
-    "silu": (lambda x, out: torch.nn.SiLU()(x), ttnn.silu, None),
-    "gelu": (lambda x, out: torch.nn.GELU()(x), ttnn.gelu, None),
-    "logit": (torch.logit, lambda x, output_tensor: ttnn.logit(x), None),  # ttnn.logit does not support output_tensor ?
+    "silu": (lambda x, out: torch.nn.SiLU()(x), ttnn.silu, None, "silu"),
+    "gelu": (lambda x, out: torch.nn.GELU()(x), ttnn.gelu, None, "gelu"),
+    "logit": (
+        torch.logit,
+        lambda x, output_tensor: ttnn.logit(x),
+        None,
+        "logit",
+    ),  # ttnn.logit does not support output_tensor ?
     "swish": (
         lambda x, out: torch.nn.SiLU()(x),
         lambda x, output_tensor: ttnn.swish(x),
         None,
+        "swish",
     ),  # ttnn.swish does not support output_tensor ?
-    "mish": (lambda x, out: torch.nn.Mish()(x), ttnn.mish, None),
+    "mish": (lambda x, out: torch.nn.Mish()(x), ttnn.mish, None, "mish"),
     "elu": (
         lambda x, out: torch.nn.ELU()(x),
         lambda x, output_tensor: ttnn.elu(x, output_tensor=output_tensor, alpha=1.0),
         None,
+        "elu",
     ),  # Unlike torch, ttnn.elu does not use alpha=1 by default
     "selu": (
         lambda x, out: torch.nn.SELU()(x),
         lambda x, output_tensor: ttnn.selu(x),
         None,
+        "selu",
     ),  # ttnn.selu does not support output_tensor ?
-    "softplus": (lambda x, out: torch.nn.Softplus()(x), ttnn.softplus, None),
+    "softplus": (lambda x, out: torch.nn.Softplus()(x), ttnn.softplus, None, "softplus"),
     "softsign": (
         lambda x, out: torch.nn.Softsign()(x),
         lambda x, output_tensor: ttnn.softsign(x),
         None,
+        "softsign",
     ),  # ttnn.softsign does not support output_tensor ?
     # Trigonometric functions
-    "tan": (torch.tan, ttnn.tan, math.tan),
-    "atan": (torch.atan, ttnn.atan, math.atan),
-    "atan2": (torch.atan2, ttnn.atan2, math.atan2),
-    "sin": (torch.sin, ttnn.sin, math.sin),
-    "cos": (torch.cos, ttnn.cos, math.cos),
+    "tan": (torch.tan, ttnn.tan, math.tan, "tan"),
+    "atan": (torch.atan, ttnn.atan, math.atan, "atan"),
+    "atan2": (torch.atan2, ttnn.atan2, math.atan2, "atan2"),
+    "sin": (torch.sin, ttnn.sin, math.sin, "sin"),
+    "cos": (torch.cos, ttnn.cos, math.cos, "cos"),
     # Miscellaneous functions
-    "sqrt": (torch.sqrt, ttnn.sqrt, math.sqrt),
-    "rsqrt": (torch.rsqrt, ttnn.rsqrt, None),
+    "sqrt": (torch.sqrt, ttnn.sqrt, math.sqrt, "sqrt"),
+    "rsqrt": (torch.rsqrt, ttnn.rsqrt, None, "rsqrt"),
     "rsqrt_approx": (
         torch.rsqrt,
         lambda x, output_tensor: ttnn.rsqrt(x, fast_and_approximate_mode=True, output_tensor=output_tensor),
         None,
+        "rsqrt",
     ),
     "digamma": (
         torch.digamma,
         lambda x, output_tensor: ttnn.digamma(x),
         None,
+        "digamma",
     ),  # ttnn.digamma does not support output_tensor ?
     "lgamma": (
         torch.lgamma,
         lambda x, output_tensor: ttnn.lgamma(x),
         math.lgamma,
+        "lgamma",
     ),  # ttnn.lgamma does not support output_tensor ?
     "tanhshrink": (
         lambda x, out: torch.nn.Tanhshrink()(x),
         lambda x, output_tensor: ttnn.tanhshrink(x),
         None,
+        "tanhshrink",
     ),  # ttnn.tan
 }
+
+# Add powers of [-1, 2, 3, 4, 5, 6, 7, 8, 9, 10] into dictionary
+powers = [2, 3, 4, 5, 6, 7, 8, 9, 10]
+for power in powers:
+    operations_dict[f"pow_{power}"] = (
+        lambda x, out, p=power: torch.pow(p, x),
+        lambda x, output_tensor, p=power: ttnn.pow(p, x, output_tensor=output_tensor),
+        None,
+        "pow",
+    )
 
 
 def measure_op_accuracy(operation_name, target_dtype, dest_dir, samples=None):
@@ -178,16 +207,20 @@ def measure_op_accuracy(operation_name, target_dtype, dest_dir, samples=None):
 
     # Define operations to run
 
-    (torch_unary_op, ttnn_unary_op, python_unary_op) = operations_dict[operation_name]
+    (torch_unary_op, ttnn_unary_op, python_unary_op, parent_op) = operations_dict[operation_name]
 
     # Measurements
-    x_array = np.zeros([repeats * sub_batches], dtype=NUMPY_TYPE)
-    y_array = np.zeros([repeats * sub_batches], dtype=NUMPY_TYPE)
-    yref_array = np.zeros([repeats * sub_batches], dtype=NUMPY_TYPE)
-    mse_array = np.zeros([repeats * sub_batches], dtype=NUMPY_TYPE)
-    max_abs_error_array = np.zeros([repeats * sub_batches], dtype=NUMPY_TYPE)
-    max_rel_error_array = np.zeros([repeats * sub_batches], dtype=NUMPY_TYPE)
-    mean_rel_error_array = np.zeros([repeats * sub_batches], dtype=NUMPY_TYPE)
+
+    [
+        x_array,
+        y_array,
+        yref_array,
+        mse_array,
+        max_abs_error_array,
+        mean_abs_error_array,
+        max_rel_error_array,
+        mean_rel_error_array,
+    ] = [np.zeros([repeats * sub_batches], dtype=NUMPY_TYPE) for _ in range(8)]
 
     for i in range(0, repeats):
         print(f"{operation_name} [{target_dtype}] iteration #{i} / {repeats}", end="\r")
@@ -269,11 +302,14 @@ def measure_op_accuracy(operation_name, target_dtype, dest_dir, samples=None):
             if len(np_diff) > 0 and len(np_sub_ref_abs) > 0:
                 # Reduces edge cases
                 max_abs_error = np_diff_curated.max()
-                max_rel_error = np.max(np_diff_curated / np_sub_ref_abs)  # Ignore NaN
-                mean_rel_error = np.mean(np_diff_curated / np_sub_ref_abs)
+                mean_abs_error = np_diff_curated.mean()
+                rel_error = np_diff_curated / (np_sub_ref_abs.max() + EPSILON)
+                max_rel_error = np.max(rel_error)  # Ignore NaN
+                mean_rel_error = np.mean(rel_error)
 
             else:  # Batch only contains infinite value
                 max_abs_error = np_diff.max()
+                mean_abs_error = np_diff.mean()
                 max_rel_error = np.max(np_diff / np.abs(np_sub_ref))  # Ignore NaN
                 mean_rel_error = np.mean(np_diff / np.abs(np_sub_ref))
 
@@ -283,6 +319,7 @@ def measure_op_accuracy(operation_name, target_dtype, dest_dir, samples=None):
             yref_array[res_i] = np_sub_ref[0].item()
             # mse_array           [res_i] = mse_value.item()
             max_abs_error_array[res_i] = max_abs_error.item()
+            mean_abs_error_array[res_i] = mean_abs_error.item()
             max_rel_error_array[res_i] = max_rel_error.item()
             mean_rel_error_array[res_i] = mean_rel_error.item()
 
@@ -293,6 +330,7 @@ def measure_op_accuracy(operation_name, target_dtype, dest_dir, samples=None):
             "base_yref": yref_array,
             "mse": mse_array,
             "max_abs_error": max_abs_error_array,
+            "mean_abs_error": mean_abs_error_array,
             "max_rel_error": max_rel_error_array,
             "mean_rel_error": mean_rel_error_array,
         }
@@ -343,15 +381,18 @@ def measure_op_accuracy_bf16(operation_name, dest_dir, group_size=None):
     ttnn_output = ttnn.zeros(size, dtype=TTNN_TYPE, device=device, layout=ttnn.TILE_LAYOUT)
 
     # Get the operations to test
-    (torch_unary_op, ttnn_unary_op, python_unary_op) = operations_dict[operation_name]
+    (torch_unary_op, ttnn_unary_op, python_unary_op, parent_op) = operations_dict[operation_name]
 
     # Initialize arrays for measurements
-    x_array = np.zeros([sub_batches], dtype=NUMPY_TYPE)
-    y_array = np.zeros([sub_batches], dtype=NUMPY_TYPE)
-    yref_array = np.zeros([sub_batches], dtype=NUMPY_TYPE)
-    max_abs_error_array = np.zeros([sub_batches], dtype=NUMPY_TYPE)
-    max_rel_error_array = np.zeros([sub_batches], dtype=NUMPY_TYPE)
-    mean_rel_error_array = np.zeros([sub_batches], dtype=NUMPY_TYPE)
+    [
+        x_array,
+        y_array,
+        yref_array,
+        max_abs_error_array,
+        mean_abs_error_array,
+        max_rel_error_array,
+        mean_rel_error_array,
+    ] = [np.zeros([sub_batches], dtype=NUMPY_TYPE) for _ in range(7)]
 
     start_time = time.time()
 
@@ -387,11 +428,17 @@ def measure_op_accuracy_bf16(operation_name, dest_dir, group_size=None):
         # Handle edge cases
         finite_mask = np.isfinite(np_diff) & np.isfinite(np_sub_ref_abs)
         if np.any(finite_mask):
+            np_abs_diff = np_sub_ref_abs[finite_mask].max() + EPSILON
+
             max_abs_error = np.max(np_diff[finite_mask])
-            max_rel_error = np.max(np_diff[finite_mask] / np_sub_ref_abs[finite_mask])
-            mean_rel_error = np.mean(np_diff[finite_mask] / np_sub_ref_abs[finite_mask])
+            mean_abs_error = np.mean(np_diff[finite_mask])
+            max_rel_error = np.max(np_diff[finite_mask] / np_abs_diff)
+            mean_rel_error = np.mean(np_diff[finite_mask] / np_abs_diff)
         else:
+            np_abs_diff = np_sub_ref_abs.max() + EPSILON
+
             max_abs_error = np.max(np_diff)
+            mean_abs_error = np.mean(np_diff)
             max_rel_error = np.max(np_diff / np_sub_ref_abs)
             mean_rel_error = np.mean(np_diff / np_sub_ref_abs)
 
@@ -400,6 +447,7 @@ def measure_op_accuracy_bf16(operation_name, dest_dir, group_size=None):
         y_array[j] = np_sub_output[0].item()
         yref_array[j] = np_sub_ref[0].item()
         max_abs_error_array[j] = max_abs_error.item()
+        mean_abs_error_array[j] = mean_abs_error.item()
         max_rel_error_array[j] = max_rel_error.item()
         mean_rel_error_array[j] = mean_rel_error.item()
 
@@ -410,12 +458,14 @@ def measure_op_accuracy_bf16(operation_name, dest_dir, group_size=None):
             "base_y": y_array,
             "base_yref": yref_array,
             "max_abs_error": max_abs_error_array,
+            "mean_abs_error": mean_abs_error_array,
             "max_rel_error": max_rel_error_array,
             "mean_rel_error": mean_rel_error_array,
         }
     )
     accuracy_df["operation"] = operation_name
     accuracy_df["dtype"] = "bfloat16"
+    accuracy_df["parent_op"] = parent_op
 
     accuracy_df.to_csv(f"{dest_dir}/{operation_name}-bfloat16-[{group_size}].csv", na_rep="NaN", index_label="index")
 
@@ -436,6 +486,10 @@ def main(args):
     np.seterr(divide="ignore")
     np.seterr(invalid="ignore")
     np.seterr(over="ignore")
+
+    # Add powers into operations
+    powers_vals = [2, 3, 4, 5, 6, 7, 8, 9, 10]
+    powers = [f"pow_{power}" for power in powers_vals]
 
     # Unused: atan2, logaddexp, logaddexp2
     all_operations = [
@@ -469,38 +523,40 @@ def main(args):
         "tanhshrink",
     ]
 
-    highres_operations = set(
-        [
-            "exp",
-            "exp_approx",
-            "log",
-            "log10",
-            "log2",
-            "log1p",
-            "tanh",
-            "cosh",
-            "sinh",
-            "tan",
-            "atan",
-            "cos",
-            "sin",
-            "silu",
-            "gelu",
-            "logit",
-            "swish",
-            "mish",
-            "elu",
-            "selu",
-            "softplus",
-            "softsign",
-            "digamma",
-            "lgamma",
-            "tanhshrink",
-            "sqrt",
-            "rsqrt",
-            "rsqrt_approx",
-        ]
-    )
+    highres_operations = [
+        "exp",
+        "exp_approx",
+        "log",
+        "log10",
+        "log2",
+        "log1p",
+        "tanh",
+        "cosh",
+        "sinh",
+        "tan",
+        "atan",
+        "cos",
+        "sin",
+        "silu",
+        "gelu",
+        "logit",
+        "swish",
+        "mish",
+        "elu",
+        "selu",
+        "softplus",
+        "softsign",
+        "digamma",
+        "lgamma",
+        "tanhshrink",
+        "sqrt",
+        "rsqrt",
+        "rsqrt_approx",
+    ]
+
+    all_operations += powers
+    highres_operations += powers
+
     success_count = 0
     successfull_operations = []
     failed_operations = []
