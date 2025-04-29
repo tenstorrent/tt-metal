@@ -1,9 +1,6 @@
 name: Build test and publish upstream tests
 
 on:
-  push:
-    branches:
-      - rkim/21067-upstream-tests
   workflow_dispatch:
   schedule:
     - cron: '0 12 * * *'
@@ -123,7 +120,7 @@ jobs:
           context: ${{ github.workspace }}
       - name: Tag and push latest
         # TODO - get rid of my branch and make this generic for both images
-        if: ${{ github.ref == 'refs/heads/main' || github.ref == 'refs/heads/rkim/21067-upstream-tests' }}
+        if: ${{ github.ref == 'refs/heads/main' }}
         run: |
           IMAGE_NAME="${{ matrix.image-config.image-base-name }}"
           LATEST_TAG="${IMAGE_NAME}:latest"
