@@ -81,13 +81,42 @@ def _golden_function(slice, tensor, num_slices, slice_id, *args, **kwargs):
 ttnn.attach_golden_function(ttnn.sharded_to_interleaved_partial, _golden_function)
 
 
-def _golden_function(in0, in1, op, dir, *args, **kwargs):
-    in0 = in0.reshape((in1.shape[0], 1, -1, in0.shape[-1]))
-    if op == ttnn.BcastOpMath.ADD:
+def _golden_function(in0, in1, math_op, bcast_dim, *args, **kwargs):
+    if bcast_dim == ttnn.BcastOpDim.W:
+        target_width = in0.shape[-1]
+        source_width = in1.shape[-1]
+
+        repeat_factor = (target_width + source_width - 1) // source_width
+        in1 = in1.repeat(1, 1, 1, repeat_factor)[:, :, :, :target_width]
+        fill_values = in1[..., 0].unsqueeze(-1)
+        in1[:] = fill_values
+
+    elif bcast_dim == ttnn.BcastOpDim.H:
+        target_height = in0.shape[-2]
+        source_height = in1.shape[-2]
+
+        repeat_factor = (target_height + source_height - 1) // source_height
+        in1 = in1.repeat(1, 1, repeat_factor, 1)[:, :, :target_height, :]
+        in1[:] = in1[:, :, 0:1, :].expand_as(in1)
+    elif bcast_dim == ttnn.BcastOpDim.HW:
+        target_height = in0.shape[-2]
+        source_height = in1.shape[-2]
+        height_repeat = (target_height + source_height - 1) // source_height
+        in1 = in1.repeat(1, 1, height_repeat, 1)[:, :, :target_height, :]
+
+        target_width = in0.shape[-1]
+        source_width = in1.shape[-1]
+        width_repeat = (target_width + source_width - 1) // source_width
+        in1 = in1.repeat(1, 1, 1, width_repeat)[:, :, :, :target_width]
+
+        fill_value = in1[:, :, 0, 0].unsqueeze(-1).unsqueeze(-1)
+        in1[:] = fill_value.expand_as(in1)
+
+    if math_op == ttnn.BcastOpMath.ADD:
         res = in0 + in1
-    elif op == ttnn.BcastOpMath.SUB:
+    elif math_op == ttnn.BcastOpMath.SUB:
         res = in0 - in1
-    elif op == ttnn.BcastOpMath.MUL:
+    elif math_op == ttnn.BcastOpMath.MUL:
         res = in0 * in1
     return res
 
