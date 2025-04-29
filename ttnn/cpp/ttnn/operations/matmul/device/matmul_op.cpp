@@ -1127,7 +1127,6 @@ inline MatmulProgramConfig get_program_config(
             using ProgramConfigType = std::decay_t<decltype(program_config)>;
             if constexpr (
                 not std::is_same_v<ProgramConfigType, MatmulMultiCoreProgramConfig> and
-                not std::is_same_v<ProgramConfigType, MatmulMultiCoreNonOptimizedReuseProgramConfig> and
                 not std::is_same_v<ProgramConfigType, MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig>) {
                 TT_FATAL(
                     program_config.compute_with_storage_grid_size.x <=
@@ -2411,15 +2410,6 @@ operation::CacheableMeshWorkload<std::vector<Tensor>> Matmul::create_mesh_worklo
                         std::move(dram_sharded_mm_program.override_runtime_arguments_callback.value());
                 }
                 return {.workload = std::move(dram_sharded_mm_workload), .per_program_callbacks = std::move(callbacks)};
-
-            } else if constexpr (std::is_same_v<ProgramConfigType, MatmulMultiCoreNonOptimizedReuseProgramConfig>) {
-                TT_FATAL(
-                    !bias.has_value(),
-                    "Bias is not supported for matmul multi core non-optimized "
-                    "reuse");
-                auto multicore_mm_program =
-                    matmul_multi_core_reuse(input_tensor_a, input_tensor_b, output_tensor, broadcast_batch);
-                return create_homogenous_mesh_workload(multicore_mm_program, tensor_coords);
 
             } else if constexpr (std::is_same_v<ProgramConfigType, MatmulMultiCoreProgramConfig>) {
                 TT_FATAL(!bias.has_value(), "Bias is not supported for matmul multi core");
