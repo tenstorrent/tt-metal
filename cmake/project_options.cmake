@@ -3,6 +3,7 @@
 #   The following options and their defaults impact what artifacts get built
 ###########################################################################################
 option(WITH_PYTHON_BINDINGS "Enables build of python bindings" ON)
+option(EXPERIMENTAL_NANOBIND_BINDINGS "Enables experimental build of python bindings with nanobind" OFF)
 option(ENABLE_CODE_TIMERS "Enable code timers" OFF)
 option(ENABLE_TRACY "Enable Tracy Profiling" OFF)
 option(ENABLE_LIBCXX "Enable using libc++" OFF)
@@ -21,6 +22,15 @@ option(TT_UMD_BUILD_SIMULATION "Force UMD to include its simulation harnessing" 
 option(TT_INSTALL "Define installation rules" ON)
 
 ###########################################################################################
+
+if(WITH_PYTHON_BINDINGS)
+    if(EXPERIMENTAL_NANOBIND_BINDINGS)
+        set(PY_BINDING "nanobind")
+    else()
+        set(PY_BINDING "pybind")
+    endif()
+    message(STATUS "Python Binding Backend: ${PY_BINDING}")
+endif()
 
 if(CMAKE_CXX_CLANG_TIDY AND TT_UNITY_BUILDS)
     # There should be a way to have clang-tidy handle Unity builds properly,
