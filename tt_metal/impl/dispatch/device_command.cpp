@@ -490,7 +490,9 @@ void DeviceCommand<hugepage_write>::add_dispatch_set_go_signal_noc_data(
         initialize_set_go_signal_noc_data_cmd(set_go_signal_noc_data_cmd_dst);
     }
     uint32_t* noc_mcast_unicast_data_dst = this->reserve_space<uint32_t*>(data_sizeB);
-    this->memcpy(noc_mcast_unicast_data_dst, noc_mcast_unicast_data.data(), data_sizeB);
+    if (data_sizeB > 0) {
+        this->memcpy(noc_mcast_unicast_data_dst, noc_mcast_unicast_data.data(), data_sizeB);
+    }
     this->cmd_write_offsetB = tt::align(this->cmd_write_offsetB, this->pcie_alignment);
 }
 

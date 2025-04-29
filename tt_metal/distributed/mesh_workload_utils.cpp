@@ -70,7 +70,7 @@ void write_go_signal(
         (send_mcast && device->has_noc_mcast_txns(sub_device_id)) ? *sub_device_id
                                                                   : CQ_DISPATCH_CMD_GO_NO_MULTICAST_OFFSET,
         send_unicasts ? device->num_virtual_eth_cores(sub_device_id) : 0,
-        device->noc_data_start_index(sub_device_id, send_mcast, send_unicasts), /* noc_data_start_idx */
+        device->noc_data_start_index(sub_device_id, send_unicasts), /* noc_data_start_idx */
         dispatcher_for_go_signal);
 
     sysmem_manager.issue_queue_push_back(cmd_sequence_sizeB, cq_id);

@@ -111,11 +111,6 @@ uint8_t SubDeviceManager::num_noc_unicast_txns(SubDeviceId sub_device_id) const 
     return num_noc_unicast_txns_[sub_device_index];
 }
 
-uint8_t SubDeviceManager::noc_mcast_data_start_index(SubDeviceId sub_device_id) const {
-    auto sub_device_index = this->get_sub_device_index(sub_device_id);
-    return noc_mcast_data_start_index_[sub_device_index];
-}
-
 uint8_t SubDeviceManager::noc_unicast_data_start_index(SubDeviceId sub_device_id) const {
     auto sub_device_index = this->get_sub_device_index(sub_device_id);
     return noc_unicast_data_start_index_[sub_device_index];
@@ -325,28 +320,15 @@ void SubDeviceManager::populate_noc_data() {
     uint32_t num_sub_devices = this->num_sub_devices();
     has_noc_mcast_txns_.resize(num_sub_devices);
     num_noc_unicast_txns_.resize(num_sub_devices);
-    noc_mcast_data_start_index_.resize(num_sub_devices);
     noc_unicast_data_start_index_.resize(num_sub_devices);
 
     NOC noc_index = MetalContext::instance().get_dispatch_query_manager().go_signal_noc();
     uint32_t idx = 0;
-    const auto& compute_grid_size = device_->compute_with_storage_grid_size();
-    CoreRange device_worker_cores = CoreRange({0, 0}, {compute_grid_size.x - 1, compute_grid_size.y - 1});
-    auto virtual_start = device_->virtual_core_from_logical_core(device_worker_cores.start_coord, CoreType::WORKER);
-    auto virtual_end = device_->virtual_core_from_logical_core(device_worker_cores.end_coord, CoreType::WORKER);
-    auto virtual_core_range = CoreRange(virtual_start, virtual_end);
-
     for (uint32_t i = 0; i < num_sub_devices; ++i) {
         const auto& eth_cores = sub_devices_[i].cores(HalProgrammableCoreType::ACTIVE_ETH);
 
-        noc_mcast_data_start_index_[i] = idx;
         has_noc_mcast_txns_[i] = sub_devices_[i].has_core_type(HalProgrammableCoreType::TENSIX);
 
-        noc_mcast_unicast_data_.resize(idx + has_noc_mcast_txns_[i] * 2);
-        if (has_noc_mcast_txns_[i]) {
-            noc_mcast_unicast_data_[idx++] = device_->get_noc_multicast_encoding(noc_index, virtual_core_range);
-            noc_mcast_unicast_data_[idx++] = device_worker_cores.size();
-        }
         noc_unicast_data_start_index_[i] = idx;
 
         // TODO: Precompute number of eth cores and resize once
@@ -365,6 +347,9 @@ void SubDeviceManager::populate_noc_data() {
             idx,
             DispatchSettings::DISPATCH_GO_SIGNAL_NOC_DATA_ENTRIES);
     }
+
+    const auto& compute_grid_size = device_->compute_with_storage_grid_size();
+    CoreRange device_worker_cores = CoreRange({0, 0}, {compute_grid_size.x - 1, compute_grid_size.y - 1});
 
     std::vector<std::pair<CoreRangeSet, uint32_t>> core_go_message_mapping;
     CoreRangeSet used_cores;
