@@ -819,7 +819,7 @@ void LlamaReduceScatterCreateHeadsDeviceOperation::LlamaReduceScatterCreateHeads
     UpdateDynamicCircularBufferAddress(program, cached_program.shared_variables.cb_handles[0], *input_tensor_buffer);
     // UpdateDynamicCircularBufferAddress(program, cached_program.shared_variables.cb_handles[1],
     // *output_tensor_buffer);
-    UpdateDynamicCircularBufferAddress(program, cached_program.shared_variables.cb_handles[2], *packet_buffer);
+    UpdateDynamicCircularBufferAddress(program, cached_program.shared_variables.cb_handles[1], *packet_buffer);
 
     for (const auto& core : cores) {
         auto& writer_runtime_args = tt::tt_metal::GetRuntimeArgs(program, unary_writer_kernel_id, core);
