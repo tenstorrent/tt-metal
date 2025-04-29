@@ -18,9 +18,6 @@
 #include "debug/dprint.h"
 #include "ckernel_sfpu.h"
 using namespace ckernel;
-// topk llk needs a global variable atm
-// this can only be removed once that's fixed
-int32_t topk_replay_init = 0;
 
 namespace NAMESPACE {
 template <uint32_t in0_cb, uint32_t in1_cb, uint32_t rows, uint32_t cols>

@@ -13,9 +13,6 @@
 
 #include "debug/dprint.h"
 
-// topk llk needs a global variable atm
-// this can only be removed once that's fixed
-int32_t topk_replay_init = 0;
 namespace NAMESPACE {
 /*
 The sorting algorithm is based on Bitonic Merge Sort.
