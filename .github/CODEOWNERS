@@ -141,6 +141,7 @@ tests/ttnn/distributed/ @cfjchu @ayerofieiev-tt @dmakoviichuk-tt @omilyutin-tt
 # models
 /models/ @uaydonat
 /models/*/**
+/**/functional_*/ @uaydonat @esmalTT
 models/common @yieldthought @mtairum @uaydonat
 models/datasets/llm_dataset_utils.py @skhorasganiTT @uaydonat
 models/demos @uaydonat
