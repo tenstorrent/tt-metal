@@ -2483,6 +2483,7 @@ void Run1DFabricPacketSendTest(
         "Linear");
     bool use_galaxy = num_devices == 32;
     bool use_tg = use_galaxy && tt::tt_metal::GetNumPCIeDevices() == 4;
+    bool is_6u_galaxy = use_galaxy && tt::tt_metal::GetNumPCIeDevices() == 32;
     if (num_devices < 4) {
         log_info("This test can only be run on T3000 devices");
         return;
@@ -2561,7 +2562,9 @@ void Run1DFabricPacketSendTest(
             enable_persistent_fabric_mode,
             params.num_links,
             topology,
-            fabric_context_switch_interval);
+            fabric_context_switch_interval,
+            false,
+            is_6u_galaxy);
         packet_header_size_bytes = sizeof(tt::tt_fabric::PacketHeader);
     } else {
         // TODO: get packet header size from control plane after it adds APIs to present this information
