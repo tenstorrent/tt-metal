@@ -156,7 +156,7 @@ jobs:
     if: ${{ github.ref == 'refs/heads/main' }}
     needs:
       - get-image-tags
-      - build-wh-6u-image
+      - build-images
     runs-on:
       - arch-wormhole_b0
       - topology-6u
