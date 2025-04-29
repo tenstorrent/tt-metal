@@ -10,7 +10,7 @@ import os
 device_id = 0
 device = ttnn.open_device(device_id=device_id)
 
-EPSILON = 2**-6
+EPSILON = 2**-9
 
 ttnn.enable_program_cache(device)  # Useful: we are going to call the same kernel several times
 
@@ -119,7 +119,12 @@ operations_dict = {
     "cos": (torch.cos, ttnn.cos, math.cos, "cos"),
     # Miscellaneous functions
     "sqrt": (torch.sqrt, ttnn.sqrt, math.sqrt, "sqrt"),
-    "rsqrt": (torch.rsqrt, ttnn.rsqrt, None, "rsqrt"),
+    "rsqrt": (
+        torch.rsqrt,
+        lambda x, output_tensor: ttnn.rsqrt(x, fast_and_approximate_mode=False, output_tensor=output_tensor),
+        None,
+        "rsqrt",
+    ),
     "rsqrt_approx": (
         torch.rsqrt,
         lambda x, output_tensor: ttnn.rsqrt(x, fast_and_approximate_mode=True, output_tensor=output_tensor),
@@ -303,7 +308,7 @@ def measure_op_accuracy(operation_name, target_dtype, dest_dir, samples=None):
                 # Reduces edge cases
                 max_abs_error = np_diff_curated.max()
                 mean_abs_error = np_diff_curated.mean()
-                rel_error = np_diff_curated / (np_sub_ref_abs.max() + EPSILON)
+                rel_error = np_diff_curated / max(np_sub_ref_abs.max(), EPSILON)
                 max_rel_error = np.max(rel_error)  # Ignore NaN
                 mean_rel_error = np.mean(rel_error)
 
@@ -428,19 +433,19 @@ def measure_op_accuracy_bf16(operation_name, dest_dir, group_size=None):
         # Handle edge cases
         finite_mask = np.isfinite(np_diff) & np.isfinite(np_sub_ref_abs)
         if np.any(finite_mask):
-            np_abs_diff = np_sub_ref_abs[finite_mask].max() + EPSILON
+            np_abs_diff = max(np_sub_ref_abs[finite_mask].max(), EPSILON)
 
             max_abs_error = np.max(np_diff[finite_mask])
             mean_abs_error = np.mean(np_diff[finite_mask])
             max_rel_error = np.max(np_diff[finite_mask] / np_abs_diff)
             mean_rel_error = np.mean(np_diff[finite_mask] / np_abs_diff)
         else:
-            np_abs_diff = np_sub_ref_abs.max() + EPSILON
+            np_abs_diff = max(np_sub_ref_abs.max(), EPSILON)
 
             max_abs_error = np.max(np_diff)
             mean_abs_error = np.mean(np_diff)
-            max_rel_error = np.max(np_diff / np_sub_ref_abs)
-            mean_rel_error = np.mean(np_diff / np_sub_ref_abs)
+            max_rel_error = np.max(np_diff / np_abs_diff)
+            mean_rel_error = np.mean(np_diff / np_abs_diff)
 
         # Store results
         x_array[j] = np_sub_input[0].item()
