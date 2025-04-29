@@ -192,6 +192,33 @@ EdmLineFabricOpInterface::EdmLineFabricOpInterface(
             end_bidirectional_device_index = device_sequence.size();
         }
 
+        for (size_t i = 0; i < device_sequence.size(); i++) {
+            const size_t num_links = edm_builders_forward_direction.at(device_sequence[i]->id()).size();
+            auto& forward_direction_edm = edm_builders_forward_direction.at(device_sequence[i]->id());
+            auto& backward_direction_edm = edm_builders_backward_direction.at(device_sequence[i]->id());
+
+            for (size_t l = 0; l < num_links; l++) {
+                auto& edm_fwd = forward_direction_edm[l];
+                auto& edm_bwd = backward_direction_edm[l];
+
+                auto edm_noc_vc = edm_fwd.config.DEFAULT_NOC_VC + (l & 0x1);
+                edm_fwd.config.edm_noc_vc = edm_noc_vc;
+                edm_bwd.config.edm_noc_vc = edm_noc_vc;
+
+                log_info(
+                    tt::LogTest,
+                    "device {} edm_fwd {} {} has vc {} edm_bwd {} {} has vc {} on link {}",
+                    edm_fwd.my_chip_id,
+                    edm_fwd.my_noc_x,
+                    edm_fwd.my_noc_y,
+                    edm_noc_vc,
+                    edm_bwd.my_noc_x,
+                    edm_bwd.my_noc_y,
+                    edm_noc_vc,
+                    l);
+            }
+        }
+
         for (size_t i = start_bidirectional_device_index; i < end_bidirectional_device_index; i++) {
             const size_t num_links = edm_builders_forward_direction.at(device_sequence[i]->id()).size();
             auto& forward_direction_edm = edm_builders_forward_direction.at(device_sequence[i]->id());
