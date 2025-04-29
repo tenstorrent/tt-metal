@@ -806,7 +806,7 @@ BatchedTransfers assemble_runtime_args_commands(
                     uint32_t dispatch_class = kernel->dispatch_class();
                     const uint32_t crta_offset = program.get_program_config(index).crta_offsets[dispatch_class];
                     for (auto& [transfer_info, dests] :
-                         device->extract_dst_noc_multicast_info(kg->core_ranges.ranges(), CoreType::WORKER)) {
+                         extract_dst_noc_multicast_info(device, kg->core_ranges.ranges(), CoreType::WORKER)) {
                         auto noc_xy_addr =
                             device->get_noc_multicast_encoding(constants.noc_index, std::get<CoreRange>(transfer_info));
                         size_t size =
@@ -950,7 +950,7 @@ BatchedTransfers assemble_runtime_args_commands(
                         }
                     } else {
                         std::vector<std::pair<transfer_info_cores, uint32_t>> dst_noc_multicast_info =
-                            device->extract_dst_noc_multicast_info(kernel->logical_coreranges(), core_type);
+                            extract_dst_noc_multicast_info(device, kernel->logical_coreranges(), core_type);
                         common_sub_cmds.emplace<std::vector<CQDispatchWritePackedMulticastSubCmd>>(
                             std::vector<CQDispatchWritePackedMulticastSubCmd>());
                         auto& multicast_sub_cmd =
@@ -1048,7 +1048,7 @@ public:
             if (semaphore.core_type() == CoreType::WORKER) {
                 uint32_t index = hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX);
                 std::vector<std::pair<transfer_info_cores, uint32_t>> dst_noc_multicast_info =
-                    device->extract_dst_noc_multicast_info(semaphore.core_range_set().ranges(), CoreType::WORKER);
+                    extract_dst_noc_multicast_info(device, semaphore.core_range_set().ranges(), CoreType::WORKER);
                 for (const auto& dst_noc_info : dst_noc_multicast_info) {
                     auto& [range, dests] = dst_noc_info;
                     auto noc_xy_addr =

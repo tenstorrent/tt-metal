@@ -14,7 +14,7 @@
 #include "tt-metalium/kernel.hpp"              // Kernel
 #include "tt-metalium/kernel_types.hpp"        // KernelHandle
 #include "tt-metalium/program.hpp"             // KernelGroup
-#include "tt-metalium/program_device_map.hpp"  // ProgramTransferInfo
+#include "program_device_map.hpp"              // ProgramTransferInfo
 #include "tt-metalium/semaphore.hpp"
 #include "tt-metalium/sub_device_types.hpp"
 
