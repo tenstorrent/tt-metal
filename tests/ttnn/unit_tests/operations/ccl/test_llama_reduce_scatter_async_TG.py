@@ -77,6 +77,7 @@ def run_reduce_scatter_test(
 ):
     mesh_device.enable_program_cache()
     num_pages_per_packet = 4
+    cyclic_buffer_size = 8
 
     # input, output, interm core range set
     device = mesh_device.get_device(mesh_device.get_device_ids()[0])
@@ -183,20 +184,21 @@ def run_reduce_scatter_test(
                 mesh_device, dims=(0, 1), mesh_shape=[num_devices_fracture, num_devices_scatter]
             ),
         )
-        tt_intermediate = ttnn.from_torch(
-            intermediate_tensor,
-            device=mesh_device,
-            layout=ttnn.TILE_LAYOUT,
-            dtype=dtype,
-            memory_config=packet_workers_persistent_mem_config,
-            mesh_mapper=ttnn.ShardTensor2dMesh(
-                mesh_device, dims=(0, 1), mesh_shape=[num_devices_fracture, num_devices_scatter]
-            ),
-        )
+        if _ < cyclic_buffer_size:
+            tt_intermediate = ttnn.from_torch(
+                intermediate_tensor,
+                device=mesh_device,
+                layout=ttnn.TILE_LAYOUT,
+                dtype=dtype,
+                memory_config=packet_workers_persistent_mem_config,
+                mesh_mapper=ttnn.ShardTensor2dMesh(
+                    mesh_device, dims=(0, 1), mesh_shape=[num_devices_fracture, num_devices_scatter]
+                ),
+            )
+            check_mesh_tensor_alloc(tt_intermediate)
+            tt_intermediate_tensors_list.append(tt_intermediate)
         check_mesh_tensor_alloc(tt_input)
-        check_mesh_tensor_alloc(tt_intermediate)
         tt_input_tensors_list.append(tt_input)
-        tt_intermediate_tensors_list.append(tt_intermediate)
 
     ccl_sub_device_crs = subdevice_shard_cores_grid if use_regular_grid is not None else SUB_DEVICE_CRS
     worker_sub_device = ttnn.SubDevice(
@@ -220,10 +222,10 @@ def run_reduce_scatter_test(
         for i in range(n_iters):
             buffer_index = 0 if trace_mode else i
             tt_out_tensor = ttnn.experimental.llama_reduce_scatter(
-                tt_input_tensors_list[i],
-                tt_intermediate_tensors_list[i],
+                tt_input_tensors_list[buffer_index],
+                tt_intermediate_tensors_list[buffer_index % cyclic_buffer_size],
                 dim,
-                ccl_semaphore_handles[i],
+                ccl_semaphore_handles[buffer_index],
                 worker_sub_device_id,
                 cluster_axis=1,
                 mesh_device=mesh_device,
@@ -321,7 +323,7 @@ def run_reduce_scatter_test(
     "device_params",
     [
         {
-            "trace_region_size": 112640,
+            "trace_region_size": 233472,
             "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
             "fabric_config": ttnn.FabricConfig.FABRIC_1D,
         }
@@ -349,7 +351,7 @@ def test_fabric_reduce_scatter_tg_trace(mesh_device, trace_mode):
     num_devices_scatter = 4
     num_devices_fracture = 8
     num_cores = 24
-    num_iters = 30
+    num_iters = 75
     warmup_iters = 10
     trace_mode = trace_mode
 
