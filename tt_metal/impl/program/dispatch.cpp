@@ -1791,45 +1791,53 @@ void assemble_device_commands(
     BatchedTransfers batched_transfers =
         assemble_runtime_args_commands(program_command_sequence, program, device, constants);
 
-    // Start calculating the size of the resulting command sequence.
-    DeviceCommandCalculator calculator;
-
-    const auto& program_transfer_info = program.get_program_transfer_info();
+    // Assemble config buffer
+    DeviceCommandCalculator program_config_buffer_calculator;
 
     SemphoreCommandGenerator semaphore_command_generator;
-    semaphore_command_generator.size_commands(program, device, calculator, constants, batched_transfers);
+    semaphore_command_generator.size_commands(
+        program, device, program_config_buffer_calculator, constants, batched_transfers);
 
     CircularBufferCommandGenerator circular_buffer_command_generator;
     circular_buffer_command_generator.construct_commands(device, constants, program, batched_transfers);
 
     BatchedTransferGenerator batched_transfer_generator;
+    batched_transfer_generator.construct_commands(batched_transfers, program_config_buffer_calculator);
 
-    batched_transfer_generator.construct_commands(batched_transfers, calculator);
+    program_command_sequence.program_config_buffer_command_sequence =
+        HostMemDeviceCommand(program_config_buffer_calculator.write_offset_bytes());
+    batched_transfer_generator.assemble_commands(
+        program_command_sequence, program_command_sequence.program_config_buffer_command_sequence);
+    semaphore_command_generator.assemble_unicast_commands(
+        program_command_sequence.program_config_buffer_command_sequence, program, constants);
+    // Ensure that we use the correct amount of space for each command sequence
+    TT_ASSERT(
+        program_command_sequence.program_config_buffer_command_sequence.size_bytes() ==
+        program_command_sequence.program_config_buffer_command_sequence.write_offset_bytes());
 
+    // Assemble binary
+    const auto& program_transfer_info = program.get_program_transfer_info();
     if (program_transfer_info.kernel_bins.size()) {
         TT_FATAL(
             program.get_kernels_buffer(device).get(), "Expected Kernel Binary Buffer to be allocated for program.");
     }
-    const auto kernels_buffer = program.get_kernels_buffer(device);
-
     ProgramBinaryCommandGenerator program_binary_command_generator;
+    DeviceCommandCalculator program_binary_calculator;
     program_binary_command_generator.size_commands(
-        device, program, program_transfer_info, kernels_buffer, constants, calculator);
+        device,
+        program,
+        program_transfer_info,
+        program.get_kernels_buffer(device),
+        constants,
+        program_binary_calculator);
+    program_command_sequence.program_binary_command_sequence =
+        HostMemDeviceCommand(program_binary_calculator.write_offset_bytes());
+    program_binary_command_generator.assemble_commands(program_command_sequence.program_binary_command_sequence);
+    TT_ASSERT(
+        program_command_sequence.program_binary_command_sequence.size_bytes() ==
+        program_command_sequence.program_binary_command_sequence.write_offset_bytes());
 
-    program_command_sequence.device_command_sequence = HostMemDeviceCommand(calculator.write_offset_bytes());
-
-    auto& device_command_sequence = program_command_sequence.device_command_sequence;
-
-    batched_transfer_generator.assemble_commands(program_command_sequence, device_command_sequence);
-
-    semaphore_command_generator.assemble_unicast_commands(device_command_sequence, program, constants);
-
-    // Capture the size of the config buffer
-    // All Previous Cmds Up to This Point Go Into the Kernel Config Buffer
-    program_command_sequence.program_config_buffer_data_size_bytes = device_command_sequence.write_offset_bytes();
-
-    program_binary_command_generator.assemble_commands(device_command_sequence);
-
+    // Assemble launch message
     LaunchMessageGenerator launch_message_generator;
     DeviceCommandCalculator launch_message_calculator;
     launch_message_generator.construct_commands(device, program, launch_message_calculator, constants, sub_device_id);
@@ -1837,7 +1845,11 @@ void assemble_device_commands(
         HostMemDeviceCommand(launch_message_calculator.write_offset_bytes());
     launch_message_generator.assemble_commands(
         program_command_sequence, program_command_sequence.launch_msg_command_sequence, constants);
+    TT_ASSERT(
+        program_command_sequence.launch_msg_command_sequence.size_bytes() ==
+        program_command_sequence.launch_msg_command_sequence.write_offset_bytes());
 
+    // Assemble go signal
     GoSignalGenerator go_signal_generator;
     DeviceCommandCalculator go_signal_calculator;
     go_signal_generator.size_commands(go_signal_calculator, device, sub_device_id, program_transfer_info);
@@ -1851,8 +1863,9 @@ void assemble_device_commands(
         program_transfer_info,
         launch_message_generator.has_multicast_launch_cmds(),
         launch_message_generator.has_unicast_launch_cmds());
-
-    TT_ASSERT(device_command_sequence.size_bytes() == device_command_sequence.write_offset_bytes());
+    TT_ASSERT(
+        program_command_sequence.go_msg_command_sequence.size_bytes() ==
+        program_command_sequence.go_msg_command_sequence.write_offset_bytes());
 }
 
 void initialize_worker_config_buf_mgr(WorkerConfigBufferMgr& config_buffer_mgr, uint32_t worker_l1_unreserved_start) {
@@ -2105,13 +2118,13 @@ void write_program_command_sequence(
 
     uint32_t runtime_args_fetch_size_bytes = program_command_sequence.runtime_args_fetch_size_bytes;
 
-    uint32_t program_config_buffer_data_size_bytes = program_command_sequence.program_config_buffer_data_size_bytes;
-    uint8_t* program_config_buffer_data = (uint8_t*)program_command_sequence.device_command_sequence.data();
+    uint32_t program_config_buffer_data_size_bytes =
+        program_command_sequence.program_config_buffer_command_sequence.size_bytes();
+    uint8_t* program_config_buffer_data =
+        (uint8_t*)program_command_sequence.program_config_buffer_command_sequence.data();
 
-    uint32_t program_binary_size_bytes = program_command_sequence.device_command_sequence.size_bytes() -
-                                         program_command_sequence.program_config_buffer_data_size_bytes;
-    uint8_t* program_binary_data =
-        (uint8_t*)((uint64_t)program_config_buffer_data + program_config_buffer_data_size_bytes);
+    uint32_t program_binary_size_bytes = program_command_sequence.program_binary_command_sequence.size_bytes();
+    uint8_t* program_binary_data = (uint8_t*)program_command_sequence.program_binary_command_sequence.data();
 
     uint32_t one_shot_fetch_size_bytes = stall_fetch_size_bytes + preamble_fetch_size_bytes +
                                          runtime_args_fetch_size_bytes + program_config_buffer_data_size_bytes +

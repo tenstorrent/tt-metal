@@ -16,7 +16,6 @@
 #include "ttnn/operations/data_movement/permute/permute.hpp"
 #include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
 #include "ttnn/operations/data_movement/tilize/tilize.hpp"
-#include "ttnn/operations/conv/conv2d/conv2d_utils.hpp"
 namespace ttnn {
 namespace operations::conv {
 using namespace tt;
@@ -1036,7 +1035,7 @@ std::pair<ttnn::Tensor, std::optional<ttnn::Tensor>> prepare_conv_weights_biases
 
     if (weights_bias_dtype == DataType::BFLOAT8_B) {
         TT_ASSERT(weight_tensor_.get_dtype() == DataType::FLOAT32);
-        if (has_bias) {
+        if (has_bias && bias_tensor.has_value()) {
             TT_ASSERT(bias_tensor.value().get_dtype() == DataType::FLOAT32);
         }
     } else {
@@ -1110,7 +1109,8 @@ ttnn::Tensor prepare_conv_weights(
     uint32_t groups,
     T* device,
     const std::optional<const Conv2dConfig>& conv_config_,
-    const std::optional<const DeviceComputeKernelConfig>& compute_config_) {
+    const std::optional<const DeviceComputeKernelConfig>& compute_config_,
+    const std::optional<const Conv2dSliceConfig>& dram_slice_config_) {
     Conv2dConfig conv_config = conv_config_.value_or(Conv2dConfig());
 
     DeviceComputeKernelConfig compute_config = compute_config_.value_or(get_conv_default_compute_kernel_config(device));
@@ -1120,6 +1120,30 @@ ttnn::Tensor prepare_conv_weights(
     auto [output_height, output_width] =
         calculate_output_image_size({input_height, input_width}, kernel_size, stride, padding_n4, dilation);
 
+    if (dram_slice_config_.has_value()) {
+        Conv2dSliceConfig dram_slice_config = dram_slice_config_.value();
+        const uint32_t output_sliced_dim =
+            dram_slice_config.slice_type == Conv2dSliceConfig::SliceType::HEIGHT ? output_height : output_width;
+        TT_FATAL(
+            dram_slice_config.num_slices > 1, " Number of slices should be greater than 1 for Conv2D DRAM Slicing");
+        TT_FATAL(
+            dram_slice_config.num_slices < output_sliced_dim,
+            " Number of slices should be less than the dimension being sliced in Conv2D DRAM Slicing");
+
+        const uint32_t min_output_slice_size = output_sliced_dim / dram_slice_config.num_slices;
+        const uint32_t output_slice_rem = output_sliced_dim % dram_slice_config.num_slices;
+        const uint32_t max_output_slice_size = min_output_slice_size + (output_slice_rem > 0);
+
+        if (dram_slice_config.slice_type == Conv2dSliceConfig::SliceType::HEIGHT) {
+            output_height = max_output_slice_size;
+            input_height =
+                ((output_height - 1) * stride[0]) + ((kernel_size[0] - 1) * (dilation[0] - 1)) + kernel_size[0];
+        } else {
+            output_width = max_output_slice_size;
+            input_width =
+                ((output_width - 1) * stride[1]) + ((kernel_size[1] - 1) * (dilation[1] - 1)) + kernel_size[1];
+        }
+    }
     auto opt_conv_op_block_config = get_opt_block_config(
         mm_conv,
         in_channels,
@@ -1344,7 +1368,8 @@ template ttnn::Tensor prepare_conv_weights<IDevice>(
     uint32_t groups,
     IDevice* device,
     const std::optional<const Conv2dConfig>& conv_config_,
-    const std::optional<const DeviceComputeKernelConfig>& compute_config_);
+    const std::optional<const DeviceComputeKernelConfig>& compute_config_,
+    const std::optional<const Conv2dSliceConfig>& dram_slice_config_);
 
 template ttnn::Tensor prepare_conv_weights<MeshDevice>(
     const ttnn::Tensor& weight_tensor,
@@ -1364,7 +1389,8 @@ template ttnn::Tensor prepare_conv_weights<MeshDevice>(
     uint32_t groups,
     MeshDevice* device,
     const std::optional<const Conv2dConfig>& conv_config_,
-    const std::optional<const DeviceComputeKernelConfig>& compute_config_);
+    const std::optional<const DeviceComputeKernelConfig>& compute_config_,
+    const std::optional<const Conv2dSliceConfig>& dram_slice_config_);
 
 template std::pair<ttnn::Tensor, std::optional<ttnn::Tensor>> prepare_conv_weights_biases_on_device<IDevice>(
     const ttnn::Tensor& weight_tensor,

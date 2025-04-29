@@ -24,8 +24,12 @@ def make_anchors(device, feats, strides, grid_cell_offset=0.5):
     b = torch.cat(stride_tensor).transpose(0, 1)
 
     return (
-        ttnn.from_torch(a, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device),
-        ttnn.from_torch(b, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device),
+        ttnn.from_torch(
+            a, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.L1_MEMORY_CONFIG
+        ),
+        ttnn.from_torch(
+            b, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.L1_MEMORY_CONFIG
+        ),
     )
 
 
@@ -51,7 +55,7 @@ def create_yolov10x_model_parameters(model: YOLOv10, input_tensor: torch.Tensor,
     parameters = preprocess_model_parameters(
         initialize_model=lambda: model,
         custom_preprocessor=custom_preprocessor,
-        device=device,
+        device=None,
     )
     parameters.conv_args = {}
     parameters.conv_args = infer_ttnn_module_args(model=model, run_model=lambda model: model(input_tensor), device=None)
@@ -72,7 +76,7 @@ def create_yolov10_model_parameters_detect(model, input_tensor_1, input_tensor_2
     parameters = preprocess_model_parameters(
         initialize_model=lambda: model,
         custom_preprocessor=custom_preprocessor,
-        device=device,
+        device=None,
     )
     parameters.conv_args = {}
     parameters.conv_args = infer_ttnn_module_args(

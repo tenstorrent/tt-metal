@@ -496,8 +496,8 @@ void DevicePool::add_devices_to_pool(const std::vector<chip_id_t>& device_ids) {
 
 void DevicePool::wait_for_fabric_router_sync() const {
     FabricConfig fabric_config = tt::tt_metal::MetalContext::instance().get_cluster().get_fabric_config();
-    auto control_plane = tt::tt_metal::MetalContext::instance().get_cluster().get_control_plane();
     if (tt_fabric::is_1d_fabric_config(fabric_config)) {
+        auto control_plane = tt::tt_metal::MetalContext::instance().get_cluster().get_control_plane();
         const auto edm_config = tt_fabric::get_1d_fabric_config();
         std::vector<uint32_t> signal(1, tt::tt_fabric::EDMStatus::READY_FOR_TRAFFIC);
 
@@ -550,6 +550,7 @@ void DevicePool::wait_for_fabric_router_sync() const {
             }
         }
     } else if (tt_fabric::is_2d_fabric_config(fabric_config)) {
+        auto control_plane = tt::tt_metal::MetalContext::instance().get_cluster().get_control_plane();
         auto fabric_router_sync_sem_addr = tt::tt_metal::hal::get_erisc_l1_unreserved_base();
 
         std::vector<std::uint32_t> master_router_status{0};
@@ -769,8 +770,8 @@ void DevicePool::close_devices(const std::vector<IDevice*>& devices, bool skip_s
     }
     // Terminate fabric routers
     FabricConfig fabric_config = tt::tt_metal::MetalContext::instance().get_cluster().get_fabric_config();
-    auto control_plane = tt::tt_metal::MetalContext::instance().get_cluster().get_control_plane();
     if (tt_fabric::is_1d_fabric_config(fabric_config)) {
+        auto control_plane = tt::tt_metal::MetalContext::instance().get_cluster().get_control_plane();
         std::vector<uint32_t> signal(1, tt::tt_fabric::TerminationSignal::IMMEDIATELY_TERMINATE);
         static constexpr std::size_t edm_buffer_size =
             tt::tt_fabric::FabricEriscDatamoverBuilder::default_packet_payload_size_bytes +
@@ -801,6 +802,7 @@ void DevicePool::close_devices(const std::vector<IDevice*>& devices, bool skip_s
                 dev, fabric_master_router_core, fabric_router_sync_sem_addr, signal, CoreType::ETH);
         }
     } else if (tt_fabric::is_2d_fabric_config(fabric_config)) {
+        auto control_plane = tt::tt_metal::MetalContext::instance().get_cluster().get_control_plane();
         std::vector<uint32_t> master_router_terminate(1, 0);
         auto fabric_router_sync_sem_addr = tt::tt_metal::hal::get_erisc_l1_unreserved_base();
         for (const auto& dev : this->get_all_active_devices()) {
