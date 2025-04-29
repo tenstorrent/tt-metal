@@ -16,9 +16,35 @@ def run_topk_test(N, C, H, W, k, dtype, dim, sorted, largest, device, sub_core_g
     pyt_topk_values, pyt_topk_indices = torch.topk(input, k, dim=dim, largest=largest, sorted=True)
     ttnn_input = ttnn.from_torch(input, dtype, layout=ttnn.Layout.TILE, device=device)
 
-    ttnn_topk_values, ttnn_topk_indices = ttnn.topk(
-        ttnn_input, k, dim=dim, largest=largest, sorted=sorted, sub_core_grids=sub_core_grids
-    )
+    indices_tensor_torch = torch.zeros(shape, dtype=torch.int32)
+    for i in range(W):
+        indices_tensor_torch[:, :, :, i] = i
+    indices_tensor = ttnn.from_torch(indices_tensor_torch, ttnn.uint16, layout=ttnn.Layout.TILE, device=device)
+
+    if sub_core_grids is not None:
+        print(f"unit test: sub_core_grids: {sub_core_grids}")
+        try:
+            ttnn_topk_values, ttnn_topk_indices = ttnn.topk(
+                ttnn_input,
+                k,
+                dim=dim,
+                largest=largest,
+                sorted=sorted,
+                sub_core_grids=sub_core_grids,
+                indices_tensor=indices_tensor,
+            )
+        except Exception as e:
+            print(f"unit test: sub_core_grids: {sub_core_grids}")
+            raise e
+    else:
+        print(f"unit test: sub_core_grids: {sub_core_grids}")
+        ttnn_topk_values, ttnn_topk_indices = ttnn.topk(
+            ttnn_input, k, dim=dim, largest=largest, sorted=sorted, indices_tensor=indices_tensor
+        )
+
+    print(f"topk done")
+    print(f"unit test: ttnn_topk_values: {ttnn_topk_values}")
+    print(f"unit test: ttnn_topk_indices: {ttnn_topk_indices}")
 
     desired_shape = [N, C, H, W]
     desired_shape[dim] = k
