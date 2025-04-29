@@ -143,6 +143,9 @@ static_assert(
         l1_cache_elements_rounded,
     "CQ_PREFETCH_CMD_RELAY_RINGBUFFER_MAX_SUB_CMDS is too large for l1_cache_elements_rounded");
 
+uint32_t my_downstream_cb_sem_additional_count = 0;
+uint32_t my_dispatch_s_cb_sem_additional_count = 0;
+
 // Define these constexpr structs for a cleaner interface for process_relay_inline_cmd and
 // process_exec_buf_relay_inline_cmd while ensuring that state for dispatch_master and dispatch_slave is passed in
 // during compile time.
@@ -156,6 +159,7 @@ struct DispatchRelayInlineState {
     static constexpr uint32_t downstream_cb_end_addr = downstream_cb_end;
     static constexpr uint32_t downstream_write_cmd_buf = BRISC_WR_CMD_BUF;
     static constexpr uint32_t downstream_noc_index = my_noc_index;
+    static constexpr uint32_t& downstream_cb_additional_count = my_downstream_cb_sem_additional_count;
 };
 
 struct DispatchSRelayInlineState {
@@ -168,6 +172,7 @@ struct DispatchSRelayInlineState {
     static constexpr uint32_t downstream_cb_end_addr = dispatch_s_buffer_end;
     static constexpr uint32_t downstream_write_cmd_buf = BRISC_WR_REG_CMD_BUF;
     static constexpr uint32_t downstream_noc_index = my_noc_index;
+    static constexpr uint32_t& downstream_cb_additional_count = my_dispatch_s_cb_sem_additional_count;
 };
 
 struct PrefetchExecBufState {
@@ -410,7 +415,8 @@ static uint32_t process_relay_inline_cmd(uint32_t cmd_ptr, uint32_t& local_downs
 
     // Assume the downstream buffer is big relative to cmddat command size that we can
     // grab what we need in one chunk
-    cb_acquire_pages<my_noc_xy, RelayInlineState::my_downstream_cb_sem>(npages);
+    cb_acquire_pages<my_noc_xy, RelayInlineState::my_downstream_cb_sem>(
+        npages, RelayInlineState::downstream_cb_additional_count);
 
     uint32_t remaining = cmddat_q_end - data_ptr;
     if (cmddat_wrap_enable && length > remaining) {
@@ -450,7 +456,7 @@ static uint32_t process_relay_inline_noflush_cmd(uint32_t cmd_ptr, uint32_t& dis
     uint32_t length = cmd->relay_inline.length;
     uint32_t data_ptr = cmd_ptr + sizeof(CQPrefetchCmd);
 
-    cb_acquire_pages<my_noc_xy, my_downstream_cb_sem_id>(1);
+    cb_acquire_pages<my_noc_xy, my_downstream_cb_sem_id>(1, DispatchRelayInlineState::downstream_cb_additional_count);
     if (dispatch_data_ptr == downstream_cb_end) {
         dispatch_data_ptr = downstream_cb_base;
     }
@@ -480,7 +486,7 @@ static uint32_t write_pages_to_dispatcher(
     // Grabbing all pages at once is ok if scratch_size < 3 * downstream_cb_block_size
     // test_for_nonzero is an optimization: inner loops moving lots of pages don't bother
     if (!test_for_nonzero || npages != 0) {
-        cb_acquire_pages<my_noc_xy, my_downstream_cb_sem_id>(npages);
+        cb_acquire_pages<my_noc_xy, my_downstream_cb_sem_id>(npages, my_downstream_cb_sem_additional_count);
     }
 
     uint64_t noc_addr;
@@ -991,7 +997,8 @@ FORCE_INLINE static uint32_t process_exec_buf_relay_inline_cmd(
 
     // Assume the downstream buffer is big relative to cmddat command size that we can
     // grab what we need in one chunk
-    cb_acquire_pages<my_noc_xy, RelayInlineState::my_downstream_cb_sem>(npages);
+    cb_acquire_pages<my_noc_xy, RelayInlineState::my_downstream_cb_sem>(
+        npages, RelayInlineState::downstream_cb_additional_count);
     uint32_t stride = cmd->relay_inline.stride;
     uint32_t remaining_stride = exec_buf_state.length;
     uint32_t remaining = exec_buf_state.length - sizeof(CQPrefetchCmd);
@@ -1044,7 +1051,7 @@ static uint32_t process_exec_buf_relay_inline_noflush_cmd(
 
     uint32_t stride = cmd->relay_inline.stride;
 
-    cb_acquire_pages<my_noc_xy, my_downstream_cb_sem_id>(1);
+    cb_acquire_pages<my_noc_xy, my_downstream_cb_sem_id>(1, my_downstream_cb_sem_additional_count);
     if (dispatch_data_ptr == downstream_cb_end) {
         dispatch_data_ptr = downstream_cb_base;
     }
@@ -1455,14 +1462,12 @@ static uint32_t process_relay_inline_all(uint32_t data_ptr, uint32_t fence, bool
 
     // Assume the dispatch buffer is big relative to cmddat command size that we can
     // grab what we need in one chunk
-    cb_acquire_pages<my_noc_xy, my_downstream_cb_sem_id>(npages);
+    cb_acquire_pages<my_noc_xy, my_downstream_cb_sem_id>(npages, my_downstream_cb_sem_additional_count);
     if (is_exec_buf) {
         // swipe all the downstream page credits from ourselves...
         // prefetch_h stalls sending commands to prefetch_d until notified by dispatch_d that the exec_buf is done
         // exec_buf completing on dispatch_h will free the pages and allow sending again
-        volatile tt_l1_ptr uint32_t* sem_addr =
-            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore<fd_core_type>(my_downstream_cb_sem_id));
-        noc_semaphore_inc(get_noc_addr_helper(my_noc_xy, (uint32_t)sem_addr), -downstream_cb_pages);
+        my_downstream_cb_sem_additional_count -= downstream_cb_pages;
 
         // OK to continue prefetching once the page credits are returned
         stall_state = NOT_STALLED;
@@ -1679,7 +1684,7 @@ void kernel_main() {
     IDLE_ERISC_RETURN();
 
     // Confirm expected number of pages, spinning here is a leak
-    cb_wait_all_pages<my_downstream_cb_sem_id>(downstream_cb_pages);
+    cb_wait_all_pages<my_downstream_cb_sem_id>(downstream_cb_pages, my_downstream_cb_sem_additional_count);
 
     noc_async_full_barrier();
 
