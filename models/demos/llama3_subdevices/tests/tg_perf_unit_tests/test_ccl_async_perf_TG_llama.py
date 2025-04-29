@@ -296,11 +296,10 @@ def test_reduce_scatter_perf(
     command = f"pytest tests/ttnn/unit_tests/operations/ccl/test_llama_reduce_scatter_async_TG.py::test_fabric_reduce_scatter_tg_trace"
     cols = ["DEVICE KERNEL"]
     op_name = "LlamaReduceScatterDeviceOperation"
-    warmup_iters = warmup_iters * 32  # 5 iterations per device
 
     profiler.start("run")
     profiler.start(step_name)
-    results = run_device_perf_detailed(command, subdir, cols, op_name, has_signposts=True, warmup_iters=0)
+    results = run_device_perf_detailed(command, subdir, cols, op_name, has_signposts=True, warmup_iters=warmup_iters)
     profiler.end(step_name)
     profiler.end("run")
 
