@@ -4,11 +4,8 @@
 
 #pragma once
 
-#include "ckernel.h"
-#include "ckernel_defs.h"
+#include "ckernel_addrmod.h"
 #include "sfpi.h"
-
-using namespace sfpi;
 
 namespace ckernel {
 namespace sfpu {
@@ -26,7 +23,7 @@ inline void add_uint32(const uint dst_offset) {
         TTI_SFPIADD(0, p_sfpu::LREG1, p_sfpu::LREG0, INT32);
         TTI_SFPSTORE(p_sfpu::LREG0, INT32, ADDR_MOD_3, 0);
 
-        dst_reg++;
+        sfpi::dst_reg++;
     }
 }
 
