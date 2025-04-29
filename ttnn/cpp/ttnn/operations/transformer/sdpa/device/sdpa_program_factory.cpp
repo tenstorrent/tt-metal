@@ -442,9 +442,9 @@ operation::ProgramWithCallbacks sdpa_multi_core(
     // tt::DataFormat out_df = tt::DataFormat::Float16_b;
     tt::DataFormat identity_df = tt::DataFormat::Float16_b;
     tt::DataFormat scalar_df = tt::DataFormat::Float16_b;
-    // TODO (cjg): add option to program factory for im df
-    tt::DataFormat im_df = tt::DataFormat::Float32;  // need to disable fp32 cbs (Issue #13364) fp32_dest_acc_en ?
-                                                     // tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
+
+    tt::DataFormat im_df =
+        program_config->fp32_matmul_intermediates ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
     tt::DataFormat stats_df = tt::DataFormat::Float16_b;
 
     uint32_t q_tile_size = tt::tt_metal::detail::TileSize(q_df);

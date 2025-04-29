@@ -21,18 +21,20 @@ namespace py = pybind11;
 void py_module(py::module& module) {
     py::class_<SDPAProgramConfig>(module, "SDPAProgramConfig")
         .def(
-            py::init<CoreCoord, std::optional<CoreRangeSet>, std::size_t, std::size_t, std::optional<bool>>(),
+            py::init<CoreCoord, std::optional<CoreRangeSet>, std::size_t, std::size_t, std::optional<bool>, bool>(),
             py::kw_only(),
             py::arg("compute_with_storage_grid_size"),
             py::arg("sub_core_grids") = std::nullopt,
             py::arg("q_chunk_size").noconvert(),
             py::arg("k_chunk_size").noconvert(),
-            py::arg("exp_approx_mode") = std::nullopt)
+            py::arg("exp_approx_mode") = std::nullopt,
+            py::arg("fp32_matmul_intermediates").noconvert())
         .def_readwrite("compute_with_storage_grid_size", &SDPAProgramConfig::compute_with_storage_grid_size)
         .def_readwrite("sub_core_grids", &SDPAProgramConfig::sub_core_grids)
         .def_readwrite("q_chunk_size", &SDPAProgramConfig::q_chunk_size)
         .def_readwrite("k_chunk_size", &SDPAProgramConfig::k_chunk_size)
-        .def_readwrite("exp_approx_mode", &SDPAProgramConfig::exp_approx_mode);
+        .def_readwrite("exp_approx_mode", &SDPAProgramConfig::exp_approx_mode)
+        .def_readwrite("fp32_matmul_intermediates", &SDPAProgramConfig::fp32_matmul_intermediates);
 
     py_bind_attention_softmax(module);
     py_bind_concatenate_heads(module);
