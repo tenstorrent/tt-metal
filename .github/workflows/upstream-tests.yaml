@@ -58,7 +58,6 @@ jobs:
       contents: read
     strategy:
       matrix:
-        # We're going to add a profiler image in here for tests that need profiler.
         # Ultimate goal will be to have a master script that people can call via
         # <url_to_script_on_main.sh> | sh -c or something like that which will download
         # the images and run them.
@@ -119,7 +118,6 @@ jobs:
           tags: ${{ matrix.image-config.image-tag }}
           context: ${{ github.workspace }}
       - name: Tag and push latest
-        # TODO - get rid of my branch and make this generic for both images
         if: ${{ github.ref == 'refs/heads/main' }}
         run: |
           IMAGE_NAME="${{ matrix.image-config.image-base-name }}"
