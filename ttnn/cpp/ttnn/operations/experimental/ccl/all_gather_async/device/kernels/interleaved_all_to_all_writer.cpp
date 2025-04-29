@@ -231,7 +231,8 @@ void kernel_main() {
         // Unicast semaphore increment to receiver core of receiver device
         uint64_t output_semaphore_noc_addr_in_pkt =
             safe_get_noc_addr(receiver_core_x, receiver_core_y, global_semaphore_addr, 0);
-        auto* pkt_hdr = reinterpret_cast<PACKET_HEADER_TYPE*>(packet_header_buffer_seminc);
+        volatile PACKET_HEADER_TYPE* pkt_hdr =
+            reinterpret_cast<volatile PACKET_HEADER_TYPE*>(packet_header_buffer_seminc);
         pkt_hdr->to_noc_unicast_atomic_inc(tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
             output_semaphore_noc_addr_in_pkt,
             static_cast<uint16_t>(1),  // increment 1
