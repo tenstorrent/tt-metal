@@ -72,7 +72,7 @@ def preprocess_unet_input_tensor(input_tensor, min_channels=16):
     return ttnn.reshape(nhwc, [1, 1, nhwc.shape[0] * nhwc.shape[1] * nhwc.shape[2], nhwc.shape[-1]])
 
 
-def concatenate(activation, residual, dim=-1, groups=4, final_block=False):
+def concatenate(activation, residual, dim=-1, groups=1, final_block=False):
     """
     Concatenate along the final dimension. The `final_block` flag is used for
     the final upblock where L1 memory pressure is highest.
@@ -211,7 +211,7 @@ class UNetConv2D:
             "stride": self.stride,
             "padding": self.padding,
             "dilation": [1, 1],
-            "groups": 4,
+            "groups": self.groups,
             "device": self.device,
             "conv_config": self.conv_config,
         }
@@ -362,7 +362,7 @@ class UNetUpblock:
             ttnn.deallocate(residual_rm)
             residual_rm = new_resid
 
-        y = concatenate(x_upsampled, residual_rm, dim=-1, final_block=self.final_block)
+        y = concatenate(x_upsampled, residual_rm, dim=-1, groups=self.conv1.groups, final_block=self.final_block)
         ttnn.deallocate(x_upsampled)
         ttnn.deallocate(residual_rm)
 
