@@ -82,7 +82,7 @@ class ShardingProjection:
     def __init__(self, *, dim: int, device: ttnn.MeshDevice) -> None:
         params = TtLinearParameters.from_torch(
             dict(weight=torch.eye(dim)),
-            dtype=ttnn.bfloat8_b,
+            dtype=ttnn.bfloat16,
             device=device,
             shard_dim=-1,
         )

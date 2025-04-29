@@ -239,10 +239,10 @@ class TtAttention:
         )
 
         compute_kernel_config = ttnn.WormholeComputeKernelConfig(
-            # MathFidelity.LoFi results in bad image quality.
-            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_fidelity=ttnn.MathFidelity.HiFi4,
             math_approx_mode=False,
-            fp32_dest_acc_en=False,  # NOTE: Set to True if there's a correctness issue
+            fp32_dest_acc_en=True,
+            packer_l1_acc=True,
         )
 
         if prompt is None:
