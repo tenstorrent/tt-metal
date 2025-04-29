@@ -16,7 +16,7 @@
 using namespace tt::constants;
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::data_movement::detail {
+namespace ttnn::operations::experimental::detail {
 
 inline std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_padded_slice_runtime_args_rm(
     const Tensor& input_tensor,
@@ -92,7 +92,7 @@ inline std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_
 
     std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> ret_val(num_cores_total);
 
-    uint32_t start_offset = ttnn::operations::data_movement::get_rm_start_offset(input_tensor, output_tensor_start);
+    uint32_t start_offset = ttnn::operations::experimental::get_rm_start_offset(input_tensor, output_tensor_start);
     for (uint32_t i = 0, num_sticks_written = 0; i < num_cores_total; i++) {
         CoreCoord core = {i / num_cores_y, i % num_cores_y};
         uint32_t num_sticks_per_core;
@@ -243,7 +243,7 @@ get_padded_slice_runtime_args_rm_sharded_output(
         num_sticks_per_core_read,
         num_read_per_barrier);
 
-    uint32_t start_offset = ttnn::operations::data_movement::get_rm_start_offset(input_tensor, output_tensor_start);
+    uint32_t start_offset = ttnn::operations::experimental::get_rm_start_offset(input_tensor, output_tensor_start);
     uint32_t core_index = 0;
     for (const auto& core : cores) {
         uint32_t core_w_index = 0;
@@ -497,7 +497,7 @@ operation::ProgramWithCallbacks padded_slice_rm_multi_core(
                     tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_unpadded_sticks);
 
             const auto tensor_start =
-                static_cast<const ttnn::operations::data_movement::PaddedSliceDeviceOperation*>(operation)
+                static_cast<const ttnn::operations::experimental::PaddedSliceDeviceOperation*>(operation)
                     ->padded_slice_start;
             auto all_runtime_args = get_padded_slice_runtime_args_rm(
                 src_tensor,
@@ -601,24 +601,26 @@ operation::ProgramWithCallbacks padded_slice_rm_strided_single_core_n_dims(
         });
 
     auto override_address_callback = [unary_reader_kernel_id, unary_writer_kernel_id](
+                                         const void* operation,
                                          const Program& program,
-                                         const std::vector<Buffer*>& input_buffers,
-                                         const std::vector<Buffer*>& output_buffers) {
-        auto input_buffer = input_buffers.at(0);
-        auto output_buffer = output_buffers.at(0);
+                                         const std::vector<Tensor>& input_tensors,
+                                         const std::vector<std::optional<const Tensor>>&,
+                                         const std::vector<Tensor>& output_tensors) {
+        auto input_tensor = input_tensors.at(0);
+        auto output_tensor = output_tensors.at(0);
 
         CoreCoord core = {0, 0};
 
         {
             auto& reader_runtime_args = GetRuntimeArgs(program, unary_reader_kernel_id, core);
-            reader_runtime_args[0] = input_buffer->address();
+            reader_runtime_args[0] = input_tensor.buffer()->address();
 
             auto& writer_runtime_args = GetRuntimeArgs(program, unary_writer_kernel_id, core);
-            writer_runtime_args[0] = output_buffer->address();
+            writer_runtime_args[0] = input_tensor.buffer()->address();
         }
     };
 
-    return {.program = std::move(program), .override_addresses_callback = override_address_callback};
+    return {.program = std::move(program), .override_runtime_arguments_callback = override_address_callback};
 }
 
 inline std::vector<std::vector<uint32_t>> group_contiguous_values(std::vector<uint32_t>& values) {
@@ -692,7 +694,7 @@ inline std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_
 
     std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> ret_val(num_cores_unpadded);
 
-    uint32_t start_offset = ttnn::operations::data_movement::get_rm_start_offset(input_tensor, output_tensor_start);
+    uint32_t start_offset = ttnn::operations::experimental::get_rm_start_offset(input_tensor, output_tensor_start);
     for (uint32_t i = 0, num_sticks_written = 0; i < num_cores_unpadded; i++) {
         CoreCoord core;
         if (row_major) {
@@ -1006,7 +1008,7 @@ inline __attribute__((always_inline)) void set_padded_slice_runtime_args_tile(
         set_common_reader_args(reader_common_args.data(), num_unpadded_tiles_per_dim, num_padded_tiles_per_dim);
     }
 
-    uint32_t start_offset = ttnn::operations::data_movement::get_tiled_start_offset(input_tensor, output_tensor_start);
+    uint32_t start_offset = ttnn::operations::experimental::get_tiled_start_offset(input_tensor, output_tensor_start);
 
     auto& reader_kernel_args_by_core = GetRuntimeArgs(program, unary_reader_kernel_id);
     auto& writer_kernel_args_by_core = GetRuntimeArgs(program, unary_writer_kernel_id);
@@ -1173,7 +1175,7 @@ operation::ProgramWithCallbacks padded_slice_tile_multi_core(
                 tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_unpadded_tiles);
 
         const auto& tensor_start =
-            static_cast<const ttnn::operations::data_movement::PaddedSliceDeviceOperation*>(operation)
+            static_cast<const ttnn::operations::experimental::PaddedSliceDeviceOperation*>(operation)
                 ->padded_slice_start;
         set_padded_slice_runtime_args_tile<false>(
             src_tensor,
@@ -1221,4 +1223,4 @@ operation::ProgramWithCallbacks padded_slice_multi_core(
     return {};
 }
 
-}  // namespace ttnn::operations::data_movement::detail
+}  // namespace ttnn::operations::experimental::detail

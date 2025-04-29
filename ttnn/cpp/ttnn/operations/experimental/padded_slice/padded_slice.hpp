@@ -8,7 +8,7 @@
 
 namespace ttnn {
 namespace operations {
-namespace data_movement {
+namespace experimental {
 
 struct PaddedSliceOperation {
     template <typename T>
@@ -94,11 +94,11 @@ struct PaddedSliceOperation {
         const std::optional<float>& pad_value = std::nullopt);
 };
 
-}  // namespace data_movement
+}  // namespace experimental
 }  // namespace operations
-
-constexpr auto padded_slice = ttnn::register_operation_with_auto_launch_op<
-    "ttnn::padded_slice",
-    ttnn::operations::data_movement::PaddedSliceOperation>();
-
 }  // namespace ttnn
+
+namespace ttnn::experimental {
+constexpr auto padded_slice =
+    ttnn::register_operation<"ttnn::padded_slice", ttnn::operations::experimental::PaddedSliceOperation>();
+}

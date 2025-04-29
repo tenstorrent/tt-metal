@@ -5,7 +5,7 @@
 
 #include <tt-metalium/host_api.hpp>
 
-namespace ttnn::operations::data_movement::detail {
+namespace ttnn::operations::experimental::detail {
 
 tt::tt_metal::operation::ProgramWithCallbacks padded_slice_multi_core(
     const Tensor& a,
@@ -14,4 +14,4 @@ tt::tt_metal::operation::ProgramWithCallbacks padded_slice_multi_core(
     const ttnn::Shape& output_tensor_end,
     const ttnn::Shape& step);
 
-}  // namespace ttnn::operations::data_movement::detail
+}  // namespace ttnn::operations::experimental::detail
