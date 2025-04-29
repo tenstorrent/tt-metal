@@ -12,10 +12,6 @@
 
 #include "topk_common_funcs.hpp"
 
-// topk llk needs a global variable atm
-// this can only be removed once that's fixed
-int32_t topk_replay_init = 0;
-
 namespace NAMESPACE {
 
 void MAIN {
