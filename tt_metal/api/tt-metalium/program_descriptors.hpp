@@ -46,7 +46,7 @@ struct CBFormatDescriptor {
     tt::DataFormat data_format = tt::DataFormat::Float32;
     uint32_t page_size = 0;
 
-    // TODO: Needs a program hash definition
+    // TODO: #21392 - Needs a program hash definition
     // std::optional<TileDescriptor> tile;
 };
 
