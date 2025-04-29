@@ -158,21 +158,21 @@ void kernel_main() {
         // increment locally
         uint64_t out_ready_sem_noc_addr =
             safe_get_noc_addr(out_ready_sem_noc0_x, out_ready_sem_noc0_y, out_ready_sem_bank_addr);
+        volatile tt_l1_ptr uint32_t* out_ready_sem_bank_addr_ptr =
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem_bank_addr);
         if constexpr (num_links == 1) {
             // We deduct the local increment from the target semaphore value as we don't need internal synchronization
-            noc_semaphore_wait(
-                reinterpret_cast<volatile uint32_t*>(out_ready_sem_bank_addr), out_ready_sem_wait_value - 1);
+            noc_semaphore_wait(out_ready_sem_bank_addr_ptr, out_ready_sem_wait_value - 1);
         } else {
             // if multiple links then we need to also ensure the local ones have completed by having them also
             // increment the semaphore and including them in the total
             noc_semaphore_inc(out_ready_sem_noc_addr, 1);
-            noc_semaphore_wait(reinterpret_cast<volatile uint32_t*>(out_ready_sem_bank_addr), out_ready_sem_wait_value);
+            noc_semaphore_wait(
+                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem_bank_addr), out_ready_sem_wait_value);
         }
 
         // 4. global semaphore reset
-        if (iteration_number == 0) {
-            *reinterpret_cast<volatile uint32_t*>(out_ready_sem_bank_addr) = 0;
-        }
+        *out_ready_sem_bank_addr_ptr = 0;
         // Signal the other local cores that the semaphore has returned
 
         *stats_set_semaphore_addr_ptr = VALID;

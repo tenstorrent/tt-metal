@@ -137,12 +137,12 @@ class TtTransformerBlock(LightweightModule):
         ), f"decoder input memcfg mismatch: {x.memory_config()} != {skip_mem_cfg}"
         # Norms take fractured inputs and output replicated across devices
         try:
-            attn_in_sharded, h = self.attention_norm(x, None, mode)
+            attn_in_sharded, _ = self.attention_norm(x, None, mode)
         except Exception as e:
             print(e)
             print("failed to run attention norm")
             assert False, "Failed to run attention norm"
-        # print("attention norm done", attn_in)
+        # print("attention norm done", attn_in_sharded)
         # NOTE: donnot deallocate x here as it updated inplace and returns new h
         # Attention takes replicated inputs and produces fractured outputs
         # pad attn input
