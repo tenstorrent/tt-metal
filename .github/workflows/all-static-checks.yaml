@@ -129,3 +129,11 @@ jobs:
       run: |
         echo "Checking compatibility with $(cmake --version)"
         cmake -D BUILD_PROGRAMMING_EXAMPLES=ON -D TT_METAL_BUILD_TESTS=ON -B build .
+  codeowners-validator:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: mszostok/codeowners-validator@7f3f5e28c6d7b8dfae5731e54ce2272ca384592f # v0.7.4
+        with:
+          checks: "files,duppatterns,syntax"
+          experimental_checks: "avoid-shadowing"
