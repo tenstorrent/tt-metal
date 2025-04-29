@@ -16,6 +16,8 @@ namespace ckernel
 namespace sfpu
 {
 
+static int32_t topk_replay_init = 0;
+
 inline void set_dst_write_addr(uint32_t addr)
 {
     uint dst_index = addr + get_dest_buffer_base();
@@ -699,6 +701,7 @@ inline void _bitonic_topk_rebuild(const bool idir, const int m_iter, const int k
 
 inline void _init_topk()
 {
+    topk_replay_init = 0;
     _sfpu_load_config32_(0xF, 0x0, 0x4); // Set bit [2] of the SFPU_CONTROL_REG to enable index tracking mode
 }
 
