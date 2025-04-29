@@ -4,7 +4,6 @@
 
 #pragma once
 
-#include <any>
 #include <cstdint>
 #include <optional>
 #include <string>
@@ -36,14 +35,8 @@ Tensor extract_output_tensor(const std::variant<
                              std::tuple<ttnn::Tensor, Args2...>,
                              std::tuple<ttnn::Tensor, Args1..., Args2...>>& result) {
     return std::visit<Tensor>(
-        [](auto&& arg) {
-            using T = std::decay_t<decltype(arg)>;
-            if constexpr (std::is_same_v<T, ttnn::Tensor>) {
-                return arg;
-            } else {
-                return std::get<0>(arg);
-            }
-        },
+        tt::stl::overloaded{
+            [](const ttnn::Tensor& arg) { return arg; }, [](const auto& arg) { return std::get<0>(arg); }},
         result);
 }
 }  // namespace detail

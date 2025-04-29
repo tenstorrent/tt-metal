@@ -23,11 +23,6 @@ using Result = std::variant<
         std::tuple<OutputHeight, OutputWidth>,
         std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>>>>;
 
-// Enum to specify the type of result to be returned, std::get is used to extract the value from the variant
-//
-// The enum values are used to index into the Result variant
-enum ResultType { OUTPUT = 0, OUTPUT_DIM, OUTPUT_WEIGHTS_AND_BIAS, OUTPUT_DIM_WEIGHTS_AND_BIAS };
-
 struct ConvTranpose2dOperation {
     static Result invoke(
         QueueId queue_id,

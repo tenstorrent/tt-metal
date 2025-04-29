@@ -2,7 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <sys/types.h>
 #include <array>
 #include <cstdint>
 #include <iostream>
@@ -13,6 +12,7 @@
 #include <tt-metalium/small_vector.hpp>
 #include "ttnn/common/queue_id.hpp"
 #include "ttnn/tensor/tensor.hpp"
+#include "ttnn/operations/conv/conv.hpp"
 #include "ttnn/operations/conv/conv2d/conv2d.hpp"
 #include "ttnn/operations/data_movement/permute/permute.hpp"
 #include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
