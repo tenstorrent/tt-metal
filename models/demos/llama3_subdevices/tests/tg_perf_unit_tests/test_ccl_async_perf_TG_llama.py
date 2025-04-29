@@ -280,7 +280,7 @@ def test_fused_all_reduce_create_heads_perf(
 @pytest.mark.parametrize(
     "warmup_iters, perf_target_us",
     [
-        (5, 9.9),
+        (5, 9.8),
     ],
 )
 @pytest.mark.models_device_performance_bare_metal
