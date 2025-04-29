@@ -6,14 +6,12 @@
 
 #include "dataflow_api.h"
 #include "tt_metal/fabric/hw/inc/edm_fabric/edm_fabric_worker_adapters.hpp"
+#include "tt_metal/fabric/hw/inc/tt_fabric_mux.hpp"
 
 namespace tt::tt_fabric {
 
-template <uint8_t FABRIC_MUX_CHANNEL_NUM_BUFFERS>
-using WorkerToFabricMuxSender = WorkerToFabricEdmSenderImpl<FABRIC_MUX_CHANNEL_NUM_BUFFERS>;
-
 template <uint8_t FABRIC_MUX_CHANNEL_NUM_BUFFERS = 0>
-auto build_fabric_mux_connection(
+WorkerToFabricMuxSender<FABRIC_MUX_CHANNEL_NUM_BUFFERS> build_fabric_mux_connection(
     uint8_t fabric_mux_x,
     uint8_t fabric_mux_y,
     uint8_t fabric_mux_num_buffers_per_channel,
@@ -25,7 +23,7 @@ auto build_fabric_mux_connection(
     size_t fabric_mux_buffer_index_address,
     uint32_t local_flow_control_address,
     uint32_t local_teardown_address,
-    uint32_t local_buffer_index_address) -> WorkerToFabricMuxSender<FABRIC_MUX_CHANNEL_NUM_BUFFERS> {
+    uint32_t local_buffer_index_address) {
     auto local_flow_control_ptr = reinterpret_cast<volatile uint32_t* const>(local_flow_control_address);
     auto local_teardown_ptr = reinterpret_cast<volatile uint32_t* const>(local_teardown_address);
     return WorkerToFabricMuxSender<FABRIC_MUX_CHANNEL_NUM_BUFFERS>(
@@ -44,6 +42,23 @@ auto build_fabric_mux_connection(
         local_buffer_index_address,
         write_reg_cmd_buf,
         write_at_cmd_buf);
+}
+
+FORCE_INLINE void wait_for_fabric_mux_ready(
+    uint8_t fabric_mux_x,
+    uint8_t fabric_mux_y,
+    size_t fabric_mux_status_address,
+    uint32_t local_fabric_mux_status_address) {
+    uint64_t noc_addr = get_noc_addr(fabric_mux_x, fabric_mux_y, fabric_mux_status_address);
+    auto local_fabric_mux_status_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(local_fabric_mux_status_address);
+
+    while (true) {
+        noc_async_read_one_packet(noc_addr, local_fabric_mux_status_address, 4);
+        noc_async_read_barrier();
+        if (local_fabric_mux_status_ptr[0] == tt::tt_fabric::FabricMuxStatus::READY_FOR_TRAFFIC) {
+            break;
+        }
+    }
 }
 
 template <uint8_t FABRIC_MUX_CHANNEL_NUM_BUFFERS = 0>

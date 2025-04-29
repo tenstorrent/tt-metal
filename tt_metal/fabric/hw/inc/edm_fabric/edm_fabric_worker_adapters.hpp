@@ -173,7 +173,7 @@ struct WorkerToFabricEdmSenderImpl {
         if constexpr (USER_DEFINED_NUM_BUFFER_SLOTS) {
             while (distance_behind<EDM_NUM_BUFFER_SLOTS>(
                        BufferPtr{static_cast<uint8_t>(*this->from_remote_buffer_slot_rdptr_ptr)},
-                       BufferPtr{static_cast<uint8_t>(this->buffer_slot_wrptr)}) < this->num_buffers_per_channel);
+                       BufferPtr{static_cast<uint8_t>(this->buffer_slot_wrptr)}) >= this->num_buffers_per_channel);
         } else {
             const auto first_rdptr = *this->from_remote_buffer_slot_rdptr_ptr;
             auto buffer_ptr_wrap = 2 * this->num_buffers_per_channel;

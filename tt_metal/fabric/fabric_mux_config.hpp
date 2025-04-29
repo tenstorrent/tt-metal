@@ -85,22 +85,28 @@ struct FabricMuxConfig {
         num_buffers_header_only_channel(num_buffers_header_only_channel),
         buffer_size_bytes_full_size_channel(buffer_size_bytes_full_size_channel) {
         // TODO: asserts on the max size/number of channels allowed?
+        auto num_total_channels = num_full_size_channels + num_header_only_channels;
 
         this->full_size_channel_size_bytes = num_buffers_full_size_channel * buffer_size_bytes_full_size_channel;
         this->header_only_channel_size_bytes = num_buffers_header_only_channel * sizeof(tt::tt_fabric::PacketHeader);
 
         this->memory_map_start_address = base_l1_address;
 
-        this->termination_signal_address = this->memory_map_start_address;
-
-        size_t address_block_size_bytes =
-            (num_full_size_channels + num_header_only_channels) * noc_aligned_address_size_bytes;
+        this->status_address = this->memory_map_start_address;
+        this->termination_signal_address = this->status_address + noc_aligned_address_size_bytes;
 
         this->connection_info_base_address = this->termination_signal_address + noc_aligned_address_size_bytes;
-        this->connection_handshake_base_address = this->connection_info_base_address + address_block_size_bytes;
+        size_t connection_info_address_block_size_bytes =
+            num_total_channels * sizeof(tt::tt_fabric::EDMChannelWorkerLocationInfo);
+
+        this->connection_handshake_base_address =
+            this->connection_info_base_address + connection_info_address_block_size_bytes;
+        size_t address_block_size_bytes = num_total_channels * noc_aligned_address_size_bytes;
+
         this->flow_control_base_address = this->connection_handshake_base_address + address_block_size_bytes;
         this->buffer_index_base_address = this->flow_control_base_address + address_block_size_bytes;
         this->full_size_channels_base_address = this->buffer_index_base_address + address_block_size_bytes;
+
         this->header_only_channels_base_address =
             this->full_size_channels_base_address + (num_full_size_channels * this->full_size_channel_size_bytes);
         this->memory_map_end_address =
@@ -114,6 +120,7 @@ struct FabricMuxConfig {
             this->buffer_size_bytes_full_size_channel,
             this->num_header_only_channels,
             this->num_buffers_header_only_channel,
+            this->status_address,
             this->termination_signal_address,
             this->connection_info_base_address,
             this->connection_handshake_base_address,
@@ -123,6 +130,8 @@ struct FabricMuxConfig {
             this->num_full_size_channel_iters,
             this->num_iters_between_teardown_checks};
     }
+
+    std::size_t get_status_address() { return this->status_address; }
 
     std::size_t get_termination_signal_address() { return this->termination_signal_address; }
 
@@ -139,19 +148,26 @@ struct FabricMuxConfig {
     }
 
     std::size_t get_connection_info_address(FabricMuxChannelType channel_type, uint8_t channel_id) {
-        return get_address_from_block(channel_type, channel_id, this->connection_info_base_address);
+        return get_address_from_block(
+            channel_type,
+            channel_id,
+            this->connection_info_base_address,
+            sizeof(tt::tt_fabric::EDMChannelWorkerLocationInfo));
     }
 
     std::size_t get_connection_handshake_address(FabricMuxChannelType channel_type, uint8_t channel_id) {
-        return get_address_from_block(channel_type, channel_id, this->connection_handshake_base_address);
+        return get_address_from_block(
+            channel_type, channel_id, this->connection_handshake_base_address, noc_aligned_address_size_bytes);
     }
 
     std::size_t get_flow_control_address(FabricMuxChannelType channel_type, uint8_t channel_id) {
-        return get_address_from_block(channel_type, channel_id, this->flow_control_base_address);
+        return get_address_from_block(
+            channel_type, channel_id, this->flow_control_base_address, noc_aligned_address_size_bytes);
     }
 
     std::size_t get_buffer_index_address(FabricMuxChannelType channel_type, uint8_t channel_id) {
-        return get_address_from_block(channel_type, channel_id, this->buffer_index_base_address);
+        return get_address_from_block(
+            channel_type, channel_id, this->buffer_index_base_address, noc_aligned_address_size_bytes);
     }
 
     std::size_t get_num_bytes_to_clear() { return this->memory_map_end_address - this->memory_map_start_address; }
@@ -174,7 +190,7 @@ struct FabricMuxConfig {
 
 private:
     std::size_t get_address_from_block(
-        FabricMuxChannelType channel_type, uint8_t channel_id, std::size_t base_address) {
+        FabricMuxChannelType channel_type, uint8_t channel_id, std::size_t base_address, std::size_t unit_size_bytes) {
         std::size_t offset = 0;
         if (channel_type == FabricMuxChannelType::FULL_SIZE_CHANNEL) {
             offset = channel_id;
@@ -184,7 +200,7 @@ private:
             TT_THROW("Unexpected channel type: {}", channel_type);
         }
 
-        return base_address + (offset * noc_aligned_address_size_bytes);
+        return base_address + (offset * unit_size_bytes);
     }
 
     std::size_t full_size_channel_size_bytes = 0;
@@ -195,6 +211,7 @@ private:
 
     // memory map
     std::size_t memory_map_start_address = 0;
+    std::size_t status_address = 0;
     std::size_t termination_signal_address = 0;
     std::size_t connection_info_base_address = 0;
     std::size_t connection_handshake_base_address = 0;

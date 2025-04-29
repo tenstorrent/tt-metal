@@ -36,7 +36,18 @@ const uint32_t noc_address_padding_bytes = 16;
 
 using FabricMuxFixture = Fabric1DFixture;
 
-TEST_F(FabricMuxFixture, TestFabricMux) {
+struct TestConfig {
+    uint32_t num_sender_clients = 0;
+    uint32_t num_packets = 0;
+    uint32_t num_credits = 0;
+    uint32_t packet_payload_size_bytes = 0;
+    uint8_t num_full_size_channels = 0;
+    uint8_t num_header_only_channels = 0;
+    uint8_t num_buffers_full_size_channel = 0;
+    uint8_t num_buffers_header_only_channel = 0;
+};
+
+void run_two_chip_test_variant(FabricMuxFixture* fixture, TestConfig test_config) {
     auto* control_plane = tt::tt_metal::MetalContext::instance().get_cluster().get_control_plane();
 
     std::pair<mesh_id_t, chip_id_t> mesh_chip_id_0;
@@ -45,7 +56,7 @@ TEST_F(FabricMuxFixture, TestFabricMux) {
     chip_id_t device_id_1;
 
     // Find a device with a neighbour in the East direction (N300 has E<>W chips only)
-    bool connection_found = find_device_with_neighbor_in_direction(
+    bool connection_found = fixture->find_device_with_neighbor_in_direction(
         mesh_chip_id_0, mesh_chip_id_1, device_id_0, device_id_1, RoutingDirection::E);
     if (!connection_found) {
         GTEST_SKIP() << "No path found between sender and receivers";
@@ -66,38 +77,41 @@ TEST_F(FabricMuxFixture, TestFabricMux) {
         }
     }
 
+    // there will be one receiver client per sender client
     // sender clients on device_id_0 send payloads to receiver clients on device_id_1
     // receiver clients on device_id_1 send credits back to sender clients on device_id_0
     // sender clients on device_id_1 send payloads to receiver clients on device_id_0
     // receiver clients on device_id_0 send credits back to sender clients on device_id_1
 
-    // there will be one receiver client per sender client
-    const uint32_t num_sender_clients = 8;
+    // test config
+    const uint32_t num_sender_clients = test_config.num_sender_clients;
+    const uint32_t num_packets = test_config.num_packets;
+    const uint32_t num_credits = test_config.num_credits;
+    const uint32_t packet_payload_size_bytes = test_config.packet_payload_size_bytes;
+    const uint8_t num_full_size_channels = test_config.num_full_size_channels;
+    const uint8_t num_header_only_channels = test_config.num_header_only_channels;
+    const uint8_t num_buffers_full_size_channel = test_config.num_buffers_full_size_channel;
+    const uint8_t num_buffers_header_only_channel = test_config.num_buffers_header_only_channel;
+
+    // mux config
+    const size_t buffer_size_bytes_full_size_channel =
+        sizeof(tt::tt_fabric::PacketHeader) + packet_payload_size_bytes;  // packet header + 4K payload
 
     const uint32_t l1_unreserved_base_address =
         devices[0]->allocator()->get_base_allocator_addr(tt_metal::HalMemType::L1);
-
-    // mux config
-    const uint8_t num_full_size_channels = 8;
-    const uint8_t num_header_only_channels = 8;
-    const uint8_t num_buffers_full_size_channel = 8;
-    const uint8_t num_buffers_header_only_channel = 8;
-    const size_t buffer_size_bytes_full_size_channel =
-        sizeof(tt::tt_fabric::PacketHeader) + 4096;  // packet header + 4K payload
     const size_t mux_base_l1_address = l1_unreserved_base_address;
 
-    // test params
-    const uint32_t num_packets = 5000;
-    const uint32_t num_credits = 16;
-    const uint32_t packet_payload_size_bytes = 4096;
     uint32_t time_seed = std::chrono::system_clock::now().time_since_epoch().count();
     uint32_t num_hops = 1;  // the sender and reciever devices are adjacent for this test
 
     // memory map for senders and receivers
     const uint32_t test_results_address = l1_unreserved_base_address;
 
+    // address to load the mux status into
+    const uint32_t local_mux_status_address = test_results_address + test_results_size_bytes;
+
     // address which will be used for flow control b/w sender and fabric mux kernel
-    const uint32_t local_flow_control_address = test_results_address + test_results_size_bytes;
+    const uint32_t local_flow_control_address = local_mux_status_address + noc_address_padding_bytes;
 
     // address which will be used for connection teardown signalling
     const uint32_t local_teardown_address = local_flow_control_address + noc_address_padding_bytes;
@@ -105,22 +119,22 @@ TEST_F(FabricMuxFixture, TestFabricMux) {
     // address to sync buffer index
     const uint32_t local_buffer_index_address = local_teardown_address + noc_address_padding_bytes;
 
-    // address at which the sender will write packets to in the receiver's L1
-    // receiver will use the same address to send the credits back to the sender
-    const uint32_t base_l1_target_address = local_buffer_index_address + noc_address_padding_bytes;
-    const uint32_t credit_handshake_address = base_l1_target_address;
+    // address to send the credits back to the sender
+    const uint32_t credit_handshake_address = local_buffer_index_address + noc_address_padding_bytes;
 
     // address for packet headers' buffer
     const uint32_t packet_header_buffer_address = credit_handshake_address + noc_address_padding_bytes;
 
+    // address at which the sender will write packets to in the receiver's L1
+    const uint32_t base_l1_target_address = packet_header_buffer_address + 1024;
+
     // address at which the payload will reside in the sender's L1
-    const uint32_t payload_buffer_address = packet_header_buffer_address + 1024;
+    const uint32_t payload_buffer_address = base_l1_target_address;
 
     std::vector<uint32_t> worker_zero_vec(1, 0);
-    auto zero_out_worker_address =
-        [&](tt::tt_metal::IDevice* device, CoreCoord& worker_logical_core, uint32_t address) {
-            tt::tt_metal::detail::WriteToDeviceL1(device, worker_logical_core, address, worker_zero_vec);
-        };
+    auto zero_out_worker_address = [&](tt::tt_metal::IDevice* device, CoreCoord& logical_core, uint32_t address) {
+        tt::tt_metal::detail::WriteToDeviceL1(device, logical_core, address, worker_zero_vec);
+    };
 
     std::vector<CoreCoord> mux_logical_cores;
     std::vector<size_t> mux_termiation_signal_addresses;
@@ -197,9 +211,7 @@ TEST_F(FabricMuxFixture, TestFabricMux) {
                     tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL, sender_id),
                 mux_kernel_config.get_buffer_index_address(
                     tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL, sender_id),
-                local_flow_control_address,
-                local_teardown_address,
-                local_buffer_index_address};
+                mux_kernel_config.get_status_address()};
 
             std::vector<uint32_t> sender_rt_args = {
                 num_packets,
@@ -207,6 +219,10 @@ TEST_F(FabricMuxFixture, TestFabricMux) {
                 packet_payload_size_bytes,
                 time_seed,
                 num_hops,
+                local_mux_status_address,
+                local_flow_control_address,
+                local_teardown_address,
+                local_buffer_index_address,
                 test_results_address,
                 test_results_size_bytes,
                 base_l1_target_address,
@@ -252,9 +268,7 @@ TEST_F(FabricMuxFixture, TestFabricMux) {
                     tt::tt_fabric::FabricMuxChannelType::HEADER_ONLY_CHANNEL, sender_id),
                 mux_kernel_config.get_buffer_index_address(
                     tt::tt_fabric::FabricMuxChannelType::HEADER_ONLY_CHANNEL, sender_id),
-                local_flow_control_address,
-                local_teardown_address,
-                local_buffer_index_address};
+                mux_kernel_config.get_status_address()};
 
             std::vector<uint32_t> receiver_rt_args = {
                 num_packets,
@@ -262,6 +276,10 @@ TEST_F(FabricMuxFixture, TestFabricMux) {
                 packet_payload_size_bytes,
                 time_seed,
                 num_hops,
+                local_mux_status_address,
+                local_flow_control_address,
+                local_teardown_address,
+                local_buffer_index_address,
                 test_results_address,
                 test_results_size_bytes,
                 base_l1_target_address,
@@ -295,12 +313,12 @@ TEST_F(FabricMuxFixture, TestFabricMux) {
         receiver_logical_cores.push_back(receiver_cores);
     }
 
-    log_info(LogTest, "running programs");
+    log_info(LogTest, "Running programs");
     for (auto i = 0; i < devices.size(); i++) {
-        this->RunProgramNonblocking(devices[i], program_handles[i]);
+        fixture->RunProgramNonblocking(devices[i], program_handles[i]);
     }
 
-    log_info(LogTest, "waiting for senders to complete");
+    log_info(LogTest, "Waiting for senders to complete");
     for (auto i = 0; i < devices.size(); i++) {
         for (auto j = 0; j < sender_logical_cores[i].size(); j++) {
             std::vector<uint32_t> sender_status(1, 0);
@@ -311,7 +329,7 @@ TEST_F(FabricMuxFixture, TestFabricMux) {
         }
     }
 
-    log_info(LogTest, "senders done, waiting for receivers to complete");
+    log_info(LogTest, "Senders done, waiting for receivers to complete");
     for (auto i = 0; i < devices.size(); i++) {
         for (auto j = 0; j < receiver_logical_cores[i].size(); j++) {
             std::vector<uint32_t> receiver_status(1, 0);
@@ -322,19 +340,19 @@ TEST_F(FabricMuxFixture, TestFabricMux) {
         }
     }
 
-    log_info(LogTest, "receivers done, terminating mux kernel");
+    log_info(LogTest, "Receivers done, terminating mux kernel");
     std::vector<uint32_t> mux_termiation_signal(1, tt::tt_fabric::TerminationSignal::IMMEDIATELY_TERMINATE);
     for (auto i = 0; i < devices.size(); i++) {
         tt::tt_metal::detail::WriteToDeviceL1(
             devices[i], mux_logical_cores[i], mux_termiation_signal_addresses[i], mux_termiation_signal);
     }
 
-    log_info(LogTest, "waiting for programs");
+    log_info(LogTest, "Waiting for programs");
     for (auto i = 0; i < devices.size(); i++) {
-        this->WaitForSingleProgramDone(devices[i], program_handles[i]);
+        fixture->WaitForSingleProgramDone(devices[i], program_handles[i]);
     }
 
-    log_info(LogTest, "programs done, validating results");
+    log_info(LogTest, "Programs done, validating results");
     for (auto i = 0; i < devices.size(); i++) {
         for (auto j = 0; j < sender_logical_cores[i].size(); j++) {
             std::vector<uint32_t> sender_status;
@@ -356,6 +374,76 @@ TEST_F(FabricMuxFixture, TestFabricMux) {
             EXPECT_EQ(receiver_status[TT_FABRIC_STATUS_INDEX], TT_FABRIC_STATUS_PASS);
         }
     }
+}
+
+TEST_F(FabricMuxFixture, TestFabricMuxTwoChipVariant1) {
+    TestConfig test_config = {
+        .num_sender_clients = 1,
+        .num_packets = 1000,
+        .num_credits = 1,
+        .packet_payload_size_bytes = 4096,
+        .num_full_size_channels = 1,
+        .num_header_only_channels = 1,
+        .num_buffers_full_size_channel = 1,
+        .num_buffers_header_only_channel = 1,
+    };
+    run_two_chip_test_variant(this, test_config);
+}
+
+TEST_F(FabricMuxFixture, TestFabricMuxTwoChipVariant2) {
+    TestConfig test_config = {
+        .num_sender_clients = 1,
+        .num_packets = 1000,
+        .num_credits = 1,
+        .packet_payload_size_bytes = 4096,
+        .num_full_size_channels = 4,
+        .num_header_only_channels = 4,
+        .num_buffers_full_size_channel = 4,
+        .num_buffers_header_only_channel = 4,
+    };
+    run_two_chip_test_variant(this, test_config);
+}
+
+TEST_F(FabricMuxFixture, TestFabricMuxTwoChipVariant3) {
+    TestConfig test_config = {
+        .num_sender_clients = 2,
+        .num_packets = 1000,
+        .num_credits = 1,
+        .packet_payload_size_bytes = 4096,
+        .num_full_size_channels = 4,
+        .num_header_only_channels = 4,
+        .num_buffers_full_size_channel = 4,
+        .num_buffers_header_only_channel = 4,
+    };
+    run_two_chip_test_variant(this, test_config);
+}
+
+TEST_F(FabricMuxFixture, TestFabricMuxTwoChipVariant4) {
+    TestConfig test_config = {
+        .num_sender_clients = 2,
+        .num_packets = 1000,
+        .num_credits = 16,
+        .packet_payload_size_bytes = 4096,
+        .num_full_size_channels = 4,
+        .num_header_only_channels = 4,
+        .num_buffers_full_size_channel = 4,
+        .num_buffers_header_only_channel = 4,
+    };
+    run_two_chip_test_variant(this, test_config);
+}
+
+TEST_F(FabricMuxFixture, TestFabricMuxTwoChipVariant5) {
+    TestConfig test_config = {
+        .num_sender_clients = 8,
+        .num_packets = 5000,
+        .num_credits = 16,
+        .packet_payload_size_bytes = 4096,
+        .num_full_size_channels = 8,
+        .num_header_only_channels = 8,
+        .num_buffers_full_size_channel = 8,
+        .num_buffers_header_only_channel = 8,
+    };
+    run_two_chip_test_variant(this, test_config);
 }
 
 }  // namespace fabric_mux_tests

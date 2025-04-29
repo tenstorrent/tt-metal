@@ -22,9 +22,7 @@ constexpr size_t fabric_mux_connection_info_address = get_compile_time_arg_val(5
 constexpr size_t fabric_mux_connection_handshake_address = get_compile_time_arg_val(6);
 constexpr size_t fabric_mux_flow_control_address = get_compile_time_arg_val(7);
 constexpr size_t fabric_mux_buffer_index_address = get_compile_time_arg_val(8);
-constexpr uint32_t local_flow_control_address = get_compile_time_arg_val(9);
-constexpr uint32_t local_teardown_address = get_compile_time_arg_val(10);
-constexpr uint32_t local_buffer_index_address = get_compile_time_arg_val(11);
+constexpr size_t fabric_mux_status_address = get_compile_time_arg_val(9);
 
 void kernel_main() {
     uint32_t rt_args_idx = 0;
@@ -33,6 +31,10 @@ void kernel_main() {
     uint32_t packet_payload_size_bytes = get_arg_val<uint32_t>(rt_args_idx++);
     uint32_t time_seed = get_arg_val<uint32_t>(rt_args_idx++);
     uint32_t num_hops = get_arg_val<uint32_t>(rt_args_idx++);
+    uint32_t local_fabric_mux_status_address = get_arg_val<uint32_t>(rt_args_idx++);
+    uint32_t local_flow_control_address = get_arg_val<uint32_t>(rt_args_idx++);
+    uint32_t local_teardown_address = get_arg_val<uint32_t>(rt_args_idx++);
+    uint32_t local_buffer_index_address = get_arg_val<uint32_t>(rt_args_idx++);
     uint32_t test_results_address = get_arg_val<uint32_t>(rt_args_idx++);
     uint32_t test_results_size_bytes = get_arg_val<uint32_t>(rt_args_idx++);
     uint32_t base_l1_target_address = get_arg_val<uint32_t>(rt_args_idx++);
@@ -58,6 +60,10 @@ void kernel_main() {
         local_flow_control_address,
         local_teardown_address,
         local_buffer_index_address);
+
+    // need to wait for fabric mux to be ready to accept connections
+    tt::tt_fabric::wait_for_fabric_mux_ready(
+        fabric_mux_x, fabric_mux_y, fabric_mux_status_address, local_fabric_mux_status_address);
 
     tt::tt_fabric::fabric_mux_client_connect<fabric_mux_num_buffers_per_channel>(mux_connection_handle);
 
