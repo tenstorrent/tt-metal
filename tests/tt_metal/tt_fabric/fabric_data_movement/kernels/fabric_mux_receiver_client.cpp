@@ -10,19 +10,21 @@
 #include "tt_metal/fabric/hw/inc/tt_fabric.h" // zero_l1_buf
 #include "tests/tt_metal/tt_metal/perf_microbenchmark/routing/kernels/tt_fabric_traffic_gen.hpp"
 #include "tt_metal/fabric/hw/inc/tt_fabric_status.h"
+#include "tt_metal/fabric/hw/inc/tt_fabric_mux_interface.hpp"
 // clang-format on
 
 constexpr uint8_t fabric_mux_x = get_compile_time_arg_val(0);
 constexpr uint8_t fabric_mux_y = get_compile_time_arg_val(1);
 constexpr uint8_t fabric_mux_num_buffers_per_channel = get_compile_time_arg_val(2);
-constexpr size_t fabric_mux_channel_base_address = get_compile_time_arg_val(3);
-constexpr size_t fabric_mux_connection_info_address = get_compile_time_arg_val(4);
-constexpr size_t fabric_mux_connection_handshake_address = get_compile_time_arg_val(5);
-constexpr size_t fabric_mux_flow_control_address = get_compile_time_arg_val(6);
-constexpr size_t fabric_mux_buffer_index_address = get_compile_time_arg_val(7);
-constexpr uint32_t local_flow_control_address = get_compile_time_arg_val(8);
-constexpr uint32_t local_teardown_address = get_compile_time_arg_val(9);
-constexpr uint32_t local_buffer_index_address = get_compile_time_arg_val(10);
+constexpr size_t fabric_mux_channel_buffer_size_bytes = get_compile_time_arg_val(3);
+constexpr size_t fabric_mux_channel_base_address = get_compile_time_arg_val(4);
+constexpr size_t fabric_mux_connection_info_address = get_compile_time_arg_val(5);
+constexpr size_t fabric_mux_connection_handshake_address = get_compile_time_arg_val(6);
+constexpr size_t fabric_mux_flow_control_address = get_compile_time_arg_val(7);
+constexpr size_t fabric_mux_buffer_index_address = get_compile_time_arg_val(8);
+constexpr uint32_t local_flow_control_address = get_compile_time_arg_val(9);
+constexpr uint32_t local_teardown_address = get_compile_time_arg_val(10);
+constexpr uint32_t local_buffer_index_address = get_compile_time_arg_val(11);
 
 void kernel_main() {
     uint32_t rt_args_idx = 0;
@@ -43,7 +45,21 @@ void kernel_main() {
     zero_l1_buf(test_results, test_results_size_bytes);
     test_results[TT_FABRIC_STATUS_INDEX] = TT_FABRIC_STATUS_STARTED;
 
-    // setup connection with the mux kernel
+    auto mux_connection_handle = tt::tt_fabric::build_fabric_mux_connection<fabric_mux_num_buffers_per_channel>(
+        fabric_mux_x,
+        fabric_mux_y,
+        fabric_mux_num_buffers_per_channel,
+        fabric_mux_channel_buffer_size_bytes,
+        fabric_mux_channel_base_address,
+        fabric_mux_connection_info_address,
+        fabric_mux_connection_handshake_address,
+        fabric_mux_flow_control_address,
+        fabric_mux_buffer_index_address,
+        local_flow_control_address,
+        local_teardown_address,
+        local_buffer_index_address);
+
+    tt::tt_fabric::fabric_mux_client_connect<fabric_mux_num_buffers_per_channel>(mux_connection_handle);
 
     // setup packet headers
     uint64_t noc_dest_addr = get_noc_addr_helper(sender_noc_xy_encoding, credit_handshake_address);
@@ -88,9 +104,10 @@ void kernel_main() {
 
         // send credit back
         // can also accumulate and then send credits back instead of sending back one at a time
+        tt::tt_fabric::fabric_mux_atomic_inc<fabric_mux_num_buffers_per_channel>(mux_connection_handle, packet_header);
     }
 
-    // teardown connection
+    tt::tt_fabric::fabric_mux_client_disconnect<fabric_mux_num_buffers_per_channel>(mux_connection_handle);
 
     if (match) {
         test_results[TT_FABRIC_STATUS_INDEX] = TT_FABRIC_STATUS_PASS;
