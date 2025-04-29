@@ -182,7 +182,7 @@ jobs:
       - get-image-tags
       - build-images
     runs-on:
-      - arch-blackhole
+      - BH
       - in-service
       - cloud-virtual-machine
     steps:
