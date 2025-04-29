@@ -279,10 +279,7 @@ def run_reduce_scatter_test(
         time_taken = profiler.get_duration("reduce-scatter-trace") - profiler.get_duration(
             "reduce-scatter-trace-warmup"
         )
-        effective_iter = num_iters - warmup_iters
         logger.info(f"Time taken e2e: {time_taken} s")
-        logger.info(f"Time per iter e2e: {time_taken / effective_iter} s")
-        logger.info(f"Time per iter e2e: {time_taken / effective_iter * 1e6} us")
     else:
         signpost("start")
         tt_out_tensor_list = run_op(num_iters, store_all_results=True)
