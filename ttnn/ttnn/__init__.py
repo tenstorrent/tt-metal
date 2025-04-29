@@ -346,6 +346,7 @@ from ttnn.operations.conv2d import (
     Conv2dSliceWidth,
     prepare_conv_weights,
     prepare_conv_bias,
+    SlidingWindowParallelConfig,
 )
 from ttnn._ttnn.operations.conv import (
     convert_conv_weight_tensor_to_tiled_layout,

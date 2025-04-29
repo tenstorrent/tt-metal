@@ -1168,7 +1168,9 @@ def test_slice_height_sharded_for_conv2d(device, dims, slice_dim, slice_size, co
             output_shape, parallel_config, 32
         )
         print("Slice output shape ", output_shape, memory_config)
-        this_ttnn_output = ttnn.slice(ttnn_input, begins, ends, strides, memory_config=memory_config)
+        this_ttnn_output = ttnn.experimental.padded_slice(
+            ttnn_input, begins, ends, strides, memory_config=memory_config
+        )
         output = ttnn.to_torch(this_ttnn_output)
         assert_with_pcc(this_torch_output, output[:, :, :, : this_torch_output.shape[3]], 0.9999)
         if output.shape[3] > this_torch_output.shape[3]:

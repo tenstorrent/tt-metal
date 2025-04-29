@@ -11,7 +11,7 @@
 
 #include "padded_slice.hpp"
 
-namespace ttnn::operations::data_movement::detail {
+namespace ttnn::operations::experimental::padded_slice {
 namespace py = pybind11;
 
 void bind_padded_slice(py::module& module) {
@@ -45,10 +45,10 @@ void bind_padded_slice(py::module& module) {
 
     // TODO: implementing the array version and overloading the pybind with all the possible array sizes is better than
     // a vector with a fixed size default value
-    using OperationType = decltype(ttnn::padded_slice);
+    using OperationType = decltype(ttnn::experimental::padded_slice);
     ttnn::bind_registered_operation(
         module,
-        ttnn::padded_slice,
+        ttnn::experimental::padded_slice,
         doc,
         ttnn::pybind_overload_t{
             [](const OperationType& self,
@@ -105,4 +105,4 @@ void bind_padded_slice(py::module& module) {
             py::arg("queue_id") = DefaultQueueId,
         });
 }
-}  // namespace ttnn::operations::data_movement::detail
+}  // namespace ttnn::operations::experimental::padded_slice

@@ -46,11 +46,12 @@
 #include "ttnn/operations/experimental/transformer/all_reduce_create_qkv_heads/all_reduce_create_qkv_heads_pybind.hpp"
 #include "ttnn/operations/experimental/unary_backward/gelu_backward/gelu_backward_pybind.hpp"
 #include "ttnn/operations/experimental/reduction/sort/sort_pybind.hpp"
-
+#include "ttnn/operations/experimental/padded_slice/padded_slice_pybind.hpp"
 namespace ttnn::operations::experimental {
 
 void py_module(py::module& module) {
     slice_write::bind_slice_write(module);
+    padded_slice::bind_padded_slice(module);
 
     transformer::detail::bind_concatenate_heads(module);
     transformer::detail::bind_split_qkv(module);

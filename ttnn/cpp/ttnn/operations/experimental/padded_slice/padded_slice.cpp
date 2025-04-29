@@ -14,7 +14,7 @@
 #include "ttnn/operations/experimental/reshape/view.hpp"
 #include "padded_slice.hpp"
 
-namespace ttnn::operations::data_movement {
+namespace ttnn::operations::experimental {
 
 template <typename T>
 ttnn::Tensor PaddedSliceOperation::invoke(
@@ -78,18 +78,18 @@ ttnn::Tensor PaddedSliceOperation::invoke(
     ttnn::SmallVector<uint32_t> modified_ends(input_rank, 0);
     ttnn::SmallVector<uint32_t> modified_step(input_rank, 1);
 
-    // Wrap indices and adjust begins, ends, and step
-    for (size_t i = 0; i < begins.size(); ++i) {
-        if constexpr (std::is_signed_v<T>) {
-            modified_begins[i] = wrap_index(begins[i], input_shape[i]);
-            modified_ends[i] = wrap_index(ends[i], input_shape[i]);
-            modified_step[i] = static_cast<uint32_t>(step[i]);
-        } else {
-            modified_begins[i] = begins[i];
-            modified_ends[i] = ends[i];
-            modified_step[i] = step[i];
-        }
-    }
+    // // Wrap indices and adjust begins, ends, and step
+    // for (size_t i = 0; i < begins.size(); ++i) {
+    //     if constexpr (std::is_signed_v<T>) {
+    //         modified_begins[i] = wrap_index(begins[i], input_shape[i]);
+    //         modified_ends[i] = wrap_index(ends[i], input_shape[i]);
+    //         modified_step[i] = static_cast<uint32_t>(step[i]);
+    //     } else {
+    //         modified_begins[i] = begins[i];
+    //         modified_ends[i] = ends[i];
+    //         modified_step[i] = step[i];
+    //     }
+    // }
 
     auto output_dim_i = [&modified_begins, &modified_step](size_t i, const ttnn::SmallVector<uint32_t>& modified_ends) {
         return (modified_ends[i] - modified_begins[i] + modified_step[i] - 1) / modified_step[i];
@@ -342,4 +342,4 @@ template ttnn::Tensor PaddedSliceOperation::invoke<uint32_t, 1>(
     const std::optional<Tensor>& optional_output_tensor,
     const std::optional<float>& pad_value);
 
-}  // namespace ttnn::operations::data_movement
+}  // namespace ttnn::operations::experimental
