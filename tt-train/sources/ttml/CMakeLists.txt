@@ -123,7 +123,7 @@ add_library(ttml STATIC ${SOURCES})
 
 target_include_directories(ttml PUBLIC ${PROJECT_SOURCE_DIR})
 
-find_package(Python REQUIRED Development)
+find_package(Python3 REQUIRED Development)
 
 foreach(lib ${BoostPackages})
     target_include_directories(ttml SYSTEM PUBLIC ${Boost${lib}_SOURCE_DIR}/include)
@@ -138,7 +138,7 @@ target_link_libraries(
         atomic
         Metalium::Metal
         Metalium::TTNN
-        Python::Python
+        Python3::Python
         fmt::fmt-header-only
         magic_enum::magic_enum
         yaml-cpp::yaml-cpp
