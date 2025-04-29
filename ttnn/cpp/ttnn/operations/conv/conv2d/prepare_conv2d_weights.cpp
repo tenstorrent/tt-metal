@@ -1035,7 +1035,7 @@ std::pair<ttnn::Tensor, std::optional<ttnn::Tensor>> prepare_conv_weights_biases
 
     if (weights_bias_dtype == DataType::BFLOAT8_B) {
         TT_ASSERT(weight_tensor_.get_dtype() == DataType::FLOAT32);
-        if (has_bias) {
+        if (has_bias && bias_tensor.has_value()) {
             TT_ASSERT(bias_tensor.value().get_dtype() == DataType::FLOAT32);
         }
     } else {
