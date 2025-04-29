@@ -79,7 +79,7 @@ Result conv1d(
     };
 
     auto [output_tensor, output_dimensions, weights_and_bias] =
-        std::get<ResultType::OUTPUT_DIM_WEIGHTS_AND_BIAS>(ttnn::conv2d(
+        std::get<static_cast<int>(ResultType::OUTPUT_DIM_WEIGHTS_AND_BIAS)>(ttnn::conv2d(
             queue_id,
             input_tensor_4d,
             weight_tensor,

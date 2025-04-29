@@ -160,7 +160,7 @@ TEST_P(Conv2DFixture, Conv2DCalculateCorrectly) {
         input_tensor = ttnn::permute(input_tensor, SmallVector<int64_t>{0, 2, 3, 1});
 
         // Run Conv2D
-        auto [output_tensor, output_dimensions] = std::get<OUTPUT_DIM>(ttnn::conv2d(
+        auto [output_tensor, output_dimensions] = std::get<static_cast<int>(ResultType::OUTPUT_DIM)>(ttnn::conv2d(
             DefaultQueueId,
             input_tensor,
             weight_tensor,
