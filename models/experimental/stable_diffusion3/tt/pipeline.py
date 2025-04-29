@@ -75,6 +75,7 @@ class TtStableDiffusion3Pipeline:
             ) * num_devices - embedding_dim
             num_heads = 40
         else:
+            hidden_dim_padding = 0
             num_heads = torch_transformer.config.num_attention_heads
 
         parameters = TtSD3Transformer2DModelParameters.from_torch(

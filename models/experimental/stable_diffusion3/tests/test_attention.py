@@ -70,6 +70,7 @@ def test_attention(
         ) * num_devices - embedding_dim
         num_heads = 40
     else:
+        hidden_dim_padding = 0
         num_heads = torch_model.num_heads
 
     parameters = TtAttentionParameters.from_torch(
