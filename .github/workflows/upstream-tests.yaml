@@ -1,6 +1,9 @@
 name: Build test and publish upstream tests
 
 on:
+  push:
+    branches:
+      - rkim/21067-add-bh
   workflow_dispatch:
   schedule:
     - cron: '0 12 * * *'
@@ -140,7 +143,7 @@ jobs:
           tags: ${{ matrix.image-config.image-tag }}
           context: ${{ github.workspace }}
       - name: Tag and push latest
-        if: ${{ github.ref == 'refs/heads/main' }}
+        if: ${{ github.ref == 'refs/heads/main' || github.ref == 'refs/heads/rkim/21067-add-bh' }}
         run: |
           IMAGE_NAME="${{ matrix.image-config.image-base-name }}"
           LATEST_TAG="${IMAGE_NAME}:latest"
@@ -149,6 +152,8 @@ jobs:
           docker tag ${{ matrix.image-config.image-tag }} ${LATEST_TAG}
           docker push ${LATEST_TAG}
   test-wh-6u-image:
+    # TODO: to remove and test one last time at the end
+    if: ${{ github.ref == 'refs/heads/main' }}
     needs:
       - get-image-tags
       - build-wh-6u-image
