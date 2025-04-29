@@ -89,9 +89,10 @@ void kernel_main() {
         // TODO: Add chunking granularity.
         const uint32_t sender_relative_ring_id =
             (remote_device_ring_id < my_ring_id) ? remote_device_ring_id : remote_device_ring_id - 1;
-        uint32_t packet_id = 0;
 
-        while (*reinterpret_cast<volatile tt_l1_ptr uint32_t*>(global_semaphore_addr) < wait_sem_value);
+        volatile tt_l1_ptr uint32_t* global_semaphore_ptr =
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(global_semaphore_addr);
+        uint32_t packet_id = 0;
 
         for (uint32_t out_row_id = out_row_start; out_row_id < out_row_end; out_row_id++) {
             for (uint32_t out_col_id = out_col_start; out_col_id < out_col_end; out_col_id += num_pages_per_packet) {
@@ -101,6 +102,12 @@ void kernel_main() {
 
                 constexpr uint32_t contig_pages_advanced = 2;  // TODO: CT arg
                 constexpr uint32_t payload_size_bytes = contig_pages_advanced * page_size;
+
+                // Calculate which chunk we need and wait for it
+                uint32_t current_chunk_id = packet_id / chunk_granularity;
+                uint32_t wait_chunk_id = current_chunk_id + 1;  // Chunks are 1-based
+                while (*global_semaphore_ptr < wait_chunk_id);
+
                 for (uint32_t j = 0; j < num_pages_to_read; j += contig_pages_advanced) {
                     uint32_t global_id = sender_relative_ring_id + packet_id * NUM_SENDERS;
                     uint32_t first_id = (global_id % N_DRAM_BANKS) + 2 * N_DRAM_BANKS * (global_id / N_DRAM_BANKS);

@@ -71,8 +71,6 @@ void kernel_main() {
         // Compute where remote sender dumped data into intermediate buffer.
         // Should follow same logic as sender writer.
 
-        // TODO: Add chunking granularity.
-
         for (uint32_t out_row_id = out_row_start; out_row_id < out_row_end; out_row_id++) {
             for (uint32_t out_col_id = out_col_start; out_col_id < out_col_end; out_col_id += num_pages_per_packet) {
                 cb_wait_front(cb_id, num_pages_per_packet);
