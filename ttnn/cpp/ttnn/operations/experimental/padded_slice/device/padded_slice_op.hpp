@@ -9,7 +9,7 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/run_operation.hpp"
 
-namespace ttnn::operations::data_movement {
+namespace ttnn::operations::experimental {
 
 uint32_t get_rm_start_offset(const Tensor& tensor, const ttnn::Shape& padded_slice_start);
 uint32_t get_tiled_start_offset(const Tensor& input_tensor, const ttnn::Shape& padded_slice_start);
@@ -27,4 +27,4 @@ struct PaddedSliceDeviceOperation {
         const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const;
 };
 
-}  // namespace ttnn::operations::data_movement
+}  // namespace ttnn::operations::experimental

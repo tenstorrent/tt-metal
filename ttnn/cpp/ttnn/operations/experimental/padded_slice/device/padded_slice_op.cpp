@@ -5,11 +5,10 @@
 #include <tt-metalium/constants.hpp>
 #include "padded_slice_op.hpp"
 #include "padded_slice_program_factory.hpp"
-#include "tt-metalium/buffer_constants.hpp"
 
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::data_movement {
+namespace ttnn::operations::experimental {
 
 inline __attribute__((always_inline)) uint32_t get_upper_dims_compressed(const ttnn::Shape& shape) {
     return std::accumulate(shape.cbegin(), shape.cend() - 2, 1, std::multiplies<uint32_t>{});
@@ -140,10 +139,15 @@ std::vector<ttnn::TensorSpec> PaddedSliceDeviceOperation::compute_output_specs(
     for (uint32_t i = 0; i < out_shape.size(); i++) {
         out_shape[i] = output_dim_i(i);
     }
+    out_shape[2] = out_shape[0] * out_shape[1] * out_shape[2];
+    out_shape[0] = 1;
+    out_shape[1] = 1;
+
     if (this->output_mem_config.memory_layout == TensorMemoryLayout::HEIGHT_SHARDED) {
         auto output_shard_shape = this->output_mem_config.shard_spec->shape;
         out_shape[out_shape.size() - 1] = output_shard_shape[1];
     }
+
     ttnn::Shape output_tensor_shape(std::move(out_shape));
     return {ttnn::TensorSpec(
         output_tensor_shape,
@@ -160,4 +164,4 @@ operation::ProgramWithCallbacks PaddedSliceDeviceOperation::create_program(
         input_tensor_a, output_tensor, this->padded_slice_start, this->padded_slice_end, this->step);
 }
 
-}  // namespace ttnn::operations::data_movement
+}  // namespace ttnn::operations::experimental
