@@ -208,7 +208,7 @@ EdmLineFabricOpInterface::EdmLineFabricOpInterface(
 
                     for (size_t l = 0; l < num_links; l++) {
                         auto& edm = direction_edm[l];
-                        auto edm_noc_vc = edm.config.DEFAULT_NOC_VC + (l & 0x1);
+                        auto edm_noc_vc = l & 0x3;
                         edm.config.edm_noc_vc = edm_noc_vc;
                     }
                 }
