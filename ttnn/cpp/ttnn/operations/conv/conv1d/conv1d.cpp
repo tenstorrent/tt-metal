@@ -20,6 +20,7 @@
 
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/conv/conv1d/conv1d.hpp"
+#include "ttnn/operations/conv/conv.hpp"
 #include "ttnn/operations/conv/conv2d/device/conv2d_op.hpp"
 #include "ttnn/operations/matmul/matmul.hpp"
 #include "ttnn/operations/sliding_window/halo/halo.hpp"
@@ -50,7 +51,7 @@ Result conv1d(
     std::variant<std::array<uint32_t, 2>, uint32_t> padding,
     uint32_t dilation,
     uint32_t groups,
-    std::optional<const ttnn::Tensor> bias_tensor,
+    const std::optional<const ttnn::Tensor>& bias_tensor,
     const std::optional<const Conv1dConfig>& conv_config,
     const std::optional<const DeviceComputeKernelConfig>& compute_config,
     const std::optional<const MemoryConfig>& memory_config,
@@ -77,33 +78,36 @@ Result conv1d(
         };
     };
 
-    auto [output_tensor, output_height, output_width, weight_tensor_on_device, bias_tensor_on_device] = conv2d::conv2d(
-        queue_id,
-        input_tensor_4d,
-        weight_tensor,
-        device,
-        in_channels,
-        out_channels,
-        batch_size,
-        input_length,
-        1,  // input_width
-        std::array<uint32_t, 2>{kernel_size, 1},
-        std::array<uint32_t, 2>{stride, 1},
-        conv2d_padding,
-        std::array<uint32_t, 2>{dilation, 1},
-        groups,
-        std::move(bias_tensor),
-        conv_config,
-        compute_config,
-        memory_config);
+    auto [output_tensor, output_dimensions, weights_and_bias] =
+        std::get<ResultType::OUTPUT_DIM_WEIGHTS_AND_BIAS>(ttnn::conv2d(
+            queue_id,
+            input_tensor_4d,
+            weight_tensor,
+            device,
+            in_channels,
+            out_channels,
+            batch_size,
+            input_length,
+            1,  // input_width
+            std::array<uint32_t, 2>{kernel_size, 1},
+            std::array<uint32_t, 2>{stride, 1},
+            conv2d_padding,
+            std::array<uint32_t, 2>{dilation, 1},
+            groups,
+            std::move(bias_tensor),
+            conv_config,
+            compute_config,
+            memory_config,
+            std::nullopt,
+            true,
+            true));
 
     if (return_output_dim && return_weights_and_bias) {
-        return Result(
-            std::tuple(output_tensor, output_height, std::tuple(weight_tensor_on_device, bias_tensor_on_device)));
+        return Result(std::tuple(output_tensor, std::get<0>(output_dimensions), weights_and_bias));
     } else if (return_output_dim) {
-        return Result(std::tuple(output_tensor, output_height));
+        return Result(std::tuple(output_tensor, std::get<0>(output_dimensions)));
     } else if (return_weights_and_bias) {
-        return Result(std::tuple(output_tensor, std::tuple(weight_tensor_on_device, bias_tensor_on_device)));
+        return Result(std::tuple(output_tensor, weights_and_bias));
     } else {
         return Result(output_tensor);
     };
@@ -122,7 +126,7 @@ Result Conv1dOperation::invoke(
     std::variant<std::array<uint32_t, 2>, uint32_t> padding,
     uint32_t dilation,
     uint32_t groups,
-    std::optional<const ttnn::Tensor> bias_tensor,
+    const std::optional<const ttnn::Tensor>& bias_tensor,
     const std::optional<const Conv1dConfig>& conv_config,
     const std::optional<const DeviceComputeKernelConfig>& compute_config,
     const std::optional<const MemoryConfig>& memory_config,
@@ -164,7 +168,7 @@ Result Conv1dOperation::invoke(
     std::variant<std::array<uint32_t, 2>, uint32_t> padding,
     uint32_t dilation,
     uint32_t groups,
-    std::optional<const ttnn::Tensor> bias_tensor,
+    const std::optional<const ttnn::Tensor>& bias_tensor,
     const std::optional<const Conv1dConfig>& conv_config,
     const std::optional<const DeviceComputeKernelConfig>& compute_config,
     const std::optional<const MemoryConfig>& memory_config,

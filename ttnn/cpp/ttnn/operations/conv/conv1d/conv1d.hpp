@@ -24,6 +24,7 @@ using Result = std::variant<
     std::tuple<ttnn::Tensor, OutputLength>,
     std::tuple<ttnn::Tensor, std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>>>,
     std::tuple<ttnn::Tensor, OutputLength, std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>>>>;
+
 using Conv1dConfig = ttnn::operations::conv::conv2d::Conv2dConfig;
 
 template <typename T>
@@ -41,7 +42,7 @@ Result conv1d(
     std::variant<std::array<uint32_t, 2>, uint32_t> padding = uint32_t{0},
     uint32_t dilation = 1,
     uint32_t groups = 1,
-    std::optional<const ttnn::Tensor> bias_tensor = std::nullopt,
+    const std::optional<const ttnn::Tensor>& bias_tensor = std::nullopt,
     const std::optional<const Conv1dConfig>& conv_config = std::nullopt,
     const std::optional<const DeviceComputeKernelConfig>& compute_config = std::nullopt,
     const std::optional<const MemoryConfig>& memory_config = std::nullopt,
@@ -66,7 +67,7 @@ struct Conv1dOperation {
         std::variant<std::array<uint32_t, 2>, uint32_t> padding = uint32_t{0},
         uint32_t dilation = 1,
         uint32_t groups = 1,
-        std::optional<const ttnn::Tensor> bias_tensor = std::nullopt,
+        const std::optional<const ttnn::Tensor>& bias_tensor = std::nullopt,
         const std::optional<const Conv1dConfig>& conv_config = std::nullopt,
         const std::optional<const DeviceComputeKernelConfig>& compute_config = std::nullopt,
         const std::optional<const MemoryConfig>& memory_config = std::nullopt,
@@ -87,7 +88,7 @@ struct Conv1dOperation {
         std::variant<std::array<uint32_t, 2>, uint32_t> padding = uint32_t{0},
         uint32_t dilation = 1,
         uint32_t groups = 1,
-        std::optional<const ttnn::Tensor> bias_tensor = std::nullopt,
+        const std::optional<const ttnn::Tensor>& bias_tensor = std::nullopt,
         const std::optional<const Conv1dConfig>& conv_config = std::nullopt,
         const std::optional<const DeviceComputeKernelConfig>& compute_config = std::nullopt,
         const std::optional<const MemoryConfig>& memory_config = std::nullopt,
