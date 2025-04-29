@@ -16,8 +16,8 @@ class ResetUtil:
         self.arch = arch
         self.command = os.getenv("TT_SMI_RESET_COMMAND")
         self.args = []
-        if arch not in ["grayskull", "wormhole_b0"]:
-            raise Exception(f"SWEEPS: Unsupported Architecture for TT-SMI Reset: {arch}")
+        # if arch not in ["grayskull", "wormhole_b0"]:
+        #     raise Exception(f"SWEEPS: Unsupported Architecture for TT-SMI Reset: {arch}")
         if self.command is not None:
             return
 

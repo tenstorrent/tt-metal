@@ -23,9 +23,11 @@ csv_files = [
     "output_log_lcm_bcast.csv",
 ]
 
+ARCH = os.getenv("ARCH_NAME")
+WH_BH = "WH" if ARCH == "wormhole_b0" else "BH"
 # Folder path
-folder = "/home/ubuntu/tt-metal/binary_ng_WH/binary_ng_WH_full"
-folder_reshaped = "/home/ubuntu/tt-metal/binary_ng_WH/binary_ng_WH_full_reshaped"
+folder = f"/home/ubuntu/tt-metal/binary_ng_{WH_BH}/binary_ng_{WH_BH}_full"
+folder_reshaped = f"/home/ubuntu/tt-metal/binary_ng_{WH_BH}/binary_ng_{WH_BH}_full_reshaped"
 
 # Define all dtype combinations to track
 dtype_combos = [

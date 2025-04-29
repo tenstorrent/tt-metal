@@ -115,8 +115,8 @@ def run(test_module, input_queue, output_queue, suite_name=""):
             print(log_file)
             # log_file = "/home/ubuntu/tt-metal/output_log.csv"
             data = {
-                # "input_a_shape": test_vector["input_shape"]["self"],
-                # "input_b_shape": test_vector["input_shape"]["other"],
+                "input_a_shape": test_vector["input_shape"]["self"],
+                "input_b_shape": test_vector["input_shape"]["other"],
                 "input_a_dtype": test_vector["input_dtype"]["input_a_dtype"],
                 "input_b_dtype": test_vector["input_dtype"]["input_b_dtype"],
                 "a_mem": test_vector["input_mem_config"]["a_mem"],
@@ -124,8 +124,8 @@ def run(test_module, input_queue, output_queue, suite_name=""):
                 "status": status,
             }
             data_full = {
-                # "input_a_shape": test_vector["input_shape"]["self"],
-                # "input_b_shape": test_vector["input_shape"]["other"],
+                "input_a_shape": test_vector["input_shape"]["self"],
+                "input_b_shape": test_vector["input_shape"]["other"],
                 "input_a_dtype": test_vector["input_dtype"]["input_a_dtype"],
                 "input_b_dtype": test_vector["input_dtype"]["input_b_dtype"],
                 "a_mem": test_vector["input_mem_config"]["a_mem"],
