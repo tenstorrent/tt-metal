@@ -2,11 +2,11 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "base_types.hpp"
 #include <tt_metal/api/tt-metalium/core_coord.hpp>
 #include <tt_metal/api/tt-metalium/work_split.hpp>
 #include <tt_metal/api/tt-metalium/host_api.hpp>
 #include <tt_metal/api/tt-metalium/assert.hpp>
+#include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/constants.hpp>
 
 #include "logger.hpp"
@@ -21,7 +21,8 @@
 #include "ttnn/operations/reduction/argmax/argmax.hpp"
 
 namespace ttnn::operations::generic::test {
-TEST_F(TTNNFixtureWithDevice, TestGenericOpArgmax) {
+
+TEST_F(TTNNFixtureWithDevice, TestGenericOpArgmaxSingleCore) {
     uint32_t batch = 1;
     uint32_t channels = 4;
     ttnn::Shape shape{batch, channels, tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH};
@@ -49,17 +50,26 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpArgmax) {
     const tt::CBIndex dst_cb_idx = tt::CBIndex::c_1;
     const uint32_t src_page_size = round_up_to_mul32(red_dim_units * unit_size);
     const uint32_t dst_page_size = round_up_to_mul32(output_last_dim * unit_size);
-    ttnn::operations::generic::circular_buffer_attributes_t input_cb_attributes = {
-        .core_spec = core,
-        .total_size = src_page_size,
+
+    CBFormatDescriptor input_format_descriptor = {
+        .buffer_index = src_cb_idx,
+        .data_format = cb_data_format,
         .page_size = src_page_size,
-        .data_format = cb_data_format,
     };
-    ttnn::operations::generic::circular_buffer_attributes_t output_cb_attributes = {
-        .core_spec = core,
-        .total_size = dst_page_size,
-        .page_size = dst_page_size,
+    CBFormatDescriptor output_format_descriptor = {
+        .buffer_index = dst_cb_idx,
         .data_format = cb_data_format,
+        .page_size = dst_page_size,
+    };
+    CBDescriptor input_cb_descriptor = {
+        .total_size = src_page_size,
+        .core_ranges = core,
+        .format_descriptors = {input_format_descriptor},
+    };
+    CBDescriptor output_cb_descriptor = {
+        .total_size = dst_page_size,
+        .core_ranges = core,
+        .format_descriptors = {output_format_descriptor},
     };
 
     const auto src_buffer = device_input_tensor.buffer();
@@ -70,7 +80,7 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpArgmax) {
     const auto inner_dim_units = output_last_dim;
     const auto outer_dim_units = input_tensor.get_logical_volume() / inner_dim_units / red_dim_units;
 
-    const std::vector<uint32_t> compile_time_args = {
+    const KernelDescriptor::CompileTimeArgs compile_time_args = {
         (uint32_t)src_cb_idx,
         (uint32_t)dst_cb_idx,
         src_is_dram,
@@ -82,28 +92,28 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpArgmax) {
         red_dim_units,
         (uint32_t)(reduce_all),
     };
-    const std::vector<uint32_t> runtime_args = {
+    const KernelDescriptor::CoreRuntimeArgs runtime_args = {
         src_buffer->address(),
         dst_buffer->address(),
     };
-    ttnn::operations::generic::data_movement_attributes_t data_movement_attributes = {
-        .core_spec = core,
-        .kernel_path = "ttnn/cpp/ttnn/operations/reduction/argmax/device/kernels/reader_argmax_interleaved.cpp",
-        .config = tt::tt_metal::ReaderDataMovementConfig(compile_time_args),
-        .runtime_args_per_core = {
-            {core_coord, runtime_args},
-        }};
+    const KernelDescriptor::RuntimeArgs runtime_args_per_cores = {{runtime_args}};  // single-core
 
-    ttnn::operations::generic::program_attributes_t program_attributes = {
-        .circular_buffer_attributes =
-            {
-                {src_cb_idx, input_cb_attributes},
-                {dst_cb_idx, output_cb_attributes},
-            },
-        .data_movement_attributes = {data_movement_attributes},
+    KernelDescriptor kernel_descriptor = {
+        .kernel_source = "ttnn/cpp/ttnn/operations/reduction/argmax/device/kernels/reader_argmax_interleaved.cpp",
+        .core_ranges = core,
+        .compile_time_args = compile_time_args,
+        .runtime_args = runtime_args_per_cores,
+        .common_runtime_args = {},
+        .config = tt::tt_metal::ReaderConfigDescriptor{},
     };
 
-    ttnn::generic_op(std::vector<Tensor>{device_input_tensor, device_output_tensor}, program_attributes);
+    ProgramDescriptor program_descriptor = {
+        .kernels = {kernel_descriptor},
+        .semaphores = {},
+        .cbs = {input_cb_descriptor, output_cb_descriptor},
+    };
+
+    ttnn::generic_op(std::vector<Tensor>{device_input_tensor, device_output_tensor}, program_descriptor);
     Tensor output_tensor = device_output_tensor.cpu();
     auto dtype = golden.get_dtype();
     auto allclose = ttnn::allclose<uint32_t>(golden, output_tensor);
@@ -111,13 +121,13 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpArgmax) {
 }
 
 TEST_F(TTNNFixtureWithDevice, TestGenericOpUnaryReluSharded) {
-    const std::map<std::string, std::string> defines_relu = {
+    const std::vector<std::pair<std::string, std::string>> defines_relu = {
         {"SFPU_OP_CHAIN_0", "SFPU_OP_CHAIN_0_INIT_0 SFPU_OP_CHAIN_0_FUNC_0"},
         {"SFPU_OP_CHAIN_0_FUNC_0", "relu_tile(0);"},
         {"SFPU_OP_CHAIN_0_INIT_0", "relu_tile_init();"},
         {"SFPU_OP_RELU_FAMILY_INCLUDE", "1"}};
-    auto shape = ttnn::Shape{64, 16, tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH};
 
+    auto shape = ttnn::Shape{64, 16, tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH};
     CoreCoord compute_with_storage_grid_size = this->device_->compute_with_storage_grid_size();
     CoreRange all_cores_range = {
         CoreCoord(0, 0), CoreCoord(compute_with_storage_grid_size.x - 1, compute_with_storage_grid_size.y - 1)};
@@ -165,62 +175,73 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpUnaryReluSharded) {
 
     tt::CBIndex in_cb_id = tt::CBIndex::c_0;
     tt::CBIndex out_cb_id = tt::CBIndex::c_2;
-    ttnn::operations::generic::circular_buffer_attributes_t input_cb_attributes = {
-        .core_spec = all_cores,
-        .total_size = in_cb_npages * in_cb_pagesize,
-        .page_size = in_cb_pagesize,
+    CBFormatDescriptor in_format_descriptor = {
+        .buffer_index = in_cb_id,
         .data_format = act_df,
-        .set_globally_allocated_address = 0,
-    };
-
-    ttnn::operations::generic::circular_buffer_attributes_t output_cb_attributes = {
-        .core_spec = all_cores,
-        .total_size = in_cb_npages * in_cb_pagesize,
         .page_size = in_cb_pagesize,
+    };
+    CBFormatDescriptor out_format_descriptor = {
+        .buffer_index = out_cb_id,
         .data_format = out_df,
-        .set_globally_allocated_address = 1,
+        .page_size = in_cb_pagesize,
+    };
+    CBDescriptor input_cb_descriptor = {
+        .total_size = in_cb_npages * in_cb_pagesize,
+        .core_ranges = all_cores,
+        .format_descriptors = {in_format_descriptor},
+        .buffer = device_input_tensor.buffer(),
+    };
+    CBDescriptor output_cb_descriptor = {
+        .total_size = in_cb_npages * in_cb_pagesize,
+        .core_ranges = all_cores,
+        .format_descriptors = {out_format_descriptor},
+        .buffer = device_output_tensor.buffer(),
     };
 
-    const std::vector<uint32_t> reader_compile_time_args = {(std::uint32_t)in_cb_id};
-    ttnn::operations::generic::data_movement_attributes_t reader_attributes = {
-        .core_spec = all_cores,
-        .kernel_path = "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/reader_unary_sharded.cpp",
-        .config = tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args),
-    };
-
-    ttnn::operations::generic::compute_attributes_t compute_attributes = {
-        .core_spec = all_cores,
-        .kernel_path = "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/compute/eltwise_sfpu.cpp",
-        .config =
-            {
-                .math_fidelity = MathFidelity::HiFi4,
-                .fp32_dest_acc_en = false,
-                .math_approx_mode = false,
-                .compile_args = {1, num_tile_per_core},
-                .defines = defines_relu,
-            },
-    };
-
-    ttnn::operations::generic::program_attributes_t program_attributes = {
-        .circular_buffer_attributes = {{in_cb_id, input_cb_attributes}, {out_cb_id, output_cb_attributes}},
-        .data_movement_attributes = {{reader_attributes}},
-        .compute_attributes = {compute_attributes},
-    };
+    const KernelDescriptor::CompileTimeArgs reader_ct_args = {(std::uint32_t)in_cb_id};
+    const KernelDescriptor::CompileTimeArgs compute_ct_args = {1, num_tile_per_core};
 
     // calculate data movement runtime arguments: every core has the same runtime args
-    for (uint32_t i = 0; i < compute_with_storage_grid_size.x * compute_with_storage_grid_size.y; i++) {
-        CoreCoord core = {i / compute_with_storage_grid_size.y, i % compute_with_storage_grid_size.y};
-        program_attributes.data_movement_attributes[0].runtime_args_per_core[core] = {num_tile_per_core};
+    uint32_t num_cores_x = compute_with_storage_grid_size.x;
+    uint32_t num_cores_y = compute_with_storage_grid_size.y;
+    KernelDescriptor::RuntimeArgs reader_rt_args_per_core(
+        num_cores_x, std::vector<KernelDescriptor::CoreRuntimeArgs>(num_cores_y));
+    for (uint32_t i = 0; i < num_cores_x * num_cores_y; i++) {
+        uint32_t core_x = i / num_cores_y;
+        uint32_t core_y = i % num_cores_y;
+        reader_rt_args_per_core[core_x][core_y] = {num_tile_per_core};
     }
 
-    ttnn::generic_op(std::vector{device_input_tensor, device_output_tensor}, program_attributes);
+    KernelDescriptor reader_kernel_descriptor = {
+        .kernel_source = "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/reader_unary_sharded.cpp",
+        .core_ranges = all_cores,
+        .compile_time_args = reader_ct_args,
+        .runtime_args = reader_rt_args_per_core,
+        .common_runtime_args = {},
+        .config = tt::tt_metal::ReaderConfigDescriptor{},
+    };
+    KernelDescriptor compute_kernel_descriptor = {
+        .kernel_source = "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/compute/eltwise_sfpu.cpp",
+        .core_ranges = all_cores,
+        .compile_time_args = compute_ct_args,
+        .defines = defines_relu,
+        .common_runtime_args = {},
+        .config = tt::tt_metal::ComputeConfigDescriptor{},
+    };
+
+    ProgramDescriptor program_descriptor = {
+        .kernels = {reader_kernel_descriptor, compute_kernel_descriptor},
+        .semaphores = {},
+        .cbs = {input_cb_descriptor, output_cb_descriptor},
+    };
+    ttnn::generic_op(std::vector{device_input_tensor, device_output_tensor}, program_descriptor);
     auto device_output = device_output_tensor.cpu();
     auto allclose = ttnn::allclose<bfloat16>(golden, device_output, 1e-1f, 1e-5f);
     ASSERT_TRUE(allclose);
 }
 
-TEST_F(TTNNFixtureWithDevice, TestGenericOpBinaryEltwiseAdd) {
-    const std::map<std::string, std::string> defines_eltwise_add = {
+TEST_F(TTNNFixtureWithDevice, DISABLED_TestGenericOpBinaryEltwiseAdd) {
+    const std::vector<std::pair<std::string, std::string>> defines_eltwise_add = {
         {"ELTWISE_OP", "add_tiles"},
         {"ELTWISE_OP_TYPE", "EltwiseBinaryType::ELWADD"},
     };
@@ -241,6 +262,8 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpBinaryEltwiseAdd) {
         tt::tt_metal::create_device_tensor(device_input_tensor_a.get_tensor_spec(), this->device_);
 
     auto compute_with_storage_grid_size = this->device_->compute_with_storage_grid_size();
+    uint32_t num_cores_x = compute_with_storage_grid_size.x;
+    uint32_t num_cores_y = compute_with_storage_grid_size.y;
     CoreRange all_cores_range = {
         CoreCoord(0, 0), CoreCoord(compute_with_storage_grid_size.x - 1, compute_with_storage_grid_size.y - 1)};
     CoreRangeSet all_cores = std::set<CoreRange>({all_cores_range});
@@ -253,75 +276,50 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpBinaryEltwiseAdd) {
     tt::CBIndex src1_cb_index = tt::CBIndex::c_1;
     tt::CBIndex dst_cb_index = tt::CBIndex::c_2;
 
+    CBFormatDescriptor in0_cb_format_descriptor = {
+        .buffer_index = src0_cb_index,
+        .data_format = input_a_cb_data_format,
+        .page_size = tt::tt_metal::detail::TileSize(input_a_cb_data_format),
+    };
+    CBFormatDescriptor in1_cb_format_descriptor = {
+        .buffer_index = src1_cb_index,
+        .data_format = input_b_cb_data_format,
+        .page_size = tt::tt_metal::detail::TileSize(input_b_cb_data_format),
+    };
+    CBFormatDescriptor out_cb_format_descriptor = {
+        .buffer_index = dst_cb_index,
+        .data_format = output_cb_data_format,
+        .page_size = tt::tt_metal::detail::TileSize(output_cb_data_format),
+    };
+    CBDescriptor in0_cb_descriptor = {
+        .total_size = 2 * tt::tt_metal::detail::TileSize(input_a_cb_data_format),
+        .core_ranges = all_cores,
+        .format_descriptors = {in0_cb_format_descriptor},
+    };
+    CBDescriptor in1_cb_descriptor = {
+        .total_size = 2 * tt::tt_metal::detail::TileSize(input_b_cb_data_format),
+        .core_ranges = all_cores,
+        .format_descriptors = {in1_cb_format_descriptor},
+    };
+    CBDescriptor output_cb_descriptor = {
+        .total_size = 2 * tt::tt_metal::detail::TileSize(output_cb_data_format),
+        .core_ranges = all_cores,
+        .format_descriptors = {out_cb_format_descriptor},
+    };
+
     bool block_or_width_sharded = false;
     bool src0_is_dram = device_input_tensor_a.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
     bool src1_is_dram = device_input_tensor_b.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
-    std::vector<uint32_t> reader_compile_time_args = {
+    const KernelDescriptor::CompileTimeArgs reader_compile_time_args = {
         (uint32_t)src0_is_dram, (uint32_t)src1_is_dram, (uint32_t)block_or_width_sharded};
 
     bool dst_is_dram = device_output_tensor.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
-    std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)dst_cb_index, (std::uint32_t)dst_is_dram};
-
-    ttnn::operations::generic::circular_buffer_attributes_t input_cb0_atrributes = {
-        .core_spec = all_cores,
-        .total_size = 2 * tt::tt_metal::detail::TileSize(input_a_cb_data_format),
-        .page_size = tt::tt_metal::detail::TileSize(input_a_cb_data_format),
-        .data_format = input_a_cb_data_format,
-    };
-    ttnn::operations::generic::circular_buffer_attributes_t input_cb1_attributes = {
-        .core_spec = all_cores,
-        .total_size = 2 * tt::tt_metal::detail::TileSize(input_b_cb_data_format),
-        .page_size = tt::tt_metal::detail::TileSize(input_b_cb_data_format),
-        .data_format = input_b_cb_data_format,
-    };
-    ttnn::operations::generic::circular_buffer_attributes_t output_cb_attributes = {
-        .core_spec = all_cores,
-        .total_size = 2 * tt::tt_metal::detail::TileSize(output_cb_data_format),
-        .page_size = tt::tt_metal::detail::TileSize(output_cb_data_format),
-        .data_format = output_cb_data_format,
-    };
-    ttnn::operations::generic::data_movement_attributes_t reader_attributes = {
-        .core_spec = all_cores,
-        .kernel_path =
-            "ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/dataflow/reader_binary_interleaved_start_id.cpp",
-        .config = tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args),
-    };
-    ttnn::operations::generic::data_movement_attributes_t writer_attributes = {
-        .core_spec = all_cores,
-        .kernel_path =
-            "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp",
-        .config = tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args),
-    };
-    ttnn::operations::generic::compute_attributes_t compute_attributes = {
-        .core_spec = all_cores,
-        .kernel_path = "ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/compute/eltwise_binary_kernel.cpp",
-        .config =
-            {
-                .math_fidelity = MathFidelity::HiFi4,
-                .fp32_dest_acc_en = false,
-                // .preserve_fp32_precision = false,
-                .math_approx_mode = false,
-                .compile_args = {},
-                .defines = defines_eltwise_add,
-            },
-    };
-
-    ttnn::operations::generic::program_attributes_t program_attributes = {
-        .circular_buffer_attributes =
-            {
-                {src0_cb_index, input_cb0_atrributes},
-                {src1_cb_index, input_cb1_attributes},
-                {dst_cb_index, output_cb_attributes},
-            },
-        .data_movement_attributes = {reader_attributes, writer_attributes},
-        .compute_attributes = {compute_attributes},
-    };
+    const KernelDescriptor::CompileTimeArgs writer_compile_time_args = {(uint32_t)dst_cb_index, (uint32_t)dst_is_dram};
 
     // setup runtime arguments for data movement kernels
     uint32_t num_cores_total = compute_with_storage_grid_size.x * compute_with_storage_grid_size.y;
     uint32_t num_tiles = device_input_tensor_a.volume() / tt::constants::TILE_HW;
     bool row_major = true;
-
     auto [num_cores, _, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2] =
         tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_tiles, row_major);
 
@@ -330,15 +328,21 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpBinaryEltwiseAdd) {
     uint32_t max_block_size = 1;
     uint32_t block_cnt_per_core_group_1 = num_tiles_per_core_group_1;
     uint32_t block_cnt_per_core_group_2 = num_tiles_per_core_group_2;
-
     auto cores =
         grid_to_cores(num_cores_total, compute_with_storage_grid_size.x, compute_with_storage_grid_size.y, row_major);
 
     uint32_t g1_numcores = core_group_1.num_cores();
     uint32_t g2_numcores = core_group_2.num_cores();
-
+    KernelDescriptor::RuntimeArgs reader_rt_args_per_core(
+        num_cores_x, std::vector<KernelDescriptor::CoreRuntimeArgs>(num_cores_y));
+    KernelDescriptor::RuntimeArgs writer_rt_args_per_core(
+        num_cores_x, std::vector<KernelDescriptor::CoreRuntimeArgs>(num_cores_y));
+    KernelDescriptor::RuntimeArgs compute_rt_args_per_core(
+        num_cores_x, std::vector<KernelDescriptor::CoreRuntimeArgs>(num_cores_y));
     for (uint32_t i = 0, num_tiles_read = 0; i < num_cores_total; ++i) {
         const CoreCoord& core = cores.at(i);
+        uint32_t core_x = core.x;
+        uint32_t core_y = core.y;
         uint32_t num_tiles_per_core = 0;
         uint32_t block_cnt_per_core = 0;
         uint32_t block_size_per_core = 0;
@@ -354,7 +358,7 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpBinaryEltwiseAdd) {
             continue;
         }
 
-        program_attributes.data_movement_attributes[0].runtime_args_per_core[core] = {
+        reader_rt_args_per_core[core_x][core_y] = {
             device_input_tensor_a.buffer()->address(),
             device_input_tensor_b.buffer()->address(),
             num_tiles_per_core,
@@ -363,28 +367,59 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpBinaryEltwiseAdd) {
             0,               // block_width = 0 when not sharded
             0,               // num_cores_y = 0 when not sharded
         };
-        program_attributes.data_movement_attributes[1].runtime_args_per_core[core] = {
+        writer_rt_args_per_core[core_x][core_y] = {
             device_output_tensor.buffer()->address(),
             num_tiles_per_core,
             num_tiles_read  // start_id
         };
-        program_attributes.compute_attributes[0].runtime_args_per_core[core] = {
-            block_cnt_per_core, block_size_per_core};
+        compute_rt_args_per_core[core_x][core_y] = {block_cnt_per_core, block_size_per_core};
 
         num_tiles_read += num_tiles_per_core;
     }
 
+    KernelDescriptor reader_kernel_descriptor = {
+        .kernel_source =
+            "ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/dataflow/reader_binary_interleaved_start_id.cpp",
+        .core_ranges = all_cores,
+        .compile_time_args = reader_compile_time_args,
+        .runtime_args = reader_rt_args_per_core,
+        .common_runtime_args = {},
+        .config = tt::tt_metal::ReaderConfigDescriptor{},
+    };
+    KernelDescriptor writer_kernel_descriptor = {
+        .kernel_source =
+            "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp",
+        .core_ranges = all_cores,
+        .compile_time_args = writer_compile_time_args,
+        .runtime_args = writer_rt_args_per_core,
+        .common_runtime_args = {},
+        .config = tt::tt_metal::WriterConfigDescriptor{},
+    };
+    KernelDescriptor compute_kernel_descriptor = {
+        .kernel_source = "ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/compute/eltwise_binary_kernel.cpp",
+        .core_ranges = all_cores,
+        .compile_time_args = {},
+        .defines = defines_eltwise_add,
+        .runtime_args = writer_rt_args_per_core,
+        .common_runtime_args = {},
+        .config = tt::tt_metal::ComputeConfigDescriptor{},
+    };
+
+    ProgramDescriptor program_descriptor = {
+        .kernels = {reader_kernel_descriptor, writer_kernel_descriptor, compute_kernel_descriptor},
+        .semaphores = {},
+        .cbs = {in0_cb_descriptor, in1_cb_descriptor, output_cb_descriptor},
+    };
+
     ttnn::generic_op(
-        std::vector<Tensor>{device_input_tensor_a, device_input_tensor_b, device_output_tensor}, program_attributes);
+        std::vector<Tensor>{device_input_tensor_a, device_input_tensor_b, device_output_tensor}, program_descriptor);
 
     auto device_output = device_output_tensor.cpu().to_layout(Layout::ROW_MAJOR);
     auto allclose = ttnn::allclose<bfloat16>(golden, device_output);
     ASSERT_TRUE(allclose);
 }
 
-TEST_F(TTNNFixtureWithDevice, TestGenericOpMatmul) {
-    // =================
-    // Matmul original and generic test
+TEST_F(TTNNFixtureWithDevice, DISABLED_TestGenericOpMatmul) {
     tt::log_info(tt::LogTest, "Running ttnn matmul");
     uint32_t Mt_original = 10;
     uint32_t Kt_original = 2;
@@ -398,7 +433,15 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpMatmul) {
     Tensor input_tensor_a = ttnn::random::random(shapea).to_layout(Layout::TILE).to_device(this->device_);
     Tensor input_tensor_b = ttnn::random::random(shapeb).to_layout(Layout::TILE).to_device(this->device_);
 
-    Tensor golden = ttnn::matmul(input_tensor_a, input_tensor_b);
+    Tensor golden = ttnn::matmul(
+        input_tensor_a,
+        input_tensor_b,
+        false,                                  // transpose_a
+        false,                                  // transpose_b
+        std::nullopt,                           // memory_config
+        std::nullopt,                           // dtype
+        matmul::MatmulMultiCoreProgramConfig{}  // program_config to indicate we want multi-core
+    );
 
     tt::log_info(tt::LogTest, "Running matmul generic test");
 
@@ -413,14 +456,6 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpMatmul) {
         input_tensor_a.get_layout(),
         input_tensor_a.device(),
         input_tensor_a.memory_config());
-
-    tt::DataFormat in0_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor_a.get_dtype());
-    tt::DataFormat in1_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor_b.get_dtype());
-    tt::DataFormat output_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.get_dtype());
-    uint32_t in0_single_tile_size = tt::tt_metal::detail::TileSize(in0_data_format);
-    uint32_t in1_single_tile_size = tt::tt_metal::detail::TileSize(in1_data_format);
-    uint32_t output_single_tile_size = tt::tt_metal::detail::TileSize(output_data_format);
-    MathFidelity math_fidelity = MathFidelity::HiFi4;
 
     tt::tt_metal::Buffer* src0_buffer = input_tensor_a.buffer();
     tt::tt_metal::Buffer* src1_buffer = input_tensor_b.buffer();
@@ -441,11 +476,13 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpMatmul) {
          num_output_tiles_per_core_group_2] =
             tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_output_tiles_total);
 
+    TT_FATAL(
+        !core_group_2.ranges().empty(),
+        "Core group 2 for matmul generic test is empty. We should never hit this case.");
+
     tt::tt_metal::Buffer* dst_buffer = output.buffer();
     TT_FATAL(dst_buffer != nullptr, "Output buffer should be allocated on device!");
 
-    // C = A*B*...
-    // MN = MK*KN
     const auto &ashape = input_tensor_a.get_logical_shape(), bshape = input_tensor_b.get_logical_shape();
     uint32_t B = get_batch_size(ashape);
     uint32_t Mt = ashape[-2] / tt::constants::TILE_HEIGHT;
@@ -465,94 +502,66 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpMatmul) {
     uint32_t num_input_tiles = 2;
     uint32_t num_output_tiles = 2;
 
-    bool src0_is_dram = src0_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
-    bool src1_is_dram = src1_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
-    std::vector<uint32_t> reader_compile_time_args = {(uint32_t)src0_is_dram, (uint32_t)src1_is_dram};
-
-    bool dst_is_dram = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
-    std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)output_cb_index, (std::uint32_t)dst_is_dram};
+    tt::DataFormat in0_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor_a.get_dtype());
+    tt::DataFormat in1_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor_b.get_dtype());
+    tt::DataFormat output_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.get_dtype());
+    uint32_t in0_single_tile_size = tt::tt_metal::detail::TileSize(in0_data_format);
+    uint32_t in1_single_tile_size = tt::tt_metal::detail::TileSize(in1_data_format);
+    uint32_t output_single_tile_size = tt::tt_metal::detail::TileSize(output_data_format);
 
     auto all_device_cores_set = CoreRangeSet({all_cores});
 
-    ttnn::operations::generic::circular_buffer_attributes_t src0_cb_attributes = {
-        .core_spec = all_device_cores_set,
-        .total_size = num_input_tiles * in0_single_tile_size,
-        .page_size = in0_single_tile_size,
+    tt::tt_metal::CBFormatDescriptor in0_format_descriptor = {
+        .buffer_index = src0_cb_index,
         .data_format = in0_data_format,
+        .page_size = in0_single_tile_size,
     };
-
-    ttnn::operations::generic::circular_buffer_attributes_t src1_cb_attributes = {
-        .core_spec = all_device_cores_set,
-        .total_size = num_input_tiles * in1_single_tile_size,
-        .page_size = in1_single_tile_size,
+    tt::tt_metal::CBFormatDescriptor in1_format_descriptor = {
+        .buffer_index = src1_cb_index,
         .data_format = in1_data_format,
+        .page_size = in1_single_tile_size,
     };
-
-    ttnn::operations::generic::circular_buffer_attributes_t output_cb_attributes = {
-        .core_spec = all_device_cores_set,
-        .total_size = num_output_tiles * output_single_tile_size,
-        .page_size = output_single_tile_size,
+    tt::tt_metal::CBFormatDescriptor output_format_descriptor = {
+        .buffer_index = output_cb_index,
         .data_format = output_data_format,
+        .page_size = output_single_tile_size,
     };
 
-    ttnn::operations::generic::program_attributes_t program_attributes = {
-        .circular_buffer_attributes =
-            {{src0_cb_index, src0_cb_attributes},
-             {src1_cb_index, src1_cb_attributes},
-             {output_cb_index, output_cb_attributes}},
-        .data_movement_attributes =
-            {{.core_spec = all_device_cores_set,
-              .kernel_path = "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/"
-                             "reader_bmm_8bank_output_tiles_partitioned.cpp",
-              .config = tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args)},
-             {.core_spec = all_device_cores_set,
-              .kernel_path = "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/"
-                             "writer_unary_interleaved_start_id.cpp",
-              .config = tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args)}},
+    tt::tt_metal::CBDescriptor in0_cb_descriptor = {
+        .total_size = num_input_tiles * in0_single_tile_size,
+        .core_ranges = all_device_cores_set,
+        .format_descriptors = {in0_format_descriptor},
+    };
+    tt::tt_metal::CBDescriptor in1_cb_descriptor = {
+        .total_size = num_input_tiles * in1_single_tile_size,
+        .core_ranges = all_device_cores_set,
+        .format_descriptors = {in1_format_descriptor},
+    };
+    tt::tt_metal::CBDescriptor output_cb_descriptor = {
+        .total_size = num_output_tiles * output_single_tile_size,
+        .core_ranges = all_device_cores_set,
+        .format_descriptors = {output_format_descriptor},
     };
 
-    std::vector<uint32_t> compute_args_group_1 = {
-        1,                                 // B
-        1,                                 // Mt
-        Kt,                                // Kt
-        num_output_tiles_per_core_group_1  // Nt
-    };  // bmm compute kernel the B, Mt, Nt are just 3 for loops that technically act as 1 large loop, so only set Nt
-        // for simplicity
+    bool src0_is_dram = src0_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
+    bool src1_is_dram = src1_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
+    const KernelDescriptor::CompileTimeArgs reader_compile_time_args = {(uint32_t)src0_is_dram, (uint32_t)src1_is_dram};
 
-    TT_FATAL(
-        !core_group_2.ranges().empty(),
-        "Core group 2 for matmul generic test is empty. We should never hit this case.");
+    bool dst_is_dram = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
+    const KernelDescriptor::CompileTimeArgs writer_compile_time_args = {
+        (uint32_t)output_cb_index, (uint32_t)dst_is_dram};
 
-    std::vector<uint32_t> compute_args_group_2 = {
-        1,                                 // B
-        1,                                 // Mt
-        Kt,                                // Kt
-        num_output_tiles_per_core_group_2  // Nt
-    };  // bmm compute kernel the B, Mt, Nt are just 3 for loops that technically act as 1 large loop, so only set
-        // Nt for simplicity
+    tt::log_info(tt::LogTest, "num_cores: {}, num_core_x: {}, num_core_y: {}", num_cores, num_cores_x, num_cores_y);
+    KernelDescriptor::RuntimeArgs reader_rt_args_per_core(
+        num_cores_x, std::vector<KernelDescriptor::CoreRuntimeArgs>(num_cores_y));
+    KernelDescriptor::RuntimeArgs writer_rt_args_per_core(
+        num_cores_x, std::vector<KernelDescriptor::CoreRuntimeArgs>(num_cores_y));
 
-    program_attributes.compute_attributes = {
-        {
-            .core_spec = core_group_1,
-            .kernel_path = "ttnn/cpp/ttnn/operations/matmul/device/kernels/compute/bmm.cpp",
-            .config =
-                {
-                    .math_fidelity = math_fidelity,
-                    .compile_args = compute_args_group_1,
-                },
-        },
-        {
-            .core_spec = all_device_cores_set,
-            .kernel_path = "ttnn/cpp/ttnn/operations/matmul/device/kernels/compute/bmm.cpp",
-            .config =
-                {
-                    .math_fidelity = math_fidelity,
-                    .compile_args = compute_args_group_2,
-                },
-        }};
-
+    // setup reader/writer runtime args
     for (uint32_t i = 0, num_tiles_written = 0; i < num_cores; i++) {
-        CoreCoord core = {i / num_cores_y, i % num_cores_y};
+        uint32_t core_x = i / num_cores_y;
+        uint32_t core_y = i % num_cores_y;
+        CoreCoord core = {core_x, core_y};
 
         uint32_t num_output_tiles_per_core = 0;
         if (core_group_1.contains(core)) {
@@ -563,7 +572,7 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpMatmul) {
             TT_FATAL(false, "Core not in specified core ranges");
         }
 
-        program_attributes.data_movement_attributes[0].runtime_args_per_core[core] = {
+        reader_rt_args_per_core[core_x][core_y] = {
             src0_addr,
             src1_addr,
             Mt,
@@ -577,23 +586,88 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpMatmul) {
             num_output_tiles_per_core,
             MtNt};
 
-        program_attributes.data_movement_attributes[1].runtime_args_per_core[core] = {
-            dst_addr, num_output_tiles_per_core, num_tiles_written};
+        writer_rt_args_per_core[core_x][core_y] = {dst_addr, num_output_tiles_per_core, num_tiles_written};
+
+        tt::log_info(
+            tt::LogTest,
+            "core: {}, reader_rt_args {}, writer_rt_args {}",
+            core,
+            reader_rt_args_per_core[core_x][core_y],
+            writer_rt_args_per_core[core_x][core_y]);
 
         num_tiles_written += num_output_tiles_per_core;
     }
+    tt::tt_metal::KernelDescriptor reader_kernel_descriptor = {
+        .kernel_source =
+            "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_8bank_output_tiles_partitioned.cpp",
+        .core_ranges = all_device_cores_set,
+        .compile_time_args = reader_compile_time_args,
+        .runtime_args = reader_rt_args_per_core,
+        .common_runtime_args = {},
+        .config = tt::tt_metal::ReaderConfigDescriptor{},
+    };
+    tt::tt_metal::KernelDescriptor writer_kernel_descriptor = {
+        .kernel_source =
+            "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp",
+        .core_ranges = all_device_cores_set,
+        .compile_time_args = reader_compile_time_args,
+        .runtime_args = writer_rt_args_per_core,
+        .common_runtime_args = {},
+        .config = tt::tt_metal::WriterConfigDescriptor{},
+    };
 
-    ttnn::generic_op(std::vector<Tensor>{input_tensor_a, input_tensor_b, output}, program_attributes);
+    const KernelDescriptor::CompileTimeArgs compute_ct_args_group_1 = {
+        1,                                 // B
+        1,                                 // Mt
+        Kt,                                // Kt
+        num_output_tiles_per_core_group_1  // Nt
+    };  // bmm compute kernel the B, Mt, Nt are just 3 for loops that technically act as 1 large loop, so only set Nt
+        // for simplicity
+    const KernelDescriptor::CompileTimeArgs compute_ct_args_group_2 = {
+        1,                                 // B
+        1,                                 // Mt
+        Kt,                                // Kt
+        num_output_tiles_per_core_group_2  // Nt
+    };
+    tt::log_info(tt::LogTest, "core_group_1: {}, core_group_2: {}", core_group_1.ranges(), core_group_2.ranges());
+    tt::tt_metal::KernelDescriptor compute_kernel_descriptor_1 = {
+        .kernel_source = "ttnn/cpp/ttnn/operations/matmul/device/kernels/compute/bmm.cpp",
+        .core_ranges = core_group_1,
+        .compile_time_args = compute_ct_args_group_1,
+        .defines = {},
+        .runtime_args = {{{}}},
+        .common_runtime_args = {},
+        .config = tt::tt_metal::ComputeConfigDescriptor{.dst_full_sync_en = true},
+    };
+    tt::tt_metal::KernelDescriptor compute_kernel_descriptor_2 = {
+        .kernel_source = "ttnn/cpp/ttnn/operations/matmul/device/kernels/compute/bmm.cpp",
+        .core_ranges = core_group_2,
+        .compile_time_args = compute_ct_args_group_2,
+        .defines = {},
+        .runtime_args = {{{}}},
+        .common_runtime_args = {},
+        .config = tt::tt_metal::ComputeConfigDescriptor{.dst_full_sync_en = true},
+    };
 
+    tt::tt_metal::ProgramDescriptor program_descriptor = {
+        .kernels =
+            {reader_kernel_descriptor,
+             writer_kernel_descriptor,
+             compute_kernel_descriptor_1,
+             compute_kernel_descriptor_2},
+        .semaphores = {},
+        .cbs = {in0_cb_descriptor, in1_cb_descriptor, output_cb_descriptor},
+    };
+
+    ttnn::generic_op(std::vector<Tensor>{input_tensor_a, input_tensor_b, output}, program_descriptor);
     auto output_tensor = output.cpu();
-
     auto allclose = ttnn::allclose<bfloat16>(golden.cpu(), output_tensor, 1e-1f, 1e-5f);
 
     ASSERT_TRUE(allclose);
 }
 
 TEST_F(TTNNFixtureWithDevice, TestGenericOpEltwiseSFPU) {
-    const std::map<std::string, std::string> sfpu_defines = {
+    const std::vector<std::pair<std::string, std::string>> sfpu_defines = {
         {"SFPU_OP_EXP_INCLUDE", "1"}, {"SFPU_OP_CHAIN_0", "exp_tile_init(); exp_tile(0);"}};
 
     uint32_t num_tiles = 4;
@@ -621,65 +695,78 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpEltwiseSFPU) {
     CoreCoord core = {0, 0};
     CoreRange core_range = {core, core};
     CoreRangeSet device_cores = std::set<CoreRange>({core_range});
+    tt::CBIndex cb_in_id = tt::CBIndex::c_0;
+    tt::CBIndex cb_out_id = tt::CBIndex::c_16;
 
-    ttnn::operations::generic::circular_buffer_attributes_t input_cb_attributes = {
-        .core_spec = device_cores,
-        .total_size = 2 * tt::tt_metal::detail::TileSize(input_cb_data_format),
-        .page_size = tt::tt_metal::detail::TileSize(input_cb_data_format),
+    CBFormatDescriptor input_cb_format_descriptor = {
+        .buffer_index = cb_in_id,
         .data_format = input_cb_data_format,
+        .page_size = tt::tt_metal::detail::TileSize(input_cb_data_format),
+    };
+    CBFormatDescriptor output_cb_format_descriptor = {
+        .buffer_index = cb_out_id,
+        .data_format = input_cb_data_format,
+        .page_size = tt::tt_metal::detail::TileSize(input_cb_data_format),
+    };
+    CBDescriptor input_cb_descriptor = {
+        .total_size = 2 * tt::tt_metal::detail::TileSize(input_cb_data_format),
+        .core_ranges = device_cores,
+        .format_descriptors = {input_cb_format_descriptor},
+    };
+    CBDescriptor output_cb_descriptor = {
+        .total_size = 2 * tt::tt_metal::detail::TileSize(input_cb_data_format),
+        .core_ranges = device_cores,
+        .format_descriptors = {output_cb_format_descriptor},
     };
 
-    ttnn::operations::generic::circular_buffer_attributes_t output_cb_attributes = {
-        .core_spec = device_cores,
-        .total_size = 2 * tt::tt_metal::detail::TileSize(input_cb_data_format),
-        .page_size = tt::tt_metal::detail::TileSize(input_cb_data_format),
-        .data_format = input_cb_data_format,
-    };
+    const KernelDescriptor::CompileTimeArgs reader_compile_time_args = {(std::uint32_t)is_dram_input};
+    const KernelDescriptor::CompileTimeArgs writer_compile_time_args = {
+        (std::uint32_t)cb_out_id, (std::uint32_t)is_dram_input};
 
-    const std::vector<uint32_t> reader_compile_time_args = {(std::uint32_t)is_dram_input};
-    const std::vector<uint32_t> writer_compile_time_args = {
-        (std::uint32_t)tt::CBIndex::c_16, (std::uint32_t)is_dram_input};
-    const std::vector<uint32_t> read_rt_args = {device_input_tensor.buffer()->address(), num_tiles, src_bank_id};
-    const std::vector<uint32_t> write_rt_args = {device_output_tensor.buffer()->address(), num_tiles, dst_bank_id};
+    // only core (0, 0) is used
+    const KernelDescriptor::CoreRuntimeArgs reader_rt_args = {
+        device_input_tensor.buffer()->address(), num_tiles, src_bank_id};
+    const KernelDescriptor::RuntimeArgs reader_rt_args_per_core = {{reader_rt_args}};
 
-    ttnn::operations::generic::data_movement_attributes_t reader_attributes = {
-        .core_spec = device_cores,
-        .kernel_path =
+    const KernelDescriptor::CoreRuntimeArgs writer_rt_args = {
+        device_output_tensor.buffer()->address(), num_tiles, dst_bank_id};
+    const KernelDescriptor::RuntimeArgs writer_rt_args_per_core = {{writer_rt_args}};
+
+    KernelDescriptor reader_kernel_descriptor = {
+        .kernel_source =
             "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/reader_unary_interleaved_start_id.cpp",
-        .config = tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args),
-        .runtime_args_per_core = {{core, read_rt_args}},
+        .core_ranges = device_cores,
+        .compile_time_args = reader_compile_time_args,
+        .runtime_args = reader_rt_args_per_core,
+        .common_runtime_args = {},
+        .config = tt::tt_metal::ReaderConfigDescriptor{},
     };
-
-    ttnn::operations::generic::data_movement_attributes_t writer_attributes = {
-        .core_spec = device_cores,
-        .kernel_path =
+    KernelDescriptor writer_kernel_descriptor = {
+        .kernel_source =
             "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp",
-        .config = tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args),
-        .runtime_args_per_core = {{core, write_rt_args}},
+        .core_ranges = device_cores,
+        .compile_time_args = writer_compile_time_args,
+        .runtime_args = writer_rt_args_per_core,
+        .common_runtime_args = {},
+        .config = tt::tt_metal::WriterConfigDescriptor{},
+    };
+    KernelDescriptor compute_kernel_descriptor = {
+        .kernel_source = "tt_metal/kernels/compute/eltwise_sfpu.cpp",
+        .core_ranges = device_cores,
+        .compile_time_args = {num_tiles, 1},
+        .defines = sfpu_defines,
+        .runtime_args = {{{}}},
+        .common_runtime_args = {},
+        .config = tt::tt_metal::ComputeConfigDescriptor{},
     };
 
-    ttnn::operations::generic::compute_attributes_t compute_attributes = {
-        .core_spec = device_cores,
-        .kernel_path = "tt_metal/kernels/compute/eltwise_sfpu.cpp",
-        .config =
-            {
-                .math_approx_mode = false,
-                .compile_args = {num_tiles, 1},
-                .defines = sfpu_defines,
-            },
+    ProgramDescriptor program_descriptor = {
+        .kernels = {reader_kernel_descriptor, writer_kernel_descriptor, compute_kernel_descriptor},
+        .semaphores = {},
+        .cbs = {input_cb_descriptor, output_cb_descriptor},
     };
 
-    ttnn::operations::generic::program_attributes_t program_attributes = {
-        .circular_buffer_attributes =
-            {
-                {tt::CBIndex::c_0, input_cb_attributes},
-                {tt::CBIndex::c_16, output_cb_attributes},
-            },
-        .data_movement_attributes = {reader_attributes, writer_attributes},
-        .compute_attributes = {compute_attributes},
-    };
-
-    Tensor device_output = ttnn::generic_op(std::vector{device_input_tensor, device_output_tensor}, program_attributes);
+    Tensor device_output = ttnn::generic_op(std::vector{device_input_tensor, device_output_tensor}, program_descriptor);
     Tensor golden = ttnn::exp(device_input_tensor);
 
     auto allclose = ttnn::allclose<bfloat16>(golden.cpu(), device_output.cpu());

@@ -4,8 +4,8 @@
 
 #pragma once
 
+#include <tt-metalium/program_descriptors.hpp>
 #include "ttnn/decorators.hpp"
-#include "generic_op_types.hpp"
 
 namespace ttnn::operations::generic {
 
@@ -18,9 +18,7 @@ namespace ttnn::operations::generic {
 struct GenericOp {
     // TODO: #20830 - Split io_tensors into input_tensors and output_tensor properly.
     static Tensor invoke(
-        const std::vector<Tensor>& io_tensors,
-        const program_attributes_t& program_attributes
-    );
+        const std::vector<Tensor>& io_tensors, const tt::tt_metal::ProgramDescriptor& program_descriptor);
 };  // struct GenericOp
 
 }  // namespace ttnn::operations::generic

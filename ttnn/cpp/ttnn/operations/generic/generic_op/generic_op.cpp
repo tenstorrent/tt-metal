@@ -8,9 +8,8 @@
 namespace ttnn::operations::generic {
 
 Tensor GenericOp::invoke(
-    const std::vector<Tensor>& io_tensors,
-    const program_attributes_t& program_attributes) {
-    return ttnn::prim::generic_op(io_tensors, program_attributes);
+    const std::vector<Tensor>& io_tensors, const tt::tt_metal::ProgramDescriptor& program_descriptor) {
+    return ttnn::prim::generic_op(io_tensors, program_descriptor);
 }
 
 }  // namespace ttnn::operations::generic

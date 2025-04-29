@@ -5,16 +5,16 @@
 #pragma once
 
 #include <variant>
-#include "ttnn/decorators.hpp"
+#include <tt-metalium/program_descriptors.hpp>
 
+#include "ttnn/decorators.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/device_operation.hpp"
-#include "ttnn/operations/generic/generic_op/generic_op_types.hpp"
 
 namespace ttnn::operations::generic {
 
 struct GenericOpDeviceOperation {
-    using operation_attributes_t = program_attributes_t;
+    using operation_attributes_t = tt::tt_metal::ProgramDescriptor;
 
     using tensor_return_value_t = Tensor;
 
@@ -28,10 +28,7 @@ struct GenericOpDeviceOperation {
 
     struct GenericProgram {
         // to refactor this when we implement caching
-        struct shared_variables_t {
-            tt::tt_metal::KernelHandle unary_reader_kernel_id;
-            tt::tt_metal::KernelHandle unary_writer_kernel_id;
-        };
+        struct shared_variables_t {};
         using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
 
         static cached_program_t create(
