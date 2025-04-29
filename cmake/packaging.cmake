@@ -34,7 +34,7 @@ set(CPACK_INSTALL_DEFAULT_DIRECTORY_PERMISSIONS
 )
 
 set(CPACK_DEBIAN_ENABLE_COMPONENT_DEPENDS TRUE)
-set(CPACK_DEBIAN_PACKAGE_SHLIBDEPS FALSE) # FIXME(afuller): enable this
+set(CPACK_DEBIAN_PACKAGE_SHLIBDEPS TRUE)
 # jit-build is cross compiling; shlibdeps does not find dependencies on the host; it should be self-contained anyway.
 set(CPACK_DEBIAN_METALIUM-JIT_PACKAGE_SHLIBDEPS FALSE)
 
@@ -77,6 +77,7 @@ cpack_add_component(jit-build GROUP metalium-jit)
 
 cpack_add_component(metalium-runtime GROUP metalium)
 cpack_add_component(umd-runtime GROUP metalium)
+cpack_add_component(tracy GROUP metalium)
 cpack_add_component_group(metalium)
 
 cpack_add_component(metalium-dev GROUP metalium-dev)
@@ -86,6 +87,7 @@ cpack_add_component(magic-enum-dev GROUP metalium-dev)
 cpack_add_component(umd-dev GROUP metalium-dev)
 cpack_add_component_group(metalium-dev)
 
+cpack_add_component(metalium-validation DEPENDS metalium GROUP metalium-validation)
 cpack_add_component(gtest GROUP metalium-validation)
 cpack_add_component_group(metalium-validation)
 
