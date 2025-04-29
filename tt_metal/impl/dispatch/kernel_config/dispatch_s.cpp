@@ -11,6 +11,7 @@
 #include <utility>
 #include <variant>
 #include <vector>
+#include <memory>
 
 #include "assert.hpp"
 #include "command_queue_common.hpp"
@@ -72,15 +73,15 @@ void DispatchSKernel::GenerateStaticConfigs() {
 void DispatchSKernel::GenerateDependentConfigs() {
     // Upstream
     TT_ASSERT(upstream_kernels_.size() == 1);
-    auto prefetch_kernel = dynamic_cast<PrefetchKernel*>(upstream_kernels_[0]);
-    TT_ASSERT(prefetch_kernel);
+    auto prefetch_kernel = std::dynamic_pointer_cast<PrefetchKernel>(upstream_kernels_[0]);
+    TT_ASSERT(prefetch_kernel != nullptr);
     dependent_config_.upstream_logical_core = prefetch_kernel->GetLogicalCore();
     dependent_config_.upstream_dispatch_cb_sem_id = prefetch_kernel->GetStaticConfig().my_dispatch_s_cb_sem_id;
 
     // Downstream
     TT_ASSERT(downstream_kernels_.size() == 1);
-    auto dispatch_kernel = dynamic_cast<DispatchKernel*>(downstream_kernels_[0]);
-    TT_ASSERT(dispatch_kernel);
+    auto dispatch_kernel = std::dynamic_pointer_cast<DispatchKernel>(downstream_kernels_[0]);
+    TT_ASSERT(dispatch_kernel != nullptr);
     dependent_config_.downstream_logical_core = dispatch_kernel->GetLogicalCore();
 }
 

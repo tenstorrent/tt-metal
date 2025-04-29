@@ -20,6 +20,7 @@
 #include <unordered_set>
 #include <utility>
 #include <variant>
+#include <memory>
 
 #include "assert.hpp"
 #include "command_queue_common.hpp"
@@ -503,7 +504,7 @@ static const std::vector<DispatchKernelNode> galaxy_nine_chip_arch_2cq = {
 };
 // clang-format on
 
-std::vector<FDKernel*> node_id_to_kernel;
+std::vector<std::shared_ptr<FDKernel>> node_id_to_kernel;
 std::unordered_map<chip_id_t, std::unique_ptr<Program>> command_queue_pgms;
 
 // Helper function to automatically generate dispatch nodes given devices + num hw CQs + detection of card type.
@@ -661,9 +662,6 @@ void populate_fd_kernels(const std::set<chip_id_t>& device_ids, uint32_t num_hw_
 void populate_fd_kernels(const std::vector<DispatchKernelNode>& nodes) {
     // If we already had nodes from a previous run, clear them (since we could have a different # of devices or CQs).
     if (!node_id_to_kernel.empty()) {
-        for (int idx = 0; idx < node_id_to_kernel.size(); idx++) {
-            delete node_id_to_kernel[idx];
-        }
         node_id_to_kernel.clear();
     }
 
@@ -731,8 +729,8 @@ void populate_fd_kernels(const std::vector<DispatchKernelNode>& nodes) {
 
     // Go through each mmio device, and set placement cq_ids to ensure that we stamp out the correct # of demux/routers
     // per tunnel. TODO: We can fix dispatch_core_manager so we don't hard-code separate channels for this.
-    std::map<chip_id_t, std::vector<FDKernel*>> mmio_device_id_to_kernels;
-    for (auto fd_kernel : node_id_to_kernel) {
+    std::map<chip_id_t, std::vector<std::shared_ptr<FDKernel>>> mmio_device_id_to_kernels;
+    for (const auto& fd_kernel : node_id_to_kernel) {
         chip_id_t mmio_device_id =
             tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(fd_kernel->GetDeviceId());
         if (fd_kernel->GetDeviceId() == mmio_device_id) {
@@ -744,9 +742,9 @@ void populate_fd_kernels(const std::vector<DispatchKernelNode>& nodes) {
         int prefetch_h_id = 0, dispatch_h_id = 0;
         int demux_id = 0, router_id = 0, tunneler_id = 0;
         for (auto fd_kernel : mmio_device_id_and_kernels.second) {
-            if (auto demux_kernel = dynamic_cast<DemuxKernel*>(fd_kernel)) {
+            if (auto demux_kernel = std::dynamic_pointer_cast<DemuxKernel>(fd_kernel)) {
                 demux_kernel->SetPlacementCQID((demux_id++) % 3);
-            } else if (auto router_kernel = dynamic_cast<EthRouterKernel*>(fd_kernel)) {
+            } else if (auto router_kernel = std::dynamic_pointer_cast<EthRouterKernel>(fd_kernel)) {
                 router_kernel->SetPlacementCQID((router_id++) % num_hw_cqs);
             }
         }
@@ -756,8 +754,8 @@ void populate_fd_kernels(const std::vector<DispatchKernelNode>& nodes) {
     std::map<chip_id_t, uint32_t> device_id_to_num_routers;  // Need to build this first. TODO: in the future walk the
                                                              // graph to populate VC counts
     std::map<chip_id_t, uint32_t> device_id_to_remaining_routers;
-    for (auto fd_kernel : node_id_to_kernel) {
-        if (auto router_kernel = dynamic_cast<EthRouterKernel*>(fd_kernel)) {
+    for (const auto& fd_kernel : node_id_to_kernel) {
+        if (auto router_kernel = std::dynamic_pointer_cast<EthRouterKernel>(fd_kernel)) {
             chip_id_t router_device_id = router_kernel->GetDeviceId();
             chip_id_t mmio_device_id =
                 tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(router_device_id);
@@ -770,9 +768,9 @@ void populate_fd_kernels(const std::vector<DispatchKernelNode>& nodes) {
             device_id_to_num_routers[router_device_id]++;
         }
     }
-    for (auto fd_kernel : node_id_to_kernel) {
+    for (const auto& fd_kernel : node_id_to_kernel) {
         uint32_t tunnel_stop = device_id_to_tunnel_stop[fd_kernel->GetDeviceId()];
-        if (auto tunneler_kernel = dynamic_cast<EthTunnelerKernel*>(fd_kernel)) {
+        if (auto tunneler_kernel = std::dynamic_pointer_cast<EthTunnelerKernel>(fd_kernel)) {
             // Local tunneler needs to match remote tunneler on previous chip in the tunnel
             if (!tunneler_kernel->IsRemote()) {
                 TT_ASSERT(tunnel_stop != 0);
@@ -780,7 +778,7 @@ void populate_fd_kernels(const std::vector<DispatchKernelNode>& nodes) {
             }
             // # of VCs is return VC + total VCs for tunnel (num_hw_cqs per remote) - num_hw_cqs VCs per remote stop
             tunneler_kernel->SetVCCount(1 + (tunnel_depth - 1) * num_hw_cqs - tunnel_stop * num_hw_cqs);
-        } else if (auto router_kernel = dynamic_cast<EthRouterKernel*>(fd_kernel)) {
+        } else if (auto router_kernel = std::dynamic_pointer_cast<EthRouterKernel>(fd_kernel)) {
             // Router has the same VCs as the remote tunneler for MMIO, same as local tunneler for remote
             if (tunnel_stop != 0) {
                 tunnel_stop--;
@@ -816,7 +814,7 @@ void populate_cq_static_args(IDevice* device) {
         "Tried to populate static args on nodes without the nodes populated (need to run populate_fd_kernels()");
     // First pass, add device/program to all kernels for this device and generate static configs.
     auto cq_program_ptr = std::make_unique<Program>();
-    for (auto node_and_kernel : node_id_to_kernel) {
+    for (const auto& node_and_kernel : node_id_to_kernel) {
         // GetDeviceId() uses Id from topology as IDevice* is not present yet
         if (node_and_kernel->GetDeviceId() == device->id()) {
             node_and_kernel->AddDevice(device);

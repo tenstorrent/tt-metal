@@ -7,6 +7,7 @@
 #include <string>
 #include <utility>
 #include <vector>
+#include <memory>
 
 #include "assert.hpp"
 #include "demux.hpp"
@@ -71,12 +72,12 @@ void EthTunnelerKernel::GenerateDependentConfigs() {
                 paired_logical_core, CoreType::ETH);
 
         // Upstream, we expect a US_TUNNELER_LOCAL and one or more PACKET_ROUTER
-        EthTunnelerKernel* tunneler_kernel = nullptr;
-        std::vector<EthRouterKernel*> router_kernels;
+        std::shared_ptr<EthTunnelerKernel> tunneler_kernel = nullptr;
+        std::vector<std::shared_ptr<EthRouterKernel>> router_kernels;
         for (auto k : upstream_kernels_) {
-            if (auto rk = dynamic_cast<EthRouterKernel*>(k)) {
+            if (auto rk = std::dynamic_pointer_cast<EthRouterKernel>(k)) {
                 router_kernels.push_back(rk);
-            } else if (auto tk = dynamic_cast<EthTunnelerKernel*>(k)) {
+            } else if (auto tk = std::dynamic_pointer_cast<EthTunnelerKernel>(k)) {
                 tunneler_kernel = tk;
             } else {
                 TT_FATAL(false, "Unexpected kernel type upstream of TUNNELER");
@@ -112,10 +113,10 @@ void EthTunnelerKernel::GenerateDependentConfigs() {
 
         // Downstream, we expect the same US_TUNNELER_LOCAL and a DEMUX (tunnel start)/MUX_D (non-tunnel start)
         TT_ASSERT(downstream_kernels_.size() == 2);
-        auto ds_tunneler_kernel = dynamic_cast<EthTunnelerKernel*>(downstream_kernels_[0]);
+        auto ds_tunneler_kernel = std::dynamic_pointer_cast<EthTunnelerKernel>(downstream_kernels_[0]);
         auto other_ds_kernel = downstream_kernels_[1];
         if (!ds_tunneler_kernel) {
-            ds_tunneler_kernel = dynamic_cast<EthTunnelerKernel*>(downstream_kernels_[1]);
+            ds_tunneler_kernel = std::dynamic_pointer_cast<EthTunnelerKernel>(downstream_kernels_[1]);
             auto other_ds_kernel = downstream_kernels_[0];
         }
         TT_ASSERT(ds_tunneler_kernel == tunneler_kernel);
@@ -126,13 +127,13 @@ void EthTunnelerKernel::GenerateDependentConfigs() {
                 dependent_config_.remote_receiver_y[idx] = other_ds_kernel->GetVirtualCore().y;
                 dependent_config_.remote_receiver_network_type[idx] =
                     (uint32_t)tt::packet_queue::DispatchRemoteNetworkType::NOC0;
-                if (auto demux_kernel = dynamic_cast<DemuxKernel*>(other_ds_kernel)) {
+                if (auto demux_kernel = std::dynamic_pointer_cast<DemuxKernel>(other_ds_kernel)) {
                     dependent_config_.remote_receiver_queue_start[idx] =
                         demux_kernel->GetStaticConfig().rx_queue_start_addr_words;
                     dependent_config_.remote_receiver_queue_size[idx] =
                         demux_kernel->GetStaticConfig().rx_queue_size_words;
                     dependent_config_.remote_receiver_queue_id[idx] = 0;  // DEMUX input queue id always 0
-                } else if (auto mux_kernel = dynamic_cast<MuxKernel*>(other_ds_kernel)) {
+                } else if (auto mux_kernel = std::dynamic_pointer_cast<MuxKernel>(other_ds_kernel)) {
                     dependent_config_.remote_receiver_queue_start[idx] =
                         mux_kernel->GetStaticConfig().rx_queue_start_addr_words.value() +
                         mux_kernel->GetStaticConfig().rx_queue_size_words.value() *
@@ -171,11 +172,11 @@ void EthTunnelerKernel::GenerateDependentConfigs() {
                 paired_logical_core, CoreType::ETH);
 
         TT_ASSERT(upstream_kernels_.size() == 2);
-        auto tunneler_kernel = dynamic_cast<EthTunnelerKernel*>(upstream_kernels_[0]);
-        auto mux_kernel = dynamic_cast<MuxKernel*>(upstream_kernels_[1]);
+        auto tunneler_kernel = std::dynamic_pointer_cast<EthTunnelerKernel>(upstream_kernels_[0]);
+        auto mux_kernel = std::dynamic_pointer_cast<MuxKernel>(upstream_kernels_[1]);
         if (!tunneler_kernel) {
-            tunneler_kernel = dynamic_cast<EthTunnelerKernel*>(upstream_kernels_[1]);
-            mux_kernel = dynamic_cast<MuxKernel*>(upstream_kernels_[0]);
+            tunneler_kernel = std::dynamic_pointer_cast<EthTunnelerKernel>(upstream_kernels_[1]);
+            mux_kernel = std::dynamic_pointer_cast<MuxKernel>(upstream_kernels_[0]);
         }
         TT_ASSERT(tunneler_kernel && mux_kernel);
         TT_ASSERT(tunneler_kernel->IsRemote());
@@ -199,12 +200,12 @@ void EthTunnelerKernel::GenerateDependentConfigs() {
         }
 
         // Downstream, we expect the same US_TUNNELER_REMOTE and one or more VC_PACKER_ROUTER
-        EthTunnelerKernel* ds_tunneler_kernel = nullptr;
-        std::vector<EthRouterKernel*> router_kernels;
+        std::shared_ptr<EthTunnelerKernel> ds_tunneler_kernel = nullptr;
+        std::vector<std::shared_ptr<EthRouterKernel>> router_kernels;
         for (auto k : downstream_kernels_) {
-            if (auto rk = dynamic_cast<EthRouterKernel*>(k)) {
+            if (auto rk = std::dynamic_pointer_cast<EthRouterKernel>(k)) {
                 router_kernels.push_back(rk);
-            } else if (auto tk = dynamic_cast<EthTunnelerKernel*>(k)) {
+            } else if (auto tk = std::dynamic_pointer_cast<EthTunnelerKernel>(k)) {
                 ds_tunneler_kernel = tk;
             } else {
                 TT_FATAL(false, "Unexpected kernel type downstream of TUNNELER");
@@ -347,11 +348,11 @@ void EthTunnelerKernel::CreateKernel() {
         false);
 }
 
-uint32_t EthTunnelerKernel::GetRouterQueueIdOffset(FDKernel* k, bool upstream) {
+uint32_t EthTunnelerKernel::GetRouterQueueIdOffset(const std::shared_ptr<FDKernel>& k, bool upstream) {
     uint32_t queue_id = (upstream) ? 0 : static_config_.vc_count.value();
-    std::vector<FDKernel*>& kernels = (upstream) ? upstream_kernels_ : downstream_kernels_;
-    for (auto kernel : kernels) {
-        if (auto router_kernel = dynamic_cast<EthRouterKernel*>(kernel)) {
+    std::vector<std::shared_ptr<FDKernel>>& kernels = (upstream) ? upstream_kernels_ : downstream_kernels_;
+    for (const auto& kernel : kernels) {
+        if (auto router_kernel = std::dynamic_pointer_cast<EthRouterKernel>(kernel)) {
             if (k == kernel) {
                 return queue_id;
             }
@@ -362,11 +363,11 @@ uint32_t EthTunnelerKernel::GetRouterQueueIdOffset(FDKernel* k, bool upstream) {
     TT_ASSERT(false, "Couldn't find router kernel");
     return queue_id;
 }
-uint32_t EthTunnelerKernel::GetRouterId(FDKernel* k, bool upstream) {
-    std::vector<FDKernel*>& search = (upstream) ? upstream_kernels_ : downstream_kernels_;
+uint32_t EthTunnelerKernel::GetRouterId(const std::shared_ptr<FDKernel>& k, bool upstream) {
+    std::vector<std::shared_ptr<FDKernel>>& search = (upstream) ? upstream_kernels_ : downstream_kernels_;
     uint32_t router_id = 0;
-    for (auto kernel : search) {
-        if (auto router_kernel = dynamic_cast<EthRouterKernel*>(kernel)) {
+    for (const auto& kernel : search) {
+        if (auto router_kernel = std::dynamic_pointer_cast<EthRouterKernel>(kernel)) {
             if (k == kernel) {
                 return router_id;
             }

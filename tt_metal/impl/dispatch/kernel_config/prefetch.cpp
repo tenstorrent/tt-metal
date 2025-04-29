@@ -213,8 +213,8 @@ void PrefetchKernel::GenerateDependentConfigs() {
         }
         bool found_dispatch = false;
         bool found_dispatch_s = false;
-        for (FDKernel* k : downstream_kernels_) {
-            if (auto dispatch_kernel = dynamic_cast<DispatchKernel*>(k)) {
+        for (std::shared_ptr<FDKernel> k : downstream_kernels_) {
+            if (auto dispatch_kernel = std::dynamic_pointer_cast<DispatchKernel>(k)) {
                 TT_ASSERT(!found_dispatch, "PREFETCH kernel has multiple downstream DISPATCH kernels.");
                 found_dispatch = true;
 
@@ -225,7 +225,7 @@ void PrefetchKernel::GenerateDependentConfigs() {
                 dependent_config_.downstream_cb_log_page_size =
                     dispatch_kernel->GetStaticConfig().dispatch_cb_log_page_size.value();
                 dependent_config_.downstream_cb_pages = dispatch_kernel->GetStaticConfig().dispatch_cb_pages.value();
-            } else if (auto dispatch_s_kernel = dynamic_cast<DispatchSKernel*>(k)) {
+            } else if (auto dispatch_s_kernel = std::dynamic_pointer_cast<DispatchSKernel>(k)) {
                 TT_ASSERT(!found_dispatch_s, "PREFETCH kernel has multiple downstream DISPATCH kernels.");
                 found_dispatch_s = true;
 
@@ -254,11 +254,11 @@ void PrefetchKernel::GenerateDependentConfigs() {
         // Downstream
         // one ROUTER or direct connection to PREFETCH_D if using fabric
         TT_ASSERT(downstream_kernels_.size() == 1);
-        if (auto router_kernel = dynamic_cast<EthRouterKernel*>(downstream_kernels_[0])) {
+        if (auto router_kernel = std::dynamic_pointer_cast<EthRouterKernel>(downstream_kernels_[0])) {
             dependent_config_.downstream_logical_core = router_kernel->GetLogicalCore();
             dependent_config_.downstream_s_logical_core = UNUSED_LOGICAL_CORE;
             uint32_t router_idx =
-                router_kernel->GetUpstreamPort(this);  // Need the port that this connects to downstream
+                router_kernel->GetUpstreamPort(shared_from_this());  // Need the port that this connects to downstream
             auto downstream_buffer_size = router_kernel->GetStaticConfig().rx_queue_size_words.value() << 4;
             dependent_config_.downstream_cb_base =
                 (router_kernel->GetStaticConfig().rx_queue_start_addr_words.value() << 4) +
@@ -270,7 +270,7 @@ void PrefetchKernel::GenerateDependentConfigs() {
             dependent_config_.downstream_cb_log_page_size = DispatchSettings::PREFETCH_D_BUFFER_LOG_PAGE_SIZE;
             dependent_config_.downstream_cb_pages =
                 downstream_buffer_size / (1 << DispatchSettings::PREFETCH_D_BUFFER_LOG_PAGE_SIZE);
-        } else if (auto prefetch_d = dynamic_cast<PrefetchKernel*>(downstream_kernels_[0])) {
+        } else if (auto prefetch_d = std::dynamic_pointer_cast<PrefetchKernel>(downstream_kernels_[0])) {
             TT_ASSERT(
                 prefetch_d->GetStaticConfig().is_d_variant.value() &&
                 !prefetch_d->GetStaticConfig().is_h_variant.value());
@@ -292,12 +292,12 @@ void PrefetchKernel::GenerateDependentConfigs() {
         // Upstream
         // One ROUTER or direct connection to PREFETCH_H if using fabric
         TT_ASSERT(upstream_kernels_.size() == 1);
-        if (auto router_kernel = dynamic_cast<EthRouterKernel*>(upstream_kernels_[0])) {
+        if (auto router_kernel = std::dynamic_pointer_cast<EthRouterKernel>(upstream_kernels_[0])) {
             dependent_config_.upstream_logical_core = router_kernel->GetLogicalCore();
-            int router_idx = router_kernel->GetDownstreamPort(this);
+            int router_idx = router_kernel->GetDownstreamPort(shared_from_this());
             dependent_config_.upstream_cb_sem_id =
                 router_kernel->GetStaticConfig().output_depacketize_local_sem[router_idx];
-        } else if (auto prefetch_h = dynamic_cast<PrefetchKernel*>(upstream_kernels_[0])) {
+        } else if (auto prefetch_h = std::dynamic_pointer_cast<PrefetchKernel>(upstream_kernels_[0])) {
             dependent_config_.upstream_logical_core = prefetch_h->GetLogicalCore();
             dependent_config_.upstream_cb_sem_id = prefetch_h->GetStaticConfig().my_downstream_cb_sem_id.value();
         } else {
@@ -313,8 +313,8 @@ void PrefetchKernel::GenerateDependentConfigs() {
         }
         bool found_dispatch = false;
         bool found_dispatch_s = false;
-        for (FDKernel* k : downstream_kernels_) {
-            if (auto dispatch_kernel = dynamic_cast<DispatchKernel*>(k)) {
+        for (std::shared_ptr<FDKernel> k : downstream_kernels_) {
+            if (auto dispatch_kernel = std::dynamic_pointer_cast<DispatchKernel>(k)) {
                 TT_ASSERT(!found_dispatch, "PREFETCH kernel has multiple downstream DISPATCH kernels.");
                 found_dispatch = true;
 
@@ -325,7 +325,7 @@ void PrefetchKernel::GenerateDependentConfigs() {
                 dependent_config_.downstream_cb_log_page_size =
                     dispatch_kernel->GetStaticConfig().dispatch_cb_log_page_size.value();
                 dependent_config_.downstream_cb_pages = dispatch_kernel->GetStaticConfig().dispatch_cb_pages.value();
-            } else if (auto dispatch_s_kernel = dynamic_cast<DispatchSKernel*>(k)) {
+            } else if (auto dispatch_s_kernel = std::dynamic_pointer_cast<DispatchSKernel>(k)) {
                 TT_ASSERT(!found_dispatch_s, "PREFETCH kernel has multiple downstream DISPATCH kernels.");
                 found_dispatch_s = true;
 

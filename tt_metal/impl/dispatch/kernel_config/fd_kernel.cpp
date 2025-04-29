@@ -5,7 +5,6 @@
 #include "fd_kernel.hpp"
 
 #include <host_api.hpp>
-#include <utility>
 #include <variant>
 
 #include "data_types.hpp"
@@ -19,7 +18,6 @@
 #include "eth_router.hpp"
 #include "eth_tunneler.hpp"
 #include "fabric_types.hpp"
-#include "hal.hpp"
 #include "hal_types.hpp"
 #include "kernel_types.hpp"
 #include "mux.hpp"
@@ -79,7 +77,7 @@ uint32_t FDKernel::GetTunnelStop(chip_id_t device_id) {
     return 0;
 }
 
-FDKernel* FDKernel::Generate(
+std::shared_ptr<FDKernel> FDKernel::Generate(
     int node_id,
     chip_id_t device_id,
     chip_id_t servicing_device_id,
@@ -88,29 +86,41 @@ FDKernel* FDKernel::Generate(
     DispatchWorkerType type) {
     switch (type) {
         case PREFETCH_HD:
-            return new PrefetchKernel(node_id, device_id, servicing_device_id, cq_id, noc_selection, true, true);
+            return std::make_shared<PrefetchKernel>(
+                node_id, device_id, servicing_device_id, cq_id, noc_selection, true, true);
         case PREFETCH_H:
-            return new PrefetchKernel(node_id, device_id, servicing_device_id, cq_id, noc_selection, true, false);
+            return std::make_shared<PrefetchKernel>(
+                node_id, device_id, servicing_device_id, cq_id, noc_selection, true, false);
         case PREFETCH_D:
-            return new PrefetchKernel(node_id, device_id, servicing_device_id, cq_id, noc_selection, false, true);
+            return std::make_shared<PrefetchKernel>(
+                node_id, device_id, servicing_device_id, cq_id, noc_selection, false, true);
         case DISPATCH_HD:
-            return new DispatchKernel(node_id, device_id, servicing_device_id, cq_id, noc_selection, true, true);
+            return std::make_shared<DispatchKernel>(
+                node_id, device_id, servicing_device_id, cq_id, noc_selection, true, true);
         case DISPATCH_H:
-            return new DispatchKernel(node_id, device_id, servicing_device_id, cq_id, noc_selection, true, false);
+            return std::make_shared<DispatchKernel>(
+                node_id, device_id, servicing_device_id, cq_id, noc_selection, true, false);
         case DISPATCH_D:
-            return new DispatchKernel(node_id, device_id, servicing_device_id, cq_id, noc_selection, false, true);
-        case DISPATCH_S: return new DispatchSKernel(node_id, device_id, servicing_device_id, cq_id, noc_selection);
-        case MUX_D: return new MuxKernel(node_id, device_id, servicing_device_id, cq_id, noc_selection);
-        case DEMUX: return new DemuxKernel(node_id, device_id, servicing_device_id, cq_id, noc_selection);
+            return std::make_shared<DispatchKernel>(
+                node_id, device_id, servicing_device_id, cq_id, noc_selection, false, true);
+        case DISPATCH_S:
+            return std::make_shared<DispatchSKernel>(node_id, device_id, servicing_device_id, cq_id, noc_selection);
+        case MUX_D: return std::make_shared<MuxKernel>(node_id, device_id, servicing_device_id, cq_id, noc_selection);
+        case DEMUX: return std::make_shared<DemuxKernel>(node_id, device_id, servicing_device_id, cq_id, noc_selection);
         case US_TUNNELER_REMOTE:
-            return new EthTunnelerKernel(node_id, device_id, servicing_device_id, cq_id, noc_selection, true);
+            return std::make_shared<EthTunnelerKernel>(
+                node_id, device_id, servicing_device_id, cq_id, noc_selection, true);
         case US_TUNNELER_LOCAL:
-            return new EthTunnelerKernel(node_id, device_id, servicing_device_id, cq_id, noc_selection, false);
+            return std::make_shared<EthTunnelerKernel>(
+                node_id, device_id, servicing_device_id, cq_id, noc_selection, false);
         case PACKET_ROUTER_MUX:
-            return new EthRouterKernel(node_id, device_id, servicing_device_id, cq_id, noc_selection, true);
+            return std::make_shared<EthRouterKernel>(
+                node_id, device_id, servicing_device_id, cq_id, noc_selection, true);
         case PACKET_ROUTER_DEMUX:
-            return new EthRouterKernel(node_id, device_id, servicing_device_id, cq_id, noc_selection, false);
-        case FABRIC_ROUTER_VC: return new tt::tt_metal::FabricRouterVC(node_id, device_id, servicing_device_id, cq_id);
+            return std::make_shared<EthRouterKernel>(
+                node_id, device_id, servicing_device_id, cq_id, noc_selection, false);
+        case FABRIC_ROUTER_VC:
+            return std::make_shared<tt::tt_metal::FabricRouterVC>(node_id, device_id, servicing_device_id, cq_id);
         default: TT_FATAL(false, "Unrecognized dispatch kernel type: {}.", type); return nullptr;
     }
 }
