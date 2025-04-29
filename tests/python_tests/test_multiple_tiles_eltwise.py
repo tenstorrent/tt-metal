@@ -72,7 +72,7 @@ param_ids = generate_param_ids(all_params)
 def test_multiple_tiles(testname, formats, dest_acc, mathop, math_fidelity, tile_cnt):
     if (
         mathop in [MathOperation.Elwadd, MathOperation.Elwsub, MathOperation.Elwmul]
-        and formats.unpack_A_src == DataFormat.Float16
+        and formats.input_format == DataFormat.Float16
         and dest_acc == DestAccumulation.Yes
     ):
         pytest.skip(reason="This combination is not fully implemented in testing")
@@ -82,11 +82,11 @@ def test_multiple_tiles(testname, formats, dest_acc, mathop, math_fidelity, tile
     pack_addresses_formatted = format_kernel_list(pack_addresses, as_hex=True)
 
     src_A, src_B = generate_stimuli(
-        formats.unpack_A_src, formats.unpack_B_src, tile_cnt=tile_cnt
+        formats.input_format, formats.input_format, tile_cnt=tile_cnt
     )  # , const_face=True, const_value_A=3, const_value_B=2)
-    golden = generate_golden(mathop, src_A, src_B, formats.pack_dst, math_fidelity)
+    golden = generate_golden(mathop, src_A, src_B, formats.output_format, math_fidelity)
     write_stimuli_to_l1(
-        src_A, src_B, formats.unpack_A_src, formats.unpack_B_src, "0,0", tile_cnt
+        src_A, src_B, formats.input_format, formats.input_format, "0,0", tile_cnt
     )
 
     if mathop != MathOperation.Elwmul:
@@ -124,24 +124,24 @@ def test_multiple_tiles(testname, formats, dest_acc, mathop, math_fidelity, tile
     golden_tensor = torch.tensor(
         golden,
         dtype=(
-            format_dict[formats.pack_dst]
-            if formats.pack_dst in [DataFormat.Float16, DataFormat.Float16_b]
+            format_dict[formats.output_format]
+            if formats.output_format in [DataFormat.Float16, DataFormat.Float16_b]
             else torch.bfloat16
         ),
     )
     res_tensor = torch.tensor(
         res_from_L1,
         dtype=(
-            format_dict[formats.pack_dst]
-            if formats.pack_dst in [DataFormat.Float16, DataFormat.Float16_b]
+            format_dict[formats.output_format]
+            if formats.output_format in [DataFormat.Float16, DataFormat.Float16_b]
             else torch.bfloat16
         ),
     )
 
-    if formats.pack_dst in [DataFormat.Float16_b, DataFormat.Float16]:
+    if formats.output_format in [DataFormat.Float16_b, DataFormat.Float16]:
         atol = 0.05
         rtol = 0.1
-    elif formats.pack_dst == DataFormat.Bfp8_b:
+    elif formats.output_format == DataFormat.Bfp8_b:
         atol = 0.1
         rtol = 0.2
 
