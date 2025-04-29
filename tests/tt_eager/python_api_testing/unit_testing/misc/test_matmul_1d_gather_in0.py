@@ -987,7 +987,7 @@ def test_matmul_1d_ring_llama_lm_head(
     function_level_defaults,
 ):
     # Only run these tests on unharvested TG
-    device_grid = (mesh_device.compute_with_storage_grid_size().x, mesh_device.compute_with_storage_grid_size().y)
+    device_grid = (device.compute_with_storage_grid_size().x, device.compute_with_storage_grid_size().y)
     if device_grid != (7, 10):
         pytest.skip("Skipping test_run_prefetcher because it only works with a 7x10 grid")
 
@@ -999,7 +999,7 @@ def test_matmul_1d_ring_llama_lm_head(
         ]
 
     run_multi_core_matmul_1d(
-        mesh_device,
+        device,
         in0_dtype,
         in1_dtype,
         fidelity,
