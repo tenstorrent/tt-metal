@@ -109,6 +109,9 @@ Tensor tensor_reshape(
                                 new_logical_shape,
                                 new_padded_shape));
 
+                        auto page_size_bytes = upd_spec.compute_page_size_bytes();
+                        device_buffer->set_page_size(page_size_bytes);
+
                         device_storage.update_specs(upd_spec);
                         return Tensor(std::move(device_storage), upd_spec);
                     }
