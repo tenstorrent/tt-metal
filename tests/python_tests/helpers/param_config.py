@@ -3,7 +3,7 @@
 
 from typing import List, Optional
 from .format_arg_mapping import *
-from .format_config import FormatConfig, DataFormat
+from .format_config import FormatConfig, DataFormat, InputOutputFormat
 
 
 def manage_included_params(func):
@@ -176,10 +176,6 @@ def clean_params(included_params, all_params: List[tuple]) -> List[tuple]:
         ("fill_dest_test", FormatConfig(DataFormat.Float16, DataFormat.Float16, DataFormat.Float16, DataFormat.Float16, DataFormat.Float16), DestAccumulation.No, ApproximationMode.Yes)
     ]
     """
-    print(
-        "clean params: ",
-        [tuple(param for param in comb if param is not None) for comb in all_params],
-    )
     return [tuple(param for param in comb if param is not None) for comb in all_params]
 
 
@@ -227,13 +223,19 @@ def generate_param_ids(included_params, all_params: List[tuple]) -> List[str]:
         testname, format_config, *params = comb
 
         # Start with the FormatConfig information
-        result = [
-            f"unpack_src={format_config.unpack_A_src.name}, {format_config.unpack_B_src.name}",
-            f"unpack_dst={format_config.unpack_A_dst.name}, {format_config.unpack_B_dst.name}",
-            f"math={format_config.math.name}",
-            f"pack_src={format_config.pack_src.name}",
-            f"pack_dst={format_config.pack_dst.name}",
-        ]
+        if isinstance(format_config, InputOutputFormat):
+            result = [
+                f"unpack_src={format_config.input.name}",
+                f"pack_dst={format_config.output.name}",
+            ]
+        else:
+            result = [
+                f"unpack_src={format_config.unpack_A_src.name}, {format_config.unpack_B_src.name}",
+                f"unpack_dst={format_config.unpack_A_dst.name}, {format_config.unpack_B_dst.name}",
+                f"math={format_config.math.name}",
+                f"pack_src={format_config.pack_src.name}",
+                f"pack_dst={format_config.pack_dst.name}",
+            ]
         if params[0]:
             result.append(f"dest_acc={params[0].name}")
         if params[1]:

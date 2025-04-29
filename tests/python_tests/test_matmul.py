@@ -48,15 +48,15 @@ def test_matmul(testname, formats, dest_acc, math_fidelity):
 
     src_A, src_B = generate_stimuli()
 
-    golden_tensor = generate_golden(src_A, src_B, formats.pack_dst, math_fidelity)
-    golden_tensor = tilize(golden_tensor, format_dict[formats.unpack_A_src])
-    golden_tensor = golden_tensor.to(format_dict[formats.pack_dst])
+    golden_tensor = generate_golden(src_A, src_B, formats.output_format, math_fidelity)
+    golden_tensor = tilize(golden_tensor, format_dict[formats.input_format])
+    golden_tensor = golden_tensor.to(format_dict[formats.output_format])
 
     write_stimuli_to_l1(
-        tilize(src_A, format_dict[formats.unpack_A_src]),
-        tilize(src_B, format_dict[formats.unpack_B_src]),
-        formats.unpack_A_src,
-        formats.unpack_B_src,
+        tilize(src_A, format_dict[formats.input_format]),
+        tilize(src_B, format_dict[formats.input_format]),
+        formats.input_format,
+        formats.input_format,
     )
 
     test_config = {
@@ -80,16 +80,16 @@ def test_matmul(testname, formats, dest_acc, math_fidelity):
     res_tensor = torch.tensor(
         res_from_L1,
         dtype=(
-            format_dict[formats.pack_dst]
-            if formats.pack_dst in [DataFormat.Float16, DataFormat.Float16_b]
+            format_dict[formats.output_format]
+            if formats.output_format in [DataFormat.Float16, DataFormat.Float16_b]
             else torch.bfloat16
         ),
     )
 
-    if formats.pack_dst in [DataFormat.Float16_b, DataFormat.Float16]:
+    if formats.output_format in [DataFormat.Float16_b, DataFormat.Float16]:
         atol = 0.1
         rtol = 0.05
-    elif formats.pack_dst == DataFormat.Bfp8_b:
+    elif formats.output_format == DataFormat.Bfp8_b:
         atol = 0.1
         rtol = 0.2
 

@@ -49,16 +49,16 @@ param_ids = generate_param_ids(all_params)
 @pytest.mark.skip(reason="Not fully implemented")
 def test_all(testname, formats, dest_acc, mathop):
     if (
-        formats.unpack_A_src in [DataFormat.Float32, DataFormat.Int32]
+        formats.input_format in [DataFormat.Float32, DataFormat.Int32]
         and dest_acc != DestAccumulation.Yes
     ):
         pytest.skip(
             "Skipping test for 32 bit wide data without 32 bit accumulation in Dest"
         )
 
-    src_A, src_B = generate_stimuli(formats.unpack_A_src, formats.unpack_B_src)
-    golden = generate_golden(mathop, src_A, src_B, formats.pack_dst)
-    write_stimuli_to_l1(src_A, src_B, formats.unpack_A_src, formats.unpack_B_src)
+    src_A, src_B = generate_stimuli(formats.input_format, formats.input_format)
+    golden = generate_golden(mathop, src_A, src_B, formats.output_format)
+    write_stimuli_to_l1(src_A, src_B, formats.input_format, formats.input_format)
 
     test_config = {
         "formats": formats,
@@ -79,22 +79,22 @@ def test_all(testname, formats, dest_acc, mathop):
 
     assert len(res_from_L1) == len(golden)
 
-    if formats.pack_dst in [
+    if formats.output_format in [
         DataFormat.Float16_b,
         DataFormat.Float16,
         DataFormat.Float32,
     ]:
         atol = 0.05
         rtol = 0.1
-    elif formats.pack_dst == DataFormat.Bfp8_b:
+    elif formats.output_format == DataFormat.Bfp8_b:
         atol = 0.1
         rtol = 0.2
 
     golden_tensor = torch.tensor(
         golden,
         dtype=(
-            format_dict[formats.pack_dst]
-            if formats.pack_dst
+            format_dict[formats.output_format]
+            if formats.output_format
             in [DataFormat.Float16, DataFormat.Float16_b, DataFormat.Float32]
             else torch.bfloat16
         ),
@@ -102,8 +102,8 @@ def test_all(testname, formats, dest_acc, mathop):
     res_tensor = torch.tensor(
         res_from_L1,
         dtype=(
-            format_dict[formats.pack_dst]
-            if formats.pack_dst
+            format_dict[formats.output_format]
+            if formats.output_format
             in [DataFormat.Float16, DataFormat.Float16_b, DataFormat.Float32]
             else torch.bfloat16
         ),

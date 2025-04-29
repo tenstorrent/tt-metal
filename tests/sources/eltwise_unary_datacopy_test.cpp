@@ -105,5 +105,4 @@ void run_kernel()
     _llk_pack_<DstSync::SyncFull, false, is_fp32_dest_acc_en>(0, L1_ADDRESS(buffer_Dest));
     _llk_pack_dest_section_done_<DstSync::SyncFull, is_fp32_dest_acc_en>();
 }
-
 #endif

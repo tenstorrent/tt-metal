@@ -72,15 +72,15 @@ def test_tilize_calculate_untilize_L1(
 ):
 
     src_A, src_B = generate_stimuli(
-        formats.unpack_A_src, formats.unpack_B_src, tile_cnt
+        formats.input_format, formats.input_format, tile_cnt
     )
 
     golden_tensor = generate_golden(
-        mathop, src_A, src_B, formats.pack_dst, math_fidelity
+        mathop, src_A, src_B, formats.output_format, math_fidelity
     )
 
     write_stimuli_to_l1(
-        src_A, src_B, formats.unpack_A_src, formats.unpack_B_src, "0,0", tile_cnt
+        src_A, src_B, formats.input_format, formats.input_format, "0,0", tile_cnt
     )
 
     buffer_dest_address = 0x1E000  # Since this test calls LLK pipeline twise, unpacker will read at address in L1 that packer packed to, this address is able to be reaused for two LLK calls
@@ -106,16 +106,16 @@ def test_tilize_calculate_untilize_L1(
     res_tensor = torch.tensor(
         res_from_L1,
         dtype=(
-            format_dict[formats.pack_dst]
-            if formats.pack_dst in [DataFormat.Float16, DataFormat.Float16_b]
+            format_dict[formats.output_format]
+            if formats.output_format in [DataFormat.Float16, DataFormat.Float16_b]
             else torch.bfloat16
         ),
     )
 
-    if formats.pack_dst in [DataFormat.Float16_b, DataFormat.Float16]:
+    if formats.output_format in [DataFormat.Float16_b, DataFormat.Float16]:
         atol = 0.1
         rtol = 0.05
-    elif formats.pack_dst == DataFormat.Bfp8_b:
+    elif formats.output_format == DataFormat.Bfp8_b:
         atol = 0.1
         rtol = 0.2
 

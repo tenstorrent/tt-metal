@@ -1,7 +1,12 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-from .format_config import FormatConfig, DataFormat, create_formats_for_testing
+from .format_config import (
+    InputOutputFormat,
+    FormatConfig,
+    DataFormat,
+    create_formats_for_testing,
+)
 from .stimuli_generator import flatten_list, generate_stimuli
 from .format_arg_mapping import (
     format_dict,

@@ -47,8 +47,8 @@ def run_shell_command(command: str):
 
 
 def calculate_read_byte_count(format: FormatConfig, array_size: int, sfpu=False) -> int:
-    total_bytes = array_size * format.pack_dst.size
-    if format.pack_dst == DataFormat.Bfp8_b:
+    total_bytes = array_size * format.output_format.size
+    if format.output_format == DataFormat.Bfp8_b:
         total_bytes += total_bytes // 16
     return total_bytes
 

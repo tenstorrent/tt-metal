@@ -117,21 +117,21 @@ def get_result_from_device(
     }
 
     # Handling "Bfp8_b" format separately with sfpu condition
-    if formats.pack_dst == DataFormat.Bfp8_b:
+    if formats.output_format == DataFormat.Bfp8_b:
         unpack_func = unpack_bfp16 if sfpu else unpack_bfp8_b
     else:
-        unpack_func = unpackers.get(formats.pack_dst)
+        unpack_func = unpackers.get(formats.output_format)
 
     if unpack_func:
         num_args = len(inspect.signature(unpack_func).parameters)
         if num_args > 1:
             return unpack_func(
-                read_data_bytes, formats.unpack_A_src, formats.pack_dst
+                read_data_bytes, formats.input_format, formats.output_format
             )  # Bug patchup in (unpack.py): in case unpack_src is Bfp8_b != pack_dst, L1 must be read in different order to extract correct results
         else:
             return unpack_func(read_data_bytes)
     else:
-        raise ValueError(f"Unsupported format: {formats.pack_dst}")
+        raise ValueError(f"Unsupported format: {formats.output_format}")
 
 
 def wait_until_tensix_complete(core_loc, mailbox_addr, timeout=30, max_backoff=5):
