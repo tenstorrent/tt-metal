@@ -11,63 +11,6 @@
 
 namespace ttnn {
 
-namespace ccl {
-// Using the same detail namespace for now, consider renaming if structure evolves
-namespace all_gather_async_detail {
-
-// Factory function for AllToAllAsync struct
-ttnn::AllToAllAsync create_all_to_all_async_struct(
-    const Tensor& input_tensor,
-    const uint32_t in_dim,
-    const uint32_t out_dim,
-    const uint32_t num_links,
-    const std::optional<MemoryConfig>& memory_config,
-    const std::vector<IDevice*>& devices,
-    const ttnn::ccl::Topology topology,
-    const global_semaphore::MultiDeviceGlobalSemaphore& multi_device_global_semaphore,
-    std::optional<tt::tt_metal::SubDeviceId> sub_device_id) {
-    uint32_t num_devices = devices.size();
-
-    std::optional<IDevice*> forward_device = std::nullopt;
-    std::optional<IDevice*> backward_device = std::nullopt;
-    std::optional<GlobalSemaphore> semaphore = std::nullopt;
-    uint32_t device_index = 0;
-    for (uint32_t i = 0; i < num_devices; ++i) {
-        // Each glogal semaphore should have the same address on each device.
-        // This is getting the semaphore for each device.
-        if (devices.at(i) == input_tensor.device()) {
-            semaphore = multi_device_global_semaphore.global_semaphores.at(i);
-            device_index = i;
-            if (i != 0) {
-                backward_device = devices.at(i - 1);
-            } else if (topology == ttnn::ccl::Topology::Ring) {
-                backward_device = devices.at(num_devices - 1);
-            }
-            if (i != num_devices - 1) {
-                forward_device = devices.at(i + 1);
-            } else if (topology == ttnn::ccl::Topology::Ring) {
-                forward_device = devices.at(0);
-            }
-        }
-    }
-
-    return ttnn::AllToAllAsync{
-        forward_device,
-        backward_device,
-        in_dim,
-        out_dim,
-        num_links,
-        num_devices,
-        device_index,
-        memory_config.value_or(input_tensor.memory_config()),
-        topology,
-        semaphore.value(),
-        sub_device_id};
-}
-
-}  // namespace all_gather_async_detail
-}  // namespace ccl
-
 // Implementation of AllToAllAsync methods
 
 void AllToAllAsync::validate_with_output_tensors(
@@ -153,21 +96,83 @@ std::vector<ttnn::TensorSpec> AllToAllAsync::compute_output_specs(const std::vec
     return {tensor_spec, tensor_spec};
 }
 
-tt::tt_metal::operation::ProgramWithCallbacks AllToAllAsync::create_program(
-    const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const {
-    // Assuming a single implementation for now (no version selection)
-    log_trace(tt::LogOp, "Running generic all_to_all_async_minimal");
+tt::tt_metal::operation::MeshWorkloadWithCallbacks AllToAllAsync::create_mesh_workload(
+    const ttnn::MeshCoordinateRangeSet& tensor_coords,
+    const std::vector<Tensor>& input_tensors,
+    std::vector<Tensor>& output_tensors) const {
+    return ccl::create_mesh_workload_from_programs(
+        tensor_coords, input_tensors, output_tensors, [&, this](const ttnn::MeshCoordinate& coord) {
+            return create_program_at(coord, input_tensors, output_tensors);
+        });
+}
+
+tt::tt_metal::operation::ProgramWithCallbacks AllToAllAsync::create_program_at(
+    const MeshCoordinate& coord, const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const {
+    tt::log_debug(tt::LogOp, "DEBUG: create_program_at is called");
+    auto mesh_device = input_tensors[0].mesh_device();
+    IDevice* target_device = mesh_device ? mesh_device->get_device(coord) : input_tensors[0].device();
+
+    std::optional<IDevice*> forward_device = std::nullopt;
+    std::optional<IDevice*> backward_device = std::nullopt;
+    uint32_t device_index = this->ring_size;  // Initialize device index
+    // tt::log_info(tt::LogOp, "DEBUG: ring_size: {}", this->ring_size);
+    // tt::log_info(tt::LogOp, "DEBUG: target_device: {}", target_device->id());
+    TT_FATAL(this->topology == ttnn::ccl::Topology::Ring, "DEBUG: topology: {}", this->topology);
+
+    std::vector<IDevice*> devices_to_use = input_tensors[0].mesh_device()->get_view().get_ring_devices();
+
+    for (uint32_t i = 0; i < this->ring_size; ++i) {
+        if (devices_to_use.at(i) == target_device) {
+            device_index = i;
+            if (i != 0) {
+                backward_device = devices_to_use.at(i - 1);
+            } else if (topology == ttnn::ccl::Topology::Ring) {
+                backward_device = devices_to_use.at(this->ring_size - 1);
+            }
+            if (i != this->ring_size - 1) {
+                forward_device = devices_to_use.at(i + 1);
+            } else if (topology == ttnn::ccl::Topology::Ring) {
+                forward_device = devices_to_use.at(0);
+            }
+        }
+    }
+
+    tt::log_info(
+        tt::LogOp,
+        "DEBUG: target_device_id: {}, device_index: {}, fwd device id: {}, bwd device id: {}",
+        target_device->id(),
+        device_index,
+        forward_device.has_value() ? forward_device.value()->id() : -1,
+        backward_device.has_value() ? backward_device.value()->id() : -1);
+    TT_FATAL(device_index < this->ring_size, "DEBUG: device_index: {}", device_index);
+    TT_FATAL(
+        forward_device.value()->id() != backward_device.value()->id(),
+        "DEBUG: forward and backward devices are the same: {}, {}",
+        forward_device.value()->id(),
+        backward_device.value()->id());
+    TT_FATAL(
+        forward_device.value()->id() != target_device->id(),
+        "DEBUG: forward device is the same as target device: {}, {}",
+        forward_device.value()->id(),
+        target_device->id());
+    TT_FATAL(
+        backward_device.value()->id() != target_device->id(),
+        "DEBUG: backward device is the same as target device: {}, {}",
+        backward_device.value()->id(),
+        target_device->id());
+
     return all_to_all_async_minimal(
         input_tensors[0],
         output_tensors.at(0),
         output_tensors.at(1),
-        this->forward_device,
-        this->backward_device,
+        target_device,
+        forward_device,
+        backward_device,
         this->in_dim,
         this->out_dim,
         this->num_links,
         this->ring_size,
-        this->ring_index,
+        device_index,
         this->topology,
         this->semaphore,
         this->sub_device_id);
@@ -186,7 +191,6 @@ tt::tt_metal::operation::Hash AllToAllAsync::compute_program_hash(const std::vec
         this->out_dim,
         this->num_links,
         this->ring_size,
-        this->ring_index,
         this->output_mem_config,
         this->topology,
         input_shape,
@@ -207,7 +211,7 @@ Tensor all_to_all_async(
     Tensor& persistent_output_buffer,
     const int32_t in_dim,   // Changed from dim
     const int32_t out_dim,  // Added
-    const global_semaphore::MultiDeviceGlobalSemaphore& multi_device_global_semaphore,
+    const GlobalSemaphore& multi_device_global_semaphore,
     const uint32_t num_links,
     const std::optional<MemoryConfig>& memory_config,
     const ttnn::ccl::Topology topology,
@@ -216,7 +220,11 @@ Tensor all_to_all_async(
         std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr,
         "all_to_all_async op is only supported for Fast Dispatch");
 
-    auto devices = input_tensor.get_workers();
+    std::vector<IDevice*> devices;
+    for (const auto& spec : input_tensor.device_storage().specs) {
+        devices.push_back(input_tensor.mesh_device()->get_device(spec.first));
+    }
+
     uint32_t num_devices = devices.size();
     TT_FATAL(num_devices > 0, "all_to_all_async requires at least one device, but has {}", num_devices);
 
@@ -229,10 +237,6 @@ Tensor all_to_all_async(
         ccl_topology = ttnn::ccl::Topology::Linear;
     }
 
-    std::vector<Tensor> output_tensors = {
-        Tensor(tt::tt_metal::operation::get_workers_for_op_output({input_tensor})),
-        Tensor(tt::tt_metal::operation::get_workers_for_op_output({input_tensor}))};
-
     std::vector<std::optional<Tensor>> optional_output_tensors = {
         persistent_intermediate_buffer, persistent_output_buffer};
 
@@ -244,41 +248,21 @@ Tensor all_to_all_async(
     TT_FATAL(norm_in_dim >= 0 && norm_in_dim < rank, "Invalid in_dim: {}", in_dim);
     TT_FATAL(norm_out_dim >= 0 && norm_out_dim < rank, "Invalid out_dim: {}", out_dim);
 
-    tt::tt_metal::operation::launch_op(
-        [norm_in_dim,
-         norm_out_dim,
-         num_links,
-         memory_config,
-         devices,
-         ccl_topology,
-         multi_device_global_semaphore,
-         sub_device_id](
-            const std::vector<Tensor>& input_tensors,
-            const std::vector<std::optional<const Tensor>>& optional_input_tensors,
-            const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
-            const auto& input_tensor = input_tensors.at(0);
-            // Using the factory function defined earlier
-            return tt::tt_metal::operation::run(
-                ttnn::ccl::all_gather_async_detail::create_all_to_all_async_struct(
-                    input_tensor,
-                    norm_in_dim,
-                    norm_out_dim,
-                    num_links,
-                    memory_config,
-                    devices,
-                    ccl_topology,
-                    multi_device_global_semaphore,
-                    sub_device_id),
-                {input_tensor},
-                optional_input_tensors,
-                optional_output_tensors);
-        },
-        {input_tensor},
-        output_tensors,
-        {},
-        optional_output_tensors);
-
-    return output_tensors.at(1);  // Return persistent output, not intermediate
+    return tt::tt_metal::operation::run(
+               ttnn::AllToAllAsync(
+                   devices,
+                   norm_in_dim,
+                   norm_out_dim,
+                   num_links,
+                   num_devices,
+                   memory_config.value_or(input_tensor.memory_config()),
+                   ccl_topology,
+                   multi_device_global_semaphore,
+                   sub_device_id),
+               {input_tensor},
+               {},
+               optional_output_tensors)
+        .at(1);
 }
 
 }  // namespace ccl

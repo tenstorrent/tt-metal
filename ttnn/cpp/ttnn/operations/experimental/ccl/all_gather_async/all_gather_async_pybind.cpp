@@ -98,7 +98,7 @@ void bind_all_to_all_async(pybind11::module& module, const ccl_operation_t& oper
                ttnn::Tensor& persistent_output_buffer,
                const int32_t in_dim,
                const int32_t out_dim,
-               const global_semaphore::MultiDeviceGlobalSemaphore& multi_device_global_semaphore,
+               const GlobalSemaphore& multi_device_global_semaphore,
                const uint32_t num_links,
                const std::optional<ttnn::MemoryConfig>& memory_config,
                const ttnn::ccl::Topology topology,

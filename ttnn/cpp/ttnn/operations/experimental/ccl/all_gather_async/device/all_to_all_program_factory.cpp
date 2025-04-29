@@ -29,6 +29,7 @@
 #include <type_traits>
 #include <ranges>
 #include <optional>
+#include <tuple>
 
 using namespace tt::constants;
 
@@ -36,10 +37,26 @@ namespace ttnn {
 
 using namespace ccl;
 
+std::tuple<uint32_t, uint32_t, uint32_t> calculate_chunk_params(
+    uint32_t num_pages_per_device_shard, uint32_t num_pages_per_packet) {
+    uint32_t chunk_granularity = 4;  // Start with minimum of 4
+
+    while (true) {
+        const uint32_t chunk_num_tiles = chunk_granularity * num_pages_per_packet;
+        const uint32_t num_chunks = tt::div_up(num_pages_per_device_shard, chunk_num_tiles);
+
+        if (num_chunks < 30) {
+            return {chunk_granularity, chunk_num_tiles, num_chunks};
+        }
+        chunk_granularity *= 2;
+    }
+}
+
 tt::tt_metal::operation::ProgramWithCallbacks all_to_all_async_minimal(
     const Tensor& input_tensor,
     Tensor& persistent_intermediate_buffer,
     Tensor& persistent_output_buffer,
+    IDevice* sender_device,
     std::optional<IDevice*> forward_device,
     std::optional<IDevice*> backward_device,
     const uint32_t in_dim,
@@ -137,13 +154,20 @@ tt::tt_metal::operation::ProgramWithCallbacks all_to_all_async_minimal(
     /**
      * Receiver CBs
      */
-    // Chunk granularity: The number of packets that are sent before signaling reader.
-    const uint32_t chunk_granularity = 4;
-    const uint32_t chunk_num_tiles = chunk_granularity * num_pages_per_packet;
+    // Calculate chunk parameters to ensure num_chunks_per_shard < 32
+    const auto [chunk_granularity, chunk_num_tiles, num_chunks_per_shard] = calculate_chunk_params(
+        input_tensor.buffer()->num_pages() / ring_size,  // number of pages sent between each pair of devices
+        num_pages_per_packet);
+
+    // Verify constraints
+    TT_FATAL(num_chunks_per_shard < 32, "num_chunks_per_shard must be < 32, got {}", num_chunks_per_shard);
+    TT_FATAL(chunk_granularity >= 4, "chunk_granularity must be >= 4, got {}", chunk_granularity);
+
+    const uint32_t receiver_num_pages = num_pages_per_packet * 3;  // triple buffering
     const uint32_t receiver_cb_index = tt::CB::c_in0;
 
     tt::tt_metal::CircularBufferConfig cb_receiver_config =
-        tt::tt_metal::CircularBufferConfig(chunk_num_tiles * op_config.get_page_size(), {{receiver_cb_index, df}})
+        tt::tt_metal::CircularBufferConfig(receiver_num_pages * op_config.get_page_size(), {{receiver_cb_index, df}})
             .set_page_size(receiver_cb_index, op_config.get_page_size());
     auto receiver_CB_handle = CreateCircularBuffer(program, receiver_worker_core_range, cb_receiver_config);
 
@@ -193,7 +217,12 @@ tt::tt_metal::operation::ProgramWithCallbacks all_to_all_async_minimal(
     const auto output_tensor_page_layout = persistent_output_buffer.layout();
     const auto output_tensor_num_pages = persistent_output_buffer.buffer()->num_pages();
 
-    const uint32_t num_chunks_per_shard = tt::round_up(input_tensor_num_pages, chunk_num_tiles);
+    TT_FATAL(
+        num_chunks_per_shard < 31,
+        "num_chunks_per_shard: {}, chunk_num_tiles: {}, input_tensor_num_pages: {}",
+        num_chunks_per_shard,
+        chunk_num_tiles,
+        input_tensor_num_pages);
 
     // KERNEL CREATION
     // Reader
@@ -416,12 +445,12 @@ tt::tt_metal::operation::ProgramWithCallbacks all_to_all_async_minimal(
         writer_rt_args.push_back(forward_device.has_value());
         if (forward_device.has_value()) {
             tt::tt_fabric::append_fabric_connection_rt_args(
-                input_tensor.device()->id(), forward_device.value()->id(), link, program, {core}, writer_rt_args);
+                sender_device->id(), forward_device.value()->id(), link, program, {core}, writer_rt_args);
         }
         writer_rt_args.push_back(backward_device.has_value());
         if (backward_device.has_value()) {
             tt::tt_fabric::append_fabric_connection_rt_args(
-                input_tensor.device()->id(), backward_device.value()->id(), link, program, {core}, writer_rt_args);
+                sender_device->id(), backward_device.value()->id(), link, program, {core}, writer_rt_args);
         }
         tt::tt_metal::SetRuntimeArgs(program, worker_sender_writer_kernel_id, {core}, writer_rt_args);
 
