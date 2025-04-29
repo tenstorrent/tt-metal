@@ -107,16 +107,24 @@ def generate_sdxl_dram_test_inputs():
 
     # 1024x1024 resoultion
     # inputs.append(((2, 1920, 64, 64), 4))  #  pcc 0.95
-    inputs.append(((2, 320, 128, 128), 2))
-    inputs.append(((2, 640, 128, 128), 4))
-    inputs.append(((2, 960, 128, 128), 2))
+    inputs.append(((2, 320, 128, 128), 2, 4))
+    inputs.append(((2, 640, 128, 128), 4, 4))
+    inputs.append(((2, 960, 128, 128), 2, 4))
+
+    # VAE tests
+    # inputs.append(((1, 128, 1024, 1024), 8, 64)) #  pcc 0.32
+    inputs.append(((1, 256, 1024, 1024), 8, 64))
+    inputs.append(((1, 256, 515, 512), 8, 16))
+    inputs.append(((1, 512, 128, 128), 4, 4))
+    inputs.append(((1, 512, 256, 256), 8, 4))
+    inputs.append(((1, 512, 512, 512), 8, 16))
 
     return inputs
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 0}], indirect=True)
-@pytest.mark.parametrize("input_shape, core_grid_y", generate_sdxl_dram_test_inputs())
-def test_sdxl_base_group_norm(device, input_shape, core_grid_y, use_program_cache):
+@pytest.mark.parametrize("input_shape, core_grid_y, num_out_blocks", generate_sdxl_dram_test_inputs())
+def test_sdxl_base_group_norm(device, input_shape, core_grid_y, num_out_blocks, use_program_cache):
     torch.manual_seed(0)
     if device.core_grid.y == 7:
         pytest.skip()
@@ -185,7 +193,7 @@ def test_sdxl_base_group_norm(device, input_shape, core_grid_y, use_program_cach
         output_layout=ttnn.TILE_LAYOUT,
         core_grid=grid_size,
         inplace=False,
-        num_out_blocks=4,
+        num_out_blocks=num_out_blocks,
     )
 
     # output tensor
