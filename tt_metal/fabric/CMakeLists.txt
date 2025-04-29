@@ -61,12 +61,14 @@ target_precompile_headers(
 
 target_compile_options(fabric PRIVATE -Wno-int-to-pointer-cast)
 
-install(
-    TARGETS
-        fabric
-    FILE_SET
-    jit_api
-        DESTINATION
-            ${CMAKE_INSTALL_LIBEXECDIR}/tt-metalium/tt_metal/fabric # FIXME: fix the include paths for jit_build
-        COMPONENT metalium-runtime
-)
+foreach(component metalium-runtime metalium-ttnn-dev)
+    install(
+        TARGETS
+            fabric
+        FILE_SET
+        jit_api
+            DESTINATION
+                ${CMAKE_INSTALL_LIBEXECDIR}/tt-metalium/tt_metal/fabric # FIXME: fix the include paths for jit_build
+            COMPONENT ${component}
+    )
+endforeach()

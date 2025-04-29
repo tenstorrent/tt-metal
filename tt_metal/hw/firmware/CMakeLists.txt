@@ -30,13 +30,15 @@ if(CMAKE_VERSION VERSION_GREATER_EQUAL 3.23)
                 src/tt_eth_api.cpp
     )
 
-    install(
-        TARGETS
-            metalium_firmware
-        FILE_SET
-        jit_api
-            DESTINATION
-                ${CMAKE_INSTALL_LIBEXECDIR}/tt-metalium/tt_metal/hw/firmware # FIXME: fix the include paths for jit_build
-            COMPONENT metalium-runtime
-    )
+    foreach(component metalium-runtime metalium-ttnn-dev)
+        install(
+            TARGETS
+                metalium_firmware
+            FILE_SET
+            jit_api
+                DESTINATION
+                    ${CMAKE_INSTALL_LIBEXECDIR}/tt-metalium/tt_metal/hw/firmware # FIXME: fix the include paths for jit_build
+                COMPONENT ${component}
+        )
+    endforeach()
 endif()

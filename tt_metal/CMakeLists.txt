@@ -384,15 +384,17 @@ if(TT_INSTALL)
     )
     install(EXPORT Metalium NAMESPACE TT:: DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/tt-metalium COMPONENT metalium-dev)
 
-    install(
-        TARGETS
-            jitapi
-        FILE_SET
-        jit_api
-            DESTINATION
-                ${CMAKE_INSTALL_LIBEXECDIR}/tt-metalium/tt_metal # FIXME: fix the include paths for jit_build
-            COMPONENT metalium-runtime
-    )
+    foreach(component metalium-runtime metalium-ttnn-dev)
+        install(
+            TARGETS
+                jitapi
+            FILE_SET
+            jit_api
+                DESTINATION
+                    ${CMAKE_INSTALL_LIBEXECDIR}/tt-metalium/tt_metal # FIXME: fix the include paths for jit_build
+                COMPONENT ${component}
+        )
+    endforeach()
 
     # 3rd party dependencies we export in our public API.
     # We must ship not only these libraries, but their public headers as well

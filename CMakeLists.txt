@@ -289,13 +289,15 @@ else()
 endif()
 
 # FIXME(17578): figure out what bits we actually need to ship and omit the rest
-install(
-    DIRECTORY
-        runtime
-    DESTINATION ${CMAKE_INSTALL_LIBEXECDIR}/tt-metalium
-    USE_SOURCE_PERMISSIONS
-    COMPONENT jit-build
-)
+foreach(component jit-build metalium-ttnn-dev)
+    install(
+        DIRECTORY
+            runtime
+        DESTINATION ${CMAKE_INSTALL_LIBEXECDIR}/tt-metalium
+        USE_SOURCE_PERMISSIONS
+        COMPONENT ${component}
+    )
+endforeach()
 
 # Custom clean target for `built` folder for when new kernel changes are pulled
 add_custom_target(

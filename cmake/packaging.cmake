@@ -5,6 +5,7 @@ set(CPACK_PACKAGE_NAME tt)
 
 set(CPACK_COMPONENT_METALIUM_DESCRIPTION "TT-Metalium runtime library")
 set(CPACK_DEBIAN_METALIUM_PACKAGE_SECTION "libs")
+set(CPACK_COMPONENT_METALIUM-TTNN-DEV_DESCRIPTION "TT-Metalium TTNN development files")
 
 set(CPACK_DEB_COMPONENT_INSTALL YES)
 set(CPACK_DEBIAN_PACKAGE_VERSION "${VERSION_DEB}")
@@ -37,6 +38,7 @@ set(CPACK_DEBIAN_ENABLE_COMPONENT_DEPENDS TRUE)
 set(CPACK_DEBIAN_PACKAGE_SHLIBDEPS TRUE)
 # jit-build is cross compiling; shlibdeps does not find dependencies on the host; it should be self-contained anyway.
 set(CPACK_DEBIAN_METALIUM-JIT_PACKAGE_SHLIBDEPS FALSE)
+set(CPACK_DEBIAN_METALIUM-TTNN-DEV_PACKAGE_SHLIBDEPS FALSE)
 
 # FIXME(afuller): Sucks for Ubuntu 22.04, but I'm not about to start packaging Boost.
 set(CPACK_DEBIAN_METALIUM-DEV_PACKAGE_DEPENDS "libboost-dev (>= 1.78) | libboost1.81-dev")
@@ -86,6 +88,90 @@ cpack_add_component(json-dev GROUP metalium-dev)
 cpack_add_component(magic-enum-dev GROUP metalium-dev)
 cpack_add_component(umd-dev GROUP metalium-dev)
 cpack_add_component_group(metalium-dev)
+
+install(DIRECTORY ${CMAKE_SOURCE_DIR}/ttnn DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/tt-metal COMPONENT metalium-ttnn-dev)
+install(
+    DIRECTORY
+        ${CMAKE_SOURCE_DIR}/ttnn/cpp
+    DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/tt-metal
+    COMPONENT metalium-ttnn-dev
+)
+install(
+    DIRECTORY
+        ${CMAKE_SOURCE_DIR}/ttnn/cpp/ttnn/deprecated
+    DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/tt-metal
+    COMPONENT metalium-ttnn-dev
+)
+install(
+    DIRECTORY
+        ${CMAKE_SOURCE_DIR}/tt_metal/api
+    DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/tt-metal
+    COMPONENT metalium-ttnn-dev
+)
+install(
+    DIRECTORY
+        ${CMAKE_SOURCE_DIR}/tt_metal
+    DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/tt-metal
+    COMPONENT metalium-ttnn-dev
+)
+install(
+    DIRECTORY
+        ${CMAKE_SOURCE_DIR}/tt_metal/include
+    DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/tt-metal
+    COMPONENT metalium-ttnn-dev
+)
+install(
+    DIRECTORY
+        ${CMAKE_SOURCE_DIR}/tt_metal/hostdevcommon/api
+    DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/tt-metal
+    COMPONENT metalium-ttnn-dev
+)
+install(
+    DIRECTORY
+        ${CMAKE_SOURCE_DIR}/tt_metal/third_party/umd
+    DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/tt-metal
+    COMPONENT metalium-ttnn-dev
+)
+install(
+    DIRECTORY
+        ${CMAKE_SOURCE_DIR}/tt_metal/third_party/umd/device/api
+    DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/tt-metal
+    COMPONENT metalium-ttnn-dev
+)
+install(
+    DIRECTORY
+        ${CMAKE_SOURCE_DIR}/tt_metal/hw/inc
+    DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/tt-metal
+    COMPONENT metalium-ttnn-dev
+)
+install(
+    DIRECTORY
+        ${CMAKE_SOURCE_DIR}/tt_stl
+    DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/tt-metal
+    COMPONENT metalium-ttnn-dev
+)
+install(
+    DIRECTORY
+        ${CMAKE_SOURCE_DIR}/tt_stl/tt_stl
+    DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/tt-metal
+    COMPONENT metalium-ttnn-dev
+)
+
+set(METALIUM_LIB_PATH "${CMAKE_BINARY_DIR}/lib")
+find_library(TT_METAL_LIBRARY NAMES "tt_metal" PATHS "${METALIUM_LIB_PATH}" NO_DEFAULT_PATH)
+find_library(DEVICE_LIBRARY NAMES "device" PATHS "${METALIUM_LIB_PATH}" NO_DEFAULT_PATH)
+find_library(TTNN_LIBRARY NAMES "_ttnn.so" PATHS "${METALIUM_LIB_PATH}" NO_DEFAULT_PATH)
+
+install(
+    FILES
+        ${TT_METAL_LIBRARY}
+        ${DEVICE_LIBRARY}
+        ${TTNN_LIBRARY}
+    DESTINATION ${CMAKE_INSTALL_LIBDIR}
+    COMPONENT metalium-ttnn-dev
+)
+
+cpack_add_component(metalium-ttnn-dev)
 
 cpack_add_component(metalium-validation DEPENDS metalium GROUP metalium-validation)
 cpack_add_component(gtest GROUP metalium-validation)
