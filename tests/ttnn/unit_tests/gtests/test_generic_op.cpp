@@ -140,7 +140,7 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpUnaryReluSharded) {
         .buffer_type = tt::tt_metal::BufferType::L1,
         .shard_spec = tt::tt_metal::ShardSpec(
             all_cores,
-            {(num_cores_x + num_cores_y) * tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH},
+            {(num_cores_x * num_cores_y) * tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH},
             tt::tt_metal::ShardOrientation::ROW_MAJOR),
     };
 
@@ -165,7 +165,6 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpUnaryReluSharded) {
     uint32_t num_tile_per_core = 0;
     size_t shard_height = shard_spec.shape[0];
     size_t shard_width = shard_spec.shape[1];
-    tt::log_info(tt::LogTest, "shard height: {}, shard width: {}", shard_height, shard_width);
     size_t shard_size_in_bytes = shard_height * shard_width * datum_size(act_df);
     TT_FATAL(shard_size_in_bytes % input_tile_size == 0, "Shard Size must be multiple of input_tile_size");
     num_tile_per_core = (shard_size_in_bytes + input_tile_size - 1) / input_tile_size;  // ceil value
