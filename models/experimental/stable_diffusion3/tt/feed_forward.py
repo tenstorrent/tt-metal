@@ -50,15 +50,13 @@ class TtFeedForward:
     def __call__(self, x: ttnn.Tensor) -> ttnn.Tensor:
         grid_size = x.device().compute_with_storage_grid_size()
         core_grid = ttnn.CoreGrid(x=grid_size.x, y=grid_size.y)
-        # NOTE: With activation fused into linear, unclear whether it's using approx mode.
-        x3 = self.in_proj(x, core_grid=core_grid, activation="gelu")
+
+        x = self.in_proj(x, core_grid=core_grid)
         # Turning on fast_and_approximate_mode leads to big changes in the generated image.
         # The image quality might still be okay.
-        # x3 = ttnn.gelu(x2, fast_and_approximate_mode=False)
-        # ttnn.deallocate(x2)
+        x = ttnn.gelu(x, fast_and_approximate_mode=False)
 
-        result = self.out_proj(x3, core_grid=core_grid)
-        ttnn.deallocate(x3)
+        result = self.out_proj(x, core_grid=core_grid)
 
         if self._distributed:
             result = ttnn.reduce_scatter(

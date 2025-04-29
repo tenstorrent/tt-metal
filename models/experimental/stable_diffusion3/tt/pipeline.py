@@ -294,7 +294,7 @@ class TtStableDiffusion3Pipeline:
         tt_prompt_embeds = ttnn.from_torch(
             prompt_embeds,
             layout=ttnn.TILE_LAYOUT,
-            dtype=ttnn.bfloat8_b,
+            dtype=ttnn.bfloat16,
             device=self._device,
             mesh_mapper=ttnn.ReplicateTensorToMesh(self._device),
         )
