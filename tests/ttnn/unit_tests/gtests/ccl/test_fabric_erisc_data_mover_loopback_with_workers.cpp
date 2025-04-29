@@ -1399,6 +1399,7 @@ TEST(EdmFabric, RingDeadlockStabilityTest) {
     auto cluster_type = tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type();
     if (cluster_type == tt::ClusterType::GALAXY) {
         num_devices = {4, 8};
+        num_links = 4;
     } else {
         num_devices = {8};
     }
