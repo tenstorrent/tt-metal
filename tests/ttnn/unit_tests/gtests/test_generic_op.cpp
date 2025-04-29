@@ -766,8 +766,10 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpEltwiseSFPU) {
         .cbs = {input_cb_descriptor, output_cb_descriptor},
     };
 
-    Tensor device_output = ttnn::generic_op(std::vector{device_input_tensor, device_output_tensor}, program_descriptor);
+    tt::log_info(tt::LogTest, "Running ttnn unary exp");
     Tensor golden = ttnn::exp(device_input_tensor);
+    tt::log_info(tt::LogTest, "Running generic_op unary exp");
+    Tensor device_output = ttnn::generic_op(std::vector{device_input_tensor, device_output_tensor}, program_descriptor);
 
     auto allclose = ttnn::allclose<bfloat16>(golden.cpu(), device_output.cpu());
 

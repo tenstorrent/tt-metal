@@ -24,6 +24,5 @@ struct GenericOp {
 }  // namespace ttnn::operations::generic
 
 namespace ttnn {
-constexpr auto generic_op =
-    ttnn::register_operation_with_auto_launch_op<"ttnn::generic_op", ttnn::operations::generic::GenericOp>();
+constexpr auto generic_op = ttnn::register_operation<"ttnn::generic_op", ttnn::operations::generic::GenericOp>();
 }  // namespace ttnn
