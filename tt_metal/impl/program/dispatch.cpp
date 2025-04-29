@@ -23,7 +23,6 @@
 #include <map>
 #include <optional>
 #include <set>
-#include <string_view>
 #include <tuple>
 #include <type_traits>
 #include <unordered_set>
@@ -1004,12 +1003,6 @@ BatchedTransfers assemble_runtime_args_commands(
         command_count,
         program_command_sequence.runtime_args_command_sequences.size());
 
-    uint32_t runtime_args_fetch_size_bytes = 0;
-    for (const auto& cmds : program_command_sequence.runtime_args_command_sequences) {
-        // BRISC, NCRISC, TRISC...
-        runtime_args_fetch_size_bytes += cmds.size_bytes();
-    }
-    program_command_sequence.runtime_args_fetch_size_bytes = runtime_args_fetch_size_bytes;
     return transfers;
 }
 
@@ -2098,121 +2091,84 @@ void write_program_command_sequence(
     CoreType dispatch_core_type,
     bool stall_first,
     bool stall_before_program) {
-    // Generic function to write data to cq
+    // Check if it's possible to write all commands in a single fetch queue entry
+    uint32_t one_shot_fetch_size = program_command_sequence.get_one_shot_fetch_size(stall_first, stall_before_program);
+    bool one_shot = one_shot_fetch_size <=
+                    MetalContext::instance().dispatch_mem_map(dispatch_core_type).max_prefetch_command_size();
+    if (one_shot) {
+        manager.issue_queue_reserve(one_shot_fetch_size, command_queue_id);
+    }
+    uint32_t one_shot_write_ptr = manager.get_issue_queue_write_ptr(command_queue_id);
+
     auto write_data_to_cq = [&](void* data, uint32_t size_bytes) {
-        if (!size_bytes) return;
-        manager.issue_queue_reserve(size_bytes, command_queue_id);
-        const uint32_t write_ptr = manager.get_issue_queue_write_ptr(command_queue_id);
-        manager.cq_write(data, size_bytes, write_ptr);
-        manager.issue_queue_push_back(size_bytes, command_queue_id);
-        manager.fetch_queue_reserve_back(command_queue_id);
-        manager.fetch_queue_write(size_bytes, command_queue_id);
+        if (!size_bytes) {
+            return;
+        }
+
+        if (one_shot) {
+            // Already reserved. Write only. Defer push back until all commands are written
+            manager.cq_write(data, size_bytes, one_shot_write_ptr);
+            one_shot_write_ptr += size_bytes;
+        } else {
+            manager.issue_queue_reserve(size_bytes, command_queue_id);
+            manager.cq_write(data, size_bytes, manager.get_issue_queue_write_ptr(command_queue_id));
+            manager.issue_queue_push_back(size_bytes, command_queue_id);
+            manager.fetch_queue_reserve_back(command_queue_id);
+            manager.fetch_queue_write(size_bytes, command_queue_id);
+        }
     };
 
-    uint32_t preamble_fetch_size_bytes = program_command_sequence.preamble_command_sequence.size_bytes();
-    auto& curr_stall_seq_idx = program_command_sequence.current_stall_seq_idx;
-    uint32_t stall_fetch_size_bytes =
-        (stall_first || stall_before_program)
-            ? program_command_sequence.stall_command_sequences[curr_stall_seq_idx].size_bytes()
-            : 0;
+    // Write the preamble
+    write_data_to_cq(
+        program_command_sequence.preamble_command_sequence.data(),
+        program_command_sequence.preamble_command_sequence.size_bytes());
 
-    uint32_t runtime_args_fetch_size_bytes = program_command_sequence.runtime_args_fetch_size_bytes;
-
-    uint32_t program_config_buffer_data_size_bytes =
-        program_command_sequence.program_config_buffer_command_sequence.size_bytes();
-    uint8_t* program_config_buffer_data =
-        (uint8_t*)program_command_sequence.program_config_buffer_command_sequence.data();
-
-    uint32_t program_binary_size_bytes = program_command_sequence.program_binary_command_sequence.size_bytes();
-    uint8_t* program_binary_data = (uint8_t*)program_command_sequence.program_binary_command_sequence.data();
-
-    uint32_t one_shot_fetch_size_bytes = stall_fetch_size_bytes + preamble_fetch_size_bytes +
-                                         runtime_args_fetch_size_bytes + program_config_buffer_data_size_bytes +
-                                         program_binary_size_bytes;
-
-    if (one_shot_fetch_size_bytes <=
-        MetalContext::instance().dispatch_mem_map(dispatch_core_type).max_prefetch_command_size()) {
-        manager.issue_queue_reserve(one_shot_fetch_size_bytes, command_queue_id);
-        uint32_t write_ptr = manager.get_issue_queue_write_ptr(command_queue_id);
-
-        manager.cq_write(
-            program_command_sequence.preamble_command_sequence.data(), preamble_fetch_size_bytes, write_ptr);
-        write_ptr += preamble_fetch_size_bytes;
-
-        if (stall_first) {
-            // Must stall before writing runtime args
-            manager.cq_write(
-                program_command_sequence.stall_command_sequences[curr_stall_seq_idx].data(),
-                stall_fetch_size_bytes,
-                write_ptr);
-            write_ptr += stall_fetch_size_bytes;
-        }
-
-        for (const auto& cmds : program_command_sequence.runtime_args_command_sequences) {
-            manager.cq_write(cmds.data(), cmds.size_bytes(), write_ptr);
-            write_ptr += cmds.size_bytes();
-        }
-
-        // Write kernel config data
-        if (program_config_buffer_data_size_bytes > 0) {
-            manager.cq_write(program_config_buffer_data, program_config_buffer_data_size_bytes, write_ptr);
-            write_ptr += program_config_buffer_data_size_bytes;
-        }
-
-        // Didn't stall before kernel config data, stall before remaining commands
-        if (stall_before_program) {
-            manager.cq_write(
-                program_command_sequence.stall_command_sequences[curr_stall_seq_idx].data(),
-                stall_fetch_size_bytes,
-                write_ptr);
-            write_ptr += stall_fetch_size_bytes;
-        }
-
-        if (program_binary_size_bytes > 0) {
-            manager.cq_write(program_binary_data, program_binary_size_bytes, write_ptr);
-            write_ptr += program_binary_size_bytes;
-        }
-
-        manager.issue_queue_push_back(one_shot_fetch_size_bytes, command_queue_id);
-
-        // One fetch queue entry for entire program
-        manager.fetch_queue_reserve_back(command_queue_id);
-        manager.fetch_queue_write(one_shot_fetch_size_bytes, command_queue_id);
-    } else {
-        // Not enough space to do it in one prefetch entry. write multiple times.
-        write_data_to_cq(program_command_sequence.preamble_command_sequence.data(), preamble_fetch_size_bytes);
-
-        if (stall_first) {
-            // Must stall before writing kernel config data
-            write_data_to_cq(program_command_sequence.stall_command_sequences[curr_stall_seq_idx].data(), stall_fetch_size_bytes);
-        }
-
-        // TODO: We can pack multiple RT args into one fetch q entry
-        for (const auto& cmds : program_command_sequence.runtime_args_command_sequences) {
-            write_data_to_cq(cmds.data(), cmds.size_bytes());
-        }
-
-        // Insert a stall between program data that goes on the ring buffer and the rest of the data
-        write_data_to_cq(program_config_buffer_data, program_config_buffer_data_size_bytes);
-
-        if (stall_before_program) {
-            // Didn't stall before kernel config data, stall before remaining commands
-            write_data_to_cq(
-                program_command_sequence.stall_command_sequences[curr_stall_seq_idx].data(), stall_fetch_size_bytes);
-        }
-
-        write_data_to_cq(program_binary_data, program_binary_size_bytes);
+    const auto curr_stall_seq_idx = program_command_sequence.current_stall_seq_idx;
+    if (stall_first) {
+        // Must stall before writing kernel config data
+        write_data_to_cq(
+            program_command_sequence.stall_command_sequences[curr_stall_seq_idx].data(),
+            program_command_sequence.stall_command_sequences[curr_stall_seq_idx].size_bytes());
     }
 
+    // TODO: We can pack multiple RT args into one fetch q entry
+    for (const auto& cmds : program_command_sequence.runtime_args_command_sequences) {
+        write_data_to_cq(cmds.data(), cmds.size_bytes());
+    }
+
+    // Write the program config buffer
+    write_data_to_cq(
+        program_command_sequence.program_config_buffer_command_sequence.data(),
+        program_command_sequence.program_config_buffer_command_sequence.size_bytes());
+
+    // Need to stall before writing the program binary?
+    if (stall_before_program) {
+        // Didn't stall before kernel config data, stall before remaining commands
+        write_data_to_cq(
+            program_command_sequence.stall_command_sequences[curr_stall_seq_idx].data(),
+            program_command_sequence.stall_command_sequences[curr_stall_seq_idx].size_bytes());
+    }
+
+    // Write the program binary
+    write_data_to_cq(
+        program_command_sequence.program_binary_command_sequence.data(),
+        program_command_sequence.program_binary_command_sequence.size_bytes());
+
     // Write the launch message
-    uint32_t launch_msg_fetch_size_bytes = program_command_sequence.launch_msg_command_sequence.size_bytes();
-    uint8_t* launch_msg_command_sequence_data = (uint8_t*)program_command_sequence.launch_msg_command_sequence.data();
-    write_data_to_cq(launch_msg_command_sequence_data, launch_msg_fetch_size_bytes);
+    write_data_to_cq(
+        program_command_sequence.launch_msg_command_sequence.data(),
+        program_command_sequence.launch_msg_command_sequence.size_bytes());
 
     // Write the go signal
-    uint32_t go_msg_fetch_size_bytes = program_command_sequence.go_msg_command_sequence.size_bytes();
-    uint8_t* go_msg_command_sequence_data = (uint8_t*)program_command_sequence.go_msg_command_sequence.data();
-    write_data_to_cq(go_msg_command_sequence_data, go_msg_fetch_size_bytes);
+    write_data_to_cq(
+        program_command_sequence.go_msg_command_sequence.data(),
+        program_command_sequence.go_msg_command_sequence.size_bytes());
+
+    if (one_shot) {
+        manager.issue_queue_push_back(one_shot_fetch_size, command_queue_id);
+        manager.fetch_queue_reserve_back(command_queue_id);
+        manager.fetch_queue_write(one_shot_fetch_size, command_queue_id);
+    }
 }
 
 KernelHandle get_device_local_kernel_handle(KernelHandle kernel_handle) {

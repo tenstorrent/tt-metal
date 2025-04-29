@@ -117,8 +117,6 @@ struct KernelDescriptor {
     std::optional<KernelBuildOptLevel> opt_level = std::nullopt;
 
     ConfigDescriptor config;
-
-    void reserve_runtime_args();
 };
 
 struct ProgramDescriptor {
