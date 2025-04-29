@@ -112,7 +112,7 @@ def generate_sdxl_dram_test_inputs():
     inputs.append(((2, 960, 128, 128), 2, 4))
 
     # VAE tests
-    # inputs.append(((1, 128, 1024, 1024), 8, 64)) #  pcc 0.32
+    inputs.append(((1, 256, 1024, 1024), 4, 64))
     inputs.append(((1, 256, 1024, 1024), 8, 64))
     inputs.append(((1, 256, 515, 512), 8, 16))
     inputs.append(((1, 512, 128, 128), 4, 4))
