@@ -22,6 +22,11 @@ from loguru import logger
 from tests.scripts.common import run_process_and_get_result
 from tests.scripts.common import get_updated_device_params
 
+# Constants for device configurations
+GALAXY_NUM_DEVICES = 32
+TG_NUM_PCIE_DEVICES = 4
+SIX_U_NUM_PCIE_DEVICES = 32
+
 
 @pytest.fixture(scope="function")
 def reset_seeds():
@@ -69,30 +74,23 @@ def is_galaxy():
 
     num_devices = ttnn.GetNumAvailableDevices()
     # Galaxy systems have 32 devices
-    return num_devices == 32
+    return num_devices == GALAXY_NUM_DEVICES
 
 
 # TODO: Remove this when TG clusters are deprecated.
 def is_6u():
     import ttnn
 
-    num_pcie = ttnn.GetNumPCIeDevices()
-    num_devices = ttnn.GetNumAvailableDevices()
-    NUM_PCIE_DEVICES = 32
-    NUM_DEVICES = 32
-    return num_pcie == NUM_PCIE_DEVICES and num_devices == NUM_DEVICES
+    # 6U has 32 PCIe devices
+    return is_galaxy() and ttnn.GetNumPCIeDevices() == SIX_U_NUM_PCIE_DEVICES
 
 
 # TODO: Remove this when TG clusters are deprecated.
 def is_tg_cluster():
     import ttnn
 
-    num_pcie = ttnn.GetNumPCIeDevices()
-    num_devices = ttnn.GetNumAvailableDevices()
-    # TG has 32 available chips and 4 PCIe mapped chips (not exposed to the user)
-    TG_NUM_PCIE_DEVICES = 4
-    TG_NUM_DEVICES = 32
-    return num_pcie == TG_NUM_PCIE_DEVICES and num_devices == TG_NUM_DEVICES
+    # TG has 4 PCIe devices
+    return is_galaxy() and ttnn.GetNumPCIeDevices() == TG_NUM_PCIE_DEVICES
 
 
 def first_available_tg_device():
