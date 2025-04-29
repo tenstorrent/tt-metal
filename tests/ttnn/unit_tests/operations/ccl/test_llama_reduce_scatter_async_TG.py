@@ -146,7 +146,7 @@ def run_reduce_scatter_test(
     output_tensor_goldens_list = []
     tt_input_tensors_list = []
     tt_intermediate_tensors_list = []
-    for _ in range(num_iters):
+    for iter in range(num_iters):
         input = gen_tensor(
             dim, shard_height, shard_width, num_devices_scatter, num_devices_fracture, num_cores, scheme=scheme
         )
@@ -184,7 +184,7 @@ def run_reduce_scatter_test(
                 mesh_device, dims=(0, 1), mesh_shape=[num_devices_fracture, num_devices_scatter]
             ),
         )
-        if _ < cyclic_buffer_size:
+        if iter < cyclic_buffer_size:
             tt_intermediate = ttnn.from_torch(
                 intermediate_tensor,
                 device=mesh_device,
