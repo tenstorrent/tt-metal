@@ -145,10 +145,34 @@
 </h1>
 <span class="target" id="id1"></span><dl class="py data">
 <dt class="sig sig-object py" id="ttnn.conv_transpose2d">
-<span class="sig-prename descclassname"><span class="pre">ttnn.</span></span><span class="sig-name descname"><span class="pre">conv_transpose2d</span></span><em class="property"><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="pre">Operation(python_fully_qualified_name='ttnn.conv_transpose2d',</span> <span class="pre">function=&lt;function</span> <span class="pre">conv_transpose2d&gt;,</span> <span class="pre">preprocess_golden_function_inputs=&lt;function</span> <span class="pre">default_preprocess_golden_function_inputs&gt;,</span> <span class="pre">golden_function=None,</span> <span class="pre">postprocess_golden_function_outputs=&lt;function</span> <span class="pre">default_postprocess_golden_function_outputs&gt;,</span> <span class="pre">is_cpp_operation=False,</span> <span class="pre">is_experimental=False)</span></em><a class="headerlink" href="#ttnn.conv_transpose2d" title="Permalink to this definition"></a>
+<span class="sig-prename descclassname"><span class="pre">ttnn.</span></span><span class="sig-name descname"><span class="pre">conv_transpose2d</span></span><em class="property"><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="pre">Operation(python_fully_qualified_name='ttnn.conv_transpose2d',</span> <span class="pre">function=&lt;ttnn._ttnn.operations.conv.conv_transpose2d_t</span> <span class="pre">object&gt;,</span> <span class="pre">preprocess_golden_function_inputs=&lt;function</span> <span class="pre">default_preprocess_golden_function_inputs&gt;,</span> <span class="pre">golden_function=None,</span> <span class="pre">postprocess_golden_function_outputs=&lt;function</span> <span class="pre">default_postprocess_golden_function_outputs&gt;,</span> <span class="pre">is_cpp_operation=True,</span> <span class="pre">is_experimental=False)</span></em><a class="headerlink" href="#ttnn.conv_transpose2d" title="Permalink to this definition"></a>
 </dt>
 <dd>
-<p>Applies a 2D transposed convolution operator over an input image composed of several input planes, sometimes also called “deconvolution”.</p>
+<p>Applies a 2D transposed convolution operator over an input image composed of several input planes.</p>
+<p>This module can be seen as the gradient of Conv2d with respect to its input. It is also known as a
+fractionally-strided convolution or a deconvolution</p>
+<p>The input tensor is expected in the following format (N x H x W x C) <strong>differs from PyTorch</strong> where:</p>
+<ul class="simple">
+<li><p>N is the batch size</p></li>
+<li><p>H is the height of the input</p></li>
+<li><p>W is the width of the input</p></li>
+<li><p>C is the number of channels in the input</p></li>
+</ul>
+<p>The weight tensor is expected in the following format (C x O / G x K_H x K_W).
+The bias tensor is optional and expected in the following format (O / G ).
+Where:</p>
+<ul class="simple">
+<li><p>C is the number of input channels</p></li>
+<li><p>O is the number of output channels</p></li>
+<li><p>G is the number of groups</p></li>
+<li><p>K_H is the height of the kernel</p></li>
+<li><p>K_W is the width of the kernel</p></li>
+</ul>
+<p>The shape of the output tensor is given by the following equation :</p>
+<ul class="simple">
+<li><p>H_out = (H_in - 1) * stride[0] - 2 * padding[0] + dilation[0] * (kernel_size[0] - 1) + output_padding[0] + 1</p></li>
+<li><p>W_out = (W_in - 1) * stride[1] - 2 * padding[1] + dilation[1] * (kernel_size[1] - 1) + output_padding[1] + 1</p></li>
+</ul>
 <dl class="field-list simple">
 <dt class="field-odd">Parameters<span class="colon">:</span>
 </dt>
@@ -158,11 +182,11 @@
 <li><p><strong>weight_tensor</strong> (<a class="reference internal" href="../dependencies/tensor.html#ttnn.Tensor" title="ttnn.Tensor"><em>ttnn.Tensor</em></a>) – the weight tensor.</p></li>
 <li><p><strong>bias_tensor</strong> (<a class="reference internal" href="../dependencies/tensor.html#ttnn.Tensor" title="ttnn.Tensor"><em>ttnn.Tensor</em></a><em>, </em><em>None</em>) – optional bias tensor. Default: None</p></li>
 <li><p><strong>device</strong> (<em>ttnn.IDevice</em>) – the device to use.</p></li>
-<li><p><strong>int</strong> – in_channels:  number of input channels.</p></li>
-<li><p><strong>int</strong> – out_channels:  number of output channels.</p></li>
-<li><p><strong>int</strong> – batch_size:  batch size.</p></li>
-<li><p><strong>int</strong> – input_height:  height of the input tensor.</p></li>
-<li><p><strong>int</strong> – input_width:  width of the input tensor.</p></li>
+<li><p><strong>in_channels</strong> (<em>int</em>) – number of input channels.</p></li>
+<li><p><strong>out_channels</strong> (<em>int</em>) – number of output channels.</p></li>
+<li><p><strong>batch_size</strong> (<em>int</em>) – batch size.</p></li>
+<li><p><strong>input_height</strong> (<em>int</em>) – height of the input tensor.</p></li>
+<li><p><strong>input_width</strong> (<em>int</em>) – width of the input tensor.</p></li>
 <li><p><strong>kernel_size</strong> (<em>tuple</em><em>[</em><em>int</em><em>  , </em><em>int</em><em>]</em>) – size of the convolving kernel.</p></li>
 <li><p><strong>stride</strong> (<em>tuple</em><em>[</em><em>int</em><em>, </em><em>int</em><em>]</em>) – stride of the cross-correlation.</p></li>
 <li><p><strong>padding</strong> (<em>tuple</em><em>[</em><em>int</em><em>, </em><em>int</em><em>] or </em><em>tuple</em><em>[</em><em>int</em><em>, </em><em>int</em><em>, </em><em>int</em><em>, </em><em>int</em><em>]</em><em>)</em>) – zero-padding added to both sides of the input. [pad_height, pad_width] or [pad_top, pad_bottom, pad_left, pad_right].</p></li>
@@ -171,8 +195,9 @@
 <li><p><strong>conv_config</strong> (<a class="reference internal" href="ttnn.Conv2dConfig.html#ttnn.Conv2dConfig" title="ttnn.Conv2dConfig"><em>ttnn.Conv2dConfig</em></a><em>, </em><em>None</em>) – configuration for convolution. Default: None</p></li>
 <li><p><strong>compute_config</strong> (<em>ttnn.DeviceComputeKernelConfig</em><em>, </em><em>None</em>) – configuration for compute kernel. Default: None</p></li>
 <li><p><strong>mirror_kernel</strong> (<em>bool</em>) – Determines if the op should mirror the kernel internally. Should be set to True if the kernel has already been mirrored.</p></li>
-<li><p><strong>bool</strong> – return_output_dim:  If true, the op also returns the height and width of the output tensor in [N, H, W, C] format,</p></li>
-<li><p><strong>bool</strong> – return_weights_and_bias:  If true, the op also returns the preprocessed weight and bias on device .</p></li>
+<li><p><strong>queue_id</strong> (<em>int</em>) – the queue id to use for the operation. Default: <cite>0</cite>.</p></li>
+<li><p><strong>return_output_dim</strong> (<em>bool</em>) – If true, the op also returns the height and width of the output tensor in [N, H, W, C] format,</p></li>
+<li><p><strong>return_weights_and_bias</strong> (<em>bool</em>) – If true, the op also returns the preprocessed weight and bias on device .</p></li>
 </ul>
 </dd>
 <dt class="field-even">Returns<span class="colon">:</span>

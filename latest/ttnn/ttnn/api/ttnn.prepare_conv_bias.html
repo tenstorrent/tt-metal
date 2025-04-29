@@ -145,7 +145,7 @@
 </h1>
 <span class="target" id="id1"></span><dl class="py function">
 <dt class="sig sig-object py" id="ttnn.prepare_conv_bias">
-<span class="sig-prename descclassname"><span class="pre">ttnn.</span></span><span class="sig-name descname"><span class="pre">prepare_conv_bias</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="o"><span class="pre">*</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">bias_tensor</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">input_memory_config</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">input_layout</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">in_channels</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">out_channels</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">batch_size</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">input_height</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">input_width</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">kernel_size</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">stride</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">padding</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">dilation</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">groups</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">device</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">conv_config</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#ttnn.prepare_conv_bias" title="Permalink to this definition"></a>
+<span class="sig-prename descclassname"><span class="pre">ttnn.</span></span><span class="sig-name descname"><span class="pre">prepare_conv_bias</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="o"><span class="pre">*</span></span><span class="n"><span class="pre">args</span></span></em>, <em class="sig-param"><span class="o"><span class="pre">**</span></span><span class="n"><span class="pre">kwargs</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#ttnn.prepare_conv_bias" title="Permalink to this definition"></a>
 </dt>
 <dd>
 <p>TTNN Conv2D applies preprocessing to the bias tensors before performing the convolution operation, to convert the bias into a format suitable for the operation.
@@ -160,12 +160,12 @@ The exact format of the weights and bias tensors depends on the input tensor par
 <li><p><strong>input_memory_config</strong> (<a class="reference internal" href="../dependencies/tensor.html#ttnn.MemoryConfig" title="ttnn.MemoryConfig"><em>ttnn.MemoryConfig</em></a>) – the memory configuration for the input tensor.</p></li>
 <li><p><strong>input_layout</strong> (<a class="reference internal" href="../dependencies/tensor.html#ttnn.Tensor" title="ttnn.Tensor"><em>ttnn.Tensor</em></a>) – the layout of the input tensor.</p></li>
 <li><p><strong>weights_format</strong> (<a class="reference internal" href="../dependencies/tensor.html#ttnn.Tensor" title="ttnn.Tensor"><em>ttnn.Tensor</em></a>) – the format of the weights tensor. Currently only supports OIHW. (out_channels, in_channels, kernel_height, kernel_width)</p></li>
-<li><p><strong>int</strong> – in_channels:  number of input channels.</p></li>
-<li><p><strong>int</strong> – out_channels:  number of output channels.</p></li>
-<li><p><strong>int</strong> – batch_size:  batch size.</p></li>
-<li><p><strong>int</strong> – input_height:  height of the input tensor.</p></li>
-<li><p><strong>int</strong> – input_width:  width of the input tensor.</p></li>
-<li><p><strong>kernel_size</strong> (<em>tuple</em><em>[</em><em>int</em><em>  , </em><em>int</em><em>]</em>) – size of the convolving kernel.</p></li>
+<li><p><strong>in_channels</strong> (<em>int</em>) – number of input channels.</p></li>
+<li><p><strong>out_channels</strong> (<em>int</em>) – number of output channels.</p></li>
+<li><p><strong>batch_size</strong> (<em>int</em>) – batch size.</p></li>
+<li><p><strong>input_height</strong> (<em>int</em>) – height of the input tensor.</p></li>
+<li><p><strong>input_width</strong> (<em>int</em>) – width of the input tensor.</p></li>
+<li><p><strong>kernel_size</strong> (<em>tuple</em><em>[</em><em>int</em><em>, </em><em>int</em><em>]</em>) – size of the convolving kernel.</p></li>
 <li><p><strong>stride</strong> (<em>tuple</em><em>[</em><em>int</em><em>, </em><em>int</em><em>]</em>) – stride of the cross-correlation.</p></li>
 <li><p><strong>padding</strong> (<em>tuple</em><em>[</em><em>int</em><em>, </em><em>int</em><em>] or </em><em>tuple</em><em>[</em><em>int</em><em>, </em><em>int</em><em>, </em><em>int</em><em>, </em><em>int</em><em>]</em><em>)</em>) – zero-padding added to both sides of the input. [pad_height, pad_width] or [pad_top, pad_bottom, pad_left, pad_right].</p></li>
 <li><p><strong>dilation</strong> (<em>tuple</em><em>[</em><em>int</em><em>, </em><em>int</em><em>]</em>) – spacing between kernel elements.</p></li>

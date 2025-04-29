@@ -158,10 +158,10 @@
 <li><p><strong>weight_tensor</strong> (<a class="reference internal" href="../dependencies/tensor.html#ttnn.Tensor" title="ttnn.Tensor"><em>ttnn.Tensor</em></a>) – The weight tensor. The weights can be passed in the same format as PyTorch, [out_channels, in_channels, kernel_height, kernel_width]. The op w</p></li>
 <li><p><strong>bias_tensor</strong> (<a class="reference internal" href="../dependencies/tensor.html#ttnn.Tensor" title="ttnn.Tensor"><em>ttnn.Tensor</em></a><em>, </em><em>None</em>) – Optional bias tensor. Default: None</p></li>
 <li><p><strong>device</strong> (<em>ttnn.IDevice</em>) – The device to use.</p></li>
-<li><p><strong>int</strong> – in_channels:  Number of input channels.</p></li>
-<li><p><strong>int</strong> – out_channels:  Number of output channels.</p></li>
-<li><p><strong>int</strong> – batch_size:  Batch size.</p></li>
-<li><p><strong>int</strong> – input_length:  Length of the input signal.</p></li>
+<li><p><strong>in_channels</strong> (<em>int</em>) – Number of input channels.</p></li>
+<li><p><strong>out_channels</strong> (<em>int</em>) – Number of output channels.</p></li>
+<li><p><strong>batch_size</strong> (<em>int</em>) – Batch size.</p></li>
+<li><p><strong>input_length</strong> (<em>int</em>) – Length of the input signal.</p></li>
 <li><p><strong>kernel_size</strong> (<em>int</em>) – Size of the convolving kernel.</p></li>
 <li><p><strong>stride</strong> (<em>int</em>) – Stride of the cross-correlation.</p></li>
 <li><p><strong>padding</strong> (<em>int</em><em> or </em><em>tuple</em><em>[</em><em>int</em><em>, </em><em>int</em><em>]</em><em>)</em>) – Zero-padding added to both sides of the input. pad_length or [pad_left, pad_right].</p></li>

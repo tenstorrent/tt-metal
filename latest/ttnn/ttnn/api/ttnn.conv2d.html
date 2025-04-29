@@ -145,7 +145,7 @@
 </h1>
 <span class="target" id="id1"></span><dl class="py data">
 <dt class="sig sig-object py" id="ttnn.conv2d">
-<span class="sig-prename descclassname"><span class="pre">ttnn.</span></span><span class="sig-name descname"><span class="pre">conv2d</span></span><em class="property"><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="pre">Operation(python_fully_qualified_name='ttnn.conv2d',</span> <span class="pre">function=&lt;function</span> <span class="pre">conv2d&gt;,</span> <span class="pre">preprocess_golden_function_inputs=&lt;function</span> <span class="pre">default_preprocess_golden_function_inputs&gt;,</span> <span class="pre">golden_function=&lt;function</span> <span class="pre">_golden_function&gt;,</span> <span class="pre">postprocess_golden_function_outputs=&lt;function</span> <span class="pre">default_postprocess_golden_function_outputs&gt;,</span> <span class="pre">is_cpp_operation=False,</span> <span class="pre">is_experimental=False)</span></em><a class="headerlink" href="#ttnn.conv2d" title="Permalink to this definition"></a>
+<span class="sig-prename descclassname"><span class="pre">ttnn.</span></span><span class="sig-name descname"><span class="pre">conv2d</span></span><em class="property"><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="pre">Operation(python_fully_qualified_name='ttnn.conv2d',</span> <span class="pre">function=&lt;ttnn._ttnn.operations.conv.conv2d_t</span> <span class="pre">object&gt;,</span> <span class="pre">preprocess_golden_function_inputs=&lt;function</span> <span class="pre">default_preprocess_golden_function_inputs&gt;,</span> <span class="pre">golden_function=&lt;function</span> <span class="pre">_golden_function&gt;,</span> <span class="pre">postprocess_golden_function_outputs=&lt;function</span> <span class="pre">default_postprocess_golden_function_outputs&gt;,</span> <span class="pre">is_cpp_operation=True,</span> <span class="pre">is_experimental=False)</span></em><a class="headerlink" href="#ttnn.conv2d" title="Permalink to this definition"></a>
 </dt>
 <dd>
 <p>Applies a 2D convolution over an input signal composed of several input planes.</p>
@@ -159,12 +159,12 @@
 <li><p><strong>weight_tensor</strong> (<a class="reference internal" href="../dependencies/tensor.html#ttnn.Tensor" title="ttnn.Tensor"><em>ttnn.Tensor</em></a>) – The weight tensor. The weights can be passed in the same format as PyTorch, [out_channels, in_channels, kernel_height, kernel_width]. The op w</p></li>
 <li><p><strong>bias_tensor</strong> (<a class="reference internal" href="../dependencies/tensor.html#ttnn.Tensor" title="ttnn.Tensor"><em>ttnn.Tensor</em></a><em>, </em><em>None</em>) – Optional bias tensor. Default: None</p></li>
 <li><p><strong>device</strong> (<em>ttnn.IDevice</em>) – The device to use.</p></li>
-<li><p><strong>int</strong> – in_channels:  Number of input channels.</p></li>
-<li><p><strong>int</strong> – out_channels:  Number of output channels.</p></li>
-<li><p><strong>int</strong> – batch_size:  Batch size.</p></li>
-<li><p><strong>int</strong> – input_height:  Height of the input tensor.</p></li>
-<li><p><strong>int</strong> – input_width:  Width of the input tensor.</p></li>
-<li><p><strong>kernel_size</strong> (<em>tuple</em><em>[</em><em>int</em><em>  , </em><em>int</em><em>]</em>) – Size of the convolving kernel.</p></li>
+<li><p><strong>in_channels</strong> (<em>int</em>) – Number of input channels.</p></li>
+<li><p><strong>out_channels</strong> (<em>int</em>) – Number of output channels.</p></li>
+<li><p><strong>batch_size</strong> (<em>int</em>) – Batch size.</p></li>
+<li><p><strong>input_height</strong> (<em>int</em>) – Height of the input tensor.</p></li>
+<li><p><strong>input_width</strong> (<em>int</em>) – Width of the input tensor.</p></li>
+<li><p><strong>kernel_size</strong> (<em>tuple</em><em>[</em><em>int</em><em>, </em><em>int</em><em>]</em>) – Size of the convolving kernel.</p></li>
 <li><p><strong>stride</strong> (<em>tuple</em><em>[</em><em>int</em><em>, </em><em>int</em><em>]</em>) – Stride of the cross-correlation.</p></li>
 <li><p><strong>padding</strong> (<em>tuple</em><em>[</em><em>int</em><em>, </em><em>int</em><em>] or </em><em>tuple</em><em>[</em><em>int</em><em>, </em><em>int</em><em>, </em><em>int</em><em>, </em><em>int</em><em>]</em><em>)</em>) – Zero-padding added to both sides of the input. [pad_height, pad_width] or [pad_top, pad_bottom, pad_left, pad_right].</p></li>
 <li><p><strong>dilation</strong> (<em>tuple</em><em>[</em><em>int</em><em>, </em><em>int</em><em>]</em>) – Spacing between kernel elements.</p></li>
