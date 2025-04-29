@@ -173,7 +173,8 @@ void py_bind_conv2d(py::module& module) {
         py::arg("groups"),
         py::arg("device"),
         py::arg("conv_config") = std::nullopt,
-        py::arg("compute_config") = std::nullopt);
+        py::arg("compute_config") = std::nullopt,
+        py::arg("slice_config") = std::nullopt);
 
     module.def(
         "prepare_conv_weights",
@@ -196,7 +197,8 @@ void py_bind_conv2d(py::module& module) {
         py::arg("groups"),
         py::arg("device"),
         py::arg("conv_config") = std::nullopt,
-        py::arg("compute_config") = std::nullopt);
+        py::arg("compute_config") = std::nullopt,
+        py::arg("slice_config") = std::nullopt);
 
     module.def(
         "prepare_conv_bias",
