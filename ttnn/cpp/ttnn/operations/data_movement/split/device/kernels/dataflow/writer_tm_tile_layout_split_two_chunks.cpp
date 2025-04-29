@@ -7,7 +7,7 @@
 #include <array>
 
 #include "dataflow_api.h"
-#include "hw/inc/wormhole/wormhole_b0_defines/tensix_types.h"
+#include "tensix_types.h"
 
 // #define DEBUG
 
