@@ -1320,7 +1320,7 @@ Tensor pad(
     auto pad = [&input_padded_shape, &output_padded_shape, &input_tensor_start, &pad_value_](const auto& input_buffer) {
         const int rank = input_padded_shape.rank();
 
-        auto output_buffer = owned_buffer::create<T>(output_padded_shape.volume());
+        auto output_buffer = std::vector<T>(output_padded_shape.volume());
         std::fill(output_buffer.begin(), output_buffer.end(), pad_value_);
 
         if (input_padded_shape.volume() == 0) {
@@ -1329,7 +1329,7 @@ Tensor pad(
 
         if (rank == 1) {
             std::memcpy(
-                output_buffer.begin() + input_tensor_start[0], input_buffer.begin(), input_padded_shape[0] * sizeof(T));
+                output_buffer.data() + input_tensor_start[0], input_buffer.begin(), input_padded_shape[0] * sizeof(T));
             return output_buffer;
         }
 
@@ -1362,7 +1362,7 @@ Tensor pad(
 
             // Copy entire input row with memcpy
             std::memcpy(
-                output_buffer.begin() + output_idx,
+                output_buffer.data() + output_idx,
                 input_buffer.begin() + input_idx,
                 input_padded_shape[rank - 1] * sizeof(T));
 

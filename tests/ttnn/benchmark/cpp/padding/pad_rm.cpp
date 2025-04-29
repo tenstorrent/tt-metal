@@ -10,9 +10,9 @@
 #include <tt_stl/span.hpp>
 #include <tt_stl/indestructible.hpp>
 #include <ttnn/tensor/storage.hpp>
-#include <ttnn/tensor/host_buffer/owned_buffer.hpp>
 #include <tt-metalium/bfloat16.hpp>
 #include <ttnn/tensor/host_buffer/functions.hpp>
+#include <ttnn/tensor/host_buffer/host_buffer.hpp>
 #include "small_vector.hpp"
 
 namespace {
@@ -32,8 +32,7 @@ ttnn::Tensor GenInputTensor(const ttnn::SmallVector<uint32_t>& shape) {
     for (size_t i = 0; i < volume; ++i) {
         input_data.push_back(static_cast<T>(dist(gen)));
     }
-    auto input_buffer = owned_buffer::create<T>(std::move(input_data));
-    return Tensor(OwnedStorage{input_buffer}, ttnn::Shape(shape), DataType::BFLOAT16, Layout::ROW_MAJOR);
+    return Tensor(HostBuffer{input_data}, ttnn::Shape(shape), DataType::BFLOAT16, Layout::ROW_MAJOR);
 }
 }  // namespace
 
