@@ -4,11 +4,8 @@
 
 #pragma once
 
-#include "ckernel.h"
-#include "ckernel_defs.h"
+#include "ckernel_addrmod.h"
 #include "sfpi.h"
-
-using namespace sfpi;
 
 namespace ckernel {
 namespace sfpu {
@@ -24,10 +21,10 @@ inline void sub_uint16(const uint dst_offset) {
         TT_SFPLOAD(p_sfpu::LREG0, LO16, ADDR_MOD_7, dst_offset * dst_tile_size);
 
         // Use 6 or LO16 as imod to convert operand B to 2's complement
-        TTI_SFPIADD(0, p_sfpu::LREG1, p_sfpu::LREG0, LO16);
+        TTI_SFPIADD(0, p_sfpu::LREG1, p_sfpu::LREG0, 6);
         TTI_SFPSTORE(p_sfpu::LREG0, LO16, ADDR_MOD_7, 0);
 
-        dst_reg++;
+        sfpi::dst_reg++;
     }
 }
 
