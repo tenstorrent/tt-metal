@@ -249,8 +249,11 @@ Tensor all_gather_impl(
         input_tensor.get_logical_shape()[-2],
         input_tensor.get_logical_shape()[-1]};
 
-    const uint32_t w_pad = input_tensor.get_logical_shape()[-1] % tt::constants::TILE_WIDTH;
-    const uint32_t h_pad = input_tensor.get_logical_shape()[-2] % tt::constants::TILE_HEIGHT;
+    const uint32_t unpadded_w = input_tensor.get_logical_shape()[-1];
+    const uint32_t unpadded_h = input_tensor.get_logical_shape()[-2];
+
+    const uint32_t w_pad = tt::round_up(unpadded_w, tt::constants::TILE_WIDTH) - unpadded_w;
+    const uint32_t h_pad = tt::round_up(unpadded_h, tt::constants::TILE_HEIGHT) - unpadded_h;
     bool needs_padding = input_tensor.get_layout() == Layout::TILE && (h_pad != 0 || w_pad != 0);
 
     Tensor input_tensor_padded = input_tensor;
