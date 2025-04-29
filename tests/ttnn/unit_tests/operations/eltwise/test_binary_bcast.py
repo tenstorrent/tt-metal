@@ -1894,14 +1894,18 @@ def test_binary_sharded_row_major_layout(
     "a_shape, b_shape",
     [
         [[1, 1, 7, 7], [1, 1, 7, 7]],
-        [[1, 71, 7, 7], [1, 71, 7, 7]],
-        [[71, 1, 7, 7], [71, 1, 7, 7]],
-        [[7, 71, 7, 7], [7, 71, 7, 7]],
-        [[7, 71, 7, 7], [7, 7]],
+        [[7, 71, 71, 7], [7, 71, 71, 7]],
+        [[1, 1, 7, 7], [1, 71, 7, 7]],
+        [[1, 71, 7, 7], [1, 1, 7, 7]],
+        [[71, 1, 7, 7], [1, 1, 7, 7]],
+        [[1, 1, 7, 7], [71, 1, 7, 7]],
+        [[1, 1, 7, 7], [7, 71, 7, 7]],
+        [[7, 71, 7, 7], [1, 1, 7, 7]],
         [[920, 1, 256], [256]],
+        [[256], [920, 1, 256]],
     ],
 )
-def test_binary_no_bcast(a_shape, b_shape, device):
+def test_binary_no_subtile_bcast(a_shape, b_shape, device):
     torch.manual_seed(0)
 
     torch_input_tensor_a, input_tensor_a = rand_bf16_gen(a_shape, device)

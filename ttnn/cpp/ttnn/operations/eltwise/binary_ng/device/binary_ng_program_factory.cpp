@@ -305,23 +305,6 @@ void set_or_update_runtime_arguments(
             c_start_id = start_tile_id;
         }
 
-        std::array reader_runtime_args = {
-            a.buffer()->address(),
-            c_start_id,
-            a_num_tiles,
-            c_num_tiles,
-            c_current_shard_width,
-            aHt * aWt * aC * aN * (aND > 1),
-            aHt * aWt * aC * (aN > 1),
-            aHt * aWt * (aC > 1),
-            cN,
-            cC,
-            cHt,
-            cWt,
-            cND,
-            b.has_value() ? b->buffer()->address() : 0u};
-        handle_args(program, reader_kernel_id, core, reader_runtime_args);
-
         const bool is_quant_op = operation_attributes.is_quant_op;
         TT_FATAL(
             is_quant_op == ((operation_attributes.post_activations.size() == 1) &&
@@ -383,6 +366,26 @@ void set_or_update_runtime_arguments(
             std::array compute_runtime_args = {c_num_tiles, 0u, 0u, quantization_zero_point};
             handle_args(program, compute_kernel_id, core, compute_runtime_args);
         }
+
+        std::array reader_runtime_args = {
+            a.buffer()->address(),
+            c_start_id,
+            a_num_tiles,
+            c_num_tiles,
+            c_current_shard_width,
+            aHt * aWt * aC * aN * (aND > 1),
+            aHt * aWt * aC * (aN > 1),
+            aHt * aWt * (aC > 1),
+            cN,
+            cC,
+            cHt,
+            cWt,
+            cND,
+            b.has_value() ? b->buffer()->address() : 0u,
+            bHt * bWt * bC * bN * (bND > 1),
+            bHt * bWt * bC * (bN > 1),
+            bHt * bWt * (bC > 1)};
+        handle_args(program, reader_kernel_id, core, reader_runtime_args);
 
         start_tile_id += c_num_tiles;
     }
@@ -562,7 +565,7 @@ BinaryNgDeviceOperation::ProgramFactory::cached_program_t BinaryNgDeviceOperatio
     writer_defines["SRC_SHARDED"] = b_sharded ? "1" : "0";
     writer_defines["DST_SHARDED"] = c_sharded ? "1" : "0";
 
-    if (b.has_value() && a.get_logical_shape() == b->get_logical_shape()) {
+    if (b.has_value() && operation_attributes.subtile_broadcast_type == SubtileBroadcastType::NONE) {
         kernel_config.reader_kernel = KernelName::ReaderNoBcastSplit;
         writer_kernel = KernelName::WriterNoBcastSplit;
     }
