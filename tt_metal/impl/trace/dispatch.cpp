@@ -104,10 +104,8 @@ void issue_trace_commands(
     reset_launch_message_read_ptr_go_signal.master_y = (uint8_t)dispatch_core.y;
 
     for (const auto& [id, desc] : dispatch_md.trace_worker_descriptors) {
-        const auto& noc_data_start_idx = device->noc_data_start_index(
-            id,
-            desc.num_traced_programs_needing_go_signal_multicast,
-            desc.num_traced_programs_needing_go_signal_unicast);
+        const auto& noc_data_start_idx =
+            device->noc_data_start_index(id, desc.num_traced_programs_needing_go_signal_unicast);
 
         const auto& num_noc_unicast_txns =
             desc.num_traced_programs_needing_go_signal_unicast ? device->num_virtual_eth_cores(id) : 0;

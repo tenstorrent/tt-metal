@@ -44,6 +44,9 @@ constexpr uint32_t virtualize_unicast_cores = get_compile_time_arg_val(12);
 constexpr uint32_t num_virtual_unicast_cores = get_compile_time_arg_val(13);
 constexpr uint32_t num_physical_unicast_cores = get_compile_time_arg_val(14);
 
+constexpr uint32_t worker_mcast_grid = get_compile_time_arg_val(15);
+constexpr uint32_t num_worker_cores_to_mcast = get_compile_time_arg_val(16);
+
 constexpr uint32_t upstream_noc_xy = uint32_t(NOC_XY_ENCODING(UPSTREAM_NOC_X, UPSTREAM_NOC_Y));
 constexpr uint32_t dispatch_d_noc_xy = uint32_t(NOC_XY_ENCODING(DOWNSTREAM_NOC_X, DOWNSTREAM_NOC_Y));
 constexpr uint32_t my_noc_xy = uint32_t(NOC_XY_ENCODING(MY_NOC_X, MY_NOC_Y));
@@ -224,10 +227,9 @@ void process_go_signal_mcast_cmd() {
 
     if (multicast_go_offset != CQ_DISPATCH_CMD_GO_NO_MULTICAST_OFFSET) {
         // Setup registers before waiting for workers so only the NOC_CMD_CTRL register needs to be touched after.
-        uint64_t dst_noc_addr_multicast = get_noc_addr_helper(
-            go_signal_noc_data[go_signal_noc_data_idx++],
-            mcast_go_signal_addr + sizeof(uint32_t) * multicast_go_offset);
-        uint32_t num_dests = go_signal_noc_data[go_signal_noc_data_idx++];
+        uint64_t dst_noc_addr_multicast =
+            get_noc_addr_helper(worker_mcast_grid, mcast_go_signal_addr + sizeof(uint32_t) * multicast_go_offset);
+        uint32_t num_dests = num_worker_cores_to_mcast;
         // Ensure the offset with respect to L1_ALIGNMENT is the same for the source and destination.
         uint32_t storage_offset = multicast_go_offset % (L1_ALIGNMENT / sizeof(uint32_t));
         aligned_go_signal_storage[storage_offset] = go_signal_value;
