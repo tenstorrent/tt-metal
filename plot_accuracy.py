@@ -23,94 +23,132 @@ def load_csv(filename):
     return pd.read_csv(filename, sep=",", index_col=False, skipinitialspace=True)
 
 
-def plot_accuracy_op(data, dest, opname, op_dtype, plot_override_fun=None, plot_mean=True, plot_absolute=True):
-    # TODO: Move processing outside of plotting functions
-    metric_max = "max_rel_error"
-    metric_mean = "mean_rel_error"
-    if plot_absolute:
-        metric_max = "max_abs_error"
-        metric_mean = "mean_abs_error"
+def preprocess_operation(data):
+    # Somewhat hacky way to have differenciate series on the same legend
+    data["operation_mean"] = data["operation"] + " (mean)"
+    data["operation_max"] = data["operation"] + " (max)"
 
-    fig, ax = plt.subplots(figsize=(25, 15))
+    return data
 
-    plt.axhline(y=0, color="k", linewidth=2)
 
-    ncolors = len(data["operation"].unique())  # Not necessary, but remove warning
-    color_palette = sns.color_palette("deep", ncolors)
+def plot_common_accuracy(
+    fig,
+    ax,
+    data,
+    dest,
+    opname,
+    op_dtype,
+    plot_override_fun=None,
+    plot_mean=True,
+    color_palette=sns.color_palette("deep"),
+):
+    # plt.axhline(y=0, color="k", linewidth=2)
 
-    if plot_absolute:
-        # Shift palette by 2 colors when plotting absolute values
-        color_palette = sns.color_palette("deep", ncolors + 3)[3:]
-
-    sns.lineplot(data=data, x="base_x", y=metric_max, hue="operation", ax=ax, palette=color_palette)
-    # sns.lineplot(data=data, x="base_x", y=metric_mean, hue="operation", ax=ax, palette=color_palette)
+    sns.lineplot(data=data, x="base_x", y="metric_max", hue="operation_mean", ax=ax, palette=color_palette)
 
     if plot_mean:
+        data["operation"] = data["operation"] + " (mean)"
         sns.lineplot(
             data=data,
             x="base_x",
-            y=metric_mean,
+            y="metric_mean",
             hue="operation",
             ax=ax,
             linestyle="--",
-            palette=sns.color_palette(color_palette.as_hex(), desat=0.7),
+            palette=color_palette,
         )
 
     ax.set_xscale("symlog", base=10)
-    ax.set_yscale("asinh", linear_width=0.01)
     ax.set_xlabel("X")
 
-    # If extreme values are low, don't use scientific notation
     xmin, xmax = ax.get_xlim()
-    ymin, ymax = ax.get_ylim()
+    ax.set_ylim(0, None)
 
-    # If extreme values are low, don't use scientific notation
     if xmax < 1:
         plt.gca().xaxis.set_major_formatter(ScalarFormatter(useOffset=False, useMathText=False))
 
-    ax.xaxis.set_major_locator(ticker.SymmetricalLogLocator(linthresh=1, base=10))
-    ax.set_ylim(0, ymax)
-
-    if not plot_absolute:
-        ax.set_title(f"Relative error of ttnn.{opname} against torch implementation\n[{op_dtype}]")
-    else:
-        ax.set_title(f"Absolute error of ttnn.{opname} against torch implementation\n[{op_dtype}]")
-
-    if not plot_absolute:
-        custom_ticks = [0, 0.005, 0.01, 0.05, 0.1, 0.5, 1]
-        if ymax > 1:
-            custom_ticks += [int(10**i) for i in range(3, int(min(10, math.log10(ymax))) + 1)]
-
-        plt.gca().set_yticks(custom_ticks)
-        plt.gca().set_yticklabels([f"{100*x}%" for x in custom_ticks])  # For decimal form
-
-    ax.set_ylabel("Error vs. torch [%]\n(lower is better)")
+    xticker = ticker.SymmetricalLogLocator(linthresh=1, base=10)
+    xticker.set_params(numticks=9)
+    ax.xaxis.set_major_locator(xticker)
 
     def xticks_formatter(x, pos):
         if abs(x) >= 100:
-            # Convert to power of 10 notation with LaTeX superscript
             exponent = int(math.log10(abs(x)))
             sign = "-" if x < 0 else ""
-            return f"${sign}10^{exponent}$"
+            return f"${sign}10^{{{exponent}}}$"
         else:
             return f"{x:.1f}" if not x.is_integer() else f"{int(x)}"
 
     ax.xaxis.set_major_formatter(ticker.FuncFormatter(xticks_formatter))
-    # plt.gca().yaxis.set_major_formatter(ScalarFormatter(useOffset=False, useMathText=False))
 
-    # ax.xaxis.set_major_formatter(ticker.FuncFormatter(lambda x, _: f"$2^{{{int(np.log2(x))}}}$" if x > 0 else "0"))
+    return plt, ax
 
-    if plot_absolute:
-        ax.set_ylabel("Absolute error vs. torch [%]\n(lower is better)")
+
+def plot_abs_accuracy(data, dest, opname, op_dtype, plot_override_fun=None, plot_mean=True):
+    data["metric_max"] = data["max_abs_error"]
+    data["metric_mean"] = data["mean_abs_error"]
+
+    data = preprocess_operation(data)
+
+    fig, ax = plt.subplots(figsize=(25, 15))
+
+    ncolors = len(data["operation_max"].unique())
+    color_palette = sns.color_palette("deep", ncolors + 3)[3:]
+
+    (fig, ax) = plot_common_accuracy(fig, ax, data, dest, opname, op_dtype, plot_override_fun, plot_mean, color_palette)
+
+    ax.set_yscale("log", base=10)
+    yticker = ticker.LogLocator(base=10)
+    yticker.set_params(numticks=7)
+    ax.yaxis.set_major_locator(yticker)
+
+    ax.set_title(f"Absolute error of ttnn.{opname} against torch implementation\n[{op_dtype}]")
+    ax.set_ylabel("Absolute error vs. torch\n(lower is better)")
 
     if plot_override_fun is not None:
         plot_override_fun(ax)
 
     plt.legend(ncol=2)
-
-    # plt.savefig(f"{dest}.svg", bbox_inches="tight", pad_inches=0.0)
     plt.savefig(f"{dest}.png", bbox_inches="tight", pad_inches=0.0)
+    plt.close()
 
+
+def plot_relative_accuracy(data, dest, opname, op_dtype, plot_override_fun=None, plot_mean=True):
+    data["metric_max"] = data["max_rel_error"]
+    data["metric_mean"] = data["mean_rel_error"]
+
+    data = preprocess_operation(data)
+
+    fig, ax = plt.subplots(figsize=(25, 15))
+
+    ncolors = len(data["operation_max"].unique())
+    color_palette = sns.color_palette("deep", ncolors)
+
+    (fig, ax) = plot_common_accuracy(fig, ax, data, dest, opname, op_dtype, plot_override_fun, plot_mean, color_palette)
+
+    ax.set_yscale("asinh", linear_width=0.01)
+
+    ax.set_title(f"Relative error of ttnn.{opname} against torch implementation\n[{op_dtype}]")
+
+    yticker = ticker.SymmetricalLogLocator(linthresh=1, base=10)
+    yticker.set_params(numticks=7)
+    ax.yaxis.set_major_locator(yticker)
+
+    ymin, ymax = ax.get_ylim()
+    custom_ticks = [0, 0.005, 0.01, 0.05, 0.1, 0.5, 1]
+    if ymax > 1:
+        custom_ticks += [int(10**i) for i in range(3, int(min(10, math.log10(ymax))) + 1)]
+
+    plt.gca().set_yticks(custom_ticks)
+    plt.gca().set_yticklabels([f"{100*x}%" for x in custom_ticks])
+
+    ax.set_ylabel("Error vs. torch [%]\n(lower is better)")
+
+    if plot_override_fun is not None:
+        plot_override_fun(ax)
+
+    plt.legend(ncol=2)
+    plt.savefig(f"{dest}.png", bbox_inches="tight", pad_inches=0.0)
     plt.close()
 
 
@@ -191,13 +229,11 @@ class PlotBasic:
 class PlotExp:
     def override_accuracy(self, ax):
         ax.set_xscale("symlog", base=2)
-        ax.set_xlim(-100, 100)
         pass
 
     def override_accuracy_zoom(self, ax):
         # ax.axvline(x=math.e, color="k", linestyle="--")
         ax.set_xscale("symlog", base=2)
-        ax.set_xlim(-100, 100)
         # custom_ticks = [-10, -2, -1,1, 2, 10]
         # ax.set_xticks(custom_ticks)
         # ax.set_xticklabels([f"{x:g}" for x in custom_ticks])
@@ -209,7 +245,7 @@ class PlotExp:
 
     def override_values(self, ax):
         ax.set_xlim(-4.0, 8.0)
-        ax.set_ylim(-1, math.exp(8.05))
+        ax.set_ylim(0, math.exp(8.05))
         pass
 
 
@@ -256,7 +292,7 @@ class PlotLog:
                 continue
 
             ax.axvline(x=xval, color="k", linestyle="--")
-            plt.text(xval * 1.05, 0.7, f"$x={base_str}^{{{k}}}$", fontsize=30)
+            plt.text(xval * 1.05, 0.3, f"$x={base_str}^{{{k}}}$", fontsize=30)
 
         plt.gca().set_xticks(custom_ticks)
 
@@ -270,7 +306,7 @@ class PlotLog:
         plt.gca().set_xticklabels([f"{x:g}" for x in custom_xticks])  # For decimal form
 
     def override_absolute(self, ax):
-        self.override_common(ax)
+        pass
 
     def override_values(self, ax):
         ax.set_xlim(-4.0, 8.0)
@@ -290,6 +326,13 @@ class PlotLog1p:
         ax.set_ylim(0, 1)
 
     def override_absolute(self, ax):
+        ax.set_yscale("log", base=10)
+        ax.set_ylim(0, 1)
+
+        yticker = ticker.LogLocator(base=10)
+        yticker.set_params(numticks=7)
+        ax.yaxis.set_major_locator(yticker)
+
         pass
 
     def override_values(self, ax):
@@ -308,7 +351,12 @@ class PlotSiLU:
         ax.set_xticklabels([f"{x:g}" for x in custom_ticks])
 
     def override_absolute(self, ax):
-        self.override_accuracy_zoom(ax)
+        ax.set_yscale("log", base=10)
+        yticker = ticker.LogLocator(base=10)
+        yticker.set_params(numticks=7)
+        ax.yaxis.set_major_locator(yticker)
+
+        ax.set_ylim(0, 1)
 
         pass
 
@@ -325,6 +373,9 @@ class PlotLogit:
         ax.set_xlim(-0.1, 1)
         ax.set_xscale("linear")
 
+        ymin, ymax = ax.get_ylim()
+        ax.set_ylim(ymin, min(ymax, 100))
+
         custom_ticks = [0, 0.1, 0.5, 1]
         ax.set_xticks(custom_ticks)
         ax.set_xticklabels([f"{x:g}" for x in custom_ticks])
@@ -334,14 +385,13 @@ class PlotLogit:
 
     def override_accuracy_zoom(self, ax):
         self.override_common(ax)
-        ax.set_ylim(0, 5)
 
         pass
 
     def override_absolute(self, ax):
         ax.set_xlim(-0.1, 1.1)
         ax.set_ylim(0, 0.05)
-        ax.set_xscale("linear")
+        ax.set_xscale("log")
         ax.set_yscale("linear")
 
         ax.set_xticks([0, 0.1, 0.25, 0.5, 0.75, 0.9, 1])
@@ -361,8 +411,6 @@ class PlotMish:
         pass
 
     def override_accuracy_zoom(self, ax):
-        ax.set_xlim(-10, 10)
-        ax.set_ylim(0, 5)
         ax.set_xscale("symlog", base=2)
 
         custom_ticks = [-8, -4, -2, -1, 0, 1, 2, 4, 8]
@@ -370,6 +418,7 @@ class PlotMish:
         ax.set_xticklabels([f"{x:g}" for x in custom_ticks])
 
     def override_absolute(self, ax):
+        ax.set_yscale("log", base=10)
         pass
 
     def override_values(self, ax):
@@ -381,12 +430,10 @@ class PlotCos:
         self.is_sin = is_sin
 
     def override_accuracy(self, ax):
-        ax.set_ylim(0, 1)
+        ax.set_ylim(0, 1e3)
         pass
 
     def override_accuracy_zoom(self, ax):
-        ax.set_xlim(-3 * math.pi, 3 * math.pi)
-
         if self.is_sin:
             phasej = 1
 
@@ -401,6 +448,7 @@ class PlotCos:
         ax.set_ylim(0, 1)
 
     def override_absolute(self, ax):
+        ax.set_ylim(0, 3 * math.pi)
         pass
 
     def override_values(self, ax):
@@ -413,8 +461,6 @@ class PlotTan:
 
     def override_accuracy_zoom(self, ax):
         xmax = math.pi
-        ax.set_xlim(-4, 4)
-        ax.set_ylim(-0.005, 1)  # Offsets graph so that tan(x)=0 values are visible
         ax.set_xscale("linear")
         kpi = math.pi / 2
 
@@ -446,56 +492,60 @@ class PlotSqrt:
         self.override_accuracy(ax)
         ax.set_xscale("log", base=2)
 
-        ax.set_xlim(0, 100)
         custom_ticks = [0, 1, 2, 4, 8, 16, 32, 64]
         ax.set_xticks(custom_ticks)
         ax.set_xticklabels([f"{x:g}" for x in custom_ticks])
+
+    def override_absolute(self, ax):
+        ax.set_xscale("log", base=2)
+
+        pass
 
     def override_values(self, ax):
         pass
 
 
-Y_OFFSET = -0.005  # Offset y=0 curve, to make f(x)=0 values visible
+Y_OFFSET = 0  # Offset y=0 curve, to make f(x)=0 values visible
 
 all_override_plot_funs = {
     # Exponential functions
-    "exp": PlotExp(),
-    "pow": PlotExp(),
-    "tanh": PlotTanh(),  # reuse exp settings
-    "cosh": PlotMish(),  # reuse exp settings
-    "sinh": PlotMish(),  # reuse exp settings
+    "exp": (PlotExp(), (-100, 100)),
+    "pow": (PlotExp(), (-100, 100)),
+    "tanh": (PlotTanh(), (-10, 10)),  # reuse exp settings
+    "cosh": (PlotMish(), (-10, 10)),  # reuse exp settings
+    "sinh": (PlotMish(), (-10, 10)),  # reuse exp settings
     # Logarithmic functions
-    "log": PlotLog(math.e),
-    "log10": PlotLog(10),
-    "log2": PlotLog(2),
-    "log1p": PlotLog1p(),
+    "log": (PlotLog(math.e), None),
+    "log10": (PlotLog(10), None),
+    "log2": (PlotLog(2), None),
+    "log1p": (PlotLog1p(), (-1, None)),
     # Activation functions
-    "silu": PlotSiLU(),  # reuse silu settings
-    "logit": PlotLogit(),  # reuse silu settings
-    "gelu": PlotSiLU(),  # reuse silu settings
-    "swish": PlotSiLU(),  # reuse silu settings
-    "mish": PlotMish(),  # reuse silu settings
-    "elu": PlotMish(),  # reuse silu settings
-    "selu": PlotSiLU(),  # reuse silu settings
-    "softplus": PlotBasic(zoomed_in_xrange=[-9, 9], zoomed_in_yrange=[Y_OFFSET, 1]),  # reuse silu settings
-    "softsign": PlotBasic(zoomed_in_xrange=[-3, 3], zoomed_in_yrange=[Y_OFFSET, 1]),  # reuse silu settings
+    "silu": (PlotSiLU(), (-4, 4)),  # reuse silu settings
+    "logit": (PlotLogit(), (-0.1, 1.1)),  # reuse silu settings
+    "gelu": (PlotSiLU(), (-4, 4)),  # reuse silu settings
+    "swish": (PlotSiLU(), (-4, 4)),  # reuse silu settings
+    "mish": (PlotMish(), (-4, 4)),  # reuse silu settings
+    "elu": (PlotMish(), (-10, 10)),  # reuse silu settings
+    "selu": (PlotSiLU(), (-4, 4)),  # reuse silu settings
+    "softplus": (PlotBasic(zoomed_in_xrange=[-9, 9], zoomed_in_yrange=[Y_OFFSET, 1]), (-9, 9)),  # reuse silu settings
+    "softsign": (PlotBasic(zoomed_in_xrange=[-3, 3], zoomed_in_yrange=[Y_OFFSET, 1]), (-3, 3)),  # reuse silu settings
     # Trigonometric functions
-    "tan": PlotTan(),  # reuse tan settings
-    "atan": PlotBasic(zoomed_in_xrange=[-3, 3], zoomed_in_yrange=[Y_OFFSET, 1]),
-    "sin": PlotCos(is_sin=True),
-    "cos": PlotCos(),
+    "tan": (PlotTan(), (-10, 10)),  # reuse tan settings
+    "atan": (PlotBasic(zoomed_in_xrange=[-3, 3], zoomed_in_yrange=[Y_OFFSET, 1]), (-3, 3)),
+    "sin": (PlotCos(is_sin=True), (-3 * math.pi, 3 * math.pi)),
+    "cos": (PlotCos(), (-3 * math.pi, 3 * math.pi)),
     # Miscellaneous functions
-    "sqrt": PlotSqrt(),
-    "rsqrt": PlotBasic(zoomed_in_xrange=[0, 3], zoomed_in_yrange=[0, 1]),
+    "sqrt": (PlotSqrt(), (0, 100)),
+    "rsqrt": (PlotBasic(zoomed_in_xrange=[0, 3], zoomed_in_yrange=[0, 1]), (0, 3)),
     "rsqrt_approx": None,
-    "digamma": PlotBasic(zoomed_in_xrange=[0, 10], zoomed_in_yrange=[Y_OFFSET, 10]),
-    "lgamma": PlotBasic(zoomed_in_xrange=[0, 10], zoomed_in_yrange=[Y_OFFSET, 10]),
-    "tanhshrink": PlotBasic(zoomed_in_xrange=[-3, 3], zoomed_in_yrange=[Y_OFFSET, 100]),
+    "digamma": (PlotBasic(zoomed_in_xrange=[0, 10], zoomed_in_yrange=[Y_OFFSET, 10]), (0, 10)),
+    "lgamma": (PlotBasic(zoomed_in_xrange=[0, 10], zoomed_in_yrange=[Y_OFFSET, 10]), (0, 10)),
+    "tanhshrink": (PlotBasic(zoomed_in_xrange=[-3, 3], zoomed_in_yrange=[Y_OFFSET, 1]), (-3, 3)),
 }
 
 powers_list = [2, 3, 5, 7, 10]
 for power in powers_list:
-    all_override_plot_funs[f"pow_{power}"] = PlotExp()
+    all_override_plot_funs[f"pow_{power}"] = (PlotExp(), (-100, 100))
 
 
 def plot_hist_accuracy(data, dest, threshold=0.1, xrange=None):
@@ -659,13 +709,29 @@ def plot_single_op(args):
         plot_mean = False
 
     if all_override_plot_funs[op] is not None:
-        override_plot_fun = all_override_plot_funs[op].override_accuracy
-        if highres:
-            override_plot_fun = all_override_plot_funs[op].override_accuracy_zoom
-        if plot_absolute:
-            override_plot_fun = all_override_plot_funs[op].override_absolute
+        (override_instance, xrange) = all_override_plot_funs[op]
 
-    plot_accuracy_op(data_op, dest_file, op, dtype, override_plot_fun, plot_mean=plot_mean, plot_absolute=plot_absolute)
+        xmin = None
+        xmax = None
+        if highres and xrange is not None:
+            (xmin, xmax) = xrange
+
+        if highres and xmin is not None and xmax is not None:
+            # Remove excess data (make plot faster + adjust y-axis values more easily)
+            data_op = data_op[data_op["base_x"] >= xmin]
+            data_op = data_op[data_op["base_x"] <= xmax]
+
+        if override_instance is not None:
+            override_plot_fun = override_instance.override_accuracy
+            if highres:
+                override_plot_fun = override_instance.override_accuracy_zoom
+            if plot_absolute:
+                override_plot_fun = override_instance.override_absolute
+
+    if plot_absolute:
+        plot_abs_accuracy(data_op, dest_file, op, dtype, override_plot_fun, plot_mean=plot_mean)
+    else:
+        plot_relative_accuracy(data_op, dest_file, op, dtype, override_plot_fun, plot_mean=plot_mean)
 
     return f"Plotting {op} {dtype} {group_size} - done in {time.time() - start_time:.2f}s"
 
@@ -726,46 +792,18 @@ def plot_all_ops(accuracy_dir, ops_list, dest_dir, highres=False, plot_absolute=
         return
 
     all_data = pd.concat(all_op_data.values())
+
+    # Remove data with NaN or infinity (might speedup plotting)
+    all_data = all_data[all_data["max_rel_error"].notna()]
+    all_data = all_data[all_data["max_rel_error"] != float("inf")]
+
     all_parent_ops = all_data["parent_op"].unique()
     groupby_parent = all_data.groupby(("parent_op"), sort=True)
-
-    # data_mlt = pd.melt(
-    #     data,
-    #     id_vars=["base_x", "operation"],
-    #     value_vars=[metric_max, metric_mean],
-    #     var_name="type",
-    #     value_name="val",
-    # )
-
-    # Concatenate exp and exp_approx (semi-generic)
-    # (write both into all_op_data[exp] and remove all_op_data[exp_approx])
-    # for opkey in list(all_op_data.keys()):
-    #     op, dtype, group_size = opkey
-
-    #     if op == "exp_approx":
-    #         exp_approx_data = all_op_data[opkey]
-
-    #         exp_data = None
-    #         if ("exp", dtype, group_size) in all_op_data:
-    #             exp_data = all_op_data[("exp", dtype, group_size)]
-
-    #         all_op_data[("exp", dtype, group_size)] = pd.concat([exp_data, exp_approx_data])
-    #         del all_op_data[opkey]
-
-    #     # If power operation then merge with pow_2
-    #     if re.match(r"^pow_\d+$", op) and op != "pow":
-    #         pow_data = None
-    #         if ("pow", dtype, group_size) in all_op_data:
-    #             pow_data = all_op_data[("pow", dtype, group_size)]
-
-    #         all_op_data[("pow", dtype, group_size)] = pd.concat([pow_data, all_op_data[opkey]])
-
-    # Plot operations
 
     # Aggregate process arguments
     plot_args = []
     for parent_op in all_parent_ops:
-        data_op = groupby_parent.get_group(op).reset_index()
+        data_op = groupby_parent.get_group(parent_op).reset_index()
         plot_args.append((parent_op, dtype, group_size, data_op, dest_dir, highres, plot_absolute))
 
     # Launch parallel plots
@@ -778,46 +816,13 @@ def plot_all_ops(accuracy_dir, ops_list, dest_dir, highres=False, plot_absolute=
         for result in results:
             print(result)
 
-    # for op, dtype, group_size in all_op_data.keys():
-
-    #     start_time = time.time()
-
-    #     if not op in all_parent_ops:
-    #         continue
-
-    #     data_op = groupby_parent.get_group(op).reset_index()
-
-    #     print("\33[2K", end='\r') # Clear line (Linux-only ?)
-    #     print(f"Plotting {op} {dtype} {group_size}", end=None)
-
-    #     # Each operation may have specific properties
-    #     # To highlight these, custom functions have been defined
-    #     override_plot_fun = None
-    #     dest_file = f"{dest_dir}/{op}-{dtype}"
-
-    #     plot_mean = True
-    #     if highres:
-    #         dest_file += "-zoom"
-    #         plot_mean = False
-
-    #     if all_override_plot_funs[op] is not None:
-    #         override_plot_fun = all_override_plot_funs[op].override_accuracy
-    #         if highres:
-    #             override_plot_fun = all_override_plot_funs[op].override_accuracy_zoom
-    #         if plot_absolute:
-    #             override_plot_fun = all_override_plot_funs[op].override_absolute
-
-    #     plot_accuracy_op(data_op, dest_file, op, dtype, override_plot_fun, plot_mean=plot_mean, plot_absolute=plot_absolute)
-
-    #     print(f"- done in {time.time() - start_time:.2f}s", end='\r')
-
 
 def main():
     sns.set(
         style="ticks",
         rc={
             "axes.grid": True,
-            "axes.edgecolor": "black",
+            # "axes.edgecolor": None,
             "axes.titlesize": 60,
             "axes.labelsize": 60,
             "xtick.labelsize": 60,
@@ -826,8 +831,7 @@ def main():
             "legend.title_fontsize": 50,
             "legend.fontsize": 40,
             "lines.linewidth": 4,
-            "axes.linewidth": 4,
-            "axes.edgecolor": "black",
+            "axes.linewidth": 1,
             "font.serif": ["Latin Modern Math"],
         },
     )
@@ -917,7 +921,7 @@ def main():
     if not os.path.exists(f"{dest_dir}/abs/"):
         os.makedirs(f"{dest_dir}/abs/")
 
-    # plot_all_ops(f"{accuracy_dir}", highres_operations, f"{dest_dir}/abs/", highres=True, plot_absolute=True)
+    plot_all_ops(f"{accuracy_dir}", all_operations, f"{dest_dir}/abs/", highres=False, plot_absolute=True)
 
 
 main()
