@@ -172,6 +172,7 @@ private:
     void readRiscProfilerResults(
         IDevice* device,
         const CoreCoord& worker_core,
+        const ProfilerDumpState state,
         const std::optional<ProfilerOptionalMetadata>& metadata,
         std::ofstream& log_file_ofs,
         nlohmann::ordered_json& noc_trace_json_log);
@@ -235,10 +236,14 @@ public:
     void setSyncInfo(std::tuple<double, double, double> sync_info);
 };
 
-distributed::AnyBuffer get_control_buffer_view(
-    IDevice* device, uint32_t address, uint32_t size, CoreCoord logical_worker_core);
-
 void issue_fd_write_to_profiler_buffer(distributed::AnyBuffer& buffer, IDevice* device, std::vector<uint32_t>& data);
+
+void write_control_buffer_to_core(
+    IDevice* device,
+    const CoreCoord& core,
+    const HalProgrammableCoreType core_type,
+    const ProfilerDumpState state,
+    std::vector<uint32_t>& control_buffer);
 
 }  // namespace tt_metal
 

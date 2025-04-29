@@ -37,9 +37,24 @@ using sliding_window::SlidingWindowConfig;
 
 namespace conv2d {
 
+ResultWithOptions result_to_result_with_options(
+    const Result& result, const bool return_output_dim, const bool return_weights_and_bias) {
+    if (return_output_dim && return_weights_and_bias) {
+        return std::make_tuple(
+            std::get<0>(result),
+            std::make_tuple(std::get<1>(result), std::get<2>(result)),
+            std::make_tuple(std::get<3>(result), std::get<4>(result)));
+    } else if (return_output_dim) {
+        return std::make_tuple(std::get<0>(result), std::make_tuple(std::get<1>(result), std::get<2>(result)));
+    } else if (return_weights_and_bias) {
+        return std::make_tuple(std::get<0>(result), std::make_tuple(std::get<3>(result), std::get<4>(result)));
+    }
+    return std::get<0>(result);
+}
+
 // GCC refuses to create a symbol for this function if it is defined in the source file, leading to linker errors.
 template <typename T>
-Result conv2d(
+ResultWithOptions conv2d(
     QueueId queue_id,
     const ttnn::Tensor& input_tensor,
     const ttnn::Tensor& weight_tensor,
@@ -58,48 +73,56 @@ Result conv2d(
     const std::optional<const Conv2dConfig>& conv_config_,
     const std::optional<const DeviceComputeKernelConfig>& compute_config_,
     const std::optional<const MemoryConfig>& memory_config_,
-    const std::optional<const Conv2dSliceConfig>& dram_slice_config_) {
+    const std::optional<const Conv2dSliceConfig>& dram_slice_config_,
+    bool return_output_dim,
+    bool return_weights_and_bias) {
     if (dram_slice_config_.has_value()) {
-        return conv2d_DRAM(
-            queue_id,
-            input_tensor,
-            weight_tensor,
-            device,
-            in_channels,
-            out_channels,
-            batch_size,
-            input_height,
-            input_width,
-            kernel_size,
-            stride,
-            padding,
-            dilation,
-            groups,
-            bias_tensor,
-            conv_config_,
-            compute_config_,
-            memory_config_,
-            dram_slice_config_.value());
+        return result_to_result_with_options(
+            conv2d_DRAM(
+                queue_id,
+                input_tensor,
+                weight_tensor,
+                device,
+                in_channels,
+                out_channels,
+                batch_size,
+                input_height,
+                input_width,
+                kernel_size,
+                stride,
+                padding,
+                dilation,
+                groups,
+                bias_tensor,
+                conv_config_,
+                compute_config_,
+                memory_config_,
+                dram_slice_config_.value()),
+            return_output_dim,
+            return_weights_and_bias);
     } else {
-        return conv2d_L1(
-            queue_id,
-            input_tensor,
-            weight_tensor,
-            device,
-            in_channels,
-            out_channels,
-            batch_size,
-            input_height,
-            input_width,
-            kernel_size,
-            stride,
-            padding,
-            dilation,
-            groups,
-            bias_tensor,
-            conv_config_,
-            compute_config_,
-            memory_config_);
+        return result_to_result_with_options(
+            conv2d_L1(
+                queue_id,
+                input_tensor,
+                weight_tensor,
+                device,
+                in_channels,
+                out_channels,
+                batch_size,
+                input_height,
+                input_width,
+                kernel_size,
+                stride,
+                padding,
+                dilation,
+                groups,
+                bias_tensor,
+                conv_config_,
+                compute_config_,
+                memory_config_),
+            return_output_dim,
+            return_weights_and_bias);
     }
 }
 
@@ -466,11 +489,7 @@ Result conv2d_L1(
                 bias_tensor.has_value());
         }
     }
-    // if 1x1 conv w/ stride 1, convert input tensor to tile layout if required
-    if (mm_conv) {
-        input_tensor_post_tm = ttnn::to_layout(
-            input_tensor_post_tm, Layout::TILE, conv_config.dtype, input_tensor_post_tm.memory_config(), device);
-    }
+
     // call optimized conv op or matmul micro op
     bool input_is_on_device = ttnn::is_tensor_on_device_or_multidevice(input_tensor_post_tm);
     TT_ASSERT(input_is_on_device);
@@ -549,6 +568,11 @@ Result conv2d_L1(
         }
         return {conv_output, output_height, output_width, weight_tensor_on_device, bias_tensor_on_device};
     } else {
+        if (input_tensor_post_tm.layout() != Layout::TILE) {
+            input_tensor_post_tm =
+                ttnn::to_layout(input_tensor_post_tm, Layout::TILE, std::nullopt, std::nullopt, device);
+        }
+
         // run conv as matmul
         std::optional<ttnn::operations::matmul::MatmulProgramConfig> program_config = std::nullopt;
         std::optional<MemoryConfig> mm_output_memory_config = std::nullopt;
@@ -576,7 +600,7 @@ Result conv2d_L1(
             false,
             false,
             mm_output_memory_config,
-            std::nullopt,
+            conv_config.dtype,
             program_config,
             activation);
 
@@ -588,7 +612,7 @@ Result conv2d_L1(
     }
 }
 
-template Result conv2d<IDevice>(
+template ResultWithOptions conv2d<IDevice>(
     QueueId queue_id,
     const ttnn::Tensor& input_tensor,
     const ttnn::Tensor& weight_tensor,
@@ -607,9 +631,11 @@ template Result conv2d<IDevice>(
     const std::optional<const Conv2dConfig>& conv_config_,
     const std::optional<const DeviceComputeKernelConfig>& compute_config_,
     const std::optional<const MemoryConfig>& memory_config_,
-    const std::optional<const Conv2dSliceConfig>& dram_slice_config_);
+    const std::optional<const Conv2dSliceConfig>& dram_slice_config_,
+    bool return_output_dim,
+    bool return_weights_and_bias);
 
-template Result conv2d<MeshDevice>(
+template ResultWithOptions conv2d<MeshDevice>(
     QueueId queue_id,
     const ttnn::Tensor& input_tensor,
     const ttnn::Tensor& weight_tensor,
@@ -628,9 +654,11 @@ template Result conv2d<MeshDevice>(
     const std::optional<const Conv2dConfig>& conv_config_,
     const std::optional<const DeviceComputeKernelConfig>& compute_config_,
     const std::optional<const MemoryConfig>& memory_config_,
-    const std::optional<const Conv2dSliceConfig>& dram_slice_config_);
+    const std::optional<const Conv2dSliceConfig>& dram_slice_config_,
+    bool return_output_dim,
+    bool return_weights_and_bias);
 
-Result Conv2dOperation::invoke(
+ResultWithOptions Conv2dOperation::invoke(
     QueueId queue_id,
     const ttnn::Tensor& input_tensor,
     const ttnn::Tensor& weight_tensor,
@@ -649,7 +677,9 @@ Result Conv2dOperation::invoke(
     const std::optional<const Conv2dConfig>& conv_config_,
     const std::optional<const DeviceComputeKernelConfig>& compute_config_,
     const std::optional<const MemoryConfig>& memory_config_,
-    const std::optional<const Conv2dSliceConfig>& slice_config_) {
+    const std::optional<const Conv2dSliceConfig>& slice_config_,
+    bool return_output_dim,
+    bool return_weights_and_bias) {
     return conv2d(
         queue_id,
         input_tensor,
@@ -669,10 +699,12 @@ Result Conv2dOperation::invoke(
         std::move(conv_config_),
         std::move(compute_config_),
         std::move(memory_config_),
-        std::move(slice_config_));
+        std::move(slice_config_),
+        return_output_dim,
+        return_weights_and_bias);
 }
 
-Result Conv2dOperation::invoke(
+ResultWithOptions Conv2dOperation::invoke(
     QueueId queue_id,
     const ttnn::Tensor& input_tensor,
     const ttnn::Tensor& weight_tensor,
@@ -691,7 +723,9 @@ Result Conv2dOperation::invoke(
     const std::optional<const Conv2dConfig>& conv_config_,
     const std::optional<const DeviceComputeKernelConfig>& compute_config_,
     const std::optional<const MemoryConfig>& memory_config,
-    const std::optional<const Conv2dSliceConfig>& slice_config_) {
+    const std::optional<const Conv2dSliceConfig>& slice_config_,
+    bool return_output_dim,
+    bool return_weights_and_bias) {
     return conv2d(
         queue_id,
         input_tensor,
@@ -711,7 +745,9 @@ Result Conv2dOperation::invoke(
         std::move(conv_config_),
         std::move(compute_config_),
         std::move(memory_config),
-        std::move(slice_config_));
+        std::move(slice_config_),
+        return_output_dim,
+        return_weights_and_bias);
 }
 
 }  // namespace conv2d

@@ -275,18 +275,19 @@ struct WorkerToFabricEdmSenderImpl {
             WORKER_HANDSHAKE_NOC);
         noc_inline_dw_write<false, posted>(
             connection_worker_xy_address, WorkerXY(my_x[0], my_y[0]).to_uint32(), 0xf, WORKER_HANDSHAKE_NOC);
-
-        const uint64_t edm_connection_handshake_noc_addr = dest_noc_addr_coord_only | edm_connection_handshake_l1_addr;
-        noc_inline_dw_write<false, posted>(
-            edm_connection_handshake_noc_addr, open_connection_value, 0xf, WORKER_HANDSHAKE_NOC);
     }
 
     // Advanced usage API:
     // Completes the connection opening process. Induces a read barrier
     // !!! IMPORTANT !!!
     // Must be called alongside (after) open_start().
+    template <bool posted = false, uint8_t WORKER_HANDSHAKE_NOC = noc_index>
     void open_finish() {
         noc_async_read_barrier();
+        const uint64_t edm_connection_handshake_noc_addr =
+            get_noc_addr(this->edm_noc_x, this->edm_noc_y, edm_connection_handshake_l1_addr);
+        noc_inline_dw_write<false, posted>(
+            edm_connection_handshake_noc_addr, open_connection_value, 0xf, WORKER_HANDSHAKE_NOC);
         this->buffer_slot_wrptr = *this->buffer_slot_wrptr_ptr;
         if constexpr (!USER_DEFINED_NUM_BUFFER_SLOTS) {
             this->edm_buffer_addr =
@@ -298,7 +299,7 @@ struct WorkerToFabricEdmSenderImpl {
     template <bool posted = false, uint8_t WORKER_HANDSHAKE_NOC = noc_index>
     void open() {
         open_start<posted, WORKER_HANDSHAKE_NOC>();
-        open_finish();
+        open_finish<posted, WORKER_HANDSHAKE_NOC>();
     }
 
     // Advanced usage API:

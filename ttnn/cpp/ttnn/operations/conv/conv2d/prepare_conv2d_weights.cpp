@@ -16,7 +16,6 @@
 #include "ttnn/operations/data_movement/permute/permute.hpp"
 #include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
 #include "ttnn/operations/data_movement/tilize/tilize.hpp"
-#include "ttnn/operations/conv/conv2d/conv2d_utils.hpp"
 namespace ttnn {
 namespace operations::conv {
 using namespace tt;
@@ -31,10 +30,8 @@ Tensor convert_tensor(const Tensor& input_tensor, compute_& compute) {
         return std::visit(
             [&compute](auto&& storage) -> Tensor {
                 using StorageType = std::decay_t<decltype(storage)>;
-                if constexpr (std::is_same_v<StorageType, tt::tt_metal::OwnedStorage>) {
-                    return compute(tt::tt_metal::owned_buffer::get_as<T>(storage.buffer));
-                } else if constexpr (std::is_same_v<StorageType, tt::tt_metal::BorrowedStorage>) {
-                    return compute(tt::tt_metal::borrowed_buffer::get_as<T>(storage.buffer));
+                if constexpr (std::is_same_v<StorageType, tt::tt_metal::HostStorage>) {
+                    return compute(tt::tt_metal::host_buffer::get_as<T>(storage.buffer));
                 } else {
                     TT_THROW("Unsupported storage type");
                 }
@@ -75,23 +72,23 @@ Tensor convert_tensor_to_tiled_layout_common(
 
 template <typename T>
 Tensor create_tensor_from_owned_buffer(
-    tt::tt_metal::owned_buffer::Buffer<T>& buf, DataType& output_dtype, ttnn::Shape& output_shape) {
+    tt::tt_metal::HostBuffer buf, DataType& output_dtype, ttnn::Shape& output_shape) {
     if constexpr (std::is_same<T, float>::value) {
         if (output_dtype == DataType::BFLOAT8_B || output_dtype == DataType::BFLOAT4_B) {
             auto tensor = Tensor(
-                              std::move(tt::tt_metal::OwnedStorage{std::move(buf)}),
+                              std::move(tt::tt_metal::HostStorage{std::move(buf)}),
                               output_shape,
                               DataType::FLOAT32,
                               Layout::ROW_MAJOR)
                               .to_layout(Layout::TILE);
-            auto output_float_data = tt::tt_metal::owned_buffer::get_as<float>(tensor).get();
+            auto output_float_data = tt::tt_metal::host_buffer::get_as<float>(tensor);
             auto output_packed_data =
                 output_dtype == DataType::BFLOAT8_B
                     ? pack_fp32_vec_as_bfp8_tiles(output_float_data, /*row_major_input=*/false, /*is_exp_a=*/false)
                     : pack_fp32_vec_as_bfp4_tiles(output_float_data, /*row_major_input=*/false, /*is_exp_a=*/false);
-            auto output_uint32_buffer = tt::tt_metal::owned_buffer::create<uint32_t>(std::move(output_packed_data));
+            auto output_uint32_buffer = tt::tt_metal::host_buffer::create<uint32_t>(std::move(output_packed_data));
             return Tensor(
-                std::move(tt::tt_metal::OwnedStorage{std::move(output_uint32_buffer)}),
+                std::move(tt::tt_metal::HostStorage{std::move(output_uint32_buffer)}),
                 output_shape,
                 output_dtype,
                 Layout::TILE);
@@ -102,7 +99,7 @@ Tensor create_tensor_from_owned_buffer(
             "Unsupported output datatype");
     }
     auto rm_tensor =
-        Tensor(std::move(tt::tt_metal::OwnedStorage{std::move(buf)}), output_shape, output_dtype, Layout::ROW_MAJOR);
+        Tensor(std::move(tt::tt_metal::HostStorage{std::move(buf)}), output_shape, output_dtype, Layout::ROW_MAJOR);
     return rm_tensor.to_layout(Layout::TILE);
 }
 
@@ -124,7 +121,7 @@ Tensor to_weight_special_padding_tile_layout(
         uint32_t block_height_padding = in1_block_h_datums - (w_shape[1] * w_shape[3]);
         auto weight_matrix_rows = ((w_shape[1] * w_shape[3]) + block_height_padding) * w_shape[2];
         ttnn::Shape output_shape{1, 1, weight_matrix_rows, weight_matrix_cols};
-        auto output_buffer = tt::tt_metal::owned_buffer::create<T>(output_shape.volume());
+        auto output_buffer = std::vector<T>(output_shape.volume());
         for (auto r = 0; r < w_shape[2]; r++) {
             for (auto s = 0; s < w_shape[3]; s++) {
                 for (auto c = 0; c < w_shape[1]; c++) {
@@ -138,7 +135,8 @@ Tensor to_weight_special_padding_tile_layout(
                 }
             }
         }
-        return create_tensor_from_owned_buffer<T>(output_buffer, output_dtype, output_shape);
+        return create_tensor_from_owned_buffer<T>(
+            tt::tt_metal::host_buffer::create<T>(std::move(output_buffer)), output_dtype, output_shape);
     };
     return convert_tensor<T>(conv_weight_tensor, compute);
 }
@@ -163,7 +161,7 @@ Tensor to_weight_tile_layout(
                 (uint32_t)std::ceil((double)weight_matrix_rows / (double)in1_block_h_datums) * in1_block_h_datums;
         }
         ttnn::Shape output_shape{1, 1, weight_matrix_rows, weight_matrix_cols};
-        auto output_buffer = tt::tt_metal::owned_buffer::create<T>(output_shape.volume());
+        auto output_buffer = std::vector<T>(output_shape.volume());
         for (auto r = 0; r < w_shape[2]; r++) {
             for (auto s = 0; s < w_shape[3]; s++) {
                 for (auto c = 0; c < w_shape[1]; c++) {
@@ -177,7 +175,8 @@ Tensor to_weight_tile_layout(
                 }
             }
         }
-        return create_tensor_from_owned_buffer<T>(output_buffer, output_dtype, output_shape);
+        return create_tensor_from_owned_buffer<T>(
+            tt::tt_metal::host_buffer::create<T>(std::move(output_buffer)), output_dtype, output_shape);
     };
 
     return convert_tensor<T>(conv_weight_tensor, compute);
@@ -227,7 +226,7 @@ Tensor to_weight_tile_layout_block_sharded(
             weight_matrix_rows = weight_block_height_padded * num_channel_shards;
         }
         ttnn::Shape output_shape{1, 1, weight_matrix_rows, weight_matrix_cols};
-        auto output_buffer = tt::tt_metal::owned_buffer::create<T>(output_shape.volume());
+        auto output_buffer = std::vector<T>(output_shape.volume());
         for (auto ic = 0; ic < num_channel_shards; ic++) {
             for (auto r = 0; r < w_shape[2]; r++) {
                 for (auto s = 0; s < w_shape[3]; s++) {
@@ -249,7 +248,8 @@ Tensor to_weight_tile_layout_block_sharded(
                 }
             }
         }
-        return create_tensor_from_owned_buffer<T>(output_buffer, output_dtype, output_shape);
+        return create_tensor_from_owned_buffer<T>(
+            tt::tt_metal::host_buffer::create<T>(std::move(output_buffer)), output_dtype, output_shape);
     };
     return convert_tensor<T>(conv_weight_tensor, compute);
 }
@@ -287,7 +287,7 @@ Tensor to_bias_tile_layout_block_sharded(
 
         auto bias_matrix_rows = 32;
         ttnn::Shape output_shape{1, 1, bias_matrix_rows, bias_matrix_cols};
-        auto output_buffer = tt::tt_metal::owned_buffer::create<T>(output_shape.volume());
+        auto output_buffer = std::vector<T>(output_shape.volume());
         for (auto oc = 0; oc < num_channel_shards; oc++) {
             for (auto k_s = 0; k_s < conv_output_shard_width; k_s++) {
                 auto matrix_idx = oc * conv_output_shard_width_padded + k_s;
@@ -295,7 +295,8 @@ Tensor to_bias_tile_layout_block_sharded(
                 output_buffer[matrix_idx] = input_buffer[idx];
             }
         }
-        return create_tensor_from_owned_buffer<T>(output_buffer, output_dtype, output_shape);
+        return create_tensor_from_owned_buffer<T>(
+            tt::tt_metal::host_buffer::create<T>(std::move(output_buffer)), output_dtype, output_shape);
     };
 
     return convert_tensor<T>(conv_bias_tensor, compute);
@@ -346,8 +347,7 @@ static Tensor conv_group_weight_zero_pad_helper(
     DataType output_dtype) {
     auto pad_weight = [&original_weight_shape, &output_weight_shape, &num_groups, &output_dtype](
                           const auto& conv_weight_tensor_buffer) {
-        tt::tt_metal::owned_buffer::Buffer<T> output_buffer =
-            tt::tt_metal::owned_buffer::create<T>(output_weight_shape.volume());
+        auto output_buffer = std::vector<T>(output_weight_shape.volume());
         for (int curr_batch_idx = 0; curr_batch_idx < original_weight_shape[0]; curr_batch_idx++) {
             int new_batch_idx = curr_batch_idx;
 
@@ -377,7 +377,7 @@ static Tensor conv_group_weight_zero_pad_helper(
             }
         }
         return Tensor(
-            std::move(tt::tt_metal::OwnedStorage{std::move(output_buffer)}),
+            tt::tt_metal::HostStorage{tt::tt_metal::host_buffer::create<T>(std::move(output_buffer))},
             output_weight_shape,
             output_dtype,
             Layout::ROW_MAJOR);
@@ -399,8 +399,7 @@ static Tensor conv_depthwise_weight_bcast_helper(
         [&original_weight_shape, &output_weight_shape, &output_dtype](const auto& conv_weight_tensor_buffer) {
             ttnn::Shape output_shape = output_weight_shape;
             // Create a new buffer with the output shape
-            tt::tt_metal::owned_buffer::Buffer<T> output_buffer =
-                tt::tt_metal::owned_buffer::create<T>(output_weight_shape.volume());
+            auto output_buffer = std::vector<T>(output_weight_shape.volume());
 
             // Copy the original weight tensor to the output tensor
             for (int i = 0; i < output_weight_shape[0]; i++) {
@@ -418,7 +417,7 @@ static Tensor conv_depthwise_weight_bcast_helper(
                 }
             }
             auto output_tensor = Tensor(
-                std::move(tt::tt_metal::OwnedStorage{std::move(output_buffer)}),
+                tt::tt_metal::HostStorage{tt::tt_metal::host_buffer::create<T>(std::move(output_buffer))},
                 output_weight_shape,
                 output_dtype,
                 Layout::ROW_MAJOR);
@@ -1110,7 +1109,8 @@ ttnn::Tensor prepare_conv_weights(
     uint32_t groups,
     T* device,
     const std::optional<const Conv2dConfig>& conv_config_,
-    const std::optional<const DeviceComputeKernelConfig>& compute_config_) {
+    const std::optional<const DeviceComputeKernelConfig>& compute_config_,
+    const std::optional<const Conv2dSliceConfig>& dram_slice_config_) {
     Conv2dConfig conv_config = conv_config_.value_or(Conv2dConfig());
 
     DeviceComputeKernelConfig compute_config = compute_config_.value_or(get_conv_default_compute_kernel_config(device));
@@ -1120,6 +1120,30 @@ ttnn::Tensor prepare_conv_weights(
     auto [output_height, output_width] =
         calculate_output_image_size({input_height, input_width}, kernel_size, stride, padding_n4, dilation);
 
+    if (dram_slice_config_.has_value()) {
+        Conv2dSliceConfig dram_slice_config = dram_slice_config_.value();
+        const uint32_t output_sliced_dim =
+            dram_slice_config.slice_type == Conv2dSliceConfig::SliceType::HEIGHT ? output_height : output_width;
+        TT_FATAL(
+            dram_slice_config.num_slices > 1, " Number of slices should be greater than 1 for Conv2D DRAM Slicing");
+        TT_FATAL(
+            dram_slice_config.num_slices < output_sliced_dim,
+            " Number of slices should be less than the dimension being sliced in Conv2D DRAM Slicing");
+
+        const uint32_t min_output_slice_size = output_sliced_dim / dram_slice_config.num_slices;
+        const uint32_t output_slice_rem = output_sliced_dim % dram_slice_config.num_slices;
+        const uint32_t max_output_slice_size = min_output_slice_size + (output_slice_rem > 0);
+
+        if (dram_slice_config.slice_type == Conv2dSliceConfig::SliceType::HEIGHT) {
+            output_height = max_output_slice_size;
+            input_height =
+                ((output_height - 1) * stride[0]) + ((kernel_size[0] - 1) * (dilation[0] - 1)) + kernel_size[0];
+        } else {
+            output_width = max_output_slice_size;
+            input_width =
+                ((output_width - 1) * stride[1]) + ((kernel_size[1] - 1) * (dilation[1] - 1)) + kernel_size[1];
+        }
+    }
     auto opt_conv_op_block_config = get_opt_block_config(
         mm_conv,
         in_channels,
@@ -1344,7 +1368,8 @@ template ttnn::Tensor prepare_conv_weights<IDevice>(
     uint32_t groups,
     IDevice* device,
     const std::optional<const Conv2dConfig>& conv_config_,
-    const std::optional<const DeviceComputeKernelConfig>& compute_config_);
+    const std::optional<const DeviceComputeKernelConfig>& compute_config_,
+    const std::optional<const Conv2dSliceConfig>& dram_slice_config_);
 
 template ttnn::Tensor prepare_conv_weights<MeshDevice>(
     const ttnn::Tensor& weight_tensor,
@@ -1364,7 +1389,8 @@ template ttnn::Tensor prepare_conv_weights<MeshDevice>(
     uint32_t groups,
     MeshDevice* device,
     const std::optional<const Conv2dConfig>& conv_config_,
-    const std::optional<const DeviceComputeKernelConfig>& compute_config_);
+    const std::optional<const DeviceComputeKernelConfig>& compute_config_,
+    const std::optional<const Conv2dSliceConfig>& dram_slice_config_);
 
 template std::pair<ttnn::Tensor, std::optional<ttnn::Tensor>> prepare_conv_weights_biases_on_device<IDevice>(
     const ttnn::Tensor& weight_tensor,

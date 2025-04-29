@@ -10,12 +10,13 @@
 #include <memory>
 
 #include "small_vector_caster.hpp"  // NOLINT - for pybind11 SmallVector binding support.
+#include "ttnn/tensor/host_buffer/host_buffer.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include <tt-metalium/graph_tracking.hpp>
 #include <tt_stl/overloaded.hpp>
+#include <tt_stl/span.hpp>
 #include "ttnn/core.hpp"
 #include "ttnn/run_operation.hpp"
-#include "ttnn/tensor/host_buffer/types.hpp"
 #include "ttnn/tensor/tensor_impl.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 #include "tools/profiler/op_profiler.hpp"
@@ -337,14 +338,14 @@ Tensor convert_python_tensors_to_tt_tensors(
             /*device=*/nullptr,
             /*force_disable_borrow=*/true));
     }
-    std::vector<OwnedBuffer> host_owned_buffers;
+    std::vector<HostBuffer> host_owned_buffers;
     std::vector<ttnn::TensorSpec> host_owned_specs;
     for (const auto& shard : tt_shards) {
         TT_ASSERT(
-            std::holds_alternative<OwnedStorage>(shard.get_storage()),
+            std::holds_alternative<HostStorage>(shard.get_storage()),
             "Unexpected type {}",
             tt::stl::get_active_type_name_in_variant(shard.get_storage()));
-        host_owned_buffers.push_back(std::get<OwnedStorage>(shard.get_storage()).buffer);
+        host_owned_buffers.push_back(std::get<HostStorage>(shard.get_storage()).buffer);
         host_owned_specs.push_back(shard.get_tensor_spec());
     }
     auto distributed_tensor_config = get_distributed_tensor_config(strategy);
@@ -357,8 +358,8 @@ Tensor convert_python_tensors_to_tt_tensors(
 }
 
 template <typename T>
-owned_buffer::Buffer<T> create_row_major_owned_buffer(
-    owned_buffer::Buffer<T>&& owned_buffer, const ttnn::TensorSpec& tensor_spec, const bool padded_output) {
+HostBuffer create_row_major_host_buffer(
+    HostBuffer host_buffer, const ttnn::TensorSpec& tensor_spec, const bool padded_output) {
     TT_FATAL(
         !tensor_spec.memory_config().is_sharded() or tensor_spec.memory_config().shard_spec.has_value(),
         "Sharded tensors must have a shard spec when converting to tt tensors!");
@@ -366,70 +367,63 @@ owned_buffer::Buffer<T> create_row_major_owned_buffer(
     if (padded_output) {
         if (tensor_spec.layout() == Layout::TILE) {
             auto data = tensor_impl::convert_layout_tile_to_row_major(
-                tensor_spec.physical_shape(), tensor_spec.tile(), owned_buffer);
-            return owned_buffer::create(std::move(data));
+                tensor_spec.physical_shape(), tensor_spec.tile(), tt::stl::MakeConstSpan(host_buffer.view_as<T>()));
+            return host_buffer::create(std::move(data));
         }
-        return owned_buffer;
+        return host_buffer;
     }
 
     // No modifications needed; direclty return buffer
     if (tensor_spec.layout() == Layout::ROW_MAJOR and tensor_spec.logical_2d_shape() == tensor_spec.physical_shape()) {
-        return owned_buffer;
+        return host_buffer;
     }
 
     // TODO: Switch to use span in decode_tensor_data and avoid data copy here
-    auto physical_data = owned_buffer.get();
+    auto typed_view = host_buffer::get_as<T>(host_buffer);
+    std::vector<T> physical_data(typed_view.begin(), typed_view.end());
 
     // See implementation for documentation
     auto logical_data = tensor_impl::decode_tensor_data(std::move(physical_data), tensor_spec);
 
-    return owned_buffer::create(std::move(logical_data));
+    return host_buffer::create(std::move(logical_data));
 }
 
-std::variant<OwnedBuffer, BorrowedBuffer> get_host_buffer_from_tensor(
-    const Tensor& tt_tensor, const bool padded_output) {
+HostBuffer get_host_buffer_from_tensor(const Tensor& tt_tensor, const bool padded_output) {
     TT_ASSERT(tt_tensor.is_host_tensor());
 
-    using RetType = std::variant<OwnedBuffer, BorrowedBuffer>;
     const auto& tensor_spec = tt_tensor.get_tensor_spec();
-    auto process_owned_buffer = [&tensor_spec, padded_output](const OwnedBuffer& buffer) -> RetType {
+    auto convert_to_logical = [&tensor_spec, padded_output](const HostBuffer& buffer) {
         const auto tt_dtype = tensor_spec.data_type();
         switch (tt_dtype) {
             case DataType::UINT8: {
-                return create_row_major_owned_buffer(
-                    std::move(owned_buffer::get_as<uint8_t>(buffer)), tensor_spec, padded_output);
+                return create_row_major_host_buffer<uint8_t>(buffer, tensor_spec, padded_output);
             }
             case DataType::UINT16: {
-                return create_row_major_owned_buffer(
-                    std::move(owned_buffer::get_as<uint16_t>(buffer)), tensor_spec, padded_output);
+                return create_row_major_host_buffer<uint16_t>(buffer, tensor_spec, padded_output);
             }
             case DataType::INT32: {
-                return create_row_major_owned_buffer(
-                    std::move(owned_buffer::get_as<int32_t>(buffer)), tensor_spec, padded_output);
+                return create_row_major_host_buffer<int32_t>(buffer, tensor_spec, padded_output);
             }
             case DataType::UINT32: {
-                return create_row_major_owned_buffer(
-                    std::move(owned_buffer::get_as<uint32_t>(buffer)), tensor_spec, padded_output);
+                return create_row_major_host_buffer<uint32_t>(buffer, tensor_spec, padded_output);
             }
             case DataType::FLOAT32: {
-                return create_row_major_owned_buffer(
-                    std::move(owned_buffer::get_as<float>(buffer)), tensor_spec, padded_output);
+                return create_row_major_host_buffer<float>(buffer, tensor_spec, padded_output);
             }
             case DataType::BFLOAT16: {
-                return create_row_major_owned_buffer(
-                    std::move(owned_buffer::get_as<::bfloat16>(buffer)), tensor_spec, padded_output);
+                return create_row_major_host_buffer<::bfloat16>(buffer, tensor_spec, padded_output);
             }
             case DataType::BFLOAT8_B:
             case DataType::BFLOAT4_B: {
                 const auto& tile = tensor_spec.tile();
-                auto uint32_data = owned_buffer::get_as<std::uint32_t>(buffer).get();
+                tt::stl::Span<const std::uint32_t> uint32_data = host_buffer::get_as<std::uint32_t>(buffer);
                 auto float_unpacked_data = tt_dtype == DataType::BFLOAT8_B
                                                ? unpack_bfp8_tiles_into_float_vec(
                                                      uint32_data, /*row_major_output=*/false, /*is_exp_a=*/false, tile)
                                                : unpack_bfp4_tiles_into_float_vec(
                                                      uint32_data, /*row_major_output=*/false, /*is_exp_a=*/false, tile);
-                auto input_float_buffer = owned_buffer::create<float>(std::move(float_unpacked_data));
-                return create_row_major_owned_buffer(std::move(input_float_buffer), tensor_spec, padded_output);
+                auto input_float_buffer = tt::tt_metal::host_buffer::create<float>(std::move(float_unpacked_data));
+                return create_row_major_host_buffer<float>(input_float_buffer, tensor_spec, padded_output);
             }
             default: {
                 TT_THROW("Unsupported DataType: {}", tt_dtype);
@@ -438,23 +432,27 @@ std::variant<OwnedBuffer, BorrowedBuffer> get_host_buffer_from_tensor(
         }
     };
 
-    return std::visit(
+    auto copy_if_borrowed = [](const HostBuffer& buffer) {
+        if (buffer.is_borrowed()) {
+            return buffer.deep_copy();
+        }
+        return buffer;
+    };
+
+    return copy_if_borrowed(convert_to_logical(std::visit(
         tt::stl::overloaded{
-            [&process_owned_buffer](const OwnedStorage& storage) -> RetType {
-                return process_owned_buffer(storage.buffer);
-            },
-            [&process_owned_buffer](const MultiDeviceHostStorage& storage) -> RetType {
+            [](const HostStorage& storage) { return storage.buffer; },
+            [](const MultiDeviceHostStorage& storage) {
                 TT_FATAL(storage.buffers.size() == 1, "Can't get a single buffer from multi device host storage");
-                return process_owned_buffer(storage.buffers[0]);
+                return storage.buffers[0];
             },
-            [](const BorrowedStorage& borrowed_storage) -> RetType { return borrowed_storage.buffer; },
-            [&tt_tensor](auto&&) -> RetType {
+            [&tt_tensor](auto&&) -> HostBuffer {
                 TT_THROW(
                     "Tensor with {} cannot be converted to torch",
                     tt::stl::get_active_type_name_in_variant(tt_tensor.get_storage()));
             },
         },
-        tt_tensor.get_storage());
+        tt_tensor.get_storage())));
 }
 
 py::object convert_tt_tensor_to_torch_tensor(const Tensor& tt_tensor, const bool padded_output = false) {
@@ -463,38 +461,25 @@ py::object convert_tt_tensor_to_torch_tensor(const Tensor& tt_tensor, const bool
 
     // TODO: Remove padded_output flag which supports old behaviour of returning tensors with padded shape.
     // Need to update tests to not use tensor.to_torch_with_padded_shape()
-    auto buffer = get_host_buffer_from_tensor(tt_tensor, padded_output);
+    HostBuffer buffer = get_host_buffer_from_tensor(tt_tensor, padded_output);
 
     py::object torch = py::module_::import("torch");
     auto frombuffer = torch.attr("frombuffer");
 
-    py::object torch_dtype = std::visit(
-        [&torch](auto&& owned_or_borrowed_buffer) -> py::object {
-            // Peel off outer variant type.
-            using BufferType = std::decay_t<decltype(owned_or_borrowed_buffer)>;
-            static_assert(std::is_same_v<BufferType, OwnedBuffer> or std::is_same_v<BufferType, BorrowedBuffer>);
-            return std::visit(
-                [&torch](auto&& b) -> py::object {
-                    using T = typename std::decay_t<decltype(b)>::value_type;
-                    if constexpr (std::is_same_v<T, uint8_t>) {
-                        return torch.attr("uint8");
-                    } else if constexpr (std::is_same_v<T, uint16_t>) {
-                        return torch.attr("int16");
-                    } else if constexpr (std::is_same_v<T, int32_t>) {
-                        return torch.attr("int32");
-                    } else if constexpr (std::is_same_v<T, uint32_t>) {
-                        return torch.attr("int32");
-                    } else if constexpr (std::is_same_v<T, float>) {
-                        return torch.attr("float32");
-                    } else if constexpr (std::is_same_v<T, ::bfloat16>) {
-                        return torch.attr("bfloat16");
-                    } else {
-                        static_assert(tt::stl::concepts::always_false_v<T>, "Unsupported buffer!");
-                    }
-                },
-                owned_or_borrowed_buffer);
-        },
-        buffer);
+    py::object torch_dtype = [&]() {
+        switch (tt_tensor.get_tensor_spec().data_type()) {
+            case DataType::UINT8: return torch.attr("uint8");
+            case DataType::UINT16: return torch.attr("int16");
+            case DataType::INT32: return torch.attr("int32");
+            case DataType::UINT32: return torch.attr("int32");
+            case DataType::BFLOAT16: return torch.attr("bfloat16");
+            case DataType::BFLOAT8_B:
+            case DataType::BFLOAT4_B:
+            case DataType::FLOAT32: return torch.attr("float32");
+            case DataType::INVALID: TT_THROW("Invalid data type");
+        }
+        TT_THROW("Unreachable");
+    }();
 
     auto logical_shape = tt_tensor.get_logical_shape();
     auto view = logical_shape.view();
@@ -513,9 +498,7 @@ py::object convert_tt_tensor_to_torch_tensor(const Tensor& tt_tensor, const bool
     }
     tensor = tensor.attr("reshape")(torch_shape);
     tensor = tensor.attr("contiguous")();
-    if (tt_tensor.storage_type() == StorageType::BORROWED) {
-        tensor = tensor.attr("clone")();
-    }
+
     GraphTracker::instance().track_function_end(tensor);
     return tensor;
 }
@@ -528,33 +511,20 @@ py::object convert_tt_tensor_to_numpy_tensor(const Tensor& tt_tensor) {
     py::object np = py::module_::import("numpy");
     auto frombuffer = np.attr("frombuffer");
 
-    py::object np_dtype = std::visit(
-        [&np](auto&& owned_or_borrowed_buffer) -> py::object {
-            // Peel off outer variant type.
-            using BufferType = std::decay_t<decltype(owned_or_borrowed_buffer)>;
-            static_assert(std::is_same_v<BufferType, OwnedBuffer> or std::is_same_v<BufferType, BorrowedBuffer>);
-            return std::visit(
-                [&np](auto&& b) -> py::object {
-                    using T = typename std::decay_t<decltype(b)>::value_type;
-                    if constexpr (std::is_same_v<T, uint8_t>) {
-                        return np.attr("ubyte");
-                    } else if constexpr (std::is_same_v<T, uint16_t>) {
-                        return np.attr("int16");
-                    } else if constexpr (std::is_same_v<T, int32_t>) {
-                        return np.attr("int32");
-                    } else if constexpr (std::is_same_v<T, uint32_t>) {
-                        return np.attr("int32");
-                    } else if constexpr (std::is_same_v<T, float>) {
-                        return np.attr("float32");
-                    } else if constexpr (std::is_same_v<T, ::bfloat16>) {
-                        TT_THROW("Bfloat16 is not supported for numpy!");
-                    } else {
-                        static_assert(tt::stl::concepts::always_false_v<T>, "Unsupported buffer!");
-                    }
-                },
-                owned_or_borrowed_buffer);
-        },
-        buffer);
+    py::object np_dtype = [&]() {
+        switch (tt_tensor.get_tensor_spec().data_type()) {
+            case DataType::UINT8: return np.attr("ubyte");
+            case DataType::UINT16: return np.attr("int16");
+            case DataType::INT32: return np.attr("int32");
+            case DataType::UINT32: return np.attr("int32");
+            case DataType::BFLOAT16: TT_THROW("Bfloat16 is not supported for numpy!");
+            case DataType::BFLOAT8_B:
+            case DataType::BFLOAT4_B:
+            case DataType::FLOAT32: return np.attr("float32");
+            case DataType::INVALID: TT_THROW("Invalid data type");
+        }
+        TT_THROW("Unreachable");
+    }();
 
     auto logical_shape = tt_tensor.get_logical_shape();
     auto view = logical_shape.view();
@@ -1482,13 +1452,11 @@ void pytensor_module(py::module& m_tensor) {
         )doc")
         .def(
             "buffer",
-            [](const Tensor& self) -> std::variant<OwnedBuffer, BorrowedBuffer> {
-                using RetType = std::variant<OwnedBuffer, BorrowedBuffer>;
+            [](const Tensor& self) -> HostBuffer {
                 return std::visit(
                     tt::stl::overloaded{
-                        [](const OwnedStorage& s) -> RetType { return s.buffer; },
-                        [](const BorrowedStorage& s) -> RetType { return s.buffer; },
-                        [&](auto&&) -> RetType {
+                        [](const HostStorage& s) -> HostBuffer { return s.buffer; },
+                        [&](auto&&) -> HostBuffer {
                             TT_THROW(
                                 "{} doesn't support buffer method",
                                 tt::stl::get_active_type_name_in_variant(self.get_storage()));

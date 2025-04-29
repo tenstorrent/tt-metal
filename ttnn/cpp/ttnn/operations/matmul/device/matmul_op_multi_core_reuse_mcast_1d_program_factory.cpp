@@ -1747,6 +1747,8 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_gather_in0(
     uint32_t num_global_cb_receivers,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
     const bool in1_is_dram_interleaved = in1_buffer->is_dram() && !b.is_sharded();
+    const bool in1_is_dram_sharded =
+        in1_buffer->is_dram() && b.is_sharded() && !global_cb.has_value();  // read from DRAM directly
 
     /* Core setup */
     constexpr bool row_major = true;
@@ -1806,15 +1808,27 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_gather_in0(
     uint32_t in1_CB_tiles = 0;
     uint32_t in1_tensor_width_in_tiles = b.get_padded_shape()[-1] / in1_tile.get_tile_shape()[1];
 
-    if (!in1_is_dram_interleaved) {
+    if (in1_is_dram_sharded || in1_is_dram_interleaved) {
+        in1_CB_tiles = 2 * in0_shard_width_in_tiles * per_core_N;  // Double buffered
+    } else {
         in1_shard_height_in_tiles = in1_buffer->shard_spec().shape()[0] / in1_tile.get_tile_shape()[0];
         in1_shard_width_in_tiles =
             in1_buffer->shard_spec().shape()[1] / in1_tile.get_tile_shape()[1] / num_global_cb_receivers;
         in1_CB_tiles = in1_shard_height_in_tiles * in1_shard_width_in_tiles;
-    } else {
-        in1_CB_tiles = 2 * in0_shard_width_in_tiles * per_core_N;  // Double buffered
     }
     uint32_t in1_CB_size = in1_CB_tiles * in1_single_tile_size;
+
+    // get the max page size based on num tiles
+    uint32_t per_core_N_size_bytes = per_core_N * in1_single_tile_size;
+    uint32_t max_packet_size = 8192;
+    uint32_t in1_block_page_size = per_core_N_size_bytes > max_packet_size ? max_packet_size : per_core_N_size_bytes;
+    uint32_t in1_block_page_size_last =
+        per_core_N_size_bytes > max_packet_size ? per_core_N_size_bytes % max_packet_size : per_core_N_size_bytes;
+    uint32_t in1_block_width_num_pages = (per_core_N_size_bytes + in1_block_page_size - 1) / in1_block_page_size;
+    uint32_t in1_shard_width_in_dram = 0;
+    if (in1_is_dram_sharded) {
+        in1_shard_width_in_dram = in1_buffer->shard_spec().shape()[1] / in1_tile.get_tile_shape()[1];
+    }
 
     /* in2 */
     uint32_t in2_single_tile_size = in0_single_tile_size;
@@ -1859,11 +1873,16 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_gather_in0(
 
     std::vector<uint32_t> in1_sender_writer_compile_time_args = {
         (std::uint32_t)in1_is_dram_interleaved,    // in1_is_dram_interleaved
+        (std::uint32_t)in1_is_dram_sharded,        // in1_is_dram_sharded
         (std::uint32_t)in1_block_height_in_tiles,  // in1_block_height_in_tiles
         (std::uint32_t)per_core_N,                 // in1_block_width_in_tiles
         (std::uint32_t)in1_tensor_width_in_tiles,  // in1_tensor_width_in_tiles
         (std::uint32_t)num_blocks,                 // num_blocks
         (std::uint32_t)B,                          // batch
+        (std::uint32_t)in1_block_page_size,
+        (std::uint32_t)in1_block_page_size_last,
+        (std::uint32_t)in1_block_width_num_pages,
+        (std::uint32_t)in1_shard_width_in_dram,
     };
 
     std::vector<uint32_t> compute_kernel_args = {
@@ -1888,6 +1907,7 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_gather_in0(
 
         untilize_out,             // untilize_out
         in1_is_dram_interleaved,  // in1_is_dram_interleaved
+        in1_is_dram_sharded,      // in1_is_dram_sharded
     };
 
     /* Kernel defines */
@@ -1984,7 +2004,7 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_gather_in0(
             tt_metal::CircularBufferConfig(in1_CB_size, {{src1_cb_index, in1_data_format}})
                 .set_page_size(src1_cb_index, in1_single_tile_size)
                 .set_tile_dims(src1_cb_index, in1_tile);
-        if (!in1_is_dram_interleaved) {
+        if (!in1_is_dram_interleaved && !in1_is_dram_sharded) {
             src1_cb_config = src1_cb_config.set_globally_allocated_address(*in1_buffer);
         }
         cb_src1 = tt_metal::CreateCircularBuffer(program, all_cores, src1_cb_config);
@@ -2084,6 +2104,33 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_gather_in0(
     }
 
     /* Runtime args */
+    std::map<uint32_t, uint32_t> worker_coord_y_to_dram_bank_first_col_mapping;
+    std::map<uint32_t, uint32_t> worker_coord_y_to_dram_bank_second_col_mapping;
+    if (in1_is_dram_sharded) {
+        if (device->arch() == tt::ARCH::WORMHOLE_B0) {
+            worker_coord_y_to_dram_bank_first_col_mapping[0] = 1;
+            worker_coord_y_to_dram_bank_first_col_mapping[4] = 2;
+            worker_coord_y_to_dram_bank_first_col_mapping[5] = 3;
+            worker_coord_y_to_dram_bank_first_col_mapping[9] = 0;
+
+            worker_coord_y_to_dram_bank_second_col_mapping[0] = 4;
+            worker_coord_y_to_dram_bank_second_col_mapping[1] = 6;
+            worker_coord_y_to_dram_bank_second_col_mapping[2] = 9;
+            worker_coord_y_to_dram_bank_second_col_mapping[4] = 10;
+            worker_coord_y_to_dram_bank_second_col_mapping[5] = 11;
+            worker_coord_y_to_dram_bank_second_col_mapping[6] = 8;
+            worker_coord_y_to_dram_bank_second_col_mapping[7] = 7;
+            worker_coord_y_to_dram_bank_second_col_mapping[9] = 5;
+
+        } else if (device->arch() == tt::ARCH::BLACKHOLE) {
+            TT_THROW("ring gather MM currently not supporting blackhole when in1 is dram sharded");
+        } else {
+            TT_THROW("ring gather MM currently not supporting this device arch");
+        }
+    }
+
+    uint32_t bank_id = 0;
+    std::vector<uint32_t> bank_ids;
     for (uint32_t i = 0; i < num_cores; ++i) {
         bool send_to_hop_core = i == 0 && use_hop_cores;
         const auto& core = worker_cores_vec[i];
@@ -2120,7 +2167,28 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_gather_in0(
             in1_buffer->address(),  // in1_tensor_addr
             i,                      // ring_idx
         };
-
+        if (in1_is_dram_sharded) {
+            if (core.x <= 3) {
+                bank_id = worker_coord_y_to_dram_bank_first_col_mapping[core.y];
+            } else {
+                bank_id = worker_coord_y_to_dram_bank_second_col_mapping[core.y];
+            }
+            uint32_t dram_read_offset = 0;
+            if (core.x % 2 == 0) {
+                dram_read_offset = 1;
+            }
+            bank_ids.push_back(bank_id);
+            uint32_t vc = 0;
+            for (uint32_t j = 0; j < i; ++j) {
+                auto core_prev = worker_cores_vec[j];
+                if (core_prev.y == core.y) {
+                    vc = (vc + 1) & 0x3;
+                }
+            }
+            mm_in1_args.push_back((std::uint32_t)bank_id);
+            mm_in1_args.push_back((std::uint32_t)vc);
+            mm_in1_args.push_back((std::uint32_t)dram_read_offset);
+        }
         tt_metal::SetRuntimeArgs(program, mm_kernel_in1_sender_writer_id, core, mm_in1_args);
 
         /* compute */
@@ -2195,7 +2263,7 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_gather_in0(
                 UpdateDynamicCircularBufferAddress(program, cb_src0, *src_buffer_a);
             }
             if (src1_sharded) {
-                if (!global_cb.has_value()) {
+                if (!global_cb.has_value() && !src_buffer_b->is_dram()) {
                     UpdateDynamicCircularBufferAddress(program, cb_src1, *src_buffer_b);
                 }
             }

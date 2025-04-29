@@ -86,7 +86,7 @@ static Tensor arange_impl(
         "Invalid range: Step direction does not match range bounds");
 
     auto size = std::max<int64_t>(0, tt::div_up(std::abs(stop - start), std::abs(step)));
-    auto owned_buffer = tt::tt_metal::owned_buffer::create<T>(size);
+    auto owned_buffer = std::vector<T>(size);
 
     auto index = 0;
     for (auto value = start; (step > 0) ? (value < stop) : (value > stop); value += step) {
@@ -96,9 +96,12 @@ static Tensor arange_impl(
             owned_buffer[index++] = static_cast<T>(value);
         }
     }
-    auto output =
-        Tensor(OwnedStorage{owned_buffer}, ttnn::Shape{static_cast<uint32_t>(size)}, data_type, Layout::ROW_MAJOR)
-            .to_layout(layout);
+    auto output = Tensor(
+                      tt::tt_metal::HostStorage{tt::tt_metal::host_buffer::create(std::move(owned_buffer))},
+                      ttnn::Shape{static_cast<uint32_t>(size)},
+                      data_type,
+                      Layout::ROW_MAJOR)
+                      .to_layout(layout);
     if (device.has_value()) {
         auto devices = device->get_devices();
         if (devices.size() == 1) {
@@ -123,12 +126,15 @@ static Tensor full_impl(
     std::optional<Tensor> optional_output_tensor) {
     constexpr DataType data_type = tt::tt_metal::convert_to_data_type<T>();
     TensorSpec tensor_spec(shape, TensorLayout(data_type, PageConfig(layout), MemoryConfig{}));
-    auto owned_buffer = tt::tt_metal::owned_buffer::create<T>(
-        tensor_spec.physical_shape().height() * tensor_spec.physical_shape().width());
+    auto owned_buffer = std::vector<T>(tensor_spec.physical_shape().height() * tensor_spec.physical_shape().width());
     // TODO: 15061 - Generalize the header to support generic vector / view types.
     std::fill(std::begin(owned_buffer), std::end(owned_buffer), value);
 
-    Tensor host_tensor(OwnedStorage{owned_buffer}, shape, data_type, layout);
+    Tensor host_tensor(
+        tt::tt_metal::HostStorage{tt::tt_metal::host_buffer::create(std::move(owned_buffer))},
+        shape,
+        data_type,
+        layout);
     if (optional_output_tensor.has_value()) {
         tt::tt_metal::write_tensor(host_tensor, *optional_output_tensor, queue_id);
         return *optional_output_tensor;
@@ -502,7 +508,6 @@ constexpr auto ones_like =
 constexpr auto empty_like =
     ttnn::decorators::register_operation<"ttnn::empty_like", ttnn::operations::creation::EmptyLike>();
 
-constexpr auto arange =
-    ttnn::decorators::register_operation_with_auto_launch_op<"ttnn::arange", ttnn::operations::creation::Arange>();
+constexpr auto arange = ttnn::decorators::register_operation<"ttnn::arange", ttnn::operations::creation::Arange>();
 
 }  // namespace ttnn

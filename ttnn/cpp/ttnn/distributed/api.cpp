@@ -9,6 +9,7 @@
 #include <tt_stl/overloaded.hpp>
 #include "tt-metalium/assert.hpp"
 #include "tt-metalium/mesh_coord.hpp"
+#include "ttnn/tensor/storage.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/host_buffer/functions.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
@@ -47,7 +48,7 @@ std::vector<Tensor> get_device_tensors(const Tensor& tensor) {
         auto& host_storage = std::get<tt::tt_metal::MultiDeviceHostStorage>(tensor.get_storage());
         const Tile tile = tensor.get_tensor_spec().tile();
         for (int i = 0; i < host_storage.num_buffers(); ++i) {
-            tensors.push_back(Tensor{OwnedStorage{host_storage.get_buffer(i)}, host_storage.specs[i]});
+            tensors.push_back(Tensor{HostStorage{host_storage.get_buffer(i)}, host_storage.specs[i]});
         }
         return tensors;
     } else if (std::holds_alternative<tt::tt_metal::DeviceStorage>(tensor.get_storage())) {
@@ -78,15 +79,15 @@ Tensor aggregate_as_tensor(
         }
     }
 
-    // Based whether the first tensor shard has OwnedBuffer or Device buffer,
+    // Based whether the first tensor shard has Host or Device buffer,
     // we want to use MultiDeviceHostStorage or MultiDeviceStorage
     StorageType storage_type = reference_shard.storage_type();
     Tile tile = reference_shard.get_tensor_spec().tile();
-    if (storage_type == StorageType::OWNED) {
+    if (storage_type == StorageType::HOST) {
         std::vector<ttnn::TensorSpec> specs;
-        std::vector<OwnedBuffer> host_owned_buffers;
+        std::vector<HostBuffer> host_owned_buffers;
         for (const auto& shard : tensor_shards) {
-            host_owned_buffers.push_back(std::get<OwnedStorage>(shard.get_storage()).buffer);
+            host_owned_buffers.push_back(std::get<HostStorage>(shard.get_storage()).buffer);
             specs.push_back(shard.get_tensor_spec());
             Tile shard_tile = shard.get_tensor_spec().tile();
             if (shard_tile != tile) {
@@ -100,23 +101,6 @@ Tensor aggregate_as_tensor(
                     shard_tile.get_height(),
                     shard_tile.get_width());
             }
-        }
-        auto storage = MultiDeviceHostStorage{config, std::move(host_owned_buffers), specs};
-        return Tensor(std::move(storage), reference_shard.get_tensor_spec());
-    } else if (storage_type == StorageType::BORROWED) {
-        std::vector<ttnn::TensorSpec> specs;
-        std::vector<OwnedBuffer> host_owned_buffers;
-        for (const auto& shard : tensor_shards) {
-            auto buffer = std::get<BorrowedStorage>(shard.get_storage()).buffer;
-            specs.push_back(shard.get_tensor_spec());
-
-            auto visitor = tt::stl::overloaded{[&shard, &host_owned_buffers](const auto& buffer) -> OwnedBuffer {
-                using BorrowedBufferType = std::vector<typename std::decay_t<decltype(buffer)>::value_type>;
-
-                return owned_buffer::create(BorrowedBufferType(buffer.begin(), buffer.end()));
-            }};
-
-            host_owned_buffers.push_back(std::visit(visitor, buffer));
         }
         auto storage = MultiDeviceHostStorage{config, std::move(host_owned_buffers), specs};
         return Tensor(std::move(storage), reference_shard.get_tensor_spec());

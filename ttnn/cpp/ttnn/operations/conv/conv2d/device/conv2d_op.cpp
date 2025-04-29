@@ -73,79 +73,49 @@ Tensor optimized_conv_new(
     bool enable_weights_double_buffer,
     bool enable_split_reader,
     bool enable_subblock_padding) {
-    std::vector<Tensor> output_tensors = {Tensor(tt::tt_metal::operation::get_workers_for_op_output({a, b}))};
+    TT_FATAL(
+        b.get_layout() == Layout::TILE,
+        "Weights should be in TILE layout.");  // Weights should already be formatted
+    const auto& ashape = input_tensor_shape;
+    auto padded_a_shape = ttnn::Shape({ashape[0], ashape[1], ashape[2], tt::round_up(ashape[3], 16)});
+    experimental::auto_format::FormatParams input_a_format_params = {
+        .pad_shape = padded_a_shape, .pad_value = 0.0, .target_layout = Layout::ROW_MAJOR};
+    experimental::auto_format::FormatParams input_b_format_params = {
+        .pad_shape = b.get_padded_shape(), .pad_value = 0.0, .target_layout = Layout::TILE};
+    experimental::auto_format::FormatParams input_bias_format_params = {};
+    if (bias.has_value()) {
+        input_bias_format_params = {
+            .pad_shape = bias.value().get_padded_shape(), .pad_value = 0, .target_layout = Layout::TILE};
+    }
+    auto output_layout = untilize_out ? Layout::ROW_MAJOR : Layout::TILE;
+    auto arch = is_tensor_on_device_or_multidevice(a)
+                    ? a.device()->arch()
+                    : ttnn::operations::experimental::auto_format::AutoFormat::GetDefaultDevice()->arch();
+    bool fp32_accum =
+        a.device()->arch() == tt::ARCH::WORMHOLE_B0;  // && compute_kernel_config.has_value()) ?
+                                                      // compute_kernel_config.value().fp32_dest_acc_en : false;
+    auto optimized_conv_op = OptimizedConvNew(
+        sliding_window_config,
+        output_channels,
+        groups,
+        untilize_out,
+        bias.has_value(),
+        activation,
+        parallelization_config,
+        block_config,
+        memory_config,
+        dtype,
+        input_tensor_shape,
+        compute_kernel_config,
+        enable_act_double_buffer,
+        enable_weights_double_buffer,
+        enable_split_reader,
+        enable_subblock_padding);
+    IDevice* device = a.device();
 
-    operation::launch_op(
-        [sliding_window_config,
-         output_channels,
-         groups,
-         untilize_out,
-         activation,
-         parallelization_config,
-         block_config,
-         memory_config,
-         dtype,
-         input_tensor_shape,
-         compute_kernel_config,
-         enable_act_double_buffer,
-         enable_weights_double_buffer,
-         enable_split_reader,
-         enable_subblock_padding](
-            const std::vector<Tensor>& input_tensors,
-            const std::vector<std::optional<const Tensor>>& optional_input_tensors,
-            const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
-            using ttnn::operations::experimental::auto_format::FormatParams;
-            auto& a = input_tensors.at(0);
-            auto& b = input_tensors.at(1);
-            auto& bias = optional_input_tensors.at(0);
-            TT_FATAL(
-                b.get_layout() == Layout::TILE,
-                "Weights should be in TILE layout.");  // Weights should already be formatted
-            const auto& ashape = input_tensor_shape;
-            auto padded_a_shape = ttnn::Shape({ashape[0], ashape[1], ashape[2], tt::round_up(ashape[3], 16)});
-            FormatParams input_a_format_params = {
-                .pad_shape = padded_a_shape, .pad_value = 0.0, .target_layout = Layout::ROW_MAJOR};
-            FormatParams input_b_format_params = {
-                .pad_shape = b.get_padded_shape(), .pad_value = 0.0, .target_layout = Layout::TILE};
-            FormatParams input_bias_format_params = {};
-            if (bias.has_value()) {
-                input_bias_format_params = {
-                    .pad_shape = bias.value().get_padded_shape(), .pad_value = 0, .target_layout = Layout::TILE};
-            }
-            auto output_layout = untilize_out ? Layout::ROW_MAJOR : Layout::TILE;
-            auto arch = is_tensor_on_device_or_multidevice(a)
-                            ? a.device()->arch()
-                            : ttnn::operations::experimental::auto_format::AutoFormat::GetDefaultDevice()->arch();
-            bool fp32_accum =
-                a.device()->arch() == tt::ARCH::WORMHOLE_B0;  // && compute_kernel_config.has_value()) ?
-                                                              // compute_kernel_config.value().fp32_dest_acc_en : false;
-            auto optimized_conv_op = OptimizedConvNew(
-                sliding_window_config,
-                output_channels,
-                groups,
-                untilize_out,
-                bias.has_value(),
-                activation,
-                parallelization_config,
-                block_config,
-                memory_config,
-                dtype,
-                input_tensor_shape,
-                compute_kernel_config,
-                enable_act_double_buffer,
-                enable_weights_double_buffer,
-                enable_split_reader,
-                enable_subblock_padding);
-            IDevice* device = a.device();
-
-            optimized_conv_op.pre_op_l1_allocation_size_bytes =
-                device->allocator()->get_statistics(tt::tt_metal::BufferType::L1).total_allocated_bytes;
-            return operation::run_without_autoformat(optimized_conv_op, input_tensors, optional_input_tensors);
-        },
-        {a, b},
-        output_tensors,
-        {std::move(bias)});
-    return output_tensors.at(0);
+    optimized_conv_op.pre_op_l1_allocation_size_bytes =
+        device->allocator()->get_statistics(tt::tt_metal::BufferType::L1).total_allocated_bytes;
+    return operation::run_without_autoformat(optimized_conv_op, {a, b}, {bias}).at(0);
 }
 
 void OptimizedConvNew::validate(

@@ -28,7 +28,6 @@
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/operations/moreh/moreh_sum/moreh_sum.hpp"
 #include "ttnn/tensor/enum_types.hpp"
-#include "ttnn/tensor/host_buffer/owned_buffer.hpp"
 #include "ttnn/tensor/layout/page_config.hpp"
 #include "ttnn/tensor/layout/tensor_layout.hpp"
 #include "ttnn/tensor/shape/shape.hpp"
@@ -69,9 +68,8 @@ TEST_F(MultiCommandQueueSingleDeviceFixture, TestAsyncPreallocatedOutputs) {
     ttnn::SmallVector<int64_t> reduce_dims = {3};
     Tensor np_out = ttnn::moreh_sum(np_tensor, reduce_dims, false, std::nullopt, std::nullopt, std::nullopt);
     Tensor np_out_host = np_out.cpu();
-    const bfloat16* golden_output = std::get<owned_buffer::Buffer<bfloat16>>(
-                                        std::get<MultiDeviceHostStorage>(np_out_host.get_storage()).buffers.at(0))
-                                        .begin();
+    const auto golden_output =
+        std::get<MultiDeviceHostStorage>(np_out_host.get_storage()).buffers.at(0).view_as<bfloat16>();
     // Events for host - device synchronization
     // Running sum-reduce with preallocated output
     // Preallocate Input and Output Tensors on Device

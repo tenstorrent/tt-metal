@@ -13,6 +13,7 @@
 #include "compute_kernel_api/binary_bitwise_sfpu.h"
 #include "compute_kernel_api/binary_shift.h"
 #include "compute_kernel_api/add_int32_sfpu.h"
+#include "compute_kernel_api/add_uint32_sfpu.h"
 #include "compute_kernel_api/add_uint16_sfpu.h"
 #include "compute_kernel_api/sub_int32_sfpu.h"
 #include "compute_kernel_api/binary_max_min.h"
@@ -115,6 +116,9 @@ void MAIN {
 #endif
 #ifdef ADD_INT32_INIT
             ADD_INT32_INIT
+#endif
+#ifdef ADD_UINT32_INIT
+            ADD_UINT32_INIT
 #endif
 #ifdef ADD_UINT16_INIT
             ADD_UINT16_INIT

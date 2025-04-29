@@ -102,19 +102,7 @@ ttnn::Tensor permute_launch(
     const ttnn::SmallVector<uint32_t>& dims,
     const MemoryConfig& output_mem_config,
     const std::optional<float>& pad_value) {
-    std::vector<ttnn::Tensor> output_tensors = {ttnn::Tensor(tt::tt_metal::operation::get_workers_for_op_output({a}))};
-    tt::tt_metal::operation::launch_op(
-        [dims, output_mem_config, pad_value](
-            const std::vector<ttnn::Tensor>& input_tensors,
-            const std::vector<std::optional<const ttnn::Tensor>>& optional_input_tensors,
-            const std::vector<std::optional<ttnn::Tensor>>& optional_output_tensors) mutable
-            -> std::vector<ttnn::Tensor> {
-            auto& a = input_tensors.at(0);
-            return {permute_impl(a, dims, output_mem_config, pad_value)};
-        },
-        {a},
-        output_tensors);
-    return output_tensors.at(0);
+    return permute_impl(a, dims, output_mem_config, pad_value);
 }
 
 bool is_permute_nop(const ttnn::Tensor& a, const ttnn::SmallVector<uint32_t>& dims) {
