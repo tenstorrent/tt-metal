@@ -10,7 +10,6 @@
 #include "compute_kernel_api/reconfig_data_format.h"
 #include "compute_kernel_api/pack.h"
 
-int32_t topk_replay_init = 0;
 namespace NAMESPACE {
 
 FORCE_INLINE void transpose_and_pack(uint32_t input_cb_index, uint32_t dest_cb_index, uint32_t total_tiles) {
