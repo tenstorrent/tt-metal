@@ -8,7 +8,6 @@ from loguru import logger
 import os
 import ttnn
 from models.tt_transformers.tt.common import (
-    get_prefill_rot_mat,
     PagedAttentionConfig,
 )
 from models.tt_transformers.tt.model_config import DecodersPrecision
@@ -16,7 +15,6 @@ from models.tt_transformers.tt.generator import Generator
 from models.tt_transformers.demo.simple_text_demo import create_tt_model  # TODO move to common util dir
 from models.utility_functions import (
     comp_pcc,
-    comp_allclose,
 )
 from models.utility_functions import skip_for_grayskull
 
@@ -87,10 +85,10 @@ def test_model_inference(
 
     # This sets the minimum PCC for each iteration based on optimization mode
     if "accuracy" in test_id:
-        pcc = 0.91  # TODO Look on improving PCC
+        expec_out_pcc = 0.91  # TODO Look on improving PCC
     else:  # performance mode
         assert "performance" in test_id
-        pcc = 0.869  # TODO Look on improving PCC
+        expec_out_pcc = 0.869  # TODO Look on improving PCC
 
     # Use instruct weights instead of general weights
     instruct = True
@@ -153,16 +151,16 @@ def test_model_inference(
     embd.load_state_dict({"emb.weight": state_dict[f"{state_dict_prefix}tok_embeddings.weight"]})
 
     # pre-compute the rotational embedding matrix and send to device
-    rot_mats = get_prefill_rot_mat(
-        model_args.head_dim,
-        mesh_device,
-        seq_len,
-        model_args.rope_theta,
-        model_args.rope_scaling_factor,
-        model_args.orig_context_len,
-    )
+    # rot_mats = get_prefill_rot_mat(
+    #     model_args.head_dim,
+    #     mesh_device,
+    #     seq_len,
+    #     model_args.rope_theta,
+    #     model_args.rope_scaling_factor,
+    #     model_args.orig_context_len,
+    # )
     # Setup page table
-    page_table_tt = None
+    # page_table_tt = None
     paged_attention_config = None
 
     if paged_attention:
@@ -196,9 +194,6 @@ def test_model_inference(
     # )
 
     logger.info("Model and caches loaded.")
-
-    if run_ref_pt:
-        all_tests_pass = True
 
     # Select the first token from the prompt for initial decoding
     encoded_prompt_tensor = torch.tensor(encoded_prompt)  # [:,0]
@@ -248,20 +243,18 @@ def test_model_inference(
 
     # Measure PCC if also running reference model
     if run_ref_pt:
-        passing, pcc_message = comp_pcc(ref_output, tt_output_torch, pcc)
+        all_tests_pass = True
 
-        logger.info(comp_allclose(ref_output, tt_output_torch))
-        logger.info(f"PCC: {pcc_message}")
-
-        if passing:
-            logger.info("Model Passed!")
-        else:
-            logger.warning("Model Failed!")
+        # Check output pcc
+        passing, pcc_message = comp_pcc(ref_output, tt_output_torch, expec_out_pcc)
+        logger.info(f"Output PCC: {pcc_message}")
         if not passing:
             all_tests_pass = False
+            logger.warning(f"Output PCC {pcc_message} is lower than {expec_out_pcc}")
 
         # Compare KV caches
         if cache_pcc:
+            expec_kv_cache_pcc = 0.99
             for i in range(model_args.n_layers):
                 pytorch_layer_present = [
                     reference_model.layers[i]
@@ -333,26 +326,18 @@ def test_model_inference(
                             )
                         )
 
-                for i, (cache_pt, cache_tt) in enumerate(zip(pytorch_layer_present, tt_layer_present)):
+                for j, (cache_pt, cache_tt) in enumerate(zip(pytorch_layer_present, tt_layer_present)):
                     cache_length_to_check = seq_len
                     cache_pt = cache_pt[:, :, 0:cache_length_to_check, :]
                     cache_tt = cache_tt[:, :, 0:cache_length_to_check, :]
-                    does_pass, output_pcc = comp_pcc(cache_pt, cache_tt)
-                    if i == 0:
-                        logger.info(f"K cache output: {output_pcc}")
-                    else:
-                        logger.info(f"V cache output: {output_pcc}")
+                    pcc_passed, output_pcc = comp_pcc(cache_pt, cache_tt, expec_kv_cache_pcc)
+                    kv_str = "K" if j == 0 else "V"
+                    logger.info(f"[layer={i+1}] {kv_str} cache PCC: {output_pcc}")
+                    if not pcc_passed:
+                        all_tests_pass = False
+                        logger.warning(f"[layer={i+1}] {kv_str} PCC {output_pcc} is lower than {expec_kv_cache_pcc}")
 
-                    if does_pass:
-                        logger.info(f"V Cache Passed!")
-                    else:
-                        logger.warning(f"V Cache Failed! PCC value is lower than {0.99}")
-                    # if not does_pass:
-                    # all_tests_pass = False
-
-    if run_ref_pt:
         if all_tests_pass:
-            logger.info(f"All prefill iterations Passed!")
+            logger.info("All PCC checks passed!")
         else:
-            logger.warning("One or more iterations of prefill had bad PCC")
-            assert all_tests_pass, f"PCC value is lower than {pcc} for some of the outputs. Check Warnings!"
+            assert all_tests_pass, f"PCC is lower than expected for some of the outputs. Check warnings!"
