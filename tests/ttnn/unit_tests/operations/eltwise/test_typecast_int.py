@@ -4,15 +4,10 @@
 
 import torch
 import ttnn
-
 import pytest
-from models.utility_functions import torch_random
-from functools import partial
-from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
-from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
-# case : need to achieve (int32 + int32) addition with (uint16 + int32) inputs
+# use case for TG Llama : need to achieve (int32 + int32) addition with (uint16 + int32) inputs
 def test_typecast_uint16(device):
     torch.manual_seed(0)
 
@@ -61,16 +56,16 @@ def test_typecast_uint16(device):
     "shape, sub_core_grid",
     [
         (
-            (torch.Size([1, 2, 32, 960])),  # 60 tiles - 2 tiles / 30 cores
+            (torch.Size([1, 2, 32, 960])),
             ttnn.CoreRangeSet(
                 [
-                    ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(3, 6)),  # 7 * 3 cores
-                    ttnn.CoreRange(ttnn.CoreCoord(5, 0), ttnn.CoreCoord(6, 6)),  # 7 * 2 cores
+                    ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(3, 6)),
+                    ttnn.CoreRange(ttnn.CoreCoord(5, 0), ttnn.CoreCoord(6, 6)),
                 ]
             ),
         ),
         (
-            (torch.Size([1, 7, 32, 96])),  # 21 tiles - 3 tiles / 7 cores
+            (torch.Size([1, 7, 32, 96])),
             ttnn.CoreRangeSet(
                 [
                     ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(1, 6)),
@@ -138,9 +133,6 @@ def test_typecast_subcore_grid(device, shape, sub_core_grid):
     golden_function = ttnn.get_golden_function(ttnn.add)
     golden_tensor = golden_function(in_data1, in_data2)
 
-    # print("golden_tensor", golden_tensor)
-    # print("output_tensor", output_tensor)
-
     assert torch.equal(golden_tensor, output_tensor)
 
 
@@ -188,8 +180,5 @@ def test_typecast_uint16_subcore_grid(device):
     output_tensor = ttnn.to_torch(output_tensor, dtype=torch.int32)
     golden_function = ttnn.get_golden_function(ttnn.add)
     golden_tensor = golden_function(in_data1, in_data2)
-
-    # print("golden_tensor", golden_tensor)
-    # print("output_tensor", output_tensor)
 
     assert torch.equal(golden_tensor, output_tensor)

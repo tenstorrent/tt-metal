@@ -8,8 +8,8 @@
 #include <optional>
 
 #include "ttnn/tensor/tensor.hpp"
-#include "typecast_pgm_factory.hpp"
-#include "typecast_sharded_pgm_factory.hpp"
+#include "typecast_program_factory.hpp"
+#include "typecast_sharded_program_factory.hpp"
 #include "typecast_device_op_types.hpp"
 
 #include "ttnn/device_operation.hpp"
@@ -44,7 +44,6 @@ struct TypecastDeviceOperation {
 
     static std::tuple<operation_attributes_t, tensor_args_t> invoke(
         const Tensor& input,
-        // const std::vector<UnaryWithParam>& op_chain,
         DataType output_dtype,
         const MemoryConfig& output_memory_config,
         bool fp32_dest_acc_en,
