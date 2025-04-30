@@ -1,7 +1,6 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
-
 
 import torch
 import torch.nn as nn
@@ -69,9 +68,7 @@ class Efficientnetb0(nn.Module):
         x = self._blocks15(x)
         x = self._conv_head(x)
         x = self._bn1(x)
-        torch.save(x, "models/experimental/mobilenetv2/dumps/cov_head")
         x = x * torch.sigmoid(x)
-        torch.save(x, "models/experimental/mobilenetv2/dumps/cov_head_sigmoid")
         x = self._avg_pooling(x)
         x = x.flatten(start_dim=1)
         x = self._fc(x)
@@ -170,7 +167,6 @@ class MBConvBlock(nn.Module):
             x = x * torch.sigmoid(x)
         x = self._depthwise_conv(x)
         x = self._bn1(x)
-        torch.save(x, "torch_out.pt")
         x = x * torch.sigmoid(x)
         mul1 = x
         x = self._avg_pooling(x)
