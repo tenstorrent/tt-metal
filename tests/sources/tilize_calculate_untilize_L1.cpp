@@ -14,12 +14,6 @@ uint32_t unp_cfg_context          = 0;
 uint32_t pack_sync_tile_dst_ptr   = 0;
 uint32_t math_sync_tile_dst_index = 0;
 
-#ifdef DEST_ACC
-const bool is_fp32_dest_acc_en = true;
-#else
-const bool is_fp32_dest_acc_en = false;
-#endif
-
 volatile uint32_t* const buffer_A = reinterpret_cast<volatile uint32_t*>(0x1a000);
 volatile uint32_t* const buffer_B = reinterpret_cast<volatile uint32_t*>(0x1b000);
 
