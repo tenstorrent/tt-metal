@@ -74,33 +74,33 @@ void set_routing_mode(RoutingMode routing_mode) {
     }
 
     // Validate dimension flags are orthogonal (only one can be set)
-    TT_ASSERT(
+    TT_FATAL(
         __builtin_popcount(mode & (ROUTING_MODE_1D | ROUTING_MODE_2D | ROUTING_MODE_3D)) == 1,
         "Only one dimension mode (1D, 2D, 3D) can be active at once");
 
     // Validate topology flags are orthogonal
-    TT_ASSERT(
+    TT_FATAL(
         __builtin_popcount(mode & (ROUTING_MODE_RING | ROUTING_MODE_LINE | ROUTING_MODE_MESH | ROUTING_MODE_TORUS)) ==
             1,
         "Only one topology mode (RING, LINE, MESH, TORUS) can be active at once");
 
     // Validate push/pull flags are orthogonal
-    TT_ASSERT(
+    TT_FATAL(
         __builtin_popcount(mode & (ROUTING_MODE_PUSH | ROUTING_MODE_PULL)) <= 1,
         "PUSH and PULL routing modes cannot be used together");
 
     // Validate push/pull flags are only for 2D
-    TT_ASSERT(
+    TT_FATAL(
         !(mode & (ROUTING_MODE_PUSH | ROUTING_MODE_PULL)) || (mode & ROUTING_MODE_2D),
         "PUSH and PULL routing modes can only be used with 2D topology");
 
     // Validate 1D can't be used with MESH or TORUS
-    TT_ASSERT(
+    TT_FATAL(
         !(mode & ROUTING_MODE_1D) || !(mode & (ROUTING_MODE_MESH | ROUTING_MODE_TORUS)),
         "1D routing mode cannot be combined with MESH or TORUS topology");
 
     // Validate 2D can't be used with LINE or RING
-    TT_ASSERT(
+    TT_FATAL(
         !(mode & ROUTING_MODE_2D) || !(mode & (ROUTING_MODE_LINE | ROUTING_MODE_RING)),
         "2D routing mode cannot be combined with LINE or RING topology");
 
@@ -110,7 +110,7 @@ void set_routing_mode(RoutingMode routing_mode) {
 
 void set_routing_mode(Topology topology, uint32_t dimension /*, take more*/) {
     // TODO: take more parameters to set detail routing mode
-    TT_ASSERT(
+    TT_FATAL(
         dimension == 1 || dimension == 2 || dimension == 3,
         "Invalid dimension {}. Supported dimensions are 1, 2, or 3",
         dimension);
