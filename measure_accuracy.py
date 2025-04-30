@@ -79,6 +79,12 @@ operations_dict = {
     # Activation functions
     "silu": (lambda x, out: torch.nn.SiLU()(x), ttnn.silu, None, "silu"),
     "gelu": (lambda x, out: torch.nn.GELU()(x), ttnn.gelu, None, "gelu"),
+    "gelu_approx": (
+        lambda x, out: torch.nn.GELU()(x),
+        lambda x, output_tensor: ttnn.gelu(x, fast_and_approximate_mode=True, output_tensor=output_tensor),
+        None,
+        "gelu",
+    ),
     "logit": (
         torch.logit,
         lambda x, output_tensor: ttnn.logit(x),
@@ -509,6 +515,7 @@ def main(args):
         "log1p",
         "silu",
         "gelu",
+        "gelu_approx",
         "logit",
         "swish",
         "mish",
@@ -544,6 +551,7 @@ def main(args):
         "sin",
         "silu",
         "gelu",
+        "gelu_approx",
         "logit",
         "swish",
         "mish",
