@@ -11,6 +11,7 @@
 #include "debug/waypoint.h"
 #include "utils/utils.h"
 #include "debug/assert.h"
+#include "tools/profiler/kernel_profiler.hpp"
 
 namespace interleaved_addr_gen {
 
@@ -135,13 +136,22 @@ std::uint64_t get_noc_multicast_addr(
         addr);
 }
 
+// clang-format off
+/**
+ * Get an encoding for a noc address which contains core and L1 address.
+ *
+ * Return value: uint64_t
+ *
+ * | Argument | Description                          | Data type | Valid range        | required |
+ * |----------|--------------------------------------|-----------|--------------------|----------|
+ * | noc_x    | Physical x coordinate of core        | uint32_t  | WH: 0-9, BH: 0-16  | True     |
+ * | noc_y    | Physical y coordinate of core        | uint32_t  | WH: 0-11, BH: 0-11 | True     |
+ * | addr     | Address in local L1 memory           | uint32_t  | 0..1MB             | True     |
+ * | noc      | Which NOC to use for the transaction | uint8_t   | 0 or 1             | False    |
+ */
+// clang-format on
 FORCE_INLINE
 std::uint64_t get_noc_addr(std::uint32_t noc_x, std::uint32_t noc_y, std::uint32_t addr, uint8_t noc = noc_index) {
-    /*
-        Get an encoding which contains tensix core and address you want to
-        write to via the noc multicast
-    */
-
     return NOC_XY_ADDR(DYNAMIC_NOC_X(noc, noc_x), DYNAMIC_NOC_Y(noc, noc_y), addr);
 }
 
@@ -216,9 +226,9 @@ std::uint64_t get_noc_addr(std::uint32_t addr, uint8_t noc = noc_index) {
 // circular dependency between InterleavedAddrGen::noc_async_read (defined and
 // implemented here) and free function noc_async_read() defined in
 // dataflow_api.h
-template <uint32_t max_page_size = NOC_MAX_BURST_SIZE + 1>
-void noc_async_read(
-    std::uint64_t src_noc_addr, std::uint32_t dst_local_l1_addr, std::uint32_t size, uint8_t noc = noc_index);
+// template <uint32_t max_page_size = NOC_MAX_BURST_SIZE + 1>
+// void noc_async_read(
+//     std::uint64_t src_noc_addr, std::uint32_t dst_local_l1_addr, std::uint32_t size, uint8_t noc = noc_index);
 
 template <bool DRAM>
 struct InterleavedAddrGen {
@@ -251,7 +261,52 @@ struct InterleavedAddrGen {
     FORCE_INLINE
     void noc_async_read_page(
         const uint32_t id, const uint32_t dest_addr, const uint32_t offset = 0, uint8_t noc = noc_index) const {
-        noc_async_read(this->get_noc_addr(id, offset), dest_addr, page_size, noc);
+        uint64_t src_noc_addr = this->get_noc_addr(id, offset);
+        uint32_t dst_local_l1_addr = dest_addr;
+        uint32_t size = this->page_size;
+        RECORD_NOC_EVENT_WITH_ADDR(NocEventType::READ, src_noc_addr, size, -1);
+
+        if constexpr (max_page_size <= NOC_MAX_BURST_SIZE) {
+            if constexpr (noc_mode == DM_DYNAMIC_NOC) {
+                inc_noc_counter_val<proc_type, NocBarrierType::READS_NUM_ISSUED>(noc, 1);
+            }
+
+            WAYPOINT("RP2W");
+            while (!noc_cmd_buf_ready(noc, read_cmd_buf));
+            WAYPOINT("RP2D");
+
+            WAYPOINT("NAOW");
+            DEBUG_SANITIZE_NOC_READ_TRANSACTION(noc, src_noc_addr, dst_local_l1_addr, size);
+
+            if constexpr (noc_mode == DM_DYNAMIC_NOC) {
+                uint32_t noc_rd_cmd_field =
+                    NOC_CMD_CPY | NOC_CMD_RD | NOC_CMD_RESP_MARKED | NOC_CMD_VC_STATIC | NOC_CMD_STATIC_VC(1);
+                NOC_CMD_BUF_WRITE_REG(noc, read_cmd_buf, NOC_CTRL, noc_rd_cmd_field);
+            }
+            NOC_CMD_BUF_WRITE_REG(noc, read_cmd_buf, NOC_RET_ADDR_LO, dst_local_l1_addr);
+            NOC_CMD_BUF_WRITE_REG(noc, read_cmd_buf, NOC_TARG_ADDR_LO, (uint32_t)src_noc_addr);
+#ifdef ARCH_BLACKHOLE
+            // Handles reading from PCIe
+            NOC_CMD_BUF_WRITE_REG(noc, read_cmd_buf, NOC_TARG_ADDR_MID, (uint32_t)(src_noc_addr >> 32) & 0x1000000F);
+#endif
+            NOC_CMD_BUF_WRITE_REG(
+                noc,
+                read_cmd_buf,
+                NOC_TARG_ADDR_COORDINATE,
+                (uint32_t)(src_noc_addr >> NOC_ADDR_COORD_SHIFT) & NOC_COORDINATE_MASK);
+            NOC_CMD_BUF_WRITE_REG(noc, read_cmd_buf, NOC_AT_LEN_BE, size);
+            NOC_CMD_BUF_WRITE_REG(noc, read_cmd_buf, NOC_CMD_CTRL, NOC_CTRL_SEND_REQ);
+            if constexpr (noc_mode == DM_DEDICATED_NOC) {
+                noc_reads_num_issued[noc] += 1;
+            }
+
+            WAYPOINT("NAOD");
+        } else {
+            WAYPOINT("NARW");
+            DEBUG_SANITIZE_NOC_READ_TRANSACTION(noc, src_noc_addr, dst_local_l1_addr, size);
+            ncrisc_noc_fast_read_any_len<noc_mode>(noc, read_cmd_buf, src_noc_addr, dst_local_l1_addr, size);
+            WAYPOINT("NARD");
+        }
     }
 };
 
@@ -593,10 +648,23 @@ FORCE_INLINE std::uint64_t get_noc_addr(
     return s.get_noc_addr(id, offset, noc);
 }
 
+// clang-format off
+/**
+ * Get an encoding for a noc address using DRAM/L1 bank id. Uses addrgen tables to convert bank_ids to physical NOC coordinates
+ *
+ * Return value: uint64_t
+ *
+ * | Argument                 | Description                             | Data type | Valid range                                            | required |
+ * |--------------------------|-----------------------------------------|-----------|--------------------------------------------------------|----------|
+ * | bank_id                  | DRAM/L1 bank id                         | uint32_t  | DOX-TODO (DRAM banks 0-5 WH, 0-7 BH. L1 banks unused?) | True     |
+ * | bank_address_offset      | DRAM/L1 bank address offset             | uint32_t  | 0..1MB                                                 | True     |
+ * | noc                      | Which NOC to use for the transaction    | uint8_t   | 0 or 1                                                 | False    |
+ * | DRAM (template argument) | Signifies if address is from DRAM or L1 | bool      | True or False                                          | True     |
+ */
+// clang-format on
 template <bool DRAM>
 FORCE_INLINE uint64_t
 get_noc_addr_from_bank_id(uint32_t bank_id, uint32_t bank_address_offset, uint8_t noc = noc_index) {
-    // Use addrgen tables to convert bank_ids to physical NOC coordinates
     uint64_t noc_addr = 0;
     if constexpr (DRAM) {
         noc_addr = dram_bank_to_noc_xy[noc_index][bank_id];
