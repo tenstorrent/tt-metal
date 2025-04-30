@@ -49,7 +49,7 @@ Tensor Pool2DOp<pool_type>::invoke(
     bool is_out_tiled = false;
     bool is_in_tiled = input_tensor.dtype() == DataType::BFLOAT8_B;  // input tiled for bfp8_b
 
-    sliding_window::ParallelConfig parallel_config;
+    std::optional<sliding_window::ParallelConfig> parallel_config;
     MemoryConfig out_memory_config = input_tensor_sharded.memory_config();
     uint32_t num_cores_nhw = 0;
     uint32_t num_cores_c = 0;
@@ -64,18 +64,17 @@ Tensor Pool2DOp<pool_type>::invoke(
                     (applied_shard_scheme.value() == TensorMemoryLayout::BLOCK_SHARDED),
                 "Only height, width, or block sharding strategies are supported.");
             shard_layout = applied_shard_scheme.value();
-            parallel_config = conv::determine_parallel_config(
-                                            shard_layout,
-                                            batch_size,
-                                            channels,
-                                            output_shape[1],
-                                            output_shape[2],
-                                            channels,
-                                            input_tensor.device()->compute_with_storage_grid_size(),
-                                            ShardOrientation::ROW_MAJOR,
-                                            false,
-                                            false,
-                                            false);
+            parallel_config = pool::determine_parallel_config(
+                shard_layout,
+                batch_size,
+                channels,
+                output_shape[1],
+                output_shape[2],
+                input_tensor.device()->compute_with_storage_grid_size(),
+                ShardOrientation::ROW_MAJOR,
+                false,
+                false,
+                false);
         }
         else { //auto-sharding
             parallel_config = pool::determine_pool_config_for_auto_shard(
@@ -84,12 +83,14 @@ Tensor Pool2DOp<pool_type>::invoke(
                 channels,
                 pool_type
                 );
-                tt::log_debug(tt::LogOp, "auto sharding spec: {}", parallel_config.shard_scheme);
+            tt::log_debug(tt::LogOp, "auto sharding spec: {}", parallel_config->shard_scheme);
         }
-        num_cores_nhw = conv::get_num_cores_nhw_from_parallel_config(parallel_config);
-        num_cores_c = conv::get_num_cores_channels_from_parallel_config(parallel_config);
+        TT_FATAL(parallel_config.has_value(), "Could not determine parallel config for pool2d.");
+
+        num_cores_nhw = conv::get_num_cores_nhw_from_parallel_config(*parallel_config);
+        num_cores_c = conv::get_num_cores_channels_from_parallel_config(*parallel_config);
         auto sharded_mem_config = conv::create_sharded_memory_config_from_parallel_config(
-            input_tensor_sharded.get_padded_shape(), parallel_config, is_in_tiled ? tt::constants::TILE_HEIGHT : 1);
+            input_tensor_sharded.get_padded_shape(), *parallel_config, is_in_tiled ? tt::constants::TILE_HEIGHT : 1);
         input_tensor_sharded = ttnn::to_memory_config(
             input_tensor_sharded, sharded_mem_config, std::nullopt);  // this converts interleaved to sharded
         out_memory_config = input_tensor_sharded.memory_config();
@@ -101,11 +102,11 @@ Tensor Pool2DOp<pool_type>::invoke(
         TT_FATAL(
             !applied_shard_scheme.has_value(), "A sharding scheme should not be specified for a sharded input tensor.");
         TT_FATAL(shard_orientation == ShardOrientation::ROW_MAJOR, "Only row major orientation is supported.");
-        parallel_config.grid = shard_grid;
-        parallel_config.shard_scheme = shard_scheme;
-        parallel_config.shard_orientation = shard_orientation;
-        num_cores_nhw = conv::get_num_cores_nhw_from_parallel_config(parallel_config);
-        num_cores_c = conv::get_num_cores_channels_from_parallel_config(parallel_config);
+        parallel_config->grid = shard_grid;
+        parallel_config->shard_scheme = shard_scheme;
+        parallel_config->shard_orientation = shard_orientation;
+        num_cores_nhw = conv::get_num_cores_nhw_from_parallel_config(*parallel_config);
+        num_cores_c = conv::get_num_cores_channels_from_parallel_config(*parallel_config);
     }
 
     // update the shard spec to match the output shape
@@ -140,7 +141,7 @@ Tensor Pool2DOp<pool_type>::invoke(
         .dilation_hw = {dilation.at(0), dilation.at(1)},
         .num_cores_nhw = num_cores_nhw,
         .num_cores_c = num_cores_c,
-        .core_range_set = parallel_config.grid,
+        .core_range_set = parallel_config->grid,
         .snap_to_tile = false,
         .ceil_mode = ceil_mode,
     };
@@ -152,7 +153,7 @@ Tensor Pool2DOp<pool_type>::invoke(
         sliding_window_config,
         get_bf16_pool_init_value(pool_type),  // pad_val
         false,
-        parallel_config.shard_orientation == ShardOrientation::COL_MAJOR,
+        parallel_config->shard_orientation == ShardOrientation::COL_MAJOR,
         input_tensor_sharded.memory_config(),
         is_out_tiled,
         in_place_halo);
