@@ -73,6 +73,8 @@ enum SfpuType {
     add_uint32,
     add_uint16,
     add1,
+    sub_int32,
+    sub_uint16,
     topk_local_sort,
     topk_merge,
     topk_rebuild,
