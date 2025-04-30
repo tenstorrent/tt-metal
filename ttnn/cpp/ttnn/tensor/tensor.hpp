@@ -20,6 +20,7 @@
 #include "ttnn/distributed/distributed_tensor_config.hpp"
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/tensor/storage.hpp"
+#include "ttnn/tensor/tensor_attributes.hpp"
 #include "ttnn/tensor/tensor_spec.hpp"
 #include "ttnn/tensor/layout/tensor_layout.hpp"
 #include <tt-metalium/buffer.hpp>
@@ -35,19 +36,12 @@ namespace tt_metal {
 namespace distributed {
 class MeshDevice;
 class MeshCommandQueue;
-}
+}  // namespace distributed
 
 class Tensor {
 public:
-    struct TensorAttributes : public std::enable_shared_from_this<TensorAttributes> {
-        Storage storage;
-        TensorSpec tensor_spec;
-        TensorAttributes(Storage storage, TensorSpec tensor_spec);
-        TensorAttributes();
-        ~TensorAttributes() = default;
-    };
-
     std::optional<std::int64_t> tensor_id = std::nullopt;
+
     // Shared pointer to all attributes associated with this tensor
     // Can be safely passed between threads when the tensor is copied
     std::shared_ptr<TensorAttributes> tensor_attributes = nullptr;
@@ -221,19 +215,19 @@ public:
     // ======================================================================================
     // Non-Blocking Getters. Query attributes directly, without waiting for worker completion
     // ======================================================================================
-    const Storage& storage() const { return this->tensor_attributes->storage; };
-    const ttnn::Shape& logical_shape() const { return this->tensor_attributes->tensor_spec.logical_shape(); };
-    const ttnn::Shape& padded_shape() const { return this->tensor_attributes->tensor_spec.padded_shape(); };
-    DataType dtype() const { return this->tensor_attributes->tensor_spec.tensor_layout().get_data_type(); };
-    Layout layout() const { return this->tensor_attributes->tensor_spec.tensor_layout().get_layout(); };
-    const TensorSpec& tensor_spec() const { return this->tensor_attributes->tensor_spec; }
+    const Storage& storage() const { return this->tensor_attributes->get_storage(); };
+    const ttnn::Shape& logical_shape() const { return this->tensor_attributes->get_tensor_spec().logical_shape(); };
+    const ttnn::Shape& padded_shape() const { return this->tensor_attributes->get_tensor_spec().padded_shape(); };
+    DataType dtype() const { return this->tensor_attributes->get_tensor_spec().tensor_layout().get_data_type(); };
+    Layout layout() const { return this->tensor_attributes->get_tensor_spec().tensor_layout().get_layout(); };
+    const TensorSpec& tensor_spec() const { return this->tensor_attributes->get_tensor_spec(); }
 
     // ======================================================================================
     //                                      Setters
     // ======================================================================================
-    void set_storage(const Storage& storage) { this->tensor_attributes->storage = storage; }
+    void set_storage(const Storage& storage) { this->tensor_attributes->set_storage(storage); }
     // We intend to remove this API once we migrate all ops to compute_output_specs, and provide TensorSpec at creation
-    void set_tensor_spec(const TensorSpec& tensor_spec) { this->tensor_attributes->tensor_spec = tensor_spec; }
+    void set_tensor_spec(const TensorSpec& tensor_spec) { this->tensor_attributes->set_tensor_spec(tensor_spec); }
     // ======================================================================================
     //                                      Extra Helper Functions
     // ======================================================================================
@@ -315,8 +309,9 @@ public:
     uint32_t element_size() const;
 
     static constexpr auto attribute_names = std::forward_as_tuple("storage", "tensor_spec");
-    const auto attribute_values() const {
-        return std::forward_as_tuple(this->tensor_attributes->storage, this->tensor_attributes->tensor_spec);
+    auto attribute_values() const {
+        return std::forward_as_tuple(
+            this->tensor_attributes->get_storage(), this->tensor_attributes->get_tensor_spec());
     }
 
     std::vector<uint32_t> host_page_ordering();

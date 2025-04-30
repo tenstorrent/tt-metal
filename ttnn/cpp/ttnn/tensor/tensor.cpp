@@ -58,14 +58,6 @@ Tensor create_owned_tensor_from_row_major_data(
 
 }  // namespace
 
-Tensor::TensorAttributes::TensorAttributes() :
-    tensor_spec(
-        ttnn::Shape(std::array<uint32_t, 4>{0xff, 0xff, 0xff, 0xff}),
-        TensorLayout(DataType::INVALID, PageConfig(Layout::INVALID), MemoryConfig{})) {}
-
-Tensor::TensorAttributes::TensorAttributes(Storage storage, TensorSpec tensor_spec) :
-    storage(std::move(storage)), tensor_spec(std::move(tensor_spec)) {}
-
 Tensor::Tensor(
     Storage storage,
     const ttnn::Shape& logical_shape,
@@ -111,12 +103,12 @@ void Tensor::init(Storage storage, TensorSpec tensor_spec) {
                 }
                 workers = {storage.get_device()};
                 tensor_impl::validate_on_device_dtype_and_layout(
-                    tensor_attributes->tensor_spec.padded_shape(),
-                    tensor_attributes->tensor_spec.data_type(),
-                    tensor_attributes->tensor_spec.layout());
+                    tensor_attributes->get_tensor_spec().padded_shape(),
+                    tensor_attributes->get_tensor_spec().data_type(),
+                    tensor_attributes->get_tensor_spec().layout());
             }
         },
-        tensor_attributes->storage);
+        tensor_attributes->get_storage());
 }
 
 Tensor::Tensor(distributed::MeshDevice* mesh_device) :
@@ -124,7 +116,7 @@ Tensor::Tensor(distributed::MeshDevice* mesh_device) :
     if (mesh_device == nullptr) {
         TT_THROW("Mesh device is nullptr");
     }
-    tensor_attributes->storage = Storage(DeviceStorage());
+    tensor_attributes->set_storage(Storage(DeviceStorage()));
     mesh_device_ = mesh_device;
 }
 
@@ -134,12 +126,8 @@ Tensor::Tensor(const std::vector<IDevice*>& workers) :
         return;
     }
 
-    tensor_attributes->storage = [&]() {
-        if (workers.size() == 1) {
-            return Storage(DeviceStorage());
-        }
-        TT_THROW("Not implemented");
-    }();
+    TT_FATAL(workers.size() == 1, "Only single device is supported.");
+    tensor_attributes->set_storage(Storage(DeviceStorage()));
 }
 
 Tensor::Tensor(uint32_t num_buffers, std::optional<DistributedTensorConfig> distributed_tensor_config) :
@@ -148,7 +136,7 @@ Tensor::Tensor(uint32_t num_buffers, std::optional<DistributedTensorConfig> dist
         return;
     }
 
-    tensor_attributes->storage = [&]() {
+    tensor_attributes->set_storage([&]() {
         if (num_buffers == 1) {
             return Storage(HostStorage());
         }
@@ -161,7 +149,7 @@ Tensor::Tensor(uint32_t num_buffers, std::optional<DistributedTensorConfig> dist
             num_buffers,
             TensorSpec(Shape{}, TensorLayout(DataType::FLOAT32, PageConfig(Layout::ROW_MAJOR), MemoryConfig{})));
         return Storage(std::move(storage));
-    }();
+    }());
 }
 
 Tensor& Tensor::operator=(const Tensor& other) {
@@ -256,12 +244,12 @@ void Tensor::deallocate_impl(bool force, bool deallocation_through_destructor) {
                                     s.buffer.deallocate();
                                 }
                             },
-                            attr->storage);
+                            attr->get_storage());
                     });
                 }
             },
         },
-        this->tensor_attributes->storage);
+        this->tensor_attributes->get_storage());
     // GraphTracker::instance().track_function_end();
 }
 
@@ -274,18 +262,18 @@ void Tensor::populate_buffers_and_metadata(const Tensor& other) {
         [this](auto&& storage) {
             using StorageType = std::decay_t<decltype(storage)>;
             if constexpr (std::is_same_v<StorageType, HostStorage>) {
-                std::get<StorageType>(this->tensor_attributes->storage).insert_buffer(storage.get_buffer());
+                std::get<StorageType>(this->tensor_attributes->get_storage()).insert_buffer(storage.get_buffer());
             } else if constexpr (std::is_same_v<StorageType, DeviceStorage>) {
                 if (storage.mesh_buffer != nullptr) {
-                    std::get<DeviceStorage>(this->tensor_attributes->storage).mesh_buffer = storage.mesh_buffer;
+                    std::get<DeviceStorage>(this->tensor_attributes->get_storage()).mesh_buffer = storage.mesh_buffer;
                 } else {
-                    std::get<DeviceStorage>(this->tensor_attributes->storage).insert_buffer(storage.buffer);
+                    std::get<DeviceStorage>(this->tensor_attributes->get_storage()).insert_buffer(storage.buffer);
                 }
             } else if constexpr (std::is_same_v<
                                      StorageType,
                                      MultiDeviceHostStorage> /*or std::is_same_v<StorageType, MultiDeviceStorage> */) {
-                std::get<StorageType>(this->tensor_attributes->storage).buffers = storage.buffers;
-                std::get<StorageType>(this->tensor_attributes->storage).specs = storage.specs;
+                std::get<StorageType>(this->tensor_attributes->get_storage()).buffers = storage.buffers;
+                std::get<StorageType>(this->tensor_attributes->get_storage()).specs = storage.specs;
             }
         },
         other.get_storage());  // Non blocking storage query, since this is done for tensors that get created inside the
@@ -316,7 +304,7 @@ std::vector<IDevice*> Tensor::get_workers(bool blocking) const {
                 }
             }
         },
-        this->tensor_attributes->storage);
+        this->tensor_attributes->get_storage());
     return workers;
 }
 
@@ -330,9 +318,9 @@ const ttnn::Shape& Tensor::get_logical_shape() const { return logical_shape(); }
 
 const ttnn::Shape& Tensor::get_padded_shape() const { return padded_shape(); }
 
-const Storage& Tensor::get_storage() const { return this->tensor_attributes->storage; }
+const Storage& Tensor::get_storage() const { return this->tensor_attributes->get_storage(); }
 
-Storage& Tensor::get_storage() { return this->tensor_attributes->storage; }
+Storage& Tensor::get_storage() { return this->tensor_attributes->get_storage(); }
 
 template <>
 Tensor Tensor::from_span<float>(
