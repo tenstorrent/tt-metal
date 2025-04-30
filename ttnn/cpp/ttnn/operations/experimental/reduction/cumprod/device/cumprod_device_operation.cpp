@@ -114,23 +114,4 @@ CumprodDeviceOperation::invocation_result_t CumprodDeviceOperation::invoke(
         tensor_args_t{input_tensor, std::move(optional_out)}};
 }
 
-hash::hash_t CumprodDeviceOperation::compute_program_hash(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    return operation::hash_operation<CumprodDeviceOperation>(
-        &tensor_args.input_tensor,
-        &tensor_args.optional_out,
-        tensor_args.input_tensor.get_tensor_spec(),
-        tensor_args.optional_out.has_value() ? tensor_args.optional_out.value().get_tensor_spec()
-                                             : tensor_args.input_tensor.get_tensor_spec(),
-        args,
-        select_program_factory(args, tensor_args).index(),
-        tensor_args.input_tensor.dtype(),
-        tensor_args.input_tensor.get_padded_shape(),
-        tensor_args.input_tensor.get_logical_shape(),
-        std::get<DeviceStorage>(tensor_args.input_tensor.storage()).memory_config(),
-        tensor_args.input_tensor.get_padded_shape().volume(),
-        tensor_args.optional_out.has_value() ? tensor_args.optional_out->dtype() : DataType::INVALID,
-        tensor_args.optional_out.has_value() ? tensor_args.optional_out->get_padded_shape() : Shape{});
-}
-
 }  // namespace ttnn::operations::experimental::reduction

@@ -16,12 +16,17 @@ constexpr union {
 }  // namespace
 
 void kernel_main() {
+    constexpr bool input_dram = get_compile_time_arg_val(0) == 1;
+
     uint32_t input_base_addr = get_arg_val<uint32_t>(0);
     uint32_t num_rows_per_core = get_arg_val<uint32_t>(1);
     uint32_t tiles_per_row = get_arg_val<uint32_t>(2);
     uint32_t input_tile_offset = get_arg_val<uint32_t>(3);
     uint32_t start_id = get_arg_val<uint32_t>(4);
-    uint32_t is_input_dram = get_arg_val<uint32_t>(5);
+    // This is the offset of all dimensions below the cumulation axis
+    uint32_t low_rank_offset = get_arg_val<uint32_t>(5);
+    // This is the offset of all dimensions above the cumulation axis (HtWt for last two axes)
+    uint32_t high_rank_offset = get_arg_val<uint32_t>(6);
 
     cb_reserve_back(cb_one, ONE_TILE);
     uint32_t data_one_addr = get_write_ptr(cb_one);
@@ -33,10 +38,9 @@ void kernel_main() {
     constexpr int32_t ACC_START_VALUE_I16{0x1};
     constexpr int32_t ACC_START_VALUE_I8{0x1};
 
-    const auto& input_data_format = get_dataformat(cb_out);
+    const auto& input_data_format = get_dataformat(cb_in);
 
-    uint32_t ublock_size_bytes = get_tile_size(cb_out);
-    uint32_t l1_addr_out = get_write_ptr(cb_out);
+    uint32_t ublock_size_bytes = get_tile_size(cb_in);
 
     const uint32_t input_tile_bytes = ublock_size_bytes;
     const uint32_t output_tile_bytes = ublock_size_bytes;
@@ -79,28 +83,25 @@ void kernel_main() {
         data_one[i] = scaler;
     }
 
-    InterleavedAddrGenFast<true> dram_input_addrg = {
-        .bank_base_address = input_base_addr, .page_size = output_tile_bytes, .data_format = input_data_format};
-
-    InterleavedAddrGenFast<false> l1_input_addrg = {
-        .bank_base_address = input_base_addr, .page_size = output_tile_bytes, .data_format = input_data_format};
+    InterleavedAddrGenFast<input_dram> input_addrg = {
+        .bank_base_address = input_base_addr, .page_size = input_tile_bytes, .data_format = input_data_format};
 
     cb_push_back(cb_one, ONE_TILE);
 
     for (uint32_t i = start_id; i < start_id + num_rows_per_core; ++i) {
-        const uint32_t i0 = i / input_tile_offset;
-        const uint32_t i1 = i % input_tile_offset;
         for (uint32_t j = 0; j < tiles_per_row; ++j) {
-            const uint32_t read_tile_id{get_tile_id(i0, i1, j, tiles_per_row, input_tile_offset)};
+            const uint32_t read_tile_id{
+                get_tile_id(low_rank_offset, high_rank_offset, j, tiles_per_row, input_tile_offset)};
             cb_reserve_back(cb_in, ONE_TILE);
-            uint32_t l1_write_addr_in0{get_write_ptr(cb_in)};
-            if (is_input_dram) {
-                noc_async_read_tile(read_tile_id, dram_input_addrg, l1_write_addr_in0);
-            } else {
-                noc_async_read_tile(read_tile_id, l1_input_addrg, l1_write_addr_in0);
-            }
+            uint32_t l1_write_addr{get_write_ptr(cb_in)};
+            noc_async_read_tile(read_tile_id, input_addrg, l1_write_addr);
             noc_async_read_barrier();
             cb_push_back(cb_in, ONE_TILE);
+        }
+        ++high_rank_offset;
+        if (high_rank_offset >= input_tile_offset) {
+            high_rank_offset = 0;
+            ++low_rank_offset;
         }
     }
 }

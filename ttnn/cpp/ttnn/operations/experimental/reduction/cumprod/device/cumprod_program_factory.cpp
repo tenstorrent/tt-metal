@@ -85,10 +85,10 @@ CumprodDeviceOperation::SingleCoreCumprodProgramFactory::create(
     const uint32_t src_is_dram{src_buffer->buffer_type() == BufferType::DRAM ? 1 : 0};
     const uint32_t dst_is_dram{dst_buffer->buffer_type() == BufferType::DRAM ? 1 : 0};
 
-    const ReaderDataMovementConfig reader_config{};
+    const ReaderDataMovementConfig reader_config{{src_is_dram}};
     const ComputeConfig compute_config{
         .math_fidelity = MathFidelity::HiFi4, .fp32_dest_acc_en = false, .math_approx_mode = false, .compile_args = {}};
-    const WriterDataMovementConfig writer_config{};
+    const WriterDataMovementConfig writer_config{{dst_is_dram}};
 
     auto cumprod_reader_kernel_id{create_kernel(program, KERNEL_PATHS[0], all_cores, reader_config)};
     auto cumprod_compute_sc_kernel_id{create_kernel(program, KERNEL_PATHS[1], core_group_1, compute_config)};
@@ -115,13 +115,25 @@ CumprodDeviceOperation::SingleCoreCumprodProgramFactory::create(
             program,
             cumprod_reader_kernel_id,
             core,
-            {src_buffer->address(), num_tiles_per_core, tiles_per_row, input_tile_offset, tile_offset, src_is_dram});
+            {src_buffer->address(),
+             num_tiles_per_core,
+             tiles_per_row,
+             input_tile_offset,
+             tile_offset,
+             tile_offset / input_tile_offset,
+             tile_offset % input_tile_offset});
 
         SetRuntimeArgs(
             program,
             cumprod_writer_kernel_id,
             core,
-            {dst_buffer->address(), num_tiles_per_core, tiles_per_row, input_tile_offset, tile_offset, dst_is_dram});
+            {dst_buffer->address(),
+             num_tiles_per_core,
+             tiles_per_row,
+             input_tile_offset,
+             tile_offset,
+             tile_offset / input_tile_offset,
+             tile_offset % input_tile_offset});
 
         if (core_group_1.contains(core)) {
             SetRuntimeArgs(program, cumprod_compute_sc_kernel_id, core, {num_tiles_per_core, tiles_per_row});
