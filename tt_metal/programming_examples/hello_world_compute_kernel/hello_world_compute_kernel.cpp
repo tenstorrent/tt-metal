@@ -11,7 +11,7 @@ using namespace tt::tt_metal;
 
 // A bit of a hack to handle packaged examples but also work inside the Metalium git repo.
 #ifndef OVERRIDE_KERNEL_PREFIX
-#define OVERRIDE_KERNEL_PREFIX "./"
+#define OVERRIDE_KERNEL_PREFIX ""
 #else
 #endif
 
