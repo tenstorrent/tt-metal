@@ -338,6 +338,9 @@ void Device::initialize_cluster() {
     if (tt_metal::MetalContext::instance().rtoptions().get_clear_l1()) {
         this->clear_l1_state();
     }
+    if (tt_metal::MetalContext::instance().rtoptions().get_clear_dram()) {
+        this->clear_dram_state();
+    }
     int ai_clk = tt::tt_metal::MetalContext::instance().get_cluster().get_device_aiclk(this->id_);
     log_info(tt::LogMetal, "AI CLK for device {} is:   {} MHz", this->id_, ai_clk);
 }
@@ -1011,6 +1014,18 @@ void Device::clear_l1_state() {
     }
     // TODO: clear idle eriscs as well
     tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(this->id());
+}
+
+void Device::clear_dram_state() {
+    log_debug(tt::LogMetal, "Clearing DRAM for device {}", this->id_);
+
+    TT_ASSERT(this->dram_size_per_channel() % sizeof(uint32_t) == 0);
+    constexpr uint32_t start_address = 0;
+    const int num_dram_channels = this->num_dram_channels();
+    std::vector<uint32_t> zero_vec(this->dram_size_per_channel() / sizeof(uint32_t), 0);
+    for (int channel = 0; channel < num_dram_channels; ++channel) {
+        detail::WriteToDeviceDRAMChannel(this, channel, start_address, zero_vec);
+    }
 }
 
 void Device::compile_command_queue_programs() {

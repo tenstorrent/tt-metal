@@ -117,6 +117,7 @@ class RunTimeOptions {
     bool kernels_early_return = false;
 
     bool clear_l1 = false;
+    bool clear_dram = false;
 
     bool skip_loading_fw = false;
     bool skip_reset_cores_on_init = false;
@@ -306,6 +307,9 @@ public:
 
     inline bool get_clear_l1() const { return clear_l1; }
     inline void set_clear_l1(bool clear) { clear_l1 = clear; }
+
+    inline bool get_clear_dram() const { return clear_dram; }
+    inline void set_clear_dram(bool clear) { clear_dram = clear; }
 
     inline bool get_skip_loading_fw() const { return skip_loading_fw; }
     inline bool get_skip_reset_cores_on_init() const { return skip_reset_cores_on_init; }

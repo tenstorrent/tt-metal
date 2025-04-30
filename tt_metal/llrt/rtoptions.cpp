@@ -117,14 +117,25 @@ RunTimeOptions::RunTimeOptions() {
 
     kernels_early_return = (std::getenv("TT_METAL_KERNELS_EARLY_RETURN") != nullptr);
 
-    clear_l1 = false;
+    this->clear_l1 = false;
     const char* clear_l1_enabled_str = std::getenv("TT_METAL_CLEAR_L1");
     if (clear_l1_enabled_str != nullptr) {
         if (clear_l1_enabled_str[0] == '0') {
-            clear_l1 = false;
+            this->clear_l1 = false;
         }
         if (clear_l1_enabled_str[0] == '1') {
-            clear_l1 = true;
+            this->clear_l1 = true;
+        }
+    }
+
+    this->clear_dram = false;
+    const char* clear_dram_enabled_str = std::getenv("TT_METAL_CLEAR_DRAM");
+    if (clear_dram_enabled_str != nullptr) {
+        if (clear_dram_enabled_str[0] == '0') {
+            this->clear_dram = false;
+        }
+        if (clear_dram_enabled_str[0] == '1') {
+            this->clear_dram = true;
         }
     }
 
