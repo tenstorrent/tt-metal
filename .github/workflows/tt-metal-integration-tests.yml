@@ -15,7 +15,7 @@ jobs:
     name: 🔧 LLK unit tests
     env:
       DOCKER_IMAGE: ghcr.io/tenstorrent/tt-metal/tt-metalium/ubuntu-22.04-ci-build-amd64
-      IMAGE_HASH: a2e6e2031c340fdbeea0fe88b36a54ddfbf75031
+      IMAGE_HASH: latest
     runs-on: ${{ inputs.runs_on }}
     timeout-minutes: 40
     steps:
