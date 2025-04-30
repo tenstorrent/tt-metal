@@ -32,10 +32,7 @@ void AllToAllAsync::validate_with_output_tensors(
         input_tensor.device()->compute_with_storage_grid_size().y);
 
     TT_FATAL(
-        input_tensor.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED ||
-            input_tensor.memory_config().memory_layout == TensorMemoryLayout::WIDTH_SHARDED ||
-            input_tensor.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED ||
-            input_tensor.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED,
+        input_tensor.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED,
         "Unsupported input memory layout {}.",
         input_tensor.memory_config().memory_layout);
 
@@ -52,36 +49,36 @@ void AllToAllAsync::validate_with_output_tensors(
         input_tensor.get_padded_shape()[this->out_dim],
         this->ring_size);
 
+    // Output tensor validation
     TT_FATAL(
         output_tensors.size() == 2,
         "AllToAllAsync: Number of output tensors must be 2, but is {}",
         output_tensors.size());
-    // // Basic validation for output tensor if provided
-    // if (output_tensors.size() > 0 && output_tensors[0].has_value()) {
-    //     TT_FATAL(
-    //         output_tensors.size() == 2,
-    //         "AllToAllAsync: Number of output tensors must be 1, but is {}",
-    //         output_tensors.size());
-    //     const auto& output_tensor = output_tensors[0].value();
-    //     TT_FATAL(
-    //         output_tensor.storage_type() == StorageType::DEVICE,
-    //         "Output tensor for all_to_all_async must be on device!");
-    //     TT_FATAL(output_tensor.get_layout() == layout, "Output tensor layout must match input tensor layout");
-    //     TT_FATAL(output_tensor.get_dtype() == dtype, "Output tensor dtype must match input tensor dtype");
-    //     TT_FATAL(
-    //         output_tensor.memory_config() == this->output_mem_config,
-    //         "Output tensor memory config must match specified output_mem_config");
 
-    //     // For AllToAll, the shape of the *local* tensor shard should typically be the same.
-    //     // Global logical shape also remains the same.
-    //     auto output_shape = output_tensor.get_padded_shape();
-    //     auto input_shape = input_tensor.get_padded_shape();
-    //     TT_FATAL(
-    //         output_shape == input_shape,
-    //         "Output tensor shape {} must match input tensor shape {} for AllToAllAsync",
-    //         output_shape,
-    //         input_shape);
-    // }
+    for (const auto& maybe_output_tensor : output_tensors) {
+        TT_FATAL(maybe_output_tensor.has_value(), "Output tensor must be provided");
+        const auto& output_tensor = maybe_output_tensor.value();
+        TT_FATAL(
+            output_tensor.storage_type() == StorageType::DEVICE,
+            "Output tensor for all_to_all_async must be on device!");
+        TT_FATAL(output_tensor.get_layout() == layout, "Output tensor layout must match input tensor layout");
+        TT_FATAL(output_tensor.get_dtype() == dtype, "Output tensor dtype must match input tensor dtype");
+        TT_FATAL(
+            output_tensor.memory_config() == this->output_mem_config,
+            "Output tensor memory config must match specified output_mem_config");
+
+        // For AllToAll, the shape of the *local* tensor shard should typically be the same.
+        // Global logical shape also remains the same.
+        auto output_shape = output_tensor.get_padded_shape();
+        auto input_shape = input_tensor.get_padded_shape();
+        input_shape[this->in_dim] *= this->ring_size;
+        input_shape[this->out_dim] /= this->ring_size;
+        TT_FATAL(
+            output_shape == input_shape,
+            "Output tensor shape {} must match input tensor shape {} for AllToAllAsync",
+            output_shape,
+            input_shape);
+    }
 
     TT_FATAL(this->num_links == 1, "AllToAllAsync: num_links must be 1, but is {}", this->num_links);
 }
