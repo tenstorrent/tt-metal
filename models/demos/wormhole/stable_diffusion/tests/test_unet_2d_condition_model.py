@@ -16,6 +16,8 @@ from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_unet_2d_condition
     UNet2DConditionModel as UNet2D,
 )
 from tests.ttnn.utils_for_testing import assert_with_pcc
+from models.utility_functions import skip_for_blackhole
+
 
 scheduler = LMSDiscreteScheduler(
     beta_start=0.00085,
@@ -47,6 +49,7 @@ def unsqueeze_all_params_to_4d(params):
     return params
 
 
+@skip_for_blackhole("Failing on harvested BH, see #21088")
 @pytest.mark.parametrize(
     "device_params", [{"l1_small_size": 32768}], ids=["device_params=l1_small_size_24576"], indirect=True
 )

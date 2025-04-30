@@ -158,24 +158,6 @@ std::uint64_t get_noc_addr_helper(std::uint32_t noc_xy, std::uint32_t addr) {
     return ((uint64_t)(noc_xy) << NOC_ADDR_COORD_SHIFT) | addr;
 }
 
-FORCE_INLINE
-std::uint32_t get_noc_exclude_region(
-    std::uint32_t exclude_start_x,
-    std::uint32_t exclude_start_y,
-    std::uint32_t exclude_dir_x,
-    std::uint32_t exclude_dir_y,
-    uint8_t noc = noc_index) {
-    /*
-        Get an encoding which contians the definition of the exclusion area
-    */
-    return (
-        EXCLUDE_ENABLED << EXCLUDE_ENABLED_OFFSET |
-        DYNAMIC_NOC_DIRECTION(noc, exclude_dir_y) << EXCLUDE_DIRECTION_Y_OFFSET |
-        DYNAMIC_NOC_DIRECTION(noc, exclude_dir_x) << EXCLUDE_DIRECTION_X_OFFSET |
-        DYNAMIC_NOC_Y(noc, exclude_start_y) << EXCLUDE_START_Y_OFFSET |
-        DYNAMIC_NOC_X(noc, exclude_start_x) << EXCLUDE_START_X_OFFSET);
-}
-
 uint64_t get_dram_noc_addr(
     const uint32_t id,
     const uint32_t page_size,

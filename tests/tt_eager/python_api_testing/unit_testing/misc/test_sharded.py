@@ -2366,6 +2366,7 @@ def test_interleaved_2_sharded_DRAM(device, dtype, y):
     yt = ttnn.interleaved_to_sharded(xt, shard_grid, (y // 8, 18 * 32), shard_scheme, ttnn.ShardOrientation.ROW_MAJOR)
 
 
+@skip_for_blackhole("Failing on harvested BH, see #21144")
 @skip_for_grayskull()
 @pytest.mark.parametrize(
     "seq_len",
