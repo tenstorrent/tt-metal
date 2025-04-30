@@ -112,6 +112,7 @@ void kernel_main() {
     uint32_t local_semaphore_address = get_semaphore(get_arg_val<uint32_t>(rt_arg_idx++));
     bool sender_core = (bool)get_arg_val<uint32_t>(rt_arg_idx++);
     bool worker_core = (bool)get_arg_val<uint32_t>(rt_arg_idx++);
+    uint32_t linear_output_page_start_idx = get_arg_val<uint32_t>(rt_arg_idx++);
     uint32_t linear_input_packet_start_idx = get_arg_val<uint32_t>(rt_arg_idx++);
     bool receiver_core = (bool)get_arg_val<uint32_t>(rt_arg_idx++);
     uint32_t sender_shard_start = get_arg_val<uint32_t>(rt_arg_idx++);

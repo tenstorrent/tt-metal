@@ -681,18 +681,19 @@ LlamaReduceScatterCreateHeadsDeviceOperation::LlamaReduceScatterCreateHeads::cre
     uint32_t local_page = 0;
 
     std::vector<uint32_t> reader_runtime_args = {
-        cross_device_semaphore->address(), local_semaphore, false, false, 0, false, 0, 0, 0};
+        cross_device_semaphore->address(), local_semaphore, false, false, 0, 0, false, 0, 0, 0};
     uint32_t is_reader_sender_core_idx = 2;
     uint32_t is_reader_worker_core_idx = 3;
-    uint32_t is_linear_input_packet_start_idx = 4;
-    uint32_t is_reader_receiver_core_idx = 5;
-    uint32_t reader_sender_packet_start_idx = 6;
-    uint32_t reader_sender_packet_end_idx = 7;
-    uint32_t reader_sender_total_num_pages_idx = 8;
+    uint32_t is_linear_output_page_start_idx = 4;
+    uint32_t is_linear_input_packet_start_idx = 5;
+    uint32_t is_reader_receiver_core_idx = 6;
+    uint32_t reader_sender_packet_start_idx = 7;
+    uint32_t reader_sender_packet_end_idx = 8;
+    uint32_t reader_sender_total_num_pages_idx = 9;
 
     uint32_t is_writer_sender_core_idx = 2;
     uint32_t is_writer_worker_core_idx = 3;
-    uint32_t is_linear_output_page_start_idx = 4;
+    // uint32_t is_linear_output_page_start_idx = 4;
     uint32_t writer_sender_packet_start_idx = 5;
     uint32_t writer_sender_packet_end_idx = 6;
     uint32_t writer_sender_total_num_pages_idx = 7;
@@ -763,6 +764,7 @@ LlamaReduceScatterCreateHeadsDeviceOperation::LlamaReduceScatterCreateHeads::cre
         } else if (packet_worker_cores_grid.contains(core)) {
             reader_runtime_args[is_reader_sender_core_idx] = false;
             reader_runtime_args[is_reader_worker_core_idx] = true;
+            reader_runtime_args[is_linear_output_page_start_idx] = local_page;
             reader_runtime_args[is_linear_input_packet_start_idx] = local_page + offset_for_input;
 
             writer_runtime_args[is_writer_sender_core_idx] = false;
