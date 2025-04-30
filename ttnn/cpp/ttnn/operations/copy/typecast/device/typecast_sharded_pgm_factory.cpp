@@ -115,9 +115,10 @@ TypecastShardedProgramFactory::cached_program_t TypecastShardedProgramFactory::c
         tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args, kernel_defines));
 
     std::vector<uint32_t> compute_kernel_args_group_1 = {
-        1,                 // per_core_block_cnt
-        num_tile_per_core  // per_core_block_size
-    };
+        1,                  // per_core_block_cnt
+        num_tile_per_core,  // per_core_block_size
+        in_cb_id,
+        out_cb_id};
 
     std::vector<UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
     if (args.preserve_fp32_precision) {
@@ -128,7 +129,7 @@ TypecastShardedProgramFactory::cached_program_t TypecastShardedProgramFactory::c
 
     std::map<string, string> unary_defines;
     unary_defines["TYPECAST_LLK"] = fmt::format(
-        "typecast_tile<{0}u, {1}u>(0);",
+        "typecast_tile<{0}u, {1}u>",
         (uint32_t)datatype_to_dataformat_converter(input_dtype),
         (uint32_t)datatype_to_dataformat_converter(output_dtype));
 

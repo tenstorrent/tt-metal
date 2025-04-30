@@ -12,7 +12,6 @@
 #include <tt-metalium/hal.hpp>
 #include "ttnn/operations/eltwise/binary/binary_composite.hpp"
 #include "cpp/ttnn/operations/eltwise/ternary/where.hpp"
-// #include "cpp/ttnn/operations/copy.hpp"
 #include "ttnn/operations/copy/typecast/typecast.hpp"
 #include "ttnn/operations/eltwise/unary/unary_composite.hpp"
 #include "ttnn/operations/data_movement/pad/pad.hpp"
@@ -314,7 +313,6 @@ Tensor ExecuteDiv::invoke(
             }
             return result;
         }
-        tt::log_info(tt::LogOp, " ****** using div op with typecast");
         Tensor a = typecast(queue_id, input_a, DataType::FLOAT32);
         Tensor b = typecast(queue_id, input_b, DataType::FLOAT32);
 
@@ -329,7 +327,6 @@ Tensor ExecuteDiv::invoke(
         }
 
         if (!accurate_mode) {  // If input_b is non-zero tensor
-            tt::log_info(tt::LogOp, " ****** using div op with typecast - result");
             return typecast(queue_id, result, input_dtype, std::nullopt, output_tensor);
         }
 

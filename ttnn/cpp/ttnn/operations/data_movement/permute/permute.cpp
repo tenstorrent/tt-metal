@@ -14,7 +14,6 @@
 
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/run_operation.hpp"
-// #include "cpp/ttnn/operations/copy.hpp"
 #include "ttnn/operations/copy/typecast/typecast.hpp"
 
 namespace ttnn::operations::data_movement {

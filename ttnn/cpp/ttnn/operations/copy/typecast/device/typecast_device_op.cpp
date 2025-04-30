@@ -16,10 +16,8 @@ TypecastDeviceOperation::program_factory_t TypecastDeviceOperation::select_progr
     if (tensor_args.input.is_sharded()) {
         return program::TypecastShardedProgramFactory{};
     } else if (args.sub_core_grids.has_value()) {
-        tt::log_info(tt::LogOp, " ****** using TypecastSubgridProgramFactory");
         return program::TypecastSubgridProgramFactory{};
     } else {
-        tt::log_info(tt::LogOp, " ****** using TypecastProgramFactory");
         return program::TypecastProgramFactory{};
     }
 }
@@ -35,10 +33,8 @@ void TypecastDeviceOperation::validate_on_program_cache_miss(
     const auto& preallocated_output_tensor = tensor_args.preallocated_output;
 
     auto out_memory_config = args.output_memory_config;
-    auto output_datatype = args.output_dtype;
     if (preallocated_output_tensor.has_value()) {
         out_memory_config = preallocated_output_tensor->memory_config();
-        output_datatype = preallocated_output_tensor->get_dtype();
     }
 
     TT_FATAL(
@@ -51,10 +47,10 @@ void TypecastDeviceOperation::validate_on_program_cache_miss(
         "Operands to Typecast need to be allocated in buffers on the device. Buffer is null.");
 
     TT_FATAL(
-        input_tensor.memory_config().memory_layout == out_memory_config.memory_layout,
+        input_tensor.memory_config().memory_layout() == out_memory_config.memory_layout(),
         "Typecast operation requires Input and Output memory layout to match. Input layout: {}, Output layout: {}",
-        static_cast<int>(input_tensor.memory_config().memory_layout),
-        static_cast<int>(out_memory_config.memory_layout));
+        static_cast<int>(input_tensor.memory_config().memory_layout()),
+        static_cast<int>(out_memory_config.memory_layout()));
 
     if (!input_tensor.is_sharded()) {
         TT_FATAL(
@@ -64,10 +60,14 @@ void TypecastDeviceOperation::validate_on_program_cache_miss(
             static_cast<int>(input_tensor.get_layout()));
 
         TT_FATAL(
-            input_tensor.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED,
+            input_tensor.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
             "Typecast operation requires Interleaved memory layout when working with non-sharded input tensor. Input "
             "memory layout: `{}`",
-            static_cast<int>(input_tensor.memory_config().memory_layout));
+            static_cast<int>(input_tensor.memory_config().memory_layout()));
+    } else {
+        TT_FATAL(
+            !args.sub_core_grids.has_value(),
+            "Typecast operation has sub_core_grids support for non-sharded inputs only");
     }
 
     if (preallocated_output_tensor.has_value()) {
@@ -121,8 +121,7 @@ tt::stl::hash::hash_t TypecastDeviceOperation::compute_program_hash(
         args,
         program_factory.index(),
         input_tensor.dtype(),
-        std::get<DeviceStorage>(input_tensor.storage()).memory_config(),
-        input_shape.volume());  // Do we need input_shape.volume() for hash ?
+        std::get<DeviceStorage>(input_tensor.storage()).memory_config());
 
     return hash;
 }
@@ -137,7 +136,6 @@ bool TypecastDeviceOperation::skip_launch(
 std::tuple<TypecastDeviceOperation::operation_attributes_t, TypecastDeviceOperation::tensor_args_t>
 TypecastDeviceOperation::invoke(
     const Tensor& input,
-    // const std::vector<UnaryWithParam>& op_chain,
     DataType output_dtype,
     const MemoryConfig& output_memory_config,
     bool fp32_dest_acc_en,
