@@ -94,13 +94,7 @@ class TtLlamaMLP(LightweightModule):
         self.w2 = as_sharded_tensor("w2_sharded", ttnn.bfloat8_b, dim=w2_dim)
         self.w3 = as_sharded_tensor("w3_sharded", ttnn.bfloat4_b if self.four_bit_mlp else ttnn.bfloat8_b, dim=w1_dim)
 
-        self.w1_prefill = as_interleaved_tensor(
-            "w1_prefill", ttnn.bfloat4_b if self.four_bit_mlp else ttnn.bfloat8_b, dim=w1_dim
-        )  # bfp4 normally ok here but sub .99 pcc for llama 3.1 weights
-        self.w2_prefill = as_interleaved_tensor("w2_prefill", ttnn.bfloat8_b, dim=w2_dim)
-        self.w3_prefill = as_interleaved_tensor(
-            "w3_prefill", ttnn.bfloat4_b if self.four_bit_mlp else ttnn.bfloat8_b, dim=w1_dim
-        )
+        self.w2_interleaved = as_interleaved_tensor("w2_interleaved", ttnn.bfloat8_b, dim=w2_dim)
 
         if tt_ccl.mode == "decode":
             self.prefetch(prefetcher_setup, tt_ccl)
@@ -216,32 +210,39 @@ class TtLlamaMLP(LightweightModule):
         HF reference: self.down_proj(self.act_fn(self.gate_proj(x)) * self.up_proj(x))
         """
         seq_len = x.shape[-2]
-        if seq_len > 2048:
+        if seq_len >= 1024:
             # Reshape input to to fit on device and parallelize computation
-            x = ttnn.reshape(x, [1, seq_len // 2048, 2048, -1])
+            x = ttnn.reshape(x, [1, seq_len // 1024, 1024, -1])
+        pc_1 = self.model_config["PREFILL_MLP_W1_W3_PRG_CONFIG"](seq_len)
+        pc_2 = self.model_config["PREFILL_MLP_W2_PRG_CONFIG"](seq_len)
+        pc_3 = self.model_config["PREFILL_MLP_W1_W3_PRG_CONFIG"](seq_len)
 
         w1_out = ttnn.linear(
             x,
-            self.w1_prefill,
-            compute_kernel_config=(
-                self.args.compute_kernel_config_lofi if self.four_bit_mlp else self.args.compute_kernel_config_hifi2_fp1
-            ),
-            dtype=ttnn.bfloat8_b,
-            core_grid=ttnn.CoreGrid(y=7, x=7),
-        )
-        w1_out_reduced = self.tt_ccl.line_reduce_scatter(
-            w1_out, cluster_axis=1, num_links=3, memory_config=w1_out.memory_config(), buffer_key="FF1", dim=3
-        )
-        w3_out = ttnn.linear(
-            x,
-            self.w3_prefill,
+            self.w1,
             compute_kernel_config=(
                 self.args.compute_kernel_config_lofi
                 if self.four_bit_mlp
                 else self.args.compute_kernel_config_hifi2_fp16
             ),
             dtype=ttnn.bfloat8_b,
-            core_grid=ttnn.CoreGrid(y=7, x=7),
+            program_config=pc_1,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        w1_out_reduced = self.tt_ccl.line_reduce_scatter(
+            w1_out, cluster_axis=1, num_links=3, memory_config=w1_out.memory_config(), buffer_key="FF1", dim=3
+        )
+        w3_out = ttnn.linear(
+            x,
+            self.w3,
+            compute_kernel_config=(
+                self.args.compute_kernel_config_lofi
+                if self.four_bit_mlp
+                else self.args.compute_kernel_config_hifi2_fp16
+            ),
+            dtype=ttnn.bfloat8_b,
+            program_config=pc_3,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         # ttnn.deallocate(x)
         w3_out_reduced = self.tt_ccl.line_reduce_scatter(
@@ -260,14 +261,28 @@ class TtLlamaMLP(LightweightModule):
         )
         # ttnn.deallocate(w3_out)
         # ttnn.deallocate(w1_out)
-        w2_out = ttnn.linear(
-            w2_in_gathered,
-            self.w2_prefill,
-            compute_kernel_config=self.args.compute_kernel_config_hifi2_fp16,
-            dtype=ttnn.bfloat8_b,
-            core_grid=ttnn.CoreGrid(y=7, x=7),
-            # core_grid=ttnn.CoreGrid(y=8, x=4),  # FIXME: validate on TG ttnn.CoreGrid(y=8, x=8) if not pc_2 else None,
-        )
+
+        if seq_len in [128, 512, 65536]:
+            w2_out = ttnn.linear(
+                w2_in_gathered,
+                self.w2,
+                compute_kernel_config=self.args.compute_kernel_config_hifi2_fp16,
+                dtype=ttnn.bfloat8_b,
+                program_config=pc_2,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                # core_grid=ttnn.CoreGrid(y=8, x=4),  # FIXME: validate on TG ttnn.CoreGrid(y=8, x=8) if not pc_2 else None,
+            )
+        else:
+            w2_out = ttnn.linear(
+                w2_in_gathered,
+                self.w2_interleaved,
+                compute_kernel_config=self.args.compute_kernel_config_hifi2_fp16,
+                dtype=ttnn.bfloat8_b,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                core_grid=ttnn.CoreGrid(y=7, x=7),
+                # core_grid=ttnn.CoreGrid(y=8, x=4),  # FIXME: validate on TG ttnn.CoreGrid(y=8, x=8) if not pc_2 else None,
+            )
+
         ttnn.deallocate(w2_in)
         w2_out_reduced = self.tt_ccl.line_all_reduce(
             w2_out, cluster_axis=0, num_links=3, memory_config=ttnn.DRAM_MEMORY_CONFIG, buffer_key="FF2"
