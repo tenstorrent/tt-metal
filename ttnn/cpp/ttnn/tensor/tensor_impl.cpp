@@ -11,6 +11,7 @@
 #include "tt-metalium/mesh_command_queue.hpp"
 #include <tt_stl/overloaded.hpp>
 #include <tt_stl/span.hpp>
+#include "tt-metalium/shape.hpp"
 #include "ttnn/distributed/distributed_tensor.hpp"
 
 #include "ttnn/distributed/distributed_tensor_config.hpp"
@@ -1318,56 +1319,61 @@ Tensor pad(
     const auto input_data_type = tensor.get_dtype();
 
     auto pad = [&input_padded_shape, &output_padded_shape, &input_tensor_start, &pad_value_](const auto& input_buffer) {
-        auto compute_stride = [](const ttnn::Shape& padded_shape, uint32_t index) {
-            uint32_t stride = 1;
-            for (auto i = index + 1; i < padded_shape.rank(); i++) {
-                stride *= padded_shape[i];
-            }
-            return stride;
-        };
+        const int rank = input_padded_shape.rank();
 
-        ttnn::SmallVector<std::array<uint32_t, 2>> pad_size{};
-        ttnn::SmallVector<uint32_t> input_strides{};
-        ttnn::SmallVector<uint32_t> output_strides{};
-        ttnn::SmallVector<uint32_t> input_indices(input_padded_shape.rank(), 0);
+        auto output_buffer = std::vector<T>(output_padded_shape.volume());
+        std::fill(output_buffer.begin(), output_buffer.end(), pad_value_);
 
-        for (auto index = 0; index < output_padded_shape.rank(); index++) {
-            // Check if input tensor fits in output tensor given the input tensor start indices
-            TT_ASSERT(
-                input_padded_shape[index] + input_tensor_start[index] <= output_padded_shape[index],
-                "Input tensor is out of bounds");
-
-            // Figure out pad size on each dim
-            pad_size.push_back(
-                {input_tensor_start[index],
-                 output_padded_shape[index] - input_padded_shape[index] - input_tensor_start[index]});
-
-            input_strides.push_back(compute_stride(input_padded_shape, index));
-            output_strides.push_back(compute_stride(output_padded_shape, index));
+        if (input_padded_shape.volume() == 0) {
+            return output_buffer;
         }
 
-        size_t flat_output_index = 0;
-        auto output_buffer = std::vector<T>(output_padded_shape.volume());
-        std::function<void(std::size_t)> pad_to_tile = [&](std::size_t dim) -> void {
-            for (auto i = 0; i < pad_size[dim][0] * output_strides[dim]; i++) {
-                output_buffer[flat_output_index++] = pad_value_;
+        if (rank == 1) {
+            std::memcpy(
+                output_buffer.data() + input_tensor_start[0], input_buffer.begin(), input_padded_shape[0] * sizeof(T));
+            return output_buffer;
+        }
+
+        // Calculate strides
+        auto input_strides = compute_strides(input_padded_shape);
+        auto output_strides = compute_strides(output_padded_shape);
+
+        // Process all coordinates except for the last dimension (it's copied with mempcy)
+        ttnn::SmallVector<size_t> coords(rank - 1, 0);
+
+        bool processed_all_coords = false;
+        while (!processed_all_coords) {
+            // Calculate offset for a given coordinate for input and output. Again, last dimension is ignored
+            size_t input_idx = 0;
+            size_t output_idx = 0;
+
+            for (int i = 0; i < rank - 1; ++i) {
+                input_idx += coords[i] * input_strides[i];
+                output_idx += (coords[i] + input_tensor_start[i]) * output_strides[i];
             }
 
-            for (auto i = 0; i < input_padded_shape[dim]; i++) {
-                input_indices[dim] = i;
-                if (dim == input_padded_shape.rank() - 1) {
-                    size_t flat_input_index = compute_flat_input_index(input_indices, input_strides);
-                    output_buffer[flat_output_index++] = input_buffer[flat_input_index];
-                } else {
-                    pad_to_tile(dim + 1);
+            // Add offset (left padding) for the innermost dimension
+            output_idx += input_tensor_start[rank - 1] * output_strides[rank - 1];
+
+            // Copy entire input row with memcpy
+            std::memcpy(
+                output_buffer.data() + output_idx,
+                input_buffer.begin() + input_idx,
+                input_padded_shape[rank - 1] * sizeof(T));
+
+            // Increment coordinates (from right to left), ignore last dimension
+            processed_all_coords = true;
+            for (int dim = rank - 2; dim >= 0; --dim) {
+                coords[dim]++;
+                // There are still coordinates to process in dim dimension
+                if (coords[dim] < input_padded_shape[dim]) {
+                    processed_all_coords = false;
+                    break;
                 }
+                // This dim's coordinate overflowed, reset it and try to increment the next one
+                coords[dim] = 0;
             }
-
-            for (auto i = 0; i < pad_size[dim][1] * output_strides[dim]; i++) {
-                output_buffer[flat_output_index++] = pad_value_;
-            }
-        };
-        pad_to_tile(0);
+        }
 
         return output_buffer;
     };

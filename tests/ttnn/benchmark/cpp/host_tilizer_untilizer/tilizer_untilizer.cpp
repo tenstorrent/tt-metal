@@ -11,7 +11,8 @@
 #include <tt_stl/indestructible.hpp>
 
 // static std::vector<float> input_data;
-static constexpr PhysicalSize shape = {10240, 1024};
+namespace {
+constexpr PhysicalSize shape = {10240, 1024};
 
 const std::vector<float>& GetInputData() {
     static tt::stl::Indestructible<std::vector<float>> input_data([]() {
@@ -29,7 +30,7 @@ const std::vector<float>& GetInputData() {
 }
 
 // Benchmark for LIN_ROW_MAJOR -> TILED_SWIZZLED
-static void BM_ConvertLayout_RowMajorToTiledSwizzled(benchmark::State& state) {
+void BM_ConvertLayout_RowMajorToTiledSwizzled(benchmark::State& state) {
     auto& input_data = GetInputData();
     for (auto _ : state) {
         auto out = convert_layout<float>(
@@ -43,7 +44,7 @@ static void BM_ConvertLayout_RowMajorToTiledSwizzled(benchmark::State& state) {
 }
 
 // Benchmark for LIN_ROW_MAJOR -> TILED_NFACES
-static void BM_ConvertLayout_RowMajorToTiledNfaces(benchmark::State& state) {
+void BM_ConvertLayout_RowMajorToTiledNfaces(benchmark::State& state) {
     auto& input_data = GetInputData();
     for (auto _ : state) {
         auto out = convert_layout<float>(
@@ -54,7 +55,7 @@ static void BM_ConvertLayout_RowMajorToTiledNfaces(benchmark::State& state) {
 }
 
 // Benchmark for TILED_SWIZZLED -> LIN_ROW_MAJOR
-static void BM_ConvertLayout_TiledSwizzledToRowMajor(benchmark::State& state) {
+void BM_ConvertLayout_TiledSwizzledToRowMajor(benchmark::State& state) {
     // Pre-convert input_data to TILED_SWIZZLED for a fair benchmark
     auto& input_data = GetInputData();
     static std::vector<float> tiled_data = convert_layout<float>(
@@ -72,7 +73,7 @@ static void BM_ConvertLayout_TiledSwizzledToRowMajor(benchmark::State& state) {
 }
 
 // Benchmark for TILED_SWIZZLED -> TILED_NFACES
-static void BM_ConvertLayout_TiledSwizzledToTiledNFaces(benchmark::State& state) {
+void BM_ConvertLayout_TiledSwizzledToTiledNFaces(benchmark::State& state) {
     // Pre-convert input_data to TILED_SWIZZLED
     auto& input_data = GetInputData();
     static std::vector<float> tiled_data = convert_layout<float>(
@@ -90,7 +91,7 @@ static void BM_ConvertLayout_TiledSwizzledToTiledNFaces(benchmark::State& state)
 }
 
 // Benchmark for TILED_NFACES -> LIN_ROW_MAJOR
-static void BM_ConvertLayout_TiledNFacesToRowMajor(benchmark::State& state) {
+void BM_ConvertLayout_TiledNFacesToRowMajor(benchmark::State& state) {
     // Pre-convert input_data to TILED_NFACES
     auto& input_data = GetInputData();
     static std::vector<float> nfaces_data = convert_layout<float>(
@@ -108,7 +109,7 @@ static void BM_ConvertLayout_TiledNFacesToRowMajor(benchmark::State& state) {
 }
 
 // Benchmark for TILED_NFACES -> TILED_SWIZZLED
-static void BM_ConvertLayout_TiledNFacesToTiledSwizzled(benchmark::State& state) {
+void BM_ConvertLayout_TiledNFacesToTiledSwizzled(benchmark::State& state) {
     // Pre-convert input_data to TILED_NFACES
     auto& input_data = GetInputData();
     static std::vector<float> nfaces_data = convert_layout<float>(
@@ -131,9 +132,6 @@ BENCHMARK(BM_ConvertLayout_TiledSwizzledToRowMajor)->Unit(benchmark::kMillisecon
 BENCHMARK(BM_ConvertLayout_TiledSwizzledToTiledNFaces)->Unit(benchmark::kMillisecond);
 BENCHMARK(BM_ConvertLayout_TiledNFacesToRowMajor)->Unit(benchmark::kMillisecond);
 BENCHMARK(BM_ConvertLayout_TiledNFacesToTiledSwizzled)->Unit(benchmark::kMillisecond);
+}  // namespace
 
-int main(int argc, char** argv) {
-    ::benchmark::Initialize(&argc, argv);
-    ::benchmark::RunSpecifiedBenchmarks();
-    return 0;
-}
+BENCHMARK_MAIN();
