@@ -5,7 +5,7 @@
 import ttnn
 import math
 
-from models.experimental.yolov8x.tt.ttnn_yolov8x_utils import (
+from models.demos.yolov8x.tt.ttnn_yolov8x_utils import (
     ttnn_decode_bboxes,
 )
 from models.experimental.yolo_common.yolo_utils import (
