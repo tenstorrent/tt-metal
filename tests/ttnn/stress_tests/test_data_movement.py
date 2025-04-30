@@ -46,18 +46,6 @@ def reshape_input_shapes(test_case: str):
         raise RuntimeError("Unidentifiable device")
 
 
-if is_blackhole():
-    l1_input_shape, l1_output_shape = (L1_INPUT_SHAPE_BH, L1_OUTPUT_SHAPE_BH)
-    dram_input_shape, dram_output_shape = (DRAM_INPUT_SHAPE_BH, DRAM_OUTPUT_SHAPE_BH)
-    sharding_input_shape = SHARDING_INPUT_SHAPE_BH
-elif is_wormhole_b0():
-    l1_input_shape, l1_output_shape = (L1_INPUT_SHAPE_WH, L1_OUTPUT_SHAPE_WH)
-    dram_input_shape, dram_output_shape = (DRAM_INPUT_SHAPE_WH, DRAM_OUTPUT_SHAPE_WH)
-    sharding_input_shape = SHARDING_INPUT_SHAPE_WH
-else:
-    raise RuntimeError("Unidentifiable device")
-
-
 @pytest.mark.parametrize(
     "shapes_memory_config",
     [
