@@ -336,6 +336,33 @@ run_t3000_resnet_tests() {
   fi
 }
 
+run_t3000_load_checkpoints_tests() {
+  # Record the start time
+  fail=0
+  start_time=$(date +%s)
+
+  echo "LOG_METAL: Running run_t3000_load_checkpoints_tests"
+
+  wh_arch_yaml=wormhole_b0_80_arch_eth_dispatch.yaml
+  # Llama3.1-70B weights
+  llama70b=/mnt/MLPerf/tt_dnn-models/llama/Llama3.1-70B-Instruct/original_weights/
+  # Llama3.2-90B weights
+  llama90b=/mnt/MLPerf/tt_dnn-models/llama/Llama3.2-90B-Vision-Instruct/
+
+  for llama_dir in "$llama70b" "$llama90b"; do
+    LLAMA_DIR=$llama_dir WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/tests/test_load_checkpoints.py ; fail+=$?
+    echo "LOG_METAL: Llama3 load checkpoints tests for $llama_dir completed"
+  done
+
+  # Record the end time
+  end_time=$(date +%s)
+  duration=$((end_time - start_time))
+  echo "LOG_METAL: run_t3000_load_checkpoints_tests $duration seconds to complete"
+  if [[ $fail -ne 0 ]]; then
+    exit 1
+  fi
+}
+
 run_t3000_tests() {
   # Run ethernet tests
   run_t3000_ethernet_tests
