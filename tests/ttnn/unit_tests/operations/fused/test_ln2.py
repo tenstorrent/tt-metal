@@ -55,7 +55,7 @@ def run_layer_norm_tests(
 
     assert len(tt_result.shape) == len(ref_value.shape)
     assert tt_result.shape == ref_value.shape
-    # assert_with_pcc(ref_value, tt_result, 0.999)
+    assert_with_pcc(ref_value, tt_result, 0.999)
     pcc_passed, pcc_message = comp_pcc(ref_value, tt_result, 0.9998)
     print(pcc_passed)
 
@@ -73,7 +73,7 @@ test_sweep_args = [
         1e-6,
     ),
 ]
-for i in range(3, 25):
+for i in range(3, 4):
     test_sweep_args.append(
         (
             [

@@ -14,6 +14,8 @@
 #include "compute_kernel_api/bcast.h"
 #include "compute_kernel_api/eltwise_binary.h"
 #include "compute_kernel_api/layernorm.h"
+#include "debug/dprint.h"
+#include "debug/dprint_pages.h"
 
 ALWI void ACQ() { acquire_dst(); }
 ALWI void REL() { release_dst(); }
@@ -116,25 +118,101 @@ void MAIN {
 #endif
 
 #ifndef RMSNORM
+        UNPACK(DPRINT << "----------------Got to the start---------" << ENDL());
         /*
          * E[x]
          * means = ttnn.sum(x, 3, True, None, None, 1.0/W) # -> NCH1
          */
-        ACQ();
-        cb_reserve_back(cb_ex, onetile);
-        reduce_init(cb_x, cb_scaler, cb_ex);
-        for (uint32_t wt = 0; wt < Wt; wt += blk) {
-            cb_wait_front(cb_x, wt + blk);
-            for (uint32_t j = 0; j < blk; j++) {
-                reduce_tile(cb_x, cb_scaler, wt + j, scaler0, dst0);
+        // GOAL: Reduce a tile in a numeric stable way through pairwise summation.
+        //   We try to avoid accumulation by adding half the cb to the other half.
+        //   Then repeating until we are left with only a single tile to reduce upon.
+        // The following code is a tad complex by nature, so some design choices were
+        //   All variables that don't change will be called const
+        //       We have a lot of these since it can reduce computation
+        //   If its not const, it will change
+        // We first reduce input from cb_x, then store the intermediates in cb_ex
+        uint32_t cb_reduce_input = cb_x;
+        uint32_t cb_length = Wt;
+        reconfig_data_format(cb_x, cb_x);
+        pack_reconfig_data_format(cb_ex);
+        add_tiles_init(cb_x, cb_x, false);
+        // 4 dst regs if FP32 and 8 is BFLOAT 16
+        constexpr uint32_t num_dst_regs = FLOAT32_DTYPE ? 4 : 8;
+        bool first_sum = true;
+        while (cb_length > 1) {
+            // This does a ceiling divide,
+            const uint32_t num_passes = 1 + ((cb_length - 1) / (num_dst_regs * 2));
+            // We need to reset this every loop since it can change in the following loop
+            uint32_t regs_to_use = num_dst_regs;
+            for (uint32_t pass = 0; pass < num_passes; pass++) {
+                const uint32_t start_index = first_sum ? pass * num_dst_regs * 2 : 0;
+
+                const uint32_t length_to_be_processed = cb_length - (pass * num_dst_regs * 2);
+                if (length_to_be_processed < regs_to_use) {
+                    // This will floor divide, we will need to account to the one leftover tile incase
+                    regs_to_use = length_to_be_processed / 2;
+                }
+                tile_regs_acquire();
+                UNPACK(DPRINT << "----------------pass" << pass << ENDL());
+                UNPACK(DPRINT << "----------------num_regs" << regs_to_use << ENDL());
+                cb_wait_front(cb_reduce_input, start_index + (regs_to_use * 2));
+                UNPACK(DPRINT << "----------------pass" << pass << ENDL());
+                cb_reserve_back(cb_ex, regs_to_use);
+                UNPACK(DPRINT << "----------------pass" << pass << ENDL());
+                for (uint32_t dst = 0; dst < regs_to_use; dst++) {
+                    add_tiles(
+                        cb_reduce_input, cb_reduce_input, start_index + (dst * 2), start_index + (dst * 2) + 1, dst);
+                }
+                // Check if we are processing the odd tile and we do & 1 to account for floor divide earlier
+                if (length_to_be_processed < regs_to_use && (length_to_be_processed & 1)) {
+                    const uint32_t last_index = start_index + (regs_to_use * 2) + 1;
+                    cb_wait_front(cb_reduce_input, last_index);
+                    binary_dest_reuse_tiles_init<EltwiseBinaryType::ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(
+                        cb_reduce_input);
+                    binary_dest_reuse_tiles<EltwiseBinaryType::ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(
+                        cb_reduce_input, last_index, dst0);
+                    add_tiles_init(cb_ex, cb_ex, false);
+                    if (!first_sum) {
+                        cb_pop_front(cb_reduce_input, 1);
+                    }
+                }
+                tile_regs_wait();
+                tile_regs_commit();
+                if (!first_sum) {
+                    cb_pop_front(cb_reduce_input, (regs_to_use * 2));
+                }
+                uint32_t dst = 0;
+                // We use a do while in the case that there is only one cb to be processed on this pass since then
+                // regs_to_use would equal 0
+                do {
+                    pack_tile(dst, cb_ex);
+                    dst++;
+                    cb_reserve_back(cb_ex, 1);
+                    cb_push_back(cb_ex, 1);
+                } while (dst < regs_to_use);
+                tile_regs_release();
             }
-            // we don't pop cb_x until we compute Ex
+            if (first_sum) {
+                reconfig_data_format(cb_ex, cb_ex);
+                add_tiles_init(cb_ex, cb_ex, false);
+                first_sum = false;
+                cb_reduce_input = cb_ex;
+            }
+            // We floor divide since we squish all odd tiles into dst0
+            cb_length = cb_length / 2;
         }
+        reconfig_data_format(cb_ex, cb_scaler);
+        cb_reserve_back(cb_ex, onetile);
+        reduce_init_delta<false>(cb_ex, cb_scaler, cb_ex);
+        tile_regs_acquire();
+        reduce_tile(cb_ex, cb_scaler, 0, scaler0, dst0);
+        tile_regs_commit();
+        tile_regs_wait();
         pack_tile(dst0, cb_ex);
         reduce_uninit();
-        REL();
-
+        reduce_revert_delta(cb_ex);
         cb_push_back(cb_ex, 1);
+        tile_regs_release();
 
         /*
          * x - E[x]
@@ -144,6 +222,7 @@ void MAIN {
             reconfig_data_format(cb_x, cb_ex);
         }
         cb_wait_front(cb_ex, 1);  // should have 1 tile
+        UNPACK(tt::compute::common::print_full_tile(cb_ex, 0, true));
         cb_reserve_back(cb_xmm, Wt);
         sub_bcast_cols_init_short(cb_x, cb_ex);
         for (uint32_t wt = 0; wt < Wt; wt += blk) {
