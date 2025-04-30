@@ -158,14 +158,23 @@ def run_reduce_scatter_test(
         ),
     )
 
-    output_tensor_goldens_list = []
+    output_tensor_q_goldens_list = []
+    output_tensor_k_goldens_list = []
+    output_tensor_v_goldens_list = []
     tt_input_tensors_list = []
     tt_intermediate_tensors_list = []
     for iter in range(num_iters):
         input = gen_tensor(
             dim, shard_height, shard_width, num_devices_scatter, num_devices_fracture, num_cores, scheme=scheme
         )
-        # print(input)
+        reduced_input_tensor = input.sum(dim=1)
+        reduced_input_tensor_reshaped = reduced_input_tensor.reshape(8, 32, 10, 128)
+        q_output_tensor_golden = reduced_input_tensor_reshaped[:, :, :8, :]
+        k_output_tensor_golden = reduced_input_tensor_reshaped[:, :, 8:9, :]
+        v_output_tensor_golden = reduced_input_tensor_reshaped[:, :, 9:10, :]
+        output_tensor_q_goldens_list.append(q_output_tensor_golden)
+        output_tensor_k_goldens_list.append(k_output_tensor_golden)
+        output_tensor_v_goldens_list.append(v_output_tensor_golden)
 
         intermediate_tensor = torch.zeros(
             [
@@ -179,16 +188,15 @@ def run_reduce_scatter_test(
             ]
         )
 
-        intermediate_outputs = torch.chunk(input, chunks=num_devices_scatter, dim=1)
-        output = torch.zeros(intermediate_outputs[0].shape)
+        # intermediate_outputs = torch.chunk(input, chunks=num_devices_scatter, dim=1)
+        # output = torch.zeros(intermediate_outputs[0].shape)
 
-        for i in range(0, len(intermediate_outputs)):
-            output += intermediate_outputs[i]
+        # for i in range(0, len(intermediate_outputs)):
+        #     output += intermediate_outputs[i]
 
-        scattered_output = torch.chunk(output, chunks=num_devices_scatter, dim=dim)
-        scattered_output = torch.cat(scattered_output, dim=1)
+        # scattered_output = torch.chunk(output, chunks=num_devices_scatter, dim=dim)
+        # scattered_output = torch.cat(scattered_output, dim=1)
 
-        output_tensor_goldens_list.append(scattered_output)
         # breakpoint()
         tt_input = ttnn.from_torch(
             input,
@@ -263,7 +271,6 @@ def run_reduce_scatter_test(
                 tt_out_tensor_q_list.append(tt_out_tensor_q)
                 tt_out_tensor_k_list.append(tt_out_tensor_k)
                 tt_out_tensor_v_list.append(tt_out_tensor_v)
-        breakpoint()
         if store_all_results:
             return tt_out_tensor_q_list, tt_out_tensor_k_list, tt_out_tensor_v_list
         else:
@@ -310,40 +317,69 @@ def run_reduce_scatter_test(
         logger.info(f"Time taken e2e: {time_taken} s")
     else:
         signpost("start")
-        tt_out_tensor_q_list, tt_out_tensor_k_list, tt_out_tensor_v_list = run_op(num_iters, store_all_results=True)
+        tt_out_tensor_list = run_op(num_iters, store_all_results=True)
         signpost("stop")
 
     mesh_device.reset_sub_device_stall_group()
     # breakpoint()
     passed = True
-    # first_failed_tensor_index = None
-    # failed_indices = []
-    # expected_pcc = 0.999 if dtype == ttnn.bfloat8_b else 0.9999
-    # for tensor_index in range(len(tt_out_tensor_list)):
-    #     tt_torch_tensor = ttnn.to_torch(
-    #         tt_out_tensor_list[tensor_index],
-    #         mesh_composer=ttnn.ConcatMesh2dToTensor(
-    #             mesh_device, mesh_shape=[num_devices_fracture, num_devices_scatter], dims=(0, 1)
-    #         ),
-    #     )
-    #     eq, output_results = comp_pcc(tt_torch_tensor, output_tensor_goldens_list[tensor_index], expected_pcc)
-    #     logger.info(f"Output tensor {tensor_index} has result {output_results}")
-    #     if not eq:
-    #         passed = False
-    #         first_failed_tensor_index = tensor_index
-    #         failed_indices = torch.where(tt_torch_tensor != output_tensor_goldens_list[tensor_index])
-    #         break
+    first_failed_tensor_index = None
+    failed_indices = []
+    expected_pcc = 0.999 if dtype == ttnn.bfloat8_b else 0.9999
 
-    # for i in range(num_devices_scatter * num_devices_fracture):
-    #     logger.info(f"Device {i} has {mesh_device.get_devices()[i].num_program_cache_entries()} program cache entries")
-    #     assert (
-    #         mesh_device.get_devices()[i].num_program_cache_entries() == 1
-    #         or mesh_device.get_devices()[i].num_program_cache_entries() == num_iters
-    #     ), f"Device {i} has {mesh_device.get_devices()[i].num_program_cache_entries()} program cache entries"
+    for tensor_index in range(len(tt_out_tensor_list[0])):
+        tt_torch_tensor_q = ttnn.to_torch(
+            tt_out_tensor_list[0][tensor_index],
+            mesh_composer=ttnn.ConcatMesh2dToTensor(
+                mesh_device, mesh_shape=[num_devices_fracture, num_devices_scatter], dims=(0, 1)
+            ),
+        )
+        tt_torch_tensor_k = ttnn.to_torch(
+            tt_out_tensor_list[1][tensor_index],
+            mesh_composer=ttnn.ConcatMesh2dToTensor(
+                mesh_device, mesh_shape=[num_devices_fracture, num_devices_scatter], dims=(0, 1)
+            ),
+        )
+        tt_torch_tensor_v = ttnn.to_torch(
+            tt_out_tensor_list[2][tensor_index],
+            mesh_composer=ttnn.ConcatMesh2dToTensor(
+                mesh_device, mesh_shape=[num_devices_fracture, num_devices_scatter], dims=(0, 1)
+            ),
+        )
+        eq, output_results = comp_pcc(tt_torch_tensor_q, output_tensor_q_goldens_list[tensor_index], expected_pcc)
+        logger.info(f"Output q tensor {tensor_index} has result {output_results}")
+        if not eq:
+            passed = False
+            first_failed_tensor_index = tensor_index
+            failed_indices = torch.where(tt_torch_tensor_q != output_tensor_q_goldens_list[tensor_index])
+            break
 
-    # if not passed:
-    #     logger.info(f"Failed indices: {failed_indices}")
-    #     assert eq, f"{first_failed_tensor_index} FAILED: {output_results}"
+        eq, output_results = comp_pcc(tt_torch_tensor_k, output_tensor_k_goldens_list[tensor_index], expected_pcc)
+        logger.info(f"Output k tensor {tensor_index} has result {output_results}")
+        if not eq:
+            passed = False
+            first_failed_tensor_index = tensor_index
+            failed_indices = torch.where(tt_torch_tensor_k != output_tensor_k_goldens_list[tensor_index])
+            break
+
+        eq, output_results = comp_pcc(tt_torch_tensor_v, output_tensor_v_goldens_list[tensor_index], expected_pcc)
+        logger.info(f"Output v tensor {tensor_index} has result {output_results}")
+        if not eq:
+            passed = False
+            first_failed_tensor_index = tensor_index
+            failed_indices = torch.where(tt_torch_tensor_v != output_tensor_v_goldens_list[tensor_index])
+            break
+
+    for i in range(num_devices_scatter * num_devices_fracture):
+        logger.info(f"Device {i} has {mesh_device.get_devices()[i].num_program_cache_entries()} program cache entries")
+        assert (
+            mesh_device.get_devices()[i].num_program_cache_entries() == 1
+            or mesh_device.get_devices()[i].num_program_cache_entries() == num_iters
+        ), f"Device {i} has {mesh_device.get_devices()[i].num_program_cache_entries()} program cache entries"
+
+    if not passed:
+        logger.info(f"Failed indices: {failed_indices}")
+        assert eq, f"{first_failed_tensor_index} FAILED: {output_results}"
 
 
 @pytest.mark.parametrize(
