@@ -94,12 +94,9 @@ std::map<std::string, std::string> initialize_device_kernel_defines(chip_id_t de
 
     auto pcie_cores = soc_d.get_cores(CoreType::PCIE, soc_d.get_umd_coord_system());
     CoreCoord pcie_core = pcie_cores.empty() ? soc_d.grid_size : pcie_cores[0];
-    auto virtual_pcie_core =
-        tt::tt_metal::MetalContext::instance().get_cluster().get_virtual_coordinate_from_physical_coordinates(
-            device_id, {pcie_core.x, pcie_core.y});
 
-    device_kernel_defines.emplace("PCIE_NOC_X", std::to_string(virtual_pcie_core.x));
-    device_kernel_defines.emplace("PCIE_NOC_Y", std::to_string(virtual_pcie_core.y));
+    device_kernel_defines.emplace("PCIE_NOC_X", std::to_string(pcie_core.x));
+    device_kernel_defines.emplace("PCIE_NOC_Y", std::to_string(pcie_core.y));
 
     return device_kernel_defines;
 }
