@@ -47,7 +47,7 @@ def gen_tensor(dim, shard_height, shard_width, num_devices_scatter, num_devices_
                         torch_input_tensors.append(torch.rand(1, 1, shard_height, 32))
                     elif scheme == "sequential":
                         torch_input_tensors.append(torch.ones(1, 1, shard_height, 32) * factor)
-                        # factor += 1
+                        factor += 1
                     else:
                         raise ValueError(f"Invalid scheme: {scheme}")
             torch_scatter_tensors.append(torch.cat(torch_input_tensors, dim=dim))
@@ -479,6 +479,6 @@ def test_rs_create_heads_tg_no_trace(mesh_device, trace_mode, dtype):
         warmup_iters,
         trace_mode,
         num_links=3,
-        scheme="sequential",
+        scheme="random",
         dtype=dtype,
     )

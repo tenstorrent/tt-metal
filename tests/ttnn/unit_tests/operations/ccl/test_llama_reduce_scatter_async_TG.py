@@ -171,7 +171,6 @@ def run_reduce_scatter_test(
         scattered_output = torch.cat(scattered_output, dim=1)
 
         output_tensor_goldens_list.append(scattered_output)
-        breakpoint()
         tt_input = ttnn.from_torch(
             input,
             device=mesh_device,
