@@ -90,6 +90,7 @@ def run_avg_pool2d(
         [2, 512, 112, 32],
         [2, 512, 16, 16],
         [2, 800, 16, 16],
+        # [1, 48, 10, 10],    # test for auto sharding
     ),
 )
 @pytest.mark.parametrize(
