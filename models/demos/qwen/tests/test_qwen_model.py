@@ -54,8 +54,6 @@ def test_qwen_model_inference(mesh_device, weights, layers, use_program_cache, r
 
     dtype = ttnn.bfloat8_b
 
-    mesh_device.enable_async(True)
-
     # This sets the minimum PCC for each iteration
     pcc = 0.79
 

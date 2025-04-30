@@ -674,7 +674,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_width_sh
         act_block_num_tiles_split,
         act_tile_size);
 
-    auto conv_reader_indices_buffer = conv_reader_indices.value().device_buffer();
+    auto conv_reader_indices_storage = conv_reader_indices.value().device_storage();
 
     cb_indices.cb_for_reader_indices = cb_indices.get_next_cb_index();
     tt::tt_metal::create_cb(
@@ -684,7 +684,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_width_sh
         out_block_h_datums * 2,
         1,
         tt::DataFormat::Float16_b,
-        &*conv_reader_indices_buffer);
+        conv_reader_indices_storage.get_buffer());
 
     if (has_bias) {
         uint32_t bias_tile_size = tt_metal::detail::TileSize(bias_df);
@@ -702,7 +702,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_width_sh
     // Share buffer if same data format
     CBHandle cb_output = 0;
     CBHandle cb_matmul_partials = 0;
-    if (untilize_out == false && interm0_df == out_df) {
+    if (!untilize_out && interm0_df == out_df) {
         cb_indices.out0_cb = cb_indices.get_next_cb_index();
         auto cb_tuple = tt::tt_metal::create_cb(
             {cb_indices.matmul_partials_cb, cb_indices.out0_cb},
@@ -917,9 +917,14 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_width_sh
         }
     }
 
-    // Capture conv_reader_indices_buffer to cache this with the program
     auto override_runtime_arguments_callback =
-        [conv_reader_indices_buffer, cb_input, cb_output, has_bias, full_core_grid, total_num_cores, weights_kernel_id](
+        [cb_input,
+         cb_output,
+         has_bias,
+         full_core_grid,
+         weights_kernel_id,
+         total_num_active_cores,
+         conv_reader_indices_storage](
             const void* operation,
             tt::tt_metal::Program& program,
             const std::vector<Tensor>& input_tensors,
@@ -932,12 +937,12 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_width_sh
             auto src_buffer_b = input_tensors.at(1).buffer();
             auto dst_buffer = output_tensors.at(0).buffer();
 
-            auto weights_kernel_runtime_args = GetRuntimeArgs(program, weights_kernel_id);
-            for (uint32_t core_index = 0; core_index < total_num_cores; core_index++) {
+            auto& weights_kernel_runtime_args = GetRuntimeArgs(program, weights_kernel_id);
+            for (uint32_t core_index = 0; core_index < total_num_active_cores; core_index++) {
                 uint32_t core_x = core_index % full_core_grid.x;
                 uint32_t core_y = core_index / full_core_grid.x;
 
-                auto this_core_weights_kernel_runtime_args = weights_kernel_runtime_args[core_x][core_y];
+                auto& this_core_weights_kernel_runtime_args = weights_kernel_runtime_args[core_x][core_y];
                 this_core_weights_kernel_runtime_args[1] = src_buffer_b->address();
                 if (has_bias) {
                     this_core_weights_kernel_runtime_args[2] = optional_input_tensors.at(0).value().buffer()->address();

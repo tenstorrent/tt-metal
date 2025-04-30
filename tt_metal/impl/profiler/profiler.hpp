@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include <nlohmann/json.hpp>
+#include <nlohmann/json_fwd.hpp>
 #include <stdint.h>
 #include <chrono>
 #include <cstddef>
@@ -23,6 +23,8 @@
 #include <vector>
 
 #include "buffer.hpp"
+#include "mesh_buffer.hpp"
+#include "program.hpp"
 #include "common/TracyTTDeviceData.hpp"
 #include "core_coord.hpp"
 #include "hostdevcommon/profiler_common.h"
@@ -92,6 +94,12 @@ private:
     // Holding current data collected for dispatch command queue zones
     DisptachMetaData current_dispatch_meta_data;
 
+    // (cpu time, device time, frequency) for sync propagated from root device
+    std::tuple<double, double, double> device_sync_info;
+
+    // Per-core sync info used to make tracy context
+    std::map<CoreCoord, std::tuple<double, double, double>> core_sync_info;
+
     // 32bit FNV-1a hashing
     uint32_t hash32CT(const char* str, size_t n, uint32_t basis = UINT32_C(2166136261));
 
@@ -115,7 +123,6 @@ private:
     void logPacketData(
         std::ofstream& log_file_ofs,
         nlohmann::ordered_json& noc_trace_json_log,
-        uint32_t runID,
         uint32_t runHostID,
         const std::string& opname,
         chip_id_t device_id,
@@ -136,7 +143,6 @@ private:
         uint32_t timer_id,
         uint64_t timestamp,
         uint64_t data,
-        uint32_t run_id,
         uint32_t run_host_id,
         const std::string_view opname,
         const std::string_view zone_name,
@@ -155,7 +161,6 @@ private:
         uint32_t timer_id,
         uint64_t timestamp,
         uint64_t data,
-        uint32_t run_id,
         uint32_t run_host_id,
         const std::string_view opname,
         const std::string_view zone_name,
@@ -167,15 +172,16 @@ private:
     void readRiscProfilerResults(
         IDevice* device,
         const CoreCoord& worker_core,
+        const ProfilerDumpState state,
         const std::optional<ProfilerOptionalMetadata>& metadata,
         std::ofstream& log_file_ofs,
         nlohmann::ordered_json& noc_trace_json_log);
 
-    // Push device results to tracy
-    void pushTracyDeviceResults();
-
     // Track the smallest timestamp dumped to file
     void firstTimestamp(uint64_t timestamp);
+
+    // Get tracy context for the core
+    void updateTracyContext(std::pair<uint32_t, CoreCoord> device_core);
 
 public:
     DeviceProfiler(const bool new_logs);
@@ -185,7 +191,7 @@ public:
     ~DeviceProfiler();
 
     // DRAM buffer for device side results
-    std::shared_ptr<tt::tt_metal::Buffer> output_dram_buffer = nullptr;
+    distributed::AnyBuffer output_dram_buffer;
     std::shared_ptr<tt::tt_metal::Program> sync_program = nullptr;
 
     // Device-core Syncdata
@@ -222,7 +228,22 @@ public:
         const std::vector<CoreCoord>& worker_cores,
         ProfilerDumpState state = ProfilerDumpState::NORMAL,
         const std::optional<ProfilerOptionalMetadata>& metadata = {});
+
+    // Push device results to tracy
+    void pushTracyDeviceResults();
+
+    // Update sync info for this device
+    void setSyncInfo(std::tuple<double, double, double> sync_info);
 };
+
+void issue_fd_write_to_profiler_buffer(distributed::AnyBuffer& buffer, IDevice* device, std::vector<uint32_t>& data);
+
+void write_control_buffer_to_core(
+    IDevice* device,
+    const CoreCoord& core,
+    const HalProgrammableCoreType core_type,
+    const ProfilerDumpState state,
+    std::vector<uint32_t>& control_buffer);
 
 }  // namespace tt_metal
 

@@ -17,7 +17,7 @@ from models.utility_functions import torch_random
     ],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
-def test_downblock2d(device, temb_shape, input_shape, use_program_cache):
+def test_downblock2d(device, temb_shape, input_shape, use_program_cache, reset_seeds):
     pipe = DiffusionPipeline.from_pretrained(
         "stabilityai/stable-diffusion-xl-base-1.0", torch_dtype=torch.float32, use_safetensors=True, variant="fp16"
     )
@@ -45,7 +45,7 @@ def test_downblock2d(device, temb_shape, input_shape, use_program_cache):
         layout=ttnn.TILE_LAYOUT,
         memory_config=ttnn.L1_MEMORY_CONFIG,
     )
-    ttnn_output_tensor, output_shape, _ = tt_downblock.forward(ttnn_input_tensor, ttnn_temb_tensor, [B, C, H, W])
+    ttnn_output_tensor, output_shape, _ = tt_downblock.forward(ttnn_input_tensor, [B, C, H, W], ttnn_temb_tensor)
     output_tensor = ttnn.to_torch(ttnn_output_tensor)
 
     output_tensor = output_tensor.reshape(input_shape[0], output_shape[1], output_shape[2], output_shape[0])

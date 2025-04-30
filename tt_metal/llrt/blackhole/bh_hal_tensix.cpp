@@ -6,7 +6,6 @@
 #include <algorithm>
 #include <cstdint>
 #include <cstdlib>
-#include <string>
 #include <vector>
 
 #include "assert.hpp"
@@ -123,8 +122,18 @@ HalCoreInfoType create_tensix_mem_map() {
         }
         processor_classes[processor_class_idx] = processor_types;
     }
-
-    return {HalProgrammableCoreType::TENSIX, CoreType::WORKER, processor_classes, mem_map_bases, mem_map_sizes, true};
+    constexpr uint32_t mailbox_size =
+        sizeof(mailboxes_t) - sizeof(profiler_msg_t::buffer) +
+        sizeof(profiler_msg_t::buffer) / PROFILER_RISC_COUNT * static_cast<uint8_t>(TensixProcessorTypes::COUNT);
+    static_assert(mailbox_size <= MEM_MAILBOX_SIZE);
+    return {
+        HalProgrammableCoreType::TENSIX,
+        CoreType::WORKER,
+        processor_classes,
+        mem_map_bases,
+        mem_map_sizes,
+        true /*supports_cbs*/,
+        true /*supports_receiving_multicast_cmds*/};
 }
 
 }  // namespace tt::tt_metal::blackhole

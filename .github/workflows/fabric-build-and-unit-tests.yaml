@@ -34,7 +34,12 @@ jobs:
           {name: fabric unit tests, cmd: ./tests/scripts/run_cpp_fabric_tests.sh },
         ]
     name: ${{ inputs.arch }} ${{ inputs.runner-label }} ${{ matrix.test-group.name }}
-    runs-on: ${{ startsWith(inputs.runner-label, 'tt-beta-ubuntu') && fromJSON(format('["{0}"]', inputs.runner-label)) || fromJSON(format('["{0}", "in-service", "cloud-virtual-machine"]', inputs.runner-label)) }}
+    runs-on: >-
+      ${{
+        (startsWith(inputs.runner-label, 'tt-beta-ubuntu') && fromJSON(format('["{0}"]', inputs.runner-label)))
+        || github.event.pull_request.head.repo.fork == true && format('tt-beta-ubuntu-2204-{0}-large-stable', inputs.runner-label)
+        || fromJSON(format('["{0}", "in-service", "cloud-virtual-machine"]', inputs.runner-label))
+      }}
     container:
       image: ${{ inputs.docker-image || 'docker-image-unresolved' }}
       env:
@@ -75,7 +80,7 @@ jobs:
         with:
           prefix: "test_reports_"
       - name: Generate system logs on failure
-        uses: ./.github/actions/generate-system-logs
+        uses: tenstorrent/tt-metal/.github/actions/generate-system-logs@main
         if: ${{ failure() }}
       - name: Generate gtest annotations on failure
         uses: tenstorrent/tt-metal/.github/actions/generate-gtest-failure-message@main

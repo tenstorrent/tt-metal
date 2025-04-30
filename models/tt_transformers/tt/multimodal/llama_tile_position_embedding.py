@@ -59,7 +59,7 @@ class TtLlamaTilePositionEmbedding(LightweightModule):
             gate = state_dict[f"{state_dict_prefix}gate"]
             self.gate = ttnn.as_tensor(
                 gate,
-                dtype=dtype,
+                dtype=ttnn.bfloat16,
                 layout=ttnn.TILE_LAYOUT,
                 device=self.mesh_device,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,

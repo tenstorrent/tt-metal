@@ -26,6 +26,7 @@
 #include "assert.hpp"
 #include "core_coord.hpp"
 #include "llrt/hal.hpp"
+#include "llrt/rtoptions.hpp"
 #include <umd/device/cluster.h>
 #include <umd/device/device_api_metal.h>
 #include <umd/device/tt_cluster_descriptor.h>
@@ -81,12 +82,16 @@ enum class EthRouterMode : uint32_t {
 
 class Cluster {
 public:
+    // TODO: #21245: Remove these workaround APIs and instead refactor UMD component out of Cluster
+    static ClusterType get_cluster_type_from_cluster_desc(
+        const llrt::RunTimeOptions& rtoptions, const tt_ClusterDescriptor* cluster_desc = nullptr);
+    static bool is_base_routing_fw_enabled(ClusterType cluster_type);
     Cluster& operator=(const Cluster&) = delete;
     Cluster& operator=(Cluster&& other) noexcept = delete;
     Cluster(const Cluster&) = delete;
     Cluster(Cluster&& other) noexcept = delete;
 
-    Cluster();
+    Cluster(const llrt::RunTimeOptions& rtoptions, const tt_metal::Hal& hal);
     ~Cluster();
 
     // For TG Galaxy systems, mmio chips are gateway chips that are only used for dispatch, so user_devices are meant
@@ -98,6 +103,13 @@ public:
     size_t number_of_devices() const { return this->cluster_desc_->get_number_of_chips(); }
 
     size_t number_of_pci_devices() const { return this->cluster_desc_->get_chips_with_mmio().size(); }
+
+    // TODO: UMD will eventually consolidate ethernet coordinates and unique ids, we can remove the ethernet coord
+    // getter after that change is in
+    const std::unordered_map<chip_id_t, uint64_t>& get_unique_chip_ids() const {
+        return this->cluster_desc_->get_chip_unique_ids();
+    }
+    std::unordered_map<chip_id_t, eth_coord_t> get_all_chip_ethernet_coordinates() const;
 
     ARCH arch() const { return this->arch_; }
 
@@ -294,16 +306,21 @@ public:
 
     tt_metal::FabricConfig get_fabric_config() const;
 
+    bool is_base_routing_fw_enabled() const;
+
     // Get all fabric ethernet cores
     std::set<tt_fabric::chan_id_t> get_fabric_ethernet_channels(chip_id_t chip_id) const;
+
+    // Get fabric ethernet cores connecting src to dst
+    std::vector<CoreCoord> get_fabric_ethernet_routers_between_src_and_dest(chip_id_t src_id, chip_id_t dst_id) const;
 
     bool is_worker_core(const CoreCoord& core, chip_id_t chip_id) const;
     bool is_ethernet_core(const CoreCoord& core, chip_id_t chip_id) const;
     CoreCoord get_logical_ethernet_core_from_virtual(chip_id_t chip, CoreCoord core) const;
 
     // These two functions should be removed in favor of direct translation.
-    const std::unordered_map<int, int> get_worker_logical_to_virtual_x(chip_id_t chip_id) const;
-    const std::unordered_map<int, int> get_worker_logical_to_virtual_y(chip_id_t chip_id) const;
+    std::unordered_map<int, int> get_worker_logical_to_virtual_x(chip_id_t chip_id) const;
+    std::unordered_map<int, int> get_worker_logical_to_virtual_y(chip_id_t chip_id) const;
 
     const std::unordered_map<CoreCoord, int32_t>& get_virtual_routing_to_profiler_flat_id(chip_id_t chip_id) const;
 
@@ -360,6 +377,8 @@ private:
     std::unordered_map<tt_cxy_pair, tt_cxy_pair> virtual_to_umd_coord_mapping_;
     std::unordered_map<chip_id_t, std::unordered_set<CoreCoord>> virtual_worker_cores_;
     std::unordered_map<chip_id_t, std::unordered_set<CoreCoord>> virtual_eth_cores_;
+    std::unordered_map<chip_id_t, std::unordered_set<CoreCoord>> virtual_dram_cores_;
+    std::unordered_map<chip_id_t, std::unordered_set<CoreCoord>> virtual_pcie_cores_;
     std::unordered_map<BoardType, std::unordered_map<CoreCoord, int32_t>> virtual_routing_to_profiler_flat_id_;
     std::unordered_map<chip_id_t, std::unordered_set<CoreCoord>> frequent_retrain_cores_;
     // Flag to tell whether we are on a TG type of system.
@@ -396,6 +415,11 @@ private:
     std::unordered_map<chip_id_t, std::unordered_map<chip_id_t, std::vector<CoreCoord>>> ethernet_sockets_;
 
     uint32_t routing_info_addr_ = 0;
+
+    // Cluster depends on RunTimeOptions and Hal to set up, but they're all initialized/accessed by MetalContext, so
+    // keep a local reference for init.
+    const llrt::RunTimeOptions& rtoptions_;
+    const tt_metal::Hal& hal_;
 };
 
 }  // namespace tt

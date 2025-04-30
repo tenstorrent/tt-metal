@@ -42,4 +42,7 @@ void kernel_main() {
     }
 
     noc_async_writes_flushed();
+    if (target_core_value) {
+        noc_async_write_barrier();
+    }
 }

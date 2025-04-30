@@ -19,7 +19,7 @@
 
 #include <tt-metalium/assert.hpp>
 #include <tt-metalium/buffer.hpp>
-#include <tt-metalium/buffer_constants.hpp>
+#include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/data_types.hpp>
 #include <tt-metalium/device.hpp>
@@ -29,7 +29,7 @@
 #include <tt-metalium/hal_types.hpp>
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/program.hpp>
-#include "span.hpp"
+#include <tt_stl/span.hpp>
 #include <tt-metalium/tt_align.hpp>
 #include "umd/device/types/xy_pair.h"
 
@@ -281,8 +281,8 @@ TEST_F(DispatchFixture, ActiveEthDRAMLoopbackSingleCore) {
         .kernel_file = "tests/tt_metal/tt_metal/test_kernels/dataflow/dram_copy.cpp",
         .dram_buffer_size = buffer_size,
         .l1_buffer_addr = tt::align(
-            hal_ref.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::UNRESERVED),
-            hal_ref.get_alignment(HalMemType::DRAM)),
+            tt::tt_metal::hal::get_erisc_l1_unreserved_base(),
+            MetalContext::instance().hal().get_alignment(HalMemType::DRAM)),
         .kernel_cfg = tt_metal::EthernetConfig{.eth_mode = Eth::RECEIVER, .noc = tt_metal::NOC::NOC_0},
     };
 
@@ -308,8 +308,8 @@ TEST_F(DispatchFixture, IdleEthDRAMLoopbackSingleCore) {
         .kernel_file = "tests/tt_metal/tt_metal/test_kernels/dataflow/dram_copy.cpp",
         .dram_buffer_size = buffer_size,
         .l1_buffer_addr = tt::align(
-            hal_ref.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::UNRESERVED),
-            hal_ref.get_alignment(HalMemType::DRAM)),
+            tt::tt_metal::hal::get_erisc_l1_unreserved_base(),
+            MetalContext::instance().hal().get_alignment(HalMemType::DRAM)),
         .kernel_cfg = tt_metal::EthernetConfig{.eth_mode = Eth::IDLE, .noc = tt_metal::NOC::NOC_0},
     };
 

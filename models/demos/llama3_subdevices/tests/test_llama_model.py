@@ -70,7 +70,17 @@ from models.utility_functions import skip_for_grayskull
     ],
     indirect=True,
 )
-@pytest.mark.parametrize("device_params", [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL}], indirect=True)
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        {
+            "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
+            "worker_l1_size": 1344544,
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+        }
+    ],
+    indirect=True,
+)
 def test_llama_model_inference(
     weights,
     layers,
@@ -88,7 +98,7 @@ def test_llama_model_inference(
     run_ref_pt = True  # Flag to run reference PyTorch model and compare PCC
     cache_pcc = layers == 1  # Flag to measure KV cache PCC. Avoid running for all layers to speed up test time.
     dtype = ttnn.bfloat8_b
-    mesh_device.enable_async(True)
+
     mode_accuracy = optimizations == LlamaOptimizations.accuracy
     instruct = True if weights == "instruct" else False
     dummy_weights = True if weights == "random" else False
@@ -316,9 +326,10 @@ def test_llama_model_inference(
                 )
                 tt_out_rm = ttnn.untilize(tt_out_gathered, use_multicore=True, sub_core_grids=sub_core_grids)
                 tt_out_tok = ttnn.argmax(  # FIXME When ttnn.argmax supports multicore, avoid falling back to host
-                    tt_out_rm, dim=3, use_multicore=True, sub_core_grids=sub_core_grids
+                    tt_out_rm, dim=3, keepdim=True, use_multicore=True, sub_core_grids=sub_core_grids
                 )
-
+                logger.info(f"TT input token shape: {tt_out_rm.shape}")
+                logger.info(f"TT output token shape: {tt_out_tok.shape}")
                 tt_out_tok = ttnn.to_torch(
                     tt_out_tok,
                     mesh_composer=ttnn.ConcatMesh2dToTensor(
@@ -326,7 +337,7 @@ def test_llama_model_inference(
                         dims=(3, 1) if model_args.is_galaxy else (1, 3),
                         mesh_shape=model_args.cluster_shape,
                     ),
-                )[0, 0, 0, :32].view(32, 1)
+                )[0, 0, :32, 0].view(32, 1)
                 for tttt in range(1, 32):
                     tt_out_tok[tttt][0] = 0
                 # print(tt_out_tok.shape, tt_out_tok_host.shape)

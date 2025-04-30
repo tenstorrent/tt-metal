@@ -13,6 +13,7 @@
 #include <tt-metalium/program_device_map.hpp>
 #include <tt-metalium/worker_config_buffer.hpp>
 #include <tt-metalium/dev_msgs.h>
+#include <tt-metalium/program_descriptors.hpp>
 
 namespace tt {
 
@@ -60,7 +61,7 @@ class CommandQueue;
 class HWCommandQueue;
 
 namespace detail {
-class Program_;
+class ProgramImpl;
 
 void ValidateCircularBufferRegion(const Program& program, const IDevice* device);
 KernelHandle AddKernel(
@@ -71,7 +72,7 @@ std::shared_ptr<CircularBuffer> GetCircularBuffer(const Program& program, CBHand
 class Internal_;
 }  // namespace detail
 
-typedef std::array<std::optional<KernelHandle>, DISPATCH_CLASS_MAX> kernel_id_array_t;
+using kernel_id_array_t = std::array<std::optional<KernelHandle>, DISPATCH_CLASS_MAX>;
 
 struct KernelGroup {
     uint32_t programmable_core_type_index;
@@ -86,7 +87,7 @@ struct KernelGroup {
 
     KernelGroup();
     KernelGroup(
-        const detail::Program_& program,
+        const detail::ProgramImpl& program,
         uint32_t programmable_core_type_index,
         kernel_id_array_t kernel_ids,
         bool erisc_is_idle,
@@ -123,6 +124,7 @@ enum class ProgramBinaryStatus : uint8_t {
 class Program {
 public:
     Program();
+    explicit Program(const ProgramDescriptor& descriptor);
 
     Program(const Program& other) = delete;
     Program& operator=(const Program& other) = delete;
@@ -162,7 +164,7 @@ public:
     // XXXXX TODO: this should return a const reference
     std::vector<std::vector<CoreCoord>> logical_cores() const;
 
-    void compile(IDevice* device, bool fd_bootloader_mode = false);
+    void compile(IDevice* device, bool force_slow_dispatch = false);
 
     void generate_dispatch_commands(IDevice* device);
 
@@ -191,7 +193,7 @@ public:
     uint32_t get_cb_memory_size() const;
 
 private:
-    std::unique_ptr<detail::Program_> pimpl_;
+    std::unique_ptr<detail::ProgramImpl> pimpl_;
 
     friend CBHandle CreateCircularBuffer(
         Program& program,

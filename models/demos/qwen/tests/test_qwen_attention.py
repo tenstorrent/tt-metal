@@ -37,8 +37,6 @@ def test_qwen_attention_inference(mesh_device, use_program_cache, reset_seeds, e
     dtype = ttnn.bfloat8_b
     pcc = 0.99
 
-    mesh_device.enable_async(True)
-
     model_args = TtModelArgs(mesh_device)
     model_args.n_layers = 1
     state_dict = model_args.load_state_dict()

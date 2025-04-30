@@ -72,7 +72,7 @@ def preprocess_unet_input_tensor(input_tensor, min_channels=16):
     return ttnn.reshape(nhwc, [1, 1, nhwc.shape[0] * nhwc.shape[1] * nhwc.shape[2], nhwc.shape[-1]])
 
 
-def concatenate(activation, residual, dim=-1, groups=4, final_block=False):
+def concatenate(activation, residual, dim=-1, groups=1, final_block=False):
     """
     Concatenate along the final dimension. The `final_block` flag is used for
     the final upblock where L1 memory pressure is highest.
@@ -130,8 +130,9 @@ class UNetConv2D:
         weights_dtype=ttnn.bfloat8_b,
         output_layout=ttnn.TILE_LAYOUT,
         reshard_if_not_optimal=False,
-        mesh_mapper=None,
         reallocate_halo_output=False,
+        override_core_grid=None,
+        mesh_mapper=None,
     ):
         assert is_valid_device_for_unet(device), "UNet Shallow requires an 8x8 grid on all devices"
 
@@ -146,7 +147,6 @@ class UNetConv2D:
         self.stride = conv.stride
         self.groups = conv.groups
         self.use_1d_systolic_array = conv.use_1d_systolic_array
-        self.deallocate_activation = True
         self.mesh_mapper = mesh_mapper
 
         shard_layout = (
@@ -154,11 +154,16 @@ class UNetConv2D:
             if self.use_1d_systolic_array
             else ttnn.TensorMemoryLayout.BLOCK_SHARDED
         )
+
+        assert (not reshard_if_not_optimal) or (
+            reshard_if_not_optimal or override_core_grid
+        ), f"Cannot enable `reshard_if_not_optimal` (was {reshard_if_not_optimal}) and `override_core_grid` (was {override_core_grid}) at the same time "
+
         self.conv_config = ttnn.Conv2dConfig(
             dtype=activation_dtype,
             weights_dtype=weights_dtype,
             shard_layout=shard_layout,
-            deallocate_activation=self.deallocate_activation,
+            deallocate_activation=True,
             enable_act_double_buffer=(
                 conv.use_activation_double_buffer if "use_activation_double_buffer" in conv else False
             ),
@@ -168,13 +173,17 @@ class UNetConv2D:
             output_layout=output_layout,
             input_channels_alignment=conv.input_channels_alignment if "input_channels_alignment" in conv else 32,
             reshard_if_not_optimal=reshard_if_not_optimal,
-            in_place=(conv.in_place if "in_place" in conv else False),
             reallocate_halo_output=reallocate_halo_output,
         )
+
+        if override_core_grid is not None:
+            self.conv_config.core_grid = get_core_grid_from_num_cores(override_core_grid)
+            self.conv_config.override_sharding_config = True
+
         self.compute_config = ttnn.init_device_compute_kernel_config(
             device.arch(),
             math_fidelity=ttnn.MathFidelity.LoFi,
-            fp32_dest_acc_en=True,
+            fp32_dest_acc_en=False,
             packer_l1_acc=False,
         )
         config_override = conv.conv_blocking_and_parallelization_config_override
@@ -202,7 +211,7 @@ class UNetConv2D:
             "stride": self.stride,
             "padding": self.padding,
             "dilation": [1, 1],
-            "groups": 4,
+            "groups": self.groups,
             "device": self.device,
             "conv_config": self.conv_config,
         }
@@ -251,8 +260,17 @@ class UNetDownblock:
         pool,
         device,
         mesh_mapper=None,
+        reshard_if_not_optimal=True,
+        override_core_grid=None,
     ):
-        self.conv1 = UNetConv2D(conv1, bn=bn1, device=device, reshard_if_not_optimal=True, mesh_mapper=mesh_mapper)
+        self.conv1 = UNetConv2D(
+            conv1,
+            bn=bn1,
+            device=device,
+            reshard_if_not_optimal=reshard_if_not_optimal,
+            mesh_mapper=mesh_mapper,
+            override_core_grid=override_core_grid,
+        )
         self.conv2 = UNetConv2D(conv2, bn=bn2, device=device, mesh_mapper=mesh_mapper)
         self.pool1 = UNetMaxPool2D(pool, conv2.out_channels, device=device)
 
@@ -266,6 +284,7 @@ class UNetDownblock:
         ], f"Downblock input is shape {list(x.shape)}, expected [1,1,BHW,C]"
         x = self.conv1(x)
         x = self.conv2(x)
+        x = ttnn.move(x)
         residual = x
         x = self.pool1(x)
         return x, residual
@@ -282,8 +301,9 @@ class UNetUpblock:
         bn3,
         device,
         mesh_mapper=None,
-        reshard=True,
+        reshard_if_not_optimal=True,
         final_block=False,
+        override_core_grid=None,
     ):
         self.final_block = final_block
         self.device = device
@@ -292,9 +312,10 @@ class UNetUpblock:
             conv1,
             bn1,
             device,
-            reshard_if_not_optimal=reshard,
+            reshard_if_not_optimal=reshard_if_not_optimal,
             mesh_mapper=mesh_mapper,
-            reallocate_halo_output=reshard,
+            reallocate_halo_output=True,
+            override_core_grid=override_core_grid,
         )
         self.conv2 = UNetConv2D(conv2, bn2, device, mesh_mapper=mesh_mapper)
         self.conv3 = UNetConv2D(conv3, bn3, device, mesh_mapper=mesh_mapper)
@@ -313,9 +334,7 @@ class UNetUpblock:
             x.shape, core_grid, ttnn.ShardStrategy.HEIGHT, orientation=ttnn.ShardOrientation.ROW_MAJOR
         )
 
-        if x.is_sharded():
-            x = ttnn.reshard(x, shardspec)
-        else:
+        if not x.is_sharded():
             x = ttnn.interleaved_to_sharded(x, shardspec)
 
         upsampled = ttnn.upsample(x, (2, 2), memory_config=x.memory_config())
@@ -343,25 +362,17 @@ class UNetUpblock:
             ttnn.deallocate(residual_rm)
             residual_rm = new_resid
 
-        y = concatenate(x_upsampled, residual_rm, dim=-1, final_block=self.final_block)
+        y = concatenate(x_upsampled, residual_rm, dim=-1, groups=self.conv1.groups, final_block=self.final_block)
         ttnn.deallocate(x_upsampled)
         ttnn.deallocate(residual_rm)
 
         if self.final_block:
-            y_rm = ttnn.untilize(y)
-            ttnn.deallocate(y)
+            y = ttnn.move(y)
 
-            out = self.conv1(y_rm)
-            out = self.conv2(out)
-            out = self.conv3(out)
-            return out
-        else:
-            y_re = ttnn.reallocate(y)
-
-            out = self.conv1(y_re)
-            out = self.conv2(out)
-            out = self.conv3(out)
-            return out
+        out = self.conv1(y)
+        out = self.conv2(out)
+        out = self.conv3(out)
+        return out
 
 
 class UNet:
@@ -376,6 +387,8 @@ class UNet:
             parameters.b1_2,
             parameters.p1,
             device,
+            override_core_grid=63,
+            reshard_if_not_optimal=False,
             mesh_mapper=mesh_mapper,
         )
         self.downblock2 = UNetDownblock(
@@ -385,6 +398,7 @@ class UNet:
             parameters.b2_2,
             parameters.p2,
             device,
+            reshard_if_not_optimal=False,
             mesh_mapper=mesh_mapper,
         )
         self.downblock3 = UNetDownblock(
@@ -428,8 +442,8 @@ class UNet:
             parameters.c5_3,
             parameters.b5_3,
             device,
-            mesh_mapper=mesh_mapper,
             final_block=False,
+            mesh_mapper=mesh_mapper,
         )
         self.upblock2 = UNetUpblock(
             parameters.c6,
@@ -439,8 +453,8 @@ class UNet:
             parameters.c6_3,
             parameters.b6_3,
             device,
-            mesh_mapper=mesh_mapper,
             final_block=False,
+            mesh_mapper=mesh_mapper,
         )
         self.upblock3 = UNetUpblock(
             parameters.c7,
@@ -450,8 +464,10 @@ class UNet:
             parameters.c7_3,
             parameters.b7_3,
             device,
-            mesh_mapper=mesh_mapper,
+            override_core_grid=63,
+            reshard_if_not_optimal=False,
             final_block=False,
+            mesh_mapper=mesh_mapper,
         )
         self.upblock4 = UNetUpblock(
             parameters.c8,
@@ -461,9 +477,9 @@ class UNet:
             parameters.c8_3,
             parameters.b8_3,
             device,
-            mesh_mapper=mesh_mapper,
-            reshard=False,
+            reshard_if_not_optimal=False,
             final_block=True,  # Special case due to high memory pressure in final upblock
+            mesh_mapper=mesh_mapper,
         )
 
         self.output_layer = UNetConv2D(
@@ -502,7 +518,7 @@ class UNet:
         output_memory_config = ttnn.MemoryConfig(
             ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, output_shard_spec
         )
-        return ttnn.experimental.convert_to_chw(x, memory_config=output_memory_config)
+        return ttnn.experimental.convert_to_chw(x, memory_config=output_memory_config, dtype=ttnn.bfloat16)
 
     def __call__(self, x, move_input_tensor_to_device=True):
         assert len(x.shape) == 4, f"Expected UNet input tensors to be rank 4 (was {len(x.shape)})"

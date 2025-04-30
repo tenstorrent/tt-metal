@@ -27,7 +27,6 @@ from models.utility_functions import (
 
 @pytest.mark.timeout(600)
 def test_grok_moe_inference(t3k_mesh_device, use_program_cache, reset_seeds):
-    t3k_mesh_device.enable_async(True)
     pcc = 0.87  # real weights = 0.99
     iterations = 1
     dtype = ttnn.bfloat8_b

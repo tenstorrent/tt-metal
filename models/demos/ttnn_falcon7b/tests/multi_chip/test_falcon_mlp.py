@@ -57,10 +57,6 @@ def torch_model():
     ],
     indirect=True,
 )
-@pytest.mark.parametrize(
-    "enable_async",
-    [True, False],
-)
 def test_falcon_mlp(
     mesh_device,
     model_name,
@@ -69,10 +65,7 @@ def test_falcon_mlp(
     expected_pcc,
     model_config_str,
     torch_model,
-    enable_async,
 ):
-    mesh_device.enable_async(enable_async)
-
     torch.manual_seed(0)
 
     configuration = transformers.FalconConfig.from_pretrained(PRETRAINED_MODEL_NAME)
@@ -110,5 +103,3 @@ def test_falcon_mlp(
         expected_pcc,
     )
     logger.success(f"Passed: pcc: {pcc}, expected: {expected_pcc}")
-
-    mesh_device.enable_async(False)

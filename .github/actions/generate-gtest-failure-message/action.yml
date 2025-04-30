@@ -2,17 +2,22 @@ name: "Generate gtest failure message"
 description: "Generate gtest failure message for Github workflow annotations"
 
 inputs:
-  path:
-    description: "Paths to pass containing gtest XML files"
+  test-report-path:
+    description: "Path to pass containing gtest XML test report files"
     required: false
     default: "/work/generated/test_reports/"
+  metal-checkout-path:
+    description: "Path to checked out metal repository"
+    required: false
+    default: "/work"
 
 runs:
   using: "composite"
   steps:
     - name: Generate gtest failure messages
       id: generate-gtest-message
+      working-directory: ${{ inputs.metal-checkout-path }}
       shell: bash
       run: |
         set +e
-        python3 .github/scripts/data_analysis/print_gtest_annotations.py ${{ inputs.path }}
+        python3 .github/scripts/data_analysis/print_gtest_annotations.py ${{ inputs.test-report-path }}

@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <allocator.hpp>
-#include <buffer_constants.hpp>
+#include <buffer_types.hpp>
 #include <command_queue.hpp>
 #include <device.hpp>
 #include <sub_device.hpp>
@@ -28,7 +28,7 @@
 #include "hal_types.hpp"
 #include "mesh_command_queue.hpp"
 #include "mesh_device.hpp"
-#include "strong_type.hpp"
+#include <tt_stl/strong_type.hpp>
 #include "tt_metal/impl/sub_device/sub_device_manager.hpp"
 
 namespace tt::tt_metal {

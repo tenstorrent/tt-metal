@@ -28,7 +28,6 @@ from models.utility_functions import is_grayskull, skip_for_blackhole
 def test_run_untilize_subcoregrid_test(dtype, nb, nc, nh, nw, device):
     if is_grayskull():
         pytest.skip("Skipping tests on Grayskull")
-    device.enable_async(True)
     shape = [nb, nc, nh, nw]
 
     torch.set_printoptions(precision=3, sci_mode=False, linewidth=3000, threshold=10000, edgeitems=128)

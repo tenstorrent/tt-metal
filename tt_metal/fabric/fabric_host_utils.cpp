@@ -2,44 +2,31 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <tt-metalium/erisc_datamover_builder.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <array>
-#include <cstddef>
-#include <map>
-#include <optional>
-#include <set>
-#include <unordered_map>
-#include <variant>
-
-#include "assert.hpp"
-#include "control_plane.hpp"
-#include "fabric_edm_packet_header.hpp"
-#include "fabric_host_utils.hpp"
-#include "metal_soc_descriptor.h"
-#include "impl/context/metal_context.hpp"
+#include <tt-metalium/fabric_edm_types.hpp>
+#include <tt-metalium/fabric_types.hpp>
+#include <tt-metalium/assert.hpp>
 #include <magic_enum/magic_enum.hpp>
-#include <umd/device/types/xy_pair.h>
-
-namespace tt {
-namespace tt_metal {
-class Program;
-}  // namespace tt_metal
-}  // namespace tt
+#include <umd/device/types/cluster_descriptor_types.h>  // chip_id_t
+#include <tt-metalium/metal_soc_descriptor.h>
+#include "impl/context/metal_context.hpp"
+#include <tt-metalium/erisc_datamover_builder.hpp>
+#include <set>
+#include <vector>
+#include <algorithm>
 
 namespace tt::tt_fabric {
 
-bool is_1d_fabric_config(const tt::tt_metal::FabricConfig& fabric_config) {
+bool is_1d_fabric_config(tt::tt_metal::FabricConfig fabric_config) {
     return fabric_config == tt::tt_metal::FabricConfig::FABRIC_1D ||
            fabric_config == tt::tt_metal::FabricConfig::FABRIC_1D_RING;
 }
 
-bool is_2d_fabric_config(const tt::tt_metal::FabricConfig& fabric_config) {
+bool is_2d_fabric_config(tt::tt_metal::FabricConfig fabric_config) {
     return fabric_config == tt::tt_metal::FabricConfig::FABRIC_2D ||
            fabric_config == tt::tt_metal::FabricConfig::FABRIC_2D_PUSH;
 }
 
-Topology get_1d_topology(const tt::tt_metal::FabricConfig& fabric_config) {
+Topology get_1d_topology(tt::tt_metal::FabricConfig fabric_config) {
     switch (fabric_config) {
         case tt::tt_metal::FabricConfig::FABRIC_1D: return tt::tt_fabric::Topology::Linear;
         case tt::tt_metal::FabricConfig::FABRIC_1D_RING: return tt::tt_fabric::Topology::Ring;
@@ -52,90 +39,86 @@ Topology get_1d_topology(const tt::tt_metal::FabricConfig& fabric_config) {
     return tt::tt_fabric::Topology::Linear;
 }
 
-// TODO: We should store this somewhere instead of constantly regenerating
-tt::tt_fabric::FabricEriscDatamoverConfig get_1d_fabric_config() {
-    constexpr std::size_t edm_buffer_size =
-        tt::tt_fabric::FabricEriscDatamoverBuilder::default_packet_payload_size_bytes +
-        sizeof(tt::tt_fabric::PacketHeader);
-    auto control_plane = tt::tt_metal::MetalContext::instance().get_cluster().get_control_plane();
-    tt::tt_metal::FabricConfig fabric_config = tt::tt_metal::MetalContext::instance().get_cluster().get_fabric_config();
-    Topology topology = get_1d_topology(fabric_config);
-    return tt::tt_fabric::FabricEriscDatamoverConfig(edm_buffer_size, topology);
+FabricType get_fabric_type(tt::tt_metal::FabricConfig fabric_config, tt::ClusterType cluster_type) {
+    if (cluster_type == tt::ClusterType::GALAXY && fabric_config == tt::tt_metal::FabricConfig::FABRIC_1D_RING) {
+        return FabricType::TORUS_2D;
+    }
+    return FabricType::MESH;
 }
 
-void append_fabric_connection_rt_args(
-    chip_id_t src_chip_id,
-    chip_id_t dst_chip_id,
-    uint32_t link_idx,
-    tt::tt_metal::Program& worker_program,
-    const CoreCoord& worker_core,
-    std::vector<uint32_t>& worker_args) {
-    TT_FATAL(
-        src_chip_id != dst_chip_id,
-        "Expected different src and dst chip ids but got same, src: {}, dst: {}",
-        src_chip_id,
-        dst_chip_id);
-
-    auto* control_plane = tt::tt_metal::MetalContext::instance().get_cluster().get_control_plane();
-
-    // for now, both the src and dest chips should be on the same mesh
-    auto [src_mesh_id, src_logical_chip_id] = control_plane->get_mesh_chip_id_from_physical_chip_id(src_chip_id);
-    auto [dst_mesh_id, dst_logical_chip_id] = control_plane->get_mesh_chip_id_from_physical_chip_id(dst_chip_id);
-    TT_FATAL(
-        src_mesh_id == dst_mesh_id,
-        "Currently only the chips on the same mesh are supported. Src mesh id: {}, Dst mesh id: {}",
-        src_mesh_id,
-        dst_mesh_id);
-
-    auto routing_directions = {RoutingDirection::N, RoutingDirection::S, RoutingDirection::E, RoutingDirection::W};
-    std::optional<std::set<chan_id_t>> candidate_ethernet_cores;
-    // mimic the 1d fabric connection setup steps to correctly find the candidate links
-    for (const auto& direction : routing_directions) {
-        auto neighbors = control_plane->get_intra_chip_neighbors(src_mesh_id, src_logical_chip_id, direction);
-        if (neighbors.empty() || neighbors[0] != dst_logical_chip_id) {
-            continue;
-        }
-
-        candidate_ethernet_cores =
-            control_plane->get_active_fabric_eth_channels_in_direction(src_mesh_id, src_logical_chip_id, direction);
+std::vector<chan_id_t> get_ordered_fabric_eth_chans(chip_id_t chip_id, const std::set<chan_id_t>& eth_chans) {
+    std::vector<std::pair<chan_id_t, CoreCoord>> ordered_eth_chans_cores;
+    auto soc_desc = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(chip_id);
+    for (const auto& chan : eth_chans) {
+        ordered_eth_chans_cores.push_back(
+            std::make_pair(chan, soc_desc.get_eth_core_for_channel(chan, CoordSystem::VIRTUAL)));
     }
 
-    TT_FATAL(
-        candidate_ethernet_cores.has_value(), "Could not find any fabric ethernet cores between src and dst chips");
+    std::sort(ordered_eth_chans_cores.begin(), ordered_eth_chans_cores.end(), [](const auto& a, const auto& b) {
+        return a.second.x < b.second.x;
+    });
 
-    TT_FATAL((link_idx + 1) <= candidate_ethernet_cores.value().size(), "link idx out of bounds");
+    std::vector<chan_id_t> ordered_eth_chans;
+    for (const auto& [chan, _] : ordered_eth_chans_cores) {
+        ordered_eth_chans.push_back(chan);
+    }
+    return ordered_eth_chans;
+}
 
-    auto it = candidate_ethernet_cores.value().begin();
-    std::advance(it, link_idx);
-    auto fabric_router_channel = *it;
+void get_optimal_noc_for_edm(
+    tt::tt_fabric::FabricEriscDatamoverBuilder& edm_builder1,
+    tt::tt_fabric::FabricEriscDatamoverBuilder& edm_builder2,
+    const uint32_t num_links,
+    const tt_fabric::Topology topology) {
+    constexpr uint32_t ring_noc_selection_link_threshold = 3;
+    constexpr uint32_t line_noc_selection_link_threshold = 2;
+    bool enable_noc_selection_opt = false;
+    if (topology == tt_fabric::Topology::Ring) {
+        enable_noc_selection_opt =
+            (num_links > ring_noc_selection_link_threshold) && (edm_builder1.my_noc_y != edm_builder2.my_noc_y);
+    } else {
+        enable_noc_selection_opt =
+            (num_links > line_noc_selection_link_threshold) && (edm_builder1.my_noc_y != edm_builder2.my_noc_y);
+    }
+    log_debug(
+        tt::LogTest,
+        "device {} edm_builder1 {} {} is connecting to edm_builder2 {} {} num links {}",
+        edm_builder1.my_chip_id,
+        edm_builder1.my_noc_x,
+        edm_builder1.my_noc_y,
+        edm_builder2.my_noc_x,
+        edm_builder2.my_noc_y,
+        num_links);
 
-    const auto& edm_config = get_1d_fabric_config();
-    CoreCoord fabric_router_virtual_core =
-        tt::tt_metal::MetalContext::instance().get_cluster().get_virtual_eth_core_from_channel(
-            src_chip_id, fabric_router_channel);
-
-    tt::tt_fabric::SenderWorkerAdapterSpec edm_connection = {
-        .edm_noc_x = fabric_router_virtual_core.x,
-        .edm_noc_y = fabric_router_virtual_core.y,
-        .edm_buffer_base_addr = edm_config.sender_channels_base_address[0],
-        .num_buffers_per_channel = edm_config.sender_channels_num_buffers[0],
-        .edm_l1_sem_addr = edm_config.sender_channels_local_flow_control_semaphore_address[0],
-        .edm_connection_handshake_addr = edm_config.sender_channels_connection_semaphore_address[0],
-        .edm_worker_location_info_addr = edm_config.sender_channels_worker_conn_info_base_address[0],
-        .buffer_size_bytes = edm_config.channel_buffer_size_bytes,
-        .buffer_index_semaphore_id = edm_config.sender_channels_buffer_index_semaphore_address[0],
-        .persistent_fabric = true};
-
-    auto worker_flow_control_semaphore_id = tt_metal::CreateSemaphore(worker_program, {worker_core}, 0);
-    auto worker_teardown_semaphore_id = tt_metal::CreateSemaphore(worker_program, {worker_core}, 0);
-    auto worker_buffer_index_semaphore_id = tt_metal::CreateSemaphore(worker_program, {worker_core}, 0);
-
-    append_worker_to_fabric_edm_sender_rt_args(
-        edm_connection,
-        worker_flow_control_semaphore_id,
-        worker_teardown_semaphore_id,
-        worker_buffer_index_semaphore_id,
-        worker_args);
+    if (enable_noc_selection_opt) {
+        if (edm_builder1.my_noc_x < edm_builder2.my_noc_x) {
+            for (uint32_t i = 0; i < edm_builder1.config.num_receiver_channels; i++) {
+                edm_builder1.config.receiver_channel_forwarding_noc_ids[i] = 0;
+                edm_builder2.config.receiver_channel_forwarding_noc_ids[i] = 1;
+            }
+            for (uint32_t i = 0; i < edm_builder1.config.num_receiver_channels; i++) {
+                edm_builder1.config.receiver_channel_local_write_noc_ids[i] = 1;
+                edm_builder2.config.receiver_channel_local_write_noc_ids[i] = 1;
+            }
+            for (uint32_t i = 0; i < edm_builder1.config.num_sender_channels; i++) {
+                edm_builder1.config.sender_channel_ack_noc_ids[i] = 1;
+                edm_builder2.config.sender_channel_ack_noc_ids[i] = 0;
+            }
+        } else if (edm_builder1.my_noc_x > edm_builder2.my_noc_x) {
+            for (uint32_t i = 0; i < edm_builder1.config.num_receiver_channels; i++) {
+                edm_builder1.config.receiver_channel_forwarding_noc_ids[i] = 1;
+                edm_builder2.config.receiver_channel_forwarding_noc_ids[i] = 0;
+            }
+            for (uint32_t i = 0; i < edm_builder1.config.num_receiver_channels; i++) {
+                edm_builder1.config.receiver_channel_local_write_noc_ids[i] = 1;
+                edm_builder2.config.receiver_channel_local_write_noc_ids[i] = 1;
+            }
+            for (uint32_t i = 0; i < edm_builder1.config.num_sender_channels; i++) {
+                edm_builder1.config.sender_channel_ack_noc_ids[i] = 0;
+                edm_builder2.config.sender_channel_ack_noc_ids[i] = 1;
+            }
+        }
+    }
 }
 
 }  // namespace tt::tt_fabric

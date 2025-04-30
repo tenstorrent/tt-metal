@@ -491,7 +491,6 @@ def run_test_sdpa_decode_single_iter(
     assert out_pass
 
 
-@skip_for_blackhole("Unsupported on BH, see #12349")
 @skip_for_grayskull("Unsupported in GS since L1 runs OOM with most configs")
 @pytest.mark.parametrize(
     "dtype, q_dtype",
@@ -541,7 +540,6 @@ def test_sdpa_decode(
         )
 
 
-@skip_for_blackhole("Unsupported on BH, see #12349")
 @skip_for_grayskull("Unsupported in GS since L1 runs OOM with most configs")
 @pytest.mark.parametrize(
     "dtype, q_dtype",
@@ -574,7 +572,6 @@ def test_sdpa_decode_non_causal(device, b, nh, nkv, s, d, dtype, grid_size, q_dt
     assert device.num_program_cache_entries() == 1
 
 
-@skip_for_blackhole("Unsupported on BH, see #12349")
 @skip_for_grayskull("Unsupported in GS since L1 runs OOM with most configs")
 @pytest.mark.parametrize(
     "dtype, q_dtype",
@@ -853,6 +850,7 @@ def run_test_sdpa_decode_paged_attention_single_iter(
     start_core=ttnn.CoreCoord(0, 0),
     sub_core_grids=None,
 ):
+    torch.manual_seed(1234)
     compute_grid_size = device.compute_with_storage_grid_size()
     if sub_core_grids is None:
         if grid_size[0] > compute_grid_size.x or grid_size[1] > compute_grid_size.y:
@@ -909,7 +907,6 @@ def run_test_sdpa_decode_paged_attention_single_iter(
     assert torch.allclose(V, V_back)
 
     padded_num_heads = nearest_pow_2(nearest_n(nh, n=32))
-    torch.manual_seed(1234)
 
     min_pcc = 0.99
 
@@ -945,9 +942,6 @@ def run_test_sdpa_decode_paged_attention_single_iter(
     scale = d**-0.5
     start_indices = [cur_pos] * b
 
-    # Test when page_table does not contain blocks for full sequence length
-    padded_layer_len = nearest_n(cur_pos + 1, n=k_chunk_size)
-
     tt_page_table = ttnn.Tensor(page_table, ttnn.int32).to(device)
 
     program_config = ttnn.SDPAProgramConfig(
@@ -957,11 +951,6 @@ def run_test_sdpa_decode_paged_attention_single_iter(
         k_chunk_size=k_chunk_size,
         exp_approx_mode=False,
     )
-
-    attn_mask = torch.zeros((b, padded_num_heads, 1, padded_layer_len))
-    for i in range(b):
-        start_idx = start_indices[i]
-        attn_mask[i, :, :, start_idx + 1 :] = torch.finfo(torch.float32).min
 
     Q = fa_rand(1, b, nh, d)
 
@@ -988,8 +977,13 @@ def run_test_sdpa_decode_paged_attention_single_iter(
     )
 
     tt_back = ttnn.to_torch(tt_back)
-
     tt_back = tt_back[:, :, :nh, :]
+
+    # PyTorch reference
+    # Test when page_table does not contain blocks for full sequence length
+    padded_layer_len = cur_pos
+    if k_chunk_size > 0:
+        padded_layer_len = nearest_n(cur_pos + 1, k_chunk_size)
 
     Q_slice = Q[:, :, :nh, :].permute(1, 2, 0, 3)  # b, nh, 1, d
     K_slice = K[:, :, :padded_layer_len, :]  # b, nkv, S, d
@@ -1000,6 +994,12 @@ def run_test_sdpa_decode_paged_attention_single_iter(
     V_slice = torch.cat(
         [V_slice[:, i : i + 1, :, :].repeat(1, nh // nkv, 1, 1) for i in range(nkv)], dim=1
     )  # b, nh, d, S
+
+    attn_mask = torch.zeros((b, padded_num_heads, 1, padded_layer_len))
+    for i in range(b):
+        start_idx = start_indices[i]
+        attn_mask[i, :, :, start_idx + 1 :] = torch.finfo(torch.float32).min
+
     attn_mask_slice = attn_mask[:, :nh, :, :]  # b, nh, 1, S
 
     expect = torch.nn.functional.scaled_dot_product_attention(
@@ -1014,7 +1014,6 @@ def run_test_sdpa_decode_paged_attention_single_iter(
     assert out_pass
 
 
-@skip_for_blackhole("Unsupported on BH, see #12349")
 @skip_for_grayskull("Unsupported in GS since L1 runs OOM with most configs")
 @pytest.mark.parametrize(
     "kv_dtype, q_dtype",
@@ -1040,6 +1039,7 @@ def run_test_sdpa_decode_paged_attention_single_iter(
         # [32, 32, 8, 4096, 128, (8, 8), True],  # llama 3.1 8b
         [8, 16, 4, 4096, 128, (8, 2), True],  # llama 3.1 8b N300
         [1, 8, 1, 128 * 1024, 128, (8, 4), True],  # llama 3.1 8b N300
+        [1, 32, 8, 32 * 1024, 128, (8, 8), True],  # llama3.1 8b (performance-batch-1 settings)
         # [1, 8, 1, 32768, 128, (8, 1), True],  # Llama2-70B
         # [16, 8, 1, 32768, 128, (8, 6), False, False],  # Llama2-70B
         # [8, 8, 1, 32768, 128, (8, 6), True, False],  # Llama2-70B
@@ -1047,7 +1047,7 @@ def run_test_sdpa_decode_paged_attention_single_iter(
         # [32, 8, 1, 32768, 128, (8, 8), True, True],  # Mixtral8x7b
     ),
 )
-@pytest.mark.parametrize("block_size", (64, 128), ids=["paged_64", "paged_128"])
+@pytest.mark.parametrize("block_size", (32, 64, 128), ids=["paged_32", "paged_64", "paged_128"])
 def test_sdpa_decode_paged_attention(
     device, b, nh, nkv, s, d, kv_dtype, grid_size, q_dtype, cur_pos_tensor, block_size, use_program_cache
 ):
@@ -1074,7 +1074,6 @@ def test_sdpa_decode_paged_attention(
     assert device.num_program_cache_entries() == 4
 
 
-@skip_for_blackhole("Unsupported on BH, see #12349")
 @skip_for_grayskull("Unsupported in GS since L1 runs OOM with most configs")
 @pytest.mark.parametrize(
     "dtype, q_dtype",
@@ -1107,7 +1106,6 @@ def test_sdpa_decode_sharded(device, b, nh, nkv, s, d, dtype, grid_size, q_dtype
     )
 
 
-@skip_for_blackhole("Unsupported on BH, see #12349")
 @skip_for_grayskull("Unsupported in GS since L1 runs OOM with most configs")
 @pytest.mark.parametrize("device_params", [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL}], indirect=True)
 @pytest.mark.parametrize(
@@ -1176,7 +1174,6 @@ def test_sdpa_decode_sharded_on_subcoregrids(
     assert device.num_program_cache_entries() == 1
 
 
-@skip_for_blackhole("Unsupported on BH, see #12349")
 @skip_for_grayskull("Unsupported in GS since L1 runs OOM with most configs")
 @pytest.mark.skip("Skipping Perf Test in CI")
 def test_sdpa_decode_perf(device, use_program_cache):
@@ -1231,7 +1228,6 @@ def test_sdpa_decode_perf(device, use_program_cache):
         )
 
 
-@skip_for_blackhole("Unsupported on BH, see #12349")
 @skip_for_grayskull("Unsupported in GS since L1 runs OOM with most configs")
 @pytest.mark.parametrize(
     "dtype",
@@ -1450,7 +1446,6 @@ def run_test_sdpa_decode_ndpcc(device, b, nh, nkv, s, d, dtype, grid_size, q_dty
     logger.info(f"PCC failed Start Pos: {failed_start_pos}")
 
 
-@skip_for_blackhole("Unsupported on BH, see #12349")
 @pytest.mark.timeout(600)
 @pytest.mark.skip("Skipping due to causing 45 minutes timeout on tt eager unit tests")
 @skip_for_grayskull("Unsupported in GS since L1 runs OOM with most configs")

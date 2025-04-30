@@ -12,7 +12,6 @@
 
 #include "core_config.h"
 #include "dev_mem_map.h"
-#include "hal_asserts.hpp"
 #include "hal_types.hpp"
 #include "llrt/hal.hpp"
 #include "noc/noc_parameters.h"
@@ -77,8 +76,18 @@ HalCoreInfoType create_idle_eth_mem_map() {
         };
         processor_classes[processor_class_idx] = processor_types;
     }
-
-    return {HalProgrammableCoreType::IDLE_ETH, CoreType::ETH, processor_classes, mem_map_bases, mem_map_sizes, false};
+    constexpr uint32_t mailbox_size =
+        sizeof(mailboxes_t) - sizeof(profiler_msg_t::buffer) +
+        sizeof(profiler_msg_t::buffer) / PROFILER_RISC_COUNT * static_cast<uint8_t>(EthProcessorTypes::COUNT);
+    static_assert(mailbox_size <= MEM_IERISC_MAILBOX_SIZE);
+    return {
+        HalProgrammableCoreType::IDLE_ETH,
+        CoreType::ETH,
+        processor_classes,
+        mem_map_bases,
+        mem_map_sizes,
+        false /*supports_cbs*/,
+        false /*supports_receiving_multicast_cmds*/};
 }
 
 }  // namespace tt::tt_metal::wormhole
