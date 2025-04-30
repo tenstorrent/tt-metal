@@ -216,11 +216,6 @@ class OpTestBase:
                 )
 
 
-def get_blackhole_grid_size(simulate_2col_harvesting):
+def get_blackhole_grid_size():
     assert is_blackhole()
-
-    if simulate_2col_harvesting:
-        assert "TT_METAL_ETH_DISPATCH" not in os.environ
-        return ttnn.CoreCoord(11, 10)
-    else:
-        return ttnn.CoreCoord(14, 10) if ("TT_METAL_ETH_DISPATCH" in os.environ) else ttnn.CoreCoord(13, 10)
+    return ttnn.CoreCoord(13, 10)

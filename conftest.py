@@ -565,12 +565,6 @@ def iterations(request):
 
 
 @pytest.fixture
-def simulate_bh_harvesting(request):
-    simulate_bh_harvesting = request.config.getoption("--simulate-bh-harvesting")
-    return simulate_bh_harvesting
-
-
-@pytest.fixture
 def input_path(request):
     return request.config.getoption("--input-path")
 

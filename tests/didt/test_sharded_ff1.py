@@ -29,13 +29,10 @@ GELU = True
     ],
     indirect=["mesh_device"],
 )
-@pytest.mark.parametrize("simulate_bh_harvesting", [False, True], ids=["bh-unharvested", "sim-bh-2col-harvested"])
-def test_reproduce_matmul_2d_hang(
-    mesh_device, ff1_hang_dummy_param, iterations, use_program_cache, simulate_bh_harvesting
-):
+def test_reproduce_matmul_2d_hang(mesh_device, ff1_hang_dummy_param, iterations, use_program_cache):
     if is_blackhole() and mesh_device.get_num_devices() > 1:
         pytest.skip("Multi-chip Blackhole has not been tested")
-    test_ff1_matmul(mesh_device, GELU, MATH_FIDELITY, iterations, -1, use_program_cache, simulate_bh_harvesting)
+    test_ff1_matmul(mesh_device, GELU, MATH_FIDELITY, iterations, -1, use_program_cache)
 
 
 @skip_for_blackhole("Multi-chip Blackhole has not been tested")

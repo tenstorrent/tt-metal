@@ -87,17 +87,14 @@ def test_binary_mul(
     iterations,
     determinism_check_iterations,
     use_program_cache,
-    simulate_bh_harvesting,
     grid_size=(13, 10),
 ):
     if is_blackhole() and mesh_device.get_num_devices() > 1:
         pytest.skip("Multi-chip Blackhole has not been tested")
-    if simulate_bh_harvesting and is_blackhole() == False:
-        pytest.skip("Blackhole harvesting simulation is only supported for Blackhole devices")
 
     # Initialize input configurations
     if is_blackhole():
-        compute_grid = get_blackhole_grid_size(simulate_bh_harvesting)
+        compute_grid = get_blackhole_grid_size()
     else:
         compute_grid = ttnn.CoreCoord(grid_size[0], grid_size[1])
 

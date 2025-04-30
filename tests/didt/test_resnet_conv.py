@@ -108,7 +108,7 @@ class ResnetConvTest(OpTestBase):
 
     def generate_tt_weights_from_torch(self, torch_tensor):
         tt_weights = ttnn.Tensor(torch_tensor.flatten().tolist(), self.in1_shape, self.in1_dtype, ttnn.ROW_MAJOR_LAYOUT)
-        tt_weights_tiled_host = ttnn.operations.conv2d.convert_conv_weight_tensor_to_tiled_layout(
+        tt_weights_tiled_host = ttnn.convert_conv_weight_tensor_to_tiled_layout(
             tt_weights, self.weights_block_h, self.weights_block_w, self.weights_df_on_device
         )
         return tt_weights_tiled_host.to(self.mesh_device, self.in1_mem_config)
@@ -154,10 +154,7 @@ class ResnetConvTest(OpTestBase):
     ],
     indirect=["mesh_device"],
 )
-def test_resnet_conv(mesh_device, iterations, determinism_check_iterations, use_program_cache, simulate_bh_harvesting):
-    if simulate_bh_harvesting:
-        pytest.skip("Blackhole harvesting is not supported for this test")
-
+def test_resnet_conv(mesh_device, iterations, determinism_check_iterations, use_program_cache):
     groups = 1
     dilation = 1
     pad_w = 0

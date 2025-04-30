@@ -257,9 +257,7 @@ def get_dispatch_core_type():
 
     # TODO: 11059 move dispatch_core_type to device_params when all tests are updated to not use WH_ARCH_YAML env flag
     dispatch_core_type = ttnn.device.DispatchCoreType.WORKER
-    if (("WH_ARCH_YAML" in os.environ) and os.environ["WH_ARCH_YAML"] == "wormhole_b0_80_arch_eth_dispatch.yaml") or (
-        "TT_METAL_ETH_DISPATCH" in os.environ
-    ):
+    if ("WH_ARCH_YAML" in os.environ) and os.environ["WH_ARCH_YAML"] == "wormhole_b0_80_arch_eth_dispatch.yaml":
         dispatch_core_type = ttnn.device.DispatchCoreType.ETH
     return dispatch_core_type
 
