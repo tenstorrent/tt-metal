@@ -84,6 +84,13 @@ def main():
         help="Collect noc event traces when profiling",
         default=False,
     )
+    parser.add_option(
+        "--check-exit-code",
+        dest="check_exit_code",
+        action="store_true",
+        help="Exit the run and do not attempt post processing if the test command fails",
+        default=False,
+    )
 
     if not sys.argv[1:]:
         parser.print_usage()
@@ -214,6 +221,9 @@ def main():
             signal.signal(signal.SIGTERM, signal_handler)
 
             testProcess.communicate()
+            if options.check_exit_code and testProcess.returncode != 0:
+                logger.error(f"{testCommand} exited with a non-zero return code")
+                sys.exit(4)
 
             try:
                 captureProcess.communicate(timeout=15)
