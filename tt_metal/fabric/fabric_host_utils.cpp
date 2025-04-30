@@ -105,7 +105,7 @@ void set_routing_mode(RoutingMode routing_mode) {
         "2D routing mode cannot be combined with LINE or RING topology");
 
     auto control_plane = tt::tt_metal::MetalContext::instance().get_cluster().get_control_plane();
-    SET_ROUTING_MODE(control_plane, routing_mode);
+    control_plane->set_routing_mode((uint16_t)routing_mode);
 }
 
 void set_routing_mode(Topology topology, uint32_t dimension /*, take more*/) {

@@ -1018,7 +1018,7 @@ KernelHandle CreateDataMovementKernel(
 
     std::shared_ptr<Kernel> kernel = std::make_shared<DataMovementKernel>(kernel_src, core_range_set, config);
     auto control_plane = tt::tt_metal::MetalContext::instance().get_cluster().get_control_plane();
-    auto mode = GET_ROUTING_MODE(control_plane);
+    auto mode = (tt::tt_fabric::RoutingMode)control_plane->get_routing_mode();
     if (mode != tt::tt_fabric::RoutingMode::Undefined) {
         kernel->add_defines({{"ROUTING_MODE", std::to_string(static_cast<int>(mode))}});
     }
@@ -1047,7 +1047,7 @@ KernelHandle CreateEthernetKernel(
 
     std::shared_ptr<Kernel> kernel = std::make_shared<EthernetKernel>(kernel_src, core_range_set, config);
     auto control_plane = tt::tt_metal::MetalContext::instance().get_cluster().get_control_plane();
-    auto mode = GET_ROUTING_MODE(control_plane);
+    auto mode = (tt::tt_fabric::RoutingMode)control_plane->get_routing_mode();
     if (mode != tt::tt_fabric::RoutingMode::Undefined) {
         kernel->add_defines({{"ROUTING_MODE", std::to_string(static_cast<int>(mode))}});
     }

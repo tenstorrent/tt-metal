@@ -7,13 +7,8 @@
 #include <tt_stl/span.hpp>
 #include <tt-metalium/routing_table_generator.hpp>
 #include <tt-metalium/fabric_host_interface.h>
-#include <tt-metalium/fabric_types.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/mesh_coord.hpp>
-
-#define SET_ROUTING_MODE(control_plane, mode) control_plane->set_routing_mode((uint16_t)mode)
-
-#define GET_ROUTING_MODE(control_plane) (tt::tt_fabric::RoutingMode) control_plane->get_routing_mode()
 
 namespace tt::tt_fabric {
 
