@@ -34,9 +34,8 @@ ttnn::Tensor GenInputTensor(const ttnn::SmallVector<uint32_t>& shape) {
     }
     return Tensor(HostBuffer{input_data}, ttnn::Shape(shape), DataType::BFLOAT16, Layout::ROW_MAJOR);
 }
-}  // namespace
 
-static void BM_pad_rm_2d_last_dim_right(benchmark::State& state) {
+void BM_pad_rm_2d_last_dim_right(benchmark::State& state) {
     auto input_tensor = GenInputTensor<bfloat16>({8192, 8100});
     ttnn::SmallVector<uint32_t> padded_shape = {8192, 8192};
     ttnn::SmallVector<uint32_t> tensor_start = {0, 0};
@@ -51,7 +50,7 @@ static void BM_pad_rm_2d_last_dim_right(benchmark::State& state) {
     }
 }
 
-static void BM_pad_rm_2d_last_dim_left_right(benchmark::State& state) {
+void BM_pad_rm_2d_last_dim_left_right(benchmark::State& state) {
     auto input_tensor = GenInputTensor<bfloat16>({8192, 8100});
     ttnn::SmallVector<uint32_t> padded_shape = {8192, 8192};
     ttnn::SmallVector<uint32_t> tensor_start = {0, 92};
@@ -66,7 +65,7 @@ static void BM_pad_rm_2d_last_dim_left_right(benchmark::State& state) {
     }
 }
 
-static void BM_pad_rm_4d_last_dim_left_right(benchmark::State& state) {
+void BM_pad_rm_4d_last_dim_left_right(benchmark::State& state) {
     auto input_tensor = GenInputTensor<bfloat16>({16, 20, 512, 500});
     ttnn::SmallVector<uint32_t> padded_shape = {16, 20 + 12, 512 + 30, 500 + 30};
     ttnn::SmallVector<uint32_t> tensor_start = {0, 1, 3, 4};
@@ -81,7 +80,7 @@ static void BM_pad_rm_4d_last_dim_left_right(benchmark::State& state) {
     }
 }
 
-static void BM_pad_rm_2d_scaling(benchmark::State& state) {
+void BM_pad_rm_2d_scaling(benchmark::State& state) {
     int N = state.range(0);
     int N_padded = N + 2 * 100;
 
@@ -104,9 +103,6 @@ BENCHMARK(BM_pad_rm_2d_last_dim_right)->Unit(benchmark::kMillisecond)->MinTime(5
 BENCHMARK(BM_pad_rm_2d_last_dim_left_right)->Unit(benchmark::kMillisecond)->MinTime(5.0);
 BENCHMARK(BM_pad_rm_4d_last_dim_left_right)->Unit(benchmark::kMillisecond)->MinTime(5.0);
 BENCHMARK(BM_pad_rm_2d_scaling)->Unit(benchmark::kMillisecond)->RangeMultiplier(2)->Range(128, 8192)->Complexity();
+}  // namespace
 
-int main(int argc, char** argv) {
-    ::benchmark::Initialize(&argc, argv);
-    ::benchmark::RunSpecifiedBenchmarks();
-    return 0;
-}
+BENCHMARK_MAIN();
