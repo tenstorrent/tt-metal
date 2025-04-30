@@ -57,23 +57,23 @@ struct ProgramInfo {
     CoreCoord core;
 };
 
-void LaunchAndSyncPhase(Fabric1DFixture* fixture, std::vector<ProgramInfo>& devices) {
-    for (auto& device : devices) {
-        fixture->RunProgramNonblocking(device.device, device.program);
+void LaunchAndSyncPhase(Fabric1DFixture* fixture, std::vector<ProgramInfo>& infos) {
+    for (auto& info : infos) {
+        fixture->RunProgramNonblocking(info.device, info.program);
     }
-    for (auto& device : devices) {
-        fixture->WaitForSingleProgramDone(device.device, device.program);
+    for (auto& info : infos) {
+        fixture->WaitForSingleProgramDone(info.device, info.program);
     }
 }
 
-void ValidationPhase(std::vector<ProgramInfo>& devices, TestParameters& params) {
+void ValidationPhase(std::vector<ProgramInfo>& infos, TestParameters& params) {
     uint64_t prev_bytes;
-    for (uint32_t i = 0; i < devices.size(); i++) {
-        auto& device = devices[i];
+    for (uint32_t i = 0; i < infos.size(); i++) {
+        auto& info = infos[i];
         std::vector<uint32_t> status;
         tt_metal::detail::ReadFromDeviceL1(
-            device.device,
-            device.core,
+            info.device,
+            info.core,
             params.test_results_address,
             params.test_results_size_bytes,
             status,
@@ -228,25 +228,18 @@ void ExecuteFabricTest(Fabric1DFixture* fixture, TestParameters params) {
         params.is_mcast ? 1 : 0,
     };
 
-    auto sender_device = DevicePool::instance().get_active_device(src_physical_device_id);
-    std::vector<ProgramInfo> program_infos;
     auto sender_program = tt_metal::CreateProgram();
     auto receiver_program = tt_metal::CreateProgram();
-    if (params.is_mcast) {
-        auto left_recv_device = DevicePool::instance().get_active_device(dst_chip_ids[0]);
-        auto right_recv_device = DevicePool::instance().get_active_device(dst_chip_ids[1]);
-        CreateTx(
-            params, sender_program, compile_time_args, receiver_noc_encoding, src_physical_device_id, dst_chip_ids);
-        CreateRx(params, receiver_program, compile_time_args);
-        program_infos.emplace_back(sender_device, sender_program, params.sender_logical_core);
-        program_infos.emplace_back(left_recv_device, receiver_program, params.receiver_logical_core);
-        program_infos.emplace_back(right_recv_device, receiver_program, params.receiver_logical_core);
-    } else {
-        auto receiver_device = DevicePool::instance().get_active_device(dst_chip_ids[0]);
-        CreateTx(
-            params, sender_program, compile_time_args, receiver_noc_encoding, src_physical_device_id, dst_chip_ids);
-        CreateRx(params, receiver_program, compile_time_args);
-        program_infos.emplace_back(sender_device, sender_program, params.sender_logical_core);
+    CreateTx(params, sender_program, compile_time_args, receiver_noc_encoding, src_physical_device_id, dst_chip_ids);
+    CreateRx(params, receiver_program, compile_time_args);
+
+    std::vector<ProgramInfo> program_infos;
+    auto sender_device = DevicePool::instance().get_active_device(src_physical_device_id);
+    program_infos.emplace_back(sender_device, sender_program, params.sender_logical_core);
+
+    // [0] is left receiver, [1] is right receiver for mcast
+    for (auto dest_chip_id : dst_chip_ids) {
+        auto receiver_device = DevicePool::instance().get_active_device(dest_chip_id);
         program_infos.emplace_back(receiver_device, receiver_program, params.receiver_logical_core);
     }
     LaunchAndSyncPhase(fixture, program_infos);
