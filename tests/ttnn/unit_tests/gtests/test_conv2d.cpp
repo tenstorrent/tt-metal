@@ -13,7 +13,6 @@
 #include "ttnn/common/queue_id.hpp"
 #include "ttnn/device.hpp"
 #include "ttnn/tensor/tensor.hpp"
-#include "ttnn/operations/conv/conv.hpp"
 #include "ttnn/operations/conv/conv2d/conv2d.hpp"
 #include "ttnn/operations/data_movement/permute/permute.hpp"
 #include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
