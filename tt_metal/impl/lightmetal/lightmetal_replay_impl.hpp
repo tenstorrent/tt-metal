@@ -114,7 +114,7 @@ public:
     void execute(const tt::tt_metal::flatbuffer::SetRuntimeArgsCommand* command);
     void execute(const tt::tt_metal::flatbuffer::CreateCircularBufferCommand* command);
     void execute(const tt::tt_metal::flatbuffer::LightMetalCompareCommand* command);
-    void execute(const tt::tt_metal::flatbuffer::* command);
+
     // Object maps public accessors
     void add_buffer_to_map(uint32_t global_id, const std::shared_ptr<::tt::tt_metal::Buffer>& buffer);
     std::shared_ptr<::tt::tt_metal::Buffer> get_buffer_from_map(uint32_t global_id) const;
@@ -166,8 +166,6 @@ private:
     tt::tt_metal::IDevice* device_ = nullptr;
 
     // Object maps for storing objects by global_id
-
-    std::vector<distributed::MeshTraceId> trace_id;
     std::unordered_map<uint32_t, std::shared_ptr<tt::tt_metal::distributed::MeshBuffer>> mesh_buffer_map_;
     std::unordered_map<uint32_t, std::shared_ptr<tt::tt_metal::distributed::MeshWorkload>> mesh_workload_map_;
     std::unordered_map<uint32_t, std::shared_ptr<::tt::tt_metal::Buffer>> buffer_map_;
