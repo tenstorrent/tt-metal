@@ -22,15 +22,30 @@ class TraceDescriptor;
 // Forward decl for command_generated.h / light_metal_binary_generated.h
 namespace tt::tt_metal::flatbuffer {
 struct Command;
+struct BeginTraceCaptureCommand;
+struct EndTraceCaptureCommand;
 struct ReplayTraceCommand;
 struct EnqueueTraceCommand;
 struct LoadTraceCommand;
 struct ReleaseTraceCommand;
+struct EnqueueRecordEventCommand;
+struct EnqueueRecordEventToHostCommand;
+struct EnqueueWaitForEventCommand;
+struct EventSynchronizeCommand;
+struct SynchronizeCommand;
 struct BufferCreateCommand;
 struct BufferDeallocateCommand;
 struct BufferDeleteCommand;
 struct EnqueueWriteBufferCommand;
 struct EnqueueReadBufferCommand;
+struct MeshBufferCreateCommand;
+struct MeshWorkloadCreateCommand;
+struct AddProgramToMeshWorkloadCommand;
+struct EnqueueMeshWorkloadCommand;
+struct EnqueueReadMeshBufferCommand;
+struct EnqueueWriteMeshBufferCommand;
+struct ReadShardCommand;
+struct WriteShardCommand;
 struct FinishCommand;
 struct ProgramConstructorCommand;
 struct EnqueueProgramCommand;
@@ -41,6 +56,8 @@ struct SetRuntimeArgsCommand;
 struct CreateCircularBufferCommand;
 struct LightMetalCompareCommand;
 struct RuntimeArg;
+
+struct MeshEvent;
 
 struct TraceDescriptor;
 struct TraceDescriptorByTraceId;
@@ -64,25 +81,40 @@ public:
 
     // Executor functions for all traced host API calls (commands)
     void execute(const tt::tt_metal::flatbuffer::Command* command);
-    void execute(const tt::tt_metal::flatbuffer::EnqueueTraceCommand* command);
+    void execute(const tt::tt_metal::flatbuffer::BeginTraceCaptureCommand* command);
+    void execute(const tt::tt_metal::flatbuffer::EndTraceCaptureCommand* command);
     void execute(const tt::tt_metal::flatbuffer::ReplayTraceCommand* command);
+    void execute(const tt::tt_metal::flatbuffer::EnqueueTraceCommand* command);
     void execute(const tt::tt_metal::flatbuffer::LoadTraceCommand* command);
     void execute(const tt::tt_metal::flatbuffer::ReleaseTraceCommand* command);
-    void execute(const tt::tt_metal::flatbuffer::BufferCreateCommand* cmd);
+    void execute(const tt::tt_metal::flatbuffer::EnqueueRecordEventCommand* command);
+    void execute(const tt::tt_metal::flatbuffer::EnqueueRecordEventToHostCommand* command);
+    void execute(const tt::tt_metal::flatbuffer::EnqueueWaitForEventCommand* command);
+    void execute(const tt::tt_metal::flatbuffer::EventSynchronizeCommand* command);
+    void execute(const tt::tt_metal::flatbuffer::SynchronizeCommand* command);
+    void execute(const tt::tt_metal::flatbuffer::BufferCreateCommand* command);
     void execute(const tt::tt_metal::flatbuffer::BufferDeallocateCommand* command);
     void execute(const tt::tt_metal::flatbuffer::BufferDeleteCommand* command);
     void execute(const tt::tt_metal::flatbuffer::EnqueueWriteBufferCommand* command);
     void execute(const tt::tt_metal::flatbuffer::EnqueueReadBufferCommand* command);
+    void execute(const tt::tt_metal::flatbuffer::MeshBufferCreateCommand* command);
+    void execute(const tt::tt_metal::flatbuffer::MeshWorkloadCreateCommand* command);
+    void execute(const tt::tt_metal::flatbuffer::AddProgramToMeshWorkloadCommand* command);
+    void execute(const tt::tt_metal::flatbuffer::EnqueueMeshWorkloadCommand* command);
+    void execute(const tt::tt_metal::flatbuffer::EnqueueReadMeshBufferCommand* command);
+    void execute(const tt::tt_metal::flatbuffer::EnqueueWriteMeshBufferCommand* command);
+    void execute(const tt::tt_metal::flatbuffer::ReadShardCommand* command);
+    void execute(const tt::tt_metal::flatbuffer::WriteShardCommand* command);
     void execute(const tt::tt_metal::flatbuffer::FinishCommand* command);
     void execute(const tt::tt_metal::flatbuffer::ProgramConstructorCommand* command);
     void execute(const tt::tt_metal::flatbuffer::EnqueueProgramCommand* command);
     void execute(const tt::tt_metal::flatbuffer::CreateKernelCommand* command);
     void execute(const tt::tt_metal::flatbuffer::SetRuntimeArgsUint32Command* command);
-    void execute(const tt::tt_metal::flatbuffer::SetRuntimeArgsUint32VecPerCoreCommand* cmd);
+    void execute(const tt::tt_metal::flatbuffer::SetRuntimeArgsUint32VecPerCoreCommand* command);
     void execute(const tt::tt_metal::flatbuffer::SetRuntimeArgsCommand* command);
     void execute(const tt::tt_metal::flatbuffer::CreateCircularBufferCommand* command);
     void execute(const tt::tt_metal::flatbuffer::LightMetalCompareCommand* command);
-
+    void execute(const tt::tt_metal::flatbuffer::* command);
     // Object maps public accessors
     void add_buffer_to_map(uint32_t global_id, const std::shared_ptr<::tt::tt_metal::Buffer>& buffer);
     std::shared_ptr<::tt::tt_metal::Buffer> get_buffer_from_map(uint32_t global_id) const;

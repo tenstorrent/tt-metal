@@ -245,7 +245,7 @@ union CommandType {
   EnqueueReadMeshBufferCommand,
   EnqueueWriteMeshBufferCommand,
   ReadShardCommand,
-  WriteShardCommand
+  WriteShardCommand,
   FinishCommand,
   ProgramConstructorCommand,
   EnqueueProgramCommand,
