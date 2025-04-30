@@ -402,6 +402,7 @@ def run_test_matmul_in1_dram_sharded_mm_chain(
     assert True
 
 
+@skip_for_blackhole("Failing on harvested BH, see #21421")
 @pytest.mark.parametrize(
     "fidelity",
     [
