@@ -36,6 +36,11 @@ class EfficientNetb0Conv2D:
         self.cache = cache
         self.parameters = parameters
         self.shard_layout = shard_layout
+<<<<<<< HEAD
+=======
+        self.use_shallow_covariant = use_shallow_covariant
+        self.activation_dtype = activation_dtype
+>>>>>>> 5d38627df8 (3047: EfficientNetb0 ttnn bringup)
         self.output_layout = output_layout
         self.shard_layout = shard_layout
         self.dilation = dilation
@@ -115,6 +120,10 @@ class Conv2dDynamicSamePadding:
         self.input_height = conv_params.input_height
         self.input_width = conv_params.input_width
         self.shard_layout = shard_layout
+<<<<<<< HEAD
+=======
+        self.use_shallow_covariant = use_shallow_covariant
+>>>>>>> 5d38627df8 (3047: EfficientNetb0 ttnn bringup)
         ih, iw = self.input_height, self.input_width
         kh, kw = self.kernel_size
         sh, sw = self.stride
