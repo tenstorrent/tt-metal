@@ -27,11 +27,7 @@ except ModuleNotFoundError:
 
 
 def dump_device_profiler(device):
-    if isinstance(device, ttnn.Device):
-        ttnn.DumpDeviceProfiler(device)
-    else:
-        for dev in device.get_device_ids():
-            ttnn.DumpDeviceProfiler(device.get_device(dev))
+    ttnn.DumpDeviceProfiler(device)
 
 
 # TODO: Create ttnn apis for this

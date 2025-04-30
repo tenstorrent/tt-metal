@@ -373,7 +373,7 @@ def test_all_reduce(
 ):
     if output_shape == [1, 1, 32, 16 * 1024] and input_dtype == ttnn.bfloat16:
         pytest.skip("Skipping LM Head test with bfloat16 due to OOM")
-    if len(mesh_device.get_devices()) != 32:
+    if mesh_device.get_num_devices() != 32:
         pytest.skip("Not TG!")
 
     profiler = BenchmarkProfiler()
@@ -461,7 +461,7 @@ def test_all_reduce_loopback(
     use_program_cache,
     function_level_defaults,
 ):
-    if len(mesh_device.get_devices()) != 32:
+    if mesh_device.get_num_devices() != 32:
         pytest.skip("Not TG!")
 
     run_all_reduce_impl(

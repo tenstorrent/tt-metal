@@ -166,7 +166,7 @@ class LMHead(LightweightModule):
         # if mode == "prefill":
         #     return self.forward_on_host(x)
 
-        # ttnn.device.dump_device_memory_state(self.mesh_device.get_device(self.mesh_device.get_device_ids()[0]), prefix="")
+        # ttnn.device.dump_device_memory_state(self.mesh_device), prefix="")
         outputs = []
         for weight, pc in zip(self.output_weights, self.program_configs):
             weight_l1 = weight  # ttnn.to_memory_config(weight, self.args.model_config["LM_HEAD_RING_MEMCFG"])

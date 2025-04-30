@@ -11,7 +11,7 @@ import ttnn
 
 @pytest.mark.parametrize("device_params", [{"trace_region_size": 1996800}], indirect=True)
 def test_with_ops(device):
-    ttnn.enable_program_cache(device)
+    device.enable_program_cache()
 
     torch.manual_seed(0)
     m = 1024

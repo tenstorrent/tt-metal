@@ -67,7 +67,7 @@ def test_multimodal_demo_text(
             model_parallel_size=model_parallel_size,
         )
     else:
-        logger.info(f"Creating TT model on {len(mesh_device.get_devices())} devices")
+        logger.info(f"Creating TT model on {mesh_device.get_num_devices()} devices")
         mesh_device.enable_program_cache()
 
         model_args, model, _ = create_multimodal_model(

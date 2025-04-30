@@ -23,7 +23,7 @@ from models.utility_functions import skip_for_grayskull
 @pytest.mark.parametrize("enable_cache", [True])
 def test_ttnn_reshape_with_cache(device, enable_cache, input_shape, output_shape):
     if enable_cache:
-        ttnn.enable_program_cache(device)
+        device.enable_program_cache()
 
     a = torch.randn(input_shape, dtype=torch.bfloat16)
     b = torch.randn(input_shape, dtype=torch.bfloat16)
@@ -50,7 +50,7 @@ def test_ttnn_reshape_with_cache(device, enable_cache, input_shape, output_shape
 @pytest.mark.parametrize("enable_cache", [True])
 def test_tensor_reshape_with_cache(device, enable_cache, input_shape, output_shape):
     if enable_cache:
-        ttnn.enable_program_cache(device)
+        device.enable_program_cache()
 
     a = torch.randn(input_shape, dtype=torch.bfloat16)
     b = torch.randn(output_shape, dtype=torch.bfloat16)

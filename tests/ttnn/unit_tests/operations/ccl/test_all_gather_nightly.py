@@ -164,7 +164,7 @@ def run_line_all_gather_instances(
 
     t3k_device = []
 
-    for device in t3k_mesh_device.get_devices():
+    for device in t3k_mesh_device.get_device_ids():
         t3k_device.append(device)
     t3k_device[4:] = t3k_device[::-1][:4]
     t3000_device_rows = [

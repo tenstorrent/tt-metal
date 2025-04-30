@@ -196,8 +196,6 @@ from ttnn.device import (
     DispatchCoreConfig,
     open_device,
     close_device,
-    enable_program_cache,
-    disable_and_clear_program_cache,
     manage_device,
     synchronize_device,
     dump_device_memory_state,

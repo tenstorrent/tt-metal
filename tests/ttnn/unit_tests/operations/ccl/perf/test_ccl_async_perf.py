@@ -115,7 +115,7 @@ def test_all_gather_async_tg(
     replication_factor,
     num_iters=1,
 ):
-    if len(mesh_device.get_devices()) != 32:
+    if mesh_device.get_num_devices() != 32:
         pytest.skip("Not TG!")
     run_line_all_gather_on_TG_with_mesh_tensor_along_rows(
         mesh_device,

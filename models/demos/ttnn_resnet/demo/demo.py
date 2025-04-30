@@ -129,7 +129,7 @@ def run_resnet_inference(
 
     # load inputs
     images = get_data(input_loc)
-    batch_size = batch_size_per_device * (1 if isinstance(device, ttnn.Device) else device.get_num_devices())
+    batch_size = batch_size_per_device * device.get_num_devices()
 
     profiler.start(f"processing_inputs")
     inputs = None

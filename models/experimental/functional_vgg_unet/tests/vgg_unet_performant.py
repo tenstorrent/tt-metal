@@ -22,11 +22,7 @@ def buffer_address(tensor):
 
 
 def dump_device_profiler(device):
-    if isinstance(device, ttnn.Device):
-        ttnn.DumpDeviceProfiler(device)
-    else:
-        for dev in device.get_device_ids():
-            ttnn.DumpDeviceProfiler(device.get_device(dev))
+    ttnn.DumpDeviceProfiler(device)
 
 
 ttnn.dump_device_profiler = dump_device_profiler
