@@ -98,3 +98,4 @@ plotly==5.18.0
 seaborn==0.13.2
 medpy==0.5.2 # Required for vanilla unet
 kagglehub==0.2.9
+efficientnet-pytorch==0.7.1
