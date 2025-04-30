@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include "pybind11/pybind_fwd.hpp"
+#include "ttnn-pybind/pybind_fwd.hpp"
 #include "ttnn/device.hpp"
 #include "ttnn/operations/experimental/auto_format/auto_format.hpp"
 

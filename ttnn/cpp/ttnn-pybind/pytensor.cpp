@@ -634,19 +634,19 @@ void pytensor_module(py::module& m_tensor) {
     m_tensor.def(
         "decorate_external_operation",
         [](const py::function& function, const std::optional<std::string>& function_name) -> py::function {
-            return py::cpp_function(std::function([function, function_name](
-                                                      const py::args& args, const py::kwargs& kwargs) {
-                ZoneScopedN("TT_DNN_FALLBACK_OP");
-                auto [operation, input_tensors] =
-                    detail::parse_external_operation(function, args, kwargs, function_name);
-                GraphTracker::instance().track_function_start(operation.get_type_name(), args, kwargs);
-                detail::log_external_operation(operation, input_tensors);
-                auto output = function(*args, **kwargs);
-                TracyOpTTNNExternal(
-                    operation, input_tensors, ttnn::CoreIDs::instance().fetch_and_increment_device_operation_id());
-                GraphTracker::instance().track_function_end(output);
-                return output;
-            }));
+            return py::cpp_function(
+                std::function([function, function_name](const py::args& args, const py::kwargs& kwargs) {
+                    ZoneScopedN("TT_DNN_FALLBACK_OP");
+                    auto [operation, input_tensors] =
+                        detail::parse_external_operation(function, args, kwargs, function_name);
+                    GraphTracker::instance().track_function_start(operation.get_type_name(), args, kwargs);
+                    detail::log_external_operation(operation, input_tensors);
+                    auto output = function(*args, **kwargs);
+                    TracyOpTTNNExternal(
+                        operation, input_tensors, ttnn::CoreIDs::instance().fetch_and_increment_device_operation_id());
+                    GraphTracker::instance().track_function_end(output);
+                    return output;
+                }));
         },
         py::arg("function").noconvert(),
         py::arg("function_name").noconvert() = std::nullopt,
