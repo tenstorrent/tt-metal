@@ -17,13 +17,6 @@ constexpr uint32_t TILE_HEIGHT = 32;
 constexpr uint32_t TILE_WIDTH = 32;
 constexpr uint32_t TARGET_INDEXES_ELEMENTS_NUMBER = 32;
 
-float bfloat16_to_float(uint16_t bf16_bits) {
-    uint32_t full_bits = static_cast<uint32_t>(bf16_bits) << 16;
-    float result;
-    std::memcpy(&result, &full_bits, sizeof(result));
-    return result;
-}
-
 // calculate page and offset for target indexes
 std::pair<uint32_t, uint32_t> get_page_and_offset(uint32_t tiled_row, uint32_t tiled_H) {
     uint32_t n = tiled_row / tiled_H;
