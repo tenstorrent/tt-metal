@@ -547,7 +547,7 @@ Tensor _hardtanh(
  *
  */
 // Function Selu - scaled exponential linear
-// use transformation y = scale *(max(0,x)) + min(0,alpha * (exp(X)-1)) by broadcast
+// use transformation y = scale *(max(0,x) + min(0,alpha * (exp(X)-1))) by broadcast
 // Ref: https://pytorch.org/docs/stable/generated/torch.nn.SELU.html
 Tensor _selu(
     const Tensor& x, const float scale, const float alpha, const std::optional<MemoryConfig>& output_mem_config) {
@@ -560,9 +560,9 @@ Tensor _selu(
 
     // term 1
     Tensor x_max = ttnn::maximum(ttnn::DefaultQueueId, x, 0.0f, std::nullopt, output_mem_config);
-    Tensor result_term1 = ttnn::multiply(x_max, scale, std::nullopt, output_mem_config);
+    Tensor sum_max_term2 = ttnn::add(x_max, result_term2, std::nullopt, output_mem_config);
     x_max.deallocate();
-    Tensor result_selu = ttnn::add(result_term1, result_term2, std::nullopt, output_mem_config);
+    Tensor result_selu = ttnn::multiply(sum_max_term2, scale, std::nullopt, output_mem_config);
 
     return result_selu;
 }
