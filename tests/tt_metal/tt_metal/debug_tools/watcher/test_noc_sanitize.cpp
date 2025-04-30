@@ -85,7 +85,8 @@ CoreCoord get_core_coord_for_test(const std::shared_ptr<tt::tt_metal::Buffer>& b
     if (buffer->is_l1()) {
         return buffer->device()->worker_core_from_logical_core(buffer->allocator()->get_logical_core_from_bank_id(0));
     } else {
-        return buffer->device()->logical_core_from_dram_channel(0);
+        auto logical_dram_core = buffer->device()->logical_core_from_dram_channel(0);
+        return buffer->device()->virtual_core_from_logical_core(logical_dram_core, CoreType::DRAM);
     }
 }
 
