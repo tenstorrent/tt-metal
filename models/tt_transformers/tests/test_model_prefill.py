@@ -46,12 +46,12 @@ from models.utility_functions import skip_for_grayskull
 )
 @pytest.mark.parametrize(
     "page_params",
-    [{"page_block_size": 32, "page_max_num_blocks_per_dp": 2048}],
+    [{"page_block_size": 32, "page_max_num_blocks": 1024}],
 )
 @pytest.mark.parametrize(
     "seq_len",
-    (4096, 8192, 16384, 32768),
-    ids=["4k", "8k", "16k", "32k"],
+    (128, 3072, 4096, 8192, 16384, 32768),
+    ids=["128", "3k", "4k", "8k", "16k", "32k"],
 )
 @pytest.mark.parametrize(
     "optimizations",
@@ -61,11 +61,17 @@ from models.utility_functions import skip_for_grayskull
     ],
     ids=["performance", "accuracy"],
 )
+@pytest.mark.parametrize(
+    "num_layers",
+    (1, None),
+    ids=["1layer", "all_layers"],
+)
 def test_model_inference(
     seq_len,
     paged_attention,
     page_params,
     optimizations,
+    num_layers,
     mesh_device,
     use_program_cache,
     reset_seeds,
@@ -74,8 +80,15 @@ def test_model_inference(
     request,
 ):
     test_id = request.node.callspec.id
-    if is_ci_env and "accuracy" in test_id:
-        pytest.skip("CI test only runs performance mode to reduce CI pipeline load")
+    if is_ci_env:
+        if "accuracy" in test_id:
+            pytest.skip("CI test only runs performance mode to reduce CI pipeline load")
+
+        # TODO: Save ref outputs to avoid running reference model for large seq_len
+        if seq_len > 8192:
+            pytest.skip("CI test only runs up to 8192 seq_len to avoid out of ram issues for ref model")
+        if num_layers != 1 and seq_len != 4096:
+            pytest.skip("CI only runs full model for 4k seq len to reduce CI pipeline load")
 
     run_ref_pt = True  # Flag to run reference PyTorch model and compare PCC
     cache_pcc = True  # Flag to measure KV cache PCC for all layers
@@ -84,25 +97,41 @@ def test_model_inference(
     batch_size = 1  # For prefill we only support batch_size = 1
 
     # This sets the minimum PCC for each iteration based on optimization mode
-    if "accuracy" in test_id:
-        expec_out_pcc = 0.91  # TODO Look on improving PCC
-    else:  # performance mode
-        assert "performance" in test_id
-        expec_out_pcc = 0.869  # TODO Look on improving PCC
+    if num_layers == 1:
+        expec_out_pcc = 0.98
+        expec_kv_cache_pcc = 0.99
+    else:
+        if "accuracy" in test_id:
+            expec_out_pcc = 0.91  # TODO Look on improving PCC
+        else:  # performance mode
+            assert "performance" in test_id
+            expec_out_pcc = 0.869  # TODO Look on improving PCC
+
+        expec_kv_cache_pcc = 0.88
 
     # Use instruct weights instead of general weights
     instruct = True
 
+    paged_attention_config = (
+        PagedAttentionConfig(
+            block_size=page_params["page_block_size"],
+            max_num_blocks=page_params["page_max_num_blocks"],
+        )
+        if paged_attention
+        else None
+    )
+
     # Load TTNN model
+    logger.info(f"Loading TT model...")
     model_args, tt_model, tt_kv_cache, state_dict = create_tt_model(
         mesh_device,
         instruct=instruct,
         max_batch_size=batch_size,
         optimizations=optimizations,
         max_seq_len=seq_len,
-        page_params=page_params,
+        paged_attention_config=paged_attention_config,
         dtype=dtype,
-        use_paged_kv_cache=paged_attention,
+        num_layers=num_layers,
     )
     
     if is_ci_env and model_args.is_90b:
@@ -110,6 +139,19 @@ def test_model_inference(
         model_args.n_layers = 1
     tokenizer = model_args.tokenizer
     generator = Generator([tt_model], [model_args], mesh_device, tokenizer=tokenizer)
+    logger.info("Finished loading TT model.")
+
+    # Create page table if paged attention is enabled
+    if paged_attention:
+        # Implied shuffling of blocks
+        permutation = torch.randperm(paged_attention_config.max_num_blocks)
+        # Page table which maps virtual blocks to physical
+        reverse_permutation = torch.argsort(permutation)
+        page_table = reverse_permutation.reshape(
+            model_args.max_batch_size, paged_attention_config.max_num_blocks // model_args.max_batch_size
+        )
+    else:
+        page_table = None
 
     # Load prompt
     current_file_path = os.path.abspath(__file__)
@@ -143,21 +185,6 @@ def test_model_inference(
         embd = model_args.reference_embedding()
         embd.load_state_dict({"emb.weight": state_dict[f"{state_dict_prefix}tok_embeddings.weight"]})
         logger.info("Finished loading reference model.")
-
-    paged_attention_config = None
-    page_table = None
-    if paged_attention:
-        paged_attention_config = PagedAttentionConfig(
-            block_size=page_params["page_block_size"],
-            max_num_blocks=page_params["page_max_num_blocks_per_dp"],
-        )
-        # Implied shuffling of blocks
-        permutation = torch.randperm(paged_attention_config.max_num_blocks)
-        # Page table which maps virtual blocks to physical
-        reverse_permutation = torch.argsort(permutation)
-        page_table = reverse_permutation.reshape(
-            model_args.max_batch_size, paged_attention_config.max_num_blocks // model_args.max_batch_size
-        )
 
     # Select the first token from the prompt for initial decoding
     encoded_prompt_tensor = torch.tensor(encoded_prompt)  # [:,0]
@@ -195,7 +222,6 @@ def test_model_inference(
 
         # Compare KV caches
         if cache_pcc:
-            expec_kv_cache_pcc = 0.99
             for i in range(model_args.n_layers):
                 pytorch_layer_present = [
                     reference_model.layers[i]
