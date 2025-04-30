@@ -40,11 +40,18 @@ public:
     void send_gradients();
     void receive_weights();
 
+    void set_lr(float lr) override {
+    }
+    [[nodiscard]] float get_lr() const override {
+        return 0.F;
+    }
+
 private:
     size_t m_steps{0};
     int m_aggregator_rank{0};
     SortedParameters m_sorted_parameters;
 };
+
 class Worker {
 public:
     Worker(DataLoader train_dataloader, std::shared_ptr<ttml::modules::LinearLayer> model, int aggregator_rank);

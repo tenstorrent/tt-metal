@@ -21,6 +21,10 @@
 #include "datasets/generators.hpp"
 #include "optimizers/adamw.hpp"
 #include "roles/worker.hpp"
+
+constexpr int WORKER_RANK = 1;
+constexpr int AGGREGATOR_RANK = 0;
+
 struct board_entry {
     std::string pci_dev_id;
     std::string board_type;
@@ -195,7 +199,7 @@ void regression_training(int aggregator_rank = 0, int optimizer_rank = 0, int wo
         optimizer->set_steps(0);
         optimizer->zero_grad();
     }
-    roles::Worker worker(train_dataloader, model);
+    roles::Worker worker(train_dataloader, model, AGGREGATOR_RANK);
     worker.training_step();
 }
 
