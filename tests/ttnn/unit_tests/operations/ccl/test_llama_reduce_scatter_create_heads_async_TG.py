@@ -263,6 +263,7 @@ def run_reduce_scatter_test(
                 tt_out_tensor_q_list.append(tt_out_tensor_q)
                 tt_out_tensor_k_list.append(tt_out_tensor_k)
                 tt_out_tensor_v_list.append(tt_out_tensor_v)
+        breakpoint()
         if store_all_results:
             return tt_out_tensor_q_list, tt_out_tensor_k_list, tt_out_tensor_v_list
         else:

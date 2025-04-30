@@ -45,9 +45,9 @@ void kernel_main() {
     constexpr uint8_t x_index = 0;
     constexpr uint8_t y_index = 1;
     constexpr uint8_t q_heads = 8;
-    constexpr uint8_t num_sticks_per_block = 8;
-    constexpr uint8_t stick_size_byte = 64;
-    constexpr uint8_t head_dim_bytes = 128;
+    constexpr uint32_t num_sticks_per_block = 8;
+    constexpr uint32_t stick_size_byte = 64 * 2;
+    constexpr uint32_t head_dim_bytes = 128 * 2;
     size_t rt_arg_idx = 0;
 
     // Define all compile-time arguments at the beginning
@@ -234,12 +234,13 @@ void kernel_main() {
         //     accumulator_l1_addresses[i] = accumulator_l1_addr + i * page_size_bytes;
         // }
 
-        cb_wait_front(accumulator_cb_id, num_pages_per_packet);
         uint32_t head_idx = linear_output_page_start_idx / 2;  // each head has 2 pages/blocks
+        cb_wait_front(accumulator_cb_id, num_pages_per_packet);
 
         auto accumulator_l1_addr = get_read_ptr(accumulator_cb_id);
         if (head_idx < q_heads) {  // write q heads
-            for (uint32_t iblock = 0; iblock < num_pages_per_packet / 2; iblock++) {
+            for (uint32_t iblock = 0; iblock < num_pages_per_packet;
+                 iblock += 2) {  // increment by 2 so that we can handle 1 head each time.
                 for (uint32_t istick = 0; istick < num_sticks_per_block; istick++) {
                     uint64_t noc_address = get_noc_addr(
                         q_output_core_xy[istick][x_index],
@@ -250,7 +251,7 @@ void kernel_main() {
                 }
                 head_idx++;  // next head as each packet has 2 heads = 4 blocks
             }
-        } else {  // write v heads
+        } else {  // write kv heads
         }
 
         // // Process all tiles
