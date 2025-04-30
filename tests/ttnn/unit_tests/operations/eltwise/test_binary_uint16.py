@@ -6,10 +6,6 @@ import torch
 import pytest
 import ttnn
 
-from models.utility_functions import torch_random
-from functools import partial
-from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
-
 
 @pytest.mark.parametrize(
     "a_shape, b_shape",
@@ -133,7 +129,9 @@ block_sharded_memory_config = ttnn.create_sharded_memory_config(
         block_sharded_memory_config,
     ],
 )
-def test_binary_add_uint16_sharded(a_shape, b_shape, sharded_config, device):
+@pytest.mark.parametrize("ttnn_fn", ("add", "mul"))
+def test_binary_uint16_sharded(a_shape, b_shape, sharded_config, ttnn_fn, device):
+    ttnn_op = getattr(ttnn, ttnn_fn)
     num_elements = max(int(torch.prod(torch.tensor(a_shape)).item()), 1)
     torch_input_tensor_a = torch.linspace(0, 100, num_elements, dtype=torch.int32)
     torch_input_tensor_a = torch_input_tensor_a[:num_elements].reshape(a_shape).nan_to_num(0.0)
@@ -157,10 +155,10 @@ def test_binary_add_uint16_sharded(a_shape, b_shape, sharded_config, device):
         memory_config=sharded_config,
     )
 
-    golden_function = ttnn.get_golden_function(ttnn.add)
+    golden_function = ttnn.get_golden_function(ttnn_op)
     torch_output_tensor = golden_function(torch_input_tensor_a, torch_input_tensor_b, device=device)
 
-    output_tensor_sharded = ttnn.add(input_tensor_a, input_tensor_b, memory_config=sharded_config, use_legacy=False)
+    output_tensor_sharded = ttnn_op(input_tensor_a, input_tensor_b, memory_config=sharded_config, use_legacy=False)
     # Since typecast does not support sharded config, we can convert the sharded tensor to interleaved
     output_tensor = ttnn.to_memory_config(output_tensor_sharded, ttnn.DRAM_MEMORY_CONFIG)
     output_tensor = ttnn.typecast(output_tensor, dtype=ttnn.uint32)
