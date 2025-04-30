@@ -59,6 +59,7 @@ void recv_tensor(ttnn::Tensor& tensor, int source, int tag) {
     for (auto buffer : buffers) {
         mpi_context.recv(buffer, source, tag);
     }
+    fmt::print("Rank {}: recv tensor: [{}]\n", mpi_context.get_rank(), buffers[0]);
     ttnn::assign(tensor, cpu_tensor.to_device(tensor.device()));
 }
 void broadcast_tensor(ttnn::Tensor& tensor, int root) {
