@@ -3,7 +3,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 ##### Python imports #####
-import pytest
 from loguru import logger
 import os
 from pathlib import Path
@@ -17,6 +16,7 @@ import torch
 
 ##### TTNN imports #####
 from models.tt_transformers.tt.load_checkpoints import load_sharded_checkpoints
+from models.tt_transformers.tt.model_config import ModelArgs
 
 # get the absolute path to this file
 _file_abs_path = os.path.abspath(__file__)
@@ -181,7 +181,7 @@ def hf_mllama_save_tensor_states(loaded: list, model_name: str, params: dict, te
 # "Llama3.1-70B"
 
 
-def load_sharded_checkpoints(checkpoints, n_layers):
+def load_sharded_checkpoints_orig(checkpoints, n_layers):
     checkpoint = {}
     logger.info(f"Loading {len(checkpoints)} checkpoint files")
     for ckpt in tqdm(checkpoints):
@@ -236,26 +236,18 @@ def write_tensor_states(loaded: dict, tensor_states_path: str) -> None:
         json.dump(tensor_states, f, indent=4)
 
 
-@pytest.mark.parametrize(
-    "input_base_path, model_name",
-    [
-        # ("/proj_sw/user_dev/llama32-data/Llama3.2-1B-Instruct", "Llama3.2-1B-Instruct"),
-        # ("/proj_sw/user_dev/llama32-data/Llama3.2-3B-Instruct", "Llama3.2-3B-Instruct"),
-        # ("/proj_sw/user_dev/llama31-8b-data/Meta-Llama-3.1-8B-Instruct", "Llama3.1-8B-Instruct"),
-        # ("/proj_sw/user_dev/llama32-data/Llama3.2-11B-Vision-Instruct", "Llama3.2-11B-Vision-Instruct"),
-        # ("/proj_sw/user_dev/llama33-data/Llama3.1-70B-Instruct/", "Llama3.1-70B-Instruct"),
-        ("/proj_sw/user_dev/llama32-data/Llama3.2-90B-Vision-Instruct", "Llama3.2-90B-Vision-Instruct"),
-    ],
-    ids=[
-        # "3.2-1B",
-        # "3.2-3B",
-        # "3.1-8B",
-        # "3.2-11B",
-        # "3.1-70B",
-        "3.2-90B",
-    ],
-)
-def test_class_embedding_inference(input_base_path, model_name):
+# [INFO] Focus on testing 70B and 90B models because they are the only ones that require shared checkpoints
+def test_load_checkpoints():
+    # make ModelArgs object with empty mesh_device for its ability to recognize the model name
+    model_args = ModelArgs(None)
+    input_base_path = model_args.CKPT_DIR
+    assert (
+        model_args.is_70b or model_args.is_90b
+    ), "this test is only needed for models with sharded checkpoints (only 70B and 90B models atm)"
+    model_name = "Llama3.1-70B-Instruct" if model_args.is_70b else "Llama3.2-90B-Vision-Instruct"
+    model_names_with_hf_golden_func = ("Llama3.2-90B-Vision-Instruct",)
+    model_names_with_orig_golden_func = ("Llama3.1-70B-Instruct",)
+
     with open(os.path.join(input_base_path, "params.json"), "r") as f:
         params = json.load(f)
 
@@ -263,25 +255,28 @@ def test_class_embedding_inference(input_base_path, model_name):
     assert len(checkpoints) > 0, f"no checkpoint files found in {input_base_path}"
     print(f"\nFetching all parameters from the checkpoint at {input_base_path}...")
 
-    tensor_states_path = Path(_file_abs_path).parent.parent.parent / "model_params" / model_name / "tensor_states.json"
+    tensor_states_path = Path(_file_abs_path).parent.parent / "model_params" / model_name / "tensor_states.json"
     if not os.path.exists(tensor_states_path):
         print(f"tensor states not found at {tensor_states_path}. Generating...")
         num_shards = len(checkpoints)
-        if model_name in ("Llama3.2-90B-Vision-Instruct",):
+        if model_name in model_names_with_hf_golden_func:
             loaded = [
                 torch.load(os.path.join(input_base_path, f"consolidated.{i:02d}.pth"), map_location="cpu", mmap=True)
                 for i in range(num_shards)
             ]
             hf_mllama_save_tensor_states(loaded, model_name, params, tensor_states_path)
         else:
-            loaded = load_sharded_checkpoints(checkpoints, n_layers=None)
+            assert (
+                model_name in model_names_with_orig_golden_func
+            ), f"model {model_name} must have a golden function implemented"
+            loaded = load_sharded_checkpoints_orig(checkpoints, n_layers=None)
             write_tensor_states(loaded, tensor_states_path)
 
     assert os.path.exists(tensor_states_path), f"tensor states must now be available at {tensor_states_path}"
     print(f"loading tensor states from {tensor_states_path}")
     tensor_states = json.load(open(tensor_states_path, "r"))
 
-    # use our load_sharded_checkpoints function to load the model
+    # use tt-transformers' load_sharded_checkpoints function to load the model
     state_dict = load_sharded_checkpoints(checkpoints, n_layers=None)  # n_layers=None will load all layers
 
     assert len(state_dict) == len(
