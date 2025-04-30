@@ -92,55 +92,7 @@ cpack_add_component_group(metalium-dev)
 install(DIRECTORY ${CMAKE_SOURCE_DIR}/ttnn DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/tt-metal COMPONENT metalium-ttnn-dev)
 install(
     DIRECTORY
-        ${CMAKE_SOURCE_DIR}/ttnn/cpp
-    DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/tt-metal
-    COMPONENT metalium-ttnn-dev
-)
-install(
-    DIRECTORY
-        ${CMAKE_SOURCE_DIR}/ttnn/cpp/ttnn/deprecated
-    DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/tt-metal
-    COMPONENT metalium-ttnn-dev
-)
-install(
-    DIRECTORY
-        ${CMAKE_SOURCE_DIR}/tt_metal/api
-    DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/tt-metal
-    COMPONENT metalium-ttnn-dev
-)
-install(
-    DIRECTORY
         ${CMAKE_SOURCE_DIR}/tt_metal
-    DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/tt-metal
-    COMPONENT metalium-ttnn-dev
-)
-install(
-    DIRECTORY
-        ${CMAKE_SOURCE_DIR}/tt_metal/include
-    DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/tt-metal
-    COMPONENT metalium-ttnn-dev
-)
-install(
-    DIRECTORY
-        ${CMAKE_SOURCE_DIR}/tt_metal/hostdevcommon/api
-    DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/tt-metal
-    COMPONENT metalium-ttnn-dev
-)
-install(
-    DIRECTORY
-        ${CMAKE_SOURCE_DIR}/tt_metal/third_party/umd
-    DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/tt-metal
-    COMPONENT metalium-ttnn-dev
-)
-install(
-    DIRECTORY
-        ${CMAKE_SOURCE_DIR}/tt_metal/third_party/umd/device/api
-    DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/tt-metal
-    COMPONENT metalium-ttnn-dev
-)
-install(
-    DIRECTORY
-        ${CMAKE_SOURCE_DIR}/tt_metal/hw/inc
     DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/tt-metal
     COMPONENT metalium-ttnn-dev
 )
@@ -152,15 +104,45 @@ install(
 )
 install(
     DIRECTORY
-        ${CMAKE_SOURCE_DIR}/tt_stl/tt_stl
-    DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/tt-metal
+        ${CMAKE_SOURCE_DIR}/.cpmcache/reflect/e75434c4c5f669e4a74e4d84e0a30d7249c1e66f/
+        ${CMAKE_SOURCE_DIR}/.cpmcache/fmt/69912fb6b71fcb1f7e5deca191a2bb4748c4e7b6/include/
+        ${CMAKE_SOURCE_DIR}/.cpmcache/magic_enum/4d76fe0a5b27a0e62d6c15976d02b33c54207096/include/
+        ${CMAKE_SOURCE_DIR}/.cpmcache/nlohmann_json/798e0374658476027d9723eeb67a262d0f3c8308/include/
+    DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/tt-metal/third-party
+    COMPONENT metalium-ttnn-dev
+    FILES_MATCHING
+    PATTERN
+    "*.h"
+    PATTERN
+    "*.hpp"
+)
+install(
+    FILES
+        ${CMAKE_SOURCE_DIR}/.cpmcache/reflect/e75434c4c5f669e4a74e4d84e0a30d7249c1e66f/reflect
+    DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/tt-metal/third-party/
     COMPONENT metalium-ttnn-dev
 )
 
-set(METALIUM_LIB_PATH "${CMAKE_BINARY_DIR}/lib")
-find_library(TT_METAL_LIBRARY NAMES "tt_metal" PATHS "${METALIUM_LIB_PATH}" NO_DEFAULT_PATH)
-find_library(DEVICE_LIBRARY NAMES "device" PATHS "${METALIUM_LIB_PATH}" NO_DEFAULT_PATH)
-find_library(TTNN_LIBRARY NAMES "_ttnn.so" PATHS "${METALIUM_LIB_PATH}" NO_DEFAULT_PATH)
+install(
+    DIRECTORY
+        ${CMAKE_SOURCE_DIR}/tt_metal/core_descriptors
+    DESTINATION ${CMAKE_INSTALL_LIBEXECDIR}/tt-metalium/tt_metal/core_descriptors
+    COMPONENT metalium-ttnn-dev
+)
+install(
+    DIRECTORY
+        ${CMAKE_SOURCE_DIR}/generated/watcher
+    DESTINATION ${CMAKE_INSTALL_LIBEXECDIR}/tt-metalium/
+    COMPONENT metalium-ttnn-dev
+)
+
+find_library(TT_METAL_LIBRARY NAMES "tt_metal" PATHS "${CMAKE_BINARY_DIR}/tt_metal" NO_DEFAULT_PATH)
+find_library(DEVICE_LIBRARY NAMES "device" PATHS "${CMAKE_BINARY_DIR}/lib" NO_DEFAULT_PATH)
+find_library(TTNN_LIBRARY NAMES "_ttnn.so" PATHS "${CMAKE_BINARY_DIR}/tnn" NO_DEFAULT_PATH)
+
+message(STATUS "TT_METAL_LIBRARY: ${TT_METAL_LIBRARY}")
+message(STATUS "DEVICE_LIBRARY: ${DEVICE_LIBRARY}")
+message(STATUS "TTNN_LIBRARY: ${TTNN_LIBRARY}")
 
 install(
     FILES
