@@ -60,14 +60,7 @@ void recv_tensor(ttnn::Tensor& tensor, int source, int tag) {
         mpi_context.recv(buffer, source, tag);
     }
 
-    std::vector<int> bytes_v;
-    bytes_v.reserve(buffers[0].size());
-    for (auto& b : buffers[0]) {
-        bytes_v.push_back(static_cast<int>(b));
-    }
-
-    fmt::print("Rank {}: recv tensor: {}\n", mpi_context.get_rank(), bytes_v);
-    ttnn::assign(tensor, cpu_tensor.to_device(tensor.device()));
+    ttnn::assign(cpu_tensor.to_device(tensor.device()), tensor);
 }
 void broadcast_tensor(ttnn::Tensor& tensor, int root) {
     auto* device = &autograd::ctx().get_device();
@@ -81,7 +74,7 @@ void broadcast_tensor(ttnn::Tensor& tensor, int root) {
         mpi_context.broadcast(buffer, root);
     }
     if (mpi_context.get_rank() != root) {
-        ttnn::assign(tensor, cpu_tensor.to_device(tensor.device()));
+        ttnn::assign(cpu_tensor.to_device(tensor.device()), tensor);
     }
 }
 
