@@ -308,13 +308,13 @@ TEST_F(TTNNFixtureWithDevice, DISABLED_TestGenericOpBinaryEltwiseAdd) {
     };
 
     bool block_or_width_sharded = false;
-    bool src0_is_dram = device_input_tensor_a.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
-    bool src1_is_dram = device_input_tensor_b.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
+    uint32_t src0_is_dram = device_input_tensor_a.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
+    uint32_t src1_is_dram = device_input_tensor_b.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
     const KernelDescriptor::CompileTimeArgs reader_compile_time_args = {
-        (uint32_t)src0_is_dram, (uint32_t)src1_is_dram, (uint32_t)block_or_width_sharded};
+        src0_is_dram, src1_is_dram, (uint32_t)block_or_width_sharded};
 
-    bool dst_is_dram = device_output_tensor.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
-    const KernelDescriptor::CompileTimeArgs writer_compile_time_args = {(uint32_t)dst_cb_index, (uint32_t)dst_is_dram};
+    uint32_t dst_is_dram = device_output_tensor.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
+    const KernelDescriptor::CompileTimeArgs writer_compile_time_args = {dst_cb_index, dst_is_dram};
 
     // setup runtime arguments for data movement kernels
     uint32_t num_cores_total = compute_with_storage_grid_size.x * compute_with_storage_grid_size.y;
@@ -543,13 +543,12 @@ TEST_F(TTNNFixtureWithDevice, DISABLED_TestGenericOpMatmul) {
         .format_descriptors = {output_format_descriptor},
     };
 
-    bool src0_is_dram = src0_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
-    bool src1_is_dram = src1_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
-    const KernelDescriptor::CompileTimeArgs reader_compile_time_args = {(uint32_t)src0_is_dram, (uint32_t)src1_is_dram};
+    uint32_t src0_is_dram = src0_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
+    uint32_t src1_is_dram = src1_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
+    const KernelDescriptor::CompileTimeArgs reader_compile_time_args = {src0_is_dram, src1_is_dram};
 
-    bool dst_is_dram = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
-    const KernelDescriptor::CompileTimeArgs writer_compile_time_args = {
-        (uint32_t)output_cb_index, (uint32_t)dst_is_dram};
+    uint32_t dst_is_dram = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
+    const KernelDescriptor::CompileTimeArgs writer_compile_time_args = {(uint32_t)output_cb_index, dst_is_dram};
 
     tt::log_info(tt::LogTest, "num_cores: {}, num_core_x: {}, num_core_y: {}", num_cores, num_cores_x, num_cores_y);
     KernelDescriptor::RuntimeArgs reader_rt_args_per_core(
@@ -690,7 +689,7 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpEltwiseSFPU) {
         device_input_tensor.device());
 
     auto input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(device_input_tensor.get_dtype());
-    bool is_dram_input = device_input_tensor.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
+    uint32_t is_dram_input = device_input_tensor.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
 
     CoreCoord core = {0, 0};
     CoreRange core_range = {core, core};
@@ -719,9 +718,8 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpEltwiseSFPU) {
         .format_descriptors = {output_cb_format_descriptor},
     };
 
-    const KernelDescriptor::CompileTimeArgs reader_compile_time_args = {(std::uint32_t)is_dram_input};
-    const KernelDescriptor::CompileTimeArgs writer_compile_time_args = {
-        (std::uint32_t)cb_out_id, (std::uint32_t)is_dram_input};
+    const KernelDescriptor::CompileTimeArgs reader_compile_time_args = {is_dram_input};
+    const KernelDescriptor::CompileTimeArgs writer_compile_time_args = {(std::uint32_t)cb_out_id, is_dram_input};
 
     // only core (0, 0) is used
     const KernelDescriptor::CoreRuntimeArgs reader_rt_args = {
