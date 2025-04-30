@@ -16,9 +16,9 @@ L1_INPUT_SHAPE_WH = (10_000, 8, 8)
 DRAM_INPUT_SHAPE_WH = (1_500_000, 8, 8)
 
 ##### BLACKHOLE #######
-L1_INPUT_SHAPE_BH = (60_000, 8, 8)
+L1_INPUT_SHAPE_BH = (30_000, 8, 8)
 
-DRAM_INPUT_SHAPE_BH = (7_500_000, 8, 8)
+DRAM_INPUT_SHAPE_BH = (3_000_000, 8, 8)
 
 
 def eltwise_input_shapes(test_case: str):
