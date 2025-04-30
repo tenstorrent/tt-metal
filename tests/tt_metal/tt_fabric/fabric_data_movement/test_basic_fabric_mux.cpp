@@ -40,6 +40,7 @@ struct TestConfig {
     uint32_t num_sender_clients = 0;
     uint32_t num_packets = 0;
     uint32_t num_credits = 0;
+    uint32_t num_return_credits_per_packet = 0;
     uint32_t packet_payload_size_bytes = 0;
     uint8_t num_full_size_channels = 0;
     uint8_t num_header_only_channels = 0;
@@ -87,6 +88,7 @@ void run_two_chip_test_variant(FabricMuxFixture* fixture, TestConfig test_config
     const uint32_t num_sender_clients = test_config.num_sender_clients;
     const uint32_t num_packets = test_config.num_packets;
     const uint32_t num_credits = test_config.num_credits;
+    const uint32_t num_return_credits_per_packet = test_config.num_return_credits_per_packet;
     const uint32_t packet_payload_size_bytes = test_config.packet_payload_size_bytes;
     const uint8_t num_full_size_channels = test_config.num_full_size_channels;
     const uint8_t num_header_only_channels = test_config.num_header_only_channels;
@@ -263,6 +265,7 @@ void run_two_chip_test_variant(FabricMuxFixture* fixture, TestConfig test_config
             std::vector<uint32_t> receiver_rt_args = {
                 num_packets,
                 num_credits,
+                num_return_credits_per_packet,
                 packet_payload_size_bytes,
                 time_seed,
                 num_hops,
@@ -378,6 +381,7 @@ TEST_F(FabricMuxFixture, TestFabricMuxTwoChipVariant1) {
         .num_sender_clients = 1,
         .num_packets = 1000,
         .num_credits = 1,
+        .num_return_credits_per_packet = 1,
         .packet_payload_size_bytes = 4096,
         .num_full_size_channels = 1,
         .num_header_only_channels = 1,
@@ -392,6 +396,7 @@ TEST_F(FabricMuxFixture, TestFabricMuxTwoChipVariant2) {
         .num_sender_clients = 1,
         .num_packets = 1000,
         .num_credits = 1,
+        .num_return_credits_per_packet = 1,
         .packet_payload_size_bytes = 4096,
         .num_full_size_channels = 4,
         .num_header_only_channels = 4,
@@ -406,6 +411,7 @@ TEST_F(FabricMuxFixture, TestFabricMuxTwoChipVariant3) {
         .num_sender_clients = 2,
         .num_packets = 1000,
         .num_credits = 1,
+        .num_return_credits_per_packet = 1,
         .packet_payload_size_bytes = 4096,
         .num_full_size_channels = 4,
         .num_header_only_channels = 4,
@@ -420,6 +426,7 @@ TEST_F(FabricMuxFixture, TestFabricMuxTwoChipVariant4) {
         .num_sender_clients = 2,
         .num_packets = 1000,
         .num_credits = 16,
+        .num_return_credits_per_packet = 4,
         .packet_payload_size_bytes = 4096,
         .num_full_size_channels = 4,
         .num_header_only_channels = 4,
@@ -434,6 +441,7 @@ TEST_F(FabricMuxFixture, TestFabricMuxTwoChipVariant5) {
         .num_sender_clients = 8,
         .num_packets = 5000,
         .num_credits = 16,
+        .num_return_credits_per_packet = 8,
         .packet_payload_size_bytes = 4096,
         .num_full_size_channels = 8,
         .num_header_only_channels = 8,
@@ -448,6 +456,7 @@ TEST_F(FabricMuxFixture, TestFabricMuxTwoChipVariant6) {
         .num_sender_clients = 8,
         .num_packets = 50000,
         .num_credits = 16,
+        .num_return_credits_per_packet = 8,
         .packet_payload_size_bytes = 4096,
         .num_full_size_channels = 8,
         .num_header_only_channels = 8,

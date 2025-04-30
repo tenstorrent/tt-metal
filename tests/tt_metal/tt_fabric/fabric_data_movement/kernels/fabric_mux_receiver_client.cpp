@@ -28,6 +28,7 @@ void kernel_main() {
     uint32_t rt_args_idx = 0;
     uint32_t num_packets = get_arg_val<uint32_t>(rt_args_idx++);
     uint32_t num_credits = get_arg_val<uint32_t>(rt_args_idx++);
+    uint32_t return_credits_per_packet = get_arg_val<uint32_t>(rt_args_idx++);
     uint32_t packet_payload_size_bytes = get_arg_val<uint32_t>(rt_args_idx++);
     uint32_t time_seed = get_arg_val<uint32_t>(rt_args_idx++);
     uint32_t num_hops = get_arg_val<uint32_t>(rt_args_idx++);
@@ -71,8 +72,8 @@ void kernel_main() {
     uint64_t noc_dest_addr = get_noc_addr_helper(sender_noc_xy_encoding, credit_handshake_address);
     auto packet_header = reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(packet_header_buffer_address);
     packet_header->to_chip_unicast(static_cast<uint8_t>(num_hops));
-    packet_header->to_noc_unicast_atomic_inc(
-        NocUnicastAtomicIncCommandHeader{noc_dest_addr, 1, std::numeric_limits<uint16_t>::max()});
+    packet_header->to_noc_unicast_atomic_inc(NocUnicastAtomicIncCommandHeader{
+        noc_dest_addr, static_cast<uint16_t>(return_credits_per_packet), std::numeric_limits<uint16_t>::max()});
 
     auto base_payload_start_ptr = reinterpret_cast<tt_l1_ptr uint32_t*>(base_l1_target_address);
     auto base_poll_ptr =
@@ -88,6 +89,7 @@ void kernel_main() {
     uint32_t seed = time_seed ^ sender_id;
     uint32_t slot_id = 0;
     uint32_t num_packets_processed = 0;
+    uint32_t num_accumulated_credits = 0;
     for (uint32_t packet_id = 0; packet_id < num_packets; packet_id++) {
         seed = prng_next(seed);
         expected_val = seed + (packet_payload_size_bytes / 16) - 1;
@@ -109,9 +111,13 @@ void kernel_main() {
             slot_id = 0;
         }
 
-        // send credit back
-        // can also accumulate and then send credits back instead of sending back one at a time
-        tt::tt_fabric::fabric_mux_atomic_inc<fabric_mux_num_buffers_per_channel>(mux_connection_handle, packet_header);
+        num_accumulated_credits++;
+        if (num_accumulated_credits == return_credits_per_packet) {
+            num_accumulated_credits = 0;
+            tt::tt_fabric::fabric_mux_atomic_inc<fabric_mux_num_buffers_per_channel>(
+                mux_connection_handle, packet_header);
+        }
+
         num_packets_processed++;
     }
 
