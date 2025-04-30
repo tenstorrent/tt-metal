@@ -15,6 +15,7 @@
 
 #include <fmt/base.h>
 #include <umd/device/types/arch.h>
+#include <magic_enum/magic_enum.hpp>
 
 namespace tt {
 
@@ -177,5 +178,11 @@ struct std::hash<tt::DataFormat> {
 
 template <>
 struct fmt::formatter<tt::DataFormat> : formatter<string_view> {
-    auto format(tt::DataFormat df, format_context& ctx) const -> format_context::iterator;
+    auto format(tt::DataFormat df, format_context& ctx) const -> format_context::iterator {
+        const auto name = magic_enum::enum_name(df);
+        if (name.empty()) {
+            throw std::invalid_argument("Unknown format");
+        }
+        return formatter<string_view>::format(name, ctx);
+    }
 };

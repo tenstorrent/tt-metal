@@ -42,7 +42,7 @@ target_link_libraries(
         umd::device
         metal_common_libs
         magic_enum::magic_enum
-        fmt::fmt-header-only
+        fmt::fmt
         yaml-cpp::yaml-cpp
         Metalium::Metal::Impl
         TT::Metalium::HostDevCommon
