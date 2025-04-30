@@ -241,7 +241,7 @@ void PrefetchKernel::GenerateDependentConfigs() {
             TT_ASSERT(found_dispatch && found_dispatch_s);
         } else {
             // No dispatch_s, just write 0s to the configs dependent on it
-            TT_ASSERT(found_dispatch && ~found_dispatch_s);
+            TT_ASSERT(found_dispatch && !found_dispatch_s);
             dependent_config_.downstream_s_logical_core = UNUSED_LOGICAL_CORE;
             dependent_config_.downstream_dispatch_s_cb_sem_id = UNUSED_SEM_ID;
         }
@@ -341,7 +341,7 @@ void PrefetchKernel::GenerateDependentConfigs() {
             TT_ASSERT(found_dispatch && found_dispatch_s);
         } else {
             // No dispatch_s, just write 0s to the configs dependent on it
-            TT_ASSERT(found_dispatch && ~found_dispatch_s);
+            TT_ASSERT(found_dispatch && !found_dispatch_s);
             dependent_config_.downstream_s_logical_core = UNUSED_LOGICAL_CORE;
             dependent_config_.downstream_dispatch_s_cb_sem_id =
                 MetalContext::instance().get_dispatch_query_manager().dispatch_s_enabled()
