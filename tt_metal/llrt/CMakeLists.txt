@@ -32,6 +32,7 @@ target_link_libraries(
     PRIVATE
         hw
         fmt::fmt
+        magic_enum::magic_enum
         umd::device
 )
 
@@ -58,6 +59,7 @@ target_link_libraries(
     PRIVATE
         hw
         fmt::fmt
+        magic_enum::magic_enum
         umd::device
 )
 
