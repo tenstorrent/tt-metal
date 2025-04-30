@@ -220,6 +220,8 @@ class PlotBasic:
         ax.set_xscale("symlog", base=2)
 
     def override_absolute(self, ax):
+        ax.set_ylim(1e-8, 1e8)
+        ax.set_xlim(None, 1e10)
         pass
 
     def override_values(self, ax):
@@ -351,12 +353,14 @@ class PlotSiLU:
         ax.set_xticklabels([f"{x:g}" for x in custom_ticks])
 
     def override_absolute(self, ax):
+        ax.set_xscale("symlog", base=10, linthresh=1e-6)
         ax.set_yscale("log", base=10)
-        yticker = ticker.LogLocator(base=10)
-        yticker.set_params(numticks=7)
-        ax.yaxis.set_major_locator(yticker)
+        ax.set_ylim(1e-9, 1)
+        ax.set_xlim(-1e10, 1e10)
 
-        ax.set_ylim(0, 1)
+        custom_ticks = [1e-9, 1e-6, 1e-3, 1e-2, 1e-1, 1, 1e3]
+        ax.set_yticks(custom_ticks)
+        ax.set_yticklabels([f"{x:g}" for x in custom_ticks])
 
         pass
 
@@ -374,7 +378,7 @@ class PlotLogit:
         ax.set_xscale("linear")
 
         ymin, ymax = ax.get_ylim()
-        ax.set_ylim(ymin, min(ymax, 100))
+        ax.set_ylim(ymin, min(ymax, 5))
 
         custom_ticks = [0, 0.1, 0.5, 1]
         ax.set_xticks(custom_ticks)
@@ -408,17 +412,29 @@ class PlotLogit:
 
 class PlotMish:
     def override_accuracy(self, ax):
+        ax.set_yscale("log", base=10)
+
+        custom_ticks = [1e-12, 1e-9, 1e-6, 1e-3, 1e-2, 1e-1, 1, 10, 1e3, 1e6, 1e9, 1e12]
+        ax.set_yticks(custom_ticks)
+        ax.set_yticklabels([f"{x:g}" for x in custom_ticks])
+
+        ax.set_ylim(1e-18, 1e18)
+        ax.set_xlim(-1e20, 1e20)
+
         pass
 
     def override_accuracy_zoom(self, ax):
-        ax.set_xscale("symlog", base=2)
+        ax.set_xscale("symlog", base=10)
 
         custom_ticks = [-8, -4, -2, -1, 0, 1, 2, 4, 8]
         ax.set_xticks(custom_ticks)
         ax.set_xticklabels([f"{x:g}" for x in custom_ticks])
 
     def override_absolute(self, ax):
-        ax.set_yscale("log", base=10)
+        ax.set_xscale("symlog", base=10)
+        ax.set_yscale("symlog", base=10, linthresh=1e-6)
+        ax.set_ylim(1e-6, 1e2)
+        ax.set_xlim(-1e6, 1e6)
         pass
 
     def override_values(self, ax):
@@ -448,7 +464,7 @@ class PlotCos:
         ax.set_ylim(0, 1)
 
     def override_absolute(self, ax):
-        ax.set_ylim(0, 3 * math.pi)
+        ax.set_ylim(1e-5, 1e2)
         pass
 
     def override_values(self, ax):
@@ -475,6 +491,7 @@ class PlotTan:
             kpi = k * math.pi + math.pi / 2.0
 
     def override_absolute(self, ax):
+        ax.set_ylim(1e-12, 1e6)
         pass
 
     def override_values(self, ax):
@@ -505,6 +522,61 @@ class PlotSqrt:
         pass
 
 
+class PlotDiagamma:
+    def override_accuracy(self, ax):
+        ax.set_xscale("symlog", base=10, linthresh=1e-6)
+        ax.set_ylim(1e-8, 2e1)
+        ax.set_xlim(1e-12, None)
+
+    def override_accuracy_zoom(self, ax):
+        ax.set_xscale("symlog", base=2, linthresh=1e-6)
+        ax.set_ylim(1e-8, 1e3)
+        ax.set_xlim(2**-2, 10)
+        pass
+
+    def override_absolute(self, ax):
+        ax.set_xscale("symlog", base=10, linthresh=1e-6)
+        ax.set_xlim(0, 1e39)
+        ax.set_ylim(1e-4, 1e6)
+
+    def override_values(self, ax):
+        pass
+
+
+class PlotLgamma:
+    def override_accuracy(self, ax):
+        ax.set_xscale("symlog", base=10, linthresh=1e-6)
+
+    def override_accuracy_zoom(self, ax):
+        pass
+
+    def override_absolute(self, ax):
+        ax.set_xlim(None, 1e10)
+        ax.set_ylim(1e-6, 1e10)
+        pass
+
+    def override_values(self, ax):
+        pass
+
+
+class PlotTanhshrink:
+    def override_accuracy(self, ax):
+        ax.set_xlim(-1e4, 10e4)
+        ax.set_ylim(1e-3, 50)
+        pass
+
+    def override_accuracy_zoom(self, ax):
+        pass
+
+    def override_absolute(self, ax):
+        ax.set_xlim(-1e4, 10e4)
+        ax.set_ylim(1e-12, 1e2)
+        pass
+
+    def override_values(self, ax):
+        pass
+
+
 Y_OFFSET = 0  # Offset y=0 curve, to make f(x)=0 values visible
 
 all_override_plot_funs = {
@@ -523,12 +595,15 @@ all_override_plot_funs = {
     "silu": (PlotSiLU(), (-4, 4)),  # reuse silu settings
     "logit": (PlotLogit(), (-0.1, 1.1)),  # reuse silu settings
     "gelu": (PlotSiLU(), (-4, 4)),  # reuse silu settings
+    "gelu_approx": (PlotSiLU(), (-4, 4)),  # reuse silu settings
     "swish": (PlotSiLU(), (-4, 4)),  # reuse silu settings
     "mish": (PlotMish(), (-4, 4)),  # reuse silu settings
     "elu": (PlotMish(), (-10, 10)),  # reuse silu settings
     "selu": (PlotSiLU(), (-4, 4)),  # reuse silu settings
-    "softplus": (PlotBasic(zoomed_in_xrange=[-9, 9], zoomed_in_yrange=[Y_OFFSET, 1]), (-9, 9)),  # reuse silu settings
-    "softsign": (PlotBasic(zoomed_in_xrange=[-3, 3], zoomed_in_yrange=[Y_OFFSET, 1]), (-3, 3)),  # reuse silu settings
+    # "softplus": (PlotBasic(zoomed_in_xrange=[-9, 9], zoomed_in_yrange=[Y_OFFSET, 1]), (-9, 9)),  # reuse silu settings
+    # "softsign": (PlotBasic(zoomed_in_xrange=[-3, 3], zoomed_in_yrange=[Y_OFFSET, 1]), (-3, 3)),  # reuse silu settings
+    "softplus": (PlotSiLU(), (-4, 4)),  # reuse silu settings
+    "softsign": (PlotSiLU(), (-4, 4)),  # reuse silu settings
     # Trigonometric functions
     "tan": (PlotTan(), (-10, 10)),  # reuse tan settings
     "atan": (PlotBasic(zoomed_in_xrange=[-3, 3], zoomed_in_yrange=[Y_OFFSET, 1]), (-3, 3)),
@@ -538,9 +613,9 @@ all_override_plot_funs = {
     "sqrt": (PlotSqrt(), (0, 100)),
     "rsqrt": (PlotBasic(zoomed_in_xrange=[0, 3], zoomed_in_yrange=[0, 1]), (0, 3)),
     "rsqrt_approx": None,
-    "digamma": (PlotBasic(zoomed_in_xrange=[0, 10], zoomed_in_yrange=[Y_OFFSET, 10]), (0, 10)),
-    "lgamma": (PlotBasic(zoomed_in_xrange=[0, 10], zoomed_in_yrange=[Y_OFFSET, 10]), (0, 10)),
-    "tanhshrink": (PlotBasic(zoomed_in_xrange=[-3, 3], zoomed_in_yrange=[Y_OFFSET, 1]), (-3, 3)),
+    "digamma": (PlotDiagamma(), (0, 10)),
+    "lgamma": (PlotLgamma(), (0, 10)),
+    "tanhshrink": (PlotTanhshrink(), (-3, 3)),
 }
 
 powers_list = [2, 3, 5, 7, 10]
@@ -852,6 +927,7 @@ def main():
         ("log1p", "bfloat16", 32),
         ("silu", "bfloat16", 32),
         ("gelu", "bfloat16", 32),
+        ("gelu_approx", "bfloat16", 32),
         ("logit", "bfloat16", 32),
         ("swish", "bfloat16", 32),
         ("mish", "bfloat16", 32),
@@ -894,6 +970,7 @@ def main():
         ("softplus", "bfloat16", 1),
         ("softsign", "bfloat16", 1),
         ("gelu", "bfloat16", 1),
+        ("gelu_approx", "bfloat16", 1),
         ("logit", "bfloat16", 1),
         ("swish", "bfloat16", 1),
         ("mish", "bfloat16", 1),
