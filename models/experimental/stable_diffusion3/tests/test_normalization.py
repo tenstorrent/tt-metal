@@ -19,6 +19,7 @@ from ..tt.utils import assert_quality
         [4096, 3072],
     ],
 )
+@pytest.mark.parametrize("dtype", [ttnn.bfloat8_b, ttnn.bfloat16], ids=["bfloat8_b", "bfloat16"])
 @pytest.mark.parametrize("mesh_device", [(1, 1), (1, 2), (1, 8)], indirect=True)
 @pytest.mark.parametrize("affine", [True, False], ids=["affine", "noaffine"])
 @pytest.mark.usefixtures("use_program_cache")
@@ -26,6 +27,7 @@ def test_layer_norm(
     *,
     mesh_device: ttnn.MeshDevice,
     input_shape: list[int],
+    dtype: ttnn.DataType,
     affine: bool,
 ) -> None:
     batch_size, _ = mesh_device.shape
@@ -38,7 +40,7 @@ def test_layer_norm(
     parameters = TtLayerNormParameters.from_torch(
         torch_model.state_dict(),
         device=mesh_device,
-        dtype=ttnn.bfloat8_b,
+        dtype=dtype,
         weight_shape=input_shape[-1:],
     )
     tt_model = TtLayerNorm(parameters, eps=torch_model.eps)
@@ -49,7 +51,7 @@ def test_layer_norm(
         torch_input_tensor,
         device=mesh_device,
         layout=ttnn.TILE_LAYOUT,
-        dtype=ttnn.bfloat8_b,
+        dtype=dtype,
         mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, tuple(mesh_device.shape), (0, -1)),
     )
 
@@ -69,27 +71,27 @@ def test_layer_norm(
         [2, 24, 4096, 64],
     ],
 )
+@pytest.mark.parametrize("dtype", [ttnn.bfloat8_b, ttnn.bfloat16], ids=["bfloat8_b", "bfloat16"])
 @pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
 @pytest.mark.usefixtures("use_program_cache")
 def test_rms_norm(
     *,
     mesh_device: ttnn.MeshDevice,
     input_shape: list[int],
+    dtype: ttnn.DataType,
 ) -> None:
     torch.manual_seed(0)
 
     torch_model = RmsNorm(dim=input_shape[-1], eps=1.0)
     torch.nn.init.normal_(torch_model.weight)
 
-    parameters = TtRmsNormParameters.from_torch(torch_model.state_dict(), device=mesh_device, dtype=ttnn.bfloat8_b)
+    parameters = TtRmsNormParameters.from_torch(torch_model.state_dict(), device=mesh_device, dtype=dtype)
 
     tt_model = TtRmsNorm(parameters, eps=torch_model.eps)
 
     torch_input_tensor = torch.randn(input_shape)
 
-    tt_input_tensor = ttnn.from_torch(
-        torch_input_tensor, device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat8_b
-    )
+    tt_input_tensor = ttnn.from_torch(torch_input_tensor, device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=dtype)
 
     torch_output = torch_model(torch_input_tensor)
 
