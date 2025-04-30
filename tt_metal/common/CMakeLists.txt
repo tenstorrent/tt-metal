@@ -32,7 +32,7 @@ target_link_libraries(
         fmt::fmt-header-only
         span
         small_vector
-        TT:STL
+        TT::STL
         umd::Firmware
         umd::device
         simde::simde
