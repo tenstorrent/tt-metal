@@ -90,24 +90,16 @@ tt::tt_metal::Tensor ttml_create_owned_tensor(
     return {std::move(storage), shape, data_type, layout};
 }
 
-template <typename T>
-std::vector<tt::tt_metal::borrowed_buffer::Buffer<T>> get_as(const ttnn::Tensor& tensor) {
+std::vector<tt::tt_metal::HostBuffer> get_as(const ttnn::Tensor& tensor) {
     return std::visit(
-        [](auto&& storage) -> std::vector<tt::tt_metal::borrowed_buffer::Buffer<T>> {
+        [](auto&& storage) -> std::vector<tt::tt_metal::HostBuffer> {
             using StorageType = std::decay_t<decltype(storage)>;
-            if constexpr (std::is_same_v<StorageType, tt::tt_metal::OwnedStorage>) {
-                return {tt::tt_metal::host_buffer::get_as<T>(storage.buffer)};
+            if constexpr (std::is_same_v<StorageType, tt::tt_metal::HostStorage>) {
+                return {storage.buffer};
             } else if constexpr (std::is_same_v<StorageType, tt::tt_metal::MultiDeviceHostStorage>) {
-                std::vector<tt::tt_metal::borrowed_buffer::Buffer<T>> res;
-                res.reserve(storage.buffers.size());
-                for (const auto& buffer : storage.buffers) {
-                    res.push_back(tt::tt_metal::host_buffer::get_as<T>(buffer));
-                }
-                return res;
-            } else if constexpr (std::is_same_v<StorageType, tt::tt_metal::BorrowedStorage>) {
-                return {tt::tt_metal::host_buffer::get_as<T>(storage.buffer)};
+                return storage.buffers;
             } else {
-                throw std::runtime_error("Tensor must have OwnedStorage or BorrowedStorage");
+                throw std::runtime_error("Tensor must be on host");
             }
         },
         tensor.get_storage());
@@ -361,48 +353,14 @@ template tt::tt_metal::Tensor from_xtensor<uint32_t, ttnn::DataType::UINT32>(
 std::vector<std::span<std::byte>> get_bytes_from_cpu_tensor(ttnn::Tensor& tensor) {
     std::vector<std::span<std::byte>> res;
     auto cpu_tensor = tensor;
-    switch (cpu_tensor.get_dtype()) {
-        case ttnn::DataType::BFLOAT16: {
-            auto buffers = get_as<bfloat16>(cpu_tensor);
-            res.reserve(buffers.size());
-            for (auto& buffer : buffers) {
-                auto span = std::as_writable_bytes(std::span{buffer});
-                res.push_back(span);
-            }
-            return res;
-        }
-        case ttnn::DataType::FLOAT32: {
-            auto buffers = get_as<float>(cpu_tensor);
-            res.reserve(buffers.size());
-            for (auto& buffer : buffers) {
-                auto span = std::as_writable_bytes(std::span{buffer});
-                res.push_back(span);
-            }
-            return res;
-        }
-        case ttnn::DataType::UINT32: {
-            auto buffers = get_as<uint32_t>(cpu_tensor);
-            res.reserve(buffers.size());
-            for (auto& buffer : buffers) {
-                auto span = std::as_writable_bytes(std::span{buffer});
-                res.push_back(span);
-            }
-            return res;
-        }
-        case ttnn::DataType::INT32: {
-            auto buffers = get_as<uint32_t>(cpu_tensor);
-            res.reserve(buffers.size());
-            for (auto& buffer : buffers) {
-                auto span = std::as_writable_bytes(std::span{buffer});
-                res.push_back(span);
-            }
-            return res;
-        }
-        default: {
-            throw std::runtime_error(fmt::format(
-                "Unsupported data type {0} for conversion to bytes", magic_enum::enum_name(cpu_tensor.get_dtype())));
-        }
+    auto buffers = get_as(cpu_tensor);
+
+    res.reserve(buffers.size());
+    for (auto& buffer : buffers) {
+        auto view = buffer.view_bytes();
+        auto span = std::as_writable_bytes(std::span{view.begin(), view.end()});
+        res.push_back(span);
     }
-    return {};
+    return res;
 }
 }  // namespace ttml::core
