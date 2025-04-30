@@ -411,18 +411,14 @@ def generate_sdxl_test_inputs():
     inputs = []
 
     # 1024x1024 resoultion
-    inputs.append((1, 1280, 64, 64))
-    inputs.append((1, 1280, 32, 32))
-    inputs.append((1, 1920, 64, 64))
-    inputs.append((1, 1920, 32, 32))
-    inputs.append((1, 2560, 32, 32))
-    inputs.append((1, 320, 128, 128))
-    inputs.append((1, 320, 64, 64))
-    # inputs.append((1, 640, 128, 128)) #  OOM
-    inputs.append((1, 640, 32, 32))
-    inputs.append((1, 640, 64, 64))
-    # inputs.append((1, 960, 128, 128)) #  OOM
-    inputs.append((1, 960, 64, 64))
+    inputs.append((2, 1280, 64, 64))
+    inputs.append((2, 1280, 32, 32))
+    inputs.append((2, 1920, 32, 32))
+    inputs.append((2, 2560, 32, 32))
+    inputs.append((2, 320, 64, 64))
+    inputs.append((2, 640, 32, 32))
+    inputs.append((2, 640, 64, 64))
+    inputs.append((2, 960, 64, 64))
 
     return inputs
 

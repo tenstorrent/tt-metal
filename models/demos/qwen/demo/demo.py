@@ -430,7 +430,7 @@ def run_qwen_demo(
             tt_out_gathered = tt_out
         tt_out_rm = ttnn.untilize(tt_out_gathered, use_multicore=True)
         ttnn.deallocate(tt_out_gathered)
-        tt_out_tok = ttnn.argmax(tt_out_rm, dim=3, use_multicore=True, output_tensor=tt_out_tok)
+        tt_out_tok = ttnn.argmax(tt_out_rm, dim=3, keepdim=True, use_multicore=True, output_tensor=tt_out_tok)
         ttnn.deallocate(tt_out_rm)
         new_rot_mat = ttnn.linear(rot_matrix, current_rot_mat)
         current_rot_mat = ttnn.copy(new_rot_mat, current_rot_mat)
@@ -451,7 +451,7 @@ def run_qwen_demo(
             tt_out_gathered = tt_out
         tt_out_rm = ttnn.untilize(tt_out_gathered, use_multicore=True)
         ttnn.deallocate(tt_out_gathered)
-        tt_out_tok = ttnn.argmax(tt_out_rm, dim=3, use_multicore=True, output_tensor=tt_out_tok)
+        tt_out_tok = ttnn.argmax(tt_out_rm, dim=3, keepdim=True, use_multicore=True, output_tensor=tt_out_tok)
         ttnn.deallocate(tt_out_rm)
         new_rot_mat = ttnn.linear(rot_matrix, current_rot_mat)
         current_rot_mat = ttnn.copy(new_rot_mat, current_rot_mat)
@@ -696,8 +696,6 @@ def test_qwen_demo(
 ):
     if is_ci_env and (instruct_weights == False or "long" in input_prompts or single_layer == True):
         pytest.skip("CI demo test only runs instruct weights to reduce CI pipeline load (both are supported)")
-
-    mesh_device.enable_async(True)
 
     return run_qwen_demo(
         user_input=input_prompts,

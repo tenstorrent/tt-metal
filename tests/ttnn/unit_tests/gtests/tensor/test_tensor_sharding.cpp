@@ -6,6 +6,7 @@
 #include <stddef.h>
 #include <tt-metalium/shape2d.hpp>
 #include <tt-metalium/work_split.hpp>
+#include <tt_stl/span.hpp>
 #include <algorithm>
 #include <functional>
 #include <iostream>
@@ -19,7 +20,7 @@
 
 #include <tt-metalium/assert.hpp>
 #include <tt-metalium/buffer.hpp>
-#include <tt-metalium/buffer_constants.hpp>
+#include <tt-metalium/buffer_types.hpp>
 #include "common_tensor_test_utils.hpp"
 #include <tt-metalium/core_coord.hpp>
 #include "gmock/gmock.h"
@@ -141,7 +142,7 @@ TEST_P(ShardWithAlignmentTests, LogicalToPhysical) {
     if (tensor_spec.layout() == Layout::TILE) {
         // TODO: Fix convert_layout_tile_to_row_major to take in vector instead of buffer?
         physical_data = tensor_impl::convert_layout_tile_to_row_major(
-            physical_shape, tensor_spec.tile(), owned_buffer::create(std::move(physical_data)));
+            physical_shape, tensor_spec.tile(), tt::stl::MakeConstSpan(physical_data));
     }
 
     // auto shape_2d = tensor_spec.logical_2d_shape();
@@ -192,7 +193,7 @@ TEST_P(ShardWithAlignmentTests, PhysicalToLogical) {
     if (tensor_spec.layout() == Layout::TILE) {
         // TODO: Fix convert_layout_row_major_to_tile to take in vector instead of buffer?
         physical_data = tensor_impl::convert_layout_row_major_to_tile(
-            physical_shape, tensor_spec.tile(), owned_buffer::create(std::move(physical_data)));
+            physical_shape, tensor_spec.tile(), tt::stl::MakeConstSpan(physical_data));
     }
     auto logical_data = tensor_impl::decode_tensor_data(std::move(physical_data), tensor_spec);
 

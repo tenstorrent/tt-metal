@@ -17,7 +17,7 @@
 #include "gtest/gtest.h"
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/program.hpp>
-#include "span.hpp"
+#include <tt_stl/span.hpp>
 
 namespace tt {
 namespace tt_metal {
@@ -37,7 +37,7 @@ const std::string golden_output =
 R"(Printing int from arg: 0
 Printing int from arg: 2)";
 
-static void RunTest(DPrintFixture* fixture, IDevice* device) {
+void RunTest(DPrintFixture* fixture, IDevice* device) {
     // Set up program
     Program program = Program();
 

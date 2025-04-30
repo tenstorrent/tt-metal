@@ -17,4 +17,3 @@
 #include <tt-metalium/command_queue_common.hpp>
 #include <tt-metalium/system_memory_manager.hpp>
 #include <tt-metalium/system_memory_cq_interface.hpp>
-#include <tt-metalium/dispatch_mem_map.hpp>

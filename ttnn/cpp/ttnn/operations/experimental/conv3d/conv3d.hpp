@@ -29,8 +29,6 @@ struct ExecuteConv3d {
 }  // namespace ttnn::operations::experimental::conv3d
 
 namespace ttnn::experimental {
-constexpr auto conv3d = ttnn::register_operation_with_auto_launch_op<
-    "ttnn::experimental::conv3d",
-    ttnn::operations::experimental::conv3d::ExecuteConv3d>();
-
+constexpr auto conv3d =
+    ttnn::register_operation<"ttnn::experimental::conv3d", ttnn::operations::experimental::conv3d::ExecuteConv3d>();
 }

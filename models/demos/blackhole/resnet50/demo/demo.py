@@ -62,7 +62,6 @@ def test_demo_trace_with_imagenet(
     act_dtype,
     weight_dtype,
     model_location_generator,
-    enable_async_mode=True,
 ):
     test_run_resnet50_trace_2cqs_inference(
         mesh_device,
@@ -72,6 +71,5 @@ def test_demo_trace_with_imagenet(
         imagenet_label_dict,
         act_dtype,
         weight_dtype,
-        enable_async_mode,
         model_location_generator,
     )

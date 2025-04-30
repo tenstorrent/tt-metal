@@ -27,13 +27,11 @@
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/mesh_graph.hpp>
-#include "span.hpp"
+#include <tt_stl/span.hpp>
 #include <tt-metalium/system_memory_manager.hpp>
 #include <tt-metalium/tt_metal.hpp>
-#include "impl/context/metal_context.hpp"
-#include "tt_metal/fabric/fabric_host_utils.hpp"
+#include <tt-metalium/fabric.hpp>
 #include "tt_metal/fabric/hw/inc/tt_fabric_status.h"
-#include "impl/context/metal_context.hpp"
 #include "umd/device/tt_core_coordinates.h"
 
 namespace tt::tt_fabric {
@@ -76,7 +74,7 @@ TEST_F(Fabric1DFixture, TestUnicastRaw) {
     CoreCoord receiver_virtual_core = receiver_device->worker_core_from_logical_core(receiver_logical_core);
 
     auto receiver_noc_encoding =
-        tt::tt_metal::hal_ref.noc_xy_encoding(receiver_virtual_core.x, receiver_virtual_core.y);
+        tt::tt_metal::MetalContext::instance().hal().noc_xy_encoding(receiver_virtual_core.x, receiver_virtual_core.y);
 
     // test parameters
     uint32_t packet_header_address = 0x25000;
@@ -219,7 +217,7 @@ TEST_F(Fabric1DFixture, TestUnicastConnAPI) {
     CoreCoord receiver_virtual_core = receiver_device->worker_core_from_logical_core(receiver_logical_core);
 
     auto receiver_noc_encoding =
-        tt::tt_metal::hal_ref.noc_xy_encoding(receiver_virtual_core.x, receiver_virtual_core.y);
+        tt::tt_metal::MetalContext::instance().hal().noc_xy_encoding(receiver_virtual_core.x, receiver_virtual_core.y);
 
     // test parameters
     uint32_t packet_header_address = 0x25000;
@@ -349,7 +347,7 @@ TEST_F(Fabric1DFixture, TestMCastConnAPI) {
     CoreCoord receiver_virtual_core = left_recv_device->worker_core_from_logical_core(receiver_logical_core);
 
     auto receiver_noc_encoding =
-        tt::tt_metal::hal_ref.noc_xy_encoding(receiver_virtual_core.x, receiver_virtual_core.y);
+        tt::tt_metal::MetalContext::instance().hal().noc_xy_encoding(receiver_virtual_core.x, receiver_virtual_core.y);
 
     // test parameters
     uint32_t packet_header_address = 0x25000;

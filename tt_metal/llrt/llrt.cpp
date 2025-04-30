@@ -7,7 +7,6 @@
 #include <fmt/base.h>
 #include <fmt/ranges.h>
 #include <logger.hpp>
-#include <rtoptions.hpp>
 #include <unistd.h>
 #include <cassert>
 #include <chrono>
@@ -24,9 +23,9 @@
 #include <unordered_map>
 #include <unordered_set>
 
+#include "impl/context/metal_context.hpp"
 #include "hal_types.hpp"
 #include "llrt.hpp"
-#include "llrt/hal.hpp"
 #include "metal_soc_descriptor.h"
 // #include <umd/device/driver_atomics.h> - This should be included as it is used here, but the file is missing include
 // guards
@@ -41,9 +40,7 @@ using std::uint16_t;
 using std::uint32_t;
 using std::uint64_t;
 
-ll_api::memory const& get_risc_binary(
-    string const& path,
-    ll_api::memory::Loading loading) {
+const ll_api::memory& get_risc_binary(std::string_view path, ll_api::memory::Loading loading) {
     static struct {
       std::unordered_map<std::string, std::unique_ptr<ll_api::memory const>> map;
       std::mutex mutex;
@@ -51,7 +48,7 @@ ll_api::memory const& get_risc_binary(
     } cache;
 
     std::unique_lock lock(cache.mutex);
-    auto [slot, inserted] = cache.map.try_emplace(path);
+    auto [slot, inserted] = cache.map.try_emplace(std::string(path));
     ll_api::memory const* ptr = nullptr;
     if (inserted) {
       // We're the first with PATH. Create and insert.
@@ -116,20 +113,11 @@ void write_launch_msg_to_core(chip_id_t chip, const CoreCoord core, launch_msg_t
     }
 }
 
-void print_worker_cores(chip_id_t chip_id) {
-    std::cout << std::endl << "worker cores: " << std::endl;
-    for (const CoreCoord& core : tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(chip_id).get_cores(
-             CoreType::TENSIX, CoordSystem::PHYSICAL)) {
-        std::cout << core.str() << " ";
-    }
-    std::cout << std::endl << std::endl;
-}
-
 ll_api::memory read_mem_from_core(chip_id_t chip, const CoreCoord &core, const ll_api::memory& mem, uint64_t local_init_addr) {
 
     ll_api::memory read_mem;
     read_mem.fill_from_mem_template(mem, [&](std::vector<uint32_t>::iterator mem_ptr, uint64_t addr, uint32_t len) {
-        uint64_t relo_addr = tt::tt_metal::hal_ref.relocate_dev_addr(addr, local_init_addr);
+        uint64_t relo_addr = tt::tt_metal::MetalContext::instance().hal().relocate_dev_addr(addr, local_init_addr);
         tt::tt_metal::MetalContext::instance().get_cluster().read_core(
             &*mem_ptr, len * sizeof(uint32_t), tt_cxy_pair(chip, core), relo_addr);
     });
@@ -147,14 +135,15 @@ bool test_load_write_read_risc_binary(
         tt::tt_metal::MetalContext::instance().get_cluster().is_worker_core(core, chip_id) or
         tt::tt_metal::MetalContext::instance().get_cluster().is_ethernet_core(core, chip_id));
 
-    uint64_t local_init_addr =
-        tt::tt_metal::hal_ref.get_jit_build_config(core_type_idx, processor_class_idx, processor_type_idx)
-            .local_init_addr;
-    auto core_type = tt::tt_metal::hal_ref.get_programmable_core_type(core_type_idx);
+    uint64_t local_init_addr = tt::tt_metal::MetalContext::instance()
+                                   .hal()
+                                   .get_jit_build_config(core_type_idx, processor_class_idx, processor_type_idx)
+                                   .local_init_addr;
+    auto core_type = tt::tt_metal::MetalContext::instance().hal().get_programmable_core_type(core_type_idx);
 
     log_debug(tt::LogLLRuntime, "hex_vec size = {}, size_in_bytes = {}", mem.size(), mem.size()*sizeof(uint32_t));
     mem.process_spans([&](std::vector<uint32_t>::const_iterator mem_ptr, uint64_t addr, uint32_t len_words) {
-        uint64_t relo_addr = tt::tt_metal::hal_ref.relocate_dev_addr(addr, local_init_addr);
+        uint64_t relo_addr = tt::tt_metal::MetalContext::instance().hal().relocate_dev_addr(addr, local_init_addr);
 
         tt::tt_metal::MetalContext::instance().get_cluster().write_core(
             &*mem_ptr, len_words * sizeof(uint32_t), tt_cxy_pair(chip_id, core), relo_addr);
@@ -207,7 +196,8 @@ static bool check_if_riscs_on_specified_core_done(chip_id_t chip_id, const CoreC
 
     tt_metal::HalProgrammableCoreType dispatch_core_type =  is_active_eth_core ? tt_metal::HalProgrammableCoreType::ACTIVE_ETH :
         is_inactive_eth_core ? tt_metal::HalProgrammableCoreType::IDLE_ETH : tt_metal::HalProgrammableCoreType::TENSIX;
-    uint64_t go_msg_addr = tt_metal::hal_ref.get_dev_addr(dispatch_core_type, tt_metal::HalL1MemAddrType::GO_MSG);
+    uint64_t go_msg_addr =
+        tt_metal::MetalContext::instance().hal().get_dev_addr(dispatch_core_type, tt_metal::HalL1MemAddrType::GO_MSG);
 
     auto get_mailbox_is_done = [&](uint64_t go_msg_addr) {
         constexpr int RUN_MAILBOX_BOGUS = 3;
@@ -236,7 +226,8 @@ void wait_until_cores_done(
     // poll the cores until the set of not done cores is empty
     int loop_count = 1;
     auto start = std::chrono::high_resolution_clock::now();
-    bool is_simulator = llrt::RunTimeOptions::get_instance().get_simulator_enabled();
+    const auto& rtoptions = tt_metal::MetalContext::instance().rtoptions();
+    bool is_simulator = rtoptions.get_simulator_enabled();
 
     if (is_simulator) timeout_ms = 0;
     while (!not_done_phys_cores.empty()) {
@@ -280,9 +271,9 @@ void wait_until_cores_done(
         // Continuously polling cores here can cause other host-driven noc transactions (dprint, watcher) to drastically
         // slow down for remote devices. So when debugging with these features, add a small delay to allow other
         // host-driven transactions through.
-        if (llrt::RunTimeOptions::get_instance().get_watcher_enabled() ||
-            llrt::RunTimeOptions::get_instance().get_feature_enabled(tt::llrt::RunTimeDebugFeatureDprint))
+        if (rtoptions.get_watcher_enabled() || rtoptions.get_feature_enabled(tt::llrt::RunTimeDebugFeatureDprint)) {
             std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        }
     }
 }
 

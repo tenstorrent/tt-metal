@@ -29,10 +29,9 @@
 #include "host_api.hpp"
 #include "logger.hpp"
 #include "profiler_types.hpp"
-#include "rtoptions.hpp"
-#include "span.hpp"
+#include <tt_stl/span.hpp>
 #include "impl/context/metal_context.hpp"
-#include <tt_metal.hpp>
+#include <tt-metalium/fabric.hpp>
 #include "tt_metal/fabric/fabric_host_utils.hpp"
 #include "tt_metal/impl/debug/noc_logging.hpp"
 #include "tt_metal/impl/debug/watcher_server.hpp"
@@ -179,7 +178,7 @@ void bind_current_thread_to_free_cores(const std::unordered_set<uint32_t>& free_
 
 DevicePool* DevicePool::_inst = nullptr;
 
-void DevicePool::init_profiler_devices() const {
+void DevicePool::init_profiler() const {
 #if defined(TRACY_ENABLE)
     for (const auto& dev : this->get_all_active_devices()) {
         // For Galaxy init, we only need to loop over mmio devices
@@ -218,7 +217,12 @@ void DevicePool::initialize(
     size_t trace_region_size,
     const DispatchCoreConfig& dispatch_core_config,
     tt::stl::Span<const std::uint32_t> l1_bank_remap,
-    size_t worker_l1_size) noexcept {
+    size_t worker_l1_size,
+    bool init_profiler,
+    bool use_max_eth_core_count_on_all_devices,
+    bool initialize_fabric_and_dispatch_fw) noexcept {
+    // Issue #19729: use_max_eth_core_count_on_all_devices is a workaround
+    // to allow TT-Mesh Workload dispatch to target active ethernet cores.
     ZoneScoped;
     log_debug(tt::LogMetal, "DevicePool initialize");
     tt::tt_metal::MetalContext::instance().initialize(
@@ -233,6 +237,8 @@ void DevicePool::initialize(
     _inst->worker_l1_size = worker_l1_size;
     _inst->num_hw_cqs = num_hw_cqs;
     _inst->l1_bank_remap.assign(l1_bank_remap.begin(), l1_bank_remap.end());
+    _inst->init_profiler_ = init_profiler;
+    _inst->initialize_fabric_and_dispatch_fw_ = initialize_fabric_and_dispatch_fw;
     // Track the thread where the Device Pool was created. Certain functions
     // modifying the state of this instance, for example those responsible for
     // (un)registering worker threads, can only be called in the creation thread
@@ -262,14 +268,16 @@ void DevicePool::initialize(
     }
 
     _inst->skip_remote_devices = skip;
-
+    _inst->use_max_eth_core_count_on_all_devices_ = use_max_eth_core_count_on_all_devices;
     _inst->add_devices_to_pool(device_ids);
-    _inst->init_firmware_on_active_devices();
-
     tt::tt_metal::MetalContext::instance().get_cluster().set_internal_routing_info_for_ethernet_cores(
         true, target_mmio_ids);
-    _inst->wait_for_fabric_router_sync();
-    _inst->init_profiler_devices();
+    _inst->init_firmware_on_active_devices();
+}
+
+void DevicePool::initialize_fabric_and_dispatch_fw() const {
+    this->initialize_active_devices();
+    this->wait_for_fabric_router_sync();
 }
 
 void DevicePool::initialize_host(IDevice* dev) const {
@@ -290,7 +298,7 @@ void DevicePool::initialize_host(IDevice* dev) const {
     watcher_init(dev->id());
 
     // TODO: as optimization, investigate removing all this call for already initialized devivces
-    if (!llrt::RunTimeOptions::get_instance().get_skip_reset_cores_on_init()) {
+    if (!tt_metal::MetalContext::instance().rtoptions().get_skip_reset_cores_on_init()) {
         dev->reset_cores();
     }
     dev->initialize_and_launch_firmware();
@@ -304,6 +312,7 @@ void DevicePool::initialize_active_devices() const {
     // Activate fabric (must be before FD)
     FabricConfig fabric_config = tt::tt_metal::MetalContext::instance().get_cluster().get_fabric_config();
     if (tt_fabric::is_1d_fabric_config(fabric_config) || tt_fabric::is_2d_fabric_config(fabric_config)) {
+        log_info(tt::LogMetal, "Initializing Fabric");
         if (tt_fabric::is_2d_fabric_config(fabric_config)) {
             // write routing tables to all ethernet cores
             tt::tt_metal::MetalContext::instance()
@@ -316,6 +325,7 @@ void DevicePool::initialize_active_devices() const {
         for (const auto& dev : active_devices) {
             dev->init_fabric();
         }
+        log_info(tt::LogMetal, "Fabric Initialized");
     }
 
     // Activate FD kernels
@@ -445,6 +455,27 @@ void DevicePool::add_devices_to_pool(const std::vector<chip_id_t>& device_ids) {
             this->activate_device(device_id);
         }
     }
+    // Issue #19729: Workaround to allow TT-Mesh Workload dispatch to target active ethernet cores.
+    // Record the maximum number of active ethernet cores across all devices.
+    // TT-Mesh dispatch assumes that all physical devices in the Mesh have the maximum number of active
+    // ethernet cores (uniformity assumption)
+    // Dispatch firmware running on each physical device knows how many ethernet cores are actually
+    // available and will dispatch to/wait on the correct number of cores (effectively ignoring the
+    // value host dispatch provides, if its incorrect).
+    if (use_max_eth_core_count_on_all_devices_) {
+        std::size_t max_eth_core_count = 0;
+        for (const auto& device : this->devices) {
+            max_eth_core_count = std::max(
+                MetalContext::instance()
+                    .get_cluster()
+                    .get_active_ethernet_cores(device->id(), /*skip_reserved_tunnel_cores*/ true)
+                    .size(),
+                max_eth_core_count);
+        }
+        for (auto& device : this->devices) {
+            dynamic_cast<Device*>(device.get())->set_ethernet_core_count_on_dispatcher(max_eth_core_count);
+        }
+    }
 
     FabricConfig fabric_config = tt::tt_metal::MetalContext::instance().get_cluster().get_fabric_config();
     // Only can launch Fabric if all devices are active
@@ -466,18 +497,20 @@ void DevicePool::add_devices_to_pool(const std::vector<chip_id_t>& device_ids) {
 void DevicePool::wait_for_fabric_router_sync() const {
     FabricConfig fabric_config = tt::tt_metal::MetalContext::instance().get_cluster().get_fabric_config();
     if (tt_fabric::is_1d_fabric_config(fabric_config)) {
+        auto control_plane = tt::tt_metal::MetalContext::instance().get_cluster().get_control_plane();
         const auto edm_config = tt_fabric::get_1d_fabric_config();
         std::vector<uint32_t> signal(1, tt::tt_fabric::EDMStatus::READY_FOR_TRAFFIC);
 
         auto wait_for_handshake = [&](IDevice* dev) {
             std::vector<std::uint32_t> master_router_status{0};
-            auto fabric_ethernet_channels =
-                tt::tt_metal::MetalContext::instance().get_cluster().get_fabric_ethernet_channels(dev->id());
-            if (fabric_ethernet_channels.empty()) {
+            auto [mesh_id, chip_id] = control_plane->get_mesh_chip_id_from_physical_chip_id(dev->id());
+
+            auto router_chans_and_direction = control_plane->get_active_fabric_eth_channels(mesh_id, chip_id);
+            if (router_chans_and_direction.empty()) {
                 return;
             }
 
-            tt_fabric::chan_id_t fabric_master_router_chan = *(fabric_ethernet_channels.begin());
+            tt_fabric::chan_id_t fabric_master_router_chan = router_chans_and_direction.begin()->first;
             CoreCoord virtual_eth_core =
                 tt::tt_metal::MetalContext::instance().get_cluster().get_virtual_eth_core_from_channel(
                     dev->id(), fabric_master_router_chan);
@@ -517,30 +550,25 @@ void DevicePool::wait_for_fabric_router_sync() const {
             }
         }
     } else if (tt_fabric::is_2d_fabric_config(fabric_config)) {
-        auto fabric_router_sync_sem_addr =
-            hal_ref.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::UNRESERVED);
+        auto control_plane = tt::tt_metal::MetalContext::instance().get_cluster().get_control_plane();
+        auto fabric_router_sync_sem_addr = tt::tt_metal::hal::get_erisc_l1_unreserved_base();
 
         std::vector<std::uint32_t> master_router_status{0};
         for (const auto& dev : this->get_all_active_devices()) {
-            auto fabric_ethernet_channels =
-                tt::tt_metal::MetalContext::instance().get_cluster().get_fabric_ethernet_channels(dev->id());
-            if (fabric_ethernet_channels.empty()) {
-                continue;
+            auto [mesh_id, chip_id] = control_plane->get_mesh_chip_id_from_physical_chip_id(dev->id());
+
+            auto router_chans_and_direction = control_plane->get_active_fabric_eth_channels(mesh_id, chip_id);
+            if (router_chans_and_direction.empty()) {
+                return;
             }
 
-            tt_fabric::chan_id_t fabric_master_router_chan = *(fabric_ethernet_channels.begin());
+            tt_fabric::chan_id_t fabric_master_router_chan = router_chans_and_direction.begin()->first;
             CoreCoord virtual_eth_core =
                 tt::tt_metal::MetalContext::instance().get_cluster().get_virtual_eth_core_from_channel(
                     dev->id(), fabric_master_router_chan);
             auto fabric_master_router_core = dev->logical_core_from_ethernet_core(virtual_eth_core);
 
-            auto [mesh_id, chip_id] = tt::tt_metal::MetalContext::instance()
-                                          .get_cluster()
-                                          .get_control_plane()
-                                          ->get_mesh_chip_id_from_physical_chip_id(dev->id());
-            auto num_routers =
-                tt::tt_metal::MetalContext::instance().get_cluster().get_control_plane()->get_num_active_fabric_routers(
-                    mesh_id, chip_id);
+            auto num_routers = router_chans_and_direction.size();
             while (master_router_status[0] != num_routers) {
                 tt_metal::detail::ReadFromDeviceL1(
                     dev,
@@ -628,7 +656,12 @@ void DevicePool::init_firmware_on_active_devices() const {
         }
     }
 
-    this->initialize_active_devices();
+    if (init_profiler_) {
+        this->init_profiler();
+    }
+    if (initialize_fabric_and_dispatch_fw_) {
+        this->initialize_fabric_and_dispatch_fw();
+    }
 }
 
 DevicePool::DevicePool() {
@@ -674,7 +707,6 @@ bool DevicePool::close_device(chip_id_t device_id) {
     // Currently can only call this on mmio chips, once we split dispatch kernel shutdown
     // from device close, we can call this on remote devices too
     ZoneScoped;
-    detail::ProfilerSync(ProfilerSyncState::CLOSE_DEVICE);
     tt::tt_metal::MetalContext::instance().get_cluster().set_internal_routing_info_for_ethernet_cores(false);
     bool pass = true;
     const auto& mmio_device_id =
@@ -690,12 +722,11 @@ bool DevicePool::close_device(chip_id_t device_id) {
     return pass;
 }
 
-void DevicePool::close_devices(const std::vector<IDevice*>& devices) {
+void DevicePool::close_devices(const std::vector<IDevice*>& devices, bool skip_synchronize) {
     // Ordered, because we need to shutdown tunnels from the farthest to the closest.
     std::vector<chip_id_t> devices_to_close;
 
     ZoneScoped;
-    detail::ProfilerSync(ProfilerSyncState::CLOSE_DEVICE);
     // Loop over all devices and add remote devices to devices_to_close
     // For Galaxy if an mmio device's tunnels are being closed, close the mmio device as well
     std::unordered_set<chip_id_t> mmio_devices_to_close;
@@ -728,18 +759,19 @@ void DevicePool::close_devices(const std::vector<IDevice*>& devices) {
     // the main thread will modify device state while the CCL is running on device.
     // On TG - this should not be done on MMIO mapped devices, since we don't run
     // any workloads on them
-    for (const auto& dev_id : devices_to_close) {
-        auto dev = tt::DevicePool::instance().get_active_device(dev_id);
-        if (tt::tt_metal::MetalContext::instance().get_cluster().is_galaxy_cluster() and dev->is_mmio_capable()) {
-            continue;
+    if (!skip_synchronize) {
+        for (const auto& dev_id : devices_to_close) {
+            auto dev = tt::DevicePool::instance().get_active_device(dev_id);
+            if (tt::tt_metal::MetalContext::instance().get_cluster().is_galaxy_cluster() and dev->is_mmio_capable()) {
+                continue;
+            }
+            Synchronize(dev);    // Synchronize device
         }
-        dev->synchronize();  // Synchronize worker queue
-        Synchronize(dev);    // Synchronize device
     }
-
     // Terminate fabric routers
     FabricConfig fabric_config = tt::tt_metal::MetalContext::instance().get_cluster().get_fabric_config();
     if (tt_fabric::is_1d_fabric_config(fabric_config)) {
+        auto control_plane = tt::tt_metal::MetalContext::instance().get_cluster().get_control_plane();
         std::vector<uint32_t> signal(1, tt::tt_fabric::TerminationSignal::IMMEDIATELY_TERMINATE);
         static constexpr std::size_t edm_buffer_size =
             tt::tt_fabric::FabricEriscDatamoverBuilder::default_packet_payload_size_bytes +
@@ -753,14 +785,15 @@ void DevicePool::close_devices(const std::vector<IDevice*>& devices) {
                 // 1d fabric is not launched on TG gateways
                 continue;
             }
+            auto [mesh_id, chip_id] = control_plane->get_mesh_chip_id_from_physical_chip_id(dev->id());
 
-            auto fabric_ethernet_channels =
-                tt::tt_metal::MetalContext::instance().get_cluster().get_fabric_ethernet_channels(dev->id());
-            if (fabric_ethernet_channels.empty()) {
+            auto router_chans_and_direction = control_plane->get_active_fabric_eth_channels(mesh_id, chip_id);
+            if (router_chans_and_direction.empty()) {
                 continue;
             }
 
-            tt_fabric::chan_id_t fabric_master_router_chan = *(fabric_ethernet_channels.begin());
+            tt_fabric::chan_id_t fabric_master_router_chan = router_chans_and_direction.begin()->first;
+
             CoreCoord virtual_eth_core =
                 tt::tt_metal::MetalContext::instance().get_cluster().get_virtual_eth_core_from_channel(
                     dev->id(), fabric_master_router_chan);
@@ -769,17 +802,18 @@ void DevicePool::close_devices(const std::vector<IDevice*>& devices) {
                 dev, fabric_master_router_core, fabric_router_sync_sem_addr, signal, CoreType::ETH);
         }
     } else if (tt_fabric::is_2d_fabric_config(fabric_config)) {
+        auto control_plane = tt::tt_metal::MetalContext::instance().get_cluster().get_control_plane();
         std::vector<uint32_t> master_router_terminate(1, 0);
-        auto fabric_router_sync_sem_addr =
-            hal_ref.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::UNRESERVED);
+        auto fabric_router_sync_sem_addr = tt::tt_metal::hal::get_erisc_l1_unreserved_base();
         for (const auto& dev : this->get_all_active_devices()) {
-            auto fabric_ethernet_channels =
-                tt::tt_metal::MetalContext::instance().get_cluster().get_fabric_ethernet_channels(dev->id());
-            if (fabric_ethernet_channels.empty()) {
+            auto [mesh_id, chip_id] = control_plane->get_mesh_chip_id_from_physical_chip_id(dev->id());
+
+            auto router_chans_and_direction = control_plane->get_active_fabric_eth_channels(mesh_id, chip_id);
+            if (router_chans_and_direction.empty()) {
                 continue;
             }
 
-            tt_fabric::chan_id_t fabric_master_router_chan = *(fabric_ethernet_channels.begin());
+            tt_fabric::chan_id_t fabric_master_router_chan = router_chans_and_direction.begin()->first;
             CoreCoord virtual_eth_core =
                 tt::tt_metal::MetalContext::instance().get_cluster().get_virtual_eth_core_from_channel(
                     dev->id(), fabric_master_router_chan);
@@ -788,6 +822,8 @@ void DevicePool::close_devices(const std::vector<IDevice*>& devices) {
                 dev, fabric_master_router_core, fabric_router_sync_sem_addr, master_router_terminate, CoreType::ETH);
         }
     }
+
+    detail::ProfilerSync(ProfilerSyncState::CLOSE_DEVICE);
 
     tt::tt_metal::MetalContext::instance().get_cluster().set_internal_routing_info_for_ethernet_cores(false);
     for (const auto& dev_id : devices_to_close) {

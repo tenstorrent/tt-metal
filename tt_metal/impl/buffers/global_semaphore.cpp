@@ -4,7 +4,7 @@
 
 #include <assert.hpp>
 #include <buffer.hpp>
-#include <buffer_constants.hpp>
+#include <buffer_types.hpp>
 #include <core_coord.hpp>
 #include <device.hpp>
 #include <global_semaphore.hpp>
@@ -18,7 +18,7 @@
 #include <vector>
 
 #include "mesh_device.hpp"
-#include "reflection.hpp"
+#include <tt_stl/reflection.hpp>
 #include "impl/context/metal_context.hpp"
 
 namespace tt::tt_metal {

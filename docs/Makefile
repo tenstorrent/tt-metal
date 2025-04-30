@@ -14,6 +14,9 @@ TTNN_BUILDDIR	= $(BUILDDIR)/ttnn
 PORT          	?= 8888
 DOCS_VERSION       	?= latest
 
+# register_python_operation doesn't load the doc string when fast_runtime_mode is enabled.
+# disable fast_runtime_mode to enable loading the doc string.
+TTNN_FLAGS      = TTNN_CONFIG_OVERRIDES='{"enable_fast_runtime_mode": false}'
 GITHUB_TOKEN    ?= INSERT_TOKEN_HERE
 TTNN_API_DIR    = source/ttnn/ttnn/api
 
@@ -33,7 +36,7 @@ clean:
 	@rm -rf $(TTNN_API_DIR)
 
 build_doxygen: clean
-	@cd .. && doxygen
+	@cd .. && doxygen docs/Doxyfile
 
 sphinx_build_dir: clean
 	@mkdir -p $(BUILDDIR)
@@ -42,7 +45,7 @@ html/tt-metalium: build_doxygen sphinx_build_dir
 	@DOCS_VERSION=$(DOCS_VERSION) REQUESTED_DOCS_PKG=tt-metalium $(SPHINXBUILD) "$(SOURCEDIR)/tt-metalium" "$(TT_METALIUM_BUILDDIR)" $(SPHINXOPTS) $(O)
 
 html/ttnn: build_doxygen sphinx_build_dir
-	@DOCS_VERSION=$(DOCS_VERSION) REQUESTED_DOCS_PKG=ttnn $(SPHINXBUILD) "$(SOURCEDIR)/ttnn" "$(TTNN_BUILDDIR)" $(SPHINXOPTS) $(O)
+	@ ${TTNN_FLAGS} DOCS_VERSION=$(DOCS_VERSION) REQUESTED_DOCS_PKG=ttnn $(SPHINXBUILD) "$(SOURCEDIR)/ttnn" "$(TTNN_BUILDDIR)" $(SPHINXOPTS) $(O)
 
 html: html/tt-metalium html/ttnn
 	mkdir -p $(HTMLDIR)

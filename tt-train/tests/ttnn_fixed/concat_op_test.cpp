@@ -24,7 +24,6 @@ protected:
 
 TEST_F(ConcatOpTest, TestConcatLastDim) {
     auto* device = &ttml::autograd::ctx().get_device();
-    device->enable_async(true);
     auto N = 1;
     auto C = 1;
     auto H = 12;

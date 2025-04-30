@@ -572,7 +572,7 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(device->arch(), compute_kernel_config);
 
-    if (dst_full_sync_en == false) {
+    if (!dst_full_sync_en) {
         if (fp32_dest_acc_en) {
             TT_FATAL(
                 subblock_wt <= 4,
@@ -1487,7 +1487,7 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
             tt::tt_metal::CreateCircularBuffer(program, all_worker_and_storage_cores, output_reshard_cb_config);
     }
 
-    const auto& cores = corerange_to_cores(all_cores, all_cores.num_cores(), row_wise = row_wise);
+    const auto& cores = corerange_to_cores(all_cores, all_cores.num_cores(), row_wise);
 
     // Runtime Args
     std::vector<KernelHandle> writer_kernel_ids;
@@ -1657,10 +1657,9 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
             std::vector<uint32_t> mcast_receiver_args;
             bool is_last_all_to_all_worker;
             if (use_two_stage_reduce) {
-                is_last_all_to_all_worker =
-                    width_index_two_stage == num_cores_all_to_all_first_stage - 1 ? true : false;
+                is_last_all_to_all_worker = width_index_two_stage == num_cores_all_to_all_first_stage - 1;
             } else {
-                is_last_all_to_all_worker = width_index == num_cores_all_to_all - 1 ? true : false;
+                is_last_all_to_all_worker = width_index == num_cores_all_to_all - 1;
             }
             mcast_receiver_args.push_back(is_last_all_to_all_worker);
             mcast_receiver_args.push_back(all_to_all_worker_tile_offset_size_bytes);

@@ -47,7 +47,6 @@ def test_tensor_parallel_falcon_mlp():
     mesh_device = ttnn.open_mesh_device(
         ttnn.MeshShape(2, 4),
     )
-    mesh_device.enable_async(True)
 
     # Set PyTorch seed for reproducibility
     torch.manual_seed(0)

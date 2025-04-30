@@ -75,11 +75,11 @@ class MathFidelitySetting(Enum):
 
 class ModelOptimizations:
     @classmethod
-    def accuracy(cls, model_name=None):
+    def accuracy(cls, model_name):
         """Configuration optimized for accuracy
         Only 70B models uses bfp4 MLPs in this configuration
         """
-        if model_name in ["Llama3.1-70B", "DeepSeek-R1-Distill-Llama-70B", "Qwen2.5-72B"]:
+        if model_name in ["Llama3.1-70B", "Llama3.2-90B-Instruct", "DeepSeek-R1-Distill-Llama-70B", "Qwen2.5-72B"]:
             inst = ModelOptimizations.performance(model_name)
         else:
             inst = cls()
@@ -87,7 +87,7 @@ class ModelOptimizations:
         return inst
 
     @classmethod
-    def performance(cls, model_name=None):
+    def performance(cls, model_name):
         """Configuration optimized for performance
         All models use bfp4 in FF1 and FF3 MLPs in this configuration
         """
@@ -238,7 +238,7 @@ def parse_optimizations(string):
     model_opt = ModelOptimizations(settings)
 
     def apply_settings(model_args):
-        return DecodersPrecision(model_args.n_layers, model_opt)
+        return DecodersPrecision(model_args.n_layers, model_args.model_name, model_opt)
 
     apply_settings.__name__ = model_opt.__name__
     return apply_settings
@@ -263,7 +263,7 @@ def parse_decoder_json(json_file_path):
             raise ValueError("Invalid JSON format: Missing 'decoders' key")
 
         num_decoders = max(int(decoder_id) for decoder_id in config_data["decoders"].keys()) + 1
-        decoders_precision = DecodersPrecision(num_decoders)
+        decoders_precision = DecodersPrecision(num_decoders, "model")
 
         for decoder_id, settings in config_data["decoders"].items():
             decoder_id = int(decoder_id)
@@ -322,6 +322,7 @@ class ModelArgs:
         "LLAMA3_1_8B_PARAMS": "models/tt_transformers/model_params/Llama3.1-8B-Instruct",
         "LLAMA3_2_11B_PARAMS": "models/tt_transformers/model_params/Llama3.2-11B-Vision-Instruct",
         "LLAMA3_1_70B_PARAMS": "models/tt_transformers/model_params/Llama3.1-70B-Instruct",
+        "LLAMA3_2_90B_PARAMS": "models/tt_transformers/model_params/Llama3.2-90B-Vision-Instruct",
     }
 
     def __init__(
@@ -349,6 +350,7 @@ class ModelArgs:
         self.max_batch_size = max_batch_size
         self.tile_size = 32
         self.is_70b = False
+        self.is_90b = False
         self.from_hf_url = False  # updated below if true
         self.prefill_len_cutoff = 512 if self.arch_name == "blackhole" else 1024
         # TODO the following is parametrized for a vocab size of 128256 (used in LLama3). Should generalize for other models
@@ -431,6 +433,8 @@ class ModelArgs:
                 local_params = "LLAMA3_2_11B_PARAMS"
             elif "3.1-70B" in self.CKPT_DIR:
                 local_params = "LLAMA3_1_70B_PARAMS"
+            elif "3.2-90B" in self.CKPT_DIR:
+                local_params = "LLAMA3_2_90B_PARAMS"
             else:
                 raise ValueError(
                     f"No local params found for {self.CKPT_DIR}, dummy weights are not supported for this model"
@@ -447,6 +451,7 @@ class ModelArgs:
                 "Llama3.1-8B": {"N150": 4, "N300": 64, "T3K": 128, "TG": 128, "P150x4": 128},
                 "Llama3.2-11B": {"N150": 4, "N300": 64, "T3K": 128, "TG": 128, "P150x4": 128},
                 "Llama3.1-70B": {"N150": None, "N300": None, "T3K": 32, "TG": 128, "P150x4": 128},
+                "Llama3.2-90B": {"N150": None, "N300": None, "T3K": 32, "TG": 128, "P150x4": 128},
                 "DeepSeek-R1-Distill-Llama-70B": {"N150": None, "N300": None, "T3K": 32, "TG": 128, "P150x4": 128},
                 "Qwen2.5-7B": {"N150": 4, "N300": 64, "T3K": 128, "TG": 128, "P150x4": 128},
                 "Qwen2.5-72B": {"N150": None, "N300": None, "T3K": 32, "TG": 128, "P150x4": 128},
@@ -559,7 +564,7 @@ class ModelArgs:
 
             # Configure data precision and math fidelity for tensors and kernels
             if self.optimizations is None:
-                self.optimizations = DecodersPrecision(num_decoders=self.n_layers)
+                self.optimizations = DecodersPrecision.accuracy(num_decoders=self.n_layers, model_name=self.model_name)
             self.model_config["DECODERS_OPTIMIZATIONS"] = self.optimizations
 
             # Create memory config for sharded tensors
@@ -834,8 +839,8 @@ class ModelArgs:
             # glx doesn't support DRAM sharded matmuls yet
             self.model_config["XQKV_DECODE_PROGCFG"] = (
                 ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-                    compute_with_storage_grid_size=(8, 5 if self.is_70b else lm_head_num_rows),
-                    in0_block_w=2 if self.is_70b else 1,
+                    compute_with_storage_grid_size=(8, 5 if self.is_70b or self.is_90b else lm_head_num_rows),
+                    in0_block_w=2 if self.is_70b or self.is_90b else 1,
                     out_subblock_h=1,
                     out_subblock_w=1,
                     per_core_M=1,
@@ -1351,6 +1356,10 @@ class ModelArgs:
             self.model_name = "Llama3.1-70B" + ("-Instruct" if self.instruct else "")
             self.rope_scaling_factor = 8
             self.is_70b = True  # self.dim == 8192 and self.n_layers == 80
+        elif "3.2-90B" in checkpoint_dir:
+            self.model_name = "Llama3.2-90B" + ("-Instruct" if self.instruct else "")
+            self.rope_scaling_factor = 8
+            self.is_90b = True
         else:
             logger.warning(f"Unknown Meta-style model: {checkpoint_dir}")
         self.orig_context_len = 8192
@@ -2084,18 +2093,20 @@ class HfModelWrapper:
 
 class DecodersPrecision:
     @classmethod
-    def accuracy(cls, num_decoders):
-        inst = cls(num_decoders, ModelOptimizations.accuracy())
+    def accuracy(cls, num_decoders, model_name):
+        inst = cls(num_decoders, model_name, ModelOptimizations.accuracy(model_name))
         inst.__name__ = "accuracy"
         return inst
 
     @classmethod
-    def performance(cls, num_decoders):
-        inst = cls(num_decoders, ModelOptimizations.performance())
+    def performance(cls, num_decoders, model_name):
+        inst = cls(num_decoders, model_name, ModelOptimizations.performance(model_name))
         inst.__name__ = "performance"
         return inst
 
-    def __init__(self, num_decoders, decoder_conf: dict = ModelOptimizations.accuracy()):
+    def __init__(self, num_decoders, model_name, decoder_conf: dict = None):
+        if decoder_conf is None:
+            decoder_conf = ModelOptimizations.accuracy(model_name)
         self.decoder_optimizations = {decoder_id: decoder_conf for decoder_id in range(num_decoders)}
         self._update_full_name()
 

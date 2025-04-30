@@ -277,7 +277,6 @@ SliceWriteRuntimeArgs get_slice_write_runtime_args_rm_sharded_input(
             core_w_index = rm_orientation ? core.x : core.y;
             core_h_index = rm_orientation ? core.y : core.x;
         }
-        tt::log_debug(" Core : {}", core);
         const uint32_t num_sticks_read = core_h_index * num_sticks_per_core;
         const uint32_t width_offset = core_w_index * input_row_size_bytes;
 
@@ -291,8 +290,6 @@ SliceWriteRuntimeArgs get_slice_write_runtime_args_rm_sharded_input(
         }
         std::vector<uint32_t> writer_kernel_args = common_writer_kernel_args;
         writer_kernel_args[0] += width_offset;
-        tt::log_debug("Output address: {}", writer_kernel_args[0]);
-        tt::log_debug("Output Start ID: {}\n", start_id);
 
         uint32_t addr_offset = 5;  // output buffer addr, output_row_size_bytes, input_row_size_bytes, num_dims
         writer_kernel_args[addr_offset++] = start_id;
@@ -389,7 +386,7 @@ operation::ProgramWithCallbacks slice_write_rm_sharded_input_multi_core(
 
     auto input_cb_handle = tt::tt_metal::CreateCircularBuffer(program, input_cores, cb_src0_config);
 
-    bool dst_is_dram = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
+    bool dst_is_dram = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
 
     std::vector<uint32_t> reader_compile_time_args = {(std::uint32_t)src0_cb_index};
     std::vector<uint32_t> writer_compile_time_args_vec = {(std::uint32_t)src0_cb_index, (std::uint32_t)dst_is_dram};
@@ -483,9 +480,9 @@ operation::ProgramWithCallbacks slice_write_rm_interleaved_multi_core(
     tt::tt_metal::Buffer* dst_buffer = output.buffer();
     TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
 
-    bool src0_is_dram = src0_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
+    bool src0_is_dram = src0_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
 
-    bool dst_is_dram = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
+    bool dst_is_dram = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
 
     uint32_t src_stick_size = input_row_size_bytes;
     uint32_t dst_stick_size = output_row_size_bytes;

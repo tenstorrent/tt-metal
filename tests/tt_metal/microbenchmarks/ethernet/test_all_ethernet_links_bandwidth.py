@@ -77,7 +77,8 @@ def run_erisc_write_worker_bw(
 @pytest.mark.parametrize("packet_size", [16, 128, 256, 512, 1024, 2048, 4096, 8192])
 def test_erisc_bw_uni_dir(num_packets, packet_size, channel_count, num_iterations, request):
     packet_size_to_expected_bw = {
-        "wormhole_b0": {16: 0.28, 128: 2.25, 256: 4.39, 512: 8.35, 1024: 11.74, 2048: 11.84, 4096: 12.04, 8192: 12.07}
+        "wormhole_b0": {16: 0.28, 128: 2.25, 256: 4.39, 512: 8.35, 1024: 11.74, 2048: 11.84, 4096: 12.04, 8192: 12.07},
+        "blackhole": {16: 0.11, 128: 0.97, 256: 1.88, 512: 3.65, 1024: 7.27, 2048: 12.97, 4096: 19.71, 8192: 24.16},
     }
     benchmark_type_id = 0
     disable_trid = 0  # don't care in this case
@@ -109,7 +110,16 @@ def test_erisc_bw_bi_dir(num_packets, packet_size, channel_count, num_iterations
             1024: 10.9,
             2048: 11.4,
             4096: 11.82,
-        }
+        },
+        "blackhole": {
+            16: 0.24,
+            128: 1.94,
+            256: 3.88,
+            512: 7.75,
+            1024: 15.46,
+            2048: 12.89,
+            4096: 18.75,
+        },
     }
     benchmark_type_id = 1
     disable_trid = 0  # don't care in this case
@@ -135,7 +145,8 @@ def test_erisc_bw_bi_dir(num_packets, packet_size, channel_count, num_iterations
 @pytest.mark.parametrize("packet_size", [16, 128, 256, 512, 1024, 2048, 4096, 8192])
 def test_erisc_write_worker_bw_uni_dir(num_packets, packet_size, channel_count, disable_trid, num_iterations, request):
     packet_size_to_expected_bw = {
-        "wormhole_b0": {16: 0.21, 128: 1.72, 256: 3.44, 512: 6.89, 1024: 11.73, 2048: 11.83, 4096: 12.04, 8192: 12.07}
+        "wormhole_b0": {16: 0.21, 128: 1.72, 256: 3.44, 512: 6.89, 1024: 11.73, 2048: 11.83, 4096: 12.04, 8192: 12.07},
+        "blackhole": {16: 0.11, 128: 0.84, 256: 1.61, 512: 3.41, 1024: 6.52, 2048: 11.70, 4096: 19.10, 8192: 23.97},
     }
     benchmark_type_id = 2
     run_erisc_write_worker_bw(
@@ -159,7 +170,8 @@ def test_erisc_write_worker_bw_uni_dir(num_packets, packet_size, channel_count, 
 @pytest.mark.parametrize("packet_size", [16, 128, 256, 512, 1024, 2048, 4096])
 def test_erisc_write_worker_bw_bi_dir(num_packets, packet_size, channel_count, disable_trid, num_iterations, request):
     packet_size_to_expected_bw = {
-        "wormhole_b0": {16: 0.13, 128: 1.03, 256: 2.08, 512: 4.15, 1024: 8.31, 2048: 11.40, 4096: 11.82}
+        "wormhole_b0": {16: 0.13, 128: 1.03, 256: 2.08, 512: 4.15, 1024: 8.31, 2048: 11.40, 4096: 11.82},
+        "blackhole": {16: 0.16, 128: 1.35, 256: 2.69, 512: 5.39, 1024: 10.79, 2048: 21.47, 4096: 18.70},
     }
     benchmark_type_id = 3
     run_erisc_write_worker_bw(
@@ -186,7 +198,8 @@ def test_erisc_write_worker_bw_uni_dir_no_trid(
     num_packets, packet_size, channel_count, disable_trid, num_iterations, request
 ):
     packet_size_to_expected_bw = {
-        "wormhole_b0": {16: 0.18, 128: 1.71, 256: 3.81, 512: 7.72, 1024: 11.32, 2048: 11.83, 4096: 12.04, 8192: 12.07}
+        "wormhole_b0": {16: 0.18, 128: 1.71, 256: 3.81, 512: 7.72, 1024: 11.32, 2048: 11.83, 4096: 12.04, 8192: 12.07},
+        "blackhole": {16: 0.11, 128: 0.90, 256: 1.82, 512: 3.71, 1024: 7.37, 2048: 12.62, 4096: 20.04, 8192: 24.09},
     }
     benchmark_type_id = 2
     run_erisc_write_worker_bw(
@@ -220,7 +233,16 @@ def test_erisc_write_worker_bw_bi_dir_no_trid(
             1024: 9.43,
             2048: 11.00,
             4096: 11.82,
-        }
+        },
+        "blackhole": {
+            16: 0.20,
+            128: 1.60,
+            256: 3.24,
+            512: 6.49,
+            1024: 12.95,
+            2048: 14.46,
+            4096: 19.02,
+        },
     }
     benchmark_type_id = 3
     run_erisc_write_worker_bw(

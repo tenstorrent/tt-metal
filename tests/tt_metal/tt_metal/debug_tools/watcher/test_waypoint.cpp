@@ -17,7 +17,7 @@
 #include <vector>
 
 #include <tt-metalium/buffer.hpp>
-#include <tt-metalium/buffer_constants.hpp>
+#include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/data_types.hpp>
 #include "debug_tools_fixture.hpp"
@@ -25,7 +25,7 @@
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/program.hpp>
-#include "span.hpp"
+#include <tt_stl/span.hpp>
 #include "impl/context/metal_context.hpp"
 #include "umd/device/types/arch.h"
 #include "umd/device/types/xy_pair.h"
@@ -40,7 +40,7 @@ using namespace tt::tt_metal;
 
 namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {
-static void RunTest(WatcherFixture* fixture, IDevice* device) {
+void RunTest(WatcherFixture* fixture, IDevice* device) {
     // Set up program
     Program program = Program();
 
@@ -192,7 +192,8 @@ static void RunTest(WatcherFixture* fixture, IDevice* device) {
                     virtual_core.y,
                     waypoint,
                     // TODO(#17275): Rework risc counts & masks into HAL and generalize this test.
-                    (device->arch() == ARCH::BLACKHOLE) ? waypoint : "   X");
+                    // Active eth core only has one available erisc to test on.
+                    (device->arch() == ARCH::BLACKHOLE and not is_active) ? waypoint : "   X");
                 if (device->arch() == ARCH::BLACKHOLE) {
                     expected += fmt::format("rmsg:***|** h_id:0 smsg:* k_id:{}", k_id_s);
                 } else {

@@ -17,11 +17,11 @@
 #include <vector>
 
 #include <tt-metalium/buffer.hpp>
-#include <tt-metalium/buffer_constants.hpp>
+#include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include "gmock/gmock.h"
 #include <tt-metalium/shape.hpp>
-#include "span.hpp"
+#include <tt_stl/span.hpp>
 #include "tests/ttnn/unit_tests/gtests/ttnn_test_fixtures.hpp"
 #include <tt-metalium/tile.hpp>
 #include "ttnn/any_device.hpp"
@@ -233,7 +233,6 @@ TYPED_TEST(BorrowedStorageVectorConversionTest, Roundtrip) {
         EXPECT_THAT(tensor.get_logical_shape(), Eq(shape)) << "for shape: " << shape;
         EXPECT_THAT(tensor.get_dtype(), Eq(convert_to_data_type<TypeParam>())) << "for shape: " << shape;
         EXPECT_THAT(tensor.get_layout(), Eq(Layout::ROW_MAJOR)) << "for shape: " << shape;
-        EXPECT_EQ(tensor.storage_type(), StorageType::BORROWED) << "for shape: " << shape;
 
         auto output = tensor.template to_vector<TypeParam>();
 
