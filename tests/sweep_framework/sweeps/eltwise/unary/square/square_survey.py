@@ -19,7 +19,7 @@ from models.utility_functions import torch_random
 parameters = {
     "square-survey": {
         "input_shape": [{"self": [1, 1, 1024, 1024]}],
-        "input_dtype": [ttnn.float32, ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat4_b],
+        "input_dtype": [ttnn.float32, ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat4_b, ttnn.int32],
         "input_layout": [ttnn.TILE_LAYOUT],
         "input_memory_config": [
             "l1_interleaved",
