@@ -27,6 +27,8 @@ public:
     size_t num_cores() const { return cores_.size(); }
     std::vector<CoreCoord> get_cores() const { return cores_; }
 
+    const std::vector<DistributionSpec::TargetData>& get_page_mapping();
+
 private:
     BufferDistributionSpec(const DistributionSpec& page_distribution_spec, const std::vector<CoreCoord>& cores);
 

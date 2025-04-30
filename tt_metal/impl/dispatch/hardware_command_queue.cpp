@@ -288,11 +288,38 @@ void HWCommandQueue::enqueue_write_buffer(
         src);
     Buffer& buffer_obj = get_buffer_object(buffer);
 
-    sub_device_ids = buffer_dispatch::select_sub_device_ids(this->device_, sub_device_ids);
-    auto dispatch_core_type = MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_type();
+    if (auto modifiable_buffer_distribution_spec = buffer_obj.get_modifiable_buffer_distribution_spec()) {
+        std::cout << "handling new buffer dist spec" << std::endl;
+        auto& buffer_distribution_spec = modifiable_buffer_distribution_spec->get();
+        const auto& page_mapping = buffer_distribution_spec.get_page_mapping();
+        const auto& cores = buffer_distribution_spec.get_cores();
+        for (size_t i = 0; i < cores.size(); i++) {
+            auto core = cores[i];
+            const auto virtual_core = buffer_obj.device()->virtual_core_from_logical_core(core, buffer_obj.core_type());
 
-    buffer_dispatch::write_to_device_buffer(
-        data, buffer_obj, region, this->id_, this->expected_num_workers_completed_, dispatch_core_type, sub_device_ids);
+            const auto& page_mapping_core = page_mapping[i];
+            for (auto& chunk_mapping : page_mapping_core) {
+                enqueue_write_to_core_l1(
+                    virtual_core,
+                    (char*)data + chunk_mapping.src * buffer_obj.page_size(),
+                    buffer_obj.address() + chunk_mapping.dst * buffer_obj.aligned_page_size(),
+                    chunk_mapping.size * buffer_obj.page_size(),
+                    false,
+                    sub_device_ids);
+            }
+        }
+    } else {
+        sub_device_ids = buffer_dispatch::select_sub_device_ids(this->device_, sub_device_ids);
+        auto dispatch_core_type = MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_type();
+        buffer_dispatch::write_to_device_buffer(
+            data,
+            buffer_obj,
+            region,
+            this->id_,
+            this->expected_num_workers_completed_,
+            dispatch_core_type,
+            sub_device_ids);
+    }
 
     if (blocking) {
         this->finish(sub_device_ids);

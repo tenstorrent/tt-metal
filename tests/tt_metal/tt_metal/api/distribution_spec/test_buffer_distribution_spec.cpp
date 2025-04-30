@@ -5,6 +5,8 @@
 #include "gtest/gtest.h"
 #include "command_queue_fixture.hpp"
 
+#include "tt_metal/test_utils/stimulus.hpp"
+// #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/buffer_distribution_spec.hpp>
 
 namespace distribution_spec_tests {
@@ -27,10 +29,37 @@ struct BufferDistributionSpecExpected {
     size_t aligned_size_per_bank;
 };
 
+struct EnqueueReadWriteBufferExpected {
+    std::vector<CoreCoord> cores;
+};
+
 struct BufferDistributionSpecParams {
     BufferDistributionSpecInputs inputs;
     BufferDistributionSpecExpected expected;
 };
+
+struct EnqueueReadWriteBufferParams {
+    BufferDistributionSpecInputs inputs;
+    EnqueueReadWriteBufferExpected expected;
+};
+
+std::shared_ptr<tt::tt_metal::Buffer> create_buffer_from_inputs(
+    const BufferDistributionSpecInputs& inputs,
+    const tt::tt_metal::BufferType& buffer_type,
+    tt::tt_metal::IDevice* device) {
+    auto buffer_distribution_spec = tt::tt_metal::BufferDistributionSpec::from_shard_spec(
+        inputs.physical_tensor_shape,
+        inputs.physical_shard_shape,
+        inputs.page_shape,
+        inputs.grid,
+        inputs.shard_orientation);
+
+    // These values would be passed from tensor correctly based on PageConfig
+    const auto host_size = inputs.physical_tensor_shape.volume() * inputs.bytes_per_element;
+    const auto page_size = inputs.page_shape.height() * inputs.page_shape.width() * inputs.bytes_per_element;
+    return tt::tt_metal::Buffer::create(device, host_size, page_size, buffer_type, buffer_distribution_spec);
+}
+
 }  // namespace distribution_spec_tests
 // namespace
 
@@ -42,28 +71,12 @@ class BufferDistributionSpecTests : public CommandQueueSingleCardBufferFixture,
 
 TEST_P(BufferDistributionSpecTests, BufferCreation) {
     const auto& params = GetParam();
-    auto device = devices_[0];
 
-    auto physical_tensor_shape = params.inputs.physical_tensor_shape;
-    auto physical_shard_shape = params.inputs.physical_shard_shape;
-    auto page_shape = params.inputs.page_shape;
-    auto bytes_per_element = params.inputs.bytes_per_element;
-    auto corerangeset = params.inputs.grid;
-    auto shard_orientation = params.inputs.shard_orientation;
-
-    // Doesn't matter for this test
-    const auto buffer_type = BufferType::L1;
-
-    auto buffer_distribution_spec = tt::tt_metal::BufferDistributionSpec::from_shard_spec(
-        physical_tensor_shape, physical_shard_shape, page_shape, corerangeset, shard_orientation);
+    auto buffer = create_buffer_from_inputs(params.inputs, BufferType::L1, devices_[0]);
+    const auto& buffer_distribution_spec = buffer->get_modifiable_buffer_distribution_spec()->get();
 
     // Check that the stored cores in BufferDistributionSpec is exact cores used
     EXPECT_EQ(buffer_distribution_spec.get_cores(), params.expected.cores);
-
-    // These values would be passed from tensor correctly based on PageConfig
-    const auto host_size = physical_tensor_shape.volume() * bytes_per_element;
-    const auto page_size = page_shape.height() * page_shape.width() * bytes_per_element;
-    auto buffer = Buffer::create(device, host_size, page_size, buffer_type, buffer_distribution_spec);
 
     /* These are the params allocator cares about; check all of them */
     EXPECT_EQ(buffer->num_cores().value(), params.expected.num_cores);
@@ -160,6 +173,93 @@ INSTANTIATE_TEST_SUITE_P(
                                  4,  // Shard shape is 120 pages; 5 shards max per bank (18 shards over 4 banks)
                 .aligned_size = 128 * 2400,
                 .aligned_size_per_bank = 128 * 600,
+            },
+        })  // Values
+);
+
+class EnqueueReadWriteBufferTests : public CommandQueueSingleCardBufferFixture,
+                                    public ::testing::WithParamInterface<EnqueueReadWriteBufferParams> {};
+
+TEST_P(EnqueueReadWriteBufferTests, EnqueueWriteBuffer) {
+    const auto& params = GetParam();
+
+    auto buffer = create_buffer_from_inputs(params.inputs, BufferType::L1, devices_[0]);
+    auto device = buffer->device();
+
+    // EnqueueWriteBuffer test
+    // Reference: test_EnqueueWriteBuffer_and_EnqueueReadBuffer
+    const auto src =
+        tt::test_utils::generate_uniform_random_vector<uint8_t>(0, UINT8_MAX, buffer->size() / sizeof(uint8_t));
+    auto& command_queue = device->command_queue();
+    EnqueueWriteBuffer(command_queue, buffer, src.data(), /*blocking=*/false);
+    Finish(command_queue);
+
+    // Validate
+    {
+        std::vector<uint32_t> result_per_core;
+        const auto* src_ptr = static_cast<const uint8_t*>(src.data());
+        const auto& cores = params.expected.cores;
+        const DeviceAddr base_address = buffer->address();
+        // Guaranteed to have valid buffer distribution spec
+        const auto& page_mapping = buffer->get_modifiable_buffer_distribution_spec()->get().get_page_mapping();
+        for (size_t i = 0; i < cores.size(); i++) {
+            const auto core = cores[i];
+            std::cout << "------ Testing core: " << core.x << ", " << core.y << std::endl;
+
+            // result_per_core is resized inside ReadFromDeviceL1
+            tt::tt_metal::detail::ReadFromDeviceL1(
+                device, core, base_address, buffer->aligned_size_per_bank(), result_per_core, buffer->core_type());
+            tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(device->id());
+
+            const auto* result_per_core_ptr = reinterpret_cast<const uint8_t*>(result_per_core.data());
+            const auto& page_mapping_core = page_mapping[i];
+            // EXPECT_EQ(src, result_per_core);
+            for (auto& chunk_mapping : page_mapping_core) {
+                const auto src_offset = chunk_mapping.src * buffer->page_size();
+                const auto dst_offset = chunk_mapping.dst * buffer->aligned_page_size();
+
+                // for (size_t j = 0; j < chunk_mapping.size * buffer->page_size(); j++) {
+                //     if (src_ptr[src_offset + j] != result_per_core_ptr[dst_offset + j]) {
+                //         std::cout << "Mismatch at index: " << j << std::endl;
+                //         std::cout << "src_val: " << static_cast<int>(src_ptr[src_offset + j]) << std::endl;
+                //         std::cout << "dst_val: " << static_cast<int>(result_per_core_ptr[dst_offset + j]) <<
+                //         std::endl; break;
+                //     }
+                // }
+                EXPECT_EQ(
+                    std::memcmp(
+                        src_ptr + src_offset,
+                        result_per_core_ptr + dst_offset,
+                        chunk_mapping.size * buffer->page_size()),
+                    0);
+            }
+        }
+    }
+
+    // dram_channel_from_logical_core
+
+    // ReadFromDeviceDRAMChannel
+    // ReadFromDeviceL1
+    // generate_uniform_random_vector
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    BufferDistributionSpec,
+    EnqueueReadWriteBufferTests,
+    ::testing::Values(
+        // Cut along last two dims; tile layout
+        // page size = 32 x 32 x 2 = 2048 bytes (eg. bfloat16, uint16, etc...)
+        EnqueueReadWriteBufferParams{
+            BufferDistributionSpecInputs{
+                .physical_tensor_shape = tt::tt_metal::Shape{5, 2, 64, 96},
+                .physical_shard_shape = tt::tt_metal::Shape{5, 2, 32, 32},
+                .page_shape = tt::tt_metal::Shape2D{32, 32},
+                .bytes_per_element = 2,
+                .grid = CoreRangeSet(CoreRange({0, 0}, {3, 3})),
+                .shard_orientation = ShardOrientation::ROW_MAJOR,
+            },
+            EnqueueReadWriteBufferExpected{
+                .cores = {{0, 0}, {1, 0}, {2, 0}, {3, 0}, {0, 1}, {1, 1}},
             },
         })  // Values
 );

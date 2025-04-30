@@ -269,6 +269,13 @@ public:
     DeviceAddr aligned_size_per_bank() const;
 
     // SHARDED API STARTS HERE
+    std::optional<std::reference_wrapper<BufferDistributionSpec>> get_modifiable_buffer_distribution_spec() {
+        if (this->buffer_distribution_spec_.has_value()) {
+            return std::ref(this->buffer_distribution_spec_.value());
+        }
+        return std::nullopt;
+    }
+
     // TODO: WILL SEPARATE INTO SHARDED BUFFER CLASS
 
     DeviceAddr sharded_page_address(uint32_t bank_id, uint32_t page_index) const;
