@@ -34,6 +34,10 @@
 #include "tt_metal/fabric/hw/inc/tt_fabric_status.h"
 #include "umd/device/tt_core_coordinates.h"
 
+static const char* SENDER_KERNEL_PATH =
+    "tests/tt_metal/tt_metal/perf_microbenchmark/routing/kernels/tt_fabric_1d_tx.cpp";
+static const char* RECEIVER_KERNEL_PATH =
+    "tests/tt_metal/tt_metal/perf_microbenchmark/routing/kernels/tt_fabric_1d_rx.cpp";
 namespace tt::tt_fabric {
 namespace fabric_router_tests {
 struct TestParameters {
@@ -50,7 +54,6 @@ struct TestParameters {
     uint32_t time_seed = std::chrono::system_clock::now().time_since_epoch().count();
     bool is_mcast = false;
 };
-
 struct ProgramInfo {
     tt::tt_metal::IDevice* device;
     tt::tt_metal::Program& program;
@@ -170,7 +173,7 @@ void CreateRx(
         params.packet_payload_size_bytes, params.num_packets, params.time_seed};
     auto receiver_kernel = tt_metal::CreateKernel(
         receiver_program,
-        "tests/tt_metal/tt_metal/perf_microbenchmark/routing/kernels/tt_fabric_1d_rx.cpp",
+        RECEIVER_KERNEL_PATH,
         {params.receiver_logical_core},
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_0,
@@ -198,11 +201,9 @@ void CreateTx(
         /* mcast_bwd_hops for mcast */
         sender_runtime_args.push_back(params.num_hops);
     }
-    // Dynamically allocate the sender program.
-    // auto* sender_program = new tt::tt_metal::Program(tt_metal::CreateProgram());
     auto sender_kernel = tt_metal::CreateKernel(
         sender_program,
-        "tests/tt_metal/tt_metal/perf_microbenchmark/routing/kernels/tt_fabric_1d_tx.cpp",
+        SENDER_KERNEL_PATH,
         {params.sender_logical_core},
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_0,
@@ -267,7 +268,7 @@ TEST_F(Fabric1DFixture, TestUnicastRaw) {
     auto sender_program = tt_metal::CreateProgram();
     auto sender_kernel = tt_metal::CreateKernel(
         sender_program,
-        "tests/tt_metal/tt_metal/perf_microbenchmark/routing/kernels/tt_fabric_1d_tx.cpp",
+        SENDER_KERNEL_PATH,
         {params.sender_logical_core},
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_0,
