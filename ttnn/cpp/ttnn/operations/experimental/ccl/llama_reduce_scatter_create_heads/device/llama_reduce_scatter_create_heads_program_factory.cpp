@@ -681,7 +681,7 @@ LlamaReduceScatterCreateHeadsDeviceOperation::LlamaReduceScatterCreateHeads::cre
     uint32_t local_page = 0;
 
     std::vector<uint32_t> reader_runtime_args = {
-        cross_device_semaphore->address(), local_semaphore, false, false, 0, 0, false, 0, 0, 0};
+        cross_device_semaphore->address(), local_semaphore, false, false, 0, 0, false, 0, 0, 0, 0, 0, 0};
     uint32_t is_reader_sender_core_idx = 2;
     uint32_t is_reader_worker_core_idx = 3;
     uint32_t is_linear_output_page_start_idx = 4;
@@ -690,6 +690,9 @@ LlamaReduceScatterCreateHeadsDeviceOperation::LlamaReduceScatterCreateHeads::cre
     uint32_t reader_sender_packet_start_idx = 7;
     uint32_t reader_sender_packet_end_idx = 8;
     uint32_t reader_sender_total_num_pages_idx = 9;
+    uint32_t reader_q_base_addr_idx = 10;
+    uint32_t reader_k_base_addr_idx = 11;
+    uint32_t reader_v_base_addr_idx = 12;
 
     uint32_t is_writer_sender_core_idx = 2;
     uint32_t is_writer_worker_core_idx = 3;
@@ -697,6 +700,9 @@ LlamaReduceScatterCreateHeadsDeviceOperation::LlamaReduceScatterCreateHeads::cre
     uint32_t writer_sender_packet_start_idx = 5;
     uint32_t writer_sender_packet_end_idx = 6;
     uint32_t writer_sender_total_num_pages_idx = 7;
+    uint32_t writer_q_base_addr_idx = 8;
+    uint32_t writer_k_base_addr_idx = 9;
+    uint32_t writer_v_base_addr_idx = 10;
 
     uint32_t reader_sender_packet_start = 0;
     uint32_t writer_sender_packet_start = 0;
@@ -711,7 +717,7 @@ LlamaReduceScatterCreateHeadsDeviceOperation::LlamaReduceScatterCreateHeads::cre
 
     for (auto core : all_cores) {
         std::vector<uint32_t> writer_runtime_args = {
-            cross_device_semaphore->address(), local_semaphore, false, false, 0, 0, 0, 0};
+            cross_device_semaphore->address(), local_semaphore, false, false, 0, 0, 0, 0, 0, 0, 0};
 
         uint32_t num_shards_to_read_per_worker = schedule[sender_core_idx].size();
 
@@ -766,10 +772,16 @@ LlamaReduceScatterCreateHeadsDeviceOperation::LlamaReduceScatterCreateHeads::cre
             reader_runtime_args[is_reader_worker_core_idx] = true;
             reader_runtime_args[is_linear_output_page_start_idx] = local_page;
             reader_runtime_args[is_linear_input_packet_start_idx] = local_page + offset_for_input;
+            reader_runtime_args[reader_q_base_addr_idx] = q_base_addr;
+            reader_runtime_args[reader_k_base_addr_idx] = k_base_addr;
+            reader_runtime_args[reader_v_base_addr_idx] = v_base_addr;
 
             writer_runtime_args[is_writer_sender_core_idx] = false;
             writer_runtime_args[is_writer_worker_core_idx] = true;
             writer_runtime_args[is_linear_output_page_start_idx] = local_page;
+            writer_runtime_args[writer_q_base_addr_idx] = q_base_addr;
+            writer_runtime_args[writer_k_base_addr_idx] = k_base_addr;
+            writer_runtime_args[writer_v_base_addr_idx] = v_base_addr;
 
             local_page += num_blocks_per_packet;
             if (core == packet_receiver_core) {

@@ -39,6 +39,7 @@ void kernel_main() {
     // Constants for indexing
     constexpr uint8_t x_index = 0;
     constexpr uint8_t y_index = 1;
+    constexpr uint8_t q_heads = 8;
 
     size_t rt_arg_idx = 0;
 
@@ -103,7 +104,9 @@ void kernel_main() {
     constexpr uint8_t device_order[other_devices] =
         DEVICE_ORDER;  // this is code gen'd in the program factory using the defines
     constexpr uint8_t input_core_xy[input_tensor_cores][2] = INPUT_CORE_XY;
-    // constexpr uint8_t output_core_xy[output_cores_per_device][2] = OUTPUT_CORE_XY;
+    constexpr uint8_t q_output_core_xy[output_cores_per_device][2] = Q_OUTPUT_CORE_XY;
+    constexpr uint8_t k_output_core_xy[output_cores_per_device][2] = K_OUTPUT_CORE_XY;
+    constexpr uint8_t v_output_core_xy[output_cores_per_device][2] = V_OUTPUT_CORE_XY;
     constexpr uint8_t schedule[total_num_read_txns][3] = SCHEDULE;
     constexpr uint32_t total_senders = num_sender_cores * other_devices;
 
@@ -118,6 +121,9 @@ void kernel_main() {
     uint32_t sender_shard_start = get_arg_val<uint32_t>(rt_arg_idx++);
     uint32_t sender_shard_end = get_arg_val<uint32_t>(rt_arg_idx++);
     uint32_t sender_total_num_pages = get_arg_val<uint32_t>(rt_arg_idx++);
+    uint32_t q_base_addr = get_arg_val<uint32_t>(rt_arg_idx++);
+    uint32_t k_base_addr = get_arg_val<uint32_t>(rt_arg_idx++);
+    uint32_t v_base_addr = get_arg_val<uint32_t>(rt_arg_idx++);
 
     // DPRINT the selected runtime arguments
     DPRINT << ENDL();
@@ -209,6 +215,12 @@ void kernel_main() {
         // DPRINT << "DPRINT all pages before reduction" << ENDL();
         // print_bf16_pages(get_read_ptr(fabric_receiver_cb_id), page_size_bytes / 2, num_pages_per_packet *
         // num_devices);
+
+        uint32_t head_idx = linear_output_page_start_idx / 2;  // each head has 2 pages/blocks
+        if (head_idx < q_heads) {                              // write q heads
+
+        } else {  // write v heads
+        }
     }
     noc_semaphore_set((uint32_t*)local_semaphore_address, INVALID);
     noc_semaphore_set((uint32_t*)receiver_semaphore_address, INVALID);

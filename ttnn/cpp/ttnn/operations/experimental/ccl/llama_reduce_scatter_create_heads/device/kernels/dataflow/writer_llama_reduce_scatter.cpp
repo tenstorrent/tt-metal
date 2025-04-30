@@ -44,7 +44,10 @@ void kernel_main() {
     // Constants for indexing
     constexpr uint8_t x_index = 0;
     constexpr uint8_t y_index = 1;
-
+    constexpr uint8_t q_heads = 8;
+    constexpr uint8_t num_sticks_per_block = 8;
+    constexpr uint8_t stick_size_byte = 64;
+    constexpr uint8_t head_dim_bytes = 128;
     size_t rt_arg_idx = 0;
 
     // Define all compile-time arguments at the beginning
@@ -111,6 +114,9 @@ void kernel_main() {
     uint32_t sender_packet_start = get_arg_val<uint32_t>(rt_arg_idx++);
     uint32_t sender_packet_end = get_arg_val<uint32_t>(rt_arg_idx++);
     uint32_t sender_total_num_pages = get_arg_val<uint32_t>(rt_arg_idx++);
+    uint32_t q_base_addr = get_arg_val<uint32_t>(rt_arg_idx++);
+    uint32_t k_base_addr = get_arg_val<uint32_t>(rt_arg_idx++);
+    uint32_t v_base_addr = get_arg_val<uint32_t>(rt_arg_idx++);
 
     // DPRINT the selected runtime arguments
     DPRINT << ENDL();
@@ -203,6 +209,9 @@ void kernel_main() {
         }
     } else if (worker_core) {
         DPRINT << "worker_core writer" << ENDL();
+        constexpr uint8_t q_output_core_xy[output_cores_per_device][2] = Q_OUTPUT_CORE_XY;
+        constexpr uint8_t k_output_core_xy[output_cores_per_device][2] = K_OUTPUT_CORE_XY;
+        constexpr uint8_t v_output_core_xy[output_cores_per_device][2] = V_OUTPUT_CORE_XY;
         // #ifndef SKIP_WRITE_BACK
         // constexpr uint8_t output_core_xy[output_cores_per_device][2] = OUTPUT_CORE_XY;
         // uint64_t noc_addresses[num_pages_per_packet];
@@ -226,13 +235,30 @@ void kernel_main() {
         // }
 
         cb_wait_front(accumulator_cb_id, num_pages_per_packet);
+        uint32_t head_idx = linear_output_page_start_idx / 2;  // each head has 2 pages/blocks
+
+        auto accumulator_l1_addr = get_read_ptr(accumulator_cb_id);
+        if (head_idx < q_heads) {  // write q heads
+            for (uint32_t iblock = 0; iblock < num_pages_per_packet / 2; iblock++) {
+                for (uint32_t istick = 0; istick < num_sticks_per_block; istick++) {
+                    uint64_t noc_address = get_noc_addr(
+                        q_output_core_xy[istick][x_index],
+                        q_output_core_xy[istick][y_index],
+                        q_base_addr + head_idx * head_dim_bytes);
+                    uint32_t l1_read_addr = accumulator_l1_addr + iblock * page_size_bytes + istick * stick_size_byte;
+                    noc_async_write(l1_read_addr, noc_address, stick_size_byte);
+                }
+                head_idx++;  // next head as each packet has 2 heads = 4 blocks
+            }
+        } else {  // write v heads
+        }
 
         // // Process all tiles
         // for (uint32_t tile = 0; tile < num_packets; tile++) {
         //     noc_async_write(accumulator_l1_addresses[tile], noc_addresses[tile], page_size_bytes);
         //     // print_bf16_pages(accumulator_l1_addresses[tile], page_size_bytes / 2, 1);
         // }
-        // noc_async_write_barrier();
+        noc_async_write_barrier();
         cb_pop_front(accumulator_cb_id, num_pages_per_packet);
         // #else
         //         cb_wait_front(output_tensor_cb_id, num_pages_per_packet);
