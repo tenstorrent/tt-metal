@@ -2,10 +2,17 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "gtest/gtest.h"
-#include "gmock/gmock.h"
-
+#include <boost/move/utility_core.hpp>
+#include <stddef.h>
 #include <tt-metalium/distribution_spec.hpp>
+#include <functional>
+#include <stdexcept>
+#include <string>
+#include <vector>
+
+#include "gmock/gmock.h"
+#include "gtest/gtest.h"
+#include <tt-metalium/shape.hpp>
 
 namespace distribution_spec_tests {
 using tt::tt_metal::DistributionSpec;
@@ -17,10 +24,11 @@ struct DistributionSpecInputs {
 };
 
 struct DistributionSpecExpected {
-    std::vector<DistributionSpec::TargetData> shard_mapping;
-    std::vector<DistributionSpec::TargetData> coalesced_shard_mapping;
+    std::vector<DistributionSpec::TargetData> noncoalesced_metadata_for_targets;
+    std::vector<DistributionSpec::TargetData> coalesced_metadata_for_targets;
     tt::tt_metal::Shape shard_shape;
     size_t num_targets;
+    size_t max_num_shards_per_target;
 };
 
 struct DistributionSpecParams {
@@ -32,7 +40,7 @@ struct DistributionSpecParams {
 
 using namespace distribution_spec_tests;
 
-TEST(IllegalDistributionSpecCreationTests, RankUnequal) {
+TEST(DistributionSpecTests, IllegalCreationWithUnequalRank) {
     EXPECT_THAT(
         std::function<void()>([]() {
             const auto tensor_shape = tt::tt_metal::Shape{2, 3, 4};
@@ -43,6 +51,43 @@ TEST(IllegalDistributionSpecCreationTests, RankUnequal) {
         }),
         ThrowsMessage<std::runtime_error>(
             ::testing::HasSubstr(std::string("Shard shape rank (2) must be same as tensor shape rank (3)!"))));
+}
+
+TEST(DistributionSpecTests, CacheMetadataForTargets) {
+    const auto tensor_shape = tt::tt_metal::Shape{2, 3, 4};
+    const auto shard_shape = tt::tt_metal::Shape{1, 2, 3};
+    const size_t num_targets = 3;
+    auto distribution_spec = tt::tt_metal::DistributionSpec::from_shard_shape(tensor_shape, shard_shape, num_targets);
+
+    auto validate_cached_metadata_for_targets = [](const auto& metadata_for_targets_1,
+                                                   const auto& metadata_for_targets_2) {
+        // Check addresses are the same
+        ASSERT_EQ(&metadata_for_targets_1, &metadata_for_targets_2);
+        // Sanity check values are the same
+        ASSERT_EQ(metadata_for_targets_1, metadata_for_targets_2);
+    };
+
+    // Test caching for MappingMode::COALESCED
+    const auto& coalesced_metadata_for_targets_1 =
+        distribution_spec.get_metadata_for_targets(DistributionSpec::MappingMode::COALESCED);
+    const auto& coalesced_metadata_for_targets_2 =
+        distribution_spec.get_metadata_for_targets(DistributionSpec::MappingMode::COALESCED);
+    validate_cached_metadata_for_targets(coalesced_metadata_for_targets_1, coalesced_metadata_for_targets_2);
+
+    // Test caching for MappingMode::NONCOALESCED
+    const auto& noncoalesced_metadata_for_targets_1 =
+        distribution_spec.get_metadata_for_targets(DistributionSpec::MappingMode::NONCOALESCED);
+    const auto& noncoalesced_metadata_for_targets_2 =
+        distribution_spec.get_metadata_for_targets(DistributionSpec::MappingMode::NONCOALESCED);
+    validate_cached_metadata_for_targets(noncoalesced_metadata_for_targets_1, noncoalesced_metadata_for_targets_2);
+
+    // Test that the caches are still valid switching between modes
+    const auto& coalesced_metadata_for_targets_3 =
+        distribution_spec.get_metadata_for_targets(DistributionSpec::MappingMode::COALESCED);
+    validate_cached_metadata_for_targets(coalesced_metadata_for_targets_1, coalesced_metadata_for_targets_3);
+    const auto& noncoalesced_metadata_for_targets_3 =
+        distribution_spec.get_metadata_for_targets(DistributionSpec::MappingMode::NONCOALESCED);
+    validate_cached_metadata_for_targets(noncoalesced_metadata_for_targets_1, noncoalesced_metadata_for_targets_3);
 }
 
 class DistributionSpecTests : public ::testing::TestWithParam<DistributionSpecParams> {};
@@ -61,22 +106,16 @@ TEST_P(DistributionSpecTests, Sharding) {
     ASSERT_EQ(shard_shape_stored, params.expected.shard_shape);
     auto num_targets_stored = distribution_spec.get_num_targets();
     ASSERT_EQ(num_targets_stored, params.expected.num_targets);
+    auto max_num_shards_per_target_stored = distribution_spec.get_max_num_shards_per_target();
+    ASSERT_EQ(max_num_shards_per_target_stored, params.expected.max_num_shards_per_target);
 
-    auto shard_mapping = distribution_spec.compute_metadata_for_targets(DistributionSpec::MappingMode::NONCOALESCED);
-    auto coalesced_shard_mapping =
-        distribution_spec.compute_metadata_for_targets(DistributionSpec::MappingMode::COALESCED);
+    auto noncoalesced_metadata_for_targets =
+        distribution_spec.get_metadata_for_targets(DistributionSpec::MappingMode::NONCOALESCED);
+    auto coalesced_metadata_for_targets =
+        distribution_spec.get_metadata_for_targets(DistributionSpec::MappingMode::COALESCED);
 
-    auto validate_target_data = [](const auto& target_data, const auto& expected_target_data) {
-        ASSERT_EQ(target_data.size(), expected_target_data.size());
-        for (size_t chunk_id = 0; chunk_id < target_data.size(); chunk_id++) {
-            EXPECT_EQ(target_data[chunk_id], expected_target_data[chunk_id]);
-        }
-    };
-
-    for (size_t target_id = 0; target_id < num_targets_stored; target_id++) {
-        validate_target_data(shard_mapping[target_id], params.expected.shard_mapping[target_id]);
-        validate_target_data(coalesced_shard_mapping[target_id], params.expected.coalesced_shard_mapping[target_id]);
-    }
+    EXPECT_EQ(noncoalesced_metadata_for_targets, params.expected.noncoalesced_metadata_for_targets);
+    EXPECT_EQ(coalesced_metadata_for_targets, params.expected.coalesced_metadata_for_targets);
 }
 
 INSTANTIATE_TEST_SUITE_P(
@@ -91,7 +130,7 @@ INSTANTIATE_TEST_SUITE_P(
                 .num_targets = 20,
             },
             DistributionSpecExpected{
-                .shard_mapping =
+                .noncoalesced_metadata_for_targets =
                     {{{0, 0, 1}, {1, 1, 1}, {2, 2, 1}, {15, 3, 1}, {16, 4, 1}, {17, 5, 1}},
                      {{3, 0, 1}, {4, 1, 1}, {18, 3, 1}, {19, 4, 1}},
                      {{5, 0, 1}, {6, 1, 1}, {7, 2, 1}, {20, 3, 1}, {21, 4, 1}, {22, 5, 1}},
@@ -110,7 +149,7 @@ INSTANTIATE_TEST_SUITE_P(
                      {{68, 0, 1}, {69, 1, 1}},
                      {{70, 0, 1}, {71, 1, 1}, {72, 2, 1}},
                      {{73, 0, 1}, {74, 1, 1}}},
-                .coalesced_shard_mapping =
+                .coalesced_metadata_for_targets =
                     {{{0, 0, 3}, {15, 3, 3}},
                      {{3, 0, 2}, {18, 3, 2}},
                      {{5, 0, 3}, {20, 3, 3}},
@@ -131,6 +170,7 @@ INSTANTIATE_TEST_SUITE_P(
                      {{73, 0, 2}}},
                 .shard_shape = tt::tt_metal::Shape{2, 1, 3},
                 .num_targets = 18,
+                .max_num_shards_per_target = 1,
             },
         },
         // Same 3D spec but with multiple shards per core
@@ -141,7 +181,7 @@ INSTANTIATE_TEST_SUITE_P(
                 .num_targets = 4,
             },
             DistributionSpecExpected{
-                .shard_mapping =
+                .noncoalesced_metadata_for_targets =
                     {{{0, 0, 1},   {1, 1, 1},   {2, 2, 1},   {15, 3, 1},  {16, 4, 1},  {17, 5, 1},
                       {10, 6, 1},  {11, 7, 1},  {12, 8, 1},  {25, 9, 1},  {26, 10, 1}, {27, 11, 1},
                       {35, 12, 1}, {36, 13, 1}, {37, 14, 1}, {50, 15, 1}, {51, 16, 1}, {52, 17, 1},
@@ -179,7 +219,7 @@ INSTANTIATE_TEST_SUITE_P(
                       {59, 16, 1},
                       {68, 18, 1},
                       {69, 19, 1}}},
-                .coalesced_shard_mapping =
+                .coalesced_metadata_for_targets =
                     {{{0, 0, 3},
                       {15, 3, 3},
                       {10, 6, 3},
@@ -200,6 +240,7 @@ INSTANTIATE_TEST_SUITE_P(
                      {{8, 0, 2}, {23, 3, 2}, {33, 6, 2}, {48, 9, 2}, {43, 12, 2}, {58, 15, 2}, {68, 18, 2}}},
                 .shard_shape = tt::tt_metal::Shape{2, 1, 3},
                 .num_targets = 4,
+                .max_num_shards_per_target = 5,
             },
         },
         // 5D spec with no cuts along last two dims (ie. can coalesce last 3 dims)
@@ -210,7 +251,7 @@ INSTANTIATE_TEST_SUITE_P(
                 .num_targets = 5,
             },
             DistributionSpecExpected{
-                .shard_mapping =
+                .noncoalesced_metadata_for_targets =
                     {{{0, 0, 1},    {1, 1, 1},    {2, 2, 1},    {3, 3, 1},    {4, 4, 1},    {5, 5, 1},   {6, 6, 1},
                       {7, 7, 1},    {8, 8, 1},    {9, 9, 1},    {10, 10, 1},  {11, 11, 1},  {12, 12, 1}, {13, 13, 1},
                       {14, 14, 1},  {15, 15, 1},  {16, 16, 1},  {17, 17, 1},  {24, 18, 1},  {25, 19, 1}, {26, 20, 1},
@@ -234,7 +275,7 @@ INSTANTIATE_TEST_SUITE_P(
                       {96, 18, 1},  {97, 19, 1},  {98, 20, 1},  {99, 21, 1},  {100, 22, 1}, {101, 23, 1},
                       {102, 24, 1}, {103, 25, 1}, {104, 26, 1}, {105, 27, 1}, {106, 28, 1}, {107, 29, 1},
                       {108, 30, 1}, {109, 31, 1}, {110, 32, 1}, {111, 33, 1}, {112, 34, 1}, {113, 35, 1}}},
-                .coalesced_shard_mapping =
+                .coalesced_metadata_for_targets =
                     {{{0, 0, 18}, {24, 18, 18}, {90, 36, 6}, {114, 54, 6}},
                      {{18, 0, 6}, {42, 18, 6}, {120, 36, 18}},
                      {{48, 0, 18}, {138, 36, 6}},
@@ -242,6 +283,7 @@ INSTANTIATE_TEST_SUITE_P(
                      {{72, 0, 18}, {96, 18, 18}}},
                 .shard_shape = tt::tt_metal::Shape{1, 2, 3, 2, 3},
                 .num_targets = 5,
+                .max_num_shards_per_target = 2,
             },
         },
         // 4D spec with cut along first dim (ie. can coalesce all dims because last dim is coalesced by default)
@@ -252,7 +294,7 @@ INSTANTIATE_TEST_SUITE_P(
                 .num_targets = 5,
             },
             DistributionSpecExpected{
-                .shard_mapping =
+                .noncoalesced_metadata_for_targets =
                     {{{0, 0, 1},
                       {1, 1, 1},
                       {2, 2, 1},
@@ -266,9 +308,10 @@ INSTANTIATE_TEST_SUITE_P(
                       {10, 10, 1},
                       {11, 11, 1}},
                      {{12, 0, 1}, {13, 1, 1}, {14, 2, 1}, {15, 3, 1}, {16, 4, 1}, {17, 5, 1}}},
-                .coalesced_shard_mapping = {{{0, 0, 12}}, {{12, 0, 6}}},
+                .coalesced_metadata_for_targets = {{{0, 0, 12}}, {{12, 0, 6}}},
                 .shard_shape = tt::tt_metal::Shape{2, 2, 1, 3},
                 .num_targets = 2,
+                .max_num_shards_per_target = 1,
             },
         },
         // 4D spec with no cuts (ie. can coalesce all dims)
@@ -279,7 +322,7 @@ INSTANTIATE_TEST_SUITE_P(
                 .num_targets = 5,
             },
             DistributionSpecExpected{
-                .shard_mapping =
+                .noncoalesced_metadata_for_targets =
                     {{{0, 0, 1},
                       {1, 1, 1},
                       {2, 2, 1},
@@ -291,11 +334,11 @@ INSTANTIATE_TEST_SUITE_P(
                       {8, 8, 1},
                       {9, 9, 1},
                       {10, 10, 1},
-                      {11, 11, 1}},
-                     {{0, 0, 12}}},
-                .coalesced_shard_mapping = {{{0, 0, 12}}},
+                      {11, 11, 1}}},
+                .coalesced_metadata_for_targets = {{{0, 0, 12}}},
                 .shard_shape = tt::tt_metal::Shape{2, 2, 3, 1},
                 .num_targets = 1,
+                .max_num_shards_per_target = 1,
             },
         },
         // 1D spec for edge case
@@ -306,10 +349,12 @@ INSTANTIATE_TEST_SUITE_P(
                 .num_targets = 5,
             },
             DistributionSpecExpected{
-                .shard_mapping = {{{0, 0, 1}, {1, 1, 1}, {2, 2, 1}}, {{3, 0, 1}, {4, 1, 1}, {5, 2, 1}}, {{6, 0, 1}}},
-                .coalesced_shard_mapping = {{{0, 0, 3}}, {{3, 0, 3}}, {{6, 0, 1}}},
+                .noncoalesced_metadata_for_targets =
+                    {{{0, 0, 1}, {1, 1, 1}, {2, 2, 1}}, {{3, 0, 1}, {4, 1, 1}, {5, 2, 1}}, {{6, 0, 1}}},
+                .coalesced_metadata_for_targets = {{{0, 0, 3}}, {{3, 0, 3}}, {{6, 0, 1}}},
                 .shard_shape = tt::tt_metal::Shape{3},
                 .num_targets = 3,
+                .max_num_shards_per_target = 1,
             },
         })  // Values
 );

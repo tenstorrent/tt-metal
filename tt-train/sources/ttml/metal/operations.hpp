@@ -9,9 +9,8 @@
 
 namespace ttml::metal {
 
-constexpr auto rmsnorm_fw = ttnn::register_operation_with_auto_launch_op<
-    "ttml::metal::rmsnorm_fw",
-    ttml::metal::ops::rmsnorm_fw::RMSNormForwardOperation>();
+constexpr auto rmsnorm_fw =
+    ttnn::register_operation<"ttml::metal::rmsnorm_fw", ttml::metal::ops::rmsnorm_fw::RMSNormForwardOperation>();
 
 constexpr auto cross_entropy_fw = ttnn::register_operation_with_auto_launch_op<
     "ttml::metal::cross_entropy_fw",

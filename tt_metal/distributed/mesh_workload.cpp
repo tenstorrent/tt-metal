@@ -19,14 +19,14 @@
 
 #include "assert.hpp"
 #include "buffer.hpp"
-#include "buffer_constants.hpp"
+#include "buffer_types.hpp"
 #include "core_coord.hpp"
 #include "hal.hpp"
 #include "kernel_types.hpp"
 #include "mesh_coord.hpp"
 #include "mesh_device.hpp"
 #include "program_device_map.hpp"
-#include "program_impl.hpp"
+#include "tt-metalium/program.hpp"
 #include "semaphore.hpp"
 #include "sub_device_types.hpp"
 #include "tt_metal/impl/dispatch/device_command.hpp"
@@ -60,8 +60,8 @@ std::optional<MeshCoordinateRange> find_intersection(
 MeshWorkload::MeshWorkload() {
     // A MeshWorkload tracks maintains its own handles to kernels across all
     // encapsulated programs
-    kernel_groups_.resize(hal_ref.get_programmable_core_type_count());
-    kernels_.resize(hal_ref.get_programmable_core_type_count());
+    kernel_groups_.resize(MetalContext::instance().hal().get_programmable_core_type_count());
+    kernels_.resize(MetalContext::instance().hal().get_programmable_core_type_count());
 }
 
 void MeshWorkload::add_program(const MeshCoordinateRange& device_range, Program&& program) {
@@ -74,15 +74,28 @@ void MeshWorkload::add_program(const MeshCoordinateRange& device_range, Program&
     programs_[device_range] = std::move(program);
 }
 
+void MeshWorkload::compile_program(const MeshCoordinateRange& device_range, MeshDevice* mesh_device) {
+    auto& program = programs_.at(device_range);
+    program.compile(mesh_device);
+    program.allocate_circular_buffers(mesh_device);
+    tt::tt_metal::detail::ValidateCircularBufferRegion(program, mesh_device);
+}
+
 void MeshWorkload::compile(MeshDevice* mesh_device) {
     // Multi-Step Compile:
     // 1. Compile Kernel Binaries
     // 2. Allocate and Validate CBs
     // 3. Finalize: Compute relative offsets for all data structures in L1
-    for (auto& [device_range, program] : programs_) {
-        program.compile(mesh_device);
-        program.allocate_circular_buffers(mesh_device);
-        tt::tt_metal::detail::ValidateCircularBufferRegion(program, mesh_device);
+    if (programs_.size() == 1) {
+        // Compile from main thread for homogenous workloads
+        this->compile_program(programs_.begin()->first, mesh_device);
+    } else {
+        for (auto& [device_range, _] : programs_) {
+            // Multi-Threaded Compile: Useful for heterogenous MeshWorkloads
+            mesh_device->enqueue_to_thread_pool(
+                [device_range, mesh_device, this]() { this->compile_program(device_range, mesh_device); });
+        }
+        mesh_device->wait_for_thread_pool();
     }
     program_dispatch::finalize_program_offsets(*this, mesh_device);
 }
@@ -115,6 +128,7 @@ void MeshWorkload::load_binaries(MeshCommandQueue& mesh_cq) {
                 .page_size = HostMemDeviceCommand::PROGRAM_PAGE_SIZE,
                 .buffer_type = BufferType::DRAM,
                 .buffer_layout = TensorMemoryLayout::INTERLEAVED,
+                .bottom_up = false,
             };
             ReplicatedBufferConfig global_kernel_bin_buf_config = {
                 .size = max_kernel_bin_buf_size,
@@ -296,11 +310,13 @@ ProgramConfig& MeshWorkload::get_program_config(uint32_t index) {
 }
 
 uint32_t MeshWorkload::get_sem_base_addr(
-    std::shared_ptr<MeshDevice>& mesh_device, CoreCoord logical_core, CoreType core_type) {
+    std::shared_ptr<MeshDevice>& mesh_device, CoreCoord /*logical_core*/, CoreType core_type) {
     HalProgrammableCoreType programmable_core_type =
         ::tt::tt_metal::detail::hal_programmable_core_type_from_core_type(core_type);
     uint32_t base_addr = program_dispatch::program_base_addr_on_core(*this, mesh_device.get(), programmable_core_type);
-    return base_addr + get_program_config(hal_ref.get_programmable_core_type_index(programmable_core_type)).sem_offset;
+    return base_addr +
+           get_program_config(MetalContext::instance().hal().get_programmable_core_type_index(programmable_core_type))
+               .sem_offset;
 }
 
 uint32_t MeshWorkload::get_sem_size(
@@ -319,11 +335,13 @@ uint32_t MeshWorkload::get_sem_size(
 }
 
 uint32_t MeshWorkload::get_cb_base_addr(
-    std::shared_ptr<MeshDevice>& mesh_device, CoreCoord logical_core, CoreType core_type) {
+    std::shared_ptr<MeshDevice>& mesh_device, CoreCoord /*logical_core*/, CoreType core_type) {
     HalProgrammableCoreType programmable_core_type =
         ::tt::tt_metal::detail::hal_programmable_core_type_from_core_type(core_type);
     uint32_t base_addr = program_dispatch::program_base_addr_on_core(*this, mesh_device.get(), programmable_core_type);
-    return base_addr + get_program_config(hal_ref.get_programmable_core_type_index(programmable_core_type)).cb_offset;
+    return base_addr +
+           get_program_config(MetalContext::instance().hal().get_programmable_core_type_index(programmable_core_type))
+               .cb_offset;
 }
 
 uint32_t MeshWorkload::get_cb_size(

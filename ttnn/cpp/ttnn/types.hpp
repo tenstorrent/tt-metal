@@ -9,7 +9,7 @@
 #include <tt-metalium/global_circular_buffer_impl.hpp>
 #include <tt-metalium/global_semaphore.hpp>
 #include <tt-metalium/sub_device.hpp>
-#include <tt-metalium/buffer_constants.hpp>
+#include <tt-metalium/buffer_types.hpp>
 
 #include "ttnn/distributed/types.hpp"
 #include "ttnn/tensor/tensor.hpp"
@@ -42,7 +42,6 @@ static constexpr auto TILE_LAYOUT = Layout::TILE;
 
 using tt::tt_metal::StorageType;
 static constexpr auto DEVICE_STORAGE_TYPE = StorageType::DEVICE;
-static constexpr auto MULTI_DEVICE_STORAGE_TYPE = StorageType::MULTI_DEVICE;
 
 using tt::tt_metal::CoreCoord;
 using tt::tt_metal::CoreRange;

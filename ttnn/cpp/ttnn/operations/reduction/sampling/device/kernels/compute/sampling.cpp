@@ -22,9 +22,6 @@
 
 #define DEBUG_PRINT 0
 using namespace ckernel;
-// topk llk needs a global variable atm
-// this can only be removed once that's fixed
-int32_t topk_replay_init = 0;
 
 namespace NAMESPACE {
 void generate_rand_tile(const uint32_t cb_id, const uint32_t seed) {

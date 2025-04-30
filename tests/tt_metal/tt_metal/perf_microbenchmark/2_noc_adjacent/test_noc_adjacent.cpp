@@ -2,20 +2,40 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <algorithm>
-#include <functional>
-#include <random>
-#include <string>
-
-#include <tt-metalium/bfloat16.hpp>
-#include <tt-metalium/tt_metal.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/command_queue.hpp>
+#include <chrono>
+#include <errno.h>
+#include <fmt/base.h>
+#include <stdint.h>
+#include <stdlib.h>
 #include <tt-metalium/allocator.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tt_metal.hpp>
+#include <algorithm>
+#include <array>
+#include <cstring>
+#include <exception>
+#include <map>
+#include <memory>
+#include <optional>
+#include <string>
+#include <tuple>
+#include <utility>
+#include <variant>
+#include <vector>
 
-#include "tt_metal/tt_metal/perf_microbenchmark/common/util.hpp"
-
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/circular_buffer_types.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/data_types.hpp>
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/hal_types.hpp>
+#include <tt-metalium/kernel_types.hpp>
+#include <tt-metalium/logger.hpp>
+#include <tt-metalium/program.hpp>
+#include <tt_stl/span.hpp>
 #include "test_common.hpp"
+#include <tt-metalium/tt_backend_api_types.hpp>
+#include "tt_metal/tt_metal/perf_microbenchmark/common/util.hpp"
 
 using namespace tt;
 using namespace tt::tt_metal;
@@ -252,7 +272,7 @@ int main(int argc, char** argv) {
 
     // Determine if it passes performance goal
     auto avg_measured_bandwidth = calculate_average(measured_bandwidth);
-    if (pass && bypass_check == false) {
+    if (pass && !bypass_check) {
         // goal is 95% of theoretical peak using a single NOC channel
         // theoretical peak: 32bytes per clock cycle
         double target_bandwidth = 32.0 * 0.9;

@@ -2,13 +2,32 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <tt-metalium/host_api.hpp>
-#include "ttnn/cpp/ttnn/operations/creation.hpp"
-#include "ttnn/tensor/tensor.hpp"
-#include "ttnn/operations/data_movement/bcast/bcast.hpp"
-#include <tt-metalium/constants.hpp>
+#include <errno.h>
+#include <fmt/base.h>
 #include <magic_enum/magic_enum.hpp>
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/host_api.hpp>
 #include <ttnn/operations/functions.hpp>
+#include <array>
+#include <cstring>
+#include <exception>
+#include <stdexcept>
+#include <vector>
+
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/logger.hpp>
+#include <tt-metalium/shape.hpp>
+#include <tt-metalium/shape_base.hpp>
+#include "ttnn/common/queue_id.hpp"
+#include "ttnn/cpp/ttnn/operations/creation.hpp"
+#include "ttnn/decorators.hpp"
+#include "ttnn/operations/data_movement/bcast/bcast.hpp"
+#include "ttnn/operations/data_movement/bcast/bcast_types.hpp"
+#include "ttnn/tensor/enum_types.hpp"
+#include "ttnn/tensor/shape/shape.hpp"
+#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/tensor/types.hpp"
 
 using namespace tt;
 using namespace tt_metal;
@@ -25,8 +44,8 @@ int main(int argc, char** argv) {
         //                      Device Setup
         ////////////////////////////////////////////////////////////////////////////
         int device_id = 0;
-        tt_metal::IDevice* device = tt_metal::CreateDevice(device_id);
-
+        auto device_owner = tt_metal::distributed::MeshDevice::create_unit_mesh(device_id);
+        auto device = device_owner.get();
         ////////////////////////////////////////////////////////////////////////////
         //                      Application Setup
         ////////////////////////////////////////////////////////////////////////////
@@ -101,9 +120,6 @@ int main(int argc, char** argv) {
         run_operations();
         run_operations();
         device->disable_and_clear_program_cache();
-
-        pass &= CloseDevice(device);
-
     } catch (const std::exception& e) {
         pass = false;
         // Capture the exception error message

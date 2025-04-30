@@ -10,11 +10,7 @@ from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 from models.utility_functions import skip_for_grayskull
-from tests.ttnn.unit_tests.operations.ccl.test_ccl_common import (
-    create_and_load_sub_device_manager_with_fabric_interface,
-    teardown_fabric_interface,
-    create_global_semaphore_with_same_address,
-)
+from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
 
 from tests.ttnn.unit_tests.operations.ccl.test_new_all_reduce import (
     SUB_DEVICE_CRS,
@@ -23,6 +19,9 @@ from tests.ttnn.unit_tests.operations.ccl.test_new_all_reduce import (
     FF1_CRS,
     FF1_CRS_RS_OUT,
     NORM_CRS,
+)
+from tracy import signpost
+from models.demos.llama3_subdevices.tt.llama_common import (
     check_mesh_tensor_alloc,
 )
 
@@ -66,41 +65,80 @@ def run_reduce_scatter_test(
     num_devices_fracture,
     num_cores,
     num_iters,
+    warmup_iters,
     trace_mode,
     num_links=3,
     scheme="random",
+    use_regular_grid=False,
+    input_grid=None,
+    output_grid=None,
+    dtype=ttnn.bfloat8_b,
+    profiler=BenchmarkProfiler(),
 ):
-    mesh_device.enable_async(True)
     mesh_device.enable_program_cache()
     num_pages_per_packet = 4
+    cyclic_buffer_size = 8
 
+    # input, output, interm core range set
+    device = mesh_device.get_device(mesh_device.get_device_ids()[0])
+    compute_grid = (device.compute_with_storage_grid_size().x, device.compute_with_storage_grid_size().y)
+    subdevice_shard_cores_grid = ttnn.CoreRangeSet(
+        {
+            ttnn.CoreRange(
+                ttnn.CoreCoord(0, 0),
+                ttnn.CoreCoord(compute_grid[0] - 1, compute_grid[1] - 1),
+            ),
+        }
+    )
+    if input_grid is not None:
+        input_shard_cores_grid = ttnn.CoreRangeSet(
+            {
+                ttnn.CoreRange(
+                    ttnn.CoreCoord(0, 0),
+                    ttnn.CoreCoord(input_grid[0] - 1, input_grid[1] - 1),
+                ),
+            }
+        )
+    if output_grid is not None:
+        output_shard_cores_grid = ttnn.CoreRangeSet(
+            {
+                ttnn.CoreRange(
+                    ttnn.CoreCoord(0, 0),
+                    ttnn.CoreCoord(output_grid[0] - 1, output_grid[1] - 1),
+                ),
+            }
+        )
+        tensor_width_in_tiles = num_cores * shard_width
+        output_num_cores = output_grid[0] * output_grid[1]
+
+    # input, output, interm memory config
     sharded_mem_config = ttnn.MemoryConfig(
         ttnn.TensorMemoryLayout.WIDTH_SHARDED,
         ttnn.BufferType.L1,
         ttnn.ShardSpec(
-            RING_CRS,
+            input_shard_cores_grid if use_regular_grid else RING_CRS,
             [shard_height, shard_width],
             ttnn.ShardOrientation.ROW_MAJOR,
         ),
     )
-
-    output_mem_config = ttnn.MemoryConfig(
-        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
-        ttnn.BufferType.L1,
-        ttnn.ShardSpec(
-            FF1_CRS_RS_OUT,
-            [shard_height, 32],
-            ttnn.ShardOrientation.ROW_MAJOR,
-        ),
-    )
-
-    # have to allocate a tensor for buffers that are written to across devices as there's no way to synchronize lifetime of buffers across devices
     packet_workers_persistent_mem_config = ttnn.MemoryConfig(
         ttnn.TensorMemoryLayout.WIDTH_SHARDED,
         ttnn.BufferType.L1,
         ttnn.ShardSpec(
-            SUB_DEVICE_CRS,
+            subdevice_shard_cores_grid if use_regular_grid else SUB_DEVICE_CRS,
             [shard_height, num_devices_scatter * num_pages_per_packet * 32],
+            ttnn.ShardOrientation.ROW_MAJOR,
+        ),
+    )
+    output_mem_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(
+            output_shard_cores_grid if use_regular_grid else FF1_CRS_RS_OUT,
+            [
+                shard_height,
+                tensor_width_in_tiles // output_num_cores // num_devices_scatter if use_regular_grid else 32,
+            ],
             ttnn.ShardOrientation.ROW_MAJOR,
         ),
     )
@@ -108,7 +146,7 @@ def run_reduce_scatter_test(
     output_tensor_goldens_list = []
     tt_input_tensors_list = []
     tt_intermediate_tensors_list = []
-    for _ in range(num_iters):
+    for iter in range(num_iters):
         input = gen_tensor(
             dim, shard_height, shard_width, num_devices_scatter, num_devices_fracture, num_cores, scheme=scheme
         )
@@ -140,29 +178,29 @@ def run_reduce_scatter_test(
             input,
             device=mesh_device,
             layout=ttnn.TILE_LAYOUT,
-            dtype=ttnn.bfloat8_b,
+            dtype=dtype,
             memory_config=sharded_mem_config,
             mesh_mapper=ttnn.ShardTensor2dMesh(
                 mesh_device, dims=(0, 1), mesh_shape=[num_devices_fracture, num_devices_scatter]
             ),
         )
-        tt_intermediate = ttnn.from_torch(
-            intermediate_tensor,
-            device=mesh_device,
-            layout=ttnn.TILE_LAYOUT,
-            dtype=ttnn.bfloat8_b,
-            memory_config=packet_workers_persistent_mem_config,
-            mesh_mapper=ttnn.ShardTensor2dMesh(
-                mesh_device, dims=(0, 1), mesh_shape=[num_devices_fracture, num_devices_scatter]
-            ),
-        )
+        if iter < cyclic_buffer_size:
+            tt_intermediate = ttnn.from_torch(
+                intermediate_tensor,
+                device=mesh_device,
+                layout=ttnn.TILE_LAYOUT,
+                dtype=dtype,
+                memory_config=packet_workers_persistent_mem_config,
+                mesh_mapper=ttnn.ShardTensor2dMesh(
+                    mesh_device, dims=(0, 1), mesh_shape=[num_devices_fracture, num_devices_scatter]
+                ),
+            )
+            check_mesh_tensor_alloc(tt_intermediate)
+            tt_intermediate_tensors_list.append(tt_intermediate)
         check_mesh_tensor_alloc(tt_input)
-        check_mesh_tensor_alloc(tt_intermediate)
         tt_input_tensors_list.append(tt_input)
-        tt_intermediate_tensors_list.append(tt_intermediate)
 
-    enable_persistent_fabric = True
-    ccl_sub_device_crs = SUB_DEVICE_CRS
+    ccl_sub_device_crs = subdevice_shard_cores_grid if use_regular_grid is not None else SUB_DEVICE_CRS
     worker_sub_device = ttnn.SubDevice(
         [
             ccl_sub_device_crs,
@@ -170,79 +208,89 @@ def run_reduce_scatter_test(
     )
     worker_sub_device_id = ttnn.SubDeviceId(0)
     sub_device_stall_group = [worker_sub_device_id]
-    mesh_sub_device_manager_id = create_and_load_sub_device_manager_with_fabric_interface(
-        mesh_device,
-        [worker_sub_device],
-        0,
-        0,
-        enable_persistent_fabric,
-    )
+    sub_device_manager = mesh_device.create_sub_device_manager([worker_sub_device], 0)
+    mesh_device.load_sub_device_manager(sub_device_manager)
     mesh_device.set_sub_device_stall_group(sub_device_stall_group)
 
     # create global semaphore handles
-    ccl_semaphore_handles = [
-        create_global_semaphore_with_same_address(mesh_device, ccl_sub_device_crs, 0) for _ in range(num_iters)
-    ]
+    ccl_semaphore_handles = [ttnn.create_global_semaphore(mesh_device, ccl_sub_device_crs, 0) for _ in range(num_iters)]
 
     tt_out_tensor_list = []
-    if trace_mode:
-        tt_out_tensor = ttnn.experimental.llama_reduce_scatter(
-            tt_input_tensors_list[0],
-            tt_intermediate_tensors_list[0],
-            dim,
-            ccl_semaphore_handles[0],
-            worker_sub_device_id,
-            cluster_axis=1,
-            mesh_device=mesh_device,
-            num_links=num_links,
-            memory_config=output_mem_config,
-        )
-        ttnn.synchronize_device(mesh_device, sub_device_ids=sub_device_stall_group)
 
-        trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
-        for iter in range(num_iters):
+    def run_op(n_iters, store_all_results=True):
+        tt_output_list = []
+        for i in range(n_iters):
+            buffer_index = 0 if trace_mode else i
             tt_out_tensor = ttnn.experimental.llama_reduce_scatter(
-                tt_input_tensors_list[0],
-                tt_intermediate_tensors_list[0],
+                tt_input_tensors_list[buffer_index],
+                tt_intermediate_tensors_list[buffer_index % cyclic_buffer_size],
                 dim,
-                ccl_semaphore_handles[0],
+                ccl_semaphore_handles[buffer_index],
                 worker_sub_device_id,
                 cluster_axis=1,
                 mesh_device=mesh_device,
                 num_links=num_links,
                 memory_config=output_mem_config,
             )
+            if not trace_mode:
+                ttnn.synchronize_device(mesh_device)
+            if store_all_results:
+                tt_output_list.append(tt_out_tensor)
+        if store_all_results:
+            return tt_output_list
+        else:
+            return [tt_out_tensor]
 
-        tt_out_tensor_list.append(tt_out_tensor)
+    if trace_mode:
+        # compile run:
+        logger.info("Compiling model")
+        tt_out_tensor_list = run_op(1, store_all_results=False)
 
+        logger.info("Capturing Warmup")
+        print("Warmup iteration: ", warmup_iters)
+        if warmup_iters > 0:
+            trace_id_warmup = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+            run_op(warmup_iters, store_all_results=False)
+            ttnn.end_trace_capture(mesh_device, trace_id_warmup, cq_id=0)
+            ttnn.synchronize_device(mesh_device)
+
+        logger.info("Capturing Trace")
+        trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+        tt_outs = run_op(num_iters, store_all_results=False)
         ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
         ttnn.synchronize_device(mesh_device)
 
+        logger.info("Starting Trace perf test...")
+        profiler.start("reduce-scatter-trace-warmup")
+        if warmup_iters > 0:
+            ttnn.execute_trace(mesh_device, trace_id_warmup, blocking=False)
+            ttnn.release_trace(mesh_device, trace_id_warmup)
+            ttnn.synchronize_device(mesh_device)
+        profiler.end("reduce-scatter-trace-warmup")
+
+        signpost("start")
+        profiler.start("reduce-scatter-trace")
         ttnn.execute_trace(mesh_device, trace_id, blocking=False)
         ttnn.release_trace(mesh_device, trace_id)
         ttnn.synchronize_device(mesh_device)
+        profiler.end("reduce-scatter-trace")
+        signpost("stop")
+
+        time_taken = profiler.get_duration("reduce-scatter-trace") - profiler.get_duration(
+            "reduce-scatter-trace-warmup"
+        )
+        logger.info(f"Time taken e2e: {time_taken} s")
     else:
-        for i in range(num_iters):
-            tt_out_tensor = ttnn.experimental.llama_reduce_scatter(
-                tt_input_tensors_list[i],
-                tt_intermediate_tensors_list[i],
-                dim,
-                ccl_semaphore_handles[i],
-                worker_sub_device_id,
-                cluster_axis=1,
-                mesh_device=mesh_device,
-                num_links=num_links,
-                memory_config=output_mem_config,
-            )
-            tt_out_tensor_list.append(tt_out_tensor)
-            ttnn.synchronize_device(mesh_device, sub_device_ids=sub_device_stall_group)
+        signpost("start")
+        tt_out_tensor_list = run_op(num_iters, store_all_results=True)
+        signpost("stop")
 
     mesh_device.reset_sub_device_stall_group()
-    teardown_fabric_interface(mesh_device)
 
     passed = True
     first_failed_tensor_index = None
     failed_indices = []
+    expected_pcc = 0.999 if dtype == ttnn.bfloat8_b else 0.9999
     for tensor_index in range(len(tt_out_tensor_list)):
         tt_torch_tensor = ttnn.to_torch(
             tt_out_tensor_list[tensor_index],
@@ -250,7 +298,7 @@ def run_reduce_scatter_test(
                 mesh_device, mesh_shape=[num_devices_fracture, num_devices_scatter], dims=(0, 1)
             ),
         )
-        eq, output_results = comp_pcc(tt_torch_tensor, output_tensor_goldens_list[tensor_index], 0.999)
+        eq, output_results = comp_pcc(tt_torch_tensor, output_tensor_goldens_list[tensor_index], expected_pcc)
         logger.info(f"Output tensor {tensor_index} has result {output_results}")
         if not eq:
             passed = False
@@ -258,12 +306,10 @@ def run_reduce_scatter_test(
             failed_indices = torch.where(tt_torch_tensor != output_tensor_goldens_list[tensor_index])
             break
 
-    for i in range(num_devices_scatter * num_devices_fracture):
-        logger.info(f"Device {i} has {mesh_device.get_devices()[i].num_program_cache_entries()} program cache entries")
-        assert (
-            mesh_device.get_devices()[i].num_program_cache_entries() == 1
-            or mesh_device.get_devices()[i].num_program_cache_entries() == num_iters
-        ), f"Device {i} has {mesh_device.get_devices()[i].num_program_cache_entries()} program cache entries"
+    logger.info(f"Device has {mesh_device.num_program_cache_entries()} program cache entries")
+    assert (
+        mesh_device.num_program_cache_entries() == 1 or mesh_device.num_program_cache_entries() == num_iters
+    ), f"Device {i} has {mesh_device.num_program_cache_entries()} program cache entries"
 
     if not passed:
         logger.info(f"Failed indices: {failed_indices}")
@@ -271,7 +317,15 @@ def run_reduce_scatter_test(
 
 
 @pytest.mark.parametrize(
-    "device_params", [{"trace_region_size": 90000, "dispatch_core_axis": ttnn.DispatchCoreAxis.COL}], indirect=True
+    "device_params",
+    [
+        {
+            "trace_region_size": 233472,
+            "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+        }
+    ],
+    indirect=True,
 )
 @pytest.mark.parametrize("trace_mode", [True])
 @pytest.mark.parametrize(
@@ -282,13 +336,20 @@ def run_reduce_scatter_test(
     indirect=True,
 )
 def test_fabric_reduce_scatter_tg_trace(mesh_device, trace_mode):
+    device = mesh_device.get_device(mesh_device.get_device_ids()[0])
+    # Only run these tests on unharvested TG
+    device_grid = (device.compute_with_storage_grid_size().x, device.compute_with_storage_grid_size().y)
+    if device_grid != (7, 10):
+        pytest.skip("Not TG!")
+
     dim = 3
     shard_height = 32
     shard_width = 160
     num_devices_scatter = 4
     num_devices_fracture = 8
     num_cores = 24
-    num_iters = 30
+    num_iters = 75
+    warmup_iters = 10
     trace_mode = trace_mode
 
     run_reduce_scatter_test(
@@ -300,13 +361,18 @@ def test_fabric_reduce_scatter_tg_trace(mesh_device, trace_mode):
         num_devices_fracture,
         num_cores,
         num_iters,
+        warmup_iters,
         trace_mode,
         num_links=3,
         scheme="random",
     )
 
 
-@pytest.mark.parametrize("device_params", [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL}], indirect=True)
+@pytest.mark.parametrize(
+    "device_params",
+    [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL, "fabric_config": ttnn.FabricConfig.FABRIC_1D}],
+    indirect=True,
+)
 @pytest.mark.parametrize("trace_mode", [False])
 @pytest.mark.parametrize(
     "mesh_device",
@@ -316,6 +382,12 @@ def test_fabric_reduce_scatter_tg_trace(mesh_device, trace_mode):
     indirect=True,
 )
 def test_fabric_reduce_scatter_tg_no_trace(mesh_device, trace_mode):
+    device = mesh_device.get_device(mesh_device.get_device_ids()[0])
+    # Only run these tests on unharvested TG
+    device_grid = (device.compute_with_storage_grid_size().x, device.compute_with_storage_grid_size().y)
+    if device_grid != (7, 10):
+        pytest.skip("Not TG!")
+
     dim = 3
     shard_height = 32
     shard_width = 160
@@ -323,6 +395,7 @@ def test_fabric_reduce_scatter_tg_no_trace(mesh_device, trace_mode):
     num_devices_fracture = 8
     num_cores = 24
     num_iters = 30
+    warmup_iters = 0
     trace_mode = trace_mode
 
     run_reduce_scatter_test(
@@ -334,7 +407,126 @@ def test_fabric_reduce_scatter_tg_no_trace(mesh_device, trace_mode):
         num_devices_fracture,
         num_cores,
         num_iters,
+        warmup_iters,
         trace_mode,
         num_links=3,
         scheme="random",
+    )
+
+
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        {
+            "trace_region_size": 90000,
+            "dispatch_core_axis": ttnn.DispatchCoreAxis.ROW,
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+        }
+    ],
+    indirect=True,
+)
+@pytest.mark.parametrize("trace_mode", [True, False])
+@pytest.mark.parametrize(
+    "mesh_device",
+    [
+        (8, 4),  # TODO: Once fabric can be initialized on a SubMesh, revert to (1, 2)
+    ],
+    indirect=True,
+)
+@pytest.mark.parametrize("shard_height", [32])
+@pytest.mark.parametrize("shard_width", [64])
+@pytest.mark.parametrize("input_grid", [(5, 4)])
+@pytest.mark.parametrize("output_grid", [(5, 2)])
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16])
+def test_fabric_reduce_scatter_regular_grid_2_dev(
+    mesh_device, trace_mode, shard_height, shard_width, input_grid, output_grid, dtype
+):
+    device = mesh_device.get_device(mesh_device.get_device_ids()[0])
+    # Only run these tests on unharvested TG
+    device_grid = (device.compute_with_storage_grid_size().x, device.compute_with_storage_grid_size().y)
+    if device_grid != (8, 8):
+        pytest.skip("Not TG!")
+
+    dim = 3
+    num_devices_scatter = 4
+    num_devices_fracture = 8
+    num_cores = input_grid[0] * input_grid[1]
+    num_iters = 30
+    warmup_iters = 0
+    run_reduce_scatter_test(
+        mesh_device,
+        dim,
+        shard_height,
+        shard_width,
+        num_devices_scatter,
+        num_devices_fracture,
+        num_cores,
+        num_iters,
+        warmup_iters,
+        trace_mode,
+        num_links=1,
+        scheme="random",
+        use_regular_grid=True,
+        input_grid=input_grid,
+        output_grid=output_grid,
+        dtype=dtype,
+    )
+
+
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        {
+            "trace_region_size": 90000,
+            "dispatch_core_axis": ttnn.DispatchCoreAxis.ROW,
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+        }
+    ],
+    indirect=True,
+)
+@pytest.mark.parametrize("trace_mode", [True])
+@pytest.mark.parametrize(
+    "mesh_device",
+    [
+        (8, 4),  # TODO: Once fabric can be initialized on a SubMesh, revert to (1, 4)
+    ],
+    indirect=True,
+)
+@pytest.mark.parametrize("shard_height", [32])
+@pytest.mark.parametrize("shard_width", [64])
+@pytest.mark.parametrize("input_grid", [(5, 5)])
+@pytest.mark.parametrize("output_grid", [(5, 1)])
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16])
+def test_fabric_reduce_scatter_regular_grid_4_dev(
+    mesh_device, trace_mode, shard_height, shard_width, input_grid, output_grid, dtype
+):
+    device = mesh_device.get_device(mesh_device.get_device_ids()[0])
+    # Only run these tests on unharvested TG
+    device_grid = (device.compute_with_storage_grid_size().x, device.compute_with_storage_grid_size().y)
+    if device_grid != (8, 8):
+        pytest.skip("Not TG!")
+
+    dim = 3
+    num_devices_scatter = 4
+    num_devices_fracture = 8
+    num_cores = input_grid[0] * input_grid[1] - 5  # test padding
+    num_iters = 30
+    warmup_iters = 0
+    run_reduce_scatter_test(
+        mesh_device,
+        dim,
+        shard_height,
+        shard_width,
+        num_devices_scatter,
+        num_devices_fracture,
+        num_cores,
+        num_iters,
+        warmup_iters,
+        trace_mode,
+        num_links=3,
+        scheme="random",
+        use_regular_grid=True,
+        input_grid=input_grid,
+        output_grid=output_grid,
+        dtype=dtype,
     )

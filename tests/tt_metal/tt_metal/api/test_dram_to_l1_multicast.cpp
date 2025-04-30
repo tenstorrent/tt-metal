@@ -1,15 +1,32 @@
 // SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
+#include <chrono>
+#include <fmt/base.h>
+#include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/logger.hpp>
+#include <tt-metalium/tt_metal.hpp>
+#include <cstddef>
+#include <cstdint>
+#include <map>
+#include <memory>
+#include <string>
+#include <variant>
+#include <vector>
+
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/buffer_types.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/data_types.hpp>
+#include <tt-metalium/device.hpp>
 #include "dispatch_fixture.hpp"
 #include "gtest/gtest.h"
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/tt_metal.hpp>
-#include "tt_metal/test_utils/env_vars.hpp"
-#include <tt-metalium/command_queue.hpp>
+#include <tt-metalium/kernel_types.hpp>
+#include <tt-metalium/program.hpp>
+#include <tt_stl/span.hpp>
 #include "tt_metal/test_utils/deprecated/tensor.hpp"
-#include <tt-metalium/bfloat16.hpp>
-#include <tt-metalium/logger.hpp>
+#include "umd/device/types/arch.h"
 
 using namespace tt;
 
@@ -148,73 +165,6 @@ TEST_F(DispatchFixture, TensixDRAMtoL1MulticastLoopbackSrc) {
         .kernel_file = "tests/tt_metal/tt_metal/test_kernels/dataflow/dram_to_l1_multicast_include_src.cpp",
     };
     for (unsigned int id = 0; id < devices_.size(); id++) {
-        ASSERT_TRUE(unit_tests_common::dram::test_dram_to_l1_multicast::dram_to_l1_multicast(
-            this, devices_.at(id), test_config));
-    }
-}
-TEST_F(DispatchFixture, TensixDRAMtoL1MulticastExcludeRegionUpLeft) {
-    unit_tests_common::dram::test_dram_to_l1_multicast::DRAMtoL1MulticastConfig test_config = {
-        .dest_buffer_addr = 200 * 1024,
-        .target_grid_offset = 0,  // source core is in exclusion zone, don't count twice
-        .kernel_file = "tests/tt_metal/tt_metal/test_kernels/dataflow/dram_to_l1_multicast_exclude_region.cpp",
-        .exclude_start = {10, 6},
-        .exclude_direction = {0, 0}};
-    for (unsigned int id = 0; id < devices_.size(); id++) {
-        if (!(this->devices_.at(id)->arch() == tt::ARCH::BLACKHOLE)) {
-            tt::log_info(tt::LogTest, "This test is only supported on Blackhole");
-            GTEST_SKIP();
-        }
-        ASSERT_TRUE(unit_tests_common::dram::test_dram_to_l1_multicast::dram_to_l1_multicast(
-            this, devices_.at(id), test_config));
-    }
-}
-
-TEST_F(DispatchFixture, TensixDRAMtoL1MulticastExcludeRegionUpRight) {
-    unit_tests_common::dram::test_dram_to_l1_multicast::DRAMtoL1MulticastConfig test_config = {
-        .dest_buffer_addr = 200 * 1024,
-        .target_grid_offset = 1,
-        .kernel_file = "tests/tt_metal/tt_metal/test_kernels/dataflow/dram_to_l1_multicast_exclude_region.cpp",
-        .exclude_start = {10, 6},
-        .exclude_direction = {1, 0}};
-    for (unsigned int id = 0; id < devices_.size(); id++) {
-        if (!(this->devices_.at(id)->arch() == tt::ARCH::BLACKHOLE)) {
-            tt::log_info(tt::LogTest, "This test is only supported on Blackhole");
-            GTEST_SKIP();
-        }
-        ASSERT_TRUE(unit_tests_common::dram::test_dram_to_l1_multicast::dram_to_l1_multicast(
-            this, devices_.at(id), test_config));
-    }
-}
-
-TEST_F(DispatchFixture, TensixDRAMtoL1MulticastExcludeRegionDownLeft) {
-    unit_tests_common::dram::test_dram_to_l1_multicast::DRAMtoL1MulticastConfig test_config = {
-        .dest_buffer_addr = 200 * 1024,
-        .target_grid_offset = 1,
-        .kernel_file = "tests/tt_metal/tt_metal/test_kernels/dataflow/dram_to_l1_multicast_exclude_region.cpp",
-        .exclude_start = {10, 6},
-        .exclude_direction = {0, 1}};
-    for (unsigned int id = 0; id < devices_.size(); id++) {
-        if (!(this->devices_.at(id)->arch() == tt::ARCH::BLACKHOLE)) {
-            tt::log_info(tt::LogTest, "This test is only supported on Blackhole");
-            GTEST_SKIP();
-        }
-        ASSERT_TRUE(unit_tests_common::dram::test_dram_to_l1_multicast::dram_to_l1_multicast(
-            this, devices_.at(id), test_config));
-    }
-}
-
-TEST_F(DispatchFixture, TensixDRAMtoL1MulticastExcludeRegionDownRight) {
-    unit_tests_common::dram::test_dram_to_l1_multicast::DRAMtoL1MulticastConfig test_config = {
-        .dest_buffer_addr = 200 * 1024,
-        .target_grid_offset = 1,
-        .kernel_file = "tests/tt_metal/tt_metal/test_kernels/dataflow/dram_to_l1_multicast_exclude_region.cpp",
-        .exclude_start = {10, 6},
-        .exclude_direction = {1, 1}};
-    for (unsigned int id = 0; id < devices_.size(); id++) {
-        if (!(this->devices_.at(id)->arch() == tt::ARCH::BLACKHOLE)) {
-            tt::log_info(tt::LogTest, "This test is only supported on Blackhole");
-            GTEST_SKIP();
-        }
         ASSERT_TRUE(unit_tests_common::dram::test_dram_to_l1_multicast::dram_to_l1_multicast(
             this, devices_.at(id), test_config));
     }

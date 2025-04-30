@@ -3,14 +3,30 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <gtest/gtest.h>
-
-#include "device.hpp"
-#include "device_fixture.hpp"
+#include <stdint.h>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tt_metal.hpp>
+#include <map>
 #include <numeric>
 #include <string>
-#include <tt-metalium/kernel.hpp>
-#include <tt-metalium/tt_metal.hpp>
-#include <tt-metalium/host_api.hpp>
+#include <variant>
+#include <vector>
+
+#include <tt-metalium/allocator.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/data_types.hpp>
+#include "device_fixture.hpp"
+#include <tt-metalium/hal.hpp>
+#include <tt-metalium/hal_types.hpp>
+#include <tt-metalium/kernel_types.hpp>
+#include <tt-metalium/program.hpp>
+#include <tt-metalium/utils.hpp>
+
+namespace tt {
+namespace tt_metal {
+class IDevice;
+}  // namespace tt_metal
+}  // namespace tt
 
 using namespace tt;
 using namespace tt::tt_metal;
@@ -20,7 +36,7 @@ TEST_F(DeviceFixture, TensixTestTwentyThousandCompileTimeArgs) {
         CoreCoord core = {0, 0};
         Program program;
 
-        const uint32_t write_addr = hal_ref.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::UNRESERVED);
+        const uint32_t write_addr = device->allocator()->get_base_allocator_addr(tt_metal::HalMemType::L1);
 
         const std::map<string, string>& defines = {{"WRITE_ADDRESS", std::to_string(write_addr)}};
 

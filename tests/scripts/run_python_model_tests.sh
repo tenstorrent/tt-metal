@@ -35,15 +35,21 @@ run_python_model_tests_wormhole_b0() {
     # higher sequence lengths and different formats trigger memory issues
     pytest models/demos/falcon7b_common/tests/unit_tests/test_falcon_matmuls_and_bmms_with_mixed_precision.py -k "seq_len_128 and in0_BFLOAT16-in1_BFLOAT8_B-out_BFLOAT16-weights_DRAM"
     pytest tests/ttnn/integration_tests/resnet/test_ttnn_functional_resnet50.py -k "pretrained_weight_false"
-    WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest tests/ttnn/integration_tests/yolov4/test_ttnn_yolov4.py -k "pretrained_weight_false"
+    WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest models/demos/yolov4/tests/pcc/test_ttnn_yolov4.py -k "pretrained_weight_false"
 
-    WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest tests/ttnn/integration_tests/yolov8x/test_yolov8x.py::test_yolov8x_640 -k "pretrained_weight_false"
+    WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest tests/ttnn/integration_tests/yolov8x/test_yolov8x.py::test_yolov8x_640
 
     # Unet Shallow
     WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -svv models/experimental/functional_unet/tests/test_unet_model.py
 
     # Mamba
     WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -svv models/demos/wormhole/mamba/tests/test_residual_block.py -k "pretrained_weight_false"
+
+    # Mobilenetv2git
+    WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -svv tests/ttnn/integration_tests/mobilenetv2/test_mobilenetv2.py
+
+    #Yolov10
+    WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -svv tests/ttnn/integration_tests/yolov10/test_ttnn_yolov10.py::test_yolov10x
 
     # Llama3.1-8B
     llama8b=/mnt/MLPerf/tt_dnn-models/llama/Meta-Llama-3.1-8B-Instruct/
@@ -73,7 +79,7 @@ run_python_model_tests_slow_runtime_mode_wormhole_b0() {
 }
 
 run_python_model_tests_blackhole() {
-    pytest models/demos/blackhole/stable_diffusion/tests/test_unet_2d_condition_model.py
+    pytest models/demos/blackhole/stable_diffusion/tests
 
     # Llama3.1-8B
     llama8b=/mnt/MLPerf/tt_dnn-models/llama/Meta-Llama-3.1-8B-Instruct/
@@ -84,4 +90,5 @@ run_python_model_tests_blackhole() {
     done
 
     pytest tests/ttnn/integration_tests/resnet/test_ttnn_functional_resnet50.py
+    pytest models/demos/yolov4/tests/pcc/test_ttnn_yolov4_bh.py
 }

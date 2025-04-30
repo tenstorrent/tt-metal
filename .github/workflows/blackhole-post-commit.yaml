@@ -8,6 +8,10 @@ on:
           required: false
           type: string
           default: 'BH'
+      enable-watcher:
+          description: 'Enable watcher in BH Post commit'
+          default: false
+          type: boolean
   workflow_dispatch:
     inputs:
       runner-label:
@@ -25,11 +29,21 @@ on:
           - RelWithDebInfo
           - ASan
           - TSan
+      enable-watcher:
+        description: 'Enable watcher in BH Post commit'
+        default: false
+        type: boolean
+      run-demo-tests:
+        description: 'Run blackhole demo tests'
+        default: true
+        type: boolean
   schedule:
     - cron: "0 */4 * * *"
   # Pause this since not enough runners to support every commit to main
   # push:
   #  branches: ["main"]
+
+run-name: ${{ inputs.enable-watcher == true && 'Blackhole post-commit tests (watcher enabled) ' || 'Blackhole post-commit tests' }}
 
 permissions:
   actions: read
@@ -40,9 +54,6 @@ permissions:
   packages: write
 
 jobs:
-  static-checks:
-    uses: ./.github/workflows/all-static-checks.yaml
-    secrets: inherit
   build-artifact:
     uses: ./.github/workflows/build-artifact.yaml
     secrets: inherit
@@ -50,6 +61,7 @@ jobs:
       build-type: ${{ inputs.build-type || 'Release' }}
       build-wheel: true
       version: "22.04"
+      build-umd-tests: true
   build-artifact-profiler:
     uses: ./.github/workflows/build-artifact.yaml
     secrets: inherit
@@ -69,6 +81,7 @@ jobs:
       docker-image: ${{ needs.build-artifact-profiler.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact-profiler.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact-profiler.outputs.wheel-artifact-name }}
+      enable-watcher: ${{ inputs.enable-watcher || false }}
   umd-unit-tests:
     needs: build-artifact
     secrets: inherit
@@ -77,6 +90,7 @@ jobs:
       arch: blackhole
       runner-label: ${{ inputs.runner-label || 'BH' }}
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
   sd-unit-tests:
     needs: build-artifact
     uses: ./.github/workflows/build-and-unit-tests.yaml
@@ -85,16 +99,21 @@ jobs:
       arch: blackhole
       runner-label: ${{ inputs.runner-label || 'BH' }}
       timeout: 15
-      os: "ubuntu-22.04"
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      enable-watcher: ${{ inputs.enable-watcher || false }}
   fd-unit-tests:
     needs: build-artifact
     uses: ./.github/workflows/fast-dispatch-build-and-unit-tests.yaml
     secrets: inherit
     with:
-      timeout: 20
+      timeout: 40
       arch: blackhole
       runner-label: ${{ inputs.runner-label || 'BH' }}
-      os: "ubuntu-22.04"
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      enable-watcher: ${{ inputs.enable-watcher || false }}
   # FD C++ Unit Tests
   cpp-unit-tests:
     needs: build-artifact
@@ -105,6 +124,9 @@ jobs:
       runner-label: ${{ inputs.runner-label || 'BH' }}
       timeout: 20
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      enable-watcher: ${{ inputs.enable-watcher || false }}
   models-unit-tests:
     needs: build-artifact
     secrets: inherit
@@ -113,7 +135,20 @@ jobs:
       arch: blackhole
       runner-label: ${{ inputs.runner-label || 'BH' }}
       timeout: 20
-
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      enable-watcher: ${{ inputs.enable-watcher || false }}
+  blackhole-demo-tests:
+    # Issue 20998: Due to capacity constraints, only run blackhole demo tests on workflow_dispatch events
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.run-demo-tests == true }}
+    needs: build-artifact
+    secrets: inherit
+    uses: ./.github/workflows/blackhole-demo-tests-impl.yaml
+    with:
+      runner-label: BH-baremetal
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
 #   profiler-regression:
 #     needs: build-artifact-profiler
 #     uses: ./.github/workflows/run-profiler-regression.yaml

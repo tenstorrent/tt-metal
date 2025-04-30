@@ -2,10 +2,34 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <fmt/base.h>
+#include <gtest/gtest.h>
+#include <stdint.h>
+#include <tt-metalium/host_api.hpp>
+#include <functional>
+#include <initializer_list>
+#include <map>
+#include <memory>
+#include <set>
+#include <string>
+#include <unordered_set>
+#include <variant>
+#include <vector>
+
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/buffer_types.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/data_types.hpp>
 #include "debug_tools_fixture.hpp"
 #include "debug_tools_test_utils.hpp"
-#include <tt-metalium/tt_metal.hpp>
-#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/kernel_types.hpp>
+#include <tt-metalium/program.hpp>
+#include <tt_stl/span.hpp>
+#include "impl/context/metal_context.hpp"
+#include "umd/device/types/arch.h"
+#include "umd/device/types/xy_pair.h"
+#include <tt-metalium/utils.hpp>
 
 //////////////////////////////////////////////////////////////////////////////////////////
 // A test for checking watcher waypoints.
@@ -16,7 +40,7 @@ using namespace tt::tt_metal;
 
 namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {
-static void RunTest(WatcherFixture* fixture, IDevice* device) {
+void RunTest(WatcherFixture* fixture, IDevice* device) {
     // Set up program
     Program program = Program();
 
@@ -44,7 +68,7 @@ static void RunTest(WatcherFixture* fixture, IDevice* device) {
 
     // The kernels need arguments to be passed in: the number of cycles to delay while syncing,
     // and an L1 buffer to use for the syncing.
-    uint32_t clk_mhz = tt::Cluster::instance().get_device_aiclk(device->id());
+    uint32_t clk_mhz = tt::tt_metal::MetalContext::instance().get_cluster().get_device_aiclk(device->id());
     uint32_t delay_cycles = clk_mhz * 2000000; // 2 seconds
     tt_metal::InterleavedBufferConfig l1_config {
         .device = device,
@@ -168,7 +192,8 @@ static void RunTest(WatcherFixture* fixture, IDevice* device) {
                     virtual_core.y,
                     waypoint,
                     // TODO(#17275): Rework risc counts & masks into HAL and generalize this test.
-                    (device->arch() == ARCH::BLACKHOLE) ? waypoint : "   X");
+                    // Active eth core only has one available erisc to test on.
+                    (device->arch() == ARCH::BLACKHOLE and not is_active) ? waypoint : "   X");
                 if (device->arch() == ARCH::BLACKHOLE) {
                     expected += fmt::format("rmsg:***|** h_id:0 smsg:* k_id:{}", k_id_s);
                 } else {

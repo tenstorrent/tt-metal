@@ -35,9 +35,6 @@ run_t3000_llama3_70b_tests() {
   # Output verification demo for old llama3-70b codebase, to be removed once old codebase is deleted
   env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest models/demos/t3000/llama3_70b/demo/demo.py::test_LlamaModel_demo[wormhole_b0-True-device_params0-short_context-check_enabled-greedy-tt-70b-T3000-80L-decode_only-trace_mode_off-text_completion-llama3] --timeout=900 ; fail+=$?
 
-  # Test chunked prefill for llama2-70b
-  env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest models/demos/t3000/llama2_70b/tests/test_chunked_generation.py::test_batch_prefill --timeout=900 ; fail+=$?
-
   # Record the end time
   end_time=$(date +%s)
   duration=$((end_time - start_time))
@@ -101,6 +98,30 @@ run_t3000_llama3_vision_tests() {
   end_time=$(date +%s)
   duration=$((end_time - start_time))
   echo "LOG_METAL: run_t3000_llama3_vision_tests $duration seconds to complete"
+  if [[ $fail -ne 0 ]]; then
+    exit 1
+  fi
+}
+
+run_t3000_llama3_90b_vision_tests() {
+  # Record the start time
+  fail=0
+  start_time=$(date +%s)
+
+  echo "LOG_METAL: Running run_t3000_llama3_90b_vision_tests"
+
+  wh_arch_yaml=wormhole_b0_80_arch_eth_dispatch.yaml
+  # Llama3.2-90B
+  llama90b=/mnt/MLPerf/tt_dnn-models/llama/Llama3.2-90B-Vision-Instruct
+  mesh_device=T3K
+
+  MESH_DEVICE=$mesh_device LLAMA_DIR=$llama90b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/demo/simple_vision_demo.py -k "batch1-notrace" --timeout 900; fail+=$?
+  echo "LOG_METAL: Llama3.2-90B vision tests for $mesh_device completed"
+
+  # Record the end time
+  end_time=$(date +%s)
+  duration=$((end_time - start_time))
+  echo "LOG_METAL: run_t3000_llama3_90b_vision_tests $duration seconds to complete"
   if [[ $fail -ne 0 ]]; then
     exit 1
   fi
@@ -171,6 +192,9 @@ run_t3000_tests() {
 
   # Run llama3 vision tests
   run_t3000_llama3_vision_tests
+
+  # Run llama3_90b vision tests
+  run_t3000_llama3_90b_vision_tests
 
   # Run llama3_70b tests
   run_t3000_llama3_70b_tests

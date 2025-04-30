@@ -14,8 +14,9 @@ import os
 import ttnn
 
 
-from models.tt_transformers.tt.generator import Generator
-from models.tt_transformers.tt.model_config import ModelOptimizations
+from models.tt_transformers.tt.generator import Generator, SamplingParams
+from models.tt_transformers.tt.model_config import DecodersPrecision, parse_decoder_json
+
 from models.tt_transformers.tt.common import (
     preprocess_inputs_prefill,
     PagedAttentionConfig,
@@ -409,9 +410,10 @@ def prepare_generator_args(
 @pytest.mark.parametrize(
     "optimizations",
     [
-        ModelOptimizations.performance,
-        ModelOptimizations.accuracy,
+        lambda model_args: DecodersPrecision.performance(model_args.n_layers, model_args.model_name),
+        lambda model_args: DecodersPrecision.accuracy(model_args.n_layers, model_args.model_name),
     ],
+    ids=["performance", "accuracy"],
 )
 @pytest.mark.parametrize("device_params", [{"trace_region_size": 23887872, "num_command_queues": 2}], indirect=True)
 @pytest.mark.parametrize(
@@ -446,15 +448,14 @@ def test_demo_text(
     """
     Simple demo with limited dependence on reference code.
     """
-
-    if is_ci_env and (optimizations == ModelOptimizations.accuracy or not ci_only):
+    test_id = request.node.callspec.id
+    if is_ci_env and (("accuracy" in test_id) or not ci_only):
         pytest.skip("CI only runs the CI-only tests")
 
     # TODO: Remove this once all batch sizes are supported on TG
     if os.environ.get("MESH_DEVICE") == "TG" and batch_size not in [1, 32]:
         pytest.skip("TG only supports batch 1 and 32")
 
-    mesh_device.enable_async(True)
     enable_trace = True  # Use tracing for better perf
     print_to_file = False  # Enable this flag to print the output of all users to a file
 
@@ -472,7 +473,13 @@ def test_demo_text(
     paged_attention = request.config.getoption("--paged_attention") or paged_attention
     page_params = request.config.getoption("--page_params") or page_params
     sampling_params = request.config.getoption("--sampling_params") or sampling_params
-    optimizations = request.config.getoption("--optimizations") or optimizations
+    json_config_file = request.config.getoption("--decoder_config_file")
+
+    if json_config_file:
+        optimizations = parse_decoder_json(json_config_file)
+    else:
+        optimizations = request.config.getoption("--optimizations") or optimizations
+
     if request.config.getoption("--stop_at_eos") in [
         0,
         1,
@@ -610,6 +617,10 @@ def test_demo_text(
         argmax_on_device = (
             False if (global_batch_size // data_parallel > 1 or sampling_params["temperature"] != 0) else True
         )
+        if argmax_on_device:
+            device_sampling_params = SamplingParams(temperature=0.0, top_k=-1, top_p=1.0)
+        else:
+            device_sampling_params = None
 
         # Initial positions
         current_pos = torch.tensor([decoding_pos[b] for b in range(global_batch_size)])
@@ -637,11 +648,11 @@ def test_demo_text(
                 enable_trace=enable_trace,
                 page_table=page_table,
                 kv_cache=tt_kv_cache,
-                argmax_on_device=argmax_on_device,
+                sampling_params=device_sampling_params,
             )
 
             # Get the next token
-            if argmax_on_device:
+            if device_sampling_params is not None:
                 out_tok = logits.unsqueeze(1)
             else:
                 # TODO Fix use case with temperature > 0

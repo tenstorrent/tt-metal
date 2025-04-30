@@ -4,6 +4,10 @@
 
 #include "rmsnorm.hpp"
 
+#include "ttnn/operations/creation.hpp"
+#include "ttnn/operations/data_movement/clone/clone.hpp"
+#include "ttnn/operations/eltwise/binary/binary.hpp"
+#include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/operations/normalization/layernorm/device/layernorm_op.hpp"
 
 namespace ttnn::operations::normalization {
@@ -17,6 +21,28 @@ ttnn::Tensor ExecuteRMSNorm::invoke(
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<const LayerNormProgramConfig>& program_config,
     const std::optional<const DeviceComputeKernelConfig> compute_kernel_config) {
+    auto output_memory_config = memory_config.value_or(input_tensor.memory_config());
+    auto rank = input_tensor.get_logical_shape().size();
+
+    // For 0V tensors
+    if (input_tensor.get_logical_volume() == 0) [[unlikely]] {
+        return ttnn::clone(input_tensor, /*dtype=*/std::nullopt, output_memory_config, compute_kernel_config);
+    }
+
+    // For 0D tensors
+    if (rank == 0) [[unlikely]] {
+        auto result = ttnn::divide(
+            input_tensor, ttnn::abs(input_tensor, output_memory_config), /*alpha=*/std::nullopt, output_memory_config);
+
+        if (weight.has_value()) {
+            result = ttnn::multiply(result, weight.value(), /*alpha=*/std::nullopt, output_memory_config);
+        }
+        if (bias.has_value()) {
+            result = ttnn::add(result, bias.value(), /*alpha=*/std::nullopt, output_memory_config);
+        }
+        return result;
+    }
+
     auto arch = input_tensor.storage_type() == StorageType::DEVICE
                     ? input_tensor.device()->arch()
                     : ttnn::operations::experimental::auto_format::AutoFormat::GetDefaultDevice()->arch();
@@ -26,7 +52,7 @@ ttnn::Tensor ExecuteRMSNorm::invoke(
                LayerNorm{
                    .norm_type = LayerNormType::RMSNORM,
                    .eps = epsilon,
-                   .output_mem_config = memory_config.value_or(input_tensor.memory_config()),
+                   .output_mem_config = output_memory_config,
                    .program_config = program_config.value_or(LayerNormDefaultProgramConfig{}),
                    .compute_kernel_config = kernel_config_val},
                {input_tensor},

@@ -37,3 +37,10 @@ repos:
       require_serial: true
       types_or: [c++, c]
       args: ["--style=file"]
+- repo: local
+  hooks:
+    - id: validate-metalium-api
+      name: validate-metalium-public-apis
+      entry: python3 scripts/validate_metalium_api.py tt_metal/api
+      language: system
+      pass_filenames: false

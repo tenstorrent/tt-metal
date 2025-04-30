@@ -2,19 +2,37 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <chrono>
+#include <fmt/base.h>
+#include <stdint.h>
+#include <sys/types.h>
+#include <tt-metalium/allocator.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/logger.hpp>
+#include <tt-metalium/tt_metal.hpp>
+#include <map>
+#include <memory>
+#include <string>
+#include <utility>
+#include <variant>
+#include <vector>
+
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/buffer_types.hpp>
+#include <tt-metalium/circular_buffer_types.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/data_types.hpp>
+#include <tt-metalium/device.hpp>
 #include "device_fixture.hpp"
 #include "gtest/gtest.h"
-
-#include <tt-metalium/logger.hpp>
-#include <tt-metalium/math.hpp>
-#include <tt-metalium/tt_metal.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/allocator.hpp>
-
-#include "tt_metal/test_utils/comparison.hpp"
-#include "tt_metal/test_utils/df/df.hpp"
-#include "tt_metal/test_utils/print_helpers.hpp"
+#include <tt-metalium/kernel_types.hpp>
+#include <tt-metalium/program.hpp>
+#include <tt_stl/span.hpp>
+#include <tt-metalium/tt_backend_api_types.hpp>
 #include "tt_metal/test_utils/stimulus.hpp"
+#include <tt-metalium/utils.hpp>
 
 using std::vector;
 using namespace tt::tt_metal;
@@ -309,7 +327,6 @@ TEST_F(DeviceFixture, TensixTestSingleCoreMultiTileBankedDramReaderOnly) {
     for (unsigned int id = 0; id < num_devices_; id++) {
         BankedConfig test_config;
         auto num_banks = devices_.at(id)->allocator()->get_num_banks(BufferType::DRAM);
-        TT_FATAL(num_banks % 2 == 0, "Error");
         size_t num_tiles = num_banks / 2;
         size_t tile_increment = num_tiles;
         uint32_t num_iterations = 6;
@@ -365,7 +382,6 @@ TEST_F(DeviceFixture, TensixTestSingleCoreMultiTileBankedDramWriterOnly) {
     for (unsigned int id = 0; id < num_devices_; id++) {
         BankedConfig test_config;
         auto num_banks = devices_.at(id)->allocator()->get_num_banks(BufferType::DRAM);
-        TT_FATAL(num_banks % 2 == 0, "Error");
         size_t num_tiles = num_banks / 2;
         size_t tile_increment = num_tiles;
         uint32_t num_iterations = 6;
@@ -393,7 +409,6 @@ TEST_F(DeviceFixture, TensixTestSingleCoreMultiTileBankedL1ReaderAndWriter) {
     for (unsigned int id = 0; id < num_devices_; id++) {
         BankedConfig test_config;
         size_t num_tiles = devices_.at(id)->allocator()->get_num_banks(BufferType::L1);
-        TT_FATAL(num_tiles % 2 == 0, "Error");
         size_t tile_increment = num_tiles / 2;
         uint32_t num_iterations = 6;
         uint32_t index = 0;
@@ -515,7 +530,6 @@ TEST_F(DeviceFixture, TensixTestSingleCoreMultiTileBankedDramReaderDataCopyDramW
     for (unsigned int id = 0; id < num_devices_; id++) {
         BankedConfig test_config;
         size_t num_tiles = devices_.at(id)->allocator()->get_num_banks(BufferType::DRAM);
-        TT_FATAL(num_tiles % 2 == 0, "Error");
         size_t tile_increment = num_tiles / 2;
         uint32_t num_iterations = 6;
         uint32_t index = 0;

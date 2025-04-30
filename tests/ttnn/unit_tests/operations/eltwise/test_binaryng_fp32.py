@@ -388,7 +388,7 @@ def test_ng_scalar_fp32(device, ttnn_function):
     z_torch = golden_fn(x_torch, y_torch)
     x_tt = ttnn.from_torch(x_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
     y_tt = y_torch
-    z_tt_out = ttnn_function(x_tt, y_tt)
+    z_tt_out = ttnn_function(x_tt, y_tt, use_legacy=False)
     tt_out = ttnn.to_torch(z_tt_out)
 
     status = torch.allclose(z_torch, tt_out, atol=1e-10, rtol=1e-5, equal_nan=False)

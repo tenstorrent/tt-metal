@@ -1,11 +1,10 @@
 name: Package and release
 on:
   workflow_dispatch:
-  # NOTE: Tempoarily disabling due to workflow running against 0.57 branch
-  # schedule:
+  schedule:
     # Create rc every day at EOD of PST Mon-Fri + night of Sunday to kick off
     # releases for beginning of work week
-    # - cron: "0 1,14 * * *"
+    - cron: "0 1,14 * * *"
 
 permissions:
   contents: write
@@ -15,12 +14,13 @@ jobs:
   build-artifact:
     needs: create-tag
     uses: ./.github/workflows/build-artifact.yaml
+    secrets: inherit
     with:
       version: 22.04
       build-wheel: true
-    secrets: inherit
   build-artifact-profiler:
     uses: ./.github/workflows/build-artifact.yaml
+    secrets: inherit
     with:
       version: 22.04
       tracy: true
@@ -39,6 +39,7 @@ jobs:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      arch: wormhole_b0
   t3000-demos:
     needs: build-artifact
     uses: ./.github/workflows/t3000-demo-tests-impl.yaml
@@ -175,7 +176,7 @@ jobs:
         with:
           name: changelog
       - name: Assert wheels exist
-        run: ls -arhl ttnn-*+*.whl
+        run: ls -arhl ttnn-*.whl
       - name: Release
         # A major release has not been tagged yet, so we need to do this to avoid
         # Node 16 deprecation warning message
@@ -192,7 +193,7 @@ jobs:
             README.md
             INSTALLING.md
             models/MODEL_UPDATES.md
-            ttnn-*+*.whl
+            ttnn-*.whl
             tt-metalium.tar.gz
           fail_on_unmatched_files: true
   create-docker-release-image:

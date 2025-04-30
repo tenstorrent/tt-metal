@@ -10,6 +10,7 @@
 #include "ttnn/operations/conv/conv2d/device/conv2d_op.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
 #include "ttnn/operations/sliding_window/sliding_window.hpp"
+#include "ttnn/tensor/types.hpp"
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/tt_metal.hpp>
@@ -38,7 +39,6 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_width_sh
     const std::optional<unary::UnaryWithParam>& fused_activation,
     const OptimizedConvParallelizationConfig& parallelization_config,
     const OptimizedConvBlockConfig& block_config,
-    bool use_shallow_conv_variant,
     bool transpose_mcast,
     Tensor& output,
     DeviceComputeKernelConfig compute_kernel_config,
@@ -385,7 +385,6 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
     const std::optional<unary::UnaryWithParam>& fused_activation,
     const OptimizedConvParallelizationConfig& parallelization_config,
     const OptimizedConvBlockConfig& block_config,
-    bool use_shallow_conv_variant,
     bool transpose_mcast,
     Tensor& output,
     DeviceComputeKernelConfig compute_kernel_config,
@@ -413,7 +412,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
     uint32_t out_subblock_h_ntiles = block_config.out_subblock_h_ntiles;
     uint32_t out_subblock_w_ntiles = block_config.out_subblock_w_ntiles;
 
-    auto conv_reader_indices_buffer = conv_reader_indices.value().device_buffer();
+    auto conv_reader_indices_storage = conv_reader_indices.value().device_storage();
 
     tt::DataFormat act_df = tt_metal::datatype_to_dataformat_converter(a.get_dtype());
     tt::DataFormat weight_df = tt_metal::datatype_to_dataformat_converter(b.get_dtype());
@@ -539,7 +538,6 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
         input_channels_padded);
     // Always use split reader for first conv in resnet which has input channels = 16
     // TODO: Expose option to split readers for 1D convs to python?
-    // bool split_reader = use_shallow_conv_variant;
     if (enable_split_reader) {
         TT_FATAL(not weight_width_sliced, "split reader does not work with 2d conv");
         TT_FATAL(
@@ -752,9 +750,6 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
         bias_ntiles =
             bias.value().get_padded_shape()[3] / constants::TILE_WIDTH;  // TODO: support non tile multiple sizes
     }
-    auto output_shape = sliding_window_config.get_output_shape();
-    uint32_t conv_output_size_h = output_shape[1];
-    uint32_t conv_output_size_w = output_shape[2];
 
     std::map<string, string> reader_defines;
 
@@ -1124,6 +1119,13 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
                             a.element_size()
                       : (round_up(a_shard_spec.shape[1] * filter_w, TILE_WIDTH) - (a_shard_spec.shape[1] * filter_w)) *
                             a.element_size();
+    const uint32_t act_block_w_extra_align_scalars = act_block_w_extra_align_bytes / a.element_size();
+    // When using block float format, we must handle cases where the data doesn't align to 16-scalar boundaries.
+    // If act_block_w_extra_align_bytes contains a number of scalars that isn't a multiple of 16,
+    // we need to zero out the temporary circular buffers used during the tiling process.
+    // Failing to do this could allow residual junk data in L1 memory to corrupt valid input data.
+    const bool needs_act_block_zero_out =
+        act_block_w_extra_align_scalars % 16 != 0 && tt_metal::is_block_float(output.get_dtype());
 
     uint32_t in0_block_w = act_block_w_ntiles / conv_act_c_blocks;
     uint32_t in0_block_num_tiles = act_block_num_tiles / conv_act_c_blocks;
@@ -1286,7 +1288,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
             out_block_h_datums * 2,
             1,
             tt::DataFormat::Float16_b,
-            &*conv_reader_indices_buffer);
+            conv_reader_indices_storage.get_buffer());
 
         // Local L1 to store temp vars
         cb_indices.cb_for_l1_array = cb_indices.get_next_cb_index();
@@ -1313,22 +1315,18 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
         in0_num_blocks_w = 1 * conv_act_c_blocks;
     }
     reader_compile_time_args = {
-        (uint32_t)stride_h,
-        (uint32_t)stride_w,
         (uint32_t)dilation_h,
         (uint32_t)dilation_w,
-        (uint32_t)conv_act_size_w,
-        (uint32_t)conv_output_size_w,  // conv_output_w_last_index
         (uint32_t)conv_act_c_read_bytes,
         (uint32_t)window_outer,
         (uint32_t)window_inner,
         (uint32_t)reader_arg_act_block_h_datums,
         (uint32_t)(split_reader ? act_block_num_tiles_split / conv_act_c_blocks
                                 : act_block_num_tiles / conv_act_c_blocks),
+        (uint32_t)filter_h,
         (uint32_t)filter_w,
         (uint32_t)conv_act_size_w + (pad_w),
-        (uint32_t)act_block_w_extra_align_bytes,  // only used for 1d systolic variant
-        (uint32_t)filter_h,
+        (uint32_t)act_block_w_extra_align_bytes,                          // only used for 1d systolic variant
         (uint32_t)num_blocks_act_h_per_core,                              // act_num_blocks_h
         (uint32_t)in0_block_num_tiles,                                    // act_block_num_tiles
         (uint32_t)conv_act_c_blocks,                                      // act_w_num_outer
@@ -1340,6 +1338,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
         (uint32_t)(transpose_mcast ? 1 : 0),
         (uint32_t)act_block_h_datums_last_block,
         (uint32_t)act_block_h_datums_split_last,
+        (uint32_t)needs_act_block_zero_out,  // zero_out_act_cb
         (uint32_t)cb_indices.act_cb,
         (uint32_t)cb_indices.sharded_act_cb,
         (uint32_t)cb_indices.cb_for_reader_indices,
@@ -1412,20 +1411,19 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
 
     if (split_reader) {
         std::vector<uint32_t> split_reader_args = {
-            // (uint32_t)act_block_h_datums,
             (uint32_t)act_block_h_datums_split_last,
-            // (uint32_t)act_block_num_tiles / conv_act_c_blocks,
             (uint32_t)act_block_num_tiles_split_last / conv_act_c_blocks,
             (uint32_t)conv_act_c_read_bytes,
             (uint32_t)filter_w * conv_act_c_read_bytes,                   // coalesced_read_bytes
             (uint32_t)(conv_act_size_w + pad_w) * conv_act_c_read_bytes,  // window_outer_offset
             (uint32_t)act_block_w_extra_align_bytes,                      // only used for 1d systolic variant
             (uint32_t)act_block_h_datums_split,                           // only used for 1d systolic variant
-            (uint32_t)act_block_h_datums_last_block};
+            (uint32_t)act_block_h_datums_last_block,
+            (uint32_t)needs_act_block_zero_out};
         writer_compile_time_args.insert(
             writer_compile_time_args.end(), split_reader_args.begin(), split_reader_args.end());
     } else {
-        std::vector<uint32_t> split_reader_args(8, 0);
+        std::vector<uint32_t> split_reader_args(9, 0);
         writer_compile_time_args.insert(
             writer_compile_time_args.end(), split_reader_args.begin(), split_reader_args.end());
     }
@@ -1730,7 +1728,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
 
     auto mcast_sender_cores_vec = grid_to_cores(mcast_sender_cores.start_coord, mcast_sender_cores.end_coord, true);
     auto mcast_receiver_cores_vec = corerange_to_cores(mcast_receiver_cores, std::nullopt, true);
-    // Capture conv_reader_indices_buffer to cache this with the program
+    // Capture conv_reader_indices_storage to cache this with the program
     auto override_runtime_arguments_callback =
         [reader_kernel_id = reader_id,
          mcast_sender_cores = mcast_sender_cores_vec,
@@ -1743,7 +1741,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
          num_cores_x = num_cores_x,
          num_cores_y = num_cores_y,
          has_bias = has_bias,
-         conv_reader_indices_buffer = conv_reader_indices_buffer](
+         conv_reader_indices_storage = conv_reader_indices_storage](
             const void* operation,
             Program& program,
             const std::vector<Tensor>& input_tensors,
@@ -1805,7 +1803,6 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
     const OptimizedConvBlockConfig& block_config,
     DataType output_dtype,
     std::array<std::uint32_t, 4> input_tensor_shape,
-    bool use_shallow_conv_variant,
     std::optional<const DeviceComputeKernelConfig> compute_kernel_config,
     Tensor& output,
     bool enable_act_double_buffer,
@@ -1853,7 +1850,6 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
             fused_activation,
             parallelization_config,
             block_config,
-            use_shallow_conv_variant,
             parallel_config.shard_orientation == ShardOrientation::COL_MAJOR,
             output,
             compute_kernel_config.value(),
@@ -1876,7 +1872,6 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
         fused_activation,
         parallelization_config,
         block_config,
-        use_shallow_conv_variant,
         parallel_config.shard_orientation == ShardOrientation::COL_MAJOR,
         output,
         compute_kernel_config.value(),

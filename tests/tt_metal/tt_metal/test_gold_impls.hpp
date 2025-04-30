@@ -7,6 +7,7 @@
 #include <vector>
 #include <cstdint>
 #include <limits>
+#include <tt-metalium/assert.hpp>
 #include <tt-metalium/tilize_utils.hpp>
 #include <tt-metalium/bfloat16.hpp>
 
@@ -173,4 +174,4 @@ inline std::vector<uint16_t> gold_bmm(
     return result;
 }
 
-typedef BcastOp EltwiseOp;
+using EltwiseOp = BcastOp;

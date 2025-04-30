@@ -2,12 +2,39 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/tt_metal.hpp>
-#include <tt-metalium/device_pool.hpp>
-#include "rtoptions.hpp"
-#include <tt-metalium/bfloat16.hpp>
 #include <chrono>
+#include <fmt/base.h>
+#include <stdint.h>
+#include <stdlib.h>
+#include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/device_pool.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <array>
+#include <exception>
+#include <map>
+#include <memory>
+#include <variant>
+#include <vector>
+
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/buffer_types.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/data_types.hpp>
+#include <tt-metalium/device.hpp>
+#include "hostdevcommon/common_values.hpp"
+#include <tt-metalium/kernel_types.hpp>
+#include <tt-metalium/logger.hpp>
+#include <tt-metalium/program.hpp>
+#include <tt_stl/span.hpp>
+#include "impl/context/metal_context.hpp"
+#include <tt-metalium/system_memory_manager.hpp>
+
+namespace tt {
+namespace tt_metal {
+class CommandQueue;
+}  // namespace tt_metal
+}  // namespace tt
 
 /*
  * Similar to loopback programming example, except run on al devices and skip device teardown to check if we can
@@ -37,7 +64,7 @@ int main(int argc, char** argv) {
         ids.push_back(id);
     }
 
-    const auto& dispatch_core_config = tt::llrt::RunTimeOptions::get_instance().get_dispatch_core_config();
+    const auto& dispatch_core_config = tt::tt_metal::MetalContext::instance().rtoptions().get_dispatch_core_config();
     tt::DevicePool::initialize(ids, 1, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, dispatch_core_config);
     const auto devices = tt::DevicePool::instance().get_all_active_devices();
 

@@ -662,10 +662,10 @@ inline __attribute__((always_inline)) void noc_fast_atomic_increment(
 }
 
 // issue noc reads while wait for outstanding transactions done
-template <uint8_t noc_mode = DM_DEDICATED_NOC>
+template <uint8_t noc_mode = DM_DEDICATED_NOC, bool skip_ptr_update = false>
 inline __attribute__((always_inline)) void ncrisc_noc_fast_read_with_transaction_id(
     uint32_t noc, uint32_t cmd_buf, uint32_t src_base_addr, uint32_t src_addr, uint32_t dest_addr, uint32_t trid) {
-    if constexpr (noc_mode == DM_DYNAMIC_NOC) {
+    if constexpr (noc_mode == DM_DYNAMIC_NOC && !skip_ptr_update) {
         inc_noc_counter_val<proc_type, NocBarrierType::READS_NUM_ISSUED>(noc, 1);
     }
     uint32_t src_addr_;
@@ -677,7 +677,7 @@ inline __attribute__((always_inline)) void ncrisc_noc_fast_read_with_transaction
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_RET_ADDR_LO, dest_addr);
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_TARG_ADDR_LO, src_addr_);  // (uint32_t)src_addr
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CMD_CTRL, NOC_CTRL_SEND_REQ);
-    if constexpr (noc_mode == DM_DEDICATED_NOC) {
+    if constexpr (noc_mode == DM_DEDICATED_NOC && !skip_ptr_update) {
         noc_reads_num_issued[noc] += 1;
     }
 }

@@ -4,7 +4,7 @@
 
 #include <assert.hpp>
 #include <buffer.hpp>
-#include <buffer_constants.hpp>
+#include <buffer_types.hpp>
 #include <core_coord.hpp>
 #include <device.hpp>
 #include <global_circular_buffer_impl.hpp>
@@ -23,12 +23,10 @@
 
 #include "distributed.hpp"
 #include "hal_types.hpp"
-#include "llrt/hal.hpp"
 #include "mesh_buffer.hpp"
 #include "mesh_device.hpp"
-#include "reflection.hpp"
-#include "span.hpp"
-#include "tt_cluster.hpp"
+#include <tt_stl/reflection.hpp>
+#include "impl/context/metal_context.hpp"
 #include <umd/device/types/xy_pair.h>
 
 namespace tt::tt_metal {
@@ -79,7 +77,7 @@ void GlobalCircularBuffer::setup_cb_buffers(BufferType buffer_type, uint32_t max
     };
     cb_buffer_ = distributed::AnyBuffer::create(cb_buffer_shard_config);
 
-    auto l1_alignment = hal_ref.get_alignment(HalMemType::L1);
+    auto l1_alignment = MetalContext::instance().hal().get_alignment(HalMemType::L1);
     // is_sender, receiver_val, fifo_start_addr, fifo_size, fifo_ptr, noc_xy coords, and pages_sent
     constexpr uint32_t num_config_elements = 7;
     uint32_t num_noc_xy_words = 2 * max_num_receivers_per_sender;
@@ -152,7 +150,7 @@ void GlobalCircularBuffer::setup_cb_buffers(BufferType buffer_type, uint32_t max
         } else {
             if (device->using_slow_dispatch()) {
                 detail::WriteToBuffer(*cb_config_buffer.get_buffer(), cb_config_host_buffer);
-                tt::Cluster::instance().l1_barrier(device->id());
+                tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(device->id());
             } else {
                 EnqueueWriteBuffer(
                     device->command_queue(), *cb_config_buffer.get_buffer(), cb_config_host_buffer.data(), false);

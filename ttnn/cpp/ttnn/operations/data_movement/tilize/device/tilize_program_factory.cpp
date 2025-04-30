@@ -287,6 +287,10 @@ operation::ProgramWithCallbacks tilize_multi_core_block(const Tensor& a, Tensor&
 
     uint32_t total_num_rows = a.get_logical_shape()[-2];
 
+    if (output.get_padded_shape()[-2] > tt::round_up(total_num_rows, tile_height)) {
+        total_num_rows = output.get_padded_shape()[-2];
+    }
+
     std::map<std::string, std::string> reader_defines = {
         {"STICK_SIZE_IS_POW2", std::to_string((uint32_t)(stick_size_is_power_of_two))}};
     KernelHandle unary_reader_kernel_id = CreateKernel(
@@ -668,7 +672,7 @@ operation::ProgramWithCallbacks tilize_multi_core_sharded(const Tensor& input, T
 
     std::vector<uint32_t> reader_compile_time_args = {(std::uint32_t)src0_cb_index};
 
-    bool dst_is_dram = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
+    bool dst_is_dram = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
     std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)output_cb_index};
 
     tt::tt_metal::KernelHandle unary_reader_kernel_id = tt::tt_metal::CreateKernel(

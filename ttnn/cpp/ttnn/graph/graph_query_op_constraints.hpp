@@ -4,13 +4,17 @@
 
 #pragma once
 
+#include <cstdint>
 #include <optional>
 #include <string>
 
 #include <nlohmann/json.hpp>
 #include <tt-metalium/logger.hpp>
+#include <tuple>
+#include <variant>
 #include "ttnn/graph/graph_processor.hpp"
 #include "ttnn/graph/graph_trace_utils.hpp"
+#include "ttnn/tensor/tensor.hpp"
 
 namespace ttnn::graph {
 
@@ -24,11 +28,17 @@ namespace detail {
 inline Tensor extract_output_tensor(const Tensor& result) { return result; }
 
 // conv2d output
-template <typename... Args>
-Tensor extract_output_tensor(const std::tuple<Tensor, Args...>& result) {
-    return std::get<0>(result);
+template <typename... Args1, typename... Args2>
+Tensor extract_output_tensor(const std::variant<
+                             ttnn::Tensor,
+                             std::tuple<ttnn::Tensor, Args1...>,
+                             std::tuple<ttnn::Tensor, Args2...>,
+                             std::tuple<ttnn::Tensor, Args1..., Args2...>>& result) {
+    return std::visit<Tensor>(
+        tt::stl::overloaded{
+            [](const ttnn::Tensor& arg) { return arg; }, [](const auto& arg) { return std::get<0>(arg); }},
+        result);
 }
-
 }  // namespace detail
 
 struct ResourceUsage {
@@ -62,7 +72,7 @@ struct ConstraintQueryResponse {
 template <typename Op, typename... Args>
 auto query_op_constraints(Op op, IDevice* device, Args&&... args) {
     nlohmann::json op_trace;
-    std::optional<TensorSpec> output_spec = std::nullopt;
+    Tensor output;
     // outer graph capture is to avoid dispatching/allocating dummy input tensors
     {
         auto capture_outer = ScopedGraphCapture(GraphProcessor::RunMode::NO_DISPATCH);
@@ -80,8 +90,7 @@ auto query_op_constraints(Op op, IDevice* device, Args&&... args) {
         // inner graph capture is to capture the actual op graph trace
         try {
             auto capture_inner = ScopedGraphCapture(GraphProcessor::RunMode::NO_DISPATCH);
-            Tensor output = detail::extract_output_tensor(std::apply(op, transformed_args));
-            output_spec = output.get_tensor_spec();
+            output = detail::extract_output_tensor(std::apply(op, transformed_args));
             op_trace = capture_inner.end_graph_capture();
         }  // end of inner graph capture
         catch (const std::exception& e) {
@@ -97,13 +106,14 @@ auto query_op_constraints(Op op, IDevice* device, Args&&... args) {
     size_t cb_peak_size_per_core = extract_circular_buffers_peak_size_per_core(op_trace);
     size_t l1_buffers_peak_per_core =
         extract_l1_buffer_allocation_peak_size_per_core(op_trace, interleaved_storage_cores);
-    size_t l1_output_buffer_per_core =
-        extract_l1_output_buffer_allocation_size_per_core(op_trace, interleaved_storage_cores);
+    size_t l1_output_buffer_per_core = output.buffer()->is_dram() ? 0
+                                                                  : extract_l1_output_buffer_allocation_size_per_core(
+                                                                        output, interleaved_storage_cores);
 
     return ConstraintQueryResponse{
         ExecutionStatus::Success,
         {cb_peak_size_per_core, l1_buffers_peak_per_core, l1_output_buffer_per_core},
-        output_spec};
+        output.get_tensor_spec()};
 }
 
 }  // namespace ttnn::graph

@@ -9,9 +9,9 @@
 #include <tt-metalium/dispatch_settings.hpp>
 #include <tt-metalium/launch_message_ring_buffer_state.hpp>
 #include <tt-metalium/system_memory_cq_interface.hpp>
-#include <umd/device/tt_device/tlb_manager.h>  // needed because tt_io.hpp requires needs TLBManager
-#include <umd/device/tt_io.hpp>                // for tt::Writer
-#include <umd/device/tt_xy_pair.h>             // for tt_cxy_pair
+#include <umd/device/chip_helpers/tlb_manager.h>  // needed because tt_io.hpp requires needs TLBManager
+#include <umd/device/tt_io.hpp>                   // for tt::Writer
+#include <umd/device/tt_xy_pair.h>                // for tt_cxy_pair
 #include <atomic>
 #include <cstdint>
 #include <functional>

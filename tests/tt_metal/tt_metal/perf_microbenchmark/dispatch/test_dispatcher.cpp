@@ -2,19 +2,46 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <algorithm>
-#include <functional>
-#include <random>
-
-#include "logger.hpp"
+#include <chrono>
+#include <fmt/base.h>
+#include <stdint.h>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_align.hpp>
 #include <tt-metalium/tt_metal.hpp>
-#include "rtoptions.hpp"
-#include "tt_metal/impl/dispatch/kernels/cq_commands.hpp"
-#include "common.h"
+#include <algorithm>
+#include <cstdlib>
+#include <ctime>
+#include <exception>
+#include <iomanip>
+#include <map>
+#include <memory>
+#include <optional>
+#include <sstream>
+#include <string>
+#include <utility>
+#include <variant>
+#include <vector>
 
+#include <tt-metalium/allocator.hpp>
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/buffer_types.hpp>
+#include <tt-metalium/command_queue_common.hpp>
+#include "common.h"
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/data_types.hpp>
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/dispatch_settings.hpp>
+#include <tt-metalium/kernel_types.hpp>
+#include "llrt.hpp"
+#include <tt-metalium/logger.hpp>
+#include <tt-metalium/metal_soc_descriptor.h>
+#include <tt-metalium/program.hpp>
+#include <tt_stl/span.hpp>
 #include "test_common.hpp"
+#include "impl/context/metal_context.hpp"
+#include "tt_metal/impl/dispatch/kernels/cq_commands.hpp"
+#include "umd/device/tt_core_coordinates.h"
+#include <tt-metalium/utils.hpp>
 
 constexpr uint32_t DEFAULT_ITERATIONS = 10000;
 constexpr uint32_t DEFAULT_WARMUP_ITERATIONS = 100;
@@ -436,12 +463,14 @@ int main(int argc, char** argv) {
 
         // Want different buffers on each core, instead use big buffer and self-manage it
         uint32_t dispatch_l1_unreserved_base =
-            DispatchMemMap::get(CoreType::WORKER).get_device_command_queue_addr(CommandQueueDeviceAddrType::UNRESERVED);
+            MetalContext::instance()
+                .dispatch_mem_map(CoreType::WORKER)
+                .get_device_command_queue_addr(CommandQueueDeviceAddrType::UNRESERVED);
         uint32_t l1_buf_base = tt::align(dispatch_l1_unreserved_base, dispatch_buffer_page_size_g);
         TT_ASSERT((l1_buf_base & (dispatch_buffer_page_size_g - 1)) == 0);
 
         // Make sure user doesn't exceed available L1 space with cmd line arguments.
-        auto& soc_desc = tt::Cluster::instance().get_soc_desc(device->id());
+        auto& soc_desc = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(device->id());
         if (prefetcher_buffer_size_g + l1_buf_base > soc_desc.worker_l1_size) {
             log_fatal(
                 LogTest,
@@ -525,13 +554,16 @@ int main(int argc, char** argv) {
         const uint32_t prefetch_sync_sem = spoof_prefetch_core_sem_1_id;
 
         const uint32_t host_completion_queue_wr_ptr =
-            DispatchMemMap::get(CoreType::WORKER)
+            MetalContext::instance()
+                .dispatch_mem_map(CoreType::WORKER)
                 .get_host_command_queue_addr(CommandQueueHostAddrType::COMPLETION_Q_WR);
         const uint32_t dev_completion_queue_wr_ptr =
-            DispatchMemMap::get(CoreType::WORKER)
+            MetalContext::instance()
+                .dispatch_mem_map(CoreType::WORKER)
                 .get_device_command_queue_addr(CommandQueueDeviceAddrType::COMPLETION_Q_WR);
         const uint32_t dev_completion_queue_rd_ptr =
-            DispatchMemMap::get(CoreType::WORKER)
+            MetalContext::instance()
+                .dispatch_mem_map(CoreType::WORKER)
                 .get_device_command_queue_addr(CommandQueueDeviceAddrType::COMPLETION_Q_RD);
 
         std::vector<uint32_t> dispatch_compile_args = {
@@ -571,6 +603,11 @@ int main(int argc, char** argv) {
             0,
             0,
             0,
+            0,
+            0,
+            0,     // unused for single device - used to "virtualize" the number of eth cores across devices
+            0,     // unused for single device - used to "virtualize" the number of eth cores across devices
+            0,     // unused for single device - used to "virtualize" the number of eth cores across devices
             true,  // is_dram_variant
             true,  // is_host_variant
         };
@@ -694,7 +731,7 @@ int main(int argc, char** argv) {
         log_fatal(e.what());
     }
 
-    tt::llrt::RunTimeOptions::get_instance().set_kernels_nullified(false);
+    tt::tt_metal::MetalContext::instance().rtoptions().set_kernels_nullified(false);
 
     if (pass) {
         log_info(LogTest, "test_dispatcher.cpp - Test Passed");

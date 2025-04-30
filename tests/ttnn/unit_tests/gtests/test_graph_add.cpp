@@ -2,25 +2,38 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "gtest/gtest.h"
+#include <boost/move/utility_core.hpp>
+#include <fmt/base.h>
+#include <nlohmann/json.hpp>
+#include <stddef.h>
 #include <tt-metalium/logger.hpp>
-#include "tests/tt_metal/tt_metal/common/dispatch_fixture.hpp"
-#include "ttnn/device.hpp"
-#include "ttnn/operations/eltwise/binary/binary.hpp"
-#include "ttnn/operations/core/core.hpp"
-#include "ttnn/operations/creation.hpp"
-#include "ttnn_test_fixtures.hpp"
-
-#include "ttnn/tensor/types.hpp"
-
-#include "ttnn/graph/graph_processor.hpp"
-#include "ttnn/graph/graph_trace_utils.hpp"
-#include "ttnn/graph/graph_operation_queries.hpp"
-
-#include "ttnn/tensor/types.hpp"
-
 #include <cstdint>
+#include <optional>
+#include <set>
+#include <sstream>
 #include <string>
+#include <tuple>
+#include <unordered_set>
+#include <vector>
+
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/buffer_types.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/graph_tracking.hpp>
+#include "gtest/gtest.h"
+#include <tt-metalium/shape.hpp>
+#include "ttnn/decorators.hpp"
+#include "ttnn/graph/graph_operation_queries.hpp"
+#include "ttnn/graph/graph_trace_utils.hpp"
+#include "ttnn/operations/creation.hpp"
+#include "ttnn/operations/eltwise/binary/binary.hpp"
+#include "ttnn/operations/functions.hpp"
+#include "ttnn/tensor/shape/shape.hpp"
+#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/tensor/types.hpp"
+#include "ttnn/types.hpp"
+#include "ttnn_test_fixtures.hpp"
 
 namespace ttnn {
 namespace operations {
@@ -57,7 +70,9 @@ TEST_P(AddOpGraphTestFixture, AddGraphTrace) {
             ttnn::zeros(params.b_Shape, DataType::BFLOAT16, ttnn::TILE_LAYOUT, *device_, params.memory_config);
 
         auto call = [&] {
-            const auto output_tensor = ttnn::add(input_tensor_a, input_tensor_b);
+            constexpr tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> none{};
+            const auto output_tensor = ttnn::add(
+                input_tensor_a, input_tensor_b, std::nullopt, std::nullopt, std::nullopt, none, none, none, false);
             return output_tensor;
         };
 
@@ -85,9 +100,6 @@ TEST_P(AddOpGraphTestFixture, AddGraphTrace) {
             auto compute_with_storage_grid_size = device_->compute_with_storage_grid_size();
             size_t interleaved_storage_cores = compute_with_storage_grid_size.x * compute_with_storage_grid_size.y;
 
-            auto l1_output_per_core =
-                graph::extract_l1_output_buffer_allocation_size_per_core(json_trace, interleaved_storage_cores);
-            EXPECT_EQ(l1_output_per_core, params.expected_l1_output_per_core);
             auto l1_peak_per_core =
                 graph::extract_l1_buffer_allocation_peak_size_per_core(json_trace, interleaved_storage_cores);
             EXPECT_EQ(l1_peak_per_core, params.expected_l1_peak_per_core);

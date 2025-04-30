@@ -478,7 +478,7 @@ def preprocess_encoder_inputs(config, input_features, *, parameters, device):
     # First time convs are runs, weights are on host (convs will return weights on device)
     conv2_out_channel_splits, conv2_out_channels = prepare_conv_weights(config, parameters)
 
-    input_embeds, [weights_device, _] = ttnn.Conv1d(
+    input_embeds, [weights_device, _] = ttnn.conv1d(
         input_tensor=input_features,
         weight_tensor=parameters.conv1.weight,
         device=device,
@@ -501,7 +501,7 @@ def preprocess_encoder_inputs(config, input_features, *, parameters, device):
 
     out_tensor_splits = []
     for i in range(conv2_out_channel_splits):
-        out_split, [weights_device, _] = ttnn.Conv1d(
+        out_split, [weights_device, _] = ttnn.conv1d(
             input_tensor=input_embeds,
             weight_tensor=parameters.conv2.weight[i],
             device=device,

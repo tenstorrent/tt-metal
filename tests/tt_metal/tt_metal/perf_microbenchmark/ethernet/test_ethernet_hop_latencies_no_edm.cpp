@@ -2,35 +2,41 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <algorithm>
-#include <functional>
-#include <limits>
-#include <random>
-#include <tuple>
-
-#include <tt-metalium/mesh_device_view.hpp>
-#include <tt-metalium/logger.hpp>
-#include "umd/device/types/arch.h"
-#include <tt-metalium/device_impl.hpp>
-#include <tt-metalium/data_types.hpp>
-#include <tt-metalium/kernel_types.hpp>
-#include "tt_backend_api_types.hpp"
+#include <assert.h>
+#include <fmt/base.h>
+#include <stdint.h>
 #include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/math.hpp>
-#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/data_types.hpp>
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/kernel.hpp>
-#include "tt_metal/test_utils/comparison.hpp"
-#include "tt_metal/test_utils/df/df.hpp"
-#include "tt_metal/test_utils/env_vars.hpp"
-#include "tt_metal/test_utils/print_helpers.hpp"
-#include "tt_metal/test_utils/stimulus.hpp"
-
-#include <tt-metalium/persistent_kernel_cache.hpp>
+#include <tt-metalium/kernel_types.hpp>
+#include <tt-metalium/logger.hpp>
+#include <tt-metalium/math.hpp>
 #include <tt-metalium/mesh_device.hpp>
+#include <tt-metalium/mesh_device_view.hpp>
+#include <tt-metalium/tt_metal.hpp>
+#include <algorithm>
+#include <cstdlib>
+#include <exception>
+#include <map>
+#include <memory>
+#include <string>
+#include <unordered_map>
+#include <unordered_set>
+#include <variant>
+#include <vector>
 
-// TODO: ARCH_NAME specific, must remove
-#include "eth_l1_address_map.h"
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/mesh_config.hpp>
+#include <tt-metalium/mesh_coord.hpp>
+#include <tt-metalium/program.hpp>
+#include <tt_stl/span.hpp>
+#include <tt-metalium/system_memory_manager.hpp>
+#include <tt-metalium/tt_backend_api_types.hpp>
+#include "tt_metal/test_utils/env_vars.hpp"
+#include "umd/device/tt_core_coordinates.h"
+#include "umd/device/types/arch.h"
+#include "umd/device/types/xy_pair.h"
 
 using tt::tt_metal::IDevice;
 using tt::tt_metal::distributed::MeshCoordinate;
@@ -93,12 +99,12 @@ std::vector<uint32_t> get_eth_receiver_rt_args(
     uint32_t init_handshake_core_y,
     uint32_t init_handshake_semaphore_id) {
     constexpr std::size_t semaphore_size = 16;
-    std::vector<uint32_t> erisc_semaphore_addresses(
-        max_concurrent_samples, eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE + 16 + 16);
+    uint32_t erisc_unreserved_base = tt::tt_metal::MetalContext::instance().hal().get_dev_addr(
+        tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::UNRESERVED);
+    std::vector<uint32_t> erisc_semaphore_addresses(max_concurrent_samples, erisc_unreserved_base + 16 + 16);
     std::vector<uint32_t> erisc_buffer_addresses(
         max_concurrent_samples,
-        eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE + 16 + 16 +
-            round_up(semaphore_size * max_concurrent_samples, 16));
+        erisc_unreserved_base + 16 + 16 + round_up(semaphore_size * max_concurrent_samples, 16));
     for (std::size_t i = 0; i < max_concurrent_samples; i++) {
         erisc_semaphore_addresses.at(i) += i * semaphore_size;
         erisc_buffer_addresses.at(i) += i * sample_page_size;
@@ -106,7 +112,7 @@ std::vector<uint32_t> get_eth_receiver_rt_args(
 
     std::vector<uint32_t> rt_args = {
         static_cast<uint32_t>(is_starting_core ? 1 : 0),
-        eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE,
+        erisc_unreserved_base,
         num_samples,
         max_concurrent_samples,
         sample_page_size,
@@ -134,12 +140,12 @@ std::vector<uint32_t> get_eth_sender_rt_args(
     uint32_t receiver_y,
     uint32_t receiver_start_semaphore_id) {
     constexpr std::size_t semaphore_size = 16;
-    std::vector<uint32_t> erisc_semaphore_addresses(
-        max_concurrent_samples, eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE + 16 + 16);
+    uint32_t erisc_unreserved_base = tt::tt_metal::MetalContext::instance().hal().get_dev_addr(
+        tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::UNRESERVED);
+    std::vector<uint32_t> erisc_semaphore_addresses(max_concurrent_samples, erisc_unreserved_base + 16 + 16);
     std::vector<uint32_t> erisc_buffer_addresses(
         max_concurrent_samples,
-        eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE + 16 + 16 +
-            round_up(semaphore_size * max_concurrent_samples, 16));
+        erisc_unreserved_base + 16 + 16 + round_up(semaphore_size * max_concurrent_samples, 16));
     for (std::size_t i = 0; i < max_concurrent_samples; i++) {
         erisc_buffer_addresses.at(i) += i * sample_page_size;
         erisc_semaphore_addresses.at(i) += i * semaphore_size;
@@ -147,7 +153,7 @@ std::vector<uint32_t> get_eth_sender_rt_args(
 
     std::vector<uint32_t> rt_args = {
         static_cast<uint32_t>(is_starting_core ? 1 : 0),
-        eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE,
+        erisc_unreserved_base,
         num_samples,
         max_concurrent_samples,
         sample_page_size,
@@ -197,6 +203,9 @@ void build_and_run_roundtrip_latency_test(
         }
     }
 
+    uint32_t erisc_unreserved_base = tt::tt_metal::MetalContext::instance().hal().get_dev_addr(
+        tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::UNRESERVED);
+
     std::unordered_map<IDevice*, uint32_t> device_visits;
 
     for (std::size_t i = 0; i < n_hops; i++) {
@@ -214,8 +223,8 @@ void build_and_run_roundtrip_latency_test(
         std::vector<uint32_t> const& receiver_eth_ct_args = {};
         std::vector<uint32_t> const& sender_eth_ct_args = {};
         bool is_starting_core = i == 0;
-        uint32_t receiver_start_semaphore = eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE +
-                                            16;  // CreateSemaphore(program, eth_receiver_core, 0, CoreType::ETH);
+        uint32_t receiver_start_semaphore =
+            erisc_unreserved_base + 16;  // CreateSemaphore(program, eth_receiver_core, 0, CoreType::ETH);
         log_trace(tt::LogTest, "is_starting_core: {}", (is_starting_core ? 1 : 0));
         std::vector<uint32_t> const& receiver_eth_rt_args = get_eth_receiver_rt_args(
             device,

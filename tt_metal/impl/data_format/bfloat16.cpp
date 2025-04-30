@@ -303,7 +303,7 @@ bool is_close(float a, float b, float rtol, float atol) {
     auto absdiff = fabsf(a - b);
     auto reldenom = fmaxf(fabsf(a), fabsf(b));
     auto result = (absdiff <= atol) || (absdiff <= rtol * reldenom);
-    if (result != true) {
+    if (!result) {
         std::cout << "Discrepacy: A = " << a << " B = " << b << std::endl;
         std::cout << "   absdiff = " << absdiff << std::endl;
         std::cout << "   reldiff = " << absdiff / (reldenom + 1e-6f) << std::endl;

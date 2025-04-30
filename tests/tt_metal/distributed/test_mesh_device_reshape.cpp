@@ -3,18 +3,28 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <gtest/gtest.h>
-#include <gmock/gmock.h>
-#include <cstddef>
-#include <array>
-
-#include "host_api.hpp"
+#include <stdlib.h>
 #include <tt_stl/indestructible.hpp>
-#include "mesh_config.hpp"
-#include "mesh_device.hpp"
-#include "mesh_coord.hpp"
+#include <algorithm>
+#include <cstddef>
+#include <memory>
+#include <optional>
+#include <stdexcept>
+#include <tuple>
+#include <vector>
 
-#include "system_mesh.hpp"
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/dispatch_core_common.hpp>
+#include "gmock/gmock.h"
+#include <tt-metalium/host_api.hpp>
+#include "hostdevcommon/common_values.hpp"
+#include <tt-metalium/mesh_config.hpp>
+#include <tt-metalium/mesh_coord.hpp>
+#include <tt-metalium/mesh_device.hpp>
+#include <tt-metalium/system_mesh.hpp>
 #include "tests/tt_metal/test_utils/env_vars.hpp"
+#include <tt-metalium/tt_backend_api_types.hpp>
+#include "umd/device/types/arch.h"
 
 namespace tt::tt_metal::distributed {
 namespace {
@@ -44,7 +54,7 @@ public:
     }
 };
 
-const std::vector<MeshShape> get_mesh_shapes() {
+std::vector<MeshShape> get_mesh_shapes() {
     static tt::stl::Indestructible<std::vector<MeshShape>> kMeshShapes(std::vector<MeshShape>{
         MeshShape{1, 1}, MeshShape{1, 2}, MeshShape{1, 3}, MeshShape{1, 4}, MeshShape{1, 5}, MeshShape{1, 6},
         MeshShape{1, 7}, MeshShape{1, 8}, MeshShape{2, 1}, MeshShape{2, 2}, MeshShape{2, 3}, MeshShape{2, 4},

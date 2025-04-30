@@ -6,7 +6,7 @@
 
 #include <tt-metalium/assert.hpp>
 #include <tt-metalium/device.hpp>
-#include <tt-metalium/program_impl.hpp>
+#include <tt-metalium/program.hpp>
 #include <tt-metalium/hal.hpp>
 
 #include <umd/device/types/cluster_descriptor_types.h>
@@ -18,13 +18,23 @@
 #include <optional>
 #include <cstdint>
 #include <vector>
+#include <array>
+#include <cstddef>
 
 namespace tt::tt_fabric {
 
 struct FabricEriscDatamoverConfig {
+    static constexpr uint32_t WR_CMD_BUF = 0;      // for large writes
+    static constexpr uint32_t RD_CMD_BUF = 1;      // for all reads
+    static constexpr uint32_t WR_REG_CMD_BUF = 2;  // for small writes (e.g., registers, semaphores)
+    static constexpr uint32_t AT_CMD_BUF = 3;      // for atomics
+
+    static constexpr uint32_t DEFAULT_RECEIVER_FORWARDING_NOC = 1;
+    static constexpr uint32_t DEFAULT_RECEIVER_LOCAL_WRITE_NOC = 1;
+    static constexpr uint32_t DEFAULT_SENDER_ACK_NOC = 0;
+
     static constexpr std::size_t num_sender_channels = 3;
     static constexpr std::size_t num_receiver_channels = 2;
-    static constexpr bool constrain_to_power_of_2_buffer_slot_counts = true;
 
     static constexpr std::size_t field_size = 16;
     static constexpr std::size_t buffer_alignment = 32;
@@ -88,14 +98,9 @@ struct FabricEriscDatamoverConfig {
     std::size_t buffer_region_start;
     std::size_t available_channel_buffering_space;
 
-    FabricEriscDatamoverConfig(
-        std::size_t channel_buffer_size_bytes,
-        std::size_t sender_ratio_size,
-        std::size_t receiver_ratio_size,
-        Topology topology = Topology::Linear);
+    FabricEriscDatamoverConfig(std::size_t channel_buffer_size_bytes, Topology topology = Topology::Linear);
 
     std::size_t channel_buffer_size_bytes = 0;
-    std::size_t channel_buffer_size_bytes_with_channel_sync = 0;
 
     std::array<std::size_t, num_sender_channels> sender_channels_size_bytes;
     std::array<std::size_t, num_receiver_channels> receiver_channels_size_bytes;
@@ -109,6 +114,16 @@ struct FabricEriscDatamoverConfig {
     std::size_t num_used_receiver_channels = 0;
 
     Topology topology = Topology::Linear;
+
+    // add the noc-usage and cmd_buf-usage here
+    std::array<std::size_t, num_receiver_channels> receiver_channel_forwarding_noc_ids;
+    std::array<std::size_t, num_receiver_channels> receiver_channel_forwarding_data_cmd_buf_ids;
+    std::array<std::size_t, num_receiver_channels> receiver_channel_forwarding_sync_cmd_buf_ids;
+    std::array<std::size_t, num_receiver_channels> receiver_channel_local_write_noc_ids;
+    std::array<std::size_t, num_receiver_channels> receiver_channel_local_write_cmd_buf_ids;
+
+    std::array<std::size_t, num_sender_channels> sender_channel_ack_noc_ids;
+    std::array<std::size_t, num_sender_channels> sender_channel_ack_cmd_buf_ids;
 
 private:
     FabricEriscDatamoverConfig();
@@ -187,13 +202,13 @@ public:
         bool dateline_connection = false);
 
     [[nodiscard]] SenderWorkerAdapterSpec build_connection_to_worker_channel() const;
-    [[nodiscard]] SenderWorkerAdapterSpec build_connection_to_fabric_channel(uint32_t vc) const;
+    [[nodiscard]] SenderWorkerAdapterSpec build_connection_to_fabric_channel(uint32_t vc);
 
     [[nodiscard]] std::vector<uint32_t> get_compile_time_args() const;
 
     [[nodiscard]] std::vector<uint32_t> get_runtime_args() const;
 
-    void connect_to_downstream_edm(const FabricEriscDatamoverBuilder& downstream_edm);
+    void connect_to_downstream_edm(FabricEriscDatamoverBuilder& downstream_edm);
 
     void dump_to_log() const {
         // TODO
@@ -205,6 +220,7 @@ public:
             tt::tt_fabric::TerminationSignal::GRACEFULLY_TERMINATE) const;
 
     void set_firmware_context_switch_interval(size_t interval);
+    void set_wait_for_host_signal(bool wait_for_host_signal);
 
     //    protected:
     friend class EdmLineFabricOpInterface;
@@ -250,12 +266,16 @@ public:
     std::array<std::optional<size_t>, num_virtual_channels> downstream_edm_vcs_worker_location_info_address;
     std::array<std::optional<size_t>, num_virtual_channels> downstream_vcs_sender_channel_buffer_index_semaphore_id;
 
+    std::array<bool, FabricEriscDatamoverConfig::num_sender_channels>
+        sender_channel_connection_liveness_check_disable_array;
+
     bool enable_persistent_mode = false;
     bool build_in_worker_connection_mode = false;
     size_t firmware_context_switch_interval = default_firmware_context_switch_interval;
     bool enable_first_level_ack = false;
     bool fuse_receiver_flush_and_completion_ptr = true;
     bool dateline_connection = false;
+    bool wait_for_host_signal = false;
 };
 
 }  // namespace tt::tt_fabric

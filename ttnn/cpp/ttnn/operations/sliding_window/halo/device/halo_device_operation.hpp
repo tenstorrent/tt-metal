@@ -15,15 +15,12 @@ namespace ttnn::operations::sliding_window {
 namespace halo {
 
 struct HaloDeviceOperation {
-    const int UNTILIZE_BLOCK_SIZE = 32;
-
     thread_local static std::unordered_map<std::size_t, std::uint32_t> sliding_window_max_out_nsticks_per_core;
     SlidingWindowConfig config_;
     ParallelConfig parallel_config_;
     uint32_t pad_val_;
     bool remote_read_;
     bool transpose_mcast_;
-    uint32_t reshard_num_cores_nhw_;
     uint32_t max_out_nsticks_per_core_;
     uint32_t in_nsticks_per_core_;
     tt::tt_metal::MemoryConfig output_memory_config_;
@@ -42,7 +39,6 @@ struct HaloDeviceOperation {
         "pad_val_",
         "remote_read_",
         "transpose_mcast_",
-        "reshard_num_cores_nhw_",
         "max_out_nsticks_per_core_",
         "output_memory_config_",
         "is_out_tiled_",
@@ -54,7 +50,6 @@ struct HaloDeviceOperation {
             std::cref(pad_val_),
             std::cref(remote_read_),
             std::cref(transpose_mcast_),
-            std::cref(reshard_num_cores_nhw_),
             std::cref(max_out_nsticks_per_core_),
             std::cref(output_memory_config_),
             std::cref(is_out_tiled_),
@@ -68,7 +63,6 @@ Tensor halo_op(
     uint32_t pad_val = 0x0,
     bool remote_read = false,
     bool transpose_mcast = true,
-    uint32_t reshard_num_cores_nhw = 0,
     const tt::tt_metal::MemoryConfig& output_memory_config = tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
     bool is_out_tiled = true,
     bool in_place = false);

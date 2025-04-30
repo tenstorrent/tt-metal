@@ -4,6 +4,17 @@
 >
 > Please refer to the front-page [README](../README.md) for the latest verified release for each model.
 
+## April 22, 2025
+
+### [TT-Transformers](tt_transformers)
+- Added support for non-uniform data format configurations in different decoder layers via json files.
+
+## April 7, 2025
+
+### [Llama 3.1-70B - Galaxy](demos/llama3_subdevices)
+- Achieved 45 t/s/u (and still working on further improvements) on Wormhole Galaxy for decode mode, with batch size 32 and 128 input sequence length. The included optimizations were: 1) using DRAM prefetching to remove memory bottlenecks for matmuls, 2) using [Sub-Devices](../tech_reports/SubDevices/SubDevices.md) to run multiple ops in parallel, 3) using CCLs enabled by [TT-Fabric](../tech_reports/TT-Fabric/TT-Fabric-Architecture.md).
+- Created a functional prefill + decode demo which can be run via [text_demo.py](demos/llama3_subdevices/demo/text_demo.py).
+
 ## March 24, 2025
 
 ### [TT-Transformers](tt_transformers)
