@@ -176,21 +176,21 @@ def test_cumsum_with_preallocated_output(size, dim, dtypes, device):
 def test_cumsum_int32(size, dim, device):
     torch.manual_seed(29112024)
 
-    (host_dtype, dev_dtype) = (torch.int32, ttnn.int32)
+    (torch_dtype, ttnn_dtype) = (torch.int32, ttnn.int32)
 
     # Generate integer input on [-2; 2];
-    torch_input_tensor = torch.randint(-2, 3, size=size, dtype=host_dtype)
+    torch_input_tensor = torch.randint(-2, 3, size=size, dtype=torch_dtype)
     input_tensor = ttnn.from_torch(torch_input_tensor, device=device, layout=ttnn.Layout.TILE)
 
-    output_tensor = ttnn.experimental.cumsum(input_tensor, dim=dim, dtype=dev_dtype)
+    output_tensor = ttnn.experimental.cumsum(input_tensor, dim=dim, dtype=ttnn_dtype)
 
-    expected_output_dtype = dev_dtype if dev_dtype is not None else input_tensor.dtype
+    expected_output_dtype = ttnn_dtype if ttnn_dtype is not None else input_tensor.dtype
 
     assert output_tensor.dtype == expected_output_dtype
     assert output_tensor.shape == (size)
 
-    torch_output = ttnn.to_torch(output_tensor, dtype=host_dtype)
+    torch_output = ttnn.to_torch(output_tensor, dtype=torch_dtype)
 
-    expected_output = torch.cumsum(torch_input_tensor, dim=dim, dtype=host_dtype)
+    expected_output = torch.cumsum(torch_input_tensor, dim=dim, dtype=torch_dtype)
 
     assert_with_pcc(expected_output, torch_output)
