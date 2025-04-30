@@ -137,13 +137,13 @@ void test_send_recv_tensor() {
     }
     auto shape = ttml::core::create_shape({1, 2, 3});
     if (rank == 0) {
-        fmt::print("Rank {}: sending tensor\n", rank);
         auto tensor = ttml::core::ones(shape, &device);
+        fmt::print("Rank {}: sending tensor\n", rank);
         ttml::core::distributed::send_tensor(tensor, 1);
         fmt::print("Rank {}: sent tensor\n", rank);
     } else if (rank == 1) {
-        fmt::print("Rank {}: receiving tensor\n", rank);
         auto tensor = ttml::core::zeros(shape, &device);
+        fmt::print("Rank {}: receiving tensor\n", rank);
         ttml::core::distributed::recv_tensor(tensor, 0);
         fmt::print("Rank {}: received tensor {}\n", rank, ttml::core::to_vector(tensor));
     }
