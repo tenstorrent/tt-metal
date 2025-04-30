@@ -171,11 +171,8 @@ struct MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig {
 
 struct MatmulMultiCoreProgramConfig {};
 
-struct MatmulMultiCoreNonOptimizedReuseProgramConfig {};
-
 using MatmulProgramConfig = std::variant<
     MatmulMultiCoreProgramConfig,
-    MatmulMultiCoreNonOptimizedReuseProgramConfig,
     MatmulMultiCoreReuseProgramConfig,
     MatmulMultiCoreReuseMultiCastProgramConfig,
     MatmulMultiCoreReuseMultiCast1DProgramConfig,
