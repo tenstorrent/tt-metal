@@ -135,20 +135,21 @@ void test_send_recv_tensor() {
         fmt::print("This example requires at least 2 processes.\n");
         return;
     }
-    auto shape = ttml::core::create_shape({1, 2, 3});
+    auto shape = ttml::core::create_shape({1, 1, 2, 3});
     if (rank == 0) {
         auto tensor = ttml::core::ones(shape, &device);
         auto vec_ones = ttml::core::to_vector(tensor);
-        fmt::print("Rank {}: sending tensor: {}\n", rank, vec_ones);
+        fmt::print("Rank {}, vector size: {}\n", rank, vec_ones.size());
+        fmt::print("Rank {}: sending tensor: [{}]\n", rank, vec_ones);
         ttml::core::distributed::send_tensor(tensor, 1);
         fmt::print("Rank {}: sent tensor\n", rank);
     } else if (rank == 1) {
         auto tensor = ttml::core::zeros(shape, &device);
         auto vec_zeros = ttml::core::to_vector(tensor);
-        fmt::print("Rank {}: original tensor {}\n", rank, vec_zeros);
+        fmt::print("Rank {}: original tensor: [{}]\n", rank, vec_zeros);
         ttml::core::distributed::recv_tensor(tensor, 0);
         auto vec = ttml::core::to_vector(tensor);
-        fmt::print("Rank {}: received tensor {}\n", rank, vec);
+        fmt::print("Rank {}: received tensor: [{}]\n", rank, vec);
     }
 }
 
