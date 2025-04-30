@@ -710,27 +710,17 @@ bool MeshDevice::dispatch_firmware_active() const {
 
 // Trace management
 void MeshDevice::begin_trace(const uint8_t cq_id, const uint32_t tid) {
-    for (auto& device : scoped_devices_->root_devices()) {
-        device->begin_trace(cq_id, tid);
-    }
+    TT_THROW("begin_trace() is not supported on MeshDevice");
 }
 void MeshDevice::end_trace(const uint8_t cq_id, const uint32_t tid) {
-    for (auto& device : scoped_devices_->root_devices()) {
-        device->end_trace(cq_id, tid);
-    }
+    TT_THROW("end_trace() is not supported on MeshDevice");
 }
 void MeshDevice::replay_trace(
     const uint8_t cq_id, const uint32_t tid, const bool block_on_device, const bool block_on_worker_thread) {
-    for (auto& device : scoped_devices_->root_devices()) {
-        device->replay_trace(cq_id, tid, block_on_device, false /* block_on_worker_thread */);
-    }
+    TT_THROW("replay_trace() is not supported on MeshDevice");
 }
 
-void MeshDevice::release_trace(const uint32_t tid) {
-    for (auto& device : scoped_devices_->root_devices()) {
-        device->release_trace(tid);
-    }
-}
+void MeshDevice::release_trace(const uint32_t tid) { TT_THROW("release_trace() is not supported on MeshDevice"); }
 
 std::shared_ptr<MeshTraceBuffer>& MeshDevice::create_mesh_trace(const MeshTraceId& trace_id) {
     auto [trace, emplaced] = trace_buffer_pool_.emplace(trace_id, MeshTrace::create_empty_mesh_trace_buffer());
@@ -921,78 +911,6 @@ const std::unique_ptr<Allocator>& MeshDevice::allocator(SubDeviceId sub_device_i
     return sub_device_manager_tracker_->get_active_sub_device_manager()->allocator(sub_device_id);
 }
 
-MeshSubDeviceManagerId MeshDevice::mesh_create_sub_device_manager(
-    tt::stl::Span<const SubDevice> sub_devices, DeviceAddr local_l1_size) {
-    MeshSubDeviceManagerId mesh_sub_device_manager_id(*this);
-    const auto& devices = scoped_devices_->root_devices();
-    for (uint32_t i = 0; i < devices.size(); i++) {
-        auto* device = devices[i];
-        auto& sub_device_manager_id = mesh_sub_device_manager_id.sub_device_manager_ids[i];
-        device->push_work([device, sub_devices, local_l1_size, &sub_device_manager_id]() {
-            sub_device_manager_id = device->create_sub_device_manager(sub_devices, local_l1_size);
-        });
-    }
-    return mesh_sub_device_manager_id;
-}
-
-std::tuple<MeshSubDeviceManagerId, SubDeviceId> MeshDevice::mesh_create_sub_device_manager_with_fabric(tt::stl::Span<const SubDevice> sub_devices, DeviceAddr local_l1_size) {
-    MeshSubDeviceManagerId mesh_sub_device_manager_id(*this);
-    SubDeviceId fabric_sub_device_id(0);
-    const auto& devices = scoped_devices_->root_devices();
-    for (uint32_t i = 0; i < devices.size(); i++) {
-        auto* device = devices[i];
-        auto& sub_device_manager_id = mesh_sub_device_manager_id.sub_device_manager_ids[i];
-        // All fabric sub-device ids will be the same, since all managers are created with the same sub_devices input
-        device->push_work([device, sub_devices, local_l1_size, &sub_device_manager_id, &fabric_sub_device_id]() {
-            std::tie(sub_device_manager_id, fabric_sub_device_id) = device->create_sub_device_manager_with_fabric(sub_devices, local_l1_size);
-        });
-    }
-    return {mesh_sub_device_manager_id, fabric_sub_device_id};
-}
-
-void MeshDevice::mesh_load_sub_device_manager(MeshSubDeviceManagerId mesh_sub_device_manager_id) {
-    const auto& devices = scoped_devices_->root_devices();
-    for (uint32_t i = 0; i < devices.size(); i++) {
-        auto* device = devices[i];
-        auto sub_device_manager_id = mesh_sub_device_manager_id.sub_device_manager_ids[i];
-        device->push_work(
-            [device, sub_device_manager_id]() { device->load_sub_device_manager(sub_device_manager_id); });
-    }
-}
-void MeshDevice::mesh_clear_loaded_sub_device_manager() {
-    for (auto* device : scoped_devices_->root_devices()) {
-        device->push_work([device]() { device->clear_loaded_sub_device_manager(); });
-    }
-}
-void MeshDevice::mesh_remove_sub_device_manager(MeshSubDeviceManagerId mesh_sub_device_manager_id) {
-    const auto& devices = scoped_devices_->root_devices();
-    for (uint32_t i = 0; i < devices.size(); i++) {
-        auto* device = devices[i];
-        auto sub_device_manager_id = mesh_sub_device_manager_id.sub_device_manager_ids[i];
-        device->push_work(
-            [device, sub_device_manager_id]() { device->remove_sub_device_manager(sub_device_manager_id); });
-    }
-}
-
-void MeshDevice::mesh_set_sub_device_stall_group(tt::stl::Span<const SubDeviceId> sub_device_ids) {
-    for (auto* device : scoped_devices_->root_devices()) {
-        device->push_work([device, sub_device_ids=std::vector<SubDeviceId>(sub_device_ids.begin(), sub_device_ids.end())]() { device->set_sub_device_stall_group(sub_device_ids); });
-    }
-}
-
-void MeshDevice::mesh_reset_sub_device_stall_group() {
-    for (auto* device : scoped_devices_->root_devices()) {
-        device->push_work([device]() { device->reset_sub_device_stall_group(); });
-    }
-}
-
 std::shared_ptr<distributed::MeshDevice> MeshDevice::get_mesh_device() { return shared_from_this(); }
-
-MeshSubDeviceManagerId::MeshSubDeviceManagerId(const MeshDevice& mesh_device) {
-    this->sub_device_manager_ids.reserve(mesh_device.num_devices());
-    for (uint32_t i = 0; i < mesh_device.num_devices(); i++) {
-        this->sub_device_manager_ids.push_back(SubDeviceManagerId(0));
-    }
-}
 
 }  // namespace tt::tt_metal::distributed

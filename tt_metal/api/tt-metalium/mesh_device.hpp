@@ -62,7 +62,6 @@ namespace distributed {
 
 class MeshCommandQueue;
 class MeshDeviceView;
-class MeshSubDeviceManagerId;
 class MeshTraceBuffer;
 
 using DeviceIds = std::vector<int>;
@@ -309,22 +308,8 @@ public:
 
     std::vector<std::shared_ptr<MeshDevice>> create_submeshes(const MeshShape& submesh_shape);
 
-    // These methods will get removed once in favour of the ones in IDevice* and TT-Mesh bringup
-    // These are prefixed with "mesh_" to avoid conflicts with the IDevice* methods
     MeshCommandQueue& mesh_command_queue(std::size_t cq_id = 0) const;
-    MeshSubDeviceManagerId mesh_create_sub_device_manager(
-        tt::stl::Span<const SubDevice> sub_devices, DeviceAddr local_l1_size);
-    // TODO #16526: Temporary api until migration to actual fabric is complete
-    std::tuple<MeshSubDeviceManagerId, SubDeviceId> mesh_create_sub_device_manager_with_fabric(
-        tt::stl::Span<const SubDevice> sub_devices, DeviceAddr local_l1_size);
-    void mesh_clear_loaded_sub_device_manager();
 
-    void mesh_load_sub_device_manager(MeshSubDeviceManagerId mesh_sub_device_manager_id);
-    void mesh_remove_sub_device_manager(MeshSubDeviceManagerId mesh_sub_device_manager_id);
-    // TODO #16492: Add get_sub_device_stall_group once MeshDevice is no longer just a collection of single Devices
-    // and the MeshDevice has a single SubDeviceManager responsible for all Devices.
-    void mesh_set_sub_device_stall_group(tt::stl::Span<const SubDeviceId> sub_device_ids);
-    void mesh_reset_sub_device_stall_group();
     // Currently expose users to the dispatch thread pool through the MeshDevice
     void enqueue_to_thread_pool(std::function<void()>&& f);
     void wait_for_thread_pool();
@@ -355,14 +340,6 @@ public:
 };
 
 std::ostream& operator<<(std::ostream& os, const MeshDevice& mesh_device);
-
-// TODO: This will be removed once we have DistributedDevice
-// Currently required since each device manages its own sub-device manager ids
-struct MeshSubDeviceManagerId {
-    MeshSubDeviceManagerId(const MeshDevice& mesh_device);
-
-    std::vector<SubDeviceManagerId> sub_device_manager_ids;
-};
 
 }  // namespace distributed
 
