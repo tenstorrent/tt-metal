@@ -5,10 +5,10 @@
 import ttnn
 import math
 
-from models.demos.yolov8x.tt.ttnn_yolov8x_utils import (
+from models.experimental.yolov8x.tt.ttnn_yolov8x_utils import (
     ttnn_decode_bboxes,
 )
-from models.demos.yolo_common.yolo_utils import (
+from models.experimental.yolo_common.yolo_utils import (
     determine_num_cores,
     get_core_grid_from_num_cores,
 )
