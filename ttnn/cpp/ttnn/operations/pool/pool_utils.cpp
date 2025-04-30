@@ -65,6 +65,157 @@ std::map<std::string, std::string> get_defines(Pool2DType pool_type) {
 using sliding_window::ParallelConfig;
 using sliding_window::SlidingWindowConfig;
 
+uint32_t find_closest_largest_divisor(uint32_t num, uint32_t start_divisor) {
+    uint32_t divisor = start_divisor;
+    while (num % divisor != 0) {
+        divisor = divisor - 1;
+    }
+    return divisor;
+}
+
+uint32_t find_closest_largest_divisor(uint32_t num1, uint32_t num2, uint32_t start_divisor) {
+    uint32_t divisor = start_divisor;
+    while (num1 % divisor != 0 or num2 % divisor != 0) {
+        divisor = divisor - 1;
+    }
+    return divisor;
+}
+
+uint32_t find_closest_largest_divisor_with_num_padding(uint32_t num, uint32_t start_divisor) {
+    uint32_t divisor = start_divisor;
+    uint32_t padded_num = tt::round_up(num, divisor);
+    while ((padded_num - num) >= (int)(padded_num / divisor)) {
+        divisor = divisor - 1;
+        padded_num = tt::round_up(num, divisor);
+    }
+    return divisor;
+}
+
+uint32_t find_closest_largest_divisor_with_num_padding_and_mult(uint32_t num, uint32_t start_divisor, uint32_t mult) {
+    uint32_t divisor = start_divisor;
+    uint32_t big_divisor = divisor * mult;
+    uint32_t padded_num = tt::round_up(num, big_divisor);
+    while ((padded_num - num) >= (int)(padded_num / big_divisor)) {
+        divisor = divisor - 1;
+        big_divisor = divisor * mult;
+        padded_num = tt::round_up(num, big_divisor);
+    }
+    return divisor;
+}
+
+uint32_t find_closest_largest_divisor_with_num_padding(uint32_t num1, uint32_t num2, uint32_t start_divisor) {
+    uint32_t divisor = start_divisor;
+    uint32_t padded_num1 = tt::round_up(num1, divisor);
+    uint32_t padded_num2 = tt::round_up(num2, divisor);
+    while ((padded_num1 - num1) >= (padded_num1 / divisor) || (padded_num2 - num2) >= (padded_num2 / divisor)) {
+        divisor = divisor - 1;
+        padded_num1 = tt::round_up(num1, divisor);
+        padded_num2 = tt::round_up(num2, divisor);
+    }
+    return divisor;
+}
+
+std::optional<ParallelConfig> determine_parallel_config(
+    const TensorMemoryLayout shard_layout,
+    uint32_t batch_size,
+    uint32_t channels,
+    uint32_t output_height,
+    uint32_t output_width,
+    const CoreCoord& compute_grid_size,
+    ShardOrientation block_shard_orientation,
+    bool enable_channels_padding,
+    bool is_shard_height_tile_multiple,
+    bool is_shard_width_tile_multiple,
+    uint32_t act_block_h_override) {
+    uint32_t effective_tile_height = is_shard_height_tile_multiple ? tt::constants::TILE_HEIGHT : 1;
+    uint32_t effective_tile_width = tt::constants::TILE_WIDTH;
+    uint32_t out_nhw_ntiles = tt::div_up(batch_size * output_height * output_width, effective_tile_height);
+
+    // In case non native activation block height is used, we need to ensure that the amount
+    // of work per core in the height dimension is a multiple of the activation block height override.
+    uint32_t act_block_h_override_ntiles =
+        act_block_h_override == 0 ? 1 : act_block_h_override / tt::constants::TILE_HEIGHT;
+
+    // calculate num_core_nhw and the grid
+    uint32_t max_num_cores = compute_grid_size.x * compute_grid_size.y;
+
+    CoreRangeSet grid;
+    if (shard_layout == TensorMemoryLayout::HEIGHT_SHARDED) {
+        if (channels != tt::constants::TILE_WIDTH / 2 && channels % tt::constants::TILE_WIDTH != 0) {
+            return std::nullopt;
+        }
+
+        uint32_t num_cores_nhw = find_closest_largest_divisor_with_num_padding_and_mult(
+            out_nhw_ntiles, max_num_cores, act_block_h_override_ntiles);
+        grid = tt::tt_metal::num_cores_to_corerangeset(num_cores_nhw, compute_grid_size, true);
+    } else if (shard_layout == TensorMemoryLayout::BLOCK_SHARDED) {
+        if (!enable_channels_padding && channels % (tt::constants::TILE_WIDTH / 2) != 0) {
+            return std::nullopt;
+        }
+
+        uint32_t start_divisor =
+            block_shard_orientation == ShardOrientation::COL_MAJOR ? compute_grid_size.x : compute_grid_size.y;
+        uint32_t num_cores_nhw = find_closest_largest_divisor_with_num_padding_and_mult(
+            out_nhw_ntiles, start_divisor, act_block_h_override_ntiles);
+
+        uint32_t start_divisor_c =
+            block_shard_orientation == ShardOrientation::COL_MAJOR ? compute_grid_size.y : compute_grid_size.x;
+        uint32_t tilesize = tt::constants::TILE_WIDTH;
+        // regardless of enable_channels_padding, tilesize can be set to 16 as if num of channels
+        // does not exceed (number of width cores)*16
+        if (channels <= start_divisor_c * tt::constants::TILE_WIDTH / 2) {
+            tilesize = tt::constants::TILE_WIDTH / 2;
+        } else if (enable_channels_padding) {
+            // num of channels exceeds (number of width cores)*16
+            tilesize = tt::constants::TILE_WIDTH;
+        } else if (channels % tt::constants::TILE_WIDTH == 0) {
+            tilesize = tt::constants::TILE_WIDTH;
+        } else {
+            tilesize = tt::constants::TILE_WIDTH / 2;
+        }
+        uint32_t channles_ntiles = tt::div_up(channels, tilesize);
+        uint32_t num_cores_c = enable_channels_padding
+                                   ? find_closest_largest_divisor_with_num_padding(channles_ntiles, start_divisor_c)
+                                   : find_closest_largest_divisor(channles_ntiles, start_divisor_c);
+
+        uint32_t cores_x = block_shard_orientation == ShardOrientation::COL_MAJOR ? num_cores_nhw : num_cores_c;
+        uint32_t cores_y = block_shard_orientation == ShardOrientation::COL_MAJOR ? num_cores_c : num_cores_nhw;
+        CoreRange core_range = CoreRange(CoreCoord({0, 0}), CoreCoord({cores_x - 1, cores_y - 1}));
+        grid = CoreRangeSet({core_range});
+    } else if (shard_layout == TensorMemoryLayout::WIDTH_SHARDED) {
+        if (!enable_channels_padding && channels % (tt::constants::TILE_WIDTH / 2) != 0) {
+            return std::nullopt;
+        }
+
+        uint32_t tilesize = tt::constants::TILE_WIDTH;
+        if (channels <= max_num_cores * tt::constants::TILE_WIDTH / 2) {
+            tilesize = tt::constants::TILE_WIDTH / 2;
+        } else if (enable_channels_padding) {
+            tilesize = tt::constants::TILE_WIDTH;
+        } else if (channels % tt::constants::TILE_WIDTH == 0) {
+            tilesize = tt::constants::TILE_WIDTH;
+        } else {
+            tilesize = tt::constants::TILE_WIDTH / 2;
+        }
+        uint32_t channles_ntiles = tt::div_up(channels, tilesize);
+        uint32_t num_cores_c = enable_channels_padding
+                                   ? find_closest_largest_divisor_with_num_padding(channles_ntiles, max_num_cores)
+                                   : find_closest_largest_divisor(channles_ntiles, max_num_cores);
+
+        grid = tt::tt_metal::num_cores_to_corerangeset(num_cores_c, compute_grid_size, true);
+    } else {
+        TT_THROW("Pool2d supports Height, Block or Width Sharded Layouts but got {}", shard_layout);
+    }
+
+    auto shard_orientation = shard_layout == TensorMemoryLayout::BLOCK_SHARDED
+                                 ? block_shard_orientation
+                                 : ShardOrientation::ROW_MAJOR;  // NOTE: taking ROW_MAJOR as default orientation for
+                                                                 // HEIGHT_SHARDED and WIDTH_SHARDED
+    ParallelConfig pconfig = {.grid = grid, .shard_scheme = shard_layout, .shard_orientation = shard_orientation};
+
+    return pconfig;
+}
+
 uint32_t calculate_L1_usage(
     const Tensor& input,
     const uint32_t kernel_h,
@@ -166,9 +317,9 @@ uint32_t calculate_L1_usage(
            + max_pool_partials_cb_config_size;
 }
 
-sliding_window::ParallelConfig determine_pool_config_for_auto_shard(
+std::optional<ParallelConfig> determine_pool_config_for_auto_shard(
     const Tensor& input_tensor,
-    const sliding_window::SlidingWindowConfig& sliding_window_config,
+    const SlidingWindowConfig& sliding_window_config,
     uint32_t channels,
     Pool2DType pool_type) {
     auto batch_size = sliding_window_config.batch_size;
@@ -177,7 +328,7 @@ sliding_window::ParallelConfig determine_pool_config_for_auto_shard(
 
     struct l1_usage_config {
         uint32_t l1_usage;
-        sliding_window::ParallelConfig config;
+        std::optional<ParallelConfig> config;
     };
 
     auto get_memconfig = [&](const ParallelConfig& parallel_config) {
@@ -189,26 +340,28 @@ sliding_window::ParallelConfig determine_pool_config_for_auto_shard(
     };
 
     auto calc_l1_usage_inner = [&](TensorMemoryLayout layout, ShardOrientation orientation) -> l1_usage_config {
-        auto input_parallel_config = conv::determine_parallel_config(
+        auto input_parallel_config = pool::determine_parallel_config(
             layout,
             batch_size,
             channels,
             output_shape[1],
             output_shape[2],
-            channels,
             compute_grid_size,
             orientation,
             false,
             false);
 
+        if (!input_parallel_config.has_value()) {
+            return {std::numeric_limits<uint32_t>::max(), input_parallel_config};
+        }
         uint32_t l1_usage = calculate_L1_usage(
             input_tensor,
             sliding_window_config.window_hw.first,
             sliding_window_config.window_hw.second,
             sliding_window_config.get_output_shape()[1],
             sliding_window_config.get_output_shape()[2],
-            get_memconfig(input_parallel_config),
-            get_memconfig(input_parallel_config),
+            get_memconfig(input_parallel_config.value()),
+            get_memconfig(input_parallel_config.value()),
             pool_type);
 
         return {l1_usage, input_parallel_config};
@@ -216,27 +369,22 @@ sliding_window::ParallelConfig determine_pool_config_for_auto_shard(
 
     auto l1_config_height = calc_l1_usage_inner(TensorMemoryLayout::HEIGHT_SHARDED, ShardOrientation::ROW_MAJOR);
     auto l1_config_width = calc_l1_usage_inner(TensorMemoryLayout::WIDTH_SHARDED, ShardOrientation::ROW_MAJOR);
-    auto l1_config_block = calc_l1_usage_inner(TensorMemoryLayout::BLOCK_SHARDED, ShardOrientation::COL_MAJOR);
+    auto l1_config_block = calc_l1_usage_inner(TensorMemoryLayout::BLOCK_SHARDED, ShardOrientation::ROW_MAJOR);
 
     uint32_t l1_usage_height = l1_config_height.l1_usage;
     uint32_t l1_usage_width = l1_config_width.l1_usage;
     uint32_t l1_usage_block = l1_config_block.l1_usage;
 
-    uint32_t ncores_block = l1_config_block.config.grid.num_cores();
-
-    uint32_t winning_l1_usage = l1_usage_height;
-    auto winning_config = l1_config_height.config;
-    // Make sure that BS not only has smaller size but provides at least some slicing along the channels.
-    // In case we have BS that would slice the tensor only along the HS conv2d code would fail later on.
-    if (l1_usage_block < l1_usage_height && ncores_block > compute_grid_size.x) {
-        winning_l1_usage = l1_usage_block;
-        winning_config = l1_config_block.config;
+    if (l1_usage_height > l1_usage_width) {
+        if (l1_usage_width > l1_usage_block) {
+            return l1_config_block.config;
+        }
+        return l1_config_width.config;
     }
-    if (l1_usage_width < winning_l1_usage) {
-        winning_config = l1_config_width.config;
+    if (l1_usage_height > l1_usage_block) {
+        return l1_config_block.config;
     }
-
-    return winning_config;
+    return l1_config_height.config;
 }
 
 }  // namespace operations::pool
