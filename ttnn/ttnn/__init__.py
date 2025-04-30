@@ -187,6 +187,14 @@ from ttnn.types import (
     BinaryOpType,
     BcastOpMath,
     BcastOpDim,
+    CBFormatDescriptor,
+    CBDescriptor,
+    ReaderConfigDescriptor,
+    WriterConfigDescriptor,
+    ComputeConfigDescriptor,
+    KernelDescriptor,
+    SemaphoreDescriptor,
+    ProgramDescriptor,
 )
 
 from ttnn.device import (
