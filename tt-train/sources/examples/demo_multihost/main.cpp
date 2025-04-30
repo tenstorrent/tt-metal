@@ -100,9 +100,12 @@ std::vector<board_entry> get_tt_smi_boards() {
 }
 
 void print_tt_smi() {
+    auto& ctx = ttml::autograd::ctx();
+    auto& mpi_ctx = ctx.get_mpi_context();
+    auto rank = mpi_ctx.get_rank();
     try {
         std::vector<board_entry> boards = get_tt_smi_boards();
-        fmt::print("Parsed boards:\n");
+        fmt::print("Rank {}: Parsed boards:\n", rank);
         for (const auto& b : boards) {
             fmt::print(
                 "PCI Dev ID:      {}\n"
@@ -121,11 +124,12 @@ void print_tt_smi() {
 }
 
 void test_send_recv_tensor() {
-    fmt::print("Testing send/recv tensor\n");
+    fmt::print("test_send_recv_tensor started\n");
     auto& ctx = ttml::autograd::ctx();
     auto& mpi_ctx = ctx.get_mpi_context();
     auto rank = mpi_ctx.get_rank();
     auto size = mpi_ctx.get_size();
+    fmt::print("Rank {}:, Testing send/recv tensor\n", rank);
     auto& device = ctx.get_device();
     if (size < 2) {
         fmt::print("This example requires at least 2 processes.\n");
@@ -218,7 +222,7 @@ int main(int argc, char** argv) {
     app.add_option("-t,--tt_smi", print_tt_smi_output, "print tt-smi on all hosts")->default_val(print_tt_smi_output);
     app.add_option("--run_test_send_recv_tensor", run_test_send_recv_tensor, "run simple send recv tensor test")
         ->default_val(run_test_send_recv_tensor);
-    app.add_option("--run_regression_training", run_test_send_recv_tensor, "runs regression training")
+    app.add_option("--run_regression_training", run_regression_training, "runs regression training")
         ->default_val(run_regression_training);
 
     CLI11_PARSE(app, argc, argv);
