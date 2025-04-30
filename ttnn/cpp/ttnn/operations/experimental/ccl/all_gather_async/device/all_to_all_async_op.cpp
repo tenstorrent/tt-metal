@@ -115,8 +115,7 @@ tt::tt_metal::operation::ProgramWithCallbacks AllToAllAsync::create_program_at(
     std::optional<IDevice*> forward_device = std::nullopt;
     std::optional<IDevice*> backward_device = std::nullopt;
     uint32_t device_index = this->ring_size;  // Initialize device index
-    // tt::log_info(tt::LogOp, "DEBUG: ring_size: {}", this->ring_size);
-    // tt::log_info(tt::LogOp, "DEBUG: target_device: {}", target_device->id());
+
     TT_FATAL(this->topology == ttnn::ccl::Topology::Ring, "DEBUG: topology: {}", this->topology);
 
     std::vector<IDevice*> devices_to_use = input_tensors[0].mesh_device()->get_view().get_ring_devices();
@@ -137,13 +136,6 @@ tt::tt_metal::operation::ProgramWithCallbacks AllToAllAsync::create_program_at(
         }
     }
 
-    tt::log_info(
-        tt::LogOp,
-        "DEBUG: target_device_id: {}, device_index: {}, fwd device id: {}, bwd device id: {}",
-        target_device->id(),
-        device_index,
-        forward_device.has_value() ? forward_device.value()->id() : -1,
-        backward_device.has_value() ? backward_device.value()->id() : -1);
     TT_FATAL(device_index < this->ring_size, "DEBUG: device_index: {}", device_index);
     TT_FATAL(
         forward_device.value()->id() != backward_device.value()->id(),

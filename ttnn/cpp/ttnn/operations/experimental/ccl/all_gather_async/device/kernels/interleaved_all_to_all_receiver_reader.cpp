@@ -18,12 +18,11 @@ constexpr uint32_t chunk_num_tiles = get_compile_time_arg_val(4);
 constexpr uint32_t num_chunks_per_shard = get_compile_time_arg_val(5);
 constexpr uint32_t page_size = get_compile_time_arg_val(6);
 constexpr uint32_t cb_id = get_compile_time_arg_val(7);
+constexpr uint32_t contig_pages_advanced = get_compile_time_arg_val(8);
 
 // TODO: CT args
 constexpr uint32_t N_DRAM_BANKS = 12;
 constexpr uint32_t NUM_SENDERS = ring_size - 1;
-
-constexpr uint32_t wait_sem_value = 1;
 
 void kernel_main() {
     size_t arg_idx = 0;
@@ -85,8 +84,6 @@ void kernel_main() {
         // Compute where remote sender dumped data into intermediate buffer.
         // Should follow same logic as sender writer.
 
-        // Wait for semaphore increment from sender. For now, wait until sender is fully done.
-        // TODO: Add chunking granularity.
         const uint32_t sender_relative_ring_id =
             (remote_device_ring_id < my_ring_id) ? remote_device_ring_id : remote_device_ring_id - 1;
 
@@ -100,12 +97,12 @@ void kernel_main() {
                 size_t l1_write_addr = get_write_ptr(cb_id);
                 uint32_t num_pages_to_read = std::min(out_col_end - out_col_id, num_pages_per_packet);
 
-                constexpr uint32_t contig_pages_advanced = 2;  // TODO: CT arg
                 constexpr uint32_t payload_size_bytes = contig_pages_advanced * page_size;
 
                 // Calculate which chunk we need and wait for it
                 uint32_t current_chunk_id = packet_id / chunk_granularity;
                 uint32_t wait_chunk_id = current_chunk_id + 1;  // Chunks are 1-based
+                // Ensure that current chunk has been sent
                 while (*global_semaphore_ptr < wait_chunk_id);
 
                 for (uint32_t j = 0; j < num_pages_to_read; j += contig_pages_advanced) {

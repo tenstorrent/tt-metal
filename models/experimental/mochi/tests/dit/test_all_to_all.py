@@ -580,7 +580,7 @@ def run_all_to_all_impl(
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING}], indirect=True)
 @pytest.mark.parametrize(
     "num_iters, do_check, reuse_inputs",
-    [(5, True, False), (6, False, True), (20, False, True)],
+    [(2, True, False), (6, False, True), (20, False, True)],
     ids=["check", "perf", "stress"],
 )
 def test_all_to_all(

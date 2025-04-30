@@ -77,8 +77,7 @@ void kernel_main() {
                 size_t l1_read_addr = get_read_ptr(cb_id);
                 uint32_t num_pages_to_read = std::min(out_col_end - out_col_id, num_pages_per_packet);
 
-                constexpr uint32_t contig_pages_advanced = 1;  // always 1 for interleaved
-                // constexpr uint32_t payload_size_bytes = contig_pages_advanced * tensor0_page_size;
+                constexpr uint32_t contig_pages_advanced = 1;  // always write 1 tile at a time to output
                 for (uint32_t j = 0; j < num_pages_to_read; j += contig_pages_advanced) {
                     uint32_t col_tile = out_col_id + j;
                     uint32_t tile_id = out_row_id * out_col_tiles + col_tile;
