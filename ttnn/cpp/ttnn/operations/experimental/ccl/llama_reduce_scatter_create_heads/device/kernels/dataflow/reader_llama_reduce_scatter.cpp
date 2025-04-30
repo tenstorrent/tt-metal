@@ -236,9 +236,27 @@ void kernel_main() {
                 head_idx++;  // next head as each packet has 2 heads = 4 blocks
             }
         } else {  // write kv heads
+            uint32_t iblock1 = 1, iblock2 = 3;
+            for (uint32_t istick = 0; istick < num_sticks_per_block; istick++) {
+                uint64_t noc_address = get_noc_addr(
+                    k_output_core_xy[istick][x_index],
+                    k_output_core_xy[istick][y_index],
+                    k_base_addr + stick_size_byte);
+                uint32_t l1_read_addr = accumulator_l1_addr + iblock1 * page_size_bytes + istick * stick_size_byte;
+                noc_async_write(l1_read_addr, noc_address, stick_size_byte);
+            }
+
+            for (uint32_t istick = 0; istick < num_sticks_per_block; istick++) {
+                uint64_t noc_address = get_noc_addr(
+                    v_output_core_xy[istick][x_index],
+                    v_output_core_xy[istick][y_index],
+                    v_base_addr + stick_size_byte);
+                uint32_t l1_read_addr = accumulator_l1_addr + iblock2 * page_size_bytes + istick * stick_size_byte;
+                noc_async_write(l1_read_addr, noc_address, stick_size_byte);
+            }
         }
+        noc_async_write_barrier();
     }
     noc_semaphore_set((uint32_t*)local_semaphore_address, INVALID);
     noc_semaphore_set((uint32_t*)receiver_semaphore_address, INVALID);
-    noc_async_write_barrier();
 }
