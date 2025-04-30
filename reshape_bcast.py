@@ -7,8 +7,8 @@ import glob
 ARCH = os.getenv("ARCH_NAME")
 WH_BH = "WH" if ARCH == "wormhole_b0" else "BH"
 # Folder path
-folder = f"/home/ubuntu/tt-metal/binary_ng_{WH_BH}/binary_ng_{WH_BH}_full"
-folder_reshaped = f"/home/ubuntu/tt-metal/binary_ng_{WH_BH}/binary_ng_{WH_BH}_full_reshaped"
+folder = f"/home/ubuntu/tt-metal/binary_ng_{WH_BH}_bcast/binary_ng_{WH_BH}_bcast_full"
+folder_reshaped = f"/home/ubuntu/tt-metal/binary_ng_{WH_BH}_bcast/binary_ng_{WH_BH}_bcast_full_reshaped"
 
 # Get all CSV files from the folder
 csv_files = [os.path.basename(f) for f in glob.glob(os.path.join(folder, "*.csv"))]
