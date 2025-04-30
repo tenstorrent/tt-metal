@@ -43,7 +43,7 @@
 
 #include "tt_metal/impl/allocator/l1_banking_allocator.hpp"
 #include "tt_metal/impl/sub_device/sub_device_manager.hpp"
-#include "tt_metal/impl/sub_device/sub_device_manager_tracker.hpp"
+#include "sub_device/sub_device_manager_tracker.hpp"
 #include <umd/device/types/xy_pair.h>
 
 enum class CoreType;
