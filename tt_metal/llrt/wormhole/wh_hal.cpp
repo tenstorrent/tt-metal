@@ -13,6 +13,7 @@
 #include "hal_types.hpp"
 #include "hw/inc/wormhole/eth_l1_address_map.h"
 #include "llrt/hal.hpp"
+#include "llrt/hal_asserts.hpp"
 #include "noc/noc_overlay_parameters.h"
 #include "noc/noc_parameters.h"
 #include "tensix.h"
