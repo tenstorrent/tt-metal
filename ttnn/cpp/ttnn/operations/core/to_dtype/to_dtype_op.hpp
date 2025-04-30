@@ -24,19 +24,9 @@ inline Tensor convert_to_cpp_supported_dtype(const Tensor& input_tensor) {
     auto input_dtype = input_tensor.get_dtype();
 
     auto buffer = std::visit(
-        [](auto&& storage) -> tt::tt_metal::HostBuffer {
-            using T = std::decay_t<decltype(storage)>;
-            if constexpr (std::is_same_v<T, tt::tt_metal::HostStorage>) {
-                return storage.buffer;
-            } else if constexpr (std::is_same_v<T, tt::tt_metal::DeviceStorage>) {
-                TT_THROW("Device input_tensor cannot be converted to torch");
-            } else if constexpr (std::is_same_v<T, tt::tt_metal::MultiDeviceHostStorage>) {
-                TT_THROW(
-                    "Tensor MultiDeviceHostStorage cannot be converted to torch directly. Use composer(..) "
-                    "functionality.");
-            } else {
-                tt::tt_metal::raise_unsupported_storage<T>();
-            }
+        tt::stl::overloaded{
+            [](const tt::tt_metal::HostStorage& storage) -> tt::tt_metal::HostBuffer { return storage.buffer; },
+            [](const auto& storage) -> tt::tt_metal::HostBuffer { TT_THROW("Unsupported storage type."); },
         },
         input_tensor.get_storage());
 
