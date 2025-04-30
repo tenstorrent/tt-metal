@@ -11,7 +11,7 @@
 #include "ttnn/types.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/decorators.hpp"
-#include "ttnn/operations/conv/conv.hpp"
+#include "ttnn/operations/conv/conv_types.hpp"
 #include "ttnn/operations/conv/conv2d/conv2d_utils.hpp"
 
 namespace ttnn {
@@ -26,7 +26,6 @@ using Result = std::variant<
     std::tuple<ttnn::Tensor, std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>>>,
     std::tuple<ttnn::Tensor, OutputLength, std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>>>>;
 
-using ResultType = ttnn::operations::conv::ResultType;
 using Conv1dConfig = ttnn::operations::conv::conv2d::Conv2dConfig;
 
 template <typename T>

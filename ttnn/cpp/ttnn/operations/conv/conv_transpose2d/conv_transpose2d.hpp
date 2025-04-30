@@ -4,7 +4,7 @@
 
 #pragma once
 #include <cstdint>
-#include "ttnn/operations/conv/conv.hpp"
+#include "ttnn/operations/conv/conv_types.hpp"
 #include "ttnn/operations/conv/conv2d/conv2d_utils.hpp"
 #include "ttnn/decorators.hpp"
 
@@ -23,7 +23,6 @@ using Result = std::variant<
         ttnn::Tensor,
         std::tuple<OutputHeight, OutputWidth>,
         std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>>>>;
-using ResultType = ttnn::operations::conv::ResultType;
 
 struct ConvTranpose2dOperation {
     static Result invoke(
