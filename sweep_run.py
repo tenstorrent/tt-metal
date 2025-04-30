@@ -20,7 +20,7 @@ ops = [
     "gez",
     "gtz",
     "exp",
-    "recip",
+    "reciprocal",
     "gelu",
     "relu",
     "sqrt",
