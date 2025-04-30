@@ -1166,13 +1166,13 @@ std::unique_ptr<Program> create_and_compile_1d_fabric_program(IDevice* device, F
                 edm_builder1.connect_to_downstream_edm(edm_builder2);
                 edm_builder2.connect_to_downstream_edm(edm_builder1);
 
-                if (is_galaxy) {
-                    // select VC based on the current link
-                    auto edm_noc_vc = link & edm_builder1.config.MAX_EDM_NOC_VC;
-                    edm_builder1.config.edm_noc_vc = edm_noc_vc;
-                    edm_builder2.config.edm_noc_vc = edm_noc_vc;
-                    link++;
+                // select VC based on the current link
+                auto edm_noc_vc = link & edm_builder1.config.MAX_EDM_NOC_VC;
+                edm_builder1.config.edm_noc_vc = edm_noc_vc;
+                edm_builder2.config.edm_noc_vc = edm_noc_vc;
+                link++;
 
+                if (is_galaxy) {
                     get_optimal_noc_for_edm(edm_builder1, edm_builder2, num_links, topology);
                 }
 
