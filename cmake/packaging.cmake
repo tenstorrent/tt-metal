@@ -126,13 +126,13 @@ install(
 install(
     DIRECTORY
         ${CMAKE_SOURCE_DIR}/tt_metal/core_descriptors
-    DESTINATION ${CMAKE_INSTALL_LIBEXECDIR}/tt-metalium/tt_metal/core_descriptors
+    DESTINATION ${CMAKE_INSTALL_LIBEXECDIR}/tt-metalium/tt_metal/
     COMPONENT metalium-ttnn-dev
 )
 install(
     DIRECTORY
         ${CMAKE_SOURCE_DIR}/generated/watcher
-    DESTINATION ${CMAKE_INSTALL_LIBEXECDIR}/tt-metalium/
+    DESTINATION ${CMAKE_INSTALL_LIBEXECDIR}/tt-metalium/generated
     COMPONENT metalium-ttnn-dev
 )
 
