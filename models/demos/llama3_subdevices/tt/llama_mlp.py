@@ -262,26 +262,15 @@ class TtLlamaMLP(LightweightModule):
         # ttnn.deallocate(w3_out)
         # ttnn.deallocate(w1_out)
 
-        if seq_len in [128, 512, 65536]:
-            w2_out = ttnn.linear(
-                w2_in_gathered,
-                self.w2,
-                compute_kernel_config=self.args.compute_kernel_config_hifi2_fp16,
-                dtype=ttnn.bfloat8_b,
-                program_config=pc_2,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                # core_grid=ttnn.CoreGrid(y=8, x=4),  # FIXME: validate on TG ttnn.CoreGrid(y=8, x=8) if not pc_2 else None,
-            )
-        else:
-            w2_out = ttnn.linear(
-                w2_in_gathered,
-                self.w2_interleaved,
-                compute_kernel_config=self.args.compute_kernel_config_hifi2_fp16,
-                dtype=ttnn.bfloat8_b,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                core_grid=ttnn.CoreGrid(y=7, x=7),
-                # core_grid=ttnn.CoreGrid(y=8, x=4),  # FIXME: validate on TG ttnn.CoreGrid(y=8, x=8) if not pc_2 else None,
-            )
+        w2_out = ttnn.linear(
+            w2_in_gathered,
+            self.w2_interleaved,
+            compute_kernel_config=self.args.compute_kernel_config_hifi2_fp16,
+            dtype=ttnn.bfloat8_b,
+            program_config=pc_2,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            # core_grid=ttnn.CoreGrid(y=8, x=4),  # FIXME: validate on TG ttnn.CoreGrid(y=8, x=8) if not pc_2 else None,
+        )
 
         ttnn.deallocate(w2_in)
         w2_out_reduced = self.tt_ccl.line_all_reduce(
