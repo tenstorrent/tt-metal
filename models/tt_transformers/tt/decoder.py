@@ -2,6 +2,9 @@
 
 # SPDX-License-Identifier: Apache-2.0
 import ttnn
+
+from models.tt_transformers.tt.mixtral_mlp import TtMixtralMLP
+from models.tt_transformers.tt.mixtral_moe import TtMoeLayer
 from models.tt_transformers.tt.attention import Attention
 from models.tt_transformers.tt.mlp import MLP
 from models.common.rmsnorm import RMSNorm
@@ -27,6 +30,7 @@ class TransformerBlock(LightweightModule):
 
         self.state_dict = state_dict
         self.mesh_device = mesh_device
+        self.layer_num = layer_num
 
         self.args = args
         self.hidden_size = args.dim
@@ -52,15 +56,37 @@ class TransformerBlock(LightweightModule):
             paged_attention_config=paged_attention_config,
             use_paged_kv_cache=use_paged_kv_cache,
         )
-        self.feed_forward = MLP(
-            mesh_device=mesh_device,
-            args=args,
-            state_dict=state_dict,
-            weight_cache_path=weight_cache_path,
-            layer_num=layer_num,
-            dtype=dtype,
-            model_config=self.model_config,
-        )
+
+        if self.args.is_mixture_of_experts:
+            self.feed_forward = TtMoeLayer(
+                mesh_device=mesh_device,
+                state_dict=state_dict,
+                experts=TtMixtralMLP(
+                    mesh_device=mesh_device,
+                    state_dict=state_dict,
+                    args=args,
+                    layer_num=layer_num,
+                    dtypes={
+                        "w1": dtype,
+                        "w2": dtype,
+                        "w3": dtype,
+                    },
+                ),
+                args=args,
+                layer_num=layer_num,
+                dtype=dtype,
+            )
+        else:
+            self.feed_forward = MLP(
+                mesh_device=mesh_device,
+                args=args,
+                state_dict=state_dict,
+                weight_cache_path=weight_cache_path,
+                layer_num=layer_num,
+                dtype=dtype,
+                model_config=self.model_config,
+            )
+
         self.attention_norm = DistributedNorm(
             RMSNorm(
                 device=mesh_device,
@@ -127,15 +153,18 @@ class TransformerBlock(LightweightModule):
             chunk_page_table=chunk_page_table,
             chunk_start_idx=chunk_start_idx,
             kv_cache=kv_cache,
-        )
+        )  # attn_out is sharded across devices,
+
         # Here x and attn_out are both fractured across devices
-        h = ttnn.add(x, attn_out, memory_config=skip_mem_cfg, dtype=ttnn.bfloat16 if TG else None)
+        h_val = ttnn.add(
+            x, attn_out, memory_config=skip_mem_cfg, dtype=ttnn.bfloat16 if TG else None
+        )  # h_val is fractured across devices
         ttnn.deallocate(attn_out)
         if mode == "prefill":
             x.deallocate(True)
 
         # Norms take fractured inputs and output replicated across devices
-        ff_in = self.ff_norm(h, mode)
+        ff_in = self.ff_norm(h_val, mode)
         if TG and mode == "decode":
             ff_in = ttnn.to_memory_config(ff_in, memory_config=self.model_config["MLP_ACT_MEMCFG"])
         # MLP takes replicated inputs and produces fractured outputs
@@ -145,11 +174,12 @@ class TransformerBlock(LightweightModule):
             decoder_id=self.layer_num, tensor=TensorGroup.ACTIVATION
         )
         out = ttnn.add(
-            h,
+            h_val,
             ff_out,
             memory_config=skip_mem_cfg,
             dtype=self.args.ccl_dtype
             if TG and not self.args.is_distributed_norm(mode)
             else activation_dtype or ttnn.bfloat16,
         )
+        ff_out.deallocate(True)
         return out  # fractured across devices

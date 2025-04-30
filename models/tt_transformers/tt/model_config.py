@@ -314,6 +314,10 @@ class ModelArgs:
         # Decoder
         "DECODE_RESIDUAL",
         "OUTPUT_MM",
+        # MoE
+        "GATE_W_LAYOUT",
+        "GATE_WEIGHTS",
+        "GATE_MM_OUTPUT",
     )
 
     LOCAL_LLAMA_PARAMS = {
@@ -558,6 +562,14 @@ class ModelArgs:
             )
 
             # Configure data precision and math fidelity for tensors and kernels
+
+            self.model_config["COMPUTE_KERNEL_CONFIG_HIFI2"] = self.compute_kernel_config_hifi2
+
+            # Mixtral
+            self.model_config["PREFILL_MLP_COMPUTE_CONFIG"] = self.compute_kernel_config_lofi
+            self.model_config["GATE_MM_OUTPUT_KERNEL_CONFIG"] = self.compute_kernel_config_lofi
+            # end mixtral
+
             if self.optimizations is None:
                 self.optimizations = DecodersPrecision.accuracy(num_decoders=self.n_layers, model_name=self.model_name)
             self.model_config["DECODERS_OPTIMIZATIONS"] = self.optimizations
@@ -1417,6 +1429,8 @@ class ModelArgs:
 
     # TODO Update function for large models: For 1 layer tests we only want to load 1 checkpoint file, instead of all.
     def load_state_dict(self):
+        # by default, the model is not a mixture-of-expert. This will be set to True if we find any `.experts.` in the keys
+        self.is_mixture_of_experts = False
         if self.dummy_weights:
             reference_model = Transformer(self)
             state_dict = reference_model.state_dict()
@@ -1433,6 +1447,8 @@ class ModelArgs:
                 state_dict = model.state_dict()
             else:
                 state_dict = load_hf_state_dict(self.CKPT_DIR)
+            # the model is a mixture-of-experts if we find any `.experts.` in the keys
+            self.is_mixture_of_experts = any([".experts." in k for k in state_dict.keys()])
             state_dict = standardize_hf_keys(state_dict)
             state_dict = convert_hf_to_meta(state_dict, self.head_dim)
         keys_dict = list(state_dict.keys())[:]
@@ -1440,8 +1456,81 @@ class ModelArgs:
         for k in keys_dict:
             if any([r in k for r in remv]):
                 state_dict.pop(k)
-
+        if self.is_mixture_of_experts:
+            self.initialize_mixture_of_experts_configs()
         return state_dict
+
+    def initialize_mixture_of_experts_configs(self):
+        # Porting mixtral to llama
+        self.model_config["FF3_OUTPUT_PROGCFG"] = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+            compute_with_storage_grid_size=(8, 8),
+            in0_block_w=2,  # K = 4096 / TILE_WIDTH=32 / Grid_Size is based on compute_with_storage_grid_size
+            out_subblock_h=1,  # Must be divisible by per_core_M
+            out_subblock_w=1,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4
+            per_core_M=1,  # M / TILE_HEIGHT = 32 / 32
+            per_core_N=7,  # N / TILE_WIDTH / Grid_Size is based on compute_with_storage_grid_size, N = 4096 for num_device=8
+            fuse_batch=True,
+            fused_activation=None,
+            mcast_in0=True,
+        )
+        self.model_config["FF1_OUTPUT_PROGCFG"] = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+            compute_with_storage_grid_size=(8, 8),
+            in0_block_w=2,  # K = 4096 / TILE_WIDTH=32 / Grid_Size is based on compute_with_storage_grid_size
+            out_subblock_h=1,  # Must be divisible by per_core_M
+            out_subblock_w=1,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4
+            per_core_M=1,  # M / TILE_HEIGHT = 32 / 32
+            per_core_N=7,  # N / TILE_WIDTH / Grid_Size is based on compute_with_storage_grid_size, N = 4096 for num_device=8
+            fuse_batch=True,
+            fused_activation=ttnn.UnaryOpType.SILU,
+            mcast_in0=True,
+        )
+        self.model_config["FF2_OUTPUT_PROGCFG"] = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+            compute_with_storage_grid_size=(8, 8),
+            in0_block_w=7,  # K = 14336 / TILE_WIDTH=32 / Grid_Size is based on compute_with_storage_grid_size
+            out_subblock_h=1,  # Must be divisible by per_core_M
+            # Issue #8959: Increasing subblock to 2 results in hangs -> Potentially related to di/dt hangs.
+            out_subblock_w=1,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4
+            per_core_M=1,  # M / TILE_HEIGHT = 32 / 32
+            per_core_N=2,  # N / TILE_WIDTH / Grid_Size is based on compute_with_storage_grid_size, N = 4096 for num_device=8
+            fuse_batch=True,
+            fused_activation=None,
+            mcast_in0=True,
+        )
+        self.model_config["PREFILL_MLP_W1_PRG_CONFIG_128"] = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+            compute_with_storage_grid_size=(8, 8),
+            in0_block_w=1,  # how much inner dim you take each time
+            out_subblock_h=1,  # Must be divisible by per_core_M
+            out_subblock_w=1,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4
+            per_core_M=1,  # 32, #16,  # M / TILE_HEIGHT / Grid_Size (dynamic based on seqlen)
+            per_core_N=56,  # N / TILE_WIDTH / Grid_Size
+            transpose_mcast=False,
+            fused_activation=ttnn.UnaryOpType.SILU,
+            fuse_batch=False,
+        )
+        self.model_config["PREFILL_MLP_W3_PRG_CONFIG_128"] = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+            compute_with_storage_grid_size=(8, 8),
+            in0_block_w=1,  # how much inner dim you take each time
+            out_subblock_h=1,  # Must be divisible by per_core_M
+            out_subblock_w=1,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4
+            per_core_M=1,  # M / TILE_HEIGHT / Grid_Size (dynamic based on seqlen)
+            per_core_N=56,  # N / TILE_WIDTH / Grid_Size
+            transpose_mcast=False,
+            fused_activation=None,
+            fuse_batch=False,
+        )
+
+        self.model_config["PREFILL_MLP_W2_PRG_CONFIG_128"] = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+            compute_with_storage_grid_size=(8, 8),
+            in0_block_w=1,  # how much inner dim you take each time
+            out_subblock_h=1,  # Must be divisible by per_core_M
+            out_subblock_w=1,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4
+            per_core_M=1,  # M / TILE_HEIGHT / Grid_Size (dynamic based on seqlen)
+            per_core_N=16,  # N / TILE_WIDTH / Grid_Size
+            transpose_mcast=False,
+            fused_activation=None,
+            fuse_batch=False,
+        )
+        # end Porting mixtral to llama
 
     def create_dram_sharded_mem_config(self, k, n):
         """Create DRAM-sharded memory config for width-sharded tensors"""
