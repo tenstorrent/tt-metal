@@ -17,22 +17,32 @@ The MobileNetV2 model has been pre-trained on the ImageNet dataset and can be us
 ## Details
 The entry point to mobilenetv2 model is MobileNetV2 in `models/demos/mobilenetv2/tt/ttnn_monilenetv2.py`.
 
-Use the following command to run the model :
-`pytest tests/ttnn/integration_tests/mobilenetv2/test_mobilenetv2.py`
+- Use the following command to run the model :
+```bash
+pytest tests/ttnn/integration_tests/mobilenetv2/test_mobilenetv2.py
+```
 
-Note : The model supports a batch size of 8 for a resolution of 224. If you prefer to use a different batch size, it is recommended to modify the batch_size accordingly in the test file.
+Note : The model supports a batch size of 8 for a resolution of 224. If you prefer to use a different batch size, it is recommended to modify the batch_size accordingly in the test file(default batch size is set to 1 in all the test files).
 
-Use the following command to run the e2e perf(11 FPS):
-`pytest models/demos/mobilenetv2/tests/test_perf_mobilenetv2.py::test_mobilenetv2`
+- Use the following command to run the e2e perf(11 FPS):
+```bash
+pytest models/demos/mobilenetv2/tests/test_perf_mobilenetv2.py::test_mobilenetv2
+```
 
-Use the following command to run the e2e perf with trace(430 FPS):
-`pytest models/demos/mobilenetv2/tests/test_e2e_performant.py`
+- Use the following command to run the e2e perf with trace(430 FPS):
+```bash
+pytest models/demos/mobilenetv2/tests/test_e2e_performant.py
+```
 
-Use the following command to run the device perf :
-`pytest models/demos/mobilenetv2/tests/test_perf_mobilenetv2.py::test_perf_device_bare_metal_mobilenetv2`
+- Use the following command to run the device perf :
+```bash
+pytest models/demos/mobilenetv2/tests/test_perf_mobilenetv2.py::test_perf_device_bare_metal_mobilenetv2
+```
 
-Use the following command to run the mobilenetv2 demo:
-`pytest -k "pretrained_weight_true" models/demos/mobilenetv2/demo/demo.py::test_mobilenetv2_imagenet_demo`
+- Use the following command to run the mobilenetv2 demo:
+```bash
+pytest -k "pretrained_weight_true" models/demos/mobilenetv2/demo/demo.py::test_mobilenetv2_imagenet_demo
+```
 
 Note: This demo receives inputs from Imagenet dataset.
 
