@@ -4,6 +4,7 @@
 
 #include "cumprod_device_operation.hpp"
 #include <magic_enum/magic_enum.hpp>
+#include "ttnn/tensor/tensor.hpp"
 
 namespace ttnn::operations::experimental::reduction {
 
@@ -17,20 +18,11 @@ void CumprodDeviceOperation::validate_on_program_cache_miss(
     const auto& input_tensor{tensor_args.input_tensor};
     auto& optional_out{tensor_args.optional_out};
     auto out_memory_config{optional_out.has_value() ? optional_out->memory_config() : attributes.output_memory_config};
-    auto out_dtype{DataType::INVALID};
+    auto out_dtype = DataType::INVALID;
     const auto& input_dtype{attributes.dtype};
-    const auto& dim{attributes.dim};
+    const auto& dim = attributes.dim;
 
     if (optional_out.has_value()) {
-        // TODO(jbbieniekTT): in this case, automatic conversion should be performed as per Torch's policy
-        // TT_FATAL(
-        //     input_tensor.get_dtype() == optional_out->get_dtype(),
-        //     "The dtype of the input tensor doesn't match the dtype of the preallocated tensor.\n"
-        //     "Input tensor's dtype: {}\n"
-        //     "Output tensor's dtype: {}",
-        //     magic_enum::enum_name(input_tensor.get_dtype()),
-        //     magic_enum::enum_name(optional_out->get_dtype()));
-
         const auto computed_output_shape{compute_output_specs(attributes, tensor_args).logical_shape()};
         const auto preallocated_output_shape = optional_out.value().get_logical_shape();
         TT_FATAL(
@@ -43,15 +35,6 @@ void CumprodDeviceOperation::validate_on_program_cache_miss(
 
         out_dtype = optional_out->get_dtype();
     } else {
-        // TODO(jbbieniekTT): in this case, automatic conversion should be performed as per Torch's policy
-        // TT_FATAL(
-        //     attributes.dtype == input_tensor.get_dtype(),
-        //     "The input tensor's dtype doesn't match the dtype provided in the argument.\n"
-        //     "Input tensor's dtype: {}\n"
-        //     "Provided dtype: {}",
-        //     magic_enum::enum_name(input_tensor.get_dtype()),
-        //     magic_enum::enum_name(input_dtype));
-
         out_dtype = input_tensor.get_dtype();
     }
 
@@ -134,6 +117,11 @@ CumprodDeviceOperation::invocation_result_t CumprodDeviceOperation::invoke(
 hash::hash_t CumprodDeviceOperation::compute_program_hash(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     return operation::hash_operation<CumprodDeviceOperation>(
+        &tensor_args.input_tensor,
+        &tensor_args.optional_out,
+        tensor_args.input_tensor.get_tensor_spec(),
+        tensor_args.optional_out.has_value() ? tensor_args.optional_out.value().get_tensor_spec()
+                                             : tensor_args.input_tensor.get_tensor_spec(),
         args,
         select_program_factory(args, tensor_args).index(),
         tensor_args.input_tensor.dtype(),

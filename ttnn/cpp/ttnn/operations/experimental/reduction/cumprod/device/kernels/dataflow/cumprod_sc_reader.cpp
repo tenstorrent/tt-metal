@@ -40,7 +40,7 @@ void kernel_main() {
 
     const uint32_t input_tile_bytes = ublock_size_bytes;
     const uint32_t output_tile_bytes = ublock_size_bytes;
-    uint32_t scaler{0};
+    uint32_t scaler = 0;
 
     uint32_t bytes_per_element = 4;
     switch (input_data_format) {
@@ -74,7 +74,7 @@ void kernel_main() {
     }
 
     // TODO(jbbieniekTTT): issue #
-    int32_t* data_one{(int32_t*)data_one_addr};
+    int32_t* data_one = (int32_t*)data_one_addr;
     for (uint32_t i = 0; i < ublock_size_bytes / sizeof(data_one); i++) {
         data_one[i] = scaler;
     }
@@ -88,8 +88,8 @@ void kernel_main() {
     cb_push_back(cb_one, ONE_TILE);
 
     for (uint32_t i = start_id; i < start_id + num_rows_per_core; ++i) {
-        const uint32_t i0{i / input_tile_offset};
-        const uint32_t i1{i % input_tile_offset};
+        const uint32_t i0 = i / input_tile_offset;
+        const uint32_t i1 = i % input_tile_offset;
         for (uint32_t j = 0; j < tiles_per_row; ++j) {
             const uint32_t read_tile_id{get_tile_id(i0, i1, j, tiles_per_row, input_tile_offset)};
             cb_reserve_back(cb_in, ONE_TILE);

@@ -24,7 +24,7 @@ void MAIN {
     cb_wait_front(cb_one, ONE_TILE);
 
     for (uint32_t i = 0; i < num_rows; i++) {
-        bool enable_reload{false};
+        bool enable_reload = false;
 
         for (uint32_t j = 0; j < tiles_per_row; j++) {
             acquire_dst();

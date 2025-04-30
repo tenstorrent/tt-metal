@@ -14,34 +14,20 @@
 
 namespace ttnn::operations::experimental::reduction {
 
-uint32_t CumprodDeviceOperation::SingleCoreCumprodProgramFactory::mul_lower_ranks(
+uint32_t CumprodDeviceOperation::SingleCoreCumprodProgramFactory::calc_input_tile_offset(
     const Shape& input_shape, const int32_t& dim) {
-    uint32_t PLow{1};
-    for (int32_t i{dim - 1}; i >= 0; --i) {
-        PLow *= input_shape[i];
+    uint32_t input_tile_offset{1};
+    for (int32_t i = dim + 1; i < input_shape.rank() - 2; ++i) {
+        input_tile_offset *= input_shape[i];
+    }
+    if (input_shape.rank() > 1) {
+        input_tile_offset *= (input_shape[-2] / tt::constants::TILE_HEIGHT);
+    }
+    if (input_shape.rank() > 0) {
+        input_tile_offset *= (input_shape[-1] / tt::constants::TILE_WIDTH);
     }
 
-    return PLow;
-}
-
-uint32_t CumprodDeviceOperation::SingleCoreCumprodProgramFactory::mul_higher_nontile_ranks(
-    const Shape& input_shape, const int32_t& dim) {
-    uint32_t PHigh{1};
-    for (int32_t i{dim + 1}; i < input_shape.rank() - 2; ++i) {
-        PHigh *= input_shape[i];
-    }
-
-    return PHigh;
-}
-
-uint32_t CumprodDeviceOperation::SingleCoreCumprodProgramFactory::calc_htwt(const Shape& input_shape) {
-    switch (input_shape.rank()) {
-        case 0: return 0;
-        case 1: return input_shape[0] / tt::constants::TILE_WIDTH;
-        default:
-            return (input_shape[input_shape.rank() - 1] / tt::constants::TILE_WIDTH) *
-                   (input_shape[input_shape.rank() - 2] / tt::constants::TILE_HEIGHT);
-    }
+    return input_tile_offset;
 }
 
 CumprodDeviceOperation::SingleCoreCumprodProgramFactory::cached_program_t
@@ -63,8 +49,6 @@ CumprodDeviceOperation::SingleCoreCumprodProgramFactory::create(
     auto src_buffer{input_tensor.buffer()};
     auto dst_buffer{output_tensor.buffer()};
 
-    // constexpr CoreCoord core{0, 0};
-
     const auto dst_cb_data_format{datatype_to_dataformat_converter(output_tensor.get_dtype())};
     const bool fp32_dest_acc_en{
         (dst_cb_data_format == DataFormat::Float32) || (dst_cb_data_format == DataFormat::Int32) ||
@@ -82,7 +66,7 @@ CumprodDeviceOperation::SingleCoreCumprodProgramFactory::create(
 
     const uint32_t tiles_per_row{input_tensor.get_padded_shape()[dim]};
     const uint32_t num_rows_total{input_tensor.volume() / tt::constants::TILE_HW / tiles_per_row};
-    const uint32_t input_tile_offset{mul_higher_nontile_ranks(input_shape, dim) * calc_htwt(input_shape)};
+    const uint32_t input_tile_offset{calc_input_tile_offset(input_shape, dim)};
 
     const auto
         [num_cores, all_cores, core_group_1, core_group_2, num_cols_per_core_group_1, num_cols_per_core_group_2] =

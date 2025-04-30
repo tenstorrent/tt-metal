@@ -44,12 +44,12 @@ void kernel_main() {
         .bank_base_address = output_base_addr, .page_size = output_tile_bytes, .data_format = output_data_format};
 
     for (uint32_t i = start_id; i < start_id + num_rows_per_core; ++i) {
-        const uint32_t i0{i / input_tile_offset};
-        const uint32_t i1{i % input_tile_offset};
+        const uint32_t i0 = i / input_tile_offset;
+        const uint32_t i1 = i % input_tile_offset;
         for (uint32_t j = 0; j < tiles_per_row; ++j) {
-            const uint32_t write_tile_id{get_tile_id(i0, i1, j, tiles_per_row, input_tile_offset)};
+            const uint32_t write_tile_id = get_tile_id(i0, i1, j, tiles_per_row, input_tile_offset);
             cb_wait_front(cb_out, ONE_TILE);
-            uint32_t l1_read_addr{get_read_ptr(cb_out)};
+            uint32_t l1_read_addr = get_read_ptr(cb_out);
             if (is_output_dram) {
                 noc_async_write_tile(write_tile_id, dram_output_addrg, l1_read_addr);
             } else {

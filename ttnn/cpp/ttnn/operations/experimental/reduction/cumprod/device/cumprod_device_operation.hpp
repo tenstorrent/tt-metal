@@ -79,9 +79,9 @@ struct CumprodDeviceOperation {
             const std::variant<DataMovementConfig, ComputeConfig, EthernetConfig>& config,
             const std::vector<uint32_t>& runtime_args = {});
 
-        static uint32_t mul_lower_ranks(const Shape& input_shape, const int32_t& dim);
-        static uint32_t mul_higher_nontile_ranks(const Shape& input_shape, const int32_t& dim);
-        static uint32_t calc_htwt(const Shape& input_shape);
+        static uint32_t calc_input_tile_offset(const Shape& input_shape, const int32_t& dim);
+        // static uint32_t mul_nontile_ranks_above_dim(const Shape& input_shape, const int32_t& dim);
+        // static uint32_t calc_htwt(const Shape& input_shape);
     };
 
     using program_factory_t = std::variant<SingleCoreCumprodProgramFactory>;
