@@ -145,7 +145,8 @@ void test_send_recv_tensor() {
         auto tensor = ttml::core::zeros(shape, &device);
         fmt::print("Rank {}: receiving tensor\n", rank);
         ttml::core::distributed::recv_tensor(tensor, 0);
-        fmt::print("Rank {}: received tensor {}\n", rank, ttml::core::to_vector(tensor));
+        auto vec = ttml::core::to_vector(tensor);
+        fmt::print("Rank {}: received tensor {}\n", rank, vec);
     }
 }
 
