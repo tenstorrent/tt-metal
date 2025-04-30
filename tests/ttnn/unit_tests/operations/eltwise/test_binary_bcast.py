@@ -1972,6 +1972,7 @@ def test_binary_bcast_profile(device, dtype_pt, dtype_tt, a_and_b_shape, memory_
         torch.testing.assert_close(torch_result, output)
         ttnn.synchronize_device(device)
 
+
 @pytest.mark.parametrize(
     "input_shape_a",
     [
@@ -1988,10 +1989,10 @@ def test_bcast(input_shape_a, device, bcast_dim, math_op):
     input_shape_b = list(input_shape_a)
 
     if bcast_dim == ttnn.BcastOpDim.H or bcast_dim == ttnn.BcastOpDim.HW:
-        input_shape_b[-2] = 32
+        input_shape_b[-2] = 1
 
     if bcast_dim == ttnn.BcastOpDim.W or bcast_dim == ttnn.BcastOpDim.HW:
-        input_shape_b[-1] = 32
+        input_shape_b[-1] = 1
     a_pt = gen_func_with_cast_tt(partial(torch_random, low=-100, high=100, dtype=torch.bfloat16), ttnn.bfloat16)(
         input_shape_a
     )
@@ -2003,14 +2004,14 @@ def test_bcast(input_shape_a, device, bcast_dim, math_op):
         a_pt,
         dtype=ttnn.bfloat16,
         device=device,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
+        layout=ttnn.TILE_LAYOUT,
     )
 
     b_tt = ttnn.from_torch(
         b_pt,
         dtype=ttnn.bfloat16,
         device=device,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
+        layout=ttnn.TILE_LAYOUT,
     )
 
     output_tensor = ttnn.bcast(a_tt, b_tt, math_op, bcast_dim)
@@ -2018,5 +2019,5 @@ def test_bcast(input_shape_a, device, bcast_dim, math_op):
     golden_function = ttnn.get_golden_function(ttnn.bcast)
     golden_tensor = golden_function(a_pt, b_pt, math_op, bcast_dim)
 
-    comp_pass = compare_pcc([output_tensor], [golden_tensor])
+    comp_pass = compare_pcc([output_tensor], [golden_tensor], 0.9999)
     assert comp_pass

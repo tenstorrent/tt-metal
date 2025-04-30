@@ -82,35 +82,10 @@ ttnn.attach_golden_function(ttnn.sharded_to_interleaved_partial, _golden_functio
 
 
 def _golden_function(in0, in1, math_op, bcast_dim, *args, **kwargs):
-    if bcast_dim == ttnn.BcastOpDim.W:
-        target_width = in0.shape[-1]
-        source_width = in1.shape[-1]
-
-        repeat_factor = (target_width + source_width - 1) // source_width
-        in1 = in1.repeat(1, 1, 1, repeat_factor)[:, :, :, :target_width]
-        fill_values = in1[..., 0].unsqueeze(-1)
-        in1[:] = fill_values
-
-    elif bcast_dim == ttnn.BcastOpDim.H:
-        target_height = in0.shape[-2]
-        source_height = in1.shape[-2]
-
-        repeat_factor = (target_height + source_height - 1) // source_height
-        in1 = in1.repeat(1, 1, repeat_factor, 1)[:, :, :target_height, :]
-        in1[:] = in1[:, :, 0:1, :].expand_as(in1)
-    elif bcast_dim == ttnn.BcastOpDim.HW:
-        target_height = in0.shape[-2]
-        source_height = in1.shape[-2]
-        height_repeat = (target_height + source_height - 1) // source_height
-        in1 = in1.repeat(1, 1, height_repeat, 1)[:, :, :target_height, :]
-
-        target_width = in0.shape[-1]
-        source_width = in1.shape[-1]
-        width_repeat = (target_width + source_width - 1) // source_width
-        in1 = in1.repeat(1, 1, 1, width_repeat)[:, :, :, :target_width]
-
-        fill_value = in1[:, :, 0, 0].unsqueeze(-1).unsqueeze(-1)
-        in1[:] = fill_value.expand_as(in1)
+    if bcast_dim in {ttnn.BcastOpDim.W, ttnn.BcastOpDim.H, ttnn.BcastOpDim.HW}:
+        in1 = in1.expand(in0.shape)
+    else:
+        raise AssertionError("Invalid bcast dimension")
 
     if math_op == ttnn.BcastOpMath.ADD:
         res = in0 + in1
@@ -118,6 +93,9 @@ def _golden_function(in0, in1, math_op, bcast_dim, *args, **kwargs):
         res = in0 - in1
     elif math_op == ttnn.BcastOpMath.MUL:
         res = in0 * in1
+    else:
+        raise AssertionError("Invalid math operation")
+
     return res
 
 
