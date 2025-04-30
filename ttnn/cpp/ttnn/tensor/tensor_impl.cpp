@@ -11,6 +11,7 @@
 #include "tt-metalium/mesh_command_queue.hpp"
 #include <tt_stl/overloaded.hpp>
 #include <tt_stl/span.hpp>
+#include "tt-metalium/shape.hpp"
 #include "ttnn/distributed/distributed_tensor.hpp"
 
 #include "ttnn/distributed/distributed_tensor_config.hpp"
@@ -1334,14 +1335,8 @@ Tensor pad(
         }
 
         // Calculate strides
-        ttnn::SmallVector<size_t> input_strides(rank);
-        ttnn::SmallVector<size_t> output_strides(rank);
-        input_strides[rank - 1] = 1;
-        output_strides[rank - 1] = 1;
-        for (int i = rank - 2; i >= 0; --i) {
-            input_strides[i] = input_strides[i + 1] * input_padded_shape[i + 1];
-            output_strides[i] = output_strides[i + 1] * output_padded_shape[i + 1];
-        }
+        auto input_strides = compute_strides(input_padded_shape);
+        auto output_strides = compute_strides(output_padded_shape);
 
         // Process all coordinates except for the last dimension (it's copied with mempcy)
         ttnn::SmallVector<size_t> coords(rank - 1, 0);
