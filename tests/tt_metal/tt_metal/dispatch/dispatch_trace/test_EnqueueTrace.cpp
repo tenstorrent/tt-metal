@@ -8,7 +8,7 @@
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/logger.hpp>
-#include <tt-metalium/program_impl.hpp>
+#include <tt-metalium/program.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <cstdint>
 #include <map>
@@ -20,7 +20,7 @@
 #include <vector>
 
 #include <tt-metalium/buffer.hpp>
-#include <tt-metalium/buffer_constants.hpp>
+#include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/circular_buffer_types.hpp>
 #include "command_queue_fixture.hpp"
 #include <tt-metalium/core_coord.hpp>

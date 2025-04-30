@@ -218,9 +218,9 @@ def test_bw_div_scalar_opt_output(input_shapes, scalar, round_mode, device):
     _, input_grad = data_gen_with_range(input_shapes, -1, 1, device)
 
     cq_id = 0
-    pages_before = ttnn._ttnn.reports.get_buffer_pages()
+    pages_before = ttnn._ttnn.reports.get_buffer_pages(device)
     ttnn.div_bw(grad_tensor, input_tensor, scalar, round_mode=round_mode, input_grad=input_grad, queue_id=cq_id)
-    assert len(pages_before) == len(ttnn._ttnn.reports.get_buffer_pages())
+    assert len(pages_before) == len(ttnn._ttnn.reports.get_buffer_pages(device))
     tt_output_tensor_on_device = [input_grad]
     golden_function = ttnn.get_golden_function(ttnn.div_bw)
     golden_tensor = golden_function(grad_data, in_data, scalar, round_mode)
@@ -262,7 +262,7 @@ def test_bw_div_opt(input_shapes, round_mode, are_required_outputs, device):
 
     cq_id = 0
 
-    pages_before = ttnn._ttnn.reports.get_buffer_pages()
+    pages_before = ttnn._ttnn.reports.get_buffer_pages(device)
     ttnn.div_bw(
         grad_tensor,
         input_tensor,
@@ -273,7 +273,7 @@ def test_bw_div_opt(input_shapes, round_mode, are_required_outputs, device):
         other_grad=other_grad,
         queue_id=cq_id,
     )
-    assert len(pages_before) == len(ttnn._ttnn.reports.get_buffer_pages())
+    assert len(pages_before) == len(ttnn._ttnn.reports.get_buffer_pages(device))
     tt_output_tensor_on_device = [input_grad, other_grad]
 
     golden_function = ttnn.get_golden_function(ttnn.div_bw)

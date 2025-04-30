@@ -21,7 +21,7 @@
 #include "debug_tools_test_utils.hpp"
 #include "hostdevcommon/kernel_structs.h"
 #include <tt-metalium/kernel_types.hpp>
-#include <tt-metalium/program_impl.hpp>
+#include <tt-metalium/program.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include <tt-metalium/utils.hpp>
 
@@ -65,7 +65,7 @@ SLICE:
 0.365234375 0.373046875 0.380859375 0.388671875 1.4609375 1.4921875 1.5234375 1.5546875
 <TileSlice data truncated due to exceeding max count (32)>)";
 
-static void RunTest(DPrintFixture* fixture, IDevice* device) {
+void RunTest(DPrintFixture* fixture, IDevice* device) {
     // Set up program and command queue
     constexpr CoreCoord core = {0, 0}; // Print on first core only
     Program program = Program();

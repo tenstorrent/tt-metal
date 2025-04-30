@@ -1,5 +1,5 @@
 # All programming example targets should link tt_stl
-link_libraries(TT:STL)
+link_libraries(TT::STL)
 
 set(PROGRAMMING_EXAMPLES_SRCS
     ${CMAKE_CURRENT_SOURCE_DIR}/add_2_integers_in_compute/add_2_integers_in_compute.cpp
@@ -34,4 +34,15 @@ add_custom_target(
         profiler_examples
         contributed
         ${PROGRAMMING_EXAMPLES_TEST_TARGETS}
+)
+
+install(
+    DIRECTORY
+        hello_world_compute_kernel
+    # DESTINATION ${CMAKE_INSTALL_DOCDIR}/examples
+    # FIXME(afuller): Something funky is happening when installing files into /usr/share/doc on a default Docker image.
+    #                 Speculation: some dependency for magic doc handling is missing.
+    #                 For now keep it out of 'doc'.
+    DESTINATION "${CMAKE_INSTALL_DATADIR}/tt-metalium/examples"
+    COMPONENT metalium-examples
 )

@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "transpose_op.hpp"
+#include "tt-metalium/assert.hpp"
 #include "ttnn/operations/data_movement/permute/permute.hpp"
 
 #include <tt-metalium/constants.hpp>
@@ -177,6 +178,7 @@ std::vector<ttnn::TensorSpec> Transpose::compute_output_specs(const std::vector<
 
     auto output_mem_config = this->output_mem_config;
     if (this->output_mem_config.is_sharded()) {
+        TT_FATAL(input_tensor.is_sharded(), "Sharded output tensor must have a sharded input tensor");
         if (this->dim == TransposeOpDim::WH) {
             const auto& input_padded_shape = input_tensor.get_padded_shape();
             ShardSpec shard_spec = input_tensor.shard_spec().value();

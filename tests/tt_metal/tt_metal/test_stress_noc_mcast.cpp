@@ -22,15 +22,15 @@
 #include <variant>
 #include <vector>
 
+#include <tt-metalium/allocator.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/data_types.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/hal_types.hpp>
 #include <tt-metalium/kernel_types.hpp>
-#include "llrt/hal.hpp"
 #include <tt-metalium/logger.hpp>
-#include <tt-metalium/program_impl.hpp>
-#include "span.hpp"
+#include <tt-metalium/program.hpp>
+#include <tt_stl/span.hpp>
 #include "test_common.hpp"
 #include "impl/context/metal_context.hpp"
 #include "umd/device/types/xy_pair.h"
@@ -143,7 +143,7 @@ int main(int argc, char** argv) {
     }
 
     CoreCoord mcast_end = device->worker_core_from_logical_core(workers_logical.end_coord);
-    bool virtualization_enabled = tt::tt_metal::hal_ref.is_coordinate_virtualization_enabled();
+    bool virtualization_enabled = tt::tt_metal::MetalContext::instance().hal().is_coordinate_virtualization_enabled();
     uint32_t num_dests = workers_logical.size();
     CoreCoord virtual_offset = virtualization_enabled
                                    ? device->worker_core_from_logical_core({0, 0})
@@ -163,10 +163,10 @@ int main(int argc, char** argv) {
         virtual_offset.y,
         N_RANDS,
         rnd_delay_g,
-        tt::tt_metal::hal_ref.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::UNRESERVED),
-        tt::tt_metal::hal_ref.get_dev_addr(
-            mcast_from_eth_g ? HalProgrammableCoreType::IDLE_ETH : HalProgrammableCoreType::TENSIX,
-            HalL1MemAddrType::UNRESERVED),
+        device->allocator()->get_base_allocator_addr(tt_metal::HalMemType::L1),
+        mcast_from_eth_g ? tt::tt_metal::MetalContext::instance().hal().get_dev_addr(
+                               HalProgrammableCoreType::IDLE_ETH, HalL1MemAddrType::UNRESERVED)
+                         : device->allocator()->get_base_allocator_addr(tt_metal::HalMemType::L1),
     };
 
     KernelHandle ucast_kernel = tt_metal::CreateKernel(

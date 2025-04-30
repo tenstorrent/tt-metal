@@ -30,9 +30,15 @@ function(ParseGitDescribe)
             ERROR_QUIET
         )
     endif()
+    if(NOT VERSION_HASH)
+        set(VERSION_HASH ${fallbackHash})
+    endif()
     if(NOT version)
         set(version ${fallbackVersion})
-        set(VERSION_HASH ${fallbackHash})
+        # A shallow Git clone will fail a git describe, but also will not have substitued the fallbackVersion
+        if(version MATCHES "Format")
+            set(version "0.0-alpha0-1-g${VERSION_HASH}-dirty")
+        endif()
     endif()
 
     # Local modifications (dirty), or not
@@ -87,6 +93,15 @@ function(ParseGitDescribe)
         string(APPEND VERSION_FULL "+m")
         string(APPEND VERSION_DEB "+m")
     endif()
+
+    # Include Ubuntu's version to disambiguate packages
+    execute_process(
+        COMMAND
+            lsb_release -sr
+        OUTPUT_VARIABLE UBUNTU_RELEASE
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+    )
+    string(APPEND VERSION_DEB "~ubuntu${UBUNTU_RELEASE}")
 
     message(STATUS "Version: ${VERSION_FULL}")
 

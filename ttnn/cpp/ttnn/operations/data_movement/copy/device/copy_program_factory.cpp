@@ -10,7 +10,6 @@
 #include "ttnn/operations/math.hpp"
 
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/util.hpp>
 #include <algorithm>
 #include <tt-metalium/host_api.hpp>
 
@@ -65,8 +64,8 @@ operation::ProgramWithCallbacks copy_multi_core(const Tensor& input, const Tenso
 
     auto src_buffer = input.buffer();
     auto dst_buffer = output.buffer();
-    bool src_is_dram = src_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
-    bool dst_is_dram = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
+    bool src_is_dram = src_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
+    bool dst_is_dram = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
 
     std::vector<uint32_t> reader_compile_time_args, writer_compile_time_args;
     if (tilized) {

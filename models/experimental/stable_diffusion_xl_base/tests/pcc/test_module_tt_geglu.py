@@ -4,7 +4,7 @@
 import torch
 import pytest
 import ttnn
-from models.experimental.stable_diffusion_xl_base.ttnn_impl.tt_geglu import TtGEGLU
+from models.experimental.stable_diffusion_xl_base.tt.tt_geglu import TtGEGLU
 from diffusers import DiffusionPipeline
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.utility_functions import torch_random
@@ -18,7 +18,7 @@ from functools import reduce
         ((4096, 640), "down_blocks.1.attentions.0.transformer_blocks.0.ff.net.0"),
     ],
 )
-def test_geglu(device, input_shape, module_path, use_program_cache):
+def test_geglu(device, input_shape, module_path, use_program_cache, reset_seeds):
     pipe = DiffusionPipeline.from_pretrained(
         "stabilityai/stable-diffusion-xl-base-1.0", torch_dtype=torch.float32, use_safetensors=True, variant="fp16"
     )

@@ -329,7 +329,7 @@ std::vector<std::optional<Tensor>> ExecuteUnaryBackwardTanh::invoke(
     input_grad = input_grad.value_or(ttnn::empty_like(input));
     Tensor tanh_res = ttnn::tanh(queue_id, input, output_mem_config);
     tanh_res = ttnn::square(queue_id, tanh_res, output_mem_config);
-    tanh_res = ttnn::rsub(queue_id, tanh_res, 1.0f, output_mem_config);
+    tanh_res = ttnn::rsub(queue_id, tanh_res, 1.0f, std::nullopt, output_mem_config);
     ttnn::multiply(queue_id, grad, tanh_res, std::nullopt, output_mem_config, input_grad);
     grad_tensor.emplace_back(input_grad);
     return grad_tensor;
@@ -510,8 +510,9 @@ std::vector<Tensor> ExecuteUnaryBackwardTan::invoke(
 std::vector<Tensor> ExecuteUnaryBackwardSigmoid::invoke(
     const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
-    Tensor sig_result = ttnn::sigmoid(input, false, output_mem_config);
-    Tensor rsub_term = ttnn::rsub(sig_result, 1.0f, output_mem_config);
+    bool approximate_mode = false;
+    Tensor sig_result = ttnn::sigmoid(input, (int)unary::VecMode::RC, approximate_mode, output_mem_config);
+    Tensor rsub_term = ttnn::rsub(sig_result, 1.0f, std::nullopt, output_mem_config);
     Tensor prod_term_1 = ttnn::multiply(sig_result, rsub_term, std::nullopt, output_mem_config);
     Tensor prod_term_2 = ttnn::multiply(prod_term_1, grad, std::nullopt, output_mem_config);
     grad_tensor.emplace_back(prod_term_2);
@@ -743,8 +744,8 @@ std::vector<Tensor> ExecuteUnaryBackwardLogit::invoke(
     std::vector<Tensor> grad_tensor;
     Tensor grad_result = ttnn::multiply(
         grad,
-        ttnn::reciprocal(
-            ttnn::multiply(input, ttnn::rsub(input, 1.0f, output_mem_config), std::nullopt, output_mem_config)),
+        ttnn::reciprocal(ttnn::multiply(
+            input, ttnn::rsub(input, 1.0f, std::nullopt, output_mem_config), std::nullopt, output_mem_config)),
         std::nullopt,
         output_mem_config);
     Tensor status = ttnn::logical_and(
@@ -953,12 +954,17 @@ std::vector<std::optional<Tensor>> ExecuteUnaryBackwardSilu::invoke(
     std::vector<std::optional<Tensor>> result = {std::nullopt};
 
     input_grad = input_grad.value_or(ttnn::empty_like(input));
-    Tensor sigmoid_res = ttnn::sigmoid(input, false, output_mem_config);
+    bool approximate_mode = false;
+    Tensor sigmoid_res = ttnn::sigmoid(input, (int)unary::VecMode::RC, approximate_mode, output_mem_config);
     Tensor grad_sigmoid = ttnn::multiply(queue_id, grad, sigmoid_res, std::nullopt, output_mem_config);
     Tensor add_sub = ttnn::add(
         queue_id,
         ttnn::multiply(
-            queue_id, ttnn::rsub(sigmoid_res, 1.0f, output_mem_config), input, std::nullopt, output_mem_config),
+            queue_id,
+            ttnn::rsub(sigmoid_res, 1.0f, std::nullopt, output_mem_config),
+            input,
+            std::nullopt,
+            output_mem_config),
         1.0f,
         std::nullopt,
         output_mem_config);
@@ -1305,8 +1311,8 @@ std::vector<Tensor> ExecuteUnaryBackwardLogiteps::invoke(
     high = 1.0 - low;
     Tensor grad_result = ttnn::multiply(
         grad,
-        ttnn::reciprocal(
-            ttnn::multiply(input, ttnn::rsub(input, 1.0f, output_mem_config), std::nullopt, output_mem_config)),
+        ttnn::reciprocal(ttnn::multiply(
+            input, ttnn::rsub(input, 1.0f, std::nullopt, output_mem_config), std::nullopt, output_mem_config)),
         std::nullopt,
         output_mem_config);
     Tensor t_eps = ttnn::full_like(input, eps, input.get_dtype(), input.get_layout(), std::nullopt, output_mem_config);
@@ -1799,11 +1805,12 @@ std::vector<Tensor> ExecuteUnaryBackwardProd::invoke(
     std::vector<Tensor> grad_tensor;
     auto output_memory_config = output_mem_config.value_or(
         input.memory_config());  // TODO: Remove after ternary forward ops migration is completed
-    Tensor prod_result = ttnn::prod(input, all_dimensions, dim, true, output_memory_config);
+    const bool keepdim = !all_dimensions;
+    Tensor prod_result = ttnn::prod(input, all_dimensions, dim, keepdim, output_memory_config);
     if (prod_result.get_layout() == Layout::ROW_MAJOR && prod_result.storage_type() == StorageType::DEVICE) {
         prod_result = ttnn::operations::unary_backward::change_layout_to_tile(prod_result, output_memory_config);
     }
-    if (all_dimensions == true) {
+    if (all_dimensions) {
         Tensor temp = ttnn::multiply(
             prod_result, grad, std::nullopt, output_memory_config);  // result is stored in the first position
         Tensor fill_tensor = ttnn::fill_first_val_into_tensor<::bfloat16>(
@@ -1826,8 +1833,7 @@ std::vector<Tensor> ExecuteUnaryBackwardProd::invoke(
             Tensor new_slice_tensor = ttnn::slice(DefaultQueueId, required, start_index, end_index, step, std::nullopt);
             after_permute_dims = {0, 2, 3, 1};
             updated_grad = ttnn::permute(new_slice_tensor, after_permute_dims, output_memory_config);
-            if (updated_grad.storage_type() != StorageType::DEVICE &&
-                updated_grad.storage_type() != StorageType::MULTI_DEVICE) {
+            if (updated_grad.storage_type() != StorageType::DEVICE) {
                 Tensor pad_updated_grad = updated_grad.pad_to_tile(1.0f);
                 pad_updated_grad = pad_updated_grad.to_layout(Layout::TILE);
                 updated_grad = pad_updated_grad.to_device(input.device());

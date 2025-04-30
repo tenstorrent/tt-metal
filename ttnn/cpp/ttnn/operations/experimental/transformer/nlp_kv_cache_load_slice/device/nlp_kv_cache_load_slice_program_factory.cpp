@@ -91,7 +91,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_nlp_kv_cache_load_slice
 
     // Reader compile-time args
     // Data is 32 byte aligned
-    bool src0_is_dram = src0_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
+    bool src0_is_dram = src0_buffer->buffer_type() == tt_metal::BufferType::DRAM;
 
     // Reader
     std::vector<uint32_t> reader_compile_time_args = {// interleaved accessor args

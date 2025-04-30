@@ -9,6 +9,7 @@
 #include <tt-metalium/erisc_datamover_builder.hpp>
 #include <tt-metalium/mesh_graph.hpp>
 #include <tt_metal.hpp>
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <initializer_list>
@@ -28,7 +29,6 @@
 #include "device.hpp"
 #include "impl/context/metal_context.hpp"
 #include "dispatch_core_common.hpp"
-#include "dispatch_mem_map.hpp"
 #include "fabric_edm_packet_header.hpp"
 #include "fabric_host_interface.h"
 #include "fabric_types.hpp"
@@ -40,10 +40,10 @@
 #include "kernel_config/fd_kernel.hpp"
 #include "kernel_types.hpp"
 #include "metal_soc_descriptor.h"
-#include "program_impl.hpp"
-#include "rtoptions.hpp"
-#include "span.hpp"
-#include "impl/context/metal_context.hpp"
+#include "tt-metalium/program.hpp"
+#include <tt_stl/span.hpp>
+#include <tt-metalium/fabric.hpp>
+#include "tt_metal/fabric/fabric_host_utils.hpp"
 #include <umd/device/tt_core_coordinates.h>
 #include <umd/device/tt_xy_pair.h>
 #include "utils.hpp"
@@ -596,7 +596,7 @@ std::vector<DispatchKernelNode> generate_nodes(const std::set<chip_id_t>& device
                 "N300/T3K expects devices in mmio/remote pairs.");
             std::vector<DispatchKernelNode> nodes_for_one_mmio;
             // TODO: Put this in a better place
-            if (llrt::RunTimeOptions::get_instance().get_fd_fabric()) {
+            if (tt_metal::MetalContext::instance().rtoptions().get_fd_fabric()) {
                 TT_FATAL(num_hw_cqs == 1, "Only 1 CQ is supported at this time for FD on Fabric");
                 // Must call tt::tt_metal::detail::InitializeFabricConfig upstream
                 nodes_for_one_mmio = two_chip_arch_1cq_fabric;
@@ -852,7 +852,7 @@ std::unique_ptr<Program> create_and_compile_cq_program(IDevice* device) {
     }
 
     // Compile the program and return it so Device can register it
-    detail::CompileProgram(device, *cq_program, /*fd_bootloader_mode=*/true);
+    detail::CompileProgram(device, *cq_program, /*force_slow_dispatch=*/true);
     // Erase from map. Note: program in map is no longer valid
     // It is returned from this function and the caller will take ownership of it
     command_queue_pgms.erase(device->id());
@@ -863,7 +863,7 @@ void configure_dispatch_cores(IDevice* device) {
     // Set up completion_queue_writer core. This doesn't actually have a kernel so keep it out of the struct and config
     // it here. TODO: should this be in the struct?
     CoreType dispatch_core_type = MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_type();
-    auto& my_dispatch_constants = DispatchMemMap::get(dispatch_core_type);
+    auto& my_dispatch_constants = MetalContext::instance().dispatch_mem_map();
     uint32_t cq_start = my_dispatch_constants.get_host_command_queue_addr(CommandQueueHostAddrType::UNRESERVED);
     uint32_t cq_size = device->sysmem_manager().get_cq_size();
     std::vector<uint32_t> zero = {0x0};
@@ -925,17 +925,19 @@ std::unique_ptr<Program> create_and_compile_2d_fabric_program(IDevice* device, F
     std::uint32_t router_mask = 0;
     auto control_plane = tt::tt_metal::MetalContext::instance().get_cluster().get_control_plane();
 
-    auto router_chans = tt::tt_metal::MetalContext::instance().get_cluster().get_fabric_ethernet_channels(device->id());
-    if (router_chans.empty()) {
+    auto [mesh_id, chip_id] = control_plane->get_mesh_chip_id_from_physical_chip_id(device->id());
+
+    auto router_chans_and_direction = control_plane->get_active_fabric_eth_channels(mesh_id, chip_id);
+    if (router_chans_and_direction.empty()) {
         return nullptr;
     }
 
     fabric_program_ptr = std::make_unique<Program>();
-    size_t num_routers = router_chans.size();
-    for (const auto& router_chan : router_chans) {
-        router_mask += 0x1 << (uint32_t)router_chan;
+    size_t num_routers = router_chans_and_direction.size();
+    for (const auto& router_chan : router_chans_and_direction) {
+        router_mask += 0x1 << (uint32_t)router_chan.first;
     }
-    auto master_router_chan = (uint32_t)(*router_chans.begin());
+    auto master_router_chan = (uint32_t)(router_chans_and_direction.begin()->first);
     // setup runtime args
     std::vector<uint32_t> router_runtime_args = {
         num_routers,         // 0: number of active fabric routers
@@ -966,18 +968,18 @@ std::unique_ptr<Program> create_and_compile_2d_fabric_program(IDevice* device, F
     // TODO: Manual clear of semaphore, move this to proper Metal sempahore apis
     std::vector<uint32_t> fabric_sem_zero_buf(1, 0);
 
-    for (const auto& router_chan : router_chans) {
+    for (const auto& router_chan : router_chans_and_direction) {
         CoreCoord virtual_eth_core =
             tt::tt_metal::MetalContext::instance().get_cluster().get_virtual_eth_core_from_channel(
-                device->id(), router_chan);
+                device->id(), router_chan.first);
         auto router_logical_core = device->logical_core_from_ethernet_core(virtual_eth_core);
-        if (master_router_chan == router_chan) {
+        if (master_router_chan == router_chan.first) {
             router_compile_args[4] = 1;
         } else {
             router_compile_args[4] = 0;
         }
         auto [mesh_id, chip_id] = control_plane->get_mesh_chip_id_from_physical_chip_id(device->id());
-        uint32_t direction = control_plane->get_eth_chan_direction(mesh_id, chip_id, router_chan);
+        uint32_t direction = router_chan.second;
         router_compile_args[5] = direction;
         auto kernel = tt_metal::CreateKernel(
             *fabric_program_ptr,
@@ -989,36 +991,76 @@ std::unique_ptr<Program> create_and_compile_2d_fabric_program(IDevice* device, F
         tt_metal::SetRuntimeArgs(*fabric_program_ptr, kernel, router_logical_core, router_runtime_args);
     }
 
-    detail::CompileProgram(device, *fabric_program_ptr, /*fd_bootloader_mode=*/device->using_fast_dispatch());
+    detail::CompileProgram(device, *fabric_program_ptr, /*force_slow_dispatch=*/device->using_fast_dispatch());
     return fabric_program_ptr;
 }
 
 void configure_2d_fabric_cores(IDevice* device) {
     std::vector<uint32_t> router_zero_buf(1, 0);
 
-    auto router_chans = tt::tt_metal::MetalContext::instance().get_cluster().get_fabric_ethernet_channels(device->id());
-    for (const auto& router_chan : router_chans) {
+    auto control_plane = tt::tt_metal::MetalContext::instance().get_cluster().get_control_plane();
+
+    auto [mesh_id, chip_id] = control_plane->get_mesh_chip_id_from_physical_chip_id(device->id());
+
+    auto router_chans_and_direction = control_plane->get_active_fabric_eth_channels(mesh_id, chip_id);
+    for (const auto& [router_chan, direction] : router_chans_and_direction) {
         CoreCoord virtual_eth_core =
             tt::tt_metal::MetalContext::instance().get_cluster().get_virtual_eth_core_from_channel(
                 device->id(), router_chan);
         auto router_logical_core = device->logical_core_from_ethernet_core(virtual_eth_core);
         // initialize the semaphore
-        auto fabric_router_sync_sem_addr =
-            hal_ref.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::UNRESERVED);
+        auto fabric_router_sync_sem_addr = tt::tt_metal::hal::get_erisc_l1_unreserved_base();
         detail::WriteToDeviceL1(
             device, router_logical_core, fabric_router_sync_sem_addr, router_zero_buf, CoreType::ETH);
     }
 }
 
-std::unique_ptr<Program> create_and_compile_1d_fabric_program(IDevice* device, bool wrap_around_mesh = true) {
+bool check_dateline(
+    const tt_fabric::ControlPlane& control_plane,
+    tt_fabric::Topology topology,
+    tt_fabric::mesh_id_t mesh_id,
+    chip_id_t chip0,
+    chip_id_t chip1,
+    bool wrap_around_mesh) {
+    if (topology != tt_fabric::Topology::Ring) {
+        return false;
+    }
+    if (chip1 < chip0) {
+        std::swap(chip0, chip1);
+    }
+
+    auto physical_mesh_shape = control_plane.get_physical_mesh_shape(mesh_id);
+    TT_FATAL(physical_mesh_shape.dims() == 2, "Dateline routing only supported for 2D mesh");
+
+    // Refactor this once mesh_id has row/col control
+    if (wrap_around_mesh) {
+        // Wrap around dateline
+        return chip0 == 0 && chip1 == physical_mesh_shape[1];
+    } else {
+        return
+            // Column dateline
+            // chip0 is the first col, chip1 is the last col on the same row
+            (chip0 % physical_mesh_shape[1] == 0 && (chip0 + physical_mesh_shape[1] - 1) == chip1) ||
+            // Row dateline
+            // chip0 is the first row, chip1 is the last row on the same column
+            (chip0 < physical_mesh_shape[1] && chip1 >= (physical_mesh_shape[1] * (physical_mesh_shape[0] - 1)) &&
+             chip1 % physical_mesh_shape[1] == chip0);
+    }
+    return false;
+}
+
+std::unique_ptr<Program> create_and_compile_1d_fabric_program(IDevice* device, FabricConfig fabric_config) {
     using namespace tt_fabric;
     std::unique_ptr<Program> fabric_program_ptr;
     auto control_plane = tt::tt_metal::MetalContext::instance().get_cluster().get_control_plane();
     std::pair<mesh_id_t, chip_id_t> mesh_chip_id = control_plane->get_mesh_chip_id_from_physical_chip_id(device->id());
+    auto mesh_shape = control_plane->get_physical_mesh_shape(mesh_chip_id.first);
+    auto [mesh_id, chip_id] = control_plane->get_mesh_chip_id_from_physical_chip_id(device->id());
     std::unordered_map<RoutingDirection, std::set<chan_id_t>> active_fabric_eth_channels;
     std::unordered_map<RoutingDirection, chip_id_t> chip_neighbors;
     std::unordered_map<chan_id_t, tt::tt_fabric::FabricEriscDatamoverBuilder> edm_builders;
     auto routing_directions = {RoutingDirection::N, RoutingDirection::S, RoutingDirection::E, RoutingDirection::W};
+    Topology topology = get_1d_topology(fabric_config);
 
     if (device->is_mmio_capable() &&
         (tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type() == tt::ClusterType::TG)) {
@@ -1026,15 +1068,24 @@ std::unique_ptr<Program> create_and_compile_1d_fabric_program(IDevice* device, b
         return nullptr;
     }
 
+    const bool is_galaxy =
+        tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type() == tt::ClusterType::GALAXY;
+
+    uint32_t corner_chip_connections = 0;
+    constexpr uint32_t corner_chip_id = 0;
     for (const auto& direction : routing_directions) {
-        auto active_eth_chans = control_plane->get_active_fabric_eth_channels_in_direction(
-            mesh_chip_id.first, mesh_chip_id.second, direction);
-        if (active_eth_chans.empty()) {
-            continue;
+        if (!control_plane->get_intra_chip_neighbors(mesh_chip_id.first, 0, direction).empty()) {
+            corner_chip_connections++;
         }
 
         auto neighbors = control_plane->get_intra_chip_neighbors(mesh_chip_id.first, mesh_chip_id.second, direction);
         if (neighbors.empty()) {
+            continue;
+        }
+
+        auto active_eth_chans = control_plane->get_active_fabric_eth_channels_in_direction(
+            mesh_chip_id.first, mesh_chip_id.second, direction);
+        if (active_eth_chans.empty()) {
             continue;
         }
 
@@ -1045,32 +1096,48 @@ std::unique_ptr<Program> create_and_compile_1d_fabric_program(IDevice* device, b
         active_fabric_eth_channels.insert({direction, active_eth_chans});
     }
 
-    if (chip_neighbors.empty()) {
-        // 1D fabric needs atleast one neighbor on the same mesh (atleast for now)
+    if (active_fabric_eth_channels.empty()) {
+        // need atleast 1 active fabric eth channel in atleast 1 direction
         return nullptr;
     }
 
     fabric_program_ptr = std::make_unique<Program>();
-    static constexpr std::size_t edm_buffer_size =
-        tt::tt_fabric::FabricEriscDatamoverBuilder::default_packet_payload_size_bytes +
-        sizeof(tt::tt_fabric::PacketHeader);
-    const auto edm_config = tt::tt_fabric::FabricEriscDatamoverConfig(edm_buffer_size);
+    const auto edm_config = get_1d_fabric_config();
+    auto soc_desc = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(device->id());
+
+    // Refactor this once mesh_id has row/col control
+    // This currently checks if chip 0 is a corner chip
+    bool wrap_around_mesh = corner_chip_connections == 2;
 
     for (const auto& [direction, remote_chip_id] : chip_neighbors) {
+        bool is_dateline = check_dateline(
+            *control_plane,
+            topology,
+            mesh_chip_id.first,
+            mesh_chip_id.second,
+            control_plane->get_mesh_chip_id_from_physical_chip_id(remote_chip_id).second,
+            wrap_around_mesh);
+
         for (const auto& eth_chan : active_fabric_eth_channels[direction]) {
-            auto eth_logical_core = tt::tt_metal::MetalContext::instance()
-                                        .get_cluster()
-                                        .get_soc_desc(device->id())
-                                        .get_eth_core_for_channel(eth_chan, CoordSystem::LOGICAL);
+            auto eth_logical_core = soc_desc.get_eth_core_for_channel(eth_chan, CoordSystem::LOGICAL);
             auto edm_builder = tt::tt_fabric::FabricEriscDatamoverBuilder::build(
-                device, *fabric_program_ptr, eth_logical_core, device->id(), remote_chip_id, edm_config, true, false);
+                device,
+                *fabric_program_ptr,
+                eth_logical_core,
+                device->id(),
+                remote_chip_id,
+                edm_config,
+                true,
+                false,
+                is_dateline);
             edm_builders.insert({eth_chan, edm_builder});
         }
     }
 
     uint32_t num_edm_chans = edm_builders.size();
-    uint32_t master_edm_chan =
-        *(tt::tt_metal::MetalContext::instance().get_cluster().get_fabric_ethernet_channels(device->id()).begin());
+
+    auto router_chans_and_direction = control_plane->get_active_fabric_eth_channels(mesh_id, chip_id);
+    uint32_t master_edm_chan = (uint32_t)(router_chans_and_direction.begin()->first);
     uint32_t edm_channels_mask = 0;
     for (const auto& [router_chan, _] : edm_builders) {
         edm_channels_mask += 0x1 << (uint32_t)router_chan;
@@ -1080,14 +1147,15 @@ std::unique_ptr<Program> create_and_compile_1d_fabric_program(IDevice* device, b
         bool can_connect =
             (chip_neighbors.find(dir1) != chip_neighbors.end()) && (chip_neighbors.find(dir2) != chip_neighbors.end());
         if (can_connect) {
-            auto& eth_chans_dir1 = active_fabric_eth_channels.at(dir1);
-            auto& eth_chans_dir2 = active_fabric_eth_channels.at(dir2);
+            auto eth_chans_dir1 = get_ordered_fabric_eth_chans(device->id(), active_fabric_eth_channels.at(dir1));
+            auto eth_chans_dir2 = get_ordered_fabric_eth_chans(device->id(), active_fabric_eth_channels.at(dir2));
 
             auto eth_chans_dir1_it = eth_chans_dir1.begin();
             auto eth_chans_dir2_it = eth_chans_dir2.begin();
 
             // since tunneling cores are not guaraneteed to be reserved on the same routing plane, iterate through
-            // the sorted eth channels in both directions
+            // the ordered eth channels in both directions
+            uint32_t num_links = std::min(eth_chans_dir1.size(), eth_chans_dir2.size());
             while (eth_chans_dir1_it != eth_chans_dir1.end() && eth_chans_dir2_it != eth_chans_dir2.end()) {
                 auto eth_chan_dir1 = *eth_chans_dir1_it;
                 auto eth_chan_dir2 = *eth_chans_dir2_it;
@@ -1096,6 +1164,10 @@ std::unique_ptr<Program> create_and_compile_1d_fabric_program(IDevice* device, b
                 auto& edm_builder2 = edm_builders.at(eth_chan_dir2);
                 edm_builder1.connect_to_downstream_edm(edm_builder2);
                 edm_builder2.connect_to_downstream_edm(edm_builder1);
+
+                if (is_galaxy) {
+                    get_optimal_noc_for_edm(edm_builder1, edm_builder2, num_links, topology);
+                }
 
                 eth_chans_dir1_it++;
                 eth_chans_dir2_it++;
@@ -1115,11 +1187,8 @@ std::unique_ptr<Program> create_and_compile_1d_fabric_program(IDevice* device, b
         connect_downstream_builders(RoutingDirection::E, RoutingDirection::W);
     }
 
-    // TODO: this will not be needed once tests are migrated and should be the default behavior
-    std::map<string, string> defines = {};
-    defines["WAIT_FOR_HOST_SIGNAL"] = "";
-
-    for (const auto& [eth_chan, edm_builder] : edm_builders) {
+    for (auto& [eth_chan, edm_builder] : edm_builders) {
+        edm_builder.set_wait_for_host_signal(true);
         const std::vector<uint32_t> edm_kernel_rt_args = edm_builder.get_runtime_args();
         std::vector<uint32_t> eth_sender_ct_args = edm_builder.get_compile_time_args();
         uint32_t is_local_handshake_master = eth_chan == master_edm_chan;
@@ -1129,10 +1198,7 @@ std::unique_ptr<Program> create_and_compile_1d_fabric_program(IDevice* device, b
         eth_sender_ct_args.push_back(num_edm_chans);
         eth_sender_ct_args.push_back(edm_channels_mask);
 
-        auto eth_logical_core = tt::tt_metal::MetalContext::instance()
-                                    .get_cluster()
-                                    .get_soc_desc(device->id())
-                                    .get_eth_core_for_channel(eth_chan, CoordSystem::LOGICAL);
+        auto eth_logical_core = soc_desc.get_eth_core_for_channel(eth_chan, CoordSystem::LOGICAL);
 
         if (is_local_handshake_master) {
             std::vector<uint32_t> router_zero_buf(1, 0);
@@ -1145,20 +1211,22 @@ std::unique_ptr<Program> create_and_compile_1d_fabric_program(IDevice* device, b
             "tt_metal/fabric/impl/kernels/edm_fabric/fabric_erisc_datamover.cpp",
             eth_logical_core,
             tt::tt_metal::EthernetConfig{
-                .noc = tt_metal::NOC::NOC_0, .compile_args = eth_sender_ct_args, .defines = defines});
+                .noc = tt_metal::NOC::NOC_0,
+                .compile_args = eth_sender_ct_args,
+                .opt_level = tt::tt_metal::KernelBuildOptLevel::O3});
 
         tt::tt_metal::SetRuntimeArgs(*fabric_program_ptr, eth_sender_kernel, eth_logical_core, edm_kernel_rt_args);
     }
 
-    detail::CompileProgram(device, *fabric_program_ptr, /*fd_bootloader_mode=*/device->using_fast_dispatch());
+    detail::CompileProgram(device, *fabric_program_ptr, /*force_slow_dispatch=*/device->using_fast_dispatch());
     return fabric_program_ptr;
 }
 
 std::unique_ptr<Program> create_and_compile_fabric_program(IDevice* device) {
     auto fabric_config = tt::tt_metal::MetalContext::instance().get_cluster().get_fabric_config();
-    if (fabric_config == FabricConfig::FABRIC_1D) {
-        return create_and_compile_1d_fabric_program(device);
-    } else if (fabric_config == FabricConfig::FABRIC_2D || fabric_config == FabricConfig::FABRIC_2D_PUSH) {
+    if (tt_fabric::is_1d_fabric_config(fabric_config)) {
+        return create_and_compile_1d_fabric_program(device, fabric_config);
+    } else if (tt_fabric::is_2d_fabric_config(fabric_config)) {
         return create_and_compile_2d_fabric_program(device, fabric_config);
     }
     return nullptr;
@@ -1166,7 +1234,7 @@ std::unique_ptr<Program> create_and_compile_fabric_program(IDevice* device) {
 
 void configure_fabric_cores(IDevice* device) {
     auto fabric_config = tt::tt_metal::MetalContext::instance().get_cluster().get_fabric_config();
-    if (fabric_config == FabricConfig::FABRIC_2D || fabric_config == FabricConfig::FABRIC_2D_PUSH) {
+    if (tt_fabric::is_2d_fabric_config(fabric_config)) {
         configure_2d_fabric_cores(device);
     }
 }

@@ -58,7 +58,11 @@ from models.demos.llama3_subdevices.tt.llama_ccl import TT_CCL
         # 1024 * 64,
     ),
 )
-@pytest.mark.parametrize("device_params", [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL}], indirect=True)
+@pytest.mark.parametrize(
+    "device_params",
+    [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL, "fabric_config": ttnn.FabricConfig.FABRIC_1D}],
+    indirect=True,
+)
 def test_llama_attention_inference(
     max_seq_len,
     paged_attention,
@@ -71,8 +75,6 @@ def test_llama_attention_inference(
     dtype = ttnn.bfloat8_b
     pcc = 0.99
     batch_size = 1  # For prefill we only support batch_size = 1
-
-    mesh_device.enable_async(True)
 
     model_args = TtModelArgs(mesh_device, max_batch_size=batch_size, max_seq_len=max_seq_len)
     model_args.n_layers = 1

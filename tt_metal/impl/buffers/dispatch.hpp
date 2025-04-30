@@ -15,9 +15,8 @@
 
 #include "buffer.hpp"
 #include "core_coord.hpp"
-#include "span.hpp"
+#include <tt_stl/span.hpp>
 #include "system_memory_manager.hpp"
-#include "tt_metal/impl/event/dispatch.hpp"
 
 enum class CoreType;
 namespace tt {
@@ -62,7 +61,8 @@ struct ReadBufferDescriptor {
         starting_host_page_id(starting_host_page_id) {}
 };
 
-using CompletionReaderVariant = std::variant<std::monostate, ReadBufferDescriptor, ReadEventDescriptor>;
+using CompletionReaderVariant =
+    std::variant<std::monostate, ReadBufferDescriptor, ReadEventDescriptor, ReadL1DataDescriptor>;
 
 // Contains helper functions to interface with buffers on device
 namespace buffer_dispatch {

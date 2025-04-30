@@ -12,7 +12,7 @@ from models.tt_transformers.tt.common import (
     PagedAttentionConfig,
 )
 from models.tt_transformers.tt.model import Transformer
-from models.tt_transformers.tt.model_config import ModelArgs, ModelOptimizations
+from models.tt_transformers.tt.model_config import ModelArgs, DecodersPrecision
 from models.utility_functions import (
     comp_pcc,
     comp_allclose,
@@ -56,9 +56,10 @@ from models.utility_functions import skip_for_grayskull
 @pytest.mark.parametrize(
     "optimizations",
     [
-        pytest.param(ModelOptimizations.accuracy, id="accuracy"),
-        pytest.param(ModelOptimizations.performance, id="performance"),
+        lambda model_args: DecodersPrecision.performance(model_args.n_layers, model_args.model_name),
+        lambda model_args: DecodersPrecision.accuracy(model_args.n_layers, model_args.model_name),
     ],
+    ids=["performance", "accuracy"],
 )
 def test_model_inference(
     seq_len,
@@ -70,8 +71,10 @@ def test_model_inference(
     reset_seeds,
     ensure_gc,
     is_ci_env,
+    request,
 ):
-    if is_ci_env and optimizations == ModelOptimizations.accuracy:
+    test_id = request.node.callspec.id
+    if is_ci_env and "accuracy" in test_id:
         pytest.skip("CI test only runs performance mode to reduce CI pipeline load")
 
     run_ref_pt = True  # Flag to run reference PyTorch model and compare PCC
@@ -81,19 +84,20 @@ def test_model_inference(
     batch_size = 1  # For prefill we only support batch_size = 1
 
     # This sets the minimum PCC for each iteration based on optimization mode
-    if optimizations == ModelOptimizations.accuracy:
+    if "accuracy" in test_id:
         pcc = 0.91  # TODO Look on improving PCC
     else:  # performance mode
-        assert optimizations == ModelOptimizations.performance
+        assert "performance" in test_id
         pcc = 0.869  # TODO Look on improving PCC
-
-    mesh_device.enable_async(True)
 
     # Use instruct weights instead of general weights
     instruct = True
 
     model_args = ModelArgs(mesh_device, max_batch_size=batch_size, optimizations=optimizations, max_seq_len=seq_len)
-    tokenizer = model_args.tokenizer
+
+    if is_ci_env and model_args.is_90b:
+        logger.info("Loading single layer of 90B model for fast CI testing...")
+        model_args.n_layers = 1
 
     logger.info("Loading weights...")
     state_dict_prefix = model_args.get_state_dict_prefix("", None)

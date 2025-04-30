@@ -19,6 +19,7 @@ Pool2D::program_factory_t Pool2D::select_program_factory(const operation_attribu
 
 void validate_pool2d(
     const Tensor& input,
+    const Pool2DType pool_type,
     const sliding_window::SlidingWindowConfig& sliding_window_config,
     const MemoryConfig& out_mem_config) {
     TT_FATAL(input.storage_type() == StorageType::DEVICE, "Operands to reshape need to be on device!");
@@ -46,14 +47,20 @@ void validate_pool2d(
             input_shape[3],
             num_shards_c);
     }
+
+    TT_FATAL(
+        sliding_window_config.ceil_mode == false || pool_type == Pool2DType::MAX_POOL2D,
+        "Ceil mode set to true not supported for avg pool op");
 }
 
 void Pool2D::validate_on_program_cache_miss(const operation_attributes_t& op_attr, const tensor_args_t& tensors) {
-    return validate_pool2d(tensors.input_tensor_, op_attr.sliding_window_config_, op_attr.memory_config_);
+    return validate_pool2d(
+        tensors.input_tensor_, op_attr.pool_type_, op_attr.sliding_window_config_, op_attr.memory_config_);
 }
 
 void Pool2D::validate_on_program_cache_hit(const operation_attributes_t& op_attr, const tensor_args_t& tensors) {
-    return validate_pool2d(tensors.input_tensor_, op_attr.sliding_window_config_, op_attr.memory_config_);
+    return validate_pool2d(
+        tensors.input_tensor_, op_attr.pool_type_, op_attr.sliding_window_config_, op_attr.memory_config_);
 }
 
 Pool2D::spec_return_value_t Pool2D::compute_output_specs(
@@ -118,7 +125,7 @@ tt::stl::hash::hash_t Pool2D::compute_program_hash(
         op_attr.sliding_window_config_.get_hash(), op_attr.pool_type_, op_attr.memory_config_, input_mem_config, dtype);
 }
 
-tt::tt_metal::operation::OpPerformanceModel Pool2D::create_op_performance_model(
+tt::tt_metal::operation::OpPerformanceModelGeneral<Pool2D::tensor_return_value_t> Pool2D::create_op_performance_model(
     const operation_attributes_t& op_attr, const tensor_args_t& inputs, const Tensor& output) {
     const auto& input = inputs.input_tensor_;
     const auto& input_shape = input.get_logical_shape();
@@ -150,7 +157,8 @@ tt::tt_metal::operation::OpPerformanceModel Pool2D::create_op_performance_model(
 
     int ideal_dev_clock_cycles = std::ceil((float)num_mul_adds / (float)(num_cores * tensix_mul_adds_per_cycle_lofi));
 
-    tt::tt_metal::operation::OpPerformanceModel result({input}, {output}, ideal_dev_clock_cycles);
+    tt::tt_metal::operation::OpPerformanceModelGeneral<tensor_return_value_t> result(
+        {input}, {output}, ideal_dev_clock_cycles);
     return result;
 }
 

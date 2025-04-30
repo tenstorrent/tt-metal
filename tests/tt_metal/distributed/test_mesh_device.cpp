@@ -11,7 +11,7 @@
 #include <vector>
 
 #include <tt-metalium/allocator_types.hpp>
-#include <tt-metalium/buffer_constants.hpp>
+#include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/dispatch_core_common.hpp>
 #include "gmock/gmock.h"
@@ -60,10 +60,6 @@ TEST_F(MeshDeviceTest, MemoryAllocationStatistics) {
         auto device_stats = device->allocator()->get_statistics(tt::tt_metal::BufferType::DRAM);
         EXPECT_EQ(stats.total_allocatable_size_bytes, device_stats.total_allocatable_size_bytes);
     }
-}
-
-TEST_F(MeshDeviceTest, NumDramChannels) {
-    EXPECT_EQ(mesh_device_->num_dram_channels(), 96);  // 8 devices * 12 channels
 }
 
 TEST_F(MeshDeviceTest, ViewIs2D) {

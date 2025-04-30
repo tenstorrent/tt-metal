@@ -507,8 +507,6 @@ def test_LlamaModel_demo(
 
     check_mesh_device(mesh_device, model_config)
 
-    mesh_device.enable_async(True)
-
     args = construct_arg(
         implementation=implementation,
         llama_version=llama_version,

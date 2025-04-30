@@ -22,7 +22,6 @@ from models.utility_functions import run_for_wormhole_b0
     "batch_size, act_dtype, weight_dtype",
     ((1, ttnn.bfloat16, ttnn.bfloat16),),
 )
-@pytest.mark.parametrize("enable_async_mode", (True,), indirect=True)
 @pytest.mark.parametrize(
     "resolution",
     [
@@ -31,16 +30,17 @@ from models.utility_functions import run_for_wormhole_b0
     ],
 )
 @pytest.mark.parametrize("test_duration", [5])
+@pytest.mark.parametrize("pcc_check_interval", [5])
 def test_yolov4_stability(
     device,
     use_program_cache,
     batch_size,
     act_dtype,
     weight_dtype,
-    enable_async_mode,
     model_location_generator,
     resolution,
     test_duration,
+    pcc_check_interval,
 ):
     performant_runner = YOLOv4PerformantRunner(
         device,
@@ -53,7 +53,10 @@ def test_yolov4_stability(
 
     logger.info(f"Running stability test for YOLOv4 with resolution: {resolution} and batch size: {batch_size}")
 
+    pcc_iter = 0
+    check_pcc = False
     start_time = time.time()
+
     with tqdm(total=test_duration, desc="Executing on device", unit="sec", mininterval=1) as pbar:
         while True:
             elapsed_time = round(time.time() - start_time, 1)
@@ -62,7 +65,12 @@ def test_yolov4_stability(
             if elapsed_time >= test_duration:
                 break
 
+            if elapsed_time >= pcc_iter * pcc_check_interval:
+                check_pcc = True
+                pcc_iter += 1
+
             torch_input_tensor = torch.randn((1, *resolution, 3), dtype=torch.float32)
-            _ = performant_runner.run(torch_input_tensor)
+            _ = performant_runner.run(torch_input_tensor, check_pcc=check_pcc)
+            check_pcc = False
 
     performant_runner.release()

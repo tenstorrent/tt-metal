@@ -18,7 +18,7 @@
 #include "gtest/gtest.h"
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/logger.hpp>
-#include <tt-metalium/program_impl.hpp>
+#include <tt-metalium/program.hpp>
 #include <tt-metalium/utils.hpp>
 
 namespace tt {
@@ -40,7 +40,7 @@ const std::string golden_output =
     R"(DPRINT server timed out on Device *, worker core (x=*,y=*), riscv 4, waiting on a RAISE signal: 1
 )";
 
-static void RunTest(DPrintFixture* fixture, IDevice* device) {
+void RunTest(DPrintFixture* fixture, IDevice* device) {
     // Set up program
     Program program = Program();
 

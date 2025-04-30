@@ -18,13 +18,13 @@ class Program;
 struct KernelGroup;
 }  // namespace tt_metal
 
-typedef enum e_data_collector_t {
+enum data_collector_t {
     DISPATCH_DATA_CB_CONFIG,
     DISPATCH_DATA_SEMAPHORE,
     DISPATCH_DATA_RTARGS,
     DISPATCH_DATA_BINARY,
     DISPATCH_DATA_COUNT
-} data_collector_t;
+};
 
 /* Record a single dispatch write, to be dumped with stats on program exit. Should only be called once per transaction
  * per program (if a program is enqueued multiple times, don't call this multiple times).

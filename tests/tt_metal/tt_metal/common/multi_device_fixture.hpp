@@ -10,6 +10,7 @@
 #include <tt-metalium/device_pool.hpp>
 #include <tt-metalium/host_api.hpp>
 #include "llrt.hpp"
+#include "impl/context/metal_context.hpp"
 #include <tt-metalium/mesh_device.hpp>
 
 #include "dispatch_fixture.hpp"
@@ -45,7 +46,8 @@ protected:
                 ids.push_back(id);
             }
 
-            const auto& dispatch_core_config = tt::llrt::RunTimeOptions::get_instance().get_dispatch_core_config();
+            const auto& dispatch_core_config =
+                tt::tt_metal::MetalContext::instance().rtoptions().get_dispatch_core_config();
             tt::DevicePool::initialize(ids, 1, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, dispatch_core_config);
             this->devices_ = tt::DevicePool::instance().get_all_active_devices();
         } else {
@@ -75,7 +77,8 @@ protected:
                 ids.push_back(id);
             }
 
-            const auto& dispatch_core_config = tt::llrt::RunTimeOptions::get_instance().get_dispatch_core_config();
+            const auto& dispatch_core_config =
+                tt::tt_metal::MetalContext::instance().rtoptions().get_dispatch_core_config();
             tt::DevicePool::initialize(ids, 1, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, dispatch_core_config);
             this->devices_ = tt::DevicePool::instance().get_all_active_devices();
         } else {
@@ -107,6 +110,7 @@ protected:
         std::unordered_set<MeshDeviceType> mesh_device_types;
         int num_cqs = 1;
         uint32_t trace_region_size = 0;
+        uint32_t worker_l1_size = DEFAULT_WORKER_L1_SIZE;
     };
 
     MeshDeviceFixtureBase(const Config& fixture_config) : config_(fixture_config) {}
@@ -140,15 +144,21 @@ protected:
                 magic_enum::enum_name(*mesh_device_type),
                 boost::algorithm::join(requested_device_types, ", "));
         }
+
         // Use ethernet dispatch for more than 1 CQ on T3K/N300
-        auto core_type = (config_.num_cqs >= 2 and *mesh_device_type != MeshDeviceType::TG) ? DispatchCoreType::ETH
-                                                                                            : DispatchCoreType::WORKER;
+        auto cluster_type = tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type();
+        bool is_n300_or_t3k_cluster = cluster_type == tt::ClusterType::T3K or cluster_type == tt::ClusterType::N300;
+        auto core_type =
+            (config_.num_cqs >= 2 and is_n300_or_t3k_cluster) ? DispatchCoreType::ETH : DispatchCoreType::WORKER;
+
         mesh_device_ = MeshDevice::create(
             MeshDeviceConfig(get_mesh_shape(*mesh_device_type)),
             0,
             config_.trace_region_size,
             config_.num_cqs,
-            core_type);
+            core_type,
+            {},
+            config_.worker_l1_size);
     }
 
     void TearDown() override {

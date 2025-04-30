@@ -98,7 +98,6 @@ Checks: >
   -hicpp-uppercase-literal-suffix,
   -hicpp-use-auto,
   -hicpp-use-emplace,
-  -hicpp-use-equals-default,
   -hicpp-use-nullptr,
   -hicpp-vararg,
   -llvm-else-after-return,
@@ -129,15 +128,12 @@ Checks: >
   -modernize-return-braced-init-list,
   -modernize-type-traits,
   -modernize-use-auto,
-  -modernize-use-bool-literals,
   -modernize-use-default-member-init,
   -modernize-use-emplace,
-  -modernize-use-equals-default,
   -modernize-use-nodiscard,
   -modernize-use-nullptr,
   -modernize-use-trailing-return-type,
   -modernize-use-transparent-functors,
-  -modernize-use-using,
   -performance-avoid-endl,
   -performance-faster-string-find,
   -performance-inefficient-string-concatenation,
@@ -151,12 +147,10 @@ Checks: >
   -readability-avoid-const-params-in-decls,
   -readability-avoid-unconditional-preprocessor-if,
   -readability-braces-around-statements,
-  -readability-const-return-type,
   -readability-container-contains,
   -readability-container-data-pointer,
   -readability-container-size-empty,
   -readability-convert-member-functions-to-static,
-  -readability-duplicate-include,
   -readability-else-after-return,
   -readability-function-cognitive-complexity,
   -readability-function-size,
@@ -166,7 +160,6 @@ Checks: >
   -readability-isolate-declaration,
   -readability-magic-numbers,
   -readability-make-member-function-const,
-  -readability-misleading-indentation,
   -readability-named-parameter,
   -readability-non-const-parameter,
   -readability-qualified-auto,
@@ -176,9 +169,7 @@ Checks: >
   -readability-redundant-smartptr-get,
   -readability-redundant-string-cstr,
   -readability-redundant-string-init,
-  -readability-simplify-boolean-expr,
   -readability-static-accessed-through-instance,
-  -readability-static-definition-in-anonymous-namespace,
   -readability-suspicious-call-argument,
   -readability-uppercase-literal-suffix,
   -readability-use-anyofallof
@@ -188,5 +179,8 @@ CheckOptions:
     value: true
   - key: portability-simd-intrinsics.Suggest
     value: true
+  # May enable later; for now activate the check with a lighter touch
+  - key: readability-simplify-boolean-expr.SimplifyDeMorgan
+    value: false
 
 FormatStyle: 'file'

@@ -35,6 +35,8 @@ static const char* TT_METAL_HOME_ENV_VAR = "TT_METAL_HOME";
 static const char* TT_METAL_KERNEL_PATH_ENV_VAR = "TT_METAL_KERNEL_PATH";
 // Set this var to change the cache dir.
 static const char* TT_METAL_CACHE_ENV_VAR = "TT_METAL_CACHE";
+// Used for demonstration purposes and will be removed in the future.
+static const char* TT_METAL_FD_FABRIC_DEMO = "TT_METAL_FD_FABRIC";
 
 RunTimeOptions::RunTimeOptions() {
     const char* root_dir_str = std::getenv(TT_METAL_HOME_ENV_VAR);
@@ -70,6 +72,7 @@ RunTimeOptions::RunTimeOptions() {
     profiler_enabled = false;
     profile_dispatch_cores = false;
     profiler_sync_enabled = false;
+    profiler_mid_run_tracy_push = false;
     profiler_buffer_usage_enabled = false;
 #if defined(TRACY_ENABLE)
     const char* profiler_enabled_str = std::getenv("TT_METAL_DEVICE_PROFILER");
@@ -82,6 +85,11 @@ RunTimeOptions::RunTimeOptions() {
         const char* profiler_sync_enabled_str = std::getenv("TT_METAL_PROFILER_SYNC");
         if (profiler_enabled && profiler_sync_enabled_str != nullptr && profiler_sync_enabled_str[0] == '1') {
             profiler_sync_enabled = true;
+        }
+        const char* profiler_force_push_enabled_str = std::getenv("TT_METAL_TRACY_MID_RUN_PUSH");
+        if (profiler_enabled && profiler_force_push_enabled_str != nullptr &&
+            profiler_force_push_enabled_str[0] == '1') {
+            profiler_mid_run_tracy_push = true;
         }
     }
 
@@ -109,15 +117,16 @@ RunTimeOptions::RunTimeOptions() {
 
     kernels_early_return = (std::getenv("TT_METAL_KERNELS_EARLY_RETURN") != nullptr);
 
-    clear_l1 = false;
+    this->clear_l1 = false;
     const char* clear_l1_enabled_str = std::getenv("TT_METAL_CLEAR_L1");
-    if (clear_l1_enabled_str != nullptr) {
-        if (clear_l1_enabled_str[0] == '0') {
-            clear_l1 = false;
-        }
-        if (clear_l1_enabled_str[0] == '1') {
-            clear_l1 = true;
-        }
+    if (clear_l1_enabled_str != nullptr && clear_l1_enabled_str[0] == '1') {
+        this->clear_l1 = true;
+    }
+
+    this->clear_dram = false;
+    const char* clear_dram_enabled_str = std::getenv("TT_METAL_CLEAR_DRAM");
+    if (clear_dram_enabled_str != nullptr && clear_dram_enabled_str[0] == '1') {
+        this->clear_dram = true;
     }
 
     const char* skip_eth_cores_with_retrain_str = std::getenv("TT_METAL_SKIP_ETH_CORES_WITH_RETRAIN");
@@ -145,7 +154,7 @@ RunTimeOptions::RunTimeOptions() {
         }
     }
 
-    const char* fb_fabric = getenv("TT_METAL_FD_FABRIC");
+    const char* fb_fabric = getenv(TT_METAL_FD_FABRIC_DEMO);
     fb_fabric_en = fb_fabric != nullptr;
 
     const char* dispatch_data_collection_str = std::getenv("TT_METAL_DISPATCH_DATA_COLLECTION");
@@ -177,7 +186,7 @@ RunTimeOptions::RunTimeOptions() {
     }
 }
 
-const std::string& RunTimeOptions::get_root_dir() {
+const std::string& RunTimeOptions::get_root_dir() const {
     if (!this->is_root_dir_specified()) {
         TT_THROW("Env var {} is not set.", TT_METAL_HOME_ENV_VAR);
     }
@@ -185,7 +194,7 @@ const std::string& RunTimeOptions::get_root_dir() {
     return root_dir;
 }
 
-const std::string& RunTimeOptions::get_cache_dir() {
+const std::string& RunTimeOptions::get_cache_dir() const {
     if (!this->is_cache_dir_specified()) {
         TT_THROW("Env var {} is not set.", TT_METAL_CACHE_ENV_VAR);
     }

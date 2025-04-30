@@ -25,9 +25,9 @@
 #include <tt-metalium/kernel_types.hpp>
 #include "llrt.hpp"
 #include <tt-metalium/logger.hpp>
-#include <tt-metalium/program_impl.hpp>
+#include <tt-metalium/program.hpp>
 #include "routing_test_common.hpp"
-#include "rtoptions.hpp"
+#include "impl/context/metal_context.hpp"
 #include "test_common.hpp"
 #include "tt_metal/impl/dispatch/kernels/packet_queue_ctrl.hpp"
 #include <tt-metalium/utils.hpp>
@@ -265,7 +265,7 @@ int main(int argc, char **argv) {
         log_fatal(e.what());
     }
 
-    tt::llrt::RunTimeOptions::get_instance().set_kernels_nullified(false);
+    tt::tt_metal::MetalContext::instance().rtoptions().set_kernels_nullified(false);
 
     if (pass) {
         log_info(LogTest, "Test Passed");
