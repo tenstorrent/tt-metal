@@ -97,40 +97,6 @@ std::shared_ptr<distributed::MeshBuffer> allocate_mesh_buffer_on_device(
     return distributed::MeshBuffer::create(replicated_buffer_config, device_local_buffer_config, mesh_device);
 }
 
-void validate_on_device_dtype_and_layout(const ttnn::Shape& shape, DataType dtype, Layout layout) {
-    // TODO: Get supported layout and dtypes from device
-    auto supported_dtype = [&dtype]() {
-        TT_ASSERT(
-            (dtype == DataType::UINT32 || dtype == DataType::INT32 || dtype == DataType::FLOAT32 ||
-             dtype == DataType::UINT8 || dtype == DataType::UINT16 || dtype == DataType::BFLOAT16 ||
-             dtype == DataType::BFLOAT8_B || dtype == DataType::BFLOAT4_B),
-            "Only UINT32, INT32, FLOAT32, UINT16, UINT8, BFLOAT16, BFLOAT8_B, or BFLOAT4_B dtypes are supported on "
-            "device!");
-    };
-    auto supported_layout = [&dtype, &layout]() {
-        switch (dtype) {
-            case DataType::UINT32:
-            case DataType::INT32:
-            case DataType::FLOAT32:
-            case DataType::UINT8:
-            case DataType::UINT16:
-            case DataType::BFLOAT16: break;
-            case DataType::BFLOAT8_B:
-            case DataType::BFLOAT4_B:
-                TT_ASSERT(layout == Layout::TILE, "Only TILE layout is supported for BFLOAT8_B dtype!");
-                break;
-            default:
-                TT_ASSERT(
-                    false,
-                    "Only UINT32, INT32, FLOAT32, UINT16, BFLOAT16, BFLOAT8_B, or BFLOAT4_B dtypes are supported on "
-                    "device!");
-                break;
-        }
-    };
-    supported_dtype();
-    supported_layout();
-}
-
 Tensor pad_bfloat8_b(
     const Tensor& tensor,
     const ttnn::Shape& output_padded_shape,
@@ -907,8 +873,7 @@ void copy_to_mesh_tensor(const Tensor& host_tensor, Tensor& mesh_tensor, ttnn::Q
             [](const auto& s) -> DeviceStorage { TT_THROW("Unexpected storage type {}", tt::stl::get_type_name(s)); }},
         host_tensor.get_storage());
 
-    // Set storage with the populated metadata.
-    mesh_tensor.set_storage(mesh_storage);
+    mesh_tensor.tensor_attributes->get_storage() = mesh_storage;
 }
 
 template Tensor to_device_mesh_tensor<bfloat16>(
