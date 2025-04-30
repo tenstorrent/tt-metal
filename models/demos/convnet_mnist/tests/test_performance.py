@@ -110,7 +110,7 @@ def test_convnet_mnist(
 @pytest.mark.parametrize(
     "batch_size, expected_perf",
     [
-        [1, 11282.62],
+        [1, 11621.10],
     ],
 )
 @pytest.mark.models_device_performance_bare_metal

@@ -233,7 +233,6 @@ TYPED_TEST(BorrowedStorageVectorConversionTest, Roundtrip) {
         EXPECT_THAT(tensor.get_logical_shape(), Eq(shape)) << "for shape: " << shape;
         EXPECT_THAT(tensor.get_dtype(), Eq(convert_to_data_type<TypeParam>())) << "for shape: " << shape;
         EXPECT_THAT(tensor.get_layout(), Eq(Layout::ROW_MAJOR)) << "for shape: " << shape;
-        EXPECT_EQ(tensor.storage_type(), StorageType::BORROWED) << "for shape: " << shape;
 
         auto output = tensor.template to_vector<TypeParam>();
 

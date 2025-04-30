@@ -13,11 +13,11 @@ from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
     ("op_name", "expected_kernel_duration_us", "perf_margin"),
     [
         ("LayerNorm", 12.5, 0.05),
-        ("ScaledDotProductAttentionDecode", 13.2, 0.05),
+        ("ScaledDotProductAttentionDecode", 9.3, 0.05),
         ("NLPCreateHeadsDecodeDeviceOperation", 8.32, 0.05),
         ("NLPConcatHeadsDecodeDeviceOperation", 6.07, 0.05),
-        ("PagedUpdateCacheDeviceOperation", 4.88, 0.03),
-        ("RotaryEmbeddingLlamaFusedQK", 4.34, 0.03),
+        ("PagedUpdateCacheDeviceOperation", 4.5, 0.05),
+        ("RotaryEmbeddingLlamaFusedQK", 4.15, 0.05),
     ],
 )
 def test_llama_tg_ops_perf_device(op_name, expected_kernel_duration_us, perf_margin):

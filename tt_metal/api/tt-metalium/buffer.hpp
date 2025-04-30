@@ -25,6 +25,7 @@
 #include <tt-metalium/assert.hpp>
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/buffer_types.hpp>
+#include <tt-metalium/buffer_distribution_spec.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/hal_types.hpp>
 #include <tt-metalium/sub_device_types.hpp>
@@ -146,7 +147,7 @@ struct BufferConfig {
     TensorMemoryLayout buffer_layout = TensorMemoryLayout::INTERLEAVED;
 };
 
-typedef BufferConfig InterleavedBufferConfig;
+using InterleavedBufferConfig = BufferConfig;
 
 // copied from above instead of using inheritance such that we can use
 // designator constructor
@@ -211,6 +212,19 @@ public:
         std::optional<bool> bottom_up = std::nullopt,
         std::optional<SubDeviceId> sub_device_id = std::nullopt);
 
+    // Forked APIs for BufferDistributionSpec
+    // - Only usable for tensor allocation in OPs
+    // TODO: Need to support proper read/write for buffers with BufferDistributionSpec
+    static std::shared_ptr<Buffer> create(
+        IDevice* device,
+        DeviceAddr size,
+        DeviceAddr page_size,
+        BufferType buffer_type,
+        const BufferDistributionSpec& buffer_distribution_spec,
+        std::optional<bool> bottom_up = std::nullopt,
+        std::optional<SubDeviceId> sub_device_id = std::nullopt);
+    // TODO: Add create with address or just port over existing one?
+
     Buffer(const Buffer& other) = delete;
     Buffer& operator=(const Buffer& other) = delete;
     Buffer(Buffer&& other) = delete;
@@ -262,6 +276,7 @@ public:
     ShardSpecBuffer shard_spec() const;
     void set_shard_spec(const ShardSpecBuffer& shard_spec);
 
+    // TODO: Consolidate with interleaved and delete this (maybe get from BufferDistributionSpec)
     std::optional<uint32_t> num_cores() const;
 
     const std::shared_ptr<const BufferPageMapping>& get_buffer_page_mapping();
@@ -280,6 +295,7 @@ public:
         BufferType buffer_type,
         TensorMemoryLayout buffer_layout,
         const std::optional<ShardSpecBuffer>& shard_parameter,
+        const std::optional<BufferDistributionSpec>& buffer_distribution_spec,
         std::optional<bool> bottom_up,
         std::optional<SubDeviceId> sub_device_id,
         bool owns_data,
@@ -321,10 +337,26 @@ private:
     // Used exclusively for is_allocated() method
     std::atomic<bool> deallocation_requested_ = false;
 
+    // Private helper function to commonize code path for buffer creation with either ShardSpecBuffer or
+    // BufferDistributionSpec
+    // TODO: Delete if/when we remove ShardSpecBuffer
+    static std::shared_ptr<Buffer> create_buffer(
+        IDevice* device,
+        DeviceAddr size,
+        DeviceAddr page_size,
+        const BufferType buffer_type,
+        const TensorMemoryLayout buffer_layout,
+        const std::optional<ShardSpecBuffer>& shard_parameters,
+        const std::optional<BufferDistributionSpec>& buffer_distribution_spec,
+        const std::optional<bool> bottom_up,
+        const std::optional<SubDeviceId> sub_device_id);
+
     // These members must be only accessed on the device worker thread
     DeviceAddr page_size_;  // Size of unit being interleaved. For non-interleaved buffers: size == page_size
     std::optional<ShardSpecBuffer> shard_parameters_;
     std::shared_ptr<const BufferPageMapping> buffer_page_mapping_;
+
+    std::optional<BufferDistributionSpec> buffer_distribution_spec_;
 
     std::weak_ptr<Buffer> weak_self;
     size_t unique_id_ = 0;

@@ -1805,7 +1805,8 @@ std::vector<Tensor> ExecuteUnaryBackwardProd::invoke(
     std::vector<Tensor> grad_tensor;
     auto output_memory_config = output_mem_config.value_or(
         input.memory_config());  // TODO: Remove after ternary forward ops migration is completed
-    Tensor prod_result = ttnn::prod(input, all_dimensions, dim, true, output_memory_config);
+    const bool keepdim = !all_dimensions;
+    Tensor prod_result = ttnn::prod(input, all_dimensions, dim, keepdim, output_memory_config);
     if (prod_result.get_layout() == Layout::ROW_MAJOR && prod_result.storage_type() == StorageType::DEVICE) {
         prod_result = ttnn::operations::unary_backward::change_layout_to_tile(prod_result, output_memory_config);
     }
@@ -1832,8 +1833,7 @@ std::vector<Tensor> ExecuteUnaryBackwardProd::invoke(
             Tensor new_slice_tensor = ttnn::slice(DefaultQueueId, required, start_index, end_index, step, std::nullopt);
             after_permute_dims = {0, 2, 3, 1};
             updated_grad = ttnn::permute(new_slice_tensor, after_permute_dims, output_memory_config);
-            if (updated_grad.storage_type() != StorageType::DEVICE &&
-                updated_grad.storage_type() != StorageType::MULTI_DEVICE) {
+            if (updated_grad.storage_type() != StorageType::DEVICE) {
                 Tensor pad_updated_grad = updated_grad.pad_to_tile(1.0f);
                 pad_updated_grad = pad_updated_grad.to_layout(Layout::TILE);
                 updated_grad = pad_updated_grad.to_device(input.device());

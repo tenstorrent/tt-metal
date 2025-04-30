@@ -50,6 +50,10 @@ class CommandQueue;
 class TraceBuffer;
 struct TraceDescriptor;
 
+namespace distributed {
+class MeshDevice;
+}
+
 class IDevice {
 public:
     IDevice() = default;
@@ -178,11 +182,6 @@ public:
     // Puts device into reset
     virtual bool close() = 0;
 
-    virtual void enable_async(bool enable) = 0;
-    virtual void synchronize() = 0;
-    virtual WorkExecutorMode get_worker_mode() = 0;
-    virtual bool is_worker_queue_empty() const = 0;
-
     virtual void push_work(std::function<void()> work, bool blocking = false) = 0;
 
     // Program cache interface. Syncrhonize with worker worker threads before querying or
@@ -215,6 +214,7 @@ public:
     virtual void set_sub_device_stall_group(tt::stl::Span<const SubDeviceId> sub_device_ids) = 0;
     virtual void reset_sub_device_stall_group() = 0;
     virtual uint32_t num_sub_devices() const = 0;
+    virtual uint32_t num_virtual_eth_cores(SubDeviceId sub_device_id) = 0;
     virtual bool dispatch_firmware_active() const = 0;
 
     // TODO #15944: Temporary api until migration to actual fabric is complete
@@ -222,6 +222,10 @@ public:
         tt::stl::Span<const SubDevice> sub_devices, DeviceAddr local_l1_size) = 0;
 
     virtual bool is_mmio_capable() const = 0;
+
+    // Allowing to get corresponding MeshDevice for a given device to properly schedule programs / create buffers for
+    // it. This is currently used exclusively by profiler.
+    virtual std::shared_ptr<distributed::MeshDevice> get_mesh_device() = 0;
 
     static constexpr MemoryAllocator allocator_scheme_ = MemoryAllocator::L1_BANKING;
 };

@@ -302,6 +302,7 @@ class Generator:
         # Get inputs ready for trace run
         device_inputs = []
         tt_out_trace = []
+        trace_ids = {}
         for i in range(self.data_parallel):
             user_page_table = page_table[i] if page_table is not None else None
             host_inputs = self.model[i].prepare_decode_inputs_host(
@@ -311,8 +312,9 @@ class Generator:
             device_inputs_i = copy_host_to_device(host_inputs, mesh_device=self.model_args[i].mesh_device)
             device_inputs.append(device_inputs_i)
 
-        trace_id = ttnn.begin_trace_capture(self.mesh_device, cq_id=0)
         for i in range(self.data_parallel):
+            trace_id = ttnn.begin_trace_capture(self.model_args[i].mesh_device, cq_id=0)
+            trace_ids[i] = trace_id
             user_kv_cache = kv_cache[i] if kv_cache is not None else None
             transformed_inputs = self.model[i].transform_decode_inputs_device(*(device_inputs[i]))
             tt_out_trace.append(
@@ -320,15 +322,13 @@ class Generator:
                     *transformed_inputs, kv_cache=user_kv_cache, argmax_on_device=argmax_on_device
                 )
             )
-
-        ttnn.end_trace_capture(self.mesh_device, trace_id, cq_id=0)
-
+            ttnn.end_trace_capture(self.model_args[i].mesh_device, trace_id, cq_id=0)
         logger.info("Done Capturing Decode Trace")
-        return trace_id, tt_out_trace, *device_inputs
+        return trace_ids, tt_out_trace, *device_inputs
 
     def _decode_forward_trace_text(
         self,
-        trace_id,
+        trace_ids,
         device_inputs,
         tt_out_trace,
         tokens,
@@ -353,7 +353,8 @@ class Generator:
                 )
             )
         device_inputs = to_device
-        ttnn.execute_trace(self.mesh_device, trace_id, cq_id=0, blocking=False)
+        for i, trace_id in trace_ids.items():
+            ttnn.execute_trace(self.model_args[i].mesh_device, trace_id, cq_id=0, blocking=False)
 
         return tt_out_trace
 
@@ -368,16 +369,16 @@ class Generator:
         """
         Tracing is easy! Just call this method and we'll handle tracing for you.
         """
-        if not hasattr(self, "trace_id_text"):
-            trace_id, tt_out_trace, *device_inputs = self._capture_trace_text(
+        if not hasattr(self, "trace_ids_text"):
+            trace_ids, tt_out_trace, *device_inputs = self._capture_trace_text(
                 tokens, current_pos, page_table=page_table, kv_cache=kv_cache, argmax_on_device=argmax_on_device
             )
-            self.trace_id_text = trace_id
+            self.trace_ids_text = trace_ids
             self.trace_inputs_text = device_inputs
             self.trace_output_text = tt_out_trace
 
         trace_logits_rm = self._decode_forward_trace_text(
-            self.trace_id_text,
+            self.trace_ids_text,
             self.trace_inputs_text,
             self.trace_output_text,
             tokens,
@@ -826,12 +827,14 @@ class Generator:
             tt_page_table.append(tt_page_table_i)
             tt_cross_page_table.append(tt_cross_page_table_i)
 
-        trace_id = ttnn.begin_trace_capture(self.mesh_device, cq_id=0)
         tt_h_trace_input = tt_h
 
         tt_logits_rm = []
+        trace_ids = {}
         # Do on-device transformations of inputs before forward
         for i in range(self.data_parallel):
+            trace_id = ttnn.begin_trace_capture(self.model_args[i].mesh_device, cq_id=0)
+            trace_ids[i] = trace_id
             B = tokens[i].shape[0]
             user_kv_cache = kv_cache[i] if kv_cache is not None else None
             xattn_cache = xattn_caches[i] if xattn_caches is not None else None
@@ -863,12 +866,11 @@ class Generator:
                 cross_page_table=tt_cross_page_table[i],
             )
             tt_logits_rm.append(tt_logits_rm_i)
-
-        ttnn.end_trace_capture(self.mesh_device, trace_id, cq_id=0)
+            ttnn.end_trace_capture(self.model_args[i].mesh_device, trace_id, cq_id=0)
         logger.info("Done Capturing Decode Trace")
 
         return (
-            trace_id,
+            trace_ids,
             tt_logits_rm,
             tt_h,
             tt_xattn_mask,
@@ -888,7 +890,7 @@ class Generator:
         full_text_row_masked_out_mask,
         page_table,
         cross_page_table,
-        trace_id,
+        trace_ids,
         trace_logits_rm,
         trace_h,
         trace_xattn_mask,
@@ -945,8 +947,8 @@ class Generator:
                     trace_cross_page_table[i],
                 ),
             )
-
-        ttnn.execute_trace(self.mesh_device, trace_id, cq_id=0, blocking=False)
+        for i, trace_id in trace_ids.items():
+            ttnn.execute_trace(self.mesh_device, trace_id, cq_id=0, blocking=False)
 
         return trace_logits_rm
 
@@ -964,9 +966,9 @@ class Generator:
         """
         Tracing is easy! Just call this method and we'll handle tracing for you.
         """
-        if not hasattr(self, "trace_id"):
+        if not hasattr(self, "trace_ids"):
             (
-                trace_id,
+                trace_ids,
                 tt_logits_rm,
                 tt_h,
                 tt_xattn_mask,
@@ -986,7 +988,7 @@ class Generator:
                 kv_cache=kv_cache,
                 cross_page_table=cross_page_table,
             )
-            self.trace_id = trace_id
+            self.trace_ids = trace_ids
             self.trace_inputs = {
                 "tt_h": tt_h,
                 "tt_xattn_mask": tt_xattn_mask,
@@ -1008,7 +1010,7 @@ class Generator:
             full_text_row_masked_out_mask,
             page_table,
             cross_page_table,
-            self.trace_id,
+            self.trace_ids,
             self.trace_outputs["tt_logits_rm"],
             self.trace_inputs["tt_h"],
             self.trace_inputs["tt_xattn_mask"],

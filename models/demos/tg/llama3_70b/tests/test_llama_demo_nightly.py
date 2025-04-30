@@ -86,9 +86,6 @@ def test_llama3_tg_nightly_demo(
 
     check_mesh_device(mesh_device, model_config)
 
-    # TODO: Renable when issue #11089 is resolved
-    mesh_device.enable_async(True)
-
     args = construct_arg(
         implementation=implementation,
         llama_version=llama_version,

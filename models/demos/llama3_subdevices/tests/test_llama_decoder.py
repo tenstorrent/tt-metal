@@ -79,7 +79,6 @@ def test_llama_decoder_inference(
     ensure_gc,
 ):
     dtype = ttnn.bfloat8_b
-    mesh_device.enable_async(True)
 
     model_args = TtModelArgs(mesh_device, max_batch_size=batch_size, max_seq_len=max_seq_len, dummy_weights=False)
     model_args.n_layers = 1

@@ -81,7 +81,6 @@ def run_all_reduce_test(
     mem_config,
     use_program_cache,
     function_level_defaults,
-    enable_async=True,
     num_iters=1,
     topology=ttnn.Topology.Ring,
 ):
@@ -98,10 +97,6 @@ def run_all_reduce_test(
     if is_known_failure:
         pytest.skip(f"Skipping unsupported case {message}.")
 
-    mesh_device.enable_async(enable_async)
-    if enable_async:
-        logger.info(f"Using Async Mode for All Reduce Op Dispatch")
-
     logger.info(f"Per chip output shape: {per_chip_output_shape}, devices: {num_devices}")
     # Generate input tensors
 
@@ -114,7 +109,6 @@ def run_all_reduce_test(
     for i in range(num_devices):
         input_tensor = torch.rand(per_chip_output_shape).bfloat16()
         t = ttnn.from_torch(input_tensor, input_dtype, layout=layout)
-        t = t.to(mesh_device.get_device(mesh_device.get_device_ids()[i]), mem_config)
         tt_input_tensors.append(t)
         input_tensor = input_tensor.view(1, -1, input_tensor.shape[2], input_tensor.shape[3])
         input_tensors.append(input_tensor)
@@ -123,7 +117,7 @@ def run_all_reduce_test(
 
     assert len(tt_input_tensors) == num_devices
 
-    input_tensor_mesh = ttnn.aggregate_as_tensor(tt_input_tensors)
+    input_tensor_mesh = ttnn.aggregate_as_tensor(tt_input_tensors).to(mesh_device, mem_config)
     # Run the op
     for i in range(num_iters):
         output_tensor_mesh = ttnn.experimental.all_reduce(
@@ -133,7 +127,6 @@ def run_all_reduce_test(
             memory_config=mem_config,
             topology=topology,
         )
-
         ttnn.synchronize_device(mesh_device)
         logger.info(f"Done iteration {i}")
 
@@ -149,7 +142,7 @@ def run_all_reduce_test(
         eq, output = comp_pcc(tt_output_tensor, golden_canonical_out_tensor)
         mismatch = mismatch or not eq
         if not eq:
-            logger.error(f"output mismatch for tensor {i}. Mesh device ID: {mesh_device.get_devices()[i].id()}")
+            logger.error(f"output mismatch for tensor {i}. Mesh device ID: {mesh_device.get_device_ids()[i]}")
             if debug:
                 for w in range(tt_output_tensor.shape[0]):
                     for z in range(tt_output_tensor.shape[1]):
@@ -211,7 +204,6 @@ def run_all_reduce_test(
     ],
 )
 @pytest.mark.parametrize("math_op", [ttnn.ReduceType.Sum])
-@pytest.mark.parametrize("enable_async", [True])
 def test_ring_all_reduce_post_commit(
     t3k_mesh_device,
     num_devices,
@@ -223,7 +215,6 @@ def test_ring_all_reduce_post_commit(
     mem_config,
     use_program_cache,
     function_level_defaults,
-    enable_async,
     num_iters=2,
 ):
     run_all_reduce_test(
@@ -238,7 +229,6 @@ def test_ring_all_reduce_post_commit(
         use_program_cache,
         function_level_defaults,
         num_iters=num_iters,
-        enable_async=enable_async,
     )
 
 
@@ -276,7 +266,6 @@ def test_ring_all_reduce_post_commit(
     ],
 )
 @pytest.mark.parametrize("math_op", [ttnn.ReduceType.Sum])
-@pytest.mark.parametrize("enable_async", [True])
 def test_ring_all_reduce_post_commit_2chip(
     pcie_mesh_device,
     num_devices,
@@ -288,7 +277,6 @@ def test_ring_all_reduce_post_commit_2chip(
     mem_config,
     use_program_cache,
     function_level_defaults,
-    enable_async,
     num_iters=2,
 ):
     run_all_reduce_test(
@@ -303,6 +291,5 @@ def test_ring_all_reduce_post_commit_2chip(
         use_program_cache,
         function_level_defaults,
         num_iters=num_iters,
-        enable_async=enable_async,
         topology=ttnn.Topology.Linear,
     )

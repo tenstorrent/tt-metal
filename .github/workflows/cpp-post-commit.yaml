@@ -40,10 +40,11 @@ jobs:
 
           {name: user kernel path, cmd: "rm -rf /tmp/kernels && TT_METAL_KERNEL_PATH=/tmp/kernels ./build/test/tt_metal/unit_tests_api_${{ inputs.arch }} --gtest_filter=CompileProgramWithKernelPathEnvVarFixture.*"},
           {name: api, cmd: "./build/test/tt_metal/unit_tests_api_${{ inputs.arch }}"},
-          {name: debug_tools, cmd: "./build/test/tt_metal/unit_tests_debug_tools_${{ inputs.arch }}"},
+          {name: debug_tools, cmd: "./build/test/tt_metal/unit_tests_debug_tools"},
           {name: device, cmd: "./build/test/tt_metal/unit_tests_device"},
           {name: dispatch, cmd: "./build/test/tt_metal/unit_tests_dispatch"},
-          {name: eth, cmd: "./build/test/tt_metal/unit_tests_eth_${{ inputs.arch }}"},
+          {name: eth, cmd: "./build/test/tt_metal/unit_tests_eth"},
+          {name: sfpi, cmd: "./build/test/tt_metal/unit_tests_sfpi"},
           {name: stl, cmd: "./build/test/tt_metal/unit_tests_stl"},
           {name: distributed, cmd: "./build/test/tt_metal/distributed/distributed_unit_tests_${{ inputs.arch }}"},
           {name: lightmetal, cmd: "./build/test/tt_metal/unit_tests_lightmetal"},
@@ -105,7 +106,7 @@ jobs:
         with:
           prefix: "test_reports_"
       - name: Generate system logs on failure
-        uses: ./.github/actions/generate-system-logs
+        uses: tenstorrent/tt-metal/.github/actions/generate-system-logs@main
         if: ${{ failure() }}
       - name: Generate gtest annotations on failure
         uses: tenstorrent/tt-metal/.github/actions/generate-gtest-failure-message@main

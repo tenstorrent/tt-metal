@@ -7,7 +7,7 @@
 #include <algorithm>
 #include <array>
 #include <cstdint>
-#include <string>
+#include <string_view>
 #include <unordered_set>
 #include <vector>
 
@@ -59,7 +59,7 @@ using WorkerCores = std::vector<WorkerCore>;
 // Return a reference to a potentially shared binary image.
 // The images are cached by path name.
 const ll_api::memory& get_risc_binary(
-    const string& path, ll_api::memory::Loading loading = ll_api::memory::Loading::DISCRETE);
+    std::string_view path, ll_api::memory::Loading loading = ll_api::memory::Loading::DISCRETE);
 
 // TODO: try using "stop" method from device instead, it's the proper way of asserting reset
 
@@ -93,8 +93,6 @@ CoreCoord logical_core_from_ethernet_core(chip_id_t chip_id, CoreCoord& ethernet
 
 void write_launch_msg_to_core(
     chip_id_t chip, CoreCoord core, launch_msg_t* msg, go_msg_t* go_msg, uint64_t addr, bool send_go = true);
-
-void print_worker_cores(chip_id_t chip_id = 0);
 
 bool test_load_write_read_risc_binary(
     const ll_api::memory& mem,

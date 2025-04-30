@@ -11,8 +11,9 @@ namespace ttnn {
 namespace device {
 
 using IDevice = ttnn::IDevice;
+using MeshDevice = tt::tt_metal::distributed::MeshDevice;
 
-IDevice& open_device(
+std::shared_ptr<MeshDevice> open_mesh_device(
     int device_id,
     size_t l1_small_size = DEFAULT_L1_SMALL_SIZE,
     size_t trace_region_size = DEFAULT_TRACE_REGION_SIZE,

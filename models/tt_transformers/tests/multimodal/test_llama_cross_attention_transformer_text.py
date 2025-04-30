@@ -52,31 +52,54 @@ def test_cross_attention_transformer_text_inference(
     mesh_device,
     use_program_cache,
     reset_seeds,
+    is_ci_env,
 ):
     dtype = ttnn.bfloat8_b
     prefill_pcc_required = 0.98
     decode_pcc_required = 0.965
 
-    mesh_device.enable_async(True)
-
     model_args = ModelArgs(mesh_device, max_batch_size=batch)
     # Limit the max seqlen to 4k to avoid OOM on host
     model_args.max_seq_len = 4096
+    kv_cache_dtype = torch.float32
+    n_iter = 10
+    if model_args.is_90b:
+        # [INFO] use bfloat16 for in reference model to avoid OOM on host
+        torch.set_default_dtype(torch.bfloat16)
+        kv_cache_dtype = torch.bfloat16
+        # [INFO] n_iter = 3 is sufficient to exercise both prefill and decode phases
+        n_iter = 3
+        if is_ci_env:
+            model_args.n_layers = 1
+            model_args.vision_num_cross_attention_layers = 1
+            logger.info(
+                f"Load and test {model_args.n_layers} layers and {model_args.vision_num_cross_attention_layers} cross attention layer in CI for Llama 90B model"
+            )
 
-    state_dict = torch.load(model_args.consolidated_weights_path, map_location=torch.device("cpu"))
+    state_dict = model_args.load_state_dict()
 
     # Ref model needs partial state dict, but our models use full state dict keys as cached weight names
     first_layer_prefix = "text_model."
     partial_state_dict = {
         k[len(first_layer_prefix) :]: v for k, v in state_dict.items() if (k.startswith(first_layer_prefix))
     }
+    if model_args.is_90b and is_ci_env:
+        # removing extra cross attention layers from the state dict as the Ref model decrees
+        x_atten_prefix = "cross_attention_layers."
+        partial_state_dict = {
+            k: v
+            for k, v in partial_state_dict.items()
+            if (not k.startswith(x_atten_prefix))
+            or (k.startswith(x_atten_prefix) and int(k.split(".")[1]) < model_args.vision_num_cross_attention_layers)
+        }
 
     dim = model_args.dim
     head_dim = model_args.head_dim
     n_heads = model_args.n_heads
     n_kv_heads = model_args.n_kv_heads
+
     reference_model = llama_reference_mod.CrossAttentionTransformerText(args=model_args)
-    reference_model.setup_cache(model_args.max_batch_size, torch.float32)
+    reference_model.setup_cache(model_args.max_batch_size, kv_cache_dtype)
     reference_model.load_state_dict(partial_state_dict)
 
     num_chunks = 4
@@ -118,9 +141,19 @@ def test_cross_attention_transformer_text_inference(
     # Test forward pass of the model
 
     prev_pos = 0
-    n_iter = 10
     # tokens = torch.randint(100, 1000, (batch, text_seq_len+n_iter), dtype=torch.long)#, device="cuda"
     tokens = torch.randint(0, model_args.vocab_size, (batch, text_seq_len + n_iter), dtype=torch.long)
+    if model_args.is_90b and is_ci_env:
+        ref_file_path = model_args.CKPT_DIR + "/refpt/llama3_cross_attention_transformer_text_reference_output.pt"
+        logger.info(f"Loading reference model results from file: {ref_file_path}")
+        results_to_save = torch.load(ref_file_path, map_location="cpu")
+        get_ref_model_logits = lambda iter_idx, *args, **kwargs: results_to_save[iter_idx]["logits"]
+        get_ref_model_xattn_cache = lambda iter_idx: results_to_save[iter_idx]["xattn_cache"]
+    else:
+        logger.info(f"Running reference model for validation")
+        get_ref_model_logits = lambda _, *args, **kwargs: reference_model.forward(*args, **kwargs)
+        get_ref_model_xattn_cache = lambda _: pt_xattn_cache_chunks
+
     for i in range(n_iter):
         # Test prefill and decode
         mode = "prefill" if i == 0 else "decode"
@@ -165,7 +198,8 @@ def test_cross_attention_transformer_text_inference(
 
         TEXT_ONLY = False
 
-        logits = reference_model.forward(
+        logits = get_ref_model_logits(
+            i,
             position_ids,
             h,
             xattn_mask,
@@ -347,7 +381,7 @@ def test_cross_attention_transformer_text_inference(
                 for x in kv_cache
             ]
 
-            for pt, tt in zip(pt_xattn_cache_chunks, tt_xattn_cache_torch):
+            for pt, tt in zip(get_ref_model_xattn_cache(i), tt_xattn_cache_torch):
                 passing, pcc_message = comp_pcc(pt, tt, prefill_pcc_required)
 
                 logger.info(comp_allclose(pt, tt))

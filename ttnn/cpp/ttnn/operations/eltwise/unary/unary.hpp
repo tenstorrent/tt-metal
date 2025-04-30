@@ -222,31 +222,31 @@ struct Tanh {
 }  // namespace unary
 }  // namespace operations
 
-#define REGISTER_UNARY_OPERATION(operation_name, operation_type)                  \
-    constexpr auto operation_name = ttnn::register_operation_with_auto_launch_op< \
-        "ttnn::" #operation_name,                                                 \
+#define REGISTER_UNARY_OPERATION(operation_name, operation_type) \
+    constexpr auto operation_name = ttnn::register_operation<    \
+        "ttnn::" #operation_name,                                \
         ttnn::operations::unary::ExecuteUnary<ttnn::operations::unary::UnaryOpType::operation_type>>();
 
 #define REGISTER_UNARY_OPERATION_WITH_FAST_AND_APPROXIMATE_MODE(operation_name, operation_type) \
-    constexpr auto operation_name = ttnn::register_operation_with_auto_launch_op<               \
+    constexpr auto operation_name = ttnn::register_operation<                                   \
         "ttnn::" #operation_name,                                                               \
         ttnn::operations::unary::ExecuteUnaryWithFastAndApproximateMode<                        \
             ttnn::operations::unary::UnaryOpType::operation_type>>();
 
 #define REGISTER_UNARY_OPERATION_WITH_VECTOR_AND_FAST_AND_APPROXIMATE_MODE(operation_name, operation_type) \
-    constexpr auto operation_name = ttnn::register_operation_with_auto_launch_op<                          \
+    constexpr auto operation_name = ttnn::register_operation<                                              \
         "ttnn::" #operation_name,                                                                          \
         ttnn::operations::unary::ExecuteUnaryWithVectorAndFastAndApproximateMode<                          \
             ttnn::operations::unary::UnaryOpType::operation_type>>();
 
 #define REGISTER_UNARY_OPERATION_WITH_FLOAT_PARAMETER(operation_name, operation_type) \
-    constexpr auto operation_name = ttnn::register_operation_with_auto_launch_op<     \
+    constexpr auto operation_name = ttnn::register_operation<                         \
         "ttnn::" #operation_name,                                                     \
         ttnn::operations::unary::ExecuteUnaryWithFloatParameter<                      \
             ttnn::operations::unary::UnaryOpType::operation_type>>();
 
 #define REGISTER_UNARY_OPERATION_WITH_INTEGER_PARAMETER(operation_name, operation_type, data_type) \
-    constexpr auto operation_name = ttnn::register_operation_with_auto_launch_op<                  \
+    constexpr auto operation_name = ttnn::register_operation<                                      \
         "ttnn::" #operation_name,                                                                  \
         ttnn::operations::unary::                                                                  \
             ExecuteUnaryWithIntegerParameter<ttnn::operations::unary::UnaryOpType::operation_type, data_type>>();
@@ -311,46 +311,41 @@ REGISTER_UNARY_OPERATION_WITH_FLOAT_PARAMETER(fill, FILL);
 REGISTER_UNARY_OPERATION_WITH_FLOAT_PARAMETER(gt_unary, UNARY_GT);
 REGISTER_UNARY_OPERATION_WITH_FLOAT_PARAMETER(lt_unary, UNARY_LT);
 REGISTER_UNARY_OPERATION_WITH_FLOAT_PARAMETER(ne_unary, UNARY_NE);
+REGISTER_UNARY_OPERATION_WITH_FLOAT_PARAMETER(eq_unary, UNARY_EQ);
 
 // Unaries with integer parameter
 REGISTER_UNARY_OPERATION_WITH_INTEGER_PARAMETER(power, POWER, uint32_t);
 REGISTER_UNARY_OPERATION_WITH_INTEGER_PARAMETER(round, ROUND, int32_t);
 
 // Other unaries
-constexpr auto identity =
-    ttnn::register_operation_with_auto_launch_op<"ttnn::identity", ttnn::operations::unary::Identity>();
-constexpr auto abs = ttnn::register_operation_with_auto_launch_op<"ttnn::abs", ttnn::operations::unary::Abs>();
-constexpr auto eqz = ttnn::register_operation_with_auto_launch_op<"ttnn::eqz", ttnn::operations::unary::Eqz>();
-constexpr auto floor =
-    ttnn::register_operation_with_auto_launch_op<"ttnn::floor", ttnn::operations::unary::Floor>();
-constexpr auto ceil = ttnn::register_operation_with_auto_launch_op<"ttnn::ceil", ttnn::operations::unary::Ceil>();
-constexpr auto mish = ttnn::register_operation_with_auto_launch_op<"ttnn::mish", ttnn::operations::unary::Mish>();
-constexpr auto softplus =
-    ttnn::register_operation_with_auto_launch_op<"ttnn::softplus", ttnn::operations::unary::Softplus>();
-constexpr auto tanh = ttnn::register_operation_with_auto_launch_op<"ttnn::tanh", ttnn::operations::unary::Tanh>();
-constexpr auto prelu_sfpu =
-    ttnn::register_operation_with_auto_launch_op<"ttnn::prelu_sfpu", ttnn::operations::unary::Prelu>();
+constexpr auto identity = ttnn::register_operation<"ttnn::identity", ttnn::operations::unary::Identity>();
+constexpr auto abs = ttnn::register_operation<"ttnn::abs", ttnn::operations::unary::Abs>();
+constexpr auto eqz = ttnn::register_operation<"ttnn::eqz", ttnn::operations::unary::Eqz>();
+constexpr auto floor = ttnn::register_operation<"ttnn::floor", ttnn::operations::unary::Floor>();
+constexpr auto ceil = ttnn::register_operation<"ttnn::ceil", ttnn::operations::unary::Ceil>();
+constexpr auto mish = ttnn::register_operation<"ttnn::mish", ttnn::operations::unary::Mish>();
+constexpr auto softplus = ttnn::register_operation<"ttnn::softplus", ttnn::operations::unary::Softplus>();
+constexpr auto tanh = ttnn::register_operation<"ttnn::tanh", ttnn::operations::unary::Tanh>();
+constexpr auto prelu_sfpu = ttnn::register_operation<"ttnn::prelu_sfpu", ttnn::operations::unary::Prelu>();
 
 constexpr auto sigmoid_accurate =
-    ttnn::register_operation_with_auto_launch_op<"ttnn::sigmoid_accurate", ttnn::operations::unary::Sigmoid_accurate>();
-constexpr auto log_sigmoid =
-    ttnn::register_operation_with_auto_launch_op<"ttnn::log_sigmoid", ttnn::operations::unary::LogSigmoid>();
-constexpr auto unary_chain =
-    ttnn::register_operation_with_auto_launch_op<"ttnn::unary_chain", ttnn::operations::unary::Unary_chain>();
+    ttnn::register_operation<"ttnn::sigmoid_accurate", ttnn::operations::unary::Sigmoid_accurate>();
+constexpr auto log_sigmoid = ttnn::register_operation<"ttnn::log_sigmoid", ttnn::operations::unary::LogSigmoid>();
+constexpr auto unary_chain = ttnn::register_operation<"ttnn::unary_chain", ttnn::operations::unary::Unary_chain>();
 
-constexpr auto add_sfpu = ttnn::register_operation_with_auto_launch_op<
+constexpr auto add_sfpu = ttnn::register_operation<
     "ttnn::add_sfpu",
     ttnn::operations::unary::SymmetricBinop<ttnn::operations::unary::UnaryOpType::ADD_UNARY_SFPU>>();
-constexpr auto mul_sfpu = ttnn::register_operation_with_auto_launch_op<
+constexpr auto mul_sfpu = ttnn::register_operation<
     "ttnn::mul_sfpu",
     ttnn::operations::unary::SymmetricBinop<ttnn::operations::unary::UnaryOpType::MUL_UNARY_SFPU>>();
 
-constexpr auto sub_sfpu = ttnn::register_operation_with_auto_launch_op<
+constexpr auto sub_sfpu = ttnn::register_operation<
     "ttnn::sub_sfpu",
     ttnn::operations::unary::AsymmetricBinop<
         ttnn::operations::unary::UnaryOpType::SUB_UNARY_SFPU,
         ttnn::operations::unary::UnaryOpType::RSUB>>();
-constexpr auto div_sfpu = ttnn::register_operation_with_auto_launch_op<
+constexpr auto div_sfpu = ttnn::register_operation<
     "ttnn::div_sfpu",
     ttnn::operations::unary::AsymmetricBinop<
         ttnn::operations::unary::UnaryOpType::DIV_UNARY_SFPU,

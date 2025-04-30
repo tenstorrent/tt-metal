@@ -30,7 +30,7 @@
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/mesh_device_view.hpp>
 #include "ttnn/cpp/ttnn/operations/experimental/reshape/view.hpp"
-
+#include <tt-metalium/system_mesh.hpp>
 #include <tt-metalium/tile.hpp>
 
 #include "umd/device/types/arch.h"
@@ -60,67 +60,128 @@ struct SubdeviceInfo {
     std::unordered_map<chip_id_t, SubDeviceId> fabric_subdevice_id;
 };
 
+using tt::tt_metal::distributed::MeshContainer;
 using tt::tt_metal::distributed::MeshCoordinate;
 using tt::tt_metal::distributed::MeshDevice;
 using tt::tt_metal::distributed::MeshDeviceConfig;
 using tt::tt_metal::distributed::MeshDeviceView;
 using tt::tt_metal::distributed::MeshShape;
-class Fabric1DFixture {
-public:
-    void SetupDevices() {
-        constexpr size_t TG_num_devices = 36;
-        constexpr size_t galaxy_6u_num_devices = 32;
+using tt::tt_metal::distributed::SystemMesh;
 
+class BaseFabricFixture {
+protected:
+    tt::ARCH arch_;
+    std::size_t num_devices_;
+    bool device_open = false;
+
+    // Common constants for both fixtures
+    static constexpr size_t TG_NUM_DEVICES = 36;
+    static constexpr size_t GALAXY_6U_NUM_DEVICES = 32;
+
+    // Gets the appropriate mesh shape based on device configuration
+    MeshShape GetDeterminedMeshShape() const {
+        if (num_devices_ == TG_NUM_DEVICES || num_devices_ == GALAXY_6U_NUM_DEVICES) {
+            return MeshShape{8, 4};
+        } else {
+            return MeshShape{2, 4};
+        }
+    }
+
+    // Validates environment and hardware for tests
+    void ValidateEnvironment() {
         auto slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
         if (slow_dispatch) {
             TT_THROW("This suite can only be run without TT_METAL_SLOW_DISPATCH_MODE set");
         }
+
         arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
-
         num_devices_ = tt::tt_metal::GetNumAvailableDevices();
-        if (arch_ == tt::ARCH::WORMHOLE_B0 and num_devices_ >= 8 and
-            (tt::tt_metal::GetNumPCIeDevices() == 4 || tt::tt_metal::GetNumPCIeDevices() == galaxy_6u_num_devices)) {
-            if (num_devices_ == TG_num_devices || num_devices_ == galaxy_6u_num_devices) {
-                mesh_device_ = MeshDevice::create(MeshDeviceConfig(MeshShape{8, 4}));
-            } else {
-                mesh_device_ = MeshDevice::create(MeshDeviceConfig(MeshShape{2, 4}));
-            }
 
-            std::vector<chip_id_t> ids(num_devices_, 0);
-            std::iota(ids.begin(), ids.end(), 0);
-
-        } else {
+        if (!(arch_ == tt::ARCH::WORMHOLE_B0 && num_devices_ >= 8 &&
+              (tt::tt_metal::GetNumPCIeDevices() == 4 || tt::tt_metal::GetNumPCIeDevices() == GALAXY_6U_NUM_DEVICES))) {
             TT_THROW("This suite can only be run on T3000 or TG Wormhole devices");
         }
+    }
+
+public:
+    BaseFabricFixture() : device_open(false) {}
+
+    BaseFabricFixture(tt::tt_metal::FabricConfig fabric_config) : device_open(false) {
+        tt::tt_metal::detail::InitializeFabricConfig(fabric_config);
+    }
+
+    virtual ~BaseFabricFixture() { tt::tt_metal::detail::InitializeFabricConfig(tt::tt_metal::FabricConfig::DISABLED); }
+
+    virtual void SetupDevices() = 0;
+    virtual void TearDown() = 0;
+};
+
+class Fabric1DFixture : public BaseFabricFixture {
+public:
+    std::shared_ptr<MeshDeviceView> view_;
+    std::map<chip_id_t, IDevice*> physical_devices_;
+
+    void SetupDevices() override {
+        ValidateEnvironment();
+
+        const MeshShape cluster_shape = GetDeterminedMeshShape();
+        const auto& physical_device_ids = SystemMesh::instance().get_mapped_physical_device_ids(cluster_shape);
+        physical_devices_ = tt::tt_metal::detail::CreateDevices(physical_device_ids);
+
+        std::vector<IDevice*> devices = {};
+        for (auto device_id : physical_device_ids) {
+            devices.push_back(physical_devices_.at(device_id));
+        }
+
+        MeshContainer<IDevice*> device_container(cluster_shape, devices);
+        view_ = std::make_shared<MeshDeviceView>(device_container);
         device_open = true;
     }
 
-    Fabric1DFixture() : device_open(false) { this->SetupDevices(); }
+    void TearDown() override {
+        if (device_open) {
+            tt::tt_metal::detail::CloseDevices(physical_devices_);
+            device_open = false;
+        }
+    }
 
-    Fabric1DFixture(tt::tt_metal::FabricConfig fabric_config) : device_open(false) {
-        tt::tt_metal::detail::InitializeFabricConfig(fabric_config);
+    Fabric1DFixture() : BaseFabricFixture() { this->SetupDevices(); }
+
+    Fabric1DFixture(tt::tt_metal::FabricConfig fabric_config) : BaseFabricFixture(fabric_config) {
         this->SetupDevices();
     }
 
-    virtual ~Fabric1DFixture() {
+    ~Fabric1DFixture() override { TearDown(); }
+};
+
+class MeshFabric1DFixture : public BaseFabricFixture {
+public:
+    std::shared_ptr<MeshDevice> mesh_device_;
+
+    void SetupDevices() override {
+        ValidateEnvironment();
+        mesh_device_ = MeshDevice::create(MeshDeviceConfig(GetDeterminedMeshShape()));
+        device_open = true;
+    }
+
+    void TearDown() override {
+        if (device_open) {
+            mesh_device_->close();
+            device_open = false;
+        }
+    }
+
+    MeshFabric1DFixture() : BaseFabricFixture() { this->SetupDevices(); }
+
+    MeshFabric1DFixture(tt::tt_metal::FabricConfig fabric_config) : BaseFabricFixture(fabric_config) {
+        this->SetupDevices();
+    }
+
+    ~MeshFabric1DFixture() override {
         if (device_open) {
             TearDown();
         }
-        tt::tt_metal::detail::InitializeFabricConfig(tt::tt_metal::FabricConfig::DISABLED);
     }
-
-    void TearDown() {
-        device_open = false;
-        mesh_device_->close();
-        tt::tt_metal::detail::InitializeFabricConfig(tt::tt_metal::FabricConfig::DISABLED);
-    }
-
-    tt::ARCH arch_;
-    size_t num_devices_;
-    std::shared_ptr<MeshDevice> mesh_device_;
-
-private:
-    bool device_open;
 };
 
 class Fabric1DLineDeviceInitFixture : public Fabric1DFixture {
@@ -131,6 +192,16 @@ public:
 class Fabric1DRingDeviceInitFixture : public Fabric1DFixture {
 public:
     Fabric1DRingDeviceInitFixture() : Fabric1DFixture(tt::tt_metal::FabricConfig::FABRIC_1D_RING) {}
+};
+
+class MeshFabric1DLineDeviceInitFixture : public MeshFabric1DFixture {
+public:
+    MeshFabric1DLineDeviceInitFixture() : MeshFabric1DFixture(tt::tt_metal::FabricConfig::FABRIC_1D) {}
+};
+
+class MeshFabric1DRingDeviceInitFixture : public MeshFabric1DFixture {
+public:
+    MeshFabric1DRingDeviceInitFixture() : MeshFabric1DFixture(tt::tt_metal::FabricConfig::FABRIC_1D_RING) {}
 };
 
 struct BankedConfig {
@@ -910,13 +981,13 @@ bool RunLocalTestWithMultiInputReaders(
         auto in0_tensor_copyback_cpu = input_tensor0_device.cpu(true, ttnn::DefaultQueueId);
         auto in1_tensor_copyback_cpu = input_tensor1_device.cpu(true, ttnn::DefaultQueueId);
 
-        auto in0_tensor_copyback = tt::tt_metal::owned_buffer::get_as<uint32_t>(in0_tensor_copyback_cpu);
-        auto in1_tensor_copyback = tt::tt_metal::owned_buffer::get_as<uint32_t>(in1_tensor_copyback_cpu);
+        auto in0_tensor_copyback = tt::tt_metal::host_buffer::get_as<uint32_t>(in0_tensor_copyback_cpu);
+        auto in1_tensor_copyback = tt::tt_metal::host_buffer::get_as<uint32_t>(in1_tensor_copyback_cpu);
 
-        auto in0_tensor_data = tt::tt_metal::owned_buffer::get_as<uint32_t>(input_tensor0);
-        auto in1_tensor_data = tt::tt_metal::owned_buffer::get_as<uint32_t>(input_tensor1);
-        auto out0_tensor_data = tt::tt_metal::owned_buffer::get_as<uint32_t>(output0_cpu);
-        auto out1_tensor_data = tt::tt_metal::owned_buffer::get_as<uint32_t>(output1_cpu);
+        auto in0_tensor_data = tt::tt_metal::host_buffer::get_as<uint32_t>(input_tensor0);
+        auto in1_tensor_data = tt::tt_metal::host_buffer::get_as<uint32_t>(input_tensor1);
+        auto out0_tensor_data = tt::tt_metal::host_buffer::get_as<uint32_t>(output0_cpu);
+        auto out1_tensor_data = tt::tt_metal::host_buffer::get_as<uint32_t>(output1_cpu);
 
         bool input0_copyback_check_passed =
             run_output_check(in0_tensor_data, in0_tensor_copyback) == Correctness::Correct;
@@ -1186,7 +1257,7 @@ int TestLineFabricEntrypoint(
     }
 
     Fabric1DFixture test_fixture;
-    auto view = test_fixture.mesh_device_->get_view();
+    auto view = *(test_fixture.view_);
 
     // build a line of devices
     std::vector<IDevice*> devices = {
@@ -1272,7 +1343,7 @@ int TestLoopbackEntrypoint(
     }
 
     Fabric1DFixture test_fixture;
-    auto view = test_fixture.mesh_device_->get_view();
+    auto view = *(test_fixture.view_);
 
     const auto& device_0 = view.get_device(MeshCoordinate(0, 0));
     const auto& device_1 = view.get_device(MeshCoordinate(0, 1));
@@ -1453,7 +1524,7 @@ bool TestMultiInputReaderKernel(
         !enable_persistent_fabric || test_mode != TwoInputReaderKernelWriteMode::LOCAL_WRITEBACK,
         "Test configuration issue. Set local writeback mode with persistent fabric");
 
-    auto view = test_fixture.mesh_device_->get_view();
+    auto view = *(test_fixture.view_);
 
     std::vector<IDevice*> devices;
     devices.reserve(fabric_num_devices);
@@ -1747,10 +1818,9 @@ bool RunPipelinedWorkersTest(
     Program& program = programs[0];
 
     Fabric1DFixture test_fixture;
-    auto view = test_fixture.mesh_device_->get_view();
+    auto view = *(test_fixture.view_);
 
     IDevice* device = view.get_device(MeshCoordinate(0, 0));
-    ;
 
     // General setup is as follows:
     // Worker 1 reads input tensor as a sequence of slices - it forwards to an output tensor and after each slice, it
@@ -1994,10 +2064,10 @@ bool RunPipelinedWorkersTest(
         auto input_cpu = device_tensors[0].cpu();
         auto final_out_cpu = device_tensors.back().cpu();
 
-        auto in_tensor_copyback = tt::tt_metal::owned_buffer::get_as<uint32_t>(input_cpu);
-        auto out_tensor_copyback = tt::tt_metal::owned_buffer::get_as<uint32_t>(final_out_cpu);
+        auto in_tensor_copyback = tt::tt_metal::host_buffer::get_as<uint32_t>(input_cpu);
+        auto out_tensor_copyback = tt::tt_metal::host_buffer::get_as<uint32_t>(final_out_cpu);
 
-        auto in_tensor_data = tt::tt_metal::owned_buffer::get_as<uint32_t>(host_tensors[0]);
+        auto in_tensor_data = tt::tt_metal::host_buffer::get_as<uint32_t>(host_tensors[0]);
 
         bool input_copyback_check_passed = run_output_check(in_tensor_data, in_tensor_copyback) == Correctness::Correct;
         TT_FATAL(input_copyback_check_passed, "Input 0 copyback check failed");
@@ -2045,7 +2115,7 @@ void run_all_gather_with_persistent_fabric(const size_t dim, const size_t num_li
         return;
     }
     // Initialize MeshDevice with 1D Fabric
-    Fabric1DFixture test_fixture(tt::tt_metal::FabricConfig::FABRIC_1D);
+    MeshFabric1DFixture test_fixture(tt::tt_metal::FabricConfig::FABRIC_1D);
     auto view = test_fixture.mesh_device_->get_view();
 
     // build a line of devices
@@ -2072,22 +2142,21 @@ void run_all_gather_with_persistent_fabric(const size_t dim, const size_t num_li
         t.set_tensor_spec(TensorSpec(
             input_shape, TensorLayout(DataType::BFLOAT16, PageConfig(layout, tt_metal::Tile()), in_memory_config)));
 
-        device_input_tensors.push_back(t.to_device(devices[i]));
+        device_input_tensors.push_back(t);
     }
     // Need to make it a mesh tensor for use with the op
-    const Tensor input_mesh_tensor = ttnn::distributed::aggregate_as_tensor(device_input_tensors, AllGatherTensor{});
+    const Tensor input_mesh_tensor = ttnn::distributed::aggregate_as_tensor(device_input_tensors, AllGatherTensor{})
+                                         .to_device(test_fixture.mesh_device_.get());
     std::optional<SubdeviceInfo> subdevice_managers = create_worker_subdevices(devices);
 
     log_info(tt::LogTest, "launching op");
 
-    ttnn::global_semaphore::MultiDeviceGlobalSemaphore multi_device_global_semaphore =
-        ttnn::global_semaphore::create_global_semaphore_with_same_address(
-            test_fixture.mesh_device_.get(),
-            devices[0]->worker_cores(HalProgrammableCoreType::TENSIX, SubDeviceId{0}),
-            0,                             // initial value
-            tt::tt_metal::BufferType::L1,  // buffer type
-            10                             // attempts
-        );
+    GlobalSemaphore multi_device_global_semaphore = ttnn::global_semaphore::create_global_semaphore(
+        test_fixture.mesh_device_.get(),
+        test_fixture.mesh_device_.get()->worker_cores(HalProgrammableCoreType::TENSIX, SubDeviceId{0}),
+        0,                            // initial value
+        tt::tt_metal::BufferType::L1  // buffer type
+    );
 
     auto output_tensor = ttnn::operations::experimental::ccl::all_gather_async(
         input_mesh_tensor,
@@ -2119,19 +2188,12 @@ void run_ring_all_gather_with_persistent_fabric(
         return;
     }
     // Initialize MeshDevice with 1D Fabric
-    Fabric1DFixture test_fixture(tt::tt_metal::FabricConfig::FABRIC_1D);
+    MeshFabric1DFixture test_fixture(tt::tt_metal::FabricConfig::FABRIC_1D_RING);
+    test_fixture.mesh_device_->reshape(MeshShape(1, 8));
     auto view = test_fixture.mesh_device_->get_view();
 
     // build a line of devices
-    std::vector<IDevice*> devices = {
-        view.get_device(MeshCoordinate(0, 0)),
-        view.get_device(MeshCoordinate(0, 1)),
-        view.get_device(MeshCoordinate(0, 2)),
-        view.get_device(MeshCoordinate(0, 3)),
-        view.get_device(MeshCoordinate(1, 3)),
-        view.get_device(MeshCoordinate(1, 2)),
-        view.get_device(MeshCoordinate(1, 1)),
-        view.get_device(MeshCoordinate(1, 0))};
+    std::vector<IDevice*> devices = test_fixture.mesh_device_->get_devices();
     const size_t num_devices = devices.size();
     TT_FATAL(
         test_expected_num_devices == num_devices,
@@ -2150,24 +2212,23 @@ void run_ring_all_gather_with_persistent_fabric(
         t.set_tensor_spec(TensorSpec(
             input_shape, TensorLayout(DataType::BFLOAT16, PageConfig(layout, tt_metal::Tile()), in_memory_config)));
 
-        device_input_tensors.push_back(t.to_device(devices[i]));
+        device_input_tensors.push_back(t);
     }
     // Need to make it a mesh tensor for use with the op
-    const Tensor input_mesh_tensor = ttnn::distributed::aggregate_as_tensor(device_input_tensors, AllGatherTensor{});
+    const Tensor input_mesh_tensor = ttnn::distributed::aggregate_as_tensor(device_input_tensors, AllGatherTensor{})
+                                         .to_device(test_fixture.mesh_device_.get());
 
     std::optional<SubdeviceInfo> subdevice_managers = create_worker_subdevices(devices);
-    ttnn::ccl::Topology topology = ttnn::ccl::Topology::Linear;
+    ttnn::ccl::Topology topology = ttnn::ccl::Topology::Ring;
 
     log_info(tt::LogTest, "launching op");
 
-    ttnn::global_semaphore::MultiDeviceGlobalSemaphore multi_device_global_semaphore =
-        ttnn::global_semaphore::create_global_semaphore_with_same_address(
-            test_fixture.mesh_device_.get(),
-            devices[0]->worker_cores(HalProgrammableCoreType::TENSIX, SubDeviceId{0}),
-            0,                             // initial value
-            tt::tt_metal::BufferType::L1,  // buffer type
-            10                             // attempts
-        );
+    GlobalSemaphore multi_device_global_semaphore = ttnn::global_semaphore::create_global_semaphore(
+        test_fixture.mesh_device_.get(),
+        devices[0]->worker_cores(HalProgrammableCoreType::TENSIX, SubDeviceId{0}),
+        0,                            // initial value
+        tt::tt_metal::BufferType::L1  // buffer type
+    );
 
     auto output_tensor = ttnn::operations::experimental::ccl::all_gather_async(
         input_mesh_tensor,
@@ -2422,6 +2483,7 @@ void Run1DFabricPacketSendTest(
         "Linear");
     bool use_galaxy = num_devices == 32;
     bool use_tg = use_galaxy && tt::tt_metal::GetNumPCIeDevices() == 4;
+    bool is_6u_galaxy = use_galaxy && tt::tt_metal::GetNumPCIeDevices() == 32;
     if (num_devices < 4) {
         log_info("This test can only be run on T3000 devices");
         return;
@@ -2472,10 +2534,10 @@ void Run1DFabricPacketSendTest(
     static constexpr tt::DataFormat cb_df = tt::DataFormat::Bfp8;
 
     log_info("Device open and fabric init");
-    // Fabric1DLineDeviceInitFixture test_fixture;
+    // MeshFabric1DLineDeviceInitFixture test_fixture;
     FABRIC_DEVICE_FIXTURE test_fixture;
     log_info("\tDone");
-    auto view = test_fixture.mesh_device_->get_view();
+    auto view = *(test_fixture.view_);
 
     auto fabrics_under_test_devices =
         generate_line_fabrics_under_test(params, use_galaxy, use_tg, line_size, topology, view);
@@ -2500,7 +2562,9 @@ void Run1DFabricPacketSendTest(
             enable_persistent_fabric_mode,
             params.num_links,
             topology,
-            fabric_context_switch_interval);
+            fabric_context_switch_interval,
+            false,
+            is_6u_galaxy);
         packet_header_size_bytes = sizeof(tt::tt_fabric::PacketHeader);
     } else {
         // TODO: get packet header size from control plane after it adds APIs to present this information
@@ -2518,10 +2582,14 @@ void Run1DFabricPacketSendTest(
     auto sync_core_coord = CoreCoord(0, 0);
 
     ttnn::SmallVector<std::shared_ptr<Buffer>> device_dest_buffers;
+    std::vector<IDevice*> devices_ = {};
     device_dest_buffers.reserve(line_size);
     for (size_t fabric_index = 0; fabric_index < fabrics_under_test_devices.size(); fabric_index++) {
         auto& devices = fabrics_under_test_devices[fabric_index];
         for (auto* d : devices) {
+            if (std::find(devices_.begin(), devices_.end(), d) == devices_.end()) {
+                devices_.push_back(d);
+            }
             auto local_input_buffer =
                 CreateBuffer(InterleavedBufferConfig{d, dest_buffer_size, dest_buffer_size, BufferType::L1});
             device_dest_buffers.push_back(local_input_buffer);
@@ -2541,10 +2609,10 @@ void Run1DFabricPacketSendTest(
     std::vector<ttnn::global_semaphore::MultiDeviceGlobalSemaphore> global_semaphore_handles;
     for (size_t i = 0; i < line_size * 4; i++) {
         auto global_semaphores = ttnn::global_semaphore::create_global_semaphore_with_same_address(
-            test_fixture.mesh_device_.get(),
+            devices_,
             fabrics_under_test_devices[0][0]->worker_cores(HalProgrammableCoreType::TENSIX, SubDeviceId{0}),
             0,                             // initial value
-            tt::tt_metal::BufferType::L1,  // buffer type
+            tt::tt_metal::BufferType::L1,  // buffer type,
             1000                           // attempts
         );
         global_semaphore_handles.push_back(global_semaphores);
@@ -2927,7 +2995,7 @@ void Run1DFabricPacketSendTest(
     for (size_t fabric_index = 0; fabric_index < fabrics_under_test_devices.size(); fabric_index++) {
         auto& devices = fabric_under_test_worker_devices[fabric_index];
         for (IDevice* d : devices) {
-            detail::DumpDeviceProfileResults(d);
+            tt_metal::detail::DumpDeviceProfileResults(d);
         }
     }
     log_info(tt::LogTest, "Finished");
@@ -2964,27 +3032,36 @@ void RunWriteThroughputStabilityTestWithPersistentFabric(
 void RunRingDeadlockStabilityTestWithPersistentFabric(
     size_t num_mcasts,
     size_t num_links,
+    size_t num_devices,
     size_t num_op_invocations,
     bool has_forward_connection,
     bool has_backward_connection,
     size_t packet_payload_size_bytes = tt::tt_fabric::FabricEriscDatamoverBuilder::default_packet_payload_size_bytes) {
     auto arch = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
-    auto num_devices = tt::tt_metal::GetNumAvailableDevices();
-    if (num_devices != 8) {
-        log_info("This test can only be run on T3000 devices");
-        return;
-    }
-    if (arch == tt::ARCH::GRAYSKULL) {
-        log_info("Test must be run on WH");
-        return;
+
+    auto cluster_type = tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type();
+    switch (cluster_type) {
+        case ClusterType::T3K:
+            if (num_devices != 8) {
+                log_info(tt::LogTest, "This test can only be run 8 chips on T3000 devices");
+                return;
+            }
+            break;
+        case ClusterType::GALAXY:
+            if (num_devices != 4 && num_devices != 8) {
+                log_info(tt::LogTest, "This test can only be run on 4 or 8 chips on Galaxy devices");
+                return;
+            }
+            break;
+        default: log_info(tt::LogTest, "This test can only be run on T3000 or Galaxy devices"); return;
     }
 
     using namespace ttnn::ccl;
     auto topology = ttnn::ccl::Topology::Ring;
-    size_t num_unicasts = 0;
+    constexpr size_t num_unicasts = 0;
     size_t line_size = num_devices;
     size_t num_devices_with_workers = line_size;
-    bool line_sync = true;
+    constexpr bool line_sync = false;
 
     auto worker_core_logical = [](size_t link) { return CoreCoord(link, 0); };
 
@@ -2997,17 +3074,39 @@ void RunRingDeadlockStabilityTestWithPersistentFabric(
     static constexpr tt::DataFormat cb_df = tt::DataFormat::Bfp8;
 
     Fabric1DRingDeviceInitFixture test_fixture;
-    auto view = test_fixture.mesh_device_->get_view();
+    auto view = *(test_fixture.view_);
 
-    std::vector<IDevice*> devices_ = {
-        view.get_device(MeshCoordinate(0, 0)),
-        view.get_device(MeshCoordinate(0, 1)),
-        view.get_device(MeshCoordinate(0, 2)),
-        view.get_device(MeshCoordinate(0, 3)),
-        view.get_device(MeshCoordinate(1, 3)),
-        view.get_device(MeshCoordinate(1, 2)),
-        view.get_device(MeshCoordinate(1, 1)),
-        view.get_device(MeshCoordinate(1, 0))};
+    std::vector<IDevice*> devices_;
+
+    if (cluster_type == ClusterType::GALAXY) {
+        if (num_devices == 4) {
+            devices_ = {
+                view.get_device(MeshCoordinate(0, 0)),
+                view.get_device(MeshCoordinate(0, 1)),
+                view.get_device(MeshCoordinate(0, 2)),
+                view.get_device(MeshCoordinate(0, 3))};
+        } else if (num_devices == 8) {
+            devices_ = {
+                view.get_device(MeshCoordinate(0, 0)),
+                view.get_device(MeshCoordinate(1, 0)),
+                view.get_device(MeshCoordinate(2, 0)),
+                view.get_device(MeshCoordinate(3, 0)),
+                view.get_device(MeshCoordinate(4, 0)),
+                view.get_device(MeshCoordinate(5, 0)),
+                view.get_device(MeshCoordinate(6, 0)),
+                view.get_device(MeshCoordinate(7, 0))};
+        }
+    } else {
+        devices_ = {
+            view.get_device(MeshCoordinate(0, 0)),
+            view.get_device(MeshCoordinate(0, 1)),
+            view.get_device(MeshCoordinate(0, 2)),
+            view.get_device(MeshCoordinate(0, 3)),
+            view.get_device(MeshCoordinate(1, 3)),
+            view.get_device(MeshCoordinate(1, 2)),
+            view.get_device(MeshCoordinate(1, 1)),
+            view.get_device(MeshCoordinate(1, 0))};
+    }
 
     std::vector<IDevice*> devices;
     devices.reserve(line_size);
@@ -3050,8 +3149,8 @@ void RunRingDeadlockStabilityTestWithPersistentFabric(
     std::vector<ttnn::global_semaphore::MultiDeviceGlobalSemaphore> global_semaphore_handles;
     for (size_t i = 0; i < line_size * 4; i++) {
         auto global_semaphores = ttnn::global_semaphore::create_global_semaphore_with_same_address(
-            test_fixture.mesh_device_.get(),
-            devices[0]->worker_cores(HalProgrammableCoreType::TENSIX, SubDeviceId{0}),
+            devices_,
+            devices_[0]->worker_cores(HalProgrammableCoreType::TENSIX, SubDeviceId{0}),
             0,                             // initial value
             tt::tt_metal::BufferType::L1,  // buffer type
             1000                           // attempts

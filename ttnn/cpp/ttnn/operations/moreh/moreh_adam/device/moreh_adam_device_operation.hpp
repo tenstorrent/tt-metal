@@ -102,7 +102,6 @@ struct MorehAdamOperation {
 }  // namespace ttnn::operations::moreh::moreh_adam
 
 namespace ttnn::prim {
-constexpr auto moreh_adam = ttnn::register_operation_with_auto_launch_op<
-    "ttnn::prim::moreh_adam",
-    ttnn::operations::moreh::moreh_adam::MorehAdamOperation>();
+constexpr auto moreh_adam =
+    ttnn::register_operation<"ttnn::prim::moreh_adam", ttnn::operations::moreh::moreh_adam::MorehAdamOperation>();
 }

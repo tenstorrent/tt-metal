@@ -64,10 +64,31 @@ def main():
         default=False,
     )
     parser.add_option(
+        "--sync-host-device",
+        dest="sync_host_device",
+        action="store_true",
+        help="Sync host with all devices",
+        default=False,
+    )
+    parser.add_option(
+        "--push-device-data-mid-run",
+        dest="mid_run_device_data",
+        action="store_true",
+        help="Push collected device data to Tracy GUI mid-run",
+        default=False,
+    )
+    parser.add_option(
         "--collect-noc-traces",
         dest="collect_noc_traces",
         action="store_true",
         help="Collect noc event traces when profiling",
+        default=False,
+    )
+    parser.add_option(
+        "--check-exit-code",
+        dest="check_exit_code",
+        action="store_true",
+        help="Exit the run and do not attempt post processing if the test command fails",
         default=False,
     )
 
@@ -106,6 +127,12 @@ def main():
 
     if options.profile_dispatch_cores:
         os.environ["TT_METAL_DEVICE_PROFILER_DISPATCH"] = "1"
+
+    if options.mid_run_device_data:
+        os.environ["TT_METAL_TRACY_MID_RUN_PUSH"] = "1"
+
+    if options.sync_host_device:
+        os.environ["TT_METAL_PROFILER_SYNC"] = "1"
 
     if options.collect_noc_traces:
         os.environ["TT_METAL_DEVICE_PROFILER_NOC_EVENTS"] = "1"
@@ -194,6 +221,9 @@ def main():
             signal.signal(signal.SIGTERM, signal_handler)
 
             testProcess.communicate()
+            if options.check_exit_code and testProcess.returncode != 0:
+                logger.error(f"{testCommand} exited with a non-zero return code")
+                sys.exit(4)
 
             try:
                 captureProcess.communicate(timeout=15)

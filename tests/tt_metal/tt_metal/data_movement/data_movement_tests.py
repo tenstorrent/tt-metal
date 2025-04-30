@@ -6,85 +6,114 @@
 
 import os
 import sys
+import csv
 from argparse import ArgumentParser
 from loguru import logger  # type: ignore
-import matplotlib.pyplot as plt
+import matplotlib.pyplot as plt  # type: ignore
 
 from tt_metal.tools.profiler.process_device_log import import_log_run_stats
 import tt_metal.tools.profiler.device_post_proc_config as device_post_proc_config
 from tt_metal.tools.profiler.common import PROFILER_LOGS_DIR, PROFILER_DEVICE_SIDE_LOG
 
 # Corresponding test ids for each test
-test_id_to_name = {0: "DRAM Interleaved Packet Sizes", 1: "DRAM Interleaved Core Locations", 2: "DRAM Sharded"}
+test_id_to_name = {
+    0: "DRAM Interleaved Packet Sizes",
+    1: "DRAM Interleaved Core Locations",
+    2: "DRAM Sharded",
+    3: "DRAM Directed Ideal",
+    4: "One to One Packet Sizes",
+}
+
+# Correspondng test bounds for each test id
+test_bounds = {
+    0: {
+        "riscv_1": {"latency": {"lower": 400, "upper": 8800}, "bandwidth": 0.12},
+        "riscv_0": {"latency": {"lower": 300, "upper": 8000}, "bandwidth": 0.16},
+    },
+    1: {
+        "riscv_1": {"latency": {"lower": 300, "upper": 700}, "bandwidth": 0.09},
+        "riscv_0": {"latency": {"lower": 200, "upper": 500}, "bandwidth": 0.16},
+    },
+    2: {
+        "riscv_1": {"latency": {"lower": 400, "upper": 600}, "bandwidth": 0.13},
+        "riscv_0": {"latency": {"lower": 300, "upper": 500}, "bandwidth": 0.16},
+    },
+    3: {
+        "riscv_1": {"latency": {"lower": 42000, "upper": 44000}, "bandwidth": 33},
+        "riscv_0": {"latency": {"lower": 42000, "upper": 43000}, "bandwidth": 34},
+    },
+    4: {
+        "riscv_1": {"latency": {"lower": 4100, "upper": 4200}, "bandwidth": 0.06},
+        "riscv_0": {"latency": {"lower": 400, "upper": 500}, "bandwidth": 0.59},
+    },
+}
 
 
-def run_dm_tests(profile, gtest_filter):
+def run_dm_tests(profile, verbose, gtest_filter, plot, report):
     log_file_path = f"{PROFILER_LOGS_DIR}/{PROFILER_DEVICE_SIDE_LOG}"
+
+    # Profile tests
     if profile or not os.path.exists(log_file_path) or gtest_filter:
+        profile_dm_tests(verbose=verbose, gtest_filter=gtest_filter)
+
+    # Gather analysis stats
+    dm_stats = gather_analysis_stats(log_file_path, verbose=verbose)
+
+    # Print stats if explicitly requested
+    if verbose:
+        print_stats(dm_stats)
+
+    # Plot results
+    if plot:
+        plot_dm_stats(dm_stats)
+
+    # Export results to csv
+    if report:
+        export_dm_stats_to_csv(dm_stats)
+
+    # Check performance (TODO: enable assertions)
+    performance_check(dm_stats, verbose=verbose)
+
+    logger.info("Data movement tests completed.")
+
+
+def profile_dm_tests(verbose=False, gtest_filter=None):
+    if verbose:
         logger.info(f"Profiling Kernels...")
-        cmd = f"TT_METAL_SLOW_DISPATCH_MODE=1 TT_METAL_DEVICE_PROFILER=1 {os.environ['TT_METAL_HOME']}/build/test/tt_metal/unit_tests_data_movement"
+    cmd = f"TT_METAL_SLOW_DISPATCH_MODE=1 TT_METAL_DEVICE_PROFILER=1 {os.environ['TT_METAL_HOME']}/build/test/tt_metal/unit_tests_data_movement"
 
-        if gtest_filter:
-            cmd += f' --gtest_filter="*{gtest_filter}*"'
+    if gtest_filter:
+        cmd += f' --gtest_filter="*{gtest_filter}*"'
 
-        os.system(cmd)
+    os.system(cmd)
 
-    # Configure post proc script
-    setup = device_post_proc_config.default_setup()
-    setup.deviceInputLog = log_file_path
-    setup.timerAnalysis = {
-        "reader_kernel_analysis": {
-            "across": "core",
-            "type": "adjacent",
-            "start": {"risc": "BRISC", "zone_name": "BRISC-KERNEL"},
-            "end": {"risc": "BRISC", "zone_name": "BRISC-KERNEL"},
-        },
-        "writer_kernel_analysis": {
-            "across": "core",
-            "type": "adjacent",
-            "start": {"risc": "NCRISC", "zone_name": "NCRISC-KERNEL"},
-            "end": {"risc": "NCRISC", "zone_name": "NCRISC-KERNEL"},
-        },
-        "reader_events": {
-            "across": "device",
-            "type": "event",
-            "marker": {"risc": "BRISC"},
-        },
-        "writer_events": {
-            "across": "device",
-            "type": "event",
-            "marker": {"risc": "NCRISC"},
-        },
-    }
 
-    # Gather stats from csv
-    stats = import_log_run_stats(setup)
+def gather_analysis_stats(file_path, verbose=False):
+    # Gather stats from csv and set up analysis
+    stats = gather_stats_from_csv(file_path, verbose=verbose)
     cores = [key for key in stats["devices"][0]["cores"].keys() if key != "DEVICE"]
     dm_stats = {
-        "reader": {
+        "riscv_1": {
             "analysis": {"stats": dict(), "series": []},
             "attributes": dict(),
         },
-        "writer": {
+        "riscv_0": {
             "analysis": {"stats": dict(), "series": []},
             "attributes": dict(),
         },
     }
 
     # Gather analysis stats
+    # Statistics are recorded per core, but timeseries data is aggregated for all cores
     for core in cores:
-        dm_stats["reader"]["analysis"]["stats"][core] = stats["devices"][0]["cores"][core]["riscs"]["TENSIX"][
-            "analysis"
-        ]["reader_kernel_analysis"]["stats"]
-        dm_stats["reader"]["analysis"]["series"].extend(
-            stats["devices"][0]["cores"][core]["riscs"]["TENSIX"]["analysis"]["reader_kernel_analysis"]["series"]
-        )
-        dm_stats["writer"]["analysis"]["stats"][core] = stats["devices"][0]["cores"][core]["riscs"]["TENSIX"][
-            "analysis"
-        ]["writer_kernel_analysis"]["stats"]
-        dm_stats["writer"]["analysis"]["series"].extend(
-            stats["devices"][0]["cores"][core]["riscs"]["TENSIX"]["analysis"]["writer_kernel_analysis"]["series"]
-        )
+        core_analysis = stats["devices"][0]["cores"][core]["riscs"]["TENSIX"]["analysis"]
+        if "riscv_1_analysis" in core_analysis.keys():
+            dm_stats["riscv_1"]["analysis"]["stats"][core] = core_analysis["riscv_1_analysis"]["stats"]
+            dm_stats["riscv_1"]["analysis"]["series"].extend(core_analysis["riscv_1_analysis"]["series"])
+
+        if "riscv_0_analysis" in core_analysis.keys():
+            dm_stats["riscv_0"]["analysis"]["stats"][core] = core_analysis["riscv_0_analysis"]["stats"]
+            dm_stats["riscv_0"]["analysis"]["series"].extend(core_analysis["riscv_0_analysis"]["series"])
 
     # Gather test attributes
     for kernel in dm_stats.keys():
@@ -98,63 +127,165 @@ def run_dm_tests(profile, gtest_filter):
 
         dm_stats[kernel]["attributes"] = attributes
 
-    # Stats per runtime host id
-    for i in range(len(dm_stats["reader"]["analysis"]["series"])):
-        run_host_id = dm_stats["reader"]["analysis"]["series"][i]["duration_type"][0]["run_host_id"]
+    return dm_stats
+
+
+def gather_stats_from_csv(file_path, verbose=False):
+    # Configure post proc script
+    setup = device_post_proc_config.default_setup()
+    setup.deviceInputLog = file_path
+    setup.timerAnalysis = {
+        "riscv_1_analysis": {
+            "across": "core",
+            "type": "adjacent",
+            "start": {"risc": "ANY", "zone_name": "RISCV1"},
+            "end": {"risc": "ANY", "zone_name": "RISCV1"},
+        },
+        "riscv_0_analysis": {
+            "across": "core",
+            "type": "adjacent",
+            "start": {"risc": "ANY", "zone_name": "RISCV0"},
+            "end": {"risc": "ANY", "zone_name": "RISCV0"},
+        },
+        "riscv_1_events": {
+            "across": "device",
+            "type": "event",
+            "marker": {"risc": "BRISC"},
+        },
+        "riscv_0_events": {
+            "across": "device",
+            "type": "event",
+            "marker": {"risc": "NCRISC"},
+        },
+    }
+
+    # Gather stats from csv
+    if not verbose:
+        logger.disable("tt_metal.tools.profiler.process_device_log")
+
+    return import_log_run_stats(setup)
+
+
+def performance_check(dm_stats, verbose=False):
+    # Results' ranges
+    results_bounds = {}
+    for i in range(len(dm_stats["riscv_1"]["analysis"]["series"])):
+        run_host_id = dm_stats["riscv_1"]["analysis"]["series"][i]["duration_type"][0]["run_host_id"]
+        test_id = dm_stats["riscv_1"]["attributes"][run_host_id]["Test id"]
+
+        if not test_id in results_bounds.keys():
+            results_bounds[test_id] = {
+                "riscv_1": {"latency": {"lower": float("inf"), "upper": 0}, "bandwidth": float("inf")},
+                "riscv_0": {"latency": {"lower": float("inf"), "upper": 0}, "bandwidth": float("inf")},
+            }
+
+        riscv1_cycles = dm_stats["riscv_1"]["analysis"]["series"][i]["duration_cycles"]
+        riscv0_cycles = dm_stats["riscv_0"]["analysis"]["series"][i]["duration_cycles"]
+
+        results_bounds[test_id]["riscv_1"]["latency"]["lower"] = min(
+            results_bounds[test_id]["riscv_1"]["latency"]["lower"], riscv1_cycles
+        )
+        results_bounds[test_id]["riscv_0"]["latency"]["lower"] = min(
+            results_bounds[test_id]["riscv_0"]["latency"]["lower"], riscv0_cycles
+        )
+        results_bounds[test_id]["riscv_1"]["latency"]["upper"] = max(
+            results_bounds[test_id]["riscv_1"]["latency"]["upper"], riscv1_cycles
+        )
+        results_bounds[test_id]["riscv_0"]["latency"]["upper"] = max(
+            results_bounds[test_id]["riscv_0"]["latency"]["upper"], riscv0_cycles
+        )
+
+        riscv1_attributes = dm_stats["riscv_1"]["attributes"][run_host_id]
+        riscv1_bw = (
+            riscv1_attributes["Number of transactions"] * riscv1_attributes["Transaction size in bytes"] / riscv1_cycles
+        )
+        results_bounds[test_id]["riscv_1"]["bandwidth"] = min(
+            results_bounds[test_id]["riscv_1"]["bandwidth"], riscv1_bw
+        )
+
+        riscv0_attributes = dm_stats["riscv_0"]["attributes"][run_host_id]
+        riscv0_bw = (
+            riscv0_attributes["Number of transactions"] * riscv0_attributes["Transaction size in bytes"] / riscv0_cycles
+        )
+        results_bounds[test_id]["riscv_0"]["bandwidth"] = min(
+            results_bounds[test_id]["riscv_0"]["bandwidth"], riscv0_bw
+        )
+
+    # Performance checks per test
+    for test_id, bounds in results_bounds.items():
+        # Bounds check
+        riscv1_cycles_within_bounds = (
+            test_bounds[test_id]["riscv_1"]["latency"]["lower"] <= bounds["riscv_1"]["latency"]["lower"]
+            and bounds["riscv_1"]["latency"]["upper"] <= test_bounds[test_id]["riscv_1"]["latency"]["upper"]
+        )
+        riscv0_cycles_within_bounds = (
+            test_bounds[test_id]["riscv_0"]["latency"]["lower"] <= bounds["riscv_0"]["latency"]["lower"]
+            and bounds["riscv_0"]["latency"]["upper"] <= test_bounds[test_id]["riscv_0"]["latency"]["upper"]
+        )
+        riscv1_bw_within_bounds = test_bounds[test_id]["riscv_1"]["bandwidth"] <= bounds["riscv_1"]["bandwidth"]
+        riscv0_bw_within_bounds = test_bounds[test_id]["riscv_0"]["bandwidth"] <= bounds["riscv_0"]["bandwidth"]
+
+        # Print latency and bandwidth perf results
+        if verbose:
+            logger.info(f"Perf results for test id: {test_id}")
+            logger.info(f"Latency")
+            logger.info(
+                f"  RISCV 1: {bounds['riscv_1']['latency']['lower']}-{bounds['riscv_1']['latency']['upper']} cycles"
+            )
+            logger.info(
+                f"  RISCV 0: {bounds['riscv_0']['latency']['lower']}-{bounds['riscv_0']['latency']['upper']} cycles"
+            )
+            logger.info(f"Bandwidth")
+            logger.info(f"  RISCV 1: {bounds['riscv_1']['bandwidth']} Bytes/cycle")
+            logger.info(f"  RISCV 0: {bounds['riscv_0']['bandwidth']} Bytes/cycle")
+
+            if not riscv1_cycles_within_bounds:
+                logger.warning(f"RISCV 1 cycles not within perf bounds.")
+            else:
+                logger.info(f"RISCV 1 cycles within perf bounds.")
+            if not riscv0_cycles_within_bounds:
+                logger.warning(f"RISCV 0 cycles not within perf bounds.")
+            else:
+                logger.info(f"RISCV 0 cycles within perf bounds.")
+            if not riscv1_bw_within_bounds:
+                logger.warning(f"RISCV 1 bandwidth not within perf bounds.")
+            else:
+                logger.info(f"RISCV 1 bandwidth within perf bounds.")
+            if not riscv0_bw_within_bounds:
+                logger.warning(f"RISCV 0 bandwidth not within perf bounds.\n")
+            else:
+                logger.info(f"RISCV 0 bandwidth within perf bounds.\n")
+
+        # assert riscv1_cycles_within_bounds
+        # assert riscv0_cycles_within_bounds
+        # assert riscv1_bw_within_bounds
+        # assert riscv0_bw_within_bounds
+
+
+def print_stats(dm_stats):
+    # Print stats per runtime host id
+    for i in range(len(dm_stats["riscv_1"]["analysis"]["series"])):
+        run_host_id = dm_stats["riscv_1"]["analysis"]["series"][i]["duration_type"][0]["run_host_id"]
+
         logger.info(f"Run host id: {run_host_id}")
-
-        # Latency
-        logger.info(f'Reader duration: {dm_stats["reader"]["analysis"]["series"][i]["duration_cycles"]}')
-        logger.info(f'Writer duration: {dm_stats["writer"]["analysis"]["series"][i]["duration_cycles"]}')
-
-        # Attributes
+        logger.info(f'RISCV 1 duration: {dm_stats["riscv_1"]["analysis"]["series"][i]["duration_cycles"]}')
+        logger.info(f'RISCV 0 duration: {dm_stats["riscv_0"]["analysis"]["series"][i]["duration_cycles"]}')
         logger.info(f"Attributes:")
-        for attr, val in dm_stats["reader"]["attributes"][run_host_id].items():
+        for attr, val in dm_stats["riscv_1"]["attributes"][run_host_id].items():
             logger.info(f"  {attr}: {val}")
         logger.info(f"\n")
 
-    # # # # # # Performance check method # # # # # #
-    reader_cycles = dm_stats["reader"]["analysis"]["series"][0]["duration_cycles"]
-    reader_cycles_lower_bound = 700
-    reader_cycles_upper_bound = 900
-    reader_cycles_within_bounds = reader_cycles_lower_bound <= reader_cycles <= reader_cycles_upper_bound
-    reader_attributes = dm_stats["reader"]["attributes"][0]
-    reader_bw = (
-        reader_attributes["Number of transactions"] * reader_attributes["Transaction size in bytes"] / reader_cycles
-    )
-    reader_bw_lower_bound = 0.07
-    reader_bw_within_bounds = reader_bw_lower_bound <= reader_bw
 
-    if not reader_cycles_within_bounds:
-        logger.warning(
-            f"Reader cycles not within bounds. Received {reader_cycles}, was expecting between {reader_cycles_lower_bound} and {reader_cycles_upper_bound}"
-        )
-    else:
-        logger.info(f"Reader cycles within bounds. Received {reader_cycles}")
-
-    if not reader_bw_within_bounds:
-        logger.warning(
-            f"Reader bandwidth not within bounds. Received {reader_bw}, was expecting above {reader_bw_lower_bound}"
-        )
-    else:
-        logger.info(f"Reader bandwidth within bounds. Received {reader_bw}")
-
-    # assert reader_cycles_within_bounds
-    # assert reader_bw_within_bounds
-
-    plot_dm_stats(dm_stats)
-
-
-def plot_dm_stats(dm_stats):
+def plot_dm_stats(dm_stats, output_file="dm_stats_plot.png"):
     # Extract data for plotting
-    reader_series = dm_stats["reader"]["analysis"]["series"]
-    writer_series = dm_stats["writer"]["analysis"]["series"]
+    riscv_1_series = dm_stats["riscv_1"]["analysis"]["series"]
+    riscv_0_series = dm_stats["riscv_0"]["analysis"]["series"]
 
     # Group data by Test id
     test_ids = set()
-    for attributes in dm_stats["reader"]["attributes"].values():
+    for attributes in dm_stats["riscv_1"]["attributes"].values():
         test_ids.add(attributes["Test id"])
-    for attributes in dm_stats["writer"]["attributes"].values():
+    for attributes in dm_stats["riscv_0"]["attributes"].values():
         test_ids.add(attributes["Test id"])
 
     test_ids = sorted(test_ids)  # Sort for consistent ordering
@@ -176,46 +307,46 @@ def plot_dm_stats(dm_stats):
         axes = subfig.subplots(1, 3)
 
         # Filter data for the current Test id
-        reader_filtered = [
+        riscv_1_filtered = [
             entry
-            for entry in reader_series
-            if dm_stats["reader"]["attributes"][entry["duration_type"][0]["run_host_id"]]["Test id"] == test_id
+            for entry in riscv_1_series
+            if dm_stats["riscv_1"]["attributes"][entry["duration_type"][0]["run_host_id"]]["Test id"] == test_id
         ]
-        writer_filtered = [
+        riscv_0_filtered = [
             entry
-            for entry in writer_series
-            if dm_stats["writer"]["attributes"][entry["duration_type"][0]["run_host_id"]]["Test id"] == test_id
+            for entry in riscv_0_series
+            if dm_stats["riscv_0"]["attributes"][entry["duration_type"][0]["run_host_id"]]["Test id"] == test_id
         ]
 
         # Aggregate data across all runtime_host_ids for the current Test id
-        reader_durations = [entry["duration_cycles"] for entry in reader_filtered]
-        writer_durations = [entry["duration_cycles"] for entry in writer_filtered]
+        riscv_1_durations = [entry["duration_cycles"] for entry in riscv_1_filtered]
+        riscv_0_durations = [entry["duration_cycles"] for entry in riscv_0_filtered]
 
-        reader_bandwidths = []
-        writer_bandwidths = []
-        reader_data_sizes = []
-        writer_data_sizes = []
+        riscv_1_bandwidths = []
+        riscv_0_bandwidths = []
+        riscv_1_data_sizes = []
+        riscv_0_data_sizes = []
 
-        for entry in reader_filtered:
+        for entry in riscv_1_filtered:
             runtime_host_id = entry["duration_type"][0]["run_host_id"]
-            attributes = dm_stats["reader"]["attributes"][runtime_host_id]
+            attributes = dm_stats["riscv_1"]["attributes"][runtime_host_id]
             transaction_size = attributes["Transaction size in bytes"]
             bandwidth = attributes["Number of transactions"] * transaction_size / entry["duration_cycles"]
-            reader_bandwidths.append(bandwidth)
-            reader_data_sizes.append(transaction_size)
+            riscv_1_bandwidths.append(bandwidth)
+            riscv_1_data_sizes.append(transaction_size)
 
-        for entry in writer_filtered:
+        for entry in riscv_0_filtered:
             runtime_host_id = entry["duration_type"][0]["run_host_id"]
-            attributes = dm_stats["writer"]["attributes"][runtime_host_id]
+            attributes = dm_stats["riscv_0"]["attributes"][runtime_host_id]
             transaction_size = attributes["Transaction size in bytes"]
             bandwidth = attributes["Number of transactions"] * transaction_size / entry["duration_cycles"]
-            writer_bandwidths.append(bandwidth)
-            writer_data_sizes.append(transaction_size)
+            riscv_0_bandwidths.append(bandwidth)
+            riscv_0_data_sizes.append(transaction_size)
 
         # Plot durations
         ax = axes[0]
-        ax.plot(reader_durations, label="Reader Duration (cycles)", marker="o")
-        ax.plot(writer_durations, label="Writer Duration (cycles)", marker="o")
+        ax.plot(riscv_1_durations, label="RISCV 1 Duration (cycles)", marker="o")
+        ax.plot(riscv_0_durations, label="RISCV 0 Duration (cycles)", marker="o")
         ax.set_xlabel("Index")
         ax.set_ylabel("Duration (cycles)")
         ax.set_title("Kernel Durations")
@@ -224,8 +355,8 @@ def plot_dm_stats(dm_stats):
 
         # Plot bandwidth
         ax = axes[1]
-        ax.plot(reader_bandwidths, label="Reader Bandwidth (bytes/cycle)", marker="o")
-        ax.plot(writer_bandwidths, label="Writer Bandwidth (bytes/cycle)", marker="o")
+        ax.plot(riscv_1_bandwidths, label="RISCV 1 Bandwidth (bytes/cycle)", marker="o")
+        ax.plot(riscv_0_bandwidths, label="RISCV 0 Bandwidth (bytes/cycle)", marker="o")
         ax.set_xlabel("Index")
         ax.set_ylabel("Bandwidth (bytes/cycle)")
         ax.set_title("Bandwidth Comparison")
@@ -234,8 +365,8 @@ def plot_dm_stats(dm_stats):
 
         # Plot size of data transferred vs bandwidth
         ax = axes[2]
-        ax.scatter(reader_data_sizes, reader_bandwidths, label="Reader", marker="o")
-        ax.scatter(writer_data_sizes, writer_bandwidths, label="Writer", marker="o")
+        ax.scatter(riscv_1_data_sizes, riscv_1_bandwidths, label="RISCV 1", marker="o")
+        ax.scatter(riscv_0_data_sizes, riscv_0_bandwidths, label="RISCV 0", marker="o")
         ax.set_xlabel("Transaction Size (bytes)")
         ax.set_ylabel("Bandwidth (bytes/cycle)")
         ax.set_title("Data Size vs Bandwidth")
@@ -243,14 +374,53 @@ def plot_dm_stats(dm_stats):
         ax.grid()
 
     # Save the combined plot
-    plt.savefig("dm_stats_plot.png")
+    plt.savefig(output_file)
     plt.close()
+    logger.info(f"dm_stats plots saved at {output_file}")
+
+
+def export_dm_stats_to_csv(dm_stats, output_file="dm_stats.csv"):
+    with open(output_file, mode="w", newline="") as csvfile:
+        writer = csv.writer(csvfile)
+
+        # Write the header
+        writer.writerow(["Kernel", "Run Host ID", "Test ID", "Latency (cycles)", "Bandwidth (bytes/cycle)"])
+
+        # Iterate over the dm_stats object
+        for kernel, kernel_data in dm_stats.items():
+            for run_host_id, attributes in kernel_data["attributes"].items():
+                test_id = attributes.get("Test id", "N/A")
+                duration_cycles = next(
+                    (
+                        entry["duration_cycles"]
+                        for entry in kernel_data["analysis"]["series"]
+                        if entry["duration_type"][0]["run_host_id"] == run_host_id
+                    ),
+                    None,
+                )
+                if duration_cycles:
+                    transaction_size = attributes.get("Transaction size in bytes", 0)
+                    num_transactions = attributes.get("Number of transactions", 0)
+                    bandwidth = (num_transactions * transaction_size) / duration_cycles if duration_cycles else 0
+                    writer.writerow([kernel, run_host_id, test_id, duration_cycles, bandwidth])
+
+    logger.info(f"dm_stats exported to {output_file}")
 
 
 if __name__ == "__main__":
-    parser = ArgumentParser(description="Generate reference outputs for LLaMA accuracy testing.")
-    parser.add_argument("-p", "--profile", action="store_true")
-    parser.add_argument("-g", "--gtest-filter", dest="gtest_filter")
+    parser = ArgumentParser(description="Generate profiling results for data movement tests.")
+    parser.add_argument(
+        "-p", "--profile", action="store_true", help="Profile the kernels. If not set, use existing profiler logs."
+    )
+    parser.add_argument("-v", "--verbose", action="store_true", help="Enable verbose logging of profiling results.")
+    parser.add_argument(
+        "-g",
+        "--gtest-filter",
+        dest="gtest_filter",
+        help="Filter for gtest tests to run. If not set and profile flag is set, all tests are run.",
+    )
+    parser.add_argument("--plot", action="store_true", help="Export profiling plots to a .png file.")
+    parser.add_argument("-r", "--report", action="store_true", help="Export profiling results to a .csv file.")
     args = parser.parse_args()
 
     run_dm_tests(*vars(args).values())

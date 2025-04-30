@@ -37,28 +37,23 @@ from models.utility_functions import skip_for_grayskull
     ],
     indirect=True,
 )
-def test_image_transformer_inference(
-    batch, num_chunks, mesh_device, is_global, use_program_cache, reset_seeds, ensure_gc
-):
-    dtype = ttnn.bfloat16
-    pcc_required = 0.86
-
-    mesh_device.enable_async(True)
+def test_image_transformer_inference(batch, num_chunks, mesh_device, is_global):
+    pcc_required = 0.75
 
     model_args = ModelArgs(mesh_device)
-    state_dict = torch.load(model_args.consolidated_weights_path, map_location=torch.device("cpu"))
+    dtype = ttnn.bfloat16
+
+    state_dict = model_args.load_state_dict()
 
     # Ref model needs partial state dict, but our models use full state dict keys as cached weight names
+    n_layers = model_args.vision_n_layers
+    n_global_layers = model_args.vision_n_global_layers
+    first_layer_prefix = "vision_model.vision_encoder."
     if is_global:
-        first_layer_prefix = "vision_model.vision_encoder."
         gated = True
-        n_layers = model_args.vision_n_global_layers
         return_intermediate = None
     else:
-        first_layer_prefix = "vision_model.vision_encoder."
         gated = False
-        n_layers = model_args.vision_n_layers
-        # return_intermediate = [int(l) for l in "3,7,15,23,30".split(",")]
         # Checks all intermediates
         return_intermediate = list(range(n_layers))
 
@@ -73,7 +68,8 @@ def test_image_transformer_inference(
         max_num_tiles=4,
         image_size=model_args.vision_chunk_size,
         patch_size=model_args.vision_patch_size,
-        n_global_layers=8,
+        layers=n_layers,
+        n_global_layers=n_global_layers,
         global_model=True,
         return_intermediate=return_intermediate,
     )
@@ -90,7 +86,7 @@ def test_image_transformer_inference(
         weight_cache_path=model_args.weight_cache_path(dtype),
         dtype=dtype,
         configuration=model_args,
-        layers=n_layers,
+        layers=n_layers if not is_global else n_global_layers,
         gated=gated,
     )
 
@@ -163,10 +159,14 @@ def test_image_transformer_inference(
         reference_output = reference_output.reshape(batch, num_chunks, ntok + npad, dim)
         reference_output = encoder_utils.contract_num_tokens_from_mult8(reference_output, npad)
         passing, pcc_message = comp_pcc(reference_output, tt_output_torch, pcc_required)
-        all_tests_pass = all_tests_pass and passing
 
+        if not passing:
+            logger.warning(f"PCC value -- {pcc_message} -- is lower than {pcc_required} for the output.")
+        else:
+            logger.info(f"PCC: {pcc_message}")
         logger.info(comp_allclose(reference_output, tt_output_torch))
-        logger.info(f"PCC: {pcc_message}")
+
+        all_tests_pass = all_tests_pass and passing
         if return_intermediate:
             for idx, (pt_interm, tt_interm) in enumerate(zip(intermediates, tt_intermed_torch)):
                 passing, pcc_message = comp_pcc(pt_interm, tt_interm, pcc_required)

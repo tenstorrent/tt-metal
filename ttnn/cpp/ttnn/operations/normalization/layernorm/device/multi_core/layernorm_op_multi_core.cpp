@@ -1487,7 +1487,7 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
             tt::tt_metal::CreateCircularBuffer(program, all_worker_and_storage_cores, output_reshard_cb_config);
     }
 
-    const auto& cores = corerange_to_cores(all_cores, all_cores.num_cores(), row_wise = row_wise);
+    const auto& cores = corerange_to_cores(all_cores, all_cores.num_cores(), row_wise);
 
     // Runtime Args
     std::vector<KernelHandle> writer_kernel_ids;
