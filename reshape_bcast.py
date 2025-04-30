@@ -1,33 +1,17 @@
 import pandas as pd
 from collections import defaultdict
 import os
+import glob
 
-# List of CSV files to process
-csv_files = [
-    "output_log_hypot_bcast.csv",
-    "output_log_xlogy_bcast.csv",
-    "output_log_minimum_bcast.csv",
-    "output_log_maximum_bcast.csv",
-    "output_log_atan2_bcast.csv",
-    "output_log_nextafter_bcast.csv",
-    "output_log_addalpha_bcast.csv",
-    "output_log_subalpha_bcast.csv",
-    "output_log_isclose_bcast.csv",
-    "output_log_remainder_bcast.csv",
-    "output_log_fmod_bcast.csv",
-    "output_log_div_bcast.csv",
-    "output_log_div_no_nan_bcast.csv",
-    "output_log_scatter_bcast.csv",
-    "output_log_outer_bcast.csv",
-    "output_log_gcd_bcast.csv",
-    "output_log_lcm_bcast.csv",
-]
 
 ARCH = os.getenv("ARCH_NAME")
 WH_BH = "WH" if ARCH == "wormhole_b0" else "BH"
 # Folder path
 folder = f"/home/ubuntu/tt-metal/binary_ng_{WH_BH}/binary_ng_{WH_BH}_full"
 folder_reshaped = f"/home/ubuntu/tt-metal/binary_ng_{WH_BH}/binary_ng_{WH_BH}_full_reshaped"
+
+# Get all CSV files from the folder
+csv_files = [os.path.basename(f) for f in glob.glob(os.path.join(folder, "*.csv"))]
 
 # Define all dtype combinations to track
 dtype_combos = [
