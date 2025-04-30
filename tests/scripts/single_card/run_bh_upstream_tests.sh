@@ -5,7 +5,7 @@ echo "[upstream-tests] Run BH python upstream tests"
 pytest --collect-only tests/ttnn/unit_tests
 
 echo "[upstream-tests] Running BH upstream metal runtime tests"
-TT_METAL_SLOW_DISPATCH_MODE=1 ./tests/scripts/run_cpp_fd2_tests.sh
+ARCH_NAME=blackhole TT_METAL_SLOW_DISPATCH_MODE=1 ./tests/scripts/run_cpp_fd2_tests.sh
 # I wonder why we can't put these in the validation suite?
 ./build/test/tt_metal/unit_tests_dispatch --gtest_filter=CommandQueueSingleCardProgramFixture.*
 ./build/test/tt_metal/unit_tests_dispatch --gtest_filter=CommandQueueProgramFixture.*
