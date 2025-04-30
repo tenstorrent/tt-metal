@@ -395,7 +395,7 @@ def test_all_reduce_qkv_heads_fuse(
     trace_mode,
     validate_all,
 ):
-    if len(mesh_device.get_devices()) != 32:
+    if mesh_device.get_num_devices() != 32:
         pytest.skip("Not TG!")
     profiler = BenchmarkProfiler()
     run_all_reduce_qkv_heads_fuse_perf_impl(
@@ -472,7 +472,7 @@ def test_all_reduce_qkv_heads_fuse_perf(
     trace_mode,
     validate_all,
 ):
-    if len(mesh_device.get_devices()) != 32:
+    if mesh_device.get_num_devices() != 32:
         pytest.skip("Not TG!")
     profiler = BenchmarkProfiler()
     run_all_reduce_qkv_heads_fuse_perf_impl(

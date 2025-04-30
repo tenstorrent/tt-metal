@@ -37,7 +37,7 @@ class TtLlamaTilePositionEmbedding(LightweightModule):
         super().__init__()
 
         self.mesh_device = mesh_device
-        self.num_devices = len(self.mesh_device.get_devices())
+        self.num_devices = self.mesh_device.get_num_devices()
 
         self.num_tiles = num_tiles
         self.width = width

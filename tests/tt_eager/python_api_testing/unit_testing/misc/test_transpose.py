@@ -1169,8 +1169,8 @@ def test_transpose_16411(device):
 @pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT])
 def test_transpose_high_rank(*, device: ttnn.Device, rank: int, indices, layout):
     torch.manual_seed(2005)
-    ttnn.disable_and_clear_program_cache(device)
-    ttnn.enable_program_cache(device)
+    device.disable_and_clear_program_cache()
+    device.enable_program_cache()
 
     shape = [2] * rank
 

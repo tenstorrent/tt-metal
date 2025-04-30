@@ -30,7 +30,7 @@ def test_run_resnet50_inference(
     math_fidelity,
     model_location_generator,
 ):
-    if len(mesh_device.get_devices()) != 8:
+    if mesh_device.get_num_devices() != 8:
         pytest.skip("Not T3K!")
 
     run_resnet50_inference(
@@ -58,7 +58,7 @@ def test_run_resnet50_trace_inference(
     math_fidelity,
     model_location_generator,
 ):
-    if len(mesh_device.get_devices()) != 8:
+    if mesh_device.get_num_devices() != 8:
         pytest.skip("Not T3K!")
 
     run_resnet50_trace_inference(
@@ -86,7 +86,7 @@ def test_run_resnet50_2cqs_inference(
     math_fidelity,
     model_location_generator,
 ):
-    if len(mesh_device.get_devices()) != 8:
+    if mesh_device.get_num_devices() != 8:
         pytest.skip("Not T3K!")
 
     run_resnet50_2cqs_inference(
@@ -116,7 +116,7 @@ def test_run_resnet50_trace_2cqs_inference(
     math_fidelity,
     model_location_generator,
 ):
-    if len(mesh_device.get_devices()) != 8:
+    if mesh_device.get_num_devices() != 8:
         pytest.skip("Not T3K!")
 
     run_resnet50_trace_2cqs_inference(

@@ -100,7 +100,7 @@ def run_all_reduce_test(
         eq, output = comp_pcc(tt_output_tensor, golden_canonical_out_tensor)
         mismatch = mismatch or not eq
         if not eq:
-            logger.error(f"output mismatch for tensor {i}. Mesh device ID: {mesh_device.get_devices()[i].id()}")
+            logger.error(f"output mismatch for tensor {i}. Mesh device ID: {mesh_device.get_device_ids()[i]}")
             if debug:
                 for w in range(tt_output_tensor.shape[0]):
                     for z in range(tt_output_tensor.shape[1]):
@@ -365,7 +365,7 @@ def run_all_reduce_with_mesh_tensor_along_row(
         eq, output = comp_pcc(tt_output_tensor, golden_canonical_out_tensor)
         mismatch = mismatch or not eq
         if not eq:
-            logger.error(f"output mismatch for tensor {i}. Mesh device ID: {mesh_device.get_devices()[i].id()}")
+            logger.error(f"output mismatch for tensor {i}. Mesh device ID: {mesh_device.get_device_ids()[i]}")
             if debug:
                 for w in range(tt_output_tensor.shape[0]):
                     for z in range(tt_output_tensor.shape[1]):
@@ -421,7 +421,7 @@ def test_line_all_reduce_on_TG_rows_post_commit(
     replication_factor,
     num_iters=16,
 ):
-    if len(mesh_device.get_devices()) != 32:
+    if mesh_device.get_num_devices() != 32:
         pytest.skip("Not TG!")
 
     run_all_reduce_with_mesh_tensor_along_row(
@@ -478,7 +478,7 @@ def test_line_all_reduce_on_TG_cols_post_commit(
     replication_factor,
     num_iters=16,
 ):
-    if len(mesh_device.get_devices()) != 32:
+    if mesh_device.get_num_devices() != 32:
         pytest.skip("Not TG!")
 
     run_all_reduce_with_mesh_tensor_along_row(

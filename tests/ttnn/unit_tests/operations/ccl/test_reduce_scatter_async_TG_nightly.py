@@ -64,7 +64,7 @@ def test_line_reduce_scatter_on_TG_rows_post_commit(
     use_persistent_output,
     num_iters=16,
 ):
-    if len(mesh_device.get_devices()) != 32:
+    if mesh_device.get_num_devices() != 32:
         pytest.skip("Not TG!")
     run_line_reduce_scatter_on_TG_with_mesh_tensor_along_rows(
         mesh_device,
@@ -134,7 +134,7 @@ def test_line_reduce_scatter_on_TG_cols_post_commit(
     use_persistent_output,
     num_iters=16,
 ):
-    if len(mesh_device.get_devices()) != 32:
+    if mesh_device.get_num_devices() != 32:
         pytest.skip("Not TG!")
 
     run_line_reduce_scatter_on_TG_with_mesh_tensor_along_rows(

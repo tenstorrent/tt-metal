@@ -190,7 +190,6 @@ def run_falcon_demo_kv(
         logger.info("Running in performance measurement mode (invalid outputs)!")
 
     configuration = FalconConfig(**model_config_entries)
-    devices = mesh_device.get_devices()
 
     profiler.start(f"loading_inputs")
     if len(user_input) == 1:
@@ -223,7 +222,9 @@ def run_falcon_demo_kv(
     profiler.end(f"tokenizing_inputs")
 
     # Update model_config for prefill
-    model_config = get_model_config(model_config_str_for_prefill, "prefill", [1, prefill_ids.shape[1]], len(devices))
+    model_config = get_model_config(
+        model_config_str_for_prefill, "prefill", [1, prefill_ids.shape[1]], mesh_device.get_num_devices()
+    )
 
     tt_cache_path = get_tt_cache_path(
         model_version, model_subdir="Falcon", default_dir=model_config["DEFAULT_CACHE_PATH"]
@@ -289,7 +290,9 @@ def run_falcon_demo_kv(
 
     ### First run decode stage with compile ###
     # Update model_config for decode
-    model_config = get_model_config(model_config_str_for_decode, "decode", [batch_size, 1], len(devices))
+    model_config = get_model_config(
+        model_config_str_for_decode, "decode", [batch_size, 1], mesh_device.get_num_devices()
+    )
     tt_FalconCausalLM_singlelayer.set_model_config(model_config)
 
     logger.info("Running 1st run decode stage with compile...")
@@ -331,7 +334,9 @@ def run_falcon_demo_kv(
     del kv_cache_singlelayer
 
     # Update model_config for prefill
-    model_config = get_model_config(model_config_str_for_prefill, "prefill", [1, prefill_ids.shape[1]], len(devices))
+    model_config = get_model_config(
+        model_config_str_for_prefill, "prefill", [1, prefill_ids.shape[1]], mesh_device.get_num_devices()
+    )
 
     logger.info("Moving weights (all layers) to device; might take some time...")
     profiler.start(f"moving_to_device")
@@ -436,7 +441,9 @@ def run_falcon_demo_kv(
     logger.info("Running inference decode stage...")
 
     # Update model_config for decode
-    model_config = get_model_config(model_config_str_for_decode, "decode", [batch_size, 1], len(devices))
+    model_config = get_model_config(
+        model_config_str_for_decode, "decode", [batch_size, 1], mesh_device.get_num_devices()
+    )
     tt_FalconCausalLM.set_model_config(model_config)
 
     decode_ids = torch.zeros(batch_size, 1, dtype=torch.int64)

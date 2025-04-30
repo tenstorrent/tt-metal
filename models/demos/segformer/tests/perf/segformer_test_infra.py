@@ -137,7 +137,7 @@ class SegformerTestInfra:
         else:
             exit("Unsupported device")
 
-        num_devices = 1 if isinstance(device, ttnn.Device) else device.get_num_devices()
+        num_devices = device.get_num_devices()
 
         torch_input_tensor = self.inputs.pixel_values
         n, c, h, w = torch_input_tensor.shape

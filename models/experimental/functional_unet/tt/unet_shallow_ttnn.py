@@ -48,10 +48,7 @@ def get_core_grid_from_num_cores(num_cores: int, grid_rows: int = 8, grid_cols: 
 
 def is_valid_device_for_unet(device):
     """Check that each device is an 8x8 grid."""
-    if isinstance(device, ttnn.MeshDevice):
-        return all([is_valid_device_for_unet(d) for d in device.get_devices()])
-    else:
-        return device.core_grid.x == 8 and device.core_grid.y == 8
+    return device.core_grid.x == 8 and device.core_grid.y == 8
 
 
 def preprocess_unet_input_tensor(input_tensor, min_channels=16):

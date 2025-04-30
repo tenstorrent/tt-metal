@@ -505,7 +505,7 @@ class ModelArgs:
 
         self.tokenizer = None if dummy_weights else self.create_tokenizer()
 
-        device = mesh_device.get_devices()[0] if mesh_device is not None else None
+        device = mesh_device if mesh_device is not None else None
         self.cluster_shape = list(mesh_device.shape) if mesh_device is not None else None
         self.is_galaxy = self.num_devices == 32
         if device is not None:  # Avoid issue with test_torch.py not having a device
