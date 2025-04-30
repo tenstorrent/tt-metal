@@ -93,8 +93,7 @@ def test_model_inference(
     # Use instruct weights instead of general weights
     instruct = True
 
-    # model_args = ModelArgs(mesh_device, max_batch_size=batch_size, optimizations=optimizations, max_seq_len=(128 * 1024))
-    # model_args.n_layers = 2
+    # Load TTNN model
     model_args, tt_model, tt_kv_cache, state_dict = create_tt_model(
         mesh_device,
         instruct=instruct,
@@ -112,57 +111,41 @@ def test_model_inference(
     tokenizer = model_args.tokenizer
     generator = Generator([tt_model], [model_args], mesh_device, tokenizer=tokenizer)
 
-    logger.info("Loading weights...")
-    state_dict_prefix = model_args.get_state_dict_prefix("", None)
-    reference_state_dict = {
-        k[len(state_dict_prefix) :]: v
-        for k, v in state_dict.items()
-        if (
-            any([f"{state_dict_prefix}layers.{i}." in k for i in range(model_args.n_layers)])
-            or any(
-                [
-                    f"{state_dict_prefix}{name}" in k
-                    for name in ["tok_embeddings.weight", "norm.weight", "output.weight"]
-                ]
-            )
-        )
-    }
-    logger.info("Finished loading weights.")
-
+    # Load prompt
     current_file_path = os.path.abspath(__file__)
     current_file_dir = os.path.dirname(current_file_path)
     prompt_file = os.path.join(current_file_dir, "tale-of-two-cities.txt.bz2")
-
     with bz2.open(prompt_file, "rt", encoding="utf-8") as f:
         prompt = f.read()
-
     encoded_prompt = model_args.encode_prompt(prompt, instruct=instruct)[:seq_len]
-
     logger.info(f"Prompt length: {len(encoded_prompt)} tokens")
 
+    # Load reference model
     if run_ref_pt:
         logger.info("Loading reference model...")
+        state_dict_prefix = model_args.get_state_dict_prefix("", None)
+        reference_state_dict = {
+            k[len(state_dict_prefix) :]: v
+            for k, v in state_dict.items()
+            if (
+                any([f"{state_dict_prefix}layers.{i}." in k for i in range(model_args.n_layers)])
+                or any(
+                    [
+                        f"{state_dict_prefix}{name}" in k
+                        for name in ["tok_embeddings.weight", "norm.weight", "output.weight"]
+                    ]
+                )
+            )
+        }
         reference_model = model_args.reference_transformer()
         reference_model.load_state_dict(reference_state_dict)
+        # Embedding on host
+        embd = model_args.reference_embedding()
+        embd.load_state_dict({"emb.weight": state_dict[f"{state_dict_prefix}tok_embeddings.weight"]})
         logger.info("Finished loading reference model.")
 
-    # Embedding on host
-    embd = model_args.reference_embedding()
-    embd.load_state_dict({"emb.weight": state_dict[f"{state_dict_prefix}tok_embeddings.weight"]})
-
-    # pre-compute the rotational embedding matrix and send to device
-    # rot_mats = get_prefill_rot_mat(
-    #     model_args.head_dim,
-    #     mesh_device,
-    #     seq_len,
-    #     model_args.rope_theta,
-    #     model_args.rope_scaling_factor,
-    #     model_args.orig_context_len,
-    # )
-    # Setup page table
-    # page_table_tt = None
     paged_attention_config = None
-
+    page_table = None
     if paged_attention:
         paged_attention_config = PagedAttentionConfig(
             block_size=page_params["page_block_size"],
@@ -175,57 +158,15 @@ def test_model_inference(
         page_table = reverse_permutation.reshape(
             model_args.max_batch_size, paged_attention_config.max_num_blocks // model_args.max_batch_size
         )
-        # page_table_tt = ttnn.from_torch(
-        #     page_table,
-        #     device=mesh_device,
-        #     dtype=ttnn.int32,
-        #     layout=ttnn.ROW_MAJOR_LAYOUT,
-        #     mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-        # )
-
-    # Load TTNN model
-    # tt_model = Transformer(
-    #     args=model_args,
-    #     mesh_device=mesh_device,
-    #     dtype=dtype,
-    #     state_dict=state_dict,
-    #     weight_cache_path=model_args.weight_cache_path(dtype),
-    #     paged_attention_config=paged_attention_config,
-    # )
-
-    logger.info("Model and caches loaded.")
 
     # Select the first token from the prompt for initial decoding
     encoded_prompt_tensor = torch.tensor(encoded_prompt)  # [:,0]
     tt_prefill_input = encoded_prompt_tensor.unsqueeze(0)
     prompt_lens = [seq_len]
-    pt_prefill_input = embd(encoded_prompt_tensor).view(batch_size, seq_len, -1)
-
-    # tt_prefill_input = pt_prefill_input
-
-    # tt_prefill_input = model_args.prepare_residual_tensor_prefill(
-    #     pt_prefill_input,
-    # )
-
     start_pos = 0
+
     # Run TT model
     logger.info(f"Running TT model...")
-    # tt_out = tt_model(
-    #     tt_prefill_input,
-    #     current_pos=None,
-    #     rot_mats=rot_mats,
-    #     user_id=0,
-    #     mode="prefill",
-    #     page_table=page_table_tt,
-    # )
-    # # Convert ttnn tensor to torch tensor
-    # tt_out = ttnn.to_torch(
-    #     tt_out,
-    #     mesh_composer=ttnn.ConcatMesh2dToTensor(
-    #         mesh_device, dims=(1, 3) if model_args.is_galaxy else (1, 3), mesh_shape=model_args.cluster_shape
-    #     ),
-    # )
-    # tt_output_torch = tt_out[:, 0:1, :, : model_args.dim].view(batch_size, seq_len, -1)  # [ batch, seq, hidden_dim]
     tt_output_torch = generator.prefill_forward_text(
         tt_prefill_input,
         page_table=page_table,
@@ -234,15 +175,15 @@ def test_model_inference(
     )
     logger.info(f"Finished running TT model.")
 
-    if run_ref_pt:  # Run reference model
+    if run_ref_pt:
+        # Run reference model
         logger.info(f"Running reference model...")
-        # ref_output = reference_model(pt_prefill_input, start_pos, mode="prefill")  # previously was returning out before lm head?
+        pt_prefill_input = embd(encoded_prompt_tensor).view(batch_size, seq_len, -1)
         ref_output = reference_model(pt_prefill_input, start_pos)
         ref_output = ref_output[:, -1:, :]  # Get last token since TT model only returns the last token
         logger.info(f"Finished running reference model.")
 
-    # Measure PCC if also running reference model
-    if run_ref_pt:
+        # Measure PCC if also running reference model
         all_tests_pass = True
 
         # Check output pcc
@@ -289,30 +230,6 @@ def test_model_inference(
                                 :batch_size, ...
                             ]
                         )
-                    tt_layer_present = [
-                        (
-                            ttnn.to_torch(
-                                cache,
-                                mesh_composer=ttnn.ConcatMesh2dToTensor(
-                                    mesh_device,
-                                    dims=(1, 0) if model_args.is_galaxy else (0, 1),
-                                    mesh_shape=model_args.cluster_shape,
-                                ),
-                            )[reverse_permutation]
-                            .reshape(
-                                model_args.max_batch_size,
-                                paged_attention_config.max_num_blocks // model_args.max_batch_size,
-                                model_args.n_kv_heads,
-                                paged_attention_config.block_size,
-                                model_args.head_dim,
-                            )
-                            .transpose(1, 2)
-                            .reshape(model_args.max_batch_size, model_args.n_kv_heads, -1, model_args.head_dim)[
-                                :batch_size, ...
-                            ]
-                        )
-                        for cache in tt_model.layers[i].attention.layer_past
-                    ]
                 else:
                     for layer_past in tt_model.layers[i].attention.layer_past_list[0]:
                         tt_layer_present.append(
