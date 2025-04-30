@@ -148,9 +148,4 @@ struct MultiDeviceHostStorage {
 
 using Storage = std::variant<HostStorage, DeviceStorage, MultiDeviceHostStorage>;
 
-template <typename T>
-constexpr void raise_unsupported_storage() {
-    static_assert(tt::stl::concepts::always_false_v<T>, "Unsupported Storage");
-}
-
 }  // namespace tt::tt_metal

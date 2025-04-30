@@ -218,6 +218,7 @@ set(TTNN_BASE_SRCS
 )
 
 set(TENSOR_SRC
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/tensor/tensor_attributes.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/tensor/tensor_impl.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/tensor/tensor.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/tensor/tensor_ops.cpp
