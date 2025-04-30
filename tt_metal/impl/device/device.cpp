@@ -1026,6 +1026,8 @@ void Device::clear_dram_state() {
     for (int channel = 0; channel < num_dram_channels; ++channel) {
         detail::WriteToDeviceDRAMChannel(this, channel, start_address, zero_vec);
     }
+
+    tt::tt_metal::MetalContext::instance().get_cluster().dram_barrier(this->id());
 }
 
 void Device::compile_command_queue_programs() {
