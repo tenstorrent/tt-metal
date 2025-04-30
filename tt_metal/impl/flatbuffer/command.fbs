@@ -63,6 +63,119 @@ table EnqueueReadBufferCommand {
   blocking: bool;
 }
 
+
+//NEW:
+//TODO: check all of these to see which are actually mcq and which can just be cq
+table MeshBufferCreateCommand {
+  mesh_buffer_config: MeshBufferConfig;
+  device_local_config: DeviceLocalBufferConfig;
+  mesh_device_id: int; // Reference to IDevice of type MeshDevice *mesh_device;
+  address: uint64
+}
+
+table MeshWorkloadCreateCommand {
+  global_id: uint32;  //Reference to MeshWorkload
+}
+
+AddProgramToMeshWorkloadCommand {
+  mesh_workload_global_id: uint32; // Reference to MeshWorkload
+  progprogram_global_id: uint32; // Reference to Program
+  device_range : MeshCoordinateRange;
+}
+
+EnqueueMeshWorkloadCommand {
+  mesh_workload_global_id: uint32; // Reference to MeshWorkload
+  blocking: bool;
+}
+
+table MeshEvent {
+  id: uint32 = 0;
+  mesh_device_id: int; // Reference to IDevice of type MeshDevice *mesh_device;
+  mesh_cq_id: uint32 = 0;
+  device_range: MeshCoordinateRange;
+}
+
+table EnqueueRecordEventCommand {
+  cq_global_id: uint32;       // reference to CommandQueue of type MeshCommandQueue
+  sub_device_ids: [ubyte];    // array of uint8 values representing SubDeviceId::Id
+  device_range: MeshCoordinateRange;
+}
+
+table EnqueueRecordEventToHostCommand {
+  cq_global_id: uint32;       // reference to CommandQueue of type MeshCommandQueue
+  sub_device_ids: [ubyte];    // array of uint8 values representing SubDeviceId::Id
+  device_range: MeshCoordinateRange;
+}
+
+table EnqueueWaitForEventCommand {
+  cq_global_id: uint32;       // reference to CommandQueue of type MeshCommandQueue
+  event: MeshEvent;
+}
+
+table EventSynchronizeCommand {
+  event: MeshEvent;
+}
+
+//TODO: in impl, add this to the meshtrace list, it will return a meshtraceid
+table BeginTraceCapture {
+  mesh_device_id: int;  // Reference to IDevice of type MeshDevice *mesh_device;
+  cq_global_id: uint32; // reference to CommandQueue of type MeshCommandQueue
+}
+
+table EndTraceCapture {
+  mesh_device_id: int;  // Reference to IDevice of type MeshDevice *mesh_device;
+  cq_global_id: uint32; // reference to CommandQueue of type MeshCommandQueue
+  trace_id: uint32;
+}
+
+table ReplayTrace {
+  mesh_device_id: int;  // Reference to IDevice of type MeshDevice *mesh_device;
+  cq_global_id: uint32; // reference to CommandQueue of type MeshCommandQueue
+  trace_id: uint32;
+  blocking: bool;
+}
+
+table ReleaseTrace {
+  mesh_device_id: int;  // Reference to IDevice of type MeshDevice *mesh_device;
+  trace_id: uint32;
+}
+
+table Synchronize {
+  mesh_device_id: int;  // Reference to IDevice of type MeshDevice *mesh_device;
+  cq_global_id: uint32; // reference to CommandQueue of type MeshCommandQueue
+  sub_device_ids: [ubyte];
+}
+
+table EnqueueReadMeshBuffer {
+  cq_global_id: uint32; // reference to CommandQueue of type MeshCommandQueue TODO: legit mcq
+  dst: [Any];
+  mesh_global_id: uint32; // Reference to MeshBuffer used as src
+  blocking: bool = true;
+}
+
+table EnqueueWriteMeshBuffer {
+  cq_global_id: uint32; // reference to CommandQueue of type MeshCommandQueue TODO: legit mcq
+  mesh_global_id: uint32 // Reference to MeshBuffer used as dest
+  src: [Any];
+  blocking: bool = false;
+}
+
+void ReadShard(
+  cq_global_id: uint32; // reference to CommandQueue of type MeshCommandQueue TODO: legit mcq
+  dst: [Any];
+  mesh_global_id: uint32 // Reference to MeshBuffer used as src
+  coord: MeshCoordinate;
+  blocking: bool = true;
+
+table WriteShard {
+  cq_global_id: uint32; // reference to CommandQueue of type MeshCommandQueue TODO: legit mcq
+  mesh_global_id: uint32 // Reference to MeshBuffer used as dest
+  src: [Any];
+  coord: MeshCoordinate;
+  blocking: bool = false;
+}
+//ENDNEW
+
 table FinishCommand {
   cq_global_id: uint32;       // reference to CommandQueue
   sub_device_ids: [ubyte];    // array of uint8 values representing SubDeviceId::Id

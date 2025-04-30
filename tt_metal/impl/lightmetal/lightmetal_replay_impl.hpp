@@ -12,6 +12,8 @@
 
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/device.hpp>
+#include <tt-metalium/mesh_workload.hpp>
+#include <tt-metalium/mesh_buffer.hpp>
 
 namespace tt::tt_metal {
 class TraceDescriptor;
@@ -102,6 +104,11 @@ public:
     ::tt::tt_metal::CBHandle get_cb_handle_from_map(uint32_t global_id) const;
     void remove_cb_handle_from_map(uint32_t global_id);
 
+    void add_mesh_workload_to_map(
+        uint32_t global_id, const std::shared_ptr<::tt::tt_metal::MeshWorkload>& meshworkload);
+    std::shared_ptr<::tt::tt_metal::MeshWorkload> get_mesh_workload_from_map(uint32_t global_id) const;
+    void remove_mesh_workload_from_map(uint32_t global_id);
+
     // Return the TraceDescriptor for a given trace_id from flatbuffer.
     std::optional<TraceDescriptor> get_trace_by_id(uint32_t target_trace_id);
 
@@ -127,6 +134,10 @@ private:
     tt::tt_metal::IDevice* device_ = nullptr;
 
     // Object maps for storing objects by global_id
+
+    std::vector<distributed::MeshTraceId> trace_id;
+    std::unordered_map<uint32_t, std::shared_ptr<tt::tt_metal::distributed::MeshBuffer>> mesh_buffer_map_;
+    std::unordered_map<uint32_t, std::shared_ptr<tt::tt_metal::distributed::MeshWorkload>> mesh_workload_map_;
     std::unordered_map<uint32_t, std::shared_ptr<::tt::tt_metal::Buffer>> buffer_map_;
     std::unordered_map<uint32_t, std::shared_ptr<::tt::tt_metal::Program>> program_map_;
     std::unordered_map<uint32_t, tt::tt_metal::KernelHandle> kernel_handle_map_;

@@ -81,6 +81,11 @@ private:
     std::unordered_map<CBHandle, uint32_t> cb_handle_to_global_id_map_;
     // TODO (kmabee) - consider adding map for CommandQueue object.
 
+    // TODO: fix this
+
+    std::unordered_map<uint64_t, uint32_t> mesh_buffer_id_to_global_id_map_;
+    std::unordered_map<MeshWorkload, uint32_t> mesh_workload_to_global_id_map_;
+
     LightMetalCaptureContext(const LightMetalCaptureContext&) = delete;
     LightMetalCaptureContext& operator=(const LightMetalCaptureContext&) = delete;
 };

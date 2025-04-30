@@ -13,6 +13,8 @@ namespace tt::tt_metal {
 LightMetalReplay::LightMetalReplay(LightMetalBinary&& binary, IDevice* device) :
     pimpl_(std::make_unique<detail::LightMetalReplayImpl>(std::move(binary), device)) {}
 
+// TODO: enforce meshdevice checks
+
 LightMetalReplay::~LightMetalReplay() = default;
 
 LightMetalReplay::LightMetalReplay(LightMetalReplay&&) noexcept = default;
