@@ -79,7 +79,7 @@ class ModelOptimizations:
         """Configuration optimized for accuracy
         Only 70B models uses bfp4 MLPs in this configuration
         """
-        if model_name in ["Llama3.1-70B", "DeepSeek-R1-Distill-Llama-70B", "Qwen2.5-72B"]:
+        if model_name in ["Llama3.1-70B", "Llama3.2-90B-Instruct", "DeepSeek-R1-Distill-Llama-70B", "Qwen2.5-72B"]:
             inst = ModelOptimizations.performance(model_name)
         else:
             inst = cls()
@@ -322,6 +322,7 @@ class ModelArgs:
         "LLAMA3_1_8B_PARAMS": "models/tt_transformers/model_params/Llama3.1-8B-Instruct",
         "LLAMA3_2_11B_PARAMS": "models/tt_transformers/model_params/Llama3.2-11B-Vision-Instruct",
         "LLAMA3_1_70B_PARAMS": "models/tt_transformers/model_params/Llama3.1-70B-Instruct",
+        "LLAMA3_2_90B_PARAMS": "models/tt_transformers/model_params/Llama3.2-90B-Vision-Instruct",
     }
 
     def __init__(
@@ -349,6 +350,7 @@ class ModelArgs:
         self.max_batch_size = max_batch_size
         self.tile_size = 32
         self.is_70b = False
+        self.is_90b = False
         self.from_hf_url = False  # updated below if true
         self.prefill_len_cutoff = 512 if self.arch_name == "blackhole" else 1024
         # TODO the following is parametrized for a vocab size of 128256 (used in LLama3). Should generalize for other models
@@ -431,6 +433,8 @@ class ModelArgs:
                 local_params = "LLAMA3_2_11B_PARAMS"
             elif "3.1-70B" in self.CKPT_DIR:
                 local_params = "LLAMA3_1_70B_PARAMS"
+            elif "3.2-90B" in self.CKPT_DIR:
+                local_params = "LLAMA3_2_90B_PARAMS"
             else:
                 raise ValueError(
                     f"No local params found for {self.CKPT_DIR}, dummy weights are not supported for this model"
@@ -447,6 +451,7 @@ class ModelArgs:
                 "Llama3.1-8B": {"N150": 4, "N300": 64, "T3K": 128, "TG": 128, "P150x4": 128},
                 "Llama3.2-11B": {"N150": 4, "N300": 64, "T3K": 128, "TG": 128, "P150x4": 128},
                 "Llama3.1-70B": {"N150": None, "N300": None, "T3K": 32, "TG": 128, "P150x4": 128},
+                "Llama3.2-90B": {"N150": None, "N300": None, "T3K": 32, "TG": 128, "P150x4": 128},
                 "DeepSeek-R1-Distill-Llama-70B": {"N150": None, "N300": None, "T3K": 32, "TG": 128, "P150x4": 128},
                 "Qwen2.5-7B": {"N150": 4, "N300": 64, "T3K": 128, "TG": 128, "P150x4": 128},
                 "Qwen2.5-72B": {"N150": None, "N300": None, "T3K": 32, "TG": 128, "P150x4": 128},
@@ -834,8 +839,8 @@ class ModelArgs:
             # glx doesn't support DRAM sharded matmuls yet
             self.model_config["XQKV_DECODE_PROGCFG"] = (
                 ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-                    compute_with_storage_grid_size=(8, 5 if self.is_70b else lm_head_num_rows),
-                    in0_block_w=2 if self.is_70b else 1,
+                    compute_with_storage_grid_size=(8, 5 if self.is_70b or self.is_90b else lm_head_num_rows),
+                    in0_block_w=2 if self.is_70b or self.is_90b else 1,
                     out_subblock_h=1,
                     out_subblock_w=1,
                     per_core_M=1,
@@ -1351,6 +1356,10 @@ class ModelArgs:
             self.model_name = "Llama3.1-70B" + ("-Instruct" if self.instruct else "")
             self.rope_scaling_factor = 8
             self.is_70b = True  # self.dim == 8192 and self.n_layers == 80
+        elif "3.2-90B" in checkpoint_dir:
+            self.model_name = "Llama3.2-90B" + ("-Instruct" if self.instruct else "")
+            self.rope_scaling_factor = 8
+            self.is_90b = True
         else:
             logger.warning(f"Unknown Meta-style model: {checkpoint_dir}")
         self.orig_context_len = 8192
