@@ -79,8 +79,9 @@ TypecastProgramFactory::cached_program_t TypecastProgramFactory::create(
 
     std::vector<uint32_t> compute_kernel_args_group_1 = {
         num_tiles_per_core_group_1,  // per_core_block_cnt
-        1                            // per_core_block_size
-    };
+        1,                           // per_core_block_size
+        src0_cb_index,
+        output_cb_index};
 
     std::vector<UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
     if (args.preserve_fp32_precision) {
@@ -91,7 +92,7 @@ TypecastProgramFactory::cached_program_t TypecastProgramFactory::create(
 
     std::map<string, string> unary_defines;
     unary_defines["TYPECAST_LLK"] = fmt::format(
-        "typecast_tile<{0}u, {1}u>(0);",
+        "typecast_tile<{0}u, {1}u>",
         (uint32_t)datatype_to_dataformat_converter(input_dtype),
         (uint32_t)datatype_to_dataformat_converter(output_dtype));
 
@@ -113,8 +114,9 @@ TypecastProgramFactory::cached_program_t TypecastProgramFactory::create(
     if (!core_group_2.ranges().empty()) {
         std::vector<uint32_t> compute_kernel_args_group_2 = {
             num_tiles_per_core_group_2,  // per_core_block_cnt
-            1                            // per_core_block_size
-        };
+            1,                           // per_core_block_size
+            src0_cb_index,
+            output_cb_index};
 
         auto eltwise_unary_kernel_group_2_id = tt::tt_metal::CreateKernel(
             program,
@@ -208,10 +210,7 @@ TypecastSubgridProgramFactory::cached_program_t TypecastSubgridProgramFactory::c
 
     uint32_t ntiles = input.volume() / tt::constants::TILE_HW;
     uint32_t ncores = sub_core_grids->num_cores();
-    // tt::log_info(tt::LogOp, " ****** ntiles {}", ntiles);
-    // tt::log_info(tt::LogOp, " ****** ncores b4 {}", ncores);
 
-    // this to decide the num of cores needed from total cores in sub_core_grids.
     for (uint32_t core_id = ncores; core_id >= 1; core_id--) {
         if (ntiles % ncores == 0) {
             break;
@@ -219,25 +218,17 @@ TypecastSubgridProgramFactory::cached_program_t TypecastSubgridProgramFactory::c
             ncores--;
         }
     }
-    // tt::log_info(tt::LogOp, " ****** ncores a4 {}", ncores);
     TT_ASSERT(ntiles % (ncores) == 0);
 
     auto cores = corerange_to_cores(sub_core_grids.value(), ncores, true);
     auto all_cores = num_cores_to_corerangeset_in_subcoregrids(cores[0], ncores, sub_core_grids.value(), true);
     if (ncores == 1) {
         all_cores = ttnn::CoreRangeSet(ttnn::CoreRange(cores[0]));
-        // tt::log_info(tt::LogOp, " ****** all_cores {}", all_cores);
     }
-    // tt::log_info(tt::LogOp, " ****** cores.size() {}", cores.size());
-    // tt::log_info(tt::LogOp, " ****** cores {}", cores[0]);
-    // tt::log_info(tt::LogOp, " ****** all_cores {}", all_cores);
 
     uint32_t ntiles_per_block = ntiles / ncores;
     uint32_t nblocks = (ntiles / ntiles_per_block);
     uint32_t nblocks_per_core = nblocks / ncores;
-    // tt::log_info(tt::LogOp, " ****** ntiles_per_block {}", ntiles_per_block);
-    // tt::log_info(tt::LogOp, " ****** nblocks {}", nblocks);
-    // tt::log_info(tt::LogOp, " ****** nblocks_per_core {}", nblocks_per_core);
 
     std::vector<CoreCoord> cores_with_rtargs;
 
@@ -276,10 +267,11 @@ TypecastSubgridProgramFactory::cached_program_t TypecastSubgridProgramFactory::c
         all_cores,
         tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 
-    std::vector<uint32_t> compute_kernel_args_group_1 = {
+    std::vector<uint32_t> compute_kernel_args = {
         (uint32_t)nblocks_per_core,  // per_core_block_cnt
         (uint32_t)ntiles_per_block,  // per_block_ntiles // per_core_block_size
-    };
+        src0_cb_index,
+        output_cb_index};
 
     std::vector<UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
     if (args.preserve_fp32_precision) {
@@ -290,13 +282,10 @@ TypecastSubgridProgramFactory::cached_program_t TypecastSubgridProgramFactory::c
 
     std::map<string, string> unary_defines;
     unary_defines["TYPECAST_LLK"] = fmt::format(
-        "typecast_tile<{0}u, {1}u>(0);",
+        "typecast_tile<{0}u, {1}u>",
         (uint32_t)datatype_to_dataformat_converter(input_dtype),
         (uint32_t)datatype_to_dataformat_converter(output_dtype));
 
-    // for (const auto& pair : unary_defines) {
-    //     std::cout << "Interleaved Subgrid PGM " << pair.first << ": " << pair.second << std::endl;
-    // }
     auto path = "ttnn/cpp/ttnn/operations/copy/typecast/device/kernels/compute/eltwise_typecast.cpp";
 
     auto typecast_compute_kernel_id = tt::tt_metal::CreateKernel(
@@ -309,7 +298,7 @@ TypecastSubgridProgramFactory::cached_program_t TypecastSubgridProgramFactory::c
             .unpack_to_dest_mode = unpack_to_dest_mode,
             .bfp8_pack_precise = args.bfp8_pack_precise,
             .math_approx_mode = math_approx_mode,
-            .compile_args = compute_kernel_args_group_1,
+            .compile_args = compute_kernel_args,
             .defines = unary_defines});
 
     uint32_t tile_start_id = 0;
@@ -317,18 +306,14 @@ TypecastSubgridProgramFactory::cached_program_t TypecastSubgridProgramFactory::c
 
     for (uint32_t i = 0; i < cores.size(); i++) {
         CoreCoord core = cores[i];
-        // tt::log_info(tt::LogOp, " ****** ntiles_per_core {}", ntiles_per_core);
-        // tt::log_info(tt::LogOp, " ****** core {}", core);
 
         tt::tt_metal::SetRuntimeArgs(
             program, typecast_reader_kernel_id, core, {src_buffer->address(), ntiles_per_core, tile_start_id});
-        // program, typecast_writer_kernel_id, core, {dst_buffer->address(), num_tiles_per_core, num_tiles_written});
 
         tt::tt_metal::SetRuntimeArgs(
             program, typecast_writer_kernel_id, core, {dst_buffer->address(), ntiles_per_core, tile_start_id});
+
         cores_with_rtargs.push_back(core);
-        // num_tiles_written += num_tiles_per_core;
-        // tt::log_info(tt::LogOp, " ****** tile_start_id {}", tile_start_id);
         tile_start_id += ntiles_per_core;
     }
 

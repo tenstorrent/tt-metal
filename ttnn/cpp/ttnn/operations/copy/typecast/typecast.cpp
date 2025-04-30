@@ -6,10 +6,6 @@
 #include "ttnn/decorators.hpp"
 #include "ttnn/operations/copy/typecast/device/typecast_device_op.hpp"
 
-// #include "ttnn/common/queue_id.hpp"
-// #include "ttnn/operations/eltwise/unary/unary.hpp"
-#include "cpp/ttnn/operations/experimental/copy/typecast/typecast.hpp"
-
 namespace ttnn {
 namespace operations {
 namespace copy {
@@ -58,9 +54,7 @@ Tensor Typecast::invoke(
             output_dtype == optional_output_tensor.value().get_dtype(),
             "If both output dtype and output tensor provided dtype should match");
     }
-    if (input.device()->arch() == tt::ARCH::GRAYSKULL) {
-        return ttnn::experimental::typecast(queue_id, input, output_dtype, memory_config_arg, optional_output_tensor);
-    }
+
     DataType input_dtype = input.get_dtype();
     return detail::typecast_impl(
         queue_id, input, output_dtype, memory_config_arg, optional_output_tensor, sub_core_grids);
