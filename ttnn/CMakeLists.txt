@@ -889,7 +889,7 @@ set(TTNN_SRC_PYBIND
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/data_movement/bcast/bcast_${PY_BINDING}.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/data_movement/clone/clone_${PY_BINDING}.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/data_movement/copy/copy_${PY_BINDING}.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/data_movement/chunk/chunk_pybind.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/data_movement/chunk/chunk_${PY_BINDING}.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/data_movement/expand/expand_${PY_BINDING}.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/data_movement/fill_pad/fill_pad_${PY_BINDING}.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/data_movement/fill_rm/fill_rm_${PY_BINDING}.cpp
