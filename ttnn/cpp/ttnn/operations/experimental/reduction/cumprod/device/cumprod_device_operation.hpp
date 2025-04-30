@@ -69,18 +69,18 @@ struct CumprodDeviceOperation {
             Program& program,
             const DataType& dtype,
             const CumprodCB& cumprod_cb,
-            const CoreCoord& core,
+            const CoreRangeSet& core_range_set,
             const uint32_t& tiles_num);
 
         static KernelHandle create_kernel(
             Program& program,
             const char* kernel_path,
-            const CoreCoord& core,
+            const CoreRangeSet& core_range_set,
             const std::variant<DataMovementConfig, ComputeConfig, EthernetConfig>& config,
             const std::vector<uint32_t>& runtime_args = {});
 
         static uint32_t mul_lower_ranks(const Shape& input_shape, const int32_t& dim);
-        static uint32_t mul_higher_ranks(const Shape& input_shape, const int32_t& dim);
+        static uint32_t mul_higher_nontile_ranks(const Shape& input_shape, const int32_t& dim);
         static uint32_t calc_htwt(const Shape& input_shape);
     };
 

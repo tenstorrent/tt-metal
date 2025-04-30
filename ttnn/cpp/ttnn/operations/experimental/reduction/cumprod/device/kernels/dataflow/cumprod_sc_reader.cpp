@@ -16,15 +16,12 @@ constexpr union {
 }  // namespace
 
 void kernel_main() {
-    uint32_t input_dram_base_addr = get_arg_val<uint32_t>(0);  // input base addr (DRAM)
-    uint32_t num_rows = get_arg_val<uint32_t>(1);
-    uint32_t tiles_per_row = get_arg_val<uint32_t>(2);  // number of tiles in a row / along axis
-    uint32_t PHi = get_arg_val<uint32_t>(3);
-    uint32_t PLo = get_arg_val<uint32_t>(4);
-    uint32_t HtWt = get_arg_val<uint32_t>(5);
-
-    constexpr uint32_t cb_out = tt::CBIndex::c_0;
-    constexpr uint32_t cb_one = tt::CBIndex::c_2;
+    uint32_t input_base_addr = get_arg_val<uint32_t>(0);
+    uint32_t num_rows_per_core = get_arg_val<uint32_t>(1);
+    uint32_t tiles_per_row = get_arg_val<uint32_t>(2);
+    uint32_t input_tile_offset = get_arg_val<uint32_t>(3);
+    uint32_t start_id = get_arg_val<uint32_t>(4);
+    uint32_t is_input_dram = get_arg_val<uint32_t>(5);
 
     cb_reserve_back(cb_one, ONE_TILE);
     uint32_t data_one_addr = get_write_ptr(cb_one);
@@ -43,9 +40,6 @@ void kernel_main() {
 
     const uint32_t input_tile_bytes = ublock_size_bytes;
     const uint32_t output_tile_bytes = ublock_size_bytes;
-    InterleavedAddrGenFast<true> dram_input_addrg = {
-        .bank_base_address = input_dram_base_addr, .page_size = input_tile_bytes, .data_format = input_data_format};
-
     uint32_t scaler{0};
 
     uint32_t bytes_per_element = 4;
@@ -79,28 +73,34 @@ void kernel_main() {
             break;
     }
 
-    const uint32_t tile_card = ublock_size_bytes / bytes_per_element;
-
+    // TODO(jbbieniekTTT): issue #
     int32_t* data_one{(int32_t*)data_one_addr};
-    for (uint32_t i = 0; i < ublock_size_bytes / 4; i++) {
+    for (uint32_t i = 0; i < ublock_size_bytes / sizeof(data_one); i++) {
         data_one[i] = scaler;
     }
 
-    cb_push_back(cb_one, 1);
+    InterleavedAddrGenFast<true> dram_input_addrg = {
+        .bank_base_address = input_base_addr, .page_size = output_tile_bytes, .data_format = input_data_format};
 
-    for (uint32_t i0 = 0; i0 < PLo; i0++) {
-        for (uint32_t i1 = 0; i1 < PHi * HtWt; i1++) {
-            for (uint32_t j = 0; j < tiles_per_row; j++) {
-                uint32_t tileid = get_tile_id(i0, i1, j, tiles_per_row, PLo, PHi, HtWt);
+    InterleavedAddrGenFast<false> l1_input_addrg = {
+        .bank_base_address = input_base_addr, .page_size = output_tile_bytes, .data_format = input_data_format};
 
-                cb_reserve_back(cb_out, ONE_TILE);
+    cb_push_back(cb_one, ONE_TILE);
 
-                uint32_t data_sram_addr = get_write_ptr(cb_out);
-                noc_async_read_tile(tileid, dram_input_addrg, data_sram_addr);
-                noc_async_read_barrier();
-
-                cb_push_back(cb_out, ONE_TILE);
+    for (uint32_t i = start_id; i < start_id + num_rows_per_core; ++i) {
+        const uint32_t i0{i / input_tile_offset};
+        const uint32_t i1{i % input_tile_offset};
+        for (uint32_t j = 0; j < tiles_per_row; ++j) {
+            const uint32_t read_tile_id{get_tile_id(i0, i1, j, tiles_per_row, input_tile_offset)};
+            cb_reserve_back(cb_in, ONE_TILE);
+            uint32_t l1_write_addr_in0{get_write_ptr(cb_in)};
+            if (is_input_dram) {
+                noc_async_read_tile(read_tile_id, dram_input_addrg, l1_write_addr_in0);
+            } else {
+                noc_async_read_tile(read_tile_id, l1_input_addrg, l1_write_addr_in0);
             }
+            noc_async_read_barrier();
+            cb_push_back(cb_in, ONE_TILE);
         }
     }
 }
