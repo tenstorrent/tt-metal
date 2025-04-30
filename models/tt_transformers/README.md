@@ -8,6 +8,7 @@ The current version is verified to work with the following models:
 - Llama3.1-8B
 - Llama3.2-11B
 - Llama3.1-70B (LoudBox / QuietBox and Galaxy)
+- Llama3.2-90B (LoudBox / QuietBox)
 - Qwen2.5-7B (N300)
 - Qwen2.5-72B (LoudBox / QuietBox)
 - DeepSeek R1 Distill Llama 3.3 70B (LoudBox / QuietBox and Galaxy)
@@ -43,11 +44,11 @@ If using Meta-provided weights you should set `LLAMA_DIR` to the path of the dow
 export LLAMA_DIR=<path_to_meta_downloaded_model_directory>
 ```
 
-##### Repack weights (Llama3.1-70B from Meta only)
-Meta's Llama3.1-70B requires repacked weights. We provide a script to facilitate this in `models/tt_transformers/scripts/repack_weights_70b.py`.
+##### Repack weights (Llama3.1-70B and Llama3.2-90B from Meta only)
+Meta's Llama3.1-70B and Llama3.2-90B requires repacked weights. We provide scripts to facilitate this in `models/tt_transformers/scripts/repack_weights_70b.py` and `models/tt_transformers/scripts/repack_weights_90b.py`.
 
 The repacked output directory can be same as the checkpoint directory, since the new files will have different names.
-If providing a different path, please make sure that you keep the string `3.1-70B` in the new path name, since the Llama3 codebase relies on the weights directory name to identify the correct model.
+If providing a different path, please make sure that you keep the string `3.1-70B` or `3.2-90B` in the new path name, since the Llama3 codebase relies on the weights directory name to identify the correct model.
 
 Note: Use the default value of `10` for `chunk_size`.
 
@@ -215,7 +216,8 @@ Max Prefill Chunk Sizes (text-only):
 | Llama3.1-8B  | 4k tokens     | 64k tokens    | 128k tokens    | 128k tokens |
 | Llama3.2-11B | 4k tokens     | 64k tokens    | 128k tokens    | 128k tokens |
 | Llama3.1-70B | Not supported | Not supported | 32k tokens     | 128k tokens |
-| DeepSeek-R1-Distill-Llama3.3-70B | Not supported | Not supported | 32k tokens     | 128k tokens |
+| Llama3.2-90B | Not supported | Not supported | 32k tokens     | Not supported |
+| DeepSeek-R1-Distill-Llama3.3-70B | Not supported | Not supported | 32k tokens | 128k tokens |
 
 - These max chunk sizes are specific to max context length 128k and are configured via `MAX_PREFILL_CHUNK_SIZES_DIV1024` in [model_config.py](https://github.com/tenstorrent/tt-metal/blob/main/models/demos/llama3/tt/model_config.py). If the max context length is set to a smaller value using the `max_seq_len` flag (see [Run the demo](#run-the-demo)), these chunk sizes can possibly be increased due to using a smaller KV cache.
 

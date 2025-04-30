@@ -31,7 +31,7 @@ class TtLlamaImageFeedForward(LightweightModule):
         if args.dummy_weights:
             cache_name = lambda *_: None
         else:
-            cache_name = lambda name, suffix: weight_cache_path / (state_dict_prefix + f".{name}.{suffix}")
+            cache_name = lambda name, suffix: weight_cache_path / (state_dict_prefix + f"{name}.{suffix}")
 
         as_interleaved_tensor = lambda name, suffix, type, dim: ttnn.as_tensor(
             (
