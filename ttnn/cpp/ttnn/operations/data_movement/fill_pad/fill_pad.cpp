@@ -43,12 +43,12 @@ ttnn::Tensor FillPadOperation::invoke(
         ttnn::Shape new_shape = ttnn::Shape{std::array<uint32_t, 3>{third_dim, original_shape[-2], original_shape[-1]}};
         auto reshaped_tensor = ttnn::reshape(mutable_input_tensor, new_shape);
 
-        reshaped_tensor = tt::tt_metal::operation::run_without_autoformat(
-                              FillPad{fill_value, output_memory_config}, {reshaped_tensor}, {}, {}, queue_id)
-                              .at(0);
+        reshaped_tensor =
+            tt::tt_metal::operation::run(FillPad{fill_value, output_memory_config}, {reshaped_tensor}, {}, {}, queue_id)
+                .at(0);
         return ttnn::reshape(reshaped_tensor, original_shape);
     }
-    auto output_tensor = tt::tt_metal::operation::run_without_autoformat(
+    auto output_tensor = tt::tt_metal::operation::run(
                              FillPad{fill_value, output_memory_config}, {mutable_input_tensor}, {}, {}, queue_id)
                              .at(0);
     if (input_tensor.get_dtype() == DataType::BFLOAT8_B) {
