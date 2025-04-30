@@ -26,7 +26,7 @@ from pathlib import Path
 from enum import Enum, auto
 from tqdm import tqdm
 from dataclasses import dataclass
-from models.tt_transformers.tt.load_checkpoints import (
+from models.demos.llama3_subdevices.tt.load_checkpoints import (
     load_meta_state_dict,
     load_hf_state_dict,
     convert_hf_to_meta,
