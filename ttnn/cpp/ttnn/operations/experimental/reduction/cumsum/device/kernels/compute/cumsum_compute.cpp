@@ -41,8 +41,6 @@ void MAIN {
         // To do this, we fill tile with 0, which are loaded in cb_zero
 
         // [UNPACK]: Zero => TILE_DEST
-
-        // Is it to prevent a data-race with UNPACK ?
         tile_regs_acquire();
         copy_tile_to_dst_init_short(cb_zero);
         copy_tile(cb_zero, first_tile, TILE_DEST);

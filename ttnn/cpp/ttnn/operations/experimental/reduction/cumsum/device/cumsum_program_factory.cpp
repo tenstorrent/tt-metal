@@ -49,26 +49,38 @@ CumSumDeviceOperation::SingleCore::cached_program_t CumSumDeviceOperation::Singl
 
     constexpr CoreCoord core{0, 0};
 
-    TT_FATAL(input_dtype == output_dtype, "In-device type conversion not supported yet");
+    TT_FATAL(
+        input_dtype == output_dtype,
+        "In-device type conversion not supported yet: received {} input dtype and {} output dtype",
+        input_dtype,
+        output_dtype);
 
     TT_FATAL(
         output_dtype == DataType::FLOAT32 || output_dtype == DataType::INT32 || output_dtype == DataType::UINT32 ||
             output_dtype == DataType::BFLOAT16,
-        "Only float32, bfloat16, uint32 and int32 data type supported for now");
+        "Only float32, bfloat16, uint32 and int32 data type supported for now: received {}",
+        output_dtype);
 
-    TT_FATAL(output_tensor.get_layout() == Layout::TILE, "Only supported tensor layout is TILE");
+    TT_FATAL(
+        output_tensor.get_layout() == Layout::TILE,
+        "Only supported tensor layout is TILE: received {}",
+        output_tensor.get_layout());
 
-    TT_FATAL(input_tensor.get_padded_shape().rank() >= 3, "Device operation only support 3D tensor and above");
+    TT_FATAL(
+        tensor_rank >= 3, "Device operation only support 3D tensor and above: received tensor of rank {}", tensor_rank);
 
     TT_FATAL(
         input_tensor.buffer()->size() == input_tensor.volume() * input_tensor.element_size(),
-        "Input tensor size does not match expected volume");
+        "Input tensor size ({}) does not match expected volume ({})",
+        input_tensor.buffer()->size(),
+        input_tensor.volume() * input_tensor.element_size());
 
     TT_FATAL(input_tensor.get_logical_volume() > 0, "Input must not be empty");
 
-    TT_ASSERT(dim >= 0, "dim argument must be positive");
+    TT_ASSERT(dim >= 0, "dim argument must be positive: received {}", dim);
 
-    TT_FATAL(dim + 2 < tensor_rank, "cumsum on x and y axes not supported (dim = {}, rank = {})", dim, tensor_rank);
+    TT_FATAL(
+        dim + 2 < tensor_rank, "cumsum on x and y axes not supported: received dim = {}, rank = {}", dim, tensor_rank);
 
     // Buffer setup
     const uint32_t single_tile_size = output_tensor.element_size() * tt::constants::TILE_HW;
