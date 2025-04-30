@@ -402,6 +402,7 @@ def run_test_matmul_in1_dram_sharded_mm_chain(
     assert True
 
 
+@skip_for_blackhole("Failing on harvested BH, see #21421")
 @pytest.mark.parametrize(
     "fidelity",
     [
@@ -458,6 +459,7 @@ def test_matmul_in1_dram_sharded_with_mm_chain(
     )
 
 
+@skip_for_blackhole("Failing on harvested BH, see #21422")
 @pytest.mark.parametrize("packer_l1_acc", [True, False], ids=["pack_l1", "no_pack_l1"])
 @pytest.mark.parametrize(
     "fp32_acc_mode",

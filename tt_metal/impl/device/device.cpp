@@ -817,7 +817,7 @@ void Device::initialize_and_launch_firmware() {
     if (not skip_physical_dram_pcie) {
         for (tt::umd::CoreCoord core : pcie_cores) {
             tt::umd::CoreCoord translated_coord =
-                soc_d.translate_coord_to(core, CoordSystem::PHYSICAL, CoordSystem::VIRTUAL);
+                soc_d.translate_coord_to(tt_xy_pair(core.x, core.y), CoordSystem::PHYSICAL, CoordSystem::VIRTUAL);
             core_info->non_worker_cores[non_worker_cores_idx++] = {core.x, core.y, AddressableCoreType::PCIE};
         }
         for (tt::umd::CoreCoord core : dram_cores) {
@@ -1794,7 +1794,9 @@ std::vector<CoreCoord> Device::get_optimal_dram_bank_to_logical_worker_assignmen
         for (int i = 0; i < num_dram_banks; ++i) {
             auto dram_core = dram_core_from_dram_channel(i);
             if (dram_is_virtualized) {
-                dram_core = soc_d.translate_coord_to(dram_core, CoordSystem::TRANSLATED, CoordSystem::PHYSICAL);
+                tt::umd::CoreCoord umd_dram_coord = soc_d.translate_coord_to(
+                    tt_xy_pair(dram_core.x, dram_core.y), CoordSystem::TRANSLATED, CoordSystem::PHYSICAL);
+                dram_core = CoreCoord(umd_dram_coord.x, umd_dram_coord.y);
             }
             dram_phy_coords.push_back(dram_core);
         }
