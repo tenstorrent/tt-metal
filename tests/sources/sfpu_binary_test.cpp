@@ -14,12 +14,6 @@ const bool unpack_to_dest = true;
 uint32_t unp_cfg_context        = 0;
 uint32_t pack_sync_tile_dst_ptr = 0;
 
-#ifdef DEST_ACC
-const bool is_fp32_dest_acc_en = true;
-#else
-const bool is_fp32_dest_acc_en = false;
-#endif
-
 #ifdef LLK_TRISC_UNPACK
 
 #include "llk_unpack_A.h"
