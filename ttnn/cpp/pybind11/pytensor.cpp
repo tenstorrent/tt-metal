@@ -389,7 +389,7 @@ HostBuffer create_row_major_host_buffer(
 }
 
 HostBuffer get_host_buffer_from_tensor(const Tensor& tt_tensor, const bool padded_output) {
-    TT_ASSERT(tt_tensor.is_host_tensor());
+    TT_ASSERT(is_cpu_tensor(tt_tensor) || is_multi_device_host_tensor(tt_tensor), "Tensor must be on host for padding");
 
     const auto& tensor_spec = tt_tensor.get_tensor_spec();
     auto convert_to_logical = [&tensor_spec, padded_output](const HostBuffer& buffer) {

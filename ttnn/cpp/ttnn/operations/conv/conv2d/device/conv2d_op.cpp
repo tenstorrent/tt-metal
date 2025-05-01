@@ -88,7 +88,7 @@ Tensor optimized_conv_new(
             .pad_shape = bias.value().get_padded_shape(), .pad_value = 0, .target_layout = Layout::TILE};
     }
     auto output_layout = untilize_out ? Layout::ROW_MAJOR : Layout::TILE;
-    auto arch = is_tensor_on_device_or_multidevice(a)
+    auto arch = is_device_tensor(a)
                     ? a.device()->arch()
                     : ttnn::operations::experimental::auto_format::AutoFormat::GetDefaultDevice()->arch();
     bool fp32_accum =

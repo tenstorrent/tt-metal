@@ -505,7 +505,7 @@ class ModelArgs:
 
         self.tokenizer = None if dummy_weights else self.create_tokenizer()
 
-        device = mesh_device.get_devices()[0] if mesh_device is not None else None
+        device = mesh_device if mesh_device is not None else None
         self.cluster_shape = list(mesh_device.shape) if mesh_device is not None else None
         self.is_galaxy = self.num_devices == 32
         if device is not None:  # Avoid issue with test_torch.py not having a device
@@ -742,6 +742,18 @@ class ModelArgs:
                 ttnn.ShardStrategy.HEIGHT,
                 ttnn.ShardOrientation.ROW_MAJOR,
                 use_height_and_width_as_shard_shape=True,
+            )
+
+            self.model_config["CREATE_QKV_DECODE_SHARD"] = (
+                ttnn.create_sharded_memory_config(
+                    shape=(ttnn.TILE_SIZE, self.head_dim),
+                    core_grid=ttnn.CoreGrid(y=4, x=8),
+                    strategy=ttnn.ShardStrategy.HEIGHT,
+                    orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                    use_height_and_width_as_shard_shape=True,
+                )
+                if self.arch_name == "blackhole"
+                else ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG
             )
 
             self.model_config["SDPA_DECODE_PROGCFG"] = ttnn.SDPAProgramConfig(

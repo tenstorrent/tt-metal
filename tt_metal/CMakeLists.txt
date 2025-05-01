@@ -84,7 +84,6 @@ target_sources(
             api/tt-metalium/program.hpp
             api/tt-metalium/program_cache.hpp
             api/tt-metalium/program_descriptors.hpp
-            api/tt-metalium/program_device_map.hpp
             api/tt-metalium/runtime_args_data.hpp
             api/tt-metalium/semaphore.hpp
             api/tt-metalium/shape.hpp
@@ -92,7 +91,6 @@ target_sources(
             api/tt-metalium/shape_base.hpp
             api/tt-metalium/small_vector.hpp
             api/tt-metalium/sub_device.hpp
-            api/tt-metalium/sub_device_manager_tracker.hpp
             api/tt-metalium/sub_device_types.hpp
             api/tt-metalium/system_memory_cq_interface.hpp
             api/tt-metalium/system_memory_manager.hpp

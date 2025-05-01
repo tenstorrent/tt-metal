@@ -54,7 +54,7 @@ class TtFalconModelShared:
 
         embeddings = self.embeddings(input_ids)
 
-        if isinstance(self.device, ttnn.Device):
+        if self.device.get_num_devices() == 1:
             mesh_mapper = None
         else:
             shard_dim = 2 if llm_mode == "decode" else 0

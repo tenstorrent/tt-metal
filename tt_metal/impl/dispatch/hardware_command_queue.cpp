@@ -31,7 +31,7 @@
 #include "event/dispatch.hpp"
 #include "hal_types.hpp"
 #include "logger.hpp"
-#include "program_device_map.hpp"
+#include "program/program_device_map.hpp"
 #include <tt_stl/strong_type.hpp>
 #include "system_memory_manager.hpp"
 #include "tt_metal/impl/debug/watcher_server.hpp"
