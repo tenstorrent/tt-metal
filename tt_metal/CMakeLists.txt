@@ -182,8 +182,6 @@ target_sources(
             third_party/tt_llk/tt_llk_blackhole/common/inc/sfpu/ckernel_sfpu_gelu.h
             third_party/tt_llk/tt_llk_blackhole/common/inc/sfpu/ckernel_sfpu_hardtanh.h
             third_party/tt_llk/tt_llk_blackhole/common/inc/sfpu/ckernel_sfpu_is_fp16_zero.h
-            third_party/tt_llk/tt_llk_blackhole/common/inc/sfpu/ckernel_sfpu_is_fp16_zero.h
-            third_party/tt_llk/tt_llk_blackhole/common/inc/sfpu/ckernel_sfpu_load_config.h
             third_party/tt_llk/tt_llk_blackhole/common/inc/sfpu/ckernel_sfpu_load_config.h
             third_party/tt_llk/tt_llk_blackhole/common/inc/sfpu/ckernel_sfpu_log.h
             third_party/tt_llk/tt_llk_blackhole/common/inc/sfpu/ckernel_sfpu_max.h
@@ -248,8 +246,6 @@ target_sources(
             third_party/tt_llk/tt_llk_wormhole_b0/common/inc/sfpu/ckernel_sfpu_gelu.h
             third_party/tt_llk/tt_llk_wormhole_b0/common/inc/sfpu/ckernel_sfpu_hardtanh.h
             third_party/tt_llk/tt_llk_wormhole_b0/common/inc/sfpu/ckernel_sfpu_is_fp16_zero.h
-            third_party/tt_llk/tt_llk_wormhole_b0/common/inc/sfpu/ckernel_sfpu_is_fp16_zero.h
-            third_party/tt_llk/tt_llk_wormhole_b0/common/inc/sfpu/ckernel_sfpu_load_config.h
             third_party/tt_llk/tt_llk_wormhole_b0/common/inc/sfpu/ckernel_sfpu_load_config.h
             third_party/tt_llk/tt_llk_wormhole_b0/common/inc/sfpu/ckernel_sfpu_log.h
             third_party/tt_llk/tt_llk_wormhole_b0/common/inc/sfpu/ckernel_sfpu_max.h
@@ -273,37 +269,23 @@ target_sources(
             third_party/tt_llk/tt_llk_wormhole_b0/common/inc/sfpu/ckernel_sfpu_typecast.h
             third_party/tt_llk/tt_llk_wormhole_b0/llk_lib/llk_defs.h
             third_party/tt_llk/tt_llk_wormhole_b0/llk_lib/llk_math_common.h
-            third_party/tt_llk/tt_llk_wormhole_b0/llk_lib/llk_math_common.h
             third_party/tt_llk/tt_llk_wormhole_b0/llk_lib/llk_math_eltwise_binary.h
             third_party/tt_llk/tt_llk_wormhole_b0/llk_lib/llk_math_eltwise_binary_sfpu.h
             third_party/tt_llk/tt_llk_wormhole_b0/llk_lib/llk_math_eltwise_unary_datacopy.h
-            third_party/tt_llk/tt_llk_wormhole_b0/llk_lib/llk_math_eltwise_unary_datacopy.h
             third_party/tt_llk/tt_llk_wormhole_b0/llk_lib/llk_math_eltwise_unary_sfpi.h
             third_party/tt_llk/tt_llk_wormhole_b0/llk_lib/llk_math_eltwise_unary_sfpu.h
-            third_party/tt_llk/tt_llk_wormhole_b0/llk_lib/llk_math_eltwise_unary_sfpu.h
-            third_party/tt_llk/tt_llk_wormhole_b0/llk_lib/llk_math_matmul.h
             third_party/tt_llk/tt_llk_wormhole_b0/llk_lib/llk_math_matmul.h
             third_party/tt_llk/tt_llk_wormhole_b0/llk_lib/llk_math_reduce.h
             third_party/tt_llk/tt_llk_wormhole_b0/llk_lib/llk_math_transpose_dest.h
             third_party/tt_llk/tt_llk_wormhole_b0/llk_lib/llk_pack.h
-            third_party/tt_llk/tt_llk_wormhole_b0/llk_lib/llk_pack.h
-            third_party/tt_llk/tt_llk_wormhole_b0/llk_lib/llk_pack_common.h
             third_party/tt_llk/tt_llk_wormhole_b0/llk_lib/llk_pack_common.h
             third_party/tt_llk/tt_llk_wormhole_b0/llk_lib/llk_pack_untilize.h
-            third_party/tt_llk/tt_llk_wormhole_b0/llk_lib/llk_pack_untilize.h
-            third_party/tt_llk/tt_llk_wormhole_b0/llk_lib/llk_unpack_A.h
             third_party/tt_llk/tt_llk_wormhole_b0/llk_lib/llk_unpack_A.h
             third_party/tt_llk/tt_llk_wormhole_b0/llk_lib/llk_unpack_AB.h
-            third_party/tt_llk/tt_llk_wormhole_b0/llk_lib/llk_unpack_AB.h
-            third_party/tt_llk/tt_llk_wormhole_b0/llk_lib/llk_unpack_AB_matmul.h
             third_party/tt_llk/tt_llk_wormhole_b0/llk_lib/llk_unpack_AB_matmul.h
             third_party/tt_llk/tt_llk_wormhole_b0/llk_lib/llk_unpack_common.h
-            third_party/tt_llk/tt_llk_wormhole_b0/llk_lib/llk_unpack_common.h
-            third_party/tt_llk/tt_llk_wormhole_b0/llk_lib/llk_unpack_reduce.h
             third_party/tt_llk/tt_llk_wormhole_b0/llk_lib/llk_unpack_reduce.h
             third_party/tt_llk/tt_llk_wormhole_b0/llk_lib/llk_unpack_tilize.h
-            third_party/tt_llk/tt_llk_wormhole_b0/llk_lib/llk_unpack_tilize.h
-            third_party/tt_llk/tt_llk_wormhole_b0/llk_lib/llk_unpack_untilize.h
             third_party/tt_llk/tt_llk_wormhole_b0/llk_lib/llk_unpack_untilize.h
             tools/profiler/kernel_profiler.hpp
             # Kernel sources
