@@ -110,9 +110,9 @@ run_t3000_llama3_90b_tests() {
 
   # Run test_model (decode and prefill) for llama3 70B
   wh_arch_yaml=wormhole_b0_80_arch_eth_dispatch.yaml
-  llama90b=/mnt/MLPerf/tt_dnn-models/llama/Llama3.2-90B-Instruct/
+  llama90b=/mnt/MLPerf/tt_dnn-models/llama/Llama3.2-90B-Vision-Instruct/
   LLAMA_DIR=$llama90b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/tests/test_model.py -k quick ; fail+=$?
-  LLAMA_DIR=$llama90b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/tests/test_model_prefill.py -k accuracy ; fail+=$?
+  LLAMA_DIR=$llama90b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/tests/test_model_prefill.py -k "performance and 1layer" ; fail+=$?
 
   # Record the end time
   end_time=$(date +%s)

@@ -930,7 +930,7 @@ def run_entry_command(entry, screen_lock, output_entries, screen_needs_update):
         "lm-head": "pytest models/tt_transformers/tests/test_lm_head.py",
         "model": "pytest models/tt_transformers/tests/test_model.py -k 'performance-256 and full'",
         "model-quick": "pytest models/tt_transformers/tests/test_model.py -k 'performance-256 and quick'",
-        "model-prefill": "pytest models/tt_transformers/tests/test_model_prefill.py -k performance-4096",
+        "model-prefill": "pytest models/tt_transformers/tests/test_model_prefill.py -k 'all_layers and performance- and 4k'",
         # Precision and Math Fidelity tests for Pareto analysis
         **pareto_commands,
         **pareto_commands_from_json,
