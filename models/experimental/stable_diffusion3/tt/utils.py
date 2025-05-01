@@ -17,8 +17,37 @@ def allocate_tensor_on_device_like(
     return ttnn.allocate_tensor_on_device(t.shape, t.dtype, t.layout, device, memory_config=memory_config)
 
 
-def to_torch(tensor, mesh_device, dtype, shard_dim=-1):
-    return ttnn.to_torch(tensor, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=shard_dim), dtype=dtype)
+def to_torch(
+    tensor: torch.Tensor,
+    *,
+    mesh_device: ttnn.MeshDevice | None = None,
+    dtype: torch.dtype | None = None,
+    mesh_composer: ttnn.MeshToTensor | None = None,
+    shard_dim: int | None = None,
+    fix_special_numbers: bool = False,
+) -> torch.Tensor:
+    if shard_dim is not None:
+        mesh_composer = ttnn.ConcatMeshToTensor(mesh_device, dim=shard_dim)
+
+    result = ttnn.to_torch(tensor, mesh_composer=mesh_composer)
+
+    # ttnn.to_torch ignores the dtype argument if a mesh composer is supplied
+    if dtype is not None:
+        result = result.to(dtype)
+
+    if not fix_special_numbers:
+        return result
+
+    assert dtype in [torch.float32, torch.float64]
+
+    mask = torch.isnan(result) | torch.isinf(result)
+    negative = torch.signbit(result)
+
+    finfo = torch.finfo(dtype)
+    result[mask.logical_and(~negative)] = finfo.max
+    result[mask.logical_and(negative)] = finfo.min
+
+    return result
 
 
 def from_torch_fast(
@@ -90,12 +119,24 @@ def assert_quality(
     shard_dim: int | None = None,
 ) -> None:
     if isinstance(a, ttnn.Tensor):
-        a = to_torch(a, mesh_device=a.device(), dtype=a.get_dtype(), shard_dim=shard_dim)
+        a = to_torch(
+            a,
+            mesh_device=a.device(),
+            dtype=torch.float32,
+            shard_dim=shard_dim,
+            fix_special_numbers=True,
+        )
         if num_devices is not None:
             assert shard_dim == 0
             a = a[0 : a.shape[0] // num_devices, ...]
     if isinstance(b, ttnn.Tensor):
-        b = to_torch(b, mesh_device=b.device(), dtype=b.get_dtype(), shard_dim=shard_dim)
+        b = to_torch(
+            b,
+            mesh_device=b.device(),
+            dtype=torch.float32,
+            shard_dim=shard_dim,
+            fix_special_numbers=True,
+        )
         if num_devices is not None:
             assert shard_dim == 0
             b = b[0 : b.shape[0] // num_devices, ...]
