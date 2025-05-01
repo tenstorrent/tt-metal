@@ -30,7 +30,6 @@
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/mesh_device_view.hpp>
 #include <tt-metalium/mesh_trace_id.hpp>
-#include <tt-metalium/program_device_map.hpp>
 #include <tt-metalium/small_vector.hpp>
 #include <tt-metalium/sub_device_types.hpp>
 #include <tt-metalium/trace_buffer.hpp>
@@ -235,8 +234,6 @@ public:
     program_cache::detail::ProgramCache& get_program_cache() override;
     std::size_t num_program_cache_entries() override;
     HalProgrammableCoreType get_programmable_core_type(CoreCoord virtual_core) const override;
-    std::vector<std::pair<transfer_info_cores, uint32_t>> extract_dst_noc_multicast_info(
-        const std::vector<CoreRange>& ranges, const CoreType core_type) override;
     uint8_t num_noc_mcast_txns(SubDeviceId sub_device_id) const override;
     uint8_t num_noc_unicast_txns(SubDeviceId sub_device_id) const override;
     uint8_t noc_data_start_index(SubDeviceId sub_device_id, bool mcast_data=true, bool unicast_data=true) const override;

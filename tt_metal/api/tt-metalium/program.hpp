@@ -10,7 +10,6 @@
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/circular_buffer_types.hpp>
 #include <tt-metalium/semaphore.hpp>
-#include <tt-metalium/program_device_map.hpp>
 #include <tt-metalium/worker_config_buffer.hpp>
 #include <tt-metalium/dev_msgs.h>
 #include <tt-metalium/program_descriptors.hpp>
@@ -27,6 +26,7 @@ class CircularBuffer;
 class IDevice;
 class Program;
 class CircularBufferConfig;
+class ProgramTransferInfo;
 
 struct ProgramCommandSequence;
 
