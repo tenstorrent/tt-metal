@@ -97,6 +97,7 @@ ttnn/cpp/ttnn/operations/data_movement/fold/ @tenstorrent/metalium-developers-co
 ttnn/cpp/ttnn/operations/matmul/ @TT-BrianLiu @bbradelTT @yugaoTT @vsureshTT @edwinleeTT @nsorabaTT
 ttnn/cpp/ttnn/operations/experimental/ccl/ @SeanNijjar @jvegaTT @tt-aho @sjameelTT @ntarafdar @nardoTT @llongTT @amorrisonTT
 ttnn/cpp/ttnn/operations/experimental/conv3d/ @tenstorrent/metalium-developers-convolutions
+ttnn/cpp/ttnn/operations/experimental/cnn/ @tenstorrent/metalium-developers-convolutions @esmalTT
 ttnn/cpp/ttnn/operations/experimental/matmul/ @TT-BrianLiu @bbradelTT @yugaoTT @vsureshTT @edwinleeTT @nsorabaTT
 ttnn/cpp/ttnn/operations/experimental/slice_write/ @tenstorrent/metalium-developers-convolutions @sjameelTT @ntarafdar @amorrisonTT
 ttnn/cpp/ttnn/operations/eltwise/ @patrickroberts @sjameelTT @ntarafdar @dchenTT
