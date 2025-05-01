@@ -178,7 +178,8 @@ constexpr std::array<uint8_t, NUM_RECEIVER_CHANNELS> receiver_channel_local_writ
     fill_array_with_next_n_args<uint8_t, RX_CH_LOCAL_WRITE_CMD_BUF_ID_IDX, NUM_RECEIVER_CHANNELS>();
 
 // TODO: Add a special marker in CT args so we don't misalign unintentionally
-constexpr size_t SPECIAL_MARKER_1_IDX = RX_CH_LOCAL_WRITE_CMD_BUF_ID_IDX + NUM_RECEIVER_CHANNELS;
+constexpr size_t EDM_NOC_VC_IDX = RX_CH_LOCAL_WRITE_CMD_BUF_ID_IDX + NUM_RECEIVER_CHANNELS;
+constexpr size_t SPECIAL_MARKER_1_IDX = EDM_NOC_VC_IDX + 1;
 constexpr size_t SPECIAL_MARKER_1 = 0x10c0ffee;
 static_assert(
     !SPECIAL_MARKER_CHECK_ENABLED || get_compile_time_arg_val(SPECIAL_MARKER_1_IDX) == SPECIAL_MARKER_1,
@@ -237,5 +238,6 @@ static constexpr uint8_t worker_handshake_noc = sender_channel_ack_noc_ids[0];
 constexpr bool local_chip_noc_equals_downstream_noc =
     receiver_channel_forwarding_noc_ids[0] == receiver_channel_local_write_noc_ids[0];
 static constexpr uint8_t local_chip_data_cmd_buf = receiver_channel_local_write_cmd_buf_ids[0];
+static constexpr uint8_t forward_and_local_write_noc_vc = get_compile_time_arg_val(EDM_NOC_VC_IDX);
 
 }  // namespace tt::tt_fabric

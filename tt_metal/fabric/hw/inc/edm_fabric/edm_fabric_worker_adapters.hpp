@@ -138,13 +138,15 @@ struct WorkerToFabricEdmSenderImpl {
         }
     }
 
-    template <uint8_t EDM_TO_DOWNSTREAM_NOC = noc_index>
+    template <uint8_t EDM_TO_DOWNSTREAM_NOC = noc_index, uint8_t EDM_TO_DOWNSTREAM_NOC_VC = NOC_UNICAST_WRITE_VC>
     FORCE_INLINE void setup_edm_noc_cmd_buf() const {
         uint64_t edm_noc_addr = get_noc_addr(this->edm_noc_x, this->edm_noc_y, 0, EDM_TO_DOWNSTREAM_NOC);
-        noc_async_write_one_packet_with_trid_set_state(edm_noc_addr, this->data_noc_cmd_buf, EDM_TO_DOWNSTREAM_NOC);
+        noc_async_write_one_packet_with_trid_set_state(
+            edm_noc_addr, this->data_noc_cmd_buf, EDM_TO_DOWNSTREAM_NOC, EDM_TO_DOWNSTREAM_NOC_VC);
         const uint64_t noc_sem_addr =
             get_noc_addr(this->edm_noc_x, this->edm_noc_y, this->edm_buffer_slot_wrptr_addr, EDM_TO_DOWNSTREAM_NOC);
-        noc_inline_dw_write_set_state(noc_sem_addr, 0xF, this->sync_noc_cmd_buf, EDM_TO_DOWNSTREAM_NOC);
+        noc_inline_dw_write_set_state(
+            noc_sem_addr, 0xF, this->sync_noc_cmd_buf, EDM_TO_DOWNSTREAM_NOC, EDM_TO_DOWNSTREAM_NOC_VC);
     }
 
     FORCE_INLINE bool edm_has_space_for_packet() const {
