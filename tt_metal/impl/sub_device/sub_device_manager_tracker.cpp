@@ -7,7 +7,6 @@
 #include <command_queue.hpp>
 #include <device.hpp>
 #include <sub_device.hpp>
-#include <sub_device_manager_tracker.hpp>
 #include <sub_device_types.hpp>
 #include <tt_stl/span.hpp>
 #include <algorithm>
@@ -30,6 +29,7 @@
 #include "mesh_device.hpp"
 #include <tt_stl/strong_type.hpp>
 #include "tt_metal/impl/sub_device/sub_device_manager.hpp"
+#include "sub_device/sub_device_manager_tracker.hpp"
 
 namespace tt::tt_metal {
 
