@@ -5,10 +5,10 @@
 #include <boost/move/utility_core.hpp>
 #include <gtest/gtest.h>
 #include <tt-metalium/bfloat16.hpp>
-#include <xtensor/xbuilder.hpp>
-#include <xtensor/xiterator.hpp>
-#include <xtensor/xlayout.hpp>
-#include <xtensor/xtensor_simd.hpp>
+#include <xtensor/generators/xbuilder.hpp>
+#include <xtensor/core/xiterator.hpp>
+#include <xtensor/core/xlayout.hpp>
+#include <xtensor/utils/xtensor_simd.hpp>
 #include <xtl/xiterator_base.hpp>
 #include <algorithm>
 #include <cstdint>

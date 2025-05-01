@@ -275,6 +275,7 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(std::size_t channel_buffe
         this->sender_channel_ack_noc_ids[i] = FabricEriscDatamoverConfig::DEFAULT_SENDER_ACK_NOC;
         this->sender_channel_ack_cmd_buf_ids[i] = FabricEriscDatamoverConfig::AT_CMD_BUF;
     }
+    this->edm_noc_vc = FabricEriscDatamoverConfig::DEFAULT_NOC_VC;
 }
 
 void get_runtime_args_for_edm_termination_infos(
@@ -512,6 +513,7 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args() const
         ct_args.push_back(
             config.receiver_channel_local_write_cmd_buf_ids[i]);  // maps to receiver_channel_local_write_cmd_buf_ids
     }
+    ct_args.push_back(config.edm_noc_vc);
 
     // Special marker to help with identifying misalignment bugs
     ct_args.push_back(0x10c0ffee);
@@ -735,16 +737,12 @@ void FabricEriscDatamoverBuilder::connect_to_downstream_edm(FabricEriscDatamover
 void FabricEriscDatamoverBuilder::teardown_from_host(
     tt::tt_metal::IDevice* d, tt::tt_fabric::TerminationSignal termination_signal) const {
     std::vector<uint32_t> val(1, termination_signal);
-    d->push_work(
-        [&]() {
-            tt::tt_metal::detail::WriteToDeviceL1(
-                d,
-                d->logical_core_from_ethernet_core(CoreCoord(this->my_noc_x, this->my_noc_y)),
-                config.termination_signal_address,
-                val,
-                CoreType::ETH);
-        },
-        true);
+    tt::tt_metal::detail::WriteToDeviceL1(
+        d,
+        d->logical_core_from_ethernet_core(CoreCoord(this->my_noc_x, this->my_noc_y)),
+        config.termination_signal_address,
+        val,
+        CoreType::ETH);
 }
 
 void FabricEriscDatamoverBuilder::set_firmware_context_switch_interval(size_t interval) {

@@ -831,12 +831,6 @@ void MeshDevice::init_fabric() {
     reference_device()->init_fabric();
 }
 
-void MeshDevice::push_work(std::function<void()> work, bool /*blocking*/) {
-    // Execute inline synchronously.
-    // Using a lock to provide the same call serialization guarantee as an async single device scheduling.
-    std::lock_guard lock(push_work_mutex_);
-    work();
-}
 program_cache::detail::ProgramCache& MeshDevice::get_program_cache() { return *program_cache_; }
 HalProgrammableCoreType MeshDevice::get_programmable_core_type(CoreCoord virtual_core) const { return reference_device()->get_programmable_core_type(virtual_core); }
 std::vector<std::pair<transfer_info_cores, uint32_t>> MeshDevice::extract_dst_noc_multicast_info(
