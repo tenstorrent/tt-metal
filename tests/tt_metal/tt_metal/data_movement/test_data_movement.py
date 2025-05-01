@@ -7,6 +7,7 @@
 import os
 import sys
 import csv
+import pytest  # type: ignore
 from argparse import ArgumentParser
 from loguru import logger  # type: ignore
 import matplotlib.pyplot as plt  # type: ignore
@@ -24,33 +25,65 @@ test_id_to_name = {
     4: "One to One Packet Sizes",
 }
 
-# Correspondng test bounds for each test id
+# Correspondng test bounds for each arch, test id, riscv core
+# NOTE: These bounds are aggregated averages of large test sweeps and
+# are subject to change with new directed tests.
 test_bounds = {
-    0: {
-        "riscv_1": {"latency": {"lower": 400, "upper": 8800}, "bandwidth": 0.12},
-        "riscv_0": {"latency": {"lower": 300, "upper": 8000}, "bandwidth": 0.16},
+    "wormhole_b0": {
+        0: {
+            "riscv_1": {"latency": {"lower": 500, "upper": 42000}, "bandwidth": 0.12},
+            "riscv_0": {"latency": {"lower": 400, "upper": 28000}, "bandwidth": 0.15},
+        },
+        1: {
+            "riscv_1": {"latency": {"lower": 400, "upper": 700}, "bandwidth": 0.19},
+            "riscv_0": {"latency": {"lower": 300, "upper": 500}, "bandwidth": 0.29},
+        },
+        2: {
+            "riscv_1": {"latency": {"lower": 500, "upper": 600}, "bandwidth": 0.24},
+            "riscv_0": {"latency": {"lower": 400, "upper": 500}, "bandwidth": 0.30},
+        },
+        3: {
+            "riscv_1": {"latency": {"lower": 33000, "upper": 35000}, "bandwidth": 22},
+            "riscv_0": {"latency": {"lower": 33000, "upper": 35000}, "bandwidth": 21},
+        },
+        4: {
+            "riscv_1": {"latency": {"lower": 4000, "upper": 12000}, "bandwidth": 0.007},
+            "riscv_0": {"latency": {"lower": 300, "upper": 4700}, "bandwidth": 0.17},
+        },
     },
-    1: {
-        "riscv_1": {"latency": {"lower": 300, "upper": 700}, "bandwidth": 0.09},
-        "riscv_0": {"latency": {"lower": 200, "upper": 500}, "bandwidth": 0.16},
-    },
-    2: {
-        "riscv_1": {"latency": {"lower": 400, "upper": 600}, "bandwidth": 0.13},
-        "riscv_0": {"latency": {"lower": 300, "upper": 500}, "bandwidth": 0.16},
-    },
-    3: {
-        "riscv_1": {"latency": {"lower": 42000, "upper": 44000}, "bandwidth": 33},
-        "riscv_0": {"latency": {"lower": 42000, "upper": 43000}, "bandwidth": 34},
-    },
-    4: {
-        "riscv_1": {"latency": {"lower": 4100, "upper": 4200}, "bandwidth": 0.06},
-        "riscv_0": {"latency": {"lower": 400, "upper": 500}, "bandwidth": 0.59},
+    "blackhole": {
+        0: {
+            "riscv_1": {"latency": {"lower": 500, "upper": 42000}, "bandwidth": 0.12},
+            "riscv_0": {"latency": {"lower": 400, "upper": 28000}, "bandwidth": 0.15},
+        },
+        1: {
+            "riscv_1": {"latency": {"lower": 400, "upper": 700}, "bandwidth": 0.19},
+            "riscv_0": {"latency": {"lower": 300, "upper": 500}, "bandwidth": 0.29},
+        },
+        2: {
+            "riscv_1": {"latency": {"lower": 500, "upper": 600}, "bandwidth": 0.24},
+            "riscv_0": {"latency": {"lower": 400, "upper": 500}, "bandwidth": 0.30},
+        },
+        3: {
+            "riscv_1": {"latency": {"lower": 42000, "upper": 44000}, "bandwidth": 33},
+            "riscv_0": {"latency": {"lower": 42000, "upper": 44000}, "bandwidth": 34},
+        },
+        4: {
+            "riscv_1": {"latency": {"lower": 4000, "upper": 12000}, "bandwidth": 0.007},
+            "riscv_0": {"latency": {"lower": 300, "upper": 4700}, "bandwidth": 0.17},
+        },
     },
 }
 
 
-def run_dm_tests(profile, verbose, gtest_filter, plot, report):
+def run_dm_tests(profile, verbose, gtest_filter, plot, report, arch_name):
+    logger.info("Starting data movement tests...")
     log_file_path = f"{PROFILER_LOGS_DIR}/{PROFILER_DEVICE_SIDE_LOG}"
+
+    # Get architecture
+    arch = get_arch(arch_name)
+    if verbose:
+        logger.info(f"Running data movement tests on architecture: {arch}")
 
     # Profile tests
     if profile or not os.path.exists(log_file_path) or gtest_filter:
@@ -72,9 +105,24 @@ def run_dm_tests(profile, verbose, gtest_filter, plot, report):
         export_dm_stats_to_csv(dm_stats)
 
     # Check performance (TODO: enable assertions)
-    performance_check(dm_stats, verbose=verbose)
+    performance_check(dm_stats, arch=arch, verbose=verbose)
 
     logger.info("Data movement tests completed.")
+
+
+def get_arch(arch_name):
+    # Get architecture from environment variable or command line argument
+    if arch_name:
+        return arch_name
+
+    arch = os.environ.get("ARCH_NAME", None)
+    if arch is None:
+        logger.warning("ARCH_NAME environment variable is not set, defaulting to 'blackhole'.")
+        return "blackhole"
+    elif arch not in test_bounds.keys():
+        logger.error(f"ARCH_NAME '{arch}' is not recognized.")
+        sys.exit(1)
+    return arch
 
 
 def profile_dm_tests(verbose=False, gtest_filter=None):
@@ -166,8 +214,8 @@ def gather_stats_from_csv(file_path, verbose=False):
     return import_log_run_stats(setup)
 
 
-def performance_check(dm_stats, verbose=False):
-    # Results' ranges
+def performance_check(dm_stats, arch="blackhole", verbose=False):
+    # Tidy results' ranges
     results_bounds = {}
     for i in range(len(dm_stats["riscv_1"]["analysis"]["series"])):
         run_host_id = dm_stats["riscv_1"]["analysis"]["series"][i]["duration_type"][0]["run_host_id"]
@@ -215,15 +263,15 @@ def performance_check(dm_stats, verbose=False):
     for test_id, bounds in results_bounds.items():
         # Bounds check
         riscv1_cycles_within_bounds = (
-            test_bounds[test_id]["riscv_1"]["latency"]["lower"] <= bounds["riscv_1"]["latency"]["lower"]
-            and bounds["riscv_1"]["latency"]["upper"] <= test_bounds[test_id]["riscv_1"]["latency"]["upper"]
+            test_bounds[arch][test_id]["riscv_1"]["latency"]["lower"] <= bounds["riscv_1"]["latency"]["lower"]
+            and bounds["riscv_1"]["latency"]["upper"] <= test_bounds[arch][test_id]["riscv_1"]["latency"]["upper"]
         )
         riscv0_cycles_within_bounds = (
-            test_bounds[test_id]["riscv_0"]["latency"]["lower"] <= bounds["riscv_0"]["latency"]["lower"]
-            and bounds["riscv_0"]["latency"]["upper"] <= test_bounds[test_id]["riscv_0"]["latency"]["upper"]
+            test_bounds[arch][test_id]["riscv_0"]["latency"]["lower"] <= bounds["riscv_0"]["latency"]["lower"]
+            and bounds["riscv_0"]["latency"]["upper"] <= test_bounds[arch][test_id]["riscv_0"]["latency"]["upper"]
         )
-        riscv1_bw_within_bounds = test_bounds[test_id]["riscv_1"]["bandwidth"] <= bounds["riscv_1"]["bandwidth"]
-        riscv0_bw_within_bounds = test_bounds[test_id]["riscv_0"]["bandwidth"] <= bounds["riscv_0"]["bandwidth"]
+        riscv1_bw_within_bounds = test_bounds[arch][test_id]["riscv_1"]["bandwidth"] <= bounds["riscv_1"]["bandwidth"]
+        riscv0_bw_within_bounds = test_bounds[arch][test_id]["riscv_0"]["bandwidth"] <= bounds["riscv_0"]["bandwidth"]
 
         # Print latency and bandwidth perf results
         if verbose:
@@ -256,10 +304,10 @@ def performance_check(dm_stats, verbose=False):
             else:
                 logger.info(f"RISCV 0 bandwidth within perf bounds.\n")
 
-        # assert riscv1_cycles_within_bounds
-        # assert riscv0_cycles_within_bounds
-        # assert riscv1_bw_within_bounds
-        # assert riscv0_bw_within_bounds
+        assert riscv1_cycles_within_bounds
+        assert riscv0_cycles_within_bounds
+        assert riscv1_bw_within_bounds
+        assert riscv0_bw_within_bounds
 
 
 def print_stats(dm_stats):
@@ -407,20 +455,14 @@ def export_dm_stats_to_csv(dm_stats, output_file="dm_stats.csv"):
     logger.info(f"dm_stats exported to {output_file}")
 
 
-if __name__ == "__main__":
-    parser = ArgumentParser(description="Generate profiling results for data movement tests.")
-    parser.add_argument(
-        "-p", "--profile", action="store_true", help="Profile the kernels. If not set, use existing profiler logs."
+def test_data_movement(
+    no_profile: bool,
+    verbose_log: bool,
+    gtest_filter: str,
+    plot: bool,
+    report: bool,
+    arch: str,
+):
+    run_dm_tests(
+        profile=not no_profile, verbose=verbose_log, gtest_filter=gtest_filter, plot=plot, report=report, arch_name=arch
     )
-    parser.add_argument("-v", "--verbose", action="store_true", help="Enable verbose logging of profiling results.")
-    parser.add_argument(
-        "-g",
-        "--gtest-filter",
-        dest="gtest_filter",
-        help="Filter for gtest tests to run. If not set and profile flag is set, all tests are run.",
-    )
-    parser.add_argument("--plot", action="store_true", help="Export profiling plots to a .png file.")
-    parser.add_argument("-r", "--report", action="store_true", help="Export profiling results to a .csv file.")
-    args = parser.parse_args()
-
-    run_dm_tests(*vars(args).values())
