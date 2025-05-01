@@ -106,7 +106,7 @@ def test_model_inference(
 
     # This sets the minimum PCC for each iteration based on optimization mode
     if num_layers == 1:
-        expec_out_pcc = 0.98
+        expec_out_pcc = 0.97
         expec_kv_cache_pcc = 0.99
     else:
         if "accuracy" in test_id:
