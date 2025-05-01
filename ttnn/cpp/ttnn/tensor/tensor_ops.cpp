@@ -60,11 +60,7 @@ Tensor tensor_to_device(
     const Tensor& input_tensor, const std::vector<IDevice*>& workers, const MemoryConfig& mem_config, QueueId cq_id) {
     ZoneScoped;
     GraphTracker::instance().track_function_start("Tensor::to_device", input_tensor, workers, mem_config);
-    Tensor device_tensor = Tensor(
-        workers,
-        TensorSpec(
-            input_tensor.get_logical_shape(),
-            input_tensor.get_tensor_spec().tensor_layout().with_memory_config(mem_config)));
+    Tensor device_tensor = Tensor(workers, input_tensor.tensor_spec().with_memory_config(mem_config));
     uint32_t num_workers = workers.size();
     for (int worker_index = 0; worker_index < workers.size(); ++worker_index) {
         auto& worker = workers[worker_index];
