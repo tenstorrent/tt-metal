@@ -191,9 +191,6 @@ EdmLineFabricOpInterface::EdmLineFabricOpInterface(
             start_bidirectional_device_index = 0;
             end_bidirectional_device_index = device_sequence.size();
         }
-        for (size_t i = 0; i < device_sequence.size(); i++) {
-            tt::log_info("device_sequence id {}", device_sequence[i]->id());
-        }
 
         uint32_t fwd_edm_start_index = 0;
         uint32_t fwd_edm_end_index = (topology == Topology::Ring) ? device_sequence.size() : device_sequence.size() - 1;
