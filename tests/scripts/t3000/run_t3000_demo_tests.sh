@@ -199,7 +199,7 @@ run_t3000_llama3_load_checkpoints_tests() {
   llama90b=/mnt/MLPerf/tt_dnn-models/llama/Llama3.2-90B-Vision-Instruct/
 
   for llama_dir in "$llama70b" "$llama90b"; do
-    LLAMA_DIR=$llama_dir WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/tests/test_load_checkpoints.py ; fail+=$?
+    LLAMA_DIR=$llama_dir WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/tests/test_load_checkpoints.py --timeout=600; fail+=$?
     echo "LOG_METAL: Llama3 load checkpoints tests for $llama_dir completed"
   done
 

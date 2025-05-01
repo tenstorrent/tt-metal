@@ -20,7 +20,7 @@ from models.tt_transformers.tt.load_checkpoints import load_sharded_checkpoints
 # get the absolute path to this file
 _file_abs_path = os.path.abspath(__file__)
 
-# NOTE: because HF does not export convert_mllama_weight_to_hf.py (the line below fails), we need to copy the functions here
+# [INFO]: because HF does not export convert_mllama_weight_to_hf.py (the line below fails), we need to copy the functions here
 # from transformers.models.mllama.convert_mllama_weight_to_hf import is_param_different_across_shards, convert_old_keys_to_new_keys, get_concat_dim, cross_attention_layers_shift, self_attention_layers_shift
 
 # fmt: off
@@ -120,7 +120,7 @@ def get_concat_dim(key):
 
 
 def hf_mllama_save_tensor_states(loaded: list, model_name: str, params: dict, tensor_states_path: str) -> None:
-    # copied just enough code from transformers.models.mllama.convert_mllama_weight_to_hf.write_model to get the tensor states
+    # [INFO] copied just enough code from transformers.models.mllama.convert_mllama_weight_to_hf.write_model to get the tensor states
     text_num_layers = params["n_layers"]
     cross_attention_num_layers = params["vision_num_cross_attention_layers"]
 
@@ -170,16 +170,12 @@ def hf_mllama_save_tensor_states(loaded: list, model_name: str, params: dict, te
         json.dump(tensor_states, f, indent=4)
 
 
-# NOTE: end of copied functions from transformers.models.mllama.convert_mllama_weight_to_hf
-
-# NOTE: start of copied function from known good implementation of load_sharded_checkpoints for the following models:
+# [INFO]: start of copied function from known good implementation of load_sharded_checkpoints for the following models:
 # "Llama3.2-1B"
 # "Llama3.2-3B"
 # "Llama3.1-8B"
 # "Llama3.2-11B"
 # "Llama3.1-70B"
-
-
 def load_sharded_checkpoints_orig(checkpoints, n_layers):
     checkpoint = {}
     logger.info(f"Loading {len(checkpoints)} checkpoint files")
@@ -216,7 +212,7 @@ def load_sharded_checkpoints_orig(checkpoints, n_layers):
     return checkpoint
 
 
-# NOTE: end of copied function from known good implementation of load_sharded_checkpoints
+# [INFO]: end of copied function from known good implementation of load_sharded_checkpoints
 
 
 def write_tensor_states(loaded: dict, tensor_states_path: str) -> None:
@@ -240,6 +236,7 @@ def test_load_checkpoints():
     # make ModelArgs object with empty mesh_device for its ability to recognize the model name
     input_base_path = os.getenv("LLAMA_DIR")
     assert input_base_path, "LLAMA_DIR must be set to indicate the path to the model checkpoints"
+    logger.info(f"Checkpoint directory: {input_base_path}")
     # [INFO] we can hardcode this check because we only test 70B and 90B models atm
     is_70b = "Llama" in input_base_path and "70B" in input_base_path
     is_90b = "Llama" in input_base_path and "90B" in input_base_path and "Vision" in input_base_path
