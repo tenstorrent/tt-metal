@@ -287,9 +287,8 @@ void Cluster::open_driver(const bool &skip_driver_allocs) {
         // umd::Cluster::detect_available_device_ids only lists MMIO device ids, since we need remote chip ids
         // generate the cluster desc and pull chip ids from there
         auto temp_cluster_desc = tt::umd::Cluster::create_cluster_descriptor();
-        const char* TT_METAL_VISIBLE_DEVICES = std::getenv("TT_METAL_VISIBLE_DEVICES");
-        if (TT_METAL_VISIBLE_DEVICES != NULL) {
-            chips_set.emplace(std::stoi(std::string(TT_METAL_VISIBLE_DEVICES)));
+        if (rtoptions_.is_visible_device_specified()) {
+            chips_set.emplace(rtoptions_.get_visible_device());
         } else {
             std::unordered_set<chip_id_t> all_chips = temp_cluster_desc->get_all_chips();
             chips_set.insert(all_chips.begin(), all_chips.end());

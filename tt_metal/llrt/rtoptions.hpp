@@ -87,6 +87,9 @@ class RunTimeOptions {
     bool is_kernel_dir_env_var_set = false;
     std::string kernel_dir;
 
+    bool is_visible_device_env_var_set = false;
+    uint32_t visible_device;
+
     bool build_map_enabled = false;
 
     bool watcher_enabled = false;
@@ -158,6 +161,9 @@ public:
 
     inline bool is_kernel_dir_specified() const { return this->is_kernel_dir_env_var_set; }
     const std::string& get_kernel_dir() const;
+
+    inline bool is_visible_device_specified() const { return this->is_visible_device_env_var_set; }
+    inline uint32_t get_visible_device() const { return this->visible_device; }
 
     inline bool get_build_map_enabled() const { return build_map_enabled; }
 
