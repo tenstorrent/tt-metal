@@ -102,55 +102,43 @@ void Tensor::init(Storage storage, TensorSpec tensor_spec) {
                     mesh_device_ = storage.mesh_buffer->device();
                 }
                 workers = {storage.get_device()};
-                tensor_impl::validate_on_device_dtype_and_layout(
-                    tensor_attributes->get_tensor_spec().padded_shape(),
-                    tensor_attributes->get_tensor_spec().data_type(),
-                    tensor_attributes->get_tensor_spec().layout());
             }
         },
         tensor_attributes->get_storage());
 }
 
-Tensor::Tensor(distributed::MeshDevice* mesh_device) :
-    tensor_attributes(std::make_shared<TensorAttributes>()), workers({mesh_device}) {
-    if (mesh_device == nullptr) {
-        TT_THROW("Mesh device is nullptr");
-    }
-    tensor_attributes->set_storage(Storage(DeviceStorage()));
-    mesh_device_ = mesh_device;
+Tensor::Tensor(distributed::MeshDevice* mesh_device, TensorSpec spec) :
+    tensor_attributes(std::make_shared<TensorAttributes>(DeviceStorage(), std::move(spec))),
+    workers({mesh_device}),
+    mesh_device_(mesh_device) {
+    TT_FATAL(mesh_device_ != nullptr, "Mesh device is nullptr");
 }
 
-Tensor::Tensor(const std::vector<IDevice*>& workers) :
-    tensor_attributes(std::make_shared<TensorAttributes>()), workers(workers) {
-    if (workers.empty()) {
-        return;
-    }
-
-    TT_FATAL(workers.size() == 1, "Only single device is supported.");
-    tensor_attributes->set_storage(Storage(DeviceStorage()));
+Tensor::Tensor(const std::vector<IDevice*>& workers, TensorSpec spec) :
+    tensor_attributes(std::make_shared<TensorAttributes>(
+        workers.empty() ? Storage(HostStorage()) : DeviceStorage(), std::move(spec))),
+    workers(workers) {
+    TT_FATAL(workers.size() <= 1, "Only single device is supported.");
 }
 
-Tensor::Tensor(uint32_t num_buffers, std::optional<DistributedTensorConfig> distributed_tensor_config) :
-    tensor_attributes(std::make_shared<TensorAttributes>()) {
-    if (num_buffers == 0) {
-        return;
-    }
-
-    tensor_attributes->set_storage([&]() {
-        if (num_buffers == 1) {
-            return Storage(HostStorage());
-        }
-        MultiDeviceHostStorage storage;
-        if (distributed_tensor_config.has_value()) {
-            storage.strategy = distributed_tensor_config.value();
-        }
-        storage.buffers = std::vector<HostBuffer>(num_buffers, HostBuffer());
-        storage.specs = std::vector<ttnn::TensorSpec>(
-            num_buffers,
-            TensorSpec(Shape{}, TensorLayout(DataType::FLOAT32, PageConfig(Layout::ROW_MAJOR), MemoryConfig{})));
-        return Storage(std::move(storage));
-    }());
-}
+Tensor::Tensor(
+    uint32_t num_buffers, TensorSpec spec, std::optional<DistributedTensorConfig> distributed_tensor_config) :
+    tensor_attributes(std::make_shared<TensorAttributes>(
+        [&]() {
+            if (num_buffers <= 1) {
+                return Storage(HostStorage());
+            }
+            MultiDeviceHostStorage storage;
+            if (distributed_tensor_config.has_value()) {
+                storage.strategy = distributed_tensor_config.value();
+            }
+            storage.buffers = std::vector<HostBuffer>(num_buffers, HostBuffer());
+            storage.specs = std::vector<ttnn::TensorSpec>(
+                num_buffers,
+                TensorSpec(Shape{}, TensorLayout(DataType::FLOAT32, PageConfig(Layout::ROW_MAJOR), MemoryConfig{})));
+            return Storage(std::move(storage));
+        }(),
+        std::move(spec))) {}
 
 Tensor& Tensor::operator=(const Tensor& other) {
     // Don't self-assign
@@ -222,33 +210,6 @@ void Tensor::deallocate_impl(bool force, bool deallocation_through_destructor) {
             }},
         this->tensor_attributes->get_storage());
     // GraphTracker::instance().track_function_end();
-}
-
-void Tensor::populate_buffers_and_metadata(const Tensor& other) {
-    ZoneScoped;
-    // Applied on a tensor that has an empty storage container initialized.
-    this->set_tensor_spec(other.get_tensor_spec());
-    // Populate storage container with buffers + shapes
-    std::visit(
-        [this](auto&& storage) {
-            using StorageType = std::decay_t<decltype(storage)>;
-            if constexpr (std::is_same_v<StorageType, HostStorage>) {
-                std::get<StorageType>(this->tensor_attributes->get_storage()).insert_buffer(storage.get_buffer());
-            } else if constexpr (std::is_same_v<StorageType, DeviceStorage>) {
-                if (storage.mesh_buffer != nullptr) {
-                    std::get<DeviceStorage>(this->tensor_attributes->get_storage()).mesh_buffer = storage.mesh_buffer;
-                } else {
-                    std::get<DeviceStorage>(this->tensor_attributes->get_storage()).insert_buffer(storage.buffer);
-                }
-            } else if constexpr (std::is_same_v<
-                                     StorageType,
-                                     MultiDeviceHostStorage> /*or std::is_same_v<StorageType, MultiDeviceStorage> */) {
-                std::get<StorageType>(this->tensor_attributes->get_storage()).buffers = storage.buffers;
-                std::get<StorageType>(this->tensor_attributes->get_storage()).specs = storage.specs;
-            }
-        },
-        other.get_storage());  // Non blocking storage query, since this is done for tensors that get created inside the
-                               // worker thread
 }
 
 std::vector<IDevice*> Tensor::get_workers(bool blocking) const {
@@ -817,8 +778,7 @@ void memcpy(Tensor& dst, const Tensor& src, const std::optional<BufferRegion>& r
 }
 
 Tensor allocate_tensor_on_devices(const TensorSpec& tensor_spec, const std::vector<IDevice*>& devices) {
-    // Top level wrapper to asynchronously create a device tensor (single- or multi-device).
-    Tensor device_tensor = Tensor(devices);
+    Tensor device_tensor = Tensor(devices, tensor_spec);
 
     const auto& workers_in_use = device_tensor.get_workers();
     uint32_t num_workers = workers_in_use.size();
@@ -827,10 +787,6 @@ Tensor allocate_tensor_on_devices(const TensorSpec& tensor_spec, const std::vect
         auto& worker = devices[worker_index];
         auto shard = create_device_tensor(tensor_spec, worker);
         insert_buffer_and_shape_for_device(worker, shard, device_tensor, worker_index);
-
-        if (worker_index == 0) {
-            device_tensor.set_tensor_spec(tensor_spec);
-        }
     }
     return device_tensor;
 }
