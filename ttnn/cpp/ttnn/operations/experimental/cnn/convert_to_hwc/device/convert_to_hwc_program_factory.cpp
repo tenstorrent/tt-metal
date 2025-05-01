@@ -10,29 +10,31 @@ namespace ttnn::operations::experimental::cnn::detail {
 
 using namespace tt::constants;
 
-tt::tt_metal::operation::ProgramWithCallbacks multi_core_convert_to_hwc(
-    const Tensor& a, Tensor& output, CoreCoord compute_with_storage_grid_size) {
+tt::tt_metal::operation::ProgramWithCallbacks multi_core_convert_to_hwc(const Tensor& a, Tensor& output) {
+    tt::log_info("STARTING CONVERT OP");
     tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
 
     const auto input_shape = a.get_logical_shape();
+    const auto input_shard_height = a.shard_spec()->shape[0];
+    const auto input_shard_width = a.shard_spec()->shape[1];
     const auto input_core_grid = a.shard_spec()->grid;
     const auto input_cores = corerange_to_cores(
         input_core_grid, std::nullopt, a.shard_spec()->orientation == tt::tt_metal::ShardOrientation::ROW_MAJOR);
+    tt::log_info("STARTING CONVERT OP");
 
     const auto C = input_shape[2];
     const auto HW = input_shape[3];
 
-    tt::log_debug(tt::LogType::LogOp, "Running op with C={}, HW={}, shard_shape={}", C, HW, a.shard_spec()->shape);
+    tt::log_info(tt::LogType::LogOp, "Running op with C={}, HW={}, shard_shape={}", C, HW, a.shard_spec()->shape);
+    tt::log_info("STARTING CONVERT OP");
 
-    TT_FATAL(HW < TILE_HEIGHT, "HW must be 32 or smaller");
-    TT_FATAL(
-        tt::div_up(C, a.shard_spec()->shape[0]) == input_cores.size(),
-        "Mismatch between core grid and input/shard shapes");
+    TT_FATAL(C < TILE_HEIGHT, "HW must be 32 or smaller");
 
-    const uint32_t total_tiles = C / TILE_HEIGHT;  // assume HW < 32
+    const uint32_t total_tiles = HW / TILE_HEIGHT;  // assume HW < 32
     const uint32_t total_tiles_per_core = tt::div_up(total_tiles, input_cores.size());
+    tt::log_info("STARTING CONVERT OP");
 
-    tt::log_debug(
+    tt::log_info(
         tt::LogType::LogOp, "Processing {} tiles per core ({} total tiles)", total_tiles_per_core, total_tiles);
 
     const auto create_circular_buffer = [&program, &input_core_grid](
@@ -41,7 +43,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_convert_to_hwc(
                                             uint32_t page_size,
                                             const tt::DataFormat& format,
                                             tt::tt_metal::Buffer* buffer = nullptr) -> tt::tt_metal::CBHandle {
-        tt::log_debug(
+        tt::log_info(
             tt::LogType::LogOp,
             "Creating CB at index {} with total size {} B and page size {} B",
             index,
@@ -54,34 +56,38 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_convert_to_hwc(
         return tt::tt_metal::CreateCircularBuffer(program, input_core_grid, config);
     };
 
-    const tt::DataFormat input_format = tt::tt_metal::datatype_to_dataformat_converter(a.get_dtype());
-    const uint32_t input_tile_size = tt::tt_metal::detail::TileSize(input_format);
-
     const tt::DataFormat intermediary_format = tt::DataFormat::Float16_b;
     const uint32_t intermediary_tile_size = tt::tt_metal::detail::TileSize(intermediary_format);
 
     const uint32_t cb_in_id = tt::CBIndex::c_0;
-    const uint32_t cb_in_total_size = total_tiles_per_core * input_tile_size;
-    const uint32_t cb_in_page_size = input_tile_size;
+    const tt::DataFormat input_format = tt::tt_metal::datatype_to_dataformat_converter(a.get_dtype());
+    const uint32_t input_element_size = tt::datum_size(input_format);
+    const uint32_t cb_in_total_size = input_shard_height * input_shard_width * input_element_size;
+    const uint32_t cb_in_page_size = input_shard_width * input_element_size;
     const auto cb_in = create_circular_buffer(cb_in_id, cb_in_total_size, cb_in_page_size, input_format, a.buffer());
 
-    const tt::DataFormat output_format = tt::tt_metal::datatype_to_dataformat_converter(output.get_dtype());
     const uint32_t cb_out_id = tt::CBIndex::c_1;
-    const uint32_t element_size = tt::datum_size(output_format);
-    const uint32_t cb_out_total_size = tt::div_up(C * HW * element_size, input_cores.size());
-    const uint32_t cb_out_page_size = tt::div_up(C * element_size, input_cores.size());
+    const tt::DataFormat output_format = input_format;
+    const uint32_t cb_out_total_size = cb_in_total_size;  // same size as input
+    const uint32_t cb_out_page_size = input_shard_height * input_element_size;
     const auto cb_out =
         create_circular_buffer(cb_out_id, cb_out_total_size, cb_out_page_size, output_format, output.buffer());
 
-    const uint32_t cb_in_transpose_id = tt::CBIndex::c_2;
-    const uint32_t cb_in_transpose_total_size = 16 * intermediary_tile_size;
+    const uint32_t cb_in_tiled_id = tt::CBIndex::c_2;
+    const uint32_t cb_in_tiled_total_size = intermediary_tile_size;
+    const uint32_t cb_in_tiled_page_size = intermediary_tile_size;
+    const auto cb_in_tiled =
+        create_circular_buffer(cb_in_tiled_id, cb_in_tiled_total_size, cb_in_tiled_page_size, intermediary_format);
+
+    const uint32_t cb_in_transpose_id = tt::CBIndex::c_3;
+    const uint32_t cb_in_transpose_total_size = intermediary_tile_size;
     const uint32_t cb_in_transpose_page_size = intermediary_tile_size;
     const auto cb_in_transpose = create_circular_buffer(
         cb_in_transpose_id, cb_in_transpose_total_size, cb_in_transpose_page_size, intermediary_format);
 
     std::vector<uint32_t> reader_compile_time_args = {cb_in_id};
     std::vector<uint32_t> writer_compile_time_args = {cb_in_transpose_id, cb_out_id, HW};
-    std::vector<uint32_t> compute_compile_time_args = {cb_in_id, cb_in_transpose_id};
+    std::vector<uint32_t> compute_compile_time_args = {cb_in_id, cb_in_tiled_id, cb_in_transpose_id};
 
     auto reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
