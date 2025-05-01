@@ -62,8 +62,8 @@ tt_metal/include/compute_kernel_api/ @rtawfik01 @rdjogoTT @ttmtrajkovic @nvelick
 tt_metal/third_party/tt_llk @rtawfik01 @ttmtrajkovic @rdjogoTT @nvelickovicTT
 tests/tt_metal/tt_metal/data_movement @rtawfik01 @vvukomanovicTT @atatuzunerTT
 
-# sfpi
-tt_metal/hw/cmake/sfpi-version.cmake @nathan-TT
+# metal - sfpi
+tt_metal/sfpi-version.sh @nathan-TT
 tests/tt_metal/tt_metal/sfpi/ @nathan-TT
 tests/tt_metal/tt_metal/test_kernels/sfpi/ @nathan-TT
 
