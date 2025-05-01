@@ -29,12 +29,13 @@ void kernel_main() {
     // Test doesn't support multiple pages per send yet since we are writing
     // to interleaved which will never have subsequent pages on the same core
     // (and hence, able to share a packet header)
-    constexpr uint32_t num_pages_per_send = 1;  // get_compile_time_arg_val(0);
     constexpr uint32_t total_pages_to_send = get_compile_time_arg_val(1);
     constexpr uint32_t page_size = get_compile_time_arg_val(2);
     constexpr uint32_t num_buffers_per_channel = get_compile_time_arg_val(3);
     constexpr bool dest_is_dram = get_compile_time_arg_val(4) != 0;
     constexpr bool mcast_mode = get_compile_time_arg_val(5) == 1;
+    constexpr bool write_scatter_mode = get_compile_time_arg_val(6) == 1;
+    constexpr uint32_t num_pages_per_send = (write_scatter_mode ? 2 : 1);
 
     size_t arg_idx = 0;
     // Nearly all of the following arguments are needed to establish a connection with
@@ -123,7 +124,7 @@ void kernel_main() {
 
         // bit of a hack to extract X/Y
         const auto dest_noc_address = get_noc_addr(p, dest_addr_gen, 0, NORMALIZED_NOC_INDEX);
-        const size_t packet_size = 2 * (page_size + sizeof(PACKET_HEADER_TYPE));
+        size_t packet_size = page_size + sizeof(PACKET_HEADER_TYPE);
         auto packet_addr = get_read_ptr(cb_id_in0);
         auto* packet_header = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(packet_addr);
         if constexpr (mcast_mode) {
@@ -133,17 +134,17 @@ void kernel_main() {
                 ->to_noc_unicast_write(
                     tt::tt_fabric::NocUnicastCommandHeader{dest_noc_address}, (pages_to_send * page_size));
         } else {
-            if constexpr (false) {
-                packet_header->to_chip_unicast(config.unicast.distance)
-                    ->to_noc_unicast_write(
-                        tt::tt_fabric::NocUnicastCommandHeader{dest_noc_address}, (pages_to_send * page_size));
-            } else {
-                p += num_pages_per_send;
-                const auto dest_noc_address2 = get_noc_addr(p, dest_addr_gen, 0, NORMALIZED_NOC_INDEX);
+            if constexpr (write_scatter_mode) {
+                packet_size = 2 * (page_size + sizeof(PACKET_HEADER_TYPE));
+                const auto dest_noc_address2 = get_noc_addr(p + 1, dest_addr_gen, 0, NORMALIZED_NOC_INDEX);
                 packet_header->to_chip_unicast(config.unicast.distance)
                     ->to_noc_unicast_scatter_write(
                         tt::tt_fabric::NocUnicastScatterCommandHeader{dest_noc_address, dest_noc_address2},
                         (2 * page_size) + sizeof(PACKET_HEADER_TYPE));
+            } else {
+                packet_header->to_chip_unicast(config.unicast.distance)
+                    ->to_noc_unicast_write(
+                        tt::tt_fabric::NocUnicastCommandHeader{dest_noc_address}, (pages_to_send * page_size));
             }
         }
 
