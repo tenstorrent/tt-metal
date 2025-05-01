@@ -786,20 +786,15 @@ void DumpDeviceProfileResults(
         auto virtualCore = device->virtual_core_from_logical_core(core, CoreType::ETH);
         workerCores.push_back(virtualCore);
     }
-    IDevice* push_work_device = device;
-    if (auto mesh_device = device->get_mesh_device()) {
-        push_work_device = mesh_device.get();
-    }
-    push_work_device->push_work([device, workerCores, state, metadata]() mutable {
-        DumpDeviceProfileResults(device, workerCores, state, metadata);
-        if (deviceDeviceTimePair.find(device->id()) != deviceDeviceTimePair.end() and
-            state == ProfilerDumpState::CLOSE_DEVICE_SYNC) {
-            for (auto& connected_device : deviceDeviceTimePair.at(device->id())) {
-                chip_id_t sender_id = device->id();
-                chip_id_t receiver_id = connected_device.first;
-            }
+
+    DumpDeviceProfileResults(device, workerCores, state, metadata);
+    if (deviceDeviceTimePair.find(device->id()) != deviceDeviceTimePair.end() and
+        state == ProfilerDumpState::CLOSE_DEVICE_SYNC) {
+        for (auto& connected_device : deviceDeviceTimePair.at(device->id())) {
+            chip_id_t sender_id = device->id();
+            chip_id_t receiver_id = connected_device.first;
         }
-    });
+    }
 
 #endif
 }

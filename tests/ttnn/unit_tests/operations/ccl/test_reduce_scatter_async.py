@@ -251,7 +251,7 @@ def run_reduce_scatter_test(
         eq, output = comp_pcc(tt_output_tensor, golden_output_tensors[i])
         mismatch = mismatch or not eq
         if not eq:
-            logger.error(f"output mismatch for tensor {i}. Mesh device ID: {mesh_device.get_devices()[i].id()}")
+            logger.error(f"output mismatch for tensor {i}. Mesh device ID: {mesh_device.get_device_ids()[i]}")
             if debug:
                 logger.info(f"FINAL OUTPUT TENSOR {tt_output_tensor}")
                 mismatch_tensor_shape = [
@@ -408,7 +408,7 @@ def test_line_reduce_scatter_async_on_T3K_cols_post_commit(
     replication_factor,
     num_iters=1,
 ):
-    if len(mesh_device.get_devices()) < 8:
+    if mesh_device.get_num_devices() < 8:
         pytest.skip("Not T3K!")
 
     run_line_reduce_scatter_on_TG_with_mesh_tensor_along_rows(
@@ -472,7 +472,7 @@ def test_line_reduce_scatter_async_on_T3K_rows_post_commit(
     replication_factor,
     num_iters=1,
 ):
-    if len(mesh_device.get_devices()) < 8:
+    if mesh_device.get_num_devices() < 8:
         pytest.skip("Not T3K!")
 
     run_line_reduce_scatter_on_TG_with_mesh_tensor_along_rows(
@@ -595,7 +595,7 @@ def test_line_reduce_scatter_cluster_axis_on_T3K_width_sharded_reduce_scatter_po
     num_iters=1,
     trace_mode=False,
 ):
-    if len(mesh_device.get_devices()) < 8:
+    if mesh_device.get_num_devices() < 8:
         pytest.skip("Not T3K!")
 
     input_shard_spec = ttnn.ShardSpec(

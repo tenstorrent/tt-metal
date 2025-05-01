@@ -39,6 +39,7 @@ jobs:
           { name: "segformer", runner-label: "N150", performance: false, cmd: run_segformer_func, owner_id: U045U3DEKM4}, # Mohamed Bahnas (vguduruTT)
           { name: "yolov9c", runner-label: "N150", performance: false, cmd: run_yolov9c_perf, owner_id: U056BK5U81E}, # Dalar Vartanians
           { name: "yolov8s_world", runner-label: "N150", performance: false, cmd: run_yolov8s_world_perf, owner_id: U056BK5U81E}, # Dalar Vartanians
+          { name: "ufld_v2", runner-label: "N150", performance: false, cmd: run_ufld_v2_func, owner_id: U056BK5U81E}, # Dalar Vartanians
           { name: "falcon7b", runner-label: "N300", performance: false, cmd: run_falcon7b_func, owner_id: U05RWH3QUPM}, # Salar Hosseini
           { name: "mistral7b", runner-label: "N300", performance: false, cmd: run_mistral7b_func, owner_id: U03PUAKE719}, # Miguel Tairum
           { name: "qwen7b", runner-label: "N300", performance: false, cmd: run_qwen7b_func, owner_id: U06F3ER8X9A}, # Stuti Raizada
@@ -53,6 +54,7 @@ jobs:
           { name: "squeezebert", runner-label: "N300", performance: false, cmd: run_squeezebert_func, owner_id: UBHPP2NDP}, #Joseph Chu
           { name: "roberta", runner-label: "N300", performance: false, cmd: run_roberta_func, owner_id: U06F3ER8X9A}, # Stuti Raizada
           { name: "yolov9c", runner-label: "N300", performance: false, cmd: run_yolov9c_perf, owner_id: U056BK5U81E}, # Dalar Vartanians
+          { name: "ufld_v2", runner-label: "N300", performance: false, cmd: run_ufld_v2_func, owner_id: U056BK5U81E}, # Dalar Vartanians
           { name: "mistral7b", runner-label: "N150", performance: true, cmd: run_mistral7b_perf, owner_id: U03PUAKE719}, # Miguel Tairum
           { name: "mistral7b", runner-label: "N300", performance: true, cmd: run_mistral7b_perf, owner_id: U03PUAKE719}, # Miguel Tairum
           { name: "llama3", runner-label: "N300", performance: true, cmd: run_llama3_perf, owner_id: U03PUAKE719}, # Miguel Tairum

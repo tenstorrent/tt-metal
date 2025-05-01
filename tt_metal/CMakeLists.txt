@@ -80,12 +80,10 @@ target_sources(
             api/tt-metalium/persistent_kernel_cache.hpp
             api/tt-metalium/program.hpp
             api/tt-metalium/program_cache.hpp
-            api/tt-metalium/program_device_map.hpp
             api/tt-metalium/runtime_args_data.hpp
             api/tt-metalium/semaphore.hpp
             api/tt-metalium/shape.hpp
             api/tt-metalium/sub_device.hpp
-            api/tt-metalium/sub_device_manager_tracker.hpp
             api/tt-metalium/sub_device_types.hpp
             api/tt-metalium/system_mesh.hpp
             api/tt-metalium/system_memory_manager.hpp
@@ -299,7 +297,7 @@ target_link_libraries(
         nlohmann_json::nlohmann_json
         TT::Metalium::HostDevCommon
         Reflect::Reflect
-        TT:STL
+        TT::STL
     PRIVATE
         Metalium::Metal::Impl
         metal_common_libs

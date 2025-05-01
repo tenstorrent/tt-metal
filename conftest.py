@@ -22,6 +22,11 @@ from loguru import logger
 from tests.scripts.common import run_process_and_get_result
 from tests.scripts.common import get_updated_device_params
 
+# Constants for device configurations
+GALAXY_NUM_DEVICES = 32
+TG_NUM_PCIE_DEVICES = 4
+SIX_U_NUM_PCIE_DEVICES = 32
+
 
 @pytest.fixture(scope="function")
 def reset_seeds():
@@ -64,27 +69,28 @@ def galaxy_type():
         return None
 
 
+def is_galaxy():
+    import ttnn
+
+    num_devices = ttnn.GetNumAvailableDevices()
+    # Galaxy systems have 32 devices
+    return num_devices == GALAXY_NUM_DEVICES
+
+
 # TODO: Remove this when TG clusters are deprecated.
 def is_6u():
     import ttnn
 
-    num_pcie = ttnn.GetNumPCIeDevices()
-    num_devices = ttnn.GetNumAvailableDevices()
-    NUM_PCIE_DEVICES = 32
-    NUM_DEVICES = 32
-    return num_pcie == NUM_PCIE_DEVICES and num_devices == NUM_DEVICES
+    # 6U has 32 PCIe devices
+    return is_galaxy() and ttnn.GetNumPCIeDevices() == SIX_U_NUM_PCIE_DEVICES
 
 
 # TODO: Remove this when TG clusters are deprecated.
 def is_tg_cluster():
     import ttnn
 
-    num_pcie = ttnn.GetNumPCIeDevices()
-    num_devices = ttnn.GetNumAvailableDevices()
-    # TG has 32 available chips and 4 PCIe mapped chips (not exposed to the user)
-    TG_NUM_PCIE_DEVICES = 4
-    TG_NUM_DEVICES = 32
-    return num_pcie == TG_NUM_PCIE_DEVICES and num_devices == TG_NUM_DEVICES
+    # TG has 4 PCIe devices
+    return is_galaxy() and ttnn.GetNumPCIeDevices() == TG_NUM_PCIE_DEVICES
 
 
 def first_available_tg_device():
@@ -271,8 +277,7 @@ def mesh_device(request, silicon_arch_name, device_params):
     logger.debug(f"multidevice with {mesh_device.get_num_devices()} devices is created")
     yield mesh_device
 
-    for device in mesh_device.get_devices():
-        ttnn.DumpDeviceProfiler(device)
+    ttnn.DumpDeviceProfiler(mesh_device)
 
     ttnn.close_mesh_device(mesh_device)
     reset_fabric(fabric_config)
@@ -307,8 +312,7 @@ def pcie_mesh_device(request, silicon_arch_name, silicon_arch_wormhole_b0, devic
     logger.debug(f"multidevice with {mesh_device.get_num_devices()} devices is created")
     yield mesh_device
 
-    for device in mesh_device.get_devices():
-        ttnn.DumpDeviceProfiler(device)
+    ttnn.DumpDeviceProfiler(mesh_device)
 
     ttnn.close_mesh_device(mesh_device)
     reset_fabric(fabric_config)
@@ -333,8 +337,7 @@ def n300_mesh_device(request, silicon_arch_name, silicon_arch_wormhole_b0, devic
     logger.debug(f"multidevice with {mesh_device.get_num_devices()} devices is created")
     yield mesh_device
 
-    for device in mesh_device.get_devices():
-        ttnn.DumpDeviceProfiler(device)
+    ttnn.DumpDeviceProfiler(mesh_device)
 
     ttnn.close_mesh_device(mesh_device)
     reset_fabric(fabric_config)
@@ -360,8 +363,7 @@ def t3k_mesh_device(request, silicon_arch_name, silicon_arch_wormhole_b0, device
     logger.debug(f"multidevice with {mesh_device.get_num_devices()} devices is created")
     yield mesh_device
 
-    for device in mesh_device.get_devices():
-        ttnn.DumpDeviceProfiler(device)
+    ttnn.DumpDeviceProfiler(mesh_device)
 
     ttnn.close_mesh_device(mesh_device)
     reset_fabric(fabric_config)
@@ -697,6 +699,10 @@ def pytest_handlecrashitem(crashitem, report, sched):
 
 def reset_tensix(tt_open_devices=None):
     import shutil
+
+    if is_galaxy():
+        logger.info("Skipping reset for Galaxy systems, need a new reset.json scheme")
+        return
 
     # Check if tt-smi exists
     if not shutil.which("tt-smi"):

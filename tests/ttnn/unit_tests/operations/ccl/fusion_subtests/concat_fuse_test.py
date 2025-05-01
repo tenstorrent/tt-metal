@@ -206,7 +206,7 @@ def run_concat_fuse_impl(
         tt_input_tensors = []
         for i, t in enumerate(input_tensors):
             tt_input_tensors.append(ttnn.Tensor(t, input_dtype).to(layout))
-            logger.info(f"using device {mesh_device.get_devices()[i].id()}")
+            logger.info(f"using device {mesh_device.get_device_ids()[i]}")
 
         input_tensor_mesh = ttnn.aggregate_as_tensor(tt_input_tensors).to(mesh_device, input_mem_config)
 
@@ -300,7 +300,7 @@ def run_concat_fuse_impl(
         output_tensor_concat = output_tensor.reshape(1, 1, 32, 1024)
         for i, t in enumerate(ttnn.get_device_tensors(tt_out_tensor)):
             tt_output_tensor = t.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch()
-            logger.info(f"Checking for device {t.device().id()}")
+            logger.info(f"Checking for device {t.device()}")
 
             if input_dtype == ttnn.bfloat16:
                 eq, output = comp_equal(tt_output_tensor[:, :, :, :1024], output_tensor_concat)
