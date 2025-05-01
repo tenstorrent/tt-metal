@@ -9,7 +9,7 @@
 #include <cstddef>
 #include <ostream>
 
-#include "assert.hpp"
+#include <tt-logger/tt-logger.hpp>
 #include "constants.hpp"
 #include <tt_stl/span.hpp>
 

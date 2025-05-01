@@ -13,7 +13,7 @@
 #include <variant>
 #include <vector>
 
-#include "assert.hpp"
+#include <tt-logger/tt-logger.hpp>
 #include "command_queue_common.hpp"
 #include "device.hpp"
 #include "dispatch.hpp"

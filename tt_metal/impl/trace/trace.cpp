@@ -5,7 +5,7 @@
 #include <command_queue.hpp>
 #include <device.hpp>
 #include <host_api.hpp>
-#include <logger.hpp>
+#include <tt-logger/tt-logger.hpp>
 #include <trace.hpp>
 #include <tt-metalium/allocator.hpp>
 #include <cstddef>
@@ -14,7 +14,7 @@
 #include <vector>
 
 #include "allocator_types.hpp"
-#include "assert.hpp"
+#include <tt-logger/tt-logger.hpp>
 #include "buffer.hpp"
 #include "buffer_types.hpp"
 #include "math.hpp"

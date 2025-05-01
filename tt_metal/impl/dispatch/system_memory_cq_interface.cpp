@@ -6,7 +6,7 @@
 #include <tt-metalium/dispatch_settings.hpp>
 #include <tt-metalium/system_memory_cq_interface.hpp>
 
-#include "assert.hpp"
+#include <tt-logger/tt-logger.hpp>
 #include "impl/context/metal_context.hpp"
 
 namespace tt::tt_metal {

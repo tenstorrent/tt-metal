@@ -17,7 +17,7 @@
 #include <string>
 #include <vector>
 
-#include "assert.hpp"
+#include <tt-logger/tt-logger.hpp>
 #include "context.hpp"
 #include "device.hpp"
 #include "device_utils.hpp"

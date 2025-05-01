@@ -39,7 +39,7 @@
 
 #include "allocator.hpp"
 #include "allocator_types.hpp"
-#include "assert.hpp"
+#include <tt-logger/tt-logger.hpp>
 #include "buffer_types.hpp"
 #include "command_queue.hpp"
 #include "command_queue_common.hpp"
@@ -55,7 +55,7 @@
 #include "launch_message_ring_buffer_state.hpp"
 #include "lightmetal/lightmetal_capture.hpp"
 #include "llrt.hpp"
-#include "logger.hpp"
+#include <tt-logger/tt-logger.hpp>
 #include "metal_soc_descriptor.h"
 #include "multi_producer_single_consumer_queue.hpp"
 #include "profiler_types.hpp"

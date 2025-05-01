@@ -4,7 +4,7 @@
 
 #include "tlb_config.hpp"
 
-#include <assert.hpp>
+#include <tt-logger/tt-logger.hpp>
 #include <algorithm>
 #include <cstdint>
 #include <string>

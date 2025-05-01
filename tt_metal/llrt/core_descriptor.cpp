@@ -14,7 +14,7 @@
 #include <unordered_map>
 #include <unordered_set>
 
-#include "assert.hpp"
+#include <tt-logger/tt-logger.hpp>
 #include "hal.hpp"
 #include "hal_types.hpp"
 #include "metal_soc_descriptor.h"

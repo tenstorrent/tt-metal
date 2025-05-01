@@ -10,7 +10,7 @@
 #include <string>
 #include <vector>
 
-#include "assert.hpp"
+#include <tt-logger/tt-logger.hpp>
 #include "core_coord.hpp"
 #include "mesh_graph.hpp"
 #include "system_memory_manager.hpp"

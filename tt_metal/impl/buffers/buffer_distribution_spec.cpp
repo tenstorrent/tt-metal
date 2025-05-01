@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "buffer_distribution_spec.hpp"
-#include "assert.hpp"
+#include <tt-logger/tt-logger.hpp>
 
 namespace tt::tt_metal {
 

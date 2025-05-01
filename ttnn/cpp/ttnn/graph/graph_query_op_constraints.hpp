@@ -9,7 +9,7 @@
 #include <string>
 
 #include <nlohmann/json.hpp>
-#include <tt-metalium/logger.hpp>
+#include <tt-logger/tt-logger.hpp>
 #include <tuple>
 #include <variant>
 #include "ttnn/graph/graph_processor.hpp"

@@ -22,7 +22,7 @@
 #include <variant>
 #include <vector>
 
-#include <tt-metalium/assert.hpp>
+#include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/buffer_distribution_spec.hpp>

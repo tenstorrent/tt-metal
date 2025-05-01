@@ -4,7 +4,7 @@
 
 #include <graph_tracking.hpp>
 
-#include "assert.hpp"
+#include <tt-logger/tt-logger.hpp>
 
 namespace tt {
 namespace tt_metal {

@@ -4,7 +4,7 @@
 
 #include "unary_op_utils.hpp"
 
-#include <tt-metalium/assert.hpp>
+#include <tt-logger/tt-logger.hpp>
 #include "cpp/ttnn/tensor/types.hpp"
 
 using namespace tt::tt_metal;

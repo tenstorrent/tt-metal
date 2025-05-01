@@ -4,7 +4,7 @@
 
 #include "llrt/hal.hpp"
 
-#include <assert.hpp>
+#include <tt-logger/tt-logger.hpp>
 
 #include "hal_types.hpp"
 #include <umd/device/types/arch.h>

@@ -7,7 +7,7 @@
 #include <utility>
 #include <vector>
 
-#include "assert.hpp"
+#include <tt-logger/tt-logger.hpp>
 #include "hal_types.hpp"
 #include "impl/context/metal_context.hpp"
 #include "tt_align.hpp"

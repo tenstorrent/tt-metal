@@ -36,7 +36,7 @@
 #include <variant>
 #include <vector>
 
-#include "assert.hpp"
+#include <tt-logger/tt-logger.hpp>
 #include "buffer.hpp"
 #include "buffer_types.hpp"
 #include "core_coord.hpp"
@@ -49,7 +49,7 @@
 #include "kernel_types.hpp"
 #include "llrt.hpp"
 #include "llrt/hal.hpp"
-#include "logger.hpp"
+#include <tt-logger/tt-logger.hpp>
 #include "metal_soc_descriptor.h"
 #include "profiler_optional_metadata.hpp"
 #include "profiler_paths.hpp"

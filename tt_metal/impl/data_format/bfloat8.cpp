@@ -10,7 +10,7 @@
 #include <vector>
 #include <simde/x86/avx2.h>
 
-#include "assert.hpp"
+#include <tt-logger/tt-logger.hpp>
 #include "blockfloat_common.hpp"
 #include "constants.hpp"
 #include "hal_types.hpp"

@@ -21,7 +21,7 @@
 #include <utility>
 #include <vector>
 
-#include "assert.hpp"
+#include <tt-logger/tt-logger.hpp>
 #include "buffers/dispatch.hpp"
 #include "device/dispatch.hpp"
 #include "dispatch/device_command.hpp"
@@ -30,7 +30,7 @@
 #include "dprint_server.hpp"
 #include "event/dispatch.hpp"
 #include "hal_types.hpp"
-#include "logger.hpp"
+#include <tt-logger/tt-logger.hpp>
 #include "program_device_map.hpp"
 #include <tt_stl/strong_type.hpp>
 #include "system_memory_manager.hpp"

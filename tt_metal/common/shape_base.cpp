@@ -10,7 +10,7 @@
 #include <type_traits>
 #include <vector>
 
-#include "assert.hpp"
+#include <tt-logger/tt-logger.hpp>
 #include "shape_base.hpp"
 #include <tt_stl/span.hpp>
 

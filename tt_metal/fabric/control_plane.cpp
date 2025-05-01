@@ -22,12 +22,12 @@
 #include <utility>
 #include <vector>
 
-#include "assert.hpp"
+#include <tt-logger/tt-logger.hpp>
 #include "control_plane.hpp"
 #include "core_coord.hpp"
 #include "fabric_host_interface.h"
 #include "hal_types.hpp"
-#include "logger.hpp"
+#include <tt-logger/tt-logger.hpp>
 #include "mesh_coord.hpp"
 #include "mesh_graph.hpp"
 #include "metal_soc_descriptor.h"

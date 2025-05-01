@@ -12,10 +12,10 @@
 
 #include "allocator/algorithms/allocator_algorithm.hpp"
 #include "allocator_types.hpp"
-#include "assert.hpp"
+#include <tt-logger/tt-logger.hpp>
 #include "buffer_types.hpp"
 #include "impl/context/metal_context.hpp"
-#include "logger.hpp"
+#include <tt-logger/tt-logger.hpp>
 #include "tt_metal/impl/allocator/algorithms/free_list_opt.hpp"
 
 namespace tt {

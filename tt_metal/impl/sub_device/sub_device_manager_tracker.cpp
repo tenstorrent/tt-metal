@@ -23,7 +23,7 @@
 #include <utility>
 #include <vector>
 
-#include "assert.hpp"
+#include <tt-logger/tt-logger.hpp>
 #include "core_coord.hpp"
 #include "hal_types.hpp"
 #include "mesh_command_queue.hpp"

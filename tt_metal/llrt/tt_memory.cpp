@@ -4,7 +4,7 @@
 
 #include "tt_memory.h"
 
-#include <assert.hpp>
+#include <tt-logger/tt-logger.hpp>
 #include <algorithm>
 #include <cstdint>
 #include <span>

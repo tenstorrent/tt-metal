@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "flatbuffer/base_types_from_flatbuffer.hpp"
-#include "assert.hpp"
+#include <tt-logger/tt-logger.hpp>
 
 namespace tt::tt_metal {
 

@@ -10,7 +10,7 @@
 #include <random>
 #include <vector>
 
-#include "assert.hpp"
+#include <tt-logger/tt-logger.hpp>
 #include "tracy/Tracy.hpp"
 
 std::ostream& operator<<(std::ostream& os, const bfloat16& bfp16) {

@@ -13,13 +13,13 @@
 #include <type_traits>
 #include <utility>
 
-#include "assert.hpp"
+#include <tt-logger/tt-logger.hpp>
 #include "buffer_types.hpp"
 #include "dispatch.hpp"
 #include "impl/context/metal_context.hpp"
 #include "dispatch/kernels/cq_commands.hpp"
 #include "hal_types.hpp"
-#include "logger.hpp"
+#include <tt-logger/tt-logger.hpp>
 #include "math.hpp"
 #include <tt_stl/strong_type.hpp>
 #include "sub_device_types.hpp"

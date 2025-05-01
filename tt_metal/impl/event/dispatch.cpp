@@ -10,7 +10,7 @@
 #include <utility>
 #include <vector>
 
-#include "assert.hpp"
+#include <tt-logger/tt-logger.hpp>
 #include "command_queue_common.hpp"
 #include "core_coord.hpp"
 #include "device.hpp"
@@ -18,7 +18,7 @@
 #include "dispatch/kernels/cq_commands.hpp"
 #include "dispatch_core_common.hpp"
 #include "hal_types.hpp"
-#include "logger.hpp"
+#include <tt-logger/tt-logger.hpp>
 #include <tt_stl/strong_type.hpp>
 #include "sub_device_types.hpp"
 #include "tt_metal/impl/dispatch/device_command.hpp"

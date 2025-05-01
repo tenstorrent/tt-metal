@@ -43,7 +43,7 @@
 #include "lightmetal/lightmetal_capture.hpp"
 #include "lightmetal_binary.hpp"
 #include "llrt.hpp"
-#include "logger.hpp"
+#include <tt-logger/tt-logger.hpp>
 #include "tt-metalium/program.hpp"
 #include "semaphore.hpp"
 #include "system_memory_manager.hpp"

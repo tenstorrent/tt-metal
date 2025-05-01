@@ -5,7 +5,7 @@
 #include <math.h>
 #include <optional>
 
-#include <tt-metalium/logger.hpp>
+#include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/buffer.hpp>
 #include "tt-metalium/circular_buffer.hpp"
 #include "tt-metalium/circular_buffer_types.hpp"

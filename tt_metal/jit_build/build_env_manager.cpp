@@ -17,7 +17,7 @@
 #include <string_view>
 #include <variant>
 
-#include "assert.hpp"
+#include <tt-logger/tt-logger.hpp>
 #include "core_coord.hpp"
 #include "core_descriptor.hpp"
 #include "dispatch_core_common.hpp"

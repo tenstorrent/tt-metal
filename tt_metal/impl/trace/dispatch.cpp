@@ -6,7 +6,7 @@
 #include <algorithm>
 #include <functional>
 
-#include "assert.hpp"
+#include <tt-logger/tt-logger.hpp>
 #include "device.hpp"
 #include "impl/context/metal_context.hpp"
 #include "dispatch/kernels/cq_commands.hpp"

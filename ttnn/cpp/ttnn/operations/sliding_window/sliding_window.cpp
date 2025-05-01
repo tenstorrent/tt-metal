@@ -5,7 +5,7 @@
 #include "sliding_window.hpp"
 #include <cstdint>
 #include <vector>
-#include <tt-metalium/assert.hpp>
+#include <tt-logger/tt-logger.hpp>
 
 using namespace tt::tt_metal;
 

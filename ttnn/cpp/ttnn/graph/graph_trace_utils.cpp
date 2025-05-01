@@ -11,7 +11,7 @@
 
 #include "graph_consts.hpp"
 #include "graph_processor.hpp"
-#include <tt-metalium/assert.hpp>
+#include <tt-logger/tt-logger.hpp>
 
 namespace ttnn::graph {
 

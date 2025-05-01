@@ -8,7 +8,7 @@
 #include <utility>
 #include <vector>
 
-#include "assert.hpp"
+#include <tt-logger/tt-logger.hpp>
 #include "demux.hpp"
 #include "device.hpp"
 #include "impl/context/metal_context.hpp"

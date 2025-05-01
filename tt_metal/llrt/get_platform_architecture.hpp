@@ -7,7 +7,7 @@
 #include <cstdlib>
 
 #include "tt_backend_api_types.hpp"
-#include "assert.hpp"
+#include <tt-logger/tt-logger.hpp>
 #include "llrt/rtoptions.hpp"
 #include <umd/device/pci_device.hpp>
 #include <umd/device/tt_soc_descriptor.h>

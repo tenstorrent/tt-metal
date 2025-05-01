@@ -4,7 +4,7 @@
 
 #include "ttnn/distributed/api.hpp"
 #include "ttnn/distributed/distributed_tensor.hpp"
-#include <tt-metalium/assert.hpp>
+#include <tt-logger/tt-logger.hpp>
 #include "ttnn/distributed/distributed_tensor_config.hpp"
 #include "ttnn/distributed/types.hpp"
 #include "ttnn/tensor/xtensor/partition.hpp"

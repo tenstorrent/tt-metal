@@ -7,7 +7,7 @@
 #include <stdint.h>
 #include <optional>
 
-#include "assert.hpp"
+#include <tt-logger/tt-logger.hpp>
 #include "core_coord.hpp"
 #include "fd_kernel.hpp"
 #include "mesh_graph.hpp"

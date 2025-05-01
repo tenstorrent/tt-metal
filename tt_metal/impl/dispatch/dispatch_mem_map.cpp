@@ -8,7 +8,7 @@
 #include <optional>
 
 #include "dispatch_mem_map.hpp"
-#include "assert.hpp"
+#include <tt-logger/tt-logger.hpp>
 #include "command_queue_common.hpp"
 #include "dispatch_settings.hpp"
 #include "hal_types.hpp"

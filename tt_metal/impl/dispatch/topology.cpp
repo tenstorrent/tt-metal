@@ -21,7 +21,7 @@
 #include <utility>
 #include <variant>
 
-#include "assert.hpp"
+#include <tt-logger/tt-logger.hpp>
 #include "command_queue_common.hpp"
 #include "control_plane.hpp"
 #include "core_coord.hpp"

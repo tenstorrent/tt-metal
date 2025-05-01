@@ -23,13 +23,13 @@
 #include <unordered_set>
 #include <vector>
 
-#include "assert.hpp"
+#include <tt-logger/tt-logger.hpp>
 #include "core_coord.hpp"
 #include "debug/ring_buffer.h"
 #include "debug_helpers.hpp"
 #include "hal_types.hpp"
 #include "llrt.hpp"
-#include "logger.hpp"
+#include <tt-logger/tt-logger.hpp>
 #include "metal_soc_descriptor.h"
 #include <tt_stl/span.hpp>
 #include "impl/context/metal_context.hpp"

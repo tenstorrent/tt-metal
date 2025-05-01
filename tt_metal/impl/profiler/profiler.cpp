@@ -17,14 +17,14 @@
 #include <filesystem>
 #include <iostream>
 
-#include "assert.hpp"
+#include <tt-logger/tt-logger.hpp>
 #include "dispatch/hardware_command_queue.hpp"
 #include "dispatch/device_command.hpp"
 #include "dispatch/kernels/cq_commands.hpp"
 #include "hal_types.hpp"
 #include "hostdevcommon/profiler_common.h"
 #include "llrt.hpp"
-#include "logger.hpp"
+#include <tt-logger/tt-logger.hpp>
 #include "metal_soc_descriptor.h"
 #include "profiler.hpp"
 #include "profiler_paths.hpp"

@@ -7,7 +7,7 @@
 #include <atomic>
 #include <functional>
 #include <memory>
-#include <tt-metalium/assert.hpp>
+#include <tt-logger/tt-logger.hpp>
 
 template <typename T>
 class MultiProducerSingleConsumerQueue {

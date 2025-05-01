@@ -5,7 +5,7 @@
 #include <unordered_map>
 #include <string>
 
-#include <tt-metalium/assert.hpp>
+#include <tt-logger/tt-logger.hpp>
 #include "ttnn/distributed/distributed_tensor_config.hpp"
 
 namespace tt::tt_metal {

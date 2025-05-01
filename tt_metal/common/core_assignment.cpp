@@ -7,7 +7,7 @@
 #include <limits>
 #include <numeric>
 
-#include "assert.hpp"
+#include <tt-logger/tt-logger.hpp>
 #include "core_assignment.hpp"
 #include <umd/device/types/arch.h>
 #include <umd/device/types/xy_pair.h>

@@ -5,7 +5,7 @@
 #pragma once
 
 #include <cstdint>
-#include "assert.hpp"
+#include <tt-logger/tt-logger.hpp>
 #include <tt_stl/aligned_allocator.hpp>
 #include <umd/device/device_api_metal.h>
 

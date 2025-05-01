@@ -14,7 +14,7 @@
 #include <vector>
 
 #include <tt-metalium/allocator_types.hpp>
-#include <tt-metalium/assert.hpp>
+#include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/hal_types.hpp>
 

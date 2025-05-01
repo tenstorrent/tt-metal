@@ -6,7 +6,7 @@
 
 #include <chrono>
 
-#include "logger.hpp"
+#include <tt-logger/tt-logger.hpp>
 
 namespace tt {
 template <typename TimeUnit = std::chrono::nanoseconds>

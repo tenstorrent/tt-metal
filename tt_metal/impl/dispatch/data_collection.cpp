@@ -18,7 +18,7 @@
 #include <string_view>
 #include <utility>
 
-#include "assert.hpp"
+#include <tt-logger/tt-logger.hpp>
 #include "dev_msgs.h"
 #include "tt-metalium/program.hpp"
 #include <umd/device/tt_core_coordinates.h>

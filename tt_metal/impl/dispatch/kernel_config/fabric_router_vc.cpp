@@ -4,7 +4,7 @@
 
 #include <vector>
 
-#include "assert.hpp"
+#include <tt-logger/tt-logger.hpp>
 #include "control_plane.hpp"
 #include "dispatch/kernel_config/dispatch.hpp"
 #include "dispatch/kernel_config/fd_kernel.hpp"

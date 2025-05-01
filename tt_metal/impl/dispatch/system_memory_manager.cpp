@@ -13,7 +13,7 @@
 #include <string>
 #include <tuple>
 
-#include "assert.hpp"
+#include <tt-logger/tt-logger.hpp>
 #include "core_coord.hpp"
 #include "dispatch_settings.hpp"
 #include "hal.hpp"

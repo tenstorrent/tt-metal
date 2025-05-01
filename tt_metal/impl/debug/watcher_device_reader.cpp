@@ -2,13 +2,13 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <assert.hpp>
+#include <tt-logger/tt-logger.hpp>
 #include <circular_buffer_constants.h>  // For NUM_CIRCULAR_BUFFERS
 #include <core_coord.hpp>
 #include <ctype.h>
 #include <dev_msgs.h>
 #include <fmt/base.h>
-#include <logger.hpp>
+#include <tt-logger/tt-logger.hpp>
 #include <metal_soc_descriptor.h>
 #include "impl/context/metal_context.hpp"
 #include <algorithm>

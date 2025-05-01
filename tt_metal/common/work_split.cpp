@@ -6,7 +6,7 @@
 // Contains utility functions for partitioning work between multiple cores.
 //
 
-#include <assert.hpp>
+#include <tt-logger/tt-logger.hpp>
 #include <core_coord.hpp>
 #include <algorithm>
 #include <cstdint>

@@ -17,7 +17,7 @@
 #include <utility>
 #include <vector>
 
-#include "assert.hpp"
+#include <tt-logger/tt-logger.hpp>
 #include "buffer.hpp"
 #include "buffer_types.hpp"
 #include "core_coord.hpp"

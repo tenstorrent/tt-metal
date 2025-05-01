@@ -4,7 +4,7 @@
 
 #include "tt_elffile.hpp"
 
-#include <assert.hpp>
+#include <tt-logger/tt-logger.hpp>
 #include <elf.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -17,7 +17,7 @@
 #include <iterator>
 #include <map>
 
-#include "logger.hpp"
+#include <tt-logger/tt-logger.hpp>
 
 // Verify some knowledge of, and compatibilty with, RiscV
 #ifndef EM_RISCV

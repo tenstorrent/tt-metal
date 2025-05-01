@@ -8,7 +8,7 @@
 #include <cstdlib>
 #include <vector>
 
-#include "assert.hpp"
+#include <tt-logger/tt-logger.hpp>
 #include "core_config.h"
 #include "dev_mem_map.h"
 #include "hal_types.hpp"

@@ -4,7 +4,7 @@
 
 #include "tt_metal/impl/allocator/algorithms/free_list.hpp"
 
-#include <assert.hpp>
+#include <tt-logger/tt-logger.hpp>
 #include <boost/smart_ptr/make_local_shared_object.hpp>
 #include <algorithm>
 #include <functional>

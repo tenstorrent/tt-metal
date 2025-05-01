@@ -12,8 +12,8 @@
 #include <queue>
 #include <unordered_map>
 
-#include "assert.hpp"
-#include "logger.hpp"
+#include <tt-logger/tt-logger.hpp>
+#include <tt-logger/tt-logger.hpp>
 
 namespace tt::tt_fabric {
 RoutingTableGenerator::RoutingTableGenerator(const std::string& mesh_graph_desc_yaml_file) {

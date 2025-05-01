@@ -17,7 +17,7 @@
 #include <string>
 #include <string_view>
 
-#include "assert.hpp"
+#include <tt-logger/tt-logger.hpp>
 #include "common/executor.hpp"
 #include "env_lib.hpp"
 #include "fmt/base.h"
@@ -25,7 +25,7 @@
 #include "impl/context/metal_context.hpp"
 #include "jit_build/kernel_args.hpp"
 #include "jit_build_settings.hpp"
-#include "logger.hpp"
+#include <tt-logger/tt-logger.hpp>
 #include "profiler_paths.hpp"
 #include "profiler_state.hpp"
 #include "tt_backend_api_types.hpp"

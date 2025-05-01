@@ -6,7 +6,7 @@
 
 #include <boost/container/vector.hpp>
 #include <boost/move/utility_core.hpp>
-#include <tt-metalium/assert.hpp>
+#include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/small_vector.hpp>
 #include <functional>
 #include <numeric>

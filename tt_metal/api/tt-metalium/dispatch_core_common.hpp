@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include <tt-metalium/assert.hpp>
+#include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/data_types.hpp>
 #include <tt_stl/reflection.hpp>

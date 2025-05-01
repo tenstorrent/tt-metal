@@ -9,7 +9,7 @@
 #include <tt-metalium/fabric.hpp>
 #include <tt-metalium/mesh_graph.hpp>
 #include <tt-metalium/fabric_edm_packet_header.hpp>
-#include <tt-metalium/assert.hpp>
+#include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/control_plane.hpp>
 #include <tt-metalium/metal_soc_descriptor.h>
 #include <umd/device/types/cluster_descriptor_types.h>  // chip_id_t

@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <allocator.hpp>
-#include <assert.hpp>
+#include <tt-logger/tt-logger.hpp>
 #include <device.hpp>
 #include <host_api.hpp>
 #include <sub_device.hpp>

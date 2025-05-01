@@ -9,7 +9,7 @@
 #include <string>
 #include <unordered_map>
 
-#include "assert.hpp"
+#include <tt-logger/tt-logger.hpp>
 #include "circular_buffer_constants.h"
 #include "tile.hpp"
 #include "utils.hpp"

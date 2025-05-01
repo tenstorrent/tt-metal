@@ -12,13 +12,13 @@
 #include <utility>
 #include <vector>
 
-#include "assert.hpp"
+#include <tt-logger/tt-logger.hpp>
 #include "command_queue_common.hpp"
 #include "dispatch_settings.hpp"
 #include "hal.hpp"
 #include "hal_types.hpp"
 #include "host_api.hpp"
-#include "logger.hpp"
+#include <tt-logger/tt-logger.hpp>
 #include "system_memory_cq_interface.hpp"
 #include "system_memory_manager.hpp"
 #include "impl/context/metal_context.hpp"

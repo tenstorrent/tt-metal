@@ -23,7 +23,7 @@
 #include <unordered_set>
 #include <vector>
 
-#include "assert.hpp"
+#include <tt-logger/tt-logger.hpp>
 #include "core_coord.hpp"
 #include "llrt/hal.hpp"
 #include "llrt/rtoptions.hpp"

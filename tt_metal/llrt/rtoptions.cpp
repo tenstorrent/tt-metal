@@ -12,7 +12,7 @@
 #include <stdexcept>
 #include <string>
 
-#include "assert.hpp"
+#include <tt-logger/tt-logger.hpp>
 #include <umd/device/tt_core_coordinates.h>
 
 using std::vector;

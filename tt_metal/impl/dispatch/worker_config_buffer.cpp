@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <assert.hpp>
+#include <tt-logger/tt-logger.hpp>
 #include <stdint.h>
 #include <stdio.h>
 #include <worker_config_buffer.hpp>
@@ -10,7 +10,7 @@
 #include <utility>
 #include <vector>
 
-#include "logger.hpp"
+#include <tt-logger/tt-logger.hpp>
 
 namespace tt {
 

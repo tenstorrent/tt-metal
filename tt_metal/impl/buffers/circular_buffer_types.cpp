@@ -6,9 +6,9 @@
 
 #include <unordered_map>
 
-#include "assert.hpp"
+#include <tt-logger/tt-logger.hpp>
 #include "buffer.hpp"
-#include "logger.hpp"
+#include <tt-logger/tt-logger.hpp>
 
 namespace tt {
 enum class DataFormat : uint8_t;

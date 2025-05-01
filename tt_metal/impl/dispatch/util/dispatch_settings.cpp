@@ -13,7 +13,7 @@
 #include <string_view>
 #include <unordered_map>
 
-#include "assert.hpp"
+#include <tt-logger/tt-logger.hpp>
 #include "fmt/base.h"
 #include "hal_types.hpp"
 #include "impl/context/metal_context.hpp"

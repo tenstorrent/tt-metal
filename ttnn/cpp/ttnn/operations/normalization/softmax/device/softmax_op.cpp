@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "softmax_op.hpp"
-#include <tt-metalium/assert.hpp>
+#include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/base_types.hpp>
 #include "ttnn/tensor/storage.hpp"
 #include "ttnn/tensor/types.hpp"

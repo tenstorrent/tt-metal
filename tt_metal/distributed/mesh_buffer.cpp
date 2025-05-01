@@ -9,7 +9,7 @@
 #include <tt_stl/overloaded.hpp>
 #include <vector>
 
-#include "assert.hpp"
+#include <tt-logger/tt-logger.hpp>
 #include "device.hpp"
 
 namespace tt::tt_metal::distributed {

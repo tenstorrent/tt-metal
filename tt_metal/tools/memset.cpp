@@ -10,10 +10,10 @@
 #include <string>
 #include <vector>
 
-#include "assert.hpp"
+#include <tt-logger/tt-logger.hpp>
 #include "fmt/base.h"
 #include "llrt.hpp"
-#include "logger.hpp"
+#include <tt-logger/tt-logger.hpp>
 #include "metal_soc_descriptor.h"
 #include <umd/device/tt_core_coordinates.h>
 #include "utils.hpp"
