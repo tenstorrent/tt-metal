@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/common/queue_id.hpp"
+#include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include <tt-metalium/math.hpp>
@@ -46,8 +47,10 @@ using MassagedConcatParams = MassagedOperationParams<ttnn::Tensor, const std::ve
 MassagedConcat build_unsqueeze_concat(int input_rank, const MemoryConfig& output_memory_config) {
     return MassagedConcat(MassagedConcatParams{
         .predicate = [input_rank](const std::vector<ttnn::Tensor>& tensors, int dim, unsigned int groups) -> bool {
-            bool inputs_are_device_tensors = std::all_of(
-                tensors.begin(), tensors.end(), [](const ttnn::Tensor& tensor) { return tensor.is_device_tensor(); });
+            bool inputs_are_device_tensors =
+                std::all_of(tensors.begin(), tensors.end(), [](const ttnn::Tensor& tensor) {
+                    return tt::tt_metal::is_device_tensor(tensor);
+                });
             bool res = input_rank < 4 && inputs_are_device_tensors;  // pad only rejects rank != 4 for device tensors
             concat_db_print(res, "unsqueeze to 4D required");
             return res;

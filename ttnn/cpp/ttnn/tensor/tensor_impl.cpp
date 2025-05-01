@@ -547,7 +547,6 @@ Tensor to_host<bfloat8_b>(const Tensor& tensor, bool blocking, ttnn::QueueId cq_
 
 template <typename T>
 Tensor to_host_mesh_tensor(const Tensor& tensor, bool blocking, ttnn::QueueId cq_id) {
-    // TT_FATAL(ttnn::distributed::is_mesh_buffer_tensor(tensor), "Tensor is not a mesh buffer tensor!");
     TT_FATAL(tt::tt_metal::detail::InMainThread(), "to_host_mesh_tensor must be called from the main thread");
     TT_ASSERT(tensor.is_allocated(), "Buffer must be allocated on device!");
     const auto& storage = std::get<DeviceStorage>(tensor.get_storage());
@@ -1269,7 +1268,7 @@ Tensor pad(
     TT_FATAL(!is_device_tensor(tensor), "pad only supports host tensors");
 
     // TODO: #15840 - Treat multi-device host vs owned/borrowed tensors uniformly.
-    if (ttnn::distributed::is_multi_device_host_tensor(tensor)) {
+    if (is_multi_device_host_tensor(tensor)) {
         return transform(tensor, [&](const Tensor& device_tensor) {
             return pad<T>(device_tensor, output_padded_shape, input_tensor_start, pad_value);
         });
