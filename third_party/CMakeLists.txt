@@ -165,7 +165,9 @@ set(CMAKE_INSTALL_DEFAULT_COMPONENT_NAME ${DEFAULT_COMPONENT_NAME})
 CPMAddPackage(
     NAME xtl
     GITHUB_REPOSITORY xtensor-stack/xtl
-    GIT_TAG 0.7.7
+    GIT_TAG 0.8.0
+    PATCHES
+        xtl.patch
     OPTIONS
         "CMAKE_MESSAGE_LOG_LEVEL NOTICE"
         "XTL_ENABLE_TESTS OFF"
@@ -173,7 +175,9 @@ CPMAddPackage(
 CPMAddPackage(
     NAME xtensor
     GITHUB_REPOSITORY xtensor-stack/xtensor
-    GIT_TAG 0.25.0
+    GIT_TAG 0.26.0
+    PATCHES
+        xtensor.patch
     OPTIONS
         "CMAKE_MESSAGE_LOG_LEVEL NOTICE"
         "XTENSOR_ENABLE_TESTS OFF"
@@ -181,7 +185,9 @@ CPMAddPackage(
 CPMAddPackage(
     NAME xtensor-blas
     GITHUB_REPOSITORY xtensor-stack/xtensor-blas
-    GIT_TAG 0.21.0
+    GIT_TAG 0.22.0
+    PATCHES
+        xtensor-blas.patch
     OPTIONS
         "CMAKE_MESSAGE_LOG_LEVEL NOTICE"
         "XTENSOR_ENABLE_TESTS OFF"
