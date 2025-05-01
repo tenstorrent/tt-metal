@@ -211,15 +211,14 @@ def import_device_profile_log(logPath):
                 timerID = {"id": int(row[4].strip()), "zone_name": "", "type": "", "src_line": "", "src_file": ""}
                 timeData = int(row[5].strip())
                 attachedData = 0
-                if len(row) == 14:
+                if len(row) == 13:
                     attachedData = int(row[6].strip())
-                    timerID["run_id"] = int(row[7].strip())
-                    timerID["run_host_id"] = int(row[8].strip())
-                    timerID["zone_name"] = row[9].strip()
-                    timerID["type"] = row[10].strip()
-                    timerID["src_line"] = int(row[11].strip())
-                    timerID["src_file"] = row[12].strip()
-                    timerID["meta_data"] = row[13].strip()
+                    timerID["run_host_id"] = int(row[7].strip())
+                    timerID["zone_name"] = row[8].strip()
+                    timerID["type"] = row[9].strip()
+                    timerID["src_line"] = int(row[10].strip())
+                    timerID["src_file"] = row[11].strip()
+                    timerID["meta_data"] = row[12].strip()
 
                 if chipID in devicesData["devices"].keys():
                     if core in devicesData["devices"][chipID]["cores"].keys():
@@ -644,15 +643,27 @@ def get_duration(riscData, analysis):
     return []
 
 
+def is_timer_id_iteration_start(timerID):
+    ret = False
+    if timerID["type"] == "ZONE_START" and timerID["zone_name"] == "BRISC-FW":
+        ret = True
+    return ret
+
+
 def adjacent_LF_analysis(riscData, analysis):
     timeseries = riscData["timeseries"]
     durations = []
     startFound = None
+    startIterMark = None
+    iterMark = None
     for timerID, timestamp, attachedData, *metaData in timeseries:
+        if is_timer_id_iteration_start(timerID):
+            iterMark = (timerID, timestamp)
         currStart, currEnd, desStart, desEnd = determine_conditions(timerID, metaData, analysis)
         if not startFound:
             if currStart in desStart:
                 startFound = (timerID, timestamp)
+                startIterMark = iterMark
         else:
             if currEnd in desEnd:
                 startID, startTS = startFound
@@ -662,11 +673,14 @@ def adjacent_LF_analysis(riscData, analysis):
                         end_cycle=timestamp,
                         duration_type=(startID, timerID),
                         duration_cycles=timestamp - startTS,
+                        end_iter_mark=iterMark,
+                        start_iter_mark=startIterMark,
                     )
                 )
                 startFound = None
             elif currStart in desStart:
                 startFound = (timerID, timestamp)
+                startIterMark = iterMark
 
     return durations
 

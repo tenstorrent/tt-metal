@@ -17,7 +17,6 @@
 #include "impl/context/metal_context.hpp"
 #include "dispatch/kernels/cq_commands.hpp"
 #include "dispatch_core_common.hpp"
-#include "dispatch_mem_map.hpp"
 #include "hal_types.hpp"
 #include "logger.hpp"
 #include <tt_stl/strong_type.hpp>
@@ -100,7 +99,7 @@ void issue_record_event_commands(
             CQ_DISPATCH_CMD_WAIT_FLAG_WAIT_STREAM | (clear_count ? CQ_DISPATCH_CMD_WAIT_FLAG_CLEAR_STREAM : 0) |
                 ((i == num_worker_counters - 1) ? CQ_DISPATCH_CMD_WAIT_FLAG_BARRIER : 0),
             0,
-            DispatchMemMap::get(dispatch_core_type).get_dispatch_stream_index(offset_index),
+            MetalContext::instance().dispatch_mem_map().get_dispatch_stream_index(offset_index),
             expected_num_workers_completed[offset_index]);
     }
 
@@ -115,12 +114,10 @@ void issue_record_event_commands(
         event_payloads[cq_id] = {event_payload.data(), event_payload.size() * sizeof(uint32_t)};
     }
 
-    uint32_t completion_q0_last_event_addr =
-        DispatchMemMap::get(dispatch_core_type)
-            .get_device_command_queue_addr(CommandQueueDeviceAddrType::COMPLETION_Q0_LAST_EVENT);
-    uint32_t completion_q1_last_event_addr =
-        DispatchMemMap::get(dispatch_core_type)
-            .get_device_command_queue_addr(CommandQueueDeviceAddrType::COMPLETION_Q1_LAST_EVENT);
+    uint32_t completion_q0_last_event_addr = MetalContext::instance().dispatch_mem_map().get_device_command_queue_addr(
+        CommandQueueDeviceAddrType::COMPLETION_Q0_LAST_EVENT);
+    uint32_t completion_q1_last_event_addr = MetalContext::instance().dispatch_mem_map().get_device_command_queue_addr(
+        CommandQueueDeviceAddrType::COMPLETION_Q1_LAST_EVENT);
     uint32_t address = cq_id == 0 ? completion_q0_last_event_addr : completion_q1_last_event_addr;
     command_sequence.add_dispatch_write_packed<CQDispatchWritePackedUnicastSubCmd>(
         CQ_DISPATCH_CMD_PACKED_WRITE_FLAG_TYPE_EVENT,
@@ -150,18 +147,13 @@ void issue_wait_for_event_commands(
     calculator.add_dispatch_wait();
     const uint32_t cmd_sequence_sizeB = calculator.write_offset_bytes();
 
-    auto dispatch_core_config = MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_config();
-    CoreType dispatch_core_type = dispatch_core_config.get_core_type();
-
     void* cmd_region = sysmem_manager.issue_queue_reserve(cmd_sequence_sizeB, cq_id);
 
     HugepageDeviceCommand command_sequence(cmd_region, cmd_sequence_sizeB);
-    uint32_t completion_q0_last_event_addr =
-        DispatchMemMap::get(dispatch_core_type)
-            .get_device_command_queue_addr(CommandQueueDeviceAddrType::COMPLETION_Q0_LAST_EVENT);
-    uint32_t completion_q1_last_event_addr =
-        DispatchMemMap::get(dispatch_core_type)
-            .get_device_command_queue_addr(CommandQueueDeviceAddrType::COMPLETION_Q1_LAST_EVENT);
+    uint32_t completion_q0_last_event_addr = MetalContext::instance().dispatch_mem_map().get_device_command_queue_addr(
+        CommandQueueDeviceAddrType::COMPLETION_Q0_LAST_EVENT);
+    uint32_t completion_q1_last_event_addr = MetalContext::instance().dispatch_mem_map().get_device_command_queue_addr(
+        CommandQueueDeviceAddrType::COMPLETION_Q1_LAST_EVENT);
 
     uint32_t last_completed_event_address =
         event_cq_id == 0 ? completion_q0_last_event_addr : completion_q1_last_event_addr;

@@ -36,8 +36,6 @@ def test_qwen_decoder_inference(mesh_device, use_program_cache, reset_seeds, ens
         pytest.skip("Only N150 is supported")
     dtype = ttnn.bfloat8_b
 
-    mesh_device.enable_async(True)
-
     model_args = TtModelArgs(mesh_device)
     model_args.n_layers = 1
     state_dict = model_args.load_state_dict()

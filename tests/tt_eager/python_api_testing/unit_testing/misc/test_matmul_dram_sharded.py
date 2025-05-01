@@ -4,7 +4,13 @@
 
 import pytest
 from loguru import logger
-from models.utility_functions import is_wormhole_b0, is_grayskull, is_blackhole, skip_for_wormhole_b0
+from models.utility_functions import (
+    is_wormhole_b0,
+    is_grayskull,
+    is_blackhole,
+    skip_for_wormhole_b0,
+    skip_for_blackhole,
+)
 from models.utility_functions import torch2tt_tensor, tt2torch_tensor, pad_by_zero, roundup32
 import torch
 import ttnn
@@ -190,6 +196,7 @@ def run_test_matmul_in1_dram_sharded(
     assert passing
 
 
+@skip_for_blackhole("Failing on harvested BH, see #21087")
 @pytest.mark.parametrize(
     "fidelity",
     [
@@ -395,6 +402,7 @@ def run_test_matmul_in1_dram_sharded_mm_chain(
     assert True
 
 
+@skip_for_blackhole("Failing on harvested BH, see #21421")
 @pytest.mark.parametrize(
     "fidelity",
     [
@@ -451,6 +459,7 @@ def test_matmul_in1_dram_sharded_with_mm_chain(
     )
 
 
+@skip_for_blackhole("Failing on harvested BH, see #21422")
 @pytest.mark.parametrize("packer_l1_acc", [True, False], ids=["pack_l1", "no_pack_l1"])
 @pytest.mark.parametrize(
     "fp32_acc_mode",

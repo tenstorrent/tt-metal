@@ -11,9 +11,6 @@ from models.utility_functions import skip_for_grayskull
 from tests.ttnn.unit_tests.operations.ccl.test_reduce_scatter_TG_nightly import (
     run_line_reduce_scatter_on_TG_with_mesh_tensor_along_rows,
 )
-from tests.ttnn.unit_tests.operations.ccl.test_ccl_common import (
-    create_global_semaphore_with_same_address,
-)
 
 
 def is_unsupported_case(input_shape, dim, math_op, mem_config, num_devices, num_links, input_dtype, layout):
@@ -104,7 +101,6 @@ def run_reduce_scatter_test(
     input_shard_shape=None,
     shard_grid=None,
     tensor_mem_layout=None,
-    enable_async=True,
     topology=ttnn.Topology.Ring,
     trace_mode=False,
 ):
@@ -147,10 +143,6 @@ def run_reduce_scatter_test(
     if is_known_failure:
         pytest.skip(f"Skipping unsupported case {message}.")
 
-    mesh_device.enable_async(enable_async)
-    if enable_async:
-        logger.info(f"Using Async Mode for Reduce Scatter Op Dispatch")
-
     compute_grid_size = mesh_device.compute_with_storage_grid_size()
     ccl_sub_device_crs = ttnn.CoreRangeSet(
         {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(compute_grid_size.x - 1, compute_grid_size.y - 1))}
@@ -162,10 +154,10 @@ def run_reduce_scatter_test(
     mesh_device.load_sub_device_manager(sub_device_manager)
     # create global semaphore handles
     from_remote_semaphore_handles = [
-        create_global_semaphore_with_same_address(mesh_device, ccl_sub_device_crs, 0) for _ in range(num_iters)
+        ttnn.create_global_semaphore(mesh_device, ccl_sub_device_crs, 0) for _ in range(num_iters)
     ]
     to_remote_semaphore_handles = [
-        create_global_semaphore_with_same_address(mesh_device, ccl_sub_device_crs, 0) for _ in range(num_iters)
+        ttnn.create_global_semaphore(mesh_device, ccl_sub_device_crs, 0) for _ in range(num_iters)
     ]
     mesh_device.set_sub_device_stall_group([worker_sub_device_id])
     debug = False
@@ -195,15 +187,11 @@ def run_reduce_scatter_test(
                         tile_id += 1
     for i, canonical_input_tensor in enumerate(input_tensors):
         logger.info(f"Creating input tensor on device {mesh_device.get_device_ids()[i]}")
-        tt_input_tensors.append(
-            ttnn.Tensor(canonical_input_tensor, input_dtype)
-            .to(layout)
-            .to(mesh_device.get_device(mesh_device.get_device_ids()[i]), input_mem_config)
-        )
+        tt_input_tensors.append(ttnn.Tensor(canonical_input_tensor, input_dtype).to(layout))
 
     assert len(tt_input_tensors) == num_devices
 
-    input_tensor_mesh = ttnn.aggregate_as_tensor(tt_input_tensors)
+    input_tensor_mesh = ttnn.aggregate_as_tensor(tt_input_tensors).to(mesh_device, input_mem_config)
 
     # Run the op
     if trace_mode:
@@ -263,7 +251,7 @@ def run_reduce_scatter_test(
         eq, output = comp_pcc(tt_output_tensor, golden_output_tensors[i])
         mismatch = mismatch or not eq
         if not eq:
-            logger.error(f"output mismatch for tensor {i}. Mesh device ID: {mesh_device.get_devices()[i].id()}")
+            logger.error(f"output mismatch for tensor {i}. Mesh device ID: {mesh_device.get_device_ids()[i]}")
             if debug:
                 logger.info(f"FINAL OUTPUT TENSOR {tt_output_tensor}")
                 mismatch_tensor_shape = [
@@ -337,7 +325,6 @@ def run_reduce_scatter_test(
     ],
 )
 @pytest.mark.parametrize("math_op", [ttnn.ReduceType.Sum])
-@pytest.mark.parametrize("enable_async", [False])
 @pytest.mark.parametrize("trace_mode", [False])
 @pytest.mark.parametrize(
     "device_params", [{"trace_region_size": 27648, "fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True
@@ -355,7 +342,6 @@ def test_line_reduce_scatter_async_post_commit(
     mem_config,
     use_program_cache,
     function_level_defaults,
-    enable_async,
     trace_mode,
     num_iters=16,
 ):
@@ -372,7 +358,6 @@ def test_line_reduce_scatter_async_post_commit(
         use_program_cache,
         function_level_defaults,
         num_iters=num_iters,
-        enable_async=enable_async,
         topology=ttnn.Topology.Linear,
         trace_mode=trace_mode,
     )
@@ -404,7 +389,6 @@ def test_line_reduce_scatter_async_post_commit(
         ttnn.BufferType.L1,
     ],
 )
-@pytest.mark.parametrize("enable_async", [True])
 @pytest.mark.parametrize("replication_factor", [4])
 @pytest.mark.parametrize("math_op", [ttnn.ReduceType.Sum])
 @pytest.mark.parametrize("mesh_device", [pytest.param((2, 4), id="2x4_grid")], indirect=True)
@@ -421,11 +405,10 @@ def test_line_reduce_scatter_async_on_T3K_cols_post_commit(
     buffer_type,
     use_program_cache,
     function_level_defaults,
-    enable_async,
     replication_factor,
     num_iters=1,
 ):
-    if len(mesh_device.get_devices()) < 8:
+    if mesh_device.get_num_devices() < 8:
         pytest.skip("Not T3K!")
 
     run_line_reduce_scatter_on_TG_with_mesh_tensor_along_rows(
@@ -441,7 +424,6 @@ def test_line_reduce_scatter_async_on_T3K_cols_post_commit(
         buffer_type,
         use_program_cache,
         function_level_defaults,
-        enable_async=enable_async,
         num_iters=num_iters,
         num_reduce_scatter_instances=replication_factor,
         cluster_axis=0,
@@ -471,7 +453,6 @@ def test_line_reduce_scatter_async_on_T3K_cols_post_commit(
         ttnn.BufferType.L1,
     ],
 )
-@pytest.mark.parametrize("enable_async", [True])
 @pytest.mark.parametrize("replication_factor", [2])
 @pytest.mark.parametrize("math_op", [ttnn.ReduceType.Sum])
 @pytest.mark.parametrize("mesh_device", [pytest.param((2, 4), id="2x4_grid")], indirect=True)
@@ -488,11 +469,10 @@ def test_line_reduce_scatter_async_on_T3K_rows_post_commit(
     buffer_type,
     use_program_cache,
     function_level_defaults,
-    enable_async,
     replication_factor,
     num_iters=1,
 ):
-    if len(mesh_device.get_devices()) < 8:
+    if mesh_device.get_num_devices() < 8:
         pytest.skip("Not T3K!")
 
     run_line_reduce_scatter_on_TG_with_mesh_tensor_along_rows(
@@ -508,7 +488,6 @@ def test_line_reduce_scatter_async_on_T3K_rows_post_commit(
         buffer_type,
         use_program_cache,
         function_level_defaults,
-        enable_async=enable_async,
         num_iters=num_iters,
         num_reduce_scatter_instances=replication_factor,
         cluster_axis=1,
@@ -593,7 +572,6 @@ def test_line_reduce_scatter_async_on_T3K_rows_post_commit(
     ),
 )
 @pytest.mark.parametrize("math_op", [ttnn.ReduceType.Sum])
-@pytest.mark.parametrize("enable_async", [False])
 @pytest.mark.parametrize("replication_factor", [1])
 @pytest.mark.parametrize("mesh_device", [pytest.param((2, 4), id="2x4_grid")], indirect=True)
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
@@ -613,12 +591,11 @@ def test_line_reduce_scatter_cluster_axis_on_T3K_width_sharded_reduce_scatter_po
     tensor_mem_layout,
     use_program_cache,
     function_level_defaults,
-    enable_async,
     replication_factor,
     num_iters=1,
     trace_mode=False,
 ):
-    if len(mesh_device.get_devices()) < 8:
+    if mesh_device.get_num_devices() < 8:
         pytest.skip("Not T3K!")
 
     input_shard_spec = ttnn.ShardSpec(
@@ -640,7 +617,6 @@ def test_line_reduce_scatter_cluster_axis_on_T3K_width_sharded_reduce_scatter_po
         buffer_type,
         use_program_cache,
         function_level_defaults,
-        enable_async=enable_async,
         num_iters=num_iters,
         input_shard_spec=input_shard_spec,
         num_reduce_scatter_instances=replication_factor,

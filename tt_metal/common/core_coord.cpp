@@ -12,7 +12,6 @@
 #include <iterator>
 #include <limits>
 #include <map>
-#include <mutex>
 #include <optional>
 #include <ostream>
 #include <set>
@@ -180,28 +179,11 @@ CoreRangeSet::CoreRangeSet(const std::set<CoreRange>& core_ranges) : ranges_(cor
 
 CoreRangeSet::CoreRangeSet(const CoreRange& core_range) : ranges_{core_range} {}
 
-void swap(CoreRangeSet& first, CoreRangeSet& second) {
-    std::scoped_lock lock(first.ranges_guard, second.ranges_guard);
-    std::swap(first.ranges_, second.ranges_);
-}
+void swap(CoreRangeSet& first, CoreRangeSet& second) { std::swap(first.ranges_, second.ranges_); }
 
-CoreRangeSet::CoreRangeSet(const CoreRangeSet& other) {
-    std::scoped_lock lock(other.ranges_guard);
-    this->ranges_ = other.ranges_;
-}
-
-CoreRangeSet& CoreRangeSet::operator=(const CoreRangeSet& other) {
-    std::scoped_lock lock(other.ranges_guard);
-    this->ranges_ = other.ranges_;
-    return *this;
-}
+CoreRangeSet::CoreRangeSet(const CoreRangeSet& other) { this->ranges_ = other.ranges_; }
 
 CoreRangeSet::CoreRangeSet(CoreRangeSet&& other) noexcept { swap(*this, other); }
-
-CoreRangeSet& CoreRangeSet::operator=(CoreRangeSet&& other) noexcept {
-    swap(*this, other);
-    return *this;
-}
 
 CoreRangeSet::CoreRangeSet(std::vector<CoreRange>&& core_ranges) : ranges_(std::move(core_ranges)) {
     ZoneScoped;

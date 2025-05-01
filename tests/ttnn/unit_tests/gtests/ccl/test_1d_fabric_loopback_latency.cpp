@@ -53,7 +53,7 @@ inline void RunPersistent1dFabricLatencyTest(
     using namespace ttnn::ccl;
 
     DEVICE_FIXTURE_T test_fixture;
-    auto view = test_fixture.mesh_device_->get_view();
+    auto view = *(test_fixture.view_);
 
     std::vector<IDevice*> devices_;
     if (is_6u) {
@@ -176,7 +176,7 @@ inline void RunPersistent1dFabricLatencyTest(
     std::vector<ttnn::global_semaphore::MultiDeviceGlobalSemaphore> global_semaphore_handles;
 
     auto global_semaphores = ttnn::global_semaphore::create_global_semaphore_with_same_address(
-        test_fixture.mesh_device_.get(),
+        devices_,
         devices[0]->worker_cores(HalProgrammableCoreType::TENSIX, SubDeviceId{0}),
         0,                             // initial value
         tt::tt_metal::BufferType::L1,  // buffer type

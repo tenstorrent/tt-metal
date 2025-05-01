@@ -153,7 +153,9 @@ void MAIN {
     constexpr uint32_t out_block_num_tiles = get_compile_time_arg_val(14);     // number of tiles in out_block
     constexpr bool untilize_out = get_compile_time_arg_val(15);                // untilize output
     constexpr bool in1_is_dram_interleaved = get_compile_time_arg_val(16);     // in1 is in dram
+    constexpr bool in1_is_dram_sharded = get_compile_time_arg_val(17);
     constexpr uint32_t ring_size = num_blocks;
+    constexpr bool in1_is_dram = in1_is_dram_interleaved || in1_is_dram_sharded;
 
     // Runtime args
     uint32_t rt_args_idx = 0;
@@ -231,7 +233,7 @@ void MAIN {
             uint32_t unpadded_in0_block_w = unpadded_in0_shard_widths_in_tiles[curr_ring_idx];
 
             // Wait for in1 block
-            if constexpr (in1_is_dram_interleaved) {
+            if constexpr (in1_is_dram) {
                 cb_wait_front(in1_cb_id, in1_block_num_tiles);
             }
 
@@ -271,7 +273,7 @@ void MAIN {
                 int in1_index_subblock_offset = 0;
 #else
                 // This should always be 0 when reading in1 from DRAM
-                int in1_index_subblock_offset = in1_is_dram_interleaved ? 0 : in1_block_num_tiles * (curr_ring_idx);
+                int in1_index_subblock_offset = in1_is_dram ? 0 : in1_block_num_tiles * (curr_ring_idx);
 #endif
                 for (uint32_t in1_subblock = 0; in1_subblock < in1_num_subblocks; in1_subblock++) {
                     tile_regs_acquire();
@@ -390,7 +392,7 @@ void MAIN {
 #endif
 
             cb_pop_front(input0_cb_id, in0_block_num_tiles);
-            if constexpr (in1_is_dram_interleaved) {
+            if constexpr (in1_is_dram) {
                 cb_pop_front(in1_cb_id, in1_block_num_tiles);
             }
 #ifdef ENABLE_GLOBAL_CB

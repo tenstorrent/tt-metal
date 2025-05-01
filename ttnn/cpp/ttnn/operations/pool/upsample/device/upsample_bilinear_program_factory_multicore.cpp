@@ -57,7 +57,7 @@ Tensor HaloTensorCreation(const Tensor& input) {
     input_tensor = ttnn::reshape(input_tensor, new_shape);
 
     auto halo_output = ttnn::halo(
-        DefaultQueueId, input_tensor, sliding_window_config, 0, false, false, 0, input_tensor.memory_config(), false);
+        DefaultQueueId, input_tensor, sliding_window_config, 0, false, false, input_tensor.memory_config(), false);
 
     return halo_output;
 }

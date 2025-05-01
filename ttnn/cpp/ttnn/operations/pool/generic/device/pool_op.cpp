@@ -125,7 +125,7 @@ tt::stl::hash::hash_t Pool2D::compute_program_hash(
         op_attr.sliding_window_config_.get_hash(), op_attr.pool_type_, op_attr.memory_config_, input_mem_config, dtype);
 }
 
-tt::tt_metal::operation::OpPerformanceModel Pool2D::create_op_performance_model(
+tt::tt_metal::operation::OpPerformanceModelGeneral<Pool2D::tensor_return_value_t> Pool2D::create_op_performance_model(
     const operation_attributes_t& op_attr, const tensor_args_t& inputs, const Tensor& output) {
     const auto& input = inputs.input_tensor_;
     const auto& input_shape = input.get_logical_shape();
@@ -157,7 +157,8 @@ tt::tt_metal::operation::OpPerformanceModel Pool2D::create_op_performance_model(
 
     int ideal_dev_clock_cycles = std::ceil((float)num_mul_adds / (float)(num_cores * tensix_mul_adds_per_cycle_lofi));
 
-    tt::tt_metal::operation::OpPerformanceModel result({input}, {output}, ideal_dev_clock_cycles);
+    tt::tt_metal::operation::OpPerformanceModelGeneral<tensor_return_value_t> result(
+        {input}, {output}, ideal_dev_clock_cycles);
     return result;
 }
 

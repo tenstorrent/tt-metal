@@ -3,18 +3,20 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <gmock/gmock.h>
+#include <gtest/gtest.h>
+
+#include <xtensor/containers/xarray.hpp>
+#include <xtensor/generators/xbuilder.hpp>
+#include <xtensor/utils/xexception.hpp>
+#include <xtensor/core/xiterator.hpp>
+#include <xtensor/core/xlayout.hpp>
+#include <xtensor/core/xmath.hpp>
+#include <xtensor/containers/xstorage.hpp>
+#include <xtensor/core/xtensor_forward.hpp>
+#include <xtensor/utils/xtensor_simd.hpp>
+#include <xtensor/utils/xutils.hpp>
 
 #include <cstdint>
-#include <xtensor/xarray.hpp>
-#include <xtensor/xbuilder.hpp>
-#include <xtensor/xexception.hpp>
-#include <xtensor/xiterator.hpp>
-#include <xtensor/xlayout.hpp>
-#include <xtensor/xmath.hpp>
-#include <xtensor/xstorage.hpp>
-#include <xtensor/xtensor_forward.hpp>
-#include <xtensor/xtensor_simd.hpp>
-#include <xtensor/xutils.hpp>
 #include <tuple>
 #include <vector>
 #include <sys/mman.h>
@@ -184,13 +186,13 @@ TEST(PartitionTest, ShardSpans) {
         test_data.push_back(i);
     }
 
-    auto chunks = chunk(tt::stl::Span(test_data), ttnn::Shape{1, 1, kNumChunks, kChunkSize}, kNumChunks, 2);
+    auto chunks = chunk(tt::stl::Span(test_data), ttnn::Shape{kNumChunks, kChunkSize}, kNumChunks);
 
     EXPECT_THAT(chunks, SizeIs(kNumChunks));
     for (int i = 0; i < kNumChunks; i++) {
         const auto& [chunk_span, shape] = chunks[i];
         EXPECT_THAT(chunk_span, SizeIs(kChunkSize));
-        EXPECT_EQ(shape, ttnn::Shape({1, 1, 1, kChunkSize}));
+        EXPECT_EQ(shape, ttnn::Shape({1, kChunkSize}));
         for (int j = 0; j < kChunkSize; j++) {
             EXPECT_EQ(chunk_span[j], i * kChunkSize + j);
         }
@@ -237,12 +239,12 @@ TEST(PartitionTest, ChunkDoesNotAccessData) {
     EXPECT_TRUE(segfault_occurred);
 
     if (sigsetjmp(jmp_env, /*savemask=*/1) == 0) {
-        auto chunks = chunk(protected_span, ttnn::Shape({1, 1, 1, total_size}), num_chunks, /*dim=*/3);
+        auto chunks = chunk(protected_span, ttnn::Shape({total_size}), num_chunks);
 
         EXPECT_THAT(chunks, SizeIs(num_chunks));
         for (const auto& [chunk_span, chunk_shape] : chunks) {
             EXPECT_THAT(chunk_span, SizeIs(page_size));
-            EXPECT_EQ(chunk_shape, ttnn::Shape({1, 1, 1, page_size}));
+            EXPECT_EQ(chunk_shape, ttnn::Shape({page_size}));
         }
     } else {
         FAIL() << "segfault occurred when calling `chunk`";

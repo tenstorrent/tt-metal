@@ -106,6 +106,7 @@ class RunTimeOptions {
     bool profiler_enabled = false;
     bool profile_dispatch_cores = false;
     bool profiler_sync_enabled = false;
+    bool profiler_mid_run_tracy_push = false;
     bool profiler_buffer_usage_enabled = false;
     bool profiler_noc_events_enabled = false;
     std::string profiler_noc_events_report_path;
@@ -116,6 +117,7 @@ class RunTimeOptions {
     bool kernels_early_return = false;
 
     bool clear_l1 = false;
+    bool clear_dram = false;
 
     bool skip_loading_fw = false;
     bool skip_reset_cores_on_init = false;
@@ -292,6 +294,7 @@ public:
     inline bool get_profiler_enabled() const { return profiler_enabled; }
     inline bool get_profiler_do_dispatch_cores() const { return profile_dispatch_cores; }
     inline bool get_profiler_sync_enabled() const { return profiler_sync_enabled; }
+    inline bool get_profiler_tracy_mid_run_push() const { return profiler_mid_run_tracy_push; }
     inline bool get_profiler_buffer_usage_enabled() const { return profiler_buffer_usage_enabled; }
     inline bool get_profiler_noc_events_enabled() const { return profiler_noc_events_enabled; }
     inline std::string get_profiler_noc_events_report_path() const { return profiler_noc_events_report_path; }
@@ -304,6 +307,9 @@ public:
 
     inline bool get_clear_l1() const { return clear_l1; }
     inline void set_clear_l1(bool clear) { clear_l1 = clear; }
+
+    inline bool get_clear_dram() const { return clear_dram; }
+    inline void set_clear_dram(bool clear) { clear_dram = clear; }
 
     inline bool get_skip_loading_fw() const { return skip_loading_fw; }
     inline bool get_skip_reset_cores_on_init() const { return skip_reset_cores_on_init; }

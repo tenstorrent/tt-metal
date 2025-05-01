@@ -94,10 +94,8 @@ def test_positional_embedding_inference(
     layout = ttnn.TILE_LAYOUT
     pcc_required = 0.9999
 
-    mesh_device.enable_async(True)
-
     model_args = ModelArgs(mesh_device)
-    state_dict = torch.load(model_args.consolidated_weights_path, map_location=torch.device("cpu"))
+    state_dict = model_args.load_state_dict()
     first_layer_prefix = "vision_model.vision_encoder."
     partial_state_dict = {
         k[len(first_layer_prefix) :]: v for k, v in state_dict.items() if (k.startswith(first_layer_prefix))

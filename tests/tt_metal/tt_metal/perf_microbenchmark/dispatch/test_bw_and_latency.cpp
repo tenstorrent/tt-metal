@@ -30,7 +30,6 @@
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/data_types.hpp>
 #include <tt-metalium/dispatch_core_common.hpp>
-#include <tt-metalium/dispatch_mem_map.hpp>
 #include <tt-metalium/hal_types.hpp>
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/logger.hpp>
@@ -440,9 +439,9 @@ int main(int argc, char** argv) {
             vector<std::uint32_t> vec;
             vec.resize(page_size_g / sizeof(uint32_t));
 
-            CoreType core_type = get_dispatch_core_type();
             uint32_t dispatch_l1_unreserved_base =
-                DispatchMemMap::get(core_type).get_device_command_queue_addr(CommandQueueDeviceAddrType::UNRESERVED);
+                MetalContext::instance().dispatch_mem_map().get_device_command_queue_addr(
+                    CommandQueueDeviceAddrType::UNRESERVED);
             for (int i = 0; i < warmup_iterations_g; i++) {
                 if (source_mem_g == 4) {
                     tt::tt_metal::MetalContext::instance().get_cluster().read_core(

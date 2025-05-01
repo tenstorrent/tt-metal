@@ -51,6 +51,8 @@ jobs:
         uses: actions/checkout@v4
         with:
           submodules: recursive
+          fetch-depth: 500 # Need enough history for `git describe`
+          fetch-tags: true # Need tags for `git describe`
           path: docker-job # Here be dragons; keep it scoped to our desired volume, yet must be under github.workspace and be sure to clean up at the end
 
       - name: Build UMD device and tests

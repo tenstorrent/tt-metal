@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <optional>
 #include <string>
+#include <vector>
 
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/tensor_impl.hpp"  // TTNN_TENSOR_PRINT_PROFILE
@@ -20,8 +21,6 @@ using OptionalConstTensors = std::vector<std::optional<const Tensor>>;
 using OptionalTensors = std::vector<std::optional<Tensor>>;
 using Tensors = std::vector<Tensor>;
 
-using tt::tt_metal::is_tensor_on_device;
-using tt::tt_metal::is_tensor_on_device_or_multidevice;
 }  // namespace ttnn
 
 namespace ttnn {

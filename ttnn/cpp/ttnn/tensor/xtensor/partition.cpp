@@ -9,11 +9,11 @@
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/tensor/xtensor/conversion_utils.hpp"
 #include <type_traits>
-#include <xtensor/xadapt.hpp>
-#include <xtensor/xdynamic_view.hpp>
-#include <xtensor/xstorage.hpp>
-#include <xtensor/xtensor_forward.hpp>
-#include <xtensor/xview.hpp>
+#include <xtensor/containers/xadapt.hpp>
+#include <xtensor/views/xdynamic_view.hpp>
+#include <xtensor/containers/xstorage.hpp>
+#include <xtensor/core/xtensor_forward.hpp>
+#include <xtensor/views/xview.hpp>
 
 namespace ttnn::experimental::xtensor {
 namespace {
@@ -69,10 +69,10 @@ auto chunk_xexpression(XtExpr& expr, int num_chunks, int dim) {
 
 template <typename T>
 std::vector<std::pair<tt::stl::Span<T>, ttnn::Shape>> chunk(
-    tt::stl::Span<T> span, const ttnn::Shape& shape, int num_chunks, int dim) {
+    tt::stl::Span<T> span, const ttnn::Shape& shape, int num_chunks) {
     const std::vector<size_t> shape_vector(shape.cbegin(), shape.cend());
     auto xtensor = xt::adapt(span.data(), span.size(), xt::no_ownership(), shape_vector);
-    auto chunk_views = chunk_xexpression(xtensor, num_chunks, dim);
+    auto chunk_views = chunk_xexpression(xtensor, num_chunks, /*dim=*/0);
 
     std::vector<std::pair<tt::stl::Span<T>, ttnn::Shape>> chunk_spans;
     chunk_spans.reserve(chunk_views.size());
@@ -103,34 +103,33 @@ template std::vector<xt::xarray<uint16_t>> chunk(const xt::xarray<uint16_t>&, in
 template std::vector<xt::xarray<uint32_t>> chunk(const xt::xarray<uint32_t>&, int, int);
 
 template std::vector<std::pair<tt::stl::Span<bfloat16>, ttnn::Shape>> chunk(
-    tt::stl::Span<bfloat16>, const ttnn::Shape&, int, int);
-template std::vector<std::pair<tt::stl::Span<float>, ttnn::Shape>> chunk(
-    tt::stl::Span<float>, const ttnn::Shape&, int, int);
+    tt::stl::Span<bfloat16>, const ttnn::Shape&, int);
+template std::vector<std::pair<tt::stl::Span<float>, ttnn::Shape>> chunk(tt::stl::Span<float>, const ttnn::Shape&, int);
 template std::vector<std::pair<tt::stl::Span<double>, ttnn::Shape>> chunk(
-    tt::stl::Span<double>, const ttnn::Shape&, int, int);
+    tt::stl::Span<double>, const ttnn::Shape&, int);
 template std::vector<std::pair<tt::stl::Span<int32_t>, ttnn::Shape>> chunk(
-    tt::stl::Span<int32_t>, const ttnn::Shape&, int, int);
+    tt::stl::Span<int32_t>, const ttnn::Shape&, int);
 template std::vector<std::pair<tt::stl::Span<uint8_t>, ttnn::Shape>> chunk(
-    tt::stl::Span<uint8_t>, const ttnn::Shape&, int, int);
+    tt::stl::Span<uint8_t>, const ttnn::Shape&, int);
 template std::vector<std::pair<tt::stl::Span<uint16_t>, ttnn::Shape>> chunk(
-    tt::stl::Span<uint16_t>, const ttnn::Shape&, int, int);
+    tt::stl::Span<uint16_t>, const ttnn::Shape&, int);
 template std::vector<std::pair<tt::stl::Span<uint32_t>, ttnn::Shape>> chunk(
-    tt::stl::Span<uint32_t>, const ttnn::Shape&, int, int);
+    tt::stl::Span<uint32_t>, const ttnn::Shape&, int);
 
 template std::vector<std::pair<tt::stl::Span<const bfloat16>, ttnn::Shape>> chunk(
-    tt::stl::Span<const bfloat16>, const ttnn::Shape&, int, int);
+    tt::stl::Span<const bfloat16>, const ttnn::Shape&, int);
 template std::vector<std::pair<tt::stl::Span<const float>, ttnn::Shape>> chunk(
-    tt::stl::Span<const float>, const ttnn::Shape&, int, int);
+    tt::stl::Span<const float>, const ttnn::Shape&, int);
 template std::vector<std::pair<tt::stl::Span<const double>, ttnn::Shape>> chunk(
-    tt::stl::Span<const double>, const ttnn::Shape&, int, int);
+    tt::stl::Span<const double>, const ttnn::Shape&, int);
 template std::vector<std::pair<tt::stl::Span<const int32_t>, ttnn::Shape>> chunk(
-    tt::stl::Span<const int32_t>, const ttnn::Shape&, int, int);
+    tt::stl::Span<const int32_t>, const ttnn::Shape&, int);
 template std::vector<std::pair<tt::stl::Span<const uint8_t>, ttnn::Shape>> chunk(
-    tt::stl::Span<const uint8_t>, const ttnn::Shape&, int, int);
+    tt::stl::Span<const uint8_t>, const ttnn::Shape&, int);
 template std::vector<std::pair<tt::stl::Span<const uint16_t>, ttnn::Shape>> chunk(
-    tt::stl::Span<const uint16_t>, const ttnn::Shape&, int, int);
+    tt::stl::Span<const uint16_t>, const ttnn::Shape&, int);
 template std::vector<std::pair<tt::stl::Span<const uint32_t>, ttnn::Shape>> chunk(
-    tt::stl::Span<const uint32_t>, const ttnn::Shape&, int, int);
+    tt::stl::Span<const uint32_t>, const ttnn::Shape&, int);
 
 // TODO: optimize concat to perform concatenation based off views.
 template <typename T>
@@ -215,36 +214,18 @@ std::vector<Tensor> chunk_impl(
     const bool data_viewable = layout.get_layout() == ttnn::Layout::ROW_MAJOR &&
                                tensor.tensor_spec().physical_shape() == tensor.tensor_spec().logical_2d_shape() &&
                                tensor.tensor_spec().data_type() == tt::tt_metal::convert_to_data_type<T>();
-    if (data_viewable) {
-        auto buffer = std::visit(
-            tt::stl::overloaded{
-                []<tt::tt_metal::OwnedOrBorrowedStorage StorageType>(const StorageType& storage) {
-                    auto buffer = tt::tt_metal::host_buffer::get_as<T>(storage.buffer);
-                    return tt::stl::Span<T>(buffer.data(), buffer.size());
-                },
-                [](const auto& s) {
-                    TT_THROW("Unexpected storage type {}", tt::stl::get_type_name(s));
-                    return tt::stl::Span<T>();
-                }},
-            tensor.get_storage());
+    if (dim == 0 && data_viewable) {
+        tt::tt_metal::HostBuffer buffer = tt::tt_metal::host_buffer::get_host_buffer(tensor);
 
-        auto chunk_spans = chunk(buffer, tensor.tensor_spec().logical_shape(), num_chunks, dim);
-
-        auto make_tensor = [&tensor](tt::stl::Span<T> data, const TensorSpec& spec) {
-            if (tensor.storage_type() == tt::tt_metal::StorageType::BORROWED) {
-                const auto& storage = std::get<tt::tt_metal::BorrowedStorage>(tensor.get_storage());
-                return Tensor::from_borrowed_data<T>(
-                    data, spec.logical_shape(), storage.on_creation_callback, storage.on_destruction_callback);
-            } else {
-                return Tensor::from_span<T>(data, spec);
-            }
-        };
+        auto chunk_spans = chunk(buffer.view_as<T>(), tensor.tensor_spec().logical_shape(), num_chunks);
 
         std::vector<Tensor> tensors;
         tensors.reserve(chunk_spans.size());
-        std::transform(chunk_spans.begin(), chunk_spans.end(), std::back_inserter(tensors), [&](const auto& chunk) {
-            const auto& [data, shape] = chunk;
-            return make_tensor(data, TensorSpec(shape, layout));
+        std::transform(chunk_spans.begin(), chunk_spans.end(), std::back_inserter(tensors), [&](auto& chunk) {
+            // Create chunks pinned to the original buffer.
+            auto& [data, shape] = chunk;
+            tt::tt_metal::HostBuffer chunk_buffer(data, buffer.pin());
+            return Tensor(tt::tt_metal::HostStorage(std::move(chunk_buffer)), TensorSpec(shape, layout));
         });
         return tensors;
     } else {

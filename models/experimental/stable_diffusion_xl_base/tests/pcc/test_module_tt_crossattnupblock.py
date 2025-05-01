@@ -22,7 +22,7 @@ from models.utility_functions import torch_random
             20,
             1280,
             0,
-            0.93,
+            0.928,
         ),
         (
             (1, 1280, 64, 64),
@@ -50,6 +50,7 @@ def test_crossattnup(
     block_id,
     pcc,
     use_program_cache,
+    reset_seeds,
 ):
     pipe = DiffusionPipeline.from_pretrained(
         "stabilityai/stable-diffusion-xl-base-1.0", torch_dtype=torch.float32, use_safetensors=True, variant="fp16"

@@ -28,8 +28,31 @@ struct ExecuteReduceScatter {
         const std::optional<size_t> user_defined_num_workers = std::nullopt,
         const std::optional<size_t> user_defined_num_buffers_per_channel = std::nullopt);
 
+    static std::vector<ttnn::Tensor> invoke(
+        const std::vector<ttnn::Tensor>& input_tensors,
+        const int32_t dim,
+        const uint32_t cluster_axis,
+        const MeshDevice& mesh_device,
+        ttnn::operations::reduction::ReduceType reduce_op = ttnn::operations::reduction::ReduceType::Sum,
+        const uint32_t num_links = 1,
+        const std::optional<ttnn::MemoryConfig>& output_mem_config =
+            tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+        ttnn::ccl::Topology topology = ttnn::ccl::Topology::Ring,
+        const std::optional<size_t> user_defined_num_workers = std::nullopt,
+        const std::optional<size_t> user_defined_num_buffers_per_channel = std::nullopt);
+
     static ttnn::Tensor invoke(
         const ttnn::Tensor& input_tensor,
+        const int32_t dim,
+        ttnn::operations::reduction::ReduceType math_op,
+        const uint32_t num_links = 1,
+        const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt,
+        ttnn::ccl::Topology topology = ttnn::ccl::Topology::Ring,
+        const std::optional<size_t> num_workers = std::nullopt,
+        const std::optional<size_t> num_buffers_per_channel = std::nullopt);
+
+    static std::vector<ttnn::Tensor> invoke(
+        const std::vector<ttnn::Tensor>& input_tensors,
         const int32_t dim,
         ttnn::operations::reduction::ReduceType math_op,
         const uint32_t num_links = 1,

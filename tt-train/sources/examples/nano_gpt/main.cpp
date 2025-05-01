@@ -580,9 +580,6 @@ int main(int argc, char **argv) {
     auto *device = &ttml::autograd::ctx().get_device();
     device->enable_program_cache();
 
-    // disable for now, unexpected freezes and crashes
-    // device->enable_async(true);
-
     struct CachedHostData {
         std::vector<uint32_t> data;
         std::vector<int32_t> targets;

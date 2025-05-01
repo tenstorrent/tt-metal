@@ -34,12 +34,11 @@ def test_mixtral_decoder_inference(t3k_mesh_device, use_program_cache, reset_see
     s: sequence length
     h: hidden size
     """
-    t3k_mesh_device.enable_async(True)
 
     pcc = 0.99
     dtype = ttnn.bfloat8_b
 
-    model_args = TtModelArgs(t3k_mesh_device.get_device(0))
+    model_args = TtModelArgs(t3k_mesh_device)
     model_args = set_model_args(model_args, seq_len)
     batch = 1
     state_dict = model_args.load_state_dict()

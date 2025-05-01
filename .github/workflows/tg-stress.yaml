@@ -59,9 +59,12 @@ jobs:
           build-artifact-name: ${{ inputs.build-artifact-name }}
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
       - name: Run stress tests
-        timeout-minutes: 360
+        timeout-minutes: 100
         run: |
-          pytest models/demos/llama3_subdevices/demo/demo_decode.py -k "stress-test"
+          for i in {1..5}; do
+            echo "🔁 Run #$i"
+            timeout --preserve-status 1200 pytest models/demos/llama3_subdevices/demo/demo_decode.py -k "nd-hang-test"
+          done
       - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
         if: ${{ failure() }}
         with:

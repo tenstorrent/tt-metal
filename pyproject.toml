@@ -16,6 +16,7 @@ dependencies = [
   "loguru>=0.6.0",
   "networkx>=3.1",
   "graphviz>=0.20.3",
+  "torch==2.2.1+cpu",
 ]
 requires-python = ">=3.10"
 description = "General compute framework for Tenstorrent devices"
