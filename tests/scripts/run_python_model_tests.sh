@@ -91,4 +91,16 @@ run_python_model_tests_blackhole() {
 
     pytest tests/ttnn/integration_tests/resnet/test_ttnn_functional_resnet50.py
     pytest models/demos/yolov4/tests/pcc/test_ttnn_yolov4_bh.py
+    pytest models/experimental/functional_unet/tests/test_unet_model.py
+}
+
+run_python_model_tests_slow_runtime_mode_blackhole() {
+    # Unet Shallow
+    export TTNN_CONFIG_OVERRIDES='{
+        "enable_fast_runtime_mode": false,
+        "enable_comparison_mode": true,
+        "comparison_mode_should_raise_exception": true,
+        "comparison_mode_pcc": 0.998
+    }'
+    pytest -svv models/experimental/functional_unet/tests/test_unet_model.py
 }

@@ -7,12 +7,14 @@ import torch
 
 from ttnn.model_preprocessing import fold_batch_norm2d_into_conv2d, ParameterDict
 
+from ttnn.device import is_wormhole_b0
+
 
 def nearest_16(x):
     return math.ceil(x / 16) * 16
 
 
-def determine_num_cores_for_upsample(nhw: int, width: int, max_cores=64) -> int:
+def determine_num_cores_for_upsample(nhw: int, width: int, max_cores: int) -> int:
     gcd_nhw_width = math.gcd(nhw, width)
     cores = nhw // gcd_nhw_width
     if cores > max_cores:
@@ -23,7 +25,7 @@ def determine_num_cores_for_upsample(nhw: int, width: int, max_cores=64) -> int:
     return cores
 
 
-def get_core_grid_from_num_cores(num_cores: int, grid_rows: int = 8, grid_cols: int = 8):
+def get_core_grid_from_num_cores(num_cores: int, grid_rows: int, grid_cols: int):
     rows = num_cores // grid_cols
     assert rows <= grid_rows, "Not enough cores for specified core grid"
     ranges = []
@@ -48,7 +50,11 @@ def get_core_grid_from_num_cores(num_cores: int, grid_rows: int = 8, grid_cols: 
 
 def is_valid_device_for_unet(device):
     """Check that each device is an 8x8 grid."""
-    return device.core_grid.x == 8 and device.core_grid.y == 8
+    return (
+        device.core_grid.x == 8 and device.core_grid.y == 8
+        if is_wormhole_b0(device)
+        else device.core_grid.x >= 11 and device.core_grid.y >= 10
+    )
 
 
 def preprocess_unet_input_tensor(input_tensor, min_channels=16):
@@ -174,7 +180,11 @@ class UNetConv2D:
         )
 
         if override_core_grid is not None:
-            self.conv_config.core_grid = get_core_grid_from_num_cores(override_core_grid)
+            self.conv_config.core_grid = get_core_grid_from_num_cores(
+                override_core_grid,
+                grid_rows=8 if is_wormhole_b0(self.device) else 11,
+                grid_cols=8 if is_wormhole_b0(self.device) else 10,
+            )
             self.conv_config.override_sharding_config = True
 
         self.compute_config = ttnn.init_device_compute_kernel_config(
@@ -325,8 +335,14 @@ class UNetUpblock:
         # Need to reshape into (B, H, W, C) to get correct output from ttnn.upsample
         x = ttnn.reshape(x, (self.batch_size, self.input_height // 2, self.input_width // 2, x.shape[-1]))
         nhw = x.shape[0] * x.shape[1] * x.shape[2]
-        num_cores = determine_num_cores_for_upsample(nhw, x.shape[2])
-        core_grid = get_core_grid_from_num_cores(num_cores)
+        num_cores = determine_num_cores_for_upsample(
+            nhw, x.shape[2], max_cores=64 if is_wormhole_b0(self.device) else 110
+        )
+        core_grid = get_core_grid_from_num_cores(
+            num_cores,
+            grid_rows=8 if is_wormhole_b0(self.device) else 11,
+            grid_cols=8 if is_wormhole_b0(self.device) else 10,
+        )
         shardspec = ttnn.create_sharded_memory_config_(
             x.shape, core_grid, ttnn.ShardStrategy.HEIGHT, orientation=ttnn.ShardOrientation.ROW_MAJOR
         )
@@ -334,7 +350,7 @@ class UNetUpblock:
         if not x.is_sharded():
             x = ttnn.interleaved_to_sharded(x, shardspec)
 
-        upsampled = ttnn.upsample(x, (2, 2), memory_config=x.memory_config())
+        upsampled = ttnn.upsample(x, (2, 2))  # , memory_config=x.memory_config())
         ttnn.deallocate(x)
         return ttnn.reshape(
             upsampled,
@@ -351,7 +367,11 @@ class UNetUpblock:
         ttnn.deallocate(x_rm)
 
         if not residual_rm.is_sharded():
-            core_grid = get_core_grid_from_num_cores(x_upsampled.memory_config().shard_spec.num_cores())
+            core_grid = get_core_grid_from_num_cores(
+                x_upsampled.memory_config().shard_spec.num_cores(),
+                grid_rows=8 if is_wormhole_b0(self.device) else 11,
+                grid_cols=8 if is_wormhole_b0(self.device) else 10,
+            )
             mem_cfg = ttnn.create_sharded_memory_config_(
                 residual_rm.shape, core_grid, ttnn.ShardStrategy.HEIGHT, orientation=ttnn.ShardOrientation.ROW_MAJOR
             )
@@ -384,8 +404,8 @@ class UNet:
             parameters.b1_2,
             parameters.p1,
             device,
-            override_core_grid=63,
-            reshard_if_not_optimal=False,
+            override_core_grid=63 if is_wormhole_b0(self.device) else None,
+            reshard_if_not_optimal=not is_wormhole_b0(self.device),
             mesh_mapper=mesh_mapper,
         )
         self.downblock2 = UNetDownblock(
@@ -461,8 +481,8 @@ class UNet:
             parameters.c7_3,
             parameters.b7_3,
             device,
-            override_core_grid=63,
-            reshard_if_not_optimal=False,
+            override_core_grid=63 if is_wormhole_b0(self.device) else None,
+            reshard_if_not_optimal=not is_wormhole_b0(self.device),
             final_block=False,
             mesh_mapper=mesh_mapper,
         )
