@@ -107,8 +107,8 @@ def assert_quality(
     if a.shape != b.shape:
         logger.warning(f"shape mismatch: {a.shape} != {b.shape}")
 
-    a = a.detach().flatten().to(torch.float32)
-    b = b.detach().flatten().to(torch.float32)
+    a = a.detach().flatten().to(torch.float64)
+    b = b.detach().flatten().to(torch.float64)
 
     cov = torch.cov(torch.stack([a, b])).numpy()
 
