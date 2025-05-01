@@ -32,19 +32,19 @@ set(IRAM_OPTIONS
 file(STRINGS "../sfpi-version.sh" SFPI)
 set(SFPI_arch_os "${CMAKE_HOST_SYSTEM_PROCESSOR}_${CMAKE_HOST_SYSTEM_NAME}")
 foreach(tuple ${SFPI})
-  string(REPLACE "=" ";" pair ${tuple})
-  list(LENGTH pair count)
-  if (count EQUAL 2)
-    list(GET pair 0 key)
-    list(GET pair 1 value)
-    if (key STREQUAL "sfpi_version")
-      set(SFPI_VERSION "${value}")
-    elseif(key STREQUAL "sfpi_url")
-      set(SFPI_URL "${value}")
-    elseif(key STREQUAL "sfpi_${SFPI_arch_os}_tgz_md5")
-      set(SFPI_TGZ_MD5 "${value}")
+    string(REPLACE "=" ";" pair ${tuple})
+    list(LENGTH pair count)
+    if(count EQUAL 2)
+        list(GET pair 0 key)
+        list(GET pair 1 value)
+        if(key STREQUAL "sfpi_version")
+            set(SFPI_VERSION "${value}")
+        elseif(key STREQUAL "sfpi_url")
+            set(SFPI_URL "${value}")
+        elseif(key STREQUAL "sfpi_${SFPI_arch_os}_tgz_md5")
+            set(SFPI_TGZ_MD5 "${value}")
+        endif()
     endif()
-  endif()
 endforeach()
 
 if(NOT DEFINED SFPI_TGZ_MD5)
@@ -53,12 +53,13 @@ endif()
 
 include(FetchContent)
 FetchContent_Declare(
-  sfpi
-  URL "${SFPI_URL}/${SFPI_VERSION}/sfpi-${SFPI_arch_os}.tgz"
-  URL_HASH "MD5=${SFPI_TGZ_MD5}"
-  SOURCE_DIR
-  "${PROJECT_SOURCE_DIR}/runtime/sfpi"
-  )
+    sfpi
+    URL
+        "${SFPI_URL}/${SFPI_VERSION}/sfpi-${SFPI_arch_os}.tgz"
+    URL_HASH "MD5=${SFPI_TGZ_MD5}"
+    SOURCE_DIR
+    "${PROJECT_SOURCE_DIR}/runtime/sfpi"
+)
 FetchContent_MakeAvailable(sfpi)
 
 foreach(ARCH IN LISTS ARCHS)
