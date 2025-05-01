@@ -347,6 +347,7 @@ void syncDeviceHost(IDevice* device, CoreCoord logical_core, bool doHeader) {
 }
 
 void setShift(int device_id, int64_t shift, double scale, std::tuple<double, double, double>& root_sync_info) {
+    ZoneScoped;
     if (std::isnan(scale)) {
         return;
     }
