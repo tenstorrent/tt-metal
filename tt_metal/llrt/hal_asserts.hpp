@@ -4,6 +4,9 @@
 
 #pragma once
 
+// This header provides static asserts. Consumers really do want it even if they don't use any symbol from it.
+// IWYU pragma: always_keep
+
 #include "dev_mem_map.h"
 #include <dev_msgs.h>
 #include "noc/noc_parameters.h"

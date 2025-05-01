@@ -11,6 +11,7 @@
 #include "blackhole/bh_hal.hpp"
 #include "core_config.h"  // ProgrammableCoreType
 #include "dev_mem_map.h"
+#include "hal_asserts.hpp"
 #include "hal_types.hpp"
 #include "llrt/hal.hpp"
 #include "noc/noc_overlay_parameters.h"
