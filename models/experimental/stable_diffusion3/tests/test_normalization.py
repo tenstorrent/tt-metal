@@ -10,7 +10,7 @@ import ttnn
 
 from ..reference.normalization import RmsNorm
 from ..tt.normalization import TtLayerNorm, TtLayerNormParameters, TtRmsNorm, TtRmsNormParameters
-from ..tt.utils import assert_quality
+from ..tt.utils import assert_quality, to_torch
 
 
 @pytest.mark.parametrize(
@@ -61,7 +61,7 @@ def test_layer_norm(
     tt_output = tt_model(tt_input_tensor)
 
     composer = ttnn.ConcatMesh2dToTensor(mesh_device, tuple(mesh_device.shape), (0, -1))
-    tt_output_torch = ttnn.to_torch(tt_output, mesh_composer=composer)
+    tt_output_torch = to_torch(tt_output, mesh_composer=composer, fix_special_numbers=True, dtype=torch.float32)
     assert_quality(torch_output, tt_output_torch, pcc=0.99990)
 
 
