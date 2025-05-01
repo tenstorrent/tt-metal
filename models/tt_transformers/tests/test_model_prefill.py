@@ -54,6 +54,13 @@ from models.utility_functions import skip_for_grayskull
     ids=["128", "3k", "4k", "8k", "16k", "32k"],
 )
 @pytest.mark.parametrize(
+    "max_seq_len",
+    (128 * 1024,),
+    ids=[
+        "max128k",
+    ],
+)
+@pytest.mark.parametrize(
     "optimizations",
     [
         lambda model_args: DecodersPrecision.performance(model_args.n_layers, model_args.model_name),
@@ -67,10 +74,11 @@ from models.utility_functions import skip_for_grayskull
     ids=["1layer", "all_layers"],
 )
 def test_model_inference(
-    seq_len,
     paged_attention,
     page_params,
     optimizations,
+    seq_len,
+    max_seq_len,
     num_layers,
     mesh_device,
     use_program_cache,
@@ -128,7 +136,7 @@ def test_model_inference(
         instruct=instruct,
         max_batch_size=batch_size,
         optimizations=optimizations,
-        max_seq_len=seq_len,
+        max_seq_len=max_seq_len,
         paged_attention_config=paged_attention_config,
         dtype=dtype,
         num_layers=num_layers,
