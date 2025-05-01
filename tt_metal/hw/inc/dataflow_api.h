@@ -1408,7 +1408,8 @@ void noc_semaphore_set(volatile tt_l1_ptr uint32_t* sem_addr, uint32_t val) {
  */
 // clang-format on
 template <bool write_to_stream_reg = false, bool posted = false>
-FORCE_INLINE void noc_inline_dw_write(uint64_t addr, uint32_t val, uint8_t be = 0xF, uint8_t noc = noc_index) {
+FORCE_INLINE void noc_inline_dw_write(
+    uint64_t addr, uint32_t val, uint8_t be = 0xF, uint8_t noc = noc_index, uint8_t vc = NOC_UNICAST_WRITE_VC) {
     WAYPOINT("NWIW");
     DEBUG_SANITIZE_NOC_ADDR(noc, addr, 4);
     // This API does not support DRAM addresses
@@ -1426,7 +1427,7 @@ FORCE_INLINE void noc_inline_dw_write(uint64_t addr, uint32_t val, uint8_t be = 
             val,
             addr,
             be,  // byte-enable
-            NOC_UNICAST_WRITE_VC,
+            vc,
             false,  // mcast
             false   // posted
         );
@@ -1446,7 +1447,7 @@ FORCE_INLINE void noc_inline_dw_write(uint64_t addr, uint32_t val, uint8_t be = 
         src_addr,
         addr,
         4,
-        NOC_UNICAST_WRITE_VC,
+        vc,
         false,  // mcast
         false,  // linked
         1,      // num_dests
@@ -1461,7 +1462,7 @@ FORCE_INLINE void noc_inline_dw_write(uint64_t addr, uint32_t val, uint8_t be = 
         val,
         addr,
         be,  // byte-enable
-        NOC_UNICAST_WRITE_VC,
+        vc,
         false,  // mcast
         posted  // posted
     );
@@ -1472,13 +1473,17 @@ FORCE_INLINE void noc_inline_dw_write(uint64_t addr, uint32_t val, uint8_t be = 
 // on BH this api can only write to stream register, writing to L1 will cause hangs!
 template <bool posted = false>
 FORCE_INLINE void noc_inline_dw_write_set_state(
-    uint64_t addr, uint8_t be = 0xF, uint8_t cmd_buf = write_at_cmd_buf, uint8_t noc = noc_index) {
+    uint64_t addr,
+    uint8_t be = 0xF,
+    uint8_t cmd_buf = write_at_cmd_buf,
+    uint8_t noc = noc_index,
+    uint8_t vc = NOC_UNICAST_WRITE_VC) {
     WAYPOINT("NWIW");
     // DEBUG_SANITIZE_NOC_ADDR is not needed here because it doesn't send out the request
     // The address could be set here or later in noc_inline_dw_write_with_state
 
-    uint32_t noc_cmd_field = NOC_CMD_VC_STATIC | NOC_CMD_STATIC_VC(NOC_UNICAST_WRITE_VC) | NOC_CMD_CPY | NOC_CMD_WR |
-                             NOC_CMD_WR_INLINE | 0x0 | (posted ? 0x0 : NOC_CMD_RESP_MARKED);
+    uint32_t noc_cmd_field = NOC_CMD_VC_STATIC | NOC_CMD_STATIC_VC(vc) | NOC_CMD_CPY | NOC_CMD_WR | NOC_CMD_WR_INLINE |
+                             0x0 | (posted ? 0x0 : NOC_CMD_RESP_MARKED);
 
     uint32_t be32 = be;
     uint32_t be_shift = (addr & (NOC_WORD_BYTES - 1));
@@ -1548,12 +1553,13 @@ FORCE_INLINE void noc_inline_dw_write_with_state(
  */
 // clang-format on
 template <bool posted = false>
-FORCE_INLINE void noc_semaphore_inc(uint64_t addr, uint32_t incr, uint8_t noc_id = noc_index) {
+FORCE_INLINE void noc_semaphore_inc(
+    uint64_t addr, uint32_t incr, uint8_t noc_id = noc_index, uint8_t vc = NOC_UNICAST_WRITE_VC) {
     /*
     [REFER TO grayskull/noc/noc.h for the documentation of noc_atomic_increment()]
     Generic increment with 32-bit wrap.
   */
-    RECORD_NOC_EVENT_WITH_ADDR(NocEventType::SEMAPHORE_INC,addr,0, NOC_UNICAST_WRITE_VC);
+    RECORD_NOC_EVENT_WITH_ADDR(NocEventType::SEMAPHORE_INC, addr, 0, vc);
 
     WAYPOINT("NSIW");
     DEBUG_SANITIZE_NOC_ADDR(noc_id, addr, 4);
@@ -1562,7 +1568,7 @@ FORCE_INLINE void noc_semaphore_inc(uint64_t addr, uint32_t incr, uint8_t noc_id
         noc_id,
         write_at_cmd_buf,
         addr,
-        NOC_UNICAST_WRITE_VC,
+        vc,
         incr,
         31 /*wrap*/,
         false /*linked*/,
@@ -1673,12 +1679,15 @@ void noc_async_read_barrier_with_trid(uint32_t trid, uint8_t noc = noc_index) {
 
 template <bool posted = false>
 FORCE_INLINE void noc_async_write_one_packet_with_trid_set_state(
-    std::uint64_t dst_noc_addr, uint8_t cmd_buf = write_cmd_buf, uint8_t noc = noc_index) {
+    std::uint64_t dst_noc_addr,
+    uint8_t cmd_buf = write_cmd_buf,
+    uint8_t noc = noc_index,
+    uint8_t vc = NOC_UNICAST_WRITE_VC) {
     WAYPOINT("NAWW");
-    RECORD_NOC_EVENT_WITH_ADDR(NocEventType::WRITE_WITH_TRID_SET_STATE, dst_noc_addr, 0, NOC_UNICAST_WRITE_VC);
+    RECORD_NOC_EVENT_WITH_ADDR(NocEventType::WRITE_WITH_TRID_SET_STATE, dst_noc_addr, 0, vc);
     while (!noc_cmd_buf_ready(noc, cmd_buf));
     WAYPOINT("NAWD");
-    uint32_t noc_cmd_field = NOC_CMD_CPY | NOC_CMD_WR | NOC_CMD_VC_STATIC | NOC_CMD_STATIC_VC(NOC_UNICAST_WRITE_VC) |
+    uint32_t noc_cmd_field = NOC_CMD_CPY | NOC_CMD_WR | NOC_CMD_VC_STATIC | NOC_CMD_STATIC_VC(vc) |
                              0x0 |  // (linked ? NOC_CMD_VC_LINKED : 0x0)
                              0x0 |  // (mcast ? (NOC_CMD_PATH_RESERVE | NOC_CMD_BRCST_PACKET) : 0x0)
                              (posted ? 0 : NOC_CMD_RESP_MARKED);
@@ -1741,7 +1750,8 @@ FORCE_INLINE void noc_async_write_one_packet_with_trid(
     std::uint32_t size,
     std::uint32_t trid,
     uint8_t cmd_buf = write_cmd_buf,
-    uint8_t noc = noc_index) {
+    uint8_t noc = noc_index,
+    uint8_t vc = NOC_UNICAST_WRITE_VC) {
     if constexpr (noc_mode == DM_DYNAMIC_NOC) {
         if constexpr (update_counter) {
             if constexpr (posted) {
@@ -1758,7 +1768,7 @@ FORCE_INLINE void noc_async_write_one_packet_with_trid(
     while (!noc_cmd_buf_ready(noc, cmd_buf));
     WAYPOINT("NWPD");
 
-    uint32_t noc_cmd_field = NOC_CMD_CPY | NOC_CMD_WR | NOC_CMD_VC_STATIC | NOC_CMD_STATIC_VC(NOC_UNICAST_WRITE_VC) |
+    uint32_t noc_cmd_field = NOC_CMD_CPY | NOC_CMD_WR | NOC_CMD_VC_STATIC | NOC_CMD_STATIC_VC(vc) |
                              0x0 |  // (linked ? NOC_CMD_VC_LINKED : 0x0)
                              0x0 |  // (mcast ? (NOC_CMD_PATH_RESERVE | NOC_CMD_BRCST_PACKET) : 0x0)
                              (posted ? 0 : NOC_CMD_RESP_MARKED);
