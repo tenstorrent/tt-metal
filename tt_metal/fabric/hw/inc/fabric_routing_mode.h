@@ -22,10 +22,4 @@ namespace tt::tt_fabric {
 #define ROUTING_MODE_PUSH 0x0200
 #define ROUTING_MODE_PULL 0x0400
 
-// routing mode type for host code
-// other type can be represented by (RoutingMode)(ROUTING_MODE_1D | ROUTING_MODE_RING) etc.
-enum class RoutingMode : uint16_t {
-    Undefined = ROUTING_MODE_UNDEFINED,
-};
-
 }  // namespace tt::tt_fabric
