@@ -76,8 +76,6 @@ TEST(CclAsyncOp, ReduceScatterSmall_PersistentFabric) {
         // {input_shape[0],input_shape[1],input_shape[2],input_shape[3]}, layout).to_device(devices[i]));
         auto t =
             ttnn::experimental::view(ttnn::arange(0, num_elems, 1, DataType::BFLOAT16), input_shape).to_layout(layout);
-        t.set_tensor_spec(TensorSpec(
-            input_shape, TensorLayout(DataType::BFLOAT16, PageConfig(layout, tt_metal::Tile()), in_memory_config)));
         device_input_tensors.push_back(t);
     }
     // Need to make it a mesh tensor for use with the op

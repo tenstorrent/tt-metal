@@ -1487,7 +1487,7 @@ int TestLoopbackEntrypoint(
     return success ? 0 : -1;
 }
 
-bool TestMultiInputReaderKernel(
+inline bool TestMultiInputReaderKernel(
     size_t fabric_num_devices,
     Tensor& input_tensor0,
     const MemoryConfig& input_tensor0_mem_config,
@@ -1651,14 +1651,6 @@ bool RunMultiInputReaderTestPropagateFullTensorIn(
             .to_layout(layout);
     Tensor output_tensor0 = ttnn::experimental::view(ttnn::ones(tensor_shape, DataType::UINT32, layout), tensor_shape);
     Tensor output_tensor1 = ttnn::experimental::view(ttnn::ones(tensor_shape, DataType::UINT32, layout), tensor_shape);
-    input_tensor0.set_tensor_spec(TensorSpec(
-        tensor_shape, TensorLayout(DataType::UINT32, PageConfig(layout, tt_metal::Tile()), in0_memory_config)));
-    input_tensor1.set_tensor_spec(TensorSpec(
-        tensor_shape, TensorLayout(DataType::UINT32, PageConfig(layout, tt_metal::Tile()), in1_memory_config)));
-    output_tensor0.set_tensor_spec(TensorSpec(
-        tensor_shape, TensorLayout(DataType::UINT32, PageConfig(layout, tt_metal::Tile()), out0_memory_config)));
-    output_tensor1.set_tensor_spec(TensorSpec(
-        tensor_shape, TensorLayout(DataType::UINT32, PageConfig(layout, tt_metal::Tile()), out1_memory_config)));
 
     size_t page_size = tile_size(DataFormat::RawUInt32);
 
@@ -1726,14 +1718,6 @@ void RunFabricMcastFullTensorPropagateTest(
         ttnn::experimental::view(ttnn::arange(0, num_elems, 1, DataType::UINT32), tensor_shape).to_layout(layout);
     Tensor output_tensor1 = ttnn::experimental::view(ttnn::ones(tensor_shape, DataType::UINT32, layout), tensor_shape);
     Tensor output_tensor0 = ttnn::experimental::view(ttnn::ones(tensor_shape, DataType::UINT32, layout), tensor_shape);
-    input_tensor0.set_tensor_spec(TensorSpec(
-        tensor_shape, TensorLayout(DataType::UINT32, PageConfig(layout, tt_metal::Tile()), in0_memory_config)));
-    input_tensor1.set_tensor_spec(TensorSpec(
-        tensor_shape, TensorLayout(DataType::UINT32, PageConfig(layout, tt_metal::Tile()), in1_memory_config)));
-    output_tensor0.set_tensor_spec(TensorSpec(
-        tensor_shape, TensorLayout(DataType::UINT32, PageConfig(layout, tt_metal::Tile()), out0_memory_config)));
-    output_tensor1.set_tensor_spec(TensorSpec(
-        tensor_shape, TensorLayout(DataType::UINT32, PageConfig(layout, tt_metal::Tile()), out1_memory_config)));
     ASSERT_EQ(input_tensor0.get_logical_shape(), tensor_shape);
     ASSERT_EQ(input_tensor1.get_logical_shape(), tensor_shape);
     ASSERT_EQ(output_tensor0.get_logical_shape(), tensor_shape);
@@ -1865,7 +1849,6 @@ bool RunPipelinedWorkersTest(
     }
     TT_FATAL(mem_configs.size() == num_tensors, "Must have a memory config for each tensor");
     for (size_t i = 0; i < num_tensors; i++) {
-        host_tensors[i].set_tensor_spec(tensor_specs[i]);
         device_tensors.push_back(host_tensors[i].to_device(device, mem_configs[i]));
         log_info("Tensor[{}] allocated starting at address {}", i, device_tensors[i].buffer()->address());
     }
@@ -2139,8 +2122,6 @@ void run_all_gather_with_persistent_fabric(const size_t dim, const size_t num_li
     std::vector<Tensor> device_input_tensors;
     for (size_t i = 0; i < num_devices; i++) {
         auto t = ttnn::experimental::view(ttnn::arange(0, num_elems, 1), input_shape).to_layout(layout);
-        t.set_tensor_spec(TensorSpec(
-            input_shape, TensorLayout(DataType::BFLOAT16, PageConfig(layout, tt_metal::Tile()), in_memory_config)));
 
         device_input_tensors.push_back(t);
     }
@@ -2209,8 +2190,6 @@ void run_ring_all_gather_with_persistent_fabric(
     std::vector<Tensor> device_input_tensors;
     for (size_t i = 0; i < num_devices; i++) {
         auto t = ttnn::experimental::view(ttnn::arange(0, num_elems, 1), input_shape).to_layout(layout);
-        t.set_tensor_spec(TensorSpec(
-            input_shape, TensorLayout(DataType::BFLOAT16, PageConfig(layout, tt_metal::Tile()), in_memory_config)));
 
         device_input_tensors.push_back(t);
     }
