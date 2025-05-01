@@ -80,7 +80,6 @@ target_sources(
             api/tt-metalium/persistent_kernel_cache.hpp
             api/tt-metalium/program.hpp
             api/tt-metalium/program_cache.hpp
-            api/tt-metalium/program_device_map.hpp
             api/tt-metalium/runtime_args_data.hpp
             api/tt-metalium/semaphore.hpp
             api/tt-metalium/shape.hpp

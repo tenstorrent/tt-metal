@@ -18,7 +18,6 @@
 #include <hostdevcommon/kernel_structs.h>  // Not used here, but leaked to programming examples
 #include <tt-metalium/work_executor_types.hpp>
 #include <tt-metalium/data_types.hpp>
-#include <tt-metalium/program_device_map.hpp>
 #include <tt-metalium/hal_types.hpp>
 #include <tt-metalium/command_queue_interface.hpp>
 #include <tt-metalium/sub_device_types.hpp>
@@ -193,8 +192,6 @@ public:
     virtual HalProgrammableCoreType get_programmable_core_type(CoreCoord virtual_core) const = 0;
 
     uint64_t get_dev_addr(CoreCoord virtual_core, HalL1MemAddrType addr_type) const;
-
-    virtual std::vector<std::pair<transfer_info_cores, uint32_t>> extract_dst_noc_multicast_info(const std::vector<CoreRange>& ranges, const CoreType core_type) = 0;
 
     virtual uint8_t num_noc_mcast_txns(SubDeviceId sub_device_id) const = 0;
     virtual uint8_t num_noc_unicast_txns(SubDeviceId sub_device_id) const = 0;
