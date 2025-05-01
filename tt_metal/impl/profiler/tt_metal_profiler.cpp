@@ -373,7 +373,6 @@ void setShift(int device_id, int64_t shift, double scale, std::tuple<double, dou
 
 void peekDeviceData(IDevice* device, std::vector<CoreCoord>& worker_cores) {
     ZoneScoped;
-    tt::log_info("peekDeviceData");
     auto device_id = device->id();
     std::string zoneName = fmt::format("peek {}", device_id);
     ZoneName(zoneName.c_str(), zoneName.size());

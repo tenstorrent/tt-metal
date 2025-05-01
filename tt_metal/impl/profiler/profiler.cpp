@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <dev_msgs.h>
-// #include <common/TracyTTDeviceData.hpp>
 #include <device.hpp>
 #include <distributed.hpp>
 #include "tools/profiler/event_metadata.hpp"
@@ -118,7 +117,6 @@ void write_control_buffer_to_core(
     const HalProgrammableCoreType core_type,
     const ProfilerDumpState state,
     const std::vector<uint32_t>& control_buffer) {
-    ZoneScoped;
     profiler_msg_t* profiler_msg =
         MetalContext::instance().hal().get_dev_addr<profiler_msg_t*>(core_type, HalL1MemAddrType::PROFILER);
     if (device->dispatch_firmware_active()) {
@@ -163,24 +161,21 @@ void DeviceProfiler::readRiscProfilerResults(
     HalProgrammableCoreType CoreType;
     int riscCount;
 
-    {
-        ZoneScopedN("get_core_type");
-        if (tt::tt_metal::MetalContext::instance().get_cluster().is_worker_core(worker_core, device_id)) {
-            CoreType = HalProgrammableCoreType::TENSIX;
-            riscCount = 5;
-        } else {
-            auto active_eth_cores =
-                tt::tt_metal::MetalContext::instance().get_cluster().get_active_ethernet_cores(device_id);
-            bool is_active_eth_core =
-                active_eth_cores.find(
-                    tt::tt_metal::MetalContext::instance().get_cluster().get_logical_ethernet_core_from_virtual(
-                        device_id, worker_core)) != active_eth_cores.end();
+    if (tt::tt_metal::MetalContext::instance().get_cluster().is_worker_core(worker_core, device_id)) {
+        CoreType = HalProgrammableCoreType::TENSIX;
+        riscCount = 5;
+    } else {
+        auto active_eth_cores =
+            tt::tt_metal::MetalContext::instance().get_cluster().get_active_ethernet_cores(device_id);
+        bool is_active_eth_core =
+            active_eth_cores.find(
+                tt::tt_metal::MetalContext::instance().get_cluster().get_logical_ethernet_core_from_virtual(
+                    device_id, worker_core)) != active_eth_cores.end();
 
-            CoreType = is_active_eth_core ? tt_metal::HalProgrammableCoreType::ACTIVE_ETH
-                                          : tt_metal::HalProgrammableCoreType::IDLE_ETH;
+        CoreType = is_active_eth_core ? tt_metal::HalProgrammableCoreType::ACTIVE_ETH
+                                      : tt_metal::HalProgrammableCoreType::IDLE_ETH;
 
-            riscCount = 1;
-        }
+        riscCount = 1;
     }
 
     std::vector<uint32_t> control_buffer = read_control_buffer_from_core(device, worker_core, CoreType, state);
@@ -190,14 +185,13 @@ void DeviceProfiler::readRiscProfilerResults(
         return;
     }
 
-    uint32_t coreFlatID =
+    const uint32_t coreFlatID =
         tt::tt_metal::MetalContext::instance().get_cluster().get_virtual_routing_to_profiler_flat_id(device_id).at(
             worker_core);
-    uint32_t startIndex = coreFlatID * MAX_RISCV_PER_CORE * PROFILER_FULL_HOST_VECTOR_SIZE_PER_RISC;
+    const uint32_t startIndex = coreFlatID * MAX_RISCV_PER_CORE * PROFILER_FULL_HOST_VECTOR_SIZE_PER_RISC;
 
     // helper function to lookup opname from runtime id if metadata is available
     auto getOpNameIfAvailable = [&metadata](auto device_id, auto runtime_id) {
-        // ZoneScopedN("getOpNameIfAvailable");
         return (metadata.has_value()) ? metadata->get_op_name(device_id, runtime_id) : "";
     };
 
@@ -206,7 +200,6 @@ void DeviceProfiler::readRiscProfilerResults(
 
     int riscNum = 0;
     for (int riscEndIndex = 0; riscEndIndex < riscCount; riscEndIndex++) {
-        // ZoneScopedN("riscEndIndex < riscCount loop");
         uint32_t bufferEndIndex = control_buffer[riscEndIndex];
         uint32_t riscType;
         if (CoreType == HalProgrammableCoreType::TENSIX) {
@@ -242,7 +235,6 @@ void DeviceProfiler::readRiscProfilerResults(
             std::string opname;
             for (int index = bufferRiscShift; index < (bufferRiscShift + bufferEndIndex);
                  index += kernel_profiler::PROFILER_L1_MARKER_UINT32_SIZE) {
-                // ZoneScopedN("index < (bufferRiscShift + bufferEndIndex) loop");
                 if (!newRunStart && profile_buffer[index] == 0 && profile_buffer[index + 1] == 0) {
                     newRunStart = true;
                     opTime_H = 0;
@@ -396,7 +388,6 @@ void DeviceProfiler::logPacketData(
     uint64_t data,
     uint32_t timer_id,
     uint64_t timestamp) {
-    // ZoneScopedN("logPacketData");
     kernel_profiler::PacketTypes packet_type = get_packet_type(timer_id);
     uint32_t t_id = timer_id & 0xFFFF;
     std::string zone_name = "";
@@ -463,7 +454,6 @@ void DeviceProfiler::logPacketData(
     }
 
     if (packet_type == kernel_profiler::TS_DATA) {
-        // ZoneScopedN("packet_type == TS_DATA");
         if (this->current_zone_it != device_events.end()) {
             // Check if we are in a Tensix Dispatch zone. If so, we could have gotten dispatch meta data packets
             // These packets can amend parent zone's info
@@ -576,7 +566,6 @@ void DeviceProfiler::logPacketDataToCSV(
     const std::string_view source_file,
     const nlohmann::json& metaData) {
     std::string metaDataStr = "";
-    // ZoneScopedN("logPacketDataToCSV");
 
     if (!metaData.is_null()) {
         metaDataStr = metaData.dump();
@@ -615,7 +604,6 @@ void DeviceProfiler::logNocTracePacketDataToJson(
     kernel_profiler::PacketTypes packet_type,
     uint64_t /*source_line*/,
     const std::string_view /*source_file*/) {
-    // ZoneScopedN("logNocTracePacketDataToJson");
     if (!MetalContext::instance().rtoptions().get_profiler_noc_events_enabled()) {
         return;
     }
@@ -759,7 +747,6 @@ void DeviceProfiler::serializeJsonNocTraces(
 }
 
 CoreCoord DeviceProfiler::getPhysicalAddressFromVirtual(chip_id_t device_id, const CoreCoord& c) const {
-    ZoneScopedN("getPhysicalAddressFromVirtual");
     bool coord_is_translated = c.x >= MetalContext::instance().hal().get_virtual_worker_start_x() &&
                                c.y >= MetalContext::instance().hal().get_virtual_worker_start_y();
     if (MetalContext::instance().hal().is_coordinate_virtualization_enabled() && coord_is_translated) {
@@ -834,11 +821,9 @@ uint16_t DeviceProfiler::hash16CT(const std::string& str) {
 }
 
 void DeviceProfiler::generateZoneSourceLocationsHashes() {
-    ZoneScopedN("generateZoneSourceLocationsHashes");
     std::ifstream log_file(tt::tt_metal::PROFILER_ZONE_SRC_LOCATIONS_LOG);
     std::string line;
     while (std::getline(log_file, line)) {
-        ZoneScopedN("getline");
         std::string delimiter = "'#pragma message: ";
         int delimiter_index = line.find(delimiter) + delimiter.length();
         std::string zone_src_location = line.substr(delimiter_index, line.length() - delimiter_index - 1);
@@ -949,7 +934,6 @@ void DeviceProfiler::dumpResults(
 
 bool isSyncInfoNewer(
     const std::tuple<double, double, double>& old_info, const std::tuple<double, double, double>& new_info) {
-    ZoneScoped;
     double old_cpu_time = get<0>(old_info);
     double old_device_time = get<1>(old_info);
     double old_frequency = get<2>(old_info);
@@ -959,10 +943,8 @@ bool isSyncInfoNewer(
     return (old_cpu_time < new_cpu_time && old_device_time / old_frequency < new_device_time / new_frequency);
 }
 
-void parallel_sort(std::vector<const tracy::TTDeviceEvent*>& device_events) {
-    ZoneScoped;
-    // try with higher number of threads
-    const uint32_t num_threads = 8;
+void sortDeviceEvents(std::vector<const tracy::TTDeviceEvent*>& device_events) {
+    constexpr uint32_t num_threads = 8;
 
     if (device_events.size() < num_threads) {
         std::sort(
@@ -973,12 +955,11 @@ void parallel_sort(std::vector<const tracy::TTDeviceEvent*>& device_events) {
     }
 
     std::array<std::thread, num_threads - 1> threads;
-    uint32_t chunk_size = device_events.size() / num_threads;
+    const uint32_t chunk_size = device_events.size() / num_threads;
     for (uint32_t i = 0; i < num_threads - 1; i++) {
-        uint32_t start_idx = i * chunk_size;
-        uint32_t end_idx = (i + 1) * chunk_size;
+        const uint32_t start_idx = i * chunk_size;
+        const uint32_t end_idx = (i + 1) * chunk_size;
         threads[i] = std::thread([&device_events, start_idx, end_idx]() {
-            // ZoneScopedN("sort chunk");
             std::sort(
                 device_events.begin() + start_idx,
                 device_events.begin() + end_idx,
@@ -995,78 +976,50 @@ void parallel_sort(std::vector<const tracy::TTDeviceEvent*>& device_events) {
         thread.join();
     }
 
-    {
-        ZoneScopedN("merge first level");
-        for (uint32_t i = 0; i < num_threads; i += 2) {
-            threads[i] = std::thread([&device_events, chunk_size, i]() {
-                std::inplace_merge(
-                    device_events.begin() + i * chunk_size,
-                    device_events.begin() + (i + 1) * chunk_size,
-                    device_events.begin() + (i + 2) * chunk_size,
-                    [](const tracy::TTDeviceEvent* a, const tracy::TTDeviceEvent* b) { return *a < *b; });
-            });
-        }
+    for (uint32_t i = 0; i < num_threads; i += 2) {
+        threads[i] = std::thread([&device_events, chunk_size, i]() {
+            std::inplace_merge(
+                device_events.begin() + i * chunk_size,
+                device_events.begin() + (i + 1) * chunk_size,
+                device_events.begin() + (i + 2) * chunk_size,
+                [](const tracy::TTDeviceEvent* a, const tracy::TTDeviceEvent* b) { return *a < *b; });
+        });
     }
 
     for (uint32_t i = 0; i < num_threads; i += 2) {
         threads[i].join();
     }
 
-    {
-        ZoneScopedN("merge second level");
-        for (uint32_t i = 0; i < num_threads; i += 4) {
-            threads[i] = std::thread([&device_events, chunk_size, i]() {
-                std::inplace_merge(
-                    device_events.begin() + i * chunk_size,
-                    device_events.begin() + (i + 2) * chunk_size,
-                    device_events.begin() + (i + 4) * chunk_size,
-                    [](const tracy::TTDeviceEvent* a, const tracy::TTDeviceEvent* b) { return *a < *b; });
-            });
-        }
+    for (uint32_t i = 0; i < num_threads; i += 4) {
+        threads[i] = std::thread([&device_events, chunk_size, i]() {
+            std::inplace_merge(
+                device_events.begin() + i * chunk_size,
+                device_events.begin() + (i + 2) * chunk_size,
+                device_events.begin() + (i + 4) * chunk_size,
+                [](const tracy::TTDeviceEvent* a, const tracy::TTDeviceEvent* b) { return *a < *b; });
+        });
     }
 
     for (uint32_t i = 0; i < num_threads; i += 4) {
         threads[i].join();
     }
 
-    // {
-    //     ZoneScopedN("merge third level");
-    //     for (uint32_t i = 0; i < num_threads; i += 8) {
-    //         threads[i] = std::thread([&device_events, chunk_size, i]() {
-    //             std::inplace_merge(
-    //             device_events.begin() + i * chunk_size,
-    //             device_events.begin() + (i + 4) * chunk_size,
-    //                 device_events.begin() + (i + 8) * chunk_size, [](const tracy::TTDeviceEvent* a, const
-    //                 tracy::TTDeviceEvent* b) {
-    //                     return *a < *b;
-    //                 });
-    //         });
-    //     }
-    // }
+    std::inplace_merge(
+        device_events.begin(),
+        device_events.begin() + 4 * chunk_size,
+        device_events.end(),
+        [](const tracy::TTDeviceEvent* a, const tracy::TTDeviceEvent* b) { return *a < *b; });
 
-    // for (uint32_t i = 0; i < num_threads; i += 8) {
-    //     threads[i].join();
-    // }
-
-    {
-        ZoneScopedN("merge fourth level");
-        std::inplace_merge(
-            device_events.begin(),
-            device_events.begin() + 4 * chunk_size,
-            device_events.end(),
-            [](const tracy::TTDeviceEvent* a, const tracy::TTDeviceEvent* b) { return *a < *b; });
-    }
-    TT_ASSERT(std::is_sorted(device_events.begin(), device_events.end()));
+    TT_ASSERT(std::is_sorted(
+        device_events.begin(), device_events.end(), [](const tracy::TTDeviceEvent* a, const tracy::TTDeviceEvent* b) {
+            return *a < *b;
+        }));
 }
 
-std::vector<const tracy::TTDeviceEvent*> populate_device_events_vec(
+std::vector<const tracy::TTDeviceEvent*> getDeviceEventsVector(
     const std::unordered_set<tracy::TTDeviceEvent>& device_events) {
-    ZoneScoped;
-    std::vector<const tracy::TTDeviceEvent*> device_events_vec;
-    device_events_vec.resize(device_events.size());
-    // const uint32_t num_threads = 3;
-    // const uint32_t chunk_size = device_events.size() / num_threads;
-    // std::array<std::thread, num_threads - 1> threads;
+    std::vector<const tracy::TTDeviceEvent*> device_events_vec(device_events.size());
+
     auto middle = device_events.begin();
     std::advance(middle, device_events.size() / 2);
 
@@ -1077,40 +1030,6 @@ std::vector<const tracy::TTDeviceEvent*> populate_device_events_vec(
             i++;
         }
     });
-
-    // auto start_it = device_events.begin();
-    // auto end_it = device_events.begin();
-    // std::advance(end_it, chunk_size);
-
-    // for (uint32_t i = 0; i < num_threads - 1; ++i) {
-    //     uint32_t start_idx = i * chunk_size;
-    //     //uint32_t end_idx = (i + 1) * chunk_size;
-
-    //     // auto start_it = device_events.begin();
-    //     // std::advance(start_it, start_idx);
-
-    //     // auto end_it = device_events.begin();
-    //     // std::advance(end_it, end_idx);
-
-    //     threads[i] = std::thread([&device_events_vec, &device_events, start_it, end_it, start_idx]() {
-    //         uint32_t idx = start_idx;
-    //         for (auto it = start_it; it != end_it; ++it) {
-    //             device_events_vec[idx] = &(*it);
-    //             idx++;
-    //         }
-    //     });
-
-    //     std::advance(start_it, chunk_size);
-    //     std::advance(end_it, chunk_size);
-    // }
-
-    // uint32_t i = (num_threads - 1) * chunk_size;
-    // auto start_it = device_events.begin();
-    // std::advance(start_it, i);
-    // for (auto it = start_it; it != device_events.end(); ++it) {
-    //     device_events_vec[i] = &(*it);
-    //     i++;
-    // }
 
     uint32_t i = 0;
     for (auto it = device_events.begin(); it != middle; ++it) {
@@ -1135,55 +1054,23 @@ void DeviceProfiler::pushTracyDeviceResults() {
         }
     }
 
-    // std::vector<std::pair<uint32_t, CoreCoord>> device_cores;
-    tt::log_info("device_events size: {}", device_events.size());
-    // std::vector<const tracy::TTDeviceEvent*> device_events_vec;
+    // IMPORTANT: This function creates a vector of pointers to the TTDeviceEvent objects stored in the device_events
+    // unordered set. These are direct pointers to the original objects, not copies of the data.
+    // Thread safety warning: The device_events set MUST NOT be modified (no insertions, deletions, or rehashing) while
+    // these pointers are in use, as this could invalidate the pointers and cause undefined behavior.
+    std::vector<const tracy::TTDeviceEvent*> device_events_vec = getDeviceEventsVector(device_events);
 
-    // check that this reserves memory
-    // {
-    //     ZoneScopedN("reserve device_events_vec");
-    //     device_events_vec.resize(device_events.size());
-    // }
-    // for (auto& event : device_events) {
-    //     device_events_vec.push_back(&event);
-    // }
-    std::vector<const tracy::TTDeviceEvent*> device_events_vec = populate_device_events_vec(device_events);
-    // device_events_vec.insert(device_events_vec.end(), device_events.begin(), device_events.end());
-    // {
-    //     ZoneScopedN("sort device_events_vec");
-    //     std::sort(
-    //         device_events_vec.begin(),
-    //         device_events_vec.end(),
-    //         [](const tracy::TTDeviceEvent* a, const tracy::TTDeviceEvent* b) { return *a < *b; });
-    // }
-    parallel_sort(device_events_vec);
-
-    // device_cores.reserve(device_events_vec.size());
-    //  std::unordered_set<std::pair<uint32_t, CoreCoord>, pair_hash<uint32_t, CoreCoord>> device_cores_set;
-    //  for (auto& event : device_events_vec) {
-    //      //std::pair<uint32_t, CoreCoord> device_core = {event->chip_id, (CoreCoord){event->core_x, event->core_y}};
-    //      auto ret = device_cores_set.emplace(event->chip_id, CoreCoord(event->core_x, event->core_y));
-    //      if (ret.second) {
-    //          //device_cores.push_back(*ret.first);
-    //          updateTracyContext(*ret.first);
-    //      }
-    //  }
+    sortDeviceEvents(device_events_vec);
 
     for (auto& device_core : device_cores) {
         updateTracyContext(device_core);
     }
 
-    // for (auto& device_core : device_cores) {
-    //     updateTracyContext(device_core);
-    // }
-
     for (auto& event : device_events_vec) {
-        // ZoneScopedN("push event gui");
-        std::pair<uint32_t, CoreCoord> device_core = {event->chip_id, (CoreCoord){event->core_x, event->core_y}};
-        const uint64_t adjusted_timestamp = event->timestamp * this->freqScale + this->shift;
         const tracy::TTDeviceEvent* event_to_push = event;
+
+        const uint64_t adjusted_timestamp = event->timestamp * this->freqScale + this->shift;
         if (adjusted_timestamp != event->timestamp) {
-            ZoneScopedN("create new event");
             tracy::TTDeviceEvent new_event(
                 event->run_num,
                 event->chip_id,
@@ -1198,12 +1085,16 @@ void DeviceProfiler::pushTracyDeviceResults() {
                 event->zone_phase);
             event_to_push = &new_event;
         }
+
+        std::pair<uint32_t, CoreCoord> device_core = {
+            event_to_push->chip_id, (CoreCoord){event_to_push->core_x, event_to_push->core_y}};
         if (event->zone_phase == tracy::TTDeviceEventPhase::begin) {
             TracyTTPushStartZone(device_tracy_contexts[device_core], *event_to_push);
         } else if (event->zone_phase == tracy::TTDeviceEventPhase::end) {
             TracyTTPushEndZone(device_tracy_contexts[device_core], *event_to_push);
         }
     }
+
     device_events.clear();
     device_cores.clear();
 #endif

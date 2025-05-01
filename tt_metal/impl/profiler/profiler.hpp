@@ -48,6 +48,10 @@ using std::chrono::duration_cast;
 using std::chrono::nanoseconds;
 using std::chrono::steady_clock;
 
+namespace tt {
+
+namespace tt_metal {
+
 template <typename T1, typename T2>
 struct pair_hash {
     size_t operator()(const std::pair<T1, T2>& p) const {
@@ -57,10 +61,6 @@ struct pair_hash {
         return h1 ^ (h2 + 0x9e3779b9 + (h1 << 6) + (h1 >> 2));
     }
 };
-
-namespace tt {
-
-namespace tt_metal {
 
 struct DisptachMetaData {
     // Dispatch command queue command type
@@ -219,7 +219,7 @@ public:
     std::vector<uint32_t> profile_buffer;
 
     // (Device ID, Core Coord) pairs that keep track of cores which need to have their Tracy contexts updated
-    std::unordered_set<std::pair<uint32_t, CoreCoord>, pair_hash<uint32_t, CoreCoord>> device_cores;
+    std::unordered_set<std::pair<chip_id_t, CoreCoord>, pair_hash<chip_id_t, CoreCoord>> device_cores;
 
     // Device events
     std::unordered_set<tracy::TTDeviceEvent> device_events;
