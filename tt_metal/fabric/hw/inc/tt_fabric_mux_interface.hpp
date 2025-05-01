@@ -11,7 +11,7 @@
 namespace tt::tt_fabric {
 
 template <uint8_t FABRIC_MUX_CHANNEL_NUM_BUFFERS = 0>
-WorkerToFabricMuxSender<FABRIC_MUX_CHANNEL_NUM_BUFFERS> build_fabric_mux_connection(
+WorkerToFabricMuxSender<FABRIC_MUX_CHANNEL_NUM_BUFFERS> build_connection_to_fabric_endpoint(
     uint8_t fabric_mux_x,
     uint8_t fabric_mux_y,
     uint8_t fabric_mux_num_buffers_per_channel,
@@ -44,7 +44,7 @@ WorkerToFabricMuxSender<FABRIC_MUX_CHANNEL_NUM_BUFFERS> build_fabric_mux_connect
         write_at_cmd_buf);
 }
 
-FORCE_INLINE void wait_for_fabric_mux_ready(
+FORCE_INLINE void wait_for_fabric_endpoint_ready(
     uint8_t fabric_mux_x,
     uint8_t fabric_mux_y,
     size_t fabric_mux_status_address,
@@ -62,20 +62,18 @@ FORCE_INLINE void wait_for_fabric_mux_ready(
 }
 
 template <uint8_t FABRIC_MUX_CHANNEL_NUM_BUFFERS = 0>
-FORCE_INLINE void fabric_mux_client_connect(
-    WorkerToFabricMuxSender<FABRIC_MUX_CHANNEL_NUM_BUFFERS>& connection_handle) {
+FORCE_INLINE void fabric_client_connect(WorkerToFabricMuxSender<FABRIC_MUX_CHANNEL_NUM_BUFFERS>& connection_handle) {
     connection_handle.open();
 }
 
 template <uint8_t FABRIC_MUX_CHANNEL_NUM_BUFFERS = 0>
-FORCE_INLINE void fabric_mux_client_disconnect(
-    WorkerToFabricMuxSender<FABRIC_MUX_CHANNEL_NUM_BUFFERS>& connection_handle) {
+FORCE_INLINE void fabric_client_disconnect(WorkerToFabricMuxSender<FABRIC_MUX_CHANNEL_NUM_BUFFERS>& connection_handle) {
     connection_handle.close();
 }
 
 // assumes packet header is correctly populated
 template <uint8_t FABRIC_MUX_CHANNEL_NUM_BUFFERS = 0>
-FORCE_INLINE void fabric_mux_async_write(
+FORCE_INLINE void fabric_async_write(
     WorkerToFabricMuxSender<FABRIC_MUX_CHANNEL_NUM_BUFFERS>& connection_handle,
     volatile tt_l1_ptr PACKET_HEADER_TYPE* packet_header,
     uint32_t source_payload_address,
@@ -86,8 +84,9 @@ FORCE_INLINE void fabric_mux_async_write(
     connection_handle.send_payload_blocking_from_address((uint32_t)packet_header, sizeof(tt::tt_fabric::PacketHeader));
 }
 
+// assumes packet header is correctly populated
 template <uint8_t FABRIC_MUX_CHANNEL_NUM_BUFFERS = 0>
-FORCE_INLINE void fabric_mux_atomic_inc(
+FORCE_INLINE void fabric_atomic_inc(
     WorkerToFabricMuxSender<FABRIC_MUX_CHANNEL_NUM_BUFFERS>& connection_handle,
     volatile tt_l1_ptr PACKET_HEADER_TYPE* packet_header) {
     connection_handle.wait_for_empty_write_slot();

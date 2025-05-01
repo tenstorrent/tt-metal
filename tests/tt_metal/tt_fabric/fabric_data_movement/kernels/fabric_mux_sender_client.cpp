@@ -48,7 +48,7 @@ void kernel_main() {
     zero_l1_buf(test_results, test_results_size_bytes);
     test_results[TT_FABRIC_STATUS_INDEX] = TT_FABRIC_STATUS_STARTED;
 
-    auto mux_connection_handle = tt::tt_fabric::build_fabric_mux_connection<fabric_mux_num_buffers_per_channel>(
+    auto mux_connection_handle = tt::tt_fabric::build_connection_to_fabric_endpoint<fabric_mux_num_buffers_per_channel>(
         fabric_mux_x,
         fabric_mux_y,
         fabric_mux_num_buffers_per_channel,
@@ -73,11 +73,11 @@ void kernel_main() {
     uint64_t base_noc_dest_address = get_noc_addr_helper(receiver_noc_xy_encoding, base_l1_target_address);
 
     // need to wait for fabric mux to be ready to accept connections
-    tt::tt_fabric::wait_for_fabric_mux_ready(
+    tt::tt_fabric::wait_for_fabric_endpoint_ready(
         fabric_mux_x, fabric_mux_y, fabric_mux_status_address, local_fabric_mux_status_address);
 
     for (uint32_t iter = 0; iter < num_open_close_iters; iter++) {
-        tt::tt_fabric::fabric_mux_client_connect<fabric_mux_num_buffers_per_channel>(mux_connection_handle);
+        tt::tt_fabric::fabric_client_connect<fabric_mux_num_buffers_per_channel>(mux_connection_handle);
 
         uint64_t noc_dest_addr = base_noc_dest_address;
         uint32_t seed = time_seed ^ sender_id ^ (iter + 1);
@@ -96,7 +96,7 @@ void kernel_main() {
             noc_semaphore_inc(local_credit_handshake_noc_address, -1);
             noc_async_atomic_barrier();
 
-            tt::tt_fabric::fabric_mux_async_write<fabric_mux_num_buffers_per_channel>(
+            tt::tt_fabric::fabric_async_write<fabric_mux_num_buffers_per_channel>(
                 mux_connection_handle, packet_header, payload_buffer_address, packet_payload_size_bytes);
 
             // update the slot id for next packet
@@ -107,7 +107,7 @@ void kernel_main() {
         noc_async_write_barrier();
         // wait for all credits to be returned before disconnecting
         while (credit_handshake_ptr[0] != num_credits);
-        tt::tt_fabric::fabric_mux_client_disconnect<fabric_mux_num_buffers_per_channel>(mux_connection_handle);
+        tt::tt_fabric::fabric_client_disconnect<fabric_mux_num_buffers_per_channel>(mux_connection_handle);
     }
 
     test_results[TT_FABRIC_STATUS_INDEX] = TT_FABRIC_STATUS_PASS;

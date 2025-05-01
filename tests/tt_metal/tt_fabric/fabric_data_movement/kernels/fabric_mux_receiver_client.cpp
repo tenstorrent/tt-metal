@@ -49,7 +49,7 @@ void kernel_main() {
     zero_l1_buf(test_results, test_results_size_bytes);
     test_results[TT_FABRIC_STATUS_INDEX] = TT_FABRIC_STATUS_STARTED;
 
-    auto mux_connection_handle = tt::tt_fabric::build_fabric_mux_connection<fabric_mux_num_buffers_per_channel>(
+    auto mux_connection_handle = tt::tt_fabric::build_connection_to_fabric_endpoint<fabric_mux_num_buffers_per_channel>(
         fabric_mux_x,
         fabric_mux_y,
         fabric_mux_num_buffers_per_channel,
@@ -78,11 +78,11 @@ void kernel_main() {
     uint32_t expected_val = 0;
 
     // need to wait for fabric mux to be ready to accept connections
-    tt::tt_fabric::wait_for_fabric_mux_ready(
+    tt::tt_fabric::wait_for_fabric_endpoint_ready(
         fabric_mux_x, fabric_mux_y, fabric_mux_status_address, local_fabric_mux_status_address);
 
     for (uint32_t iter = 0; iter < num_open_close_iters; iter++) {
-        tt::tt_fabric::fabric_mux_client_connect<fabric_mux_num_buffers_per_channel>(mux_connection_handle);
+        tt::tt_fabric::fabric_client_connect<fabric_mux_num_buffers_per_channel>(mux_connection_handle);
 
         packet_header->to_noc_unicast_atomic_inc(NocUnicastAtomicIncCommandHeader{
             noc_dest_addr, static_cast<uint16_t>(return_credits_per_packet), std::numeric_limits<uint16_t>::max()});
@@ -116,7 +116,7 @@ void kernel_main() {
 
             if (++num_accumulated_credits == return_credits_per_packet) {
                 num_accumulated_credits = 0;
-                tt::tt_fabric::fabric_mux_atomic_inc<fabric_mux_num_buffers_per_channel>(
+                tt::tt_fabric::fabric_atomic_inc<fabric_mux_num_buffers_per_channel>(
                     mux_connection_handle, packet_header);
             }
 
@@ -127,11 +127,11 @@ void kernel_main() {
         if (num_accumulated_credits > 0) {
             packet_header->to_noc_unicast_atomic_inc(NocUnicastAtomicIncCommandHeader{
                 noc_dest_addr, static_cast<uint16_t>(num_accumulated_credits), std::numeric_limits<uint16_t>::max()});
-            tt::tt_fabric::fabric_mux_atomic_inc<fabric_mux_num_buffers_per_channel>(
-                mux_connection_handle, packet_header);
+            tt::tt_fabric::fabric_atomic_inc<fabric_mux_num_buffers_per_channel>(mux_connection_handle, packet_header);
+            num_accumulated_credits = 0;
         }
         noc_async_write_barrier();
-        tt::tt_fabric::fabric_mux_client_disconnect<fabric_mux_num_buffers_per_channel>(mux_connection_handle);
+        tt::tt_fabric::fabric_client_disconnect<fabric_mux_num_buffers_per_channel>(mux_connection_handle);
 
         if (!match) {
             break;
