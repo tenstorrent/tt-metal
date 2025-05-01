@@ -192,13 +192,4 @@ DistributedTensorConfig get_distributed_tensor_config_from_tensor(const Tensor& 
     }
 }
 
-bool is_multi_device_host_tensor(const Tensor& tensor) {
-    return tensor.storage_type() == StorageType::MULTI_DEVICE_HOST;
-}
-
-bool is_mesh_buffer_tensor(const Tensor& tensor) {
-    const auto* device_storage = std::get_if<DeviceStorage>(&tensor.get_storage());
-    return device_storage != nullptr && device_storage->mesh_buffer != nullptr;
-}
-
 }  // namespace ttnn::distributed

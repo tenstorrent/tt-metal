@@ -36,8 +36,6 @@ Tensor tensor_to_device(
         GraphTracker::instance().track_function_end(input_tensor);
         return input_tensor;
     }
-    tensor_impl::validate_on_device_dtype_and_layout(
-        input_tensor.get_padded_shape(), input_tensor.get_dtype(), input_tensor.get_layout());
     auto device_tensor = tensor_impl::to_device_wrapper(input_tensor, target_device, mem_config, cq_id);
     device_tensor = tt::tt_metal::set_tensor_id(device_tensor);
     GraphTracker::instance().track_function_end(device_tensor);
@@ -53,8 +51,6 @@ Tensor tensor_to_device(
         GraphTracker::instance().track_function_end(input_tensor);
         return input_tensor;
     }
-    tensor_impl::validate_on_device_dtype_and_layout(
-        input_tensor.get_padded_shape(), input_tensor.get_dtype(), input_tensor.get_layout());
     auto device_tensor = tensor_impl::to_device_mesh_tensor_wrapper(input_tensor, mesh_device, mem_config, cq_id);
     GraphTracker::instance().track_function_end(device_tensor);
     return device_tensor;
@@ -64,7 +60,7 @@ Tensor tensor_to_device(
     const Tensor& input_tensor, const std::vector<IDevice*>& workers, const MemoryConfig& mem_config, QueueId cq_id) {
     ZoneScoped;
     GraphTracker::instance().track_function_start("Tensor::to_device", input_tensor, workers, mem_config);
-    Tensor device_tensor = Tensor(workers);
+    Tensor device_tensor = Tensor(workers, input_tensor.tensor_spec().with_memory_config(mem_config));
     uint32_t num_workers = workers.size();
     for (int worker_index = 0; worker_index < workers.size(); ++worker_index) {
         auto& worker = workers[worker_index];
@@ -73,11 +69,6 @@ Tensor tensor_to_device(
             shard = tensor_impl::to_device_wrapper(shard, worker, mem_config, cq_id);
         }
         insert_buffer_and_shape_for_device(worker, shard, device_tensor, worker_index);
-        if (worker_index == 0) {
-            device_tensor.set_tensor_spec(TensorSpec(
-                input_tensor.get_logical_shape(),
-                input_tensor.get_tensor_spec().tensor_layout().with_memory_config(mem_config)));
-        }
     }
     device_tensor = tt::tt_metal::set_tensor_id(device_tensor);
     GraphTracker::instance().track_function_end(device_tensor);
@@ -100,18 +91,14 @@ Tensor tensor_cpu(const Tensor& input_tensor, bool blocking, QueueId cq_id) {
         GraphTracker::instance().track_function_end(output);
         return output;
     }
-    Tensor host_tensor(workers.size());
+
+    Tensor host_tensor(
+        workers.size(), input_tensor.get_tensor_spec(), std::get<DeviceStorage>(input_tensor.get_storage()).strategy);
     for (int worker_index = 0; worker_index < workers.size(); worker_index++) {
-        auto target_device = workers[worker_index];
-        TT_ASSERT(
-            input_tensor.storage_type() == StorageType::DEVICE,
-            "Can only use worker queue for cpu call if tensor is on device.");
+        auto* target_device = workers[worker_index];
         auto shard = get_shard_for_device(input_tensor, target_device);
         shard = tensor_impl::to_host_wrapper(shard, blocking, cq_id);
         insert_buffer_and_shape_for_device(target_device, shard, host_tensor, worker_index);
-        if (worker_index == 0) {
-            host_tensor.set_tensor_spec(input_tensor.get_tensor_spec());
-        }
     }
 
     host_tensor = tt::tt_metal::set_tensor_id(host_tensor);
@@ -138,7 +125,7 @@ Tensor tensor_to_layout(const Tensor& input_tensor, Layout target_layout, IDevic
 Tensor tensor_to_layout(const Tensor& input_tensor, Layout target_layout, distributed::MeshDevice* mesh_device) {
     ZoneScoped;
     TT_ASSERT(
-        input_tensor.is_host_tensor(),
+        is_cpu_tensor(input_tensor) || is_multi_device_host_tensor(input_tensor),
         "to(layout) must be called on host tensors with MULTI_DEVICE_HOST_STORAGE when multiple "
         "workers "
         "are specified");
@@ -154,7 +141,16 @@ Tensor tensor_to_layout(const Tensor& input_tensor, Layout target_layout, distri
             distributed_config = host_storage->strategy;
         }
 
-        Tensor tensor_modified_layout = Tensor(num_shards, distributed_config);
+        const auto& original_layout = input_tensor.get_tensor_spec().tensor_layout();
+        Tensor tensor_modified_layout(
+            num_shards,
+            TensorSpec(
+                input_tensor.get_logical_shape(),
+                TensorLayout(
+                    original_layout.get_data_type(),
+                    PageConfig(target_layout, original_layout.get_tile()),
+                    original_layout.get_memory_config())),
+            distributed_config);
         for (std::size_t shard_idx = 0; shard_idx < num_shards; ++shard_idx) {
             // Multi-Thread Host tilization of shards.
             mesh_device->enqueue_to_thread_pool(
@@ -165,16 +161,8 @@ Tensor tensor_to_layout(const Tensor& input_tensor, Layout target_layout, distri
                     insert_buffer_and_shape_for_device(mesh_device, shard, tensor_modified_layout, shard_idx);
                 });
         }
-        // Update tensor metadata in main thread while thread-pool performs tilization.
-        auto orig_layout = input_tensor.get_tensor_spec().tensor_layout();
-        auto upd_layout = TensorLayout(
-            orig_layout.get_data_type(),
-            PageConfig(target_layout, orig_layout.get_tile()),
-            orig_layout.get_memory_config());
-        tensor_modified_layout.set_tensor_spec(TensorSpec(input_tensor.get_logical_shape(), upd_layout));
         tensor_modified_layout = tt::tt_metal::set_tensor_id(tensor_modified_layout);
         GraphTracker::instance().track_function_end(tensor_modified_layout);
-        // Wait for thread-pool
         mesh_device->wait_for_thread_pool();
         return tensor_modified_layout;
     }
@@ -201,7 +189,8 @@ Tensor tensor_pad(
     ZoneScoped;
     GraphTracker::instance().track_function_start(
         "Tensor::pad", input_tensor, output_padded_shape, input_tensor_start, pad_value);
-    TT_ASSERT(input_tensor.is_host_tensor(), "Tensor must be on host for padding");
+    TT_ASSERT(
+        is_cpu_tensor(input_tensor) || is_multi_device_host_tensor(input_tensor), "Tensor must be on host for padding");
     // TODO: Flip to assert when we remove use cases in python and c++
     if (input_tensor.get_layout() != Layout::ROW_MAJOR) {
         log_warning(
