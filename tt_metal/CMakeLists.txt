@@ -38,8 +38,8 @@ target_sources(
             api/tt-metalium/bfloat8.hpp
             api/tt-metalium/blockfloat_common.hpp
             api/tt-metalium/buffer.hpp
-            api/tt-metalium/buffer_types.hpp
             api/tt-metalium/buffer_distribution_spec.hpp
+            api/tt-metalium/buffer_types.hpp
             api/tt-metalium/circular_buffer.hpp
             api/tt-metalium/circular_buffer_constants.h
             api/tt-metalium/circular_buffer_types.hpp
@@ -69,9 +69,9 @@ target_sources(
             api/tt-metalium/hlk_desc.hpp
             api/tt-metalium/host_api.hpp
             api/tt-metalium/kernel.hpp
-            api/tt-metalium/lightmetal_binary.hpp
             api/tt-metalium/kernel_types.hpp
             api/tt-metalium/launch_message_ring_buffer_state.hpp
+            api/tt-metalium/lightmetal_binary.hpp
             api/tt-metalium/logger.hpp
             api/tt-metalium/math.hpp
             api/tt-metalium/memory_reporter.hpp
@@ -85,7 +85,6 @@ target_sources(
             api/tt-metalium/program_cache.hpp
             api/tt-metalium/program_descriptors.hpp
             api/tt-metalium/program_device_map.hpp
-            api/tt-metalium/program_descriptors.hpp
             api/tt-metalium/runtime_args_data.hpp
             api/tt-metalium/semaphore.hpp
             api/tt-metalium/shape.hpp
@@ -95,9 +94,9 @@ target_sources(
             api/tt-metalium/sub_device.hpp
             api/tt-metalium/sub_device_manager_tracker.hpp
             api/tt-metalium/sub_device_types.hpp
-            api/tt-metalium/system_mesh.hpp
-            api/tt-metalium/system_memory_manager.hpp
             api/tt-metalium/system_memory_cq_interface.hpp
+            api/tt-metalium/system_memory_manager.hpp
+            api/tt-metalium/system_mesh.hpp
             api/tt-metalium/tile.hpp
             api/tt-metalium/trace.hpp
             api/tt-metalium/trace_buffer.hpp
@@ -107,8 +106,8 @@ target_sources(
             api/tt-metalium/tt_metal.hpp
             api/tt-metalium/util.hpp
             api/tt-metalium/utils.hpp
-            api/tt-metalium/work_split.hpp
             api/tt-metalium/work_executor_types.hpp
+            api/tt-metalium/work_split.hpp
             api/tt-metalium/worker_config_buffer.hpp
 )
 
@@ -122,10 +121,6 @@ target_sources(
         TYPE HEADERS
         BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
         FILES
-            third_party/tt_llk/tt_llk_blackhole/llk_lib/llk_unpack_tilize.h
-            third_party/tt_llk/tt_llk_wormhole_b0/llk_lib/llk_unpack_tilize.h
-            third_party/tt_llk/tt_llk_blackhole/llk_lib/llk_math_eltwise_binary.h
-            third_party/tt_llk/tt_llk_wormhole_b0/llk_lib/llk_math_eltwise_binary.h
             api/tt-metalium/circular_buffer_constants.h
             api/tt-metalium/dev_msgs.h
             api/tt-metalium/fabric_host_interface.h
@@ -160,8 +155,6 @@ target_sources(
             include/compute_kernel_api/tile_move_copy.h
             soc_descriptors/blackhole_140_arch.yaml
             soc_descriptors/wormhole_b0_80_arch.yaml
-            third_party/tt_llk/tt_llk_blackhole/llk_lib/llk_unpack_untilize.h
-            third_party/tt_llk/tt_llk_wormhole_b0/llk_lib/llk_unpack_untilize.h
             third_party/tt_llk/tt_llk_blackhole/common/inc/ckernel.h
             third_party/tt_llk/tt_llk_blackhole/common/inc/ckernel_addrmod.h
             third_party/tt_llk/tt_llk_blackhole/common/inc/ckernel_defs.h
@@ -213,6 +206,7 @@ target_sources(
             third_party/tt_llk/tt_llk_blackhole/common/inc/sfpu/ckernel_sfpu_typecast.h
             third_party/tt_llk/tt_llk_blackhole/llk_lib/llk_defs.h
             third_party/tt_llk/tt_llk_blackhole/llk_lib/llk_math_common.h
+            third_party/tt_llk/tt_llk_blackhole/llk_lib/llk_math_eltwise_binary.h
             third_party/tt_llk/tt_llk_blackhole/llk_lib/llk_math_eltwise_unary_datacopy.h
             third_party/tt_llk/tt_llk_blackhole/llk_lib/llk_math_eltwise_unary_sfpu.h
             third_party/tt_llk/tt_llk_blackhole/llk_lib/llk_math_matmul.h
@@ -220,10 +214,12 @@ target_sources(
             third_party/tt_llk/tt_llk_blackhole/llk_lib/llk_pack_common.h
             third_party/tt_llk/tt_llk_blackhole/llk_lib/llk_pack_untilize.h
             third_party/tt_llk/tt_llk_blackhole/llk_lib/llk_unpack_A.h
-            third_party/tt_llk/tt_llk_blackhole/llk_lib/llk_unpack_reduce.h
             third_party/tt_llk/tt_llk_blackhole/llk_lib/llk_unpack_AB.h
             third_party/tt_llk/tt_llk_blackhole/llk_lib/llk_unpack_AB_matmul.h
             third_party/tt_llk/tt_llk_blackhole/llk_lib/llk_unpack_common.h
+            third_party/tt_llk/tt_llk_blackhole/llk_lib/llk_unpack_reduce.h
+            third_party/tt_llk/tt_llk_blackhole/llk_lib/llk_unpack_tilize.h
+            third_party/tt_llk/tt_llk_blackhole/llk_lib/llk_unpack_untilize.h
             third_party/tt_llk/tt_llk_wormhole_b0/common/inc/ckernel.h
             third_party/tt_llk/tt_llk_wormhole_b0/common/inc/ckernel_addrmod.h
             third_party/tt_llk/tt_llk_wormhole_b0/common/inc/ckernel_debug.h
@@ -263,6 +259,7 @@ target_sources(
             third_party/tt_llk/tt_llk_wormhole_b0/common/inc/sfpu/ckernel_sfpu_recip.h
             third_party/tt_llk/tt_llk_wormhole_b0/common/inc/sfpu/ckernel_sfpu_recip.h
             third_party/tt_llk/tt_llk_wormhole_b0/common/inc/sfpu/ckernel_sfpu_relu.h
+            third_party/tt_llk/tt_llk_wormhole_b0/common/inc/sfpu/ckernel_sfpu_reshuffle_rows.h
             third_party/tt_llk/tt_llk_wormhole_b0/common/inc/sfpu/ckernel_sfpu_shift.h
             third_party/tt_llk/tt_llk_wormhole_b0/common/inc/sfpu/ckernel_sfpu_sigmoid.h
             third_party/tt_llk/tt_llk_wormhole_b0/common/inc/sfpu/ckernel_sfpu_sign.h
@@ -274,37 +271,39 @@ target_sources(
             third_party/tt_llk/tt_llk_wormhole_b0/common/inc/sfpu/ckernel_sfpu_topk.h
             third_party/tt_llk/tt_llk_wormhole_b0/common/inc/sfpu/ckernel_sfpu_trigonometry.h
             third_party/tt_llk/tt_llk_wormhole_b0/common/inc/sfpu/ckernel_sfpu_typecast.h
-            third_party/tt_llk/tt_llk_wormhole_b0/common/inc/sfpu/ckernel_sfpu_reshuffle_rows.h
             third_party/tt_llk/tt_llk_wormhole_b0/llk_lib/llk_defs.h
             third_party/tt_llk/tt_llk_wormhole_b0/llk_lib/llk_math_common.h
-            third_party/tt_llk/tt_llk_wormhole_b0/llk_lib/llk_math_eltwise_unary_datacopy.h
-            third_party/tt_llk/tt_llk_wormhole_b0/llk_lib/llk_math_eltwise_unary_sfpu.h
-            third_party/tt_llk/tt_llk_wormhole_b0/llk_lib/llk_math_matmul.h
-            third_party/tt_llk/tt_llk_wormhole_b0/llk_lib/llk_pack.h
-            third_party/tt_llk/tt_llk_wormhole_b0/llk_lib/llk_pack_common.h
-            third_party/tt_llk/tt_llk_wormhole_b0/llk_lib/llk_pack_untilize.h
-            third_party/tt_llk/tt_llk_wormhole_b0/llk_lib/llk_unpack_reduce.h
-            third_party/tt_llk/tt_llk_wormhole_b0/llk_lib/llk_unpack_A.h
-            third_party/tt_llk/tt_llk_wormhole_b0/llk_lib/llk_unpack_AB.h
-            third_party/tt_llk/tt_llk_wormhole_b0/llk_lib/llk_unpack_AB_matmul.h
-            third_party/tt_llk/tt_llk_wormhole_b0/llk_lib/llk_unpack_common.h
-            third_party/tt_llk/tt_llk_wormhole_b0/llk_lib/llk_unpack_tilize.h
-            third_party/tt_llk/tt_llk_wormhole_b0/llk_lib/llk_math_reduce.h
             third_party/tt_llk/tt_llk_wormhole_b0/llk_lib/llk_math_common.h
+            third_party/tt_llk/tt_llk_wormhole_b0/llk_lib/llk_math_eltwise_binary.h
             third_party/tt_llk/tt_llk_wormhole_b0/llk_lib/llk_math_eltwise_binary_sfpu.h
+            third_party/tt_llk/tt_llk_wormhole_b0/llk_lib/llk_math_eltwise_unary_datacopy.h
             third_party/tt_llk/tt_llk_wormhole_b0/llk_lib/llk_math_eltwise_unary_datacopy.h
             third_party/tt_llk/tt_llk_wormhole_b0/llk_lib/llk_math_eltwise_unary_sfpi.h
             third_party/tt_llk/tt_llk_wormhole_b0/llk_lib/llk_math_eltwise_unary_sfpu.h
+            third_party/tt_llk/tt_llk_wormhole_b0/llk_lib/llk_math_eltwise_unary_sfpu.h
             third_party/tt_llk/tt_llk_wormhole_b0/llk_lib/llk_math_matmul.h
+            third_party/tt_llk/tt_llk_wormhole_b0/llk_lib/llk_math_matmul.h
+            third_party/tt_llk/tt_llk_wormhole_b0/llk_lib/llk_math_reduce.h
             third_party/tt_llk/tt_llk_wormhole_b0/llk_lib/llk_math_transpose_dest.h
             third_party/tt_llk/tt_llk_wormhole_b0/llk_lib/llk_pack.h
+            third_party/tt_llk/tt_llk_wormhole_b0/llk_lib/llk_pack.h
+            third_party/tt_llk/tt_llk_wormhole_b0/llk_lib/llk_pack_common.h
             third_party/tt_llk/tt_llk_wormhole_b0/llk_lib/llk_pack_common.h
             third_party/tt_llk/tt_llk_wormhole_b0/llk_lib/llk_pack_untilize.h
+            third_party/tt_llk/tt_llk_wormhole_b0/llk_lib/llk_pack_untilize.h
+            third_party/tt_llk/tt_llk_wormhole_b0/llk_lib/llk_unpack_A.h
             third_party/tt_llk/tt_llk_wormhole_b0/llk_lib/llk_unpack_A.h
             third_party/tt_llk/tt_llk_wormhole_b0/llk_lib/llk_unpack_AB.h
+            third_party/tt_llk/tt_llk_wormhole_b0/llk_lib/llk_unpack_AB.h
+            third_party/tt_llk/tt_llk_wormhole_b0/llk_lib/llk_unpack_AB_matmul.h
             third_party/tt_llk/tt_llk_wormhole_b0/llk_lib/llk_unpack_AB_matmul.h
             third_party/tt_llk/tt_llk_wormhole_b0/llk_lib/llk_unpack_common.h
+            third_party/tt_llk/tt_llk_wormhole_b0/llk_lib/llk_unpack_common.h
             third_party/tt_llk/tt_llk_wormhole_b0/llk_lib/llk_unpack_reduce.h
+            third_party/tt_llk/tt_llk_wormhole_b0/llk_lib/llk_unpack_reduce.h
+            third_party/tt_llk/tt_llk_wormhole_b0/llk_lib/llk_unpack_tilize.h
+            third_party/tt_llk/tt_llk_wormhole_b0/llk_lib/llk_unpack_tilize.h
+            third_party/tt_llk/tt_llk_wormhole_b0/llk_lib/llk_unpack_untilize.h
             third_party/tt_llk/tt_llk_wormhole_b0/llk_lib/llk_unpack_untilize.h
             tools/profiler/kernel_profiler.hpp
             # Kernel sources
@@ -312,9 +311,9 @@ target_sources(
             impl/dispatch/kernels/cq_dispatch_slave.cpp
             impl/dispatch/kernels/cq_prefetch.cpp
             impl/dispatch/kernels/packet_demux.cpp
-            impl/dispatch/kernels/vc_packet_router.cpp
-            impl/dispatch/kernels/vc_eth_tunneler.cpp
             impl/dispatch/kernels/packet_mux.cpp
+            impl/dispatch/kernels/vc_eth_tunneler.cpp
+            impl/dispatch/kernels/vc_packet_router.cpp
             kernels/compute/blank.cpp
             kernels/compute/eltwise_binary.cpp
             kernels/compute/eltwise_sfpu.cpp
