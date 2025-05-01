@@ -175,7 +175,6 @@ add_compile_options(
     -Werror
     # The following list is not indicative of what we _desire_ only the status quo to build.
     -Wno-deprecated-declarations
-    -Wno-bool-operation
     -Wno-pessimizing-move
     -Wno-range-loop-construct
     -Wno-unused-but-set-variable
@@ -310,4 +309,7 @@ if(BUILD_TT_TRAIN)
     add_subdirectory(tt-train)
 endif()
 
-include(packaging)
+# If we've been asked to build static libs, packaging is left up to them to sort out.
+if(TT_INSTALL)
+    include(packaging)
+endif()

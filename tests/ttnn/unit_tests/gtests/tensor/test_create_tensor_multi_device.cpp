@@ -31,11 +31,10 @@ using ::tt::tt_metal::MemoryConfig;
 using ::tt::tt_metal::StorageType;
 using ::tt::tt_metal::TensorMemoryLayout;
 
-class MultiDeviceTensorCreationTest : public GenericMeshDeviceFixture, public ::testing::WithParamInterface<bool> {};
+using MultiDeviceTensorCreationTest = GenericMeshDeviceFixture;
 
-TEST_P(MultiDeviceTensorCreationTest, Empty) {
+TEST_F(MultiDeviceTensorCreationTest, Empty) {
     MeshDevice* mesh_device = this->mesh_device_.get();
-    mesh_device->enable_async(GetParam());
 
     const Tensor mesh_replicated_tensor = ttnn::empty(
         ttnn::Shape({32, 32}),
@@ -47,9 +46,8 @@ TEST_P(MultiDeviceTensorCreationTest, Empty) {
     EXPECT_THAT(get_device_tensors(mesh_replicated_tensor), SizeIs(mesh_device->num_devices()));
 }
 
-TEST_P(MultiDeviceTensorCreationTest, EmptyLike) {
+TEST_F(MultiDeviceTensorCreationTest, EmptyLike) {
     MeshDevice* mesh_device = this->mesh_device_.get();
-    mesh_device->enable_async(GetParam());
 
     ASSERT_FALSE(mesh_device->get_devices().empty());
 
@@ -72,9 +70,8 @@ TEST_P(MultiDeviceTensorCreationTest, EmptyLike) {
     EXPECT_THAT(get_device_tensors(mesh_replicated_tensor), SizeIs(mesh_device->num_devices()));
 }
 
-TEST_P(MultiDeviceTensorCreationTest, Full) {
+TEST_F(MultiDeviceTensorCreationTest, Full) {
     MeshDevice* mesh_device = this->mesh_device_.get();
-    mesh_device->enable_async(GetParam());
 
     const Tensor mesh_replicated_tensor = ttnn::full(
         ttnn::Shape({32, 32}),
@@ -97,9 +94,8 @@ TEST_P(MultiDeviceTensorCreationTest, Full) {
     }
 }
 
-TEST_P(MultiDeviceTensorCreationTest, FullLike) {
+TEST_F(MultiDeviceTensorCreationTest, FullLike) {
     MeshDevice* mesh_device = this->mesh_device_.get();
-    mesh_device->enable_async(GetParam());
 
     ASSERT_FALSE(mesh_device->get_devices().empty());
 
@@ -131,9 +127,8 @@ TEST_P(MultiDeviceTensorCreationTest, FullLike) {
     }
 }
 
-TEST_P(MultiDeviceTensorCreationTest, FullLikeWithOptTensor) {
+TEST_F(MultiDeviceTensorCreationTest, FullLikeWithOptTensor) {
     MeshDevice* mesh_device = this->mesh_device_.get();
-    mesh_device->enable_async(GetParam());
 
     ASSERT_FALSE(mesh_device->get_devices().empty());
 
@@ -169,9 +164,8 @@ TEST_P(MultiDeviceTensorCreationTest, FullLikeWithOptTensor) {
     EXPECT_THAT(get_device_tensors(mesh_replicated_tensor), SizeIs(mesh_device->num_devices()));
 }
 
-TEST_P(MultiDeviceTensorCreationTest, Arange) {
+TEST_F(MultiDeviceTensorCreationTest, Arange) {
     MeshDevice* mesh_device = this->mesh_device_.get();
-    mesh_device->enable_async(GetParam());
 
     Tensor tensor = ttnn::arange(
         /*start=*/0,
@@ -191,8 +185,6 @@ TEST_P(MultiDeviceTensorCreationTest, Arange) {
         EXPECT_THAT(values, Pointwise(FloatEq(), expected));
     }
 }
-
-INSTANTIATE_TEST_SUITE_P(AllTests, MultiDeviceTensorCreationTest, ::testing::Bool());
 
 }  // namespace
 }  // namespace ttnn::distributed::test

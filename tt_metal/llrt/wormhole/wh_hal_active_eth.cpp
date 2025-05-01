@@ -21,7 +21,7 @@
 
 namespace tt::tt_metal::wormhole {
 
-HalCoreInfoType create_active_eth_mem_map() {
+HalCoreInfoType create_active_eth_mem_map(bool is_base_routing_fw_enabled) {
     std::vector<DeviceAddr> mem_map_bases;
 
     mem_map_bases.resize(static_cast<std::size_t>(HalL1MemAddrType::COUNT));
@@ -36,7 +36,8 @@ HalCoreInfoType create_active_eth_mem_map() {
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::KERNEL_CONFIG)] =
         eth_l1_mem::address_map::ERISC_L1_KERNEL_CONFIG_BASE;
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::UNRESERVED)] =
-        eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE;
+        is_base_routing_fw_enabled ? eth_l1_mem::address_map::ROUTING_ENABLED_ERISC_L1_UNRESERVED_BASE
+                                   : eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE;
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::CORE_INFO)] = GET_ETH_MAILBOX_ADDRESS_HOST(core_info);
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::GO_MSG)] = GET_ETH_MAILBOX_ADDRESS_HOST(go_message);
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::LAUNCH_MSG_BUFFER_RD_PTR)] =
@@ -45,12 +46,12 @@ HalCoreInfoType create_active_eth_mem_map() {
         eth_l1_mem::address_map::ERISC_MEM_BANK_TO_NOC_SCRATCH;
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::APP_SYNC_INFO)] =
         eth_l1_mem::address_map::ERISC_APP_SYNC_INFO_BASE;
-    mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::TILE_HEADER_BUFFER)] =
-        eth_l1_mem::address_map::TILE_HEADER_BUFFER_BASE;
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::APP_ROUTING_INFO)] =
         eth_l1_mem::address_map::ERISC_APP_ROUTING_INFO_BASE;
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::RETRAIN_COUNT)] =
         eth_l1_mem::address_map::RETRAIN_COUNT_ADDR;
+    mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::RETRAIN_FORCE)] =
+        eth_l1_mem::address_map::RETRAIN_FORCE_ADDR;
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::FABRIC_ROUTER_CONFIG)] =
         eth_l1_mem::address_map::FABRIC_ROUTER_CONFIG_BASE;
 
@@ -68,16 +69,17 @@ HalCoreInfoType create_active_eth_mem_map() {
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::KERNEL_CONFIG)] =
         eth_l1_mem::address_map::ERISC_L1_KERNEL_CONFIG_SIZE;
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::UNRESERVED)] =
-        eth_l1_mem::address_map::MAX_SIZE - eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE;
+        is_base_routing_fw_enabled ? eth_l1_mem::address_map::ROUTING_ENABLED_ERISC_L1_UNRESERVED_SIZE
+                                   : eth_l1_mem::address_map::ERISC_L1_UNRESERVED_SIZE;
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::GO_MSG)] = sizeof(go_msg_t);
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::LAUNCH_MSG_BUFFER_RD_PTR)] = sizeof(uint32_t);
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::BANK_TO_NOC_SCRATCH)] = eth_l1_mem::address_map::ERISC_MEM_BANK_TO_NOC_SIZE;
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::APP_SYNC_INFO)] =
         eth_l1_mem::address_map::ERISC_APP_SYNC_INFO_SIZE;
-    mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::TILE_HEADER_BUFFER)] = sizeof(std::uint32_t);
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::APP_ROUTING_INFO)] =
         eth_l1_mem::address_map::ERISC_APP_ROUTING_INFO_SIZE;
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::RETRAIN_COUNT)] = sizeof(uint32_t);
+    mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::RETRAIN_FORCE)] = sizeof(uint32_t);
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::FABRIC_ROUTER_CONFIG)] =
         eth_l1_mem::address_map::FABRIC_ROUTER_CONFIG_SIZE;
 
@@ -92,7 +94,10 @@ HalCoreInfoType create_active_eth_mem_map() {
         };
         processor_classes[processor_class_idx] = processor_types;
     }
-
+    constexpr uint32_t mailbox_size =
+        sizeof(mailboxes_t) - sizeof(profiler_msg_t::buffer) +
+        sizeof(profiler_msg_t::buffer) / PROFILER_RISC_COUNT * static_cast<uint8_t>(EthProcessorTypes::COUNT);
+    static_assert(mailbox_size <= eth_l1_mem::address_map::ERISC_MEM_MAILBOX_SIZE);
     return {
         HalProgrammableCoreType::ACTIVE_ETH,
         CoreType::ETH,

@@ -1127,7 +1127,6 @@ inline MatmulProgramConfig get_program_config(
             using ProgramConfigType = std::decay_t<decltype(program_config)>;
             if constexpr (
                 not std::is_same_v<ProgramConfigType, MatmulMultiCoreProgramConfig> and
-                not std::is_same_v<ProgramConfigType, MatmulMultiCoreNonOptimizedReuseProgramConfig> and
                 not std::is_same_v<ProgramConfigType, MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig>) {
                 TT_FATAL(
                     program_config.compute_with_storage_grid_size.x <=
@@ -1261,6 +1260,59 @@ namespace operations {
 
 namespace matmul {
 
+ttnn::Shape compute_matmul_output_shape(const Tensor& input_tensor_a, const Tensor& input_tensor_b) {
+    const auto input_shape_a = input_tensor_a.get_logical_shape();
+    const auto input_shape_b = input_tensor_b.get_logical_shape();
+
+    const auto a_rank = input_shape_a.rank();
+    const auto b_rank = input_shape_b.rank();
+
+    // Rank difference will be used to align batch dimensions
+    const int32_t out_rank = std::max<int32_t>(a_rank, b_rank) - (a_rank == 1 || b_rank == 1);
+    const int32_t rank_difference = std::max<int32_t>(0, out_rank - a_rank);
+
+    // Initialize output shape based on the tensor with higher rank
+    ttnn::Shape output_shape = (b_rank > a_rank) ? input_shape_b : input_shape_a;
+
+    // Handle batch dimensions for the case where b_rank > a_rank
+    for (auto index = 0; index < rank_difference; ++index) {
+        TT_FATAL(input_shape_b[index] == 1, "When in1 rank greater than in0 rank front dimensions need to be 1");
+        output_shape[index] = input_shape_b[index];
+    }
+
+    // Copy dimensions from input_shape_a except the last one
+    for (auto index = 0; index < a_rank - 1; ++index) {
+        output_shape[rank_difference + index] = input_shape_a[index];
+    }
+
+    // The last dimension comes from input_tensor_b
+    output_shape[-1] = input_shape_b[-1];
+
+    // Handle the vector matmul case: if a_rank == 1, remove the second-to-last dimension
+    if (a_rank == 1 && output_shape.rank() > 1) [[unlikely]] {
+        ttnn::SmallVector<uint32_t> new_shape(output_shape.rank() - 1);
+        // Copy all elements except the second-to-last dimension
+        size_t dst_idx = 0;
+        for (size_t src_idx = 0; src_idx < output_shape.rank(); ++src_idx) {
+            if (src_idx != output_shape.rank() - 2) {
+                new_shape[dst_idx++] = output_shape[src_idx];
+            }
+        }
+        output_shape = ttnn::Shape(new_shape);
+    }
+
+    // Handle the case where b_rank == 1, remove the last dimension
+    if (b_rank == 1) [[unlikely]] {
+        ttnn::SmallVector<uint32_t> new_shape(output_shape.rank() - 1);
+        for (auto index = 0; index < output_shape.rank() - 1; ++index) {
+            new_shape[index] = output_shape[index];
+        }
+        output_shape = ttnn::Shape(new_shape);
+    }
+
+    return output_shape;
+}
+
 Matmul create_matmul_struct(
     const Tensor& input_tensor_a,
     const Tensor& input_tensor_b,
@@ -1351,37 +1403,19 @@ Tensor matmul(
     const QueueId queue_id,
     const std::optional<Tensor>& optional_output_tensor) {
     std::vector<std::optional<const Tensor>> optional_input_tensors = {};
-    std::vector<Tensor> output_tensors;
-
     if (bias.has_value()) {
         optional_input_tensors.push_back(bias.value());
-        output_tensors = {
-            Tensor(operation::get_workers_for_op_output({input_tensor_a, input_tensor_b}, {bias.value()}))};
     } else {
         optional_input_tensors.push_back(std::nullopt);
-        output_tensors = {Tensor(operation::get_workers_for_op_output({input_tensor_a, input_tensor_b}))};
     }
 
-    operation::launch_op(
-        [parameters, queue_id](
-            const std::vector<Tensor>& input_tensors,
-            const std::vector<std::optional<const Tensor>>& optional_input_tensors,
-            const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
-            const auto& input_tensor_a = input_tensors.at(0);
-            const auto& input_tensor_b = input_tensors.at(1);
-
-            return operation::run(
-                create_matmul_struct(input_tensor_a, input_tensor_b, parameters, optional_output_tensors),
-                {input_tensor_a, input_tensor_b},
-                optional_input_tensors,
-                optional_output_tensors,
-                queue_id);
-        },
-        {input_tensor_a, input_tensor_b},
-        output_tensors,
-        optional_input_tensors,
-        {optional_output_tensor});
-    return output_tensors.at(0);
+    return operation::run(
+               create_matmul_struct(input_tensor_a, input_tensor_b, parameters, {optional_output_tensor}),
+               {input_tensor_a, input_tensor_b},
+               optional_input_tensors,
+               {optional_output_tensor},
+               queue_id)
+        .at(0);
 }
 
 void check_tensor_in_grid(const Tensor& tensor, const CoreCoord& grid_size) {
@@ -1439,10 +1473,10 @@ void Matmul::validate(
 
     TT_FATAL(optional_input_tensors.size() == 1, "Error");
 
+    const auto output_tensor_spec = this->compute_output_specs(input_tensors, {}, optional_input_tensors).at(0);
     if (is_optional_output_tensor) {
         const auto& optional_output_tensor_c = optional_output_tensors.at(0);
         const auto& optional_output_tensor_shape = optional_output_tensor_c->get_logical_shape();
-        const auto output_tensor_spec = this->compute_output_specs(input_tensors, {}, optional_input_tensors).at(0);
         TT_FATAL(
             optional_output_tensor_shape == output_tensor_spec.logical_shape(),
             "Shape of Optional Output Tensor {} doesnt match Output Tensor {}",
@@ -1459,6 +1493,25 @@ void Matmul::validate(
             "tensor {}",
             optional_output_tensor_c->memory_config(),
             this->output_mem_config);
+    } else {
+        TT_FATAL(
+            output_tensor_spec.memory_config().memory_layout == this->output_mem_config.memory_layout,
+            "Mismatch between computed {} and provided {} mem config memory layout",
+            output_tensor_spec.memory_config().memory_layout,
+            this->output_mem_config.memory_layout);
+        TT_FATAL(
+            output_tensor_spec.memory_config().buffer_type == this->output_mem_config.buffer_type,
+            "Mismatch between computed {} and provided {} mem config buffer type",
+            output_tensor_spec.memory_config().buffer_type,
+            this->output_mem_config.buffer_type);
+        if (this->output_mem_config.shard_spec.has_value() &&
+            output_tensor_spec.memory_config() != this->output_mem_config) {
+            log_warning(
+                tt::LogOp,
+                "Mismatch between computed {} and provided {} mem config. Using computed config.",
+                output_tensor_spec.memory_config(),
+                this->output_mem_config);
+        }
     }
 
     TT_FATAL(this->bcast_batch.has_value(), "Error: bcast_batch field should have been automatically populated");
@@ -1587,10 +1640,12 @@ void Matmul::validate(
                              input_tensor_b.buffer()->buffer_type() == tt_metal::BufferType::DRAM),
                         "Input tensor B must be width sharded or DRAM interleaved when using gather_in0.");
                     if (!this->global_cb.has_value() && input_tensor_b.is_sharded()) {
-                        TT_FATAL(
-                            input_tensor_a.shard_spec().value().grid == input_tensor_b.shard_spec().value().grid,
-                            "Input tensor A and B must be sharded on the same cores "
-                            "when using gather_in0.");
+                        if (input_tensor_b.buffer()->buffer_type() == tt_metal::BufferType::L1) {
+                            TT_FATAL(
+                                input_tensor_a.shard_spec().value().grid == input_tensor_b.shard_spec().value().grid,
+                                "Input tensor A and B must be sharded on the same cores "
+                                "when using gather_in0.");
+                        }
                     }
                     TT_FATAL(
                         this->output_mem_config.is_sharded(), "Output tensor must be sharded when using gather_in0.");
@@ -2045,22 +2100,9 @@ std::vector<ttnn::TensorSpec> Matmul::compute_output_specs(
 
     const auto& input_tensor_a = input_tensors.at(0);
     const auto& input_tensor_b = input_tensors.at(1);
-    const ttnn::Shape input_shape_a = input_tensor_a.get_logical_shape();
-    const ttnn::Shape input_shape_b = input_tensor_b.get_logical_shape();
-    const uint32_t a_rank = input_shape_a.rank();
-    const uint32_t b_rank = input_shape_b.rank();
-    const uint32_t out_rank = std::max(a_rank, b_rank);
-    const uint32_t rank_difference = out_rank - a_rank;
-    ttnn::Shape output_shape = (b_rank > a_rank) ? input_shape_b : input_shape_a;
 
-    for (auto index = 0; index < rank_difference; index++) {
-        TT_FATAL(input_shape_b[index] == 1, "When in1 rank greater than in0 rank front dimensions need to be 1");
-        output_shape[index] = input_shape_b[index];
-    }
-    for (auto index = 0; index < a_rank - 1; index++) {
-        output_shape[rank_difference + index] = input_shape_a[index];
-    }
-    output_shape[-1] = input_shape_b[-1];
+    // Use the compute_matmul_output_shape function to get the output shape
+    const auto output_shape = compute_matmul_output_shape(input_tensor_a, input_tensor_b);
 
     auto in0_tile_shape = input_tensor_a.get_tensor_spec().tile().get_tile_shape();
     auto in1_tile_shape = input_tensor_b.get_tensor_spec().tile().get_tile_shape();
@@ -2387,15 +2429,6 @@ operation::CacheableMeshWorkload<std::vector<Tensor>> Matmul::create_mesh_worklo
                         std::move(dram_sharded_mm_program.override_runtime_arguments_callback.value());
                 }
                 return {.workload = std::move(dram_sharded_mm_workload), .per_program_callbacks = std::move(callbacks)};
-
-            } else if constexpr (std::is_same_v<ProgramConfigType, MatmulMultiCoreNonOptimizedReuseProgramConfig>) {
-                TT_FATAL(
-                    !bias.has_value(),
-                    "Bias is not supported for matmul multi core non-optimized "
-                    "reuse");
-                auto multicore_mm_program =
-                    matmul_multi_core_reuse(input_tensor_a, input_tensor_b, output_tensor, broadcast_batch);
-                return create_homogenous_mesh_workload(multicore_mm_program, tensor_coords);
 
             } else if constexpr (std::is_same_v<ProgramConfigType, MatmulMultiCoreProgramConfig>) {
                 TT_FATAL(!bias.has_value(), "Bias is not supported for matmul multi core");

@@ -6,12 +6,21 @@ source scripts/tools_setup_common.sh
 
 set -eo pipefail
 
+run_mid_run_tracy_push() {
+    echo "Smoke test, checking tracy mid-run device data push for hangs"
+    remove_default_log_locations
+    mkdir -p $PROFILER_ARTIFACTS_DIR
+    python -m tracy -v -r -p --sync-host-device --push-device-data-mid-run -m pytest tests/ttnn/tracy/test_profiler_sync.py::test_all_devices
+    runDate=$(ls $PROFILER_OUTPUT_DIR/)
+    cat $PROFILER_OUTPUT_DIR/$runDate/ops_perf_results_$runDate.csv
+}
+
 run_async_test() {
     #Some tests here do not skip grayskull
     if [ "$ARCH_NAME" == "wormhole_b0" ]; then
         remove_default_log_locations
         mkdir -p $PROFILER_ARTIFACTS_DIR
-        ./tt_metal/tools/profiler/profile_this.py -c "pytest -svv models/demos/ttnn_falcon7b/tests/multi_chip/test_falcon_causallm.py::test_falcon_causal_lm[wormhole_b0-True-20-2-BFLOAT16-L1-falcon_7b-layers_2-decode_batch32]" | tee $PROFILER_ARTIFACTS_DIR/test_out.log
+        ./tt_metal/tools/profiler/profile_this.py -c "pytest -svv models/demos/ttnn_falcon7b/tests/multi_chip/test_falcon_causallm.py::test_falcon_causal_lm[wormhole_b0-20-2-BFLOAT16-L1-falcon_7b-layers_2-decode_batch32]" | tee $PROFILER_ARTIFACTS_DIR/test_out.log
 
         if cat $PROFILER_ARTIFACTS_DIR/test_out.log | grep "SKIPPED"
         then
@@ -32,7 +41,7 @@ run_async_tracing_T3000_test() {
         remove_default_log_locations
         mkdir -p $PROFILER_ARTIFACTS_DIR
 
-        env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml ./tt_metal/tools/profiler/profile_this.py -c "pytest models/demos/t3000/resnet50/tests/test_resnet50_performant.py::test_run_resnet50_trace_2cqs_inference[wormhole_b0-True-16-act_dtype0-weight_dtype0-math_fidelity0-device_params0]" | tee $PROFILER_ARTIFACTS_DIR/test_out.log
+        env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml ./tt_metal/tools/profiler/profile_this.py -c "pytest models/demos/t3000/resnet50/tests/test_resnet50_performant.py::test_run_resnet50_trace_2cqs_inference[wormhole_b0-16-act_dtype0-weight_dtype0-math_fidelity0-device_params0]" | tee $PROFILER_ARTIFACTS_DIR/test_out.log
 
         if cat $PROFILER_ARTIFACTS_DIR/test_out.log | grep "SKIPPED"
         then
@@ -98,21 +107,7 @@ run_async_ccl_T3000_test() {
     fi
 }
 
-run_single_op_test() {
-    remove_default_log_locations
-
-    $PROFILER_SCRIPTS_ROOT/profile_this.py -c "pytest tests/tt_eager/python_api_testing/sweep_tests/pytests/tt_dnn/test_matmul.py::test_run_matmul_test[BFLOAT16-input_shapes0]"
-
-    runDate=$(ls $PROFILER_OUTPUT_DIR/)
-
-    CORE_COUNT=7
-    res=$(verify_perf_column "$PROFILER_OUTPUT_DIR/$runDate/ops_perf_results_$runDate.csv" "$CORE_COUNT" "1" "1")
-    echo $res
-}
-
 run_profiling_test() {
-    run_single_op_test
-
     run_async_test
 
     run_ccl_T3000_test
@@ -121,7 +116,11 @@ run_profiling_test() {
 
     run_async_tracing_T3000_test
 
-    TT_METAL_DEVICE_PROFILER=1 pytest $PROFILER_TEST_SCRIPTS_ROOT/test_device_profiler.py
+    run_mid_run_tracy_push
+
+    TT_METAL_DEVICE_PROFILER=1 pytest $PROFILER_TEST_SCRIPTS_ROOT/test_device_profiler.py --noconftest
+
+    pytest tests/ttnn/tracy/test_perf_op_report.py --noconftest
 
     remove_default_log_locations
 }

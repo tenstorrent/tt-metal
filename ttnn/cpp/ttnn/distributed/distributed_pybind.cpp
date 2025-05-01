@@ -171,25 +171,6 @@ void py_module(py::module& module) {
         .def("id", &MeshDevice::id)
         .def("get_device_ids", &MeshDevice::get_device_ids)
         .def(
-            "get_device",
-            py::overload_cast<chip_id_t>(&MeshDevice::get_device, py::const_),
-            py::return_value_policy::reference)
-        .def(
-            "get_device",
-            py::overload_cast<size_t, size_t>(&MeshDevice::get_device, py::const_),
-            py::return_value_policy::reference)
-        .def(
-            "get_devices",
-            &MeshDevice::get_devices,
-            py::return_value_policy::reference,
-            R"doc(
-           Get the devices in the device mesh.
-
-
-           Returns:
-               List[Device]: The devices in the device mesh.
-       )doc")
-        .def(
             "create_submesh",
             &MeshDevice::create_submesh,
             py::arg("submesh_shape"),
@@ -230,17 +211,6 @@ void py_module(py::module& module) {
            Returns:
                Arch: The arch of the first device in the device mesh.
        )doc")
-        .def(
-            "enable_async",
-            &MeshDevice::enable_async,
-            py::arg("enable"),
-            R"doc(
-               Enable or disable async mode across all devices in the mesh.
-
-
-               Args:
-                   enable (bool): True to enable async mode, False to disable it.
-           )doc")
         .def(
             "enable_program_cache",
             &MeshDevice::enable_program_cache,

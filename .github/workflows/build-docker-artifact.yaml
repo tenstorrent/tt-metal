@@ -121,7 +121,7 @@ jobs:
     name: "🐳️ Build images"
     needs: check-docker-images
     if: needs.check-docker-images.outputs.dev-exists != 'true' || needs.check-docker-images.outputs.basic-dev-exists != 'true'
-    timeout-minutes: 45
+    timeout-minutes: 60
     runs-on: tt-beta-ubuntu-2204-large
     steps:
       - name: ⬇️ Checkout
@@ -201,14 +201,34 @@ jobs:
 
       - name: Tag and push latest
         run: |
-          IMAGE_REPO="ghcr.io/${{ github.repository }}/tt-metalium/${{ env.DEV_IMAGE_NAME }}"
-          LATEST_TAG="${IMAGE_REPO}:latest"
-          DEV_TAG="${{ needs.check-docker-images.outputs.dev-tag }}"
-          echo "Tagging ${DEV_TAG} as ${LATEST_TAG}"
-          docker pull ${DEV_TAG}
-          docker tag ${DEV_TAG} ${LATEST_TAG}
-          docker push ${LATEST_TAG}
+          # Tag CI Build image
+          CI_BUILD_IMAGE_REPO="ghcr.io/${{ github.repository }}/tt-metalium/${{ env.CI_BUILD_IMAGE_NAME }}"
+          CI_BUILD_LATEST_TAG="${CI_BUILD_IMAGE_REPO}:latest"
+          CI_BUILD_TAG="${{ needs.check-docker-images.outputs.ci-build-tag }}"
+          echo "Tagging ${CI_BUILD_TAG} as ${CI_BUILD_LATEST_TAG}"
+          docker pull ${CI_BUILD_TAG}
+          docker tag ${CI_BUILD_TAG} ${CI_BUILD_LATEST_TAG}
+          docker push ${CI_BUILD_LATEST_TAG}
 
+          # Tag CI Test image
+          CI_TEST_IMAGE_REPO="ghcr.io/${{ github.repository }}/tt-metalium/${{ env.CI_TEST_IMAGE_NAME }}"
+          CI_TEST_LATEST_TAG="${CI_TEST_IMAGE_REPO}:latest"
+          CI_TEST_TAG="${{ needs.check-docker-images.outputs.ci-test-tag }}"
+          echo "Tagging ${CI_TEST_TAG} as ${CI_TEST_LATEST_TAG}"
+          docker pull ${CI_TEST_TAG}
+          docker tag ${CI_TEST_TAG} ${CI_TEST_LATEST_TAG}
+          docker push ${CI_TEST_LATEST_TAG}
+
+          # Tag Dev image
+          DEV_IMAGE_REPO="ghcr.io/${{ github.repository }}/tt-metalium/${{ env.DEV_IMAGE_NAME }}"
+          DEV_LATEST_TAG="${DEV_IMAGE_REPO}:latest"
+          DEV_TAG="${{ needs.check-docker-images.outputs.dev-tag }}"
+          echo "Tagging ${DEV_TAG} as ${DEV_LATEST_TAG}"
+          docker pull ${DEV_TAG}
+          docker tag ${DEV_TAG} ${DEV_LATEST_TAG}
+          docker push ${DEV_LATEST_TAG}
+
+          # Tag Basic Dev image
           BASIC_DEV_IMAGE_REPO="ghcr.io/${{ github.repository }}/tt-metalium/${{ env.BASIC_DEV_IMAGE_NAME }}"
           BASIC_DEV_LATEST_TAG="${BASIC_DEV_IMAGE_REPO}:latest"
           BASIC_DEV_TAG="${{ needs.check-docker-images.outputs.basic-dev-tag }}"

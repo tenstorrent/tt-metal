@@ -68,16 +68,21 @@
 #define MEM_BOOT_CODE_BASE 0
 #define MEM_NOC_ATOMIC_RET_VAL_ADDR 4
 #define MEM_L1_BARRIER 12
+
+// Used by ARC FW and LLKs to store power throttling state
+#define MEM_L1_ARC_FW_SCRATCH 16
+#define MEM_L1_ARC_FW_SCRATCH_SIZE 16
+
 // On Blackhole issuing inline writes and atomics requires all 4 memory ports to accept the transaction at the same
 // time. If one port on the receipient has no back-pressure then the transaction will hang because there is no mechanism
 // to allow one memory port to move ahead of another. To workaround this hang, we emulate inline writes on Blackhole by
 // writing the value to be written to local L1 first and then issue a noc async write.
-#define MEM_L1_INLINE_BASE 16
+#define MEM_L1_INLINE_BASE 32  // MEM_L1_ARC_FW_SCRATCH + MEM_L1_ARC_FW_SCRATCH_SIZE
 // Each noc has 16B to store value written out by inline writes.
 // Base address for each noc to store the value to be written will be `MEM_L1_INLINE_BASE + (noc_index * 16)`
 #define MEM_L1_INLINE_SIZE_PER_NOC 16
 // Hardcode below due to compiler bug that cannot statically resolve the expression see GH issue #19265
-#define MEM_MAILBOX_BASE 48  // (MEM_L1_INLINE_BASE + (MEM_L1_INLINE_SIZE_PER_NOC * 2))  // 2 nocs
+#define MEM_MAILBOX_BASE 64  // (MEM_L1_INLINE_BASE + (MEM_L1_INLINE_SIZE_PER_NOC * 2))  // 2 nocs
 // Magic size must be big enough to hold dev_msgs_t.  static_asserts will fire if this is too small
 #define MEM_MAILBOX_SIZE 12640
 #define MEM_MAILBOX_END (MEM_MAILBOX_BASE + MEM_MAILBOX_SIZE)
@@ -124,11 +129,11 @@
 #define MEM_TRISC1_STACK_SIZE 512
 #define MEM_TRISC2_STACK_SIZE 768
 
-#define MEM_BRISC_STACK_BASE (MEM_LOCAL_BASE + MEM_BRISC_LOCAL_SIZE - MEM_BRISC_STACK_SIZE)
-#define MEM_NCRISC_STACK_BASE (MEM_LOCAL_BASE + MEM_NCRISC_LOCAL_SIZE - MEM_NCRISC_STACK_SIZE)
-#define MEM_TRISC0_STACK_BASE (MEM_LOCAL_BASE + MEM_TRISC_LOCAL_SIZE - MEM_TRISC0_STACK_SIZE)
-#define MEM_TRISC1_STACK_BASE (MEM_LOCAL_BASE + MEM_TRISC_LOCAL_SIZE - MEM_TRISC1_STACK_SIZE)
-#define MEM_TRISC2_STACK_BASE (MEM_LOCAL_BASE + MEM_TRISC_LOCAL_SIZE - MEM_TRISC2_STACK_SIZE)
+#define MEM_BRISC_STACK_TOP (MEM_LOCAL_BASE + MEM_BRISC_LOCAL_SIZE)
+#define MEM_NCRISC_STACK_TOP (MEM_LOCAL_BASE + MEM_NCRISC_LOCAL_SIZE)
+#define MEM_TRISC0_STACK_TOP (MEM_LOCAL_BASE + MEM_TRISC_LOCAL_SIZE)
+#define MEM_TRISC1_STACK_TOP (MEM_LOCAL_BASE + MEM_TRISC_LOCAL_SIZE)
+#define MEM_TRISC2_STACK_TOP (MEM_LOCAL_BASE + MEM_TRISC_LOCAL_SIZE)
 
 /////////////
 // Idle ERISC memory map
@@ -151,8 +156,8 @@
 #define MEM_SLAVE_IERISC_INIT_LOCAL_L1_BASE_SCRATCH (MEM_IERISC_INIT_LOCAL_L1_BASE_SCRATCH + MEM_IERISC_LOCAL_SIZE)
 #define MEM_IERISC_STACK_SIZE 1024
 #define MEM_SLAVE_IERISC_STACK_SIZE 1024
-#define MEM_IERISC_STACK_BASE (MEM_LOCAL_BASE + MEM_IERISC_LOCAL_SIZE - MEM_IERISC_STACK_SIZE)
-#define MEM_SLAVE_IERISC_STACK_BASE (MEM_LOCAL_BASE + MEM_SLAVE_IERISC_LOCAL_SIZE - MEM_SLAVE_IERISC_STACK_SIZE)
+#define MEM_IERISC_STACK_TOP (MEM_LOCAL_BASE + MEM_IERISC_LOCAL_SIZE)
+#define MEM_SLAVE_IERISC_STACK_TOP (MEM_LOCAL_BASE + MEM_SLAVE_IERISC_LOCAL_SIZE)
 
 #define MEM_IERISC_BANK_TO_NOC_SCRATCH (MEM_SLAVE_IERISC_INIT_LOCAL_L1_BASE_SCRATCH + MEM_SLAVE_IERISC_LOCAL_SIZE)
 #define MEM_IERISC_BANK_TO_NOC_SIZE (MEM_BANK_TO_NOC_XY_SIZE + MEM_BANK_OFFSET_SIZE)
@@ -170,7 +175,7 @@
 #define MEM_AERISC_MAP_END (MEM_AERISC_FIRMWARE_BASE + MEM_IERISC_FIRMWARE_SIZE)
 #define MEM_AERISC_INIT_LOCAL_L1_BASE_SCRATCH MEM_AERISC_MAP_END
 #define MEM_AERISC_STACK_SIZE 1024
-#define MEM_AERISC_STACK_BASE (MEM_LOCAL_BASE + MEM_IERISC_LOCAL_SIZE - MEM_AERISC_STACK_SIZE)
+#define MEM_AERISC_STACK_TOP (MEM_LOCAL_BASE + MEM_IERISC_LOCAL_SIZE)
 
 /////////////
 // Padding/alignment restriction needed in linker scripts for erisc

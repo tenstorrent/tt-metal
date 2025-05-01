@@ -188,6 +188,9 @@ std::map<std::string, std::string> get_defines_fp32(
             if (input_a_dtype == DataType::INT32 && input_b_dtype == DataType::INT32) {
                 new_defines.insert({"ADD_INT32_INIT", fmt::format("add_int32_tile_init();")});
                 op_name = "add_int32_tile";
+            } else if (input_a_dtype == DataType::UINT32 && input_b_dtype == DataType::UINT32) {
+                new_defines.insert({"ADD_UINT32_INIT", fmt::format("add_uint32_tile_init();")});
+                op_name = "add_uint32_tile";
             } else if (input_a_dtype == DataType::UINT16 && input_b_dtype == DataType::UINT16) {
                 new_defines.insert({"ADD_UINT16_INIT", fmt::format("add_uint16_tile_init();")});
                 op_name = "add_uint16_tile";
@@ -200,6 +203,9 @@ std::map<std::string, std::string> get_defines_fp32(
             if (input_a_dtype == DataType::INT32 && input_b_dtype == DataType::INT32) {
                 new_defines.insert({"SUB_INT32_INIT", "sub_int32_tile_init();"});
                 op_name = "sub_int32_tile";
+            } else if (input_a_dtype == DataType::UINT16 && input_b_dtype == DataType::UINT16) {
+                new_defines.insert({"SUB_UINT16_INIT", fmt::format("sub_uint16_tile_init();")});
+                op_name = "sub_uint16_tile";
             } else {
                 new_defines.insert({"BINOP_INIT", "sub_binary_tile_init();"});
                 op_name = "sub_binary_tile";
@@ -251,7 +257,11 @@ std::map<std::string, std::string> get_defines_fp32(
             break;
         case BinaryOpType::MINIMUM:
             new_defines.insert({"BINOP_INIT", fmt::format("binary_min_tile_init();")});
-            op_name = "binary_min_tile";
+            if (input_a_dtype == DataType::INT32 && input_b_dtype == DataType::INT32) {
+                op_name = "binary_min_int32_tile";
+            } else {
+                op_name = "binary_min_tile";
+            }
             break;
         case BinaryOpType::LOGADDEXP:
             // PRE_IN0_0 ===> Applies prescaling for first input

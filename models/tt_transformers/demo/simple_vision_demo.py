@@ -49,13 +49,21 @@ def create_multimodal_model(
     from models.tt_transformers.tt.model_config import ModelArgs
 
     tt_model_args = ModelArgs(mesh_device, max_batch_size=max_batch_size)
+    assert tt_model_args.is_vision(), "This model is multimodal"
+
     # limit length or we'll run out of space
     tt_model_args.max_seq_len = max_seq_len
+    if tt_model_args.is_90b:
+        assert tt_model_args.device_name == "T3K", "90B model only supported on T3K right now"
+        # for 90B model on T3K, use bfp8 and performance optimizations or the model won't fit in memory
+        dtype = ttnn.bfloat8_b
+        logger.info(f"Setting dtype to bfloat8_b for 90B model on T3K to fit model in memory")
+
     if checkpoint is None:
-        checkpoint = torch.load(tt_model_args.consolidated_weights_path, map_location="cpu", weights_only=True)
+        checkpoint = tt_model_args.load_state_dict()
     model = CrossAttentionTransformer(
         mesh_device,
-        checkpoint,
+        state_dict=checkpoint,
         weight_cache_path=tt_model_args.weight_cache_path(dtype),
         dtype=dtype,
         configuration=tt_model_args,
@@ -152,7 +160,6 @@ def test_multimodal_demo_text(
     tokenizer_path = str(Path(ckpt_dir) / "tokenizer.model")
 
     mesh_device.enable_program_cache()
-    mesh_device.enable_async(True)
 
     num_devices = mesh_device.get_num_devices() if isinstance(mesh_device, ttnn.MeshDevice) else 1
     max_batch_size *= data_parallel  # input batch_size is interpreted as size per DP group
@@ -371,11 +378,13 @@ def test_multimodal_demo_text(
         target_prefill_tok_s = {
             "N300_Llama3.2-11B": 10.8,
             "T3K_Llama3.2-11B": 7.7,
+            "T3K_Llama3.2-90B": 3,
         }[f"{tt_device_name}_{base_model_name}"]
 
         target_decode_tok_s_u = {
             "N300_Llama3.2-11B": 20,
             "T3K_Llama3.2-11B": 33,
+            "T3K_Llama3.2-90B": 6,
         }[f"{tt_device_name}_{base_model_name}"]
 
         target_decode_tok_s = target_decode_tok_s_u * max_batch_size
@@ -400,4 +409,4 @@ def test_multimodal_demo_text(
                 output_sequence_length=max_gen_len,
             )
 
-        verify_perf(measurements, targets)
+        verify_perf(measurements, targets, high_tol_percentage=1.15)

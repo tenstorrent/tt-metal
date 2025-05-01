@@ -79,9 +79,7 @@ def run_mixtral_demo(user_input, batch_size, mesh_device, instruct_mode, test_pr
     profiler.end("loading_inputs")
 
     # Load model args, weights, and tokenizer
-    model_args = TtModelArgs(
-        mesh_device.get_device(0), instruct=instruct_mode, max_seq_len=max_seq_len, max_batch_size=batch_size
-    )
+    model_args = TtModelArgs(mesh_device, instruct=instruct_mode, max_seq_len=max_seq_len, max_batch_size=batch_size)
     tokenizer = Tokenizer(model_args.tokenizer_path)
 
     model_args.n_layers = 32  # Full model
@@ -506,8 +504,6 @@ def test_mixtral8x7b_demo(t3k_mesh_device, use_program_cache, input_prompts, ins
         batch_size = 16
     else:
         batch_size = 32
-
-    t3k_mesh_device.enable_async(True)
 
     return run_mixtral_demo(
         user_input=input_prompts,

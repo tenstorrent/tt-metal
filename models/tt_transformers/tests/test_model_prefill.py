@@ -90,13 +90,14 @@ def test_model_inference(
         assert "performance" in test_id
         pcc = 0.869  # TODO Look on improving PCC
 
-    mesh_device.enable_async(True)
-
     # Use instruct weights instead of general weights
     instruct = True
 
     model_args = ModelArgs(mesh_device, max_batch_size=batch_size, optimizations=optimizations, max_seq_len=seq_len)
-    tokenizer = model_args.tokenizer
+
+    if is_ci_env and model_args.is_90b:
+        logger.info("Loading single layer of 90B model for fast CI testing...")
+        model_args.n_layers = 1
 
     logger.info("Loading weights...")
     state_dict_prefix = model_args.get_state_dict_prefix("", None)

@@ -51,6 +51,7 @@
 #include <umd/device/tt_xy_pair.h>
 #include <umd/device/types/xy_pair.h>
 #include "utils.hpp"
+#include "fabric/hw/inc/fabric_routing_mode.h"
 
 namespace tt {
 
@@ -938,23 +939,6 @@ void CompileProgram(IDevice* device, Program& program, bool force_slow_dispatch)
     program.compile(device, force_slow_dispatch);
 }
 
-void SynchronizeWorkerThreads(const std::vector<IDevice*>& workers) {
-    if (tt::tt_metal::detail::InWorkerThread()) {
-        // Early exit if in a worker thread, since waiting for the worker
-        // queue to become empty inside a worker thread leads to a deadlock
-        // Synchronizing in a worker thread should be a nop by definition
-        return;
-    }
-    // Push empty work to threads and ensure its been picked up
-    for (auto target_device : workers) {
-        target_device->push_work([]() {});
-    }
-    // Block until work has been picked up, to flush the queue
-    for (auto target_device : workers) {
-        while (not target_device->is_worker_queue_empty());
-    }
-}
-
 }  // namespace detail
 
 size_t GetNumAvailableDevices() {
@@ -1033,6 +1017,11 @@ KernelHandle CreateDataMovementKernel(
         kernel_name);
 
     std::shared_ptr<Kernel> kernel = std::make_shared<DataMovementKernel>(kernel_src, core_range_set, config);
+    auto control_plane = tt::tt_metal::MetalContext::instance().get_cluster().get_control_plane();
+    auto mode = control_plane->get_routing_mode();
+    if (mode != ROUTING_MODE_UNDEFINED) {
+        kernel->add_defines({{"ROUTING_MODE", std::to_string(static_cast<int>(mode))}});
+    }
     return detail::AddKernel(program, kernel, HalProgrammableCoreType::TENSIX);
 }
 
@@ -1057,6 +1046,11 @@ KernelHandle CreateEthernetKernel(
     const bool are_both_noc_in_use = data_movement_config_status.noc0_in_use && data_movement_config_status.noc1_in_use;
 
     std::shared_ptr<Kernel> kernel = std::make_shared<EthernetKernel>(kernel_src, core_range_set, config);
+    auto control_plane = tt::tt_metal::MetalContext::instance().get_cluster().get_control_plane();
+    auto mode = control_plane->get_routing_mode();
+    if (mode != ROUTING_MODE_UNDEFINED) {
+        kernel->add_defines({{"ROUTING_MODE", std::to_string(static_cast<int>(mode))}});
+    }
 
     TT_FATAL(
         utils::underlying_type<DataMovementProcessor>(config.processor) <

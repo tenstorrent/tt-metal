@@ -152,7 +152,8 @@ std::vector<Tensor> ExecuteSort::invoke(
     if ((original_lshape == ttnn::Shape{}) || (original_lshape == ttnn::Shape{1})) {
         if (CMAKE_UNIQUE_NAMESPACE::validate_optional_output_tensors_for_early_exit(
                 optional_output_tensors, original_lshape)) {
-            std::get<0>(optional_output_tensors.value()).populate_buffers_and_metadata(input_tensor);
+            std::get<0>(*optional_output_tensors).tensor_attributes->get_storage() =
+                input_tensor.tensor_attributes->get_storage();
             return {std::get<0>(optional_output_tensors.value()), std::get<1>(optional_output_tensors.value())};
         } else {
             return {input_tensor, ttnn::zeros_like(input_tensor)};
@@ -186,14 +187,6 @@ std::vector<Tensor> ExecuteSort::invoke(
 
     return CMAKE_UNIQUE_NAMESPACE::post_sort_transform_tensor(
         input_tensor, sorted_tensors, dim, is_dim_last_idx, original_lshape, memory_config_value);
-}
-
-std::vector<Tensor> ExecuteSort::create_async_output_tensors(
-    const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_inputs) {
-    const auto& input_tensor = input_tensors.at(0);
-    return {
-        Tensor(tt::tt_metal::operation::get_workers_for_op_output({input_tensor})),
-        Tensor(tt::tt_metal::operation::get_workers_for_op_output({input_tensor}))};
 }
 
 }  // namespace ttnn::operations::experimental::reduction::sort

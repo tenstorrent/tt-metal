@@ -188,7 +188,7 @@ perf_targets = {
     },
     "ScaledDotProductAttentionDecode_0": {
         "op_name": "SDPA",
-        "kernel_duration": 13338,
+        "kernel_duration": 9300,
         "op_to_op": 652.6666666666666,
         "non-overlapped-dispatch-time": 9741.5,
         "kernel_duration_relative_margin": 0.07,
@@ -311,8 +311,6 @@ def test_llama_demo(
     # TODO: Remove this once all batch sizes are supported on TG
     if os.environ.get("FAKE_DEVICE") == "TG" and batch_size not in [1, 32]:
         pytest.skip("TG only supports batch 1 and 32")
-
-    mesh_device.enable_async(True)
 
     if paged_attention:
         paged_attention_config = PagedAttentionConfig(

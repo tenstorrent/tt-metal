@@ -66,7 +66,7 @@ struct Pool2D {
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
     static Tensor create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
     static tt::stl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
-    static tt::tt_metal::operation::OpPerformanceModel create_op_performance_model(
+    static tt::tt_metal::operation::OpPerformanceModelGeneral<tensor_return_value_t> create_op_performance_model(
         const operation_attributes_t&, const tensor_args_t&, const Tensor&);
 
     static std::tuple<operation_attributes_t, tensor_args_t> invoke(

@@ -19,13 +19,11 @@ from models.utility_functions import (
 
 
 def test_mixtral_moe_inference(t3k_mesh_device, use_program_cache, reset_seeds):
-    t3k_mesh_device.enable_async(True)
-
     pcc = 0.99
     iterations = 1
     dtype = ttnn.bfloat8_b
 
-    model_args = TtModelArgs(t3k_mesh_device.get_device(0))
+    model_args = TtModelArgs(t3k_mesh_device)
     state_dict = model_args.load_state_dict()
 
     # Ref model needs partial state dict, but our models use full state dict keys as cached weight names

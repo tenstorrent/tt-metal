@@ -31,24 +31,12 @@ Tensor tensor_to_device(
     const Tensor& input_tensor, IDevice* target_device, const MemoryConfig& mem_config, QueueId cq_id) {
     ZoneScoped;
     GraphTracker::instance().track_function_start("Tensor::to_device", input_tensor, target_device, mem_config);
-    // Tensor can be using borrowed storage. If so, when running in async mode, copy this tensor to owned storage.
-    Tensor async_safe_tensor = copy_borrowed_tensor_in_async_mode(target_device, input_tensor);
-    // Populate device storage outside of thread, so that downstream
-    // functions running in main can get storage type without blocking
-    Tensor device_tensor({target_device});
-    // Record main thread ref count for tensors before pushing to queue.
-    target_device->push_work([async_safe_tensor, device_tensor, mem_config, target_device, cq_id]() mutable {
-        if (async_safe_tensor.storage_type() == StorageType::DEVICE) {
-            TT_ASSERT(async_safe_tensor.device() == target_device && "Currently do not support moving between devices");
-            device_tensor.populate_buffers_and_metadata(async_safe_tensor);
-        } else {
-            tensor_impl::validate_on_device_dtype_and_layout(
-                async_safe_tensor.get_padded_shape(), async_safe_tensor.get_dtype(), async_safe_tensor.get_layout());
-            auto local_tensor = tensor_impl::to_device_wrapper(async_safe_tensor, target_device, mem_config, cq_id);
-            // Populate device tensor
-            device_tensor.populate_buffers_and_metadata(local_tensor);
-        }
-    });
+    if (input_tensor.storage_type() == StorageType::DEVICE) {
+        TT_FATAL(input_tensor.device() == target_device, "Currently do not support moving between devices");
+        GraphTracker::instance().track_function_end(input_tensor);
+        return input_tensor;
+    }
+    auto device_tensor = tensor_impl::to_device_wrapper(input_tensor, target_device, mem_config, cq_id);
     device_tensor = tt::tt_metal::set_tensor_id(device_tensor);
     GraphTracker::instance().track_function_end(device_tensor);
     return device_tensor;
@@ -63,8 +51,6 @@ Tensor tensor_to_device(
         GraphTracker::instance().track_function_end(input_tensor);
         return input_tensor;
     }
-    tensor_impl::validate_on_device_dtype_and_layout(
-        input_tensor.get_padded_shape(), input_tensor.get_dtype(), input_tensor.get_layout());
     auto device_tensor = tensor_impl::to_device_mesh_tensor_wrapper(input_tensor, mesh_device, mem_config, cq_id);
     GraphTracker::instance().track_function_end(device_tensor);
     return device_tensor;
@@ -74,25 +60,15 @@ Tensor tensor_to_device(
     const Tensor& input_tensor, const std::vector<IDevice*>& workers, const MemoryConfig& mem_config, QueueId cq_id) {
     ZoneScoped;
     GraphTracker::instance().track_function_start("Tensor::to_device", input_tensor, workers, mem_config);
-    TT_FATAL(
-        validate_worker_modes(workers), "All device threads/workers must be running in the same mode (ASYNC or SYNC)");
-    Tensor device_tensor = Tensor(workers);
+    Tensor device_tensor = Tensor(workers, input_tensor.tensor_spec().with_memory_config(mem_config));
     uint32_t num_workers = workers.size();
     for (int worker_index = 0; worker_index < workers.size(); ++worker_index) {
         auto& worker = workers[worker_index];
-        worker->push_work(
-            [worker, input_tensor, device_tensor, mem_config, num_workers, worker_index, cq_id]() mutable {
-                auto shard = get_shard_for_device(input_tensor, worker, worker_index);
-                if (shard.storage_type() == StorageType::OWNED) {
-                    shard = tensor_impl::to_device_wrapper(shard, worker, mem_config, cq_id);
-                }
-                insert_buffer_and_shape_for_device(worker, shard, device_tensor, worker_index);
-                if (worker_index == 0) {
-                    device_tensor.set_tensor_spec(TensorSpec(
-                        input_tensor.get_logical_shape(),
-                        input_tensor.get_tensor_spec().tensor_layout().with_memory_config(mem_config)));
-                }
-            });
+        auto shard = get_shard_for_device(input_tensor, worker, worker_index);
+        if (shard.storage_type() == StorageType::HOST) {
+            shard = tensor_impl::to_device_wrapper(shard, worker, mem_config, cq_id);
+        }
+        insert_buffer_and_shape_for_device(worker, shard, device_tensor, worker_index);
     }
     device_tensor = tt::tt_metal::set_tensor_id(device_tensor);
     GraphTracker::instance().track_function_end(device_tensor);
@@ -100,7 +76,7 @@ Tensor tensor_to_device(
 }
 
 Tensor tensor_cpu(const Tensor& input_tensor, bool blocking, QueueId cq_id) {
-    if (input_tensor.storage_type() == StorageType::OWNED || input_tensor.storage_type() == StorageType::BORROWED) {
+    if (input_tensor.storage_type() == StorageType::HOST) {
         return input_tensor;
     }
 
@@ -115,27 +91,16 @@ Tensor tensor_cpu(const Tensor& input_tensor, bool blocking, QueueId cq_id) {
         GraphTracker::instance().track_function_end(output);
         return output;
     }
-    TT_FATAL(
-        validate_worker_modes(workers), "All device threads/workers must be running in the same mode (ASYNC or SYNC)");
-    Tensor host_tensor(workers.size());
+
+    Tensor host_tensor(
+        workers.size(), input_tensor.get_tensor_spec(), std::get<DeviceStorage>(input_tensor.get_storage()).strategy);
     for (int worker_index = 0; worker_index < workers.size(); worker_index++) {
-        auto target_device = workers[worker_index];
-        target_device->push_work([host_tensor, blocking, target_device, input_tensor, worker_index, cq_id]() mutable {
-            TT_ASSERT(
-                input_tensor.storage_type() == StorageType::DEVICE,
-                "Can only use worker queue for cpu call if tensor is on device.");
-            auto shard = get_shard_for_device(input_tensor, target_device);
-            shard = tensor_impl::to_host_wrapper(shard, blocking, cq_id);
-            insert_buffer_and_shape_for_device(target_device, shard, host_tensor, worker_index);
-            if (worker_index == 0) {
-                host_tensor.set_tensor_spec(input_tensor.get_tensor_spec());
-            }
-        });
+        auto* target_device = workers[worker_index];
+        auto shard = get_shard_for_device(input_tensor, target_device);
+        shard = tensor_impl::to_host_wrapper(shard, blocking, cq_id);
+        insert_buffer_and_shape_for_device(target_device, shard, host_tensor, worker_index);
     }
 
-    if (blocking) {
-        tt::tt_metal::detail::SynchronizeWorkerThreads(workers);
-    }
     host_tensor = tt::tt_metal::set_tensor_id(host_tensor);
     GraphTracker::instance().track_function_end(host_tensor);
     return host_tensor;
@@ -149,34 +114,9 @@ Tensor tensor_cpu(const Tensor& input_tensor, distributed::MeshDevice* mesh_devi
 Tensor tensor_to_layout(const Tensor& input_tensor, Layout target_layout, IDevice* worker) {
     ZoneScoped;
     GraphTracker::instance().track_function_start("Tensor::to_layout", input_tensor, target_layout, worker);
-    // Only push layout conversion to worker if running in async mode
-    if (worker && worker->get_worker_mode() == WorkExecutorMode::ASYNCHRONOUS) {
-        // Tensor can be using borrowed storage. If so, when running in async mode, copy this tensor to owned storage.
-        Tensor async_safe_tensor = copy_borrowed_tensor_in_async_mode(worker, input_tensor);
-        Tensor tensor_modified_layout = Tensor(1);
-        worker->push_work([async_safe_tensor, tensor_modified_layout, target_layout]() mutable {
-            TT_ASSERT(
-                async_safe_tensor.storage_type() == StorageType::OWNED or
-                async_safe_tensor.storage_type() == StorageType::BORROWED &&
-                    "to_layout must be called on host tensors with a single buffer when a single worker is specified");
-            auto local_tensor = tensor_impl::to_layout_wrapper(async_safe_tensor, target_layout);
-            // Populate modified layout tensor
-            tensor_modified_layout.populate_buffers_and_metadata(local_tensor);
-        });
-        tensor_modified_layout = tt::tt_metal::set_tensor_id(tensor_modified_layout);
-        GraphTracker::instance().track_function_end(tensor_modified_layout);
-        return tensor_modified_layout;
-    }
-
-    // Running without worker threads (non-async)
     TT_ASSERT(
         input_tensor.storage_type() != StorageType::DEVICE, "Bring tensor to host before converting to target layout");
-    Tensor output;
-    if (worker) {
-        worker->push_work([&] { output = tensor_impl::to_layout_wrapper(input_tensor, target_layout); });
-    } else {
-        output = tensor_impl::to_layout_wrapper(input_tensor, target_layout);
-    }
+    Tensor output = tensor_impl::to_layout_wrapper(input_tensor, target_layout);
     output = tt::tt_metal::set_tensor_id(output);
     GraphTracker::instance().track_function_end(output);
     return output;
@@ -185,7 +125,7 @@ Tensor tensor_to_layout(const Tensor& input_tensor, Layout target_layout, IDevic
 Tensor tensor_to_layout(const Tensor& input_tensor, Layout target_layout, distributed::MeshDevice* mesh_device) {
     ZoneScoped;
     TT_ASSERT(
-        input_tensor.is_host_tensor(),
+        is_cpu_tensor(input_tensor) || is_multi_device_host_tensor(input_tensor),
         "to(layout) must be called on host tensors with MULTI_DEVICE_HOST_STORAGE when multiple "
         "workers "
         "are specified");
@@ -201,7 +141,16 @@ Tensor tensor_to_layout(const Tensor& input_tensor, Layout target_layout, distri
             distributed_config = host_storage->strategy;
         }
 
-        Tensor tensor_modified_layout = Tensor(num_shards, distributed_config);
+        const auto& original_layout = input_tensor.get_tensor_spec().tensor_layout();
+        Tensor tensor_modified_layout(
+            num_shards,
+            TensorSpec(
+                input_tensor.get_logical_shape(),
+                TensorLayout(
+                    original_layout.get_data_type(),
+                    PageConfig(target_layout, original_layout.get_tile()),
+                    original_layout.get_memory_config())),
+            distributed_config);
         for (std::size_t shard_idx = 0; shard_idx < num_shards; ++shard_idx) {
             // Multi-Thread Host tilization of shards.
             mesh_device->enqueue_to_thread_pool(
@@ -212,16 +161,8 @@ Tensor tensor_to_layout(const Tensor& input_tensor, Layout target_layout, distri
                     insert_buffer_and_shape_for_device(mesh_device, shard, tensor_modified_layout, shard_idx);
                 });
         }
-        // Update tensor metadata in main thread while thread-pool performs tilization.
-        auto orig_layout = input_tensor.get_tensor_spec().tensor_layout();
-        auto upd_layout = TensorLayout(
-            orig_layout.get_data_type(),
-            PageConfig(target_layout, orig_layout.get_tile()),
-            orig_layout.get_memory_config());
-        tensor_modified_layout.set_tensor_spec(TensorSpec(input_tensor.get_logical_shape(), upd_layout));
         tensor_modified_layout = tt::tt_metal::set_tensor_id(tensor_modified_layout);
         GraphTracker::instance().track_function_end(tensor_modified_layout);
-        // Wait for thread-pool
         mesh_device->wait_for_thread_pool();
         return tensor_modified_layout;
     }
@@ -248,7 +189,8 @@ Tensor tensor_pad(
     ZoneScoped;
     GraphTracker::instance().track_function_start(
         "Tensor::pad", input_tensor, output_padded_shape, input_tensor_start, pad_value);
-    TT_ASSERT(input_tensor.is_host_tensor(), "Tensor must be on host for padding");
+    TT_ASSERT(
+        is_cpu_tensor(input_tensor) || is_multi_device_host_tensor(input_tensor), "Tensor must be on host for padding");
     // TODO: Flip to assert when we remove use cases in python and c++
     if (input_tensor.get_layout() != Layout::ROW_MAJOR) {
         log_warning(

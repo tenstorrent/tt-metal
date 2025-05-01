@@ -63,40 +63,28 @@ MultiDeviceGlobalSemaphore create_global_semaphore_with_same_address(
         tt::log_debug("chkpt 2, target_addr: {}", target_addr);
         for (auto i = 0; i < global_semaphores.size(); i++) {
             auto* device = devices[i];
-            tt::log_debug("pushed, i: {}", i);
-            device->push_work([i,
-                               device,
-                               attempts,
-                               target_addr,
-                               &cores,
-                               initial_value,
-                               buffer_type,
-                               global_semaphore = &multi_device_global_semaphore.global_semaphores[i]] {
-                size_t attempt = 0;
-                std::vector<GlobalSemaphore> garbage;
-                tt::log_debug("global_semaphore->address(): {}", get_global_semaphore_address(*global_semaphore));
-                while (get_global_semaphore_address(*global_semaphore) != target_addr) {
-                    auto sem = create_global_semaphore(device, cores, initial_value, buffer_type);
+            auto& global_semaphore = multi_device_global_semaphore.global_semaphores[i];
+            size_t attempt = 0;
+            std::vector<GlobalSemaphore> garbage;
+            tt::log_debug("global_semaphore->address(): {}", get_global_semaphore_address(global_semaphore));
+            while (get_global_semaphore_address(global_semaphore) != target_addr) {
+                auto sem = create_global_semaphore(device, cores, initial_value, buffer_type);
 
-                    if (i == 0) {
-                        tt::log_debug("chkpt 3, sem->address(): {}", get_global_semaphore_address(sem));
-                    }
-
-                    if (get_global_semaphore_address(sem) == target_addr) {
-                        *global_semaphore = std::move(sem);
-                    } else {
-                        garbage.push_back(std::move(sem));
-                        attempt++;
-                    }
-
-                    if (attempt > attempts) {
-                        TT_THROW("Failed to create global semaphores with the same address");
-                    }
+                if (i == 0) {
+                    tt::log_debug("chkpt 3, sem->address(): {}", get_global_semaphore_address(sem));
                 }
-            });
-        }
-        for (auto device : devices) {
-            device->synchronize();
+
+                if (get_global_semaphore_address(sem) == target_addr) {
+                    global_semaphore = std::move(sem);
+                } else {
+                    garbage.push_back(std::move(sem));
+                    attempt++;
+                }
+
+                if (attempt > attempts) {
+                    TT_THROW("Failed to create global semaphores with the same address");
+                }
+            }
         }
     }
 
