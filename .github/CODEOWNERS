@@ -52,9 +52,8 @@ tt_metal/distributed/**/CMakeLists.txt @cfjchu @aliuTT @tt-asaigal @omilyutin-tt
 tests/tt_metal/distributed/ @cfjchu @tt-asaigal @omilyutin-tt
 tests/tt_metal/distributed/**/CMakeLists.txt @cfjchu @tt-asaigal @omilyutin-tt @tenstorrent/metalium-developers-infra
 
-# metal - fw, llks, risc-v
+# metal - fw, llks
 tt_metal/hw/ckernels/ @rtawfik01 @rdjogoTT @ttmtrajkovic @nvelickovicTT
-tt_metal/hw/cmake/sfpi-version.cmake @nathan-TT
 tt_metal/hw/firmware/src/*erisc* @aliuTT @ubcheema
 tt_metal/hw/inc/ethernet/ @aliuTT @ubcheema
 tt_metal/hw/inc/wormhole/eth_l1_address_map.h @aliuTT @ubcheema
@@ -62,6 +61,11 @@ tt_metal/include/compute_kernel_api.h @davorchap @rtawfik01 @rdjogoTT @ttmtrajko
 tt_metal/include/compute_kernel_api/ @rtawfik01 @rdjogoTT @ttmtrajkovic @nvelickovicTT
 tt_metal/third_party/tt_llk @rtawfik01 @ttmtrajkovic @rdjogoTT @nvelickovicTT
 tests/tt_metal/tt_metal/data_movement @rtawfik01 @vvukomanovicTT @atatuzunerTT
+
+# sfpi
+tt_metal/hw/cmake/sfpi-version.cmake @nathan-TT
+tests/tt_metal/tt_metal/sfpi/ @nathan-TT
+tests/tt_metal/tt_metal/test_kernels/sfpi/ @nathan-TT
 
 # metal - profiler
 tt_metal/**/profiler/ @mo-tenstorrent
@@ -78,7 +82,7 @@ ttnn/ttnn/operations/moreh.py @razorback3 @dongjin-na @cfjchu @ayerofieiev-tt @d
 ttnn/ttnn/operations/conv2d.py @tenstorrent/metalium-developers-convolutions
 ttnn/ttnn/operations/pool.py @tenstorrent/metalium-developers-convolutions
 ttnn/**/kernels/ # Removes the owners above from owning kernels unless specified afterwards
-ttnn/**/CMakeLists.txt @ayerofieiev-tt @dmakoviichuk-tt @sminakov-tt
+/ttnn/**/CMakeLists.txt @ayerofieiev-tt @dmakoviichuk-tt @sminakov-tt @tenstorrent/metalium-developers-infra
 ttnn/cpp/ttnn/tensor/ @cfjchu @ayerofieiev-tt @dmakoviichuk-tt @omilyutin-tt
 ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/moreh*/ @razorback3 @dongjin-na @cfjchu @ayerofieiev-tt @dmakoviichuk-tt
 ttnn/cpp/ttnn/deprecated/tt_lib/csrc/ @ayerofieiev-tt @razorback3 @dongjin-na
@@ -204,8 +208,6 @@ docs/source/ttnn/ @patrickroberts @ayerofieiev-tt @razorback3 @dongjin-na
 
 # misc
 dockerfile/upstream_test_images/ @tenstorrent/metalium-developers-infra
-
-ttnn/CMakeLists.txt @ayerofieiev-tt @dmakoviichuk-tt @sminakov-tt
 
 # tt-train
 tt-train/** @dmakoviichuk-tt @rfurko-tt @ayerofieiev-tt

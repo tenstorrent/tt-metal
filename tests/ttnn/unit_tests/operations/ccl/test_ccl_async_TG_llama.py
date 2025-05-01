@@ -149,7 +149,7 @@ def test_all_gather_tg_llama(
     num_iters,
     warmup_iters,
 ):
-    if len(mesh_device.get_devices()) != 32:
+    if mesh_device.get_num_devices() != 32:
         pytest.skip("Not TG!")
     input_shard_spec = ttnn.ShardSpec(
         input_shard_grid,

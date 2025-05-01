@@ -172,7 +172,7 @@ Result conv2d_DRAM(
         " Number of slices should be less than the dimension being sliced in Conv2D DRAM Slicing");
 
     ttnn::Tensor input_tensor_on_device;
-    if (!is_tensor_on_device_or_multidevice(input_tensor)) {
+    if (!is_device_tensor(input_tensor)) {
         input_tensor_on_device = ttnn::operations::core::to_device(input_tensor, device, ttnn::DRAM_MEMORY_CONFIG);
     } else {
         input_tensor_on_device = input_tensor;
@@ -412,8 +412,8 @@ Result conv2d_L1(
             input_width,
             compute_grid_size,
             input_tensor.layout(),
-            ttnn::is_tensor_on_device_or_multidevice(input_tensor) ? std::make_optional(input_tensor.memory_config())
-                                                                   : std::nullopt,
+            tt::tt_metal::is_device_tensor(input_tensor) ? std::make_optional(input_tensor.memory_config())
+                                                         : std::nullopt,
             kernel_size,
             groups,
             bias_tensor.has_value(),
@@ -449,7 +449,7 @@ Result conv2d_L1(
         kernel_size,
         compute_grid_size);
 
-    bool weight_is_on_device = ttnn::is_tensor_on_device_or_multidevice(weight_tensor);
+    bool weight_is_on_device = tt::tt_metal::is_device_tensor(weight_tensor);
     ttnn::Tensor weight_tensor_on_device = weight_tensor;
     std::optional<ttnn::Tensor> bias_tensor_on_device = bias_tensor;
     if (!weight_is_on_device || conv_config.always_preprocess_weights) {
@@ -491,7 +491,7 @@ Result conv2d_L1(
     }
 
     // call optimized conv op or matmul micro op
-    bool input_is_on_device = ttnn::is_tensor_on_device_or_multidevice(input_tensor_post_tm);
+    bool input_is_on_device = tt::tt_metal::is_device_tensor(input_tensor_post_tm);
     TT_ASSERT(input_is_on_device);
 
     if (!mm_conv) {

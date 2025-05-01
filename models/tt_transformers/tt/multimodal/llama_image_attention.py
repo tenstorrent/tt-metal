@@ -49,7 +49,7 @@ class TtLlamaImageAttention(LightweightModule):
         if configuration.dummy_weights or (weight_cache_path is None):
             cache_name = lambda _: None
         else:
-            cache_name = lambda name: weight_cache_path / (f"{state_dict_prefix}.{name}")
+            cache_name = lambda name: weight_cache_path / (f"{state_dict_prefix}{name}")
 
         wq_str = f"{state_dict_prefix}wq.weight"
         wk_str = f"{state_dict_prefix}wk.weight"
