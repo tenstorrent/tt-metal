@@ -76,7 +76,7 @@ tests/tt_metal/tools/profiler/ @mo-tenstorrent
 tt_metal/impl/flatbuffer/ @kmabeeTT @nsmithtt @omilyutin-tt
 
 # TTNN
-ttnn/ @metalium-developers-ttnn-core
+ttnn/ @tenstorrent/metalium-developers-ttnn-core
 ttnn/ttnn/library_tweaks.py @ayerofieiev-tt @tenstorrent/metalium-developers-infra
 ttnn/ttnn/operations/moreh.py @razorback3 @dongjin-na @cfjchu @ayerofieiev-tt @dmakoviichuk-tt
 ttnn/ttnn/operations/conv2d.py @tenstorrent/metalium-developers-convolutions
