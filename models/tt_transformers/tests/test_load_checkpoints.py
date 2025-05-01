@@ -16,7 +16,6 @@ import torch
 
 ##### TTNN imports #####
 from models.tt_transformers.tt.load_checkpoints import load_sharded_checkpoints
-from models.tt_transformers.tt.model_config import ModelArgs
 
 # get the absolute path to this file
 _file_abs_path = os.path.abspath(__file__)
@@ -239,12 +238,15 @@ def write_tensor_states(loaded: dict, tensor_states_path: str) -> None:
 # [INFO] Focus on testing 70B and 90B models because they are the only ones that require shared checkpoints
 def test_load_checkpoints():
     # make ModelArgs object with empty mesh_device for its ability to recognize the model name
-    model_args = ModelArgs(None)
-    input_base_path = model_args.CKPT_DIR
+    input_base_path = os.getenv("LLAMA_DIR")
+    assert input_base_path, "LLAMA_DIR must be set to indicate the path to the model checkpoints"
+    # [INFO] we can hardcode this check because we only test 70B and 90B models atm
+    is_70b = "Llama" in input_base_path and "70B" in input_base_path
+    is_90b = "Llama" in input_base_path and "90B" in input_base_path and "Vision" in input_base_path
     assert (
-        model_args.is_70b or model_args.is_90b
+        is_70b or is_90b
     ), "this test is only needed for models with sharded checkpoints (only 70B and 90B models atm)"
-    model_name = "Llama3.1-70B-Instruct" if model_args.is_70b else "Llama3.2-90B-Vision-Instruct"
+    model_name = "Llama3.1-70B-Instruct" if is_70b else "Llama3.2-90B-Vision-Instruct"
     model_names_with_hf_golden_func = ("Llama3.2-90B-Vision-Instruct",)
     model_names_with_orig_golden_func = ("Llama3.1-70B-Instruct",)
 
