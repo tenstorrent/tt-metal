@@ -140,6 +140,10 @@ function(add_ttnn_sublibrary SUBLIBRARY_NAME)
     target_link_directories(${SUBLIBRARY_NAME} PUBLIC ${TTNN_PUBLIC_LINK_DIRS})
     use_precompiled_header(${SUBLIBRARY_NAME})
     set(PRECOMPILED_HEADER_TARGET "${PRECOMPILED_HEADER_TARGET}" PARENT_SCOPE)
+
+    if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+        target_compile_definitions(${SUBLIBRARY_NAME} PRIVATE DISABLE_NAMESPACE_STATIC_ASSERT)
+    endif()
 endfunction()
 
 ##################################################
