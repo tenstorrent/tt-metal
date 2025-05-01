@@ -26,6 +26,8 @@ test_id_to_name = {
 }
 
 # Correspondng test bounds for each arch, test id, riscv core
+# NOTE: These bounds are aggregated averages of large test sweeps and
+# are subject to change with new directed tests.
 test_bounds = {
     "wormhole_b0": {
         0: {
