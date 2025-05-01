@@ -135,12 +135,15 @@ void kernel_main() {
                     tt::tt_fabric::NocUnicastCommandHeader{dest_noc_address}, (pages_to_send * page_size));
         } else {
             if constexpr (write_scatter_mode) {
-                packet_size = 2 * (page_size + sizeof(PACKET_HEADER_TYPE));
-                const auto dest_noc_address2 = get_noc_addr(p + 1, dest_addr_gen, 0, NORMALIZED_NOC_INDEX);
+                packet_size = pages_to_send * (page_size + sizeof(PACKET_HEADER_TYPE));
+                uint64_t dest_noc_address2 = 0;
+                if (pages_to_send == 2) {
+                    dest_noc_address2 = get_noc_addr(p + 1, dest_addr_gen, 0, NORMALIZED_NOC_INDEX);
+                }
                 packet_header->to_chip_unicast(config.unicast.distance)
                     ->to_noc_unicast_scatter_write(
                         tt::tt_fabric::NocUnicastScatterCommandHeader{dest_noc_address, dest_noc_address2},
-                        (2 * page_size) + sizeof(PACKET_HEADER_TYPE));
+                        (pages_to_send * page_size) + (pages_to_send - 1) * sizeof(PACKET_HEADER_TYPE));
             } else {
                 packet_header->to_chip_unicast(config.unicast.distance)
                     ->to_noc_unicast_write(

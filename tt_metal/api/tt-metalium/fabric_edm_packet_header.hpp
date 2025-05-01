@@ -309,12 +309,15 @@ struct PacketHeaderBase {
             noc_address_components.second,
             edm_to_local_chip_noc);
 
-        noc_address_components = get_noc_address_components(noc_unicast_scatter_command_header.noc_address2);
-        auto noc_addr2 = safe_get_noc_addr(
-            noc_address_components.first.x,
-            noc_address_components.first.y,
-            noc_address_components.second,
-            edm_to_local_chip_noc);
+        uint64_t noc_addr2 = 0;
+        if (noc_unicast_scatter_command_header.noc_address2 != 0) {
+            noc_address_components = get_noc_address_components(noc_unicast_scatter_command_header.noc_address2);
+            noc_addr2 = safe_get_noc_addr(
+                noc_address_components.first.x,
+                noc_address_components.first.y,
+                noc_address_components.second,
+                edm_to_local_chip_noc);
+        }
 
         this->command_fields.unicast_scatter_write.noc_address1 = noc_addr1;
         this->command_fields.unicast_scatter_write.noc_address2 = noc_addr2;
