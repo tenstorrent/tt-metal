@@ -8,7 +8,7 @@
 
 namespace ttnn::operations::data_movement::detail {
 
-tt::tt_metal::operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
+tt::tt_metal::operation::ProgramWithCallbacks untilize_with_halo_multi_core(
     tt::tt_metal::Program& program,
     const Tensor& input_tensor,
     const uint32_t pad_val,
@@ -23,9 +23,9 @@ tt::tt_metal::operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
     Tensor& output_tensor,
     const int block_size,
     const bool capture_buffers);  // Used by halo op to cache internally created config buffers with the program
-                                  // Untilize with Halo V2 op takes them as inputs from the user, so doesn't capture
+                                  // Untilize with Halo takes them as inputs from the user, so doesn't capture
 
-tt::tt_metal::operation::ProgramWithCallbacks inplace_untilize_with_halo_multi_core_v2(
+tt::tt_metal::operation::ProgramWithCallbacks inplace_untilize_with_halo_multi_core(
     tt::tt_metal::Program& program,
     const Tensor& input_tensor,
     const uint32_t pad_val,

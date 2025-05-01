@@ -2,20 +2,18 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "untilize_with_halo_v2_program_factory.hpp"
+#include "untilize_with_halo_program_factory.hpp"
 
-#include <math.h>
-
-// #include "lightmetal/lightmetal_capture.hpp"
-#include "ttnn/operations/cb_utils.hpp"
-#include "ttnn/operations/math.hpp"
 #include <cstdint>
 #include <optional>
+#include <cmath>
+
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/util.hpp>
 #include <tt-metalium/host_api.hpp>
+
+#include "ttnn/operations/cb_utils.hpp"
 #include "ttnn/common/constants.hpp"
-#include "ttnn/operation.hpp"
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
@@ -57,7 +55,7 @@ static inline CBHandle create_circular_buffer(
 
 constexpr bool ENABLE_UNTILIZE_DOUBLE_BUFFERING = true;
 
-operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
+operation::ProgramWithCallbacks untilize_with_halo_multi_core(
     Program& program,
     const Tensor& input_tensor,
     const uint32_t pad_val,
@@ -314,7 +312,7 @@ private:
     uint32_t next_cb_id = tt::CBIndex::c_0;
 };
 
-operation::ProgramWithCallbacks inplace_untilize_with_halo_multi_core_v2(
+operation::ProgramWithCallbacks inplace_untilize_with_halo_multi_core(
     Program& program,
     const Tensor& input_tensor,
     const uint32_t pad_val,
