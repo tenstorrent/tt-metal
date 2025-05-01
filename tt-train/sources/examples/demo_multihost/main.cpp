@@ -155,7 +155,7 @@ void test_send_recv_tensor() {
 }
 
 struct LinearRegressionParameters {
-    const size_t training_samples_count = 100000;
+    const size_t training_samples_count = 128000;
     const uint32_t num_features = 64;
     const uint32_t num_targets = 32;
     const float noise = 0.0F;
@@ -218,7 +218,7 @@ void regression_training() {
 
         for (int i = 0; i < params.num_epochs; i++) {
             fmt::print("Rank {}: Optimizer epoch {}\n", rank, i);
-            while (true) {
+            for (int i = 0; i < params.training_samples_count / params.batch_size; i++) {
                 optimizer.optimization_step();
                 optimizer.send_weights();
             }
