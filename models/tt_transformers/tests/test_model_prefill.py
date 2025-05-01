@@ -133,10 +133,6 @@ def test_model_inference(
         dtype=dtype,
         num_layers=num_layers,
     )
-    
-    if is_ci_env and model_args.is_90b:
-        logger.info("Loading single layer of 90B model for fast CI testing...")
-        model_args.n_layers = 1
     tokenizer = model_args.tokenizer
     generator = Generator([tt_model], [model_args], mesh_device, tokenizer=tokenizer)
     logger.info("Finished loading TT model.")
