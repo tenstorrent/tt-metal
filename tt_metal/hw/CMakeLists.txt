@@ -6,11 +6,11 @@ set(ARCHS
 set(PROCS
     brisc
     ncrisc
-    trisc0
-    trisc1
-    trisc2
     ierisc
     slave_ierisc
+    trisc=0
+    trisc=1
+    trisc=2
     aerisc
 )
 set(TYPES
@@ -99,32 +99,33 @@ foreach(ARCH IN LISTS ARCHS)
     endif()
 
     foreach(PROC IN LISTS PROCS)
+        string(REPLACE "=" "" PROC_FILE "${PROC}")
         foreach(TYPE IN LISTS TYPES)
-            set(HW_OUTPUT_FILE "${HW_OUTPUT_DIR}/${TYPE}_${PROC}.ld")
+            set(HW_OUTPUT_FILE "${TYPE}_${PROC_FILE}.ld")
             string(TOUPPER ${PROC} PROC_DEFINE)
             string(TOUPPER ${TYPE} TYPE_DEFINE)
 
             # custom command to preprocess/generate the output file
             add_custom_command(
                 OUTPUT
-                    ${HW_OUTPUT_FILE}
+                    ${HW_OUTPUT_DIR}/${HW_OUTPUT_FILE}
                 COMMAND
                     ${CMAKE_COMMAND} -E make_directory ${HW_OUTPUT_DIR}
                 COMMAND
-                    ${CMAKE_CXX_COMPILER} -DLD_TARGET=${PROC_DEFINE} -DLD_TYPE=${TYPE_DEFINE} -DTARGET_${PROC_DEFINE}
-                    -DTYPE_${TYPE_DEFINE} -DCOMPILE_FOR_${PROC_DEFINE} -I${HW_INCLUDES} -E -P -x c -o ${HW_OUTPUT_FILE}
+                    ${CMAKE_CXX_COMPILER} -DTYPE_${TYPE_DEFINE} -DCOMPILE_FOR_${PROC_DEFINE}
+		    -I${HW_INCLUDES} -E -P -x c -o ${HW_OUTPUT_DIR}/${HW_OUTPUT_FILE}
                     ${CMAKE_CURRENT_SOURCE_DIR}/toolchain/main.ld
                 DEPENDS
                     ${CMAKE_CURRENT_SOURCE_DIR}/toolchain/main.ld
                     ${CMAKE_CURRENT_SOURCE_DIR}/toolchain/memory.ld
                     ${CMAKE_CURRENT_SOURCE_DIR}/toolchain/sections.ld
                     ${DEV_MEM_MAP}
-                COMMENT "Preprocessing toolchain/${PROC}.ld"
+                COMMENT "Preprocessing toolchain/${HW_OUTPUT_FILE}"
                 VERBATIM
             )
 
             # add output file to the custom target
-            list(APPEND PREPROCESSED_LD_FILES ${HW_OUTPUT_FILE})
+            list(APPEND PREPROCESSED_LD_FILES ${HW_OUTPUT_DIR}/${HW_OUTPUT_FILE})
         endforeach()
     endforeach()
 endforeach()
