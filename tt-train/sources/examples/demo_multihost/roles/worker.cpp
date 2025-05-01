@@ -7,6 +7,7 @@
 #include <string>
 
 #include "core/distributed/distributed.hpp"
+#include "core/distributed/mpi_context.hpp"
 #include "ops/losses.hpp"
 namespace roles {
 
@@ -51,22 +52,21 @@ SortedParameters RemoteOptimizer::get_sorted_parameters() const {
 }
 
 void RemoteOptimizer::send_gradients() {
-    for (auto& it : m_sorted_parameters) {
-        auto& [name, tensor_ptr] = it;
+    auto& ctx = ttml::autograd::ctx();
+    auto& mpi_ctx = ctx.get_mpi_context();
+    for (auto& [name, tensor_ptr] : m_sorted_parameters) {
         if (tensor_ptr->get_requires_grad() && tensor_ptr->is_grad_initialized()) {
             auto grad = tensor_ptr->get_grad();
+            fmt::print("Rank {}: sending gradient for parameter {}\n", mpi_ctx.get_rank(), name);
             ttml::core::distributed::send_tensor(grad, m_aggregator_rank);
         }
     }
 }
 
 void RemoteOptimizer::receive_weights() {
-    for (auto& it : m_sorted_parameters) {
-        auto& [name, tensor_ptr] = it;
-        {
-            auto tensor = tensor_ptr->get_value();
-            ttml::core::distributed::recv_tensor(tensor, m_aggregator_rank);
-        }
+    for (auto& [name, tensor_ptr] : m_sorted_parameters) {
+        auto tensor = tensor_ptr->get_value();
+        ttml::core::distributed::recv_tensor(tensor, m_aggregator_rank);
     }
 }
 
@@ -85,8 +85,10 @@ void Worker::training_step() {
         m_optimizer->zero_grad();
         auto output = (*m_model)(features);
         auto loss = ttml::ops::mse_loss(output, target);
+        fmt::print("Rank {}: Loss: {}\n", mpi_ctx.get_rank(), ttml::core::to_vector(loss->get_value())[0]);
         loss->backward();
         m_optimizer->step();
+        ttml::autograd::ctx().reset_graph();
         m_training_step++;
     }
 }

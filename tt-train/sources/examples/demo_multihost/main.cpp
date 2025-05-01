@@ -20,6 +20,7 @@
 #include "datasets/dataloader.hpp"
 #include "datasets/generators.hpp"
 #include "optimizers/adamw.hpp"
+#include "roles/optimizer.hpp"
 #include "roles/worker.hpp"
 
 constexpr int WORKER_RANK = 1;
@@ -163,11 +164,11 @@ struct LinearRegressionParameters {
     const int num_epochs = 10;
 };
 
-void regression_training(int aggregator_rank = 0, int optimizer_rank = 0, int worker_rank = 1) {
+void regression_training() {
     auto& ctx = ttml::autograd::ctx();
     auto& device = ctx.get_device();
     auto& mpi_ctx = ctx.get_mpi_context();
-
+    int rank = mpi_ctx.get_rank();
     LinearRegressionParameters params{};
     auto training_params = ttml::datasets::MakeRegressionParams{
         .n_samples = params.training_samples_count,
@@ -176,51 +177,69 @@ void regression_training(int aggregator_rank = 0, int optimizer_rank = 0, int wo
         .noise = params.noise,
         .bias = params.bias,
     };
-    auto train_dataset = ttml::datasets::make_regression(training_params);
-
-    std::function<roles::BatchType(std::vector<roles::DatasetSample> && samples)> collate_fn =
-        [&params, &device](std::vector<roles::DatasetSample>&& samples) {
-            const uint32_t batch_size = samples.size();
-            std::vector<float> data;
-            std::vector<float> targets;
-            data.reserve(params.batch_size * params.num_features);
-            targets.reserve(params.batch_size * params.num_targets);
-            for (auto& [features, target] : samples) {
-                std::move(features.begin(), features.end(), std::back_inserter(data));
-                std::move(target.begin(), target.end(), std::back_inserter(targets));
-            }
-            auto feature_shape = ttml::core::create_shape({params.batch_size, 1, 1, params.num_features});
-            auto target_shape = ttml::core::create_shape({params.batch_size, 1, 1, params.num_targets});
-            auto data_tensor =
-                ttml::autograd::create_tensor(ttml::core::from_vector<float>(data, feature_shape, &device));
-            auto targets_tensor =
-                ttml::autograd::create_tensor(ttml::core::from_vector(targets, target_shape, &device));
-            return std::make_pair(data_tensor, targets_tensor);
-        };
-
-    auto train_dataloader = roles::DataLoader(train_dataset, params.batch_size, /* shuffle */ true, collate_fn);
 
     auto model = std::make_shared<ttml::modules::LinearLayer>(params.num_features, params.num_targets);
 
-    if (optimizer_rank == mpi_ctx.get_rank()) {
-        fmt::print("Optimizer rank {} initializing optimizer\n", optimizer_rank);
-        auto optimizer =
-            std::make_unique<ttml::optimizers::MorehAdamW>(model->parameters(), ttml::optimizers::AdamWConfig());
-        optimizer->set_steps(0);
-        optimizer->zero_grad();
+    if (rank == WORKER_RANK) {
+        fmt::print("Worker rank {} initializing worker\n", rank);
+        auto train_dataset = ttml::datasets::make_regression(training_params);
+
+        std::function<roles::BatchType(std::vector<roles::DatasetSample> && samples)> collate_fn =
+            [&params, &device](std::vector<roles::DatasetSample>&& samples) {
+                const uint32_t batch_size = samples.size();
+                std::vector<float> data;
+                std::vector<float> targets;
+                data.reserve(params.batch_size * params.num_features);
+                targets.reserve(params.batch_size * params.num_targets);
+                for (auto& [features, target] : samples) {
+                    std::move(features.begin(), features.end(), std::back_inserter(data));
+                    std::move(target.begin(), target.end(), std::back_inserter(targets));
+                }
+                auto feature_shape = ttml::core::create_shape({params.batch_size, 1, 1, params.num_features});
+                auto target_shape = ttml::core::create_shape({params.batch_size, 1, 1, params.num_targets});
+                auto data_tensor =
+                    ttml::autograd::create_tensor(ttml::core::from_vector<float>(data, feature_shape, &device));
+                auto targets_tensor =
+                    ttml::autograd::create_tensor(ttml::core::from_vector(targets, target_shape, &device));
+                return std::make_pair(data_tensor, targets_tensor);
+            };
+
+        auto train_dataloader = roles::DataLoader(train_dataset, params.batch_size, /* shuffle */ true, collate_fn);
+        roles::Worker worker(train_dataloader, model, AGGREGATOR_RANK);
+        for (int i = 0; i < params.num_epochs; i++) {
+            fmt::print("Rank {}: Training epoch {}\n", rank, i);
+            worker.training_step();
+        }
+        fmt::print("Rank {}: Training finished\n", rank);
     }
-    roles::Worker worker(train_dataloader, model, AGGREGATOR_RANK);
-    worker.training_step();
+    if (rank == AGGREGATOR_RANK) {
+        // use optimizer now
+        roles::Optimizer optimizer(model, rank, WORKER_RANK);
+
+        for (int i = 0; i < params.num_epochs; i++) {
+            fmt::print("Rank {}: Optimizer epoch {}\n", rank, i);
+            while (true) {
+                optimizer.optimization_step();
+                optimizer.send_weights();
+            }
+            fmt::print("Rank {}: Optimizer epoch {} finished\n", rank, i);
+        }
+
+        fmt::print("Rank {}: Optimizer finished\n", rank);
+    }
 }
 
 int main(int argc, char** argv) {
-    ttml::autograd::ctx().init_mpi_context(argc, argv);
-    CLI::App app{"NanoGPT Example"};
+    auto& ctx = ttml::autograd::ctx();
+    ctx.init_mpi_context(argc, argv);
+    auto& mpi_ctx = ctx.get_mpi_context();
+    CLI::App app{"Multihost Example"};
+    fmt::print("Size {}, Rank {}: Initializing MPI context\n", mpi_ctx.get_size(), mpi_ctx.get_rank());
     argv = app.ensure_utf8(argv);
 
     bool print_tt_smi_output = false;
-    bool run_test_send_recv_tensor = true;
-    bool run_regression_training = false;
+    bool run_test_send_recv_tensor = false;
+    bool run_regression_training = true;
 
     // app.add_option("-c,--config", config_name, "Yaml Config name")->default_val(config_name);
     app.add_option("-t,--tt_smi", print_tt_smi_output, "print tt-smi on all hosts")->default_val(print_tt_smi_output);
@@ -230,12 +249,19 @@ int main(int argc, char** argv) {
         ->default_val(run_regression_training);
 
     CLI11_PARSE(app, argc, argv);
+
     if (print_tt_smi_output) {
         print_tt_smi();
     }
     if (run_test_send_recv_tensor) {
         test_send_recv_tensor();
     }
+    if (run_regression_training) {
+        regression_training();
+    }
 
+    mpi_ctx.barrier();
+    mpi_ctx.finalize();
+    fmt::print("Rank {}: Finalized MPI context\n", mpi_ctx.get_rank());
     return 0;
 }
