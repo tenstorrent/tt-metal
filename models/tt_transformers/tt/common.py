@@ -492,3 +492,45 @@ def pad_to_size(x: torch.Tensor, dim: int, size: int) -> torch.Tensor:
 
     padded_x = torch.nn.functional.pad(x, pad, mode="constant", value=0)
     return padded_x
+
+
+def create_tt_model(
+    mesh_device,
+    instruct,
+    max_batch_size,
+    optimizations,
+    max_seq_len,
+    paged_attention_config: PagedAttentionConfig = None,
+    dtype=ttnn.bfloat8_b,
+    state_dict=None,
+    num_layers=None,
+):
+    from models.tt_transformers.tt.model import Transformer
+    from models.tt_transformers.tt.model_config import ModelArgs
+
+    tt_model_args = ModelArgs(
+        mesh_device,
+        instruct=instruct,
+        max_batch_size=max_batch_size,
+        optimizations=optimizations,
+        max_seq_len=max_seq_len,
+    )
+    if num_layers is not None:
+        tt_model_args.n_layers = num_layers
+
+    # Avoid loading state_dict for every DP model
+    if not state_dict:
+        state_dict = tt_model_args.load_state_dict()
+
+    model = Transformer(
+        args=tt_model_args,
+        mesh_device=mesh_device,
+        dtype=dtype,
+        state_dict=state_dict,
+        weight_cache_path=tt_model_args.weight_cache_path(dtype),
+        paged_attention_config=paged_attention_config,
+    )
+
+    tt_kv_cache = [l.attention.layer_past for l in model.layers] if paged_attention_config else None
+
+    return tt_model_args, model, tt_kv_cache, state_dict
