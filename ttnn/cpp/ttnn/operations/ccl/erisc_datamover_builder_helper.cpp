@@ -590,9 +590,8 @@ void initialize_edm_fabric(
         for (size_t i = 0; i < devices.size(); i++) {
             auto* device = devices[i];
             auto* program_ptr = program_ptrs[i];
-            device->push_work([&]() { tt::tt_metal::detail::CompileProgram(device, *program_ptr); }, false);
-            device->push_work(
-                [&]() { tt::tt_metal::EnqueueProgram(device->command_queue(), *program_ptr, false); }, true);
+            tt::tt_metal::detail::CompileProgram(device, *program_ptr);
+            tt::tt_metal::EnqueueProgram(device->command_queue(), *program_ptr, false);
         }
     } else {
         std::vector<EdmLineFabricOpInterface> row_fabric_lines;
@@ -642,9 +641,8 @@ void initialize_edm_fabric(
                 log_info(tt::LogAlways, "Compile EDM program");
                 tt::tt_metal::IDevice* device = mesh_device->get_device(r, c);
                 auto& program = programs.at(r).at(c);
-                device->push_work([&]() { tt::tt_metal::detail::CompileProgram(device, program); }, false);
-                device->push_work(
-                    [&]() { tt::tt_metal::EnqueueProgram(device->command_queue(), program, false); }, true);
+                tt::tt_metal::detail::CompileProgram(device, program);
+                tt::tt_metal::EnqueueProgram(device->command_queue(), program, false);
             }
         }
     }
