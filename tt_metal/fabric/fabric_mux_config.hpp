@@ -131,11 +131,11 @@ struct FabricMuxConfig {
             this->num_iters_between_teardown_checks};
     }
 
-    std::size_t get_status_address() { return this->status_address; }
+    std::size_t get_status_address() const { return this->status_address; }
 
-    std::size_t get_termination_signal_address() { return this->termination_signal_address; }
+    std::size_t get_termination_signal_address() const { return this->termination_signal_address; }
 
-    std::size_t get_channel_base_address(FabricMuxChannelType channel_type, uint8_t channel_id) {
+    std::size_t get_channel_base_address(FabricMuxChannelType channel_type, uint8_t channel_id) const {
         if (channel_type == FabricMuxChannelType::FULL_SIZE_CHANNEL) {
             return this->full_size_channels_base_address + (channel_id * this->full_size_channel_size_bytes);
         } else if (channel_type == FabricMuxChannelType::HEADER_ONLY_CHANNEL) {
@@ -147,7 +147,7 @@ struct FabricMuxConfig {
         return 0;
     }
 
-    std::size_t get_connection_info_address(FabricMuxChannelType channel_type, uint8_t channel_id) {
+    std::size_t get_connection_info_address(FabricMuxChannelType channel_type, uint8_t channel_id) const {
         return get_address_from_block(
             channel_type,
             channel_id,
@@ -155,24 +155,24 @@ struct FabricMuxConfig {
             sizeof(tt::tt_fabric::EDMChannelWorkerLocationInfo));
     }
 
-    std::size_t get_connection_handshake_address(FabricMuxChannelType channel_type, uint8_t channel_id) {
+    std::size_t get_connection_handshake_address(FabricMuxChannelType channel_type, uint8_t channel_id) const {
         return get_address_from_block(
             channel_type, channel_id, this->connection_handshake_base_address, noc_aligned_address_size_bytes);
     }
 
-    std::size_t get_flow_control_address(FabricMuxChannelType channel_type, uint8_t channel_id) {
+    std::size_t get_flow_control_address(FabricMuxChannelType channel_type, uint8_t channel_id) const {
         return get_address_from_block(
             channel_type, channel_id, this->flow_control_base_address, noc_aligned_address_size_bytes);
     }
 
-    std::size_t get_buffer_index_address(FabricMuxChannelType channel_type, uint8_t channel_id) {
+    std::size_t get_buffer_index_address(FabricMuxChannelType channel_type, uint8_t channel_id) const {
         return get_address_from_block(
             channel_type, channel_id, this->buffer_index_base_address, noc_aligned_address_size_bytes);
     }
 
-    std::size_t get_num_bytes_to_clear() { return this->memory_map_end_address - this->memory_map_start_address; }
+    std::size_t get_num_bytes_to_clear() const { return this->memory_map_end_address - this->memory_map_start_address; }
 
-    std::size_t get_start_address_to_clear() { return this->memory_map_start_address; }
+    std::size_t get_start_address_to_clear() const { return this->memory_map_start_address; }
 
     void set_num_full_size_channel_iters(std::size_t new_val) {
         if (this->num_full_size_channels > 0 && new_val == 0) {
@@ -190,7 +190,10 @@ struct FabricMuxConfig {
 
 private:
     std::size_t get_address_from_block(
-        FabricMuxChannelType channel_type, uint8_t channel_id, std::size_t base_address, std::size_t unit_size_bytes) {
+        FabricMuxChannelType channel_type,
+        uint8_t channel_id,
+        std::size_t base_address,
+        std::size_t unit_size_bytes) const {
         std::size_t offset = 0;
         if (channel_type == FabricMuxChannelType::FULL_SIZE_CHANNEL) {
             offset = channel_id;

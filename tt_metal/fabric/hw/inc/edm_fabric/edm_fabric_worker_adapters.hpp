@@ -335,6 +335,7 @@ struct WorkerToFabricEdmSenderImpl {
         // Need to wait for the ack to teardown notice, from edm
         noc_semaphore_wait(this->worker_teardown_addr, 1);
         noc_async_write_barrier();
+        *(this->worker_teardown_addr) = 0;
     }
 
     void close() {
