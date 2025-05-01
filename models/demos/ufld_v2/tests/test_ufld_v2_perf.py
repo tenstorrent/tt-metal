@@ -10,8 +10,8 @@ import pytest
 from loguru import logger
 from models.utility_functions import is_wormhole_b0
 from models.perf.perf_utils import prep_perf_report
-from models.experimental.ufld_v2.ttnn.ttnn_UFLD_v2 import TtnnUFLDv2
-from models.experimental.ufld_v2.reference.UFLD_v2_model import TuSimple34
+from models.demos.ufld_v2.ttnn.ttnn_ufld_v2 import TtnnUFLDv2
+from models.demos.ufld_v2.reference.ufld_v2_model import TuSimple34
 from models.utility_functions import (
     enable_persistent_kernel_cache,
     disable_persistent_kernel_cache,
@@ -19,7 +19,7 @@ from models.utility_functions import (
 )
 from models.perf.device_perf_utils import run_device_perf, check_device_perf, prep_device_perf_report
 from ttnn.model_preprocessing import preprocess_model_parameters, infer_ttnn_module_args
-from tests.ttnn.integration_tests.ufld_v2.test_ttnn_UFLD_v2 import custom_preprocessor_whole_model
+from tests.ttnn.integration_tests.ufld_v2.test_ttnn_ufld_v2 import custom_preprocessor_whole_model
 
 
 def get_expected_times(name):
@@ -52,9 +52,9 @@ def test_ufld_v2_perf(device, batch_size, input_channels, height, width, use_pre
     torch_input_tensor = torch.randn((batch_size, input_channels, height, width))
     reference_model = TuSimple34(input_height=height, input_width=width)
     if use_pretrained_weight:
-        weights_path = "models/experimental/ufld_v2/tusimple_res34.pth"
+        weights_path = "models/demos/ufld_v2/tusimple_res34.pth"
         if not os.path.exists(weights_path):
-            os.system("bash models/experimental/ufld_v2/weights_download.sh")
+            os.system("bash models/demos/ufld_v2/weights_download.sh")
             state_dict = torch.load(weights_path)
             new_state_dict = {}
             for key, value in state_dict["model"].items():
@@ -93,7 +93,7 @@ def test_ufld_v2_perf(device, batch_size, input_channels, height, width, use_pre
     expected_compile_time, expected_inference_time = get_expected_times("ufld_v2")
 
     prep_perf_report(
-        model_name="models/experimental/ufld_v2",
+        model_name="models/demos/ufld_v2",
         batch_size=batch_size,
         inference_and_compile_time=inference_and_compile_time,
         inference_time=inference_time,
@@ -125,7 +125,7 @@ def test_perf_device_bare_metal_ufld_v2(batch_size, expected_perf, test):
     margin = 0.03
     expected_perf = expected_perf if is_wormhole_b0() else 0
 
-    command = f"pytest tests/ttnn/integration_tests/ufld_v2/test_ttnn_UFLD_v2.py::test_UFD_V2_Model"
+    command = f"pytest tests/ttnn/integration_tests/ufld_v2/test_ttnn_ufld_v2.py::test_ufld_v2_model"
     cols = ["DEVICE FW", "DEVICE KERNEL", "DEVICE BRISC KERNEL"]
 
     inference_time_key = "AVG DEVICE KERNEL SAMPLES/S"
