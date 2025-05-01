@@ -80,7 +80,7 @@ struct ZoneDetails {
     bool is_zone_in_brisc_or_erisc;
 };
 
-const ZoneDetails InvalidZoneDetails = ZoneDetails{"", "", 0, false};
+const ZoneDetails UnidentifiedZoneDetails = ZoneDetails{"", "", 0, false};
 
 class DeviceProfiler {
 private:
@@ -136,6 +136,8 @@ private:
 
     // translates potentially-virtual coordinates recorded on Device into physical coordinates
     CoreCoord getPhysicalAddressFromVirtual(chip_id_t device_id, const CoreCoord& c) const;
+
+    ZoneDetails getZoneDetails(uint16_t timer_id) const;
 
     // Dumping profile result to file
     void logPacketData(

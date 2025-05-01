@@ -111,7 +111,6 @@ constexpr CoreCoord SYNC_CORE = {0, 0};
 
 void setControlBuffer(IDevice* device, std::vector<uint32_t>& control_buffer) {
 #if defined(TRACY_ENABLE)
-    ZoneScoped;
     chip_id_t device_id = device->id();
     const metal_SocDescriptor& soc_d = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(device_id);
 
@@ -347,7 +346,6 @@ void syncDeviceHost(IDevice* device, CoreCoord logical_core, bool doHeader) {
 }
 
 void setShift(int device_id, int64_t shift, double scale, std::tuple<double, double, double>& root_sync_info) {
-    ZoneScoped;
     if (std::isnan(scale)) {
         return;
     }

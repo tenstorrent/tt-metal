@@ -376,6 +376,17 @@ void DeviceProfiler::firstTimestamp(uint64_t timestamp) {
     }
 }
 
+ZoneDetails DeviceProfiler::getZoneDetails(uint16_t timer_id) const {
+    ZoneDetails zone_details;
+    auto zone_details_iter = hash_to_zone_src_locations.find(timer_id);
+    if (zone_details_iter != hash_to_zone_src_locations.end()) {
+        zone_details = zone_details_iter->second;
+    } else {
+        zone_details = UnidentifiedZoneDetails;
+    }
+    return zone_details;
+}
+
 void DeviceProfiler::logPacketData(
     std::ofstream& log_file_ofs,
     nlohmann::ordered_json& noc_trace_json_log,
@@ -390,28 +401,11 @@ void DeviceProfiler::logPacketData(
     uint64_t timestamp) {
     kernel_profiler::PacketTypes packet_type = get_packet_type(timer_id);
     uint32_t t_id = timer_id & 0xFFFF;
-    std::string zone_name = "";
-    std::string source_file = "";
-    uint64_t source_line = 0;
-    bool is_zone_in_brisc_or_erisc = false;
     nlohmann::json metaData;
 
-    {
-        // ZoneScopedN("hash_to_zone_src_locations.find");
-        if (hash_to_zone_src_locations.find((uint16_t)timer_id) != hash_to_zone_src_locations.end()) {
-            auto details_iter = hash_to_zone_src_locations.find((uint16_t)timer_id);
-            if (details_iter != hash_to_zone_src_locations.end()) {
-                const ZoneDetails& details = details_iter->second;
-                zone_name = details.zone_name;
-                source_file = details.source_file;
-                source_line = details.source_line_num;
-                is_zone_in_brisc_or_erisc = details.is_zone_in_brisc_or_erisc;
-            }
-        }
-    }
+    const ZoneDetails zone_details = getZoneDetails(timer_id);
 
     if ((packet_type == kernel_profiler::ZONE_START) || (packet_type == kernel_profiler::ZONE_END)) {
-        // ZoneScopedN("packet_type == (ZONE_START || ZONE_END)");
         tracy::TTDeviceEventPhase zone_phase = tracy::TTDeviceEventPhase::begin;
         if (packet_type == kernel_profiler::ZONE_END) {
             zone_phase = tracy::TTDeviceEventPhase::end;
@@ -420,35 +414,30 @@ void DeviceProfiler::logPacketData(
         // TODO(MO) Until #14847 avoid attaching opID as the zone function name except for B and E FW
         // This is to avoid generating 5 to 10 times more source locations which is capped at 32K
         uint32_t tracy_run_host_id = run_host_id;
-        {
-            // ZoneScopedN("zone name find");
-            if (!is_zone_in_brisc_or_erisc) {
-                tracy_run_host_id = 0;
-            }
+        if (!zone_details.is_zone_in_brisc_or_erisc) {
+            tracy_run_host_id = 0;
         }
 
-        {
-            // ZoneScopedN("emplace TTDeviceEvent");
-            auto ret = device_events.emplace(
-                tracy_run_host_id,
-                device_id,
-                core.x,
-                core.y,
-                risc_num,
-                timer_id,
-                timestamp,
-                source_line,
-                source_file,
-                zone_name,
-                zone_phase);
-            this->current_zone_it = ret.first;
+        auto ret = device_events.emplace(
+            tracy_run_host_id,
+            device_id,
+            core.x,
+            core.y,
+            risc_num,
+            timer_id,
+            timestamp,
+            zone_details.source_line_num,
+            zone_details.source_file,
+            zone_details.zone_name,
+            zone_phase);
+        this->current_zone_it = ret.first;
 
-            if (!ret.second) {
-                return;
-            }
-
-            device_cores.emplace(device_id, core);
+        if (!ret.second) {
+            return;
         }
+
+        device_cores.emplace(device_id, core);
+
         // Reset the command subtype, in case it isn't set during the command.
         this->current_dispatch_meta_data.cmd_subtype = "";
     }
@@ -460,21 +449,21 @@ void DeviceProfiler::logPacketData(
             if ((tracy::riscName[risc_num] == "BRISC" || tracy::riscName[risc_num] == "NCRISC") &&
                 this->current_zone_it->zone_phase == tracy::TTDeviceEventPhase::begin &&
                 this->current_zone_it->zone_name.find("DISPATCH") != std::string::npos) {
-                if (zone_name.find("process_cmd") != std::string::npos) {
+                if (zone_details.zone_name.find("process_cmd") != std::string::npos) {
                     this->current_dispatch_meta_data.cmd_type =
                         fmt::format("{}", magic_enum::enum_name((CQDispatchCmdId)data));
                     metaData["dispatch_command_type"] = this->current_dispatch_meta_data.cmd_type;
-                } else if (zone_name.find("runtime_host_id_dispatch") != std::string::npos) {
+                } else if (zone_details.zone_name.find("runtime_host_id_dispatch") != std::string::npos) {
                     this->current_dispatch_meta_data.worker_runtime_id = (uint32_t)data;
                     metaData["workers_runtime_id"] = this->current_dispatch_meta_data.worker_runtime_id;
-                } else if (zone_name.find("packed_data_dispatch") != std::string::npos) {
+                } else if (zone_details.zone_name.find("packed_data_dispatch") != std::string::npos) {
                     this->current_dispatch_meta_data.cmd_subtype = fmt::format(
                         "{}{}",
                         data & CQ_DISPATCH_CMD_PACKED_WRITE_FLAG_MCAST ? "MCAST," : "",
                         magic_enum::enum_name(static_cast<CQDispatchCmdPackedWriteType>(
                             (data >> 1) << CQ_DISPATCH_CMD_PACKED_WRITE_TYPE_SHIFT)));
                     metaData["dispatch_command_subtype"] = this->current_dispatch_meta_data.cmd_subtype;
-                } else if (zone_name.find("packed_large_data_dispatch") != std::string::npos) {
+                } else if (zone_details.zone_name.find("packed_large_data_dispatch") != std::string::npos) {
                     this->current_dispatch_meta_data.cmd_subtype =
                         fmt::format("{}", magic_enum::enum_name(static_cast<CQDispatchCmdPackedWriteLargeType>(data)));
                     metaData["dispatch_command_subtype"] = this->current_dispatch_meta_data.cmd_subtype;
@@ -526,10 +515,10 @@ void DeviceProfiler::logPacketData(
         data,
         run_host_id,
         opname,
-        zone_name,
+        zone_details.zone_name,
         packet_type,
-        source_line,
-        source_file,
+        zone_details.source_line_num,
+        zone_details.source_file,
         metaData);
 
     logNocTracePacketDataToJson(
@@ -543,10 +532,10 @@ void DeviceProfiler::logPacketData(
         data,
         run_host_id,
         opname,
-        zone_name,
+        zone_details.zone_name,
         packet_type,
-        source_line,
-        source_file);
+        zone_details.source_line_num,
+        zone_details.source_file);
 }
 
 void DeviceProfiler::logPacketDataToCSV(
@@ -1086,7 +1075,7 @@ void DeviceProfiler::pushTracyDeviceResults() {
             event_to_push = &new_event;
         }
 
-        std::pair<uint32_t, CoreCoord> device_core = {
+        std::pair<chip_id_t, CoreCoord> device_core = {
             event_to_push->chip_id, (CoreCoord){event_to_push->core_x, event_to_push->core_y}};
         if (event->zone_phase == tracy::TTDeviceEventPhase::begin) {
             TracyTTPushStartZone(device_tracy_contexts[device_core], *event_to_push);
@@ -1104,7 +1093,6 @@ void DeviceProfiler::setSyncInfo(const std::tuple<double, double, double>& sync_
 
 void DeviceProfiler::updateTracyContext(std::pair<uint32_t, CoreCoord> device_core) {
 #if defined(TRACY_ENABLE)
-    ZoneScoped;
     chip_id_t device_id = device_core.first;
     CoreCoord worker_core = device_core.second;
 
