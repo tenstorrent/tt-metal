@@ -9,10 +9,10 @@ import os
 import ttnn
 from models.tt_transformers.tt.common import (
     PagedAttentionConfig,
+    create_tt_model,
 )
 from models.tt_transformers.tt.model_config import DecodersPrecision
 from models.tt_transformers.tt.generator import Generator
-from models.tt_transformers.demo.simple_text_demo import create_tt_model  # TODO move to common util dir
 from models.utility_functions import (
     comp_pcc,
 )
