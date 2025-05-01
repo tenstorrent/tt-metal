@@ -71,25 +71,9 @@ function(build_library LIBRARY_NAME ALIAS)
             Boost::algorithm
     )
 
-    # Set compile options for the library
-    target_compile_options(
-        ${LIBRARY_NAME}
-        PUBLIC
-            -MP
-            -Wno-int-to-pointer-cast
-            -fno-var-tracking
-    )
-
     if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
         target_compile_definitions(${LIBRARY_NAME} PUBLIC DISABLE_NAMESPACE_STATIC_ASSERT)
     endif()
-
-    set_target_properties(
-        ${LIBRARY_NAME}
-        PROPERTIES
-            DEFINE_SYMBOL
-                ""
-    )
 
     TT_ENABLE_UNITY_BUILD(${LIBRARY_NAME})
 
@@ -137,21 +121,18 @@ function(use_precompiled_header TARGET)
     endif()
 endfunction()
 
+set(LIB_TYPE OBJECT)
+if(ENABLE_TTNN_SHARED_SUBLIBS)
+    set(LIB_TYPE SHARED)
+endif()
+
 function(add_ttnn_sublibrary SUBLIBRARY_NAME)
-    if(ENABLE_TTNN_SHARED_SUBLIBS)
-        add_library(${SUBLIBRARY_NAME} SHARED ${ARGN})
-        install(
-            TARGETS
-                ${SUBLIBRARY_NAME}
-            LIBRARY
-                DESTINATION ${CMAKE_INSTALL_LIBDIR}
-            ARCHIVE
-                DESTINATION ${CMAKE_INSTALL_LIBDIR}
-                COMPONENT tt_build_artifacts
-        )
-    else()
-        add_library(${SUBLIBRARY_NAME} OBJECT ${ARGN})
-    endif()
+    add_library(
+        ${SUBLIBRARY_NAME}
+        ${LIB_TYPE}
+        ${ARGN}
+    )
+    install(TARGETS ${SUBLIBRARY_NAME} LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR})
 
     TT_ENABLE_UNITY_BUILD(${SUBLIBRARY_NAME})
     target_include_directories(${SUBLIBRARY_NAME} PUBLIC ${TTNN_PUBLIC_INCLUDE_DIRS})
@@ -159,29 +140,6 @@ function(add_ttnn_sublibrary SUBLIBRARY_NAME)
     target_link_directories(${SUBLIBRARY_NAME} PUBLIC ${TTNN_PUBLIC_LINK_DIRS})
     use_precompiled_header(${SUBLIBRARY_NAME})
     set(PRECOMPILED_HEADER_TARGET "${PRECOMPILED_HEADER_TARGET}" PARENT_SCOPE)
-    target_compile_options(
-        ${SUBLIBRARY_NAME}
-        PRIVATE
-            -MP
-            -Wno-int-to-pointer-cast
-            -fno-var-tracking
-            -ffunction-sections
-    )
-    set_target_properties(
-        ${SUBLIBRARY_NAME}
-        PROPERTIES
-            DEFINE_SYMBOL
-                ""
-    )
-    if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
-        target_compile_definitions(${SUBLIBRARY_NAME} PRIVATE DISABLE_NAMESPACE_STATIC_ASSERT)
-        target_link_options(
-            ${SUBLIBRARY_NAME}
-            PRIVATE
-                "-Wl,--gc-sections"
-                "-Wl,--no-as-needed"
-        )
-    endif()
 endfunction()
 
 ##################################################
