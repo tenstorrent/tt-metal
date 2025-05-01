@@ -1120,8 +1120,7 @@ void detail::ProgramImpl::populate_dispatch_data(IDevice* device) {
             // TODO: add a bit in the hal that says if this core type is unicast/multicast
             if (core_type == CoreType::WORKER) {
                 std::vector<std::pair<transfer_info_cores, uint32_t>> dst_noc_multicast_info =
-                    device->extract_dst_noc_multicast_info(
-                       kernel_group->core_ranges.ranges(), core_type);
+                    extract_dst_noc_multicast_info(device, kernel_group->core_ranges.ranges(), core_type);
                 std::vector<KernelHandle> kernel_ids;
                 for (int dispatch_class = 0; dispatch_class < kernel_group->kernel_ids.size(); dispatch_class++) {
                     auto &optional_id = kernel_group->kernel_ids[dispatch_class];

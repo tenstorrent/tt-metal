@@ -5,17 +5,19 @@
 #pragma once
 
 #include <cstdint>
-#include <unordered_map>
 #include <variant>
 #include <vector>
 
 #include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/device.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
 
 namespace tt::tt_metal {
 
 using transfer_info_cores = std::variant<CoreCoord, CoreRange>;
 
+std::vector<std::pair<transfer_info_cores, uint32_t>> extract_dst_noc_multicast_info(
+    IDevice* device, const std::vector<CoreRange>& ranges, const CoreType core_type);
 struct transfer_info {
     std::uint32_t dst_base_addr;
     std::vector<std::pair<transfer_info_cores, std::uint32_t>> dst_noc_info;  // noc_encoding, num_mcast_dests
