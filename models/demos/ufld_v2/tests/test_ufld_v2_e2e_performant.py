@@ -9,7 +9,7 @@ import torch
 from loguru import logger
 
 from models.utility_functions import run_for_wormhole_b0
-from models.experimental.ufld_v2.tests.UFLD_v2_e2e_performant import UFLDv2Trace2CQ
+from models.demos.ufld_v2.tests.ufld_v2_e2e_performant import UFLDv2Trace2CQ
 
 
 @run_for_wormhole_b0()
