@@ -8,7 +8,6 @@
 
 namespace ttnn::operations::experimental::cnn::detail {
 
-tt::tt_metal::operation::ProgramWithCallbacks multi_core_convert_to_hwc(
-    const Tensor& a, Tensor& output, CoreCoord compute_with_storage_grid_size);
+tt::tt_metal::operation::ProgramWithCallbacks multi_core_convert_to_hwc(const Tensor& a, Tensor& output);
 
 }  // namespace ttnn::operations::experimental::cnn::detail
