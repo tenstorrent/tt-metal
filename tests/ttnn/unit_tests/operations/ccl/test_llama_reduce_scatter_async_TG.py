@@ -439,7 +439,7 @@ def test_fabric_reduce_scatter_regular_grid_2_dev(
     mesh_device, trace_mode, shard_height, shard_width, input_grid, output_grid, dtype
 ):
     # Only run these tests on unharvested TG
-    device_grid = (mesh_.compute_with_storage_grid_size().x, mesh_device.compute_with_storage_grid_size().y)
+    device_grid = (mesh_device.compute_with_storage_grid_size().x, mesh_device.compute_with_storage_grid_size().y)
     if device_grid != (8, 8):
         pytest.skip("Not TG!")
 
