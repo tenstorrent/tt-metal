@@ -65,7 +65,7 @@ class RotarySetup(LightweightModule):
             mesh_mapper=ReplicateTensorToMesh(device) if self.is_mesh_device else None,
         )
 
-        batch_grid = (
+        self.batch_grid = (
             ttnn.CoreGrid(y=4, x=8)
             if ttnn.get_arch_name() == "blackhole"
             else ttnn.num_cores_to_corerangeset(batch_size, self.core_grid, row_wise=True)
@@ -80,7 +80,7 @@ class RotarySetup(LightweightModule):
         )  # Repeat across all cores on device
         trans_mat_mem_config = ttnn.create_sharded_memory_config(
             shape=(ttnn.TILE_SIZE, ttnn.TILE_SIZE),
-            core_grid=batch_grid,
+            core_grid=self.batch_grid,
             strategy=ttnn.ShardStrategy.HEIGHT,
             orientation=ttnn.ShardOrientation.ROW_MAJOR,
             use_height_and_width_as_shard_shape=True,
@@ -178,15 +178,9 @@ class RotarySetup(LightweightModule):
             cos = cos[:, : self.batch_size_per_device_group, :, :]
             sin = sin[:, : self.batch_size_per_device_group, :, :]
 
-        grid = (
-            ttnn.CoreGrid(y=4, x=8)
-            if ttnn.get_arch_name() == "blackhole"
-            else ttnn.num_cores_to_corerangeset(self.batch_size, self.core_grid, row_wise=True)
-        )
-
         mem_config = ttnn.create_sharded_memory_config(
             shape=(ttnn.TILE_SIZE, self.head_dim),
-            core_grid=grid,
+            core_grid=self.batch_grid,
             strategy=ttnn.ShardStrategy.HEIGHT,
             orientation=ttnn.ShardOrientation.ROW_MAJOR,
             use_height_and_width_as_shard_shape=True,
