@@ -64,7 +64,11 @@ public:
     std::set<std::pair<chan_id_t, eth_chan_directions>> get_active_fabric_eth_channels(
         mesh_id_t mesh_id, chip_id_t chip_id) const;
 
+    void set_routing_mode(uint16_t mode);
+    uint16_t get_routing_mode() const;
+
 private:
+    uint16_t routing_mode_ = 0;  // ROUTING_MODE_UNDEFINED
     std::unique_ptr<RoutingTableGenerator> routing_table_generator_;
     std::vector<std::vector<chip_id_t>> logical_mesh_chip_id_to_physical_chip_id_mapping_;
     // map[mesh_id][chip_id][direction] has a list of ethernet channels in that direction

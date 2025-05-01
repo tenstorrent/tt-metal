@@ -22,6 +22,7 @@
 #include <variant>
 #include <vector>
 
+#include "tt_metal/fabric/fabric_host_utils.hpp"
 #include "core_coord.hpp"
 #include "fabric_edm_types.hpp"
 #include "logger.hpp"
@@ -124,6 +125,8 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(std::size_t channel_buffe
         this->num_used_sender_channels -= 1;
         this->num_used_receiver_channels -= 1;
     }
+    tt::tt_fabric::set_routing_mode(topology);
+
     for (uint32_t i = 0; i < this->num_used_receiver_channels; i++) {
         TT_FATAL(
             (receivers_completed_packet_header_cb_address[i] % eth_word_l1_alignment == 0),

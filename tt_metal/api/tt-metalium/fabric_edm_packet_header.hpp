@@ -12,6 +12,7 @@
 #if defined(KERNEL_BUILD) || defined(FW_BUILD)
 #include "ttnn/cpp/ttnn/operations/ccl/common/interpreter_backends/kernel_common/noc_addr.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/edm_fabric_utils.hpp"
+#include "tt_metal/fabric/hw/inc/fabric_routing_mode.h"
 #else
 #include <tt-metalium/assert.hpp>
 #endif
@@ -521,15 +522,40 @@ static_assert(
 
 static constexpr size_t header_size_bytes = sizeof(PacketHeader);
 
-// TODO: Should be piped from host to determine which packet header to use
-#define FABRIC_LOW_LATENCY_MODE 1
+#define STRINGIFY(x) #x
+#define TOSTRING(x) STRINGIFY(x)
 
-#if defined FABRIC_LOW_LATENCY_MODE and FABRIC_LOW_LATENCY_MODE == 1
+#ifndef ROUTING_MODE
+#define PACKET_HEADER_TYPE tt::tt_fabric::LowLatencyPacketHeader
+#define ROUTING_FIELDS_TYPE tt::tt_fabric::LowLatencyRoutingFields
+#else
+#if ((ROUTING_MODE & ROUTING_MODE_DYNAMIC)) == ROUTING_MODE_DYNAMIC
+static_assert(false, "ROUTING_MODE_DYNAMIC is not supported yet");
+#elif (                                                              \
+    ((ROUTING_MODE & (ROUTING_MODE_1D | ROUTING_MODE_LINE)) != 0) || \
+    ((ROUTING_MODE & (ROUTING_MODE_1D | ROUTING_MODE_RING)) != 0))
+#if ((ROUTING_MODE & ROUTING_MODE_LOW_LATENCY)) != 0
 #define PACKET_HEADER_TYPE tt::tt_fabric::LowLatencyPacketHeader
 #define ROUTING_FIELDS_TYPE tt::tt_fabric::LowLatencyRoutingFields
 #else
 #define PACKET_HEADER_TYPE tt::tt_fabric::PacketHeader
 #define ROUTING_FIELDS_TYPE tt::tt_fabric::RoutingFields
 #endif
+#elif (                                                              \
+    ((ROUTING_MODE & (ROUTING_MODE_2D | ROUTING_MODE_MESH)) != 0) || \
+    ((ROUTING_MODE & (ROUTING_MODE_2D | ROUTING_MODE_TORUS)) != 0))
+#if (ROUTING_MODE & ROUTING_MODE_PULL) != 0
+#define PACKET_HEADER_TYPE packet_header_t
+#else  // ROUTING_MODE_PUSH as default
+#if (ROUTING_MODE & ROUTING_MODE_LOW_LATENCY) != 0
+#define PACKET_HEADER_TYPE low_latency_packet_header_t
+#else
+#define PACKET_HEADER_TYPE packet_header_t
+#endif
+#endif
+#else
+static_assert(false, "non supported ROUTING_MODE: " TOSTRING(ROUTING_MODE));
+#endif
+#endif  // ROUTING_MODE
 
 }  // namespace tt::tt_fabric

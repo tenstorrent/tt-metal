@@ -987,4 +987,17 @@ void ControlPlane::print_ethernet_channels() const {
     log_debug(tt::LogFabric, "{}", ss.str());
 }
 
+void ControlPlane::set_routing_mode(uint16_t mode) {
+    if (!(this->routing_mode_ == 0 || this->routing_mode_ == mode)) {
+        tt::log_warning(
+            tt::LogFabric,
+            "Control Plane: Routing mode already set to {}. Setting to {}",
+            (uint16_t)this->routing_mode_,
+            (uint16_t)mode);
+    }
+    this->routing_mode_ = mode;
+}
+
+uint16_t ControlPlane::get_routing_mode() const { return this->routing_mode_; }
+
 }  // namespace tt::tt_fabric
