@@ -738,7 +738,7 @@ def test_demo_text(
                         model_args[0].encode_prompt(prompt, instruct=instruct)
                     )
                     text_after_prompt = text.replace(prompt_including_assistant_tags, "", 1)
-                    # Find all Japanese and Arabic characters
+                    # Find all Japanese and Arabic characters.
                     jp_chars = find_japanese_chars(text_after_prompt)
                     ar_chars = find_arabic_chars(text_after_prompt)
                     if jp_chars:
