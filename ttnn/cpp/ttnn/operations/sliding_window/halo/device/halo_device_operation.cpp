@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/operations/sliding_window/halo/device/untilize_with_halo_v2_program_factory.hpp"
+#include "ttnn/operations/sliding_window/halo/device/untilize_with_halo_program_factory.hpp"
 #include "ttnn/operations/conv/conv2d/conv2d_utils.hpp"
 #include "ttnn/tensor/shape/shape.hpp"
 #include "ttnn/operations/sliding_window/halo/device/halo_device_operation.hpp"
@@ -146,7 +146,7 @@ operation::ProgramWithCallbacks HaloDeviceOperation::create_program(
         int num_cores_c = conv::get_num_cores_channels_from_parallel_config(this->parallel_config_);
         int stick_size = input_tensor.get_padded_shape()[3] / num_cores_c;
 
-        return {data_movement::detail::inplace_untilize_with_halo_multi_core_v2(
+        return {data_movement::detail::inplace_untilize_with_halo_multi_core(
             program,
             input_tensor,
             pad_val_,
@@ -196,7 +196,7 @@ operation::ProgramWithCallbacks HaloDeviceOperation::create_program(
 
         Program program = CreateProgram();
 
-        return {data_movement::detail::untilize_with_halo_multi_core_v2(
+        return {data_movement::detail::untilize_with_halo_multi_core(
             program,
             input_tensor,
             pad_val_,
@@ -261,18 +261,19 @@ Tensor halo_op(
     }
 
     return operation::run(
-        HaloDeviceOperation{
-            .config_ = config,
-            .parallel_config_ = p_config,
-            .pad_val_ = pad_val,
-            .remote_read_ = remote_read,
-            .transpose_mcast_ = transpose_mcast,
-            .max_out_nsticks_per_core_ = max_out_nsticks_per_core,
-            .in_nsticks_per_core_ = in_nsticks_per_core,
-            .output_memory_config_ = output_memory_config,
-            .is_out_tiled_ = is_out_tiled,
-            .in_place_ = in_place},
-        {input_tensor}).at(0);
+               HaloDeviceOperation{
+                   .config_ = config,
+                   .parallel_config_ = p_config,
+                   .pad_val_ = pad_val,
+                   .remote_read_ = remote_read,
+                   .transpose_mcast_ = transpose_mcast,
+                   .max_out_nsticks_per_core_ = max_out_nsticks_per_core,
+                   .in_nsticks_per_core_ = in_nsticks_per_core,
+                   .output_memory_config_ = output_memory_config,
+                   .is_out_tiled_ = is_out_tiled,
+                   .in_place_ = in_place},
+               {input_tensor})
+        .at(0);
 }
 
 }  // namespace ttnn::operations::sliding_window::halo
