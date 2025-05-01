@@ -551,7 +551,7 @@ Tensor Tensor::unpad_from_tile(const ttnn::Shape& output_tensor_shape) const {
 }
 
 bool Tensor::is_sharded() const {
-    return is_tensor_on_device_or_multidevice(*this) ? this->memory_config().is_sharded() : false;
+    return tt::tt_metal::is_device_tensor(*this) ? this->memory_config().is_sharded() : false;
 }
 
 uint32_t Tensor::element_size() const { return tensor_impl::element_size_bytes(this->get_dtype()); }
@@ -593,13 +593,6 @@ StorageType Tensor::storage_type() const {
         },
         this->get_storage());
 }
-
-bool Tensor::is_host_tensor() const {
-    auto type = storage_type();
-    return type == StorageType::HOST || type == StorageType::MULTI_DEVICE_HOST;
-}
-
-bool Tensor::is_device_tensor() const { return !is_host_tensor(); }
 
 ttnn::Shape Tensor::strides() const { return ttnn::Shape(tt::tt_metal::compute_strides(this->get_padded_shape())); }
 

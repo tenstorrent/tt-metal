@@ -87,9 +87,8 @@ Tensor _transform_weights_for_conv_transpose2d(const Tensor& conv_weight_tensor,
         !is_device_tensor(conv_weight_tensor), "transform_weights_for_conv_transpose2d only supports host tensors");
 
     // TODO: #15840 - Treat multi-device host vs owned/borrowed tensors uniformly.
-    return ttnn::distributed::is_multi_device_host_tensor(conv_weight_tensor)
-               ? transform(conv_weight_tensor, convert_tensor)
-               : convert_tensor(conv_weight_tensor);
+    return tt::tt_metal::is_multi_device_host_tensor(conv_weight_tensor) ? transform(conv_weight_tensor, convert_tensor)
+                                                                         : convert_tensor(conv_weight_tensor);
 }
 
 Tensor transform_weights_for_conv_transpose2d(const Tensor& conv_weight_tensor, bool mirror_kernel) {
@@ -202,8 +201,8 @@ Result conv_transpose2d(
             full_input_width,
             compute_grid_size,
             input_tensor.layout(),
-            ttnn::is_tensor_on_device_or_multidevice(input_tensor) ? std::make_optional(input_tensor.memory_config())
-                                                                   : std::nullopt,
+            tt::tt_metal::is_device_tensor(input_tensor) ? std::make_optional(input_tensor.memory_config())
+                                                         : std::nullopt,
             kernel_size,
             groups,
             bias_tensor.has_value(),
@@ -284,7 +283,7 @@ Result conv_transpose2d(
         get_fp32_dest_acc_en(compute_config),
         conv_config.enable_split_reader);
 
-    bool weight_is_on_device = ttnn::is_tensor_on_device_or_multidevice(weight_tensor);
+    bool weight_is_on_device = tt::tt_metal::is_device_tensor(weight_tensor);
     ttnn::Tensor weight_tensor_on_device = weight_tensor;
     std::optional<ttnn::Tensor> bias_tensor_on_device = bias_tensor;
     if (!weight_is_on_device) {

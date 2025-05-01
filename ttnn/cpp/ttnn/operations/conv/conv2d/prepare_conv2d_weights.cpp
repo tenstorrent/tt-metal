@@ -42,8 +42,8 @@ Tensor convert_tensor(const Tensor& input_tensor, compute_& compute) {
     TT_FATAL(!is_device_tensor(input_tensor), "convert_tensor only supports host tensors");
 
     // TODO: #15840 - Treat multi-device host vs owned/borrowed tensors uniformly.
-    return ttnn::distributed::is_multi_device_host_tensor(input_tensor) ? transform(input_tensor, convert_tensor)
-                                                                        : convert_tensor(input_tensor);
+    return is_multi_device_host_tensor(input_tensor) ? transform(input_tensor, convert_tensor)
+                                                     : convert_tensor(input_tensor);
 }
 
 template <typename Func, typename... Args>
@@ -680,7 +680,7 @@ ttnn::Tensor prepare_bias_on_device(
     uint32_t out_channel_padding = out_channels_padded - out_channels;
 
     ttnn::Tensor bias_tensor_ = bias_tensor;
-    bool is_bias_tensor_is_on_device = ttnn::is_tensor_on_device_or_multidevice(bias_tensor_);
+    bool is_bias_tensor_is_on_device = tt::tt_metal::is_device_tensor(bias_tensor_);
     if (!is_bias_tensor_is_on_device) {
         bias_tensor_ = ttnn::operations::core::to_device(bias_tensor_, device, std::nullopt);
     }
@@ -783,7 +783,7 @@ std::pair<ttnn::Tensor, std::optional<ttnn::Tensor>> prepare_conv_weights_biases
         has_bias);
 
     // Convert weight tensor to 0 padded shape if groups > 1
-    if (groups > 1 and is_tensor_on_device_or_multidevice(weight_tensor_)) {
+    if (groups > 1 and is_device_tensor(weight_tensor_)) {
         TT_THROW(
             "Grouped Convolution not supported when weights are on device. Please move the weights tensor to host");
     }
@@ -1003,7 +1003,7 @@ std::pair<ttnn::Tensor, std::optional<ttnn::Tensor>> prepare_conv_weights_biases
         input_width,
         has_bias);
     TT_FATAL(
-        !is_tensor_on_device_or_multidevice(weight_tensor_),
+        !is_device_tensor(weight_tensor_),
         "prepare_conv_weights_biases_and_move_to_device is not supported when the weights tensor is on the device");
     // Convert weight tensor to 0 padded shape if groups > 1
     if (!is_conv1d and groups > 1) {
@@ -1071,7 +1071,7 @@ std::pair<ttnn::Tensor, std::optional<ttnn::Tensor>> prepare_conv_weights_biases
 
     if (bias_tensor.has_value()) {
         bias_tensor_ = bias_tensor.value();
-        bool is_bias_tensor_is_on_device = ttnn::is_tensor_on_device_or_multidevice(bias_tensor_);
+        bool is_bias_tensor_is_on_device = tt::tt_metal::is_device_tensor(bias_tensor_);
         if (!is_bias_tensor_is_on_device) {
             TT_FATAL(
                 bias_tensor_.get_logical_shape()[3] == out_channels,
@@ -1198,7 +1198,7 @@ ttnn::Tensor prepare_conv_weights(
     std::optional<const ttnn::Tensor> bias_tensor = std::nullopt;
     ttnn::Tensor weight_tensor_on_device = weight_tensor;
     std::optional<ttnn::Tensor> bias_tensor_on_device = bias_tensor;
-    if (weight_tensor.is_device_tensor() || conv_config.preprocess_weights_on_device) {
+    if (is_device_tensor(weight_tensor) || conv_config.preprocess_weights_on_device) {
         if (!conv_config.preprocess_weights_on_device) {
             log_warning(
                 tt::LogOp,
@@ -1328,7 +1328,7 @@ ttnn::Tensor prepare_conv_bias(
     ttnn::Tensor bias_tensor_ = bias_tensor;
     TT_FATAL(bias_tensor_.get_logical_shape()[3] == out_channels, "Bias must have the same length as output channels");
 
-    if (bias_tensor_.is_device_tensor()) {
+    if (tt::tt_metal::is_device_tensor(bias_tensor_)) {
         bias_tensor_ = prepare_bias_on_device(
             bias_tensor_,
             conv_config.weights_dtype,
