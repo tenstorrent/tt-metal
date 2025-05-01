@@ -323,7 +323,7 @@ std::shared_ptr<Buffer> Buffer::create_buffer(
     const std::optional<BufferDistributionSpec>& buffer_distribution_spec,
     const std::optional<bool> bottom_up,
     const std::optional<SubDeviceId> sub_device_id) {
-    auto* bufferPtr = new Buffer(
+    auto buffer = std::make_shared<Buffer>(
         device,
         size,
         page_size,
@@ -336,28 +336,12 @@ std::shared_ptr<Buffer> Buffer::create_buffer(
         true /* owns data */,
         Private());
 
-    // Using a custom deleter to properly clean up the owned datas
-    auto buffer = std::shared_ptr<Buffer>(bufferPtr, deleter);
-    buffer->weak_self = buffer;
-
     if (buffer->size_ == 0) {
-        buffer->allocation_status_.store(AllocationStatus::ALLOCATED, std::memory_order::relaxed);
+        buffer->allocation_status_ = AllocationStatus::ALLOCATED;
         return buffer;
     }
 
-    buffer->device_->push_work([buffer] {
-        try {
-            buffer->allocate_impl();
-            buffer->allocation_cv_.notify_all();
-        } catch (...) {
-            {
-                std::unique_lock lock(buffer->allocation_mutex_);
-                buffer->allocation_status_.store(AllocationStatus::ALLOCATION_FAILED, std::memory_order::relaxed);
-            }
-            buffer->allocation_cv_.notify_all();
-            throw;
-        }
-    });
+    buffer->allocate_impl();
 
     return buffer;
 }
@@ -403,7 +387,6 @@ std::shared_ptr<Buffer> Buffer::create(
     const std::optional<bool> bottom_up,
     const std::optional<SubDeviceId> sub_device_id) {
     LIGHT_METAL_TRACE_FUNCTION_ENTRY();
-    // Not using a custom deleter, because it doesn't own any data to cleanup
     auto buffer = std::make_shared<Buffer>(
         device,
         size,
@@ -416,10 +399,9 @@ std::shared_ptr<Buffer> Buffer::create(
         sub_device_id,
         false /* owns data */,
         Private());
-    buffer->weak_self = buffer;
 
     buffer->address_ = address;
-    buffer->allocation_status_.store(AllocationStatus::ALLOCATED, std::memory_order::relaxed);
+    buffer->allocation_status_ = AllocationStatus::ALLOCATED;
 
     LIGHT_METAL_TRACE_FUNCTION_CALL(
         CaptureBufferCreate,
@@ -481,38 +463,22 @@ void Buffer::allocate_impl() {
     }
 
     // Important! Graph tracker must called after the allocation status is updated.
-    {
-        std::unique_lock lock(allocation_mutex_);
-        allocation_status_.store(AllocationStatus::ALLOCATED, std::memory_order::release);
-    }
+    allocation_status_ = AllocationStatus::ALLOCATED;
+
     GraphTracker::instance().track_allocate(this);
 }
 
 void Buffer::deallocate() {
-    deallocation_requested_.store(true, std::memory_order::relaxed);
     if (!owns_data_) {
         return;
     }
-    device_->push_work([self = weak_self.lock()] { self->deallocate_impl(); });
+    this->deallocate_impl();
 }
 
-void Buffer::mark_as_deallocated() {
-    allocation_status_.store(AllocationStatus::DEALLOCATED, std::memory_order::relaxed);
-}
-
-void Buffer::deleter(Buffer* buffer) {
-    if (buffer->allocation_status_.load(std::memory_order::relaxed) == AllocationStatus::DEALLOCATED) {
-        delete buffer;
-        return;
-    }
-    buffer->device_->push_work([buffer] {
-        std::unique_ptr<Buffer> unique_buffer = std::unique_ptr<Buffer>(buffer);
-        buffer->deallocate_impl();
-    });
-}
+void Buffer::mark_as_deallocated() { allocation_status_ = AllocationStatus::DEALLOCATED; }
 
 void Buffer::deallocate_impl() {
-    if (allocation_status_.load(std::memory_order::relaxed) != AllocationStatus::ALLOCATED) {
+    if (allocation_status_ != AllocationStatus::ALLOCATED) {
         return;
     }
 
@@ -535,35 +501,23 @@ void Buffer::deallocate_impl() {
         LIGHT_METAL_TRACE_FUNCTION_CALL(CaptureBufferDeallocate, *this);
     }
 
-    allocation_status_.store(AllocationStatus::DEALLOCATED, std::memory_order::relaxed);
+    allocation_status_ = AllocationStatus::DEALLOCATED;
 }
 
 Buffer::~Buffer() {
     LIGHT_METAL_TRACE_FUNCTION_ENTRY();
     LIGHT_METAL_TRACE_FUNCTION_CALL(CaptureBufferDelete, *this);
+    if (this->allocation_status_ != AllocationStatus::DEALLOCATED) {
+        this->deallocate();
+    }
 }
 
-bool Buffer::is_allocated() const {
-    auto allocation_status = allocation_status_.load(std::memory_order::relaxed);
-
-    // For calls from different threads we consider buffer to be allocated even if it's just ALLOCATION_REQUESTED,
-    // because once the caller will try to access it, the buffer will already be fully allocated. For the same reason we
-    // need to check deallocation_requested_ too.
-    bool deallocation_requested = deallocation_requested_.load(std::memory_order::relaxed);
-    return (allocation_status == AllocationStatus::ALLOCATION_REQUESTED ||
-            allocation_status == AllocationStatus::ALLOCATED) &&
-           !deallocation_requested;
-}
+bool Buffer::is_allocated() const { return allocation_status_ == AllocationStatus::ALLOCATED; }
 
 uint32_t Buffer::address() const {
-    if (allocation_status_.load(std::memory_order::acquire) != AllocationStatus::ALLOCATION_REQUESTED) {
-        return address_;
-    }
-
-    std::unique_lock lock(allocation_mutex_);
-    allocation_cv_.wait(lock, [this] {
-        return this->allocation_status_.load(std::memory_order::relaxed) != AllocationStatus::ALLOCATION_REQUESTED;
-    });
+    TT_FATAL(
+        allocation_status_ != AllocationStatus::ALLOCATION_REQUESTED,
+        "Can only query the address of a buffer that has been allocated");
     return address_;
 }
 

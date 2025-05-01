@@ -22,16 +22,13 @@ using ::tt::tt_metal::distributed::EnqueueWaitForEvent;
 std::shared_ptr<tt::tt_metal::Event> record_event(
     tt::tt_metal::IDevice* device, QueueId cq_id, const std::vector<tt::tt_metal::SubDeviceId>& sub_device_ids) {
     std::shared_ptr<tt::tt_metal::Event> event = std::make_shared<tt::tt_metal::Event>();
-    event->device = device;
-    device->push_work([device, event, cq_id, sub_device_ids] {
-        EnqueueRecordEvent(device->command_queue(*cq_id), event, sub_device_ids);
-    });
+    EnqueueRecordEvent(device->command_queue(*cq_id), event, sub_device_ids);
     return event;
 }
 
 void wait_for_event(QueueId cq_id, const std::shared_ptr<tt::tt_metal::Event>& event) {
     tt::tt_metal::IDevice* device = event->device;
-    device->push_work([device, event, cq_id] { EnqueueWaitForEvent(device->command_queue(*cq_id), event); });
+    EnqueueWaitForEvent(device->command_queue(*cq_id), event);
 }
 
 MultiDeviceEvent record_event(

@@ -735,16 +735,12 @@ void FabricEriscDatamoverBuilder::connect_to_downstream_edm(FabricEriscDatamover
 void FabricEriscDatamoverBuilder::teardown_from_host(
     tt::tt_metal::IDevice* d, tt::tt_fabric::TerminationSignal termination_signal) const {
     std::vector<uint32_t> val(1, termination_signal);
-    d->push_work(
-        [&]() {
-            tt::tt_metal::detail::WriteToDeviceL1(
-                d,
-                d->logical_core_from_ethernet_core(CoreCoord(this->my_noc_x, this->my_noc_y)),
-                config.termination_signal_address,
-                val,
-                CoreType::ETH);
-        },
-        true);
+    tt::tt_metal::detail::WriteToDeviceL1(
+        d,
+        d->logical_core_from_ethernet_core(CoreCoord(this->my_noc_x, this->my_noc_y)),
+        config.termination_signal_address,
+        val,
+        CoreType::ETH);
 }
 
 void FabricEriscDatamoverBuilder::set_firmware_context_switch_interval(size_t interval) {

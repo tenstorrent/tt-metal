@@ -304,7 +304,6 @@ public:
 private:
     enum class AllocationStatus : uint8_t {
         ALLOCATION_REQUESTED,
-        ALLOCATION_FAILED,
         ALLOCATED,
         DEALLOCATED,
     };
@@ -313,7 +312,6 @@ private:
 
     // Deallocate is allowed to be called multiple times on the same buffer
     void deallocate();
-    static void deleter(Buffer* buffer);
     void deallocate_impl();
     friend void DeallocateBuffer(Buffer& buffer);
 
@@ -330,12 +328,8 @@ private:
     std::optional<SubDeviceManagerId> sub_device_manager_id_;
     Allocator* allocator_;
 
-    std::atomic<AllocationStatus> allocation_status_ = AllocationStatus::ALLOCATION_REQUESTED;
+    AllocationStatus allocation_status_ = AllocationStatus::ALLOCATION_REQUESTED;
     DeviceAddr address_ = 0;
-    mutable std::mutex allocation_mutex_;
-    mutable std::condition_variable allocation_cv_;
-    // Used exclusively for is_allocated() method
-    std::atomic<bool> deallocation_requested_ = false;
 
     // Private helper function to commonize code path for buffer creation with either ShardSpecBuffer or
     // BufferDistributionSpec
@@ -357,8 +351,6 @@ private:
     std::shared_ptr<const BufferPageMapping> buffer_page_mapping_;
 
     std::optional<BufferDistributionSpec> buffer_distribution_spec_;
-
-    std::weak_ptr<Buffer> weak_self;
     size_t unique_id_ = 0;
     static std::atomic<size_t> next_unique_id;
 };
