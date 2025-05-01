@@ -507,6 +507,7 @@ void register_full_benchmark_suite() {
             {32_KB},
             {1, 2},
             {1, 2},
+            {true},
         });
     ::benchmark::RegisterBenchmark(
         "Multiple MMIO Devices Reading (Same NUMA node)", mem_bench_multi_mmio_devices_reading_same_node)
