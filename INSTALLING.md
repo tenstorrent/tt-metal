@@ -28,7 +28,7 @@ Note the current compatibility matrix:
 
 #### Install System-level Dependencies
 ```
-wget https://raw.githubusercontent.com/tenstorrent/tt-metal/refs/heads/main/install_dependencies.sh
+wget https://raw.githubusercontent.com/tenstorrent/tt-metal/refs/heads/main/{install_dependencies.sh,tt_metal/sfpi-version.sh}
 chmod a+x install_dependencies.sh
 sudo ./install_dependencies.sh
 ```
