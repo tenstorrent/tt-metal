@@ -18,11 +18,14 @@ The entry point to yolov8x model is YOLOv8x in `models/experimental/yolov8x/tt/t
 Use the following command to run the model :
 `pytest tests/ttnn/integration_tests/yolov8x/test_yolov8x.py::test_yolov8x_640`
 
-se the following command to run the e2e perf :
+se the following command to run the e2e perf(1.86 fps) :
 `pytest models/experimental/yolov8x/tests/test_perf_yolov8x.py::test_yolov8x`
 
 Use the following command to run the device perf :
 `pytest models/experimental/yolov8x/tests/test_yolov8x.py::test_perf_device_bare_metal_yolov8x`
+
+Use the following command to run the e2e perf with trace(40 fps):
+`pytest models/experimental/yolov8x/tests/test_e2e_performant.py`
 
 ## Additional Information:
 The tests can be run with  randomly initialized weights and pre-trained real weights.  To run only for the pre-trained weights, specify pretrained_weight_true when running the tests.

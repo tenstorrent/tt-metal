@@ -35,7 +35,7 @@ Tensor _transform_weights_for_conv_transpose2d(const Tensor& conv_weight_tensor,
         auto kernel_height = in_w_shape[2];
         auto kernel_width = in_w_shape[3];
         ttnn::Shape output_shape{out_channels, in_channels, kernel_height, kernel_width};
-        auto output_buffer = tt::tt_metal::owned_buffer::create<T>(output_shape.volume());
+        auto owned_buffer = std::vector<T>(output_shape.volume());
 
         for (auto out_channels_index = 0; out_channels_index < out_channels; out_channels_index++) {
             auto output_weight_out_channel_base_idx = out_channels_index * in_channels * kernel_height * kernel_width;
@@ -60,29 +60,34 @@ Tensor _transform_weights_for_conv_transpose2d(const Tensor& conv_weight_tensor,
                         auto out_idx = output_weight_out_channel_base_idx + output_weight_in_channel_base_idx +
                                        out_height_offset + out_buffer_kw_index;
 
-                        output_buffer[out_idx] = input_buffer[in_idx];
+                        owned_buffer[out_idx] = input_buffer[in_idx];
                     }
                 }
             }
         }
         return Tensor(
-            std::move(tt::tt_metal::OwnedStorage{std::move(output_buffer)}), output_shape, dtype, Layout::ROW_MAJOR);
+            tt::tt_metal::HostStorage{tt::tt_metal::host_buffer::create(std::move(owned_buffer))},
+            output_shape,
+            dtype,
+            Layout::ROW_MAJOR);
     };
     auto convert_tensor = [&compute](const auto& conv_weight_tensor) {
         return std::visit(
             [&compute](auto&& storage) -> Tensor {
                 using StorageType = std::decay_t<decltype(storage)>;
-                if constexpr (std::is_same_v<StorageType, tt::tt_metal::OwnedStorage>) {
-                    return compute(tt::tt_metal::owned_buffer::get_as<T>(storage.buffer));
-                } else if constexpr (std::is_same_v<StorageType, tt::tt_metal::BorrowedStorage>) {
-                    return compute(tt::tt_metal::borrowed_buffer::get_as<T>(storage.buffer));
+                if constexpr (std::is_same_v<StorageType, tt::tt_metal::HostStorage>) {
+                    return compute(tt::tt_metal::host_buffer::get_as<T>(storage.buffer));
                 } else {
                     TT_THROW("Unsupported storage type");
                 }
             },
             conv_weight_tensor.get_storage());
     };
-    return ttnn::distributed::is_multi_device_tensor(conv_weight_tensor) ? transform(conv_weight_tensor, convert_tensor)
+    TT_FATAL(
+        !is_device_tensor(conv_weight_tensor), "transform_weights_for_conv_transpose2d only supports host tensors");
+
+    // TODO: #15840 - Treat multi-device host vs owned/borrowed tensors uniformly.
+    return tt::tt_metal::is_multi_device_host_tensor(conv_weight_tensor) ? transform(conv_weight_tensor, convert_tensor)
                                                                          : convert_tensor(conv_weight_tensor);
 }
 
@@ -120,7 +125,9 @@ Result conv_transpose2d(
     const std::optional<const Conv2dConfig>& conv_config_,
     const std::optional<const DeviceComputeKernelConfig>& compute_config_,
     const std::optional<const MemoryConfig>& memory_config,
-    bool mirror_kernel) {
+    bool mirror_kernel,
+    bool return_output_dim,
+    bool return_weights_and_bias) {
     Conv2dConfig conv_config = conv_config_.value_or(Conv2dConfig());
     DeviceComputeKernelConfig compute_config = compute_config_.value_or(get_conv_default_compute_kernel_config(device));
 
@@ -194,8 +201,8 @@ Result conv_transpose2d(
             full_input_width,
             compute_grid_size,
             input_tensor.layout(),
-            ttnn::is_tensor_on_device_or_multidevice(input_tensor) ? std::make_optional(input_tensor.memory_config())
-                                                                   : std::nullopt,
+            tt::tt_metal::is_device_tensor(input_tensor) ? std::make_optional(input_tensor.memory_config())
+                                                         : std::nullopt,
             kernel_size,
             groups,
             bias_tensor.has_value(),
@@ -231,7 +238,6 @@ Result conv_transpose2d(
             0,
             false,
             parallel_config.shard_orientation == ShardOrientation::COL_MAJOR,
-            0,
             input_tensor_post_tm.memory_config());
 
         if (conv_config.deallocate_activation) {
@@ -277,7 +283,7 @@ Result conv_transpose2d(
         get_fp32_dest_acc_en(compute_config),
         conv_config.enable_split_reader);
 
-    bool weight_is_on_device = ttnn::is_tensor_on_device_or_multidevice(weight_tensor);
+    bool weight_is_on_device = tt::tt_metal::is_device_tensor(weight_tensor);
     ttnn::Tensor weight_tensor_on_device = weight_tensor;
     std::optional<ttnn::Tensor> bias_tensor_on_device = bias_tensor;
     if (!weight_is_on_device) {
@@ -327,8 +333,17 @@ Result conv_transpose2d(
         if (memory_config.has_value() && memory_config.value() != matmul_output.memory_config()) {
             matmul_output = ttnn::to_memory_config(matmul_output, memory_config.value(), std::nullopt);
         }
-
-        return {matmul_output, output_height, output_width, weight_tensor_on_device, bias_tensor_on_device};
+        if (return_output_dim && return_weights_and_bias) {
+            return std::tuple(
+                matmul_output,
+                std::tuple(output_height, output_width),
+                std::tuple(weight_tensor_on_device, bias_tensor_on_device));
+        } else if (return_output_dim) {
+            return std::tuple(matmul_output, std::tuple(output_height, output_width));
+        } else if (return_weights_and_bias) {
+            return std::tuple(matmul_output, std::tuple(weight_tensor_on_device, bias_tensor_on_device));
+        }
+        return matmul_output;
     }
     // call conv micro op
     auto conv_output = optimized_conv_new(
@@ -352,7 +367,17 @@ Result conv_transpose2d(
     if (memory_config.has_value() && memory_config.value() != conv_output.memory_config()) {
         conv_output = ttnn::to_memory_config(conv_output, memory_config.value(), std::nullopt);
     }
-    return {conv_output, output_height, output_width, weight_tensor_on_device, bias_tensor_on_device};
+    if (return_output_dim && return_weights_and_bias) {
+        return std::tuple(
+            conv_output,
+            std::tuple(output_height, output_width),
+            std::tuple(weight_tensor_on_device, bias_tensor_on_device));
+    } else if (return_output_dim) {
+        return std::tuple(conv_output, std::tuple(output_height, output_width));
+    } else if (return_weights_and_bias) {
+        return std::tuple(conv_output, std::tuple(weight_tensor_on_device, bias_tensor_on_device));
+    }
+    return conv_output;
 }
 
 Result ConvTranpose2dOperation::invoke(
@@ -375,7 +400,9 @@ Result ConvTranpose2dOperation::invoke(
     const std::optional<const Conv2dConfig>& conv_config_,
     const std::optional<const DeviceComputeKernelConfig>& compute_config_,
     const std::optional<const MemoryConfig>& memory_config,
-    bool mirror_kernel) {
+    bool mirror_kernel,
+    bool return_output_dim,
+    bool return_weights_and_bias) {
     return conv_transpose2d(
         input_tensor,
         weight_tensor,
@@ -395,7 +422,9 @@ Result ConvTranpose2dOperation::invoke(
         std::move(conv_config_),
         std::move(compute_config_),
         std::move(memory_config),
-        mirror_kernel);
+        mirror_kernel,
+        return_output_dim,
+        return_weights_and_bias);
 }
 
 Result ConvTranpose2dOperation::invoke(
@@ -418,7 +447,9 @@ Result ConvTranpose2dOperation::invoke(
     const std::optional<const Conv2dConfig>& conv_config_,
     const std::optional<const DeviceComputeKernelConfig>& compute_config_,
     const std::optional<const MemoryConfig>& memory_config,
-    bool mirror_kernel) {
+    bool mirror_kernel,
+    bool return_output_dim,
+    bool return_weights_and_bias) {
     return conv_transpose2d(
         input_tensor,
         weight_tensor,
@@ -438,7 +469,9 @@ Result ConvTranpose2dOperation::invoke(
         std::move(conv_config_),
         std::move(compute_config_),
         std::move(memory_config),
-        mirror_kernel);
+        mirror_kernel,
+        return_output_dim,
+        return_weights_and_bias);
 }
 
 }  // namespace conv_transpose2d

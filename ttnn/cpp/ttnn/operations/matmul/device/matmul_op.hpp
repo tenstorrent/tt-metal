@@ -4,11 +4,10 @@
 
 #pragma once
 #include <optional>
-
+#include <tt-metalium/mesh_coord.hpp>
 #include "ttnn/operations/ccl/ccl_op_fusion.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
-#include "ttnn/operations/global_cb_utils.hpp"
 #include "ttnn/run_operation.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
@@ -21,6 +20,20 @@ namespace operations {
 namespace matmul {
 
 using ttnn::operations::unary::UnaryWithParam;
+
+/**
+ * @brief Computes the output shape of a matmul operation given two input tensors
+ *
+ * Determines the output shape based on the broadcasting rules for matrix multiplication:
+ * - For 2D tensors: [m, k] @ [k, n] -> [m, n]
+ * - For tensors with batch dimensions, the batch dimensions are broadcast
+ * - For vector-matrix multiplication (rank 1 @ rank 2), the result is a vector
+ *
+ * @param input_tensor_a First input tensor
+ * @param input_tensor_b Second input tensor
+ * @return Shape of the resulting tensor after matmul
+ */
+ttnn::Shape compute_matmul_output_shape(const Tensor& input_tensor_a, const Tensor& input_tensor_b);
 
 /*
  * GENERAL MATMUL AND BMM
@@ -57,6 +70,7 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_o
     uint32_t num_global_cb_receivers,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id);
 tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse_dram_sharded_optimized(
+    const ttnn::MeshCoordinate& mesh_coord,
     const Tensor& input_tensor_a,
     const Tensor& input_tensor_b,
     const std::optional<const Tensor>& bias,
@@ -157,11 +171,8 @@ struct MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig {
 
 struct MatmulMultiCoreProgramConfig {};
 
-struct MatmulMultiCoreNonOptimizedReuseProgramConfig {};
-
 using MatmulProgramConfig = std::variant<
     MatmulMultiCoreProgramConfig,
-    MatmulMultiCoreNonOptimizedReuseProgramConfig,
     MatmulMultiCoreReuseProgramConfig,
     MatmulMultiCoreReuseMultiCastProgramConfig,
     MatmulMultiCoreReuseMultiCast1DProgramConfig,
@@ -180,7 +191,7 @@ struct Matmul {
     const bool transpose_a = false;
     const bool transpose_b = false;
     const std::optional<const tt::tt_metal::Tile> output_tile;
-    const std::optional<const tt::tt_metal::DeviceGlobalCircularBuffer> global_cb;
+    const std::optional<const GlobalCircularBuffer> global_cb;
     std::optional<tt::tt_metal::SubDeviceId> sub_device_id;
 
     void validate(
@@ -194,7 +205,8 @@ struct Matmul {
     std::vector<Tensor> create_output_tensors(
         const std::vector<Tensor>& input_tensors,
         const std::vector<std::optional<Tensor>>& optional_output_tensors = {std::nullopt}) const;
-    tt::tt_metal::operation::ProgramWithCallbacks create_program(
+    tt::tt_metal::operation::CacheableMeshWorkload<std::vector<Tensor>> create_mesh_workload(
+        const ttnn::MeshCoordinateRangeSet& tensor_coords,
         const std::vector<Tensor>& input_tensors,
         const std::vector<std::optional<const Tensor>>& optional_input_tensors,
         std::vector<Tensor>& output_tensors) const;

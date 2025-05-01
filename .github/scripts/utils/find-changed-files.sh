@@ -46,7 +46,7 @@ while IFS= read -r FILE; do
             TTTRAIN_CHANGED=true
             ANY_CODE_CHANGED=true
             ;;
-        docs/**)
+        docs/**|**/*.rst|**/*.md)
             DOCS_CHANGED=true
             ;;
     esac

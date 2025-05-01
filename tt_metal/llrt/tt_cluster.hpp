@@ -82,6 +82,10 @@ enum class EthRouterMode : uint32_t {
 
 class Cluster {
 public:
+    // TODO: #21245: Remove these workaround APIs and instead refactor UMD component out of Cluster
+    static ClusterType get_cluster_type_from_cluster_desc(
+        const llrt::RunTimeOptions& rtoptions, const tt_ClusterDescriptor* cluster_desc = nullptr);
+    static bool is_base_routing_fw_enabled(ClusterType cluster_type);
     Cluster& operator=(const Cluster&) = delete;
     Cluster& operator=(Cluster&& other) noexcept = delete;
     Cluster(const Cluster&) = delete;
@@ -100,6 +104,11 @@ public:
 
     size_t number_of_pci_devices() const { return this->cluster_desc_->get_chips_with_mmio().size(); }
 
+    // TODO: UMD will eventually consolidate ethernet coordinates and unique ids, we can remove the ethernet coord
+    // getter after that change is in
+    const std::unordered_map<chip_id_t, uint64_t>& get_unique_chip_ids() const {
+        return this->cluster_desc_->get_chip_unique_ids();
+    }
     std::unordered_map<chip_id_t, eth_coord_t> get_all_chip_ethernet_coordinates() const;
 
     ARCH arch() const { return this->arch_; }
@@ -297,6 +306,8 @@ public:
 
     tt_metal::FabricConfig get_fabric_config() const;
 
+    bool is_base_routing_fw_enabled() const;
+
     // Get all fabric ethernet cores
     std::set<tt_fabric::chan_id_t> get_fabric_ethernet_channels(chip_id_t chip_id) const;
 
@@ -366,6 +377,8 @@ private:
     std::unordered_map<tt_cxy_pair, tt_cxy_pair> virtual_to_umd_coord_mapping_;
     std::unordered_map<chip_id_t, std::unordered_set<CoreCoord>> virtual_worker_cores_;
     std::unordered_map<chip_id_t, std::unordered_set<CoreCoord>> virtual_eth_cores_;
+    std::unordered_map<chip_id_t, std::unordered_set<CoreCoord>> virtual_dram_cores_;
+    std::unordered_map<chip_id_t, std::unordered_set<CoreCoord>> virtual_pcie_cores_;
     std::unordered_map<BoardType, std::unordered_map<CoreCoord, int32_t>> virtual_routing_to_profiler_flat_id_;
     std::unordered_map<chip_id_t, std::unordered_set<CoreCoord>> frequent_retrain_cores_;
     // Flag to tell whether we are on a TG type of system.

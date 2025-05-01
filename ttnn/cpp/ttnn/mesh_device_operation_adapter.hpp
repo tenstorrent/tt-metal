@@ -14,6 +14,7 @@
 #include "ttnn/distributed/types.hpp"
 #include "ttnn/mesh_device_operation_utils.hpp"
 #include "ttnn/operation_concepts.hpp"
+#include "ttnn/operation.hpp"
 
 namespace ttnn::device_operation {
 
@@ -142,7 +143,38 @@ struct MeshDeviceOperationAdapter {
         tt::tt_metal::distributed::MeshDevice* mesh_device,
         const operation_attributes_t& attrs,
         const tensor_args_t& tensor_args) {
-        return compute_program_hash(attrs, tensor_args);
+        // Hash the program hash and the tensor coordinates the workload is targeting.
+        auto hash = compute_program_hash(attrs, tensor_args);
+        for (const auto& coord : mesh_device_operation_utils::extract_tensor_coordinates(tensor_args)) {
+            tt::utils::hash_combine(hash, coord);
+        }
+        return hash;
+    }
+
+    static tt::tt_metal::operation::OpPerformanceModelGeneral<tensor_return_value_t> create_op_performance_model(
+        const operation_attributes_t& attributes,
+        const tensor_args_t& tensor_args,
+        tensor_return_value_t& tensor_return_value) {
+        if constexpr (requires {
+                          device_operation_t::create_op_performance_model(attributes, tensor_args, tensor_return_value);
+                      }) {
+            // Custom Performance Model detected for this Op
+            return device_operation_t::create_op_performance_model(attributes, tensor_args, tensor_return_value);
+        } else {
+            // Use generic Op Performance Models
+            if constexpr (requires { tensor_args.input_tensors; }) {
+                // tensor_args_t for Op contains input_tensors attributes (mirror what's done in
+                // OldInfraDeviceOperation)
+                return tt::tt_metal::operation::OpPerformanceModelGeneral(
+                    tensor_args.input_tensors,
+                    tensor_return_value,
+                    1 /* ideal_compute_cycles: specify as 1, since op perf model is not provided*/);
+            } else {
+                // tensor_args_t does not comply with interface used by OldInfraDeviceOperation, use default performance
+                // model
+                return tt::tt_metal::operation::OpPerformanceModelGeneral<tensor_return_value_t>{};
+            }
+        }
     }
 };
 

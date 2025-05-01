@@ -1,0 +1,189 @@
+name: Build test and publish upstream tests
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '0 12 * * *'
+
+# any reason to bake the test script in as entrypoint??? WHY NOT ONE IMAGE
+# well, that's because of the two builds...
+env:
+  WH_6U_IMAGE_NAME: ghcr.io/tenstorrent/tt-metal/upstream-tests-wh-6u
+  WH_6U_PROFILER_IMAGE_NAME: ghcr.io/tenstorrent/tt-metal/upstream-profiler-tests-wh-6u
+  BLACKHOLE_IMAGE_NAME: ghcr.io/tenstorrent/tt-metal/upstream-tests-bh
+  BLACKHOLE_PROFILER_IMAGE_NAME: ghcr.io/tenstorrent/tt-metal/upstream-profiler-tests-bh
+
+jobs:
+  build-artifact:
+    uses: ./.github/workflows/build-artifact.yaml
+    secrets: inherit
+    with:
+      version: 22.04
+      build-wheel: true
+  build-artifact-profiler:
+    uses: ./.github/workflows/build-artifact.yaml
+    secrets: inherit
+    with:
+      version: 22.04
+      build-wheel: true
+      tracy: true
+  get-image-tags:
+    runs-on: ubuntu-latest
+    outputs:
+      image-tag-suffix: ${{ steps.set-image-tag-suffix.outputs.image-tag-suffix }}
+      wh-6u-image-tag: ${{ steps.set-image-tags.outputs.wh-6u-image-tag }}
+      wh-6u-base-image-name: ${{ steps.set-image-tags.outputs.wh-6u-base-image-name }}
+      wh-6u-profiler-image-tag: ${{ steps.set-image-tags.outputs.wh-6u-profiler-image-tag }}
+      wh-6u-profiler-base-image-name: ${{ steps.set-image-tags.outputs.wh-6u-profiler-base-image-name }}
+      bh-image-tag: ${{ steps.set-image-tags.outputs.bh-image-tag }}
+      bh-base-image-name: ${{ steps.set-image-tags.outputs.bh-base-image-name }}
+      bh-profiler-image-tag: ${{ steps.set-image-tags.outputs.bh-profiler-image-tag }}
+      bh-profiler-base-image-name: ${{ steps.set-image-tags.outputs.bh-profiler-base-image-name }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+      - name: Get tag to use everywhere
+        id: set-image-tag-suffix
+        run: echo "image-tag-suffix=$(git describe)" >> "$GITHUB_OUTPUT"
+      - name: Set image tags
+        id: set-image-tags
+        run: |
+          echo "wh-6u-image-tag=${{ env.WH_6U_IMAGE_NAME }}:${{ steps.set-image-tag-suffix.outputs.image-tag-suffix }}" >> "$GITHUB_OUTPUT"
+          echo "wh-6u-base-image-name=${{ env.WH_6U_IMAGE_NAME }}" >> "$GITHUB_OUTPUT"
+          echo "wh-6u-profiler-image-tag=${{ env.WH_6U_PROFILER_IMAGE_NAME }}:${{ steps.set-image-tag-suffix.outputs.image-tag-suffix }}" >> "$GITHUB_OUTPUT"
+          echo "wh-6u-profiler-base-image-name=${{ env.WH_6U_PROFILER_IMAGE_NAME }}" >> "$GITHUB_OUTPUT"
+          echo "bh-image-tag=${{ env.BLACKHOLE_IMAGE_NAME }}:${{ steps.set-image-tag-suffix.outputs.image-tag-suffix }}" >> "$GITHUB_OUTPUT"
+          echo "bh-base-image-name=${{ env.BLACKHOLE_IMAGE_NAME }}" >> "$GITHUB_OUTPUT"
+          echo "bh-profiler-image-tag=${{ env.BLACKHOLE_PROFILER_IMAGE_NAME }}:${{ steps.set-image-tag-suffix.outputs.image-tag-suffix }}" >> "$GITHUB_OUTPUT"
+          echo "bh-profiler-base-image-name=${{ env.BLACKHOLE_PROFILER_IMAGE_NAME }}" >> "$GITHUB_OUTPUT"
+  build-images:
+    needs:
+      - build-artifact
+      - build-artifact-profiler
+      - get-image-tags
+    permissions:
+      packages: write
+      contents: read
+    strategy:
+      matrix:
+        # Ultimate goal will be to have a master script that people can call via
+        # <url_to_script_on_main.sh> | sh -c or something like that which will download
+        # the images and run them.
+        image-config:
+          - image-tag: ${{ needs.get-image-tags.outputs.wh-6u-image-tag }}
+            image-base-name: ${{ needs.get-image-tags.outputs.wh-6u-base-image-name }}
+            dockerfile: dockerfile/upstream_test_images/Dockerfile
+            test-command: tests/scripts/wh_6u/run_wh_6u_upstream_tests.sh
+            build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+            wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+          - image-tag: ${{ needs.get-image-tags.outputs.wh-6u-profiler-image-tag }}
+            image-base-name: ${{ needs.get-image-tags.outputs.wh-6u-profiler-base-image-name }}
+            dockerfile: dockerfile/upstream_test_images/Dockerfile
+            test-command: tests/scripts/wh_6u/run_wh_6u_upstream_profiler_tests.sh
+            build-artifact-name: ${{ needs.build-artifact-profiler.outputs.build-artifact-name }}
+            wheel-artifact-name: ${{ needs.build-artifact-profiler.outputs.wheel-artifact-name }}
+          - image-tag: ${{ needs.get-image-tags.outputs.bh-image-tag }}
+            image-base-name: ${{ needs.get-image-tags.outputs.bh-base-image-name }}
+            dockerfile: dockerfile/upstream_test_images/Dockerfile
+            test-command: tests/scripts/single_card/run_bh_upstream_tests.sh
+            build-artifact-name: ${{ needs.build-artifact-profiler.outputs.build-artifact-name }}
+            wheel-artifact-name: ${{ needs.build-artifact-profiler.outputs.wheel-artifact-name }}
+          - image-tag: ${{ needs.get-image-tags.outputs.bh-profiler-image-tag }}
+            image-base-name: ${{ needs.get-image-tags.outputs.bh-profiler-base-image-name }}
+            dockerfile: dockerfile/upstream_test_images/Dockerfile
+            test-command: tests/scripts/single_card/run_bh_upstream_profiler_tests.sh
+            build-artifact-name: ${{ needs.build-artifact-profiler.outputs.build-artifact-name }}
+            wheel-artifact-name: ${{ needs.build-artifact-profiler.outputs.wheel-artifact-name }}
+    runs-on: tt-beta-ubuntu-2204-large
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download artifacts from metal
+        id: download-artifacts
+        uses: actions/download-artifact@v4
+        with:
+          # 22.04 artifact... we'll probably need to key on that in the original action in metal
+          name: ${{ matrix.image-config.build-artifact-name }}
+      - run: mkdir -p _tt-metal
+      - run: tar -xvf ttm_any.tar -C _tt-metal/
+      - run: ls -hal _tt-metal
+      - name: 🧪 Download Python Wheel
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ matrix.image-config.wheel-artifact-name }}
+      - name: 💿 Verify Wheel exists
+        shell: bash
+        run: |
+          echo "📂 In directory: $(pwd)"
+          echo "📄 Files:"
+          ls -la .
+      # Do not set up docker buildx because of https://github.com/docker/setup-buildx-action/issues/57
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          file: ${{ matrix.image-config.dockerfile }}
+          platforms: linux/amd64
+          pull: true
+          push: true
+          # https://github.com/docker/build-push-action/issues/557#issuecomment-1030412477
+          build-args: |
+            TT_METAL_DEV_VERSION=latest
+            TT_METAL_COMMIT_SHA=${{ github.sha }}
+            TEST_COMMAND=${{ matrix.image-config.test-command }}
+          tags: ${{ matrix.image-config.image-tag }}
+          context: ${{ github.workspace }}
+      - name: Tag and push latest
+        if: ${{ github.ref == 'refs/heads/main' }}
+        run: |
+          IMAGE_NAME="${{ matrix.image-config.image-base-name }}"
+          LATEST_TAG="${IMAGE_NAME}:latest"
+          echo "Tagging ${{ matrix.image-config.image-tag }} as ${LATEST_TAG}"
+          docker pull ${{ matrix.image-config.image-tag }}
+          docker tag ${{ matrix.image-config.image-tag }} ${LATEST_TAG}
+          docker push ${LATEST_TAG}
+  test-wh-6u-image:
+    needs:
+      - get-image-tags
+      - build-images
+    runs-on:
+      - arch-wormhole_b0
+      - topology-6u
+      - in-service
+      - pipeline-functional
+    steps:
+      # TODO -likely need to put this into a script which can be parameterized on the build number
+      # and whether to only pull
+      - name: Pull image
+        timeout-minutes: 10
+        run: docker pull ${{ needs.get-image-tags.outputs.wh-6u-image-tag }}
+      - name: Run image
+        timeout-minutes: 15
+        env:
+          SOURCE_LLAMA_DIR: /mnt/MLPerf/tt_dnn-models/llama/Llama3.1-70B-Instruct
+          LLAMA_DIR: /model_weights/llama/Llama3.1-70B-Instruct
+        run: docker run -v /dev/hugepages-1G:/dev/hugepages-1G --device /dev/tenstorrent -v $SOURCE_LLAMA_DIR:$LLAMA_DIR:ro -e LLAMA_DIR ${{ needs.get-image-tags.outputs.wh-6u-image-tag }}
+      - name: Run profiler image
+        timeout-minutes: 10
+        run: docker run -v /dev/hugepages-1G:/dev/hugepages-1G --device /dev/tenstorrent ${{ needs.get-image-tags.outputs.wh-6u-profiler-image-tag }}
+  test-bh-image:
+    needs:
+      - get-image-tags
+      - build-images
+    runs-on:
+      - BH
+      - in-service
+      - cloud-virtual-machine
+    steps:
+      - name: Run image
+        timeout-minutes: 45
+        run: docker run -v /dev/hugepages-1G:/dev/hugepages-1G --device /dev/tenstorrent ${{ needs.get-image-tags.outputs.bh-image-tag }}
+      - name: Run profiler image
+        timeout-minutes: 10
+        run: docker run -v /dev/hugepages-1G:/dev/hugepages-1G --device /dev/tenstorrent ${{ needs.get-image-tags.outputs.bh-profiler-image-tag }}

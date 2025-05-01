@@ -52,6 +52,7 @@ class Attention(LightweightModule):
         self.n_local_heads = self.n_heads // self.num_devices_per_group
         self.n_local_kv_heads = self.n_kv_heads // self.num_devices_per_group
 
+        self.arch_name = configuration.arch_name
         # TODO: Fix this once all-gather supports < tile_size
         if self.TG:
             weight = torch.zeros(1, 32, 8, 32)
@@ -343,7 +344,7 @@ class Attention(LightweightModule):
             memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
             program_config=self.model_config["XQKV_DECODE_PROGCFG"],
             compute_kernel_config=self.li_qkv_decode_compute_kernel_cfg,
-            dtype=xself.ccl_dtype if self.TG else self.activation_dtype or ttnn.bfloat16,
+            dtype=self.ccl_dtype if self.TG else self.activation_dtype or ttnn.bfloat16,
         )
         # FIXME: File bug against dram-sharded matmuls with bias
         if self.wqkv_bias_decode:
@@ -396,7 +397,7 @@ class Attention(LightweightModule):
             xqkv_fused,
             num_heads=self.n_local_heads,
             num_kv_heads=self.n_local_kv_heads,
-            memory_config=ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG,
+            memory_config=self.model_config["CREATE_QKV_DECODE_SHARD"],
         )
 
         ttnn.deallocate(xqkv_fused)

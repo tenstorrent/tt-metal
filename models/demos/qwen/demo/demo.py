@@ -697,8 +697,6 @@ def test_qwen_demo(
     if is_ci_env and (instruct_weights == False or "long" in input_prompts or single_layer == True):
         pytest.skip("CI demo test only runs instruct weights to reduce CI pipeline load (both are supported)")
 
-    mesh_device.enable_async(True)
-
     return run_qwen_demo(
         user_input=input_prompts,
         batch_size=1,

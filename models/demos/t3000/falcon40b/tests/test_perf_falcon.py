@@ -50,7 +50,6 @@ def run_test_FalconCausalLM_end_to_end(
 
     # Clear global profiler state before starting measurements
     profiler.clear()
-    devices = mesh_device.get_devices()
     model_name = model_location_generator(model_version, model_subdir="Falcon")
 
     profiler.start("hugging_face_model_setup")
@@ -184,8 +183,7 @@ def run_test_FalconCausalLM_end_to_end(
         signpost("WARMUP_RUNS")
 
     for _ in range(warmup_iterations):
-        for device in devices:
-            ttnn.DumpDeviceProfiler(device)
+        ttnn.DumpDeviceProfiler(mesh_device)
         if llm_mode == "prefill":
             model_inputs = torch.split(model_input, 1)
             tt_inputs, tt_attention_mask = zip(
@@ -229,8 +227,7 @@ def run_test_FalconCausalLM_end_to_end(
     ttnn.synchronize_device(mesh_device)
 
     # Run for perf iteration - profiler enabled
-    for device in devices:
-        ttnn.DumpDeviceProfiler(device)
+    ttnn.DumpDeviceProfiler(mesh_device)
     profiler.enable()
     enable_persistent_kernel_cache()
     logger.info(f"Enable profiler and enable binary and compile cache")
@@ -277,7 +274,7 @@ def run_test_FalconCausalLM_end_to_end(
             use_cache=use_cache,
         )
         # TODO: Return token id to simulate real situation in decode
-        _ = ttnn.to_torch(tt_FalconCausalLM.perf_e2e_test_tile_tensor)
+        _ = ttnn.to_torch(ttnn.get_device_tensors(tt_FalconCausalLM.perf_e2e_test_tile_tensor)[0])
 
     ttnn.synchronize_device(mesh_device)
 
@@ -345,10 +342,6 @@ def run_test_FalconCausalLM_end_to_end(
     ("tiiuae/falcon-40b-instruct",),
     ids=["falcon_40b"],
 )
-@pytest.mark.parametrize(
-    "async_mode",
-    (True,),
-)
 def test_perf_bare_metal(
     num_devices,
     model_version,
@@ -366,7 +359,6 @@ def test_perf_bare_metal(
     t3k_mesh_device,
     use_program_cache,
     is_ci_env,
-    async_mode,
 ):
     if llm_mode == "prefill" and (model_config_str not in ["BFLOAT8_B-DRAM", "BFLOAT16-DRAM"] or num_devices != 8):
         pytest.skip("Prefill is only supported for DRAM memory config and 8 chips!")
@@ -375,7 +367,6 @@ def test_perf_bare_metal(
 
     input_shape = [batch, seq_len]
     model_config = get_model_config(model_config_str, llm_mode, input_shape, num_devices)
-    t3k_mesh_device.enable_async(async_mode)
     compute_grid_size = t3k_mesh_device.compute_with_storage_grid_size()
     if compute_grid_size.x < model_config["MAX_GRID_SIZE"][0] or compute_grid_size.y < model_config["MAX_GRID_SIZE"][1]:
         pytest.skip(f"Requires grid size of at least {model_config['MAX_GRID_SIZE']} to run")
@@ -448,8 +439,7 @@ def test_device_perf_bare_metal(
 
     input_shape = [batch, seq_len]
     model_config = get_model_config(model_config_str, llm_mode, input_shape, num_devices)
-    devices = t3k_mesh_device.get_devices()
-    compute_grid_size = devices[0].compute_with_storage_grid_size()
+    compute_grid_size = t3k_mesh_device.compute_with_storage_grid_size()
     if compute_grid_size.x < model_config["MAX_GRID_SIZE"][0] or compute_grid_size.y < model_config["MAX_GRID_SIZE"][1]:
         pytest.skip(f"Requires grid size of at least {model_config['MAX_GRID_SIZE']} to run")
 

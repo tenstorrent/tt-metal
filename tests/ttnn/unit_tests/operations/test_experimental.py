@@ -181,6 +181,13 @@ def test_ttnn_matmul_dram_sharded(device, m_size, k_size, n_size):
         memory_config=in1_mem_config,
     )
 
+    # output shard config
+    out_shard_shape = (32, 128)
+    out_shard_spec = ttnn.ShardSpec(shard_grid, out_shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
+    out_sharded_mem_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, out_shard_spec
+    )
+
     program_config = ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
         in0_block_w=32,
         per_core_M=1,
@@ -199,7 +206,7 @@ def test_ttnn_matmul_dram_sharded(device, m_size, k_size, n_size):
         input_tensor_in0,
         input_tensor_in1,
         program_config=program_config,
-        memory_config=sharded_mem_config,
+        memory_config=out_sharded_mem_config,
         dtype=ttnn.bfloat16,
         compute_kernel_config=compute_kernel_config,
     )
@@ -212,9 +219,7 @@ def test_ttnn_matmul_dram_sharded(device, m_size, k_size, n_size):
 
 @pytest.mark.parametrize("H, num_cores", [[64, 64]])
 @pytest.mark.parametrize("num_slices", [2])
-@pytest.mark.parametrize("enable_async", [True, False])
-def test_sharded_partial_op(device, H, num_cores, num_slices, enable_async):
-    device.enable_async(enable_async)
+def test_sharded_partial_op(device, H, num_cores, num_slices):
     compute_grid_size = device.compute_with_storage_grid_size()
     if num_cores > (compute_grid_size.x * compute_grid_size.y):
         pytest.skip(f"Need {num_cores} cores to run this test but core grid is {compute_grid_size}")

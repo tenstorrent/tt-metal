@@ -42,7 +42,8 @@ namespace ttnn::operations::binary::test {
 
 class TTNNFixtureWithTraceEnabledDevice : public ::testing::Test {
 protected:
-    tt::tt_metal::IDevice* device_ = nullptr;
+    tt::tt_metal::distributed::MeshDevice* device_ = nullptr;
+    std::shared_ptr<tt::tt_metal::distributed::MeshDevice> device_holder_;
     tt::ARCH arch_ = tt::ARCH::Invalid;
     size_t num_devices_ = 0;
 
@@ -50,7 +51,8 @@ protected:
         std::srand(0);
         arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
         num_devices_ = tt::tt_metal::GetNumAvailableDevices();
-        device_ = &ttnn::open_device(0, DEFAULT_L1_SMALL_SIZE, /* trace region size= */ 200000);
+        device_holder_ = ttnn::open_mesh_device(0, DEFAULT_L1_SMALL_SIZE, /* trace region size= */ 200000);
+        device_ = device_holder_.get();
     }
 
     void TearDown() override { ttnn::close_device(*device_); }
@@ -77,7 +79,7 @@ TEST_P(BinaryOpTraceRuntime, Add) {
     const auto& [input_spec_a, input_spec_b] = GetParam();
 
     {
-        tt::tt_metal::IDevice* device = device_;
+        auto device = device_;
         auto query = ttnn::graph::query_op_runtime(ttnn::add, device, input_spec_a, input_spec_b);
 
         EXPECT_EQ(query.status, ttnn::graph::ExecutionStatus::Success);
@@ -90,7 +92,7 @@ TEST_P(BinaryOpTraceRuntime, AddChain) {
 
     {
         auto add_chain = [](const auto& i0, const auto& i1) { return ttnn::add(i0, ttnn::add(i0, i1)); };
-        tt::tt_metal::IDevice* device = device_;
+        auto device = device_;
         auto query = ttnn::graph::query_op_runtime(add_chain, device, input_spec_a, input_spec_b);
 
         EXPECT_EQ(query.status, ttnn::graph::ExecutionStatus::Success);

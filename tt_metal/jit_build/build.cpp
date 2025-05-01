@@ -30,6 +30,7 @@
 #include "profiler_state.hpp"
 #include "tt_backend_api_types.hpp"
 #include "tt_metal/llrt/tt_elffile.hpp"
+#include "control_plane.hpp"
 #include <umd/device/types/arch.h>
 
 namespace fs = std::filesystem;
@@ -238,6 +239,10 @@ void JitBuildEnv::init(
 
     if (rtoptions.get_hw_cache_invalidation_enabled()) {
         this->defines_ += "-DENABLE_HW_CACHE_INVALIDATION ";
+    }
+
+    if (tt::tt_metal::MetalContext::instance().get_cluster().is_base_routing_fw_enabled()) {
+        this->defines_ += "-DROUTING_FW_ENABLED ";
     }
 
     // Includes

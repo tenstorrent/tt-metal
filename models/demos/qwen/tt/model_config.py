@@ -168,7 +168,7 @@ class TtModelArgs:
         )  # for prefill
         self.rot_emb = freqs_to_rotation_matrix(self.cos, self.sin)  # for decode
 
-        device = mesh_device.get_devices()[0] if mesh_device is not None else None
+        device = mesh_device if mesh_device is not None else None
         if device is not None:  # Avoid issue with test_qwen_torch.py not having a device
             self.n_local_heads = self.n_heads // self.num_devices
 

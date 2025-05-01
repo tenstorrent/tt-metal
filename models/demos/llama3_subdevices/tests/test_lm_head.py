@@ -46,8 +46,6 @@ from models.demos.llama3_subdevices.tt.llama_ccl import TT_CCL
 def test_llama_lm_head_inference(seq_len, batch_size, mesh_device, use_program_cache, reset_seeds):
     dtype = ttnn.bfloat8_b
 
-    mesh_device.enable_async(True)
-
     model_args = TtModelArgs(mesh_device, max_batch_size=batch_size, max_seq_len=seq_len, dummy_weights=True)
     model_args.n_layers = 1
     state_dict = model_args.load_state_dict()
@@ -99,7 +97,9 @@ def test_llama_lm_head_inference(seq_len, batch_size, mesh_device, use_program_c
     )
 
     logger.info("Run Llama_LM_Head")
-    tt_outputs = tt_model(tt_input)
+    # Pre-allocated output of AllReduce in LM Head to avoid memory cloberring
+    tt_ccl.tt_lm_head_buffer_l1 = ttnn.to_memory_config(tt_ccl.tt_lm_head_buffer, tt_ccl.lm_head_buffer_mem_cfg)
+    tt_outputs = tt_model(tt_input, prefetcher_setup.worker_sub_device_id, mode="decode")
     tt_outputs = [
         ttnn.to_torch(
             tt_output,

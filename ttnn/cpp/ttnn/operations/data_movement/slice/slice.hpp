@@ -97,7 +97,6 @@ struct SliceOperation {
 }  // namespace data_movement
 }  // namespace operations
 
-constexpr auto slice =
-    ttnn::register_operation_with_auto_launch_op<"ttnn::slice", ttnn::operations::data_movement::SliceOperation>();
+constexpr auto slice = ttnn::register_operation<"ttnn::slice", ttnn::operations::data_movement::SliceOperation>();
 
 }  // namespace ttnn

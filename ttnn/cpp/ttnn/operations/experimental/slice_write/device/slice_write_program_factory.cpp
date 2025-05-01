@@ -277,7 +277,6 @@ SliceWriteRuntimeArgs get_slice_write_runtime_args_rm_sharded_input(
             core_w_index = rm_orientation ? core.x : core.y;
             core_h_index = rm_orientation ? core.y : core.x;
         }
-        tt::log_debug(" Core : {}", core);
         const uint32_t num_sticks_read = core_h_index * num_sticks_per_core;
         const uint32_t width_offset = core_w_index * input_row_size_bytes;
 
@@ -291,8 +290,6 @@ SliceWriteRuntimeArgs get_slice_write_runtime_args_rm_sharded_input(
         }
         std::vector<uint32_t> writer_kernel_args = common_writer_kernel_args;
         writer_kernel_args[0] += width_offset;
-        tt::log_debug("Output address: {}", writer_kernel_args[0]);
-        tt::log_debug("Output Start ID: {}\n", start_id);
 
         uint32_t addr_offset = 5;  // output buffer addr, output_row_size_bytes, input_row_size_bytes, num_dims
         writer_kernel_args[addr_offset++] = start_id;

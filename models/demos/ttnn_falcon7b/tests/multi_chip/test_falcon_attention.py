@@ -65,10 +65,6 @@ def torch_model():
     ],
     indirect=True,
 )
-@pytest.mark.parametrize(
-    "enable_async",
-    [True, False],
-)
 def test_falcon_attention(
     mesh_device,
     model_name,
@@ -79,10 +75,7 @@ def test_falcon_attention(
     expected_pcc,
     model_config_str,
     torch_model,
-    enable_async,
 ):
-    mesh_device.enable_async(enable_async)
-
     torch.manual_seed(0)
     batch = device_batch_size * mesh_device.get_num_devices()
     if llm_mode == "decode":
@@ -153,7 +146,7 @@ def test_falcon_attention(
         configuration.max_position_embeddings,
         model_config,
         parameters=parameters,
-        core_grid=mesh_device.get_devices()[0].core_grid,
+        core_grid=mesh_device.core_grid,
     )
 
     tt_out, tt_layer_present = tt_FalconAttention_model(
@@ -188,5 +181,3 @@ def test_falcon_attention(
     assert_with_pcc(
         pytorch_layer_present[1].squeeze(1), tt_layer_present[1].to(pytorch_layer_present[1].dtype), expected_pcc
     )
-
-    mesh_device.enable_async(False)

@@ -15,11 +15,11 @@ namespace tt_metal {
 
 // Hal Constructor determines the platform architecture by using UMD
 // Once it knows the architecture it can self initialize architecture specific memory maps
-Hal::Hal(tt::ARCH arch) : arch_(arch) {
+Hal::Hal(tt::ARCH arch, bool is_base_routing_fw_enabled) : arch_(arch) {
     switch (this->arch_) {
         case tt::ARCH::GRAYSKULL: /*TT_THROW("Unsupported arch for HAL")*/; break;
 
-        case tt::ARCH::WORMHOLE_B0: initialize_wh(); break;
+        case tt::ARCH::WORMHOLE_B0: initialize_wh(is_base_routing_fw_enabled); break;
 
         case tt::ARCH::BLACKHOLE: initialize_bh(); break;
 

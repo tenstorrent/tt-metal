@@ -54,9 +54,7 @@ def run_mixtral_demo(user_input, batch_size, mesh_device, instruct_mode, is_ci_e
         input_prompts = load_inputs(user_input, batch_size)
 
     # Load model args, weights, and tokenizer
-    model_args = TtModelArgs(
-        mesh_device.get_device(0), instruct=instruct_mode, max_seq_len=max_seq_len, max_batch_size=batch_size
-    )
+    model_args = TtModelArgs(mesh_device, instruct=instruct_mode, max_seq_len=max_seq_len, max_batch_size=batch_size)
     tokenizer = Tokenizer(model_args.tokenizer_path)
 
     model_args.n_layers = 32  # Full model
@@ -188,7 +186,7 @@ def run_mixtral_demo(user_input, batch_size, mesh_device, instruct_mode, is_ci_e
         else:  # Embedding/argmax on device
             # TODO Debug (only device 0 is doing argmax, otherwise it throws an error)
             # Alternatively, send the output back to device: ttnn.Tensor.to()
-            # ttnn.SetDefaultDevice(mesh_device.get_device(0))
+            # ttnn.SetDefaultDevice(mesh_device)
 
             # TODO Update argmax to ttnn when OP becomes available
             tt_out_B11B = ttnn.argmax(tt_out_11BH, dim=-1)
@@ -270,8 +268,6 @@ def run_mixtral_demo(user_input, batch_size, mesh_device, instruct_mode, is_ci_e
 def test_mixtral8x7b_demo(t3k_mesh_device, use_program_cache, input_prompts, instruct_weights, is_ci_env):
     if is_ci_env and instruct_weights == True:
         pytest.skip("CI demo test only runs general weights to reduce CI pipeline load (both are supported)")
-
-    t3k_mesh_device.enable_async(True)
 
     return run_mixtral_demo(
         user_input=input_prompts,

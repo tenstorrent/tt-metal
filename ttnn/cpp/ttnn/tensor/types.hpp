@@ -20,7 +20,6 @@
 #include <tt_stl/reflection.hpp>
 #include <tt_stl/span.hpp>
 #include "ttnn/distributed/distributed_tensor_config.hpp"
-#include "ttnn/tensor/host_buffer/types.hpp"
 #include "cpp/ttnn/tensor/enum_types.hpp"
 
 #include "ttnn/tensor/shape/shape.hpp"
@@ -68,26 +67,26 @@ bool is_floating_point(DataType dtype);
 
 bool is_block_float(DataType dtype);
 
+// Enums are explicitly enumerated due to serialization dependency
+// TODO: #16067 - This shouldn't be needed. Serialize this enum to flatbuffer.
 enum class StorageType {
-    OWNED,
-    DEVICE,
-    BORROWED,           // for storing torch/numpy/etc tensors
-    MULTI_DEVICE,       // on-device storage for multi-device context
-    MULTI_DEVICE_HOST,  // host storage for multi-device context
+    HOST = 0,
+    DEVICE = 1,
+    MULTI_DEVICE_HOST = 4,  // host storage for multi-device context
 };
 
 tt::DataFormat datatype_to_dataformat_converter(DataType datatype);
 
 static constexpr std::size_t MAX_NUM_DIMENSIONS = 8;
 
-typedef std::array<uint32_t, 1> Array1D;
-typedef std::array<uint32_t, 2> Array2D;
-typedef std::array<uint32_t, 3> Array3D;
-typedef std::array<uint32_t, 4> Array4D;
-typedef std::array<uint32_t, 5> Array5D;
-typedef std::array<uint32_t, 6> Array6D;
-typedef std::array<uint32_t, 7> Array7D;
-typedef std::array<uint32_t, 8> Array8D;
+using Array1D = std::array<uint32_t, 1>;
+using Array2D = std::array<uint32_t, 2>;
+using Array3D = std::array<uint32_t, 3>;
+using Array4D = std::array<uint32_t, 4>;
+using Array5D = std::array<uint32_t, 5>;
+using Array6D = std::array<uint32_t, 6>;
+using Array7D = std::array<uint32_t, 7>;
+using Array8D = std::array<uint32_t, 8>;
 
 struct MemoryConfig {
     TensorMemoryLayout memory_layout = TensorMemoryLayout::INTERLEAVED;  // Interleave the data across multiple banks
