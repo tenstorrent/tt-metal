@@ -20,6 +20,7 @@
 #include "ttnn/distributed/distributed_tensor_config.hpp"
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/tensor/storage.hpp"
+#include "ttnn/tensor/tensor_attributes.hpp"
 #include "ttnn/tensor/tensor_spec.hpp"
 #include "ttnn/tensor/layout/tensor_layout.hpp"
 #include <tt-metalium/buffer.hpp>
@@ -35,19 +36,12 @@ namespace tt_metal {
 namespace distributed {
 class MeshDevice;
 class MeshCommandQueue;
-}
+}  // namespace distributed
 
 class Tensor {
 public:
-    struct TensorAttributes : public std::enable_shared_from_this<TensorAttributes> {
-        Storage storage;
-        TensorSpec tensor_spec;
-        TensorAttributes(Storage storage, TensorSpec tensor_spec);
-        TensorAttributes();
-        ~TensorAttributes() = default;
-    };
-
     std::optional<std::int64_t> tensor_id = std::nullopt;
+
     // Shared pointer to all attributes associated with this tensor
     // Can be safely passed between threads when the tensor is copied
     std::shared_ptr<TensorAttributes> tensor_attributes = nullptr;
@@ -79,9 +73,11 @@ public:
     // Constructors to initialize unpopulated tensor with workers and storage specified. Use this when creating tensor
     // handles in async mode.
     explicit Tensor(
-        uint32_t num_buffers, std::optional<DistributedTensorConfig> distributed_tensor_config = std::nullopt);
-    explicit Tensor(const std::vector<IDevice*>& workers);
-    explicit Tensor(distributed::MeshDevice* mesh_device);
+        uint32_t num_buffers,
+        TensorSpec spec,
+        std::optional<DistributedTensorConfig> distributed_tensor_config = std::nullopt);
+    explicit Tensor(const std::vector<IDevice*>& workers, TensorSpec spec);
+    explicit Tensor(distributed::MeshDevice* mesh_device, TensorSpec spec);
 
     Tensor(const Tensor& other);
 
@@ -101,8 +97,6 @@ public:
     }
 
     ~Tensor();
-
-    void populate_buffers_and_metadata(const Tensor& other);
 
     void deallocate(bool force = false);
 
@@ -211,6 +205,7 @@ public:
     //                                      Getters
     // ======================================================================================
     const Storage& get_storage() const;
+    Storage& get_storage();
     DataType get_dtype() const;
     Layout get_layout() const;
     const ttnn::Shape& get_logical_shape() const;
@@ -220,25 +215,17 @@ public:
     // ======================================================================================
     // Non-Blocking Getters. Query attributes directly, without waiting for worker completion
     // ======================================================================================
-    const Storage& storage() const { return this->tensor_attributes->storage; };
-    const ttnn::Shape& logical_shape() const { return this->tensor_attributes->tensor_spec.logical_shape(); };
-    const ttnn::Shape& padded_shape() const { return this->tensor_attributes->tensor_spec.padded_shape(); };
-    DataType dtype() const { return this->tensor_attributes->tensor_spec.tensor_layout().get_data_type(); };
-    Layout layout() const { return this->tensor_attributes->tensor_spec.tensor_layout().get_layout(); };
-    const TensorSpec& tensor_spec() const { return this->tensor_attributes->tensor_spec; }
+    const Storage& storage() const { return this->tensor_attributes->get_storage(); };
+    const ttnn::Shape& logical_shape() const { return this->tensor_attributes->get_tensor_spec().logical_shape(); };
+    const ttnn::Shape& padded_shape() const { return this->tensor_attributes->get_tensor_spec().padded_shape(); };
+    DataType dtype() const { return this->tensor_attributes->get_tensor_spec().tensor_layout().get_data_type(); };
+    Layout layout() const { return this->tensor_attributes->get_tensor_spec().tensor_layout().get_layout(); };
+    const TensorSpec& tensor_spec() const { return this->tensor_attributes->get_tensor_spec(); }
 
-    // ======================================================================================
-    //                                      Setters
-    // ======================================================================================
-    void set_storage(const Storage& storage) { this->tensor_attributes->storage = storage; }
-    // We intend to remove this API once we migrate all ops to compute_output_specs, and provide TensorSpec at creation
-    void set_tensor_spec(const TensorSpec& tensor_spec) { this->tensor_attributes->tensor_spec = tensor_spec; }
     // ======================================================================================
     //                                      Extra Helper Functions
     // ======================================================================================
     StorageType storage_type() const;
-    bool is_host_tensor() const;
-    bool is_device_tensor() const;
     ttnn::Shape strides() const;
     uint32_t volume() const;
 
@@ -314,8 +301,9 @@ public:
     uint32_t element_size() const;
 
     static constexpr auto attribute_names = std::forward_as_tuple("storage", "tensor_spec");
-    const auto attribute_values() const {
-        return std::forward_as_tuple(this->tensor_attributes->storage, this->tensor_attributes->tensor_spec);
+    auto attribute_values() const {
+        return std::forward_as_tuple(
+            this->tensor_attributes->get_storage(), this->tensor_attributes->get_tensor_spec());
     }
 
     std::vector<uint32_t> host_page_ordering();
@@ -335,10 +323,6 @@ Tensor create_device_tensor(
     IDevice* device,
     const MemoryConfig& memory_config = {.memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED},
     const std::optional<Tile>& tile = std::nullopt);
-
-// template<typename Buffer>
-// void *get_host_buffer(const Tensor &tensor);
-void* get_raw_host_data_ptr(const Tensor& tensor);
 
 // The set of memcpy functions below are used to copy data between host buffers/tensors and single-device tensors
 void memcpy(
@@ -385,8 +369,6 @@ Tensor allocate_tensor_on_mesh(const TensorSpec& tensor_spec, distributed::MeshD
 void write_tensor(const Tensor& host_tensor, Tensor device_tensor, ttnn::QueueId cq_id = ttnn::DefaultQueueId);
 
 Tensor set_tensor_id(const Tensor& tensor);
-
-bool validate_worker_modes(const std::vector<IDevice*>& workers);
 
 }  // namespace tt_metal
 

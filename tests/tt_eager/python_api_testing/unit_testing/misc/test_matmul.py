@@ -21,7 +21,7 @@ from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
 @pytest.mark.parametrize("N", [1024])
 @pytest.mark.parametrize("activations_dtype", [ttnn.bfloat16, ttnn.bfloat8_b])
 @pytest.mark.parametrize("weights_dtype", [ttnn.bfloat16, ttnn.bfloat8_b])
-@pytest.mark.parametrize("enable_async, num_loops", ((True, 2), (False, 1)))
+@pytest.mark.parametrize("num_loops", [2])
 def test_matmul_1d_in0_batched(
     device,
     batch,
@@ -33,7 +33,6 @@ def test_matmul_1d_in0_batched(
     weights_dtype,
     function_level_defaults,
     num_loops,
-    enable_async,
 ):
     grid_size = (12, 8)
     compute_grid_size = device.compute_with_storage_grid_size()
@@ -55,7 +54,6 @@ def test_matmul_1d_in0_batched(
         memory_layout=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
         buffer_type=ttnn.BufferType.L1,
     )
-    device.enable_async(enable_async)
     for _ in range(num_loops):
         in0 = torch.randn(in0_shape).bfloat16().float()
         in1 = torch.randn(in1_shape).bfloat16().float()
@@ -110,7 +108,6 @@ def test_matmul_1d_in0_batched(
         passing, output = comp_pcc(pt_out, tt_out)
         logger.info(output)
         assert passing
-    device.enable_async(False)
 
 
 @pytest.mark.skipif(is_grayskull(), reason="GS does not support fp32")
@@ -123,7 +120,7 @@ def test_matmul_1d_in0_batched(
 @pytest.mark.parametrize("N", [1024])
 @pytest.mark.parametrize("activations_dtype", [ttnn.bfloat8_b])
 @pytest.mark.parametrize("weights_dtype", [ttnn.bfloat8_b])
-@pytest.mark.parametrize("enable_async, num_loops", ((True, 2), (False, 1)))
+@pytest.mark.parametrize("num_loops", [2])
 def test_linear_fp32_acc_l1(
     device,
     packer_l1_acc,
@@ -137,7 +134,6 @@ def test_linear_fp32_acc_l1(
     weights_dtype,
     function_level_defaults,
     num_loops,
-    enable_async,
 ):
     grid_size = (8, 4)
     compute_grid_size = device.compute_with_storage_grid_size()
@@ -159,7 +155,6 @@ def test_linear_fp32_acc_l1(
         memory_layout=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
         buffer_type=ttnn.BufferType.L1,
     )
-    device.enable_async(enable_async)
     for _ in range(num_loops):
         in0 = torch.randn(in0_shape).bfloat16().float()
         in1 = torch.randn(in1_shape).bfloat16().float()
@@ -219,7 +214,6 @@ def test_linear_fp32_acc_l1(
         passing, output = comp_pcc(pt_out, tt_out)
         logger.info(output)
         assert passing
-    device.enable_async(False)
 
 
 @pytest.mark.skipif(is_grayskull(), reason="GS does not support fp32")
@@ -230,7 +224,7 @@ def test_linear_fp32_acc_l1(
 @pytest.mark.parametrize("out_sharded", [True, False], ids=["out_sharded", "out_unsharded"])
 @pytest.mark.parametrize("B, H, M, K, N, out_subblock_h, out_subblock_w", [[2, 16, 384, 64, 128, 1, 4]])
 @pytest.mark.parametrize("activations_dtype", [ttnn.bfloat8_b])
-@pytest.mark.parametrize("enable_async, num_loops", ((True, 2), (False, 1)))
+@pytest.mark.parametrize("num_loops", [2])
 def test_matmul_no_mcast_fp32_acc_l1(
     device,
     packer_l1_acc,
@@ -248,7 +242,6 @@ def test_matmul_no_mcast_fp32_acc_l1(
     activations_dtype,
     function_level_defaults,
     num_loops,
-    enable_async,
 ):
     grid_size = (8, 4)
     compute_grid_size = device.compute_with_storage_grid_size()
@@ -266,7 +259,6 @@ def test_matmul_no_mcast_fp32_acc_l1(
         memory_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
         buffer_type=ttnn.BufferType.L1,
     )
-    device.enable_async(enable_async)
     for _ in range(num_loops):
         in0 = torch.randn(in0_shape).bfloat16().float()
         in1 = torch.randn(in1_shape).bfloat16().float()
@@ -327,7 +319,6 @@ def test_matmul_no_mcast_fp32_acc_l1(
         passing, output = comp_pcc(pt_out, tt_out)
         logger.info(output)
         assert passing
-    device.enable_async(False)
 
 
 @pytest.mark.skipif(is_grayskull(), reason="GS does not support fp32")
@@ -346,7 +337,7 @@ def test_matmul_no_mcast_fp32_acc_l1(
 @pytest.mark.parametrize("N", [1024])
 @pytest.mark.parametrize("activations_dtype", [ttnn.float32])
 @pytest.mark.parametrize("weights_dtype", [ttnn.float32])
-@pytest.mark.parametrize("enable_async, num_loops", ((True, 2), (False, 1)))
+@pytest.mark.parametrize("num_loops", [2])
 def test_matmul_1d_fp32_input_output(
     device,
     packer_l1_acc,
@@ -360,7 +351,6 @@ def test_matmul_1d_fp32_input_output(
     weights_dtype,
     function_level_defaults,
     num_loops,
-    enable_async,
 ):
     grid_size = (8, 4)
     compute_grid_size = device.compute_with_storage_grid_size()
@@ -382,7 +372,6 @@ def test_matmul_1d_fp32_input_output(
         memory_layout=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
         buffer_type=ttnn.BufferType.L1,
     )
-    device.enable_async(enable_async)
     for _ in range(num_loops):
         in0 = torch.rand(in0_shape).float()
         in1 = torch.rand(in1_shape).float()
@@ -442,7 +431,6 @@ def test_matmul_1d_fp32_input_output(
         passing, output = comp_pcc(pt_out, tt_out)
         logger.info(output)
         assert passing
-    device.enable_async(False)
 
 
 @pytest.mark.skipif(is_grayskull(), reason="GS does not support fp32")
@@ -459,7 +447,7 @@ def test_matmul_1d_fp32_input_output(
 @pytest.mark.parametrize("out_sharded", [True, False], ids=["out_sharded", "out_unsharded"])
 @pytest.mark.parametrize("B, H, M, K, N, out_subblock_h, out_subblock_w", [[2, 16, 384, 64, 128, 1, 4]])
 @pytest.mark.parametrize("activations_dtype", [ttnn.float32])
-@pytest.mark.parametrize("enable_async, num_loops", ((True, 2), (False, 1)))
+@pytest.mark.parametrize("num_loops", [2])
 def test_matmul_no_mcast_fp32_input_output(
     device,
     packer_l1_acc,
@@ -477,7 +465,6 @@ def test_matmul_no_mcast_fp32_input_output(
     activations_dtype,
     function_level_defaults,
     num_loops,
-    enable_async,
 ):
     grid_size = (8, 4)
     compute_grid_size = device.compute_with_storage_grid_size()
@@ -495,7 +482,6 @@ def test_matmul_no_mcast_fp32_input_output(
         memory_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
         buffer_type=ttnn.BufferType.L1,
     )
-    device.enable_async(enable_async)
     for _ in range(num_loops):
         in0 = torch.rand(in0_shape).float() * 1000.0
         in1 = torch.rand(in1_shape).float() * 1000.0
@@ -556,7 +542,6 @@ def test_matmul_no_mcast_fp32_input_output(
         passing, output = comp_pcc(pt_out, tt_out)
         logger.info(output)
         assert passing
-    device.enable_async(False)
 
 
 @pytest.mark.parametrize("packer_l1_acc", [True, False], ids=["pack_l1", "no_pack_l1"])
@@ -574,7 +559,7 @@ def test_matmul_no_mcast_fp32_input_output(
 @pytest.mark.parametrize("B, H, M, K, N, out_subblock_h, out_subblock_w", [[2, 16, 384, 128, 64, 2, 2]])
 @pytest.mark.parametrize("activations_dtype", [ttnn.bfloat8_b])
 @pytest.mark.parametrize("output_dtype", [ttnn.bfloat16, ttnn.float32])
-@pytest.mark.parametrize("enable_async, num_loops", ((True, 2), (False, 1)))
+@pytest.mark.parametrize("num_loops", [2])
 def test_matmul_no_untilize_output_param(
     device,
     packer_l1_acc,
@@ -593,7 +578,6 @@ def test_matmul_no_untilize_output_param(
     output_dtype,
     function_level_defaults,
     num_loops,
-    enable_async,
 ):
     grid_size = (8, 4)
     compute_grid_size = device.compute_with_storage_grid_size()
@@ -613,7 +597,6 @@ def test_matmul_no_untilize_output_param(
         memory_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
         buffer_type=ttnn.BufferType.L1,
     )
-    device.enable_async(enable_async)
     for _ in range(num_loops):
         in0 = torch.rand(in0_shape).float() * 1000.0
         in1 = torch.rand(in1_shape).float() * 1000.0
@@ -680,4 +663,3 @@ def test_matmul_no_untilize_output_param(
         passing, output = comp_pcc(pt_out, tt_out)
         logger.info(output)
         assert passing
-    device.enable_async(False)

@@ -27,6 +27,7 @@
 #include <tt-metalium/data_types.hpp>
 #include "debug_tools_fixture.hpp"
 #include <tt-metalium/device.hpp>
+#include <tt-metalium/hal.hpp>
 #include <tt-metalium/hal_types.hpp>
 #include <tt-metalium/kernel_types.hpp>
 #include "llrt.hpp"
@@ -46,14 +47,14 @@
 using namespace tt;
 using namespace tt::tt_metal;
 
-typedef enum sanitization_features {
+enum watcher_features_t {
     SanitizeAddress,
     SanitizeAlignmentL1Write,
     SanitizeAlignmentL1Read,
     SanitizeZeroL1Write,
     SanitizeMailboxWrite,
     SanitizeInlineWriteDram,
-} watcher_features_t;
+};
 
 tt::tt_metal::HalMemType get_buffer_mem_type_for_test(watcher_features_t feature) {
     return feature == watcher_features_t::SanitizeInlineWriteDram ? tt_metal::HalMemType::DRAM
@@ -84,7 +85,8 @@ CoreCoord get_core_coord_for_test(const std::shared_ptr<tt::tt_metal::Buffer>& b
     if (buffer->is_l1()) {
         return buffer->device()->worker_core_from_logical_core(buffer->allocator()->get_logical_core_from_bank_id(0));
     } else {
-        return buffer->device()->logical_core_from_dram_channel(0);
+        auto logical_dram_core = buffer->device()->logical_core_from_dram_channel(0);
+        return buffer->device()->virtual_core_from_logical_core(logical_dram_core, CoreType::DRAM);
     }
 }
 

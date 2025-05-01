@@ -12,7 +12,7 @@
 #include "cpp/pybind11/json_class.hpp"
 #include "export_enum.hpp"
 
-#include "ttnn/tensor/host_buffer/types.hpp"
+#include "ttnn/tensor/host_buffer/host_buffer.hpp"
 #include "ttnn/tensor/serialization.hpp"
 #include "ttnn/tensor/tensor_impl.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
@@ -28,44 +28,6 @@ namespace ttnn::tensor {
 using tt::tt_metal::CoreCoord;
 using tt::tt_metal::CoreRange;
 using tt::tt_metal::CoreRangeSet;
-
-namespace detail {
-
-template <class T>
-struct DataTypeToFormatType {
-    using type = T;
-};
-
-template <>
-struct DataTypeToFormatType<::bfloat16> {
-    using type = uint16_t;
-};
-
-template <class CppType>
-void implement_buffer_protocol(py::module& m_tensor, std::string_view name) {
-    auto py_buffer_t = static_cast<py::class_<CppType>>(m_tensor.attr(name.data()));
-    using DataType = typename CppType::value_type;
-
-    py_buffer_t.def("__getitem__", [](const CppType& self, std::size_t index) { return self[index]; })
-        .def("__len__", [](const CppType& self) { return self.size(); })
-        .def(
-            "__iter__",
-            [](const CppType& self) { return py::make_iterator(self.begin(), self.end()); },
-            py::keep_alive<0, 1>())
-        .def_buffer([](CppType& self) -> py::buffer_info {
-            using FormatType = typename DataTypeToFormatType<DataType>::type;
-            return py::buffer_info(
-                self.begin(),                                /* Pointer to buffer */
-                sizeof(DataType),                            /* Size of one scalar */
-                py::format_descriptor<FormatType>::format(), /* Python struct-style format descriptor */
-                1,                                           /* Number of dimensions */
-                {self.size()},                               /* Buffer dimensions */
-                {sizeof(DataType)}                           /* Strides (in bytes) for each index */
-            );
-        });
-};
-
-}  // namespace detail
 
 void tensor_mem_config_module_types(py::module& m_tensor) {
     export_enum<Layout>(m_tensor);
@@ -109,19 +71,25 @@ void tensor_mem_config_module_types(py::module& m_tensor) {
     tt_serializable_class<tt::tt_metal::CoreRangeSet>(m_tensor, "CoreRangeSet", R"doc(
         Class defining a set of CoreRanges required for sharding)doc");
 
-    py::class_<tt::tt_metal::owned_buffer::Buffer<uint8_t>>(m_tensor, "owned_buffer_for_uint8_t", py::buffer_protocol());
-    py::class_<tt::tt_metal::owned_buffer::Buffer<uint16_t>>(m_tensor, "owned_buffer_for_uint16_t", py::buffer_protocol());
-    py::class_<tt::tt_metal::owned_buffer::Buffer<int32_t>>(m_tensor, "owned_buffer_for_int32_t", py::buffer_protocol());
-    py::class_<tt::tt_metal::owned_buffer::Buffer<uint32_t>>(m_tensor, "owned_buffer_for_uint32_t", py::buffer_protocol());
-    py::class_<tt::tt_metal::owned_buffer::Buffer<float>>(m_tensor, "owned_buffer_for_float32_t", py::buffer_protocol());
-    py::class_<tt::tt_metal::owned_buffer::Buffer<::bfloat16>>(m_tensor, "owned_buffer_for_bfloat16_t", py::buffer_protocol());
-    py::class_<tt::tt_metal::borrowed_buffer::Buffer<std::uint8_t>>(m_tensor, "borrowed_buffer_for_uint8_t", py::buffer_protocol());
-    py::class_<tt::tt_metal::borrowed_buffer::Buffer<std::uint16_t>>(m_tensor, "borrowed_buffer_for_uint16_t", py::buffer_protocol());
-    py::class_<tt::tt_metal::borrowed_buffer::Buffer<std::int32_t>>(m_tensor, "borrowed_buffer_for_int32_t", py::buffer_protocol());
-    py::class_<tt::tt_metal::borrowed_buffer::Buffer<std::uint32_t>>(m_tensor, "borrowed_buffer_for_uint32_t", py::buffer_protocol());
-    py::class_<tt::tt_metal::borrowed_buffer::Buffer<float>>(m_tensor, "borrowed_buffer_for_float32_t", py::buffer_protocol());
-    py::class_<tt::tt_metal::borrowed_buffer::Buffer<::bfloat16>>(m_tensor, "borrowed_buffer_for_bfloat16_t", py::buffer_protocol());
-
+    py::class_<tt::tt_metal::HostBuffer>(m_tensor, "HostBuffer", py::buffer_protocol())
+        .def("__getitem__", [](const HostBuffer& self, std::size_t index) { return self.view_bytes()[index]; })
+        .def("__len__", [](const HostBuffer& self) { return self.view_bytes().size(); })
+        .def(
+            "__iter__",
+            [](const HostBuffer& self) {
+                return py::make_iterator(self.view_bytes().begin(), self.view_bytes().end());
+            },
+            py::keep_alive<0, 1>())
+        .def_buffer([](HostBuffer& self) -> py::buffer_info {
+            return py::buffer_info(
+                self.view_bytes().data(),                       /* Pointer to buffer */
+                sizeof(std::byte),                              /* Size of one scalar */
+                py::format_descriptor<unsigned char>::format(), /* Python struct-style format descriptor */
+                1,                                              /* Number of dimensions */
+                {self.view_bytes().size()},                     /* Buffer dimensions */
+                {sizeof(std::byte)}                             /* Strides (in bytes) for each index */
+            );
+        });
 }
 
 void tensor_mem_config_module(py::module& m_tensor) {
@@ -260,20 +228,6 @@ void tensor_mem_config_module(py::module& m_tensor) {
         .def("num_cores", &ShardSpec::num_cores, "Number of cores")
         .def(py::self == py::self)
         .def(py::self != py::self);
-
-    detail::implement_buffer_protocol<tt::tt_metal::owned_buffer::Buffer<uint8_t>>(m_tensor, "owned_buffer_for_uint8_t");
-    detail::implement_buffer_protocol<tt::tt_metal::owned_buffer::Buffer<uint16_t>>(m_tensor, "owned_buffer_for_uint16_t");
-    detail::implement_buffer_protocol<tt::tt_metal::owned_buffer::Buffer<int32_t>>(m_tensor, "owned_buffer_for_int32_t");
-    detail::implement_buffer_protocol<tt::tt_metal::owned_buffer::Buffer<uint32_t>>(m_tensor, "owned_buffer_for_uint32_t");
-    detail::implement_buffer_protocol<tt::tt_metal::owned_buffer::Buffer<float>>(m_tensor, "owned_buffer_for_float32_t");
-    detail::implement_buffer_protocol<tt::tt_metal::owned_buffer::Buffer<::bfloat16>>(m_tensor, "owned_buffer_for_bfloat16_t");
-    detail::implement_buffer_protocol<tt::tt_metal::borrowed_buffer::Buffer<std::uint8_t>>(m_tensor, "borrowed_buffer_for_uint8_t");
-    detail::implement_buffer_protocol<tt::tt_metal::borrowed_buffer::Buffer<std::uint16_t>>(m_tensor, "borrowed_buffer_for_uint16_t");
-    detail::implement_buffer_protocol<tt::tt_metal::borrowed_buffer::Buffer<std::int32_t>>(m_tensor, "borrowed_buffer_for_int32_t");
-    detail::implement_buffer_protocol<tt::tt_metal::borrowed_buffer::Buffer<std::uint32_t>>(m_tensor, "borrowed_buffer_for_uint32_t");
-    detail::implement_buffer_protocol<tt::tt_metal::borrowed_buffer::Buffer<float>>(m_tensor, "borrowed_buffer_for_float32_t");
-    detail::implement_buffer_protocol<tt::tt_metal::borrowed_buffer::Buffer<::bfloat16>>(m_tensor, "borrowed_buffer_for_bfloat16_t");
-
 
     m_tensor.def(
         "dump_tensor",

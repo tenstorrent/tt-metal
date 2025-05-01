@@ -11,7 +11,7 @@ import ttnn
 from loguru import logger
 from models.utility_functions import is_grayskull, is_blackhole, torch_random
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc, comp_equal
-from models.utility_functions import skip_for_grayskull, skip_for_blackhole, run_for_blackhole
+from models.utility_functions import skip_for_grayskull, skip_for_blackhole, run_for_blackhole, skip_for_wormhole_b0
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
@@ -56,7 +56,7 @@ def transpose(
         assert device.num_program_cache_entries() == expected_program_cache_size
 
 
-@run_for_blackhole()
+@pytest.mark.skip("Failing on harvested BH, see #21147 (never ran on WH)")
 def test_fold_transpose(device, use_program_cache):
     N = 32
     C = 4
@@ -1169,8 +1169,8 @@ def test_transpose_16411(device):
 @pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT])
 def test_transpose_high_rank(*, device: ttnn.Device, rank: int, indices, layout):
     torch.manual_seed(2005)
-    ttnn.disable_and_clear_program_cache(device)
-    ttnn.enable_program_cache(device)
+    device.disable_and_clear_program_cache()
+    device.enable_program_cache()
 
     shape = [2] * rank
 

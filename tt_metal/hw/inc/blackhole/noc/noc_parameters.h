@@ -5,10 +5,9 @@
 #ifndef _NOC_PARAMETERS_H_
 #define _NOC_PARAMETERS_H_
 
-// Coordinate Virtualization is not currently supported on BH (requires syseng support for updating FW).
-#define VIRTUAL_TENSIX_START_X 0
-#define VIRTUAL_TENSIX_START_Y 0
-#define COORDINATE_VIRTUALIZATION_ENABLED 0
+#define VIRTUAL_TENSIX_START_X 1
+#define VIRTUAL_TENSIX_START_Y 2
+#define COORDINATE_VIRTUALIZATION_ENABLED 1
 
 #define NUM_NOCS 2
 #define NUM_TENSIXES 140

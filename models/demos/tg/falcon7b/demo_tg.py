@@ -32,7 +32,6 @@ from models.utility_functions import is_wormhole_b0
         "default_mode_1024_stochastic",
     ],
 )
-@pytest.mark.parametrize("enable_async_mode", (True,), indirect=True)  # Option to run Falcon in Async mode
 @pytest.mark.parametrize(
     "mesh_device",
     ((8, 4),),
@@ -50,7 +49,6 @@ def test_demo_multichip(
     get_tt_cache_path,
     mesh_device,
     use_program_cache,
-    enable_async_mode,
     is_ci_env,
     ensure_devices_tg,
 ):

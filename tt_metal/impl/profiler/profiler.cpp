@@ -15,12 +15,12 @@
 #include <cstdint>
 #include <cstdlib>
 #include <filesystem>
-#include <functional>
 #include <iostream>
 
 #include "assert.hpp"
+#include "dispatch/hardware_command_queue.hpp"
+#include "dispatch/device_command.hpp"
 #include "dispatch/kernels/cq_commands.hpp"
-#include "hal.hpp"
 #include "hal_types.hpp"
 #include "hostdevcommon/profiler_common.h"
 #include "llrt.hpp"
@@ -45,41 +45,135 @@ static kernel_profiler::PacketTypes get_packet_type(uint32_t timer_id) {
 }
 
 distributed::AnyBuffer get_control_buffer_view(
-    IDevice* device, uint32_t address, uint32_t size, CoreCoord logical_worker_core) {
-    auto shard_parameters = ShardSpecBuffer({logical_worker_core}, {1, 1}, ShardOrientation::ROW_MAJOR, {1, 1}, {1, 1});
-    auto mesh_device = device->get_mesh_device();
-    auto buffer_config = ShardedBufferConfig(
+    IDevice* device, const CoreCoord& virtual_core, const profiler_msg_t* profiler_msg) {
+    const umd::CoreCoord logical_core =
+        MetalContext::instance()
+            .get_cluster()
+            .get_soc_desc(device->id())
+            .translate_coord_to(virtual_core, CoordSystem::TRANSLATED, CoordSystem::LOGICAL);
+    const CoreCoord core(logical_core.x, logical_core.y);
+    const ShardSpecBuffer shard_parameters =
+        ShardSpecBuffer({core}, {1, 1}, ShardOrientation::ROW_MAJOR, {1, 1}, {1, 1});
+    const auto mesh_device = device->get_mesh_device();
+    const ShardedBufferConfig buffer_config = ShardedBufferConfig(
         {mesh_device ? mesh_device.get() : device,
-         size,
-         size,
+         kernel_profiler::PROFILER_L1_CONTROL_BUFFER_SIZE,
+         kernel_profiler::PROFILER_L1_CONTROL_BUFFER_SIZE,
          BufferType::L1,
          TensorMemoryLayout::HEIGHT_SHARDED,
          shard_parameters});
-    return distributed::AnyBuffer::create(buffer_config, address);
+    return distributed::AnyBuffer::create(buffer_config, reinterpret_cast<DeviceAddr>(profiler_msg->control_vector));
 }
 
 void issue_fd_write_to_profiler_buffer(distributed::AnyBuffer& buffer, IDevice* device, std::vector<uint32_t>& data) {
+    TT_ASSERT(device->dispatch_firmware_active());
     if (auto mesh_device = device->get_mesh_device()) {
-        auto device_coord = mesh_device->get_view().find_device(device->id());
-        WriteShard(mesh_device->mesh_command_queue(), buffer.get_mesh_buffer(), data, device_coord, true);
+        const distributed::MeshCoordinate device_coord = mesh_device->get_view().find_device(device->id());
+        distributed::WriteShard(mesh_device->mesh_command_queue(), buffer.get_mesh_buffer(), data, device_coord, true);
     } else {
         EnqueueWriteBuffer(device->command_queue(), *(buffer.get_buffer()), data, true);
     }
 }
 
 void issue_fd_read_from_profiler_buffer(
-    distributed::AnyBuffer& buffer, IDevice* device, std::vector<uint32_t>& host_data) {
+    const distributed::AnyBuffer& buffer, IDevice* device, std::vector<uint32_t>& host_data) {
+    TT_ASSERT(device->dispatch_firmware_active());
     if (auto mesh_device = device->get_mesh_device()) {
-        auto device_coord = mesh_device->get_view().find_device(device->id());
-        distributed::ReadShard(mesh_device->mesh_command_queue(), host_data, buffer.get_mesh_buffer(), device_coord);
+        const distributed::MeshCoordinate device_coord = mesh_device->get_view().find_device(device->id());
+        distributed::ReadShard(
+            mesh_device->mesh_command_queue(), host_data, buffer.get_mesh_buffer(), device_coord, true);
     } else {
         EnqueueReadBuffer(device->command_queue(), *(buffer.get_buffer()), host_data.data(), true);
+    }
+}
+
+std::vector<uint32_t> read_control_buffer_from_core(
+    IDevice* device, const CoreCoord& core, const HalProgrammableCoreType core_type, const ProfilerDumpState state) {
+    std::vector<uint32_t> control_buffer;
+    profiler_msg_t* profiler_msg =
+        MetalContext::instance().hal().get_dev_addr<profiler_msg_t*>(core_type, HalL1MemAddrType::PROFILER);
+    if (device->dispatch_firmware_active()) {
+        if (auto mesh_device = device->get_mesh_device()) {
+            if (core_type == HalProgrammableCoreType::TENSIX) {
+                control_buffer.resize(kernel_profiler::PROFILER_L1_CONTROL_VECTOR_SIZE);
+                const distributed::AnyBuffer control_buffer_view = get_control_buffer_view(device, core, profiler_msg);
+                const distributed::MeshCoordinate device_coord = mesh_device->get_view().find_device(device->id());
+                distributed::ReadShard(
+                    mesh_device->mesh_command_queue(),
+                    control_buffer,
+                    control_buffer_view.get_mesh_buffer(),
+                    device_coord,
+                    true);
+            } else {
+                control_buffer = tt::llrt::read_hex_vec_from_core(
+                    device->id(),
+                    core,
+                    reinterpret_cast<DeviceAddr>(profiler_msg->control_vector),
+                    kernel_profiler::PROFILER_L1_CONTROL_BUFFER_SIZE);
+            }
+        } else {
+            control_buffer.resize(kernel_profiler::PROFILER_L1_CONTROL_VECTOR_SIZE);
+            dynamic_cast<HWCommandQueue&>(device->command_queue())
+                .enqueue_read_from_core_l1(
+                    core,
+                    control_buffer.data(),
+                    reinterpret_cast<DeviceAddr>(profiler_msg->control_vector),
+                    kernel_profiler::PROFILER_L1_CONTROL_BUFFER_SIZE,
+                    true);
+        }
+    } else {
+        control_buffer = tt::llrt::read_hex_vec_from_core(
+            device->id(),
+            core,
+            reinterpret_cast<uint64_t>(profiler_msg->control_vector),
+            kernel_profiler::PROFILER_L1_CONTROL_BUFFER_SIZE);
+    }
+
+    return control_buffer;
+}
+
+void write_control_buffer_to_core(
+    IDevice* device,
+    const CoreCoord& core,
+    const HalProgrammableCoreType core_type,
+    const ProfilerDumpState state,
+    std::vector<uint32_t>& control_buffer) {
+    profiler_msg_t* profiler_msg =
+        MetalContext::instance().hal().get_dev_addr<profiler_msg_t*>(core_type, HalL1MemAddrType::PROFILER);
+    if (device->dispatch_firmware_active()) {
+        if (auto mesh_device = device->get_mesh_device()) {
+            if (core_type == HalProgrammableCoreType::TENSIX) {
+                const distributed::AnyBuffer control_buffer_view = get_control_buffer_view(device, core, profiler_msg);
+                const distributed::MeshCoordinate device_coord = mesh_device->get_view().find_device(device->id());
+                distributed::WriteShard(
+                    mesh_device->mesh_command_queue(),
+                    control_buffer_view.get_mesh_buffer(),
+                    control_buffer,
+                    device_coord,
+                    true);
+            } else {
+                tt::llrt::write_hex_vec_to_core(
+                    device->id(), core, control_buffer, reinterpret_cast<DeviceAddr>(profiler_msg->control_vector));
+            }
+        } else {
+            dynamic_cast<HWCommandQueue&>(device->command_queue())
+                .enqueue_write_to_core_l1(
+                    core,
+                    control_buffer.data(),
+                    reinterpret_cast<DeviceAddr>(profiler_msg->control_vector),
+                    kernel_profiler::PROFILER_L1_CONTROL_BUFFER_SIZE,
+                    true);
+        }
+    } else {
+        tt::llrt::write_hex_vec_to_core(
+            device->id(), core, control_buffer, reinterpret_cast<uint64_t>(profiler_msg->control_vector));
     }
 }
 
 void DeviceProfiler::readRiscProfilerResults(
     IDevice* device,
     const CoreCoord& worker_core,
+    const ProfilerDumpState state,
     const std::optional<ProfilerOptionalMetadata>& metadata,
     std::ofstream& log_file_ofs,
     nlohmann::ordered_json& noc_trace_json_log) {
@@ -106,38 +200,18 @@ void DeviceProfiler::readRiscProfilerResults(
 
         riscCount = 1;
     }
-    profiler_msg_t* profiler_msg =
-        MetalContext::instance().hal().get_dev_addr<profiler_msg_t*>(CoreType, HalL1MemAddrType::PROFILER);
+
+    std::vector<uint32_t> control_buffer = read_control_buffer_from_core(device, worker_core, CoreType, state);
+
+    if ((control_buffer[kernel_profiler::HOST_BUFFER_END_INDEX_BR_ER] == 0) &&
+        (control_buffer[kernel_profiler::HOST_BUFFER_END_INDEX_NC] == 0)) {
+        return;
+    }
 
     uint32_t coreFlatID =
         tt::tt_metal::MetalContext::instance().get_cluster().get_virtual_routing_to_profiler_flat_id(device_id).at(
             worker_core);
     uint32_t startIndex = coreFlatID * MAX_RISCV_PER_CORE * PROFILER_FULL_HOST_VECTOR_SIZE_PER_RISC;
-
-    std::vector<uint32_t> control_buffer;
-    if (device->dispatch_firmware_active() && CoreType == HalProgrammableCoreType::TENSIX) {
-        // TODO: Currently only using FD reads on worker cores. Use FD reads across all core types, once we have a
-        // generic API to read from an address instead of a buffer. (#15015)
-        control_buffer.resize(kernel_profiler::PROFILER_L1_CONTROL_BUFFER_SIZE / sizeof(uint32_t));
-        auto logical_worker_core =
-            soc_desc.translate_coord_to(worker_core, CoordSystem::TRANSLATED, CoordSystem::LOGICAL);
-        auto control_buffer_view = get_control_buffer_view(
-            device,
-            reinterpret_cast<uint64_t>(profiler_msg->control_vector),
-            kernel_profiler::PROFILER_L1_CONTROL_BUFFER_SIZE,
-            CoreCoord(logical_worker_core.x, logical_worker_core.y));
-        issue_fd_read_from_profiler_buffer(control_buffer_view, device, control_buffer);
-    } else {
-        control_buffer = tt::llrt::read_hex_vec_from_core(
-            device_id,
-            worker_core,
-            reinterpret_cast<uint64_t>(profiler_msg->control_vector),
-            kernel_profiler::PROFILER_L1_CONTROL_BUFFER_SIZE);
-    }
-    if ((control_buffer[kernel_profiler::HOST_BUFFER_END_INDEX_BR_ER] == 0) &&
-        (control_buffer[kernel_profiler::HOST_BUFFER_END_INDEX_NC] == 0)) {
-        return;
-    }
 
     // helper function to lookup opname from runtime id if metadata is available
     auto getOpNameIfAvailable = [&metadata](auto device_id, auto runtime_id) {
@@ -160,7 +234,8 @@ void DeviceProfiler::readRiscProfilerResults(
             uint32_t bufferRiscShift = riscNum * PROFILER_FULL_HOST_VECTOR_SIZE_PER_RISC + startIndex;
             if ((control_buffer[kernel_profiler::DROPPED_ZONES] >> riscEndIndex) & 1) {
                 std::string warningMsg = fmt::format(
-                    "Profiler DRAM buffers were full, markers were dropped! device {}, worker core {}, {}, Risc {},  "
+                    "Profiler DRAM buffers were full, markers were dropped! device {}, worker core {}, {}, Risc "
+                    "{},  "
                     "bufferEndIndex = {}",
                     device_id,
                     worker_core.x,
@@ -313,21 +388,8 @@ void DeviceProfiler::readRiscProfilerResults(
         control_buffer[kernel_profiler::DRAM_PROFILER_ADDRESS];
     control_buffer_reset[kernel_profiler::FLAT_ID] = control_buffer[kernel_profiler::FLAT_ID];
     control_buffer_reset[kernel_profiler::CORE_COUNT_PER_DRAM] = control_buffer[kernel_profiler::CORE_COUNT_PER_DRAM];
-    if (device->dispatch_firmware_active() && CoreType == HalProgrammableCoreType::TENSIX) {
-        // TODO: Currently only using FD reads on worker cores. Use FD reads across all core types, once we have a
-        // generic API to read from an address instead of a buffer. (#15015)
-        auto logical_worker_core =
-            soc_desc.translate_coord_to(worker_core, CoordSystem::TRANSLATED, CoordSystem::LOGICAL);
-        auto control_buffer_view = get_control_buffer_view(
-            device,
-            reinterpret_cast<uint64_t>(profiler_msg->control_vector),
-            kernel_profiler::PROFILER_L1_CONTROL_VECTOR_SIZE,
-            CoreCoord(logical_worker_core.x, logical_worker_core.y));
-        issue_fd_write_to_profiler_buffer(control_buffer_view, device, control_buffer_reset);
-    } else {
-        tt::llrt::write_hex_vec_to_core(
-            device_id, worker_core, control_buffer_reset, reinterpret_cast<uint64_t>(profiler_msg->control_vector));
-    }
+
+    write_control_buffer_to_core(device, worker_core, CoreType, state, control_buffer_reset);
 }
 
 void DeviceProfiler::firstTimestamp(uint64_t timestamp) {
@@ -571,7 +633,6 @@ void DeviceProfiler::logNocTracePacketDataToJson(
                 {"timestamp", timestamp},
             });
         }
-
     } else if (packet_type == kernel_profiler::TS_DATA) {
         KernelProfilerNocEventMetadata ev_md(data);
 
@@ -655,8 +716,8 @@ void DeviceProfiler::serializeJsonNocTraces(
         });
     }
 
-    // for each opname in events_by_opname, adjust timestamps to be relative to the smallest timestamp within the group
-    // with identical sx,sy,proc
+    // for each opname in events_by_opname, adjust timestamps to be relative to the smallest timestamp within the
+    // group with identical sx,sy,proc
     for (auto& [runtime_id, events] : events_by_opname) {
         std::tuple<int, int, std::string> reference_event_loc;
         uint64_t reference_timestamp = 0;
@@ -696,17 +757,15 @@ void DeviceProfiler::serializeJsonNocTraces(
 CoreCoord DeviceProfiler::getPhysicalAddressFromVirtual(chip_id_t device_id, const CoreCoord& c) const {
     bool coord_is_translated = c.x >= MetalContext::instance().hal().get_virtual_worker_start_x() &&
                                c.y >= MetalContext::instance().hal().get_virtual_worker_start_y();
-    if (device_architecture == tt::ARCH::WORMHOLE_B0 && coord_is_translated) {
+    if (MetalContext::instance().hal().is_coordinate_virtualization_enabled() && coord_is_translated) {
         const metal_SocDescriptor& soc_desc =
             tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(device_id);
         // disable linting here; slicing is __intended__
         // NOLINTBEGIN
         return soc_desc.translate_coord_to(c, CoordSystem::TRANSLATED, CoordSystem::PHYSICAL);
         // NOLINTEND
-    } else {
-        // tt:ARCH::BLACKHOLE currently doesn't have any translated coordinate adjustment
-        return c;
     }
+    return c;
 }
 
 DeviceProfiler::DeviceProfiler(const bool new_logs) {
@@ -721,6 +780,7 @@ DeviceProfiler::DeviceProfiler(const bool new_logs) {
     }
 
     this->current_zone_it = device_events.begin();
+    device_sync_info = std::make_tuple(0.0, 0.0, 0.0);
 #endif
 }
 
@@ -842,7 +902,7 @@ void DeviceProfiler::dumpResults(
             log_error("Could not open kernel profiler dump file '{}'", log_path);
         } else {
             for (const auto& worker_core : worker_cores) {
-                readRiscProfilerResults(device, worker_core, metadata, log_file_ofs, noc_trace_json_log);
+                readRiscProfilerResults(device, worker_core, state, metadata, log_file_ofs, noc_trace_json_log);
             }
 
             // if defined, used profiler_noc_events_report_path to write json log. otherwise use output_dir
@@ -861,9 +921,28 @@ void DeviceProfiler::dumpResults(
 #endif
 }
 
+bool isSyncInfoNewer(std::tuple<double, double, double> old_info, std::tuple<double, double, double> new_info) {
+    double old_cpu_time = get<0>(old_info);
+    double old_device_time = get<1>(old_info);
+    double old_frequency = get<2>(old_info);
+    double new_cpu_time = get<0>(new_info);
+    double new_device_time = get<1>(new_info);
+    double new_frequency = get<2>(new_info);
+    return (old_cpu_time < new_cpu_time && old_device_time / old_frequency < new_device_time / new_frequency);
+}
+
 void DeviceProfiler::pushTracyDeviceResults() {
 #if defined(TRACY_ENABLE)
     ZoneScoped;
+
+    // If this device is root, it may have new sync info updated with syncDeviceHost
+    // called during DumpDeviceProfilerResults
+    for (auto& [core, info] : device_core_sync_info) {
+        if (isSyncInfoNewer(device_sync_info, info)) {
+            setSyncInfo(info);
+        }
+    }
+
     std::set<std::pair<uint32_t, CoreCoord>> device_cores_set;
     std::vector<std::pair<uint32_t, CoreCoord>> device_cores;
     for (auto& event : device_events) {
@@ -874,53 +953,8 @@ void DeviceProfiler::pushTracyDeviceResults() {
         }
     }
 
-    static double delay = 0;
-    static double frequency = 0;
-    static uint64_t cpuTime = 0;
-
     for (auto& device_core : device_cores) {
-        chip_id_t device_id = device_core.first;
-        CoreCoord worker_core = device_core.second;
-
-        if (device_core_sync_info.find(worker_core) != device_core_sync_info.end()) {
-            cpuTime = get<0>(device_core_sync_info.at(worker_core));
-            delay = get<1>(device_core_sync_info.at(worker_core));
-            frequency = get<2>(device_core_sync_info.at(worker_core));
-            log_info(
-                "Device {} sync info are, frequency {} GHz,  delay {} cycles and, sync point {} seconds",
-                device_id,
-                frequency,
-                delay,
-                cpuTime);
-        }
-    }
-
-    for (auto& device_core : device_cores) {
-        chip_id_t device_id = device_core.first;
-        CoreCoord worker_core = device_core.second;
-
-        if (delay == 0.0 || frequency == 0.0) {
-            delay = smallest_timestamp;
-            frequency = device_core_frequency / 1000.0;
-            cpuTime = TracyGetCpuTime();
-            log_warning(
-                "For device {}, core {},{} default frequency was used and its zones will be out of sync",
-                device_id,
-                worker_core.x,
-                worker_core.y);
-        }
-
-        if (device_tracy_contexts.find(device_core) == device_tracy_contexts.end()) {
-            auto tracyCtx = TracyTTContext();
-            std::string tracyTTCtxName =
-                fmt::format("Device: {}, Core ({},{})", device_id, worker_core.x, worker_core.y);
-
-            TracyTTContextPopulate(tracyCtx, cpuTime, delay, frequency);
-
-            TracyTTContextName(tracyCtx, tracyTTCtxName.c_str(), tracyTTCtxName.size());
-
-            device_tracy_contexts.emplace(device_core, tracyCtx);
-        }
+        updateTracyContext(device_core);
     }
 
     for (auto event : device_events) {
@@ -933,6 +967,72 @@ void DeviceProfiler::pushTracyDeviceResults() {
         }
     }
     device_events.clear();
+#endif
+}
+
+void DeviceProfiler::setSyncInfo(std::tuple<double, double, double> sync_info) { device_sync_info = sync_info; }
+
+void DeviceProfiler::updateTracyContext(std::pair<uint32_t, CoreCoord> device_core) {
+#if defined(TRACY_ENABLE)
+    chip_id_t device_id = device_core.first;
+    CoreCoord worker_core = device_core.second;
+
+    if (device_tracy_contexts.find(device_core) == device_tracy_contexts.end()) {
+        // Create a new tracy context for this device core
+        auto tracyCtx = TracyTTContext();
+        std::string tracyTTCtxName = fmt::format("Device: {}, Core ({},{})", device_id, worker_core.x, worker_core.y);
+
+        double cpu_time = get<0>(device_sync_info);
+        double device_time = get<1>(device_sync_info);
+        double frequency = get<2>(device_sync_info);
+
+        if (frequency == 0) {
+            cpu_time = TracyGetCpuTime();
+            device_time = smallest_timestamp;
+            frequency = device_core_frequency / 1000.0;
+            device_sync_info = std::make_tuple(cpu_time, device_time, frequency);
+            log_debug(
+                "For device {}, core {},{} default frequency was used and its zones will be out of sync",
+                device_id,
+                worker_core.x,
+                worker_core.y);
+        } else {
+            log_debug(
+                "Device {}, core {},{} sync info are, frequency {} GHz,  delay {} cycles and, sync point {} seconds",
+                device_id,
+                worker_core.x,
+                worker_core.y,
+                frequency,
+                device_time,
+                cpu_time);
+        }
+
+        TracyTTContextPopulate(tracyCtx, cpu_time, device_time, frequency);
+
+        TracyTTContextName(tracyCtx, tracyTTCtxName.c_str(), tracyTTCtxName.size());
+
+        device_tracy_contexts.emplace(device_core, tracyCtx);
+        core_sync_info[worker_core] = std::make_tuple(cpu_time, device_time, frequency);
+    } else {
+        // Update the existing tracy context for this device core
+        if (isSyncInfoNewer(core_sync_info[worker_core], device_sync_info)) {
+            core_sync_info[worker_core] = device_sync_info;
+            double cpu_time = get<0>(device_sync_info);
+            double device_time = get<1>(device_sync_info);
+            double frequency = get<2>(device_sync_info);
+            auto tracyCtx = device_tracy_contexts.at(device_core);
+            TracyTTContextCalibrate(tracyCtx, cpu_time, device_time, frequency);
+            log_debug(
+                "Device {}, core {},{} calibration info are, frequency {} GHz,  delay {} cycles and, sync point {} "
+                "seconds",
+                device_id,
+                worker_core.x,
+                worker_core.y,
+                frequency,
+                device_time,
+                cpu_time);
+        }
+    }
 #endif
 }
 

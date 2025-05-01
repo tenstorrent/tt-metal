@@ -46,11 +46,12 @@ class TtnnPSA:
 
     def __call__(self, input_tensor):
         cv1 = self.cv1(input_tensor)
+        cv1 = ttnn.sharded_to_interleaved(cv1, ttnn.L1_MEMORY_CONFIG)
         a = cv1[:, :, :, : cv1.shape[-1] // 2]
-        b = cv1[:, :, :, cv1.shape[-1] // 2 : cv1.shape[-1]]
+        b = cv1[:, :, :, cv1.shape[-1] // 2 :]
+
         out = self.attn(b)
 
-        b = ttnn.to_layout(b, ttnn.TILE_LAYOUT)
         b = b + out
 
         out = self.ffn_0(b)
@@ -58,7 +59,8 @@ class TtnnPSA:
 
         b = b + out
 
-        out = concat(-1, False, a, b)
+        out = concat(-1, True, a, b)
+        out = ttnn.sharded_to_interleaved(out, memory_config=ttnn.L1_MEMORY_CONFIG)
 
         output = self.cv2(out)
         deallocate_tensors(a, b)

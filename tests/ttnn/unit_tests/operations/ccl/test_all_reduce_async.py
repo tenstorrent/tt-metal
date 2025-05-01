@@ -22,7 +22,6 @@ def run_all_reduce_test(
     mem_config,
     use_program_cache,
     function_level_defaults,
-    enable_async=True,
     num_iters=1,
     topology=ttnn.Topology.Linear,
 ):
@@ -50,10 +49,6 @@ def run_all_reduce_test(
     gather_semaphore_handles = ttnn.create_global_semaphore(mesh_device, ccl_sub_device_crs, 0)
 
     debug = False
-
-    mesh_device.enable_async(enable_async)
-    if enable_async:
-        logger.info(f"Using Async Mode for All Reduce Op Dispatch")
 
     logger.info(f"Per chip output shape: {per_chip_output_shape}, devices: {num_devices}")
     # Generate input tensors
@@ -105,7 +100,7 @@ def run_all_reduce_test(
         eq, output = comp_pcc(tt_output_tensor, golden_canonical_out_tensor)
         mismatch = mismatch or not eq
         if not eq:
-            logger.error(f"output mismatch for tensor {i}. Mesh device ID: {mesh_device.get_devices()[i].id()}")
+            logger.error(f"output mismatch for tensor {i}. Mesh device ID: {mesh_device.get_device_ids()[i]}")
             if debug:
                 for w in range(tt_output_tensor.shape[0]):
                     for z in range(tt_output_tensor.shape[1]):
@@ -168,7 +163,6 @@ def run_all_reduce_test(
     ],
 )
 @pytest.mark.parametrize("math_op", [ttnn.ReduceType.Sum])
-@pytest.mark.parametrize("enable_async", [True])
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
 def test_ring_all_reduce_post_commit(
     t3k_mesh_device,
@@ -181,7 +175,6 @@ def test_ring_all_reduce_post_commit(
     mem_config,
     use_program_cache,
     function_level_defaults,
-    enable_async,
     num_iters=2,
 ):
     run_all_reduce_test(
@@ -196,7 +189,6 @@ def test_ring_all_reduce_post_commit(
         use_program_cache,
         function_level_defaults,
         num_iters=num_iters,
-        enable_async=enable_async,
     )
 
 
@@ -234,7 +226,6 @@ def test_ring_all_reduce_post_commit(
     ],
 )
 @pytest.mark.parametrize("math_op", [ttnn.ReduceType.Sum])
-@pytest.mark.parametrize("enable_async", [True])
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
 def test_ring_all_reduce_post_commit_2chip(
     t3k_mesh_device,
@@ -247,7 +238,6 @@ def test_ring_all_reduce_post_commit_2chip(
     mem_config,
     use_program_cache,
     function_level_defaults,
-    enable_async,
     num_iters=2,
 ):
     run_all_reduce_test(
@@ -262,7 +252,6 @@ def test_ring_all_reduce_post_commit_2chip(
         use_program_cache,
         function_level_defaults,
         num_iters=num_iters,
-        enable_async=enable_async,
         topology=ttnn.Topology.Linear,
     )
 
@@ -278,7 +267,6 @@ def run_all_reduce_with_mesh_tensor_along_row(
     buffer_type: ttnn.BufferType,
     use_program_cache,
     function_level_defaults,
-    enable_async,
     num_all_reduce_instances: int = 1,
     num_iters: int = 1,
     cluster_axis: int = 0,
@@ -305,10 +293,6 @@ def run_all_reduce_with_mesh_tensor_along_row(
 
     try:
         debug = False
-
-        mesh_device.enable_async(enable_async)
-        if enable_async:
-            logger.info(f"Using Async Mode for All Reduce Op Dispatch")
 
         logger.info(f"Per chip output shape: {per_chip_output_shape}, devices: {num_devices_per_line}")
         # Generate input tensors
@@ -381,7 +365,7 @@ def run_all_reduce_with_mesh_tensor_along_row(
         eq, output = comp_pcc(tt_output_tensor, golden_canonical_out_tensor)
         mismatch = mismatch or not eq
         if not eq:
-            logger.error(f"output mismatch for tensor {i}. Mesh device ID: {mesh_device.get_devices()[i].id()}")
+            logger.error(f"output mismatch for tensor {i}. Mesh device ID: {mesh_device.get_device_ids()[i]}")
             if debug:
                 for w in range(tt_output_tensor.shape[0]):
                     for z in range(tt_output_tensor.shape[1]):
@@ -420,7 +404,6 @@ def run_all_reduce_with_mesh_tensor_along_row(
     ],
 )
 @pytest.mark.parametrize("replication_factor", [8])  # 1, 8])
-@pytest.mark.parametrize("enable_async", [True])
 @pytest.mark.parametrize("mesh_device", [pytest.param((8, 4), id="8x4_grid")], indirect=True)
 @pytest.mark.parametrize("math_op", [ttnn.ReduceType.Sum])
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
@@ -435,11 +418,10 @@ def test_line_all_reduce_on_TG_rows_post_commit(
     buffer_type,
     use_program_cache,
     function_level_defaults,
-    enable_async,
     replication_factor,
     num_iters=16,
 ):
-    if len(mesh_device.get_devices()) != 32:
+    if mesh_device.get_num_devices() != 32:
         pytest.skip("Not TG!")
 
     run_all_reduce_with_mesh_tensor_along_row(
@@ -453,7 +435,6 @@ def test_line_all_reduce_on_TG_rows_post_commit(
         buffer_type,
         use_program_cache,
         function_level_defaults,
-        enable_async=enable_async,
         num_iters=num_iters,
         num_all_reduce_instances=replication_factor,
         cluster_axis=1,
@@ -479,7 +460,6 @@ def test_line_all_reduce_on_TG_rows_post_commit(
         ttnn.BufferType.DRAM,
     ],
 )
-@pytest.mark.parametrize("enable_async", [True])
 @pytest.mark.parametrize("replication_factor", [4])
 @pytest.mark.parametrize("mesh_device", [pytest.param((8, 4), id="8x4_grid")], indirect=True)
 @pytest.mark.parametrize("math_op", [ttnn.ReduceType.Sum])
@@ -495,11 +475,10 @@ def test_line_all_reduce_on_TG_cols_post_commit(
     buffer_type,
     use_program_cache,
     function_level_defaults,
-    enable_async,
     replication_factor,
     num_iters=16,
 ):
-    if len(mesh_device.get_devices()) != 32:
+    if mesh_device.get_num_devices() != 32:
         pytest.skip("Not TG!")
 
     run_all_reduce_with_mesh_tensor_along_row(
@@ -513,7 +492,6 @@ def test_line_all_reduce_on_TG_cols_post_commit(
         buffer_type,
         use_program_cache,
         function_level_defaults,
-        enable_async=enable_async,
         num_iters=num_iters,
         num_all_reduce_instances=replication_factor,
         cluster_axis=0,

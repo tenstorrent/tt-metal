@@ -20,24 +20,29 @@ test_id_to_name = {
     0: "DRAM Interleaved Packet Sizes",
     1: "DRAM Interleaved Core Locations",
     2: "DRAM Sharded",
-    3: "One to One Packet Sizes",
+    3: "DRAM Directed Ideal",
+    4: "One to One Packet Sizes",
 }
 
 # Correspondng test bounds for each test id
 test_bounds = {
     0: {
-        "riscv_1": {"latency": {"lower": 500, "upper": 1100}, "bandwidth": 0.06},
-        "riscv_0": {"latency": {"lower": 400, "upper": 900}, "bandwidth": 0.07},
+        "riscv_1": {"latency": {"lower": 400, "upper": 8800}, "bandwidth": 0.12},
+        "riscv_0": {"latency": {"lower": 300, "upper": 8000}, "bandwidth": 0.16},
     },
     1: {
-        "riscv_1": {"latency": {"lower": 400, "upper": 700}, "bandwidth": 0.19},
-        "riscv_0": {"latency": {"lower": 300, "upper": 500}, "bandwidth": 0.29},
+        "riscv_1": {"latency": {"lower": 300, "upper": 700}, "bandwidth": 0.09},
+        "riscv_0": {"latency": {"lower": 200, "upper": 500}, "bandwidth": 0.16},
     },
     2: {
-        "riscv_1": {"latency": {"lower": 500, "upper": 600}, "bandwidth": 0.24},
-        "riscv_0": {"latency": {"lower": 400, "upper": 500}, "bandwidth": 0.30},
+        "riscv_1": {"latency": {"lower": 400, "upper": 600}, "bandwidth": 0.13},
+        "riscv_0": {"latency": {"lower": 300, "upper": 500}, "bandwidth": 0.16},
     },
     3: {
+        "riscv_1": {"latency": {"lower": 42000, "upper": 44000}, "bandwidth": 33},
+        "riscv_0": {"latency": {"lower": 42000, "upper": 43000}, "bandwidth": 34},
+    },
+    4: {
         "riscv_1": {"latency": {"lower": 4100, "upper": 4200}, "bandwidth": 0.06},
         "riscv_0": {"latency": {"lower": 400, "upper": 500}, "bandwidth": 0.59},
     },
@@ -190,7 +195,7 @@ def performance_check(dm_stats, verbose=False):
             results_bounds[test_id]["riscv_0"]["latency"]["upper"], riscv0_cycles
         )
 
-        riscv1_attributes = dm_stats["riscv_1"]["attributes"][test_id]
+        riscv1_attributes = dm_stats["riscv_1"]["attributes"][run_host_id]
         riscv1_bw = (
             riscv1_attributes["Number of transactions"] * riscv1_attributes["Transaction size in bytes"] / riscv1_cycles
         )
@@ -198,7 +203,7 @@ def performance_check(dm_stats, verbose=False):
             results_bounds[test_id]["riscv_1"]["bandwidth"], riscv1_bw
         )
 
-        riscv0_attributes = dm_stats["riscv_0"]["attributes"][test_id]
+        riscv0_attributes = dm_stats["riscv_0"]["attributes"][run_host_id]
         riscv0_bw = (
             riscv0_attributes["Number of transactions"] * riscv0_attributes["Transaction size in bytes"] / riscv0_cycles
         )

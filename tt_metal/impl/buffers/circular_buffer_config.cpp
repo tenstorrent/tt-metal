@@ -55,10 +55,10 @@ CircularBufferConfig::CircularBufferConfig(const CBDescriptor& descriptor) : tot
                 format_descriptor.page_size);
         }
         this->page_sizes_[format_descriptor.buffer_index] = format_descriptor.page_size;
-        if (format_descriptor.tile) {
-            this->tiles_[format_descriptor.buffer_index] = Tile(
-                {format_descriptor.tile->height, format_descriptor.tile->width}, format_descriptor.tile->transpose);
-        }
+        // if (format_descriptor.tile) {
+        //     this->tiles_[format_descriptor.buffer_index] = Tile(
+        //         {format_descriptor.tile->height, format_descriptor.tile->width}, format_descriptor.tile->transpose);
+        // }
     };
     this->buffer_indices_.reserve(descriptor.format_descriptors.size() + descriptor.remote_format_descriptors.size());
     this->local_buffer_indices_.reserve(descriptor.format_descriptors.size());

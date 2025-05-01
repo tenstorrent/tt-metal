@@ -142,8 +142,8 @@ static Tensor create_config_tensor(
         elems_per_core);
 
     ttnn::Shape config_shape({tt::div_up(config_vector.size(), elems_per_core), elems_per_core});
-    auto config_buffer = owned_buffer::create<uint16_t>(std::move(config_vector));
-    return Tensor(OwnedStorage{config_buffer}, config_shape, DataType::UINT16, Layout::ROW_MAJOR);
+    auto config_buffer = host_buffer::create<uint16_t>(std::move(config_vector));
+    return Tensor(HostStorage{std::move(config_buffer)}, config_shape, DataType::UINT16, Layout::ROW_MAJOR);
 }
 
 operation::ProgramWithCallbacks upsample_multi_core(

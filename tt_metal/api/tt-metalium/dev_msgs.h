@@ -31,6 +31,21 @@
 #else
 #define GET_MAILBOX_ADDRESS_DEV(x) (&(((mailboxes_t tt_l1_ptr*)MEM_MAILBOX_BASE)->x))
 #endif
+// TODO: when device specific headers specify number of processors
+// (and hal abstracts them on host), get these from there (same as above for dprint)
+#if defined(COMPILE_FOR_ERISC) || defined(COMPILE_FOR_IDLE_ERISC)
+// TODO: Review if this should  be 2 for BH (the number of eth processors)
+// Hardcode to 1 to keep size as before
+#ifdef ARCH_BLACKHOLE
+static constexpr uint32_t PROFILER_RISC_COUNT = 1;
+#else
+static constexpr uint32_t PROFILER_RISC_COUNT = static_cast<uint32_t>(EthProcessorTypes::COUNT);
+#endif
+#else
+static constexpr uint32_t PROFILER_RISC_COUNT = static_cast<uint32_t>(TensixProcessorTypes::COUNT);
+#endif
+#else
+static constexpr uint32_t PROFILER_RISC_COUNT = 5;
 #endif
 
 // Messages for host to tell brisc to go
@@ -216,13 +231,17 @@ struct debug_assert_msg_t {
     volatile uint8_t which;
 };
 
-enum debug_assert_tripped_enum {
+enum debug_assert_type_t {
     DebugAssertOK = 2,
     DebugAssertTripped = 3,
+    DebugAssertNCriscNOCReadsFlushedTripped = 4,
+    DebugAssertNCriscNOCNonpostedWritesSentTripped = 5,
+    DebugAssertNCriscNOCNonpostedAtomicsFlushedTripped = 6,
+    DebugAssertNCriscNOCPostedWritesSentTripped = 7
 };
 
 // XXXX TODO(PGK): why why why do we not have this standardized
-typedef enum debug_sanitize_which_riscv {
+enum riscv_id_t {
     DebugBrisc = 0,
     DebugNCrisc = 1,
     DebugTrisc0 = 2,
@@ -232,14 +251,9 @@ typedef enum debug_sanitize_which_riscv {
     DebugIErisc = 6,
     DebugSlaveIErisc = 7,
     DebugNumUniqueRiscs
-} riscv_id_t;
+};
 
-typedef enum debug_transaction_type {
-    TransactionRead = 0,
-    TransactionWrite = 1,
-    TransactionAtomic = 2,
-    TransactionNumTypes
-} debug_transaction_type_t;
+enum debug_transaction_type_t { TransactionRead = 0, TransactionWrite = 1, TransactionAtomic = 2, TransactionNumTypes };
 
 struct debug_pause_msg_t {
     volatile uint8_t flags[DebugNumUniqueRiscs];
@@ -288,19 +302,7 @@ struct dprint_buf_msg_t {
 // NOC aligment max from BH
 static constexpr uint32_t TT_ARCH_MAX_NOC_WRITE_ALIGNMENT = 16;
 
-// TODO: when device specific headers specify number of processors
-// (and hal abstracts them on host), get these from there (same as above for dprint)
-#if defined(COMPILE_FOR_ERISC) || defined(COMPILE_FOR_IDLE_ERISC)
-#ifdef ARCH_BLACKHOLE
-static constexpr uint32_t PROFILER_RISC_COUNT = 1;
-#else
-static constexpr uint32_t PROFILER_RISC_COUNT = 1;
-#endif
-#else
-static constexpr uint32_t PROFILER_RISC_COUNT = 5;
-#endif
-
-static constexpr uint32_t PROFILER_NOC_ALIGNMENT_PAD_COUNT = 2;
+static constexpr uint32_t PROFILER_NOC_ALIGNMENT_PAD_COUNT = 4;
 
 struct profiler_msg_t {
     uint32_t control_vector[kernel_profiler::PROFILER_L1_CONTROL_VECTOR_SIZE];
@@ -323,23 +325,23 @@ struct addressable_core_t {
 };
 
 // TODO: This can move into the hal eventually, currently sized for WH.
-// This is the number of Ethernet cores on WH (Ethernet cores can be queried through Virtual Coordinates).
+// This is the max number of non tensix cores between WH and BH that can be queried through Virtual Coordinates.
 // All other Non Worker Cores are not accessible through virtual coordinates. Subject to change, depending on the arch.
-constexpr static std::uint32_t MAX_VIRTUAL_NON_WORKER_CORES = 18;
-// This is the total number of Non Worker Cores on WH (first term is DRAM, second term is PCIe and last term is
-// DRAM).
-constexpr static std::uint32_t MAX_NON_WORKER_CORES = 24 + 1 + 14;
-constexpr static std::uint32_t MAX_HARVESTED_ROWS = 2;
+// Currently sized for BH (first term is DRAM, second term is PCIe and last term is eth).
+constexpr static std::uint32_t MAX_VIRTUAL_NON_WORKER_CORES = 24 + 1 + 14;
+// This is the max number of Non Worker Cores across BH and WH
+constexpr static std::uint32_t MAX_PHYSICAL_NON_WORKER_CORES = 24 + 1 + 14;
+constexpr static std::uint32_t MAX_HARVESTED_ON_AXIS = 2;
 constexpr static std::uint8_t CORE_COORD_INVALID = 0xFF;
 struct core_info_msg_t {
     volatile uint64_t noc_pcie_addr_base;
     volatile uint64_t noc_pcie_addr_end;
     volatile uint64_t noc_dram_addr_base;
     volatile uint64_t noc_dram_addr_end;
-    addressable_core_t non_worker_cores[MAX_NON_WORKER_CORES];
+    addressable_core_t non_worker_cores[MAX_PHYSICAL_NON_WORKER_CORES];
     addressable_core_t virtual_non_worker_cores[MAX_VIRTUAL_NON_WORKER_CORES];
-    volatile uint8_t harvested_y[MAX_HARVESTED_ROWS];
-    volatile uint8_t virtual_harvested_y[MAX_HARVESTED_ROWS];
+    volatile uint8_t harvested_coords[MAX_HARVESTED_ON_AXIS];
+    volatile uint8_t virtual_harvested_coords[MAX_HARVESTED_ON_AXIS];
     volatile uint8_t noc_size_x;
     volatile uint8_t noc_size_y;
     volatile uint8_t worker_grid_size_x;
@@ -347,7 +349,6 @@ struct core_info_msg_t {
     volatile uint8_t absolute_logical_x;  // Logical X coordinate of this core
     volatile uint8_t absolute_logical_y;  // Logical Y coordinate of this core
     volatile uint32_t l1_unreserved_start;
-    volatile uint8_t pad[19];
 };
 
 constexpr uint32_t launch_msg_buffer_num_entries = 8;
@@ -359,9 +360,10 @@ struct mailboxes_t {
     volatile struct go_msg_t go_message;
     struct watcher_msg_t watcher;
     struct dprint_buf_msg_t dprint_buf;
+    struct core_info_msg_t core_info;
+    // Keep profiler last since it's size is dynamic per core type
     uint32_t pads_2[PROFILER_NOC_ALIGNMENT_PAD_COUNT];
     struct profiler_msg_t profiler;
-    struct core_info_msg_t core_info;
 };
 
 // Watcher struct needs to be 32b-divisible, since we need to write it from host using write_hex_vec_to_core().

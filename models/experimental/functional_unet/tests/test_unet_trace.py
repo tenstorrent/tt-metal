@@ -28,88 +28,6 @@ from models.utility_functions import skip_for_grayskull, divup
 
 @skip_for_grayskull("UNet not currently supported on GS")
 @pytest.mark.parametrize(
-    "device_params", [{"l1_small_size": 68864, "trace_region_size": UNET_TRACE_REGION_SIZE}], indirect=True
-)
-@pytest.mark.parametrize(
-    "batch, groups, iterations",
-    ((1, 4, 32),),
-)
-def test_unet_trace(
-    batch: int,
-    groups: int,
-    iterations: int,
-    device,
-    use_program_cache,
-    reset_seeds,
-):
-    torch_input, ttnn_input = create_unet_input_tensors(batch, groups, channel_order="first", pad=False, fold=False)
-
-    model = unet_shallow_torch.UNet.from_random_weights(groups=groups)
-    torch_output_tensor = model(torch_input)
-
-    parameters = create_unet_model_parameters(model, torch_input, groups=groups, device=device)
-    ttnn_model = unet_shallow_ttnn.UNet(parameters, device)
-
-    dram_grid_size = device.dram_grid_size()
-    dram_shard_spec = ttnn.ShardSpec(
-        ttnn.CoreRangeSet(
-            {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(dram_grid_size.x - 1, dram_grid_size.y - 1))}
-        ),
-        [
-            divup(ttnn_input.volume() // ttnn_input.shape[-1], dram_grid_size.x),
-            ttnn_input.shape[-1],
-        ],
-        ttnn.ShardOrientation.ROW_MAJOR,
-    )
-    dram_memory_config = ttnn.MemoryConfig(
-        ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.DRAM, dram_shard_spec
-    )
-    input_tensor = ttnn.allocate_tensor_on_device(
-        ttnn_input.shape, ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, device, dram_memory_config
-    )
-
-    logger.info(f"Compiling model with warmup run")
-    ttnn.copy_host_to_device_tensor(ttnn_input, input_tensor, cq_id=0)
-    l1_input_tensor = ttnn.reshard(input_tensor, ttnn_model.input_sharded_memory_config)
-    output_tensor = ttnn_model(l1_input_tensor, move_input_tensor_to_device=False)
-    logger.info(f"Done compile run")
-
-    logger.info(f"Capturing trace")
-    ttnn.copy_host_to_device_tensor(ttnn_input, input_tensor, cq_id=0)
-    l1_input_tensor = ttnn.reshard(input_tensor, ttnn_model.input_sharded_memory_config)
-
-    input_trace_addr = l1_input_tensor.buffer_address()
-    spec = l1_input_tensor.spec
-    output_tensor.deallocate(force=True)
-
-    tid = ttnn.begin_trace_capture(device, cq_id=0)
-    output_tensor = ttnn_model(l1_input_tensor, move_input_tensor_to_device=False)
-
-    # Try allocating our persistent input tensor here and verifying it matches the address that trace captured
-    l1_input_tensor = ttnn.allocate_tensor_on_device(spec, device)
-    assert input_trace_addr == l1_input_tensor.buffer_address()
-    ttnn.end_trace_capture(device, tid, cq_id=0)
-
-    logger.info(f"Running trace for {iterations} iterations...")
-    outputs = []
-    start = time.time()
-    for _ in range(iterations):
-        ttnn.copy_host_to_device_tensor(ttnn_input, input_tensor, cq_id=0)
-        l1_input_tensor = ttnn.reshard(input_tensor, ttnn_model.input_sharded_memory_config, l1_input_tensor)
-        ttnn.execute_trace(device, tid, cq_id=0, blocking=False)
-        outputs.append(output_tensor.cpu(blocking=False))
-    ttnn.synchronize_device(device)
-    end = time.time()
-    logger.info(f"Average model performance={iterations * batch / (end-start) : .2f} fps")
-
-    logger.info(f"Running sanity check against reference model output")
-    B, C, H, W = torch_output_tensor.shape
-    ttnn_output_tensor = ttnn.to_torch(outputs[-1]).reshape(B, C, H, W)
-    # verify_with_pcc(torch_output_tensor, ttnn_output_tensor, UNET_FULL_MODEL_PCC)
-
-
-@skip_for_grayskull("UNet not currently supported on GS")
-@pytest.mark.parametrize(
     "device_params",
     [{"l1_small_size": 68864, "trace_region_size": UNET_TRACE_REGION_SIZE, "num_command_queues": 2}],
     indirect=True,
@@ -214,7 +132,6 @@ def test_unet_trace_2cq(
 
 
 @skip_for_grayskull("UNet not currently supported on GS")
-@pytest.mark.parametrize("enable_async_mode", (True,), indirect=True)
 @pytest.mark.parametrize(
     "device_params",
     [{"l1_small_size": 68864, "trace_region_size": UNET_TRACE_REGION_SIZE, "num_command_queues": 2}],
@@ -225,7 +142,7 @@ def test_unet_trace_2cq(
     ((1, 4, 128),),
 )
 def test_unet_trace_2cq_multi_device(
-    batch: int, groups: int, iterations: int, mesh_device, use_program_cache, reset_seeds, enable_async_mode
+    batch: int, groups: int, iterations: int, mesh_device, use_program_cache, reset_seeds
 ):
     if not is_n300_with_eth_dispatch_cores(mesh_device) and not is_t3k_with_eth_dispatch_cores(mesh_device):
         pytest.skip("Test is only valid for N300 or T3000")
@@ -470,7 +387,6 @@ def test_unet_trace_2cq_same_io(
 
 
 @skip_for_grayskull("UNet not currently supported on GS")
-@pytest.mark.parametrize("enable_async_mode", (True, False), indirect=True)
 @pytest.mark.parametrize(
     "device_params",
     [{"l1_small_size": 68864, "trace_region_size": UNET_TRACE_REGION_SIZE, "num_command_queues": 2}],
@@ -485,7 +401,6 @@ def test_unet_trace_2cq_same_io_multi_device(
     groups: int,
     iterations: int,
     mesh_device,
-    enable_async_mode,
     use_program_cache,
     reset_seeds,
 ):

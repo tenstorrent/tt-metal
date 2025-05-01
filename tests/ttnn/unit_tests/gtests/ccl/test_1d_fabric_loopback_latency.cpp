@@ -53,7 +53,7 @@ inline void RunPersistent1dFabricLatencyTest(
     using namespace ttnn::ccl;
 
     DEVICE_FIXTURE_T test_fixture;
-    auto view = test_fixture.mesh_device_->get_view();
+    auto view = *(test_fixture.view_);
 
     std::vector<IDevice*> devices_;
     if (is_6u) {

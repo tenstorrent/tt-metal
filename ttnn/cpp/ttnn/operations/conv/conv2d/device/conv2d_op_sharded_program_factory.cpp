@@ -10,6 +10,7 @@
 #include "ttnn/operations/conv/conv2d/device/conv2d_op.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
 #include "ttnn/operations/sliding_window/sliding_window.hpp"
+#include "ttnn/tensor/types.hpp"
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/tt_metal.hpp>
@@ -749,9 +750,6 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
         bias_ntiles =
             bias.value().get_padded_shape()[3] / constants::TILE_WIDTH;  // TODO: support non tile multiple sizes
     }
-    auto output_shape = sliding_window_config.get_output_shape();
-    uint32_t conv_output_size_h = output_shape[1];
-    uint32_t conv_output_size_w = output_shape[2];
 
     std::map<string, string> reader_defines;
 
@@ -1121,6 +1119,13 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
                             a.element_size()
                       : (round_up(a_shard_spec.shape[1] * filter_w, TILE_WIDTH) - (a_shard_spec.shape[1] * filter_w)) *
                             a.element_size();
+    const uint32_t act_block_w_extra_align_scalars = act_block_w_extra_align_bytes / a.element_size();
+    // When using block float format, we must handle cases where the data doesn't align to 16-scalar boundaries.
+    // If act_block_w_extra_align_bytes contains a number of scalars that isn't a multiple of 16,
+    // we need to zero out the temporary circular buffers used during the tiling process.
+    // Failing to do this could allow residual junk data in L1 memory to corrupt valid input data.
+    const bool needs_act_block_zero_out =
+        act_block_w_extra_align_scalars % 16 != 0 && tt_metal::is_block_float(output.get_dtype());
 
     uint32_t in0_block_w = act_block_w_ntiles / conv_act_c_blocks;
     uint32_t in0_block_num_tiles = act_block_num_tiles / conv_act_c_blocks;
@@ -1310,22 +1315,18 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
         in0_num_blocks_w = 1 * conv_act_c_blocks;
     }
     reader_compile_time_args = {
-        (uint32_t)stride_h,
-        (uint32_t)stride_w,
         (uint32_t)dilation_h,
         (uint32_t)dilation_w,
-        (uint32_t)conv_act_size_w,
-        (uint32_t)conv_output_size_w,  // conv_output_w_last_index
         (uint32_t)conv_act_c_read_bytes,
         (uint32_t)window_outer,
         (uint32_t)window_inner,
         (uint32_t)reader_arg_act_block_h_datums,
         (uint32_t)(split_reader ? act_block_num_tiles_split / conv_act_c_blocks
                                 : act_block_num_tiles / conv_act_c_blocks),
+        (uint32_t)filter_h,
         (uint32_t)filter_w,
         (uint32_t)conv_act_size_w + (pad_w),
-        (uint32_t)act_block_w_extra_align_bytes,  // only used for 1d systolic variant
-        (uint32_t)filter_h,
+        (uint32_t)act_block_w_extra_align_bytes,                          // only used for 1d systolic variant
         (uint32_t)num_blocks_act_h_per_core,                              // act_num_blocks_h
         (uint32_t)in0_block_num_tiles,                                    // act_block_num_tiles
         (uint32_t)conv_act_c_blocks,                                      // act_w_num_outer
@@ -1337,6 +1338,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
         (uint32_t)(transpose_mcast ? 1 : 0),
         (uint32_t)act_block_h_datums_last_block,
         (uint32_t)act_block_h_datums_split_last,
+        (uint32_t)needs_act_block_zero_out,  // zero_out_act_cb
         (uint32_t)cb_indices.act_cb,
         (uint32_t)cb_indices.sharded_act_cb,
         (uint32_t)cb_indices.cb_for_reader_indices,
@@ -1409,20 +1411,19 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
 
     if (split_reader) {
         std::vector<uint32_t> split_reader_args = {
-            // (uint32_t)act_block_h_datums,
             (uint32_t)act_block_h_datums_split_last,
-            // (uint32_t)act_block_num_tiles / conv_act_c_blocks,
             (uint32_t)act_block_num_tiles_split_last / conv_act_c_blocks,
             (uint32_t)conv_act_c_read_bytes,
             (uint32_t)filter_w * conv_act_c_read_bytes,                   // coalesced_read_bytes
             (uint32_t)(conv_act_size_w + pad_w) * conv_act_c_read_bytes,  // window_outer_offset
             (uint32_t)act_block_w_extra_align_bytes,                      // only used for 1d systolic variant
             (uint32_t)act_block_h_datums_split,                           // only used for 1d systolic variant
-            (uint32_t)act_block_h_datums_last_block};
+            (uint32_t)act_block_h_datums_last_block,
+            (uint32_t)needs_act_block_zero_out};
         writer_compile_time_args.insert(
             writer_compile_time_args.end(), split_reader_args.begin(), split_reader_args.end());
     } else {
-        std::vector<uint32_t> split_reader_args(8, 0);
+        std::vector<uint32_t> split_reader_args(9, 0);
         writer_compile_time_args.insert(
             writer_compile_time_args.end(), split_reader_args.begin(), split_reader_args.end());
     }

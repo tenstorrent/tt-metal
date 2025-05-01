@@ -192,6 +192,42 @@ inline __attribute__((always_inline)) void risc_finished_profiling() {
 
 #if defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_BRISC) || defined(COMPILE_FOR_ERISC) || \
     defined(COMPILE_FOR_IDLE_ERISC)
+
+#if (defined(DISPATCH_KERNEL) && (PROFILE_KERNEL == PROFILER_OPT_DO_DISPATCH_CORES))
+
+// Saves several NoC register states that may be setup by dispatch kernels and restores them
+// when the NocDestinationStateSaver is destroyed
+struct NocDestinationStateSaver {
+    uint32_t noc_ctrl_state;
+    uint32_t noc_ret_addr_coord_state;
+#ifdef ARCH_BLACKHOLE
+    uint32_t noc_ret_addr_mid_state;
+#endif
+
+    inline __attribute__((always_inline)) NocDestinationStateSaver() {
+        noc_ctrl_state = NOC_CMD_BUF_READ_REG(noc_index, write_cmd_buf, NOC_CTRL);
+        noc_ret_addr_coord_state = NOC_CMD_BUF_READ_REG(noc_index, write_cmd_buf, NOC_RET_ADDR_COORDINATE);
+#ifdef ARCH_BLACKHOLE
+        noc_ret_addr_mid_state = NOC_CMD_BUF_READ_REG(noc_index, write_cmd_buf, NOC_RET_ADDR_MID);
+#endif
+    }
+
+    inline __attribute__((always_inline)) ~NocDestinationStateSaver() {
+        while (!noc_cmd_buf_ready(noc_index, write_cmd_buf));
+        NOC_CMD_BUF_WRITE_REG(noc_index, write_cmd_buf, NOC_CTRL, noc_ctrl_state);
+        NOC_CMD_BUF_WRITE_REG(noc_index, write_cmd_buf, NOC_RET_ADDR_COORDINATE, noc_ret_addr_coord_state);
+#ifdef ARCH_BLACKHOLE
+        NOC_CMD_BUF_WRITE_REG(noc_index, write_cmd_buf, NOC_RET_ADDR_MID, noc_ret_addr_mid_state);
+#endif
+    }
+};
+
+#else
+
+struct NocDestinationStateSaver {};
+
+#endif
+
 inline void __attribute__((always_inline)) profiler_noc_async_write_posted(
     std::uint32_t src_local_l1_addr, std::uint64_t dst_noc_addr, std::uint32_t size, uint8_t noc = noc_index) {
     WAYPOINT("NAWW");
@@ -222,6 +258,7 @@ __attribute__((noinline)) void finish_profiler() {
 
     uint32_t pageSize = PROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC * MAX_RISCV_PER_CORE * profiler_core_count_per_dram;
 
+    NocDestinationStateSaver noc_state;
     for (uint32_t riscID = 0; riscID < PROFILER_RISC_COUNT; riscID++) {
         profiler_data_buffer[riscID][ID_LH] = ((core_flat_id & 0xFF) << 3) | riscID;
         int hostIndex = riscID;
@@ -310,6 +347,7 @@ __attribute__((noinline)) void quick_push() {
     uint32_t currEndIndex = profiler_control_buffer[HOST_BUFFER_END_INDEX_BR_ER + myRiscID] + wIndex;
 
     if (currEndIndex <= PROFILER_FULL_HOST_VECTOR_SIZE_PER_RISC) {
+        NocDestinationStateSaver noc_state;
         profiler_noc_async_write_posted(
             reinterpret_cast<uint32_t>(profiler_data_buffer[myRiscID]),
             dram_bank_dst_noc_addr,
@@ -317,7 +355,6 @@ __attribute__((noinline)) void quick_push() {
 
         profiler_noc_async_flush_posted_write();
         profiler_control_buffer[HOST_BUFFER_END_INDEX_BR_ER + myRiscID] = currEndIndex;
-
     } else {
         mark_dropped_timestamps(HOST_BUFFER_END_INDEX_BR_ER + myRiscID);
     }
