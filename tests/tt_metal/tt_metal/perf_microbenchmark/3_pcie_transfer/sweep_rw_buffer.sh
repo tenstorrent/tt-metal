@@ -38,15 +38,15 @@ echo "###" write bw 512M buffer
 run_set --transfer-size 536870912 --skip-read
 
 echo "###" read bw 32K buffer remote device
-run_set --transfer-size 32768 --skip-write --device 2
+run_set --transfer-size 32768 --skip-write --device 1
 
 echo "###" read bw 512M buffer remote device
-run_set --transfer-size 536870912 --skip-write --device 2
+run_set --transfer-size 536870912 --skip-write --device 1
 
 echo "###" write bw 32K buffer remote device
-run_set --transfer-size 32768 --skip-read --device 2
+run_set --transfer-size 32768 --skip-read --device 1
 
 echo "###" write bw 512M buffer remote device
-run_set --transfer-size 536870912 --skip-read --device 2
+run_set --transfer-size 536870912 --skip-read --device 1
 
 echo "###" done
