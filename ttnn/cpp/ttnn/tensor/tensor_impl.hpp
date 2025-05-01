@@ -83,7 +83,7 @@ constexpr size_t packed_buffer_size_bytes<bfloat4_b>(size_t volume_unpacked_data
 //                                  Layout converters
 // ======================================================================================
 template <typename T>
-inline std::vector<T> convert_layout_row_major_to_tile(
+std::vector<T> convert_layout_row_major_to_tile(
     const Shape2D& shape, const Tile& tile, tt::stl::Span<const T> data_to_convert) {
     if (shape.width() * shape.height() == 0) {
         return std::vector<T>();
@@ -113,7 +113,7 @@ inline std::vector<T> convert_layout_row_major_to_tile(
 }
 
 template <typename T>
-inline std::vector<T> convert_layout_tile_to_row_major(
+std::vector<T> convert_layout_tile_to_row_major(
     const Shape2D& shape, const Tile& tile, tt::stl::Span<const T> data_to_convert) {
     auto tile_shape = tile.get_tile_shape();
     auto face_shape = tile.get_face_shape();

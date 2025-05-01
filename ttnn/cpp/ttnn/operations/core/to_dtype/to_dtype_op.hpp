@@ -190,8 +190,8 @@ inline Tensor convert_to_dtype(const Tensor& input_tensor, const Layout& input_l
     TT_FATAL(!is_device_tensor(input_tensor), "to_dtype only supports host tensors");
 
     // TODO: #15840 - Treat multi-device host vs owned/borrowed tensors uniformly.
-    return distributed::is_multi_device_host_tensor(input_tensor) ? transform(input_tensor, convert_dtype)
-                                                                  : convert_dtype(input_tensor);
+    return tt::tt_metal::is_multi_device_host_tensor(input_tensor) ? transform(input_tensor, convert_dtype)
+                                                                   : convert_dtype(input_tensor);
 }
 
 }  // namespace detail
@@ -211,7 +211,7 @@ struct ToDtype {
         auto row_major_input_tensor = input_tensor.to_layout(ttnn::ROW_MAJOR_LAYOUT);
 
         // TODO: #15840 - Treat multi-device host vs owned/borrowed tensors uniformly.
-        auto intermediate_tensor = distributed::is_multi_device_host_tensor(row_major_input_tensor)
+        auto intermediate_tensor = tt::tt_metal::is_multi_device_host_tensor(row_major_input_tensor)
                                        ? transform(row_major_input_tensor, detail::convert_to_cpp_supported_dtype)
                                        : detail::convert_to_cpp_supported_dtype(row_major_input_tensor);
         return detail::convert_to_dtype(intermediate_tensor, input_layout, dtype);

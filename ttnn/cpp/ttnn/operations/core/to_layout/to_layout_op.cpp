@@ -95,7 +95,7 @@ Tensor to_layout_impl(
         }
     }
 
-    if (ttnn::is_tensor_on_device_or_multidevice(tensor_arg)) {
+    if (tt::tt_metal::is_device_tensor(tensor_arg)) {
         bool use_multicore_untilize = true;
         bool use_multicore_tilize = true;
 
