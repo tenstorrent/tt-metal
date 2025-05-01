@@ -9,6 +9,8 @@
 #include <tt-metalium/fabric_types.hpp>
 #include <umd/device/types/cluster_descriptor_types.h>  // chip_id_t
 #include <tt-metalium/erisc_datamover_builder.hpp>
+#include "tt_metal/impl/context/metal_context.hpp"
+#include "tt_metal/fabric/hw/inc/fabric_routing_mode.h"
 #include <set>
 #include <vector>
 
@@ -18,6 +20,8 @@ bool is_1d_fabric_config(tt::tt_metal::FabricConfig fabric_config);
 bool is_2d_fabric_config(tt::tt_metal::FabricConfig fabric_config);
 
 Topology get_1d_topology(tt::tt_metal::FabricConfig fabric_config);
+void set_routing_mode(uint16_t routing_mode);
+void set_routing_mode(Topology topology, uint32_t dimension = 1);
 
 FabricType get_fabric_type(tt::tt_metal::FabricConfig fabric_config, tt::ClusterType cluster_type);
 

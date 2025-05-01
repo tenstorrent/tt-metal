@@ -30,6 +30,7 @@
 #include "profiler_state.hpp"
 #include "tt_backend_api_types.hpp"
 #include "tt_metal/llrt/tt_elffile.hpp"
+#include "control_plane.hpp"
 #include <umd/device/types/arch.h>
 
 namespace fs = std::filesystem;

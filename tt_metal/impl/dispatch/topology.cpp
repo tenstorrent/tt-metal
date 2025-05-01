@@ -957,11 +957,16 @@ std::unique_ptr<Program> create_and_compile_2d_fabric_program(IDevice* device, F
     std::map<string, string> router_defines = {};
     if (fabric_config == FabricConfig::FABRIC_2D) {
         router_defines["FVC_MODE_PULL"] = "";
+        tt::tt_fabric::set_routing_mode(ROUTING_MODE_MESH | ROUTING_MODE_2D | ROUTING_MODE_PULL);
     } else {
         // TODO: delete or selectively set
         //       https://github.com/tenstorrent/tt-metal/issues/20000
         if (isFabricUnitTest()) {
+            tt::tt_fabric::set_routing_mode(ROUTING_MODE_MESH | ROUTING_MODE_2D | ROUTING_MODE_PUSH);
             router_defines["DISABLE_LOW_LATENCY_ROUTING"] = "";
+        } else {
+            tt::tt_fabric::set_routing_mode(
+                ROUTING_MODE_MESH | ROUTING_MODE_2D | ROUTING_MODE_PUSH | ROUTING_MODE_LOW_LATENCY);
         }
     }
 
@@ -1061,6 +1066,7 @@ std::unique_ptr<Program> create_and_compile_1d_fabric_program(IDevice* device, F
     std::unordered_map<chan_id_t, tt::tt_fabric::FabricEriscDatamoverBuilder> edm_builders;
     auto routing_directions = {RoutingDirection::N, RoutingDirection::S, RoutingDirection::E, RoutingDirection::W};
     Topology topology = get_1d_topology(fabric_config);
+    tt::tt_fabric::set_routing_mode(topology);
 
     if (device->is_mmio_capable() &&
         (tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type() == tt::ClusterType::TG)) {
