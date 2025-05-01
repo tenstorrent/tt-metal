@@ -7,10 +7,10 @@ import torch
 from loguru import logger
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.utility_functions import is_wormhole_b0, divup
-from models.experimental.ufld_v2.ttnn.ttnn_UFLD_v2 import TtnnUFLDv2
-from models.experimental.ufld_v2.reference.UFLD_v2_model import TuSimple34
+from models.demos.ufld_v2.ttnn.ttnn_ufld_v2 import TtnnUFLDv2
+from models.demos.ufld_v2.reference.ufld_v2_model import TuSimple34
 from ttnn.model_preprocessing import preprocess_model_parameters, infer_ttnn_module_args
-from tests.ttnn.integration_tests.ufld_v2.test_ttnn_UFLD_v2 import custom_preprocessor_whole_model
+from tests.ttnn.integration_tests.ufld_v2.test_ttnn_ufld_v2 import custom_preprocessor_whole_model
 
 
 def load_torch_model():
