@@ -24,6 +24,12 @@ from models.experimental.functional_unet.tests.common import (
 @pytest.mark.parametrize("groups", [4])
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 79104}], indirect=True)
 def test_unet_model(batch, groups, device, use_program_cache, reset_seeds):
+    if (
+        not is_wormhole_b0(device)
+        and device.compute_with_storage_grid_size().x * device.compute_with_storage_grid_size().y != 110
+    ):
+        pytest.skip(f"Shallow UNet only support 110 cores on BH (was {device.compute_with_storage_grid_size()})")
+
     torch_input, ttnn_input = create_unet_input_tensors(batch, groups, channel_order="first", pad=False, fold=False)
     model = unet_shallow_torch.UNet.from_random_weights(groups=groups)
 
