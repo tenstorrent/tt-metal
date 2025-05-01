@@ -299,7 +299,7 @@ target_link_libraries(
         nlohmann_json::nlohmann_json
         TT::Metalium::HostDevCommon
         Reflect::Reflect
-        TT:STL
+        TT::STL
     PRIVATE
         Metalium::Metal::Impl
         metal_common_libs

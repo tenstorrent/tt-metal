@@ -82,8 +82,9 @@ ttnn/ttnn/operations/moreh.py @razorback3 @dongjin-na @cfjchu @ayerofieiev-tt @d
 ttnn/ttnn/operations/conv2d.py @tenstorrent/metalium-developers-convolutions
 ttnn/ttnn/operations/pool.py @tenstorrent/metalium-developers-convolutions
 ttnn/**/kernels/ # Removes the owners above from owning kernels unless specified afterwards
-ttnn/**/CMakeLists.txt @ayerofieiev-tt @dmakoviichuk-tt @sminakov-tt @tenstorrent/metalium-developers-infra
+ttnn/**/CMakeLists.txt @metalium-developers-ttnn-core @tenstorrent/metalium-developers-infra
 ttnn/cpp/ttnn/tensor/ @metalium-developers-ttnn-core
+
 ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/moreh*/ @razorback3 @dongjin-na @cfjchu @ayerofieiev-tt @dmakoviichuk-tt
 ttnn/cpp/ttnn/deprecated/tt_lib/csrc/ @ayerofieiev-tt @razorback3 @dongjin-na
 
@@ -208,8 +209,6 @@ docs/source/ttnn/ @metalium-developers-ttnn-core @razorback3 @dongjin-na
 
 # misc
 dockerfile/upstream_test_images/ @tenstorrent/metalium-developers-infra
-
-ttnn/CMakeLists.txt @metalium-developers-ttnn-core
 
 # tt-train
 tt-train/** @dmakoviichuk-tt @rfurko-tt @ayerofieiev-tt
