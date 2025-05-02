@@ -3,24 +3,17 @@
 DRAM Loopback
 =============
 
-We will build a program in TT-Metal that will simply copy data from one DRAM
-buffer to another, using the compute engine and an intermediate L1 buffer to do
-so. We call this concept "loopback".
+The is the simplest example of using the TT-Metal API. A data movement core in the Tensix copies data DRAM into it's L1(SRAM) buffer and back out to DRAM. Hence "loopback".
 
-We'll go through this code section by section. Note that we have this exact,
-full example program in
-``tt_metal/programming_examples/loopback/loopback.cpp``, so you can follow
-along.
 
-To build and execute, you may use the following commands. Note that we include
-the necessary environment variables here, but you may possibly need more
-depending on the most up-to-date installation methods.
+We'll go through this code section by section. The fully source code for this example is avaliable under the ``tt_metal/programming_examples/loopback`` directory.
 
-::
+Building the example can be done by adding a ``--build-programming-examples`` flag or adding the ``-DBUILD_PROGRAMMING_EXAMPLES=ON`` flag to the cmake command and results in a
+``loopback`` executable in the ``build/programming_examples`` directory. For example:
 
-    export ARCH_NAME=<arch name>
-    export TT_METAL_HOME=<this repo dir>
-    ./build_metal.sh
+:: code-block:: bash
+    export TT_METAL_HOME=</path/to/tt-metal>
+    ./build_metal.sh --build-programming-examples
     ./build/programming_examples/loopback
 
 Silicon accelerator setup
@@ -31,31 +24,24 @@ Silicon accelerator setup
    constexpr int device_id = 0;
    auto device = CreateDevice(device_id);
 
-We instantiate a device to control our ``GRAYSKULL`` type
-accelerator.
+We first open a device. This is our gateway to all operations on the accelerator. The device ID is simply an index into the list of available devices (from 0 to N). Thus device 0 is the first device and always available if one is installed.
 
 Program pre-compilation setup
 -----------------------------
 
 .. code-block:: cpp
 
-   CommandQueue& cq = detail::GetCommandQueue(device);
+   CommandQueue& cq = device->command_queue();
    Program program = CreateProgram();
 
-We first obtain the global ``CommandQueue`` in order to use the fast dispatch
-capabilities of the software. This will be used when issuing commands for
-asynchronous reads/writes/program management.
+Operations in Metalium are almost always capable to be run asynchronously and the ordering of operations is managed by a command queue. The command queue, like the name suggests, is a FIFO queue of commands that are executed in order. And commands are operations that are run on the device, including but not limited to upload/download of data and program execution.
 
-Next, we create a ``Program`` to be run on our Grayskull accelerator. This is how
-we'll be keeping track of things in our session with the device.
+Next, we create a ``Program`` object that we will fill in later. A program is a set of kernels that are executed on the device. If you are familiar with OpenCL, the program in Metalium is different from OpenCL in that All Tensix cores need to to run the exact same kernel at the same time. However in this example, we are only going to use one of all the cores in the device.
 
-Building a data movement kernel
+Creating a data movement kernel
 -------------------------------
 
-Declare a kernel for data movement. We'll use a pre-written kernel that copies
-data from one place to another.
-
-We will be using the accelerator core with coordinates ``{0, 0}``.
+Create a kernel that will copy data from DRAM to L1 and back. Since we are only using one Tensix core, ``{0, 0}`` is the only core (core on the most top left) we use. And as we are moving data from DRAM to L1, This is a data movement kernel using the movement processor 0, and the default NoC interface.
 
 .. code-block:: cpp
 
@@ -68,20 +54,26 @@ We will be using the accelerator core with coordinates ``{0, 0}``.
         DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default}
     );
 
-Create buffers in DRAM and L1
+Create buffers in DRAM and L1(SRAM)
 -----------------------------
 
-Next, we need to declare buffers that we will use during execution. We will
-need
+Next, we need to declare buffers that we hold the actual data and a intermidiate buffer on chip,
 
-* An L1 buffer within the core itself that will be used to store the compute
-  engine's work
+There's in total 3 buffers that we need to create:
+* An L1(SRAM) buffer within the core itself that will act as temporary storage
 * A DRAM buffer that will house input data
 * A DRAM buffer that will be written to with output data
 
+Note that almost all operations on the Tensix are aligned with tiles. And a tile is a 32x32 grid of values. The data type used in this example is bfloat16 as it is what the math engine uses internally (though we won't touch the math engine in this example). Making each tile 32 x 32 x 2 bytes = 2048 bytes. And we wish to allocate 50 tiles in each buffer.
+
+There are two types of buffers in the Tensix: L1 and DRAM. L1 is a misnomer as it can be mistaken as similar to L1 cache in a CPU. In fact, the L1 is a SRAM scratchpad on the Tensix. Each generation of Tensotrrent processors has a different amount of L1 memory per Tensix. The previous Grayskull generation had 1MB and Wormhole/Blackhole has 1.5MN.
+
+<TODO: Quick explnation of pages>
+
 .. code-block:: cpp
 
-  constexpr uint32_t single_tile_size = 2 * (32 * 32);
+  constexpr uint32_t tile_size = TILE_WIDTH * TILE_HEIGHT;
+  constexpr uint32_t single_tile_size = sizeof(bfloat16) * tile_size;
   constexpr uint32_t num_tiles = 50;
   constexpr uint32_t dram_buffer_size = single_tile_size * num_tiles;
   tt_metal::InterleavedBufferConfig l1_config{
@@ -93,9 +85,7 @@ need
 
   Buffer l1_buffer = CreateBuffer(l1_config);
 
-For simplicity, let's make the size of all our buffers 50 tiles.
-
-Let's make the input and output DRAM buffers.
+The only difference between the L1 and DRAM buffer is the ``BufferType``. The L1 buffer is created with a ``BufferType::L1`` and the DRAM buffer is created with a ``BufferType::DRAM``.
 
 .. code-block:: cpp
 
