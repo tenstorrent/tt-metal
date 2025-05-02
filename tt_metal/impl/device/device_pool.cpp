@@ -17,7 +17,7 @@
 
 #include "control_plane.hpp"
 #include "core_coord.hpp"
-#include "dispatch_settings.hpp"
+#include "dispatch/dispatch_settings.hpp"
 #include "dprint_server.hpp"
 #include "env_lib.hpp"
 #include "erisc_datamover_builder.hpp"
