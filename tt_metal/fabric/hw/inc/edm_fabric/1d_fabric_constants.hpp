@@ -179,7 +179,9 @@ constexpr std::array<uint8_t, NUM_RECEIVER_CHANNELS> receiver_channel_local_writ
 
 // TODO: Add a special marker in CT args so we don't misalign unintentionally
 constexpr size_t EDM_NOC_VC_IDX = RX_CH_LOCAL_WRITE_CMD_BUF_ID_IDX + NUM_RECEIVER_CHANNELS;
-constexpr size_t SPECIAL_MARKER_1_IDX = EDM_NOC_VC_IDX + 1;
+constexpr size_t USE_STATEFUL_API_ON_SENDER_ACK_IDX = EDM_NOC_VC_IDX + 1;
+constexpr bool use_stateful_api_on_sender_ack = get_compile_time_arg_val(USE_STATEFUL_API_ON_SENDER_ACK_IDX) == 1;
+constexpr size_t SPECIAL_MARKER_1_IDX = USE_STATEFUL_API_ON_SENDER_ACK_IDX + 1;
 constexpr size_t SPECIAL_MARKER_1 = 0x10c0ffee;
 static_assert(
     !SPECIAL_MARKER_CHECK_ENABLED || get_compile_time_arg_val(SPECIAL_MARKER_1_IDX) == SPECIAL_MARKER_1,

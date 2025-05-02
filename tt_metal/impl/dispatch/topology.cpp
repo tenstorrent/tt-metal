@@ -1150,6 +1150,7 @@ std::unique_ptr<Program> create_and_compile_1d_fabric_program(IDevice* device, F
     }
 
     auto set_sender_channel_ack_cmd_buf_ids = [&](auto& edm_builder) {
+        edm_builder.config.use_stateful_api_on_sender_ack = true;
         if (edm_builder.config.receiver_channel_forwarding_noc_ids[0] == 1) {
             edm_builder.config.sender_channel_ack_cmd_buf_ids[0] = edm_builder.config.WR_REG_CMD_BUF;
             edm_builder.config.sender_channel_ack_cmd_buf_ids[1] = edm_builder.config.WR_CMD_BUF;
@@ -1192,10 +1193,10 @@ std::unique_ptr<Program> create_and_compile_1d_fabric_program(IDevice* device, F
 
                 if (is_galaxy) {
                     get_optimal_noc_for_edm(edm_builder1, edm_builder2, num_links, topology);
-                }
 
-                set_sender_channel_ack_cmd_buf_ids(edm_builder1);
-                set_sender_channel_ack_cmd_buf_ids(edm_builder2);
+                    set_sender_channel_ack_cmd_buf_ids(edm_builder1);
+                    set_sender_channel_ack_cmd_buf_ids(edm_builder2);
+                }
 
                 eth_chans_dir1_it++;
                 eth_chans_dir2_it++;

@@ -279,6 +279,7 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(std::size_t channel_buffe
         this->sender_channel_ack_cmd_buf_ids[i] = FabricEriscDatamoverConfig::AT_CMD_BUF;
     }
     this->edm_noc_vc = FabricEriscDatamoverConfig::DEFAULT_NOC_VC;
+    this->use_stateful_api_on_sender_ack = false;
 }
 
 void get_runtime_args_for_edm_termination_infos(
@@ -517,6 +518,8 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args() const
             config.receiver_channel_local_write_cmd_buf_ids[i]);  // maps to receiver_channel_local_write_cmd_buf_ids
     }
     ct_args.push_back(config.edm_noc_vc);
+
+    ct_args.push_back((uint32_t)config.use_stateful_api_on_sender_ack);
 
     // Special marker to help with identifying misalignment bugs
     ct_args.push_back(0x10c0ffee);

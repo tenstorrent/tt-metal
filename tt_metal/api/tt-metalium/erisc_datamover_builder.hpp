@@ -127,6 +127,8 @@ struct FabricEriscDatamoverConfig {
     std::array<std::size_t, num_sender_channels> sender_channel_ack_noc_ids;
     std::array<std::size_t, num_sender_channels> sender_channel_ack_cmd_buf_ids;
 
+    bool use_stateful_api_on_sender_ack;
+
     // emd vcs
     std::size_t edm_noc_vc;
 

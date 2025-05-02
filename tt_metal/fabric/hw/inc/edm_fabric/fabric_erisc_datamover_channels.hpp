@@ -148,15 +148,18 @@ struct EdmChannelWorkerInterface {
         return cached_worker_semaphore_address & 0xFFFFFFFF;
     }
 
-    template <bool enable_ring_support>
+    template <bool enable_ring_support, bool use_stateful_api>
     FORCE_INLINE void update_worker_copy_of_read_ptr(BufferPtr new_ptr_val) {
-        // noc_inline_dw_write<false, true>(
-        //     this->cached_worker_semaphore_address, new_ptr_val, 0xf, tt::tt_fabric::worker_handshake_noc);
-        if constexpr (enable_ring_support) {
-            noc_inline_dw_write_with_state<true, false, true>(
-                new_ptr_val, (uint32_t)this->cached_worker_semaphore_address, this->sender_sync_noc_cmd_buf);
+        if constexpr (use_stateful_api) {
+            if constexpr (enable_ring_support) {
+                noc_inline_dw_write_with_state<true, false, true>(
+                    new_ptr_val, (uint32_t)this->cached_worker_semaphore_address, this->sender_sync_noc_cmd_buf);
+            } else {
+                noc_inline_dw_write_with_state<false, false, true>(new_ptr_val, 0, this->sender_sync_noc_cmd_buf);
+            }
         } else {
-            noc_inline_dw_write_with_state<false, false, true>(new_ptr_val, 0, this->sender_sync_noc_cmd_buf);
+            noc_inline_dw_write<false, true>(
+                this->cached_worker_semaphore_address, new_ptr_val, 0xf, tt::tt_fabric::worker_handshake_noc);
         }
     }
 
@@ -178,14 +181,16 @@ struct EdmChannelWorkerInterface {
         noc_semaphore_inc<posted>(worker_semaphore_address, 1, tt::tt_fabric::worker_handshake_noc);
     }
 
+    template <bool use_stateful_api>
     FORCE_INLINE void cache_producer_noc_addr() {
         const auto& worker_info = *worker_location_info_ptr;
         uint64_t worker_semaphore_address = get_noc_addr(
             (uint32_t)worker_info.worker_xy.x, (uint32_t)worker_info.worker_xy.y, worker_info.worker_semaphore_address);
         this->cached_worker_semaphore_address = worker_semaphore_address;
-        noc_inline_dw_write_set_state<true>(this->cached_worker_semaphore_address, 0xF, this->sender_sync_noc_cmd_buf);
-        // noc_inline_dw_write_set_state(
-        //     worker_semaphore_address, 0xF, sender_sync_noc_cmd_buf, tt::tt_fabric::worker_handshake_noc);
+        if constexpr (use_stateful_api) {
+            noc_inline_dw_write_set_state<true>(
+                this->cached_worker_semaphore_address, 0xF, this->sender_sync_noc_cmd_buf);
+        }
     }
 
     FORCE_INLINE bool all_eth_packets_acked() const { return this->local_ackptr.is_caught_up_to(this->local_wrptr); }

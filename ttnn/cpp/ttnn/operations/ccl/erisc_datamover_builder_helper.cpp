@@ -197,6 +197,24 @@ EdmLineFabricOpInterface::EdmLineFabricOpInterface(
         uint32_t bwd_edm_start_index = (topology == Topology::Ring) ? 0 : 1;
         uint32_t bwd_edm_end_index = device_sequence.size();
 
+        auto assign_noc_vc =
+            [](auto& edm_builders_direction, size_t start_index, size_t end_index, const auto& device_sequence) {
+                for (size_t i = start_index; i < end_index; i++) {
+                    const size_t num_links = edm_builders_direction.at(device_sequence[i]->id()).size();
+                    auto& direction_edm = edm_builders_direction.at(device_sequence[i]->id());
+
+                    for (size_t l = 0; l < num_links; l++) {
+                        auto& edm = direction_edm[l];
+                        auto edm_noc_vc = l & 0x3;
+                        edm.config.edm_noc_vc = edm_noc_vc;
+                    }
+                }
+            };
+
+        // Call assign_noc_vc for both forward and backward directions
+        assign_noc_vc(edm_builders_forward_direction, fwd_edm_start_index, fwd_edm_end_index, device_sequence);
+        assign_noc_vc(edm_builders_backward_direction, bwd_edm_start_index, bwd_edm_end_index, device_sequence);
+
         for (size_t i = start_bidirectional_device_index; i < end_bidirectional_device_index; i++) {
             const size_t num_links = edm_builders_forward_direction.at(device_sequence[i]->id()).size();
             auto& forward_direction_edm = edm_builders_forward_direction.at(device_sequence[i]->id());
@@ -267,7 +285,7 @@ EdmLineFabricOpInterface::EdmLineFabricOpInterface(
             }
         }
 
-        auto assign_noc_vc =
+        auto set_sender_channel_ack_cmd_buf_ids =
             [](auto& edm_builders_direction, size_t start_index, size_t end_index, const auto& device_sequence) {
                 for (size_t i = start_index; i < end_index; i++) {
                     const size_t num_links = edm_builders_direction.at(device_sequence[i]->id()).size();
@@ -275,8 +293,7 @@ EdmLineFabricOpInterface::EdmLineFabricOpInterface(
 
                     for (size_t l = 0; l < num_links; l++) {
                         auto& edm = direction_edm[l];
-                        auto edm_noc_vc = l & 0x3;
-                        edm.config.edm_noc_vc = edm_noc_vc;
+                        edm.config.use_stateful_api_on_sender_ack = true;
                         if (edm.config.receiver_channel_forwarding_noc_ids[0] == 1) {
                             edm.config.sender_channel_ack_cmd_buf_ids[0] = edm.config.WR_REG_CMD_BUF;
                             edm.config.sender_channel_ack_cmd_buf_ids[1] = edm.config.WR_CMD_BUF;
@@ -290,9 +307,14 @@ EdmLineFabricOpInterface::EdmLineFabricOpInterface(
                 }
             };
 
-        // Call assign_noc_vc for both forward and backward directions
-        assign_noc_vc(edm_builders_forward_direction, fwd_edm_start_index, fwd_edm_end_index, device_sequence);
-        assign_noc_vc(edm_builders_backward_direction, bwd_edm_start_index, bwd_edm_end_index, device_sequence);
+        // Call set_sender_channel_ack_cmd_buf_ids for both forward and backward directions, only for 6U as t3k has
+        // hangs for unknown reason.
+        if (is_galaxy) {
+            set_sender_channel_ack_cmd_buf_ids(
+                edm_builders_forward_direction, fwd_edm_start_index, fwd_edm_end_index, device_sequence);
+            set_sender_channel_ack_cmd_buf_ids(
+                edm_builders_backward_direction, bwd_edm_start_index, bwd_edm_end_index, device_sequence);
+        }
 
         for (size_t i = start_bidirectional_device_index; i < end_bidirectional_device_index; i++) {
             const size_t num_links = edm_builders_forward_direction.at(device_sequence[i]->id()).size();
