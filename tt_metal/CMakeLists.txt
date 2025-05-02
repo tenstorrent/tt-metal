@@ -69,7 +69,6 @@ target_sources(
             api/tt-metalium/host_api.hpp
             api/tt-metalium/kernel.hpp
             api/tt-metalium/kernel_types.hpp
-            api/tt-metalium/launch_message_ring_buffer_state.hpp
             api/tt-metalium/lightmetal_binary.hpp
             api/tt-metalium/logger.hpp
             api/tt-metalium/math.hpp
