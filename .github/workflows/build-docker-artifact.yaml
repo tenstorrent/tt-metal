@@ -79,11 +79,12 @@ jobs:
         run: |
           HASH=$(cat \
             .github/workflows/build-docker-artifact.yaml \
-            install_dependencies.sh \
             dockerfile/Dockerfile \
-            tt_metal/python_env/requirements-dev.txt \
             docs/requirements-docs.txt \
+            install_dependencies.sh \
             tests/sweep_framework/requirements-sweeps.txt \
+            tt_metal/python_env/requirements-dev.txt \
+            tt_metal/sfpi-version.sh \
             | sha1sum | cut -d' ' -f1)
           echo "ci-build-tag=ghcr.io/${{ github.repository }}/tt-metalium/${{ env.CI_BUILD_IMAGE_NAME }}:${HASH}" >> $GITHUB_OUTPUT
           echo "ci-test-tag=ghcr.io/${{ github.repository }}/tt-metalium/${{ env.CI_TEST_IMAGE_NAME }}:${HASH}" >> $GITHUB_OUTPUT
