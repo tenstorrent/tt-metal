@@ -202,8 +202,7 @@ void socket_notify_sender(const SocketReceiverInterface& socket) {
     // TODO: Store noc encoding in struct?
     auto upstream_bytes_acked_noc_addr =
         get_noc_addr(socket.upstream_noc_x, socket.upstream_noc_y, socket.upstream_bytes_acked_addr);
-    // TODO This is wrong
-    noc_semaphore_inc(upstream_bytes_acked_noc_addr, socket.bytes_acked);
+    noc_inline_dw_write(upstream_bytes_acked_noc_addr, socket.bytes_acked);
 }
 
 void update_socket_config(const SocketReceiverInterface& socket) {
