@@ -51,7 +51,7 @@
 #include "dprint_server.hpp"
 #include "hal_types.hpp"
 #include "jit_build/build.hpp"
-#include "launch_message_ring_buffer_state.hpp"
+#include "dispatch/launch_message_ring_buffer_state.hpp"
 #include "lightmetal/lightmetal_capture.hpp"
 #include "llrt.hpp"
 #include "logger.hpp"

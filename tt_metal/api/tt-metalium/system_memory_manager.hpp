@@ -5,7 +5,6 @@
 #pragma once
 
 // needed for private members
-#include <tt-metalium/launch_message_ring_buffer_state.hpp>
 #include <tt-metalium/system_memory_cq_interface.hpp>
 #include <umd/device/chip_helpers/tlb_manager.h>  // needed because tt_io.hpp requires needs TLBManager
 #include <umd/device/tt_io.hpp>                   // for tt::Writer
