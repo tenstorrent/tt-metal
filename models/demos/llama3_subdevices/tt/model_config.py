@@ -738,7 +738,7 @@ class TtModelArgs:
                         fuse_batch=True,
                         fused_activation=None,
                         mcast_in0=True,
-                        gather_in0=True,
+                        gather_in0=False,
                         num_global_cb_receivers=0,
                     )
                 elif seq_len == 4096:
