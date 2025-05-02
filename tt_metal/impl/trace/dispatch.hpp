@@ -13,7 +13,7 @@
 #include <vector>
 
 #include "core_coord.hpp"
-#include "dispatch_settings.hpp"
+#include "dispatch/dispatch_settings.hpp"
 #include "sub_device_types.hpp"
 
 namespace tt {

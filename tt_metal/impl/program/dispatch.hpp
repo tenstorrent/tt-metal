@@ -19,7 +19,7 @@
 
 #include "core_coord.hpp"
 #include "dev_msgs.h"
-#include "dispatch_settings.hpp"
+#include "dispatch/dispatch_settings.hpp"
 #include "kernel_types.hpp"
 #include "sub_device_types.hpp"
 

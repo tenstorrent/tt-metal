@@ -12,7 +12,6 @@
 #include <trace_buffer.hpp>
 #include <tracy/Tracy.hpp>
 #include <tt-metalium/allocator.hpp>
-#include <tt-metalium/dispatch_settings.hpp>
 #include <tt_stl/overloaded.hpp>
 #include <algorithm>
 #include <array>
@@ -25,6 +24,7 @@
 #include "buffers/dispatch.hpp"
 #include "device/dispatch.hpp"
 #include "dispatch/device_command.hpp"
+#include "dispatch_settings.hpp"
 #include "impl/context/metal_context.hpp"
 #include "dispatch/host_runtime_commands.hpp"
 #include "dprint_server.hpp"

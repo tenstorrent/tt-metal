@@ -55,7 +55,6 @@ target_sources(
             api/tt-metalium/device_impl.hpp
             api/tt-metalium/device_pool.hpp
             api/tt-metalium/dispatch_core_common.hpp
-            api/tt-metalium/dispatch_settings.hpp
             api/tt-metalium/event.hpp
             api/tt-metalium/fabric_host_interface.h
             api/tt-metalium/global_circular_buffer.hpp

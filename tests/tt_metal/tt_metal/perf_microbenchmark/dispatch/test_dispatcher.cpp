@@ -30,7 +30,7 @@
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/data_types.hpp>
 #include <tt-metalium/device.hpp>
-#include <tt-metalium/dispatch_settings.hpp>
+#include "impl/dispatch/dispatch_settings.hpp"
 #include <tt-metalium/kernel_types.hpp>
 #include "llrt.hpp"
 #include <tt-metalium/logger.hpp>

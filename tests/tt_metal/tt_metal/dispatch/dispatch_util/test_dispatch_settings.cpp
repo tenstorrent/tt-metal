@@ -4,7 +4,6 @@
 
 #include <fmt/base.h>
 #include <stdint.h>
-#include <tt-metalium/dispatch_settings.hpp>
 #include <tt-metalium/logger.hpp>
 #include <array>
 #include <functional>
@@ -15,6 +14,7 @@
 #include <tt-metalium/hal_types.hpp>
 #include "impl/context/metal_context.hpp"
 #include "umd/device/tt_core_coordinates.h"
+#include "impl/dispatch/dispatch_settings.hpp"
 
 namespace tt::tt_metal {
 
