@@ -20,6 +20,7 @@ set(PROGRAMMING_EXAMPLES_SRCS
     ${CMAKE_CURRENT_SOURCE_DIR}/vecadd_multi_core/vecadd_multi_core.cpp
 )
 
+add_compile_definitions(OVERRIDE_KERNEL_PREFIX="tt_metal/programming_examples/")
 include(${PROJECT_SOURCE_DIR}/cmake/helper_functions.cmake)
 
 CREATE_PGM_EXAMPLES_EXE("${PROGRAMMING_EXAMPLES_SRCS}" "") # no subdir, output binaries straight to build/programming_examples
@@ -45,4 +46,17 @@ install(
     #                 For now keep it out of 'doc'.
     DESTINATION "${CMAKE_INSTALL_DATADIR}/tt-metalium/examples"
     COMPONENT metalium-examples
+    REGEX
+    "/kernels/"
+        EXCLUDE
+)
+
+install(
+    DIRECTORY
+        hello_world_compute_kernel
+    DESTINATION "${CMAKE_INSTALL_DATADIR}/tenstorrent/kernels"
+    COMPONENT metalium-examples
+    FILES_MATCHING
+    REGEX
+    "/kernels/"
 )
