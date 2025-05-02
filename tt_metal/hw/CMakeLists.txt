@@ -112,9 +112,8 @@ foreach(ARCH IN LISTS ARCHS)
                 COMMAND
                     ${CMAKE_COMMAND} -E make_directory ${HW_OUTPUT_DIR}
                 COMMAND
-                    ${CMAKE_CXX_COMPILER} -DTYPE_${TYPE_DEFINE} -DCOMPILE_FOR_${PROC_DEFINE}
-		    -I${HW_INCLUDES} -E -P -x c -o ${HW_OUTPUT_DIR}/${HW_OUTPUT_FILE}
-                    ${CMAKE_CURRENT_SOURCE_DIR}/toolchain/main.ld
+                ${CMAKE_CXX_COMPILER} -DTYPE_${TYPE_DEFINE} -DCOMPILE_FOR_${PROC_DEFINE} -I${HW_INCLUDES} -E -P -x c
+                    -o ${HW_OUTPUT_DIR}/${HW_OUTPUT_FILE} ${CMAKE_CURRENT_SOURCE_DIR}/toolchain/main.ld
                 DEPENDS
                     ${CMAKE_CURRENT_SOURCE_DIR}/toolchain/main.ld
                     ${CMAKE_CURRENT_SOURCE_DIR}/toolchain/memory.ld
