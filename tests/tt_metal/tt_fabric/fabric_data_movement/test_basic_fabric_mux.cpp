@@ -75,8 +75,8 @@ struct WorkerMemoryMap {
 
 // first generates the physical chip id matrix and then returns the sequence of connected chip ids
 std::vector<chip_id_t> get_physical_chip_sequence(uint32_t num_seq_chips) {
-    tt::tt_fabric::mesh_id_t mesh_id = 0;
     auto* control_plane = tt::tt_metal::MetalContext::instance().get_cluster().get_control_plane();
+    tt::tt_fabric::mesh_id_t mesh_id = control_plane->get_user_physical_mesh_ids()[0];
 
     auto num_devices = tt::tt_metal::GetNumAvailableDevices();
     uint32_t chip_id_offset = 0;
@@ -104,7 +104,7 @@ std::vector<chip_id_t> get_physical_chip_sequence(uint32_t num_seq_chips) {
     if (chip_0_neigbors.size() > 2) {
         log_fatal(
             LogTest, "Expected 2 or less than 2 neigbors for a corner chip, but found {}", chip_0_neigbors.size());
-        throw std::runtime_error("Unexpected number of neigbord for corner chip");
+        throw std::runtime_error("Unexpected number of neigbors for corner chip");
     }
 
     if (!chip_1_direction.has_value()) {
