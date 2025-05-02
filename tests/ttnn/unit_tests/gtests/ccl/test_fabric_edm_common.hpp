@@ -425,7 +425,7 @@ void generate_sender_worker_kernels(
         worker_fabric_connection.num_buffers_per_channel,
         dest_is_dram,
         std::holds_alternative<mcast_send>(mode) ? 1 : 0,
-        scatter_write ? 1 : 0};
+        scatter_write};
     log_trace(tt::LogTest, "worker_fabric_connection.edm_l1_sem_addr: {}", worker_fabric_connection.edm_l1_sem_addr);
     log_trace(tt::LogTest, "worker_buffer_index_semaphore_id: {}", worker_buffer_index_semaphore_id);
     log_trace(tt::LogTest, "last_message_semaphore_address: {}", local_worker_last_message_semaphore_id);
