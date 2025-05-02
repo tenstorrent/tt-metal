@@ -24,9 +24,6 @@ void kernel_main() {
     const uint32_t nD_stride_b = get_arg_val<uint32_t>(14);
     const uint32_t n_stride_b = get_arg_val<uint32_t>(15);
     const uint32_t c_stride_b = get_arg_val<uint32_t>(16);
-    const uint32_t nD_stride_b = get_arg_val<uint32_t>(14);
-    const uint32_t n_stride_b = get_arg_val<uint32_t>(15);
-    const uint32_t c_stride_b = get_arg_val<uint32_t>(16);
     const uint32_t src_num_tiles_b = get_arg_val<uint32_t>(17);
 
     constexpr auto cb_id_src = tt::CBIndex::c_0;
