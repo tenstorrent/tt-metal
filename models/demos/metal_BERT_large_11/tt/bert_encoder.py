@@ -10,6 +10,7 @@ import ttnn
 from models.demos.metal_BERT_large_11.tt.mha import TtMultiHeadAttentionModel
 from models.demos.metal_BERT_large_11.tt.ffn import TtFeedForwardModel
 from models.demos.metal_BERT_large_11.tt import custom_matmuls
+from models.demos.metal_BERT_large_11.tt.tensor_utils import load_or_compute_and_cache
 from tt_lib.utils import pad_weight
 
 
@@ -24,112 +25,129 @@ class TtBertEncoder:
         attn_layer_name = f"bert.encoder.layer.{encoder_idx}.attention.output"
         layer_name = f"bert.encoder.layer.{encoder_idx}.output"
 
+        attention_output_weight_path = None
+        attention_output_bias_path = None
+        mha_gamma_path = None
+        mha_beta_path = None
+        ffn_gamma_path = None
+        ffn_beta_path = None
+
         if tt_cache_path is not None:
-            self.attention_output_weight = ttnn.load_tensor(
-                str(
-                    tt_cache_path
-                    / f"{attn_layer_name}.dense.weight_{self.model_config['OP7_SELFOUT_WEIGHTS_DTYPE'].name}.bin"
-                )
-            ).to(device, self.model_config["OP7_SELFOUT_WEIGHTS_MEMCFG"])
-            self.attention_output_bias = ttnn.load_tensor(
-                str(
-                    tt_cache_path
-                    / f"{attn_layer_name}.dense.bias_{self.model_config['OP7_SELFOUT_BIAS_DTYPE'].name}.bin"
-                )
-            ).to(device, self.model_config["OP7_SELFOUT_BIAS_MEMCFG"])
-            self.mha_gamma = ttnn.load_tensor(
-                str(
-                    tt_cache_path
-                    / f"{attn_layer_name}.LayerNorm.weight_{self.model_config['OP8_LAYERNORM_GAMMA_DTYPE'].name}.bin"
-                )
-            ).to(device, self.model_config["OP8_LAYERNORM_GAMMA_MEMCFG"])
-            self.mha_beta = ttnn.load_tensor(
-                str(
-                    tt_cache_path
-                    / f"{attn_layer_name}.LayerNorm.bias_{self.model_config['OP8_LAYERNORM_BETA_DTYPE'].name}.bin"
-                )
-            ).to(device, self.model_config["OP8_LAYERNORM_BETA_MEMCFG"])
-            self.ffn_gamma = ttnn.load_tensor(
-                str(
-                    tt_cache_path
-                    / f"{layer_name}.LayerNorm.weight_{self.model_config['OP11_LAYERNORM_GAMMA_DTYPE'].name}.bin"
-                )
-            ).to(device, self.model_config["OP8_LAYERNORM_GAMMA_MEMCFG"])
-            self.ffn_beta = ttnn.load_tensor(
-                str(
-                    tt_cache_path
-                    / f"{layer_name}.LayerNorm.bias_{self.model_config['OP11_LAYERNORM_BETA_DTYPE'].name}.bin"
-                )
-            ).to(device, self.model_config["OP8_LAYERNORM_BETA_MEMCFG"])
-        else:
-            attention_output_weight = pad_weight(
+            attention_output_weight_path = str(
+                f"{tt_cache_path}/"
+                f"{attn_layer_name}.dense.weight_{self.model_config['OP7_SELFOUT_WEIGHTS_DTYPE'].name}.bin"
+            )
+            attention_output_bias_path = str(
+                f"{tt_cache_path}/"
+                f"{attn_layer_name}.dense.bias_{self.model_config['OP7_SELFOUT_BIAS_DTYPE'].name}.bin"
+            )
+            mha_gamma_path = str(
+                f"{tt_cache_path}/"
+                f"{attn_layer_name}.LayerNorm.weight_{self.model_config['OP8_LAYERNORM_GAMMA_DTYPE'].name}.bin"
+            )
+            mha_beta_path = str(
+                f"{tt_cache_path}/"
+                f"{attn_layer_name}.LayerNorm.bias_{self.model_config['OP8_LAYERNORM_BETA_DTYPE'].name}.bin"
+            )
+            ffn_gamma_path = str(
+                f"{tt_cache_path}/"
+                f"{layer_name}.LayerNorm.weight_{self.model_config['OP11_LAYERNORM_GAMMA_DTYPE'].name}.bin"
+            )
+            ffn_beta_path = str(
+                f"{tt_cache_path}/"
+                f"{layer_name}.LayerNorm.bias_{self.model_config['OP11_LAYERNORM_BETA_DTYPE'].name}.bin"
+            )
+
+        def compute_attention_output_weight():
+            weight_torch = pad_weight(
                 torch.transpose(
                     state_dict[f"{attn_layer_name}.dense.weight"],
                     -2,
                     -1,
                 )
             )
-            self.attention_output_weight = ttnn.from_torch(
-                attention_output_weight,
+            return ttnn.from_torch(
+                weight_torch,
                 model_config["OP7_SELFOUT_WEIGHTS_DTYPE"],
                 layout=ttnn.TILE_LAYOUT,
-                device=device,
-                memory_config=model_config["OP7_SELFOUT_WEIGHTS_MEMCFG"],
             )
-            attention_output_bias = pad_weight(state_dict[f"{attn_layer_name}.dense.bias"])
-            self.attention_output_bias = ttnn.from_torch(
-                attention_output_bias,
+
+        def compute_attention_output_bias():
+            bias_torch = pad_weight(state_dict[f"{attn_layer_name}.dense.bias"])
+            return ttnn.from_torch(
+                bias_torch,
                 model_config["OP7_SELFOUT_BIAS_DTYPE"],
                 layout=ttnn.TILE_LAYOUT,
-                device=device,
-                memory_config=model_config["OP7_SELFOUT_BIAS_MEMCFG"],
             )
 
-            # Weights pre-transposed on host​. No on-the fly transpose of W.
-            # self.attention_output_weight = ttnn.transpose(
-            #     self.attention_output_weight,
-            #     -2, -1,
-            # )
-
-            # MHA layernorm
-            gamma0 = state_dict[f"{attn_layer_name}.LayerNorm.weight"]
-            beta0 = state_dict[f"{attn_layer_name}.LayerNorm.bias"]
-            mha_gamma = gamma0.reshape(1, 1, -1, 32)
-            self.mha_gamma = ttnn.from_torch(
-                mha_gamma,
+        def compute_mha_gamma():
+            gamma_torch = state_dict[f"{attn_layer_name}.LayerNorm.weight"].reshape(1, 1, -1, 32)
+            return ttnn.from_torch(
+                gamma_torch,
                 model_config["OP8_LAYERNORM_GAMMA_DTYPE"],
                 layout=ttnn.ROW_MAJOR_LAYOUT,
-                device=device,
-                memory_config=model_config["OP8_LAYERNORM_GAMMA_MEMCFG"],
-            )
-            mha_beta = beta0.reshape(1, 1, -1, 32)
-            self.mha_beta = ttnn.from_torch(
-                mha_beta,
-                model_config["OP8_LAYERNORM_BETA_DTYPE"],
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-                device=device,
-                memory_config=model_config["OP8_LAYERNORM_BETA_MEMCFG"],
             )
 
-            # FFN layernorm
-            gamma1 = state_dict[f"{layer_name}.LayerNorm.weight"]
-            beta1 = state_dict[f"{layer_name}.LayerNorm.bias"]
-            ffn_gamma = gamma1.reshape(1, 1, -1, 32)
-            self.ffn_gamma = ttnn.from_torch(
-                ffn_gamma,
+        def compute_mha_beta():
+            beta_torch = state_dict[f"{attn_layer_name}.LayerNorm.bias"].reshape(1, 1, -1, 32)
+            return ttnn.from_torch(
+                beta_torch,
+                model_config["OP8_LAYERNORM_BETA_DTYPE"],
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+            )
+
+        def compute_ffn_gamma():
+            gamma_torch = state_dict[f"{layer_name}.LayerNorm.weight"].reshape(1, 1, -1, 32)
+            return ttnn.from_torch(
+                gamma_torch,
                 model_config["OP11_LAYERNORM_GAMMA_DTYPE"],
                 layout=ttnn.ROW_MAJOR_LAYOUT,
-                device=device,
-                memory_config=model_config["OP11_LAYERNORM_GAMMA_MEMCFG"],
             )
-            ffn_beta = beta1.reshape(1, 1, -1, 32)
-            self.ffn_beta = ttnn.from_torch(
-                ffn_beta,
+
+        def compute_ffn_beta():
+            beta_torch = state_dict[f"{layer_name}.LayerNorm.bias"].reshape(1, 1, -1, 32)
+            return ttnn.from_torch(
+                beta_torch,
                 model_config["OP11_LAYERNORM_BETA_DTYPE"],
                 layout=ttnn.ROW_MAJOR_LAYOUT,
-                device=device,
-                memory_config=model_config["OP11_LAYERNORM_BETA_MEMCFG"],
             )
+
+        self.attention_output_weight = load_or_compute_and_cache(
+            attention_output_weight_path,
+            compute_attention_output_weight,
+            device=device,
+            mem_config=model_config["OP7_SELFOUT_WEIGHTS_MEMCFG"],
+        )
+        self.attention_output_bias = load_or_compute_and_cache(
+            attention_output_bias_path,
+            compute_attention_output_bias,
+            device=device,
+            mem_config=model_config["OP7_SELFOUT_BIAS_MEMCFG"],
+        )
+        self.mha_gamma = load_or_compute_and_cache(
+            mha_gamma_path,
+            compute_mha_gamma,
+            device=device,
+            mem_config=model_config["OP8_LAYERNORM_GAMMA_MEMCFG"],
+        )
+        self.mha_beta = load_or_compute_and_cache(
+            mha_beta_path,
+            compute_mha_beta,
+            device=device,
+            mem_config=model_config["OP8_LAYERNORM_BETA_MEMCFG"],
+        )
+        self.ffn_gamma = load_or_compute_and_cache(
+            ffn_gamma_path,
+            compute_ffn_gamma,
+            device=device,
+            mem_config=model_config["OP11_LAYERNORM_GAMMA_MEMCFG"],
+        )
+        self.ffn_beta = load_or_compute_and_cache(
+            ffn_beta_path,
+            compute_ffn_beta,
+            device=device,
+            mem_config=model_config["OP11_LAYERNORM_BETA_MEMCFG"],
+        )
 
         # FFN sub-graph
         self.ffn = TtFeedForwardModel(encoder_idx, state_dict, device, model_config, tt_cache_path)

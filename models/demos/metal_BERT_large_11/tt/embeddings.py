@@ -5,6 +5,7 @@
 from typing import Optional
 import torch
 import ttnn
+from models.demos.metal_BERT_large_11.tt.tensor_utils import load_or_compute_and_cache
 
 
 class TtEmbeddings:
@@ -17,77 +18,105 @@ class TtEmbeddings:
         self.pad_token = config.pad_token_id
 
         base_address = "bert.embeddings"
+
+        word_embeddings_path = None
+        position_embeddings_path = None
+        token_type_embeddings_path = None
+        layerNorm_gamma_path = None
+        layerNorm_beta_path = None
+
         if tt_cache_path is not None:
-            self.word_embeddings_weight = ttnn.load_tensor(
-                str(
-                    tt_cache_path
-                    / f"{base_address}.word_embeddings.weight_{self.model_config['INPUT_EMBEDDINGS_WEIGHTS_DTYPE'].name}.bin"
-                )
-            ).to(device, self.model_config["INPUT_EMBEDDINGS_WEIGHTS_MEMCFG"])
-            self.position_embeddings_weight = ttnn.load_tensor(
-                str(
-                    tt_cache_path
-                    / f"{base_address}.position_embeddings.weight_{self.model_config['INPUT_EMBEDDINGS_WEIGHTS_DTYPE'].name}.bin"
-                )
-            ).to(device, self.model_config["INPUT_EMBEDDINGS_WEIGHTS_MEMCFG"])
-            self.token_type_embeddings_weight = ttnn.load_tensor(
-                str(
-                    tt_cache_path
-                    / f"{base_address}.token_type_embeddings.weight_{self.model_config['INPUT_EMBEDDINGS_WEIGHTS_DTYPE'].name}.bin"
-                )
-            ).to(device, self.model_config["INPUT_EMBEDDINGS_WEIGHTS_MEMCFG"])
-            self.layerNorm_gamma = ttnn.load_tensor(
-                str(
-                    tt_cache_path
-                    / f"{base_address}.LayerNorm.weight_{self.model_config['EMBEDDINGS_LAYERNORM_GAMMA_DTYPE'].name}.bin"
-                )
-            ).to(device, self.model_config["EMBEDDINGS_LAYERNORM_GAMMA_MEMCFG"])
-            self.layerNorm_beta = ttnn.load_tensor(
-                str(
-                    tt_cache_path
-                    / f"{base_address}.LayerNorm.beta_{self.model_config['EMBEDDINGS_LAYERNORM_BETA_DTYPE'].name}.bin"
-                )
-            ).to(device, self.model_config["EMBEDDINGS_LAYERNORM_BETA_MEMCFG"])
-        else:
-            self.word_embeddings_weight = ttnn.from_torch(
-                state_dict[f"{base_address}.word_embeddings.weight"],
-                model_config["INPUT_EMBEDDINGS_WEIGHTS_DTYPE"],
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-                device=device,
-                memory_config=model_config["INPUT_EMBEDDINGS_WEIGHTS_MEMCFG"],
+            word_embeddings_path = str(
+                f"{tt_cache_path}/"
+                f"{base_address}.word_embeddings.weight_{self.model_config['INPUT_EMBEDDINGS_WEIGHTS_DTYPE'].name}.bin"
+            )
+            position_embeddings_path = str(
+                f"{tt_cache_path}/"
+                f"{base_address}.position_embeddings.weight_{self.model_config['INPUT_EMBEDDINGS_WEIGHTS_DTYPE'].name}.bin"
+            )
+            token_type_embeddings_path = str(
+                f"{tt_cache_path}/"
+                f"{base_address}.token_type_embeddings.weight_{self.model_config['INPUT_EMBEDDINGS_WEIGHTS_DTYPE'].name}.bin"
+            )
+            layerNorm_gamma_path = str(
+                f"{tt_cache_path}/"
+                f"{base_address}.LayerNorm.weight_{self.model_config['EMBEDDINGS_LAYERNORM_GAMMA_DTYPE'].name}.bin"
+            )
+            layerNorm_beta_path = str(
+                f"{tt_cache_path}/"
+                f"{base_address}.LayerNorm.beta_{self.model_config['EMBEDDINGS_LAYERNORM_BETA_DTYPE'].name}.bin"
             )
 
-            self.position_embeddings_weight = ttnn.from_torch(
-                state_dict[f"{base_address}.position_embeddings.weight"],
-                model_config["INPUT_EMBEDDINGS_WEIGHTS_DTYPE"],
+        def compute_word_embeddings():
+            weight_torch = state_dict[f"{base_address}.word_embeddings.weight"]
+            return ttnn.from_torch(
+                weight_torch,
+                dtype=model_config["INPUT_EMBEDDINGS_WEIGHTS_DTYPE"],
                 layout=ttnn.ROW_MAJOR_LAYOUT,
-                device=device,
-                memory_config=model_config["INPUT_EMBEDDINGS_WEIGHTS_MEMCFG"],
             )
 
-            self.token_type_embeddings_weight = ttnn.from_torch(
-                state_dict[f"{base_address}.token_type_embeddings.weight"],
-                model_config["INPUT_EMBEDDINGS_WEIGHTS_DTYPE"],
+        def compute_position_embeddings():
+            weight_torch = state_dict[f"{base_address}.position_embeddings.weight"]
+            return ttnn.from_torch(
+                weight_torch,
+                dtype=model_config["INPUT_EMBEDDINGS_WEIGHTS_DTYPE"],
                 layout=ttnn.ROW_MAJOR_LAYOUT,
-                device=device,
-                memory_config=model_config["INPUT_EMBEDDINGS_WEIGHTS_MEMCFG"],
             )
 
-            self.layerNorm_gamma = ttnn.from_torch(
-                state_dict[f"{base_address}.LayerNorm.weight"].reshape([1, 1, -1, 32]),
-                model_config["EMBEDDINGS_LAYERNORM_GAMMA_DTYPE"],
+        def compute_token_type_embeddings():
+            weight_torch = state_dict[f"{base_address}.token_type_embeddings.weight"]
+            return ttnn.from_torch(
+                weight_torch,
+                dtype=model_config["INPUT_EMBEDDINGS_WEIGHTS_DTYPE"],
                 layout=ttnn.ROW_MAJOR_LAYOUT,
-                device=device,
-                memory_config=model_config["EMBEDDINGS_LAYERNORM_GAMMA_MEMCFG"],
             )
 
-            self.layerNorm_beta = ttnn.from_torch(
-                state_dict[f"{base_address}.LayerNorm.bias"].reshape([1, 1, -1, 32]),
-                model_config["EMBEDDINGS_LAYERNORM_BETA_DTYPE"],
+        def compute_layerNorm_gamma():
+            gamma_torch = state_dict[f"{base_address}.LayerNorm.weight"].reshape([1, 1, -1, 32])
+            return ttnn.from_torch(
+                gamma_torch,
+                dtype=model_config["EMBEDDINGS_LAYERNORM_GAMMA_DTYPE"],
                 layout=ttnn.ROW_MAJOR_LAYOUT,
-                device=device,
-                memory_config=model_config["EMBEDDINGS_LAYERNORM_BETA_MEMCFG"],
             )
+
+        def compute_layerNorm_beta():
+            beta_torch = state_dict[f"{base_address}.LayerNorm.bias"].reshape([1, 1, -1, 32])
+            return ttnn.from_torch(
+                beta_torch,
+                dtype=model_config["EMBEDDINGS_LAYERNORM_BETA_DTYPE"],
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+            )
+
+        self.word_embeddings_weight = load_or_compute_and_cache(
+            word_embeddings_path,
+            compute_word_embeddings,
+            device=device,
+            mem_config=self.model_config["INPUT_EMBEDDINGS_WEIGHTS_MEMCFG"],
+        )
+        self.position_embeddings_weight = load_or_compute_and_cache(
+            position_embeddings_path,
+            compute_position_embeddings,
+            device=device,
+            mem_config=self.model_config["INPUT_EMBEDDINGS_WEIGHTS_MEMCFG"],
+        )
+        self.token_type_embeddings_weight = load_or_compute_and_cache(
+            token_type_embeddings_path,
+            compute_token_type_embeddings,
+            device=device,
+            mem_config=self.model_config["INPUT_EMBEDDINGS_WEIGHTS_MEMCFG"],
+        )
+        self.layerNorm_gamma = load_or_compute_and_cache(
+            layerNorm_gamma_path,
+            compute_layerNorm_gamma,
+            device=device,
+            mem_config=self.model_config["EMBEDDINGS_LAYERNORM_GAMMA_MEMCFG"],
+        )
+        self.layerNorm_beta = load_or_compute_and_cache(
+            layerNorm_beta_path,
+            compute_layerNorm_beta,
+            device=device,
+            mem_config=self.model_config["EMBEDDINGS_LAYERNORM_BETA_MEMCFG"],
+        )
 
         self.layerNorm_eps = config.layer_norm_eps
 
