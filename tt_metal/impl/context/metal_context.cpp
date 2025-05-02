@@ -22,6 +22,7 @@ void MetalContext::initialize(
         if (this->dispatch_core_config_ != dispatch_core_config or num_hw_cqs != this->num_hw_cqs_ or
             l1_bank_remap != this->l1_bank_remap_) {
             log_warning("Closing and re-initializing MetalContext with new parameters.");
+            teardown();
         } else {
             // Re-init request with the same parameters, do nothing
             return;
@@ -44,6 +45,22 @@ void MetalContext::initialize(
         std::make_unique<DispatchMemMap>(CoreType::ETH, num_hw_cqs);
 
     // TODO: Move FW, fabric, dispatch init here
+
+    // Register teardown function
+    std::atexit([]() { MetalContext::instance().teardown(); });
+}
+
+void MetalContext::teardown() {
+    initialized_ = false;
+
+    for (auto& mem_map : dispatch_mem_map_) {
+        if (mem_map) {
+            mem_map.reset();
+        }
+    }
+    dispatch_query_manager_.reset();
+    dispatch_core_manager_.reset();
+    log_warning("MetalContext::teardown() finished.");
 }
 
 MetalContext& MetalContext::instance() {
@@ -56,6 +73,12 @@ MetalContext::MetalContext() {
         Cluster::is_base_routing_fw_enabled(Cluster::get_cluster_type_from_cluster_desc(rtoptions_));
     hal_ = std::make_unique<Hal>(get_platform_architecture(rtoptions_), is_base_routing_fw_enabled);
     cluster_ = std::make_unique<Cluster>(rtoptions_, *hal_);
+}
+
+MetalContext::~MetalContext() {
+    cluster_.reset();
+    hal_.reset();
+    log_warning("MetalContext::~MetalContext() finished.");
 }
 
 llrt::RunTimeOptions& MetalContext::rtoptions() { return rtoptions_; }
