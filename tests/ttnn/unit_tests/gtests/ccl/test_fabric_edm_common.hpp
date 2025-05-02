@@ -406,7 +406,8 @@ void generate_sender_worker_kernels(
         src_is_dram,      //
         num_pages_total,  //
         page_plus_header_size - PACKET_HEADER_SIZE_BYTES,
-        num_pages_per_edm_buffer};
+        num_pages_per_edm_buffer,
+        scatter_write};
     std::vector<uint32_t> sender_worker_reader_runtime_args{dram_input_buffer_base_addr};
 
     log_trace(tt::LogTest, "\tSenderReader CT Args");

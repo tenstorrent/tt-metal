@@ -37,6 +37,11 @@ void kernel_main() {
     constexpr bool write_scatter_mode = get_compile_time_arg_val(6) == 1;
     constexpr uint32_t num_pages_per_send = (write_scatter_mode ? 2 : 1);
 
+    DPRINT << "sws: args " << "\n\tnum_pages_to_send=" << total_pages_to_send << "\n\tpage_size=" << page_size
+           << "\n\tnum_buffers_per_channel=" << num_buffers_per_channel
+           << "\n\tdest_is_dram=" << (dest_is_dram ? "T" : "F") << "\n\tmcast_mode=" << (mcast_mode ? "T" : "F")
+           << "\n\twrite_scatter_mode=" << (write_scatter_mode ? "T" : "F") << "\n";
+
     size_t arg_idx = 0;
     // Nearly all of the following arguments are needed to establish a connection with
     // EDM.
@@ -124,7 +129,7 @@ void kernel_main() {
 
         // bit of a hack to extract X/Y
         const auto dest_noc_address = get_noc_addr(p, dest_addr_gen, 0, NORMALIZED_NOC_INDEX);
-        size_t packet_size = page_size + sizeof(PACKET_HEADER_TYPE);
+        size_t packet_size = (pages_to_send * page_size) + sizeof(PACKET_HEADER_TYPE);
         auto packet_addr = get_read_ptr(cb_id_in0);
         auto* packet_header = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(packet_addr);
         if constexpr (mcast_mode) {
@@ -135,12 +140,11 @@ void kernel_main() {
                     tt::tt_fabric::NocUnicastCommandHeader{dest_noc_address}, (pages_to_send * page_size));
         } else {
             if (write_scatter_mode && pages_to_send == 2) {
-                packet_size = pages_to_send * (page_size + sizeof(PACKET_HEADER_TYPE));
                 uint64_t dest_noc_address2 = get_noc_addr(p + 1, dest_addr_gen, 0, NORMALIZED_NOC_INDEX);
                 packet_header->to_chip_unicast(config.unicast.distance)
                     ->to_noc_unicast_scatter_write(
                         tt::tt_fabric::NocUnicastScatterCommandHeader{dest_noc_address, dest_noc_address2},
-                        (pages_to_send * page_size) + (pages_to_send - 1) * sizeof(PACKET_HEADER_TYPE));
+                        (pages_to_send * page_size));
             } else {
                 packet_header->to_chip_unicast(config.unicast.distance)
                     ->to_noc_unicast_write(
