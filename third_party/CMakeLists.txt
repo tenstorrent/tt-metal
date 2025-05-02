@@ -155,6 +155,7 @@ CPMAddPackage(
     OPTIONS
         "CMAKE_MESSAGE_LOG_LEVEL NOTICE"
         "JSON_Install ON"
+        "JSON_BuildTests OFF"
 )
 set(CMAKE_INSTALL_DEFAULT_COMPONENT_NAME ${DEFAULT_COMPONENT_NAME})
 
@@ -226,6 +227,8 @@ CPMAddPackage(
     GIT_TAG v3.7.0
     OPTIONS
         "CMAKE_MESSAGE_LOG_LEVEL NOTICE" # Taskflow's CMakeLists.txt is super noisy
+        "TF_BUILD_TESTS OFF"
+        "TF_BUILD_EXAMPLES OFF"
 )
 if(Taskflow_ADDED AND NOT TARGET Taskflow::Taskflow)
     add_library(Taskflow::Taskflow ALIAS Taskflow)
