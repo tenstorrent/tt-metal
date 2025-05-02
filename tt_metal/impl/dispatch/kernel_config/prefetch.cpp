@@ -4,7 +4,6 @@
 #include "prefetch.hpp"
 
 #include <host_api.hpp>
-#include <tt-metalium/dispatch_settings.hpp>
 #include <tt_metal.hpp>
 #include <array>
 #include <map>
@@ -18,6 +17,7 @@
 #include "device.hpp"
 #include "dispatch.hpp"
 #include "dispatch/kernel_config/fd_kernel.hpp"
+#include "dispatch/dispatch_settings.hpp"
 #include "dispatch_core_common.hpp"
 #include "dispatch_s.hpp"
 #include "eth_router.hpp"

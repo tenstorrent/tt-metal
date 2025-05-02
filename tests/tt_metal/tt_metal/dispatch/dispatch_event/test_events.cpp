@@ -20,7 +20,7 @@
 #include <tt-metalium/buffer_types.hpp>
 #include "command_queue_fixture.hpp"
 #include <tt-metalium/device.hpp>
-#include <tt-metalium/dispatch_settings.hpp>
+#include "impl/dispatch/dispatch_settings.hpp"
 #include "gtest/gtest.h"
 #include "impl/debug/watcher_server.hpp"
 #include <tt-metalium/logger.hpp>

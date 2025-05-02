@@ -135,9 +135,9 @@ public:
     // page size is padded appropriately.
     static constexpr uint32_t BASE_PARTIAL_PAGE_SIZE_DISPATCH = 4096;
 
-    static constexpr uint32_t MAX_HUGEPAGE_SIZE = 1 << 30;                                        // 1GB
-    static constexpr uint32_t MAX_DEV_CHANNEL_SIZE = 1 << 28;                                     // 256 MB;
-    static constexpr uint32_t DEVICES_PER_UMD_CHANNEL = MAX_HUGEPAGE_SIZE / MAX_DEV_CHANNEL_SIZE; // 256 MB;
+    static constexpr uint32_t MAX_HUGEPAGE_SIZE = 1 << 30;                                         // 1GB
+    static constexpr uint32_t MAX_DEV_CHANNEL_SIZE = 1 << 28;                                      // 256 MB;
+    static constexpr uint32_t DEVICES_PER_UMD_CHANNEL = MAX_HUGEPAGE_SIZE / MAX_DEV_CHANNEL_SIZE;  // 256 MB;
 
     //
     // Configurable Settings

@@ -2,10 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <dispatch_settings.hpp>
 #include <limits.h>
 #include <tt-metalium/dev_msgs.h>
-#include <tt-metalium/dispatch_settings.hpp>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
@@ -17,6 +15,7 @@
 #include "fmt/base.h"
 #include "hal_types.hpp"
 #include "impl/context/metal_context.hpp"
+#include "dispatch/dispatch_settings.hpp"
 #include "magic_enum/magic_enum.hpp"
 #include "size_literals.hpp"
 #include "tt_metal/impl/dispatch/kernels/cq_commands.hpp"
