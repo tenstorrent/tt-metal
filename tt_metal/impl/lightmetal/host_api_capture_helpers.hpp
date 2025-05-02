@@ -5,6 +5,7 @@
 #pragma once
 
 #include "flatbuffers/flatbuffers.h"
+#include "host_api.hpp"
 #include "lightmetal/lightmetal_capture.hpp"
 #include <tt-metalium/logger.hpp>
 #include <tt_stl/span.hpp>
@@ -69,6 +70,11 @@ struct TraceScope {
 namespace tt::tt_metal {
 
 // Per Command type capture helper functions
+// TODO
+void CaptureBeginTraceCapture(IDevice* device, uint8_t cq_id);
+// TODO
+void CaptureEndTraceCapture(IDevice* device, uint8_t cq_id, uint32_t tid);
+
 void CaptureReplayTrace(IDevice* device, uint8_t cq_id, uint32_t tid, bool blocking);
 
 void CaptureEnqueueTrace(CommandQueue& cq, uint32_t tid, bool blocking);
@@ -91,6 +97,37 @@ void CaptureBufferCreate(
 
 void CaptureBufferDeallocate(const Buffer& buffer);
 void CaptureBufferDelete(const Buffer& buffer);
+
+// TODO START
+void CaptureMeshWorkloadCreate();
+
+void CaptureAddProgramToMeshWorkload(
+    MeshWorkload& mesh_workload, Program&& program, const MeshCoordinateRange& device_range);
+
+void CaptureEnqueueMeshWorkload(
+    CommandQueue& cq,
+    MeshWorkload& mesh_workload,
+    const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec,
+    const std::variant<DataMovementConfig, ComputeConfig, EthernetConfig>& config);
+
+void CaptureEnqueueRecordEvent();
+
+void CaptureEnqueueRecordEventToHost();
+
+void CaptureEnqueueWaitForEvent();
+
+void CaptureEventSynchronize();
+
+void CaptureSynchronize();
+
+void CaptureEnqueueReadMeshBuffer();
+
+void CaptureEnqueueWriteMeshBuffer();
+
+void CaptureEnqueueReadShard();
+
+void CaptureEnqueueWriteShard();
+// END TODO
 
 void CaptureEnqueueWriteBuffer(
     CommandQueue& cq,
