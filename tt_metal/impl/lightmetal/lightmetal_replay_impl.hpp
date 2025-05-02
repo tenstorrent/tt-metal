@@ -5,6 +5,7 @@
 #pragma once
 
 #include <flatbuffers/flatbuffers.h>
+#include <cstdint>
 #include <string>
 #include <vector>
 #include <optional>
@@ -166,6 +167,7 @@ private:
     tt::tt_metal::IDevice* device_ = nullptr;
 
     // Object maps for storing objects by global_id
+    std::unordered_map<uint32_t, tt::tt_metal::distributed::MeshTraceId> mesh_trace_ids_;
     std::unordered_map<uint32_t, std::shared_ptr<tt::tt_metal::distributed::MeshBuffer>> mesh_buffer_map_;
     std::unordered_map<uint32_t, std::shared_ptr<tt::tt_metal::distributed::MeshWorkload>> mesh_workload_map_;
     std::unordered_map<uint32_t, std::shared_ptr<::tt::tt_metal::Buffer>> buffer_map_;
