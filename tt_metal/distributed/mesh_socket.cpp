@@ -102,7 +102,7 @@ void populate_sender_socket_config_buffer(
     auto recv_bytes_sent_addr = recv_config_buffer->address();
     std::vector<sender_socket_md> sender_config_buffer_data(
         sender_config_buffer->size() / sizeof(sender_socket_md), sender_socket_md());
-    const auto sender_core_to_core_id =
+    const auto& sender_core_to_core_id =
         sender_config_buffer->get_backing_buffer()->get_buffer_page_mapping()->core_to_core_id_;
     auto sender_mesh_device = sender_config_buffer->device();
     for (const auto& [sender, receiver] : config.socket_connection_config) {
@@ -138,7 +138,7 @@ void populate_receiver_socket_config_buffer(
     auto sender_bytes_acked_addr = sender_config_buffer->address();
     std::vector<receiver_socket_md> recv_config_buffer_data(
         recv_config_buffer->size() / sizeof(receiver_socket_md), receiver_socket_md());
-    const auto recv_core_to_core_id =
+    const auto& recv_core_to_core_id =
         recv_config_buffer->get_backing_buffer()->get_buffer_page_mapping()->core_to_core_id_;
     auto receiver_mesh_device = recv_config_buffer->device();
     for (const auto& [sender, receiver] : config.socket_connection_config) {
