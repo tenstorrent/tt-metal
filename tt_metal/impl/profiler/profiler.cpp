@@ -932,14 +932,15 @@ bool isSyncInfoNewer(
     return (old_cpu_time < new_cpu_time && old_device_time / old_frequency < new_device_time / new_frequency);
 }
 
-void sortDeviceEvents(std::vector<const tracy::TTDeviceEvent*>& device_events) {
+void sortDeviceEvents(std::vector<std::reference_wrapper<const tracy::TTDeviceEvent>>& device_events) {
     constexpr uint32_t num_threads = 8;
 
     if (device_events.size() < num_threads) {
         std::sort(
             device_events.begin(),
             device_events.end(),
-            [](const tracy::TTDeviceEvent* a, const tracy::TTDeviceEvent* b) { return *a < *b; });
+            [](std::reference_wrapper<const tracy::TTDeviceEvent> a,
+               std::reference_wrapper<const tracy::TTDeviceEvent> b) { return a.get() < b.get(); });
         return;
     }
 
@@ -952,14 +953,17 @@ void sortDeviceEvents(std::vector<const tracy::TTDeviceEvent*>& device_events) {
             std::sort(
                 device_events.begin() + start_idx,
                 device_events.begin() + end_idx,
-                [](const tracy::TTDeviceEvent* a, const tracy::TTDeviceEvent* b) { return *a < *b; });
+                [](std::reference_wrapper<const tracy::TTDeviceEvent> a,
+                   std::reference_wrapper<const tracy::TTDeviceEvent> b) { return a.get() < b.get(); });
         });
     }
 
     std::sort(
         device_events.begin() + (num_threads - 1) * chunk_size,
         device_events.end(),
-        [](const tracy::TTDeviceEvent* a, const tracy::TTDeviceEvent* b) { return *a < *b; });
+        [](std::reference_wrapper<const tracy::TTDeviceEvent> a, std::reference_wrapper<const tracy::TTDeviceEvent> b) {
+            return a.get() < b.get();
+        });
 
     for (auto& thread : threads) {
         thread.join();
@@ -971,7 +975,8 @@ void sortDeviceEvents(std::vector<const tracy::TTDeviceEvent*>& device_events) {
                 device_events.begin() + i * chunk_size,
                 device_events.begin() + (i + 1) * chunk_size,
                 device_events.begin() + (i + 2) * chunk_size,
-                [](const tracy::TTDeviceEvent* a, const tracy::TTDeviceEvent* b) { return *a < *b; });
+                [](std::reference_wrapper<const tracy::TTDeviceEvent> a,
+                   std::reference_wrapper<const tracy::TTDeviceEvent> b) { return a.get() < b.get(); });
         });
     }
 
@@ -985,7 +990,8 @@ void sortDeviceEvents(std::vector<const tracy::TTDeviceEvent*>& device_events) {
                 device_events.begin() + i * chunk_size,
                 device_events.begin() + (i + 2) * chunk_size,
                 device_events.begin() + (i + 4) * chunk_size,
-                [](const tracy::TTDeviceEvent* a, const tracy::TTDeviceEvent* b) { return *a < *b; });
+                [](std::reference_wrapper<const tracy::TTDeviceEvent> a,
+                   std::reference_wrapper<const tracy::TTDeviceEvent> b) { return a.get() < b.get(); });
         });
     }
 
@@ -997,17 +1003,23 @@ void sortDeviceEvents(std::vector<const tracy::TTDeviceEvent*>& device_events) {
         device_events.begin(),
         device_events.begin() + 4 * chunk_size,
         device_events.end(),
-        [](const tracy::TTDeviceEvent* a, const tracy::TTDeviceEvent* b) { return *a < *b; });
+        [](std::reference_wrapper<const tracy::TTDeviceEvent> a, std::reference_wrapper<const tracy::TTDeviceEvent> b) {
+            return a.get() < b.get();
+        });
 
     TT_ASSERT(std::is_sorted(
-        device_events.begin(), device_events.end(), [](const tracy::TTDeviceEvent* a, const tracy::TTDeviceEvent* b) {
-            return *a < *b;
+        device_events.begin(),
+        device_events.end(),
+        [](std::reference_wrapper<const tracy::TTDeviceEvent> a, std::reference_wrapper<const tracy::TTDeviceEvent> b) {
+            return a.get() < b.get();
         }));
 }
 
-std::vector<const tracy::TTDeviceEvent*> getDeviceEventsVector(
+std::vector<std::reference_wrapper<const tracy::TTDeviceEvent>> getDeviceEventsVector(
     const std::unordered_set<tracy::TTDeviceEvent>& device_events) {
-    std::vector<const tracy::TTDeviceEvent*> device_events_vec(device_events.size());
+    tracy::TTDeviceEvent dummy_event;
+    std::vector<std::reference_wrapper<const tracy::TTDeviceEvent>> device_events_vec(
+        device_events.size(), std::cref(dummy_event));
 
     auto middle = device_events.begin();
     std::advance(middle, device_events.size() / 2);
@@ -1015,14 +1027,14 @@ std::vector<const tracy::TTDeviceEvent*> getDeviceEventsVector(
     std::thread t([&device_events_vec, &device_events, &middle]() {
         uint32_t i = device_events.size() / 2;
         for (auto it = middle; it != device_events.end(); ++it) {
-            device_events_vec[i] = &(*it);
+            device_events_vec[i] = std::cref(*it);
             i++;
         }
     });
 
     uint32_t i = 0;
     for (auto it = device_events.begin(); it != middle; ++it) {
-        device_events_vec[i] = &(*it);
+        device_events_vec[i] = std::cref(*it);
         i++;
     }
 
@@ -1043,49 +1055,57 @@ void DeviceProfiler::pushTracyDeviceResults() {
         }
     }
 
-    // IMPORTANT: This function creates a vector of pointers to the TTDeviceEvent objects stored in the device_events
-    // unordered set. These are direct pointers to the original objects, not copies of the data.
+    // IMPORTANT: This function creates a vector of references to the TTDeviceEvent objects stored in the device_events
+    // unordered set. These are direct references to the original objects, not copies of the data.
     // Thread safety warning: The device_events set MUST NOT be modified (no insertions, deletions, or rehashing) while
-    // these pointers are in use, as this could invalidate the pointers and cause undefined behavior.
-    std::vector<const tracy::TTDeviceEvent*> device_events_vec = getDeviceEventsVector(device_events);
+    // these references are in use, as this could invalidate the references and cause undefined behavior.
+    std::vector<std::reference_wrapper<const tracy::TTDeviceEvent>> device_events_vec =
+        getDeviceEventsVector(device_events);
 
     sortDeviceEvents(device_events_vec);
 
-    for (auto& device_core : device_cores) {
-        updateTracyContext(device_core);
+    for (auto& event : device_events_vec) {
+        auto device_core_it = device_cores.find({event.get().chip_id, {event.get().core_x, event.get().core_y}});
+        if (device_core_it != device_cores.end()) {
+            updateTracyContext(*device_core_it);
+            device_cores.erase(device_core_it);
+        }
+
+        if (device_cores.empty()) {
+            break;
+        }
     }
 
     for (auto& event : device_events_vec) {
-        const tracy::TTDeviceEvent* event_to_push = event;
+        std::reference_wrapper<const tracy::TTDeviceEvent> event_to_push = event;
 
-        const uint64_t adjusted_timestamp = event->timestamp * this->freqScale + this->shift;
-        if (adjusted_timestamp != event->timestamp) {
+        const uint64_t adjusted_timestamp = event.get().timestamp * this->freqScale + this->shift;
+        if (adjusted_timestamp != event.get().timestamp) {
             tracy::TTDeviceEvent new_event(
-                event->run_num,
-                event->chip_id,
-                event->core_x,
-                event->core_y,
-                event->risc,
-                event->marker,
+                event.get().run_num,
+                event.get().chip_id,
+                event.get().core_x,
+                event.get().core_y,
+                event.get().risc,
+                event.get().marker,
                 adjusted_timestamp,
-                event->line,
-                event->file,
-                event->zone_name,
-                event->zone_phase);
-            event_to_push = &new_event;
+                event.get().line,
+                event.get().file,
+                event.get().zone_name,
+                event.get().zone_phase);
+            event_to_push = std::cref(new_event);
         }
 
         std::pair<chip_id_t, CoreCoord> device_core = {
-            event_to_push->chip_id, (CoreCoord){event_to_push->core_x, event_to_push->core_y}};
-        if (event->zone_phase == tracy::TTDeviceEventPhase::begin) {
-            TracyTTPushStartZone(device_tracy_contexts[device_core], *event_to_push);
-        } else if (event->zone_phase == tracy::TTDeviceEventPhase::end) {
-            TracyTTPushEndZone(device_tracy_contexts[device_core], *event_to_push);
+            event_to_push.get().chip_id, (CoreCoord){event_to_push.get().core_x, event_to_push.get().core_y}};
+        if (event_to_push.get().zone_phase == tracy::TTDeviceEventPhase::begin) {
+            TracyTTPushStartZone(device_tracy_contexts[device_core], event_to_push.get());
+        } else if (event_to_push.get().zone_phase == tracy::TTDeviceEventPhase::end) {
+            TracyTTPushEndZone(device_tracy_contexts[device_core], event_to_push.get());
         }
     }
 
     device_events.clear();
-    device_cores.clear();
 #endif
 }
 

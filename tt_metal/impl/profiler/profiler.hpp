@@ -57,8 +57,8 @@ struct pair_hash {
     size_t operator()(const std::pair<T1, T2>& p) const {
         auto h1 = std::hash<T1>{}(p.first);
         auto h2 = std::hash<T2>{}(p.second);
-        // The magic number 0x9e3779b9 is from Boost's hash_combine
-        return h1 ^ (h2 + 0x9e3779b9 + (h1 << 6) + (h1 >> 2));
+        constexpr std::size_t hash_combine_prime = 0x9e3779b9;
+        return h1 ^ (h2 + hash_combine_prime + (h1 << 6) + (h1 >> 2));
     }
 };
 
