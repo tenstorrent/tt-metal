@@ -19,13 +19,26 @@ from llama_models.llama3.reference_impl.generation import (
 )
 from models.tt_transformers.tt.common import (
     copy_host_to_device,
-    get_padded_prefill_len,
     num_blocks_in_seq,
     get_block_size,
     get_max_prefill_chunk_size,
 )
 
 from models.tt_transformers.tt.generator import SamplingParams
+
+
+def get_padded_prefill_len(seq_len):
+    """
+    Get the padded prefill length for a given sequence length.
+    This is used to pad the sequence length to the nearest power of 2.
+    """
+    if seq_len <= 128:
+        return 128
+    if seq_len <= 1024:
+        return 1024
+    else:
+        # return next power of 2 greater than seq_len
+        return 2 ** (seq_len - 1).bit_length()
 
 
 class Generator:
@@ -87,7 +100,7 @@ class Generator:
                 [tokens[user_id : user_id + 1, :seq_len], torch.zeros(1, prefill_seq_len - seq_len).long()], dim=-1
             )
             if page_table is not None:
-                page_table_user = self._get_prefill_user_page_table(page_table, kv_cache, seq_len)
+                page_table_user = self._get_prefill_user_page_table(page_table, kv_cache, prefill_seq_len)
             prefill_kwargs = {
                 "tokens": prefill_ids,
                 "page_table": page_table_user if page_table is not None else None,

@@ -121,7 +121,13 @@ class TtLlamaRotarySetup(LightweightModule):
     def get_rot_idxs(self, position_idxs, on_host=False):
         assert isinstance(position_idxs, torch.Tensor), "Position ids must be a torch tensor"
         assert len(position_idxs.shape) == 1, "position idxs must be a [batch] tensor"
-        position_idxs = position_idxs.repeat(2)
+        assert position_idxs.shape[0] == 32, "position idxs must be a [32] tensor"
+
+        position_idxs_0 = position_idxs[:8].repeat(2)
+        position_idxs_1 = position_idxs[8:16].repeat(2)
+        position_idxs_2 = position_idxs[16:24].repeat(2)
+        position_idxs_3 = position_idxs[24:32].repeat(2)
+        position_idxs = torch.cat([position_idxs_0, position_idxs_1, position_idxs_2, position_idxs_3], dim=0)
 
         batch = position_idxs.shape[0]
         position_idxs = position_idxs.reshape(1, batch)  # [1, 1, 1, batch]
