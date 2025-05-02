@@ -51,12 +51,6 @@ void kernel_main() {
     uint32_t start_tw = start_t % Wt;                          // W index
     uint32_t end_tw = has_sharding ? start_tw + dst_shard_width : Wt;
 
-    // this is the INPUT tile offset
-    uint32_t tile_offset = start_d * nD_stride + start_n * n_stride + start_c * c_stride + start_th * Wt;
-    uint32_t next_channel_shift = c_stride - HtWt;
-    uint32_t next_batch_shift = n_stride - c_stride * C;
-    uint32_t next_depth_shift = nD_stride - (n_stride * N);
-
     uint32_t num_tiles_written = 0;
     uint32_t dst_tile_offset = start_tile_id;
 
@@ -75,7 +69,6 @@ void kernel_main() {
                         cb_pop_front(cb_id_dst, onetile);
 #endif
                     }
-                    tile_offset += Wt;
                     if constexpr (has_sharding) {
                         // adjust the output tile offset since we had to skip parts of the row
                         dst_tile_offset += (Wt - dst_shard_width);
@@ -84,11 +77,8 @@ void kernel_main() {
                         start_tw = 0;
                     }
                 }
-                tile_offset += next_channel_shift;
             }
-            tile_offset += next_batch_shift;
         }
-        tile_offset += next_depth_shift;
     }
 #endif
 }

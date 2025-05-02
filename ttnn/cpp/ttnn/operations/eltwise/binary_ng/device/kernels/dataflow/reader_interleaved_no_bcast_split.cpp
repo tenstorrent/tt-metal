@@ -24,6 +24,7 @@ void kernel_main() {
     const uint32_t nD_stride_b = get_arg_val<uint32_t>(14);
     const uint32_t n_stride_b = get_arg_val<uint32_t>(15);
     const uint32_t c_stride_b = get_arg_val<uint32_t>(16);
+    const uint32_t src_num_tiles_b = get_arg_val<uint32_t>(17);
 
     constexpr auto cb_id_src = tt::CBIndex::c_0;
     constexpr auto cb_id_src_b = tt::CBIndex::c_1;
@@ -32,16 +33,16 @@ void kernel_main() {
     cb_reserve_back(cb_id_src, src_num_tiles);
     cb_push_back(cb_id_src, src_num_tiles);
 
-    cb_reserve_back(cb_id_src_b, src_num_tiles);
-    cb_push_back(cb_id_src_b, src_num_tiles);
+    cb_reserve_back(cb_id_src_b, src_num_tiles_b);
+    cb_push_back(cb_id_src_b, src_num_tiles_b);
 #else
 #if SRC_SHARDED
     cb_reserve_back(cb_id_src, src_num_tiles);
     cb_push_back(cb_id_src, src_num_tiles);
 #endif
 #if SRC_SHARDED_B
-    cb_reserve_back(cb_id_src_b, src_num_tiles);
-    cb_push_back(cb_id_src_b, src_num_tiles);
+    cb_reserve_back(cb_id_src_b, src_num_tiles_b);
+    cb_push_back(cb_id_src_b, src_num_tiles_b);
 #endif
     constexpr uint32_t onetile = 1;
 #if !SRC_SHARDED
