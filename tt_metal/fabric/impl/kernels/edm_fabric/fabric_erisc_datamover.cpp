@@ -379,8 +379,7 @@ FORCE_INLINE void send_next_data(
 
     auto src_addr = (uint32_t)pkt_header;
     auto dest_addr = receiver_buffer_channel.get_buffer_address(remote_receiver_buffer_index);
-    while (internal_::eth_txq_is_busy(DEFAULT_ETH_TXQ)) {
-    };
+
     internal_::eth_send_packet_bytes_unsafe(DEFAULT_ETH_TXQ, src_addr, dest_addr, payload_size_bytes);
 
     // Note: We can only advance to the next buffer index if we have fully completed the send (both the payload and sync
@@ -425,8 +424,6 @@ FORCE_INLINE void receiver_send_received_ack(
 
 // MUST CHECK !is_eth_txq_busy() before calling
 FORCE_INLINE void receiver_send_completion_ack(uint8_t src_id) {
-    while (internal_::eth_txq_is_busy(DEFAULT_ETH_TXQ)) {
-    };
     remote_update_ptr_val(to_sender_packets_completed_streams[src_id], 1);
 }
 
@@ -563,7 +560,7 @@ void run_sender_channel_step(
     // TODO: update to be stream reg based. Initialize to space available and simply check for non-zero
     bool receiver_has_space_for_packet = outbound_to_receiver_channel_pointers.has_space_for_packet();
     bool has_unsent_packet = local_sender_channel_worker_interface.has_unsent_payload();
-    bool can_send = receiver_has_space_for_packet && has_unsent_packet;
+    bool can_send = receiver_has_space_for_packet && has_unsent_packet && !internal_::eth_txq_is_busy(DEFAULT_ETH_TXQ);
     if constexpr (enable_first_level_ack) {
         bool sender_backpressured_from_sender_side =
             !(local_sender_channel_worker_interface.local_rdptr.distance_behind(
@@ -706,7 +703,8 @@ void run_receiver_channel_step(
         }
 
         auto& completion_counter = receiver_channel_pointers.completion_counter;
-        bool unsent_completions = !completion_counter.is_caught_up_to(completion_counter, wr_flush_counter);
+        bool unsent_completions = !completion_counter.is_caught_up_to(completion_counter, wr_flush_counter) &&
+                                  !internal_::eth_txq_is_busy(DEFAULT_ETH_TXQ);
         if (unsent_completions) {
             // completion ptr incremented in callee
             auto receiver_buffer_index = wr_flush_counter.get_buffer_index();
