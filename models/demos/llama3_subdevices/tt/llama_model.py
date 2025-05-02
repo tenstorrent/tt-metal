@@ -77,6 +77,29 @@ class TtTransformer(LightweightModule):
         else:
             self.setup_prefill()
             self.is_prefill_setup = True
+        core_grid_ln, grid_offset = (8, 2), ttnn.CoreCoord(1, 0)
+        core_range = ttnn.CoreRange(
+            grid_offset, ttnn.CoreCoord(core_grid_ln[1] + grid_offset.x - 1, core_grid_ln[0] + grid_offset.y - 1)
+        )
+        num_cores_ln = core_grid_ln[0] * core_grid_ln[1]
+        residual_memory_config = ttnn.create_sharded_memory_config(
+            shape=(1, 1, 32, 2048 // num_cores_ln),
+            core_grid=ttnn.CoreRangeSet(
+                {
+                    core_range,
+                }
+            ),
+            strategy=ttnn.ShardStrategy.WIDTH,
+            use_height_and_width_as_shard_shape=True,
+        )
+        self.residual_buffer = ttnn.as_tensor(
+            torch.zeros((1, 1, 32, 2048)),
+            device=self.mesh_device,
+            layout=ttnn.TILE_LAYOUT,
+            dtype=ttnn.bfloat16,
+            memory_config=residual_memory_config,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+        )
 
         self.layers = [
             TtTransformerBlock(
@@ -526,7 +549,7 @@ class TtTransformer(LightweightModule):
         if mode == "decode" and not self.args.is_galaxy:
             x = ttnn.to_memory_config(x, self.model_config["DECODE_RESIDUAL_MEMCFG"])
 
-        h = None
+        h = self.residual_buffer
         for i, layer in enumerate(self.layers):
             x, h = layer(
                 x,

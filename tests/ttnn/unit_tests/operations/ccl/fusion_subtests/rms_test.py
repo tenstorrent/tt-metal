@@ -13,8 +13,8 @@ from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
 from tracy import signpost
 
 
-def get_torch_rms(x, dim, gamma, beta, eps):
-    return x * torch.rsqrt(x.pow(2).mean([-i for i in range(1, len(dim) + 1)], keepdim=True) + eps) * gamma + beta
+def get_torch_rms(x, dim, gamma, eps):
+    return x * torch.rsqrt(x.pow(2).mean([-i for i in range(1, len(dim) + 1)], keepdim=True) + eps) * gamma
 
 
 def run_rms_trace(
@@ -483,17 +483,13 @@ def run_rms_fuse_impl(
             ref_res_add = input_tensor_torch[i] + residual_torch[i]
             passing, output = comp_pcc(residual_out_torch, ref_res_add, 0.999)
             if not passing:
-                print(residual_out_torch)
-                print(ref_res_add)
-                print(input_tensor_torch[i])
-                print(residual_torch[i])
                 mesh_device.reset_sub_device_stall_group()
             logger.info(output)
             assert passing
 
         else:
             ref_res_add = input_tensor_torch[i]
-        ref_lnorm = get_torch_rms(ref_res_add, [3], gamma_torch[i], torch.zeros_like(gamma_torch[i]), epsilon)
+        ref_lnorm = get_torch_rms(ref_res_add, [3], gamma_torch[i], epsilon)
         passing, output = comp_pcc(tt_out_torch, ref_lnorm, 0.999)
         logger.info(output)
         if not passing:

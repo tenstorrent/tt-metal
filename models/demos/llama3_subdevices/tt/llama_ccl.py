@@ -761,4 +761,4 @@ def tt_sharded_distributed_rmsnorm(
         memory_config=output_mem_config,
     )
     tt_ccl.gather_idx[cluster_axis] = (tt_ccl.gather_idx[cluster_axis] + 1) % tt_ccl.num_cbs
-    return tt_out, inp
+    return tt_out, res

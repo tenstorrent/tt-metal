@@ -38,6 +38,7 @@ class TtTransformerBlock(LightweightModule):
         self.dim = args.dim
         self.max_batch_size = args.max_batch_size
         self.n_kv_heads = args.n_kv_heads
+        self.weight_cache_path = weight_cache_path
         self.current = 0
         self.model_config = args.get_model_config()
 
@@ -137,13 +138,13 @@ class TtTransformerBlock(LightweightModule):
         ), f"decoder input memcfg mismatch: {x.memory_config()} != {skip_mem_cfg}"
         # Norms take fractured inputs and output replicated across devices
         try:
-            attn_in_sharded, _ = self.attention_norm(x, None, mode)
+            attn_in_sharded, _ = self.attention_norm(x, h, mode)
         except Exception as e:
             print(e)
             print("failed to run attention norm")
             assert False, "Failed to run attention norm"
         # print("attention norm done", attn_in_sharded)
-        # NOTE: donnot deallocate x here as it updated inplace and returns new h
+        # NOTE: do not deallocate x here as it updated inplace and returns new h
         # Attention takes replicated inputs and produces fractured outputs
         # pad attn input
         attn_out = self.attention.forward(
@@ -160,10 +161,11 @@ class TtTransformerBlock(LightweightModule):
         # print("attention done", attn_out)
 
         # Norms take fractured inputs and output replicated across devices
-        h = ttnn.add(x, attn_out, memory_config=skip_mem_cfg)  # , dtype=ttnn.bfloat16)
+        # h = ttnn.add(x, attn_out, memory_config=skip_mem_cfg)  # , dtype=ttnn.bfloat16)
         # x.deallocate(True)
         # attn_out.deallocate(True)
-        ff_in_sharded, _ = self.ff_norm(h, None, mode)
+        ff_in_sharded, _ = self.ff_norm(attn_out, h, mode)
+        # ff_in_sharded, _ = self.ff_norm(h, None, mode)
         # print("ff norm done", ff_in)
         # if TG and mode == "decode":
         #     ff_in = ttnn.to_memory_config(ff_in, memory_config=self.model_config["MLP_ACT_MEMCFG"])
@@ -171,9 +173,10 @@ class TtTransformerBlock(LightweightModule):
         # MLP takes replicated inputs and produces fractured outputs
         ff_out = self.feed_forward.forward(ff_in_sharded, mode)
         # print("feed forward done", ff_out)
-        # if self.layer_num == self.n_layers - 1:
-        out = ttnn.add(h, ff_out, memory_config=skip_mem_cfg)  # , dtype=ttnn.bfloat16)
-        # ff_out.deallocate(True)
-        # else:
-        #     out = ff_out
+        # out = ttnn.add(h, ff_out, memory_config=skip_mem_cfg)
+        if self.layer_num == self.n_layers - 1:
+            out = ttnn.add(ff_out, h, memory_config=skip_mem_cfg)  # , dtype=ttnn.bfloat16)
+            ff_out.deallocate(True)
+        else:
+            out = ff_out
         return out, h  # fractured across devices
