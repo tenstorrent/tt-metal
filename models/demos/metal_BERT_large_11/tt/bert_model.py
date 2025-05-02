@@ -52,17 +52,12 @@ class TtBertBatchDram:
             )
             qa_bias_path = str(f"{tt_cache_path}/qa_outputs.bias_{self.model_config['QA_LINEAR_BIAS_DTYPE'].name}.bin")
 
-        qa_weight_mem_config = self.model_config["QA_LINEAR_WEIGHTS_MEMCFG"]
-        qa_bias_mem_config = self.model_config["QA_LINEAR_BIAS_MEMCFG"]
-
         def compute_qa_weight():
             weight_torch = pad_weight(torch.transpose(state_dict["qa_outputs.weight"], -2, -1))
             return ttnn.from_torch(
                 weight_torch,
                 dtype=model_config["QA_LINEAR_WEIGHTS_DTYPE"],
                 layout=ttnn.TILE_LAYOUT,
-                device=device,
-                memory_config=qa_weight_mem_config,
             )
 
         def compute_qa_bias():
@@ -71,21 +66,19 @@ class TtBertBatchDram:
                 bias_torch,
                 dtype=model_config["QA_LINEAR_BIAS_DTYPE"],
                 layout=ttnn.TILE_LAYOUT,
-                device=device,
-                memory_config=qa_bias_mem_config,
             )
 
         weight = load_or_compute_and_cache(
             qa_weight_path,
             compute_qa_weight,
             device=device,
-            mem_config=qa_weight_mem_config,
+            mem_config=self.model_config["QA_LINEAR_WEIGHTS_MEMCFG"],
         )
         bias = load_or_compute_and_cache(
             qa_bias_path,
             compute_qa_bias,
             device=device,
-            mem_config=qa_bias_mem_config,
+            mem_config=self.model_config["QA_LINEAR_BIAS_MEMCFG"],
         )
 
         # QA linear

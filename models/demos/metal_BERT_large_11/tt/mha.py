@@ -179,6 +179,7 @@ class TtMultiHeadAttentionModel:
 
         qkv_weight_cache_path = None
         qkv_bias_cache_path = None
+
         if tt_cache_path is not None:
             interleaved_str = ""
             if "QKV_INTERLEAVED" in model_config:
@@ -191,9 +192,6 @@ class TtMultiHeadAttentionModel:
                 f"{tt_cache_path}/"
                 f"{layer_name}.qkv.bias_{interleaved_str}{model_config['OP1_FUSED_QKV_MM_BIAS_DTYPE'].name}.bin"
             )
-
-        qkv_weight_mem_config = model_config["OP1_FUSED_QKV_MM_WEIGHTS_MEMCFG"]
-        qkv_bias_mem_config = model_config["OP1_FUSED_QKV_MM_BIAS_MEMCFG"]
 
         def compute_qkv_weight():
             qw = state_dict[f"{layer_name}.query.weight"]
@@ -219,8 +217,6 @@ class TtMultiHeadAttentionModel:
                 qkv_weight_torch,
                 dtype=model_config["OP1_FUSED_QKV_MM_WEIGHTS_DTYPE"],
                 layout=ttnn.Layout.TILE,
-                device=device,
-                memory_config=qkv_weight_mem_config,
             )
 
         def compute_qkv_bias():
@@ -243,22 +239,20 @@ class TtMultiHeadAttentionModel:
                 qkv_bias_torch,
                 dtype=model_config["OP1_FUSED_QKV_MM_BIAS_DTYPE"],
                 layout=ttnn.Layout.TILE,
-                device=device,
-                memory_config=qkv_bias_mem_config,
             )
 
         qkv_weight = load_or_compute_and_cache(
             qkv_weight_cache_path,
             compute_qkv_weight,
             device=device,
-            mem_config=qkv_weight_mem_config,
+            mem_config=model_config["OP1_FUSED_QKV_MM_WEIGHTS_MEMCFG"],
         )
 
         qkv_bias = load_or_compute_and_cache(
             qkv_bias_cache_path,
             compute_qkv_bias,
             device=device,
-            mem_config=qkv_bias_mem_config,
+            mem_config=model_config["OP1_FUSED_QKV_MM_BIAS_MEMCFG"],
         )
 
         # Hidden dim

@@ -47,18 +47,12 @@ class TtEmbeddings:
                 f"{base_address}.LayerNorm.beta_{self.model_config['EMBEDDINGS_LAYERNORM_BETA_DTYPE'].name}.bin"
             )
 
-        input_weights_mem_config = self.model_config["INPUT_EMBEDDINGS_WEIGHTS_MEMCFG"]
-        ln_gamma_mem_config = self.model_config["EMBEDDINGS_LAYERNORM_GAMMA_MEMCFG"]
-        ln_beta_mem_config = self.model_config["EMBEDDINGS_LAYERNORM_BETA_MEMCFG"]
-
         def compute_word_embeddings():
             weight_torch = state_dict[f"{base_address}.word_embeddings.weight"]
             return ttnn.from_torch(
                 weight_torch,
                 dtype=model_config["INPUT_EMBEDDINGS_WEIGHTS_DTYPE"],
                 layout=ttnn.ROW_MAJOR_LAYOUT,
-                device=device,
-                memory_config=input_weights_mem_config,
             )
 
         def compute_position_embeddings():
@@ -67,8 +61,6 @@ class TtEmbeddings:
                 weight_torch,
                 dtype=model_config["INPUT_EMBEDDINGS_WEIGHTS_DTYPE"],
                 layout=ttnn.ROW_MAJOR_LAYOUT,
-                device=device,
-                memory_config=input_weights_mem_config,
             )
 
         def compute_token_type_embeddings():
@@ -77,8 +69,6 @@ class TtEmbeddings:
                 weight_torch,
                 dtype=model_config["INPUT_EMBEDDINGS_WEIGHTS_DTYPE"],
                 layout=ttnn.ROW_MAJOR_LAYOUT,
-                device=device,
-                memory_config=input_weights_mem_config,
             )
 
         def compute_layerNorm_gamma():
@@ -87,8 +77,6 @@ class TtEmbeddings:
                 gamma_torch,
                 dtype=model_config["EMBEDDINGS_LAYERNORM_GAMMA_DTYPE"],
                 layout=ttnn.ROW_MAJOR_LAYOUT,
-                device=device,
-                memory_config=ln_gamma_mem_config,
             )
 
         def compute_layerNorm_beta():
@@ -97,39 +85,37 @@ class TtEmbeddings:
                 beta_torch,
                 dtype=model_config["EMBEDDINGS_LAYERNORM_BETA_DTYPE"],
                 layout=ttnn.ROW_MAJOR_LAYOUT,
-                device=device,
-                memory_config=ln_beta_mem_config,
             )
 
         self.word_embeddings_weight = load_or_compute_and_cache(
             word_embeddings_path,
             compute_word_embeddings,
             device=device,
-            mem_config=input_weights_mem_config,
+            mem_config=self.model_config["INPUT_EMBEDDINGS_WEIGHTS_MEMCFG"],
         )
         self.position_embeddings_weight = load_or_compute_and_cache(
             position_embeddings_path,
             compute_position_embeddings,
             device=device,
-            mem_config=input_weights_mem_config,
+            mem_config=self.model_config["INPUT_EMBEDDINGS_WEIGHTS_MEMCFG"],
         )
         self.token_type_embeddings_weight = load_or_compute_and_cache(
             token_type_embeddings_path,
             compute_token_type_embeddings,
             device=device,
-            mem_config=input_weights_mem_config,
+            mem_config=self.model_config["INPUT_EMBEDDINGS_WEIGHTS_MEMCFG"],
         )
         self.layerNorm_gamma = load_or_compute_and_cache(
             layerNorm_gamma_path,
             compute_layerNorm_gamma,
             device=device,
-            mem_config=ln_gamma_mem_config,
+            mem_config=self.model_config["EMBEDDINGS_LAYERNORM_GAMMA_MEMCFG"],
         )
         self.layerNorm_beta = load_or_compute_and_cache(
             layerNorm_beta_path,
             compute_layerNorm_beta,
             device=device,
-            mem_config=ln_beta_mem_config,
+            mem_config=self.model_config["EMBEDDINGS_LAYERNORM_BETA_MEMCFG"],
         )
 
         self.layerNorm_eps = config.layer_norm_eps

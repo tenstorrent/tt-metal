@@ -58,14 +58,6 @@ class TtBertEncoder:
                 f"{layer_name}.LayerNorm.bias_{self.model_config['OP11_LAYERNORM_BETA_DTYPE'].name}.bin"
             )
 
-        # Define memory configs to be captured by nested functions
-        attn_out_w_mem_config = model_config["OP7_SELFOUT_WEIGHTS_MEMCFG"]
-        attn_out_b_mem_config = model_config["OP7_SELFOUT_BIAS_MEMCFG"]
-        mha_ln_g_mem_config = model_config["OP8_LAYERNORM_GAMMA_MEMCFG"]
-        mha_ln_b_mem_config = model_config["OP8_LAYERNORM_BETA_MEMCFG"]
-        ffn_ln_g_mem_config = model_config["OP11_LAYERNORM_GAMMA_MEMCFG"]  # Assuming same memcfg as OP8
-        ffn_ln_b_mem_config = model_config["OP11_LAYERNORM_BETA_MEMCFG"]  # Assuming same memcfg as OP8
-
         def compute_attention_output_weight():
             weight_torch = pad_weight(
                 torch.transpose(
@@ -78,8 +70,6 @@ class TtBertEncoder:
                 weight_torch,
                 model_config["OP7_SELFOUT_WEIGHTS_DTYPE"],
                 layout=ttnn.TILE_LAYOUT,
-                device=device,
-                memory_config=attn_out_w_mem_config,
             )
 
         def compute_attention_output_bias():
@@ -88,8 +78,6 @@ class TtBertEncoder:
                 bias_torch,
                 model_config["OP7_SELFOUT_BIAS_DTYPE"],
                 layout=ttnn.TILE_LAYOUT,
-                device=device,
-                memory_config=attn_out_b_mem_config,
             )
 
         def compute_mha_gamma():
@@ -98,8 +86,6 @@ class TtBertEncoder:
                 gamma_torch,
                 model_config["OP8_LAYERNORM_GAMMA_DTYPE"],
                 layout=ttnn.ROW_MAJOR_LAYOUT,
-                device=device,
-                memory_config=mha_ln_g_mem_config,
             )
 
         def compute_mha_beta():
@@ -108,8 +94,6 @@ class TtBertEncoder:
                 beta_torch,
                 model_config["OP8_LAYERNORM_BETA_DTYPE"],
                 layout=ttnn.ROW_MAJOR_LAYOUT,
-                device=device,
-                memory_config=mha_ln_b_mem_config,
             )
 
         def compute_ffn_gamma():
@@ -118,8 +102,6 @@ class TtBertEncoder:
                 gamma_torch,
                 model_config["OP11_LAYERNORM_GAMMA_DTYPE"],
                 layout=ttnn.ROW_MAJOR_LAYOUT,
-                device=device,
-                memory_config=ffn_ln_g_mem_config,
             )
 
         def compute_ffn_beta():
@@ -128,45 +110,43 @@ class TtBertEncoder:
                 beta_torch,
                 model_config["OP11_LAYERNORM_BETA_DTYPE"],
                 layout=ttnn.ROW_MAJOR_LAYOUT,
-                device=device,
-                memory_config=ffn_ln_b_mem_config,
             )
 
         self.attention_output_weight = load_or_compute_and_cache(
             attention_output_weight_path,
             compute_attention_output_weight,
             device=device,
-            mem_config=attn_out_w_mem_config,
+            mem_config=model_config["OP7_SELFOUT_WEIGHTS_MEMCFG"],
         )
         self.attention_output_bias = load_or_compute_and_cache(
             attention_output_bias_path,
             compute_attention_output_bias,
             device=device,
-            mem_config=attn_out_b_mem_config,
+            mem_config=model_config["OP7_SELFOUT_BIAS_MEMCFG"],
         )
         self.mha_gamma = load_or_compute_and_cache(
             mha_gamma_path,
             compute_mha_gamma,
             device=device,
-            mem_config=mha_ln_g_mem_config,
+            mem_config=model_config["OP8_LAYERNORM_GAMMA_MEMCFG"],
         )
         self.mha_beta = load_or_compute_and_cache(
             mha_beta_path,
             compute_mha_beta,
             device=device,
-            mem_config=mha_ln_b_mem_config,
+            mem_config=model_config["OP8_LAYERNORM_BETA_MEMCFG"],
         )
         self.ffn_gamma = load_or_compute_and_cache(
             ffn_gamma_path,
             compute_ffn_gamma,
             device=device,
-            mem_config=ffn_ln_g_mem_config,
+            mem_config=model_config["OP11_LAYERNORM_GAMMA_MEMCFG"],
         )
         self.ffn_beta = load_or_compute_and_cache(
             ffn_beta_path,
             compute_ffn_beta,
             device=device,
-            mem_config=ffn_ln_b_mem_config,
+            mem_config=model_config["OP11_LAYERNORM_BETA_MEMCFG"],
         )
 
         # FFN sub-graph

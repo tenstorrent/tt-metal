@@ -32,7 +32,7 @@ def load_or_compute_and_cache(
     tensor = None
     if cache_path:
         try:
-            tensor = ttnn.load_tensor(cache_path).to(device, mem_config)
+            tensor = ttnn.load_tensor(cache_path)
             logger.info(f"Loaded tensor from cache: {cache_path}")
         except Exception as e:
             logger.warning(f"Failed to load tensor from cache: {cache_path}. Error: {e}")
@@ -44,4 +44,4 @@ def load_or_compute_and_cache(
             logger.info(f"Dumping tensor to cache: {cache_path}")
             ttnn.dump_tensor(cache_path, tensor)
 
-    return tensor
+    return tensor.to(device, mem_config)

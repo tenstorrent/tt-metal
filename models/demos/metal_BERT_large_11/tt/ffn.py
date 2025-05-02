@@ -99,6 +99,7 @@ class TtFeedForwardModel:
         ff1_bias_path = None
         ff2_weight_path = None
         ff2_bias_path = None
+
         if tt_cache_path is not None:
             ff1_weight_path = str(
                 f"{tt_cache_path}/" f"{encoder_ff1_str}.weight_{model_config['OP9_FF1_MM_WEIGHTS_DTYPE'].name}.bin"
@@ -113,11 +114,6 @@ class TtFeedForwardModel:
                 f"{tt_cache_path}/" f"{encoder_ff2_str}.bias_{model_config['OP10_FF2_MM_BIAS_DTYPE'].name}.bin"
             )
 
-        ff1_weight_mem_config = model_config["OP9_FF1_MM_WEIGHTS_MEMCFG"]
-        ff1_bias_mem_config = model_config["OP9_FF1_MM_BIAS_MEMCFG"]
-        ff2_weight_mem_config = model_config["OP10_FF2_MM_WEIGHTS_MEMCFG"]
-        ff2_bias_mem_config = model_config["OP10_FF2_MM_BIAS_MEMCFG"]
-
         def compute_ff1_weight():
             ff1_weight_torch = pad_weight(
                 torch.transpose(
@@ -130,8 +126,6 @@ class TtFeedForwardModel:
                 ff1_weight_torch,
                 dtype=model_config["OP9_FF1_MM_WEIGHTS_DTYPE"],
                 layout=ttnn.TILE_LAYOUT,
-                device=device,
-                memory_config=ff1_weight_mem_config,
             )
 
         def compute_ff1_bias():
@@ -140,8 +134,6 @@ class TtFeedForwardModel:
                 ff1_bias_torch,
                 dtype=model_config["OP9_FF1_MM_BIAS_DTYPE"],
                 layout=ttnn.TILE_LAYOUT,
-                device=device,
-                memory_config=ff1_bias_mem_config,
             )
 
         def compute_ff2_weight():
@@ -156,8 +148,6 @@ class TtFeedForwardModel:
                 ff2_weight_torch,
                 dtype=model_config["OP10_FF2_MM_WEIGHTS_DTYPE"],
                 layout=ttnn.TILE_LAYOUT,
-                device=device,
-                memory_config=ff2_weight_mem_config,
             )
 
         def compute_ff2_bias():
@@ -166,33 +156,31 @@ class TtFeedForwardModel:
                 ff2_bias_torch,
                 dtype=model_config["OP10_FF2_MM_BIAS_DTYPE"],
                 layout=ttnn.TILE_LAYOUT,
-                device=device,
-                memory_config=ff2_bias_mem_config,
             )
 
         encoder0_ff1_weight = load_or_compute_and_cache(
             ff1_weight_path,
             compute_ff1_weight,
             device=device,
-            mem_config=ff1_weight_mem_config,
+            mem_config=model_config["OP9_FF1_MM_WEIGHTS_MEMCFG"],
         )
         encoder0_ff1_bias = load_or_compute_and_cache(
             ff1_bias_path,
             compute_ff1_bias,
             device=device,
-            mem_config=ff1_bias_mem_config,
+            mem_config=model_config["OP9_FF1_MM_BIAS_MEMCFG"],
         )
         encoder0_ff2_weight = load_or_compute_and_cache(
             ff2_weight_path,
             compute_ff2_weight,
             device=device,
-            mem_config=ff2_weight_mem_config,
+            mem_config=model_config["OP10_FF2_MM_WEIGHTS_MEMCFG"],
         )
         encoder0_ff2_bias = load_or_compute_and_cache(
             ff2_bias_path,
             compute_ff2_bias,
             device=device,
-            mem_config=ff2_bias_mem_config,
+            mem_config=model_config["OP10_FF2_MM_BIAS_MEMCFG"],
         )
 
         encoder0_ff1_weight_shape = encoder0_ff1_weight.padded_shape
