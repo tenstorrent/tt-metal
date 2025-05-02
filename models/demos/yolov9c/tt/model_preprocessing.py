@@ -2,13 +2,13 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import ttnn
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from ttnn.model_preprocessing import infer_ttnn_module_args
-from models.experimental.functional_yolov9c.reference.yolov9c import Conv, YoloV9
-from ttnn.model_preprocessing import preprocess_model_parameters, fold_batch_norm2d_into_conv2d
+from ttnn.model_preprocessing import fold_batch_norm2d_into_conv2d, infer_ttnn_module_args, preprocess_model_parameters
+
+import ttnn
+from models.demos.yolov9c.reference.yolov9c import Conv, YoloV9
 
 
 def custom_preprocessor(model, name):

@@ -4,16 +4,15 @@
 
 
 import torch
-from loguru import logger
 import torch.nn.functional as F
+from loguru import logger
 
 import ttnn
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from models.demos.yolov9c.demo.demo_utils import load_torch_model
+from models.demos.yolov9c.tt.model_preprocessing import create_yolov9c_model_parameters
+from models.demos.yolov9c.tt.ttnn_yolov9c import YoloV9
 from models.utility_functions import divup, is_wormhole_b0
-
-from models.experimental.functional_yolov9c.tt.ttnn_yolov9c import YoloV9
-from models.experimental.functional_yolov9c.demo.demo_utils import load_torch_model
-from models.experimental.functional_yolov9c.tt.model_preprocessing import create_yolov9c_model_parameters
+from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
 class YOLOv9PerformanceRunnerInfra:
