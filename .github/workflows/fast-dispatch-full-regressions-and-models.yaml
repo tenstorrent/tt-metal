@@ -3,6 +3,10 @@ name: "(Single-card) Frequent model and ttnn tests"
 on:
   workflow_dispatch:
   workflow_call:
+    with-retries:
+        default: true
+        type: boolean
+        description: "Re-run failed jobs (max 3)"
   schedule:
     - cron: "0 */2 * * *"
 
