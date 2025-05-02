@@ -156,10 +156,9 @@ def is_param_replicated_across_shards(key: str) -> bool:
     """
     if key.startswith("vision_model."):
         return any(keyword in key for keyword in ("ln", "gate", "embed", "c_proj.bias"))
-    elif key.startswith("text_model."):
-        return any(keyword in key for keyword in ("norm", "gate"))
     else:
-        raise ValueError(f"Unknown model parameter name: {key}")
+        # for Meta checkpoint keys, key either starts with "text_model." or contains no such prefix; both cases are handled here
+        return any(keyword in key for keyword in ("norm", "gate"))
 
 
 def load_sharded_checkpoints(checkpoints, n_layers):
