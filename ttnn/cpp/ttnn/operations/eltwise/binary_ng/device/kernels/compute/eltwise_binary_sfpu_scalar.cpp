@@ -16,6 +16,7 @@
 #include "compute_kernel_api/sub_int32_sfpu.h"
 #include "compute_kernel_api/sub_uint16_sfpu.h"
 #include "compute_kernel_api/quantization.h"
+#include "compute_kernel_api/binary_bitwise_and_uint16_sfpu.h"
 
 #include "eltwise_utils_common.hpp"
 #include "eltwise_utils_sfpu.hpp"

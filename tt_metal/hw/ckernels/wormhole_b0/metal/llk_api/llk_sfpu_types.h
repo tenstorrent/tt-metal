@@ -89,6 +89,7 @@ enum SfpuType {
     bitwise_xor,
     bitwise_not,
     bitwise_and,
+    bitwise_and_uint16,
     bitwise_or,
     right_shift,
     floor,

@@ -17,9 +17,13 @@
 #include "compute_kernel_api/sub_uint16_sfpu.h"
 #include "compute_kernel_api/quantization.h"
 #include "compute_kernel_api/binary_max_min.h"
+<<<<<<< HEAD
 #include "compute_kernel_api/gcd.h"
 #include "compute_kernel_api/lcm.h"
 
+=======
+#include "compute_kernel_api/binary_bitwise_and_uint16_sfpu.h"
+>>>>>>> 2a389d1361 (Add bitwise_and support for uint16)
 #include "eltwise_utils_common.hpp"
 #include "eltwise_utils_sfpu.hpp"
 
