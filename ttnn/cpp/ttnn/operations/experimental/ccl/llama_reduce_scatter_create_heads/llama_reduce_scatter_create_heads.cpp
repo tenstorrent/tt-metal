@@ -68,6 +68,7 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ExecuteLlamaReduceScatterCr
          ring_devices,
          memory_config,
          mesh_view,
+         topology,
          num_links,
          num_heads,
          num_kv_heads,
@@ -92,9 +93,13 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ExecuteLlamaReduceScatterCr
                     semaphore = semaphores.at(i);
                     if (i != 0) {
                         backward_device = devices.at(i - 1);
+                    } else if (topology == ttnn::ccl::Topology::Ring) {
+                        backward_device = devices.at(ring_devices - 1);
                     }
                     if (i != ring_devices - 1) {
                         forward_device = devices.at(i + 1);
+                    } else if (topology == ttnn::ccl::Topology::Ring) {
+                        forward_device = devices.at(0);
                     }
                 }
             }
@@ -109,6 +114,7 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ExecuteLlamaReduceScatterCr
                 forward_device,
                 backward_device,
                 ring_devices,
+                topology,
                 num_links,
                 num_heads,
                 num_kv_heads,
