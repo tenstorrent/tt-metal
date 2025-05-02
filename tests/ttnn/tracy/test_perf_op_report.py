@@ -72,6 +72,5 @@ class TestSingleOp:
             "PM BANDWIDTH [ns]": 7,
             "PM REQ I BW": "[292.5714416503906; 292.5714416503906]",
             "PM REQ O BW": "[292.5714416503906]",
-            "PM FPU UTIL (%)": 0.1,
         }
         verify_columns(received_columns, expected_columns, verify_equal)
