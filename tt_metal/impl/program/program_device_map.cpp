@@ -7,16 +7,16 @@
 namespace tt::tt_metal {
 
 // Extracts all the pairs of noc multicast encodings given a set of core ranges
-std::vector<std::pair<transfer_info_cores, uint32_t>> extract_dst_noc_multicast_info(
+std::vector<multicast_transfer_info> extract_dst_noc_multicast_info(
     IDevice* device, const std::vector<CoreRange>& ranges, const CoreType core_type) {
-    std::vector<std::pair<transfer_info_cores, uint32_t>> dst_noc_multicast_info;
+    std::vector<multicast_transfer_info> dst_noc_multicast_info;
     dst_noc_multicast_info.reserve(ranges.size());
     for (const CoreRange& core_range : ranges) {
         CoreCoord virtual_start = device->virtual_core_from_logical_core(core_range.start_coord, core_type);
         CoreCoord virtual_end = device->virtual_core_from_logical_core(core_range.end_coord, core_type);
 
         uint32_t num_receivers = core_range.size();
-        dst_noc_multicast_info.push_back(std::make_pair(CoreRange(virtual_start, virtual_end), num_receivers));
+        dst_noc_multicast_info.push_back(multicast_transfer_info{CoreRange(virtual_start, virtual_end), num_receivers});
     }
     return dst_noc_multicast_info;
 }
