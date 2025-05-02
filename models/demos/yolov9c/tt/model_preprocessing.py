@@ -7,7 +7,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from ttnn.model_preprocessing import infer_ttnn_module_args
-from models.experimental.functional_yolov9c.reference.yolov9c import Conv, YoloV9
+from models.demos.yolov9c.reference.yolov9c import Conv, YoloV9
 from ttnn.model_preprocessing import preprocess_model_parameters, fold_batch_norm2d_into_conv2d
 
 

@@ -7,8 +7,8 @@ import ttnn
 import torch.nn.functional as F
 
 from tests.ttnn.utils_for_testing import assert_with_pcc
-from models.experimental.functional_yolov9c.tt.model_preprocessing import create_yolov9c_input_tensors
-from models.experimental.functional_yolov9c.runner.performant_runner_infra import YOLOv9PerformanceRunnerInfra
+from models.demos.yolov9c.tt.model_preprocessing import create_yolov9c_input_tensors
+from models.demos.yolov9c.runner.performant_runner_infra import YOLOv9PerformanceRunnerInfra
 
 
 class YOLOv9PerformantRunner:
@@ -38,8 +38,6 @@ class YOLOv9PerformantRunner:
             self.input_mem_config,
         ) = self.runner_infra.setup_dram_sharded_input(device)
         self.tt_image_res = self.tt_inputs_host.to(device, sharded_mem_config_DRAM)
-
-        self._capture_yolov9_trace_2cqs()
 
     def _capture_yolov9_trace_2cqs(self):
         # Initialize the op event so we can write
@@ -85,17 +83,15 @@ class YOLOv9PerformantRunner:
     def _execute_yolov9_trace_2cqs_inference(self, tt_inputs_host=None):
         tt_inputs_host = self.tt_inputs_host if tt_inputs_host is None else tt_inputs_host
         ttnn.wait_for_event(1, self.op_event)
-        ttnn.copy_host_to_device_tensor(tt_inputs_host, self.tt_image_res, 1)
+        ttnn.copy_host_to_device_tensor(self.tt_inputs_host, self.tt_image_res, 1)
         self.write_event = ttnn.record_event(self.device, 1)
         ttnn.wait_for_event(0, self.write_event)
         # TODO: Add in place support to ttnn to_memory_config
-        self.input_tensor = ttnn.reshard(self.tt_image_res, self.input_mem_config, self.input_tensor)
+        if self.input_tensor.is_sharded():
+            self.input_tensor = ttnn.reshard(self.tt_image_res, self.input_mem_config, self.input_tensor)
         self.op_event = ttnn.record_event(self.device, 0)
         ttnn.execute_trace(self.device, self.tid, cq_id=0, blocking=False)
-        ttnn.synchronize_device(self.device)
-
-        ttnn_output_tensor = self.runner_infra.output_tensor
-        return ttnn_output_tensor
+        return self.runner_infra.output_tensor
 
     def _validate(self, input_tensor, result_output_tensor):
         torch_output_tensor = self.runner_infra.torch_output_tensor

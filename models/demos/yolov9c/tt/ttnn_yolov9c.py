@@ -3,16 +3,15 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import math
-
 import ttnn
 from models.experimental.yolo_common.yolo_utils import concat, determine_num_cores, get_core_grid_from_num_cores
 
 
 def interleaved_to_sharded(x):
     x = ttnn.to_layout(x, layout=ttnn.ROW_MAJOR_LAYOUT)
+    x = ttnn.reshape(x, (x.shape[0], int(math.sqrt(x.shape[2])), int(math.sqrt(x.shape[2])), x.shape[3]))
     nhw = x.shape[0] * x.shape[1] * x.shape[2]
-    num_cores = determine_num_cores(nhw, int(math.sqrt(x.shape[2])))
-    num_cores = 56 if num_cores == 1 else num_cores
+    num_cores = determine_num_cores(nhw, x.shape[2])
     core_grid = get_core_grid_from_num_cores(num_cores)
     shardspec = ttnn.create_sharded_memory_config_(
         x.shape, core_grid, ttnn.ShardStrategy.HEIGHT, orientation=ttnn.ShardOrientation.ROW_MAJOR
@@ -131,7 +130,7 @@ class TtnnRepconv:
             device=device, conv=parameter.conv2.conv, conv_pth=conv_pt.conv2.conv, activation=""
         )
 
-    def __call__(self, device, x):
+    def __call__(self, x):
         conv1_out = self.conv1(x)
         conv2_out = self.conv2(x)
         x = ttnn.silu(conv1_out + conv2_out)
@@ -144,9 +143,9 @@ class TtnnRepBottleneck:
         self.cv1 = TtnnRepconv(device=device, parameter=parameter.cv1, conv_pt=conv_pt.cv1)
         self.cv2 = TtYOLOv9cConv2D(device=device, conv=parameter.cv2.conv, conv_pth=conv_pt.cv2.conv, activation="silu")
 
-    def __call__(self, device, x):
+    def __call__(self, x):
         input = x
-        x = self.cv1(device, x)
+        x = self.cv1(x)
         x = self.cv2(x)
         return input + x
 
@@ -158,20 +157,14 @@ class TtnnRepcsp:
         self.cv3 = TtYOLOv9cConv2D(device=device, conv=parameter.cv3.conv, conv_pth=conv_pt.cv3.conv, activation="silu")
         self.m = TtnnRepBottleneck(device, parameter.m[0], conv_pt.m[0])
 
-    def __call__(self, device, x):
+    def __call__(self, x):
         cv1_out = self.cv1(x)
-        m_out = self.m(device, cv1_out)
+        m_out = self.m(cv1_out)
         ttnn.deallocate(cv1_out)
 
         cv2_out = self.cv2(x)
-
-        cv2_out = ttnn.to_layout(cv2_out, ttnn.ROW_MAJOR_LAYOUT)
-        cv2_out = ttnn.to_dtype(cv2_out, ttnn.bfloat16)
-
-        m_out = ttnn.to_layout(m_out, ttnn.ROW_MAJOR_LAYOUT)
-        m_out = ttnn.to_dtype(m_out, ttnn.bfloat16)
-
         concat_out = concat(-1, True, m_out, cv2_out)
+
         ttnn.deallocate(m_out)
         ttnn.deallocate(cv2_out)
 
@@ -182,13 +175,21 @@ class TtnnRepcsp:
 
 
 class TtnnRepncspelan4:
-    def __init__(self, device, parameter, conv_pt, shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED):
+    def __init__(
+        self,
+        device,
+        parameter,
+        conv_pt,
+        shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        use_1d_systolic_array=True,
+    ):
         self.cv1 = TtYOLOv9cConv2D(
             device=device,
             conv=parameter.cv1.conv,
             conv_pth=conv_pt.cv1.conv,
             activation="silu",
             shard_layout=shard_layout,
+            use_1d_systolic_array=use_1d_systolic_array,
         )
         self.k1 = TtnnRepcsp(device, parameter.cv2[0], conv_pt.cv2[0])
         self.k2 = TtYOLOv9cConv2D(
@@ -200,7 +201,7 @@ class TtnnRepncspelan4:
         )
         self.cv4 = TtYOLOv9cConv2D(device=device, conv=parameter.cv4.conv, conv_pth=conv_pt.cv4.conv, activation="silu")
 
-    def __call__(self, device, x):
+    def __call__(self, x):
         x = self.cv1(x)
         if x.is_sharded():
             x = ttnn.sharded_to_interleaved(x, memory_config=ttnn.L1_MEMORY_CONFIG)
@@ -208,13 +209,11 @@ class TtnnRepncspelan4:
         y1 = x[:, :, :, : x.shape[-1] // 2]
         y2 = x[:, :, :, x.shape[-1] // 2 : x.shape[-1]]
 
-        y2 = interleaved_to_sharded(y2)
-
-        cv2_out = self.k1(device, y2)
+        cv2_out = self.k1(y2)
         cv3_out = self.k2(cv2_out)
         ttnn.deallocate(cv2_out)
 
-        cv4_out = self.k3(device, cv3_out)
+        cv4_out = self.k3(cv3_out)
         cv5_out = self.k4(cv4_out)
         ttnn.deallocate(cv4_out)
 
@@ -239,9 +238,14 @@ class TtnnADown:
             activation="silu",
             use_1d_systolic_array=use_1d_systolic_array,
         )
-        self.cv2 = TtYOLOv9cConv2D(device=device, conv=parameter.cv2.conv, conv_pth=conv_pt.cv2.conv, activation="silu")
+        self.cv2 = TtYOLOv9cConv2D(
+            device=device,
+            conv=parameter.cv2.conv,
+            conv_pth=conv_pt.cv2.conv,
+            activation="silu",
+        )
 
-    def __call__(self, device, x):
+    def __call__(self, x):
         x = ttnn.avg_pool2d(
             input_tensor=x,
             batch_size=x.shape[0],
@@ -288,7 +292,7 @@ class TtnnSPPELAN:
         self.cv1 = TtYOLOv9cConv2D(device=device, conv=parameter.cv1.conv, conv_pth=conv_pt.cv1.conv, activation="silu")
         self.cv5 = TtYOLOv9cConv2D(device=device, conv=parameter.cv5.conv, conv_pth=conv_pt.cv5.conv, activation="silu")
 
-    def __call__(self, device, x):
+    def __call__(self, x):
         x = self.cv1(x)
         x1 = x
         if x.is_sharded():
@@ -395,6 +399,7 @@ class TtnnDetect:
             device=device,
             conv=parameter.cv2[2][1].conv,
             conv_pth=conv_pt.cv2[2][1].conv,
+            activation="silu",
             is_detect=True,
         )
         self.cv2_2_2 = TtYOLOv9cConv2D(
@@ -443,7 +448,6 @@ class TtnnDetect:
             conv_pth=conv_pt.cv3[2][0].conv,
             activation="silu",
             is_detect=True,
-            shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
         )
         self.cv3_2_1 = TtYOLOv9cConv2D(
             device=device,
@@ -455,11 +459,11 @@ class TtnnDetect:
         self.cv3_2_2 = TtYOLOv9cConv2D(
             conv=parameter.cv3[2][2], conv_pth=conv_pt.cv3[2][2], device=device, is_detect=True
         )
-        self.dfl = TtYOLOv9cConv2D(device=device, conv=parameter.dfl.conv, conv_pth=conv_pt.dfl.conv, is_dfl=True)
+        self.dfl = TtYOLOv9cConv2D(conv=parameter.dfl.conv, conv_pth=conv_pt.dfl.conv, device=device, is_dfl=True)
         self.anchors = conv_pt.anchors
         self.strides = conv_pt.strides
 
-    def __call__(self, device, y1, y2, y3):
+    def __call__(self, y1, y2, y3):
         x1 = self.cv2_0_0(y1)
         x1 = self.cv2_0_1(x1)
         x1 = self.cv2_0_2(x1)
@@ -480,34 +484,46 @@ class TtnnDetect:
         x6 = self.cv3_2_2(x6)
 
         y1 = concat(-1, False, x1, x4)
-        y2 = concat(-1, False, x2, x5)
-        y3 = concat(-1, False, x3, x6)
-
         ttnn.deallocate(x1)
-        ttnn.deallocate(x2)
-        ttnn.deallocate(x3)
         ttnn.deallocate(x4)
+
+        y1 = ttnn.reshape(y1, (y1.shape[0], y1.shape[2], y1.shape[-1]))
+
+        y2 = concat(-1, False, x2, x5)
+        ttnn.deallocate(x2)
         ttnn.deallocate(x5)
+
+        y2 = ttnn.reshape(y2, (y2.shape[0], y2.shape[2], y2.shape[-1]))
+
+        y3 = concat(-1, False, x3, x6)
+        ttnn.deallocate(x3)
         ttnn.deallocate(x6)
 
-        y = concat(2, False, y1, y2, y3)
+        y3 = ttnn.reshape(y3, (y3.shape[0], y3.shape[2], y3.shape[-1]))
+
+        y = concat(1, False, y1, y2, y3)
 
         ttnn.deallocate(y1)
         ttnn.deallocate(y2)
         ttnn.deallocate(y3)
 
-        ya, yb = y[:, :, :, :64], y[:, :, :, 64:144]
-        ya = ttnn.permute(ya, (0, 1, 3, 2))
-        ya = ttnn.reshape(ya, (ya.shape[0], 4, 16, ya.shape[-1]))
+        ya, yb = y[:, :, :64], y[:, :, 64:144]
+
+        ya = ttnn.permute(ya, (0, 2, 1))
+        ya = ttnn.reshape(ya, (ya.shape[0], 4, 16, ya.shape[2]))
         ya = ttnn.permute(ya, (0, 2, 1, 3))
+
         ya = ttnn.to_layout(ya, ttnn.TILE_LAYOUT)
         ya = ttnn.softmax(ya, dim=1, memory_config=ttnn.L1_MEMORY_CONFIG)
         ya = ttnn.permute(ya, (0, 2, 3, 1))
+
         c = self.dfl(ya)
 
         if c.is_sharded():
             c = ttnn.sharded_to_interleaved(c, memory_config=ttnn.L1_MEMORY_CONFIG)
+
         c = ttnn.to_layout(c, layout=ttnn.ROW_MAJOR_LAYOUT)
+
         c = ttnn.permute(c, (0, 3, 1, 2))
         c = ttnn.reshape(c, (c.shape[0], 1, 4, int(c.shape[3] / 4)))
         c = ttnn.reshape(c, (c.shape[0], c.shape[1] * c.shape[2], c.shape[3]))
@@ -529,12 +545,11 @@ class TtnnDetect:
 
         z = concat(1, False, z2, z1)
         z = ttnn.multiply(z, self.strides, memory_config=ttnn.L1_MEMORY_CONFIG)
-        yb = ttnn.squeeze(yb, 0)
+
         yb = ttnn.permute(yb, (0, 2, 1))
         yb = ttnn.sigmoid(yb)
 
         out = concat(1, False, z, yb)
-
         ttnn.deallocate(z)
         ttnn.deallocate(yb)
 
@@ -548,12 +563,15 @@ class YoloV9:
             device=device,
             conv=parameters.conv_args[0].conv,
             conv_pth=parameters.model[0].conv,
-            config_override={"act_block_h": 32},
             activation="silu",
+            config_override={"act_block_h": 32},
             deallocate_activation=True,
         )  # 0
         self.conv2 = TtYOLOv9cConv2D(
-            device=device, conv=parameters.conv_args[1].conv, conv_pth=parameters.model[1].conv, activation="silu"
+            device=device,
+            conv=parameters.conv_args[1].conv,
+            conv_pth=parameters.model[1].conv,
+            activation="silu",
         )  # 1
         self.repncspelan4_1 = TtnnRepncspelan4(device, parameters.conv_args[2], parameters.model[2])  # 2
         self.adown_1 = TtnnADown(device, parameters.conv_args[3], parameters.model[3], use_1d_systolic_array=False)  # 3
@@ -564,7 +582,9 @@ class YoloV9:
         self.repncspelan4_4 = TtnnRepncspelan4(device, parameters.conv_args[8], parameters.model[8])  # 8
         self.ttnn_sppelan = TtnnSPPELAN(device, parameters.conv_args[9], parameters.model[9])  # 9
         self.repncspelan4_5 = TtnnRepncspelan4(device, parameters.conv_args[12], parameters.model[12])  # 12
-        self.repncspelan4_6 = TtnnRepncspelan4(device, parameters.conv_args[15], parameters.model[15])  # 15
+        self.repncspelan4_6 = TtnnRepncspelan4(
+            device, parameters.conv_args[15], parameters.model[15], use_1d_systolic_array=False
+        )  # 15
         self.adown_6 = TtnnADown(device, parameters.conv_args[16], parameters.model[16])  # 16
         self.repncspelan4_7 = TtnnRepncspelan4(device, parameters.conv_args[18], parameters.model[18])  # 18
         self.adown_7 = TtnnADown(device, parameters.conv_args[19], parameters.model[19])  # 19
@@ -574,51 +594,48 @@ class YoloV9:
     def __call__(self, x):
         x = self.conv1(x)  # 0
         x = self.conv2(x)  # 1
-        x = self.repncspelan4_1(self.device, x)  # 2
-        x = self.adown_1(self.device, x)  # 3
-        x = self.repncspelan4_2(self.device, x)  # 4
+        x = self.repncspelan4_1(x)  # 2
+        x = self.adown_1(x)  # 3
+        x = self.repncspelan4_2(x)  # 4
         x4 = x
-        x = self.adown_2(self.device, x)  # 5
-        x = self.repncspelan4_3(self.device, x)  # 6
+        x = self.adown_2(x)  # 5
+        x = self.repncspelan4_3(x)  # 6
         x6 = x
-        x = self.adown_3(self.device, x)  # 7
-        x = self.repncspelan4_4(self.device, x)  # 8
-        x = self.ttnn_sppelan(self.device, x)  # 9
+        x = self.adown_3(x)  # 7
+        x = self.repncspelan4_4(x)  # 8
+        x = self.ttnn_sppelan(x)  # 9
         x10 = x
         x = interleaved_to_sharded(x)
         x = ttnn.upsample(x, scale_factor=2)  # 10
-
         x = ttnn.reshape(x, (1, 1, x.shape[0] * x.shape[1] * x.shape[2], x.shape[3]))
         x = concat(-1, True, x, x6)  # 11
         ttnn.deallocate(x6)
 
-        x = self.repncspelan4_5(self.device, x)  # 12
+        x = self.repncspelan4_5(x)  # 12
         x13 = x
         x = interleaved_to_sharded(x)
         x = ttnn.upsample(x, scale_factor=2)  # 13
-
         x = ttnn.reshape(x, (1, 1, x.shape[0] * x.shape[1] * x.shape[2], x.shape[3]))
-
         x = concat(-1, True, x, x4)  # 14
         x = ttnn.sharded_to_interleaved(x)
         ttnn.deallocate(x4)
 
-        x = self.repncspelan4_6(self.device, x)  # 15
+        x = interleaved_to_sharded(x)
+        x = self.repncspelan4_6(x)  # 15
         x16 = x
-        x = self.adown_6(self.device, x)  # 16
-
+        x = self.adown_6(x)  # 16
         x = concat(-1, False, x, x13)  # 17
         ttnn.deallocate(x13)
 
-        x = self.repncspelan4_7(self.device, x)  # 18
+        x = self.repncspelan4_7(x)  # 18
         x19 = x
-        x = self.adown_7(self.device, x)  # 19
+        x = self.adown_7(x)  # 19
         x = concat(-1, True, x, x10)  # 20
         ttnn.deallocate(x10)
 
-        x = self.repncspelan4_8(self.device, x)  # 21
+        x = self.repncspelan4_8(x)  # 21
         x22 = x
-        x = self.detect(self.device, x16, x19, x22)  # 22
+        x = self.detect(x16, x19, x22)  # 22
 
         ttnn.deallocate(x16)
         ttnn.deallocate(x19)

@@ -6,10 +6,11 @@ import time
 import torch
 import pytest
 from loguru import logger
+import torch.nn.functional as F
 
 import ttnn
 from models.utility_functions import run_for_wormhole_b0
-from models.experimental.functional_yolov9c.runner.performant_runner import YOLOv9PerformantRunner
+from models.demos.yolov9c.runner.performant_runner import YOLOv9PerformantRunner
 
 
 @run_for_wormhole_b0()
@@ -45,14 +46,16 @@ def test_e2e_performant(
         resolution=resolution,
         model_location_generator=None,
     )
+    performant_runner._capture_yolov9_trace_2cqs()
+    input_shape = (1, *resolution, 3)
+    torch_input_tensor = torch.randn(input_shape, dtype=torch.float32)
+    torch_input_tensor = F.pad(torch_input_tensor, (0, 29), mode="constant", value=0)
+    tt_inputs_host = ttnn.from_torch(torch_input_tensor, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
 
     inference_times = []
     for _ in range(10):
-        input_shape = (1, *resolution, 3)
-        torch_input_tensor = torch.randn(input_shape, dtype=torch.float32)
-
         t0 = time.time()
-        _ = performant_runner.run(torch_input_tensor)
+        _ = performant_runner._execute_yolov9_trace_2cqs_inference(tt_inputs_host)
         t1 = time.time()
         inference_times.append(t1 - t0)
 
