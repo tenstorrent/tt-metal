@@ -49,6 +49,9 @@ test_bounds = {
             "riscv_1": {"latency": {"lower": 4000, "upper": 12000}, "bandwidth": 0.007},
             "riscv_0": {"latency": {"lower": 300, "upper": 4700}, "bandwidth": 0.17},
         },
+        5: {
+            "riscv_1": {"latency": {"lower": 300, "upper": 4700}, "bandwidth": 0.17},
+        },
     },
     "blackhole": {
         0: {
@@ -71,9 +74,9 @@ test_bounds = {
             "riscv_1": {"latency": {"lower": 4000, "upper": 12000}, "bandwidth": 0.007},
             "riscv_0": {"latency": {"lower": 300, "upper": 4700}, "bandwidth": 0.17},
         },
-    },
-    5: {
-        "riscv_1": {"latency": {"lower": 300, "upper": 4700}, "bandwidth": 0.17},
+        5: {
+            "riscv_1": {"latency": {"lower": 300, "upper": 4700}, "bandwidth": 0.17},
+        },
     },
 }
 
@@ -279,29 +282,31 @@ def performance_check(dm_stats, arch="blackhole", verbose=False):
         if verbose:
             logger.info(f"Perf results for test id: {test_id}")
             logger.info(f"Latency")
-            logger.info(
-                f"  RISCV 1: {bounds['riscv_1']['latency']['lower']}-{bounds['riscv_1']['latency']['upper']} cycles"
-            )
-            logger.info(
-                f"  RISCV 0: {bounds['riscv_0']['latency']['lower']}-{bounds['riscv_0']['latency']['upper']} cycles"
-            )
-            logger.info(f"Bandwidth")
-            logger.info(f"  RISCV 1: {bounds['riscv_1']['bandwidth']} Bytes/cycle")
-            logger.info(f"  RISCV 0: {bounds['riscv_0']['bandwidth']} Bytes/cycle")
+            for riscv in bounds.keys():
+                if bounds[riscv]["latency"]["lower"] != float("inf"):
+                    logger.info(
+                        f"  {riscv}: {bounds[riscv]['latency']['lower']}-{bounds[riscv]['latency']['upper']} cycles"
+                    )
 
-        if test_id not in test_bounds.keys():
-            logger.warning(f"Test id {test_id} not found in test bounds.")
+            logger.info(f"Bandwidth")
+            for riscv in bounds.keys():
+                if bounds[riscv]["bandwidth"] != float("inf"):
+                    logger.info(f"  {riscv}: {bounds[riscv]['bandwidth']} Bytes/cycle")
+
+            logger.info("")
+
+        if test_id not in test_bounds[arch].keys():
+            logger.warning(f"Test id {test_id} not found in {arch} test bounds.")
             continue
 
-
         for riscv in bounds.keys():
-            if riscv not in test_bounds[test_id].keys():
+            if riscv not in test_bounds[arch][test_id].keys():
                 continue
             cycles_within_bounds = (
-                test_bounds[test_id][riscv]["latency"]["lower"] <= bounds[riscv]["latency"]["lower"]
-                and bounds[riscv]["latency"]["upper"] <= test_bounds[test_id][riscv]["latency"]["upper"]
+                test_bounds[arch][test_id][riscv]["latency"]["lower"] <= bounds[riscv]["latency"]["lower"]
+                and bounds[riscv]["latency"]["upper"] <= test_bounds[arch][test_id][riscv]["latency"]["upper"]
             )
-            bw_within_bounds = test_bounds[test_id][riscv]["bandwidth"] <= bounds[riscv]["bandwidth"]
+            bw_within_bounds = test_bounds[arch][test_id][riscv]["bandwidth"] <= bounds[riscv]["bandwidth"]
 
             # Print bounds check results
             if verbose:
@@ -339,7 +344,7 @@ def print_stats(dm_stats):
         logger.info(f"Attributes:")
         for attr, val in dm_stats["riscv_1" if riscv1_run else "riscv_0"]["attributes"][run_host_id].items():
             logger.info(f"  {attr}: {val}")
-        logger.info(f"\n")
+        logger.info("")
 
 
 def plot_dm_stats(dm_stats, output_file="dm_stats_plot.png"):
