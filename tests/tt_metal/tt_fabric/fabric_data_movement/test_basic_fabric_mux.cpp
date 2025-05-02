@@ -52,8 +52,6 @@ struct TestConfig {
     uint32_t num_return_credits_per_packet = 0;
     uint32_t packet_payload_size_bytes = 0;
     uint32_t time_seed = 0;
-    uint8_t num_full_size_channels = 0;
-    uint8_t num_header_only_channels = 0;
     uint8_t num_buffers_full_size_channel = 0;
     uint8_t num_buffers_header_only_channel = 0;
     bool unifom_sender_receiver_split = true;
@@ -334,19 +332,20 @@ void run_mux_test_variant(FabricMuxFixture* fixture, TestConfig test_config) {
         }
     }
 
-    auto assign_worker_cores = [&](tt::tt_metal::IDevice* device, uint8_t num_workers, uint8_t num_hops, bool sender) {
-        for (uint8_t i = 0; i < num_workers; i++) {
-            auto core_and_hops = std::make_pair(worker_logical_cores.back(), num_hops);
-            worker_logical_cores.pop_back();
-            if (sender) {
-                device_senders_map[device].push_back(core_and_hops);
-                device_receivers_map[devices.front()].push_back(core_and_hops);
-            } else {
-                device_receivers_map[device].push_back(core_and_hops);
-                device_senders_map[devices.front()].push_back(core_and_hops);
+    auto assign_worker_cores =
+        [&](tt::tt_metal::IDevice* device, uint8_t num_workers, uint8_t num_hops, bool is_sender) {
+            for (uint8_t i = 0; i < num_workers; i++) {
+                auto core_and_hops = std::make_pair(worker_logical_cores.back(), num_hops);
+                worker_logical_cores.pop_back();
+                if (is_sender) {
+                    device_senders_map[device].push_back(core_and_hops);
+                    device_receivers_map[devices.front()].push_back(core_and_hops);
+                } else {
+                    device_receivers_map[device].push_back(core_and_hops);
+                    device_senders_map[devices.front()].push_back(core_and_hops);
+                }
             }
-        }
-    };
+        };
 
     uint8_t num_assigned_senders = 0;
     uint8_t num_assigned_receivers = 0;
@@ -354,18 +353,18 @@ void run_mux_test_variant(FabricMuxFixture* fixture, TestConfig test_config) {
     // each of the receivers starting from the 2nd device in the seq will receive packets from the 1st device
     for (auto i = 1; i < num_devices - 1; i++) {
         auto num_local_senders = num_senders_per_chip + offset;
-        assign_worker_cores(devices[i], num_local_senders, i, true);
+        assign_worker_cores(devices[i], num_local_senders, i, true /* is_sender */);
         num_assigned_senders += num_local_senders;
 
         offset *= -1;
         auto num_local_receivers = num_receivers_per_chip + offset;
-        assign_worker_cores(devices[i], num_local_senders, i, false);
+        assign_worker_cores(devices[i], num_local_senders, i, false /* is_sender */);
         num_assigned_receivers += num_local_receivers;
     }
 
     // assign all the remaining senders/receivers to the last device
-    assign_worker_cores(devices.back(), num_senders - num_assigned_senders, num_devices - 1, true);
-    assign_worker_cores(devices.back(), num_receivers - num_assigned_receivers, num_devices - 1, false);
+    assign_worker_cores(devices.back(), num_senders - num_assigned_senders, num_devices - 1, true /* is_sender */);
+    assign_worker_cores(devices.back(), num_receivers - num_assigned_receivers, num_devices - 1, false /* is_sender */);
 
     const uint32_t l1_unreserved_base_address =
         devices[0]->allocator()->get_base_allocator_addr(tt_metal::HalMemType::L1);
@@ -534,8 +533,6 @@ TEST_F(FabricMuxFixture, TestFabricMuxTwoChipVariant1) {
         .num_return_credits_per_packet = 1,
         .packet_payload_size_bytes = 4096,
         .time_seed = std::chrono::system_clock::now().time_since_epoch().count(),
-        .num_full_size_channels = 1,
-        .num_header_only_channels = 1,
         .num_buffers_full_size_channel = 1,
         .num_buffers_header_only_channel = 1,
         .unifom_sender_receiver_split = true,
@@ -554,8 +551,6 @@ TEST_F(FabricMuxFixture, TestFabricMuxTwoChipVariant2) {
         .num_return_credits_per_packet = 1,
         .packet_payload_size_bytes = 4096,
         .time_seed = std::chrono::system_clock::now().time_since_epoch().count(),
-        .num_full_size_channels = 4,
-        .num_header_only_channels = 4,
         .num_buffers_full_size_channel = 4,
         .num_buffers_header_only_channel = 4,
         .unifom_sender_receiver_split = true,
@@ -574,8 +569,6 @@ TEST_F(FabricMuxFixture, TestFabricMuxTwoChipVariant3) {
         .num_return_credits_per_packet = 1,
         .packet_payload_size_bytes = 4096,
         .time_seed = std::chrono::system_clock::now().time_since_epoch().count(),
-        .num_full_size_channels = 8,
-        .num_header_only_channels = 8,
         .num_buffers_full_size_channel = 8,
         .num_buffers_header_only_channel = 8,
         .unifom_sender_receiver_split = true,
@@ -594,8 +587,6 @@ TEST_F(FabricMuxFixture, TestFabricMuxTwoChipVariant4) {
         .num_return_credits_per_packet = 8,
         .packet_payload_size_bytes = 4096,
         .time_seed = std::chrono::system_clock::now().time_since_epoch().count(),
-        .num_full_size_channels = 8,
-        .num_header_only_channels = 8,
         .num_buffers_full_size_channel = 8,
         .num_buffers_header_only_channel = 8,
         .unifom_sender_receiver_split = true,
@@ -614,8 +605,6 @@ TEST_F(FabricMuxFixture, TestFabricMuxThreeChipVariant) {
         .num_return_credits_per_packet = 8,
         .packet_payload_size_bytes = 4096,
         .time_seed = std::chrono::system_clock::now().time_since_epoch().count(),
-        .num_full_size_channels = 8,
-        .num_header_only_channels = 8,
         .num_buffers_full_size_channel = 8,
         .num_buffers_header_only_channel = 8,
         .unifom_sender_receiver_split = true,
@@ -634,8 +623,6 @@ TEST_F(FabricMuxFixture, TestFabricMuxFourChipVariant1) {
         .num_return_credits_per_packet = 8,
         .packet_payload_size_bytes = 4096,
         .time_seed = std::chrono::system_clock::now().time_since_epoch().count(),
-        .num_full_size_channels = 8,
-        .num_header_only_channels = 8,
         .num_buffers_full_size_channel = 8,
         .num_buffers_header_only_channel = 8,
         .unifom_sender_receiver_split = true,
@@ -654,13 +641,83 @@ TEST_F(FabricMuxFixture, TestFabricMuxFourChipVariant2) {
         .num_return_credits_per_packet = 8,
         .packet_payload_size_bytes = 4096,
         .time_seed = std::chrono::system_clock::now().time_since_epoch().count(),
-        .num_full_size_channels = 8,
-        .num_header_only_channels = 8,
         .num_buffers_full_size_channel = 8,
         .num_buffers_header_only_channel = 8,
         .unifom_sender_receiver_split = false,
         .num_open_close_iters = 1,
         .num_full_size_channel_iters = 1,
+    };
+    run_mux_test_variant(this, test_config);
+}
+
+TEST_F(FabricMuxFixture, TestFabricMuxFiveChipVariant) {
+    TestConfig test_config = {
+        .num_devices = 5,
+        .num_sender_clients = 8,
+        .num_packets = 5000,
+        .num_credits = 16,
+        .num_return_credits_per_packet = 8,
+        .packet_payload_size_bytes = 4096,
+        .time_seed = std::chrono::system_clock::now().time_since_epoch().count(),
+        .num_buffers_full_size_channel = 8,
+        .num_buffers_header_only_channel = 8,
+        .unifom_sender_receiver_split = true,
+        .num_open_close_iters = 1,
+        .num_full_size_channel_iters = 1,
+    };
+    run_mux_test_variant(this, test_config);
+}
+
+TEST_F(FabricMuxFixture, TestFabricMuxSixChipVariant) {
+    TestConfig test_config = {
+        .num_devices = 6,
+        .num_sender_clients = 16,
+        .num_packets = 5000,
+        .num_credits = 16,
+        .num_return_credits_per_packet = 8,
+        .packet_payload_size_bytes = 4096,
+        .time_seed = std::chrono::system_clock::now().time_since_epoch().count(),
+        .num_buffers_full_size_channel = 4,
+        .num_buffers_header_only_channel = 4,
+        .unifom_sender_receiver_split = true,
+        .num_open_close_iters = 1,
+        .num_full_size_channel_iters = 2,
+    };
+    run_mux_test_variant(this, test_config);
+}
+
+TEST_F(FabricMuxFixture, TestFabricMuxSevenChipVariant) {
+    TestConfig test_config = {
+        .num_devices = 7,
+        .num_sender_clients = 20,
+        .num_packets = 5000,
+        .num_credits = 16,
+        .num_return_credits_per_packet = 8,
+        .packet_payload_size_bytes = 4096,
+        .time_seed = std::chrono::system_clock::now().time_since_epoch().count(),
+        .num_buffers_full_size_channel = 4,
+        .num_buffers_header_only_channel = 4,
+        .unifom_sender_receiver_split = true,
+        .num_open_close_iters = 1,
+        .num_full_size_channel_iters = 3,
+    };
+    run_mux_test_variant(this, test_config);
+}
+
+TEST_F(FabricMuxFixture, TestFabricMuxEightChipVariant) {
+    TestConfig test_config = {
+        .num_devices = 8,
+        .num_sender_clients = 20,
+        .num_packets = 5000,
+        .num_credits = 16,
+        .num_return_credits_per_packet = 8,
+        .packet_payload_size_bytes = 4096,
+        .time_seed = std::chrono::system_clock::now().time_since_epoch().count(),
+        .num_buffers_full_size_channel = 4,
+        .num_buffers_header_only_channel = 4,
+        .unifom_sender_receiver_split = false,
+        .num_open_close_iters = 1,
+        .num_full_size_channel_iters = 3,
     };
     run_mux_test_variant(this, test_config);
 }
@@ -674,8 +731,6 @@ TEST_F(FabricMuxFixture, TestFabricMuxStressOpenClose) {
         .num_return_credits_per_packet = 8,
         .packet_payload_size_bytes = 4096,
         .time_seed = std::chrono::system_clock::now().time_since_epoch().count(),
-        .num_full_size_channels = 8,
-        .num_header_only_channels = 8,
         .num_buffers_full_size_channel = 8,
         .num_buffers_header_only_channel = 8,
         .unifom_sender_receiver_split = false,
@@ -694,8 +749,6 @@ TEST_F(FabricMuxFixture, TestFabricMuxNumFullSizeChannelIters) {
         .num_return_credits_per_packet = 8,
         .packet_payload_size_bytes = 4096,
         .time_seed = std::chrono::system_clock::now().time_since_epoch().count(),
-        .num_full_size_channels = 8,
-        .num_header_only_channels = 8,
         .num_buffers_full_size_channel = 8,
         .num_buffers_header_only_channel = 8,
         .unifom_sender_receiver_split = true,
