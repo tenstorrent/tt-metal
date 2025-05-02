@@ -49,7 +49,7 @@ enum class FabricMuxChannelType : uint8_t { FULL_SIZE_CHANNEL = 0, HEADER_ONLY_C
         header size)
     -> Base address where the channels start in the mux's L1
 
-    Advanced configuation parameters:
+    Advanced configuration parameters:
     -> Number of full size channel iters
         This determines the number of full size channel iters to run per iter of header only channels.
         By default its set to 1, which indicates that the full size channels and header only channels are processed
