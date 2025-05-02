@@ -170,14 +170,17 @@ std::vector<MeshCoordinate> MeshDeviceView::get_line_coordinates(
 
 std::vector<MeshCoordinate> MeshDeviceView::get_ring_coordinates(const Shape2D& ring_shape, const Shape2D& mesh_shape) {
     const auto [ring_rows, ring_cols] = ring_shape;
+    TT_FATAL(ring_rows > 0 && ring_cols > 0, "Ring shape must not be empty along either dimension. Got {}", ring_shape);
+    TT_FATAL(
+        ring_rows <= mesh_shape.height() && ring_cols <= mesh_shape.width(),
+        "Subgrid {} is out of mesh bounds {}",
+        ring_shape,
+        mesh_shape);
+
     const auto end_row = ring_rows - 1;
     const auto end_col = ring_cols - 1;
 
-    // Validate the specified subgrid
     std::vector<MeshCoordinate> boundary_coords;
-    if (ring_rows > mesh_shape.height() || ring_cols > mesh_shape.width()) {
-        TT_THROW("Subgrid is out of mesh bounds.");
-    }
 
     // Traverse the top row from left to right
     for (size_t col = 0; col <= end_col; ++col) {
