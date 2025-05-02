@@ -739,7 +739,6 @@ class TtModelArgs:
                         fused_activation=None,
                         mcast_in0=True,
                         gather_in0=True,
-                        hop_cores={},
                         num_global_cb_receivers=0,
                     )
                 elif seq_len == 4096:
@@ -854,7 +853,6 @@ class TtModelArgs:
                         fused_activation=None,
                         mcast_in0=False,
                         gather_in0=False,
-                        hop_cores={},
                         num_global_cb_receivers=0,
                     )
                 elif seq_len == 32768:
@@ -871,7 +869,6 @@ class TtModelArgs:
                         fused_activation=None,
                         mcast_in0=False,
                         gather_in0=False,
-                        hop_cores={},
                         num_global_cb_receivers=0,
                     )
                 elif seq_len == 51200:
@@ -888,7 +885,6 @@ class TtModelArgs:
                         fused_activation=None,
                         mcast_in0=False,
                         gather_in0=False,
-                        hop_cores={},
                         num_global_cb_receivers=0,
                     )
                 elif seq_len == 65536:
@@ -905,7 +901,6 @@ class TtModelArgs:
                         fused_activation=None,
                         mcast_in0=False,
                         gather_in0=False,
-                        hop_cores={},
                         num_global_cb_receivers=0,
                     )
                 elif seq_len == 86106:
@@ -922,7 +917,6 @@ class TtModelArgs:
                         fused_activation=None,
                         mcast_in0=False,
                         gather_in0=False,
-                        hop_cores={},
                         num_global_cb_receivers=0,
                     )
                 elif seq_len == 131072:
@@ -939,7 +933,6 @@ class TtModelArgs:
                         fused_activation=None,
                         mcast_in0=False,
                         gather_in0=False,
-                        hop_cores={},
                         num_global_cb_receivers=0,
                     )
                 else:
