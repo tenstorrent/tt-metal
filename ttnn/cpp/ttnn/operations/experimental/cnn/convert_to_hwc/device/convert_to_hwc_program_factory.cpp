@@ -28,7 +28,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_convert_to_hwc(const Te
     tt::log_info(tt::LogType::LogOp, "Running op with C={}, HW={}, shard_shape={}", C, HW, a.shard_spec()->shape);
     tt::log_info("STARTING CONVERT OP");
 
-    TT_FATAL(C < TILE_HEIGHT, "HW must be 32 or smaller");
+    TT_FATAL(C <= TILE_HEIGHT, "C must be 32 or smaller");
 
     const uint32_t total_tiles = HW / TILE_HEIGHT;  // assume HW < 32
     const uint32_t total_tiles_per_core = tt::div_up(total_tiles, input_cores.size());
@@ -86,7 +86,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_convert_to_hwc(const Te
         cb_in_transpose_id, cb_in_transpose_total_size, cb_in_transpose_page_size, intermediary_format);
 
     std::vector<uint32_t> reader_compile_time_args = {cb_in_id};
-    std::vector<uint32_t> writer_compile_time_args = {cb_in_transpose_id, cb_out_id, HW};
+    std::vector<uint32_t> writer_compile_time_args = {cb_in_transpose_id, cb_out_id, C};
     std::vector<uint32_t> compute_compile_time_args = {cb_in_id, cb_in_tiled_id, cb_in_transpose_id};
 
     auto reader_kernel_id = tt::tt_metal::CreateKernel(

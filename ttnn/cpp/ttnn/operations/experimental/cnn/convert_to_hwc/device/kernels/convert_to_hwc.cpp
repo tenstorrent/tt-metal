@@ -13,6 +13,8 @@
 constexpr uint32_t ONE_TILE = 1;
 
 FORCE_INLINE void transpose(uint32_t cb_in, uint32_t cb_out) {
+    pack_untilize_dst_init_short<1>(cb_in);
+
     cb_wait_front(cb_in, ONE_TILE);
 
     tile_regs_acquire();
@@ -22,7 +24,7 @@ FORCE_INLINE void transpose(uint32_t cb_in, uint32_t cb_out) {
     transpose_wh_tile(cb_in, 0, 0);
 
     cb_reserve_back(cb_out, ONE_TILE);
-    pack_tile(0, cb_out);
+    pack_untilize_dst<1>(cb_out, ONE_TILE);
 
     tile_regs_commit();
     tile_regs_release();
@@ -57,10 +59,9 @@ void MAIN {
     transpose_wh_init(cb_tiled_in, cb_transpose_in);
     tilize_init(cb_in, 1, cb_tiled_in);
 
-    tilize<1>(cb_in, cb_tiled_in);
-    DPRINT << "done done tilzie" << ENDL();
-    transpose(cb_tiled_in, cb_transpose_in);
-
-    DPRINT << "done compute" << ENDL();
+    for (uint32_t idx = 0; idx < total_tiles; idx++) {
+        tilize<1>(cb_in, cb_tiled_in);
+        transpose(cb_tiled_in, cb_transpose_in);
+    }
 }
 }  // namespace NAMESPACE
