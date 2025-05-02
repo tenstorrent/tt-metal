@@ -71,20 +71,28 @@ std::shared_ptr<MeshBuffer> create_receiver_socket_config_buffer(
 std::shared_ptr<MeshBuffer> create_socket_data_buffer(
     std::shared_ptr<MeshDevice> receiver, const socket_config_t& config) {
     const auto& socket_mem_config = config.socket_mem_config;
-    // TODO: Support DRAM
-    TT_FATAL(socket_mem_config.socket_type == BufferType::L1, "Socket data buffer must be L1");
-    auto num_worker_cores = receiver->num_worker_cores(HalProgrammableCoreType::TENSIX, SubDeviceId{0});
-    const auto total_data_buffer_size = num_worker_cores * socket_mem_config.fifo_size;
+
+    uint32_t num_data_cores = 0;
+    CoreRangeSet shard_grid;
+    if (socket_mem_config.socket_type == BufferType::DRAM) {
+        // Allocate DRAM Sharded Buffer
+        shard_grid =
+            CoreRange(CoreCoord(0, 0), CoreCoord(receiver->dram_grid_size().x - 1, receiver->dram_grid_size().y - 1));
+        num_data_cores = receiver->dram_grid_size().x * receiver->dram_grid_size().y;
+    } else {
+        // Allocate Sharded buffer on worker cores
+        shard_grid = receiver->worker_cores(HalProgrammableCoreType::TENSIX, SubDeviceId{0});
+        num_data_cores = receiver->num_worker_cores(HalProgrammableCoreType::TENSIX, SubDeviceId{0});
+        ;
+    }
+    // Allocate a shard of size fifo_size on each data core. User decides how these data-cores must be used
+    const auto total_data_buffer_size = num_data_cores * socket_mem_config.fifo_size;
     DeviceLocalBufferConfig socket_data_buffer_specs = {
         .page_size = socket_mem_config.fifo_size,
         .buffer_type = socket_mem_config.socket_type,
         .buffer_layout = TensorMemoryLayout::HEIGHT_SHARDED,
-        .shard_parameters = ShardSpecBuffer(
-            receiver->worker_cores(HalProgrammableCoreType::TENSIX, SubDeviceId{0}),
-            {1, 1},
-            ShardOrientation::ROW_MAJOR,
-            {1, 1},
-            {num_worker_cores, 1}),
+        .shard_parameters =
+            ShardSpecBuffer(shard_grid, {1, 1}, ShardOrientation::ROW_MAJOR, {1, 1}, {num_data_cores, 1}),
         .bottom_up = std::nullopt,
     };
     MeshBufferConfig socket_data_mesh_buffer_specs = ReplicatedBufferConfig{

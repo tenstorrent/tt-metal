@@ -4,6 +4,8 @@
 
 #include <tt-metalium/distributed.hpp>
 #include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
+#include <algorithm>
+#include <random>
 #include "gmock/gmock.h"
 
 #include "tt_metal/hw/inc/socket.h"
@@ -81,7 +83,7 @@ TEST_F(MeshSocketTest, SingleConnectionSingleDeviceConfig) {
 }
 
 // Test multiple connections
-TEST_F(MeshSocketTest, MultiConnectionSingleDeviceTest) {
+TEST_F(MeshSocketTest, MultiConnectionSingleDeviceConfig) {
     auto md0 = mesh_device_->create_submesh(MeshShape(1, 1), MeshCoordinate(0, 0));
     auto current_device_id = md0->get_device(MeshCoordinate(0, 0))->id();
     std::size_t socket_fifo_size = 1024;
@@ -172,6 +174,148 @@ TEST_F(MeshSocketTest, MultiConnectionSingleDeviceTest) {
         EXPECT_EQ(recv_config.upstream_noc_y, sender_virtual_coord.y);
         EXPECT_EQ(recv_config.upstream_noc_x, sender_virtual_coord.x);
         EXPECT_EQ(recv_config.upstream_bytes_acked_addr, send_socket.config_buffer->address());
+        EXPECT_EQ(recv_config.upstream_bytes_acked_addr % l1_alignment, 0);
+    }
+}
+
+TEST_F(MeshSocketTest, MultiConnectionMultiDeviceTest) {
+    auto md0 = mesh_device_->create_submesh(MeshShape(1, 4), MeshCoordinate(0, 0));
+    auto md1 = mesh_device_->create_submesh(MeshShape(1, 4), MeshCoordinate(1, 0));
+    std::unordered_map<MeshCoordinate, chip_id_t> sender_device_coord_to_id;
+    std::unordered_map<MeshCoordinate, chip_id_t> receiver_device_coord_to_id;
+
+    for (const auto& coord : MeshCoordinateRange(md0->shape())) {
+        sender_device_coord_to_id[coord] = md0->get_device(coord)->id();
+    }
+
+    for (const auto& coord : MeshCoordinateRange(md1->shape())) {
+        receiver_device_coord_to_id[coord] = md1->get_device(coord)->id();
+    }
+    std::size_t socket_fifo_size = 1024;
+    auto l1_alignment = MetalContext::instance().hal().get_alignment(HalMemType::L1);
+    const auto& worker_grid = md0->compute_with_storage_grid_size();
+
+    std::vector<CoreCoord> sender_logical_coords;
+    std::vector<CoreCoord> recv_logical_coords;
+    std::vector<MeshCoordinate> sender_device_coords;
+    std::vector<MeshCoordinate> recv_device_coords;
+    uint32_t core_idx = 0;
+    for (std::size_t x = 0; x < worker_grid.x; x++) {
+        for (std::size_t y = 0; y < worker_grid.y; y++) {
+            sender_logical_coords.push_back(CoreCoord(x, y));
+            recv_logical_coords.push_back(CoreCoord(x, y));
+            sender_device_coords.push_back(MeshCoordinate(0, core_idx % 4));
+            recv_device_coords.push_back(MeshCoordinate(0, core_idx % 4));
+            core_idx++;
+        }
+    }
+
+    // Shuffle core coordinates to randomize the connections
+    std::random_device rd;
+    std::mt19937 generator(rd());
+    std::shuffle(sender_logical_coords.begin(), sender_logical_coords.end(), generator);
+    std::shuffle(recv_logical_coords.begin(), recv_logical_coords.end(), generator);
+    std::shuffle(sender_device_coords.begin(), sender_device_coords.end(), generator);
+    std::shuffle(recv_device_coords.begin(), recv_device_coords.end(), generator);
+
+    std::vector<socket_connection_t> socket_connections;
+
+    for (std::size_t coord_idx = 0; coord_idx < sender_logical_coords.size(); coord_idx++) {
+        std::cout << "Create Connection: "
+                  << "Sender: (" << sender_device_coords[coord_idx] << ", " << sender_logical_coords[coord_idx].str()
+                  << ") "
+                  << "Receiver: (" << recv_device_coords[coord_idx] << ", " << recv_logical_coords[coord_idx].str()
+                  << ")" << std::endl;
+        socket_connection_t socket_connection = {
+            .sender_core = {sender_device_coords[coord_idx], sender_logical_coords[coord_idx]},
+            .receiver_core = {recv_device_coords[coord_idx], recv_logical_coords[coord_idx]}};
+        socket_connections.push_back(socket_connection);
+    }
+
+    socket_config_t socket_config_l1 = {
+        .socket_connection_config = socket_connections,
+        .socket_mem_config =
+            {
+                .socket_type = BufferType::L1,
+                .fifo_size = socket_fifo_size,
+            },
+    };
+    socket_config_t socket_config_dram = {
+        .socket_connection_config = socket_connections,
+        .socket_mem_config =
+            {
+                .socket_type = BufferType::DRAM,
+                .fifo_size = socket_fifo_size,
+            },
+    };
+
+    auto [send_socket_l1, recv_socket_l1] = create_sockets(md0, md1, socket_config_l1);
+    auto [send_socket_dram, recv_socket_dram] = create_sockets(md0, md1, socket_config_dram);
+
+    const auto& sender_core_to_core_id =
+        send_socket_l1.config_buffer->get_backing_buffer()->get_buffer_page_mapping()->core_to_core_id_;
+
+    const auto& recv_core_to_core_id =
+        recv_socket_l1.config_buffer->get_backing_buffer()->get_buffer_page_mapping()->core_to_core_id_;
+
+    std::unordered_map<MeshCoordinate, std::vector<sender_socket_md>> sender_configs_per_dev_coord;
+    std::unordered_map<MeshCoordinate, std::vector<receiver_socket_md>> recv_configs_per_dev_coord;
+
+    for (const auto& device_coord : MeshCoordinateRange(md0->shape())) {
+        std::vector<sender_socket_md> sender_configs;
+        std::vector<receiver_socket_md> recv_configs;
+
+        ReadShard(md0->mesh_command_queue(), sender_configs, send_socket_l1.config_buffer, device_coord);
+        ReadShard(md1->mesh_command_queue(), recv_configs, recv_socket_l1.config_buffer, device_coord);
+
+        sender_configs_per_dev_coord[device_coord] = std::move(sender_configs);
+        recv_configs_per_dev_coord[device_coord] = std::move(recv_configs);
+    }
+
+    for (const auto& connection : socket_connections) {
+        const auto& sender_core = connection.sender_core;
+        const auto& recv_core = connection.receiver_core;
+        const auto& sender_device_coord = sender_core.first;
+        const auto& recv_device_coord = recv_core.first;
+        const auto& sender_core_coord = sender_core.second;
+        const auto& recv_core_coord = recv_core.second;
+
+        auto sender_idx = sender_core_to_core_id.at(sender_core_coord);
+        auto recv_idx = recv_core_to_core_id.at(recv_core_coord);
+
+        auto sender_virtual_coord = md0->worker_core_from_logical_core(sender_core_coord);
+        auto recv_virtual_coord = md1->worker_core_from_logical_core(recv_core_coord);
+        auto sender_device_id = sender_device_coord_to_id[sender_device_coord];
+        auto receiver_device_id = receiver_device_coord_to_id[recv_device_coord];
+
+        const auto& sender_config = sender_configs_per_dev_coord[sender_device_coord][sender_idx];
+        const auto& recv_config = recv_configs_per_dev_coord[recv_device_coord][recv_idx];
+
+        // Validate Sender Configs
+        EXPECT_EQ(sender_config.bytes_acked, 0);
+        EXPECT_EQ(sender_config.write_ptr, send_socket_l1.data_buffer->address());
+        EXPECT_EQ(sender_config.bytes_sent, 0);
+        EXPECT_EQ(sender_config.downstream_mesh_id, 0);
+        EXPECT_EQ(sender_config.downstream_chip_id, receiver_device_id);
+        EXPECT_EQ(sender_config.downstream_noc_y, recv_virtual_coord.y);
+        EXPECT_EQ(sender_config.downstream_noc_x, recv_virtual_coord.x);
+        EXPECT_EQ(sender_config.downstream_bytes_sent_addr, recv_socket_l1.config_buffer->address());
+        EXPECT_EQ(sender_config.downstream_fifo_addr, send_socket_l1.data_buffer->address());
+        EXPECT_EQ(sender_config.downstream_fifo_total_size, socket_fifo_size);
+        EXPECT_EQ(sender_config.is_sender, 1);
+        EXPECT_EQ(sender_config.downstream_bytes_sent_addr % l1_alignment, 0);
+
+        // Validate Recv Configs
+        EXPECT_EQ(recv_config.bytes_sent, 0);
+        EXPECT_EQ(recv_config.bytes_acked, 0);
+        EXPECT_EQ(recv_config.read_ptr, recv_socket_l1.data_buffer->address());
+        EXPECT_EQ(recv_config.fifo_addr, recv_socket_l1.data_buffer->address());
+        EXPECT_EQ(recv_config.fifo_total_size, socket_fifo_size);
+        EXPECT_EQ(recv_config.upstream_mesh_id, 0);
+        EXPECT_EQ(recv_config.upstream_chip_id, sender_device_id);
+        EXPECT_EQ(recv_config.upstream_noc_y, sender_virtual_coord.y);
+        EXPECT_EQ(recv_config.upstream_noc_x, sender_virtual_coord.x);
+        EXPECT_EQ(recv_config.upstream_bytes_acked_addr, send_socket_l1.config_buffer->address());
         EXPECT_EQ(recv_config.upstream_bytes_acked_addr % l1_alignment, 0);
     }
 }
