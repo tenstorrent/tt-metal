@@ -25,7 +25,7 @@
 
 #include "allocator.hpp"
 #include "assert.hpp"
-#include "dispatch_settings.hpp"
+#include "dispatch/dispatch_settings.hpp"
 #include "launch_message_ring_buffer_state.hpp"
 #include "mesh_trace.hpp"
 #include "shape_base.hpp"
