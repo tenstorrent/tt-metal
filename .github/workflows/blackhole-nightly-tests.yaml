@@ -18,8 +18,6 @@ on:
   schedule:
     - cron: "0 */12 * * *"  # Every day at 0:00 and 12:00 UTC
 
-run-name: '(Blackhole) Blackhole nightly tests'
-
 jobs:
   build-artifact:
     uses: ./.github/workflows/build-artifact.yaml
