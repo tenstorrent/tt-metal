@@ -29,7 +29,7 @@ inline bool is_dram(const Buffer* b) { return b->buffer_type() == BufferType::DR
 
 inline uint16_t bfloat16(float float_num) {
     uint32_t uint32_data;
-    TT_ASSERT(sizeof float_num == sizeof uint32_data);
+    TT_FATAL(sizeof float_num == sizeof uint32_data);
 
     uint32_data = *reinterpret_cast<uint32_t*>(&float_num);
     // just move upper 16 to lower 16 (truncate)
@@ -238,33 +238,33 @@ operation::ProgramWithCallbacks layernorm_multi_core(
         }
     }
 
-    TT_ASSERT(
+    TT_FATAL(
         in0_t % block_size == 0 &&
         "Size of buffer must be divisible by the size of block used by the reader and compute kernel.");
-    TT_ASSERT(
+    TT_FATAL(
         in1_t % block_size == 0 &&
         "Size of buffer must be divisible by the size of block used by the reader and compute kernel.");
-    TT_ASSERT(
+    TT_FATAL(
         out0_t % block_size == 0 &&
         "Size of buffer must be divisible by the size of block used by the reader and compute kernel.");
-    TT_ASSERT(
+    TT_FATAL(
         im0_t % block_size == 0 &&
         "Size of buffer must be divisible by the size of block used by the reader and compute kernel.");
-    TT_ASSERT(
+    TT_FATAL(
         im3_t % block_size == 0 &&
         "Size of buffer must be divisible by the size of block used by the reader and compute kernel.");
-    TT_ASSERT(
+    TT_FATAL(
         in5_t % block_size == 0 &&
         "Size of buffer must be divisible by the size of block used by the reader and compute kernel.");
-    TT_ASSERT(
+    TT_FATAL(
         in6_t % block_size == 0 &&
         "Size of buffer must be divisible by the size of block used by the reader and compute kernel.");
-    TT_ASSERT(
+    TT_FATAL(
         im6_t % block_size == 0 &&
         "Size of buffer must be divisible by the size of block used by the reader and compute kernel.");
-    TT_ASSERT(Wt % block_size == 0);
-    TT_ASSERT(num_gamma_tiles % block_size == 0);
-    TT_ASSERT(num_beta_tiles % block_size == 0);
+    TT_FATAL(Wt % block_size == 0);
+    TT_FATAL(num_gamma_tiles % block_size == 0);
+    TT_FATAL(num_beta_tiles % block_size == 0);
 
     uint32_t num_tile_rows = NC * Ht;
     auto grid_size = device->compute_with_storage_grid_size();
@@ -470,7 +470,7 @@ operation::ProgramWithCallbacks layernorm_multi_core(
         } else if (core_group_2.contains(core)) {
             num_tile_rows_per_core = num_tile_rows_per_core_group_2;
         } else {
-            TT_ASSERT(false, "Core not in specified core ranges");
+            TT_THROW("Core not in specified core ranges");
         }
 
         uint32_t tile_offset = curr_row * Wt;
@@ -1761,14 +1761,14 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
                     current_storage_core += 1;        // Move to next storage core
                     current_storage_core_offset = 0;  // Reset offset on new storage core
 
-                    TT_ASSERT(
+                    TT_FATAL(
                         current_storage_core <= num_storage_cores,
                         "current_storage_core {} is exceeding number of storage cores {}",
                         current_storage_core,
                         num_storage_cores);
                 }
             }
-            TT_ASSERT(
+            TT_FATAL(
                 worker_core_current_offset == block_wt,
                 "All worker core data should be written, but worker_core_current_offset {} != block_wt {}",
                 worker_core_current_offset,

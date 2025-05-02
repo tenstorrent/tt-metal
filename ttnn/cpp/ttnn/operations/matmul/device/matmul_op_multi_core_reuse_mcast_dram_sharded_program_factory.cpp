@@ -295,7 +295,7 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_dram_sharded(
     uint32_t num_blocks_per_shard = num_blocks / all_storage_cores_vec.size();
     log_debug("num_blocks_per_shard: {}", num_blocks_per_shard);
     if (per_core_M > 1) {
-        TT_ASSERT(
+        TT_FATAL(
             num_blocks_per_shard == 1,
             "currently not support per_core_M larger than 1, while split one shard into multiple blocks");
     }
@@ -842,7 +842,7 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_dram_sharded(
         writer_kernel_ids.push_back(mm_kernel_in1_sender_writer_id);
     }
 
-    TT_ASSERT(
+    TT_FATAL(
         total_tensor_width_written_back <= expected_max_total_width,
         "more datums written back to sharded tensor, L1 corruption, expected: {}, actual: {}",
         expected_max_total_width,

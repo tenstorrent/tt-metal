@@ -135,10 +135,10 @@ operation::ProgramWithCallbacks groupnorm_multi_core_sharded(
     bool inplace) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
     if (gamma.has_value()) {
-        TT_ASSERT(gamma.value().get_layout() == Layout::ROW_MAJOR);
+        TT_FATAL(gamma.value().get_layout() == Layout::ROW_MAJOR);
     }
     if (beta.has_value()) {
-        TT_ASSERT(beta.value().get_layout() == Layout::ROW_MAJOR);
+        TT_FATAL(beta.value().get_layout() == Layout::ROW_MAJOR);
     }
 
     bool is_height_sharding = a.get_padded_shape()[3] == a.shard_spec().value().shape[1];
@@ -158,7 +158,7 @@ operation::ProgramWithCallbacks groupnorm_multi_core_sharded(
                                : tt::DataFormat::Float16_b;
     uint32_t datum_size_bytes = 2;  // bfloat16
 
-    TT_ASSERT(out_data_format == in_data_format && "input and output must be the same data format");
+    TT_FATAL(out_data_format == in_data_format && "input and output must be the same data format");
 
     // tile sizes
     uint32_t in_single_tile_size = tt::tt_metal::detail::TileSize(in_data_format);
@@ -201,34 +201,34 @@ operation::ProgramWithCallbacks groupnorm_multi_core_sharded(
     uint32_t num_batches_per_core = num_batches > num_shards_r ? num_batches / num_shards_r : 1;
     uint32_t num_groups_per_core = num_groups > num_shards_c ? num_groups / num_shards_c : 1;
 
-    TT_ASSERT(per_core_N % num_datum_row_per_group == 0);
-    TT_ASSERT(per_core_M % TILE_HEIGHT == 0);
+    TT_FATAL(per_core_N % num_datum_row_per_group == 0);
+    TT_FATAL(per_core_M % TILE_HEIGHT == 0);
     if (per_core_N != W) {
         if (shard_orientation == ShardOrientation::COL_MAJOR) {
-            TT_ASSERT(per_core_N * num_cores_r == W);
-            TT_ASSERT(per_core_M * num_cores_c == H);
+            TT_FATAL(per_core_N * num_cores_r == W);
+            TT_FATAL(per_core_M * num_cores_c == H);
         } else {
-            TT_ASSERT(per_core_N * num_cores_c == W);
-            TT_ASSERT(per_core_M * num_cores_r == H);
+            TT_FATAL(per_core_N * num_cores_c == W);
+            TT_FATAL(per_core_M * num_cores_r == H);
         }
     }
 
-    TT_ASSERT(per_core_M % TILE_HEIGHT == 0 && "per_core_M must be divisble by TILE_HEIGHT");
+    TT_FATAL(per_core_M % TILE_HEIGHT == 0 && "per_core_M must be divisble by TILE_HEIGHT");
 
-    TT_ASSERT(W % num_groups == 0 && "Tensor W must be divisble by num_groups");
-    TT_ASSERT(H % per_core_M == 0 && "H dim must be divisible by per_core_M");
-    TT_ASSERT(W % per_core_N == 0 && "W dim must be divisible by per_core_N");
+    TT_FATAL(W % num_groups == 0 && "Tensor W must be divisble by num_groups");
+    TT_FATAL(H % per_core_M == 0 && "H dim must be divisible by per_core_M");
+    TT_FATAL(W % per_core_N == 0 && "W dim must be divisible by per_core_N");
     if (num_batches >= num_shards_r) {
-        TT_ASSERT(
+        TT_FATAL(
             num_batches % num_shards_r == 0 && "num_batches must be divisible by number of cores in a full column");
     } else {
-        TT_ASSERT(
+        TT_FATAL(
             num_shards_r % num_batches == 0 && "number of cores in a full column must be divisible by num_batches");
     }
     if (num_groups >= num_shards_c) {
-        TT_ASSERT(num_groups % num_shards_c == 0 && "num_groups must be divisible by number of cores in a full row");
+        TT_FATAL(num_groups % num_shards_c == 0 && "num_groups must be divisible by number of cores in a full row");
     } else {
-        TT_ASSERT(num_shards_c % num_groups == 0 && "number of cores in a full row must be divisible by num_groups");
+        TT_FATAL(num_shards_c % num_groups == 0 && "number of cores in a full row must be divisible by num_groups");
     }
 
     // subblock
@@ -261,38 +261,38 @@ operation::ProgramWithCallbacks groupnorm_multi_core_sharded(
     log_debug(tt::LogOp, "num_subblocks_w: {}", num_subblocks_w);
     log_debug(tt::LogOp, "reader_repack_output: {}", reader_repack_output);
 
-    TT_ASSERT(per_core_M % num_batches_per_core == 0 && "shard height must be div by per_core_batch");
-    TT_ASSERT(W % num_groups == 0 && "tensor width must be divisible by num_groups!");
+    TT_FATAL(per_core_M % num_batches_per_core == 0 && "shard height must be div by per_core_batch");
+    TT_FATAL(W % num_groups == 0 && "tensor width must be divisible by num_groups!");
     if (shard_orientation == ShardOrientation::ROW_MAJOR and num_groups_per_core == 1) {
-        TT_ASSERT(
+        TT_FATAL(
             num_cores_c % num_groups == 0 &&
             "for RM shard, when each group is split across cores, num_cores_c must be divisible by num_groups!");
     } else if (shard_orientation == ShardOrientation::COL_MAJOR and num_groups_per_core == 1) {
-        TT_ASSERT(
+        TT_FATAL(
             num_cores_r % num_groups == 0 &&
             "for CM shard, when each group is split across cores, num_cores_r must be divisible by num_groups!");
     }
 
     if (per_core_N != W) {  // block sharded
         if (shard_orientation == ShardOrientation::ROW_MAJOR and num_batches_per_core == 1) {
-            TT_ASSERT(
+            TT_FATAL(
                 num_cores_r % num_batches == 0 &&
                 "for RM shard, when each batch is split across cores, num_cores_r must be divisible by num_batches!");
         } else if (shard_orientation == ShardOrientation::COL_MAJOR and num_groups_per_core == 1) {
-            TT_ASSERT(
+            TT_FATAL(
                 num_cores_c % num_batches == 0 &&
                 "for CM shard, when each batch is split across cores, num_cores_c must be divisible by num_batches!");
         }
     } else {  // height sharded
         if (num_batches_per_core == 1) {
-            TT_ASSERT(
+            TT_FATAL(
                 (num_cores_c * num_cores_r) % num_batches == 0 &&
                 "for height shard, number of cores must be divisible by num_batches!");
         }
     }
 
     if (input_mask.has_value()) {
-        TT_ASSERT(
+        TT_FATAL(
             input_mask.value().get_padded_shape()[3] == block_wt * TILE_WIDTH &&
             "input mask must have the same width as block_wt");
     }
