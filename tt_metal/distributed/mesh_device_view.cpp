@@ -142,13 +142,13 @@ chip_id_t MeshDeviceView::find_device_id(const MeshCoordinate& coord) const {
 
 bool MeshDeviceView::is_mesh_2d() const { return shape_2d_.has_value(); }
 
-std::vector<MeshCoordinate> MeshDeviceView::get_line_coordinates(size_t length, const Shape2D& mesh_shape) {
-    // Iterate in a zigzag pattern from top-left to bottom-right.
+std::vector<MeshCoordinate> MeshDeviceView::get_line_coordinates(
+    size_t length, const Shape2D& mesh_shape, const Shape2D& mesh_offset) {
+    // Iterate in a zigzag pattern from top-left to bottom-right, starting at the offset.
     std::vector<MeshCoordinate> line_coords;
     line_coords.reserve(length);
     const auto [num_rows, num_cols] = mesh_shape;
-    int row_index = 0;
-    int col_index = 0;
+    auto [row_index, col_index] = mesh_offset;
     bool left_to_right = true;
 
     for (size_t i = 0; i < length && row_index < num_rows && col_index < num_cols; ++i) {
@@ -207,7 +207,8 @@ std::vector<MeshCoordinate> MeshDeviceView::get_ring_coordinates(const Shape2D& 
 
 std::vector<IDevice*> MeshDeviceView::get_line_devices() const {
     TT_FATAL(shape_2d_.has_value(), "MeshDeviceView is not 2D!");
-    auto boundary_coords = get_line_coordinates(devices_.shape().mesh_size(), *shape_2d_);
+    auto boundary_coords =
+        get_line_coordinates(devices_.shape().mesh_size(), *shape_2d_, /*mesh_offset=*/Shape2D(0, 0));
     return get_devices_from_coordinates(*this, boundary_coords);
 }
 

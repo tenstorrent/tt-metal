@@ -102,10 +102,12 @@ std::vector<chip_id_t> SystemMesh::Impl::get_mapped_physical_device_ids(
             "The specifed offset {} is out of bounds for the system mesh shape {}",
             system_offset,
             system_shape);
-        Shape2D shape_2d(system_shape[0] - system_offset[0], system_shape[1] - system_offset[1]);
+        Shape2D system_mesh_2d(system_shape[0], system_shape[1]);
+        Shape2D system_offset_2d(system_offset[0], system_offset[1]);
 
         auto line_length = shape.mesh_size();
-        for (const auto& logical_coordinate : MeshDeviceView::get_line_coordinates(line_length, shape_2d)) {
+        for (const auto& logical_coordinate :
+             MeshDeviceView::get_line_coordinates(line_length, system_mesh_2d, system_offset_2d)) {
             auto physical_device_id = get_physical_device_id(logical_coordinate);
             physical_device_ids.push_back(physical_device_id);
 
