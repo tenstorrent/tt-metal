@@ -6,7 +6,9 @@
 
 #include <mutex>
 #include <stdint.h>
+#include <unordered_map>
 #include <unordered_set>
+#include <optional>
 
 namespace tt::tt_metal::detail {
 struct HashLookup {
@@ -17,38 +19,54 @@ struct HashLookup {
 
     bool exists(size_t khash) {
         std::unique_lock<std::mutex> lock(mutex_);
-        return hashes_.find(khash) != hashes_.end();
+        return map_key_to_generated_bin_.find(khash) != map_key_to_generated_bin_.end();
     }
-    bool add(size_t khash) {
+
+    bool add(size_t khash, size_t key) {
         std::unique_lock<std::mutex> lock(mutex_);
-        bool ret = false;
-        if (hashes_.find(khash) == hashes_.end()) {
-            hashes_.insert(khash);
-            ret = true;
+        auto it = map_key_to_generated_bin_.find(key);
+        if (it == map_key_to_generated_bin_.end()) {
+            map_key_to_generated_bin_[key] = khash;
+            return true;
         }
-        return ret;
+        return false;
+    }
+
+    std::optional<size_t> get(size_t key) {
+        std::unique_lock<std::mutex> lock(mutex_);
+        auto it = map_key_to_generated_bin_.find(key);
+        if (it != map_key_to_generated_bin_.end()) {
+            return it->second;
+        }
+        return std::nullopt;
+    }
+
+    bool add_generated_bin(size_t khash) {
+        std::unique_lock<std::mutex> lock(mutex_);
+        auto it = generated_bin_.find(khash);
+        if (it == generated_bin_.end()) {
+            generated_bin_.insert(khash);
+            return true;
+        }
+        return false;
     }
 
     bool is_bin_generated(size_t khash) {
         std::unique_lock<std::mutex> lock(mutex_);
-        return generated_bins_.find(khash) != generated_bins_.end();
-    }
-
-    void add_generated_bin(size_t khash) {
-        std::unique_lock<std::mutex> lock(mutex_);
-        generated_bins_.insert(khash);
+        auto it = generated_bin_.find(khash);
+        return it != generated_bin_.end();
     }
 
     void clear() {
         std::unique_lock<std::mutex> lock(mutex_);
-        hashes_.clear();
-        generated_bins_.clear();
+        map_key_to_generated_bin_.clear();
+        generated_bin_.clear();
     }
 
 private:
     std::mutex mutex_;
-    std::unordered_set<size_t> hashes_;
-    std::unordered_set<size_t> generated_bins_;
+    std::unordered_map<size_t, size_t> map_key_to_generated_bin_;
+    std::unordered_set<size_t> generated_bin_;
 };
 
 /**

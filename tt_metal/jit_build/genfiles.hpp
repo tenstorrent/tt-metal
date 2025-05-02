@@ -27,5 +27,6 @@ void jit_build_genfiles_triscs_src(
     const JitBuildEnv& env, const JitBuildSettings& settings, const KernelSource& kernel_src);
 
 void jit_build_genfiles_descriptors(const JitBuildEnv& env, JitBuildOptions& options);
+std::string jit_build_get_absolute_path(const std::string& file_path_string);
 
 }  // namespace tt::tt_metal

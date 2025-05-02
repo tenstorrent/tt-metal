@@ -89,7 +89,7 @@ static fs::path get_file_path_relative_to_src(const fs::path& file_path) {
     return file_path_relative_to_src;
 }
 
-static string get_absolute_path(const string& file_path_string) {
+string jit_build_get_absolute_path(const string& file_path_string) {
     const fs::path& file_path = get_file_path_relative_to_src(file_path_string);
 
     const bool does_file_exist = fs::exists(file_path);
@@ -101,7 +101,7 @@ static string get_absolute_path(const string& file_path_string) {
 
 static string get_kernel_source_to_include(const KernelSource& kernel_src) {
     switch (kernel_src.source_type_) {
-        case KernelSource::FILE_PATH: return "#include \"" + get_absolute_path(kernel_src.source_) + "\"\n";
+        case KernelSource::FILE_PATH: return "#include \"" + jit_build_get_absolute_path(kernel_src.source_) + "\"\n";
         case KernelSource::SOURCE_CODE: return kernel_src.source_;
         default: {
             TT_THROW("Unsupported kernel source type!");
