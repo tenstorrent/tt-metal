@@ -350,8 +350,9 @@ LlamaReduceScatterCreateHeadsDeviceOperation::LlamaReduceScatterCreateHeads::cre
     std::vector<Tensor> input_tensors = {input_tensor};
     std::vector<Tensor> output_tensors = {q_output_tensor, k_output_tensor, v_output_tensor};
 
-    const auto& op_config = ttnn::ccl::CCLOpConfig(input_tensors, output_tensors, ttnn::ccl::Topology::Linear);
-    LineTopology line_topology(ring_size, ring_index);
+    // const auto& op_config = ttnn::ccl::CCLOpConfig(input_tensors, output_tensors, ttnn::ccl::Topology::Linear);
+    const auto& op_config = ttnn::ccl::CCLOpConfig(input_tensors, output_tensors, operation_attributes.topology);
+    // LineTopology line_topology(ring_size, ring_index);
 
     // need to drop unused cores in shard spec
     auto input_grid = input_shard_spec.grid;
@@ -644,7 +645,8 @@ LlamaReduceScatterCreateHeadsDeviceOperation::LlamaReduceScatterCreateHeads::cre
         output_cores_per_device,
         packet_receiver_worker_core.x,
         packet_receiver_worker_core.y,
-        num_packet_worker_cores};
+        num_packet_worker_cores,
+        operation_attributes.topology == ttnn::ccl::Topology::Linear ? 0 : 1};
 
     auto writer_defines = reader_defines;
     // bool skip_write_back = output_cores == packet_worker_cores and num_blocks_per_packet == 1;
@@ -710,10 +712,17 @@ LlamaReduceScatterCreateHeadsDeviceOperation::LlamaReduceScatterCreateHeads::cre
 
     uint32_t link_idx = 0;
 
-    bool forward_fabric_connection =
-        !(line_topology.is_first_device_in_line(ttnn::ccl::EdmLineFabricOpInterface::Direction::BACKWARD));
-    bool backward_fabric_connection =
-        !(line_topology.is_last_device_in_line(ttnn::ccl::EdmLineFabricOpInterface::Direction::BACKWARD));
+    bool forward_fabric_connection = false, backward_fabric_connection = false;
+    if (operation_attributes.topology == ttnn::ccl::Topology::Linear) {
+        LineTopology line_topology(ring_size, ring_index);
+        forward_fabric_connection =
+            !(line_topology.is_first_device_in_line(ttnn::ccl::EdmLineFabricOpInterface::Direction::BACKWARD));
+        backward_fabric_connection =
+            !(line_topology.is_last_device_in_line(ttnn::ccl::EdmLineFabricOpInterface::Direction::BACKWARD));
+    } else if (operation_attributes.topology == ttnn::ccl::Topology::Ring) {
+        forward_fabric_connection = true;
+        backward_fabric_connection = true;
+    }
 
     for (auto core : all_cores) {
         std::vector<uint32_t> writer_runtime_args = {

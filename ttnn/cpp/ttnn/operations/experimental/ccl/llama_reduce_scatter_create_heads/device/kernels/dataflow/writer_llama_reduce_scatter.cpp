@@ -68,6 +68,7 @@ void kernel_main() {
     constexpr uint32_t packet_receiver_core_x = get_compile_time_arg_val(13);
     constexpr uint32_t packet_receiver_core_y = get_compile_time_arg_val(14);
     constexpr uint32_t num_packet_worker_cores = get_compile_time_arg_val(15);
+    constexpr bool RING_TOPOLOGY = get_compile_time_arg_val(16) == 0 ? false : true;
 
     // DPRINT the selected compile-time arguments
     DPRINT << ENDL();
@@ -159,10 +160,24 @@ void kernel_main() {
         }
         for (uint32_t target_device_id : device_order) {
             // Calculate device-specific constants once per device
-            const uint32_t num_hops = std::abs(int(target_device_id) - int(chip_id));
-            unicast_packet_header->to_chip_unicast(static_cast<uint8_t>(num_hops));
-            auto& fabric_conn = target_device_id > chip_id ? fabric_connection.get_forward_connection()
-                                                           : fabric_connection.get_backward_connection();
+            bool forward_connection = true;
+            if (RING_TOPOLOGY) {
+                const int diff = int(target_device_id) - int(chip_id);
+                const uint32_t num_hops = std::abs(diff) == 2 ? 2 : 1;
+                // To evenly distribute the load, we use the following logic:
+                if (diff == 1 || diff == -3 || (chip_id % 2 == 0 && num_hops == 2)) {
+                    forward_connection = true;
+                } else {
+                    forward_connection = false;
+                }
+                unicast_packet_header->to_chip_unicast(static_cast<uint8_t>(num_hops));
+            } else {
+                const uint32_t num_hops = std::abs(int(target_device_id) - int(chip_id));
+                unicast_packet_header->to_chip_unicast(static_cast<uint8_t>(num_hops));
+                forward_connection = target_device_id > chip_id;
+            }
+            auto& fabric_conn = forward_connection ? fabric_connection.get_forward_connection()
+                                                   : fabric_connection.get_backward_connection();
 
             uint32_t num_pages_sent = 0;
             uint32_t packet = sender_packet_start;
