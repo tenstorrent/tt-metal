@@ -53,6 +53,7 @@ private:
     friend class tt::stl::Indestructible<MetalContext>;
     MetalContext();
     ~MetalContext();
+    void teardown();
 
     bool initialized_ = false;
 
