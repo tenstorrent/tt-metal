@@ -27,8 +27,10 @@ void set_printoptions(const std::string& profile) {
 }
 
 void segfault_handler(int sig) {
+    /*
     std::cerr << tt::assert::backtrace_to_string() << std::endl;
     exit(EXIT_FAILURE);
+    */
 }
 
 void dump_stack_trace_on_segfault() {

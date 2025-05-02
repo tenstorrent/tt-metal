@@ -170,9 +170,7 @@ struct std::hash<tt::tt_hlk_desc> {
             hash_hlk_args(hash_value, hlk_args, hlk_args_size);
         } else if (hlk_args == nullptr and hlk_args_size == 0) {
         } else {
-            TT_THROW(
-                "Mismatching values, either hlk_args == nullptr and hlk_args_size == 0 or hlk_args != nullptr and "
-                "hlk_args_size > 0!");
+            tt::log_fatal("Invalid hlk_args, hlk_args == {}, hlk_args_size == {}", hlk_args, hlk_args_size);
         }
 
         return hash_value;

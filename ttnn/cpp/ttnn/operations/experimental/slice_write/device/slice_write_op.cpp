@@ -5,7 +5,7 @@
 #include <tt-metalium/constants.hpp>
 #include "slice_write_op.hpp"
 #include "slice_write_program_factory.hpp"
-#include "tt-metalium/assert.hpp"
+#include <tt-logger/tt-logger.hpp>
 #include "ttnn/tensor/tensor.hpp"
 
 using namespace tt::tt_metal;

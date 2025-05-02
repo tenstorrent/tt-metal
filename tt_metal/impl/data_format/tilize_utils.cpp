@@ -7,6 +7,7 @@
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/tilize_utils.hpp>
 #include <cstddef>
+#include <iostream>
 #include <ostream>
 
 #include <tt-logger/tt-logger.hpp>

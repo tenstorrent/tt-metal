@@ -56,6 +56,7 @@ static string noc_address(CoreCoord core, uint64_t a, uint32_t l) {
 }
 
 static void print_stack_trace(void) {
+    /*
     void* array[15];
 
     int size = backtrace(array, 15);
@@ -68,6 +69,7 @@ static void print_stack_trace(void) {
     }
 
     free(strings);
+    */
 }
 
 static void watcher_sanitize_host_noc(

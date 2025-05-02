@@ -7,7 +7,7 @@
 #include <memory>
 
 #include <tt_stl/overloaded.hpp>
-#include "tt-metalium/assert.hpp"
+#include <tt-logger/tt-logger.hpp>
 #include "tt-metalium/mesh_coord.hpp"
 #include "ttnn/tensor/storage.hpp"
 #include "ttnn/tensor/tensor.hpp"

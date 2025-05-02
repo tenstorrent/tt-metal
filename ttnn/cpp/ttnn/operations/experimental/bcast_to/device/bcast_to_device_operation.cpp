@@ -6,7 +6,7 @@
 
 #include <cstdint>
 
-#include "tt-metalium/assert.hpp"
+#include <tt-logger/tt-logger.hpp>
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/types.hpp"
 

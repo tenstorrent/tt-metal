@@ -4,7 +4,7 @@
 
 #include "cumsum_device_operation.hpp"
 
-#include "tt-metalium/assert.hpp"
+#include <tt-logger/tt-logger.hpp>
 #include "ttnn/tensor/layout/page_config.hpp"
 #include "ttnn/tensor/layout/tensor_layout.hpp"
 #include "ttnn/tensor/storage.hpp"

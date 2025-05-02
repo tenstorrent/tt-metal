@@ -257,4 +257,4 @@ if(simd-everywhere_ADDED)
     target_include_directories(simde SYSTEM INTERFACE ${simd-everywhere_SOURCE_DIR})
 endif()
 
-CPMAddPackage("gh:blozano-tt/tt-logger@0.2.3")
+CPMAddPackage("gh:blozano-tt/tt-logger@0.2.4")
