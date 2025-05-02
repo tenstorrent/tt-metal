@@ -81,19 +81,19 @@ table MeshBufferCreateCommand {
   mesh_buffer_config: MeshBufferConfig;
   device_local_config: DeviceLocalBufferConfig;
   mesh_device_id: int; // Reference to IDevice of type MeshDevice *mesh_device;
-  address: uint64 //std::optional<DeviceAddr>
+  address: uint64; //std::optional<DeviceAddr>
 }
 
 table MeshWorkloadCreateCommand {
 }
 
-AddProgramToMeshWorkloadCommand {
+table AddProgramToMeshWorkloadCommand {
   mesh_workload_global_id: uint32; // Reference to MeshWorkload
   program_global_id: uint32; // Reference to Program TODO: requires std::move(program) in orig, reference to a reference
   device_range : MeshCoordinateRange;
 }
 
-EnqueueMeshWorkloadCommand {
+table EnqueueMeshWorkloadCommand {
   cq_global_id: uint32; // reference to MeshCommandQueue
   mesh_workload_global_id: uint32; // Reference to MeshWorkload
   blocking: bool;
@@ -135,30 +135,30 @@ table SynchronizeCommand {
 
 table EnqueueReadMeshBufferCommand {
   cq_global_id: uint32; // reference to CommandQueue of type MeshCommandQueue
-  dst: [Any];
+  dst: [uint32];  // Data to be written. Support only some types for now.
   mesh_global_id: uint32; // Reference to MeshBuffer used as src
   blocking: bool = true;
 }
 
 table EnqueueWriteMeshBufferCommand {
   cq_global_id: uint32; // reference to CommandQueue of type MeshCommandQueue
-  mesh_global_id: uint32 // Reference to MeshBuffer used as dest
-  src: [Any];
+  mesh_global_id: uint32; // Reference to MeshBuffer used as dest
+  src: [uint32];  // Data to be written. Support only some types for now.
   blocking: bool = false;
 }
 
-void ReadShardCommand {
+table ReadShardCommand {
   cq_global_id: uint32; // reference to CommandQueue of type MeshCommandQueue
-  dst: [Any];
-  mesh_global_id: uint32 // Reference to MeshBuffer used as src
+  dst: [uint32];  // Data to be written. Support only some types for now.
+  mesh_global_id: uint32; // Reference to MeshBuffer used as src
   coord: MeshCoordinate;
   blocking: bool = true;
 }
 
 table WriteShardCommand {
   cq_global_id: uint32; // reference to CommandQueue of type MeshCommandQueue
-  mesh_global_id: uint32 // Reference to MeshBuffer used as dest
-  src: [Any];
+  mesh_global_id: uint32; // Reference to MeshBuffer used as dest
+  src: [uint32];  // Data to be written. Support only some types for now.
   coord: MeshCoordinate;
   blocking: bool = false;
 }

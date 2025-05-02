@@ -137,9 +137,8 @@ public:
     ::tt::tt_metal::CBHandle get_cb_handle_from_map(uint32_t global_id) const;
     void remove_cb_handle_from_map(uint32_t global_id);
 
-    void add_mesh_workload_to_map(
-        uint32_t global_id, const std::shared_ptr<::tt::tt_metal::MeshWorkload>& meshworkload);
-    std::shared_ptr<::tt::tt_metal::MeshWorkload> get_mesh_workload_from_map(uint32_t global_id) const;
+    void add_mesh_workload_to_map(uint32_t global_id, const std::shared_ptr<distributed::MeshWorkload>& meshworkload);
+    std::shared_ptr<distributed::MeshWorkload> get_mesh_workload_from_map(uint32_t global_id) const;
     void remove_mesh_workload_from_map(uint32_t global_id);
 
     // Return the TraceDescriptor for a given trace_id from flatbuffer.

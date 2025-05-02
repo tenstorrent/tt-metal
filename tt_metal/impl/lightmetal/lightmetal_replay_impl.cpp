@@ -289,6 +289,14 @@ void LightMetalReplayImpl::clear_object_maps() {
 // execute a command by dispatching to appropriate handler based on type.
 void LightMetalReplayImpl::execute(const tt::tt_metal::flatbuffer::Command* command) {
     switch (command->cmd_type()) {
+        case ::tt::tt_metal::flatbuffer::CommandType::BeginTraceCaptureCommand: {
+            execute(command->cmd_as_LightMetalCompareCommand());
+            break;
+        }
+        case ::tt::tt_metal::flatbuffer::CommandType::EndTraceCaptureCommand: {
+            execute(command->cmd_as_EndTraceCaptureCommand());
+            break;
+        }
         case ::tt::tt_metal::flatbuffer::CommandType::EnqueueTraceCommand: {
             execute(command->cmd_as_EnqueueTraceCommand());
             break;
@@ -303,6 +311,46 @@ void LightMetalReplayImpl::execute(const tt::tt_metal::flatbuffer::Command* comm
         }
         case ::tt::tt_metal::flatbuffer::CommandType::ReleaseTraceCommand: {
             execute(command->cmd_as_ReleaseTraceCommand());
+            break;
+        }
+        case ::tt::tt_metal::flatbuffer::CommandType::EnqueueRecordEventCommand: {
+            execute(command->cmd_as_EnqueueRecordEventCommand());
+            break;
+        }
+        case ::tt::tt_metal::flatbuffer::CommandType::EnqueueRecordEventToHostCommand: {
+            execute(command->cmd_as_EnqueueRecordEventToHostCommand());
+            break;
+        }
+        case ::tt::tt_metal::flatbuffer::CommandType::EnqueueWaitForEventCommand: {
+            execute(command->cmd_as_EnqueueWaitForEventCommand());
+            break;
+        }
+        case ::tt::tt_metal::flatbuffer::CommandType::EventSynchronizeCommand: {
+            execute(command->cmd_as_EventSynchronizeCommand());
+            break;
+        }
+        case ::tt::tt_metal::flatbuffer::CommandType::SynchronizeCommand: {
+            execute(command->cmd_as_SynchronizeCommand());
+            break;
+        }
+        case ::tt::tt_metal::flatbuffer::CommandType::EnqueueMeshWorkloadCommand: {
+            execute(command->cmd_as_EnqueueMeshWorkloadCommand());
+            break;
+        }
+        case ::tt::tt_metal::flatbuffer::CommandType::EnqueueReadMeshBufferCommand: {
+            execute(command->cmd_as_EnqueueReadMeshBufferCommand());
+            break;
+        }
+        case ::tt::tt_metal::flatbuffer::CommandType::EnqueueWriteMeshBufferCommand: {
+            execute(command->cmd_as_EnqueueWriteMeshBufferCommand());
+            break;
+        }
+        case ::tt::tt_metal::flatbuffer::CommandType::ReadShardCommand: {
+            execute(command->cmd_as_ReadShardCommand());
+            break;
+        }
+        case ::tt::tt_metal::flatbuffer::CommandType::WriteShardCommand: {
+            execute(command->cmd_as_WriteShardCommand());
             break;
         }
         case ::tt::tt_metal::flatbuffer::CommandType::BufferCreateCommand: {
