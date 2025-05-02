@@ -6,6 +6,7 @@
 
 #include "ttnn/decorators.hpp"
 #include "cpp/ttnn/global_semaphore.hpp"
+#include "ttnn/operations/ccl/ccl_common.hpp"
 #include <tt-metalium/sub_device_types.hpp>
 
 namespace ttnn {
@@ -21,6 +22,7 @@ struct ExecuteLlamaReduceScatterCreateHeads {
         const tt::tt_metal::SubDeviceId& subdevice_id,
         const uint32_t cluster_axis,
         const MeshDevice& mesh_device,
+        ttnn::ccl::Topology topology,
         const uint32_t num_links,
         const uint32_t num_heads,
         const uint32_t num_kv_heads,

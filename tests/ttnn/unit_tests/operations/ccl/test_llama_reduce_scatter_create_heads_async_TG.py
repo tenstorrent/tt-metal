@@ -33,6 +33,14 @@ PACKET_WORKER_CRS = ttnn.CoreRangeSet(
     ]
 )
 
+LINEAR_TOPOLOGY = True
+if LINEAR_TOPOLOGY:
+    TOPOLOGY = ttnn.Topology.Linear
+    WRAP_MESH = False
+else:
+    TOPOLOGY = ttnn.Topology.Ring
+    WRAP_MESH = True
+
 
 def gen_tensor(dim, shard_height, shard_width, num_devices_scatter, num_devices_fracture, num_cores, scheme="random"):
     factor = 1
@@ -259,6 +267,7 @@ def run_reduce_scatter_test(
                 worker_sub_device_id,
                 cluster_axis=1,
                 mesh_device=mesh_device,
+                topology=TOPOLOGY,
                 num_links=num_links,
                 num_heads=8,
                 num_kv_heads=1,

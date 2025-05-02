@@ -24,6 +24,7 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ExecuteLlamaReduceScatterCr
     const tt::tt_metal::SubDeviceId& subdevice_id,
     const uint32_t cluster_axis,
     const MeshDevice& mesh_device,
+    ttnn::ccl::Topology topology,
     const uint32_t num_links,
     const uint32_t num_heads,
     const uint32_t num_kv_heads,
@@ -34,7 +35,7 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ExecuteLlamaReduceScatterCr
     uint32_t ring_devices = (cluster_axis == 0) ? mesh_view.num_rows() : mesh_view.num_cols();
     TT_FATAL(ring_devices > 1, "reduce_scatter async op will only work for ring_devices > 1, but has {}", ring_devices);
 
-    ttnn::ccl::Topology ccl_topology = ttnn::ccl::Topology::Linear;
+    // ttnn::ccl::Topology ccl_topology = ttnn::ccl::Topology::Linear;
 
     std::vector<Tensor> output_tensors = {
         Tensor(tt::tt_metal::operation::get_workers_for_op_output({input_tensor})),
