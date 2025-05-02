@@ -102,6 +102,7 @@ Tensor Pool2DOp<pool_type>::invoke(
         TT_FATAL(
             !applied_shard_scheme.has_value(), "A sharding scheme should not be specified for a sharded input tensor.");
         TT_FATAL(shard_orientation == ShardOrientation::ROW_MAJOR, "Only row major orientation is supported.");
+        parallel_config = std::make_optional(sliding_window::ParallelConfig{});
         parallel_config->grid = shard_grid;
         parallel_config->shard_scheme = shard_scheme;
         parallel_config->shard_orientation = shard_orientation;
