@@ -47,7 +47,7 @@
 #include "device.hpp"
 #include "impl/context/metal_context.hpp"
 #include "dispatch_core_common.hpp"
-#include "dispatch_settings.hpp"
+#include "dispatch/dispatch_settings.hpp"
 #include "dprint_server.hpp"
 #include "hal_types.hpp"
 #include "jit_build/build.hpp"
