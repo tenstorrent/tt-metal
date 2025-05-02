@@ -363,7 +363,7 @@ def test_all_gather_only(
     [
         {
             "trace_region_size": 23887872,
-            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
         }
     ],
     indirect=True,
@@ -394,7 +394,7 @@ def test_tg_trace_rms_fuse(
         function_level_defaults,
         input_shard_grid,
         output_shard_grid,
-        ttnn.Topology.Linear,
+        ttnn.Topology.Ring,
         fused_add,
         num_iters=num_iters,
         warmup_iters=warmup_iters,
@@ -439,9 +439,10 @@ def test_tg_trace_rms_fuse(
 @pytest.mark.parametrize("residual_dtype", [ttnn.bfloat8_b, ttnn.bfloat16])
 @pytest.mark.parametrize(
     "device_params",
-    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}],
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING}],
     indirect=True,
 )
+@pytest.mark.parametrize("topology", [ttnn.Topology.Linear, ttnn.Topology.Ring])
 def test_rms_fuse(
     mesh_device,
     num_devices,
@@ -455,6 +456,7 @@ def test_rms_fuse(
     fused_add,
     input_dtype,
     residual_dtype,
+    topology,
 ):
     run_rms_fuse_impl(
         mesh_device,
@@ -465,7 +467,7 @@ def test_rms_fuse(
         function_level_defaults,
         input_shard_grid,
         output_shard_grid,
-        ttnn.Topology.Linear,
+        topology,
         fused_add,
         num_iters=num_iters,
         input_dtype=input_dtype,
