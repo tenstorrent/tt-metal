@@ -1064,6 +1064,7 @@ void DeviceProfiler::pushTracyDeviceResults() {
 
     sortDeviceEvents(device_events_vec);
 
+    // Tracy contexts must be updated in order of their first timestamps
     for (auto& event : device_events_vec) {
         auto device_core_it = device_cores.find({event.get().chip_id, {event.get().core_x, event.get().core_y}});
         if (device_core_it != device_cores.end()) {
