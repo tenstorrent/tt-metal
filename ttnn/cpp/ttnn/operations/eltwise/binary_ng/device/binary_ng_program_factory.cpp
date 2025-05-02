@@ -319,6 +319,8 @@ void set_or_update_runtime_arguments(
                 auto b_shard_shape = b_shard_shape_generator(core);
                 b_num_tiles = b_shard_shape[0] * b_shard_shape[1];
             }
+            // for the specific case of subtile no_bcast type, writer no longer needs b's information
+            // for other cases, it remains needing b's information for now.
             std::array writer_runtime_args = {
                 b->buffer()->address(),
                 c.buffer()->address(),
@@ -367,6 +369,8 @@ void set_or_update_runtime_arguments(
             handle_args(program, compute_kernel_id, core, compute_runtime_args);
         }
 
+        // for the specific case of subtile no_bcast type, reader also needs b's information
+        // number of parameters are still small so negligible dispatch cost
         std::array reader_runtime_args = {
             a.buffer()->address(),
             c_start_id,
@@ -384,7 +388,9 @@ void set_or_update_runtime_arguments(
             b.has_value() ? b->buffer()->address() : 0u,
             bHt * bWt * bC * bN * (bND > 1),
             bHt * bWt * bC * (bN > 1),
-            bHt * bWt * (bC > 1)};
+            bHt * bWt * (bC > 1),
+            b_num_tiles,
+        };
         handle_args(program, reader_kernel_id, core, reader_runtime_args);
 
         start_tile_id += c_num_tiles;
@@ -565,10 +571,13 @@ BinaryNgDeviceOperation::ProgramFactory::cached_program_t BinaryNgDeviceOperatio
     writer_defines["SRC_SHARDED"] = b_sharded ? "1" : "0";
     writer_defines["DST_SHARDED"] = c_sharded ? "1" : "0";
 
+    // overwrite reader and write kernel names for the following specific case
+    // so that reader reads of both and b and writer does not read b
     if (b.has_value() && operation_attributes.subtile_broadcast_type == SubtileBroadcastType::NONE) {
         kernel_config.reader_kernel = KernelName::ReaderNoBcastSplit;
         writer_kernel = KernelName::WriterNoBcastSplit;
     }
+
     auto writer_kernel_id = tt_metal::CreateKernel(
         program,
         get_kernel_file_path(writer_kernel, is_sfpu_op),
