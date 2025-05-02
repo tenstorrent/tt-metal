@@ -13,6 +13,7 @@
 #include <tt-metalium/allocator_types.hpp>
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/device.hpp>
+#include <tt-metalium/distributed.hpp>
 #include <tt-metalium/dispatch_core_common.hpp>
 #include "gmock/gmock.h"
 #include "hostdevcommon/common_values.hpp"
@@ -122,6 +123,49 @@ TEST_F(MeshDeviceTest, CreateSubmeshes) {
     }
 
     EXPECT_EQ(mesh_device_->get_submeshes(), submeshes);
+}
+
+TEST_F(MeshDeviceTest, MeshSockets) {
+    auto md0 = mesh_device_->create_submesh(MeshShape(1, 1), MeshCoordinate(0, 0));
+    socket_connection_t socket_connection = {
+        .sender_core = {MeshCoordinate(0, 0), CoreCoord(0, 0)},
+        .receiver_core = {MeshCoordinate(0, 0), CoreCoord(0, 1)},
+    };
+
+    socket_memory_config_t socket_mem_config = {
+        .socket_type = BufferType::L1,
+        .fifo_size = 1024,
+    };
+
+    socket_config_t socket_config = {
+        .socket_connection_config = {socket_connection},
+        .socket_mem_config = socket_mem_config,
+    };
+    auto [send_socket, recv_socket] = create_sockets(md0, md0, socket_config);
+
+    auto socket_program = CreateProgram();
+    auto socket_sender_kernel = CreateKernel(
+        socket_program,
+        "tests/tt_metal/distributed/socket_validation.cpp",
+        {CoreCoord(0, 0)},
+        tt_metal::DataMovementConfig{
+            .processor = tt_metal::DataMovementProcessor::RISCV_0,
+            .noc = tt_metal::NOC::RISCV_0_default,
+            .compile_args = {send_socket.config_buffer->address()}});
+    auto socket_receiver_kernel = CreateKernel(
+        socket_program,
+        "tests/tt_metal/distributed/recv_socket_validation.cpp",
+        {CoreCoord(0, 1)},
+        tt_metal::DataMovementConfig{
+            .processor = tt_metal::DataMovementProcessor::RISCV_0,
+            .noc = tt_metal::NOC::RISCV_0_default,
+            .compile_args = {recv_socket.config_buffer->address()}});
+    auto socket_mesh_workload = CreateMeshWorkload();
+    AddProgramToMeshWorkload(
+        socket_mesh_workload,
+        std::move(socket_program),
+        MeshCoordinateRange(MeshCoordinate{0, 0}, MeshCoordinate{0, 0}));
+    EnqueueMeshWorkload(md0->mesh_command_queue(), socket_mesh_workload, true);
 }
 
 }  // namespace
