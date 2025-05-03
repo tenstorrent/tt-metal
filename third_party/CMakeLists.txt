@@ -265,3 +265,9 @@ if(simd-everywhere_ADDED)
     add_library(simde::simde ALIAS simde)
     target_include_directories(simde SYSTEM INTERFACE ${simd-everywhere_SOURCE_DIR})
 endif()
+
+############################################################################################################################
+# tt-logger : https://github.com/blozano-tt/tt-logger
+############################################################################################################################
+
+CPMAddPackage("gh:blozano-tt/tt-logger@0.2.5")
