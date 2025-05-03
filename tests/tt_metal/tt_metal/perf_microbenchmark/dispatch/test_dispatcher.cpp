@@ -33,7 +33,7 @@
 #include "impl/dispatch/dispatch_settings.hpp"
 #include <tt-metalium/kernel_types.hpp>
 #include "llrt.hpp"
-#include <tt-metalium/logger.hpp>
+#include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/metal_soc_descriptor.h>
 #include <tt-metalium/program.hpp>
 #include <tt_stl/span.hpp>
@@ -728,7 +728,7 @@ int main(int argc, char** argv) {
         pass &= tt_metal::CloseDevice(device);
     } catch (const std::exception& e) {
         pass = false;
-        log_fatal(e.what());
+        log_fatal("{}", e.what());
     }
 
     tt::tt_metal::MetalContext::instance().rtoptions().set_kernels_nullified(false);

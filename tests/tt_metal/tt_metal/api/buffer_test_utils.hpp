@@ -8,7 +8,7 @@
 #include <vector>
 
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/logger.hpp>
+#include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/tt_metal.hpp>
 
 namespace tt::test::buffer::detail {

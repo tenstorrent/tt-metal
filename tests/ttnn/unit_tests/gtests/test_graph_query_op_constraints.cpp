@@ -4,7 +4,7 @@
 
 #include <fmt/base.h>
 #include <stddef.h>
-#include <tt-metalium/logger.hpp>
+#include <tt-logger/tt-logger.hpp>
 #include <array>
 #include <cstdint>
 #include <optional>

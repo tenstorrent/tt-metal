@@ -21,7 +21,7 @@
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/hal_types.hpp>
-#include <tt-metalium/logger.hpp>
+#include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/shape.hpp>
 #include <tt-metalium/sub_device_types.hpp>
 #include "tests/ttnn/unit_tests/gtests/ccl/test_fabric_edm_common.hpp"

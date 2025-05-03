@@ -23,7 +23,7 @@
 #include "impl/dispatch/dispatch_settings.hpp"
 #include "gtest/gtest.h"
 #include "impl/debug/watcher_server.hpp"
-#include <tt-metalium/logger.hpp>
+#include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/system_memory_manager.hpp>
 #include "impl/context/metal_context.hpp"
 #include "tt_metal/impl/dispatch/kernels/cq_commands.hpp"

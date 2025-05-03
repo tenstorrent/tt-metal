@@ -6,7 +6,7 @@
 #include <fmt/base.h>
 #include <nlohmann/json.hpp>
 #include <stddef.h>
-#include <tt-metalium/logger.hpp>
+#include <tt-logger/tt-logger.hpp>
 #include <cstdint>
 #include <optional>
 #include <set>

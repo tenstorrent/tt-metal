@@ -11,7 +11,7 @@
 
 #include <tt-metalium/assert.hpp>
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/logger.hpp>
+#include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/shape.hpp>
 #include "ttnn/decorators.hpp"
 #include "ttnn/operations/normalization/layernorm/layernorm.hpp"

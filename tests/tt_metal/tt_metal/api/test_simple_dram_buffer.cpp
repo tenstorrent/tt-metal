@@ -14,7 +14,7 @@
 #include "device_fixture.hpp"
 #include "gtest/gtest.h"
 #include <tt-metalium/hal_types.hpp>
-#include <tt-metalium/logger.hpp>
+#include <tt-logger/tt-logger.hpp>
 #include "tt_metal/test_utils/stimulus.hpp"
 
 using tt::tt_metal::IDevice;

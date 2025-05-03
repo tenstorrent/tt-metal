@@ -6,7 +6,7 @@
 #include <fmt/base.h>
 #include <magic_enum/magic_enum.hpp>
 #include <stdint.h>
-#include <tt-metalium/logger.hpp>
+#include <tt-logger/tt-logger.hpp>
 #include <initializer_list>
 #include <memory>
 #include <optional>

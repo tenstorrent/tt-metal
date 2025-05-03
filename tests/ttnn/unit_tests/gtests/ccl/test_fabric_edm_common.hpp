@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include <tt-metalium/logger.hpp>
+#include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/sub_device_types.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/tt_metal.hpp>

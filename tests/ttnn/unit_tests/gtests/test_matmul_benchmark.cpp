@@ -5,7 +5,7 @@
 #include <chrono>
 #include <fmt/base.h>
 #include <tracy/Tracy.hpp>
-#include <tt-metalium/logger.hpp>
+#include <tt-logger/tt-logger.hpp>
 #include <algorithm>
 #include <array>
 #include <cstdlib>

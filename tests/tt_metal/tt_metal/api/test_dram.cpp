@@ -7,7 +7,7 @@
 #include <stddef.h>
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/logger.hpp>
+#include <tt-logger/tt-logger.hpp>
 #include <cstdint>
 #include <map>
 #include <memory>

@@ -9,7 +9,7 @@
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/event.hpp>
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/logger.hpp>
+#include <tt-logger/tt-logger.hpp>
 #include <functional>
 #include <memory>
 #include <unordered_map>

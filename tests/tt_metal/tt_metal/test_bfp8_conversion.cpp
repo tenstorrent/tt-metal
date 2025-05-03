@@ -16,7 +16,7 @@
 #include <vector>
 
 #include <tt-metalium/assert.hpp>
-#include <tt-metalium/logger.hpp>
+#include <tt-logger/tt-logger.hpp>
 #include <tt_stl/span.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
 

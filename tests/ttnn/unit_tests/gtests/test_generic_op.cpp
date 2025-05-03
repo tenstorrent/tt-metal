@@ -9,7 +9,7 @@
 #include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/constants.hpp>
 
-#include "logger.hpp"
+#include <tt-logger/tt-logger.hpp>
 #include "ttnn_test_fixtures.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/types.hpp"

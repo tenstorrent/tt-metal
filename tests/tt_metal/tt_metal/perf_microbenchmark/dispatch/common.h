@@ -7,7 +7,7 @@
 #include <cstdint>
 #include <unordered_map>
 #include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/logger.hpp>
+#include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/allocator.hpp>

@@ -40,7 +40,7 @@
 #include <tt-metalium/hal_types.hpp>
 #include <tt-metalium/kernel_types.hpp>
 #include "llrt.hpp"
-#include <tt-metalium/logger.hpp>
+#include <tt-logger/tt-logger.hpp>
 #include "noc/noc_parameters.h"
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/system_memory_manager.hpp>
@@ -3788,7 +3788,7 @@ int main(int argc, char** argv) {
         }
     } catch (const std::exception& e) {
         pass = false;
-        log_fatal(e.what());
+        log_fatal("{}", e.what());
     }
 
     tt::tt_metal::MetalContext::instance().rtoptions().set_kernels_nullified(false);

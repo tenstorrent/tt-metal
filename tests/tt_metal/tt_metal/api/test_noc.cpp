@@ -23,7 +23,7 @@
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/hal_types.hpp>
 #include <tt-metalium/kernel_types.hpp>
-#include <tt-metalium/logger.hpp>
+#include <tt-logger/tt-logger.hpp>
 // FIXME: ARCH_NAME
 #include "noc/noc_parameters.h"
 #include <tt-metalium/program.hpp>

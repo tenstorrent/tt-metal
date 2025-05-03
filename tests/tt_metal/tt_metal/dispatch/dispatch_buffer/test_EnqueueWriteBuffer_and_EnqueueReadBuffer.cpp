@@ -39,7 +39,7 @@
 #include "dispatch_test_utils.hpp"
 #include "impl/dispatch/dispatch_settings.hpp"
 #include "gtest/gtest.h"
-#include <tt-metalium/logger.hpp>
+#include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/math.hpp>
 #include "multi_command_queue_fixture.hpp"
 #include <tt-metalium/shape2d.hpp>

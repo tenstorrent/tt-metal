@@ -28,7 +28,7 @@
 #include <tt-metalium/dispatch_core_common.hpp>
 #include "hostdevcommon/common_values.hpp"
 #include <tt-metalium/kernel_types.hpp>
-#include <tt-metalium/logger.hpp>
+#include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/program.hpp>
 #include "impl/context/metal_context.hpp"
 #include <tt-metalium/semaphore.hpp>
@@ -467,7 +467,7 @@ static int pgm_dispatch(T& state, TestInfo info) {
         pass &= tt_metal::CloseDevice(device);
     } catch (const std::exception& e) {
         pass = false;
-        log_fatal(e.what());
+        log_fatal("{}", e.what());
     }
 
     tt::tt_metal::MetalContext::instance().rtoptions().set_kernels_nullified(false);

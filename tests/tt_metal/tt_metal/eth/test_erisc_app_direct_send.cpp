@@ -6,7 +6,7 @@
 #include <gtest/gtest.h>
 #include <stdlib.h>
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/logger.hpp>
+#include <tt-logger/tt-logger.hpp>
 #include <algorithm>
 #include <cstdint>
 #include <iostream>
