@@ -1024,20 +1024,6 @@ void run_fabric_edm_main_loop(
     // to check for termination and context switch. Removing the these checks from the inner loop can drastically
     // improve performance. The value of 32 was chosen somewhat empirically and then raised up slightly.
 
-#ifdef FABRIC_2D
-    auto ds_index = 0;
-    if constexpr (my_direction == eth_chan_directions::EAST) {
-        ds_index = eth_chan_directions::WEST;
-    } else if constexpr (my_direction == eth_chan_directions::WEST) {
-        ds_index = eth_chan_directions::EAST;
-    } else if constexpr (my_direction == eth_chan_directions::NORTH) {
-        ds_index = eth_chan_directions::SOUTH;
-    } else if constexpr (my_direction == eth_chan_directions::SOUTH) {
-        ds_index = eth_chan_directions::NORTH;
-    }
-#else
-    auto constexpr ds_index = 0;
-#endif
     while (!got_immediate_termination_signal(termination_signal_ptr)) {
         bool got_graceful_termination = got_graceful_termination_signal(termination_signal_ptr);
         if (got_graceful_termination) {
@@ -1498,14 +1484,11 @@ void kernel_main() {
     auto sender3_worker_semaphore_ptr = reinterpret_cast<volatile uint32_t*>(get_arg_val<uint32_t>(arg_idx++));
     auto sender4_worker_semaphore_ptr = reinterpret_cast<volatile uint32_t*>(get_arg_val<uint32_t>(arg_idx++));
 
-    // unused - can later remove
     const size_t local_sender_channel_0_connection_buffer_index_addr =
         persistent_mode ? local_sender_channel_0_connection_buffer_index_id
                         : get_semaphore<ProgrammableCoreType::ACTIVE_ETH>(
                               get_arg_val<uint32_t>(local_sender_channel_0_connection_buffer_index_id));
     if constexpr (persistent_mode) {
-        // UC: Need to handle this properly.
-        //     In 2D, local sender is not always on channel 0.
         //  initialize the statically allocated "semaphores"
         *reinterpret_cast<volatile uint32_t*>(local_sender_channel_0_connection_semaphore_addr) = 0;
         *reinterpret_cast<volatile uint32_t*>(local_sender_channel_0_connection_buffer_index_addr) = 0;
@@ -1590,8 +1573,7 @@ void kernel_main() {
                 local_sender_channel_2_connection_info_addr,
                 local_sender_channel_3_connection_info_addr,
                 local_sender_channel_4_connection_info_addr});
-    // UC: Looks like its duplicate
-    // happens in the constructor later as well.
+
     for (size_t i = 0; i < NUM_SENDER_CHANNELS; i++) {
         auto connection_worker_info_ptr = reinterpret_cast<volatile tt::tt_fabric::EDMChannelWorkerLocationInfo*>(
             local_sender_connection_info_addresses[i]);
@@ -1723,15 +1705,6 @@ void kernel_main() {
     WriteTransactionIdTracker<RECEIVER_NUM_BUFFERS, NUM_TRANSACTION_IDS, NUM_TRANSACTION_IDS>
         receiver_channel_1_trid_tracker;
 
-    /*
-        if (has_downstream_edm_vc0_buffer_connection) {
-            for (auto& downstream_edm_noc_interface : downstream_edm_noc_interfaces) {
-                downstream_edm_noc_interface.template open<true, tt::tt_fabric::worker_handshake_noc>();
-                *downstream_edm_noc_interface.from_remote_buffer_slot_rdptr_ptr = 0;
-                ASSERT(*downstream_edm_noc_interface.from_remote_buffer_slot_rdptr_ptr == 0);
-            }
-        }
-    */
     if constexpr (is_handshake_sender) {
         erisc::datamover::handshake::sender_side_finish(handshake_addr, DEFAULT_HANDSHAKE_CONTEXT_SWITCH_TIMEOUT);
     } else {
@@ -1741,7 +1714,6 @@ void kernel_main() {
     *edm_status_ptr = tt::tt_fabric::EDMStatus::REMOTE_HANDSHAKE_COMPLETE;
 
     if constexpr (wait_for_host_signal) {
-        DPRINT << "WAIT FOR HOST\n";
         if constexpr (is_local_handshake_master) {
             wait_for_notification((uint32_t)edm_local_sync_ptr, num_local_edms - 1);
             notify_slave_routers(
@@ -1752,10 +1724,8 @@ void kernel_main() {
         }
 
         *edm_status_ptr = tt::tt_fabric::EDMStatus::LOCAL_HANDSHAKE_COMPLETE;
-        DPRINT << "LOCAL HS COMPLETE\n";
 
         wait_for_notification((uint32_t)edm_status_ptr, tt::tt_fabric::EDMStatus::READY_FOR_TRAFFIC);
-        DPRINT << "Notification Received\n";
 
         if constexpr (is_local_handshake_master) {
             notify_slave_routers(
@@ -1764,7 +1734,6 @@ void kernel_main() {
                 (uint32_t)edm_status_ptr,
                 tt::tt_fabric::EDMStatus::READY_FOR_TRAFFIC);
         }
-        DPRINT << "READY FOR TRAFFIC\n";
     }
 
     if constexpr (is_2d_fabric) {
@@ -1773,13 +1742,11 @@ void kernel_main() {
         while (has_downstream_edm) {
             if (has_downstream_edm & 0x1) {
                 downstream_edm_noc_interfaces[edm_index].template open<true, tt::tt_fabric::worker_handshake_noc>();
-                *downstream_edm_noc_interfaces[edm_index].from_remote_buffer_slot_rdptr_ptr =
-                    0;  // UC: Maybe redundant. Remove.
+                *downstream_edm_noc_interfaces[edm_index].from_remote_buffer_slot_rdptr_ptr = 0;
             }
             edm_index++;
             has_downstream_edm >>= 1;
         }
-        DPRINT << "DS EDM Opened\n";
         if constexpr (enable_ring_support) {
             bool connect_ring = false;
             if constexpr (my_direction == eth_chan_directions::EAST) {
@@ -1794,8 +1761,7 @@ void kernel_main() {
             if (connect_ring) {
                 downstream_edm_noc_interfaces[NUM_USED_RECEIVER_CHANNELS - 1]
                     .template open<true, tt::tt_fabric::worker_handshake_noc>();
-                *downstream_edm_noc_interfaces[NUM_USED_RECEIVER_CHANNELS - 1].from_remote_buffer_slot_rdptr_ptr =
-                    0;  // UC: Maybe redundant. Remove.
+                *downstream_edm_noc_interfaces[NUM_USED_RECEIVER_CHANNELS - 1].from_remote_buffer_slot_rdptr_ptr = 0;
             }
         }
     } else {
