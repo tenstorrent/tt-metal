@@ -54,7 +54,7 @@
 #include "dispatch/launch_message_ring_buffer_state.hpp"
 #include "lightmetal/lightmetal_capture.hpp"
 #include "llrt.hpp"
-#include "logger.hpp"
+#include <tt-logger/tt-logger.hpp>
 #include "metal_soc_descriptor.h"
 #include "multi_producer_single_consumer_queue.hpp"
 #include "profiler_types.hpp"

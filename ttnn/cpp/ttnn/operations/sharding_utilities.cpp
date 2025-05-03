@@ -7,7 +7,7 @@
 //
 
 #include <tt-metalium/assert.hpp>
-#include <tt-metalium/logger.hpp>
+#include <tt-logger/tt-logger.hpp>
 
 #include "sharding_utilities.hpp"
 

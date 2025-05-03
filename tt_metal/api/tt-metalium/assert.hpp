@@ -13,7 +13,7 @@
 #include <sstream>
 #include <vector>
 
-#include <tt-metalium/logger.hpp>
+#include <tt-logger/tt-logger.hpp>
 
 namespace tt {
 template <typename A, typename B>
@@ -95,7 +95,7 @@ template <typename... Args>
     if (std::getenv("TT_ASSERT_ABORT")) {
         if constexpr (sizeof...(args) > 0) {
             log_fatal(args...);
-            Logger::get().flush();
+            spdlog::default_logger()->flush();
         }
         abort();
     }
@@ -106,7 +106,7 @@ template <typename... Args>
         trace_message_ss << "info:" << std::endl;
         trace_message_ss << fmt::format(args...) << std::endl;
         log_debug(args...);
-        Logger::get().flush();
+        spdlog::default_logger()->flush();
     }
     trace_message_ss << "backtrace:\n";
     trace_message_ss << tt::assert::backtrace_to_string(100, 3, " --- ");

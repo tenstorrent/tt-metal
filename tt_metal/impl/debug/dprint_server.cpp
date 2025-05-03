@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <logger.hpp>
+#include <tt-logger/tt-logger.hpp>
 #include <math.h>
 #include <pthread.h>
 #include <tt-metalium/blockfloat_common.hpp>

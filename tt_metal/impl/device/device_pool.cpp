@@ -27,7 +27,7 @@
 #include "hal.hpp"
 #include "hal_types.hpp"
 #include "host_api.hpp"
-#include "logger.hpp"
+#include <tt-logger/tt-logger.hpp>
 #include "profiler_types.hpp"
 #include <tt_stl/span.hpp>
 #include "impl/context/metal_context.hpp"

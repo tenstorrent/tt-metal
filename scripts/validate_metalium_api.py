@@ -17,6 +17,7 @@ SKIP_FILES = {
 
 ALLOWED_PREFIXES = {
     "hostdevcommon",
+    "tt-logger",
     "tt-metalium",
     "tt_stl",
     "umd",

@@ -9,7 +9,7 @@
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/operations/experimental/auto_format/auto_format.hpp"
 #include "ttnn/run_operation.hpp"
-#include <tt-metalium/logger.hpp>
+#include <tt-logger/tt-logger.hpp>
 
 using namespace tt::constants;
 using namespace tt::tt_metal;

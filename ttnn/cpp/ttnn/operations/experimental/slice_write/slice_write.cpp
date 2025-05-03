@@ -5,7 +5,7 @@
 #include "slice_write.hpp"
 #include "device/slice_write_op.hpp"
 #include "tt-metalium/assert.hpp"
-#include "tt-metalium/logger.hpp"
+#include <tt-logger/tt-logger.hpp>
 #include "ttnn/common/queue_id.hpp"
 #include "ttnn/run_operation.hpp"
 #include "ttnn/operations/core/core.hpp"

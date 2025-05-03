@@ -4,7 +4,7 @@
 
 #include <boost/container/vector.hpp>
 #include <device_impl.hpp>
-#include <logger.hpp>
+#include <tt-logger/tt-logger.hpp>
 #include <mesh_command_queue.hpp>
 #include <mesh_coord.hpp>
 #include <mesh_device.hpp>

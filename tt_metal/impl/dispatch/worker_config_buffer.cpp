@@ -10,7 +10,7 @@
 #include <utility>
 #include <vector>
 
-#include "logger.hpp"
+#include <tt-logger/tt-logger.hpp>
 
 namespace tt {
 

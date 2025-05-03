@@ -8,7 +8,7 @@
 #include "light_metal_binary_generated.h"
 #include "command_generated.h"
 #include <trace_buffer.hpp>
-#include <tt-metalium/logger.hpp>
+#include <tt-logger/tt-logger.hpp>
 
 #include <host_api.hpp>
 #include "env_lib.hpp"

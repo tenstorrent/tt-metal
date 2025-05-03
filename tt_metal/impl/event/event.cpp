@@ -4,7 +4,7 @@
 
 #include <assert.hpp>
 #include <event.hpp>
-#include <logger.hpp>
+#include <tt-logger/tt-logger.hpp>
 #include <chrono>
 #include <thread>
 

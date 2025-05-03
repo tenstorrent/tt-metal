@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/operations/conv/conv2d/prepare_conv2d_weights.hpp"
-#include "tt-metalium/logger.hpp"
+#include <tt-logger/tt-logger.hpp>
 #include "tt-metalium/shape.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/sliding_window/sliding_window.hpp"

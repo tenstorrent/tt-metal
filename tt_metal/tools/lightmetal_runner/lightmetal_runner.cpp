@@ -5,7 +5,7 @@
 #include <tt-metalium/assert.hpp>
 #include <tt-metalium/lightmetal_binary.hpp>
 #include <tt-metalium/lightmetal_replay.hpp>
-#include <tt-metalium/logger.hpp>
+#include <tt-logger/tt-logger.hpp>
 #include <string>
 #include <utility>
 

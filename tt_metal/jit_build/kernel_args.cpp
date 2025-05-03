@@ -10,7 +10,7 @@
 #include <mutex>
 #include <string>
 
-#include "logger.hpp"
+#include <tt-logger/tt-logger.hpp>
 
 using namespace std;
 

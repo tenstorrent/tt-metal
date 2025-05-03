@@ -12,7 +12,7 @@
 #include "assert.hpp"
 #include "buffer_types.hpp"
 #include "impl/allocator/bank_manager.hpp"
-#include "logger.hpp"
+#include <tt-logger/tt-logger.hpp>
 #include <umd/device/types/xy_pair.h>
 
 namespace tt {

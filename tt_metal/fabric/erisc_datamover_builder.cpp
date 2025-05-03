@@ -25,7 +25,7 @@
 #include "tt_metal/fabric/fabric_host_utils.hpp"
 #include "core_coord.hpp"
 #include "fabric_edm_types.hpp"
-#include "logger.hpp"
+#include <tt-logger/tt-logger.hpp>
 #include "system_memory_manager.hpp"
 #include <umd/device/tt_core_coordinates.h>
 

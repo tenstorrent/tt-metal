@@ -18,7 +18,7 @@
 #include "hostdevcommon/dprint_common.h"
 #include "llrt.hpp"
 #include "impl/context/metal_context.hpp"
-#include "logger.hpp"
+#include <tt-logger/tt-logger.hpp>
 #include <umd/device/tt_soc_descriptor.h>
 #include "utils.hpp"
 

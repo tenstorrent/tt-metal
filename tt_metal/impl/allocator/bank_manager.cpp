@@ -15,7 +15,7 @@
 #include "assert.hpp"
 #include "buffer_types.hpp"
 #include "impl/context/metal_context.hpp"
-#include "logger.hpp"
+#include <tt-logger/tt-logger.hpp>
 #include "tt_metal/impl/allocator/algorithms/free_list_opt.hpp"
 
 namespace tt {
