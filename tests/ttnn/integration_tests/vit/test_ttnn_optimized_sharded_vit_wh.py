@@ -480,28 +480,25 @@ def test_vit(device, model_name, batch_size, image_size, image_channels, sequenc
     patch_size = 16
     torch_pixel_values = torch_pixel_values.reshape(batch_size, img_h, img_w // patch_size, 4 * patch_size)
     N, H, W, C = torch_pixel_values.shape
+
+    if batch_size <= 8:
+        fold_core_x = batch_size - 1
+        fold_core_y = 1
+    else:
+        batch_size = 16
+        fold_core_x = 7
+        fold_core_y = 3
+
     shard_grid = ttnn.CoreRangeSet(
         {
             ttnn.CoreRange(
                 ttnn.CoreCoord(0, 0),
-                ttnn.CoreCoord(7, 0),
+                ttnn.CoreCoord(fold_core_x, fold_core_y),
             ),
         }
     )
-    n_cores = 8
+    n_cores = batch_size * 2
     shard_spec = ttnn.ShardSpec(shard_grid, [N * H * W // n_cores, C], ttnn.ShardOrientation.ROW_MAJOR)
-
-    pixel_values = ttnn.from_torch(
-        torch_pixel_values,
-        dtype=ttnn.bfloat16,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
-        device=device,
-        memory_config=ttnn.MemoryConfig(
-            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-            ttnn.BufferType.L1,
-            shard_spec,
-        ),
-    )
 
     if torch_attention_mask is not None:
         head_masks = [
@@ -517,6 +514,18 @@ def test_vit(device, model_name, batch_size, image_size, image_channels, sequenc
     else:
         head_masks = [None for _ in range(config.num_hidden_layers)]
 
+    pixel_values = ttnn.from_torch(
+        torch_pixel_values,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttnn.BufferType.L1,
+            shard_spec,
+        ),
+    )
+
     output = ttnn_optimized_sharded_vit.vit(
         config,
         pixel_values,
@@ -527,4 +536,4 @@ def test_vit(device, model_name, batch_size, image_size, image_channels, sequenc
     )
     output = ttnn.to_torch(output)
 
-    assert_with_pcc(torch_output, output[0, 0, :1000], 0.829)
+    assert_with_pcc(torch_output, output[0, 0, :1000], 0.854)
