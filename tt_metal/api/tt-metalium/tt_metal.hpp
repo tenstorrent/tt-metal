@@ -39,9 +39,6 @@ namespace detail {
 
 bool DispatchStateCheck(bool isFastDispatch);
 
-bool InWorkerThread();
-inline bool InMainThread() { return not InWorkerThread(); }
-
 // Call before CreateDevices to enable fabric, which uses all free ethernet cores
 void InitializeFabricConfig(FabricConfig fabric_config);
 
