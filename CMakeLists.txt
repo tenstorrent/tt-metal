@@ -175,7 +175,6 @@ add_compile_options(
     # The following list is not indicative of what we _desire_ only the status quo to build.
     -Wno-deprecated-declarations
     -Wno-pessimizing-move
-    -Wno-range-loop-construct
     -Wno-unused-but-set-variable
     -Wno-unused-function
     -Wno-unused-variable
