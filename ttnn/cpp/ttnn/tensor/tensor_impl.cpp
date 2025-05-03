@@ -1035,7 +1035,7 @@ std::vector<T> encode_tensor_data(std::vector<T>&& logical_data, const TensorSpe
                 logical_2d_shape, logical_shard_shape, physical_shard_shape, physical_stride);
 
             for (const auto& [indices, cols] : logical_physical_mapping) {
-                for (const auto [logical_idx_start, physical_idx_start] : indices) {
+                for (const auto& [logical_idx_start, physical_idx_start] : indices) {
                     for (size_t col = 0; col < cols; col++) {
                         row_major_physical_data[physical_idx_start + col] = logical_data[logical_idx_start + col];
                     }
@@ -1109,7 +1109,7 @@ std::vector<T> decode_tensor_data(std::vector<T>&& physical_data, const TensorSp
                 logical_2d_shape, logical_shard_shape, physical_shard_shape, physical_stride);
 
             for (const auto& [indices, cols] : logical_physical_mapping) {
-                for (const auto [logical_idx_start, physical_idx_start] : indices) {
+                for (const auto& [logical_idx_start, physical_idx_start] : indices) {
                     for (size_t col = 0; col < cols; col++) {
                         logical_data[logical_idx_start + col] = row_major_physical_data[physical_idx_start + col];
                     }
