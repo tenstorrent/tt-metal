@@ -123,30 +123,12 @@ CircularBufferConfig& CircularBufferConfig::set_page_size(uint8_t buffer_index, 
 
 CircularBufferConfig& CircularBufferConfig::set_total_size(uint32_t total_size) {
     if (dynamic_cb_) {
-        if (total_size > this->max_size_) {
-            TT_ASSERT(
-                false,
-                "Cannot set circular buffer size to {}. This is larger than the associated dynamically allocated "
-                "L1 buffer bank size of {} B",
-                total_size,
-                this->max_size_);
-#ifndef DEBUG
-            log_warning(
-                "Cannot set circular buffer size to {}. This is larger than the associated dynamically allocated "
-                "L1 buffer bank size of {} B and may allow this circular buffer to write outside the allocated "
-                "buffer space.",
-                total_size,
-                this->max_size_);
-            if (total_size > this->buffer_size_) {
-                TT_THROW(
-                    "Cannot set circular buffer size to {}. This is larger than the associated dynamically "
-                    "allocated L1 buffer size"
-                    "of {} B",
-                    total_size,
-                    this->buffer_size_);
-            }
-#endif
-        }
+        TT_FATAL(
+            total_size <= this->max_size_,
+            "Cannot set circular buffer size to {}. This is larger than the associated dynamically allocated "
+            "L1 buffer bank size of {} B",
+            total_size,
+            this->max_size_);
     }
     this->total_size_ = total_size;
     return *this;
@@ -166,29 +148,7 @@ CircularBufferConfig& CircularBufferConfig::set_globally_allocated_address_and_t
     this->max_size_ = buffer.aligned_size_per_bank();
     this->buffer_size_ = buffer.aligned_size();
     this->shadow_global_buffer = &buffer;
-    if (total_size > this->max_size_) {
-        TT_ASSERT(
-            false,
-            "Cannot set to globally allocated buffer. Circular buffer size {} B exceeds allocated L1 buffer bank "
-            "size of {} B",
-            total_size,
-            this->max_size_);
-#ifndef DEBUG
-        log_warning(
-            "Circular buffer size {} B exceeds allocated L1 buffer bank size of {} B. This may allow this circular "
-            "buffer to write outside the allocated buffer space.",
-            total_size,
-            this->max_size_);
-        if (total_size > this->buffer_size_) {
-            TT_THROW(
-                "Cannot set to globally allocated buffer. Circular buffer size {} B exceeds allocated L1 buffer "
-                "size of {} B",
-                total_size,
-                this->buffer_size_);
-        }
-#endif
-    }
-    this->total_size_ = total_size;
+    this->set_total_size(total_size);
     return *this;
 }
 
