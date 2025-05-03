@@ -8,38 +8,24 @@ import pytest
 import torch
 
 import ttnn
-from models.utility_functions import is_wormhole_b0
 
 TILE_HEIGHT = 32
 TILE_WIDTH = 32
 
 
-compute_kernel_options = [False]
-compute_kernel_ids = ["fp32_dest_acc_en=False"]
-if is_wormhole_b0():
-    compute_kernel_options.append(True)
-    compute_kernel_ids.append("fp32_dest_acc_en=True")
+compute_kernel_options = [False, True]
+compute_kernel_ids = ["fp32_dest_acc_en=False", "fp32_dest_acc_en=True"]
 
 
-def get_compute_kernel_options(compute_kernel_options):
-    if compute_kernel_options is None:
+def get_compute_kernel_options(fp32_dest_acc_en):
+    if fp32_dest_acc_en is None:
         return None
-    if is_wormhole_b0():
-        fp32_dest_acc_en = compute_kernel_options
-        packer_l1_acc = False
-        compute_kernel_config = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.HiFi4,
-            math_approx_mode=False,
-            fp32_dest_acc_en=fp32_dest_acc_en,
-            packer_l1_acc=packer_l1_acc,
-        )
-    else:
-        # Grayskull doesn't support FP32, but passing a Grayskull config in the test is OK.
-        compute_kernel_config = ttnn.GrayskullComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.HiFi4,
-            math_approx_mode=True,
-        )
-    return compute_kernel_config
+    return ttnn.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=False,
+        fp32_dest_acc_en=fp32_dest_acc_en,
+        packer_l1_acc=False,
+    )
 
 
 def to_torch(ttnn_tensor, *, shape=None):
