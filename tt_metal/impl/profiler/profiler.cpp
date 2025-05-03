@@ -244,7 +244,7 @@ void DeviceProfiler::readRiscProfilerResults(
                     tracy::riscName[riscEndIndex],
                     bufferEndIndex);
                 TracyMessageC(warningMsg.c_str(), warningMsg.size(), tracy::Color::Tomato3);
-                log_warning(warningMsg.c_str());
+                log_warning("{}", warningMsg);
             }
 
             uint32_t riscNumRead = 0;

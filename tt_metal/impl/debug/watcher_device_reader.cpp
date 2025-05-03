@@ -708,7 +708,7 @@ void WatcherDeviceReader::DumpAssertStatus(CoreDescriptor& core, const string& c
 void WatcherDeviceReader::DumpAssertTrippedDetails(
     CoreDescriptor& core, const string& error_msg, const mailboxes_t* mbox_data) {
     log_warning("Watcher stopped the device due to tripped assert, see watcher log for more details");
-    log_warning(error_msg.c_str());
+    log_warning("Watcher Device Reader Error: {}", error_msg);
     DumpWaypoints(core, mbox_data, true);
     DumpRingBuffer(core, mbox_data, true);
     const launch_msg_t* launch_msg = get_valid_launch_message(mbox_data);
@@ -727,7 +727,6 @@ void WatcherDeviceReader::DumpPauseStatus(CoreDescriptor& core, const string& co
         } else if (pause > 1) {
             string error_reason = fmt::format(
                 "Watcher data corruption, pause state on core {} unknown code: {}.\n", core.coord.str(), pause);
-            log_warning(error_reason.c_str());
             log_warning("{}: {}", core_str, error_reason);
             DumpWaypoints(core, mbox_data, true);
             DumpRingBuffer(core, mbox_data, true);
@@ -770,7 +769,7 @@ void WatcherDeviceReader::DumpRingBuffer(CoreDescriptor& /*core*/, const mailbox
     if (to_stdout) {
         if (!out.empty()) {
             out = string("Last ring buffer status: ") + out;
-            log_info(out.c_str());
+            log_info("{}", out);
         }
     } else {
         fprintf(f, "%s", out.c_str());
@@ -936,7 +935,7 @@ void WatcherDeviceReader::DumpWaypoints(CoreDescriptor& core, const mailboxes_t*
     // This function can either log the waypoint to the log or stdout.
     if (to_stdout) {
         out = string("Last waypoint: ") + out;
-        log_info(out.c_str());
+        log_info("{}", out);
     } else {
         fprintf(f, "%s ", out.c_str());
     }

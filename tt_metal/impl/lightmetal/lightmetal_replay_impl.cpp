@@ -753,7 +753,7 @@ bool LightMetalReplayImpl::run() {
 
         return true;
     } catch (const std::exception& e) {
-        log_fatal(e.what());
+        log_fatal("{}", e.what());
         clear_object_maps();
         if (replay_manages_device) {
             close_devices();
