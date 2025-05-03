@@ -604,7 +604,6 @@ void build_and_run_autonomous_stream_test(
         bool matches = true;
         std::size_t size = outputs.size();
         uint32_t sub_size_i = 0;
-        uint32_t page_idx = 0;
         for (auto i = 0; i < size; i += page_size_words) {
             std::size_t n_elems = page_size_words - (sub_sizes.at(sub_size_i) * noc_word_size / sizeof(uint32_t));
             sub_size_i = (sub_size_i + 1) % num_sizes;
@@ -625,7 +624,6 @@ void build_and_run_autonomous_stream_test(
                     matches = false;
                 }
             }
-            page_idx++;
         }
         TT_ASSERT(matches);
     } else {

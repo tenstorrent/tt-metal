@@ -258,11 +258,6 @@ void syncDeviceHost(IDevice* device, CoreCoord logical_core, bool doHeader) {
 
     uint32_t hostStartTime_H = 0;
 
-    uint64_t preDeviceTimeLarge = 0;
-    uint64_t preHostTimeLarge = 0;
-    uint64_t firstDeviceTimeLarge = 0;
-    uint64_t firstHostTimeLarge = 0;
-
     for (int i = 2; i < 2 * (sampleCount + 1); i += 2) {
         uint32_t deviceTime = sync_times[i];
         if (deviceTime < preDeviceTime) {
@@ -282,13 +277,8 @@ void syncDeviceHost(IDevice* device, CoreCoord logical_core, bool doHeader) {
         deviceHostTimePair[device_id].push_back(std::pair<uint64_t, uint64_t>{deviceTimeLarge, hostTimeLarge});
 
         if (firstSample) {
-            firstDeviceTimeLarge = deviceTimeLarge;
-            firstHostTimeLarge = hostTimeLarge;
             firstSample = false;
         }
-
-        preDeviceTimeLarge = deviceTimeLarge;
-        preHostTimeLarge = hostTimeLarge;
     }
 
     double hostSum = 0;

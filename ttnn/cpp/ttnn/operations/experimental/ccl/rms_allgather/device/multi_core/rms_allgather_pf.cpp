@@ -86,15 +86,9 @@ operation::ProgramWithCallbacks frmsnorm_pre_multi_core_sharded(
     tt::tt_metal::Program program{};
     bool is_first_chip = ring_index == 0;
     bool is_last_chip = ring_index == ring_size - 1;
-    uint32_t page_size = 0;
     uint32_t output_page_size = 0;
     tt::DataFormat in_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.get_dtype());
     tt::DataFormat out_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.get_dtype());
-    if (a.get_layout() == Layout::TILE) {
-        page_size = a.tensor_spec().tile().get_tile_size(in_data_format);
-    } else {
-        page_size = a.buffer()->page_size();
-    }
     if (output.get_layout() == Layout::TILE) {
         output_page_size = output.tensor_spec().tile().get_tile_size(out_data_format);
     } else {
@@ -432,8 +426,7 @@ operation::ProgramWithCallbacks frmsnorm_pre_multi_core_sharded(
     tt::tt_metal::CircularBufferConfig output_cb_config =
         tt::tt_metal::CircularBufferConfig(out_CB_size, {{cb_to_allgather_writer, out_data_format}})
             .set_page_size(cb_to_allgather_writer, out_single_tile_size);
-    CBHandle cb_output = 0;
-    cb_output = tt::tt_metal::CreateCircularBuffer(program, all_cores, output_cb_config);
+    tt::tt_metal::CreateCircularBuffer(program, all_cores, output_cb_config);
 
     // Set aside a buffer we can use for storing packet headers in (particularly for atomic incs)
     const auto reserved_packet_header_CB_index = tt::CBIndex::c_8;
@@ -714,8 +707,7 @@ operation::ProgramWithCallbacks frmsnorm_pre_multi_core_sharded(
 
         tt::log_debug("core: {}, {}", core.x, core.y);
 
-        uint32_t height_index = 0, width_index = 0;
-        height_index = 0;
+        uint32_t width_index = 0;
         width_index = i;
 
         uint32_t width_index_two_stage = width_index % num_blocks_first_stage;
@@ -894,7 +886,6 @@ operation::ProgramWithCallbacks frmsnorm_pre_multi_core_sharded(
          cb_in1,
          cb_stats,
          cb_add_out,
-         // cb_output,
          cores](
             const void* operation,
             Program& program,
@@ -1094,7 +1085,6 @@ operation::ProgramWithCallbacks frmsnorm_post_multi_core_sharded(
     uint32_t ex_partial_CB_size = in0_block_tiles * single_tile_size / block_wt;
     uint32_t ex_CB_size = ex_partial_CB_size;
     uint32_t ex_global_CB_size = ex_partial_CB_size;
-    uint32_t ex_external_CB_size = tt::div_up(Kt, block_wt) * single_tile_size;
     uint32_t xmm2_CB_size = in0_block_tiles * single_tile_size / 1;
     uint32_t ex2pe_CB_size = single_tile_size;
     uint32_t stats_cb_size = 0;
@@ -1128,10 +1118,6 @@ operation::ProgramWithCallbacks frmsnorm_post_multi_core_sharded(
         num_cores_all_to_all = num_cores_y;
         num_blocks_second_stage = num_cores_all_to_all_second_stage;
     }
-    // change tt::CBIndex external size
-    if (use_two_stage_reduce) {
-        ex_external_CB_size = (num_blocks_first_stage + num_blocks_second_stage - 1) * single_tile_size;
-    }
     uint32_t num_none_all_to_all_workers = num_blocks - num_cores_all_to_all;
 
     CoreCoord start_core = {0, 0};
@@ -1140,7 +1126,6 @@ operation::ProgramWithCallbacks frmsnorm_post_multi_core_sharded(
     CoreRangeSet all_to_all_cores;
     CoreRangeSet all_to_all_workers_except_sender;
     CoreRangeSet not_all_to_all_workers;
-    uint32_t num_cores_x_mcast, num_cores_y_mcast;
     sender_cores = {start_core, start_core};
     CoreCoord all_core_grid_size;
     CoreCoord none_core_grid_size;
@@ -1189,8 +1174,6 @@ operation::ProgramWithCallbacks frmsnorm_post_multi_core_sharded(
                 num_cores_to_corerangeset(none_start_core, num_none_all_to_all_workers, none_core_grid_size, true);
         }
     }
-    num_cores_x_mcast = num_cores_x;
-    num_cores_y_mcast = num_cores_y;
     auto applyStartOffset = [](const CoreRangeSet& input_set, const CoreCoord& grid_offset) -> CoreRangeSet {
         if (input_set.empty()) {
             return input_set;
@@ -1534,9 +1517,6 @@ operation::ProgramWithCallbacks frmsnorm_post_multi_core_sharded(
         in0_mcast_noc_y.push_back(device->worker_core_from_logical_core({core_start_offset.x, core_idx_y}).y);
     }
 
-    uint32_t last_core_width_index = 0;
-    last_core_width_index = cores.size() - 1;
-
     // For write back calculation
     uint32_t current_storage_core = 0;
     uint32_t current_storage_core_offset = 0;
@@ -1546,24 +1526,12 @@ operation::ProgramWithCallbacks frmsnorm_post_multi_core_sharded(
 
         tt::log_debug("core: {}, {}", core.x, core.y);
 
-        uint32_t height_index = 0, width_index = 0;
-        height_index = 0;
+        uint32_t width_index = 0;
         width_index = i;
 
         uint32_t width_index_two_stage = width_index % num_blocks_first_stage;
 
-        uint32_t all_to_all_worker_tile_offset_size_bytes;
-        if (use_two_stage_reduce) {
-            all_to_all_worker_tile_offset_size_bytes = (width_index_two_stage)*single_tile_size;
-        } else {
-            all_to_all_worker_tile_offset_size_bytes = (width_index)*single_tile_size;
-        }
         uint32_t gamma_tile_start_id = width_index * block_wt;
-        uint32_t num_reduce_tiles_per_block_h = block_wt;
-        // account for padding
-        if (width_index == last_core_width_index) {
-            num_reduce_tiles_per_block_h = Kt - last_core_width_index * block_wt;
-        }
 
         std::vector<uint32_t> compute_args{};
         if ((not use_two_stage_reduce and width_index < num_cores_all_to_all) or
