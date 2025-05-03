@@ -7,7 +7,7 @@
 #include <functional>
 #include <random>
 
-#include "tt_metal/common/logger.hpp"
+#include <tt-metalium/logger.hpp>
 #include "tt_metal/test_utils/packing.hpp"
 
 namespace tt {
@@ -20,8 +20,8 @@ namespace test_utils {
 //! to_packed() - get packed (into an integral type that is of the bitwidth specified by SIZEOF)
 //! Constructor(float in) - constructor with a float as the initializer
 //! Constructor(uint32_t in) - constructor with a uint32_t as the initializer -- only lower bits needed
-
-// this follows the implementation of numpy::is_close
+//
+// this follows the implementation of numpy's is_close
 template <typename ValueType>
 bool is_close(const ValueType a, const ValueType b, float rtol = 0.01f, float atol = 0.001f) {
     float af = 0.0f;
@@ -52,12 +52,17 @@ bool is_close_vectors(
     const std::vector<ValueType>& vec_b,
     std::function<bool(ValueType, ValueType)> comparison_function,
     int* argfail = nullptr) {
-    TT_FATAL(vec_a.size() == vec_b.size(), "is_close_vectors -- vec_a.size()={} == vec_b.size()={}", vec_a.size(), vec_b.size());
+    TT_FATAL(
+        vec_a.size() == vec_b.size(),
+        "is_close_vectors -- vec_a.size()={} == vec_b.size()={}",
+        vec_a.size(),
+        vec_b.size());
 
     for (unsigned int i = 0; i < vec_a.size(); i++) {
         if (not comparison_function(vec_a.at(i), vec_b.at(i))) {
-            if (argfail)
+            if (argfail) {
                 *argfail = i;
+            }
             return false;
         }
     }

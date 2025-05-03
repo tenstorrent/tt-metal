@@ -3,31 +3,43 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
+#include <core_coord.hpp>
+#include <stdint.h>
+#include <system_memory_manager.hpp>  // For chip_id_t
+#include <string>
 
-#include "tt_metal/impl/device/device.hpp"
+struct metal_SocDescriptor;
 
 namespace tt {
 
-void watcher_init(Device *device);
-void watcher_attach(Device *device);
-void watcher_detach(Device *dev);
+void watcher_init(chip_id_t device_id);
+void watcher_attach(chip_id_t device_id);
+void watcher_detach(chip_id_t device_id);
 
-void watcher_sanitize_host_noc_read(const metal_SocDescriptor &soc_d, CoreCoord core, uint64_t addr, uint32_t len);
-void watcher_sanitize_host_noc_write(const metal_SocDescriptor &soc_d, CoreCoord core, uint64_t addr, uint32_t len);
+void watcher_sanitize_host_noc_read(const metal_SocDescriptor& soc_d, CoreCoord core, uint64_t addr, uint32_t len);
+void watcher_sanitize_host_noc_write(const metal_SocDescriptor& soc_d, CoreCoord core, uint64_t addr, uint32_t len);
 
-int watcher_register_kernel(const string& name);
+int watcher_register_kernel(const std::string& name);
 
-// Check whether the watcher server has been killed due to an error detected.
+// Helper functions for manually dumping watcher contents.
+void watcher_dump();
+void watcher_read_kernel_ids_from_file();
+
+// Check whether the watcher server has been killed due to an error detected, and a function to set
+// that flag. Used in test mode only.
 bool watcher_server_killed_due_to_error();
-// Function to set this flag to true/false, so that non-watcher runs can continue as normal when set to false.
-// TODO(dma): this doesn't currently clear the actual error codes on the device. Once watcher is
-// moved out of llrt we can change this to watcher_clear_errors().
 void watcher_server_set_error_flag(bool val);
+
+// Description of thrown exception from watcher server, used for testing purposes.
+std::string get_watcher_exception_message();
 
 // Helper function to clear the watcher log file
 void watcher_clear_log();
 
 // Helper function to get the current watcher log file name/path
-string watcher_get_log_file_name();
+std::string watcher_get_log_file_name();
 
-} // namespace tt
+// Helper function to get the current watcher dump count
+int watcher_get_dump_count();
+
+}  // namespace tt

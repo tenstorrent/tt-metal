@@ -1,0 +1,90 @@
+name: Pull Request Validation
+
+on:
+  pull_request:
+
+jobs:
+  validate-pr:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Run pre-commit hooks (check only)
+        id: tests-step
+        run: |
+          python3 -m venv venv
+          source venv/bin/activate
+          pip install pre-commit
+          pre-commit install
+          pre-commit run --all-files
+          if ! git diff --exit-code; then
+            echo "Pre-commit hooks made changes, please commit them."
+            exit 1
+          fi
+
+  clang-tidy:
+    runs-on: ubuntu-24.04
+    # container: ghcr.io/tenstorrent/tt-metal/tt-metalium/ubuntu-22.04-amd64:latest
+    env:
+      ARCH_NAME: wormhole_b0
+      TT_METAL_HOME: ${{ github.workspace }}/3rd_party/tt-metal
+      PYTHONPATH: ${{ github.workspace }}/3rd_party/tt-meta
+    permissions:
+      pull-requests: write
+      contents: write
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        ref: ${{ github.event.pull_request.head.sha }}
+        fetch-depth: 0
+        submodules: "recursive"
+
+    - name: Set safe directory for Git
+      run: git config --global --add safe.directory $GITHUB_WORKSPACE
+
+    - name: Fetch base branch
+      run: |
+        git remote add upstream "https://github.com/${{ github.event.pull_request.base.repo.full_name }}"
+        git fetch --no-tags upstream "${{ github.event.pull_request.base.ref }}"
+
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo DEBIAN_FRONTEND=noninteractive apt-get install -y clang-tidy-17 libc++-17-dev libc++abi-17-dev
+        sudo DEBIAN_FRONTEND=noninteractive apt-get install python3-dev python3-numpy
+        source ~/.bashrc
+        # sudo ln -s $(which clang-tidy-17) /usr/local/bin/clang-tidy
+
+    - name: Prepare compile_commands.json
+      run: |
+        cmake -B build -DCMAKE_EXPORT_COMPILE_COMMANDS=ON -DCMAKE_DISABLE_PRECOMPILE_HEADERS=ON
+
+    - name: Create results directory
+      run: |
+        mkdir clang-tidy-result
+
+    - name: Analyze
+      run: |
+        git diff -U0 "$(git merge-base HEAD "upstream/${{ github.event.pull_request.base.ref }}")" | python3 /usr/bin/clang-tidy-diff-17.py -p1 -path build -export-fixes clang-tidy-result/fixes.yml -j4
+      timeout-minutes: 10
+      continue-on-error: true
+
+    - name: Run clang-tidy-pr-comments action
+      uses: platisd/clang-tidy-pr-comments@837ad8077b1f554dab31a8a43e8bb12c89d2f144
+      with:
+        # The GitHub token (or a personal access token)
+        github_token: ${{ secrets.GITHUB_TOKEN }}
+        # The path to the clang-tidy fixes generated above
+        clang_tidy_fixes: clang-tidy-result/fixes.yml
+        # Optionally set to true if you want the Action to request
+        # changes in case warnings are found
+        request_changes: true
+        # Optionally set the number of comments per review
+        # to avoid GitHub API timeouts for heavily loaded
+        # pull requests
+        suggestions_per_comment: 10
+      continue-on-error: true
+
+    - name: Final step to signal success
+      run: echo "The job passes even if 3rd party action fails."

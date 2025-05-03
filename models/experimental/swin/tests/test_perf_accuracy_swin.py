@@ -3,20 +3,15 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
-import tt_lib
 import pytest
 import evaluate
 
-import os
-import random
-from pathlib import Path
+import ttnn
 from loguru import logger
 from transformers import AutoFeatureExtractor
-from PIL import Image
 import torchvision.transforms as transforms
 from transformers import AutoImageProcessor
 
-from models.sample_data.huggingface_imagenet_classes import IMAGENET2012_CLASSES as labels_dict
 from models.experimental.swin.tt.swin_for_image_classification import (
     TtSwinForImageClassification,
 )
@@ -65,7 +60,7 @@ def run_swin_perf(device, model_name, iterations, model_location_generator):
         torch_input = transform(image_examples[0].image)
         torch_input = torch.unsqueeze(torch_input, 0)
         torch_output = torch_model(torch_input)
-        tt_lib.device.Synchronize(device)
+        ttnn.synchronize_device(device)
         profiler.end(cpu_key)
 
         profiler.start(first_key)
@@ -84,7 +79,7 @@ def run_swin_perf(device, model_name, iterations, model_location_generator):
         del tt_output
 
         profiler.start(third_key)
-        tt_lib.device.Synchronize(device)
+        ttnn.synchronize_device(device)
         for i in range(iterations):
             input_image = image_examples[i].image
             input = image_processor(input_image, return_tensors="pt")

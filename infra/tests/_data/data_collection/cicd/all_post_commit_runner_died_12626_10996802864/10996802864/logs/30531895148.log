@@ -1,0 +1,1599 @@
+﻿2024-09-23T15:06:42.4774753Z Current runner version: '2.319.1'
+2024-09-23T15:06:42.4782537Z Runner name: 'tt-metal-ci-vm-51'
+2024-09-23T15:06:42.4783759Z Runner group name: 'Default'
+2024-09-23T15:06:42.4784962Z Machine name: 'tt-metal-ci-vm-51'
+2024-09-23T15:06:42.4805042Z Testing runner upgrade compatibility
+2024-09-23T15:06:42.6000295Z ##[group]GITHUB_TOKEN Permissions
+2024-09-23T15:06:42.6002646Z Actions: read
+2024-09-23T15:06:42.6003318Z Contents: read
+2024-09-23T15:06:42.6004100Z Metadata: read
+2024-09-23T15:06:42.6004700Z Packages: write
+2024-09-23T15:06:42.6005277Z Pages: write
+2024-09-23T15:06:42.6006292Z ##[endgroup]
+2024-09-23T15:06:42.6009974Z Secret source: Actions
+2024-09-23T15:06:42.6010827Z Prepare workflow directory
+2024-09-23T15:06:42.7645360Z Prepare all required actions
+2024-09-23T15:06:42.7862780Z Getting action download info
+2024-09-23T15:06:43.0018398Z Download action repository 'tenstorrent-metal/metal-workflows@v2.0.0' (SHA:22c747950076e4c9627125e14734e287c08287a7)
+2024-09-23T15:06:43.4127773Z Download action repository 'actions/download-artifact@v4' (SHA:fa0a91b85d4f404e444e00e005971372dc801d16)
+2024-09-23T15:06:44.1121027Z Getting action download info
+2024-09-23T15:06:44.2470927Z Download action repository 'actions/checkout@v4' (SHA:692973e3d937129bcbf40652eb9f2f61becf3332)
+2024-09-23T15:06:44.8308355Z Uses: tenstorrent/tt-metal/.github/workflows/ttnn-post-commit.yaml@refs/heads/virdhatchani/5_clean (64249512152ed52c6df7d6adf6bb1a59b96db81c)
+2024-09-23T15:06:44.8311324Z ##[group] Inputs
+2024-09-23T15:06:44.8311821Z   arch: wormhole_b0
+2024-09-23T15:06:44.8312270Z   runner-label: N300
+2024-09-23T15:06:44.8313639Z   timeout: 45
+2024-09-23T15:06:44.8314077Z ##[endgroup]
+2024-09-23T15:06:44.8315252Z Complete job name: ttnn-unit-tests (wormhole_b0, N300) / ttnn example tests wormhole_b0 N300
+2024-09-23T15:06:44.9174326Z A job started hook has been configured by the self-hosted runner administrator
+2024-09-23T15:06:44.9376177Z ##[group]Run '/opt/tt_metal_infra/scripts/ci/wormhole_b0/reset.sh'
+2024-09-23T15:06:44.9397420Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2024-09-23T15:06:44.9398146Z ##[endgroup]
+2024-09-23T15:06:44.9722204Z Current date / time is Mon Sep 23 15:06:44 UTC 2024
+2024-09-23T15:06:57.9939128Z tt-smi reset was successful
+2024-09-23T15:06:58.4588002Z 
+2024-09-23T15:06:58.4588995Z [95m Detected Chips: [93m1[0m
+2024-09-23T15:06:58.4603548Z [1A[J
+2024-09-23T15:06:58.4604188Z [95m Detected Chips: [93m1[0m
+2024-09-23T15:06:58.4604616Z 
+2024-09-23T15:06:58.4604951Z [94m Detecting ARC: [93m|[0m
+2024-09-23T15:06:58.4605373Z 
+2024-09-23T15:06:58.4605689Z [94m Detecting DRAM: [93m|[0m
+2024-09-23T15:06:58.4606158Z 
+2024-09-23T15:06:58.4606488Z  [95m[][94m [16/16] ETH: [93m|[0m
+2024-09-23T15:06:58.4608291Z [4A[J
+2024-09-23T15:06:58.4609076Z [95m Detected Chips: [93m2[0m
+2024-09-23T15:06:58.4722260Z [1A[J
+2024-09-23T15:06:58.4722851Z [95m Detected Chips: [93m2[0m
+2024-09-23T15:06:58.4723335Z 
+2024-09-23T15:06:58.4723670Z [94m Detecting ARC: [93m/[0m
+2024-09-23T15:06:58.4724115Z 
+2024-09-23T15:06:58.4724445Z [94m Detecting DRAM: [93m/[0m
+2024-09-23T15:06:58.4724836Z 
+2024-09-23T15:06:58.4725147Z  [95m[][94m [16/16] ETH: [93m/[0m
+2024-09-23T15:06:58.4780814Z [4A[J
+2024-09-23T15:06:58.4781320Z [95m Detected Chips: [93m3[0m
+2024-09-23T15:06:58.4880820Z [1A[J
+2024-09-23T15:06:58.4881442Z [95m Detected Chips: [93m3[0m
+2024-09-23T15:06:58.4881832Z 
+2024-09-23T15:06:58.4882167Z [94m Detecting ARC: [93m-[0m
+2024-09-23T15:06:58.4882542Z 
+2024-09-23T15:06:58.4882819Z [94m Detecting DRAM: [93m-[0m
+2024-09-23T15:06:58.4883256Z 
+2024-09-23T15:06:58.4883552Z  [95m[][94m [16/16] ETH: [93m-[0m
+2024-09-23T15:06:58.4915745Z [4A[J
+2024-09-23T15:06:58.4916353Z [95m Detected Chips: [93m2[0m
+2024-09-23T15:06:58.5032370Z Gathering Information ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 100% 0:00:00
+2024-09-23T15:06:58.5044097Z [95m Saved tt-smi log to: /opt/tt_metal_infra/smi.log [0m
+2024-09-23T15:06:58.5693907Z {
+2024-09-23T15:06:58.5694548Z     "time": "2024-09-23T15:06:58.491466",
+2024-09-23T15:06:58.5695727Z     "host_info": {
+2024-09-23T15:06:58.5696201Z         "OS": "Linux",
+2024-09-23T15:06:58.5696732Z         "Distro": "Ubuntu 20.04.3 LTS",
+2024-09-23T15:06:58.5697474Z         "Kernel": "5.4.0-195-generic",
+2024-09-23T15:06:58.5698239Z         "Hostname": "tt-metal-ci-vm-51",
+2024-09-23T15:06:58.5698811Z         "Platform": "x86_64",
+2024-09-23T15:06:58.5699334Z         "Python": "3.8.10",
+2024-09-23T15:06:58.5699831Z         "Memory": "47.14 GB",
+2024-09-23T15:06:58.5700733Z         "Driver": "TTKMD 1.27.1"
+2024-09-23T15:06:58.5701490Z     },
+2024-09-23T15:06:58.5701911Z     "device_info": [
+2024-09-23T15:06:58.5702373Z         {
+2024-09-23T15:06:58.5702806Z             "smbus_telem": {
+2024-09-23T15:06:58.5703383Z                 "BOARD_ID": "0x10001451172a00f",
+2024-09-23T15:06:58.5704076Z                 "SMBUS_TX_ENUM_VERSION": "0xba5e0001",
+2024-09-23T15:06:58.5705048Z                 "SMBUS_TX_DEVICE_ID": "0x401e1e52",
+2024-09-23T15:06:58.5705695Z                 "SMBUS_TX_ASIC_RO": "0x2d0c0",
+2024-09-23T15:06:58.5706337Z                 "SMBUS_TX_ASIC_IDD": "0xd8d",
+2024-09-23T15:06:58.5706948Z                 "SMBUS_TX_BOARD_ID_HIGH": "0x1000145",
+2024-09-23T15:06:58.5707642Z                 "SMBUS_TX_BOARD_ID_LOW": "0x1172a00f",
+2024-09-23T15:06:58.5708309Z                 "SMBUS_TX_ARC0_FW_VERSION": "0x21b0000",
+2024-09-23T15:06:58.5708985Z                 "SMBUS_TX_ARC1_FW_VERSION": "0x21b0000",
+2024-09-23T15:06:58.5709757Z                 "SMBUS_TX_ARC2_FW_VERSION": null,
+2024-09-23T15:06:58.5710376Z                 "SMBUS_TX_ARC3_FW_VERSION": "0x21b0000",
+2024-09-23T15:06:58.5711066Z                 "SMBUS_TX_SPIBOOTROM_FW_VERSION": "0x30b0000",
+2024-09-23T15:06:58.5711797Z                 "SMBUS_TX_ETH_FW_VERSION": "0x69000",
+2024-09-23T15:06:58.5712720Z                 "SMBUS_TX_M3_BL_FW_VERSION": "0x81020000",
+2024-09-23T15:06:58.5713389Z                 "SMBUS_TX_M3_APP_FW_VERSION": "0x5090002",
+2024-09-23T15:06:58.5714039Z                 "SMBUS_TX_DDR_SPEED": null,
+2024-09-23T15:06:58.5714686Z                 "SMBUS_TX_DDR_STATUS": "0x2222222",
+2024-09-23T15:06:58.5715343Z                 "SMBUS_TX_ETH_STATUS0": "0x11111111",
+2024-09-23T15:06:58.5715980Z                 "SMBUS_TX_ETH_STATUS1": "0x11111133",
+2024-09-23T15:06:58.5716674Z                 "SMBUS_TX_PCIE_STATUS": "0x11040000",
+2024-09-23T15:06:58.5717314Z                 "SMBUS_TX_FAULTS": null,
+2024-09-23T15:06:58.5717922Z                 "SMBUS_TX_ARC0_HEALTH": "0xa78b",
+2024-09-23T15:06:58.5718537Z                 "SMBUS_TX_ARC1_HEALTH": "0x473e",
+2024-09-23T15:06:58.5719167Z                 "SMBUS_TX_ARC2_HEALTH": null,
+2024-09-23T15:06:58.5719796Z                 "SMBUS_TX_ARC3_HEALTH": "0x76",
+2024-09-23T15:06:58.5720447Z                 "SMBUS_TX_FAN_SPEED": "0xffffffff",
+2024-09-23T15:06:58.5721065Z                 "SMBUS_TX_AICLK": "0x3e801f4",
+2024-09-23T15:06:58.5721706Z                 "SMBUS_TX_AXICLK": "0x384",
+2024-09-23T15:06:58.5722304Z                 "SMBUS_TX_ARCCLK": "0x21c",
+2024-09-23T15:06:58.5722901Z                 "SMBUS_TX_THROTTLER": null,
+2024-09-23T15:06:58.5723576Z                 "SMBUS_TX_VCORE": "0x2d5",
+2024-09-23T15:06:58.5724280Z                 "SMBUS_TX_ASIC_TEMPERATURE": "0x3560350",
+2024-09-23T15:06:58.5725042Z                 "SMBUS_TX_VREG_TEMPERATURE": "0x330033",
+2024-09-23T15:06:58.5725809Z                 "SMBUS_TX_BOARD_TEMPERATURE": "0x2c2d2c",
+2024-09-23T15:06:58.5726513Z                 "SMBUS_TX_TDP": "0x550010",
+2024-09-23T15:06:58.5727563Z                 "SMBUS_TX_TDC": "0xa00015",
+2024-09-23T15:06:58.5728243Z                 "SMBUS_TX_VDD_LIMITS": "0x3e802d0",
+2024-09-23T15:06:58.5728874Z                 "SMBUS_TX_THM_LIMITS": "0x53004b",
+2024-09-23T15:06:58.5729555Z                 "SMBUS_TX_WH_FW_DATE": "0x4711141b",
+2024-09-23T15:06:58.5730272Z                 "SMBUS_TX_ASIC_TMON0": "0x3c353834",
+2024-09-23T15:06:58.5730927Z                 "SMBUS_TX_ASIC_TMON1": "0x332e",
+2024-09-23T15:06:58.5731538Z                 "SMBUS_TX_MVDDQ_POWER": "0x19ef1c",
+2024-09-23T15:06:58.5732352Z                 "SMBUS_TX_GDDR_TRAIN_TEMP0": null,
+2024-09-23T15:06:58.5733001Z                 "SMBUS_TX_GDDR_TRAIN_TEMP1": null,
+2024-09-23T15:06:58.5733648Z                 "SMBUS_TX_BOOT_DATE": "0x49170f06",
+2024-09-23T15:06:58.5734248Z                 "SMBUS_TX_RT_SECONDS": "0xb",
+2024-09-23T15:06:58.5734873Z                 "SMBUS_TX_AUX_STATUS": null,
+2024-09-23T15:06:58.5735528Z                 "SMBUS_TX_ETH_DEBUG_STATUS0": "0xccddddcc",
+2024-09-23T15:06:58.5736228Z                 "SMBUS_TX_ETH_DEBUG_STATUS1": "0xccdddd00",
+2024-09-23T15:06:58.5736905Z                 "SMBUS_TX_TT_FLASH_VERSION": "0x20100"
+2024-09-23T15:06:58.5737482Z             },
+2024-09-23T15:06:58.5737925Z             "board_info": {
+2024-09-23T15:06:58.5738455Z                 "bus_id": "0000:07:00.0",
+2024-09-23T15:06:58.5739012Z                 "board_type": "n300 L",
+2024-09-23T15:06:58.5739610Z                 "board_id": "010001451172a00f",
+2024-09-23T15:06:58.5740431Z                 "coords": "(0, 0, 0, 0)",
+2024-09-23T15:06:58.5741038Z                 "dram_status": true,
+2024-09-23T15:06:58.5741581Z                 "dram_speed": "12G",
+2024-09-23T15:06:58.5742154Z                 "pcie_speed": 4,
+2024-09-23T15:06:58.5742690Z                 "pcie_width": 16
+2024-09-23T15:06:58.5743211Z             },
+2024-09-23T15:06:58.5743632Z             "telemetry": {
+2024-09-23T15:06:58.5744150Z                 "voltage": "0.72",
+2024-09-23T15:06:58.5744700Z                 "current": " 21.0",
+2024-09-23T15:06:58.5745258Z                 "power": " 16.0",
+2024-09-23T15:06:58.5745757Z                 "aiclk": " 500",
+2024-09-23T15:06:58.5746362Z                 "asic_temperature": "53.0"
+2024-09-23T15:06:58.5746939Z             },
+2024-09-23T15:06:58.5747522Z             "firmwares": {
+2024-09-23T15:06:58.5748055Z                 "arc_fw": "2.27.0.0",
+2024-09-23T15:06:58.5748758Z                 "arc_fw_date": "2024-07-17",
+2024-09-23T15:06:58.5749482Z                 "eth_fw": "6.9.0",
+2024-09-23T15:06:58.5750057Z                 "m3_bl_fw": "129.2.0.0",
+2024-09-23T15:06:58.5750633Z                 "m3_app_fw": "5.9.0.2",
+2024-09-23T15:06:58.5751213Z                 "tt_flash_version": "0.2.1.0"
+2024-09-23T15:06:58.5751807Z             },
+2024-09-23T15:06:58.5752243Z             "limits": {
+2024-09-23T15:06:58.5752743Z                 "vdd_min": "0.72",
+2024-09-23T15:06:58.5753259Z                 "vdd_max": "1.00",
+2024-09-23T15:06:58.5753822Z                 "tdp_limit": " 85",
+2024-09-23T15:06:58.5754390Z                 "tdc_limit": "160",
+2024-09-23T15:06:58.5754948Z                 "asic_fmax": "1000",
+2024-09-23T15:06:58.5755522Z                 "therm_trip_l1_limit": "83",
+2024-09-23T15:06:58.5756129Z                 "thm_limit": "75",
+2024-09-23T15:06:58.5756715Z                 "bus_peak_limit": null
+2024-09-23T15:06:58.5757271Z             }
+2024-09-23T15:06:58.5757673Z         },
+2024-09-23T15:06:58.5758074Z         {
+2024-09-23T15:06:58.5758516Z             "smbus_telem": {
+2024-09-23T15:06:58.5759096Z                 "BOARD_ID": "0x10001451172a00f",
+2024-09-23T15:06:58.5759732Z                 "SMBUS_TX_ENUM_VERSION": "0xba5e0001",
+2024-09-23T15:06:58.5760396Z                 "SMBUS_TX_DEVICE_ID": null,
+2024-09-23T15:06:58.5761044Z                 "SMBUS_TX_ASIC_RO": "0x2ae4a",
+2024-09-23T15:06:58.5761704Z                 "SMBUS_TX_ASIC_IDD": "0x6f2",
+2024-09-23T15:06:58.5762330Z                 "SMBUS_TX_BOARD_ID_HIGH": "0x1000145",
+2024-09-23T15:06:58.5763017Z                 "SMBUS_TX_BOARD_ID_LOW": "0x1172a00f",
+2024-09-23T15:06:58.5763700Z                 "SMBUS_TX_ARC0_FW_VERSION": "0x21b0000",
+2024-09-23T15:06:58.5764378Z                 "SMBUS_TX_ARC1_FW_VERSION": "0x21b0000",
+2024-09-23T15:06:58.5765036Z                 "SMBUS_TX_ARC2_FW_VERSION": null,
+2024-09-23T15:06:58.5765706Z                 "SMBUS_TX_ARC3_FW_VERSION": "0x21b0000",
+2024-09-23T15:06:58.5766430Z                 "SMBUS_TX_SPIBOOTROM_FW_VERSION": "0x30b0000",
+2024-09-23T15:06:58.5767150Z                 "SMBUS_TX_ETH_FW_VERSION": "0x69000",
+2024-09-23T15:06:58.5767953Z                 "SMBUS_TX_M3_BL_FW_VERSION": "0x81020000",
+2024-09-23T15:06:58.5768659Z                 "SMBUS_TX_M3_APP_FW_VERSION": "0x5090002",
+2024-09-23T15:06:58.5769324Z                 "SMBUS_TX_DDR_SPEED": null,
+2024-09-23T15:06:58.5769967Z                 "SMBUS_TX_DDR_STATUS": "0x2222222",
+2024-09-23T15:06:58.5770607Z                 "SMBUS_TX_ETH_STATUS0": "0x11111122",
+2024-09-23T15:06:58.5771279Z                 "SMBUS_TX_ETH_STATUS1": "0x11111111",
+2024-09-23T15:06:58.5771937Z                 "SMBUS_TX_PCIE_STATUS": null,
+2024-09-23T15:06:58.5772572Z                 "SMBUS_TX_FAULTS": null,
+2024-09-23T15:06:58.5773171Z                 "SMBUS_TX_ARC0_HEALTH": "0xa757",
+2024-09-23T15:06:58.5773849Z                 "SMBUS_TX_ARC1_HEALTH": "0x4705",
+2024-09-23T15:06:58.5774484Z                 "SMBUS_TX_ARC2_HEALTH": null,
+2024-09-23T15:06:58.5775106Z                 "SMBUS_TX_ARC3_HEALTH": "0x75",
+2024-09-23T15:06:58.5948692Z                 "SMBUS_TX_FAN_SPEED": "0xffffffff",
+2024-09-23T15:06:58.5949746Z                 "SMBUS_TX_AICLK": "0x3e801f4",
+2024-09-23T15:06:58.5950313Z                 "SMBUS_TX_AXICLK": "0x384",
+2024-09-23T15:06:58.5950856Z                 "SMBUS_TX_ARCCLK": "0x21c",
+2024-09-23T15:06:58.5951404Z                 "SMBUS_TX_THROTTLER": null,
+2024-09-23T15:06:58.5951938Z                 "SMBUS_TX_VCORE": "0x2df",
+2024-09-23T15:06:58.5952524Z                 "SMBUS_TX_ASIC_TEMPERATURE": "0x26e0268",
+2024-09-23T15:06:58.5953151Z                 "SMBUS_TX_VREG_TEMPERATURE": "0x2c002c",
+2024-09-23T15:06:58.5953782Z                 "SMBUS_TX_BOARD_TEMPERATURE": "0x2c2d2c",
+2024-09-23T15:06:58.5954371Z                 "SMBUS_TX_TDP": "0x55000b",
+2024-09-23T15:06:58.5955471Z                 "SMBUS_TX_TDC": "0xa0000e",
+2024-09-23T15:06:58.5956053Z                 "SMBUS_TX_VDD_LIMITS": "0x3e802e7",
+2024-09-23T15:06:58.5956654Z                 "SMBUS_TX_THM_LIMITS": "0x53004b",
+2024-09-23T15:06:58.5957247Z                 "SMBUS_TX_WH_FW_DATE": "0x4711141b",
+2024-09-23T15:06:58.5957847Z                 "SMBUS_TX_ASIC_TMON0": "0x31212128",
+2024-09-23T15:06:58.5958440Z                 "SMBUS_TX_ASIC_TMON1": "0x2924",
+2024-09-23T15:06:58.5959046Z                 "SMBUS_TX_MVDDQ_POWER": "0x1955ac",
+2024-09-23T15:06:58.5959639Z                 "SMBUS_TX_GDDR_TRAIN_TEMP0": null,
+2024-09-23T15:06:58.5960224Z                 "SMBUS_TX_GDDR_TRAIN_TEMP1": null,
+2024-09-23T15:06:58.5960807Z                 "SMBUS_TX_BOOT_DATE": "0x49170f06",
+2024-09-23T15:06:58.5961378Z                 "SMBUS_TX_RT_SECONDS": "0xc",
+2024-09-23T15:06:58.5961933Z                 "SMBUS_TX_AUX_STATUS": null,
+2024-09-23T15:06:58.5962525Z                 "SMBUS_TX_ETH_DEBUG_STATUS0": "0xccdddd00",
+2024-09-23T15:06:58.5963238Z                 "SMBUS_TX_ETH_DEBUG_STATUS1": "0xdddddddd",
+2024-09-23T15:06:58.5963873Z                 "SMBUS_TX_TT_FLASH_VERSION": "0x20100"
+2024-09-23T15:06:58.5964404Z             },
+2024-09-23T15:06:58.5964777Z             "board_info": {
+2024-09-23T15:06:58.5965228Z                 "bus_id": "N/A",
+2024-09-23T15:06:58.5965727Z                 "board_type": "n300 R",
+2024-09-23T15:06:58.5966258Z                 "board_id": "010001451172a00f",
+2024-09-23T15:06:58.5966802Z                 "coords": "(1, 0, 0, 0)",
+2024-09-23T15:06:58.5967342Z                 "dram_status": true,
+2024-09-23T15:06:58.5967854Z                 "dram_speed": "12G",
+2024-09-23T15:06:58.5968359Z                 "pcie_speed": "N/A",
+2024-09-23T15:06:58.5968852Z                 "pcie_width": "N/A"
+2024-09-23T15:06:58.5969316Z             },
+2024-09-23T15:06:58.5969696Z             "telemetry": {
+2024-09-23T15:06:58.5970127Z                 "voltage": "0.73",
+2024-09-23T15:06:58.5970600Z                 "current": " 14.0",
+2024-09-23T15:06:58.5971118Z                 "power": " 11.0",
+2024-09-23T15:06:58.5971616Z                 "aiclk": " 500",
+2024-09-23T15:06:58.5972114Z                 "asic_temperature": "38.5"
+2024-09-23T15:06:58.5972636Z             },
+2024-09-23T15:06:58.5973222Z             "firmwares": {
+2024-09-23T15:06:58.5973703Z                 "arc_fw": "2.27.0.0",
+2024-09-23T15:06:58.5974577Z                 "arc_fw_date": "2024-07-17",
+2024-09-23T15:06:58.5975136Z                 "eth_fw": "6.9.0",
+2024-09-23T15:06:58.5975663Z                 "m3_bl_fw": "129.2.0.0",
+2024-09-23T15:06:58.5976208Z                 "m3_app_fw": "5.9.0.2",
+2024-09-23T15:06:58.5976757Z                 "tt_flash_version": "0.2.1.0"
+2024-09-23T15:06:58.5977298Z             },
+2024-09-23T15:06:58.5977705Z             "limits": {
+2024-09-23T15:06:58.5978185Z                 "vdd_min": "0.74",
+2024-09-23T15:06:58.5978683Z                 "vdd_max": "1.00",
+2024-09-23T15:06:58.5979194Z                 "tdp_limit": " 85",
+2024-09-23T15:06:58.5979723Z                 "tdc_limit": "160",
+2024-09-23T15:06:58.5980489Z                 "asic_fmax": "1000",
+2024-09-23T15:06:58.5981028Z                 "therm_trip_l1_limit": "83",
+2024-09-23T15:06:58.5981585Z                 "thm_limit": "75",
+2024-09-23T15:06:58.5982125Z                 "bus_peak_limit": null
+2024-09-23T15:06:58.5982642Z             }
+2024-09-23T15:06:58.5983020Z         }
+2024-09-23T15:06:58.5983390Z     ]
+2024-09-23T15:06:58.5983802Z }Printing out cpu information...
+2024-09-23T15:06:58.5984393Z Architecture:                       x86_64
+2024-09-23T15:06:58.5985111Z CPU op-mode(s):                     32-bit, 64-bit
+2024-09-23T15:06:58.5985789Z Byte Order:                         Little Endian
+2024-09-23T15:06:58.5986541Z Address sizes:                      40 bits physical, 48 bits virtual
+2024-09-23T15:06:58.5987234Z CPU(s):                             14
+2024-09-23T15:06:58.5987853Z On-line CPU(s) list:                0-13
+2024-09-23T15:06:58.5988432Z Thread(s) per core:                 1
+2024-09-23T15:06:58.5989240Z Core(s) per socket:                 1
+2024-09-23T15:06:58.5989807Z Socket(s):                          14
+2024-09-23T15:06:58.5990341Z NUMA node(s):                       2
+2024-09-23T15:06:58.5990901Z Vendor ID:                          AuthenticAMD
+2024-09-23T15:06:58.5991493Z CPU family:                         23
+2024-09-23T15:06:58.5991997Z Model:                              49
+2024-09-23T15:06:58.5992741Z Model name:                         AMD EPYC-Rome Processor
+2024-09-23T15:06:58.5993465Z Stepping:                           0
+2024-09-23T15:06:58.5994075Z CPU MHz:                            2299.942
+2024-09-23T15:06:58.5994726Z BogoMIPS:                           4599.88
+2024-09-23T15:06:58.5995404Z Virtualization:                     AMD-V
+2024-09-23T15:06:58.5996019Z Hypervisor vendor:                  KVM
+2024-09-23T15:06:58.5996605Z Virtualization type:                full
+2024-09-23T15:06:58.5997189Z L1d cache:                          448 KiB
+2024-09-23T15:06:58.5997784Z L1i cache:                          448 KiB
+2024-09-23T15:06:58.5998365Z L2 cache:                           7 MiB
+2024-09-23T15:06:58.5998949Z L3 cache:                           224 MiB
+2024-09-23T15:06:58.5999626Z NUMA node0 CPU(s):                  0-6
+2024-09-23T15:06:58.6000345Z NUMA node1 CPU(s):                  7-13
+2024-09-23T15:06:58.6001007Z Vulnerability Gather data sampling: Not affected
+2024-09-23T15:06:58.6001750Z Vulnerability Itlb multihit:        Not affected
+2024-09-23T15:06:58.6002487Z Vulnerability L1tf:                 Not affected
+2024-09-23T15:06:58.6003226Z Vulnerability Mds:                  Not affected
+2024-09-23T15:06:58.6004397Z Vulnerability Meltdown:             Not affected
+2024-09-23T15:06:58.6005166Z Vulnerability Mmio stale data:      Not affected
+2024-09-23T15:06:58.6005937Z Vulnerability Retbleed:             Vulnerable
+2024-09-23T15:06:58.6007114Z Vulnerability Spec store bypass:    Mitigation; Speculative Store Bypass disabled via prctl and seccomp
+2024-09-23T15:06:58.6008668Z Vulnerability Spectre v1:           Mitigation; usercopy/swapgs barriers and __user pointer sanitization
+2024-09-23T15:06:58.6010761Z Vulnerability Spectre v2:           Mitigation; Retpolines; IBPB conditional; STIBP disabled; RSB filling; PBRSB-eIBRS Not affected; BHI Not affected
+2024-09-23T15:06:58.6012424Z Vulnerability Srbds:                Not affected
+2024-09-23T15:06:58.6013176Z Vulnerability Tsx async abort:      Not affected
+2024-09-23T15:06:58.6017333Z Flags:                              fpu vme de pse tsc msr pae mce cx8 apic sep mtrr pge mca cmov pat pse36 clflush mmx fxsr sse sse2 syscall nx mmxext fxsr_opt pdpe1gb rdtscp lm constant_tsc rep_good nopl nonstop_tsc cpuid extd_apicid tsc_known_freq pni pclmulqdq ssse3 fma cx16 sse4_1 sse4_2 x2apic movbe popcnt aes xsave avx f16c rdrand hypervisor lahf_lm svm cr8_legacy abm sse4a misalignsse 3dnowprefetch osvw topoext perfctr_core ssbd ibpb stibp vmmcall fsgsbase bmi1 avx2 smep bmi2 rdseed adx smap clflushopt clwb sha_ni xsaveopt xsavec xgetbv1 clzero xsaveerptr wbnoinvd arat npt nrip_save umip rdpid
+2024-09-23T15:07:29.3413334Z /proc/cmdline is satisfactory, continuing with installation
+2024-09-23T15:07:29.3414399Z Huge pages is now set up
+2024-09-23T15:07:29.4105380Z Hugepage check passed!
+2024-09-23T15:07:29.4658131Z ##[group]Run tenstorrent-metal/metal-workflows/.github/actions/checkout-with-submodule-lfs@v2.0.0
+2024-09-23T15:07:29.4659074Z with:
+2024-09-23T15:07:29.4659663Z   token: ***
+2024-09-23T15:07:29.4660284Z   fetch-depth: 1
+2024-09-23T15:07:29.4660680Z env:
+2024-09-23T15:07:29.4661049Z   LOGURU_LEVEL: INFO
+2024-09-23T15:07:29.4661734Z   LD_LIBRARY_PATH: /home/ubuntu/actions-runner/_work/tt-metal/tt-metal/build/lib
+2024-09-23T15:07:29.4662505Z ##[endgroup]
+2024-09-23T15:07:29.5001293Z ##[group]Run actions/checkout@v4
+2024-09-23T15:07:29.5001860Z with:
+2024-09-23T15:07:29.5002457Z   token: ***
+2024-09-23T15:07:29.5002907Z   fetch-depth: 1
+2024-09-23T15:07:29.5003361Z   lfs: true
+2024-09-23T15:07:29.5003782Z   submodules: recursive
+2024-09-23T15:07:29.5004262Z   clean: true
+2024-09-23T15:07:29.5005088Z   repository: tenstorrent/tt-metal
+2024-09-23T15:07:29.5005605Z   ssh-strict: true
+2024-09-23T15:07:29.5006017Z   ssh-user: git
+2024-09-23T15:07:29.5006493Z   persist-credentials: true
+2024-09-23T15:07:29.5007142Z   sparse-checkout-cone-mode: true
+2024-09-23T15:07:29.5007696Z   fetch-tags: false
+2024-09-23T15:07:29.5008129Z   show-progress: true
+2024-09-23T15:07:29.5008578Z   set-safe-directory: true
+2024-09-23T15:07:29.5009079Z env:
+2024-09-23T15:07:29.5009459Z   LOGURU_LEVEL: INFO
+2024-09-23T15:07:29.5010922Z   LD_LIBRARY_PATH: /home/ubuntu/actions-runner/_work/tt-metal/tt-metal/build/lib
+2024-09-23T15:07:29.5011715Z ##[endgroup]
+2024-09-23T15:07:29.6466324Z Syncing repository: tenstorrent/tt-metal
+2024-09-23T15:07:29.6468481Z ##[group]Getting Git version info
+2024-09-23T15:07:29.6469371Z Working directory is '/home/ubuntu/actions-runner/_work/tt-metal/tt-metal'
+2024-09-23T15:07:29.6470595Z [command]/usr/bin/git version
+2024-09-23T15:07:29.6500659Z git version 2.25.1
+2024-09-23T15:07:29.6552808Z [command]/usr/bin/git lfs version
+2024-09-23T15:07:29.6838434Z git-lfs/2.9.2 (GitHub; linux amd64; go 1.13.5)
+2024-09-23T15:07:29.6857621Z ##[endgroup]
+2024-09-23T15:07:29.6879855Z Temporarily overriding HOME='/home/ubuntu/actions-runner/_work/_temp/4110613e-ba2a-47a1-8004-61e0b615a6ab' before making global git config changes
+2024-09-23T15:07:29.6881364Z Adding repository directory to the temporary git global config as a safe directory
+2024-09-23T15:07:29.6887657Z [command]/usr/bin/git config --global --add safe.directory /home/ubuntu/actions-runner/_work/tt-metal/tt-metal
+2024-09-23T15:07:29.6957362Z [command]/usr/bin/git config --local --get remote.origin.url
+2024-09-23T15:07:29.6961545Z https://github.com/tenstorrent/tt-metal
+2024-09-23T15:07:29.6982133Z ##[group]Removing previously created refs, to avoid conflicts
+2024-09-23T15:07:29.6987769Z [command]/usr/bin/git rev-parse --symbolic-full-name --verify --quiet HEAD
+2024-09-23T15:07:29.7031678Z refs/heads/yan-zaretskiy/11531-op-autodoc
+2024-09-23T15:07:29.7045109Z [command]/usr/bin/git checkout --detach
+2024-09-23T15:07:30.0687538Z HEAD is now at b9c05cb #0: fix ci test issue and warnings
+2024-09-23T15:07:30.1564389Z [command]/usr/bin/git branch --delete --force yan-zaretskiy/11531-op-autodoc
+2024-09-23T15:07:30.1593368Z Deleted branch yan-zaretskiy/11531-op-autodoc (was b9c05cb).
+2024-09-23T15:07:30.1889998Z ##[endgroup]
+2024-09-23T15:07:30.1890607Z [command]/usr/bin/git submodule status
+2024-09-23T15:07:30.2291386Z  7b11d073376b905b46edaa757f0bfde5c38a9636 models/demos/t3000/llama2_70b/reference/llama (heads/main)
+2024-09-23T15:07:30.2372525Z  2ba5a2973915aa1c5afbf6f1524e87e0c43bc058 tt_metal/third_party/lfs (heads/main)
+2024-09-23T15:07:30.2469554Z  b8f28551cc3a98ea9fbfc15c05b513c8f2d23e84 tt_metal/third_party/pybind11 (b8f2855)
+2024-09-23T15:07:30.2557054Z  3008daa0abc9f37fe757aa8ac7fee26f410947bb tt_metal/third_party/sfpi (heads/master)
+2024-09-23T15:07:30.2652819Z  7d9e85b6b2e9bf501021f857f2f3cbe43bc37c85 tt_metal/third_party/taskflow (7d9e85b)
+2024-09-23T15:07:30.2748632Z  71d4c8d378b52af7da7012b9b595a61e9304f0bb tt_metal/third_party/tracy (71d4c8d)
+2024-09-23T15:07:30.2835158Z  b3d5095528537db52e069b0daa54aaee2e609437 tt_metal/third_party/tt_llk_blackhole (b3d5095)
+2024-09-23T15:07:30.2912371Z  eda31ada422e8a7999d46823aa476e3487397093 tt_metal/third_party/tt_llk_grayskull (heads/main)
+2024-09-23T15:07:30.2992494Z  fefda7caec7452072fa84b1ce5046df7f9254246 tt_metal/third_party/tt_llk_wormhole_b0 (fefda7c)
+2024-09-23T15:07:30.3076823Z  f7b1ce0f6ed3101bdd4f1367145378a59996f07b tt_metal/third_party/umd (heads/main)
+2024-09-23T15:07:30.3096078Z ##[group]Cleaning the repository
+2024-09-23T15:07:30.3097385Z [command]/usr/bin/git clean -ffdx
+2024-09-23T15:07:33.7938425Z Removing .pytest_cache/
+2024-09-23T15:07:33.7938988Z Removing .umd/
+2024-09-23T15:07:33.7939438Z Removing __pycache__/
+2024-09-23T15:07:33.7940219Z Removing build/
+2024-09-23T15:07:33.7940734Z Removing built/
+2024-09-23T15:07:33.7941184Z Removing generated/
+2024-09-23T15:07:33.7945077Z Removing models/__pycache__/
+2024-09-23T15:07:33.7945832Z Removing models/datasets/__pycache__/
+2024-09-23T15:07:33.7946502Z Removing models/demos/utils/__pycache__/
+2024-09-23T15:07:33.7947315Z Removing models/demos/wormhole/mamba/benchmarks/__pycache__/
+2024-09-23T15:07:33.7948581Z Removing models/demos/wormhole/mamba/demo/__pycache__/
+2024-09-23T15:07:33.7949486Z Removing models/demos/wormhole/mamba/reference/__pycache__/
+2024-09-23T15:07:33.7950243Z Removing models/demos/wormhole/mamba/tt/__pycache__/
+2024-09-23T15:07:33.7950957Z Removing models/perf/__pycache__/
+2024-09-23T15:07:33.7951534Z Removing python_env/
+2024-09-23T15:07:33.7952050Z Removing runtime/
+2024-09-23T15:07:33.7952813Z Removing tests/nightly/single_card/mamba/models/demos/wormhole/mamba/__pycache__/
+2024-09-23T15:07:33.7953642Z Removing tests/scripts/__pycache__/
+2024-09-23T15:07:33.7954343Z Removing tests/tt_eager/python_api_testing/sweep_tests/__pycache__/
+2024-09-23T15:07:33.7955425Z Removing tt_dnn-models/
+2024-09-23T15:07:33.7955906Z Removing ttm_wormhole_b0.tar
+2024-09-23T15:07:33.7956406Z Removing ttnn/tt_lib/__pycache__/
+2024-09-23T15:07:33.7956953Z Removing ttnn/tt_lib/_internal/__pycache__/
+2024-09-23T15:07:33.7957531Z Removing ttnn/ttnn/__pycache__/
+2024-09-23T15:07:33.7958084Z Removing ttnn/ttnn/_ttnn.so
+2024-09-23T15:07:33.7958679Z Removing ttnn/ttnn/experimental_loader/__pycache__/
+2024-09-23T15:07:33.7959387Z Removing ttnn/ttnn/operations/__pycache__/
+2024-09-23T15:07:33.7960020Z Removing ttnn/ttnn/operations/conv/__pycache__/
+2024-09-23T15:07:33.7962106Z [command]/usr/bin/git reset --hard HEAD
+2024-09-23T15:07:33.8825168Z HEAD is now at b9c05cb #0: fix ci test issue and warnings
+2024-09-23T15:07:33.8836457Z ##[endgroup]
+2024-09-23T15:07:33.8838929Z ##[group]Disabling automatic garbage collection
+2024-09-23T15:07:33.8844814Z [command]/usr/bin/git config --local gc.auto 0
+2024-09-23T15:07:33.8882151Z ##[endgroup]
+2024-09-23T15:07:33.8882921Z ##[group]Setting up auth
+2024-09-23T15:07:33.8890521Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+2024-09-23T15:07:33.8925133Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+2024-09-23T15:07:33.9201932Z Entering 'models/demos/t3000/llama2_70b/reference/llama'
+2024-09-23T15:07:33.9252876Z Entering 'tt_metal/third_party/lfs'
+2024-09-23T15:07:33.9311668Z Entering 'tt_metal/third_party/pybind11'
+2024-09-23T15:07:33.9360913Z Entering 'tt_metal/third_party/sfpi'
+2024-09-23T15:07:33.9420975Z Entering 'tt_metal/third_party/taskflow'
+2024-09-23T15:07:33.9474354Z Entering 'tt_metal/third_party/tracy'
+2024-09-23T15:07:33.9527772Z Entering 'tt_metal/third_party/tt_llk_blackhole'
+2024-09-23T15:07:33.9579847Z Entering 'tt_metal/third_party/tt_llk_grayskull'
+2024-09-23T15:07:33.9634116Z Entering 'tt_metal/third_party/tt_llk_wormhole_b0'
+2024-09-23T15:07:33.9685820Z Entering 'tt_metal/third_party/umd'
+2024-09-23T15:07:33.9734306Z Entering 'tt_metal/third_party/umd/third_party/fmt'
+2024-09-23T15:07:33.9833682Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+2024-09-23T15:07:33.9874184Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+2024-09-23T15:07:34.0153025Z Entering 'models/demos/t3000/llama2_70b/reference/llama'
+2024-09-23T15:07:34.0197044Z Entering 'tt_metal/third_party/lfs'
+2024-09-23T15:07:34.0240914Z Entering 'tt_metal/third_party/pybind11'
+2024-09-23T15:07:34.0285883Z Entering 'tt_metal/third_party/sfpi'
+2024-09-23T15:07:34.0334699Z Entering 'tt_metal/third_party/taskflow'
+2024-09-23T15:07:34.0380612Z Entering 'tt_metal/third_party/tracy'
+2024-09-23T15:07:34.0424373Z Entering 'tt_metal/third_party/tt_llk_blackhole'
+2024-09-23T15:07:34.0464393Z Entering 'tt_metal/third_party/tt_llk_grayskull'
+2024-09-23T15:07:34.0510818Z Entering 'tt_metal/third_party/tt_llk_wormhole_b0'
+2024-09-23T15:07:34.0553287Z Entering 'tt_metal/third_party/umd'
+2024-09-23T15:07:34.0595868Z Entering 'tt_metal/third_party/umd/third_party/fmt'
+2024-09-23T15:07:34.0660728Z [command]/usr/bin/git config --local http.https://github.com/.extraheader AUTHORIZATION: basic ***
+2024-09-23T15:07:34.0708252Z ##[endgroup]
+2024-09-23T15:07:34.0712889Z [command]/usr/bin/git lfs install --local
+2024-09-23T15:07:34.0881583Z Updated git hooks.
+2024-09-23T15:07:34.0882143Z Git LFS initialized.
+2024-09-23T15:07:34.0899343Z ##[group]Fetching the repository
+2024-09-23T15:07:34.0913207Z [command]/usr/bin/git -c protocol.version=2 fetch --no-tags --prune --no-recurse-submodules --depth=1 origin +64249512152ed52c6df7d6adf6bb1a59b96db81c:refs/remotes/origin/virdhatchani/5_clean
+2024-09-23T15:07:34.5548651Z From https://github.com/tenstorrent/tt-metal
+2024-09-23T15:07:34.5549980Z  + 554b45f...6424951 64249512152ed52c6df7d6adf6bb1a59b96db81c -> origin/virdhatchani/5_clean  (forced update)
+2024-09-23T15:07:34.5581004Z ##[endgroup]
+2024-09-23T15:07:34.5581709Z ##[group]Determining the checkout info
+2024-09-23T15:07:34.5584425Z ##[endgroup]
+2024-09-23T15:07:34.5585211Z ##[group]Fetching LFS objects
+2024-09-23T15:07:34.5592600Z [command]/usr/bin/git lfs fetch origin refs/remotes/origin/virdhatchani/5_clean
+2024-09-23T15:07:34.5724935Z fetch: Fetching reference refs/remotes/origin/virdhatchani/5_clean
+2024-09-23T15:07:35.0199594Z ##[endgroup]
+2024-09-23T15:07:35.0200339Z ##[group]Checking out the ref
+2024-09-23T15:07:35.0206645Z [command]/usr/bin/git checkout --progress --force -B virdhatchani/5_clean refs/remotes/origin/virdhatchani/5_clean
+2024-09-23T15:07:35.0606862Z Previous HEAD position was b9c05cb #0: fix ci test issue and warnings
+2024-09-23T15:07:35.0859890Z Switched to a new branch 'virdhatchani/5_clean'
+2024-09-23T15:07:35.0861234Z Branch 'virdhatchani/5_clean' set up to track remote branch 'virdhatchani/5_clean' from 'origin'.
+2024-09-23T15:07:35.1374817Z ##[endgroup]
+2024-09-23T15:07:35.1375592Z ##[group]Setting up auth for fetching submodules
+2024-09-23T15:07:35.1384272Z [command]/usr/bin/git config --global http.https://github.com/.extraheader AUTHORIZATION: basic ***
+2024-09-23T15:07:35.1427924Z [command]/usr/bin/git config --global --unset-all url.https://github.com/.insteadOf
+2024-09-23T15:07:35.1460309Z [command]/usr/bin/git config --global --add url.https://github.com/.insteadOf git@github.com:
+2024-09-23T15:07:35.1496186Z [command]/usr/bin/git config --global --add url.https://github.com/.insteadOf org-64161552@github.com:
+2024-09-23T15:07:35.1530362Z ##[endgroup]
+2024-09-23T15:07:35.1531034Z ##[group]Fetching submodules
+2024-09-23T15:07:35.1535052Z [command]/usr/bin/git submodule sync --recursive
+2024-09-23T15:07:35.1804498Z Synchronizing submodule url for 'models/demos/t3000/llama2_70b/reference/llama'
+2024-09-23T15:07:35.1839626Z Synchronizing submodule url for 'tt_metal/third_party/lfs'
+2024-09-23T15:07:35.1878611Z Synchronizing submodule url for 'tt_metal/third_party/pybind11'
+2024-09-23T15:07:35.1914778Z Synchronizing submodule url for 'tt_metal/third_party/sfpi'
+2024-09-23T15:07:35.1961637Z Synchronizing submodule url for 'tt_metal/third_party/taskflow'
+2024-09-23T15:07:35.2004946Z Synchronizing submodule url for 'tt_metal/third_party/tracy'
+2024-09-23T15:07:35.2039528Z Synchronizing submodule url for 'tt_metal/third_party/tt_llk_blackhole'
+2024-09-23T15:07:35.2074573Z Synchronizing submodule url for 'tt_metal/third_party/tt_llk_grayskull'
+2024-09-23T15:07:35.2109653Z Synchronizing submodule url for 'tt_metal/third_party/tt_llk_wormhole_b0'
+2024-09-23T15:07:35.2146439Z Synchronizing submodule url for 'tt_metal/third_party/umd'
+2024-09-23T15:07:35.2182758Z Synchronizing submodule url for 'tt_metal/third_party/umd/third_party/fmt'
+2024-09-23T15:07:35.2229899Z [command]/usr/bin/git -c protocol.version=2 submodule update --init --force --depth=1 --recursive
+2024-09-23T15:07:35.2780992Z Submodule path 'models/demos/t3000/llama2_70b/reference/llama': checked out '7b11d073376b905b46edaa757f0bfde5c38a9636'
+2024-09-23T15:07:35.3206532Z WARNING: Multiple 'url.*..insteadof' keys with the same alias: "git@github.com:"
+2024-09-23T15:07:35.3207775Z WARNING: Multiple 'url.*..insteadof' keys with the same alias: "org-64161552@github.com:"
+2024-09-23T15:07:35.3247399Z Submodule path 'tt_metal/third_party/lfs': checked out '2ba5a2973915aa1c5afbf6f1524e87e0c43bc058'
+2024-09-23T15:07:35.3572002Z Submodule path 'tt_metal/third_party/pybind11': checked out 'b8f28551cc3a98ea9fbfc15c05b513c8f2d23e84'
+2024-09-23T15:07:35.4059727Z WARNING: Multiple 'url.*..insteadof' keys with the same alias: "git@github.com:"
+2024-09-23T15:07:35.4063462Z WARNING: Multiple 'url.*..insteadof' keys with the same alias: "org-64161552@github.com:"
+2024-09-23T15:07:35.4186771Z Submodule path 'tt_metal/third_party/sfpi': checked out '3008daa0abc9f37fe757aa8ac7fee26f410947bb'
+2024-09-23T15:07:35.4577047Z Submodule path 'tt_metal/third_party/taskflow': checked out '7d9e85b6b2e9bf501021f857f2f3cbe43bc37c85'
+2024-09-23T15:07:35.4917534Z Submodule path 'tt_metal/third_party/tracy': checked out '71d4c8d378b52af7da7012b9b595a61e9304f0bb'
+2024-09-23T15:07:35.5240488Z Submodule path 'tt_metal/third_party/tt_llk_blackhole': checked out 'b3d5095528537db52e069b0daa54aaee2e609437'
+2024-09-23T15:07:35.5559153Z Submodule path 'tt_metal/third_party/tt_llk_grayskull': checked out 'eda31ada422e8a7999d46823aa476e3487397093'
+2024-09-23T15:07:35.5879290Z Submodule path 'tt_metal/third_party/tt_llk_wormhole_b0': checked out 'fefda7caec7452072fa84b1ce5046df7f9254246'
+2024-09-23T15:07:35.6188813Z Submodule path 'tt_metal/third_party/umd': checked out 'f7b1ce0f6ed3101bdd4f1367145378a59996f07b'
+2024-09-23T15:07:35.6528187Z Submodule path 'tt_metal/third_party/umd/third_party/fmt': checked out 'b50e685db996c167e6c831dcef582aba6e14276a'
+2024-09-23T15:07:35.6618216Z [command]/usr/bin/git submodule foreach --recursive git config --local gc.auto 0
+2024-09-23T15:07:35.6877681Z Entering 'models/demos/t3000/llama2_70b/reference/llama'
+2024-09-23T15:07:35.6919049Z Entering 'tt_metal/third_party/lfs'
+2024-09-23T15:07:35.6961345Z Entering 'tt_metal/third_party/pybind11'
+2024-09-23T15:07:35.7006948Z Entering 'tt_metal/third_party/sfpi'
+2024-09-23T15:07:35.7051268Z Entering 'tt_metal/third_party/taskflow'
+2024-09-23T15:07:35.7098042Z Entering 'tt_metal/third_party/tracy'
+2024-09-23T15:07:35.7136662Z Entering 'tt_metal/third_party/tt_llk_blackhole'
+2024-09-23T15:07:35.7175519Z Entering 'tt_metal/third_party/tt_llk_grayskull'
+2024-09-23T15:07:35.7214563Z Entering 'tt_metal/third_party/tt_llk_wormhole_b0'
+2024-09-23T15:07:35.7257315Z Entering 'tt_metal/third_party/umd'
+2024-09-23T15:07:35.7301533Z Entering 'tt_metal/third_party/umd/third_party/fmt'
+2024-09-23T15:07:35.7356378Z ##[endgroup]
+2024-09-23T15:07:35.7357172Z ##[group]Persisting credentials for submodules
+2024-09-23T15:07:35.7364174Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'url\.https\:\/\/github\.com\/\.insteadOf' && git config --local --unset-all 'url.https://github.com/.insteadOf' || :"
+2024-09-23T15:07:35.7611836Z Entering 'models/demos/t3000/llama2_70b/reference/llama'
+2024-09-23T15:07:35.7636718Z url.https://github.com/.insteadof
+2024-09-23T15:07:35.7637642Z url.https://github.com/.insteadof
+2024-09-23T15:07:35.7675502Z Entering 'tt_metal/third_party/lfs'
+2024-09-23T15:07:35.7701384Z url.https://github.com/.insteadof
+2024-09-23T15:07:35.7701955Z url.https://github.com/.insteadof
+2024-09-23T15:07:35.7735655Z Entering 'tt_metal/third_party/pybind11'
+2024-09-23T15:07:35.7761213Z url.https://github.com/.insteadof
+2024-09-23T15:07:35.7761794Z url.https://github.com/.insteadof
+2024-09-23T15:07:35.7797359Z Entering 'tt_metal/third_party/sfpi'
+2024-09-23T15:07:35.7824056Z url.https://github.com/.insteadof
+2024-09-23T15:07:35.7824613Z url.https://github.com/.insteadof
+2024-09-23T15:07:35.7866954Z Entering 'tt_metal/third_party/taskflow'
+2024-09-23T15:07:35.7892426Z url.https://github.com/.insteadof
+2024-09-23T15:07:35.7892979Z url.https://github.com/.insteadof
+2024-09-23T15:07:35.7934556Z Entering 'tt_metal/third_party/tracy'
+2024-09-23T15:07:35.7959619Z url.https://github.com/.insteadof
+2024-09-23T15:07:35.7960173Z url.https://github.com/.insteadof
+2024-09-23T15:07:35.7995070Z Entering 'tt_metal/third_party/tt_llk_blackhole'
+2024-09-23T15:07:35.8019453Z url.https://github.com/.insteadof
+2024-09-23T15:07:35.8020198Z url.https://github.com/.insteadof
+2024-09-23T15:07:35.8056262Z Entering 'tt_metal/third_party/tt_llk_grayskull'
+2024-09-23T15:07:35.8082475Z url.https://github.com/.insteadof
+2024-09-23T15:07:35.8083004Z url.https://github.com/.insteadof
+2024-09-23T15:07:35.8118981Z Entering 'tt_metal/third_party/tt_llk_wormhole_b0'
+2024-09-23T15:07:35.8143911Z url.https://github.com/.insteadof
+2024-09-23T15:07:35.8144453Z url.https://github.com/.insteadof
+2024-09-23T15:07:35.8180525Z Entering 'tt_metal/third_party/umd'
+2024-09-23T15:07:35.8203660Z url.https://github.com/.insteadof
+2024-09-23T15:07:35.8204236Z url.https://github.com/.insteadof
+2024-09-23T15:07:35.8236043Z Entering 'tt_metal/third_party/umd/third_party/fmt'
+2024-09-23T15:07:35.8263049Z url.https://github.com/.insteadof
+2024-09-23T15:07:35.8263613Z url.https://github.com/.insteadof
+2024-09-23T15:07:35.8314394Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local 'http.https://github.com/.extraheader' 'AUTHORIZATION: basic ***' && git config --local --show-origin --name-only --get-regexp remote.origin.url"
+2024-09-23T15:07:35.8565819Z Entering 'models/demos/t3000/llama2_70b/reference/llama'
+2024-09-23T15:07:35.8617169Z file:/home/ubuntu/actions-runner/_work/tt-metal/tt-metal/.git/modules/models/demos/t3000/llama2_70b/reference/llama/config	remote.origin.url
+2024-09-23T15:07:35.8635010Z Entering 'tt_metal/third_party/lfs'
+2024-09-23T15:07:35.8672069Z file:/home/ubuntu/actions-runner/_work/tt-metal/tt-metal/.git/modules/third_party/lfs/config	remote.origin.url
+2024-09-23T15:07:35.8694505Z Entering 'tt_metal/third_party/pybind11'
+2024-09-23T15:07:35.8736935Z file:/home/ubuntu/actions-runner/_work/tt-metal/tt-metal/.git/modules/third_party/pybind11/config	remote.origin.url
+2024-09-23T15:07:35.8758673Z Entering 'tt_metal/third_party/sfpi'
+2024-09-23T15:07:35.8804785Z file:/home/ubuntu/actions-runner/_work/tt-metal/tt-metal/.git/modules/src/ckernels/sfpi/config	remote.origin.url
+2024-09-23T15:07:35.8827395Z Entering 'tt_metal/third_party/taskflow'
+2024-09-23T15:07:35.8871697Z file:/home/ubuntu/actions-runner/_work/tt-metal/tt-metal/.git/modules/tt_metal/third_party/taskflow/config	remote.origin.url
+2024-09-23T15:07:35.8897611Z Entering 'tt_metal/third_party/tracy'
+2024-09-23T15:07:35.8942658Z file:/home/ubuntu/actions-runner/_work/tt-metal/tt-metal/.git/modules/tt_metal/third_party/tracy/config	remote.origin.url
+2024-09-23T15:07:35.8964204Z Entering 'tt_metal/third_party/tt_llk_blackhole'
+2024-09-23T15:07:35.9008613Z file:/home/ubuntu/actions-runner/_work/tt-metal/tt-metal/.git/modules/tt_metal/third_party/tt_llk_blackhole/config	remote.origin.url
+2024-09-23T15:07:35.9030682Z Entering 'tt_metal/third_party/tt_llk_grayskull'
+2024-09-23T15:07:35.9076864Z file:/home/ubuntu/actions-runner/_work/tt-metal/tt-metal/.git/modules/tt_metal/third_party/tt_llk_grayskull/config	remote.origin.url
+2024-09-23T15:07:35.9098011Z Entering 'tt_metal/third_party/tt_llk_wormhole_b0'
+2024-09-23T15:07:35.9142089Z file:/home/ubuntu/actions-runner/_work/tt-metal/tt-metal/.git/modules/tt_metal/third_party/tt_llk_wormhole_b0/config	remote.origin.url
+2024-09-23T15:07:35.9165448Z Entering 'tt_metal/third_party/umd'
+2024-09-23T15:07:35.9208186Z file:/home/ubuntu/actions-runner/_work/tt-metal/tt-metal/.git/modules/tt_metal/third_party/umd/config	remote.origin.url
+2024-09-23T15:07:35.9225450Z Entering 'tt_metal/third_party/umd/third_party/fmt'
+2024-09-23T15:07:35.9267601Z file:/home/ubuntu/actions-runner/_work/tt-metal/tt-metal/.git/modules/tt_metal/third_party/umd/modules/third_party/fmt/config	remote.origin.url
+2024-09-23T15:07:35.9390817Z [command]/usr/bin/git submodule foreach --recursive git config --local --add 'url.https://github.com/.insteadOf' 'git@github.com:'
+2024-09-23T15:07:35.9663141Z Entering 'models/demos/t3000/llama2_70b/reference/llama'
+2024-09-23T15:07:35.9710332Z Entering 'tt_metal/third_party/lfs'
+2024-09-23T15:07:35.9754851Z Entering 'tt_metal/third_party/pybind11'
+2024-09-23T15:07:35.9797735Z Entering 'tt_metal/third_party/sfpi'
+2024-09-23T15:07:35.9843406Z Entering 'tt_metal/third_party/taskflow'
+2024-09-23T15:07:35.9887058Z Entering 'tt_metal/third_party/tracy'
+2024-09-23T15:07:35.9931107Z Entering 'tt_metal/third_party/tt_llk_blackhole'
+2024-09-23T15:07:35.9974083Z Entering 'tt_metal/third_party/tt_llk_grayskull'
+2024-09-23T15:07:36.0016572Z Entering 'tt_metal/third_party/tt_llk_wormhole_b0'
+2024-09-23T15:07:36.0060774Z Entering 'tt_metal/third_party/umd'
+2024-09-23T15:07:36.0101382Z Entering 'tt_metal/third_party/umd/third_party/fmt'
+2024-09-23T15:07:36.0166304Z [command]/usr/bin/git submodule foreach --recursive git config --local --add 'url.https://github.com/.insteadOf' 'org-64161552@github.com:'
+2024-09-23T15:07:36.0423868Z Entering 'models/demos/t3000/llama2_70b/reference/llama'
+2024-09-23T15:07:36.0460648Z Entering 'tt_metal/third_party/lfs'
+2024-09-23T15:07:36.0499325Z Entering 'tt_metal/third_party/pybind11'
+2024-09-23T15:07:36.0536038Z Entering 'tt_metal/third_party/sfpi'
+2024-09-23T15:07:36.0587333Z Entering 'tt_metal/third_party/taskflow'
+2024-09-23T15:07:36.0634451Z Entering 'tt_metal/third_party/tracy'
+2024-09-23T15:07:36.0673631Z Entering 'tt_metal/third_party/tt_llk_blackhole'
+2024-09-23T15:07:36.0710225Z Entering 'tt_metal/third_party/tt_llk_grayskull'
+2024-09-23T15:07:36.0750567Z Entering 'tt_metal/third_party/tt_llk_wormhole_b0'
+2024-09-23T15:07:36.0785799Z Entering 'tt_metal/third_party/umd'
+2024-09-23T15:07:36.0824124Z Entering 'tt_metal/third_party/umd/third_party/fmt'
+2024-09-23T15:07:36.0877894Z ##[endgroup]
+2024-09-23T15:07:36.0928077Z [command]/usr/bin/git log -1 --format='%H'
+2024-09-23T15:07:36.0955940Z '64249512152ed52c6df7d6adf6bb1a59b96db81c'
+2024-09-23T15:07:36.1157912Z ##[group]Run git clean -xffd
+2024-09-23T15:07:36.1158432Z [36;1mgit clean -xffd[0m
+2024-09-23T15:07:36.1177184Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2024-09-23T15:07:36.1178076Z env:
+2024-09-23T15:07:36.1178459Z   LOGURU_LEVEL: INFO
+2024-09-23T15:07:36.1179132Z   LD_LIBRARY_PATH: /home/ubuntu/actions-runner/_work/tt-metal/tt-metal/build/lib
+2024-09-23T15:07:36.1180323Z ##[endgroup]
+2024-09-23T15:07:36.1454175Z ##[group]Run git submodule foreach 'git clean -xffd'
+2024-09-23T15:07:36.1454931Z [36;1mgit submodule foreach 'git clean -xffd'[0m
+2024-09-23T15:07:36.1475387Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2024-09-23T15:07:36.1476041Z env:
+2024-09-23T15:07:36.1476442Z   LOGURU_LEVEL: INFO
+2024-09-23T15:07:36.1477111Z   LD_LIBRARY_PATH: /home/ubuntu/actions-runner/_work/tt-metal/tt-metal/build/lib
+2024-09-23T15:07:36.1477871Z ##[endgroup]
+2024-09-23T15:07:36.1776545Z Entering 'models/demos/t3000/llama2_70b/reference/llama'
+2024-09-23T15:07:36.1797815Z Entering 'tt_metal/third_party/lfs'
+2024-09-23T15:07:36.1823677Z Entering 'tt_metal/third_party/pybind11'
+2024-09-23T15:07:36.1849070Z Entering 'tt_metal/third_party/sfpi'
+2024-09-23T15:07:36.1917173Z Entering 'tt_metal/third_party/taskflow'
+2024-09-23T15:07:36.1998394Z Entering 'tt_metal/third_party/tracy'
+2024-09-23T15:07:36.2026650Z Entering 'tt_metal/third_party/tt_llk_blackhole'
+2024-09-23T15:07:36.2049751Z Entering 'tt_metal/third_party/tt_llk_grayskull'
+2024-09-23T15:07:36.2073665Z Entering 'tt_metal/third_party/tt_llk_wormhole_b0'
+2024-09-23T15:07:36.2094852Z Entering 'tt_metal/third_party/umd'
+2024-09-23T15:07:36.2172504Z ##[group]Run git submodule foreach 'git lfs fetch && git lfs pull'
+2024-09-23T15:07:36.2173401Z [36;1mgit submodule foreach 'git lfs fetch && git lfs pull'[0m
+2024-09-23T15:07:36.2195736Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2024-09-23T15:07:36.2196380Z env:
+2024-09-23T15:07:36.2196760Z   LOGURU_LEVEL: INFO
+2024-09-23T15:07:36.2197435Z   LD_LIBRARY_PATH: /home/ubuntu/actions-runner/_work/tt-metal/tt-metal/build/lib
+2024-09-23T15:07:36.2198204Z ##[endgroup]
+2024-09-23T15:07:36.2489728Z Entering 'models/demos/t3000/llama2_70b/reference/llama'
+2024-09-23T15:07:36.2603767Z fetch: Fetching reference HEAD
+2024-09-23T15:07:36.2839718Z Entering 'tt_metal/third_party/lfs'
+2024-09-23T15:07:36.2955212Z fetch: Fetching reference HEAD
+2024-09-23T15:07:36.3271164Z Entering 'tt_metal/third_party/pybind11'
+2024-09-23T15:07:36.3386771Z fetch: Fetching reference HEAD
+2024-09-23T15:07:36.3765568Z Entering 'tt_metal/third_party/sfpi'
+2024-09-23T15:07:36.3871024Z fetch: Fetching reference HEAD
+2024-09-23T15:07:36.5323388Z Entering 'tt_metal/third_party/taskflow'
+2024-09-23T15:07:36.5450438Z fetch: Fetching reference HEAD
+2024-09-23T15:07:36.8335042Z Entering 'tt_metal/third_party/tracy'
+2024-09-23T15:07:36.8460966Z fetch: Fetching reference HEAD
+2024-09-23T15:07:36.9057632Z Entering 'tt_metal/third_party/tt_llk_blackhole'
+2024-09-23T15:07:36.9172687Z fetch: Fetching reference HEAD
+2024-09-23T15:07:36.9484182Z Entering 'tt_metal/third_party/tt_llk_grayskull'
+2024-09-23T15:07:36.9598731Z fetch: Fetching reference HEAD
+2024-09-23T15:07:36.9857885Z Entering 'tt_metal/third_party/tt_llk_wormhole_b0'
+2024-09-23T15:07:36.9958860Z fetch: Fetching reference HEAD
+2024-09-23T15:07:37.0230807Z Entering 'tt_metal/third_party/umd'
+2024-09-23T15:07:37.0346958Z fetch: Fetching reference HEAD
+2024-09-23T15:07:37.0739026Z ##[group]Run actions/download-artifact@v4
+2024-09-23T15:07:37.0739616Z with:
+2024-09-23T15:07:37.0740300Z   name: eager-dist-ubuntu-20.04-wormhole_b0
+2024-09-23T15:07:37.0740880Z   merge-multiple: false
+2024-09-23T15:07:37.0741377Z   repository: tenstorrent/tt-metal
+2024-09-23T15:07:37.0741907Z   run-id: 10996802864
+2024-09-23T15:07:37.0742336Z env:
+2024-09-23T15:07:37.0742704Z   LOGURU_LEVEL: INFO
+2024-09-23T15:07:37.0743405Z   LD_LIBRARY_PATH: /home/ubuntu/actions-runner/_work/tt-metal/tt-metal/build/lib
+2024-09-23T15:07:37.0744176Z ##[endgroup]
+2024-09-23T15:07:37.3406815Z Downloading single artifact
+2024-09-23T15:07:37.5860644Z Preparing to download the following artifacts:
+2024-09-23T15:07:37.5862013Z - eager-dist-ubuntu-20.04-wormhole_b0 (ID: 1966873301, Size: 513860560)
+2024-09-23T15:07:37.7272088Z Redirecting to blob download url: https://productionresultssa14.blob.core.windows.net/actions-results/fa6d7664-dfc8-4e0a-ad1d-f35b97bc1b81/workflow-job-run-859c0d3c-fd64-581c-fe3c-861d137cb35a/artifacts/c779ac1f9e77fe53c03e8da7e3330fd4da5d41ee546476beea6fd41b88dd0784.zip
+2024-09-23T15:07:37.7274667Z Starting download of artifact to: /home/ubuntu/actions-runner/_work/tt-metal/tt-metal
+2024-09-23T15:07:38.0021291Z (node:3092567) [DEP0005] DeprecationWarning: Buffer() is deprecated due to security and usability issues. Please use the Buffer.alloc(), Buffer.allocUnsafe(), or Buffer.from() methods instead.
+2024-09-23T15:07:38.0024933Z (Use `node --trace-deprecation ...` to show where the warning was created)
+2024-09-23T15:07:56.8619226Z Artifact download completed successfully.
+2024-09-23T15:07:56.8620187Z Total of 1 artifact(s) downloaded
+2024-09-23T15:07:56.8632433Z Download artifact has finished successfully
+2024-09-23T15:07:56.9044222Z Prepare all required actions
+2024-09-23T15:07:56.9044847Z Getting action download info
+2024-09-23T15:07:57.0796418Z Download action repository 'docker/login-action@v3' (SHA:9780b0c442fbb1117ed29e0efdff1e18412f7567)
+2024-09-23T15:07:57.8275038Z Download action repository 'addnab/docker-run-action@v3' (SHA:4f65fabd2431ebc8d299f8e5a018d79a769ae185)
+2024-09-23T15:07:58.1755567Z ##[group]Run ./.github/actions/docker-run
+2024-09-23T15:07:58.1756116Z with:
+2024-09-23T15:07:58.1756561Z   docker_username: VirdhatchaniKN
+2024-09-23T15:07:58.1757575Z   docker_password: ***
+2024-09-23T15:07:58.1758052Z   docker_image_arch: wormhole_b0
+2024-09-23T15:07:58.1758968Z   run_args: WHEEL_FILENAME=$(ls -1 *.whl)
+pip3 install --user $WHEEL_FILENAME
+./tests/scripts/run_ttnn_examples.sh
+
+2024-09-23T15:07:58.1759944Z   docker_image: tt-metalium/ubuntu-20.04-amd64
+2024-09-23T15:07:58.1760722Z   device: -v /dev/hugepages-1G:/dev/hugepages-1G
+--device /dev/tenstorrent
+
+2024-09-23T15:07:58.1761430Z env:
+2024-09-23T15:07:58.1761849Z   LOGURU_LEVEL: INFO
+2024-09-23T15:07:58.1762543Z   LD_LIBRARY_PATH: /home/ubuntu/actions-runner/_work/tt-metal/tt-metal/build/lib
+2024-09-23T15:07:58.1763341Z ##[endgroup]
+2024-09-23T15:07:58.1868215Z ##[group]Build container for action use: '/home/ubuntu/actions-runner/_work/_actions/addnab/docker-run-action/v3/Dockerfile'.
+2024-09-23T15:07:58.1921486Z ##[command]/usr/bin/docker build -t d065f5:797cf0cf5f814f368b2f141c3be80509 -f "/home/ubuntu/actions-runner/_work/_actions/addnab/docker-run-action/v3/Dockerfile" "/home/ubuntu/actions-runner/_work/_actions/addnab/docker-run-action/v3"
+2024-09-23T15:07:58.8383712Z #0 building with "default" instance using docker driver
+2024-09-23T15:07:58.8384735Z 
+2024-09-23T15:07:58.8386865Z #1 [internal] load build definition from Dockerfile
+2024-09-23T15:07:58.8387653Z #1 transferring dockerfile: 139B done
+2024-09-23T15:07:58.8388228Z #1 DONE 0.0s
+2024-09-23T15:07:58.8388497Z 
+2024-09-23T15:07:58.8388897Z #2 [internal] load metadata for docker.io/library/docker:20.10
+2024-09-23T15:07:59.0663729Z #2 DONE 0.4s
+2024-09-23T15:07:59.1494594Z 
+2024-09-23T15:07:59.1495202Z #3 [internal] load .dockerignore
+2024-09-23T15:07:59.1495814Z #3 transferring context: 2B done
+2024-09-23T15:07:59.1496343Z #3 DONE 0.0s
+2024-09-23T15:07:59.1496625Z 
+2024-09-23T15:07:59.1497336Z #4 [1/3] FROM docker.io/library/docker:20.10@sha256:2967f0819c84dd589ed0a023b9d25dcfe7a3c123d5bf784ffbb77edf55335f0c
+2024-09-23T15:07:59.1498374Z #4 DONE 0.0s
+2024-09-23T15:07:59.1498625Z 
+2024-09-23T15:07:59.1498892Z #5 [internal] load build context
+2024-09-23T15:07:59.1499425Z #5 transferring context: 35B done
+2024-09-23T15:07:59.1500170Z #5 DONE 0.0s
+2024-09-23T15:07:59.1500589Z 
+2024-09-23T15:07:59.1500787Z #6 [2/3] RUN apk add bash
+2024-09-23T15:07:59.1501274Z #6 CACHED
+2024-09-23T15:07:59.1501497Z 
+2024-09-23T15:07:59.1501730Z #7 [3/3] COPY entrypoint.sh /entrypoint.sh
+2024-09-23T15:07:59.1502305Z #7 CACHED
+2024-09-23T15:07:59.1502557Z 
+2024-09-23T15:07:59.1502745Z #8 exporting to image
+2024-09-23T15:07:59.1503393Z #8 exporting layers done
+2024-09-23T15:07:59.1504747Z #8 writing image sha256:e30a6c700c8e906fa2055dfe2a092d5701586b83b0f9d963ca185de4cf820d0b done
+2024-09-23T15:07:59.1506037Z #8 naming to docker.io/library/d065f5:797cf0cf5f814f368b2f141c3be80509 done
+2024-09-23T15:07:59.1506815Z #8 DONE 0.0s
+2024-09-23T15:07:59.1594936Z ##[endgroup]
+2024-09-23T15:07:59.1678631Z ##[group]Run echo "IMAGE_TAG=latest" >> $GITHUB_ENV
+2024-09-23T15:07:59.1679395Z [36;1mecho "IMAGE_TAG=latest" >> $GITHUB_ENV[0m
+2024-09-23T15:07:59.1699802Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2024-09-23T15:07:59.1700788Z env:
+2024-09-23T15:07:59.1701204Z   LOGURU_LEVEL: INFO
+2024-09-23T15:07:59.1701917Z   LD_LIBRARY_PATH: /home/ubuntu/actions-runner/_work/tt-metal/tt-metal/build/lib
+2024-09-23T15:07:59.1702738Z ##[endgroup]
+2024-09-23T15:07:59.1808410Z ##[group]Run docker/login-action@v3
+2024-09-23T15:07:59.1808977Z with:
+2024-09-23T15:07:59.1809395Z   registry: https://ghcr.io
+2024-09-23T15:07:59.1810230Z   username: VirdhatchaniKN
+2024-09-23T15:07:59.1811138Z   password: ***
+2024-09-23T15:07:59.1811678Z   ecr: auto
+2024-09-23T15:07:59.1812095Z   logout: true
+2024-09-23T15:07:59.1812551Z env:
+2024-09-23T15:07:59.1812981Z   LOGURU_LEVEL: INFO
+2024-09-23T15:07:59.1813704Z   LD_LIBRARY_PATH: /home/ubuntu/actions-runner/_work/tt-metal/tt-metal/build/lib
+2024-09-23T15:07:59.1814482Z   IMAGE_TAG: latest
+2024-09-23T15:07:59.1814934Z ##[endgroup]
+2024-09-23T15:07:59.5532453Z Logging into https://ghcr.io...
+2024-09-23T15:08:00.0299431Z Login Succeeded!
+2024-09-23T15:08:00.0432311Z ##[group]Run docker pull ghcr.io/tenstorrent/tt-metal/tt-metalium/ubuntu-20.04-amd64:latest
+2024-09-23T15:08:00.0433791Z [36;1mdocker pull ghcr.io/tenstorrent/tt-metal/tt-metalium/ubuntu-20.04-amd64:latest[0m
+2024-09-23T15:08:00.0454726Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2024-09-23T15:08:00.0455368Z env:
+2024-09-23T15:08:00.0455752Z   LOGURU_LEVEL: INFO
+2024-09-23T15:08:00.0456454Z   LD_LIBRARY_PATH: /home/ubuntu/actions-runner/_work/tt-metal/tt-metal/build/lib
+2024-09-23T15:08:00.0457261Z   IMAGE_TAG: latest
+2024-09-23T15:08:00.0457700Z ##[endgroup]
+2024-09-23T15:08:00.5994959Z latest: Pulling from tenstorrent/tt-metal/tt-metalium/ubuntu-20.04-amd64
+2024-09-23T15:08:00.6030713Z Digest: sha256:f1bb114fd25f8a45bae4921b61bc9dad47128e9cd2ebd8e9cb9ae24e66e487b5
+2024-09-23T15:08:00.6032181Z Status: Image is up to date for ghcr.io/tenstorrent/tt-metal/tt-metalium/ubuntu-20.04-amd64:latest
+2024-09-23T15:08:00.6050052Z ghcr.io/tenstorrent/tt-metal/tt-metalium/ubuntu-20.04-amd64:latest
+2024-09-23T15:08:00.6157959Z ##[group]Run addnab/docker-run-action@v3
+2024-09-23T15:08:00.6158515Z with:
+2024-09-23T15:08:00.6158886Z   shell: bash
+2024-09-23T15:08:00.6159317Z   username: VirdhatchaniKN
+2024-09-23T15:08:00.6160034Z   password: ***
+2024-09-23T15:08:00.6160463Z   registry: ghcr.io
+2024-09-23T15:08:00.6161122Z   image: ghcr.io/tenstorrent/tt-metal/tt-metalium/ubuntu-20.04-amd64:latest
+2024-09-23T15:08:00.6162949Z   options: --rm
+-v /home/ubuntu/actions-runner/_work/tt-metal/tt-metal:/github_workspace:ro
+--net=host
+
+-e LOGURU_LEVEL=INFO
+-e PYTHONPATH=/usr/app
+-v /dev/hugepages-1G:/dev/hugepages-1G
+--device /dev/tenstorrent
+
+
+2024-09-23T15:08:00.6165314Z   run: cp -r /github_workspace/* /usr/app/
+cd /usr/app/
+rm -rf tt_metal tt_eager
+WHEEL_FILENAME=$(ls -1 *.whl)
+pip3 install --user $WHEEL_FILENAME
+./tests/scripts/run_ttnn_examples.sh
+
+
+2024-09-23T15:08:00.6166707Z env:
+2024-09-23T15:08:00.6167093Z   LOGURU_LEVEL: INFO
+2024-09-23T15:08:00.6167759Z   LD_LIBRARY_PATH: /home/ubuntu/actions-runner/_work/tt-metal/tt-metal/build/lib
+2024-09-23T15:08:00.6168521Z   IMAGE_TAG: latest
+2024-09-23T15:08:00.6168938Z ##[endgroup]
+2024-09-23T15:08:00.6458211Z ##[command]/usr/bin/docker run --name d065f5797cf0cf5f814f368b2f141c3be80509_da5532 --label d065f5 --workdir /github/workspace --rm -e "LOGURU_LEVEL" -e "LD_LIBRARY_PATH" -e "IMAGE_TAG" -e "INPUT_SHELL" -e "INPUT_USERNAME" -e "INPUT_PASSWORD" -e "INPUT_REGISTRY" -e "INPUT_IMAGE" -e "INPUT_OPTIONS" -e "INPUT_RUN" -e "INPUT_DOCKER_NETWORK" -e "HOME" -e "GITHUB_JOB" -e "GITHUB_REF" -e "GITHUB_SHA" -e "GITHUB_REPOSITORY" -e "GITHUB_REPOSITORY_OWNER" -e "GITHUB_REPOSITORY_OWNER_ID" -e "GITHUB_RUN_ID" -e "GITHUB_RUN_NUMBER" -e "GITHUB_RETENTION_DAYS" -e "GITHUB_RUN_ATTEMPT" -e "GITHUB_REPOSITORY_ID" -e "GITHUB_ACTOR_ID" -e "GITHUB_ACTOR" -e "GITHUB_TRIGGERING_ACTOR" -e "GITHUB_WORKFLOW" -e "GITHUB_HEAD_REF" -e "GITHUB_BASE_REF" -e "GITHUB_EVENT_NAME" -e "GITHUB_SERVER_URL" -e "GITHUB_API_URL" -e "GITHUB_GRAPHQL_URL" -e "GITHUB_REF_NAME" -e "GITHUB_REF_PROTECTED" -e "GITHUB_REF_TYPE" -e "GITHUB_WORKFLOW_REF" -e "GITHUB_WORKFLOW_SHA" -e "GITHUB_WORKSPACE" -e "GITHUB_EVENT_PATH" -e "GITHUB_PATH" -e "GITHUB_ENV" -e "GITHUB_STEP_SUMMARY" -e "GITHUB_STATE" -e "GITHUB_OUTPUT" -e "GITHUB_ACTION" -e "GITHUB_ACTION_REPOSITORY" -e "GITHUB_ACTION_REF" -e "GITHUB_ACTION_PATH" -e "RUNNER_OS" -e "RUNNER_ARCH" -e "RUNNER_NAME" -e "RUNNER_ENVIRONMENT" -e "RUNNER_TOOL_CACHE" -e "RUNNER_TEMP" -e "RUNNER_WORKSPACE" -e "ACTIONS_RUNTIME_URL" -e "ACTIONS_RUNTIME_TOKEN" -e "ACTIONS_CACHE_URL" -e "ACTIONS_ID_TOKEN_REQUEST_URL" -e "ACTIONS_ID_TOKEN_REQUEST_TOKEN" -e "ACTIONS_RESULTS_URL" -e GITHUB_ACTIONS=true -e CI=true -v "/var/run/docker.sock":"/var/run/docker.sock" -v "/home/ubuntu/actions-runner/_work/_temp/_github_home":"/github/home" -v "/home/ubuntu/actions-runner/_work/_temp/_github_workflow":"/github/workflow" -v "/home/ubuntu/actions-runner/_work/_temp/_runner_file_commands":"/github/file_commands" -v "/home/ubuntu/actions-runner/_work/tt-metal/tt-metal":"/github/workspace" d065f5:797cf0cf5f814f368b2f141c3be80509
+2024-09-23T15:08:01.6705121Z WARNING! Your password will be stored unencrypted in /github/home/.docker/config.json.
+2024-09-23T15:08:01.6706108Z Login Succeeded
+2024-09-23T15:08:01.6706700Z Configure a credential helper to remove this warning. See
+2024-09-23T15:08:01.6708076Z https://docs.docker.com/engine/reference/commandline/login/#credentials-store
+2024-09-23T15:08:01.6708714Z 
+2024-09-23T15:08:08.2265786Z Looking in indexes: https://pypi.org/simple, https://download.pytorch.org/whl/cpu
+2024-09-23T15:08:08.2717196Z Processing ./metal_libs-0.52.0rc31.dev6+wormhole.b0-cp38-cp38-linux_x86_64.whl
+2024-09-23T15:08:14.5563772Z Collecting ipywidgets==8.1.1
+2024-09-23T15:08:14.6064204Z   Downloading ipywidgets-8.1.1-py3-none-any.whl (139 kB)
+2024-09-23T15:08:15.6108509Z Collecting Pillow==10.3.0
+2024-09-23T15:08:15.6247186Z   Downloading pillow-10.3.0-cp38-cp38-manylinux_2_17_x86_64.manylinux2014_x86_64.whl (4.4 MB)
+2024-09-23T15:08:15.8129606Z Requirement already satisfied: pyyaml>=5.4 in /usr/local/lib/python3.8/dist-packages (from metal-libs==0.52.0rc31.dev6+wormhole.b0) (6.0.2)
+2024-09-23T15:08:16.0115909Z Collecting plotly==5.18.0
+2024-09-23T15:08:16.0257468Z   Downloading plotly-5.18.0-py3-none-any.whl (15.6 MB)
+2024-09-23T15:08:18.7708269Z Collecting matplotlib==3.7.1
+2024-09-23T15:08:18.7868856Z   Downloading matplotlib-3.7.1-cp38-cp38-manylinux_2_12_x86_64.manylinux2010_x86_64.whl (9.2 MB)
+2024-09-23T15:08:19.1154002Z Requirement already satisfied: networkx==3.1 in /usr/local/lib/python3.8/dist-packages (from metal-libs==0.52.0rc31.dev6+wormhole.b0) (3.1)
+2024-09-23T15:08:19.6439326Z Collecting jupyterlab==4.2.5
+2024-09-23T15:08:19.6629547Z   Downloading jupyterlab-4.2.5-py3-none-any.whl (11.6 MB)
+2024-09-23T15:08:20.3577922Z Collecting bokeh==3.1.1
+2024-09-23T15:08:20.3726239Z   Downloading bokeh-3.1.1-py3-none-any.whl (8.3 MB)
+2024-09-23T15:08:20.8149254Z Requirement already satisfied: pandas==2.0.3 in /usr/local/lib/python3.8/dist-packages (from metal-libs==0.52.0rc31.dev6+wormhole.b0) (2.0.3)
+2024-09-23T15:08:21.0521915Z Collecting graphviz==0.20.3
+2024-09-23T15:08:21.0638953Z   Downloading graphviz-0.20.3-py3-none-any.whl (47 kB)
+2024-09-23T15:08:21.4141731Z Collecting dash==2.15.0
+2024-09-23T15:08:21.4284793Z   Downloading dash-2.15.0-py3-none-any.whl (10.2 MB)
+2024-09-23T15:08:22.0740191Z Collecting seaborn==0.13.2
+2024-09-23T15:08:22.0854028Z   Downloading seaborn-0.13.2-py3-none-any.whl (294 kB)
+2024-09-23T15:08:22.1507021Z Requirement already satisfied: click==8.1.7 in /usr/local/lib/python3.8/dist-packages (from metal-libs==0.52.0rc31.dev6+wormhole.b0) (8.1.7)
+2024-09-23T15:08:22.1535952Z Requirement already satisfied: torch==2.2.1+cpu in /usr/local/lib/python3.8/dist-packages (from metal-libs==0.52.0rc31.dev6+wormhole.b0) (2.2.1+cpu)
+2024-09-23T15:08:22.3563613Z Collecting toolz==0.12.0
+2024-09-23T15:08:22.3673815Z   Downloading toolz-0.12.0-py3-none-any.whl (55 kB)
+2024-09-23T15:08:22.5134503Z Collecting loguru==0.6.0
+2024-09-23T15:08:22.5251613Z   Downloading loguru-0.6.0-py3-none-any.whl (58 kB)
+2024-09-23T15:08:22.5766058Z Requirement already satisfied: numpy<2,>=1.24.4 in /usr/local/lib/python3.8/dist-packages (from metal-libs==0.52.0rc31.dev6+wormhole.b0) (1.24.4)
+2024-09-23T15:08:22.5782592Z Requirement already satisfied: traitlets>=4.3.1 in /usr/local/lib/python3.8/dist-packages (from ipywidgets==8.1.1->metal-libs==0.52.0rc31.dev6+wormhole.b0) (5.14.3)
+2024-09-23T15:08:22.5871687Z Requirement already satisfied: ipython>=6.1.0 in /usr/local/lib/python3.8/dist-packages (from ipywidgets==8.1.1->metal-libs==0.52.0rc31.dev6+wormhole.b0) (8.12.3)
+2024-09-23T15:08:22.8145923Z Collecting widgetsnbextension~=4.0.9
+2024-09-23T15:08:22.8257330Z   Downloading widgetsnbextension-4.0.13-py3-none-any.whl (2.3 MB)
+2024-09-23T15:08:23.0743479Z Collecting jupyterlab-widgets~=3.0.9
+2024-09-23T15:08:23.0856724Z   Downloading jupyterlab_widgets-3.0.13-py3-none-any.whl (214 kB)
+2024-09-23T15:08:23.2296656Z Collecting comm>=0.1.3
+2024-09-23T15:08:23.2409818Z   Downloading comm-0.2.2-py3-none-any.whl (7.2 kB)
+2024-09-23T15:08:23.2754190Z Requirement already satisfied: packaging in /usr/local/lib/python3.8/dist-packages (from plotly==5.18.0->metal-libs==0.52.0rc31.dev6+wormhole.b0) (24.1)
+2024-09-23T15:08:23.3964109Z Collecting tenacity>=6.2.0
+2024-09-23T15:08:23.4106154Z   Downloading tenacity-9.0.0-py3-none-any.whl (28 kB)
+2024-09-23T15:08:23.4499381Z Requirement already satisfied: cycler>=0.10 in /usr/local/lib/python3.8/dist-packages (from matplotlib==3.7.1->metal-libs==0.52.0rc31.dev6+wormhole.b0) (0.12.1)
+2024-09-23T15:08:23.4560662Z Requirement already satisfied: contourpy>=1.0.1 in /usr/local/lib/python3.8/dist-packages (from matplotlib==3.7.1->metal-libs==0.52.0rc31.dev6+wormhole.b0) (1.1.1)
+2024-09-23T15:08:23.4718369Z Requirement already satisfied: pyparsing>=2.3.1 in /usr/local/lib/python3.8/dist-packages (from matplotlib==3.7.1->metal-libs==0.52.0rc31.dev6+wormhole.b0) (3.1.4)
+2024-09-23T15:08:23.4747514Z Requirement already satisfied: fonttools>=4.22.0 in /usr/local/lib/python3.8/dist-packages (from matplotlib==3.7.1->metal-libs==0.52.0rc31.dev6+wormhole.b0) (4.53.1)
+2024-09-23T15:08:23.5131022Z Requirement already satisfied: importlib-resources>=3.2.0; python_version < "3.10" in /usr/local/lib/python3.8/dist-packages (from matplotlib==3.7.1->metal-libs==0.52.0rc31.dev6+wormhole.b0) (6.4.5)
+2024-09-23T15:08:23.5278014Z Requirement already satisfied: kiwisolver>=1.0.1 in /usr/local/lib/python3.8/dist-packages (from matplotlib==3.7.1->metal-libs==0.52.0rc31.dev6+wormhole.b0) (1.4.7)
+2024-09-23T15:08:23.5296121Z Requirement already satisfied: python-dateutil>=2.7 in /usr/local/lib/python3.8/dist-packages (from matplotlib==3.7.1->metal-libs==0.52.0rc31.dev6+wormhole.b0) (2.9.0.post0)
+2024-09-23T15:08:23.7576659Z Collecting ipykernel>=6.5.0
+2024-09-23T15:08:23.7687009Z   Downloading ipykernel-6.29.5-py3-none-any.whl (117 kB)
+2024-09-23T15:08:23.9944987Z Collecting notebook-shim>=0.2
+2024-09-23T15:08:24.0058445Z   Downloading notebook_shim-0.2.4-py3-none-any.whl (13 kB)
+2024-09-23T15:08:24.1887386Z Collecting httpx>=0.25.0
+2024-09-23T15:08:24.2013375Z   Downloading httpx-0.27.2-py3-none-any.whl (76 kB)
+2024-09-23T15:08:24.2495478Z Requirement already satisfied: jinja2>=3.0.3 in /usr/local/lib/python3.8/dist-packages (from jupyterlab==4.2.5->metal-libs==0.52.0rc31.dev6+wormhole.b0) (3.1.4)
+2024-09-23T15:08:24.2533370Z Requirement already satisfied: tomli>=1.2.2; python_version < "3.11" in /usr/local/lib/python3.8/dist-packages (from jupyterlab==4.2.5->metal-libs==0.52.0rc31.dev6+wormhole.b0) (2.0.1)
+2024-09-23T15:08:24.2560640Z Requirement already satisfied: importlib-metadata>=4.8.3; python_version < "3.10" in /usr/local/lib/python3.8/dist-packages (from jupyterlab==4.2.5->metal-libs==0.52.0rc31.dev6+wormhole.b0) (8.5.0)
+2024-09-23T15:08:24.5567976Z Collecting jupyter-lsp>=2.0.0
+2024-09-23T15:08:24.5722733Z   Downloading jupyter_lsp-2.2.5-py3-none-any.whl (69 kB)
+2024-09-23T15:08:24.8254527Z Collecting jupyter-server<3,>=2.4.0
+2024-09-23T15:08:24.8382131Z   Downloading jupyter_server-2.14.2-py3-none-any.whl (383 kB)
+2024-09-23T15:08:25.0358717Z Collecting async-lru>=1.0.0
+2024-09-23T15:08:25.0476471Z   Downloading async_lru-2.0.4-py3-none-any.whl (6.1 kB)
+2024-09-23T15:08:25.0854532Z Requirement already satisfied: jupyter-core in /usr/local/lib/python3.8/dist-packages (from jupyterlab==4.2.5->metal-libs==0.52.0rc31.dev6+wormhole.b0) (5.7.2)
+2024-09-23T15:08:25.0966166Z Requirement already satisfied: setuptools>=40.1.0 in /usr/lib/python3/dist-packages (from jupyterlab==4.2.5->metal-libs==0.52.0rc31.dev6+wormhole.b0) (45.2.0)
+2024-09-23T15:08:25.6364784Z Collecting jupyterlab-server<3,>=2.27.1
+2024-09-23T15:08:25.6481832Z   Downloading jupyterlab_server-2.27.3-py3-none-any.whl (59 kB)
+2024-09-23T15:08:25.7130878Z Requirement already satisfied: tornado>=6.2.0 in /usr/local/lib/python3.8/dist-packages (from jupyterlab==4.2.5->metal-libs==0.52.0rc31.dev6+wormhole.b0) (6.4.1)
+2024-09-23T15:08:25.8279162Z Collecting xyzservices>=2021.09.1
+2024-09-23T15:08:25.8395046Z   Downloading xyzservices-2024.9.0-py3-none-any.whl (85 kB)
+2024-09-23T15:08:25.8791667Z Requirement already satisfied: pytz>=2020.1 in /usr/local/lib/python3.8/dist-packages (from pandas==2.0.3->metal-libs==0.52.0rc31.dev6+wormhole.b0) (2024.2)
+2024-09-23T15:08:25.8815203Z Requirement already satisfied: tzdata>=2022.1 in /usr/local/lib/python3.8/dist-packages (from pandas==2.0.3->metal-libs==0.52.0rc31.dev6+wormhole.b0) (2024.1)
+2024-09-23T15:08:25.8831891Z Requirement already satisfied: typing-extensions>=4.1.1 in /usr/local/lib/python3.8/dist-packages (from dash==2.15.0->metal-libs==0.52.0rc31.dev6+wormhole.b0) (4.12.2)
+2024-09-23T15:08:26.0228742Z Collecting Flask<3.1,>=1.0.4
+2024-09-23T15:08:26.0340276Z   Downloading flask-3.0.3-py3-none-any.whl (101 kB)
+2024-09-23T15:08:26.0822483Z Requirement already satisfied: requests in /usr/local/lib/python3.8/dist-packages (from dash==2.15.0->metal-libs==0.52.0rc31.dev6+wormhole.b0) (2.32.3)
+2024-09-23T15:08:26.2863529Z Collecting dash-core-components==2.0.0
+2024-09-23T15:08:26.2976421Z   Downloading dash_core_components-2.0.0-py3-none-any.whl (3.8 kB)
+2024-09-23T15:08:26.5070305Z Collecting Werkzeug<3.1
+2024-09-23T15:08:26.5181197Z   Downloading werkzeug-3.0.4-py3-none-any.whl (227 kB)
+2024-09-23T15:08:26.7018036Z Collecting dash-html-components==2.0.0
+2024-09-23T15:08:26.7139510Z   Downloading dash_html_components-2.0.0-py3-none-any.whl (4.1 kB)
+2024-09-23T15:08:26.8844075Z Collecting dash-table==5.0.0
+2024-09-23T15:08:26.8958228Z   Downloading dash_table-5.0.0-py3-none-any.whl (3.9 kB)
+2024-09-23T15:08:27.0288214Z Collecting retrying
+2024-09-23T15:08:27.0400479Z   Downloading retrying-1.3.4-py3-none-any.whl (11 kB)
+2024-09-23T15:08:27.2931886Z Collecting nest-asyncio
+2024-09-23T15:08:27.3043179Z   Downloading nest_asyncio-1.6.0-py3-none-any.whl (5.2 kB)
+2024-09-23T15:08:27.3377433Z Requirement already satisfied: filelock in /usr/local/lib/python3.8/dist-packages (from torch==2.2.1+cpu->metal-libs==0.52.0rc31.dev6+wormhole.b0) (3.16.0)
+2024-09-23T15:08:27.3500507Z Requirement already satisfied: sympy in /usr/local/lib/python3.8/dist-packages (from torch==2.2.1+cpu->metal-libs==0.52.0rc31.dev6+wormhole.b0) (1.13.2)
+2024-09-23T15:08:27.3541776Z Requirement already satisfied: fsspec in /usr/local/lib/python3.8/dist-packages (from torch==2.2.1+cpu->metal-libs==0.52.0rc31.dev6+wormhole.b0) (2023.9.2)
+2024-09-23T15:08:27.3930110Z Requirement already satisfied: pygments>=2.4.0 in /usr/local/lib/python3.8/dist-packages (from ipython>=6.1.0->ipywidgets==8.1.1->metal-libs==0.52.0rc31.dev6+wormhole.b0) (2.18.0)
+2024-09-23T15:08:27.3952191Z Requirement already satisfied: backcall in /usr/local/lib/python3.8/dist-packages (from ipython>=6.1.0->ipywidgets==8.1.1->metal-libs==0.52.0rc31.dev6+wormhole.b0) (0.2.0)
+2024-09-23T15:08:27.3964769Z Requirement already satisfied: decorator in /usr/local/lib/python3.8/dist-packages (from ipython>=6.1.0->ipywidgets==8.1.1->metal-libs==0.52.0rc31.dev6+wormhole.b0) (5.1.1)
+2024-09-23T15:08:27.3980142Z Requirement already satisfied: matplotlib-inline in /usr/local/lib/python3.8/dist-packages (from ipython>=6.1.0->ipywidgets==8.1.1->metal-libs==0.52.0rc31.dev6+wormhole.b0) (0.1.7)
+2024-09-23T15:08:27.4002827Z Requirement already satisfied: pickleshare in /usr/local/lib/python3.8/dist-packages (from ipython>=6.1.0->ipywidgets==8.1.1->metal-libs==0.52.0rc31.dev6+wormhole.b0) (0.7.5)
+2024-09-23T15:08:27.4021848Z Requirement already satisfied: stack-data in /usr/local/lib/python3.8/dist-packages (from ipython>=6.1.0->ipywidgets==8.1.1->metal-libs==0.52.0rc31.dev6+wormhole.b0) (0.6.3)
+2024-09-23T15:08:27.4090103Z Requirement already satisfied: jedi>=0.16 in /usr/local/lib/python3.8/dist-packages (from ipython>=6.1.0->ipywidgets==8.1.1->metal-libs==0.52.0rc31.dev6+wormhole.b0) (0.19.1)
+2024-09-23T15:08:27.4363123Z Requirement already satisfied: prompt-toolkit!=3.0.37,<3.1.0,>=3.0.30 in /usr/local/lib/python3.8/dist-packages (from ipython>=6.1.0->ipywidgets==8.1.1->metal-libs==0.52.0rc31.dev6+wormhole.b0) (3.0.47)
+2024-09-23T15:08:27.4390394Z Requirement already satisfied: pexpect>4.3; sys_platform != "win32" in /usr/local/lib/python3.8/dist-packages (from ipython>=6.1.0->ipywidgets==8.1.1->metal-libs==0.52.0rc31.dev6+wormhole.b0) (4.9.0)
+2024-09-23T15:08:27.4416005Z Requirement already satisfied: zipp>=3.1.0; python_version < "3.10" in /usr/local/lib/python3.8/dist-packages (from importlib-resources>=3.2.0; python_version < "3.10"->matplotlib==3.7.1->metal-libs==0.52.0rc31.dev6+wormhole.b0) (3.20.2)
+2024-09-23T15:08:27.4584085Z Requirement already satisfied: six>=1.5 in /usr/lib/python3/dist-packages (from python-dateutil>=2.7->matplotlib==3.7.1->metal-libs==0.52.0rc31.dev6+wormhole.b0) (1.14.0)
+2024-09-23T15:08:27.4595091Z Requirement already satisfied: psutil in /usr/local/lib/python3.8/dist-packages (from ipykernel>=6.5.0->jupyterlab==4.2.5->metal-libs==0.52.0rc31.dev6+wormhole.b0) (6.0.0)
+2024-09-23T15:08:27.4679873Z Requirement already satisfied: jupyter-client>=6.1.12 in /usr/local/lib/python3.8/dist-packages (from ipykernel>=6.5.0->jupyterlab==4.2.5->metal-libs==0.52.0rc31.dev6+wormhole.b0) (8.6.2)
+2024-09-23T15:08:28.0275841Z Collecting debugpy>=1.6.5
+2024-09-23T15:08:28.0438262Z   Downloading debugpy-1.8.5-cp38-cp38-manylinux_2_17_x86_64.manylinux2014_x86_64.whl (3.1 MB)
+2024-09-23T15:08:28.2094724Z Requirement already satisfied: pyzmq>=24 in /usr/local/lib/python3.8/dist-packages (from ipykernel>=6.5.0->jupyterlab==4.2.5->metal-libs==0.52.0rc31.dev6+wormhole.b0) (26.2.0)
+2024-09-23T15:08:28.2118816Z Requirement already satisfied: idna in /usr/lib/python3/dist-packages (from httpx>=0.25.0->jupyterlab==4.2.5->metal-libs==0.52.0rc31.dev6+wormhole.b0) (2.8)
+2024-09-23T15:08:28.3543480Z Collecting httpcore==1.*
+2024-09-23T15:08:28.3656220Z   Downloading httpcore-1.0.5-py3-none-any.whl (77 kB)
+2024-09-23T15:08:28.7179660Z Collecting anyio
+2024-09-23T15:08:28.7297717Z   Downloading anyio-4.5.0-py3-none-any.whl (89 kB)
+2024-09-23T15:08:28.7878298Z Requirement already satisfied: certifi in /usr/lib/python3/dist-packages (from httpx>=0.25.0->jupyterlab==4.2.5->metal-libs==0.52.0rc31.dev6+wormhole.b0) (2019.11.28)
+2024-09-23T15:08:28.9950004Z Collecting sniffio
+2024-09-23T15:08:29.0061642Z   Downloading sniffio-1.3.1-py3-none-any.whl (10 kB)
+2024-09-23T15:08:29.0405009Z Requirement already satisfied: MarkupSafe>=2.0 in /usr/local/lib/python3.8/dist-packages (from jinja2>=3.0.3->jupyterlab==4.2.5->metal-libs==0.52.0rc31.dev6+wormhole.b0) (2.1.5)
+2024-09-23T15:08:29.1483410Z Collecting send2trash>=1.8.2
+2024-09-23T15:08:29.1591731Z   Downloading Send2Trash-1.8.3-py3-none-any.whl (18 kB)
+2024-09-23T15:08:29.1998765Z Requirement already satisfied: nbconvert>=6.4.4 in /usr/local/lib/python3.8/dist-packages (from jupyter-server<3,>=2.4.0->jupyterlab==4.2.5->metal-libs==0.52.0rc31.dev6+wormhole.b0) (7.16.4)
+2024-09-23T15:08:29.4195001Z Collecting terminado>=0.8.3
+2024-09-23T15:08:29.4483044Z   Downloading terminado-0.18.1-py3-none-any.whl (14 kB)
+2024-09-23T15:08:29.6262840Z Collecting websocket-client>=1.7
+2024-09-23T15:08:29.6373316Z   Downloading websocket_client-1.8.0-py3-none-any.whl (58 kB)
+2024-09-23T15:08:29.8107021Z Collecting prometheus-client>=0.9
+2024-09-23T15:08:29.8219044Z   Downloading prometheus_client-0.21.0-py3-none-any.whl (54 kB)
+2024-09-23T15:08:29.9640763Z Collecting jupyter-server-terminals>=0.4.4
+2024-09-23T15:08:29.9753351Z   Downloading jupyter_server_terminals-0.5.3-py3-none-any.whl (13 kB)
+2024-09-23T15:08:30.1790164Z Collecting argon2-cffi>=21.1
+2024-09-23T15:08:30.1902775Z   Downloading argon2_cffi-23.1.0-py3-none-any.whl (15 kB)
+2024-09-23T15:08:30.2466440Z Requirement already satisfied: nbformat>=5.3.0 in /usr/local/lib/python3.8/dist-packages (from jupyter-server<3,>=2.4.0->jupyterlab==4.2.5->metal-libs==0.52.0rc31.dev6+wormhole.b0) (5.10.4)
+2024-09-23T15:08:30.3733440Z Collecting jupyter-events>=0.9.0
+2024-09-23T15:08:30.3854002Z   Downloading jupyter_events-0.10.0-py3-none-any.whl (18 kB)
+2024-09-23T15:08:30.5528113Z Collecting overrides>=5.0
+2024-09-23T15:08:30.5672956Z   Downloading overrides-7.7.0-py3-none-any.whl (17 kB)
+2024-09-23T15:08:30.6041765Z Requirement already satisfied: platformdirs>=2.5 in /usr/local/lib/python3.8/dist-packages (from jupyter-core->jupyterlab==4.2.5->metal-libs==0.52.0rc31.dev6+wormhole.b0) (3.11.0)
+2024-09-23T15:08:30.6140246Z Requirement already satisfied: jsonschema>=4.18.0 in /usr/local/lib/python3.8/dist-packages (from jupyterlab-server<3,>=2.27.1->jupyterlab==4.2.5->metal-libs==0.52.0rc31.dev6+wormhole.b0) (4.23.0)
+2024-09-23T15:08:30.6321000Z Requirement already satisfied: babel>=2.10 in /usr/local/lib/python3.8/dist-packages (from jupyterlab-server<3,>=2.27.1->jupyterlab==4.2.5->metal-libs==0.52.0rc31.dev6+wormhole.b0) (2.16.0)
+2024-09-23T15:08:30.7682124Z Collecting json5>=0.9.0
+2024-09-23T15:08:30.7794727Z   Downloading json5-0.9.25-py3-none-any.whl (30 kB)
+2024-09-23T15:08:30.9736587Z Collecting itsdangerous>=2.1.2
+2024-09-23T15:08:30.9852871Z   Downloading itsdangerous-2.2.0-py3-none-any.whl (16 kB)
+2024-09-23T15:08:31.1831605Z Collecting blinker>=1.6.2
+2024-09-23T15:08:31.1943108Z   Downloading blinker-1.8.2-py3-none-any.whl (9.5 kB)
+2024-09-23T15:08:31.2275147Z Requirement already satisfied: charset-normalizer<4,>=2 in /usr/local/lib/python3.8/dist-packages (from requests->dash==2.15.0->metal-libs==0.52.0rc31.dev6+wormhole.b0) (3.3.2)
+2024-09-23T15:08:31.2303836Z Requirement already satisfied: urllib3<3,>=1.21.1 in /usr/local/lib/python3.8/dist-packages (from requests->dash==2.15.0->metal-libs==0.52.0rc31.dev6+wormhole.b0) (2.2.3)
+2024-09-23T15:08:31.2373840Z Requirement already satisfied: mpmath<1.4,>=1.1.0 in /usr/local/lib/python3.8/dist-packages (from sympy->torch==2.2.1+cpu->metal-libs==0.52.0rc31.dev6+wormhole.b0) (1.3.0)
+2024-09-23T15:08:31.2452076Z Requirement already satisfied: pure-eval in /usr/local/lib/python3.8/dist-packages (from stack-data->ipython>=6.1.0->ipywidgets==8.1.1->metal-libs==0.52.0rc31.dev6+wormhole.b0) (0.2.3)
+2024-09-23T15:08:31.2474112Z Requirement already satisfied: executing>=1.2.0 in /usr/local/lib/python3.8/dist-packages (from stack-data->ipython>=6.1.0->ipywidgets==8.1.1->metal-libs==0.52.0rc31.dev6+wormhole.b0) (2.1.0)
+2024-09-23T15:08:31.2545567Z Requirement already satisfied: asttokens>=2.1.0 in /usr/local/lib/python3.8/dist-packages (from stack-data->ipython>=6.1.0->ipywidgets==8.1.1->metal-libs==0.52.0rc31.dev6+wormhole.b0) (2.4.1)
+2024-09-23T15:08:31.2639676Z Requirement already satisfied: parso<0.9.0,>=0.8.3 in /usr/local/lib/python3.8/dist-packages (from jedi>=0.16->ipython>=6.1.0->ipywidgets==8.1.1->metal-libs==0.52.0rc31.dev6+wormhole.b0) (0.8.4)
+2024-09-23T15:08:31.2695387Z Requirement already satisfied: wcwidth in /usr/local/lib/python3.8/dist-packages (from prompt-toolkit!=3.0.37,<3.1.0,>=3.0.30->ipython>=6.1.0->ipywidgets==8.1.1->metal-libs==0.52.0rc31.dev6+wormhole.b0) (0.2.13)
+2024-09-23T15:08:31.2723998Z Requirement already satisfied: ptyprocess>=0.5 in /usr/local/lib/python3.8/dist-packages (from pexpect>4.3; sys_platform != "win32"->ipython>=6.1.0->ipywidgets==8.1.1->metal-libs==0.52.0rc31.dev6+wormhole.b0) (0.7.0)
+2024-09-23T15:08:31.3744885Z Collecting h11<0.15,>=0.13
+2024-09-23T15:08:31.3857853Z   Downloading h11-0.14.0-py3-none-any.whl (58 kB)
+2024-09-23T15:08:31.4262861Z Requirement already satisfied: exceptiongroup>=1.0.2; python_version < "3.11" in /usr/local/lib/python3.8/dist-packages (from anyio->httpx>=0.25.0->jupyterlab==4.2.5->metal-libs==0.52.0rc31.dev6+wormhole.b0) (1.2.2)
+2024-09-23T15:08:31.4287942Z Requirement already satisfied: pandocfilters>=1.4.1 in /usr/local/lib/python3.8/dist-packages (from nbconvert>=6.4.4->jupyter-server<3,>=2.4.0->jupyterlab==4.2.5->metal-libs==0.52.0rc31.dev6+wormhole.b0) (1.5.1)
+2024-09-23T15:08:31.4304875Z Requirement already satisfied: defusedxml in /usr/local/lib/python3.8/dist-packages (from nbconvert>=6.4.4->jupyter-server<3,>=2.4.0->jupyterlab==4.2.5->metal-libs==0.52.0rc31.dev6+wormhole.b0) (0.7.1)
+2024-09-23T15:08:31.4332532Z Requirement already satisfied: jupyterlab-pygments in /usr/local/lib/python3.8/dist-packages (from nbconvert>=6.4.4->jupyter-server<3,>=2.4.0->jupyterlab==4.2.5->metal-libs==0.52.0rc31.dev6+wormhole.b0) (0.3.0)
+2024-09-23T15:08:31.4344788Z Requirement already satisfied: tinycss2 in /usr/local/lib/python3.8/dist-packages (from nbconvert>=6.4.4->jupyter-server<3,>=2.4.0->jupyterlab==4.2.5->metal-libs==0.52.0rc31.dev6+wormhole.b0) (1.3.0)
+2024-09-23T15:08:31.4393599Z Requirement already satisfied: beautifulsoup4 in /usr/local/lib/python3.8/dist-packages (from nbconvert>=6.4.4->jupyter-server<3,>=2.4.0->jupyterlab==4.2.5->metal-libs==0.52.0rc31.dev6+wormhole.b0) (4.12.3)
+2024-09-23T15:08:31.4450557Z Requirement already satisfied: mistune<4,>=2.0.3 in /usr/local/lib/python3.8/dist-packages (from nbconvert>=6.4.4->jupyter-server<3,>=2.4.0->jupyterlab==4.2.5->metal-libs==0.52.0rc31.dev6+wormhole.b0) (3.0.2)
+2024-09-23T15:08:31.4466591Z Requirement already satisfied: bleach!=5.0.0 in /usr/local/lib/python3.8/dist-packages (from nbconvert>=6.4.4->jupyter-server<3,>=2.4.0->jupyterlab==4.2.5->metal-libs==0.52.0rc31.dev6+wormhole.b0) (6.1.0)
+2024-09-23T15:08:31.4517686Z Requirement already satisfied: nbclient>=0.5.0 in /usr/local/lib/python3.8/dist-packages (from nbconvert>=6.4.4->jupyter-server<3,>=2.4.0->jupyterlab==4.2.5->metal-libs==0.52.0rc31.dev6+wormhole.b0) (0.10.0)
+2024-09-23T15:08:31.5776771Z Collecting argon2-cffi-bindings
+2024-09-23T15:08:31.5893049Z   Downloading argon2_cffi_bindings-21.2.0-cp36-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl (86 kB)
+2024-09-23T15:08:31.6289677Z Requirement already satisfied: fastjsonschema>=2.15 in /usr/local/lib/python3.8/dist-packages (from nbformat>=5.3.0->jupyter-server<3,>=2.4.0->jupyterlab==4.2.5->metal-libs==0.52.0rc31.dev6+wormhole.b0) (2.20.0)
+2024-09-23T15:08:31.7391220Z Collecting python-json-logger>=2.0.4
+2024-09-23T15:08:31.7506373Z   Downloading python_json_logger-2.0.7-py3-none-any.whl (8.1 kB)
+2024-09-23T15:08:31.7842368Z Requirement already satisfied: referencing in /usr/local/lib/python3.8/dist-packages (from jupyter-events>=0.9.0->jupyter-server<3,>=2.4.0->jupyterlab==4.2.5->metal-libs==0.52.0rc31.dev6+wormhole.b0) (0.35.1)
+2024-09-23T15:08:31.8832358Z Collecting rfc3339-validator
+2024-09-23T15:08:31.8944462Z   Downloading rfc3339_validator-0.1.4-py2.py3-none-any.whl (3.5 kB)
+2024-09-23T15:08:32.0205402Z Collecting rfc3986-validator>=0.1.1
+2024-09-23T15:08:32.0317370Z   Downloading rfc3986_validator-0.1.1-py2.py3-none-any.whl (4.2 kB)
+2024-09-23T15:08:32.0639487Z Requirement already satisfied: jsonschema-specifications>=2023.03.6 in /usr/local/lib/python3.8/dist-packages (from jsonschema>=4.18.0->jupyterlab-server<3,>=2.27.1->jupyterlab==4.2.5->metal-libs==0.52.0rc31.dev6+wormhole.b0) (2023.12.1)
+2024-09-23T15:08:32.0681900Z Requirement already satisfied: rpds-py>=0.7.1 in /usr/local/lib/python3.8/dist-packages (from jsonschema>=4.18.0->jupyterlab-server<3,>=2.27.1->jupyterlab==4.2.5->metal-libs==0.52.0rc31.dev6+wormhole.b0) (0.20.0)
+2024-09-23T15:08:32.0699686Z Requirement already satisfied: attrs>=22.2.0 in /usr/local/lib/python3.8/dist-packages (from jsonschema>=4.18.0->jupyterlab-server<3,>=2.27.1->jupyterlab==4.2.5->metal-libs==0.52.0rc31.dev6+wormhole.b0) (24.2.0)
+2024-09-23T15:08:32.1172118Z Requirement already satisfied: pkgutil-resolve-name>=1.3.10; python_version < "3.9" in /usr/local/lib/python3.8/dist-packages (from jsonschema>=4.18.0->jupyterlab-server<3,>=2.27.1->jupyterlab==4.2.5->metal-libs==0.52.0rc31.dev6+wormhole.b0) (1.3.10)
+2024-09-23T15:08:32.1187864Z Requirement already satisfied: webencodings>=0.4 in /usr/local/lib/python3.8/dist-packages (from tinycss2->nbconvert>=6.4.4->jupyter-server<3,>=2.4.0->jupyterlab==4.2.5->metal-libs==0.52.0rc31.dev6+wormhole.b0) (0.5.1)
+2024-09-23T15:08:32.1203293Z Requirement already satisfied: soupsieve>1.2 in /usr/local/lib/python3.8/dist-packages (from beautifulsoup4->nbconvert>=6.4.4->jupyter-server<3,>=2.4.0->jupyterlab==4.2.5->metal-libs==0.52.0rc31.dev6+wormhole.b0) (2.6)
+2024-09-23T15:08:32.1222558Z Requirement already satisfied: cffi>=1.0.1 in /usr/local/lib/python3.8/dist-packages (from argon2-cffi-bindings->argon2-cffi>=21.1->jupyter-server<3,>=2.4.0->jupyterlab==4.2.5->metal-libs==0.52.0rc31.dev6+wormhole.b0) (1.17.1)
+2024-09-23T15:08:32.1238339Z Requirement already satisfied: pycparser in /usr/local/lib/python3.8/dist-packages (from cffi>=1.0.1->argon2-cffi-bindings->argon2-cffi>=21.1->jupyter-server<3,>=2.4.0->jupyterlab==4.2.5->metal-libs==0.52.0rc31.dev6+wormhole.b0) (2.22)
+2024-09-23T15:08:34.2177202Z Installing collected packages: widgetsnbextension, jupyterlab-widgets, comm, ipywidgets, Pillow, tenacity, plotly, matplotlib, debugpy, nest-asyncio, ipykernel, send2trash, terminado, websocket-client, prometheus-client, jupyter-server-terminals, argon2-cffi-bindings, argon2-cffi, python-json-logger, rfc3339-validator, rfc3986-validator, jupyter-events, overrides, sniffio, anyio, jupyter-server, notebook-shim, h11, httpcore, httpx, jupyter-lsp, async-lru, json5, jupyterlab-server, jupyterlab, xyzservices, bokeh, graphviz, itsdangerous, blinker, Werkzeug, Flask, dash-core-components, dash-html-components, dash-table, retrying, dash, seaborn, toolz, loguru, metal-libs
+2024-09-23T15:08:46.8846178Z   WARNING: The script debugpy is installed in '/root/.local/bin' which is not on PATH.
+2024-09-23T15:08:46.8847879Z   Consider adding this directory to PATH or, if you prefer to suppress this warning, use --no-warn-script-location.
+2024-09-23T15:08:46.9904577Z   WARNING: The script send2trash is installed in '/root/.local/bin' which is not on PATH.
+2024-09-23T15:08:46.9906098Z   Consider adding this directory to PATH or, if you prefer to suppress this warning, use --no-warn-script-location.
+2024-09-23T15:08:47.0404940Z   WARNING: The script wsdump is installed in '/root/.local/bin' which is not on PATH.
+2024-09-23T15:08:47.0406509Z   Consider adding this directory to PATH or, if you prefer to suppress this warning, use --no-warn-script-location.
+2024-09-23T15:08:47.1384539Z   WARNING: The script jupyter-events is installed in '/root/.local/bin' which is not on PATH.
+2024-09-23T15:08:47.1386194Z   Consider adding this directory to PATH or, if you prefer to suppress this warning, use --no-warn-script-location.
+2024-09-23T15:08:47.3809703Z   WARNING: The script jupyter-server is installed in '/root/.local/bin' which is not on PATH.
+2024-09-23T15:08:47.3811202Z   Consider adding this directory to PATH or, if you prefer to suppress this warning, use --no-warn-script-location.
+2024-09-23T15:08:47.5466326Z   WARNING: The script httpx is installed in '/root/.local/bin' which is not on PATH.
+2024-09-23T15:08:47.5467980Z   Consider adding this directory to PATH or, if you prefer to suppress this warning, use --no-warn-script-location.
+2024-09-23T15:08:47.6244083Z   WARNING: The script pyjson5 is installed in '/root/.local/bin' which is not on PATH.
+2024-09-23T15:08:47.6245600Z   Consider adding this directory to PATH or, if you prefer to suppress this warning, use --no-warn-script-location.
+2024-09-23T15:08:48.2007412Z   WARNING: The scripts jlpm, jupyter-lab, jupyter-labextension and jupyter-labhub are installed in '/root/.local/bin' which is not on PATH.
+2024-09-23T15:08:48.2009352Z   Consider adding this directory to PATH or, if you prefer to suppress this warning, use --no-warn-script-location.
+2024-09-23T15:08:49.1629503Z   WARNING: The script bokeh is installed in '/root/.local/bin' which is not on PATH.
+2024-09-23T15:08:49.1631187Z   Consider adding this directory to PATH or, if you prefer to suppress this warning, use --no-warn-script-location.
+2024-09-23T15:08:49.4335240Z   WARNING: The script flask is installed in '/root/.local/bin' which is not on PATH.
+2024-09-23T15:08:49.4337245Z   Consider adding this directory to PATH or, if you prefer to suppress this warning, use --no-warn-script-location.
+2024-09-23T15:08:49.9498999Z   WARNING: The scripts dash-generate-components, dash-update-components and renderer are installed in '/root/.local/bin' which is not on PATH.
+2024-09-23T15:08:49.9501232Z   Consider adding this directory to PATH or, if you prefer to suppress this warning, use --no-warn-script-location.
+2024-09-23T15:09:00.6608276Z Successfully installed Flask-3.0.3 Pillow-10.3.0 Werkzeug-3.0.4 anyio-4.5.0 argon2-cffi-23.1.0 argon2-cffi-bindings-21.2.0 async-lru-2.0.4 blinker-1.8.2 bokeh-3.1.1 comm-0.2.2 dash-2.15.0 dash-core-components-2.0.0 dash-html-components-2.0.0 dash-table-5.0.0 debugpy-1.8.5 graphviz-0.20.3 h11-0.14.0 httpcore-1.0.5 httpx-0.27.2 ipykernel-6.29.5 ipywidgets-8.1.1 itsdangerous-2.2.0 json5-0.9.25 jupyter-events-0.10.0 jupyter-lsp-2.2.5 jupyter-server-2.14.2 jupyter-server-terminals-0.5.3 jupyterlab-4.2.5 jupyterlab-server-2.27.3 jupyterlab-widgets-3.0.13 loguru-0.6.0 matplotlib-3.7.1 metal-libs-0.52.0rc31.dev6+wormhole.b0 nest-asyncio-1.6.0 notebook-shim-0.2.4 overrides-7.7.0 plotly-5.18.0 prometheus-client-0.21.0 python-json-logger-2.0.7 retrying-1.3.4 rfc3339-validator-0.1.4 rfc3986-validator-0.1.1 seaborn-0.13.2 send2trash-1.8.3 sniffio-1.3.1 tenacity-9.0.0 terminado-0.18.1 toolz-0.12.0 websocket-client-1.8.0 widgetsnbextension-4.0.13 xyzservices-2024.9.0
+2024-09-23T15:09:01.7280262Z [Info] Running ttnn example: ttnn/examples/usage/convert_to_from_torch.py
+2024-09-23T15:09:03.5126490Z 2024-09-23 15:09:03.511 | WARNING  | ttnn.decorators:operation_decorator:768 - Should ttnn.pearson_correlation_coefficient be migrated to C++?
+2024-09-23T15:09:03.5128348Z 2024-09-23 15:09:03.512 | WARNING  | ttnn.decorators:operation_decorator:768 - Should ttnn.Conv1d be migrated to C++?
+2024-09-23T15:09:03.5157993Z 2024-09-23 15:09:03.514 | WARNING  | ttnn.decorators:operation_decorator:768 - Should ttnn.conv2d be migrated to C++?
+2024-09-23T15:09:03.5160414Z 2024-09-23 15:09:03.515 | WARNING  | ttnn.decorators:operation_decorator:768 - Should ttnn.reshape be migrated to C++?
+2024-09-23T15:09:03.5163263Z 2024-09-23 15:09:03.515 | WARNING  | ttnn.decorators:operation_decorator:768 - Should ttnn.unsqueeze_to_4D be migrated to C++?
+2024-09-23T15:09:03.5165155Z 2024-09-23 15:09:03.515 | WARNING  | ttnn.decorators:operation_decorator:768 - Should ttnn.from_torch be migrated to C++?
+2024-09-23T15:09:03.5167342Z 2024-09-23 15:09:03.515 | WARNING  | ttnn.decorators:operation_decorator:768 - Should ttnn.to_torch be migrated to C++?
+2024-09-23T15:09:03.5169025Z 2024-09-23 15:09:03.515 | WARNING  | ttnn.decorators:operation_decorator:768 - Should ttnn.to_device be migrated to C++?
+2024-09-23T15:09:03.5171689Z 2024-09-23 15:09:03.515 | WARNING  | ttnn.decorators:operation_decorator:768 - Should ttnn.from_device be migrated to C++?
+2024-09-23T15:09:03.5173465Z 2024-09-23 15:09:03.515 | WARNING  | ttnn.decorators:operation_decorator:768 - Should ttnn.allocate_tensor_on_device be migrated to C++?
+2024-09-23T15:09:03.5175266Z 2024-09-23 15:09:03.516 | WARNING  | ttnn.decorators:operation_decorator:768 - Should ttnn.copy_host_to_device_tensor be migrated to C++?
+2024-09-23T15:09:03.5177807Z 2024-09-23 15:09:03.516 | WARNING  | ttnn.decorators:operation_decorator:768 - Should ttnn.deallocate be migrated to C++?
+2024-09-23T15:09:03.5179396Z 2024-09-23 15:09:03.516 | WARNING  | ttnn.decorators:operation_decorator:768 - Should ttnn.reallocate be migrated to C++?
+2024-09-23T15:09:03.5181272Z 2024-09-23 15:09:03.516 | WARNING  | ttnn.decorators:operation_decorator:768 - Should ttnn.load_tensor be migrated to C++?
+2024-09-23T15:09:03.5182868Z 2024-09-23 15:09:03.516 | WARNING  | ttnn.decorators:operation_decorator:768 - Should ttnn.dump_tensor be migrated to C++?
+2024-09-23T15:09:03.5184516Z 2024-09-23 15:09:03.516 | WARNING  | ttnn.decorators:operation_decorator:768 - Should ttnn.as_tensor be migrated to C++?
+2024-09-23T15:09:03.5188160Z 2024-09-23 15:09:03.518 | WARNING  | ttnn.decorators:operation_decorator:768 - Should ttnn.avg_pool2d be migrated to C++?
+2024-09-23T15:09:03.5222500Z 2024-09-23 15:09:03.521 | WARNING  | ttnn.decorators:operation_decorator:768 - Should ttnn.conv2d be migrated to C++?
+2024-09-23T15:09:03.5224717Z 2024-09-23 15:09:03.521 | WARNING  | ttnn.decorators:operation_decorator:768 - Should ttnn.avg_pool2d be migrated to C++?
+2024-09-23T15:09:03.5226307Z 2024-09-23 15:09:03.521 | WARNING  | ttnn.decorators:operation_decorator:768 - Should ttnn.Conv1d be migrated to C++?
+2024-09-23T15:09:03.8531184Z [Info] Running ttnn example: ttnn/examples/usage/debugging_intermediate_tensors.py
+2024-09-23T15:09:05.0954437Z 2024-09-23 15:09:05.094 | WARNING  | ttnn.decorators:operation_decorator:768 - Should ttnn.pearson_correlation_coefficient be migrated to C++?
+2024-09-23T15:09:05.0956197Z 2024-09-23 15:09:05.094 | WARNING  | ttnn.decorators:operation_decorator:768 - Should ttnn.Conv1d be migrated to C++?
+2024-09-23T15:09:05.0982186Z 2024-09-23 15:09:05.097 | WARNING  | ttnn.decorators:operation_decorator:768 - Should ttnn.conv2d be migrated to C++?
+2024-09-23T15:09:05.0988371Z 2024-09-23 15:09:05.097 | WARNING  | ttnn.decorators:operation_decorator:768 - Should ttnn.reshape be migrated to C++?
+2024-09-23T15:09:05.0990022Z 2024-09-23 15:09:05.098 | WARNING  | ttnn.decorators:operation_decorator:768 - Should ttnn.unsqueeze_to_4D be migrated to C++?
+2024-09-23T15:09:05.0991627Z 2024-09-23 15:09:05.098 | WARNING  | ttnn.decorators:operation_decorator:768 - Should ttnn.from_torch be migrated to C++?
+2024-09-23T15:09:05.0993186Z 2024-09-23 15:09:05.098 | WARNING  | ttnn.decorators:operation_decorator:768 - Should ttnn.to_torch be migrated to C++?
+2024-09-23T15:09:05.0994734Z 2024-09-23 15:09:05.098 | WARNING  | ttnn.decorators:operation_decorator:768 - Should ttnn.to_device be migrated to C++?
+2024-09-23T15:09:05.0996313Z 2024-09-23 15:09:05.098 | WARNING  | ttnn.decorators:operation_decorator:768 - Should ttnn.from_device be migrated to C++?
+2024-09-23T15:09:05.0998116Z 2024-09-23 15:09:05.098 | WARNING  | ttnn.decorators:operation_decorator:768 - Should ttnn.allocate_tensor_on_device be migrated to C++?
+2024-09-23T15:09:05.0999890Z 2024-09-23 15:09:05.098 | WARNING  | ttnn.decorators:operation_decorator:768 - Should ttnn.copy_host_to_device_tensor be migrated to C++?
+2024-09-23T15:09:05.1001551Z 2024-09-23 15:09:05.098 | WARNING  | ttnn.decorators:operation_decorator:768 - Should ttnn.deallocate be migrated to C++?
+2024-09-23T15:09:05.1003147Z 2024-09-23 15:09:05.098 | WARNING  | ttnn.decorators:operation_decorator:768 - Should ttnn.reallocate be migrated to C++?
+2024-09-23T15:09:05.1004715Z 2024-09-23 15:09:05.098 | WARNING  | ttnn.decorators:operation_decorator:768 - Should ttnn.load_tensor be migrated to C++?
+2024-09-23T15:09:05.1006298Z 2024-09-23 15:09:05.098 | WARNING  | ttnn.decorators:operation_decorator:768 - Should ttnn.dump_tensor be migrated to C++?
+2024-09-23T15:09:05.1007843Z 2024-09-23 15:09:05.099 | WARNING  | ttnn.decorators:operation_decorator:768 - Should ttnn.as_tensor be migrated to C++?
+2024-09-23T15:09:05.1022608Z 2024-09-23 15:09:05.100 | WARNING  | ttnn.decorators:operation_decorator:768 - Should ttnn.avg_pool2d be migrated to C++?
+2024-09-23T15:09:05.1045182Z 2024-09-23 15:09:05.103 | WARNING  | ttnn.decorators:operation_decorator:768 - Should ttnn.conv2d be migrated to C++?
+2024-09-23T15:09:05.1046856Z 2024-09-23 15:09:05.103 | WARNING  | ttnn.decorators:operation_decorator:768 - Should ttnn.avg_pool2d be migrated to C++?
+2024-09-23T15:09:05.1048391Z 2024-09-23 15:09:05.104 | WARNING  | ttnn.decorators:operation_decorator:768 - Should ttnn.Conv1d be migrated to C++?
+2024-09-23T15:09:05.1178365Z [38;2;000;128;000m                 Device[0m | [1m[38;2;100;149;237mINFO    [0m | Opening user mode device driver
+2024-09-23T15:09:05.1616128Z 
+2024-09-23T15:09:05.1950608Z [32m2024-09-23 15:09:05.194[0m | [1m[38;2;100;149;237mINFO    [0m | [36mSiliconDriver  [0m - Detected 1 PCI device : [0]
+2024-09-23T15:09:05.2095438Z [32m2024-09-23 15:09:05.208[0m | [1m[38;2;255;165;000mWARNING [0m | [36mSiliconDriver  [0m - init_detect_tt_device_numanodes(): Could not determine NumaNodeSet for TT device (physical_device_id: 0 pci_bus_id: 0000:07:00.0)
+2024-09-23T15:09:05.2097986Z [32m2024-09-23 15:09:05.208[0m | [1m[38;2;255;165;000mWARNING [0m | [36mSiliconDriver  [0m - Could not find NumaNodeSet for TT Device (physical_device_id: 0 pci_bus_id: 0000:07:00.0)
+2024-09-23T15:09:05.2106083Z [32m2024-09-23 15:09:05.209[0m | [1m[38;2;255;165;000mWARNING [0m | [36mSiliconDriver  [0m - bind_area_memory_nodeset(): Unable to determine TT Device to NumaNode mapping for physical_device_id: 0. Skipping membind.
+2024-09-23T15:09:05.2126170Z [0;33m---- ttSiliconDevice::init_hugepage: bind_area_to_memory_nodeset() failed (physical_device_id: 0 ch: 0). Hugepage allocation is not on NumaNode matching TT Device. Side-Effect is decreased Device->Host perf (Issue #893).
+2024-09-23T15:09:05.2144564Z [0m[32m2024-09-23 15:09:05.213[0m | [1m[38;2;255;165;000mWARNING [0m | [36mSiliconDriver  [0m - bind_area_memory_nodeset(): Unable to determine TT Device to NumaNode mapping for physical_device_id: 0. Skipping membind.
+2024-09-23T15:09:05.2147427Z [0;33m---- ttSiliconDevice::init_hugepage: bind_area_to_memory_nodeset() failed (physical_device_id: 0 ch: 1). Hugepage allocation is not on NumaNode matching TT Device. Side-Effect is decreased Device->Host perf (Issue #893).
+2024-09-23T15:09:05.2251058Z [0m[32m2024-09-23 15:09:05.224[0m | [1m[38;2;100;149;237mINFO    [0m | [36mSiliconDriver  [0m - Software version 6.0.0, Ethernet FW version 6.9.0 (Device 0)
+2024-09-23T15:09:05.2256172Z [32m2024-09-23 15:09:05.225[0m | [1m[38;2;100;149;237mINFO    [0m | [36mSiliconDriver  [0m - Software version 6.0.0, Ethernet FW version 6.9.0 (Device 1)
+2024-09-23T15:09:05.2303701Z [38;2;000;128;000m                  Metal[0m | [1m[38;2;100;149;237mINFO    [0m | Initializing device 0. Program cache is NOT enabled
+2024-09-23T15:09:05.2305148Z [38;2;000;128;000m                  Metal[0m | [1m[38;2;100;149;237mINFO    [0m | AI CLK for device 0 is:   1000 MHz
+2024-09-23T15:09:06.5583911Z [38;2;000;128;000m                  Metal[0m | [1m[38;2;100;149;237mINFO    [0m | MMIO Device 0 : Tunnel 0 : Device 0
+2024-09-23T15:09:06.5585353Z [38;2;000;128;000m                  Metal[0m | [1m[38;2;100;149;237mINFO    [0m | MMIO Device 0 : Tunnel 0 : Device 1
+2024-09-23T15:09:07.0378183Z [38;2;000;128;000m                  Metal[0m | [1m[38;2;100;149;237mINFO    [0m | Closing device 0
+2024-09-23T15:09:07.0379603Z [38;2;000;128;000m                  Metal[0m | [1m[38;2;100;149;237mINFO    [0m | Disabling and clearing program cache on device 0
+2024-09-23T15:09:07.2060380Z [38;2;000;128;000m                 Device[0m | [1m[38;2;100;149;237mINFO    [0m | Closing user mode device drivers
+2024-09-23T15:09:07.3204520Z [Info] Running ttnn example: ttnn/examples/usage/falling_back_to_torch.py
+2024-09-23T15:09:08.5370642Z 2024-09-23 15:09:08.535 | WARNING  | ttnn.decorators:operation_decorator:768 - Should ttnn.pearson_correlation_coefficient be migrated to C++?
+2024-09-23T15:09:08.5373426Z 2024-09-23 15:09:08.536 | WARNING  | ttnn.decorators:operation_decorator:768 - Should ttnn.Conv1d be migrated to C++?
+2024-09-23T15:09:08.5396646Z 2024-09-23 15:09:08.538 | WARNING  | ttnn.decorators:operation_decorator:768 - Should ttnn.conv2d be migrated to C++?
+2024-09-23T15:09:08.5402961Z 2024-09-23 15:09:08.539 | WARNING  | ttnn.decorators:operation_decorator:768 - Should ttnn.reshape be migrated to C++?
+2024-09-23T15:09:08.5407361Z 2024-09-23 15:09:08.539 | WARNING  | ttnn.decorators:operation_decorator:768 - Should ttnn.unsqueeze_to_4D be migrated to C++?
+2024-09-23T15:09:08.5409199Z 2024-09-23 15:09:08.539 | WARNING  | ttnn.decorators:operation_decorator:768 - Should ttnn.from_torch be migrated to C++?
+2024-09-23T15:09:08.5411927Z 2024-09-23 15:09:08.539 | WARNING  | ttnn.decorators:operation_decorator:768 - Should ttnn.to_torch be migrated to C++?
+2024-09-23T15:09:08.5413873Z 2024-09-23 15:09:08.539 | WARNING  | ttnn.decorators:operation_decorator:768 - Should ttnn.to_device be migrated to C++?
+2024-09-23T15:09:08.5415526Z 2024-09-23 15:09:08.539 | WARNING  | ttnn.decorators:operation_decorator:768 - Should ttnn.from_device be migrated to C++?
+2024-09-23T15:09:08.5417242Z 2024-09-23 15:09:08.539 | WARNING  | ttnn.decorators:operation_decorator:768 - Should ttnn.allocate_tensor_on_device be migrated to C++?
+2024-09-23T15:09:08.5419039Z 2024-09-23 15:09:08.540 | WARNING  | ttnn.decorators:operation_decorator:768 - Should ttnn.copy_host_to_device_tensor be migrated to C++?
+2024-09-23T15:09:08.5421108Z 2024-09-23 15:09:08.540 | WARNING  | ttnn.decorators:operation_decorator:768 - Should ttnn.deallocate be migrated to C++?
+2024-09-23T15:09:08.5422821Z 2024-09-23 15:09:08.540 | WARNING  | ttnn.decorators:operation_decorator:768 - Should ttnn.reallocate be migrated to C++?
+2024-09-23T15:09:08.5424574Z 2024-09-23 15:09:08.540 | WARNING  | ttnn.decorators:operation_decorator:768 - Should ttnn.load_tensor be migrated to C++?
+2024-09-23T15:09:08.5427049Z 2024-09-23 15:09:08.540 | WARNING  | ttnn.decorators:operation_decorator:768 - Should ttnn.dump_tensor be migrated to C++?
+2024-09-23T15:09:08.5428770Z 2024-09-23 15:09:08.540 | WARNING  | ttnn.decorators:operation_decorator:768 - Should ttnn.as_tensor be migrated to C++?
+2024-09-23T15:09:08.5430361Z 2024-09-23 15:09:08.541 | WARNING  | ttnn.decorators:operation_decorator:768 - Should ttnn.avg_pool2d be migrated to C++?
+2024-09-23T15:09:08.5457819Z 2024-09-23 15:09:08.545 | WARNING  | ttnn.decorators:operation_decorator:768 - Should ttnn.conv2d be migrated to C++?
+2024-09-23T15:09:08.5459611Z 2024-09-23 15:09:08.545 | WARNING  | ttnn.decorators:operation_decorator:768 - Should ttnn.avg_pool2d be migrated to C++?
+2024-09-23T15:09:08.5462261Z 2024-09-23 15:09:08.545 | WARNING  | ttnn.decorators:operation_decorator:768 - Should ttnn.Conv1d be migrated to C++?
+2024-09-23T15:09:08.8360295Z [Info] Running ttnn example: ttnn/examples/usage/get_item.py
+2024-09-23T15:09:10.0843232Z 2024-09-23 15:09:10.083 | WARNING  | ttnn.decorators:operation_decorator:768 - Should ttnn.pearson_correlation_coefficient be migrated to C++?
+2024-09-23T15:09:10.0848239Z 2024-09-23 15:09:10.084 | WARNING  | ttnn.decorators:operation_decorator:768 - Should ttnn.Conv1d be migrated to C++?
+2024-09-23T15:09:10.0873402Z 2024-09-23 15:09:10.086 | WARNING  | ttnn.decorators:operation_decorator:768 - Should ttnn.conv2d be migrated to C++?
+2024-09-23T15:09:10.0878218Z 2024-09-23 15:09:10.086 | WARNING  | ttnn.decorators:operation_decorator:768 - Should ttnn.reshape be migrated to C++?
+2024-09-23T15:09:10.0881602Z 2024-09-23 15:09:10.087 | WARNING  | ttnn.decorators:operation_decorator:768 - Should ttnn.unsqueeze_to_4D be migrated to C++?
+2024-09-23T15:09:10.0884801Z 2024-09-23 15:09:10.087 | WARNING  | ttnn.decorators:operation_decorator:768 - Should ttnn.from_torch be migrated to C++?
+2024-09-23T15:09:10.0886821Z 2024-09-23 15:09:10.087 | WARNING  | ttnn.decorators:operation_decorator:768 - Should ttnn.to_torch be migrated to C++?
+2024-09-23T15:09:10.0888766Z 2024-09-23 15:09:10.087 | WARNING  | ttnn.decorators:operation_decorator:768 - Should ttnn.to_device be migrated to C++?
+2024-09-23T15:09:10.0890699Z 2024-09-23 15:09:10.087 | WARNING  | ttnn.decorators:operation_decorator:768 - Should ttnn.from_device be migrated to C++?
+2024-09-23T15:09:10.0892381Z 2024-09-23 15:09:10.087 | WARNING  | ttnn.decorators:operation_decorator:768 - Should ttnn.allocate_tensor_on_device be migrated to C++?
+2024-09-23T15:09:10.0894138Z 2024-09-23 15:09:10.087 | WARNING  | ttnn.decorators:operation_decorator:768 - Should ttnn.copy_host_to_device_tensor be migrated to C++?
+2024-09-23T15:09:10.0895809Z 2024-09-23 15:09:10.087 | WARNING  | ttnn.decorators:operation_decorator:768 - Should ttnn.deallocate be migrated to C++?
+2024-09-23T15:09:10.0897405Z 2024-09-23 15:09:10.087 | WARNING  | ttnn.decorators:operation_decorator:768 - Should ttnn.reallocate be migrated to C++?
+2024-09-23T15:09:10.0899195Z 2024-09-23 15:09:10.088 | WARNING  | ttnn.decorators:operation_decorator:768 - Should ttnn.load_tensor be migrated to C++?
+2024-09-23T15:09:10.0901369Z 2024-09-23 15:09:10.088 | WARNING  | ttnn.decorators:operation_decorator:768 - Should ttnn.dump_tensor be migrated to C++?
+2024-09-23T15:09:10.0903382Z 2024-09-23 15:09:10.088 | WARNING  | ttnn.decorators:operation_decorator:768 - Should ttnn.as_tensor be migrated to C++?
+2024-09-23T15:09:10.0904998Z 2024-09-23 15:09:10.089 | WARNING  | ttnn.decorators:operation_decorator:768 - Should ttnn.avg_pool2d be migrated to C++?
+2024-09-23T15:09:10.0934214Z 2024-09-23 15:09:10.092 | WARNING  | ttnn.decorators:operation_decorator:768 - Should ttnn.conv2d be migrated to C++?
+2024-09-23T15:09:10.0936280Z 2024-09-23 15:09:10.092 | WARNING  | ttnn.decorators:operation_decorator:768 - Should ttnn.avg_pool2d be migrated to C++?
+2024-09-23T15:09:10.0937975Z 2024-09-23 15:09:10.093 | WARNING  | ttnn.decorators:operation_decorator:768 - Should ttnn.Conv1d be migrated to C++?
+2024-09-23T15:09:10.1068106Z [38;2;000;128;000m                 Device[0m | [1m[38;2;100;149;237mINFO    [0m | Opening user mode device driver
+2024-09-23T15:09:10.1461345Z 
+2024-09-23T15:09:10.1802259Z [32m2024-09-23 15:09:10.179[0m | [1m[38;2;100;149;237mINFO    [0m | [36mSiliconDriver  [0m - Detected 1 PCI device : [0]
+2024-09-23T15:09:10.1941518Z [32m2024-09-23 15:09:10.193[0m | [1m[38;2;255;165;000mWARNING [0m | [36mSiliconDriver  [0m - init_detect_tt_device_numanodes(): Could not determine NumaNodeSet for TT device (physical_device_id: 0 pci_bus_id: 0000:07:00.0)
+2024-09-23T15:09:10.1944375Z [32m2024-09-23 15:09:10.193[0m | [1m[38;2;255;165;000mWARNING [0m | [36mSiliconDriver  [0m - Could not find NumaNodeSet for TT Device (physical_device_id: 0 pci_bus_id: 0000:07:00.0)
+2024-09-23T15:09:10.1950851Z [32m2024-09-23 15:09:10.194[0m | [1m[38;2;255;165;000mWARNING [0m | [36mSiliconDriver  [0m - bind_area_memory_nodeset(): Unable to determine TT Device to NumaNode mapping for physical_device_id: 0. Skipping membind.
+2024-09-23T15:09:10.1953949Z [0;33m---- ttSiliconDevice::init_hugepage: bind_area_to_memory_nodeset() failed (physical_device_id: 0 ch: 0). Hugepage allocation is not on NumaNode matching TT Device. Side-Effect is decreased Device->Host perf (Issue #893).
+2024-09-23T15:09:10.1988258Z [0m[32m2024-09-23 15:09:10.198[0m | [1m[38;2;255;165;000mWARNING [0m | [36mSiliconDriver  [0m - bind_area_memory_nodeset(): Unable to determine TT Device to NumaNode mapping for physical_device_id: 0. Skipping membind.
+2024-09-23T15:09:10.1991036Z [0;33m---- ttSiliconDevice::init_hugepage: bind_area_to_memory_nodeset() failed (physical_device_id: 0 ch: 1). Hugepage allocation is not on NumaNode matching TT Device. Side-Effect is decreased Device->Host perf (Issue #893).
+2024-09-23T15:09:10.2095510Z [0m[32m2024-09-23 15:09:10.208[0m | [1m[38;2;100;149;237mINFO    [0m | [36mSiliconDriver  [0m - Software version 6.0.0, Ethernet FW version 6.9.0 (Device 0)
+2024-09-23T15:09:10.2100512Z [32m2024-09-23 15:09:10.209[0m | [1m[38;2;100;149;237mINFO    [0m | [36mSiliconDriver  [0m - Software version 6.0.0, Ethernet FW version 6.9.0 (Device 1)
+2024-09-23T15:09:10.2128430Z [38;2;000;128;000m                  Metal[0m | [1m[38;2;100;149;237mINFO    [0m | Initializing device 0. Program cache is NOT enabled
+2024-09-23T15:09:10.2130810Z [38;2;000;128;000m                  Metal[0m | [1m[38;2;100;149;237mINFO    [0m | AI CLK for device 0 is:   1000 MHz
+2024-09-23T15:09:11.5884896Z [38;2;000;128;000m                  Metal[0m | [1m[38;2;100;149;237mINFO    [0m | MMIO Device 0 : Tunnel 0 : Device 0
+2024-09-23T15:09:11.5886332Z [38;2;000;128;000m                  Metal[0m | [1m[38;2;100;149;237mINFO    [0m | MMIO Device 0 : Tunnel 0 : Device 1
+2024-09-23T15:09:11.9846458Z [38;2;000;128;000m                  Metal[0m | [1m[38;2;100;149;237mINFO    [0m | Closing device 0
+2024-09-23T15:09:11.9848467Z [38;2;000;128;000m                  Metal[0m | [1m[38;2;100;149;237mINFO    [0m | Disabling and clearing program cache on device 0
+2024-09-23T15:09:12.1530988Z [38;2;000;128;000m                 Device[0m | [1m[38;2;100;149;237mINFO    [0m | Closing user mode device drivers
+2024-09-23T15:09:12.2762704Z [Info] Running ttnn example: ttnn/examples/usage/graph_capture.py
+2024-09-23T15:09:13.5951035Z 2024-09-23 15:09:13.593 | WARNING  | ttnn.decorators:operation_decorator:768 - Should ttnn.pearson_correlation_coefficient be migrated to C++?
+2024-09-23T15:09:13.5953091Z 2024-09-23 15:09:13.594 | WARNING  | ttnn.decorators:operation_decorator:768 - Should ttnn.Conv1d be migrated to C++?
+2024-09-23T15:09:13.5978382Z 2024-09-23 15:09:13.597 | WARNING  | ttnn.decorators:operation_decorator:768 - Should ttnn.conv2d be migrated to C++?
+2024-09-23T15:09:13.5982275Z 2024-09-23 15:09:13.597 | WARNING  | ttnn.decorators:operation_decorator:768 - Should ttnn.reshape be migrated to C++?
+2024-09-23T15:09:13.5984263Z 2024-09-23 15:09:13.597 | WARNING  | ttnn.decorators:operation_decorator:768 - Should ttnn.unsqueeze_to_4D be migrated to C++?
+2024-09-23T15:09:13.5986321Z 2024-09-23 15:09:13.597 | WARNING  | ttnn.decorators:operation_decorator:768 - Should ttnn.from_torch be migrated to C++?
+2024-09-23T15:09:13.5988184Z 2024-09-23 15:09:13.597 | WARNING  | ttnn.decorators:operation_decorator:768 - Should ttnn.to_torch be migrated to C++?
+2024-09-23T15:09:13.5990005Z 2024-09-23 15:09:13.598 | WARNING  | ttnn.decorators:operation_decorator:768 - Should ttnn.to_device be migrated to C++?
+2024-09-23T15:09:13.5991960Z 2024-09-23 15:09:13.598 | WARNING  | ttnn.decorators:operation_decorator:768 - Should ttnn.from_device be migrated to C++?
+2024-09-23T15:09:13.5993959Z 2024-09-23 15:09:13.598 | WARNING  | ttnn.decorators:operation_decorator:768 - Should ttnn.allocate_tensor_on_device be migrated to C++?
+2024-09-23T15:09:13.5995875Z 2024-09-23 15:09:13.598 | WARNING  | ttnn.decorators:operation_decorator:768 - Should ttnn.copy_host_to_device_tensor be migrated to C++?
+2024-09-23T15:09:13.5997557Z 2024-09-23 15:09:13.598 | WARNING  | ttnn.decorators:operation_decorator:768 - Should ttnn.deallocate be migrated to C++?
+2024-09-23T15:09:13.5999158Z 2024-09-23 15:09:13.598 | WARNING  | ttnn.decorators:operation_decorator:768 - Should ttnn.reallocate be migrated to C++?
+2024-09-23T15:09:13.6000805Z 2024-09-23 15:09:13.598 | WARNING  | ttnn.decorators:operation_decorator:768 - Should ttnn.load_tensor be migrated to C++?
+2024-09-23T15:09:13.6002384Z 2024-09-23 15:09:13.598 | WARNING  | ttnn.decorators:operation_decorator:768 - Should ttnn.dump_tensor be migrated to C++?
+2024-09-23T15:09:13.6003979Z 2024-09-23 15:09:13.598 | WARNING  | ttnn.decorators:operation_decorator:768 - Should ttnn.as_tensor be migrated to C++?
+2024-09-23T15:09:13.6008994Z 2024-09-23 15:09:13.600 | WARNING  | ttnn.decorators:operation_decorator:768 - Should ttnn.avg_pool2d be migrated to C++?
+2024-09-23T15:09:13.6039924Z 2024-09-23 15:09:13.603 | WARNING  | ttnn.decorators:operation_decorator:768 - Should ttnn.conv2d be migrated to C++?
+2024-09-23T15:09:13.6041541Z 2024-09-23 15:09:13.603 | WARNING  | ttnn.decorators:operation_decorator:768 - Should ttnn.avg_pool2d be migrated to C++?
+2024-09-23T15:09:13.6043766Z 2024-09-23 15:09:13.603 | WARNING  | ttnn.decorators:operation_decorator:768 - Should ttnn.Conv1d be migrated to C++?
+2024-09-23T15:09:13.6182000Z [38;2;000;128;000m                 Device[0m | [1m[38;2;100;149;237mINFO    [0m | Opening user mode device driver
+2024-09-23T15:09:13.6594931Z 
+2024-09-23T15:09:13.6932764Z [32m2024-09-23 15:09:13.692[0m | [1m[38;2;100;149;237mINFO    [0m | [36mSiliconDriver  [0m - Detected 1 PCI device : [0]
+2024-09-23T15:09:13.7072880Z [32m2024-09-23 15:09:13.706[0m | [1m[38;2;255;165;000mWARNING [0m | [36mSiliconDriver  [0m - init_detect_tt_device_numanodes(): Could not determine NumaNodeSet for TT device (physical_device_id: 0 pci_bus_id: 0000:07:00.0)
+2024-09-23T15:09:13.7075682Z [32m2024-09-23 15:09:13.706[0m | [1m[38;2;255;165;000mWARNING [0m | [36mSiliconDriver  [0m - Could not find NumaNodeSet for TT Device (physical_device_id: 0 pci_bus_id: 0000:07:00.0)
+2024-09-23T15:09:13.7082459Z [32m2024-09-23 15:09:13.707[0m | [1m[38;2;255;165;000mWARNING [0m | [36mSiliconDriver  [0m - bind_area_memory_nodeset(): Unable to determine TT Device to NumaNode mapping for physical_device_id: 0. Skipping membind.
+2024-09-23T15:09:13.7085573Z [0;33m---- ttSiliconDevice::init_hugepage: bind_area_to_memory_nodeset() failed (physical_device_id: 0 ch: 0). Hugepage allocation is not on NumaNode matching TT Device. Side-Effect is decreased Device->Host perf (Issue #893).
+2024-09-23T15:09:13.7127499Z [0m[32m2024-09-23 15:09:13.711[0m | [1m[38;2;255;165;000mWARNING [0m | [36mSiliconDriver  [0m - bind_area_memory_nodeset(): Unable to determine TT Device to NumaNode mapping for physical_device_id: 0. Skipping membind.
+2024-09-23T15:09:13.7130345Z [0;33m---- ttSiliconDevice::init_hugepage: bind_area_to_memory_nodeset() failed (physical_device_id: 0 ch: 1). Hugepage allocation is not on NumaNode matching TT Device. Side-Effect is decreased Device->Host perf (Issue #893).
+2024-09-23T15:09:13.7227100Z [0m[32m2024-09-23 15:09:13.722[0m | [1m[38;2;100;149;237mINFO    [0m | [36mSiliconDriver  [0m - Software version 6.0.0, Ethernet FW version 6.9.0 (Device 0)
+2024-09-23T15:09:13.7231725Z [32m2024-09-23 15:09:13.722[0m | [1m[38;2;100;149;237mINFO    [0m | [36mSiliconDriver  [0m - Software version 6.0.0, Ethernet FW version 6.9.0 (Device 1)
+2024-09-23T15:09:13.7281323Z [38;2;000;128;000m                  Metal[0m | [1m[38;2;100;149;237mINFO    [0m | Initializing device 0. Program cache is NOT enabled
+2024-09-23T15:09:13.7282805Z [38;2;000;128;000m                  Metal[0m | [1m[38;2;100;149;237mINFO    [0m | AI CLK for device 0 is:   1000 MHz
+2024-09-23T15:09:15.1658057Z [38;2;000;128;000m                  Metal[0m | [1m[38;2;100;149;237mINFO    [0m | MMIO Device 0 : Tunnel 0 : Device 0
+2024-09-23T15:09:15.1659666Z [38;2;000;128;000m                  Metal[0m | [1m[38;2;100;149;237mINFO    [0m | MMIO Device 0 : Tunnel 0 : Device 1
+2024-09-23T15:09:15.1677111Z [38;2;000;128;000m                 Always[0m | [1m[38;2;100;149;237mINFO    [0m | Begin op: tt::tt_metal::detail::convert_python_tensor_to_tt_tensor
+2024-09-23T15:09:15.1679391Z [38;2;000;128;000m                 Always[0m | [1m[38;2;100;149;237mINFO    [0m | input any type name ignored: std::__1::reference_wrapper<pybind11::handle const>
+2024-09-23T15:09:15.1681951Z [38;2;000;128;000m                 Always[0m | [1m[38;2;100;149;237mINFO    [0m | input any type name ignored: std::__1::reference_wrapper<std::__1::optional<tt::tt_metal::DataType>>
+2024-09-23T15:09:15.1684232Z [38;2;000;128;000m                 Always[0m | [1m[38;2;100;149;237mINFO    [0m | input any type name ignored: std::__1::reference_wrapper<bool>
+2024-09-23T15:09:15.1686220Z [38;2;000;128;000m                 Always[0m | [1m[38;2;100;149;237mINFO    [0m | End op: tt::tt_metal::detail::convert_python_tensor_to_tt_tensor
+2024-09-23T15:09:15.1688231Z [38;2;000;128;000m                 Always[0m | [1m[38;2;100;149;237mINFO    [0m | Tensor doesn't have buffer, but storage is tt::tt_metal::BorrowedStorage
+2024-09-23T15:09:15.1690308Z [38;2;000;128;000m                 Always[0m | [1m[38;2;100;149;237mINFO    [0m | Begin op: ttnn::to_layout
+2024-09-23T15:09:15.1691949Z [38;2;000;128;000m                 Always[0m | [1m[38;2;100;149;237mINFO    [0m | Tensor doesn't have buffer, but storage is tt::tt_metal::BorrowedStorage
+2024-09-23T15:09:15.1693862Z [38;2;000;128;000m                 Always[0m | [1m[38;2;100;149;237mINFO    [0m | input any type name ignored: std::__1::reference_wrapper<tt::tt_metal::Layout const>
+2024-09-23T15:09:15.1696278Z [38;2;000;128;000m                 Always[0m | [1m[38;2;100;149;237mINFO    [0m | input any type name ignored: std::__1::reference_wrapper<std::__1::optional<tt::tt_metal::DataType> const>
+2024-09-23T15:09:15.1699224Z [38;2;000;128;000m                 Always[0m | [1m[38;2;100;149;237mINFO    [0m | input any type name ignored: std::__1::reference_wrapper<std::__1::optional<tt::tt_metal::MemoryConfig> const>
+2024-09-23T15:09:15.1702051Z [38;2;000;128;000m                 Always[0m | [1m[38;2;100;149;237mINFO    [0m | input any type name ignored: std::__1::reference_wrapper<tt::tt_metal::Device*>
+2024-09-23T15:09:15.1703662Z [38;2;000;128;000m                 Always[0m | [1m[38;2;100;149;237mINFO    [0m | Begin op: Tensor::reshape
+2024-09-23T15:09:15.1705314Z [38;2;000;128;000m                 Always[0m | [1m[38;2;100;149;237mINFO    [0m | Tensor doesn't have buffer, but storage is tt::tt_metal::BorrowedStorage
+2024-09-23T15:09:15.1707270Z [38;2;000;128;000m                 Always[0m | [1m[38;2;100;149;237mINFO    [0m | input any type name ignored: std::__1::reference_wrapper<tt::tt_metal::LegacyShape const>
+2024-09-23T15:09:15.1709009Z [38;2;000;128;000m                 Always[0m | [1m[38;2;100;149;237mINFO    [0m | End op: Tensor::reshape
+2024-09-23T15:09:15.1710641Z [38;2;000;128;000m                 Always[0m | [1m[38;2;100;149;237mINFO    [0m | Tensor doesn't have buffer, but storage is tt::tt_metal::BorrowedStorage
+2024-09-23T15:09:15.1712248Z [38;2;000;128;000m                 Always[0m | [1m[38;2;100;149;237mINFO    [0m | Begin op: Tensor::pad
+2024-09-23T15:09:15.1713883Z [38;2;000;128;000m                 Always[0m | [1m[38;2;100;149;237mINFO    [0m | Tensor doesn't have buffer, but storage is tt::tt_metal::BorrowedStorage
+2024-09-23T15:09:15.1715839Z [38;2;000;128;000m                 Always[0m | [1m[38;2;100;149;237mINFO    [0m | input any type name ignored: std::__1::reference_wrapper<tt::tt_metal::LegacyShape const>
+2024-09-23T15:09:15.1717893Z [38;2;000;128;000m                 Always[0m | [1m[38;2;100;149;237mINFO    [0m | input any type name ignored: std::__1::reference_wrapper<tt::tt_metal::LegacyShape const>
+2024-09-23T15:09:15.1719776Z [38;2;000;128;000m                 Always[0m | [1m[38;2;100;149;237mINFO    [0m | input any type name ignored: std::__1::reference_wrapper<float>
+2024-09-23T15:09:15.1721241Z [38;2;000;128;000m                 Always[0m | [1m[38;2;100;149;237mINFO    [0m | End op: Tensor::pad
+2024-09-23T15:09:15.1722955Z [38;2;000;128;000m                 Always[0m | [1m[38;2;100;149;237mINFO    [0m | Tensor doesn't have buffer, but storage is tt::tt_metal::OwnedStorage
+2024-09-23T15:09:15.1724481Z [38;2;000;128;000m                 Always[0m | [1m[38;2;100;149;237mINFO    [0m | Begin op: Tensor::to
+2024-09-23T15:09:15.1726069Z [38;2;000;128;000m                 Always[0m | [1m[38;2;100;149;237mINFO    [0m | Tensor doesn't have buffer, but storage is tt::tt_metal::OwnedStorage
+2024-09-23T15:09:15.1727984Z [38;2;000;128;000m                 Always[0m | [1m[38;2;100;149;237mINFO    [0m | input any type name ignored: std::__1::reference_wrapper<tt::tt_metal::Layout>
+2024-09-23T15:09:15.1729948Z [38;2;000;128;000m                 Always[0m | [1m[38;2;100;149;237mINFO    [0m | input any type name ignored: std::__1::reference_wrapper<tt::tt_metal::Device*>
+2024-09-23T15:09:15.1731493Z [38;2;000;128;000m                 Always[0m | [1m[38;2;100;149;237mINFO    [0m | End op: Tensor::to
+2024-09-23T15:09:15.1733231Z [38;2;000;128;000m                 Always[0m | [1m[38;2;100;149;237mINFO    [0m | Tensor doesn't have buffer, but storage is tt::tt_metal::OwnedStorage
+2024-09-23T15:09:15.1734774Z [38;2;000;128;000m                 Always[0m | [1m[38;2;100;149;237mINFO    [0m | End op: ttnn::to_layout
+2024-09-23T15:09:15.1736390Z [38;2;000;128;000m                 Always[0m | [1m[38;2;100;149;237mINFO    [0m | Tensor doesn't have buffer, but storage is tt::tt_metal::OwnedStorage
+2024-09-23T15:09:15.1737953Z [38;2;000;128;000m                 Always[0m | [1m[38;2;100;149;237mINFO    [0m | Begin op: Tensor::to
+2024-09-23T15:09:15.1739519Z [38;2;000;128;000m                 Always[0m | [1m[38;2;100;149;237mINFO    [0m | Tensor doesn't have buffer, but storage is tt::tt_metal::OwnedStorage
+2024-09-23T15:09:15.1741948Z [38;2;000;128;000m                 Always[0m | [1m[38;2;100;149;237mINFO    [0m | input any type name ignored: std::__1::reference_wrapper<tt::tt_metal::Device*>
+2024-09-23T15:09:15.1743972Z [38;2;000;128;000m                 Always[0m | [1m[38;2;100;149;237mINFO    [0m | input any type name ignored: std::__1::reference_wrapper<tt::tt_metal::MemoryConfig const>
+2024-09-23T15:09:15.1745587Z [38;2;000;128;000m                 Always[0m | [1m[38;2;100;149;237mINFO    [0m | End op: Tensor::to
+2024-09-23T15:09:15.1746862Z [38;2;000;128;000m                 Always[0m | [1m[38;2;100;149;237mINFO    [0m | Begin op: ttnn::add
+2024-09-23T15:09:15.1748584Z [38;2;000;128;000m                 Always[0m | [1m[38;2;100;149;237mINFO    [0m | input any type name ignored: std::__1::reference_wrapper<unsigned char const>
+2024-09-23T15:09:15.1751834Z [38;2;000;128;000m                 Always[0m | [1m[38;2;100;149;237mINFO    [0m | input any type name ignored: std::__1::reference_wrapper<float const>
+2024-09-23T15:09:15.1753928Z [38;2;000;128;000m                 Always[0m | [1m[38;2;100;149;237mINFO    [0m | input any type name ignored: std::__1::reference_wrapper<std::__1::optional<tt::tt_metal::DataType const> const>
+2024-09-23T15:09:15.1756228Z [38;2;000;128;000m                 Always[0m | [1m[38;2;100;149;237mINFO    [0m | input any type name ignored: std::__1::reference_wrapper<std::__1::optional<tt::tt_metal::MemoryConfig> const>
+2024-09-23T15:09:15.1760737Z [38;2;000;128;000m                 Always[0m | [1m[38;2;100;149;237mINFO    [0m | input any type name ignored: std::__1::reference_wrapper<std::__1::optional<std::__1::vector<ttnn::operations::unary::UnaryWithParam, std::__1::allocator<ttnn::operations::unary::UnaryWithParam>>> const>
+2024-09-23T15:09:15.1763712Z [38;2;000;128;000m                 Always[0m | [1m[38;2;100;149;237mINFO    [0m | input any type name ignored: std::__1::reference_wrapper<std::__1::optional<ttnn::operations::unary::UnaryWithParam> const>
+2024-09-23T15:09:15.1765513Z [38;2;000;128;000m                 Always[0m | [1m[38;2;100;149;237mINFO    [0m | Begin op: Tensor::to
+2024-09-23T15:09:15.1767485Z [38;2;000;128;000m                 Always[0m | [1m[38;2;255;165;000mWARNING [0m | Tensor doesn't have tensor_id, generating new one. Ideally this should not happen. Please set tensor_id for this tensor ahead of time.
+2024-09-23T15:09:15.1769688Z [38;2;000;128;000m                 Always[0m | [1m[38;2;100;149;237mINFO    [0m | Tensor doesn't have buffer, but storage is tt::tt_metal::OwnedStorage
+2024-09-23T15:09:15.1771526Z [38;2;000;128;000m                 Always[0m | [1m[38;2;100;149;237mINFO    [0m | input any type name ignored: std::__1::reference_wrapper<tt::tt_metal::Device*>
+2024-09-23T15:09:15.1773508Z [38;2;000;128;000m                 Always[0m | [1m[38;2;100;149;237mINFO    [0m | input any type name ignored: std::__1::reference_wrapper<tt::tt_metal::MemoryConfig const>
+2024-09-23T15:09:15.1775143Z [38;2;000;128;000m                 Always[0m | [1m[38;2;100;149;237mINFO    [0m | End op: Tensor::to
+2024-09-23T15:09:15.1776685Z [38;2;000;128;000m                 Always[0m | [1m[38;2;100;149;237mINFO    [0m | Begin op: ttnn::prim::binary
+2024-09-23T15:09:15.1778335Z [38;2;000;128;000m                 Always[0m | [1m[38;2;100;149;237mINFO    [0m | input any type name ignored: std::__1::reference_wrapper<unsigned char>
+2024-09-23T15:09:15.1780597Z [38;2;000;128;000m                 Always[0m | [1m[38;2;100;149;237mINFO    [0m | input any type name ignored: std::__1::reference_wrapper<ttnn::operations::binary::BinaryOpType>
+2024-09-23T15:09:15.1782804Z [38;2;000;128;000m                 Always[0m | [1m[38;2;100;149;237mINFO    [0m | input any type name ignored: std::__1::reference_wrapper<std::__1::optional<tt::tt_metal::DataType const> const>
+2024-09-23T15:09:15.1785193Z [38;2;000;128;000m                 Always[0m | [1m[38;2;100;149;237mINFO    [0m | input any type name ignored: std::__1::reference_wrapper<std::__1::optional<tt::tt_metal::MemoryConfig> const>
+2024-09-23T15:09:15.1787994Z [38;2;000;128;000m                 Always[0m | [1m[38;2;100;149;237mINFO    [0m | input any type name ignored: std::__1::reference_wrapper<std::__1::optional<std::__1::vector<ttnn::operations::unary::UnaryWithParam, std::__1::allocator<ttnn::operations::unary::UnaryWithParam>>>>
+2024-09-23T15:09:15.1790825Z [38;2;000;128;000m                 Always[0m | [1m[38;2;100;149;237mINFO    [0m | input any type name ignored: std::__1::reference_wrapper<std::__1::optional<ttnn::operations::unary::UnaryWithParam>>
+2024-09-23T15:09:15.1792611Z [38;2;000;128;000m                 Always[0m | [1m[38;2;100;149;237mINFO    [0m | Begin op: BinaryDeviceOperation
+2024-09-23T15:09:15.1794701Z [38;2;000;128;000m                 Always[0m | [1m[38;2;100;149;237mINFO    [0m | input any type name ignored: std::__1::reference_wrapper<ttnn::operations::binary::BinaryDeviceOperation::operation_attributes_t const>
+2024-09-23T15:09:15.1797247Z [38;2;000;128;000m                 Always[0m | [1m[38;2;100;149;237mINFO    [0m | input any type name ignored: std::__1::reference_wrapper<ttnn::operations::binary::BinaryDeviceOperation::tensor_args_t const>
+2024-09-23T15:09:15.1799254Z [38;2;000;128;000m                 Always[0m | [1m[38;2;100;149;237mINFO    [0m | Begin op: tt::tt_metal::create_device_tensor
+2024-09-23T15:09:15.1801045Z [38;2;000;128;000m                 Always[0m | [1m[38;2;100;149;237mINFO    [0m | input any type name ignored: std::__1::reference_wrapper<tt::tt_metal::LegacyShape const>
+2024-09-23T15:09:15.1803161Z [38;2;000;128;000m                 Always[0m | [1m[38;2;100;149;237mINFO    [0m | input any type name ignored: std::__1::reference_wrapper<tt::tt_metal::DataType>
+2024-09-23T15:09:15.1805086Z [38;2;000;128;000m                 Always[0m | [1m[38;2;100;149;237mINFO    [0m | input any type name ignored: std::__1::reference_wrapper<tt::tt_metal::Layout>
+2024-09-23T15:09:15.1807016Z [38;2;000;128;000m                 Always[0m | [1m[38;2;100;149;237mINFO    [0m | input any type name ignored: std::__1::reference_wrapper<tt::tt_metal::Device*>
+2024-09-23T15:09:15.1809091Z [38;2;000;128;000m                 Always[0m | [1m[38;2;100;149;237mINFO    [0m | input any type name ignored: std::__1::reference_wrapper<tt::tt_metal::MemoryConfig const>
+2024-09-23T15:09:15.1811190Z [38;2;000;128;000m                 Always[0m | [1m[38;2;100;149;237mINFO    [0m | End op: tt::tt_metal::create_device_tensor
+2024-09-23T15:09:15.1812774Z [38;2;000;128;000m                 Always[0m | [1m[38;2;100;149;237mINFO    [0m | End op: BinaryDeviceOperation
+2024-09-23T15:09:15.1814367Z [38;2;000;128;000m                 Always[0m | [1m[38;2;100;149;237mINFO    [0m | End op: ttnn::prim::binary
+2024-09-23T15:09:15.1815772Z [38;2;000;128;000m                 Always[0m | [1m[38;2;100;149;237mINFO    [0m | End op: ttnn::add
+2024-09-23T15:09:15.1817779Z [38;2;000;128;000m                 Always[0m | [1m[38;2;255;165;000mWARNING [0m | Tensor doesn't have tensor_id, generating new one. Ideally this should not happen. Please set tensor_id for this tensor ahead of time.
+2024-09-23T15:09:15.1819883Z [38;2;000;128;000m                 Always[0m | [1m[38;2;100;149;237mINFO    [0m | Begin op: Tensor::cpu
+2024-09-23T15:09:15.1822112Z [38;2;000;128;000m                 Always[0m | [1m[38;2;255;165;000mWARNING [0m | Tensor doesn't have tensor_id, generating new one. Ideally this should not happen. Please set tensor_id for this tensor ahead of time.
+2024-09-23T15:09:15.1824252Z [38;2;000;128;000m                 Always[0m | [1m[38;2;100;149;237mINFO    [0m | input any type name ignored: std::__1::reference_wrapper<bool>
+2024-09-23T15:09:15.1825744Z [38;2;000;128;000m                 Always[0m | [1m[38;2;100;149;237mINFO    [0m | End op: Tensor::cpu
+2024-09-23T15:09:15.1827465Z [38;2;000;128;000m                 Always[0m | [1m[38;2;100;149;237mINFO    [0m | Tensor doesn't have buffer, but storage is tt::tt_metal::OwnedStorage
+2024-09-23T15:09:15.1829028Z [38;2;000;128;000m                 Always[0m | [1m[38;2;100;149;237mINFO    [0m | Begin op: Tensor::to
+2024-09-23T15:09:15.1830625Z [38;2;000;128;000m                 Always[0m | [1m[38;2;100;149;237mINFO    [0m | Tensor doesn't have buffer, but storage is tt::tt_metal::OwnedStorage
+2024-09-23T15:09:15.1832482Z [38;2;000;128;000m                 Always[0m | [1m[38;2;100;149;237mINFO    [0m | input any type name ignored: std::__1::reference_wrapper<tt::tt_metal::Layout>
+2024-09-23T15:09:15.1834399Z [38;2;000;128;000m                 Always[0m | [1m[38;2;100;149;237mINFO    [0m | input any type name ignored: std::__1::reference_wrapper<tt::tt_metal::Device*>
+2024-09-23T15:09:15.1835969Z [38;2;000;128;000m                 Always[0m | [1m[38;2;100;149;237mINFO    [0m | End op: Tensor::to
+2024-09-23T15:09:15.1837570Z [38;2;000;128;000m                 Always[0m | [1m[38;2;100;149;237mINFO    [0m | Tensor doesn't have buffer, but storage is tt::tt_metal::OwnedStorage
+2024-09-23T15:09:15.1839429Z [38;2;000;128;000m                 Always[0m | [1m[38;2;100;149;237mINFO    [0m | Begin op: tt::tt_metal::detail::convert_tt_tensor_to_torch_tensor
+2024-09-23T15:09:15.1841222Z [38;2;000;128;000m                 Always[0m | [1m[38;2;100;149;237mINFO    [0m | Tensor doesn't have buffer, but storage is tt::tt_metal::OwnedStorage
+2024-09-23T15:09:15.1843096Z [38;2;000;128;000m                 Always[0m | [1m[38;2;100;149;237mINFO    [0m | End op: tt::tt_metal::detail::convert_tt_tensor_to_torch_tensor
+2024-09-23T15:09:15.1844917Z [38;2;000;128;000m                 Always[0m | [1m[38;2;100;149;237mINFO    [0m | output any type name ignored: std::__1::reference_wrapper<pybind11::object>
+2024-09-23T15:09:15.2599759Z 2024-09-23 15:09:15.258 | INFO     | ttnn.graph:_visualize:154 - Graph visualization saved to "graph.svg"
+2024-09-23T15:09:15.2601135Z [38;2;000;128;000m                  Metal[0m | [1m[38;2;100;149;237mINFO    [0m | Closing device 0
+2024-09-23T15:09:15.2605228Z [38;2;000;128;000m                  Metal[0m | [1m[38;2;100;149;237mINFO    [0m | Disabling and clearing program cache on device 0
+2024-09-23T15:09:15.2612159Z Capture Start                                     
+2024-09-23T15:09:15.2618668Z Function Start: tt::tt_metal::detail::convert_python_tensor_to_tt_tensor
+2024-09-23T15:09:15.2619698Z Function End:   tt::tt_metal::detail::convert_python_tensor_to_tt_tensor
+2024-09-23T15:09:15.2620726Z Add Tensor: 0                                     
+2024-09-23T15:09:15.2621388Z Function Start: ttnn::to_layout                   
+2024-09-23T15:09:15.2622077Z     Function Start: Tensor::reshape               
+2024-09-23T15:09:15.2622785Z     Function End:   Tensor::reshape               
+2024-09-23T15:09:15.2623581Z     Add Tensor: 1                                 
+2024-09-23T15:09:15.2624238Z     Function Start: Tensor::pad                   
+2024-09-23T15:09:15.2625055Z     Function End:   Tensor::pad                   
+2024-09-23T15:09:15.2625697Z     Add Tensor: 2                                 
+2024-09-23T15:09:15.2626927Z     Function Start: Tensor::to                    
+2024-09-23T15:09:15.2627564Z     Function End:   Tensor::to                    
+2024-09-23T15:09:15.2628170Z     Add Tensor: 3                                 
+2024-09-23T15:09:15.2628806Z Function End:   ttnn::to_layout                   
+2024-09-23T15:09:15.2629469Z Function Start: Tensor::to                        
+2024-09-23T15:09:15.2630103Z     Add Device Buffer                             
+2024-09-23T15:09:15.2630718Z     Allocate Device Buffer                        
+2024-09-23T15:09:15.2631362Z Function End:   Tensor::to                        
+2024-09-23T15:09:15.2631993Z Add Tensor: 4                                     
+2024-09-23T15:09:15.2632644Z Function Start: ttnn::add                         
+2024-09-23T15:09:15.2633262Z     Function Start: Tensor::to                    
+2024-09-23T15:09:15.2634121Z         Add Tensor: 5                             
+2024-09-23T15:09:15.2634733Z         Add Device Buffer                         
+2024-09-23T15:09:15.2635363Z         Allocate Device Buffer                    
+2024-09-23T15:09:15.2635966Z     Function End:   Tensor::to                    
+2024-09-23T15:09:15.2636573Z     Add Tensor: 6                                 
+2024-09-23T15:09:15.2637193Z     Function Start: ttnn::prim::binary            
+2024-09-23T15:09:15.2637832Z         Function Start: BinaryDeviceOperation     
+2024-09-23T15:09:15.2638514Z             Function Start: tt::tt_metal::create_device_tensor
+2024-09-23T15:09:15.2639161Z                 Add Device Buffer                 
+2024-09-23T15:09:15.2639754Z                 Allocate Device Buffer            
+2024-09-23T15:09:15.2640399Z             Function End:   tt::tt_metal::create_device_tensor
+2024-09-23T15:09:15.2641047Z             Add Tensor: 7                         
+2024-09-23T15:09:15.2641651Z             Deallocate All Circular Buffers       
+2024-09-23T15:09:15.2642265Z             Allocate Circular Buffer              
+2024-09-23T15:09:15.2642876Z             Allocate Circular Buffer              
+2024-09-23T15:09:15.2643471Z             Allocate Circular Buffer              
+2024-09-23T15:09:15.2644080Z         Function End:   BinaryDeviceOperation     
+2024-09-23T15:09:15.2644724Z     Function End:   ttnn::prim::binary            
+2024-09-23T15:09:15.2645353Z     Deallocate Device Buffer                      
+2024-09-23T15:09:15.2645978Z Function End:   ttnn::add                         
+2024-09-23T15:09:15.2646582Z Add Tensor: 8                                     
+2024-09-23T15:09:15.2647214Z Function Start: Tensor::cpu                       
+2024-09-23T15:09:15.2647835Z     Add Tensor: 9                                 
+2024-09-23T15:09:15.2648444Z Function End:   Tensor::cpu                       
+2024-09-23T15:09:15.2649059Z Add Tensor: 10                                    
+2024-09-23T15:09:15.2649687Z Function Start: Tensor::to                        
+2024-09-23T15:09:15.2650318Z Function End:   Tensor::to                        
+2024-09-23T15:09:15.2650946Z Add Tensor: 11                                    
+2024-09-23T15:09:15.2651695Z Function Start: tt::tt_metal::detail::convert_tt_tensor_to_torch_tensor
+2024-09-23T15:09:15.2652568Z Function End:   tt::tt_metal::detail::convert_tt_tensor_to_torch_tensor
+2024-09-23T15:09:15.2653332Z Deallocate Device Buffer                          
+2024-09-23T15:09:15.2653966Z Capture End                                       
+2024-09-23T15:09:15.2654363Z 
+2024-09-23T15:09:15.4577861Z [38;2;000;128;000m                 Device[0m | [1m[38;2;100;149;237mINFO    [0m | Closing user mode device drivers
+2024-09-23T15:09:15.5801790Z [Info] Running ttnn example: ttnn/examples/usage/program_cache.py
+2024-09-23T15:09:16.8700269Z 2024-09-23 15:09:16.868 | WARNING  | ttnn.decorators:operation_decorator:768 - Should ttnn.pearson_correlation_coefficient be migrated to C++?
+2024-09-23T15:09:16.8707017Z 2024-09-23 15:09:16.869 | WARNING  | ttnn.decorators:operation_decorator:768 - Should ttnn.Conv1d be migrated to C++?
+2024-09-23T15:09:16.8735822Z 2024-09-23 15:09:16.872 | WARNING  | ttnn.decorators:operation_decorator:768 - Should ttnn.conv2d be migrated to C++?
+2024-09-23T15:09:16.8741872Z 2024-09-23 15:09:16.873 | WARNING  | ttnn.decorators:operation_decorator:768 - Should ttnn.reshape be migrated to C++?
+2024-09-23T15:09:16.8743509Z 2024-09-23 15:09:16.873 | WARNING  | ttnn.decorators:operation_decorator:768 - Should ttnn.unsqueeze_to_4D be migrated to C++?
+2024-09-23T15:09:16.8748193Z 2024-09-23 15:09:16.874 | WARNING  | ttnn.decorators:operation_decorator:768 - Should ttnn.from_torch be migrated to C++?
+2024-09-23T15:09:16.8751238Z 2024-09-23 15:09:16.874 | WARNING  | ttnn.decorators:operation_decorator:768 - Should ttnn.to_torch be migrated to C++?
+2024-09-23T15:09:16.8754593Z 2024-09-23 15:09:16.874 | WARNING  | ttnn.decorators:operation_decorator:768 - Should ttnn.to_device be migrated to C++?
+2024-09-23T15:09:16.8760111Z 2024-09-23 15:09:16.874 | WARNING  | ttnn.decorators:operation_decorator:768 - Should ttnn.from_device be migrated to C++?
+2024-09-23T15:09:16.8762742Z 2024-09-23 15:09:16.875 | WARNING  | ttnn.decorators:operation_decorator:768 - Should ttnn.allocate_tensor_on_device be migrated to C++?
+2024-09-23T15:09:16.8768069Z 2024-09-23 15:09:16.875 | WARNING  | ttnn.decorators:operation_decorator:768 - Should ttnn.copy_host_to_device_tensor be migrated to C++?
+2024-09-23T15:09:16.8771276Z 2024-09-23 15:09:16.875 | WARNING  | ttnn.decorators:operation_decorator:768 - Should ttnn.deallocate be migrated to C++?
+2024-09-23T15:09:16.8773743Z 2024-09-23 15:09:16.875 | WARNING  | ttnn.decorators:operation_decorator:768 - Should ttnn.reallocate be migrated to C++?
+2024-09-23T15:09:16.8775446Z 2024-09-23 15:09:16.876 | WARNING  | ttnn.decorators:operation_decorator:768 - Should ttnn.load_tensor be migrated to C++?
+2024-09-23T15:09:16.8778866Z 2024-09-23 15:09:16.876 | WARNING  | ttnn.decorators:operation_decorator:768 - Should ttnn.dump_tensor be migrated to C++?
+2024-09-23T15:09:16.8780909Z 2024-09-23 15:09:16.877 | WARNING  | ttnn.decorators:operation_decorator:768 - Should ttnn.as_tensor be migrated to C++?
+2024-09-23T15:09:16.8796530Z 2024-09-23 15:09:16.878 | WARNING  | ttnn.decorators:operation_decorator:768 - Should ttnn.avg_pool2d be migrated to C++?
+2024-09-23T15:09:16.8830644Z 2024-09-23 15:09:16.882 | WARNING  | ttnn.decorators:operation_decorator:768 - Should ttnn.conv2d be migrated to C++?
+2024-09-23T15:09:16.8833958Z 2024-09-23 15:09:16.882 | WARNING  | ttnn.decorators:operation_decorator:768 - Should ttnn.avg_pool2d be migrated to C++?
+2024-09-23T15:09:16.8838600Z 2024-09-23 15:09:16.883 | WARNING  | ttnn.decorators:operation_decorator:768 - Should ttnn.Conv1d be migrated to C++?
+2024-09-23T15:09:16.8975724Z [38;2;000;128;000m                 Device[0m | [1m[38;2;100;149;237mINFO    [0m | Opening user mode device driver
+2024-09-23T15:09:16.9363077Z 
+2024-09-23T15:09:16.9674683Z [32m2024-09-23 15:09:16.966[0m | [1m[38;2;100;149;237mINFO    [0m | [36mSiliconDriver  [0m - Detected 1 PCI device : [0]
+2024-09-23T15:09:16.9825767Z [32m2024-09-23 15:09:16.981[0m | [1m[38;2;255;165;000mWARNING [0m | [36mSiliconDriver  [0m - init_detect_tt_device_numanodes(): Could not determine NumaNodeSet for TT device (physical_device_id: 0 pci_bus_id: 0000:07:00.0)
+2024-09-23T15:09:16.9828398Z [32m2024-09-23 15:09:16.981[0m | [1m[38;2;255;165;000mWARNING [0m | [36mSiliconDriver  [0m - Could not find NumaNodeSet for TT Device (physical_device_id: 0 pci_bus_id: 0000:07:00.0)
+2024-09-23T15:09:16.9837485Z [32m2024-09-23 15:09:16.982[0m | [1m[38;2;255;165;000mWARNING [0m | [36mSiliconDriver  [0m - bind_area_memory_nodeset(): Unable to determine TT Device to NumaNode mapping for physical_device_id: 0. Skipping membind.
+2024-09-23T15:09:16.9840460Z [0;33m---- ttSiliconDevice::init_hugepage: bind_area_to_memory_nodeset() failed (physical_device_id: 0 ch: 0). Hugepage allocation is not on NumaNode matching TT Device. Side-Effect is decreased Device->Host perf (Issue #893).
+2024-09-23T15:09:16.9877680Z [0m[32m2024-09-23 15:09:16.986[0m | [1m[38;2;255;165;000mWARNING [0m | [36mSiliconDriver  [0m - bind_area_memory_nodeset(): Unable to determine TT Device to NumaNode mapping for physical_device_id: 0. Skipping membind.
+2024-09-23T15:09:16.9880508Z [0;33m---- ttSiliconDevice::init_hugepage: bind_area_to_memory_nodeset() failed (physical_device_id: 0 ch: 1). Hugepage allocation is not on NumaNode matching TT Device. Side-Effect is decreased Device->Host perf (Issue #893).
+2024-09-23T15:09:16.9987521Z [0m[32m2024-09-23 15:09:16.997[0m | [1m[38;2;100;149;237mINFO    [0m | [36mSiliconDriver  [0m - Software version 6.0.0, Ethernet FW version 6.9.0 (Device 0)
+2024-09-23T15:09:16.9991022Z [32m2024-09-23 15:09:16.998[0m | [1m[38;2;100;149;237mINFO    [0m | [36mSiliconDriver  [0m - Software version 6.0.0, Ethernet FW version 6.9.0 (Device 1)
+2024-09-23T15:09:17.0031908Z [38;2;000;128;000m                  Metal[0m | [1m[38;2;100;149;237mINFO    [0m | Initializing device 0. Program cache is NOT enabled
+2024-09-23T15:09:17.0033382Z [38;2;000;128;000m                  Metal[0m | [1m[38;2;100;149;237mINFO    [0m | AI CLK for device 0 is:   1000 MHz
+2024-09-23T15:09:18.3047216Z [38;2;000;128;000m                  Metal[0m | [1m[38;2;100;149;237mINFO    [0m | MMIO Device 0 : Tunnel 0 : Device 0
+2024-09-23T15:09:18.3048618Z [38;2;000;128;000m                  Metal[0m | [1m[38;2;100;149;237mINFO    [0m | MMIO Device 0 : Tunnel 0 : Device 1
+2024-09-23T15:09:18.3049960Z [38;2;000;128;000m                  Metal[0m | [1m[38;2;100;149;237mINFO    [0m | Enabling program cache on device 0
+2024-09-23T15:09:18.7835169Z [38;2;000;128;000m                  Metal[0m | [1m[38;2;100;149;237mINFO    [0m | Closing device 0
+2024-09-23T15:09:18.7836912Z [38;2;000;128;000m                  Metal[0m | [1m[38;2;100;149;237mINFO    [0m | Disabling and clearing program cache on device 0
+2024-09-23T15:09:18.7838861Z duration of the first run: 0.47669005393981934
+2024-09-23T15:09:18.7839611Z duration of the second run: 0.00031876564025878906
+2024-09-23T15:09:19.0107079Z [38;2;000;128;000m                 Device[0m | [1m[38;2;100;149;237mINFO    [0m | Closing user mode device drivers
+2024-09-23T15:09:19.1266427Z [Info] Running ttnn example: ttnn/examples/usage/run_op_on_device.py
+2024-09-23T15:09:20.3826419Z 2024-09-23 15:09:20.381 | WARNING  | ttnn.decorators:operation_decorator:768 - Should ttnn.pearson_correlation_coefficient be migrated to C++?
+2024-09-23T15:09:20.3828493Z 2024-09-23 15:09:20.382 | WARNING  | ttnn.decorators:operation_decorator:768 - Should ttnn.Conv1d be migrated to C++?
+2024-09-23T15:09:20.3853443Z 2024-09-23 15:09:20.384 | WARNING  | ttnn.decorators:operation_decorator:768 - Should ttnn.conv2d be migrated to C++?
+2024-09-23T15:09:20.3858491Z 2024-09-23 15:09:20.384 | WARNING  | ttnn.decorators:operation_decorator:768 - Should ttnn.reshape be migrated to C++?
+2024-09-23T15:09:20.3860855Z 2024-09-23 15:09:20.385 | WARNING  | ttnn.decorators:operation_decorator:768 - Should ttnn.unsqueeze_to_4D be migrated to C++?
+2024-09-23T15:09:20.3862934Z 2024-09-23 15:09:20.385 | WARNING  | ttnn.decorators:operation_decorator:768 - Should ttnn.from_torch be migrated to C++?
+2024-09-23T15:09:20.3864916Z 2024-09-23 15:09:20.385 | WARNING  | ttnn.decorators:operation_decorator:768 - Should ttnn.to_torch be migrated to C++?
+2024-09-23T15:09:20.3866884Z 2024-09-23 15:09:20.385 | WARNING  | ttnn.decorators:operation_decorator:768 - Should ttnn.to_device be migrated to C++?
+2024-09-23T15:09:20.3868891Z 2024-09-23 15:09:20.385 | WARNING  | ttnn.decorators:operation_decorator:768 - Should ttnn.from_device be migrated to C++?
+2024-09-23T15:09:20.3870773Z 2024-09-23 15:09:20.385 | WARNING  | ttnn.decorators:operation_decorator:768 - Should ttnn.allocate_tensor_on_device be migrated to C++?
+2024-09-23T15:09:20.3872546Z 2024-09-23 15:09:20.385 | WARNING  | ttnn.decorators:operation_decorator:768 - Should ttnn.copy_host_to_device_tensor be migrated to C++?
+2024-09-23T15:09:20.3874700Z 2024-09-23 15:09:20.385 | WARNING  | ttnn.decorators:operation_decorator:768 - Should ttnn.deallocate be migrated to C++?
+2024-09-23T15:09:20.3876399Z 2024-09-23 15:09:20.385 | WARNING  | ttnn.decorators:operation_decorator:768 - Should ttnn.reallocate be migrated to C++?
+2024-09-23T15:09:20.3877984Z 2024-09-23 15:09:20.385 | WARNING  | ttnn.decorators:operation_decorator:768 - Should ttnn.load_tensor be migrated to C++?
+2024-09-23T15:09:20.3879826Z 2024-09-23 15:09:20.386 | WARNING  | ttnn.decorators:operation_decorator:768 - Should ttnn.dump_tensor be migrated to C++?
+2024-09-23T15:09:20.3881732Z 2024-09-23 15:09:20.386 | WARNING  | ttnn.decorators:operation_decorator:768 - Should ttnn.as_tensor be migrated to C++?
+2024-09-23T15:09:20.3886175Z 2024-09-23 15:09:20.387 | WARNING  | ttnn.decorators:operation_decorator:768 - Should ttnn.avg_pool2d be migrated to C++?
+2024-09-23T15:09:20.3915712Z 2024-09-23 15:09:20.390 | WARNING  | ttnn.decorators:operation_decorator:768 - Should ttnn.conv2d be migrated to C++?
+2024-09-23T15:09:20.3917674Z 2024-09-23 15:09:20.390 | WARNING  | ttnn.decorators:operation_decorator:768 - Should ttnn.avg_pool2d be migrated to C++?
+2024-09-23T15:09:20.3919339Z 2024-09-23 15:09:20.391 | WARNING  | ttnn.decorators:operation_decorator:768 - Should ttnn.Conv1d be migrated to C++?
+2024-09-23T15:09:20.4048488Z [38;2;000;128;000m                 Device[0m | [1m[38;2;100;149;237mINFO    [0m | Opening user mode device driver
+2024-09-23T15:09:20.4459698Z 
+2024-09-23T15:09:20.4752112Z [32m2024-09-23 15:09:20.474[0m | [1m[38;2;100;149;237mINFO    [0m | [36mSiliconDriver  [0m - Detected 1 PCI device : [0]
+2024-09-23T15:09:20.4892128Z [32m2024-09-23 15:09:20.488[0m | [1m[38;2;255;165;000mWARNING [0m | [36mSiliconDriver  [0m - init_detect_tt_device_numanodes(): Could not determine NumaNodeSet for TT device (physical_device_id: 0 pci_bus_id: 0000:07:00.0)
+2024-09-23T15:09:20.4894651Z [32m2024-09-23 15:09:20.488[0m | [1m[38;2;255;165;000mWARNING [0m | [36mSiliconDriver  [0m - Could not find NumaNodeSet for TT Device (physical_device_id: 0 pci_bus_id: 0000:07:00.0)
+2024-09-23T15:09:20.4902508Z [32m2024-09-23 15:09:20.489[0m | [1m[38;2;255;165;000mWARNING [0m | [36mSiliconDriver  [0m - bind_area_memory_nodeset(): Unable to determine TT Device to NumaNode mapping for physical_device_id: 0. Skipping membind.
+2024-09-23T15:09:20.4905453Z [0;33m---- ttSiliconDevice::init_hugepage: bind_area_to_memory_nodeset() failed (physical_device_id: 0 ch: 0). Hugepage allocation is not on NumaNode matching TT Device. Side-Effect is decreased Device->Host perf (Issue #893).
+2024-09-23T15:09:20.4941251Z [0m[32m2024-09-23 15:09:20.493[0m | [1m[38;2;255;165;000mWARNING [0m | [36mSiliconDriver  [0m - bind_area_memory_nodeset(): Unable to determine TT Device to NumaNode mapping for physical_device_id: 0. Skipping membind.
+2024-09-23T15:09:20.4944105Z [0;33m---- ttSiliconDevice::init_hugepage: bind_area_to_memory_nodeset() failed (physical_device_id: 0 ch: 1). Hugepage allocation is not on NumaNode matching TT Device. Side-Effect is decreased Device->Host perf (Issue #893).
+2024-09-23T15:09:20.5041506Z [0m[32m2024-09-23 15:09:20.503[0m | [1m[38;2;100;149;237mINFO    [0m | [36mSiliconDriver  [0m - Software version 6.0.0, Ethernet FW version 6.9.0 (Device 0)
+2024-09-23T15:09:20.5046439Z [32m2024-09-23 15:09:20.504[0m | [1m[38;2;100;149;237mINFO    [0m | [36mSiliconDriver  [0m - Software version 6.0.0, Ethernet FW version 6.9.0 (Device 1)
+2024-09-23T15:09:20.5091303Z [38;2;000;128;000m                  Metal[0m | [1m[38;2;100;149;237mINFO    [0m | Initializing device 0. Program cache is NOT enabled
+2024-09-23T15:09:20.5092740Z [38;2;000;128;000m                  Metal[0m | [1m[38;2;100;149;237mINFO    [0m | AI CLK for device 0 is:   1000 MHz
+2024-09-23T15:09:21.9280866Z [38;2;000;128;000m                  Metal[0m | [1m[38;2;100;149;237mINFO    [0m | MMIO Device 0 : Tunnel 0 : Device 0
+2024-09-23T15:09:21.9282276Z [38;2;000;128;000m                  Metal[0m | [1m[38;2;100;149;237mINFO    [0m | MMIO Device 0 : Tunnel 0 : Device 1
+2024-09-23T15:09:22.4122331Z [38;2;000;128;000m                  Metal[0m | [1m[38;2;100;149;237mINFO    [0m | Closing device 0
+2024-09-23T15:09:22.4128055Z [38;2;000;128;000m                  Metal[0m | [1m[38;2;100;149;237mINFO    [0m | Disabling and clearing program cache on device 0
+2024-09-23T15:09:22.5811599Z [38;2;000;128;000m                 Device[0m | [1m[38;2;100;149;237mINFO    [0m | Closing user mode device drivers
+2024-09-23T15:09:22.7051832Z [Info] Running ttnn example: ttnn/examples/usage/string_repr.py
+2024-09-23T15:09:23.9606694Z 2024-09-23 15:09:23.959 | WARNING  | ttnn.decorators:operation_decorator:768 - Should ttnn.pearson_correlation_coefficient be migrated to C++?
+2024-09-23T15:09:23.9611500Z 2024-09-23 15:09:23.960 | WARNING  | ttnn.decorators:operation_decorator:768 - Should ttnn.Conv1d be migrated to C++?
+2024-09-23T15:09:23.9639683Z 2024-09-23 15:09:23.963 | WARNING  | ttnn.decorators:operation_decorator:768 - Should ttnn.conv2d be migrated to C++?
+2024-09-23T15:09:23.9641699Z 2024-09-23 15:09:23.963 | WARNING  | ttnn.decorators:operation_decorator:768 - Should ttnn.reshape be migrated to C++?
+2024-09-23T15:09:23.9643854Z 2024-09-23 15:09:23.963 | WARNING  | ttnn.decorators:operation_decorator:768 - Should ttnn.unsqueeze_to_4D be migrated to C++?
+2024-09-23T15:09:23.9645915Z 2024-09-23 15:09:23.963 | WARNING  | ttnn.decorators:operation_decorator:768 - Should ttnn.from_torch be migrated to C++?
+2024-09-23T15:09:23.9647890Z 2024-09-23 15:09:23.964 | WARNING  | ttnn.decorators:operation_decorator:768 - Should ttnn.to_torch be migrated to C++?
+2024-09-23T15:09:23.9649728Z 2024-09-23 15:09:23.964 | WARNING  | ttnn.decorators:operation_decorator:768 - Should ttnn.to_device be migrated to C++?
+2024-09-23T15:09:23.9651712Z 2024-09-23 15:09:23.964 | WARNING  | ttnn.decorators:operation_decorator:768 - Should ttnn.from_device be migrated to C++?
+2024-09-23T15:09:23.9653891Z 2024-09-23 15:09:23.964 | WARNING  | ttnn.decorators:operation_decorator:768 - Should ttnn.allocate_tensor_on_device be migrated to C++?
+2024-09-23T15:09:23.9656004Z 2024-09-23 15:09:23.964 | WARNING  | ttnn.decorators:operation_decorator:768 - Should ttnn.copy_host_to_device_tensor be migrated to C++?
+2024-09-23T15:09:23.9657675Z 2024-09-23 15:09:23.964 | WARNING  | ttnn.decorators:operation_decorator:768 - Should ttnn.deallocate be migrated to C++?
+2024-09-23T15:09:23.9659240Z 2024-09-23 15:09:23.964 | WARNING  | ttnn.decorators:operation_decorator:768 - Should ttnn.reallocate be migrated to C++?
+2024-09-23T15:09:23.9661069Z 2024-09-23 15:09:23.964 | WARNING  | ttnn.decorators:operation_decorator:768 - Should ttnn.load_tensor be migrated to C++?
+2024-09-23T15:09:23.9662636Z 2024-09-23 15:09:23.964 | WARNING  | ttnn.decorators:operation_decorator:768 - Should ttnn.dump_tensor be migrated to C++?
+2024-09-23T15:09:23.9664454Z 2024-09-23 15:09:23.964 | WARNING  | ttnn.decorators:operation_decorator:768 - Should ttnn.as_tensor be migrated to C++?
+2024-09-23T15:09:23.9667432Z 2024-09-23 15:09:23.966 | WARNING  | ttnn.decorators:operation_decorator:768 - Should ttnn.avg_pool2d be migrated to C++?
+2024-09-23T15:09:23.9701894Z 2024-09-23 15:09:23.969 | WARNING  | ttnn.decorators:operation_decorator:768 - Should ttnn.conv2d be migrated to C++?
+2024-09-23T15:09:23.9705195Z 2024-09-23 15:09:23.969 | WARNING  | ttnn.decorators:operation_decorator:768 - Should ttnn.avg_pool2d be migrated to C++?
+2024-09-23T15:09:23.9706792Z 2024-09-23 15:09:23.970 | WARNING  | ttnn.decorators:operation_decorator:768 - Should ttnn.Conv1d be migrated to C++?
+2024-09-23T15:09:24.2552737Z [Info] Running ttnn example: ttnn/examples/usage/using_tt_lib.py
+2024-09-23T15:09:25.4816326Z 2024-09-23 15:09:25.480 | WARNING  | ttnn.decorators:operation_decorator:768 - Should ttnn.pearson_correlation_coefficient be migrated to C++?
+2024-09-23T15:09:25.4819795Z 2024-09-23 15:09:25.481 | WARNING  | ttnn.decorators:operation_decorator:768 - Should ttnn.Conv1d be migrated to C++?
+2024-09-23T15:09:25.4845695Z 2024-09-23 15:09:25.483 | WARNING  | ttnn.decorators:operation_decorator:768 - Should ttnn.conv2d be migrated to C++?
+2024-09-23T15:09:25.4853666Z 2024-09-23 15:09:25.484 | WARNING  | ttnn.decorators:operation_decorator:768 - Should ttnn.reshape be migrated to C++?
+2024-09-23T15:09:25.4855327Z 2024-09-23 15:09:25.484 | WARNING  | ttnn.decorators:operation_decorator:768 - Should ttnn.unsqueeze_to_4D be migrated to C++?
+2024-09-23T15:09:25.4856924Z 2024-09-23 15:09:25.484 | WARNING  | ttnn.decorators:operation_decorator:768 - Should ttnn.from_torch be migrated to C++?
+2024-09-23T15:09:25.4858477Z 2024-09-23 15:09:25.484 | WARNING  | ttnn.decorators:operation_decorator:768 - Should ttnn.to_torch be migrated to C++?
+2024-09-23T15:09:25.4864109Z 2024-09-23 15:09:25.484 | WARNING  | ttnn.decorators:operation_decorator:768 - Should ttnn.to_device be migrated to C++?
+2024-09-23T15:09:25.4866140Z 2024-09-23 15:09:25.484 | WARNING  | ttnn.decorators:operation_decorator:768 - Should ttnn.from_device be migrated to C++?
+2024-09-23T15:09:25.4867860Z 2024-09-23 15:09:25.485 | WARNING  | ttnn.decorators:operation_decorator:768 - Should ttnn.allocate_tensor_on_device be migrated to C++?
+2024-09-23T15:09:25.4869595Z 2024-09-23 15:09:25.485 | WARNING  | ttnn.decorators:operation_decorator:768 - Should ttnn.copy_host_to_device_tensor be migrated to C++?
+2024-09-23T15:09:25.4872620Z 2024-09-23 15:09:25.485 | WARNING  | ttnn.decorators:operation_decorator:768 - Should ttnn.deallocate be migrated to C++?
+2024-09-23T15:09:25.4874617Z 2024-09-23 15:09:25.485 | WARNING  | ttnn.decorators:operation_decorator:768 - Should ttnn.reallocate be migrated to C++?
+2024-09-23T15:09:25.4876978Z 2024-09-23 15:09:25.485 | WARNING  | ttnn.decorators:operation_decorator:768 - Should ttnn.load_tensor be migrated to C++?
+2024-09-23T15:09:25.4878762Z 2024-09-23 15:09:25.485 | WARNING  | ttnn.decorators:operation_decorator:768 - Should ttnn.dump_tensor be migrated to C++?
+2024-09-23T15:09:25.4880329Z 2024-09-23 15:09:25.485 | WARNING  | ttnn.decorators:operation_decorator:768 - Should ttnn.as_tensor be migrated to C++?
+2024-09-23T15:09:25.4881881Z 2024-09-23 15:09:25.487 | WARNING  | ttnn.decorators:operation_decorator:768 - Should ttnn.avg_pool2d be migrated to C++?
+2024-09-23T15:09:25.4906071Z 2024-09-23 15:09:25.489 | WARNING  | ttnn.decorators:operation_decorator:768 - Should ttnn.conv2d be migrated to C++?
+2024-09-23T15:09:25.4908635Z 2024-09-23 15:09:25.490 | WARNING  | ttnn.decorators:operation_decorator:768 - Should ttnn.avg_pool2d be migrated to C++?
+2024-09-23T15:09:25.4910229Z 2024-09-23 15:09:25.490 | WARNING  | ttnn.decorators:operation_decorator:768 - Should ttnn.Conv1d be migrated to C++?
+2024-09-23T15:09:25.5040281Z [38;2;000;128;000m                 Device[0m | [1m[38;2;100;149;237mINFO    [0m | Opening user mode device driver
+2024-09-23T15:09:25.5467039Z 
+2024-09-23T15:09:25.5763405Z [32m2024-09-23 15:09:25.575[0m | [1m[38;2;100;149;237mINFO    [0m | [36mSiliconDriver  [0m - Detected 1 PCI device : [0]
+2024-09-23T15:09:25.5905022Z [32m2024-09-23 15:09:25.589[0m | [1m[38;2;255;165;000mWARNING [0m | [36mSiliconDriver  [0m - init_detect_tt_device_numanodes(): Could not determine NumaNodeSet for TT device (physical_device_id: 0 pci_bus_id: 0000:07:00.0)
+2024-09-23T15:09:25.5907518Z [32m2024-09-23 15:09:25.589[0m | [1m[38;2;255;165;000mWARNING [0m | [36mSiliconDriver  [0m - Could not find NumaNodeSet for TT Device (physical_device_id: 0 pci_bus_id: 0000:07:00.0)
+2024-09-23T15:09:25.5914536Z [32m2024-09-23 15:09:25.590[0m | [1m[38;2;255;165;000mWARNING [0m | [36mSiliconDriver  [0m - bind_area_memory_nodeset(): Unable to determine TT Device to NumaNode mapping for physical_device_id: 0. Skipping membind.
+2024-09-23T15:09:25.5917498Z [0;33m---- ttSiliconDevice::init_hugepage: bind_area_to_memory_nodeset() failed (physical_device_id: 0 ch: 0). Hugepage allocation is not on NumaNode matching TT Device. Side-Effect is decreased Device->Host perf (Issue #893).
+2024-09-23T15:09:25.5951724Z [0m[32m2024-09-23 15:09:25.594[0m | [1m[38;2;255;165;000mWARNING [0m | [36mSiliconDriver  [0m - bind_area_memory_nodeset(): Unable to determine TT Device to NumaNode mapping for physical_device_id: 0. Skipping membind.
+2024-09-23T15:09:25.5954794Z [0;33m---- ttSiliconDevice::init_hugepage: bind_area_to_memory_nodeset() failed (physical_device_id: 0 ch: 1). Hugepage allocation is not on NumaNode matching TT Device. Side-Effect is decreased Device->Host perf (Issue #893).
+2024-09-23T15:09:25.6053173Z [0m[32m2024-09-23 15:09:25.604[0m | [1m[38;2;100;149;237mINFO    [0m | [36mSiliconDriver  [0m - Software version 6.0.0, Ethernet FW version 6.9.0 (Device 0)
+2024-09-23T15:09:25.6058859Z [32m2024-09-23 15:09:25.605[0m | [1m[38;2;100;149;237mINFO    [0m | [36mSiliconDriver  [0m - Software version 6.0.0, Ethernet FW version 6.9.0 (Device 1)
+2024-09-23T15:09:25.6101252Z [38;2;000;128;000m                  Metal[0m | [1m[38;2;100;149;237mINFO    [0m | Initializing device 0. Program cache is NOT enabled
+2024-09-23T15:09:25.6102749Z [38;2;000;128;000m                  Metal[0m | [1m[38;2;100;149;237mINFO    [0m | AI CLK for device 0 is:   1000 MHz
+2024-09-23T15:09:26.8607251Z [38;2;000;128;000m                  Metal[0m | [1m[38;2;100;149;237mINFO    [0m | MMIO Device 0 : Tunnel 0 : Device 0
+2024-09-23T15:09:26.8608659Z [38;2;000;128;000m                  Metal[0m | [1m[38;2;100;149;237mINFO    [0m | MMIO Device 0 : Tunnel 0 : Device 1
+2024-09-23T15:09:27.3390723Z [38;2;000;128;000m                  Metal[0m | [1m[38;2;100;149;237mINFO    [0m | Closing device 0
+2024-09-23T15:09:27.3392204Z [38;2;000;128;000m                  Metal[0m | [1m[38;2;100;149;237mINFO    [0m | Disabling and clearing program cache on device 0
+2024-09-23T15:09:27.5766228Z [38;2;000;128;000m                 Device[0m | [1m[38;2;100;149;237mINFO    [0m | Closing user mode device drivers
+2024-09-23T15:09:27.6902875Z [Info] Running ttnn example: ttnn/examples/usage/visualizer_example.py
+2024-09-23T15:09:28.9241243Z 2024-09-23 15:09:28.922 | WARNING  | ttnn.decorators:operation_decorator:768 - Should ttnn.pearson_correlation_coefficient be migrated to C++?
+2024-09-23T15:09:28.9243152Z 2024-09-23 15:09:28.923 | WARNING  | ttnn.decorators:operation_decorator:768 - Should ttnn.Conv1d be migrated to C++?
+2024-09-23T15:09:28.9269546Z 2024-09-23 15:09:28.926 | WARNING  | ttnn.decorators:operation_decorator:768 - Should ttnn.conv2d be migrated to C++?
+2024-09-23T15:09:28.9273935Z 2024-09-23 15:09:28.926 | WARNING  | ttnn.decorators:operation_decorator:768 - Should ttnn.reshape be migrated to C++?
+2024-09-23T15:09:28.9275769Z 2024-09-23 15:09:28.926 | WARNING  | ttnn.decorators:operation_decorator:768 - Should ttnn.unsqueeze_to_4D be migrated to C++?
+2024-09-23T15:09:28.9277589Z 2024-09-23 15:09:28.926 | WARNING  | ttnn.decorators:operation_decorator:768 - Should ttnn.from_torch be migrated to C++?
+2024-09-23T15:09:28.9279723Z 2024-09-23 15:09:28.927 | WARNING  | ttnn.decorators:operation_decorator:768 - Should ttnn.to_torch be migrated to C++?
+2024-09-23T15:09:28.9281711Z 2024-09-23 15:09:28.927 | WARNING  | ttnn.decorators:operation_decorator:768 - Should ttnn.to_device be migrated to C++?
+2024-09-23T15:09:28.9283502Z 2024-09-23 15:09:28.927 | WARNING  | ttnn.decorators:operation_decorator:768 - Should ttnn.from_device be migrated to C++?
+2024-09-23T15:09:28.9285293Z 2024-09-23 15:09:28.927 | WARNING  | ttnn.decorators:operation_decorator:768 - Should ttnn.allocate_tensor_on_device be migrated to C++?
+2024-09-23T15:09:28.9287092Z 2024-09-23 15:09:28.927 | WARNING  | ttnn.decorators:operation_decorator:768 - Should ttnn.copy_host_to_device_tensor be migrated to C++?
+2024-09-23T15:09:28.9288752Z 2024-09-23 15:09:28.927 | WARNING  | ttnn.decorators:operation_decorator:768 - Should ttnn.deallocate be migrated to C++?
+2024-09-23T15:09:28.9290478Z 2024-09-23 15:09:28.927 | WARNING  | ttnn.decorators:operation_decorator:768 - Should ttnn.reallocate be migrated to C++?
+2024-09-23T15:09:28.9292105Z 2024-09-23 15:09:28.927 | WARNING  | ttnn.decorators:operation_decorator:768 - Should ttnn.load_tensor be migrated to C++?
+2024-09-23T15:09:28.9294676Z 2024-09-23 15:09:28.927 | WARNING  | ttnn.decorators:operation_decorator:768 - Should ttnn.dump_tensor be migrated to C++?
+2024-09-23T15:09:28.9296290Z 2024-09-23 15:09:28.927 | WARNING  | ttnn.decorators:operation_decorator:768 - Should ttnn.as_tensor be migrated to C++?
+2024-09-23T15:09:28.9301265Z 2024-09-23 15:09:28.929 | WARNING  | ttnn.decorators:operation_decorator:768 - Should ttnn.avg_pool2d be migrated to C++?
+2024-09-23T15:09:28.9331595Z 2024-09-23 15:09:28.932 | WARNING  | ttnn.decorators:operation_decorator:768 - Should ttnn.conv2d be migrated to C++?
+2024-09-23T15:09:28.9334021Z 2024-09-23 15:09:28.932 | WARNING  | ttnn.decorators:operation_decorator:768 - Should ttnn.avg_pool2d be migrated to C++?
+2024-09-23T15:09:28.9336216Z 2024-09-23 15:09:28.932 | WARNING  | ttnn.decorators:operation_decorator:768 - Should ttnn.Conv1d be migrated to C++?
+2024-09-23T15:09:28.9464652Z [38;2;000;128;000m                 Device[0m | [1m[38;2;100;149;237mINFO    [0m | Opening user mode device driver
+2024-09-23T15:09:28.9881965Z 
+2024-09-23T15:09:29.0204485Z [32m2024-09-23 15:09:29.019[0m | [1m[38;2;100;149;237mINFO    [0m | [36mSiliconDriver  [0m - Detected 1 PCI device : [0]
+2024-09-23T15:09:29.0347122Z [32m2024-09-23 15:09:29.034[0m | [1m[38;2;255;165;000mWARNING [0m | [36mSiliconDriver  [0m - init_detect_tt_device_numanodes(): Could not determine NumaNodeSet for TT device (physical_device_id: 0 pci_bus_id: 0000:07:00.0)
+2024-09-23T15:09:29.0349615Z [32m2024-09-23 15:09:29.034[0m | [1m[38;2;255;165;000mWARNING [0m | [36mSiliconDriver  [0m - Could not find NumaNodeSet for TT Device (physical_device_id: 0 pci_bus_id: 0000:07:00.0)
+2024-09-23T15:09:29.0357168Z [32m2024-09-23 15:09:29.035[0m | [1m[38;2;255;165;000mWARNING [0m | [36mSiliconDriver  [0m - bind_area_memory_nodeset(): Unable to determine TT Device to NumaNode mapping for physical_device_id: 0. Skipping membind.
+2024-09-23T15:09:29.0360149Z [0;33m---- ttSiliconDevice::init_hugepage: bind_area_to_memory_nodeset() failed (physical_device_id: 0 ch: 0). Hugepage allocation is not on NumaNode matching TT Device. Side-Effect is decreased Device->Host perf (Issue #893).
+2024-09-23T15:09:29.0396326Z [0m[32m2024-09-23 15:09:29.038[0m | [1m[38;2;255;165;000mWARNING [0m | [36mSiliconDriver  [0m - bind_area_memory_nodeset(): Unable to determine TT Device to NumaNode mapping for physical_device_id: 0. Skipping membind.
+2024-09-23T15:09:29.0399213Z [0;33m---- ttSiliconDevice::init_hugepage: bind_area_to_memory_nodeset() failed (physical_device_id: 0 ch: 1). Hugepage allocation is not on NumaNode matching TT Device. Side-Effect is decreased Device->Host perf (Issue #893).
+2024-09-23T15:09:29.0499730Z [0m[32m2024-09-23 15:09:29.049[0m | [1m[38;2;100;149;237mINFO    [0m | [36mSiliconDriver  [0m - Software version 6.0.0, Ethernet FW version 6.9.0 (Device 0)
+2024-09-23T15:09:29.0504873Z [32m2024-09-23 15:09:29.049[0m | [1m[38;2;100;149;237mINFO    [0m | [36mSiliconDriver  [0m - Software version 6.0.0, Ethernet FW version 6.9.0 (Device 1)
+2024-09-23T15:09:29.0545780Z [38;2;000;128;000m                  Metal[0m | [1m[38;2;100;149;237mINFO    [0m | Initializing device 0. Program cache is NOT enabled
+2024-09-23T15:09:29.0547226Z [38;2;000;128;000m                  Metal[0m | [1m[38;2;100;149;237mINFO    [0m | AI CLK for device 0 is:   1000 MHz
+2024-09-23T15:09:30.3606416Z [38;2;000;128;000m                  Metal[0m | [1m[38;2;100;149;237mINFO    [0m | MMIO Device 0 : Tunnel 0 : Device 0
+2024-09-23T15:09:30.3607844Z [38;2;000;128;000m                  Metal[0m | [1m[38;2;100;149;237mINFO    [0m | MMIO Device 0 : Tunnel 0 : Device 1
+2024-09-23T15:09:31.1381244Z [38;2;000;128;000m                  Metal[0m | [1m[38;2;100;149;237mINFO    [0m | Closing device 0
+2024-09-23T15:09:31.1383104Z [38;2;000;128;000m                  Metal[0m | [1m[38;2;100;149;237mINFO    [0m | Disabling and clearing program cache on device 0
+2024-09-23T15:09:31.3092690Z [38;2;000;128;000m                 Device[0m | [1m[38;2;100;149;237mINFO    [0m | Closing user mode device drivers
+2024-09-23T15:09:33.0131236Z Prepare all required actions
+2024-09-23T15:09:33.0131946Z Getting action download info
+2024-09-23T15:09:33.2988060Z Download action repository 'actions/upload-artifact@v4' (SHA:50769540e7f4bd5e21e526ee35c689e35e0d6874)
+2024-09-23T15:09:33.9512922Z ##[group]Run ./.github/actions/upload-artifact-with-job-uuid
+2024-09-23T15:09:33.9513565Z with:
+2024-09-23T15:09:33.9513958Z   path: generated/test_reports/
+
+2024-09-23T15:09:33.9514458Z   prefix: test_reports_
+2024-09-23T15:09:33.9514875Z env:
+2024-09-23T15:09:33.9515232Z   LOGURU_LEVEL: INFO
+2024-09-23T15:09:33.9515905Z   LD_LIBRARY_PATH: /home/ubuntu/actions-runner/_work/tt-metal/tt-metal/build/lib
+2024-09-23T15:09:33.9516660Z   IMAGE_TAG: latest
+2024-09-23T15:09:33.9517075Z ##[endgroup]
+2024-09-23T15:09:33.9556727Z ##[group]Run uuid=$(uuidgen)
+2024-09-23T15:09:33.9557238Z [36;1muuid=$(uuidgen)[0m
+2024-09-23T15:09:33.9557743Z [36;1martifact_name="test_reports_$uuid"[0m
+2024-09-23T15:09:33.9558540Z [36;1mecho "[UPLOAD-ARTIFACT-UUID] $artifact_name"[0m
+2024-09-23T15:09:33.9559305Z [36;1mecho "artifact-name=$artifact_name" >> "$GITHUB_OUTPUT"[0m
+2024-09-23T15:09:33.9579094Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2024-09-23T15:09:33.9579725Z env:
+2024-09-23T15:09:33.9580320Z   LOGURU_LEVEL: INFO
+2024-09-23T15:09:33.9581003Z   LD_LIBRARY_PATH: /home/ubuntu/actions-runner/_work/tt-metal/tt-metal/build/lib
+2024-09-23T15:09:33.9582556Z   IMAGE_TAG: latest
+2024-09-23T15:09:33.9582977Z ##[endgroup]
+2024-09-23T15:09:33.9642091Z [UPLOAD-ARTIFACT-UUID] test_reports_ce0f20cd-83d4-4c4c-a071-635cf0df7db6
+2024-09-23T15:09:33.9743701Z ##[group]Run actions/upload-artifact@v4
+2024-09-23T15:09:33.9744276Z with:
+2024-09-23T15:09:33.9744801Z   name: test_reports_ce0f20cd-83d4-4c4c-a071-635cf0df7db6
+2024-09-23T15:09:33.9745490Z   path: generated/test_reports/
+
+2024-09-23T15:09:33.9746094Z   if-no-files-found: warn
+2024-09-23T15:09:33.9746570Z   compression-level: 6
+2024-09-23T15:09:33.9747048Z   overwrite: false
+2024-09-23T15:09:33.9747582Z   include-hidden-files: false
+2024-09-23T15:09:33.9748092Z env:
+2024-09-23T15:09:33.9748468Z   LOGURU_LEVEL: INFO
+2024-09-23T15:09:33.9749197Z   LD_LIBRARY_PATH: /home/ubuntu/actions-runner/_work/tt-metal/tt-metal/build/lib
+2024-09-23T15:09:33.9749988Z   IMAGE_TAG: latest
+2024-09-23T15:09:33.9750440Z ##[endgroup]
+2024-09-23T15:09:34.2401108Z ##[warning]No files were found with the provided path: generated/test_reports/. No artifacts will be uploaded.
+2024-09-23T15:09:34.2587281Z Post job cleanup.
+2024-09-23T15:09:34.2636181Z Post job cleanup.
+2024-09-23T15:09:34.6251012Z [command]/usr/bin/docker logout https://ghcr.io
+2024-09-23T15:09:34.6431233Z Removing login credentials for ghcr.io
+2024-09-23T15:09:34.6491356Z ##[group]Post cache
+2024-09-23T15:09:34.6492691Z State not set
+2024-09-23T15:09:34.6494382Z ##[endgroup]
+2024-09-23T15:09:34.6686708Z Post job cleanup.
+2024-09-23T15:09:34.6765535Z Post job cleanup.
+2024-09-23T15:09:34.7916134Z [command]/usr/bin/git version
+2024-09-23T15:09:34.7960033Z git version 2.25.1
+2024-09-23T15:09:34.8013717Z Temporarily overriding HOME='/home/ubuntu/actions-runner/_work/_temp/732c8f27-14c0-4cc1-8d7c-52a001c6fece' before making global git config changes
+2024-09-23T15:09:34.8015780Z Adding repository directory to the temporary git global config as a safe directory
+2024-09-23T15:09:34.8020850Z [command]/usr/bin/git config --global --add safe.directory /home/ubuntu/actions-runner/_work/tt-metal/tt-metal
+2024-09-23T15:09:34.8068169Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+2024-09-23T15:09:34.8100671Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+2024-09-23T15:09:34.8380957Z Entering 'models/demos/t3000/llama2_70b/reference/llama'
+2024-09-23T15:09:34.8425837Z Entering 'tt_metal/third_party/lfs'
+2024-09-23T15:09:34.8470268Z Entering 'tt_metal/third_party/pybind11'
+2024-09-23T15:09:34.8514025Z Entering 'tt_metal/third_party/sfpi'
+2024-09-23T15:09:34.8561496Z Entering 'tt_metal/third_party/taskflow'
+2024-09-23T15:09:34.8613016Z Entering 'tt_metal/third_party/tracy'
+2024-09-23T15:09:34.8659694Z Entering 'tt_metal/third_party/tt_llk_blackhole'
+2024-09-23T15:09:34.8704323Z Entering 'tt_metal/third_party/tt_llk_grayskull'
+2024-09-23T15:09:34.8746897Z Entering 'tt_metal/third_party/tt_llk_wormhole_b0'
+2024-09-23T15:09:34.8787573Z Entering 'tt_metal/third_party/umd'
+2024-09-23T15:09:34.8830229Z Entering 'tt_metal/third_party/umd/third_party/fmt'
+2024-09-23T15:09:34.8920548Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+2024-09-23T15:09:34.8921646Z http.https://github.com/.extraheader
+2024-09-23T15:09:34.8932630Z [command]/usr/bin/git config --local --unset-all http.https://github.com/.extraheader
+2024-09-23T15:09:34.8968949Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+2024-09-23T15:09:34.9221987Z Entering 'models/demos/t3000/llama2_70b/reference/llama'
+2024-09-23T15:09:34.9252366Z http.https://github.com/.extraheader
+2024-09-23T15:09:34.9291719Z Entering 'tt_metal/third_party/lfs'
+2024-09-23T15:09:34.9319332Z http.https://github.com/.extraheader
+2024-09-23T15:09:34.9362405Z Entering 'tt_metal/third_party/pybind11'
+2024-09-23T15:09:34.9392069Z http.https://github.com/.extraheader
+2024-09-23T15:09:34.9435601Z Entering 'tt_metal/third_party/sfpi'
+2024-09-23T15:09:34.9466409Z http.https://github.com/.extraheader
+2024-09-23T15:09:34.9511654Z Entering 'tt_metal/third_party/taskflow'
+2024-09-23T15:09:34.9539799Z http.https://github.com/.extraheader
+2024-09-23T15:09:34.9584662Z Entering 'tt_metal/third_party/tracy'
+2024-09-23T15:09:34.9612614Z http.https://github.com/.extraheader
+2024-09-23T15:09:34.9647704Z Entering 'tt_metal/third_party/tt_llk_blackhole'
+2024-09-23T15:09:34.9673044Z http.https://github.com/.extraheader
+2024-09-23T15:09:34.9710899Z Entering 'tt_metal/third_party/tt_llk_grayskull'
+2024-09-23T15:09:34.9739598Z http.https://github.com/.extraheader
+2024-09-23T15:09:34.9780481Z Entering 'tt_metal/third_party/tt_llk_wormhole_b0'
+2024-09-23T15:09:34.9811495Z http.https://github.com/.extraheader
+2024-09-23T15:09:34.9845420Z Entering 'tt_metal/third_party/umd'
+2024-09-23T15:09:34.9870827Z http.https://github.com/.extraheader
+2024-09-23T15:09:34.9905448Z Entering 'tt_metal/third_party/umd/third_party/fmt'
+2024-09-23T15:09:34.9929105Z http.https://github.com/.extraheader
+2024-09-23T15:09:35.0083747Z A job completed hook has been configured by the self-hosted runner administrator
+2024-09-23T15:09:35.0120935Z ##[group]Run '/opt/tt_metal_infra/scripts/ci/wormhole_b0/cleanup.sh'
+2024-09-23T15:09:35.0135437Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2024-09-23T15:09:35.0136147Z ##[endgroup]
+2024-09-23T15:09:35.0205096Z Current date / time is Mon Sep 23 15:09:35 UTC 2024
+2024-09-23T15:09:35.0205897Z Printing out cpu information...
+2024-09-23T15:09:35.0239804Z Architecture:                       x86_64
+2024-09-23T15:09:35.0241052Z CPU op-mode(s):                     32-bit, 64-bit
+2024-09-23T15:09:35.0241843Z Byte Order:                         Little Endian
+2024-09-23T15:09:35.0243061Z Address sizes:                      40 bits physical, 48 bits virtual
+2024-09-23T15:09:35.0244379Z CPU(s):                             14
+2024-09-23T15:09:35.0246108Z On-line CPU(s) list:                0-13
+2024-09-23T15:09:35.0246940Z Thread(s) per core:                 1
+2024-09-23T15:09:35.0247748Z Core(s) per socket:                 1
+2024-09-23T15:09:35.0248403Z Socket(s):                          14
+2024-09-23T15:09:35.0249018Z NUMA node(s):                       2
+2024-09-23T15:09:35.0249643Z Vendor ID:                          AuthenticAMD
+2024-09-23T15:09:35.0250675Z CPU family:                         23
+2024-09-23T15:09:35.0251256Z Model:                              49
+2024-09-23T15:09:35.0252036Z Model name:                         AMD EPYC-Rome Processor
+2024-09-23T15:09:35.0252708Z Stepping:                           0
+2024-09-23T15:09:35.0253303Z CPU MHz:                            2299.942
+2024-09-23T15:09:35.0253923Z BogoMIPS:                           4599.88
+2024-09-23T15:09:35.0254582Z Virtualization:                     AMD-V
+2024-09-23T15:09:35.0255196Z Hypervisor vendor:                  KVM
+2024-09-23T15:09:35.0256121Z Virtualization type:                full
+2024-09-23T15:09:35.0256736Z L1d cache:                          448 KiB
+2024-09-23T15:09:35.0257353Z L1i cache:                          448 KiB
+2024-09-23T15:09:35.0257957Z L2 cache:                           7 MiB
+2024-09-23T15:09:35.0258556Z L3 cache:                           224 MiB
+2024-09-23T15:09:35.0259213Z NUMA node0 CPU(s):                  0-6
+2024-09-23T15:09:35.0260121Z NUMA node1 CPU(s):                  7-13
+2024-09-23T15:09:35.0260842Z Vulnerability Gather data sampling: Not affected
+2024-09-23T15:09:35.0261567Z Vulnerability Itlb multihit:        Not affected
+2024-09-23T15:09:35.0262262Z Vulnerability L1tf:                 Not affected
+2024-09-23T15:09:35.0262950Z Vulnerability Mds:                  Not affected
+2024-09-23T15:09:35.0263638Z Vulnerability Meltdown:             Not affected
+2024-09-23T15:09:35.0264309Z Vulnerability Mmio stale data:      Not affected
+2024-09-23T15:09:35.0265002Z Vulnerability Retbleed:             Vulnerable
+2024-09-23T15:09:35.0266023Z Vulnerability Spec store bypass:    Mitigation; Speculative Store Bypass disabled via prctl and seccomp
+2024-09-23T15:09:35.0267712Z Vulnerability Spectre v1:           Mitigation; usercopy/swapgs barriers and __user pointer sanitization
+2024-09-23T15:09:35.0269485Z Vulnerability Spectre v2:           Mitigation; Retpolines; IBPB conditional; STIBP disabled; RSB filling; PBRSB-eIBRS Not affected; BHI Not affected
+2024-09-23T15:09:35.0270741Z Vulnerability Srbds:                Not affected
+2024-09-23T15:09:35.0271410Z Vulnerability Tsx async abort:      Not affected
+2024-09-23T15:09:35.0275448Z Flags:                              fpu vme de pse tsc msr pae mce cx8 apic sep mtrr pge mca cmov pat pse36 clflush mmx fxsr sse sse2 syscall nx mmxext fxsr_opt pdpe1gb rdtscp lm constant_tsc rep_good nopl nonstop_tsc cpuid extd_apicid tsc_known_freq pni pclmulqdq ssse3 fma cx16 sse4_1 sse4_2 x2apic movbe popcnt aes xsave avx f16c rdrand hypervisor lahf_lm svm cr8_legacy abm sse4a misalignsse 3dnowprefetch osvw topoext perfctr_core ssbd ibpb stibp vmmcall fsgsbase bmi1 avx2 smep bmi2 rdseed adx smap clflushopt clwb sha_ni xsaveopt xsavec xgetbv1 clzero xsaveerptr wbnoinvd arat npt nrip_save umip rdpid
+2024-09-23T15:09:35.0501604Z Cleaning up orphan processes

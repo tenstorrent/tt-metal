@@ -1,10 +1,11 @@
 ---
 test-list:
-  - ttnn-eltwise-log1p:
+  - eltwise-log1p:
       shape:
         start-shape: [1, 1, 32, 32]
         end-shape: [6, 12, 256, 256]
         interval: [1, 1, 32, 32]
+        num-dims: [2, 3, 4]
         num-shapes: 1
         num-samples: 128
         args-sampling-strategy: "all"
@@ -16,11 +17,12 @@ test-list:
       comparison:
         function: comp_pcc
       args-gen: gen_dtype_layout_device
+      sanitize-args: False
       output-file: eltwise_log1p_sweep.csv
       env:
         # TT_PCI_DMA_BUF_SIZE: "1048576"
       args:
         data-layout: ["TILE"]
-        data-type: ["BFLOAT16"]
+        data-type: ["BFLOAT16", "BFLOAT8_B"]
         buffer-type: ["DRAM", "L1"]
         out-buffer-type: ["DRAM", "L1"]

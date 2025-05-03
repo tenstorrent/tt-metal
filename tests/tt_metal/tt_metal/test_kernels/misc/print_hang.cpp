@@ -7,9 +7,6 @@
 
 /*
  * Test kernel that wait for a signal that never raises.
-*/
+ */
 
-void kernel_main() {
-    DPRINT << WAIT{1};
-    print_test_data();
-}
+void kernel_main() { DPRINT << WAIT{1}; }

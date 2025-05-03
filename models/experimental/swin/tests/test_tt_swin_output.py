@@ -12,7 +12,7 @@ from models.utility_functions import (
     comp_allclose,
     comp_pcc,
 )
-import tt_lib
+
 from models.experimental.swin.tt.swin_output import (
     TtSwinOutput,
 )

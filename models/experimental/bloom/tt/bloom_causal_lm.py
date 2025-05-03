@@ -3,12 +3,10 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
-from torch.nn import functional as F
 
-import tt_lib
 import models.experimental.bloom.bloom_utils as bloom_utils
 import models.experimental.bloom.tt.bloom_model as bloom_model
-from typing import Optional, Tuple, Union
+from typing import Optional, Tuple
 
 
 class TtBloomForCausalLM:
@@ -18,7 +16,7 @@ class TtBloomForCausalLM:
         self.lm_head_weight = bloom_utils.torch2tt_tensor(state_dict["lm_head.weight"], device)
 
         # Transpose the weights
-        self.lm_head_weight = tt_lib.tensor.transpose(self.lm_head_weight, -2, -1)
+        self.lm_head_weight = ttnn.transpose(self.lm_head_weight, -2, -1)
 
     # def get_output_embeddings(self):
     #    return self.lm_head

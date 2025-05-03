@@ -5,7 +5,7 @@
 from typing import Tuple
 from torch import nn
 
-import tt_lib
+import ttnn
 
 from models.experimental.deit.tt.deit_config import DeiTConfig
 from models.experimental.deit.tt.deit_embeddings import DeiTEmbeddings
@@ -52,34 +52,22 @@ class TtDeiTModel(nn.Module):
             biases=ln_bias,
         )
 
-        self.pooler = (
-            TtDeiTPooler(config, state_dict, f"{base_address}.pooler")
-            if add_pooling_layer
-            else None
-        )
+        self.pooler = TtDeiTPooler(config, state_dict, f"{base_address}.pooler") if add_pooling_layer else None
 
     def forward(
         self,
-        pixel_values: tt_lib.tensor.Tensor = None,
+        pixel_values: ttnn.Tensor = None,
         bool_masked_pos: bool = None,
         head_mask: bool = None,
         output_attentions: bool = None,
         output_hidden_states: bool = None,
         return_dict: bool = None,
-    ) -> Tuple[tt_lib.tensor.Tensor]:
-        output_attentions = (
-            output_attentions
-            if output_attentions is not None
-            else self.config.output_attentions
-        )
+    ) -> Tuple[ttnn.Tensor]:
+        output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
         output_hidden_states = (
-            output_hidden_states
-            if output_hidden_states is not None
-            else self.config.output_hidden_states
+            output_hidden_states if output_hidden_states is not None else self.config.output_hidden_states
         )
-        return_dict = (
-            return_dict if return_dict is not None else self.config.use_return_dict
-        )
+        return_dict = return_dict if return_dict is not None else self.config.use_return_dict
 
         if pixel_values is None:
             raise ValueError("You have to specify pixel_values")
@@ -92,9 +80,7 @@ class TtDeiTModel(nn.Module):
         if pixel_values.dtype != expected_dtype:
             pixel_values = pixel_values.to(expected_dtype)
 
-        embedding_output = self.embeddings(
-            pixel_values, bool_masked_pos=bool_masked_pos
-        )
+        embedding_output = self.embeddings(pixel_values, bool_masked_pos=bool_masked_pos)
         embedding_output = torch_to_tt_tensor_rm(embedding_output, self.device)
 
         encoder_outputs = self.encoder(
@@ -106,14 +92,8 @@ class TtDeiTModel(nn.Module):
         )
         sequence_output = encoder_outputs[0]
         sequence_output = self.layernorm(sequence_output)
-        pooled_output = (
-            self.pooler(sequence_output) if self.pooler is not None else None
-        )
+        pooled_output = self.pooler(sequence_output) if self.pooler is not None else None
 
-        head_outputs = (
-            (sequence_output, pooled_output)
-            if pooled_output is not None
-            else (sequence_output,)
-        )
+        head_outputs = (sequence_output, pooled_output) if pooled_output is not None else (sequence_output,)
 
         return head_outputs + encoder_outputs[1:]

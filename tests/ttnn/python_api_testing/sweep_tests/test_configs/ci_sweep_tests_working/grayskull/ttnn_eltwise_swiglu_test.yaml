@@ -4,7 +4,7 @@ test-list:
       shape:
         start-shape: [1, 1, 32, 64]
         end-shape: [1, 1, 128, 192]
-        interval: [1, 1, 2, 64]
+        interval: [1, 1, 32, 64]
         num-dims: [2, 3, 4]
         num-shapes: 1
         num-samples: 128
@@ -17,6 +17,7 @@ test-list:
       comparison:
         function: comp_pcc
       args-gen: gen_dtype_layout_device
+      sanitize-args: False
       args:
         data-layout: ["TILE"]
         data-type: ["BFLOAT16", "BFLOAT8_B"]

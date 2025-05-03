@@ -1,0 +1,195 @@
+name: "[internal] Produce data for external analysis"
+
+on:
+  workflow_call:
+  workflow_dispatch:
+    inputs:
+      test_workflow_run_id:
+        description: "Unique GitHub workflow run ID to use for data"
+        default: 12788722730
+        type: number
+      test_workflow_run_attempt:
+        description: "Run attempt of the workflow run"
+        default: 1
+        type: number
+      upload_data:
+        description: "Upload data to datastore cluster for our dashboard"
+        default: false
+        type: boolean
+  workflow_run:
+    workflows:
+      - "All post-commit tests"
+      - "(Single-card) Model perf tests"
+      - "(Single-card) Device perf regressions"
+      - "(Single-card) Demo tests"
+      - "(Single-card) Tests for new models"
+      - "(Single-card) Fast dispatch frequent tests"
+      - "(Single-card) Frequent model and ttnn tests"
+      - "(T3K) T3000 demo tests"
+      - "(T3K) T3000 frequent tests"
+      - "(T3K) T3000 model perf tests"
+      - "(T3K) T3000 nightly tests"
+      - "(T3K) T3000 perplexity tests"
+      - "(T3K) T3000 profiler tests"
+      - "(T3K) T3000 unit tests"
+      - "(T3K) T3000 fast tests"
+      - "(TG) TG unit tests"
+      - "(TG) TG demo tests"
+      - "(TG) TG frequent tests"
+      - "(TG) TG model perf tests"
+      - "(TG) TG nightly tests"
+      - "Galaxy Quick"
+      - "ttnn - Run sweeps"
+      - "Blackhole post-commit tests"
+      - "(Blackhole) Blackhole nightly tests"
+      - "(Blackhole) Demo tests"
+      - "PR Gate"
+      - "Nightly tt-metal L2 tests"
+      - "Package and release"
+    types:
+      - completed
+
+jobs:
+  produce-cicd-data:
+    if: |
+      # Check if triggered by `workflow_run` with specific conclusion states,
+      # or if it's triggered by `workflow_call` or `workflow_dispatch`
+      ${{ github.event_name == 'workflow_run' && (github.event.workflow_run.conclusion == 'success' || github.event.workflow_run.conclusion == 'failure' || github.event.workflow_run.conclusion == 'cancelled') }} ||
+      ${{ github.event_name == 'workflow_call' }} ||
+      ${{ github.event_name == 'workflow_dispatch' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Output (safe) pipeline values
+        run: |
+          echo "pipeline_id (id / run #): ${{ github.run_id }}/${{ github.run_attempt }}"
+          echo "submissions_ts: "
+          echo "start_ts: "
+          echo "end_ts: "
+          echo "name: ${{ github.workflow }}, but rk recommended name w/out @: ${{ github.workflow_ref }}"
+          echo "trigger: ${{ github.event_name }}"
+          echo "sha: ${{ github.sha }}"
+          echo "(triggering) author/actor: ${{ github.actor }}"
+          echo "author/actor: ${{ github.triggering_actor }}"
+          echo "orchestrator: github (Static)"
+          echo "docker_image: ${{ job.container.image }}"
+          echo "build duration is post-process"
+      - name: Get workflow run_id attempt number to analyze
+        id: get-run-id-and-attempt
+        shell: bash
+        run: |
+          event_name="${{ github.event_name }}"
+          if [[ "$event_name" == "workflow_dispatch" ]]; then
+            run_id="${{ inputs.test_workflow_run_id }}"
+            attempt_number="${{ inputs.test_workflow_run_attempt }}"
+          elif [[ "$event_name" == "workflow_run" ]]; then
+            run_id="${{ github.event.workflow_run.id }}"
+            attempt_number="${{ github.event.workflow_run.run_attempt }}"
+            [[ -z "$run_id" ]] && { echo "run_id is empty" ; exit 1; }
+            [[ -z "$attempt_number" ]] && { echo "attempt_number is empty" ; exit 1; }
+          else
+            echo "Unknown event name" && exit 1
+          fi
+
+          echo $run_id
+          echo $attempt_number
+          echo "run-id=$run_id" >> "$GITHUB_OUTPUT"
+          echo "attempt-number=$attempt_number" >> "$GITHUB_OUTPUT"
+
+          echo "::notice title=target-workflow-link::The workflow being analyzed is available at https://github.com/tenstorrent/tt-metal/actions/runs/$run_id/attempts/$attempt_number"
+      - name: Get API rate limit status
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          echo "[Info] Grabbing API rate limit status"
+          gh api rate_limit
+      - name: Output auxiliary values
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          echo "Sleeping for 60 seconds for github to fully sync the workflow run before calling the API"
+          sleep 60
+          echo "[Info] Workflow run attempt"
+          gh api /repos/tenstorrent/tt-metal/actions/runs/${{ steps.get-run-id-and-attempt.outputs.run-id }}/attempts/${{ steps.get-run-id-and-attempt.outputs.attempt-number }}
+          gh api /repos/tenstorrent/tt-metal/actions/runs/${{ steps.get-run-id-and-attempt.outputs.run-id }}/attempts/${{ steps.get-run-id-and-attempt.outputs.attempt-number }} > workflow.json
+          echo "[Info] Workflow run attempt jobs"
+          gh api /repos/tenstorrent/tt-metal/actions/runs/${{ steps.get-run-id-and-attempt.outputs.run-id }}/attempts/${{ steps.get-run-id-and-attempt.outputs.attempt-number }}/jobs --paginate
+          # GitHub chunks the jobs array into multiple objects side-by-side if there are more than 100 jobs, so we need to slurp them into one giant object for later Python processing
+          gh api /repos/tenstorrent/tt-metal/actions/runs/${{ steps.get-run-id-and-attempt.outputs.run-id }}/attempts/${{ steps.get-run-id-and-attempt.outputs.attempt-number }}/jobs --paginate | jq -s '{total_count: .[0].total_count, jobs: map(.jobs) | add}' > workflow_jobs.json
+      - name: Collect workflow artifact and job logs
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          ./infra/data_collection/github/download_cicd_logs_and_artifacts.sh --workflow-run-id ${{ steps.get-run-id-and-attempt.outputs.run-id }} --attempt-number ${{ steps.get-run-id-and-attempt.outputs.attempt-number }}
+          find generated/cicd/ -type f
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+          cache: 'pip'
+          cache-dependency-path: 'infra/requirements-infra.txt'
+      - name: Install infra dependencies
+        run: pip install -r infra/requirements-infra.txt
+      - name: Create JSON
+        env:
+          PYTHONPATH: ${{ github.workspace }}
+        run: python3 .github/scripts/data_analysis/create_pipeline_json.py
+      - name: Show directory to see output files
+        run: ls -hal
+      - name: Upload cicd data
+        uses: ./.github/actions/upload-data-via-sftp
+        if: ${{ github.event_name == 'workflow_run' || inputs.upload_data }}
+        with:
+          ssh-private-key: ${{ secrets.SFTP_CICD_WRITER_KEY }}
+          sftp-batchfile: .github/actions/upload-data-via-sftp/cicd_data_batchfile.txt
+          username: ${{ secrets.SFTP_CICD_WRITER_USERNAME }}
+          hostname: ${{ secrets.SFTP_CICD_WRITER_HOSTNAME }}
+      - name: Upload workflow run data, even on failure
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        timeout-minutes: 10
+        with:
+          name: workflow-run-data
+          path: |
+            if-no-files-found: warn
+            path: |
+              pipelinecopy_*.json
+              workflow.json
+              workflow_jobs.json
+      - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
+        if: ${{ failure() }}
+        with:
+          slack_webhook_url: ${{ secrets.SLACK_WEBHOOK_URL }}
+          owner: U0883RN6CRE # William Ly
+  test-produce-complete-benchmark-with-environment:
+    if: |
+      # Check if triggered by `workflow_run` with specific conclusion states,
+      # or if it's triggered by `workflow_call` or `workflow_dispatch`
+      ${{ github.event_name == 'workflow_run' && (github.event.workflow_run.conclusion == 'success' || github.event.workflow_run.conclusion == 'failure' || github.event.workflow_run.conclusion == 'cancelled') }} ||
+      ${{ github.event_name == 'workflow_call' }} ||
+      ${{ github.event_name == 'workflow_dispatch' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5.0.0
+        with:
+          python-version: '3.10'
+          cache: 'pip'
+          cache-dependency-path: 'infra/requirements-infra.txt'
+      - name: Install infra dependencies
+        run: pip install -r infra/requirements-infra.txt
+      - name: create dummy partial benchmark JSON
+        shell: bash
+        env:
+          PYTHONPATH: ${{ github.workspace }}
+        run: |
+          mkdir -p generated/benchmark_data
+          python3 .github/scripts/data_analysis/create_dummy_partial_benchmark_json.py
+      - name: Create complete benchmark JSON test
+        env:
+          PYTHONPATH: ${{ github.workspace }}
+          ARCH_NAME: grayskull
+        run: python3 .github/scripts/data_analysis/create_benchmark_with_environment_json.py
+      - name: Show files
+        shell: bash
+        run: find generated/benchmark_data -type f | xargs -n 1 -I {} bash -c 'echo {} && cat {}'

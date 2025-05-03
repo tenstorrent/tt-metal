@@ -19,6 +19,7 @@ test-list:
       comparison:
         function: comp_pcc
       args-gen: gen_logical_immediate_args
+      sanitize-args: False
       output-file: eltwise_logical_not_sweep.csv
       args:
         data-layout: ["TILE"]

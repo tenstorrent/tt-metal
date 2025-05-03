@@ -2,7 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from typing import Any, cast, Dict, List, Optional, Union
+from typing import cast, Dict, List, Union
 
 import torch
 import torch.nn as nn

@@ -1,0 +1,74 @@
+name: "[internal] T3000 profiler tests impl"
+
+on:
+  workflow_call:
+    inputs:
+      build-artifact-name:
+        required: true
+        type: string
+      wheel-artifact-name:
+        required: true
+        type: string
+      docker-image:
+        required: true
+        type: string
+      extra-tag:
+        required: false
+        type: string
+        default: "in-service"
+
+jobs:
+  t3000-profiler-tests:
+    strategy:
+      fail-fast: false
+    name: "T3000 profiler tests"
+    runs-on:
+      - arch-wormhole_b0
+      - config-t3000
+      - pipeline-perf
+      - ${{ inputs.extra-tag }}
+    container:
+      image: ${{ inputs.docker-image }}
+      env:
+        TT_METAL_HOME: /work
+        PYTHONPATH: /work
+        LD_LIBRARY_PATH: /work/build/lib
+        ARCH_NAME: wormhole_b0
+        LOGURU_LEVEL: INFO
+        PROFILER_SCRIPTS_ROOT: /work/tt_metal/tools/profiler
+        PROFILER_TEST_SCRIPTS_ROOT: /work/tests/tt_metal/tools/profiler
+        PROFILER_ARTIFACTS_DIR: /work/generated/profiler
+        PROFILER_OUTPUT_DIR: /work/generated/profiler/reports
+        DONT_USE_VIRTUAL_ENVIRONMENT: 1
+      volumes:
+        - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
+        - /dev/hugepages-1G:/dev/hugepages-1G
+        - /mnt/MLPerf:/mnt/MLPerf:ro
+      options: "--device /dev/tenstorrent"
+    defaults:
+      run:
+        shell: bash
+        working-directory: /work # https://github.com/actions/runner/issues/878
+    steps:
+      - name: ⬇️  Setup Job
+        uses: tenstorrent/tt-metal/.github/actions/setup-job@main
+        timeout-minutes: 10
+        with:
+          build-artifact-name: ${{ inputs.build-artifact-name }}
+          wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
+      - name: Run profiler regression tests
+        timeout-minutes: 30
+        run: |
+          ./tests/scripts/run_profiler_regressions.sh
+      - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
+        if: ${{ failure() }}
+        with:
+          slack_webhook_url: ${{ secrets.SLACK_WEBHOOK_URL }}
+          owner: U03BJ1L3LUQ # Mo Memarian
+      - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
+        timeout-minutes: 10
+        if: ${{ !cancelled() }}
+        with:
+          prefix: "test_reports_"
+      - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
+        if: always()

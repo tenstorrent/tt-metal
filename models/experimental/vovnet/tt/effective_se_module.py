@@ -8,8 +8,7 @@ from models.utility_functions import (
     tt_to_torch_tensor,
     torch_to_tt_tensor_rm,
 )
-
-import tt_lib
+import ttnn
 from tt_lib import fallback_ops
 
 
@@ -34,12 +33,8 @@ class TtEffectiveSEModule(nn.Module):
         self.device = device
         self.base_address = base_address
 
-        conv_weight = torch_to_tt_tensor_rm(
-            state_dict[f"{base_address}.fc.weight"], self.device, put_on_device=False
-        )
-        conv_bias = torch_to_tt_tensor_rm(
-            state_dict[f"{base_address}.fc.bias"], self.device, put_on_device=False
-        )
+        conv_weight = torch_to_tt_tensor_rm(state_dict[f"{base_address}.fc.weight"], self.device, put_on_device=False)
+        conv_bias = torch_to_tt_tensor_rm(state_dict[f"{base_address}.fc.bias"], self.device, put_on_device=False)
 
         self.fc = fallback_ops.Conv2d(
             weights=conv_weight,
@@ -53,9 +48,9 @@ class TtEffectiveSEModule(nn.Module):
             padding_mode="zeros",
         )
 
-        self.activation = tt_lib.tensor.hardsigmoid
+        self.activation = ttnn.hardsigmoid
 
-    def forward(self, input: tt_lib.tensor.Tensor) -> tt_lib.tensor.Tensor:
+    def forward(self, input: ttnn.Tensor) -> ttnn.Tensor:
         out = tt_to_torch_tensor(input)
         out = out.mean((2, 3), keepdim=True)
         if self.add_maxpool:
@@ -64,7 +59,5 @@ class TtEffectiveSEModule(nn.Module):
         out = torch_to_tt_tensor_rm(out, self.device, put_on_device=False)
         out = self.fc(out)
         out = self.activation(out)
-        out = tt_lib.tensor.bcast(
-            input, out, tt_lib.tensor.BcastOpMath.MUL, tt_lib.tensor.BcastOpDim.HW
-        )
+        out = ttnn.multiply(input, out)
         return out

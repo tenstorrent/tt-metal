@@ -3,12 +3,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
-import tt_lib
+import ttnn
 
-from models.utility_functions import (
-    torch2tt_tensor,
-    tt2torch_tensor,
-)
 from models.experimental.t5.tt.t5_attention import TtT5Attention
 from models.experimental.t5.tt.t5_layer_norm import TtT5LayerNorm
 
@@ -27,9 +23,7 @@ class TtT5LayerCrossAttention(torch.nn.Module):
         # Cross attention is only in decoder
         assert config["is_decoder"]
 
-        self.layer_norm = TtT5LayerNorm(
-            config, state_dict, f"{base_address}.layer_norm", device
-        )
+        self.layer_norm = TtT5LayerNorm(config, state_dict, f"{base_address}.layer_norm", device)
         # self.dropout = nn.Dropout(config["dropout_rate"])
 
     def forward(
@@ -57,8 +51,6 @@ class TtT5LayerCrossAttention(torch.nn.Module):
             output_attentions=output_attentions,
         )
         # layer_output = hidden_states + self.dropout(attention_output[0])
-        layer_output = tt_lib.tensor.add(hidden_states, attention_output[0])
-        outputs = (layer_output,) + attention_output[
-            1:
-        ]  # add attentions if we output them
+        layer_output = ttnn.add(hidden_states, attention_output[0])
+        outputs = (layer_output,) + attention_output[1:]  # add attentions if we output them
         return outputs

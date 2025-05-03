@@ -1,0 +1,115 @@
+name: "[internal] Single-card Device perf regressions impl"
+
+on:
+  workflow_call:
+    inputs:
+      os:
+        required: false
+        type: string
+        default: "ubuntu-22.04"
+      docker-image:
+        required: true
+        type: string
+      build-artifact-name:
+        required: true
+        type: string
+      wheel-artifact-name:
+        required: true
+        type: string
+
+jobs:
+  device-perf:
+    strategy:
+      # Do not fail-fast because we need to ensure all tests go to completion
+      # so we try not to get hanging machines
+      fail-fast: false
+      matrix:
+        test-info: [
+          {name: "N300 WH B0", arch: wormhole_b0, runs-on: ["N300", "pipeline-perf", "bare-metal", "in-service"], machine-type: "bare_metal", timeout: 75},
+        ]
+    name: "${{ matrix.test-info.name }} device perf"
+    runs-on: ${{ matrix.test-info.runs-on }}
+    container:
+      image: ${{ inputs.docker-image || 'docker-image-unresolved!' }}
+      env:
+        TT_METAL_HOME: /work
+        PYTHONPATH: /work
+        LD_LIBRARY_PATH: /work/build/lib
+        ARCH_NAME: ${{ matrix.test-info.arch }}
+        LOGURU_LEVEL: INFO
+        GITHUB_ACTIONS: true
+      volumes:
+        - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
+        - /dev/hugepages-1G:/dev/hugepages-1G
+        - /mnt/MLPerf:/mnt/MLPerf:ro
+      options: "--device /dev/tenstorrent"
+    defaults:
+      run:
+        shell: bash
+        working-directory: /work # https://github.com/actions/runner/issues/878
+    steps:
+      - name: ⬇️  Setup Job
+        uses: tenstorrent/tt-metal/.github/actions/setup-job@main
+        timeout-minutes: 10
+        with:
+          build-artifact-name: ${{ inputs.build-artifact-name }}
+          wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
+
+      - name: ${{ matrix.test-info.name }} tests
+        timeout-minutes: ${{ matrix.test-info.timeout }}
+        run: |
+          if [[ "${{ matrix.test-info.arch }}" == "wormhole_b0" ]]; then
+            export MAGIC_ENV=wormhole_b0_80_arch_eth_dispatch.yaml
+          fi
+          pytest models/demos/wormhole/stable_diffusion/tests -m models_device_performance_bare_metal --timeout=600
+          pytest models/demos/distilbert/tests -m models_device_performance_bare_metal
+          pytest models/demos/vgg/tests/ -m models_device_performance_bare_metal
+          pytest models/demos/convnet_mnist/tests/ -m models_device_performance_bare_metal
+          pytest models/demos/bert_tiny/tests/ -m models_device_performance_bare_metal
+          pytest models/demos/mnist/tests -m models_device_performance_bare_metal
+          pytest models/demos/squeezebert/tests -m models_device_performance_bare_metal
+          pytest models/demos/roberta/tests/ -m models_device_performance_bare_metal
+          WH_ARCH_YAML=$MAGIC_ENV pytest models/demos/wormhole/resnet50/tests -m models_device_performance_bare_metal
+          WH_ARCH_YAML=$MAGIC_ENV pytest models/experimental/functional_unet/tests/test_unet_perf.py -m models_device_performance_bare_metal
+          WH_ARCH_YAML=$MAGIC_ENV pytest models/demos/wormhole/mamba/tests -m models_device_performance_bare_metal
+          WH_ARCH_YAML=$MAGIC_ENV pytest models/demos/metal_BERT_large_11/tests -m models_device_performance_bare_metal
+          WH_ARCH_YAML=$MAGIC_ENV pytest models/demos/falcon7b_common/tests -m models_device_performance_bare_metal
+          WH_ARCH_YAML=$MAGIC_ENV pytest models/demos/wormhole/bert_tiny/tests -m models_device_performance_bare_metal
+          WH_ARCH_YAML=$MAGIC_ENV pytest models/demos/yolov4/tests -m models_device_performance_bare_metal
+          WH_ARCH_YAML=$MAGIC_ENV pytest models/demos/wormhole/distilbert/tests -m models_device_performance_bare_metal
+          WH_ARCH_YAML=$MAGIC_ENV pytest models/experimental/mobilenetv2/tests -m models_device_performance_bare_metal
+          WH_ARCH_YAML=$MAGIC_ENV pytest models/experimental/yolov8x/tests -m models_device_performance_bare_metal
+          WH_ARCH_YAML=$MAGIC_ENV pytest models/experimental/functional_yolov9c/tests/perf -m models_device_performance_bare_metal
+          WH_ARCH_YAML=$MAGIC_ENV pytest models/experimental/functional_vanilla_unet/test -m models_device_performance_bare_metal
+          WH_ARCH_YAML=$MAGIC_ENV pytest models/experimental/yolov8s_world/tests -m models_device_performance_bare_metal
+          WH_ARCH_YAML=$MAGIC_ENV pytest models/experimental/functional_vgg_unet/tests -m models_device_performance_bare_metal
+          WH_ARCH_YAML=$MAGIC_ENV pytest models/demos/segformer/tests/perf -m models_device_performance_bare_metal
+          WH_ARCH_YAML=$MAGIC_ENV pytest models/experimental/yolov10/tests -m models_device_performance_bare_metal
+          WH_ARCH_YAML=$MAGIC_ENV pytest models/demos/ufld_v2/tests -m models_device_performance_bare_metal
+          python3 models/perf/merge_device_perf_results.py
+
+      - name: Check device perf report exists
+        id: check-device-perf-report
+        if: ${{ !cancelled() }}
+        run: |
+          ls -hal
+          export DEVICE_PERF_REPORT_FILENAME=Models_Device_Perf_$(date +%Y_%m_%d).csv
+          ls -hal $DEVICE_PERF_REPORT_FILENAME
+          echo "device_perf_report_filename=$DEVICE_PERF_REPORT_FILENAME" >> "$GITHUB_OUTPUT"
+
+      - name: Upload device perf report
+        timeout-minutes: 5
+        if: ${{ !cancelled() && steps.check-device-perf-report.conclusion == 'success' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: device-perf-report-csv-${{ matrix.test-info.arch }}-${{ matrix.test-info.machine-type }}
+          path: /work/${{ steps.check-device-perf-report.outputs.device_perf_report_filename }}
+
+      - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
+        timeout-minutes: 10
+        if: ${{ !cancelled() }}
+        with:
+          prefix: "test_reports_"
+
+      - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
+        if: always()

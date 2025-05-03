@@ -13,11 +13,9 @@ from models.utility_functions import (
     comp_pcc,
 )
 
-import tt_lib
 from models.experimental.swin.tt.swin_for_image_classification import (
     TtSwinForImageClassification,
 )
-from models.experimental.swin.swin_utils import get_shape
 from transformers import SwinForImageClassification as HF_SwinForImageClassification
 from transformers import AutoFeatureExtractor
 

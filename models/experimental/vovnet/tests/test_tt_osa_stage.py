@@ -3,13 +3,10 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
-import torch.nn as nn
 import pytest
 import timm
 
 from loguru import logger
-
-import tt_lib
 
 from models.utility_functions import (
     torch_to_tt_tensor_rm,

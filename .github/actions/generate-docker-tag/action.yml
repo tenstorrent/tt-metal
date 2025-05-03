@@ -1,0 +1,35 @@
+name: "Run set of commands in Docker"
+description: "Run commands in docker"
+
+inputs:
+  image:
+    description: 'Docker image to run commands in - follows os-arch format'
+    required: false
+    default: ubuntu-20.04-amd64
+runs:
+  using: "composite"
+  steps:
+    - name: Deprecation warning
+      shell: bash
+      run: |
+        echo "::notice::[DEPRECATION] This action is deprecated. Please migrate to reading the Docker image from the pipeline."
+
+    - name: Checkout repo
+      uses: actions/checkout@v3
+      with:
+        fetch-depth: 1
+        clean: false
+
+    - name: Compute tags
+      id: tags
+      shell: bash
+      run: |
+        BUILD_TAG=$(cat \
+          install_dependencies.sh \
+          dockerfile/Dockerfile \
+          tt_metal/python_env/requirements-dev.txt \
+          docs/requirements-docs.txt \
+          tests/sweep_framework/requirements-sweeps.txt \
+          | sha1sum | cut -d' ' -f1)
+        echo "BUILD_TAG=$BUILD_TAG" >> $GITHUB_ENV
+        echo "TT_METAL_DOCKER_IMAGE_TAG=ghcr.io/${{ github.repository }}/${{ inputs.image }}:${BUILD_TAG}" >> $GITHUB_ENV

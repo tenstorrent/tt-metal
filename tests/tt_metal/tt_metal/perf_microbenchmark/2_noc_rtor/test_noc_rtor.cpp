@@ -2,16 +2,39 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <chrono>
+#include <errno.h>
+#include <fmt/base.h>
+#include <stdint.h>
+#include <stdlib.h>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tt_metal.hpp>
 #include <algorithm>
-#include <functional>
-#include <random>
+#include <array>
+#include <cstring>
+#include <exception>
+#include <map>
+#include <memory>
+#include <optional>
 #include <string>
+#include <tuple>
+#include <utility>
+#include <variant>
 #include <vector>
 
-#include "common/bfloat16.hpp"
-#include "tt_metal/detail/tt_metal.hpp"
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/impl/dispatch/command_queue.hpp"
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/buffer_types.hpp>
+#include <tt-metalium/circular_buffer_types.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/data_types.hpp>
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/kernel_types.hpp>
+#include <tt-metalium/logger.hpp>
+#include <tt-metalium/program.hpp>
+#include <tt_stl/span.hpp>
+#include "test_common.hpp"
+#include <tt-metalium/tt_backend_api_types.hpp>
 #include "tt_metal/tt_metal/perf_microbenchmark/common/util.hpp"
 
 using namespace tt;
@@ -60,7 +83,7 @@ int main(int argc, char** argv) {
     uint32_t num_cores_r = 0;
     uint32_t num_cores_c = 0;
     uint32_t num_tiles = 204800;
-    uint32_t noc_index;
+    uint32_t noc_index = 0;
     uint32_t access_type = 0;
     uint32_t num_tests = 10;
     bool use_device_profiler = false;
@@ -95,11 +118,11 @@ int main(int argc, char** argv) {
     }
 
     if (use_device_profiler) {
-#if !defined(PROFILER)
+#if !defined(TRACY_ENABLE)
         log_error(
             LogTest,
             "Metal library and test code should be build with "
-            "'ENABLE_PROFILER=1' to use device profiler");
+            "profiler option using ./build_metal.sh --enable-profiler");
 #endif
         auto device_profiler = getenv("TT_METAL_DEVICE_PROFILER");
         TT_FATAL(
@@ -114,7 +137,7 @@ int main(int argc, char** argv) {
         //                      Device Setup
         ////////////////////////////////////////////////////////////////////////////
         int device_id = 0;
-        tt_metal::Device* device = tt_metal::CreateDevice(device_id);
+        tt_metal::IDevice* device = tt_metal::CreateDevice(device_id);
 
         int clock_freq_mhz = get_tt_npu_clock(device);
         auto grid_coord = device->compute_with_storage_grid_size();
@@ -126,7 +149,7 @@ int main(int argc, char** argv) {
 
         // limit size of the L1 buffer to do not exceed global L1 size
         uint32_t l1_buffer_size = num_cores_r * num_cores_c * (num_tiles > 256 ? 256 : num_tiles) * page_size;
-        auto l1_buffer = tt_metal::Buffer(device, l1_buffer_size, page_size, tt_metal::BufferType::L1);
+        auto l1_buffer = tt_metal::Buffer::create(device, l1_buffer_size, page_size, tt_metal::BufferType::L1);
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Application Setup
@@ -166,9 +189,9 @@ int main(int argc, char** argv) {
             for (int j = 0; j < num_cores_c; j++) {
                 CoreCoord core = {(std::size_t)j, (std::size_t)i};
                 uint32_t core_index = i * num_cores_c + j;
-                uint32_t l1_buffer_addr = l1_buffer.address();
+                uint32_t l1_buffer_addr = l1_buffer->address();
 
-                vector<uint32_t> noc_runtime_args = {core_index, l1_buffer_addr, num_tiles, num_cores_r * num_cores_c};
+                const std::array noc_runtime_args = {core_index, l1_buffer_addr, num_tiles, num_cores_r * num_cores_c};
                 SetRuntimeArgs(program, noc_kernel, core, noc_runtime_args);
             }
         }
@@ -204,7 +227,7 @@ int main(int argc, char** argv) {
 
     // Determine if it passes performance goal
     auto avg_elapsed_us = calculate_average(elapsed_us);
-    if (pass && bypass_check == false) {
+    if (pass && !bypass_check) {
         // TODO: Numbers are TBD in SoW
         ;
     }

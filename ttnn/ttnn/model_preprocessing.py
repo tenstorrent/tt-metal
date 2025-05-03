@@ -15,7 +15,7 @@ from loguru import logger
 import torch
 
 import ttnn
-from ttnn.tracer import trace, visualize
+from ttnn.torch_tracer import trace, visualize
 
 
 def preprocess_linear_weight(weight, *, dtype, layout=ttnn.TILE_LAYOUT):
@@ -41,36 +41,6 @@ def preprocess_embedding_weight(weight, *, dtype):
     return weight
 
 
-def preprocess_conv2d(weight, bias, ttnn_module_args, return_parallel_config=False):
-    if ttnn_module_args is None:
-        raise RuntimeError(f"torch.nn.Conv2d modules need run_model to be provided to preprocess_model_parameters")
-
-    weights_dtype = ttnn_module_args.weights_dtype
-    if weights_dtype == ttnn.bfloat8_b:
-        weights_dtype = ttnn.float32
-
-    weight = ttnn.from_torch(weight, dtype=weights_dtype)
-    if bias is not None:
-        bias = ttnn.from_torch(torch.reshape(bias, (1, 1, 1, -1)), dtype=weights_dtype)
-
-    conv = ttnn.Conv2d(
-        **ttnn_module_args,
-        weight=weight,
-        bias=bias,
-        reader_patterns_cache=None,
-        move_weights_to_device=False,
-    )
-
-    parameters = {}
-    parameters["weight"] = conv.conv.weight
-    if bias is not None:
-        parameters["bias"] = conv.conv.bias
-    if return_parallel_config:
-        return parameters, conv.get_parallel_config()
-    else:
-        return parameters
-
-
 def fold_batch_norm2d_into_conv2d(conv, bn):
     if not bn.track_running_stats:
         raise RuntimeError("BatchNorm2d must have track_running_stats=True to be folded into Conv2d")
@@ -89,22 +59,6 @@ def fold_batch_norm2d_into_conv2d(conv, bn):
         bias = shift - running_mean * (scale / torch.sqrt(running_var + eps))
 
     return weight, bias
-
-
-def fold_conv7s2_into_conv4s1(conv7s2_weight, conv7s2_bias, ttnn_module_args):
-    from models.utility_functions import pad_and_fold_conv_filters_for_unity_stride
-
-    stride = ttnn_module_args.stride
-    padding = ttnn_module_args.padding
-    conv4s1_weight = pad_and_fold_conv_filters_for_unity_stride(conv7s2_weight, *stride)
-    conv4s1_bias = conv7s2_bias
-    ttnn_module_args["kernel_size"] = (4, 4)
-    ttnn_module_args["stride"] = (1, 1)
-    ttnn_module_args["padding"] = (0, 0)
-    ttnn_module_args["in_channels"] = conv4s1_weight.shape[1]
-    ttnn_module_args["input_height"] = (ttnn_module_args["input_height"] + padding[0] * 2) // stride[0]
-    ttnn_module_args["input_width"] = (ttnn_module_args["input_width"] + padding[1] * 2) // stride[1]
-    return preprocess_conv2d(conv4s1_weight, conv4s1_bias, ttnn_module_args)
 
 
 class ParameterList(list):
@@ -191,8 +145,6 @@ def default_preprocessor(model, name, ttnn_module_args) -> ParameterDict:
         parameters[f"weight"] = preprocess_linear_weight(model.weight, dtype=ttnn.bfloat16)
         if model.bias is not None:
             parameters[f"bias"] = preprocess_linear_bias(model.bias, dtype=ttnn.bfloat16)
-    elif isinstance(model, torch.nn.Conv2d):
-        parameters = preprocess_conv2d(model.weight, model.bias, ttnn_module_args)
     elif isinstance(model, torch.nn.LayerNorm):
         parameters[f"weight"] = preprocess_layernorm_parameter(model.weight, dtype=ttnn.bfloat16)
         parameters[f"bias"] = preprocess_layernorm_parameter(model.bias, dtype=ttnn.bfloat16)
@@ -202,8 +154,9 @@ def default_preprocessor(model, name, ttnn_module_args) -> ParameterDict:
 
 
 torch_dtype_to_ttnn_dtype = {
+    torch.uint8: ttnn.uint8,
     torch.int16: ttnn.uint16,
-    torch.int32: ttnn.uint32,
+    torch.int32: ttnn.int32,
     torch.int64: ttnn.uint32,
     torch.bfloat16: ttnn.bfloat16,
     torch.float32: ttnn.bfloat16,
@@ -333,9 +286,6 @@ def _load_parameters(model_cache_path: pathlib.Path) -> ParameterDict:
             output[name] = ttnn.load_tensor(path)
         elif extension == ".pt":
             output[name] = torch.load(path)
-        elif extension == ".conv2d_module_args":
-            with open(path, "rb") as file:
-                output[name] = Conv2dArgs(pickle.load(file))
         elif extension == ".max_pool2d_module_args":
             with open(path, "rb") as file:
                 output[name] = MaxPool2dArgs(pickle.load(file))
@@ -360,11 +310,6 @@ def _dump_parameters(model_cache_path: pathlib.Path, parameters: ParameterDict) 
             file_path = str(model_cache_path / name)
             file_name = file_path + ".pt"
             torch.save(value, file_name)
-        elif isinstance(value, Conv2dArgs):
-            file_path = str(model_cache_path / name)
-            file_name = file_path + ".conv2d_module_args"
-            with open(file_name, "wb") as file:
-                pickle.dump(dict(value), file, protocol=pickle.HIGHEST_PROTOCOL)
         elif isinstance(value, MaxPool2dArgs):
             file_path = str(model_cache_path / name)
             file_name = file_path + ".max_pool2d_module_args"
@@ -410,6 +355,14 @@ class Conv2dArgs(ModuleArgs):
         return super().__repr__()
 
 
+class ConvTranspose2dArgs(ModuleArgs):
+    __getattr__ = dict.__getitem__
+    __delattr__ = dict.__delitem__
+
+    def __repr__(self):
+        return super().__repr__()
+
+
 class MaxPool2dArgs(ModuleArgs):
     __getattr__ = dict.__getitem__
     __delattr__ = dict.__delitem__
@@ -433,7 +386,7 @@ def infer_ttnn_module_args(*, model, run_model, device):
             attributes = graph.nodes[node]
             operation = attributes["operation"]
             if isinstance(operation, ttnn.tracer.TorchModule):
-                *_, module_name = operation.module.torchtrail_name.split(".")
+                *_, module_name = operation.module.__ttnn_tracer_name__.split(".")
                 (input_node, _, edge_data), *_ = graph.in_edges(node, data=True)
                 input_shape = graph.nodes[input_node]["shapes"][edge_data["source_output_index"]]
                 if isinstance(operation.module, torch.nn.Conv2d):
@@ -443,6 +396,28 @@ def infer_ttnn_module_args(*, model, run_model, device):
                         kernel_size=operation.module.kernel_size,
                         stride=operation.module.stride,
                         padding=operation.module.padding,
+                        dilation=operation.module.dilation,
+                        groups=operation.module.groups,
+                        padding_mode=operation.module.padding_mode,
+                        batch_size=input_shape[0],
+                        input_height=input_shape[-2],
+                        input_width=input_shape[-1],
+                        math_fidelity=ttnn.MathFidelity.HiFi4,
+                        dtype=ttnn.bfloat16,
+                        weights_dtype=ttnn.bfloat16,
+                        use_1d_systolic_array=True,
+                        enable_auto_formatting=False,
+                        conv_blocking_and_parallelization_config_override={},
+                        device=device,
+                    )
+                elif isinstance(operation.module, torch.nn.ConvTranspose2d):
+                    ttnn_module_args[module_name] = ConvTranspose2dArgs(
+                        in_channels=operation.module.in_channels,
+                        out_channels=operation.module.out_channels,
+                        kernel_size=operation.module.kernel_size,
+                        stride=operation.module.stride,
+                        padding=operation.module.padding,
+                        output_padding=operation.module.output_padding,
                         dilation=operation.module.dilation,
                         groups=operation.module.groups,
                         padding_mode=operation.module.padding_mode,
@@ -517,7 +492,7 @@ def _initialize_model_and_preprocess_parameters(
     return make_parameter_dict(parameters)
 
 
-def preprocess_model(
+def from_torch(
     *,
     model_name: Optional[str] = None,
     version: Optional[str] = None,
@@ -644,7 +619,6 @@ def preprocess_model(
                         **model.ttnn_module_args,
                         weight=model.weight,
                         bias=model.bias if "bias" in model else None,
-                        reader_patterns_cache=reader_patterns_cache,
                         using_parameters_cache=True,
                         device=device,
                     )
@@ -670,6 +644,50 @@ def preprocess_model(
     return model
 
 
+def preprocess_model(
+    *,
+    model_name: Optional[str] = None,
+    version: Optional[str] = None,
+    initialize_model: Optional[Callable[[], torch.nn.Module]] = None,
+    convert_to_ttnn: Optional[Callable[[torch.nn.Module, str], bool]] = None,
+    custom_preprocessor: Optional[Callable[[torch.nn.Module, str], Union[dict, ParameterDict]]] = None,
+    device: Optional[ttnn.Device] = None,
+    prefix: str = "",
+    run_model: Optional[Callable] = None,
+    reader_patterns_cache: Optional[dict] = None,
+) -> ParameterDict:
+    """
+
+    preprocess_model(initialize_model: Optional[Callable[[], torch.nn.Module]]=None, *, model_name: Optional[str]=None, version: Optional[str]=None, convert_to_ttnn: Optional[Callable[[torch.nn.Module, str], bool]]=None, custom_preprocessor: Optional[Callable[[torch.nn.Module, str], Union[dict, ParameterDict]]]=None, device: Optional[ttnn.Device] = None, prefix: Optional[str] = None, run_model: Optional[Callable], reader_patterns_cache: Optional[Dict]) -> ParameterDict
+
+    Preprocess modules and parameters of a given model.
+
+    Args:
+        model_name: Name of the model to be used by the cache. If not provided, the cache will be disabled.
+        version: Version of the model to be used by the cache. If not provided, the current git hash will be used. If the version doesn't match the cached version, the cache will be invalidated.
+        initialize_model: Function for initializing the model. It's not required if the model has already been cached and the cache is valid.
+        convert_to_ttnn: Function for determining whether to convert the parameters of a given module to ttnn.Tensor. If not provided, all modules will be converted.
+        custom_preprocessor: Function for preprocessing the parameters of a given module using user-specified logic. If not provided, the default preprocessor will be used.
+        device: Device on which to put ttnn.Tensor parameters
+        prefix: Prefix string to attach to the names of the modules/parameters. It's useful for making the names of submodules appear in the same way as in the original model.
+        run_model: Function for running the model. It's required for populating ttnn_module_args. If run_model is provided, the graph of the model will be dumped to /tmp/ttnn/model_graph.svg
+        reader_patterns_cache: Cache for reader patterns. It's useful for avoiding recomputation of reader patterns when the same model is used multiple times.
+    """
+
+    with ttnn.manage_config("enable_logging", False), ttnn.manage_config("enable_comparison_mode", False):
+        return from_torch(
+            model_name=model_name,
+            version=version,
+            initialize_model=initialize_model,
+            convert_to_ttnn=convert_to_ttnn,
+            custom_preprocessor=custom_preprocessor,
+            device=device,
+            prefix=prefix,
+            run_model=run_model,
+            reader_patterns_cache=reader_patterns_cache,
+        )
+
+
 def preprocess_model_parameters(
     *,
     model_name: Optional[str] = None,
@@ -687,13 +705,13 @@ def preprocess_model_parameters(
     Preprocess parameters of a given model.
 
     Args:
-        * :attr:`model_name`: Name of the model to be used by the cache. If not provided, the cache will be disabled.
-        * :attr:`version`: Version of the model to be used by the cache. If not provided, the current git hash will be used. If the version doesn't match the cached version, the cache will be invalidated.
-        * :attr:`initialize_model`: Function for initializing the model. It's not required if the model has already been cached and the cache is valid.
-        * :attr:`convert_to_ttnn`: Function for determining whether to convert the parameters of a given module to ttnn.Tensor. If not provided, all modules will be converted.
-        * :attr:`custom_preprocessor`: Function for preprocessing the parameters of a given module using user-specified logic. If not provided, the default preprocessor will be used.
-        * :attr:`device`: Device on which to put ttnn.Tensor parameters
-        * :attr:`prefix`: Prefix string to attach to the names of the modules/parameters. It's useful for making the names of submodules appear in the same way as in the original model.
+        model_name: Name of the model to be used by the cache. If not provided, the cache will be disabled.
+        version: Version of the model to be used by the cache. If not provided, the current git hash will be used. If the version doesn't match the cached version, the cache will be invalidated.
+        initialize_model: Function for initializing the model. It's not required if the model has already been cached and the cache is valid.
+        convert_to_ttnn: Function for determining whether to convert the parameters of a given module to ttnn.Tensor. If not provided, all modules will be converted.
+        custom_preprocessor: Function for preprocessing the parameters of a given module using user-specified logic. If not provided, the default preprocessor will be used.
+        device: Device on which to put ttnn.Tensor parameters
+        prefix: Prefix string to attach to the names of the modules/parameters. It's useful for making the names of submodules appear in the same way as in the original model.
     """
 
     return preprocess_model(

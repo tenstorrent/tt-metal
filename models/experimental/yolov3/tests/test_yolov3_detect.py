@@ -6,14 +6,11 @@ import torch
 
 from loguru import logger
 
-import tt_lib
+import ttnn
 
 from models.experimental.yolov3.reference.models.common import (
-    autopad,
     DetectMultiBackend,
 )
-from models.experimental.yolov3.reference.utils.dataloaders import LoadImages
-from models.experimental.yolov3.reference.utils.general import check_img_size
 from models.experimental.yolov3.tt.yolov3_detect import TtDetect
 from models.utility_functions import (
     comp_pcc,
@@ -33,9 +30,7 @@ def test_detect_module(device, model_location_generator):
     model_config_path = str(data_path / "yolov3.yaml")
     weights_loc = str(model_path / "yolov3.pt")
 
-    reference_model = DetectMultiBackend(
-        weights_loc, device=torch.device("cpu"), dnn=False, data=data_coco, fp16=False
-    )
+    reference_model = DetectMultiBackend(weights_loc, device=torch.device("cpu"), dnn=False, data=data_coco, fp16=False)
 
     state_dict = reference_model.state_dict()
 
@@ -73,9 +68,9 @@ def test_detect_module(device, model_location_generator):
         torch_model.eval()
         pt_out = torch_model(test_input)
 
-    tt_a = torch2tt_tensor(a, device, tt_layout=tt_lib.tensor.Layout.ROW_MAJOR)
-    tt_b = torch2tt_tensor(b, device, tt_layout=tt_lib.tensor.Layout.ROW_MAJOR)
-    tt_c = torch2tt_tensor(c, device, tt_layout=tt_lib.tensor.Layout.ROW_MAJOR)
+    tt_a = torch2tt_tensor(a, device, tt_layout=ttnn.ROW_MAJOR_LAYOUT)
+    tt_b = torch2tt_tensor(b, device, tt_layout=ttnn.ROW_MAJOR_LAYOUT)
+    tt_c = torch2tt_tensor(c, device, tt_layout=ttnn.ROW_MAJOR_LAYOUT)
     tt_test_input = [tt_a, tt_b, tt_c]
 
     with torch.no_grad():

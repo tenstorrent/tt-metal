@@ -18,20 +18,31 @@
 #include "firmware_common.h"
 #include "tools/profiler/kernel_profiler.hpp"
 #include "dataflow_api.h"
-#include "noc_addr_ranges_gen.h"
 
-#include <kernel.cpp>
+#include <kernel_includes.hpp>
 
-uint8_t noc_index = NOC_INDEX;
-inline void RISC_POST_STATUS(uint32_t status) {
-  volatile uint32_t* ptr = (volatile uint32_t*)(NOC_CFG(ROUTER_CFG_2));
-  ptr[0] = status;
-}
-void kernel_launch() {
-    DeviceZoneScopedMainChildN("ERISC-KERNEL");
-    firmware_kernel_common_init((void tt_l1_ptr *)MEM_IERISC_INIT_LOCAL_L1_BASE);
+void kernel_launch(uint32_t kernel_base_addr) {
+    extern uint32_t __kernel_init_local_l1_base[];
+    extern uint32_t __fw_export_end_text[];
+    do_crt1((uint32_t tt_l1_ptr
+                 *)(kernel_base_addr + (uint32_t)__kernel_init_local_l1_base - (uint32_t)__fw_export_end_text));
 
-    noc_local_state_init(noc_index);
+    noc_local_state_init(NOC_INDEX);
 
-    kernel_main();
+    {
+        DeviceZoneScopedMainChildN("IDLE-ERISC-KERNEL");
+        WAYPOINT("K");
+        kernel_main();
+        WAYPOINT("KD");
+        if constexpr (NOC_MODE == DM_DEDICATED_NOC) {
+            WAYPOINT("NKFW");
+            // Assert that no noc transactions are outstanding, to ensure that all reads and writes have landed and the NOC
+            // interface is in a known idle state for the next kernel.
+            ASSERT(ncrisc_noc_reads_flushed(NOC_INDEX), DebugAssertNCriscNOCReadsFlushedTripped);
+            ASSERT(ncrisc_noc_nonposted_writes_sent(NOC_INDEX), DebugAssertNCriscNOCNonpostedWritesSentTripped);
+            ASSERT(ncrisc_noc_nonposted_atomics_flushed(NOC_INDEX), DebugAssertNCriscNOCNonpostedAtomicsFlushedTripped);
+            ASSERT(ncrisc_noc_posted_writes_sent(NOC_INDEX), DebugAssertNCriscNOCPostedWritesSentTripped);
+            WAYPOINT("NKFD");
+        }
+    }
 }

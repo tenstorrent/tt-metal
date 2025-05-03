@@ -4,7 +4,7 @@
 
 import torch
 import json
-import tt_lib
+import pytest
 from loguru import logger
 
 from transformers import T5Model
@@ -12,8 +12,11 @@ from models.utility_functions import (
     torch2tt_tensor,
     tt2torch_tensor,
     comp_pcc,
+    is_wormhole_b0,
 )
 from models.experimental.t5.tt.t5_layer_self_attention import TtT5LayerSelfAttention
+
+pytestmark = pytest.mark.skipif(is_wormhole_b0(), reason="Skip for Wormhole B0")
 
 
 def run_test_T5LayerSelfAttention_inference(device, model_name, input_h, input_w):

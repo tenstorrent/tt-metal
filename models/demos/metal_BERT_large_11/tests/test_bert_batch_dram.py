@@ -8,19 +8,21 @@ import torch
 from loguru import logger
 from transformers import BertForQuestionAnswering, BertTokenizer, pipeline
 
-import tt_lib
+import ttnn
 
 from models.demos.metal_BERT_large_11.tt.bert_model import TtBertBatchDram
-from models.demos.metal_BERT_large_11.tt.model_config import get_model_config, get_tt_cache_path
+from models.demos.metal_BERT_large_11.tt.model_config import (
+    get_model_config,
+    get_tt_cache_path,
+    skip_unsupported_config,
+)
 
 from models.utility_functions import (
     enable_persistent_kernel_cache,
-    disable_compilation_reports,
     comp_pcc,
     comp_allclose,
     disable_persistent_kernel_cache,
     profiler,
-    is_e75,
 )
 
 
@@ -138,7 +140,7 @@ def run_bert_question_and_answering_inference(
     # Recreate inputs since activations were deallocated
     tt_attention_mask = tt_bert_model.model_attention_mask(**bert_input)
     tt_embedding_inputs = tt_bert_model.embeddings.preprocess_embedding_inputs(**bert_input)
-    tt_lib.device.Synchronize(device)
+    ttnn.synchronize_device(device)
     print(f"Enable profiler and enable binary and compile cache")
     profiler.enable()
     enable_persistent_kernel_cache()
@@ -159,9 +161,7 @@ def run_bert_question_and_answering_inference(
     # output postprocessing
     profiler.start("processing_output_to_string")
 
-    tt_untilized_output = (
-        tt_out.to(tt_lib.tensor.Layout.ROW_MAJOR).to_torch().reshape(batch, 1, seq_len, -1).to(torch.float32)
-    )
+    tt_untilized_output = tt_out.to(ttnn.ROW_MAJOR_LAYOUT).to_torch().reshape(batch, 1, seq_len, -1).to(torch.float32)
 
     tt_start_logits = tt_untilized_output[..., :, 0].squeeze(1)
     tt_end_logits = tt_untilized_output[..., :, 1].squeeze(1)
@@ -190,7 +190,7 @@ def run_bert_question_and_answering_inference(
     passing = passing_start and passing_end
 
     if real_input:
-        if model_config["DEFAULT_DTYPE"] == tt_lib.tensor.DataType.BFLOAT8_B and not passing:
+        if model_config["DEFAULT_DTYPE"] == ttnn.bfloat8_b and not passing:
             logger.warning("Skipping post processing due to garbage output in BFP8!")
         else:
             for i in range(batch):
@@ -218,12 +218,19 @@ def run_bert_question_and_answering_inference(
     profiler.end("processing_output_to_string")
 
     del tt_out
+    del tt_embedding
+    del tt_attention_mask
+    del tt_embedding_inputs
+    del bert_input
+    del pytorch_out
+    if "single_inputs" in locals():
+        del single_inputs
 
     profiler.print()
 
     # assert profiler.get("whole_model") < 60.0
 
-    if model_config["DEFAULT_DTYPE"] == tt_lib.tensor.DataType.BFLOAT8_B and not passing:
+    if model_config["DEFAULT_DTYPE"] == ttnn.bfloat8_b and not passing:
         pytest.xfail("PCC is garbage for BFLOAT8_B. Numbers are for perf only!")
 
     assert passing, f"At least one start or end logits don't meet PCC requirement {pcc}"
@@ -279,8 +286,7 @@ def test_bert_batch_dram(
     request,
     device,
 ):
-    if is_e75(device):
-        pytest.skip(f"Bert large 11 is not supported on E75")
+    skip_unsupported_config(device, model_config_str, batch)
 
     model_config = get_model_config(batch, device.compute_with_storage_grid_size(), model_config_str)
     tt_cache_path = get_tt_cache_path(model_version)
@@ -291,7 +297,6 @@ def test_bert_batch_dram(
     PERF_CNT = 1
     assert PERF_CNT == 1, "Bert does not support internal perf count no more."
     disable_persistent_kernel_cache()
-    disable_compilation_reports()
 
     run_bert_question_and_answering_inference(
         model_version,
@@ -362,8 +367,7 @@ def test_bert_batch_dram_with_program_cache(
     model_location_generator,
     request,
 ):
-    if is_e75(device):
-        pytest.skip(f"Bert large 11 is not supported on E75")
+    skip_unsupported_config(device, model_config_str, batch)
 
     model_config = get_model_config(batch, device.compute_with_storage_grid_size(), model_config_str)
     tt_cache_path = get_tt_cache_path(model_version)
@@ -374,7 +378,6 @@ def test_bert_batch_dram_with_program_cache(
     PERF_CNT = 1
 
     disable_persistent_kernel_cache()
-    disable_compilation_reports()
 
     run_bert_question_and_answering_inference(
         model_version,

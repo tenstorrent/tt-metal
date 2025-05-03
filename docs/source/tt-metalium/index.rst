@@ -10,6 +10,7 @@ Welcome to TT-Metalium documentation!
    :caption: Get Started
 
    get_started/get_started
+   installing
 
 .. toctree::
    :caption: TT-Metalium

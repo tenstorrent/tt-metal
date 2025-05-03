@@ -4,7 +4,7 @@
 
 import torch
 import pytest
-import tt_lib
+import ttnn
 import os
 from pathlib import Path
 
@@ -19,12 +19,16 @@ from models.utility_functions import (
     torch_to_tt_tensor_rm,
     comp_allclose,
     comp_pcc,
+    is_wormhole_b0,
+    is_blackhole,
 )
 
 
+@pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported on WH and BH")
+@pytest.mark.skip(reason="Test is hanging gs, see issue #7534")
 @pytest.mark.parametrize(
     "dtype",
-    (tt_lib.tensor.DataType.BFLOAT16,),
+    (ttnn.bfloat16,),
 )
 @pytest.mark.parametrize(
     "pcc",

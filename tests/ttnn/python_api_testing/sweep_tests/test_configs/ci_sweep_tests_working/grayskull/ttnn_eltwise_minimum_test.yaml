@@ -1,6 +1,6 @@
 ---
 test-list:
-  - ttnn-eltwise-minimum:
+  - ttnn-eltwise-min:
       shape:
         start-shape: [1, 1, 32, 32]
         end-shape: [6, 12, 256, 256]
@@ -17,11 +17,12 @@ test-list:
       comparison:
         function: comp_pcc
       args-gen: gen_dtype_layout_device
+      sanitize-args: False
       args:
         data-layout: ["TILE"]
         data-type: ["BFLOAT16", "BFLOAT8_B"]
         buffer-type: ["DRAM", "L1"]
         out-buffer-type: ["DRAM", "L1"]
-      output-file: eltwise_minimum_sweep.csv
+      output-file: eltwise_min_sweep.csv
       env:
         # TT_PCI_DMA_BUF_SIZE: "1048576"

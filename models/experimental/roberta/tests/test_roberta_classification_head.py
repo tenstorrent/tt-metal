@@ -7,7 +7,6 @@ import torch
 from loguru import logger
 from transformers import RobertaForSequenceClassification
 
-import tt_lib
 
 from models.experimental.roberta.tt.roberta_classification_head import TtRobertaClassificationHead
 from models.utility_functions import (
@@ -17,13 +16,12 @@ from models.utility_functions import (
 )
 from models.experimental.roberta.roberta_common import torch2tt_tensor
 
+
 def test_roberta_classification_head(device):
     torch.manual_seed(1234)
     base_address = f"classifier"
     with torch.no_grad():
-        model = RobertaForSequenceClassification.from_pretrained(
-            "cardiffnlp/twitter-roberta-base-emotion"
-        )
+        model = RobertaForSequenceClassification.from_pretrained("cardiffnlp/twitter-roberta-base-emotion")
         torch_model = model.classifier
 
         # Tt roberta

@@ -12,8 +12,9 @@ import tt_metal.tools.profiler.device_post_proc_config as device_post_proc_confi
 
 
 def test_noc_unicast_vs_multicast_to_single_core_latency():
+    ARCH_NAME = os.getenv("ARCH_NAME")
     os.system(
-        f"TT_METAL_SLOW_DISPATCH_MODE=1 TT_METAL_DEVICE_PROFILER=1 {os.environ['TT_METAL_HOME']}/build/test/tt_metal/perf_microbenchmark/noc/test_noc_unicast_vs_multicast_to_single_core_latency"
+        f"TT_METAL_SLOW_DISPATCH_MODE=1 TT_METAL_DEVICE_PROFILER=1 {os.environ['TT_METAL_HOME']}/build/test/tt_metal/perf_microbenchmark/noc/test_noc_unicast_vs_multicast_to_single_core_latency_{ARCH_NAME}"
     )
     setup = device_post_proc_config.default_setup()
     setup.timerAnalysis = {
@@ -33,12 +34,12 @@ def test_noc_unicast_vs_multicast_to_single_core_latency():
     stats = import_log_run_stats(setup)
     multicast_cycles = stats["devices"][0]["cores"][core]["riscs"]["TENSIX"]["analysis"]["LATENCY"]["stats"]["First"]
 
-    unicast_cycles_lower_bound = 200
-    unicast_cycles_upper_bound = 300
+    unicast_cycles_lower_bound = 300
+    unicast_cycles_upper_bound = 400
     unicast_cycles_within_bounds = unicast_cycles_lower_bound <= unicast_cycles <= unicast_cycles_upper_bound
 
-    multicast_cycles_lower_bound = 200
-    multicast_cycles_upper_bound = 310
+    multicast_cycles_lower_bound = 450
+    multicast_cycles_upper_bound = 550
     multicast_cycles_within_bounds = multicast_cycles_lower_bound <= multicast_cycles <= multicast_cycles_upper_bound
 
     if not unicast_cycles_within_bounds:

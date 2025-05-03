@@ -8,7 +8,7 @@ import torch
 from loguru import logger
 from transformers import BertForQuestionAnswering, BertTokenizer, pipeline
 
-import tt_lib
+import ttnn
 
 from models.demos.metal_BERT_large_11.tt.bert_model import TtBertBatchDram
 from models.demos.metal_BERT_large_11.tt.model_config import get_model_config, get_tt_cache_path
@@ -112,9 +112,7 @@ def run_bert_question_and_answering_inference(
     tt_embedding = tt_bert_model.model_embedding(**tt_embedding_inputs)
     tt_out = tt_bert_model(tt_embedding, tt_attention_mask).cpu()
 
-    tt_untilized_output = (
-        tt_out.to(tt_lib.tensor.Layout.ROW_MAJOR).to_torch().reshape(batch, 1, seq_len, -1).to(torch.float32)
-    )
+    tt_untilized_output = tt_out.to(ttnn.ROW_MAJOR_LAYOUT).to_torch().reshape(batch, 1, seq_len, -1).to(torch.float32)
 
     tt_start_logits = tt_untilized_output[..., :, 0].squeeze(1)
     tt_end_logits = tt_untilized_output[..., :, 1].squeeze(1)
@@ -144,7 +142,7 @@ def run_bert_question_and_answering_inference(
 
     del tt_out
 
-    if model_config["DEFAULT_DTYPE"] == tt_lib.tensor.DataType.BFLOAT8_B and not passing:
+    if model_config["DEFAULT_DTYPE"] == ttnn.bfloat8_b and not passing:
         pytest.xfail("PCC is garbage for BFLOAT8_B. Numbers are for perf only!")
 
     assert passing, f"At least one start or end logits don't meet PCC requirement {pcc}"
@@ -159,6 +157,7 @@ def run_bert_question_and_answering_inference(
         (9, "BFLOAT16-L1"),
         (9, "MIXED_PRECISION_BATCH9"),
         (8, "MIXED_PRECISION_BATCH8"),
+        (8, "BFLOAT8_B-SHARDED"),
         (7, "BFLOAT8_B-SHARDED"),
         (12, "BFLOAT8_B-SHARDED"),
     ),
@@ -169,6 +168,7 @@ def run_bert_question_and_answering_inference(
         "batch_9-BFLOAT16-L1",
         "batch_9-MIXED_PRECISION_BATCH9",
         "batch_8-MIXED_PRECISION_BATCH8",
+        "batch_8-BFLOAT8_B-SHARDED",
         "batch_7-BFLOAT8_B-SHARDED",
         "batch_12-BFLOAT8_B-SHARDED",
     ],

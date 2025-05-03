@@ -6,7 +6,7 @@ test-list:
         end-shape: [1, 512, 2048, 4096]
         interval: [1, 32, 32, 32]
         num-shapes: 2
-        num-samples: 64
+        num-samples: 128
         method: ttnn-embeddings
       datagen:
         function: gen_rand
@@ -15,12 +15,13 @@ test-list:
           high: 512
       comparison:
         function: comp_pcc
-      args-gen: gen_embeddings_args
+      args-gen: gen_dtype_layout_device
+      sanitize-args: False
       args:
         inputs:
           - input-1:
             data-layout: ["ROW_MAJOR"]
-            data-type: ["UINT32"]
+            data-type: ["UINT32", "BFLOAT16"]
             buffer-type: ["DRAM", "L1"]
           - input-2:
             data-layout: ["ROW_MAJOR"]

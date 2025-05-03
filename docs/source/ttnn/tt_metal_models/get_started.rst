@@ -8,14 +8,18 @@ Prerequisites
 
 Ensure that you have the base TT-Metalium source and environment configuration
 `built and ready
-<https://github.com/tenstorrent-metal/tt-metal/blob/main/INSTALLING.md>`_.
+<https://github.com/tenstorrent/tt-metal/blob/main/INSTALLING.md>`_.
 
-Now, from the project root, get the Python virtual environment in which you'll
-be working in ready.
+Now, from the project root, activate the provided Python virtual environment in
+which you'll be working.
 
 ::
 
-    source build/python_env/bin/activate
+    source python_env/bin/activate
+
+.. note::
+   You can use the ``PYTHON_ENV_DIR`` environment variable with the provided
+   ``create_venv.sh`` script to control where the environment is created.
 
 Set ``PYTHONPATH`` to the root for running models. This is a common practice.
 

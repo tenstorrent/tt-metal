@@ -7,7 +7,7 @@ import torch.nn as nn
 from models.utility_functions import (
     torch_to_tt_tensor_rm,
 )
-import tt_lib
+import ttnn
 from models.helper_funcs import Linear as TtLinear
 
 
@@ -22,8 +22,8 @@ class TtFFN(nn.Module):
         self.linear_1_weight = torch_to_tt_tensor_rm(state_dict[f"{base_address}.ffn.lin1.weight"], self.device)
         self.linear_1_bias = torch_to_tt_tensor_rm(state_dict[f"{base_address}.ffn.lin1.bias"], self.device)
         self.linear1 = TtLinear(
-            self.linear_1_weight.get_legacy_shape()[-1],
-            self.linear_1_weight.get_legacy_shape()[-2],
+            self.linear_1_weight.padded_shape[-1],
+            self.linear_1_weight.padded_shape[-2],
             self.linear_1_weight,
             self.linear_1_bias,
         )
@@ -31,15 +31,15 @@ class TtFFN(nn.Module):
         self.linear_2_weight = torch_to_tt_tensor_rm(state_dict[f"{base_address}.ffn.lin2.weight"], self.device)
         self.linear_2_bias = torch_to_tt_tensor_rm(state_dict[f"{base_address}.ffn.lin2.bias"], self.device)
         self.linear2 = TtLinear(
-            self.linear_2_weight.get_legacy_shape()[-1],
-            self.linear_2_weight.get_legacy_shape()[-2],
+            self.linear_2_weight.padded_shape[-1],
+            self.linear_2_weight.padded_shape[-2],
             self.linear_2_weight,
             self.linear_2_bias,
         )
 
-        self.activation = tt_lib.tensor.gelu
+        self.activation = ttnn.gelu
 
-    def forward(self, input: tt_lib.tensor.Tensor) -> tt_lib.tensor.Tensor:
+    def forward(self, input: ttnn.Tensor) -> ttnn.Tensor:
         x = self.linear1(input)
         x = self.activation(x)
         x = self.linear2(x)

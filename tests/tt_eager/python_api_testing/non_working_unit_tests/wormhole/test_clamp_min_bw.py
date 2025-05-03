@@ -6,7 +6,7 @@ import random
 from loguru import logger
 import pytest
 import torch
-import tt_lib as ttl
+import ttnn
 
 
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
@@ -45,30 +45,30 @@ test_sweep_args = [
     (
         (4, 7, 32, 96),
         [
-            ttl.tensor.DataType.BFLOAT16,
-            ttl.tensor.DataType.BFLOAT16,
+            ttnn.bfloat16,
+            ttnn.bfloat16,
         ],
-        [ttl.tensor.Layout.TILE, ttl.tensor.Layout.TILE],
+        [ttnn.TILE_LAYOUT, ttnn.TILE_LAYOUT],
         [
-            ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
+            ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
             None,
         ],
-        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1),
+        ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1),
         19575052,
         94.0,
     ),
     (
         (4, 7, 32, 96),
         [
-            ttl.tensor.DataType.BFLOAT16,
-            ttl.tensor.DataType.BFLOAT16,
+            ttnn.bfloat16,
+            ttnn.bfloat16,
         ],
-        [ttl.tensor.Layout.TILE, ttl.tensor.Layout.TILE],
+        [ttnn.TILE_LAYOUT, ttnn.TILE_LAYOUT],
         [
-            ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
+            ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
             None,
         ],
-        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1),
+        ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1),
         8405597,
         93.0,
     ),

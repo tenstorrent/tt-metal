@@ -2,68 +2,100 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "eth_l1_address_map.h"
 #include "ethernet/dataflow_api.h"
 #include "ethernet/tunneling.h"
 #include "firmware_common.h"
-#include "generated_bank_to_noc_coord_mapping.h"
 #include "noc_parameters.h"
 #include "risc_attribs.h"
+#include "dataflow_api.h"
 #include "tools/profiler/kernel_profiler.hpp"
+#include "debug/watcher_common.h"
 
-// Number of registers to save for early exit
-#define CONTEXT_SIZE (13 * 4)
-
-#ifdef __cplusplus
-extern "C" {
-#endif
-
-void ApplicationHandler(void) __attribute__((__section__(".init")));
-
-#ifdef __cplusplus
-}
-#endif
-
+#if defined(PROFILE_KERNEL)
 namespace kernel_profiler {
     uint32_t wIndex __attribute__((used));
     uint32_t stackSize __attribute__((used));
     uint32_t sums[SUM_COUNT] __attribute__((used));
     uint32_t sumIDs[SUM_COUNT] __attribute__((used));
 }
+#endif
 
 uint8_t noc_index = 0;  // TODO: remove hardcoding
+
 uint8_t my_x[NUM_NOCS] __attribute__((used));
 uint8_t my_y[NUM_NOCS] __attribute__((used));
+uint8_t my_logical_x_ __attribute__((used));
+uint8_t my_logical_y_ __attribute__((used));
+uint8_t my_relative_x_ __attribute__((used));
+uint8_t my_relative_y_ __attribute__((used));
 
 uint32_t noc_reads_num_issued[NUM_NOCS] __attribute__((used));
 uint32_t noc_nonposted_writes_num_issued[NUM_NOCS] __attribute__((used));
 uint32_t noc_nonposted_writes_acked[NUM_NOCS] __attribute__((used));
+uint32_t noc_nonposted_atomics_acked[NUM_NOCS] __attribute__((used));
+uint32_t noc_posted_writes_num_issued[NUM_NOCS] __attribute__((used));
 
-void __attribute__((section("code_l1"))) risc_init() {
-    for (uint32_t n = 0; n < NUM_NOCS; n++) {
-        uint32_t noc_id_reg = NOC_CMD_BUF_READ_REG(n, 0, NOC_NODE_ID);
-        my_x[n] = noc_id_reg & NOC_NODE_ID_MASK;
-        my_y[n] = (noc_id_reg >> NOC_ADDR_NODE_ID_BITS) & NOC_NODE_ID_MASK;
-    }
+uint32_t tt_l1_ptr *rta_l1_base __attribute__((used));
+uint32_t tt_l1_ptr *crta_l1_base __attribute__((used));
+uint32_t tt_l1_ptr *sem_l1_base[ProgrammableCoreType::COUNT] __attribute__((used));
+
+// These arrays are stored in local memory of FW, but primarily used by the kernel which shares
+// FW symbols. Hence mark these as 'used' so that FW compiler doesn't optimize it out.
+uint16_t dram_bank_to_noc_xy[NUM_NOCS][NUM_DRAM_BANKS] __attribute__((used));
+uint16_t l1_bank_to_noc_xy[NUM_NOCS][NUM_L1_BANKS] __attribute__((used));
+int32_t bank_to_dram_offset[NUM_DRAM_BANKS] __attribute__((used));
+int32_t bank_to_l1_offset[NUM_L1_BANKS] __attribute__((used));
+
+#if defined(ARCH_WORMHOLE) && defined(ENABLE_IRAM)
+void l1_to_erisc_iram_copy(volatile uint32_t* iram_load_reg) {
+    // Trigger copy of code from L1 to IRAM.
+    *iram_load_reg = eth_l1_mem::address_map::KERNEL_BASE >> 4;
+    RISC_POST_STATUS(0x10000000);
 }
 
-void __attribute__((section("erisc_l1_code"))) Application(void) {
-    DEBUG_STATUS('I');
+void l1_to_erisc_iram_copy_wait(volatile uint32_t* iram_load_reg) {
+    // Wait for copy to complete.
+    while (*iram_load_reg & 0x1);
+}
+
+void iram_setup() {
+    // Copy code from L1 to IRAM.
+    volatile uint32_t* iram_load_reg = (volatile uint32_t*)(ETH_CTRL_REGS_START + ETH_CORE_IRAM_LOAD);
+
+    *(volatile uint32_t*)0xFFBA0000 = 0x30000000;
+    *(volatile uint32_t*)0xFFBA0004 = 0x6;
+
+    l1_to_erisc_iram_copy(iram_load_reg);
+    l1_to_erisc_iram_copy_wait(iram_load_reg);
+
+    *(volatile uint32_t*)0xFFBA0000 = 0x30000001;
+    *(volatile uint32_t*)0xFFBA0004 = 0x7;
+}
+
+#endif
+
+void __attribute__((noinline)) Application(void) {
+    WAYPOINT("I");
+
+    // Not using do_crt1 since it is copying to registers???
+    // bss already cleared in entry code.
+    // TODO: need to find free space that routing FW is not using
+
     rtos_context_switch_ptr = (void (*)())RtosTable[0];
 
-    // Not using firmware_kernel_common_init since it is copying to registers
-    // TODO: need to find free space that routing FW is not using
-    wzerorange(__ldm_bss_start, __ldm_bss_end);
+    my_logical_x_ = mailboxes->core_info.absolute_logical_x;
+    my_logical_y_ = mailboxes->core_info.absolute_logical_y;
+
+    noc_bank_table_init(eth_l1_mem::address_map::ERISC_MEM_BANK_TO_NOC_SCRATCH);
 
     risc_init();
-    noc_init();
-    wzerorange(__ldm_bss_start, __ldm_bss_end);
+    noc_init(MEM_NOC_ATOMIC_RET_VAL_ADDR);
 
     for (uint32_t n = 0; n < NUM_NOCS; n++) {
         noc_local_state_init(n);
     }
     ncrisc_noc_full_sync();
-    DEBUG_STATUS('R', 'E', 'W');
+    WAYPOINT("REW");
     uint32_t count = 0;
     while (routing_info->routing_enabled != 1) {
         volatile uint32_t *ptr = (volatile uint32_t *)0xffb2010c;
@@ -71,64 +103,55 @@ void __attribute__((section("erisc_l1_code"))) Application(void) {
         *ptr = 0xAABB0000 | (count & 0xFFFF);
         internal_::risc_context_switch();
     }
-    DEBUG_STATUS('R', 'E', 'D');
+    WAYPOINT("RED");
 
-
+    mailboxes->launch_msg_rd_ptr = 0; // Initialize the rdptr to 0
     while (routing_info->routing_enabled) {
         // FD: assume that no more host -> remote writes are pending
-        if (mailboxes->launch.run == RUN_MSG_GO) {
+        uint8_t go_message_signal = mailboxes->go_message.signal;
+        if (go_message_signal == RUN_MSG_GO) {
+            // Only include this iteration in the device profile if the launch message is valid. This is because all workers get a go signal regardless of whether
+            // they're running a kernel or not. We don't want to profile "invalid" iterations.
             DeviceZoneScopedMainN("ERISC-FW");
-            DEBUG_STATUS('R');
-            kernel_init();
+            uint32_t launch_msg_rd_ptr = mailboxes->launch_msg_rd_ptr;
+            launch_msg_t* launch_msg_address = &(mailboxes->launch[launch_msg_rd_ptr]);
+            DeviceValidateProfiler(launch_msg_address->kernel_config.enables);
+            DeviceZoneSetCounter(launch_msg_address->kernel_config.host_assigned_id);
+            // Note that a core may get "GO" w/ enable false to keep its launch_msg's in sync
+            enum dispatch_core_processor_masks enables =
+                (enum dispatch_core_processor_masks)launch_msg_address->kernel_config.enables;
+            my_relative_x_ = my_logical_x_ - launch_msg_address->kernel_config.sub_device_origin_x;
+            my_relative_y_ = my_logical_y_ - launch_msg_address->kernel_config.sub_device_origin_y;
+            if (enables & DISPATCH_CLASS_MASK_ETH_DM0) {
+                WAYPOINT("R");
+                firmware_config_init(mailboxes, ProgrammableCoreType::ACTIVE_ETH, DISPATCH_CLASS_ETH_DM0);
+#if defined(ARCH_WORMHOLE) && defined(ENABLE_IRAM)
+                iram_setup();
+#endif
+                kernel_init(0);
+                WAYPOINT("D");
+            }
+            mailboxes->go_message.signal = RUN_MSG_DONE;
+
+            if (launch_msg_address->kernel_config.mode == DISPATCH_MODE_DEV) {
+                launch_msg_address->kernel_config.enables = 0;
+                uint64_t dispatch_addr = calculate_dispatch_addr(&mailboxes->go_message);
+                CLEAR_PREVIOUS_LAUNCH_MESSAGE_ENTRY_FOR_WATCHER();
+                internal_::notify_dispatch_core_done(dispatch_addr);
+                mailboxes->launch_msg_rd_ptr = (launch_msg_rd_ptr + 1) & (launch_msg_buffer_num_entries - 1);
+                // Only executed if watcher is enabled. Ensures that we don't report stale data due to invalid launch
+                // messages in the ring buffer
+            }
+
+        } else if (go_message_signal == RUN_MSG_RESET_READ_PTR) {
+            // Reset the launch message buffer read ptr
+            mailboxes->launch_msg_rd_ptr = 0;
+            uint64_t dispatch_addr = calculate_dispatch_addr(&mailboxes->go_message);
+            mailboxes->go_message.signal = RUN_MSG_DONE;
+            internal_::notify_dispatch_core_done(dispatch_addr);
         } else {
             internal_::risc_context_switch();
         }
     }
     internal_::disable_erisc_app();
-}
-void __attribute__((section("erisc_l1_code"), naked)) ApplicationHandler(void) {
-    // Save the registers, stack pointer, return address so that we can early exit in the case of
-    // an error.
-    __asm__(
-        "addi sp, sp, -%[context_size]\n\t"
-        "sw x1, 0 * 4( sp )\n\t" // Return addr saved on stack
-        "sw x8, 1 * 4( sp )\n\t"
-        "sw x9, 2 * 4( sp )\n\t"
-        "sw x18, 3 * 4( sp )\n\t"
-        "sw x19, 4 * 4( sp )\n\t"
-        "sw x20, 5 * 4( sp )\n\t"
-        "sw x21, 6 * 4( sp )\n\t"
-        "sw x22, 7 * 4( sp )\n\t"
-        "sw x23, 8 * 4( sp )\n\t"
-        "sw x24, 9 * 4( sp )\n\t"
-        "sw x25, 10 * 4( sp )\n\t"
-        "sw x26, 11 * 4( sp )\n\t"
-        "sw x27, 12 * 4( sp )\n\t"
-        "li x10, %[stack_save_addr]\n\t"
-        "sw  sp, 0( x10 )\n\t"
-        : /* No Inputs */
-        : [context_size] "i" (CONTEXT_SIZE), [stack_save_addr] "i" (eth_l1_mem::address_map::ERISC_MEM_MAILBOX_STACK_SAVE)
-        : "x10", "memory"
-    );
-    Application();
-    __asm__(
-        "lw  x1, 0 * 4( sp )\n\t"
-        "lw  x8, 1 * 4( sp )\n\t"
-        "lw  x9, 2 * 4( sp )\n\t"
-        "lw  x18, 3 * 4( sp )\n\t"
-        "lw  x19, 4 * 4( sp )\n\t"
-        "lw  x20, 5 * 4( sp )\n\t"
-        "lw  x21, 6 * 4( sp )\n\t"
-        "lw  x22, 7 * 4( sp )\n\t"
-        "lw  x23, 8 * 4( sp )\n\t"
-        "lw  x24, 9 * 4( sp )\n\t"
-        "lw  x25, 10 * 4( sp )\n\t"
-        "lw  x26, 11 * 4( sp )\n\t"
-        "lw  x27, 12 * 4( sp )\n\t"
-        "addi sp, sp, %[context_size]\n\t"
-        "ret\n\t"
-        : /* No Inputs */
-        : [context_size] "i" (CONTEXT_SIZE)
-        :
-    );
 }

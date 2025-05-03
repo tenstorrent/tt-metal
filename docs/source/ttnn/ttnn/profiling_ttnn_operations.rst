@@ -1,13 +1,13 @@
-Profiling ttnn Operations
-=========================
+Profiling TT-NN Operations
+==========================
 
 The following set of commands will generate perf reports for ``resnet`` as an example.
 
 ..  code-block:: sh
 
     cd $TT_METAL_HOME
-    scripts/build_scripts/build_with_profiler_opt.sh
-    ./tt_metal/tools/profiler/profile_this.py -n resnet -c "pytest models/demos/resnet/tests/test_perf_resnet.py::test_perf_bare_metal[8-0.024-28]"
+    build_metal.sh --enable-profiler
+    ./tt_metal/tools/profiler/profile_this.py -n resnet -c "pytest models/demos/resnet/tests/test_perf_resnet.py::test_perf_bare_metal[20-0.0185-25]"
 
 After the commands finish, the location of the generated csv will be printed on console similar to the image below:
 
@@ -22,7 +22,7 @@ The headers for the CSV are explained under `Perf Report Headers`_.
 
 **IMPORTANT NOTES**:
 
-- If this is the first time you are running ``profile_this.py``, it requires `developer dependencies <https://github.com/tenstorrent-metal/tt-metal/blob/main/INSTALLING.md#step-4-installing-developer-dependencies>`_ to be installed.
+- If this is the first time you are running ``profile_this.py``, it requires `developer dependencies <https://github.com/tenstorrent/tt-metal/blob/main/INSTALLING.md#step-4-installing-developer-dependencies>`_ to be installed.
 - If you have done a reset on your GS device with ``tt_smi`` or ``tensix_reset.sh``, profiling results are not valid due to tensix cores' skewed timer starts. You need to perform a full reboot with ``sudo reboot`` on your host machine to align the timer starts. WH does not have this issue and profiling can be performed after ``tt_smi`` resets.
 
 - In order to populate program cache, tests should run their inference layer at least twice and should run it in the same process. If pytest is being used, that would be running in

@@ -1,0 +1,4 @@
+elasticsearch
+termcolor
+beautifultable
+faster-fifo

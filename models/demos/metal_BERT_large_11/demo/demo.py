@@ -8,16 +8,19 @@ import torch
 
 from loguru import logger
 
-import tt_lib
+import ttnn
 from models.utility_functions import (
-    disable_compilation_reports,
     disable_persistent_kernel_cache,
     enable_persistent_kernel_cache,
     profiler,
 )
 
 from transformers import BertForQuestionAnswering, BertTokenizer, pipeline
-from models.demos.metal_BERT_large_11.tt.model_config import get_model_config, get_tt_cache_path
+from models.demos.metal_BERT_large_11.tt.model_config import (
+    get_model_config,
+    get_tt_cache_path,
+    skip_unsupported_config,
+)
 from models.demos.metal_BERT_large_11.tt.bert_model import TtBertBatchDram
 
 from models.datasets.dataset_squadv2 import squadv2_1K_samples_input, squadv2_answer_decode_batch
@@ -135,10 +138,7 @@ def run_bert_question_and_answering_inference_squadv2(
                 tt_output = tt_bert_model(tt_embedding, tt_attention_mask).cpu()
 
                 tt_output = (
-                    tt_output.to(tt_lib.tensor.Layout.ROW_MAJOR)
-                    .to_torch()
-                    .reshape(BATCH_SIZE, 1, seq_len, -1)
-                    .to(torch.float32)
+                    tt_output.to(ttnn.ROW_MAJOR_LAYOUT).to_torch().reshape(BATCH_SIZE, 1, seq_len, -1).to(torch.float32)
                 )
                 references = batch[1]
                 question = batch[2]
@@ -167,7 +167,7 @@ def run_bert_question_and_answering_inference_squadv2(
         logger.info(f"\tTT_Eval: exact: {eval_score['exact']} --  F1: {eval_score['f1']}")
         logger.info(f"\tCPU_Eval: exact: {cpu_eval_score['exact']} -- F1:  {cpu_eval_score['f1']}")
 
-        tt_lib.device.Synchronize(device)
+        ttnn.synchronize_device(device)
 
         return eval_score
 
@@ -306,9 +306,7 @@ def run_bert_question_and_answering_inference(
     profiler.start("processing_output_to_string")
 
     # convert TT Tensor returned from GS device to Torch tensor
-    tt_untilized_output = (
-        tt_out.to(tt_lib.tensor.Layout.ROW_MAJOR).to_torch().reshape(batch, 1, seq_len, -1).to(torch.float32)
-    )
+    tt_untilized_output = tt_out.to(ttnn.ROW_MAJOR_LAYOUT).to_torch().reshape(batch, 1, seq_len, -1).to(torch.float32)
     # extract logits for start and end of answer string
     tt_start_logits = tt_untilized_output[..., :, 0].squeeze(1)
     tt_end_logits = tt_untilized_output[..., :, 1].squeeze(1)
@@ -360,7 +358,7 @@ def run_bert_question_and_answering_inference(
     return measurements, model_answers
 
 
-@pytest.mark.parametrize("batch", (7, 12), ids=["batch_7", "batch_12"])
+@pytest.mark.parametrize("batch", (7, 8, 12), ids=["batch_7", "batch_8", "batch_12"])
 @pytest.mark.parametrize(
     "input_path, NUM_RUNS",
     (("models/demos/metal_BERT_large_11/demo/input_data.json", 1),),
@@ -373,8 +371,9 @@ def test_demo(
     device,
     use_program_cache,
 ):
+    model_config_str = "BFLOAT8_B-SHARDED"
+    skip_unsupported_config(device, model_config_str, batch)
     disable_persistent_kernel_cache()
-    disable_compilation_reports()
 
     return run_bert_question_and_answering_inference(
         model_version="phiyodr/bert-large-finetuned-squad2",
@@ -382,7 +381,7 @@ def test_demo(
         seq_len=384,
         return_attention_mask=True,
         return_token_type_ids=True,
-        model_config=get_model_config(batch, device.compute_with_storage_grid_size(), "BFLOAT8_B-SHARDED"),
+        model_config=get_model_config(batch, device.compute_with_storage_grid_size(), model_config_str),
         tt_cache_path=get_tt_cache_path("phiyodr/bert-large-finetuned-squad2"),
         NUM_RUNS=NUM_RUNS,
         input_path=input_path,
@@ -391,14 +390,15 @@ def test_demo(
     )
 
 
-@pytest.mark.parametrize("batch", (7, 12), ids=["batch_7", "batch_12"])
+@pytest.mark.parametrize("batch", (7, 8, 12), ids=["batch_7", "batch_8", "batch_12"])
 @pytest.mark.parametrize(
     "loop_count",
-    ((50),),
+    ((20),),
 )
 def test_demo_squadv2(model_location_generator, device, use_program_cache, batch, loop_count):
+    model_config_str = "BFLOAT8_B-SHARDED"
+    skip_unsupported_config(device, model_config_str, batch)
     disable_persistent_kernel_cache()
-    disable_compilation_reports()
 
     return run_bert_question_and_answering_inference_squadv2(
         model_version="phiyodr/bert-large-finetuned-squad2",
@@ -406,7 +406,7 @@ def test_demo_squadv2(model_location_generator, device, use_program_cache, batch
         seq_len=384,
         return_attention_mask=True,
         return_token_type_ids=True,
-        model_config=get_model_config(batch, device.compute_with_storage_grid_size(), "BFLOAT8_B-SHARDED"),
+        model_config=get_model_config(batch, device.compute_with_storage_grid_size(), model_config_str),
         tt_cache_path=get_tt_cache_path("phiyodr/bert-large-finetuned-squad2"),
         model_location_generator=model_location_generator,
         device=device,

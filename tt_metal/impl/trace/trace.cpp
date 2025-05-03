@@ -2,53 +2,63 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <algorithm>  // for copy() and assign()
-#include <iterator>   // for back_inserter
+#include <command_queue.hpp>
+#include <device.hpp>
+#include <host_api.hpp>
+#include <logger.hpp>
+#include <trace.hpp>
+#include <tt-metalium/allocator.hpp>
+#include <cstddef>
 #include <memory>
-#include <string>
+#include <variant>
+#include <vector>
 
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/impl/dispatch/command_queue.hpp"
+#include "allocator_types.hpp"
+#include "assert.hpp"
+#include "buffer.hpp"
+#include "buffer_types.hpp"
+#include "math.hpp"
+#include "tt_metal/impl/trace/dispatch.hpp"
 
 namespace tt::tt_metal {
 
-Trace::Trace() : trace_complete(false), num_data_bytes(0) { this->cq = std::make_unique<CommandQueue>(this); }
+std::atomic<uint32_t> Trace::global_trace_id = 0;
 
-void Trace::record(const TraceNode& trace_node) {
-    TT_FATAL(not this->trace_complete, "Cannot record any more for a completed trace");
-    this->num_data_bytes += trace_node.num_data_bytes;
-    this->history.push_back(trace_node);
+uint32_t Trace::next_id() { return global_trace_id++; }
+
+std::shared_ptr<TraceBuffer> Trace::create_empty_trace_buffer() {
+    return std::make_shared<TraceBuffer>(std::make_shared<TraceDescriptor>(), nullptr);
 }
 
-void Trace::validate() {
-    for (const auto& cmd : this->queue().worker_queue) {
-        if (cmd.blocking.has_value()) {
-            TT_FATAL(cmd.blocking.value() == false, "Blocking commands are not supported in traces");
-        }
+void Trace::initialize_buffer(CommandQueue& cq, const std::shared_ptr<TraceBuffer>& trace_buffer) {
+    std::vector<uint32_t>& trace_data = trace_buffer->desc->data;
+    uint64_t unpadded_size = trace_data.size() * sizeof(uint32_t);
+    size_t page_size = trace_dispatch::compute_interleaved_trace_buf_page_size(
+        unpadded_size, cq.device()->allocator()->get_num_banks(BufferType::DRAM));
+    uint64_t padded_size = round_up(unpadded_size, page_size);
+    size_t numel_padding = (padded_size - unpadded_size) / sizeof(uint32_t);
+    if (numel_padding > 0) {
+        trace_data.resize(trace_data.size() + numel_padding, 0 /*padding value*/);
     }
+    const auto current_trace_buffers_size = cq.device()->get_trace_buffers_size();
+    cq.device()->set_trace_buffers_size(current_trace_buffers_size + padded_size);
+    auto trace_region_size = cq.device()->allocator()->get_config().trace_region_size;
+    TT_FATAL(
+        cq.device()->get_trace_buffers_size() <= trace_region_size,
+        "Creating trace buffers of size {}B on device {}, but only {}B is allocated for trace region.",
+        cq.device()->get_trace_buffers_size(),
+        cq.device()->id(),
+        trace_region_size);
+    // Commit trace to device DRAM
+    trace_buffer->buffer =
+        Buffer::create(cq.device(), padded_size, page_size, BufferType::TRACE, TensorMemoryLayout::INTERLEAVED);
+    EnqueueWriteBuffer(cq, trace_buffer->buffer, trace_data, true /* blocking */);
+    log_trace(
+        LogMetalTrace,
+        "Trace issue buffer unpadded size={}, padded size={}, num_pages={}",
+        unpadded_size,
+        padded_size,
+        trace_buffer->buffer->num_pages());
 }
 
-uint32_t Trace::next_trace_id() {
-    static uint32_t global_trace_id = 0;
-    return global_trace_id++;
-}
-
-uint32_t Trace::instantiate(CommandQueue& cq) {
-    uint32_t trace_id = next_trace_id();
-    cq.trace_ptr = this;
-
-    // Stage the trace commands into device DRAM that the command queue will read from
-    // - flatten commands into tightly packed data structure
-    // - allocate the data into a DRAM interleaved buffer using 2KB page size
-    // - commit the DRAM buffer via an enqueue WB command
-    // - map the trace id to the DRAM buffer for later enqueue Trace
-
-    if (trace_instances.count(trace_id)) {
-        TT_THROW("Trace ID " + std::to_string(trace_id) + " already exists");
-    }
-
-    trace_instances.insert(trace_id);
-    return trace_id;
-}
-
-}
+}  // namespace tt::tt_metal

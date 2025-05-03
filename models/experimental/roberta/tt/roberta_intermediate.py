@@ -5,7 +5,7 @@
 import torch
 import torch.nn as nn
 
-import tt_lib
+import ttnn
 
 from models.helper_funcs import Linear as TTLinear
 from models.utility_functions import (
@@ -19,9 +19,7 @@ from models.experimental.roberta.roberta_common import torch2tt_tensor
 class TtRobertaIntermediate(nn.Module):
     def __init__(self, config, state_dict, base_address, device, fall_back_to_torch_gelu=True):
         super().__init__()
-        self.mem_config = tt_lib.tensor.MemoryConfig(
-            tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.L1
-        )
+        self.mem_config = ttnn.L1_MEMORY_CONFIG
         self.device = device
 
         self.fall_back_to_torch_gelu = fall_back_to_torch_gelu
@@ -29,21 +27,19 @@ class TtRobertaIntermediate(nn.Module):
         self.dense_weight = pad_by_zero(state_dict[f"{base_address}.dense.weight"], self.device)[0]
         self.dense_bias = pad_by_zero(state_dict[f"{base_address}.dense.bias"], self.device)[0]
         self.dense_linear = TTLinear(
-            self.dense_weight.get_legacy_shape()[-1],
-            self.dense_weight.get_legacy_shape()[-2],
+            self.dense_weight.padded_shape[-1],
+            self.dense_weight.padded_shape[-2],
             self.dense_weight,
             self.dense_bias,
         )
 
     def linear(self, x, weight, bias):
-        weight = tt_lib.tensor.transpose(weight, -2, -1)
-        x = tt_lib.tensor.matmul(x, weight, output_mem_config=self.mem_config)
-        x = tt_lib.tensor.bcast(
+        weight = ttnn.transpose(weight, -2, -1)
+        x = ttnn.matmul(x, weight, memory_config=self.mem_config)
+        x = ttnn.add(
             x,
             bias,
-            tt_lib.tensor.BcastOpMath.ADD,
-            tt_lib.tensor.BcastOpDim.H,
-            output_mem_config=self.mem_config,
+            memory_config=self.mem_config,
         )
         return x
 
@@ -54,5 +50,5 @@ class TtRobertaIntermediate(nn.Module):
             torch_hidden_states = torch.nn.functional.gelu(torch_hidden_states)
             hidden_states = torch2tt_tensor(torch_hidden_states, self.device)
         else:
-            hidden_states = tt_lib.tensor.gelu(hidden_states, output_mem_config=self.mem_config)
+            hidden_states = ttnn.gelu(hidden_states, memory_config=self.mem_config)
         return hidden_states

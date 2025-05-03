@@ -3,10 +3,15 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "tt_metal/impl/allocator/algorithms/free_list.hpp"
-#include "tt_metal/common/assert.hpp"
 
+#include <assert.hpp>
+#include <boost/smart_ptr/make_local_shared_object.hpp>
 #include <algorithm>
-#include <cmath>
+#include <functional>
+#include <string>
+#include <unordered_map>
+
+#include "allocator/algorithms/allocator_algorithm.hpp"
 
 namespace tt {
 
@@ -14,31 +19,50 @@ namespace tt_metal {
 
 namespace allocator {
 
-FreeList::FreeList(uint64_t max_size_bytes, uint64_t offset_bytes, uint64_t min_allocation_size, uint64_t alignment, FreeList::SearchPolicy search_policy)
-    : search_policy_(search_policy), Algorithm(max_size_bytes, offset_bytes, min_allocation_size, alignment) {
+FreeList::FreeList(
+    DeviceAddr max_size_bytes,
+    DeviceAddr offset_bytes,
+    DeviceAddr min_allocation_size,
+    DeviceAddr alignment,
+    FreeList::SearchPolicy search_policy) :
+    search_policy_(search_policy), Algorithm(max_size_bytes, offset_bytes, min_allocation_size, alignment) {
     this->init();
 }
 
+FreeList::~FreeList() { this->clear(); }
+
 void FreeList::init() {
-    auto block = std::make_shared<FreeList::Block>(0, this->max_size_bytes_);
+    boost::local_shared_ptr<FreeList::Block> curr_block = this->block_head_;
+    while (curr_block != nullptr) {
+        auto next_block = curr_block->next_block;
+        curr_block->prev_block = nullptr;
+        curr_block->next_block = nullptr;
+        curr_block->prev_free = nullptr;
+        curr_block->next_free = nullptr;
+        curr_block = next_block;
+    }
+
+    this->shrink_size_ = 0;
+    auto block = boost::make_local_shared<Block>(0, this->max_size_bytes_);
     this->block_head_ = block;
     this->block_tail_ = block;
     this->free_block_head_ = block;
     this->free_block_tail_ = block;
 }
 
-bool FreeList::is_allocated(const std::shared_ptr<Block> block) const {
-    return block->prev_free == nullptr and block->next_free == nullptr and block != this->free_block_head_ and block != this->free_block_tail_;
+bool FreeList::is_allocated(const boost::local_shared_ptr<Block>& block) const {
+    return block->prev_free == nullptr and block->next_free == nullptr and block != this->free_block_head_ and
+           block != this->free_block_tail_;
 }
 
-std::vector<std::pair<uint64_t, uint64_t>> FreeList::available_addresses(uint64_t size_bytes) const {
-    uint64_t alloc_size = size_bytes < this->min_allocation_size_ ? this->min_allocation_size_ : size_bytes;
+std::vector<std::pair<DeviceAddr, DeviceAddr>> FreeList::available_addresses(DeviceAddr size_bytes) const {
+    DeviceAddr alloc_size = size_bytes < this->min_allocation_size_ ? this->min_allocation_size_ : size_bytes;
     alloc_size = this->align(alloc_size);
-    std::vector<std::pair<uint64_t, uint64_t>> addresses;
-    std::shared_ptr<FreeList::Block> curr_block = this->free_block_head_;
+    std::vector<std::pair<DeviceAddr, DeviceAddr>> addresses;
+    boost::local_shared_ptr<FreeList::Block> curr_block = this->free_block_head_;
     while (curr_block != nullptr) {
         if (curr_block->size >= alloc_size) {
-            uint64_t end_range = (curr_block->address + curr_block->size) - alloc_size;
+            DeviceAddr end_range = (curr_block->address + curr_block->size) - alloc_size;
             addresses.push_back({curr_block->address, end_range});
         }
         curr_block = curr_block->next_free;
@@ -46,9 +70,9 @@ std::vector<std::pair<uint64_t, uint64_t>> FreeList::available_addresses(uint64_
     return addresses;
 }
 
-std::shared_ptr<FreeList::Block> FreeList::search_best(uint64_t size_bytes, bool bottom_up) {
-    std::shared_ptr<FreeList::Block> best_block = nullptr;
-    std::shared_ptr<FreeList::Block> curr_block = bottom_up ? this->free_block_head_ : this->free_block_tail_;
+boost::local_shared_ptr<FreeList::Block> FreeList::search_best(DeviceAddr size_bytes, bool bottom_up) {
+    boost::local_shared_ptr<FreeList::Block> best_block = nullptr;
+    boost::local_shared_ptr<FreeList::Block> curr_block = bottom_up ? this->free_block_head_ : this->free_block_tail_;
     while (curr_block != nullptr) {
         if (curr_block->size == size_bytes) {
             best_block = curr_block;
@@ -64,9 +88,9 @@ std::shared_ptr<FreeList::Block> FreeList::search_best(uint64_t size_bytes, bool
     return best_block;
 }
 
-std::shared_ptr<FreeList::Block> FreeList::search_first(uint64_t size_bytes, bool bottom_up) {
-    std::shared_ptr<FreeList::Block> curr_block = bottom_up ? this->free_block_head_ : this->free_block_tail_;
-    std::shared_ptr<FreeList::Block> first_fit_block = nullptr;
+boost::local_shared_ptr<FreeList::Block> FreeList::search_first(DeviceAddr size_bytes, bool bottom_up) {
+    boost::local_shared_ptr<FreeList::Block> curr_block = bottom_up ? this->free_block_head_ : this->free_block_tail_;
+    boost::local_shared_ptr<FreeList::Block> first_fit_block = nullptr;
     while (curr_block != nullptr) {
         if (curr_block->size >= size_bytes) {
             first_fit_block = curr_block;
@@ -78,21 +102,16 @@ std::shared_ptr<FreeList::Block> FreeList::search_first(uint64_t size_bytes, boo
     return first_fit_block;
 }
 
-std::shared_ptr<FreeList::Block> FreeList::search(uint64_t size_bytes, bool bottom_up) {
+boost::local_shared_ptr<FreeList::Block> FreeList::search(DeviceAddr size_bytes, bool bottom_up) {
     switch (this->search_policy_) {
-        case FreeList::SearchPolicy::BEST:
-            return search_best(size_bytes, bottom_up);
-        break;
-        case FreeList::SearchPolicy::FIRST:
-            return search_first(size_bytes, bottom_up);
-        break;
-        default:
-            TT_ASSERT(false && "Unsupported search policy");
+        case FreeList::SearchPolicy::BEST: return search_best(size_bytes, bottom_up); break;
+        case FreeList::SearchPolicy::FIRST: return search_first(size_bytes, bottom_up); break;
+        default: TT_ASSERT(false && "Unsupported search policy");
     }
     return nullptr;
 }
 
-void FreeList::allocate_entire_free_block(std::shared_ptr<Block> free_block_to_allocate) {
+void FreeList::allocate_entire_free_block(const boost::local_shared_ptr<Block>& free_block_to_allocate) {
     TT_ASSERT(not is_allocated(free_block_to_allocate));
     if (free_block_to_allocate->prev_free != nullptr) {
         free_block_to_allocate->prev_free->next_free = free_block_to_allocate->next_free;
@@ -120,7 +139,8 @@ void FreeList::allocate_entire_free_block(std::shared_ptr<Block> free_block_to_a
 
 // free_block range: [a, b)
 // allocated_block range: [a, c), where c < b
-void FreeList::update_left_aligned_allocated_block_connections(std::shared_ptr<Block> free_block, std::shared_ptr<Block> allocated_block) {
+void FreeList::update_left_aligned_allocated_block_connections(
+    const boost::local_shared_ptr<Block>& free_block, const boost::local_shared_ptr<Block>& allocated_block) {
     allocated_block->prev_block = free_block->prev_block;
     allocated_block->next_block = free_block;
     if (free_block->prev_block != nullptr) {
@@ -137,7 +157,8 @@ void FreeList::update_left_aligned_allocated_block_connections(std::shared_ptr<B
 
 // free_block range: [a, b)
 // allocated_block range: [c, b), where c > a
-void FreeList::update_right_aligned_allocated_block_connections(std::shared_ptr<Block> free_block, std::shared_ptr<Block> allocated_block) {
+void FreeList::update_right_aligned_allocated_block_connections(
+    const boost::local_shared_ptr<Block>& free_block, const boost::local_shared_ptr<Block>& allocated_block) {
     allocated_block->prev_block = free_block;
     allocated_block->next_block = free_block->next_block;
     if (free_block->next_block != nullptr) {
@@ -152,7 +173,8 @@ void FreeList::update_right_aligned_allocated_block_connections(std::shared_ptr<
 }
 
 // Offset marks the start of the allocated block
-std::shared_ptr<FreeList::Block> FreeList::allocate_slice_of_free_block(std::shared_ptr<FreeList::Block> free_block, uint64_t offset, uint64_t size_bytes) {
+boost::local_shared_ptr<FreeList::Block> FreeList::allocate_slice_of_free_block(
+    boost::local_shared_ptr<FreeList::Block> free_block, DeviceAddr offset, DeviceAddr size_bytes) {
     TT_ASSERT(free_block->address + offset + size_bytes <= free_block->address + free_block->size);
 
     // Allocated slice spans the entire space of free_block
@@ -161,15 +183,17 @@ std::shared_ptr<FreeList::Block> FreeList::allocate_slice_of_free_block(std::sha
         return free_block;
     }
 
-    auto allocated_block = std::make_shared<Block>(free_block->address + offset, size_bytes);
+    auto allocated_block = boost::make_local_shared<FreeList::Block>(free_block->address + offset, size_bytes);
 
     // Allocated slice takes up a portion of free_block, three cases to consider:
     // 1. allocated_block is left aligned with free_block with free space remaining on the right
     // 2. allocated_block is right aligned with free_block with free space remaining on the left
     // 3. allocated_block is in the middle of free_block with free space on left and right sides
     bool case_one = offset == 0 and size_bytes < free_block->size;
-    bool case_two = offset > 0 and ((free_block->address + offset + size_bytes) == (free_block->address + free_block->size));
-    bool case_three = offset > 0 and ((free_block->address + offset + size_bytes) < (free_block->address + free_block->size));
+    bool case_two =
+        offset > 0 and ((free_block->address + offset + size_bytes) == (free_block->address + free_block->size));
+    bool case_three =
+        offset > 0 and ((free_block->address + offset + size_bytes) < (free_block->address + free_block->size));
     TT_ASSERT((int)(case_one + case_two + case_three) == 1);
 
     if (case_one) {
@@ -180,16 +204,15 @@ std::shared_ptr<FreeList::Block> FreeList::allocate_slice_of_free_block(std::sha
         TT_ASSERT(case_three);
         // Original: | .................... free_block ....................|
         // Result:   | free_block_mod | allocated_block | next_free_block  |
-        uint64_t next_free_block_addr = free_block->address + offset + size_bytes;
-        uint64_t next_free_block_size = (free_block->address + free_block->size) - next_free_block_addr;
-        auto next_free_block = std::make_shared<FreeList::Block>(
+        DeviceAddr next_free_block_addr = free_block->address + offset + size_bytes;
+        DeviceAddr next_free_block_size = (free_block->address + free_block->size) - next_free_block_addr;
+        auto next_free_block = boost::make_local_shared<FreeList::Block>(
             next_free_block_addr,
             next_free_block_size,
             allocated_block,
             free_block->next_block,
             free_block,
-            free_block->next_free
-        );
+            free_block->next_free);
         if (free_block->next_block != nullptr) {
             free_block->next_block->prev_block = next_free_block;
         }
@@ -214,7 +237,7 @@ std::shared_ptr<FreeList::Block> FreeList::allocate_slice_of_free_block(std::sha
     return allocated_block;
 }
 
-void FreeList::update_lowest_occupied_address(uint64_t address) {
+void FreeList::update_lowest_occupied_address(DeviceAddr address) {
     if (not this->lowest_occupied_address_.has_value()) {
         this->lowest_occupied_address_ = address;
     } else {
@@ -222,8 +245,8 @@ void FreeList::update_lowest_occupied_address(uint64_t address) {
     }
 }
 
-std::optional<uint64_t> FreeList::allocate(uint64_t size_bytes, bool bottom_up, uint64_t address_limit) {
-    uint64_t alloc_size = size_bytes < this->min_allocation_size_ ? this->min_allocation_size_ : size_bytes;
+std::optional<DeviceAddr> FreeList::allocate(DeviceAddr size_bytes, bool bottom_up, DeviceAddr address_limit) {
+    DeviceAddr alloc_size = size_bytes < this->min_allocation_size_ ? this->min_allocation_size_ : size_bytes;
     alloc_size = this->align(alloc_size);
     auto free_block = search(alloc_size, bottom_up);
 
@@ -232,21 +255,28 @@ std::optional<uint64_t> FreeList::allocate(uint64_t size_bytes, bool bottom_up, 
     }
 
     // offset denotes where allocation starts relative to free_block start
-    uint64_t offset = bottom_up ? 0 : (((free_block->address + free_block->size) - alloc_size) - free_block->address);
+    DeviceAddr offset = bottom_up ? 0 : (((free_block->address + free_block->size) - alloc_size) - free_block->address);
     auto allocated_block = allocate_slice_of_free_block(free_block, offset, alloc_size);
 
     this->update_lowest_occupied_address(allocated_block->address);
     if (allocated_block->address + this->offset_bytes_ < address_limit) {
-        TT_THROW("Out of Memory: Cannot allocate at an address below {}. Tried to allocate at {}", address_limit, allocated_block->address + this->offset_bytes_);
+        TT_THROW(
+            "Out of Memory: Cannot allocate at an address below {}. Tried to allocate at {}",
+            address_limit,
+            allocated_block->address + this->offset_bytes_);
     }
     return allocated_block->address + this->offset_bytes_;
 }
 
-std::optional<uint64_t> FreeList::allocate_at_address(uint64_t absolute_start_address, uint64_t size_bytes) {
-    TT_ASSERT(absolute_start_address % this->alignment_ == 0, "Requested address " + std::to_string(absolute_start_address) + " should be " + std::to_string(this->alignment_) + "B aligned");
+std::optional<DeviceAddr> FreeList::allocate_at_address(DeviceAddr absolute_start_address, DeviceAddr size_bytes) {
+    TT_ASSERT(
+        absolute_start_address % this->alignment_ == 0,
+        "Requested address {} should be {} B aligned",
+        absolute_start_address,
+        this->alignment_);
     auto start_address = absolute_start_address - this->offset_bytes_;
-    std::shared_ptr<FreeList::Block> curr_block = this->free_block_head_;
-    uint64_t alloc_size = size_bytes < this->min_allocation_size_ ? this->min_allocation_size_ : size_bytes;
+    boost::local_shared_ptr<FreeList::Block> curr_block = this->free_block_head_;
+    DeviceAddr alloc_size = size_bytes < this->min_allocation_size_ ? this->min_allocation_size_ : size_bytes;
     alloc_size = this->align(alloc_size);
     // Look for a free block of size at least size_bytes that encompasses start_address
     while (curr_block != nullptr) {
@@ -254,8 +284,10 @@ std::optional<uint64_t> FreeList::allocate_at_address(uint64_t absolute_start_ad
             if (curr_block->address == start_address) {
                 allocate_slice_of_free_block(curr_block, /*offset=*/0, alloc_size);
                 break;
-            } else if ((start_address > curr_block->address) and ((start_address + alloc_size) <= (curr_block->address + curr_block->size))) {
-                uint64_t start_offset = start_address - curr_block->address;
+            } else if (
+                (start_address > curr_block->address) and
+                ((start_address + alloc_size) <= (curr_block->address + curr_block->size))) {
+                DeviceAddr start_offset = start_address - curr_block->address;
                 allocate_slice_of_free_block(curr_block, start_offset, alloc_size);
                 break;
             }
@@ -270,9 +302,9 @@ std::optional<uint64_t> FreeList::allocate_at_address(uint64_t absolute_start_ad
     return absolute_start_address;
 }
 
-std::shared_ptr<FreeList::Block> FreeList::find_block(uint64_t address) {
-    std::shared_ptr<Block> block = nullptr;
-    std::shared_ptr<Block> curr_block = this->block_head_;
+boost::local_shared_ptr<FreeList::Block> FreeList::find_block(DeviceAddr address) {
+    boost::local_shared_ptr<Block> block = nullptr;
+    boost::local_shared_ptr<Block> curr_block = this->block_head_;
     while (curr_block != nullptr) {
         if (curr_block->address == address) {
             return curr_block;
@@ -283,7 +315,7 @@ std::shared_ptr<FreeList::Block> FreeList::find_block(uint64_t address) {
 }
 
 void FreeList::update_lowest_occupied_address() {
-    std::shared_ptr<Block> block = this->block_head_;
+    boost::local_shared_ptr<Block> block = this->block_head_;
     while (block != nullptr) {
         if (this->is_allocated(block)) {
             break;
@@ -297,9 +329,9 @@ void FreeList::update_lowest_occupied_address() {
     }
 }
 
-void FreeList::deallocate(uint64_t absolute_address) {
-    uint64_t address = absolute_address - this->offset_bytes_;
-    std::shared_ptr<Block> block_to_free = find_block(address);
+void FreeList::deallocate(DeviceAddr absolute_address) {
+    DeviceAddr address = absolute_address - this->offset_bytes_;
+    boost::local_shared_ptr<Block> block_to_free = find_block(address);
     if (block_to_free == nullptr or not this->is_allocated(block_to_free)) {
         return;
     }
@@ -374,19 +406,16 @@ void FreeList::deallocate(uint64_t absolute_address) {
     }
 }
 
-void FreeList::clear() {
-    this->init();
-}
+void FreeList::clear() { this->init(); }
 
 Statistics FreeList::get_statistics() const {
     Statistics stats{
         .total_allocatable_size_bytes = this->max_size_bytes_,
         .total_allocated_bytes = 0,
         .total_free_bytes = 0,
-        .largest_free_block_bytes = 0
-    };
+        .largest_free_block_bytes = 0};
 
-    std::shared_ptr<Block> curr_block = this->block_head_;
+    boost::local_shared_ptr<Block> curr_block = this->block_head_;
     while (curr_block != nullptr) {
         if (this->is_allocated(curr_block)) {
             stats.total_allocated_bytes += curr_block->size;
@@ -406,21 +435,114 @@ Statistics FreeList::get_statistics() const {
     return stats;
 }
 
-void FreeList::dump_block(const std::shared_ptr<Block> block, std::ofstream &out) const {
+void FreeList::dump_block(const boost::local_shared_ptr<Block>& block, std::ostream& out) const {
     auto alloc_status = this->is_allocated(block) ? "Y" : "N";
-    out << ",,," << (block->address + this->offset_bytes_)
-        << "," << (block->size)
-        << "," << alloc_status << "\n";
+    out << ",,," << (block->address + this->offset_bytes_) << "," << (block->size) << "," << alloc_status << "\n";
 }
 
-void FreeList::dump_blocks(std::ofstream &out) const {
+void FreeList::dump_blocks(std::ostream& out) const {
     out << ",,Blocks:,Address (B),Size (B),Allocated (Y/N)\n";
-    std::shared_ptr<Block> curr_block = this->block_head_;
+    boost::local_shared_ptr<Block> curr_block = this->block_head_;
     while (curr_block != nullptr) {
         this->dump_block(curr_block, out);
         curr_block = curr_block->next_block;
     }
     out << "\n";
+}
+
+MemoryBlockTable FreeList::get_memory_block_table() const {
+    MemoryBlockTable blocks;
+    boost::local_shared_ptr<Block> curr_block = this->block_head_;
+
+    while (curr_block != nullptr) {
+        std::unordered_map<std::string, std::string> block_entry;
+
+        block_entry["address"] = std::to_string(curr_block->address + this->offset_bytes_);  // bytes
+        block_entry["size"] = std::to_string(curr_block->size);                              // bytes
+        block_entry["allocated"] = this->is_allocated(curr_block) ? "yes" : "no";
+
+        blocks.push_back(block_entry);
+        curr_block = curr_block->next_block;
+    }
+
+    return blocks;
+}
+
+void FreeList::shrink_size(DeviceAddr shrink_size, bool bottom_up) {
+    if (shrink_size == 0) {
+        return;
+    }
+    TT_FATAL(bottom_up, "Shrinking from the top is currently not supported");
+    TT_FATAL(
+        shrink_size <= this->max_size_bytes_,
+        "Shrink size {} must be smaller than max size {}",
+        shrink_size,
+        this->max_size_bytes_);
+    if (this->lowest_occupied_address_.has_value()) {
+        TT_FATAL(
+            shrink_size <= *this->lowest_occupied_address_,
+            "Shrinking size by {} that would cut into allocated memory at address {} and is not supported",
+            shrink_size,
+            *this->lowest_occupied_address_);
+    }
+    TT_FATAL(this->shrink_size_ == 0, "Can only shrink size if it is not already shrunk");
+
+    // Since we know the lowest occupied addr is greater or equal to shrink size, there should be a free block at start
+    // with size of at least shrink size
+    // Case 1: There is a free block at head and its size is greater than shrink size,
+    // so we just need to modify its attributes
+    TT_ASSERT(this->free_block_head_ != nullptr, "Free block head should not be null");
+    if (this->free_block_head_->size > shrink_size) {
+        TT_ASSERT(this->free_block_head_->address == 0, "Free block head should start at 0");
+        this->free_block_head_->address = shrink_size;
+        this->free_block_head_->size -= shrink_size;
+    }
+    // Case 2: The free block at head is the exact shrink size, so we need to remove it
+    else {
+        // Free block head is also the block head
+        this->block_head_ = this->block_head_->next_block;
+        this->block_head_->prev_block = nullptr;
+        // Free block head is also the free block tail when there is only 1 free block
+        if (this->free_block_head_->next_free == nullptr) {
+            this->free_block_tail_ = nullptr;
+            this->free_block_head_ = nullptr;
+        } else {
+            this->free_block_head_->next_free->prev_free = nullptr;
+            this->free_block_head_ = this->free_block_head_->next_free;
+        }
+    }
+    this->max_size_bytes_ -= shrink_size;
+    this->shrink_size_ = shrink_size;
+}
+
+void FreeList::reset_size() {
+    if (shrink_size_ == 0) {
+        return;
+    }
+    // Case 1: No free blocks exist
+    // We create a new free block which will be the free head and tail, and will also be our new block head
+    if (this->free_block_head_ == nullptr) {
+        this->free_block_head_ = boost::make_local_shared<FreeList::Block>(0, this->shrink_size_);
+        this->free_block_head_->next_block = this->block_head_;
+        this->free_block_tail_ = this->free_block_head_;
+        this->block_head_ = this->free_block_head_;
+    }
+    // Case 2: Free blocks exist but not at the start
+    else if (this->free_block_head_->address != this->shrink_size_) {
+        auto new_free_block = boost::make_local_shared<FreeList::Block>(0, this->shrink_size_);
+        new_free_block->next_block = this->block_head_;
+        new_free_block->next_free = this->free_block_head_;
+        this->free_block_head_->prev_free = new_free_block;
+        this->free_block_head_ = new_free_block;
+        this->block_head_ = this->free_block_head_;
+    }
+    // Case 3: There is a free block at the start and we just need to modify its attributes
+    else {
+        this->free_block_head_->address = 0;
+        this->free_block_head_->size += this->shrink_size_;
+    }
+    this->max_size_bytes_ += this->shrink_size_;
+    this->shrink_size_ = 0;
 }
 
 }  // namespace allocator

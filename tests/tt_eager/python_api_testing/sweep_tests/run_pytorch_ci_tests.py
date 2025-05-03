@@ -11,7 +11,8 @@ from tests.tt_eager.python_api_testing.sweep_tests import (
     comparison_funcs,
     generation_funcs,
 )
-from tests.tt_eager.python_api_testing.sweep_tests.op_map import op_map
+from tests.tt_eager.python_api_testing.sweep_tests.op_map import op_map as op_map_tt_eager
+from tests.ttnn.python_api_testing.sweep_tests.op_map import op_map as op_map_ttnn
 
 from tests.tt_eager.python_api_testing.sweep_tests.common import (
     run_tt_lib_test,
@@ -27,8 +28,14 @@ def run_single_pytorch_test(
     test_args={},
     env="",
     plot_func=None,
+    ttnn_op=False,
 ):
-    assert test_name in op_map
+    op_map = op_map_tt_eager
+    if not ttnn_op:
+        assert test_name in op_map_tt_eager
+    else:
+        assert test_name in op_map_ttnn
+        op_map = op_map_ttnn
 
     default_env_dict = {}
     # Get env variables from CLI
@@ -60,7 +67,7 @@ def run_single_pytorch_test(
     ################# RUN TEST #################
     logger.info(f"Running with shape: {input_shapes} on device: {device.id()}")
     test_pass, test_output = run_tt_lib_test(
-        op_map[test_name]["tt_lib_op"],
+        op_map[test_name]["tt_op"],
         op_map[test_name]["pytorch_op"],
         input_shapes,
         datagen_funcs,

@@ -2,17 +2,37 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <algorithm>
 #include <chrono>
-#include <functional>
-#include <random>
-#include <thread>
+#include <errno.h>
+#include <fmt/base.h>
+#include <stdint.h>
+#include <stdlib.h>
+#include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tt_metal.hpp>
+#include <algorithm>
+#include <cstring>
+#include <exception>
+#include <iostream>
+#include <map>
+#include <optional>
+#include <string>
+#include <tuple>
+#include <utility>
+#include <variant>
+#include <vector>
 
-#include "common/bfloat16.hpp"
-#include "test_tiles.hpp"
-#include "tt_metal/detail/tt_metal.hpp"
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/impl/debug/dprint_server.hpp"
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/circular_buffer_types.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/data_types.hpp>
+#include <tt-metalium/kernel_types.hpp>
+#include <tt-metalium/logger.hpp>
+#include <tt-metalium/program.hpp>
+#include <tt_stl/span.hpp>
+#include "test_common.hpp"
+#include <tt-metalium/tt_backend_api_types.hpp>
 #include "tt_metal/test_utils/deprecated/tensor.hpp"
 
 using namespace tt;
@@ -21,7 +41,7 @@ using std::chrono::microseconds;
 using std::chrono::steady_clock;
 
 template <typename T>
-std::vector<T> slice_vec(std::vector<T> const &v, int m, int n) {
+std::vector<T> slice_vec(std::vector<T> const& v, int m, int n) {
     auto first = v.cbegin() + m;
     auto last = v.cbegin() + n + 1;
 
@@ -29,7 +49,7 @@ std::vector<T> slice_vec(std::vector<T> const &v, int m, int n) {
     return vec;
 }
 
-void print_vec(std::vector<bfloat16> data, int rows, int cols, string name) {
+void print_vec(const std::vector<bfloat16>& data, int rows, int cols, const std::string& name) {
     std::cout << name << ": " << std::endl;
     int index = 0;
     for (int i = 0; i < rows; i++) {
@@ -42,7 +62,7 @@ void print_vec(std::vector<bfloat16> data, int rows, int cols, string name) {
     std::cout << std::endl;
 }
 
-int main(int argc, char **argv) {
+int main(int argc, char** argv) {
     if (getenv("TT_METAL_SLOW_DISPATCH_MODE") != nullptr) {
         TT_THROW("Test not supported w/ slow dispatch, exiting");
     }
@@ -76,7 +96,7 @@ int main(int argc, char **argv) {
                 test_args::get_command_option_uint32_and_remaining_args(input_args, "--c", 12);
             std::tie(validation, input_args) =
                 test_args::get_command_option_uint32_and_remaining_args(input_args, "--validation", 1);
-        } catch (const std::exception &e) {
+        } catch (const std::exception& e) {
             TT_THROW("Command line arguments found exception", e.what());
         }
 
@@ -84,7 +104,7 @@ int main(int argc, char **argv) {
         //                      Device Setup
         ////////////////////////////////////////////////////////////////////////////
         int device_id = 0;
-        tt_metal::Device *device = tt_metal::CreateDevice(device_id);
+        tt_metal::IDevice* device = tt_metal::CreateDevice(device_id);
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Application Setup
@@ -92,7 +112,7 @@ int main(int argc, char **argv) {
         // for convenience
         if (Nt % cb_n != 0) {
             log_error(LogTest, "activations({} tiles) should be divided cb buffer ({} tiles)", Nt, cb_n);
-            TT_FATAL(false);
+            TT_FATAL(false, "Error");
         }
 
         tt::DataFormat data_format = tt::DataFormat::Float16_b;
@@ -107,6 +127,7 @@ int main(int argc, char **argv) {
                 auto tensor = tt::deprecated::initialize_tensor<bfloat16>(
                     shape,
                     tt::deprecated::Initialize::RANDOM,
+                    0,
                     100,
                     std::chrono::system_clock::now().time_since_epoch().count());
 
@@ -164,7 +185,7 @@ int main(int argc, char **argv) {
 
         if (activations_addr + total_tiles_size_bytes > 1024 * 1024) {
             log_error(LogTest, "cb and activations buffer exceeds local L1 size");
-            TT_FATAL(false);
+            TT_FATAL(false, "Error");
         }
 
         // copy activation to l1 buffer
@@ -268,7 +289,7 @@ int main(int argc, char **argv) {
 
         pass &= tt_metal::CloseDevice(device);
 
-    } catch (const std::exception &e) {
+    } catch (const std::exception& e) {
         pass = false;
         // Capture the exception error message
         log_error(LogTest, "{}", e.what());
@@ -282,7 +303,7 @@ int main(int argc, char **argv) {
         TT_THROW("Test Failed");
     }
 
-    TT_FATAL(pass);
+    TT_FATAL(pass, "Error");
 
     return 0;
 }

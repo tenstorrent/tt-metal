@@ -4,18 +4,22 @@
 
 import json
 import time
+import pandas as pd
+
 from loguru import logger
+from collections import defaultdict
 
 from tt_metal.tools.profiler.common import clear_profiler_runtime_artifacts
 from tt_metal.tools.profiler.process_model_log import (
+    get_latest_ops_log_filename,
     post_process_ops_log,
     run_device_profiler,
     get_samples_per_s,
 )
-from models.perf.perf_utils import today, process_perf_results
+from models.perf.perf_utils import process_perf_results
 
 
-def run_device_perf(command, subdir, num_iterations, cols, batch_size):
+def run_device_perf(command, subdir, num_iterations, cols, batch_size, op_name="", has_signposts=False):
     duration_cols = [col + " DURATION [ns]" for col in cols]
     samples_cols = [col + " SAMPLES/S" for col in cols]
 
@@ -29,7 +33,7 @@ def run_device_perf(command, subdir, num_iterations, cols, batch_size):
 
     for _ in range(num_iterations):
         run_device_profiler(command, subdir)
-        r = post_process_ops_log(subdir, duration_cols)
+        r = post_process_ops_log(subdir, duration_cols, op_name=op_name, has_signposts=has_signposts)
         for d_col in duration_cols:
             results[f"AVG {d_col}"] += r[d_col]
             results[f"MIN {d_col}"] = min(results[f"MIN {d_col}"], r[d_col])
@@ -40,6 +44,9 @@ def run_device_perf(command, subdir, num_iterations, cols, batch_size):
         post_processed_results[f"AVG {s_col}"] = get_samples_per_s(results[f"AVG {d_col}"] / num_iterations, batch_size)
         post_processed_results[f"MIN {s_col}"] = get_samples_per_s(results[f"MAX {d_col}"], batch_size)
         post_processed_results[f"MAX {s_col}"] = get_samples_per_s(results[f"MIN {d_col}"], batch_size)
+        post_processed_results[f"AVG {d_col}"] = results[f"AVG {d_col}"] / num_iterations
+        post_processed_results[f"MIN {d_col}"] = results[f"MIN {d_col}"]
+        post_processed_results[f"MAX {d_col}"] = results[f"MAX {d_col}"]
 
     logger.info(
         f"\nTest: {command}"
@@ -49,8 +56,93 @@ def run_device_perf(command, subdir, num_iterations, cols, batch_size):
     return post_processed_results
 
 
-def check_device_perf(post_processed_results, margin, expected_perf_cols):
+# TODO: Move into process_model_log.py (#18698)
+def post_process_ops_log_detailed(
+    output_logs_subdir, columns, sum_vals=True, op_name="", has_signposts=False, detailed=False, warmup_iters=0
+):
+    filename = get_latest_ops_log_filename(output_logs_subdir)
+    df = pd.read_csv(filename)
+
+    if has_signposts:
+        # there are explicit start and stop points in the model we want to measure between
+        markers = df[df["OP TYPE"] == "signpost"]["OP CODE"]
+        start = markers[markers == "start"].index[0]
+        stop = markers[markers == "stop"].index[0]
+        df = df.iloc[start + 1 : stop]
+    if op_name != "":
+        df = df[df["OP CODE"] == op_name]
+
+    # group by DEVICE ID
+    df = df.groupby("DEVICE ID")
+    # now sort the list of df by the DEVICE FW START CYCLE
+    df = sorted(df, key=lambda x: x[1]["DEVICE FW START CYCLE"].iloc[0])
+
+    # Convert list of tuples to list of dataframes
+    dfs = [group for _, group in df]
+
+    # concatenate the list of df into a single df by interleaving the rows
+    df = pd.concat([df.iloc[[i]] for i in range(len(dfs[0])) for df in dfs], ignore_index=True)
+
+    if warmup_iters > 0:
+        df = df.iloc[warmup_iters:]
+
+    results = {}
+    for col in columns:
+        df_filtered = df[df[col] != "-"]
+        if sum_vals:
+            results[col] = df_filtered[col].astype(float).sum()
+        else:
+            results[col] = df_filtered[col].astype(float).to_numpy()
+
+        if detailed:
+            results[f"AVG {col}"] = df_filtered[col].astype(float).mean()
+            results[f"MIN {col}"] = df_filtered[col].astype(float).min()
+            results[f"MAX {col}"] = df_filtered[col].astype(float).max()
+            results[f"STD {col}"] = df_filtered[col].astype(float).std()
+
+    return results
+
+
+def run_device_perf_detailed(command, subdir, cols, op_name="", has_signposts=False, warmup_iters=0):
+    duration_cols = [col + " DURATION [ns]" for col in cols]
+
+    clear_profiler_runtime_artifacts()
+
+    results = {}
+    for d_col in duration_cols:
+        results[f"AVG {d_col}"] = 0
+        results[f"MIN {d_col}"] = float("inf")
+        results[f"MAX {d_col}"] = -float("inf")
+        results[f"STD {d_col}"] = 0
+
+    run_device_profiler(command, subdir)
+    r = post_process_ops_log_detailed(
+        subdir, duration_cols, op_name=op_name, has_signposts=has_signposts, detailed=True, warmup_iters=warmup_iters
+    )
+    for d_col in duration_cols:
+        results[f"AVG {d_col}"] = r[f"AVG {d_col}"]
+        results[f"MIN {d_col}"] = r[f"MIN {d_col}"]
+        results[f"MAX {d_col}"] = r[f"MAX {d_col}"]
+        results[f"STD {d_col}"] = r[f"STD {d_col}"]
+
+    post_processed_results = defaultdict(dict)
+    for col, d_col in zip(cols, duration_cols):
+        post_processed_results[col]["AVG"] = results[f"AVG {d_col}"]
+        post_processed_results[col]["MIN"] = results[f"MIN {d_col}"]
+        post_processed_results[col]["MAX"] = results[f"MAX {d_col}"]
+        post_processed_results[col]["STD"] = results[f"STD {d_col}"]
+
+    logger.info(
+        f"\nTest: {command}"
+        f"\nPerformance statistics for op: {op_name}"
+        f"\n{json.dumps(post_processed_results, indent=4)}"
+    )
+    return post_processed_results
+
+
+def check_device_perf(post_processed_results, margin, expected_perf_cols, assert_on_fail=False):
     expected_results = {}
+    failed = False
     for col, expected_perf in expected_perf_cols.items():
         lower_threshold = (1 - margin) * expected_perf
         upper_threshold = (1 + margin) * expected_perf
@@ -62,9 +154,12 @@ def check_device_perf(post_processed_results, margin, expected_perf_cols):
         )
         passing = lower_threshold <= post_processed_results[col] <= upper_threshold
         if not passing:
+            failed = True
             logger.error(
                 f"{col} {post_processed_results[col]} is outside of expected range ({lower_threshold}, {upper_threshold})"
             )
+    if assert_on_fail:
+        assert not failed, "Some performance metrics are outside of expected range, see above for details."
     return expected_results
 
 

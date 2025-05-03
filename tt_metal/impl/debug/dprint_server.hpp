@@ -3,26 +3,14 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /*
-* Implements host-side debug print server interface.
-*/
+ * Implements host-side debug print server interface.
+ */
 
 #pragma once
 
-#include "tt_metal/common/core_coord.h"
-#include "tt_metal/impl/device/device.hpp"
+#include <umd/device/types/cluster_descriptor_types.h>
 
-namespace tt {
-
-enum DebugPrintHartFlags : unsigned int {
-    DPRINT_RISCV_NC  = 1,
-    DPRINT_RISCV_TR0 = 2,
-    DPRINT_RISCV_TR1 = 4,
-    DPRINT_RISCV_TR2 = 8,
-    DPRINT_RISCV_BR  = 16,
-};
-
-constexpr int DPRINT_NRISCVS = 5;
-constexpr int DPRINT_NRISCVS_ETH = 1;
+namespace tt::tt_metal {
 
 /*
 @brief Attaches a device to be monitored by the print server. If no devices were present on the
@@ -33,7 +21,7 @@ constexpr int DPRINT_NRISCVS_ETH = 1;
 
 This call is not thread safe, and there is only one instance of print server supported at a time.
 */
-void DprintServerAttach(tt::tt_metal::Device* device);
+void DprintServerAttach(chip_id_t device_id);
 
 /*
 @brief Detach a device so it is no longer monitored by the print server. If no devices are present
@@ -44,7 +32,7 @@ void DprintServerAttach(tt::tt_metal::Device* device);
 
 Note that this api call is not thread safe at the moment.
 */
-void DprintServerDetach(tt::tt_metal::Device* device);
+void DprintServerDetach(chip_id_t device_id);
 
 /**
 @brief Set device side profiler state.
@@ -97,4 +85,9 @@ void DPrintServerClearLogFile();
 */
 void DPrintServerClearSignals();
 
-} // namespace tt
+/**
+@brief Returns true if the DPRINT server reads any dispatch cores on a given device.
+*/
+bool DPrintServerReadsDispatchCores(chip_id_t device_id);
+
+}  // namespace tt::tt_metal

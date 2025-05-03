@@ -1,0 +1,81 @@
+// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#include "moreh_mean_backward_device_operation.hpp"
+
+#include "ttnn/operations/moreh/moreh_helper_functions.hpp"
+#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/tensor/types.hpp"
+
+namespace ttnn::operations::moreh::moreh_mean_backward {
+void MorehMeanBackwardOperation::validate_tensors(
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const auto& output_grad = tensor_args.output_grad;
+    const auto& input_grad = tensor_args.input_grad;
+    TT_FATAL(
+        input_grad.has_value() || operation_attributes.input_grad_shape.has_value() || operation_attributes.keepdim,
+        "Either input_grad tensor or input_grad_shape or keepdim must be present");
+
+    check_tensor(output_grad, "moreh_mean_backward", "output_grad", {DataType::BFLOAT16});
+    check_tensor(input_grad, "moreh_mean_backward", "input_grad", {DataType::BFLOAT16});
+}
+
+MorehMeanBackwardOperation::program_factory_t MorehMeanBackwardOperation::select_program_factory(
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    return MorehMeanBackwardFactory{};
+}
+
+void MorehMeanBackwardOperation::validate_on_program_cache_miss(
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    validate_tensors(operation_attributes, tensor_args);
+};
+
+void MorehMeanBackwardOperation::validate_on_program_cache_hit(
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    validate_tensors(operation_attributes, tensor_args);
+};
+
+MorehMeanBackwardOperation::spec_return_value_t MorehMeanBackwardOperation::compute_output_specs(
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    if (tensor_args.input_grad.has_value()) {
+        return tensor_args.input_grad->get_tensor_spec();
+    }
+    auto input_grad_shape = operation_attributes.input_grad_shape.value();
+    return TensorSpec(
+        input_grad_shape,
+        TensorLayout(
+            tensor_args.output_grad.get_dtype(), PageConfig(Layout::TILE), operation_attributes.memory_config));
+}
+
+MorehMeanBackwardOperation::tensor_return_value_t MorehMeanBackwardOperation::create_output_tensors(
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    auto& output_grad = tensor_args.output_grad;
+    if (tensor_args.input_grad.has_value()) {
+        return tensor_args.input_grad.value();
+    }
+
+    return create_device_tensor(compute_output_specs(operation_attributes, tensor_args), output_grad.device());
+}
+
+std::tuple<MorehMeanBackwardOperation::operation_attributes_t, MorehMeanBackwardOperation::tensor_args_t>
+MorehMeanBackwardOperation::invoke(
+    const Tensor& output_grad,
+    const ttnn::SmallVector<int64_t>& dims,
+    const bool keepdim,
+    const std::optional<ttnn::Shape>& input_grad_shape,
+    const std::optional<Tensor>& input_grad,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
+    return {
+        {dims,
+         keepdim,
+         input_grad_shape,
+         memory_config.value_or(output_grad.memory_config()),
+         init_device_compute_kernel_config(output_grad.device()->arch(), compute_kernel_config, MathFidelity::HiFi4)},
+        {
+            output_grad,
+            input_grad,
+        }};
+}
+}  // namespace ttnn::operations::moreh::moreh_mean_backward

@@ -1,0 +1,69 @@
+{
+    "version": 3,
+    "configurePresets": [
+      {
+        "name": "default",
+        "displayName": "Default Config",
+        "description": "Default build of all the code using Ninja",
+        "generator": "Ninja Multi-Config",
+        "binaryDir": "${sourceDir}/.build/default",
+        "cacheVariables": {
+          "TT_METAL_BUILD_TESTS": {"value": "TRUE"},
+          "TTNN_BUILD_TESTS": {"value": "TRUE"},
+          "TT_UMD_BUILD_TESTS": {"value": "FALSE"},
+          "BUILD_PROGRAMMING_EXAMPLES": {"value": "TRUE"},
+          "BUILD_TT_TRAIN": {"value": "TRUE"},
+          "CMAKE_DISABLE_PRECOMPILE_HEADERS": {"value": "TRUE"},
+          "ENABLE_CCACHE": {"value": "TRUE"},
+          "TT_UNITY_BUILDS": {"value": "FALSE"}
+        },
+        "toolchainFile": "cmake/x86_64-linux-clang-17-libstdcpp-toolchain.cmake"
+      },
+      {
+        "name": "clang-tidy",
+        "inherits": "default",
+        "description": "Run Clang Tidy",
+        "binaryDir": "${sourceDir}/.build/clang-tidy",
+        "cacheVariables": {
+          "CMAKE_CXX_CLANG_TIDY": {"value": "clang-tidy-17;--warnings-as-errors=*"},
+          "CMAKE_VERIFY_INTERFACE_HEADER_SETS": {"value": "TRUE"},
+          "CMAKE_EXPORT_COMPILE_COMMANDS": {"value": "TRUE"}
+        }
+      },
+      {
+        "name": "clang-tidy-fix",
+        "inherits": "clang-tidy",
+        "description": "Run Clang Tidy and apply fixes",
+        "binaryDir": "${sourceDir}/.build/clang-tidy-fix",
+        "cacheVariables": {
+          "CMAKE_CXX_CLANG_TIDY": {"value": "clang-tidy-17;--fix"}
+        }
+      }
+    ],
+    "buildPresets": [
+      {
+        "name": "dev",
+        "configurePreset": "default",
+        "configuration": "RelWithDebInfo",
+        "targets": ["all"]
+      },
+      {
+        "name": "debug",
+        "configurePreset": "default",
+        "configuration": "Debug",
+        "targets": ["all"]
+      },
+      {
+        "name": "clang-tidy",
+        "configurePreset": "clang-tidy",
+        "configuration": "RelWithDebInfo",
+        "nativeToolOptions": ["-k0"]
+      },
+      {
+        "name": "clang-tidy-fix",
+        "configurePreset": "clang-tidy-fix",
+        "configuration": "RelWithDebInfo",
+        "nativeToolOptions": ["-k0"]
+      }
+    ]
+  }

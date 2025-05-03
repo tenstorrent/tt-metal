@@ -1,0 +1,38 @@
+include "flatbuffer/command.fbs";
+
+namespace tt.tt_metal.flatbuffer;
+
+// Represents the TraceWorkerDescriptor struct
+table TraceWorkerDescriptor {
+  num_completion_worker_cores: uint32;
+  num_traced_programs_needing_go_signal_multicast: uint32;
+  num_traced_programs_needing_go_signal_unicast: uint32;
+}
+
+// Represents a key-value pair for SubDeviceId -> TraceWorkerDescriptor mapping
+table SubDeviceDescriptorMapping {
+  sub_device_id: uint8;
+  descriptor: TraceWorkerDescriptor;
+}
+
+// Matches C++ struct TraceDescriptor
+table TraceDescriptor {
+  trace_data: [uint32];
+  sub_device_descriptors: [SubDeviceDescriptorMapping]; // Vector of key-value pairs
+  sub_device_ids: [uint8]; // Optimized vector of sub_device_ids
+}
+
+// Associate key (trace_id) to value (TraceDescriptor)
+table TraceDescriptorByTraceId {
+  trace_id: uint32 (key);
+  desc: TraceDescriptor;
+}
+
+// Top level Binary to represent a host+device workload as LightMetalBinary.
+table LightMetalBinary {
+  // TODO (kmabee) - Git Hash, Versioning, SystemDesc, etc.
+  commands: [tt.tt_metal.flatbuffer.Command];
+  trace_descriptors: [TraceDescriptorByTraceId];  // Metal "Traces"
+}
+
+root_type LightMetalBinary;

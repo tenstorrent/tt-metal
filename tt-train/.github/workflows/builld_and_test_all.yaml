@@ -1,0 +1,93 @@
+name: Build Tests
+
+on:
+  workflow_call:
+  workflow_dispatch:
+  merge_group:
+
+jobs:
+  run-tests:
+    runs-on: ["n150"]
+    env:
+      ARCH_NAME: wormhole_b0
+      TT_METAL_HOME: ${{ github.workspace }}/3rd_party/tt-metal
+      PYTHONPATH: ${{ github.workspace }}/3rd_party/tt-metal
+    steps:
+      - name: Setup Telemetry
+        uses: catchpoint/workflow-telemetry-action@v2
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          lfs: false
+
+      # actions/checkout runs `git clean -ffdx && git reset --hard HEAD` before fetching
+      # but `build`, `build_Release`, `built` (contains compiled kernels) dirs are not removed because they are in .gitignore
+      # Keep things hermetic - wiping those folders
+      - name: Clear Metal Repo Artifacts
+        run: |
+          rm -rf ${{ env.TT_METAL_HOME }}/build
+          rm -rf ${{ env.TT_METAL_HOME }}/build_Release
+          rm -rf ${{ env.TT_METAL_HOME }}/built
+
+      - name: Get submodule commit hash
+        id: submodule-commit
+        run: |
+          commit=$(git -C 3rd_party/tt-metal rev-parse HEAD)
+          echo "Submodule commit hash: $commit"
+          echo "commit=$commit" >> $GITHUB_OUTPUT
+
+      - name: Restore Metal Build Cache
+        id: restore-cache
+        uses: actions/cache/restore@v4
+        with:
+          path:
+            ${{ env.TT_METAL_HOME }}/build_Release
+          key: metal-build-${{ steps.submodule-commit.outputs.commit }}
+
+      # Making sure that valid `build` symlink exists
+      # It can't be cached by actions/cache
+      - name: Restore Metal build -> build_Release symlink
+        if: steps.restore-cache.outputs.cache-hit == 'true'
+        run: |
+          ln -nsf ${{ env.TT_METAL_HOME }}/build_Release ${{ env.TT_METAL_HOME }}/build
+
+      - name: Build Metal
+        if: steps.restore-cache.outputs.cache-hit != 'true'
+        run: |
+          cd 3rd_party/tt-metal
+          ./build_metal.sh -b Release
+          cd ../../
+
+      # See https://github.com/marketplace/actions/cache#cache-limits
+      - name: Update Metal Build Cache
+        if: steps.restore-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path:
+            ${{ env.TT_METAL_HOME }}/build_Release
+          key: metal-build-${{ steps.submodule-commit.outputs.commit }}
+
+      - name: Build
+        run: |
+          cmake -DCMAKE_BUILD_TYPE=Release -B build -GNinja
+          cmake --build build --config Release --clean-first
+
+      - name: Tests
+        run: |
+          cd build
+          ctest --no-tests=error --output-on-failure
+
+  # Status check requires job with exact same name
+  # This approach allows to further extend this workflow to allow for a multijob run
+  validate-pr:
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    needs: [run-tests]
+    steps:
+      - run: |
+          test_result="${{ needs.run-tests.result}}"
+          if [[ $test_result == "success" ]] ; then
+            exit 0
+          else
+            exit 1
+          fi

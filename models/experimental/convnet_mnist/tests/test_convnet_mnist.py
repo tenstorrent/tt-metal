@@ -4,7 +4,7 @@
 
 import torch
 from loguru import logger
-import tt_lib
+import ttnn
 
 from models.utility_functions import (
     comp_pcc,
@@ -22,9 +22,7 @@ def test_mnist_inference(device):
     with torch.no_grad():
         pt_output = pt_convnet(test_input).unsqueeze(1).unsqueeze(1)
 
-        tt_input = torch2tt_tensor(
-            test_input, device, tt_layout=tt_lib.tensor.Layout.ROW_MAJOR
-        )
+        tt_input = torch2tt_tensor(test_input, device, tt_layout=ttnn.ROW_MAJOR_LAYOUT)
         tt_output = tt_convnet(tt_input)
         tt_output = tt2torch_tensor(tt_output)
 

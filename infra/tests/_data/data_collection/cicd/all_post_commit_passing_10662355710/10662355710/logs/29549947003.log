@@ -1,0 +1,402 @@
+﻿2024-09-02T07:15:21.8822298Z Current runner version: '2.319.1'
+2024-09-02T07:15:21.8829577Z Runner name: 'tt-metal-ci-vm-88'
+2024-09-02T07:15:21.8830396Z Runner group name: 'Default'
+2024-09-02T07:15:21.8831486Z Machine name: 'tt-metal-ci-vm-88'
+2024-09-02T07:15:21.8852798Z Testing runner upgrade compatibility
+2024-09-02T07:15:22.0029288Z ##[group]GITHUB_TOKEN Permissions
+2024-09-02T07:15:22.0032390Z Actions: read
+2024-09-02T07:15:22.0032920Z Contents: read
+2024-09-02T07:15:22.0033413Z Metadata: read
+2024-09-02T07:15:22.0033911Z Pages: write
+2024-09-02T07:15:22.0034414Z ##[endgroup]
+2024-09-02T07:15:22.0039055Z Secret source: Actions
+2024-09-02T07:15:22.0040166Z Prepare workflow directory
+2024-09-02T07:15:22.1455682Z Prepare all required actions
+2024-09-02T07:15:22.1692142Z Getting action download info
+2024-09-02T07:15:22.3331978Z Download action repository 'tenstorrent-metal/metal-workflows@v2.0.0' (SHA:22c747950076e4c9627125e14734e287c08287a7)
+2024-09-02T07:15:22.8141042Z Getting action download info
+2024-09-02T07:15:22.9754499Z Download action repository 'actions/checkout@v4' (SHA:692973e3d937129bcbf40652eb9f2f61becf3332)
+2024-09-02T07:15:23.5541326Z Uses: tenstorrent/tt-metal/.github/workflows/fast-dispatch-build-and-unit-tests.yaml@refs/heads/main (a9bcd03b1775ab989aebab822ec2e4f821abac41)
+2024-09-02T07:15:23.5544346Z ##[group] Inputs
+2024-09-02T07:15:23.5544921Z   arch: wormhole_b0
+2024-09-02T07:15:23.5545451Z   runner-label: N300
+2024-09-02T07:15:23.5546825Z   timeout: 45
+2024-09-02T07:15:23.5547371Z ##[endgroup]
+2024-09-02T07:15:23.5548570Z Complete job name: fast-dispatch-unit-tests (wormhole_b0, N300) / eager unit tests 1 wormhole_b0 N300
+2024-09-02T07:15:23.6365233Z A job started hook has been configured by the self-hosted runner administrator
+2024-09-02T07:15:23.6566163Z ##[group]Run '/opt/tt_metal_infra/scripts/ci/wormhole_b0/reset.sh'
+2024-09-02T07:15:23.6587563Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2024-09-02T07:15:23.6588343Z ##[endgroup]
+2024-09-02T07:15:23.6895511Z Current date / time is Mon Sep 2 07:15:23 UTC 2024
+2024-09-02T07:15:36.5144301Z tt-smi reset was successful
+2024-09-02T07:15:36.9803335Z 
+2024-09-02T07:15:36.9805865Z [95m Detected Chips: [93m1[0m
+2024-09-02T07:15:36.9818484Z [1A[J
+2024-09-02T07:15:36.9819108Z [95m Detected Chips: [93m1[0m
+2024-09-02T07:15:36.9819528Z 
+2024-09-02T07:15:36.9819807Z [94m Detecting ARC: [93m|[0m
+2024-09-02T07:15:36.9820154Z 
+2024-09-02T07:15:36.9820444Z [94m Detecting DRAM: [93m|[0m
+2024-09-02T07:15:36.9820816Z 
+2024-09-02T07:15:36.9821089Z  [95m[][94m [16/16] ETH: [93m|[0m
+2024-09-02T07:15:36.9823627Z [4A[J
+2024-09-02T07:15:36.9824616Z [95m Detected Chips: [93m2[0m
+2024-09-02T07:15:36.9925934Z [1A[J
+2024-09-02T07:15:36.9926720Z [95m Detected Chips: [93m2[0m
+2024-09-02T07:15:36.9927071Z 
+2024-09-02T07:15:36.9929601Z [94m Detecting ARC: [93m/[0m
+2024-09-02T07:15:36.9930246Z 
+2024-09-02T07:15:36.9930509Z [94m Detecting DRAM: [93m/[0m
+2024-09-02T07:15:36.9930887Z 
+2024-09-02T07:15:36.9931198Z  [95m[][94m [16/16] ETH: [93m/[0m
+2024-09-02T07:15:36.9979662Z [4A[J
+2024-09-02T07:15:36.9980204Z [95m Detected Chips: [93m3[0m
+2024-09-02T07:15:37.0068266Z [1A[J
+2024-09-02T07:15:37.0068852Z [95m Detected Chips: [93m3[0m
+2024-09-02T07:15:37.0069248Z 
+2024-09-02T07:15:37.0069513Z [94m Detecting ARC: [93m-[0m
+2024-09-02T07:15:37.0069881Z 
+2024-09-02T07:15:37.0070157Z [94m Detecting DRAM: [93m-[0m
+2024-09-02T07:15:37.0070504Z 
+2024-09-02T07:15:37.0070783Z  [95m[][94m [16/16] ETH: [93m-[0m
+2024-09-02T07:15:37.0099368Z [4A[J
+2024-09-02T07:15:37.0099974Z [95m Detected Chips: [93m2[0m
+2024-09-02T07:15:37.0218059Z Gathering Information ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 100% 0:00:00
+2024-09-02T07:15:37.0230823Z [95m Saved tt-smi log to: /opt/tt_metal_infra/smi.log [0m
+2024-09-02T07:15:37.0880771Z {
+2024-09-02T07:15:37.0882060Z     "time": "2024-09-02T07:15:37.009837",
+2024-09-02T07:15:37.0883701Z     "host_info": {
+2024-09-02T07:15:37.0884156Z         "OS": "Linux",
+2024-09-02T07:15:37.0884711Z         "Distro": "Ubuntu 20.04.3 LTS",
+2024-09-02T07:15:37.0886058Z         "Kernel": "5.4.0-189-generic",
+2024-09-02T07:15:37.0886713Z         "Hostname": "tt-metal-ci-vm-88",
+2024-09-02T07:15:37.0887316Z         "Platform": "x86_64",
+2024-09-02T07:15:37.0887807Z         "Python": "3.8.10",
+2024-09-02T07:15:37.0888688Z         "Memory": "47.14 GB",
+2024-09-02T07:15:37.0889161Z         "Driver": "TTKMD 1.27.1"
+2024-09-02T07:15:37.0889654Z     },
+2024-09-02T07:15:37.0890033Z     "device_info": [
+2024-09-02T07:15:37.0890455Z         {
+2024-09-02T07:15:37.0890860Z             "smbus_telem": {
+2024-09-02T07:15:37.0891629Z                 "BOARD_ID": "0x10001451172318e",
+2024-09-02T07:15:37.0892286Z                 "SMBUS_TX_ENUM_VERSION": "0xba5e0001",
+2024-09-02T07:15:37.0892916Z                 "SMBUS_TX_DEVICE_ID": "0x401e1e52",
+2024-09-02T07:15:37.0893516Z                 "SMBUS_TX_ASIC_RO": "0x2d807",
+2024-09-02T07:15:37.0894103Z                 "SMBUS_TX_ASIC_IDD": "0x10b4",
+2024-09-02T07:15:37.0894721Z                 "SMBUS_TX_BOARD_ID_HIGH": "0x1000145",
+2024-09-02T07:15:37.0895390Z                 "SMBUS_TX_BOARD_ID_LOW": "0x1172318e",
+2024-09-02T07:15:37.0896019Z                 "SMBUS_TX_ARC0_FW_VERSION": "0x21b0000",
+2024-09-02T07:15:37.0896688Z                 "SMBUS_TX_ARC1_FW_VERSION": "0x21b0000",
+2024-09-02T07:15:37.0897321Z                 "SMBUS_TX_ARC2_FW_VERSION": null,
+2024-09-02T07:15:37.0897966Z                 "SMBUS_TX_ARC3_FW_VERSION": "0x21b0000",
+2024-09-02T07:15:37.0898617Z                 "SMBUS_TX_SPIBOOTROM_FW_VERSION": "0x30b0000",
+2024-09-02T07:15:37.0899311Z                 "SMBUS_TX_ETH_FW_VERSION": "0x69000",
+2024-09-02T07:15:37.0900177Z                 "SMBUS_TX_M3_BL_FW_VERSION": "0x81020000",
+2024-09-02T07:15:37.0900850Z                 "SMBUS_TX_M3_APP_FW_VERSION": "0x5090002",
+2024-09-02T07:15:37.0901460Z                 "SMBUS_TX_DDR_SPEED": null,
+2024-09-02T07:15:37.0902074Z                 "SMBUS_TX_DDR_STATUS": "0x2222222",
+2024-09-02T07:15:37.0902718Z                 "SMBUS_TX_ETH_STATUS0": "0x11111111",
+2024-09-02T07:15:37.0903370Z                 "SMBUS_TX_ETH_STATUS1": "0x11111133",
+2024-09-02T07:15:37.0903977Z                 "SMBUS_TX_PCIE_STATUS": "0x11040000",
+2024-09-02T07:22:31.4963889Z PASSED tests/tt_eager/python_api_testing/unit_testing/misc/test_bcast.py::test_bcast[orientation1-2-2-op0-in1_dtype0-in0_dtype0-512-1280-64-shard_grid8-ShardStrategy.BLOCK]
+2024-09-02T07:22:31.4965053Z PASSED tests/tt_eager/python_api_testing/unit_testing/misc/test_bcast.py::test_bcast[orientation1-2-2-op0-in1_dtype0-in0_dtype1-2048-320-40-shard_grid0-ShardStrategy.BLOCK]
+2024-09-02T07:22:31.4966339Z PASSED tests/tt_eager/python_api_testing/unit_testing/misc/test_bcast.py::test_bcast[orientation1-2-2-op0-in1_dtype0-in0_dtype1-512-640-40-shard_grid1-ShardStrategy.BLOCK]
+2024-09-02T07:22:31.4967539Z PASSED tests/tt_eager/python_api_testing/unit_testing/misc/test_bcast.py::test_bcast[orientation1-2-2-op0-in1_dtype0-in0_dtype1-2048-1280-40-shard_grid2-ShardStrategy.BLOCK]
+2024-09-02T07:22:31.4968697Z PASSED tests/tt_eager/python_api_testing/unit_testing/misc/test_bcast.py::test_bcast[orientation1-2-2-op0-in1_dtype0-in0_dtype1-128-1280-40-shard_grid3-ShardStrategy.WIDTH]
+2024-09-02T07:22:31.4969856Z PASSED tests/tt_eager/python_api_testing/unit_testing/misc/test_bcast.py::test_bcast[orientation1-2-2-op0-in1_dtype0-in0_dtype1-8192-320-40-shard_grid4-ShardStrategy.BLOCK]
+2024-09-02T07:22:31.4971003Z PASSED tests/tt_eager/python_api_testing/unit_testing/misc/test_bcast.py::test_bcast[orientation1-2-2-op0-in1_dtype0-in0_dtype1-2048-640-40-shard_grid5-ShardStrategy.BLOCK]
+2024-09-02T07:22:31.4972253Z PASSED tests/tt_eager/python_api_testing/unit_testing/misc/test_bcast.py::test_bcast[orientation1-2-2-op0-in1_dtype0-in0_dtype1-512-1280-40-shard_grid6-ShardStrategy.BLOCK]
+2024-09-02T07:22:31.4973410Z PASSED tests/tt_eager/python_api_testing/unit_testing/misc/test_bcast.py::test_bcast[orientation1-2-2-op0-in1_dtype0-in0_dtype1-128-1280-32-shard_grid7-ShardStrategy.BLOCK]
+2024-09-02T07:22:31.4974566Z PASSED tests/tt_eager/python_api_testing/unit_testing/misc/test_bcast.py::test_bcast[orientation1-2-2-op0-in1_dtype0-in0_dtype1-512-1280-64-shard_grid8-ShardStrategy.BLOCK]
+2024-09-02T07:22:31.4975817Z PASSED tests/tt_eager/python_api_testing/unit_testing/misc/test_bcast.py::test_bcast[orientation1-2-2-op0-in1_dtype1-in0_dtype0-2048-320-40-shard_grid0-ShardStrategy.BLOCK]
+2024-09-02T07:22:31.4977061Z PASSED tests/tt_eager/python_api_testing/unit_testing/misc/test_bcast.py::test_bcast[orientation1-2-2-op0-in1_dtype1-in0_dtype0-512-640-40-shard_grid1-ShardStrategy.BLOCK]
+2024-09-02T07:22:31.4978261Z PASSED tests/tt_eager/python_api_testing/unit_testing/misc/test_bcast.py::test_bcast[orientation1-2-2-op0-in1_dtype1-in0_dtype0-2048-1280-40-shard_grid2-ShardStrategy.BLOCK]
+2024-09-02T07:22:31.4979499Z PASSED tests/tt_eager/python_api_testing/unit_testing/misc/test_bcast.py::test_bcast[orientation1-2-2-op0-in1_dtype1-in0_dtype0-128-1280-40-shard_grid3-ShardStrategy.WIDTH]
+2024-09-02T07:22:31.4981003Z PASSED tests/tt_eager/python_api_testing/unit_testing/misc/test_bcast.py::test_bcast[orientation1-2-2-op0-in1_dtype1-in0_dtype0-8192-320-40-shard_grid4-ShardStrategy.BLOCK]
+2024-09-02T07:22:31.4982170Z PASSED tests/tt_eager/python_api_testing/unit_testing/misc/test_bcast.py::test_bcast[orientation1-2-2-op0-in1_dtype1-in0_dtype0-2048-640-40-shard_grid5-ShardStrategy.BLOCK]
+2024-09-02T07:22:31.4983319Z PASSED tests/tt_eager/python_api_testing/unit_testing/misc/test_bcast.py::test_bcast[orientation1-2-2-op0-in1_dtype1-in0_dtype0-512-1280-40-shard_grid6-ShardStrategy.BLOCK]
+2024-09-02T07:22:31.4984541Z PASSED tests/tt_eager/python_api_testing/unit_testing/misc/test_bcast.py::test_bcast[orientation1-2-2-op0-in1_dtype1-in0_dtype0-128-1280-32-shard_grid7-ShardStrategy.BLOCK]
+2024-09-02T07:22:31.4985712Z PASSED tests/tt_eager/python_api_testing/unit_testing/misc/test_bcast.py::test_bcast[orientation1-2-2-op0-in1_dtype1-in0_dtype0-512-1280-64-shard_grid8-ShardStrategy.BLOCK]
+2024-09-02T07:22:31.4986903Z PASSED tests/tt_eager/python_api_testing/unit_testing/misc/test_bcast.py::test_bcast[orientation1-2-2-op0-in1_dtype1-in0_dtype1-2048-320-40-shard_grid0-ShardStrategy.BLOCK]
+2024-09-02T07:22:31.4988114Z PASSED tests/tt_eager/python_api_testing/unit_testing/misc/test_bcast.py::test_bcast[orientation1-2-2-op0-in1_dtype1-in0_dtype1-512-640-40-shard_grid1-ShardStrategy.BLOCK]
+2024-09-02T07:22:31.4989298Z PASSED tests/tt_eager/python_api_testing/unit_testing/misc/test_bcast.py::test_bcast[orientation1-2-2-op0-in1_dtype1-in0_dtype1-2048-1280-40-shard_grid2-ShardStrategy.BLOCK]
+2024-09-02T07:22:31.4989983Z SKIPPED [4] tests/tt_eager/python_api_testing/unit_testing/loss_ops/test_loss_mae.py:77: mean not supported in dimensions 3, 4
+2024-09-02T07:22:31.4990666Z SKIPPED [4] tests/tt_eager/python_api_testing/unit_testing/loss_ops/test_loss_mse.py:76: mean not supported in dimensions 3, 4
+2024-09-02T07:22:31.4991067Z = 1301 passed, 8 skipped, 7851 deselected, 1325 warnings in 326.84s (0:05:26) ==
+2024-09-02T07:22:32.5416109Z [38;2;000;128;000m                 Device[0m | [1m[38;2;100;149;237mINFO    [0m | Closing user mode device drivers
+2024-09-02T07:22:32.7563576Z Prepare all required actions
+2024-09-02T07:22:32.7564276Z Getting action download info
+2024-09-02T07:22:33.0177510Z Download action repository 'actions/upload-artifact@v4' (SHA:834a144ee995460fba8ed112a2fc961b36a5ec5a)
+2024-09-02T07:22:33.6691502Z ##[group]Run ./.github/actions/upload-artifact-with-job-uuid
+2024-09-02T07:22:33.6692342Z with:
+2024-09-02T07:22:33.6692793Z   path: generated/test_reports/
+
+2024-09-02T07:22:33.6693345Z   prefix: test_reports_
+2024-09-02T07:22:33.6693840Z env:
+2024-09-02T07:22:33.6694246Z   TT_METAL_ENV: 
+2024-09-02T07:22:33.6694711Z   ARCH_NAME: wormhole_b0
+2024-09-02T07:22:33.6695209Z   LOGURU_LEVEL: INFO
+2024-09-02T07:22:33.6696358Z   LD_LIBRARY_PATH: /home/ubuntu/actions-runner/_work/_tool/Python/3.8.18/x64/lib:/home/ubuntu/actions-runner/_work/tt-metal/tt-metal/build/lib
+2024-09-02T07:22:33.6697702Z   TT_METAL_HOME: /home/ubuntu/actions-runner/_work/tt-metal/tt-metal
+2024-09-02T07:22:33.6698805Z   pythonLocation: /home/ubuntu/actions-runner/_work/_tool/Python/3.8.18/x64
+2024-09-02T07:22:33.6699906Z   PKG_CONFIG_PATH: /home/ubuntu/actions-runner/_work/_tool/Python/3.8.18/x64/lib/pkgconfig
+2024-09-02T07:22:33.6700994Z   Python_ROOT_DIR: /home/ubuntu/actions-runner/_work/_tool/Python/3.8.18/x64
+2024-09-02T07:22:33.6702011Z   Python2_ROOT_DIR: /home/ubuntu/actions-runner/_work/_tool/Python/3.8.18/x64
+2024-09-02T07:22:33.6702989Z   Python3_ROOT_DIR: /home/ubuntu/actions-runner/_work/_tool/Python/3.8.18/x64
+2024-09-02T07:22:33.6704101Z   VIRTUAL_ENV: /home/ubuntu/actions-runner/_work/tt-metal/tt-metal/python_env
+2024-09-02T07:22:33.6704893Z ##[endgroup]
+2024-09-02T07:22:33.6739594Z ##[group]Run uuid=$(uuidgen)
+2024-09-02T07:22:33.6740233Z [36;1muuid=$(uuidgen)[0m
+2024-09-02T07:22:33.6740772Z [36;1martifact_name="test_reports_$uuid"[0m
+2024-09-02T07:22:33.6741443Z [36;1mecho "[UPLOAD-ARTIFACT-UUID] $artifact_name"[0m
+2024-09-02T07:22:33.6742245Z [36;1mecho "artifact-name=$artifact_name" >> "$GITHUB_OUTPUT"[0m
+2024-09-02T07:22:33.6766281Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2024-09-02T07:22:33.6766927Z env:
+2024-09-02T07:22:33.6767311Z   TT_METAL_ENV: 
+2024-09-02T07:22:33.6767745Z   ARCH_NAME: wormhole_b0
+2024-09-02T07:22:33.6768205Z   LOGURU_LEVEL: INFO
+2024-09-02T07:22:33.6769298Z   LD_LIBRARY_PATH: /home/ubuntu/actions-runner/_work/_tool/Python/3.8.18/x64/lib:/home/ubuntu/actions-runner/_work/tt-metal/tt-metal/build/lib
+2024-09-02T07:22:33.6770654Z   TT_METAL_HOME: /home/ubuntu/actions-runner/_work/tt-metal/tt-metal
+2024-09-02T07:22:33.6771595Z   pythonLocation: /home/ubuntu/actions-runner/_work/_tool/Python/3.8.18/x64
+2024-09-02T07:22:33.6772721Z   PKG_CONFIG_PATH: /home/ubuntu/actions-runner/_work/_tool/Python/3.8.18/x64/lib/pkgconfig
+2024-09-02T07:22:33.6773946Z   Python_ROOT_DIR: /home/ubuntu/actions-runner/_work/_tool/Python/3.8.18/x64
+2024-09-02T07:22:33.6775023Z   Python2_ROOT_DIR: /home/ubuntu/actions-runner/_work/_tool/Python/3.8.18/x64
+2024-09-02T07:22:33.6798150Z   Python3_ROOT_DIR: /home/ubuntu/actions-runner/_work/_tool/Python/3.8.18/x64
+2024-09-02T07:22:33.6799157Z   VIRTUAL_ENV: /home/ubuntu/actions-runner/_work/tt-metal/tt-metal/python_env
+2024-09-02T07:22:33.6799914Z ##[endgroup]
+2024-09-02T07:22:33.6865283Z [UPLOAD-ARTIFACT-UUID] test_reports_eef6c922-2feb-44dd-b8ed-c0d19c79dff0
+2024-09-02T07:22:33.6938389Z ##[group]Run actions/upload-artifact@v4
+2024-09-02T07:22:33.6938990Z with:
+2024-09-02T07:22:33.6939512Z   name: test_reports_eef6c922-2feb-44dd-b8ed-c0d19c79dff0
+2024-09-02T07:22:33.6940255Z   path: generated/test_reports/
+
+2024-09-02T07:22:33.6940820Z   if-no-files-found: warn
+2024-09-02T07:22:33.6941316Z   compression-level: 6
+2024-09-02T07:22:33.6941788Z   overwrite: false
+2024-09-02T07:22:33.6942237Z env:
+2024-09-02T07:22:33.6942601Z   TT_METAL_ENV: 
+2024-09-02T07:22:33.6943053Z   ARCH_NAME: wormhole_b0
+2024-09-02T07:22:33.6943533Z   LOGURU_LEVEL: INFO
+2024-09-02T07:22:33.6944891Z   LD_LIBRARY_PATH: /home/ubuntu/actions-runner/_work/_tool/Python/3.8.18/x64/lib:/home/ubuntu/actions-runner/_work/tt-metal/tt-metal/build/lib
+2024-09-02T07:22:33.6946306Z   TT_METAL_HOME: /home/ubuntu/actions-runner/_work/tt-metal/tt-metal
+2024-09-02T07:22:33.6947282Z   pythonLocation: /home/ubuntu/actions-runner/_work/_tool/Python/3.8.18/x64
+2024-09-02T07:22:33.6948361Z   PKG_CONFIG_PATH: /home/ubuntu/actions-runner/_work/_tool/Python/3.8.18/x64/lib/pkgconfig
+2024-09-02T07:22:33.6949569Z   Python_ROOT_DIR: /home/ubuntu/actions-runner/_work/_tool/Python/3.8.18/x64
+2024-09-02T07:22:33.6950565Z   Python2_ROOT_DIR: /home/ubuntu/actions-runner/_work/_tool/Python/3.8.18/x64
+2024-09-02T07:22:33.6951626Z   Python3_ROOT_DIR: /home/ubuntu/actions-runner/_work/_tool/Python/3.8.18/x64
+2024-09-02T07:22:33.6952612Z   VIRTUAL_ENV: /home/ubuntu/actions-runner/_work/tt-metal/tt-metal/python_env
+2024-09-02T07:22:33.6953365Z ##[endgroup]
+2024-09-02T07:22:33.9859572Z With the provided path, there will be 1 file uploaded
+2024-09-02T07:22:33.9864673Z Artifact name is valid!
+2024-09-02T07:22:33.9865993Z Root directory input is valid!
+2024-09-02T07:22:34.1872199Z Beginning upload of artifact content to blob storage
+2024-09-02T07:22:34.4268942Z Uploaded bytes 12991
+2024-09-02T07:22:34.4856809Z Finished uploading artifact content to blob storage!
+2024-09-02T07:22:34.4860533Z SHA256 hash of uploaded artifact zip is abf66ed73ce5539032ca586d8d2fdc9a52db9f8b9d58582c43ce33e51923f25b
+2024-09-02T07:22:34.4862051Z Finalizing artifact upload
+2024-09-02T07:22:34.5904922Z Artifact test_reports_eef6c922-2feb-44dd-b8ed-c0d19c79dff0.zip successfully finalized. Artifact ID 1880987623
+2024-09-02T07:22:34.5906905Z Artifact test_reports_eef6c922-2feb-44dd-b8ed-c0d19c79dff0 has been successfully uploaded! Final size is 12991 bytes. Artifact ID is 1880987623
+2024-09-02T07:22:34.5910764Z Artifact download URL: https://github.com/tenstorrent/tt-metal/actions/runs/10662355710/artifacts/1880987623
+2024-09-02T07:22:34.6080478Z Post job cleanup.
+2024-09-02T07:22:34.6172931Z Post job cleanup.
+2024-09-02T07:22:31.4983319Z PASSED tests/tt_eager/python_api_testing/unit_testing/misc/test_bcast.py::test_bcast[orientation1-2-2-op0-in1_dtype1-in0_dtype0-512-1280-40-shard_grid6-ShardStrategy.BLOCK]
+2024-09-02T07:22:31.4984541Z PASSED tests/tt_eager/python_api_testing/unit_testing/misc/test_bcast.py::test_bcast[orientation1-2-2-op0-in1_dtype1-in0_dtype0-128-1280-32-shard_grid7-ShardStrategy.BLOCK]
+2024-09-02T07:22:31.4985712Z PASSED tests/tt_eager/python_api_testing/unit_testing/misc/test_bcast.py::test_bcast[orientation1-2-2-op0-in1_dtype1-in0_dtype0-512-1280-64-shard_grid8-ShardStrategy.BLOCK]
+2024-09-02T07:22:31.4986903Z PASSED tests/tt_eager/python_api_testing/unit_testing/misc/test_bcast.py::test_bcast[orientation1-2-2-op0-in1_dtype1-in0_dtype1-2048-320-40-shard_grid0-ShardStrategy.BLOCK]
+2024-09-02T07:22:31.4988114Z PASSED tests/tt_eager/python_api_testing/unit_testing/misc/test_bcast.py::test_bcast[orientation1-2-2-op0-in1_dtype1-in0_dtype1-512-640-40-shard_grid1-ShardStrategy.BLOCK]
+2024-09-02T07:22:31.4989298Z PASSED tests/tt_eager/python_api_testing/unit_testing/misc/test_bcast.py::test_bcast[orientation1-2-2-op0-in1_dtype1-in0_dtype1-2048-1280-40-shard_grid2-ShardStrategy.BLOCK]
+2024-09-02T07:22:31.4989983Z SKIPPED [4] tests/tt_eager/python_api_testing/unit_testing/loss_ops/test_loss_mae.py:77: mean not supported in dimensions 3, 4
+2024-09-02T07:22:31.4990666Z SKIPPED [4] tests/tt_eager/python_api_testing/unit_testing/loss_ops/test_loss_mse.py:76: mean not supported in dimensions 3, 4
+2024-09-02T07:22:31.4991067Z = 1301 passed, 8 skipped, 7851 deselected, 1325 warnings in 326.84s (0:05:26) ==
+2024-09-02T07:22:32.5416109Z [38;2;000;128;000m                 Device[0m | [1m[38;2;100;149;237mINFO    [0m | Closing user mode device drivers
+2024-09-02T07:22:32.7563576Z Prepare all required actions
+2024-09-02T07:22:32.7564276Z Getting action download info
+2024-09-02T07:22:33.0177510Z Download action repository 'actions/upload-artifact@v4' (SHA:834a144ee995460fba8ed112a2fc961b36a5ec5a)
+2024-09-02T07:22:33.6691502Z ##[group]Run ./.github/actions/upload-artifact-with-job-uuid
+2024-09-02T07:22:33.6692342Z with:
+2024-09-02T07:22:33.6692793Z   path: generated/test_reports/
+
+2024-09-02T07:22:33.6693345Z   prefix: test_reports_
+2024-09-02T07:22:33.6693840Z env:
+2024-09-02T07:22:33.6694246Z   TT_METAL_ENV: 
+2024-09-02T07:22:33.6694711Z   ARCH_NAME: wormhole_b0
+2024-09-02T07:22:33.6695209Z   LOGURU_LEVEL: INFO
+2024-09-02T07:22:33.6696358Z   LD_LIBRARY_PATH: /home/ubuntu/actions-runner/_work/_tool/Python/3.8.18/x64/lib:/home/ubuntu/actions-runner/_work/tt-metal/tt-metal/build/lib
+2024-09-02T07:22:33.6697702Z   TT_METAL_HOME: /home/ubuntu/actions-runner/_work/tt-metal/tt-metal
+2024-09-02T07:22:33.6698805Z   pythonLocation: /home/ubuntu/actions-runner/_work/_tool/Python/3.8.18/x64
+2024-09-02T07:22:33.6699906Z   PKG_CONFIG_PATH: /home/ubuntu/actions-runner/_work/_tool/Python/3.8.18/x64/lib/pkgconfig
+2024-09-02T07:22:33.6700994Z   Python_ROOT_DIR: /home/ubuntu/actions-runner/_work/_tool/Python/3.8.18/x64
+2024-09-02T07:22:33.6702011Z   Python2_ROOT_DIR: /home/ubuntu/actions-runner/_work/_tool/Python/3.8.18/x64
+2024-09-02T07:22:33.6702989Z   Python3_ROOT_DIR: /home/ubuntu/actions-runner/_work/_tool/Python/3.8.18/x64
+2024-09-02T07:22:33.6704101Z   VIRTUAL_ENV: /home/ubuntu/actions-runner/_work/tt-metal/tt-metal/python_env
+2024-09-02T07:22:33.6704893Z ##[endgroup]
+2024-09-02T07:22:33.6739594Z ##[group]Run uuid=$(uuidgen)
+2024-09-02T07:22:33.6740233Z [36;1muuid=$(uuidgen)[0m
+2024-09-02T07:22:33.6740772Z [36;1martifact_name="test_reports_$uuid"[0m
+2024-09-02T07:22:33.6741443Z [36;1mecho "[UPLOAD-ARTIFACT-UUID] $artifact_name"[0m
+2024-09-02T07:22:33.6742245Z [36;1mecho "artifact-name=$artifact_name" >> "$GITHUB_OUTPUT"[0m
+2024-09-02T07:22:33.6766281Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2024-09-02T07:22:33.6766927Z env:
+2024-09-02T07:22:33.6767311Z   TT_METAL_ENV: 
+2024-09-02T07:22:33.6767745Z   ARCH_NAME: wormhole_b0
+2024-09-02T07:22:33.6768205Z   LOGURU_LEVEL: INFO
+2024-09-02T07:22:33.6769298Z   LD_LIBRARY_PATH: /home/ubuntu/actions-runner/_work/_tool/Python/3.8.18/x64/lib:/home/ubuntu/actions-runner/_work/tt-metal/tt-metal/build/lib
+2024-09-02T07:22:33.6770654Z   TT_METAL_HOME: /home/ubuntu/actions-runner/_work/tt-metal/tt-metal
+2024-09-02T07:22:33.6771595Z   pythonLocation: /home/ubuntu/actions-runner/_work/_tool/Python/3.8.18/x64
+2024-09-02T07:22:33.6772721Z   PKG_CONFIG_PATH: /home/ubuntu/actions-runner/_work/_tool/Python/3.8.18/x64/lib/pkgconfig
+2024-09-02T07:22:33.6773946Z   Python_ROOT_DIR: /home/ubuntu/actions-runner/_work/_tool/Python/3.8.18/x64
+2024-09-02T07:22:33.6775023Z   Python2_ROOT_DIR: /home/ubuntu/actions-runner/_work/_tool/Python/3.8.18/x64
+2024-09-02T07:22:33.6798150Z   Python3_ROOT_DIR: /home/ubuntu/actions-runner/_work/_tool/Python/3.8.18/x64
+2024-09-02T07:22:33.6799157Z   VIRTUAL_ENV: /home/ubuntu/actions-runner/_work/tt-metal/tt-metal/python_env
+2024-09-02T07:22:33.6799914Z ##[endgroup]
+2024-09-02T07:22:33.6865283Z [UPLOAD-ARTIFACT-UUID] test_reports_eef6c922-2feb-44dd-b8ed-c0d19c79dff0
+2024-09-02T07:22:33.6938389Z ##[group]Run actions/upload-artifact@v4
+2024-09-02T07:22:33.6938990Z with:
+2024-09-02T07:22:33.6939512Z   name: test_reports_eef6c922-2feb-44dd-b8ed-c0d19c79dff0
+2024-09-02T07:22:33.6940255Z   path: generated/test_reports/
+
+2024-09-02T07:22:33.6940820Z   if-no-files-found: warn
+2024-09-02T07:22:33.6941316Z   compression-level: 6
+2024-09-02T07:22:33.6941788Z   overwrite: false
+2024-09-02T07:22:33.6942237Z env:
+2024-09-02T07:22:33.6942601Z   TT_METAL_ENV: 
+2024-09-02T07:22:33.6943053Z   ARCH_NAME: wormhole_b0
+2024-09-02T07:22:33.6943533Z   LOGURU_LEVEL: INFO
+2024-09-02T07:22:33.6944891Z   LD_LIBRARY_PATH: /home/ubuntu/actions-runner/_work/_tool/Python/3.8.18/x64/lib:/home/ubuntu/actions-runner/_work/tt-metal/tt-metal/build/lib
+2024-09-02T07:22:33.6946306Z   TT_METAL_HOME: /home/ubuntu/actions-runner/_work/tt-metal/tt-metal
+2024-09-02T07:22:33.6947282Z   pythonLocation: /home/ubuntu/actions-runner/_work/_tool/Python/3.8.18/x64
+2024-09-02T07:22:33.6948361Z   PKG_CONFIG_PATH: /home/ubuntu/actions-runner/_work/_tool/Python/3.8.18/x64/lib/pkgconfig
+2024-09-02T07:22:33.6949569Z   Python_ROOT_DIR: /home/ubuntu/actions-runner/_work/_tool/Python/3.8.18/x64
+2024-09-02T07:22:33.6950565Z   Python2_ROOT_DIR: /home/ubuntu/actions-runner/_work/_tool/Python/3.8.18/x64
+2024-09-02T07:22:33.6951626Z   Python3_ROOT_DIR: /home/ubuntu/actions-runner/_work/_tool/Python/3.8.18/x64
+2024-09-02T07:22:33.6952612Z   VIRTUAL_ENV: /home/ubuntu/actions-runner/_work/tt-metal/tt-metal/python_env
+2024-09-02T07:22:33.6953365Z ##[endgroup]
+2024-09-02T07:22:33.9859572Z With the provided path, there will be 1 file uploaded
+2024-09-02T07:22:33.9864673Z Artifact name is valid!
+2024-09-02T07:22:33.9865993Z Root directory input is valid!
+2024-09-02T07:22:34.1872199Z Beginning upload of artifact content to blob storage
+2024-09-02T07:22:34.4268942Z Uploaded bytes 12991
+2024-09-02T07:22:34.4856809Z Finished uploading artifact content to blob storage!
+2024-09-02T07:22:34.4860533Z SHA256 hash of uploaded artifact zip is abf66ed73ce5539032ca586d8d2fdc9a52db9f8b9d58582c43ce33e51923f25b
+2024-09-02T07:22:34.4862051Z Finalizing artifact upload
+2024-09-02T07:22:34.5904922Z Artifact test_reports_eef6c922-2feb-44dd-b8ed-c0d19c79dff0.zip successfully finalized. Artifact ID 1880987623
+2024-09-02T07:22:34.5906905Z Artifact test_reports_eef6c922-2feb-44dd-b8ed-c0d19c79dff0 has been successfully uploaded! Final size is 12991 bytes. Artifact ID is 1880987623
+2024-09-02T07:22:34.5910764Z Artifact download URL: https://github.com/tenstorrent/tt-metal/actions/runs/10662355710/artifacts/1880987623
+2024-09-02T07:22:34.6080478Z Post job cleanup.
+2024-09-02T07:22:34.6172931Z Post job cleanup.
+2024-09-02T07:22:34.7075777Z Post job cleanup.
+2024-09-02T07:22:34.8656633Z Cache hit occurred on the primary key setup-venv-Linux-py-3.8.18-/home/ubuntu/actions-runner/_work/_tool/Python/3.8.18/x64/bin/python-1ec69d644b7c62e16fcb3d345f721fe68d2d764541f2368fb2116afb460a857b-./create_venv.sh, not saving cache.
+2024-09-02T07:22:34.8790898Z Post job cleanup.
+2024-09-02T07:22:35.0801948Z Post job cleanup.
+2024-09-02T07:22:35.0879959Z Post job cleanup.
+2024-09-02T07:22:35.2123957Z [command]/usr/bin/git version
+2024-09-02T07:22:35.2170344Z git version 2.25.1
+2024-09-02T07:22:35.2223909Z Temporarily overriding HOME='/home/ubuntu/actions-runner/_work/_temp/a7f6d463-fdce-4d86-809e-d718a4d574a6' before making global git config changes
+2024-09-02T07:22:35.2226008Z Adding repository directory to the temporary git global config as a safe directory
+2024-09-02T07:22:35.2230981Z [command]/usr/bin/git config --global --add safe.directory /home/ubuntu/actions-runner/_work/tt-metal/tt-metal
+2024-09-02T07:22:35.2282338Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+2024-09-02T07:22:35.2315428Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+2024-09-02T07:22:35.2593750Z Entering 'models/demos/t3000/llama2_70b/reference/llama'
+2024-09-02T07:22:35.2644653Z Entering 'tt_metal/third_party/lfs'
+2024-09-02T07:22:35.2698050Z Entering 'tt_metal/third_party/pybind11'
+2024-09-02T07:22:35.2750667Z Entering 'tt_metal/third_party/sfpi'
+2024-09-02T07:22:34.5904922Z Artifact test_reports_eef6c922-2feb-44dd-b8ed-c0d19c79dff0.zip successfully finalized. Artifact ID 1880987623
+2024-09-02T07:22:34.5906905Z Artifact test_reports_eef6c922-2feb-44dd-b8ed-c0d19c79dff0 has been successfully uploaded! Final size is 12991 bytes. Artifact ID is 1880987623
+2024-09-02T07:22:34.5910764Z Artifact download URL: https://github.com/tenstorrent/tt-metal/actions/runs/10662355710/artifacts/1880987623
+2024-09-02T07:22:34.6080478Z Post job cleanup.
+2024-09-02T07:22:34.6172931Z Post job cleanup.
+2024-09-02T07:22:34.7075777Z Post job cleanup.
+2024-09-02T07:22:34.8656633Z Cache hit occurred on the primary key setup-venv-Linux-py-3.8.18-/home/ubuntu/actions-runner/_work/_tool/Python/3.8.18/x64/bin/python-1ec69d644b7c62e16fcb3d345f721fe68d2d764541f2368fb2116afb460a857b-./create_venv.sh, not saving cache.
+2024-09-02T07:22:34.8790898Z Post job cleanup.
+2024-09-02T07:22:35.0801948Z Post job cleanup.
+2024-09-02T07:22:35.0879959Z Post job cleanup.
+2024-09-02T07:22:35.2123957Z [command]/usr/bin/git version
+2024-09-02T07:22:35.2170344Z git version 2.25.1
+2024-09-02T07:22:35.2223909Z Temporarily overriding HOME='/home/ubuntu/actions-runner/_work/_temp/a7f6d463-fdce-4d86-809e-d718a4d574a6' before making global git config changes
+2024-09-02T07:22:35.2226008Z Adding repository directory to the temporary git global config as a safe directory
+2024-09-02T07:22:35.2230981Z [command]/usr/bin/git config --global --add safe.directory /home/ubuntu/actions-runner/_work/tt-metal/tt-metal
+2024-09-02T07:22:35.2282338Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+2024-09-02T07:22:35.2315428Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+2024-09-02T07:22:35.2593750Z Entering 'models/demos/t3000/llama2_70b/reference/llama'
+2024-09-02T07:22:35.2644653Z Entering 'tt_metal/third_party/lfs'
+2024-09-02T07:22:35.2698050Z Entering 'tt_metal/third_party/pybind11'
+2024-09-02T07:22:35.2750667Z Entering 'tt_metal/third_party/sfpi'
+2024-09-02T07:22:35.2809652Z Entering 'tt_metal/third_party/taskflow'
+2024-09-02T07:22:35.2863833Z Entering 'tt_metal/third_party/tracy'
+2024-09-02T07:22:35.2908612Z Entering 'tt_metal/third_party/tt_llk_blackhole'
+2024-09-02T07:22:35.2956217Z Entering 'tt_metal/third_party/tt_llk_grayskull'
+2024-09-02T07:22:35.3002702Z Entering 'tt_metal/third_party/tt_llk_wormhole_b0'
+2024-09-02T07:22:35.3051748Z Entering 'tt_metal/third_party/umd'
+2024-09-02T07:22:35.3108505Z Entering 'tt_metal/third_party/umd/third_party/fmt'
+2024-09-02T07:22:35.3173073Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+2024-09-02T07:22:35.3196746Z http.https://github.com/.extraheader
+2024-09-02T07:22:35.3209831Z [command]/usr/bin/git config --local --unset-all http.https://github.com/.extraheader
+2024-09-02T07:22:35.3264377Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+2024-09-02T07:22:35.3545040Z Entering 'models/demos/t3000/llama2_70b/reference/llama'
+2024-09-02T07:22:35.3570795Z http.https://github.com/.extraheader
+2024-09-02T07:22:35.3607036Z Entering 'tt_metal/third_party/lfs'
+2024-09-02T07:22:35.3635104Z http.https://github.com/.extraheader
+2024-09-02T07:22:35.3672659Z Entering 'tt_metal/third_party/pybind11'
+2024-09-02T07:22:35.3697988Z http.https://github.com/.extraheader
+2024-09-02T07:22:35.3732358Z Entering 'tt_metal/third_party/sfpi'
+2024-09-02T07:22:35.3758423Z http.https://github.com/.extraheader
+2024-09-02T07:22:35.3799364Z Entering 'tt_metal/third_party/taskflow'
+2024-09-02T07:22:35.3824725Z http.https://github.com/.extraheader
+2024-09-02T07:22:35.3862986Z Entering 'tt_metal/third_party/tracy'
+2024-09-02T07:22:35.3890766Z http.https://github.com/.extraheader
+2024-09-02T07:22:35.3924155Z Entering 'tt_metal/third_party/tt_llk_blackhole'
+2024-09-02T07:22:35.3951434Z http.https://github.com/.extraheader
+2024-09-02T07:22:35.4017497Z Entering 'tt_metal/third_party/tt_llk_grayskull'
+2024-09-02T07:22:35.4018426Z http.https://github.com/.extraheader
+2024-09-02T07:22:35.4054882Z Entering 'tt_metal/third_party/tt_llk_wormhole_b0'
+2024-09-02T07:22:35.4080746Z http.https://github.com/.extraheader
+2024-09-02T07:22:35.4114955Z Entering 'tt_metal/third_party/umd'
+2024-09-02T07:22:35.4141047Z http.https://github.com/.extraheader
+2024-09-02T07:22:35.4173063Z Entering 'tt_metal/third_party/umd/third_party/fmt'
+2024-09-02T07:22:35.4205240Z http.https://github.com/.extraheader
+2024-09-02T07:22:35.4392984Z A job completed hook has been configured by the self-hosted runner administrator
+2024-09-02T07:22:35.4430180Z ##[group]Run '/opt/tt_metal_infra/scripts/ci/wormhole_b0/cleanup.sh'
+2024-09-02T07:22:35.4446990Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2024-09-02T07:22:35.4447707Z ##[endgroup]
+2024-09-02T07:22:35.4517706Z Current date / time is Mon Sep 2 07:22:35 UTC 2024
+2024-09-02T07:22:35.4518392Z Printing out cpu information...
+2024-09-02T07:22:35.4553911Z Architecture:                       x86_64
+2024-09-02T07:22:35.4563841Z CPU op-mode(s):                     32-bit, 64-bit
+2024-09-02T07:22:35.4564727Z Byte Order:                         Little Endian
+2024-09-02T07:22:35.4565568Z Address sizes:                      40 bits physical, 48 bits virtual
+2024-09-02T07:22:35.4566331Z CPU(s):                             14
+2024-09-02T07:22:35.4567059Z On-line CPU(s) list:                0-13
+2024-09-02T07:22:35.4567689Z Thread(s) per core:                 1
+2024-09-02T07:22:35.4568391Z Core(s) per socket:                 1
+2024-09-02T07:22:35.4568991Z Socket(s):                          14
+2024-09-02T07:22:35.4569579Z NUMA node(s):                       2
+2024-09-02T07:22:35.4570208Z Vendor ID:                          AuthenticAMD
+2024-09-02T07:22:35.4570966Z CPU family:                         23
+2024-09-02T07:22:35.4571583Z Model:                              49
+2024-09-02T07:22:35.4572370Z Model name:                         AMD EPYC-Rome Processor
+2024-09-02T07:22:35.4573047Z Stepping:                           0
+2024-09-02T07:22:35.4573660Z CPU MHz:                            2300.000
+2024-09-02T07:22:35.4574309Z BogoMIPS:                           4600.00
+2024-09-02T07:22:35.4574984Z Virtualization:                     AMD-V
+2024-09-02T07:22:35.4575619Z Hypervisor vendor:                  KVM
+2024-09-02T07:22:35.4576226Z Virtualization type:                full
+2024-09-02T07:22:35.4576845Z L1d cache:                          448 KiB
+2024-09-02T07:22:35.4577496Z L1i cache:                          448 KiB
+2024-09-02T07:22:35.4578229Z L2 cache:                           7 MiB
+2024-09-02T07:22:35.4578830Z L3 cache:                           224 MiB
+2024-09-02T07:22:35.4579481Z NUMA node0 CPU(s):                  0-6
+2024-09-02T07:22:35.4580160Z NUMA node1 CPU(s):                  7-13
+2024-09-02T07:22:35.4581032Z Vulnerability Gather data sampling: Not affected
+2024-09-02T07:22:35.4581806Z Vulnerability Itlb multihit:        Not affected
+2024-09-02T07:22:35.4582503Z Vulnerability L1tf:                 Not affected
+2024-09-02T07:22:35.4583179Z Vulnerability Mds:                  Not affected
+2024-09-02T07:22:35.4583863Z Vulnerability Meltdown:             Not affected
+2024-09-02T07:22:35.4584551Z Vulnerability Mmio stale data:      Not affected
+2024-09-02T07:22:35.4585238Z Vulnerability Retbleed:             Vulnerable
+2024-09-02T07:22:35.4586270Z Vulnerability Spec store bypass:    Mitigation; Speculative Store Bypass disabled via prctl and seccomp
+2024-09-02T07:22:35.4587693Z Vulnerability Spectre v1:           Mitigation; usercopy/swapgs barriers and __user pointer sanitization
+2024-09-02T07:22:35.4589427Z Vulnerability Spectre v2:           Mitigation; Retpolines; IBPB conditional; STIBP disabled; RSB filling; PBRSB-eIBRS Not affected; BHI Not affected
+2024-09-02T07:22:35.4590663Z Vulnerability Srbds:                Not affected
+2024-09-02T07:22:35.4591369Z Vulnerability Tsx async abort:      Not affected
+2024-09-02T07:22:35.4595538Z Flags:                              fpu vme de pse tsc msr pae mce cx8 apic sep mtrr pge mca cmov pat pse36 clflush mmx fxsr sse sse2 syscall nx mmxext fxsr_opt pdpe1gb rdtscp lm constant_tsc rep_good nopl nonstop_tsc cpuid extd_apicid tsc_known_freq pni pclmulqdq ssse3 fma cx16 sse4_1 sse4_2 x2apic movbe popcnt aes xsave avx f16c rdrand hypervisor lahf_lm svm cr8_legacy abm sse4a misalignsse 3dnowprefetch osvw topoext perfctr_core ssbd ibpb stibp vmmcall fsgsbase bmi1 avx2 smep bmi2 rdseed adx smap clflushopt clwb sha_ni xsaveopt xsavec xgetbv1 clzero xsaveerptr wbnoinvd arat npt nrip_save umip rdpid
+2024-09-02T07:22:35.4833221Z Cleaning up orphan processes

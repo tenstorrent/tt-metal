@@ -6,7 +6,7 @@ import torch
 import pytest
 import ttnn
 
-from models.demos.ttnn_falcon7b.tt.falcon_attention import TtFalconAttention
+from models.demos.ttnn_falcon7b.tt import TtFalconAttention
 from models.demos.ttnn_falcon7b.tt.model_config import get_model_config, get_tt_cache_path
 from models.demos.ttnn_falcon7b.tt.common import (
     create_custom_preprocessor,
@@ -33,7 +33,7 @@ def get_model_prefix(layer_index: int = 0):
 @pytest.fixture(scope="module")
 def torch_model():
     hugging_face_reference_model = transformers.FalconForCausalLM.from_pretrained(
-        PRETRAINED_MODEL_NAME, low_cpu_mem_usage=True
+        PRETRAINED_MODEL_NAME, low_cpu_mem_usage=True, device_map="auto"
     ).eval()
     state_dict = hugging_face_reference_model.state_dict()
     filtered_state_dict = strip_state_dict_prefix(state_dict, get_model_prefix())
@@ -95,12 +95,12 @@ def test_falcon_attention(
         ),
     )
     tt_FalconAttention_model = TtFalconAttention(
-        device,
         configuration.hidden_size,
         configuration.num_attention_heads,
         configuration.max_position_embeddings,
         model_config,
         parameters=parameters,
+        core_grid=device.core_grid,
     )
 
     tt_out, tt_layer_present = tt_FalconAttention_model(
@@ -113,11 +113,11 @@ def test_falcon_attention(
         layer_past_len=kv_cache_len,
         use_cache=True,
     )
-    tt_out = ttnn.to_torch(tt_out).squeeze(1)
+    tt_out = ttnn.to_torch(tt_out, device=device).squeeze(1)
 
     tt_layer_present = (
-        ttnn.to_torch(tt_layer_present[0]).squeeze(1),
-        ttnn.to_torch(tt_layer_present[1]).squeeze(1),
+        ttnn.to_torch(tt_layer_present[0], device=device).squeeze(1),
+        ttnn.to_torch(tt_layer_present[1], device=device).squeeze(1),
     )
 
     if llm_mode == "decode":

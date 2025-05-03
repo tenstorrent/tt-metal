@@ -1,0 +1,239 @@
+name: "Build tt-metal docker artifact"
+
+on:
+  workflow_call:
+    inputs:
+      distro:
+        required: false
+        type: string
+        default: "ubuntu"
+      version:
+        required: false
+        type: string
+        default: "20.04"
+      architecture:
+        required: false
+        type: string
+        default: "amd64"
+    outputs:
+      ci-build-tag:
+        description: "Docker tag for the CI Build Docker image for building TT-Metalium et al"
+        value: ${{ jobs.check-docker-images.outputs.ci-build-tag }}
+      ci-test-tag:
+        description: "Docker tag for the CI Test Docker image for testing TT-Metalium et al"
+        value: ${{ jobs.check-docker-images.outputs.ci-test-tag }}
+      dev-tag:
+        description: "Docker tag for the dev Docker image for developing TT-Metalium et al"
+        value: ${{ jobs.check-docker-images.outputs.dev-tag }}
+      basic-dev-tag:
+        description: "Docker tag for the basic dev Docker image for basic development"
+        value: ${{ jobs.check-docker-images.outputs.basic-dev-tag }}
+  workflow_dispatch:
+    inputs:
+      distro:
+        required: false
+        type: choice
+        default: "ubuntu"
+        options:
+            - "ubuntu"
+      version:
+        required: false
+        type: choice
+        default: "22.04"
+        options:
+            - "22.04"
+            - "24.04"
+      architecture:
+        required: false
+        type: choice
+        default: "amd64"
+        options:
+            - "amd64"
+
+env:
+  CI_BUILD_IMAGE_NAME: ${{ inputs.distro }}-${{ inputs.version }}-ci-build-${{ inputs.architecture }}
+  CI_TEST_IMAGE_NAME: ${{ inputs.distro }}-${{ inputs.version }}-ci-test-${{ inputs.architecture }}
+  DEV_IMAGE_NAME: ${{ inputs.distro }}-${{ inputs.version }}-dev-${{ inputs.architecture }}
+  BASIC_DEV_IMAGE_NAME: ${{ inputs.distro }}-${{ inputs.version }}-basic-dev-${{ inputs.architecture }}
+
+jobs:
+  check-docker-images:
+    runs-on: ubuntu-latest
+    outputs:
+      ci-build-exists: ${{ steps.images.outputs.ci-build-exists }}
+      ci-build-tag: ${{ steps.tags.outputs.ci-build-tag }}
+      ci-test-exists: ${{ steps.images.outputs.ci-test-exists }}
+      ci-test-tag: ${{ steps.tags.outputs.ci-test-tag }}
+      dev-exists: ${{ steps.images.outputs.dev-exists }}
+      dev-tag: ${{ steps.tags.outputs.dev-tag }}
+      basic-dev-exists: ${{ steps.images.outputs.basic-dev-exists }}
+      basic-dev-tag: ${{ steps.tags.outputs.basic-dev-tag }}
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v3
+        with:
+          fetch-depth: 1
+
+      - name: Compute tags
+        id: tags
+        run: |
+          HASH=$(cat \
+            .github/workflows/build-docker-artifact.yaml \
+            dockerfile/Dockerfile \
+            docs/requirements-docs.txt \
+            install_dependencies.sh \
+            tests/sweep_framework/requirements-sweeps.txt \
+            tt_metal/python_env/requirements-dev.txt \
+            tt_metal/sfpi-version.sh \
+            | sha1sum | cut -d' ' -f1)
+          echo "ci-build-tag=ghcr.io/${{ github.repository }}/tt-metalium/${{ env.CI_BUILD_IMAGE_NAME }}:${HASH}" >> $GITHUB_OUTPUT
+          echo "ci-test-tag=ghcr.io/${{ github.repository }}/tt-metalium/${{ env.CI_TEST_IMAGE_NAME }}:${HASH}" >> $GITHUB_OUTPUT
+          echo "dev-tag=ghcr.io/${{ github.repository }}/tt-metalium/${{ env.DEV_IMAGE_NAME }}:${HASH}" >> $GITHUB_OUTPUT
+
+          BASIC_DEV_HASH=$(cat dockerfile/Dockerfile.basic-dev | sha1sum | cut -d' ' -f1)
+          echo "basic-dev-tag=ghcr.io/${{ github.repository }}/tt-metalium/${{ env.BASIC_DEV_IMAGE_NAME }}:${BASIC_DEV_HASH}" >> $GITHUB_OUTPUT
+
+      # Assume if dev-tag exists, the others will exist too
+      - name: Query images exist
+        id: images
+        run: |
+          if docker manifest inspect ${{ steps.tags.outputs.dev-tag }} > /dev/null 2>&1; then
+            echo "${{ steps.tags.outputs.dev-tag }} exists"
+            echo "ci-build-exists=true" >> $GITHUB_OUTPUT
+            echo "ci-test-exists=true" >> $GITHUB_OUTPUT
+            echo "dev-exists=true" >> $GITHUB_OUTPUT
+          else
+            echo "${{ steps.tags.outputs.dev-tag }} does not exist"
+            echo "ci-build-exists=false" >> $GITHUB_OUTPUT
+            echo "ci-test-exists=false" >> $GITHUB_OUTPUT
+            echo "dev-exists=false" >> $GITHUB_OUTPUT
+          fi
+
+          if docker manifest inspect ${{ steps.tags.outputs.basic-dev-tag }} > /dev/null 2>&1; then
+            echo "${{ steps.tags.outputs.basic-dev-tag }} exists"
+            echo "basic-dev-exists=true" >> $GITHUB_OUTPUT
+          else
+            echo "${{ steps.tags.outputs.basic-dev-tag }} does not exist"
+            echo "basic-dev-exists=false" >> $GITHUB_OUTPUT
+          fi
+
+  # Assume if dev-tag does not exist, the others will not exist either
+  build-docker-image:
+    name: "🐳️ Build images"
+    needs: check-docker-images
+    if: needs.check-docker-images.outputs.dev-exists != 'true' || needs.check-docker-images.outputs.basic-dev-exists != 'true'
+    timeout-minutes: 60
+    runs-on: tt-beta-ubuntu-2204-large
+    steps:
+      - name: ⬇️ Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: https://ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build and push CI Build image
+        if: needs.check-docker-images.outputs.dev-exists != 'true'
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ github.workspace }}
+          file: dockerfile/Dockerfile
+          target: ci-build
+          push: true
+          tags: ${{ needs.check-docker-images.outputs.ci-build-tag }}
+          build-args: UBUNTU_VERSION=${{ inputs.version }}
+          cache-to: type=inline
+          pull: true
+      - name: Build and push CI Test image
+        if: needs.check-docker-images.outputs.dev-exists != 'true'
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ github.workspace }}
+          file: dockerfile/Dockerfile
+          target: ci-test
+          push: true
+          tags: ${{ needs.check-docker-images.outputs.ci-test-tag }}
+          build-args: UBUNTU_VERSION=${{ inputs.version }}
+          cache-to: type=inline
+          pull: true
+      - name: Build and push Dev image
+        if: needs.check-docker-images.outputs.dev-exists != 'true'
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ github.workspace }}
+          file: dockerfile/Dockerfile
+          target: dev
+          push: true
+          tags: ${{ needs.check-docker-images.outputs.dev-tag }}
+          build-args: UBUNTU_VERSION=${{ inputs.version }}
+          cache-to: type=inline
+          pull: true
+      - name: Build and push Basic Dev image
+        if: needs.check-docker-images.outputs.basic-dev-exists != 'true'
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ github.workspace }}
+          file: dockerfile/Dockerfile.basic-dev
+          push: true
+          tags: ${{ needs.check-docker-images.outputs.basic-dev-tag }}
+          build-args: UBUNTU_VERSION=${{ inputs.version }}
+          cache-to: type=inline
+          pull: true
+
+  # Cannot use needs.build-docker-image to ensure this job runs sequentially after the build job because it would break when the build job is skipped
+  # Instead, this setup causes the tag-latest job to lag one run behind the actual build.
+  # However, this isn't a huge issue because the image should already have been built on a branch before merging, and if it wasn't (like in a push scenario),
+  # the problem would self-correct on the next merge to main, which happens frequently.
+  tag-latest:
+    name: "🔄 Update latest tag"
+    needs: check-docker-images
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.check-docker-images.outputs.dev-exists == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: https://ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Tag and push latest
+        run: |
+          # Tag CI Build image
+          CI_BUILD_IMAGE_REPO="ghcr.io/${{ github.repository }}/tt-metalium/${{ env.CI_BUILD_IMAGE_NAME }}"
+          CI_BUILD_LATEST_TAG="${CI_BUILD_IMAGE_REPO}:latest"
+          CI_BUILD_TAG="${{ needs.check-docker-images.outputs.ci-build-tag }}"
+          echo "Tagging ${CI_BUILD_TAG} as ${CI_BUILD_LATEST_TAG}"
+          docker pull ${CI_BUILD_TAG}
+          docker tag ${CI_BUILD_TAG} ${CI_BUILD_LATEST_TAG}
+          docker push ${CI_BUILD_LATEST_TAG}
+
+          # Tag CI Test image
+          CI_TEST_IMAGE_REPO="ghcr.io/${{ github.repository }}/tt-metalium/${{ env.CI_TEST_IMAGE_NAME }}"
+          CI_TEST_LATEST_TAG="${CI_TEST_IMAGE_REPO}:latest"
+          CI_TEST_TAG="${{ needs.check-docker-images.outputs.ci-test-tag }}"
+          echo "Tagging ${CI_TEST_TAG} as ${CI_TEST_LATEST_TAG}"
+          docker pull ${CI_TEST_TAG}
+          docker tag ${CI_TEST_TAG} ${CI_TEST_LATEST_TAG}
+          docker push ${CI_TEST_LATEST_TAG}
+
+          # Tag Dev image
+          DEV_IMAGE_REPO="ghcr.io/${{ github.repository }}/tt-metalium/${{ env.DEV_IMAGE_NAME }}"
+          DEV_LATEST_TAG="${DEV_IMAGE_REPO}:latest"
+          DEV_TAG="${{ needs.check-docker-images.outputs.dev-tag }}"
+          echo "Tagging ${DEV_TAG} as ${DEV_LATEST_TAG}"
+          docker pull ${DEV_TAG}
+          docker tag ${DEV_TAG} ${DEV_LATEST_TAG}
+          docker push ${DEV_LATEST_TAG}
+
+          # Tag Basic Dev image
+          BASIC_DEV_IMAGE_REPO="ghcr.io/${{ github.repository }}/tt-metalium/${{ env.BASIC_DEV_IMAGE_NAME }}"
+          BASIC_DEV_LATEST_TAG="${BASIC_DEV_IMAGE_REPO}:latest"
+          BASIC_DEV_TAG="${{ needs.check-docker-images.outputs.basic-dev-tag }}"
+          echo "Tagging ${BASIC_DEV_TAG} as ${BASIC_DEV_LATEST_TAG}"
+          docker pull ${BASIC_DEV_TAG}
+          docker tag ${BASIC_DEV_TAG} ${BASIC_DEV_LATEST_TAG}
+          docker push ${BASIC_DEV_LATEST_TAG}

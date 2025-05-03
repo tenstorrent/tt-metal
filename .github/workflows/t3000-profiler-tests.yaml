@@ -1,0 +1,24 @@
+name: "(T3K) T3000 profiler tests"
+
+on:
+  workflow_dispatch:
+  workflow_call:
+  schedule:
+    - cron: "0 */8 * * *" # This cron schedule runs the workflow every 8 hours
+
+jobs:
+  build-artifact-profiler:
+    uses: ./.github/workflows/build-artifact.yaml
+    secrets: inherit
+    with:
+      tracy: true
+      build-wheel: true
+      version: 22.04
+  t3000-profiler-tests:
+    needs: build-artifact-profiler
+    secrets: inherit
+    uses: ./.github/workflows/t3000-profiler-tests-impl.yaml
+    with:
+      docker-image: ${{ needs.build-artifact-profiler.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact-profiler.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact-profiler.outputs.wheel-artifact-name }}

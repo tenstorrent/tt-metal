@@ -21,6 +21,8 @@ from tests.scripts.common import (
     get_git_home_dir_str,
     filter_empty,
     void_for_whb0,
+    void_for_gs,
+    void_for_bh,
 )
 from tests.scripts.cmdline_args import (
     get_tt_metal_arguments_from_cmdline_args,
@@ -30,69 +32,22 @@ from tests.scripts.cmdline_args import (
 TT_EAGER_COMMON_TEST_ENTRIES = (
     TestEntry("tt_eager/tests/ops/test_eltwise_binary_op", "ops/test_eltwise_binary_op"),
     TestEntry("tt_eager/tests/ops/test_bcast_op", "ops/test_bcast_op"),
-    TestEntry("tt_eager/tests/ops/test_reduce_op", "ops/test_reduce_op"),
-    TestEntry("tt_eager/tests/ops/test_transpose_op", "ops/test_transpose_op"),
     TestEntry("tt_eager/tests/ops/test_bmm_op", "ops/test_bmm_op"),
-    void_for_whb0(TestEntry("tt_eager/tests/ops/test_eltwise_unary_op", "ops/test_eltwise_unary_op")),
-    void_for_whb0(
-        TestEntry(
-            "tt_eager/tests/ops/test_transpose_wh_single_core",
-            "ops/test_transpose_wh_single_core",
-        )
-    ),
-    void_for_whb0(
-        TestEntry(
-            "tt_eager/tests/ops/test_transpose_wh_multi_core",
-            "ops/test_transpose_wh_multi_core",
-        )
-    ),
-    void_for_whb0(TestEntry("tt_eager/tests/ops/test_tilize_op", "ops/test_tilize_op")),
-    void_for_whb0(
-        TestEntry(
-            "tt_eager/tests/ops/test_tilize_op_channels_last",
-            "ops/test_tilize_op_channels_last",
-        )
-    ),
-    void_for_whb0(
-        TestEntry(
-            "tt_eager/tests/ops/test_tilize_zero_padding",
-            "ops/test_tilize_zero_padding",
-        )
-    ),
-    void_for_whb0(
-        TestEntry(
-            "tt_eager/tests/ops/test_tilize_zero_padding_channels_last",
-            "ops/test_tilize_zero_padding_channels_last",
-        )
-    ),
+    void_for_bh(void_for_whb0(TestEntry("tt_eager/tests/ops/test_eltwise_unary_op", "ops/test_eltwise_unary_op"))),
     TestEntry("tt_eager/tests/ops/test_layernorm_op", "ops/test_layernorm_op"),
     TestEntry("tt_eager/tests/ops/test_softmax_op", "ops/test_softmax_op"),
-    TestEntry("tt_eager/tests/ops/test_average_pool", "ops/test_average_pool"),
-    TestEntry("tt_eager/tests/ops/test_multi_queue_api", "ops/test_multi_queue_api"),
     TestEntry(
         "tt_eager/tests/tensors/test_host_device_loopback",
         "tensors/test_host_device_loopback",
     ),
     TestEntry("tt_eager/tests/tensors/test_copy_and_move", "tensors/test_copy_and_move"),
     TestEntry("tt_eager/tests/tensors/test_raw_host_memory_pointer", "tensors/test_raw_host_memory_pointer"),
-    TestEntry("tt_eager/tests/tensors/test_async_tensor_apis", "tensors/test_async_tensor_apis"),
-    # DTX Tests
-    TestEntry("tt_eager/tests/dtx/tensor", "dtx/tensor"),
-    TestEntry("tt_eager/tests/dtx/unit_tests/", "dtx/unit_tests"),
-    TestEntry("tt_eager/tests/dtx/overlap", "dtx/overlap"),
-    TestEntry("tt_eager/tests/dtx/collapse_transformations", "dtx/collapse_transformations"),
     # Integration tests
     # void_for_whb0(TestEntry("tt_eager/tests/integration_tests/test_bert", "integration_tests/test_bert")),
 )
 
 TT_EAGER_SLOW_DISPATCH_TEST_ENTRIES = (
-    void_for_whb0(TestEntry("tt_eager/tests/ops/test_sfpu", "ops/test_sfpu")),
-    # DTX Tests
-    TestEntry(
-        "tt_eager/tests/dtx/test_dtx_tilized_row_to_col_major",
-        "dtx/test_dtx_tilized_row_to_col_major",
-    ),
-    TestEntry("tt_eager/tests/dtx/test_dtx", "dtx/test_dtx"),
+    void_for_bh(void_for_whb0(TestEntry("tt_eager/tests/ops/test_sfpu", "ops/test_sfpu"))),
 )
 
 

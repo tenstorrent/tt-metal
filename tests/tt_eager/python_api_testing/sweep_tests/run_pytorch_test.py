@@ -14,8 +14,9 @@ import random
 from pathlib import Path
 from loguru import logger
 from functools import partial
-import tt_lib
+import ttnn
 from itertools import permutations, product
+from tracy import signpost
 
 
 from tests.tt_eager.python_api_testing.sweep_tests import comparison_funcs, generation_funcs
@@ -26,22 +27,24 @@ from tests.tt_eager.python_api_testing.sweep_tests.common import (
     shapes_and_datagen,
 )
 
-from tests.tt_eager.python_api_testing.sweep_tests.op_map import op_map
-
 DTYPES_TT_DICT = {
-    "BFLOAT16": tt_lib.tensor.DataType.BFLOAT16,
-    "BFLOAT8_B": tt_lib.tensor.DataType.BFLOAT8_B,
-    "UINT32": tt_lib.tensor.DataType.UINT32,
+    "BFLOAT16": ttnn.bfloat16,
+    "BFLOAT8_B": ttnn.bfloat8_b,
+    "UINT32": ttnn.uint32,
+    "UINT16": ttnn.uint16,
+    "INT32": ttnn.int32,
+    "BFLOAT4_B": ttnn.bfloat4_b,
+    "FLOAT32": ttnn.float32,
 }
 
 LAYOUTS_TT_DICT = {
-    "ROW_MAJOR": tt_lib.tensor.Layout.ROW_MAJOR,
-    "TILE": tt_lib.tensor.Layout.TILE,
+    "ROW_MAJOR": ttnn.ROW_MAJOR_LAYOUT,
+    "TILE": ttnn.TILE_LAYOUT,
 }
 
 MEM_CONFIGS_TT_DICT = {
-    "DRAM": tt_lib.tensor.MemoryConfig(tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.DRAM),
-    "L1": tt_lib.tensor.MemoryConfig(tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.L1),
+    "DRAM": ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
+    "L1": ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1),
     "SYSTEM_MEMORY": None,
 }
 
@@ -97,8 +100,6 @@ def generate_test_sweep_parameters(input_test_config, env=""):
 
     for i in range(len(pytorch_test_list)):
         for test_name, test_config in pytorch_test_list[i].items():
-            assert test_name in op_map
-
             # Get env variables from yaml (yaml overrides CLI)
             yaml_env_dict = test_config.get("env", {})
 
@@ -112,6 +113,8 @@ def generate_test_sweep_parameters(input_test_config, env=""):
 
             env_dict_combinations = make_env_combinations(env_dict)
 
+            coregrid_dict = test_config.get("coregrid", {})
+
             for env_dict in env_dict_combinations:
                 shape_dict = test_config["shape"]
                 datagen_dict = test_config["datagen"]
@@ -119,17 +122,24 @@ def generate_test_sweep_parameters(input_test_config, env=""):
                 comparison_dict = test_config["comparison"]
                 comparison_args = comparison_dict.get("args", {})
                 comparison_func = partial(getattr(comparison_funcs, comparison_dict["function"]), **comparison_args)
+
                 test_args_gen = getattr(
                     generation_funcs,
                     test_config.get("args-gen", "gen_default_dtype_layout_device"),
                 )
+                sanitize_args = test_config.get("sanitize-args", True)
+
                 # Optional test args for dtype, etc...
                 test_args = test_config.get("args", {})
+
+                if coregrid_dict:
+                    test_args["coregrid"] = coregrid_dict
 
                 # Set tests parameters --------------------------
                 test_tt_dtypes = []
                 test_tt_layouts = []
                 test_mem_configs = []
+                test_coregrid_configs = []
 
                 if "inputs" in test_args:
                     for input_spec in test_args["inputs"]:
@@ -173,6 +183,12 @@ def generate_test_sweep_parameters(input_test_config, env=""):
                         else:
                             test_mem_configs[-1] = generation_funcs.supported_mem_configs
 
+                if "coregrid" in test_args:
+                    test_coregrid_configs.append(coregrid_dict.get("xmin", {}))
+                    test_coregrid_configs.append(coregrid_dict.get("xmax", {}))
+                    test_coregrid_configs.append(coregrid_dict.get("ymin", {}))
+                    test_coregrid_configs.append(coregrid_dict.get("ymax", {}))
+
                 if "outputs" in test_args:
                     for out_spec in test_args["outputs"]:
                         test_mem_configs.append([])
@@ -193,7 +209,14 @@ def generate_test_sweep_parameters(input_test_config, env=""):
 
                 ################# RUN TEST SWEEP #################
                 for input_shapes, datagen_funcs, generated_test_args in shapes_and_datagen(
-                    shape_dict, datagen_dict, test_args_gen, test_tt_dtypes, test_tt_layouts, test_mem_configs
+                    shape_dict,
+                    datagen_dict,
+                    test_args_gen,
+                    test_tt_dtypes,
+                    test_tt_layouts,
+                    test_mem_configs,
+                    sanitize_args=sanitize_args,
+                    coregrid=test_coregrid_configs,
                 ):
                     data_seed = random.randint(0, 20000000)
                     # input_shapes = input_shapes.copy()
@@ -212,7 +235,7 @@ def generate_test_sweep_parameters(input_test_config, env=""):
     return generated_test_sweep_parameters, test_config["output-file"]
 
 
-def run_sweep_test(parameters, device, results_csv_writer=None):
+def run_sweep_test(parameters, op_map, device, results_csv_writer=None):
     data_seed = parameters["data_seed"]
     input_shapes = parameters["input_shapes"]
     test_name = parameters["test_name"]
@@ -235,7 +258,7 @@ def run_sweep_test(parameters, device, results_csv_writer=None):
         data_seed,
         parameters["env_dict"],
         parameters["generated_test_args"],
-        op_map[test_name]["tt_lib_op"],
+        op_map[test_name]["tt_op"],
         op_map[test_name]["pytorch_op"],
         input_shapes,
         parameters["datagen_funcs"],
@@ -253,7 +276,7 @@ def run_sweep_test(parameters, device, results_csv_writer=None):
     return test_pass
 
 
-def run_sweep_tests(test_sweep_parameters, output_folder, output_file, run_tests_for_ci, device):
+def run_sweep_tests(test_sweep_parameters, output_folder, output_file, run_tests_for_ci, op_map, device):
     # Create output folder
     output_folder = Path(output_folder)
 
@@ -286,10 +309,12 @@ def run_sweep_tests(test_sweep_parameters, output_folder, output_file, run_tests
 
             test_profiling_key = f"test_sweep_separator - {run_id}"
             logger.info(f"Starting profiling test {test_profiling_key}")
+            signpost(header=test_profiling_key)
 
-            test_pass = run_sweep_test(parameters, device, results_csv_writer)
+            test_pass = run_sweep_test(parameters, op_map, device, results_csv_writer)
 
-            tt_lib.device.Synchronize(device)
+            ttnn.synchronize_device(device)
+            signpost(header=f"{test_profiling_key} - end")
             logger.info(f"Stopped profiling test {test_profiling_key}")
             run_id += 1
 
@@ -340,12 +365,12 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     device_id = args.device_id
-    device = tt_lib.device.CreateDevice(device_id)
-    tt_lib.device.SetDefaultDevice(device)
+    device = ttnn.open_device(device_id)
+    ttnn.SetDefaultDevice(device)
 
     logger.info(f"Running on device {device_id} for test.")
 
     test_sweep_parameters, output_file = generate_test_sweep_parameters(args.input_test_config, args.env)
     run_sweep_tests(test_sweep_parameters, args.output_folder_path, output_file, args.run_tests_for_ci, device)
 
-    tt_lib.device.CloseDevice(device)
+    ttnn.close_device(device)

@@ -4,7 +4,6 @@
 
 import torch.nn as nn
 
-import tt_lib
 import tt_lib.fallback_ops
 
 from models.helper_funcs import Linear
@@ -47,19 +46,11 @@ class TtClassifierHead(nn.Module):
         self.base_address = base_address
 
         self.global_pool = TtSelectAdaptivePool2d(
-            output_size=1,
-            pool_type="Fast",
-            flatten=True,
-            input_fmt="NCHW",
-            device=None
+            output_size=1, pool_type="Fast", flatten=True, input_fmt="NCHW", device=None
         )
 
-        self.weight = torch_to_tt_tensor_rm(
-            state_dict[f"{base_address}.fc.weight"], self.device, put_on_device=False
-        )
-        self.bias = torch_to_tt_tensor_rm(
-            state_dict[f"{base_address}.fc.bias"], self.device, put_on_device=False
-        )
+        self.weight = torch_to_tt_tensor_rm(state_dict[f"{base_address}.fc.weight"], self.device, put_on_device=False)
+        self.bias = torch_to_tt_tensor_rm(state_dict[f"{base_address}.fc.bias"], self.device, put_on_device=False)
 
         self.shape = (1, 1, 1, 1000)
 

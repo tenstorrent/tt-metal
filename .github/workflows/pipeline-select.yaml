@@ -1,0 +1,99 @@
+name: "(Single) Choose your pipeline"
+
+on:
+  workflow_dispatch:
+    inputs:
+      build-type:
+        required: false
+        type: choice
+        options:
+          - Release
+          - Debug
+          - RelWithDebInfo
+          - ASan
+          - TSan
+        default: "Release"
+      build-with-tracy:
+        required: false
+        type: boolean
+        default: false
+      single-card-demo:
+        required: false
+        type: boolean
+        default: false
+      single-card-perf-models:
+        required: false
+        type: boolean
+        default: false
+      single-card-perf-device-models:
+        description: "perf-device (requires tracy build)"
+        required: false
+        type: boolean
+        default: false
+      single-card-nightly:
+        required: false
+        type: boolean
+        default: false
+      cpp-unit:
+        required: false
+        type: boolean
+        default: false
+
+run-name: ${{ inputs.description }}
+jobs:
+  build-artifact:
+    uses: ./.github/workflows/build-artifact.yaml
+    secrets: inherit
+    with:
+      build-type: ${{ inputs.build-type }}
+      tracy: ${{ inputs.build-with-tracy }}
+      build-wheel: true
+      version: "22.04"
+  single-card-demo-tests:
+    needs: build-artifact
+    secrets: inherit
+    if: ${{ inputs.single-card-demo }}
+    uses: ./.github/workflows/single-card-demo-tests-impl.yaml
+    with:
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      arch: wormhole_b0
+  single-card-perf-models-tests:
+    needs: build-artifact
+    secrets: inherit
+    uses: ./.github/workflows/perf-models-impl.yaml
+    with:
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+    if: ${{ inputs.single-card-perf-models }}
+  single-card-perf-device-models-tests:
+    needs: build-artifact
+    secrets: inherit
+    uses: ./.github/workflows/perf-device-models-impl.yaml
+    if: ${{ inputs.single-card-perf-device-models }}
+    with:
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+  single-card-nightly:
+    needs: build-artifact
+    secrets: inherit
+    uses: ./.github/workflows/fast-dispatch-full-regressions-and-models-impl.yaml
+    with:
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+    if: ${{ inputs.single-card-nightly }}
+  cpp-unit-tests:
+    if: ${{ inputs.cpp-unit }}
+    needs: build-artifact
+    secrets: inherit
+    uses: ./.github/workflows/cpp-post-commit.yaml
+    with:
+      arch: wormhole_b0
+      runner-label: tt-beta-ubuntu-2204-n300-large-stable
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}

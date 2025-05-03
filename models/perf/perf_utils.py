@@ -24,7 +24,8 @@ def merge_perf_files(fname, perf_fname, expected_cols):
     repo = git.Repo(search_parent_directories=True)
 
     merge_res = open(fname, "w")
-    merge_res.write(f"branch: {repo.active_branch} \n")
+    if not repo.head.is_detached:
+        merge_res.write(f"branch: {repo.active_branch} \n")
     merge_res.write(f"hash: {repo.head.object.hexsha} \n")
     cols = ", ".join(expected_cols)
     merge_res.write(f"{cols} \n")
@@ -45,7 +46,7 @@ def merge_perf_files(fname, perf_fname, expected_cols):
 
 def process_perf_results(fname, expected_cols):
     with open(fname) as file:
-        merge_res = csv.reader(file)
+        merge_res = csv.reader(file, skipinitialspace=True)
         logger.info(next(merge_res)[0].strip())
         logger.info(next(merge_res)[0].strip())
         cols = next(merge_res)
@@ -124,7 +125,7 @@ def prep_perf_report(
         "Inference Time (sec)": "{:.4f}".format(inference_time),
         "Expected Inference Time (sec)": "{:.4f}".format(expected_inference_time),
         "Throughput (batch*inf/sec)": device_throughput,
-        "Inference Time CPU (sec)": "{:.4f}".format(inference_time_cpu),
+        "Inference Time CPU (sec)": "{:.4f}".format(inference_time_cpu) if inference_time_cpu else "unknown",
         "Throughput CPU (batch*inf/sec)": cpu_throughput,
     }
 

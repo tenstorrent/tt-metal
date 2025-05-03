@@ -3,21 +3,10 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch.nn as nn
-import numpy as np
 from loguru import logger
-from pathlib import Path
-import sys
-import torch
+import ttnn
 
 from models.experimental.yolov3.tt.yolov3_conv2d import TtConv2D
-from models.experimental.yolov3.reference.models.common import autopad
-from models.experimental.yolov3.reference.models.yolo import Conv, Model
-import tt_lib
-from models.utility_functions import (
-    torch2tt_tensor,
-    tt2torch_tensor,
-    torch_to_tt_tensor_rm,
-)
 
 
 class TtConv(nn.Module):
@@ -58,9 +47,9 @@ class TtConv(nn.Module):
         self.act = act
         if self.act != True:
             logger.warning(
-                f"Configuration for activation function {self.act} not supported. Using tt_lib.tensor.SiLU act function"
+                f"Configuration for activation function {self.act} not supported. Using ttnn.SiLU act function"
             )
             raise NotImplementedError
 
     def forward(self, x):
-        return tt_lib.tensor.silu(self.conv(x))
+        return ttnn.silu(self.conv(x))

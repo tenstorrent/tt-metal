@@ -1,1 +1,0 @@
-../unit_tests_common/basic/test_device_init.cpp

@@ -7,7 +7,7 @@ from typing import (
     Dict,
     List,
 )
-import tt_lib
+import ttnn
 
 from models.experimental.ssd.tt.ssd_classification_head import TtSSDclassificationhead
 from models.experimental.ssd.tt.ssd_regression_head import TtSSDregressionhead
@@ -53,7 +53,7 @@ class TtSSDLiteHead(nn.Module):
             device=device,
         )
 
-    def forward(self, x: List[tt_lib.tensor.Tensor]) -> Dict[str, tt_lib.tensor.Tensor]:
+    def forward(self, x: List[ttnn.Tensor]) -> Dict[str, ttnn.Tensor]:
         return {
             "bbox_regression": self.regression_head(x),
             "cls_logits": self.classification_head(x),

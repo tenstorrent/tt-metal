@@ -3,3 +3,4 @@ Kernels
 
 .. toctree::
   CreateKernel
+  CreateKernelFromString

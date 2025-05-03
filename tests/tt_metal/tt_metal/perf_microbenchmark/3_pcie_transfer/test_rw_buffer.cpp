@@ -2,16 +2,30 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <chrono>
+#include <errno.h>
+#include <fmt/base.h>
+#include <stdint.h>
+#include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/host_api.hpp>
 #include <algorithm>
-#include <functional>
-#include <random>
+#include <cmath>
+#include <cstring>
+#include <exception>
+#include <memory>
+#include <optional>
 #include <string>
+#include <tuple>
+#include <variant>
 #include <vector>
 
-#include "common/bfloat16.hpp"
-#include "tt_metal/detail/tt_metal.hpp"
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/impl/dispatch/command_queue.hpp"
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/buffer_types.hpp>
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/logger.hpp>
+#include "test_common.hpp"
+#include "impl/context/metal_context.hpp"
 #include "tt_metal/tt_metal/perf_microbenchmark/common/util.hpp"
 
 using namespace tt;
@@ -29,6 +43,7 @@ using std::chrono::microseconds;
 //   ./test_rw_buffer
 //     --buffer-type <0 for DRAM, 1 for L1>
 //     --transfer-size <size in bytes>
+//     --page-size <size in bytes>
 //     --num-tests <count of tests>
 //     --bypass-check (set to bypass checking performance criteria fulfillment)
 ////////////////////////////////////////////////////////////////////////////////
@@ -36,10 +51,15 @@ using std::chrono::microseconds;
 int main(int argc, char** argv) {
     bool pass = true;
     bool bypass_check = false;
+    bool skip_read = false;
+    bool skip_write = false;
+    bool device_is_mmio = false;  // MMIO devices should have higher perf
     std::vector<double> h2d_bandwidth;
     std::vector<double> d2h_bandwidth;
     int32_t buffer_type = 0;
     uint32_t transfer_size;
+    uint32_t page_size;
+    uint32_t device_id = 0;
 
     try {
         // Input arguments parsing
@@ -53,25 +73,51 @@ int main(int argc, char** argv) {
             std::tie(transfer_size, input_args) = test_args::get_command_option_uint32_and_remaining_args(
                 input_args, "--transfer-size", 512 * 1024 * 1024);
 
+            std::tie(page_size, input_args) =
+                test_args::get_command_option_uint32_and_remaining_args(input_args, "--page-size", 2048);
+
             std::tie(num_tests, input_args) =
                 test_args::get_command_option_uint32_and_remaining_args(input_args, "--num-tests", 10);
 
             std::tie(bypass_check, input_args) =
                 test_args::has_command_option_and_remaining_args(input_args, "--bypass-check");
 
+            std::tie(skip_read, input_args) =
+                test_args::has_command_option_and_remaining_args(input_args, "--skip-read");
+
+            std::tie(skip_write, input_args) =
+                test_args::has_command_option_and_remaining_args(input_args, "--skip-write");
+
+            std::tie(device_id, input_args) =
+                test_args::get_command_option_uint32_and_remaining_args(input_args, "--device");
+
             test_args::validate_remaining_args(input_args);
         } catch (const std::exception& e) {
             log_error(tt::LogTest, "Command line arguments found exception", e.what());
         }
 
+        TT_ASSERT(
+            page_size == 0 ? transfer_size == 0 : transfer_size % page_size == 0,
+            "Transfer size {}B should be divisible by page size {}B",
+            transfer_size,
+            page_size);
+
         // Device setup
-        int device_id = 0;
-        tt_metal::Device* device = tt_metal::CreateDevice(device_id);
+        if (device_id >= tt::tt_metal::MetalContext::instance().get_cluster().number_of_devices()) {
+            log_info(LogTest, "Skip! Device id {} is not applicable on this system", device_id);
+            return 1;
+        }
+
+        tt_metal::IDevice* device = tt_metal::CreateDevice(device_id);
+        device_is_mmio = device->is_mmio_capable();
+
+        if (!device->using_fast_dispatch()) {
+            log_info(LogTest, "Skip! This test needs to be run with fast dispatch enabled");
+            return 1;
+        }
 
         // Application setup
-        uint32_t single_tile_size = 2 * 1024;
-        auto page_size = single_tile_size;
-        auto buffer = tt_metal::Buffer(
+        auto buffer = tt_metal::Buffer::create(
             device, transfer_size, page_size, buffer_type == 0 ? tt_metal::BufferType::DRAM : tt_metal::BufferType::L1);
 
         std::vector<uint32_t> src_vec = create_random_vector_of_bfloat16(
@@ -81,20 +127,25 @@ int main(int argc, char** argv) {
         log_info(
             LogTest,
             "Measuring host-to-device and device-to-host bandwidth for "
-            "buffer_type={}, transfer_size={}bytes ",
+            "buffer_type={}, transfer_size={} bytes, page_size={} bytes",
             buffer_type == 0 ? "DRAM" : "L1",
-            transfer_size);
+            transfer_size,
+            page_size);
 
         log_info(LogTest, "Num tests {}", num_tests);
+        float best_write_bw = 0.0f;
+        float best_read_bw = 0.0f;
         for (uint32_t i = 0; i < num_tests; ++i) {
             // Execute application
-            {
+            if (!skip_write) {
                 auto t_begin = std::chrono::steady_clock::now();
-                EnqueueWriteBuffer(device->command_queue(), buffer, src_vec, false);
+                EnqueueWriteBuffer(device->command_queue(), *buffer, src_vec, false);
                 Finish(device->command_queue());
                 auto t_end = std::chrono::steady_clock::now();
                 auto elapsed_us = duration_cast<microseconds>(t_end - t_begin).count();
-                h2d_bandwidth.push_back((transfer_size / 1024.0 / 1024.0 / 1024.0) / (elapsed_us / 1000.0 / 1000.0));
+                float write_bw = transfer_size / (elapsed_us * 1000.0);
+                h2d_bandwidth.push_back(write_bw);
+                best_write_bw = std::fmax(best_write_bw, write_bw);
                 log_info(
                     LogTest,
                     "EnqueueWriteBuffer to {} (H2D): {:.3f}ms, {:.3f}GB/s",
@@ -103,12 +154,14 @@ int main(int argc, char** argv) {
                     h2d_bandwidth[i]);
             }
 
-            {
+            if (!skip_read) {
                 auto t_begin = std::chrono::steady_clock::now();
-                EnqueueReadBuffer(device->command_queue(), buffer, result_vec, true);
+                EnqueueReadBuffer(device->command_queue(), *buffer, result_vec, true);
                 auto t_end = std::chrono::steady_clock::now();
                 auto elapsed_us = duration_cast<microseconds>(t_end - t_begin).count();
-                d2h_bandwidth.push_back((transfer_size / 1024.0 / 1024.0 / 1024.0) / (elapsed_us / 1000.0 / 1000.0));
+                float read_bw = transfer_size / (elapsed_us * 1000.0);
+                d2h_bandwidth.push_back(read_bw);
+                best_read_bw = std::fmax(best_read_bw, read_bw);
                 log_info(
                     LogTest,
                     "EnqueueReadBuffer from {} (D2H): {:.3f}ms, {:.3f}GB/s",
@@ -118,8 +171,19 @@ int main(int argc, char** argv) {
             }
         }
 
+        if (!skip_write) {
+            log_info(LogTest, "Best write: {} GB/s", best_write_bw);
+        }
+        if (!skip_read) {
+            log_info(LogTest, "Best read: {} GB/s", best_read_bw);
+        }
+
         // Validation & teardown
-        pass &= (src_vec == result_vec);
+        // Data check is only valid if both read and write are enabled
+        if (!skip_read && !skip_write && !(src_vec == result_vec)) {
+            log_error("Read data mismatch");
+            pass = false;
+        }
         pass &= tt_metal::CloseDevice(device);
     } catch (const std::exception& e) {
         pass = false;
@@ -130,27 +194,40 @@ int main(int argc, char** argv) {
     // Determine if it passes performance goal
     auto avg_h2d_bandwidth = calculate_average(h2d_bandwidth);
     auto avg_d2h_bandwidth = calculate_average(d2h_bandwidth);
-    if (pass && bypass_check == false) {
-        // goal is 70% of PCI-e Gen3 x16 for grayskull
+    if (pass && !bypass_check) {
         // TODO: check the theoritical peak of wormhole
-        double target_bandwidth = 16.0 * 0.7;
+        static constexpr double k_PcieMax = 16.0;  // GB/s
+        double target_read_bandwidth;
+        double target_write_bandwidth;
 
-        if (avg_h2d_bandwidth < target_bandwidth) {
+        if (device_is_mmio) {
+            // MMIO
+            target_read_bandwidth = k_PcieMax * 0.5;    // 50%
+            target_write_bandwidth = k_PcieMax * 0.75;  // 80%
+        } else {
+            // Remote
+            target_read_bandwidth = k_PcieMax * 0.15;   // 15%
+            target_write_bandwidth = k_PcieMax * 0.35;  // 35%
+        }
+
+        if (!skip_write && avg_h2d_bandwidth < target_write_bandwidth) {
             pass = false;
             log_error(
                 LogTest,
                 "The host-to-device bandwidth does not meet the criteria. "
                 "Current: {:.3f}GB/s, goal: {:.3f}GB/s",
                 avg_h2d_bandwidth,
-                target_bandwidth);
-        } else if (avg_d2h_bandwidth < target_bandwidth) {
+                target_write_bandwidth);
+        }
+
+        if (!skip_read && avg_d2h_bandwidth < target_read_bandwidth) {
             pass = false;
             log_error(
                 LogTest,
                 "The device-to-host bandwidth does not meet the criteria. "
                 "Current: {:.3f}GB/s, goal: {:.3f}GB/s",
                 avg_d2h_bandwidth,
-                target_bandwidth);
+                target_read_bandwidth);
         }
     }
 

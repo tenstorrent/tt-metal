@@ -11,10 +11,9 @@
  * explicit flushes need to be used since the calls are non-blocking
  * */
 
-
 void eth_setup_handshake(std::uint32_t handshake_register_address, bool is_sender) {
     if (is_sender) {
-        eth_send_bytes(handshake_register_address,handshake_register_address, 16);
+        eth_send_bytes(handshake_register_address, handshake_register_address, 16);
         eth_wait_for_receiver_done();
 
         // eth_wait_for_bytes(16);
@@ -34,7 +33,6 @@ void kernel_main() {
     std::size_t num_bytes_ = get_arg_val<uint32_t>(2);
     std::uint32_t num_loops_ = get_arg_val<uint32_t>(3);
     std::uint32_t num_sends_per_loop_ = get_arg_val<uint32_t>(4);
-
 
     constexpr uint32_t num_bytes_per_send = get_compile_time_arg_val(0);
     constexpr uint32_t num_bytes_per_send_word_size = get_compile_time_arg_val(1);

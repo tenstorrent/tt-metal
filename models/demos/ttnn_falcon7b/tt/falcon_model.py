@@ -10,6 +10,7 @@ import ttnn
 
 from models.demos.ttnn_falcon7b.tt.falcon_decoder import TtFalconDecoderLayer
 from models.demos.ttnn_falcon7b.tt.common import create_attention_mask
+from ttnn import ShardTensorToMesh
 
 
 class TtFalconModelShared:
@@ -53,18 +54,21 @@ class TtFalconModelShared:
 
         embeddings = self.embeddings(input_ids)
 
+        if self.device.get_num_devices() == 1:
+            mesh_mapper = None
+        else:
+            shard_dim = 2 if llm_mode == "decode" else 0
+            mesh_mapper = ShardTensorToMesh(self.device, dim=shard_dim)
+
         # Generate input and attention_mask ---------------------------------------------
         if llm_mode == "prefill":
-            assert batch_size == 1, "For prefill, batch_size must be 1!"
-            assert sequence_size % 32 == 0, "For prefill, sequence_size must be multiple of 32!"
-            assert kv_cache_len == 0, "For prefill, no kv_cache is passed in!"
-
             tt_embeddings = ttnn.from_torch(
                 embeddings.unsqueeze(1),
                 device=self.device,
                 memory_config=self.model_config["WORD_EMBEDDING_OUTPUT_MEMCFG"],
                 dtype=self.model_config["WORD_EMBEDDING_OUTPUT_DTYPE"],
                 layout=ttnn.TILE_LAYOUT,
+                mesh_mapper=mesh_mapper,
             )
 
         elif llm_mode == "decode":
@@ -77,6 +81,7 @@ class TtFalconModelShared:
                 memory_config=self.model_config["WORD_EMBEDDING_OUTPUT_MEMCFG"],
                 dtype=self.model_config["WORD_EMBEDDING_OUTPUT_DTYPE"],
                 layout=ttnn.TILE_LAYOUT,
+                mesh_mapper=mesh_mapper,
             )
 
         else:
@@ -91,6 +96,7 @@ class TtFalconModelShared:
             self.config.num_attention_heads,
             kv_cache_len,
             self.device,
+            mesh_mapper=mesh_mapper,
         )
 
         return tt_embeddings, tt_attention_mask
@@ -127,6 +133,7 @@ class TtFalconModelShared:
             layer_output,
             epsilon=self.layernorm_eps,
             memory_config=self.model_config["LN_F_OUTPUT_MEMCFG"],
+            compute_kernel_config=ttnn.WormholeComputeKernelConfig(math_fidelity=ttnn.MathFidelity.HiFi4),
         )
         layer_output = ttnn.mul(
             layer_output,

@@ -3,12 +3,14 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
+import pytest
 import torch
 import transformers
 
 import ttnn
 
 
+@pytest.mark.requires_fast_runtime_mode_off
 def test_codegen_traced_torch_bert():
     model_name = "bert-base-uncased"
     config = transformers.BertConfig.from_pretrained(model_name)
@@ -23,6 +25,7 @@ def test_codegen_traced_torch_bert():
     ttnn.tracer.codegen(outputs)
 
 
+@pytest.mark.requires_fast_runtime_mode_off
 def test_codegen_traced_torch_bloom():
     model_name = "bigscience/bloom-560m"
     config = transformers.BloomConfig.from_pretrained(model_name)

@@ -7,16 +7,12 @@
 
 ## TT Architecture and Metalium Overview
 
-Tenstorrent has built the future of AI architecture and parallel programming. 
-It achieves high performance on current AI models but is flexible and programmable to enable invention of future AI models and HPC applications without the constraints of current architectures.
-It is designed for both inference and training, and is from ground up designed for scale-out of AI workloads, while allowing to be scaled down to a couple of cores.
+Tenstorrent has built the future of AI architecture and parallel programming.
+It achieves high performance on current AI models but is flexible and programmable, enabling the invention of future AI models and HPC (High-Performance Computing) applications without the constraints of current architectures.
+It is designed for both inference and training and is, from the ground up, designed for the scale-out of AI workloads, while also allowing for scaling down to just a couple of cores.
 Additionally, it is built using cost-effective components: simple packages, GDDR memory and Ethernet.
-This document desribes it. 
+This document describes it.
 
-* [All you need is a Tensix core and a mesh](#all-you-need-is-a-tensix-core-and-a-mesh)
-  - [Near Memory Compute and Efficient use of SRAM](#near-memory-compute-and-efficient-use-of-SRAM)
-  - [Distributed Shared Memory and In-Place Compute](#distributed-memory-and-in-place-compute)
-  - [Explicit Data Movement](#explicit-data-movement)
   - [Native Tile-Based Compute](#native-tile-based-compute)
   - [Think Bare Metal Cores, Not Threads](#native-tile-processing)
 * [Scalable Architecture](#scalable-architecture)
@@ -24,10 +20,10 @@ This document desribes it.
   - [Compute Density via Scale-Out](#compute-desnsity-via-scale-out)
 * [MIMD and Control of Both Compute and Data](#mimd-and-control-of-both-compute-and-data)
 * [Everything is a RISCV kernel](#everything-is-a-riscv-kernel)
-  - Bare Metal C/C++ kernels on RISCV 
+  - Bare Metal C/C++ kernels on RISCV
   - [User Kernels: Explicit and Decoupled Data Movement and Compute](#user-kernels-explicit-and-decoupled-data-movement-and-compute)
     - Data Movement Kernels
-    - Compute Kernels 
+    - Compute Kernels
     - Ethernet Data Movement Kernels
     - Read-Compute-Write kernel pipeline
   - Dispatch Kernels
@@ -35,16 +31,16 @@ This document desribes it.
 * [Interleaved and Sharded Buffers](#interleaved-and-sharded-buffers)
 * [Fast Kernel Dispatch](#fast-kernel-dispatch)
 * [FAQ](#FAQ)
-  - [What about CUDA, scalar threads, and caches?](#what-about-cuda-scalar-threads-and-caches)  
+  - [What about CUDA, scalar threads, and caches?](#what-about-cuda-scalar-threads-and-caches)
   - [What about HBM?](#what-about-HBM)
   - [For GPU, CPU, FPGA, TPU experts](#for-gpu-cpu-fpga-tpu-experts)
   - [First Principles Summary](#first-principles-summary)
 
-### All you need is a Tensix core and a mesh 
+### All you need is a Tensix core and a mesh
  A Tensix Core is:
  - **5 small RISC-V processors** (aka "Baby RISCVs") that run C/C++ kernels and dispatch instructions to the compute and data movement engines
  - **1 MB SRAM memory**, (aka L1) a scratch pad accessible by all RISCVs and engines within the core
- - **Matrix engine (aka FPU)** that performs Matrix multiplication, elementwise, and dot product operations on small matricies (or tiles) of shape 32x32 and similar
+ - **Matrix engine (aka FPU)** that performs Matrix multiplication, elementwise, and dot product operations on small matrices (or tiles) of shape 32x32 and similar
  - **Vector engine (aka SFPU)** for vectorized kernels such as Top-k, Sort and special functions such as GELU, Exp, and Sqrt
  - **Data Movement engine** connected to 2 Networks on Chip (NoCs)
 
@@ -55,68 +51,276 @@ A chips is a collection of cores and I/O blocks, connected into a mesh via a NoC
 - **PCIe link** for host interface
 - **ARC core** for board management and control
 
-<img width="900" alt="image" src="https://github.com/tenstorrent-metal/tt-metal/assets/3885633/78d64b36-bb68-4d41-b2ca-5e3ed7ccda8f">
+<img width="900" alt="image" src="https://github.com/tenstorrent/tt-metal/assets/3885633/78d64b36-bb68-4d41-b2ca-5e3ed7ccda8f">
 
 #### Near Memory Compute and Efficient use of SRAM
-The **high BW and large capacity SRAM** in each Tensix core is a form of **near memory compute**. A Tensix core operating on its local SRAM achieves **"silicon peak"** of what current technology node allows for. 
+The **high BW and large capacity SRAM** in each Tensix core is a form of **near memory compute**. A Tensix core operating on its local SRAM achieves **"silicon peak"** of what current technology node allows for.
 Tensix cores are connected into a mesh via 2 NOCs, and each Tensix core can communicate with any other Tensix core in the mesh, and with off-chip DRAM, as well as Ethernet cores.
-GPUs fracture SRAM across levels within the chip: large register files, small L1, and L2. This means that, with GPUs, SRAM is primarily used for re-use and pre-fetch on the way to off-chip DRAM, not as a primary form of Tensor storage and large parts of it cannot perform at peak silicon speed. 
-In contrast, in TT architecture, entire SRAM in one single level, and its significant capacity allows it be used as intermediates between operations, w/o relaying on HBM as the primary storage to hand-off data between operations.    
+GPUs fracture SRAM across multiple levels within the chip: large register files, small L1, and L2 caches. This means that SRAM is primarily used for reuse and prefetching on the way to off-chip DRAM—not as a primary form of tensor storage—and large parts of it cannot operate at peak silicon speed.
+In contrast, in the TT architecture, the entire SRAM exists at a single level, and its significant capacity allows it to be used for storing intermediates between operations without relying on HBM as the primary storage for handing off data between operations.
 
 #### Distributed Shared Memory and In-Place Compute
-The mesh of Tensix cores architecture is the first one to efficiently implement distributed shared memory within the chip and **enable programmers and compilers to optimize both layout and movement of the data**. 
-In many AI and HPC operations, such as as elementwise, the tensors can be laid out (ie "sharded") across SRAMs so that compute can operate on the local data **in-place** without any data movement. 
-Further elaboration in [Scalable Architecture](#scalable-architecture) section.  
+The mesh of Tensix cores architecture is the first one to efficiently implement distributed shared memory within the chip and **enable programmers and compilers to optimize both layout and movement of the data**.
+In many AI and HPC operations, such as as elementwise, the tensors can be laid out (ie "sharded") across SRAMs so that compute can operate on the local data **in-place** without any data movement.
+Further elaboration in [Scalable Architecture](#scalable-architecture) section.
 
 #### Explicit Data Movement
-The performance and efficiency of data movement in AI and HPC application is as important as raw compute capacity of the math engines. 
-In Tensix, data movemenet is explicit and decoupled from compute. The data movement kernels use the data movement engine in each Tensix to bring data from neighbouring cores or off-chip DRAM to the local SRAM of the Tensix core, and trigger the compute engine to operate on the data. The data movement in TT architecture can be pre-planned, optimized and debugged separately from the compute.
-There is no cache, no global crossbar, no memory access coalescing or other complex mechanisms that are used in traditional architectures and that end up hiding the data movement from the programmer or compiler.
+The performance and efficiency of data movement in AI and HPC applications is as important as the raw compute capacity of the math engines.
+In Tensix, data movement is explicit and decoupled from compute. The data movement kernels use the data movement engine in each Tensix to bring data from neighbouring cores or off-chip DRAM to the local SRAM of the Tensix core and trigger the compute engine to operate on the data. The data movement in TT architecture can be pre-planned, optimized, and debugged separately from the compute.
+There are no caches, no global crossbars, no memory access coalescing, or other complex mechanisms used in traditional architectures that end up hiding data movement from the programmer or compiler.
 For deeper insight see section [User Kernels: Explicit and Decoupled Data Movement and Compute](#user-kernels-explicit-and-decoupled-data-movement-and-compute).
 
 #### Native Tile-Based Compute
-In Tensix, compute instructions operate on tiles -- 32x32 matrix of scalars. Operating on coarse chunks of data allows for use of a simple single-threaded RISCVs processors to dispatch these instructions. 
-Similarly, data movement RISCVs issue asynchronous tile-sized data movement instructions to bring data into the scratch SRAM, allowing for large number of outstanding transfers generated by a single RISC-V data movement processor, concurrently with the compute engine. 
+In Tensix, compute instructions operate on tiles -- 32x32 matrix of scalars. Operating on coarse chunks of data allows for use of a simple single-threaded RISCVs processors to dispatch these instructions.
+Similarly, data movement RISCVs issue asynchronous tile-sized data movement instructions to bring data into the scratch SRAM, allowing for large number of outstanding transfers generated by a single RISC-V data movement processor, concurrently with the compute engine.
 
 #### Think Bare Metal Cores, Not Threads
 Each RISCV processor runs single-threaded and Core-to-Thread mapping is 1:1. Thus, the parallelization involves breaking the work across cores and dispatching the kernels directly to cores. This is in contrast to a complex thread scheduling scheme where a very large number of threads is time-slice scheduled onto a limited number of cores. As a result, in TT architecture there is no context switching or complex thread scheduling. Once the kernel is dispatched to a core it runs to completion without interruption or preemption by another thread. This simplifies reasoning about performance: it boils down to direct cycle couting of sections of a C/C++ kernel running on a bare metal RISCV core.
-Equally important, it simplifies direct debug of kernels via gdb step-through, breakpoints, and printf from cores. 
+Equally important, it simplifies direct debug of kernels via `gdb` step-through, breakpoints, and `printf` from cores.
 
 ### Scalable Architecture
 AI workloads operate on tensors (N-dimensional data) and exhibit a high degree of locality and regularity in the fundamental compute operations:
 - **Elementwise operations** are entirely local on each element in the tensor (in-place), and can be achieved without any data movement
 - **Matrix multiplication operations** have regular communication across the rows and columns of the matrix
 - **Reduction operation** can be decomposed across dimensions, such as columns, rows, and nearest neighbours in a matrix
-- **Window based (stencil) operations** such as convolutions exchage data with their neigbours
+- **Window based (stencil) operations** such as convolutions exchange data with their neighbours
 
 These data movement patterns (local, row/column, nearest neighbour) are most efficiently implemented via a regular and scalable mesh architecture.
 
-Tenstorrent architecture is a mesh of cores within a chip and mesh of chips at the cluster level. 
-<img width="900" alt="image" src="https://github.com/tenstorrent-metal/tt-metal/assets/3885633/0f40ace9-e2b3-4740-a89c-3e8a3580da8a">
+Tenstorrent architecture is a mesh of cores within a chip and mesh of chips at the cluster level.
+<img width="900" alt="image" src="https://github.com/tenstorrent/tt-metal/assets/3885633/0f40ace9-e2b3-4740-a89c-3e8a3580da8a">
 TODO: Describe Galaxy, break up the slide into two slides
 
 #### Two levels of memory
 
-TODO: Describe SRAM and DRAM as two levels of memory hierachy within the mesh, both distributed and explicit data movement.
+TODO: Describe SRAM and DRAM as two levels of memory hierarchy within the mesh, both distributed and explicit data movement.
 
 #### Compute Density via Scale-Out
 
-TODO: Describe that TT wins at scale-out, best compute density at the server and cluster level 
+TODO: Describe that TT wins at scale-out, best compute density at the server and cluster level
 
 ### MIMD and Control of Both Compute and Data
 
-- "Program cores not threads" 
+- "Program cores not threads"
 
 ### Everything is a RISCV kernel
 
- - Bare Metal C/C++ kernels on RISCV 
+ - Bare Metal C/C++ kernels on RISCV
   - User Kernels
     - Data Movement Kernels
-    - Compute Kernels 
+    - Compute Kernels
     - Ethernet Data Movement Kernels
   - Dispatch Kernels
-  <img width="1176" alt="image" src="https://github.com/tenstorrent-metal/tt-metal/assets/3885633/d3c89155-6e4d-49cb-a95c-85654ac29e7d">
-<img width="1171" alt="image" src="https://github.com/tenstorrent-metal/tt-metal/assets/3885633/73039d17-3bce-4ff5-b797-da1aa9b147c4">
+  <img width="1176" alt="image" src="https://github.com/tenstorrent/tt-metal/assets/3885633/d3c89155-6e4d-49cb-a95c-85654ac29e7d">
+<img width="1171" alt="image" src="https://github.com/tenstorrent/tt-metal/assets/3885633/73039d17-3bce-4ff5-b797-da1aa9b147c4">
+
+#### Behind the scenes, a Compute Kernel becomes Unpack, Math, Pack Kernels
+
+As the above single Tensix core architecture shows, the Compute Kernel uses
+three Baby RISCVs. tt-metal uses them to conduct unpack, math, and pack. It
+actually generates Unpack, Math, Pack kernels from a single Compute kernel.
+
+For details, let's check what tt-metal generates for the following compute
+kernel:
+```
+namespace NAMESPACE {
+void MAIN {
+  mm_init(tt::CBIndex::c_0, tt::CBIndex::c_1, tt::CBIndex::c_16);
+  acquire_dst();
+
+  cb_wait_front(tt::CBIndex::c_0, /* number of tiles */ 1);
+  cb_wait_front(tt::CBIndex::c_1, /* number of tiles */ 1);
+
+  matmul_tiles(tt::CBIndex::c_0, tt::CBIndex::c_1, 0, 0, 0, false);
+
+  cb_pop_front(tt::CBIndex::c_1, /* number of tiles */ 1);
+  cb_pop_front(tt::CBIndex::c_0, /* number of tiles */ 1);
+
+  cb_reserve_back(tt::CBIndex::c_16, /* number of tiles */ 1);
+  pack_tile(0, tt::CBIndex::c_16);
+  cb_push_back(tt::CBIndex::c_16, /* number of tiles */ 1);
+
+  release_dst();
+}
+}  // namespace NAMESPACE
+```
+
+It takes two matrix tiles from `tt::CBIndex::c_0` and `tt::CBIndex::c_0` L1 and
+conducts a single-tile matrix multiplication. Finally, it packs the result to
+`tt::CBIndex::c_16`.
+
+Note that tile registers are acquired by `acquire_dst()`, but actually we can
+use `tile_regs_..()` functions for the more fine-grained tile register lock
+mechanism. At the end of this section, we will explain more details.
+
+Even though it looks like a single Compute kernel,
+`tt::tt_metal::CreateKernel(..)` actually generates UNPACK, MATH, PACK kernels.
+To check the artifact of `tt::tt_metal::CreateKernel(..)`, we can intentionally
+add a syntax error like removing `p` from `pack_tile(..)`. Running the program
+with the syntax error will have a compile failure, which will dump the
+compilation command information like:
+```
+cd /path/to/tt-metal//built/2052/kernels/single_tile_matmul/1584599061800683236/trisc2/ \
+&& \
+/path/to/tt-metal//tt_metal/third_party/sfpi/compiler/bin/riscv32-unknown-elf-g++ \
+-mgrayskull -march=rv32iy -mtune=rvtt-b1 -mabi=ilp32 -std=c++17 -flto -ffast-math \
+-fno-use-cxa-atexit -fno-exceptions -Wall -Werror -Wno-unknown-pragmas \
+-Wno-error=multistatement-macros -Wno-error=parentheses \
+-Wno-error=unused-but-set-variable -Wno-unused-variable \
+-Wno-unused-function -O3 -DARCH_GRAYSKULL -DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 \
+-DDEBUG_PRINT_ENABLED -DUCK_CHLKC_PACK -DNAMESPACE=chlkc_pack -DCOMPILE_FOR_TRISC=2 \
+-DKERNEL_BUILD -I.  -I..  -I/path/to/tt-metal// -I/path/to/tt-metal//tt_metal \
+... (a few more -I.. options) ...
+-I/path/to/tt-metal//tt_metal/hw/firmware/src \
+-I/path/to/tt-metal//tt_metal/third_party/tt_llk_grayskull/llk_lib \
+-c -o trisck.o \
+/path/to/tt-metal//tt_metal/hw/firmware/src/trisck.cc
+```
+(Note that the actual log shows a command in a single line, but we added line
+breaks to help understanding)
+
+Among many of the options, `-DUCK_CHLKC_PACK -DNAMESPACE=chlkc_pack` specifies
+it is a "Pack kernel". `-DCOMPILE_FOR_TRISC=2` means it will use `TRISC2` among
+the three Baby RISCVs.
+
+Based on the information, we can try the following steps:
+* Checking the ELF file on the directory e.g.,
+`/path/to/tt-metal//built/2052/kernels/single_tile_matmul/1584599061800683236/trisc2/trisc2.elf`.
+  * `/path/to/tt-metal/tt_metal/third_party/sfpi/compiler/bin/` directory
+    contains build tools like `riscv32-unknown-elf-g++`, and it also contains
+    `riscv32-unknown-elf-objdump` and `riscv32-unknown-elf-readelf`
+    * For example, you can check all headers of ELF by running
+      `/path/to/riscv32-unknown-elf-readelf -a trisc2.elf`.
+* Running only preprocessing by replacing `-c` with `-E` of
+  `riscv32-unknown-elf-g++` command.
+  * As we do `-E` compiler option for C/C++ code, we can also use it for Unpack,
+    Math, and Pack kernels. The output file will show you the result of
+    "preprocessing".
+* Options to generate different kernels:
+  * Unpack kernel: `-DUCK_CHLKC_UNPACK -DNAMESPACE=chlkc_unpack`
+  * Math kernel: `-DUCK_CHLKC_MATH -DNAMESPACE=chlkc_math`
+  * Pack kernel: `-DUCK_CHLKC_PACK -DNAMESPACE=chlkc_pack`
+
+Note that the preprocessed kernel code is long like 23,000 lines, because
+tt-metal kernel APIs are implemented as header files.
+
+Also note that tt-metal uses `PACK(..), MATH(..), UNPACK(..)` macro to
+selectively attach code snippets to the preprocessed output. For example,
+if you wrap an expression with `PACK( /* an expression */ )`, it will
+disappear from Unpack and Math kernels, but will be only shown in the Pack
+kernel.
+
+If you generate a Pack kernel for the above Compute kernel example, the
+preprocessed `cb_wait_front(..)` is empty:
+```
+inline __attribute__((always_inline)) void cb_wait_front(uint32_t cbid, uint32_t ntiles) {
+    ;
+}
+```
+
+On the other hand, the UNPACK kernel has the following
+`cb_wait_front(..)`:
+```
+inline __attribute__((always_inline)) void cb_wait_front(uint32_t cbid, uint32_t ntiles) {
+    ( llk_wait_tiles(cbid, ntiles) );
+}
+```
+
+Another interesting function is `acquire_dst()`:
+* The UNPACK kernel has an empty one:
+```
+inline __attribute__((always_inline)) void acquire_dst() {
+    ;
+
+    ;
+}
+```
+* The MATH kernel waits for DEST available:
+```
+inline __attribute__((always_inline)) void acquire_dst() {
+    ( llk_math_wait_for_dest_available() );
+
+    ;
+}
+```
+* The UNPACK kernel waits for the end of MATH kernel:
+```
+inline __attribute__((always_inline)) void acquire_dst() {
+    ;
+
+    ( llk_packer_wait_for_math_done() );
+}
+```
+
+[Its implementation](https://github.com/tenstorrent/tt-metal/blob/6d4951a20ca4c392888f924f038ae0780a8cc656/tt_metal/include/compute_kernel_api/reg_api.h#L28-L32) matches the preprocessed code:
+```
+ALWI void acquire_dst() {
+    MATH(( llk_math_wait_for_dest_available()  ));
+
+    PACK(( llk_packer_wait_for_math_done()  ));
+}
+```
+
+Based on the implementation of `acquire_dst()`, if we use it, we can guess it
+executes UNPACK, MATH, PACK in order, which will help you to follow the
+execution order and instructions that actually run on each kernel.
+
+Actually, following `tile_regs_..()` functions provide the exact same mechanism
+but in a more fine-grained way:
+*  The MATH kernel can acquire the tile registers using:
+```
+ALWI void tile_regs_acquire() {
+    MATH(( llk_math_wait_for_dest_available()  ));
+}
+```
+* The PACK kernel can wait for the end of MATH kernel using:
+```
+ALWI void tile_regs_wait() {
+    PACK(( llk_packer_wait_for_math_done()  ));
+}
+```
+* `tile_regs_commit()` releases the lock from MATH kernel:
+```
+ALWI void tile_regs_commit() {
+    MATH(( llk_math_dest_section_done()  ));
+}
+```
+* `tile_regs_release()` releases the lock from PACK kernel:
+```
+ALWI void tile_regs_release() {
+    PACK(( llk_pack_dest_section_done()  ));
+}
+```
+
+We can replace `acquire_dst()` from the above example
+with `tile_regs_..()` functions like:
+```
+namespace NAMESPACE {
+void MAIN {
+  mm_init(tt::CBIndex::c_0, tt::CBIndex::c_1, tt::CBIndex::c_16);
+
+  cb_wait_front(tt::CBIndex::c_0, /* number of tiles */ 1);
+  cb_wait_front(tt::CBIndex::c_1, /* number of tiles */ 1);
+
+  tile_regs_acquire();
+
+  matmul_tiles(tt::CBIndex::c_0, tt::CBIndex::c_1, 0, 0, 0, false);
+
+  tile_regs_commit();
+
+  cb_pop_front(tt::CBIndex::c_1, /* number of tiles */ 1);
+  cb_pop_front(tt::CBIndex::c_0, /* number of tiles */ 1);
+
+  tile_regs_wait();
+
+  cb_reserve_back(tt::CBIndex::c_16, /* number of tiles */ 1);
+  pack_tile(0, tt::CBIndex::c_16);
+  cb_push_back(tt::CBIndex::c_16, /* number of tiles */ 1);
+
+  tile_regs_release();
+}
+}  // namespace NAMESPACE
+```
 
 
 ### Efficiency of Tile-Based Compute and Data Movement
@@ -129,7 +333,7 @@ TODO: Describe that TT wins at scale-out, best compute density at the server an
 ### Fast Kernel Dispatch
 
 ### FAQ
-#### Where is CUDA, scalar threads, and caches? 
+#### Where is CUDA, scalar threads, and caches?
 #### Where is HBM?
 #### For GPU, CPU, FPGA, TPU experts
  - GPU
@@ -137,13 +341,13 @@ TODO: Describe that TT wins at scale-out, best compute density at the server an
  - FPGA
  - TPU
 #### First Principles Summary
-  
+
 
 
 
 ## TT Architecture deep dive
 
-TODO: 1) TOC, write it 
+TODO: 1) TOC, write it
 
 ## Learn Metalium in 7 steps
 
@@ -163,12 +367,12 @@ void MAIN {
     uint32_t per_core_block_cnt = get_arg_val<uint32_t>(0);
     uint32_t per_core_block_size = get_arg_val<uint32_t>(1); // should be <= 8 in this kernel
 
-    constexpr auto cb_in0 = tt::CB::c_in0;
-    constexpr auto cb_in1 = tt::CB::c_in1;
-    constexpr auto cb_out0 =  tt::CB::c_out0;
+    constexpr auto cb_in0 = tt::CBIndex::c_0;
+    constexpr auto cb_in1 = tt::CBIndex::c_1;
+    constexpr auto cb_out0 =  tt::CBIndex::c_16;
 
     binary_op_init_common(cb_in0, cb_in1, cb_out0);
-    add_tiles_init();
+    add_tiles_init(cb_in0, cb_in1);
 
     for(uint32_t block = 0; block < per_core_block_cnt; ++block) {
 
@@ -196,11 +400,10 @@ void MAIN {
         cb_pop_front(cb_in0, per_core_block_size);
         cb_pop_front(cb_in1, per_core_block_size);
 
-        // push a block of tiles to output CB
+        // push a block of tiles to output CBIndex
         cb_push_back(cb_out0, per_core_block_size);
     }
 
 }
 }
 ```
-

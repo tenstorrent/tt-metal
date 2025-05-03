@@ -5,7 +5,7 @@
 import torch
 from loguru import logger
 import pytest
-import tt_lib
+import ttnn
 
 from models.utility_functions import (
     profiler,
@@ -23,9 +23,7 @@ from models.experimental.lenet.lenet_utils import load_torch_lenet, prepare_imag
     "pcc, PERF_CNT",
     ((0.99, 2),),
 )
-def test_lenet_perf_inference(
-    device, pcc, PERF_CNT, mnist_sample_input, model_location_generator, reset_seeds
-):
+def test_lenet_perf_inference(device, pcc, PERF_CNT, mnist_sample_input, model_location_generator, reset_seeds):
     disable_persistent_kernel_cache()
     image = prepare_image(mnist_sample_input)
     num_classes = 10
@@ -46,7 +44,7 @@ def test_lenet_perf_inference(
         _, torch_predicted = torch.max(torch_output.data, -1)
         profiler.end("\nExec time of reference model")
 
-        tt_image = torch2tt_tensor(image, device, tt_lib.tensor.Layout.ROW_MAJOR)
+        tt_image = torch2tt_tensor(image, device, ttnn.ROW_MAJOR_LAYOUT)
 
         profiler.start("\nExecution time of tt_vgg first run")
         tt_output = tt_lenet(tt_image)

@@ -3,17 +3,13 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
-import math
-from torch.nn import functional as F
-from torch.nn import LayerNorm
+
+import ttnn
 
 from functools import partial
-import tt_lib as ttl
-from tt_lib.fallback_ops import fallback_ops
-import models.experimental.bloom.bloom_utils as bloom_utils
 import models.experimental.bloom.tt.bloom_attention as bloom_attention
 import models.experimental.bloom.tt.bloom_mlp as bloom_mlp
-from typing import Optional, Tuple, Union
+from typing import Optional, Tuple
 from models.utility_functions import pad_by_zero
 
 
@@ -29,10 +25,10 @@ class TtBloomBlock(torch.nn.Module):
         self.beta = pad_by_zero(state_dict[f"{base_address}.input_layernorm.bias"], device)[0]
         self.gamma = pad_by_zero(state_dict[f"{base_address}.input_layernorm.weight"], device)[0]
         self.input_layernorm = partial(
-            ttl.tensor.layernorm,
-            gamma=self.gamma,
-            beta=self.beta,
-            eps=self.layer_norm_epsilon,
+            ttnn.layer_norm,
+            weight=self.gamma,
+            bias=self.beta,
+            epsilon=self.layer_norm_epsilon,
         )
 
         self.self_attention = bloom_attention.TtBloomAttention(
@@ -42,10 +38,10 @@ class TtBloomBlock(torch.nn.Module):
         self.beta_2 = pad_by_zero(state_dict[f"{base_address}.post_attention_layernorm.bias"], device)[0]
         self.gamma_2 = pad_by_zero(state_dict[f"{base_address}.post_attention_layernorm.weight"], device)[0]
         self.post_attention_layernorm = partial(
-            ttl.tensor.layernorm,
-            gamma=self.gamma_2,
-            beta=self.beta_2,
-            eps=self.layer_norm_epsilon,
+            ttnn.layer_norm,
+            weight=self.gamma_2,
+            bias=self.beta_2,
+            epsilon=self.layer_norm_epsilon,
         )
 
         self.mlp = bloom_mlp.TtBloomMLP(config, state_dict, f"{base_address}.mlp", device)
@@ -63,7 +59,7 @@ class TtBloomBlock(torch.nn.Module):
     ):
         # hidden_states: [batch_size, seq_length, hidden_size]
         # Layer norm at the beginning of the transformer layer.
-        layernorm_output = self.input_layernorm(hidden_states)  # , overrideH=hidden_states.get_legacy_shape()[-2])
+        layernorm_output = self.input_layernorm(hidden_states)  # , overrideH=hidden_states.padded_shape[-2])
 
         # Layer norm post the self attention.
         if self.apply_residual_connection_post_layernorm:
@@ -89,7 +85,7 @@ class TtBloomBlock(torch.nn.Module):
 
         layernorm_output = self.post_attention_layernorm(
             attention_output
-        )  # , overrideH=attention_output.get_legacy_shape()[-2])
+        )  # , overrideH=attention_output.padded_shape[-2])
 
         # Get residual
         if self.apply_residual_connection_post_layernorm:

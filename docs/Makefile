@@ -14,14 +14,17 @@ TTNN_BUILDDIR	= $(BUILDDIR)/ttnn
 PORT          	?= 8888
 DOCS_VERSION       	?= latest
 
+# register_python_operation doesn't load the doc string when fast_runtime_mode is enabled.
+# disable fast_runtime_mode to enable loading the doc string.
+TTNN_FLAGS      = TTNN_CONFIG_OVERRIDES='{"enable_fast_runtime_mode": false}'
 GITHUB_TOKEN    ?= INSERT_TOKEN_HERE
-TTNN_SWEEPS_DIR = $(HTMLDIR)/ttnn/ttnn_sweeps
+TTNN_API_DIR    = source/ttnn/ttnn/api
 
 # Put it first so that "make" without argument is like "make help".
 help:
 	@$(SPHINXBUILD) -M help "$(SOURCEDIR)" "$(BUILDDIR)" $(SPHINXOPTS) $(O)
 
-.PHONY: help default clean html publish build_doxygen sphinx_build_dir html/ttnn html/tt-metalium ttnn_sweeps ttnn_sweeps/check_directory
+.PHONY: help default clean html publish build_doxygen sphinx_build_dir html/ttnn html/tt-metalium
 
 default: html
 
@@ -30,9 +33,10 @@ all: clean html server
 clean:
 	@rm -rf $(BUILDDIR)
 	@rm -rf $(DOXYGENDIR)
+	@rm -rf $(TTNN_API_DIR)
 
 build_doxygen: clean
-	@cd .. && doxygen
+	@cd .. && doxygen docs/Doxyfile
 
 sphinx_build_dir: clean
 	@mkdir -p $(BUILDDIR)
@@ -41,7 +45,7 @@ html/tt-metalium: build_doxygen sphinx_build_dir
 	@DOCS_VERSION=$(DOCS_VERSION) REQUESTED_DOCS_PKG=tt-metalium $(SPHINXBUILD) "$(SOURCEDIR)/tt-metalium" "$(TT_METALIUM_BUILDDIR)" $(SPHINXOPTS) $(O)
 
 html/ttnn: build_doxygen sphinx_build_dir
-	@DOCS_VERSION=$(DOCS_VERSION) REQUESTED_DOCS_PKG=ttnn $(SPHINXBUILD) "$(SOURCEDIR)/ttnn" "$(TTNN_BUILDDIR)" $(SPHINXOPTS) $(O)
+	@ ${TTNN_FLAGS} DOCS_VERSION=$(DOCS_VERSION) REQUESTED_DOCS_PKG=ttnn $(SPHINXBUILD) "$(SOURCEDIR)/ttnn" "$(TTNN_BUILDDIR)" $(SPHINXOPTS) $(O)
 
 html: html/tt-metalium html/ttnn
 	mkdir -p $(HTMLDIR)
@@ -49,17 +53,6 @@ html: html/tt-metalium html/ttnn
 	mv -f $(TTNN_BUILDDIR) $(HTMLDIR)/ttnn
 	cp source/index.html $(HTMLDIR)/
 
-ttnn_sweeps/check_directory:
-	@if [ -d "$(TTNN_SWEEPS_DIR)" ]; then \
-		echo "Error: ttnn sweeps dir $(TTNN_SWEEPS_DIR) exists already."; \
-		exit 1; \
-	else \
-		mkdir -p $(TTNN_SWEEPS_DIR); \
-	fi
-
-ttnn_sweeps:
-	@echo "Note that GITHUB_TOKEN must be set before calling this"
-	@cd .. && python tests/ttnn/sweep_tests/build_html_sweep_results.py --dir docs/$(TTNN_SWEEPS_DIR) --token $(GITHUB_TOKEN)
 
 server:
 	@echo "Navigate to: \033[4;33mlocalhost:$(PORT)/index.html\033[0m"

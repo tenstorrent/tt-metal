@@ -18,7 +18,7 @@ import os
 import sys
 import collections
 
-sys.path.insert(0, os.path.abspath("."))
+sys.path.insert(0, os.path.abspath(".."))
 
 MetalSphinxConfig = collections.namedtuple("MetalSphinxConfig", ["fullname", "shortname"])
 
@@ -52,7 +52,15 @@ extensions = [
     "sphinxcontrib.email",
     "sphinx.ext.mathjax",
     "breathe",
+    "myst_parser",
 ]
+
+# For markdown and RST files
+source_suffix = {
+    ".rst": "restructuredtext",
+    ".txt": "markdown",
+    ".md": "markdown",
+}
 
 # Napoleon settings
 napoleon_google_docstring = False
@@ -61,7 +69,7 @@ napoleon_include_init_with_doc = True
 napoleon_include_private_with_doc = False
 napoleon_include_special_with_doc = True
 napoleon_use_admonition_for_examples = False
-napoleon_use_admonition_for_notes = False
+napoleon_use_admonition_for_notes = True
 napoleon_use_admonition_for_references = False
 napoleon_use_ivar = False
 napoleon_use_param = True
@@ -89,13 +97,15 @@ exclude_patterns = []
 #
 html_theme = "sphinx_rtd_theme"
 html_logo = "images/tt_logo.svg"
-html_favicon = "images/cropped-favicon-32x32.png"
-html_baseurl = f"/{metal_sphinx_config.shortname}/" + os.environ["DOCS_VERSION"]
+html_favicon = "images/favicon.png"
+html_baseurl = f"/tt-metal/" + os.environ["DOCS_VERSION"] + f"/{metal_sphinx_config.shortname}"
 
 # Add any paths that contain custom static files (such as style sheets) here,
 # relative to this directory. They are copied after the builtin static files,
 # so a file named "default.css" will overwrite the builtin "default.css".
 html_static_path = ["_static"]
+
+html_context = {"logo_link_url": "https://docs.tenstorrent.com/"}
 
 
 def setup(app):

@@ -26,6 +26,8 @@ profiler_log_path = PROFILER_LOGS_DIR / PROFILER_DEVICE_SIDE_LOG
 from tt_metal.tools.profiler.process_device_log import import_log_run_stats
 import tt_metal.tools.profiler.device_post_proc_config as device_post_proc_config
 
+ARCH_NAME = os.getenv("ARCH_NAME")
+
 
 def run_moreh_single_test(test_name, test_entry):
     full_env = copy.deepcopy(os.environ)
@@ -76,6 +78,14 @@ def append_to_csv(file_path, header, data, write_header=True):
 def profile_results():
     setup = device_post_proc_config.default_setup()
     setup.deviceInputLog = profiler_log_path
+    setup.timerAnalysis = {
+        "device_fw_duration": {
+            "across": "device",
+            "type": "session_first_last",
+            "start": {"core": "ANY", "risc": "ANY", "zone_name": [f"{risc}-FW" for risc in setup.riscTypes]},
+            "end": {"core": "ANY", "risc": "ANY", "zone_name": [f"{risc}-FW" for risc in setup.riscTypes]},
+        },
+    }
     devices_data = import_log_run_stats(setup)
     deviceID = list(devices_data["devices"].keys())[0]
     total_cycle = devices_data["devices"][deviceID]["cores"]["DEVICE"]["analysis"]["device_fw_duration"]["stats"][
@@ -87,6 +97,14 @@ def profile_results():
 def profile_results_kernel_duration():
     setup = device_post_proc_config.default_setup()
     setup.deviceInputLog = profiler_log_path
+    setup.timerAnalysis = {
+        "device_kernel_duration": {
+            "across": "device",
+            "type": "session_first_last",
+            "start": {"core": "ANY", "risc": "ANY", "zone_name": [f"{risc}-KERNEL" for risc in setup.riscTypes]},
+            "end": {"core": "ANY", "risc": "ANY", "zone_name": [f"{risc}-KERNEL" for risc in setup.riscTypes]},
+        },
+    }
     devices_data = import_log_run_stats(setup)
     deviceID = list(devices_data["devices"].keys())[0]
     total_cycle = devices_data["devices"][deviceID]["cores"]["DEVICE"]["analysis"]["device_kernel_duration"]["stats"][
@@ -95,9 +113,25 @@ def profile_results_kernel_duration():
     return total_cycle
 
 
+def get_device_freq():
+    setup = device_post_proc_config.default_setup()
+    setup.deviceInputLog = profiler_log_path
+    deviceData = import_log_run_stats(setup)
+    freq = deviceData["deviceInfo"]["freq"]
+    return freq
+
+
 def profile_noc_results():
     setup = device_post_proc_config.test_noc()
     setup.deviceInputLog = profiler_log_path
+    setup.timerAnalysis = {
+        "NoC For Loop": {
+            "across": "device",
+            "type": "session_first_last",
+            "start": {"core": "ANY", "risc": "ANY", "zone_name": [f"{risc}-KERNEL" for risc in setup.riscTypes]},
+            "end": {"core": "ANY", "risc": "ANY", "zone_name": [f"{risc}-KERNEL" for risc in setup.riscTypes]},
+        },
+    }
     devices_data = import_log_run_stats(setup)
     deviceID = list(devices_data["devices"].keys())[0]
     min = devices_data["devices"][deviceID]["cores"]["DEVICE"]["analysis"]["NoC For Loop"]["stats"]["Min"]
@@ -108,7 +142,10 @@ def profile_noc_results():
 # pcie write
 def test_write_device_l1(iter=1, buffer_type=0, size=2048):
     command = (
-        "./build/test/tt_metal/perf_microbenchmark/old/pcie/test_rw_device_l1 "
+        "./build/test/tt_metal/perf_microbenchmark/old/pcie/test_rw_device_l1"
+        + "_"
+        + ARCH_NAME
+        + " "
         + "--iter "
         + str(iter)
         + " --buffer_type "
@@ -124,7 +161,10 @@ def test_write_device_l1(iter=1, buffer_type=0, size=2048):
 
 def test_write_device_dram_channel(iter=1, buffer_type=0, size=2048):
     command = (
-        "./build/test/tt_metal/perf_microbenchmark/old/pcie/test_rw_device_dram "
+        "./build/test/tt_metal/perf_microbenchmark/old/pcie/test_rw_device_dram"
+        + "_"
+        + ARCH_NAME
+        + " "
         + "--iter "
         + str(iter)
         + " --buffer_type "
@@ -140,7 +180,10 @@ def test_write_device_dram_channel(iter=1, buffer_type=0, size=2048):
 
 def test_write_buffer(iter=1, buffer_type=0, size=2048):
     command = (
-        "./build/test/tt_metal/perf_microbenchmark/old/pcie/test_rw_buffer "
+        "./build/test/tt_metal/perf_microbenchmark/old/pcie/test_rw_buffer_old"
+        + "_"
+        + ARCH_NAME
+        + " "
         + "--iter "
         + str(iter)
         + " --buffer_type "
@@ -156,7 +199,10 @@ def test_write_buffer(iter=1, buffer_type=0, size=2048):
 
 def test_enqueue_write_buffer(iter=1, buffer_type=0, size=2048, timeout=600):
     command = (
-        "./build/test/tt_metal/perf_microbenchmark/old/pcie/test_enqueue_rw_buffer "
+        "./build/test/tt_metal/perf_microbenchmark/old/pcie/test_enqueue_rw_buffer"
+        + "_"
+        + ARCH_NAME
+        + " "
         + "--iter "
         + str(iter)
         + " --buffer_type "
@@ -173,7 +219,10 @@ def test_enqueue_write_buffer(iter=1, buffer_type=0, size=2048, timeout=600):
 # pcie read
 def test_read_device_l1(iter=1, buffer_type=0, size=2048):
     command = (
-        "./build/test/tt_metal/perf_microbenchmark/old/pcie/test_rw_device_l1 "
+        "./build/test/tt_metal/perf_microbenchmark/old/pcie/test_rw_device_l1"
+        + "_"
+        + ARCH_NAME
+        + " "
         + "--iter "
         + str(iter)
         + " --buffer_type "
@@ -189,7 +238,10 @@ def test_read_device_l1(iter=1, buffer_type=0, size=2048):
 
 def test_read_device_dram_channel(iter=1, buffer_type=0, size=2048):
     command = (
-        "./build/test/tt_metal/perf_microbenchmark/old/pcie/test_rw_device_dram "
+        "./build/test/tt_metal/perf_microbenchmark/old/pcie/test_rw_device_dram"
+        + "_"
+        + ARCH_NAME
+        + " "
         + "--iter "
         + str(iter)
         + " --buffer_type "
@@ -205,7 +257,10 @@ def test_read_device_dram_channel(iter=1, buffer_type=0, size=2048):
 
 def test_read_buffer(iter=1, buffer_type=0, size=2048):
     command = (
-        "./build/test/tt_metal/perf_microbenchmark/old/pcie/test_rw_buffer "
+        "./build/test/tt_metal/perf_microbenchmark/old/pcie/test_rw_buffer_old"
+        + "_"
+        + ARCH_NAME
+        + " "
         + "--iter "
         + str(iter)
         + " --buffer_type "
@@ -221,7 +276,10 @@ def test_read_buffer(iter=1, buffer_type=0, size=2048):
 
 def test_enqueue_read_buffer(iter=1, buffer_type=0, size=2048, timeout=600):
     command = (
-        "./build/test/tt_metal/perf_microbenchmark/old/pcie/test_enqueue_rw_buffer "
+        "./build/test/tt_metal/perf_microbenchmark/old/pcie/test_enqueue_rw_buffer"
+        + "_"
+        + ARCH_NAME
+        + " "
         + "--iter "
         + str(iter)
         + " --buffer_type "
@@ -235,10 +293,127 @@ def test_enqueue_read_buffer(iter=1, buffer_type=0, size=2048, timeout=600):
     return bw
 
 
+def run_dram_read_cmd(k, n, num_blocks, df, num_banks, bank_start_id):
+    command = (
+        "TT_METAL_DEVICE_PROFILER=1 ./build/test/tt_metal/perf_microbenchmark/8_dram_adjacent_core_read/test_dram_read"
+        + "_"
+        + ARCH_NAME
+        + " "
+        + " --k "
+        + str(k)
+        + " --n "
+        + str(n)
+        + " --num-blocks "
+        + str(num_blocks)
+        + " --num-tests "
+        + str(1)
+        + " --data-type "
+        + str(df)
+        + " --num-banks "
+        + str(num_banks)
+        + " --bank-start-id "
+        + str(bank_start_id)
+        + " --bypass-check "
+    )
+    run_moreh_single_test("DRAM BW test multi-core", command)
+
+
+def run_dram_read_l1_write_cmd(k, n, num_blocks, df, num_banks, bank_start_id):
+    command = (
+        "TT_METAL_DEVICE_PROFILER=1 ./build/test/tt_metal/perf_microbenchmark/9_dram_adjacent_read_remote_l1_write/test_dram_read_l1_write"
+        + "_"
+        + ARCH_NAME
+        + " "
+        + " --k "
+        + str(k)
+        + " --n "
+        + str(n)
+        + " --num-blocks "
+        + str(num_blocks)
+        + " --num-tests "
+        + str(1)
+        + " --data-type "
+        + str(df)
+        + " --num-banks "
+        + str(num_banks)
+        + " --bank-start-id "
+        + str(bank_start_id)
+        + " --bypass-check "
+    )
+    run_moreh_single_test("DRAM BW test multi-core", command)
+
+
+def run_dram_read_remote_cb_sync_cmd(
+    k, n, num_blocks, cb_num_blocks, cb_padding, df, num_receivers, num_mixed_df_layers, use_sub_devices
+):
+    command = (
+        "TT_METAL_DEVICE_PROFILER=1 ./build/test/tt_metal/perf_microbenchmark/10_dram_read_remote_cb_sync/test_dram_read_remote_cb"
+        + "_"
+        + ARCH_NAME
+        + " "
+        + " --k "
+        + str(k)
+        + " --n "
+        + str(n)
+        + " --num-blocks "
+        + str(num_blocks)
+        + " --cb-num-blocks "
+        + str(cb_num_blocks)
+        + " --cb-padding "
+        + str(cb_padding)
+        + " --num-tests "
+        + str(1)
+        + " --data-type "
+        + str(df)
+        + " --num-receivers "
+        + str(num_receivers)
+        + " --num-mixed-df-layers "
+        + str(num_mixed_df_layers)
+        + (" --use-sub-devices " if use_sub_devices else "")
+    )
+    run_moreh_single_test("DRAM read remote CB sync single-core ", command)
+
+
+def run_remote_cb_sync_matmul_single_core_cmd(
+    m, k, n, num_blocks, cb_num_blocks, cb_padding, df, num_receivers, num_layers, use_sub_devices
+):
+    command = (
+        "TT_METAL_DEVICE_PROFILER=1 ./build/test/tt_metal/perf_microbenchmark/11_remote_cb_sync_matmul_single_core/test_remote_cb_sync_matmul"
+        + "_"
+        + ARCH_NAME
+        + " "
+        + " --m "
+        + str(m)
+        + " --k "
+        + str(k)
+        + " --n "
+        + str(n)
+        + " --num-blocks "
+        + str(num_blocks)
+        + " --cb-num-blocks "
+        + str(cb_num_blocks)
+        + " --cb-padding "
+        + str(cb_padding)
+        + " --num-tests "
+        + str(1)
+        + " --data-type "
+        + str(df)
+        + " --num-receivers "
+        + str(num_receivers)
+        + " --num-layers "
+        + str(num_layers)
+        + (" --use-sub-devices " if use_sub_devices else "")
+    )
+    run_moreh_single_test("DRAM read remote CB sync single-core ", command)
+
+
 # noc
 def test_noc_local(r=9, c=12, nt=256, cb=1):
     command = (
-        "./build/test/tt_metal/perf_microbenchmark/old/noc/test_noc_read_local_l1 "
+        "./build/test/tt_metal/perf_microbenchmark/old/noc/test_noc_read_local_l1"
+        + "_"
+        + ARCH_NAME
+        + " "
         + "--r "
         + str(r)
         + " --c "
@@ -253,7 +428,10 @@ def test_noc_local(r=9, c=12, nt=256, cb=1):
 
 def test_noc_global_type_a(r=9, c=12, nt=256, cb=1):
     command = (
-        "./build/test/tt_metal/perf_microbenchmark/old/noc/test_noc_read_global_l1 "
+        "./build/test/tt_metal/perf_microbenchmark/old/noc/test_noc_read_global_l1"
+        + "_"
+        + ARCH_NAME
+        + " "
         + "--r "
         + str(r)
         + " --c "
@@ -269,7 +447,10 @@ def test_noc_global_type_a(r=9, c=12, nt=256, cb=1):
 
 def test_noc_global_type_b(r=9, c=12, nt=256, cb=1):
     command = (
-        "./build/test/tt_metal/perf_microbenchmark/old/noc/test_noc_read_global_l1 "
+        "./build/test/tt_metal/perf_microbenchmark/old/noc/test_noc_read_global_l1"
+        + "_"
+        + ARCH_NAME
+        + " "
         + "--r "
         + str(r)
         + " --c "
@@ -288,7 +469,10 @@ def test_matmul_global(
     r=9, c=12, mt=72, nt=96, kt=24, per_core_mt=8, per_core_nt=8, l1_in0=0, l1_in1=0, l1_out=0, in0_block_w=4
 ):
     command = (
-        "./build/test/tt_metal/perf_microbenchmark/old/matmul/matmul_global_l1 "
+        "./build/test/tt_metal/perf_microbenchmark/old/matmul/matmul_global_l1"
+        + "_"
+        + ARCH_NAME
+        + " "
         + "--r "
         + str(r)
         + " --c "
@@ -317,7 +501,10 @@ def test_matmul_global(
 
 def test_matmul_local(r=9, c=12, mt=72, nt=96, kt=24):
     command = (
-        "./build/test/tt_metal/perf_microbenchmark/old/matmul/matmul_local_l1 "
+        "./build/test/tt_metal/perf_microbenchmark/old/matmul/matmul_local_l1"
+        + "_"
+        + ARCH_NAME
+        + " "
         + "--r "
         + str(r)
         + " --c "
@@ -336,7 +523,10 @@ def test_matmul_single_core(
     m, n, k, dtype, fidel, matmul_block, num_blocks, packer_l1_acc, fp32_dest_acc, interm_cb_dtype, subblock_index
 ):
     command = (
-        "TT_METAL_DEVICE_PROFILER=1 ./build/test/tt_metal/perf_microbenchmark/1_compute_mm/test_compute_mm "
+        "TT_METAL_DEVICE_PROFILER=1 ./build/test/tt_metal/perf_microbenchmark/1_compute_mm/test_compute_mm"
+        + "_"
+        + ARCH_NAME
+        + " "
         + "--m "
         + str(m)
         + " --n "
@@ -419,6 +609,7 @@ def test_pcie_d2h_dram(iteration, test_vector_small, test_vector_large):
     [
         ("grayskull", 2, 1048576, np.array([4096, 16384, 65536, 262144, 1048576, 4194304, 16777216])),
         ("wormhole_b0", 2, 1499136, np.array([4096, 16384, 65536, 262144, 1048576, 4194304, 16777216])),
+        ("blackhole", 2, 1499136, np.array([4096, 16384, 65536, 262144, 1048576, 4194304, 16777216])),
     ],
 )
 def test_pcie_h2d_l1(arch, iteration, L1_size, test_vector):
@@ -443,6 +634,7 @@ def test_pcie_h2d_l1(arch, iteration, L1_size, test_vector):
     [
         ("grayskull", 2, 1048576, np.array([4096, 16384, 65536])),
         ("wormhole_b0", 2, 1499136, np.array([4096, 16384, 65536])),
+        ("blackhole", 2, 1499136, np.array([4096, 16384, 65536])),
     ],
 )
 def test_pcie_d2h_l1(arch, iteration, L1_size, test_vector):
@@ -527,155 +719,28 @@ def test_matmul_dram(arch, freq, r, c, test_vector):
 
 
 @pytest.mark.parametrize(
-    "arch, freq, test_vector, dtype, fidel, matmul_block, num_blocks, packer_l1_acc, fp32_dest_acc, interm_cb_dtype, subblock_index",
+    "arch, freq, test_vector, dtype, fidel, matmul_block, num_blocks, packer_l1_acc, fp32_dest_acc, interm_cb_dtype, subblock_index, baseline",
     [
         # ########################### 512 512 512 x 8 subblock 4 2 ################################
-        ("wormhole_b0", 1000, np.array([[512, 512, 512]]), 0, 0, 0, 8, 0, 0, 0, 0),
-        ("wormhole_b0", 1000, np.array([[512, 512, 512]]), 0, 1, 0, 8, 0, 0, 0, 0),
-        ("wormhole_b0", 1000, np.array([[512, 512, 512]]), 0, 0, 1, 8, 0, 0, 0, 0),
-        ("wormhole_b0", 1000, np.array([[512, 512, 512]]), 0, 1, 1, 8, 0, 0, 0, 0),
-        ("wormhole_b0", 1000, np.array([[512, 512, 512]]), 0, 0, 1, 8, 1, 0, 0, 0),
-        ("wormhole_b0", 1000, np.array([[512, 512, 512]]), 0, 1, 1, 8, 1, 0, 0, 0),
+        ("wormhole_b0", 1000, np.array([[512, 512, 512]]), 0, 0, 1, 8, 0, 0, 0, 0, 717089.0),
+        ("wormhole_b0", 1000, np.array([[512, 512, 512]]), 0, 1, 1, 8, 0, 0, 0, 0, 1233930.0),
+        ("wormhole_b0", 1000, np.array([[512, 512, 512]]), 0, 0, 1, 8, 1, 0, 0, 0, 664492.0),
+        ("wormhole_b0", 1000, np.array([[512, 512, 512]]), 0, 1, 1, 8, 1, 0, 0, 0, 1173029.0),
         # ########################### 512 512 256x8 subblock 4 2 ################################
-        # ("wormhole_b0", 1000, np.array([[512, 512, 256]]), 0, 0, 0, 8, 0, 0, 0, 0),
-        # ("wormhole_b0", 1000, np.array([[512, 512, 256]]), 0, 1, 0, 8, 0, 0, 0, 0),
-        # ("wormhole_b0", 1000, np.array([[512, 512, 256]]), 0, 0, 1, 8, 0, 0, 0, 0),
-        # ("wormhole_b0", 1000, np.array([[512, 512, 256]]), 0, 1, 1, 8, 0, 0, 0, 0),
-        # ("wormhole_b0", 1000, np.array([[512, 512, 256]]), 0, 0, 1, 8, 1, 0, 0, 0),
-        # ("wormhole_b0", 1000, np.array([[512, 512, 256]]), 0, 1, 1, 8, 1, 0, 0, 0),
-        # ########################### 512 512 256x8 subblock 4 2 num_block 2 #####################
-        # ("wormhole_b0", 1000, np.array([[512, 512, 256]]), 0, 0, 0, 2, 0, 0, 0, 0),
-        # ("wormhole_b0", 1000, np.array([[512, 512, 256]]), 0, 1, 0, 2, 0, 0, 0, 0),
-        # ("wormhole_b0", 1000, np.array([[512, 512, 256]]), 0, 0, 1, 2, 0, 0, 0, 0),
-        # ("wormhole_b0", 1000, np.array([[512, 512, 256]]), 0, 1, 1, 2, 0, 0, 0, 0),
-        # ("wormhole_b0", 1000, np.array([[512, 512, 256]]), 0, 0, 1, 2, 1, 0, 0, 0),
-        # ("wormhole_b0", 1000, np.array([[512, 512, 256]]), 0, 1, 1, 2, 1, 0, 0, 0),
-        # ########################### 512 512 256x8 subblock 4 2 num_block 16 #####################
-        # ("wormhole_b0", 1000, np.array([[512, 512, 256]]), 0, 0, 0, 16, 0, 0, 0, 0),
-        # ("wormhole_b0", 1000, np.array([[512, 512, 256]]), 0, 1, 0, 16, 0, 0, 0, 0),
-        # ("wormhole_b0", 1000, np.array([[512, 512, 256]]), 0, 0, 1, 16, 0, 0, 0, 0),
-        # ("wormhole_b0", 1000, np.array([[512, 512, 256]]), 0, 1, 1, 16, 0, 0, 0, 0),
-        # ("wormhole_b0", 1000, np.array([[512, 512, 256]]), 0, 0, 1, 16, 1, 0, 0, 0),
-        # ("wormhole_b0", 1000, np.array([[512, 512, 256]]), 0, 1, 1, 16, 1, 0, 0, 0),
-        # # ########################### 512 512 256x8 subblock 1 8 ################################
-        # ("wormhole_b0", 1000, np.array([[512, 512, 256]]), 0, 0, 0, 8, 0, 0, 0, 3),
-        # ("wormhole_b0", 1000, np.array([[512, 512, 256]]), 0, 1, 0, 8, 0, 0, 0, 3),
-        # ("wormhole_b0", 1000, np.array([[512, 512, 256]]), 0, 0, 1, 8, 0, 0, 0, 3),
-        # ("wormhole_b0", 1000, np.array([[512, 512, 256]]), 0, 1, 1, 8, 0, 0, 0, 3),
-        # ("wormhole_b0", 1000, np.array([[512, 512, 256]]), 0, 0, 1, 8, 1, 0, 0, 3),
-        # ("wormhole_b0", 1000, np.array([[512, 512, 256]]), 0, 1, 1, 8, 1, 0, 0, 3),
-        # ########################### 512 512 256x8 subblock 8 1 ################################
-        # ("wormhole_b0", 1000, np.array([[512, 512, 256]]), 0, 0, 0, 8, 0, 0, 0, 2),
-        # ("wormhole_b0", 1000, np.array([[512, 512, 256]]), 0, 1, 0, 8, 0, 0, 0, 2),
-        # ("wormhole_b0", 1000, np.array([[512, 512, 256]]), 0, 0, 1, 8, 0, 0, 0, 2),
-        # ("wormhole_b0", 1000, np.array([[512, 512, 256]]), 0, 1, 1, 8, 0, 0, 0, 2),
-        # ("wormhole_b0", 1000, np.array([[512, 512, 256]]), 0, 0, 1, 8, 1, 0, 0, 2),
-        # ("wormhole_b0", 1000, np.array([[512, 512, 256]]), 0, 1, 1, 8, 1, 0, 0, 2),
-        # ########################## 512 512 256x8  FP16 subblock 4 2 ##########################
-        # ("wormhole_b0", 1000, np.array([[512, 512, 256]]), 1, 0, 0, 8, 0, 0, 0, 0),
-        # ("wormhole_b0", 1000, np.array([[512, 512, 256]]), 1, 1, 0, 8, 0, 0, 0, 0),
-        # ("wormhole_b0", 1000, np.array([[512, 512, 256]]), 1, 0, 1, 8, 0, 0, 0, 0),
-        # ("wormhole_b0", 1000, np.array([[512, 512, 256]]), 1, 1, 1, 8, 0, 0, 0, 0),
-        # ("wormhole_b0", 1000, np.array([[512, 512, 256]]), 1, 0, 1, 8, 1, 0, 0, 0),
-        # ("wormhole_b0", 1000, np.array([[512, 512, 256]]), 1, 1, 1, 8, 1, 0, 0, 0),
-        # ########################## 512 512 256x8  FP16 subblock 4 2 num_block 2 ################
-        # ("wormhole_b0", 1000, np.array([[512, 512, 256]]), 1, 0, 0, 2, 0, 0, 0, 0),
-        # ("wormhole_b0", 1000, np.array([[512, 512, 256]]), 1, 1, 0, 2, 0, 0, 0, 0),
-        # ("wormhole_b0", 1000, np.array([[512, 512, 256]]), 1, 0, 1, 2, 0, 0, 0, 0),
-        # ("wormhole_b0", 1000, np.array([[512, 512, 256]]), 1, 1, 1, 2, 0, 0, 0, 0),
-        # ("wormhole_b0", 1000, np.array([[512, 512, 256]]), 1, 0, 1, 2, 1, 0, 0, 0),
-        # ("wormhole_b0", 1000, np.array([[512, 512, 256]]), 1, 1, 1, 2, 1, 0, 0, 0),
-        # ########################## 512 512 256x8  FP16 subblock 4 2 num_block 16 ################
-        # ("wormhole_b0", 1000, np.array([[512, 512, 256]]), 1, 0, 0, 16, 0, 0, 0, 0),
-        # ("wormhole_b0", 1000, np.array([[512, 512, 256]]), 1, 1, 0, 16, 0, 0, 0, 0),
-        # ("wormhole_b0", 1000, np.array([[512, 512, 256]]), 1, 0, 1, 16, 0, 0, 0, 0),
-        # ("wormhole_b0", 1000, np.array([[512, 512, 256]]), 1, 1, 1, 16, 0, 0, 0, 0),
-        # ("wormhole_b0", 1000, np.array([[512, 512, 256]]), 1, 0, 1, 16, 1, 0, 0, 0),
-        # ("wormhole_b0", 1000, np.array([[512, 512, 256]]), 1, 1, 1, 16, 1, 0, 0, 0),
-        # ########################## 512 512 256x8  FP16 subblock 1 8  ##########################
-        # ("wormhole_b0", 1000, np.array([[512, 512, 256]]), 1, 0, 0, 8, 0, 0, 0, 3),
-        # ("wormhole_b0", 1000, np.array([[512, 512, 256]]), 1, 1, 0, 8, 0, 0, 0, 3),
-        # ("wormhole_b0", 1000, np.array([[512, 512, 256]]), 1, 0, 1, 8, 0, 0, 0, 3),
-        # ("wormhole_b0", 1000, np.array([[512, 512, 256]]), 1, 1, 1, 8, 0, 0, 0, 3),
-        # ("wormhole_b0", 1000, np.array([[512, 512, 256]]), 1, 0, 1, 8, 1, 0, 0, 3),
-        # ("wormhole_b0", 1000, np.array([[512, 512, 256]]), 1, 1, 1, 8, 1, 0, 0, 3),
-        # ########################## 512 512 256x8  FP16 subblock 8 1  ##########################
-        # ("wormhole_b0", 1000, np.array([[512, 512, 256]]), 1, 0, 0, 8, 0, 0, 0, 2),
-        # ("wormhole_b0", 1000, np.array([[512, 512, 256]]), 1, 1, 0, 8, 0, 0, 0, 2),
-        # ("wormhole_b0", 1000, np.array([[512, 512, 256]]), 1, 0, 1, 8, 0, 0, 0, 2),
-        # ("wormhole_b0", 1000, np.array([[512, 512, 256]]), 1, 1, 1, 8, 0, 0, 0, 2),
-        # ("wormhole_b0", 1000, np.array([[512, 512, 256]]), 1, 0, 1, 8, 1, 0, 0, 2),
-        # ("wormhole_b0", 1000, np.array([[512, 512, 256]]), 1, 1, 1, 8, 1, 0, 0, 2),
-        # ########################### 1024 256 256x8 ####################################
-        # ("wormhole_b0", 1000, np.array([[1024, 256, 256]]), 0, 0, 0, 8, 0, 0, 0, 0),
-        # ("wormhole_b0", 1000, np.array([[1024, 256, 256]]), 0, 1, 0, 8, 0, 0, 0, 0),
-        # ("wormhole_b0", 1000, np.array([[1024, 256, 256]]), 0, 0, 1, 8, 0, 0, 0, 0),
-        # ("wormhole_b0", 1000, np.array([[1024, 256, 256]]), 0, 1, 1, 8, 0, 0, 0, 0),
-        # ("wormhole_b0", 1000, np.array([[1024, 256, 256]]), 0, 0, 1, 8, 1, 0, 0, 0),
-        # ("wormhole_b0", 1000, np.array([[1024, 256, 256]]), 0, 1, 1, 8, 1, 0, 0, 0),
-        # ########################### 1024 256 256x8 FP16 ############################
-        # ("wormhole_b0", 1000, np.array([[1024, 256, 256]]), 1, 0, 0, 8, 0, 0, 0, 0),
-        # ("wormhole_b0", 1000, np.array([[1024, 256, 256]]), 1, 1, 0, 8, 0, 0, 0, 0),
-        # ("wormhole_b0", 1000, np.array([[1024, 256, 256]]), 1, 0, 1, 8, 0, 0, 0, 0),
-        # ("wormhole_b0", 1000, np.array([[1024, 256, 256]]), 1, 1, 1, 8, 0, 0, 0, 0),
-        # ("wormhole_b0", 1000, np.array([[1024, 256, 256]]), 1, 0, 1, 8, 1, 0, 0, 0),
-        # ("wormhole_b0", 1000, np.array([[1024, 256, 256]]), 1, 1, 1, 8, 1, 0, 0, 0),
-        # ########################### 256 1024 256x8  ####################################
-        # ("wormhole_b0", 1000, np.array([[256, 1024, 256]]), 0, 0, 0, 8, 0, 0, 0, 0),
-        # ("wormhole_b0", 1000, np.array([[256, 1024, 256]]), 0, 1, 0, 8, 0, 0, 0, 0),
-        # ("wormhole_b0", 1000, np.array([[256, 1024, 256]]), 0, 0, 1, 8, 0, 0, 0, 0),
-        # ("wormhole_b0", 1000, np.array([[256, 1024, 256]]), 0, 1, 1, 8, 0, 0, 0, 0),
-        # ("wormhole_b0", 1000, np.array([[256, 1024, 256]]), 0, 0, 1, 8, 1, 0, 0, 0),
-        # ("wormhole_b0", 1000, np.array([[256, 1024, 256]]), 0, 1, 1, 8, 1, 0, 0, 0),
-        # ########################### 256 1024 256x8 FP16 ################################
-        # ("wormhole_b0", 1000, np.array([[256, 1024, 256]]), 1, 0, 0, 8, 0, 0, 0, 0),
-        # ("wormhole_b0", 1000, np.array([[256, 1024, 256]]), 1, 1, 0, 8, 0, 0, 0, 0),
-        # ("wormhole_b0", 1000, np.array([[256, 1024, 256]]), 1, 0, 1, 8, 0, 0, 0, 0),
-        # ("wormhole_b0", 1000, np.array([[256, 1024, 256]]), 1, 1, 1, 8, 0, 0, 0, 0),
-        # ("wormhole_b0", 1000, np.array([[256, 1024, 256]]), 1, 0, 1, 8, 1, 0, 0, 0),
-        # ("wormhole_b0", 1000, np.array([[256, 1024, 256]]), 1, 1, 1, 8, 1, 0, 0, 0),
-        # ########################### 256 512 256x8 FP32 subblock 2 2 #####################
-        # ("wormhole_b0", 1000, np.array([[256, 512, 256]]), 0, 0, 0, 8, 0, 1, 1, 0),
-        # ("wormhole_b0", 1000, np.array([[256, 512, 256]]), 0, 1, 0, 8, 0, 1, 1, 0),
-        # ("wormhole_b0", 1000, np.array([[256, 512, 256]]), 0, 0, 1, 8, 0, 1, 1, 0),
-        # ("wormhole_b0", 1000, np.array([[256, 512, 256]]), 0, 1, 1, 8, 0, 1, 1, 0),
-        # ("wormhole_b0", 1000, np.array([[256, 512, 256]]), 0, 0, 1, 8, 1, 1, 1, 0),
-        # ("wormhole_b0", 1000, np.array([[256, 512, 256]]), 0, 1, 1, 8, 1, 1, 1, 0),
-        # # ########################### 256 512 256x8 input:FP16 FP32 subblock 2 2 #########
-        # ("wormhole_b0", 1000, np.array([[256, 512, 256]]), 1, 0, 0, 8, 0, 1, 1, 0),
-        # ("wormhole_b0", 1000, np.array([[256, 512, 256]]), 1, 1, 0, 8, 0, 1, 1, 0),
-        # ("wormhole_b0", 1000, np.array([[256, 512, 256]]), 1, 0, 1, 8, 0, 1, 1, 0),
-        # ("wormhole_b0", 1000, np.array([[256, 512, 256]]), 1, 1, 1, 8, 0, 1, 1, 0),
-        # ("wormhole_b0", 1000, np.array([[256, 512, 256]]), 1, 0, 1, 8, 1, 1, 1, 0),
-        # ("wormhole_b0", 1000, np.array([[256, 512, 256]]), 1, 1, 1, 8, 1, 1, 1, 0),
-        # ########################### 256 512 256x8 FP32 subblock 1 4 #####################
-        # ("wormhole_b0", 1000, np.array([[256, 512, 256]]), 0, 0, 0, 8, 0, 1, 1, 3),
-        # ("wormhole_b0", 1000, np.array([[256, 512, 256]]), 0, 1, 0, 8, 0, 1, 1, 3),
-        # ("wormhole_b0", 1000, np.array([[256, 512, 256]]), 0, 0, 1, 8, 0, 1, 1, 3),
-        # ("wormhole_b0", 1000, np.array([[256, 512, 256]]), 0, 1, 1, 8, 0, 1, 1, 3),
-        # ("wormhole_b0", 1000, np.array([[256, 512, 256]]), 0, 0, 1, 8, 1, 1, 1, 3),
-        # ("wormhole_b0", 1000, np.array([[256, 512, 256]]), 0, 1, 1, 8, 1, 1, 1, 3),
-        # # ########################### 256 512 256x8 input:FP16 FP32 subblock 1 4 #########
-        # ("wormhole_b0", 1000, np.array([[256, 512, 256]]), 1, 0, 0, 8, 0, 1, 1, 3),
-        # ("wormhole_b0", 1000, np.array([[256, 512, 256]]), 1, 1, 0, 8, 0, 1, 1, 3),
-        # ("wormhole_b0", 1000, np.array([[256, 512, 256]]), 1, 0, 1, 8, 0, 1, 1, 3),
-        # ("wormhole_b0", 1000, np.array([[256, 512, 256]]), 1, 1, 1, 8, 0, 1, 1, 3),
-        # ("wormhole_b0", 1000, np.array([[256, 512, 256]]), 1, 0, 1, 8, 1, 1, 1, 3),
-        # ("wormhole_b0", 1000, np.array([[256, 512, 256]]), 1, 1, 1, 8, 1, 1, 1, 3),
-        # ########################### 256 512 256x8 FP32 interm_cb FP16 #####################
-        # ("wormhole_b0", 1000, np.array([[256, 512, 256]]), 0, 0, 0, 8, 0, 1, 0, 0),
-        # ("wormhole_b0", 1000, np.array([[256, 512, 256]]), 0, 1, 0, 8, 0, 1, 0, 0),
-        # ("wormhole_b0", 1000, np.array([[256, 512, 256]]), 0, 0, 1, 8, 0, 1, 0, 0),
-        # ("wormhole_b0", 1000, np.array([[256, 512, 256]]), 0, 1, 1, 8, 0, 1, 0, 0),
-        # ("wormhole_b0", 1000, np.array([[256, 512, 256]]), 0, 0, 1, 8, 1, 1, 0, 0),
-        # ("wormhole_b0", 1000, np.array([[256, 512, 256]]), 0, 1, 1, 8, 1, 1, 0, 0),
-        # ########################### 256 512 256x8 input:FP16 FP32 interm_cb FP16  #########
-        # ("wormhole_b0", 1000, np.array([[256, 512, 256]]), 1, 0, 0, 8, 0, 1, 0, 0),
-        # ("wormhole_b0", 1000, np.array([[256, 512, 256]]), 1, 1, 0, 8, 0, 1, 0, 0),
-        # ("wormhole_b0", 1000, np.array([[256, 512, 256]]), 1, 0, 1, 8, 0, 1, 0, 0),
-        # ("wormhole_b0", 1000, np.array([[256, 512, 256]]), 1, 1, 1, 8, 0, 1, 0, 0),
-        # ("wormhole_b0", 1000, np.array([[256, 512, 256]]), 1, 0, 1, 8, 1, 1, 0, 0),
-        # ("wormhole_b0", 1000, np.array([[256, 512, 256]]), 1, 1, 1, 8, 1, 1, 0, 0),
+        ("wormhole_b0", 1000, np.array([[512, 512, 256]]), 0, 0, 1, 8, 0, 0, 0, 0, 399068.0),
+        ("wormhole_b0", 1000, np.array([[512, 512, 256]]), 0, 1, 1, 8, 0, 0, 0, 0, 658522.0),
+        ("wormhole_b0", 1000, np.array([[512, 512, 256]]), 0, 0, 1, 8, 1, 0, 0, 0, 346350.0),
+        ("wormhole_b0", 1000, np.array([[512, 512, 256]]), 0, 1, 1, 8, 1, 0, 0, 0, 597457.0),
+        # ########################### 512 512 512 x 8 subblock 4 2 ################################
+        ("blackhole", 800, np.array([[512, 512, 512]]), 0, 0, 1, 8, 0, 0, 0, 0, 717089.0),
+        ("blackhole", 800, np.array([[512, 512, 512]]), 0, 1, 1, 8, 0, 0, 0, 0, 1233930.0),
+        ("blackhole", 800, np.array([[512, 512, 512]]), 0, 0, 1, 8, 1, 0, 0, 0, 664492.0),
+        ("blackhole", 800, np.array([[512, 512, 512]]), 0, 1, 1, 8, 1, 0, 0, 0, 1173029.0),
+        # ########################### 512 512 256x8 subblock 4 2 ################################
+        ("blackhole", 800, np.array([[512, 512, 256]]), 0, 0, 1, 8, 0, 0, 0, 0, 399068.0),
+        ("blackhole", 800, np.array([[512, 512, 256]]), 0, 1, 1, 8, 0, 0, 0, 0, 658522.0),
+        ("blackhole", 800, np.array([[512, 512, 256]]), 0, 0, 1, 8, 1, 0, 0, 0, 346350.0),
+        ("blackhole", 800, np.array([[512, 512, 256]]), 0, 1, 1, 8, 1, 0, 0, 0, 597457.0),
     ],
 )
 def test_matmul_single_core_sharded(
@@ -690,10 +755,11 @@ def test_matmul_single_core_sharded(
     fp32_dest_acc,
     interm_cb_dtype,
     subblock_index,
+    baseline,
 ):
     file_name = PROFILER_LOGS_DIR / "moreh_single_core_Matmul_Sharded.csv"
     header = ["Kernel Duration (Cycles)"]
-    data = []
+    kernel_durations_cycle = []
     for vec in test_vector:
         m = int(vec[0])
         n = int(vec[1])
@@ -712,14 +778,325 @@ def test_matmul_single_core_sharded(
             subblock_index,
         )
         cycle = profile_results_kernel_duration()
+        dev_freq = get_device_freq()
         logger.info("cycle: " + str(cycle))
         num_op = vec[0] * vec[1] * vec[2] * 2
-        time = cycle / freq / 1000.0
+        time = cycle / dev_freq / 1000.0
         throughput = num_op / time / 1000.0 / 1000.0 / 1000.0
-        data.append([cycle])
+        kernel_durations_cycle.append([cycle])
+
+    max_diff = 0.01
+
+    percentage_diff = np.abs(kernel_durations_cycle[0][0] - baseline) / baseline
+    is_within_range = percentage_diff < max_diff
+    if is_within_range == False:
+        logger.info(
+            "Diff is too large! kernel duration: {}, baseline: {}, diff: {}",
+            kernel_durations_cycle[0][0],
+            baseline,
+            percentage_diff,
+        )
+
     write_header = not os.path.exists(file_name)
-    append_to_csv(file_name, header, data, write_header)
-    return
+    append_to_csv(file_name, header, kernel_durations_cycle, write_header)
+    assert is_within_range
+
+
+@pytest.mark.parametrize(
+    "arch, freq, test_vector, num_tests, nblock, data_format, num_banks, bank_start_id",
+    [
+        ("wormhole_b0", 1000, np.array([32768, 12 * 128]), 1, 8, 0, 12, 0),
+        ("wormhole_b0", 1000, np.array([32768, 12 * 128]), 1, 8, 1, 12, 0),
+        ("wormhole_b0", 1000, np.array([2048, 3840]), 1, 4, 1, 12, 0),  # Padded FF1 shapes for llama 70b on TG
+        ("blackhole", 800, np.array([32768, 8 * 128]), 1, 8, 0, 8, 0),
+        ("blackhole", 800, np.array([32768, 8 * 128]), 1, 8, 1, 8, 0),
+        ("blackhole", 800, np.array([2048, 3840]), 1, 4, 1, 8, 0),  # Padded FF1 shapes for llama 70b on TG
+    ],
+)
+def test_dram_read_all_core(arch, freq, test_vector, num_tests, nblock, data_format, num_banks, bank_start_id):
+    data = []
+    cycle_list = []
+    time_list = []
+    throughput_list = []
+    for _ in range(num_tests):
+        k = int(test_vector[0])
+        n = int(test_vector[1])
+        if data_format == 0:
+            input_size = k * n * 1088 // 1024
+        elif data_format == 1:
+            input_size = k * n * 2048 // 1024
+        run_dram_read_cmd(k, n, nblock, data_format, num_banks, bank_start_id)
+        cycle = profile_results_kernel_duration()
+        time = cycle / freq / 1000.0 / 1000.0
+        throughput = input_size / cycle
+        logger.info("DRAM read cycle: " + str(cycle))
+        logger.info("DRAM read time: " + str(time))
+        logger.info("DRAM read throughput: " + str(throughput))
+        cycle_list.append(cycle)
+        time_list.append(time)
+        throughput_list.append(throughput)
+    cycle = sum(cycle_list) / len(cycle_list)
+    time = sum(time_list) / len(time_list)
+    throughput = sum(throughput_list) / len(throughput_list)
+    logger.info("DRAM read cycle: " + str(cycle))
+    logger.info("DRAM read time: " + str(time))
+    logger.info("DRAM read throughput: " + str(throughput))
+    data.append([throughput])
+    # check within range
+    dev_freq = get_device_freq()
+    bw_lower_bound = 260.0 * dev_freq / 1000.0
+    bw_upper_bound = bw_lower_bound + 10.0
+    assert bw_lower_bound <= throughput
+    assert throughput <= bw_upper_bound
+
+
+@pytest.mark.parametrize(
+    "arch, test_vector, num_tests, nblock, data_format, num_banks, bank_start_id, bw_target",
+    [
+        ("grayskull", np.array([32768 * 2, 8 * 128]), 1, 64, 1, 8, 0, None),
+        ("wormhole_b0", np.array([32768 * 2, 12 * 128]), 1, 64, 2, 12, 0, None),
+        ("blackhole", np.array([32768 * 8, 8 * 128]), 1, 256, 2, 8, 0, None),
+        # FF1/FF3 shapes for TG llama 70b
+        (
+            "wormhole_b0",
+            np.array([2048, 3840]),
+            1,
+            16,
+            0,
+            12,
+            0,
+            240,
+        ),  # 244 GB/s
+        (
+            "blackhole",
+            np.array([2048, 3840]),
+            1,
+            16,
+            0,
+            8,
+            0,
+            240,
+        ),  # 244 GB/s
+        # FF2 shapes for TG llama 70b
+        (
+            "wormhole_b0",
+            np.array([3584, 2304]),
+            1,
+            28,
+            1,
+            12,
+            0,
+            250,
+        ),  # 255 GB/s
+        (
+            "blackhole",
+            np.array([3584, 2304]),
+            1,
+            28,
+            1,
+            8,
+            0,
+            250,
+        ),  # 255 GB/s
+        # Dense Out shapes for TG llama 70b
+        (
+            "wormhole_b0",
+            np.array([1024, 2304]),
+            1,
+            8,
+            1,
+            12,
+            0,
+            220,
+        ),  # 226 GB/s
+        (
+            "blackhole",
+            np.array([1024, 2304]),
+            1,
+            8,
+            1,
+            8,
+            0,
+            220,
+        ),  # 226 GB/s
+        # QKV shapes for TG llama 70b
+        (
+            "wormhole_b0",
+            np.array([2048, 1536]),
+            1,
+            16,
+            1,
+            12,
+            0,
+            225,
+        ),  # 232 GB/s
+        (
+            "blackhole",
+            np.array([2048, 1536]),
+            1,
+            16,
+            1,
+            8,
+            0,
+            225,
+        ),  # 232 GB/ss
+    ],
+)
+def test_dram_read_l1_write_core(
+    arch, test_vector, num_tests, nblock, data_format, num_banks, bank_start_id, bw_target
+):
+    data = []
+    cycle_list = []
+    time_list = []
+    throughput_list = []
+    for _ in range(num_tests):
+        k = int(test_vector[0])
+        n = int(test_vector[1])
+        if data_format == 0:  # BFP4
+            input_size = k * n * (512 + 64) // 1024
+        elif data_format == 1:  # BFP8
+            input_size = k * n * 1088 // 1024
+        elif data_format == 2:  # BFLOAT16
+            input_size = k * n * 2048 // 1024
+        run_dram_read_l1_write_cmd(k, n, nblock, data_format, num_banks, bank_start_id)
+        cycle = profile_results_kernel_duration()
+        dev_freq = get_device_freq()
+        time = cycle / dev_freq / 1000.0 / 1000.0
+        throughput = input_size / cycle * dev_freq / 1000.0
+        cycle_list.append(cycle)
+        time_list.append(time)
+        throughput_list.append(throughput)
+    cycle = sum(cycle_list) / len(cycle_list)
+    time = sum(time_list) / len(time_list)
+    throughput = sum(throughput_list) / len(throughput_list)
+    logger.info("DRAM read cycle: " + str(cycle))
+    logger.info("DRAM read time: " + str(time))
+    logger.info("DRAM read throughput: " + str(throughput))
+    data.append([throughput])
+    # check within range
+    if arch == "grayskull":
+        bw_lower_bound = 70.0  # Equals 85 GB/s with 1200 MHz
+    elif arch == "wormhole_b0":
+        bw_lower_bound = 260.0
+    elif arch == "blackhole":
+        bw_lower_bound = 340.0
+    if bw_target is not None:
+        bw_lower_bound = bw_target
+    bw_lower_bound = (
+        bw_lower_bound * dev_freq / 1000.0
+    )  # Adjust for device frequency; target is based on max device frequency
+    assert bw_lower_bound <= throughput
+    bw_upper_bound = bw_lower_bound + 10.0
+    assert throughput <= bw_upper_bound
+
+
+@pytest.mark.parametrize(
+    "arch, test, test_vector, num_tests, nblock, cb_nblock, cb_padding, data_format, num_receivers, num_mixed_df_layers",
+    [
+        # single layer single receiver test
+        ("wormhole_b0", None, np.array([32768, 128]), 1, 64, 5, 256, 1, 1, 1),
+        # single layer multi receiver test
+        ("wormhole_b0", None, np.array([32768, 128]), 1, 64, 3, 256, 1, 2, 1),
+        # multi layer multi receiver test
+        ("wormhole_b0", None, np.array([32768, 256]), 1, 64, 5, 256, 1, 4, 15),
+        # Matmul test does not support mixed data format, just test for either bfp8 or fp16
+        # single layer single receiver test
+        ("wormhole_b0", "Matmul", np.array([32, 4096, 128]), 1, 8, 10, 256, 0, 1, 1),
+        ("wormhole_b0", "Matmul", np.array([32, 2048, 128]), 1, 8, 10, 256, 1, 1, 1),
+        # # single layer multi receiver test
+        ("wormhole_b0", "Matmul", np.array([32, 2048, 128]), 1, 8, 10, 256, 1, 2, 1),
+        # # multi layer multi receiver test
+        ("wormhole_b0", "Matmul", np.array([32, 2048, 128]), 1, 8, 10, 256, 1, 2, 15),
+        # single layer single receiver test
+        ("blackhole", None, np.array([32768, 128]), 1, 64, 5, 256, 1, 1, 1),
+        # single layer multi receiver test
+        ("blackhole", None, np.array([32768, 128]), 1, 64, 3, 256, 1, 2, 1),
+        # multi layer multi receiver test
+        ("blackhole", None, np.array([32768, 256]), 1, 64, 5, 256, 1, 4, 15),
+        # Matmul test does not support mixed data format, just test for either bfp8 or fp16
+        # single layer single receiver test
+        ("blackhole", "Matmul", np.array([32, 4096, 128]), 1, 8, 10, 256, 0, 1, 1),
+        ("blackhole", "Matmul", np.array([32, 2048, 128]), 1, 8, 10, 256, 1, 1, 1),
+        # # single layer multi receiver test
+        ("blackhole", "Matmul", np.array([32, 2048, 128]), 1, 8, 10, 256, 1, 2, 1),
+        # # multi layer multi receiver test
+        ("blackhole", "Matmul", np.array([32, 2048, 128]), 1, 8, 10, 256, 1, 2, 15),
+    ],
+)
+@pytest.mark.parametrize(
+    "use_sub_devices",
+    [False, True],
+)
+def test_dram_read_remote_cb_sync(
+    arch,
+    test,
+    test_vector,
+    num_tests,
+    nblock,
+    cb_nblock,
+    cb_padding,
+    data_format,
+    num_receivers,
+    num_mixed_df_layers,
+    use_sub_devices,
+):
+    data = []
+    cycle_list = []
+    time_list = []
+    throughput_list = []
+    for _ in range(num_tests):
+        if test == None:
+            k = int(test_vector[0])
+            n = int(test_vector[1])
+        elif test == "Matmul":
+            m = int(test_vector[0])
+            k = int(test_vector[1])
+            n = int(test_vector[2])
+        input_size = 0
+        if data_format == 0:
+            input_size += k * n * 1088 // 1024
+        elif data_format == 1:
+            input_size += k * n * 2048 // 1024
+        if test == None:
+            for i in range(num_mixed_df_layers - 1):
+                if i % 2 == 0:
+                    input_size += k * n * 1088 // 1024
+                else:
+                    input_size += k * n * 2048 // 1024
+            run_dram_read_remote_cb_sync_cmd(
+                k, n, nblock, cb_nblock, cb_padding, data_format, num_receivers, num_mixed_df_layers, use_sub_devices
+            )
+        elif test == "Matmul":
+            input_size = input_size * num_mixed_df_layers
+            run_remote_cb_sync_matmul_single_core_cmd(
+                m, k, n, nblock, cb_nblock, cb_padding, data_format, num_receivers, num_mixed_df_layers, use_sub_devices
+            )
+        cycle = profile_results_kernel_duration()
+        time = cycle / get_device_freq() / 1000.0 / 1000.0
+        throughput = input_size / cycle * get_device_freq() / 1000.0
+        cycle_list.append(cycle)
+        time_list.append(time)
+        throughput_list.append(throughput)
+    cycle = sum(cycle_list) / len(cycle_list)
+    time = sum(time_list) / len(time_list)
+    throughput = sum(throughput_list) / len(throughput_list)
+    logger.info("DRAM read cycle: " + str(cycle))
+    logger.info("DRAM read time: " + str(time))
+    logger.info("DRAM read throughput: " + str(throughput))
+    data.append([throughput])
+    # check within range
+    bw_lower_bound = 0.0
+    if test == None:
+        if arch == "wormhole_b0":
+            bw_lower_bound = 21.5
+    elif test == "Matmul":
+        if arch == "wormhole_b0":
+            bw_lower_bound = 18.0
+    bw_upper_bound = bw_lower_bound + 4.0
+    if use_sub_devices:
+        pytest.xfail("Tests using sub-devices is not correctly set up for BW measurements")
+    assert bw_lower_bound <= throughput
+    assert throughput <= bw_upper_bound
 
 
 @pytest.mark.parametrize(
@@ -727,6 +1104,7 @@ def test_matmul_single_core_sharded(
     [
         ("grayskull", 1020, 9, 12, np.array([[3456, 3072, 1024], [2304, 3072, 768]]), np.array([[2304, 3072, 768]])),
         ("wormhole_b0", 1000, 6, 6, np.array([[2304, 1536, 1024], [1536, 1536, 768]]), np.array([[1536, 1536, 768]])),
+        ("blackhole", 800, 6, 6, np.array([[2304, 1536, 1024], [1536, 1536, 768]]), np.array([[1536, 1536, 768]])),
     ],
 )
 def test_matmul_l1(arch, freq, r, c, test_vector_global, test_vector_local):
@@ -838,7 +1216,10 @@ def test_noc_adjacent(
     record_moreh_microbenchmark_csv,
 ):
     command = (
-        "./build/test/tt_metal/perf_microbenchmark/2_noc_adjacent/test_noc_adjacent "
+        "./build/test/tt_metal/perf_microbenchmark/2_noc_adjacent/test_noc_adjacent"
+        + "_"
+        + ARCH_NAME
+        + " "
         + "--cores-r "
         + str(r)
         + " --cores-c "

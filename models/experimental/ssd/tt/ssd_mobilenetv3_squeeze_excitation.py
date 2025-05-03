@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
-import tt_lib
+import ttnn
 import tt_lib.fallback_ops as fallback_ops
 from models.utility_functions import (
     torch_to_tt_tensor_rm,
@@ -29,12 +29,8 @@ class TtSqueezeExcitation(torch.nn.Module):
 
         self.avgpool = fallback_ops.AdaptiveAvgPool2d(1)
 
-        weight_fc1 = torch_to_tt_tensor_rm(
-            state_dict[f"{base_address}.fc1.weight"], device, put_on_device=False
-        )
-        bias_fc1 = torch_to_tt_tensor_rm(
-            state_dict[f"{base_address}.fc1.bias"], device, put_on_device=False
-        )
+        weight_fc1 = torch_to_tt_tensor_rm(state_dict[f"{base_address}.fc1.weight"], device, put_on_device=False)
+        bias_fc1 = torch_to_tt_tensor_rm(state_dict[f"{base_address}.fc1.bias"], device, put_on_device=False)
         self.fc1 = fallback_ops.Conv2d(
             weights=weight_fc1,
             biases=bias_fc1,
@@ -46,12 +42,8 @@ class TtSqueezeExcitation(torch.nn.Module):
             dilation=dilation,
         )
 
-        weight_fc2 = torch_to_tt_tensor_rm(
-            state_dict[f"{base_address}.fc2.weight"], device, put_on_device=False
-        )
-        bias_fc2 = torch_to_tt_tensor_rm(
-            state_dict[f"{base_address}.fc2.bias"], device, put_on_device=False
-        )
+        weight_fc2 = torch_to_tt_tensor_rm(state_dict[f"{base_address}.fc2.weight"], device, put_on_device=False)
+        bias_fc2 = torch_to_tt_tensor_rm(state_dict[f"{base_address}.fc2.bias"], device, put_on_device=False)
         self.fc2 = fallback_ops.Conv2d(
             weights=weight_fc2,
             biases=bias_fc2,
@@ -63,16 +55,14 @@ class TtSqueezeExcitation(torch.nn.Module):
             dilation=dilation,
         )
 
-        self.activation = tt_lib.tensor.relu
-        self.scale_activation = tt_lib.tensor.hardsigmoid
+        self.activation = ttnn.relu
+        self.scale_activation = ttnn.hardsigmoid
 
-    def forward(self, input: tt_lib.tensor.Tensor) -> tt_lib.tensor.Tensor:
+    def forward(self, input: ttnn.Tensor) -> ttnn.Tensor:
         scale = self.avgpool(input)
         scale = self.fc1(scale)
         scale = self.activation(scale)
         scale = self.fc2(scale)
         scale = self.scale_activation(scale)
-        final_out = tt_lib.tensor.bcast(
-            input, scale, tt_lib.tensor.BcastOpMath.MUL, tt_lib.tensor.BcastOpDim.HW
-        )
+        final_out = ttnn.multiply(input, scale)
         return final_out

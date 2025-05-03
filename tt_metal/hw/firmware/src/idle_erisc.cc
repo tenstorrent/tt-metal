@@ -19,39 +19,63 @@
 #include "tools/profiler/kernel_profiler.hpp"
 #include "dev_msgs.h"
 #include "risc_attribs.h"
-#include "noc_addr_ranges_gen.h"
-#include "generated_bank_to_noc_coord_mapping.h"
 #include "circular_buffer.h"
 #include "dataflow_api.h"
 
-#include "debug/status.h"
-#include "debug/dprint.h"
+#include "debug/watcher_common.h"
+#include "debug/waypoint.h"
+#include "debug/stack_usage.h"
+
+uint8_t noc_index;
 
 uint32_t noc_reads_num_issued[NUM_NOCS] __attribute__((used));
 uint32_t noc_nonposted_writes_num_issued[NUM_NOCS] __attribute__((used));
 uint32_t noc_nonposted_writes_acked[NUM_NOCS] __attribute__((used));
+uint32_t noc_nonposted_atomics_acked[NUM_NOCS] __attribute__((used));
+uint32_t noc_posted_writes_num_issued[NUM_NOCS] __attribute__((used));
+
+uint32_t tt_l1_ptr *rta_l1_base __attribute__((used));
+uint32_t tt_l1_ptr *crta_l1_base __attribute__((used));
+uint32_t tt_l1_ptr *sem_l1_base[ProgrammableCoreType::COUNT] __attribute__((used));
 
 uint8_t my_x[NUM_NOCS] __attribute__((used));
 uint8_t my_y[NUM_NOCS] __attribute__((used));
+uint8_t my_logical_x_ __attribute__((used));
+uint8_t my_logical_y_ __attribute__((used));
+uint8_t my_relative_x_ __attribute__((used));
+uint8_t my_relative_y_ __attribute__((used));
+
+// These arrays are stored in local memory of FW, but primarily used by the kernel which shares
+// FW symbols. Hence mark these as 'used' so that FW compiler doesn't optimize it out.
+uint16_t dram_bank_to_noc_xy[NUM_NOCS][NUM_DRAM_BANKS] __attribute__((used));
+uint16_t l1_bank_to_noc_xy[NUM_NOCS][NUM_L1_BANKS] __attribute__((used));
+int32_t bank_to_dram_offset[NUM_DRAM_BANKS] __attribute__((used));
+int32_t bank_to_l1_offset[NUM_L1_BANKS] __attribute__((used));
 
 //c_tensix_core core;
 
 tt_l1_ptr mailboxes_t * const mailboxes = (tt_l1_ptr mailboxes_t *)(MEM_IERISC_MAILBOX_BASE);
 
-constexpr uint32_t num_cbs_to_early_init = 4;  // safe small number to overlap w/ ncrisc copy
-
 CBInterface cb_interface[NUM_CIRCULAR_BUFFERS] __attribute__((used));
 
+#if defined(PROFILE_KERNEL)
 namespace kernel_profiler {
     uint32_t wIndex __attribute__((used));
     uint32_t stackSize __attribute__((used));
     uint32_t sums[SUM_COUNT] __attribute__((used));
     uint32_t sumIDs[SUM_COUNT] __attribute__((used));
 }
+#endif
 
-inline void RISC_POST_STATUS(uint32_t status) {
-  volatile uint32_t* ptr = (volatile uint32_t*)(NOC_CFG(ROUTER_CFG_2));
-  ptr[0] = status;
+//inline void RISC_POST_STATUS(uint32_t status) {
+//  volatile uint32_t* ptr = (volatile uint32_t*)(NOC_CFG(ROUTER_CFG_2));
+//  ptr[0] = status;
+//}
+
+void set_deassert_addresses() {
+#ifdef ARCH_BLACKHOLE
+    WRITE_REG(SLAVE_IERISC_RESET_PC, MEM_SLAVE_IERISC_FIRMWARE_BASE);
+#endif
 }
 
 void init_sync_registers() {
@@ -65,64 +89,110 @@ void init_sync_registers() {
     }
 }
 
-int main() {
-
-    DEBUG_STATUS('I');
-    int32_t num_words = ((uint)__ldm_data_end - (uint)__ldm_data_start) >> 2;
-    uint32_t *local_mem_ptr = (uint32_t *)__ldm_data_start;
-    uint32_t *l1_data_ptr = (uint32_t *)MEM_IERISC_INIT_LOCAL_L1_BASE;
-    uint32_t heartbeat = 0;
-    for (int32_t i = 0; i < num_words; i++) {
-        local_mem_ptr[i] = l1_data_ptr[i];
+inline void run_slave_eriscs(dispatch_core_processor_masks enables) {
+    if (enables & DISPATCH_CLASS_MASK_ETH_DM1) {
+        mailboxes->slave_sync.dm1 = RUN_SYNC_MSG_GO;
     }
+}
+
+inline void wait_slave_eriscs(uint32_t &heartbeat) {
+    WAYPOINT("SEW");
+    while (mailboxes->slave_sync.all != RUN_SYNC_MSG_ALL_SLAVES_DONE) {
+        invalidate_l1_cache();
+        RISC_POST_HEARTBEAT(heartbeat);
+    }
+    WAYPOINT("SED");
+}
+
+int main() {
+    configure_l1_data_cache();
+    DIRTY_STACK_MEMORY();
+    WAYPOINT("I");
+    do_crt1((uint32_t *)MEM_IERISC_INIT_LOCAL_L1_BASE_SCRATCH);
+    uint32_t heartbeat = 0;
+
+    noc_bank_table_init(MEM_IERISC_BANK_TO_NOC_SCRATCH);
+
+    my_logical_x_ = mailboxes->core_info.absolute_logical_x;
+    my_logical_y_ = mailboxes->core_info.absolute_logical_y;
 
     risc_init();
+
+    mailboxes->slave_sync.all = RUN_SYNC_MSG_ALL_SLAVES_DONE;
+    set_deassert_addresses();
     //device_setup();
-    noc_init();
 
-    mailboxes->launch.run = RUN_MSG_DONE;
+    noc_init(MEM_NOC_ATOMIC_RET_VAL_ADDR);
+    for (uint32_t n = 0; n < NUM_NOCS; n++) {
+        noc_local_state_init(n);
+    }
 
+    deassert_all_reset(); // Bring all riscs on eth cores out of reset
+    mailboxes->go_message.signal = RUN_MSG_DONE;
+    mailboxes->launch_msg_rd_ptr = 0; // Initialize the rdptr to 0
     // Cleanup profiler buffer incase we never get the go message
+
+
     while (1) {
 
         init_sync_registers();
         // Wait...
-        DEBUG_STATUS('G', 'W');
-        while (mailboxes->launch.run != RUN_MSG_GO)
-        {
+        WAYPOINT("GW");
+        while (mailboxes->go_message.signal != RUN_MSG_GO) {
+            invalidate_l1_cache();
             RISC_POST_HEARTBEAT(heartbeat);
         };
-        DEBUG_STATUS('G', 'D');
+        WAYPOINT("GD");
 
         {
-            DeviceZoneScopedMainN("ERISC-FW");
+            // Idle ERISC Kernels aren't given go-signals corresponding to empty launch messages. Always profile this iteration, since it's guaranteed to be valid.
+            DeviceZoneScopedMainN("ERISC-IDLE-FW");
+            uint32_t launch_msg_rd_ptr = mailboxes->launch_msg_rd_ptr;
+            launch_msg_t* launch_msg_address = &(mailboxes->launch[launch_msg_rd_ptr]);
+            DeviceZoneSetCounter(launch_msg_address->kernel_config.host_assigned_id);
 
-            uint32_t noc_index = mailboxes->launch.brisc_noc_id;
+            noc_index = launch_msg_address->kernel_config.brisc_noc_id;
+            my_relative_x_ = my_logical_x_ - launch_msg_address->kernel_config.sub_device_origin_x;
+            my_relative_y_ = my_logical_y_ - launch_msg_address->kernel_config.sub_device_origin_y;
 
-            //UC FIXME: do i need this?
-            setup_cb_read_write_interfaces(0, num_cbs_to_early_init, true, true);
+            flush_erisc_icache();
+
+            enum dispatch_core_processor_masks enables = (enum dispatch_core_processor_masks)launch_msg_address->kernel_config.enables;
+            run_slave_eriscs(enables);
+
+            uint32_t kernel_config_base =
+                firmware_config_init(mailboxes, ProgrammableCoreType::IDLE_ETH, DISPATCH_CLASS_ETH_DM0);
 
             // Run the ERISC kernel
-            DEBUG_STATUS('R');
-            //if (mailboxes->launch.enable_brisc) {
-                //UC FIXME: do i need this?
-                setup_cb_read_write_interfaces(num_cbs_to_early_init, mailboxes->launch.max_cb_index, true, true);
-                kernel_init();
-            //} else {
-                // This was not initialized in kernel_init
-            //    noc_local_state_init(noc_index);
-            //}
-            DEBUG_STATUS('D');
+            if (enables & DISPATCH_CLASS_MASK_ETH_DM0) {
+                WAYPOINT("R");
+                int index = static_cast<std::underlying_type<EthProcessorTypes>::type>(EthProcessorTypes::DM0);
+                void (*kernel_address)(uint32_t) = (void (*)(uint32_t))(
+                    kernel_config_base + launch_msg_address->kernel_config.kernel_text_offset[index]);
+                (*kernel_address)((uint32_t)kernel_address);
+                RECORD_STACK_USAGE();
+                WAYPOINT("D");
+            }
 
-            mailboxes->launch.run = RUN_MSG_DONE;
+            wait_slave_eriscs(heartbeat);
 
+            mailboxes->go_message.signal = RUN_MSG_DONE;
 
             // Notify dispatcher core that it has completed
-            if (mailboxes->launch.mode == DISPATCH_MODE_DEV) {
-                uint64_t dispatch_addr = NOC_XY_ADDR(NOC_X(DISPATCH_CORE_X), NOC_Y(DISPATCH_CORE_Y), DISPATCH_MESSAGE_ADDR);
-                noc_fast_atomic_increment(noc_index, NCRISC_AT_CMD_BUF, dispatch_addr, NOC_UNICAST_WRITE_VC, 1, 31 /*wrap*/, false /*linked*/);
+            if (launch_msg_address->kernel_config.mode == DISPATCH_MODE_DEV) {
+                launch_msg_address->kernel_config.enables = 0;
+                uint64_t dispatch_addr = calculate_dispatch_addr(&mailboxes->go_message);
+                DEBUG_SANITIZE_NOC_ADDR(noc_index, dispatch_addr, 4);
+                CLEAR_PREVIOUS_LAUNCH_MESSAGE_ENTRY_FOR_WATCHER();
+                notify_dispatch_core_done(dispatch_addr, noc_index);
+                mailboxes->launch_msg_rd_ptr = (launch_msg_rd_ptr + 1) & (launch_msg_buffer_num_entries - 1);
             }
         }
+#ifndef ARCH_BLACKHOLE
+        while (1) {
+            RISC_POST_HEARTBEAT(heartbeat);
+        }
+#endif
     }
 
     return 0;

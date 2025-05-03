@@ -4,7 +4,6 @@
 
 #pragma once
 
-
 #include "compute_kernel_api/common_globals.h"
 #ifdef TRISC_MATH
 #include "llk_math_eltwise_unary_sfpu_exp.h"
@@ -14,20 +13,17 @@
 #define MATH(x)
 #endif
 
-
-
 namespace ckernel {
 
 /**
  * Please refer to documentation for any_init.
  */
- ALWI void exp_tile_init(bool fast_and_approx=false) {
-    if ( fast_and_approx )
-        MATH(( llk_math_eltwise_unary_sfpu_exponential_init<true>() ));
-    else
-        MATH(( llk_math_eltwise_unary_sfpu_exponential_init<false>() ));
- }
+template <bool fast_and_approx = false>
+ALWI void exp_tile_init() {
+    MATH((llk_math_eltwise_unary_sfpu_exponential_init<fast_and_approx>()));
+}
 
+// clang-format off
 /**
  * Performs element-wise computation of exponential on each element of a tile
  * in DST register at index tile_index. The DST register buffer must be in
@@ -39,13 +35,13 @@ namespace ckernel {
  * | Argument        | Description                                                                | Type     | Valid Range                                           | Required |
  * |-----------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
  * | tile_index      | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
+ * | vector_mode     | VectorMode for sfpu math functions                                         | int      | Must be a valid VectorMode                            | False    |
  * | fast_and_approx | Computation to be done faster and approximate                              | bool     |                                                       | False    |
  */
-ALWI void exp_tile(uint32_t idst, bool fast_and_approx=false) {
-    if ( fast_and_approx )
-        MATH(( llk_math_eltwise_unary_sfpu_exponential<true>(idst) ));
-    else
-        MATH(( llk_math_eltwise_unary_sfpu_exponential<false>(idst) ));
- }
+// clang-format on
+template <bool fast_and_approx = false>
+ALWI void exp_tile(uint32_t idst, int vector_mode = (int)VectorMode::RC) {
+    MATH((llk_math_eltwise_unary_sfpu_exponential<fast_and_approx>(idst, vector_mode)));
+}
 
-} // namespace ckernel
+}  // namespace ckernel

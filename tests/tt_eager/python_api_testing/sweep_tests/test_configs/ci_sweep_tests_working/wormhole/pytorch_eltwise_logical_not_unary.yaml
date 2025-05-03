@@ -21,9 +21,9 @@ test-list:
       output-file: eltwise_logical_not_unary_sweep.csv
       args:
         data-layout: ["TILE"]
-        data-type: ["BFLOAT16"]
+        data-type: ["BFLOAT16", "BFLOAT8_B"]
         buffer-type: ["DRAM", "L1", "SYSTEM_MEMORY"]
-        out-buffer-type: ["DRAM"]
+        out-buffer-type: ["DRAM", "L1"]
   - eltwise-logical_not_unary:
       shape:
         start-shape: [1, 1, 2, 2]

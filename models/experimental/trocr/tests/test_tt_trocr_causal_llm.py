@@ -10,8 +10,6 @@ from PIL import Image
 from transformers import TrOCRProcessor, VisionEncoderDecoderModel
 from transformers import VisionEncoderDecoderModel
 
-import tt_lib
-
 from models.experimental.trocr.trocr_generate_utils import GenerationMixin
 
 
@@ -21,9 +19,7 @@ from models.experimental.trocr.trocr_generate_utils import GenerationMixin
 )
 def test_trocr_causal_llm_inference(device, pcc, reset_seeds):
     with torch.no_grad():
-        model = VisionEncoderDecoderModel.from_pretrained(
-            "microsoft/trocr-base-handwritten"
-        )
+        model = VisionEncoderDecoderModel.from_pretrained("microsoft/trocr-base-handwritten")
         generationmixin = GenerationMixin(
             model=model,
             config=model.decoder.config,
@@ -32,9 +28,7 @@ def test_trocr_causal_llm_inference(device, pcc, reset_seeds):
         )
         processor = TrOCRProcessor.from_pretrained("microsoft/trocr-base-handwritten")
         iam_ocr_sample_input = Image.open("models/sample_data/iam_ocr_image.jpg")
-        pixel_values = processor(
-            images=iam_ocr_sample_input, return_tensors="pt"
-        ).pixel_values
+        pixel_values = processor(images=iam_ocr_sample_input, return_tensors="pt").pixel_values
 
         with torch.no_grad():
             input_ids = generationmixin.generate(pixel_values)

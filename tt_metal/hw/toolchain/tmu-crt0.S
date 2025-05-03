@@ -1,32 +1,24 @@
-.section .init
+.section .start,"ax",@progbits
 .global _start
 .type   _start, @function
 
 _start:
+	// Use explicit lui/addi pairs here to generate absolute
+	// addresses, these will get relaxed to gp-relative
+	// computations where possible.
 
-CRT_START:
-  # Initialize global pointer
-  .option push
-  .option norelax
-1:auipc gp, %pcrel_hi(__global_pointer$)
-  addi  gp, gp, %pcrel_lo(1b)
+	.option push
+	.option norelax
+	// Initialize global pointer,
+	lui gp,%hi(__global_pointer$)
+	addi gp,gp,%lo(__global_pointer$)
+	.option pop
 
-/* set stack pointer */
-  la sp, __stack_top
+	// set stack pointer, reserve 16 bytes for main's arguments
+	lui	sp, %hi(__stack_top - 16)
+	addi	sp, sp, %lo(__stack_top - 16)
 
-  # Clear the bss segment
-  la      a0, __ldm_bss_start
-  la      a1, __ldm_bss_end
-  call    wzerorange
-
-  la      s2, __init_array_start
-  la      s3, __init_array_end
-  j       2f
-1:lw      a0, 0(s2)
-  jalr    a0
-  addi    s2, s2, 4
-2:bne     s2, s3, 1b
-  .option pop
+	// main is responsible for the rest of crt -- clear bss, copy data image, run global constructors
 
   /* Pass in the tensix coordinates as argv[0][0] through argv[0][3].
      argc = 1, envp = NULL. In memory, we'll have
@@ -35,28 +27,16 @@ CRT_START:
    * sp+8: s1
    * sp+c: 0
    */
-  addi    sp, sp, -16 /* (stack is aligned to 16 bytes in riscv calling convention) */
   addi    a0, sp, 8
-  sw      a0, 0(sp)
-  sw      zero, 4(sp)
-  sw      s1, 8(sp)
-  sw      zero, 12(sp)
+  sw      a0, 0(sp) // argv[0]
+  sw      zero, 4(sp) // argv[1]
+  sw      s1, 8(sp) // argv[0][0..3]
+  sw      zero, 12(sp) // argv[0][4..7]
 
-  li      a0, 1 # argc = 1
-  mv      a1, sp
-  mv      a2, zero
+  li      a0, 1 // argc = 1
+  mv      a1, sp // argv
+  mv      a2, zero // env
 
   call    main
   tail    exit
   .size  _start, .-_start
-
-  .global _init
-  .type   _init, @function
-  .global _fini
-  .type   _fini, @function
-_init:
-_fini:
-  # These don't have to do anything since we use init_array/fini_array.
-  ret
-  .size  _init, .-_init
-  .size  _fini, .-_fini

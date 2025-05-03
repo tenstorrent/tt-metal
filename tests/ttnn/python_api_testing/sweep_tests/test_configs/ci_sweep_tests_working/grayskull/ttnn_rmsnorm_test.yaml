@@ -5,8 +5,7 @@ test-list:
         start-shape: [32, 64]
         end-shape: [256, 512]
         interval: [32, 32]
-        #num-dims: [2]
-        num-shapes: 3
+        num-shapes: 2
         num-samples: 128
         args-sampling-strategy: "all"
         method: ttnn-rmsnorm
@@ -19,10 +18,11 @@ test-list:
           high: 100
       comparison:
         function: comp_pcc
-      args-gen: gen_ttnn_rmsnorm_args
+      args-gen: gen_dtype_layout_device
+      sanitize-args: False
       args:
         data-layout: ["TILE"]
-        data-type: ["BFLOAT16"]
+        data-type: ["BFLOAT16", "BFLOAT8_B"]
         buffer-type: ["DRAM", "L1"]
         out-buffer-type: ["DRAM", "L1"]
       output-file: ttnn_rmsnorm_sweep.csv

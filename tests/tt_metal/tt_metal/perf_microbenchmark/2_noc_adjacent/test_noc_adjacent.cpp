@@ -2,15 +2,39 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <chrono>
+#include <errno.h>
+#include <fmt/base.h>
+#include <stdint.h>
+#include <stdlib.h>
+#include <tt-metalium/allocator.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tt_metal.hpp>
 #include <algorithm>
-#include <functional>
-#include <random>
+#include <array>
+#include <cstring>
+#include <exception>
+#include <map>
+#include <memory>
+#include <optional>
 #include <string>
+#include <tuple>
+#include <utility>
+#include <variant>
+#include <vector>
 
-#include "common/bfloat16.hpp"
-#include "tt_metal/detail/tt_metal.hpp"
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/impl/dispatch/command_queue.hpp"
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/circular_buffer_types.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/data_types.hpp>
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/hal_types.hpp>
+#include <tt-metalium/kernel_types.hpp>
+#include <tt-metalium/logger.hpp>
+#include <tt-metalium/program.hpp>
+#include <tt_stl/span.hpp>
+#include "test_common.hpp"
+#include <tt-metalium/tt_backend_api_types.hpp>
 #include "tt_metal/tt_metal/perf_microbenchmark/common/util.hpp"
 
 using namespace tt;
@@ -54,7 +78,7 @@ int main(int argc, char** argv) {
     uint32_t num_cores_r = 0;
     uint32_t num_cores_c = 0;
     uint32_t num_tiles = 204800;
-    uint32_t noc_index;
+    uint32_t noc_index = 0;
     uint32_t noc_direction = 0;
     uint32_t access_type = 0;
     uint32_t tiles_per_transfer;
@@ -115,11 +139,11 @@ int main(int argc, char** argv) {
     }
 
     if (use_device_profiler) {
-#if !defined(PROFILER)
+#if !defined(TRACY_ENABLE)
         log_error(
             LogTest,
             "Metal library and test code should be build with "
-            "'ENABLE_PROFILER=1' to use device profiler");
+            "profiler option using ./build_metal.sh --enable-profiler");
 #endif
         auto device_profiler = getenv("TT_METAL_DEVICE_PROFILER");
         TT_FATAL(
@@ -134,7 +158,7 @@ int main(int argc, char** argv) {
         //                      Device Setup
         ////////////////////////////////////////////////////////////////////////////
         int device_id = 0;
-        tt_metal::Device* device = tt_metal::CreateDevice(device_id);
+        tt_metal::IDevice* device = tt_metal::CreateDevice(device_id);
 
         int clock_freq_mhz = get_tt_npu_clock(device);
         auto grid_coord = device->compute_with_storage_grid_size();
@@ -154,7 +178,7 @@ int main(int argc, char** argv) {
         uint32_t single_tile_size = 2 * 1024;
 
         uint32_t cb_src0_index = 0;
-        uint32_t cb_src0_addr = L1_UNRESERVED_BASE;
+        uint32_t cb_src0_addr = device->allocator()->get_base_allocator_addr(HalMemType::L1);
         tt_metal::CircularBufferConfig cb_src0_config =
             tt_metal::CircularBufferConfig(cb_tiles * single_tile_size, {{cb_src0_index, tt::DataFormat::Float16_b}})
                 .set_page_size(cb_src0_index, single_tile_size);
@@ -200,7 +224,7 @@ int main(int argc, char** argv) {
 
                 CoreCoord adjacent_core_noc = device->worker_core_from_logical_core(adjacent_core_logical);
 
-                vector<uint32_t> noc_runtime_args = {
+                const std::array noc_runtime_args = {
                     (uint32_t)adjacent_core_noc.x,
                     (uint32_t)adjacent_core_noc.y,
                     cb_src1_addr,
@@ -248,7 +272,7 @@ int main(int argc, char** argv) {
 
     // Determine if it passes performance goal
     auto avg_measured_bandwidth = calculate_average(measured_bandwidth);
-    if (pass && bypass_check == false) {
+    if (pass && !bypass_check) {
         // goal is 95% of theoretical peak using a single NOC channel
         // theoretical peak: 32bytes per clock cycle
         double target_bandwidth = 32.0 * 0.9;

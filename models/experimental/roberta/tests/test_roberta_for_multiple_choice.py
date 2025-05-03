@@ -8,17 +8,19 @@ import torch
 from loguru import logger
 from transformers import AutoTokenizer, RobertaForMultipleChoice
 
-import tt_lib
 
 from models.experimental.roberta.tt.roberta_for_multiple_choice import TtRobertaForMultipleChoice
 from models.utility_functions import (
     tt2torch_tensor,
     comp_allclose,
     comp_pcc,
+    is_wormhole_b0,
+    is_blackhole,
 )
 from models.experimental.roberta.roberta_common import torch2tt_tensor
 
 
+@pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported on WH and BH")
 @pytest.mark.skip(reason="Mismatch happening on GS, issue #5943")
 def test_roberta_for_multiple_choice(device):
     """
@@ -59,7 +61,7 @@ def test_roberta_for_multiple_choice(device):
         print(inputs_dict["attention_mask"].shape)
         inputs_dict["attention_mask"] = torch.unsqueeze(inputs_dict["attention_mask"], 0)
         inputs_dict["attention_mask"] = torch2tt_tensor(inputs_dict["attention_mask"], device)
-        print(inputs_dict["attention_mask"].get_legacy_shape())
+        print(inputs_dict["attention_mask"].padded_shape)
 
         logger.info("Running tt model ...")
         tt_output = tt_model(**inputs_dict)

@@ -1,0 +1,75 @@
+name: "(Single-card) Tests for new models"
+
+on:
+  workflow_dispatch:
+    inputs:
+      build-type:
+        required: false
+        default: Release
+        type: choice
+        options:
+          - Release
+          - Debug
+          - RelWithDebInfo
+          - ASan
+          - TSan
+  schedule:
+    - cron: "0 2,11 * * *"
+
+permissions:
+  actions: read
+  contents: write
+  pull-requests: write
+  pages: write
+  id-token: write
+  packages: write
+
+jobs:
+  build-artifact:
+    uses: ./.github/workflows/build-artifact.yaml
+    secrets: inherit
+    with:
+      build-type: ${{ inputs.build-type || 'Release' }}
+      build-wheel: true
+      version: 22.04
+  build-artifact-profiler:
+    uses: ./.github/workflows/build-artifact.yaml
+    with:
+      tracy: true
+      build-type: ${{ inputs.build-type || 'Release' }}
+      build-wheel: true
+      version: 22.04
+    secrets: inherit
+  device-perf-single-card:
+    needs: build-artifact-profiler
+    uses: ./.github/workflows/perf-device-models-impl.yaml
+    secrets: inherit
+    with:
+      docker-image: ${{ needs.build-artifact-profiler.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact-profiler.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact-profiler.outputs.wheel-artifact-name }}
+  e2e-model-perf-single-card:
+    needs: build-artifact
+    uses: ./.github/workflows/perf-models-impl.yaml
+    with:
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+    secrets: inherit
+  nightly-single-card:
+    needs: build-artifact
+    uses: ./.github/workflows/fast-dispatch-full-regressions-and-models-impl.yaml
+    secrets: inherit
+    with:
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+  demos-single-card:
+    needs: build-artifact
+    uses: ./.github/workflows/single-card-demo-tests-impl.yaml
+    secrets: inherit
+    with:
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      arch: wormhole_b0

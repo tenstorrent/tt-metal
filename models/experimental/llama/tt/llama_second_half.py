@@ -3,9 +3,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
-from typing import List, Optional, Tuple, Union
-from loguru import logger
-import tt_lib
+from typing import List, Optional, Tuple
+import ttnn
 from models.experimental.llama.llama_utils import _make_causal_mask, _expand_mask, linear
 
 from models.utility_functions import (
@@ -120,7 +119,7 @@ class TtLlamaModelSecondHFModel(torch.nn.Module):
 
     def forward(
         self,
-        input_ids: tt_lib.tensor.Tensor,
+        input_ids: ttnn.Tensor,
         attention_mask: Optional[torch.Tensor] = None,
         position_ids: Optional[torch.LongTensor] = None,
         past_key_values: Optional[List[torch.FloatTensor]] = None,
@@ -143,8 +142,8 @@ class TtLlamaModelSecondHFModel(torch.nn.Module):
             raise ValueError("You cannot specify both decoder_input_ids and decoder_inputs_embeds at the same time")
         elif input_ids is not None:
             # batch_size, seq_length = input_ids.shape
-            batch_size = input_ids.get_legacy_shape()[0]
-            seq_length = input_ids.get_legacy_shape()[2]
+            batch_size = input_ids.padded_shape[0]
+            seq_length = input_ids.padded_shape[2]
         elif inputs_embeds is not None:
             batch_size, seq_length, _ = inputs_embeds.shape
         else:

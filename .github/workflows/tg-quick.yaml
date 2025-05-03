@@ -1,0 +1,126 @@
+name: "zzz TG Quick tests"
+
+on:
+  workflow_call:
+    inputs:
+      docker-image:
+        required: true
+        type: string
+      wheel-artifact-name:
+        required: true
+        type: string
+      build-artifact-name:
+        required: true
+        type: string
+      extra-tag:
+        required: false
+        type: string
+        default: "in-service"
+      topology-4u:
+        required: false
+        type: boolean
+        default: true
+      topology-6u:
+        required: false
+        type: boolean
+        default: true
+
+jobs:
+  quick-4u:
+    if: ${{ inputs.topology-4u }}
+    runs-on:
+      - config-tg
+      - arch-wormhole_b0
+      - ${{ inputs.extra-tag }}
+    container:
+      image: ${{ inputs.docker-image || 'docker-image-unresolved!'}}
+      env:
+        TT_METAL_HOME: /work
+        PYTHONPATH: /work
+        LD_LIBRARY_PATH: /work/build/lib
+        LOGURU_LEVEL: INFO
+        LLAMA_DIR: /mnt/MLPerf/tt_dnn-models/llama/Llama3.1-70B-Instruct/
+        TT_METAL_ENABLE_ERISC_IRAM: 1
+      volumes:
+        - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
+        - /dev/hugepages-1G:/dev/hugepages-1G
+        - /mnt/MLPerf:/mnt/MLPerf:ro
+      options: --device /dev/tenstorrent
+    defaults:
+      run:
+        shell: bash
+        working-directory: /work # https://github.com/actions/runner/issues/878
+    steps:
+      - name: ⬇️  Setup Job
+        uses: tenstorrent/tt-metal/.github/actions/setup-job@main
+        timeout-minutes: 10
+        with:
+          build-artifact-name: ${{ inputs.build-artifact-name }}
+          wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
+      - name: Run quick tests
+        timeout-minutes: 20
+        run: |
+          pytest models/demos/llama3_subdevices/tests/test_llama_model.py -k "quick";
+          pytest models/demos/llama3_subdevices/demo/demo_decode.py -k "quick";
+          pytest models/demos/llama3_subdevices/tests/unit_tests/test_llama_model_prefill.py;
+      - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
+        if: ${{ failure() }}
+        with:
+          slack_webhook_url: ${{ secrets.SLACK_WEBHOOK_URL }}
+          owner: U06F3ER8X9A # Stuti Raizada
+      - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
+        if: always()
+  quick-6u:
+    if: ${{ inputs.topology-6u }}
+    runs-on:
+      - topology-6u
+      - arch-wormhole_b0
+      - ${{ inputs.extra-tag }}
+    container:
+      image: ${{ inputs.docker-image || 'docker-image-unresolved!'}}
+      env:
+        TT_METAL_HOME: /work
+        PYTHONPATH: /work
+        LD_LIBRARY_PATH: /work/build/lib
+        LOGURU_LEVEL: INFO
+        LLAMA_DIR: /mnt/MLPerf/tt_dnn-models/llama/Llama3.1-70B-Instruct/
+        TT_METAL_ENABLE_ERISC_IRAM: 1
+      volumes:
+        - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
+        - /dev/hugepages-1G:/dev/hugepages-1G
+        - /mnt/MLPerf:/mnt/MLPerf:ro
+      options: --device /dev/tenstorrent
+    defaults:
+      run:
+        shell: bash
+        working-directory: /work # https://github.com/actions/runner/issues/878
+    steps:
+      - name: ⬇️  Setup Job
+        uses: tenstorrent/tt-metal/.github/actions/setup-job@main
+        timeout-minutes: 10
+        with:
+          build-artifact-name: ${{ inputs.build-artifact-name }}
+          wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
+      - name: Run quick tests
+        timeout-minutes: 20
+        # NOTE: These tests do not automatically get added to upstream tests. Please refer to dockerfile/upstream_test_images/.
+        run: |
+          ./build/test/tt_metal/tt_fabric/test_system_health
+          TT_METAL_SKIP_ETH_CORES_WITH_RETRAIN=1 ./build/test/tt_metal/unit_tests_dispatch --gtest_filter="CommandQueueSingleCardFixture.*";
+          TT_METAL_SKIP_ETH_CORES_WITH_RETRAIN=1 ./build/test/tt_metal/unit_tests_dispatch --gtest_filter="CommandQueueSingleCardProgramFixture.*";
+          TT_METAL_SKIP_ETH_CORES_WITH_RETRAIN=1 ./build/test/tt_metal/unit_tests_dispatch --gtest_filter="CommandQueueSingleCardBufferFixture.ShardedBufferLarge*ReadWrites";
+          ./build/test/ttnn/unit_tests_ttnn_ccl --gtest_filter="EdmFabric.RingDeadlockStabilityTest"
+          ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric2D*Fixture.*"
+          ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric1D*Fixture.*"
+          TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric2D*Fixture.*"
+          TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric1D*Fixture.*"
+          pytest models/demos/llama3_subdevices/tests/test_llama_model.py -k "quick";
+          pytest models/demos/llama3_subdevices/demo/demo_decode.py -k "quick";
+          pytest models/demos/llama3_subdevices/tests/unit_tests/test_llama_model_prefill.py;
+      - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
+        if: ${{ failure() }}
+        with:
+          slack_webhook_url: ${{ secrets.SLACK_WEBHOOK_URL }}
+          owner: U06F3ER8X9A # Stuti Raizada
+      - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
+        if: always()

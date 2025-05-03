@@ -2,15 +2,15 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from typing import List, Union, Optional
-from tt_lib import tensor
+from typing import Optional
+import ttnn
 
 
 def Linear(
     in_features: int,
     out_features: int,
-    weight: tensor.Tensor,
-    bias: Optional[tensor.Tensor],
+    weight: ttnn.Tensor,
+    bias: Optional[ttnn.Tensor],
     device,
 ):
     """
@@ -18,33 +18,33 @@ def Linear(
 
     ``weight`` must be the weight as a tilized list of values.
     """
-    assert weight.get_legacy_shape() == [1, 1, out_features, in_features]
-    # weight = tensor.Tensor(
+    assert weight.padded_shape == [1, 1, out_features, in_features]
+    # weight = ttnn.Tensor(
     #     weight,
     #     [1, 1, out_features, in_features],
-    #     tensor.DataType.BFLOAT16,
-    #     tensor.Layout.TILE,
+    #     ttnn.bfloat16,
+    #     ttnn.TILE_LAYOUT,
     #     device
     # )
 
     if bias is None:
         bias = None
     else:
-        assert bias.get_legacy_shape() == [1, 1, 32, out_features]
-        # bias = tensor.Tensor(
+        assert bias.padded_shape == [1, 1, 32, out_features]
+        # bias = ttnn.Tensor(
         #     bias,
         #     [1, 1, 32, out_features],
-        #     tensor.DataType.BFLOAT16,
-        #     tensor.Layout.TILE,
+        #     ttnn.bfloat16,
+        #     ttnn.TILE_LAYOUT,
         #     device
         # )
 
     def linear_(activation):
-        weight_T = tensor.transpose(weight, -2, -1)
-        output = tensor.matmul(activation, weight_T)
+        weight_T = ttnn.transpose(weight, -2, -1)
+        output = ttnn.matmul(activation, weight_T)
 
         if bias is not None:
-            output_plus_bias = tensor.bcast(output, bias, tensor.BcastOpMath.ADD, tensor.BcastOpDim.H)
+            output_plus_bias = ttnn.add(output, bias)
             return output_plus_bias
 
         return output

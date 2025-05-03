@@ -5,13 +5,14 @@
 
 import torch.nn as nn
 
-import tt_lib
+import ttnn
 
 from tt_lib import fallback_ops
 from models.utility_functions import (
     torch_to_tt_tensor_rm,
 )
 from models.experimental.vovnet.vovnet_utils import create_batchnorm
+
 
 class TtSeparableConvNormAct(nn.Module):
     def __init__(
@@ -70,13 +71,11 @@ class TtSeparableConvNormAct(nn.Module):
             padding_mode="zeros",
         )
 
-        self.bn = create_batchnorm(
-            out_channels, state_dict, base_address=f"{base_address}.bn", device=None
-        )
+        self.bn = create_batchnorm(out_channels, state_dict, base_address=f"{base_address}.bn", device=None)
 
-    def forward(self, x: tt_lib.tensor.Tensor) -> tt_lib.tensor.Tensor:
+    def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
         x = self.conv_dw(x)
         x = self.conv_pw(x)
         x = self.bn(x)
-        x = tt_lib.tensor.relu(x)
+        x = ttnn.relu(x)
         return x

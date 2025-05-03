@@ -1,0 +1,23 @@
+name: "Report Workflow Status to Slack"
+description: "Report the workflow status to Slack to help identify breakages faster."
+inputs:
+  owner:
+    description: "The Slack ID of the person to be tagged."
+    default: "U014XCQ9CF8" # @Raymond Kim
+  slack_webhook_url:
+    description: "Webhook URL for the Slack channel to be posted to. Generated via slack app!"
+    required: true
+runs:
+  using: "composite"
+  steps:
+    - name: Report Github Pipeline Status Slack Action
+      if: ${{ github.ref == 'refs/heads/main' }}
+      uses: slackapi/slack-github-action@v1.26.0
+      with:
+        payload: |
+          {
+            "text": "just so you know `${{ github.event.sender.login }}` broke ${{ github.workflow }} with https://github.com/tenstorrent/tt-metal/commit/${{ github.sha }} at ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}",
+            "owner": "${{ inputs.owner }}"
+          }
+      env:
+        SLACK_WEBHOOK_URL: ${{ inputs.slack_webhook_url }}

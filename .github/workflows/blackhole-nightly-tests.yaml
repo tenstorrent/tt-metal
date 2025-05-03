@@ -1,0 +1,56 @@
+name: "(Blackhole) Blackhole nightly tests"
+
+on:
+  workflow_dispatch:
+    inputs:
+      runner-label:
+          description: 'Optional: BH'
+          required: true
+          type: string
+          default: 'BH'
+  workflow_call:
+    inputs:
+      runner-label:
+          description: 'Optional: BH'
+          required: false
+          type: string
+          default: 'BH'
+  schedule:
+    - cron: "0 */12 * * *"  # Every day at 0:00 and 12:00 UTC
+
+jobs:
+  build-artifact:
+    uses: ./.github/workflows/build-artifact.yaml
+    secrets: inherit
+    with:
+      build-wheel: true
+      version: 22.04
+  bh-nightly:
+    needs: build-artifact
+    uses: ./.github/workflows/blackhole-nightly-tests-impl.yaml
+    secrets: inherit
+    with:
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+  ttnn-unit-tests:
+    needs: build-artifact
+    secrets: inherit
+    uses: ./.github/workflows/ttnn-post-commit.yaml
+    with:
+      arch: blackhole
+      runner-label: ${{ inputs.runner-label || 'BH' }}
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+  ttnn-l2-tests:
+    needs: build-artifact
+    secrets: inherit
+    uses: ./.github/workflows/tt-metal-l2-nightly-impl.yaml
+    with:
+      arch: blackhole
+      runner-label: ${{ inputs.runner-label || 'BH' }}
+      timeout: 120
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}

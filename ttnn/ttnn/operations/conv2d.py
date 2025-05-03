@@ -2,151 +2,194 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from typing import Tuple, Union, Dict, Optional
+from loguru import logger
 
+from typing import Tuple, Union, Dict, Optional
+import warnings
+import math
 import ttnn
 
-from tt_eager.tt_dnn.op_library.sliding_window_op_infra.tt_py_composite_conv import (
-    TTPyCompositeConv,
-    SlidingWindowOpParams,
+Conv2dConfig = ttnn._ttnn.operations.conv.Conv2dConfig
+Conv2dSliceConfig = ttnn._ttnn.operations.conv.Conv2dSliceConfig
+Conv2dSliceHeight = ttnn._ttnn.operations.conv.Conv2dSliceConfig.SliceTypeEnum.SliceHeight
+Conv2dSliceWidth = ttnn._ttnn.operations.conv.Conv2dSliceConfig.SliceTypeEnum.SliceWidth
+
+OptimizedConvParallelizationConfig = ttnn._ttnn.operations.conv.OptimizedConvParallelizationConfig
+OptimizedConvBlockConfig = ttnn._ttnn.operations.conv.OptimizedConvBlockConfig
+
+
+def get_conv_output_dim(input, window, stride=1, pad=0, dilation=1):
+    """
+    Returns the output dimension of a convolution operation.
+    """
+    return (input + (2 * pad) - dilation * (window - 1) - 1) // stride + 1
+
+
+# TODO: remove this function after #21040 is fixed
+def prepare_conv_weights(*args, **kwargs):
+    """
+    TTNN Conv2D applies preprocessing to the weights tensors before performing the convolution operation, to convert the weights into a format suitable for the operation.
+    This can be applied just once to the weights and bias tensors, and the resulting tensors can be reused for multiple invocations of the same convolution operation.
+    The exact format of the weights and bias tensors depends on the input tensor parameters and the sharding scheme.
+
+    :param ttnn.Tensor weight_tensor: the weight tensor in PyTorch Conv2d format.
+    :param ttnn.MemoryConfig input_memory_config: the memory configuration for the input tensor.
+    :param ttnn.Tensor input_layout: the layout of the input tensor.
+    :param ttnn.Tensor weights_format: the format of the weights tensor. Currently only supports OIHW. (out_channels, in_channels, kernel_height, kernel_width)
+    :param int in_channels:  number of input channels.
+    :param int out_channels:  number of output channels.
+    :param int batch_size:  batch size.
+    :param int input_height:  height of the input tensor.
+    :param int input_width:  width of the input tensor.
+    :param tuple[int, int] kernel_size: size of the convolving kernel.
+    :param tuple[int, int] stride: stride of the cross-correlation.
+    :param tuple[int, int] or tuple[int, int, int, int]) padding: zero-padding added to both sides of the input. [pad_height, pad_width] or [pad_top, pad_bottom, pad_left, pad_right].
+    :param tuple[int, int] dilation: spacing between kernel elements.
+    :param bool has_bias:  whether the convolution has a bias term.
+    :param int groups:  number of blocked connections from input channels to output channels.
+    :param ttnn.Conv2dConfig, None conv_config: configuration for convolution. Default: None
+    :param ttnn.DeviceComputeKernelConfig, None compute_config: configuration for compute kernel. Default: None
+
+    :return: The preprocessed weight tensor on device
+    :rtype: [ttnn.Tensor]: The preprocessed bias tensor on device
+    """
+    return ttnn._ttnn.operations.conv.prepare_conv_weights(*args, **kwargs)
+
+
+# TODO: remove this function after #21040 is fixed
+def prepare_conv_bias(*args, **kwargs):
+    """
+    TTNN Conv2D applies preprocessing to the bias tensors before performing the convolution operation, to convert the bias into a format suitable for the operation.
+    This can be applied just once to the weights and bias tensors, and the resulting tensors can be reused for multiple invocations of the same convolution operation.
+    The exact format of the weights and bias tensors depends on the input tensor parameters and the sharding scheme.
+
+    :param ttnn.Tensor bias: the bias tensor in PyTorch Conv2d format.
+    :param ttnn.MemoryConfig input_memory_config: the memory configuration for the input tensor.
+    :param ttnn.Tensor input_layout: the layout of the input tensor.
+    :param ttnn.Tensor weights_format: the format of the weights tensor. Currently only supports OIHW. (out_channels, in_channels, kernel_height, kernel_width)
+    :param int in_channels:  number of input channels.
+    :param int out_channels:  number of output channels.
+    :param int batch_size:  batch size.
+    :param int input_height:  height of the input tensor.
+    :param int input_width:  width of the input tensor.
+    :param tuple[int, int] kernel_size: size of the convolving kernel.
+    :param tuple[int, int] stride: stride of the cross-correlation.
+    :param tuple[int, int] or tuple[int, int, int, int]) padding: zero-padding added to both sides of the input. [pad_height, pad_width] or [pad_top, pad_bottom, pad_left, pad_right].
+    :param tuple[int, int] dilation: spacing between kernel elements.
+    :param ttnn.IDevice device:  the device to use.
+    :param int groups:  number of blocked connections from input channels to output channels.
+    :param ttnn.Conv2dConfig, None conv_config: configuration for convolution. Default: None
+    :param ttnn.DeviceComputeKernelConfig, None compute_config: configuration for compute kernel. Default: None
+
+    :return: The preprocessed bias tensor on device
+    :rtype: [ttnn.Tensor]: The preprocessed bias tensor on device
+
+    """
+    return ttnn._ttnn.operations.conv.prepare_conv_bias(*args, **kwargs)
+
+
+def get_torch_act_func_from_string(act_string):
+    import torch
+
+    act_func_map = {
+        "relu": torch.nn.functional.relu,
+        "silu": torch.nn.functional.silu,
+        "mish": torch.nn.functional.mish,
+        "sigmoid": torch.nn.functional.sigmoid,
+        "sigmoid_approx": torch.nn.functional.sigmoid,
+        "tanh": torch.nn.functional.tanh,
+        "log": torch.log,
+        "softplus": torch.nn.functional.softplus,
+        "gelu": torch.nn.functional.gelu,
+        "sqrt": torch.sqrt,
+    }
+    if act_string == "":
+        return None
+    if act_string in act_func_map:
+        return act_func_map[act_string]
+    raise RuntimeError(f"Activation function {act_string} not supported")
+
+
+def _golden_function(
+    input_tensor,
+    weight_tensor,
+    in_channels: int,
+    out_channels: int,
+    batch_size: int,
+    input_height: int,
+    input_width: int,
+    kernel_size: Union[int, Tuple[int, int]],
+    stride: Union[int, Tuple[int, int]],
+    padding: Union[int, Tuple[int, int], Tuple[int, int, int, int]],
+    dilation: Union[int, Tuple[int, int]] = (1, 1),
+    groups: int = 1,
+    bias_tensor=None,
+    conv_config: Conv2dConfig = None,
+    return_output_dim=False,
+    return_weights_and_bias=False,
+    **_,
+):
+    import torch
+
+    input_tensor = input_tensor.reshape(batch_size, input_height, input_width, -1)[:, :, :, :in_channels].permute(
+        0, 3, 1, 2
+    )  # 1, 1, NHW, C -> N, C, H, W
+
+    bias_tensor = bias_tensor.reshape(-1)  # torch expected 1D bias
+
+    if hasattr(padding, "__len__"):
+        if len(padding) == 2:
+            pad_top = padding[0]
+            pad_bottom = padding[0]
+            pad_left = padding[1]
+            pad_right = padding[1]
+        elif len(padding) == 4:
+            pad_top = padding[0]
+            pad_bottom = padding[1]
+            pad_left = padding[2]
+            pad_right = padding[3]
+        else:
+            raise ValueError("Padding should be a scalar or a list of 2 or 4 elements")
+    else:
+        pad_top = padding
+        pad_bottom = padding
+        pad_left = padding
+        pad_right = padding
+
+    # this is done because torch doesn't support different padding for height and width (e.g. padding = (1, 2, 3, 4))
+    torch_padded_input = torch.nn.functional.pad(
+        input_tensor.float(),
+        (pad_left, pad_right, pad_top, pad_bottom),
+        mode="constant",
+        value=0,
+    )
+
+    # padding is (0, 0) because the padding is already applied to the input tensor above
+    output_tensor = torch.nn.functional.conv2d(
+        torch_padded_input,
+        weight_tensor.float(),
+        bias=bias_tensor.float(),
+        stride=stride,
+        padding=(0, 0),
+        dilation=dilation,
+        groups=groups,
+    )
+
+    act_func = get_torch_act_func_from_string(conv_config.activation) if conv_config is not None else None
+    output_tensor = act_func(output_tensor) if act_func is not None else output_tensor
+
+    N, C, H, W = output_tensor.shape
+    output_tensor = output_tensor.permute(0, 2, 3, 1).reshape(1, 1, N * H * W, C)  # N, C, H, W -> 1, 1, NHW, C
+
+    if return_output_dim or return_weights_and_bias:
+        return [output_tensor]
+
+    return output_tensor
+
+
+ttnn.attach_golden_function(
+    ttnn.conv2d,
+    golden_function=_golden_function,
 )
-
-
-class Conv2d:
-    def __init__(
-        self,
-        in_channels: int,
-        out_channels: int,
-        kernel_size: Union[int, Tuple[int, int]],
-        stride: Union[int, Tuple[int, int]] = 1,
-        padding: Union[int, Tuple[int, int]] = 0,
-        dilation: Union[int, Tuple[int, int]] = 1,
-        groups: int = 1,
-        padding_mode: str = "zeros",
-        dtype: ttnn.DataType = None,
-        *,
-        device: ttnn.Device,
-        use_1d_systolic_array: bool,
-        batch_size: int,
-        input_height: int,
-        input_width: int,
-        reader_patterns_cache: Optional[Dict],
-        weight: ttnn.Tensor,
-        bias: ttnn.Tensor = None,
-        math_fidelity: ttnn.MathFidelity = None,
-        weights_dtype: ttnn.DataType = None,
-        activation: str = None,
-        conv_blocking_and_parallelization_config_override: Dict = None,
-        reallocate_halo_output: bool = False,
-        using_parameters_cache: bool = False,
-        move_weights_to_device: bool = True,
-        use_shallow_conv_variant: bool = False,
-        enable_auto_formatting: bool = False,
-        deallocate_activation: bool = False,
-        padded_input_channels: Optional[int] = None,
-        compute_kernel_config: Union[ttnn.GrayskullComputeKernelConfig, ttnn.WormholeComputeKernelConfig] = None,
-        use_dram_for_matmul: bool = False,
-        output_layout: ttnn.Layout = ttnn.TILE_LAYOUT,
-    ):
-        assert (
-            padding_mode == "zeros"
-        ), f"Only convs with padding_mode=zeroes supported. Found padding_mode set to {padding_mode}."
-        if isinstance(kernel_size, int):
-            window_h = kernel_size
-            window_w = kernel_size
-        else:
-            window_h, window_w = kernel_size
-
-        if isinstance(stride, int):
-            stride_h = stride
-            stride_w = stride
-        else:
-            stride_h, stride_w = stride
-
-        if isinstance(padding, int):
-            pad_h = padding
-            pad_w = padding
-        else:
-            pad_h, pad_w = padding
-
-        if isinstance(dilation, int):
-            dilation_h = dilation
-            dilation_w = dilation
-        else:
-            dilation_h, dilation_w = dilation
-
-        assert dilation_h == 1, f"Only convs with dilation == 1 supported. Found dilation_h={dilation_h}"
-        assert dilation_w == 1, f"Only convs with dilation == 1 supported. Found dilation_w={dilation_w}"
-        assert groups == 1, "Only convs with groups == 1 supported"
-        sliding_window_op_params = SlidingWindowOpParams(
-            stride_h=stride_h,
-            stride_w=stride_w,
-            pad_h=pad_h,
-            pad_w=pad_w,
-            window_h=window_h,
-            window_w=window_w,
-            batch_size=batch_size,
-            input_h=input_height,
-            input_w=input_width,
-        )
-        fuse_relu = False
-        if activation is not None:
-            activation = activation.lower()
-            assert activation == "relu", f"Only support relu fusion with conv. Got activation={activation}."
-            fuse_relu = True
-        self.conv = TTPyCompositeConv(
-            sliding_window_op_params,
-            weight,
-            out_channels,
-            in_channels,
-            device,
-            use_1d_systolic_array,
-            reader_patterns_cache,
-            bias=bias,
-            conv_blocking_and_parallelization_config_override=conv_blocking_and_parallelization_config_override,
-            fuse_relu=fuse_relu,
-            output_dtype=dtype,
-            weights_dtype=weights_dtype,
-            math_fidelity=math_fidelity,
-            move_utwh_output=reallocate_halo_output,
-            using_parameters_cache=using_parameters_cache,
-            move_weights_to_device=move_weights_to_device,
-            use_shallow_conv_variant=use_shallow_conv_variant,
-            enable_auto_formatting=enable_auto_formatting,
-            deallocate_activation=deallocate_activation,
-            padded_input_channels=padded_input_channels,
-            compute_kernel_config=compute_kernel_config,
-            use_dram_for_matmul=use_dram_for_matmul,
-            output_layout=output_layout,
-        )
-        self.batch_size = batch_size
-        self.input_height = input_height
-        self.input_width = input_width
-        self.output_height = (input_height + (2 * pad_h) - dilation_h * (window_h - 1) - 1) // stride_h + 1
-        self.output_width = (input_width + (2 * pad_w) - dilation_w * (window_w - 1) - 1) // stride_w + 1
-        self.in_channels = in_channels
-        self.out_channels = out_channels
-
-    @ttnn.register_operation(
-        name="ttnn.Conv2d.__call__", validate_input_tensors=lambda *args, **kwargs: None, is_method=True
-    )
-    def __call__(self, activation: ttnn.Tensor):
-        return self.conv(activation)
-
-    @ttnn.register_operation(
-        name="ttnn.Conv2d.copy_input_to_device", validate_input_tensors=lambda *args, **kwargs: None, is_method=True
-    )
-    def copy_input_to_device(self, input: ttnn.Tensor):
-        return self.conv.copy_input_to_device(input)
-
-    @ttnn.register_operation(
-        name="ttnn.Conv2d.copy_output_from_device", validate_input_tensors=lambda *args, **kwargs: None, is_method=True
-    )
-    def copy_output_from_device(self, output: ttnn.Tensor):
-        return self.conv.copy_output_from_device(output)
-
-    def get_parallel_config(self):
-        return self.conv.get_parallel_config()
-
 
 __all__ = []

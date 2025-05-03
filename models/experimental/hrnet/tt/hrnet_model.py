@@ -6,7 +6,7 @@ import logging
 import torch.nn as nn
 import timm
 
-import tt_lib
+import ttnn
 from tt_lib.fallback_ops import fallback_ops
 from models.utility_functions import torch_to_tt_tensor_rm
 
@@ -15,7 +15,6 @@ from models.helper_funcs import Linear as TtLinear
 from models.experimental.hrnet.tt.basicblock import TtBasicBlock
 from models.experimental.hrnet.tt.bottleneck import TtBottleneck
 from models.experimental.hrnet.tt.high_resolution_module import TtHighResolutionModule
-
 
 
 from models.experimental.hrnet.hrnet_utils import create_batchnorm
@@ -112,56 +111,38 @@ class TtHighResolutionNet(nn.Module):
             padding=1,
             bias=False,
         )
-        self.relu = tt_lib.tensor.relu
+        self.relu = ttnn.relu
 
         self.stage1_cfg = self.cfg["stage1"]
         num_channels = self.stage1_cfg["num_channels"][0]
         block = blocks_dict[self.stage1_cfg["block_type"]]
         num_blocks = self.stage1_cfg["num_blocks"][0]
-        self.layer1 = self._make_layer(
-            block, 64, num_channels, num_blocks, base_address="layer1.0"
-        )
+        self.layer1 = self._make_layer(block, 64, num_channels, num_blocks, base_address="layer1.0")
         stage1_out_channel = block.expansion * num_channels
 
         self.stage2_cfg = self.cfg["stage2"]
         num_channels = self.stage2_cfg["num_channels"]
         block = blocks_dict[self.stage2_cfg["block_type"]]
-        num_channels = [
-            num_channels[i] * block.expansion for i in range(len(num_channels))
-        ]
-        self.transition1 = self._make_transition_layer(
-            [stage1_out_channel], num_channels
-        )
-        self.stage2, pre_stage_channels = self._make_stage(
-            self.stage2_cfg, num_channels
-        )
+        num_channels = [num_channels[i] * block.expansion for i in range(len(num_channels))]
+        self.transition1 = self._make_transition_layer([stage1_out_channel], num_channels)
+        self.stage2, pre_stage_channels = self._make_stage(self.stage2_cfg, num_channels)
 
         self.stage3_cfg = self.cfg["stage3"]
         num_channels = self.stage3_cfg["num_channels"]
         block = blocks_dict[self.stage3_cfg["block_type"]]
-        num_channels = [
-            num_channels[i] * block.expansion for i in range(len(num_channels))
-        ]
+        num_channels = [num_channels[i] * block.expansion for i in range(len(num_channels))]
         self.transition2 = self._make_transition_layer(pre_stage_channels, num_channels)
-        self.stage3, pre_stage_channels = self._make_stage(
-            self.stage3_cfg, num_channels
-        )
+        self.stage3, pre_stage_channels = self._make_stage(self.stage3_cfg, num_channels)
 
         self.stage4_cfg = self.cfg["stage4"]
         num_channels = self.stage4_cfg["num_channels"]
         block = blocks_dict[self.stage4_cfg["block_type"]]
-        num_channels = [
-            num_channels[i] * block.expansion for i in range(len(num_channels))
-        ]
+        num_channels = [num_channels[i] * block.expansion for i in range(len(num_channels))]
         self.transition3 = self._make_transition_layer(pre_stage_channels, num_channels)
-        self.stage4, pre_stage_channels = self._make_stage(
-            self.stage4_cfg, num_channels, multi_scale_output=True
-        )
+        self.stage4, pre_stage_channels = self._make_stage(self.stage4_cfg, num_channels, multi_scale_output=True)
 
         # Classification Head
-        self.incre_modules, self.downsamp_modules, self.final_layer = self._make_head(
-            pre_stage_channels
-        )
+        self.incre_modules, self.downsamp_modules, self.final_layer = self._make_head(pre_stage_channels)
         self.avg_pool2d = fallback_ops.AdaptiveAvgPool2d(1)
         self.linear_weight = torch_to_tt_tensor_rm(
             self.state_dict[f"classifier.weight"],
@@ -205,9 +186,7 @@ class TtHighResolutionNet(nn.Module):
                 self.device,
                 put_on_device=False,
             )
-            self.ds_bn = create_batchnorm(
-                out_channels, self.state_dict, f"downsamp_modules.{i}.1", self.device
-            )
+            self.ds_bn = create_batchnorm(out_channels, self.state_dict, f"downsamp_modules.{i}.1", self.device)
             downsamp_module = [
                 fallback_ops.Conv2d(
                     self.ds_conv_weight,
@@ -220,7 +199,7 @@ class TtHighResolutionNet(nn.Module):
                     bias=False,
                 ),
                 self.ds_bn,
-                tt_lib.tensor.relu,
+                ttnn.relu,
             ]
 
             downsamp_modules.append(downsamp_module)
@@ -235,9 +214,7 @@ class TtHighResolutionNet(nn.Module):
             self.device,
             put_on_device=False,
         )
-        self.final_bn = create_batchnorm(
-            2048, self.state_dict, f"final_layer.1", self.device
-        )
+        self.final_bn = create_batchnorm(2048, self.state_dict, f"final_layer.1", self.device)
         final_layer = [
             fallback_ops.Conv2d(
                 self.final_conv_weight,
@@ -250,7 +227,7 @@ class TtHighResolutionNet(nn.Module):
                 bias=True,
             ),
             self.final_bn,
-            tt_lib.tensor.relu,
+            ttnn.relu,
         ]
 
         return incre_modules, downsamp_modules, final_layer
@@ -288,7 +265,7 @@ class TtHighResolutionNet(nn.Module):
                                 bias=False,
                             ),
                             self.bn,
-                            tt_lib.tensor.relu,
+                            ttnn.relu,
                         ]
                     )
                 else:
@@ -297,15 +274,9 @@ class TtHighResolutionNet(nn.Module):
                 conv3x3s = []
                 for j in range(i + 1 - num_branches_pre):
                     inchannels = num_channels_pre_layer[-1]
-                    outchannels = (
-                        num_channels_cur_layer[i]
-                        if j == i - num_branches_pre
-                        else inchannels
-                    )
+                    outchannels = num_channels_cur_layer[i] if j == i - num_branches_pre else inchannels
                     self.conv_weight = torch_to_tt_tensor_rm(
-                        self.state_dict[
-                            f"transition{num_branches_pre}.{i}.{j}.0.weight"
-                        ],
+                        self.state_dict[f"transition{num_branches_pre}.{i}.{j}.0.weight"],
                         self.device,
                         put_on_device=False,
                     )
@@ -328,7 +299,7 @@ class TtHighResolutionNet(nn.Module):
                                 bias=False,
                             ),
                             self.bn,
-                            tt_lib.tensor.relu,
+                            ttnn.relu,
                         ]
                     )
                 merged_list = [item for sublist in conv3x3s for item in sublist]
@@ -386,7 +357,7 @@ class TtHighResolutionNet(nn.Module):
 
         return nn.Sequential(*modules), num_inchannels
 
-    def forward(self, x: tt_lib.tensor.Tensor):
+    def forward(self, x: ttnn.Tensor):
         x = self.conv1(x)
         x = self.bn1(x)
         x = self.relu(x)
@@ -437,21 +408,19 @@ class TtHighResolutionNet(nn.Module):
         for i in range(len(self.downsamp_modules)):
             for module in self.downsamp_modules[i]:
                 y = module(y)
-            y = tt_lib.tensor.add(self.incre_modules[i + 1](y_list[i + 1]), y)
+            y = ttnn.add(self.incre_modules[i + 1](y_list[i + 1]), y)
 
         for module in self.final_layer:
             y = module(y)
 
         y = self.avg_pool2d(y)
-        y = tt_lib.tensor.permute(y, (0, 3, 2, 1))
+        y = ttnn.permute(y, (0, 3, 2, 1))
         y = self.classifier(y)
 
         return y
 
 
-def _hrnet_for_image_classification(
-    device, state_dict, base_address=""
-) -> TtHighResolutionNet:
+def _hrnet_for_image_classification(device, state_dict, base_address="") -> TtHighResolutionNet:
     return TtHighResolutionNet(state_dict, device, multi_scale_output=True)
 
 

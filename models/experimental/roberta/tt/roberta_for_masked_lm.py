@@ -9,16 +9,17 @@ from typing import Optional, Tuple, Union
 from loguru import logger
 from dataclasses import dataclass
 
-import tt_lib
+import ttnn
 
 from models.experimental.roberta.tt.roberta_model import TtRobertaModel
 from models.experimental.roberta.tt.roberta_lm_head import TtRobertaLMHead
 
+
 @dataclass
 class TtMaskedLMOutput:
-    loss: tt_lib.tensor.Tensor = None
-    logits: tt_lib.tensor.Tensor = None
-    hidden_states: tt_lib.tensor.Tensor = None
+    loss: ttnn.Tensor = None
+    logits: ttnn.Tensor = None
+    hidden_states: ttnn.Tensor = None
 
 
 class TtRobertaForMaskedLM(nn.Module):
@@ -60,18 +61,18 @@ class TtRobertaForMaskedLM(nn.Module):
     def forward(
         self,
         input_ids: Optional[torch.LongTensor] = None,
-        attention_mask: Optional[tt_lib.tensor.Tensor] = None,
+        attention_mask: Optional[ttnn.Tensor] = None,
         token_type_ids: Optional[torch.LongTensor] = None,
         position_ids: Optional[torch.LongTensor] = None,
-        head_mask: Optional[tt_lib.tensor.Tensor] = None,
-        inputs_embeds: Optional[tt_lib.tensor.Tensor] = None,
-        encoder_hidden_states: Optional[tt_lib.tensor.Tensor] = None,
-        encoder_attention_mask: Optional[tt_lib.tensor.Tensor] = None,
+        head_mask: Optional[ttnn.Tensor] = None,
+        inputs_embeds: Optional[ttnn.Tensor] = None,
+        encoder_hidden_states: Optional[ttnn.Tensor] = None,
+        encoder_attention_mask: Optional[ttnn.Tensor] = None,
         labels: Optional[torch.LongTensor] = None,
         output_attentions: Optional[bool] = None,
         output_hidden_states: Optional[bool] = None,
         return_dict: Optional[bool] = None,
-    ) -> Union[Tuple[tt_lib.tensor.Tensor], TtMaskedLMOutput]:
+    ) -> Union[Tuple[ttnn.Tensor], TtMaskedLMOutput]:
         r"""
         labels (`torch.LongTensor` of shape `(batch_size, sequence_length)`, *optional*):
             Labels for computing the masked language modeling loss. Indices should be in `[-100, 0, ...,
@@ -80,9 +81,7 @@ class TtRobertaForMaskedLM(nn.Module):
         kwargs (`Dict[str, any]`, optional, defaults to *{}*):
             Used to hide legacy arguments that have been deprecated.
         """
-        return_dict = (
-            return_dict if return_dict is not None else self.config.use_return_dict
-        )
+        return_dict = return_dict if return_dict is not None else self.config.use_return_dict
 
         outputs = self.roberta(
             input_ids,
@@ -107,15 +106,11 @@ class TtRobertaForMaskedLM(nn.Module):
             # move labels to correct device to enable model parallelism
             labels = labels.to(prediction_scores.device)
             loss_fct = CrossEntropyLoss()
-            masked_lm_loss = loss_fct(
-                prediction_scores.view(-1, self.config.vocab_size), labels.view(-1)
-            )
+            masked_lm_loss = loss_fct(prediction_scores.view(-1, self.config.vocab_size), labels.view(-1))
 
         if not return_dict:
             output = (prediction_scores,) + outputs[2:]
-            return (
-                ((masked_lm_loss,) + output) if masked_lm_loss is not None else output
-            )
+            return ((masked_lm_loss,) + output) if masked_lm_loss is not None else output
 
         return TtMaskedLMOutput(
             loss=masked_lm_loss,

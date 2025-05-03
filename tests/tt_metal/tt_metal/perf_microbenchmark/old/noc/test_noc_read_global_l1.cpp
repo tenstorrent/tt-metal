@@ -2,17 +2,40 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <algorithm>
 #include <chrono>
-#include <functional>
-#include <random>
-#include <thread>
+#include <errno.h>
+#include <fmt/base.h>
+#include <stdint.h>
+#include <stdlib.h>
+#include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tt_metal.hpp>
+#include <algorithm>
+#include <cstring>
+#include <exception>
+#include <iostream>
+#include <map>
+#include <memory>
+#include <optional>
+#include <string>
+#include <tuple>
+#include <utility>
+#include <variant>
+#include <vector>
 
-#include "common/bfloat16.hpp"
-#include "test_tiles.hpp"
-#include "tt_metal/detail/tt_metal.hpp"
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/impl/debug/dprint_server.hpp"
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/buffer_types.hpp>
+#include <tt-metalium/circular_buffer_types.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/data_types.hpp>
+#include <tt-metalium/kernel_types.hpp>
+#include <tt-metalium/logger.hpp>
+#include <tt-metalium/program.hpp>
+#include <tt_stl/span.hpp>
+#include "test_common.hpp"
+#include <tt-metalium/tt_backend_api_types.hpp>
 #include "tt_metal/test_utils/deprecated/tensor.hpp"
 
 using namespace tt;
@@ -21,7 +44,7 @@ using std::chrono::microseconds;
 using std::chrono::steady_clock;
 
 template <typename T>
-std::vector<T> slice_vec(std::vector<T> const &v, int m, int n) {
+std::vector<T> slice_vec(std::vector<T> const& v, int m, int n) {
     auto first = v.cbegin() + m;
     auto last = v.cbegin() + n + 1;
 
@@ -29,7 +52,7 @@ std::vector<T> slice_vec(std::vector<T> const &v, int m, int n) {
     return vec;
 }
 
-void print_vec(std::vector<bfloat16> data, int rows, int cols, string name) {
+void print_vec(const std::vector<bfloat16>& data, int rows, int cols, const std::string& name) {
     std::cout << name << ": " << std::endl;
     int index = 0;
     for (int i = 0; i < rows; i++) {
@@ -42,7 +65,7 @@ void print_vec(std::vector<bfloat16> data, int rows, int cols, string name) {
     std::cout << std::endl;
 }
 
-int main(int argc, char **argv) {
+int main(int argc, char** argv) {
     if (getenv("TT_METAL_SLOW_DISPATCH_MODE") != nullptr) {
         TT_THROW("Test not supported w/ slow dispatch, exiting");
     }
@@ -82,7 +105,7 @@ int main(int argc, char **argv) {
                 test_args::get_command_option_uint32_and_remaining_args(input_args, "--one_buffer_share", 0);
             std::tie(validation, input_args) =
                 test_args::get_command_option_uint32_and_remaining_args(input_args, "--validation", 1);
-        } catch (const std::exception &e) {
+        } catch (const std::exception& e) {
             TT_THROW("Command line arguments found exception", e.what());
         }
 
@@ -92,7 +115,7 @@ int main(int argc, char **argv) {
         //                      Device Setup
         ////////////////////////////////////////////////////////////////////////////
         int device_id = 0;
-        tt_metal::Device *device = tt_metal::CreateDevice(device_id);
+        tt_metal::IDevice* device = tt_metal::CreateDevice(device_id);
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Application Setup
@@ -100,15 +123,16 @@ int main(int argc, char **argv) {
         // for convenience
         if (Nt % cb_n != 0) {
             log_error(LogTest, "activations({} tiles) should be divided cb buffer ({} tiles)", Nt, cb_n);
-            TT_FATAL(false);
+            TT_FATAL(false, "Error");
         }
 
         tt::DataFormat data_format = tt::DataFormat::Float16_b;
         uint32_t single_tile_size = 2 * 1024;
 
         uint32_t shape_Nt = Nt;
-        if (one_buffer_share)
+        if (one_buffer_share) {
             shape_Nt = (num_cores_r * num_cores_c) * Nt;
+        }
         log_info(LogTest, "Activations = {}x{}", shape_Nt * 32, 32);
 
         SHAPE shape = {1, 1, shape_Nt * 32, 32};
@@ -118,15 +142,18 @@ int main(int argc, char **argv) {
                 auto tensor = tt::deprecated::initialize_tensor<bfloat16>(
                     shape,
                     tt::deprecated::Initialize::RANDOM,
+                    0,
                     100,
                     std::chrono::system_clock::now().time_since_epoch().count());
 
                 tensors.push_back(tensor);
-                if (single_read || one_buffer_share)
+                if (single_read || one_buffer_share) {
                     break;
+                }
             }
-            if (single_read || one_buffer_share)
+            if (single_read || one_buffer_share) {
                 break;
+            }
         }
 
         if (print_tensor) {
@@ -137,11 +164,13 @@ int main(int argc, char **argv) {
                         1,
                         32,
                         std::string("input tensor " + std::to_string(r) + " " + std::to_string(c)));
-                    if (single_read || one_buffer_share)
+                    if (single_read || one_buffer_share) {
                         break;
+                    }
                 }
-                if (single_read || one_buffer_share)
+                if (single_read || one_buffer_share) {
                     break;
+                }
             }
         }
 
@@ -150,11 +179,13 @@ int main(int argc, char **argv) {
             for (int c = 0; c < num_cores_c; ++c) {
                 auto activations = pack_bfloat16_vec_into_uint32_vec(tensors[r * num_cores_c + c].get_values());
                 packed_tensors.push_back(activations);
-                if (single_read || one_buffer_share)
+                if (single_read || one_buffer_share) {
                     break;
+                }
             }
-            if (single_read || one_buffer_share)
+            if (single_read || one_buffer_share) {
                 break;
+            }
         }
 
         tt_metal::Program program = tt_metal::CreateProgram();
@@ -188,7 +219,7 @@ int main(int argc, char **argv) {
             activations_addr,
             activations_addr / 1024,
             Nt);
-        std::vector<tt_metal::Buffer> l1_buffers;
+        std::vector<std::shared_ptr<tt_metal::Buffer>> l1_buffers;
 
         int l1_buffers_size = 1;
         if (!(single_read || one_buffer_share)) {
@@ -198,21 +229,24 @@ int main(int argc, char **argv) {
         l1_buffers.reserve(l1_buffers_size);
         for (int r = 0; r < num_cores_r; ++r) {
             for (int c = 0; c < num_cores_c; ++c) {
-                l1_buffers.emplace_back(device, total_tiles_size_bytes, single_tile_size, tt_metal::BufferType::L1);
-                tt_metal::detail::WriteToBuffer(l1_buffers[r * num_cores_c + c], packed_tensors[r * num_cores_c + c]);
+                l1_buffers.push_back(tt_metal::Buffer::create(
+                    device, total_tiles_size_bytes, single_tile_size, tt_metal::BufferType::L1));
+                tt_metal::detail::WriteToBuffer(*l1_buffers[r * num_cores_c + c], packed_tensors[r * num_cores_c + c]);
 
-                if (single_read || one_buffer_share)
+                if (single_read || one_buffer_share) {
                     break;
+                }
             }
-            if (single_read || one_buffer_share)
+            if (single_read || one_buffer_share) {
                 break;
+            }
         }
 
         // validation
         for (int r = 0; r < num_cores_r; ++r) {
             for (int c = 0; c < num_cores_c; ++c) {
                 std::vector<uint32_t> result_vec;
-                tt_metal::detail::ReadFromBuffer(l1_buffers[r * num_cores_c + c], result_vec);
+                tt_metal::detail::ReadFromBuffer(*l1_buffers[r * num_cores_c + c], result_vec);
                 auto result_bfp16 = unpack_uint32_vec_into_bfloat16_vec(result_vec);
 
                 if (print_tensor) {
@@ -237,11 +271,13 @@ int main(int argc, char **argv) {
                         result_bfp16.size());
                 }
 
-                if (single_read || one_buffer_share)
+                if (single_read || one_buffer_share) {
                     break;
+                }
             }
-            if (single_read || one_buffer_share)
+            if (single_read || one_buffer_share) {
                 break;
+            }
         }
 
         // kernel setup
@@ -259,7 +295,7 @@ int main(int argc, char **argv) {
                 CoreCoord core = {(size_t)c, (size_t)r};
 
                 int l1_buffers_idx = (single_read || one_buffer_share) ? (0) : (r * num_cores_c + c);
-                auto l1_buffer_addr = l1_buffers[l1_buffers_idx].address();
+                auto l1_buffer_addr = l1_buffers[l1_buffers_idx]->address();
 
                 uint32_t l1_buffer_offset = (one_buffer_share) ? ((r * num_cores_c + c) * Nt) : (0);
 
@@ -334,7 +370,7 @@ int main(int argc, char **argv) {
 
         pass &= tt_metal::CloseDevice(device);
 
-    } catch (const std::exception &e) {
+    } catch (const std::exception& e) {
         pass = false;
         // Capture the exception error message
         log_error(LogTest, "{}", e.what());
@@ -348,7 +384,7 @@ int main(int argc, char **argv) {
         TT_THROW("Test Failed");
     }
 
-    TT_FATAL(pass);
+    TT_FATAL(pass, "Error");
 
     return 0;
 }

@@ -7,34 +7,28 @@ import json
 import re
 import inspect
 import pytest
+import subprocess
+from loguru import logger
+
+import pandas as pd
+import numpy as np
 
 from tt_metal.tools.profiler.common import (
     TT_METAL_HOME,
+    PROFILER_HOST_DEVICE_SYNC_INFO,
     PROFILER_SCRIPTS_ROOT,
     PROFILER_ARTIFACTS_DIR,
     PROFILER_LOGS_DIR,
     clear_profiler_runtime_artifacts,
 )
 
+from models.utility_functions import skip_for_grayskull, skip_for_blackhole
+
 PROG_EXMP_DIR = "programming_examples/profiler"
+TRACY_TESTS_DIR = "./tests/ttnn/tracy"
 
 
-def run_device_profiler_test(doubleRun=False, setup=False):
-    name = inspect.stack()[1].function
-    clear_profiler_runtime_artifacts()
-    profilerRun = os.system(f"cd {TT_METAL_HOME} && " f"build/{PROG_EXMP_DIR}/{name}")
-    assert profilerRun == 0
-
-    if doubleRun:
-        # Run test under twice to make sure icache is populated
-        # with instructions for test
-        profilerRun = os.system(f"cd {TT_METAL_HOME} && " f"build/{PROG_EXMP_DIR}/{name}")
-        assert profilerRun == 0
-
-    setupStr = ""
-    if setup:
-        setupStr = f"-s {name}"
-
+def get_device_data(setupStr=""):
     postProcessRun = os.system(
         f"cd {PROFILER_SCRIPTS_ROOT} && " f"./process_device_log.py {setupStr} --no-artifacts --no-print-stats"
     )
@@ -48,23 +42,80 @@ def run_device_profiler_test(doubleRun=False, setup=False):
     return devicesData
 
 
+def set_env_vars(**kwargs):
+    envVarsDict = {
+        "doSync": "TT_METAL_PROFILER_SYNC=1 ",
+        "doDispatchCores": "TT_METAL_DEVICE_PROFILER_DISPATCH=1 ",
+        "slowDispatch": "TT_METAL_SLOW_DISPATCH_MODE=1 ",
+        "dispatchFromEth": "WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml ",
+    }
+    envVarsStr = " "
+    for arg, argVal in kwargs.items():
+        if argVal:
+            envVarsStr += envVarsDict[arg]
+    return envVarsStr
+
+
+def run_gtest_profiler_test(testbin, testname, doSync=False):
+    clear_profiler_runtime_artifacts()
+    envVars = set_env_vars(doSync=doSync)
+    testCommand = f"cd {TT_METAL_HOME} && {envVars} {testbin} --gtest_filter={testname}"
+    print()
+    logger.info(f"Running: {testCommand}")
+    output = subprocess.check_output(testCommand, stderr=subprocess.STDOUT, shell=True).decode("UTF-8")
+    print(output)
+    if "SKIPPED" not in output:
+        get_device_data()
+
+
+def run_device_profiler_test(
+    testName=None,
+    setupAutoExtract=False,
+    slowDispatch=False,
+    doSync=False,
+    doDispatchCores=False,
+    dispatchFromEth=False,
+):
+    name = inspect.stack()[1].function
+    testCommand = f"build/{PROG_EXMP_DIR}/{name}"
+    if testName:
+        testCommand = testName
+    clear_profiler_runtime_artifacts()
+    envVars = set_env_vars(
+        slowDispatch=slowDispatch, doSync=doSync, doDispatchCores=doDispatchCores, dispatchFromEth=dispatchFromEth
+    )
+    testCommand = f"cd {TT_METAL_HOME} && {envVars} {testCommand}"
+    print()
+    logger.info(f"Running: {testCommand}")
+    profilerRun = os.system(testCommand)
+    assert profilerRun == 0
+
+    setupStr = ""
+    if setupAutoExtract:
+        setupStr = f"-s {name}"
+
+    return get_device_data(setupStr)
+
+
 def get_function_name():
     frame = inspect.currentframe()
     return frame.f_code.co_name
 
 
+@skip_for_grayskull()
 def test_multi_op():
     OP_COUNT = 1000
     RUN_COUNT = 2
     REF_COUNT_DICT = {
         "grayskull": [108 * OP_COUNT * RUN_COUNT, 88 * OP_COUNT * RUN_COUNT],
         "wormhole_b0": [72 * OP_COUNT * RUN_COUNT, 64 * OP_COUNT * RUN_COUNT, 56 * OP_COUNT * RUN_COUNT],
+        "blackhole": [130 * OP_COUNT * RUN_COUNT, 120 * OP_COUNT * RUN_COUNT, 110 * OP_COUNT * RUN_COUNT],
     }
 
     ENV_VAR_ARCH_NAME = os.getenv("ARCH_NAME")
     assert ENV_VAR_ARCH_NAME in REF_COUNT_DICT.keys()
 
-    devicesData = run_device_profiler_test(setup=True)
+    devicesData = run_device_profiler_test(setupAutoExtract=True)
 
     stats = devicesData["data"]["devices"]["0"]["cores"]["DEVICE"]["analysis"]
 
@@ -72,6 +123,28 @@ def test_multi_op():
 
     assert statName in stats.keys(), "Wrong device analysis format"
     assert stats[statName]["stats"]["Count"] in REF_COUNT_DICT[ENV_VAR_ARCH_NAME], "Wrong Marker Repeat count"
+
+
+def test_custom_cycle_count_slow_dispatch():
+    REF_CYCLE_COUNT_PER_LOOP = 52
+    LOOP_COUNT = 2000
+    REF_CYCLE_COUNT = REF_CYCLE_COUNT_PER_LOOP * LOOP_COUNT
+    REF_CYCLE_COUNT_HIGH_MULTIPLIER = 10
+    REF_CYCLE_COUNT_LOW_MULTIPLIER = 5
+
+    REF_CYCLE_COUNT_MAX = REF_CYCLE_COUNT * REF_CYCLE_COUNT_HIGH_MULTIPLIER
+    REF_CYCLE_COUNT_MIN = REF_CYCLE_COUNT // REF_CYCLE_COUNT_LOW_MULTIPLIER
+
+    devicesData = run_device_profiler_test(setupAutoExtract=True, slowDispatch=True)
+
+    stats = devicesData["data"]["devices"]["0"]["cores"]["DEVICE"]["analysis"]
+
+    for risc in ["BRISC", "NCRISC", "TRISC_0", "TRISC_1", "TRISC_2"]:
+        statName = f"{risc} KERNEL_START->KERNEL_END"
+
+        assert statName in stats.keys(), "Wrong device analysis format"
+        assert stats[statName]["stats"]["Average"] < REF_CYCLE_COUNT_MAX, "Wrong cycle count, too high"
+        assert stats[statName]["stats"]["Average"] > REF_CYCLE_COUNT_MIN, "Wrong cycle count, too low"
 
 
 def test_custom_cycle_count():
@@ -84,7 +157,7 @@ def test_custom_cycle_count():
     REF_CYCLE_COUNT_MAX = REF_CYCLE_COUNT * REF_CYCLE_COUNT_HIGH_MULTIPLIER
     REF_CYCLE_COUNT_MIN = REF_CYCLE_COUNT // REF_CYCLE_COUNT_LOW_MULTIPLIER
 
-    devicesData = run_device_profiler_test(setup=True)
+    devicesData = run_device_profiler_test(setupAutoExtract=True)
 
     stats = devicesData["data"]["devices"]["0"]["cores"]["DEVICE"]["analysis"]
 
@@ -107,12 +180,17 @@ def test_full_buffer():
             64 * OP_COUNT * RISC_COUNT * ZONE_COUNT,
             56 * OP_COUNT * RISC_COUNT * ZONE_COUNT,
         ],
+        "blackhole": [
+            130 * OP_COUNT * RISC_COUNT * ZONE_COUNT,
+            120 * OP_COUNT * RISC_COUNT * ZONE_COUNT,
+            110 * OP_COUNT * RISC_COUNT * ZONE_COUNT,
+        ],
     }
 
     ENV_VAR_ARCH_NAME = os.getenv("ARCH_NAME")
     assert ENV_VAR_ARCH_NAME in REF_COUNT_DICT.keys()
 
-    devicesData = run_device_profiler_test(setup=True)
+    devicesData = run_device_profiler_test(setupAutoExtract=True)
 
     stats = devicesData["data"]["devices"]["0"]["cores"]["DEVICE"]["analysis"]
     statName = "Marker Repeat"
@@ -129,3 +207,248 @@ def test_full_buffer():
         assert stats[statNameEth]["stats"]["Count"] % (OP_COUNT * ZONE_COUNT) == 0, "Wrong Eth Marker Repeat count"
     else:
         assert stats[statName]["stats"]["Count"] in REF_COUNT_DICT[ENV_VAR_ARCH_NAME], "Wrong Marker Repeat count"
+
+
+@skip_for_blackhole()
+def test_dispatch_cores():
+    OP_COUNT = 1
+    RISC_COUNT = 1
+    ZONE_COUNT = 37
+    REF_COUNT_DICT = {
+        "Tensix CQ Dispatch": [250, 1000, 2000],
+        "Tensix CQ Prefetch": [400, 1000, 4000],
+        "dispatch_total_cq_cmd_op_time": [103],
+        "dispatch_go_send_wait_time": [103],
+    }
+
+    def verify_stats(devicesData, statTypes, allowedRange):
+        verifiedStat = []
+        for device, deviceData in devicesData["data"]["devices"].items():
+            for ref, counts in REF_COUNT_DICT.items():
+                if ref in deviceData["cores"]["DEVICE"]["analysis"].keys():
+                    verifiedStat.append(ref)
+                    res = False
+                    readCount = deviceData["cores"]["DEVICE"]["analysis"][ref]["stats"]["Count"]
+                    for count in counts:
+                        if count - allowedRange <= readCount <= count + allowedRange:
+                            res = True
+                            break
+                    assert (
+                        res
+                    ), f"Wrong tensix dispatch zone count for {ref}, read {readCount} which is not within {allowedRange} cycle counts of any of the limits {counts}"
+
+        statTypesSet = set(statTypes)
+        for statType in statTypes:
+            for stat in verifiedStat:
+                if statType in stat and statType in statTypesSet:
+                    statTypesSet.remove(statType)
+        assert len(statTypesSet) == 0
+
+    verify_stats(
+        run_device_profiler_test(setupAutoExtract=True, doDispatchCores=True),
+        statTypes=["Dispatch", "Prefetch"],
+        allowedRange=150,
+    )
+
+    verify_stats(
+        run_device_profiler_test(
+            testName=f"pytest {TRACY_TESTS_DIR}/test_dispatch_profiler.py::test_with_ops",
+            setupAutoExtract=True,
+            doDispatchCores=True,
+        ),
+        statTypes=["Dispatch", "Prefetch"],
+        allowedRange=1000,
+    )
+
+    verify_stats(
+        run_device_profiler_test(
+            testName=f"pytest {TRACY_TESTS_DIR}/test_dispatch_profiler.py::test_all_devices",
+            setupAutoExtract=True,
+            doDispatchCores=True,
+        ),
+        statTypes=["Dispatch", "Prefetch"],
+        allowedRange=1000,
+    )
+
+    verify_stats(
+        run_device_profiler_test(
+            testName=f"pytest {TRACY_TESTS_DIR}/test_trace_runs.py",
+            setupAutoExtract=False,
+            doDispatchCores=True,
+        ),
+        statTypes=["dispatch_total_cq_cmd_op_time", "dispatch_go_send_wait_time"],
+        allowedRange=0,  # This test is basically counting ops and should be exact regardless of changes to dispatch code or harvesting.
+    )
+
+
+# Eth dispatch will be deprecated
+@skip_for_blackhole()
+@skip_for_grayskull()
+def test_ethernet_dispatch_cores():
+    REF_COUNT_DICT = {
+        "Ethernet CQ Dispatch": [700, 910, 2100],
+        "Ethernet CQ Prefetch": [600, 2500],
+    }
+    devicesData = run_device_profiler_test(
+        testName=f"pytest {TRACY_TESTS_DIR}/test_dispatch_profiler.py::test_with_ops",
+        setupAutoExtract=True,
+        doDispatchCores=True,
+        dispatchFromEth=True,
+    )
+    for device, deviceData in devicesData["data"]["devices"].items():
+        for ref, counts in REF_COUNT_DICT.items():
+            if ref in deviceData["cores"]["DEVICE"]["analysis"].keys():
+                res = False
+                readCount = deviceData["cores"]["DEVICE"]["analysis"][ref]["stats"]["Count"]
+                allowedRange = 200
+                for count in counts:
+                    if count - allowedRange < readCount < count + allowedRange:
+                        res = True
+                        break
+                assert (
+                    res
+                ), f"Wrong ethernet dispatch zone count, read {readCount} which is not within {allowedRange} cycle counts of any of the limits {counts}"
+
+    devicesData = run_device_profiler_test(
+        testName=f"pytest {TRACY_TESTS_DIR}/test_dispatch_profiler.py::test_all_devices",
+        setupAutoExtract=True,
+        doDispatchCores=True,
+        dispatchFromEth=True,
+    )
+    for device, deviceData in devicesData["data"]["devices"].items():
+        for ref, counts in REF_COUNT_DICT.items():
+            if ref in deviceData["cores"]["DEVICE"]["analysis"].keys():
+                res = False
+                readCount = deviceData["cores"]["DEVICE"]["analysis"][ref]["stats"]["Count"]
+                allowedRange = 200
+                for count in counts:
+                    if count - allowedRange < readCount < count + allowedRange:
+                        res = True
+                        break
+                assert (
+                    res
+                ), f"Wrong ethernet dispatch zone count, read {readCount} which is not within {allowedRange} cycle counts of any of the limits {counts}"
+
+
+@skip_for_grayskull()
+def test_profiler_host_device_sync():
+    TOLERANCE = 0.1
+
+    syncInfoFile = PROFILER_LOGS_DIR / PROFILER_HOST_DEVICE_SYNC_INFO
+
+    deviceData = run_device_profiler_test(
+        testName=f"pytest {TRACY_TESTS_DIR}/test_profiler_sync.py::test_all_devices", doSync=True
+    )
+    reportedFreq = deviceData["data"]["deviceInfo"]["freq"] * 1e6
+    assert os.path.isfile(syncInfoFile)
+
+    syncinfoDF = pd.read_csv(syncInfoFile)
+    devices = sorted(syncinfoDF["device id"].unique())
+    for device in devices:
+        deviceFreq = syncinfoDF[syncinfoDF["device id"] == device].iloc[-1]["frequency"]
+        if not np.isnan(deviceFreq):  # host sync entry
+            freq = float(deviceFreq) * 1e9
+
+            assert freq < (reportedFreq * (1 + TOLERANCE)), f"Frequency {freq} is too large on device {device}"
+            assert freq > (reportedFreq * (1 - TOLERANCE)), f"Frequency {freq} is too small on device {device}"
+        else:  # device sync entry
+            deviceFreqRatio = syncinfoDF[syncinfoDF["device id"] == device].iloc[-1]["device_frequency_ratio"]
+            assert deviceFreqRatio < (
+                1 + TOLERANCE
+            ), f"Frequency ratio {deviceFreqRatio} is too large on device {device}"
+            assert deviceFreqRatio > (
+                1 - TOLERANCE
+            ), f"Frequency ratio {deviceFreqRatio} is too small on device {device}"
+
+    deviceData = run_device_profiler_test(
+        testName=f"pytest {TRACY_TESTS_DIR}/test_profiler_sync.py::test_with_ops", doSync=1
+    )
+    reportedFreq = deviceData["data"]["deviceInfo"]["freq"] * 1e6
+    assert os.path.isfile(syncInfoFile)
+
+    syncinfoDF = pd.read_csv(syncInfoFile)
+    devices = sorted(syncinfoDF["device id"].unique())
+    for device in devices:
+        deviceFreq = syncinfoDF[syncinfoDF["device id"] == device].iloc[-1]["frequency"]
+        if not np.isnan(deviceFreq):  # host sync entry
+            freq = float(deviceFreq) * 1e9
+
+            assert freq < (reportedFreq * (1 + TOLERANCE)), f"Frequency {freq} is too large on device {device}"
+            assert freq > (reportedFreq * (1 - TOLERANCE)), f"Frequency {freq} is too small on device {device}"
+
+
+def test_timestamped_events():
+    OP_COUNT = 2
+    RISC_COUNT = 5
+    ZONE_COUNT = 100
+    WH_ERISC_COUNTS = [0, 1, 5]
+    WH_TENSIX_COUNTS = [72, 64, 56]
+    BH_ERISC_COUNTS = [0, 1, 6, 8]
+    BH_TENSIX_COUNTS = [130, 120, 110]
+
+    WH_COMBO_COUNTS = []
+    for T in WH_TENSIX_COUNTS:
+        for E in WH_ERISC_COUNTS:
+            WH_COMBO_COUNTS.append((T, E))
+
+    BH_COMBO_COUNTS = []
+    for T in BH_TENSIX_COUNTS:
+        for E in BH_ERISC_COUNTS:
+            BH_COMBO_COUNTS.append((T, E))
+
+    REF_COUNT_DICT = {
+        "grayskull": [108 * OP_COUNT * RISC_COUNT * ZONE_COUNT, 88 * OP_COUNT * RISC_COUNT * ZONE_COUNT],
+        "wormhole_b0": [(T * RISC_COUNT + E) * OP_COUNT * ZONE_COUNT for T, E in WH_COMBO_COUNTS],
+        "blackhole": [(T * RISC_COUNT + E) * OP_COUNT * ZONE_COUNT for T, E in BH_COMBO_COUNTS],
+    }
+    REF_ERISC_COUNT = {
+        "wormhole_b0": [C * OP_COUNT * ZONE_COUNT for C in WH_ERISC_COUNTS],
+        "blackhole": [C * OP_COUNT * ZONE_COUNT for C in BH_ERISC_COUNTS],
+    }
+
+    ENV_VAR_ARCH_NAME = os.getenv("ARCH_NAME")
+    assert ENV_VAR_ARCH_NAME in REF_COUNT_DICT.keys()
+
+    devicesData = run_device_profiler_test(setupAutoExtract=True)
+
+    if ENV_VAR_ARCH_NAME in REF_ERISC_COUNT.keys():
+        eventCount = len(
+            devicesData["data"]["devices"]["0"]["cores"]["DEVICE"]["riscs"]["TENSIX"]["events"]["erisc_events"]
+        )
+        assert eventCount in REF_ERISC_COUNT[ENV_VAR_ARCH_NAME], "Wrong erisc event count"
+
+    if ENV_VAR_ARCH_NAME in REF_COUNT_DICT.keys():
+        eventCount = len(
+            devicesData["data"]["devices"]["0"]["cores"]["DEVICE"]["riscs"]["TENSIX"]["events"]["all_events"]
+        )
+        assert eventCount in REF_COUNT_DICT[ENV_VAR_ARCH_NAME], "Wrong event count"
+
+
+def test_noc_event_profiler():
+    ENV_VAR_ARCH_NAME = os.getenv("ARCH_NAME")
+    assert ENV_VAR_ARCH_NAME in ["grayskull", "wormhole_b0", "blackhole"]
+
+    testCommand = f"build/{PROG_EXMP_DIR}/test_noc_event_profiler"
+    clear_profiler_runtime_artifacts()
+    nocEventProfilerEnv = "TT_METAL_DEVICE_PROFILER_NOC_EVENTS=1"
+    profilerRun = os.system(f"cd {TT_METAL_HOME} && {nocEventProfilerEnv} {testCommand}")
+    assert profilerRun == 0
+
+    expected_trace_file = f"{PROFILER_LOGS_DIR}/noc_trace_dev0_ID0.json"
+    assert os.path.isfile(expected_trace_file)
+
+    with open(expected_trace_file, "r") as nocTraceJson:
+        noc_trace_data = json.load(nocTraceJson)
+        assert len(noc_trace_data) == 8
+
+
+def test_sub_device_profiler():
+    ARCH_NAME = os.getenv("ARCH_NAME")
+    run_gtest_profiler_test(
+        "./build/test/tt_metal/unit_tests_dispatch",
+        "CommandQueueSingleCardFixture.TensixTestSubDeviceBasicPrograms",
+    )
+    run_gtest_profiler_test(
+        "./build/test/tt_metal/unit_tests_dispatch",
+        "CommandQueueSingleCardTraceFixture.TensixTestSubDeviceTraceBasicPrograms",
+    )

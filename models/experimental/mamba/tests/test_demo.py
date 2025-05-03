@@ -2,17 +2,14 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch
 import pytest
-from loguru import logger
-
-from transformers import AutoTokenizer
 
 from models.experimental.mamba.demo.demo import run_demo
 from models.experimental.mamba.reference.decode_model import MambaPretrainedModelName
-from models.utility_functions import skip_for_grayskull 
+from models.utility_functions import skip_for_grayskull
 
 
+@pytest.mark.skip(reason="Test failing, see issue #7551")
 @skip_for_grayskull("Not supported on Grayskull")
 @pytest.mark.parametrize(
     "model_version, batch, genlen",

@@ -6,7 +6,7 @@
 import torch
 import torch.nn as nn
 
-import tt_lib
+import ttnn
 
 from tt_lib.fallback_ops import fallback_ops
 from models.utility_functions import (
@@ -15,7 +15,7 @@ from models.utility_functions import (
 from models.experimental.roberta.roberta_common import torch2tt_tensor
 
 
-mem_config = tt_lib.tensor.MemoryConfig(tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.L1)
+mem_config = ttnn.L1_MEMORY_CONFIG
 
 
 class TtRobertaLMHead(nn.Module):
@@ -57,14 +57,12 @@ class TtRobertaLMHead(nn.Module):
             self.decoder.bias.data = state_dict[f"{base_address}.decoder.bias"]
 
     def linear(self, x, weight, bias):
-        weight = tt_lib.tensor.transpose(weight, -2, -1)
-        x = tt_lib.tensor.matmul(x, weight, output_mem_config=mem_config)
-        x = tt_lib.tensor.bcast(
+        weight = ttnn.transpose(weight, -2, -1)
+        x = ttnn.matmul(x, weight, memory_config=mem_config)
+        x = ttnn.add(
             x,
             bias,
-            tt_lib.tensor.BcastOpMath.ADD,
-            tt_lib.tensor.BcastOpDim.H,
-            output_mem_config=mem_config,
+            memory_config=mem_config,
         )
         return x
 
@@ -76,7 +74,7 @@ class TtRobertaLMHead(nn.Module):
             torch_x = nn.functional.gelu(torch_input)
             x = torch2tt_tensor(torch_x, self.device)
         else:
-            x = tt_lib.tensor.gelu(tt_input)
+            x = ttnn.gelu(tt_input)
 
         x = self.layer_norm(x)
 

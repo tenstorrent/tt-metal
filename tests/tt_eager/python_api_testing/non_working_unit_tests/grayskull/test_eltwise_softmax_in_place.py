@@ -5,13 +5,10 @@
 from loguru import logger
 import pytest
 import torch
-import tt_lib as ttl
+import ttnn
 
-from tests.tt_eager.python_api_testing.sweep_tests import pytorch_ops
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
-from tests.tt_eager.python_api_testing.sweep_tests.tt_lib_ops import (
-    eltwise_softmax_in_place as tt_eltwise_softmax_in_place,
-)
+from tests.ttnn.python_api_testing.sweep_tests import ttnn_ops
 
 
 def run_eltwise_softmax_in_place_tests(input_shape, dtype, dlayout, in_mem_config, data_seed, device):
@@ -24,9 +21,9 @@ def run_eltwise_softmax_in_place_tests(input_shape, dtype, dlayout, in_mem_confi
     x_ref = x.detach().clone()
 
     # get ref result
-    ref_value = pytorch_ops.softmax_in_place(x_ref)
+    ref_value = torch.softmax(x_ref, -1)
 
-    tt_result = tt_eltwise_softmax_in_place(
+    tt_result = ttnn_ops.eltwise_softmax_in_place(
         x=x, device=device, dtype=[dtype], layout=[dlayout], input_mem_config=[in_mem_config], output_mem_config=None
     )
 
@@ -40,23 +37,23 @@ def run_eltwise_softmax_in_place_tests(input_shape, dtype, dlayout, in_mem_confi
 test_sweep_args = [
     (
         (1, 9, 32, 32),
-        ttl.tensor.DataType.BFLOAT16,
-        ttl.tensor.Layout.TILE,
-        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1),
+        ttnn.bfloat16,
+        ttnn.TILE_LAYOUT,
+        ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1),
         38346,
     ),
     (
         (4, 7, 32, 96),
-        ttl.tensor.DataType.BFLOAT16,
-        ttl.tensor.Layout.TILE,
-        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
+        ttnn.bfloat16,
+        ttnn.TILE_LAYOUT,
+        ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
         17155532,
     ),
     (
         (4, 7, 32, 96),
-        ttl.tensor.DataType.BFLOAT16,
-        ttl.tensor.Layout.TILE,
-        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1),
+        ttnn.bfloat16,
+        ttnn.TILE_LAYOUT,
+        ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1),
         16305027,
     ),
 ]

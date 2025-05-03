@@ -1,38 +1,23 @@
-name: Nightly fast dispatch tests
+name: "(Single-card) Frequent model and ttnn tests"
 
 on:
   workflow_dispatch:
   workflow_call:
   schedule:
-    - cron: "0 1,6 * * *"
+    - cron: "0 */2 * * *"
 
 jobs:
-  frequent-fast-dispatch:
-    strategy:
-      # Do not fail-fast because we need to ensure all tests go to completion
-      # so we try not to get hanging machines
-      fail-fast: false
-      matrix:
-        arch: [grayskull, wormhole_b0]
-        frequent-type: [models, api]
-    env:
-      TT_METAL_ENV: ${{ vars.TT_METAL_ENV }}
-      ARCH_NAME: ${{ matrix.arch }}
-      CONFIG: ci
-    environment: dev
-    runs-on: model-runner-${{ matrix.arch }}
-    steps:
-      - uses: tenstorrent-metal/metal-workflows/.github/actions/checkout-with-submodule-lfs@v2.0.0
-      - name: Ensure weka mount is active
-        run: |
-          sudo systemctl restart mnt-MLPerf.mount
-          sudo /etc/rc.local
-          ls -al /mnt/MLPerf/bit_error_tests
-      - name: Set up dyanmic env vars for build
-        run: |
-          echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
-      - name: Build tt-metal and libs
-        run: make build
-      - name: Run frequent reg tests scripts
-        timeout-minutes: 165
-        run: ./tests/scripts/run_tests.sh --tt-arch ${{ matrix.arch }} --pipeline-type frequent_${{ matrix.frequent-type }} --dispatch-mode fast
+  build-artifact:
+    uses: ./.github/workflows/build-artifact.yaml
+    secrets: inherit
+    with:
+      build-wheel: true
+      version: 22.04
+  fd-nightly:
+    needs: build-artifact
+    uses: ./.github/workflows/fast-dispatch-full-regressions-and-models-impl.yaml
+    secrets: inherit
+    with:
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}

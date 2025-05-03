@@ -18,10 +18,11 @@ test-list:
           high: 100
       comparison:
         function: comp_pcc
-      args-gen: gen_dtype_layout_device
+      args-gen: gen_clip_args
+      sanitize-args: False
       args:
         data-layout: ["TILE"]
-        data-type: ["BFLOAT16", "BFLOAT8_B"]
+        data-type: ["BFLOAT16"]
         buffer-type: ["DRAM", "L1"]
         out-buffer-type: ["DRAM", "L1"]
       output-file: eltwise_clip_sweep.csv

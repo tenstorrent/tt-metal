@@ -2,13 +2,12 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import tt_lib
-import torch
+import ttnn
 import torch.nn as nn
 
 
 from models.experimental.lenet.lenet_utils import load_torch_lenet
-from models.utility_functions import torch2tt_tensor, tt2torch_tensor
+from models.utility_functions import torch2tt_tensor
 from tt_lib.fallback_ops import fallback_ops
 
 
@@ -39,7 +38,7 @@ class TtLeNet5(nn.Module):
             track_running_stats=True,
         )
 
-        self.relu1 = tt_lib.tensor.relu
+        self.relu1 = ttnn.relu
 
         self.maxp1 = fallback_ops.MaxPool2d(kernel_size=2, stride=2)
 
@@ -65,7 +64,7 @@ class TtLeNet5(nn.Module):
             track_running_stats=True,
         )
 
-        self.relu2 = tt_lib.tensor.relu
+        self.relu2 = ttnn.relu
 
         self.maxp2 = fallback_ops.MaxPool2d(kernel_size=2, stride=2)
 
@@ -73,42 +72,42 @@ class TtLeNet5(nn.Module):
         self.fc_weights = torch2tt_tensor(
             fc_weights.reshape(list((1, 1) + fc_weights.shape)),
             self.device,
-            tt_lib.tensor.Layout.ROW_MAJOR,
+            ttnn.ROW_MAJOR_LAYOUT,
         )
         fc_bias = state_dict[f"fc.bias"]
         self.fc_bias = torch2tt_tensor(
             fc_bias.reshape(list((1, 1, 1) + fc_bias.shape)),
             self.device,
-            tt_lib.tensor.Layout.ROW_MAJOR,
+            ttnn.ROW_MAJOR_LAYOUT,
         )
 
         fc1_weights = state_dict[f"fc1.weight"]
         self.fc1_weights = torch2tt_tensor(
             fc1_weights.reshape(list((1, 1) + fc1_weights.shape)),
             self.device,
-            tt_lib.tensor.Layout.ROW_MAJOR,
+            ttnn.ROW_MAJOR_LAYOUT,
         )
         fc1_bias = state_dict[f"fc1.bias"]
         self.fc1_bias = torch2tt_tensor(
             fc1_bias.reshape(list((1, 1, 1) + fc1_bias.shape)),
             self.device,
-            tt_lib.tensor.Layout.ROW_MAJOR,
+            ttnn.ROW_MAJOR_LAYOUT,
         )
 
         fc2_weights = state_dict[f"fc2.weight"]
         self.fc2_weights = torch2tt_tensor(
             fc2_weights.reshape(list((1, 1) + fc2_weights.shape)),
             self.device,
-            tt_lib.tensor.Layout.ROW_MAJOR,
+            ttnn.ROW_MAJOR_LAYOUT,
         )
         fc2_bias = state_dict[f"fc2.bias"]
         self.fc2_bias = torch2tt_tensor(
             fc2_bias.reshape(list((1, 1, 1) + fc2_bias.shape)),
             self.device,
-            tt_lib.tensor.Layout.ROW_MAJOR,
+            ttnn.ROW_MAJOR_LAYOUT,
         )
 
-    def forward(self, x: tt_lib.tensor.Tensor) -> tt_lib.tensor.Tensor:
+    def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
         out = self.conv1(x)  # HOST (fallback)
 
         out = self.batch_norm1(out)  # HOST (fallback)
@@ -126,45 +125,33 @@ class TtLeNet5(nn.Module):
         out = self.maxp2(out)  # HOST (fallback)
 
         # using fallback since last dimension of tensor is not divisible by 2
-        out_shape = out.get_legacy_shape()
+        out_shape = out.padded_shape
         out = fallback_ops.reshape(
             out, out_shape[0], 1, 1, out_shape[1] * out_shape[2] * out_shape[3]
         )  # HOST (fallback)
 
         # fc
-        weight_T = tt_lib.tensor.transpose(self.fc_weights, -2, -1)
-        output = tt_lib.tensor.matmul(out, weight_T)
-        out = tt_lib.tensor.bcast(
-            output,
-            self.fc_bias,
-            tt_lib.tensor.BcastOpMath.ADD,
-            tt_lib.tensor.BcastOpDim.H,
-        )
+        weight_T = ttnn.transpose(self.fc_weights, -2, -1)
+        output = ttnn.matmul(out, weight_T)
+        out = ttnn.add(output, self.fc_bias)
         # relu 2
         out = self.relu2(out)
 
         # fc1
-        weight_T = tt_lib.tensor.transpose(self.fc1_weights, -2, -1)
-        output = tt_lib.tensor.matmul(out, weight_T)
-        out = tt_lib.tensor.bcast(
+        weight_T = ttnn.transpose(self.fc1_weights, -2, -1)
+        output = ttnn.matmul(out, weight_T)
+        out = ttnn.add(
             output,
             self.fc1_bias,
-            tt_lib.tensor.BcastOpMath.ADD,
-            tt_lib.tensor.BcastOpDim.H,
         )
 
         # relu 2
         out = self.relu2(out)
 
         # fc2
-        weight_T = tt_lib.tensor.transpose(self.fc2_weights, -2, -1)
-        output = tt_lib.tensor.matmul(out, weight_T)
-        out = tt_lib.tensor.bcast(
-            output,
-            self.fc2_bias,
-            tt_lib.tensor.BcastOpMath.ADD,
-            tt_lib.tensor.BcastOpDim.H,
-        )
+        weight_T = ttnn.transpose(self.fc2_weights, -2, -1)
+        output = ttnn.matmul(out, weight_T)
+        out = ttnn.add(output, self.fc2_bias)
 
         return out
 

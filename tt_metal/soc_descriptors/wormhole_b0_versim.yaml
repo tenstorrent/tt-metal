@@ -1,0 +1,65 @@
+grid:
+  x_size: 2
+  y_size: 2
+
+arc:
+  [ ]
+
+pcie:
+  [ ]
+
+dram:
+  [
+    [0-0, 0-1],
+  ]
+
+dram_views:
+  [
+    {
+      channel: 0,
+      eth_endpoint: 0,
+      worker_endpoint: 1,
+      address_offset: 0
+    }
+  ]
+
+dram_view_size:
+  1073741824
+
+eth:
+  [ ]
+
+functional_workers:
+  [
+   1-1,
+  ]
+
+harvested_workers:
+  []
+
+router_only:
+  [
+   1-0
+  ]
+
+worker_l1_size:
+  1499136
+
+dram_bank_size:
+  1073741824
+
+eth_l1_size:
+  262144
+
+arch_name: WORMHOLE_B0
+
+features:
+  unpacker:
+    version: 2
+    inline_srca_trans_without_srca_trans_instr: True
+  math:
+    dst_size_alignment: 32768
+  packer:
+    version: 2
+  overlay:
+    version: 2

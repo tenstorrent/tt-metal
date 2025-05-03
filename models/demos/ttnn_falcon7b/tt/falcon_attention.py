@@ -19,19 +19,18 @@ class TtFalconAttention:
 
     def __init__(
         self,
-        device,
         hidden_size: int,
         num_heads: int,
         max_position_embeddings: int = 2048,
         model_config=None,
         parameters=None,
+        core_grid=None,
     ):
         super().__init__()
         self.hidden_size = hidden_size
         self.num_heads = num_heads
         self.head_dim = hidden_size // num_heads
         self.max_position_embeddings = max_position_embeddings
-        self.device = device
         self.parameters = parameters
         self.model_config = model_config
 
@@ -51,6 +50,7 @@ class TtFalconAttention:
         )
 
         self.scalar = 1 / math.sqrt(self.head_dim)
+        self.core_grid = core_grid
 
     def __call__(
         self,
@@ -68,7 +68,6 @@ class TtFalconAttention:
         Prefill input shape: [batch, 1, seq_len, hidden_size]
         Decode input shape: [seq_len, 1, batch, hidden_size]
         """
-        device = self.device
 
         assert not output_attentions
 
@@ -97,7 +96,7 @@ class TtFalconAttention:
             input_tensor_b=self.query_key_value_weights,
             memory_config=self.model_config["FUSED_QKV_MM_OUTPUT_MEMCFG"],
             dtype=self.model_config["FUSED_QKV_MM_OUTPUT_DTYPE"],
-            use_1d_systolic_array=True,
+            core_grid=self.core_grid,
         )
         batch_size, _, sequence_size, fused_query_key_value_width = fused_query_key_value.shape
         fused_query_key_value = ttnn.reshape(
@@ -153,25 +152,26 @@ class TtFalconAttention:
                 input_tensor_a=query_layer,
                 input_tensor_b=key_layer_transposed,
                 memory_config=self.model_config["PRE_SOFTMAX_MM_OUTPUT_MEMCFG"],
+                core_grid=self.core_grid,
             )
 
         elif llm_mode == "decode":
             # TODO: switch to group_attn_matmul once multiple q heads is supported (issue #5318)
             if is_wormhole_b0():
-                attn_weights = ttnn.experimental.operations.primary.transformers.attn_matmul(
+                attn_weights = ttnn.experimental.attn_matmul(
                     query_layer,
                     key_layer_transposed,
-                    compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
-                    output_mem_config=self.model_config["PRE_SOFTMAX_MM_OUTPUT_MEMCFG"],
-                    output_dtype=self.model_config["PRE_SOFTMAX_MM_OUTPUT_DTYPE"],  # Must be BFLOAT16
+                    compute_with_storage_grid_size=ttnn.CoreCoord(self.core_grid.x, self.core_grid.y),
+                    memory_config=self.model_config["PRE_SOFTMAX_MM_OUTPUT_MEMCFG"],
+                    dtype=self.model_config["PRE_SOFTMAX_MM_OUTPUT_DTYPE"],  # Must be BFLOAT16
                 )
             else:
-                attn_weights = ttnn.experimental.operations.primary.transformers.group_attn_matmul(
+                attn_weights = ttnn.experimental.group_attn_matmul(
                     query_layer,
                     key_layer_transposed,
-                    compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
-                    output_mem_config=self.model_config["PRE_SOFTMAX_MM_OUTPUT_MEMCFG"],
-                    output_dtype=self.model_config["PRE_SOFTMAX_MM_OUTPUT_DTYPE"],  # Must be BFLOAT16
+                    compute_with_storage_grid_size=ttnn.CoreCoord(self.core_grid.x, self.core_grid.y),
+                    memory_config=self.model_config["PRE_SOFTMAX_MM_OUTPUT_MEMCFG"],
+                    dtype=self.model_config["PRE_SOFTMAX_MM_OUTPUT_DTYPE"],  # Must be BFLOAT16
                 )
         ttnn.deallocate(query_layer)
         ttnn.deallocate(key_layer_transposed)
@@ -221,20 +221,20 @@ class TtFalconAttention:
         elif llm_mode == "decode":
             # TODO: switch to group_attn_matmul once multiple q heads is supported (issue #5318)
             if is_wormhole_b0():
-                attn_output = ttnn.experimental.operations.primary.transformers.attn_matmul(
+                attn_output = ttnn.experimental.attn_matmul(
                     attn_weights,
                     value_layer,
-                    compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
-                    output_mem_config=self.model_config["POST_SOFTMAX_MM_OUTPUT_MEMCFG"],
-                    output_dtype=self.model_config["POST_SOFTMAX_MM_OUTPUT_DTYPE"],  # Must be BFLOAT16
+                    compute_with_storage_grid_size=ttnn.CoreCoord(self.core_grid.x, self.core_grid.y),
+                    memory_config=self.model_config["POST_SOFTMAX_MM_OUTPUT_MEMCFG"],
+                    dtype=self.model_config["POST_SOFTMAX_MM_OUTPUT_DTYPE"],  # Must be BFLOAT16
                 )
             else:
-                attn_output = ttnn.experimental.operations.primary.transformers.group_attn_matmul(
+                attn_output = ttnn.experimental.group_attn_matmul(
                     attn_weights,
                     value_layer,
-                    compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
-                    output_mem_config=self.model_config["POST_SOFTMAX_MM_OUTPUT_MEMCFG"],
-                    output_dtype=self.model_config["POST_SOFTMAX_MM_OUTPUT_DTYPE"],  # Must be BFLOAT16
+                    compute_with_storage_grid_size=ttnn.CoreCoord(self.core_grid.x, self.core_grid.y),
+                    memory_config=self.model_config["POST_SOFTMAX_MM_OUTPUT_MEMCFG"],
+                    dtype=self.model_config["POST_SOFTMAX_MM_OUTPUT_DTYPE"],  # Must be BFLOAT16
                 )
         ttnn.deallocate(attn_weights)
         ttnn.deallocate(value_layer, force=False)
@@ -251,7 +251,7 @@ class TtFalconAttention:
             attn_output,
             self.dense_weights,
             memory_config=self.model_config["SELFOUT_MM_OUTPUT_MEMCFG"],
-            use_1d_systolic_array=True,
+            core_grid=self.core_grid,
         )
 
         return attn_output, layer_present

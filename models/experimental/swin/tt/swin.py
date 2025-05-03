@@ -2,10 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch
-import torch.nn as nn
 
-import tt_lib
 from models.experimental.swin.tt.swin_for_image_classification import (
     TtSwinForImageClassification,
 )

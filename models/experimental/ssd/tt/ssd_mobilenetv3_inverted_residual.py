@@ -4,7 +4,7 @@
 
 from typing import Union
 import torch.nn as nn
-import tt_lib
+import ttnn
 from models.experimental.ssd.tt.ssd_mobilenetv3_convlayer import (
     TtMobileNetV3ConvLayer,
 )
@@ -44,9 +44,7 @@ class TtMobileNetV3InvertedResidual(nn.Module):
             use_activation=use_activation,
             activation=activation,
             state_dict=state_dict,
-            base_address=f"{base_address}.block.0"
-            if not self.extractor
-            else f"{base_address}.0",
+            base_address=f"{base_address}.block.0" if not self.extractor else f"{base_address}.0",
             device=device,
         )
 
@@ -62,9 +60,7 @@ class TtMobileNetV3InvertedResidual(nn.Module):
             use_activation=use_activation,
             activation=activation,
             state_dict=state_dict,
-            base_address=f"{base_address}.block.1"
-            if not self.extractor
-            else f"{base_address}.1",
+            base_address=f"{base_address}.block.1" if not self.extractor else f"{base_address}.1",
             device=device,
         )
 
@@ -77,13 +73,11 @@ class TtMobileNetV3InvertedResidual(nn.Module):
             padding=0,
             use_activation=False if not self.extractor else True,
             state_dict=state_dict,
-            base_address=f"{base_address}.block.2"
-            if not self.extractor
-            else f"{base_address}.2",
+            base_address=f"{base_address}.block.2" if not self.extractor else f"{base_address}.2",
             device=device,
         )
 
-    def forward(self, features: tt_lib.tensor.Tensor) -> tt_lib.tensor.Tensor:
+    def forward(self, features: ttnn.Tensor) -> ttnn.Tensor:
         features = self.expand_1x1(features)
         features = self.conv_3x3(features)
         features = self.reduce_1x1(features)

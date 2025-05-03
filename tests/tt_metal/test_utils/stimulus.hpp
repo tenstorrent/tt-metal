@@ -6,7 +6,7 @@
 #include <algorithm>
 #include <random>
 
-#include "tt_metal/common/logger.hpp"
+#include <tt-metalium/logger.hpp>
 #include "tt_metal/test_utils/packing.hpp"
 
 namespace tt {
@@ -35,8 +35,38 @@ std::vector<ValueType> generate_strided_vector(
 }
 
 template <typename ValueType>
+std::vector<ValueType> generate_constant_vector(const ValueType& constant, const size_t& numel) {
+    std::vector<ValueType> results(numel, constant);
+    return results;
+}
+
+template <typename ValueType>
+std::vector<ValueType> generate_increment_vector(
+    const ValueType& init,
+    const size_t& numel,
+    const float increment = 1.0,
+    const float start = 0.0,
+    const int count = 16,
+    const bool slide = true) {
+    std::vector<ValueType> results(numel, init);
+    float start_value = start;
+    float value = start_value;
+    for (unsigned int index = 0; index < numel; ++index) {
+        if (index % count == 0 && index > 0) {
+            if (slide) {
+                start_value += increment;
+            }
+            value = start_value;
+        }
+        results.at(index) = value;
+        value += increment;
+    }
+    return results;
+}
+
+template <typename ValueType>
 std::vector<ValueType> generate_uniform_random_vector(
-    ValueType min, ValueType max, const size_t numel, const float seed = 0) {
+    ValueType min, ValueType max, const size_t numel, const uint32_t seed = 0) {
     std::mt19937 gen(seed);
     std::vector<ValueType> results(numel);
     if constexpr (std::is_integral<ValueType>::value) {
@@ -54,7 +84,7 @@ std::vector<ValueType> generate_uniform_random_vector(
 
 template <typename ValueType>
 std::vector<ValueType> generate_normal_random_vector(
-    ValueType mean, ValueType stdev, const size_t numel, const float seed = 0) {
+    ValueType mean, ValueType stdev, const size_t numel, const uint32_t seed = 0) {
     std::mt19937 gen(seed);
     std::vector<ValueType> results(numel);
     if constexpr (std::is_integral<ValueType>::value or std::is_floating_point<ValueType>::value) {
@@ -70,7 +100,7 @@ std::vector<ValueType> generate_normal_random_vector(
 // Will randomize values in the generated vector from the input vector
 template <typename ValueType>
 std::vector<ValueType> generate_random_vector_from_vector(
-    std::vector<ValueType>& possible_values, const size_t numel, const float seed = 0) {
+    std::vector<ValueType>& possible_values, const size_t numel, const uint32_t seed = 0) {
     TT_FATAL(possible_values.size(), "possible_values.size()={} > 0", possible_values.size());
     std::mt19937 gen(seed);
     std::vector<ValueType> results(numel);
@@ -81,26 +111,42 @@ std::vector<ValueType> generate_random_vector_from_vector(
 
 template <typename PackType, typename ValueType>
 std::vector<PackType> generate_packed_uniform_random_vector(
-    ValueType min, ValueType max, const size_t numel, const float seed = 0) {
+    ValueType min, ValueType max, const size_t numel, const uint32_t seed = 0) {
     return pack_vector<PackType, ValueType>(generate_uniform_random_vector(min, max, numel, seed));
 }
 
 template <typename PackType, typename ValueType>
 std::vector<PackType> generate_packed_normal_random_vector(
-    ValueType mean, ValueType stdev, const size_t numel, const float seed = 0) {
+    ValueType mean, ValueType stdev, const size_t numel, const uint32_t seed = 0) {
     return pack_vector<PackType, ValueType>(generate_normal_random_vector(mean, stdev, numel, seed));
 }
 
 template <typename PackType, typename ValueType>
 std::vector<PackType> generate_packed_random_vector_from_vector(
-    std::vector<ValueType>& possible_values, const size_t numel, const float seed = 0) {
+    std::vector<ValueType>& possible_values, const size_t numel, const uint32_t seed = 0) {
     return pack_vector<PackType, ValueType>(generate_random_vector_from_vector(possible_values, numel, seed));
 }
 
 template <typename PackType, typename ValueType>
 std::vector<PackType> generate_packed_strided_vector(
-     const ValueType& init, const ValueType& assigned, const size_t& stride, const size_t& offset, const size_t& numel) {
+    const ValueType& init, const ValueType& assigned, const size_t& stride, const size_t& offset, const size_t& numel) {
     return pack_vector<PackType, ValueType>(generate_strided_vector(init, assigned, stride, offset, numel));
+}
+
+template <typename PackType, typename ValueType>
+std::vector<PackType> generate_packed_constant_vector(const ValueType& constant, const size_t& numel) {
+    return pack_vector<PackType, ValueType>(generate_constant_vector(constant, numel));
+}
+
+template <typename PackType, typename ValueType>
+std::vector<PackType> generate_packed_increment_vector(
+    const ValueType& init,
+    const size_t& numel,
+    float increment = 1.0,
+    float start = 0.0,
+    int count = 16,
+    bool slide = true) {
+    return pack_vector<PackType, ValueType>(generate_increment_vector(init, numel, increment, start, count, slide));
 }
 
 }  // namespace test_utils

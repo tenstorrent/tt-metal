@@ -5,13 +5,10 @@
 
 import torch
 
-from loguru import logger
 
-
-import tt_lib
+import ttnn
 from models.experimental.yolov3.reference.models.common import DetectMultiBackend
 from models.experimental.yolov3.tt.yolov3_detection_model import TtDetectionModel
-from models.experimental.yolov3.reference.models.common import autopad
 from models.experimental.yolov3.reference.utils.dataloaders import LoadImages
 from models.experimental.yolov3.reference.utils.general import check_img_size
 from models.utility_functions import (
@@ -69,7 +66,7 @@ def test_perf(device, use_program_cache, model_location_generator):
         if len(im.shape) == 3:
             im = im[None]
 
-        tt_im = torch2tt_tensor(im, device, tt_layout=tt_lib.tensor.Layout.ROW_MAJOR)
+        tt_im = torch2tt_tensor(im, device, tt_layout=ttnn.ROW_MAJOR_LAYOUT)
 
         profiler.start(cpu_key)
         pt_out = reference_model(im)

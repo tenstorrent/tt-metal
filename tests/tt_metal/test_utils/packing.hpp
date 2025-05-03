@@ -6,7 +6,7 @@
 #include <algorithm>
 #include <random>
 
-#include "tt_metal/common/logger.hpp"
+#include <tt-metalium/logger.hpp>
 
 namespace tt {
 namespace test_utils {
@@ -26,8 +26,8 @@ std::vector<PackType> pack_vector(const std::vector<ValueType>& values) {
         std::is_integral<PackType>::value,
         "Packed Type must be an integral type we are packing to -- uint8_t/uint16_t/uint32_t...");
     TT_FATAL(
-        sizeof(PackType) > ValueType::SIZEOF,
-        "sizeof(PackType)={} > ValueType::SIZEOF)={}",
+        sizeof(PackType) >= ValueType::SIZEOF,
+        "sizeof(PackType)={} >= ValueType::SIZEOF)={}",
         sizeof(PackType),
         ValueType::SIZEOF);
     TT_FATAL(
@@ -43,7 +43,7 @@ std::vector<PackType> pack_vector(const std::vector<ValueType>& values) {
     unsigned int index = 0;
     std::for_each(results.begin(), results.end(), [&](PackType& result) {
         for (unsigned j = 0; j < num_values_to_pack; j++) {
-            result |= values[index].to_packed() << (index * ValueType::SIZEOF * CHAR_BIT);
+            result |= values[index].to_packed() << (j * ValueType::SIZEOF * CHAR_BIT);
             index++;
         }
         return result;

@@ -3,14 +3,11 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
-import tt_lib
-
+import ttnn
 from loguru import logger
 from tt_lib.fallback_ops import fallback_ops
-
 from models.utility_functions import (
     torch2tt_tensor,
-    tt2torch_tensor,
     run_conv_on_device_wrapper,
     is_conv_supported_on_device,
 )
@@ -90,7 +87,7 @@ class TtYolov5Conv2D(torch.nn.Module):
         if self.conv_on_device:
             x = self.conv(x)
             x = x + self.conv_bias
-            x = torch2tt_tensor(x, self.device, tt_layout=tt_lib.tensor.Layout.ROW_MAJOR)
+            x = torch2tt_tensor(x, self.device, tt_layout=ttnn.ROW_MAJOR_LAYOUT)
         else:
             x = self.conv(x)
 
@@ -125,6 +122,6 @@ class TtYolov5Conv(torch.nn.Module):
         x = self.conv(x)
 
         if self.act:
-            x = tt_lib.tensor.silu(x)
+            x = ttnn.silu(x)
 
         return x

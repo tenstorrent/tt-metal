@@ -11,14 +11,15 @@ import transformers
 import ttnn
 from ttnn.tracer import trace, visualize, get_graph
 
-from models.utility_functions import skip_for_wormhole_b0
+from models.utility_functions import is_wormhole_b0, is_blackhole
 
 from models.demos.bert.tt import ttnn_bert
 from models.demos.bert.tt import ttnn_optimized_bert
 from ttnn.model_preprocessing import preprocess_model_parameters
 
 
-@skip_for_wormhole_b0()
+@pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported on WH and BH")
+@pytest.mark.requires_fast_runtime_mode_off
 def test_exp():
     with trace():
         tensor = torch.randint(0, 100, (1, 64))
@@ -27,7 +28,8 @@ def test_exp():
     visualize(tensor)
 
 
-@skip_for_wormhole_b0()
+@pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported on WH and BH")
+@pytest.mark.requires_fast_runtime_mode_off
 def test_reshape():
     with trace():
         tensor = torch.randint(0, 100, (4, 64))
@@ -39,7 +41,8 @@ def test_reshape():
     visualize(tensor)
 
 
-@skip_for_wormhole_b0()
+@pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported on WH and BH")
+@pytest.mark.requires_fast_runtime_mode_off
 @pytest.mark.parametrize("show_modules", [True, False])
 def test_torch_bert(show_modules):
     model_name = "google/bert_uncased_L-4_H-256_A-4"
@@ -55,7 +58,8 @@ def test_torch_bert(show_modules):
     visualize(last_hidden_state, show_modules=show_modules)
 
 
-@skip_for_wormhole_b0()
+@pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported on WH and BH")
+@pytest.mark.requires_fast_runtime_mode_off
 @pytest.mark.parametrize("show_modules", [True, False])
 def test_bloom(show_modules):
     model_name = "bigscience/bloom-560m"
@@ -74,9 +78,11 @@ def test_bloom(show_modules):
         visualize(last_hidden_state, show_modules=show_modules)
 
 
-@skip_for_wormhole_b0()
+@pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported on WH and BH")
+@pytest.mark.requires_fast_runtime_mode_off
 @pytest.mark.models_performance_bare_metal
 @pytest.mark.models_performance_virtual_machine
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 0}], indirect=True)
 @pytest.mark.parametrize("model_name", ["phiyodr/bert-large-finetuned-squad2"])
 @pytest.mark.parametrize("batch_size", [8])
 @pytest.mark.parametrize("sequence_size", [384])
@@ -124,10 +130,11 @@ def test_ttnn_bert(device, use_program_cache, model_name, batch_size, sequence_s
     visualize(output)
 
 
+@pytest.mark.requires_fast_runtime_mode_off
 def test_falcon7b_instruct():
     from functools import partial
     from loguru import logger
-    from models.demos.falcon7b.reference.hf_modeling_falcon import FalconConfig, FalconForCausalLM
+    from transformers import FalconConfig, FalconForCausalLM
 
     model_version = "tiiuae/falcon-7b-instruct"
 

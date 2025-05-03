@@ -5,7 +5,6 @@ import torch
 import pytest
 from loguru import logger
 import ttnn
-import tt_lib
 from models.experimental.bert_tiny.tt.bert_encoder import TtBertencoder
 
 from transformers import BertForQuestionAnswering
@@ -27,9 +26,7 @@ def test_bert_encoder_inference(
 ):
     model_name = str(model_location_generator("mrm8488/bert-tiny-finetuned-squadv2", model_subdir="Bert"))
     hugging_face_reference_model = BertForQuestionAnswering.from_pretrained(model_name, torchscript=False)
-    output_mem_config = tt_lib.tensor.MemoryConfig(
-        tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.DRAM
-    )
+    output_mem_config = ttnn.DRAM_MEMORY_CONFIG
     state_dict = hugging_face_reference_model.state_dict()
     tt_ouptut_model = TtBertencoder(
         hugging_face_reference_model.config, state_dict=state_dict, device=device, mem_config=output_mem_config

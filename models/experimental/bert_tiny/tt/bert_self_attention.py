@@ -3,7 +3,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch.nn as nn
-import tt_lib
 import ttnn
 import math
 import torch
@@ -66,11 +65,15 @@ def mha(
         # Input shape : [1, 1, 128, 128]
         # Expected output shape: [1, 128, 2, 64]
         reshape_unt = fallback_ops.reshape(
-            x, x.get_legacy_shape()[0], x.get_legacy_shape()[2], num_heads, x.get_legacy_shape()[3] // num_heads
+            x,
+            x.padded_shape[0],
+            x.padded_shape[2],
+            num_heads,
+            x.padded_shape[3] // num_heads,
         )
         # Permute expects input to be in TILE layout
         # Input shape: [1, 128, 2, 64]
-        transposed = tt_lib.tensor.permute(reshape_unt, [0, 2, 1, 3])
+        transposed = ttnn.permute(reshape_unt, [0, 2, 1, 3])
 
         transposed = tt_to_torch_tensor(transposed)
         transposed = ttnn.from_torch(transposed, dtype=ttnn.bfloat16)
@@ -94,12 +97,10 @@ def mha(
         reciprocal_of_sqrt_hidden_dim_tensor = ttnn.to_torch(ttnn.from_device(reciprocal_of_sqrt_hidden_dim_tensor))
         reciprocal_of_sqrt_hidden_dim_tensor = torch_to_tt_tensor(reciprocal_of_sqrt_hidden_dim_tensor, device)
 
-        return tt_lib.tensor.bcast(
+        return ttnn.multiply(
             x,
             reciprocal_of_sqrt_hidden_dim_tensor,
-            tt_lib.tensor.BcastOpMath.MUL,
-            tt_lib.tensor.BcastOpDim.HW,
-            output_mem_config=out_mem_config,
+            memory_config=out_mem_config,
         )
 
     def mha_(activation: ttnn.Tensor, attention_mask: ttnn.Tensor):

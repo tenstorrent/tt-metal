@@ -4,7 +4,6 @@
 
 import json
 import torch
-import tt_lib
 from loguru import logger
 
 from transformers import T5Model
@@ -24,14 +23,10 @@ def run_test_T5DenseActDense_inference(device, model_name, input_h, input_w):
     config["is_decoder"] = False
 
     if config["is_decoder"]:
-        hf_reference_module = (
-            hugging_face_reference_model.decoder.block[0].layer[2].DenseReluDense
-        )
+        hf_reference_module = hugging_face_reference_model.decoder.block[0].layer[2].DenseReluDense
         base_address = f"decoder.block.0.layer.2.DenseReluDense"
     else:
-        hf_reference_module = (
-            hugging_face_reference_model.encoder.block[0].layer[1].DenseReluDense
-        )
+        hf_reference_module = hugging_face_reference_model.encoder.block[0].layer[1].DenseReluDense
         base_address = f"encoder.block.0.layer.1.DenseReluDense"
 
     # Prepare input
@@ -42,9 +37,7 @@ def run_test_T5DenseActDense_inference(device, model_name, input_h, input_w):
     pt_out = hf_reference_module(test_input)[0].unsqueeze(1)
 
     # T5-small config file: https://huggingface.co/t5-small/resolve/main/config.json
-    tt_model = TtT5DenseActDense(
-        config, hugging_face_reference_model.state_dict(), base_address, device
-    )
+    tt_model = TtT5DenseActDense(config, hugging_face_reference_model.state_dict(), base_address, device)
     tt_out = tt_model(torch2tt_tensor(test_input, device))
     tt_out = tt2torch_tensor(tt_out)
 

@@ -9,11 +9,12 @@ import pytest
 import torch
 import transformers
 
-from models.experimental.functional_t5.tt import ttnn_functional_t5
-from models.experimental.functional_t5.tt import ttnn_optimized_functional_t5
+from models.demos.grayskull.t5.tt import ttnn_functional_t5
+from models.demos.grayskull.t5.tt import ttnn_optimized_functional_t5
 from models.utility_functions import (
     torch_random,
-    skip_for_wormhole_b0,
+    is_wormhole_b0,
+    is_blackhole,
     enable_persistent_kernel_cache,
     disable_persistent_kernel_cache,
 )
@@ -36,20 +37,21 @@ def get_expected_times(model_name, functional_t5):
     }[model_name][functional_t5]
 
 
-@skip_for_wormhole_b0()
+@pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported on WH and BH")
+@pytest.mark.skip(reason="#7619: Perf regression on both")
 @pytest.mark.models_performance_bare_metal
 @pytest.mark.models_performance_virtual_machine
 @pytest.mark.parametrize("model_name", ["t5-small", "google/flan-t5-small"])
 @pytest.mark.parametrize("batch_size", [8])
-@pytest.mark.parametrize("sequence_size", [64])
+@pytest.mark.parametrize("sequence_size", [128])
 @pytest.mark.parametrize("functional_t5", [ttnn_functional_t5, ttnn_optimized_functional_t5])
 def test_t5_for_conditional_generation(device, use_program_cache, model_name, batch_size, sequence_size, functional_t5):
     disable_persistent_kernel_cache()
 
     config = transformers.T5Config.from_pretrained(model_name)
 
-    torch_input_ids = torch_random((batch_size, sequence_size), 0, 10, dtype=torch.int64)
-    torch_decoder_input_ids = torch_random((batch_size, sequence_size), 0, 10, dtype=torch.int64)
+    torch_input_ids = torch_random((batch_size, sequence_size), 0, config.vocab_size, dtype=torch.int64)
+    torch_decoder_input_ids = torch_random((batch_size, sequence_size), 0, config.vocab_size, dtype=torch.int64)
 
     if functional_t5 == ttnn_functional_t5:
         tt_model_name = f"ttnn_{model_name}"
@@ -61,6 +63,7 @@ def test_t5_for_conditional_generation(device, use_program_cache, model_name, ba
     parameters = preprocess_model_parameters(
         model_name=tt_model_name,
         initialize_model=lambda: transformers.T5ForConditionalGeneration.from_pretrained(model_name).eval(),
+        convert_to_ttnn=functional_t5.convert_to_ttnn,
         custom_preprocessor=functional_t5.custom_preprocessor,
         device=device,
     )
@@ -71,14 +74,13 @@ def test_t5_for_conditional_generation(device, use_program_cache, model_name, ba
         decoder_input_ids = ttnn.from_torch(torch_decoder_input_ids, device=device)
 
         start = time.time()
-        with ttnn.enable_fast_runtime_mode():
-            output, *_ = functional_t5.t5_for_conditional_generation(
-                config,
-                input_ids,
-                decoder_input_ids,
-                parameters=parameters,
-            )
-            output = ttnn.from_device(output)
+        output, *_ = functional_t5.t5_for_conditional_generation(
+            config,
+            input_ids,
+            decoder_input_ids,
+            parameters=parameters,
+        )
+        output = ttnn.from_device(output)
         end = time.time()
         durations.append(end - start)
         enable_persistent_kernel_cache()

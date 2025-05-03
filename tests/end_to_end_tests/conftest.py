@@ -2,10 +2,27 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import pytest
+import random
 
-import tt_lib
+import pytest
+import torch
+import numpy as np
+
+import ttnn
+
 
 @pytest.fixture(scope="function")
-def first_grayskull_device(silicon_arch_name, silicon_arch_grayskull):
-    return tt_lib.device.CreateDevice(0)
+def first_grayskull_device():
+    device = ttnn.CreateDevice(0)
+    yield device
+
+    ttnn.CloseDevice(device)
+
+
+@pytest.fixture(scope="function")
+def reset_seeds():
+    torch.manual_seed(213919)
+    np.random.seed(213919)
+    random.seed(213919)
+
+    yield

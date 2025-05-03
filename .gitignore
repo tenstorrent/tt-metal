@@ -1,14 +1,22 @@
 .cache
+.clangd
+.devcontainer/
 .vscode
 .idea
+runtime
 *.log
 *.csv
 *.xlsx
+*.code-workspace
 /tt-perf*
 test_hlk_args_init_gen
 tt_build
 tt_debug
+.build/
 build
+build_*
+/python_env/
+CMakeUserPresets.json
 
 /llk_out/
 /out/
@@ -19,6 +27,8 @@ coremodel/model/release/
 
 pipegen.yaml
 device_desc.yaml
+cluster_descriptor.yaml
+.umd/
 /clean
 *coverage.txt
 blobgen_cmd_log
@@ -70,6 +80,7 @@ infra/machine_setup/inventory/
 
 # exclude MNIST etc model downloads
 data/
+hf_data/
 
 # exclude venv
 venv/
@@ -77,11 +88,11 @@ venv/
 # exclude pytorch binaries
 *.pt
 
+# exclude binaries
+*.bin
+
 # releases
 dist
-
-# exclude dtx generated files
-tt_metal/third_party/lfs/dtx_transform_outputs
 
 #exclude reports dir
 .reports/*
@@ -100,8 +111,25 @@ src/firmware/riscv/targets/erisc/src/api/
 src/firmware/riscv/targets/erisc/src/eth_routing.cpp
 src/firmware/riscv/targets/erisc/src/eth_routing_v2.cpp
 .ipynb_checkpoints/
+ttnn/tutorials/DiT/
 
 .envrc
 
 # tt_lib and _ttnn stubs
 *.pyi
+
+compile_commands.json
+
+# files to ensure that we can use the wheel with runtime artifacts
+ttnn/build
+ttnn/ttnn/build
+ttnn/runtime
+ttnn/ttnn/runtime
+.ttnn_runtime_artifacts/
+
+# exclude packages brough in from CPM
+.cpmcache
+
+ClangBuildAnalyzer.ini
+ttnn/ttnn/.rpath_checked__ttnn
+Testing

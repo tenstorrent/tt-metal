@@ -1,0 +1,96 @@
+name: "[internal] Perf models impl"
+
+on:
+  workflow_call:
+    inputs:
+      build-artifact-name:
+        required: true
+        type: string
+      wheel-artifact-name:
+        required: true
+        type: string
+      docker-image:
+        required: true
+        type: string
+
+jobs:
+  models-perf:
+    strategy:
+      # Do not fail-fast because we need to ensure all tests go to completion
+      # so we try not to get hanging machines
+      fail-fast: false
+      matrix:
+        test-info: [
+          {name: "N300 WH B0", arch: wormhole_b0, runs-on: ["N300", "pipeline-perf", "bare-metal", "in-service"], machine-type: "bare_metal"},
+        ]
+        model-type: [llm_javelin, cnn_javelin, other]
+    name: "${{ matrix.model-type }} ${{ matrix.test-info.name }}"
+    defaults:
+      run:
+        shell: bash
+    runs-on: ${{ matrix.test-info.runs-on }}
+    steps:
+      - name: ⬇️ Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: ⬇️ Download Build
+        uses: actions/download-artifact@v4
+        timeout-minutes: 10
+        with:
+          name: ${{ inputs.build-artifact-name }}
+      - name: Extract files
+        run: tar -xvf ttm_any.tar
+      - name: ⬇️ Download Wheel
+        uses: actions/download-artifact@v4
+        timeout-minutes: 10
+        with:
+          name: ${{ inputs.wheel-artifact-name }}
+      - name: Enable Performance mode
+        run: sudo cpupower frequency-set -g performance
+      - name: Run performance regressions
+        timeout-minutes: 70
+        uses: ./.github/actions/docker-run
+        env:
+          LOGURU_LEVEL: INFO
+        with:
+          docker_image: ${{ inputs.docker-image }}
+          docker_password: ${{ secrets.GITHUB_TOKEN }}
+          docker_opts: |
+            -v /mnt/MLPerf:/mnt/MLPerf:ro
+            -e TT_METAL_HOME=${{ github.workspace }}
+            -e ARCH_NAME=${{ matrix.test-info.arch }}
+            -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
+            -e GTEST_OUTPUT=xml:generated/test_reports/
+            -e GITHUB_ACTIONS=true
+          install_wheel: true
+          run_args: ./tests/scripts/run_tests.sh --tt-arch ${{ matrix.test-info.arch }} --pipeline-type ${{ matrix.model-type }}_models_performance_${{ matrix.test-info.machine-type }}
+      # TODO: Fix the pipeline before enabling notifications.
+      #- uses: tenstorrent/tt-metal/.github/actions/slack-report@main
+      #  if: ${{ failure() }}
+      #  with:
+      #    slack_webhook_url: ${{ secrets.SLACK_WEBHOOK_URL }}
+      - name: Check perf report exists
+        id: check-perf-report
+        if: ${{ !cancelled() }}
+        run: |
+          ls -hal
+          export PERF_REPORT_FILENAME=Models_Perf_$(date +%Y_%m_%d).csv
+          ls -hal $PERF_REPORT_FILENAME
+          echo "perf_report_filename=$PERF_REPORT_FILENAME" >> "$GITHUB_OUTPUT"
+      - name: Upload perf report
+        if: ${{ !cancelled() && steps.check-perf-report.conclusion == 'success' }}
+        uses: actions/upload-artifact@v4
+        timeout-minutes: 10
+        with:
+          name: perf-report-csv-${{ matrix.model-type }}-${{ matrix.test-info.arch }}-${{ matrix.test-info.machine-type }}
+          path: "${{ steps.check-perf-report.outputs.perf_report_filename }}"
+      - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
+        timeout-minutes: 10
+        if: ${{ !cancelled() }}
+        with:
+          path: generated/test_reports/
+          prefix: "test_reports_"
+      - name: Disable Performance mode
+        if: always()
+        run: sudo cpupower frequency-set -g ondemand

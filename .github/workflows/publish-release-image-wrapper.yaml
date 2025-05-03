@@ -1,0 +1,30 @@
+name: "Create and Publish Release Docker Image"
+
+on:
+  workflow_dispatch:
+jobs:
+  build-artifact:
+    uses: ./.github/workflows/build-artifact.yaml
+    secrets: inherit
+    with:
+      build-wheel: true
+      version: "22.04"
+  create-image-tag-name:
+    runs-on: ubuntu-latest
+    outputs:
+      image-tag-name: ${{ steps.set-tag-name.outputs.image-tag-name }}
+    steps:
+      - name: Set the tag name of the docker image
+        id: set-tag-name
+        run: |
+          echo "image-tag-name=${GITHUB_REF_NAME//\//-}" >> $GITHUB_OUTPUT
+  publish-release-image:
+    needs:
+      - build-artifact
+      - create-image-tag-name
+    uses: ./.github/workflows/publish-release-image.yaml
+    secrets: inherit
+    with:
+      base-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      version: dev-${{ needs.create-image-tag-name.outputs.image-tag-name }}
+      is_major_version: false

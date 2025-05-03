@@ -15,25 +15,27 @@
 #include "noc_nonblocking_api.h"
 #include "stream_io_map.h"
 #include "tdma_xmov.h"
-#include "dataflow_api.h"
 #include "debug/dprint.h"
-#include "noc_addr_ranges_gen.h"
+#include "dataflow_api.h"
 #include "tools/profiler/kernel_profiler.hpp"
-#include <kernel.cpp>
+#include <kernel_includes.hpp>
+#include <stdint.h>
 
-
-uint8_t noc_index = NOC_INDEX;
+extern "C" void wzerorange(uint32_t *start, uint32_t *end);
 
 CBInterface cb_interface[NUM_CIRCULAR_BUFFERS];
 
-void __attribute__((section("erisc_l1_code"))) kernel_launch() {
+extern "C" [[gnu::section(".start")]] void _start(uint32_t) {
     DeviceZoneScopedMainChildN("ERISC-KERNEL");
+
+    // Clear bss, we write to rtos_context_switch_ptr just below.
+    extern uint32_t __ldm_bss_start[];
+    extern uint32_t __ldm_bss_end[];
+    wzerorange(__ldm_bss_start, __ldm_bss_end);
+
     rtos_context_switch_ptr = (void (*)())RtosTable[0];
 
+    WAYPOINT("K");
     kernel_main();
-    mailboxes->launch.run = RUN_MSG_DONE;
-    uint64_t dispatch_addr = NOC_XY_ADDR(NOC_X(DISPATCH_CORE_X), NOC_Y(DISPATCH_CORE_Y), DISPATCH_MESSAGE_ADDR);
-    if (routing_info->routing_enabled and mailboxes->launch.mode == DISPATCH_MODE_DEV) {
-        internal_::notify_dispatch_core_done(dispatch_addr);
-    }
+    WAYPOINT("KD");
 }

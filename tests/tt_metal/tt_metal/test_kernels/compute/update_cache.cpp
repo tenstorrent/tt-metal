@@ -8,7 +8,6 @@
 #include "compute_kernel_api/untilize.h"
 #include "compute_kernel_api/tilize.h"
 
-
 namespace NAMESPACE {
 void MAIN {
     constexpr uint32_t onetile = 1;
@@ -24,7 +23,7 @@ void MAIN {
 
     untilize_init(in_cb, untilized_in_cb);
 
-    for (uint32_t  b = 0; b < B / 32; b++) {
+    for (uint32_t b = 0; b < B / 32; b++) {
         untilize_init_short(in_cb);
 
         cb_wait_front(in_cb, Wt);
@@ -34,7 +33,7 @@ void MAIN {
         cb_pop_front(in_cb, Wt);
         untilize_uninit(in_cb);
 
-        for(uint32_t u = 0; u < 32; u++) {
+        for (uint32_t u = 0; u < 32; u++) {
             untilize_init_short(cache_cb);
             cb_wait_front(cache_cb, Wt);
             cb_reserve_back(untilized_cache_cb, Wt);
@@ -43,7 +42,7 @@ void MAIN {
             cb_pop_front(cache_cb, Wt);
             untilize_uninit(cache_cb);
 
-            tilize_init_short(untilized_cache2_cb, Wt);
+            tilize_init_short(untilized_cache2_cb, Wt, out_cb);
             cb_wait_front(untilized_cache2_cb, Wt);
             cb_reserve_back(out_cb, Wt);
             tilize_block(untilized_cache2_cb, Wt, out_cb);
@@ -52,8 +51,8 @@ void MAIN {
             // Compute pops both
             cb_pop_front(untilized_cache2_cb, Wt);
             cb_pop_front(untilized_cache_cb, Wt);
-            tilize_uninit(untilized_cache2_cb);
+            tilize_uninit(untilized_cache2_cb, out_cb);
         }
     }
 }
-} // NAMESPACE
+}  // namespace NAMESPACE

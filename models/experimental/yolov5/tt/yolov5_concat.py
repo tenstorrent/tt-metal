@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
-import tt_lib as ttl
+import ttnn
 
 
 class TtYolov5Concat(torch.nn.Module):
@@ -16,4 +16,4 @@ class TtYolov5Concat(torch.nn.Module):
         self.d = dimension
 
     def forward(self, x):
-        return ttl.tensor.concat(x, self.d)
+        return ttnn.concat(x, self.d)

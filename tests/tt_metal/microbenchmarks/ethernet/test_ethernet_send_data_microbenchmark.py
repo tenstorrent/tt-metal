@@ -87,11 +87,18 @@ def test_ethernet_send_data_microbenchmark_concurrent_with_dram_read_and_write(
                         input_buffer_size_bytes: {input_buffer_size_bytes}"
     )
     os.system(f"rm -rf {os.environ['TT_METAL_HOME']}/generated/profiler/.logs/profile_log_device.csv")
+    ARCH_NAME = os.getenv("ARCH_NAME")
+    exec_path = (
+        os.environ["TT_METAL_HOME"]
+        + "/build/test/tt_metal/perf_microbenchmark/ethernet/test_ethernet_read_and_send_data"
+        + "_"
+        + ARCH_NAME
+    )
     rc = os.system(
-        f"TT_METAL_SLOW_DISPATCH_MODE=1 TT_METAL_DEVICE_PROFILER=1 \
-            {os.environ['TT_METAL_HOME']}/build/test/tt_metal/perf_microbenchmark/ethernet/test_ethernet_read_and_send_data \
-            \"tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/erisc/eth_l1_forward_local_chip_data_looping_multi_channel.cpp\" \
-            \"tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/erisc/eth_non_blocking_receive_fwd_to_dram.cpp\" \
+        f'TT_METAL_SLOW_DISPATCH_MODE=1 TT_METAL_DEVICE_PROFILER=1 \
+            {exec_path} \
+            "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/erisc/eth_l1_forward_local_chip_data_looping_multi_channel.cpp" \
+            "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/erisc/eth_non_blocking_receive_fwd_to_dram.cpp" \
             {eth_buffer_size_bytes} \
             {num_transaction_buffers} \
             {input_buffer_page_size} \
@@ -99,7 +106,7 @@ def test_ethernet_send_data_microbenchmark_concurrent_with_dram_read_and_write(
             {1} \
             {1} \
             0 \
-            "
+            '
         # > /dev/null 2>&1"
     )
     if rc != 0:
@@ -126,6 +133,7 @@ def test_ethernet_send_data_microbenchmark_concurrent_with_dram_read_and_write(
 @pytest.mark.parametrize("num_transaction_buffers", [1, 2, 3])
 @pytest.mark.parametrize("input_buffer_page_size", [1024, 2048, 4096])
 # @pytest.mark.parametrize("precomputed_address_buffer_size", [0, 16, 32])
+@pytest.mark.skip("FD2_MULTI: FD2 doesn't support multichip yet")
 def test_decoupled_worker_and_erisc_data_mover_single_direction(
     input_buffer_size_bytes, eth_buffer_size_bytes, num_transaction_buffers, input_buffer_page_size
 ):
@@ -156,13 +164,20 @@ def test_decoupled_worker_and_erisc_data_mover_single_direction(
                         input_buffer_size_bytes: {input_buffer_size_bytes}"
     )
     os.system(f"rm -rf {os.environ['TT_METAL_HOME']}/generated/profiler/.logs/profile_log_device.csv")
+    ARCH_NAME = os.getenv("ARCH_NAME")
+    exec_path = (
+        os.environ["TT_METAL_HOME"]
+        + "/build/test/tt_metal/perf_microbenchmark/ethernet/test_workers_and_erisc_datamover_unidirectional"
+        + "_"
+        + ARCH_NAME
+    )
     rc = os.system(
-        f"TT_METAL_SLOW_DISPATCH_MODE=1 TT_METAL_DEVICE_PROFILER=1 \
-            {os.environ['TT_METAL_HOME']}/build/test/tt_metal/perf_microbenchmark/ethernet/test_workers_and_erisc_datamover_unidirectional \
-            \"tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/erisc/erisc_datamover_sender_worker_reader.cpp\" \
-            \"tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/erisc/erisc_datamover_sender_worker_sender.cpp\" \
-            \"tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/erisc/erisc_datamover_receiver_worker_reader.cpp\" \
-            \"tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/erisc/erisc_datamover_receiver_worker_sender.cpp\" \
+        f'TT_METAL_SLOW_DISPATCH_MODE=1 TT_METAL_DEVICE_PROFILER=1 \
+            {exec_path} \
+            "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/erisc/erisc_datamover_sender_worker_reader.cpp" \
+            "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/erisc/erisc_datamover_sender_worker_sender.cpp" \
+            "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/erisc/erisc_datamover_receiver_worker_reader.cpp" \
+            "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/erisc/erisc_datamover_receiver_worker_sender.cpp" \
             {eth_buffer_size_bytes} \
             {num_transaction_buffers} \
             {input_buffer_page_size} \
@@ -170,7 +185,7 @@ def test_decoupled_worker_and_erisc_data_mover_single_direction(
             {1} \
             {1} \
             0 \
-            "
+            '
         # > /dev/null 2>&1"
     )
     if rc != 0:

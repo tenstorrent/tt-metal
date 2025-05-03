@@ -2,17 +2,38 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <chrono>
+#include <errno.h>
+#include <fmt/base.h>
+#include <stdint.h>
+#include <stdlib.h>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tt_metal.hpp>
 #include <algorithm>
-#include <functional>
-#include <random>
+#include <array>
+#include <cstring>
+#include <exception>
+#include <map>
+#include <optional>
+#include <string>
+#include <tuple>
+#include <utility>
+#include <variant>
 #include <vector>
 
-#include "common/bfloat16.hpp"
-#include "tt_metal/detail/tt_metal.hpp"
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/impl/dispatch/command_queue.hpp"
+#include <tt-metalium/circular_buffer_types.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/data_types.hpp>
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/kernel_types.hpp>
+#include <tt-metalium/logger.hpp>
+#include <tt-metalium/program.hpp>
+#include <tt_stl/span.hpp>
+#include "test_common.hpp"
+#include <tt-metalium/tt_backend_api_types.hpp>
 #include "tt_metal/tt_metal/perf_microbenchmark/common/util.hpp"
 
+using std::vector;
 using namespace tt;
 using namespace tt::tt_metal;
 using std::chrono::duration_cast;
@@ -73,7 +94,7 @@ int main(int argc, char** argv) {
     //                      Device Setup
     ////////////////////////////////////////////////////////////////////////////
     int device_id = 0;
-    tt_metal::Device* device = tt_metal::CreateDevice(device_id);
+    tt_metal::IDevice* device = tt_metal::CreateDevice(device_id);
 
     auto grid_coord = device->compute_with_storage_grid_size();
     num_cores_c = (num_cores_c == 0) ? grid_coord.x : num_cores_c;
@@ -163,11 +184,11 @@ int main(int argc, char** argv) {
                     CoreCoord core = {(std::size_t)j, (std::size_t)i};
                     int core_index = i * num_cores_c + j;
 
-                    vector<uint32_t> reader_runtime_args;
-                    vector<uint32_t> writer_runtime_args;
+                    std::array<uint32_t, 255> reader_runtime_args;
+                    std::array<uint32_t, 255> writer_runtime_args;
                     for (uint32_t k = 0; k < 255; ++k) {
-                        reader_runtime_args.push_back(core_index + k);
-                        writer_runtime_args.push_back(core_index + k);
+                        reader_runtime_args[k] = core_index + k;
+                        writer_runtime_args[k] = core_index + k;
                     }
 
                     SetRuntimeArgs(program, writer_kernel, core, writer_runtime_args);
@@ -201,7 +222,7 @@ int main(int argc, char** argv) {
 
     // Determine if it passes performance goal
     auto avg_elapsed_us = calculate_average(elapsed_us);
-    if (pass && bypass_check == false) {
+    if (pass && !bypass_check) {
         // goal is under 10us
         long target_us = 10;
 

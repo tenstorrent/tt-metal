@@ -14,7 +14,7 @@ from operator import ne, truth
 
 from loguru import logger
 
-from models.utility_functions import is_wormhole_b0
+from models.utility_functions import is_wormhole_b0, is_grayskull, is_blackhole
 
 
 class TestSuiteType(Enum):
@@ -31,6 +31,14 @@ TestEntry = namedtuple("TestEntry", ["test_name", "executable_name", "extra_para
 
 def void_for_whb0(x):
     return (not is_wormhole_b0()) and x or None
+
+
+def void_for_gs(x):
+    return (not is_grayskull()) and x or None
+
+
+def void_for_bh(x):
+    return (not is_blackhole()) and x or None
 
 
 def filter_empty(fn):
@@ -239,3 +247,39 @@ def error_out_if_test_report_has_failures(test_report):
 
     if not all_passed:
         sys.exit(1)
+
+
+# Device helpers to be shared with top-level conftest.py and other conftest.py files that will handle open/close of devices.
+
+
+def get_dispatch_core_type():
+    import ttnn
+
+    # TODO: 11059 move dispatch_core_type to device_params when all tests are updated to not use WH_ARCH_YAML env flag
+    dispatch_core_type = ttnn.device.DispatchCoreType.WORKER
+    if ("WH_ARCH_YAML" in os.environ) and os.environ["WH_ARCH_YAML"] == "wormhole_b0_80_arch_eth_dispatch.yaml":
+        dispatch_core_type = ttnn.device.DispatchCoreType.ETH
+    return dispatch_core_type
+
+
+def get_updated_device_params(device_params):
+    import ttnn
+
+    dispatch_core_type = get_dispatch_core_type()
+    new_device_params = device_params.copy()
+
+    is_blackhole = ttnn.get_arch_name() == "blackhole"
+    dispatch_core_axis = new_device_params.pop("dispatch_core_axis", None)
+
+    # Set default if not specified
+    if dispatch_core_axis is None:
+        dispatch_core_axis = ttnn.DispatchCoreAxis.COL if is_blackhole else ttnn.DispatchCoreAxis.ROW
+
+    # Force COL for blackhole regardless of user setting
+    if is_blackhole and dispatch_core_axis == ttnn.DispatchCoreAxis.ROW:
+        logger.warning("blackhole arch does not support DispatchCoreAxis.Row, using DispatchCoreAxis.COL instead.")
+        dispatch_core_axis = ttnn.DispatchCoreAxis.COL
+
+    dispatch_core_config = ttnn.DispatchCoreConfig(dispatch_core_type, dispatch_core_axis)
+    new_device_params["dispatch_core_config"] = dispatch_core_config
+    return new_device_params

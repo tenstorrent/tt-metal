@@ -2,15 +2,15 @@
 
 TTNN is a Python library that provides a launching point for learning the APIs within ``TT-METAL``.
 The TTNN library assumes the user is familiar with [PyTorch](https://pytorch.org) and provides
-operations that easily translate PyTorch tensors to and from ``ttnn.Tensor``(s).   This library is an application programming interface intended for Tenstorrent device operations with a primary dependency on the Python libray tt_lib within the tt_eager subproject.  This code has been tested with PyTorch 1.13.
+operations that easily translate PyTorch tensors to and from ``ttnn.Tensor``(s).   This library is an application programming interface intended for Tenstorrent device operations with a primary dependency on the Python library tt_lib within the tt_eager subproject.  This code has been tested with PyTorch 1.13.
 
 We trust that this library will be a valuable guide to helping you on your journey to take full advantage of our devices!
 
 #### Please learn the API using our Jupyter Notebook tutorials
 * There is a collection of tutorials written with Jupyter Notebooks to help you ramp up your skillset for using `tt-metal`. These
-notebooks can be found under https://github.com/tenstorrent-metal/tt-metal/tree/main/ttnn/tutorials.
+notebooks can be found under https://github.com/tenstorrent/tt-metal/tree/main/ttnn/tutorials.
 * These tutorials assume you already have a machine set up with either a grayskull or wormhole device available and that you have successfully
-followed the instructions for [installing and building the software](https://github.com/tenstorrent-metal/tt-metal/blob/main/README.md).
+followed the instructions for [installing and building the software with the development Python environment](https://github.com/tenstorrent/tt-metal/blob/main/README.md).
 * From within the `ttnn/tutorials` directory, launch the notebooks with: `jupyter lab --no-browser --port=8888`
 
 
@@ -26,7 +26,7 @@ followed the instructions for [installing and building the software](https://git
 * add
     * The tensors must be moved to device before the operation can be done.
 * subtract.
-    * Broadcasting is only suported in the last two dimensions (ie the height and width dimensions).
+    * Broadcasting is only supported in the last two dimensions (i.e. the height and width dimensions).
     * The tensors must be moved to device before the operation can be done.
 * reshape
     * The last two dimensions in the reshape must be a multiple of 32 when using the tensor on a device.
@@ -52,7 +52,7 @@ followed the instructions for [installing and building the software](https://git
         * These are traditional unit tests written with pytest
         * Failures on these tests will cause alarms if code is merged into main
 * Why do the sweep tests use a dictionary for all the combinations of input and then use a special run method?  Could you not have done this with a traditional pytest instead?
-    * The primary reason was because we needed a way to create a consolidated report per operation in the form of a csv file.  The idea was that each operation would get its own python file where all the test combinations are handled by a single run method.  Each permuation of the input combinations would become the header for the resulting csv which is then uploaded and reported on.
+    * The primary reason was because we needed a way to create a consolidated report per operation in the form of a csv file.  The idea was that each operation would get its own python file where all the test combinations are handled by a single run method.  Each permutation of the input combinations would become the header for the resulting csv which is then uploaded and reported on.
 * How do I run sweep tests with pytest?
     * To run all of the sweep tests for a given python operation file:
         * `pytest <full-path-to-tt-metal>/tt-metal/tests/ttnn/sweep_tests/test_all_sweep_tests.py::test_<operation>`
@@ -66,14 +66,14 @@ followed the instructions for [installing and building the software](https://git
 * What types are supported on device?
     * We currently support ttnn.bfloat16, ttnn.bfloat8 and ttnn.uint32.
 * What shapes are supported on device?
-    * The last dimension of the shape multiplied by the number of bytes of the sizeof the dataype must be a multiple of four.  For example, ttnn.bloat16 would need to have the last dimension be even for a tensor using ttnn.ROW_MAJOR_LAYOUT.  For ttnn.TILE_LAYOUT the to_layout operation will automatically do padding to ensure the the last two dimensions (height and width) are multiples of 32.
+    * The last dimension of the shape multiplied by the number of bytes of the sizeof the dataype must be a multiple of four.  For example, ttnn.bloat16 would need to have the last dimension be even for a tensor using ttnn.ROW_MAJOR_LAYOUT.  For ttnn.TILE_LAYOUT the to_layout operation will automatically do padding to ensure the last two dimensions (height and width) are multiples of 32.
 * Is slicing available?
     * Slicing is supported.  At the moment this feature falls back to using PyTorch slicing on the host.
     * Example:
         * tensor1 = ttnn.from_torch(torch.randn(3,3))
         * print(tensor1[:1])
 * Why are the results from operations like add and matmul not the same precision and require a pearson correlation coefficient comparison?
-    * Results for operations are different because the order of floating point operations is different between CPU and the TT device.  A similiar issue would arise when comparing cpu and gpu operations.
+    * Results for operations are different because the order of floating point operations is different between CPU and the TT device.  A similar issue would arise when comparing cpu and gpu operations.
 * How do I create a tensor of all zeros that is not on device and the height and width do not have to be multiples of 32?
     * Use PyTorch to achieve this.
         * tensor = ttnn.from_torch(torch.zeros(3,3))
@@ -82,10 +82,12 @@ followed the instructions for [installing and building the software](https://git
     * You can add one or both of these environment variables
         *   `export TT_METAL_LOGGER_TYPES=Op`
         *   `export TT_METAL_LOGGER_LEVEL=DEBUG`
-    * For the location of the operations use the following environment variable
-        * `export OPERATION_HISTORY_CSV=<filename>`
+    * In addition, you can add the following environment variable to print currently executing ttnn operations. This makes every op blocking, ensuring that what is printed is actually executing. Otherwise, logging may not be representative of where the error occurs. Note: you may want to omit this when using gdb since there may be interactions with gdb.
+        * `export TTNN_CONFIG_OVERRIDES='{"enable_fast_runtime_mode": false, "enable_logging": true}'`
+            * `enable_fast_runtime_mode`: When turned on, op validation is always skipped
+            * `enable_logging`: Turns on ttnn logging feature for ops, which makes every op blocking
 * What is the format for git commit messages?
-    * As mentioned in other documenation, the use of the '#' symbol to identify an issue request number is expected on each commit message.
+    * As mentioned in other documentation, the use of the '#' symbol to identify an issue request number is expected on each commit message.
         * For example your git commit message might be: "#4003: Your message here" for github issue 4003.
     * Consider using: `git config --global core.commentChar '>'`
 

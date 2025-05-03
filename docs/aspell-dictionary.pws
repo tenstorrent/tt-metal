@@ -12,7 +12,7 @@ BRISC
 BRISCs
 BUF
 BUFs
-BeginTrace
+BeginTraceCapture
 BertIntermediate
 BinaryOpType
 BorrowedStorage
@@ -62,13 +62,15 @@ DumpDeviceProfileResults
 ENDL
 ETH
 EltwiseUnary
-EndTrace
+EndTraceCapture
 EnqueueProgram
 EnqueueReadBuffer
+EnqueueReadSubBuffer
 EnqueueRecordEvent
 EnqueueTrace
 EnqueueWaitForEvent
 EnqueueWriteBuffer
+EnqueueWriteSubBuffer
 Enum
 Enums
 EventSynchronize
@@ -84,7 +86,6 @@ Grayskull
 HW
 HiFi
 HostDataType
-InstantiateTrace
 InterleavedBufferConfig
 Jupyter
 KernelHandle
@@ -136,6 +137,8 @@ RISCVs
 RISCs
 ReadFromDevice
 ReduceDim
+RepeatTrace
+ReplayTrace
 ResNet
 RuntimeArgs
 SETPRECISION
@@ -157,7 +160,7 @@ TT
 TTNN
 TTNN's
 TT-NN
-TensTorrent's
+Tenstorrent's
 TensorMemoryLayout
 Tensorflow
 Tenstorrent
@@ -169,7 +172,6 @@ UnaryOpType
 UpdateCircularBufferPageSize
 UpdateCircularBufferTotalSize
 UpdateDynamicCircularBufferAddress
-UpdateRuntimeArgs
 VC
 VCs
 WH
@@ -469,6 +471,7 @@ softplus
 softshrink
 softsign
 sqrt
+square
 sr
 src
 srca
@@ -525,6 +528,7 @@ untilize
 untilized
 untilizing
 upsample
+downsample
 vBool
 vConst
 vConstFloatPrgm

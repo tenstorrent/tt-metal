@@ -5,9 +5,9 @@
 import math
 import torch
 from torch import nn
-import tt_lib
 
-from loguru import logger
+import ttnn
+
 from models.utility_functions import (
     torch2tt_tensor,
     tt2torch_tensor,
@@ -24,8 +24,8 @@ def t5_shape_tt(states, batch_size, n_heads, key_value_proj_dim, device):
         states = states.transpose(1, 2)
         tt_out = torch2tt_tensor(states, device)
     else:
-        tt_out = tt_lib.tensor.reshape(states, batch_size, -1, n_heads, key_value_proj_dim)
-        tt_out = tt_lib.tensor.transpose(tt_out, 1, -2)
+        tt_out = ttnn.reshape_on_device(states, batch_size, -1, n_heads, key_value_proj_dim)
+        tt_out = ttnn.transpose(tt_out, 1, -2)
 
     return tt_out
 
@@ -54,8 +54,8 @@ def t5_unshape_tt(states, batch_size, inner_dim, device):
         states = t5_unshape_pt(states, batch_size, inner_dim)
         tt_out = torch2tt_tensor(states, device)
     else:
-        states = tt_lib.tensor.transpose(states, 1, -2)
-        tt_out = tt_lib.tensor.reshape(states, 1, batch_size, -1, inner_dim)
+        states = ttnn.transpose(states, 1, -2)
+        tt_out = ttnn.reshape_on_device(states, 1, batch_size, -1, inner_dim)
 
     return tt_out
 
@@ -315,19 +315,17 @@ class TtT5Attention(nn.Module):
         self.dropout = config["dropout_rate"]
         self.inner_dim = self.n_heads * self.key_value_proj_dim
         self.device = device
-        self.mem_config = tt_lib.tensor.MemoryConfig(
-            tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.L1
-        )
+        self.mem_config = ttnn.L1_MEMORY_CONFIG
 
         self.q_weights = torch2tt_tensor(state_dict[f"{base_address}.q.weight"], device)
         self.k_weights = torch2tt_tensor(state_dict[f"{base_address}.k.weight"], device)
         self.v_weights = torch2tt_tensor(state_dict[f"{base_address}.v.weight"], device)
         self.o_weights = torch2tt_tensor(state_dict[f"{base_address}.o.weight"], device)
 
-        self.q_weights = tt_lib.tensor.transpose(self.q_weights, -2, -1)
-        self.k_weights = tt_lib.tensor.transpose(self.k_weights, -2, -1)
-        self.v_weights = tt_lib.tensor.transpose(self.v_weights, -2, -1)
-        self.o_weights = tt_lib.tensor.transpose(self.o_weights, -2, -1)
+        self.q_weights = ttnn.transpose(self.q_weights, -2, -1)
+        self.k_weights = ttnn.transpose(self.k_weights, -2, -1)
+        self.v_weights = ttnn.transpose(self.v_weights, -2, -1)
+        self.o_weights = ttnn.transpose(self.o_weights, -2, -1)
 
         if self.has_relative_attention_bias:
             self.relative_attention_bias = nn.Embedding(self.relative_attention_num_buckets, self.n_heads)
@@ -422,8 +420,8 @@ class TtT5Attention(nn.Module):
         Mask is (batch_size, key_length) (non-causal) or (batch_size, key_length, key_length)
         past_key_value[0] is (batch_size, n_heads, q_len - 1, dim_per_head)
         """
-        batch_size = hidden_states.get_legacy_shape()[1]
-        seq_length = hidden_states.get_legacy_shape()[2]
+        batch_size = hidden_states.padded_shape[1]
+        seq_length = hidden_states.padded_shape[2]
 
         real_seq_length = seq_length
 
@@ -433,7 +431,7 @@ class TtT5Attention(nn.Module):
             ), f"past_key_value should have 2 past states: keys and values. Got { len(past_key_value)} past states"
             real_seq_length += past_key_value[0].shape[2] if query_length is None else query_length
 
-        key_length = real_seq_length if key_value_states is None else key_value_states.get_legacy_shape()[2]
+        key_length = real_seq_length if key_value_states is None else key_value_states.padded_shape[2]
 
         def shape(states):
             """projection"""
@@ -450,11 +448,11 @@ class TtT5Attention(nn.Module):
             if key_value_states is None:
                 # self-attn
                 # (batch_size, n_heads, seq_length, dim_per_head)
-                hidden_states = shape(tt_lib.tensor.matmul(hidden_states, proj_weights, self.mem_config))
+                hidden_states = shape(ttnn.matmul(hidden_states, proj_weights, memory_config=self.mem_config))
             elif past_key_value is None:
                 # cross-attn
                 # (batch_size, n_heads, seq_length, dim_per_head)
-                hidden_states = shape(tt_lib.tensor.matmul(key_value_states, proj_weights, self.mem_config))
+                hidden_states = shape(ttnn.matmul(key_value_states, proj_weights, memory_config=self.mem_config))
 
             if past_key_value is not None:
                 if key_value_states is None:
@@ -463,12 +461,12 @@ class TtT5Attention(nn.Module):
                     hidden_states = tt2torch_tensor(hidden_states)
                     hidden_states = torch.cat([past_key_value, hidden_states], dim=2)
                     hidden_states = torch2tt_tensor(hidden_states, self.device)
-                elif past_key_value.shape[2] != key_value_states.get_legacy_shape()[2]:
+                elif past_key_value.shape[2] != key_value_states.padded_shape[2]:
                     # checking that the `sequence_length` of the `past_key_value` is the same as
                     # the provided `key_value_states` to support prefix tuning
                     # cross-attn
                     # (batch_size, n_heads, seq_length, dim_per_head)
-                    hidden_states = shape(tt_lib.tensor.matmul(key_value_states, proj_weights, self.mem_config))
+                    hidden_states = shape(ttnn.matmul(key_value_states, proj_weights, memory_config=self.mem_config))
                 else:
                     # cross-attn
                     hidden_states = past_key_value
@@ -476,7 +474,7 @@ class TtT5Attention(nn.Module):
 
         # get query states
         query_states = shape(
-            tt_lib.tensor.matmul(hidden_states, self.q_weights, self.mem_config)
+            ttnn.matmul(hidden_states, self.q_weights, memory_config=self.mem_config)
             # self.q(hidden_states)
         )  # (batch_size, n_heads, seq_length, dim_per_head)
 
@@ -497,8 +495,8 @@ class TtT5Attention(nn.Module):
         # compute scores
         # scores = torch.matmul(query_states, key_states.transpose(3, 2))
         # equivalent of torch.einsum("bnqd,bnkd->bnqk", query_states, key_states), compatible with onnx op>9
-        transposed_key_states = tt_lib.tensor.transpose(key_states, -2, -1)
-        scores = tt_lib.tensor.bmm(query_states, transposed_key_states, self.mem_config)
+        transposed_key_states = ttnn.transpose(key_states, -2, -1)
+        scores = ttnn.matmul(query_states, transposed_key_states, memory_config=self.mem_config)
 
         if (
             position_bias is None
@@ -520,7 +518,7 @@ class TtT5Attention(nn.Module):
             # if key and values are already calculated
             # we want only the last query position bias
             if past_key_value is not None:
-                position_bias = position_bias[:, :, -hidden_states.get_legacy_shape()[2] :, :]
+                position_bias = position_bias[:, :, -hidden_states.padded_shape[2] :, :]
 
             # "Broadcast" position bias so it can be used in + operation
             position_bias = position_bias.repeat(batch_size, 1, 1, 1)
@@ -530,7 +528,7 @@ class TtT5Attention(nn.Module):
 
             # Prunned heads!
             if self.pruned_heads:
-                mask = torch.ones(position_bias.get_legacy_shape()[2])
+                mask = torch.ones(position_bias.padded_shape[2])
                 mask[list(self.pruned_heads)] = 0
                 position_bias = position_bias[:, mask.bool()]
 
@@ -543,21 +541,21 @@ class TtT5Attention(nn.Module):
             self.cached_key_length = key_length
 
         # scores += position_bias_masked
-        scores = tt_lib.tensor.add(scores, position_bias, output_mem_config=self.mem_config)
+        scores = ttnn.add(scores, position_bias, memory_config=self.mem_config)
 
         # attn_weights = nn.functional.softmax(scores.float(), dim=-1).type_as(scores)
-        attn_weights = tt_lib.operations.primary.softmax_in_place(scores)
+        attn_weights = ttnn.softmax_in_place(scores)
 
         # Dropout is not used in inference
         # attn_weights = nn.functional.dropout(attn_weights, p=self.dropout, training=self.training)  # (batch_size, n_heads, seq_length, key_length)
 
         # Mask heads if we want to
         if layer_head_mask is not None:
-            attn_weights = tt_lib.tensor.mul(attn_weights, layer_head_mask, self.mem_config)
+            attn_weights = ttnn.mul(attn_weights, layer_head_mask, self.mem_config)
 
-        attn_output = tt_lib.tensor.bmm(attn_weights, value_states, self.mem_config)
+        attn_output = ttnn.matmul(attn_weights, value_states, memory_config=self.mem_config)
         attn_output = unshape(attn_output)  # (batch_size, seq_length, dim)
-        attn_output = tt_lib.tensor.matmul(attn_output, self.o_weights, self.mem_config)
+        attn_output = ttnn.matmul(attn_output, self.o_weights, memory_config=self.mem_config)
 
         present_key_value_state = (key_states, value_states) if (self.is_decoder and use_cache) else None
         outputs = (attn_output,) + (present_key_value_state,) + (position_bias,)

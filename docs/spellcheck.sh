@@ -12,7 +12,7 @@ then
     exit -1
 fi
 cd ${TT_METAL_HOME}/docs/
-for i in `find ./source/ -iname '*.rst'`; 
+for i in `find ./source/ -type d -name 'sweeps' -prune -o -iname '*.rst'`;
 do
     echo "Checking $i"
     if [ $INTERACTIVE_MODE -gt 0 ];
@@ -27,7 +27,7 @@ do
                 echo "-------------------------------"
                 echo "There are typos in the file: $i"
                 echo "Please update text in $i, or update personal dictionary as case maybe"
-                echo "-------------------------------"            
+                echo "-------------------------------"
                 exit -1
             else
                 echo "Skipping empty file $i"

@@ -3,11 +3,9 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
-from torch import nn
 
 from typing import List, Tuple, Union, Optional
 from packaging import version
-from collections import OrderedDict
 from PIL import Image
 import os
 import glob
@@ -43,7 +41,7 @@ def window_partition(input_feature, window_size, device, put_on_device=True):
     """
     Partitions the given input into windows.
     """
-    batch_size, height, width, num_channels = input_feature.get_legacy_shape()
+    batch_size, height, width, num_channels = input_feature.padded_shape
     input_feature = tt_to_torch_tensor(input_feature)
     input_feature = input_feature.view(
         batch_size,
@@ -63,7 +61,7 @@ def window_reverse(windows, window_size, height, width, device, put_on_device=Tr
     """
     Merges windows to produce higher resolution features.
     """
-    num_channels = windows.get_legacy_shape()[-1]
+    num_channels = windows.padded_shape[-1]
     windows = tt_to_torch_tensor(windows)
     windows = windows.view(
         -1,

@@ -1,0 +1,24 @@
+name: "apc nightly debug run"
+
+on:
+  schedule:
+    # Runs nightly at 12:00 AM UTC
+    - cron: "0 0 * * *"
+
+  workflow_dispatch:
+
+permissions:
+  actions: read
+  contents: write
+  pull-requests: write
+  pages: write
+  id-token: write
+  packages: write
+  checks: write
+
+jobs:
+  nightly-debug:
+    uses: ./.github/workflows/all-post-commit-workflows.yaml
+    secrets: inherit
+    with:
+      build-type: RelWithDebInfo

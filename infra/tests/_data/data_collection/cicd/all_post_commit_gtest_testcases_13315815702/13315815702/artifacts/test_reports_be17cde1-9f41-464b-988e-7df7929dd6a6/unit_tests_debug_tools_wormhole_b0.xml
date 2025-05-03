@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuites tests="1" failures="0" disabled="0" errors="0" time="1.77" timestamp="2025-02-13T20:10:36.275" name="AllTests">
+  <testsuite name="DPrintFixture" tests="1" failures="0" disabled="0" skipped="0" errors="0" time="1.769" timestamp="2025-02-13T20:10:36.275">
+    <testcase name="TensixTestPrintHanging" file="/work/tests/tt_metal/tt_metal/debug_tools/dprint/test_print_hanging.cpp" line="59" status="run" result="completed" time="1.769" timestamp="2025-02-13T20:10:36.275" classname="DPrintFixture" />
+  </testsuite>
+</testsuites>

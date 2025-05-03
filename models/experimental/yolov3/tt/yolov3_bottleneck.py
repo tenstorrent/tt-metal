@@ -3,17 +3,10 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch.nn as nn
-import numpy as np
-from loguru import logger
-from pathlib import Path
-import sys
-import torch
 
-from models.experimental.yolov3.reference.models.common import autopad
 from models.experimental.yolov3.tt.yolov3_conv import TtConv
-import tt_lib
-from tt_lib.fallback_ops import fallback_ops
-from models.utility_functions import torch2tt_tensor, tt2torch_tensor
+
+import ttnn
 
 
 class TtBottleneck(nn.Module):
@@ -60,6 +53,6 @@ class TtBottleneck(nn.Module):
     def forward(self, x):
         output = self.cv2(self.cv1(x))
         if self.add:
-            output = tt_lib.tensor.add(x, output)
+            output = ttnn.add(x, output)
 
         return output

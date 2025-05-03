@@ -1,0 +1,53 @@
+name: "[internal] UMD Unit tests"
+
+on:
+  workflow_call:
+    inputs:
+      arch:
+        required: true
+        type: string
+      runner-label:
+        required: true
+        type: string
+      timeout:
+        required: false
+        type: number
+        default: 15
+      docker-image:
+        required: true
+        type: string
+      build-artifact-name:
+        required: true
+        type: string
+
+jobs:
+  umd-unit-tests:
+    name: UMD tests ${{ inputs.arch }} ${{ inputs.runner-label }}
+    runs-on:
+      - ${{ inputs.runner-label }}
+      - cloud-virtual-machine
+      - in-service
+    container:
+      image: ${{ inputs.docker-image }}
+      env:
+        ARCH_NAME: ${{ inputs.arch }}
+        LD_LIBRARY_PATH: /work/build/lib
+        LOGURU_LEVEL: INFO
+        PYTHONPATH: /work
+      volumes:
+        - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
+        - /dev/hugepages-1G:/dev/hugepages-1G
+      options: "--device /dev/tenstorrent"
+    defaults:
+      run:
+        shell: bash
+        working-directory: /work # https://github.com/actions/runner/issues/878
+    steps:
+      - name: ⬇️  Setup Job
+        uses: tenstorrent/tt-metal/.github/actions/setup-job@main
+        timeout-minutes: 10
+        with:
+          build-artifact-name: ${{ inputs.build-artifact-name }}
+      - name: Run UMD unit tests
+        timeout-minutes: ${{ inputs.timeout }}
+        run: build/test/umd/${{ inputs.arch }}/unit_tests

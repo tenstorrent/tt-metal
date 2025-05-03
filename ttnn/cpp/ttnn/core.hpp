@@ -3,56 +3,68 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
+#include <csignal>
+#include <cstdint>
 #include <optional>
+#include <string>
+#include <vector>
 
-#include "third_party/magic_enum/magic_enum.hpp"
-#include "tt_eager/tensor/tensor.hpp"
-#include "tt_eager/tensor/tensor_impl.hpp"  // TTNN_TENSOR_PRINT_PROFILE
-#include "tt_eager/tensor/types.hpp"
+#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/tensor/tensor_impl.hpp"  // TTNN_TENSOR_PRINT_PROFILE
+#include "ttnn/tensor/types.hpp"
+#include "ttnn/config.hpp"
 #include "ttnn/types.hpp"
+
+namespace ttnn {
+
+using OptionalConstTensors = std::vector<std::optional<const Tensor>>;
+using OptionalTensors = std::vector<std::optional<Tensor>>;
+using Tensors = std::vector<Tensor>;
+
+}  // namespace ttnn
 
 namespace ttnn {
 
 namespace core {
 
-inline bool has_storage_type_of(const ttnn::Tensor& tensor, const ttnn::StorageType& storage_type) {
-    return tensor.storage_type() == storage_type;
-}
+bool has_storage_type_of(const ttnn::Tensor& tensor, const ttnn::StorageType& storage_type);
 
-inline bool is_tensor_on_device(const ttnn::Tensor& tensor) {
-    return tensor.storage_type() == StorageType::DEVICE;
-}
+std::optional<ttnn::MemoryConfig> get_memory_config(const ttnn::Tensor& tensor);
 
-inline bool is_tensor_on_multi_device(const ttnn::Tensor& tensor) {
-    return tensor.storage_type() == StorageType::MULTI_DEVICE;
-}
+void set_printoptions(const std::string& profile);
 
-inline bool is_tensor_on_device_or_multidevice(const ttnn::Tensor& tensor) {
-    return is_tensor_on_device(tensor) or is_tensor_on_multi_device(tensor);
-}
+void segfault_handler(int sig);
 
-inline bool any_tensor_on_multi_device(const std::vector<ttnn::Tensor>& tensors) {
-    for (const auto& tensor : tensors) {
-        if (is_tensor_on_multi_device(tensor)) {
-            return true;
-        }
-    }
-    return false;
-}
-
-inline void set_printoptions(const std::string& profile) {
-    tt::tt_metal::tensor_impl::TTNN_TENSOR_PRINT_PROFILE =
-        magic_enum::enum_cast<tt::tt_metal::tensor_impl::TensorPrintProfile>(profile, [](char lhs, char rhs) {
-            return std::tolower(lhs) == std::tolower(rhs);
-        }).value();
-}
+void dump_stack_trace_on_segfault();
 
 }  // namespace core
 
+using core::get_memory_config;
 using core::has_storage_type_of;
-using core::is_tensor_on_device;
-using core::is_tensor_on_multi_device;
-using core::is_tensor_on_device_or_multidevice;
-using core::any_tensor_on_multi_device;
 using core::set_printoptions;
+
+class CoreIDs {
+public:
+    static CoreIDs& instance();
+
+    std::int64_t get_python_operation_id();
+    void set_python_operation_id(std::int64_t operation_id);
+    std::int64_t fetch_and_increment_python_operation_id();
+
+    std::int64_t get_tensor_id();
+    void set_tensor_id(std::int64_t tensor_id);
+    std::int64_t fetch_and_increment_tensor_id();
+
+    std::int64_t get_device_operation_id();
+    void set_device_operation_id(std::int64_t device_operation_id);
+    std::int64_t fetch_and_increment_device_operation_id();
+
+private:
+    CoreIDs() = default;
+    ~CoreIDs() = default;
+    std::atomic<std::int64_t> tensor_id;
+    std::atomic<std::int64_t> python_operation_id;
+    std::atomic<std::int64_t> device_operation_id = 1;
+};
+
 }  // namespace ttnn

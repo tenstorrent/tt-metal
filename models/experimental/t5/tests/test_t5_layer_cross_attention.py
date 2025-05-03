@@ -4,7 +4,7 @@
 
 import torch
 import json
-import tt_lib
+import pytest
 from loguru import logger
 
 from transformers import T5Model
@@ -12,8 +12,11 @@ from models.utility_functions import (
     torch2tt_tensor,
     tt2torch_tensor,
     comp_pcc,
+    is_wormhole_b0,
 )
 from models.experimental.t5.tt.t5_layer_cross_attention import TtT5LayerCrossAttention
+
+pytestmark = pytest.mark.skipif(is_wormhole_b0(), reason="Skip for Wormhole B0")
 
 
 def run_test_T5LayerCrossAttention_inference(device, model_name, input_h, input_w):
@@ -42,12 +45,8 @@ def run_test_T5LayerCrossAttention_inference(device, model_name, input_h, input_
     key_value_states = key_value_states.unsqueeze(0)
 
     # T5-small config file: https://huggingface.co/t5-small/resolve/main/config.json
-    tt_model = TtT5LayerCrossAttention(
-        config, hf_reference_model.state_dict(), base_address, device
-    )
-    tt_out = tt_model(
-        torch2tt_tensor(test_input, device), torch2tt_tensor(key_value_states, device)
-    )[0]
+    tt_model = TtT5LayerCrossAttention(config, hf_reference_model.state_dict(), base_address, device)
+    tt_out = tt_model(torch2tt_tensor(test_input, device), torch2tt_tensor(key_value_states, device))[0]
     tt_out = tt2torch_tensor(tt_out)
 
     does_pass, pcc_message = comp_pcc(pt_out, tt_out, 0.98)

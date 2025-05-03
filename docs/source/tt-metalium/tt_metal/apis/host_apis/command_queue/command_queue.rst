@@ -3,13 +3,21 @@ CommandQueue
 
 .. toctree::
   EnqueueWriteBuffer
+  EnqueueWriteSubBuffer
   EnqueueReadBuffer
+  EnqueueReadSubBuffer
   EnqueueProgram
   EnqueueRecordEvent
   EnqueueWaitForEvent
+  EventQuery
   EventSynchronize
-  BeginTrace
-  EndTrace
-  InstantiateTrace
+  BeginTraceCapture
+  EndTraceCapture
+  ReplayTrace
+  ReleaseTrace
   EnqueueTrace
+  LoadTrace
+  LightMetalBeginCapture
+  LightMetalEndCapture
   Finish
+  Synchronize

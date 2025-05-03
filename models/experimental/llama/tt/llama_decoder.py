@@ -2,21 +2,19 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import math
 import torch
 from torch import nn
-import tt_lib
+
+import ttnn
 from loguru import logger
-from typing import List, Optional, Tuple, Union
+from typing import Optional, Tuple
 from models.experimental.llama.tt.llama_mlp import TtLlamaMLP
 from models.experimental.llama.tt.llama_attention import TtLlamaAttention
 from models.experimental.llama.tt.llama_layer_norm import TtLlamaRMSNorm
 
 
 class TtLlamaDecoderLayer(nn.Module):
-    def __init__(
-        self, device, state_dict, base_url, decoder_idx, max_position_embeddings, config
-    ):
+    def __init__(self, device, state_dict, base_url, decoder_idx, max_position_embeddings, config):
         super().__init__()
         self.hidden_size = config.hidden_size
         self.state_dict = state_dict
@@ -73,9 +71,7 @@ class TtLlamaDecoderLayer(nn.Module):
         output_attentions: Optional[bool] = False,
         use_cache: Optional[bool] = False,
         past_key_value: Optional[Tuple[torch.Tensor]] = None,
-    ) -> Tuple[
-        torch.FloatTensor, Optional[Tuple[torch.FloatTensor, torch.FloatTensor]]
-    ]:
+    ) -> Tuple[torch.FloatTensor, Optional[Tuple[torch.FloatTensor, torch.FloatTensor]]]:
         """
         Args:
             hidden_states (`torch.FloatTensor`): input to the layer of shape `(batch, seq_len, embed_dim)`
@@ -102,7 +98,7 @@ class TtLlamaDecoderLayer(nn.Module):
             output_attentions=output_attentions,
             use_cache=use_cache,
         )
-        hidden_states = tt_lib.tensor.add(residual, hidden_states)
+        hidden_states = ttnn.add(residual, hidden_states)
 
         # Fully Connected
         residual = hidden_states
@@ -111,7 +107,7 @@ class TtLlamaDecoderLayer(nn.Module):
 
         hidden_states = self.mlp(hidden_states)
 
-        hidden_states = tt_lib.tensor.add(residual, hidden_states)
+        hidden_states = ttnn.add(residual, hidden_states)
 
         outputs = (hidden_states,)
 

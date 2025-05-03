@@ -4,11 +4,11 @@
 
 import torch
 import pytest
-import tt_lib
 from tests.tt_eager.python_api_testing.sweep_tests import (
     comparison_funcs,
 )
 from loguru import logger
+import ttnn
 
 
 @pytest.mark.parametrize(
@@ -34,18 +34,14 @@ def test_embedding_bw(input_shapes, device):
     grad_shape = [1, 1, batch_size * no_of_embeddings, embedding_dim]
     grad_data = torch.randn(grad_shape, requires_grad=True)
 
-    grad_tensor = (
-        tt_lib.tensor.Tensor(grad_data, tt_lib.tensor.DataType.BFLOAT16).to(tt_lib.tensor.Layout.ROW_MAJOR).to(device)
-    )
+    grad_tensor = ttnn.Tensor(grad_data, ttnn.bfloat16).to(ttnn.ROW_MAJOR_LAYOUT).to(device)
 
-    input_tensor = tt_lib.tensor.Tensor(input_index, tt_lib.tensor.DataType.UINT32).to(device)
+    input_tensor = ttnn.Tensor(input_index, ttnn.uint32).to(device)
 
-    weights_tensor = (
-        tt_lib.tensor.Tensor(weights, tt_lib.tensor.DataType.BFLOAT16).to(tt_lib.tensor.Layout.ROW_MAJOR).to(device)
-    )
+    weights_tensor = ttnn.Tensor(weights, ttnn.bfloat16).to(ttnn.ROW_MAJOR_LAYOUT).to(device)
 
-    tt_output_tensor_on_device = tt_lib.tensor.embedding_bw(grad_tensor, input_tensor, weights_tensor)
-    tt_output_tensor_a = tt_output_tensor_on_device[0].cpu().to(tt_lib.tensor.Layout.ROW_MAJOR).to_torch()
+    tt_output_tensor_on_device = ttnn.embedding_bw(grad_tensor, input_tensor, weights_tensor)
+    tt_output_tensor_a = tt_output_tensor_on_device[0].cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch()
 
     weights.retain_grad()
 

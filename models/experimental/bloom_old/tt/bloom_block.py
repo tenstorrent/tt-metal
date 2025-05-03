@@ -3,22 +3,15 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
-import math
-from torch.nn import functional as F
-from torch.nn import LayerNorm
 
-import tt_lib as ttm
 import models.experimental.bloom_old.bloom_utils as bloom_utils
 import models.experimental.bloom_old.tt.bloom_attention as bloom_attention
 import models.experimental.bloom_old.tt.bloom_mlp as bloom_mlp
 
-from fused_ops.linear import Linear as TtLinear
 from fused_ops.layernorm import Layernorm as TtLayernorm
 
-from fused_ops.softmax import softmax as TtSoftmax
-from transformers import BloomForCausalLM
 
-from typing import Optional, Tuple, Union
+from typing import Optional, Tuple
 
 
 class TtBloomBlock(torch.nn.Module):
@@ -83,7 +76,7 @@ class TtBloomBlock(torch.nn.Module):
     ):
         # hidden_states: [batch_size, seq_length, hidden_size]
         # Layer norm at the beginning of the transformer layer.
-        layernorm_output = self.input_layernorm(hidden_states, overrideH=hidden_states.get_legacy_shape()[-2])
+        layernorm_output = self.input_layernorm(hidden_states, overrideH=hidden_states.padded_shape[-2])
 
         # Layer norm post the self attention.
         if self.apply_residual_connection_post_layernorm:
@@ -107,9 +100,7 @@ class TtBloomBlock(torch.nn.Module):
         attention_output = attn_outputs[0]
         outputs = attn_outputs[1:]
 
-        layernorm_output = self.post_attention_layernorm(
-            attention_output, overrideH=attention_output.get_legacy_shape()[-2]
-        )
+        layernorm_output = self.post_attention_layernorm(attention_output, overrideH=attention_output.padded_shape[-2])
 
         # Get residual
         if self.apply_residual_connection_post_layernorm:

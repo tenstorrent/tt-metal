@@ -3,16 +3,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch.nn as nn
-import numpy as np
-from loguru import logger
-from pathlib import Path
-import sys
-import torch
 
-from models.experimental.yolov3.reference.models.common import autopad
-import tt_lib
-from tt_lib.fallback_ops import fallback_ops
-from models.utility_functions import torch2tt_tensor, tt2torch_tensor
+import ttnn
 
 
 class TtConcat(nn.Module):
@@ -25,4 +17,4 @@ class TtConcat(nn.Module):
         self.d = dimension
 
     def forward(self, x):
-        return tt_lib.tensor.concat(x, self.d)
+        return ttnn.concat(x, self.d)

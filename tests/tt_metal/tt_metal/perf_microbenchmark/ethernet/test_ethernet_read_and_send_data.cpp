@@ -3,34 +3,54 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <assert.h>
+#include <fmt/base.h>
+#include <stdint.h>
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tt_metal.hpp>
 #include <algorithm>
-#include <functional>
-#include <limits>
-#include <random>
+#include <cstdlib>
+#include <exception>
+#include <iostream>
+#include <map>
+#include <memory>
+#include <string>
+#include <thread>
+#include <unordered_set>
+#include <variant>
+#include <vector>
 
-#include "tt_metal/common/core_coord.h"
-#include "tt_metal/common/math.hpp"
-#include "tt_metal/detail/tt_metal.hpp"
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/impl/kernels/kernel.hpp"
-#include "tt_metal/test_utils/comparison.hpp"
-#include "tt_metal/test_utils/df/df.hpp"
-#include "tt_metal/test_utils/print_helpers.hpp"
-#include "tt_metal/test_utils/stimulus.hpp"
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/buffer_types.hpp>
+#include <tt-metalium/data_types.hpp>
+#include "df/float32.hpp"
+#include "impl/context/metal_context.hpp"
+
+#include <tt-metalium/kernel_types.hpp>
+#include <tt-metalium/logger.hpp>
+#include <tt-metalium/program.hpp>
+#include <tt_stl/span.hpp>
+#include <tt-metalium/tt_backend_api_types.hpp>
 #include "tt_metal/test_utils/env_vars.hpp"
+#include "tt_metal/test_utils/stimulus.hpp"
+#include "umd/device/types/arch.h"
+#include "umd/device/types/xy_pair.h"
 
 using namespace tt;
 using namespace tt::test_utils;
 using namespace tt::test_utils::df;
 
 class N300TestDevice {
-   public:
+public:
     N300TestDevice() : device_open(false) {
         auto slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
         if (not slow_dispatch) {
             TT_THROW("This suite can only be run with TT_METAL_SLOW_DISPATCH_MODE set");
         }
-        arch_ = tt::get_arch_from_string(tt::test_utils::get_env_arch_name());
+        arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
 
         num_devices_ = tt::tt_metal::GetNumAvailableDevices();
         if (arch_ == tt::ARCH::WORMHOLE_B0 and tt::tt_metal::GetNumAvailableDevices() == 2 and
@@ -39,7 +59,7 @@ class N300TestDevice {
                 auto* device = tt::tt_metal::CreateDevice(id);
                 devices_.push_back(device);
             }
-            tt::Cluster::instance().set_internal_routing_info_for_ethernet_cores(true);
+            tt::tt_metal::MetalContext::instance().get_cluster().set_internal_routing_info_for_ethernet_cores(true);
 
         } else {
             TT_THROW("This suite can only be run on N300 Wormhole devices");
@@ -54,17 +74,17 @@ class N300TestDevice {
 
     void TearDown() {
         device_open = false;
-        tt::Cluster::instance().set_internal_routing_info_for_ethernet_cores(false);
+        tt::tt_metal::MetalContext::instance().get_cluster().set_internal_routing_info_for_ethernet_cores(false);
         for (unsigned int id = 0; id < devices_.size(); id++) {
             tt::tt_metal::CloseDevice(devices_.at(id));
         }
     }
 
-    std::vector<tt::tt_metal::Device*> devices_;
+    std::vector<tt::tt_metal::IDevice*> devices_;
     tt::ARCH arch_;
     size_t num_devices_;
 
-   private:
+private:
     bool device_open;
 };
 
@@ -72,20 +92,21 @@ struct BankedConfig {
     size_t num_pages;
     size_t size_bytes;
     size_t page_size_bytes;
-    BufferType input_buffer_type;// = BufferType::L1;
-    BufferType output_buffer_type;// = BufferType::L1;
-    tt::DataFormat l1_data_format;// = tt::DataFormat::Float16_b;
+    tt_metal::BufferType input_buffer_type;   // = tt_metal::BufferType::L1;
+    tt_metal::BufferType output_buffer_type;  // = tt_metal::BufferType::L1;
+    tt::DataFormat l1_data_format;            // = tt::DataFormat::Float16_b;
 };
 
 bool RunWriteBWTest(
     std::string const& sender_kernel_path,
     std::string const& receiver_kernel_path,
-    tt_metal::Device* sender_device,
-    tt_metal::Device* receiver_device,
+    tt_metal::IDevice* sender_device,
+    tt_metal::IDevice* receiver_device,
 
     const CoreCoord& eth_sender_core,
     const CoreCoord& eth_receiver_core,
 
+    const size_t eth_channel_sync_ack_addr,
     const size_t src_eth_l1_byte_address,
     const size_t dst_eth_l1_byte_address,
 
@@ -108,7 +129,9 @@ bool RunWriteBWTest(
     const uint32_t num_pages = ((input_buffer_size_bytes - 1) / input_buffer_page_size) + 1;  // includes padding
     const uint32_t num_messages_to_send = ((input_buffer_size_bytes - 1) / num_bytes_per_send) + 1;
 
-    TT_ASSERT(precomputed_source_addresses_buffer_address < std::numeric_limits<uint32_t>::max(), "precomputed_source_addresses_buffer_address is too large");
+    TT_ASSERT(
+        precomputed_source_addresses_buffer_address < std::numeric_limits<uint32_t>::max(),
+        "precomputed_source_addresses_buffer_address is too large");
 
     bool pass = true;
     log_debug(
@@ -131,19 +154,17 @@ bool RunWriteBWTest(
 
     // Clear expected value at ethernet L1 address
 
-    BankedConfig test_config =
-        BankedConfig{
-            .num_pages = num_pages,
-            .size_bytes = input_buffer_size_bytes,
-            .page_size_bytes = input_buffer_page_size,
-            .input_buffer_type = source_is_dram ? BufferType::DRAM : BufferType::L1,
-            .output_buffer_type = dest_is_dram ? BufferType::DRAM : BufferType::L1,
-            .l1_data_format = tt::DataFormat::Float16_b};
-    auto input_buffer =
-            CreateBuffer(
-                InterleavedBufferConfig{sender_device, test_config.size_bytes, test_config.page_size_bytes, test_config.input_buffer_type});
+    BankedConfig test_config = BankedConfig{
+        .num_pages = num_pages,
+        .size_bytes = input_buffer_size_bytes,
+        .page_size_bytes = input_buffer_page_size,
+        .input_buffer_type = source_is_dram ? tt_metal::BufferType::DRAM : tt_metal::BufferType::L1,
+        .output_buffer_type = dest_is_dram ? tt_metal::BufferType::DRAM : tt_metal::BufferType::L1,
+        .l1_data_format = tt::DataFormat::Float16_b};
+    auto input_buffer = CreateBuffer(tt_metal::InterleavedBufferConfig{
+        sender_device, test_config.size_bytes, test_config.page_size_bytes, test_config.input_buffer_type});
 
-    bool input_is_dram = test_config.input_buffer_type == BufferType::DRAM;
+    bool input_is_dram = test_config.input_buffer_type == tt_metal::BufferType::DRAM;
     tt_metal::detail::WriteToBuffer(input_buffer, inputs);
     const uint32_t dram_input_buf_base_addr = input_buffer->address();
 
@@ -154,15 +175,12 @@ bool RunWriteBWTest(
     // Clear expected value at ethernet L1 address
     std::vector<uint32_t> all_zeros(inputs.size(), 0);
 
-    auto output_buffer =
-            CreateBuffer(
-                InterleavedBufferConfig{receiver_device, test_config.size_bytes, test_config.page_size_bytes, test_config.output_buffer_type});
+    auto output_buffer = CreateBuffer(tt_metal::InterleavedBufferConfig{
+        receiver_device, test_config.size_bytes, test_config.page_size_bytes, test_config.output_buffer_type});
 
-    bool output_is_dram = test_config.output_buffer_type == BufferType::DRAM;
+    bool output_is_dram = test_config.output_buffer_type == tt_metal::BufferType::DRAM;
     tt_metal::detail::WriteToBuffer(output_buffer, all_zeros);
     const uint32_t dram_output_buffer_base_addr = output_buffer->address();
-
-
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Sender Device
@@ -171,7 +189,9 @@ bool RunWriteBWTest(
 
     uint32_t num_pages_per_l1_buffer = num_bytes_per_send / input_buffer_page_size;
     TT_ASSERT(num_messages_to_send * num_pages_per_l1_buffer >= num_pages);
-    std::cout << "eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE: " << eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE << std::endl;
+    uint32_t erisc_unreserved_base = tt::tt_metal::MetalContext::instance().hal().get_dev_addr(
+        tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::UNRESERVED);
+    std::cout << "ERISC_L1_UNRESERVED_BASE: " << erisc_unreserved_base << std::endl;
     std::cout << "src_eth_l1_byte_address: " << src_eth_l1_byte_address << std::endl;
     auto eth_sender_kernel = tt_metal::CreateKernel(
         sender_program,
@@ -179,29 +199,28 @@ bool RunWriteBWTest(
         eth_sender_core,
         tt_metal::EthernetConfig{
             .noc = tt_metal::NOC::NOC_0,
-            .compile_args = {
-                uint32_t(num_bytes_per_send),         // 0
-                uint32_t(num_bytes_per_send >> 4),    // 1
-                uint32_t(num_messages_to_send),       // 2
-                uint32_t(eth_max_concurrent_sends),   // 3
-                uint32_t(source_is_dram)              // 4
+            .compile_args =
+                {
+                    uint32_t(num_bytes_per_send),        // 0
+                    uint32_t(num_bytes_per_send >> 4),   // 1
+                    uint32_t(num_messages_to_send),      // 2
+                    uint32_t(eth_max_concurrent_sends),  // 3
+                    uint32_t(source_is_dram)             // 4
                 }
             // .compile_args = {uint32_t(256), uint32_t(256 >> 4)}
-            });
+        });
 
     tt_metal::SetRuntimeArgs(
         sender_program,
         eth_sender_kernel,
         eth_sender_core,
-        {
-            uint32_t(src_eth_l1_byte_address),
-            uint32_t(dst_eth_l1_byte_address),
-            uint32_t(dram_input_buf_base_addr),
-            uint32_t(input_buffer_page_size),
-            uint32_t(num_pages),
-            uint32_t(precomputed_source_addresses_buffer_address),
-            uint32_t(precomputed_source_addresses_buffer_size)
-        });
+        {uint32_t(src_eth_l1_byte_address),
+         uint32_t(dst_eth_l1_byte_address),
+         uint32_t(dram_input_buf_base_addr),
+         uint32_t(input_buffer_page_size),
+         uint32_t(num_pages),
+         uint32_t(precomputed_source_addresses_buffer_address),
+         uint32_t(precomputed_source_addresses_buffer_size)});
 
     ////////////////////////////////////////////////////////////////////////////
     //                           Receiver Device
@@ -215,39 +234,37 @@ bool RunWriteBWTest(
         tt_metal::EthernetConfig{
             .noc = tt_metal::NOC::NOC_0,
             .compile_args = {
-                uint32_t(num_bytes_per_send),         // 0
-                uint32_t(num_bytes_per_send >> 4),    // 1
-                uint32_t(num_messages_to_send),       // 2
-                uint32_t(eth_max_concurrent_sends),   // 3
-                uint32_t(dest_is_dram)                // 4
-            }});  // probably want to use NOC_1 here
-            // .compile_args = {uint32_t(256), uint32_t(256 >> 4)}});  // probably want to use NOC_1 here
+                uint32_t(num_bytes_per_send),        // 0
+                uint32_t(num_bytes_per_send >> 4),   // 1
+                uint32_t(num_messages_to_send),      // 2
+                uint32_t(eth_max_concurrent_sends),  // 3
+                uint32_t(dest_is_dram)               // 4
+            }});                                     // probably want to use NOC_1 here
+    // .compile_args = {uint32_t(256), uint32_t(256 >> 4)}});  // probably want to use NOC_1 here
 
     tt_metal::SetRuntimeArgs(
         receiver_program,
         eth_receiver_kernel,
         eth_receiver_core,
-        {
-            uint32_t(dst_eth_l1_byte_address),
-            uint32_t(src_eth_l1_byte_address),
-            dram_output_buffer_base_addr,
-            input_buffer_page_size,
-            num_pages
-        });
+        {uint32_t(eth_channel_sync_ack_addr),
+         uint32_t(dst_eth_l1_byte_address),
+         uint32_t(src_eth_l1_byte_address),
+         dram_output_buffer_base_addr,
+         input_buffer_page_size,
+         num_pages});
 
     std::cout << "dram_output_buffer_base_addr: " << dram_output_buffer_base_addr << std::endl;
     std::cout << "dram_input_buf_base_addr: " << dram_input_buf_base_addr << std::endl;
     std::cout << "input_buffer_page_size: " << input_buffer_page_size << std::endl;
     std::cout << "num_pages: " << num_pages << std::endl;
 
-
     ////////////////////////////////////////////////////////////////////////////
     //                      Compile and Execute Application
     ////////////////////////////////////////////////////////////////////////////
 
     try {
-    tt::tt_metal::detail::CompileProgram(sender_device, sender_program);
-    tt::tt_metal::detail::CompileProgram(receiver_device, receiver_program);
+        tt::tt_metal::detail::CompileProgram(sender_device, sender_program);
+        tt::tt_metal::detail::CompileProgram(receiver_device, receiver_program);
     } catch (std::exception& e) {
         std::cout << "Failed compile: " << e.what() << std::endl;
         throw e;
@@ -255,22 +272,21 @@ bool RunWriteBWTest(
 
     std::cout << "Running..." << std::endl;
 
-    std::thread th2 = std::thread([&] {
-        tt_metal::detail::LaunchProgram(receiver_device, receiver_program);
-    });
-    std::thread th1 = std::thread([&] {
-        tt_metal::detail::LaunchProgram(sender_device, sender_program);
-    });
+    std::thread th2 = std::thread([&] { tt_metal::detail::LaunchProgram(receiver_device, receiver_program); });
+    std::thread th1 = std::thread([&] { tt_metal::detail::LaunchProgram(sender_device, sender_program); });
 
     th2.join();
     std::cout << "receiver done" << std::endl;
     th1.join();
     std::cout << "sender done" << std::endl;
 
-    std::vector<uint32_t> readback_data_vec = std::vector<uint32_t>(all_zeros.size(), -1); // init to 0 data for easier debug
+    std::vector<uint32_t> readback_data_vec =
+        std::vector<uint32_t>(all_zeros.size(), -1);  // init to 0 data for easier debug
     tt_metal::detail::ReadFromBuffer(output_buffer, readback_data_vec);
     pass &= (readback_data_vec == inputs);
-    TT_ASSERT(std::any_of(inputs.begin(), inputs.end(), [](uint32_t x) { return x != 0; }), "Input buffer expected to not be all 0");
+    TT_ASSERT(
+        std::any_of(inputs.begin(), inputs.end(), [](uint32_t x) { return x != 0; }),
+        "Input buffer expected to not be all 0");
     if (not pass) {
         std::cout << "Mismatch output mismatch" << std::endl;
         std::size_t num_printed_mismatches = 0;
@@ -285,12 +301,11 @@ bool RunWriteBWTest(
     return pass;
 }
 
-
 int main(int argc, char** argv) {
     // argv[0]: program
     // argv[1]: buffer_size_bytes
     // argv[2]: num_loops
-    assert (argc == 10);
+    assert(argc == 10);
     std::string const& sender_kernel_path = argv[1];
     std::string const& receiver_kernel_path = argv[2];
     const uint32_t eth_l1_staging_buffer_size = std::stoi(argv[3]);
@@ -300,7 +315,7 @@ int main(int argc, char** argv) {
     const bool source_is_dram = std::stoi(argv[7]) == 1;
     const bool dest_is_dram = std::stoi(argv[8]) == 1;
     const uint32_t precomputed_source_addresses_buffer_size = std::stoi(argv[9]);
-    auto arch = tt::get_arch_from_string(tt::test_utils::get_env_arch_name());
+    auto arch = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
 
     auto num_devices = tt::tt_metal::GetNumAvailableDevices();
     if (num_devices != 2) {
@@ -317,13 +332,15 @@ int main(int argc, char** argv) {
     const auto& device_0 = test_fixture.devices_.at(0);
     const auto& device_1 = test_fixture.devices_.at(1);
     const size_t precomputed_source_addresses_buffer_address = (size_t)nullptr;
-    const size_t src_eth_l1_byte_address = eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE + 32;
-    const size_t dst_eth_l1_byte_address = eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE + 32;
+    const size_t eth_channel_sync_ack_addr = tt::tt_metal::MetalContext::instance().hal().get_dev_addr(
+        tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::UNRESERVED);
+    const size_t src_eth_l1_byte_address = eth_channel_sync_ack_addr + 16;
+    const size_t dst_eth_l1_byte_address = eth_channel_sync_ack_addr + 16;
 
     auto const& active_eth_cores = device_0->get_active_ethernet_cores(true);
-    assert (active_eth_cores.size() > 0);
+    assert(active_eth_cores.size() > 0);
     auto eth_sender_core_iter = active_eth_cores.begin();
-    assert (eth_sender_core_iter != active_eth_cores.end());
+    assert(eth_sender_core_iter != active_eth_cores.end());
     // eth_sender_core_iter++;
     // assert (eth_sender_core_iter != active_eth_cores.end());
     const auto& eth_sender_core = *eth_sender_core_iter;
@@ -342,6 +359,7 @@ int main(int argc, char** argv) {
             device_1,
             eth_sender_core,
             eth_receiver_core,
+            eth_channel_sync_ack_addr,
             src_eth_l1_byte_address,
             dst_eth_l1_byte_address,
             precomputed_source_addresses_buffer_address,
@@ -351,17 +369,14 @@ int main(int argc, char** argv) {
             input_buffer_page_size,
             input_buffer_size_bytes,
             source_is_dram,
-            dest_is_dram
-            );
+            dest_is_dram);
     } catch (std::exception& e) {
         std::cout << "Caught exception: " << e.what() << std::endl;
         test_fixture.TearDown();
         return -1;
     }
 
-
     test_fixture.TearDown();
 
     return success ? 0 : -1;
-
 }

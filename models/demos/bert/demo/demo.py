@@ -8,22 +8,18 @@ import torch
 from loguru import logger
 
 import transformers
-import tt_lib
 import ttnn
 from models.utility_functions import (
-    disable_compilation_reports,
     disable_persistent_kernel_cache,
     profiler,
 )
-from models.demos.bert.tt import ttnn_bert
-from models.demos.bert.tt import ttnn_optimized_bert
+from models.demos.bert.tt import ttnn_bert, ttnn_optimized_bert, ttnn_optimized_sharded_bert
 
 from models.datasets.dataset_squadv2 import squadv2_1K_samples_input, squadv2_answer_decode_batch
 from ttnn.model_preprocessing import (
     preprocess_model_parameters,
 )
 
-from ttnn.model_preprocessing import *
 from transformers import BertForQuestionAnswering, BertTokenizer, pipeline
 
 import evaluate
@@ -41,6 +37,15 @@ def load_inputs(input_path, batch):
             question.append(input_data[i]["question"])
 
         return context, question
+
+
+def positional_ids(config, input_ids, past_key_values_length=0):
+    seq_length = input_ids.size(1)
+    position_ids = torch.arange(config.max_position_embeddings, dtype=torch.long, device=input_ids.device)
+    position_ids = position_ids.unsqueeze(0)[:, past_key_values_length : seq_length + past_key_values_length]
+    position_ids = position_ids.expand_as(input_ids)
+
+    return position_ids
 
 
 def run_bert_question_and_answering_inference(
@@ -69,6 +74,9 @@ def run_bert_question_and_answering_inference(
         tt_model_name = f"ttnn_{model_name}"
     elif bert == ttnn_optimized_bert:
         tt_model_name = f"ttnn_{model_name}_optimized"
+    elif bert == ttnn_optimized_sharded_bert:
+        tt_model_name = f"ttnn_{model_name}_optimized_sharded"
+        config = ttnn_optimized_sharded_bert.update_model_config(config, batch_size)
     else:
         raise ValueError(f"Unknown bert: {bert}")
 
@@ -106,13 +114,14 @@ def run_bert_question_and_answering_inference(
         return_token_type_ids=True,
         return_tensors="pt",
     )
+
+    position_ids = positional_ids(config, bert_input.input_ids)
     profiler.start(f"preprocessing_input")
-    torch_attention_mask = None
     ttnn_bert_inputs = bert.preprocess_inputs(
         bert_input["input_ids"],
         bert_input["token_type_ids"],
-        torch.zeros(batch_size, sequence_size),
-        torch_attention_mask,
+        position_ids,
+        bert_input["attention_mask"],
         device=device,
     )
     profiler.end(f"preprocessing_input")
@@ -153,6 +162,8 @@ def run_bert_question_and_answering_inference(
         "inference_time": profiler.get("inference_time"),
         "post_processing": profiler.get("post_processing_output_to_string"),
     }
+
+    logger.info(f"tt_model_name: {tt_model_name}")
     logger.info(f"preprocessing_parameter: {measurements['preprocessing_parameter']} s")
     logger.info(f"preprocessing_input: {measurements['preprocessing_input']} s")
     logger.info(f"inference_time: {measurements['inference_time']} s")
@@ -186,6 +197,9 @@ def run_bert_question_and_answering_inference_squad_v2(
         tt_model_name = f"ttnn_{model_name}"
     elif bert == ttnn_optimized_bert:
         tt_model_name = f"ttnn_{model_name}_optimized"
+    elif bert == ttnn_optimized_sharded_bert:
+        tt_model_name = f"ttnn_{model_name}_optimized_sharded"
+        config = ttnn_optimized_sharded_bert.update_model_config(config, batch_size)
     else:
         raise ValueError(f"Unknown bert: {bert}")
 
@@ -214,12 +228,12 @@ def run_bert_question_and_answering_inference_squad_v2(
             if i < n_iterations:
                 batch_data = batch[0]
                 curr_batch_size = batch_data["input_ids"].shape[0]
-                torch_attention_mask = None
+                position_ids = positional_ids(config, batch_data.input_ids)
                 ttnn_bert_inputs = bert.preprocess_inputs(
                     batch_data["input_ids"],
                     batch_data["token_type_ids"],
-                    torch.zeros(batch_size, sequence_size),
-                    torch_attention_mask,
+                    position_ids,
+                    batch_data["attention_mask"],
                     device=device,
                 )
 
@@ -262,7 +276,7 @@ def run_bert_question_and_answering_inference_squad_v2(
 
 
 @pytest.mark.parametrize("model_name", ["phiyodr/bert-large-finetuned-squad2"])
-@pytest.mark.parametrize("bert", [ttnn_bert, ttnn_optimized_bert])
+@pytest.mark.parametrize("bert", [ttnn_optimized_bert, ttnn_bert, ttnn_optimized_sharded_bert])
 def test_demo(
     input_path,
     model_name,
@@ -272,7 +286,6 @@ def test_demo(
     use_program_cache,
 ):
     disable_persistent_kernel_cache()
-    disable_compilation_reports()
 
     return run_bert_question_and_answering_inference(
         device=device,
@@ -287,7 +300,7 @@ def test_demo(
 
 
 @pytest.mark.parametrize("model_name", ["phiyodr/bert-large-finetuned-squad2"])
-@pytest.mark.parametrize("bert", [ttnn_bert, ttnn_optimized_bert])
+@pytest.mark.parametrize("bert", [ttnn_optimized_bert, ttnn_bert, ttnn_optimized_sharded_bert])
 @pytest.mark.parametrize(
     "n_iterations",
     ((3),),
@@ -301,7 +314,6 @@ def test_demo_squadv2(
     use_program_cache,
 ):
     disable_persistent_kernel_cache()
-    disable_compilation_reports()
 
     return run_bert_question_and_answering_inference_squad_v2(
         device=device,

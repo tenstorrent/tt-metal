@@ -1,0 +1,218 @@
+name: "[internal] T3000 model perf tests impl"
+
+on:
+  workflow_call:
+    inputs:
+      build-artifact-name:
+        required: true
+        type: string
+      wheel-artifact-name:
+        required: true
+        type: string
+      build-artifact-profiler-name:
+        required: true
+        type: string
+      wheel-artifact-profiler-name:
+        required: true
+        type: string
+      docker-image:
+        required: true
+        type: string
+      extra-tag:
+        required: false
+        type: string
+        default: "in-service"
+
+jobs:
+  t3000-model-perf-tests:
+    strategy:
+      fail-fast: false
+      matrix:
+        test-group: [
+          { name: "t3k LLM falcon7b model perf tests", model: "falcon7b", model-type: "LLM", arch: wormhole_b0, cmd: run_t3000_falcon7b_tests, timeout: 75, owner_id: U05RWH3QUPM}, # Salar Hosseini
+          { name: "t3k LLM falcon40b model perf tests", model: "falcon40b", model-type: "LLM", arch: wormhole_b0, cmd: run_t3000_falcon40b_tests, timeout: 75, owner_id: U053W15B6JF}, # Djordje Ivanovic
+          { name: "t3k CNN resnet50 model perf tests", model: "resnet50", model-type: "CNN", arch: wormhole_b0, cmd: run_t3000_resnet50_tests, timeout: 75, owner_id: U0837MYG788}, # Marko Radosavljevic
+        ]
+    name: ${{ matrix.test-group.name }}
+    env:
+      ARCH_NAME: ${{ matrix.test-group.arch }}
+      LOGURU_LEVEL: INFO
+      LD_LIBRARY_PATH: ${{ github.workspace }}/build/lib
+    runs-on:
+      - arch-wormhole_b0
+      - config-t3000
+      - pipeline-perf
+      - ${{ inputs.extra-tag }}
+    steps:
+      - name: ⬇️ Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - uses: ./.github/actions/ensure-active-weka-mount
+      - name: ⬇️ Download Build
+        uses: actions/download-artifact@v4
+        timeout-minutes: 10
+        with:
+          name: ${{ inputs.build-artifact-name }}
+      - name: Extract files
+        run: tar -xvf ttm_any.tar
+      - name: ⬇️ Download Wheel
+        uses: actions/download-artifact@v4
+        timeout-minutes: 10
+        with:
+          name: ${{ inputs.wheel-artifact-name }}
+      - name: Enable Performance mode
+        run: |
+          sudo cpupower frequency-set -g performance
+      - name: Run model perf regression tests
+        uses: ./.github/actions/docker-run
+        timeout-minutes: ${{ matrix.test-group.timeout }}
+        env:
+          LOGURU_LEVEL: INFO
+        with:
+          docker_image: ${{ inputs.docker-image }}
+          docker_password: ${{ secrets.GITHUB_TOKEN }}
+          docker_opts: |
+            -e TT_METAL_HOME=${{ github.workspace }}
+            -e ARCH_NAME=${{ matrix.test-group.arch }}
+            -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
+            -v /mnt/MLPerf:/mnt/MLPerf:ro
+          install_wheel: true
+          run_args: |
+            source ${{ github.workspace }}/tests/scripts/t3000/run_t3000_model_perf_tests.sh
+            ${{ matrix.test-group.cmd }}
+            env python3 models/perf/merge_perf_results.py
+      - name: Check perf report exists
+        id: check-perf-report
+        run: |
+          TODAY=$(date +%Y_%m_%d)
+          PERF_REPORT_FILENAME_MODELS="Models_Perf_${TODAY}.csv"
+          if [ -f "$PERF_REPORT_FILENAME_MODELS" ]; then
+            echo "Found Models Perf report: $PERF_REPORT_FILENAME_MODELS"
+            echo "perf_report_filename=$PERF_REPORT_FILENAME_MODELS" >> "$GITHUB_OUTPUT"
+          else
+            echo "No Models perf report found for today."
+            exit 1
+          fi
+      - name: Upload Models perf report
+        uses: actions/upload-artifact@v4
+        timeout-minutes: 10
+        with:
+          name: perf-report-csv-${{ matrix.test-group.model-type }}-${{ matrix.test-group.arch }}-${{ matrix.test-group.model }}-bare-metal
+          path: "${{ steps.check-perf-report.outputs.perf_report_filename }}"
+      - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
+        if: ${{ failure() }}
+        with:
+          slack_webhook_url: ${{ secrets.SLACK_WEBHOOK_URL }}
+          owner: ${{ matrix.test-group.owner_id }}
+      - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
+        timeout-minutes: 10
+        if: ${{ !cancelled() }}
+        with:
+          path: generated/test_reports/
+          prefix: "test_reports_"
+      - name: Disable performance mode
+        if: always()
+        run: |
+          sudo cpupower frequency-set -g ondemand
+
+  t3000-model-perf-tests-profiler:
+    strategy:
+      fail-fast: false
+      matrix:
+        test-group: [
+          { name: "t3k CCL perf tests", arch: wormhole_b0, cmd: run_t3000_ccl_all_gather_perf_tests && run_t3000_ccl_reduce_scatter_perf_tests, timeout: 75, owner_id: ULMEPM2MA}, # Sean Nijjar
+        ]
+    name: ${{ matrix.test-group.name }}
+    env:
+      ARCH_NAME: ${{ matrix.test-group.arch }}
+      LOGURU_LEVEL: INFO
+      LD_LIBRARY_PATH: ${{ github.workspace }}/build/lib
+    runs-on:
+      - arch-wormhole_b0
+      - config-t3000
+      - pipeline-perf
+      - ${{ inputs.extra-tag }}
+    steps:
+      - name: ⬇️ Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - uses: ./.github/actions/ensure-active-weka-mount
+      - name: ⬇️ Download Build
+        uses: actions/download-artifact@v4
+        timeout-minutes: 10
+        with:
+          name: ${{ inputs.build-artifact-profiler-name }}
+      - name: Extract files
+        run: tar -xvf ttm_any.tar
+      - name: ⬇️ Download Wheel
+        uses: actions/download-artifact@v4
+        timeout-minutes: 10
+        with:
+          name: ${{ inputs.wheel-artifact-profiler-name }}
+      - name: Enable Performance mode
+        run: |
+          sudo cpupower frequency-set -g performance
+      - name: Run model perf regression tests
+        uses: ./.github/actions/docker-run
+        timeout-minutes: ${{ matrix.test-group.timeout }}
+        env:
+          LOGURU_LEVEL: INFO
+        with:
+          docker_image: ${{ inputs.docker-image }}
+          docker_password: ${{ secrets.GITHUB_TOKEN }}
+          docker_opts: |
+            -e TT_METAL_HOME=${{ github.workspace }}
+            -e ARCH_NAME=${{ matrix.test-group.arch }}
+            -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
+            -v /mnt/MLPerf:/mnt/MLPerf:ro
+          install_wheel: true
+          run_args: |
+            source ${{ github.workspace }}/tests/scripts/t3000/run_t3000_model_perf_tests.sh
+            ${{ matrix.test-group.cmd }}
+            env python3 models/perf/merge_perf_results.py
+      - name: Check perf report exists
+        id: check-perf-report
+        run: |
+          TODAY=$(date +%Y_%m_%d)
+          PERF_REPORT_FILENAME_CCL_ALL_GATHER="CCL_all_gather_Perf_${TODAY}.csv"
+          PERF_REPORT_FILENAME_CCL_REDUCE_SCATTER="CCL_reduce_scatter_Perf_${TODAY}.csv"
+          found_reports=false
+          if [ -f "$PERF_REPORT_FILENAME_CCL_ALL_GATHER" ]; then
+            echo "Found CCL AllGather Perf report: $PERF_REPORT_FILENAME_CCL_ALL_GATHER"
+            echo "perf_report_filename_all_gather=$PERF_REPORT_FILENAME_CCL_ALL_GATHER" >> "$GITHUB_OUTPUT"
+            found_reports=true
+          fi
+          if [ -f "$PERF_REPORT_FILENAME_CCL_REDUCE_SCATTER" ]; then
+            echo "Found CCL ReduceScatter Perf report: $PERF_REPORT_FILENAME_CCL_REDUCE_SCATTER"
+            echo "perf_report_filename_reduce_scatter=$PERF_REPORT_FILENAME_CCL_REDUCE_SCATTER" >> "$GITHUB_OUTPUT"
+            found_reports=true
+          fi
+          if [ "$found_reports" = false ]; then
+            echo "No CCL perf report found for today."
+            exit 1
+          fi
+      - name: Upload CCL perf report
+        uses: actions/upload-artifact@v4
+        timeout-minutes: 10
+        with:
+          name: perf-report-csv-${{ matrix.test-group.model-type }}-${{ matrix.test-group.arch }}-${{ matrix.test-group.model }}-bare-metal
+          path: |
+            ${{ steps.check-perf-report.outputs.perf_report_filename_all_gather }}
+            ${{ steps.check-perf-report.outputs.perf_report_filename_reduce_scatter }}
+      - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
+        if: ${{ failure() }}
+        with:
+          slack_webhook_url: ${{ secrets.SLACK_WEBHOOK_URL }}
+          owner: ${{ matrix.test-group.owner_id }}
+      - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
+        timeout-minutes: 10
+        if: ${{ !cancelled() }}
+        with:
+          path: generated/test_reports/
+          prefix: "test_reports_"
+      - name: Disable performance mode
+        if: always()
+        run: |
+          sudo cpupower frequency-set -g ondemand

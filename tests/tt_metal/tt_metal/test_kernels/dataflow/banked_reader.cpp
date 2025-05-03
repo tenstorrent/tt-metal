@@ -31,6 +31,6 @@ void kernel_main() {
         noc_async_read(src_noc_addr, l1_write_addr, tile_bytes);
         noc_async_read_barrier();
 
-	    cb_push_back(cb_id, ublock_size_tiles);
+        cb_push_back(cb_id, ublock_size_tiles);
     }
 }

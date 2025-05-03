@@ -8,8 +8,6 @@ import timm
 
 from loguru import logger
 
-import tt_lib
-
 from models.experimental.vovnet.tt.classifier_head import TtClassifierHead
 from models.utility_functions import (
     torch_to_tt_tensor_rm,
@@ -17,6 +15,7 @@ from models.utility_functions import (
     comp_allclose,
     comp_pcc,
 )
+
 
 @pytest.mark.parametrize(
     "pcc",

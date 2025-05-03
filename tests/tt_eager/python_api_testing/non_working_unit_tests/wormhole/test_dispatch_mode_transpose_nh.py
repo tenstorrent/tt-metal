@@ -9,8 +9,8 @@ from loguru import logger
 import random
 import pytest
 import torch
-import tt_lib as ttl
 import random
+import ttnn
 
 from tests.tt_eager.python_api_testing.sweep_tests import pytorch_ops
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal
@@ -20,7 +20,7 @@ from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_r
 
 def tt_transpose_nh(x, device, dtype, layout, input_mem_config, output_mem_config):
     t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = ttl.tensor.transpose(t0, 0, 2, output_mem_config=output_mem_config)
+    t1 = ttnn.transpose(t0, 0, 2, memory_config=output_mem_config)
 
     return tt2torch_tensor(t1)
 
@@ -43,7 +43,7 @@ def gen_shapes(start_shape, end_shape, interval, num_shapes):
 
 
 def run_transpose_nh_tests(dtype, dlayout, in_mem_config, out_mem_config, device):
-    if dlayout == ttl.tensor.Layout.ROW_MAJOR:
+    if dlayout == ttnn.ROW_MAJOR_LAYOUT:
         shapes = gen_shapes([1, 1, 2, 2], [12, 24, 512, 512], [1, 1, 2, 2], 256)
     else:
         shapes = gen_shapes([1, 1, 32, 32], [12, 24, 512, 512], [1, 1, 32, 32], 256)
@@ -83,22 +83,22 @@ def run_transpose_nh_tests(dtype, dlayout, in_mem_config, out_mem_config, device
 
 test_sweep_args = [
     (
-        ttl.tensor.DataType.BFLOAT16,
-        ttl.tensor.Layout.ROW_MAJOR,
-        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
-        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
+        ttnn.bfloat16,
+        ttnn.ROW_MAJOR_LAYOUT,
+        ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
+        ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
     ),
     (
-        ttl.tensor.DataType.BFLOAT16,
-        ttl.tensor.Layout.TILE,
-        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
-        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
+        ttnn.bfloat16,
+        ttnn.TILE_LAYOUT,
+        ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
+        ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
     ),
     (
-        ttl.tensor.DataType.BFLOAT16,
-        ttl.tensor.Layout.TILE,
+        ttnn.bfloat16,
+        ttnn.TILE_LAYOUT,
         None,
-        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
+        ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
     ),
 ]
 

@@ -4,10 +4,10 @@
 
 import pytest
 from loguru import logger
-import tt_lib as ttl
 from models.utility_functions import is_wormhole_b0, is_grayskull
 from models.utility_functions import torch2tt_tensor, tt2torch_tensor, pad_by_zero, roundup32
 import torch
+import ttnn
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
     comp_equal,
     comp_pcc,
@@ -19,9 +19,9 @@ from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
 @pytest.mark.parametrize("out_sharded", [False], ids=["out_unsharded"])
 @pytest.mark.parametrize("M", [32, 128])
 @pytest.mark.parametrize("N", [1024])
-@pytest.mark.parametrize("activations_dtype", [ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT8_B])
-@pytest.mark.parametrize("weights_dtype", [ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT8_B])
-@pytest.mark.parametrize("enable_async, num_loops", ((True, 2), (False, 1)))
+@pytest.mark.parametrize("activations_dtype", [ttnn.bfloat16, ttnn.bfloat8_b])
+@pytest.mark.parametrize("weights_dtype", [ttnn.bfloat16, ttnn.bfloat8_b])
+@pytest.mark.parametrize("num_loops", [2])
 def test_matmul_1d_in0_batched(
     device,
     batch,
@@ -33,7 +33,6 @@ def test_matmul_1d_in0_batched(
     weights_dtype,
     function_level_defaults,
     num_loops,
-    enable_async,
 ):
     grid_size = (12, 8)
     compute_grid_size = device.compute_with_storage_grid_size()
@@ -47,15 +46,14 @@ def test_matmul_1d_in0_batched(
     in1_shape = [1, 1, K, N]
     bias_shape = [1, 1, 1, N]
 
-    interleaved_mem_config = ttl.tensor.MemoryConfig(
-        memory_layout=ttl.tensor.TensorMemoryLayout.INTERLEAVED,
-        buffer_type=ttl.tensor.BufferType.L1,
+    interleaved_mem_config = ttnn.MemoryConfig(
+        memory_layout=ttnn.TensorMemoryLayout.INTERLEAVED,
+        buffer_type=ttnn.BufferType.L1,
     )
-    sharded_mem_config = ttl.tensor.MemoryConfig(
-        memory_layout=ttl.tensor.TensorMemoryLayout.WIDTH_SHARDED,
-        buffer_type=ttl.tensor.BufferType.L1,
+    sharded_mem_config = ttnn.MemoryConfig(
+        memory_layout=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        buffer_type=ttnn.BufferType.L1,
     )
-    device.enable_async(enable_async)
     for _ in range(num_loops):
         in0 = torch.randn(in0_shape).bfloat16().float()
         in1 = torch.randn(in1_shape).bfloat16().float()
@@ -68,17 +66,17 @@ def test_matmul_1d_in0_batched(
         output_mem_config = sharded_mem_config if out_sharded else interleaved_mem_config
 
         if in0_sharded:
-            in0_t = ttl.tensor.interleaved_to_sharded(
+            in0_t = ttnn.interleaved_to_sharded(
                 in0_t,
                 grid_size,
                 [M, K // num_cores],
-                ttl.tensor.TensorMemoryLayout.WIDTH_SHARDED,
-                ttl.tensor.ShardOrientation.ROW_MAJOR,
+                ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+                ttnn.ShardOrientation.ROW_MAJOR,
             )
 
         per_core_M = M // 32
 
-        program_config = ttl.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
             compute_with_storage_grid_size=grid_size,
             in0_block_w=1,
             out_subblock_h=1,
@@ -89,20 +87,20 @@ def test_matmul_1d_in0_batched(
             fused_activation=None,
             mcast_in0=True,
         )
-        output_t = ttl.operations.primary.matmul_1d(
+        output_t = ttnn.linear(
             in0_t,
             in1_t,
             bias=bias_t,
             program_config=program_config,
-            output_mem_config=output_mem_config,
-            output_dtype=activations_dtype,
+            memory_config=output_mem_config,
+            dtype=activations_dtype,
         )
 
         in0_t.deallocate()
         in1_t.deallocate()
         bias_t.deallocate()
         if out_sharded:
-            output_t = ttl.tensor.sharded_to_interleaved(output_t, interleaved_mem_config)
+            output_t = ttnn.sharded_to_interleaved(output_t, interleaved_mem_config)
         pt_out = in0 @ in1 + bias
 
         tt_out = tt2torch_tensor(output_t)
@@ -110,7 +108,6 @@ def test_matmul_1d_in0_batched(
         passing, output = comp_pcc(pt_out, tt_out)
         logger.info(output)
         assert passing
-    device.enable_async(False)
 
 
 @pytest.mark.skipif(is_grayskull(), reason="GS does not support fp32")
@@ -121,10 +118,10 @@ def test_matmul_1d_in0_batched(
 @pytest.mark.parametrize("out_sharded", [False], ids=["out_unsharded"])
 @pytest.mark.parametrize("M", [32, 128])
 @pytest.mark.parametrize("N", [1024])
-@pytest.mark.parametrize("activations_dtype", [ttl.tensor.DataType.BFLOAT8_B])
-@pytest.mark.parametrize("weights_dtype", [ttl.tensor.DataType.BFLOAT8_B])
-@pytest.mark.parametrize("enable_async, num_loops", ((True, 2), (False, 1)))
-def test_matmul_1d_fp32_acc_l1(
+@pytest.mark.parametrize("activations_dtype", [ttnn.bfloat8_b])
+@pytest.mark.parametrize("weights_dtype", [ttnn.bfloat8_b])
+@pytest.mark.parametrize("num_loops", [2])
+def test_linear_fp32_acc_l1(
     device,
     packer_l1_acc,
     fp32_acc_mode,
@@ -137,7 +134,6 @@ def test_matmul_1d_fp32_acc_l1(
     weights_dtype,
     function_level_defaults,
     num_loops,
-    enable_async,
 ):
     grid_size = (8, 4)
     compute_grid_size = device.compute_with_storage_grid_size()
@@ -151,15 +147,14 @@ def test_matmul_1d_fp32_acc_l1(
     in1_shape = [1, 1, K, N]
     bias_shape = [1, 1, 1, N]
 
-    interleaved_mem_config = ttl.tensor.MemoryConfig(
-        memory_layout=ttl.tensor.TensorMemoryLayout.INTERLEAVED,
-        buffer_type=ttl.tensor.BufferType.L1,
+    interleaved_mem_config = ttnn.MemoryConfig(
+        memory_layout=ttnn.TensorMemoryLayout.INTERLEAVED,
+        buffer_type=ttnn.BufferType.L1,
     )
-    sharded_mem_config = ttl.tensor.MemoryConfig(
-        memory_layout=ttl.tensor.TensorMemoryLayout.WIDTH_SHARDED,
-        buffer_type=ttl.tensor.BufferType.L1,
+    sharded_mem_config = ttnn.MemoryConfig(
+        memory_layout=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        buffer_type=ttnn.BufferType.L1,
     )
-    device.enable_async(enable_async)
     for _ in range(num_loops):
         in0 = torch.randn(in0_shape).bfloat16().float()
         in1 = torch.randn(in1_shape).bfloat16().float()
@@ -172,17 +167,17 @@ def test_matmul_1d_fp32_acc_l1(
         output_mem_config = sharded_mem_config if out_sharded else interleaved_mem_config
 
         if in0_sharded:
-            in0_t = ttl.tensor.interleaved_to_sharded(
+            in0_t = ttnn.interleaved_to_sharded(
                 in0_t,
                 grid_size,
                 [M, K // num_cores],
-                ttl.tensor.TensorMemoryLayout.WIDTH_SHARDED,
-                ttl.tensor.ShardOrientation.ROW_MAJOR,
+                ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+                ttnn.ShardOrientation.ROW_MAJOR,
             )
 
         per_core_M = M // 32
 
-        program_config = ttl.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
             compute_with_storage_grid_size=grid_size,
             in0_block_w=1,
             out_subblock_h=1,
@@ -194,24 +189,24 @@ def test_matmul_1d_fp32_acc_l1(
             mcast_in0=True,
         )
 
-        compute_kernel_config = ttl.tensor.WormholeComputeKernelConfig(
-            math_fidelity=ttl.tensor.MathFidelity.LoFi,
+        compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.LoFi,
             math_approx_mode=True,
             fp32_dest_acc_en=fp32_acc_mode,
             packer_l1_acc=packer_l1_acc,
         )
 
-        output_t = ttl.operations.primary.matmul_1d(
+        output_t = ttnn.linear(
             in0_t,
             in1_t,
             bias=bias_t,
             program_config=program_config,
-            output_mem_config=output_mem_config,
-            output_dtype=activations_dtype,
+            memory_config=output_mem_config,
+            dtype=activations_dtype,
             compute_kernel_config=compute_kernel_config,
         )
         if out_sharded:
-            output_t = ttl.tensor.sharded_to_interleaved(output_t, interleaved_mem_config)
+            output_t = ttnn.sharded_to_interleaved(output_t, interleaved_mem_config)
         pt_out = in0 @ in1 + bias
 
         tt_out = tt2torch_tensor(output_t)
@@ -219,7 +214,6 @@ def test_matmul_1d_fp32_acc_l1(
         passing, output = comp_pcc(pt_out, tt_out)
         logger.info(output)
         assert passing
-    device.enable_async(False)
 
 
 @pytest.mark.skipif(is_grayskull(), reason="GS does not support fp32")
@@ -229,8 +223,8 @@ def test_matmul_1d_fp32_acc_l1(
 @pytest.mark.parametrize("in1_sharded", [True, False], ids=["in1_sharded", "in1_unsharded"])
 @pytest.mark.parametrize("out_sharded", [True, False], ids=["out_sharded", "out_unsharded"])
 @pytest.mark.parametrize("B, H, M, K, N, out_subblock_h, out_subblock_w", [[2, 16, 384, 64, 128, 1, 4]])
-@pytest.mark.parametrize("activations_dtype", [ttl.tensor.DataType.BFLOAT8_B])
-@pytest.mark.parametrize("enable_async, num_loops", ((True, 2), (False, 1)))
+@pytest.mark.parametrize("activations_dtype", [ttnn.bfloat8_b])
+@pytest.mark.parametrize("num_loops", [2])
 def test_matmul_no_mcast_fp32_acc_l1(
     device,
     packer_l1_acc,
@@ -248,7 +242,6 @@ def test_matmul_no_mcast_fp32_acc_l1(
     activations_dtype,
     function_level_defaults,
     num_loops,
-    enable_async,
 ):
     grid_size = (8, 4)
     compute_grid_size = device.compute_with_storage_grid_size()
@@ -258,15 +251,14 @@ def test_matmul_no_mcast_fp32_acc_l1(
     in0_shape = [B, H, M, K]
     in1_shape = [B, H, K, N]
 
-    interleaved_mem_config = ttl.tensor.MemoryConfig(
-        memory_layout=ttl.tensor.TensorMemoryLayout.INTERLEAVED,
-        buffer_type=ttl.tensor.BufferType.DRAM,
+    interleaved_mem_config = ttnn.MemoryConfig(
+        memory_layout=ttnn.TensorMemoryLayout.INTERLEAVED,
+        buffer_type=ttnn.BufferType.DRAM,
     )
-    sharded_mem_config = ttl.tensor.MemoryConfig(
-        memory_layout=ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
-        buffer_type=ttl.tensor.BufferType.L1,
+    sharded_mem_config = ttnn.MemoryConfig(
+        memory_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        buffer_type=ttnn.BufferType.L1,
     )
-    device.enable_async(enable_async)
     for _ in range(num_loops):
         in0 = torch.randn(in0_shape).bfloat16().float()
         in1 = torch.randn(in1_shape).bfloat16().float()
@@ -277,23 +269,23 @@ def test_matmul_no_mcast_fp32_acc_l1(
         output_mem_config = sharded_mem_config if out_sharded else interleaved_mem_config
 
         if in0_sharded:
-            in0_t = ttl.tensor.interleaved_to_sharded(
+            in0_t = ttnn.interleaved_to_sharded(
                 in0_t,
                 grid_size,
                 [B * H * M // num_cores, K],
-                ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
-                ttl.tensor.ShardOrientation.COL_MAJOR,
+                ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                ttnn.ShardOrientation.COL_MAJOR,
             )
         if in1_sharded:
-            in1_t = ttl.tensor.interleaved_to_sharded(
+            in1_t = ttnn.interleaved_to_sharded(
                 in1_t,
                 grid_size,
                 [B * H * K // num_cores, N],
-                ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
-                ttl.tensor.ShardOrientation.COL_MAJOR,
+                ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                ttnn.ShardOrientation.COL_MAJOR,
             )
 
-        program_config = ttl.operations.primary.MatmulMultiCoreReuseProgramConfig(
+        program_config = ttnn.MatmulMultiCoreReuseProgramConfig(
             compute_with_storage_grid_size=grid_size,
             in0_block_w=K // 32,
             out_subblock_h=out_subblock_h,
@@ -302,23 +294,23 @@ def test_matmul_no_mcast_fp32_acc_l1(
             per_core_N=N // 32,
         )
 
-        compute_kernel_config = ttl.tensor.WormholeComputeKernelConfig(
-            math_fidelity=ttl.tensor.MathFidelity.LoFi,
+        compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.LoFi,
             math_approx_mode=True,
             fp32_dest_acc_en=fp32_acc_mode,
             packer_l1_acc=packer_l1_acc,
         )
 
-        output_t = ttl.operations.primary.matmul(
+        output_t = ttnn.matmul(
             in0_t,
             in1_t,
             program_config=program_config,
-            output_mem_config=output_mem_config,
-            output_dtype=activations_dtype,
+            memory_config=output_mem_config,
+            dtype=activations_dtype,
             compute_kernel_config=compute_kernel_config,
         )
         if out_sharded:
-            output_t = ttl.tensor.sharded_to_interleaved(output_t, interleaved_mem_config)
+            output_t = ttnn.sharded_to_interleaved(output_t, interleaved_mem_config)
 
         pt_out = in0 @ in1
 
@@ -327,7 +319,6 @@ def test_matmul_no_mcast_fp32_acc_l1(
         passing, output = comp_pcc(pt_out, tt_out)
         logger.info(output)
         assert passing
-    device.enable_async(False)
 
 
 @pytest.mark.skipif(is_grayskull(), reason="GS does not support fp32")
@@ -344,9 +335,9 @@ def test_matmul_no_mcast_fp32_acc_l1(
 @pytest.mark.parametrize("out_sharded", [False], ids=["out_unsharded"])
 @pytest.mark.parametrize("M", [32, 128])
 @pytest.mark.parametrize("N", [1024])
-@pytest.mark.parametrize("activations_dtype", [ttl.tensor.DataType.FLOAT32])
-@pytest.mark.parametrize("weights_dtype", [ttl.tensor.DataType.FLOAT32])
-@pytest.mark.parametrize("enable_async, num_loops", ((True, 2), (False, 1)))
+@pytest.mark.parametrize("activations_dtype", [ttnn.float32])
+@pytest.mark.parametrize("weights_dtype", [ttnn.float32])
+@pytest.mark.parametrize("num_loops", [2])
 def test_matmul_1d_fp32_input_output(
     device,
     packer_l1_acc,
@@ -360,7 +351,6 @@ def test_matmul_1d_fp32_input_output(
     weights_dtype,
     function_level_defaults,
     num_loops,
-    enable_async,
 ):
     grid_size = (8, 4)
     compute_grid_size = device.compute_with_storage_grid_size()
@@ -374,15 +364,14 @@ def test_matmul_1d_fp32_input_output(
     in1_shape = [1, 1, K, N]
     bias_shape = [1, 1, 1, N]
 
-    interleaved_mem_config = ttl.tensor.MemoryConfig(
-        memory_layout=ttl.tensor.TensorMemoryLayout.INTERLEAVED,
-        buffer_type=ttl.tensor.BufferType.L1,
+    interleaved_mem_config = ttnn.MemoryConfig(
+        memory_layout=ttnn.TensorMemoryLayout.INTERLEAVED,
+        buffer_type=ttnn.BufferType.L1,
     )
-    sharded_mem_config = ttl.tensor.MemoryConfig(
-        memory_layout=ttl.tensor.TensorMemoryLayout.WIDTH_SHARDED,
-        buffer_type=ttl.tensor.BufferType.L1,
+    sharded_mem_config = ttnn.MemoryConfig(
+        memory_layout=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        buffer_type=ttnn.BufferType.L1,
     )
-    device.enable_async(enable_async)
     for _ in range(num_loops):
         in0 = torch.rand(in0_shape).float()
         in1 = torch.rand(in1_shape).float()
@@ -395,17 +384,17 @@ def test_matmul_1d_fp32_input_output(
         output_mem_config = sharded_mem_config if out_sharded else interleaved_mem_config
 
         if in0_sharded:
-            in0_t = ttl.tensor.interleaved_to_sharded(
+            in0_t = ttnn.interleaved_to_sharded(
                 in0_t,
                 grid_size,
                 [M, K // num_cores],
-                ttl.tensor.TensorMemoryLayout.WIDTH_SHARDED,
-                ttl.tensor.ShardOrientation.ROW_MAJOR,
+                ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+                ttnn.ShardOrientation.ROW_MAJOR,
             )
 
         per_core_M = M // 32
 
-        program_config = ttl.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
             compute_with_storage_grid_size=grid_size,
             in0_block_w=1,
             out_subblock_h=1,
@@ -417,24 +406,24 @@ def test_matmul_1d_fp32_input_output(
             mcast_in0=True,
         )
 
-        compute_kernel_config = ttl.tensor.WormholeComputeKernelConfig(
-            math_fidelity=ttl.tensor.MathFidelity.LoFi,
+        compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.LoFi,
             math_approx_mode=True,
             fp32_dest_acc_en=fp32_acc_mode,
             packer_l1_acc=packer_l1_acc,
         )
 
-        output_t = ttl.operations.primary.matmul_1d(
+        output_t = ttnn.linear(
             in0_t,
             in1_t,
             bias=bias_t,
             program_config=program_config,
-            output_mem_config=output_mem_config,
-            output_dtype=activations_dtype,
+            memory_config=output_mem_config,
+            dtype=activations_dtype,
             compute_kernel_config=compute_kernel_config,
         )
         if out_sharded:
-            output_t = ttl.tensor.sharded_to_interleaved(output_t, interleaved_mem_config)
+            output_t = ttnn.sharded_to_interleaved(output_t, interleaved_mem_config)
         pt_out = in0 @ in1 + bias
 
         tt_out = tt2torch_tensor(output_t)
@@ -442,7 +431,6 @@ def test_matmul_1d_fp32_input_output(
         passing, output = comp_pcc(pt_out, tt_out)
         logger.info(output)
         assert passing
-    device.enable_async(False)
 
 
 @pytest.mark.skipif(is_grayskull(), reason="GS does not support fp32")
@@ -458,8 +446,8 @@ def test_matmul_1d_fp32_input_output(
 @pytest.mark.parametrize("in1_sharded", [True, False], ids=["in1_sharded", "in1_unsharded"])
 @pytest.mark.parametrize("out_sharded", [True, False], ids=["out_sharded", "out_unsharded"])
 @pytest.mark.parametrize("B, H, M, K, N, out_subblock_h, out_subblock_w", [[2, 16, 384, 64, 128, 1, 4]])
-@pytest.mark.parametrize("activations_dtype", [ttl.tensor.DataType.FLOAT32])
-@pytest.mark.parametrize("enable_async, num_loops", ((True, 2), (False, 1)))
+@pytest.mark.parametrize("activations_dtype", [ttnn.float32])
+@pytest.mark.parametrize("num_loops", [2])
 def test_matmul_no_mcast_fp32_input_output(
     device,
     packer_l1_acc,
@@ -477,7 +465,6 @@ def test_matmul_no_mcast_fp32_input_output(
     activations_dtype,
     function_level_defaults,
     num_loops,
-    enable_async,
 ):
     grid_size = (8, 4)
     compute_grid_size = device.compute_with_storage_grid_size()
@@ -487,15 +474,14 @@ def test_matmul_no_mcast_fp32_input_output(
     in0_shape = [B, H, M, K]
     in1_shape = [B, H, K, N]
 
-    interleaved_mem_config = ttl.tensor.MemoryConfig(
-        memory_layout=ttl.tensor.TensorMemoryLayout.INTERLEAVED,
-        buffer_type=ttl.tensor.BufferType.DRAM,
+    interleaved_mem_config = ttnn.MemoryConfig(
+        memory_layout=ttnn.TensorMemoryLayout.INTERLEAVED,
+        buffer_type=ttnn.BufferType.DRAM,
     )
-    sharded_mem_config = ttl.tensor.MemoryConfig(
-        memory_layout=ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
-        buffer_type=ttl.tensor.BufferType.L1,
+    sharded_mem_config = ttnn.MemoryConfig(
+        memory_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        buffer_type=ttnn.BufferType.L1,
     )
-    device.enable_async(enable_async)
     for _ in range(num_loops):
         in0 = torch.rand(in0_shape).float() * 1000.0
         in1 = torch.rand(in1_shape).float() * 1000.0
@@ -506,23 +492,23 @@ def test_matmul_no_mcast_fp32_input_output(
         output_mem_config = sharded_mem_config if out_sharded else interleaved_mem_config
 
         if in0_sharded:
-            in0_t = ttl.tensor.interleaved_to_sharded(
+            in0_t = ttnn.interleaved_to_sharded(
                 in0_t,
                 grid_size,
                 [B * H * M // num_cores, K],
-                ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
-                ttl.tensor.ShardOrientation.COL_MAJOR,
+                ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                ttnn.ShardOrientation.COL_MAJOR,
             )
         if in1_sharded:
-            in1_t = ttl.tensor.interleaved_to_sharded(
+            in1_t = ttnn.interleaved_to_sharded(
                 in1_t,
                 grid_size,
                 [B * H * K // num_cores, N],
-                ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
-                ttl.tensor.ShardOrientation.COL_MAJOR,
+                ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                ttnn.ShardOrientation.COL_MAJOR,
             )
 
-        program_config = ttl.operations.primary.MatmulMultiCoreReuseProgramConfig(
+        program_config = ttnn.MatmulMultiCoreReuseProgramConfig(
             compute_with_storage_grid_size=grid_size,
             in0_block_w=K // 32,
             out_subblock_h=out_subblock_h,
@@ -531,23 +517,23 @@ def test_matmul_no_mcast_fp32_input_output(
             per_core_N=N // 32,
         )
 
-        compute_kernel_config = ttl.tensor.WormholeComputeKernelConfig(
-            math_fidelity=ttl.tensor.MathFidelity.LoFi,
+        compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.LoFi,
             math_approx_mode=True,
             fp32_dest_acc_en=fp32_acc_mode,
             packer_l1_acc=packer_l1_acc,
         )
 
-        output_t = ttl.operations.primary.matmul(
+        output_t = ttnn.matmul(
             in0_t,
             in1_t,
             program_config=program_config,
-            output_mem_config=output_mem_config,
-            output_dtype=activations_dtype,
+            memory_config=output_mem_config,
+            dtype=activations_dtype,
             compute_kernel_config=compute_kernel_config,
         )
         if out_sharded:
-            output_t = ttl.tensor.sharded_to_interleaved(output_t, interleaved_mem_config)
+            output_t = ttnn.sharded_to_interleaved(output_t, interleaved_mem_config)
 
         pt_out = in0 @ in1
 
@@ -556,7 +542,6 @@ def test_matmul_no_mcast_fp32_input_output(
         passing, output = comp_pcc(pt_out, tt_out)
         logger.info(output)
         assert passing
-    device.enable_async(False)
 
 
 @pytest.mark.parametrize("packer_l1_acc", [True, False], ids=["pack_l1", "no_pack_l1"])
@@ -572,10 +557,10 @@ def test_matmul_no_mcast_fp32_input_output(
 @pytest.mark.parametrize("in1_sharded", [True], ids=["in1_sharded"])
 @pytest.mark.parametrize("out_sharded", [True], ids=["out_sharded"])
 @pytest.mark.parametrize("B, H, M, K, N, out_subblock_h, out_subblock_w", [[2, 16, 384, 128, 64, 2, 2]])
-@pytest.mark.parametrize("activations_dtype", [ttl.tensor.DataType.BFLOAT8_B])
-@pytest.mark.parametrize("output_dtype", [ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.FLOAT32])
-@pytest.mark.parametrize("enable_async, num_loops", ((True, 2), (False, 1)))
-def test_matmul_untilize_output(
+@pytest.mark.parametrize("activations_dtype", [ttnn.bfloat8_b])
+@pytest.mark.parametrize("output_dtype", [ttnn.bfloat16, ttnn.float32])
+@pytest.mark.parametrize("num_loops", [2])
+def test_matmul_no_untilize_output_param(
     device,
     packer_l1_acc,
     fp32_acc_mode,
@@ -593,7 +578,6 @@ def test_matmul_untilize_output(
     output_dtype,
     function_level_defaults,
     num_loops,
-    enable_async,
 ):
     grid_size = (8, 4)
     compute_grid_size = device.compute_with_storage_grid_size()
@@ -605,15 +589,14 @@ def test_matmul_untilize_output(
     in0_shape = [B, H, M, K]
     in1_shape = [B, H, K, N]
 
-    interleaved_mem_config = ttl.tensor.MemoryConfig(
-        memory_layout=ttl.tensor.TensorMemoryLayout.INTERLEAVED,
-        buffer_type=ttl.tensor.BufferType.DRAM,
+    interleaved_mem_config = ttnn.MemoryConfig(
+        memory_layout=ttnn.TensorMemoryLayout.INTERLEAVED,
+        buffer_type=ttnn.BufferType.DRAM,
     )
-    sharded_mem_config = ttl.tensor.MemoryConfig(
-        memory_layout=ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
-        buffer_type=ttl.tensor.BufferType.L1,
+    sharded_mem_config = ttnn.MemoryConfig(
+        memory_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        buffer_type=ttnn.BufferType.L1,
     )
-    device.enable_async(enable_async)
     for _ in range(num_loops):
         in0 = torch.rand(in0_shape).float() * 1000.0
         in1 = torch.rand(in1_shape).float() * 1000.0
@@ -624,23 +607,23 @@ def test_matmul_untilize_output(
         output_mem_config = sharded_mem_config if out_sharded else interleaved_mem_config
 
         if in0_sharded:
-            in0_t = ttl.tensor.interleaved_to_sharded(
+            in0_t = ttnn.interleaved_to_sharded(
                 in0_t,
                 grid_size,
                 [B * H * M // num_cores, K],
-                ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
-                ttl.tensor.ShardOrientation.COL_MAJOR,
+                ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                ttnn.ShardOrientation.COL_MAJOR,
             )
         if in1_sharded:
-            in1_t = ttl.tensor.interleaved_to_sharded(
+            in1_t = ttnn.interleaved_to_sharded(
                 in1_t,
                 grid_size,
                 [B * H * K // num_cores, N],
-                ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
-                ttl.tensor.ShardOrientation.COL_MAJOR,
+                ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                ttnn.ShardOrientation.COL_MAJOR,
             )
 
-        program_config = ttl.operations.primary.MatmulMultiCoreReuseProgramConfig(
+        program_config = ttnn.MatmulMultiCoreReuseProgramConfig(
             compute_with_storage_grid_size=grid_size,
             in0_block_w=K // 32,
             out_subblock_h=out_subblock_h,
@@ -650,29 +633,28 @@ def test_matmul_untilize_output(
         )
 
         if is_grayskull():
-            compute_kernel_config = ttl.tensor.GrayskullComputeKernelConfig(
-                math_fidelity=ttl.tensor.MathFidelity.LoFi,
+            compute_kernel_config = ttnn.GrayskullComputeKernelConfig(
+                math_fidelity=ttnn.MathFidelity.LoFi,
                 math_approx_mode=True,
             )
         else:
-            compute_kernel_config = ttl.tensor.WormholeComputeKernelConfig(
-                math_fidelity=ttl.tensor.MathFidelity.LoFi,
+            compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+                math_fidelity=ttnn.MathFidelity.LoFi,
                 math_approx_mode=True,
                 fp32_dest_acc_en=fp32_acc_mode,
                 packer_l1_acc=packer_l1_acc,
             )
 
-        output_t = ttl.operations.primary.matmul(
+        output_t = ttnn.matmul(
             in0_t,
             in1_t,
             program_config=program_config,
-            output_mem_config=output_mem_config,
-            output_dtype=output_dtype,
+            memory_config=output_mem_config,
+            dtype=output_dtype,
             compute_kernel_config=compute_kernel_config,
-            untilize_out=True,
         )
         if out_sharded:
-            output_t = ttl.tensor.sharded_to_interleaved(output_t, interleaved_mem_config)
+            output_t = ttnn.sharded_to_interleaved(output_t, interleaved_mem_config)
 
         pt_out = in0 @ in1
 
@@ -681,4 +663,3 @@ def test_matmul_untilize_output(
         passing, output = comp_pcc(pt_out, tt_out)
         logger.info(output)
         assert passing
-    device.enable_async(False)

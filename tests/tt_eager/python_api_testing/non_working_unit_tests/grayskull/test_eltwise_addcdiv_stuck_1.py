@@ -6,7 +6,7 @@ import random
 from loguru import logger
 import pytest
 import torch
-import tt_lib as ttl
+import ttnn
 
 from tests.tt_eager.python_api_testing.sweep_tests.tt_lib_ops import setup_tt_tensor
 from models.utility_functions import tt2torch_tensor
@@ -25,39 +25,39 @@ def run_addcdiv(input_shape, dtype, dlayout, buffer_type, output_mem_config, dat
         f"Running addcdiv with input_shape {input_shape} dtype {dtype} dlayout {dlayout} buffer_type {buffer_type} output_mem_config {output_mem_config} scalar {scalar} data_seed {data_seed}"
     )
 
-    device = ttl.device.CreateDevice(0)
+    device = ttnn.open_device(0)
 
     try:
         t0 = setup_tt_tensor(
             x,
             device,
             dlayout[0],
-            ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, buffer_type[0]),
+            ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, buffer_type[0]),
             dtype[0],
         )
         t1 = setup_tt_tensor(
             y,
             device,
             dlayout[1],
-            ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, buffer_type[1]),
+            ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, buffer_type[1]),
             dtype[1],
         )
         t2 = setup_tt_tensor(
             z,
             device,
             dlayout[2],
-            ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, buffer_type[2]),
+            ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, buffer_type[2]),
             dtype[2],
         )
-        t3 = ttl.tensor.addcdiv(t0, t1, t2, scalar, output_mem_config)
+        t3 = ttnn.addcdiv(t0, t1, t2, value=scalar, memory_config=output_mem_config)
 
         y = tt2torch_tensor(t3)
 
     except Exception as exc:
         logger.warning(f"run_addcdiv RuntimeError occured {exc}")
 
-    ttl.device.DeallocateBuffers(device)
-    ttl.device.CloseDevice(device)
+    ttnn.experimental.device.DeallocateBuffers(device)
+    ttnn.close_device(device)
 
     logger.info(f"Finished running addcdiv")
 
@@ -65,28 +65,28 @@ def run_addcdiv(input_shape, dtype, dlayout, buffer_type, output_mem_config, dat
 test_sweep_args = [
     (
         (9, 23, 416, 310),
-        [ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT16],
-        [ttl.tensor.Layout.ROW_MAJOR, ttl.tensor.Layout.ROW_MAJOR, ttl.tensor.Layout.ROW_MAJOR],
-        [ttl.tensor.BufferType.DRAM, ttl.tensor.BufferType.L1, ttl.tensor.BufferType.DRAM],
-        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1),
+        [ttnn.bfloat16, ttnn.bfloat16, ttnn.bfloat16],
+        [ttnn.ROW_MAJOR_LAYOUT, ttnn.ROW_MAJOR_LAYOUT, ttnn.ROW_MAJOR_LAYOUT],
+        [ttnn.BufferType.DRAM, ttnn.BufferType.L1, ttnn.BufferType.DRAM],
+        ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1),
         10406825,
         -42.25,
     ),
     (
         (3, 10, 73, 388),
-        [ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT16],
-        [ttl.tensor.Layout.ROW_MAJOR, ttl.tensor.Layout.ROW_MAJOR, ttl.tensor.Layout.ROW_MAJOR],
-        [ttl.tensor.BufferType.DRAM, ttl.tensor.BufferType.DRAM, ttl.tensor.BufferType.L1],
-        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1),
+        [ttnn.bfloat16, ttnn.bfloat16, ttnn.bfloat16],
+        [ttnn.ROW_MAJOR_LAYOUT, ttnn.ROW_MAJOR_LAYOUT, ttnn.ROW_MAJOR_LAYOUT],
+        [ttnn.BufferType.DRAM, ttnn.BufferType.DRAM, ttnn.BufferType.L1],
+        ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1),
         8405597,
         -61.75,
     ),
     (
         (2, 24, 39, 462),
-        [ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT16],
-        [ttl.tensor.Layout.ROW_MAJOR, ttl.tensor.Layout.ROW_MAJOR, ttl.tensor.Layout.ROW_MAJOR],
-        [ttl.tensor.BufferType.L1, ttl.tensor.BufferType.DRAM, ttl.tensor.BufferType.L1],
-        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1),
+        [ttnn.bfloat16, ttnn.bfloat16, ttnn.bfloat16],
+        [ttnn.ROW_MAJOR_LAYOUT, ttnn.ROW_MAJOR_LAYOUT, ttnn.ROW_MAJOR_LAYOUT],
+        [ttnn.BufferType.L1, ttnn.BufferType.DRAM, ttnn.BufferType.L1],
+        ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1),
         10406825,
         -42.25,
     ),

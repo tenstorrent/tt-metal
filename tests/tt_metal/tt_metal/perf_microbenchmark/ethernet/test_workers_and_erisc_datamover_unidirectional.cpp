@@ -3,38 +3,58 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <assert.h>
+#include <fmt/base.h>
+#include <stdint.h>
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tt_metal.hpp>
 #include <algorithm>
-#include <functional>
-#include <limits>
-#include <random>
+#include <cstdlib>
+#include <exception>
+#include <iostream>
+#include <map>
+#include <memory>
+#include <string>
+#include <thread>
+#include <unordered_set>
+#include <utility>
+#include <variant>
+#include <vector>
 
-#include "device/tt_arch_types.h"
-#include "tt_backend_api_types.hpp"
-#include "tt_metal/common/core_coord.h"
-#include "tt_metal/common/math.hpp"
-#include "tt_metal/detail/tt_metal.hpp"
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/impl/kernels/kernel.hpp"
-#include "tt_metal/test_utils/comparison.hpp"
-#include "tt_metal/test_utils/df/df.hpp"
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/buffer_types.hpp>
+#include <tt-metalium/circular_buffer_types.hpp>
+#include <tt-metalium/data_types.hpp>
+#include "df/float32.hpp"
+#include "impl/context/metal_context.hpp"
+
+#include "hostdevcommon/kernel_structs.h"
+#include <tt-metalium/kernel_types.hpp>
+#include <tt-metalium/logger.hpp>
+#include <tt-metalium/program.hpp>
+#include <tt_stl/span.hpp>
+#include <tt-metalium/tt_backend_api_types.hpp>
 #include "tt_metal/test_utils/env_vars.hpp"
-#include "tt_metal/test_utils/print_helpers.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
-
-// #include "impl/kernels/kernel_types.hpp"
+#include "umd/device/tt_core_coordinates.h"
+#include "umd/device/types/arch.h"
+#include "umd/device/types/xy_pair.h"
 
 using namespace tt;
 using namespace tt::test_utils;
 using namespace tt::test_utils::df;
 
 class N300TestDevice {
-   public:
+public:
     N300TestDevice() : device_open(false) {
         auto slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
         if (not slow_dispatch) {
             TT_THROW("This suite can only be run with TT_METAL_SLOW_DISPATCH_MODE set");
         }
-        arch_ = tt::get_arch_from_string(tt::test_utils::get_env_arch_name());
+        arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
 
         num_devices_ = tt::tt_metal::GetNumAvailableDevices();
         if (arch_ == tt::ARCH::WORMHOLE_B0 and tt::tt_metal::GetNumAvailableDevices() == 2 and
@@ -43,7 +63,7 @@ class N300TestDevice {
                 auto* device = tt::tt_metal::CreateDevice(id);
                 devices_.push_back(device);
             }
-            tt::Cluster::instance().set_internal_routing_info_for_ethernet_cores(true);
+            tt::tt_metal::MetalContext::instance().get_cluster().set_internal_routing_info_for_ethernet_cores(true);
 
         } else {
             TT_THROW("This suite can only be run on N300 Wormhole devices");
@@ -58,17 +78,17 @@ class N300TestDevice {
 
     void TearDown() {
         device_open = false;
-        tt::Cluster::instance().set_internal_routing_info_for_ethernet_cores(false);
+        tt::tt_metal::MetalContext::instance().get_cluster().set_internal_routing_info_for_ethernet_cores(false);
         for (unsigned int id = 0; id < devices_.size(); id++) {
             tt::tt_metal::CloseDevice(devices_.at(id));
         }
     }
 
-    std::vector<tt::tt_metal::Device*> devices_;
+    std::vector<tt::tt_metal::IDevice*> devices_;
     tt::ARCH arch_;
     size_t num_devices_;
 
-   private:
+private:
     bool device_open;
 };
 
@@ -76,9 +96,9 @@ struct BankedConfig {
     size_t num_pages;
     size_t size_bytes;
     size_t page_size_bytes;
-    BufferType input_buffer_type;   // = BufferType::L1;
-    BufferType output_buffer_type;  // = BufferType::L1;
-    tt::DataFormat l1_data_format;  // = tt::DataFormat::Float16_b;
+    tt_metal::BufferType input_buffer_type;   // = BufferType::L1;
+    tt_metal::BufferType output_buffer_type;  // = BufferType::L1;
+    tt::DataFormat l1_data_format;            // = tt::DataFormat::Float16_b;
 };
 
 struct KernelXY {
@@ -89,13 +109,13 @@ struct KernelXY {
 };
 
 bool RunWriteBWTest(
-    std::string const &sender_side_reader_worker_kernel_path,
-    std::string const &sender_side_writer_worker_kernel_path,
-    std::string const &receiver_side_reader_worker_kernel_path,
-    std::string const &receiver_side_writer_worker_kernel_path,
+    std::string const& sender_side_reader_worker_kernel_path,
+    std::string const& sender_side_writer_worker_kernel_path,
+    std::string const& receiver_side_reader_worker_kernel_path,
+    std::string const& receiver_side_writer_worker_kernel_path,
 
-    tt_metal::Device* sender_device,
-    tt_metal::Device* receiver_device,
+    tt_metal::IDevice* sender_device,
+    tt_metal::IDevice* receiver_device,
 
     const CoreCoord& eth_sender_core,
     const CoreCoord& eth_receiver_core,
@@ -114,6 +134,11 @@ bool RunWriteBWTest(
     bool dest_is_dram
 
 ) {
+    using tt_metal::BufferType;
+    using tt_metal::CBHandle;
+    using tt_metal::DataMovementProcessor;
+    using tt_metal::InterleavedBufferConfig;
+
     // number of bytes to send per eth send (given that eth l1 buf size not
     // guaranteed to be multiple of page size, we won't send the left over
     // bytes at the end
@@ -174,7 +199,8 @@ bool RunWriteBWTest(
     const uint32_t dram_output_buffer_base_addr = output_buffer->address();
 
     // TODO(snijjar): Find a cleaner way to do this
-    uint32_t erisc_handshake_address = eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE;
+    uint32_t erisc_handshake_address = tt::tt_metal::MetalContext::instance().hal().get_dev_addr(
+        tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::UNRESERVED);
 
     // MAKE GLOBAL FOR NOW
     auto chip0_sender_worker_core = CoreCoord(0, 0);
@@ -187,20 +213,21 @@ bool RunWriteBWTest(
     ////////////////////////////////////////////////////////////////////////////
     //                  WORKER CB CONFIG
     ////////////////////////////////////////////////////////////////////////////
-    uint32_t src0_cb_index = CB::c_in0;
+    uint32_t src0_cb_index = CBIndex::c_0;
 
     // Just want a dummy DF
-    tt::DataFormat df = input_buffer_page_size == 1024 ? tt::DataFormat::Bfp8 :
-                        input_buffer_page_size == 2048 ? tt::DataFormat::Float16 :
-                                                         tt::DataFormat::Float32;
-    tt_metal::CircularBufferConfig cb_src0_config = tt_metal::CircularBufferConfig(2 * pages_per_send * input_buffer_page_size, {{src0_cb_index, df}})
-		.set_page_size(src0_cb_index, input_buffer_page_size);
+    tt::DataFormat df = input_buffer_page_size == 1024   ? tt::DataFormat::Bfp8
+                        : input_buffer_page_size == 2048 ? tt::DataFormat::Float16
+                                                         : tt::DataFormat::Float32;
+    tt_metal::CircularBufferConfig cb_src0_config =
+        tt_metal::CircularBufferConfig(2 * pages_per_send * input_buffer_page_size, {{src0_cb_index, df}})
+            .set_page_size(src0_cb_index, input_buffer_page_size);
 
     ////////////////////////////////////////////////////////////////////////////
     //                               Device 0
     ////////////////////////////////////////////////////////////////////////////
     tt_metal::Program sender_program = tt_metal::Program();
-    uint32_t chip0_worker_semaphores_base_address = tt::tt_metal::CreateSemaphore(sender_program, chip0_sender_worker_core, 0);
+    uint32_t chip0_worker_semaphore_id = tt::tt_metal::CreateSemaphore(sender_program, chip0_sender_worker_core, 0);
 
     chip0_edm_args.push_back(chip0_sender_channels_offset);
 
@@ -239,8 +266,8 @@ bool RunWriteBWTest(
         chip0_next_buffer_address += 16;
         //    8) worker_semaphore_address
         //       worker local L1 semaphores that erisc updates
-        chip0_edm_args.push_back(chip0_worker_semaphores_base_address);
-        log_debug(tt::LogTest, "\t\tworker_semaphores_base_address: {}", chip0_worker_semaphores_base_address);
+        chip0_edm_args.push_back(chip0_worker_semaphore_id);
+        log_debug(tt::LogTest, "\t\tworker_semaphores_base_address: {}", chip0_worker_semaphore_id);
         //    9) sender_num_workers
         //       Informs how many worker X/Y coords to accept in the next loop. Each X/Y pair is 2 uint16s
         const uint32_t chip0_num_workers_on_channel = 1;
@@ -248,15 +275,12 @@ bool RunWriteBWTest(
         log_debug(tt::LogTest, "\t\tchip0_num_workers_on_channel: {}", chip0_num_workers_on_channel);
         for (uint32_t w = 0; w < chip0_num_workers_on_channel; w++) {
             //       10) worker_coord(s)
-            auto worker_noc_coord = sender_device->physical_core_from_logical_core(chip0_sender_worker_core, CoreType::WORKER);
-            chip0_edm_args.push_back(KernelXY{
-                static_cast<uint16_t>(worker_noc_coord.x), static_cast<uint16_t>(worker_noc_coord.y)}
-                                         .to_uint32());
-            log_debug(
-                tt::LogTest,
-                "\t\t\tchip0_sender_noc_xy: x={},y={}",
-                worker_noc_coord.x,
-                worker_noc_coord.y);
+            auto worker_noc_coord =
+                sender_device->virtual_core_from_logical_core(chip0_sender_worker_core, CoreType::WORKER);
+            chip0_edm_args.push_back(
+                KernelXY{static_cast<uint16_t>(worker_noc_coord.x), static_cast<uint16_t>(worker_noc_coord.y)}
+                    .to_uint32());
+            log_debug(tt::LogTest, "\t\t\tchip0_sender_noc_xy: x={},y={}", worker_noc_coord.x, worker_noc_coord.y);
         }
     }
     TT_ASSERT(chip0_eth_sender_l1_sem_addr != 0);
@@ -277,48 +301,38 @@ bool RunWriteBWTest(
 
     auto eth_sender_kernel = tt_metal::CreateKernel(
         sender_program,
-        "tt_eager/tt_dnn/op_library/ccl/edm/erisc_datamover.cpp",
+        "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/ccl/edm/erisc_datamover.cpp",
         eth_sender_core,
         tt_metal::EthernetConfig{
             .noc = tt_metal::NOC::NOC_0,
             .compile_args = {
                 uint32_t(1),  // enable sender side
-                uint32_t(0),   // enable receiver side
+                uint32_t(0),  // enable receiver side
                 static_cast<uint32_t>(chip0_sender_num_channels),
-                static_cast<uint32_t>(0)
-            }});
+                static_cast<uint32_t>(0)}});
 
     // chip 0 sender_worker_sender
-    std::vector<uint32_t> chip0_sender_worker_sender_compile_args{
-        pages_per_send,
-        num_pages,
-        input_buffer_page_size};
+    std::vector<uint32_t> chip0_sender_worker_sender_compile_args{pages_per_send, num_pages, input_buffer_page_size};
     std::vector<uint32_t> chip0_sender_worker_sender_runtime_args{
         chip0_sender_erisc_sender_buffer_address,
         // ERISC's semaphore address
         chip0_eth_sender_l1_sem_addr,
         // worker L1 semaphore address. Sender writes to this address to signal the worker
         // that the buffer is empty and available to write into
-        chip0_worker_semaphores_base_address,
+        chip0_worker_semaphore_id,
         uint32_t(sender_device->ethernet_core_from_logical_core(eth_sender_core).x),
-        uint32_t(sender_device->ethernet_core_from_logical_core(eth_sender_core).y)
-        };
+        uint32_t(sender_device->ethernet_core_from_logical_core(eth_sender_core).y)};
     // TODO
-    std::vector<uint32_t> chip0_sender_worker_reader_compile_args{
-        input_is_dram,
-        num_pages,
-        input_buffer_page_size
-        };
+    std::vector<uint32_t> chip0_sender_worker_reader_compile_args{input_is_dram, num_pages, input_buffer_page_size};
     // TODO
-    std::vector<uint32_t> chip0_sender_worker_reader_runtime_args{
-        dram_input_buf_base_addr};
+    std::vector<uint32_t> chip0_sender_worker_reader_runtime_args{dram_input_buf_base_addr};
 
     CBHandle cb_src0_sender_workers = CreateCircularBuffer(sender_program, chip0_sender_worker_core, cb_src0_config);
     auto device_0_edm_sender_worker_reader_kernel = tt_metal::CreateKernel(
         sender_program,
         sender_side_reader_worker_kernel_path,
         chip0_sender_worker_core,
-        tt_metal::DataMovementConfig {
+        tt_metal::DataMovementConfig{
             .processor = DataMovementProcessor::RISCV_0,
             .noc = tt_metal::NOC::RISCV_0_default,
             .compile_args = chip0_sender_worker_reader_compile_args});
@@ -326,9 +340,9 @@ bool RunWriteBWTest(
         sender_program,
         sender_side_writer_worker_kernel_path,
         chip0_sender_worker_core,
-        tt_metal::DataMovementConfig {
+        tt_metal::DataMovementConfig{
             .processor = DataMovementProcessor::RISCV_1,
-            .noc = tt_metal::NOC::NOC_0,//  ::RISCV_1_default,
+            .noc = tt_metal::NOC::NOC_0,  //  ::RISCV_1_default,
             .compile_args = chip0_sender_worker_sender_compile_args});
 
     tt_metal::SetRuntimeArgs(sender_program, eth_sender_kernel, eth_sender_core, chip0_edm_args);
@@ -338,28 +352,30 @@ bool RunWriteBWTest(
         chip0_sender_worker_core,
         chip0_sender_worker_sender_runtime_args);
     tt_metal::SetRuntimeArgs(
-        sender_program, device_0_edm_sender_worker_reader_kernel, chip0_sender_worker_core, chip0_sender_worker_reader_runtime_args);
+        sender_program,
+        device_0_edm_sender_worker_reader_kernel,
+        chip0_sender_worker_core,
+        chip0_sender_worker_reader_runtime_args);
 
     ////////////////////////////////////////////////////////////////////////////
     //                              Device 1
     ////////////////////////////////////////////////////////////////////////////
     tt_metal::Program receiver_program = tt_metal::Program();
     auto chip1_receiver_worker_core = CoreCoord(0, 0);
-    uint32_t chip1_worker_semaphores_base_address = tt::tt_metal::CreateSemaphore(receiver_program, chip1_receiver_worker_core, 0);
+    uint32_t chip1_worker_semaphore_id = tt::tt_metal::CreateSemaphore(receiver_program, chip1_receiver_worker_core, 0);
 
     uint32_t chip1_receiver_num_channels = chip0_arg_sender_num_channels;
     auto eth_receiver_kernel = tt_metal::CreateKernel(
         receiver_program,
-        "tt_eager/tt_dnn/op_library/ccl/edm/erisc_datamover.cpp",
+        "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/ccl/edm/erisc_datamover.cpp",
         eth_receiver_core,
         tt_metal::EthernetConfig{
             .noc = tt_metal::NOC::NOC_0,
             .compile_args = {
                 static_cast<uint32_t>(0),  // enable sender side
-                static_cast<uint32_t>(1),   // enable receiver side
+                static_cast<uint32_t>(1),  // enable receiver side
                 static_cast<uint32_t>(0),
-                static_cast<uint32_t>(chip1_receiver_num_channels)
-            }});
+                static_cast<uint32_t>(chip1_receiver_num_channels)}});
 
     //                              Device 1 - RECEIVER
     log_debug(tt::LogTest, "------------------ Device 1 args ----------------");
@@ -376,7 +392,7 @@ bool RunWriteBWTest(
     log_debug(tt::LogTest, "\tchip1_sender_channels_offset: {}", chip1_sender_channels_offset);
     // chip1_edm_args.push_back(chip1_sender_num_channels);
     log_debug(tt::LogTest, "\tchip1_sender_num_channels: {}", chip1_sender_num_channels);
-    CoreCoord chip1_sender_noc_xy(0,0);
+    CoreCoord chip1_sender_noc_xy(0, 0);
     for (uint32_t sc = 0; sc < chip1_sender_num_channels; sc++) {
         TT_ASSERT(chip1_sender_noc_xy.x != 0 && chip1_sender_noc_xy.y != 0);
         //    Informs how many times to iterate through the next group of args
@@ -397,8 +413,8 @@ bool RunWriteBWTest(
         log_debug(tt::LogTest, "\t\tsender_semaphores_base_address: {}", chip1_next_buffer_address);
         chip1_next_buffer_address += 16;
         //    8) worker_semaphore_address
-        chip1_edm_args.push_back(chip1_worker_semaphores_base_address);
-        log_debug(tt::LogTest, "\t\tworker_semaphores_base_address: {}", chip1_worker_semaphores_base_address);
+        chip1_edm_args.push_back(chip1_worker_semaphore_id);
+        log_debug(tt::LogTest, "\t\tworker_semaphores_base_id: {}", chip1_worker_semaphore_id);
         //    9) sender_num_workers
         //       Informs how many worker X/Y coords to accept in the next loop. Each X/Y pair is 2 uint16s
         const uint32_t chip1_num_workers_on_channel = 1;
@@ -406,18 +422,15 @@ bool RunWriteBWTest(
         log_debug(tt::LogTest, "\t\tchip1_num_workers_on_channel: {}", chip1_num_workers_on_channel);
         for (uint32_t w = 0; w < chip1_num_workers_on_channel; w++) {
             //       10) worker_coord(s)
-            auto worker_noc_coord = receiver_device->physical_core_from_logical_core(chip1_sender_noc_xy, CoreType::WORKER);
+            auto worker_noc_coord =
+                receiver_device->virtual_core_from_logical_core(chip1_sender_noc_xy, CoreType::WORKER);
             chip1_edm_args.push_back(
                 KernelXY{static_cast<uint16_t>(worker_noc_coord.x), static_cast<uint16_t>(worker_noc_coord.y)}
                     .to_uint32());
             log_debug(
-                tt::LogTest,
-                "\t\t\tchip1_num_workers_on_channel: x={},y={}",
-                worker_noc_coord.x,
-                worker_noc_coord.y);
+                tt::LogTest, "\t\t\tchip1_num_workers_on_channel: x={},y={}", worker_noc_coord.x, worker_noc_coord.y);
         }
     }
-
 
     log_debug(tt::LogTest, "\t-- receiver --");
     uint32_t chip1_receiver_channels_offset = chip0_sender_channels_offset;
@@ -448,8 +461,8 @@ bool RunWriteBWTest(
         chip1_eth_receiver_l1_sem_addr = chip1_next_buffer_address;
         chip1_next_buffer_address += 16;
         //    8) worker_semaphore_address
-        chip1_edm_args.push_back(chip1_worker_semaphores_base_address);
-        log_debug(tt::LogTest, "\t\tworker_semaphores_base_address: {}", chip1_worker_semaphores_base_address);
+        chip1_edm_args.push_back(chip1_worker_semaphore_id);
+        log_debug(tt::LogTest, "\t\tworker_semaphores_base_address: {}", chip1_worker_semaphore_id);
         //    9) sender_num_workers
         //       Informs how many worker X/Y coords to accept in the next loop. Each X/Y pair is 2 uint16s
         const uint32_t chip1_num_workers_on_channel = 1;
@@ -457,17 +470,16 @@ bool RunWriteBWTest(
         log_debug(tt::LogTest, "\t\tnum_workers: {}", chip1_num_workers_on_channel);
         for (uint32_t w = 0; w < chip1_num_workers_on_channel; w++) {
             //       10) worker_coord(s)
-            auto worker_noc_coord = receiver_device->physical_core_from_logical_core(chip1_receiver_worker_core, CoreType::WORKER);
+            auto worker_noc_coord =
+                receiver_device->virtual_core_from_logical_core(chip1_receiver_worker_core, CoreType::WORKER);
             chip1_edm_args.push_back(
                 KernelXY{static_cast<uint16_t>(worker_noc_coord.x), static_cast<uint16_t>(worker_noc_coord.y)}
                     .to_uint32());
-            log_debug(
-                tt::LogTest, "\t\t\tchip1_receiver_noc_xy: x={},y={}", worker_noc_coord.x, worker_noc_coord.y);
+            log_debug(tt::LogTest, "\t\t\tchip1_receiver_noc_xy: x={},y={}", worker_noc_coord.x, worker_noc_coord.y);
         }
     }
     TT_ASSERT(chip1_eth_receiver_l1_base_addr != 0);
     TT_ASSERT(chip1_eth_receiver_l1_sem_addr != 0);
-
 
     tt_metal::SetRuntimeArgs(receiver_program, eth_receiver_kernel, eth_receiver_core, chip1_edm_args);
     std::vector<uint32_t> chip1_receiver_worker_sender_compile_args{
@@ -485,9 +497,10 @@ bool RunWriteBWTest(
         input_buffer_page_size,
         (uint32_t)receiver_device->ethernet_core_from_logical_core(eth_receiver_core).x,
         (uint32_t)receiver_device->ethernet_core_from_logical_core(eth_receiver_core).y,
-        chip1_worker_semaphores_base_address};
+        chip1_worker_semaphore_id};
 
-    CBHandle cb_src0_receiver_workers = CreateCircularBuffer(receiver_program, chip1_receiver_worker_core, cb_src0_config);
+    CBHandle cb_src0_receiver_workers =
+        CreateCircularBuffer(receiver_program, chip1_receiver_worker_core, cb_src0_config);
     auto device_1_edm_receiver_worker_receiver_kernel = tt_metal::CreateKernel(
         receiver_program,
         receiver_side_reader_worker_kernel_path,
@@ -573,7 +586,7 @@ int main(int argc, char** argv) {
     const bool dest_is_dram = std::stoi(argv[10]) == 1;
     const uint32_t precomputed_source_addresses_buffer_size = std::stoi(argv[9]);
 
-    auto arch = tt::get_arch_from_string(tt::test_utils::get_env_arch_name());
+    auto arch = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
     auto num_devices = tt::tt_metal::GetNumAvailableDevices();
     if (num_devices != 2) {
         std::cout << "Need at least 2 devices to run this test" << std::endl;
@@ -586,12 +599,13 @@ int main(int argc, char** argv) {
 
     N300TestDevice test_fixture;
 
-
     const auto& device_0 = test_fixture.devices_.at(0);
     const auto& device_1 = test_fixture.devices_.at(1);
-    const size_t precomputed_source_addresses_buffer_address = (size_t) nullptr;
-    const size_t src_eth_l1_byte_address = eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE + 32;
-    const size_t dst_eth_l1_byte_address = eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE + 32;
+    const size_t precomputed_source_addresses_buffer_address = (size_t)nullptr;
+    const size_t erisc_unreserved_base = tt::tt_metal::MetalContext::instance().hal().get_dev_addr(
+        tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::UNRESERVED);
+    const size_t src_eth_l1_byte_address = erisc_unreserved_base + 32;
+    const size_t dst_eth_l1_byte_address = erisc_unreserved_base + 32;
 
     auto const& active_eth_cores = device_0->get_active_ethernet_cores(true);
     assert(active_eth_cores.size() > 0);
@@ -631,6 +645,5 @@ int main(int argc, char** argv) {
 
     return success ? 0 : -1;
 }
-
 
 // EnablePersistentKernelCache

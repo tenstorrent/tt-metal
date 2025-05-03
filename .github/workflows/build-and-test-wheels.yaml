@@ -1,0 +1,14 @@
+name: "[post-commit] Python wheels build and test"
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build-artifact:
+    uses: ./.github/workflows/build-artifact.yaml
+    secrets: inherit
+    with:
+      build-wheel: true
+  test-wheels:
+    needs: build-artifact
+    uses: ./.github/workflows/_test-wheels-impl.yaml

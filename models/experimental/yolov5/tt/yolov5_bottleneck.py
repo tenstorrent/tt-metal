@@ -3,7 +3,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
-import tt_lib
 from models.experimental.yolov5.tt.yolov5_conv import TtYolov5Conv
 
 
@@ -44,5 +43,5 @@ class TtYolov5Bottleneck(torch.nn.Module):
         tmp = self.cv1(x)
         conv_res = self.cv2(tmp)
 
-        res = tt_lib.tensor.add(x, conv_res) if self.add else conv_res
+        res = ttnn.add(x, conv_res) if self.add else conv_res
         return res

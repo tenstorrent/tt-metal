@@ -2,23 +2,20 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch
-import tt_lib
 
 from transformers import BloomForCausalLM, BloomTokenizerFast
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
-    comp_allclose,
     comp_pcc,
 )
 
 from loguru import logger
 import models.experimental.bloom.tt.bloom_causal_lm as bloom_causal_lm
+from models.utility_functions import is_wormhole_b0, is_blackhole
 
 
+@pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported on WH and BH")
 def test_bloom_causal_lm(device):
-    hugging_bloom_reference_model = BloomForCausalLM.from_pretrained(
-        "bigscience/bloom-560m", torchscript=False
-    )
+    hugging_bloom_reference_model = BloomForCausalLM.from_pretrained("bigscience/bloom-560m", torchscript=False)
     hugging_bloom_reference_model.eval()
 
     config = hugging_bloom_reference_model.config

@@ -9,6 +9,7 @@ test-list:
         num-shapes: 2
         num-samples: 128
         args-sampling-strategy: "all"
+        method: "tt_nn-bcast"
       env:
         # TT_PCI_DMA_BUF_SIZE: "1048576"
       datagen:
@@ -18,7 +19,8 @@ test-list:
           high: 100
       comparison:
         function: comp_pcc
-      args-gen: gen_scalar_args
+      args-gen: gen_dtype_layout_device
+      sanitize-args: False
       args:
         data-layout: ["TILE"]
         data-type: ["BFLOAT16"]

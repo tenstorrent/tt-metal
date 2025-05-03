@@ -7,9 +7,8 @@ from torch.utils.data import DataLoader
 from torchvision import transforms, datasets
 from loguru import logger
 import pytest
-import tt_lib
+import ttnn
 import evaluate
-from torch import Generator
 
 from models.utility_functions import (
     profiler,
@@ -55,14 +54,14 @@ def run_perf_inference(device, pcc, iterations, model_location_generator, reset_
 
         profiler.start(cpu_key)
         torch_output = torch_LeNet(test_input)
-        tt_lib.device.Synchronize(device)
+        ttnn.synchronize_device(device)
         profiler.end(cpu_key)
 
         tt_image = torch_to_tt_tensor_rm(test_input, device, put_on_device=False)
 
         profiler.start(first_key)
         tt_output = tt_lenet(tt_image)
-        tt_lib.device.Synchronize(device)
+        ttnn.synchronize_device(device)
         profiler.end(first_key)
         del tt_output
 
@@ -70,7 +69,7 @@ def run_perf_inference(device, pcc, iterations, model_location_generator, reset_
 
         profiler.start(second_key)
         tt_output = tt_lenet(tt_image)
-        tt_lib.device.Synchronize(device)
+        ttnn.synchronize_device(device)
         profiler.end(second_key)
         del tt_output
 
@@ -79,7 +78,7 @@ def run_perf_inference(device, pcc, iterations, model_location_generator, reset_
         profiler.start(third_key)
         accuracy_metric = evaluate.load("accuracy")
 
-        tt_lib.device.Synchronize(device)
+        ttnn.synchronize_device(device)
         for idx, (image, label) in enumerate(dataloader):
             if idx == iterations:
                 break

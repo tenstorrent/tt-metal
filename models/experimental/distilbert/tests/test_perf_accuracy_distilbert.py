@@ -4,7 +4,7 @@
 
 import torch
 import pytest
-import tt_lib
+import ttnn
 import evaluate
 
 from loguru import logger
@@ -59,7 +59,7 @@ def run_perf_distilbert(expected_inference_time, expected_compile_time, device, 
 
         profiler.start(first_key)
         tt_output = tt_model(inputs.input_ids, tt_attn_mask)
-        tt_lib.device.Synchronize(device)
+        ttnn.synchronize_device(device)
         profiler.end(first_key)
         del tt_output
 
@@ -67,7 +67,7 @@ def run_perf_distilbert(expected_inference_time, expected_compile_time, device, 
 
         profiler.start(second_key)
         tt_output = tt_model(inputs.input_ids, tt_attn_mask)
-        tt_lib.device.Synchronize(device)
+        ttnn.synchronize_device(device)
         profiler.end(second_key)
         del tt_output
 
@@ -117,7 +117,7 @@ def run_perf_distilbert(expected_inference_time, expected_compile_time, device, 
         logger.info("F1 Score :")
         logger.info(eval_score["f1"])
 
-        tt_lib.device.Synchronize(device)
+        ttnn.synchronize_device(device)
         profiler.end(third_key)
 
     first_iter_time = profiler.get(first_key)

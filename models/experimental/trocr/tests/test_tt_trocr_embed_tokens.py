@@ -8,7 +8,6 @@ import pytest
 from loguru import logger
 from transformers import VisionEncoderDecoderModel
 
-import tt_lib
 
 from models.experimental.trocr.tt.trocr_embed_tokens import TtTrOCREmbedTokens
 from models.utility_functions import (
@@ -25,9 +24,7 @@ from models.utility_functions import (
 )
 def test_trocr_embed_tokens_inference(device, pcc, reset_seeds):
     with torch.no_grad():
-        model = VisionEncoderDecoderModel.from_pretrained(
-            "microsoft/trocr-base-handwritten"
-        )
+        model = VisionEncoderDecoderModel.from_pretrained("microsoft/trocr-base-handwritten")
 
         config = model.decoder.config
 

@@ -3,7 +3,7 @@ test-list:
   - eltwise-tanh-bw:
       shape:
         start-shape: [1, 1, 32, 32]
-        end-shape: [12, 24, 512, 512]
+        end-shape: [6, 12, 256, 256]
         interval: [1, 1, 32, 32]
         num-shapes: 2
         num-samples: 64
@@ -23,11 +23,11 @@ test-list:
         data-layout: ["TILE"]
         data-type: ["BFLOAT16"]
         buffer-type: ["DRAM", "L1", "SYSTEM_MEMORY"]
-        out-buffer-type: ["DRAM"]
+        out-buffer-type: ["DRAM", "L1"]
   - eltwise-tanh-bw:
       shape:
         start-shape: [1, 1, 2, 2]
-        end-shape: [12, 24, 512, 512]
+        end-shape: [6, 12, 256, 256]
         interval: [1, 1, 2, 2]
         num-shapes: 2
         num-samples: 64
@@ -47,4 +47,4 @@ test-list:
         data-layout: ["ROW_MAJOR"]
         data-type: ["BFLOAT16"]
         buffer-type: ["DRAM", "L1", "SYSTEM_MEMORY"]
-        out-buffer-type: ["DRAM"]
+        out-buffer-type: ["DRAM", "L1"]

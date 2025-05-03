@@ -1,6 +1,6 @@
 ---
 test-list:
-  - ttnn-eltwise-threshold:
+  - eltwise-threshold:
       shape:
         start-shape: [1, 1, 32, 32]
         end-shape: [6, 12, 256, 256]
@@ -17,6 +17,7 @@ test-list:
       comparison:
         function: comp_pcc
       args-gen: gen_threshold_args
+      sanitize-args: False
       args:
         data-layout: ["TILE"]
         data-type: ["BFLOAT16"]

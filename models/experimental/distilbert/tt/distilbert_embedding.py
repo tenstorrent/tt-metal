@@ -10,7 +10,7 @@ from models.utility_functions import (
     torch_to_tt_tensor_rm,
 )
 
-import tt_lib
+import ttnn
 
 
 class TtDistilBert_Embeddings(nn.Module):
@@ -38,7 +38,7 @@ class TtDistilBert_Embeddings(nn.Module):
         self.gamma = torch_to_tt_tensor_rm(state_dict[f"{base_address}.LayerNorm.weight"], self.device)
         self.beta = torch_to_tt_tensor_rm(state_dict[f"{base_address}.LayerNorm.bias"], self.device)
 
-        self.LayerNorm = tt_lib.tensor.layernorm
+        self.LayerNorm = ttnn.layer_norm
 
         self.register_buffer(
             "position_ids",
@@ -49,8 +49,8 @@ class TtDistilBert_Embeddings(nn.Module):
     def forward(
         self,
         input_ids: torch.Tensor,
-        input_embeds: Optional[tt_lib.tensor.Tensor] = None,
-    ) -> tt_lib.tensor.Tensor:
+        input_embeds: Optional[ttnn.Tensor] = None,
+    ) -> ttnn.Tensor:
         """
         Torch tensor is passed as input for embedding to address low pcc
         """
@@ -58,7 +58,7 @@ class TtDistilBert_Embeddings(nn.Module):
             input_embeds = self.word_embeddings(input_ids)
             input_embeds = torch_to_tt_tensor_rm(input_embeds, self.device, put_on_device=True)
 
-        seq_length = input_embeds.get_legacy_shape()[-2]
+        seq_length = input_embeds.padded_shape[-2]
 
         if hasattr(self, "position_ids"):
             position_ids = self.position_ids[:, :seq_length]
@@ -69,7 +69,7 @@ class TtDistilBert_Embeddings(nn.Module):
         position_embeddings = self.position_embeddings(position_ids)
         position_embeddings = torch_to_tt_tensor_rm(position_embeddings, self.device, put_on_device=True)
 
-        embeddings = tt_lib.tensor.add(input_embeds, position_embeddings)
-        embeddings = self.LayerNorm(embeddings, eps=1e-12, gamma=self.gamma, beta=self.beta)
+        embeddings = ttnn.add(input_embeds, position_embeddings)
+        embeddings = self.LayerNorm(embeddings, epsilon=1e-12, weight=self.gamma, bias=self.beta)
 
         return embeddings

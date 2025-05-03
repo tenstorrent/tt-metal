@@ -1,0 +1,173 @@
+name: "Blackhole post-commit tests"
+
+on:
+  workflow_call:
+    inputs:
+      runner-label:
+          description: 'Optional: BH'
+          required: false
+          type: string
+          default: 'BH'
+      enable-watcher:
+          description: 'Enable watcher in BH Post commit'
+          default: false
+          type: boolean
+  workflow_dispatch:
+    inputs:
+      runner-label:
+          description: 'Optional: BH'
+          required: true
+          type: string
+          default: 'BH'
+      build-type:
+        required: false
+        default: Release
+        type: choice
+        options:
+          - Release
+          - Debug
+          - RelWithDebInfo
+          - ASan
+          - TSan
+      enable-watcher:
+        description: 'Enable watcher in BH Post commit'
+        default: false
+        type: boolean
+      run-demo-tests:
+        description: 'Run blackhole demo tests'
+        default: true
+        type: boolean
+  schedule:
+    - cron: "0 */4 * * *"
+  # Pause this since not enough runners to support every commit to main
+  # push:
+  #  branches: ["main"]
+
+run-name: ${{ inputs.enable-watcher == true && 'Blackhole post-commit tests (watcher enabled) ' || 'Blackhole post-commit tests' }}
+
+permissions:
+  actions: read
+  contents: write
+  pull-requests: write
+  pages: write
+  id-token: write
+  packages: write
+
+jobs:
+  build-artifact:
+    uses: ./.github/workflows/build-artifact.yaml
+    secrets: inherit
+    with:
+      build-type: ${{ inputs.build-type || 'Release' }}
+      build-wheel: true
+      version: "22.04"
+      build-umd-tests: true
+  build-artifact-profiler:
+    uses: ./.github/workflows/build-artifact.yaml
+    secrets: inherit
+    with:
+      build-type: ${{ inputs.build-type || 'Release' }}
+      build-wheel: true
+      tracy: true
+      version: "22.04"
+  run-profiler-regression:
+    needs: build-artifact-profiler
+    uses: ./.github/workflows/run-profiler-regression.yaml
+    secrets: inherit
+    with:
+      arch: "blackhole"
+      timeout: 20
+      runner-label: ${{ inputs.runner-label || 'BH' }}
+      docker-image: ${{ needs.build-artifact-profiler.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact-profiler.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact-profiler.outputs.wheel-artifact-name }}
+      enable-watcher: ${{ inputs.enable-watcher || false }}
+  umd-unit-tests:
+    needs: build-artifact
+    secrets: inherit
+    uses: ./.github/workflows/umd-unit-tests.yaml
+    with:
+      arch: blackhole
+      runner-label: ${{ inputs.runner-label || 'BH' }}
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+  sd-unit-tests:
+    needs: build-artifact
+    uses: ./.github/workflows/build-and-unit-tests.yaml
+    secrets: inherit
+    with:
+      arch: blackhole
+      runner-label: ${{ inputs.runner-label || 'BH' }}
+      timeout: 15
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      enable-watcher: ${{ inputs.enable-watcher || false }}
+  fd-unit-tests:
+    needs: build-artifact
+    uses: ./.github/workflows/fast-dispatch-build-and-unit-tests.yaml
+    secrets: inherit
+    with:
+      timeout: 40
+      arch: blackhole
+      runner-label: ${{ inputs.runner-label || 'BH' }}
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      enable-watcher: ${{ inputs.enable-watcher || false }}
+  # FD C++ Unit Tests
+  cpp-unit-tests:
+    needs: build-artifact
+    secrets: inherit
+    uses: ./.github/workflows/cpp-post-commit.yaml
+    with:
+      arch: blackhole
+      runner-label: ${{ inputs.runner-label || 'BH' }}
+      timeout: 20
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      enable-watcher: ${{ inputs.enable-watcher || false }}
+  models-unit-tests:
+    needs: build-artifact
+    secrets: inherit
+    uses: ./.github/workflows/models-post-commit.yaml
+    strategy:
+      fail-fast: false
+      matrix:
+        test-group: [
+          { runner-label: P100 },
+          { runner-label: P150 },
+        ]
+    with:
+      arch: blackhole
+      runner-label: ${{ matrix.test-group.runner-label }}
+      timeout: 20
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      enable-watcher: ${{ inputs.enable-watcher || false }}
+  blackhole-demo-tests:
+    # Issue 20998: Due to capacity constraints, only run blackhole demo tests on workflow_dispatch events
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.run-demo-tests == true }}
+    needs: build-artifact
+    secrets: inherit
+    uses: ./.github/workflows/blackhole-demo-tests-impl.yaml
+    with:
+      runner-label: BH-baremetal
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+#   profiler-regression:
+#     needs: build-artifact-profiler
+#     uses: ./.github/workflows/run-profiler-regression.yaml
+#     secrets: inherit
+#   build-and-test-wheels:
+#     uses: Check all-post-commit yaml for directions
+#     secrets: inherit
+#   build-docs:
+#     needs: build-artifact
+#     uses: ./.github/workflows/docs-latest-public.yaml
+#     secrets: inherit
+  # We used to use this for post-commit, but we didn't have enough runners
+  # to support the number of developers running this workflow
+  # build-and-test-measure-perf:
+  # build-and-test-measure-perf-device:

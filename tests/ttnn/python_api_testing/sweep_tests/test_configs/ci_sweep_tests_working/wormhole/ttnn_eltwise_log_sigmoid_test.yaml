@@ -5,6 +5,7 @@ test-list:
         start-shape: [1, 1, 32, 32]
         end-shape: [6, 12, 256, 256]
         interval: [1, 1, 32, 32]
+        num-dims: [2, 3, 4]
         num-shapes: 1
         num-samples: 128
         args-sampling-strategy: "all"
@@ -18,6 +19,7 @@ test-list:
       comparison:
         function: comp_pcc
       args-gen: gen_dtype_layout_device
+      sanitize-args: False
       output-file: eltwise_log_sigmoid_sweep.csv
       args:
         data-layout: ["TILE"]

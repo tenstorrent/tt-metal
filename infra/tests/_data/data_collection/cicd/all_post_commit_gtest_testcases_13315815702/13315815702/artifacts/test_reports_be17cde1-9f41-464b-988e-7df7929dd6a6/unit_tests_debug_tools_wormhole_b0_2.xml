@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuites tests="1" failures="0" disabled="0" errors="0" time="3.432" timestamp="2025-02-13T20:10:42.125" name="AllTests">
+  <testsuite name="WatcherFixture" tests="1" failures="0" disabled="0" skipped="0" errors="0" time="3.432" timestamp="2025-02-13T20:10:42.125">
+    <testcase name="TestWatcherRingBufferBrisc" file="/work/tests/tt_metal/tt_metal/debug_tools/watcher/test_ringbuf.cpp" line="146" status="run" result="completed" time="3.432" timestamp="2025-02-13T20:10:42.125" classname="WatcherFixture" />
+  </testsuite>
+</testsuites>

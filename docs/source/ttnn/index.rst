@@ -10,6 +10,8 @@ Welcome to TT-NN documentation!
    :caption: TTNN
 
    ttnn/about
+   ttnn/get_started
+   ttnn/installing
    ttnn/usage
    ttnn/tensor
    ttnn/api
@@ -19,6 +21,7 @@ Welcome to TT-NN documentation!
    ttnn/adding_new_ttnn_operation
    ttnn/profiling_ttnn_operations
    ttnn/dependencies/index.rst
+   ttnn/demos
 
 .. toctree::
    :caption: Models

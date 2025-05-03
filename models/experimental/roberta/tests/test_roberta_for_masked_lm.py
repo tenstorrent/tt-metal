@@ -7,17 +7,20 @@ import torch
 from loguru import logger
 from transformers import AutoTokenizer, RobertaForMaskedLM
 
-import tt_lib
+import pytest
 
 from models.experimental.roberta.tt.roberta_for_masked_lm import TtRobertaForMaskedLM
 from models.utility_functions import (
     tt2torch_tensor,
     comp_allclose,
     comp_pcc,
+    is_wormhole_b0,
+    is_blackhole,
 )
 from models.experimental.roberta.roberta_common import torch2tt_tensor
 
 
+@pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported on WH and BH")
 def test_roberta_masked_lm_inference(device):
     torch.manual_seed(1234)
     base_address = f""
@@ -47,9 +50,7 @@ def test_roberta_masked_lm_inference(device):
 
         torch_output = torch_output.logits
         # retrieve index of <mask>
-        mask_token_index = (inputs.input_ids == tokenizer.mask_token_id)[0].nonzero(
-            as_tuple=True
-        )[0]
+        mask_token_index = (inputs.input_ids == tokenizer.mask_token_id)[0].nonzero(as_tuple=True)[0]
 
         predicted_token_id = torch_output[0, mask_token_index].argmax(axis=-1)
         decoded_token = tokenizer.decode(predicted_token_id)
@@ -71,9 +72,7 @@ def test_roberta_masked_lm_inference(device):
         tt_output_torch = tt_output_torch.squeeze(0)
 
         # retrieve index of <mask>
-        mask_token_index = (inputs.input_ids == tokenizer.mask_token_id)[0].nonzero(
-            as_tuple=True
-        )[0]
+        mask_token_index = (inputs.input_ids == tokenizer.mask_token_id)[0].nonzero(as_tuple=True)[0]
         # Get predicted token
         predicted_token_id = tt_output_torch[0, mask_token_index].argmax(axis=-1)
         decoded_token = tokenizer.decode(predicted_token_id)
