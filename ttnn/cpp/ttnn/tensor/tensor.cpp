@@ -168,10 +168,14 @@ Tensor::Tensor(
 void Tensor::deallocate(bool force) { deallocate_impl(force); }
 
 void Tensor::deallocate_impl(bool force) {
+    auto can_deallocate = [](const auto& shared_resource, bool force) {
+        return shared_resource.use_count() == 1 ||  //
+               (shared_resource.use_count() > 1 && force);
+    };
+
     ZoneScopedN("TensorDeallocate");
     // GraphTracker::instance().track_function_start("Tensor::deallocate", *this, force);
-    if ((tensor_attributes.use_count() == 1) ||  //
-        (tensor_attributes.use_count() > 1 && force)) {
+    if (can_deallocate(tensor_attributes, force)) {
         // It is safe to deallocate the storage, if the `tensor_attributes` is not shared.
         // Otherwise, deallocate only if only `force` is set.
         std::visit(
@@ -182,10 +186,10 @@ void Tensor::deallocate_impl(bool force) {
                         host_buffer.deallocate();
                     }
                 },
-                [this](DeviceStorage& storage) {
-                    if (storage.mesh_buffer) {
+                [this, force, &can_deallocate](DeviceStorage& storage) {
+                    if (can_deallocate(storage.mesh_buffer, force)) {
                         storage.mesh_buffer->deallocate();
-                    } else if (storage.buffer) {
+                    } else if (can_deallocate(storage.buffer, force)) {
                         DeallocateBuffer(*(storage.buffer));
                     }
                     storage.mesh_buffer.reset();
