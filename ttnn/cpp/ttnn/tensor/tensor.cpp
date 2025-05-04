@@ -170,12 +170,10 @@ void Tensor::deallocate(bool force) { deallocate_impl(force); }
 void Tensor::deallocate_impl(bool force) {
     ZoneScopedN("TensorDeallocate");
     // GraphTracker::instance().track_function_start("Tensor::deallocate", *this, force);
-    if (tensor_attributes.use_count() <= 1) {
-        // Run destructor of `tensor_attributes` that will deallocate the storage.
-        // No extra work needed.
-        tensor_attributes.reset();
-    } else if (force) {
-        // Force-deallocate storage on the shared `tensor_attributes` instance.
+    if ((tensor_attributes.use_count() == 1) ||  //
+        (tensor_attributes.use_count() > 1 && force)) {
+        // It is safe to deallocate the storage, if the `tensor_attributes` is not shared.
+        // Otherwise, deallocate only if only `force` is set.
         std::visit(
             tt::stl::overloaded{
                 [this](HostStorage& host_storage) { host_storage.buffer.deallocate(); },
