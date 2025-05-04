@@ -267,7 +267,29 @@ if(simd-everywhere_ADDED)
 endif()
 
 ############################################################################################################################
+# spdlog : https://github.com/gabime/spdlog
+############################################################################################################################
+
+set(CMAKE_INSTALL_DEFAULT_COMPONENT_NAME spdlog-dev)
+CPMAddPackage(
+    NAME spdlog
+    GITHUB_REPOSITORY gabime/spdlog
+    VERSION 1.15.2
+    OPTIONS
+        "SPDLOG_FMT_EXTERNAL_HO ON"
+        "SPDLOG_INSTALL ON"
+)
+set(CMAKE_INSTALL_DEFAULT_COMPONENT_NAME ${DEFAULT_COMPONENT_NAME})
+
+############################################################################################################################
 # tt-logger : https://github.com/blozano-tt/tt-logger
 ############################################################################################################################
 
-CPMAddPackage("gh:blozano-tt/tt-logger@0.2.5")
+CPMAddPackage(
+    NAME tt-logger
+    GITHUB_REPOSITORY blozano-tt/tt-logger
+    VERSION 0.3.0
+    OPTIONS
+        "TT_LOGGER_INSTALL ON"
+        "TT_LOGGER_BUILD_TESTING OFF"
+)

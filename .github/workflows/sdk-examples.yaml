@@ -36,6 +36,12 @@ jobs:
           name: ${{ inputs.package-artifact-name || 'packages artifact unresolved!' }}
           path: /work/pkgs/
 
+      - name: List package content
+        run: |
+          set -euo pipefail
+          echo "tt-metalium-dev debian content:"
+          dpkg -c ./pkgs/tt-metalium-dev_*.deb
+
       - name: Install packages
         run: |
           set -euo pipefail
