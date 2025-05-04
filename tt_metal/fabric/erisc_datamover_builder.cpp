@@ -22,6 +22,7 @@
 #include <variant>
 #include <vector>
 
+#include "tt_metal/fabric/fabric_host_utils.hpp"
 #include "core_coord.hpp"
 #include "fabric_edm_types.hpp"
 #include "logger.hpp"
@@ -124,6 +125,8 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(std::size_t channel_buffe
         this->num_used_sender_channels -= 1;
         this->num_used_receiver_channels -= 1;
     }
+    tt::tt_fabric::set_routing_mode(topology);
+
     for (uint32_t i = 0; i < this->num_used_receiver_channels; i++) {
         TT_FATAL(
             (receivers_completed_packet_header_cb_address[i] % eth_word_l1_alignment == 0),
@@ -275,6 +278,7 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(std::size_t channel_buffe
         this->sender_channel_ack_noc_ids[i] = FabricEriscDatamoverConfig::DEFAULT_SENDER_ACK_NOC;
         this->sender_channel_ack_cmd_buf_ids[i] = FabricEriscDatamoverConfig::AT_CMD_BUF;
     }
+    this->edm_noc_vc = FabricEriscDatamoverConfig::DEFAULT_NOC_VC;
 }
 
 void get_runtime_args_for_edm_termination_infos(
@@ -512,6 +516,7 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args() const
         ct_args.push_back(
             config.receiver_channel_local_write_cmd_buf_ids[i]);  // maps to receiver_channel_local_write_cmd_buf_ids
     }
+    ct_args.push_back(config.edm_noc_vc);
 
     // Special marker to help with identifying misalignment bugs
     ct_args.push_back(0x10c0ffee);

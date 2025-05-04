@@ -9,6 +9,9 @@
 #include <tt-metalium/command_queue.hpp>
 #include <tt-metalium/multi_producer_single_consumer_queue.hpp>
 
+#include "dispatch/dispatch_settings.hpp"
+#include "dispatch/launch_message_ring_buffer_state.hpp"
+
 namespace tt::tt_metal::distributed {
 
 struct MeshReadEventDescriptor;

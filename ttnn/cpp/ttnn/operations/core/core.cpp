@@ -19,7 +19,7 @@
 namespace ttnn::operations::core {
 
 ttnn::Tensor unsqueeze_to_4D(const ttnn::Tensor& tensor) {
-    if (distributed::is_multi_device_host_tensor(tensor)) {
+    if (tt::tt_metal::is_multi_device_host_tensor(tensor)) {
         return transform(tensor, [&](const Tensor& device_tensor) { return unsqueeze_to_4D(device_tensor); });
     }
 

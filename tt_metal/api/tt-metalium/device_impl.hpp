@@ -12,17 +12,17 @@
 #include <hostdevcommon/kernel_structs.h>  // Leaked up to ttnn level from here
 #include <tt-metalium/work_executor_types.hpp>
 #include <tt-metalium/data_types.hpp>
-#include <tt-metalium/program_device_map.hpp>
 #include <tt-metalium/hal_types.hpp>
 #include <tt-metalium/command_queue_interface.hpp>
 #include <tt-metalium/command_queue.hpp>
-#include <tt-metalium/sub_device_manager_tracker.hpp>
 #include <tt-metalium/sub_device_types.hpp>
+#include <tt-metalium/sub_device.hpp>
 #include <tt-metalium/trace_buffer.hpp>
 #include <tt_stl/span.hpp>
 #include <tt-metalium/program_cache.hpp>
 
 namespace tt::tt_metal {
+class SubDeviceManagerTracker;
 
 // A physical PCIexpress Tenstorrent device
 class Device : public IDevice {
@@ -164,8 +164,6 @@ public:
     std::size_t num_program_cache_entries() override;
 
     HalProgrammableCoreType get_programmable_core_type(CoreCoord virtual_core) const override;
-
-    std::vector<std::pair<transfer_info_cores, uint32_t>> extract_dst_noc_multicast_info(const std::vector<CoreRange>& ranges, const CoreType core_type) override;
 
     uint8_t num_noc_mcast_txns(SubDeviceId sub_device_id) const override;
     uint8_t num_noc_unicast_txns(SubDeviceId sub_device_id) const override;
