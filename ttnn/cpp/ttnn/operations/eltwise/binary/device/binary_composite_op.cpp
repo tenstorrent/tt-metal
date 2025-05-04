@@ -637,12 +637,13 @@ Tensor ExecuteGCD::invoke(
 }
 
 Tensor ExecuteLCM::invoke(
-    const Tensor& input_a, const Tensor& input_b, const std::optional<MemoryConfig>& output_mem_config) {
-    Tensor val = ttnn::multiply(input_a, input_b, std::nullopt, output_mem_config);
-    Tensor tmp_result = ttnn::gcd(input_a, input_b);
-    Tensor result = ttnn::divide(val, tmp_result, std::nullopt, output_mem_config);
-    result = ttnn::abs(result);
-    return result;
+    QueueId queue_id,
+    const Tensor& input_tensor_a,
+    const Tensor& input_tensor_b,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& optional_output_tensor) {
+    return BinaryOperationSfpu<operations::binary::BinaryOpType::LCM>::invoke(
+        queue_id, input_tensor_a, input_tensor_b, std::nullopt, memory_config, optional_output_tensor);
 }
 
 // power - floating point exponent

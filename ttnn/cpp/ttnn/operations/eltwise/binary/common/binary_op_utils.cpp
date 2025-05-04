@@ -267,6 +267,10 @@ std::map<std::string, std::string> get_defines_fp32(
             new_defines.insert({"BINOP_INIT", fmt::format("gcd_tile_init();")});
             op_name = "gcd_tile";
             break;
+        case BinaryOpType::LCM:
+            new_defines.insert({"BINOP_INIT", fmt::format("lcm_tile_init();")});
+            op_name = "lcm_tile";
+            break;
         case BinaryOpType::LOGADDEXP:
             // PRE_IN0_0 ===> Applies prescaling for first input
             // PRE_IN1_0 ====> Applies prescaling for second input

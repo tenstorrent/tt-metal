@@ -38,6 +38,7 @@ enum class BinaryOpType {
     MAXIMUM,
     MINIMUM,
     GCD,
+    LCM,
 };
 
 }  // namespace ttnn::operations::binary
