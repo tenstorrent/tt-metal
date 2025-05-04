@@ -77,7 +77,7 @@ Tensor arange_impl(
 }
 
 template <typename T>
-ttnn::Tensor full_impl(
+Tensor full_impl(
     QueueId queue_id,
     const ttnn::Shape& shape,
     T value,
@@ -90,7 +90,11 @@ ttnn::Tensor full_impl(
     auto owned_buffer = std::vector<T>(tensor_spec.physical_shape().height() * tensor_spec.physical_shape().width());
     std::fill(std::begin(owned_buffer), std::end(owned_buffer), value);
 
-    auto host_tensor = Tensor::from_vector(std::move(owned_buffer), tensor_spec);
+    Tensor host_tensor(
+        tt::tt_metal::HostStorage{tt::tt_metal::host_buffer::create(std::move(owned_buffer))},
+        shape,
+        data_type,
+        layout);
 
     if (optional_output_tensor.has_value()) {
         tt::tt_metal::write_tensor(host_tensor, *optional_output_tensor, queue_id);
@@ -105,7 +109,7 @@ ttnn::Tensor full_impl(
 }  // namespace detail
 
 template <typename T>
-ttnn::Tensor full_impl(
+Tensor full_impl(
     QueueId queue_id,
     const ttnn::Shape& shape,
     const T fill_value,
@@ -113,7 +117,7 @@ ttnn::Tensor full_impl(
     const std::optional<Layout>& layout = std::nullopt,
     MeshDevice* device = nullptr,
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
-    std::optional<ttnn::Tensor> optional_output_tensor = std::nullopt) {
+    std::optional<Tensor> optional_output_tensor = std::nullopt) {
     MeshDevice* device_to_use = optional_output_tensor.has_value() ? optional_output_tensor->device() : device;
 
     DataType dtype_value = optional_output_tensor.has_value() ? optional_output_tensor.value().get_dtype()
@@ -159,7 +163,7 @@ template <detail::boxed FillValue>
 struct FullWith {
     static constexpr auto fill_value = FillValue.invoke();
 
-    static ttnn::Tensor invoke(
+    static Tensor invoke(
         const ttnn::Shape& shape,
         const std::optional<DataType>& dtype = std::nullopt,
         const std::optional<Layout>& layout = std::nullopt,
@@ -184,15 +188,15 @@ inline constexpr Zeros zeros{};
 inline constexpr Ones ones{};
 
 template <typename T>
-ttnn::Tensor full_like_impl(
+Tensor full_like_impl(
     QueueId queue_id,
-    const ttnn::Tensor& tensor,
+    const Tensor& tensor,
     const T fill_value,
     const std::optional<DataType>& dtype = std::nullopt,
     const std::optional<Layout>& layout = std::nullopt,
     std::optional<std::reference_wrapper<MeshDevice>> device_arg = std::nullopt,
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
-    std::optional<ttnn::Tensor> optional_output_tensor = std::nullopt) {
+    std::optional<Tensor> optional_output_tensor = std::nullopt) {
     MeshDevice* device = device_arg.has_value() ? &device_arg->get() : nullptr;
     Layout layout_value = optional_output_tensor.has_value() ? optional_output_tensor.value().get_layout()
                                                              : layout.value_or(tensor.get_layout());
@@ -235,25 +239,25 @@ template <detail::boxed FillValue>
 struct FullLikeWith {
     static constexpr auto fill_value = FillValue.invoke();
 
-    static ttnn::Tensor invoke(
+    static Tensor invoke(
         QueueId queue_id,
-        const ttnn::Tensor& tensor,
+        const Tensor& tensor,
         const std::optional<DataType>& dtype = std::nullopt,
         const std::optional<Layout>& layout = std::nullopt,
         std::optional<std::reference_wrapper<MeshDevice>> device = std::nullopt,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        std::optional<ttnn::Tensor> optional_output_tensor = std::nullopt) {
+        std::optional<Tensor> optional_output_tensor = std::nullopt) {
         return full_like_impl(
             queue_id, tensor, fill_value, dtype, layout, device, memory_config, optional_output_tensor);
     }
 
-    static ttnn::Tensor invoke(
-        const ttnn::Tensor& tensor,
+    static Tensor invoke(
+        const Tensor& tensor,
         const std::optional<DataType>& dtype = std::nullopt,
         const std::optional<Layout>& layout = std::nullopt,
         std::optional<std::reference_wrapper<MeshDevice>> device = std::nullopt,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        std::optional<ttnn::Tensor> optional_output_tensor = std::nullopt) {
+        std::optional<Tensor> optional_output_tensor = std::nullopt) {
         return full_like_impl(
             ttnn::DefaultQueueId, tensor, fill_value, dtype, layout, device, memory_config, optional_output_tensor);
     }
@@ -266,7 +270,7 @@ inline constexpr ZerosLike zeros_like{};
 inline constexpr OnesLike ones_like{};
 
 struct Empty {
-    static ttnn::Tensor invoke(
+    static Tensor invoke(
         const ttnn::Shape& shape,
         const DataType& dtype,
         const Layout& layout,
@@ -278,8 +282,8 @@ struct Empty {
 };
 
 struct EmptyLike {
-    static ttnn::Tensor invoke(
-        const ttnn::Tensor& tensor,
+    static Tensor invoke(
+        const Tensor& tensor,
         const std::optional<DataType>& dtype = std::nullopt,
         const std::optional<Layout>& layout = std::nullopt,
         std::optional<std::reference_wrapper<MeshDevice>> device = std::nullopt,
@@ -310,7 +314,7 @@ struct EmptyLike {
 struct Full {
     template <typename FillValueType>
         requires std::is_same_v<FillValueType, int> or std::is_same_v<FillValueType, float>
-    static ttnn::Tensor invoke(
+    static Tensor invoke(
         QueueId queue_id,
         const ttnn::Shape& shape,
         const FillValueType fill_value,
@@ -318,7 +322,7 @@ struct Full {
         const std::optional<Layout>& layout = std::nullopt,
         std::optional<std::reference_wrapper<MeshDevice>> device = std::nullopt,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        std::optional<ttnn::Tensor> optional_output_tensor = std::nullopt) {
+        std::optional<Tensor> optional_output_tensor = std::nullopt) {
         return full_impl(
             queue_id,
             shape,
@@ -332,14 +336,14 @@ struct Full {
 
     template <typename FillValueType>
         requires std::is_same_v<FillValueType, int> or std::is_same_v<FillValueType, float>
-    static ttnn::Tensor invoke(
+    static Tensor invoke(
         const ttnn::Shape& shape,
         const FillValueType fill_value,
         const std::optional<DataType>& dtype = std::nullopt,
         const std::optional<Layout>& layout = std::nullopt,
         std::optional<std::reference_wrapper<MeshDevice>> device = std::nullopt,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        std::optional<ttnn::Tensor> optional_output_tensor = std::nullopt) {
+        std::optional<Tensor> optional_output_tensor = std::nullopt) {
         return full_impl(
             ttnn::DefaultQueueId,
             shape,
@@ -355,36 +359,36 @@ struct Full {
 struct FullLike {
     template <typename FillValueType>
         requires std::is_same_v<FillValueType, int> or std::is_same_v<FillValueType, float>
-    static ttnn::Tensor invoke(
+    static Tensor invoke(
         QueueId queue_id,
-        const ttnn::Tensor& tensor,
+        const Tensor& tensor,
         const FillValueType fill_value,
         const std::optional<DataType>& dtype = std::nullopt,
         const std::optional<Layout>& layout = std::nullopt,
         std::optional<std::reference_wrapper<MeshDevice>> device = std::nullopt,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        std::optional<ttnn::Tensor> optional_output_tensor = std::nullopt) {
+        std::optional<Tensor> optional_output_tensor = std::nullopt) {
         return full_like_impl(
             queue_id, tensor, fill_value, dtype, layout, device, memory_config, optional_output_tensor);
     }
 
     template <typename FillValueType>
         requires std::is_same_v<FillValueType, int> or std::is_same_v<FillValueType, float>
-    static ttnn::Tensor invoke(
-        const ttnn::Tensor& tensor,
+    static Tensor invoke(
+        const Tensor& tensor,
         const FillValueType fill_value,
         const std::optional<DataType>& dtype = std::nullopt,
         const std::optional<Layout>& layout = std::nullopt,
         std::optional<std::reference_wrapper<MeshDevice>> device = std::nullopt,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        std::optional<ttnn::Tensor> optional_output_tensor = std::nullopt) {
+        std::optional<Tensor> optional_output_tensor = std::nullopt) {
         return full_like_impl(
             ttnn::DefaultQueueId, tensor, fill_value, dtype, layout, device, memory_config, optional_output_tensor);
     }
 };
 
 struct Arange {
-    static ttnn::Tensor invoke(
+    static Tensor invoke(
         const int64_t stop,
         const DataType dtype = DataType::BFLOAT16,
         std::optional<std::reference_wrapper<MeshDevice>> device = std::nullopt,
@@ -392,7 +396,7 @@ struct Arange {
         return Arange::invoke(0, stop, 1, dtype, device, memory_config);
     }
 
-    static ttnn::Tensor invoke(
+    static Tensor invoke(
         const int64_t start,
         const int64_t stop,
         const int64_t step = 1,
