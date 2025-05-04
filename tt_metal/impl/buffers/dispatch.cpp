@@ -5,7 +5,6 @@
 #include <boost/core/span.hpp>
 #include <device.hpp>
 #include <tt-metalium/allocator.hpp>
-#include <tt-metalium/dispatch_settings.hpp>
 #include <algorithm>
 #include <array>
 #include <optional>
@@ -18,6 +17,7 @@
 #include "dispatch.hpp"
 #include "impl/context/metal_context.hpp"
 #include "dispatch/kernels/cq_commands.hpp"
+#include "dispatch/dispatch_settings.hpp"
 #include "hal_types.hpp"
 #include "logger.hpp"
 #include "math.hpp"

@@ -236,7 +236,8 @@ void DeviceProfiler::readRiscProfilerResults(
                 std::string warningMsg = fmt::format(
                     "Profiler DRAM buffers were full, markers were dropped! device {}, worker core {}, {}, Risc "
                     "{},  "
-                    "bufferEndIndex = {}",
+                    "bufferEndIndex = {}. "
+                    "Please either decrease the number of ops being profiled or run dump device profiler more often",
                     device_id,
                     worker_core.x,
                     worker_core.y,

@@ -1070,6 +1070,7 @@ void kernel_main() {
     DPRINT << "remote_sender_0_channel_address: " << (uint32_t)remote_sender_0_channel_address << "\n";
     DPRINT << "remote_sender_1_channel_address: " << (uint32_t)remote_sender_1_channel_address << "\n";
     DPRINT << "remote_sender_2_channel_address: " << (uint32_t)remote_sender_2_channel_address << "\n";
+    DPRINT << "forward_and_local_write_noc_vc: " << (uint32_t)tt::tt_fabric::forward_and_local_write_noc_vc << ENDL();
 
     // TODO: CONVERT TO SEMAPHORE
     volatile auto termination_signal_ptr =
@@ -1276,7 +1277,10 @@ void kernel_main() {
             downstream_vc0_noc_interface_buffer_index_local_addr,
             receiver_channel_forwarding_data_cmd_buf_ids[0],
             receiver_channel_forwarding_sync_cmd_buf_ids[0]);
-        downstream_edm_noc_interfaces[0].template setup_edm_noc_cmd_buf<tt::tt_fabric::edm_to_downstream_noc>();
+        downstream_edm_noc_interfaces[0]
+            .template setup_edm_noc_cmd_buf<
+                tt::tt_fabric::edm_to_downstream_noc,
+                tt::tt_fabric::forward_and_local_write_noc_vc>();
     }
     if constexpr (enable_ring_support) {
         if (has_downstream_edm_vc1_buffer_connection) {
@@ -1298,7 +1302,10 @@ void kernel_main() {
                 downstream_vc1_noc_interface_buffer_index_local_addr,
                 receiver_channel_forwarding_data_cmd_buf_ids[1],
                 receiver_channel_forwarding_sync_cmd_buf_ids[1]);
-            downstream_edm_noc_interfaces[1].template setup_edm_noc_cmd_buf<tt::tt_fabric::edm_to_downstream_noc>();
+            downstream_edm_noc_interfaces[1]
+                .template setup_edm_noc_cmd_buf<
+                    tt::tt_fabric::edm_to_downstream_noc,
+                    tt::tt_fabric::forward_and_local_write_noc_vc>();
         }
     }
     for (uint8_t i = 0; i < NUM_RECEIVER_CHANNELS; i++) {

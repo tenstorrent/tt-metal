@@ -142,7 +142,7 @@ def run_all_reduce_test(
         eq, output = comp_pcc(tt_output_tensor, golden_canonical_out_tensor)
         mismatch = mismatch or not eq
         if not eq:
-            logger.error(f"output mismatch for tensor {i}. Mesh device ID: {mesh_device.get_devices()[i].id()}")
+            logger.error(f"output mismatch for tensor {i}. Mesh device ID: {mesh_device.get_device_ids()[i]}")
             if debug:
                 for w in range(tt_output_tensor.shape[0]):
                     for z in range(tt_output_tensor.shape[1]):

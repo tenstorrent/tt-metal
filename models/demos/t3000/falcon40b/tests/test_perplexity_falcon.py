@@ -150,7 +150,7 @@ def run_test_perplexity(
         # Load tt-metal model config
         input_shape = [batch_size, max_seq_len]
         model_config = get_model_config(
-            model_config_str, llm_mode, input_shape, num_devices=len(mesh_device.get_devices())
+            model_config_str, llm_mode, input_shape, num_devices=mesh_device.get_num_devices()
         )
         tt_cache_path = get_tt_cache_path(
             model_version, model_subdir="Falcon", default_dir=model_config["DEFAULT_CACHE_PATH"]

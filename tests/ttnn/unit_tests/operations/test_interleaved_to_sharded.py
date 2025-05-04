@@ -23,7 +23,7 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 @pytest.mark.parametrize("input_in_l1", [True, False])
 @pytest.mark.parametrize("keep_l1_aligned", [True, False])
 def test_interleaved_to_sharded_hash(device, first_dtype, second_dtype, input_in_l1, keep_l1_aligned):
-    ttnn.enable_program_cache(device)
+    device.enable_program_cache()
 
     # Sample tensor size and shard config
     input_tensor_shape = (1, 1, 512, 512)

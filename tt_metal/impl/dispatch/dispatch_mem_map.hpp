@@ -6,11 +6,11 @@
 
 #include <stdint.h>
 #include <tt-metalium/command_queue_common.hpp>
-#include <tt-metalium/dispatch_settings.hpp>
 #include <utility>
 #include <vector>
 
 #include <umd/device/tt_core_coordinates.h>
+#include "dispatch_settings.hpp"
 
 namespace tt {
 namespace tt_metal {

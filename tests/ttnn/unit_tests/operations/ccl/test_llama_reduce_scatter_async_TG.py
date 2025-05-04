@@ -80,8 +80,7 @@ def run_reduce_scatter_test(
     cyclic_buffer_size = 8
 
     # input, output, interm core range set
-    device = mesh_device.get_device(mesh_device.get_device_ids()[0])
-    compute_grid = (device.compute_with_storage_grid_size().x, device.compute_with_storage_grid_size().y)
+    compute_grid = (mesh_device.compute_with_storage_grid_size().x, mesh_device.compute_with_storage_grid_size().y)
     subdevice_shard_cores_grid = ttnn.CoreRangeSet(
         {
             ttnn.CoreRange(
@@ -336,9 +335,8 @@ def run_reduce_scatter_test(
     indirect=True,
 )
 def test_fabric_reduce_scatter_tg_trace(mesh_device, trace_mode):
-    device = mesh_device.get_device(mesh_device.get_device_ids()[0])
     # Only run these tests on unharvested TG
-    device_grid = (device.compute_with_storage_grid_size().x, device.compute_with_storage_grid_size().y)
+    device_grid = (mesh_device.compute_with_storage_grid_size().x, mesh_device.compute_with_storage_grid_size().y)
     if device_grid != (7, 10):
         pytest.skip("Not TG!")
 
@@ -382,9 +380,8 @@ def test_fabric_reduce_scatter_tg_trace(mesh_device, trace_mode):
     indirect=True,
 )
 def test_fabric_reduce_scatter_tg_no_trace(mesh_device, trace_mode):
-    device = mesh_device.get_device(mesh_device.get_device_ids()[0])
     # Only run these tests on unharvested TG
-    device_grid = (device.compute_with_storage_grid_size().x, device.compute_with_storage_grid_size().y)
+    device_grid = (mesh_device.compute_with_storage_grid_size().x, mesh_device.compute_with_storage_grid_size().y)
     if device_grid != (7, 10):
         pytest.skip("Not TG!")
 
@@ -441,9 +438,8 @@ def test_fabric_reduce_scatter_tg_no_trace(mesh_device, trace_mode):
 def test_fabric_reduce_scatter_regular_grid_2_dev(
     mesh_device, trace_mode, shard_height, shard_width, input_grid, output_grid, dtype
 ):
-    device = mesh_device.get_device(mesh_device.get_device_ids()[0])
     # Only run these tests on unharvested TG
-    device_grid = (device.compute_with_storage_grid_size().x, device.compute_with_storage_grid_size().y)
+    device_grid = (mesh_device.compute_with_storage_grid_size().x, mesh_device.compute_with_storage_grid_size().y)
     if device_grid != (8, 8):
         pytest.skip("Not TG!")
 
@@ -500,9 +496,8 @@ def test_fabric_reduce_scatter_regular_grid_2_dev(
 def test_fabric_reduce_scatter_regular_grid_4_dev(
     mesh_device, trace_mode, shard_height, shard_width, input_grid, output_grid, dtype
 ):
-    device = mesh_device.get_device(mesh_device.get_device_ids()[0])
     # Only run these tests on unharvested TG
-    device_grid = (device.compute_with_storage_grid_size().x, device.compute_with_storage_grid_size().y)
+    device_grid = (mesh_device.compute_with_storage_grid_size().x, mesh_device.compute_with_storage_grid_size().y)
     if device_grid != (8, 8):
         pytest.skip("Not TG!")
 

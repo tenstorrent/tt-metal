@@ -148,7 +148,7 @@ TEST_P(Matmul2DHostPerfTestFixture, Matmul2DHostPerfTest) {
 
     TT_FATAL(num_measurement_iterations > 0, "Won't have data without at least one measurement iteration");
 
-    tt::tt_metal::IDevice* device = device_;
+    auto device = device_;
 
     const bool enable_program_cache = test_config.enable_program_cache;
     if (use_trace) {

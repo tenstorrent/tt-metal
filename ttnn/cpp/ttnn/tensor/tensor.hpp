@@ -73,9 +73,11 @@ public:
     // Constructors to initialize unpopulated tensor with workers and storage specified. Use this when creating tensor
     // handles in async mode.
     explicit Tensor(
-        uint32_t num_buffers, std::optional<DistributedTensorConfig> distributed_tensor_config = std::nullopt);
-    explicit Tensor(const std::vector<IDevice*>& workers);
-    explicit Tensor(distributed::MeshDevice* mesh_device);
+        uint32_t num_buffers,
+        TensorSpec spec,
+        std::optional<DistributedTensorConfig> distributed_tensor_config = std::nullopt);
+    explicit Tensor(const std::vector<IDevice*>& workers, TensorSpec spec);
+    explicit Tensor(distributed::MeshDevice* mesh_device, TensorSpec spec);
 
     Tensor(const Tensor& other);
 
@@ -95,8 +97,6 @@ public:
     }
 
     ~Tensor();
-
-    void populate_buffers_and_metadata(const Tensor& other);
 
     void deallocate(bool force = false);
 
@@ -223,17 +223,9 @@ public:
     const TensorSpec& tensor_spec() const { return this->tensor_attributes->get_tensor_spec(); }
 
     // ======================================================================================
-    //                                      Setters
-    // ======================================================================================
-    void set_storage(const Storage& storage) { this->tensor_attributes->set_storage(storage); }
-    // We intend to remove this API once we migrate all ops to compute_output_specs, and provide TensorSpec at creation
-    void set_tensor_spec(const TensorSpec& tensor_spec) { this->tensor_attributes->set_tensor_spec(tensor_spec); }
-    // ======================================================================================
     //                                      Extra Helper Functions
     // ======================================================================================
     StorageType storage_type() const;
-    bool is_host_tensor() const;
-    bool is_device_tensor() const;
     ttnn::Shape strides() const;
     uint32_t volume() const;
 
