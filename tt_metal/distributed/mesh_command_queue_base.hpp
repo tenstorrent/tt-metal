@@ -40,7 +40,7 @@ public:
     void enqueue_write_shard_to_sub_grid(
         const MeshBuffer& buffer,
         const void* host_data,
-        const MeshCoordinateRange& device_range,
+        const MeshCoordinateRangeSet& device_range_set,
         bool blocking,
         std::optional<BufferRegion> region = std::nullopt) override;
     void enqueue_write_mesh_buffer(

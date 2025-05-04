@@ -40,16 +40,20 @@ private:
     void set_program_binary_status(std::size_t mesh_id, ProgramBinaryStatus status);
     ProgramConfig& get_program_config(uint32_t index);
     ProgramCommandSequence& get_dispatch_cmds_for_program(Program& program, uint64_t command_hash);
-    void compile_program(const MeshCoordinateRange& device_range, MeshDevice* mesh_device);
+    void compile_program(const MeshCoordinateRangeSet& device_range, MeshDevice* mesh_device);
 
     std::unordered_map<std::size_t, ProgramBinaryStatus> program_binary_status_;
     std::shared_ptr<MeshBuffer> kernel_bin_buf_;
     std::vector<std::unordered_map<KernelHandle, std::shared_ptr<Kernel>>> kernels_;
     std::vector<std::vector<std::shared_ptr<KernelGroup>>> kernel_groups_;
     std::vector<Semaphore> semaphores_;
-    std::unordered_map<MeshCoordinateRange, Program> programs_;
+    std::unordered_map<MeshCoordinateRangeSet, Program> programs_;
+
+    // Used to detect overlaps between programs.
+    // Kept empty until at least 2 programs were added.
+    std::unordered_set<MeshCoordinate> program_coords_;
+
     bool finalized_ = false;
-    std::unordered_map<MeshCoordinateRange, std::unordered_map<KernelHandle, RuntimeArgsPerCore>> runtime_args_;
     MeshCommandQueue* last_used_command_queue_ = nullptr;
 
     template <typename T>
@@ -62,9 +66,12 @@ private:
 public:
     // Main User-Facing API building blocks
     MeshWorkload();
-    void add_program(const MeshCoordinateRange& device_range, Program&& program);
-    std::unordered_map<MeshCoordinateRange, Program>& get_programs() { return programs_; }
-    const std::unordered_map<MeshCoordinateRange, Program>& get_programs() const { return programs_; }
+    void add_program(const MeshCoordinate& coord, Program&& program);
+    void add_program(const MeshCoordinateRange& range, Program&& program);
+    void add_program(const MeshCoordinateRangeSet& range_set, Program&& program);
+
+    std::unordered_map<MeshCoordinateRangeSet, Program>& get_programs() { return programs_; }
+    const std::unordered_map<MeshCoordinateRangeSet, Program>& get_programs() const { return programs_; }
 
     // For testing purposes only
     void set_last_used_command_queue_for_testing(MeshCommandQueue* mesh_cq);

@@ -179,6 +179,9 @@ public:
     // Constructs a set with a single range.
     explicit MeshCoordinateRangeSet(const MeshCoordinateRange&);
 
+    // Constructs a set with a single coordinate.
+    explicit MeshCoordinateRangeSet(const MeshCoordinate&);
+
     // Merges the given range into the set.
     void merge(const MeshCoordinateRange& range);
 

@@ -124,8 +124,8 @@ void verify_cb_config(
     uint32_t cb_config_buffer_size =
         NUM_CIRCULAR_BUFFERS * UINT32_WORDS_PER_LOCAL_CIRCULAR_BUFFER_CONFIG * sizeof(uint32_t);
 
-    for (const auto& [device_range, _] : workload.get_programs()) {
-        for (const auto& coord : device_range) {
+    for (const auto& [device_range_set, _] : workload.get_programs()) {
+        for (const auto& coord : device_range_set.coords()) {
             auto device = mesh_device->get_device(coord);
             uint32_t l1_unreserved_base = device->allocator()->get_base_allocator_addr(HalMemType::L1);
             for (const auto& core_range : crs.ranges()) {
@@ -210,6 +210,18 @@ TEST_F(MeshWorkloadTestSuite, TestMeshWorkloadOnActiveEth) {
     Finish(mesh_device_->mesh_command_queue());
 }
 
+TEST_F(MeshWorkloadTestSuite, EmptyRangeSet) {
+    MeshWorkload workload;
+
+    auto programs = tt::tt_metal::distributed::test::utils::create_random_programs(
+        /*num_programs=*/1, mesh_device_->compute_with_storage_grid_size(), /*seed=*/0);
+    auto mesh_workload = CreateMeshWorkload();
+
+    EXPECT_THAT(
+        ([&]() { AddProgramToMeshWorkload(mesh_workload, std::move(*programs[0]), MeshCoordinateRangeSet()); }),
+        ThrowsMessage<std::runtime_error>(HasSubstr("Cannot enqueue a program for an empty range set.")));
+}
+
 TEST_F(MeshWorkloadTestSuite, OverlappingProgramRanges) {
     MeshWorkload workload;
 
@@ -224,7 +236,7 @@ TEST_F(MeshWorkloadTestSuite, OverlappingProgramRanges) {
     AddProgramToMeshWorkload(mesh_workload, std::move(*programs[0]), devices_range);
     EXPECT_THAT(
         ([&]() { AddProgramToMeshWorkload(mesh_workload, std::move(*programs[1]), devices_range); }),
-        ThrowsMessage<std::runtime_error>(HasSubstr("overlaps with the previously added range")));
+        ThrowsMessage<std::runtime_error>(HasSubstr("Found 2 programs for coordinate MeshCoordinate([0, 0])")));
 }
 
 // Test running different configurations of heterogenous MeshWorkloads on T3000.
@@ -593,7 +605,7 @@ TEST_F(MeshWorkloadTestSuite, MeshWorkloadSanity) {
     for (int iter = 0; iter < 100; iter++) {
         log_info(LogTest, "Run iter {}", iter);
         if (iter) {
-            auto& program = mesh_workload.get_programs().at(devices_0);
+            auto& program = mesh_workload.get_programs().at(MeshCoordinateRangeSet{devices_0});
             auto& rtas = GetRuntimeArgs(program, reader_writer_kernel);
             for (auto core : full_grid) {
                 rtas[core.x][core.y].at(4) = ((iter % 2) + 1) * add_factor;
@@ -651,7 +663,8 @@ TEST_F(MeshWorkloadTestSuite, MeshWorkloadCBUpdate) {
         CBConfig& cb_config = updated_cb_config_vector[cb_id];
         cb_config.num_pages *= 2;
         const uint32_t cb_size = cb_config.num_pages * cb_config.page_size;
-        UpdateCircularBufferTotalSize(mesh_workload.get_programs().at(devices), cb_handles[cb_id], cb_size);
+        UpdateCircularBufferTotalSize(
+            mesh_workload.get_programs().at(MeshCoordinateRangeSet{devices}), cb_handles[cb_id], cb_size);
     }
     EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), mesh_workload, false);
     Finish(mesh_device_->mesh_command_queue());

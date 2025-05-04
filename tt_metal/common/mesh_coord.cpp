@@ -280,6 +280,8 @@ size_t to_linear_index(const MeshShape& shape, const MeshCoordinate& coord) {
 }
 
 MeshCoordinateRangeSet::MeshCoordinateRangeSet(const MeshCoordinateRange& range) { ranges_.push_back(range); }
+MeshCoordinateRangeSet::MeshCoordinateRangeSet(const MeshCoordinate& coord) :
+    MeshCoordinateRangeSet(MeshCoordinateRange(coord)) {}
 
 void MeshCoordinateRangeSet::merge(const MeshCoordinateRange& to_merge) {
     TT_FATAL(

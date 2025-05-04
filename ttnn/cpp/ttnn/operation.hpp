@@ -60,7 +60,7 @@ struct CacheableMeshWorkload {
     // TODO: #19569 - `per_program_callbacks` is used to assist old infra migration, which relied on per-program
     // callbacks. This needs to be removed
     std::optional<OverrideRuntimeArgumentsWorkloadCallback<OutputTensors>> workload_callback = std::nullopt;
-    std::unordered_map<ttnn::MeshCoordinateRange, OverrideRuntimeArgumentsCallback<OutputTensors>>
+    std::unordered_map<ttnn::MeshCoordinateRangeSet, OverrideRuntimeArgumentsCallback<OutputTensors>>
         per_program_callbacks;
 };
 

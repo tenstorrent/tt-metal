@@ -15,8 +15,17 @@ namespace tt::tt_metal::distributed {
 
 MeshWorkload CreateMeshWorkload() { return MeshWorkload(); }
 
+void AddProgramToMeshWorkload(MeshWorkload& mesh_workload, Program&& program, const MeshCoordinate& coord) {
+    mesh_workload.add_program(coord, std::move(program));
+}
+
 void AddProgramToMeshWorkload(MeshWorkload& mesh_workload, Program&& program, const MeshCoordinateRange& device_range) {
     mesh_workload.add_program(device_range, std::move(program));
+}
+
+void AddProgramToMeshWorkload(
+    MeshWorkload& mesh_workload, Program&& program, const MeshCoordinateRangeSet& device_range_set) {
+    mesh_workload.add_program(device_range_set, std::move(program));
 }
 
 void EnqueueMeshWorkload(MeshCommandQueue& mesh_cq, MeshWorkload& mesh_workload, bool blocking) {
@@ -31,15 +40,15 @@ void EnqueueMeshWorkload(MeshCommandQueue& mesh_cq, MeshWorkload& mesh_workload,
 MeshEvent EnqueueRecordEvent(
     MeshCommandQueue& mesh_cq,
     tt::stl::Span<const SubDeviceId> sub_device_ids,
-    const std::optional<MeshCoordinateRange>& device_range) {
-    return mesh_cq.enqueue_record_event(sub_device_ids, device_range);
+    const std::optional<MeshCoordinateRangeSet>& device_range_set) {
+    return mesh_cq.enqueue_record_event(sub_device_ids, device_range_set);
 }
 
 MeshEvent EnqueueRecordEventToHost(
     MeshCommandQueue& mesh_cq,
     tt::stl::Span<const SubDeviceId> sub_device_ids,
-    const std::optional<MeshCoordinateRange>& device_range) {
-    return mesh_cq.enqueue_record_event_to_host(sub_device_ids, device_range);
+    const std::optional<MeshCoordinateRangeSet>& device_range_set) {
+    return mesh_cq.enqueue_record_event_to_host(sub_device_ids, device_range_set);
 }
 
 void EnqueueWaitForEvent(MeshCommandQueue& mesh_cq, const MeshEvent& event) { mesh_cq.enqueue_wait_for_event(event); }
@@ -48,7 +57,7 @@ void EventSynchronize(const MeshEvent& event) {
     if (event.device()->using_slow_dispatch()) {
         return;
     }
-    for (const auto& coord : event.device_range()) {
+    for (const auto& coord : event.device_range_set().coords()) {
         auto physical_device = event.device()->get_device(coord);
         while (physical_device->sysmem_manager().get_last_completed_event(event.mesh_cq_id()) < event.id());
     }

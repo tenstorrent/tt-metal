@@ -3,8 +3,12 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <boost/move/utility_core.hpp>
-#include <gtest/gtest.h>
 #include <stdint.h>
+#include <gmock/gmock.h>
+
+#include <tt-metalium/distributed.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <cstddef>
@@ -34,6 +38,22 @@ namespace {
 
 using MeshEventsTestT3000 = T3000MultiCQMeshDeviceFixture;
 using MeshEventsTestSuite = GenericMultiCQMeshDeviceFixture;
+
+using ::testing::HasSubstr;
+
+TEST_F(MeshEventsTestSuite, EmptyRangeSet) {
+    EXPECT_THAT(
+        ([&]() {
+            EnqueueRecordEventToHost(
+                mesh_device_->mesh_command_queue(0), /*sub_device_ids=*/{}, MeshCoordinateRangeSet());
+        }),
+        ThrowsMessage<std::runtime_error>(HasSubstr("If provided, device_range_set must be non-empty.")));
+    EXPECT_THAT(
+        ([&]() {
+            EnqueueRecordEvent(mesh_device_->mesh_command_queue(0), /*sub_device_ids=*/{}, MeshCoordinateRangeSet());
+        }),
+        ThrowsMessage<std::runtime_error>(HasSubstr("If provided, device_range_set must be non-empty.")));
+}
 
 TEST_F(MeshEventsTestSuite, ReplicatedAsyncIO) {
     uint32_t NUM_TILES = 1000;
@@ -234,8 +254,9 @@ TEST_F(MeshEventsTestSuite, CustomDeviceRanges) {
 
         std::vector<std::vector<uint32_t>> readback_vecs = {};
 
-        mesh_device_->mesh_command_queue(1).enqueue_write_shard_to_sub_grid(*buf, src_vec.data(), devices_0, false);
-        auto event0 = EnqueueRecordEvent(mesh_device_->mesh_command_queue(1), {}, devices_0);
+        mesh_device_->mesh_command_queue(1).enqueue_write_shard_to_sub_grid(
+            *buf, src_vec.data(), MeshCoordinateRangeSet{devices_0}, false);
+        auto event0 = EnqueueRecordEvent(mesh_device_->mesh_command_queue(1), {}, MeshCoordinateRangeSet{devices_0});
         EnqueueWaitForEvent(mesh_device_->mesh_command_queue(0), event0);
 
         for (const auto& coord : devices_0) {
@@ -244,8 +265,10 @@ TEST_F(MeshEventsTestSuite, CustomDeviceRanges) {
             ReadShard(mesh_device_->mesh_command_queue(0), readback_vecs.back(), buf, coord);
         }
 
-        mesh_device_->mesh_command_queue(1).enqueue_write_shard_to_sub_grid(*buf, src_vec.data(), devices_1, false);
-        auto event1 = EnqueueRecordEventToHost(mesh_device_->mesh_command_queue(1), {}, devices_1);
+        mesh_device_->mesh_command_queue(1).enqueue_write_shard_to_sub_grid(
+            *buf, src_vec.data(), MeshCoordinateRangeSet{devices_1}, false);
+        auto event1 =
+            EnqueueRecordEventToHost(mesh_device_->mesh_command_queue(1), {}, MeshCoordinateRangeSet{devices_1});
         EventSynchronize(event1);
 
         for (const auto& coord : devices_1) {

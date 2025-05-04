@@ -160,7 +160,7 @@ void MeshCommandQueueBase::read_sharded_buffer(MeshBuffer& buffer, void* dst) {
 void MeshCommandQueueBase::enqueue_write_shard_to_sub_grid(
     const MeshBuffer& buffer,
     const void* host_data,
-    const MeshCoordinateRange& device_range,
+    const MeshCoordinateRangeSet& device_range_set,
     bool blocking,
     std::optional<BufferRegion> region) {
     if (buffer.global_layout() == MeshBufferLayout::REPLICATED) {
@@ -172,7 +172,7 @@ void MeshCommandQueueBase::enqueue_write_shard_to_sub_grid(
             const BufferRegion buffer_region = region.value_or(BufferRegion(0, device_shard_view->size()));
             this->write_shard_to_device(device_shard_view, host_data, buffer_region);
         };
-        for (const auto& coord : device_range) {
+        for (const auto& coord : device_range_set.coords()) {
             dispatch_thread_pool_->enqueue(
                 [&dispatch_lambda, coord]() { dispatch_lambda(coord); }, mesh_device_->get_device(coord)->id());
         }
@@ -188,7 +188,7 @@ void MeshCommandQueueBase::enqueue_write_shard_to_sub_grid(
 
 void MeshCommandQueueBase::enqueue_write_mesh_buffer(
     const std::shared_ptr<MeshBuffer>& buffer, const void* host_data, bool blocking) {
-    MeshCoordinateRange mesh_device_extent(buffer->device()->shape());
+    MeshCoordinateRangeSet mesh_device_extent(MeshCoordinateRange(buffer->device()->shape()));
     this->enqueue_write_shard_to_sub_grid(*buffer, host_data, mesh_device_extent, blocking);
 }
 

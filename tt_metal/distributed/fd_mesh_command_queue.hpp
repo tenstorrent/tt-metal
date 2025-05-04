@@ -31,12 +31,12 @@ private:
     MeshEvent enqueue_record_event_helper(
         tt::stl::Span<const SubDeviceId> sub_device_ids,
         bool notify_host,
-        const std::optional<MeshCoordinateRange>& device_range = std::nullopt);
+        const std::optional<MeshCoordinateRangeSet>& device_range_set = std::nullopt);
     // Trace capture utility functions
     // Captures dispatch commands associated with running a program on a Virtual Mesh subgrid
     // inside the appropriate trace staging vector (corresponding to the specified subgrid)
     void capture_program_trace_on_subgrid(
-        const MeshCoordinateRange& sub_grid,
+        const MeshCoordinateRangeSet& sub_grid,
         ProgramCommandSequence& program_cmd_seq,
         bool stall_first,
         bool stall_before_program,
@@ -46,7 +46,7 @@ private:
     // When running trace, the dispatch commands responsible for forwarding go signals must be
     // captured on these subgrids.
     void capture_go_signal_trace_on_unused_subgrids(
-        const MeshCoordinateRange& active_sub_grids,
+        const MeshCoordinateRangeSet& active_sub_grids,
         const SubDeviceId& sub_device_id,
         uint32_t expected_num_workers_completed,
         bool mcast_go_signals,
@@ -54,7 +54,7 @@ private:
     // Workload dispatch utility functions
     // Write dispatch commands associated with running a program on a Virtual Mesh subgrid
     void write_program_cmds_to_subgrid(
-        const MeshCoordinateRange& sub_grid,
+        const MeshCoordinateRangeSet& sub_grid,
         ProgramCommandSequence& program_cmd_seq,
         bool stall_first,
         bool stall_before_program,
@@ -165,10 +165,10 @@ public:
 
     MeshEvent enqueue_record_event(
         tt::stl::Span<const SubDeviceId> sub_device_ids = {},
-        const std::optional<MeshCoordinateRange>& device_range = std::nullopt) override;
+        const std::optional<MeshCoordinateRangeSet>& device_range_set = std::nullopt) override;
     MeshEvent enqueue_record_event_to_host(
         tt::stl::Span<const SubDeviceId> sub_device_ids = {},
-        const std::optional<MeshCoordinateRange>& device_range = std::nullopt) override;
+        const std::optional<MeshCoordinateRangeSet>& device_range_set = std::nullopt) override;
     void enqueue_wait_for_event(const MeshEvent& sync_event) override;
     void drain_events_from_completion_queue();
     void verify_reported_events_after_draining(const MeshEvent& event);

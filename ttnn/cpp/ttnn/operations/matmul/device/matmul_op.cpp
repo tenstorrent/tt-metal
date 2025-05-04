@@ -2275,19 +2275,13 @@ std::vector<Tensor> Matmul::create_output_tensors(
 
 using MatmulCallback = tt::tt_metal::operation::OverrideRuntimeArgumentsCallback<std::vector<Tensor>>;
 
-MeshCoordinateRange get_range_from_mesh_coords(const ttnn::MeshCoordinateRangeSet& tensor_coords) {
-    TT_FATAL(tensor_coords.size() == 1, "Cannot support dispatching TTNN Ops to different device ranges.");
-    return tensor_coords.ranges().front();
-}
-
 operation::CacheableMeshWorkload<std::vector<Tensor>> create_homogenous_mesh_workload(
     tt::tt_metal::operation::ProgramWithCallbacks& matmul_program, const ttnn::MeshCoordinateRangeSet& tensor_coords) {
     tt::tt_metal::distributed::MeshWorkload matmul_workload = tt::tt_metal::distributed::CreateMeshWorkload();
-    std::unordered_map<MeshCoordinateRange, MatmulCallback> callbacks = {};
+    std::unordered_map<MeshCoordinateRangeSet, MatmulCallback> callbacks;
 
-    auto workload_device_range = get_range_from_mesh_coords(tensor_coords);
-    AddProgramToMeshWorkload(matmul_workload, std::move(matmul_program.program), workload_device_range);
-    callbacks[workload_device_range] = std::move(matmul_program.override_runtime_arguments_callback.value());
+    AddProgramToMeshWorkload(matmul_workload, std::move(matmul_program.program), tensor_coords);
+    callbacks[tensor_coords] = std::move(matmul_program.override_runtime_arguments_callback.value());
     return {.workload = std::move(matmul_workload), .per_program_callbacks = std::move(callbacks)};
 }
 
@@ -2403,11 +2397,10 @@ operation::CacheableMeshWorkload<std::vector<Tensor>> Matmul::create_mesh_worklo
                                      MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig>) {
                 // DRAM Sharded Matmul generates different programs across devices, since it depends on harvesting.
                 // Account for this by creating a heterogenous MeshWorkload.
-                auto workload_device_range = get_range_from_mesh_coords(tensor_coords);
                 tt::tt_metal::distributed::MeshWorkload dram_sharded_mm_workload;
-                std::unordered_map<MeshCoordinateRange, MatmulCallback> callbacks;
+                std::unordered_map<MeshCoordinateRangeSet, MatmulCallback> callbacks;
 
-                for (const auto& coord : workload_device_range) {
+                for (const auto& coord : tensor_coords.coords()) {
                     auto dram_sharded_mm_program = matmul_multi_core_reuse_dram_sharded_optimized(
                         coord,
                         input_tensor_a,
@@ -2424,10 +2417,8 @@ operation::CacheableMeshWorkload<std::vector<Tensor>> Matmul::create_mesh_worklo
                         false,
                         false);
                     AddProgramToMeshWorkload(
-                        dram_sharded_mm_workload,
-                        std::move(dram_sharded_mm_program.program),
-                        MeshCoordinateRange(coord, coord));
-                    callbacks[MeshCoordinateRange(coord, coord)] =
+                        dram_sharded_mm_workload, std::move(dram_sharded_mm_program.program), coord);
+                    callbacks[MeshCoordinateRangeSet(MeshCoordinateRange(coord, coord))] =
                         std::move(dram_sharded_mm_program.override_runtime_arguments_callback.value());
                 }
                 return {.workload = std::move(dram_sharded_mm_workload), .per_program_callbacks = std::move(callbacks)};

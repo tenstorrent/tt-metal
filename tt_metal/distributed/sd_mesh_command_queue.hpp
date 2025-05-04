@@ -32,10 +32,10 @@ public:
 
     MeshEvent enqueue_record_event(
         tt::stl::Span<const SubDeviceId> sub_device_ids = {},
-        const std::optional<MeshCoordinateRange>& device_range = std::nullopt) override;
+        const std::optional<MeshCoordinateRangeSet>& device_range_set = std::nullopt) override;
     MeshEvent enqueue_record_event_to_host(
         tt::stl::Span<const SubDeviceId> sub_device_ids = {},
-        const std::optional<MeshCoordinateRange>& device_range = std::nullopt) override;
+        const std::optional<MeshCoordinateRangeSet>& device_range_set = std::nullopt) override;
     void enqueue_wait_for_event(const MeshEvent& sync_event) override;
     void finish(tt::stl::Span<const SubDeviceId> sub_device_ids = {}) override;
     void reset_worker_state(
