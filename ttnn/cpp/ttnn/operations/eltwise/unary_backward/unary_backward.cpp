@@ -1751,7 +1751,7 @@ std::vector<Tensor> ExecuteUnaryBackwardRepeat::invoke(
                 required,
                 input.get_dtype(),
                 input.get_layout(),
-                std::optional<std::reference_wrapper<tt::tt_metal::IDevice>>(*ttnn_device),
+                std::optional<std::reference_wrapper<MeshDevice>>(*ttnn_device),
                 output_memory_config),
             output_memory_config,
             std::nullopt);
@@ -1770,7 +1770,7 @@ std::vector<Tensor> ExecuteUnaryBackwardRepeat::invoke(
                 required,
                 input.get_dtype(),
                 input.get_layout(),
-                std::optional<std::reference_wrapper<tt::tt_metal::IDevice>>(*ttnn_device),
+                std::optional<std::reference_wrapper<MeshDevice>>(*ttnn_device),
                 output_memory_config),
             output_memory_config,
             std::nullopt);

@@ -46,8 +46,7 @@ TEST_P(Add1DTensorAndScalarFixture, AddsScalarCorrectly) {
     {
         const auto input_tensor = ttnn::zeros(shape, DataType::BFLOAT16, ttnn::TILE_LAYOUT, device);
         const auto output_tensor = input_tensor + param.scalar;
-        const auto expected_tensor =
-            ttnn::operations::creation::full(shape, param.scalar, DataType::BFLOAT16, ttnn::TILE_LAYOUT, device);
+        const auto expected_tensor = ttnn::full(shape, param.scalar, DataType::BFLOAT16, ttnn::TILE_LAYOUT, device);
         TT_FATAL(
             ttnn::allclose<::bfloat16>(ttnn::from_device(expected_tensor), ttnn::from_device(output_tensor)), "Error");
     }

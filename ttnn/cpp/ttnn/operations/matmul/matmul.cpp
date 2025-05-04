@@ -67,7 +67,7 @@ Tensor handle_zero_volume_matmul(
         0.0f,
         output_dtype,
         input_tensor_a.get_layout(),
-        std::optional<std::reference_wrapper<tt::tt_metal::IDevice>>(*input_tensor_a.device()),
+        std::optional<std::reference_wrapper<MeshDevice>>(*input_tensor_a.device()),
         memory_config);
 
     // Apply bias if provided
