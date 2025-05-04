@@ -617,7 +617,6 @@ def test_all_gather(
     ],
 )
 @pytest.mark.parametrize("num_iters", [1])
-@pytest.mark.parametrize("enable_async", [True])
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
 def test_all_gather_real_workloads(
     t3k_mesh_device,
@@ -632,7 +631,6 @@ def test_all_gather_real_workloads(
     num_iters,
     use_program_cache,
     function_level_defaults,
-    enable_async,
 ):
     if 2052096 <= (output_shape[0] * output_shape[1] * output_shape[2] * output_shape[3]) / num_devices:
         pytest.skip(f"Output shape {output_shape} is too slow for CI operation")
@@ -648,7 +646,6 @@ def test_all_gather_real_workloads(
         function_level_defaults,
         all_gather_topology=ttnn.Topology.Linear,
         num_iters=num_iters,
-        enable_async=enable_async,
         rand_tensor=True,
         mem_config=mem_config,
     )
