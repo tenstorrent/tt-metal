@@ -282,7 +282,7 @@ Tensor Tensor::from_span<float>(
 
             Tensor tensor(HostStorage(host_buffer::create(std::move(packed_block_floats))), spec);
             if (device != nullptr) {
-                tensor = tensor.to_device(device->get_devices(), spec.memory_config(), cq_id);
+                tensor = tensor.to_device(device, spec.memory_config(), cq_id);
             }
             return tensor;
         }
@@ -472,15 +472,6 @@ Tensor Tensor::to_device(IDevice* target_device, const MemoryConfig& mem_config,
 
 Tensor Tensor::to_device(distributed::MeshDevice* mesh_device, const MemoryConfig& mem_config, QueueId cq_id) const {
     return tensor_ops::tensor_to_device(*this, mesh_device, mem_config, cq_id);
-}
-
-Tensor Tensor::to_device(const std::vector<IDevice*>& workers, const MemoryConfig& mem_config, QueueId cq_id) const {
-    if (workers.size() == 1) {
-        if (auto mesh_device = dynamic_cast<distributed::MeshDevice*>(workers[0])) {
-            return to_device(mesh_device, mem_config, cq_id);
-        }
-    }
-    return tensor_ops::tensor_to_device(*this, workers, mem_config, cq_id);
 }
 
 Tensor Tensor::cpu(bool blocking, QueueId cq_id) const {

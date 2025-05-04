@@ -170,11 +170,6 @@ public:
         const MemoryConfig& mem_config = {.memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED},
         ttnn::QueueId cq_id = ttnn::DefaultQueueId) const;
 
-    Tensor to_device(
-        const std::vector<IDevice*>& workers,
-        const MemoryConfig& mem_config = {.memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED},
-        ttnn::QueueId cq_id = ttnn::DefaultQueueId) const;
-
     Tensor to_layout(Layout target_layout, IDevice* worker = nullptr) const;
 
     Tensor to_layout(Layout target_layout, distributed::MeshDevice* mesh_device) const;

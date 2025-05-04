@@ -32,20 +32,7 @@ ttnn::global_semaphore::MultiDeviceGlobalSemaphore create_global_semaphore(const
         10);
 }
 
-std::vector<IDevice*> get_line_devices(distributed::MeshDevice* mesh_device) {
-    auto view = mesh_device->get_view();
-    return {
-        view.get_device(distributed::MeshCoordinate(0, 0)),
-        view.get_device(distributed::MeshCoordinate(0, 1)),
-        view.get_device(distributed::MeshCoordinate(0, 2)),
-        view.get_device(distributed::MeshCoordinate(0, 3))};
-}
-
 }  // namespace CMAKE_UNIQUE_NAMESPACE
-
-// Only testing top row of T3000.
-constexpr int kNumDevices = 4;
-
 }  // namespace
 
 class T3000MultiCQFabricMeshDeviceFixture : public T3000MultiCQMeshDeviceFixture {
@@ -61,15 +48,16 @@ protected:
 
 TEST_F(T3000MultiCQMeshDeviceFixture, AllGather) {
     mesh_device_->enable_program_cache();
-    auto devices = CMAKE_UNIQUE_NAMESPACE::get_line_devices(mesh_device_.get());
+    auto devices = mesh_device_->get_devices();
 
     TensorSpec tensor_spec(
-        ttnn::Shape({kNumDevices, 8, 1024, 768}),
+        ttnn::Shape({mesh_device_->num_devices(), 8, 1024, 768}),
         TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), MemoryConfig{}));
-    std::vector<bfloat16> host_data(tensor_spec.logical_shape().volume());
-    for (int dev_idx = 0; dev_idx < kNumDevices; dev_idx++) {
+    std::vector<bfloat16> host_data;
+    host_data.reserve(tensor_spec.logical_shape().volume());
+    for (int dev_idx = 0; dev_idx < mesh_device_->num_devices(); dev_idx++) {
         std::vector<bfloat16> data(
-            tensor_spec.logical_shape().volume() / kNumDevices, bfloat16(static_cast<float>(dev_idx)));
+            tensor_spec.logical_shape().volume() / mesh_device_->num_devices(), bfloat16(static_cast<float>(dev_idx)));
         std::move(data.begin(), data.end(), std::back_inserter(host_data));
     }
 
@@ -97,16 +85,16 @@ TEST_F(T3000MultiCQMeshDeviceFixture, AllGather) {
 
 TEST_F(T3000MultiCQFabricMeshDeviceFixture, AllGatherAsync) {
     mesh_device_->enable_program_cache();
-    auto devices = CMAKE_UNIQUE_NAMESPACE::get_line_devices(mesh_device_.get());
+    auto devices = mesh_device_->get_devices();
 
     TensorSpec tensor_spec(
-        ttnn::Shape({kNumDevices, 8, 1024, 768}),
+        ttnn::Shape({mesh_device_->num_devices(), 8, 1024, 768}),
         TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), MemoryConfig{}));
     std::vector<bfloat16> host_data;
     host_data.reserve(tensor_spec.logical_shape().volume());
-    for (int dev_idx = 0; dev_idx < kNumDevices; dev_idx++) {
+    for (int dev_idx = 0; dev_idx < mesh_device_->num_devices(); dev_idx++) {
         std::vector<bfloat16> data(
-            tensor_spec.logical_shape().volume() / kNumDevices, bfloat16(static_cast<float>(dev_idx)));
+            tensor_spec.logical_shape().volume() / mesh_device_->num_devices(), bfloat16(static_cast<float>(dev_idx)));
         std::move(data.begin(), data.end(), std::back_inserter(host_data));
     }
 
@@ -135,10 +123,10 @@ TEST_F(T3000MultiCQFabricMeshDeviceFixture, AllGatherAsync) {
 
 TEST_F(T3000MultiCQMeshDeviceFixture, ReduceScatter) {
     mesh_device_->enable_program_cache();
-    auto devices = CMAKE_UNIQUE_NAMESPACE::get_line_devices(mesh_device_.get());
+    auto devices = mesh_device_->get_devices();
 
     TensorSpec tensor_spec(
-        ttnn::Shape({kNumDevices, 8, 1024, 768}),
+        ttnn::Shape({mesh_device_->num_devices(), 8, 1024, 768}),
         TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), MemoryConfig{}));
     std::vector<bfloat16> host_data(tensor_spec.logical_shape().volume(), bfloat16(static_cast<float>(1)));
 
@@ -165,10 +153,10 @@ TEST_F(T3000MultiCQMeshDeviceFixture, ReduceScatter) {
 
 TEST_F(T3000MultiCQMeshDeviceFixture, AllReduce) {
     mesh_device_->enable_program_cache();
-    auto devices = CMAKE_UNIQUE_NAMESPACE::get_line_devices(mesh_device_.get());
+    auto devices = mesh_device_->get_devices();
 
     TensorSpec tensor_spec(
-        ttnn::Shape({kNumDevices, 8, 1024, 768}),
+        ttnn::Shape({mesh_device_->num_devices(), 8, 1024, 768}),
         TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), MemoryConfig{}));
     std::vector<bfloat16> host_data(tensor_spec.logical_shape().volume(), bfloat16(static_cast<float>(1)));
 
