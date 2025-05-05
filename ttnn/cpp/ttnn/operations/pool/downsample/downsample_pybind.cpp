@@ -4,7 +4,7 @@
 
 #include "downsample.hpp"
 
-#include "cpp/pybind11/decorators.hpp"
+#include "cpp/ttnn-pybind/decorators.hpp"
 
 namespace py = pybind11;
 

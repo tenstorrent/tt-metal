@@ -7,11 +7,11 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 
-#include "pybind11/types.hpp"
-#include "pybind11/operations/copy.hpp"
-#include "pybind11/operations/core.hpp"
-#include "pybind11/operations/creation.hpp"
-#include "pybind11/operations/trace.hpp"
+#include "ttnn-pybind/types.hpp"
+#include "ttnn-pybind/operations/copy.hpp"
+#include "ttnn-pybind/operations/core.hpp"
+#include "ttnn-pybind/operations/creation.hpp"
+#include "ttnn-pybind/operations/trace.hpp"
 #include "ttnn/operations/bernoulli/bernoulli_pybind.hpp"
 #include "cpp/ttnn/operations/ccl/ccl_pybind.hpp"
 #include "ttnn/operations/conv/conv_pybind.hpp"
