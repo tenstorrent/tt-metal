@@ -36,7 +36,7 @@
 #include "data_types.hpp"
 #include "device.hpp"
 #include "impl/context/metal_context.hpp"
-#include "dispatch_settings.hpp"
+#include "dispatch/dispatch_settings.hpp"
 #include "hal_types.hpp"
 #include "kernel_types.hpp"
 #include "lightmetal/host_api_capture_helpers.hpp"
@@ -51,6 +51,7 @@
 #include <umd/device/tt_xy_pair.h>
 #include <umd/device/types/xy_pair.h>
 #include "utils.hpp"
+#include "fabric/hw/inc/fabric_routing_mode.h"
 
 namespace tt {
 
@@ -426,21 +427,6 @@ void CloseDevices(const std::map<chip_id_t, IDevice*>& devices) {
         devices_to_close.push_back(device);
     }
     tt::DevicePool::instance().close_devices(devices_to_close);
-}
-
-bool InWorkerThread() {
-    // These are values are cached per thread. in_worker_thread is a 1:1 function of the thread_id.
-    // Therefore it does not need to be recomputed or looked up using the worker_thread_ids each time.
-    // This is a performance optimization, since looking up the thread id inside worker_thread_ids for
-    // each function call significantly degrades runtime perf.
-    thread_local static bool in_worker_thread = false;
-    thread_local static bool is_thread_status_checked = false;
-    if (not is_thread_status_checked) {
-        auto worker_thread_ids = tt::DevicePool::instance().get_worker_thread_ids();
-        in_worker_thread = worker_thread_ids.find(std::this_thread::get_id()) != worker_thread_ids.end();
-        is_thread_status_checked = true;
-    }
-    return in_worker_thread;
 }
 
 void print_page(
@@ -1016,6 +1002,11 @@ KernelHandle CreateDataMovementKernel(
         kernel_name);
 
     std::shared_ptr<Kernel> kernel = std::make_shared<DataMovementKernel>(kernel_src, core_range_set, config);
+    auto control_plane = tt::tt_metal::MetalContext::instance().get_cluster().get_control_plane();
+    auto mode = control_plane->get_routing_mode();
+    if (mode != ROUTING_MODE_UNDEFINED) {
+        kernel->add_defines({{"ROUTING_MODE", std::to_string(static_cast<int>(mode))}});
+    }
     return detail::AddKernel(program, kernel, HalProgrammableCoreType::TENSIX);
 }
 
@@ -1040,6 +1031,11 @@ KernelHandle CreateEthernetKernel(
     const bool are_both_noc_in_use = data_movement_config_status.noc0_in_use && data_movement_config_status.noc1_in_use;
 
     std::shared_ptr<Kernel> kernel = std::make_shared<EthernetKernel>(kernel_src, core_range_set, config);
+    auto control_plane = tt::tt_metal::MetalContext::instance().get_cluster().get_control_plane();
+    auto mode = control_plane->get_routing_mode();
+    if (mode != ROUTING_MODE_UNDEFINED) {
+        kernel->add_defines({{"ROUTING_MODE", std::to_string(static_cast<int>(mode))}});
+    }
 
     TT_FATAL(
         utils::underlying_type<DataMovementProcessor>(config.processor) <
