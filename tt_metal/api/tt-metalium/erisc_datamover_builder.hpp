@@ -39,7 +39,7 @@ struct FabricEriscDatamoverConfig {
     static constexpr std::size_t num_sender_channels_2d = 5;
     static constexpr std::size_t num_receiver_channels = 2;
     static constexpr std::size_t num_downstream_edms_vc0 = 1;
-    static constexpr std::size_t num_downstream_edms_2d_vc0 = 3;
+    static constexpr std::size_t num_downstream_edms_2d_vc0 = 4;
     static constexpr std::size_t num_downstream_edms_vc1 = 1;
     static constexpr std::size_t num_downstream_edms = num_downstream_edms_vc0 + num_downstream_edms_vc1;
     static constexpr std::size_t num_downstream_edms_2d = num_downstream_edms_2d_vc0 + num_downstream_edms_vc1;

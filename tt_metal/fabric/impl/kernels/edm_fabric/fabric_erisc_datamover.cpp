@@ -1438,17 +1438,6 @@ void kernel_main() {
     const auto downstream_edm_vc0_worker_location_info_address = get_arg_val<uint32_t>(arg_idx++);
     const auto downstream_vc0_noc_interface_buffer_index_local_addr = get_arg_val<uint32_t>(arg_idx++);
 
-    // Receiver channels local semaphore for managing flow control with the downstream EDM.
-    // The downstream EDM should be sending semaphore updates to this address any time it can
-    // accept a new message
-    // 1D has 1 downstream EDM.
-    // 2D has 3 downstream EDMs. We have 4 directions, E/W/N/S at bytes 0, 1, 2, 3 respectively.
-    // Depending on the Receiver Channel direction, Respective/remaining 3 outgoing directions'
-    // semaphores are populated in respective 3 bytes of these two variables.
-    // UC, make these 4 each for the 4 downstream edm connections. 3 on vc0, 1 on vc 1
-    const auto edm_vc0_forwarding_semaphore = get_arg_val<uint32_t>(arg_idx++);
-    const auto edm_vc0_teardown_semaphore = get_arg_val<uint32_t>(arg_idx++);
-
     // downstream EDM semaphore location
     const auto has_downstream_edm_vc1_buffer_connection = get_arg_val<uint32_t>(arg_idx++);
     const auto downstream_edm_vc1_buffer_base_address = get_arg_val<uint32_t>(arg_idx++);
@@ -1464,10 +1453,20 @@ void kernel_main() {
     // Receiver channels local semaphore for managing flow control with the downstream EDM.
     // The downstream EDM should be sending semaphore updates to this address any time it can
     // accept a new message
-    const auto edm_vc1_forwarding_semaphore_address =
-        get_semaphore<ProgrammableCoreType::ACTIVE_ETH>(get_arg_val<uint32_t>(arg_idx++));
-    const auto edm_vc1_teardown_semaphore_address =
-        get_semaphore<ProgrammableCoreType::ACTIVE_ETH>(get_arg_val<uint32_t>(arg_idx++));
+    // 1D has 1 downstream EDM for line and 2 downstream EDMs for ring.
+    // 2D has 3 downstream EDMs for mesh but we allocate 4 to simplify connectivity. 1 corresponding to router's own
+    // direction stays unused. 2D torus has 4 downstream EDMs but we allocate 5 with one unused.
+    const auto my_sem_for_ack_from_downstream_edm_0 = get_arg_val<uint32_t>(arg_idx++);
+    const auto my_sem_for_ack_from_downstream_edm_1 = get_arg_val<uint32_t>(arg_idx++);
+    const auto my_sem_for_ack_from_downstream_edm_2 = get_arg_val<uint32_t>(arg_idx++);
+    const auto my_sem_for_ack_from_downstream_edm_3 = get_arg_val<uint32_t>(arg_idx++);
+    const auto my_sem_for_ack_from_downstream_edm_4 = get_arg_val<uint32_t>(arg_idx++);
+
+    const auto my_sem_for_teardown_from_edm_0 = get_arg_val<uint32_t>(arg_idx++);
+    const auto my_sem_for_teardown_from_edm_1 = get_arg_val<uint32_t>(arg_idx++);
+    const auto my_sem_for_teardown_from_edm_2 = get_arg_val<uint32_t>(arg_idx++);
+    const auto my_sem_for_teardown_from_edm_3 = get_arg_val<uint32_t>(arg_idx++);
+    const auto my_sem_for_teardown_from_edm_4 = get_arg_val<uint32_t>(arg_idx++);
 
     ////////////////////////
     // Sender runtime args
@@ -1543,6 +1542,24 @@ void kernel_main() {
                 local_sender_channel_3_connection_buffer_index_id,
                 local_sender_channel_4_connection_buffer_index_id});
 
+    const auto& local_sem_for_acks_from_downstream_edm =
+        take_first_n_elements<NUM_USED_RECEIVER_CHANNELS, MAX_NUM_SENDER_CHANNELS, size_t>(
+            std::array<size_t, MAX_NUM_SENDER_CHANNELS>{
+                my_sem_for_ack_from_downstream_edm_0,
+                my_sem_for_ack_from_downstream_edm_1,
+                my_sem_for_ack_from_downstream_edm_2,
+                my_sem_for_ack_from_downstream_edm_3,
+                my_sem_for_ack_from_downstream_edm_4});
+
+    const auto& local_sem_for_teardown_from_downstream_edm =
+        take_first_n_elements<NUM_USED_RECEIVER_CHANNELS, MAX_NUM_SENDER_CHANNELS, size_t>(
+            std::array<size_t, MAX_NUM_SENDER_CHANNELS>{
+                my_sem_for_teardown_from_edm_0,
+                my_sem_for_teardown_from_edm_1,
+                my_sem_for_teardown_from_edm_2,
+                my_sem_for_teardown_from_edm_3,
+                my_sem_for_teardown_from_edm_4});
+
     std::array<tt::tt_fabric::EthChannelBuffer<RECEIVER_NUM_BUFFERS>, NUM_RECEIVER_CHANNELS> remote_receiver_channels;
     std::array<tt::tt_fabric::EthChannelBuffer<RECEIVER_NUM_BUFFERS>, NUM_RECEIVER_CHANNELS> local_receiver_channels;
     std::array<tt::tt_fabric::EthChannelBuffer<SENDER_NUM_BUFFERS>, NUM_SENDER_CHANNELS> remote_sender_channels;
@@ -1592,15 +1609,18 @@ void kernel_main() {
                 // Receiver channels local semaphore for managing flow control with the downstream EDM.
                 // The downstream EDM should be sending semaphore updates to this address any time it can
                 // accept a new message
-                const auto edm_vc0_forwarding_semaphore_address =
-                    is_2d_fabric ? edm_vc0_forwarding_semaphore
-                                 : get_semaphore<ProgrammableCoreType::ACTIVE_ETH>(edm_vc0_forwarding_semaphore);
-                const auto edm_vc0_teardown_semaphore_address =
-                    is_2d_fabric ? edm_vc0_teardown_semaphore
-                                 : get_semaphore<ProgrammableCoreType::ACTIVE_ETH>(edm_vc0_teardown_semaphore);
+                const auto local_sem_address_for_acks = is_2d_fabric
+                                                            ? local_sem_for_acks_from_downstream_edm[edm_index]
+                                                            : get_semaphore<ProgrammableCoreType::ACTIVE_ETH>(
+                                                                  local_sem_for_acks_from_downstream_edm[edm_index]);
+                const auto teardown_sem_address = is_2d_fabric
+                                                      ? local_sem_for_teardown_from_downstream_edm[edm_index]
+                                                      : get_semaphore<ProgrammableCoreType::ACTIVE_ETH>(
+                                                            local_sem_for_teardown_from_downstream_edm[edm_index]);
                 if constexpr (is_2d_fabric) {
-                    *reinterpret_cast<volatile uint32_t* const>(edm_vc0_forwarding_semaphore_address) = 0;
-                    *reinterpret_cast<volatile uint32_t* const>(edm_vc0_teardown_semaphore_address) = 0;
+                    // reset the handshake addresses to 0
+                    *reinterpret_cast<volatile uint32_t* const>(local_sem_address_for_acks) = 0;
+                    *reinterpret_cast<volatile uint32_t* const>(teardown_sem_address) = 0;
                 }
                 new (&downstream_edm_noc_interfaces[edm_index]) tt::tt_fabric::EdmToEdmSender<SENDER_NUM_BUFFERS>(
                     // persistent_mode -> hardcode to false for 1D because for 1D, EDM -> EDM
@@ -1620,8 +1640,8 @@ void kernel_main() {
 #else
                     local_sender_channel_1_connection_buffer_index_id,
 #endif
-                    reinterpret_cast<volatile uint32_t* const>(edm_vc0_forwarding_semaphore_address),
-                    reinterpret_cast<volatile uint32_t* const>(edm_vc0_teardown_semaphore_address),
+                    reinterpret_cast<volatile uint32_t* const>(local_sem_address_for_acks),
+                    reinterpret_cast<volatile uint32_t* const>(teardown_sem_address),
                     downstream_vc0_noc_interface_buffer_index_local_addr,  // keep common, since its a scratch noc read
                                                                            // dest.
                     receiver_channel_forwarding_data_cmd_buf_ids[0],
@@ -1637,6 +1657,19 @@ void kernel_main() {
     }
     if constexpr (enable_ring_support) {
         if (has_downstream_edm_vc1_buffer_connection) {
+            const auto local_sem_address_for_acks =
+                is_2d_fabric ? local_sem_for_acks_from_downstream_edm[NUM_USED_RECEIVER_CHANNELS - 1]
+                             : get_semaphore<ProgrammableCoreType::ACTIVE_ETH>(
+                                   local_sem_for_acks_from_downstream_edm[NUM_USED_RECEIVER_CHANNELS - 1]);
+            const auto teardown_sem_address =
+                is_2d_fabric ? local_sem_for_teardown_from_downstream_edm[NUM_USED_RECEIVER_CHANNELS - 1]
+                             : get_semaphore<ProgrammableCoreType::ACTIVE_ETH>(
+                                   local_sem_for_teardown_from_downstream_edm[NUM_USED_RECEIVER_CHANNELS - 1]);
+            if constexpr (is_2d_fabric) {
+                // reset the handshake addresses to 0
+                *reinterpret_cast<volatile uint32_t* const>(local_sem_address_for_acks) = 0;
+                *reinterpret_cast<volatile uint32_t* const>(teardown_sem_address) = 0;
+            }
             new (&downstream_edm_noc_interfaces[NUM_USED_RECEIVER_CHANNELS - 1])
                 tt::tt_fabric::EdmToEdmSender<SENDER_NUM_BUFFERS>(
                     // persistent_mode -> hardcode to false because for EDM -> EDM
@@ -1655,8 +1688,8 @@ void kernel_main() {
 #else
                     local_sender_channel_2_connection_buffer_index_id,
 #endif
-                    reinterpret_cast<volatile uint32_t* const>(edm_vc1_forwarding_semaphore_address),
-                    reinterpret_cast<volatile uint32_t* const>(edm_vc1_teardown_semaphore_address),
+                    reinterpret_cast<volatile uint32_t* const>(local_sem_address_for_acks),
+                    reinterpret_cast<volatile uint32_t* const>(teardown_sem_address),
                     downstream_vc1_noc_interface_buffer_index_local_addr,
                     receiver_channel_forwarding_data_cmd_buf_ids[1],
                     receiver_channel_forwarding_sync_cmd_buf_ids[1]);
@@ -1741,6 +1774,7 @@ void kernel_main() {
         uint32_t edm_index = 0;
         while (has_downstream_edm) {
             if (has_downstream_edm & 0x1) {
+                // open connections with available downstream edms
                 downstream_edm_noc_interfaces[edm_index].template open<true, tt::tt_fabric::worker_handshake_noc>();
                 *downstream_edm_noc_interfaces[edm_index].from_remote_buffer_slot_rdptr_ptr = 0;
             }
