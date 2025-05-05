@@ -1919,3 +1919,55 @@ def test_binary_subtile_no_bcast(a_shape, b_shape, device):
 
     assert output_tensor.shape == torch_output_tensor.shape
     assert ttnn.pearson_correlation_coefficient(torch_output_tensor, output_tensor) >= 0.99988
+
+
+profile_a_b_shape_pairs = [
+    # ((32, 32), (1, 32)),
+    # ((1280, 320), (1, 320)),
+    # ((8192, 8192), (1, 8192)),
+    # [[1, 1, 8192, 8192], [1, 1, 8192, 8192]],
+    # [[1, 4, 2048, 8192], [1, 1, 2048, 8192]],
+    # [[4, 1, 2048, 8192], [1, 1, 2048, 8192]],
+    [[4, 4, 2048, 2048], [1, 1, 2048, 2048]],
+]
+
+
+@pytest.mark.parametrize(
+    "dtype_pt, dtype_tt",
+    ((torch.bfloat16, ttnn.bfloat16),),
+)
+@pytest.mark.parametrize(
+    "memory_config_input",
+    [ttnn.DRAM_MEMORY_CONFIG],
+)
+@pytest.mark.parametrize("a_and_b_shape", profile_a_b_shape_pairs)
+def test_binary_bcast_profile(device, dtype_pt, dtype_tt, a_and_b_shape, memory_config_input):
+    ttnn.enable_program_cache(device)
+    torch.manual_seed(0)
+    a_shape, b_shape = a_and_b_shape
+
+    torch_input_tensor_a = gen_func_with_cast_tt(partial(torch_random, low=-50, high=50, dtype=dtype_pt), dtype_tt)(
+        a_shape
+    )
+    torch_input_tensor_b = gen_func_with_cast_tt(partial(torch_random, low=-50, high=50, dtype=dtype_pt), dtype_tt)(
+        b_shape
+    )
+
+    torch_result = torch.add(torch_input_tensor_a, torch_input_tensor_b)
+
+    input_tensor_a = ttnn.from_torch(
+        torch_input_tensor_a, layout=ttnn.TILE_LAYOUT, device=device, memory_config=memory_config_input
+    )
+    input_tensor_b = ttnn.from_torch(
+        torch_input_tensor_b, layout=ttnn.TILE_LAYOUT, device=device, memory_config=memory_config_input
+    )
+    for _ in range(2):
+        output = ttnn.add(input_tensor_a, input_tensor_b, memory_config=memory_config_input, use_legacy=False)
+        output = ttnn.to_torch(output)
+
+        assert (
+            output.shape == torch_result.shape
+        ), f"Output shape {output.shape} does not match torch shape {torch_result.shape}"
+
+        torch.testing.assert_close(torch_result, output)
+        ttnn.synchronize_device(device)
