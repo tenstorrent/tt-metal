@@ -13,11 +13,16 @@ on:
 jobs:
   test-tt-metal:
     name: 🔧 LLK unit tests
-    env:
-      DOCKER_IMAGE: ghcr.io/tenstorrent/tt-metal/tt-metalium/ubuntu-22.04-ci-build-amd64
-      IMAGE_HASH: latest
     runs-on: ${{ inputs.runs_on }}
     timeout-minutes: 40
+    container:
+      image: ghcr.io/tenstorrent/tt-metal/tt-metalium/ubuntu-22.04-ci-build-amd64:latest
+      options: --user root --device /dev/tenstorrent
+      volumes:
+        - /dev/hugepages:/dev/hugepages
+        - /dev/hugepages-1G:/dev/hugepages-1G
+        - /lib/modules:/lib/modules
+
     steps:
       - name: Checkout tt-metal repository with submodules
         uses: actions/checkout@v4
@@ -56,25 +61,10 @@ jobs:
 
           cd ../../../../
 
-      - name: Log in to Docker registry
-        uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.repository_owner }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Pull Docker image
-        run: |
-          docker pull ${DOCKER_IMAGE}:${IMAGE_HASH}
-
       - name: Run tests in Docker container
         run: |
-          docker run --device /dev/tenstorrent --rm \
-            -v ${{ github.workspace }}:/workspace \
-            -v /dev/hugepages-1G:/dev/hugepages-1G \
-            -w /workspace/tt-metal \
-            -e TT_METAL_HOME=/workspace/tt-metal \
-            -e PYTHONPATH=/workspace/tt-metal \
-            ${DOCKER_IMAGE}:${IMAGE_HASH} \
-            bash -c "./build_metal.sh --build-metal-tests && \
-              TT_METAL_SLOW_DISPATCH_MODE=1 ./build_Release/test/tt_metal/unit_tests_llk"
+          cd tt-metal
+          export TT_METAL_HOME=$(pwd)
+          export PYTHONPATH=$(pwd)
+          ./build_metal.sh --build-metal-tests
+          TT_METAL_SLOW_DISPATCH_MODE=1 ./build_Release/test/tt_metal/unit_tests_llk

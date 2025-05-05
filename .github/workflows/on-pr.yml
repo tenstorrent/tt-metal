@@ -27,12 +27,20 @@ jobs:
     secrets: inherit
 
   setup-and-test-wormhole:
-    name: "🧪 Perform checks (Wormhole)"
+    name: "🌀 Perform checks (Wormhole)"
     uses: ./.github/workflows/setup-and-test.yml
     needs: build-images
     with:
       docker_image: ${{ needs.build-images.outputs.docker-image }}
       runs_on: tt-beta-ubuntu-2204-n150-large-stable
+
+  setup-and-test-blackhole:
+    name: "🕳️ Perform checks (Blackhole)"
+    uses: ./.github/workflows/setup-and-test.yml
+    needs: build-images
+    with:
+      docker_image: ${{ needs.build-images.outputs.docker-image }}
+      runs_on: p150
 
   check-all-green:
     name: "✅ Check all green"
@@ -41,6 +49,7 @@ jobs:
       - pre-commit
       - build-images
       - setup-and-test-wormhole
+      - setup-and-test-blackhole
     runs-on: ubuntu-latest
     steps:
       - name: Check if the required jobs succeeded or failed
