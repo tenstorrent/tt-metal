@@ -725,7 +725,8 @@ void run_receiver_channel_step(
         bool unflushed_writes = !completion_counter.is_caught_up_to(wr_sent_counter);
         auto receiver_buffer_index = completion_counter.get_buffer_index();
         bool next_trid_flushed = receiver_channel_trid_tracker.transaction_flushed(receiver_buffer_index);
-        bool can_send_completion = unflushed_writes && next_trid_flushed;
+        bool can_send_completion =
+            unflushed_writes && next_trid_flushed && !internal_::eth_txq_is_busy(DEFAULT_ETH_TXQ);
         if (can_send_completion) {
             receiver_send_completion_ack(receiver_channel_pointers.get_src_chan_id(receiver_buffer_index));
             receiver_channel_trid_tracker.clear_trid_at_buffer_slot(receiver_buffer_index);
