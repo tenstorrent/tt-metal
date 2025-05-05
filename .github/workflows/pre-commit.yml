@@ -64,8 +64,8 @@ jobs:
               issue_number: context.payload.pull_request.number,
               body:
                 "Thank you for your contribution! 🚀\n\n" +
-                "You can run tt-metal integration tests by adding the `run-integration-tests` label " +
-                "to this pull request.\n\n" +
+                "You can run tt-metal integration tests by adding the `blackole-integration-tests` and/or " +
+                "`wormhole-integration-tests` labels to this pull request.\n\n" +
                 "📖 For more information, please refer to our [CONTRIBUTING.md](" +
                 "https://github.com/tenstorrent/tt-llk/blob/main/CONTRIBUTING.md)."
             });
