@@ -21,8 +21,8 @@ void MAIN {
 
     constexpr uint32_t cb_in = tt::CBIndex::c_0;
     constexpr uint32_t cb_out = tt::CBIndex::c_1;
-    constexpr uint32_t cb_zero = tt::CBIndex::c_16;
-    constexpr uint32_t cb_intermed = tt::CBIndex::c_24;
+    constexpr uint32_t cb_zero = tt::CBIndex::c_2;
+    constexpr uint32_t cb_intermed = tt::CBIndex::c_3;
 
     constexpr uint32_t TILE_DEST = 0;
     constexpr uint32_t TILE_ACC = 1;

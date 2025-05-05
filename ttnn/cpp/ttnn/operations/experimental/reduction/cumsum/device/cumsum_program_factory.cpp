@@ -87,8 +87,8 @@ CumSumDeviceOperation::SingleCore::cached_program_t CumSumDeviceOperation::Singl
 
     constexpr uint32_t cb_in_index = CBIndex::c_0;
     constexpr uint32_t cb_out_index = CBIndex::c_1;
-    constexpr uint32_t cb_zero_index = CBIndex::c_16;
-    constexpr uint32_t cb_intermed_index = CBIndex::c_24;
+    constexpr uint32_t cb_zero_index = CBIndex::c_2;
+    constexpr uint32_t cb_intermed_index = CBIndex::c_3;
 
     // Device operation does not handle on-the-fly type conversion yet and we ensured that input_dtype == ouptut_dtype
     DataFormat in_df = datatype_to_dataformat_converter(output_dtype);

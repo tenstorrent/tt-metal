@@ -18,7 +18,7 @@ void kernel_main() {
     uint32_t HtWt = get_arg_val<uint32_t>(4);
 
     constexpr uint32_t cb_out = tt::CBIndex::c_0;
-    constexpr uint32_t cb_zero = tt::CBIndex::c_16;
+    constexpr uint32_t cb_zero = tt::CBIndex::c_2;
 
     const auto& input_data_format = get_dataformat(cb_out);
 
