@@ -19,6 +19,7 @@ target_link_libraries(
         Tracy::TracyClient
         Taskflow::Taskflow
         TT::Metalium::HostDevCommon
+        tt-logger::tt-logger
 )
 
 if(DEFINED VERSION_HASH)

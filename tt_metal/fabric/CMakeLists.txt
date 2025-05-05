@@ -47,6 +47,7 @@ target_link_libraries(
         yaml-cpp::yaml-cpp
         Metalium::Metal::Impl
         TT::Metalium::HostDevCommon
+        tt-logger::tt-logger
 )
 
 target_precompile_headers(

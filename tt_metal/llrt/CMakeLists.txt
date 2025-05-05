@@ -33,6 +33,7 @@ target_link_libraries(
         hw
         fmt::fmt-header-only
         umd::device
+        tt-logger::tt-logger
 )
 
 add_library(bh_hal OBJECT ${BH_HAL_SRC})
@@ -59,6 +60,7 @@ target_link_libraries(
         hw
         fmt::fmt-header-only
         umd::device
+        tt-logger::tt-logger
 )
 
 set(LLRT_SRC
@@ -91,6 +93,7 @@ target_link_libraries(
         magic_enum::magic_enum
         span
         TT::Metalium::Common
+        tt-logger::tt-logger
 )
 target_include_directories(llrt PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_compile_options(llrt PRIVATE -Wno-int-to-pointer-cast)

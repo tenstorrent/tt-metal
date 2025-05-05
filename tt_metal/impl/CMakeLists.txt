@@ -115,6 +115,7 @@ target_link_libraries(
         TT::Metalium::HostDevCommon
         Metalium::Metal::Hardware
         Metalium::Metal::LLRT
+        tt-logger::tt-logger
 )
 
 target_include_directories(

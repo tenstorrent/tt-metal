@@ -8,4 +8,5 @@ target_link_libraries(
     PRIVATE
         Metalium::Metal::Impl
         TT::Metalium::HostDevCommon
+        tt-logger::tt-logger
 )

@@ -23,4 +23,5 @@ target_link_libraries(
         Metalium::Metal::Impl
         Metalium::Metal::LLRT
         TT::Metalium::HostDevCommon
+        tt-logger::tt-logger
 )

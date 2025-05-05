@@ -4,8 +4,6 @@ if(ENABLE_COVERAGE AND CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
     add_link_options(--coverage)
 endif()
 
-link_libraries(tt-logger::tt-logger)
-
 add_library(tt_metal)
 add_library(TT::Metalium ALIAS tt_metal)
 add_library(Metalium::Metal ALIAS tt_metal) # For backwards compatibility
@@ -317,6 +315,7 @@ target_link_libraries(
         TT::Metalium::HostDevCommon
         Reflect::Reflect
         TT::STL
+        tt-logger::tt-logger
     PRIVATE
         Metalium::Metal::Impl
         metal_common_libs
