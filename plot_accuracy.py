@@ -72,6 +72,7 @@ def plot_common_accuracy(
     ax.xaxis.set_major_locator(xticker)
 
     def xticks_formatter(x, pos):
+        x = float(x)  # Ensure x is a floating point number
         if abs(x) >= 100:
             exponent = int(math.log10(abs(x)))
             sign = "-" if x < 0 else ""
@@ -231,6 +232,7 @@ class PlotBasic:
 class PlotExp:
     def override_accuracy(self, ax):
         ax.set_xscale("symlog", base=2)
+        ax.set_xlim(-100, 100)
         pass
 
     def override_accuracy_zoom(self, ax):
@@ -577,6 +579,22 @@ class PlotTanhshrink:
         pass
 
 
+class PlotReciprocal:
+    def override_accuracy(self, ax):
+        ax.set_xlim(-1e7, 1e7)
+        pass
+
+    def override_accuracy_zoom(self, ax):
+        ax.set_xlim(-0.8, 0.8)
+        pass
+
+    def override_absolute(self, ax):
+        pass
+
+    def override_values(self, ax):
+        pass
+
+
 Y_OFFSET = 0  # Offset y=0 curve, to make f(x)=0 values visible
 
 all_override_plot_funs = {
@@ -612,6 +630,7 @@ all_override_plot_funs = {
     # Miscellaneous functions
     "sqrt": (PlotSqrt(), (0, 100)),
     "rsqrt": (PlotBasic(zoomed_in_xrange=[0, 3], zoomed_in_yrange=[0, 1]), (0, 3)),
+    "reciprocal": (PlotReciprocal(), (0, 3)),
     "rsqrt_approx": None,
     "digamma": (PlotDiagamma(), (0, 10)),
     "lgamma": (PlotLgamma(), (0, 10)),
@@ -942,6 +961,7 @@ def main():
         ("sqrt", "bfloat16", 32),
         ("rsqrt", "bfloat16", 32),
         ("rsqrt_approx", "bfloat16", 32),
+        ("reciprocal", "bfloat16", 32),
         ("digamma", "bfloat16", 32),
         ("lgamma", "bfloat16", 32),
         ("tanhshrink", "bfloat16", 32),
@@ -978,6 +998,7 @@ def main():
         ("sqrt", "bfloat16", 1),
         ("rsqrt_approx", "bfloat16", 1),
         ("rsqrt", "bfloat16", 1),
+        ("reciprocal", "bfloat16", 1),
         ("digamma", "bfloat16", 1),
         ("lgamma", "bfloat16", 1),
         ("tanhshrink", "bfloat16", 1),
