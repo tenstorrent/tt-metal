@@ -33,7 +33,8 @@ void kernel_main() {
 
     const int32_t ACC_START_VALUE_F32{caster.u};
     constexpr int32_t ACC_START_VALUE_F16{0x3F80};
-    // TODO(jbbieniekTT): the below ones will work only if applied LLK is preconfigured appropriately for those.
+    // TODO(jbbieniekTT): the below ones will work only if applied LLK is preconfigured appropriately for those (issue
+    // #21108)
     constexpr int32_t ACC_START_VALUE_I32{0x1};
     constexpr int32_t ACC_START_VALUE_I16{0x1};
     constexpr int32_t ACC_START_VALUE_I8{0x1};
@@ -77,7 +78,7 @@ void kernel_main() {
             break;
     }
 
-    // TODO(jbbieniekTTT): issue #
+    // TODO(jbbieniekTT): issue #21108
     int32_t* data_one = (int32_t*)data_one_addr;
     for (uint32_t i = 0; i < ublock_size_bytes / sizeof(data_one); i++) {
         data_one[i] = scaler;

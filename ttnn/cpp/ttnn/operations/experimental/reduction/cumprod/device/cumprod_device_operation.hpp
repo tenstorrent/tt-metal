@@ -34,7 +34,7 @@ struct CumprodDeviceOperation {
     using spec_return_value_t = ttnn::TensorSpec;
     using tensor_return_value_t = Tensor;
 
-    struct SingleCoreCumprodProgramFactory {
+    struct MultiCoreCumprodProgramFactory {
         enum class CumprodCB : std::underlying_type_t<tt::CBIndex> {
             SRC = tt::CBIndex::c_0,
             DST = tt::CBIndex::c_1,
@@ -43,9 +43,11 @@ struct CumprodDeviceOperation {
         };
 
         static constexpr std::array<const char*, 3> KERNEL_PATHS{
-            "ttnn/cpp/ttnn/operations/experimental/reduction/cumprod/device/kernels/dataflow/cumprod_sc_reader.cpp",
-            "ttnn/cpp/ttnn/operations/experimental/reduction/cumprod/device/kernels/compute/cumprod_single_core.cpp",
-            "ttnn/cpp/ttnn/operations/experimental/reduction/cumprod/device/kernels/dataflow/cumprod_sc_writer.cpp"};
+            "ttnn/cpp/ttnn/operations/experimental/reduction/cumprod/device/kernels/dataflow/"
+            "reader_multicore_cumprod.cpp",
+            "ttnn/cpp/ttnn/operations/experimental/reduction/cumprod/device/kernels/compute/cumprod_multicore.cpp",
+            "ttnn/cpp/ttnn/operations/experimental/reduction/cumprod/device/kernels/dataflow/"
+            "writer_multicore_cumprod.cpp"};
         struct shared_variables_t {
             KernelHandle cumprod_reader_kernel_id;
             KernelHandle cumprod_compute_kernel_id;
@@ -80,11 +82,9 @@ struct CumprodDeviceOperation {
             const std::vector<uint32_t>& runtime_args = {});
 
         static uint32_t calc_input_tile_offset(const Shape& input_shape, const int32_t& dim);
-        // static uint32_t mul_nontile_ranks_above_dim(const Shape& input_shape, const int32_t& dim);
-        // static uint32_t calc_htwt(const Shape& input_shape);
     };
 
-    using program_factory_t = std::variant<SingleCoreCumprodProgramFactory>;
+    using program_factory_t = std::variant<MultiCoreCumprodProgramFactory>;
     using invocation_result_t = std::tuple<operation_attributes_t, tensor_args_t>;
 
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);

@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include "pybind11/pybind_fwd.hpp"
+#include "pybind11/pybind11.h"
 
 namespace ttnn::operations::experimental::reduction::cumprod::detail {
 namespace py = pybind11;
