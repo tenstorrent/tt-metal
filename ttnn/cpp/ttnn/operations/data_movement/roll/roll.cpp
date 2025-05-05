@@ -12,14 +12,28 @@
 namespace ttnn::operations::data_movement {
 
 ttnn::Tensor RollOperation::invoke(
-    const ttnn::Tensor& input_tensor, const ttnn::SmallVector<int>& shift, const ttnn::SmallVector<int>& dim) {
+    const ttnn::Tensor& input_tensor, const ttnn::SmallVector<int>& shift, const ttnn::SmallVector<int>& input_dims) {
     std::vector<int> shifts(shift.begin(), shift.end());
-    std::vector<int> dims(dim.begin(), dim.end());
+    std::vector<int> dims(input_dims.begin(), input_dims.end());
+
+    ttnn::Tensor result = input_tensor;
+    auto size = result.get_logical_shape();
+    int num_dims = size.rank();
+
     TT_FATAL(
         !shifts.empty() && shifts.size() == dims.size(),
         "Roll expects shifts {} and dims {} to have the same length",
         shifts.size(),
         dims.size());
+
+    for (int dim : dims) {
+        TT_FATAL(
+            dim >= -num_dims && dim < num_dims,
+            "Invalid dimension index {}. The dimension must be within the range [{}, {}].",
+            dim,
+            -num_dims,
+            num_dims - 1);
+    }
 
     std::vector<int> adjusted_shifts = shifts;
 
@@ -31,18 +45,7 @@ ttnn::Tensor RollOperation::invoke(
         adjusted_shifts[i] = ((shift % shift_size) + shift_size) % shift_size;
     }
 
-    ttnn::Tensor result = input_tensor;
-    auto size = result.get_logical_shape();
-    int num_dims = size.rank();
-
-    for (int dim : dims) {
-        TT_FATAL(
-            dim >= -num_dims && dim < num_dims,
-            "Invalid dimension index {}. The dimension must be within the range [{}, {}].",
-            dim,
-            -num_dims,
-            num_dims - 1);
-    }
+    const ttnn::SmallVector<int> stride_vector(num_dims, 1);
 
     for (size_t i = 0; i < adjusted_shifts.size(); ++i) {
         int dim = dims[i];
@@ -68,8 +71,8 @@ ttnn::Tensor RollOperation::invoke(
         start_right[dim] = 0;
         end_right[dim] = size[dim] - shift;
 
-        ttnn::Tensor left_part = ttnn::slice(result, start_left, end_left, ttnn::SmallVector<int>(num_dims, 1));
-        ttnn::Tensor right_part = ttnn::slice(result, start_right, end_right, ttnn::SmallVector<int>(num_dims, 1));
+        ttnn::Tensor left_part = ttnn::slice(result, start_left, end_left, stride_vector);
+        ttnn::Tensor right_part = ttnn::slice(result, start_right, end_right, stride_vector);
 
         std::vector<ttnn::Tensor> tensors_to_concat = {left_part, right_part};
         result = ttnn::concat(tensors_to_concat, dim);
