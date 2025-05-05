@@ -9,6 +9,7 @@ from models.experimental.stable_diffusion_xl_base.tt.tt_timesteps import TtTimes
 from diffusers import UNet2DConditionModel
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.utility_functions import torch_random
+from loguru import logger
 
 
 @pytest.mark.parametrize(
@@ -43,4 +44,5 @@ def test_timesteps(device, input_shape, module_path, num_channels, use_program_c
     del unet
     gc.collect()
 
-    assert_with_pcc(torch_output_tensor, output_tensor, 0.999)
+    _, pcc_message = assert_with_pcc(torch_output_tensor, output_tensor, 0.999)
+    logger.info(f"PCC is: {pcc_message}")
