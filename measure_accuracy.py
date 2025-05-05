@@ -42,12 +42,34 @@ datatypes_parameters = {
     },
 }
 
+
+def exp_accurate_python(input_tensor, output_tensor):
+    # setsgn => get sign of input and then multiply input by it to make numbers positive
+    # this shouldn't alter accuracy as -1 and 1 are exact and so are their multiples
+    tensor_sign = ttnn.sign(input_tensor, 0)
+    tensor_input_positive = input_tensor * tensor_sign
+
+    # _sfpu_exp_
+    uint32_tensor = ttnn.to_memory_config(tensor_input_positive, tensor_input_positive.layout, ttnn.UINT32)
+    uint32_exponent = 1
+
+    # sfpu_reciprocal
+
+    pass
+
+
 operations_dict = {
     # Exponential functions
     "exp": (torch.exp, ttnn.exp, math.exp, "exp"),
     "exp_approx": (
         torch.exp,
         lambda x, output_tensor: ttnn.exp(x, fast_and_approximate_mode=True, output_tensor=output_tensor),
+        None,
+        "exp",
+    ),
+    "exp_accurate_python": (
+        torch.exp,
+        exp_accurate_python,
         None,
         "exp",
     ),
@@ -136,6 +158,12 @@ operations_dict = {
         lambda x, output_tensor: ttnn.rsqrt(x, fast_and_approximate_mode=True, output_tensor=output_tensor),
         None,
         "rsqrt",
+    ),
+    "reciprocal": (
+        torch.reciprocal,
+        ttnn.reciprocal,
+        None,
+        "reciprocal",
     ),
     "digamma": (
         torch.digamma,
@@ -530,6 +558,7 @@ def main(args):
         "sqrt",
         "rsqrt",
         "rsqrt_approx",
+        "reciprocal",
         "digamma",
         "lgamma",
         "tanhshrink",
@@ -565,10 +594,11 @@ def main(args):
         "sqrt",
         "rsqrt",
         "rsqrt_approx",
+        "reciprocal",
     ]
 
-    all_operations += powers
-    highres_operations += powers
+    # all_operations += powers
+    # highres_operations += powers
 
     success_count = 0
     successfull_operations = []
