@@ -245,8 +245,7 @@ inline void calculate_acos() {
 
 template <bool APPROXIMATION_MODE>
 void atan_init() {
-    vConstFloatPrgm0 = 1.442695f;  // ln2_recip
-    vConstFloatPrgm1 = 2.0f;
+    recip_init<APPROXIMATION_MODE>();
 }
 
 }  // namespace sfpu

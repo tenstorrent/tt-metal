@@ -39,8 +39,7 @@ inline void calculate_rsqrt() {
 
 template <bool APPROXIMATION_MODE>
 inline void rsqrt_init() {
-    vConstFloatPrgm0 = 1.442695f;  // ln2_recip
-    vConstFloatPrgm1 = 2.0f;
+    recip_init<APPROXIMATION_MODE>();
 }
 
 }  // namespace sfpu
