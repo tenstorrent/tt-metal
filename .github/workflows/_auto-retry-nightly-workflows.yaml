@@ -25,6 +25,7 @@ on:
       - "(TG) TG model perf tests"
       - "(TG) TG nightly tests"
       - "(TG) TG unit tests"
+      - "(Single-card) Frequent model and ttnn tests"
       - "Package and release"
     types:
       - completed

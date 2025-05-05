@@ -12,10 +12,6 @@ on:
       docker-image:
         required: true
         type: string
-      with-retries:
-        default: true
-        type: boolean
-        description: "Re-run failed jobs (max 3)"
 
 jobs:
   fd-nightly:
