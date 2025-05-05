@@ -9,7 +9,9 @@ run_falcon7b_func() {
 
 run_mistral7b_func() {
 
-  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest models/demos/wormhole/mistral7b/demo/demo.py
+  mistral7b=/mnt/MLPerf/tt_dnn-models/Mistral/hub/models--mistralai--Mistral-7B-Instruct-v0.3/snapshots/e0bc86c23ce5aae1db576c8cca6f06f1f73af2db
+  mistral_cache=/mnt/MLPerf/tt_dnn-models/Mistral/TT_CACHE/Mistral-7B-Instruct-v0.3
+  HF_MODEL=$mistral7b TT_CACHE_PATH=$mistral_cache WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/tt_transformers/tests/test_accuracy.py -k perf --timeout 1200; fail+=$?
 
 }
 
@@ -145,7 +147,13 @@ run_stable_diffusion_func() {
 
 run_mistral7b_perf() {
 
-  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest models/demos/wormhole/mistral7b/demo/demo_with_prefill.py
+  # To ensure a proper perf measurement and dashboard upload of Mistral-7B N150, we have to run them on the N300 perf pipeline for now
+  mistral7b=/mnt/MLPerf/tt_dnn-models/Mistral/hub/models--mistralai--Mistral-7B-Instruct-v0.3/snapshots/e0bc86c23ce5aae1db576c8cca6f06f1f73af2db
+  mistral_cache=/mnt/MLPerf/tt_dnn-models/Mistral/TT_CACHE/Mistral-7B-Instruct-v0.3
+  # Run Mistral-7B-v0.3 for N150
+  MESH_DEVICE=N150 HF_MODEL=$mistral7b TT_CACHE_PATH=$mistral_cache WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/tt_transformers/demo/simple_text_demo.py --timeout 600; fail+=$?
+  # Run Mistral-7B-v0.3 for N300
+  MESH_DEVICE=N300 HF_MODEL=$mistral7b TT_CACHE_PATH=$mistral_cache WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/tt_transformers/demo/simple_text_demo.py --timeout 600; fail+=$?
 
 }
 
