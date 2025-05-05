@@ -4,8 +4,7 @@
 
 #pragma once
 
-#include "ckernel.h"
-#include "ckernel_defs.h"
+#include "ckernel_addrmod.h"
 #include "sfpi.h"
 
 namespace ckernel {
@@ -17,12 +16,12 @@ inline void binary_bitwise_and_uint16(const uint dst_offset) {
     for (int d = 0; d < ITERATIONS; d++) {
         constexpr uint dst_tile_size = 64;
         // operand A - uint16
-        TTI_SFPLOAD(p_sfpu::LREG0, 6, ADDR_MOD_3, 0);
+        TTI_SFPLOAD(p_sfpu::LREG0, LO16, ADDR_MOD_7, 0);
         // operand B - uint16
-        TT_SFPLOAD(p_sfpu::LREG1, 6, ADDR_MOD_3, dst_offset * dst_tile_size);
+        TT_SFPLOAD(p_sfpu::LREG1, LO16, ADDR_MOD_7, dst_offset * dst_tile_size);
 
         TTI_SFPAND(0, p_sfpu::LREG1, p_sfpu::LREG0, 4);
-        TTI_SFPSTORE(p_sfpu::LREG0, 6, ADDR_MOD_7, 0);
+        TTI_SFPSTORE(p_sfpu::LREG0, LO16, ADDR_MOD_7, 0);
         dst_reg++;
     }
 }
