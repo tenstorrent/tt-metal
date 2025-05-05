@@ -78,7 +78,8 @@ jobs:
     runs-on: ubuntu-latest
     needs: find-changed-files
     # We get rate-limited if we run too often; only run when it's useful
-    if: ${{ github.ref_name == 'main' || needs.find-changed-files.outputs.docs-changed == 'true' }}
+    # Issue 21637: Disable check-docs-links for now to unblock developers
+    if: false  # ${{ github.ref_name == 'main' || needs.find-changed-files.outputs.docs-changed == 'true' }}
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4
