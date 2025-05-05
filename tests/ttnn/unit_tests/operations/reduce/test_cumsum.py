@@ -203,13 +203,13 @@ def test_cumsum_backward(size, dim, dtypes, device):
 
     (torch_dtype, ttnn_dtype) = dtypes
 
+<<<<<<< HEAD
     # Generate integer input on [-2; 2];
     # by generating around 0, this avoids FP-related issues when adding large sums with small inputs
     # which are not handled yet
     torch_input_tensor = torch.randint(-2, 3, size=size, dtype=torch_dtype, requires_grad=True)
     input_tensor = ttnn.from_torch(torch_input_tensor, device=device, layout=ttnn.Layout.TILE)
 
-    (tt_output_grad, tt_input_grad, torch_output_grad) = get_backward_tensors(size, size, device)
 
     torch_output = torch.cumsum(torch_input_tensor, dim)
     torch_output.backward(torch_output_grad)
@@ -299,3 +299,53 @@ def test_cumsum_failing_cases(
     ttnn_preallocated_tensor = ttnn.zeros(output_shape, dtype=output_dtype)
     with pytest.raises(RuntimeError):
         ttnn.cumsum(ttnn_input_tensor, memory_config=memory_config, dim=dim, out=ttnn_preallocated_tensor)
+
+    torch_input_tensor = torch.randint(-2, 3, size=size, dtype=torch_dtype)
+    input_tensor = ttnn.from_torch(torch_input_tensor, device=device, layout=ttnn.Layout.TILE)
+
+    expected_output_dtype = ttnn_dtype if ttnn_dtype is not None else input_tensor.dtype
+
+    tensor_rank = len(size)
+
+# OFT
+
+
+@pytest.mark.parametrize(
+    "size, dim",
+    [
+        ([1, 256, 47, 153], -1),
+        ([1, 256, 47, 153], -2),
+        ([1, 256, 24, 77], -1),
+        ([1, 256, 24, 77], -2),
+        ([1, 256, 12, 39], -1),
+        ([1, 256, 12, 39], -2),
+    ],
+)
+@pytest.mark.parametrize(
+    "dtypes",
+    [
+        (torch.float32, ttnn.bfloat16),
+    ],
+)
+def test_cumsum_oft(size, dim, dtypes, device):
+    torch.manual_seed(29112024)
+
+    (torch_dtype, ttnn_dtype) = dtypes
+
+    torch_input_tensor = torch.randint(-2, 3, size=size, dtype=torch_dtype)
+    input_tensor = ttnn.from_torch(torch_input_tensor, device=device, layout=ttnn.Layout.TILE)
+
+    expected_output_dtype = ttnn_dtype if ttnn_dtype is not None else input_tensor.dtype
+
+    tensor_rank = len(size)
+
+    if not is_supported(tensor_rank, dim, expected_output_dtype):
+        return
+
+    output_tensor = ttnn.cumsum(input_tensor, dim=dim, dtype=ttnn_dtype)
+
+    torch_output = ttnn.to_torch(output_tensor, dtype=torch_dtype)
+
+    expected_output = torch.cumsum(torch_input_tensor, dim=dim, dtype=torch_dtype)
+
+    assert_with_pcc(expected_output, torch_output)

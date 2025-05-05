@@ -188,3 +188,377 @@ def test_conv_dram(
             num_slices=num_slices,
         ),
     )
+
+
+# OFT
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
+@pytest.mark.parametrize("batch_size", [1])
+@pytest.mark.parametrize(
+    "output_channels, input_channels, input_height, input_width, shard_layout, config",
+    (
+        (256, 256, 159, 159, ttnn.TensorMemoryLayout.HEIGHT_SHARDED, {"act_block_h": 32}),
+        (256, 256, 159, 159, ttnn.TensorMemoryLayout.WIDTH_SHARDED, None),
+        (256, 256, 159, 159, ttnn.TensorMemoryLayout.BLOCK_SHARDED, None),
+        (256, 256, 159, 159, None, None),
+    ),
+)
+@pytest.mark.parametrize(
+    "weights_dtype",
+    [ttnn.bfloat8_b, ttnn.bfloat16],
+)
+@pytest.mark.parametrize(
+    "activations_dtype",
+    [ttnn.bfloat8_b, ttnn.bfloat16],
+)
+@pytest.mark.parametrize(
+    "fp32_accum",
+    [False],
+)
+@pytest.mark.parametrize(
+    "packer_l1_acc",
+    [False],
+)
+@pytest.mark.parametrize(
+    "filter, stride, padding",
+    [
+        [3, 1, 1],
+    ],
+)
+@pytest.mark.parametrize("math_fidelity", [ttnn.MathFidelity.LoFi])
+@pytest.mark.parametrize("output_layout", [ttnn.TILE_LAYOUT])
+def test_conv_oft1(
+    device,
+    torch_tensor_map,
+    use_program_cache,
+    math_fidelity,
+    activations_dtype,
+    weights_dtype,
+    batch_size,
+    output_channels,
+    input_channels,
+    input_height,
+    input_width,
+    shard_layout,
+    config,
+    filter,
+    stride,
+    padding,
+    output_layout,
+    fp32_accum,
+    packer_l1_acc,
+):
+    if output_layout == ttnn.ROW_MAJOR_LAYOUT and shard_layout == WS:
+        pytest.skip("Bug in Width Sharded Row Major Tensor Creation when height%32!=0. #19408")
+
+    if output_layout == ttnn.ROW_MAJOR_LAYOUT and activations_dtype == ttnn.bfloat8_b:
+        pytest.skip("Row major layout not compatible with bfloat8_b")
+
+    if output_layout == ttnn.ROW_MAJOR_LAYOUT and activations_dtype == ttnn.bfloat16 and packer_l1_acc and fp32_accum:
+        pytest.skip("skipping due to pack_untilize_dst issue!")
+
+    run_conv(
+        device,
+        torch_tensor_map,
+        math_fidelity,
+        activations_dtype,
+        weights_dtype,
+        batch_size,
+        output_channels,
+        input_channels,
+        input_height,
+        input_width,
+        filter,
+        filter,
+        stride,
+        stride,
+        padding,
+        config,
+        shard_layout=shard_layout,
+        output_layout=output_layout,
+        has_bias=True,
+        fp32_accum=fp32_accum,
+        packer_l1_acc=packer_l1_acc,
+        preprocess_weights_on_device=True,
+        run_twice=True,
+    )
+
+
+# Update Configs
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
+@pytest.mark.parametrize("batch_size", [1])
+@pytest.mark.parametrize(
+    "output_channels, input_channels, input_height, input_width, shard_layout, config, weights_dtype, activations_dtype, fp32_accum, packer_l1_acc, filter, stride, padding",
+    (
+        (64, 3, 370, 1224, None, None, ttnn.bfloat8_b, ttnn.bfloat16, False, False, 7, 2, 3),  # passed
+        (
+            64,
+            64,
+            93,
+            306,
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            {"act_block_h": 32},
+            ttnn.bfloat8_b,
+            ttnn.bfloat16,
+            False,
+            False,
+            3,
+            1,
+            1,
+        ),  # passed
+        (
+            128,
+            64,
+            93,
+            306,
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            {"act_block_h": 32},
+            ttnn.bfloat8_b,
+            ttnn.bfloat16,
+            False,
+            False,
+            3,
+            2,
+            1,
+        ),  # passed
+        (
+            128,
+            128,
+            47,
+            153,
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            {"act_block_h": 32},
+            ttnn.bfloat8_b,
+            ttnn.bfloat16,
+            False,
+            False,
+            3,
+            1,
+            1,
+        ),  # passed
+        (
+            128,
+            64,
+            93,
+            306,
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            {"act_block_h": 32},
+            ttnn.bfloat8_b,
+            ttnn.bfloat16,
+            False,
+            False,
+            1,
+            2,
+            0,
+        ),  # passed
+        (
+            256,
+            128,
+            47,
+            153,
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            {"act_block_h": 32},
+            ttnn.bfloat8_b,
+            ttnn.bfloat16,
+            False,
+            False,
+            3,
+            2,
+            1,
+        ),  # passed
+        (
+            256,
+            256,
+            24,
+            77,
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            {"act_block_h": 32},
+            ttnn.bfloat8_b,
+            ttnn.bfloat16,
+            False,
+            False,
+            3,
+            1,
+            1,
+        ),  # passed
+        (
+            256,
+            128,
+            47,
+            153,
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            {"act_block_h": 32},
+            ttnn.bfloat8_b,
+            ttnn.bfloat16,
+            False,
+            False,
+            1,
+            2,
+            0,
+        ),  # passed
+        (
+            512,
+            256,
+            24,
+            77,
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            {"act_block_h": 32},
+            ttnn.bfloat8_b,
+            ttnn.bfloat16,
+            False,
+            False,
+            3,
+            2,
+            1,
+        ),  # passed
+        (
+            512,
+            512,
+            12,
+            39,
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            {"act_block_h": 32},
+            ttnn.bfloat8_b,
+            ttnn.bfloat16,
+            False,
+            False,
+            3,
+            1,
+            1,
+        ),  # passed
+        (
+            512,
+            256,
+            24,
+            77,
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            {"act_block_h": 32},
+            ttnn.bfloat8_b,
+            ttnn.bfloat16,
+            False,
+            False,
+            1,
+            2,
+            0,
+        ),  # passed
+        (
+            256,
+            128,
+            47,
+            153,
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            {"act_block_h": 32},
+            ttnn.bfloat8_b,
+            ttnn.bfloat16,
+            False,
+            False,
+            1,
+            1,
+            0,
+        ),  # passed
+        (
+            256,
+            256,
+            24,
+            77,
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            {"act_block_h": 32},
+            ttnn.bfloat8_b,
+            ttnn.bfloat16,
+            False,
+            False,
+            1,
+            1,
+            0,
+        ),  # passed
+        (
+            256,
+            512,
+            12,
+            39,
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            {"act_block_h": 32},
+            ttnn.bfloat8_b,
+            ttnn.bfloat16,
+            False,
+            False,
+            1,
+            1,
+            0,
+        ),  # passed
+        (256, 256, 159, 159, None, None, ttnn.bfloat8_b, ttnn.bfloat16, False, False, 3, 1, 1),  # passed
+        (
+            9,
+            256,
+            159,
+            159,
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            {"act_block_h": 32},
+            ttnn.bfloat8_b,
+            ttnn.bfloat16,
+            False,
+            False,
+            3,
+            1,
+            1,
+        ),  # passed
+    ),
+)
+@pytest.mark.parametrize("math_fidelity", [ttnn.MathFidelity.LoFi])
+@pytest.mark.parametrize("output_layout", [ttnn.TILE_LAYOUT])
+def test_conv_oft(
+    device,
+    torch_tensor_map,
+    use_program_cache,
+    math_fidelity,
+    activations_dtype,
+    weights_dtype,
+    batch_size,
+    output_channels,
+    input_channels,
+    input_height,
+    input_width,
+    shard_layout,
+    config,
+    filter,
+    stride,
+    padding,
+    output_layout,
+    fp32_accum,
+    packer_l1_acc,
+):
+    if output_layout == ttnn.ROW_MAJOR_LAYOUT and shard_layout == WS:
+        pytest.skip("Bug in Width Sharded Row Major Tensor Creation when height%32!=0. #19408")
+
+    if output_layout == ttnn.ROW_MAJOR_LAYOUT and activations_dtype == ttnn.bfloat8_b:
+        pytest.skip("Row major layout not compatible with bfloat8_b")
+
+    if output_layout == ttnn.ROW_MAJOR_LAYOUT and activations_dtype == ttnn.bfloat16 and packer_l1_acc and fp32_accum:
+        pytest.skip("skipping due to pack_untilize_dst issue!")
+
+    run_conv(
+        device,
+        torch_tensor_map,
+        math_fidelity,
+        activations_dtype,
+        weights_dtype,
+        batch_size,
+        output_channels,
+        input_channels,
+        input_height,
+        input_width,
+        filter,
+        filter,
+        stride,
+        stride,
+        padding,
+        config,
+        shard_layout=shard_layout,
+        output_layout=output_layout,
+        has_bias=True,
+        fp32_accum=fp32_accum,
+        packer_l1_acc=packer_l1_acc,
+        preprocess_weights_on_device=True,
+        run_twice=True,
+    )
