@@ -457,74 +457,54 @@ class Attention(LightweightModule):
                 assert len(shards) == 1 or all(torch.equal(ttnn.to_torch(shards[0]), ttnn.to_torch(s)) for s in shards)
                 return ttnn.to_torch(shards[0])
 
-            cur_pos_torch = safe_to_torch_replicated(current_pos)[0]
-            cur_page = cur_pos_torch.item() // self.paged_attention_config.block_size
+            def to_torch_from_sharded(tensor):
+                shards = ttnn.get_device_tensors(tensor)
+                return torch.cat([ttnn.to_torch(shard) for shard in shards], dim=0)
 
-            page_table_torch = safe_to_torch_replicated(page_table)
+            keys_torch = to_torch_from_sharded(keys)
+            page_table_torch = safe_to_torch_replicated(page_table)[0]
 
-            local_mask = page_table_torch == cur_page
-            external_mask = ~local_mask
+            cur_page = safe_to_torch_replicated(current_pos)[0].item() // self.paged_attention_config.block_size
+            local_block_ids = page_table_torch[page_table_torch == cur_page].unique()
+            assert len(local_block_ids) == 1
+            local_block_id = int(local_block_ids[0])
 
-            # Function to create masked TTNN page table
-            def mask_page_table(mask):
-                masked = page_table_torch.clone()
-                masked[~mask] = -1
-                return ttnn.from_torch(
-                    masked.unsqueeze(0),
-                    dtype=page_table.dtype,
-                    device=self.mesh_device,
-                    layout=ttnn.ROW_MAJOR_LAYOUT,
-                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                    mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
-                )
+            local_block = keys_torch[local_block_id].unsqueeze(0)
+            local_block_ttnn = ttnn.from_torch(
+                local_block, dtype=ttnn.bfloat16, device=self.mesh_device, layout=ttnn.TILE_LAYOUT
+            )
+            local_block_bfp8 = ttnn.typecast(local_block_ttnn, dtype=ttnn.bfloat8_b)
+            local_block_bfp8_torch = ttnn.to_torch(local_block_bfp8)[0]
 
-            page_table_local = mask_page_table(local_mask)
-            page_table_external = mask_page_table(external_mask)
+            all_keys_ttnn = ttnn.from_torch(
+                keys_torch, dtype=ttnn.bfloat16, device=self.mesh_device, layout=ttnn.TILE_LAYOUT
+            )
+            all_keys_bfp4 = ttnn.typecast(all_keys_ttnn, dtype=ttnn.bfloat4_b)
+            all_keys_bfp8 = ttnn.typecast(all_keys_bfp4, dtype=ttnn.bfloat8_b)
+            keys_torch_quantized = ttnn.to_torch(all_keys_bfp8)
 
-            keys_local = ttnn.typecast(keys, dtype=ttnn.bfloat8_b)
-            values_local = ttnn.typecast(values, dtype=ttnn.bfloat4_b)
-            keys_external = ttnn.typecast(keys, dtype=ttnn.bfloat4_b)
-            values_external = ttnn.typecast(values, dtype=ttnn.bfloat4_b)
+            keys_torch_quantized[local_block_id] = local_block_bfp8_torch
 
-            # local pages (high precision)
-            attn_output_local = ttnn.transformer.paged_scaled_dot_product_attention_decode(
+            keys = ttnn.from_torch(
+                keys_torch_quantized,
+                dtype=ttnn.bfloat8_b,
+                device=self.mesh_device,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+            )
+
+            attn_output_1G4D = ttnn.transformer.paged_scaled_dot_product_attention_decode(
                 q_heads_1BQD,
-                keys_local,
-                values_local,
+                keys,
+                values,
                 cur_pos_tensor=current_pos,
-                page_table_tensor=page_table_local,
+                page_table_tensor=page_table,
                 scale=self.scale,
                 program_config=self.model_config["SDPA_DECODE_PROGCFG"],
                 compute_kernel_config=self.sdpa_decode_compute_kernel_cfg,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
-
-            # external pages (low precision)
-            attn_output_external = ttnn.transformer.paged_scaled_dot_product_attention_decode(
-                q_heads_1BQD,
-                keys_external,
-                values_external,
-                cur_pos_tensor=current_pos,
-                page_table_tensor=page_table_external,
-                scale=self.scale,
-                program_config=self.model_config["SDPA_DECODE_PROGCFG"],
-                compute_kernel_config=self.sdpa_decode_compute_kernel_cfg,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            )
-
-            attn_output_1G4D = attn_output_local + attn_output_external
-
-            # attn_output_1G4D = ttnn.transformer.paged_scaled_dot_product_attention_decode(
-            #     q_heads_1BQD,
-            #     keys,
-            #     values,
-            #     cur_pos_tensor=current_pos,
-            #     page_table_tensor=page_table,
-            #     scale=self.scale,
-            #     program_config=self.model_config["SDPA_DECODE_PROGCFG"],
-            #     compute_kernel_config=self.sdpa_decode_compute_kernel_cfg,
-            #     memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            # )
         else:
             attn_output_1G4D = ttnn.transformer.scaled_dot_product_attention_decode(
                 q_heads_1BQD,
