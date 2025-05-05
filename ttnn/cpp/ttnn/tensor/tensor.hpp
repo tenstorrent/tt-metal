@@ -258,17 +258,31 @@ public:
     }
     const DeviceStorage& device_storage() const { return std::get<DeviceStorage>(this->get_storage()); }
 
-    distributed::MeshDevice* device() const {
+    // TODO: #21099 - Remove the overload `mesh_device()`, and instead use `device()`.
+    distributed::MeshDevice* mesh_device() const {
         if (this->mesh_device_.has_value()) {
             return this->mesh_device_.value();
         }
         return nullptr;
     }
-    // TODO(omilyutin): remove this alias.
-    distributed::MeshDevice* mesh_device() const { return device(); }
 
     std::shared_ptr<distributed::MeshBuffer> mesh_buffer() const {
         return std::get<DeviceStorage>(get_storage()).get_mesh_buffer();
+    }
+
+    IDevice* device() const {
+        if (this->mesh_device_.has_value()) {
+            return this->mesh_device_.value();
+        }
+        if (this->storage_type() == tt::tt_metal::StorageType::DEVICE) {
+            auto buffer = this->buffer();
+            if (buffer == nullptr) {
+                TT_THROW("Cannot get the device from a tensor without an allocated buffer");
+            }
+            return buffer->device();
+        } else {
+            TT_THROW("Cannot get the device from a tensor with host storage");
+        }
     }
 
     std::vector<IDevice*> active_physical_devices() const;

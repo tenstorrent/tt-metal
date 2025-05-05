@@ -118,7 +118,7 @@ Tensor full_impl(
     MeshDevice* device = nullptr,
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
     std::optional<Tensor> optional_output_tensor = std::nullopt) {
-    MeshDevice* device_to_use = optional_output_tensor.has_value() ? optional_output_tensor->device() : device;
+    MeshDevice* device_to_use = optional_output_tensor.has_value() ? optional_output_tensor->mesh_device() : device;
 
     DataType dtype_value = optional_output_tensor.has_value() ? optional_output_tensor.value().get_dtype()
                                                               : dtype.value_or(DataType::BFLOAT16);
@@ -218,7 +218,7 @@ Tensor full_like_impl(
                 fill_value,
                 dtype_value,
                 layout_value,
-                device ? device : tensor.device(),
+                device ? device : tensor.mesh_device(),
                 memory_config.value_or(tensor.memory_config()),
                 optional_output_tensor);
         }
@@ -229,7 +229,7 @@ Tensor full_like_impl(
             fill_value,
             dtype_value,
             layout_value,
-            device ? device : tensor.device(),
+            device ? device : tensor.mesh_device(),
             memory_config,
             optional_output_tensor);
     }
