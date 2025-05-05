@@ -20,7 +20,7 @@ We support N150, N300, T3000, 6U Galaxy systems, and single chip Blackhole. To c
 - 8chips
 - galaxy
 
-NOTE: If running on Galaxy system, remove the WH_ARCH_YAML env variable from the command.
+NOTE: If running on Galaxy or Blackhole systems, remove the WH_ARCH_YAML env variable from the command.
 
 ### Targetting specific device
 
@@ -78,6 +78,6 @@ LM head: `WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest models/demos
 
 # Adding another suspected repro test
 
-`tests/didt/matmul_test_base.py` defines a base class for all tests that encapsulates common behavior - how we run iterations, deallocate, check determinism, sync, etc.  To add a new test, create a new file under the same directory, and then either:
+`tests/didt/op_test_base.py` defines a base class for all tests that encapsulates common behavior - how we run iterations, deallocate, check determinism, sync, etc.  To add a new test, create a new file under the same directory, and then either:
 - instantiate object of the base class in case you don't need to change any behavior, just populate dimensions, configs etc (example in `test_ff1_matmul.py`)
 - extend the base class to override any behavior that needs to be changed (for now we allow to change the way we generate activations & weights, and setting the seed), and then instantiate object of the new class

@@ -277,8 +277,7 @@ def mesh_device(request, silicon_arch_name, device_params):
     logger.debug(f"multidevice with {mesh_device.get_num_devices()} devices is created")
     yield mesh_device
 
-    for device in mesh_device.get_devices():
-        ttnn.DumpDeviceProfiler(device)
+    ttnn.DumpDeviceProfiler(mesh_device)
 
     ttnn.close_mesh_device(mesh_device)
     reset_fabric(fabric_config)
@@ -530,13 +529,7 @@ def pytest_addoption(parser):
         help="Number of iterations to run",
     )
 
-    parser.addoption(
-        "--simulate-bh-harvesting",
-        action="store_true",
-        default=False,
-        help="Simulate BH harvesting",
-    )
-
+    # Indicates the iteration interval at which determinism is verified for the op output
     parser.addoption(
         "--determinism-check-iterations",
         action="store",

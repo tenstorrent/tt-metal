@@ -62,11 +62,7 @@ class OpTestBase:
         self.weights = None
 
     def get_device(self, device_idx):
-        if isinstance(self.mesh_device, ttnn.MeshDevice):
-            return self.mesh_device.get_device(device_idx)
-        else:
-            # ttnn.Device
-            return self.mesh_device
+        return self.mesh_device
 
     # Override if needed
     def set_seed(self):
@@ -158,7 +154,6 @@ class OpTestBase:
                 self.activations = self.convert_activations_to_memory_config(a_t[act])
                 output = self.run_device_operation()
                 reference_out[act] = [ttnn.to_torch(shard) for shard in ttnn.get_device_tensors(output.cpu())]
-                # reference_out[act] = ttnn.to_torch(output, mesh_composer=self.to_torch_mesh_mapper)
 
                 output.deallocate(True)
                 self.deallocate_activations()

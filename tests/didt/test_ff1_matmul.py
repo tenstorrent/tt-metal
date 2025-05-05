@@ -121,6 +121,8 @@ def test_ff1_matmul(
         out_subblock_w = 1
 
     fidelity_env = int(os.getenv("TT_MATH_FIDELITY", default=1))
+    if fidelity_env == 0:
+        math_fidelity = ttnn.MathFidelity.LoFi
     if fidelity_env == 2:
         math_fidelity = ttnn.MathFidelity.HiFi2
     elif fidelity_env == 3:
