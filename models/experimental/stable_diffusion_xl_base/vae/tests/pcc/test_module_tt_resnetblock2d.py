@@ -11,14 +11,14 @@ from models.utility_functions import torch_random
 
 
 @pytest.mark.parametrize(
-    "input_shape, down_block_id, resnet_id, conv_shortcut, split_in, block, pcc",
+    "input_shape, down_block_id, resnet_id, conv_shortcut, block, pcc",
     [
-        ((1, 512, 128, 128), 0, 0, False, 1, "mid_block", 0.999),
+        ((1, 512, 128, 128), 0, 0, False, "mid_block", 0.999),
     ],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 def test_vae_resnetblock2d(
-    device, input_shape, down_block_id, resnet_id, conv_shortcut, split_in, block, pcc, use_program_cache
+    device, input_shape, down_block_id, resnet_id, conv_shortcut, block, pcc, use_program_cache, reset_seeds
 ):
     pipe = DiffusionPipeline.from_pretrained(
         "stabilityai/stable-diffusion-xl-base-1.0", torch_dtype=torch.float32, use_safetensors=True, variant="fp16"
@@ -32,7 +32,7 @@ def test_vae_resnetblock2d(
         block = f"{block}.{down_block_id}"
     else:
         torch_resnet = vae.decoder.mid_block.resnets[resnet_id]
-    tt_resnet = TtResnetBlock2D(device, state_dict, f"decoder.{block}.resnets.{resnet_id}", conv_shortcut, split_in)
+    tt_resnet = TtResnetBlock2D(device, state_dict, f"decoder.{block}.resnets.{resnet_id}", conv_shortcut)
 
     torch_input_tensor = torch_random(input_shape, -0.1, 0.1, dtype=torch.float32)
     torch_output_tensor = torch_resnet(torch_input_tensor, None)

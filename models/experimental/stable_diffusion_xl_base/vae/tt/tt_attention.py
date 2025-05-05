@@ -67,10 +67,10 @@ class TtAttention(nn.Module):
         out_weights = state_dict[f"{module_path}.to_out.0.weight"].unsqueeze(0).unsqueeze(0)
         out_bias = state_dict[f"{module_path}.to_out.0.bias"]
 
-        self.tt_q_weights, self.tt_q_bias = prepare_linear_params(device, q_weights, q_bias, ttnn.bfloat8_b)
-        self.tt_k_weights, self.tt_k_bias = prepare_linear_params(device, k_weights, k_bias, ttnn.bfloat8_b)
-        self.tt_v_weights, self.tt_v_bias = prepare_linear_params(device, v_weights, v_bias, ttnn.bfloat8_b)
-        self.tt_out_weights, self.tt_out_bias = prepare_linear_params(device, out_weights, out_bias, ttnn.bfloat8_b)
+        self.tt_q_weights, self.tt_q_bias = prepare_linear_params(device, q_weights, q_bias, ttnn.bfloat16)
+        self.tt_k_weights, self.tt_k_bias = prepare_linear_params(device, k_weights, k_bias, ttnn.bfloat16)
+        self.tt_v_weights, self.tt_v_bias = prepare_linear_params(device, v_weights, v_bias, ttnn.bfloat16)
+        self.tt_out_weights, self.tt_out_bias = prepare_linear_params(device, out_weights, out_bias, ttnn.bfloat16)
 
     def forward(self, input_tensor, input_shape, encoder_hidden_states=None):
         B, C, H, W = input_shape
