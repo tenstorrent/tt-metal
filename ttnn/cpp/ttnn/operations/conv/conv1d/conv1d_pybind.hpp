@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include "pybind11/pybind_fwd.hpp"
+#include "ttnn-pybind/pybind_fwd.hpp"
 
 namespace ttnn::operations::conv::conv1d {
 void py_bind_conv1d(pybind11::module& module);

@@ -10,8 +10,8 @@
 
 #include "loss.hpp"
 #include "loss_types.hpp"
-#include "cpp/pybind11/export_enum.hpp"
-#include "cpp/pybind11/decorators.hpp"
+#include "cpp/ttnn-pybind/export_enum.hpp"
+#include "cpp/ttnn-pybind/decorators.hpp"
 
 namespace py = pybind11;
 

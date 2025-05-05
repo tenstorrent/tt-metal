@@ -7,8 +7,8 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 
-#include "cpp/pybind11/decorators.hpp"
-#include "cpp/pybind11/types.hpp"
+#include "cpp/ttnn-pybind/decorators.hpp"
+#include "cpp/ttnn-pybind/types.hpp"
 #include "ttnn/operations/creation.hpp"
 
 namespace py = pybind11;

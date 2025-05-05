@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "pybind11/decorators.hpp"
+#include "ttnn-pybind/decorators.hpp"
 
 #include "quantization_pybind.hpp"
 #include "quantization.hpp"

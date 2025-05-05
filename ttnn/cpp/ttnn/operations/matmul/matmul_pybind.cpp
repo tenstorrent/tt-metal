@@ -9,9 +9,9 @@
 
 #include <utility>
 
-#include "pybind11/decorators.hpp"
+#include "ttnn-pybind/decorators.hpp"
 #include <tt-metalium/core_coord.hpp>
-#include "cpp/pybind11/json_class.hpp"
+#include "cpp/ttnn-pybind/json_class.hpp"
 #include "ttnn/operations/matmul/matmul.hpp"
 #include "ttnn/types.hpp"
 

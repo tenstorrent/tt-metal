@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "dram_prefetcher_pybind.hpp"
-#include "cpp/pybind11/decorators.hpp"
+#include "cpp/ttnn-pybind/decorators.hpp"
 #include "dram_prefetcher.hpp"
 
 namespace ttnn::operations::dram_prefetcher::detail {
