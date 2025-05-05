@@ -163,7 +163,7 @@ static Tensor zero_volume_reduce(
         fill_value,
         input_tensor.get_dtype(),
         input_tensor.get_layout(),
-        std::optional<std::reference_wrapper<tt::tt_metal::IDevice>>(*input_tensor.device()),
+        *input_tensor.mesh_device(),
         memory_config);
 }
 
