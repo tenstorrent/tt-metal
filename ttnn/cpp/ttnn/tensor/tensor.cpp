@@ -103,40 +103,23 @@ void Tensor::init(Storage storage, TensorSpec tensor_spec) {
         tensor_attributes->get_storage());
 }
 
-Tensor::Tensor(distributed::MeshDevice* mesh_device, TensorSpec spec) :
-    tensor_attributes(std::make_shared<TensorAttributes>(DeviceStorage(), std::move(spec))),
-    workers({mesh_device}),
-    mesh_device_(mesh_device) {
-    TT_FATAL(mesh_device_ != nullptr, "Mesh device is nullptr");
-}
-
-Tensor::Tensor(
-    uint32_t num_buffers, TensorSpec spec, std::optional<DistributedTensorConfig> distributed_tensor_config) :
-    tensor_attributes(std::make_shared<TensorAttributes>(
-        [&]() {
-            if (num_buffers <= 1) {
-                return Storage(HostStorage());
-            }
-            MultiDeviceHostStorage storage;
-            if (distributed_tensor_config.has_value()) {
-                storage.strategy = distributed_tensor_config.value();
-            }
-            storage.buffers = std::vector<HostBuffer>(num_buffers, HostBuffer());
-            storage.specs = std::vector<ttnn::TensorSpec>(
-                num_buffers,
-                TensorSpec(Shape{}, TensorLayout(DataType::FLOAT32, PageConfig(Layout::ROW_MAJOR), MemoryConfig{})));
-            return Storage(std::move(storage));
-        }(),
-        std::move(spec))) {}
-
 Tensor& Tensor::operator=(const Tensor& other) {
-    // Don't self-assign
     this->tensor_id = other.tensor_id;
     if (this->tensor_attributes != other.tensor_attributes) {
         this->workers = other.workers;
         this->tensor_attributes = other.tensor_attributes;
     }
     this->mesh_device_ = other.mesh_device_;
+    return *this;
+}
+
+Tensor& Tensor::operator=(Tensor&& other) noexcept {
+    this->tensor_id = std::move(other.tensor_id);
+    if (this->tensor_attributes != other.tensor_attributes) {
+        this->workers = std::move(other.workers);
+        this->tensor_attributes = std::move(other.tensor_attributes);
+    }
+    this->mesh_device_ = std::move(other.mesh_device_);
     return *this;
 }
 
@@ -467,12 +450,7 @@ Tensor Tensor::to_device(distributed::MeshDevice* mesh_device, const MemoryConfi
     return tensor_ops::tensor_to_device(*this, mesh_device, mem_config, cq_id);
 }
 
-Tensor Tensor::cpu(bool blocking, QueueId cq_id) const {
-    if (this->mesh_device_.has_value()) {
-        return tensor_ops::tensor_cpu(*this, this->mesh_device_.value(), blocking, cq_id);
-    }
-    return tensor_ops::tensor_cpu(*this, blocking, cq_id);
-}
+Tensor Tensor::cpu(bool blocking, QueueId cq_id) const { return tensor_ops::tensor_cpu(*this, blocking, cq_id); }
 
 Tensor Tensor::extract_shard(const CoreCoord& core) const {
     ZoneScoped;
@@ -528,22 +506,6 @@ bool Tensor::is_allocated() const {
     ZoneScoped;
     auto output = std::visit([](auto&& storage) -> bool { return storage.is_allocated(); }, this->get_storage());
     return output;
-}
-
-std::vector<uint32_t> Tensor::host_page_ordering() {
-    const auto& buffer_page_mapping = *this->buffer()->get_buffer_page_mapping();
-    auto cores = buffer_page_mapping.all_cores_;
-    auto shard_num_pages = buffer()->shard_spec().num_pages();
-    auto num_pages = cores.size() * shard_num_pages;
-
-    std::vector<uint32_t> ret_vec;
-    ret_vec.reserve(num_pages);
-    for (int page_id = 0; page_id < num_pages; page_id++) {
-        if (buffer_page_mapping.dev_page_to_host_page_mapping_[page_id].has_value()) {
-            ret_vec.push_back(buffer_page_mapping.dev_page_to_host_page_mapping_[page_id].value());
-        }
-    }
-    return ret_vec;
 }
 
 StorageType Tensor::storage_type() const {

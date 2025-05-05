@@ -69,30 +69,10 @@ public:
         const std::optional<Tile>& tile = std::nullopt);
     Tensor(Storage storage, TensorSpec tensor_spec);
 
-    // Constructors to initialize unpopulated tensor with workers and storage specified. Use this when creating tensor
-    // handles in async mode.
-    explicit Tensor(
-        uint32_t num_buffers,
-        TensorSpec spec,
-        std::optional<DistributedTensorConfig> distributed_tensor_config = std::nullopt);
-    explicit Tensor(distributed::MeshDevice* mesh_device, TensorSpec spec);
-
     Tensor(const Tensor& other);
-
     Tensor& operator=(const Tensor& other);
-
     Tensor(Tensor&& other) noexcept = default;
-
-    Tensor& operator=(Tensor&& other) {
-        // Don't self assign
-        this->tensor_id = std::move(other.tensor_id);
-        if (this->tensor_attributes != other.tensor_attributes) {
-            this->workers = std::move(other.workers);
-            this->tensor_attributes = std::move(other.tensor_attributes);
-        }
-        this->mesh_device_ = std::move(other.mesh_device_);
-        return *this;
-    }
+    Tensor& operator=(Tensor&& other) noexcept;
 
     ~Tensor();
 
@@ -299,8 +279,6 @@ public:
         return std::forward_as_tuple(
             this->tensor_attributes->get_storage(), this->tensor_attributes->get_tensor_spec());
     }
-
-    std::vector<uint32_t> host_page_ordering();
 
 private:
     void init(Storage storage, TensorSpec tensor_spec);
