@@ -62,10 +62,14 @@ Tensor pre_sort_transform_tensor(
     // padding if needed
     const auto current_padded_shape = padded_tensor.get_padded_shape();
     const auto last_dim = current_padded_shape[-1];
-    const auto padded_last_dim = next_power_of_two(last_dim);
-    if (padded_last_dim == last_dim) {
-        // If the last dimension is already a power of two, no padding is needed
+    auto padded_last_dim = next_power_of_two(last_dim);
+    if ((padded_last_dim == last_dim) && (last_dim > tt::constants::TILE_WIDTH)) {
+        // If the last dimension is already a power of two and is multiple of 64, no padding is needed
         return padded_tensor;
+    }
+    if (padded_last_dim == tt::constants::TILE_WIDTH) {
+        // Bitonic sort works on tiles that are the size of power of two - need at least 2 tiles
+        padded_last_dim = tt::constants::TILE_WIDTH * 2;
     }
     const Tensor padded_output_tensor = ttnn::pad(
         padded_tensor,
@@ -93,7 +97,7 @@ std::vector<Tensor> post_sort_transform_tensor(
         const ttnn::SmallVector<uint32_t> step = {1, 1, 1, 1};
         const ttnn::SmallVector<uint32_t> start_index = {0, 0, 0, 0};
         const ttnn::SmallVector<uint32_t> end_index = {
-            output_logical_shape[0], output_logical_shape[1], output_logical_shape[2], original_lshape[-1]};
+            original_lshape[0], original_lshape[1], original_lshape[2], original_lshape[-1]};
         result[0] = ttnn::slice(result[0], start_index, end_index, step, input_memory_config);
         result[1] = ttnn::slice(result[1], start_index, end_index, step, input_memory_config);
     }
@@ -156,7 +160,7 @@ std::vector<Tensor> ExecuteSort::invoke(
     const bool descending,
     const bool stable,
     const std::optional<MemoryConfig>& memory_config,
-    std::optional<std::tuple<Tensor, Tensor>> optional_output_tensors) {
+    std::optional<std::tuple<Tensor&, Tensor&>> optional_output_tensors) {
     ttnn::Shape original_lshape = input_tensor.get_logical_shape();
     auto rank = input_tensor.get_padded_shape().rank();
 
@@ -209,12 +213,10 @@ std::vector<Tensor> ExecuteSort::invoke(
     // Check if padding or dtype conversion changed buffer address
     if (optional_output_tensors.has_value()) {
         if (std::get<0>(optional_output_tensors.value()).buffer() != output_tensors.at(0)->buffer()) {
-            std::get<0>(optional_output_tensors.value())
-                .populate_buffers_and_metadata(post_transform_output_tensors.at(0));
+            std::get<0>(optional_output_tensors.value()) = post_transform_output_tensors.at(0);
         }
         if (std::get<1>(optional_output_tensors.value()).buffer() != output_tensors.at(1)->buffer()) {
-            std::get<1>(optional_output_tensors.value())
-                .populate_buffers_and_metadata(post_transform_output_tensors.at(1));
+            std::get<1>(optional_output_tensors.value()) = post_transform_output_tensors.at(1);
         }
     }
 
