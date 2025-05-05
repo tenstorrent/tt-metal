@@ -4,7 +4,6 @@
 
 import transformers
 import torch
-from typing import Optional
 from loguru import logger
 
 from ttnn.model_preprocessing import preprocess_linear_weight, preprocess_linear_bias
@@ -153,20 +152,22 @@ def whisper_attention(
 ):
     head_size = config.d_model // config.encoder_attention_heads
     scaling = head_size**-0.5
-    bsz, *_, tgt_len, _ = hidden_states.shape
+    # bsz, *_, tgt_len, _ = hidden_states.shape
 
-    is_cross_attention = encoder_hidden_states is not None
-    sdpa_with_kv_cache = not is_cross_attention and is_decode and kv_cache is not None
+    # is_cross_attention = encoder_hidden_states is not None
+    # sdpa_with_kv_cache = not is_cross_attention and is_decode and kv_cache is not None
+    sdpa_with_kv_cache = True
 
-    if is_cross_attention:
-        query_states = hidden_states @ parameters.q_proj.weight + parameters.q_proj.bias
-        query_states = ttnn.unsqueeze_to_4D(query_states)
-        query_states = ttnn.transpose(query_states, 1, 2)  # 1, 32, 1, Hxd
-        query_states = ttnn.reshape(query_states, (bsz, tgt_len, config.encoder_attention_heads, head_size))
-        query_states = ttnn.transpose(query_states, 1, 2)  # 1, H, 32, d
-        key_states, value_states = calculate_key_values(config, encoder_hidden_states, parameters=parameters)
-        attn_output = functional_sdpa(query_states, key_states, value_states, scaling, attention_mask)
-    else:
+    # if is_cross_attention:
+    #     query_states = hidden_states @ parameters.q_proj.weight + parameters.q_proj.bias
+    #     query_states = ttnn.unsqueeze_to_4D(query_states)
+    #     query_states = ttnn.transpose(query_states, 1, 2)  # 1, 32, 1, Hxd
+    #     query_states = ttnn.reshape(query_states, (bsz, tgt_len, config.encoder_attention_heads, head_size))
+    #     query_states = ttnn.transpose(query_states, 1, 2)  # 1, H, 32, d
+    #     key_states, value_states = calculate_key_values(config, encoder_hidden_states, parameters=parameters)
+    #     attn_output = functional_sdpa(query_states, key_states, value_states, scaling, attention_mask)
+    # else:
+    if True:
         fused_qkv = hidden_states @ parameters.query_key_value.weight + parameters.query_key_value.bias  # 1, S, 3xHxd
         fused_qkv = ttnn.unsqueeze_to_4D(fused_qkv)
         (
@@ -211,7 +212,7 @@ def whisper_attention(
             )
             ttnn.experimental.paged_update_cache(
                 v_cache, value_states, update_idxs_tensor=current_decode_pos, page_table=None
-            )
+            )  # commenting these removes hang
 
             attn_output = ttnn.transformer.scaled_dot_product_attention_decode(
                 query_states,
@@ -224,102 +225,102 @@ def whisper_attention(
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )  # 1, 1, H, D
 
-            attn_output = ttnn.transpose(attn_output, 1, 2)
-        else:
-            attn_output = functional_sdpa(query_states, key_states, value_states, scaling, attention_mask)
+            # attn_output = ttnn.transpose(attn_output, 1, 2)
+        # else:
+        #     attn_output = functional_sdpa(query_states, key_states, value_states, scaling, attention_mask)
 
-    attn_output = ttnn.experimental.nlp_concat_heads(attn_output)
-    attn_output = ttnn.squeeze(attn_output, 0)
-    attn_output = attn_output[:, :tgt_len, :]
+    # attn_output = ttnn.experimental.nlp_concat_heads(attn_output)
+    # attn_output = ttnn.squeeze(attn_output, 0)
+    # attn_output = attn_output[:, :tgt_len, :]
 
-    attn_output = attn_output @ parameters.out_proj.weight + parameters.out_proj.bias
+    # attn_output = attn_output @ parameters.out_proj.weight + parameters.out_proj.bias
     return attn_output
 
 
-def encoder_layer(config, hidden_states, *, parameters):
-    residual = hidden_states
-    hidden_states = ttnn.layer_norm(
-        hidden_states,
-        weight=parameters.self_attn_layer_norm.weight,
-        bias=parameters.self_attn_layer_norm.bias,
-        memory_config=WHISPER_MEMORY_CONFIG,
-        compute_kernel_config=ttnn.WormholeComputeKernelConfig(math_fidelity=ttnn.MathFidelity.HiFi4),
-    )
+# def encoder_layer(config, hidden_states, *, parameters):
+#     residual = hidden_states
+#     hidden_states = ttnn.layer_norm(
+#         hidden_states,
+#         weight=parameters.self_attn_layer_norm.weight,
+#         bias=parameters.self_attn_layer_norm.bias,
+#         memory_config=WHISPER_MEMORY_CONFIG,
+#         compute_kernel_config=ttnn.WormholeComputeKernelConfig(math_fidelity=ttnn.MathFidelity.HiFi4),
+#     )
 
-    hidden_states = whisper_attention(
-        config, hidden_states, attention_mask=None, is_decode=False, parameters=parameters.self_attn
-    )
-    hidden_states = dropout(hidden_states, p=0, training=False)
-    hidden_states = residual + hidden_states
+#     hidden_states = whisper_attention(
+#         config, hidden_states, attention_mask=None, is_decode=False, parameters=parameters.self_attn
+#     )
+#     hidden_states = dropout(hidden_states, p=0, training=False)
+#     hidden_states = residual + hidden_states
 
-    residual = hidden_states
-    hidden_states = ttnn.layer_norm(
-        hidden_states,
-        weight=parameters.final_layer_norm.weight,
-        bias=parameters.final_layer_norm.bias,
-        memory_config=WHISPER_MEMORY_CONFIG,
-        compute_kernel_config=ttnn.WormholeComputeKernelConfig(math_fidelity=ttnn.MathFidelity.HiFi4),
-    )
-    hidden_states = hidden_states @ parameters.fc1.weight + parameters.fc1.bias
-    hidden_states = gelu(hidden_states)
-    hidden_states = dropout(hidden_states, p=0, training=False)
-    hidden_states = hidden_states @ parameters.fc2.weight + parameters.fc2.bias
-    hidden_states = dropout(hidden_states, p=0, training=False)
-    hidden_states = residual + hidden_states
+#     residual = hidden_states
+#     hidden_states = ttnn.layer_norm(
+#         hidden_states,
+#         weight=parameters.final_layer_norm.weight,
+#         bias=parameters.final_layer_norm.bias,
+#         memory_config=WHISPER_MEMORY_CONFIG,
+#         compute_kernel_config=ttnn.WormholeComputeKernelConfig(math_fidelity=ttnn.MathFidelity.HiFi4),
+#     )
+#     hidden_states = hidden_states @ parameters.fc1.weight + parameters.fc1.bias
+#     hidden_states = gelu(hidden_states)
+#     hidden_states = dropout(hidden_states, p=0, training=False)
+#     hidden_states = hidden_states @ parameters.fc2.weight + parameters.fc2.bias
+#     hidden_states = dropout(hidden_states, p=0, training=False)
+#     hidden_states = residual + hidden_states
 
-    return hidden_states
-
-
-def encoder(config, inputs_embeds, *, parameters):
-    hidden_states = inputs_embeds + parameters.embed_positions.weight
-    hidden_states = dropout(hidden_states, p=0, training=False)
-
-    for encoder_layer_parameter in parameters.layers:
-        hidden_states = encoder_layer(config, hidden_states, parameters=encoder_layer_parameter)
-
-    hidden_states = ttnn.layer_norm(
-        hidden_states,
-        weight=parameters.layer_norm.weight,
-        bias=parameters.layer_norm.bias,
-        compute_kernel_config=ttnn.WormholeComputeKernelConfig(math_fidelity=ttnn.MathFidelity.HiFi4),
-    )
-    return hidden_states
+#     return hidden_states
 
 
-def make_causal_mask(input_ids_shape, dtype):
-    bsz, tgt_len = input_ids_shape
-    mask = torch.full((tgt_len, tgt_len), torch.tensor(torch.finfo(dtype).min))
-    mask_cond = torch.arange(mask.size(-1))
-    mask.masked_fill_(mask_cond < (mask_cond + 1).view(mask.size(-1), 1), 0)
-    mask = mask.to(dtype)
+# def encoder(config, inputs_embeds, *, parameters):
+#     hidden_states = inputs_embeds + parameters.embed_positions.weight
+#     hidden_states = dropout(hidden_states, p=0, training=False)
 
-    return mask[None, None, :, :].expand(bsz, 1, tgt_len, tgt_len)
+#     for encoder_layer_parameter in parameters.layers:
+#         hidden_states = encoder_layer(config, hidden_states, parameters=encoder_layer_parameter)
+
+#     hidden_states = ttnn.layer_norm(
+#         hidden_states,
+#         weight=parameters.layer_norm.weight,
+#         bias=parameters.layer_norm.bias,
+#         compute_kernel_config=ttnn.WormholeComputeKernelConfig(math_fidelity=ttnn.MathFidelity.HiFi4),
+#     )
+#     return hidden_states
 
 
-def expand_mask(mask: torch.Tensor, dtype: torch.dtype, tgt_len: Optional[int] = None):
-    """
-    Expands attention_mask from `[bsz, seq_len]` to `[bsz, 1, tgt_seq_len, src_seq_len]`.
-    """
-    bsz, src_len = mask.shape
-    tgt_len = tgt_len if tgt_len is not None else src_len
+# def make_causal_mask(input_ids_shape, dtype):
+#     bsz, tgt_len = input_ids_shape
+#     mask = torch.full((tgt_len, tgt_len), torch.tensor(torch.finfo(dtype).min))
+#     mask_cond = torch.arange(mask.size(-1))
+#     mask.masked_fill_(mask_cond < (mask_cond + 1).view(mask.size(-1), 1), 0)
+#     mask = mask.to(dtype)
 
-    expanded_mask = mask[:, None, None, :].expand(bsz, 1, tgt_len, src_len).to(dtype)
+#     return mask[None, None, :, :].expand(bsz, 1, tgt_len, tgt_len)
 
-    inverted_mask = 1.0 - expanded_mask
 
-    return inverted_mask.masked_fill(inverted_mask.to(torch.bool), torch.finfo(dtype).min)
+# def expand_mask(mask: torch.Tensor, dtype: torch.dtype, tgt_len: Optional[int] = None):
+#     """
+#     Expands attention_mask from `[bsz, seq_len]` to `[bsz, 1, tgt_seq_len, src_seq_len]`.
+#     """
+#     bsz, src_len = mask.shape
+#     tgt_len = tgt_len if tgt_len is not None else src_len
+
+#     expanded_mask = mask[:, None, None, :].expand(bsz, 1, tgt_len, src_len).to(dtype)
+
+#     inverted_mask = 1.0 - expanded_mask
+
+#     return inverted_mask.masked_fill(inverted_mask.to(torch.bool), torch.finfo(dtype).min)
 
 
 def decoder_layer(
     config, hidden_states, attention_mask, encoder_hidden_states, kv_cache=None, current_decode_pos=None, *, parameters
 ):
-    residual = hidden_states
+    # residual = hidden_states
     hidden_states = ttnn.layer_norm(
         hidden_states,
         weight=parameters.self_attn_layer_norm.weight,
         bias=parameters.self_attn_layer_norm.bias,
         compute_kernel_config=ttnn.WormholeComputeKernelConfig(math_fidelity=ttnn.MathFidelity.HiFi4),
-    )
+    )  # commenting this removes hang
 
     hidden_states = whisper_attention(
         config,
@@ -330,45 +331,45 @@ def decoder_layer(
         current_decode_pos=current_decode_pos,
         parameters=parameters.self_attn,
     )
-    hidden_states = dropout(hidden_states, p=0, training=False)
-    hidden_states = residual + hidden_states
+    # hidden_states = dropout(hidden_states, p=0, training=False)
+    # hidden_states = residual + hidden_states
 
     # Cross-Attention Block
-    residual = hidden_states
-    hidden_states = ttnn.layer_norm(
-        hidden_states,
-        weight=parameters.encoder_attn_layer_norm.weight,
-        bias=parameters.encoder_attn_layer_norm.bias,
-        compute_kernel_config=ttnn.WormholeComputeKernelConfig(math_fidelity=ttnn.MathFidelity.HiFi4),
-    )
+    # residual = hidden_states
+    # hidden_states = ttnn.layer_norm(
+    #     hidden_states,
+    #     weight=parameters.encoder_attn_layer_norm.weight,
+    #     bias=parameters.encoder_attn_layer_norm.bias,
+    #     compute_kernel_config=ttnn.WormholeComputeKernelConfig(math_fidelity=ttnn.MathFidelity.HiFi4),
+    # )
 
-    hidden_states = whisper_attention(
-        config,
-        hidden_states,
-        attention_mask=None,
-        is_decode=True,
-        encoder_hidden_states=encoder_hidden_states,
-        kv_cache=kv_cache,
-        current_decode_pos=current_decode_pos,
-        parameters=parameters.encoder_attn,
-    )
+    # hidden_states = whisper_attention(
+    #     config,
+    #     hidden_states,
+    #     attention_mask=None,
+    #     is_decode=True,
+    #     encoder_hidden_states=encoder_hidden_states,
+    #     kv_cache=kv_cache,
+    #     current_decode_pos=current_decode_pos,
+    #     parameters=parameters.encoder_attn,
+    # )
 
-    hidden_states = dropout(hidden_states, p=0, training=False)
-    hidden_states = residual + hidden_states
+    # hidden_states = dropout(hidden_states, p=0, training=False)
+    # hidden_states = residual + hidden_states
 
-    residual = hidden_states
-    hidden_states = ttnn.layer_norm(
-        hidden_states,
-        weight=parameters.final_layer_norm.weight,
-        bias=parameters.final_layer_norm.bias,
-        compute_kernel_config=ttnn.WormholeComputeKernelConfig(math_fidelity=ttnn.MathFidelity.HiFi4),
-    )
-    hidden_states = hidden_states @ parameters.fc1.weight + parameters.fc1.bias
-    hidden_states = gelu(hidden_states)
-    hidden_states = dropout(hidden_states, p=0, training=False)
-    hidden_states = hidden_states @ parameters.fc2.weight + parameters.fc2.bias
-    hidden_states = dropout(hidden_states, p=0, training=False)
-    hidden_states = residual + hidden_states
+    # residual = hidden_states
+    # hidden_states = ttnn.layer_norm(
+    #     hidden_states,
+    #     weight=parameters.final_layer_norm.weight,
+    #     bias=parameters.final_layer_norm.bias,
+    #     compute_kernel_config=ttnn.WormholeComputeKernelConfig(math_fidelity=ttnn.MathFidelity.HiFi4),
+    # )
+    # hidden_states = hidden_states @ parameters.fc1.weight + parameters.fc1.bias
+    # hidden_states = gelu(hidden_states)
+    # hidden_states = dropout(hidden_states, p=0, training=False)
+    # hidden_states = hidden_states @ parameters.fc2.weight + parameters.fc2.bias
+    # hidden_states = dropout(hidden_states, p=0, training=False)
+    # hidden_states = residual + hidden_states
 
     return hidden_states
 
