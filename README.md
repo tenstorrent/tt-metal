@@ -57,7 +57,7 @@
 
 | Model                                                | Batch | Hardware                                                 | ttft (ms) | t/s/u | Target t/s/u | t/s    | TT-Metalium Release                                                       |
 |------------------------------------------------------|-------|----------------------------------------------------------|-----------|-------|--------------|--------|---------------------------------------------------------------------------|
-| [Whisper (distil-large-v3)](./models/demos/whisper)  | 1     | [n150](https://tenstorrent.com/hardware/wormhole)        | 244       | 54.7  | 45           | 54.7   | [v0.57.0-rc71](https://github.com/tenstorrent/tt-metal/tree/v0.57.0-rc71) |
+| [Whisper (distil-large-v3)](./models/demos/whisper)  | 1     | [n150](https://tenstorrent.com/hardware/wormhole)        | 244       | 54.7  | 45           | 54.7   | [v0.58.0-rc22](https://github.com/tenstorrent/tt-metal/tree/v0.58.0-rc22) |
 
 
 ## CNNs
