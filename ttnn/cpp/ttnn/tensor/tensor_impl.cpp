@@ -136,7 +136,7 @@ Tensor pad_bfloat8_b(
             MemoryConfig{},
             float_tensor.logical_shape(),
             float_tensor.padded_shape()));
-    return Tensor(std::move(HostStorage{std::move(output_uint32_buffer)}), output_spec);
+    return Tensor(HostStorage{std::move(output_uint32_buffer)}, output_spec);
 }
 
 Tensor unpad_bfloat8_b(
@@ -167,7 +167,7 @@ Tensor unpad_bfloat8_b(
         pack_fp32_vec_as_bfp8_tiles(output_float_data, /*row_major_input=*/false, /*is_exp_a=*/false, tile);
     auto output_uint32_buffer = host_buffer::create<uint32_t>(std::move(output_packed_data));
     return Tensor(
-        std::move(HostStorage{std::move(output_uint32_buffer)}),
+        HostStorage{std::move(output_uint32_buffer)},
         TensorSpec(
             float_tensor.get_logical_shape(),
             TensorLayout::fromPaddedShape(
@@ -216,7 +216,7 @@ Tensor pad_bfloat4_b(
             MemoryConfig{},
             float_tensor.logical_shape(),
             float_tensor.padded_shape()));
-    return Tensor(std::move(HostStorage{std::move(output_uint32_buffer)}), output_spec);
+    return Tensor(HostStorage{std::move(output_uint32_buffer)}, output_spec);
 }
 
 Tensor unpad_bfloat4_b(
@@ -247,7 +247,7 @@ Tensor unpad_bfloat4_b(
         pack_fp32_vec_as_bfp4_tiles(output_float_data, /*row_major_input=*/false, /*is_exp_a=*/false, tile);
     auto output_uint32_buffer = host_buffer::create<uint32_t>(std::move(output_packed_data));
     return Tensor(
-        std::move(HostStorage{std::move(output_uint32_buffer)}),
+        HostStorage{std::move(output_uint32_buffer)},
         TensorSpec(
             float_tensor.get_logical_shape(),
             TensorLayout::fromPaddedShape(

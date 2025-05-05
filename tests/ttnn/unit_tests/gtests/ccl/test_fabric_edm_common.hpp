@@ -2421,7 +2421,7 @@ static std::vector<std::vector<IDevice*>> generate_line_fabrics_under_test(
     std::vector<std::vector<IDevice*>> fabrics_under_test;
     if (use_default_device_selection) {
         fabrics_under_test.push_back(
-            std::move(generate_default_line_fabric_under_test(use_galaxy, use_tg, line_size, topology, view)));
+            generate_default_line_fabric_under_test(use_galaxy, use_tg, line_size, topology, view));
     } else {
         fabrics_under_test.reserve(params.num_fabric_rows + params.num_fabric_cols);
         TT_FATAL(

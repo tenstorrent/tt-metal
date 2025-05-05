@@ -100,7 +100,7 @@ std::vector<OptionalTensor> WhereBackwardOperation::invoke(
     } else {
         result.emplace_back(std::nullopt);
     }
-    return std::move(result);
+    return result;
 }
 
 // lerp(input, end, weight) = self: grad * (1 - weight), end: grad * weight
