@@ -13,7 +13,7 @@ namespace operations {
 namespace compute_throttle_utils {
 
 void add_stagger_defines_if_needed(
-    const tt::ARCH arch, const int num_cores, std::map<string, string>& mm_kernel_defines) {
+    const tt::ARCH arch, const int num_cores, std::map<std::string, std::string>& mm_kernel_defines) {
     // Empirically deduced di/dt problems appear for matmuls using more than 48
     // cores; when there is 48 cores or less, we never enable stagger since the
     // delay impacts op performance
@@ -42,7 +42,7 @@ void add_stagger_defines_if_needed(
     }
 }
 
-void throttle_mm_perf(const tt::ARCH arch, const int num_cores, std::map<string, string>& mm_kernel_defines) {
+void throttle_mm_perf(const tt::ARCH arch, const int num_cores, std::map<std::string, std::string>& mm_kernel_defines) {
     // Empirically deduced di/dt problems appear for OPs calling matmul using more than 48 cores on WH_B0
     constexpr uint32_t WH_B0_MM_MAX_CORES_NO_THROTTLE = 48;
     // TODO: determine min core threshold for throttle to be needed on BH
@@ -76,7 +76,8 @@ void throttle_mm_perf(const tt::ARCH arch, const int num_cores, std::map<string,
     }
 }
 
-void add_dram_skip_defines_if_needed(const tt::ARCH arch, std::map<string, string>& mm_in1_sender_writer_defines) {
+void add_dram_skip_defines_if_needed(
+    const tt::ARCH arch, std::map<std::string, std::string>& mm_in1_sender_writer_defines) {
     const bool skip_in1_dram = std::getenv("TT_MM_SKIP_IN1_DRAM");
     if (skip_in1_dram && (arch == tt::ARCH::WORMHOLE_B0 || arch == tt::ARCH::BLACKHOLE)) {
         mm_in1_sender_writer_defines["SKIP_IN1_DRAM"] = "1";
