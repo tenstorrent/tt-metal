@@ -114,6 +114,12 @@ void socket_notify_receiver(const SocketSenderInterface& socket) {
     noc_inline_dw_write(downstream_bytes_sent_noc_addr, socket.bytes_sent);
 }
 
+void socket_barrier(const SocketSenderInterface& socket) {
+    volatile tt_l1_ptr uint32_t* bytes_acked_ptr =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(socket.bytes_acked_addr);
+    while (socket.bytes_sent != *bytes_acked_ptr);
+}
+
 void update_socket_config(const SocketSenderInterface& socket) {
     volatile tt_l1_ptr sender_socket_md* socket_config =
         reinterpret_cast<volatile tt_l1_ptr sender_socket_md*>(socket.config_addr);
@@ -159,7 +165,7 @@ void set_receiver_socket_page_size(SocketReceiverInterface& socket, uint32_t pag
 
 void socket_wait_for_pages(const SocketReceiverInterface& socket, uint32_t num_pages) {
     uint32_t num_bytes = num_pages * socket.page_size;
-    if (socket.read_ptr + num_bytes >= socket.fifo_curr_size) {
+    if (socket.read_ptr + num_bytes >= socket.fifo_curr_size + socket.fifo_addr) {
         num_bytes += socket.fifo_total_size - socket.fifo_curr_size;
     }
     volatile tt_l1_ptr uint32_t* bytes_sent_ptr =
@@ -172,7 +178,7 @@ void socket_wait_for_pages(const SocketReceiverInterface& socket, uint32_t num_p
 
 void socket_pop_pages(SocketReceiverInterface& socket, uint32_t num_pages) {
     uint32_t num_bytes = num_pages * socket.page_size;
-    ASSERT(num_bytes <= socket.downstream_fifo_curr_size);
+    ASSERT(num_bytes <= socket.fifo_curr_size);
     if (socket.read_ptr + num_bytes >= socket.fifo_curr_size + socket.fifo_addr) {
         socket.read_ptr = socket.read_ptr + num_bytes - socket.fifo_curr_size;
         socket.bytes_acked += num_bytes + socket.fifo_total_size - socket.fifo_curr_size;
@@ -185,8 +191,8 @@ void socket_pop_pages(SocketReceiverInterface& socket, uint32_t num_pages) {
 // TODO: Wrap properly
 void assign_local_cb_to_socket(const SocketReceiverInterface& socket, uint32_t cb_id) {
     LocalCBInterface& local_cb = get_local_cb_interface(cb_id);
-    uint32_t fifo_limit = socket.fifo_curr_size >> cb_addr_shift;
-    uint32_t fifo_size = fifo_limit - (socket.fifo_addr >> cb_addr_shift);
+    uint32_t fifo_size = socket.fifo_curr_size >> cb_addr_shift;
+    uint32_t fifo_limit = socket.fifo_addr >> cb_addr_shift + fifo_size;
     uint32_t fifo_ptr = socket.read_ptr >> cb_addr_shift;
     ASSERT(fifo_size % local_cb.fifo_page_size == 0);
     uint32_t fifo_num_pages = fifo_size / local_cb.fifo_page_size;

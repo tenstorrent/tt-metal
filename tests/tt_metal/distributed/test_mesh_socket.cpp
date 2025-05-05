@@ -176,4 +176,107 @@ TEST_F(MeshSocketTest, MultiConnectionSingleDeviceTest) {
     }
 }
 
+TEST_F(MeshSocketTest, SingleConnectionSingleDeviceSocket) {
+    auto md0 = mesh_device_->create_submesh(MeshShape(1, 1), MeshCoordinate(0, 0));
+    auto current_device_id = md0->get_device(MeshCoordinate(0, 0))->id();
+    auto sender_logical_coord = CoreCoord(0, 0);
+    auto recv_logical_coord = CoreCoord(0, 1);
+    auto sender_virtual_coord = md0->worker_core_from_logical_core(sender_logical_coord);
+    auto recv_virtual_coord = md0->worker_core_from_logical_core(recv_logical_coord);
+    std::size_t socket_fifo_size = 1024;
+
+    auto l1_alignment = MetalContext::instance().hal().get_alignment(HalMemType::L1);
+
+    socket_connection_t socket_connection = {
+        .sender_core = {MeshCoordinate(0, 0), sender_logical_coord},
+        .receiver_core = {MeshCoordinate(0, 0), recv_logical_coord},
+    };
+
+    socket_memory_config_t socket_mem_config = {
+        .socket_type = BufferType::L1,
+        .fifo_size = socket_fifo_size,
+    };
+
+    socket_config_t socket_config = {
+        .socket_connection_config = {socket_connection},
+        .socket_mem_config = socket_mem_config,
+    };
+    auto [send_socket, recv_socket] = create_sockets(md0, md0, socket_config);
+
+    auto sender_data_shard_params =
+        ShardSpecBuffer(CoreRangeSet(sender_logical_coord), {1, 1}, ShardOrientation::ROW_MAJOR, {1, 1}, {1, 1});
+
+    const DeviceLocalBufferConfig sender_device_local_config{
+        .page_size = socket_fifo_size,
+        .buffer_type = BufferType::L1,
+        .buffer_layout = TensorMemoryLayout::HEIGHT_SHARDED,
+        .shard_parameters = sender_data_shard_params,
+        .bottom_up = false};
+
+    const ReplicatedBufferConfig buffer_config{.size = socket_fifo_size};
+
+    auto sender_data_buffer = MeshBuffer::create(buffer_config, sender_device_local_config, md0.get());
+
+    std::vector<uint32_t> src_vec(socket_fifo_size / sizeof(uint32_t));
+    std::iota(src_vec.begin(), src_vec.end(), 0);
+
+    WriteShard(md0->mesh_command_queue(), sender_data_buffer, src_vec, MeshCoordinate(0, 0));
+
+    auto send_recv_program = CreateProgram();
+    auto sender_kernel = CreateKernel(
+        send_recv_program,
+        "tests/tt_metal/tt_metal/test_kernels/misc/socket/sender.cpp",
+        sender_logical_coord,
+        DataMovementConfig{
+            .processor = DataMovementProcessor::RISCV_0,
+            .noc = NOC::RISCV_0_default,
+            .compile_args = {
+                static_cast<uint32_t>(send_socket.config_buffer->address()),
+                static_cast<uint32_t>(sender_data_buffer->address()),
+                32,
+                static_cast<uint32_t>(socket_fifo_size)}});
+
+    auto recv_kernel = CreateKernel(
+        send_recv_program,
+        "tests/tt_metal/tt_metal/test_kernels/misc/socket/receiver_worker.cpp",
+        recv_logical_coord,
+        DataMovementConfig{
+            .processor = DataMovementProcessor::RISCV_0,
+            .noc = NOC::RISCV_0_default,
+            .compile_args = {
+                static_cast<uint32_t>(recv_socket.config_buffer->address()),
+                32,
+                static_cast<uint32_t>(socket_fifo_size)}});
+
+    auto mesh_workload = CreateMeshWorkload();
+    MeshCoordinateRange devices(md0->shape());
+
+    AddProgramToMeshWorkload(mesh_workload, std::move(send_recv_program), devices);
+
+    std::cout << "D" << std::endl;
+    EnqueueMeshWorkload(md0->mesh_command_queue(), mesh_workload, false);
+
+    auto recv_data_shard_params =
+        ShardSpecBuffer(CoreRangeSet(recv_logical_coord), {1, 1}, ShardOrientation::ROW_MAJOR, {1, 1}, {1, 1});
+
+    const DeviceLocalBufferConfig recv_device_local_config{
+        .page_size = socket_fifo_size,
+        .buffer_type = BufferType::L1,
+        .buffer_layout = TensorMemoryLayout::HEIGHT_SHARDED,
+        .shard_parameters = recv_data_shard_params,
+        .bottom_up = false};
+
+    auto recv_data_buffer =
+        MeshBuffer::create(buffer_config, recv_device_local_config, md0.get(), recv_socket.data_buffer->address());
+
+    std::vector<uint32_t> recv_data_readback;
+
+    std::cout << "C" << std::endl;
+    ReadShard(md0->mesh_command_queue(), recv_data_readback, recv_data_buffer, MeshCoordinate(0, 0));
+    std::cout << "A" << std::endl;
+    Finish(md0->mesh_command_queue());
+    std::cout << "B" << std::endl;
+    EXPECT_EQ(src_vec, recv_data_readback);
+}
+
 }  // namespace tt::tt_metal::distributed
