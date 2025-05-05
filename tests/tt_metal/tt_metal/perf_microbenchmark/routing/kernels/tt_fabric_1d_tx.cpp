@@ -75,10 +75,9 @@ void kernel_main() {
     uint32_t num_packets = get_arg_val<uint32_t>(rt_args_idx++);
     uint32_t rx_noc_encoding = get_arg_val<uint32_t>(rt_args_idx++);
     uint32_t time_seed = get_arg_val<uint32_t>(rt_args_idx++);
-    uint32_t outgoing_dir = get_arg_val<uint32_t>(rt_args_idx++);
-    uint32_t my_dev_id = get_arg_val<uint32_t>(rt_args_idx++);
-    uint32_t dst_dev_id = get_arg_val<uint32_t>(rt_args_idx++);
     uint32_t ew_dim = get_arg_val<uint32_t>(rt_args_idx++);
+    uint32_t my_dev_id = get_arg_val<uint32_t>(rt_args_idx++);
+    uint32_t fwd_dev_id = get_arg_val<uint32_t>(rt_args_idx++);
 
     uint64_t noc_dest_addr = get_noc_addr_helper(rx_noc_encoding, target_address);
 
@@ -90,16 +89,28 @@ void kernel_main() {
 
     if constexpr (mcast_mode) {
         uint32_t mcast_fwd_hops = get_arg_val<uint32_t>(rt_args_idx++);
-        uint32_t mcast_bwd_hops = get_arg_val<uint32_t>(rt_args_idx++);
+        uint32_t fwd_dir = get_arg_val<uint32_t>(rt_args_idx++);
 
         fwd_fabric_connection =
             tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(rt_args_idx);
+
+        uint32_t bwd_dev_id = get_arg_val<uint32_t>(rt_args_idx++);
+        uint32_t mcast_bwd_hops = get_arg_val<uint32_t>(rt_args_idx++);
+        uint32_t bwd_dir = get_arg_val<uint32_t>(rt_args_idx++);
         bwd_fabric_connection =
             tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(rt_args_idx);
 
         fwd_packet_header = reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(packet_header_buffer_address);
         bwd_packet_header = reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(
             packet_header_buffer_address + sizeof(PACKET_HEADER_TYPE));
+        zero_l1_buf((uint32_t*)packet_header_buffer_address, sizeof(PACKET_HEADER_TYPE) * 2);
+
+        if constexpr (is_2d_fabric) {
+            fabric_set_mcast_route(
+                (LowLatencyMeshPacketHeader*)fwd_packet_header, (eth_chan_directions)fwd_dir, mcast_fwd_hops);
+            fabric_set_mcast_route(
+                (LowLatencyMeshPacketHeader*)bwd_packet_header, (eth_chan_directions)bwd_dir, mcast_bwd_hops);
+        }
 
         setup_connection_and_headers(
             fwd_fabric_connection, fwd_packet_header, mcast_fwd_hops, noc_dest_addr, packet_payload_size_bytes);
@@ -109,6 +120,7 @@ void kernel_main() {
 
     } else {
         uint32_t unicast_hops = get_arg_val<uint32_t>(rt_args_idx++);
+        uint32_t fwd_dir = get_arg_val<uint32_t>(rt_args_idx++);
 
         fwd_fabric_connection =
             tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(rt_args_idx);
@@ -119,9 +131,9 @@ void kernel_main() {
         if constexpr (is_2d_fabric) {
             fabric_set_unicast_route(
                 (LowLatencyMeshPacketHeader*)packet_header_buffer_address,
-                (eth_chan_directions)outgoing_dir,
+                (eth_chan_directions)fwd_dir,
                 my_dev_id,
-                dst_dev_id,
+                fwd_dev_id,
                 ew_dim);
         }
 

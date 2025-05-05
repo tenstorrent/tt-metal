@@ -322,7 +322,7 @@ void DevicePool::initialize_active_devices() const {
         for (const auto& dev : active_devices) {
             dev->init_fabric();
         }
-        log_info(tt::LogMetal, "Fabric Initialized");
+        log_info(tt::LogMetal, "Fabric Initialized with config {}", fabric_config);
     }
 
     // Activate FD kernels

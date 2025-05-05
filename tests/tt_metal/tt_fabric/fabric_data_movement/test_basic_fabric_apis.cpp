@@ -692,6 +692,10 @@ TEST_F(Fabric2DPullFixture, TestAsyncRawWrite) { RunAsyncWriteTest(this, fabric_
 
 TEST_F(Fabric2DPushFixture, TestUnicastRaw) { RunTestUnicastRaw(this, 1); }
 
+TEST_F(Fabric2DPushFixture, TestUnicastConnAPI) { RunTestUnicastConnAPI(this, 1); }
+
+TEST_F(Fabric2DPushFixture, TestMCastConnAPI) { RunTestMCastConnAPI(this); }
+
 TEST_F(Fabric2DPullFixture, TestAtomicInc) { RunAtomicIncTest(this, fabric_mode::PULL); }
 
 TEST_F(Fabric2DPushFixture, DISABLED_TestAtomicInc) { RunAtomicIncTest(this, fabric_mode::PUSH); }
