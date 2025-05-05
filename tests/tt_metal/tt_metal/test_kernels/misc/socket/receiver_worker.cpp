@@ -8,11 +8,14 @@
 void kernel_main() {
     // Get this value from mesh_socket_t struct on host
     constexpr uint32_t socket_config_addr = get_compile_time_arg_val(0);
-    constexpr uint32_t page_size = get_compile_time_arg_val(1);
-    constexpr uint32_t data_size = get_compile_time_arg_val(2);
+    constexpr uint32_t local_l1_buffer_addr = get_compile_time_arg_val(1);
+    constexpr uint32_t page_size = get_compile_time_arg_val(2);
+    constexpr uint32_t data_size = get_compile_time_arg_val(3);
 
     SocketReceiverInterface receiver_socket = create_receiver_socket_interface(socket_config_addr);
     uint32_t outstanding_data_size = data_size;
+
+    uint64_t dst_noc_addr = get_noc_addr(local_l1_buffer_addr);
 
     set_receiver_socket_page_size(receiver_socket, page_size);
 
@@ -34,8 +37,11 @@ void kernel_main() {
     //    pages in the local CB)
     while (outstanding_data_size) {
         socket_wait_for_pages(receiver_socket, 1);
+        noc_async_write(receiver_socket.read_ptr, dst_noc_addr, page_size);
+        dst_noc_addr += page_size;
         outstanding_data_size -= page_size;
         socket_pop_pages(receiver_socket, 1);
+        noc_async_write_barrier();
         socket_notify_sender(receiver_socket);
     }
     noc_async_write_barrier();

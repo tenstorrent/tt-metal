@@ -79,7 +79,7 @@ void set_sender_socket_page_size(SocketSenderInterface& socket, uint32_t page_si
     }
     fifo_wr_ptr = next_fifo_wr_ptr;
     socket.page_size = page_size;
-    socket.downstream_fifo_curr_size = fifo_limit_page_aligned;
+    socket.downstream_fifo_curr_size = fifo_page_aligned_size;
 }
 
 void socket_reserve_pages(const SocketSenderInterface& socket, uint32_t num_pages) {
@@ -160,7 +160,7 @@ void set_receiver_socket_page_size(SocketReceiverInterface& socket, uint32_t pag
     }
     fifo_rd_ptr = next_fifo_rd_ptr;
     socket.page_size = page_size;
-    socket.fifo_curr_size = fifo_limit_page_aligned;
+    socket.fifo_curr_size = fifo_page_aligned_size;
 }
 
 void socket_wait_for_pages(const SocketReceiverInterface& socket, uint32_t num_pages) {
@@ -192,7 +192,7 @@ void socket_pop_pages(SocketReceiverInterface& socket, uint32_t num_pages) {
 void assign_local_cb_to_socket(const SocketReceiverInterface& socket, uint32_t cb_id) {
     LocalCBInterface& local_cb = get_local_cb_interface(cb_id);
     uint32_t fifo_size = socket.fifo_curr_size >> cb_addr_shift;
-    uint32_t fifo_limit = socket.fifo_addr >> cb_addr_shift + fifo_size;
+    uint32_t fifo_limit = (socket.fifo_addr >> cb_addr_shift) + fifo_size;
     uint32_t fifo_ptr = socket.read_ptr >> cb_addr_shift;
     ASSERT(fifo_size % local_cb.fifo_page_size == 0);
     uint32_t fifo_num_pages = fifo_size / local_cb.fifo_page_size;
