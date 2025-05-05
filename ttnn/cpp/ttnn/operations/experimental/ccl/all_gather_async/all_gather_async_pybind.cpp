@@ -7,7 +7,7 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 
-#include "cpp/pybind11/decorators.hpp"
+#include "cpp/ttnn-pybind/decorators.hpp"
 #include "ttnn/operations/experimental/ccl/all_gather_async/all_gather_async.hpp"
 #include "ttnn/operations/ccl/ccl_host_datastructures.hpp"
 #include "ttnn/distributed/types.hpp"
@@ -29,7 +29,7 @@ void bind_all_gather_async(pybind11::module& module, const ccl_operation_t& oper
             [](const ccl_operation_t& self,
                const ttnn::Tensor& input_tensor,
                const int32_t dim,
-               const global_semaphore::MultiDeviceGlobalSemaphore& multi_device_global_semaphore,
+               const GlobalSemaphore& multi_device_global_semaphore,
                const uint32_t num_links,
                const std::optional<ttnn::MemoryConfig>& memory_config,
                const ttnn::ccl::Topology topology,
@@ -53,7 +53,7 @@ void bind_all_gather_async(pybind11::module& module, const ccl_operation_t& oper
                const uint32_t cluster_axis,
                const MeshDevice& mesh_device,
                const ttnn::ccl::Topology topology,
-               const global_semaphore::MultiDeviceGlobalSemaphore& multi_device_global_semaphore,
+               const GlobalSemaphore& multi_device_global_semaphore,
                const std::optional<ttnn::Tensor>& persistent_output_tensor,
                const std::optional<size_t> num_preferred_links,
                const std::optional<MemoryConfig>& memory_config,

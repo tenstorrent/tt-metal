@@ -10,62 +10,7 @@ from tests.ttnn.utils_for_testing import check_with_pcc_without_tensor_printout
 import ttnn
 
 
-@pytest.mark.parametrize(
-    "batch_size, output_channels, input_channels, input_height, input_width, filter_height, filter_width, stride_h, stride_w, pad_h, pad_w, use_1d_systolic_array, config_override, groups",
-    (
-        # unique convs in rn50 (complete list)
-        # first conv post folding and input_channels padding to tile width
-        # (8, 64, 16, 115, 115, 4, 4, 1, 1, 0, 0, True, None), HANGS!!
-        (16, 64, 16, 115, 115, 4, 4, 1, 1, 0, 0, True, {"act_block_h": 256}, 1),
-        # (20, 64, 16, 115, 115, 4, 4, 1, 1, 0, 0, True, {"act_block_h": 32}, 1),  Out of Memory!!
-        # rn50 layer1
-        (8, 64, 64, 56, 1, 3, 1, 1, 1, 1, 0, True, None, 64),
-        (16, 64, 64, 56, 56, 3, 3, 1, 1, 1, 1, True, None, 1),
-        (20, 64, 64, 56, 56, 3, 3, 1, 1, 1, 1, True, None, 1),
-        # rn50 layer2
-        (8, 128, 128, 56, 56, 3, 3, 2, 2, 1, 1, True, None, 1),
-        (16, 128, 128, 56, 56, 3, 3, 2, 2, 1, 1, True, None, 1),
-        (20, 128, 128, 56, 56, 3, 3, 2, 2, 1, 1, True, {"act_block_h": 32}, 1),
-        (8, 128, 128, 28, 28, 3, 3, 1, 1, 1, 1, True, None, 1),
-        (16, 128, 128, 28, 28, 3, 3, 1, 1, 1, 1, True, None, 1),
-        (20, 128, 128, 28, 28, 3, 3, 1, 1, 1, 1, True, None, 1),
-        # rn50 layer3
-        (8, 256, 256, 28, 28, 3, 3, 2, 2, 1, 1, False, None, 1),
-        (16, 256, 256, 28, 28, 3, 3, 2, 2, 1, 1, False, None, 1),
-        (20, 256, 256, 28, 28, 3, 3, 2, 2, 1, 1, False, None, 1),
-        (8, 256, 256, 14, 14, 3, 3, 1, 1, 1, 1, False, None, 1),
-        (16, 256, 256, 14, 14, 3, 3, 1, 1, 1, 1, False, None, 1),
-        (20, 256, 256, 14, 14, 3, 3, 1, 1, 1, 1, False, None, 1),
-        # rn50 layer4
-        (8, 512, 512, 14, 14, 3, 3, 2, 2, 1, 1, False, None, 1),
-        (16, 512, 512, 14, 14, 3, 3, 2, 2, 1, 1, False, None, 1),
-        (20, 512, 512, 14, 14, 3, 3, 2, 2, 1, 1, False, None, 1),
-        (8, 512, 512, 7, 7, 3, 3, 1, 1, 1, 1, False, None, 1),
-        (16, 512, 512, 7, 7, 3, 3, 1, 1, 1, 1, False, None, 1),
-        (20, 512, 512, 7, 7, 3, 3, 1, 1, 1, 1, False, None, 1),
-        ## small test
-        (1, 64, 64, 8, 8, 3, 3, 1, 1, 1, 1, False, {"num_cores_nhw": 2, "grid_size": (2, 2)}, 1),
-        (1, 64, 64, 16, 16, 3, 3, 1, 1, 1, 1, False, {"num_cores_nhw": 4, "grid_size": (2, 4)}, 1),
-        # (1, 160, 160, 7, 7, 3, 3, 1, 1, 1, 1, False, None, 1), sliding_window_op_infra/sliding_window.cpp:341: indices_length_last_core <= indices_length_per_core
-        (8, 256, 256, 7, 7, 3, 3, 1, 1, 1, 1, False, None, 1),
-        # r50 1x1s2 shapes
-        # Fails with packer_l1_acc = True (20, 256, 64, 56, 56, 1, 1, 2, 2, 0, 0, False, None, 1),  # r50 first bottleneck downsample shape
-        (20, 256, 64, 56, 56, 1, 1, 2, 2, 0, 0, True, None, 1),  # r50 first bottleneck downsample shape
-        # Fails with packer_l1_acc = True (20, 512, 256, 56, 56, 1, 1, 2, 2, 0, 0, False, None, 1),  # r50 second bottleneck downsample shape
-        # (20, 512, 256, 56, 56, 1, 1, 2, 2, 0, 0, True, None, 1), - doesnt fit
-        (20, 1024, 512, 28, 28, 1, 1, 2, 2, 0, 0, False, None, 1),  # r50 third bottleneck downsample shape
-        # (20, 1024, 512, 28, 28, 1, 1, 2, 2, 0, 0, True, None, 1), - doesnt fit
-        (20, 2048, 1024, 14, 14, 1, 1, 2, 2, 0, 0, False, None, 1),  # r50 fourth bottleneck downsample shape
-        # (20, 2048, 1024, 14, 14, 1, 1, 2, 2, 0, 0, True, None, 1), - doesnt fit
-        # (20, 128, 256, 56, 56, 1, 1, 2, 2, 0, 0, True, None, 1),  ## L2M1 DS: doesn't fit
-        # formerly failing test case in segformer when ntiles_channels not evenly divisible with num_cores_c
-        (1, 640, 640, 32, 32, 3, 3, 1, 1, 1, 1, False, None, 1),
-    ),
-)
-@pytest.mark.parametrize("on_device", [True, False], ids=["on_device", "on_host"])
-@pytest.mark.parametrize("is_owned", [True, False], ids=["owned_storage", "borrowed_storage"])
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 2**15}], indirect=True)
-def test_prepare_conv_weights(
+def prepare_conv_weights_func(
     batch_size,
     output_channels,
     input_channels,
@@ -77,12 +22,12 @@ def test_prepare_conv_weights(
     stride_w,
     pad_h,
     pad_w,
-    use_1d_systolic_array,
     config_override,
     on_device,
     device,
     groups,
     is_owned,
+    slice_config=None,
 ):
     if device.core_grid.y == 7:
         pytest.skip("Issue #6992: Statically allocated circular buffers in program clash with L1 buffers on core range")
@@ -160,6 +105,7 @@ def test_prepare_conv_weights(
         "groups": groups,
         "device": device,
         "conv_config": conv_config,
+        "slice_config": slice_config,
     }
 
     tt_input_tensor = ttnn.to_device(tt_input_tensor, device)
@@ -205,14 +151,107 @@ def test_prepare_conv_weights(
 
 
 @pytest.mark.parametrize(
-    "batch_size, output_channels, input_channels, input_height, input_width, filter_height, filter_width, stride_h, stride_w, pad_h, pad_w, use_1d_systolic_array, config_override",
+    "batch_size, output_channels, input_channels, input_height, input_width, filter_height, filter_width, stride_h, stride_w, pad_h, pad_w,  config_override, groups",
+    (
+        # unique convs in rn50 (complete list)
+        # first conv post folding and input_channels padding to tile width
+        # (8, 64, 16, 115, 115, 4, 4, 1, 1, 0, 0, True, None), HANGS!!
+        (16, 64, 16, 115, 115, 4, 4, 1, 1, 0, 0, {"act_block_h": 256}, 1),
+        # (20, 64, 16, 115, 115, 4, 4, 1, 1, 0, 0, {"act_block_h": 32}, 1),  Out of Memory!!
+        # rn50 layer1
+        (8, 64, 64, 56, 1, 3, 1, 1, 1, 1, 0, None, 64),
+        (16, 64, 64, 56, 56, 3, 3, 1, 1, 1, 1, None, 1),
+        (20, 64, 64, 56, 56, 3, 3, 1, 1, 1, 1, None, 1),
+        # rn50 layer2
+        (8, 128, 128, 56, 56, 3, 3, 2, 2, 1, 1, None, 1),
+        (16, 128, 128, 56, 56, 3, 3, 2, 2, 1, 1, None, 1),
+        (20, 128, 128, 56, 56, 3, 3, 2, 2, 1, 1, {"act_block_h": 32}, 1),
+        (8, 128, 128, 28, 28, 3, 3, 1, 1, 1, 1, None, 1),
+        (16, 128, 128, 28, 28, 3, 3, 1, 1, 1, 1, None, 1),
+        (20, 128, 128, 28, 28, 3, 3, 1, 1, 1, 1, None, 1),
+        # rn50 layer3
+        (8, 256, 256, 28, 28, 3, 3, 2, 2, 1, 1, None, 1),
+        (16, 256, 256, 28, 28, 3, 3, 2, 2, 1, 1, None, 1),
+        (20, 256, 256, 28, 28, 3, 3, 2, 2, 1, 1, None, 1),
+        (8, 256, 256, 14, 14, 3, 3, 1, 1, 1, 1, None, 1),
+        (16, 256, 256, 14, 14, 3, 3, 1, 1, 1, 1, None, 1),
+        (20, 256, 256, 14, 14, 3, 3, 1, 1, 1, 1, None, 1),
+        # rn50 layer4
+        (8, 512, 512, 14, 14, 3, 3, 2, 2, 1, 1, None, 1),
+        (16, 512, 512, 14, 14, 3, 3, 2, 2, 1, 1, None, 1),
+        (20, 512, 512, 14, 14, 3, 3, 2, 2, 1, 1, None, 1),
+        (8, 512, 512, 7, 7, 3, 3, 1, 1, 1, 1, None, 1),
+        (16, 512, 512, 7, 7, 3, 3, 1, 1, 1, 1, None, 1),
+        (20, 512, 512, 7, 7, 3, 3, 1, 1, 1, 1, None, 1),
+        ## small test
+        (1, 64, 64, 8, 8, 3, 3, 1, 1, 1, 1, {"num_cores_nhw": 2, "grid_size": (2, 2)}, 1),
+        (1, 64, 64, 16, 16, 3, 3, 1, 1, 1, 1, {"num_cores_nhw": 4, "grid_size": (2, 4)}, 1),
+        # (1, 160, 160, 7, 7, 3, 3, 1, 1, 1, 1, None, 1), sliding_window_op_infra/sliding_window.cpp:341: indices_length_last_core <= indices_length_per_core
+        (8, 256, 256, 7, 7, 3, 3, 1, 1, 1, 1, None, 1),
+        # r50 1x1s2 shapes
+        # Fails with packer_l1_acc = True (20, 256, 64, 56, 56, 1, 1, 2, 2, 0, 0, None, 1),  # r50 first bottleneck downsample shape
+        (20, 256, 64, 56, 56, 1, 1, 2, 2, 0, 0, None, 1),  # r50 first bottleneck downsample shape
+        # Fails with packer_l1_acc = True (20, 512, 256, 56, 56, 1, 1, 2, 2, 0, 0, None, 1),  # r50 second bottleneck downsample shape
+        # (20, 512, 256, 56, 56, 1, 1, 2, 2, 0, 0, True, None, 1), - doesnt fit
+        (20, 1024, 512, 28, 28, 1, 1, 2, 2, 0, 0, None, 1),  # r50 third bottleneck downsample shape
+        # (20, 1024, 512, 28, 28, 1, 1, 2, 2, 0, 0, True, None, 1), - doesnt fit
+        (20, 2048, 1024, 14, 14, 1, 1, 2, 2, 0, 0, None, 1),  # r50 fourth bottleneck downsample shape
+        # (20, 2048, 1024, 14, 14, 1, 1, 2, 2, 0, 0, True, None, 1), - doesnt fit
+        # (20, 128, 256, 56, 56, 1, 1, 2, 2, 0, 0, True, None, 1),  ## L2M1 DS: doesn't fit
+        # formerly failing test case in segformer when ntiles_channels not evenly divisible with num_cores_c
+        (1, 640, 640, 32, 32, 3, 3, 1, 1, 1, 1, None, 1),
+    ),
+)
+@pytest.mark.parametrize("on_device", [True, False], ids=["on_device", "on_host"])
+@pytest.mark.parametrize("is_owned", [True, False], ids=["owned_storage", "borrowed_storage"])
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 2**15}], indirect=True)
+def test_prepare_conv_weights(
+    batch_size,
+    output_channels,
+    input_channels,
+    input_height,
+    input_width,
+    filter_height,
+    filter_width,
+    stride_h,
+    stride_w,
+    pad_h,
+    pad_w,
+    config_override,
+    on_device,
+    device,
+    groups,
+    is_owned,
+):
+    prepare_conv_weights_func(
+        batch_size,
+        output_channels,
+        input_channels,
+        input_height,
+        input_width,
+        filter_height,
+        filter_width,
+        stride_h,
+        stride_w,
+        pad_h,
+        pad_w,
+        config_override,
+        on_device,
+        device,
+        groups,
+        is_owned,
+    )
+
+
+@pytest.mark.parametrize(
+    "batch_size, output_channels, input_channels, input_height, input_width, filter_height, filter_width, stride_h, stride_w, pad_h, pad_w, config_override",
     (
         # rn50 layer1
-        (8, 64, 64, 56, 56, 3, 3, 1, 1, 1, 1, True, None),
-        (16, 64, 64, 56, 56, 3, 3, 1, 1, 1, 1, True, None),
-        (20, 64, 64, 56, 56, 3, 3, 1, 1, 1, 1, True, None),
+        (8, 64, 64, 56, 56, 3, 3, 1, 1, 1, 1, None),
+        (16, 64, 64, 56, 56, 3, 3, 1, 1, 1, 1, None),
+        (20, 64, 64, 56, 56, 3, 3, 1, 1, 1, 1, None),
         # formerly failing test case in segformer when ntiles_channels not evenly divisible with num_cores_c
-        (1, 640, 640, 32, 32, 3, 3, 1, 1, 1, 1, False, None),
+        (1, 640, 640, 32, 32, 3, 3, 1, 1, 1, 1, None),
     ),
 )
 @pytest.mark.parametrize("has_bias", [True], ids=["has_bias"])
@@ -229,7 +268,6 @@ def test_prepare_bias(
     stride_w,
     pad_h,
     pad_w,
-    use_1d_systolic_array,
     config_override,
     has_bias,
     device,
@@ -330,3 +368,62 @@ def test_prepare_bias(
     passing, pcc_msg = check_with_pcc_without_tensor_printout(torch_output_tensor, torch_out_golden_tensor, pcc=pcc)
     logger.info(f"PCC = {pcc_msg}. Threshold = {pcc}")
     assert passing
+
+
+SliceHeight = ttnn.Conv2dSliceHeight
+SliceWidth = ttnn.Conv2dSliceWidth
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
+@pytest.mark.parametrize(
+    "batch_size, input_channels, output_channels, input_height, input_width, slice_type, num_slices, kernel, stride, padding, dilation, act_block_h_override",
+    # fmt: off
+    (
+        (2, 64,   64,   384,   64,    SliceHeight,   6, (4, 4), (2, 2), (1, 1), (1, 1),  0,       ),
+        (1, 32,   32,   1024,  1024,  SliceWidth,    4, (5, 5), (1, 1), (0, 0), (1, 1),  32,      ),
+        (1, 64,   128,  992,   992,   SliceWidth,   64, (2, 2), (1, 1), (0, 0), (1, 1),  32 * 4,  ),
+    )
+    # fmt: on
+)
+def test_conv_dram(
+    device,
+    batch_size,
+    output_channels,
+    input_channels,
+    input_height,
+    input_width,
+    slice_type,
+    num_slices,
+    kernel,
+    stride,
+    padding,
+    dilation,
+    act_block_h_override,
+):
+    if device.core_grid.y == 7:
+        pytest.skip("Tests have been configured for N150.")
+    config = {
+        "act_block_h": act_block_h_override,
+    }
+    prepare_conv_weights_func(
+        batch_size,
+        output_channels,
+        input_channels,
+        input_height,
+        input_width,
+        kernel[0],
+        kernel[1],
+        stride[0],
+        stride[1],
+        padding[0],
+        padding[1],
+        config,
+        True,
+        device=device,
+        groups=1,
+        is_owned=False,
+        slice_config=ttnn.Conv2dSliceConfig(
+            slice_type=slice_type,
+            num_slices=num_slices,
+        ),
+    )

@@ -27,12 +27,11 @@ from models.utility_functions import (
 
 @pytest.mark.timeout(600)
 def test_grok_moe_inference(t3k_mesh_device, use_program_cache, reset_seeds):
-    t3k_mesh_device.enable_async(True)
     pcc = 0.87  # real weights = 0.99
     iterations = 1
     dtype = ttnn.bfloat8_b
 
-    model_args = TtModelArgs(t3k_mesh_device.get_device(0), dummy_weights=os.getenv("CI") == "true")
+    model_args = TtModelArgs(t3k_mesh_device, dummy_weights=os.getenv("CI") == "true")
     model_args.n_layers = 1
     state_dict = model_args.load_state_dict()
 

@@ -21,7 +21,6 @@
 #include "core_coord.hpp"
 #include "core_descriptor.hpp"
 #include "dispatch_core_common.hpp"
-#include "dispatch_mem_map.hpp"
 #include "hal.hpp"
 #include "hal_types.hpp"
 #include "impl/context/metal_context.hpp"
@@ -93,13 +92,14 @@ std::map<std::string, std::string> initialize_device_kernel_defines(chip_id_t de
         device_kernel_defines.emplace("IS_NOT_POW2_NUM_L1_BANKS", "1");
     }
 
-    // TODO (abhullar): Until we switch to virtual coordinates, we need to pass physical PCIe coordinates to device
-    //  because Blackhole PCIe endpoint is dependent on board type
     auto pcie_cores = soc_d.get_cores(CoreType::PCIE, soc_d.get_umd_coord_system());
     CoreCoord pcie_core = pcie_cores.empty() ? soc_d.grid_size : pcie_cores[0];
+    auto virtual_pcie_core =
+        tt::tt_metal::MetalContext::instance().get_cluster().get_virtual_coordinate_from_physical_coordinates(
+            device_id, {pcie_core.x, pcie_core.y});
 
-    device_kernel_defines.emplace("PCIE_NOC_X", std::to_string(pcie_core.x));
-    device_kernel_defines.emplace("PCIE_NOC_Y", std::to_string(pcie_core.y));
+    device_kernel_defines.emplace("PCIE_NOC_X", std::to_string(virtual_pcie_core.x));
+    device_kernel_defines.emplace("PCIE_NOC_Y", std::to_string(virtual_pcie_core.y));
 
     return device_kernel_defines;
 }
@@ -141,9 +141,7 @@ uint32_t compute_build_key(chip_id_t device_id, uint8_t num_hw_cqs) {
 
 JitBuildStateSet create_build_state(JitBuildEnv& build_env, chip_id_t /*device_id*/, uint8_t num_hw_cqs, bool is_fw) {
     // Get the dispatch message address for this device
-    CoreType dispatch_core_type = MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_type();
-    uint32_t dispatch_message_addr =
-        DispatchMemMap::get(dispatch_core_type, num_hw_cqs).get_dispatch_message_addr_start();
+    uint32_t dispatch_message_addr = MetalContext::instance().dispatch_mem_map().get_dispatch_message_addr_start();
 
     // Prepare the container for build states
     const auto& hal = MetalContext::instance().hal();

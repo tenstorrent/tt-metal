@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "dataflow_api.h"
+#include "height_sharded_reader_common.hpp"
 
 void kernel_main() {
     // This writer is for output tensor in tile format
@@ -37,6 +38,7 @@ void kernel_main() {
     constexpr uint32_t act_block_w_extra_align_bytes = get_compile_time_arg_val(24);
     constexpr uint32_t act_block_h_datums_first_reader = get_compile_time_arg_val(25);
     constexpr uint32_t act_block_h_datums_last_block = get_compile_time_arg_val(26);
+    constexpr bool needs_act_block_zero_out = get_compile_time_arg_val(27) == 1;
 
     constexpr uint32_t act_block_h_datums_read_last_block =
         act_block_h_datums_last_block > act_block_h_datums
@@ -59,6 +61,10 @@ void kernel_main() {
         return;
     }
 
+    if constexpr (split_reader && needs_act_block_zero_out) {
+        zero_out_tiles<cb_id_act_second_reader>();
+    }
+
     // mcast args
     const uint32_t weights_mcast_dest_noc_start_x = get_arg_val<uint32_t>(i++);
     const uint32_t weights_mcast_dest_noc_start_y = get_arg_val<uint32_t>(i++);
@@ -70,7 +76,6 @@ void kernel_main() {
     const uint32_t weights_mcast_receiver_semaphore_addr = get_semaphore(get_arg_val<uint32_t>(i++));
 
     constexpr uint32_t act_block_h_datums_read = act_block_h_datums / 2;  // Extra /2 because of packed uint16 reads
-    constexpr uint32_t act_block_num_tiles_read = act_block_num_tiles;
 
     volatile tt_l1_ptr uint32_t* packed_reader_indices_ptr;
     uint32_t reader_idx;
@@ -150,7 +155,7 @@ void kernel_main() {
                         // Do the second half of the reads for act
                         noc_async_read_one_packet_set_state(get_noc_addr(act_l1_read_addr), coalesced_read_bytes);
                         reader_idx = start_reader_idx;
-                        cb_reserve_back(cb_id_act_second_reader, act_block_num_tiles_read);
+                        cb_reserve_back(cb_id_act_second_reader, act_block_num_tiles);
                         uint32_t l1_write_addr_act = get_write_ptr(cb_id_act_second_reader);
                         uint32_t act_block_h_datums_read_curr =
                             bh == out_num_blocks_h - 1 ? act_block_h_datums_read_last_block : act_block_h_datums_read;
@@ -171,7 +176,7 @@ void kernel_main() {
                             reader_idx++;
                         }
                         noc_async_read_barrier();
-                        cb_push_back(cb_id_act_second_reader, act_block_num_tiles_read);
+                        cb_push_back(cb_id_act_second_reader, act_block_num_tiles);
 
                         reader_offset += window_outer_offset;
                     }

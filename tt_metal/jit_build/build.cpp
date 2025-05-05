@@ -30,6 +30,7 @@
 #include "profiler_state.hpp"
 #include "tt_backend_api_types.hpp"
 #include "tt_metal/llrt/tt_elffile.hpp"
+#include "control_plane.hpp"
 #include <umd/device/types/arch.h>
 
 namespace fs = std::filesystem;
@@ -160,7 +161,7 @@ void JitBuildEnv::init(
     switch (arch) {
         case ARCH::GRAYSKULL: common_flags = "-mcpu=tt-gs "; break;
         case ARCH::WORMHOLE_B0: common_flags = "-mcpu=tt-wh "; break;
-        case ARCH::BLACKHOLE: common_flags = "-mcpu=tt-bh "; break;
+        case ARCH::BLACKHOLE: common_flags = "-mcpu=tt-bh -fno-rvtt-sfpu-replay "; break;
         default: TT_ASSERT(false, "Invalid arch"); break;
     }
     common_flags += "-std=c++17 -flto -ffast-math ";
@@ -238,6 +239,14 @@ void JitBuildEnv::init(
 
     if (rtoptions.get_hw_cache_invalidation_enabled()) {
         this->defines_ += "-DENABLE_HW_CACHE_INVALIDATION ";
+    }
+
+    if (rtoptions.get_relaxed_memory_ordering_disabled()) {
+        this->defines_ += "-DDISABLE_RELAXED_MEMORY_ORDERING ";
+    }
+
+    if (tt::tt_metal::MetalContext::instance().get_cluster().is_base_routing_fw_enabled()) {
+        this->defines_ += "-DROUTING_FW_ENABLED ";
     }
 
     // Includes

@@ -78,9 +78,7 @@ public:
     bool operator!=(const TensorLayout&) const = default;
 
     static constexpr auto attribute_names = std::forward_as_tuple("dtype", "page_config", "memory_config", "alignment");
-    const auto attribute_values() const {
-        return std::forward_as_tuple(dtype_, page_config_, memory_config_, alignment_);
-    }
+    auto attribute_values() const { return std::forward_as_tuple(dtype_, page_config_, memory_config_, alignment_); }
 
     static TensorLayout restore_from_serialized(
         DataType dtype, const PageConfig& page_config, const MemoryConfig& memory_config, const Alignment& alignment);

@@ -22,6 +22,11 @@ from loguru import logger
 from tests.scripts.common import run_process_and_get_result
 from tests.scripts.common import get_updated_device_params
 
+# Constants for device configurations
+GALAXY_NUM_DEVICES = 32
+TG_NUM_PCIE_DEVICES = 4
+SIX_U_NUM_PCIE_DEVICES = 32
+
 
 @pytest.fixture(scope="function")
 def reset_seeds():
@@ -52,6 +57,46 @@ def is_single_card_n300(device):
     num_devices = ttnn.GetNumAvailableDevices()
     # N150 has 1 chip; N300 has 2 chips (1 pcie); T3000 has 8 chips (4 pcie)
     return num_pcie == 1 and num_devices == 2 and device.arch().name == "WORMHOLE_B0"
+
+
+@pytest.fixture(scope="function")
+def galaxy_type():
+    if is_6u():
+        return "6U"
+    elif is_tg_cluster():
+        return "4U"
+    else:
+        return None
+
+
+def is_galaxy():
+    import ttnn
+
+    num_devices = ttnn.GetNumAvailableDevices()
+    # Galaxy systems have 32 devices
+    return num_devices == GALAXY_NUM_DEVICES
+
+
+# TODO: Remove this when TG clusters are deprecated.
+def is_6u():
+    import ttnn
+
+    # 6U has 32 PCIe devices
+    return is_galaxy() and ttnn.GetNumPCIeDevices() == SIX_U_NUM_PCIE_DEVICES
+
+
+# TODO: Remove this when TG clusters are deprecated.
+def is_tg_cluster():
+    import ttnn
+
+    # TG has 4 PCIe devices
+    return is_galaxy() and ttnn.GetNumPCIeDevices() == TG_NUM_PCIE_DEVICES
+
+
+def first_available_tg_device():
+    assert is_tg_cluster()
+    # The id of the first user exposed device for a TG cluster is 4
+    return 4
 
 
 @pytest.fixture(scope="session")
@@ -107,8 +152,12 @@ def device(request, device_params):
     device_id = request.config.getoption("device_id")
     request.node.pci_ids = [ttnn.GetPCIeDeviceID(device_id)]
 
-    num_devices = ttnn.GetNumPCIeDevices()
-    assert device_id < num_devices, "CreateDevice not supported for non-mmio device"
+    # When initializing a single device on a TG system, we want to
+    # target the first user exposed device, not device 0 (one of the
+    # 4 gateway devices)
+    if is_tg_cluster() and not device_id:
+        device_id = first_available_tg_device()
+
     updated_device_params = get_updated_device_params(device_params)
     device = ttnn.CreateDevice(device_id=device_id, **updated_device_params)
     ttnn.SetDefaultDevice(device)
@@ -228,8 +277,7 @@ def mesh_device(request, silicon_arch_name, device_params):
     logger.debug(f"multidevice with {mesh_device.get_num_devices()} devices is created")
     yield mesh_device
 
-    for device in mesh_device.get_devices():
-        ttnn.DumpDeviceProfiler(device)
+    ttnn.DumpDeviceProfiler(mesh_device)
 
     ttnn.close_mesh_device(mesh_device)
     reset_fabric(fabric_config)
@@ -264,8 +312,7 @@ def pcie_mesh_device(request, silicon_arch_name, silicon_arch_wormhole_b0, devic
     logger.debug(f"multidevice with {mesh_device.get_num_devices()} devices is created")
     yield mesh_device
 
-    for device in mesh_device.get_devices():
-        ttnn.DumpDeviceProfiler(device)
+    ttnn.DumpDeviceProfiler(mesh_device)
 
     ttnn.close_mesh_device(mesh_device)
     reset_fabric(fabric_config)
@@ -290,8 +337,7 @@ def n300_mesh_device(request, silicon_arch_name, silicon_arch_wormhole_b0, devic
     logger.debug(f"multidevice with {mesh_device.get_num_devices()} devices is created")
     yield mesh_device
 
-    for device in mesh_device.get_devices():
-        ttnn.DumpDeviceProfiler(device)
+    ttnn.DumpDeviceProfiler(mesh_device)
 
     ttnn.close_mesh_device(mesh_device)
     reset_fabric(fabric_config)
@@ -317,8 +363,7 @@ def t3k_mesh_device(request, silicon_arch_name, silicon_arch_wormhole_b0, device
     logger.debug(f"multidevice with {mesh_device.get_num_devices()} devices is created")
     yield mesh_device
 
-    for device in mesh_device.get_devices():
-        ttnn.DumpDeviceProfiler(device)
+    ttnn.DumpDeviceProfiler(mesh_device)
 
     ttnn.close_mesh_device(mesh_device)
     reset_fabric(fabric_config)
@@ -380,19 +425,6 @@ def use_program_cache(request):
     yield
     for dev in devices:
         dev.disable_and_clear_program_cache()
-
-
-@pytest.fixture(scope="function")
-def enable_async_mode(request):
-    devices = get_devices(request)
-    if not devices:
-        logger.warning("No device fixture found to apply async mode to: ASYNC MODE DISABLED")
-
-    for dev in devices:
-        dev.enable_async(request.param)
-    yield request.param
-    for dev in devices:
-        dev.enable_async(False)
 
 
 @pytest.fixture(scope="function")
@@ -667,6 +699,10 @@ def pytest_handlecrashitem(crashitem, report, sched):
 
 def reset_tensix(tt_open_devices=None):
     import shutil
+
+    if is_galaxy():
+        logger.info("Skipping reset for Galaxy systems, need a new reset.json scheme")
+        return
 
     # Check if tt-smi exists
     if not shutil.which("tt-smi"):

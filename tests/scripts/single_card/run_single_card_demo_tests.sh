@@ -52,6 +52,10 @@ run_llama3_func() {
 
 }
 
+run_ufld_v2_func() {
+  #ufld_v2
+  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/ufld_v2/demo/demo.py --timeout 600
+}
 run_vgg_func() {
 
   #VGG11/VGG16
@@ -81,6 +85,12 @@ run_bert_func() {
   if [[ $fail -ne 0 ]]; then
     exit 1
   fi
+
+}
+
+run_resnet_stability() {
+
+  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto --disable-warnings models/demos/wormhole/resnet50/tests/test_resnet50_stability.py -k "short"
 
 }
 
@@ -192,6 +202,12 @@ run_whisper_perf() {
 run_yolov9c_perf() {
 
   WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto --disable-warnings models/experimental/functional_yolov9c/demo/demo.py --timeout 600
+
+}
+
+run_yolov8s_world_perf() {
+
+  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto --disable-warnings models/experimental/yolov8s_world/demo/demo.py --timeout 600
 
 }
 

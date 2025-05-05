@@ -361,6 +361,7 @@ void ControlPlane::initialize_from_mesh_graph_desc_file(const std::string& mesh_
             this->get_mesh_physical_chip_ids(mesh_ns_size, mesh_ew_size, nw_chip_physical_id));
     } else if (
         mesh_graph_desc_filename == "quanta_galaxy_mesh_graph_descriptor.yaml" ||
+        mesh_graph_desc_filename == "quanta_galaxy_torus_2d_graph_descriptor.yaml" ||
         mesh_graph_desc_filename == "p100_mesh_graph_descriptor.yaml" ||
         mesh_graph_desc_filename == "p150_mesh_graph_descriptor.yaml" ||
         mesh_graph_desc_filename == "p150_x2_mesh_graph_descriptor.yaml" ||
@@ -985,5 +986,18 @@ void ControlPlane::print_ethernet_channels() const {
     }
     log_debug(tt::LogFabric, "{}", ss.str());
 }
+
+void ControlPlane::set_routing_mode(uint16_t mode) {
+    if (!(this->routing_mode_ == 0 || this->routing_mode_ == mode)) {
+        tt::log_warning(
+            tt::LogFabric,
+            "Control Plane: Routing mode already set to {}. Setting to {}",
+            (uint16_t)this->routing_mode_,
+            (uint16_t)mode);
+    }
+    this->routing_mode_ = mode;
+}
+
+uint16_t ControlPlane::get_routing_mode() const { return this->routing_mode_; }
 
 }  // namespace tt::tt_fabric

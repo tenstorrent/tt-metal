@@ -10,9 +10,9 @@
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/circular_buffer_types.hpp>
 #include <tt-metalium/semaphore.hpp>
-#include <tt-metalium/program_device_map.hpp>
 #include <tt-metalium/worker_config_buffer.hpp>
 #include <tt-metalium/dev_msgs.h>
+#include <tt-metalium/program_descriptors.hpp>
 
 namespace tt {
 
@@ -26,6 +26,7 @@ class CircularBuffer;
 class IDevice;
 class Program;
 class CircularBufferConfig;
+class ProgramTransferInfo;
 
 struct ProgramCommandSequence;
 
@@ -71,7 +72,7 @@ std::shared_ptr<CircularBuffer> GetCircularBuffer(const Program& program, CBHand
 class Internal_;
 }  // namespace detail
 
-typedef std::array<std::optional<KernelHandle>, DISPATCH_CLASS_MAX> kernel_id_array_t;
+using kernel_id_array_t = std::array<std::optional<KernelHandle>, DISPATCH_CLASS_MAX>;
 
 struct KernelGroup {
     uint32_t programmable_core_type_index;
@@ -123,6 +124,7 @@ enum class ProgramBinaryStatus : uint8_t {
 class Program {
 public:
     Program();
+    explicit Program(const ProgramDescriptor& descriptor);
 
     Program(const Program& other) = delete;
     Program& operator=(const Program& other) = delete;

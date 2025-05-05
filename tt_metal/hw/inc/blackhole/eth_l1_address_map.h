@@ -24,7 +24,7 @@ struct address_map {
     static constexpr std::int32_t MAX_SIZE = 512 * 1024 - SYSENG_RESERVED_SIZE - ERISC_BARRIER_SIZE -
                                              ERISC_APP_ROUTING_INFO_SIZE - ERISC_APP_SYNC_INFO_SIZE -
                                              FABRIC_ROUTER_CONFIG_SIZE;
-    static constexpr std::int32_t MAX_L1_LOADING_SIZE = MAX_SIZE;
+    static constexpr std::int32_t MAX_L1_LOADING_ADDR = MAX_SIZE;
 
     static constexpr std::int32_t FABRIC_ROUTER_CONFIG_BASE = MAX_SIZE;
     static constexpr std::int32_t ERISC_APP_SYNC_INFO_BASE = FABRIC_ROUTER_CONFIG_BASE + FABRIC_ROUTER_CONFIG_SIZE;
@@ -53,8 +53,8 @@ struct address_map {
     static constexpr std::int32_t MEM_ERISC_INIT_LOCAL_L1_BASE_SCRATCH = MEM_ERISC_MAP_END;
     static constexpr std::int32_t MEM_ERISC_STACK_SIZE = 1024;
     static constexpr std::int32_t MEM_SLAVE_ERISC_STACK_SIZE = 1024;
-    static constexpr std::int32_t MEM_ERISC_STACK_BASE =
-        RISC_LOCAL_MEM_BASE + MEM_ERISC_LOCAL_SIZE - MEM_ERISC_STACK_SIZE;
+    static constexpr std::int32_t MEM_ERISC_STACK_TOP =
+        RISC_LOCAL_MEM_BASE + MEM_ERISC_LOCAL_SIZE;
 
     static constexpr std::int32_t LAUNCH_ERISC_APP_FLAG = 0;  // don't need this - just to get things to compile
     static constexpr std::int32_t ERISC_L1_UNRESERVED_BASE = (MEM_ERISC_MAP_END + (69 * 1024) + 63) & ~63;

@@ -7,7 +7,7 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 
-#include "cpp/pybind11/decorators.hpp"
+#include "cpp/ttnn-pybind/decorators.hpp"
 #include "ttnn/operations/experimental/transformer/all_reduce_create_qkv_heads/all_reduce_create_qkv_heads.hpp"
 #include "ttnn/types.hpp"
 #include "cpp/ttnn/global_semaphore.hpp"
@@ -31,7 +31,7 @@ void bind_all_reduce_create_qkv_heads(pybind11::module& module, const ccl_operat
                const ttnn::Tensor& batch_offset,
                const uint32_t cluster_axis,
                const MeshDevice& mesh_device,
-               const global_semaphore::MultiDeviceGlobalSemaphore& multi_device_global_semaphore,
+               const GlobalSemaphore& multi_device_global_semaphore,
                const uint32_t num_heads,
                const ttnn::MemoryConfig& memory_config,
                ttnn::ccl::Topology topology,

@@ -4,7 +4,6 @@
 #include "eth_router.hpp"
 
 #include <host_api.hpp>
-#include <tt-metalium/dispatch_settings.hpp>
 #include <map>
 #include <string>
 #include <utility>
@@ -15,8 +14,8 @@
 #include "device.hpp"
 #include "impl/context/metal_context.hpp"
 #include "dispatch/kernel_config/fd_kernel.hpp"
+#include "dispatch/dispatch_settings.hpp"
 #include "dispatch_core_common.hpp"
-#include "dispatch_mem_map.hpp"
 #include "eth_tunneler.hpp"
 #include "hal.hpp"
 #include "prefetch.hpp"
@@ -25,7 +24,7 @@
 using namespace tt::tt_metal;
 
 void EthRouterKernel::GenerateStaticConfigs() {
-    auto& my_dispatch_constants = DispatchMemMap::get(GetCoreType());
+    auto& my_dispatch_constants = MetalContext::instance().dispatch_mem_map(GetCoreType());
     if (as_mux_) {
         uint16_t channel = tt::tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(
             servicing_device_id_);  // TODO: can be mmio

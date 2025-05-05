@@ -129,6 +129,7 @@ std::tuple<CoreRangeSet, std::vector<CoreCoord>> choose_worker_cores(
 //   (in other words, disable the "bidirectional" send flag)
 tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_multi_core_with_workers(
     const Tensor& input_tensor,
+    IDevice* sender_device,
     std::optional<IDevice*> forward_device,
     std::optional<IDevice*> backward_device,
     Tensor& output_tensor,
@@ -140,18 +141,21 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_multi_core_with_w
     const GlobalSemaphore semaphore,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
     tt::tt_metal::Program program{};
+    IDevice* mesh_device = input_tensor.mesh_device();
+    if (!mesh_device) {
+        mesh_device = input_tensor.device();
+    }
     const bool enable_persistent_fabric_mode = true;
     const bool enable_async_output_tensor = false;
     const bool lower_command_stream_to_noc_commands =
         ttnn::ccl::worker_detail::can_command_stream_be_lowered_to_noc_commands(input_tensor);
 
-    IDevice* device = input_tensor.device();
     bool is_first_chip = ring_index == 0;
     bool is_last_chip = ring_index == ring_size - 1;
     log_trace(
         tt::LogOp,
         "DEBUG: device: {}, is_first_chip: {}, is_last_chip: {}",
-        input_tensor.device()->id(),
+        sender_device->id(),
         is_first_chip,
         is_last_chip);
 
@@ -163,7 +167,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_multi_core_with_w
     // Get worker cores, assuming 1 worker per link
     uint32_t num_workers_per_link = 1;
     const auto [sender_worker_core_range, sender_worker_cores] =
-        choose_worker_cores(num_links, num_workers_per_link, enable_persistent_fabric_mode, device, sub_device_id);
+        choose_worker_cores(num_links, num_workers_per_link, enable_persistent_fabric_mode, mesh_device, sub_device_id);
 
     // L1 Scratch CB Creation
     const size_t packet_size_bytes = tt::tt_fabric::get_1d_fabric_config().channel_buffer_size_bytes;
@@ -205,7 +209,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_multi_core_with_w
             sender_worker_core_range,
             tt::tt_metal::ReaderDataMovementConfig{},
             1,  // num_command_streams
-            device->id());
+            sender_device->id());
 
     tt::tt_metal::KernelHandle worker_sender_writer_kernel_id =
         ttnn::ccl::worker_detail::generate_multi_command_stream_kernel_ct_args(
@@ -215,7 +219,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_multi_core_with_w
             sender_worker_core_range,
             tt::tt_metal::WriterDataMovementConfig{},
             1,  // num_command_streams
-            device->id());
+            sender_device->id());
     size_t num_targets_forward = 0;
     size_t num_targets_backward = 0;
     if (topology == ccl::Topology::Linear) {
@@ -257,7 +261,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_multi_core_with_w
         CoreCoord core = sender_worker_cores[link];
         if (link == 0) {
             // drain sync core is the first worker core
-            drain_sync_core = device->worker_core_from_logical_core(core);
+            drain_sync_core = mesh_device->worker_core_from_logical_core(core);
         }
         std::size_t worker_tensor_slice_index = link;
 
@@ -297,7 +301,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_multi_core_with_w
             worker_sender_reader_kernel_id,
             {&input_tensor},
             {op_config.get_page_size()},
-            input_tensor.device(),
+            sender_device,
             link,
             num_pages_per_packet,
             {core},
@@ -352,7 +356,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_multi_core_with_w
             worker_sender_writer_kernel_id,
             {&output_tensor},
             {op_config.get_page_size()},
-            input_tensor.device(),
+            sender_device,
             link,
             num_pages_per_packet,  // num_pages_per_edm_buffer
             {core},

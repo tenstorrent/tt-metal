@@ -36,7 +36,7 @@
 #include "data_types.hpp"
 #include "device.hpp"
 #include "impl/context/metal_context.hpp"
-#include "dispatch_settings.hpp"
+#include "dispatch/dispatch_settings.hpp"
 #include "hal_types.hpp"
 #include "kernel_types.hpp"
 #include "lightmetal/host_api_capture_helpers.hpp"
@@ -51,6 +51,7 @@
 #include <umd/device/tt_xy_pair.h>
 #include <umd/device/types/xy_pair.h>
 #include "utils.hpp"
+#include "fabric/hw/inc/fabric_routing_mode.h"
 
 namespace tt {
 
@@ -384,11 +385,26 @@ std::map<chip_id_t, IDevice*> CreateDevices(
     const size_t trace_region_size,
     const DispatchCoreConfig& dispatch_core_config,
     const std::vector<uint32_t>& /*l1_bank_remap*/,
-    const size_t worker_l1_size) {
+    const size_t worker_l1_size,
+    bool init_profiler,
+    bool use_max_eth_core_count_on_all_devices,
+    bool initialize_fabric_and_dispatch_fw) {
+    // Issue #19729: use_max_eth_core_count_on_all_devices is a workaround
+    // to allow TT-Mesh Workload dispatch to target active ethernet cores.
     ZoneScoped;
     bool is_galaxy = tt::tt_metal::MetalContext::instance().get_cluster().is_galaxy_cluster();
     tt::DevicePool::initialize(
-        device_ids, num_hw_cqs, l1_small_size, trace_region_size, dispatch_core_config, {}, worker_l1_size);
+        device_ids,
+        num_hw_cqs,
+        l1_small_size,
+        trace_region_size,
+        dispatch_core_config,
+        {},
+        worker_l1_size,
+        init_profiler,
+        use_max_eth_core_count_on_all_devices,
+        initialize_fabric_and_dispatch_fw);
+
     const auto devices = tt::DevicePool::instance().get_all_active_devices();
     std::map<chip_id_t, IDevice*> ret_devices;
     // Only include the mmio device in the active devices set returned to the caller if we are not running
@@ -411,21 +427,6 @@ void CloseDevices(const std::map<chip_id_t, IDevice*>& devices) {
         devices_to_close.push_back(device);
     }
     tt::DevicePool::instance().close_devices(devices_to_close);
-}
-
-bool InWorkerThread() {
-    // These are values are cached per thread. in_worker_thread is a 1:1 function of the thread_id.
-    // Therefore it does not need to be recomputed or looked up using the worker_thread_ids each time.
-    // This is a performance optimization, since looking up the thread id inside worker_thread_ids for
-    // each function call significantly degrades runtime perf.
-    thread_local static bool in_worker_thread = false;
-    thread_local static bool is_thread_status_checked = false;
-    if (not is_thread_status_checked) {
-        auto worker_thread_ids = tt::DevicePool::instance().get_worker_thread_ids();
-        in_worker_thread = worker_thread_ids.find(std::this_thread::get_id()) != worker_thread_ids.end();
-        is_thread_status_checked = true;
-    }
-    return in_worker_thread;
 }
 
 void print_page(
@@ -923,23 +924,6 @@ void CompileProgram(IDevice* device, Program& program, bool force_slow_dispatch)
     program.compile(device, force_slow_dispatch);
 }
 
-void SynchronizeWorkerThreads(const std::vector<IDevice*>& workers) {
-    if (tt::tt_metal::detail::InWorkerThread()) {
-        // Early exit if in a worker thread, since waiting for the worker
-        // queue to become empty inside a worker thread leads to a deadlock
-        // Synchronizing in a worker thread should be a nop by definition
-        return;
-    }
-    // Push empty work to threads and ensure its been picked up
-    for (auto target_device : workers) {
-        target_device->push_work([]() {});
-    }
-    // Block until work has been picked up, to flush the queue
-    for (auto target_device : workers) {
-        while (not target_device->is_worker_queue_empty());
-    }
-}
-
 }  // namespace detail
 
 size_t GetNumAvailableDevices() {
@@ -1018,6 +1002,11 @@ KernelHandle CreateDataMovementKernel(
         kernel_name);
 
     std::shared_ptr<Kernel> kernel = std::make_shared<DataMovementKernel>(kernel_src, core_range_set, config);
+    auto control_plane = tt::tt_metal::MetalContext::instance().get_cluster().get_control_plane();
+    auto mode = control_plane->get_routing_mode();
+    if (mode != ROUTING_MODE_UNDEFINED) {
+        kernel->add_defines({{"ROUTING_MODE", std::to_string(static_cast<int>(mode))}});
+    }
     return detail::AddKernel(program, kernel, HalProgrammableCoreType::TENSIX);
 }
 
@@ -1042,6 +1031,11 @@ KernelHandle CreateEthernetKernel(
     const bool are_both_noc_in_use = data_movement_config_status.noc0_in_use && data_movement_config_status.noc1_in_use;
 
     std::shared_ptr<Kernel> kernel = std::make_shared<EthernetKernel>(kernel_src, core_range_set, config);
+    auto control_plane = tt::tt_metal::MetalContext::instance().get_cluster().get_control_plane();
+    auto mode = control_plane->get_routing_mode();
+    if (mode != ROUTING_MODE_UNDEFINED) {
+        kernel->add_defines({{"ROUTING_MODE", std::to_string(static_cast<int>(mode))}});
+    }
 
     TT_FATAL(
         utils::underlying_type<DataMovementProcessor>(config.processor) <

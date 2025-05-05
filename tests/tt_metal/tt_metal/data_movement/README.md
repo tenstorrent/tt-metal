@@ -3,8 +3,10 @@
 This test suite addresses the functionality and performance (i.e. bandwidth) of various data movement scenarios.
 
 ## Tests in the Test Suite
-1. **DRAM Unary**: Transactions between DRAM and a single Tensix core.
-2. **One to One**: Transactions between two Tensix cores. (In Progress)
+| Name       | ID(s) | Description                                          |
+| ---------- | ----- | ---------------------------------------------------- |
+| DRAM Unary | 0-3   | Transactions between DRAM and a single Tensix core.  |
+| One to One | 4     | Transactions between two Tensix cores.               |
 
 ## Running Tests
 Before running any tests, build the repo with tests: ```./build_metal.sh --build-tests```
@@ -27,11 +29,14 @@ Follow these steps to add new tests to this test suite.
     - **Example:** `./dram_unary/test_unary_dram.cpp`
 3. Write your test in this file and place the kernels you use within this test in "kernels" directory.
     - **Example:** `./dram_unary/kernels/reader_unary.cpp`
-4. Create a README file within the test directory that describes:
+4. Assign your test a unique test id to make sure your test results are grouped together and are plotted separately from other tests.
+    - Refer to the "Tests in the Test Suite" section for already taken test ids.
+    - Preferably use the next integer available.
+5. Create a README file within the test directory that describes:
     1. What your test does,
     2. What the test parameters are,
     3. And what different test cases are implemented.
-5. In the `CMakeLists.txt` file, add your test path in the `set(UNIT_TESTS_DATA_MOVEMENT_SRC ... )` call.
+6. In the `CMakeLists.txt` file, add your test path in the `set(UNIT_TESTS_DATA_MOVEMENT_SRC ... )` call.
     - **Example:** `${CMAKE_CURRENT_SOURCE_DIR}/dram_unary/test_unary_dram.cpp`
 
 **Note:** Make sure the tests pass by building and running as above.

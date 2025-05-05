@@ -16,11 +16,12 @@ from models.utility_functions import (
     comp_pcc,
     comp_allclose,
 )
-from models.utility_functions import skip_for_grayskull
+from models.utility_functions import skip_for_grayskull, skip_for_blackhole
 
 
 @torch.no_grad()
 @skip_for_grayskull("Requires wormhole_b0 to run")
+@skip_for_blackhole("Failing on DRAM harvested P100a, see #21419")
 @pytest.mark.timeout(1800)
 @pytest.mark.models_performance_bare_metal
 @pytest.mark.parametrize(
@@ -88,7 +89,7 @@ def test_model_inference(
     run_ref_pt = True  # Flag to run reference PyTorch model and compare PCC
     cache_pcc = layers == 1  # Flag to measure KV cache PCC. Avoid running for all layers to speed up test time.
     dtype = ttnn.bfloat8_b
-    mesh_device.enable_async(True)
+
     test_id = request.node.callspec.id
     mode_accuracy = "accuracy" in test_id
     instruct = False  # True if weights == "instruct" else False
@@ -115,6 +116,7 @@ def test_model_inference(
             (32, False): "llama31_8b",
             (32, True): "llama32_11b",
             (80, False): "llama31_70b",
+            (80, True): "llama32_90b",
         }[(model_args.n_layers, model_args.is_vision())]
 
         # Define tight final PCC thresholds for quick mode
@@ -124,6 +126,7 @@ def test_model_inference(
             "llama31_8b": 0.9987 if mode_accuracy else 0.9850,
             "llama32_11b": 0.9987 if mode_accuracy else 0.9850,
             "llama31_70b": 0.9843 if mode_accuracy else 0.97607,
+            "llama32_90b": 0.9759,
         }[model_name]
 
         final_k_cache_pcc = {
@@ -132,6 +135,7 @@ def test_model_inference(
             "llama31_8b": 0.9997,
             "llama32_11b": 0.9995,
             "llama31_70b": 0.9997,
+            "llama32_90b": 0.9995,
         }[model_name]
         final_v_cache_pcc = {
             "llama32_1b": 0.9996,
@@ -139,11 +143,17 @@ def test_model_inference(
             "llama31_8b": 0.9997,
             "llama32_11b": 0.9996,
             "llama31_70b": 0.9997,
+            "llama32_90b": 0.9996,
         }[model_name]
 
-        quick_iterations = {"llama32_1b": 2, "llama32_3b": 4, "llama31_8b": 6, "llama32_11b": 6, "llama31_70b": 6}[
-            model_name
-        ]
+        quick_iterations = {
+            "llama32_1b": 2,
+            "llama32_3b": 4,
+            "llama31_8b": 6,
+            "llama32_11b": 6,
+            "llama31_70b": 6,
+            "llama32_90b": 6,
+        }[model_name]
 
         iterations = quick_iterations
     else:

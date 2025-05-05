@@ -224,8 +224,6 @@ def test_Llama_perf_host(
 
     check_mesh_device(mesh_device, model_config)
 
-    mesh_device.enable_async(True)
-
     run_test_LlamaModel_end_to_end(
         mesh_device,
         llama_version,
@@ -432,7 +430,6 @@ def test_Llama_perf_hybrid_data_tensor_parallel(
     )
 
     check_mesh_device(mesh_device, model_config)
-    mesh_device.enable_async(True)
 
     run_test_LlamaModel_end_to_end_hybrid_data_tensor_parallel(
         mesh_device,

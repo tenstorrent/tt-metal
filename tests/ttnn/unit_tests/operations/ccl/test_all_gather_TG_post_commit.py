@@ -9,9 +9,6 @@ import ttnn
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal, comp_pcc
 from models.utility_functions import skip_for_grayskull
 from ttnn import ShardTensor2dMesh, ConcatMesh2dToTensor
-from tests.ttnn.unit_tests.operations.ccl.test_ccl_common import (
-    create_global_semaphore_with_same_address,
-)
 from models.perf.benchmarking_utils import BenchmarkProfiler
 from tracy import signpost
 
@@ -176,7 +173,6 @@ def run_line_all_gather_on_TG_with_mesh_tensor_along_rows(
     buffer_type: ttnn.BufferType,
     use_program_cache,
     function_level_defaults,
-    enable_async,
     input_shard_spec: ttnn.ShardSpec = None,
     output_shard_spec: ttnn.ShardSpec = None,
     num_all_gather_instances: int = 1,
@@ -193,8 +189,6 @@ def run_line_all_gather_on_TG_with_mesh_tensor_along_rows(
 ):
     if use_persistent_output and not use_all_gather_async:
         pytest.skip("Persistent output tensor requires all-gather-async")
-
-    mesh_device.enable_async(enable_async)
 
     input_shape_per_chip = list(per_chip_output_shape)
     input_shape_per_chip[dim] //= num_devices_per_line
@@ -284,7 +278,7 @@ def run_line_all_gather_on_TG_with_mesh_tensor_along_rows(
         mesh_device.set_sub_device_stall_group(sub_device_stall_group)
         # create global semaphore handles
         ccl_semaphore_handles = [
-            create_global_semaphore_with_same_address(mesh_device, ccl_sub_device_crs, 0) for _ in range(NUM_BUFFERS)
+            ttnn.create_global_semaphore(mesh_device, ccl_sub_device_crs, 0) for _ in range(NUM_BUFFERS)
         ]
     try:
         # ttnn.visualize_mesh_device(mesh_device, tensor=ttnn_tensor)
@@ -406,7 +400,6 @@ def run_line_all_gather_on_TG_with_mesh_tensor_along_rows(
     ],
 )
 @pytest.mark.parametrize("replication_factor", [8])  # 1, 8])
-@pytest.mark.parametrize("enable_async", [True])
 @pytest.mark.parametrize("mesh_device", [pytest.param((8, 4), id="8x4_grid")], indirect=True)
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
 def test_line_all_gather_on_TG_rows_post_commit(
@@ -420,11 +413,10 @@ def test_line_all_gather_on_TG_rows_post_commit(
     buffer_type,
     use_program_cache,
     function_level_defaults,
-    enable_async,
     replication_factor,
     num_iters=1,
 ):
-    if len(mesh_device.get_devices()) != 32:
+    if mesh_device.get_num_devices() != 32:
         pytest.skip("Not TG!")
     run_line_all_gather_on_TG_with_mesh_tensor_along_rows(
         mesh_device,
@@ -438,7 +430,6 @@ def test_line_all_gather_on_TG_rows_post_commit(
         buffer_type,
         use_program_cache,
         function_level_defaults,
-        enable_async=enable_async,
         num_iters=num_iters,
         num_all_gather_instances=replication_factor,
         cluster_axis=1,
@@ -469,7 +460,6 @@ def test_line_all_gather_on_TG_rows_post_commit(
         ttnn.BufferType.DRAM,
     ],
 )
-@pytest.mark.parametrize("enable_async", [True])
 @pytest.mark.parametrize("replication_factor", [4])
 @pytest.mark.parametrize("mesh_device", [pytest.param((8, 4), id="8x4_grid")], indirect=True)
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
@@ -484,11 +474,10 @@ def test_line_all_gather_on_TG_cols_post_commit(
     buffer_type,
     use_program_cache,
     function_level_defaults,
-    enable_async,
     replication_factor,
     num_iters=1,
 ):
-    if len(mesh_device.get_devices()) != 32:
+    if mesh_device.get_num_devices() != 32:
         pytest.skip("Not TG!")
     run_line_all_gather_on_TG_with_mesh_tensor_along_rows(
         mesh_device,
@@ -502,7 +491,6 @@ def test_line_all_gather_on_TG_cols_post_commit(
         buffer_type,
         use_program_cache,
         function_level_defaults,
-        enable_async=enable_async,
         num_iters=num_iters,
         num_all_gather_instances=replication_factor,
         cluster_axis=0,

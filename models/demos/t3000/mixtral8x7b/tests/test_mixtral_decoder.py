@@ -27,7 +27,6 @@ def test_mixtral_decoder_inference(t3k_mesh_device, use_program_cache, reset_see
     s: sequence length
     h: hidden size
     """
-    t3k_mesh_device.enable_async(True)
 
     pcc = 0.99
     dtype = ttnn.bfloat8_b
@@ -41,7 +40,7 @@ def test_mixtral_decoder_inference(t3k_mesh_device, use_program_cache, reset_see
     else:
         raise ValueError(f"Batch size {batch} not supported")
 
-    model_args = TtModelArgs(t3k_mesh_device.get_device(0), max_seq_len=max_seq_len, max_batch_size=batch)
+    model_args = TtModelArgs(t3k_mesh_device, max_seq_len=max_seq_len, max_batch_size=batch)
     state_dict = model_args.load_state_dict()
     partial_state_dict = {k[9:]: v for k, v in state_dict.items() if (k.startswith("layers.0."))}
     reference_model = TransformerBlock(args=model_args)

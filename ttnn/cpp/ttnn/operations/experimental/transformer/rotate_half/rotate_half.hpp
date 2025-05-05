@@ -16,7 +16,7 @@ struct RotateHalfOperation {
 }  // namespace operations::experimental::transformer
 
 namespace experimental {
-constexpr auto rotate_half = ttnn::register_operation_with_auto_launch_op<
+constexpr auto rotate_half = ttnn::register_operation<
     "ttnn::experimental::rotate_half",
     ttnn::operations::experimental::transformer::RotateHalfOperation>();
 

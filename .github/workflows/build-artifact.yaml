@@ -67,6 +67,9 @@ on:
       dev-docker-image:
         description: "Docker tag for the dev Docker image for developing TT-Metalium et al"
         value: ${{ jobs.build-docker-image.outputs.dev-tag }}
+      basic-dev-docker-image:
+        description: "Docker tag for the basic dev Docker image for basic development"
+        value: ${{ jobs.build-docker-image.outputs.basic-dev-tag }}
       packages-artifact-name:
         description: "Name to give download-artifact to get the packages"
         value: ${{ jobs.build-artifact.outputs.packages-artifact-name }}
