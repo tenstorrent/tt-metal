@@ -7,7 +7,6 @@
 #include <mesh_device.hpp>
 #include <mesh_event.hpp>
 #include <optional>
-#include <tt-metalium/dispatch_settings.hpp>
 
 #include "buffer.hpp"
 #include "mesh_coord.hpp"
@@ -18,6 +17,7 @@
 #include "tt_metal/impl/dispatch/dispatch_query_manager.hpp"
 #include "tt_metal/common/thread_pool.hpp"
 #include "tt_cluster.hpp"
+#include "dispatch/dispatch_settings.hpp"
 
 namespace tt::tt_metal::distributed {
 

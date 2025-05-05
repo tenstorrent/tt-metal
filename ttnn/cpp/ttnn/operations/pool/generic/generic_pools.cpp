@@ -145,7 +145,6 @@ Tensor Pool2DOp<pool_type>::invoke(
         get_bf16_pool_init_value(pool_type),  // pad_val
         false,
         parallel_config.shard_orientation == ShardOrientation::COL_MAJOR,
-        0,
         input_tensor_sharded.memory_config(),
         is_out_tiled,
         in_place_halo);

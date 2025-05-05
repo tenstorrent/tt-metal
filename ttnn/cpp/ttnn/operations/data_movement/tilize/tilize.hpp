@@ -20,7 +20,6 @@ struct ExecuteTilize {
 
 }  // namespace operations::data_movement
 
-constexpr auto tilize =
-    ttnn::register_operation_with_auto_launch_op<"ttnn::tilize", ttnn::operations::data_movement::ExecuteTilize>();
+constexpr auto tilize = ttnn::register_operation<"ttnn::tilize", ttnn::operations::data_movement::ExecuteTilize>();
 
 }  // namespace ttnn

@@ -82,6 +82,10 @@ enum class EthRouterMode : uint32_t {
 
 class Cluster {
 public:
+    // TODO: #21245: Remove these workaround APIs and instead refactor UMD component out of Cluster
+    static ClusterType get_cluster_type_from_cluster_desc(
+        const llrt::RunTimeOptions& rtoptions, const tt_ClusterDescriptor* cluster_desc = nullptr);
+    static bool is_base_routing_fw_enabled(ClusterType cluster_type);
     Cluster& operator=(const Cluster&) = delete;
     Cluster& operator=(Cluster&& other) noexcept = delete;
     Cluster(const Cluster&) = delete;
@@ -299,6 +303,8 @@ public:
 
     tt_metal::FabricConfig get_fabric_config() const;
 
+    bool is_base_routing_fw_enabled() const;
+
     // Get all fabric ethernet cores
     std::set<tt_fabric::chan_id_t> get_fabric_ethernet_channels(chip_id_t chip_id) const;
 
@@ -368,6 +374,8 @@ private:
     std::unordered_map<tt_cxy_pair, tt_cxy_pair> virtual_to_umd_coord_mapping_;
     std::unordered_map<chip_id_t, std::unordered_set<CoreCoord>> virtual_worker_cores_;
     std::unordered_map<chip_id_t, std::unordered_set<CoreCoord>> virtual_eth_cores_;
+    std::unordered_map<chip_id_t, std::unordered_set<CoreCoord>> virtual_dram_cores_;
+    std::unordered_map<chip_id_t, std::unordered_set<CoreCoord>> virtual_pcie_cores_;
     std::unordered_map<BoardType, std::unordered_map<CoreCoord, int32_t>> virtual_routing_to_profiler_flat_id_;
     std::unordered_map<chip_id_t, std::unordered_set<CoreCoord>> frequent_retrain_cores_;
     // Flag to tell whether we are on a TG type of system.

@@ -5,10 +5,10 @@
 #include <boost/move/utility_core.hpp>
 #include <gtest/gtest.h>
 #include <tt-metalium/bfloat16.hpp>
-#include <xtensor/xbuilder.hpp>
-#include <xtensor/xiterator.hpp>
-#include <xtensor/xlayout.hpp>
-#include <xtensor/xtensor_simd.hpp>
+#include <xtensor/generators/xbuilder.hpp>
+#include <xtensor/core/xiterator.hpp>
+#include <xtensor/core/xlayout.hpp>
+#include <xtensor/utils/xtensor_simd.hpp>
 #include <xtl/xiterator_base.hpp>
 #include <algorithm>
 #include <cstdint>
@@ -233,7 +233,6 @@ TYPED_TEST(BorrowedStorageVectorConversionTest, Roundtrip) {
         EXPECT_THAT(tensor.get_logical_shape(), Eq(shape)) << "for shape: " << shape;
         EXPECT_THAT(tensor.get_dtype(), Eq(convert_to_data_type<TypeParam>())) << "for shape: " << shape;
         EXPECT_THAT(tensor.get_layout(), Eq(Layout::ROW_MAJOR)) << "for shape: " << shape;
-        EXPECT_EQ(tensor.storage_type(), StorageType::BORROWED) << "for shape: " << shape;
 
         auto output = tensor.template to_vector<TypeParam>();
 

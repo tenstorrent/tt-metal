@@ -981,13 +981,13 @@ bool RunLocalTestWithMultiInputReaders(
         auto in0_tensor_copyback_cpu = input_tensor0_device.cpu(true, ttnn::DefaultQueueId);
         auto in1_tensor_copyback_cpu = input_tensor1_device.cpu(true, ttnn::DefaultQueueId);
 
-        auto in0_tensor_copyback = tt::tt_metal::owned_buffer::get_as<uint32_t>(in0_tensor_copyback_cpu);
-        auto in1_tensor_copyback = tt::tt_metal::owned_buffer::get_as<uint32_t>(in1_tensor_copyback_cpu);
+        auto in0_tensor_copyback = tt::tt_metal::host_buffer::get_as<uint32_t>(in0_tensor_copyback_cpu);
+        auto in1_tensor_copyback = tt::tt_metal::host_buffer::get_as<uint32_t>(in1_tensor_copyback_cpu);
 
-        auto in0_tensor_data = tt::tt_metal::owned_buffer::get_as<uint32_t>(input_tensor0);
-        auto in1_tensor_data = tt::tt_metal::owned_buffer::get_as<uint32_t>(input_tensor1);
-        auto out0_tensor_data = tt::tt_metal::owned_buffer::get_as<uint32_t>(output0_cpu);
-        auto out1_tensor_data = tt::tt_metal::owned_buffer::get_as<uint32_t>(output1_cpu);
+        auto in0_tensor_data = tt::tt_metal::host_buffer::get_as<uint32_t>(input_tensor0);
+        auto in1_tensor_data = tt::tt_metal::host_buffer::get_as<uint32_t>(input_tensor1);
+        auto out0_tensor_data = tt::tt_metal::host_buffer::get_as<uint32_t>(output0_cpu);
+        auto out1_tensor_data = tt::tt_metal::host_buffer::get_as<uint32_t>(output1_cpu);
 
         bool input0_copyback_check_passed =
             run_output_check(in0_tensor_data, in0_tensor_copyback) == Correctness::Correct;
@@ -1487,7 +1487,7 @@ int TestLoopbackEntrypoint(
     return success ? 0 : -1;
 }
 
-bool TestMultiInputReaderKernel(
+inline bool TestMultiInputReaderKernel(
     size_t fabric_num_devices,
     Tensor& input_tensor0,
     const MemoryConfig& input_tensor0_mem_config,
@@ -1651,14 +1651,6 @@ bool RunMultiInputReaderTestPropagateFullTensorIn(
             .to_layout(layout);
     Tensor output_tensor0 = ttnn::experimental::view(ttnn::ones(tensor_shape, DataType::UINT32, layout), tensor_shape);
     Tensor output_tensor1 = ttnn::experimental::view(ttnn::ones(tensor_shape, DataType::UINT32, layout), tensor_shape);
-    input_tensor0.set_tensor_spec(TensorSpec(
-        tensor_shape, TensorLayout(DataType::UINT32, PageConfig(layout, tt_metal::Tile()), in0_memory_config)));
-    input_tensor1.set_tensor_spec(TensorSpec(
-        tensor_shape, TensorLayout(DataType::UINT32, PageConfig(layout, tt_metal::Tile()), in1_memory_config)));
-    output_tensor0.set_tensor_spec(TensorSpec(
-        tensor_shape, TensorLayout(DataType::UINT32, PageConfig(layout, tt_metal::Tile()), out0_memory_config)));
-    output_tensor1.set_tensor_spec(TensorSpec(
-        tensor_shape, TensorLayout(DataType::UINT32, PageConfig(layout, tt_metal::Tile()), out1_memory_config)));
 
     size_t page_size = tile_size(DataFormat::RawUInt32);
 
@@ -1726,14 +1718,6 @@ void RunFabricMcastFullTensorPropagateTest(
         ttnn::experimental::view(ttnn::arange(0, num_elems, 1, DataType::UINT32), tensor_shape).to_layout(layout);
     Tensor output_tensor1 = ttnn::experimental::view(ttnn::ones(tensor_shape, DataType::UINT32, layout), tensor_shape);
     Tensor output_tensor0 = ttnn::experimental::view(ttnn::ones(tensor_shape, DataType::UINT32, layout), tensor_shape);
-    input_tensor0.set_tensor_spec(TensorSpec(
-        tensor_shape, TensorLayout(DataType::UINT32, PageConfig(layout, tt_metal::Tile()), in0_memory_config)));
-    input_tensor1.set_tensor_spec(TensorSpec(
-        tensor_shape, TensorLayout(DataType::UINT32, PageConfig(layout, tt_metal::Tile()), in1_memory_config)));
-    output_tensor0.set_tensor_spec(TensorSpec(
-        tensor_shape, TensorLayout(DataType::UINT32, PageConfig(layout, tt_metal::Tile()), out0_memory_config)));
-    output_tensor1.set_tensor_spec(TensorSpec(
-        tensor_shape, TensorLayout(DataType::UINT32, PageConfig(layout, tt_metal::Tile()), out1_memory_config)));
     ASSERT_EQ(input_tensor0.get_logical_shape(), tensor_shape);
     ASSERT_EQ(input_tensor1.get_logical_shape(), tensor_shape);
     ASSERT_EQ(output_tensor0.get_logical_shape(), tensor_shape);
@@ -1865,7 +1849,6 @@ bool RunPipelinedWorkersTest(
     }
     TT_FATAL(mem_configs.size() == num_tensors, "Must have a memory config for each tensor");
     for (size_t i = 0; i < num_tensors; i++) {
-        host_tensors[i].set_tensor_spec(tensor_specs[i]);
         device_tensors.push_back(host_tensors[i].to_device(device, mem_configs[i]));
         log_info("Tensor[{}] allocated starting at address {}", i, device_tensors[i].buffer()->address());
     }
@@ -2064,10 +2047,10 @@ bool RunPipelinedWorkersTest(
         auto input_cpu = device_tensors[0].cpu();
         auto final_out_cpu = device_tensors.back().cpu();
 
-        auto in_tensor_copyback = tt::tt_metal::owned_buffer::get_as<uint32_t>(input_cpu);
-        auto out_tensor_copyback = tt::tt_metal::owned_buffer::get_as<uint32_t>(final_out_cpu);
+        auto in_tensor_copyback = tt::tt_metal::host_buffer::get_as<uint32_t>(input_cpu);
+        auto out_tensor_copyback = tt::tt_metal::host_buffer::get_as<uint32_t>(final_out_cpu);
 
-        auto in_tensor_data = tt::tt_metal::owned_buffer::get_as<uint32_t>(host_tensors[0]);
+        auto in_tensor_data = tt::tt_metal::host_buffer::get_as<uint32_t>(host_tensors[0]);
 
         bool input_copyback_check_passed = run_output_check(in_tensor_data, in_tensor_copyback) == Correctness::Correct;
         TT_FATAL(input_copyback_check_passed, "Input 0 copyback check failed");
@@ -2139,8 +2122,6 @@ void run_all_gather_with_persistent_fabric(const size_t dim, const size_t num_li
     std::vector<Tensor> device_input_tensors;
     for (size_t i = 0; i < num_devices; i++) {
         auto t = ttnn::experimental::view(ttnn::arange(0, num_elems, 1), input_shape).to_layout(layout);
-        t.set_tensor_spec(TensorSpec(
-            input_shape, TensorLayout(DataType::BFLOAT16, PageConfig(layout, tt_metal::Tile()), in_memory_config)));
 
         device_input_tensors.push_back(t);
     }
@@ -2188,7 +2169,7 @@ void run_ring_all_gather_with_persistent_fabric(
         return;
     }
     // Initialize MeshDevice with 1D Fabric
-    MeshFabric1DFixture test_fixture(tt::tt_metal::FabricConfig::FABRIC_1D);
+    MeshFabric1DFixture test_fixture(tt::tt_metal::FabricConfig::FABRIC_1D_RING);
     test_fixture.mesh_device_->reshape(MeshShape(1, 8));
     auto view = test_fixture.mesh_device_->get_view();
 
@@ -2209,8 +2190,6 @@ void run_ring_all_gather_with_persistent_fabric(
     std::vector<Tensor> device_input_tensors;
     for (size_t i = 0; i < num_devices; i++) {
         auto t = ttnn::experimental::view(ttnn::arange(0, num_elems, 1), input_shape).to_layout(layout);
-        t.set_tensor_spec(TensorSpec(
-            input_shape, TensorLayout(DataType::BFLOAT16, PageConfig(layout, tt_metal::Tile()), in_memory_config)));
 
         device_input_tensors.push_back(t);
     }
@@ -2219,7 +2198,7 @@ void run_ring_all_gather_with_persistent_fabric(
                                          .to_device(test_fixture.mesh_device_.get());
 
     std::optional<SubdeviceInfo> subdevice_managers = create_worker_subdevices(devices);
-    ttnn::ccl::Topology topology = ttnn::ccl::Topology::Linear;
+    ttnn::ccl::Topology topology = ttnn::ccl::Topology::Ring;
 
     log_info(tt::LogTest, "launching op");
 
@@ -2483,6 +2462,7 @@ void Run1DFabricPacketSendTest(
         "Linear");
     bool use_galaxy = num_devices == 32;
     bool use_tg = use_galaxy && tt::tt_metal::GetNumPCIeDevices() == 4;
+    bool is_6u_galaxy = use_galaxy && tt::tt_metal::GetNumPCIeDevices() == 32;
     if (num_devices < 4) {
         log_info("This test can only be run on T3000 devices");
         return;
@@ -2561,7 +2541,9 @@ void Run1DFabricPacketSendTest(
             enable_persistent_fabric_mode,
             params.num_links,
             topology,
-            fabric_context_switch_interval);
+            fabric_context_switch_interval,
+            false,
+            is_6u_galaxy);
         packet_header_size_bytes = sizeof(tt::tt_fabric::PacketHeader);
     } else {
         // TODO: get packet header size from control plane after it adds APIs to present this information
@@ -3055,10 +3037,10 @@ void RunRingDeadlockStabilityTestWithPersistentFabric(
 
     using namespace ttnn::ccl;
     auto topology = ttnn::ccl::Topology::Ring;
-    size_t num_unicasts = 0;
+    constexpr size_t num_unicasts = 0;
     size_t line_size = num_devices;
     size_t num_devices_with_workers = line_size;
-    bool line_sync = true;
+    constexpr bool line_sync = false;
 
     auto worker_core_logical = [](size_t link) { return CoreCoord(link, 0); };
 

@@ -22,8 +22,7 @@ struct ExecuteHCSumReduce {
 
 namespace ttnn::experimental {
 
-constexpr auto hc_sum_reduce = ttnn::register_operation_with_auto_launch_op<
-    "ttnn::experimental::hc_sum_reduce",
-    ttnn::operations::experimental::ssm::ExecuteHCSumReduce>();
+constexpr auto hc_sum_reduce = ttnn::
+    register_operation<"ttnn::experimental::hc_sum_reduce", ttnn::operations::experimental::ssm::ExecuteHCSumReduce>();
 
 }  // namespace ttnn::experimental

@@ -25,13 +25,13 @@ namespace detail {
 
 IDevice* get_device(const Tensors& input_tensors, const OptionalConstTensors& optional_input_tensors) {
     for (auto& input_tensor : input_tensors) {
-        if (std::holds_alternative<DeviceStorage>(input_tensor.tensor_attributes->storage)) {
+        if (std::holds_alternative<DeviceStorage>(input_tensor.tensor_attributes->get_storage())) {
             return input_tensor.workers.at(0);
         }
     }
     for (auto& optional_input_tensor : optional_input_tensors) {
         if (optional_input_tensor.has_value() and
-            std::holds_alternative<DeviceStorage>(optional_input_tensor.value().tensor_attributes->storage)) {
+            std::holds_alternative<DeviceStorage>(optional_input_tensor.value().tensor_attributes->get_storage())) {
             return optional_input_tensor.value().workers.at(0);
         }
     }
@@ -60,32 +60,6 @@ Tensor* get_tensor(T& maybe_tensor) {
         output_tensor = &maybe_tensor;
     }
     return output_tensor;
-}
-
-void check_output(auto& output_tensors, const std::vector<IDevice*>& workers) {
-    for (auto& output_tensor_like : output_tensors) {
-        auto output_tensor = get_tensor(output_tensor_like);
-        if (!output_tensor) {
-            continue;
-        }
-        TT_FATAL(
-            output_tensor->workers.size(),
-            "Worker threads must be specified for outputs populated by launch_op. This API can only be used for "
-            "creating output tensors on device.");
-        TT_FATAL(
-            output_tensor->workers == workers,
-            "Worker threads must be consistent across all outputs populated by launch_op.");
-    }
-}
-
-auto& get_workers(auto& output_tensors) {
-    for (auto& output_tensor_like : output_tensors) {
-        Tensor* output_tensor = get_tensor(output_tensor_like);
-        if (output_tensor) {
-            return output_tensor->workers;
-        }
-    }
-    TT_THROW("Workers not found in output tensors.");
 }
 
 }  // namespace detail
@@ -331,63 +305,5 @@ Tensors run_with_autoformat(
 
     return output_tensors;
 }
-
-std::vector<IDevice*> get_workers_for_op_output(
-    const std::vector<Tensor>& inputs, const std::vector<std::optional<const Tensor>>& optional_inputs) {
-    using ttnn::operations::experimental::auto_format::AutoFormat;
-    std::vector<IDevice*> workers_for_op = {};
-    // Infer output workers from inputs. For multi-device tensors the number
-    // of workers used for the op (and assigned to the ouput) is the minimum
-    // number of workers across all inputs. Additionally, in this case, at least
-    // 1 worker must be specified across all inputs, i.e. host inputs are not allowed.
-    size_t min_workers_size = std::numeric_limits<uint32_t>::max();
-    for (auto& input : inputs) {
-        auto workers = input.get_workers();
-        min_workers_size = std::min(min_workers_size, workers.size());
-        if (workers.size() == min_workers_size) {
-            workers_for_op = workers;
-        }
-    }
-
-    if (not workers_for_op.size()) {
-        for (auto& input : optional_inputs) {
-            if (input.has_value()) {
-                auto workers = input.value().get_workers();
-                min_workers_size = std::min(min_workers_size, workers.size());
-                if (workers.size() == min_workers_size) {
-                    workers_for_op = workers;
-                }
-            }
-        }
-    }
-    return workers_for_op;
-}
-
-template <class OutputType>
-void launch_op_func(
-    const std::function<OutputType(const Tensors&, const OptionalConstTensors&, const OptionalTensors&)>& op_func,
-    const Tensors input_tensors,
-    OutputType& output_tensors,
-    const OptionalConstTensors optional_input_tensors,
-    const OptionalTensors optional_output_tensors) {
-    // Send host side op compile and run to the worker queue
-    // Assert to ensure that worker threads are specified.
-    ZoneScopedN("LaunchOp");
-    output_tensors = op_func(input_tensors, optional_input_tensors, optional_output_tensors);
-    return;
-}
-
-template void launch_op_func<Tensors>(
-    const std::function<Tensors(const Tensors&, const OptionalConstTensors&, const OptionalTensors&)>& op_func,
-    const Tensors input_tensors,
-    Tensors& output_tensors,
-    const OptionalConstTensors optional_input_tensors,
-    const OptionalTensors optional_output_tensors);
-template void launch_op_func<OptionalTensors>(
-    const std::function<OptionalTensors(const Tensors&, const OptionalConstTensors&, const OptionalTensors&)>& op_func,
-    const Tensors input_tensors,
-    OptionalTensors& output_tensors,
-    const OptionalConstTensors optional_input_tensors,
-    const OptionalTensors optional_output_tensors);
 
 }  // namespace tt::tt_metal::operation

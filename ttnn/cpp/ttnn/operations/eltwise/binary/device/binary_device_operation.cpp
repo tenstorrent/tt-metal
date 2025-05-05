@@ -20,9 +20,10 @@ namespace utils {
     bool is_binary_sfpu_op(BinaryOpType val, DataType a, DataType b) {
     switch (val) {
         case BinaryOpType::ADD:
-            return ((a == DataType::FLOAT32 && b == DataType::FLOAT32) || (a == DataType::INT32 && b == DataType::INT32) || (a == DataType::UINT16 && b == DataType::UINT16));
+            return ((a == DataType::FLOAT32 && b == DataType::FLOAT32) || (a == DataType::INT32 && b == DataType::INT32)
+                || (a == DataType::UINT32 && b == DataType::UINT32) || (a == DataType::UINT16 && b == DataType::UINT16));
         case BinaryOpType::SUB:
-            return ((a == DataType::FLOAT32 && b == DataType::FLOAT32) || (a == DataType::INT32 && b == DataType::INT32));
+            return ((a == DataType::FLOAT32 && b == DataType::FLOAT32) || (a == DataType::INT32 && b == DataType::INT32) || (a == DataType::UINT16 && b == DataType::UINT16));
         case BinaryOpType::MUL:
         case BinaryOpType::DIV:
         case BinaryOpType::RSUB:
@@ -315,7 +316,7 @@ tt::stl::hash::hash_t BinaryDeviceOperation::compute_program_hash(
         std::get<DeviceStorage>(input_tensor_a.storage()).memory_config());
 }
 
-operation::OpPerformanceModel BinaryDeviceOperation::create_op_performance_model(
+operation::OpPerformanceModelGeneral<BinaryDeviceOperation::tensor_return_value_t> BinaryDeviceOperation::create_op_performance_model(
     const operation_attributes_t& attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value) {
@@ -337,7 +338,7 @@ operation::OpPerformanceModel BinaryDeviceOperation::create_op_performance_model
     uint32_t ideal_eltwise_cycles = total_bytes / 80 / num_cores;
 
     // TODO: update OpPerformanceModel to work on variadic arguments
-    operation::OpPerformanceModel result(input_tensors, {output_tensor}, ideal_eltwise_cycles);
+    operation::OpPerformanceModelGeneral<tensor_return_value_t> result(input_tensors, output_tensor, ideal_eltwise_cycles);
 #if 0
         tt::log_info(tt::LogOp, "BinaryDeviceOperation PerfModel:");
         tt::log_info(tt::LogOp, "\t Data (Bytes): {}", total_bytes);

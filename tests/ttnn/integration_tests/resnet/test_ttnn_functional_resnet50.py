@@ -25,6 +25,9 @@ def run_resnet_50(
     if batch_size > 16 and not is_blackhole():
         pytest.skip("Batch size > 16 is not supported on non-blackhole devices")
 
+    if is_blackhole() and device.compute_with_storage_grid_size().x * device.compute_with_storage_grid_size().y != 130:
+        pytest.skip("Expected to run only on blackhole devices with 130 cores (unharvested grid), see #21319")
+
     test_infra = create_test_infra(
         device,
         batch_size,

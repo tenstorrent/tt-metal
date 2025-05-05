@@ -17,6 +17,7 @@ class TT_CCL:
         model_args,
         worker_sub_device_id,
         mode="decode",
+        allocate_prefill_buffers=True,
     ):
         self.mode = mode
         all_crs = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(6, 9))])
@@ -50,21 +51,25 @@ class TT_CCL:
                     )
 
         self.gather_idx = [0, 0]
-        self.buffer_idx = [0, 0]
         self.reduce_scatter_buffer_idx = [0, 0]
-
+        self.persistent_buffers = {}
+        self.all_gather_buffers = {}
         if mode == "decode":
             self.persistent_buffers = self.get_persistent_buffers()
             self.all_gather_buffers = self.get_all_gather_buffers()
             self.reduce_scatter_buffers = self.get_decode_reduce_scatter_buffers()
         if mode == "prefill":
             self.support_seqlens = [8192, 4096, 1024, 2048, 128]
-            self.persistent_buffers = self.get_prefill_reduce_scatter_buffers()
-            self.all_gather_buffers = self.get_prefill_all_gather_buffers()
+            if allocate_prefill_buffers:
+                self.persistent_buffers = self.get_prefill_reduce_scatter_buffers()
+                self.all_gather_buffers = self.get_prefill_all_gather_buffers()
+            else:
+                for seqlen in self.support_seqlens:
+                    self.persistent_buffers[seqlen] = {}
+                    self.all_gather_buffers[seqlen] = {}
 
     def reset_gather_and_buffer_idx(self):
         self.gather_idx = [0, 0]
-        self.buffer_idx = [0, 0]
         self.reduce_scatter_buffer_idx = [0, 0]
 
     def get_all_gather_concat_inter_buffer(self):
@@ -197,7 +202,7 @@ class TT_CCL:
 
         """
 
-        persistent_buffers = [[], []]
+        persistent_buffers = [None, None]
 
         cluster_shape = (8, 4)
         M = 32
@@ -215,20 +220,20 @@ class TT_CCL:
                 ttnn.ShardOrientation.ROW_MAJOR,
             ),
         )
-        for _ in range(self.num_cbs):
-            tt_buffer = ttnn.from_torch(
-                torch.zeros((*cluster_shape, M, N_per_shard * num_cores)),
-                device=self.mesh_device,
-                layout=ttnn.TILE_LAYOUT,
-                dtype=ttnn.bfloat16,
-                memory_config=buffer_mem_cfg,
-                mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=(0, 1), mesh_shape=cluster_shape),
-            )
-            persistent_buffers[cluster_axis].append(tt_buffer)
+        tt_buffer = ttnn.from_torch(
+            torch.zeros((*cluster_shape, M, N_per_shard * num_cores)),
+            device=self.mesh_device,
+            layout=ttnn.TILE_LAYOUT,
+            dtype=ttnn.bfloat8_b,
+            memory_config=buffer_mem_cfg,
+            mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=(0, 1), mesh_shape=cluster_shape),
+        )
+        persistent_buffers[cluster_axis] = tt_buffer
 
         # Create persistent buffers for cluster axis 1
         cluster_axis = 1
-        N_per_shard = 3840 // 24 * cluster_shape[cluster_axis]  # FF1/FF3/QKV
+        num_input_cores_create_qkv = 10
+        N_per_shard = 1280 // num_input_cores_create_qkv * cluster_shape[cluster_axis]  # QKV
         buffer_mem_cfg = ttnn.MemoryConfig(
             ttnn.TensorMemoryLayout.WIDTH_SHARDED,
             ttnn.BufferType.L1,
@@ -238,16 +243,15 @@ class TT_CCL:
                 ttnn.ShardOrientation.ROW_MAJOR,
             ),
         )
-        for _ in range(self.num_cbs):
-            tt_buffer = ttnn.from_torch(
-                torch.zeros((*cluster_shape, M, N_per_shard * num_cores)),
-                device=self.mesh_device,
-                layout=ttnn.TILE_LAYOUT,
-                dtype=ttnn.bfloat16,
-                memory_config=buffer_mem_cfg,
-                mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=(0, 1), mesh_shape=cluster_shape),
-            )
-            persistent_buffers[cluster_axis].append(tt_buffer)
+        tt_buffer = ttnn.from_torch(
+            torch.zeros((*cluster_shape, M, N_per_shard * num_cores)),
+            device=self.mesh_device,
+            layout=ttnn.TILE_LAYOUT,
+            dtype=ttnn.bfloat8_b,
+            memory_config=buffer_mem_cfg,
+            mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=(0, 1), mesh_shape=cluster_shape),
+        )
+        persistent_buffers[cluster_axis] = tt_buffer
 
         # Create persistent buffer for lm_head
         num_cores_after_lm_head = 32  # Use 32 cores instead of 16 to reduce L1 memory usage per core
@@ -409,7 +413,7 @@ class TT_CCL:
             if lm_head:
                 persistent_buffer = self.tt_lm_head_buffer_l1
             else:
-                persistent_buffer = self.persistent_buffers[cluster_axis][self.buffer_idx[cluster_axis]]
+                persistent_buffer = self.persistent_buffers[cluster_axis]
 
             output_tensor_mesh = ttnn.experimental.all_reduce_async(
                 input_tensor_mesh,
@@ -469,7 +473,6 @@ class TT_CCL:
             # ttnn.synchronize_device(self.mesh_device)
 
         self.gather_idx[cluster_axis] = (self.gather_idx[cluster_axis] + 1) % self.num_cbs
-        self.buffer_idx[cluster_axis] = (self.buffer_idx[cluster_axis] + 1) % self.num_cbs
         return output_tensor_mesh
 
     def line_all_reduce_create_heads(
@@ -492,7 +495,7 @@ class TT_CCL:
             v_heads_1BKD,
         ) = ttnn.experimental.all_reduce_create_qkv_heads(
             input_tensor_mesh,
-            self.persistent_buffers[cluster_axis][self.buffer_idx[cluster_axis]],
+            self.persistent_buffers[cluster_axis],
             cluster_axis=cluster_axis,
             mesh_device=self.mesh_device,
             multi_device_global_semaphore=self.gather_semaphore_handles[cluster_axis][self.gather_idx[cluster_axis]],
@@ -508,7 +511,6 @@ class TT_CCL:
             dtype=dtype,
         )
         self.gather_idx[cluster_axis] = (self.gather_idx[cluster_axis] + 1) % self.num_cbs
-        self.buffer_idx[cluster_axis] = (self.buffer_idx[cluster_axis] + 1) % self.num_cbs
         return xqkv_reduced, q_heads_pre_rot_1BQD, k_heads_pre_rot_1BKD, v_heads_1BKD
 
     def line_reduce_scatter(

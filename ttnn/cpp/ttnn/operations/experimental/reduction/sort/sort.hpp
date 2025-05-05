@@ -19,17 +19,13 @@ struct ExecuteSort {
         const bool stable,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         std::optional<std::tuple<Tensor, Tensor>> optional_output_tensors = std::nullopt);
-
-    static std::vector<Tensor> create_async_output_tensors(
-        const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_inputs);
 };
 
 }  // namespace ttnn::operations::experimental::reduction::sort
 
 namespace ttnn::experimental {
 
-constexpr auto sort = ttnn::register_operation_with_auto_launch_op<
-    "ttnn::experimental::sort",
-    ttnn::operations::experimental::reduction::sort::ExecuteSort>();
+constexpr auto sort = ttnn::
+    register_operation<"ttnn::experimental::sort", ttnn::operations::experimental::reduction::sort::ExecuteSort>();
 
 }  // namespace ttnn::experimental

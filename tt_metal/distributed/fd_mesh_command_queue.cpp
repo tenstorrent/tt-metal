@@ -7,7 +7,6 @@
 #include <mesh_device.hpp>
 #include <mesh_event.hpp>
 #include <tt-metalium/allocator.hpp>
-#include <tt-metalium/dispatch_settings.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <algorithm>
 #include <array>
@@ -23,6 +22,7 @@
 #include "device.hpp"
 #include "impl/context/metal_context.hpp"
 #include "dispatch_core_common.hpp"
+#include "dispatch/dispatch_settings.hpp"
 #include "event/dispatch.hpp"
 #include "hal_types.hpp"
 #include "mesh_config.hpp"
@@ -39,6 +39,7 @@
 #include "tt_metal/impl/program/dispatch.hpp"
 #include "tt_metal/impl/trace/dispatch.hpp"
 #include "tt_metal/impl/program/program_command_sequence.hpp"
+#include "tt_metal/impl/device/dispatch.hpp"
 #include <umd/device/types/xy_pair.h>
 
 namespace tt {
@@ -764,7 +765,7 @@ SystemMemoryManager& FDMeshCommandQueue::reference_sysmem_manager() {
 void FDMeshCommandQueue::update_launch_messages_for_device_profiler(
     ProgramCommandSequence& program_cmd_seq, uint32_t program_runtime_id, IDevice* device) {
 #if defined(TRACY_ENABLE)
-    for (auto& launch_msg : program_cmd_seq.go_signals) {
+    for (auto& launch_msg : program_cmd_seq.launch_messages) {
         launch_msg->kernel_config.host_assigned_id =
             tt_metal::detail::EncodePerDeviceProgramID(program_runtime_id, device->id());
     }

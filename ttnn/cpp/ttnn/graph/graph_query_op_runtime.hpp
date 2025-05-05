@@ -37,7 +37,7 @@ static constexpr int NUM_TRACE_EXECUTIONS = 10;
  * @return ID for captured trace.
  */
 template <typename Op, typename... Args>
-auto capture_op_trace(Op op, IDevice* device, Args&&... args) {
+auto capture_op_trace(Op op, MeshDevice* device, Args&&... args) {
     // helper lambda to transform TensorSpec to DeviceTensor
     auto transform_arg = [device](auto&& arg) {
         if constexpr (std::is_same_v<std::decay_t<decltype(arg)>, TensorSpec>) {
@@ -78,7 +78,7 @@ auto capture_op_trace(Op op, IDevice* device, Args&&... args) {
  * @return Trace runtime in nanoseconds.
  */
 template <typename TraceID>
-uint64_t execute_time_and_release_trace(TraceID trace_id, IDevice* device) {
+uint64_t execute_time_and_release_trace(TraceID trace_id, MeshDevice* device) {
     try {
         uint64_t duration = 0;
         for (int i = 0; i < NUM_TRACE_EXECUTIONS; ++i) {
@@ -115,7 +115,7 @@ uint64_t execute_time_and_release_trace(TraceID trace_id, IDevice* device) {
  *         - On failure: ExecutionStatus::Error, zeroed runtime, and an error message.
  */
 template <typename Op, typename... Args>
-auto query_op_runtime(Op op, IDevice* device, Args&&... args) {
+auto query_op_runtime(Op op, MeshDevice* device, Args&&... args) {
     try {
         auto trace_id = capture_op_trace(op, device, std::forward<Args>(args)...);
         auto runtime = execute_time_and_release_trace(trace_id, device);

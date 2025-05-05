@@ -13,6 +13,7 @@ from models.utility_functions import torch_random
 def prepare_ttnn_tensors(
     device, torch_input_tensor, torch_timestep_tensor, torch_temb_tensor, torch_encoder_tensor, torch_time_ids
 ):
+    torch.manual_seed(2025)
     ttnn_input_tensor = ttnn.from_torch(
         torch_input_tensor,
         dtype=ttnn.bfloat16,
@@ -77,6 +78,7 @@ def test_unet(
     temb_shape,
     time_ids_shape,
     use_program_cache,
+    reset_seeds,
 ):
     pipe = DiffusionPipeline.from_pretrained(
         "stabilityai/stable-diffusion-xl-base-1.0", torch_dtype=torch.float32, use_safetensors=True, variant="fp16"

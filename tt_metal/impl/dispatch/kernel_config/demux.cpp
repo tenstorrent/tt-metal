@@ -4,7 +4,6 @@
 #include "demux.hpp"
 
 #include <host_api.hpp>
-#include <tt-metalium/dispatch_settings.hpp>
 #include <map>
 #include <string>
 #include <utility>
@@ -17,6 +16,7 @@
 #include "impl/context/metal_context.hpp"
 #include "dispatch/kernel_config/fd_kernel.hpp"
 #include "dispatch_core_common.hpp"
+#include "dispatch/dispatch_settings.hpp"
 #include "eth_tunneler.hpp"
 #include "hal.hpp"
 #include <umd/device/tt_xy_pair.h>

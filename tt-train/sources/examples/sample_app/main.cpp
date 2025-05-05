@@ -60,7 +60,7 @@ int main() {
     std::cout << "Creating a tensor with bfloat16 data type" << std::endl;
     // TTNN wants us to explicitly specify if the tensor owns the buffer or not. if not, we need to make dman sure that
     // the buffer is not deallocated before the tensor
-    auto buffer = tt::tt_metal::owned_buffer::create(create_random_vector_of_bfloat16_native(
+    auto buffer = tt::tt_metal::host_buffer::create(create_random_vector_of_bfloat16_native(
         // In number of bytes. so 2 bytes per bfloat16 element
         tensor_width * tensor_height * 2
         //  max = 2, offset = -1, seed = 42. Effectively, the range is [-1, 1]. I know, weird API
@@ -71,7 +71,7 @@ int main() {
     // Now we create a tensor with the buffer we just created
     auto x = tt::tt_metal::Tensor(
         // Let the tensor take ownership of the buffer
-        tt::tt_metal::OwnedStorage{std::move(buffer)},
+        tt::tt_metal::HostStorage{std::move(buffer)},
         // IMPORTANT: SHAPE MUST BE 4D ELSE EVERYTHING WILL BREAK during the PAD operation
         ttnn::Shape({1, 1, tensor_width, tensor_height}),
         // The data type of the tensor
