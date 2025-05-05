@@ -20,10 +20,6 @@ struct HostStorage {
     static constexpr auto attribute_names = std::forward_as_tuple();
     auto attribute_values() const { return std::forward_as_tuple(); }
 
-    void insert_buffer(const HostBuffer& buffer_) { this->buffer = buffer_; }
-
-    HostBuffer get_buffer() const { return this->buffer; }
-
     bool is_allocated() const { return buffer.is_allocated(); }
 };
 
