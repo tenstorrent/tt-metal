@@ -23,8 +23,8 @@ enum DispatchWorkerType : uint32_t;
 namespace tt::tt_metal {
 
 // Max number of upstream/downstream dispatch kernels that can be connected to a single dispatch kernel.
-constexpr uint32_t k_dispatch_max_upstream_kernels = 4;
-constexpr uint32_t k_dispatch_max_downstream_kernels = 4;
+constexpr uint32_t k_dispatch_max_upstream_kernels = 8;
+constexpr uint32_t k_dispatch_max_downstream_kernels = 8;
 
 // NOC ID used by dispatch kernels to communicate with downstream cores. This parameter
 // is required when setting up Command Queue objects on host.
@@ -36,9 +36,9 @@ struct DispatchKernelNode {
     chip_id_t servicing_device_id;   // Remote device that this kernel services, used for kernels on MMIO
     uint8_t cq_id;                   // CQ this kernel implements
     DispatchWorkerType kernel_type;  // Type of dispatch kernel this is
-    int upstream_ids[k_dispatch_max_upstream_kernels];      // Upstream dispatch kernels
-    int downstream_ids[k_dispatch_max_downstream_kernels];  // Downstream dispatch kernels
-    noc_selection_t noc_selection;                          // NOC selection
+    std::vector<int> upstream_ids;   // Upstream dispatch kernels. Max size is k_dispatch_max_upstream_kernels
+    std::vector<int> downstream_ids;  // Downstream dispatch kernels. Max size is k_dispatch_max_downstream_kernels
+    noc_selection_t noc_selection;    // NOC selection
 };
 
 // Create FD kernels for all given device ids. Creates all objects, but need to call create_and_compile_cq_program() use
