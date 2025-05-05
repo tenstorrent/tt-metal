@@ -30,13 +30,30 @@ def generate_golden(operation, operand1, operand2, data_format):
     return operations[operation].tolist()
 
 
-full_sweep = False
-all_format_combos = generate_format_combinations(
-    [DataFormat.Float32], all_same=True
-)  # Generate format combinations with all formats being the same (flag set to True), refer to `param_config.py` for more details.
+# SUPPORTED FORMATS FOR TEST
+supported_formats = [DataFormat.Float16, DataFormat.Float16_b]
+
+#   INPUT-OUTPUT FORMAT SWEEP
+#   input_output_formats(supported_formats)
+
+#   FULL FORMAT SWEEP
+#   format_combination_sweep(formats=supported_formats, all_same=False, same_src_reg_format=True)
+
+#   SPECIFIC FORMAT COMBINATION
+#   generate_combination(
+#       [(DataFormat.Float16_b,  # index 0 is for unpack_A_src
+#         DataFormat.Float16_b,  # index 1 is for unpack_A_dst
+#         DataFormat.Float16_b,  # index 2 is for pack_src (if src registers have same formats)
+#         DataFormat.Bfp8_b,  # index 3 is for pack_dst
+#         DataFormat.Float16_b,  # index 4 is for math format)])
+
+#   SPECIFIC INPUT-OUTPUT COMBINATION
+#   [InputOutputFormat(DataFormat.Float16, DataFormat.Float32)]
+
+test_formats = input_output_formats(supported_formats)
 all_params = generate_params(
     ["sfpu_binary_test"],
-    all_format_combos,
+    test_formats,
     dest_acc=[DestAccumulation.Yes],
     mathop=[MathOperation.Elwadd, MathOperation.Elwsub, MathOperation.Elwmul],
 )
@@ -48,13 +65,6 @@ param_ids = generate_param_ids(all_params)
 )
 @pytest.mark.skip(reason="Not fully implemented")
 def test_all(testname, formats, dest_acc, mathop):
-    if (
-        formats.input_format in [DataFormat.Float32, DataFormat.Int32]
-        and dest_acc != DestAccumulation.Yes
-    ):
-        pytest.skip(
-            "Skipping test for 32 bit wide data without 32 bit accumulation in Dest"
-        )
 
     src_A, src_B = generate_stimuli(formats.input_format, formats.input_format)
     golden = generate_golden(mathop, src_A, src_B, formats.output_format)

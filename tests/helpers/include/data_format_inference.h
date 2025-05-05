@@ -3,14 +3,16 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "tensix_types.h"
 
-#ifdef ARCH_WORMHOLE
-const bool is_blackhole = false;
-const bool is_wormhole  = true;
-#endif
-
-#ifdef ARCH_BLACKHOLE
-const bool is_blackhole = true;
-const bool is_wormhole  = false;
+#if defined(ARCH_WORMHOLE) && defined(ARCH_BLACKHOLE)
+#error "Only one of ARCH_WORMHOLE or ARCH_BLACKHOLE can be defined"
+#elif defined(ARCH_WORMHOLE)
+constexpr bool is_blackhole = false;
+constexpr bool is_wormhole  = true;
+#elif defined(ARCH_BLACKHOLE)
+constexpr bool is_blackhole = true;
+constexpr bool is_wormhole  = false;
+#else
+#error "You must define either ARCH_WORMHOLE or ARCH_BLACKHOLE"
 #endif
 
 struct FormatConfig
@@ -47,7 +49,7 @@ constexpr FormatConfig get_data_formats(uint32_t input, uint32_t output, bool is
     else if (is_wormhole && is_fp32_dest_acc_en && output == (uint32_t)DataFormat::Float16)
     {
         pack_in = static_cast<uint32_t>(DataFormat::Float32); // Gasket in wormhole cannot convert fp32 to fp16, and since dest accumulation turns on for
-                                                              // outlier cases we have fp32 in dest, so gasket cannot conver it to fp16, packer must do that
+                                                              // outlier cases we have fp32 in dest, so gasket cannot convert it to fp16, packer must do that
     }
     else if (is_format_combination_outlier(input, output, is_fp32_dest_acc_en))
     {

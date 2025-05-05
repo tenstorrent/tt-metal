@@ -11,11 +11,28 @@ def generate_golden(operand1, data_format):
     return A_tilized.flatten()
 
 
-full_sweep = False
-all_format_combos = generate_format_combinations(
-    [DataFormat.Float16_b, DataFormat.Float16], all_same=True
-)  # Generate format combinations with all formats being the same (flag set to True), refer to `param_config.py` for more details.
-all_params = generate_params(["unpack_tilize_test"], all_format_combos)
+# SUPPORTED FORMATS FOR TEST
+supported_formats = [DataFormat.Float16, DataFormat.Float16_b]
+
+#   INPUT-OUTPUT FORMAT SWEEP
+#   input_output_formats(supported_formats)
+
+#   FULL FORMAT SWEEP
+#   format_combination_sweep(formats=supported_formats, all_same=False, same_src_reg_format=True)
+
+#   SPECIFIC FORMAT COMBINATION
+#   generate_combination(
+#       [(DataFormat.Float16_b,  # index 0 is for unpack_A_src
+#         DataFormat.Float16_b,  # index 1 is for unpack_A_dst
+#         DataFormat.Float16_b,  # index 2 is for pack_src (if src registers have same formats)
+#         DataFormat.Bfp8_b,  # index 3 is for pack_dst
+#         DataFormat.Float16_b,  # index 4 is for math format)])
+
+#   SPECIFIC INPUT-OUTPUT COMBINATION
+#   [InputOutputFormat(DataFormat.Float16, DataFormat.Float32)]
+
+test_formats = input_output_formats(supported_formats)
+all_params = generate_params(["unpack_tilize_test"], test_formats)
 param_ids = generate_param_ids(all_params)
 
 

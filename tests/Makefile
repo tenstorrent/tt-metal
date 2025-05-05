@@ -38,7 +38,7 @@ OPTIONS_LINK=-fexceptions -Wl,-z,max-page-size=16 -Wl,-z,common-page-size=16 -no
 INCLUDES = -I../$(ARCH_LLK_ROOT)/llk_lib -I../$(ARCH_LLK_ROOT)/common/inc -I../$(ARCH_LLK_ROOT)/common/inc/sfpu -I../$(ARCH_LLK_ROOT)/hw_specific/inc
 INCLUDES += -Ifirmware/riscv/common -Ifirmware/riscv/$(CHIP_ARCH)/ -Isfpi/include -Ihelpers/include
 
-FORMAT_ARG += $(foreach var, unpack_A_src unpack_A_dst unpack_B_src unpack_B_dst fpu pack_src pack_dst, -D$($(var)))
+FORMAT_ARG += $(foreach var, unpack_A_src unpack_A_dst unpack_B_src unpack_B_dst fpu pack_src pack_dst, $(if $($(var)),-D$($(var))))
 
 ifeq ($(mathop),)
     MATHOP_ARG =
