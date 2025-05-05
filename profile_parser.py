@@ -15,7 +15,7 @@ def open_trace(fname):
 
 
 def is_start_of_test(trace):
-    return trace[9] == "BRISC-FW" and trace[10] == "ZONE_START"
+    return trace[8] == "BRISC-FW" and trace[9] == "ZONE_START"
 
 
 def split_tests(trace):
@@ -39,7 +39,7 @@ def filter_traces(traces, blacklist):
         for trace in tmp:
             blacklisted = False
             for kw in blacklist:
-                if kw in trace[9]:
+                if kw in trace[8]:
                     blacklisted = True
                     break
             if not blacklisted:
@@ -53,7 +53,7 @@ def condense_traces(traces):
         traces[i] = []
         zonedict = {}
         for trace in tmp:
-            name = trace[9].lower().replace(" ", "-") + ("-s" if trace[10] == "ZONE_START" else "-e")
+            name = trace[8].lower().replace(" ", "-") + ("-s" if trace[9] == "ZONE_START" else "-e")
             tt = (trace[3][-1], name, trace[5])
             if name not in zonedict:
                 zonedict[name] = [tt]
