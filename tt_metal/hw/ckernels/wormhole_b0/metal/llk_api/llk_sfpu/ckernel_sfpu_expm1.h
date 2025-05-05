@@ -27,7 +27,7 @@ inline void calculate_expm1() {
 
 template <bool APPROXIMATION_MODE>
 void expm1_init() {
-    exp_init<APPROXIMATION_MODE>();
+    exp_init<APPROXIMATION_MODE, false>();
 }
 
 }  // namespace sfpu
