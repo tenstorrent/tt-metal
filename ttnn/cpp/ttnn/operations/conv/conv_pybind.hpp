@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include "pybind11/pybind_fwd.hpp"
+#include "ttnn-pybind/pybind_fwd.hpp"
 #include "conv2d/conv2d_pybind.hpp"
 #include "conv_transpose2d/conv_transpose2d_pybind.hpp"
 #include "conv1d/conv1d_pybind.hpp"

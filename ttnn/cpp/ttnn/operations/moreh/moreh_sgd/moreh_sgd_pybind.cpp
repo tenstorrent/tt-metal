@@ -4,7 +4,7 @@
 
 #include "moreh_sgd_pybind.hpp"
 
-#include "pybind11/decorators.hpp"
+#include "ttnn-pybind/decorators.hpp"
 #include "ttnn/operations/moreh/moreh_sgd/moreh_sgd.hpp"
 
 namespace ttnn::operations::moreh::moreh_sgd {

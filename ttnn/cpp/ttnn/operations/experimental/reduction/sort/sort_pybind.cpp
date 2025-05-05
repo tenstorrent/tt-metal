@@ -6,7 +6,7 @@
 
 #include "sort.hpp"
 
-#include "pybind11/decorators.hpp"
+#include "ttnn-pybind/decorators.hpp"
 
 namespace ttnn::operations::experimental::reduction::sort::detail {
 namespace py = pybind11;

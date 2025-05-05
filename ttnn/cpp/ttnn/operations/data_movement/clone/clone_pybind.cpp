@@ -5,7 +5,7 @@
 #include "clone_pybind.hpp"
 
 #include "clone.hpp"
-#include "pybind11/decorators.hpp"
+#include "ttnn-pybind/decorators.hpp"
 
 namespace ttnn::operations::data_movement::clone {
 void bind_clone_operation(py::module& module) {

@@ -1048,17 +1048,17 @@ set(CCL_TTNN_SRCS_PYBIND
 list(
     APPEND
     TTNN_SRC_PYBIND
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/pybind11/__init__.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/pybind11/types.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/pybind11/events.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/pybind11/global_circular_buffer.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/pybind11/global_semaphore.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/pybind11/cluster.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/pybind11/device.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/pybind11/fabric.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/pybind11/profiler.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/pybind11/tensor.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/pybind11/pytensor.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn-${PY_BINDING}/__init__.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn-${PY_BINDING}/types.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn-${PY_BINDING}/events.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn-${PY_BINDING}/global_circular_buffer.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn-${PY_BINDING}/global_semaphore.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn-${PY_BINDING}/cluster.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn-${PY_BINDING}/device.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn-${PY_BINDING}/fabric.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn-${PY_BINDING}/profiler.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn-${PY_BINDING}/tensor.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn-${PY_BINDING}/pytensor.cpp
 )
 
 set(TTNN_PUBLIC_INCLUDE_DIRS_PYBIND ${Python3_INCLUDE_DIRS})

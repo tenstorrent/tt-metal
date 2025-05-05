@@ -4,8 +4,8 @@
 
 #include "binary_pybind.hpp"
 
-#include "pybind11/decorators.hpp"
-#include "pybind11/export_enum.hpp"
+#include "ttnn-pybind/decorators.hpp"
+#include "ttnn-pybind/export_enum.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/eltwise/binary/binary_composite.hpp"
 #include "ttnn/types.hpp"

@@ -9,7 +9,7 @@
 #include <utility>
 
 #include "tensor.hpp"
-#include "cpp/pybind11/json_class.hpp"
+#include "cpp/ttnn-pybind/json_class.hpp"
 #include "export_enum.hpp"
 
 #include "ttnn/tensor/host_buffer/host_buffer.hpp"
@@ -105,14 +105,15 @@ void tensor_mem_config_module(py::module& m_tensor) {
 
     auto py_tile = static_cast<py::class_<Tile>>(m_tensor.attr("Tile"));
     py_tile
-        .def(py::init<const std::array<uint32_t, 2>&, bool>(),
-            py::arg("tile_shape"), py::arg("transpose_tile") = false)
+        .def(py::init<const std::array<uint32_t, 2>&, bool>(), py::arg("tile_shape"), py::arg("transpose_tile") = false)
         .def(py::init<>([](const std::array<uint32_t, 2>& tile_shape, bool transpose_tile = false) {
             return Tile{tile_shape, transpose_tile};
         }))
-        .def("__repr__", [](const Tile& self) {
-            return fmt::format("Tile with shape: [{}, {}]", self.get_tile_shape()[0], self.get_tile_shape()[1]);
-        })
+        .def(
+            "__repr__",
+            [](const Tile& self) {
+                return fmt::format("Tile with shape: [{}, {}]", self.get_tile_shape()[0], self.get_tile_shape()[1]);
+            })
         .def_readonly("tile_shape", &Tile::tile_shape)
         .def_readonly("face_shape", &Tile::face_shape)
         .def_readonly("num_faces", &Tile::num_faces)
@@ -122,19 +123,19 @@ void tensor_mem_config_module(py::module& m_tensor) {
         .def_readonly("transpose_of_faces", &Tile::transpose_of_faces);
 
     auto pyTensorSpec = static_cast<py::class_<TensorSpec>>(m_tensor.attr("TensorSpec"));
-    pyTensorSpec
-        .def("shape", &TensorSpec::logical_shape, "Logical shape of a tensor")
+    pyTensorSpec.def("shape", &TensorSpec::logical_shape, "Logical shape of a tensor")
         .def("layout", &TensorSpec::layout, "Layout of a tensor")
         .def("dtype", &TensorSpec::data_type, "Dtype of a tensor");
 
     auto pyMemoryConfig = static_cast<py::class_<MemoryConfig>>(m_tensor.attr("MemoryConfig"));
     pyMemoryConfig
         .def(
-            py::init<>(
-                [](TensorMemoryLayout memory_layout, BufferType buffer_type, std::optional<ShardSpec> shard_spec) {
-                    return MemoryConfig{
-                        .memory_layout = memory_layout, .buffer_type = buffer_type, .shard_spec = std::move(shard_spec)};
-                }),
+            py::init<>([](TensorMemoryLayout memory_layout,
+                          BufferType buffer_type,
+                          std::optional<ShardSpec> shard_spec) {
+                return MemoryConfig{
+                    .memory_layout = memory_layout, .buffer_type = buffer_type, .shard_spec = std::move(shard_spec)};
+            }),
             py::arg("memory_layout") = TensorMemoryLayout::INTERLEAVED,
             py::arg("buffer_type") = BufferType::DRAM,
             py::arg("shard_spec") = std::nullopt,
@@ -188,7 +189,9 @@ void tensor_mem_config_module(py::module& m_tensor) {
 
     auto pyCoreRangeSet = static_cast<py::class_<CoreRangeSet>>(m_tensor.attr("CoreRangeSet"));
     pyCoreRangeSet.def(py::init<>([](const std::set<CoreRange>& core_ranges) { return CoreRangeSet(core_ranges); }))
-        .def(py::init<>([](const std::vector<CoreRange>& core_ranges) { return CoreRangeSet(tt::stl::Span<const CoreRange>(core_ranges)); }))
+        .def(py::init<>([](const std::vector<CoreRange>& core_ranges) {
+            return CoreRangeSet(tt::stl::Span<const CoreRange>(core_ranges));
+        }))
         .def(
             "bounding_box",
             &CoreRangeSet::bounding_box,
@@ -251,8 +254,6 @@ void tensor_mem_config_module(py::module& m_tensor) {
         py::arg("file_name"),
         py::arg("device") = nullptr,
         R"doc(Load tensor to file)doc");
-
 }
-
 
 }  // namespace ttnn::tensor
