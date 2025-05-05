@@ -6,8 +6,6 @@
 
 #include <tt-metalium/logger.hpp>
 
-#include "umd/device/types/arch.h"
-
 namespace ttnn {
 
 namespace operations {
