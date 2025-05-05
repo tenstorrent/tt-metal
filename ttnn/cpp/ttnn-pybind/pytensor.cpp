@@ -68,7 +68,7 @@ template <typename T>
 Tensor create_typed_tt_tensor_from_py_data(
     std::size_t py_data_ptr,
     const TensorSpec& tensor_spec,
-    IDevice* device,
+    MeshDevice* device,
     const std::function<void()>& on_creation_callback,
     const std::function<void()>& on_destruction_callback,
     const bool force_disable_borrow) {
@@ -93,17 +93,14 @@ Tensor create_typed_tt_tensor_from_py_data(
         }
         return output;
     } else {
-        return Tensor::from_span(
-            tt::stl::Span<const T>(pydata_span),
-            tensor_spec,
-            device == nullptr ? std::nullopt : std::optional<ttnn::AnyDevice>(device));
+        return Tensor::from_span(tt::stl::Span<const T>(pydata_span), tensor_spec, device);
     }
 }
 
 Tensor create_tt_tensor_from_py_data(
     std::size_t py_data_ptr,
     const TensorSpec& tensor_spec,
-    IDevice* device,
+    MeshDevice* device,
     const bool force_disable_borrow,
     const std::function<void()>& on_creation_callback,
     const std::function<void()>& on_destruction_callback) {
@@ -717,7 +714,7 @@ void pytensor_module(py::module& m_tensor) {
                 return Tensor::from_vector(
                     std::move(data),
                     TensorSpec(ttnn::Shape(shape), TensorLayout(data_type, PageConfig(layout, tile), MemoryConfig{})),
-                    device == nullptr ? std::nullopt : std::optional<ttnn::AnyDevice>(device));
+                    device);
             }),
             py::keep_alive<1, 6>(),
             py::arg("data"),
@@ -772,7 +769,7 @@ void pytensor_module(py::module& m_tensor) {
                 return Tensor::from_vector(
                     std::move(data),
                     TensorSpec(ttnn::Shape(shape), TensorLayout(data_type, PageConfig(layout, tile), memory_config)),
-                    device == nullptr ? std::nullopt : std::optional<ttnn::AnyDevice>(device));
+                    device);
             }),
             py::keep_alive<1, 7>(),
             py::arg("data"),

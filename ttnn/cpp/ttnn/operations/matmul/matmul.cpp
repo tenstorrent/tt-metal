@@ -63,12 +63,7 @@ Tensor handle_zero_volume_matmul(
 
     // Create a tensor filled with zeros
     auto output_tensor = ttnn::full(
-        output_shape,
-        0.0f,
-        output_dtype,
-        input_tensor_a.get_layout(),
-        std::optional<std::reference_wrapper<tt::tt_metal::IDevice>>(*input_tensor_a.device()),
-        memory_config);
+        output_shape, 0.0f, output_dtype, input_tensor_a.get_layout(), *input_tensor_a.mesh_device(), memory_config);
 
     // Apply bias if provided
     if (bias.has_value()) {
