@@ -23,15 +23,30 @@ def generate_golden(operation, operand1, data_format):
     return [ops[operation](num) for num in tensor1_float.tolist()][:256]
 
 
-full_sweep = False
-all_format_combos = generate_format_combinations(
-    [DataFormat.Float16_b, DataFormat.Float16, DataFormat.Float32],
-    all_same=True,
-    same_src_reg_format=True,  # setting src_A and src_B register to have same format
-)  # Generate format combinations with all formats being the same (flag set to True), refer to `param_config.py` for more details.
+# SUPPORTED FORMATS FOR TEST
+supported_formats = [DataFormat.Float32, DataFormat.Float16, DataFormat.Float16_b]
+
+#   INPUT-OUTPUT FORMAT SWEEP
+#   input_output_formats(supported_formats)
+
+#   FULL FORMAT SWEEP
+#   format_combination_sweep(formats=supported_formats, all_same=False, same_src_reg_format=True)
+
+#   SPECIFIC FORMAT COMBINATION
+#   generate_combination(
+#       [(DataFormat.Float16_b,  # index 0 is for unpack_A_src
+#         DataFormat.Float16_b,  # index 1 is for unpack_A_dst
+#         DataFormat.Float16_b,  # index 2 is for pack_src (if src registers have same formats)
+#         DataFormat.Bfp8_b,  # index 3 is for pack_dst
+#         DataFormat.Float16_b,  # index 4 is for math format)])
+
+#   SPECIFIC INPUT-OUTPUT COMBINATION
+#   [InputOutputFormat(DataFormat.Float16, DataFormat.Float32)]
+
+test_formats = input_output_formats(supported_formats)
 all_params = generate_params(
     ["eltwise_unary_sfpu_test"],
-    all_format_combos,
+    test_formats,
     dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
     approx_mode=[ApproximationMode.No, ApproximationMode.Yes],
     mathop=[MathOperation.Sqrt, MathOperation.Log, MathOperation.Square],
@@ -44,7 +59,8 @@ param_ids = generate_param_ids(all_params)
     clean_params(all_params),
     ids=param_ids,
 )
-def test_eltwise_unary_sfpu(testname, formats, dest_acc, approx_mode, mathop):  #
+def test_eltwise_unary_sfpu(testname, formats, dest_acc, approx_mode, mathop):
+    arch = get_chip_architecture()
     if (
         formats.input_format in [DataFormat.Float32, DataFormat.Int32]
         and dest_acc != DestAccumulation.Yes
@@ -52,9 +68,9 @@ def test_eltwise_unary_sfpu(testname, formats, dest_acc, approx_mode, mathop):  
         pytest.skip(
             reason="Skipping test for 32 bit wide data without 32 bit accumulation in Dest"
         )
+
     if formats.input_format == DataFormat.Float16 and (
-        (dest_acc == DestAccumulation.No and get_chip_architecture() == "blackhole")
-        or (dest_acc == DestAccumulation.Yes and get_chip_architecture() == "wormhole")
+        dest_acc == DestAccumulation.No and arch == "blackhole"
     ):
         pytest.skip(reason="This combination is not fully implemented in testing")
 
