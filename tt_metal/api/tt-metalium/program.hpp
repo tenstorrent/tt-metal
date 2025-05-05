@@ -136,7 +136,7 @@ public:
     const detail::ProgramImpl& impl() const { return *pimpl_; }
 
 private:
-    std::unique_ptr<detail::ProgramImpl> pimpl_;
+    std::shared_ptr<detail::ProgramImpl> pimpl_;
 
     friend CBHandle CreateCircularBuffer(
         Program& program,

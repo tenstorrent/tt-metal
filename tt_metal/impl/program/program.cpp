@@ -217,12 +217,12 @@ detail::ProgramImpl::ProgramImpl() :
     program_config_sizes_.resize(programmable_core_count_ + 2);
 }
 
-Program::Program() : pimpl_(std::make_unique<detail::ProgramImpl>()) {
+Program::Program() : pimpl_(std::make_shared<detail::ProgramImpl>()) {
     LIGHT_METAL_TRACE_FUNCTION_ENTRY();
     LIGHT_METAL_TRACE_FUNCTION_CALL(CaptureProgramConstructor, *this);
 }
 
-Program::Program(const ProgramDescriptor& descriptor) : pimpl_(std::make_unique<detail::ProgramImpl>()) {
+Program::Program(const ProgramDescriptor& descriptor) : pimpl_(std::make_shared<detail::ProgramImpl>()) {
     LIGHT_METAL_TRACE_FUNCTION_ENTRY();
     LIGHT_METAL_TRACE_FUNCTION_CALL(CaptureProgramConstructor, *this);
 
@@ -1165,6 +1165,10 @@ ProgramConfig& detail::ProgramImpl::get_program_config(uint32_t programmable_cor
     return this->program_configs_[programmable_core_type_index];
 }
 
+const ProgramConfig& detail::ProgramImpl::get_program_config(uint32_t programmable_core_type_index) const {
+    return this->program_configs_[programmable_core_type_index];
+}
+
 void detail::ProgramImpl::set_launch_msg_sem_offsets() {
     const auto& hal = MetalContext::instance().hal();
     for (uint32_t kg_type_index = 0; kg_type_index < hal.get_programmable_core_type_count(); kg_type_index++) {
@@ -1269,6 +1273,37 @@ void Program::generate_dispatch_commands(IDevice* device) {
         // TODO: We currently do not have a mechanism of removing entries in the cache when a manager is removed
         // This means programs will contain stale entries in the cache until the program is deleted
         cached_program_command_sequences.insert({command_hash, std::move(program_command_sequence)});
+    }
+}
+
+void ProgramImpl::generate_trace_dispatch_commands(IDevice* device) {
+    uint64_t command_hash = *device->get_active_sub_device_manager_id();
+
+    uint64_t device_hash = BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_key;
+    if (not MetalContext::instance().hal().is_coordinate_virtualization_enabled()) {
+        // When coordinate virtualization is not enabled, explicitly encode the device
+        // id into the device hash, to always assert on programs being reused across devices.
+        device_hash = (device_hash << 32) | (device->id());
+    }
+    if (!is_cached()) {
+        set_cached(device_hash);
+    } else {
+        TT_FATAL(
+            *get_cached() == device_hash,
+            "Enqueueing a Program across devices with different cores harvested is not supported, unless coordinate "
+            "virtualization is enabled (only enabled on Wormhole and above).");
+    }
+    auto& trace_cached_program_command_sequences = get_trace_cached_program_command_sequences();
+    if (!trace_cached_program_command_sequences.contains(command_hash)) {
+        // Programs currently only support spanning a single sub-device
+        auto sub_device_id = this->determine_sub_device_ids(device)[0];
+        ProgramCommandSequence program_command_sequence;
+        program_dispatch::insert_empty_program_dispatch_preamble_cmd(program_command_sequence);
+        program_dispatch::insert_stall_cmds(program_command_sequence, sub_device_id, device);
+        program_dispatch::assemble_device_commands(program_command_sequence, *this, device, sub_device_id);
+        // TODO: We currently do not have a mechanism of removing entries in the cache when a manager is removed
+        // This means programs will contain stale entries in the cache until the program is deleted
+        trace_cached_program_command_sequences.insert({command_hash, std::move(program_command_sequence)});
     }
 }
 
@@ -1694,6 +1729,11 @@ void detail::ProgramImpl::finalize_program_offsets(
     for (auto& program : programs) {
         program->set_program_attrs_across_core_types(device);
     }
+}
+
+std::unordered_map<uint64_t, ProgramCommandSequence>&
+ProgramImpl::get_trace_cached_program_command_sequences() noexcept {
+    return trace_cached_program_command_sequences_;
 }
 
 }  // namespace tt::tt_metal
