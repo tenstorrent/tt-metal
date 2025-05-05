@@ -524,7 +524,6 @@ operation::ProgramWithCallbacks topk_multicore_interleaved(
             binary_writer_kernel_id,
             core,
             {
-                core_h,  // TODO: remove this, unused
                 core_w,
             });
 
