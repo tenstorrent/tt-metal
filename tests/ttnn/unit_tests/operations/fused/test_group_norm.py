@@ -482,3 +482,85 @@ def test_sdxl_base_group_norm(device, input_shape, use_program_cache):
     tt_output_tensor = ttnn.to_torch(tt_output_tensor)
 
     assert_with_pcc(torch_output_tensor, tt_output_tensor, 0.9997)
+
+
+# OFT
+@pytest.mark.parametrize(
+    "N, C, H, W, num_groups",
+    [
+        (1, 64, 185, 612, 16),
+        (1, 64, 93, 306, 16),
+        (1, 128, 47, 153, 16),
+        (1, 256, 24, 77, 16),
+        (1, 512, 12, 39, 16),
+        (1, 256, 47, 153, 16),
+        (1, 256, 12, 39, 16),
+        (1, 256, 159, 159, 16),
+    ],
+)
+def test_group_norm_with_height_sharded_oft(device, N, C, H, W, num_groups):
+    torch.manual_seed(0)
+
+    grid_size = ttnn.CoreGrid(y=1, x=8)
+
+    torch_input_tensor = torch.rand((N, C, H, W), dtype=torch.bfloat16)
+    torch_weight = torch.rand((C,), dtype=torch.bfloat16)
+    torch_bias = torch.rand((C,), dtype=torch.bfloat16)
+    torch_output_tensor = torch.nn.functional.group_norm(
+        torch_input_tensor, num_groups, weight=torch_weight, bias=torch_bias
+    )
+    torch_output_tensor = torch_output_tensor.permute(0, 2, 3, 1).view(N, 1, W * H, C)
+
+    input_tensor = torch_input_tensor.permute(0, 2, 3, 1).view(N, 1, W * H, C)
+    input_tensor = ttnn.from_torch(
+        input_tensor,
+        dtype=ttnn.DataType.BFLOAT16,
+        # layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+    )
+
+    # input mask
+    input_mask_tensor = ttnn.create_group_norm_input_mask(C, num_groups, grid_size.x)
+    input_mask_tensor = ttnn.from_torch(
+        input_mask_tensor,
+        dtype=ttnn.DataType.BFLOAT8_B,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+    )
+
+    gamma = ttnn.create_group_norm_weight_bias_rm(torch_weight, C, grid_size.x)
+    beta = ttnn.create_group_norm_weight_bias_rm(torch_bias, C, grid_size.x)
+
+    gamma_t = ttnn.from_torch(
+        gamma,
+        dtype=ttnn.DataType.BFLOAT16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+    )
+    beta_t = ttnn.from_torch(
+        beta,
+        dtype=ttnn.DataType.BFLOAT16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    output_tensor = ttnn.group_norm(
+        input_tensor,
+        num_groups=num_groups,
+        input_mask=input_mask_tensor,
+        weight=gamma_t,
+        bias=beta_t,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+        core_grid=grid_size,
+        # inplace = False,
+    )
+
+    output_tensor = ttnn.to_memory_config(output_tensor, ttnn.DRAM_MEMORY_CONFIG)
+    output_tensor = ttnn.from_device(output_tensor)
+    output_tensor = ttnn.to_torch(output_tensor)
+
+    assert_with_pcc(torch_output_tensor, output_tensor, 0.9998)

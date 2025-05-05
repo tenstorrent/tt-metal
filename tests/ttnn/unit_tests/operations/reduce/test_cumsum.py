@@ -182,3 +182,47 @@ def test_cumsum_with_preallocated_output(size, dim, dtypes, device):
     assert preallocated_output_tensor == output_tensor
 
     assert_with_pcc(expected_output, torch_output)
+
+
+# OFT
+
+
+@pytest.mark.parametrize(
+    "size, dim",
+    [
+        ([1, 256, 47, 153], -1),
+        ([1, 256, 47, 153], -2),
+        ([1, 256, 24, 77], -1),
+        ([1, 256, 24, 77], -2),
+        ([1, 256, 12, 39], -1),
+        ([1, 256, 12, 39], -2),
+    ],
+)
+@pytest.mark.parametrize(
+    "dtypes",
+    [
+        (torch.float32, ttnn.bfloat16),
+    ],
+)
+def test_cumsum_oft(size, dim, dtypes, device):
+    torch.manual_seed(29112024)
+
+    (torch_dtype, ttnn_dtype) = dtypes
+
+    torch_input_tensor = torch.randint(-2, 3, size=size, dtype=torch_dtype)
+    input_tensor = ttnn.from_torch(torch_input_tensor, device=device, layout=ttnn.Layout.TILE)
+
+    expected_output_dtype = ttnn_dtype if ttnn_dtype is not None else input_tensor.dtype
+
+    tensor_rank = len(size)
+
+    if not is_supported(tensor_rank, dim, expected_output_dtype):
+        return
+
+    output_tensor = ttnn.experimental.cumsum(input_tensor, dim=dim, dtype=ttnn_dtype)
+
+    torch_output = ttnn.to_torch(output_tensor, dtype=torch_dtype)
+
+    expected_output = torch.cumsum(torch_input_tensor, dim=dim, dtype=torch_dtype)
+
+    assert_with_pcc(expected_output, torch_output)
