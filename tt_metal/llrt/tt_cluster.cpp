@@ -1141,6 +1141,9 @@ std::set<tt_fabric::chan_id_t> Cluster::get_fabric_ethernet_channels(chip_id_t c
     std::set<tt_fabric::chan_id_t> fabric_ethernet_channels;
     const auto& active_eth_cores = this->get_active_ethernet_cores(chip_id, false);
     for (const auto& eth_core : active_eth_cores) {
+        if (!this->is_ethernet_link_up(chip_id, eth_core)) {
+            continue;
+        }
         if (this->device_eth_routing_info_.at(chip_id).at(eth_core) == EthRouterMode::FABRIC_ROUTER) {
             fabric_ethernet_channels.insert(this->get_soc_desc(chip_id).logical_eth_core_to_chan_map.at(eth_core));
         }

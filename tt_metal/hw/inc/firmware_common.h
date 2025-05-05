@@ -133,6 +133,8 @@ bool is_message_go() {
 
 inline __attribute__((always_inline)) void disable_gathering() {
 #if defined(ARCH_BLACKHOLE)
+    // Workaround for tt-metal#16439, making sure gathering multiple instructions issued to Tensix is disabled
+    // Brisc does not issue Tensix instructions but to be consistent for all riscs around Tensix we disable it
     // Disable gathering: set bit 18
     asm(R"ASM(
         .option push
@@ -154,7 +156,7 @@ inline __attribute__((always_inline)) void disable_gathering() {
 inline __attribute__((always_inline)) void configure_l1_data_cache() {
 #if defined(ARCH_BLACKHOLE)
 #if defined(DISABLE_L1_DATA_CACHE)
-    // Disables Blackhole's L1 cache. Grayskull and Wormhole do not have L1 cache
+    // Disables Blackhole's L1 cache by setting bit 3. Grayskull and Wormhole do not have L1 cache
     // L1 cache can be disabled by setting `TT_METAL_DISABLE_L1_DATA_CACHE_RISCVS` env var
     // export TT_METAL_DISABLE_L1_DATA_CACHE_RISCVS=<BR,NC,TR*,ER*>
     asm(R"ASM(
@@ -163,13 +165,32 @@ inline __attribute__((always_inline)) void configure_l1_data_cache() {
              )ASM" ::
             : "t1");
 #elif !defined(ENABLE_HW_CACHE_INVALIDATION)
-    // Disable gathering to stop HW from invalidating the data cache after 128 transactions
+    // Disable gathering to stop HW from invalidating the data cache after 128 transactions by setting bit 24
     // This is default enabled
     asm(R"ASM(
-            lui  t1, 0x40
+            li   t1, 0x1
+            slli t1, t1, 24
+            fence
             csrrs zero, 0x7c0, t1
              )ASM" ::
             : "t1");
 #endif
 #endif
+}
+
+inline __attribute__((always_inline)) void disable_relaxed_memory_ordering() {
+#if defined(ARCH_BLACKHOLE) && defined(DISABLE_RELAXED_MEMORY_ORDERING)
+    // Disable relaxed ordering which allows loads to bypass stores when going to separate addresses (bit 0)
+    asm(R"ASM(
+        li t1, 0x1
+        csrrs zero, 0x7c0, t1
+            )ASM" ::
+            : "t1");
+#endif
+}
+
+inline __attribute__((always_inline)) void configure_csr() {
+    disable_gathering();
+    configure_l1_data_cache();
+    disable_relaxed_memory_ordering();
 }
