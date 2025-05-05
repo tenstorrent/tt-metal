@@ -1747,12 +1747,7 @@ std::vector<Tensor> ExecuteUnaryBackwardRepeat::invoke(
             grad,
             dim,
             true,
-            ttnn::zeros(
-                required,
-                input.get_dtype(),
-                input.get_layout(),
-                std::optional<std::reference_wrapper<MeshDevice>>(*ttnn_device),
-                output_memory_config),
+            ttnn::zeros(required, input.get_dtype(), input.get_layout(), *ttnn_device, output_memory_config),
             output_memory_config,
             std::nullopt);
         grad_tensor.emplace_back(result);
@@ -1766,12 +1761,7 @@ std::vector<Tensor> ExecuteUnaryBackwardRepeat::invoke(
             grad,
             dim,
             true,
-            ttnn::zeros(
-                required,
-                input.get_dtype(),
-                input.get_layout(),
-                std::optional<std::reference_wrapper<MeshDevice>>(*ttnn_device),
-                output_memory_config),
+            ttnn::zeros(required, input.get_dtype(), input.get_layout(), *ttnn_device, output_memory_config),
             output_memory_config,
             std::nullopt);
         grad_tensor.emplace_back(result);

@@ -34,7 +34,7 @@ ttnn::Tensor ExecuteSoftmax::invoke(
             1.0f,
             input_tensor.get_dtype(),
             input_tensor.get_layout(),
-            std::optional<std::reference_wrapper<MeshDevice>>(*input_tensor.mesh_device()),
+            *input_tensor.mesh_device(),
             memory_config);
     }
 
@@ -87,7 +87,7 @@ ttnn::Tensor ExecuteScaleMaskSoftmax::invoke(
             scale.value_or(1.0f),
             input_tensor.get_dtype(),
             input_tensor.get_layout(),
-            std::optional<std::reference_wrapper<MeshDevice>>(*input_tensor.mesh_device()),
+            *input_tensor.mesh_device(),
             memory_config);
     }
 
