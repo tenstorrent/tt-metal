@@ -529,7 +529,6 @@ def pytest_addoption(parser):
         help="Number of iterations to run",
     )
 
-    # Indicates the iteration interval at which determinism is verified for the op output
     parser.addoption(
         "--determinism-check-iterations",
         action="store",
@@ -538,6 +537,7 @@ def pytest_addoption(parser):
     )
 
 
+# Indicates the iteration interval at which determinism is verified for the op output
 @pytest.fixture
 def determinism_check_iterations(request):
     iterations = request.config.getoption("--determinism-check-iterations")
