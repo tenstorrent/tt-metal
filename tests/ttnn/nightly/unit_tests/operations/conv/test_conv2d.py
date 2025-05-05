@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import math
 from loguru import logger
 
 import torch
@@ -3432,14 +3433,10 @@ def test_conv_sharded_non_tile(device):
 
     torch_input_nhwc = torch.permute(torch_input, (0, 2, 3, 1))
 
+    num_cores = math.ceil((batch * input_height * input_width) / shard_height)
     input_mem_cfg = ttnn.create_sharded_memory_config(
         shape=(shard_height, shard_width),
-        core_grid=ttnn.CoreRangeSet(
-            [
-                ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 6)),
-                ttnn.CoreRange(ttnn.CoreCoord(0, 7), ttnn.CoreCoord(6, 7)),
-            ]
-        ),
+        core_grid=ttnn.num_cores_to_corerangeset(target_num_cores=num_cores, grid_size=device.compute_with_storage_grid_size(), row_wise=True),
         strategy=ttnn.ShardStrategy.HEIGHT,
         orientation=ttnn.ShardOrientation.ROW_MAJOR,
         use_height_and_width_as_shard_shape=True,
