@@ -12,6 +12,7 @@ set(DISTRIBUTED_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/mesh_workload.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/mesh_workload_utils.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/system_mesh.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/mpi_distributed_context.cpp
 )
 
 add_library(distributed OBJECT ${DISTRIBUTED_SRC})

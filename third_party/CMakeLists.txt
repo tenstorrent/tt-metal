@@ -39,6 +39,7 @@ ensureboosttarget(core)
 ensureboosttarget(container)
 ensureboosttarget(smart_ptr)
 ensureboosttarget(interprocess)
+ensureboosttarget(mpi)
 
 add_library(span INTERFACE)
 target_link_libraries(

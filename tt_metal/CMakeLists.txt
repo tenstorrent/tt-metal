@@ -22,6 +22,12 @@ target_sources(
         graph/graph_tracking.cpp
         hal.cpp
 )
+
+# temporary solution to make it compile
+find_package(MPI REQUIRED)
+include_directories(${MPI_INCLUDE_PATH})
+target_link_libraries(tt_metal PRIVATE ${MPI_CXX_LIBRARIES})
+
 target_sources(
     tt_metal
     PUBLIC
