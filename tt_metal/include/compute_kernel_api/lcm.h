@@ -18,7 +18,7 @@ namespace ckernel {
 // clang-format off
 /**
  * Performs an elementwise LCM operation on two inputs: y = lcm(x0, x1).
- * Both inputs must be int32 but only up to 16 bits are supported.
+ * Both inputs must be int32 with values constrained to |value| ≤ 2^15-1 (32,767).
  * Output overwrites first operand in DST.
  *
  * The DST register buffer must be in acquired state via *acquire_dst* call. This call is blocking and is only available
