@@ -24,7 +24,7 @@ def get_conv_output_dim(input, window, stride=1, pad=0, dilation=1):
     """
     return (input + (2 * pad) - dilation * (window - 1) - 1) // stride + 1
 
-
+# TODO: remove this function after #21040 is fixed
 def prepare_conv_transpose2d_weights(*args, **kwargs):
     """
     TTNN ConvTranspose2D applies preprocessing to the weights tensors before performing the conv_tranpose2D operation, to convert the weights into a format suitable for the operation.
@@ -54,7 +54,7 @@ def prepare_conv_transpose2d_weights(*args, **kwargs):
     """
     return ttnn._ttnn.operations.conv.prepare_conv_transpose2d_weights(*args, **kwargs)
 
-
+# TODO: remove this function after #21040 is fixed
 def prepare_conv_transpose2d_bias(*args, **kwargs):
     """
     TTNN ConvTranspose2D applies preprocessing to the bias tensors before performing the convolution operation, to convert the bias into a format suitable for the operation.
@@ -84,7 +84,7 @@ def prepare_conv_transpose2d_bias(*args, **kwargs):
     """
     return ttnn._ttnn.operations.conv.prepare_conv_transpose2d_bias(*args, **kwargs)
 
-
+# TODO: remove this function after #21040 is fixed
 def prepare_conv_weights(*args, **kwargs):
     """
     TTNN Conv2D applies preprocessing to the weights tensors before performing the convolution operation, to convert the weights into a format suitable for the operation.
