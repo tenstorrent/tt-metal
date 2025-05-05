@@ -167,8 +167,8 @@ jobs:
         timeout-minutes: 15
         env:
           # !!!!!! WARNING !!!!!! PLEASE REVERT THIS LINE
-          SOURCE_LLAMA_DIR: /home/ubuntu/Meta-Llama-3.1-70B-Instruct/original
-          LLAMA_DIR: /model_weights/llama/Llama3.1-70B-Instruct
+          SOURCE_LLAMA_DIR: /home/ubuntu/Meta-Llama-3.3-70B-Instruct/original
+          LLAMA_DIR: /model_weights/llama/Llama3.3-70B-Instruct
         run: docker run -v /dev/hugepages-1G:/dev/hugepages-1G --device /dev/tenstorrent -v $SOURCE_LLAMA_DIR:$LLAMA_DIR:ro -e LLAMA_DIR ${{ needs.get-image-tags.outputs.wh-6u-image-tag }}
       - name: Run profiler image
         timeout-minutes: 10
