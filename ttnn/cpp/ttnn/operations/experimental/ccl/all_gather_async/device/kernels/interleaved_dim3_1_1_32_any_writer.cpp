@@ -365,7 +365,6 @@ inline void fabric_send_generic(
     volatile PACKET_HEADER_TYPE* pkt_hdr_backward,
     FabricConnectionManager& fabric_connection) {
     uint32_t tile_id = tile_id_start;
-    uint32_t row = 0;
     for (uint32_t i = 0; i < num_tiles_per_chip; i += packet_size_in_pages) {
         uint32_t num_pages_to_read = min(num_tiles_per_chip - i, packet_size_in_pages);
         cb_wait_front(cb0_id, num_pages_to_read);
@@ -382,8 +381,7 @@ inline void fabric_send_generic(
             tile_id++;
             if constexpr (last_dim) {
                 if (tile_id % tile_cols_per_chip == 0) {
-                    row++;
-                    tile_id = row * (tile_cols_per_chip * ring_size) + tile_id_start;
+                    tile_id += (tile_cols_per_chip * (ring_size - 1));
                 }
             }
         }

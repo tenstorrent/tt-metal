@@ -223,7 +223,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_interleav
         uint32_t output_tile_id_start = ring_index * input_tensor_num_pages + input_tile_id_start;
         uint32_t output_tile_id_end = ring_index * input_tensor_num_pages + input_tile_id_end;
         if (last_dim) {
-            output_tile_id_start = link * (base_pages_per_worker * ring_size) + ring_index * tile_cols_per_chip;
+            output_tile_id_start = tile_cols_per_chip * ring_index + (base_pages_per_worker * ring_size) * link;
             output_tile_id_end = tile_rows * tile_cols_per_chip + input_tile_id_end;
         }
         std::vector<uint32_t> writer_rt_args = {

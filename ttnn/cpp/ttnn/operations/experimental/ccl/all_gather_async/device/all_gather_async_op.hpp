@@ -96,6 +96,7 @@ struct AllGatherAsync {
         const Tensor& input_tensor,
         const uint32_t dim,
         const BufferType output_buffer_type,
+        const uint32_t num_links,
         bool use_optimized = false);
     static bool is_tensor_aligned_by_tile(const Tensor& input_tensor);
 };
