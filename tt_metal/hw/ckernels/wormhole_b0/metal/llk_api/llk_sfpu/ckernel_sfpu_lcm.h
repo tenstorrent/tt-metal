@@ -15,27 +15,6 @@ using namespace sfpi;
 namespace ckernel {
 namespace sfpu {
 
-// inputs are lreg0, lreg1. output is lreg0. bits must be <= 16.
-template <int bits>
-inline void calculate_sfpu_restoring_division_body() {
-
-    TTI_SFPSHFT(bits, 0, p_sfpu::LREG1, 1);
-    TTI_SFPLOADI(p_sfpu::LREG2, SFPLOADI_MOD0_USHORT, 1); // c = 1
-    TTI_SFPIADD(0, p_sfpu::LREG2, p_sfpu::LREG1, SFPIADD_MOD1_CC_NONE | SFPIADD_MOD1_ARG_2SCOMP_LREG_DST); // b = 1 - b
-    TTI_SFPMOV(0, p_sfpu::LREG1, p_sfpu::LREG2, 0);
-    TTI_SFPIADD(0, p_sfpu::LCONST_0, p_sfpu::LREG2, SFPIADD_MOD1_CC_NONE | SFPIADD_MOD1_ARG_2SCOMP_LREG_DST);
-
-#pragma GCC unroll 16
-    for (int i = 0; i < bits; ++i) {
-        // AQ = 2 * AQ
-        TTI_SFPSHFT(1, 0, p_sfpu::LREG0, 1);
-        // AQ - M
-        TTI_SFPIADD(0, p_sfpu::LREG1, p_sfpu::LREG0, SFPIADD_MOD1_CC_LT0);
-        TTI_SFPIADD(0, p_sfpu::LREG2, p_sfpu::LREG0, SFPIADD_MOD1_CC_NONE);
-        TTI_SFPENCC(0, 0, 0, 0);
-    }
-}
-
 // inputs are lreg0, lreg1. output is lreg4
 inline void calculate_sfpu_mul_u16_to_u32_body() {
     // mask
