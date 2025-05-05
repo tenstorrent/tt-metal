@@ -27,15 +27,7 @@ inline void calculate_expm1() {
 
 template <bool APPROXIMATION_MODE>
 void expm1_init() {
-    if constexpr (APPROXIMATION_MODE) {
-        vConstFloatPrgm0 = 1.442695f;  // ln2_recip
-        vConstFloatPrgm1 = s2vFloat16b(p_exp::C23_73);
-        vConstFloatPrgm2 = s2vFloat16b(p_exp::ADJ_EXP);
-    } else {
-        vConstFloatPrgm0 = 1.442695f;  // ln2_recip
-        vConstFloatPrgm1 = 2.0f;
-        vConstFloatPrgm2 = 0.863281f;
-    }
+    exp_init<APPROXIMATION_MODE>();
 }
 
 }  // namespace sfpu
