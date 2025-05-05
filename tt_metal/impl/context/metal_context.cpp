@@ -19,13 +19,14 @@ namespace tt::tt_metal {
 void MetalContext::initialize(
     const DispatchCoreConfig& dispatch_core_config, uint8_t num_hw_cqs, const BankMapping& l1_bank_remap) {
     if (initialized_) {
-        if (this->dispatch_core_config_ != dispatch_core_config or num_hw_cqs != this->num_hw_cqs_ or
-            l1_bank_remap != this->l1_bank_remap_) {
-            log_warning("Closing and re-initializing MetalContext with new parameters.");
-        } else {
-            // Re-init request with the same parameters, do nothing
-            return;
-        }
+        TT_FATAL(
+            this->dispatch_core_config_ == dispatch_core_config,
+            "Cannot re-initialize MetalContext with different dispatch_core_config.");
+        TT_FATAL(num_hw_cqs == this->num_hw_cqs_, "Cannot re-initialize MetalContext with different num_hw_cqs.");
+        TT_FATAL(
+            l1_bank_remap == this->l1_bank_remap_, "Cannot re-initialize MetalContext with different l1_bank_remap.");
+        // Re-init request with the same parameters, do nothing
+        return;
     }
 
     initialized_ = true;

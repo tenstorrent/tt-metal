@@ -31,16 +31,41 @@ jobs:
       # so we try not to get hanging machines
       fail-fast: false
       matrix:
-        test-group: [
-          {name: eager unit tests 1, cmd: pytest tests/tt_eager/python_api_testing/unit_testing/ -xvvv --splits 7 --group 1 },
-          {name: eager unit tests 2, cmd: pytest tests/tt_eager/python_api_testing/unit_testing/ -xvvv --splits 7 --group 2 },
-          {name: eager unit tests 3, cmd: pytest tests/tt_eager/python_api_testing/unit_testing/ -xvvv --splits 7 --group 3 },
-          {name: eager unit tests 4, cmd: pytest tests/tt_eager/python_api_testing/unit_testing/ -xvvv --splits 7 --group 4 },
-          {name: eager unit tests 5, cmd: pytest tests/tt_eager/python_api_testing/unit_testing/ -xvvv --splits 7 --group 5 },
-          {name: eager unit tests 6, cmd: pytest tests/tt_eager/python_api_testing/unit_testing/ -xvvv --splits 7 --group 6 },
-          {name: eager unit tests 7, cmd: pytest tests/tt_eager/python_api_testing/unit_testing/ -xvvv --splits 7 --group 7 },
-          {name: sweep, cmd: pytest tests/tt_eager/python_api_testing/sweep_tests/pytests/ -xvvv },
-        ]
+        test-group:
+          - name: eager unit tests 1
+            cmd: >
+              pytest tests/tt_eager/python_api_testing/unit_testing/ -xvvv --splits 7 --group 1
+              --filter-param-name "device_params" --filter-subparam-name "dispatch_core_axis" --filter-param-value "not DispatchCoreAxis.COL"
+          - name: eager unit tests 2
+            cmd: >
+              pytest tests/tt_eager/python_api_testing/unit_testing/ -xvvv --splits 7 --group 2
+              --filter-param-name "device_params" --filter-subparam-name "dispatch_core_axis" --filter-param-value "not DispatchCoreAxis.COL"
+          - name: eager unit tests 3
+            cmd: >
+              pytest tests/tt_eager/python_api_testing/unit_testing/ -xvvv --splits 7 --group 3
+              --filter-param-name "device_params" --filter-subparam-name "dispatch_core_axis" --filter-param-value "not DispatchCoreAxis.COL"
+          - name: eager unit tests 4
+            cmd: >
+              pytest tests/tt_eager/python_api_testing/unit_testing/ -xvvv --splits 7 --group 4
+              --filter-param-name "device_params" --filter-subparam-name "dispatch_core_axis" --filter-param-value "not DispatchCoreAxis.COL"
+          - name: eager unit tests 5
+            cmd: >
+              pytest tests/tt_eager/python_api_testing/unit_testing/ -xvvv --splits 7 --group 5
+              --filter-param-name "device_params" --filter-subparam-name "dispatch_core_axis" --filter-param-value "not DispatchCoreAxis.COL"
+          - name: eager unit tests 6
+            cmd: >
+              pytest tests/tt_eager/python_api_testing/unit_testing/ -xvvv --splits 7 --group 6
+              --filter-param-name "device_params" --filter-subparam-name "dispatch_core_axis" --filter-param-value "not DispatchCoreAxis.COL"
+          - name: eager unit tests 7
+            cmd: >
+              pytest tests/tt_eager/python_api_testing/unit_testing/ -xvvv --splits 7 --group 7
+              --filter-param-name "device_params" --filter-subparam-name "dispatch_core_axis" --filter-param-value "not DispatchCoreAxis.COL"
+          - name: eager unit tests col dispatch
+            cmd: >
+              pytest tests/tt_eager/python_api_testing/unit_testing/ -xvvv
+              --filter-param-name "device_params" --filter-subparam-name "dispatch_core_axis" --filter-param-value "DispatchCoreAxis.COL"
+          - name: sweep
+            cmd: pytest tests/tt_eager/python_api_testing/sweep_tests/pytests/ -xvvv
     name: ${{ matrix.test-group.name }} ${{ inputs.arch }} ${{ inputs.runner-label }}
     runs-on: >-
       ${{

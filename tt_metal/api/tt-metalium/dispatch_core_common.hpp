@@ -72,7 +72,9 @@ public:
 
     void set_dispatch_core_axis(DispatchCoreAxis new_axis) { axis_ = new_axis; }
 
-    bool operator==(const DispatchCoreConfig& other) const { return (type_ == other.type_) && (axis_ == other.axis_); }
+    bool operator==(const DispatchCoreConfig& other) const {
+        return (type_ == other.type_) && (get_dispatch_core_axis() == other.get_dispatch_core_axis());
+    }
 };
 
 // Helper functions to get the dispatch core config/type

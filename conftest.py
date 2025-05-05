@@ -490,6 +490,63 @@ def pytest_addoption(parser):
         default=None,
         help="Enable process timeout",
     )
+    parser.addoption(
+        "--filter-param-name",
+        action="store",
+        default=None,
+        help="Parameter name to filter by",
+    )
+    parser.addoption(
+        "--filter-subparam-name",
+        action="store",
+        default=None,
+        help="Sub-parameter name to filter by",
+    )
+    parser.addoption(
+        "--filter-param-value",
+        action="store",
+        default=None,
+        help="Parameter value to filter by, supports 'not' prefix",
+    )
+
+
+def pytest_collection_modifyitems(session, config, items):
+    param_name = config.getoption("--filter-param-name")
+    subparam_name = config.getoption("--filter-subparam-name")
+    param_value = config.getoption("--filter-param-value")
+
+    # param_name and param_value are required to filter tests, subparam_value is optional
+    if not param_name or not param_value:
+        return  # param_name and param_value are required to filter tests, subparam_value is optional
+
+    # Check if we want to filter for tests including this value, or excluding
+    if param_value.startswith("not "):
+        param_value = param_value[len("not ") :]
+        excluding_value = True
+    else:
+        excluding_value = False
+
+    # Gather items with name/value matching what we're looking for
+    matching_items = [
+        item
+        for item in items
+        if hasattr(item, "callspec")
+        and param_name in item.callspec.params
+        and (
+            (
+                subparam_name is not None
+                and subparam_name in item.callspec.params[param_name]
+                and str(item.callspec.params[param_name][subparam_name]) == param_value
+            )
+            or (subparam_name is None and str(item.callspec.params[param_name]) == param_value)
+        )
+    ]
+
+    # Set final items list to either include or exclude the matching items
+    if excluding_value:
+        items[:] = [item for item in items if item not in matching_items]
+    else:
+        items[:] = [item for item in matching_items]
 
 
 @pytest.fixture
