@@ -24,15 +24,15 @@ class TtUNetMidBlock2D(nn.Module):
         for i in range(num_layers_resn):
             self.resnets.append(TtResnetBlock2D(device, state_dict, f"{module_path}.resnets.{i}"))
 
-    def forward(self, input_tensor, input_shape, temb=None):
+    def forward(self, input_tensor, input_shape):
         B, C, H, W = input_shape
         hidden_states = input_tensor
 
-        hidden_states, [C, H, W] = self.resnets[0].forward(hidden_states, temb, [B, C, H, W])
+        hidden_states, [C, H, W] = self.resnets[0].forward(hidden_states, [B, C, H, W])
 
         tt_blocks = list(zip(self.resnets[1:], self.attentions))
         for resnet, attn in tt_blocks:
             hidden_states = attn.forward(hidden_states, [B, C, H, W])
-            hidden_states, [C, H, W] = resnet.forward(hidden_states, temb, [B, C, H, W])
+            hidden_states, [C, H, W] = resnet.forward(hidden_states, [B, C, H, W])
 
         return hidden_states, [C, H, W]

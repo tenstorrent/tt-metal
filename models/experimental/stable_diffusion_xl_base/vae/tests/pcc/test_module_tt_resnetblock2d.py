@@ -11,25 +11,25 @@ from models.utility_functions import torch_random
 
 
 @pytest.mark.parametrize(
-    "input_shape, down_block_id, resnet_id, conv_shortcut, block, pcc",
+    "input_shape, block_id, resnet_id, conv_shortcut, block, pcc",
     [
         ((1, 512, 128, 128), 0, 0, False, "mid_block", 0.999),
     ],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 def test_vae_resnetblock2d(
-    device, input_shape, down_block_id, resnet_id, conv_shortcut, block, pcc, use_program_cache, reset_seeds
+    device, input_shape, block_id, resnet_id, conv_shortcut, block, pcc, use_program_cache, reset_seeds
 ):
     pipe = DiffusionPipeline.from_pretrained(
-        "stabilityai/stable-diffusion-xl-base-1.0", torch_dtype=torch.float32, use_safetensors=True, variant="fp16"
+        "stabilityai/stable-diffusion-xl-base-1.0", torch_dtype=torch.float32, use_safetensors=True
     )
     vae = pipe.vae
     vae.eval()
     state_dict = vae.state_dict()
 
     if block == "up_blocks":
-        torch_resnet = vae.decoder.up_blocks[down_block_id].resnets[resnet_id]
-        block = f"{block}.{down_block_id}"
+        torch_resnet = vae.decoder.up_blocks[block_id].resnets[resnet_id]
+        block = f"{block}.{block_id}"
     else:
         torch_resnet = vae.decoder.mid_block.resnets[resnet_id]
     tt_resnet = TtResnetBlock2D(device, state_dict, f"decoder.{block}.resnets.{resnet_id}", conv_shortcut)
@@ -37,18 +37,19 @@ def test_vae_resnetblock2d(
     torch_input_tensor = torch_random(input_shape, -0.1, 0.1, dtype=torch.float32)
     torch_output_tensor = torch_resnet(torch_input_tensor, None)
 
-    input_mem_cfg = (
-        ttnn.L1_MEMORY_CONFIG if down_block_id != 0 and not block == "up_blocks" else ttnn.DRAM_MEMORY_CONFIG
-    )
     ttnn_input_tensor = ttnn.from_torch(
-        torch_input_tensor, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT, memory_config=input_mem_cfg
+        torch_input_tensor,
+        dtype=ttnn.bfloat16,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
     )
     B, C, H, W = list(ttnn_input_tensor.shape)
 
     ttnn_input_tensor = ttnn.permute(ttnn_input_tensor, (0, 2, 3, 1))
     ttnn_input_tensor = ttnn.reshape(ttnn_input_tensor, (B, 1, H * W, C))
 
-    ttnn_output_tensor, output_shape = tt_resnet.forward(ttnn_input_tensor, None, [B, C, H, W])
+    ttnn_output_tensor, output_shape = tt_resnet.forward(ttnn_input_tensor, [B, C, H, W])
     output_tensor = ttnn.to_torch(ttnn_output_tensor)
     output_tensor = output_tensor.reshape(input_shape[0], output_shape[1], output_shape[2], output_shape[0])
     output_tensor = torch.permute(output_tensor, (0, 3, 1, 2))

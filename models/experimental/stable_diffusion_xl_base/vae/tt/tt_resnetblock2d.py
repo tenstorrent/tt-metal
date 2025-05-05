@@ -86,7 +86,7 @@ class TtResnetBlock2D(nn.Module):
         else:
             self.tt_conv3_weights = self.tt_conv3_bias = None
 
-    def forward(self, input_tensor, temb, input_shape):
+    def forward(self, input_tensor, input_shape):
         B, C, H, W = input_shape
         hidden_states = input_tensor
 
