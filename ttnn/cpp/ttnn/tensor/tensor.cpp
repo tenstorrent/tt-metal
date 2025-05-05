@@ -110,13 +110,6 @@ Tensor::Tensor(distributed::MeshDevice* mesh_device, TensorSpec spec) :
     TT_FATAL(mesh_device_ != nullptr, "Mesh device is nullptr");
 }
 
-Tensor::Tensor(const std::vector<IDevice*>& workers, TensorSpec spec) :
-    tensor_attributes(std::make_shared<TensorAttributes>(
-        workers.empty() ? Storage(HostStorage()) : DeviceStorage(), std::move(spec))),
-    workers(workers) {
-    TT_FATAL(workers.size() <= 1, "Only single device is supported.");
-}
-
 Tensor::Tensor(
     uint32_t num_buffers, TensorSpec spec, std::optional<DistributedTensorConfig> distributed_tensor_config) :
     tensor_attributes(std::make_shared<TensorAttributes>(
@@ -737,20 +730,6 @@ void memcpy(Tensor& dst, const Tensor& src, const std::optional<BufferRegion>& r
     } else {
         TT_THROW("Unsupported memcpy");
     }
-}
-
-Tensor allocate_tensor_on_devices(const TensorSpec& tensor_spec, const std::vector<IDevice*>& devices) {
-    Tensor device_tensor = Tensor(devices, tensor_spec);
-
-    const auto& workers_in_use = device_tensor.get_workers();
-    uint32_t num_workers = workers_in_use.size();
-
-    for (int worker_index = 0; worker_index < num_workers; ++worker_index) {
-        auto& worker = devices[worker_index];
-        auto shard = create_device_tensor(tensor_spec, worker);
-        insert_buffer_and_shape_for_device(worker, shard, device_tensor, worker_index);
-    }
-    return device_tensor;
 }
 
 Tensor allocate_tensor_on_mesh(const TensorSpec& tensor_spec, distributed::MeshDevice* mesh_device) {

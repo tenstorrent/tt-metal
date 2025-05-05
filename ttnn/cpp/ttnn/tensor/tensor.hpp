@@ -75,7 +75,6 @@ public:
         uint32_t num_buffers,
         TensorSpec spec,
         std::optional<DistributedTensorConfig> distributed_tensor_config = std::nullopt);
-    explicit Tensor(const std::vector<IDevice*>& workers, TensorSpec spec);
     explicit Tensor(distributed::MeshDevice* mesh_device, TensorSpec spec);
 
     Tensor(const Tensor& other);
@@ -355,8 +354,6 @@ void memcpy(
 void memcpy(Tensor& dst, const void* src, const std::optional<BufferRegion>& region = std::nullopt);
 
 void memcpy(Tensor& dst, const Tensor& src, const std::optional<BufferRegion>& region = std::nullopt);
-
-Tensor allocate_tensor_on_devices(const TensorSpec& spec, const std::vector<IDevice*>& devices);
 
 // Allocates a tensor on a mesh device through mesh buffer.
 Tensor allocate_tensor_on_mesh(const TensorSpec& tensor_spec, distributed::MeshDevice* mesh_device);

@@ -56,25 +56,6 @@ Tensor tensor_to_device(
     return device_tensor;
 }
 
-Tensor tensor_to_device(
-    const Tensor& input_tensor, const std::vector<IDevice*>& workers, const MemoryConfig& mem_config, QueueId cq_id) {
-    ZoneScoped;
-    GraphTracker::instance().track_function_start("Tensor::to_device", input_tensor, workers, mem_config);
-    Tensor device_tensor = Tensor(workers, input_tensor.tensor_spec().with_memory_config(mem_config));
-    uint32_t num_workers = workers.size();
-    for (int worker_index = 0; worker_index < workers.size(); ++worker_index) {
-        auto& worker = workers[worker_index];
-        auto shard = get_shard_for_device(input_tensor, worker, worker_index);
-        if (shard.storage_type() == StorageType::HOST) {
-            shard = tensor_impl::to_device_wrapper(shard, worker, mem_config, cq_id);
-        }
-        insert_buffer_and_shape_for_device(worker, shard, device_tensor, worker_index);
-    }
-    device_tensor = tt::tt_metal::set_tensor_id(device_tensor);
-    GraphTracker::instance().track_function_end(device_tensor);
-    return device_tensor;
-}
-
 Tensor tensor_cpu(const Tensor& input_tensor, bool blocking, QueueId cq_id) {
     if (input_tensor.storage_type() == StorageType::HOST) {
         return input_tensor;
