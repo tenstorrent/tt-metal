@@ -786,8 +786,6 @@ Tensor allocate_tensor_on_devices(const TensorSpec& tensor_spec, const std::vect
 
 Tensor allocate_tensor_on_mesh(const TensorSpec& tensor_spec, distributed::MeshDevice* mesh_device) {
     // Allocate a mesh buffer synchronously.
-    TT_FATAL(
-        tt::tt_metal::detail::InMainThread(), "Allocation of a tensor on mesh must be called from the main thread");
     auto mesh_buffer = tensor_impl::allocate_mesh_buffer_on_device(mesh_device, tensor_spec);
     std::vector<std::pair<distributed::MeshCoordinate, TensorSpec>> specs;
     specs.reserve(mesh_device->shape().mesh_size());

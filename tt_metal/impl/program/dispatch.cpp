@@ -11,7 +11,6 @@
 #include <sub_device_types.hpp>
 #include <tracy/Tracy.hpp>
 #include <tt-metalium/allocator.hpp>
-#include <tt-metalium/dispatch_settings.hpp>
 #include <tt-metalium/mesh_command_queue.hpp>
 #include <tt_align.hpp>
 #include <algorithm>
@@ -39,6 +38,7 @@
 #include "dispatch/device_command.hpp"
 #include "impl/context/metal_context.hpp"
 #include "dispatch/kernels/cq_commands.hpp"
+#include "dispatch/dispatch_settings.hpp"
 #include "dispatch_core_common.hpp"
 #include "hal_types.hpp"
 #include "kernel.hpp"
@@ -805,19 +805,20 @@ BatchedTransfers assemble_runtime_args_commands(
                     }
                     uint32_t dispatch_class = kernel->dispatch_class();
                     const uint32_t crta_offset = program.get_program_config(index).crta_offsets[dispatch_class];
-                    for (auto& [transfer_info, dests] :
+                    for (auto& transfer_info :
                          extract_dst_noc_multicast_info(device, kg->core_ranges.ranges(), CoreType::WORKER)) {
-                        auto noc_xy_addr =
-                            device->get_noc_multicast_encoding(constants.noc_index, std::get<CoreRange>(transfer_info));
+                        auto noc_xy_addr = device->get_noc_multicast_encoding(
+                            constants.noc_index, std::get<CoreRange>(transfer_info.cores));
                         size_t size =
                             kernel->common_runtime_args().size() * sizeof(*kernel->common_runtime_args().data());
                         RecordDispatchData(program, DISPATCH_DATA_RTARGS, size);
-                        transfers[std::make_pair(noc_xy_addr, dests)][crta_offset] = std::vector<Transfer>{Transfer{
-                            .start = crta_offset,
-                            .data =
-                                tt::stl::Span(reinterpret_cast<uint8_t*>(kernel->common_runtime_args().data()), size),
-                            .cbs = {},
-                            .rta_data = &kernel->common_runtime_args_data()}};
+                        transfers[std::make_pair(noc_xy_addr, transfer_info.num_dests)][crta_offset] =
+                            std::vector<Transfer>{Transfer{
+                                .start = crta_offset,
+                                .data = tt::stl::Span(
+                                    reinterpret_cast<uint8_t*>(kernel->common_runtime_args().data()), size),
+                                .cbs = {},
+                                .rta_data = &kernel->common_runtime_args_data()}};
                     }
                 }
             }
@@ -949,7 +950,7 @@ BatchedTransfers assemble_runtime_args_commands(
                                     device->get_noc_unicast_encoding(constants.noc_index, virtual_core_coords)});
                         }
                     } else {
-                        std::vector<std::pair<transfer_info_cores, uint32_t>> dst_noc_multicast_info =
+                        std::vector<multicast_transfer_info> dst_noc_multicast_info =
                             extract_dst_noc_multicast_info(device, kernel->logical_coreranges(), core_type);
                         common_sub_cmds.emplace<std::vector<CQDispatchWritePackedMulticastSubCmd>>(
                             std::vector<CQDispatchWritePackedMulticastSubCmd>());
@@ -959,8 +960,8 @@ BatchedTransfers assemble_runtime_args_commands(
                         for (const auto& mcast_dests : dst_noc_multicast_info) {
                             multicast_sub_cmd.emplace_back(CQDispatchWritePackedMulticastSubCmd{
                                 .noc_xy_addr = device->get_noc_multicast_encoding(
-                                    constants.noc_index, std::get<CoreRange>(mcast_dests.first)),
-                                .num_mcast_dests = mcast_dests.second});
+                                    constants.noc_index, std::get<CoreRange>(mcast_dests.cores)),
+                                .num_mcast_dests = mcast_dests.num_dests});
                         }
                     }
 
@@ -1041,18 +1042,18 @@ public:
 
             if (semaphore.core_type() == CoreType::WORKER) {
                 uint32_t index = hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX);
-                std::vector<std::pair<transfer_info_cores, uint32_t>> dst_noc_multicast_info =
+                std::vector<multicast_transfer_info> dst_noc_multicast_info =
                     extract_dst_noc_multicast_info(device, semaphore.core_range_set().ranges(), CoreType::WORKER);
                 for (const auto& dst_noc_info : dst_noc_multicast_info) {
-                    auto& [range, dests] = dst_noc_info;
-                    auto noc_xy_addr =
-                        device->get_noc_multicast_encoding(constants.noc_index, std::get<CoreRange>(range));
+                    auto noc_xy_addr = device->get_noc_multicast_encoding(
+                        constants.noc_index, std::get<CoreRange>(dst_noc_info.cores));
                     uint32_t start_addr = semaphore.offset() + program.get_program_config(index).sem_offset;
                     RecordDispatchData(program, DISPATCH_DATA_SEMAPHORE, sizeof(uint32_t));
-                    batched_transfers[std::make_pair(noc_xy_addr, dests)][start_addr] = std::vector<Transfer>{
-                        {{.start = start_addr,
-                          .data = tt::stl::Span(
-                              reinterpret_cast<const uint8_t*>(&semaphore_data.back()), sizeof(uint32_t))}}};
+                    batched_transfers[std::make_pair(noc_xy_addr, dst_noc_info.num_dests)][start_addr] =
+                        std::vector<Transfer>{
+                            {{.start = start_addr,
+                              .data = tt::stl::Span(
+                                  reinterpret_cast<const uint8_t*>(&semaphore_data.back()), sizeof(uint32_t))}}};
                 }
             } else if (semaphore.core_type() == CoreType::ETH) {
                 unicast_semaphore_cmds.push_back({.dst = semaphore.offset(), .size = sizeof(uint32_t)});
