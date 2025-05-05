@@ -64,7 +64,7 @@ inline __attribute__((always_inline)) void signal_slave_idle_erisc_completion() 
 }
 
 int main(int argc, char *argv[]) {
-    configure_l1_data_cache();
+    configure_csr();
     DIRTY_STACK_MEMORY();
     WAYPOINT("I");
     do_crt1((uint32_t *)MEM_SLAVE_IERISC_INIT_LOCAL_L1_BASE_SCRATCH);

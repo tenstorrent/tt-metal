@@ -30,10 +30,12 @@ FORCE_INLINE void run_loop_iteration(
     std::array<volatile eth_channel_sync_t*, NUM_CHANNELS> const& channel_sync_addrs) {
     if constexpr (MEASURE) {
         while (channel_sync_addrs[0]->bytes_sent == 0) {
+            invalidate_l1_cache();
         }
 
         for (uint32_t i = 0; i < NUM_CHANNELS; i++) {
             while (channel_sync_addrs[i]->bytes_sent == 0) {
+                invalidate_l1_cache();
             }
             DeviceZoneScopedN("SYNC-ZONE-RECEIVER");
 
@@ -51,11 +53,13 @@ FORCE_INLINE void run_loop_iteration(
         }
     } else {
         while (channel_sync_addrs[0]->bytes_sent == 0) {
+            invalidate_l1_cache();
         }
 
         {
             for (uint32_t i = 0; i < NUM_CHANNELS; i++) {
                 while (channel_sync_addrs[i]->bytes_sent == 0) {
+                    invalidate_l1_cache();
                 }
 
                 channel_sync_addrs[i]->bytes_sent = 0;

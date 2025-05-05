@@ -175,7 +175,9 @@ RunTimeOptions::RunTimeOptions() {
         this->skip_deleting_built_cache = true;
     }
 
-    this->enable_hw_cache_invalidation = (std::getenv("TT_METAL_ENABLE_HW_CACHE_INVALIDATION") != nullptr);
+    if (getenv("TT_METAL_ENABLE_HW_CACHE_INVALIDATION")) {
+        this->enable_hw_cache_invalidation = true;
+    }
 
     if (std::getenv("TT_METAL_SIMULATOR")) {
         this->simulator_enabled = true;
@@ -184,6 +186,10 @@ RunTimeOptions::RunTimeOptions() {
 
     if (getenv("TT_METAL_ENABLE_ERISC_IRAM")) {
         this->erisc_iram_enabled = true;
+    }
+
+    if (getenv("TT_METAL_DISABLE_RELAXED_MEM_ORDERING")) {
+        this->disable_relaxed_memory_ordering = true;
     }
 }
 

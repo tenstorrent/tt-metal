@@ -65,7 +65,7 @@ uint32_t sumIDs[SUM_COUNT] __attribute__((used));
 #endif
 
 int main() {
-    configure_l1_data_cache();
+    configure_csr();
     DIRTY_STACK_MEMORY();
     WAYPOINT("I");
     do_crt1((uint32_t*)eth_l1_mem::address_map::MEM_ERISC_INIT_LOCAL_L1_BASE_SCRATCH);

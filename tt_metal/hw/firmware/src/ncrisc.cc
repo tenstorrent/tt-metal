@@ -97,12 +97,7 @@ void l1_to_ncrisc_iram_copy_wait() {
 #endif
 
 int main(int argc, char *argv[]) {
-    // Workaround for tt-metal#16439, making sure gathering multiple instructions issued to Tensix is disabled
-    // Ncrisc does not issue Tensix instructions but to be consistent for all riscs around Tensix we disable it
-#ifdef ARCH_BLACKHOLE
-    disable_gathering();
-#endif
-    configure_l1_data_cache();
+    configure_csr();
     DIRTY_STACK_MEMORY();
     WAYPOINT("I");
 
