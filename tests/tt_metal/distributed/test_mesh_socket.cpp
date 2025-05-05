@@ -15,7 +15,7 @@ using MeshSocketTest = T3000MeshDeviceFixture;
 // Sanity test with a single connection
 TEST_F(MeshSocketTest, SingleConnectionSingleDeviceConfig) {
     auto md0 = mesh_device_->create_submesh(MeshShape(1, 1), MeshCoordinate(0, 0));
-
+    auto current_device_id = md0->get_device(MeshCoordinate(0, 0))->id();
     auto sender_logical_coord = CoreCoord(0, 0);
     auto recv_logical_coord = CoreCoord(0, 1);
     auto sender_virtual_coord = md0->worker_core_from_logical_core(sender_logical_coord);
@@ -57,7 +57,7 @@ TEST_F(MeshSocketTest, SingleConnectionSingleDeviceConfig) {
     EXPECT_EQ(sender_config.write_ptr, send_socket.data_buffer->address());
     EXPECT_EQ(sender_config.bytes_sent, 0);
     EXPECT_EQ(sender_config.downstream_mesh_id, 0);
-    EXPECT_EQ(sender_config.downstream_chip_id, 0);
+    EXPECT_EQ(sender_config.downstream_chip_id, current_device_id);
     EXPECT_EQ(sender_config.downstream_noc_y, recv_virtual_coord.y);
     EXPECT_EQ(sender_config.downstream_noc_x, recv_virtual_coord.x);
     EXPECT_EQ(sender_config.downstream_bytes_sent_addr, recv_socket.config_buffer->address());
@@ -73,7 +73,7 @@ TEST_F(MeshSocketTest, SingleConnectionSingleDeviceConfig) {
     EXPECT_EQ(recv_config.fifo_addr, recv_socket.data_buffer->address());
     EXPECT_EQ(recv_config.fifo_total_size, socket_fifo_size);
     EXPECT_EQ(recv_config.upstream_mesh_id, 0);
-    EXPECT_EQ(recv_config.upstream_chip_id, 0);
+    EXPECT_EQ(recv_config.upstream_chip_id, current_device_id);
     EXPECT_EQ(recv_config.upstream_noc_y, sender_virtual_coord.y);
     EXPECT_EQ(recv_config.upstream_noc_x, sender_virtual_coord.x);
     EXPECT_EQ(recv_config.upstream_bytes_acked_addr, send_socket.config_buffer->address());
@@ -83,6 +83,7 @@ TEST_F(MeshSocketTest, SingleConnectionSingleDeviceConfig) {
 // Test multiple connections
 TEST_F(MeshSocketTest, MultiConnectionSingleDeviceTest) {
     auto md0 = mesh_device_->create_submesh(MeshShape(1, 1), MeshCoordinate(0, 0));
+    auto current_device_id = md0->get_device(MeshCoordinate(0, 0))->id();
     std::size_t socket_fifo_size = 1024;
     auto l1_alignment = MetalContext::instance().hal().get_alignment(HalMemType::L1);
     const auto& worker_grid = md0->compute_with_storage_grid_size();
@@ -151,7 +152,7 @@ TEST_F(MeshSocketTest, MultiConnectionSingleDeviceTest) {
         EXPECT_EQ(sender_config.write_ptr, send_socket.data_buffer->address());
         EXPECT_EQ(sender_config.bytes_sent, 0);
         EXPECT_EQ(sender_config.downstream_mesh_id, 0);
-        EXPECT_EQ(sender_config.downstream_chip_id, 0);
+        EXPECT_EQ(sender_config.downstream_chip_id, current_device_id);
         EXPECT_EQ(sender_config.downstream_noc_y, recv_virtual_coord.y);
         EXPECT_EQ(sender_config.downstream_noc_x, recv_virtual_coord.x);
         EXPECT_EQ(sender_config.downstream_bytes_sent_addr, recv_socket.config_buffer->address());
@@ -167,7 +168,7 @@ TEST_F(MeshSocketTest, MultiConnectionSingleDeviceTest) {
         EXPECT_EQ(recv_config.fifo_addr, recv_socket.data_buffer->address());
         EXPECT_EQ(recv_config.fifo_total_size, socket_fifo_size);
         EXPECT_EQ(recv_config.upstream_mesh_id, 0);
-        EXPECT_EQ(recv_config.upstream_chip_id, 0);
+        EXPECT_EQ(recv_config.upstream_chip_id, current_device_id);
         EXPECT_EQ(recv_config.upstream_noc_y, sender_virtual_coord.y);
         EXPECT_EQ(recv_config.upstream_noc_x, sender_virtual_coord.x);
         EXPECT_EQ(recv_config.upstream_bytes_acked_addr, send_socket.config_buffer->address());
