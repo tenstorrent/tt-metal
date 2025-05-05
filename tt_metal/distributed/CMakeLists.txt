@@ -15,6 +15,7 @@ set(DISTRIBUTED_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/mpi_distributed_context.cpp
 )
 
+find_package(MPI REQUIRED)
 add_library(distributed OBJECT ${DISTRIBUTED_SRC})
 target_link_libraries(
     distributed
@@ -24,4 +25,7 @@ target_link_libraries(
         Metalium::Metal::Impl
         Metalium::Metal::LLRT
         TT::Metalium::HostDevCommon
+        Boost::mpi
+        ${MPI_CXX_LIBRARIES}
 )
+target_include_directories(distributed PRIVATE ${MPI_INCLUDE_PATH})

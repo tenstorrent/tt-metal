@@ -5,7 +5,6 @@
 #pragma once
 
 #include <boost/mpi.hpp>
-#include <mpi.h>
 #include "api/tt-metalium/distributed_context.hpp"
 
 namespace tt::tt_metal::distributed::multihost {

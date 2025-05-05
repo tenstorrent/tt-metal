@@ -41,5 +41,4 @@ target_link_libraries(
         TT::Metalium::HostDevCommon
         yaml-cpp::yaml-cpp
         Boost::asio
-        Boost::mpi
 )
