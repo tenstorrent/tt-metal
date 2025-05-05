@@ -114,35 +114,35 @@ ttnn::Tensor ExecuteTranspose::invoke(
     TT_FATAL(normalized_dim1 <= 3, "dimension has to be 0-3 only corresponding to N,C,H,W");
     TT_FATAL(normalized_dim2 <= 3, "dimension has to be 0-3 only corresponding to N,C,H,W");
 
+    Tensor output;
     if ((normalized_dim1 == normalized_dim2) || (input_typecasted.get_padded_shape()[normalized_dim1] == 1 &&
                                                  input_typecasted.get_padded_shape()[normalized_dim2] == 1)) {
-        return {ttnn::operations::experimental::auto_format::AutoFormat::move_tensor_to_mem_config(
-            input_typecasted, memory_config)};
-    }
-
-    if (normalized_dim1 > normalized_dim2) {
-        std::swap(normalized_dim1, normalized_dim2);
-    }
-
-    TransposeOpDim transpose_dim = TransposeOpDim::NW;
-
-    if (normalized_dim2 == 3 && normalized_dim1 == 0) {
-        transpose_dim = TransposeOpDim::NW;
-    } else if (normalized_dim2 == 3 && normalized_dim1 == 1) {
-        transpose_dim = TransposeOpDim::CW;
-    } else if (normalized_dim2 == 3 && normalized_dim1 == 2) {
-        transpose_dim = TransposeOpDim::WH;
-    } else if (normalized_dim2 == 2 && normalized_dim1 == 0) {
-        transpose_dim = TransposeOpDim::NH;
-    } else if (normalized_dim2 == 2 && normalized_dim1 == 1) {
-        transpose_dim = TransposeOpDim::HC;
-    } else if (normalized_dim2 == 1 && normalized_dim1 == 0) {
-        transpose_dim = TransposeOpDim::CN;
+        output = ttnn::operations::experimental::auto_format::AutoFormat::move_tensor_to_mem_config(
+            input_typecasted, memory_config);
     } else {
-        TT_ASSERT(false, "Unsupported transpose dims");
-    }
+        if (normalized_dim1 > normalized_dim2) {
+            std::swap(normalized_dim1, normalized_dim2);
+        }
 
-    auto output = detail::transpose_(input_typecasted, transpose_dim, memory_config, pad_value);
+        TransposeOpDim transpose_dim = TransposeOpDim::NW;
+
+        if (normalized_dim2 == 3 && normalized_dim1 == 0) {
+            transpose_dim = TransposeOpDim::NW;
+        } else if (normalized_dim2 == 3 && normalized_dim1 == 1) {
+            transpose_dim = TransposeOpDim::CW;
+        } else if (normalized_dim2 == 3 && normalized_dim1 == 2) {
+            transpose_dim = TransposeOpDim::WH;
+        } else if (normalized_dim2 == 2 && normalized_dim1 == 0) {
+            transpose_dim = TransposeOpDim::NH;
+        } else if (normalized_dim2 == 2 && normalized_dim1 == 1) {
+            transpose_dim = TransposeOpDim::HC;
+        } else if (normalized_dim2 == 1 && normalized_dim1 == 0) {
+            transpose_dim = TransposeOpDim::CN;
+        } else {
+            TT_ASSERT(false, "Unsupported transpose dims");
+        }
+        output = detail::transpose_(input_typecasted, transpose_dim, memory_config, pad_value);
+    }
     output = initial_rank < 4u ? ttnn::squeeze_from_4D(output, initial_rank) : output;
     return typecast ? ttnn::typecast(output, DataType::BFLOAT8_B) : output;
 }
