@@ -31,6 +31,47 @@ FORCE_INLINE bool connect_is_requested(uint32_t cached) {
            cached == tt::tt_fabric::EdmToEdmSender<0>::close_connection_request_value;
 }
 
+template <bool enable_ring_support = false, bool enable_first_level_ack = false, uint8_t SENDER_NUM_BUFFERS>
+FORCE_INLINE void establish_connection(
+    tt::tt_fabric::EdmChannelWorkerInterface<SENDER_NUM_BUFFERS>& local_sender_channel_worker_interface) {
+    local_sender_channel_worker_interface.cache_producer_noc_addr();
+    if constexpr (enable_first_level_ack) {
+        local_sender_channel_worker_interface.template update_worker_copy_of_read_ptr<enable_ring_support>(
+            local_sender_channel_worker_interface.local_ackptr.get_ptr());
+    } else {
+        local_sender_channel_worker_interface.template update_worker_copy_of_read_ptr<enable_ring_support>(
+            local_sender_channel_worker_interface.local_rdptr.get_ptr());
+    }
+}
+
+template <bool enable_ring_support = false, bool enable_first_level_ack = false, uint8_t SENDER_NUM_BUFFERS>
+FORCE_INLINE void check_worker_connections(
+    tt::tt_fabric::EdmChannelWorkerInterface<SENDER_NUM_BUFFERS>& local_sender_channel_worker_interface,
+    bool& channel_connection_established) {
+    if (!channel_connection_established) {
+        // Can get rid of one of these two checks if we duplicate the logic above here in the function
+        // and depending on which of the two versions we are in (the connected version or disconnected version)
+        // We also check if the interface has a teardown request in case worker
+        // 1. opened connection
+        // 2. sent of all packets (EDM sender channel was sufficiently empty)
+        // 3. closed the connection
+        //
+        // In such a case like that, we still want to formally teardown the connection to keep things clean
+        uint32_t cached = *local_sender_channel_worker_interface.connection_live_semaphore;
+        if (connect_is_requested(cached)) {
+            // if constexpr (enable_fabric_counters) {
+            //     sender_channel_counters->add_connection();
+            // }
+            channel_connection_established = true;
+            establish_connection<enable_ring_support, enable_first_level_ack>(local_sender_channel_worker_interface);
+        }
+    } else if (local_sender_channel_worker_interface.has_worker_teardown_request()) {
+        channel_connection_established = false;
+        local_sender_channel_worker_interface.template teardown_connection<true>(
+            local_sender_channel_worker_interface.local_rdptr.get_ptr());
+    }
+}
+
 // !!!FORCE_INLINE could potentially cause stack corruption as seen in the past
 inline void wait_for_notification(uint32_t address, uint32_t value) {
     volatile tt_l1_ptr uint32_t* poll_addr = (volatile tt_l1_ptr uint32_t*)address;

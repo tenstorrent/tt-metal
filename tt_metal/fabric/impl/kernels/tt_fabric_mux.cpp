@@ -28,7 +28,7 @@ constexpr size_t channels_base_l1_address = get_compile_time_arg_val(10);
 
 constexpr uint8_t NUM_EDM_BUFFERS = get_compile_time_arg_val(11);
 constexpr size_t NUM_FULL_SIZE_CHANNELS_ITERS = get_compile_time_arg_val(12);
-constexpr size_t DEFAULT_NUM_ITERS_BETWEEN_TEARDOWN_CHECKS = get_compile_time_arg_val(13);
+constexpr size_t NUM_ITERS_BETWEEN_TEARDOWN_CHECKS = get_compile_time_arg_val(13);
 
 constexpr size_t NOC_ALIGN_PADDING_BYTES = 12;
 
@@ -69,28 +69,6 @@ void setup_channel(
     connection_handshake_address += sizeof(uint32_t) + NOC_ALIGN_PADDING_BYTES;
 
     channel_connection_established = false;
-}
-
-template <uint8_t NUM_BUFFERS>
-FORCE_INLINE void establish_connection(tt::tt_fabric::FabricMuxChannelWorkerInterface<NUM_BUFFERS>& worker_interface) {
-    worker_interface.cache_producer_noc_addr();
-    worker_interface.template update_worker_copy_of_read_ptr<false>(worker_interface.local_rdptr.get_ptr());
-}
-
-template <uint8_t NUM_BUFFERS>
-FORCE_INLINE void check_worker_connections(
-    tt::tt_fabric::FabricMuxChannelWorkerInterface<NUM_BUFFERS>& worker_interface,
-    bool& channel_connection_established) {
-    if (!channel_connection_established) {
-        uint32_t cached = *worker_interface.connection_live_semaphore;
-        if (tt::tt_fabric::connect_is_requested(cached)) {
-            channel_connection_established = true;
-            establish_connection(worker_interface);
-        }
-    } else if (worker_interface.has_worker_teardown_request()) {
-        channel_connection_established = false;
-        worker_interface.template teardown_connection<true>(worker_interface.local_rdptr.get_ptr());
-    }
 }
 
 template <uint8_t NUM_BUFFERS>
@@ -196,7 +174,7 @@ void kernel_main() {
             }
         }
 
-        for (size_t i = 0; i < DEFAULT_NUM_ITERS_BETWEEN_TEARDOWN_CHECKS; i++) {
+        for (size_t i = 0; i < NUM_ITERS_BETWEEN_TEARDOWN_CHECKS; i++) {
             for (size_t iter = 0; iter < NUM_FULL_SIZE_CHANNELS_ITERS; iter++) {
                 for (uint8_t channel_id = 0; channel_id < NUM_FULL_SIZE_CHANNELS; channel_id++) {
                     forward_data<NUM_BUFFERS_FULL_SIZE_CHANNEL>(
