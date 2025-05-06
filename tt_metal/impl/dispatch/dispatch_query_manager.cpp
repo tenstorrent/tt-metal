@@ -73,6 +73,10 @@ std::vector<CoreCoord> get_consistent_logical_cores(
     for (auto chip : user_chips) {
         current_cores = std::forward<F>(func)(chip, num_hw_cqs, dispatch_core_config);
         if (!first_core_set.empty()) {
+            for (int i = 0; i < 5; i++) {
+                std::cout << "First core set: " << first_core_set[i].str() << std::endl;
+                std::cout << "Current cores: " << current_cores[i].str() << std::endl;
+            }
             TT_FATAL(first_core_set == current_cores, "Expected logical cores to match across user exposed devices");
         } else {
             first_core_set = current_cores;
