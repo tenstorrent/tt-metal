@@ -20,7 +20,6 @@
 
 #include "assert.hpp"
 #include "dispatch/hardware_command_queue.hpp"
-#include "dispatch/device_command.hpp"
 #include "dispatch/kernels/cq_commands.hpp"
 #include "hal_types.hpp"
 #include "hostdevcommon/profiler_common.h"
@@ -969,33 +968,53 @@ void sortDeviceEvents(std::vector<std::reference_wrapper<const tracy::TTDeviceEv
         thread.join();
     }
 
-    for (uint32_t i = 0; i < num_threads; i += 2) {
-        threads[i] = std::thread([&device_events, chunk_size, i]() {
+    uint32_t chunk_idx = 0;
+    for (uint32_t i = 0; i < (num_threads / 2) - 1; ++i) {
+        threads[i] = std::thread([&device_events, chunk_size, chunk_idx]() {
             std::inplace_merge(
-                device_events.begin() + i * chunk_size,
-                device_events.begin() + (i + 1) * chunk_size,
-                device_events.begin() + (i + 2) * chunk_size,
+                device_events.begin() + chunk_idx * chunk_size,
+                device_events.begin() + (chunk_idx + 1) * chunk_size,
+                device_events.begin() + (chunk_idx + 2) * chunk_size,
                 [](std::reference_wrapper<const tracy::TTDeviceEvent> a,
                    std::reference_wrapper<const tracy::TTDeviceEvent> b) { return a.get() < b.get(); });
         });
+        chunk_idx += 2;
     }
 
-    for (uint32_t i = 0; i < num_threads; i += 2) {
+    std::inplace_merge(
+        device_events.begin() + chunk_idx * chunk_size,
+        device_events.begin() + (chunk_idx + 1) * chunk_size,
+        device_events.end(),
+        [](std::reference_wrapper<const tracy::TTDeviceEvent> a, std::reference_wrapper<const tracy::TTDeviceEvent> b) {
+            return a.get() < b.get();
+        });
+
+    for (uint32_t i = 0; i < (num_threads / 2) - 1; ++i) {
         threads[i].join();
     }
 
-    for (uint32_t i = 0; i < num_threads; i += 4) {
-        threads[i] = std::thread([&device_events, chunk_size, i]() {
+    chunk_idx = 0;
+    for (uint32_t i = 0; i < (num_threads / 4) - 1; ++i) {
+        threads[i] = std::thread([&device_events, chunk_size, chunk_idx]() {
             std::inplace_merge(
-                device_events.begin() + i * chunk_size,
-                device_events.begin() + (i + 2) * chunk_size,
-                device_events.begin() + (i + 4) * chunk_size,
+                device_events.begin() + chunk_idx * chunk_size,
+                device_events.begin() + (chunk_idx + 2) * chunk_size,
+                device_events.begin() + (chunk_idx + 4) * chunk_size,
                 [](std::reference_wrapper<const tracy::TTDeviceEvent> a,
                    std::reference_wrapper<const tracy::TTDeviceEvent> b) { return a.get() < b.get(); });
         });
+        chunk_idx += 4;
     }
 
-    for (uint32_t i = 0; i < num_threads; i += 4) {
+    std::inplace_merge(
+        device_events.begin() + chunk_idx * chunk_size,
+        device_events.begin() + (chunk_idx + 2) * chunk_size,
+        device_events.end(),
+        [](std::reference_wrapper<const tracy::TTDeviceEvent> a, std::reference_wrapper<const tracy::TTDeviceEvent> b) {
+            return a.get() < b.get();
+        });
+
+    for (uint32_t i = 0; i < (num_threads / 4) - 1; ++i) {
         threads[i].join();
     }
 
