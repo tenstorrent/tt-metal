@@ -26,7 +26,7 @@ static inline bool verify_multi_core_cost(
 
     const auto core_range = core_range_set.ranges().at(0);
     const auto max_cores = core_range.end_coord.y - core_range.start_coord.y - 1;
-    for (uint16_t split_size = min_dim; split_size <= max_dim; split_size *= 2) {
+    for (uint16_t split_size = max_dim; split_size >= min_dim; split_size /= 2) {
         uint16_t rem = width % split_size;
         uint16_t num_cores = width / split_size + (rem > 0);
         uint32_t memory_cost_gather =
@@ -70,6 +70,7 @@ static inline bool verify_single_core_cost(const std::vector<Tensor>& input_tens
 }
 
 constexpr uint32_t multi_core_min_width = 8192;
+constexpr uint32_t min_dim_per_core = 64;
 }  // namespace topk_utils
 namespace ttnn::operations::reduction {
 
@@ -79,7 +80,7 @@ void TopK::validate_with_output_tensors(
     TT_FATAL(input_shape.rank() == 4, "Input shape must be 4D, got {}", input_shape.rank());
 
     TT_FATAL(
-        input_shape[-1] >= 64,
+        input_shape[-1] >= topk_utils::min_dim_per_core,
         "Input shape inner dim {} must be a multiple of 64, pad with +/-infinity if necessary",
         input_shape[-1]);
     TT_FATAL(
@@ -94,7 +95,12 @@ void TopK::validate_with_output_tensors(
 
     if (input_shape[dim] >= topk_utils::multi_core_min_width) {  // multicore implementation
         can_run = topk_utils::verify_multi_core_cost(
-            input_tensors, input_shape[this->dim], 64, input_shape[this->dim] / 2, this->k, this->sub_core_grids);
+            input_tensors,
+            input_shape[this->dim],
+            topk_utils::min_dim_per_core,
+            input_shape[this->dim] / 2,
+            this->k,
+            this->sub_core_grids);
 
         TT_FATAL(
             this->sub_core_grids.ranges().size() == 1,
@@ -163,7 +169,12 @@ operation::ProgramWithCallbacks TopK::create_program(
     // tensor size, so it can handle larger input tensor sizes.
     // TODO: implement new topk implementation for multicore
     multicore_supported &= topk_utils::verify_multi_core_cost(
-        input_tensors, input_shape[this->dim], 64, input_shape[this->dim] / 2, this->k, this->sub_core_grids);
+        input_tensors,
+        input_shape[this->dim],
+        topk_utils::min_dim_per_core,
+        input_shape[this->dim] / 2,
+        this->k,
+        this->sub_core_grids);
 
     multicore_supported &= (this->k <= 64);  // old implementation cannot handle k>64
 

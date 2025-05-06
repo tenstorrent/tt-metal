@@ -229,7 +229,7 @@ static inline std::tuple<uint16_t, uint16_t, uint16_t, uint16_t> cores_utilized(
     const uint32_t value_tile_size,
     const uint32_t index_tile_size) {
     const auto max_cores = core_range.end_coord.y - core_range.start_coord.y - 1;
-    for (uint16_t split_size = min_dim; split_size <= max_dim; split_size *= 2) {
+    for (uint16_t split_size = max_dim; split_size >= min_dim; split_size /= 2) {
         uint16_t rem = width % split_size;
         uint16_t num_cores = width / split_size + (rem > 0);
         uint32_t memory_cost_gather =

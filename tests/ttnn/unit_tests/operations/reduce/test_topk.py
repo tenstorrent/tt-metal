@@ -6,7 +6,6 @@ import pytest
 import torch
 import ttnn
 from tests.ttnn.utils_for_testing import assert_with_pcc
-from models.utility_functions import skip_for_grayskull
 
 
 def run_topk_test(N, C, H, W, k, dtype, dim, sorted, largest, device, sub_core_grids=None):
@@ -20,10 +19,6 @@ def run_topk_test(N, C, H, W, k, dtype, dim, sorted, largest, device, sub_core_g
     ttnn_topk_values, ttnn_topk_indices = ttnn.topk(
         ttnn_input, k, dim=dim, largest=largest, sorted=sorted, sub_core_grids=sub_core_grids
     )
-
-    print(f"topk done")
-    print(f"unit test: ttnn_topk_values: {ttnn_topk_values}")
-    print(f"unit test: ttnn_topk_indices: {ttnn_topk_indices}")
 
     desired_shape = [N, C, H, W]
     desired_shape[dim] = k
@@ -49,13 +44,9 @@ def run_topk_test(N, C, H, W, k, dtype, dim, sorted, largest, device, sub_core_g
 
     assert ttnn_torch_cosine > 0.99, "Cosine similarity between topk values and gather from indices is less than 0.99"
 
-    print(f"unit test: pyt_topk_values: {pyt_topk_values}")
-    print(f"unit test: ttnn_torch_values: {ttnn_torch_values}")
-
     assert_with_pcc(pyt_topk_values, ttnn_torch_values, pcc_values)
 
 
-@skip_for_grayskull()
 @pytest.mark.parametrize(
     "dtype",
     (
@@ -114,7 +105,6 @@ def test_topk(N, C, H, W, dim, k, dtype, sorted, largest, device, sub_core_grids
     run_topk_test(N, C, H, W, k, dtype, dim, sorted, largest, device, sub_core_grids)
 
 
-@skip_for_grayskull()
 @pytest.mark.parametrize(
     "dtype",
     (ttnn.bfloat8_b,),
