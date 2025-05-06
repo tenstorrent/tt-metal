@@ -34,15 +34,13 @@ constexpr auto kTargetCbIndex = tt::CBIndex::c_1;
 constexpr auto kMaskCbIndex = tt::CBIndex::c_2;
 constexpr auto kMaxMaskCbIndex = tt::CBIndex::c_3;
 constexpr auto kScalerCbIndex = tt::CBIndex::c_4;  // used to reduction
-constexpr auto kInputTileCbIndex = tt::CBIndex::c_5;
-constexpr auto kTargetLogitsCbIndex = tt::CBIndex::c_6;
-constexpr auto kMaxValueBeforeReductionCbIndex = tt::CBIndex::c_7;
-constexpr auto kMaxValueAfterReductionCbIndex = tt::CBIndex::c_8;
-constexpr auto kExpSumBeforeReductionCbIndex = tt::CBIndex::c_9;
-constexpr auto KExpSumAfterReductionCbIndex = tt::CBIndex::c_10;
-constexpr auto kOutputCbIndex = tt::CBIndex::c_11;
+constexpr auto kMaxValueBeforeReductionCbIndex = tt::CBIndex::c_5;
+constexpr auto kMaxValueAfterReductionCbIndex = tt::CBIndex::c_6;
+constexpr auto kExpSumBeforeReductionCbIndex = tt::CBIndex::c_7;
+constexpr auto KExpSumAfterReductionCbIndex = tt::CBIndex::c_8;
+constexpr auto kOutputCbIndex = tt::CBIndex::c_9;
 
-constexpr uint32_t kNumTargetIndexesTiles = 1U;
+constexpr uint32_t kNumTargetIndexesTiles = 2U;
 constexpr uint32_t kNumMaskTiles = 1U;
 constexpr uint32_t kNumMaxValueTiles = 1U;
 constexpr uint32_t kNumInputTilesByIndx = 1U;
@@ -52,7 +50,7 @@ constexpr uint32_t kNumMaxValueAfterReductionTiles = 2U;
 constexpr uint32_t kNumExpSumBeforeReductionTiles = 2U;
 constexpr uint32_t kNumExpSumAfterReductionTiles = 2U;
 constexpr uint32_t kNumScalerTiles = 1U;  // used it to reduction
-constexpr uint32_t kNumOutputTiles = 1U;
+// constexpr uint32_t kNumOutputTiles = 1U;
 
 constexpr uint32_t kPageElementsNumber = 32U;
 
@@ -263,7 +261,8 @@ CrossEntropyBackwardProgramFactory::cached_program_t CrossEntropyBackwardProgram
 
     const uint64_t mask_scaler_maxmask_memory =
         (kNumMaskTiles + kNumScalerTiles + kNumMaskTiles) * bfloat16_single_tile_size_bytes;
-    const uint64_t output_memory = kNumOutputTiles * bfloat16_single_tile_size_bytes;
+    const uint64_t output_memory =
+        Wt * bfloat16_single_tile_size_bytes;  // TODO: check if this is correct, because my output is the same as input
     const uint64_t max_value_memory =
         (kNumMaxValueAfterReductionTiles + kMaxValueBeforeReductionTiles) * bfloat16_single_tile_size_bytes;
     const uint64_t exp_sum_memory =
@@ -278,6 +277,7 @@ CrossEntropyBackwardProgramFactory::cached_program_t CrossEntropyBackwardProgram
     const bool everything_fits_in_l1 = required_L1_in_bytes <= available_L1_in_bytes;
 
     const uint32_t num_input_tiles = (everything_fits_in_l1) ? Wt : twice_block_size;
+    const uint32_t num_output_tiles = (everything_fits_in_l1) ? Wt : twice_block_size;
 
     auto data_format = input_data_format;  // tt::DataFormat::Float16_b
     auto precise_data_format = tt::DataFormat::Float32;
@@ -298,11 +298,12 @@ CrossEntropyBackwardProgramFactory::cached_program_t CrossEntropyBackwardProgram
     auto cb_scaler = create_circular_buffer(
         program, all_cores, kScalerCbIndex, data_format, bfloat16_single_tile_size_bytes, kNumScalerTiles);
 
-    auto cb_input_tile_by_idx = create_circular_buffer(
-        program, all_cores, kInputTileCbIndex, data_format, bfloat16_single_tile_size_bytes, kNumInputTilesByIndx);
+    // auto cb_input_tile_by_idx = create_circular_buffer(
+    //     program, all_cores, kInputTileCbIndex, data_format, bfloat16_single_tile_size_bytes, kNumInputTilesByIndx);
 
-    auto cb_target_inputs = create_circular_buffer(
-        program, all_cores, kTargetLogitsCbIndex, data_format, bfloat16_single_tile_size_bytes, kNumTargetLogitsTiles);
+    // auto cb_target_inputs = create_circular_buffer(
+    //     program, all_cores, kTargetLogitsCbIndex, data_format, bfloat16_single_tile_size_bytes,
+    //     kNumTargetLogitsTiles);
 
     auto cb_max_value_before_reduction = create_circular_buffer(
         program,
@@ -337,12 +338,7 @@ CrossEntropyBackwardProgramFactory::cached_program_t CrossEntropyBackwardProgram
         kNumExpSumAfterReductionTiles);
 
     auto cb_output = create_circular_buffer(
-        program,
-        all_cores,
-        kOutputCbIndex,
-        data_format,
-        bfloat16_single_tile_size_bytes,
-        kNumOutputTiles);  // create twice block_size variable it looks like I need 1 tile here
+        program, all_cores, kOutputCbIndex, data_format, bfloat16_single_tile_size_bytes, num_output_tiles);
 
     // -------------------------------------------------------------------------
     // 3) Create reader/writer kernels

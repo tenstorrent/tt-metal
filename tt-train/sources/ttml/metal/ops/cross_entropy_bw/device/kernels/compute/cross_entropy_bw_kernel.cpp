@@ -37,12 +37,11 @@ constexpr auto cb_input = tt::CBIndex::c_0;
 constexpr auto cb_mask = tt::CBIndex::c_2;
 constexpr auto cb_max_mask = tt::CBIndex::c_3;
 constexpr auto cb_scaler = tt::CBIndex::c_4;  // used to reduction
-constexpr auto cb_target_logits = tt::CBIndex::c_6;
-constexpr auto cb_max_value_before_reduction = tt::CBIndex::c_7;
-constexpr auto cb_max_value_after_reduction = tt::CBIndex::c_8;
-constexpr auto cb_exp_sum_before_reduction = tt::CBIndex::c_9;
-constexpr auto cb_exp_sum_after_reduction = tt::CBIndex::c_10;
-constexpr auto cb_output = tt::CBIndex::c_11;
+constexpr auto cb_max_value_before_reduction = tt::CBIndex::c_5;
+constexpr auto cb_max_value_after_reduction = tt::CBIndex::c_6;
+constexpr auto cb_exp_sum_before_reduction = tt::CBIndex::c_7;
+constexpr auto cb_exp_sum_after_reduction = tt::CBIndex::c_8;
+constexpr auto cb_output = tt::CBIndex::c_9;
 
 constexpr uint32_t onetile = 1;
 
@@ -307,7 +306,7 @@ void calculate_sum_exp_x() {
 
 #endif
 
-void reduce_log_sum_exp_x() {
+void reduce_sum_exp_x() {
     // reduce exp sum to cb_exp_sum_after_reduction
     cb_wait_front(cb_exp_sum_before_reduction, onetile);
     cb_reserve_back(cb_exp_sum_after_reduction, onetile);
@@ -324,10 +323,6 @@ void reduce_log_sum_exp_x() {
         /* tile_idx */ 0,
         /* reduction_register */ reduction_register);
     reduce_revert_delta<ReduceDim::REDUCE_ROW>(cb_exp_sum_before_reduction);
-
-    // log(sum(exp(x - max(x))))
-    // log_tile_init();
-    // log_tile(reduction_register);
     tile_regs_commit();
 
     tile_regs_wait();
@@ -346,24 +341,85 @@ void MAIN {
     cb_wait_front(cb_scaler, onetile);
 
     init_sfpu(cb_input, cb_output);
-    binary_op_init_common(cb_input, cb_target_logits, cb_output);
+    binary_op_init_common(cb_input, cb_max_mask, cb_output);
+    DPRINT << "Number of rows to process: " << num_rows_per_core << "\n";
 
     for (uint32_t row = 0; row < num_rows_per_core; ++row) {
         find_max_value_in_row();  // find max value in each row
         reduce_max_value();       // reduce max value to cb_max_value_after_reduction
 
-        calculate_sum_exp_x();   // calculate sum of exp(x - max(x))
-        reduce_log_sum_exp_x();  // reduce sum(exp(x - max(x))), take log and push to cb_exp_sum_after_reduction
+        calculate_sum_exp_x();  // calculate sum of exp(x - max(x))
+        reduce_sum_exp_x();     // reduce sum(exp(x - max(x))), take log and push to cb_exp_sum_after_reduction
 
         cb_wait_front(cb_exp_sum_after_reduction, onetile);  //  wait log(sum(exp(x - max(x)))
-        cb_wait_front(cb_target_logits, onetile);
-        cb_reserve_back(cb_output, onetile);  // reserve onetile tiles in output buffer
 
-        cb_push_back(cb_output, onetile);
+        const uint32_t working_register = 0;
+        const uint32_t max_value_register = 4U;
+        const uint32_t sum_exp_register = 5U;
+        cb_reserve_back(cb_output, block_size);
+
+        for (uint32_t col = 0; col < Wt; col += block_size) {
+#ifndef EVERYTHING_FITS_IN_L1
+            cb_wait_front(cb_input, block_size);
+#endif
+
+            tile_regs_acquire();
+            unary_bcast_init<BroadcastType::COL>(cb_max_value_after_reduction, cb_max_value_after_reduction);
+            unary_bcast<BroadcastType::COL>(
+                cb_max_value_after_reduction, /* tile idx */ 0, /* reg tile idx */ max_value_register);
+
+            unary_bcast_init<BroadcastType::COL>(cb_exp_sum_after_reduction, cb_exp_sum_after_reduction);
+            unary_bcast<BroadcastType::COL>(
+                cb_exp_sum_after_reduction, /* tile idx */ 0, /* reg tile idx */ sum_exp_register);
+
+            for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
+#ifdef EVERYTHING_FITS_IN_L1
+                const uint32_t input_tile_idx = col + block_idx;
+#else
+                const uint32_t input_tile_idx = block_idx;
+#endif
+                copy_tile_init(cb_input);
+                copy_tile(cb_input, /* tile_idx */ input_tile_idx, /* register_idx */ block_idx);
+
+                sub_binary_tile_init();
+                sub_binary_tile(block_idx, max_value_register);  // subtract max value from each tile
+
+                exp_tile_init();
+                exp_tile</* approx */ false>(block_idx);  // calculate exp for each tile in tile register
+
+                div_binary_tile_init();
+                div_binary_tile(block_idx, sum_exp_register);  // divide exp by sum(exp(x - max(x)))
+
+                if constexpr (do_mask_w) {
+                    if (col + 1 == Wt) {
+                        // this is limitation of the function mask_tile
+                        // mask tile currently does not work for mask register that is not next to data register
+                        const uint32_t mask_register = block_idx + 1U;  // mask register should be next to data register
+                        copy_tile_init(cb_mask);
+                        copy_tile(cb_mask, /* tile_idx */ 0, /* register idx */ mask_register);
+
+                        mask_tile_init();
+                        mask_tile(block_idx, mask_register);  // mask should be next to tile register
+                    }
+                }
+            }
+            tile_regs_commit();
+
+            tile_regs_wait();
+            pack_reconfig_data_format(cb_output);
+            for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
+                pack_tile(block_idx, cb_output);
+            }
+            tile_regs_release();
+            cb_push_back(cb_output, block_size);
+
+#ifndef EVERYTHING_FITS_IN_L1
+            cb_pop_front(cb_input, block_size);
+#endif
+        }
 
         cb_pop_front(cb_max_value_after_reduction, onetile);  // pop tile after reduction
         cb_pop_front(cb_exp_sum_after_reduction, onetile);    // pop tile after reduction
-        cb_pop_front(cb_target_logits, onetile);              // pop logits tile
 
 #ifdef EVERYTHING_FITS_IN_L1
         cb_pop_front(cb_input, Wt);  // pop Wt tiles from input buffer

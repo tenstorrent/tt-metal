@@ -11,6 +11,11 @@
 #include "debug/dprint.h"
 #include "debug/dprint_pages.h"
 
+constexpr uint32_t FACE_HEIGHT = 16;
+constexpr uint32_t FACE_WIDTH = 16;
+constexpr uint32_t TILE_HEIGHT = 32;
+constexpr uint32_t TILE_WIDTH = 32;
+
 // calculate page and offset for target indexes
 std::pair<uint32_t, uint32_t> get_page_and_offset(uint32_t tiled_row, uint32_t tiled_H) {
     uint32_t n = tiled_row / tiled_H;
@@ -59,8 +64,6 @@ void kernel_main() {
     constexpr uint32_t cb_mask_idx = tt::CBIndex::c_2;
     constexpr uint32_t cb_max_mask_idx = tt::CBIndex::c_3;
     constexpr uint32_t cb_scaler_idx = tt::CBIndex::c_4;  // used for reduction
-    constexpr uint32_t cb_input_tile = tt::CBIndex::c_5;
-    constexpr uint32_t cb_target_logits = tt::CBIndex::c_6;
 
     constexpr uint32_t block_size = get_compile_time_arg_val(0);
     constexpr uint32_t Wt = get_compile_time_arg_val(1);
@@ -136,36 +139,9 @@ void kernel_main() {
         noc_async_read(
             noc_async_target_indexes_page_addr,
             l1_target_indexes_write_addr,
-            target_indexes_read_page_size);  // read the page from the target buffer
-        noc_async_read_barrier();            // wait until all tiles are read
-
-        cb_reserve_back(cb_input_tile, onetile);
-        cb_reserve_back(cb_target_logits, onetile);
-
-        uint32_t l1_input_tile_write_addr = get_write_ptr(cb_input_tile);
-        uint32_t l1_target_logits_write_addr = get_write_ptr(cb_target_logits);
-
-        // auto target_indexes_l1_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_read_ptr(cb_target_idx));
-        // for (uint32_t h = 0; h < TILE_HEIGHT; ++h) {
-        //     uint32_t target_value_idx = h;  // only first row of the tile is used
-
-        //     uint32_t target_value = target_indexes_l1_ptr[target_value_idx];
-
-        //     noc_async_read_tile(idx + (target_value / TILE_WIDTH), input_address_generator,
-        //     l1_input_tile_write_addr); noc_async_read_barrier();
-
-        //     auto read_input_tile_l1_ptr = reinterpret_cast<volatile tt_l1_ptr
-        //     uint16_t*>(get_read_ptr(cb_input_tile));
-
-        //     auto target_logits_write_l1_ptr =
-        //         reinterpret_cast<volatile tt_l1_ptr uint16_t*>(l1_target_logits_write_addr);
-
-        //     auto idx_inside_tile = get_tilized_idx(h, target_value);  // only first row of the tile is used
-        //     uint32_t inplace_idx = get_tilized_idx(h, 0);
-        //     target_logits_write_l1_ptr[inplace_idx] = read_input_tile_l1_ptr[idx_inside_tile];
-        // }
-
-        cb_push_back(cb_target_logits, onetile);
+            target_indexes_read_page_size);    // read the page from the target buffer
+        noc_async_read_barrier();              // wait until all tiles are read
+        cb_push_back(cb_target_idx, onetile);  // push the tile to the back of the target buffer
 
 #ifdef EVERYTHING_FITS_IN_L1
         // read input buffer
@@ -194,6 +170,18 @@ void kernel_main() {
         }
 
         // read input buffer by blocks to calculate sum(exp(x - max(x))) in row
+        for (uint32_t j = 0; j < Wt; j += block_size) {
+            cb_reserve_back(cb_input_idx, block_size);
+            uint32_t l1_write_addr = get_write_ptr(cb_input_idx);
+            for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
+                noc_async_read_tile(idx + j + block_idx, input_address_generator, l1_write_addr);
+                l1_write_addr += tile_bytes;
+            }
+            noc_async_read_barrier();
+            cb_push_back(cb_input_idx, block_size);
+        }
+
+        // read input buffer by blocks to calculate softmax in row
         for (uint32_t j = 0; j < Wt; j += block_size) {
             cb_reserve_back(cb_input_idx, block_size);
             uint32_t l1_write_addr = get_write_ptr(cb_input_idx);
