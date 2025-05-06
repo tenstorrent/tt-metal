@@ -13,8 +13,9 @@ static MPI_Op reduce_to_mpi(ReduceOp op) {
         case ReduceOp::MAX: return MPI_MAX;
         case ReduceOp::MIN: return MPI_MIN;
         case ReduceOp::PROD: return MPI_PROD;
+        default: throw std::logic_error("Wrong reduce Op type");
     }
-    return MPI_SUM;  // fallback
+    return MPI_SUM;
 }
 
 template <class T>
@@ -78,22 +79,32 @@ void MPIContext::broadcast(tt::stl::Span<std::byte> buf, Rank root) const {
     boost::mpi::broadcast(comm_, reinterpret_cast<char*>(buf.data()), buf.size(), *root);
 }
 void MPIContext::all_reduce(tt::stl::Span<std::byte> send_buf, tt::stl::Span<std::byte> recv_buf, ReduceOp op) const {
+    throw std::logic_error(" MPIContext::all_reduce not yet implemented");
+    // overall there is no sense to introduce reduce ops on bytes.
+    // If we need any in fututre need to add overloads for other types of the data
+    /*
     boost::mpi::all_reduce(
         comm_,
         reinterpret_cast<const char*>(send_buf.data()),
         send_buf.size(),
         reinterpret_cast<char*>(recv_buf.data()),
         reduce_to_mpi(op));
+    */
 }
 void MPIContext::reduce(
     tt::stl::Span<std::byte> send_buf, tt::stl::Span<std::byte> recv_buf, ReduceOp op, Rank root) const {
-    boost::mpi::reduce(
-        comm_,
-        reinterpret_cast<const char*>(send_buf.data()),
-        send_buf.size(),
-        reinterpret_cast<char*>(recv_buf.data()),
-        reduce_to_mpi(op),
-        *root);
+    throw std::logic_error(" MPIContext::reduce not yet implemented");
+    // overall there is no sense to introduce reduce ops on bytes.
+    // If we need any in fututre need to add overloads for other types of the data
+    /*
+boost::mpi::reduce(
+    comm_,
+    reinterpret_cast<const char*>(send_buf.data()),
+    send_buf.size(),
+    reinterpret_cast<char*>(recv_buf.data()),
+    reduce_to_mpi(op),
+    *root);
+    */
 }
 void MPIContext::gather(tt::stl::Span<std::byte> send_buf, tt::stl::Span<std::byte> recv_buf, Rank root) const {
     boost::mpi::gather(
@@ -142,12 +153,18 @@ boost::mpi::reduce_scatter(
 }
 
 void MPIContext::scan(tt::stl::Span<std::byte> send_buf, tt::stl::Span<std::byte> recv_buf, ReduceOp op) const {
+    throw std::logic_error(" MPIContext::scan not yet implemented");
+    // overall there is no sense to introduce any reduce ops on bytes.
+    // If we need any in fututre need to add overloads for other types of the data
+    /*
+
     boost::mpi::scan(
         comm_,
         reinterpret_cast<const char*>(send_buf.data()),
         send_buf.size(),
         reinterpret_cast<char*>(recv_buf.data()),
         reduce_to_mpi(op));
+        */
 }
 
 std::shared_ptr<IDistributedContext> MPIContext::duplicate() const {
@@ -161,7 +178,9 @@ std::shared_ptr<IDistributedContext> MPIContext::split(Color color, Key key) con
 
 std::shared_ptr<IDistributedContext> MPIContext::create_sub_context(tt::stl::Span<Rank> ranks) const {
     boost::mpi::group world_group = comm_.group();
-    boost::mpi::group sub_group = world_group.include(ranks.begin(), ranks.end());
+    std::vector<int> int_ranks(ranks.size());
+    std::transform(ranks.begin(), ranks.end(), int_ranks.begin(), [](Rank r) { return *r; });
+    boost::mpi::group sub_group = world_group.include(int_ranks.begin(), int_ranks.end());
 
     return std::make_shared<MPIContext>(boost::mpi::communicator(comm_, sub_group));
 }
