@@ -34,6 +34,7 @@ PACKET_WORKER_CRS = ttnn.CoreRangeSet(
 
 
 def gen_tensor(dim, shard_height, shard_width, num_devices_scatter, num_devices_fracture, num_cores, scheme="random"):
+    torch.manual_seed(2005)
     factor = 0
     torch_fracture_tensors = []
     for _ in range(num_devices_fracture):
@@ -74,6 +75,7 @@ def run_reduce_scatter_test(
     output_grid=None,
     dtype=ttnn.bfloat8_b,
     profiler=BenchmarkProfiler(),
+    topology=ttnn.Topology.Linear,
 ):
     mesh_device.enable_program_cache()
     num_pages_per_packet = 4
@@ -230,6 +232,7 @@ def run_reduce_scatter_test(
                 mesh_device=mesh_device,
                 num_links=num_links,
                 memory_config=output_mem_config,
+                topology=topology,
             )
             if not trace_mode:
                 ttnn.synchronize_device(mesh_device)
@@ -408,6 +411,7 @@ def test_fabric_reduce_scatter_tg_no_trace(mesh_device, trace_mode):
         trace_mode,
         num_links=3,
         scheme="random",
+        topology=ttnn.Topology.Linear,
     )
 
 

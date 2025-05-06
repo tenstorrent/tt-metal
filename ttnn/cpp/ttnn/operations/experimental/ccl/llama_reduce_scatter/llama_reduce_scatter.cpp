@@ -25,7 +25,8 @@ ttnn::Tensor ExecuteLlamaReduceScatter::invoke(
     const uint32_t cluster_axis,
     const MeshDevice& mesh_device,
     const uint32_t num_links,
-    const std::optional<ttnn::MemoryConfig>& memory_config) {
+    const std::optional<ttnn::MemoryConfig>& memory_config,
+    tt::tt_fabric::Topology topology) {
     const auto& mesh_view = mesh_device.get_view();
     const uint32_t ring_devices = (cluster_axis == 0) ? mesh_view.num_rows() : mesh_view.num_cols();
 
@@ -40,7 +41,8 @@ ttnn::Tensor ExecuteLlamaReduceScatter::invoke(
         cluster_axis,
         ring_devices,
         num_links,
-        memory_config);
+        memory_config,
+        topology);
 }
 
 }  // namespace ttnn::operations::experimental::ccl

@@ -28,6 +28,33 @@ FORCE_INLINE std::uint64_t static_noc_multicast_addr(
     }
 }
 
+template <bool ring_topology>
+FORCE_INLINE uint32_t distance(uint32_t chip_id, uint32_t target_device_id, uint32_t num_devices) {
+    if constexpr (ring_topology) {
+        uint32_t line_distance = std::abs(int(target_device_id) - int(chip_id));
+        return std::min(line_distance, num_devices - line_distance);
+    } else {
+        return std::abs(int(target_device_id) - int(chip_id));
+    }
+}
+
+template <bool ring_topology>
+FORCE_INLINE tt::tt_fabric::WorkerToFabricEdmSender& get_fabric_connection(
+    FabricConnectionManager& fabric_connection, uint32_t chip_id, uint32_t target_device_id, uint32_t num_devices) {
+    if constexpr (ring_topology) {
+        uint32_t right_distance = (target_device_id - chip_id + num_devices) % num_devices;
+        uint32_t left_distance = (chip_id - target_device_id + num_devices) % num_devices;
+        if (right_distance <= left_distance) {
+            return fabric_connection.get_forward_connection();
+        } else {
+            return fabric_connection.get_backward_connection();
+        }
+    } else {
+        return target_device_id > chip_id ? fabric_connection.get_forward_connection()
+                                          : fabric_connection.get_backward_connection();
+    }
+}
+
 void kernel_main() {
     // Constants for indexing
     constexpr uint8_t x_index = 0;
@@ -53,7 +80,7 @@ void kernel_main() {
     constexpr uint32_t packet_receiver_core_x = get_compile_time_arg_val(14);
     constexpr uint32_t packet_receiver_core_y = get_compile_time_arg_val(15);
     constexpr uint32_t num_packet_worker_cores = get_compile_time_arg_val(16);
-
+    constexpr bool ring_topology = (bool)get_compile_time_arg_val(17);
     // Derived compile-time constants
     constexpr uint32_t input_tensor_cores = input_shard_cores_per_device * num_devices;
     constexpr uint32_t num_packets_total_per_device =
@@ -108,10 +135,10 @@ void kernel_main() {
         }
         for (uint32_t target_device_id : device_order) {
             // Calculate device-specific constants once per device
-            const uint32_t num_hops = std::abs(int(target_device_id) - int(chip_id));
+            const uint32_t num_hops = distance<ring_topology>(chip_id, target_device_id, num_devices);
             unicast_packet_header->to_chip_unicast(static_cast<uint8_t>(num_hops));
-            auto& fabric_conn = target_device_id > chip_id ? fabric_connection.get_forward_connection()
-                                                           : fabric_connection.get_backward_connection();
+            auto& fabric_conn =
+                get_fabric_connection<ring_topology>(fabric_connection, chip_id, target_device_id, num_devices);
 
             uint32_t num_pages_sent = 0;
             uint32_t packet = sender_packet_start;
