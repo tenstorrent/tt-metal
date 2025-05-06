@@ -3,8 +3,12 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <tt-metalium/distributed.hpp>
+<<<<<<< HEAD
 #include <tt-metalium/sub_device.hpp>
 #include <tt-metalium/sub_device_types.hpp>
+=======
+#include <tt-metalium/work_split.hpp>
+>>>>>>> 49d7ac7ab7 (#0: Multi-worker/data tests)
 #include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
 #include <algorithm>
 #include <random>
@@ -525,15 +529,44 @@ void test_single_connection_single_device_socket_with_workers(
     std::shared_ptr<tt::tt_metal::distributed::MeshDevice> md0,
     std::size_t socket_fifo_size,
     std::size_t page_size,
-    std::size_t data_size) {
+    std::size_t data_size,
+    CoreRange worker_core_range,
+    CoreRangeSet data_crs,
+    CoreRangeSet output_crs,
+    bool final_ack) {
+    if (worker_core_range.size() != output_crs.num_cores() || worker_core_range.size() != data_crs.num_cores()) {
+        GTEST_SKIP() << "Worker and data/output core ranges must be the same size";
+    }
+    if (final_ack && socket_fifo_size < data_size) {
+        GTEST_SKIP() << "Socket FIFO size must be greater than data size for final ack";
+    }
+    if (!final_ack && socket_fifo_size < 2 * page_size) {
+        GTEST_SKIP() << "Socket FIFO size must be greater than 2 * page size for loop ack";
+    }
     auto sender_logical_coord = CoreCoord(0, 0);
-    auto recv_logical_coord = CoreCoord(0, 1);
-    auto worker_logical_coord = CoreCoord(0, 2);
-    auto output_logical_coord = CoreCoord(0, 3);
+    auto recv_logical_coord = CoreCoord(1, 0);
+    if (worker_core_range.contains(recv_logical_coord)) {
+        GTEST_SKIP() << "Worker core range must not contain receiver core";
+    }
+    std::vector<CoreCoord> worker_logical_coords = corerange_to_cores(worker_core_range, std::nullopt, true);
+    std::vector<CoreCoord> output_logical_coords = corerange_to_cores(output_crs, std::nullopt, true);
+    std::vector<CoreCoord> data_logical_coords = corerange_to_cores(data_crs, std::nullopt, true);
+
     auto sender_virtual_coord = md0->worker_core_from_logical_core(sender_logical_coord);
     auto recv_virtual_coord = md0->worker_core_from_logical_core(recv_logical_coord);
-    auto worker_virtual_coord = md0->worker_core_from_logical_core(worker_logical_coord);
-    auto output_virtual_coord = md0->worker_core_from_logical_core(output_logical_coord);
+    std::vector<CoreCoord> worker_virtual_coords = md0->worker_cores_from_logical_cores(worker_logical_coords);
+    std::vector<CoreCoord> output_virtual_coords = md0->worker_cores_from_logical_cores(output_logical_coords);
+    std::vector<CoreCoord> data_virtual_coords = md0->worker_cores_from_logical_cores(data_logical_coords);
+    std::vector<uint32_t> output_virtual_xy;
+    std::vector<uint32_t> data_virtual_xy;
+    output_virtual_xy.reserve(output_virtual_coords.size() * 2);
+    data_virtual_xy.reserve(data_logical_coords.size() * 2);
+    for (uint32_t i = 0; i < output_virtual_coords.size(); ++i) {
+        output_virtual_xy.push_back(output_virtual_coords[i].x);
+        output_virtual_xy.push_back(output_virtual_coords[i].y);
+        data_virtual_xy.push_back(data_virtual_coords[i].x);
+        data_virtual_xy.push_back(data_virtual_coords[i].y);
+    }
 
     auto l1_alignment = MetalContext::instance().hal().get_alignment(HalMemType::L1);
 
@@ -557,23 +590,23 @@ void test_single_connection_single_device_socket_with_workers(
         ShardSpecBuffer(CoreRangeSet(sender_logical_coord), {1, 1}, ShardOrientation::ROW_MAJOR, {1, 1}, {1, 1});
 
     const DeviceLocalBufferConfig sender_device_local_config{
-        .page_size = data_size,
+        .page_size = data_size * data_crs.num_cores(),
         .buffer_type = BufferType::L1,
         .buffer_layout = TensorMemoryLayout::HEIGHT_SHARDED,
         .shard_parameters = sender_data_shard_params,
         .bottom_up = false};
 
     auto output_shard_params =
-        ShardSpecBuffer(CoreRangeSet(output_logical_coord), {1, 1}, ShardOrientation::ROW_MAJOR, {1, 1}, {1, 1});
+        ShardSpecBuffer(output_crs, {1, 1}, ShardOrientation::ROW_MAJOR, {1, 1}, {output_crs.num_cores(), 1});
 
     const DeviceLocalBufferConfig output_device_local_config{
         .page_size = data_size,
         .buffer_type = BufferType::L1,
-        .buffer_layout = TensorMemoryLayout::HEIGHT_SHARDED,
+        .buffer_layout = TensorMemoryLayout::WIDTH_SHARDED,
         .shard_parameters = output_shard_params,
         .bottom_up = false};
 
-    const ReplicatedBufferConfig buffer_config{.size = data_size};
+    const ReplicatedBufferConfig buffer_config{.size = data_size * data_crs.num_cores()};
 
     auto sender_data_buffer = MeshBuffer::create(buffer_config, sender_device_local_config, md0.get());
 
@@ -584,10 +617,12 @@ void test_single_connection_single_device_socket_with_workers(
 
     WriteShard(md0->mesh_command_queue(), sender_data_buffer, src_vec, MeshCoordinate(0, 0));
 
+    const std::vector<uint32_t>& sender_rtas = data_virtual_xy;
+
     auto send_recv_program = CreateProgram();
     auto sender_kernel = CreateKernel(
         send_recv_program,
-        "tests/tt_metal/tt_metal/test_kernels/misc/socket/sender.cpp",
+        "tests/tt_metal/tt_metal/test_kernels/misc/socket/sender_multi_data.cpp",
         sender_logical_coord,
         DataMovementConfig{
             .processor = DataMovementProcessor::RISCV_0,
@@ -596,10 +631,12 @@ void test_single_connection_single_device_socket_with_workers(
                 static_cast<uint32_t>(send_socket.config_buffer->address()),
                 static_cast<uint32_t>(sender_data_buffer->address()),
                 static_cast<uint32_t>(page_size),
-                static_cast<uint32_t>(data_size)}});
+                static_cast<uint32_t>(data_size),
+                static_cast<uint32_t>(data_logical_coords.size())}});
+    SetRuntimeArgs(send_recv_program, sender_kernel, sender_logical_coord, sender_rtas);
 
     CoreRangeSet recv_worker_crs =
-        CoreRangeSet(std::array{CoreRange(recv_logical_coord), CoreRange(worker_logical_coord)}).merge_ranges();
+        CoreRangeSet(std::array{CoreRange(recv_logical_coord)}).merge(CoreRangeSet(worker_core_range));
 
     // Create CB on both receiver and worker so that receiver knows the address
     auto config_cb_index = tt::CBIndex::c_0;
@@ -615,49 +652,108 @@ void test_single_connection_single_device_socket_with_workers(
     auto data_cb = CreateCircularBuffer(send_recv_program, recv_worker_crs, data_cb_config);
 
     auto config_sem = CreateSemaphore(send_recv_program, recv_worker_crs, 0);
-    auto credits_sem = CreateSemaphore(send_recv_program, recv_worker_crs, 0);
+    auto credits0_sem = CreateSemaphore(send_recv_program, recv_worker_crs, 0);
 
-    auto recv_kernel = CreateKernel(
-        send_recv_program,
-        "tests/tt_metal/tt_metal/test_kernels/misc/socket/receiver_final_ack.cpp",
-        recv_logical_coord,
-        DataMovementConfig{
-            .processor = DataMovementProcessor::RISCV_0,
-            .noc = NOC::RISCV_0_default,
-            .compile_args = {
-                static_cast<uint32_t>(recv_socket.config_buffer->address()),
-                static_cast<uint32_t>(config_cb_index),
-                static_cast<uint32_t>(config_sem),
-                static_cast<uint32_t>(credits_sem),
-                static_cast<uint32_t>(page_size),
-                static_cast<uint32_t>(data_size),
-                static_cast<uint32_t>(worker_virtual_coord.x),
-                static_cast<uint32_t>(worker_virtual_coord.y),
-                static_cast<uint32_t>(worker_virtual_coord.x),
-                static_cast<uint32_t>(worker_virtual_coord.y),
-                static_cast<uint32_t>(1)}});
+    if (final_ack) {
+        auto recv_kernel = CreateKernel(
+            send_recv_program,
+            "tests/tt_metal/tt_metal/test_kernels/misc/socket/receiver_final_ack.cpp",
+            recv_logical_coord,
+            DataMovementConfig{
+                .processor = DataMovementProcessor::RISCV_0,
+                .noc = NOC::RISCV_0_default,
+                .compile_args = {
+                    static_cast<uint32_t>(recv_socket.config_buffer->address()),
+                    static_cast<uint32_t>(config_cb_index),
+                    static_cast<uint32_t>(config_sem),
+                    static_cast<uint32_t>(credits0_sem),
+                    static_cast<uint32_t>(page_size),
+                    static_cast<uint32_t>(data_size),
+                    static_cast<uint32_t>(worker_virtual_coords.begin()->x),
+                    static_cast<uint32_t>(worker_virtual_coords.begin()->y),
+                    static_cast<uint32_t>(worker_virtual_coords.rbegin()->x),
+                    static_cast<uint32_t>(worker_virtual_coords.rbegin()->y),
+                    static_cast<uint32_t>(worker_virtual_coords.size()),
+                }});
+        auto worker_kernel = CreateKernel(
+            send_recv_program,
+            "tests/tt_metal/tt_metal/test_kernels/misc/socket/worker_final_ack.cpp",
+            worker_core_range,
+            DataMovementConfig{
+                .processor = DataMovementProcessor::RISCV_0,
+                .noc = NOC::RISCV_0_default,
+                .compile_args = {
+                    static_cast<uint32_t>(config_cb_index),
+                    static_cast<uint32_t>(config_sem),
+                    static_cast<uint32_t>(credits0_sem),
+                    static_cast<uint32_t>(data_cb_index),
+                    static_cast<uint32_t>(page_size),
+                    static_cast<uint32_t>(data_size),
+                    static_cast<uint32_t>(recv_virtual_coord.x),
+                    static_cast<uint32_t>(recv_virtual_coord.y),
+                    static_cast<uint32_t>(output_buffer->address()),
+                }});
+        for (uint32_t i = 0; i < worker_logical_coords.size(); ++i) {
+            std::vector<uint32_t> worker_rtas = {
+                static_cast<uint32_t>(data_virtual_coords[i].x),
+                static_cast<uint32_t>(data_virtual_coords[i].y),
+                static_cast<uint32_t>(output_virtual_coords[i].x),
+                static_cast<uint32_t>(output_virtual_coords[i].y),
+            };
+            SetRuntimeArgs(send_recv_program, worker_kernel, worker_logical_coords[i], worker_rtas);
+        }
+    } else {
+        auto credits1_sem = CreateSemaphore(send_recv_program, recv_worker_crs, 0);
+        auto recv_kernel = CreateKernel(
+            send_recv_program,
+            "tests/tt_metal/tt_metal/test_kernels/misc/socket/receiver_loop_ack.cpp",
+            recv_logical_coord,
+            DataMovementConfig{
+                .processor = DataMovementProcessor::RISCV_0,
+                .noc = NOC::RISCV_0_default,
+                .compile_args = {
+                    static_cast<uint32_t>(recv_socket.config_buffer->address()),
+                    static_cast<uint32_t>(config_cb_index),
+                    static_cast<uint32_t>(config_sem),
+                    static_cast<uint32_t>(credits0_sem),
+                    static_cast<uint32_t>(credits1_sem),
+                    static_cast<uint32_t>(page_size),
+                    static_cast<uint32_t>(data_size),
+                    static_cast<uint32_t>(worker_virtual_coords.begin()->x),
+                    static_cast<uint32_t>(worker_virtual_coords.begin()->y),
+                    static_cast<uint32_t>(worker_virtual_coords.rbegin()->x),
+                    static_cast<uint32_t>(worker_virtual_coords.rbegin()->y),
+                    static_cast<uint32_t>(worker_virtual_coords.size()),
+                }});
 
-    auto worker_kernel = CreateKernel(
-        send_recv_program,
-        "tests/tt_metal/tt_metal/test_kernels/misc/socket/worker_final_ack.cpp",
-        worker_logical_coord,
-        DataMovementConfig{
-            .processor = DataMovementProcessor::RISCV_0,
-            .noc = NOC::RISCV_0_default,
-            .compile_args = {
-                static_cast<uint32_t>(config_cb_index),
-                static_cast<uint32_t>(config_sem),
-                static_cast<uint32_t>(credits_sem),
-                static_cast<uint32_t>(data_cb_index),
-                static_cast<uint32_t>(page_size),
-                static_cast<uint32_t>(data_size),
-                static_cast<uint32_t>(recv_virtual_coord.x),
-                static_cast<uint32_t>(recv_virtual_coord.y),
-                static_cast<uint32_t>(recv_virtual_coord.x),
-                static_cast<uint32_t>(recv_virtual_coord.y),
-                static_cast<uint32_t>(output_virtual_coord.x),
-                static_cast<uint32_t>(output_virtual_coord.y),
-                static_cast<uint32_t>(output_buffer->address())}});
+        auto worker_kernel = CreateKernel(
+            send_recv_program,
+            "tests/tt_metal/tt_metal/test_kernels/misc/socket/worker_loop_ack.cpp",
+            worker_core_range,
+            DataMovementConfig{
+                .processor = DataMovementProcessor::RISCV_0,
+                .noc = NOC::RISCV_0_default,
+                .compile_args = {
+                    static_cast<uint32_t>(config_cb_index),
+                    static_cast<uint32_t>(config_sem),
+                    static_cast<uint32_t>(credits0_sem),
+                    static_cast<uint32_t>(credits1_sem),
+                    static_cast<uint32_t>(data_cb_index),
+                    static_cast<uint32_t>(page_size),
+                    static_cast<uint32_t>(data_size),
+                    static_cast<uint32_t>(recv_virtual_coord.x),
+                    static_cast<uint32_t>(recv_virtual_coord.y),
+                    static_cast<uint32_t>(output_buffer->address())}});
+        for (uint32_t i = 0; i < worker_logical_coords.size(); ++i) {
+            std::vector<uint32_t> worker_rtas = {
+                static_cast<uint32_t>(data_virtual_coords[i].x),
+                static_cast<uint32_t>(data_virtual_coords[i].y),
+                static_cast<uint32_t>(output_virtual_coords[i].x),
+                static_cast<uint32_t>(output_virtual_coords[i].y),
+            };
+            SetRuntimeArgs(send_recv_program, worker_kernel, worker_logical_coords[i], worker_rtas);
+        }
+    }
 
     auto mesh_workload = CreateMeshWorkload();
     MeshCoordinateRange devices(md0->shape());
@@ -671,10 +767,33 @@ void test_single_connection_single_device_socket_with_workers(
     EXPECT_EQ(src_vec, recv_data_readback);
 }
 
-TEST_F(MeshSocketTest1DFabric, SingleConnectionSingleDeviceSocketWithWorkers) {
+TEST_F(MeshSocketTest, SingleConnectionSingleDeviceSocketWithWorkersFinalAck) {
     auto md0 = mesh_device_->create_submesh(MeshShape(1, 1), MeshCoordinate(0, 0));
+    auto worker_cr = CoreRange({0, 1}, {0, 1});
+    auto data_crs = CoreRangeSet(CoreCoord(0, 0));
+    auto output_crs = CoreRangeSet(CoreCoord(0, 0));
+    // These tests must not wrap and continue sending data
+    test_single_connection_single_device_socket_with_workers(md0, 1024, 64, 512, worker_cr, data_crs, output_crs, true);
+    test_single_connection_single_device_socket_with_workers(
+        md0, 1024, 64, 1024, worker_cr, data_crs, output_crs, true);
+}
+
+TEST_F(MeshSocketTest, SingleConnectionSingleDeviceSocketWithWorkersLoopAck) {
+    auto md0 = mesh_device_->create_submesh(MeshShape(1, 1), MeshCoordinate(0, 0));
+    auto worker_cr = CoreRange({0, 1}, {0, 1});
+    auto data_crs = CoreRangeSet(CoreCoord(0, 0));
+    auto output_crs = CoreRangeSet(CoreCoord(0, 0));
     // No wrap
-    test_single_connection_single_device_socket_with_workers(md0, 1024, 64, 1024);
+    test_single_connection_single_device_socket_with_workers(
+        md0, 1024, 64, 512, worker_cr, data_crs, output_crs, false);
+    test_single_connection_single_device_socket_with_workers(
+        md0, 1024, 64, 1024, worker_cr, data_crs, output_crs, false);
+    // Even wrap
+    test_single_connection_single_device_socket_with_workers(
+        md0, 1024, 64, 2048, worker_cr, data_crs, output_crs, false);
+    // Uneven wrap
+    test_single_connection_single_device_socket_with_workers(
+        md0, 4096, 1088, 9792, worker_cr, data_crs, output_crs, false);
 }
 
 void test_single_connection_multi_device_socket(
