@@ -305,7 +305,7 @@ public:
 
 private:
     void init(Storage storage, TensorSpec tensor_spec);
-    void deallocate_impl(bool force, bool deallocation_through_destructor);
+    void deallocate_impl(bool force);
 };
 
 Tensor create_device_tensor(const TensorSpec& tensor_spec, IDevice* device);
