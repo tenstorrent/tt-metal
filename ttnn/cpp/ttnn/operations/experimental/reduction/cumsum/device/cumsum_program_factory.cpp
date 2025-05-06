@@ -145,7 +145,7 @@ CumSumDeviceOperation::SingleCore::cached_program_t CumSumDeviceOperation::Singl
         program,
         all_cores,
         in_df,
-        {{tt::CBIndex::c_0, 1}, {tt::CBIndex::c_1, 1}, {tt::CBIndex::c_16, 1}, {tt::CBIndex::c_24, 1}});
+        {{tt::CBIndex::c_0, 1}, {tt::CBIndex::c_1, 1}, {tt::CBIndex::c_2, 1}, {tt::CBIndex::c_3, 1}});
 
     // Create kernels
     KernelHandle cumsum_reader_handle_id = CreateKernel(
