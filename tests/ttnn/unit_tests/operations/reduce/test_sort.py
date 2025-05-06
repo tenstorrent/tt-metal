@@ -23,6 +23,8 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
         ([1, 2048, 1, 64], -1, False),
         ([1, 55, 43], -1, True),
         ([11, 29, 14, 1], -1, True),
+        ([1, 1, 512, 64], -1, False),
+        ([1, 1, 2112, 64], -1, False),
     ],
 )
 def test_sort_standard(shape, dim, descending, device):
@@ -61,6 +63,8 @@ def test_sort_standard(shape, dim, descending, device):
         ([1, 2048, 1, 64], -1, False),
         ([1, 55, 43], -1, True),
         ([11, 29, 14, 1], -1, True),
+        ([1, 1, 512, 64], -1, False),
+        ([1, 1, 2112, 64], -1, False),
     ],
 )
 def test_sort_prealocated_output(shape, dim, descending, device):
