@@ -596,11 +596,12 @@ void test_single_connection_single_device_socket_with_workers(
         .shard_parameters = sender_data_shard_params,
         .bottom_up = false};
 
-    auto output_shard_params =
-        ShardSpecBuffer(output_crs, {1, 1}, ShardOrientation::ROW_MAJOR, {1, 1}, {output_crs.num_cores(), 1});
+    uint32_t pages_per_core = data_size / page_size;
+    auto output_shard_params = ShardSpecBuffer(
+        output_crs, {pages_per_core, 1}, ShardOrientation::ROW_MAJOR, {1, 1}, {pages_per_core, output_crs.num_cores()});
 
     const DeviceLocalBufferConfig output_device_local_config{
-        .page_size = data_size,
+        .page_size = page_size,
         .buffer_type = BufferType::L1,
         .buffer_layout = TensorMemoryLayout::WIDTH_SHARDED,
         .shard_parameters = output_shard_params,
@@ -612,7 +613,7 @@ void test_single_connection_single_device_socket_with_workers(
 
     auto output_buffer = MeshBuffer::create(buffer_config, output_device_local_config, md0.get());
 
-    std::vector<uint32_t> src_vec(data_size / sizeof(uint32_t));
+    std::vector<uint32_t> src_vec(buffer_config.size / sizeof(uint32_t));
     std::iota(src_vec.begin(), src_vec.end(), 0);
 
     WriteShard(md0->mesh_command_queue(), sender_data_buffer, src_vec, MeshCoordinate(0, 0));
@@ -769,9 +770,9 @@ void test_single_connection_single_device_socket_with_workers(
 
 TEST_F(MeshSocketTest, SingleConnectionSingleDeviceSocketWithWorkersFinalAck) {
     auto md0 = mesh_device_->create_submesh(MeshShape(1, 1), MeshCoordinate(0, 0));
-    auto worker_cr = CoreRange({0, 1}, {0, 1});
-    auto data_crs = CoreRangeSet(CoreCoord(0, 0));
-    auto output_crs = CoreRangeSet(CoreCoord(0, 0));
+    auto worker_cr = CoreRange({0, 1}, {3, 2});
+    auto data_crs = CoreRangeSet(CoreRange({0, 3}, {3, 4}));
+    auto output_crs = CoreRangeSet(CoreRange({0, 4}, {3, 5}));
     // These tests must not wrap and continue sending data
     test_single_connection_single_device_socket_with_workers(md0, 1024, 64, 512, worker_cr, data_crs, output_crs, true);
     test_single_connection_single_device_socket_with_workers(
@@ -780,9 +781,9 @@ TEST_F(MeshSocketTest, SingleConnectionSingleDeviceSocketWithWorkersFinalAck) {
 
 TEST_F(MeshSocketTest, SingleConnectionSingleDeviceSocketWithWorkersLoopAck) {
     auto md0 = mesh_device_->create_submesh(MeshShape(1, 1), MeshCoordinate(0, 0));
-    auto worker_cr = CoreRange({0, 1}, {0, 1});
-    auto data_crs = CoreRangeSet(CoreCoord(0, 0));
-    auto output_crs = CoreRangeSet(CoreCoord(0, 0));
+    auto worker_cr = CoreRange({0, 1}, {3, 2});
+    auto data_crs = CoreRangeSet(CoreRange({0, 3}, {3, 4}));
+    auto output_crs = CoreRangeSet(CoreRange({0, 4}, {3, 5}));
     // No wrap
     test_single_connection_single_device_socket_with_workers(
         md0, 1024, 64, 512, worker_cr, data_crs, output_crs, false);

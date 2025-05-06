@@ -20,10 +20,6 @@ void kernel_main() {
     uint32_t remote_data_core_y = get_arg_val<uint32_t>(1);
     uint32_t output_data_core_x = get_arg_val<uint32_t>(2);
     uint32_t output_data_core_y = get_arg_val<uint32_t>(3);
-    DPRINT << remote_data_core_x << ENDL();
-    DPRINT << remote_data_core_y << ENDL();
-    DPRINT << output_data_core_x << ENDL();
-    DPRINT << output_data_core_y << ENDL();
     uint32_t socket_config_addr = get_write_ptr(config_cb_id);
     volatile tt_l1_ptr uint32_t* config_sem_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(config_sem_id));
@@ -47,14 +43,12 @@ void kernel_main() {
     for (uint32_t i = 0; i < num_pages; ++i) {
         noc_semaphore_wait_min(credits_sem_ptr, i + 1);
         uint64_t read_addr = get_noc_addr(remote_data_core_x, remote_data_core_y, receiver_socket.read_ptr);
-        DPRINT << read_addr << ENDL();
         cb_reserve_back(worker_local_data_cb_id, 1);
         uint32_t write_addr = get_write_ptr(worker_local_data_cb_id);
         noc_async_read(read_addr, write_addr, page_size);
         // Just used for wrapping semantics. Add better impl for sockets
         socket_pop_pages(receiver_socket, 1);
         noc_async_read_barrier();
-        DPRINT << *reinterpret_cast<volatile uint32_t*>(write_addr) << ENDL();
         cb_push_back(worker_local_data_cb_id, 1);
         noc_async_write(write_addr, output_data_noc_addr, page_size);
         output_data_noc_addr += page_size;
