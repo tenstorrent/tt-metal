@@ -31,7 +31,7 @@ void kernel_main() {
         .bank_base_address = b_addr, .page_size = datum_size_bytes * row_size};
 
     // Calculate the range of rows this core should process
-    const uint32_t end_row_id = start_tile_id + n_rows;
+    const uint32_t end_row_id = start_row_id + n_rows;
     const uint32_t num_tiles_per_row = (row_size + TILE_SIZE - 1) / TILE_SIZE;
 
     // Now we loop over the assigned rows and read them into the circular
