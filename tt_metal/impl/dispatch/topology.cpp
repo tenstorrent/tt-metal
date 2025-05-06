@@ -853,6 +853,8 @@ std::unique_ptr<Program> create_and_compile_cq_program(IDevice* device) {
 
     // Compile the program and return it so Device can register it
     detail::CompileProgram(device, *cq_program, /*force_slow_dispatch=*/true);
+    // Write runtime args to device
+    detail::WriteRuntimeArgsToDevice(device, *cq_program, /*force_slow_dispatch=*/true);
     // Erase from map. Note: program in map is no longer valid
     // It is returned from this function and the caller will take ownership of it
     command_queue_pgms.erase(device->id());
