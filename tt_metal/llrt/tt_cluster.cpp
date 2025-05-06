@@ -92,6 +92,13 @@ namespace tt {
 ClusterType Cluster::get_cluster_type_from_cluster_desc(
     const llrt::RunTimeOptions& rtoptions, const tt_ClusterDescriptor* cluster_desc) {
     if (rtoptions.get_simulator_enabled()) {
+        tt_SimulationDeviceInit init(rtoptions.get_simulator_path());
+        auto arch = init.get_arch_name();
+        if (arch == tt::ARCH::WORMHOLE_B0) {
+            return ClusterType::SIMULATOR_WORMHOLE_B0;
+        } else if (arch == tt::ARCH::BLACKHOLE) {
+            return ClusterType::SIMULATOR_BLACKHOLE;
+        }
         return ClusterType::INVALID;
     }
     if (cluster_desc == nullptr) {
@@ -1384,6 +1391,8 @@ void Cluster::initialize_control_plane() {
         case tt::ClusterType::P150: mesh_graph_descriptor = "p150_mesh_graph_descriptor.yaml"; break;
         case tt::ClusterType::P150_X2: mesh_graph_descriptor = "p150_x2_mesh_graph_descriptor.yaml"; break;
         case tt::ClusterType::P150_X4: mesh_graph_descriptor = "p150_x4_mesh_graph_descriptor.yaml"; break;
+        case tt::ClusterType::SIMULATOR_WORMHOLE_B0: mesh_graph_descriptor = "n150_mesh_graph_descriptor.yaml"; break;
+        case tt::ClusterType::SIMULATOR_BLACKHOLE: mesh_graph_descriptor = "p150_mesh_graph_descriptor.yaml"; break;
         default: TT_THROW("Unknown cluster type"); // TODO: we could expose this as a custom mesh graph option
     }
     const std::filesystem::path mesh_graph_desc_path = std::filesystem::path(rtoptions_.get_root_dir()) /
