@@ -24,7 +24,7 @@ Note the current compatibility matrix:
 | Galaxy (Wormhole 6U) | Ubuntu 22.04    | 3.10     | v1.33 or above     | fw_pack-80.17.0.0 (v80.17.0.0)             | v3.0.12 or above      | N/A                            |
 | Wormhole             | Ubuntu 22.04    | 3.10     | v1.33 or above     | fw_pack-80.17.0.0 (v80.17.0.0)             | v3.0.12 or above      | N/A                            |
 | T3000 (Wormhole)     | Ubuntu 22.04    | 3.10     | v1.33 or above     | fw_pack-80.17.0.0 (v80.17.0.0)             | v3.0.12 or above      | v1.2.5 or above, `mesh` config |
-| Blackhole            | Ubuntu 22.04    | 3.10     | v1.33 or above     | fw_pack-80.15.0.0 (v80.15.0.0)             | v3.0.5 or above       | N/A                            |
+| Blackhole            | Ubuntu 22.04    | 3.10     | v1.33 or above     | fw_pack-80.18.0.0 (v80.18.0.0)             | v3.0.12 or above      | N/A                            |
 
 #### Install System-level Dependencies
 ```
