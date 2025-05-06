@@ -55,16 +55,16 @@ inline void calculate_sfpu_mul_u16_to_u32_body() {
 template <int ITERATIONS = 8>
 inline void calculate_sfpu_lcm(const uint dst_offset)
 {
-    // Binary GCD algorithm.
     for (int d = 0; d < ITERATIONS; d++) {
         constexpr uint dst_tile_size = 64;
 
         TTI_SFPLOAD(p_sfpu::LREG0, 4, 3, 0); // a
         TT_SFPLOAD(p_sfpu::LREG1, 4, 3, dst_offset * dst_tile_size); // b
 
+        // Binary GCD algorithm; assumes abs(a) < 2^15 and abs(b) < 2^15, hence gcd(a, b) < 2^15
         calculate_sfpu_gcd_body<15>();
 
-        // Two iterations of Newton's method to find reciprocal
+        // Two iterations of Newton's method to find reciprocal of gcd(a, b)
         TTI_SFPCAST(p_sfpu::LREG1, p_sfpu::LREG2, 0);
         TTI_SFPSETSGN(1, p_sfpu::LREG2, p_sfpu::LREG1, 1);
         TTI_SFPSETEXP(126, p_sfpu::LREG1, p_sfpu::LREG1, 1);
@@ -87,12 +87,18 @@ inline void calculate_sfpu_lcm(const uint dst_offset)
         TTI_SFPIADD(0, p_sfpu::LREG4, p_sfpu::LREG3, SFPIADD_MOD1_CC_NONE | SFPIADD_MOD1_ARG_2SCOMP_LREG_DST);
         TTI_SFPSETEXP(0, p_sfpu::LREG0, p_sfpu::LREG3, 0);
 
+	// Load a and multiply by 1/gcd(a, b)
         TTI_SFPLOAD(p_sfpu::LREG0, 4, 3, 0);
+        TTI_SFPABS(0, p_sfpu::LREG0, p_sfpu::LREG0, 0);
         TTI_SFPCAST(p_sfpu::LREG0, p_sfpu::LREG0, 0);
         TTI_SFPMUL(p_sfpu::LREG0, p_sfpu::LREG3, p_sfpu::LCONST_0, p_sfpu::LREG0, 0);
         TT_SFPLOAD(p_sfpu::LREG1, 4, 3, dst_offset * dst_tile_size);
+        TTI_SFPABS(0, p_sfpu::LREG1, p_sfpu::LREG1, 0);
+
+	// Convert a/gcd(a, b) to int32
         TTI_SFP_STOCH_RND(0, 0, 0, p_sfpu::LREG0, p_sfpu::LREG0, 6);
 
+	// Finally, compute lcm(a, b) = a/gcd(a, b) * b
         calculate_sfpu_mul_u16_to_u32_body();
 
         TTI_SFPSTORE(p_sfpu::LREG4, 4, 3, 0);
