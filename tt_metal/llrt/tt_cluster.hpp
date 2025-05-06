@@ -169,6 +169,11 @@ public:
         uint64_t addr,
         bool small_access = false) const;
 
+    // DMA reads and writes only supported on MMIO devices
+    void dma_write_core(const void* mem_ptr, uint32_t size_in_bytes, tt_cxy_pair core, uint64_t addr) const;
+    void dma_read_core(void* mem_ptr, uint32_t size_in_bytes, tt_cxy_pair core, uint64_t addr) const;
+    void dma_read_core(std::vector<uint32_t>& data, uint32_t size_in_bytes, tt_cxy_pair core, uint64_t addr) const;
+
     std::optional<std::tuple<uint32_t, uint32_t>> get_tlb_data(const tt_cxy_pair& target) const {
         tt::umd::CoreCoord target_coord = get_soc_desc(target.chip).get_coord_at(target, CoordSystem::TRANSLATED);
         auto tlb_configuration = driver_->get_tlb_configuration(target.chip, target_coord);
