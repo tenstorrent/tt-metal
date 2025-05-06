@@ -16,7 +16,6 @@ ResNet50 is a deep convolutional neural network architecture with 50 layers, des
 pytest --disable-warnings models/demos/blackhole/resnet50/demo/demo.py::test_demo_sample
 ```
 - Where 16 (or 32) is the batch size per device, and `models/demos/ttnn_resnet/demo/images/` is where the images are located.
-  
 
 + Our second demo is designed to run ImageNet dataset, run this with
 ```python
