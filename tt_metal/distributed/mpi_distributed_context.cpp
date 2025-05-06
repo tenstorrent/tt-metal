@@ -141,15 +141,15 @@ void MPIContext::reduce_scatter(
     tt::stl::Span<std::byte> send_buf, tt::stl::Span<std::byte> recv_buf, ReduceOp op) const {
     throw std::logic_error(" MPIContext::reduce_scatter not yet implemented");
     /*
-    // I didn't find it
-int n = comm_.size();
-std::vector<int> counts(n, recv_buf.size());
-boost::mpi::reduce_scatter(
-    comm_,
-    reinterpret_cast<const char*>(send_buf.data()), send_buf.size(),
-    reinterpret_cast<char*>(      recv_buf.data()),
-    counts.data(),
-    reduce_to_mpi(op));*/
+    // I didn't find it in the boost.mpi
+    int n = comm_.size();
+    std::vector<int> counts(n, recv_buf.size());
+    boost::mpi::reduce_scatter(
+        comm_,
+        reinterpret_cast<const char*>(send_buf.data()), send_buf.size(),
+        reinterpret_cast<char*>(      recv_buf.data()),
+        counts.data(),
+        reduce_to_mpi(op));*/
 }
 
 void MPIContext::scan(tt::stl::Span<std::byte> send_buf, tt::stl::Span<std::byte> recv_buf, ReduceOp op) const {

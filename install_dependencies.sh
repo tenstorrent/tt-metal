@@ -85,6 +85,7 @@ ub_runtime_packages()
      libc++-17-dev \
      libc++abi-17-dev \
      libstdc++6 \
+     openmpi-bin \
     )
 }
 
@@ -103,6 +104,7 @@ ub_buildtime_packages()
      libc++abi-17-dev \
      build-essential \
      xz-utils \
+     libopenmpi-dev \
     )
 }
 
@@ -260,17 +262,9 @@ configure_hugepages() {
     rm -rf "$TEMP_DIR"
 }
 
-install_open_mpi() {
-    # Install OpenMPi
-    echo "Installing OpenMPI..."
-    apt-get install -y --no-install-recommends openmpi-bin libopenmpi-dev
-}
-
-
 install() {
     if [ $FLAVOR == "ubuntu" ]; then
         echo "Installing packages..."
-    install_open_mpi
 	case "$mode" in
             runtime)
                 prep_ubuntu_runtime
