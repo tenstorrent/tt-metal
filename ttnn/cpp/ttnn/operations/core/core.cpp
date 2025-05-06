@@ -66,20 +66,6 @@ ttnn::Tensor allocate_tensor_on_device(
     const Shape& shape,
     DataType data_type,
     Layout layout,
-    IDevice* device,
-    const std::optional<MemoryConfig>& memory_config) {
-    return allocate_tensor_on_device(
-        TensorSpec(
-            shape,
-            tt::tt_metal::TensorLayout(
-                data_type, tt::tt_metal::PageConfig(layout), memory_config.value_or(ttnn::DRAM_MEMORY_CONFIG))),
-        device);
-}
-
-ttnn::Tensor allocate_tensor_on_device(
-    const Shape& shape,
-    DataType data_type,
-    Layout layout,
     MeshDevice* mesh_device,
     const std::optional<MemoryConfig>& memory_config) {
     return allocate_tensor_on_mesh(
@@ -88,10 +74,6 @@ ttnn::Tensor allocate_tensor_on_device(
             tt::tt_metal::TensorLayout(
                 data_type, tt::tt_metal::PageConfig(layout), memory_config.value_or(ttnn::DRAM_MEMORY_CONFIG))),
         mesh_device);
-}
-
-ttnn::Tensor allocate_tensor_on_device(const ttnn::TensorSpec& spec, IDevice* device) {
-    return tt::tt_metal::allocate_tensor_on_devices(spec, {device});
 }
 
 ttnn::Tensor allocate_tensor_on_device(const ttnn::TensorSpec& spec, MeshDevice* mesh_device) {

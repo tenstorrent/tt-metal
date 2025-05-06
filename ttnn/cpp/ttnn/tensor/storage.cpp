@@ -33,8 +33,6 @@ DeviceStorage::DeviceStorage(
     std::vector<std::pair<distributed::MeshCoordinate, TensorSpec>> specs_) :
     strategy(std::move(strategy_)), specs(std::move(specs_)), mesh_buffer(std::move(mesh_buffer_)) {}
 
-void DeviceStorage::insert_buffer(const std::shared_ptr<Buffer>& buffer_) { this->buffer = buffer_; }
-
 Buffer* DeviceStorage::get_buffer() const {
     if (this->mesh_buffer.get() != nullptr) {
         return this->mesh_buffer->get_reference_buffer();
