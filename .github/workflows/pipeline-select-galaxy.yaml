@@ -13,6 +13,13 @@ on:
           - ASan
           - TSan
         default: "Release"
+      topology:
+        required: false
+        type: choice
+        options:
+          - config-tg
+          - topology-6u
+        default: "config-tg"
       extra-tag:
         required: true
         type: string
@@ -46,13 +53,6 @@ on:
         required: false
         type: boolean
         default: false
-      topology:
-        required: false
-        type: choice
-        options:
-          - config-tg
-          - topology-6u
-        default: "config-tg"
 run-name: ${{ inputs.description }}
 jobs:
   build-artifact:
