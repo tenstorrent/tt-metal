@@ -128,8 +128,7 @@ __attribute__((optimize("jump-tables"))) FORCE_INLINE void execute_chip_unicast_
     uint32_t payload_start_address = reinterpret_cast<size_t>(packet_start) + sizeof(PACKET_HEADER_TYPE);
 
     tt::tt_fabric::NocSendType noc_send_type = header.noc_send_type;
-    if (noc_send_type == tt::tt_fabric::NocSendType::NOC_MULTICAST_ATOMIC_INC ||
-        noc_send_type > tt::tt_fabric::NocSendType::NOC_SEND_TYPE_LAST) {
+    if (noc_send_type >= tt::tt_fabric::NocSendType::NOC_MULTICAST_ATOMIC_INC) {
         __builtin_unreachable();
     }
     switch (noc_send_type) {
