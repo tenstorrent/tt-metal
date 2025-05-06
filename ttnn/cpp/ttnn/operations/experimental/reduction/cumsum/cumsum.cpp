@@ -52,7 +52,8 @@ Tensor CumSumOperation::invoke(
 
         if (optional_output_tensor.has_value()) {
             auto& out_tensor = optional_output_tensor.value();
-            out_tensor.populate_buffers_and_metadata(adjusted_input_tensor);
+            out_tensor.tensor_attributes->get_storage() =
+                optional_output_tensor.value().tensor_attributes->get_storage();
         }
 
         return adjusted_input_tensor;
@@ -113,7 +114,7 @@ Tensor CumSumOperation::invoke(
 
         if (opt_output.has_value()) {
             auto& out_tensor = optional_output_tensor.value();
-            out_tensor.populate_buffers_and_metadata(output_tensor);
+            out_tensor.tensor_attributes->get_storage() = output_tensor.tensor_attributes->get_storage();
         }
 
         return output_tensor;
