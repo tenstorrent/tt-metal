@@ -75,12 +75,9 @@ Tensor create_tensor_from_owned_buffer(
     tt::tt_metal::HostBuffer buf, DataType& output_dtype, ttnn::Shape& output_shape) {
     if constexpr (std::is_same<T, float>::value) {
         if (output_dtype == DataType::BFLOAT8_B || output_dtype == DataType::BFLOAT4_B) {
-            auto tensor = Tensor(
-                              std::move(tt::tt_metal::HostStorage{std::move(buf)}),
-                              output_shape,
-                              DataType::FLOAT32,
-                              Layout::ROW_MAJOR)
-                              .to_layout(Layout::TILE);
+            auto tensor =
+                Tensor(tt::tt_metal::HostStorage{std::move(buf)}, output_shape, DataType::FLOAT32, Layout::ROW_MAJOR)
+                    .to_layout(Layout::TILE);
             auto output_float_data = tt::tt_metal::host_buffer::get_as<float>(tensor);
             auto output_packed_data =
                 output_dtype == DataType::BFLOAT8_B
@@ -88,18 +85,14 @@ Tensor create_tensor_from_owned_buffer(
                     : pack_fp32_vec_as_bfp4_tiles(output_float_data, /*row_major_input=*/false, /*is_exp_a=*/false);
             auto output_uint32_buffer = tt::tt_metal::host_buffer::create<uint32_t>(std::move(output_packed_data));
             return Tensor(
-                std::move(tt::tt_metal::HostStorage{std::move(output_uint32_buffer)}),
-                output_shape,
-                output_dtype,
-                Layout::TILE);
+                tt::tt_metal::HostStorage{std::move(output_uint32_buffer)}, output_shape, output_dtype, Layout::TILE);
         }
     } else {
         TT_FATAL(
             (output_dtype != DataType::BFLOAT8_B) || (output_dtype != DataType::BFLOAT4_B),
             "Unsupported output datatype");
     }
-    auto rm_tensor =
-        Tensor(std::move(tt::tt_metal::HostStorage{std::move(buf)}), output_shape, output_dtype, Layout::ROW_MAJOR);
+    auto rm_tensor = Tensor(tt::tt_metal::HostStorage{std::move(buf)}, output_shape, output_dtype, Layout::ROW_MAJOR);
     return rm_tensor.to_layout(Layout::TILE);
 }
 

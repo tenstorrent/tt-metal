@@ -15,7 +15,6 @@
 #include <tt-metalium/bfloat8.hpp>
 #include <tt-metalium/tilize_utils.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
-#include "ttnn/any_device.hpp"
 #include "ttnn/common/queue_id.hpp"
 #include "ttnn/distributed/distributed_tensor_config.hpp"
 #include "ttnn/tensor/types.hpp"
@@ -111,7 +110,7 @@ public:
     static Tensor from_span(
         tt::stl::Span<const T> buffer,
         const TensorSpec& spec,
-        std::optional<ttnn::AnyDevice> device = std::nullopt,
+        distributed::MeshDevice* device = nullptr,
         ttnn::QueueId cq_id = ttnn::DefaultQueueId);
 
     // Creates a `Tensor` with storage "borrowed" from the buffer of elements of type `T`.
@@ -139,7 +138,7 @@ public:
     static Tensor from_vector(
         const std::vector<T>& buffer,
         const TensorSpec& spec,
-        std::optional<ttnn::AnyDevice> device = std::nullopt,
+        distributed::MeshDevice* device = nullptr,
         ttnn::QueueId cq_id = ttnn::DefaultQueueId) {
         return from_span(tt::stl::Span<const T>(buffer), spec, device);
     }
@@ -150,7 +149,7 @@ public:
     static Tensor from_vector(
         std::vector<T>&& buffer,
         const TensorSpec& spec,
-        std::optional<ttnn::AnyDevice> device = std::nullopt,
+        distributed::MeshDevice* device = nullptr,
         ttnn::QueueId cq_id = ttnn::DefaultQueueId);
 
     // Converts a `Tensor` to a `std::vector<T>`.
@@ -168,11 +167,6 @@ public:
 
     Tensor to_device(
         distributed::MeshDevice* mesh_device,
-        const MemoryConfig& mem_config = {.memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED},
-        ttnn::QueueId cq_id = ttnn::DefaultQueueId) const;
-
-    Tensor to_device(
-        const std::vector<IDevice*>& workers,
         const MemoryConfig& mem_config = {.memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED},
         ttnn::QueueId cq_id = ttnn::DefaultQueueId) const;
 
@@ -264,6 +258,7 @@ public:
     }
     const DeviceStorage& device_storage() const { return std::get<DeviceStorage>(this->get_storage()); }
 
+    // TODO: #21099 - Remove the overload `mesh_device()`, and instead use `device()`.
     distributed::MeshDevice* mesh_device() const {
         if (this->mesh_device_.has_value()) {
             return this->mesh_device_.value();
@@ -310,7 +305,7 @@ public:
 
 private:
     void init(Storage storage, TensorSpec tensor_spec);
-    void deallocate_impl(bool force, bool deallocation_through_destructor);
+    void deallocate_impl(bool force);
 };
 
 Tensor create_device_tensor(const TensorSpec& tensor_spec, IDevice* device);

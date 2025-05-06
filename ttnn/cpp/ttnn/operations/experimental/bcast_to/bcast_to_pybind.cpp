@@ -4,7 +4,7 @@
 
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
-#include "cpp/pybind11/decorators.hpp"
+#include "cpp/ttnn-pybind/decorators.hpp"
 
 #include "bcast_to_pybind.hpp"
 #include "ttnn/operations/experimental/bcast_to/bcast_to.hpp"
