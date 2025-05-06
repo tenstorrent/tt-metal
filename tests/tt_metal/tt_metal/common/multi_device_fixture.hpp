@@ -150,7 +150,7 @@ protected:
         bool is_n300_or_t3k_cluster = cluster_type == tt::ClusterType::T3K or cluster_type == tt::ClusterType::N300;
         auto core_type =
             (config_.num_cqs >= 2 and is_n300_or_t3k_cluster) ? DispatchCoreType::ETH : DispatchCoreType::WORKER;
-
+        tt::tt_metal::detail::InitializeFabricConfig(tt_metal::FabricConfig::FABRIC_1D);
         mesh_device_ = MeshDevice::create(
             MeshDeviceConfig(get_mesh_shape(*mesh_device_type)),
             0,
@@ -167,6 +167,7 @@ protected:
         }
         mesh_device_->close();
         mesh_device_.reset();
+        tt::tt_metal::detail::InitializeFabricConfig(tt::tt_metal::FabricConfig::DISABLED);
     }
 
     std::shared_ptr<tt::tt_metal::distributed::MeshDevice> mesh_device_;

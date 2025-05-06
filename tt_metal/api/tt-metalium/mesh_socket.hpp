@@ -27,6 +27,9 @@ public:
 class socket_memory_config_t {
 public:
     BufferType socket_type = BufferType::L1;
+    // TODO: These must be optionals. Up to the user: Can tie socket lifetime to sub device lifetime and regen socket
+    // each time SD is loaded Or keep socket persistent in global mem pool and use across SD.
+    // TODO: Should data cores be on a different sub device?
     SubDeviceId sender_sub_device{0};
     SubDeviceId receiver_sub_device{0};
     uint32_t fifo_size = 0;

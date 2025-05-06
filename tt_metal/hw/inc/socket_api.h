@@ -114,6 +114,20 @@ void socket_notify_receiver(const SocketSenderInterface& socket) {
     noc_inline_dw_write(downstream_bytes_sent_noc_addr, socket.bytes_sent);
 }
 
+void fabric_socket_notify_receiver(
+    const SocketSenderInterface& socket,
+    tt::tt_fabric::WorkerToFabricEdmSender fabric_connection,
+    volatile tt_l1_ptr PACKET_HEADER_TYPE* fabric_header_addr) {
+    auto downstream_bytes_sent_noc_addr =
+        get_noc_addr(socket.downstream_noc_x, socket.downstream_noc_y, socket.downstream_bytes_sent_addr);
+    fabric_header_addr->to_chip_unicast(static_cast<uint8_t>(socket.downstream_chip_id));
+    fabric_header_addr->to_noc_unicast_inline_write(
+        NocUnicastInlineWriteCommandHeader{downstream_bytes_sent_noc_addr, socket.bytes_sent});
+
+    fabric_connection.wait_for_empty_write_slot();
+    fabric_connection.send_payload_blocking_from_address((uint32_t)fabric_header_addr, sizeof(PACKET_HEADER_TYPE));
+}
+
 void socket_barrier(const SocketSenderInterface& socket) {
     volatile tt_l1_ptr uint32_t* bytes_acked_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(socket.bytes_acked_addr);
@@ -209,6 +223,20 @@ void socket_notify_sender(const SocketReceiverInterface& socket) {
     auto upstream_bytes_acked_noc_addr =
         get_noc_addr(socket.upstream_noc_x, socket.upstream_noc_y, socket.upstream_bytes_acked_addr);
     noc_inline_dw_write(upstream_bytes_acked_noc_addr, socket.bytes_acked);
+}
+
+void fabric_socket_notify_sender(
+    const SocketReceiverInterface& socket,
+    tt::tt_fabric::WorkerToFabricEdmSender fabric_connection,
+    volatile tt_l1_ptr PACKET_HEADER_TYPE* fabric_header_addr) {
+    auto upstream_bytes_acked_noc_addr =
+        get_noc_addr(socket.upstream_noc_x, socket.upstream_noc_y, socket.upstream_bytes_acked_addr);
+    fabric_header_addr->to_chip_unicast(static_cast<uint8_t>(1));
+    fabric_header_addr->to_noc_unicast_inline_write(
+        NocUnicastInlineWriteCommandHeader{upstream_bytes_acked_noc_addr, socket.bytes_acked});
+
+    fabric_connection.wait_for_empty_write_slot();
+    fabric_connection.send_payload_blocking_from_address((uint32_t)fabric_header_addr, sizeof(PACKET_HEADER_TYPE));
 }
 
 void update_socket_config(const SocketReceiverInterface& socket) {
