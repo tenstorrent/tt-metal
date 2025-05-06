@@ -138,17 +138,15 @@ inline void bitonic_topk_ph3_st4_to_1(bool dir, bool &init_replay, int replay_st
 
     if (init_replay)
     {
-        TT_REPLAY(replay_start, 7, 1, 1);
+        TT_REPLAY(replay_start, 5, 1, 1);
 
         // Step 4
         TTI_SFPSWAP(0, p_sfpu::LREG0, p_sfpu::LREG2, p_sfpswap::ALL_ROWS_MAX);
         TTI_SFPSWAP(0, p_sfpu::LREG1, p_sfpu::LREG3, p_sfpswap::ALL_ROWS_MAX);
-        TTI_SFPNOP;
 
         // Step 3
         TTI_SFPSWAP(0, p_sfpu::LREG0, p_sfpu::LREG1, p_sfpswap::ALL_ROWS_MAX);
         TTI_SFPSWAP(0, p_sfpu::LREG2, p_sfpu::LREG3, p_sfpswap::ALL_ROWS_MAX);
-        TTI_SFPNOP;
 
         TTI_SFPTRANSP(0, 0, 0, 0);
 
@@ -156,10 +154,10 @@ inline void bitonic_topk_ph3_st4_to_1(bool dir, bool &init_replay, int replay_st
     }
     else
     {
-        TT_REPLAY(replay_start, 7, 0, 0);
+        TT_REPLAY(replay_start, 5, 0, 0);
     }
 
-    TT_REPLAY(replay_start, 7, 0, 0);
+    TT_REPLAY(replay_start, 5, 0, 0);
 
     if (dir == (bool)SortDir::ArgMin)
     {
@@ -174,21 +172,17 @@ inline void bitonic_topk_ph2_st3_to_1()
     // Step 3
     TTI_SFPSWAP(0, p_sfpu::LREG0, p_sfpu::LREG1, p_sfpswap::ALL_ROWS_MAX);
     TTI_SFPSWAP(0, p_sfpu::LREG2, p_sfpu::LREG3, p_sfpswap::ALL_ROWS_MAX);
-    TTI_SFPNOP;
     TTI_SFPSWAP(0, p_sfpu::LREG2, p_sfpu::LREG3, p_sfpswap::UNCONDITIONALLY);
-    TTI_SFPNOP;
 
     TTI_SFPTRANSP(0, 0, 0, 0);
 
     // Step 2
     TTI_SFPSWAP(0, p_sfpu::LREG0, p_sfpu::LREG2, p_sfpswap::ROWS_01_MAX);
     TTI_SFPSWAP(0, p_sfpu::LREG1, p_sfpu::LREG3, p_sfpswap::ROWS_01_MAX);
-    TTI_SFPNOP;
 
     // Step 1
     TTI_SFPSWAP(0, p_sfpu::LREG0, p_sfpu::LREG1, p_sfpswap::ROWS_01_MAX);
     TTI_SFPSWAP(0, p_sfpu::LREG2, p_sfpu::LREG3, p_sfpswap::ROWS_01_MAX);
-    TTI_SFPNOP;
 
     TTI_SFPTRANSP(0, 0, 0, 0);
 }
@@ -200,12 +194,10 @@ inline void bitonic_topk_ph1_st2_to_1()
     // Step 2
     TTI_SFPSWAP(0, p_sfpu::LREG0, p_sfpu::LREG2, p_sfpswap::ROWS_02_MAX);
     TTI_SFPSWAP(0, p_sfpu::LREG1, p_sfpu::LREG3, p_sfpswap::ROWS_02_MAX);
-    TTI_SFPNOP;
 
     // Step 1
     TTI_SFPSWAP(0, p_sfpu::LREG0, p_sfpu::LREG1, p_sfpswap::ROWS_02_MAX);
     TTI_SFPSWAP(0, p_sfpu::LREG2, p_sfpu::LREG3, p_sfpswap::ROWS_02_MAX);
-    TTI_SFPNOP;
 
     TTI_SFPTRANSP(0, 0, 0, 0);
 }
@@ -217,9 +209,7 @@ inline void bitonic_topk_ph0_st1_to_1()
     // Step 1
     TTI_SFPSWAP(0, p_sfpu::LREG0, p_sfpu::LREG1, p_sfpswap::ALL_ROWS_MAX);
     TTI_SFPSWAP(0, p_sfpu::LREG2, p_sfpu::LREG3, p_sfpswap::ALL_ROWS_MAX);
-    TTI_SFPNOP;
     TTI_SFPSWAP(0, p_sfpu::LREG2, p_sfpu::LREG3, p_sfpswap::UNCONDITIONALLY);
-    TTI_SFPNOP;
 
     TTI_SFPTRANSP(0, 0, 0, 0);
 }
@@ -310,13 +300,13 @@ inline void _bitonic_topk_phases_steps(const int idir, const int i_end_phase, co
                             }
                             if (init_phase)
                             {
-                                TT_REPLAY(16, 7, 1, 1);
+                                TT_REPLAY(16, 5, 1, 1);
                                 bitonic_topk_ph0_st1_to_1();
                                 init_phase = false;
                             }
                             else
                             {
-                                TT_REPLAY(16, 7, 0, 0);
+                                TT_REPLAY(16, 5, 0, 0);
                             }
                             if (init_store)
                             {
@@ -337,13 +327,13 @@ inline void _bitonic_topk_phases_steps(const int idir, const int i_end_phase, co
                             TT_REPLAY(0, 8, 0, 0);
                             if (init_phase)
                             {
-                                TT_REPLAY(16, 8, 1, 1);
+                                TT_REPLAY(16, 6, 1, 1);
                                 bitonic_topk_ph1_st2_to_1();
                                 init_phase = false;
                             }
                             else
                             {
-                                TT_REPLAY(16, 8, 0, 0);
+                                TT_REPLAY(16, 6, 0, 0);
                             }
                             TT_REPLAY(8, 8, 0, 0);
                         }
@@ -354,13 +344,13 @@ inline void _bitonic_topk_phases_steps(const int idir, const int i_end_phase, co
                             TT_REPLAY(0, 8, 0, 0);
                             if (init_phase)
                             {
-                                TT_REPLAY(16, 13, 1, 1);
+                                TT_REPLAY(16, 9, 1, 1);
                                 bitonic_topk_ph2_st3_to_1();
                                 init_phase = false;
                             }
                             else
                             {
-                                TT_REPLAY(16, 13, 0, 0);
+                                TT_REPLAY(16, 9, 0, 0);
                             }
                             TT_REPLAY(8, 8, 0, 0);
                         }
@@ -524,7 +514,7 @@ inline void _bitonic_topk_rebuild(const bool idir, const int m_iter, const int k
                             // Groups of 8 datums being sorted at the same time
                             if (init_rebuild)
                             {
-                                TT_REPLAY(0, 24, 1, 1);
+                                TT_REPLAY(0, 22, 1, 1);
                                 bitonic_topk_load8(0, ld_offset);
                                 bitonic_topk_ph1_st2_to_1();
                                 bitonic_topk_store8(0, ld_offset);
@@ -533,7 +523,7 @@ inline void _bitonic_topk_rebuild(const bool idir, const int m_iter, const int k
                             }
                             else
                             {
-                                TT_REPLAY(0, 24, 0, 0);
+                                TT_REPLAY(0, 22, 0, 0);
                             }
                             datums_compared += 16;
                         }
@@ -547,7 +537,7 @@ inline void _bitonic_topk_rebuild(const bool idir, const int m_iter, const int k
                             // Groups of 16 datums being sorted at the same time
                             if (init_rebuild)
                             {
-                                TT_REPLAY(0, 28, 1, 1);
+                                TT_REPLAY(0, 26, 1, 1);
                                 bitonic_topk_load16(ld_offset, ld_dist);
                                 bitonic_topk_ph1_st2_to_1();
                                 bitonic_topk_store16<true>(ld_offset, ld_dist);
@@ -559,7 +549,7 @@ inline void _bitonic_topk_rebuild(const bool idir, const int m_iter, const int k
                             }
                             else
                             {
-                                TT_REPLAY(0, 28, 0, 0);
+                                TT_REPLAY(0, 26, 0, 0);
                             }
                             datums_compared += 16;
                         }
@@ -571,7 +561,7 @@ inline void _bitonic_topk_rebuild(const bool idir, const int m_iter, const int k
                         // Groups of 16 datums being sorted at the same time
                         if (init_rebuild)
                         {
-                            TT_REPLAY(0, 32, 1, 1);
+                            TT_REPLAY(0, 29, 1, 1);
                             bitonic_topk_load16(4, ld_offset);
                             bitonic_topk_ph2_st3_to_1();
                             bitonic_topk_store16<true>(4, ld_offset);
@@ -583,8 +573,7 @@ inline void _bitonic_topk_rebuild(const bool idir, const int m_iter, const int k
                         }
                         else
                         {
-                            TT_REPLAY(0, 32, 0, 0);
-                            TTI_INCRWC(0, 8, 0, 0);
+                            TT_REPLAY(0, 29, 0, 0);
                         }
                         datums_compared += 16;
                     }
@@ -598,7 +587,7 @@ inline void _bitonic_topk_rebuild(const bool idir, const int m_iter, const int k
                             TT_REPLAY(0, 8, 1, 1);
                             bitonic_topk_load16(4, 8);
                             bitonic_topk_ph3_st4_to_1(dir, init_rebuild, 8);
-                            TT_REPLAY(15, 12, 1, 1);
+                            TT_REPLAY(13, 12, 1, 1);
                             bitonic_topk_store16<true>(4, 8);
                             TTI_INCRWC(0, 8, 0, 0);
                             TTI_INCRWC(0, 8, 0, 0);
@@ -609,7 +598,7 @@ inline void _bitonic_topk_rebuild(const bool idir, const int m_iter, const int k
                         {
                             TT_REPLAY(0, 8, 0, 0);
                             bitonic_topk_ph3_st4_to_1(dir, init_rebuild, 8);
-                            TT_REPLAY(15, 12, 0, 0);
+                            TT_REPLAY(13, 12, 0, 0);
                         }
                         datums_compared += 16;
                         dir = !dir;
@@ -668,14 +657,14 @@ inline void _bitonic_topk_rebuild(const bool idir, const int m_iter, const int k
                             TT_REPLAY(0, 8, 1, 1);
                             bitonic_topk_load16(4, 8);
                             bitonic_topk_ph3_st4_to_1(dir, init_rebuild, 8);
-                            TT_REPLAY(15, 8, 1, 1);
+                            TT_REPLAY(13, 8, 1, 1);
                             bitonic_topk_store16<true>(4, 8);
                         }
                         else
                         {
                             TT_REPLAY(0, 8, 0, 0);
                             bitonic_topk_ph3_st4_to_1(dir, init_rebuild, 8);
-                            TT_REPLAY(15, 8, 0, 0);
+                            TT_REPLAY(13, 8, 0, 0);
                         }
                         datums_compared += 16;
                         dir = (datums_compared == sorted_seq_length) ? !dir : dir;
