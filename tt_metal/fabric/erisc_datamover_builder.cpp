@@ -621,12 +621,6 @@ FabricEriscDatamoverBuilder FabricEriscDatamoverBuilder::build(
     std::array<std::optional<size_t>, FabricEriscDatamoverConfig::max_downstream_edms>
         receiver_channels_downstream_teardown_semaphore_id;
     if (enable_persistent_mode) {
-        // Sender channel 0 uses addresses instead of ids in persistent mode
-        // sender_channels_buffer_index_semaphore_id[0] = config.sender_channels_buffer_index_semaphore_address[0];
-        // sender_channels_flow_control_semaphore_id[0] =
-        // config.sender_channels_local_flow_control_semaphore_address[0]; sender_channels_connection_semaphore_id[0] =
-        // config.sender_channels_connection_semaphore_address[0];
-
         if (build_in_worker_connection_mode) {
             for (uint32_t i = 0; i < FabricEriscDatamoverConfig::num_receiver_channels; i++) {
                 receiver_channels_downstream_flow_control_semaphore_id[i] = 0;

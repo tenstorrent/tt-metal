@@ -857,7 +857,7 @@ void run_receiver_channel_step(
             //  - Hop command of [0011] instructs fabric router to write the packet locally AND forward East (a line
             //  mcast)
 #ifdef FABRIC_2D
-            // need thid ifdef since the packet header for 1D does not have router_buffer field in it.
+            // need this ifdef since the packet header for 1D does not have router_buffer field in it.
             hop_cmd = packet_header->route_buffer[cached_routing_fields.value];
 #endif
             can_send_to_all_local_chip_receivers = can_forward_packet_completely(hop_cmd, downstream_edm_interface);
