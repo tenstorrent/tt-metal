@@ -83,7 +83,6 @@ std::shared_ptr<MeshBuffer> create_socket_data_buffer(
         // Allocate Sharded buffer on worker cores
         shard_grid = receiver->worker_cores(HalProgrammableCoreType::TENSIX, SubDeviceId{0});
         num_data_cores = receiver->num_worker_cores(HalProgrammableCoreType::TENSIX, SubDeviceId{0});
-        ;
     }
     // Allocate a shard of size fifo_size on each data core. User decides how these data-cores must be used
     const auto total_data_buffer_size = num_data_cores * socket_mem_config.fifo_size;
