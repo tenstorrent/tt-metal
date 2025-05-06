@@ -33,7 +33,7 @@ inline void calculate_sfpu_mul_u16_to_u32_body() {
     TTI_SFPCAST(p_sfpu::LREG1, p_sfpu::LREG1, 0);
     TTI_SFPCAST(p_sfpu::LREG2, p_sfpu::LREG2, 0);
     TTI_SFPCAST(p_sfpu::LREG3, p_sfpu::LREG3, 0);
-    // hi_fp32 = a_fp32 * b_fp32
+    // multiply in fp32
     TTI_SFPMUL(p_sfpu::LREG0, p_sfpu::LREG1, p_sfpu::LCONST_0, p_sfpu::LREG4, 0);
     TTI_SFPMUL(p_sfpu::LREG0, p_sfpu::LREG3, p_sfpu::LCONST_0, p_sfpu::LREG5, 0);
     TTI_SFPMUL(p_sfpu::LREG2, p_sfpu::LREG1, p_sfpu::LCONST_0, p_sfpu::LREG6, 0);
