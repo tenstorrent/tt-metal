@@ -46,12 +46,7 @@ def encode_prompt_instruct(tokenizer, prompt_text, system_prompt_text=None):
 
 
 def preprocess_inputs_prefill(
-    input_prompts,
-    tokenizer,
-    model_args,
-    instruct,
-    max_generated_tokens,
-    max_prefill_len=128 * 1024,
+    input_prompts, tokenizer, model_args, instruct, max_generated_tokens, max_prefill_len=128 * 1024, truncate=False
 ):
     """
     Run tokenizer on inputs, and create embeddings for the first token of each input
@@ -61,7 +56,9 @@ def preprocess_inputs_prefill(
         max_prefill_len = 128 * 1024 - max_generated_tokens
 
     encoded_prompts = [
-        model_args[idx % len(model_args)].encode_prompt(prompt, instruct=instruct)
+        model_args[idx % len(model_args)].encode_prompt(
+            prompt, instruct=instruct, truncate=truncate, max_generated_tokens=max_generated_tokens
+        )
         for idx, prompt in enumerate(input_prompts)
     ]
 
@@ -138,14 +135,49 @@ def preprocess_inputs_prefill(
     )
 
 
-def encode_prompt_hf(tokenizer, prompt_text, system_prompt_text=None):
+def encode_prompt_hf(
+    tokenizer, prompt_text, system_prompt_text=None, truncate=False, max_generated_tokens=0, max_seq_len=0
+):
     """See https://huggingface.co/docs/transformers/main/en/chat_templating"""
-    chat = []
-    if system_prompt_text:
-        chat.append({"role": "system", "content": system_prompt_text})
-    if prompt_text:
-        chat.append({"role": "user", "content": prompt_text})
-    return tokenizer.apply_chat_template(chat, tokenize=True, add_generation_prompt=True)
+
+    if truncate:
+        # Every tokernizer creates a different number of tokens for the same prompt, so we need to truncate the prompt
+        # to the maximum length of the model minus the maximum number of tokens that will be generated
+        # This is to avoid going out of memory when the prompts are too long.
+
+        org_prompt_text_len = len(system_prompt_text) if system_prompt_text else len(prompt_text)
+        while True:
+            chat = []
+            if system_prompt_text:
+                chat.append({"role": "system", "content": system_prompt_text})
+            if prompt_text:
+                chat.append({"role": "user", "content": prompt_text})
+            encoded_prompt = tokenizer.apply_chat_template(chat, tokenize=True, add_generation_prompt=True)
+            max_target_len = max_seq_len - max_generated_tokens
+
+            if len(encoded_prompt) <= max_target_len:
+                tuncated_prompt_text_len = len(system_prompt_text) if system_prompt_text else len(prompt_text)
+                if tuncated_prompt_text_len != org_prompt_text_len:
+                    logger.warning(
+                        f"Input prompt len = {org_prompt_text_len}, it's trancated to {tuncated_prompt_text_len} to fit the model's max seq len {max_seq_len} and the max generated tokens {max_generated_tokens}"
+                    )
+                return encoded_prompt
+            else:
+                # Truncate to TRACATE_RATIO% of the prompt and see it fits
+                TRACATE_RATIO = 0.99
+                if system_prompt_text:
+                    tl = int(len(system_prompt_text) * TRACATE_RATIO)
+                    system_prompt_text = system_prompt_text[:tl]
+                if prompt_text:
+                    tl = int(len(prompt_text) * TRACATE_RATIO)
+                    prompt_text = prompt_text[:tl]
+    else:
+        chat = []
+        if system_prompt_text:
+            chat.append({"role": "system", "content": system_prompt_text})
+        if prompt_text:
+            chat.append({"role": "user", "content": prompt_text})
+        return tokenizer.apply_chat_template(chat, tokenize=True, add_generation_prompt=True)
 
 
 def apply_scaling(freqs: torch.Tensor, scale_factor: float, orig_context_len: int):
