@@ -154,57 +154,46 @@ Tensor::Tensor(const Tensor& other) :
 
 Tensor::~Tensor() {
     ZoneScoped;
-    this->deallocate_impl(/*force=*/false, /*deallocation_through_destructor=*/true);
-    tensor_attributes.reset();
+    this->deallocate_impl(/*force=*/false);
 }
 
 Tensor::Tensor(
     Storage storage, const ttnn::Shape& shape, DataType dtype, Layout layout, const std::optional<Tile>& tile) :
     Tensor(std::move(storage), /* logical_shape */ shape, /* padded_shape */ shape, dtype, layout, tile) {}
 
-void Tensor::deallocate(bool force) { deallocate_impl(force, /*deallocation_through_destructor=*/false); }
+void Tensor::deallocate(bool force) { deallocate_impl(force); }
 
-void Tensor::deallocate_impl(bool force, bool deallocation_through_destructor) {
-    ZoneScopedN("TensorDeallocate");
-    // GraphTracker::instance().track_function_start("Tensor::deallocate", *this, force);
-    // Check if the attributes didn't get moved to another tensor.
-    // If not, we can deallocate this tensor.
-    if (tensor_attributes.use_count() == 0) {
-        return;
-    }
-
-    auto get_tensor_ref_count = [](const Tensor& tensor) {
-        // If owned by the main thread, deallocate this tensor only from the main thread. If owned by worker thread,
-        // allow deallocation in worker and use shared_ptr ref count, since this is a thread_local tensor
-        return tensor.tensor_attributes.use_count();
+void Tensor::deallocate_impl(bool force) {
+    auto can_deallocate = []<typename T>(const std::shared_ptr<T>& shared_resource, bool force) {
+        // It is safe to deallocate a shared resource, if either it is not shared or `force` is set.
+        return shared_resource.use_count() == 1 ||  //
+               (shared_resource.use_count() > 1 && force);
     };
 
-    std::visit(
-        tt::stl::overloaded{
-            [this](HostStorage& storage) {
-                if (this->tensor_attributes.use_count() == 1) {
-                    storage.buffer.deallocate();
-                }
-            },
-            [this](MultiDeviceHostStorage& storage) {
-                if (this->tensor_attributes.use_count() == 1) {
-                    for (int i = 0; i < storage.num_buffers(); i++) {
-                        storage.get_buffer(i).deallocate();
+    ZoneScopedN("TensorDeallocate");
+    // GraphTracker::instance().track_function_start("Tensor::deallocate", *this, force);
+    if (can_deallocate(tensor_attributes, force)) {
+        std::visit(
+            // TODO: #21604 - Host-side buffers do not support "forced" deallocation.
+            // The underlying data can still be shared across tensors.
+            tt::stl::overloaded{
+                [this](HostStorage& host_storage) { host_storage.buffer.deallocate(); },
+                [this](MultiDeviceHostStorage& host_storage) {
+                    for (auto& host_buffer : host_storage.buffers) {
+                        host_buffer.deallocate();
                     }
-                }
-            },
-            [force, this](DeviceStorage& storage) {
-                if ((force or this->tensor_attributes.use_count() == 1)) {
-                    if (storage.mesh_buffer and (force or storage.mesh_buffer.use_count() == 1)) {
+                },
+                [this, force, &can_deallocate](DeviceStorage& storage) {
+                    if (can_deallocate(storage.mesh_buffer, force)) {
                         storage.mesh_buffer->deallocate();
-                    } else if (storage.buffer and (force or storage.buffer.use_count() == 1)) {
+                    } else if (can_deallocate(storage.buffer, force)) {
                         DeallocateBuffer(*(storage.buffer));
                     }
                     storage.mesh_buffer.reset();
                     storage.buffer.reset();
-                }
-            }},
-        this->tensor_attributes->get_storage());
+                }},
+            this->tensor_attributes->get_storage());
+    }
     // GraphTracker::instance().track_function_end();
 }
 
