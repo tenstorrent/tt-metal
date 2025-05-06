@@ -174,7 +174,6 @@ add_compile_options(
     -Werror
     # The following list is not indicative of what we _desire_ only the status quo to build.
     -Wno-deprecated-declarations
-    -Wno-pessimizing-move
     # Vars that are used only in Asserts will appear as dead stores in builds
     # where the preprocessor has stripped away the assert.
     "$<$<CONFIG:Release>:-Wno-unused-but-set-variable>"

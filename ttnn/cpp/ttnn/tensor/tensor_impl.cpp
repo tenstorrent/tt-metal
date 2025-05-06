@@ -136,7 +136,7 @@ Tensor pad_bfloat8_b(
             MemoryConfig{},
             float_tensor.logical_shape(),
             float_tensor.padded_shape()));
-    return Tensor(std::move(HostStorage{std::move(output_uint32_buffer)}), output_spec);
+    return Tensor(HostStorage{std::move(output_uint32_buffer)}, output_spec);
 }
 
 Tensor unpad_bfloat8_b(
@@ -167,7 +167,7 @@ Tensor unpad_bfloat8_b(
         pack_fp32_vec_as_bfp8_tiles(output_float_data, /*row_major_input=*/false, /*is_exp_a=*/false, tile);
     auto output_uint32_buffer = host_buffer::create<uint32_t>(std::move(output_packed_data));
     return Tensor(
-        std::move(HostStorage{std::move(output_uint32_buffer)}),
+        HostStorage{std::move(output_uint32_buffer)},
         TensorSpec(
             float_tensor.get_logical_shape(),
             TensorLayout::fromPaddedShape(
@@ -216,7 +216,7 @@ Tensor pad_bfloat4_b(
             MemoryConfig{},
             float_tensor.logical_shape(),
             float_tensor.padded_shape()));
-    return Tensor(std::move(HostStorage{std::move(output_uint32_buffer)}), output_spec);
+    return Tensor(HostStorage{std::move(output_uint32_buffer)}, output_spec);
 }
 
 Tensor unpad_bfloat4_b(
@@ -247,7 +247,7 @@ Tensor unpad_bfloat4_b(
         pack_fp32_vec_as_bfp4_tiles(output_float_data, /*row_major_input=*/false, /*is_exp_a=*/false, tile);
     auto output_uint32_buffer = host_buffer::create<uint32_t>(std::move(output_packed_data));
     return Tensor(
-        std::move(HostStorage{std::move(output_uint32_buffer)}),
+        HostStorage{std::move(output_uint32_buffer)},
         TensorSpec(
             float_tensor.get_logical_shape(),
             TensorLayout::fromPaddedShape(
@@ -547,7 +547,6 @@ Tensor to_host<bfloat8_b>(const Tensor& tensor, bool blocking, ttnn::QueueId cq_
 
 template <typename T>
 Tensor to_host_mesh_tensor(const Tensor& tensor, bool blocking, ttnn::QueueId cq_id) {
-    TT_FATAL(tt::tt_metal::detail::InMainThread(), "to_host_mesh_tensor must be called from the main thread");
     TT_ASSERT(tensor.is_allocated(), "Buffer must be allocated on device!");
     const auto& storage = std::get<DeviceStorage>(tensor.get_storage());
     const auto& mesh_buffer = storage.mesh_buffer;
@@ -818,7 +817,6 @@ Tensor to_device_mesh_tensor(
         return tensor;  // Tensor already on device
     }
 
-    TT_FATAL(tt::tt_metal::detail::InMainThread(), "to_device_mesh_tensor must be called from the main thread");
     TT_FATAL(mesh_device != nullptr, "Need target device in order to move tensor to device!");
     TT_FATAL(tensor.is_allocated(), "Need data to exist in order to move it to device");
 
@@ -846,7 +844,6 @@ template <typename T>
 void copy_to_mesh_tensor(const Tensor& host_tensor, Tensor& mesh_tensor, ttnn::QueueId cq_id) {
     TT_FATAL(host_tensor.storage_type() != StorageType::DEVICE, "Host tensor is on device.");
     TT_FATAL(mesh_tensor.storage_type() == StorageType::DEVICE, "Mesh tensor is not on device.");
-    TT_FATAL(tt::tt_metal::detail::InMainThread(), "copy_to_mesh_tensor must be called from the main thread");
     TT_FATAL(mesh_tensor.is_allocated(), "Need data to exist in order to move it to device");
 
     TT_FATAL(host_tensor.get_logical_shape() == mesh_tensor.get_logical_shape(), "Host tensor has different shape");
