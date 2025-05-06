@@ -119,7 +119,7 @@ Tensor tensor_to_layout(const Tensor& input_tensor, Layout target_layout, distri
                     std::vector<Tensor> shards(s.buffers.size());
                     for (std::size_t shard_idx = 0; shard_idx < s.buffers.size(); ++shard_idx) {
                         // Multi-Thread Host tilization of shards.
-                        mesh_device->enqueue_to_thread_pool([&]() {
+                        mesh_device->enqueue_to_thread_pool([shard_idx, &s, &shards, target_layout]() {
                             ZoneScopedN("HostTilize");
                             Tensor shard(s.buffers[shard_idx], s.specs[shard_idx]);
                             shards[shard_idx] = tensor_impl::to_layout_wrapper(shard, target_layout);
