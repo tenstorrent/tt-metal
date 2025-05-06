@@ -1,11 +1,12 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
+import gc
 import torch
 import pytest
 import ttnn
 from models.experimental.stable_diffusion_xl_base.tt.tt_timesteps import TtTimesteps
-from diffusers import DiffusionPipeline
+from diffusers import UNet2DConditionModel
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.utility_functions import torch_random
 
@@ -14,10 +15,10 @@ from models.utility_functions import torch_random
     "input_shape, module_path, num_channels", [((1,), "time_proj", 320), ((6,), "add_time_proj", 256)]
 )
 def test_timesteps(device, input_shape, module_path, num_channels, use_program_cache, reset_seeds):
-    pipe = DiffusionPipeline.from_pretrained(
-        "stabilityai/stable-diffusion-xl-base-1.0", torch_dtype=torch.float32, use_safetensors=True, variant="fp16"
+    unet = UNet2DConditionModel.from_pretrained(
+        "stabilityai/stable-diffusion-xl-base-1.0", torch_dtype=torch.float32, use_safetensors=True, subfolder="unet"
     )
-    unet = pipe.unet
+    # unet = pipe.unet
     unet.eval()
     state_dict = unet.state_dict()
 
@@ -38,5 +39,8 @@ def test_timesteps(device, input_shape, module_path, num_channels, use_program_c
     )
     ttnn_output_tensor = tt_timesteps.forward(ttnn_input_tensor)
     output_tensor = ttnn.to_torch(ttnn_output_tensor)
+
+    del unet
+    gc.collect()
 
     assert_with_pcc(torch_output_tensor, output_tensor, 0.999)
