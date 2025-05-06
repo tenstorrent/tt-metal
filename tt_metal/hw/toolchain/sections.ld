@@ -13,7 +13,7 @@
 #define TEXT_START ORIGIN(REGION_CODE)
 #elif defined(TYPE_KERNEL)
 /* Where firmware ended. */
-#define TEXT_START __fw_export_end_text
+#define TEXT_START __fw_export_text_end
 #else
 #error "Neither TYPE_FIRMARE nor TYPE_KERNEL defined, what am I to be?"
 #endif
@@ -95,10 +95,10 @@ SECTIONS
   . = ALIGN(ABSOLUTE(.) + MEM_PAD, MEM_ALIGN);
 
 #if defined(TYPE_FIRMWARE)
-  __fw_export_end_text = ABSOLUTE(.);
+  __fw_export_text_end = ABSOLUTE(.);
 #if defined(COMPILE_FOR_NCRISC)
 #if !defined(NCRISC_FIRMWARE_KERNEL_SPLIT)
-  PROVIDE (KERNEL_ENTRY_SYMBOL = ABSOLUTE(__fw_export_end_text));
+  PROVIDE (KERNEL_ENTRY_SYMBOL = ABSOLUTE(__fw_export_text_end));
 #else
   PROVIDE (KERNEL_ENTRY_SYMBOL = MEM_NCRISC_KERNEL_BASE);
 #endif
