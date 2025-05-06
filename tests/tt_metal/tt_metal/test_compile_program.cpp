@@ -171,7 +171,7 @@ Program create_program(IDevice* device, const ProgramAttributes& program_attribu
             .math_approx_mode = program_attributes.math_approx_mode,
             .compile_args = compute_kernel_args});
 
-    return std::move(program);
+    return program;
 }
 
 void assert_kernel_binary_path_exists(

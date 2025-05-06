@@ -1,0 +1,36 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index c7ec920..5228c30 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -5,11 +5,11 @@
+ # Distributed under the terms of the BSD 3-Clause License.                 #
+ #                                                                          #
+ # The full license is in the file LICENSE, distributed with this software. #
+ ############################################################################
+
+-cmake_minimum_required(VERSION 3.29)
++cmake_minimum_required(VERSION 3.15..3.30)
+ project(xtensor CXX)
+
+ set(XTENSOR_INCLUDE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/include)
+
+ # Versionning
+diff --git a/test/CMakeLists.txt b/test/CMakeLists.txt
+index cc2f928..8e84e39 100644
+--- a/test/CMakeLists.txt
++++ b/test/CMakeLists.txt
+@@ -5,11 +5,11 @@
+ # Distributed under the terms of the BSD 3-Clause License.                 #
+ #                                                                          #
+ # The full license is in the file LICENSE, distributed with this software. #
+ ############################################################################
+
+-cmake_minimum_required(VERSION 3.29)
++cmake_minimum_required(VERSION 3.15..3.30)
+
+ if (CMAKE_CURRENT_SOURCE_DIR STREQUAL CMAKE_SOURCE_DIR)
+     project(xtensor-test CXX)
+
+     enable_testing()
+--
+2.49.0

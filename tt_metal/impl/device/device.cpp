@@ -10,7 +10,6 @@
 #include <magic_enum/magic_enum.hpp>
 #include <persistent_kernel_cache.hpp>
 #include <sub_device.hpp>
-#include <sub_device_manager_tracker.hpp>
 #include <sub_device_types.hpp>
 #include <trace.hpp>
 #include <tt-metalium/program_cache.hpp>
@@ -48,18 +47,17 @@
 #include "device.hpp"
 #include "impl/context/metal_context.hpp"
 #include "dispatch_core_common.hpp"
-#include "dispatch_settings.hpp"
+#include "dispatch/dispatch_settings.hpp"
 #include "dprint_server.hpp"
 #include "hal_types.hpp"
 #include "jit_build/build.hpp"
-#include "launch_message_ring_buffer_state.hpp"
+#include "dispatch/launch_message_ring_buffer_state.hpp"
 #include "lightmetal/lightmetal_capture.hpp"
 #include "llrt.hpp"
 #include "logger.hpp"
 #include "metal_soc_descriptor.h"
 #include "multi_producer_single_consumer_queue.hpp"
 #include "profiler_types.hpp"
-#include "program_device_map.hpp"
 #include "tt-metalium/program.hpp"
 #include <tt_stl/strong_type.hpp>
 #include "system_memory_manager.hpp"
@@ -71,6 +69,7 @@
 #include "tt_metal/impl/dispatch/hardware_command_queue.hpp"
 #include "tt_metal/impl/dispatch/topology.hpp"
 #include "tt_metal/impl/sub_device/sub_device_manager.hpp"
+#include "sub_device/sub_device_manager_tracker.hpp"
 #include "tt_metal/jit_build/build_env_manager.hpp"
 #include "tt_metal/tools/profiler/tt_metal_tracy.hpp"
 #include <umd/device/coordinate_manager.h>
@@ -78,8 +77,6 @@
 #include <umd/device/tt_silicon_driver_common.hpp>
 #include <umd/device/tt_xy_pair.h>
 #include <umd/device/types/xy_pair.h>
-#include "work_executor.hpp"
-#include "work_executor_types.hpp"
 
 namespace tt {
 enum class ARCH;
@@ -109,8 +106,7 @@ Device::Device(
     size_t worker_l1_size) :
     id_(device_id),
     worker_thread_core_(worker_thread_core),
-    completion_queue_reader_core_(completion_queue_reader_core),
-    work_executor_(std::make_unique<WorkExecutor>(worker_thread_core, device_id)) {
+    completion_queue_reader_core_(completion_queue_reader_core) {
     ZoneScoped;
     this->initialize(num_hw_cqs, l1_small_size, trace_region_size, worker_l1_size, l1_bank_remap, minimal);
 }
@@ -338,6 +334,9 @@ void Device::initialize_cluster() {
     if (tt_metal::MetalContext::instance().rtoptions().get_clear_l1()) {
         this->clear_l1_state();
     }
+    if (tt_metal::MetalContext::instance().rtoptions().get_clear_dram()) {
+        this->clear_dram_state();
+    }
     int ai_clk = tt::tt_metal::MetalContext::instance().get_cluster().get_device_aiclk(this->id_);
     log_info(tt::LogMetal, "AI CLK for device {} is:   {} MHz", this->id_, ai_clk);
 }
@@ -381,7 +380,7 @@ std::unique_ptr<Allocator> Device::initialize_allocator(
     // PCIe/DRAM -> Tensix/Eth src and dst addrs must be DRAM_ALIGNMENT aligned
     // Tensix/Eth <-> Tensix/Eth src and dst addrs must be L1_ALIGNMENT aligned
     const auto &logical_size = this->logical_grid_size();
-    const auto &compute_size = this->compute_with_storage_grid_size();
+    const auto& compute_size = this->compute_with_storage_grid_size();
     const auto& hal = MetalContext::instance().hal();
     AllocatorConfig config(
         {.num_dram_channels = static_cast<size_t>(soc_desc.get_num_dram_views()),
@@ -788,65 +787,100 @@ void Device::initialize_and_launch_firmware() {
     core_info->l1_unreserved_start = this->allocator()->get_base_allocator_addr(tt_metal::HalMemType::L1);
 
     const std::vector<tt::umd::CoreCoord>& pcie_cores = soc_d.get_cores(CoreType::PCIE, soc_d.get_umd_coord_system());
-    const std::vector<tt::umd::CoreCoord>& dram_cores = soc_d.get_cores(CoreType::DRAM, soc_d.get_umd_coord_system());
-    const std::vector<tt::umd::CoreCoord>& eth_cores = soc_d.get_cores(CoreType::ETH, CoordSystem::PHYSICAL);
+    const std::vector<tt::umd::CoreCoord>& dram_cores = soc_d.get_cores(
+        CoreType::DRAM, soc_d.get_umd_coord_system());  // make these translated and then convert to physical
+    const std::vector<tt::umd::CoreCoord>& eth_cores =
+        soc_d.get_cores(CoreType::ETH, CoordSystem::PHYSICAL);  // make these translated and then convert to physical
     // The SOC descriptor can list a dram core multiple times, depending on how GDDR is assigned to banks
     // Get a list of unique DRAM cores.
     std::unordered_set<CoreCoord> unique_dram_cores(dram_cores.begin(), dram_cores.end());
     TT_ASSERT(
-        pcie_cores.size() + dram_cores.size() + eth_cores.size() <= MAX_NON_WORKER_CORES,
+        pcie_cores.size() + dram_cores.size() + eth_cores.size() <= MAX_PHYSICAL_NON_WORKER_CORES,
         "Detected more pcie/dram/eth cores than fit in the device mailbox.");
     TT_ASSERT(
         eth_cores.size() <= MAX_VIRTUAL_NON_WORKER_CORES,
         "Detected more eth cores (virtual non-workers) than can fit in device mailbox.");
-    for (int idx = 0; idx < MAX_NON_WORKER_CORES; idx++) {
+    for (int idx = 0; idx < MAX_PHYSICAL_NON_WORKER_CORES; idx++) {
         core_info->non_worker_cores[idx] = {CORE_COORD_INVALID, CORE_COORD_INVALID, AddressableCoreType::UNKNOWN};
     }
     for (int idx = 0; idx < MAX_VIRTUAL_NON_WORKER_CORES; idx++) {
         core_info->virtual_non_worker_cores[idx] = {CORE_COORD_INVALID, CORE_COORD_INVALID, AddressableCoreType::UNKNOWN};
     }
 
+    // On Blackhole, virtualized Tensix coordinates overlap with NoC1 physical DRAM and PCIe coordinates beause
+    // virtualized Tensix coordinates == NoC0 Tensix physical coordinates. This causes false negative Watcher
+    // sanitization errors because it appears as a mixed use of physical and virtual To workaround this, skip over
+    // populating `non_worker_cores` for BH DRAM when virtualization is enabled
     int non_worker_cores_idx = 0;
-    for (const tt::umd::CoreCoord& core : pcie_cores) {
-        core_info->non_worker_cores[non_worker_cores_idx++] = {core.x, core.y, AddressableCoreType::PCIE};
+    bool skip_physical_dram_pcie = this->arch() == ARCH::BLACKHOLE and hal.is_coordinate_virtualization_enabled();
+    if (not skip_physical_dram_pcie) {
+        for (tt::umd::CoreCoord core : pcie_cores) {
+            tt::umd::CoreCoord translated_coord =
+                soc_d.translate_coord_to(tt_xy_pair(core.x, core.y), CoordSystem::PHYSICAL, CoordSystem::VIRTUAL);
+            core_info->non_worker_cores[non_worker_cores_idx++] = {core.x, core.y, AddressableCoreType::PCIE};
+        }
+        for (tt::umd::CoreCoord core : dram_cores) {
+            core_info->non_worker_cores[non_worker_cores_idx++] = {core.x, core.y, AddressableCoreType::DRAM};
+        }
     }
-    for (const tt::umd::CoreCoord& core : dram_cores) {
-        core_info->non_worker_cores[non_worker_cores_idx++] = {core.x, core.y, AddressableCoreType::DRAM};
-    }
-    for (const tt::umd::CoreCoord& core : eth_cores) {
+    for (tt::umd::CoreCoord core : eth_cores) {
         core_info->non_worker_cores[non_worker_cores_idx++] = {core.x, core.y, AddressableCoreType::ETH};
     }
+
     if (hal.is_coordinate_virtualization_enabled()) {
         // Track Virtual Non Worker Cores (In this case only Eth) separately
         uint32_t virtual_non_worker_cores_idx = 0;
-        for (const tt::umd::CoreCoord& core : eth_cores) {
+        for (tt::umd::CoreCoord core : eth_cores) {
             auto virtual_core = this->virtual_core_from_physical_core({core.x, core.y});
             core_info->virtual_non_worker_cores[virtual_non_worker_cores_idx++] = {virtual_core.x, virtual_core.y, AddressableCoreType::ETH};
+        }
+
+        if (this->arch() == ARCH::BLACKHOLE) {
+            for (const CoreCoord& core : pcie_cores) {
+                auto virtual_core = this->virtual_core_from_physical_core({core.x, core.y});
+                core_info->virtual_non_worker_cores[virtual_non_worker_cores_idx++] = {
+                    virtual_core.x, virtual_core.y, AddressableCoreType::PCIE};
+            }
+            auto translated_dram_cores = soc_d.get_cores(CoreType::DRAM, CoordSystem::TRANSLATED);
+
+            for (const CoreCoord& core : translated_dram_cores) {
+                core_info->virtual_non_worker_cores[virtual_non_worker_cores_idx++] = {
+                    core.x, core.y, AddressableCoreType::DRAM};
+            }
         }
     }
 
     // Determine which noc-coords are harvested
-    // TODO(PGK/Almeet): fix this w/ new UMD
-    std::vector<uint32_t> harvested_rows;
-    uint32_t harvested_noc_rows = CoordinateManager::shuffle_tensix_harvesting_mask_to_noc0_coords(
-        tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(this->id()).arch,
-        tt::tt_metal::MetalContext::instance().get_cluster().get_harvesting_mask(this->id()));
-    for (uint32_t y = 0; y < soc_d.grid_size.y; y++) {
-        bool row_harvested = (harvested_noc_rows >> y) & 0x1;
-        if (row_harvested) {
-            harvested_rows.push_back(y);
+    std::vector<uint32_t> harvested_axis_coord;
+    uint32_t harvested_noc_coords = CoordinateManager::shuffle_tensix_harvesting_mask_to_noc0_coords(
+        tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(this->id()).arch, tt::tt_metal::MetalContext::instance().get_cluster().get_harvesting_mask(this->id()));
+    uint32_t max_along_axis =
+        hal.get_tensix_harvest_axis() == HalTensixHarvestAxis::ROW ? soc_d.grid_size.y : soc_d.grid_size.x;
+    for (uint32_t idx = 0; idx < max_along_axis; idx++) {
+        bool harvested_axis = (harvested_noc_coords >> idx) & 0x1;
+        if (harvested_axis) {
+            harvested_axis_coord.push_back(idx);
         }
     }
-    TT_ASSERT(harvested_rows.size() <= MAX_HARVESTED_ROWS, "Detected more harvested rows than fit in mailbox.");
-    for (int idx = 0; idx < MAX_HARVESTED_ROWS; idx++) {
-        core_info->harvested_y[idx] = (idx < harvested_rows.size()) ? harvested_rows[idx] : CORE_COORD_INVALID;
-        // Populate harvested rows in virtual coordinate space if virtualization is supported by HW.
-        // Harvested rows in the virtual space are placed at the end of the worker grid,
-        if (hal.is_coordinate_virtualization_enabled() and idx < harvested_rows.size()) {
-            core_info->virtual_harvested_y[idx] =
-                (hal.get_virtual_worker_start_y() + this->logical_grid_size().y + harvested_rows.size() - (idx + 1));
+    TT_ASSERT(
+        harvested_axis_coord.size() <= MAX_HARVESTED_ON_AXIS, "Detected more harvested rows than fit in mailbox.");
+    for (int idx = 0; idx < MAX_HARVESTED_ON_AXIS; idx++) {
+        core_info->harvested_coords[idx] =
+            (idx < harvested_axis_coord.size()) ? harvested_axis_coord[idx] : CORE_COORD_INVALID;
+        // Populate harvested rows/cols in virtual coordinate space if virtualization is supported by HW.
+        // Harvested rows/cols in the virtual space are placed at the end of the worker grid,
+        if (hal.is_coordinate_virtualization_enabled() and idx < harvested_axis_coord.size()) {
+            // On BH virtual coordinates are not contiguous
+            uint32_t end_virtual_grid = hal.get_tensix_harvest_axis() == HalTensixHarvestAxis::ROW
+                                            ? hal.get_virtual_worker_start_y() + this->logical_grid_size().y
+                                        : (this->arch() == ARCH::BLACKHOLE)
+                                            ? max_along_axis - 1
+                                            : hal.get_virtual_worker_start_x() + this->logical_grid_size().x;
+
+            // BH translated tensix cores are same as noc0 physical
+            core_info->virtual_harvested_coords[idx] = end_virtual_grid + harvested_axis_coord.size() - (idx + 1);
         } else {
-            core_info->virtual_harvested_y[idx] = CORE_COORD_INVALID;
+            core_info->virtual_harvested_coords[idx] = CORE_COORD_INVALID;
         }
     }
 
@@ -976,6 +1010,20 @@ void Device::clear_l1_state() {
     }
     // TODO: clear idle eriscs as well
     tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(this->id());
+}
+
+void Device::clear_dram_state() {
+    log_debug(tt::LogMetal, "Clearing DRAM for device {}", this->id_);
+
+    TT_ASSERT(this->dram_size_per_channel() % sizeof(uint32_t) == 0);
+    constexpr uint32_t start_address = 0;
+    const int num_dram_channels = this->num_dram_channels();
+    std::vector<uint32_t> zero_vec(this->dram_size_per_channel() / sizeof(uint32_t), 0);
+    for (int channel = 0; channel < num_dram_channels; ++channel) {
+        detail::WriteToDeviceDRAMChannel(this, channel, start_address, zero_vec);
+    }
+
+    tt::tt_metal::MetalContext::instance().get_cluster().dram_barrier(this->id());
 }
 
 void Device::compile_command_queue_programs() {
@@ -1191,8 +1239,6 @@ bool Device::initialize(
     if (minimal)
         return true;
 
-    // Mark initialized before compiling and sending dispatch kernels to device because compilation expects device to be initialized
-    this->work_executor_->initialize();
     this->initialized_ = true;
     // Clear the entire launch message ring buffer on ethernet cores before application firmware is activated.
     // This is required since ethernet cores context switch between application and routing firmware.
@@ -1202,17 +1248,6 @@ bool Device::initialize(
     this->clear_launch_messages_on_eth_cores();
 
     return true;
-}
-
-void Device::push_work(std::function<void()> work, bool blocking) {
-    if (not this->initialized_) {
-        if (!uninitialized_error_fired_) {
-            log_fatal("Attempting to push work to Device {} which is not initialized. Ignoring...", this->id_);
-            uninitialized_error_fired_ = true;
-        }
-        return;
-    }
-    this->work_executor_->push_work(std::move(work), blocking);
 }
 
 bool Device::close() {
@@ -1229,7 +1264,6 @@ bool Device::close() {
     }
 
     dispatch_firmware_active_ = false;
-    this->work_executor_->reset();
 
     tt_metal::detail::DumpDeviceProfileResults(this, ProfilerDumpState::LAST_CLOSE_DEVICE);
 
@@ -1343,7 +1377,7 @@ CoreCoord Device::compute_with_storage_grid_size() const {
 }
 
 CoreCoord Device::virtual_noc0_coordinate(uint8_t noc_index, CoreCoord coord) const {
-    if (coord.x >= this->grid_size().x || coord.y >= this->grid_size().y) {
+    if (coord.x >= this->grid_size().x || coord.y >= this->grid_size().y || this->arch() == ARCH::BLACKHOLE) {
         // Coordinate already in virtual space: NOC0 and NOC1 are the same
         return coord;
     } else {
@@ -1476,61 +1510,50 @@ bool Device::using_fast_dispatch() const {
 }
 
 void Device::begin_trace(const uint8_t cq_id, const uint32_t tid) {
-    this->push_work(
-        [this, cq_id, tid]() mutable {
-            ZoneScoped;
+    ZoneScoped;
 
-            TracyTTMetalBeginTrace(this->id(), tid);
-            TT_FATAL(
-                !this->command_queues_[cq_id]->tid().has_value(),
-                "CQ {} is already being used for tracing tid {}",
-                (uint32_t)cq_id,
-                tid);
-            this->mark_allocations_safe();
-            // Create an empty trace buffer here. This will get initialized in end_trace
-            auto* active_sub_device_manager = sub_device_manager_tracker_->get_active_sub_device_manager();
-            TT_FATAL(
-                active_sub_device_manager->get_trace(tid) == nullptr,
-                "Trace already exists for tid {} on device {}'s active sub-device manager {}",
-                tid,
-                this->id_,
-                active_sub_device_manager->id());
-            auto& trace_buffer = active_sub_device_manager->create_trace(tid);
-            this->command_queues_[cq_id]->record_begin(tid, trace_buffer->desc);
-        },
-        false /* blocking */);
+    TracyTTMetalBeginTrace(this->id(), tid);
+    TT_FATAL(
+        !this->command_queues_[cq_id]->tid().has_value(),
+        "CQ {} is already being used for tracing tid {}",
+        (uint32_t)cq_id,
+        tid);
+    this->mark_allocations_safe();
+    // Create an empty trace buffer here. This will get initialized in end_trace
+    auto* active_sub_device_manager = sub_device_manager_tracker_->get_active_sub_device_manager();
+    TT_FATAL(
+        active_sub_device_manager->get_trace(tid) == nullptr,
+        "Trace already exists for tid {} on device {}'s active sub-device manager {}",
+        tid,
+        this->id_,
+        active_sub_device_manager->id());
+    auto& trace_buffer = active_sub_device_manager->create_trace(tid);
+    this->command_queues_[cq_id]->record_begin(tid, trace_buffer->desc);
 }
 
 void Device::end_trace(const uint8_t cq_id, const uint32_t tid) {
-    this->push_work(
-        [this, cq_id, tid]() mutable {
-            ZoneScoped;
-            TracyTTMetalEndTrace(this->id(), tid);
-            TT_FATAL(
-                this->command_queues_[cq_id]->tid() == tid,
-                "CQ {} is not being used for tracing tid {}",
-                (uint32_t)cq_id,
-                tid);
-            auto* active_sub_device_manager = sub_device_manager_tracker_->get_active_sub_device_manager();
-            auto trace_buffer = active_sub_device_manager->get_trace(tid);
-            TT_FATAL(
-                trace_buffer != nullptr,
-                "Trace instance {} must exist on device {}'s active sub-device manager {}",
-                tid,
-                this->id_,
-                active_sub_device_manager->id());
-            this->command_queues_[cq_id]->record_end();
+    ZoneScoped;
+    TracyTTMetalEndTrace(this->id(), tid);
+    TT_FATAL(
+        this->command_queues_[cq_id]->tid() == tid, "CQ {} is not being used for tracing tid {}", (uint32_t)cq_id, tid);
+    auto* active_sub_device_manager = sub_device_manager_tracker_->get_active_sub_device_manager();
+    auto trace_buffer = active_sub_device_manager->get_trace(tid);
+    TT_FATAL(
+        trace_buffer != nullptr,
+        "Trace instance {} must exist on device {}'s active sub-device manager {}",
+        tid,
+        this->id_,
+        active_sub_device_manager->id());
+    this->command_queues_[cq_id]->record_end();
 
-            // Capture Trace if light metal trace capturing is enabled.
-            auto& lm_capture_ctx = LightMetalCaptureContext::get();
-            if (lm_capture_ctx.is_tracing()) {
-                lm_capture_ctx.capture_trace_descriptor(*trace_buffer->desc, tid);
-            }
+    // Capture Trace if light metal trace capturing is enabled.
+    auto& lm_capture_ctx = LightMetalCaptureContext::get();
+    if (lm_capture_ctx.is_tracing()) {
+        lm_capture_ctx.capture_trace_descriptor(*trace_buffer->desc, tid);
+    }
 
-            Trace::initialize_buffer(this->command_queue(cq_id), trace_buffer);
-            this->mark_allocations_unsafe();
-        },
-        false /* blocking */);
+    Trace::initialize_buffer(this->command_queue(cq_id), trace_buffer);
+    this->mark_allocations_unsafe();
 }
 
 // Load the TraceDescriptor for a given trace_id to the device. A combination of logic from begin/end_trace.
@@ -1554,41 +1577,33 @@ void Device::load_trace(const uint8_t cq_id, const uint32_t trace_id, const Trac
 void Device::replay_trace(
     const uint8_t cq_id, const uint32_t tid, const bool block_on_device, const bool block_on_worker_thread) {
     // If blocking, ensure that worker thread blocks until trace is completed
-    this->push_work(
-        [this, cq_id, tid, block_on_device]() mutable {
-            ZoneScoped;
-            TracyTTMetalReplayTrace(this->id(), tid);
-            constexpr bool check = false;
-            auto* active_sub_device_manager = sub_device_manager_tracker_->get_active_sub_device_manager();
-            const auto& trace_buffer = active_sub_device_manager->get_trace(tid);
-            TT_FATAL(
-                trace_buffer != nullptr,
-                "Trace instance {} must exist on device {}'s active sub-device manager {}",
-                tid,
-                this->id_,
-                active_sub_device_manager->id());
-            if constexpr (check) {
-                trace_buffer->validate();
-            }
-            EnqueueTrace(this->command_queue(cq_id), tid, block_on_device);
-        },
-        block_on_worker_thread);
+    ZoneScoped;
+    TracyTTMetalReplayTrace(this->id(), tid);
+    constexpr bool check = false;
+    auto* active_sub_device_manager = sub_device_manager_tracker_->get_active_sub_device_manager();
+    const auto& trace_buffer = active_sub_device_manager->get_trace(tid);
+    TT_FATAL(
+        trace_buffer != nullptr,
+        "Trace instance {} must exist on device {}'s active sub-device manager {}",
+        tid,
+        this->id_,
+        active_sub_device_manager->id());
+    if constexpr (check) {
+        trace_buffer->validate();
+    }
+    EnqueueTrace(this->command_queue(cq_id), tid, block_on_device);
 }
 
 void Device::release_trace(const uint32_t tid) {
-    this->push_work(
-        [this, tid]() mutable {
-            ZoneScoped;
-            TracyTTMetalReleaseTrace(this->id(), tid);
+    ZoneScoped;
+    TracyTTMetalReleaseTrace(this->id(), tid);
 
-            sub_device_manager_tracker_->get_active_sub_device_manager()->release_trace(tid);
+    sub_device_manager_tracker_->get_active_sub_device_manager()->release_trace(tid);
 
-            // Only enable allocations once all captured traces are released
-            if (this->trace_buffers_size_ == 0) {
-                this->mark_allocations_safe();
-            }
-        },
-        false /* blocking */);
+    // Only enable allocations once all captured traces are released
+    if (this->trace_buffers_size_ == 0) {
+        this->mark_allocations_safe();
+    }
 }
 
 std::shared_ptr<TraceBuffer> Device::get_trace(uint32_t tid) {
@@ -1620,8 +1635,8 @@ void Device::generate_device_bank_to_noc_tables()
     dram_bank_offset_map_.clear();
     dram_bank_offset_map_.resize(num_dram_banks);
     for (unsigned bank_id = 0; bank_id < num_dram_banks; bank_id++) {
-        dram_noc_coord_per_bank[bank_id] =
-            this->dram_core_from_dram_channel(allocator->get_dram_channel_from_bank_id(bank_id));
+        auto physical_dram_core = this->dram_core_from_dram_channel(allocator->get_dram_channel_from_bank_id(bank_id));
+        dram_noc_coord_per_bank[bank_id] = physical_dram_core;
         dram_bank_offset_map_[bank_id] = allocator->get_bank_offset(BufferType::DRAM, bank_id);
     }
     const size_t num_l1_banks = allocator->get_num_banks(BufferType::L1);
@@ -1639,10 +1654,18 @@ void Device::generate_device_bank_to_noc_tables()
     const auto& hal = MetalContext::instance().hal();
     dram_bank_to_noc_xy_.clear();
     dram_bank_to_noc_xy_.reserve(hal.get_num_nocs() * dram_noc_coord_per_bank.size());
+    bool dram_is_virtualized = hal.get_virtualized_core_types().find(AddressableCoreType::DRAM) !=
+                               hal.get_virtualized_core_types().end();
     for (unsigned int noc = 0; noc < hal.get_num_nocs(); noc++) {
         for (unsigned int bank_id = 0; bank_id < dram_noc_coord_per_bank.size(); bank_id++) {
-            uint16_t noc_x = hal.noc_coordinate(noc, soc_d.grid_size.x, dram_noc_coord_per_bank[bank_id].x);
-            uint16_t noc_y = hal.noc_coordinate(noc, soc_d.grid_size.y, dram_noc_coord_per_bank[bank_id].y);
+            uint16_t noc_x, noc_y;
+            if (dram_is_virtualized) {
+                noc_x = dram_noc_coord_per_bank[bank_id].x;
+                noc_y = dram_noc_coord_per_bank[bank_id].y;
+            } else {
+                noc_x = hal.noc_coordinate(noc, soc_d.grid_size.x, dram_noc_coord_per_bank[bank_id].x);
+                noc_y = hal.noc_coordinate(noc, soc_d.grid_size.y, dram_noc_coord_per_bank[bank_id].y);
+            }
             uint16_t xy = ((noc_y << hal.get_noc_addr_node_id_bits()) | noc_x) << hal.get_noc_coord_reg_offset();
             dram_bank_to_noc_xy_.push_back(xy);
         }
@@ -1741,9 +1764,21 @@ std::vector<CoreCoord> Device::get_optimal_dram_bank_to_logical_worker_assignmen
         uint32_t num_cores_y = compute_with_storage_grid_size.y;
         // Get physical coordinates of DRAM Controller NOC end-points
         uint32_t num_dram_banks = this->num_dram_channels();
+
+        const auto& hal = MetalContext::instance().hal();
+        bool dram_is_virtualized =
+            hal.get_virtualized_core_types().find(AddressableCoreType::DRAM) != hal.get_virtualized_core_types().end();
+        const metal_SocDescriptor& soc_d =
+            tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(this->id());
         std::vector<CoreCoord> dram_phy_coords;
         for (int i = 0; i < num_dram_banks; ++i) {
-            dram_phy_coords.push_back(dram_core_from_dram_channel(i));
+            auto dram_core = dram_core_from_dram_channel(i);
+            if (dram_is_virtualized) {
+                tt::umd::CoreCoord umd_dram_coord = soc_d.translate_coord_to(
+                    tt_xy_pair(dram_core.x, dram_core.y), CoordSystem::TRANSLATED, CoordSystem::PHYSICAL);
+                dram_core = CoreCoord(umd_dram_coord.x, umd_dram_coord.y);
+            }
+            dram_phy_coords.push_back(dram_core);
         }
         // Get all logical cores in the worker grid
         std::vector<CoreCoord> all_worker_cores_logical;
@@ -1790,21 +1825,6 @@ HalProgrammableCoreType Device::get_programmable_core_type(CoreCoord virtual_cor
     }
 
     return HalProgrammableCoreType::IDLE_ETH;
-}
-
-// TODO: Find a better home for this function
-// Extracts all the pairs of noc multicast encodings given a set of core ranges
-std::vector<std::pair<transfer_info_cores, uint32_t>> Device::extract_dst_noc_multicast_info(const std::vector<CoreRange>& ranges, const CoreType core_type) {
-    std::vector<std::pair<transfer_info_cores, uint32_t>> dst_noc_multicast_info;
-    dst_noc_multicast_info.reserve(ranges.size());
-    for (const CoreRange& core_range : ranges) {
-        CoreCoord virtual_start = this->virtual_core_from_logical_core(core_range.start_coord, core_type);
-        CoreCoord virtual_end = this->virtual_core_from_logical_core(core_range.end_coord, core_type);
-
-        uint32_t num_receivers = core_range.size();
-        dst_noc_multicast_info.push_back(std::make_pair(CoreRange(virtual_start, virtual_end), num_receivers));
-    }
-    return dst_noc_multicast_info;
 }
 
 std::shared_ptr<distributed::MeshDevice> Device::get_mesh_device() { return mesh_device.lock(); }

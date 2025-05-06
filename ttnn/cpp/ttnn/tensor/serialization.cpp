@@ -11,6 +11,8 @@
 
 #include <flatbuffers/flatbuffers.h>
 
+#include <tt_stl/overloaded.hpp>
+
 #include "ttnn/tensor/host_buffer/functions.hpp"
 #include "ttnn/tensor/storage.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
@@ -286,25 +288,24 @@ void dump_tensor(
     auto storage_type = tensor.storage_type();
     safe_fwrite(&storage_type, sizeof(storage_type), 1, output_file);
 
-    bool is_on_device = is_tensor_on_device_or_multidevice(tensor);
+    bool is_on_device = is_device_tensor(tensor);
     Tensor tensor_to_dump = tensor;
     if (is_on_device) {
         tensor_to_dump = tensor_to_dump.cpu();
     }
 
     std::visit(
-        [output_file, &strategy, dtype = tensor.get_dtype()](const auto& storage) {
-            using StorageType = std::decay_t<decltype(storage)>;
-            if constexpr (std::is_same_v<StorageType, HostStorage>) {
+        tt::stl::overloaded{
+            [output_file, dtype = tensor.get_dtype()](const HostStorage& storage) {
                 dump_host_storage(output_file, storage, dtype);
-            } else if constexpr (std::is_same_v<StorageType, DeviceStorage>) {
+            },
+            [output_file, dtype = tensor.get_dtype()](const DeviceStorage& storage) {
                 TT_THROW("Device storage isn't supported");
-            } else if constexpr (std::is_same_v<StorageType, MultiDeviceHostStorage>) {
+            },
+            [output_file, &strategy, dtype = tensor.get_dtype()](const MultiDeviceHostStorage& storage) {
                 auto distribute_config = get_distributed_tensor_config(strategy);
                 dump_multi_device_host_storage(output_file, storage, distribute_config, dtype);
-            } else {
-                raise_unsupported_storage<StorageType>();
-            }
+            },
         },
         tensor_to_dump.get_storage());
 }

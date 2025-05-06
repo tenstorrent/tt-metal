@@ -61,7 +61,7 @@ def test_mixtral_model_inference_CI(t3k_mesh_device, use_program_cache, reset_se
             ref_out_file
         ), f"Reference output file not found: {ref_out_file}. Please set the flag 'MIXTRAL_REF_OUTPUT_PATH' correctly."
 
-    model_args = TtModelArgs(t3k_mesh_device.get_device(0))
+    model_args = TtModelArgs(t3k_mesh_device)
     model_args = set_model_args(model_args, seq_len)
     model_args.n_layers = n_layers
 

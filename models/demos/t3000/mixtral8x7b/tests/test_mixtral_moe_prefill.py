@@ -33,7 +33,7 @@ def test_mixtral_moe_inference(t3k_mesh_device, use_program_cache, reset_seeds, 
     iterations = 1
     dtype = ttnn.bfloat8_b
 
-    model_args = TtModelArgs(t3k_mesh_device.get_device(0))
+    model_args = TtModelArgs(t3k_mesh_device)
     state_dict = model_args.load_state_dict()
     batch = 1
 

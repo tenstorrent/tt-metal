@@ -103,6 +103,30 @@ run_t3000_llama3_vision_tests() {
   fi
 }
 
+run_t3000_llama3_90b_vision_tests() {
+  # Record the start time
+  fail=0
+  start_time=$(date +%s)
+
+  echo "LOG_METAL: Running run_t3000_llama3_90b_vision_tests"
+
+  wh_arch_yaml=wormhole_b0_80_arch_eth_dispatch.yaml
+  # Llama3.2-90B
+  llama90b=/mnt/MLPerf/tt_dnn-models/llama/Llama3.2-90B-Vision-Instruct
+  mesh_device=T3K
+
+  MESH_DEVICE=$mesh_device LLAMA_DIR=$llama90b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/demo/simple_vision_demo.py -k "batch1-notrace" --timeout 900; fail+=$?
+  echo "LOG_METAL: Llama3.2-90B vision tests for $mesh_device completed"
+
+  # Record the end time
+  end_time=$(date +%s)
+  duration=$((end_time - start_time))
+  echo "LOG_METAL: run_t3000_llama3_90b_vision_tests $duration seconds to complete"
+  if [[ $fail -ne 0 ]]; then
+    exit 1
+  fi
+}
+
 run_t3000_falcon7b_tests(){
   # Record the start time
   fail=0
@@ -120,6 +144,17 @@ run_t3000_falcon7b_tests(){
   if [[ $fail -ne 0 ]]; then
     exit 1
   fi
+}
+
+run_t3000_mistral_tests() {
+
+  echo "LOG_METAL: Running run_t3000_mistral_demo_tests"
+
+  wh_arch_yaml=wormhole_b0_80_arch_eth_dispatch.yaml
+  tt_cache_path="/mnt/MLPerf/tt_dnn-models/Mistral/TT_CACHE/Mistral-7B-Instruct-v0.3"
+  hf_model="/mnt/MLPerf/tt_dnn-models/Mistral/hub/models--mistralai--Mistral-7B-Instruct-v0.3/snapshots/e0bc86c23ce5aae1db576c8cca6f06f1f73af2db"
+  WH_ARCH_YAML=$wh_arch_yaml TT_CACHE_PATH=$tt_cache_path HF_MODEL=$hf_model pytest models/tt_transformers/demo/simple_text_demo.py --timeout 10800
+
 }
 
 run_t3000_mixtral_tests() {
@@ -161,13 +196,45 @@ run_t3000_resnet50_tests() {
   fi
 }
 
+run_t3000_llama3_load_checkpoints_tests() {
+  # Record the start time
+  fail=0
+  start_time=$(date +%s)
+
+  echo "LOG_METAL: Running run_t3000_load_checkpoints_tests"
+
+  wh_arch_yaml=wormhole_b0_80_arch_eth_dispatch.yaml
+  # Llama3.1-70B weights
+  llama70b=/mnt/MLPerf/tt_dnn-models/llama/Llama3.1-70B-Instruct/original_weights/
+  # Llama3.2-90B weights
+  llama90b=/mnt/MLPerf/tt_dnn-models/llama/Llama3.2-90B-Vision-Instruct/
+
+  for llama_dir in "$llama70b" "$llama90b"; do
+    LLAMA_DIR=$llama_dir WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/tests/test_load_checkpoints.py --timeout=600; fail+=$?
+    echo "LOG_METAL: Llama3 load checkpoints tests for $llama_dir completed"
+  done
+
+  # Record the end time
+  end_time=$(date +%s)
+  duration=$((end_time - start_time))
+  echo "LOG_METAL: run_t3000_load_checkpoints_tests $duration seconds to complete"
+  if [[ $fail -ne 0 ]]; then
+    exit 1
+  fi
+}
+
 run_t3000_tests() {
+  # Run llama3 load checkpoints tests
+  run_t3000_llama3_load_checkpoints_tests
 
   # Run llama3 smaller tests (1B, 3B, 8B, 11B)
   run_t3000_llama3_tests
 
   # Run llama3 vision tests
   run_t3000_llama3_vision_tests
+
+  # Run llama3_90b vision tests
+  run_t3000_llama3_90b_vision_tests
 
   # Run llama3_70b tests
   run_t3000_llama3_70b_tests
@@ -177,6 +244,9 @@ run_t3000_tests() {
 
   # Run falcon7b tests
   run_t3000_falcon7b_tests
+
+  # Run mistral tests
+  run_t3000_mistral_tests
 
   # Run mixtral tests
   run_t3000_mixtral_tests

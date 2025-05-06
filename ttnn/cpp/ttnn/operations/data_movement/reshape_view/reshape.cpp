@@ -309,7 +309,7 @@ ttnn::Tensor ReshapeViewOperation::invoke(
     }
     TT_FATAL(logical_shape.volume() != 0, "Tensor volume is not 0, but shape volume is 0");
 
-    if (!is_tensor_on_device_or_multidevice(tensor)) {
+    if (!is_device_tensor(tensor)) {
         // This case has been allowed in the past though it means introducing padding values to the data
         return ttnn::experimental::view(tensor, logical_shape, padded_shape);
     }

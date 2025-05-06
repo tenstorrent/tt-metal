@@ -34,11 +34,15 @@ This configuration uses bfp4 MLP FF1+FF3 for all models. **Batch_size=1 (per DP 
 | Llama3.1-70B   | T3K        | 97        | 100       | 16.3          | 182       |
 | Llama3.1-70B   | TG         | 95        | 100       | 12.7          |           |
 | Llama3.1-70B   | TG   (DP=4)|           |           | 14.8          | 189       |
+| Llama3.2-90B   | T3K        | 87        | 99        | 6             | 5535      |
 | Qwen2.5-7B     | N300       | 80        | 96        | 37.9          |           |
 | Qwen2.5-72B    | T3K        | 98        | 100       | 12.8          |           |
 | Phi3.5-mini    | N150       |           |           | 43.2          | 98        |
 | Phi3.5-mini    | N300       |           |           | 57.8          | 62        |
 | Phi3.5-mini    | T3K        |           |           | 48.8          | 51        |
+| Mistral-7B                  | N150       | 91        | 98        | 29.75         | 100.24    |
+| Mistral-7B                  | N300       | 91        | 98        | 47.01         | 65.95     |
+| Mistral-7B                  | T3K        | 91        | 98        | 67.82         | 53.93     |
 
 
 ## Accuracy
@@ -64,11 +68,15 @@ This configuration uses bfp4 MLP FF1+FF3 only for the 3.1-70B model and the Qwen
 | Llama3.2-11B   | TG     | 88        | 100       | 29.5          |           |
 | Llama3.1-70B   | T3K    | 98        | 100       | 14.1          | 210       |
 | Llama3.1-70B   | TG     | 95        | 100       | 12.7          |           |
+| Llama3.2-90B   | T3K    | 97        | 100       | 6             | 5600      |
 | Qwen2.5-7B     | N300   | 80        | 96        | 33.4          |           |
 | Qwen2.5-72B    | T3K    | 99        | 100       | 12.8          |           |
 | Phi3.5-mini    | N150   |           |           | 38.8          | 92        |
 | Phi3.5-mini    | N300   |           |           | 53.9          | 63        |
 | Phi3.5-mini    | T3K    |           |           | 48.6          | 53        |
+| Mistral-7B                  | N150   | 91        | 98        | 29.75         | 100.24    |
+| Mistral-7B                  | N300   | 91        | 98        | 47.01         | 65.95     |
+| Mistral-7B                  | T3K    | 91        | 98        | 67.82         | 53.93     |
 
 ##  Long-context (64K Tokens)
 

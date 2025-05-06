@@ -198,8 +198,10 @@ inline uint32_t get_estimated_size_of_cbs(
         in0_shard_width_in_tiles = in0_buffer->shard_spec().shape()[1] / in0_tile.get_tile_shape()[1];
     }
     in2_block_tiles = per_core_M * in0_shard_width_in_tiles;
-    uint32_t in0_size = per_core_M * in0_block_w * 2 * in0_single_tile_size;
-    uint32_t in1_size = per_core_N * in0_block_w * 2 * in1_single_tile_size;
+
+    // Calculate individual buffer sizes in bytes - use constant for buffering depth
+    uint32_t in0_size = per_core_M * in0_block_w * MCAST_INPUT_BUFFERING_DEPTH * in0_single_tile_size;
+    uint32_t in1_size = per_core_N * in0_block_w * MCAST_INPUT_BUFFERING_DEPTH * in1_single_tile_size;
     uint32_t out_size = per_core_M * per_core_N * output_single_tile_size;
     uint32_t in2_size = in2_block_tiles * in0_single_tile_size;
     uint32_t interm_size = per_core_M * per_core_N * interm_single_tile_size;
@@ -1127,7 +1129,6 @@ inline MatmulProgramConfig get_program_config(
             using ProgramConfigType = std::decay_t<decltype(program_config)>;
             if constexpr (
                 not std::is_same_v<ProgramConfigType, MatmulMultiCoreProgramConfig> and
-                not std::is_same_v<ProgramConfigType, MatmulMultiCoreNonOptimizedReuseProgramConfig> and
                 not std::is_same_v<ProgramConfigType, MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig>) {
                 TT_FATAL(
                     program_config.compute_with_storage_grid_size.x <=
@@ -1474,10 +1475,10 @@ void Matmul::validate(
 
     TT_FATAL(optional_input_tensors.size() == 1, "Error");
 
+    const auto output_tensor_spec = this->compute_output_specs(input_tensors, {}, optional_input_tensors).at(0);
     if (is_optional_output_tensor) {
         const auto& optional_output_tensor_c = optional_output_tensors.at(0);
         const auto& optional_output_tensor_shape = optional_output_tensor_c->get_logical_shape();
-        const auto output_tensor_spec = this->compute_output_specs(input_tensors, {}, optional_input_tensors).at(0);
         TT_FATAL(
             optional_output_tensor_shape == output_tensor_spec.logical_shape(),
             "Shape of Optional Output Tensor {} doesnt match Output Tensor {}",
@@ -1494,6 +1495,25 @@ void Matmul::validate(
             "tensor {}",
             optional_output_tensor_c->memory_config(),
             this->output_mem_config);
+    } else {
+        TT_FATAL(
+            output_tensor_spec.memory_config().memory_layout == this->output_mem_config.memory_layout,
+            "Mismatch between computed {} and provided {} mem config memory layout",
+            output_tensor_spec.memory_config().memory_layout,
+            this->output_mem_config.memory_layout);
+        TT_FATAL(
+            output_tensor_spec.memory_config().buffer_type == this->output_mem_config.buffer_type,
+            "Mismatch between computed {} and provided {} mem config buffer type",
+            output_tensor_spec.memory_config().buffer_type,
+            this->output_mem_config.buffer_type);
+        if (this->output_mem_config.shard_spec.has_value() &&
+            output_tensor_spec.memory_config() != this->output_mem_config) {
+            log_warning(
+                tt::LogOp,
+                "Mismatch between computed {} and provided {} mem config. Using computed config.",
+                output_tensor_spec.memory_config(),
+                this->output_mem_config);
+        }
     }
 
     TT_FATAL(this->bcast_batch.has_value(), "Error: bcast_batch field should have been automatically populated");
@@ -2411,15 +2431,6 @@ operation::CacheableMeshWorkload<std::vector<Tensor>> Matmul::create_mesh_worklo
                         std::move(dram_sharded_mm_program.override_runtime_arguments_callback.value());
                 }
                 return {.workload = std::move(dram_sharded_mm_workload), .per_program_callbacks = std::move(callbacks)};
-
-            } else if constexpr (std::is_same_v<ProgramConfigType, MatmulMultiCoreNonOptimizedReuseProgramConfig>) {
-                TT_FATAL(
-                    !bias.has_value(),
-                    "Bias is not supported for matmul multi core non-optimized "
-                    "reuse");
-                auto multicore_mm_program =
-                    matmul_multi_core_reuse(input_tensor_a, input_tensor_b, output_tensor, broadcast_batch);
-                return create_homogenous_mesh_workload(multicore_mm_program, tensor_coords);
 
             } else if constexpr (std::is_same_v<ProgramConfigType, MatmulMultiCoreProgramConfig>) {
                 TT_FATAL(!bias.has_value(), "Bias is not supported for matmul multi core");

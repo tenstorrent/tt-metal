@@ -52,7 +52,7 @@ def test_mixtral_model_inference(
     running_top5 = 0
     inputs_file = "models/demos/t3000/mixtral8x7b/demo/input_data.json"
 
-    model_args = TtModelArgs(t3k_mesh_device.get_device(0), max_batch_size=batch, max_seq_len=max_seq_len)
+    model_args = TtModelArgs(t3k_mesh_device, max_batch_size=batch, max_seq_len=max_seq_len)
     state_dict = model_args.load_state_dict()
     tokenizer = Tokenizer(model_args.tokenizer_path)
 

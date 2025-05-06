@@ -56,7 +56,7 @@ inline Tensor prod_nc(const Tensor& temp, int64_t dim, const MemoryConfig& outpu
         input_shape[3]};
 
     auto ttnn_shape = ttnn::Shape(required);
-    auto ttnn_device = formatted_input_tensor.device();
+    auto ttnn_device = formatted_input_tensor.mesh_device();
 
     return tt::operations::primary::prod_nc(
         formatted_input_tensor,
@@ -64,7 +64,7 @@ inline Tensor prod_nc(const Tensor& temp, int64_t dim, const MemoryConfig& outpu
             ttnn_shape,
             formatted_input_tensor.get_dtype(),
             formatted_input_tensor.get_layout(),
-            std::optional<std::reference_wrapper<tt::tt_metal::IDevice>>(*ttnn_device),
+            *ttnn_device,
             output_mem_config),
         dimension,
         output_mem_config);

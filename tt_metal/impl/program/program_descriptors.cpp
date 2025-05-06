@@ -17,17 +17,4 @@ uint32_t ProgramDescriptor::add_semaphore(CoreRangeSet core_ranges, uint32_t ini
     return semaphores.size() - 1;
 }
 
-void KernelDescriptor::reserve_runtime_args() {
-    size_t max_x = 0;
-    size_t max_y = 0;
-    for (const auto& core_range : core_ranges.ranges()) {
-        max_x = std::max(max_x, core_range.end_coord.x + 1);
-        max_y = std::max(max_y, core_range.end_coord.y + 1);
-    }
-    runtime_args.resize(max_x);
-    for (auto& runtime_args_col : runtime_args) {
-        runtime_args_col.resize(max_y);
-    }
-}
-
 }  // namespace tt::tt_metal
