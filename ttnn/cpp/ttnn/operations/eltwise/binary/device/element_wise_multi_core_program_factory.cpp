@@ -168,7 +168,7 @@ BinaryDeviceOperation::ElementWiseMultiCore::cached_program_t BinaryDeviceOperat
         (block_or_width_sharded and not out_sharded)
             ? "ttnn/cpp/ttnn/operations/data_movement/sharded/device/kernels/dataflow/"
               "writer_unary_sharded_blocks_interleaved_start_id.cpp"
-            : "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_row_major.cpp",
+            : "ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/dataflow/writer_row_major.cpp",
         all_device_cores,
         tt_metal::WriterDataMovementConfig(writer_compile_time_args, writer_defines));
 
