@@ -25,7 +25,8 @@ target_link_libraries(
         Metalium::Metal::Impl
         Metalium::Metal::LLRT
         TT::Metalium::HostDevCommon
-        Boost::mpi
         ${MPI_CXX_LIBRARIES}
+        Boost::mpi
+        Boost::serialization
 )
 target_include_directories(distributed PRIVATE ${MPI_INCLUDE_PATH})

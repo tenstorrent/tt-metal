@@ -28,7 +28,8 @@ CPMAddPackage(
         "BOOST_ENABLE_CMAKE ON"
         "BOOST_SKIP_INSTALL_RULES ON"
         "BUILD_SHARED_LIBS OFF"
-        "BOOST_INCLUDE_LIBRARIES core\\\;container\\\;smart_ptr\\\;interprocess\\\;asio\\\;lockfree\\\;mpi"
+        "BOOST_ENABLE_MPI ON"
+        "BOOST_INCLUDE_LIBRARIES core\\\;container\\\;smart_ptr\\\;interprocess\\\;asio\\\;lockfree\\\;mpi\\\;serialization"
     FIND_PACKAGE_ARGUMENTS "CONFIG REQUIRED"
 )
 
@@ -40,6 +41,7 @@ ensureboosttarget(container)
 ensureboosttarget(smart_ptr)
 ensureboosttarget(interprocess)
 ensureboosttarget(mpi)
+ensureboosttarget(serialization)
 
 add_library(span INTERFACE)
 target_link_libraries(
