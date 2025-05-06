@@ -212,6 +212,7 @@ void CumSumDeviceOperation::SingleCore::override_runtime_arguments(
 
     const auto& input_dtype = input_tensor.get_dtype();
 
+    // Support for override_runtime_arguments() will be added in resolution of issue #21097
     TT_THROW("override_runtime_arguments() not yet supported");
 }
 
