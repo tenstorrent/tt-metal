@@ -1080,6 +1080,7 @@ bool check_dateline(
 std::unique_ptr<Program> create_and_compile_tt_fabric_program(IDevice* device, FabricConfig fabric_config) {
     using namespace tt_fabric;
     std::unique_ptr<Program> fabric_program_ptr;
+    tt::tt_metal::MetalContext::instance().rtoptions().set_erisc_iram_enabled(true);
     auto control_plane = tt::tt_metal::MetalContext::instance().get_cluster().get_control_plane();
     std::pair<mesh_id_t, chip_id_t> mesh_chip_id = control_plane->get_mesh_chip_id_from_physical_chip_id(device->id());
     auto mesh_shape = control_plane->get_physical_mesh_shape(mesh_chip_id.first);
