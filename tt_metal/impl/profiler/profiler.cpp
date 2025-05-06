@@ -160,8 +160,7 @@ void write_control_buffer_to_core(
                 mesh_cq.enqueue_write_shard_to_core(
                     address, control_buffer.data(), kernel_profiler::PROFILER_L1_CONTROL_BUFFER_SIZE, true);
             } else {
-                tt::llrt::write_hex_vec_to_core(
-                    device->id(), core, control_buffer, reinterpret_cast<DeviceAddr>(profiler_msg->control_vector));
+                write_control_buffer_to_core_slow_dispatch(device, core, core_type, control_buffer);
             }
         } else {
             dynamic_cast<HWCommandQueue&>(device->command_queue())
@@ -173,8 +172,7 @@ void write_control_buffer_to_core(
                     true);
         }
     } else {
-        tt::llrt::write_hex_vec_to_core(
-            device->id(), core, control_buffer, reinterpret_cast<uint64_t>(profiler_msg->control_vector));
+        write_control_buffer_to_core_slow_dispatch(device, core, core_type, control_buffer);
     }
 }
 HalProgrammableCoreType get_core_type(chip_id_t device_id, const CoreCoord& core) {
