@@ -83,9 +83,10 @@ CumSumDeviceOperation::invoke(
     const Tensor& input_tensor,
     int64_t dim,
     std::optional<ttnn::DataType> dtype,
-    std::optional<Tensor> preallocated_output) {
+    std::optional<Tensor> preallocated_output,
+    std::optional<bool> flip) {
     return {
-        operation_attributes_t{.dim = dim, .dtype = dtype.value_or(input_tensor.dtype())},
+        operation_attributes_t{.dim = dim, .flip = flip.value_or(false), .dtype = dtype.value_or(input_tensor.dtype())},
         tensor_args_t{.input_tensor = input_tensor, .preallocated_output = std::move(preallocated_output)}};
 }
 

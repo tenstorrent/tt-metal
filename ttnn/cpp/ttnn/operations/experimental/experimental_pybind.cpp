@@ -110,6 +110,7 @@ void py_module(py::module& module) {
     reduction::sort::detail::bind_reduction_sort_operation(module);
 
     reduction::detail::bind_cumsum_operation(module);
+    reduction::detail::bind_cumsum_bw_operation(module);
 
     gather::detail::bind_gather_operation(module);
 

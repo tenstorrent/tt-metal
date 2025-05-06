@@ -100,4 +100,22 @@ void bind_cumsum_operation(py::module& module) {
             py::arg("queueId") = DefaultQueueId});
 }
 
+void bind_cumsum_bw_operation(py::module& module) {
+    auto docstring = "Returns backward cumulative sum of `input` along dimension `dim`";
+
+    using OperationType = decltype(ttnn::experimental::cumsum_bw);
+    bind_registered_operation(
+        module,
+        ttnn::experimental::cumsum_bw,
+        docstring,
+        ttnn::pybind_overload_t{
+            [](const OperationType& self,
+               const ttnn::Tensor& input_tensor,
+               const int64_t dim,
+               std::optional<tt::tt_metal::DataType>& dtype,
+               std::optional<Tensor> preallocated_tensor,
+               QueueId queue_id) { return self(queue_id, input_tensor, dim, dtype, preallocated_tensor); },
+        });
+}
+
 }  // namespace ttnn::operations::experimental::reduction::detail
