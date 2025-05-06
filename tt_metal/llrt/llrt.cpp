@@ -91,6 +91,12 @@ std::vector<uint32_t> read_hex_vec_from_core(chip_id_t chip, const CoreCoord &co
     return read_hex_vec;
 }
 
+std::vector<uint32_t> dma_read_hex_vec_from_core(chip_id_t chip, const CoreCoord& core, uint64_t addr, uint32_t size) {
+    std::vector<uint32_t> data;
+    tt::tt_metal::MetalContext::instance().get_cluster().dma_read_core(data, size, tt_cxy_pair(chip, core), addr);
+    return data;
+}
+
 CoreCoord logical_core_from_ethernet_core(chip_id_t chip_id, const CoreCoord &ethernet_core) {
     return tt::tt_metal::MetalContext::instance().get_cluster().get_logical_ethernet_core_from_virtual(
         chip_id, ethernet_core);
