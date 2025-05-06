@@ -10,25 +10,20 @@ constexpr uint32_t TILE_SIZE = 1024;
 
 void kernel_main() {
     // Read parameters from the kernel arguments
-    uint32_t a_addr = get_arg_val<uint32_t>(0);
-    uint32_t b_addr = get_arg_val<uint32_t>(1);
-    uint32_t n_rows = get_arg_val<uint32_t>(2);
-    uint32_t start_row_id = get_arg_val<uint32_t>(3);
-    uint32_t row_size = get_arg_val<uint32_t>(4);
+    uint32_t c_addr = get_arg_val<uint32_t>(0);
+    uint32_t n_rows = get_arg_val<uint32_t>(1);
+    uint32_t start_row_id = get_arg_val<uint32_t>(2);
+    uint32_t row_size = get_arg_val<uint32_t>(3);
 
     constexpr uint32_t datum_size_bytes = 2;
 
-    // The circular buffers to read the tiles into
-    constexpr uint32_t cb_in0 = get_compile_time_arg_val(0);
-    constexpr uint32_t cb_in1 = get_compile_time_arg_val(1);
+    // The circular buffer to write the results into
+    constexpr uint32_t cb_out0 = tt::CBIndex::c_3;
 
-    const uint32_t tile_size_bytes = get_tile_size(cb_in0);
+    const uint32_t tile_size_bytes = get_tile_size(cb_out0);
 
-    const InterleavedAddrGen<true> a = {
-        .bank_base_address = a_addr, .page_size = datum_size_bytes * row_size};
-
-    const InterleavedAddrGen<true> b = {
-        .bank_base_address = b_addr, .page_size = datum_size_bytes * row_size};
+    const InterleavedAddrGen<true> c = {
+        .bank_base_address = c_addr, .page_size = datum_size_bytes * row_size};
 
     // Calculate the range of rows this core should process
     const uint32_t end_row_id = start_tile_id + n_rows;
@@ -39,22 +34,16 @@ void kernel_main() {
     for (uint32_t i = start_row_id; i < end_row_id; i++) {
         uint32_t offset = 0;
         for (uint32_t j = 0; j < num_tiles_per_row; ++j) {
-            uint64_t a_noc_addr = get_noc_addr(i, a, offset);
-            uint64_t b_noc_addr = get_noc_addr(i, b, offset);
+            uint64_t c_noc_addr = get_noc_addr(i, c, offset);
 
-            cb_wait_front(cb_in0, 1);
-            uint32_t cb_in0_addr = get_write_ptr(cb_in0);
-            cb_wait_front(cb_in1, 1);
-            uint32_t cb_in1_addr = get_write_ptr(cb_in1);
+            cb_wait_front(cb_out0, 1);
+            uint32_t cb_out0_addr = get_write_ptr(cb_out0);
 
             uint32_t bytes_to_write = min(TILE_SIZE * datum_size_bytes, row_size * datum_size_bytes - offset);
-	        noc_async_write(cb_in0_addr, a_noc_addr, bytes_to_write);
-	        noc_async_write(cb_in1_addr, b_noc_addr, bytes_to_write);
-
+            noc_async_write(cb_out0_addr, c_noc_addr, bytes_to_write);
             noc_async_write_barrier();
 
-            cb_pop_front(cb_in0, 1);
-            cb_pop_front(cb_in1, 1);
+            cb_pop_front(cb_out0, 1);
 
             offset += bytes_to_write;
 	    }

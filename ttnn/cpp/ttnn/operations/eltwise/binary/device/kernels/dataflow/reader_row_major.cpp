@@ -19,8 +19,8 @@ void kernel_main() {
     constexpr uint32_t datum_size_bytes = 2;
 
     // The circular buffers to read the tiles into
-    constexpr uint32_t cb_in0 = get_compile_time_arg_val(0);
-    constexpr uint32_t cb_in1 = get_compile_time_arg_val(1);
+    constexpr uint32_t cb_in0 = tt::CBIndex::c_0;
+    constexpr uint32_t cb_in1 = tt::CBIndex::c_1;
 
     const uint32_t tile_size_bytes = get_tile_size(cb_in0);
 
