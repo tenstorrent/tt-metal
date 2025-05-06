@@ -186,9 +186,13 @@ uint32_t LightMetalCaptureContext::get_global_id(const CBHandle handle) {
     }
 }
 
+// TODO: add new mesh objects
+
 ////////////////////////////////////////////
 // Non-Class Helper Functions             //
 ////////////////////////////////////////////
+
+// TODO: (jjiang) - may need to specially to_flatbuffer the mesh_event, mesh_coord, mesh_coordrange as well
 
 // Serialize tt-metal traceDescriptor and trace_id to flatbuffer format.
 TraceDescriptorByTraceIdOffset to_flatbuffer(

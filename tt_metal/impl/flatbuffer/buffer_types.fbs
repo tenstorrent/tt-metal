@@ -66,7 +66,7 @@ table ShardedBufferConfig {
     // Orientation of the shards in a mesh.
     shard_orientation: ShardOrientation = RowMajor;
 
-//TODO:
+//TODO: (jjiang) - these probably need to be implemented in lightmetal_capture as helpers along with all the other buffer stuff
 //uint32_t ShardedBufferConfig::compute_datum_size_bytes() const {
 //    return global_size / (global_buffer_shape.height() * global_buffer_shape.width());
 //}
@@ -82,6 +82,8 @@ table ShardedBufferConfig {
 //}
 }
 
+//jjiang:
+//TODO: createmeshbuffer in lightmetal_capture.cpp
 //TODO: delete  DeviceAddr page_size = 0 field?
 table DeviceLocalBufferConfig {
     page_size: uint64 = 0;
@@ -96,11 +98,11 @@ table DeviceLocalBufferConfig {
     // The direction in which memory for this buffer is allocated.
     bottom_up: BoolOptional;
 }
-
+//TODO: (jjiang) - createmeshbuffer in lightmetal_capture.cpp
 struct ReplicatedBufferConfig {
     size: uint64 = 0;
 }
-
+//TODO: (jjiang) - createmeshbuffer in lightmetal_capture.cpp
 union MeshBufferConfig {
   ShardedBufferConfig,
   ReplicatedBufferConfig

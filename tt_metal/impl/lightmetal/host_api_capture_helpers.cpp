@@ -63,6 +63,8 @@ void CaptureCommand(tt::tt_metal::flatbuffer::CommandType cmd_type, ::flatbuffer
 }
 }  // namespace
 
+// TODO: (jjiang) Add new captures for mesh
+
 void CaptureReplayTrace(IDevice* /*device*/, uint8_t cq_id, uint32_t trace_id, bool blocking) {
     auto& ctx = LightMetalCaptureContext::get();
     log_debug(tt::LogMetalTrace, "{}: cq_id: {} trace_id: {} blocking: {}", __FUNCTION__, cq_id, trace_id, blocking);
@@ -90,6 +92,8 @@ void CaptureReleaseTrace(IDevice* /*device*/, uint32_t trace_id) {
     auto cmd = tt::tt_metal::flatbuffer::CreateReleaseTraceCommand(ctx.get_builder(), trace_id);
     CaptureCommand(tt::tt_metal::flatbuffer::CommandType::ReleaseTraceCommand, cmd.Union());
 }
+
+// TODO: (jjiang) Add new mesh apis
 
 void CaptureBufferCreate(
     const std::shared_ptr<Buffer>& buffer,

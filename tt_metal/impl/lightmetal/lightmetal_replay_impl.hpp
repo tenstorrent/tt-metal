@@ -166,9 +166,11 @@ private:
     tt::tt_metal::IDevice* device_ = nullptr;
 
     // Object maps for storing objects by global_id
+    // TODO: (jjiang) - Access these with the translation tables from capture, use them in impl
     std::unordered_map<uint32_t, tt::tt_metal::distributed::MeshTraceId> mesh_trace_ids_;
     std::unordered_map<uint32_t, std::shared_ptr<tt::tt_metal::distributed::MeshBuffer>> mesh_buffer_map_;
     std::unordered_map<uint32_t, std::shared_ptr<tt::tt_metal::distributed::MeshWorkload>> mesh_workload_map_;
+
     std::unordered_map<uint32_t, std::shared_ptr<::tt::tt_metal::Buffer>> buffer_map_;
     std::unordered_map<uint32_t, std::shared_ptr<::tt::tt_metal::Program>> program_map_;
     std::unordered_map<uint32_t, tt::tt_metal::KernelHandle> kernel_handle_map_;
