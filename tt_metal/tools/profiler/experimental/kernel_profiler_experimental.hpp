@@ -148,18 +148,16 @@ __attribute__((noinline)) void init_profiler(
     stackSize = 0;
 
 #if defined(COMPILE_FOR_ERISC) || defined(COMPILE_FOR_IDLE_ERISC) || defined(COMPILE_FOR_BRISC)
-    uint32_t runCounter = profiler_control_buffer[RUN_COUNTER];
     profiler_control_buffer[PROFILER_DONE] = 0;
-    if (runCounter == 0) {
-        for (uint32_t riscID = 0; riscID < PROFILER_RISC_COUNT; riscID++) {
-            for (uint32_t i = ID_HH; i < GUARANTEED_MARKER_1_H; i++) {
-                profiler_data_buffer[riscID][i] = 0;
-            }
-        }
 
-        profiler_control_buffer[NOC_X] = my_x[0];
-        profiler_control_buffer[NOC_Y] = my_y[0];
+    for (uint32_t riscID = 0; riscID < PROFILER_RISC_COUNT; riscID++) {
+        for (uint32_t i = ID_HH; i < GUARANTEED_MARKER_1_H; i++) {
+            profiler_data_buffer[riscID][i] = 0;
+        }
     }
+
+    profiler_control_buffer[NOC_X] = my_x[0];
+    profiler_control_buffer[NOC_Y] = my_y[0];
 
     for (uint32_t riscID = 0; riscID < PROFILER_RISC_COUNT; riscID++) {
         for (uint32_t i = GUARANTEED_MARKER_1_H; i < CUSTOM_MARKERS; i++) {
@@ -225,7 +223,7 @@ inline __attribute__((always_inline)) void risc_finished_profiling() {
     profiler_control_buffer[DEVICE_BUFFER_END_INDEX_BR_ER + myRiscID] = wIndex;
 }
 
-template <bool RECORD_ZONE = true>
+template <bool RECORD_ZONE = false>
 __attribute__((noinline)) void finish_profiler() {
     if constexpr (RECORD_ZONE) {
         SrcLocNameToHash("PROFILER-DRAM-PUSH");
@@ -237,22 +235,30 @@ __attribute__((noinline)) void finish_profiler() {
     }
     risc_finished_profiling();
     profiler_control_buffer[PROFILER_DONE] = 1;
-#if !defined(COMPILE_FOR_TRISC)
-#if defined(COMPILE_FOR_ERISC) || defined(COMPILE_FOR_IDLE_ERISC) || defined(COMPILE_FOR_BRISC)
-    NocDestinationStateSaver noc_state;
-    for (uint32_t riscID = 0; riscID < PROFILER_RISC_COUNT; riscID++)
-#elif defined(DISPATCH_KERNEL)
-    NocDestinationStateSaver noc_state;
-    uint32_t riscID = myRiscID;
+#if defined(COMPILE_FOR_TRISC) || defined(COMPILE_FOR_NCRISC)
+    return;
+#else
+
+// Dispatch core might get to finish
+#if defined(DISPATCH_KERNEL)
+    while (!noc_cmd_buf_ready(noc_index, write_cmd_buf));
     core_flat_id = profiler_control_buffer[FLAT_ID];
     profiler_core_count_per_dram = profiler_control_buffer[CORE_COUNT_PER_DRAM];
     dram_buffer_page_size = PROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC * MAX_RISCV_PER_CORE * profiler_core_count_per_dram;
+
     profiler_data_buffer[myRiscID][ID_LH] = ((core_flat_id & 0xFF) << 3) | myRiscID;
-#else
-    uint32_t riscID = myRiscID;
-    return;
 #endif
-    {
+    NocDestinationStateSaver noc_state;
+
+    constexpr uint32_t startRisc = myRiscID;
+#if defined(COMPILE_FOR_BRISC)
+    // Send all riscs
+    constexpr uint32_t endRisc = PROFILER_RISC_COUNT;
+#else
+    constexpr uint32_t endRisc = myRiscID + 1;
+#endif
+
+    for (uint32_t riscID = startRisc; riscID < endRisc; riscID++) {
         int hostIndex = riscID;
         int deviceIndex = DEVICE_BUFFER_END_INDEX_BR_ER + riscID;
         if (profiler_control_buffer[deviceIndex]) {
@@ -271,15 +277,6 @@ __attribute__((noinline)) void finish_profiler() {
 
                 do_noc = true;
                 profiler_control_buffer[hostIndex] = currEndIndex;
-            } else if (profiler_control_buffer[RUN_COUNTER] < 1) {
-                dram_offset = (core_flat_id % profiler_core_count_per_dram) * MAX_RISCV_PER_CORE *
-                                  PROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC +
-                              hostIndex * PROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC;
-
-                send_size = CUSTOM_MARKERS * sizeof(uint32_t);
-
-                do_noc = true;
-                mark_dropped_timestamps(hostIndex);
             } else {
                 mark_dropped_timestamps(hostIndex);
             }
@@ -361,8 +358,12 @@ struct profileScope {
             mark_time_at_index_inlined(wIndex, timer_id);
             wIndex += PROFILER_L1_MARKER_UINT32_SIZE;
         } else {
-#if defined(DISPATCH_KERNEL)
+#if (defined(DISPATCH_KERNEL) && defined(COMPILE_FOR_BRISC))
             finish_profiler();
+            stackSize += PROFILER_L1_MARKER_UINT32_SIZE;
+            start_marked = true;
+            mark_time_at_index_inlined(wIndex, timer_id);
+            wIndex += PROFILER_L1_MARKER_UINT32_SIZE;
 #endif
         }
     }
