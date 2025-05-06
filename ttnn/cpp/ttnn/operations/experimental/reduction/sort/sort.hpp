@@ -18,7 +18,7 @@ struct ExecuteSort {
         const bool descending,
         const bool stable,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        std::optional<std::tuple<Tensor, Tensor>> optional_output_tensors = std::nullopt);
+        std::optional<std::tuple<Tensor&, Tensor&>> optional_output_tensors = std::nullopt);
 };
 
 }  // namespace ttnn::operations::experimental::reduction::sort

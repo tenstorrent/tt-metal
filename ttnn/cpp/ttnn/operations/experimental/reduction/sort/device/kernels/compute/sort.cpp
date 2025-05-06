@@ -15,37 +15,64 @@
 
 namespace NAMESPACE {
 /*
-The sorting algorithm is based on Bitonic Merge Sort.
+This sorting algorithm is based on Bitonic Merge Sort and operates on input data arranged in tiles.
 
- The program operates on the arrangement of input data in the form of tiles. After the data passes through
- preprocessing, the dimension by which the data is to be sorted is the last dimension in the tensor, hence from the
- point of view of the arrangement of tiles, the sorting is practically based on sorting successive rows of the matrix.
+The algorithm processes the data such that the dimension to be sorted becomes the last dimension of the tensor.
+From the perspective of tile arrangement, sorting is performed row by row in a matrix-like structure.
 
- First, the program reads one full row of tiles (size Wt) from DRAM to L1 and generates a corresponding set of tiles
- containing the data indices in the initial arrangement. The basis for the described sorting implementation is
- ckernel::topk_local_sort LLK, which takes as input arguments to the DST register two tiles on which
- the sorting is to be performed and two tiles containing the indices of this data. LLK sorts the two input tiles in the
- inplace method and sets the indices of the data that have been changed in place. However, it performs sorting on
- columns, hence the additional step of performing transposition. Since LLK always takes a set of two tiles, their number
- in the Wt dimension must always be a multiple of 64 (2 * Tile_Width (32)).
+### Overview:
+1. **Tile Initialization**:
+    - A full row of tiles (size `Wt`) is read from DRAM into L1 memory.
+    - Corresponding tiles containing the initial data indices are also generated.
 
- sort_Wt_tiles_row_to_bitonic_sequence takes pairs of tiles and sorts them among themselves changing the sorting order
- (for the first pair according to the desired order, for the next one vice versa, etc.), as a result we get a set of
- sorted pairs of tiles with a variable sorting order.
+2. **Sorting Mechanism**:
+    - The core of the sorting is performed using `ckernel::topk_local_sort`, which:
+      - Sorts two input tiles in-place.
+      - Updates the indices of the data to reflect the new order.
+    - Since `ckernel::topk_local_sort` operates on columns, an additional transposition step is required.
+    - The number of tiles in the `Wt` dimension must be a multiple of 64 (2 * Tile_Width (32)) to ensure compatibility.
 
- The next step is to sort the tiles among themselves, so that the entire row of input data is sorted. As in the
- bitonic merge sort algorithm, this is done in stages – the next indexes of tiles in CB are calculated, which are to be
- sorted among themselves. Finally, all tiles have their values ​​sorted with respect to one dimension and are
- ready to be transposed to the desired dimension and written to DRAM memory.
+3. **Bitonic Sequence Formation**:
+    - The function `sort_Wt_tiles_row_to_bitonic_sequence`:
+      - Sorts pairs of tiles alternately in ascending and descending order.
+      - Produces a set of sorted tile pairs with alternating sorting directions.
 
- Example:
- The input tensor is a 32x128 matrix, which translates to 1x4 tiles: T0 T1 T2 T3, we sort the values ​​ascending.
- Pairwise sorting: Tiles T0 and T1 are sorted as a pair ascending, T2 and T3 are sorted as a pair descending.
- Sorting among themselves: Stage 1 - we sort T0 and T2 ascending and T1 and T3 ascending (we do not change the order),
-                           Stage 2 – We sort T0 and T1 ascending and T2 and T3 ascending.
- Data saving: Values ​​have been sorted by a common dimension and are ready to be saved.
+4. **Bitonic Merge Sort**:
+    - The tiles are further sorted in stages to ensure the entire row is sorted.
+    - At each stage, tile indices are calculated, and tiles are sorted pairwise.
+    - This process continues until all tiles in the row are sorted.
+
+5. **Multicore Calculation**:
+    - Multicore parallelism is enabled by assigning each row of tiles (`Wt`) to a separate core.
+    - If the number of rows (`Ht`) exceeds the number of available cores, the workload is distributed such that some
+cores process multiple rows.
+    - This ensures efficient utilization of all cores and minimizes idle time during computation.
+
+6. **Final Steps**:
+    - Once sorted, the tiles are transposed back to the desired dimension.
+    - The sorted data is then written back to DRAM.
+
+### Example:
+- Input: A 64x128 matrix, represented as 2x4 tiles: T0, T1, T2, T3
+                                                    T4, T5, T6, T7
+- Sorting (ascending order):
+0. Distributing workload across cores:
+   - Core 0 processes T0, T1, T2, T3
+   - Core 1 processes T4, T5, T6, T7
+Calculation of each row:
+  1. **Pairwise Sorting**:
+      - T0 and T1 are sorted as a pair in ascending order.
+      - T2 and T3 are sorted as a pair in descending order.
+  2. **Sorting Across Pairs**:
+      - **Stage 1**: T0 and T2 are sorted in ascending order, and T1 and T3 are sorted in ascending order.
+      - **Stage 2**: T0 and T1 are sorted in ascending order, and T2 and T3 are sorted in ascending order.
+  3. **Data Saving**:
+      - The tiles are now fully sorted along the desired dimension and ready to be saved.
  */
 void MAIN {
+    // Runtime args
+    const uint32_t core_loop_count = get_arg_val<uint32_t>(0);
+
     // Compile time args
     constexpr uint32_t input_tensor_cb_index = get_compile_time_arg_val(0);
     constexpr uint32_t index_tensor_cb_index = get_compile_time_arg_val(1);
@@ -53,12 +80,12 @@ void MAIN {
     constexpr uint32_t index_tensor_transposed_cb_index = get_compile_time_arg_val(3);
     constexpr uint32_t value_tensor_cb_index = get_compile_time_arg_val(4);
     constexpr uint32_t index_tensor_output_cb_index = get_compile_time_arg_val(5);
-    constexpr uint32_t Ht = get_compile_time_arg_val(6);
-    constexpr uint32_t Wt = get_compile_time_arg_val(7);
-    constexpr bool descending = get_compile_time_arg_val(8);
+    constexpr uint32_t Wt = get_compile_time_arg_val(6);
+    constexpr bool descending = get_compile_time_arg_val(7);
     constexpr bool stable =
-        get_compile_time_arg_val(9);  // TODO: In the future change LLK to have the option or add additional step with
+        get_compile_time_arg_val(8);  // TODO: In the future change LLK to have the option or add additional step with
                                       // checking values and indexes after the sorting
+                                      // Issue: https://github.com/tenstorrent/tt-metal/issues/20625
 
     constexpr uint32_t one_tile = 1;
 
@@ -70,7 +97,7 @@ void MAIN {
     ckernel::topk_tile_init();
     transpose_wh_init(input_tensor_cb_index, input_tensor_transposed_cb_index);
 
-    for (uint32_t h = 0; h < Ht; h++) {
+    for (uint32_t core_loop = 0; core_loop < core_loop_count; core_loop++) {
         const bool ascending = !descending;
 
         sort_Wt_tiles_row_to_bitonic_sequence(
