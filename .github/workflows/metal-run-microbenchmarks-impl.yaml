@@ -63,6 +63,18 @@ jobs:
             name: "T3K ubench - Fabric Latency",
             cmd: "pytest -svv tests/tt_metal/microbenchmarks/ethernet/test_1d_fabric_latency.py",
           }, # Sean Nijjar
+          {
+            arch: wormhole_b0,
+            runs-on: ["N300", "pipeline-perf", "bare-metal", "in-service"],
+            name: "WH Data Movement Regressions",
+            cmd: "pytest -svv tests/tt_metal/tt_metal/data_movement --gtest-filter Directed --verbose-log",
+          }, # Ata Tuzuner
+          {
+            arch: blackhole,
+            runs-on: ["BH", "pipeline-perf", "in-service"],
+            name: "BH Data Movement Regressions",
+            cmd: "pytest -svv tests/tt_metal/tt_metal/data_movement --gtest-filter Directed --verbose-log",
+          } # Ata Tuzuner
         ]
     container:
       image: ${{ inputs.docker-image }}

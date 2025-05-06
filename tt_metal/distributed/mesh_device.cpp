@@ -11,7 +11,6 @@
 #include <mesh_device_view.hpp>
 #include <small_vector.hpp>
 #include <sub_device.hpp>
-#include <sub_device_manager_tracker.hpp>
 #include <system_mesh.hpp>
 #include <tt_metal.hpp>
 #include <algorithm>
@@ -26,7 +25,7 @@
 
 #include "allocator.hpp"
 #include "assert.hpp"
-#include "dispatch_settings.hpp"
+#include "dispatch/dispatch_settings.hpp"
 #include "launch_message_ring_buffer_state.hpp"
 #include "mesh_trace.hpp"
 #include "shape_base.hpp"
@@ -44,6 +43,7 @@
 
 #include "tt_metal/impl/allocator/l1_banking_allocator.hpp"
 #include "tt_metal/impl/sub_device/sub_device_manager.hpp"
+#include "sub_device/sub_device_manager_tracker.hpp"
 #include <umd/device/types/xy_pair.h>
 
 enum class CoreType;

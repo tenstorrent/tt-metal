@@ -10,7 +10,6 @@
 #include <tt-metalium/fabric_host_interface.h>
 
 #include <tt-metalium/launch_message_ring_buffer_state.hpp>
-#include <tt-metalium/dispatch_settings.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <umd/device/tt_core_coordinates.h>
 

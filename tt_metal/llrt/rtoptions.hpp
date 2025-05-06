@@ -86,6 +86,7 @@ class RunTimeOptions {
 
     bool is_kernel_dir_env_var_set = false;
     std::string kernel_dir;
+    std::string system_kernel_dir;
 
     bool build_map_enabled = false;
 
@@ -160,6 +161,8 @@ public:
 
     inline bool is_kernel_dir_specified() const { return this->is_kernel_dir_env_var_set; }
     const std::string& get_kernel_dir() const;
+    // Location where kernels are installed via package manager.
+    const std::string& get_system_kernel_dir() const;
 
     inline bool get_build_map_enabled() const { return build_map_enabled; }
 
