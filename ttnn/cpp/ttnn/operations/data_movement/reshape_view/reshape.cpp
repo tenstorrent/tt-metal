@@ -300,11 +300,6 @@ ttnn::Tensor ReshapeViewOperation::invoke(
     // Just edit shape if shape has a 0 dimension
     if (tensor.get_logical_volume() == 0) {
         TT_FATAL(logical_shape.volume() == 0, "Tensor volume is 0, but shape's volume is not");
-        auto mesh_device = tensor.mesh_device();
-        TT_FATAL(
-            ((mesh_device == nullptr || mesh_device->num_devices() == 1) &&
-             tensor.storage_type() != StorageType::MULTI_DEVICE_HOST),
-            "Reshaping a multi-device tensor with 0 volume is not supported");
         return ttnn::experimental::view(tensor, logical_shape, padded_shape);
     }
     TT_FATAL(logical_shape.volume() != 0, "Tensor volume is not 0, but shape volume is 0");
