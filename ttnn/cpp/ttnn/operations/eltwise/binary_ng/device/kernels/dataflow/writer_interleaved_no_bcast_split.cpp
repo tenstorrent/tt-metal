@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -24,19 +24,6 @@ void kernel_main() {
 
     constexpr uint32_t onetile = 1;
 
-    constexpr auto cb_id_src = tt::CBIndex::c_1;
-#if SRC_SHARDED
-    cb_reserve_back(cb_id_src, src_num_tiles);
-    cb_push_back(cb_id_src, src_num_tiles);
-#else
-    constexpr bool src_is_dram = get_compile_time_arg_val(0) == 1;
-    const uint32_t src_tile_bytes = get_tile_size(cb_id_src);
-    const DataFormat src_data_format = get_dataformat(cb_id_src);
-
-    const InterleavedAddrGenFast<src_is_dram> src = {
-        .bank_base_address = src_addr, .page_size = src_tile_bytes, .data_format = src_data_format};
-#endif
-
     constexpr auto cb_id_dst = tt::CBIndex::c_2;
 #if !DST_SHARDED
     constexpr bool dst_is_dram = get_compile_time_arg_val(1) == 1;
@@ -47,7 +34,7 @@ void kernel_main() {
         .bank_base_address = dst_addr, .page_size = dst_tile_bytes, .data_format = dst_data_format};
 #endif
 
-#if !SRC_SHARDED || !DST_SHARDED
+#if !DST_SHARDED
     constexpr bool has_sharding = get_compile_time_arg_val(2) == 1;
     const uint32_t HtWt = Ht * Wt;
 
@@ -64,12 +51,6 @@ void kernel_main() {
     uint32_t start_tw = start_t % Wt;                          // W index
     uint32_t end_tw = has_sharding ? start_tw + dst_shard_width : Wt;
 
-    // this is the INPUT tile offset
-    uint32_t tile_offset = start_d * nD_stride + start_n * n_stride + start_c * c_stride + start_th * Wt;
-    uint32_t next_channel_shift = c_stride - HtWt;
-    uint32_t next_batch_shift = n_stride - c_stride * C;
-    uint32_t next_depth_shift = nD_stride - (n_stride * N);
-
     uint32_t num_tiles_written = 0;
     uint32_t dst_tile_offset = start_tile_id;
 
@@ -79,17 +60,8 @@ void kernel_main() {
                 for (uint32_t th = start_th; th < Ht && num_tiles_written < dst_num_tiles; ++th) {
                     for (uint32_t tw = start_tw; tw < end_tw && num_tiles_written < dst_num_tiles;
                          ++tw, ++num_tiles_written) {
-#if !SRC_SHARDED
-                        // read a tile from src
-                        cb_reserve_back(cb_id_src, onetile);
-                        uint32_t l1_write_addr = get_write_ptr(cb_id_src);
-                        noc_async_read_tile(tile_offset + tw, src, l1_write_addr);
-                        noc_async_read_barrier();
-                        cb_push_back(cb_id_src, onetile);
-#endif
-
 #if !DST_SHARDED
-                        // write a tile to dst, since the dst shape is full, the tile offset simply grows linearly
+                        //  write a tile to dst, since the dst shape is full, the tile offset simply grows linearly
                         cb_wait_front(cb_id_dst, onetile);
                         uint32_t l1_read_addr = get_read_ptr(cb_id_dst);
                         noc_async_write_tile(dst_tile_offset + num_tiles_written, dst, l1_read_addr);
@@ -97,7 +69,6 @@ void kernel_main() {
                         cb_pop_front(cb_id_dst, onetile);
 #endif
                     }
-                    tile_offset += Wt;
                     if constexpr (has_sharding) {
                         // adjust the output tile offset since we had to skip parts of the row
                         dst_tile_offset += (Wt - dst_shard_width);
@@ -106,11 +77,8 @@ void kernel_main() {
                         start_tw = 0;
                     }
                 }
-                tile_offset += next_channel_shift;
             }
-            tile_offset += next_batch_shift;
         }
-        tile_offset += next_depth_shift;
     }
 #endif
 }
