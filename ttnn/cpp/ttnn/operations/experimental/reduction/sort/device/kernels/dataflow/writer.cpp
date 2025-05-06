@@ -55,13 +55,17 @@ Writer:
 void kernel_main() {
     // Runtime args
     const uint32_t value_tensor_buffer_addr = get_arg_val<uint32_t>(0);
+    const uint32_t core_loop_count = get_arg_val<uint32_t>(1);
 
     // Compile time args
     constexpr uint32_t value_tensor_cb_index = get_compile_time_arg_val(0);
     constexpr uint32_t index_tensor_cb_index = get_compile_time_arg_val(1);
     constexpr bool value_tensor_is_dram = get_compile_time_arg_val(2);
-    constexpr uint32_t Ht = get_compile_time_arg_val(3);
-    constexpr uint32_t Wt = get_compile_time_arg_val(4);
+    constexpr uint32_t Wt = get_compile_time_arg_val(3);
+    constexpr uint32_t Ht = get_compile_time_arg_val(4);
+    constexpr uint32_t total_number_of_cores = get_compile_time_arg_val(5);
+    constexpr uint32_t compute_with_storage_grid_size_x = get_compile_time_arg_val(6);
+    constexpr uint32_t compute_with_storage_grid_size_y = get_compile_time_arg_val(7);
 
     // Output tensor config
     constexpr uint32_t one_tile = 1;
@@ -72,7 +76,12 @@ void kernel_main() {
         .page_size = value_tensor_tile_size_bytes,
         .data_format = value_tensor_data_format};
 
-    for (uint32_t h = 0; h < Ht; h++) {
+    // Move data from L1 to DRAMs
+    for (uint32_t core_loop = 0; core_loop < core_loop_count; core_loop++) {
+        // Calculate tile h coordinate
+        const uint32_t h = core_loop * total_number_of_cores +
+                           get_absolute_logical_y() * compute_with_storage_grid_size_x + get_absolute_logical_x();
+
         // Generate index tiles
         for (uint32_t w = 0; w < Wt; w++) {
             generate_index_tile(index_tensor_cb_index, w);
@@ -86,5 +95,5 @@ void kernel_main() {
             noc_async_write_barrier();
             cb_pop_front(value_tensor_cb_index, one_tile);
         }  // Wt loop
-    }  // Ht loop
+    }  // core_loop_count loop
 }
