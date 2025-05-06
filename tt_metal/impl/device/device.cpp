@@ -1267,8 +1267,6 @@ bool Device::close() {
 
     tt_metal::detail::DumpDeviceProfileResults(this, ProfilerDumpState::LAST_CLOSE_DEVICE);
 
-    sub_device_manager_tracker_.reset(nullptr);
-
     std::unordered_map<chip_id_t, std::unordered_set<CoreCoord>> not_done_dispatch_cores;
     std::unordered_map<chip_id_t, std::unordered_set<CoreCoord>> cores_to_skip;
     this->get_associated_dispatch_virtual_cores(not_done_dispatch_cores, cores_to_skip);
@@ -1334,6 +1332,7 @@ bool Device::close() {
     this->command_queue_programs_.clear();
     this->command_queues_.clear();
     this->sysmem_manager_.reset();
+    this->sub_device_manager_tracker_.reset(nullptr);
     this->initialized_ = false;
 
     return true;
