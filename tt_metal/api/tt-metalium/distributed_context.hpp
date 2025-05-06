@@ -94,6 +94,6 @@ public:
     [[nodiscard]] virtual std::shared_ptr<IDistributedContext> create_sub_context(tt::stl::Span<Rank> ranks) const = 0;
 
     //--- Error handling -----------------------------------------------------
-    virtual ~IDistributedContext() = 0;
+    virtual ~IDistributedContext() = default;
 };
 }  // namespace tt::tt_metal::distributed::multihost
