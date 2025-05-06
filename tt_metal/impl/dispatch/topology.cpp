@@ -694,8 +694,6 @@ void populate_fd_kernels(const std::vector<DispatchKernelNode>& nodes) {
 
     // Connect the graph with upstream/downstream kernels
     for (const auto& node : nodes) {
-        TT_ASSERT(node.upstream_ids.size() <= k_dispatch_max_upstream_kernels);
-        TT_ASSERT(node.downstream_ids.size() <= k_dispatch_max_downstream_kernels);
         for (int idx = 0; idx < node.upstream_ids.size(); idx++) {
             if (node.upstream_ids[idx] >= 0) {
                 TT_ASSERT(
