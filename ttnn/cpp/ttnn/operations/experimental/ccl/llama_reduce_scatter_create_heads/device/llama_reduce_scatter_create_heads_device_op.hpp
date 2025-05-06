@@ -6,7 +6,7 @@
 
 #include <variant>
 #include <optional>
-
+#include "ttnn/distributed/types.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/core.hpp"
 #include "ttnn/device_operation.hpp"
@@ -23,7 +23,6 @@ struct LlamaReduceScatterCreateHeadsDeviceOperation {
         const uint32_t dim;
         const std::optional<GlobalSemaphore> cross_device_semaphore;
         const std::optional<tt::tt_metal::SubDeviceId> subdevice_id;
-        const uint32_t ring_index;
         const uint32_t cluster_axis;
         const std::optional<MemoryConfig> output_mem_config;
         const uint32_t ring_devices;
@@ -34,8 +33,6 @@ struct LlamaReduceScatterCreateHeadsDeviceOperation {
         const uint32_t head_dim;
         const uint32_t slice_size;
         const std::optional<MemoryConfig> qkv_memory_config;
-        std::optional<IDevice*> forward_device;
-        std::optional<IDevice*> backward_device;
     };
     struct tensor_args_t {
         const Tensor input_tensor;
@@ -57,15 +54,22 @@ struct LlamaReduceScatterCreateHeadsDeviceOperation {
             std::vector<tt::tt_metal::CBHandle> cb_handles;
             CoreRangeSet core_range;
         };
-        using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
+        using cached_mesh_workload_t = ttnn::device_operation::AdaptedCachedMeshWorkload<shared_variables_t>;
 
-        static cached_program_t create(
+        static cached_mesh_workload_t create_mesh_workload(
             const operation_attributes_t& operation_attributes,
+            const ttnn::MeshCoordinateRangeSet& tensor_coords,
+            const tensor_args_t& tensor_args,
+            tensor_return_value_t& tensor_return_value);
+
+        static ttnn::device_operation::CachedProgram<shared_variables_t> create_at(
+            const operation_attributes_t& operation_attributes,
+            const ttnn::MeshCoordinate& mesh_coordinate,
             const tensor_args_t& tensor_args,
             tensor_return_value_t& tensor_return_value);
 
         static void override_runtime_arguments(
-            cached_program_t& cached_program,
+            cached_mesh_workload_t& cached_program,
             const operation_attributes_t& operation_attributes,
             const tensor_args_t& tensor_args,
             tensor_return_value_t& tensor_return_value);
@@ -96,10 +100,7 @@ struct LlamaReduceScatterCreateHeadsDeviceOperation {
         const int32_t dim,
         const GlobalSemaphore& semaphore,
         const tt::tt_metal::SubDeviceId subdevice_id,
-        const uint32_t ring_index,
         const uint32_t cluster_axis,
-        std::optional<IDevice*>& forward_device,
-        std::optional<IDevice*>& backward_device,
         const uint32_t ring_devices,
         const ttnn::ccl::Topology topology,
         const uint32_t num_links,
