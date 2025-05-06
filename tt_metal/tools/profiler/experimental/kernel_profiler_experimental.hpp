@@ -87,6 +87,42 @@ constexpr uint32_t Hash16_CT(const char (&s)[N]) {
 
 #if defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_BRISC) || defined(COMPILE_FOR_ERISC) || \
     defined(COMPILE_FOR_IDLE_ERISC)
+
+#if (defined(DISPATCH_KERNEL))
+
+// Saves several NoC register states that may be setup by dispatch kernels and restores them
+// when the NocDestinationStateSaver is destroyed
+struct NocDestinationStateSaver {
+    uint32_t noc_ctrl_state;
+    uint32_t noc_ret_addr_coord_state;
+#ifdef ARCH_BLACKHOLE
+    uint32_t noc_ret_addr_mid_state;
+#endif
+
+    inline __attribute__((always_inline)) NocDestinationStateSaver() {
+        noc_ctrl_state = NOC_CMD_BUF_READ_REG(noc_index, write_cmd_buf, NOC_CTRL);
+        noc_ret_addr_coord_state = NOC_CMD_BUF_READ_REG(noc_index, write_cmd_buf, NOC_RET_ADDR_COORDINATE);
+#ifdef ARCH_BLACKHOLE
+        noc_ret_addr_mid_state = NOC_CMD_BUF_READ_REG(noc_index, write_cmd_buf, NOC_RET_ADDR_MID);
+#endif
+    }
+
+    inline __attribute__((always_inline)) ~NocDestinationStateSaver() {
+        while (!noc_cmd_buf_ready(noc_index, write_cmd_buf));
+        NOC_CMD_BUF_WRITE_REG(noc_index, write_cmd_buf, NOC_CTRL, noc_ctrl_state);
+        NOC_CMD_BUF_WRITE_REG(noc_index, write_cmd_buf, NOC_RET_ADDR_COORDINATE, noc_ret_addr_coord_state);
+#ifdef ARCH_BLACKHOLE
+        NOC_CMD_BUF_WRITE_REG(noc_index, write_cmd_buf, NOC_RET_ADDR_MID, noc_ret_addr_mid_state);
+#endif
+    }
+};
+
+#else
+
+struct NocDestinationStateSaver {};
+
+#endif
+
 inline void __attribute__((always_inline)) profiler_noc_async_write_posted(
     std::uint32_t src_local_l1_addr, std::uint64_t dst_noc_addr, std::uint32_t size, uint8_t noc = noc_index) {
     WAYPOINT("NAWW");
@@ -130,8 +166,6 @@ __attribute__((noinline)) void init_profiler(
             // TODO(MO): Clean up magic numbers
             profiler_data_buffer[riscID][i] = 0x80000000;
         }
-        profiler_data_buffer[riscID][ID_LL] =
-            (runCounter & 0xFFFF) | (profiler_data_buffer[riscID][ID_LL] & 0xFFFF0000);
     }
 
     while (!profiler_control_buffer[DRAM_PROFILER_ADDRESS]);
@@ -176,7 +210,7 @@ inline __attribute__((always_inline)) void mark_dropped_timestamps(uint32_t inde
 
 inline __attribute__((always_inline)) void set_host_counter(uint32_t counterValue) {
     for (uint32_t riscID = 0; riscID < PROFILER_RISC_COUNT; riscID++) {
-        profiler_data_buffer[riscID][ID_LL] = (counterValue << 16) | (profiler_data_buffer[riscID][ID_LL] & 0xFFFF);
+        profiler_data_buffer[riscID][ID_LL] = counterValue;
     }
 }
 
@@ -205,8 +239,10 @@ __attribute__((noinline)) void finish_profiler() {
     profiler_control_buffer[PROFILER_DONE] = 1;
 #if !defined(COMPILE_FOR_TRISC)
 #if defined(COMPILE_FOR_ERISC) || defined(COMPILE_FOR_IDLE_ERISC) || defined(COMPILE_FOR_BRISC)
+    NocDestinationStateSaver noc_state;
     for (uint32_t riscID = 0; riscID < PROFILER_RISC_COUNT; riscID++)
 #elif defined(DISPATCH_KERNEL)
+    NocDestinationStateSaver noc_state;
     uint32_t riscID = myRiscID;
     core_flat_id = profiler_control_buffer[FLAT_ID];
     profiler_core_count_per_dram = profiler_control_buffer[CORE_COUNT_PER_DRAM];
