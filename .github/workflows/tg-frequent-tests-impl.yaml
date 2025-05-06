@@ -33,7 +33,7 @@ jobs:
         ]
     runs-on:
       - arch-wormhole_b0
-      - config-tg
+      - ${{ inputs.topology }}
       - bare-metal
       - pipeline-functional
       - ${{ inputs.extra-tag }}
