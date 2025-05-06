@@ -17,6 +17,7 @@ void kernel_main() {
     uint32_t product_high_dims = get_arg_val<uint32_t>(4);
     uint32_t product_low_dims = get_arg_val<uint32_t>(5);
     uint32_t HtWt = get_arg_val<uint32_t>(6);
+    uint32_t flip = get_arg_val<uint32_t>(7);
 
     constexpr uint32_t cb_in = tt::CBIndex::c_1;
 
@@ -39,7 +40,12 @@ void kernel_main() {
         uint32_t i1 = i % (product_high_dims * HtWt);
 
         for (uint32_t j = 0; j < tiles_per_row; j++) {
-            uint32_t tileid = get_tile_id(i0, i1, j, tiles_per_row, product_low_dims, product_high_dims, HtWt);
+            uint32_t tile_j = j;
+            if (flip) {
+                tile_j = tiles_per_row - j - 1;
+            }
+
+            uint32_t tileid = get_tile_id(i0, i1, tile_j, tiles_per_row, product_low_dims, product_high_dims, HtWt);
 
             // Read tile from Circularbuffer
             cb_wait_front(cb_in, 1);

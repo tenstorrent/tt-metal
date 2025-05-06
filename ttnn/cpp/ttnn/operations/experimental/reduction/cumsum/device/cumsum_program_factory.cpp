@@ -44,6 +44,7 @@ CumSumDeviceOperation::SingleCore::cached_program_t CumSumDeviceOperation::Singl
     const auto& tensor_shape = input_tensor.padded_shape();
     const uint32_t tensor_rank = tensor_shape.rank();
     int32_t dim = operation_attributes.dim;
+    const bool flip = operation_attributes.flip;
 
     if (dim < 0) {  // Handle cases where dim is negative
         dim += tensor_rank;
@@ -206,6 +207,7 @@ CumSumDeviceOperation::SingleCore::cached_program_t CumSumDeviceOperation::Singl
                 product_high_dims,
                 product_low_dims,
                 HtWt,
+                flip,
             });
 
         SetRuntimeArgs(
@@ -220,6 +222,7 @@ CumSumDeviceOperation::SingleCore::cached_program_t CumSumDeviceOperation::Singl
                 product_high_dims,
                 product_low_dims,
                 HtWt,
+                flip,
             });
 
         SetRuntimeArgs(
