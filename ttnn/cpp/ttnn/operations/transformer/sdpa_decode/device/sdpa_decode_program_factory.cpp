@@ -344,7 +344,7 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
     // - In non-causal mode, mask can be an input tensor which needs proper handling to read as 16x32 tiles
     // - Only support Float16_b since block float w/ shared exp needs special handling to read as 16x32 tiles
     // In compute, need to find a proper way to get num_faces for sfpu functions
-    const bool use_half_tile = (is_causal and num_q_heads <= 16 and q_df == tt::DataFormat::Float16_b and device->arch() == tt::ARCH::WORMHOLE_B0);
+    const bool use_half_tile = (is_causal and num_q_heads <= 16 and q_df == tt::DataFormat::Float16_b);
     if (use_half_tile) {
         q_tile = half_tile;
         mask_tile = half_tile;
