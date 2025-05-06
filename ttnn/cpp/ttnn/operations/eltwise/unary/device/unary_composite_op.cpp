@@ -552,17 +552,17 @@ Tensor _hardtanh(
 Tensor _selu(
     const Tensor& x, const float scale, const float alpha, const std::optional<MemoryConfig>& output_mem_config) {
     // term 2
-    Tensor x_Exp_minus_1 = ttnn::expm1(x);
-    Tensor result_t2_ = ttnn::multiply(x_Exp_minus_1, alpha, std::nullopt, output_mem_config);
+    Tensor x_Exp_minus_1 = ttnn::expm1(x, output_mem_config);
+    Tensor result_t2_ = ttnn::multiply_(x_Exp_minus_1, alpha);
     x_Exp_minus_1.deallocate();
     Tensor result_term2 = ttnn::minimum(ttnn::DefaultQueueId, result_t2_, 0.0f, std::nullopt, output_mem_config);
     result_t2_.deallocate();
 
     // term 1
     Tensor x_max = ttnn::maximum(ttnn::DefaultQueueId, x, 0.0f, std::nullopt, output_mem_config);
-    Tensor sum_max_term2 = ttnn::add(x_max, result_term2, std::nullopt, output_mem_config);
+    Tensor sum_max_term2 = ttnn::add_(x_max, result_term2);
     x_max.deallocate();
-    Tensor result_selu = ttnn::multiply(sum_max_term2, scale, std::nullopt, output_mem_config);
+    Tensor result_selu = ttnn::multiply_(sum_max_term2, scale);
 
     return result_selu;
 }
