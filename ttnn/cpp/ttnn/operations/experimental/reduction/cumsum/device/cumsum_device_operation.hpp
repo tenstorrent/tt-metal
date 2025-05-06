@@ -29,8 +29,13 @@ struct CumSumDeviceOperation {
     using spec_return_value_t = ttnn::TensorSpec;
     using tensor_return_value_t = Tensor;
 
-    struct SingleCore {
-        struct shared_variables_t {};
+    struct ProgramFactory {
+        struct shared_variables_t {
+            tt::tt_metal::KernelHandle unary_reader_kernel_id;
+            tt::tt_metal::KernelHandle unary_writer_kernel_id;
+
+            std::size_t num_cores;
+        };
         using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
 
         static cached_program_t create(
@@ -45,7 +50,7 @@ struct CumSumDeviceOperation {
             tensor_return_value_t& tensor_return_value);
     };
 
-    using program_factory_t = std::variant<SingleCore>;
+    using program_factory_t = std::variant<ProgramFactory>;
 
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
 
@@ -54,6 +59,8 @@ struct CumSumDeviceOperation {
 
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
+
+    static tt::stl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
 
     static std::tuple<operation_attributes_t, tensor_args_t> invoke(
         const Tensor& input_tensor,

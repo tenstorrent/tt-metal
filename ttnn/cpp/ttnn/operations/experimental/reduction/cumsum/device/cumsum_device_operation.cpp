@@ -10,13 +10,14 @@
 #include "ttnn/tensor/storage.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/types.hpp"
+#include "ttnn/operation.hpp"
 
 namespace ttnn::operations::experimental::reduction {
 
 CumSumDeviceOperation::program_factory_t CumSumDeviceOperation::select_program_factory(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     // Scaffolding / WIP => only single core program for now
-    return CumSumDeviceOperation::SingleCore();
+    return CumSumDeviceOperation::ProgramFactory();
 }
 
 void CumSumDeviceOperation::validate_on_program_cache_miss(
@@ -76,6 +77,16 @@ CumSumDeviceOperation::tensor_return_value_t CumSumDeviceOperation::create_outpu
     }
 
     return create_device_tensor(compute_output_specs(args, tensor_args), tensor_args.input_tensor.device());
+}
+
+tt::stl::hash::hash_t CumSumDeviceOperation::compute_program_hash(
+    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    auto program_factory = select_program_factory(args, tensor_args);
+    tt::tt_metal::operation::Hash hash = tt::tt_metal::operation::hash_operation<CumSumDeviceOperation>(
+        program_factory.index()  // TODO: Add other arguments
+    );
+
+    return hash;
 }
 
 std::tuple<CumSumDeviceOperation::operation_attributes_t, CumSumDeviceOperation::tensor_args_t>
