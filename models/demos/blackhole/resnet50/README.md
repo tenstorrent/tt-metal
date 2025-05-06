@@ -46,4 +46,3 @@ pytest models/demos/blackhole/resnet50/tests/test_perf_e2e_resnet50.py::test_per
 + This will generate a CSV with the timings and throughputs.
 + **Expected end-to-end perf**: For batch = 16, it is about `9,130 fps` currently. This may vary machine to machine.
 + **Expected end-to-end perf**: For batch = 32, it is about `10,880 fps` currently. This may vary machine to machine.
-
