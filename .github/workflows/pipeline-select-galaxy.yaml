@@ -73,7 +73,8 @@ jobs:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      topology: ${{ inputs.topology }}
+      topology-4u: ${{ inputs.topology == 'config-tg' }}
+      topology-6u: ${{ inputs.topology == 'topology-6u' }}
   tg-unit-tests:
     if: ${{ inputs.tg-unit }}
     needs: build-artifact
