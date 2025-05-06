@@ -88,9 +88,9 @@ class TtResnetBlock2D(nn.Module):
 
     def forward(self, input_tensor, input_shape):
         B, C, H, W = input_shape
-        hidden_states = input_tensor
 
-        hidden_states = ttnn.to_memory_config(hidden_states, ttnn.DRAM_MEMORY_CONFIG)
+        input_tensor = ttnn.reshape(input_tensor, (1, 1, B * H * W, C))
+        hidden_states = ttnn.to_memory_config(input_tensor, ttnn.DRAM_MEMORY_CONFIG)
         hidden_states = ttnn.group_norm(
             hidden_states,
             num_groups=self.norm_groups,
@@ -157,6 +157,8 @@ class TtResnetBlock2D(nn.Module):
             inplace=False,
             num_out_blocks=self.norm_blocks_2,
         )
+
+        hidden_states = ttnn.to_layout(hidden_states, ttnn.TILE_LAYOUT)
         hidden_states = ttnn.silu(hidden_states)  # hang if not tile
         self.conv_config.shard_layout = None
         if self.conv2_slice_config is not None:
@@ -187,9 +189,8 @@ class TtResnetBlock2D(nn.Module):
         C = self.conv2_params["output_channels"]
         self.tt_conv2_weights = d_w
         self.tt_conv2_bias = d_b
-        if self.conv2_slice_config is not None:
-            hidden_states = ttnn.reshape(hidden_states, (1, 1, B * H * W, C))
-            hidden_states = ttnn.to_layout(hidden_states, ttnn.TILE_LAYOUT)
+        # if self.conv2_slice_config is not None:
+        hidden_states = ttnn.reshape(hidden_states, (1, 1, B * H * W, C))
 
         if self.tt_conv3_weights is not None:
             if input_tensor.shape[3] >= 1920:
@@ -221,8 +222,13 @@ class TtResnetBlock2D(nn.Module):
             C = self.conv3_params["output_channels"]
             self.tt_conv3_weights = d_w
             self.tt_conv3_bias = d_b
-            if input_tensor.is_sharded():
-                input_tensor = ttnn.sharded_to_interleaved(input_tensor, ttnn.L1_MEMORY_CONFIG)
+        if input_tensor.is_sharded():
+            input_tensor = ttnn.sharded_to_interleaved(input_tensor, ttnn.L1_MEMORY_CONFIG)
+        if hidden_states.is_sharded():
+            hidden_states = ttnn.sharded_to_interleaved(hidden_states, ttnn.L1_MEMORY_CONFIG)
+
+        hidden_states = ttnn.to_layout(hidden_states, ttnn.TILE_LAYOUT)
+        input_tensor = ttnn.to_layout(input_tensor, ttnn.TILE_LAYOUT)
         hidden_states = ttnn.add(input_tensor, hidden_states)
 
         ttnn.deallocate(input_tensor)
