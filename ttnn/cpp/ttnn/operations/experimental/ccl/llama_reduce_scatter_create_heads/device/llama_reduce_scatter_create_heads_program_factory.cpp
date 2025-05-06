@@ -295,9 +295,14 @@ LlamaReduceScatterCreateHeadsDeviceOperation::LlamaReduceScatterCreateHeads::cre
             ring_index = i;
             if (i != 0) {
                 backward_device = devices.at(i - 1);
+            } else if (operation_attributes.topology == ttnn::ccl::Topology::Ring) {
+                backward_device = devices.at(ring_size - 1);
             }
+
             if (i != ring_size - 1) {
                 forward_device = devices.at(i + 1);
+            } else if (operation_attributes.topology == ttnn::ccl::Topology::Ring) {
+                forward_device = devices.at(0);
             }
         }
     }
