@@ -245,7 +245,9 @@ foreach(ARCH IN LISTS ARCHS)
                 ${GPP_CMD} ${GPP_FLAGS} ${GPP_DEFINES} ${GPP_INCLUDES} -c -o ${HW_LIB_DIR}/${HWLIB}.o ${${HWLIB}_SOURCE}
             DEPENDS
                 ${${HWLIB}_SOURCE}
-            COMMENT "Building hw lib ${HWLIB}.o"
+                # If the compiler changes, rebuild
+                ../sfpi-version.sh
+            COMMENT "Building ${ARCH} hw lib ${HWLIB}.o"
             VERBATIM
         )
         list(APPEND PREPROCESSED_O_FILES ${HW_OUTPUT_FILE})
