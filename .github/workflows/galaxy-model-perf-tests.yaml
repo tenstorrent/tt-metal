@@ -1,9 +1,9 @@
-name: "(TG) TG model perf tests"
+name: "Galaxy model perf tests"
 
 on:
   workflow_dispatch:
   schedule:
-    - cron: "0 */12 * * *" # This cron schedule runs the workflow every 12 hours
+    - cron: "0 0 * * 4" # Runs every Thursday at 12am UTC
 
 jobs:
   build-artifact-profiler:
@@ -22,3 +22,4 @@ jobs:
       docker-image: ${{ needs.build-artifact-profiler.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact-profiler.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact-profiler.outputs.wheel-artifact-name }}
+      topology: topology-6u

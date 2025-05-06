@@ -1,9 +1,9 @@
-name: "(TG) TG nightly tests"
+name: "Galaxy nightly tests"
 
 on:
   workflow_dispatch:
   schedule:
-    - cron: "0 21 * * *"
+    - cron: "0 0 * * 3" # Runs every Wednesday at 12am UTC
 
 jobs:
   build-artifact:
@@ -20,3 +20,4 @@ jobs:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      topology: topology-6u
