@@ -10,9 +10,6 @@ from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 from models.utility_functions import skip_for_grayskull
-from tests.ttnn.unit_tests.operations.ccl.test_ccl_common import (
-    create_global_semaphore_with_same_address,
-)
 from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
 from tests.ttnn.unit_tests.operations.ccl.test_new_all_reduce import (
     SUB_DEVICE_CRS,
@@ -83,7 +80,6 @@ def run_reduce_scatter_test(
     dtype=ttnn.bfloat8_b,
     profiler=BenchmarkProfiler(),
 ):
-    mesh_device.enable_async(True)
     mesh_device.enable_program_cache()
     num_pages_per_packet = 4
     cyclic_buffer_size = 8
@@ -91,8 +87,7 @@ def run_reduce_scatter_test(
     model_config = {}
     model_config = set_tg_attention_config(model_config, 4096)
     # input, output, interm core range set
-    device = mesh_device.get_device(mesh_device.get_device_ids()[0])
-    compute_grid = (device.compute_with_storage_grid_size().x, device.compute_with_storage_grid_size().y)
+    compute_grid = (mesh_device.compute_with_storage_grid_size().x, mesh_device.compute_with_storage_grid_size().y)
     subdevice_shard_cores_grid = ttnn.CoreRangeSet(
         {
             ttnn.CoreRange(
@@ -247,9 +242,7 @@ def run_reduce_scatter_test(
     mesh_device.set_sub_device_stall_group(sub_device_stall_group)
 
     # create global semaphore handles
-    ccl_semaphore_handles = [
-        create_global_semaphore_with_same_address(mesh_device, ccl_sub_device_crs, 0) for _ in range(num_iters)
-    ]
+    ccl_semaphore_handles = [ttnn.create_global_semaphore(mesh_device, ccl_sub_device_crs, 0) for _ in range(num_iters)]
 
     tt_out_tensor_q_list = []
     tt_out_tensor_k_list = []
@@ -379,12 +372,10 @@ def run_reduce_scatter_test(
             failed_indices = torch.where(tt_torch_tensor_v != output_tensor_v_goldens_list[tensor_index])
             break
 
-    for i in range(num_devices_scatter * num_devices_fracture):
-        logger.info(f"Device {i} has {mesh_device.get_devices()[i].num_program_cache_entries()} program cache entries")
-        assert (
-            mesh_device.get_devices()[i].num_program_cache_entries() == 1
-            or mesh_device.get_devices()[i].num_program_cache_entries() == num_iters
-        ), f"Device {i} has {mesh_device.get_devices()[i].num_program_cache_entries()} program cache entries"
+    logger.info(f"Device has {mesh_device.num_program_cache_entries()} program cache entries")
+    assert (
+        mesh_device.num_program_cache_entries() == 1 or mesh_device.num_program_cache_entries() == num_iters
+    ), f"Device has {mesh_device.num_program_cache_entries()} program cache entries"
 
     if not passed:
         logger.info(f"Failed indices: {failed_indices}")
@@ -412,9 +403,8 @@ def run_reduce_scatter_test(
     indirect=True,
 )
 def test_rs_create_heads_tg_trace(mesh_device, trace_mode, dtype):
-    device = mesh_device.get_device(mesh_device.get_device_ids()[0])
     # Only run these tests on unharvested TG
-    device_grid = (device.compute_with_storage_grid_size().x, device.compute_with_storage_grid_size().y)
+    device_grid = (mesh_device.compute_with_storage_grid_size().x, mesh_device.compute_with_storage_grid_size().y)
     if device_grid != (7, 10):
         pytest.skip("Not TG!")
 
@@ -460,9 +450,8 @@ def test_rs_create_heads_tg_trace(mesh_device, trace_mode, dtype):
     indirect=True,
 )
 def test_rs_create_heads_tg_no_trace(mesh_device, trace_mode, dtype):
-    device = mesh_device.get_device(mesh_device.get_device_ids()[0])
     # Only run these tests on unharvested TG
-    device_grid = (device.compute_with_storage_grid_size().x, device.compute_with_storage_grid_size().y)
+    device_grid = (mesh_device.compute_with_storage_grid_size().x, mesh_device.compute_with_storage_grid_size().y)
     if device_grid != (7, 10):
         pytest.skip("Not TG!")
 
