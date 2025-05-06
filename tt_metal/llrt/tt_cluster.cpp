@@ -693,6 +693,28 @@ void Cluster::read_core(
     read_core(data.data(), size_in_bytes, core, addr, small_access);
 }
 
+void Cluster::dma_write_core(const void* mem_ptr, uint32_t size_in_bytes, tt_cxy_pair core, uint64_t addr) const {
+    const chip_id_t chip_id = core.chip;
+    TT_FATAL(this->cluster_desc_->is_chip_mmio_capable(chip_id), "DMA write to non-MMIO device is not supported");
+    const metal_SocDescriptor& soc_desc = this->get_soc_desc(chip_id);
+    tt::umd::CoreCoord core_coord = soc_desc.get_coord_at(core, CoordSystem::TRANSLATED);
+    this->driver_->dma_write_to_device(mem_ptr, size_in_bytes, chip_id, core_coord, addr);
+}
+
+void Cluster::dma_read_core(void* mem_ptr, uint32_t size_in_bytes, tt_cxy_pair core, uint64_t addr) const {
+    const chip_id_t chip_id = core.chip;
+    TT_FATAL(this->cluster_desc_->is_chip_mmio_capable(chip_id), "DMA read from non-MMIO device is not supported");
+    const metal_SocDescriptor& soc_desc = this->get_soc_desc(chip_id);
+    tt::umd::CoreCoord core_coord = soc_desc.get_coord_at(core, CoordSystem::TRANSLATED);
+    this->driver_->dma_read_from_device(mem_ptr, size_in_bytes, chip_id, core_coord, addr);
+}
+
+void Cluster::dma_read_core(
+    std::vector<uint32_t>& data, uint32_t size_in_bytes, tt_cxy_pair core, uint64_t addr) const {
+    data.resize(size_in_bytes / sizeof(uint32_t));
+    dma_read_core(data.data(), size_in_bytes, core, addr);
+}
+
 void Cluster::write_reg(const std::uint32_t *mem_ptr, tt_cxy_pair target, uint64_t addr) const {
     const unsigned int size_in_bytes = sizeof(uint32_t);
     int chip_id = target.chip;
