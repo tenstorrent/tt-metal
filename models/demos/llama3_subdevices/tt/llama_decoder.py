@@ -131,22 +131,21 @@ class TtTransformerBlock(LightweightModule):
         kv_cache=None,
     ) -> ttnn.Tensor:
         TG = self.args.is_galaxy
-        # x is fractured across devices and interleaved in DRAM (for prefill) and sharded in L1 (for decode)
+        # x contains input in layer 0 and ffout of previous layer thereafter, x should be dealocated
+        # h contains 0 in layer 0 and h_prev+x_prev+attn_out_prev thereafter, h is persistent
         skip_mem_cfg = self.model_config["DECODE_RESIDUAL_MEMCFG"] if mode == "decode" else ttnn.DRAM_MEMORY_CONFIG
         assert (
             x.memory_config() == skip_mem_cfg
         ), f"decoder input memcfg mismatch: {x.memory_config()} != {skip_mem_cfg}"
         # Norms take fractured inputs and output replicated across devices
         try:
+            # attn_in_sharded=norm(x+h), h = x+h happens implicitly
             attn_in_sharded, _ = self.attention_norm(x, h, mode)
         except Exception as e:
             print(e)
             print("failed to run attention norm")
             assert False, "Failed to run attention norm"
-        # print("attention norm done", attn_in_sharded)
-        # NOTE: do not deallocate x here as it updated inplace and returns new h
-        # Attention takes replicated inputs and produces fractured outputs
-        # pad attn input
+        x.deallocate(True)
         attn_out = self.attention.forward(
             attn_in_sharded,
             current_pos,
@@ -158,22 +157,11 @@ class TtTransformerBlock(LightweightModule):
             chunk_start_idx=chunk_start_idx,
             kv_cache=kv_cache,
         )
-        # print("attention done", attn_out)
-
-        # Norms take fractured inputs and output replicated across devices
-        # h = ttnn.add(x, attn_out, memory_config=skip_mem_cfg)  # , dtype=ttnn.bfloat16)
-        # x.deallocate(True)
-        # attn_out.deallocate(True)
         ff_in_sharded, _ = self.ff_norm(attn_out, h, mode)
-        # ff_in_sharded, _ = self.ff_norm(h, None, mode)
-        # print("ff norm done", ff_in)
-        # if TG and mode == "decode":
-        #     ff_in = ttnn.to_memory_config(ff_in, memory_config=self.model_config["MLP_ACT_MEMCFG"])
+        attn_out.deallocate(True)
 
         # MLP takes replicated inputs and produces fractured outputs
         ff_out = self.feed_forward.forward(ff_in_sharded, mode)
-        # print("feed forward done", ff_out)
-        # out = ttnn.add(h, ff_out, memory_config=skip_mem_cfg)
         if self.layer_num == self.n_layers - 1:
             out = ttnn.add(ff_out, h, memory_config=skip_mem_cfg)  # , dtype=ttnn.bfloat16)
             ff_out.deallocate(True)
