@@ -69,31 +69,10 @@ public:
         const std::optional<Tile>& tile = std::nullopt);
     Tensor(Storage storage, TensorSpec tensor_spec);
 
-    // Constructors to initialize unpopulated tensor with workers and storage specified. Use this when creating tensor
-    // handles in async mode.
-    explicit Tensor(
-        uint32_t num_buffers,
-        TensorSpec spec,
-        std::optional<DistributedTensorConfig> distributed_tensor_config = std::nullopt);
-    explicit Tensor(const std::vector<IDevice*>& workers, TensorSpec spec);
-    explicit Tensor(distributed::MeshDevice* mesh_device, TensorSpec spec);
-
     Tensor(const Tensor& other);
-
     Tensor& operator=(const Tensor& other);
-
     Tensor(Tensor&& other) noexcept = default;
-
-    Tensor& operator=(Tensor&& other) {
-        // Don't self assign
-        this->tensor_id = std::move(other.tensor_id);
-        if (this->tensor_attributes != other.tensor_attributes) {
-            this->workers = std::move(other.workers);
-            this->tensor_attributes = std::move(other.tensor_attributes);
-        }
-        this->mesh_device_ = std::move(other.mesh_device_);
-        return *this;
-    }
+    Tensor& operator=(Tensor&& other) noexcept;
 
     ~Tensor();
 
@@ -301,8 +280,6 @@ public:
             this->tensor_attributes->get_storage(), this->tensor_attributes->get_tensor_spec());
     }
 
-    std::vector<uint32_t> host_page_ordering();
-
 private:
     void init(Storage storage, TensorSpec tensor_spec);
     void deallocate_impl(bool force);
@@ -355,8 +332,6 @@ void memcpy(
 void memcpy(Tensor& dst, const void* src, const std::optional<BufferRegion>& region = std::nullopt);
 
 void memcpy(Tensor& dst, const Tensor& src, const std::optional<BufferRegion>& region = std::nullopt);
-
-Tensor allocate_tensor_on_devices(const TensorSpec& spec, const std::vector<IDevice*>& devices);
 
 // Allocates a tensor on a mesh device through mesh buffer.
 Tensor allocate_tensor_on_mesh(const TensorSpec& tensor_spec, distributed::MeshDevice* mesh_device);
