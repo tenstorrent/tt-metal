@@ -27,7 +27,7 @@
 
 namespace ttnn::operations::experimental::reduction {
 
-CumSumDeviceOperation::SingleCore::cached_program_t CumSumDeviceOperation::SingleCore::create(
+CumSumDeviceOperation::ProgramFactory::cached_program_t CumSumDeviceOperation::ProgramFactory::create(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& output_tensor) {
@@ -236,10 +236,10 @@ CumSumDeviceOperation::SingleCore::cached_program_t CumSumDeviceOperation::Singl
 
         start_row += rows_per_core;
     }
-    return {std::move(program), {}};
+    return {std::move(program), {cumsum_reader_handle_id, cumsum_writer_handle_id, num_cores}};
 }
 
-void CumSumDeviceOperation::SingleCore::override_runtime_arguments(
+void CumSumDeviceOperation::ProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
@@ -248,6 +248,16 @@ void CumSumDeviceOperation::SingleCore::override_runtime_arguments(
     const auto& dtype = operation_attributes.dtype;
 
     const auto& input_dtype = input_tensor.dtype();
+
+    auto& unary_reader_kernel_id = cached_program.shared_variables.unary_reader_kernel_id;
+    auto& unary_writer_kernel_id = cached_program.shared_variables.unary_writer_kernel_id;
+
+    auto& num_cores = cached_program.shared_variables.num_cores;
+
+    auto& program = cached_program.program;
+
+    for (uint32_t i = 0; i < num_cores; i++) {
+    }
 
     // Support for override_runtime_arguments() will be added in resolution of issue #21097
     TT_THROW("override_runtime_arguments() not yet supported");
