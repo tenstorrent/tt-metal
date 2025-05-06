@@ -4,6 +4,9 @@
 #include "noc_parameters.h"
 #include "risc_attribs.h"
 #include "socket.h"
+#include "tt_metal/fabric/hw/inc/tt_fabric.h"
+#include "tt_metal/api/tt-metalium/fabric_edm_packet_header.hpp"
+#include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
 
 static_assert(offsetof(sender_socket_md, bytes_acked) % L1_ALIGNMENT == 0);
 
@@ -116,11 +119,11 @@ void socket_notify_receiver(const SocketSenderInterface& socket) {
 
 void fabric_socket_notify_receiver(
     const SocketSenderInterface& socket,
-    tt::tt_fabric::WorkerToFabricEdmSender fabric_connection,
+    tt::tt_fabric::WorkerToFabricEdmSender& fabric_connection,
     volatile tt_l1_ptr PACKET_HEADER_TYPE* fabric_header_addr) {
     auto downstream_bytes_sent_noc_addr =
         get_noc_addr(socket.downstream_noc_x, socket.downstream_noc_y, socket.downstream_bytes_sent_addr);
-    fabric_header_addr->to_chip_unicast(static_cast<uint8_t>(socket.downstream_chip_id));
+    fabric_header_addr->to_chip_unicast(static_cast<uint8_t>(1));
     fabric_header_addr->to_noc_unicast_inline_write(
         NocUnicastInlineWriteCommandHeader{downstream_bytes_sent_noc_addr, socket.bytes_sent});
 
@@ -227,14 +230,13 @@ void socket_notify_sender(const SocketReceiverInterface& socket) {
 
 void fabric_socket_notify_sender(
     const SocketReceiverInterface& socket,
-    tt::tt_fabric::WorkerToFabricEdmSender fabric_connection,
+    tt::tt_fabric::WorkerToFabricEdmSender& fabric_connection,
     volatile tt_l1_ptr PACKET_HEADER_TYPE* fabric_header_addr) {
     auto upstream_bytes_acked_noc_addr =
         get_noc_addr(socket.upstream_noc_x, socket.upstream_noc_y, socket.upstream_bytes_acked_addr);
     fabric_header_addr->to_chip_unicast(static_cast<uint8_t>(1));
     fabric_header_addr->to_noc_unicast_inline_write(
         NocUnicastInlineWriteCommandHeader{upstream_bytes_acked_noc_addr, socket.bytes_acked});
-
     fabric_connection.wait_for_empty_write_slot();
     fabric_connection.send_payload_blocking_from_address((uint32_t)fabric_header_addr, sizeof(PACKET_HEADER_TYPE));
 }
