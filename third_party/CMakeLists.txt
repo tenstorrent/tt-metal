@@ -40,7 +40,6 @@ ensureboosttarget(core)
 ensureboosttarget(container)
 ensureboosttarget(smart_ptr)
 ensureboosttarget(interprocess)
-ensureboosttarget(mpi)
 ensureboosttarget(serialization)
 
 add_library(span INTERFACE)
