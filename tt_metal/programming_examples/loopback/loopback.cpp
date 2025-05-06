@@ -56,10 +56,10 @@ int main() {
 
         // Data on Tensix is (usually) stored in tiles. A tile is a 2D array of 32x32 elements. And the Tensix uses
         // BFloat16 as the most well supported data type. Thus the tile size is 32x32x2 = 2048 bytes.
-        constexpr uint32_t tile_size = tt::constants::TILE_WIDTH * tt::constants::TILE_HEIGHT;
-        constexpr uint32_t single_tile_size = sizeof(bfloat16) * tile_size;
+        constexpr uint32_t elemnts_per_tile = tt::constants::TILE_WIDTH * tt::constants::TILE_HEIGHT;
+        constexpr uint32_t tile_size_bytes = sizeof(bfloat16) * elemnts_per_tile;
         constexpr uint32_t num_tiles = 50;
-        constexpr uint32_t dram_buffer_size = single_tile_size * num_tiles;
+        constexpr uint32_t dram_buffer_size = tile_size_bytes * num_tiles;
 
         // Configuration for the buffers.
         tt::tt_metal::InterleavedBufferConfig dram_config{
@@ -83,7 +83,7 @@ int main() {
         const uint32_t output_bank_id = 0;
 
         // Initialize the input buffer with random data.
-        std::vector<bfloat16> input_vec(num_tiles * tile_size);
+        std::vector<bfloat16> input_vec(tile_size_bytes * num_tiles);
         std::mt19937 rng(std::random_device{}());
         std::uniform_real_distribution<float> distribution(0.0f, 100.0f);
         for (auto& val : input_vec) {
