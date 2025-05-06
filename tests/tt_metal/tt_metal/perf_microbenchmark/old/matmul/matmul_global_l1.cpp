@@ -898,7 +898,7 @@ tt_metal::Program create_program_mcast_in0_in1(
             }
         }
     }
-    return std::move(program);
+    return program;
 }
 
 std::vector<bfloat16> select_columns(std::vector<bfloat16> data, int M, int K, int N) {
