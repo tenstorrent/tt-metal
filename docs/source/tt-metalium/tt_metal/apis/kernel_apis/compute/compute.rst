@@ -58,6 +58,10 @@ Compute APIs
   atan_tile
   acos_tile
 
+  quant_tile
+  requant_tile
+  dequant_tile
+
   ltz_tile
   eqz_tile
   lez_tile
