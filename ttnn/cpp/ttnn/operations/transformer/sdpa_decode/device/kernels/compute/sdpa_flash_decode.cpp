@@ -338,6 +338,11 @@ void MAIN {
             }
         }
         /* END OF FLASH ATTENTION LOOP */
+#ifdef ARCH_BLACKHOLE
+        for (uint32_t i = 0; i < 10; i++) {
+            asm volatile("nop");  // #19201 BH hang workaround
+        }
+#endif
 
         // do reduction across intermediates from other cores if this is the reduction core
         if (do_reduce) {
