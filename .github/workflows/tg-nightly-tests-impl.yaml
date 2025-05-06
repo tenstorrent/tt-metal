@@ -16,6 +16,10 @@ on:
         required: false
         type: string
         default: "in-service"
+      topology:
+        required: false
+        type: string
+        default: "config-tg"
 
 jobs:
   tg-nightly-tests:
@@ -42,7 +46,7 @@ jobs:
     name: ${{ matrix.test-group.name }}
     runs-on:
       - arch-wormhole_b0
-      - config-tg
+      - ${{ inputs.topology }}
       - pipeline-functional
       - ${{ inputs.extra-tag }}
     container:
