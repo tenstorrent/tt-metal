@@ -208,6 +208,16 @@ def get_job_row_from_github_job(github_job, github_job_id_to_annotations, workfl
     else:
         ubuntu_version = None
 
+    # Clean up ephemeral runner names
+    if host_name and host_name.startswith("tt-beta"):
+        parts = host_name.split("-")
+        # Issue: https://github.com/tenstorrent/tt-metal/issues/21694
+        # Remove non-constant ephemeral runner suffix from tt-beta runner names only if the second last part is "runner"
+        # We don't want to remove the suffix for non-ephemeral tt-beta runners (e.g. tt-beta-ubuntu-2204-xlarge)
+        # E.g. tt-beta-ubuntu-2204-n150-large-stable-nk6pd-runner-5g5f9 -> tt-beta-ubuntu-2204-n150-large-stable-nk6pd
+        if len(parts) >= 2 and parts[-2] == "runner":
+            host_name = "-".join(parts[:-1])
+
     os = ubuntu_version
 
     name = github_job["name"]
