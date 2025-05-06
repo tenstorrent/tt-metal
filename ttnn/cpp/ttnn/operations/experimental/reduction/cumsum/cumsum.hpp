@@ -17,6 +17,16 @@ struct CumSumOperation {
         const Tensor& input,
         int64_t dim,
         std::optional<ttnn::DataType> dtype = std::nullopt,
+        std::optional<Tensor> preallocated_output = std::nullopt,
+        std::optional<bool> flip = std::nullopt);
+};
+
+struct CumSumBackwardOperation {
+    static Tensor invoke(
+        QueueId queue_id,
+        const Tensor& input,
+        int64_t dim,
+        std::optional<ttnn::DataType> dtype = std::nullopt,
         std::optional<Tensor> preallocated_output = std::nullopt);
 };
 
@@ -25,4 +35,9 @@ struct CumSumOperation {
 namespace ttnn::experimental {
 constexpr auto cumsum = decorators::
     register_operation<"ttnn::experimental::cumsum", ttnn::operations::experimental::reduction::CumSumOperation>();
+
+constexpr auto cumsum_bw = decorators::register_operation<
+    "ttnn::experimental::cumsum_bw",
+    ttnn::operations::experimental::reduction::CumSumBackwardOperation>();
+
 }  // namespace ttnn::experimental
