@@ -11,7 +11,7 @@
 #include "debug/waypoint.h"
 #include "utils/utils.h"
 #include "debug/assert.h"
-#include "tools/profiler/kernel_profiler.hpp"
+// #include "tools/profiler/kernel_profiler.hpp"
 
 namespace interleaved_addr_gen {
 
@@ -256,7 +256,8 @@ struct InterleavedAddrGen {
         uint64_t src_noc_addr = this->get_noc_addr(id, offset);
         uint32_t dst_local_l1_addr = dest_addr;
         uint32_t size = this->page_size;
-        RECORD_NOC_EVENT_WITH_ADDR(NocEventType::READ, src_noc_addr, size, -1);
+        // RECORD_NOC_EVENT_WITH_ADDR(NocEventType::READ, src_noc_addr, size, -1); // TODO: need to fix circular
+        // dependency to uncomment this line
 
         WAYPOINT("NARW");
         DEBUG_SANITIZE_NOC_READ_TRANSACTION(noc, src_noc_addr, dst_local_l1_addr, size);
