@@ -179,12 +179,12 @@ operation::ProgramWithCallbacks upsample_multi_core(
         out_shard_spec.num_cores(),
         ncores);
 
-    if (input.memory_config().memory_layout == TensorMemoryLayout::WIDTH_SHARDED) {
+    if (input.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED) {
         TT_THROW("Unsupported sharding layout");
     }
 
     // extra limitation to avoid post upsample step of resharding
-    if (input.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED) {
+    if (input.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED) {
         ncores_x = all_cores.ranges().begin()->end_coord.x - all_cores.ranges().begin()->start_coord.x + 1;
         ncores_nhw = all_cores.ranges().begin()->end_coord.y - all_cores.ranges().begin()->start_coord.y + 1;
         input_stick_nbytes = input_stick_nbytes / ncores_x;
@@ -222,8 +222,8 @@ operation::ProgramWithCallbacks upsample_multi_core(
 
     // create config tensor
     Tensor config_tensor;
-    if ((input.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED) ||
-        (input.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED)) {
+    if ((input.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED) ||
+        (input.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED)) {
         config_tensor = create_config_tensor(
             device,
             shard_spec,
@@ -232,12 +232,12 @@ operation::ProgramWithCallbacks upsample_multi_core(
             in_w,
             scale_factor_h,
             scale_factor_w,
-            input.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED);
+            input.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED);
     } else {
         TT_THROW("Unsupported sharding layout");
     }
     auto shard_shape = std::array<uint32_t, 2>({1, (uint32_t)config_tensor.get_logical_shape()[-1]});
-    auto config_tensor_shard_orientation = input.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED
+    auto config_tensor_shard_orientation = input.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED
                                                ? ShardOrientation::COL_MAJOR
                                                : shard_spec.orientation;
     ShardSpec config_shard_spec(input.shard_spec().value().grid, shard_shape, config_tensor_shard_orientation);

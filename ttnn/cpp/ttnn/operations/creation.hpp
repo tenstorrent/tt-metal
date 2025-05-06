@@ -43,8 +43,7 @@ Tensor arange_impl(
     const int64_t step,
     const Layout layout = Layout::ROW_MAJOR,
     std::optional<std::reference_wrapper<MeshDevice>> device = std::nullopt,
-    const MemoryConfig& output_mem_config = MemoryConfig{
-        .memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED}) {
+    const MemoryConfig& output_mem_config = MemoryConfig{}) {
     constexpr DataType data_type = tt::tt_metal::convert_to_data_type<T>();
 
     TT_FATAL(step != 0, "Step must be nonzero");

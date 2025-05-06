@@ -213,23 +213,23 @@ static void emit_sharded_tensor_kernel_rt_args(IDevice* d, Tensor const& tensor,
 
 static bool shard_grid_is_transposed(Tensor const& t) {
     TT_FATAL(
-        t.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED ||
-            t.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED ||
-            t.memory_config().memory_layout == TensorMemoryLayout::WIDTH_SHARDED,
+        t.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED ||
+            t.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED ||
+            t.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED,
         "Unsupported memory layout {}.",
-        t.memory_config().memory_layout);
+        t.memory_config().memory_layout());
     bool shard_grid_transposed =
-        ((t.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED &&
+        ((t.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED &&
           t.shard_spec()->orientation == ShardOrientation::ROW_MAJOR) ||
-         ((t.memory_config().memory_layout == TensorMemoryLayout::WIDTH_SHARDED ||
-           t.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED) &&
+         ((t.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED ||
+           t.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED) &&
           t.shard_spec()->orientation == ShardOrientation::COL_MAJOR));
     return shard_grid_transposed;
 }
 
 static void emit_sharded_tensor_kernel_ct_args(IDevice* d, const Tensor& tensor, std::vector<uint32_t>& args) {
     std::ranges::copy(
-        std::vector<uint32_t>{static_cast<uint32_t>(tensor.memory_config().memory_layout)}, std::back_inserter(args));
+        std::vector<uint32_t>{static_cast<uint32_t>(tensor.memory_config().memory_layout())}, std::back_inserter(args));
     std::ranges::copy(ShardedAddrGenArgBuilder::emit_ct_args(tensor), std::back_inserter(args));
 };
 

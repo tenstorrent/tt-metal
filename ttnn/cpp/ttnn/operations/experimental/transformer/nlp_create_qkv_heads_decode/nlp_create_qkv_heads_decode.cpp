@@ -35,18 +35,18 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> NLPCreateHeadsDecodeOperati
          input_tensor.shard_spec().value().grid.bounding_box().start_coord != CoreCoord{0, 0});
 
     CoreRangeSet output_core_grid;
-    if (memory_config.has_value() and memory_config.value().shard_spec.has_value()) {
-        output_core_grid = memory_config.value().shard_spec.value().grid;
+    if (memory_config.has_value() and memory_config.value().shard_spec().has_value()) {
+        output_core_grid = memory_config.value().shard_spec().value().grid;
     } else {
         const auto device_grid_size = input_tensor.device()->compute_with_storage_grid_size();
         output_core_grid =
             CoreRangeSet{CoreRange{CoreCoord{0, 0}, CoreCoord{device_grid_size.x - 1, device_grid_size.y - 1}}};
     }
 
-    MemoryConfig output_mem_config;
-    output_mem_config.buffer_type = BufferType::L1;
-    output_mem_config.memory_layout = TensorMemoryLayout::HEIGHT_SHARDED;
-    output_mem_config.shard_spec = tt::tt_metal::ShardSpec{output_core_grid, {}};
+    MemoryConfig output_mem_config{
+        tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED,
+        tt::tt_metal::BufferType::L1,
+        tt::tt_metal::ShardSpec{output_core_grid, {}}};
     // Infer head_dim
     TT_FATAL(
         input_tensor.get_padded_shape()[3] % (num_heads + 2 * num_kv_heads_val) == 0,

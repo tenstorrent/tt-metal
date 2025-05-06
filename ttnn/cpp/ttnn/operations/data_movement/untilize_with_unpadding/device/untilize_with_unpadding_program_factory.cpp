@@ -929,9 +929,9 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_sharded(
     uint32_t num_output_rows = output.volume() / output.get_padded_shape()[-1];
     num_output_rows_unpadded =
         num_rows_block - (tt::round_up(num_output_rows, out_shard_spec.shape[0]) - num_output_rows);
-    if (a.memory_config().memory_layout == TensorMemoryLayout::WIDTH_SHARDED) {
+    if (a.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED) {
         last_idx = tt::div_up(output.get_padded_shape()[-1], out_shard_spec.shape[1]) - 1;
-    } else if (a.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED) {
+    } else if (a.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED) {
         last_idx = tt::div_up(num_output_rows, out_shard_spec.shape[0]) - 1;
     } else {
         end_core = {
@@ -1069,7 +1069,7 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_sharded(
             uint32_t block_start_row_id_offset;
             uint32_t row_size_unpadded = block_row_size;
             uint32_t num_rows_unpadded = num_rows_block;
-            if (a.memory_config().memory_layout == TensorMemoryLayout::WIDTH_SHARDED) {
+            if (a.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED) {
                 block_start_row_offset = i * block_row_size;
                 block_start_row_id_offset = 0;
                 if (i > last_idx) {
@@ -1081,7 +1081,7 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_sharded(
                         row_size_unpadded = last_block_row_size_unpadded;
                     }
                 }
-            } else if (a.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED) {
+            } else if (a.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED) {
                 block_start_row_offset = 0;
                 block_start_row_id_offset = i * num_rows_block;
                 if (i > last_idx) {

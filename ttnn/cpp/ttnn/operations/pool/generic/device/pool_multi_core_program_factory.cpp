@@ -415,7 +415,7 @@ Pool2D::MultiCore::cached_program_t Pool2D::MultiCore::create(
 
     auto parallel_config = sliding_window::ParallelConfig{
         .grid = input.shard_spec().value().grid,
-        .shard_scheme = input.memory_config().memory_layout,
+        .shard_scheme = input.memory_config().memory_layout(),
         .shard_orientation = input.shard_spec().value().orientation,
     };
 
@@ -423,7 +423,7 @@ Pool2D::MultiCore::cached_program_t Pool2D::MultiCore::create(
     uint32_t out_h = output_shape[1];
     uint32_t out_w = output_shape[2];
 
-    bool is_block_sharded = input.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED;
+    bool is_block_sharded = input.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED;
 
     auto pad_metadata = sliding_window::generate_pad_metadata(sliding_window_config);
     auto op_trace_metadata = sliding_window::generate_op_trace_metadata(sliding_window_config);

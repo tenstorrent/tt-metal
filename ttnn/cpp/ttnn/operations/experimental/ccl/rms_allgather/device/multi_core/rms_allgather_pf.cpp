@@ -44,7 +44,9 @@ namespace ttnn::operations::fused::normalization {
 
 namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {
-inline bool is_dram(const Tensor& input_tensor) { return input_tensor.memory_config().buffer_type == BufferType::DRAM; }
+inline bool is_dram(const Tensor& input_tensor) {
+    return input_tensor.memory_config().buffer_type() == BufferType::DRAM;
+}
 inline bool is_dram(const std::optional<const Tensor>& input_tensor) {
     return input_tensor.has_value() ? is_dram(input_tensor.value()) : true;
 }
@@ -125,9 +127,9 @@ operation::ProgramWithCallbacks frmsnorm_pre_multi_core_sharded(
     const auto& cores = corerange_to_cores(all_cores, all_cores.num_cores(), true);
 
     // Tensor Info
-    const auto input_tensor_cores = a.memory_config().shard_spec->grid;
-    const auto output_tensor_cores = output.memory_config().shard_spec->grid;
-    const auto output_tensor_shard_shape = output.memory_config().shard_spec->shape;
+    const auto input_tensor_cores = a.memory_config().shard_spec()->grid;
+    const auto output_tensor_cores = output.memory_config().shard_spec()->grid;
+    const auto output_tensor_shard_shape = output.memory_config().shard_spec()->shape;
     const auto output_tensor_shard_num_pages = output_tensor_shard_shape[0] * output_tensor_shard_shape[1] / TILE_HW;
 
     // L1 Scratch CB Creation

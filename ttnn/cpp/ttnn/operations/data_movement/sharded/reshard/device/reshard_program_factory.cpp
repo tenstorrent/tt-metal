@@ -739,18 +739,18 @@ operation::ProgramWithCallbacks reshard_multi_core_same_height(const Tensor& inp
 }
 
 operation::ProgramWithCallbacks reshard_multi_core(const Tensor& input, Tensor& output) {
-    if (input.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED &&
-        output.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED) {
-        if (output.memory_config().buffer_type == BufferType::L1) {
+    if (input.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED &&
+        output.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED) {
+        if (output.memory_config().buffer_type() == BufferType::L1) {
             return reshard_multi_core_same_width<true>(input, output);
         } else {
             return reshard_multi_core_same_width<false>(input, output);
         }
     } else if (
         input.layout() == Layout::ROW_MAJOR &&
-        input.memory_config().memory_layout == TensorMemoryLayout::WIDTH_SHARDED &&
-        output.memory_config().memory_layout == TensorMemoryLayout::WIDTH_SHARDED) {
-        if (output.memory_config().buffer_type == BufferType::L1) {
+        input.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED &&
+        output.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED) {
+        if (output.memory_config().buffer_type() == BufferType::L1) {
             return reshard_multi_core_same_height<true>(input, output);
         } else {
             return reshard_multi_core_same_height<false>(input, output);

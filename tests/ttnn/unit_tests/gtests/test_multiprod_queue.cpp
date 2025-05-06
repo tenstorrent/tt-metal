@@ -46,10 +46,7 @@ TEST_F(MultiProducerCommandQueueTest, Stress) {
     IDevice* device = this->device_;
 
     const ttnn::Shape tensor_shape{1, 1, 1024, 1024};
-    const MemoryConfig mem_cfg = MemoryConfig{
-        .memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED,
-        .buffer_type = BufferType::DRAM,
-        .shard_spec = std::nullopt};
+    const MemoryConfig mem_cfg = MemoryConfig{tt::tt_metal::TensorMemoryLayout::INTERLEAVED, BufferType::DRAM};
     const TensorLayout tensor_layout(DataType::FLOAT32, PageConfig(Layout::ROW_MAJOR), mem_cfg);
     const TensorSpec tensor_spec(tensor_shape, tensor_layout);
 
@@ -96,10 +93,7 @@ TEST_F(MultiProducerCommandQueueTest, EventSync) {
     auto device = this->device_;
 
     const ttnn::Shape tensor_shape{1, 1, 1024, 1024};
-    const MemoryConfig mem_cfg = MemoryConfig{
-        .memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED,
-        .buffer_type = BufferType::DRAM,
-        .shard_spec = std::nullopt};
+    const MemoryConfig mem_cfg = MemoryConfig{tt::tt_metal::TensorMemoryLayout::INTERLEAVED, BufferType::DRAM};
     const TensorLayout tensor_layout(DataType::UINT32, PageConfig(Layout::ROW_MAJOR), mem_cfg);
     const TensorSpec tensor_spec(tensor_shape, tensor_layout);
 

@@ -31,7 +31,7 @@ void SplitFusedQKVAndSplitHeadsDeviceOperation::validate_with_output_tensors(
             "Error");
         TT_FATAL(input_tensor.shard_spec().value().grid.ranges().size() == 1, "Error");
         TT_FATAL(
-            input_tensor.memory_config().memory_layout == tt::tt_metal::TensorMemoryLayout::BLOCK_SHARDED, "Error");
+            input_tensor.memory_config().memory_layout() == tt::tt_metal::TensorMemoryLayout::BLOCK_SHARDED, "Error");
     }
 
     if (!output_tensors.empty()) {
@@ -75,10 +75,8 @@ std::vector<ttnn::TensorSpec> SplitFusedQKVAndSplitHeadsDeviceOperation::compute
         uint32_t per_core_N_k = M;                              // 384
         auto shard_spec_k = tt::tt_metal::ShardSpec{all_cores, {per_core_M_k, per_core_N_k}, shard_orientation};
         // create sharded tensors
-        auto mem_config_qv = this->output_mem_config;
-        mem_config_qv.shard_spec = shard_spec_qv;
-        auto mem_config_k = this->output_mem_config;
-        mem_config_k.shard_spec = shard_spec_k;
+        auto mem_config_qv = this->output_mem_config.with_shard_spec(shard_spec_qv);
+        auto mem_config_k = this->output_mem_config.with_shard_spec(shard_spec_k);
         auto out_tensor_q = TensorSpec(
             Shape({batch_size, num_heads, M, K}),
             TensorLayout(input_tensor.get_dtype(), PageConfig(Layout::TILE), mem_config_qv));

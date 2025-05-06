@@ -113,7 +113,7 @@ def run_matmul(
             (per_core_height, per_core_width),
             ttnn.ShardOrientation.ROW_MAJOR,
         )
-    input_a_memory_config.shard_spec = input_a_shard_spec
+    input_a_memory_config = input_a_memory_config.with_shard_spec(input_a_shard_spec)
 
     input_shape_a = (*batch_sizes, m_size, k_size)
     input_shape_b = (k_size, n_size)

@@ -33,8 +33,8 @@ void CreateQKVHeadsSeparateTensorsDeviceOperation::validate(const std::vector<Te
          bbox.end_coord.y < q_input_tensor.device()->compute_with_storage_grid_size().y),
         "Error");
 
-    TT_FATAL(q_input_tensor.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED, "Error");
-    TT_FATAL(kv_input_tensor.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED, "Error");
+    TT_FATAL(q_input_tensor.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED, "Error");
+    TT_FATAL(kv_input_tensor.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED, "Error");
 
     ShardOrientation shard_orientation = q_input_tensor.shard_spec().value().orientation;
     bool rm = shard_orientation == ShardOrientation::ROW_MAJOR;
@@ -124,7 +124,7 @@ void CreateQKVHeadsSeparateTensorsDeviceOperation::validate(const std::vector<Te
         l1_size >= 2 * (per_core_q_tiles + 2 * per_core_k_tiles) * single_tile_size, "Workload exceeds L1 capacity");
 
     // TODO: Add this back when output is HEIGHT sharded only!
-    // TT_FATAL(this->output_mem_config.memory_layout == TensorMemoryLayout::HEIGHT_SHARDED, "Error");
+    // TT_FATAL(this->output_mem_config.memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED, "Error");
     TT_FATAL(
         q_input_shape[0] == num_h_cores, "Batch size {} must be equal to num cores {}", q_input_shape[0], num_h_cores);
 }
@@ -165,14 +165,9 @@ std::vector<ttnn::TensorSpec> CreateQKVHeadsSeparateTensorsDeviceOperation::comp
     auto k_spec = tt::tt_metal::ShardSpec(all_cores, {k_shard_h, k_shape[-1]}, shard_orientation);
     auto v_spec = tt::tt_metal::ShardSpec(all_cores, {v_shard_h, v_shape[-1]}, shard_orientation);
     // create sharded tensors
-    auto mem_config_q = this->output_mem_config;
-    mem_config_q.shard_spec = q_spec;
-
-    auto mem_config_k = this->output_mem_config;
-    mem_config_k.shard_spec = k_spec;
-
-    auto mem_config_v = this->output_mem_config;
-    mem_config_v.shard_spec = v_spec;
+    auto mem_config_q = this->output_mem_config.with_shard_spec(q_spec);
+    auto mem_config_k = this->output_mem_config.with_shard_spec(k_spec);
+    auto mem_config_v = this->output_mem_config.with_shard_spec(v_spec);
 
     auto out_tensor_q = TensorSpec(
         q_shape,
