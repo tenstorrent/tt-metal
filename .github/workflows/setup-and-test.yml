@@ -19,7 +19,7 @@ jobs:
     timeout-minutes: 40
     container:
       image: ${{ inputs.docker_image }}
-      options: "--device /dev/tenstorrent"
+      options: "--rm --device /dev/tenstorrent"
 
     steps:
       # Step 1: Checkout the repository
