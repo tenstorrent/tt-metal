@@ -26,7 +26,8 @@ static inline bool verify_multi_core_cost(
 
     const auto core_range = core_range_set.ranges().at(0);
     const auto max_cores = core_range.end_coord.y - core_range.start_coord.y - 1;
-    for (uint16_t split_size = max_dim; split_size >= min_dim; split_size /= 2) {
+    uint16_t start_split_size = width / max_cores;
+    for (uint16_t split_size = start_split_size; split_size <= max_dim; split_size *= 2) {
         uint16_t rem = width % split_size;
         uint16_t num_cores = width / split_size + (rem > 0);
         uint32_t memory_cost_gather =
@@ -38,7 +39,7 @@ static inline bool verify_multi_core_cost(
                                                   // as a matching set of indices, is processed by a core
         if (num_cores <= max_cores &&
             (memory_cost_gather + (memory_cost_local * num_cores)) < (device->l1_size_per_core() * num_cores) &&
-            num_cores > 1) {
+            num_cores > 1 && split_size >= min_dim) {
             return true;
         }
     }
