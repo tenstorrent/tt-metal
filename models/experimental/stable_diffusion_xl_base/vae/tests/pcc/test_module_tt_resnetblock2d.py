@@ -1,11 +1,12 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
+import gc
 import torch
 import pytest
 import ttnn
 from models.experimental.stable_diffusion_xl_base.vae.tt.tt_resnetblock2d import TtResnetBlock2D
-from diffusers import DiffusionPipeline
+from diffusers import AutoencoderKL
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.utility_functions import torch_random
 
@@ -24,10 +25,10 @@ from models.utility_functions import torch_random
 def test_vae_resnetblock2d(
     device, input_shape, block_id, resnet_id, conv_shortcut, block, pcc, use_program_cache, reset_seeds
 ):
-    pipe = DiffusionPipeline.from_pretrained(
-        "stabilityai/stable-diffusion-xl-base-1.0", torch_dtype=torch.float32, use_safetensors=True
+    vae = AutoencoderKL.from_pretrained(
+        "stabilityai/stable-diffusion-xl-base-1.0", torch_dtype=torch.float32, use_safetensors=True, subfolder="vae"
     )
-    vae = pipe.vae
+    # vae = pipe.vae
     vae.eval()
     state_dict = vae.state_dict()
 
@@ -57,4 +58,8 @@ def test_vae_resnetblock2d(
     output_tensor = ttnn.to_torch(ttnn_output_tensor)
     output_tensor = output_tensor.reshape(input_shape[0], output_shape[1], output_shape[2], output_shape[0])
     output_tensor = torch.permute(output_tensor, (0, 3, 1, 2))
+
+    del vae
+    gc.collect()
+
     assert_with_pcc(torch_output_tensor, output_tensor, pcc)

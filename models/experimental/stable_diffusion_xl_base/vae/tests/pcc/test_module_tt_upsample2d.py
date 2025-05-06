@@ -1,11 +1,12 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
+import gc
 import torch
 import pytest
 import ttnn
 from models.experimental.stable_diffusion_xl_base.vae.tt.tt_upsample2d import TtUpsample2D
-from diffusers import DiffusionPipeline
+from diffusers import AutoencoderKL
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.utility_functions import torch_random
 from models.experimental.stable_diffusion_xl_base.tt.sdxl_utility import (
@@ -22,10 +23,10 @@ from models.experimental.stable_diffusion_xl_base.tt.sdxl_utility import (
 @pytest.mark.parametrize("dilation", [(1, 1)])
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 4 * 16384}], indirect=True)
 def test_vae_upsample2d(device, input_shape, up_block_id, stride, padding, dilation, use_program_cache):
-    pipe = DiffusionPipeline.from_pretrained(
-        "stabilityai/stable-diffusion-xl-base-1.0", torch_dtype=torch.float32, use_safetensors=True, variant="fp16"
+    vae = AutoencoderKL.from_pretrained(
+        "stabilityai/stable-diffusion-xl-base-1.0", torch_dtype=torch.float32, use_safetensors=True, subfolder="vae"
     )
-    vae = pipe.vae
+    # vae = pipe.vae
     vae.eval()
     state_dict = vae.state_dict()
 
@@ -45,5 +46,8 @@ def test_vae_upsample2d(device, input_shape, up_block_id, stride, padding, dilat
     output_tensor = from_channel_last_ttnn(
         ttnn_output_tensor, [input_shape[0], output_shape[1], output_shape[2], output_shape[0]]
     )
+
+    del vae
+    gc.collect()
 
     assert_with_pcc(torch_output_tensor, output_tensor, 0.999)

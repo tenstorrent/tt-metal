@@ -1,11 +1,12 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
+import gc
 import torch
 import pytest
 import ttnn
 from models.experimental.stable_diffusion_xl_base.tt.tt_resnetblock2d import TtResnetBlock2D
-from diffusers import DiffusionPipeline
+from diffusers import UNet2DConditionModel
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.utility_functions import torch_random
 
@@ -41,10 +42,10 @@ def test_resnetblock2d(
     use_program_cache,
     reset_seeds,
 ):
-    pipe = DiffusionPipeline.from_pretrained(
-        "stabilityai/stable-diffusion-xl-base-1.0", torch_dtype=torch.float32, use_safetensors=True, variant="fp16"
+    unet = UNet2DConditionModel.from_pretrained(
+        "stabilityai/stable-diffusion-xl-base-1.0", torch_dtype=torch.float32, use_safetensors=True, subfolder="unet"
     )
-    unet = pipe.unet
+    # unet = pipe.unet
     unet.eval()
     state_dict = unet.state_dict()
 
@@ -84,5 +85,8 @@ def test_resnetblock2d(
     output_tensor = ttnn.to_torch(ttnn_output_tensor)
     output_tensor = output_tensor.reshape(input_shape[0], output_shape[1], output_shape[2], output_shape[0])
     output_tensor = torch.permute(output_tensor, (0, 3, 1, 2))
+
+    del unet
+    gc.collect()
 
     assert_with_pcc(torch_output_tensor, output_tensor, pcc)
