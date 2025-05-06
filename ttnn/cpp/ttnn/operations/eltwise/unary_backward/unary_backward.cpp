@@ -1789,17 +1789,25 @@ Tensor change_layout_to_tile(const Tensor& temp, const MemoryConfig& output_mem_
 std::vector<Tensor> ExecuteUnaryBackwardProd::invoke(
     const Tensor& grad,
     const Tensor& input,
-    bool all_dimensions,
-    int64_t dim,
+    const std::optional<int64_t> dim,
     const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
     auto output_memory_config = output_mem_config.value_or(
         input.memory_config());  // TODO: Remove after ternary forward ops migration is completed
-    const bool keepdim = !all_dimensions;
-    Tensor prod_result = ttnn::prod(input, all_dimensions, dim, keepdim, output_memory_config);
+
+    Tensor prod_result;
+    const bool all_dimensions = !dim.has_value();
+
+    if (all_dimensions) {
+        prod_result = ttnn::prod(input, /*dim=*/std::nullopt, /*keepdim=*/false, output_memory_config);
+    } else {
+        prod_result = ttnn::prod(input, *dim, /*keepdim=*/true, output_memory_config);
+    }
+
     if (prod_result.get_layout() == Layout::ROW_MAJOR && prod_result.storage_type() == StorageType::DEVICE) {
         prod_result = ttnn::operations::unary_backward::change_layout_to_tile(prod_result, output_memory_config);
     }
+
     if (all_dimensions) {
         Tensor temp = ttnn::multiply(
             prod_result, grad, std::nullopt, output_memory_config);  // result is stored in the first position
@@ -1810,11 +1818,12 @@ std::vector<Tensor> ExecuteUnaryBackwardProd::invoke(
         grad_tensor.emplace_back(all_dimension_result);
         return grad_tensor;
     }
+
     // all_dimensions = False
     Tensor updated_grad = prod_result;
     auto step = ttnn::SmallVector<uint32_t>({1, 1, 1, 1});
     if (prod_result.get_logical_shape() != grad.padded_shape()) {
-        if (dim == 3 || dim == -1) {
+        if (*dim == 3 || *dim == -1) {
             ttnn::SmallVector<int64_t> after_permute_dims = {0, 3, 1, 2};
             Tensor required = ttnn::permute(grad, after_permute_dims, output_memory_config);
             ttnn::SmallVector<uint32_t> start_index = {0, 0, 0, 0};
@@ -1828,7 +1837,7 @@ std::vector<Tensor> ExecuteUnaryBackwardProd::invoke(
                 pad_updated_grad = pad_updated_grad.to_layout(Layout::TILE);
                 updated_grad = pad_updated_grad.to_device(input.device());
             }
-        } else if (dim == 2 || dim == -2) {
+        } else if (*dim == 2 || *dim == -2) {
             ttnn::SmallVector<int64_t> after_permute_dims = {0, 2, 1, 3};
             Tensor required = ttnn::permute(grad, after_permute_dims, output_memory_config);
             ttnn::SmallVector<uint32_t> start_index = {0, 0, 0, 0};
@@ -1845,13 +1854,13 @@ std::vector<Tensor> ExecuteUnaryBackwardProd::invoke(
     Tensor reciprocal_input = ttnn::reciprocal(input, output_memory_config);
     Tensor temp = ttnn::multiply(
         prod_result,
-        (dim == 1 || dim == 0 || dim == -4 || dim == -3) ? grad : updated_grad,
+        (*dim == 1 || *dim == 0 || *dim == -4 || *dim == -3) ? grad : updated_grad,
         std::nullopt,
         output_memory_config);
     if (temp.get_layout() == Layout::ROW_MAJOR) {
         temp = ttnn::operations::unary_backward::change_layout_to_tile(temp, output_memory_config);
     }
-    if (dim == 3 || dim == -1) {
+    if (*dim == 3 || *dim == -1) {
         Tensor grad_result = ttnn::bcast(
             ttnn::DefaultQueueId,
             reciprocal_input,
@@ -1861,7 +1870,7 @@ std::vector<Tensor> ExecuteUnaryBackwardProd::invoke(
             output_memory_config);
         grad_tensor.emplace_back(grad_result);
         return grad_tensor;
-    } else if (dim == 2 || dim == -2) {
+    } else if (*dim == 2 || *dim == -2) {
         Tensor grad_result = ttnn::bcast(
             ttnn::DefaultQueueId,
             reciprocal_input,
@@ -1871,7 +1880,7 @@ std::vector<Tensor> ExecuteUnaryBackwardProd::invoke(
             output_memory_config);
         grad_tensor.emplace_back(grad_result);
         return grad_tensor;
-    } else if (dim == 1 || dim == -3) {
+    } else if (*dim == 1 || *dim == -3) {
         Tensor tensor_1_temp = reciprocal_input;
         if (reciprocal_input.padded_shape()[1] % 32 != 0) {
             ttnn::SmallVector<std::pair<uint32_t, uint32_t>> padding = {

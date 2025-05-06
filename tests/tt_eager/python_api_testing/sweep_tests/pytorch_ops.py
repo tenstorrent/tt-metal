@@ -974,10 +974,9 @@ def xlogy(x, y, *args, **kwargs):
     return torch.xlogy(x, y)
 
 
-def prod(x, *args, all_dimensions, dim, **kwargs):
-    if all_dimensions:
+def prod(x, *args, dim, **kwargs):
+    if dim is None:
         return torch.prod(x)
-
     return torch.prod(x, dim, keepdim=kwargs["keepdim"])
 
 

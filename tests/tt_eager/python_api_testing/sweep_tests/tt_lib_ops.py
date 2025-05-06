@@ -1254,7 +1254,6 @@ def arange(
 def prod(
     x,
     *args,
-    all_dimensions,
     dim,
     keepdim,
     device,
@@ -1264,12 +1263,11 @@ def prod(
     output_mem_config,
     **kwargs,
 ):
-    t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = ttnn.prod(t0, all_dimensions, dim, keepdim=keepdim, memory_config=output_mem_config)
+    t0 = ttnn.from_torch(x, device=device, layout=layout[0], memory_config=input_mem_config[0], dtype=dtype[0])
+    t1 = ttnn.prod(t0, dim, keepdim=keepdim, memory_config=output_mem_config)
     output_tensor = ttnn.from_device(t1)
     output_tensor = ttnn.to_layout(output_tensor, ttnn.ROW_MAJOR_LAYOUT)
     output_tensor = ttnn.to_torch(output_tensor)
-
     return output_tensor
 
 
