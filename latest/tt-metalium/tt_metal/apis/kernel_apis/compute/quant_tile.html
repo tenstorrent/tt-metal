@@ -4,12 +4,12 @@
   <meta charset="utf-8" /><meta name="generator" content="Docutils 0.18.1: http://docutils.sourceforge.net/" />
 
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>add_tiles &mdash; TT-Metalium  documentation</title>
+  <title>quant_tile &mdash; TT-Metalium  documentation</title>
       <link rel="stylesheet" href="../../../../_static/pygments.css" type="text/css" />
       <link rel="stylesheet" href="../../../../_static/css/theme.css" type="text/css" />
       <link rel="stylesheet" href="../../../../_static/tt_theme.css" type="text/css" />
     <link rel="shortcut icon" href="../../../../_static/favicon.png"/>
-    <link rel="canonical" href="/tt-metal/latest/tt-metalium/tt_metal/apis/kernel_apis/compute/add_tiles.html" />
+    <link rel="canonical" href="/tt-metal/latest/tt-metalium/tt_metal/apis/kernel_apis/compute/quant_tile.html" />
   <!--[if lt IE 9]>
     <script src="../../../../_static/js/html5shiv.min.js"></script>
   <![endif]-->
@@ -23,8 +23,8 @@
     <script src="../../../../_static/js/theme.js"></script>
     <link rel="index" title="Index" href="../../../../genindex.html" />
     <link rel="search" title="Search" href="../../../../search.html" />
-    <link rel="next" title="sub_tiles" href="sub_tiles.html" />
-    <link rel="prev" title="abs_tile" href="abs_tile.html" /> 
+    <link rel="next" title="requant_tile" href="requant_tile.html" />
+    <link rel="prev" title="acos_tile" href="acos_tile.html" /> 
 </head>
 
 <body class="wy-body-for-nav"> 
@@ -71,7 +71,7 @@
 <li class="toctree-l4"><a class="reference internal" href="reg_api.html">reg_api</a></li>
 <li class="toctree-l4"><a class="reference internal" href="init_functions.html">any_init</a></li>
 <li class="toctree-l4"><a class="reference internal" href="abs_tile.html">abs_tile</a></li>
-<li class="toctree-l4 current"><a class="current reference internal" href="#">add_tiles</a></li>
+<li class="toctree-l4"><a class="reference internal" href="add_tiles.html">add_tiles</a></li>
 <li class="toctree-l4"><a class="reference internal" href="sub_tiles.html">sub_tiles</a></li>
 <li class="toctree-l4"><a class="reference internal" href="mul_tiles.html">mul_tiles</a></li>
 <li class="toctree-l4"><a class="reference internal" href="add_tiles_bcast.html">add_tiles_bcast</a></li>
@@ -119,7 +119,7 @@
 <li class="toctree-l4"><a class="reference internal" href="asin_tile.html">asin_tile</a></li>
 <li class="toctree-l4"><a class="reference internal" href="atan_tile.html">atan_tile</a></li>
 <li class="toctree-l4"><a class="reference internal" href="acos_tile.html">acos_tile</a></li>
-<li class="toctree-l4"><a class="reference internal" href="quant_tile.html">quant_tile</a></li>
+<li class="toctree-l4 current"><a class="current reference internal" href="#">quant_tile</a></li>
 <li class="toctree-l4"><a class="reference internal" href="requant_tile.html">requant_tile</a></li>
 <li class="toctree-l4"><a class="reference internal" href="dequant_tile.html">dequant_tile</a></li>
 <li class="toctree-l4"><a class="reference internal" href="ltz_tile.html">ltz_tile</a></li>
@@ -175,9 +175,9 @@
           <li class="breadcrumb-item"><a href="../../index.html">APIs</a></li>
           <li class="breadcrumb-item"><a href="../../kernel_apis.html">Kernel APIs</a></li>
           <li class="breadcrumb-item"><a href="compute.html">Compute APIs</a></li>
-      <li class="breadcrumb-item active">add_tiles</li>
+      <li class="breadcrumb-item active">quant_tile</li>
       <li class="wy-breadcrumbs-aside">
-            <a href="../../../../_sources/tt_metal/apis/kernel_apis/compute/add_tiles.rst.txt" rel="nofollow"> View page source</a>
+            <a href="../../../../_sources/tt_metal/apis/kernel_apis/compute/quant_tile.rst.txt" rel="nofollow"> View page source</a>
       </li>
   </ul>
   <hr/>
@@ -185,47 +185,34 @@
           <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
            <div itemprop="articleBody">
              
-  <section id="add-tiles">
-<h1>add_tiles<a class="headerlink" href="#add-tiles" title="Permalink to this heading"></a>
+  <section id="quant-tile">
+<h1>quant_tile<a class="headerlink" href="#quant-tile" title="Permalink to this heading"></a>
 </h1>
 <dl class="cpp function">
-<dt class="sig sig-object cpp" id="_CPPv4N7ckernel14add_tiles_initE8uint32_t8uint32_tb">
-<span class="target" id="namespaceckernel_1a368ce49c1d94c540950156db48c79238"></span><span class="kt"><span class="pre">void</span></span><span class="w"> </span><span class="sig-prename descclassname"><span class="n"><span class="pre">ckernel</span></span><span class="p"><span class="pre">::</span></span></span><span class="sig-name descname"><span class="n"><span class="pre">add_tiles_init</span></span></span><span class="sig-paren">(</span><span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">icb0</span></span>, <span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">icb1</span></span>, <span class="kt"><span class="pre">bool</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">acc_to_dest</span></span><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="k"><span class="pre">false</span></span><span class="sig-paren">)</span><a class="headerlink" href="#_CPPv4N7ckernel14add_tiles_initE8uint32_t8uint32_tb" title="Permalink to this definition"></a><br>
+<dt class="sig sig-object cpp" id="_CPPv4N7ckernel15quant_tile_initEK8uint32_t">
+<span class="target" id="namespaceckernel_1a142acd2c14a3ee5a10f57e9eae4fab72"></span><span class="kt"><span class="pre">void</span></span><span class="w"> </span><span class="sig-prename descclassname"><span class="n"><span class="pre">ckernel</span></span><span class="p"><span class="pre">::</span></span></span><span class="sig-name descname"><span class="n"><span class="pre">quant_tile_init</span></span></span><span class="sig-paren">(</span><span class="k"><span class="pre">const</span></span><span class="w"> </span><span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">zero_point</span></span><span class="sig-paren">)</span><a class="headerlink" href="#_CPPv4N7ckernel15quant_tile_initEK8uint32_t" title="Permalink to this definition"></a><br>
 </dt>
 <dd>
-<p>Short init function</p>
+<p>Initialize the sfpu with the zero point argument of the quantization Op. To be called once at beginning of a kernel.</p>
+<p>Return value: None</p>
 <p></p>
 <table class="docutils align-default">
 <thead>
 <tr class="row-odd">
 <th class="head"><p>Argument   </p></th>
 <th class="head"><p>Description   </p></th>
-<th class="head"><p>Type   </p></th>
-<th class="head"><p>Valid Range   </p></th>
+<th class="head"><p>Data type   </p></th>
+<th class="head"><p>Valid range   </p></th>
 <th class="head"><p>Required    </p></th>
 </tr>
 </thead>
 <tbody>
 <tr class="row-even">
-<td><p>icb0   </p></td>
-<td><p>The identifier of the circular buffer (CB) containing A   </p></td>
+<td><p>zero_point   </p></td>
+<td><p>The zero point of the quantization Op   </p></td>
 <td><p>uint32_t   </p></td>
-<td><p>0 to 31   </p></td>
-<td><p>True    </p></td>
-</tr>
-<tr class="row-odd">
-<td><p>icb1   </p></td>
-<td><p>The identifier of the circular buffer (CB) containing B   </p></td>
-<td><p>uint32_t   </p></td>
-<td><p>0 to 31   </p></td>
-<td><p>True    </p></td>
-</tr>
-<tr class="row-even">
-<td><p>acc_to_dest   </p></td>
-<td><p>If true, operation = A + B + dst_tile_idx of add_tiles   </p></td>
-<td><p>bool   </p></td>
-<td><p>0,1   </p></td>
-<td><p>False   </p></td>
+<td><p>Any number   </p></td>
+<td><p>Yes   </p></td>
 </tr>
 </tbody>
 </table>
@@ -234,11 +221,11 @@
 </dl>
 
 <dl class="cpp function">
-<dt class="sig sig-object cpp" id="_CPPv4N7ckernel9add_tilesE8uint32_t8uint32_t8uint32_t8uint32_t8uint32_t">
-<span class="target" id="namespaceckernel_1a5a091c5371932422fc303adea3eec806"></span><span class="kt"><span class="pre">void</span></span><span class="w"> </span><span class="sig-prename descclassname"><span class="n"><span class="pre">ckernel</span></span><span class="p"><span class="pre">::</span></span></span><span class="sig-name descname"><span class="n"><span class="pre">add_tiles</span></span></span><span class="sig-paren">(</span><span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">icb0</span></span>, <span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">icb1</span></span>, <span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">itile0</span></span>, <span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">itile1</span></span>, <span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">idst</span></span><span class="sig-paren">)</span><a class="headerlink" href="#_CPPv4N7ckernel9add_tilesE8uint32_t8uint32_t8uint32_t8uint32_t8uint32_t" title="Permalink to this definition"></a><br>
+<dt class="sig sig-object cpp" id="_CPPv4N7ckernel10quant_tileE8uint32_t8uint32_t">
+<span class="target" id="namespaceckernel_1add1fee982f49ba29a48d47f5ef241762"></span><span class="kt"><span class="pre">void</span></span><span class="w"> </span><span class="sig-prename descclassname"><span class="n"><span class="pre">ckernel</span></span><span class="p"><span class="pre">::</span></span></span><span class="sig-name descname"><span class="n"><span class="pre">quant_tile</span></span></span><span class="sig-paren">(</span><span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">idst0</span></span>, <span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">idst1</span></span><span class="sig-paren">)</span><a class="headerlink" href="#_CPPv4N7ckernel10quant_tileE8uint32_t8uint32_t" title="Permalink to this definition"></a><br>
 </dt>
 <dd>
-<p>Performs element-wise addition C=A+B of tiles in two CBs at given indices and writes the result to the DST register at index dst_tile_index. The DST register buffer must be in acquired state via <em>acquire_dst</em> call. This call is blocking and is only available on the compute engine.</p>
+<p>Performs an elementwise per-tensor affine quantization operation on the first operand using the scaling factor in the second operand. Output overwrites first operand in DST.</p>
 <p>Return value: None</p>
 <p></p>
 <table class="docutils align-default">
@@ -253,38 +240,17 @@
 </thead>
 <tbody>
 <tr class="row-even">
-<td><p>in0_cb_id   </p></td>
-<td><p>The identifier of the circular buffer (CB) containing A   </p></td>
+<td><p>idst0   </p></td>
+<td><p>The index of the tile in DST register buffer to use as first operand   </p></td>
 <td><p>uint32_t   </p></td>
-<td><p>0 to 31   </p></td>
+<td><p>Must be less than the size of the DST register buffer   </p></td>
 <td><p>True    </p></td>
 </tr>
 <tr class="row-odd">
-<td><p>in1_cb_id   </p></td>
-<td><p>The identifier of the circular buffer (CB) containing B   </p></td>
+<td><p>idst1   </p></td>
+<td><p>The index of the tile in DST register buffer to use as second operand   </p></td>
 <td><p>uint32_t   </p></td>
-<td><p>0 to 31   </p></td>
-<td><p>True    </p></td>
-</tr>
-<tr class="row-even">
-<td><p>in0_tile_index   </p></td>
-<td><p>The index of tile A within the first CB   </p></td>
-<td><p>uint32_t   </p></td>
-<td><p>Must be less than the size of the CB   </p></td>
-<td><p>True    </p></td>
-</tr>
-<tr class="row-odd">
-<td><p>in1_tile_index   </p></td>
-<td><p>The index of tile B within the second CB   </p></td>
-<td><p>uint32_t   </p></td>
-<td><p>Must be less than the size of the CB   </p></td>
-<td><p>True    </p></td>
-</tr>
-<tr class="row-even">
-<td><p>dst_tile_index   </p></td>
-<td><p>The index of the tile in DST REG for the result C   </p></td>
-<td><p>uint32_t   </p></td>
-<td><p>Must be less than the acquired size of DST REG   </p></td>
+<td><p>Must be less than the size of the DST register buffer   </p></td>
 <td><p>True   </p></td>
 </tr>
 </tbody>
@@ -300,8 +266,8 @@
            </div>
           </div>
           <footer><div class="rst-footer-buttons" role="navigation" aria-label="Footer">
-        <a href="abs_tile.html" class="btn btn-neutral float-left" title="abs_tile" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
-        <a href="sub_tiles.html" class="btn btn-neutral float-right" title="sub_tiles" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
+        <a href="acos_tile.html" class="btn btn-neutral float-left" title="acos_tile" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
+        <a href="requant_tile.html" class="btn btn-neutral float-right" title="requant_tile" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
     </div>
 
   <hr/>
