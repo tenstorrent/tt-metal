@@ -17,7 +17,7 @@ jobs:
     timeout-minutes: 40
     container:
       image: ghcr.io/tenstorrent/tt-metal/tt-metalium/ubuntu-22.04-ci-build-amd64:latest
-      options: --user root --device /dev/tenstorrent
+      options: --user root --device /dev/tenstorrent --rm
       volumes:
         - /dev/hugepages:/dev/hugepages
         - /dev/hugepages-1G:/dev/hugepages-1G
