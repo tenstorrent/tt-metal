@@ -9,6 +9,7 @@ import glob
 from models.sample_data.huggingface_imagenet_classes import IMAGENET2012_CLASSES
 from datasets import load_dataset
 from torchvision import models
+from tqdm import tqdm
 
 
 class InputExample(object):
@@ -49,7 +50,7 @@ def get_batch(data_loader, image_processor):
     return images, labels
 
 
-def get_data_loader(input_loc, batch_size, iterations):
+def get_data_loader(input_loc, batch_size, iterations, download_entire_dataset=False):
     img_dir = input_loc + "/"
     data_path = os.path.join(img_dir, "*G")
     files = glob.glob(data_path)
@@ -83,10 +84,12 @@ def get_data_loader(input_loc, batch_size, iterations):
                 examples = []
 
     if len(files) == 0:
-        files_raw = iter(load_dataset("imagenet-1k", split="validation", use_auth_token=True, streaming=True))
+        files_raw = iter(
+            load_dataset("imagenet-1k", split="validation", use_auth_token=True, streaming=not download_entire_dataset)
+        )
         files = []
         sample_count = batch_size * iterations
-        for _ in range(sample_count):
+        for _ in tqdm(range(sample_count), desc="Loading samples"):
             files.append(next(files_raw))
         del files_raw
         return loader_hf()

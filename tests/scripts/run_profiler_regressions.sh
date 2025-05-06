@@ -107,21 +107,7 @@ run_async_ccl_T3000_test() {
     fi
 }
 
-run_single_op_test() {
-    remove_default_log_locations
-
-    $PROFILER_SCRIPTS_ROOT/profile_this.py -c "pytest tests/tt_eager/python_api_testing/sweep_tests/pytests/tt_dnn/test_matmul.py::test_run_matmul_test[BFLOAT16-input_shapes0]"
-
-    runDate=$(ls $PROFILER_OUTPUT_DIR/)
-
-    CORE_COUNT=7
-    res=$(verify_perf_column "$PROFILER_OUTPUT_DIR/$runDate/ops_perf_results_$runDate.csv" "$CORE_COUNT" "1" "1")
-    echo $res
-}
-
 run_profiling_test() {
-    run_single_op_test
-
     run_async_test
 
     run_ccl_T3000_test
@@ -132,7 +118,9 @@ run_profiling_test() {
 
     run_mid_run_tracy_push
 
-    TT_METAL_DEVICE_PROFILER=1 pytest $PROFILER_TEST_SCRIPTS_ROOT/test_device_profiler.py
+    TT_METAL_DEVICE_PROFILER=1 pytest $PROFILER_TEST_SCRIPTS_ROOT/test_device_profiler.py --noconftest --timeout 360
+
+    pytest tests/ttnn/tracy/test_perf_op_report.py --noconftest
 
     remove_default_log_locations
 }

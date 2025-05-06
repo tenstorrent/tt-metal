@@ -5,10 +5,10 @@
 #include <boost/move/utility_core.hpp>
 #include <gtest/gtest.h>
 #include <tt-metalium/bfloat16.hpp>
-#include <xtensor/xbuilder.hpp>
-#include <xtensor/xiterator.hpp>
-#include <xtensor/xlayout.hpp>
-#include <xtensor/xtensor_simd.hpp>
+#include <xtensor/generators/xbuilder.hpp>
+#include <xtensor/core/xiterator.hpp>
+#include <xtensor/core/xlayout.hpp>
+#include <xtensor/utils/xtensor_simd.hpp>
 #include <xtl/xiterator_base.hpp>
 #include <algorithm>
 #include <cstdint>
@@ -24,7 +24,6 @@
 #include <tt_stl/span.hpp>
 #include "tests/ttnn/unit_tests/gtests/ttnn_test_fixtures.hpp"
 #include <tt-metalium/tile.hpp>
-#include "ttnn/any_device.hpp"
 #include "ttnn/tensor/enum_types.hpp"
 #include "ttnn/tensor/layout/page_config.hpp"
 #include "ttnn/tensor/layout/tensor_layout.hpp"

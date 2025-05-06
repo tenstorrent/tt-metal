@@ -28,6 +28,8 @@ struct FabricEriscDatamoverConfig {
     static constexpr uint32_t RD_CMD_BUF = 1;      // for all reads
     static constexpr uint32_t WR_REG_CMD_BUF = 2;  // for small writes (e.g., registers, semaphores)
     static constexpr uint32_t AT_CMD_BUF = 3;      // for atomics
+    static constexpr uint32_t DEFAULT_NOC_VC = 2;
+    static constexpr uint32_t MAX_EDM_NOC_VC = 3;
 
     static constexpr uint32_t DEFAULT_RECEIVER_FORWARDING_NOC = 1;
     static constexpr uint32_t DEFAULT_RECEIVER_LOCAL_WRITE_NOC = 1;
@@ -124,6 +126,9 @@ struct FabricEriscDatamoverConfig {
 
     std::array<std::size_t, num_sender_channels> sender_channel_ack_noc_ids;
     std::array<std::size_t, num_sender_channels> sender_channel_ack_cmd_buf_ids;
+
+    // emd vcs
+    std::size_t edm_noc_vc;
 
 private:
     FabricEriscDatamoverConfig();

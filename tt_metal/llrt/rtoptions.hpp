@@ -86,6 +86,7 @@ class RunTimeOptions {
 
     bool is_kernel_dir_env_var_set = false;
     std::string kernel_dir;
+    std::string system_kernel_dir;
 
     bool build_map_enabled = false;
 
@@ -117,6 +118,7 @@ class RunTimeOptions {
     bool kernels_early_return = false;
 
     bool clear_l1 = false;
+    bool clear_dram = false;
 
     bool skip_loading_fw = false;
     bool skip_reset_cores_on_init = false;
@@ -146,6 +148,11 @@ class RunTimeOptions {
 
     bool skip_eth_cores_with_retrain = false;
 
+    // Relaxed ordering on BH allows loads to bypass stores when going to separate addresses
+    // e.g. Store A followed by Load A will be unchanges but Store A followed by Load B may return B before A is written
+    // This option will disable the relaxed ordering
+    bool disable_relaxed_memory_ordering = false;
+
 public:
     RunTimeOptions();
     RunTimeOptions(const RunTimeOptions&) = delete;
@@ -159,6 +166,8 @@ public:
 
     inline bool is_kernel_dir_specified() const { return this->is_kernel_dir_env_var_set; }
     const std::string& get_kernel_dir() const;
+    // Location where kernels are installed via package manager.
+    const std::string& get_system_kernel_dir() const;
 
     inline bool get_build_map_enabled() const { return build_map_enabled; }
 
@@ -307,6 +316,9 @@ public:
     inline bool get_clear_l1() const { return clear_l1; }
     inline void set_clear_l1(bool clear) { clear_l1 = clear; }
 
+    inline bool get_clear_dram() const { return clear_dram; }
+    inline void set_clear_dram(bool clear) { clear_dram = clear; }
+
     inline bool get_skip_loading_fw() const { return skip_loading_fw; }
     inline bool get_skip_reset_cores_on_init() const { return skip_reset_cores_on_init; }
 
@@ -326,6 +338,8 @@ public:
     inline void set_dispatch_data_collection_enabled(bool enable) { enable_dispatch_data_collection = enable; }
 
     inline bool get_hw_cache_invalidation_enabled() const { return this->enable_hw_cache_invalidation; }
+
+    inline bool get_relaxed_memory_ordering_disabled() const { return this->disable_relaxed_memory_ordering; }
 
     tt_metal::DispatchCoreConfig get_dispatch_core_config() const;
 

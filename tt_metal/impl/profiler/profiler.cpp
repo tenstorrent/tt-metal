@@ -236,7 +236,8 @@ void DeviceProfiler::readRiscProfilerResults(
                 std::string warningMsg = fmt::format(
                     "Profiler DRAM buffers were full, markers were dropped! device {}, worker core {}, {}, Risc "
                     "{},  "
-                    "bufferEndIndex = {}",
+                    "bufferEndIndex = {}. "
+                    "Please either decrease the number of ops being profiled or run dump device profiler more often",
                     device_id,
                     worker_core.x,
                     worker_core.y,
@@ -757,17 +758,15 @@ void DeviceProfiler::serializeJsonNocTraces(
 CoreCoord DeviceProfiler::getPhysicalAddressFromVirtual(chip_id_t device_id, const CoreCoord& c) const {
     bool coord_is_translated = c.x >= MetalContext::instance().hal().get_virtual_worker_start_x() &&
                                c.y >= MetalContext::instance().hal().get_virtual_worker_start_y();
-    if (device_architecture == tt::ARCH::WORMHOLE_B0 && coord_is_translated) {
+    if (MetalContext::instance().hal().is_coordinate_virtualization_enabled() && coord_is_translated) {
         const metal_SocDescriptor& soc_desc =
             tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(device_id);
         // disable linting here; slicing is __intended__
         // NOLINTBEGIN
         return soc_desc.translate_coord_to(c, CoordSystem::TRANSLATED, CoordSystem::PHYSICAL);
         // NOLINTEND
-    } else {
-        // tt:ARCH::BLACKHOLE currently doesn't have any translated coordinate adjustment
-        return c;
     }
+    return c;
 }
 
 DeviceProfiler::DeviceProfiler(const bool new_logs) {
