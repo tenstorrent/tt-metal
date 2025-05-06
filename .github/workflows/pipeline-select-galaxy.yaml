@@ -17,10 +17,6 @@ on:
         required: true
         type: string
         default: "in-service"
-      build-with-tracy:
-        required: false
-        type: boolean
-        default: false
       tg-quick:
         required: false
         type: boolean
@@ -64,7 +60,7 @@ jobs:
     secrets: inherit
     with:
       build-type: ${{ inputs.build-type }}
-      tracy: ${{ inputs.build-with-tracy }}
+      tracy: ${{ inputs.tg-model-perf || inputs.tg-nightly }}
       build-wheel: true
       version: 22.04
   tg-quick:
