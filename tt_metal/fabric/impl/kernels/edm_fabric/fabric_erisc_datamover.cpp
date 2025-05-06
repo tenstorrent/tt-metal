@@ -454,7 +454,7 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) bool can_forward_packet_co
         downstream_edm_interface) {
     bool ret_val = false;
     switch (hop_cmd) {
-        case 0x0: break;
+        case LowLatencyMeshRoutingFields::NOOP: break;
         case LowLatencyMeshRoutingFields::FORWARD_EAST:
             if constexpr (my_direction == eth_chan_directions::EAST) {  // packet dest
                 ret_val = true;
@@ -560,7 +560,7 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) void receiver_forward_pack
     uint16_t payload_size_bytes = packet_start->payload_size_bytes;
 
     switch (hop_cmd) {
-        case 0x0: break;
+        case LowLatencyMeshRoutingFields::NOOP: break;
         case LowLatencyMeshRoutingFields::FORWARD_EAST:
             if constexpr (my_direction == eth_chan_directions::EAST) {
                 execute_chip_unicast_to_local_chip(packet_start, payload_size_bytes, transaction_id, rx_channel_id);
@@ -1295,12 +1295,12 @@ void kernel_main() {
     init_ptr_val<to_sender_packets_completed_streams[0]>(0);
     init_ptr_val<to_sender_packets_completed_streams[1]>(0);
     init_ptr_val<to_sender_packets_completed_streams[2]>(0);
-#ifdef FABRIC_2D
-    init_ptr_val<to_sender_packets_acked_streams[3]>(0);
-    init_ptr_val<to_sender_packets_acked_streams[4]>(0);
-    init_ptr_val<to_sender_packets_completed_streams[3]>(0);
-    init_ptr_val<to_sender_packets_completed_streams[4]>(0);
-#endif
+    if constexpr (is_2d_fabric) {
+        init_ptr_val<to_sender_packets_acked_streams[3]>(0);
+        init_ptr_val<to_sender_packets_acked_streams[4]>(0);
+        init_ptr_val<to_sender_packets_completed_streams[3]>(0);
+        init_ptr_val<to_sender_packets_completed_streams[4]>(0);
+    }
 
     if constexpr (is_handshake_sender) {
         erisc::datamover::handshake::sender_side_start(handshake_addr, DEFAULT_HANDSHAKE_CONTEXT_SWITCH_TIMEOUT);

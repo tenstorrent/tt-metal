@@ -50,11 +50,8 @@ namespace tt::tt_fabric {
 
 FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(Topology topology) {
     this->topology = topology;
-    bool mesh = topology == Topology::Mesh;
-    uint32_t num_sender_channels =
-        mesh ? FabricEriscDatamoverConfig::num_sender_channels_2d : FabricEriscDatamoverConfig::num_sender_channels;
-    uint32_t num_downstream_edms =
-        mesh ? FabricEriscDatamoverConfig::num_downstream_edms_2d : FabricEriscDatamoverConfig::num_downstream_edms;
+    uint32_t num_sender_channels = get_sender_channel_count(topology);
+    uint32_t num_downstream_edms = get_downstream_edm_count(topology);
     // Global
     this->handshake_addr = tt::tt_metal::hal::get_erisc_l1_unreserved_base() /* + 1024*/;
     this->edm_channel_ack_addr = handshake_addr + eth_channel_sync_size;
@@ -125,15 +122,16 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(Topology topology) {
 
 FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(std::size_t channel_buffer_size_bytes, Topology topology) :
     FabricEriscDatamoverConfig(topology) {
+    this->num_used_sender_channels = get_sender_channel_count(topology);
     if (topology == Topology::Mesh) {
-        this->num_used_sender_channels = FabricEriscDatamoverConfig::num_sender_channels_2d;
-        this->num_fwd_paths = FabricEriscDatamoverConfig::num_sender_channels_2d;
+        // For 2D there is no forwarding to self but we are still initialize the settings for it.
+        // Routers ignore the settings at self index.
+        this->num_fwd_paths = this->num_used_sender_channels;
     } else {
-        this->num_used_sender_channels = FabricEriscDatamoverConfig::num_sender_channels;
-        this->num_fwd_paths = FabricEriscDatamoverConfig::num_sender_channels - 1;
+        this->num_fwd_paths = this->num_used_sender_channels - 1;
     }
     this->num_used_receiver_channels = FabricEriscDatamoverConfig::num_receiver_channels;
-    // this->topology = topology;
+
     if (topology == Topology::Linear || topology == Topology::Mesh) {
         this->num_used_sender_channels -= 1;
         this->num_used_receiver_channels -= 1;
@@ -288,7 +286,7 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(std::size_t channel_buffe
         this->receiver_channel_local_write_noc_ids[i] = FabricEriscDatamoverConfig::DEFAULT_RECEIVER_LOCAL_WRITE_NOC;
         this->receiver_channel_local_write_cmd_buf_ids[i] = FabricEriscDatamoverConfig::WR_CMD_BUF;
     }
-    for (uint32_t i = 0; i < FabricEriscDatamoverConfig::num_sender_channels_2d; i++) {
+    for (uint32_t i = 0; i < FabricEriscDatamoverConfig::num_sender_channels; i++) {
         this->sender_channel_ack_noc_ids[i] = FabricEriscDatamoverConfig::DEFAULT_SENDER_ACK_NOC;
         this->sender_channel_ack_cmd_buf_ids[i] = FabricEriscDatamoverConfig::AT_CMD_BUF;
     }
@@ -366,11 +364,10 @@ FabricEriscDatamoverBuilder::FabricEriscDatamoverBuilder(
         receiver_channels_downstream_flow_control_semaphore_id,
     const std::array<std::optional<size_t>, FabricEriscDatamoverConfig::max_downstream_edms>&
         receiver_channels_downstream_teardown_semaphore_id,
-    const std::array<size_t, FabricEriscDatamoverConfig::num_sender_channels_2d>&
+    const std::array<size_t, FabricEriscDatamoverConfig::num_sender_channels>&
         sender_channels_flow_control_semaphore_id,
-    const std::array<size_t, FabricEriscDatamoverConfig::num_sender_channels_2d>&
-        sender_channels_connection_semaphore_id,
-    const std::array<size_t, FabricEriscDatamoverConfig::num_sender_channels_2d>&
+    const std::array<size_t, FabricEriscDatamoverConfig::num_sender_channels>& sender_channels_connection_semaphore_id,
+    const std::array<size_t, FabricEriscDatamoverConfig::num_sender_channels>&
         sender_channels_buffer_index_semaphore_id,
 
     const FabricEriscDatamoverConfig& config,
@@ -616,9 +613,9 @@ FabricEriscDatamoverBuilder FabricEriscDatamoverBuilder::build(
     bool build_in_worker_connection_mode,
     bool dateline_connection,
     eth_chan_directions direction) {
-    std::array<size_t, FabricEriscDatamoverConfig::num_sender_channels_2d> sender_channels_buffer_index_semaphore_id;
-    std::array<size_t, FabricEriscDatamoverConfig::num_sender_channels_2d> sender_channels_flow_control_semaphore_id;
-    std::array<size_t, FabricEriscDatamoverConfig::num_sender_channels_2d> sender_channels_connection_semaphore_id;
+    std::array<size_t, FabricEriscDatamoverConfig::num_sender_channels> sender_channels_buffer_index_semaphore_id;
+    std::array<size_t, FabricEriscDatamoverConfig::num_sender_channels> sender_channels_flow_control_semaphore_id;
+    std::array<size_t, FabricEriscDatamoverConfig::num_sender_channels> sender_channels_connection_semaphore_id;
     std::array<std::optional<size_t>, FabricEriscDatamoverConfig::max_downstream_edms>
         receiver_channels_downstream_flow_control_semaphore_id;
     std::array<std::optional<size_t>, FabricEriscDatamoverConfig::max_downstream_edms>
@@ -681,7 +678,7 @@ FabricEriscDatamoverBuilder FabricEriscDatamoverBuilder::build(
                     tt::tt_metal::CreateSemaphore(program, ethernet_core, 0, CoreType::ETH);
             }
             uint32_t num_sender_channels = mesh ? FabricEriscDatamoverConfig::num_sender_channels_2d
-                                                : FabricEriscDatamoverConfig::num_sender_channels;
+                                                : FabricEriscDatamoverConfig::num_sender_channels_1d;
             for (uint32_t i = 0; i < num_sender_channels; i++) {
                 if (mesh) {
                     sender_channels_buffer_index_semaphore_id[i] =
@@ -736,7 +733,7 @@ FabricEriscDatamoverBuilder FabricEriscDatamoverBuilder::build(
                 tt::tt_metal::CreateSemaphore(program, ethernet_core, 0, CoreType::ETH);
         }
 
-        for (uint32_t i = 0; i < FabricEriscDatamoverConfig::num_sender_channels; i++) {
+        for (uint32_t i = 0; i < FabricEriscDatamoverConfig::num_sender_channels_1d; i++) {
             sender_channels_flow_control_semaphore_id[i] =
                 tt::tt_metal::CreateSemaphore(program, ethernet_core, 0, CoreType::ETH);
             sender_channels_connection_semaphore_id[i] =
@@ -792,7 +789,7 @@ SenderWorkerAdapterSpec FabricEriscDatamoverBuilder::build_connection_to_worker_
 
 SenderWorkerAdapterSpec FabricEriscDatamoverBuilder::build_connection_to_fabric_channel(uint32_t ds_edm) {
     auto max_ds_edm_count = config.topology == Topology::Mesh ? FabricEriscDatamoverConfig::num_sender_channels_2d
-                                                              : FabricEriscDatamoverConfig::num_sender_channels;
+                                                              : FabricEriscDatamoverConfig::num_sender_channels_1d;
     if (ds_edm >= max_ds_edm_count) {
         TT_THROW("Invalid VC");
     }
@@ -856,7 +853,7 @@ void FabricEriscDatamoverBuilder::connect_to_downstream_edm(FabricEriscDatamover
 
     // VC 1
     ds_edm_send_chan = config.topology == Topology::Mesh ? FabricEriscDatamoverConfig::num_sender_channels_2d - 1
-                                                         : FabricEriscDatamoverConfig::num_sender_channels - 1;
+                                                         : FabricEriscDatamoverConfig::num_sender_channels_1d - 1;
     adapter_spec = downstream_edm.build_connection_to_fabric_channel(ds_edm_send_chan);
 
     bool connect_vc1 = (this->direction == eth_chan_directions::EAST && ds_dir == eth_chan_directions::WEST) ||

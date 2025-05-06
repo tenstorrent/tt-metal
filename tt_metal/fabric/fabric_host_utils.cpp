@@ -17,6 +17,32 @@
 
 namespace tt::tt_fabric {
 
+uint32_t get_fabric_router_buffer_size(tt::tt_fabric::Topology topology) {
+    if (topology == Topology::Mesh) {
+        return tt::tt_fabric::FabricEriscDatamoverBuilder::default_mesh_packet_payload_size_bytes +
+               sizeof(tt::tt_fabric::LowLatencyMeshPacketHeader);
+    } else {
+        return tt::tt_fabric::FabricEriscDatamoverBuilder::default_packet_payload_size_bytes +
+               sizeof(tt::tt_fabric::PacketHeader);
+    }
+}
+
+uint32_t get_sender_channel_count(tt::tt_fabric::Topology topology) {
+    if (topology == Topology::Mesh) {
+        return FabricEriscDatamoverConfig::num_sender_channels_2d;
+    } else {
+        return FabricEriscDatamoverConfig::num_sender_channels_1d;
+    }
+}
+
+uint32_t get_downstream_edm_count(tt::tt_fabric::Topology topology) {
+    if (topology == Topology::Mesh) {
+        return FabricEriscDatamoverConfig::num_downstream_edms_2d;
+    } else {
+        return FabricEriscDatamoverConfig::num_downstream_edms;
+    }
+}
+
 bool is_tt_fabric_config(tt::tt_metal::FabricConfig fabric_config) {
     return fabric_config == tt::tt_metal::FabricConfig::FABRIC_1D ||
            fabric_config == tt::tt_metal::FabricConfig::FABRIC_1D_RING ||

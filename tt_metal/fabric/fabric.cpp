@@ -34,10 +34,7 @@ namespace tt::tt_fabric {
 tt::tt_fabric::FabricEriscDatamoverConfig get_tt_fabric_config() {
     tt::tt_metal::FabricConfig fabric_config = tt::tt_metal::MetalContext::instance().get_cluster().get_fabric_config();
     Topology topology = get_tt_fabric_topology(fabric_config);
-    uint32_t payload_size_bytes =
-        topology == Topology::Mesh ? tt::tt_fabric::FabricEriscDatamoverBuilder::default_mesh_packet_payload_size_bytes
-                                   : tt::tt_fabric::FabricEriscDatamoverBuilder::default_packet_payload_size_bytes;
-    std::size_t edm_buffer_size = payload_size_bytes + sizeof(tt::tt_fabric::PacketHeader);
+    std::size_t edm_buffer_size = get_fabric_router_buffer_size(topology);
     return tt::tt_fabric::FabricEriscDatamoverConfig(edm_buffer_size, topology);
 }
 

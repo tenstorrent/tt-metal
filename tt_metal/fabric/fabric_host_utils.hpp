@@ -15,7 +15,9 @@
 #include <vector>
 
 namespace tt::tt_fabric {
-
+uint32_t get_fabric_router_buffer_size(tt::tt_fabric::Topology topology);
+uint32_t get_sender_channel_count(tt::tt_fabric::Topology topology);
+uint32_t get_downstream_edm_count(tt::tt_fabric::Topology topology);
 bool is_tt_fabric_config(tt::tt_metal::FabricConfig fabric_config);
 bool is_2d_fabric_config(tt::tt_metal::FabricConfig fabric_config);
 
