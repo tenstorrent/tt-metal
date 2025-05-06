@@ -30,7 +30,7 @@ CPMAddPackage(
         "BUILD_SHARED_LIBS OFF"
         "BOOST_ENABLE_MPI ON"
         "BOOST_INCLUDE_LIBRARIES core\\\;container\\\;smart_ptr\\\;interprocess\\\;asio\\\;lockfree\\\;mpi\\\;serialization"
-    FIND_PACKAGE_ARGUMENTS "CONFIG REQUIRED"
+    FIND_PACKAGE_ARGUMENTS "CONFIG REQUIRED COMPONENTS ALL"
 )
 
 ensureboosttarget(algorithm)
