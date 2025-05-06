@@ -181,8 +181,7 @@ void write_control_buffer_to_core(
                     device_coord,
                     true);
             } else {
-                tt::llrt::write_hex_vec_to_core(
-                    device->id(), core, control_buffer, reinterpret_cast<DeviceAddr>(profiler_msg->control_vector));
+                write_control_buffer_to_core_slow_dispatch(device, core, core_type, control_buffer);
             }
         } else {
             dynamic_cast<HWCommandQueue&>(device->command_queue())
@@ -194,8 +193,7 @@ void write_control_buffer_to_core(
                     true);
         }
     } else {
-        tt::llrt::write_hex_vec_to_core(
-            device->id(), core, control_buffer, reinterpret_cast<uint64_t>(profiler_msg->control_vector));
+        write_control_buffer_to_core_slow_dispatch(device, core, core_type, control_buffer);
     }
 }
 
