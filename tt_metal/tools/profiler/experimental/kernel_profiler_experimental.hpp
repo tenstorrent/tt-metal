@@ -47,6 +47,7 @@ constexpr uint32_t PROFILER_PUSH_TIME_OUT = 100000;
 constexpr uint32_t NOC_PUSH_MARKER_COUNT = 2;
 constexpr int WALL_CLOCK_HIGH_INDEX = 1;
 constexpr int WALL_CLOCK_LOW_INDEX = 0;
+constexpr uint32_t ALL_DATA_SENT = PROFILER_L1_VECTOR_SIZE + 1;
 
 #if !defined(COMPILE_FOR_TRISC)
 extern uint32_t core_flat_id;
@@ -223,7 +224,7 @@ inline __attribute__((always_inline)) void risc_finished_profiling() {
     profiler_control_buffer[DEVICE_BUFFER_END_INDEX_BR_ER + myRiscID] = wIndex;
 }
 
-template <bool RECORD_ZONE = false>
+template <bool RECORD_ZONE = true>
 __attribute__((noinline)) void finish_profiler() {
     if constexpr (RECORD_ZONE) {
         SrcLocNameToHash("PROFILER-DRAM-PUSH");
@@ -236,7 +237,6 @@ __attribute__((noinline)) void finish_profiler() {
     risc_finished_profiling();
     profiler_control_buffer[PROFILER_DONE] = 1;
 #if defined(COMPILE_FOR_TRISC) || defined(COMPILE_FOR_NCRISC)
-    return;
 #else
 
 // Dispatch core might get to finish
@@ -292,14 +292,14 @@ __attribute__((noinline)) void finish_profiler() {
                 profiler_noc_async_write_posted(
                     reinterpret_cast<uint32_t>(profiler_data_buffer[hostIndex]), dram_bank_dst_noc_addr, send_size);
             }
-            profiler_control_buffer[deviceIndex] = 0;
+            profiler_control_buffer[deviceIndex] = ALL_DATA_SENT;
         }
     }
 
     profiler_noc_async_flush_posted_write();
+#endif
     profiler_control_buffer[PROFILER_DONE] = 0;
     wIndex = CUSTOM_MARKERS;
-#endif
 }
 
 void push_time_out() {
@@ -314,17 +314,19 @@ void push_time_out() {
 struct scopePush {
     inline __attribute__((always_inline)) scopePush() {
 #if defined(COMPILE_FOR_ERISC) || defined(COMPILE_FOR_IDLE_ERISC) || defined(COMPILE_FOR_BRISC)
+#if !defined(DISPATCH_KERNEL)
         uint32_t runCounter = profiler_control_buffer[RUN_COUNTER];
         profiler_data_buffer[myRiscID][wIndex] = (runCounter & 0xFFFF) |
                                                  ((((core_flat_id & 0xFF) << 3) | myRiscID) << 16) |
                                                  ((runCounter & 0xF) << 27) | (0x1 << 31);
+#endif
 #else
         if (wIndex >= (PROFILER_L1_VECTOR_SIZE - (NOC_PUSH_MARKER_COUNT * PROFILER_L1_MARKER_UINT32_SIZE))) {
             // This risc did request a noc push so wait until its data is pushed
-            while (profiler_control_buffer[DEVICE_BUFFER_END_INDEX_BR_ER + myRiscID] != 0) {
+            while (profiler_control_buffer[DEVICE_BUFFER_END_INDEX_BR_ER + myRiscID] != ALL_DATA_SENT) {
             }
             wIndex = CUSTOM_MARKERS;
-        } else if (profiler_control_buffer[DEVICE_BUFFER_END_INDEX_BR_ER + myRiscID] == 0) {
+        } else if (profiler_control_buffer[DEVICE_BUFFER_END_INDEX_BR_ER + myRiscID] == ALL_DATA_SENT) {
             // This risc did not request a noc push but its data might have been sent so flush the buffer
             wIndex = CUSTOM_MARKERS;
         }
@@ -357,14 +359,6 @@ struct profileScope {
             start_marked = true;
             mark_time_at_index_inlined(wIndex, timer_id);
             wIndex += PROFILER_L1_MARKER_UINT32_SIZE;
-        } else {
-#if (defined(DISPATCH_KERNEL) && defined(COMPILE_FOR_BRISC))
-            finish_profiler();
-            stackSize += PROFILER_L1_MARKER_UINT32_SIZE;
-            start_marked = true;
-            mark_time_at_index_inlined(wIndex, timer_id);
-            wIndex += PROFILER_L1_MARKER_UINT32_SIZE;
-#endif
         }
     }
 
@@ -414,6 +408,7 @@ inline __attribute__((always_inline)) void recordEvent(uint16_t event_id) {
     kernel_profiler::profileScope<hash> zone = kernel_profiler::profileScope<hash>();
 
 #define DeviceZoneScopedN(name)                                                \
+    kernel_profiler::scopePush scope_push = kernel_profiler::scopePush();      \
     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
     auto constexpr hash = kernel_profiler::Hash16_CT(PROFILER_MSG_NAME(name)); \
     kernel_profiler::profileScope<hash> zone = kernel_profiler::profileScope<hash>();
