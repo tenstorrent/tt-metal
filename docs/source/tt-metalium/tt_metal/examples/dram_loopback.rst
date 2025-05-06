@@ -8,26 +8,27 @@ The is the simplest example of using the TT-Metal API. A data movement core in t
 
 We'll go through this code section by section. The fully source code for this example is avaliable under the ``tt_metal/programming_examples/loopback`` directory.
 
-Building the example can be done by adding a ``--build-programming-examples`` flag or adding the ``-DBUILD_PROGRAMMING_EXAMPLES=ON`` flag to the cmake command and results in a
-``loopback`` executable in the ``build/programming_examples`` directory. For example:
+Building the example can be done by adding a ``--build-programming-examples`` flag to the build script or adding the ``-DBUILD_PROGRAMMING_EXAMPLES=ON`` flag to the cmake command and results in the ``loopback`` executable in the ``build/programming_examples`` directory. For example:
 
-:: code-block:: bash
+.. code-block:: bash
+
     export TT_METAL_HOME=</path/to/tt-metal>
     ./build_metal.sh --build-programming-examples
+    # To run the example
     ./build/programming_examples/loopback
 
-Silicon accelerator setup
--------------------------
+Device initalization
+--------------------
 
 .. code-block:: cpp
 
    constexpr int device_id = 0;
    auto device = CreateDevice(device_id);
 
-We first open a device. This is our gateway to all operations on the accelerator. The device ID is simply an index into the list of available devices (from 0 to N). Thus device 0 is the first device and always available if one is installed.
+First we open a device. This is our gateway to all operations on the accelerator. The device ID is simply an index into the list of available devices (from 0 to N). Thus device 0 is the first device and always available if one is installed.
 
-Program pre-compilation setup
------------------------------
+Program setup
+-------------
 
 .. code-block:: cpp
 
@@ -54,21 +55,21 @@ Create a kernel that will copy data from DRAM to L1 and back. Since we are only 
         DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default}
     );
 
-Create buffers in DRAM and L1(SRAM)
------------------------------
+Create buffers in DRAM and L1 (SRAM)
+------------------------------------
 
-Next, we need to declare buffers that we hold the actual data and a intermidiate buffer on chip,
+Next, we need to declare buffers that will hold the actual data and a intermidiate buffer on chip,
 
-There's in total 3 buffers that we need to create:
-* An L1(SRAM) buffer within the core itself that will act as temporary storage
+There's in total 3 buffers to be created:
+* An L1 (SRAM) buffer within the core itself that will act as temporary storage
 * A DRAM buffer that will house input data
 * A DRAM buffer that will be written to with output data
 
 Note that almost all operations on the Tensix are aligned with tiles. And a tile is a 32x32 grid of values. The data type used in this example is bfloat16 as it is what the math engine uses internally (though we won't touch the math engine in this example). Making each tile 32 x 32 x 2 bytes = 2048 bytes. And we wish to allocate 50 tiles in each buffer.
 
-There are two types of buffers in the Tensix: L1 and DRAM. L1 is a misnomer as it can be mistaken as similar to L1 cache in a CPU. In fact, the L1 is a SRAM scratchpad on the Tensix. Each generation of Tensotrrent processors has a different amount of L1 memory per Tensix. The previous Grayskull generation had 1MB and Wormhole/Blackhole has 1.5MN.
+There are two types of buffers in the Tensix: L1 and DRAM. L1 is a misnomer as it can be mistaken as similar to L1 cache in a CPU. In fact, the L1 is a SRAM scratchpad on the Tensix. Each generation of Tensotrrent processors has a different amount of L1 memory per Tensix. Grayskull had 1MB and Wormhole/Blackhole has 1.5MN.
 
-<TODO: Quick explnation of pages>
+Note the ``page_size`` argument in the buffer config and the ``Interleaved`` in the buffer type. Both L1 and DRAM are splitted into banks. Each bank is a physical memory unit that can be accessed independently. Howerver, managing banks seperately is trick and not scalable. Interleaved buffers simply round-robin the data across all banks every ``page_size`` bytes. This allows the programmer to treat the buffer as a single unit, while taking advantage of the parallelism of the banks for hifher bandwidth. Setting page size equal to the buffer size means that the entire buffer will live on a single bank. This is not recommended for performance and in most cases, page size is set to the size of a tile. However, this configuration allows easy illustration of NoC operations. However, these are implementation details and the programmer should not be overly concerned with them.
 
 .. code-block:: cpp
 
@@ -110,14 +111,17 @@ Sending real data into DRAM
 
 .. code-block:: cpp
 
-  std::vector<uint32_t> input_vec = create_random_vector_of_bfloat16(
-      dram_buffer_size, 100, std::chrono::system_clock::now().time_since_epoch().count());
+  std::vector<bfloat16> input_vec(num_tiles * tile_size);
+  std::mt19937 rng(std::random_device{}());
+  std::uniform_real_distribution<float> distribution(0.0f, 100.0f);
+  for (auto& val : input_vec) {
+      val = bfloat16(distribution(rng));
+  }
   EnqueueWriteBuffer(cq, input_dram_buffer, input_vec, false);
 
-Send in a randomly-generated FP16 vector that will act as our input data
-tensor.
+Send in a randomly-generated BFP16 (Brain 16bit floating point) vector that will act as our input data tensor.
 
-We use a non-blocking call so we can continue setting up our program.
+Note the final ``false`` argument. This indicates to tt-Metalium that the upload is non-blocking. The function may retrun as soon as possible while data transfer is still in progress. This is useful for performance, but the profram is responsible for ensuring that the the source buffer is not freed before the transfer is complete. In this case, there are future blocking calls/calls to ``Finish`` that will ensure commands are completed before the program exits, which is also when the source buffer is freed.
 
 Setting runtime arguments for the data movement kernel
 ------------------------------------------------------
@@ -140,15 +144,15 @@ Setting runtime arguments for the data movement kernel
       runtime_args
   );
 
-We now set runtime arguments for our data movement kernel. For this
-particular kernel, we have to provide:
+We now set runtime arguments for our data movement kernel. The kernel can then access these arguments at runtime. For this specific kernel, we need to pass in the following arguments:
 
 * Where the L1 buffer starts (memory address)
 * Where the input DRAM buffer starts (memory address)
-* The location of the input DRAM buffer's channel on the NOC
+* The channel index of the input DRAM buffer
 * Where the output DRAM buffer starts (memory address)
-* The location of the output DRAM buffer's channel on the NOC
-* The size of the buffers
+* The channel index of the output DRAM buffer
+* The size of the copy
+  * Which happens to be the same as the size of the L1 buffer
 
 Running the program
 -------------------
@@ -157,26 +161,29 @@ Running the program
 
     EnqueueProgram(cq, program, false);
     Finish(cq);
+    // Equivalently, we could have done:
+    // EnqueueProgram(cq, program, true);
 
 
-Now we finally launch our program. The ``Finish`` call waits for the program
-to return a finished status.
+Finally, we launch our program. The ``Finish`` call waits for the the host program only continues execution after everything in the command queue has been completed. The final argument in ``EnqueueProgram`` indicates that the program is non-blocking. Setting it to ``true`` would cause the program to block until the program is finished. Efficiently, this is the same as calling ``Finish`` after the program is enqueued.
 
-Launch and verify output
-------------------------
+Download the result and verify output
+-------------------------------------
 
 Then we can finally read back the data from the output buffer and assert that
-it matches what we sent!
+it matches what we sent. Again the final ``true`` argument causes the data transfer to be blocking. Thus we know that the data is fully avaliable when the function returns.
 
 .. code-block:: cpp
 
-  std::vector<uint32_t> result_vec;
+  std::vector<bfloat16> result_vec;
   EnqueueReadBuffer(cq,output_dram_buffer, result_vec, true);
 
-  pass &= input_vec == result_vec;
-
-We use a blocking call this time because we want to get all the data before
-doing a comparison.
+  for (int i = 0; i < input_vec.size(); i++) {
+    if (input_vec[i] != result_vec[i]) {
+        pass = false;
+        break;
+    }
+  }
 
 Validation and teardown
 -----------------------
@@ -185,8 +192,7 @@ Validation and teardown
 
    pass &= CloseDevice(device);
 
-We now use ``CloseDevice`` to teardown our connection to the Tenstorrent
-device.
+We now use ``CloseDevice`` to teardown our device. This releases resources associated with the device.
 
 Now we can start adding some compute to our program. Please refer to the
 :ref:`Eltwise sfpu example<Eltwise sfpu example>`.
