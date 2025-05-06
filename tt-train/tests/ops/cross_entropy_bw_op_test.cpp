@@ -14,7 +14,6 @@
 #include "autograd/auto_context.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "metal/operations.hpp"
-#include "xtensor/xmath.hpp"
 
 class CrossEntropyBackwardTest : public ::testing::Test {
 protected:
