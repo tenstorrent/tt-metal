@@ -29,7 +29,7 @@ pytest --disable-warnings models/demos/blackhole/resnet50/demo/demo.py::test_dem
 
 ### Single Device
 
-#### Wormhole_B0 Device Performance
+#### Blackhole Device Performance
 + To obtain device performance, run
 ```python
 pytest models/demos/blackhole/resnet50/tests/test_perf_device_resnet50.py::test_perf_device
@@ -37,7 +37,7 @@ pytest models/demos/blackhole/resnet50/tests/test_perf_device_resnet50.py::test_
 + This will run the model for 4 times and generate CSV reports under `<this repo dir>/generated/profiler/reports/ops/<report name>`. The report file name is logged in the run output.
 + It will also show a sumary of the device throughput in the run output.
 
-#### Wormhole_B0 End-to-End Performance
+#### Blackhole End-to-End Performance
 + For end-to-end performance, run
 ```python
 pytest models/demos/blackhole/resnet50/tests/test_perf_e2e_resnet50.py::test_perf_trace_2cqs
