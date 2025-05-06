@@ -302,7 +302,9 @@ def from_torch(
         tensor = ttnn.to_torch(tensor)
 
     tensor_creation_args = [tensor, dtype]
-    # TODO: Try calling the ttnn sharding path directly and the tilize directly removing the need to reformat after tilizing bfb
+    # TODO: (jjiang) - Try calling the ttnn sharding path directly and the tilize directly removing the need to reshape at the end after tilizing bfb, would likely avoid a lot of bugs
+    # TODO: (jjiang) - Could also extend the pytensor.cpp apis to support bfpb types and provide richer initialization options, removing the need for tilize, to_layout, and to_device
+    # much of the groundwork for that has already been done and it would likely just be a few fairly trivial function calls
     if mesh_mapper:
         shards = mesh_mapper.map(tensor)
         tensor_creation_args[0] = shards
