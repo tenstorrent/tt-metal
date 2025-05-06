@@ -474,7 +474,6 @@ def run_llama3_demo(
         profiler.start(f"log_printing_iter_{iteration}", iteration=iteration)
         # Print out generated outputs for each user at the end of every iteration
         if not is_ci_env:
-            # if len(user_input) == 1:
             logger.info("[User 0] {}".format("".join(tokenizer.decode(all_outputs))))
             # else:
             #     for user in range(batch_size):
