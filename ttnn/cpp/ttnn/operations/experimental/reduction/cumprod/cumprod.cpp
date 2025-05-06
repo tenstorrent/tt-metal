@@ -73,8 +73,6 @@ Tensor CumprodOperation::invoke(
         Tensor permuted_tensor =
             ttnn::permute(adjusted_input_tensor, permutation, adjusted_input_tensor.memory_config());
 
-        permuted_tensor = ttnn::fill_implicit_tile_padding(permuted_tensor, 0.0f, permuted_tensor.memory_config());
-
         Tensor output_tensor = ttnn::prim::cumprod(
             permuted_tensor,
             FIRST_DIMENSION,
