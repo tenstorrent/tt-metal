@@ -9,7 +9,7 @@ run_tg_llama3.1-70b_tests() {
   echo "LOG_METAL: Running run_tg_llama3.1-70b_tests"
 
   # Llama3.1-70B weights
-  llama70b=/mnt/MLPerf/tt_dnn-models/llama/Llama3.1-70B-Instruct/
+  llama70b=/mnt/MLPerf/tt_dnn-models/llama/Llama3.3-70B-Instruct/
 
   LLAMA_DIR=$llama70b FAKE_DEVICE=TG pytest -n auto models/demos/llama3_subdevices/tests/unit_tests ; fail+=$?
 
