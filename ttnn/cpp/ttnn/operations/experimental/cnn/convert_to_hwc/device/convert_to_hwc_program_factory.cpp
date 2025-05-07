@@ -74,13 +74,13 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_convert_to_hwc(const Te
         create_circular_buffer(cb_out_id, cb_out_total_size, cb_out_page_size, output_format, output.buffer());
 
     const uint32_t cb_in_tiled_id = tt::CBIndex::c_2;
-    const uint32_t cb_in_tiled_total_size = intermediary_tile_size;
+    const uint32_t cb_in_tiled_total_size = 2 * intermediary_tile_size;
     const uint32_t cb_in_tiled_page_size = intermediary_tile_size;
     const auto cb_in_tiled =
         create_circular_buffer(cb_in_tiled_id, cb_in_tiled_total_size, cb_in_tiled_page_size, intermediary_format);
 
     const uint32_t cb_in_transpose_id = tt::CBIndex::c_3;
-    const uint32_t cb_in_transpose_total_size = intermediary_tile_size;
+    const uint32_t cb_in_transpose_total_size = 2 * intermediary_tile_size;
     const uint32_t cb_in_transpose_page_size = intermediary_tile_size;
     const auto cb_in_transpose = create_circular_buffer(
         cb_in_transpose_id, cb_in_transpose_total_size, cb_in_transpose_page_size, intermediary_format);
