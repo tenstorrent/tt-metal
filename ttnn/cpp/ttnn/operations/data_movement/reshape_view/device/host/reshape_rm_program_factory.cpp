@@ -11,7 +11,7 @@
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/util.hpp>
 #include <tt-metalium/host_api.hpp>
-#include "cpp/ttnn/operations/data_movement/reshape_view/reshape_common.hpp"
+#include "ttnn/operations/data_movement/reshape_view/reshape_common.hpp"
 
 #include <optional>
 #include <variant>

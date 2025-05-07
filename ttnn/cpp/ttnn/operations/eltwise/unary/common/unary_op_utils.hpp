@@ -8,7 +8,7 @@
 #include <string>
 
 #include "unary_op_types.hpp"
-#include "cpp/ttnn/tensor/types.hpp"
+#include "ttnn/tensor/types.hpp"
 namespace ttnn::operations::unary::utils {
 
 UnaryWithParam string_to_unary_with_param(const std::string& name);

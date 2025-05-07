@@ -5,7 +5,7 @@
 #include "all_reduce_create_qkv_heads_op.hpp"
 #include "all_reduce_create_qkv_heads_program_factory.hpp"
 #include "ttnn/operations/math.hpp"
-#include "cpp/ttnn/global_semaphore.hpp"
+#include "ttnn/global_semaphore.hpp"
 
 #include <tt-metalium/host_api.hpp>
 

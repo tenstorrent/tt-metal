@@ -17,7 +17,7 @@
 #include "ttnn/tensor/types.hpp"
 #include <tt-metalium/erisc_datamover_builder.hpp>
 #include "erisc_datamover_builder_helper.hpp"
-#include "cpp/ttnn/operations/ccl/common/host/ccl_command_stream_builders.hpp"
+#include "ttnn/operations/ccl/common/host/ccl_command_stream_builders.hpp"
 
 namespace ttnn {
 namespace ccl {

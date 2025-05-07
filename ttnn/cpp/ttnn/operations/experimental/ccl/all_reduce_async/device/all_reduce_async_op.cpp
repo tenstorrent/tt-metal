@@ -4,7 +4,7 @@
 
 #include "all_reduce_async_op.hpp"
 #include "ttnn/operations/math.hpp"
-#include "cpp/ttnn/global_semaphore.hpp"
+#include "ttnn/global_semaphore.hpp"
 
 #include <tt-metalium/host_api.hpp>
 
