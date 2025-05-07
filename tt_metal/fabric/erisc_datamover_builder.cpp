@@ -321,6 +321,7 @@ void append_worker_to_fabric_edm_sender_rt_args(
     auto edm_noc_xy = tt::tt_fabric::WorkerXY(connection.edm_noc_x, connection.edm_noc_y);
     const std::vector<uint32_t> values = {
         connection.persistent_fabric,
+        connection.edm_direction,
         edm_noc_xy.to_uint32(),
         connection.edm_buffer_base_addr,
         connection.num_buffers_per_channel,
@@ -778,7 +779,8 @@ SenderWorkerAdapterSpec FabricEriscDatamoverBuilder::build_connection_to_worker_
         this->config.sender_channels_worker_conn_info_base_address[worker_chan],
         this->config.channel_buffer_size_bytes,
         this->sender_channels_buffer_index_semaphore_id[worker_chan],
-        this->enable_persistent_mode};
+        this->enable_persistent_mode,
+        this->direction};
 }
 
 SenderWorkerAdapterSpec FabricEriscDatamoverBuilder::build_connection_to_fabric_channel(uint32_t ds_edm) {
@@ -798,7 +800,8 @@ SenderWorkerAdapterSpec FabricEriscDatamoverBuilder::build_connection_to_fabric_
         this->config.sender_channels_worker_conn_info_base_address[ds_edm],
         this->config.channel_buffer_size_bytes,
         this->sender_channels_buffer_index_semaphore_id[ds_edm],
-        false};
+        false,
+        eth_chan_directions::EAST};
 }
 
 void FabricEriscDatamoverBuilder::connect_to_downstream_edm(FabricEriscDatamoverBuilder& downstream_edm) {
@@ -850,7 +853,8 @@ void FabricEriscDatamoverBuilder::connect_to_downstream_edm(FabricEriscDatamover
                                                          : FabricEriscDatamoverConfig::num_sender_channels_1d - 1;
     adapter_spec = downstream_edm.build_connection_to_fabric_channel(ds_edm_send_chan);
 
-    bool connect_vc1 = (this->direction == eth_chan_directions::EAST && ds_dir == eth_chan_directions::WEST) ||
+    bool connect_vc1 = config.topology != Topology::Mesh ||
+                       (this->direction == eth_chan_directions::EAST && ds_dir == eth_chan_directions::WEST) ||
                        (this->direction == eth_chan_directions::WEST && ds_dir == eth_chan_directions::EAST) ||
                        (this->direction == eth_chan_directions::NORTH && ds_dir == eth_chan_directions::SOUTH) ||
                        (this->direction == eth_chan_directions::SOUTH && ds_dir == eth_chan_directions::NORTH);

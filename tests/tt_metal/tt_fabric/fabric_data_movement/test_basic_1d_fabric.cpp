@@ -145,8 +145,7 @@ void RunTestUnicastRaw(BaseFabricFixture* fixture, uint32_t num_hops, RoutingDir
         mesh_shape[1],
         src_mesh_chip_id.second,
         dst_mesh_chip_id.second,
-        num_hops,
-        edm_direction};
+        num_hops};
 
     // append the EDM connection rt args
     const auto sender_channel = edm_config.topology == Topology::Mesh ? edm_direction : 0;
@@ -160,7 +159,8 @@ void RunTestUnicastRaw(BaseFabricFixture* fixture, uint32_t num_hops, RoutingDir
         .edm_worker_location_info_addr = edm_config.sender_channels_worker_conn_info_base_address[sender_channel],
         .buffer_size_bytes = edm_config.channel_buffer_size_bytes,
         .buffer_index_semaphore_id = edm_config.sender_channels_buffer_index_semaphore_address[sender_channel],
-        .persistent_fabric = true};
+        .persistent_fabric = true,
+        .edm_direction = edm_direction};
 
     auto worker_flow_control_semaphore_id = tt_metal::CreateSemaphore(sender_program, sender_logical_core, 0);
     auto worker_teardown_semaphore_id = tt_metal::CreateSemaphore(sender_program, sender_logical_core, 0);

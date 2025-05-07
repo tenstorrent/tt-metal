@@ -52,6 +52,7 @@ struct WorkerToFabricEdmSenderImpl {
     template <ProgrammableCoreType my_core_type>
     static WorkerToFabricEdmSenderImpl build_from_args(std::size_t& arg_idx) {
         bool is_persistent_fabric = get_arg_val<uint32_t>(arg_idx++);
+        const auto direction = get_arg_val<uint32_t>(arg_idx++);
         const WorkerXY edm_worker_xy = WorkerXY::from_uint32(get_arg_val<uint32_t>(arg_idx++));
         const auto edm_buffer_base_addr = get_arg_val<uint32_t>(arg_idx++);
         const uint8_t num_buffers_per_channel = get_arg_val<uint32_t>(arg_idx++);
@@ -74,6 +75,7 @@ struct WorkerToFabricEdmSenderImpl {
         ASSERT(edm_buffer_index_addr < 262144);
         return WorkerToFabricEdmSenderImpl(
             is_persistent_fabric,
+            direction,
             edm_worker_xy.x,
             edm_worker_xy.y,
             edm_buffer_base_addr,
@@ -92,6 +94,7 @@ struct WorkerToFabricEdmSenderImpl {
 
     WorkerToFabricEdmSenderImpl(
         bool connected_to_persistent_fabric,
+        uint8_t direction,
         uint8_t edm_worker_x,
         uint8_t edm_worker_y,
         std::size_t edm_buffer_base_addr,
@@ -128,7 +131,8 @@ struct WorkerToFabricEdmSenderImpl {
         edm_noc_x(edm_worker_x),
         edm_noc_y(edm_worker_y),
         data_noc_cmd_buf(data_noc_cmd_buf),
-        sync_noc_cmd_buf(sync_noc_cmd_buf) {
+        sync_noc_cmd_buf(sync_noc_cmd_buf),
+        direction(direction) {
         ASSERT(buffer_size_bytes > 0);
         if constexpr (USER_DEFINED_NUM_BUFFER_SLOTS) {
             ASSERT(num_buffers_per_channel == EDM_NUM_BUFFER_SLOTS);
@@ -373,6 +377,7 @@ struct WorkerToFabricEdmSenderImpl {
     // the cmd buffer is used for edm-edm path
     uint8_t data_noc_cmd_buf;
     uint8_t sync_noc_cmd_buf;
+    uint8_t direction;
 
 private:
     template <bool stateful_api = false, bool enable_ring_support = false>

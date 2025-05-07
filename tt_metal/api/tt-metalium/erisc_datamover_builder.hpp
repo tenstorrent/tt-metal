@@ -157,6 +157,7 @@ struct SenderWorkerAdapterSpec {
     size_t buffer_size_bytes = 0;
     size_t buffer_index_semaphore_id = 0;  // the semaphore ID on the EDM, not the worker
     bool persistent_fabric = false;
+    eth_chan_directions edm_direction;
 };
 
 struct edm_termination_info_t {
