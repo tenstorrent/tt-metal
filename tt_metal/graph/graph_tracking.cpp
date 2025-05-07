@@ -86,7 +86,7 @@ void GraphTracker::track_program(Program* program, const IDevice* device) {
     }
 }
 
-bool GraphTracker::hook_allocate(const Buffer* buffer) {
+bool GraphTracker::hook_allocate(Buffer* buffer) {
     if (hook == nullptr) {
         return false;
     }
@@ -133,10 +133,18 @@ void GraphTracker::clear() {
 }
 
 void GraphTracker::clear_hook() {
-    hook = nullptr;
-
     std::lock_guard<std::mutex> lock(hooked_buffers_mutex);
-    TT_FATAL(hooked_buffers.empty(), "Clearing hook with {} allocated buffers", hooked_buffers.size());
+    size_t num_hooked_buffers = hooked_buffers.size();
+    for (auto hooked_buffer : hooked_buffers) {
+        DeallocateBuffer(*hooked_buffer);
+        tt::log_warning(
+            "Forcefully deallocating buffer {}, which was allocated by the hook", hooked_buffer->unique_id());
+    }
+    hooked_buffers.clear();
+
+    TT_FATAL(num_hooked_buffers > 0, "Clearing hook with {} allocated buffers", num_hooked_buffers);
+
+    hook = nullptr;
 }
 
 GraphTracker::~GraphTracker() { clear(); }

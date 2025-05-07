@@ -139,7 +139,7 @@ public:
         }
     }
 
-    bool hook_allocate(const Buffer* buffer);
+    bool hook_allocate(Buffer* buffer);
 
     bool hook_deallocate(Buffer* buffer);
 
@@ -164,6 +164,6 @@ private:
     std::shared_ptr<IGraphHooks> hook;
 
     std::mutex hooked_buffers_mutex;
-    std::unordered_set<const Buffer*> hooked_buffers;
+    std::unordered_set<Buffer*> hooked_buffers;
 };
 }  // namespace tt::tt_metal
