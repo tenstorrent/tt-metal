@@ -56,6 +56,10 @@ inline bool does_device_have_active_eth_cores(const IDevice* device) {
     return !(device->get_active_ethernet_cores(true).empty());
 }
 
+inline bool does_device_have_idle_eth_cores(const IDevice* device) {
+    return !(device->get_inactive_ethernet_cores().empty());
+}
+
 inline std::pair<std::vector<uint32_t>, std::vector<uint32_t>> create_runtime_args(
     const uint32_t num_unique_rt_args,
     const uint32_t num_common_rt_args,

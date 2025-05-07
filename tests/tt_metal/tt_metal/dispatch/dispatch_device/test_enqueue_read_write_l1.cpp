@@ -11,7 +11,7 @@
 
 using namespace tt::tt_metal;
 
-TEST_F(CommandQueueSingleCardFixture, TestBasicReadWriteL1) {
+TEST_F(CommandQueueSingleCardFixture, TensixTestBasicReadWriteL1) {
     const uint32_t num_elements = 1000;
     const std::vector<uint32_t> src_data = generate_arange_vector(num_elements * sizeof(uint32_t));
 
@@ -34,7 +34,7 @@ TEST_F(CommandQueueSingleCardFixture, TestBasicReadWriteL1) {
     }
 }
 
-TEST_F(CommandQueueSingleCardFixture, TestBasicReadL1) {
+TEST_F(CommandQueueSingleCardFixture, TensixTestBasicReadL1) {
     const uint32_t num_elements = 1000;
     const std::vector<uint32_t> src_data = generate_arange_vector(num_elements * sizeof(uint32_t));
 
@@ -56,7 +56,7 @@ TEST_F(CommandQueueSingleCardFixture, TestBasicReadL1) {
     }
 }
 
-TEST_F(CommandQueueSingleCardFixture, TestBasicWriteL1) {
+TEST_F(CommandQueueSingleCardFixture, TensixTestBasicWriteL1) {
     const uint32_t num_elements = 1000;
     const std::vector<uint32_t> src_data = generate_arange_vector(num_elements * sizeof(uint32_t));
 
@@ -78,7 +78,7 @@ TEST_F(CommandQueueSingleCardFixture, TestBasicWriteL1) {
     }
 }
 
-TEST_F(CommandQueueSingleCardFixture, TestInvalidReadWriteAddressL1) {
+TEST_F(CommandQueueSingleCardFixture, TensixTestInvalidReadWriteAddressL1) {
     const uint32_t num_elements = 1010;
     const std::vector<uint32_t> src_data = generate_arange_vector(num_elements * sizeof(uint32_t));
 
@@ -106,7 +106,7 @@ TEST_F(CommandQueueSingleCardFixture, TestInvalidReadWriteAddressL1) {
     }
 }
 
-TEST_F(CommandQueueSingleCardFixture, TestReadWriteMultipleTensixCoresL1) {
+TEST_F(CommandQueueSingleCardFixture, TensixTestReadWriteMultipleCoresL1) {
     const DeviceAddr address = MetalContext::instance().hal().get_dev_addr(
         HalProgrammableCoreType::TENSIX, HalL1MemAddrType::DEFAULT_UNRESERVED);
     const uint32_t num_elements = 1000;
@@ -143,7 +143,7 @@ TEST_F(CommandQueueSingleCardFixture, TestReadWriteMultipleTensixCoresL1) {
     }
 }
 
-TEST_F(CommandQueueSingleCardFixture, TestReadWriteZeroElementsL1) {
+TEST_F(CommandQueueSingleCardFixture, TensixTestReadWriteZeroElementsL1) {
     const CoreCoord logical_core = {0, 0};
     const DeviceAddr address = MetalContext::instance().hal().get_dev_addr(
         HalProgrammableCoreType::TENSIX, HalL1MemAddrType::DEFAULT_UNRESERVED);
@@ -164,7 +164,7 @@ TEST_F(CommandQueueSingleCardFixture, TestReadWriteZeroElementsL1) {
     }
 }
 
-TEST_F(CommandQueueSingleCardFixture, TestReadWriteEntireL1) {
+TEST_F(CommandQueueSingleCardFixture, TensixTestReadWriteEntireL1) {
     const CoreCoord logical_core = {0, 0};
     const DeviceAddr address = MetalContext::instance().hal().get_dev_addr(
         HalProgrammableCoreType::TENSIX, HalL1MemAddrType::DEFAULT_UNRESERVED);
@@ -185,5 +185,266 @@ TEST_F(CommandQueueSingleCardFixture, TestReadWriteEntireL1) {
         Finish(device->command_queue());
 
         EXPECT_EQ(src_data, dst_data);
+    }
+}
+
+TEST_F(CommandQueueSingleCardFixture, ActiveEthTestReadWriteEntireL1) {
+    const DeviceAddr address =
+        MetalContext::instance().hal().get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::UNRESERVED);
+    const uint32_t size =
+        MetalContext::instance().hal().get_dev_size(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::UNRESERVED);
+    const uint32_t num_elements = size / sizeof(uint32_t);
+    const std::vector<uint32_t> src_data = generate_arange_vector(size);
+
+    for (IDevice* device : this->devices_) {
+        if (!does_device_have_active_eth_cores(device)) {
+            GTEST_SKIP() << "No active ethernet cores found";
+        }
+
+        std::unordered_set<CoreCoord> active_ethernet_cores = device->get_active_ethernet_cores(true);
+        const CoreCoord eth_core = *active_ethernet_cores.begin();
+        const CoreCoord virtual_core = device->ethernet_core_from_logical_core(eth_core);
+        dynamic_cast<HWCommandQueue&>(device->command_queue())
+            .enqueue_write_to_core_l1(virtual_core, src_data.data(), address, size, false);
+
+        std::vector<uint32_t> dst_data(num_elements, 0);
+        dynamic_cast<HWCommandQueue&>(device->command_queue())
+            .enqueue_read_from_core_l1(virtual_core, dst_data.data(), address, size, false);
+
+        Finish(device->command_queue());
+
+        EXPECT_EQ(src_data, dst_data);
+    }
+}
+
+TEST_F(CommandQueueSingleCardFixture, ActiveEthTestReadWriteMultipleCoresL1) {
+    const DeviceAddr address =
+        MetalContext::instance().hal().get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::UNRESERVED);
+    const uint32_t num_elements = 1000;
+    const std::vector<uint32_t> src_data = generate_arange_vector(num_elements * sizeof(uint32_t));
+
+    for (IDevice* device : this->devices_) {
+        if (!does_device_have_active_eth_cores(device)) {
+            GTEST_SKIP() << "No active ethernet cores found";
+        }
+
+        std::unordered_set<CoreCoord> active_ethernet_cores = device->get_active_ethernet_cores(true);
+        for (const CoreCoord& core : active_ethernet_cores) {
+            const CoreCoord virtual_core = device->ethernet_core_from_logical_core(core);
+            dynamic_cast<HWCommandQueue&>(device->command_queue())
+                .enqueue_write_to_core_l1(
+                    virtual_core, src_data.data(), address, num_elements * sizeof(uint32_t), false);
+        }
+
+        std::vector<std::vector<uint32_t>> all_cores_dst_data(
+            active_ethernet_cores.size(), std::vector<uint32_t>(num_elements, 0));
+        uint32_t i = 0;
+        for (const CoreCoord& core : active_ethernet_cores) {
+            const CoreCoord virtual_core = device->ethernet_core_from_logical_core(core);
+            dynamic_cast<HWCommandQueue&>(device->command_queue())
+                .enqueue_read_from_core_l1(
+                    virtual_core, all_cores_dst_data[i].data(), address, num_elements * sizeof(uint32_t), false);
+            i++;
+        }
+
+        Finish(device->command_queue());
+
+        for (const std::vector<uint32_t>& dst_data : all_cores_dst_data) {
+            EXPECT_EQ(src_data, dst_data);
+        }
+    }
+}
+
+TEST_F(CommandQueueSingleCardFixture, IdleEthTestReadWriteEntireL1) {
+    const DeviceAddr address =
+        MetalContext::instance().hal().get_dev_addr(HalProgrammableCoreType::IDLE_ETH, HalL1MemAddrType::UNRESERVED);
+    const uint32_t size =
+        MetalContext::instance().hal().get_dev_size(HalProgrammableCoreType::IDLE_ETH, HalL1MemAddrType::UNRESERVED);
+    const uint32_t num_elements = size / sizeof(uint32_t);
+    const std::vector<uint32_t> src_data = generate_arange_vector(size);
+
+    for (IDevice* device : this->devices_) {
+        if (!does_device_have_idle_eth_cores(device)) {
+            GTEST_SKIP() << "No idle ethernet cores found";
+        }
+
+        std::unordered_set<CoreCoord> idle_ethernet_cores = device->get_inactive_ethernet_cores();
+        const CoreCoord eth_core = *idle_ethernet_cores.begin();
+        const CoreCoord virtual_core = device->ethernet_core_from_logical_core(eth_core);
+
+        dynamic_cast<HWCommandQueue&>(device->command_queue())
+            .enqueue_write_to_core_l1(virtual_core, src_data.data(), address, size, false);
+
+        std::vector<uint32_t> dst_data(num_elements, 0);
+        dynamic_cast<HWCommandQueue&>(device->command_queue())
+            .enqueue_read_from_core_l1(virtual_core, dst_data.data(), address, size, false);
+
+        Finish(device->command_queue());
+
+        EXPECT_EQ(src_data, dst_data);
+    }
+}
+
+TEST_F(CommandQueueSingleCardFixture, IdleEthTestInvalidReadWriteAddressL1) {
+    const uint32_t num_elements = 1010;
+    const std::vector<uint32_t> src_data = generate_arange_vector(num_elements * sizeof(uint32_t));
+
+    const DeviceAddr l1_end_address =
+        MetalContext::instance().hal().get_dev_addr(HalProgrammableCoreType::IDLE_ETH, HalL1MemAddrType::UNRESERVED) +
+        MetalContext::instance().hal().get_dev_size(HalProgrammableCoreType::IDLE_ETH, HalL1MemAddrType::UNRESERVED);
+    const DeviceAddr l1_end_address_offset = 256;
+    const DeviceAddr address = l1_end_address + l1_end_address_offset;
+
+    for (IDevice* device : this->devices_) {
+        if (!does_device_have_idle_eth_cores(device)) {
+            GTEST_SKIP() << "No idle ethernet cores found";
+        }
+
+        std::unordered_set<CoreCoord> idle_ethernet_cores = device->get_inactive_ethernet_cores();
+        const CoreCoord eth_core = *idle_ethernet_cores.begin();
+        const CoreCoord virtual_core = device->ethernet_core_from_logical_core(eth_core);
+
+        EXPECT_THROW(
+            dynamic_cast<HWCommandQueue&>(device->command_queue())
+                .enqueue_write_to_core_l1(
+                    virtual_core, src_data.data(), address, num_elements * sizeof(uint32_t), false),
+            std::runtime_error);
+
+        std::vector<uint32_t> dst_data(num_elements, 0);
+        EXPECT_THROW(
+            dynamic_cast<HWCommandQueue&>(device->command_queue())
+                .enqueue_read_from_core_l1(
+                    virtual_core, dst_data.data(), address, num_elements * sizeof(uint32_t), false),
+            std::runtime_error);
+    }
+}
+
+TEST_F(CommandQueueSingleCardFixture, IdleEthTestReadWriteMultipleCoresL1) {
+    const DeviceAddr address =
+        MetalContext::instance().hal().get_dev_addr(HalProgrammableCoreType::IDLE_ETH, HalL1MemAddrType::UNRESERVED);
+    const uint32_t num_elements = 1000;
+    const std::vector<uint32_t> src_data = generate_arange_vector(num_elements * sizeof(uint32_t));
+
+    for (IDevice* device : this->devices_) {
+        if (!does_device_have_idle_eth_cores(device)) {
+            GTEST_SKIP() << "No idle ethernet cores found";
+        }
+
+        std::unordered_set<CoreCoord> idle_ethernet_cores = device->get_inactive_ethernet_cores();
+        for (const CoreCoord& core : idle_ethernet_cores) {
+            const CoreCoord virtual_core = device->ethernet_core_from_logical_core(core);
+            dynamic_cast<HWCommandQueue&>(device->command_queue())
+                .enqueue_write_to_core_l1(
+                    virtual_core, src_data.data(), address, num_elements * sizeof(uint32_t), false);
+        }
+
+        std::vector<std::vector<uint32_t>> all_cores_dst_data(
+            idle_ethernet_cores.size(), std::vector<uint32_t>(num_elements, 0));
+        uint32_t i = 0;
+        for (const CoreCoord& core : idle_ethernet_cores) {
+            const CoreCoord virtual_core = device->ethernet_core_from_logical_core(core);
+            dynamic_cast<HWCommandQueue&>(device->command_queue())
+                .enqueue_read_from_core_l1(
+                    virtual_core, all_cores_dst_data[i].data(), address, num_elements * sizeof(uint32_t), false);
+            i++;
+        }
+
+        Finish(device->command_queue());
+
+        for (const std::vector<uint32_t>& dst_data : all_cores_dst_data) {
+            EXPECT_EQ(src_data, dst_data);
+        }
+    }
+}
+
+TEST_F(CommandQueueSingleCardFixture, TestReadWriteEntireDRAM) {
+    for (IDevice* device : this->devices_) {
+        const DeviceAddr address = MetalContext::instance().hal().get_dev_addr(HalDramMemAddrType::DRAM_BARRIER) +
+                                   MetalContext::instance().hal().get_dev_size(HalDramMemAddrType::DRAM_BARRIER);
+        const uint32_t size = device->dram_size_per_channel() -
+                              MetalContext::instance().hal().get_dev_size(HalDramMemAddrType::DRAM_BARRIER);
+        const uint32_t num_elements = size / sizeof(uint32_t);
+        const std::vector<uint32_t> src_data = generate_arange_vector(size);
+
+        const CoreCoord logical_core = {0, 0};
+        const CoreCoord virtual_core = device->virtual_core_from_logical_core(logical_core, CoreType::DRAM);
+
+        dynamic_cast<HWCommandQueue&>(device->command_queue())
+            .enqueue_write_to_core_l1(virtual_core, src_data.data(), address, size, false);
+
+        std::vector<uint32_t> dst_data(num_elements, 0);
+        dynamic_cast<HWCommandQueue&>(device->command_queue())
+            .enqueue_read_from_core_l1(virtual_core, dst_data.data(), address, size, false);
+
+        Finish(device->command_queue());
+
+        EXPECT_EQ(src_data, dst_data);
+    }
+}
+
+TEST_F(CommandQueueSingleCardFixture, TestInvalidReadWriteAddressDRAM) {
+    for (IDevice* device : this->devices_) {
+        const uint32_t num_elements = 1010;
+        const std::vector<uint32_t> src_data = generate_arange_vector(num_elements * sizeof(uint32_t));
+
+        const DeviceAddr address = MetalContext::instance().hal().get_dev_addr(HalDramMemAddrType::DRAM_BARRIER) +
+                                   MetalContext::instance().hal().get_dev_size(HalDramMemAddrType::DRAM_BARRIER);
+        const uint32_t size = device->dram_size_per_channel() -
+                              MetalContext::instance().hal().get_dev_size(HalDramMemAddrType::DRAM_BARRIER);
+        const uint32_t dram_end_address = address + size;
+        const DeviceAddr dram_end_address_offset = 256;
+        const DeviceAddr dram_invalid_address = dram_end_address + dram_end_address_offset;
+
+        const CoreCoord logical_core = {0, 0};
+        const CoreCoord virtual_core = device->virtual_core_from_logical_core(logical_core, CoreType::DRAM);
+
+        EXPECT_THROW(
+            dynamic_cast<HWCommandQueue&>(device->command_queue())
+                .enqueue_write_to_core_l1(
+                    virtual_core, src_data.data(), dram_invalid_address, num_elements * sizeof(uint32_t), false),
+            std::runtime_error);
+
+        std::vector<uint32_t> dst_data(num_elements, 0);
+        EXPECT_THROW(
+            dynamic_cast<HWCommandQueue&>(device->command_queue())
+                .enqueue_read_from_core_l1(
+                    virtual_core, dst_data.data(), dram_invalid_address, num_elements * sizeof(uint32_t), false),
+            std::runtime_error);
+    }
+}
+
+TEST_F(CommandQueueSingleCardFixture, TestReadWriteMultipleCoresDRAM) {
+    for (IDevice* device : this->devices_) {
+        const DeviceAddr address = MetalContext::instance().hal().get_dev_addr(HalDramMemAddrType::DRAM_BARRIER) +
+                                   MetalContext::instance().hal().get_dev_size(HalDramMemAddrType::DRAM_BARRIER);
+        const uint32_t num_elements = 1000;
+        const std::vector<uint32_t> src_data = generate_arange_vector(num_elements * sizeof(uint32_t));
+
+        for (uint32_t core_x = 0; core_x < device->dram_grid_size().x; ++core_x) {
+            for (uint32_t core_y = 0; core_y < device->dram_grid_size().y; ++core_y) {
+                const CoreCoord core = device->virtual_core_from_logical_core({core_x, core_y}, CoreType::DRAM);
+                dynamic_cast<HWCommandQueue&>(device->command_queue())
+                    .enqueue_write_to_core_l1(core, src_data.data(), address, num_elements * sizeof(uint32_t), false);
+            }
+        }
+
+        std::vector<std::vector<uint32_t>> all_cores_dst_data(
+            device->dram_grid_size().x * device->dram_grid_size().y, std::vector<uint32_t>(num_elements, 0));
+        uint32_t i = 0;
+        for (uint32_t core_x = 0; core_x < device->dram_grid_size().x; ++core_x) {
+            for (uint32_t core_y = 0; core_y < device->dram_grid_size().y; ++core_y) {
+                const CoreCoord core = device->virtual_core_from_logical_core({core_x, core_y}, CoreType::DRAM);
+                dynamic_cast<HWCommandQueue&>(device->command_queue())
+                    .enqueue_read_from_core_l1(
+                        core, all_cores_dst_data[i].data(), address, num_elements * sizeof(uint32_t), false);
+                i++;
+            }
+        }
+
+        Finish(device->command_queue());
+
+        for (const std::vector<uint32_t>& dst_data : all_cores_dst_data) {
+            EXPECT_EQ(src_data, dst_data);
+        }
     }
 }
