@@ -1,5 +1,7 @@
-// SPDX‑FileCopyrightText: © 2025 Tenstorrent Inc.
-// SPDX‑License‑Identifier: Apache‑2.0
+// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
 
 #include "mpi_distributed_context.hpp"
 #include <mpi.h>
@@ -272,7 +274,7 @@ MPIContext::create_sub_context(tt::stl::Span<Rank> ranks) const
 
     MPI_Group_incl(world_grp, static_cast<int>(int_ranks.size()),
                    int_ranks.data(), &sub_grp);
-                   
+
     MPI_Comm sub_comm;
     MPI_Comm_create_group(comm_, sub_grp, 0 /*tag*/, &sub_comm);
     MPI_Group_free(&sub_grp);
