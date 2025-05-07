@@ -7,7 +7,7 @@ run_tg_llama3_tests() {
 
   echo "LOG_METAL: Running run_tg_llama3_tests"
 
-  # Llama3.1-70B
+  # Llama3.3-70B
   llama70b=/mnt/MLPerf/tt_dnn-models/llama/Llama3.3-70B-Instruct/
 
   # Run all Llama3 tests for 8B, 1B, and 3B weights
