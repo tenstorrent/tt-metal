@@ -1971,3 +1971,53 @@ def test_binary_bcast_profile(device, dtype_pt, dtype_tt, a_and_b_shape, memory_
 
         torch.testing.assert_close(torch_result, output)
         ttnn.synchronize_device(device)
+
+
+@pytest.mark.parametrize(
+    "input_shape_a",
+    [
+        torch.Size([32, 32]),
+        torch.Size([64, 64]),
+        torch.Size([1, 1, 32, 32]),
+        torch.Size([1, 1, 320, 384]),
+        torch.Size([1, 3, 320, 384]),
+    ],
+)
+@pytest.mark.parametrize("bcast_dim", [ttnn.BcastOpDim.H, ttnn.BcastOpDim.W, ttnn.BcastOpDim.HW])
+@pytest.mark.parametrize("math_op", [ttnn.BcastOpMath.ADD, ttnn.BcastOpMath.SUB, ttnn.BcastOpMath.MUL])
+def test_bcast(input_shape_a, device, bcast_dim, math_op):
+    input_shape_b = list(input_shape_a)
+
+    if bcast_dim == ttnn.BcastOpDim.H or bcast_dim == ttnn.BcastOpDim.HW:
+        input_shape_b[-2] = 1
+
+    if bcast_dim == ttnn.BcastOpDim.W or bcast_dim == ttnn.BcastOpDim.HW:
+        input_shape_b[-1] = 1
+    a_pt = gen_func_with_cast_tt(partial(torch_random, low=-100, high=100, dtype=torch.bfloat16), ttnn.bfloat16)(
+        input_shape_a
+    )
+    b_pt = gen_func_with_cast_tt(partial(torch_random, low=-90, high=90, dtype=torch.bfloat16), ttnn.bfloat16)(
+        input_shape_b
+    )
+
+    a_tt = ttnn.from_torch(
+        a_pt,
+        dtype=ttnn.bfloat16,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+    )
+
+    b_tt = ttnn.from_torch(
+        b_pt,
+        dtype=ttnn.bfloat16,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+    )
+
+    output_tensor = ttnn.bcast(a_tt, b_tt, math_op, bcast_dim)
+
+    golden_function = ttnn.get_golden_function(ttnn.bcast)
+    golden_tensor = golden_function(a_pt, b_pt, math_op, bcast_dim)
+
+    comp_pass = compare_pcc([output_tensor], [golden_tensor], 0.9999)
+    assert comp_pass
