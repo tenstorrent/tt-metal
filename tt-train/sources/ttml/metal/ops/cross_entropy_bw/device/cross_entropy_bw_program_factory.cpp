@@ -43,14 +43,11 @@ constexpr auto kOutputCbIndex = tt::CBIndex::c_9;
 constexpr uint32_t kNumTargetIndexesTiles = 2U;
 constexpr uint32_t kNumMaskTiles = 1U;
 constexpr uint32_t kNumMaxValueTiles = 1U;
-constexpr uint32_t kNumInputTilesByIndx = 1U;
 constexpr uint32_t kMaxValueBeforeReductionTiles = 2U;
-constexpr uint32_t kNumTargetLogitsTiles = 2U;
 constexpr uint32_t kNumMaxValueAfterReductionTiles = 2U;
 constexpr uint32_t kNumExpSumBeforeReductionTiles = 2U;
 constexpr uint32_t kNumExpSumAfterReductionTiles = 2U;
 constexpr uint32_t kNumScalerTiles = 1U;  // used it to reduction
-// constexpr uint32_t kNumOutputTiles = 1U;
 
 constexpr uint32_t kPageElementsNumber = 32U;
 
@@ -297,13 +294,6 @@ CrossEntropyBackwardProgramFactory::cached_program_t CrossEntropyBackwardProgram
 
     auto cb_scaler = create_circular_buffer(
         program, all_cores, kScalerCbIndex, data_format, bfloat16_single_tile_size_bytes, kNumScalerTiles);
-
-    // auto cb_input_tile_by_idx = create_circular_buffer(
-    //     program, all_cores, kInputTileCbIndex, data_format, bfloat16_single_tile_size_bytes, kNumInputTilesByIndx);
-
-    // auto cb_target_inputs = create_circular_buffer(
-    //     program, all_cores, kTargetLogitsCbIndex, data_format, bfloat16_single_tile_size_bytes,
-    //     kNumTargetLogitsTiles);
 
     auto cb_max_value_before_reduction = create_circular_buffer(
         program,

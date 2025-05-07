@@ -10,6 +10,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <ttnn/operations/reduction/generic/generic_reductions.hpp>
+#include <ttnn/tensor/shape/shape.hpp>
 
 #include "autograd/auto_context.hpp"
 #include "core/tt_tensor_utils.hpp"
@@ -53,7 +54,7 @@ xt::xarray<float> calculate_cross_entropy_backward(const xt::xarray<float>& inpu
 TEST_F(CrossEntropyBackwardTest, CrossEntropyBackward_Small_Backward) {
     using namespace ttml;
 
-    const uint32_t N = 1, C = 1, H = 1, W = 8;
+    const uint32_t N = 1U, C = 1U, H = 1U, W = 8U;
 
     xt::xarray<float> input_tensor = {{{{1.F, 2.F, 3.F, 4.F, 1.F, 2.F, 3.F, 4.F}}}};
     auto input = core::from_xtensor(input_tensor, &autograd::ctx().get_device());

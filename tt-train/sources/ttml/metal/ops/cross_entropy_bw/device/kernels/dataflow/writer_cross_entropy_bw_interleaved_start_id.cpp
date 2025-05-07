@@ -8,36 +8,37 @@
 #include "dataflow_api.h"
 #include "debug/dprint.h"
 #include "debug/dprint_pages.h"
+#include "tt-train/sources/ttml/metal/ops/common/common_utils.hpp"
 
-constexpr uint32_t FACE_HEIGHT = 16;
-constexpr uint32_t FACE_WIDTH = 16;
-constexpr uint32_t TILE_HEIGHT = 32;
-constexpr uint32_t TILE_WIDTH = 32;
+// constexpr uint32_t FACE_HEIGHT = 16;
+// constexpr uint32_t FACE_WIDTH = 16;
+// constexpr uint32_t TILE_HEIGHT = 32;
+// constexpr uint32_t TILE_WIDTH = 32;
 
-uint32_t get_tilized_idx(uint32_t h, uint32_t w) {
-    // Get local coordinates within the tile
-    uint32_t local_row = h % TILE_HEIGHT;
-    uint32_t local_col = w % TILE_WIDTH;
+// uint32_t get_tilized_idx(uint32_t h, uint32_t w) {
+//     // Get local coordinates within the tile
+//     uint32_t local_row = h % TILE_HEIGHT;
+//     uint32_t local_col = w % TILE_WIDTH;
 
-    // Determine the index offset based on which quadrant we're in
-    uint32_t offset = 0;
+//     // Determine the index offset based on which quadrant we're in
+//     uint32_t offset = 0;
 
-    // If we're in the right half (columns beyond FACE_WIDTH)
-    if (local_col >= FACE_WIDTH) {
-        local_col -= FACE_WIDTH;
-        offset += FACE_HEIGHT * FACE_WIDTH;  // Right face offset
-    }
+//     // If we're in the right half (columns beyond FACE_WIDTH)
+//     if (local_col >= FACE_WIDTH) {
+//         local_col -= FACE_WIDTH;
+//         offset += FACE_HEIGHT * FACE_WIDTH;  // Right face offset
+//     }
 
-    // If we're in the bottom half (rows beyond FACE_WIDTH)
-    if (local_row >= FACE_WIDTH) {
-        local_row -= FACE_WIDTH;
-        offset += FACE_HEIGHT * TILE_WIDTH;  // Bottom face offset
-    }
+//     // If we're in the bottom half (rows beyond FACE_WIDTH)
+//     if (local_row >= FACE_WIDTH) {
+//         local_row -= FACE_WIDTH;
+//         offset += FACE_HEIGHT * TILE_WIDTH;  // Bottom face offset
+//     }
 
-    // Final index within the tile
-    uint32_t index = offset + local_row * FACE_WIDTH + local_col;
-    return index;
-}
+//     // Final index within the tile
+//     uint32_t index = offset + local_row * FACE_WIDTH + local_col;
+//     return index;
+// }
 
 inline float bfloat16_to_float(uint16_t bf16) {
     uint32_t tmp = static_cast<uint32_t>(bf16) << 16;
