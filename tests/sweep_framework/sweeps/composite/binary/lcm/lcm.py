@@ -68,8 +68,8 @@ def run(
     data_seed = random.randint(0, 20000000)
     torch.manual_seed(data_seed)
 
-    torch_input_tensor_a = torch.randint(-32767, 32767, input_shape, dtype=torch.int32)
-    torch_input_tensor_b = torch.randint(-32767, 32767, input_shape, dtype=torch.int32)
+    torch_input_tensor_a = torch.randint(-32767, 32768, input_shape, dtype=torch.int32)
+    torch_input_tensor_b = torch.randint(-32767, 32768, input_shape, dtype=torch.int32)
 
     golden_function = ttnn.get_golden_function(ttnn.lcm)
     torch_output_tensor = golden_function(torch_input_tensor_a, torch_input_tensor_b)
