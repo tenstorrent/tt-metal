@@ -8,9 +8,22 @@
 void kernel_main() {
     // Get this value from mesh_socket_t struct on host
     constexpr uint32_t socket_config_addr = get_compile_time_arg_val(0);
-    constexpr uint32_t local_l1_buffer_addr = get_compile_time_arg_val(1);
-    constexpr uint32_t page_size = get_compile_time_arg_val(2);
-    constexpr uint32_t data_size = get_compile_time_arg_val(3);
+    constexpr uint32_t page_size = get_compile_time_arg_val(1);
+    constexpr uint32_t data_size = get_compile_time_arg_val(2);
+    constexpr uint32_t config_cb_id = get_compile_time_arg_val(3);
+    constexpr uint32_t config_sem_id = get_compile_time_arg_val(4);
+    constexpr uint32_t credits_sem_id = get_compile_time_arg_val(5);
+    constexpr uint32_t reduction_core_x = get_compile_time_arg_val(6);
+    constexpr uint32_t reduction_core_y = get_compile_time_arg_val(7);
+
+    // Setup Socket Config on Worker
+    uint32_t worker_config_addr = get_write_ptr(config_cb_id);
+    uint64_t worker_config_unicast_noc_addr = get_noc_addr(reduction_core_x, reduction_core_y, worker_config_addr);
+    uint64_t worker_config_sem_noc_addr =
+        get_noc_addr(reduction_core_x, reduction_core_y, (uint32_t)get_semaphore(config_sem_id));
+
+    noc_async_write(socket_config_addr, worker_config_unicast_noc_addr, sizeof(SocketReceiverInterface));
+    noc_semaphore_inc(worker_config_sem_noc_addr, 1);
 
     size_t rt_args_idx = 0;
     tt::tt_fabric::WorkerToFabricEdmSender fabric_connection =
@@ -26,19 +39,22 @@ void kernel_main() {
     uint32_t outstanding_data_size = data_size;
     set_receiver_socket_page_size(receiver_socket, page_size);
 
-    uint64_t dst_noc_addr = get_noc_addr(local_l1_buffer_addr);
+    volatile tt_l1_ptr uint32_t* credits_sem_addr =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(credits_sem_id));
+
+    uint64_t credits_sem_noc_addr = get_noc_addr(reduction_core_x, reduction_core_y, (uint32_t)credits_sem_addr);
 
     // Reads one page at a time and sends ack to sender, can be optimized to notify
     // receiver after reading larger chunks
-    while (outstanding_data_size) {
+    constexpr uint32_t num_pages = data_size / page_size;
+    for (uint32_t i = 0; i < num_pages; ++i) {
         socket_wait_for_pages(receiver_socket, 1);
-        noc_async_write(receiver_socket.read_ptr, dst_noc_addr, page_size);
-        dst_noc_addr += page_size;
-        outstanding_data_size -= page_size;
+        noc_inline_dw_write(credits_sem_noc_addr, i + 1);
+        noc_semaphore_wait(credits_sem_addr, i + 1);
         socket_pop_pages(receiver_socket, 1);
-        noc_async_write_barrier();
         fabric_socket_notify_sender(receiver_socket, fabric_connection, socket_packet_header_addr);
     }
+
     update_socket_config(receiver_socket);
     fabric_connection.close();
 }

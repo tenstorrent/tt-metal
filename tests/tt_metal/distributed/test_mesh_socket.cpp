@@ -969,12 +969,58 @@ std::shared_ptr<Program> create_recv_program(
     std::size_t data_size,
     const CoreCoord& recv_logical_coord_0,
     const CoreCoord& recv_logical_coord_1,
+    const CoreCoord& reduce_logical_coord,
     chip_id_t sender0_physical_device_id,
     chip_id_t sender1_physical_device_id,
     chip_id_t recv_physical_device_id) {
     static constexpr auto packet_header_size_bytes = sizeof(tt::tt_fabric::PacketHeader);
-    const auto reserved_packet_header_CB_index = tt::CB::c_in0;
+
+    auto reserved_packet_header_CB_index = tt::CB::c_in0;
+    auto config0_cb_index = tt::CBIndex::c_1;
+    auto config1_cb_index = tt::CBIndex::c_2;
+    auto in0_cb_index = tt::CBIndex::c_3;
+    auto in1_cb_index = tt::CBIndex::c_4;
+
+    auto recv_virtual_coord_0 = recv_data_buffer->device()->worker_core_from_logical_core(recv_logical_coord_0);
+    auto recv_virtual_coord_1 = recv_data_buffer->device()->worker_core_from_logical_core(recv_logical_coord_1);
+    auto reduce_virtual_core = recv_data_buffer->device()->worker_core_from_logical_core(reduce_logical_coord);
+
     auto recv_program = std::make_shared<Program>();
+
+    auto recv_cb_packet_header_config =
+        CircularBufferConfig(packet_header_size_bytes, {{reserved_packet_header_CB_index, tt::DataFormat::RawUInt32}})
+            .set_page_size(tt::CB::c_in0, packet_header_size_bytes);
+    auto config_cb_config0 =
+        CircularBufferConfig(sizeof(receiver_socket_md), {{config0_cb_index, tt::DataFormat::UInt32}})
+            .set_page_size(config0_cb_index, sizeof(receiver_socket_md));
+    auto config_cb_config1 =
+        CircularBufferConfig(sizeof(receiver_socket_md), {{config1_cb_index, tt::DataFormat::UInt32}})
+            .set_page_size(config1_cb_index, sizeof(receiver_socket_md));
+    auto in0_cb_config = CircularBufferConfig(2 * page_size, {{in0_cb_index, tt::DataFormat::UInt32}})
+                             .set_page_size(in0_cb_index, page_size);
+    auto in1_cb_config = CircularBufferConfig(2 * page_size, {{in1_cb_index, tt::DataFormat::UInt32}})
+                             .set_page_size(in1_cb_index, page_size);
+    CoreRangeSet recv_crs =
+        CoreRangeSet(std::array{CoreRange(recv_logical_coord_0), CoreRange(recv_logical_coord_1)}).merge_ranges();
+    CoreRangeSet recv_worker_crs =
+        CoreRangeSet(
+            std::array{
+                CoreRange(recv_logical_coord_0), CoreRange(recv_logical_coord_1), CoreRange(reduce_logical_coord)})
+            .merge_ranges();
+    // Fabric header CB
+    auto recv_packet_header_CB_handle = CreateCircularBuffer(*recv_program, recv_crs, recv_cb_packet_header_config);
+    // Socket Config CB
+    auto config_cb_handle0 = CreateCircularBuffer(*recv_program, recv_worker_crs, config_cb_config0);
+    auto config_cb_handle1 = CreateCircularBuffer(*recv_program, recv_worker_crs, config_cb_config1);
+    // Data CBs
+    auto in0_cb_handle = CreateCircularBuffer(*recv_program, reduce_logical_coord, in0_cb_config);
+    auto in1_cb_handle = CreateCircularBuffer(*recv_program, reduce_logical_coord, in1_cb_config);
+
+    auto config0_sem = CreateSemaphore(*recv_program, recv_worker_crs, 0);
+    auto credits0_sem = CreateSemaphore(*recv_program, recv_worker_crs, 0);
+    auto config1_sem = CreateSemaphore(*recv_program, recv_worker_crs, 0);
+    auto credits1_sem = CreateSemaphore(*recv_program, recv_worker_crs, 0);
+
     auto recv_kernel_0 = CreateKernel(
         *recv_program,
         "tests/tt_metal/tt_metal/test_kernels/misc/socket/receiver_worker.cpp",
@@ -984,9 +1030,13 @@ std::shared_ptr<Program> create_recv_program(
             .noc = NOC::RISCV_0_default,
             .compile_args = {
                 static_cast<uint32_t>(recv_socket_0.config_buffer->address()),
-                static_cast<uint32_t>(recv_data_buffer->address()),
                 static_cast<uint32_t>(page_size),
-                static_cast<uint32_t>(data_size)}});
+                static_cast<uint32_t>(data_size),
+                static_cast<uint32_t>(config0_cb_index),
+                static_cast<uint32_t>(config0_sem),
+                static_cast<uint32_t>(credits0_sem),
+                static_cast<uint32_t>(reduce_virtual_core.x),
+                static_cast<uint32_t>(reduce_virtual_core.y)}});
 
     auto recv_kernel_1 = CreateKernel(
         *recv_program,
@@ -997,18 +1047,39 @@ std::shared_ptr<Program> create_recv_program(
             .noc = NOC::RISCV_0_default,
             .compile_args = {
                 static_cast<uint32_t>(recv_socket_1.config_buffer->address()),
+                static_cast<uint32_t>(page_size),
+                static_cast<uint32_t>(data_size),
+                static_cast<uint32_t>(config1_cb_index),
+                static_cast<uint32_t>(config1_sem),
+                static_cast<uint32_t>(credits1_sem),
+                static_cast<uint32_t>(reduce_virtual_core.x),
+                static_cast<uint32_t>(reduce_virtual_core.y)}});
+
+    auto reduce_kernel = CreateKernel(
+        *recv_program,
+        "tests/tt_metal/tt_metal/test_kernels/misc/socket/reduce_worker.cpp",
+        reduce_logical_coord,
+        DataMovementConfig{
+            .processor = DataMovementProcessor::RISCV_0,
+            .noc = NOC::RISCV_0_default,
+            .compile_args = {
+                static_cast<uint32_t>(config0_cb_index),
+                static_cast<uint32_t>(config0_sem),
+                static_cast<uint32_t>(config1_cb_index),
+                static_cast<uint32_t>(config1_sem),
+                static_cast<uint32_t>(credits0_sem),
+                static_cast<uint32_t>(credits1_sem),
+                static_cast<uint32_t>(in0_cb_index),
+                static_cast<uint32_t>(in1_cb_index),
+                static_cast<uint32_t>(recv_virtual_coord_0.x),
+                static_cast<uint32_t>(recv_virtual_coord_0.y),
+                static_cast<uint32_t>(recv_virtual_coord_1.x),
+                static_cast<uint32_t>(recv_virtual_coord_1.y),
+                static_cast<uint32_t>(reduce_virtual_core.x),  // Output buf core
+                static_cast<uint32_t>(reduce_virtual_core.y),  // Output buf core
                 static_cast<uint32_t>(recv_data_buffer->address()),
                 static_cast<uint32_t>(page_size),
                 static_cast<uint32_t>(data_size)}});
-
-    tt::tt_metal::CircularBufferConfig recv_cb_packet_header_config =
-        tt::tt_metal::CircularBufferConfig(
-            packet_header_size_bytes, {{reserved_packet_header_CB_index, tt::DataFormat::RawUInt32}})
-            .set_page_size(tt::CB::c_in0, packet_header_size_bytes);
-
-    CoreRangeSet recv_crs =
-        CoreRangeSet(std::array{CoreRange(recv_logical_coord_0), CoreRange(recv_logical_coord_1)}).merge_ranges();
-    auto recv_packet_header_CB_handle = CreateCircularBuffer(*recv_program, recv_crs, recv_cb_packet_header_config);
 
     std::vector<uint32_t> recv_rtas_0;
     std::vector<uint32_t> recv_rtas_1;
@@ -1020,6 +1091,7 @@ std::shared_ptr<Program> create_recv_program(
 
     tt_metal::SetRuntimeArgs(*recv_program, recv_kernel_0, recv_logical_coord_0, recv_rtas_0);
     tt_metal::SetRuntimeArgs(*recv_program, recv_kernel_1, recv_logical_coord_1, recv_rtas_1);
+
     return recv_program;
 }
 
@@ -1038,6 +1110,7 @@ void test_multi_sender_single_recv(
     auto sender_logical_coord = CoreCoord(0, 0);
     auto recv0_logical_coord = CoreCoord(0, 0);
     auto recv1_logical_coord = CoreCoord(0, 1);
+    auto reduce_core = CoreCoord(0, 2);
 
     auto l1_alignment = MetalContext::instance().hal().get_alignment(HalMemType::L1);
 
@@ -1076,22 +1149,23 @@ void test_multi_sender_single_recv(
         .shard_parameters = sender_data_shard_params,
         .bottom_up = false};
 
-    CoreRangeSet recv_crs =
-        CoreRangeSet(std::array{CoreRange(recv0_logical_coord), CoreRange(recv1_logical_coord)}).merge_ranges();
-    auto recv_data_shard_params = ShardSpecBuffer(recv_crs, {1, 1}, ShardOrientation::ROW_MAJOR, {1, 1}, {2, 1});
+    // CoreRangeSet recv_crs =
+    //     CoreRangeSet(std::array{CoreRange(recv0_logical_coord), CoreRange(recv1_logical_coord)}).merge_ranges();
+    auto reduce_data_shard_params =
+        ShardSpecBuffer(CoreRangeSet(reduce_core), {1, 1}, ShardOrientation::ROW_MAJOR, {1, 1}, {1, 1});
 
-    const DeviceLocalBufferConfig recv_device_local_config{
+    const DeviceLocalBufferConfig reduce_device_local_config{
         .page_size = data_size,
         .buffer_type = BufferType::L1,
         .buffer_layout = TensorMemoryLayout::HEIGHT_SHARDED,
-        .shard_parameters = recv_data_shard_params,
+        .shard_parameters = reduce_data_shard_params,
         .bottom_up = false};
 
     const ReplicatedBufferConfig sender_buffer_config{.size = data_size};
-    const ReplicatedBufferConfig recv_buffer_config{.size = 2 * data_size};
+    const ReplicatedBufferConfig reduce_buffer_config{.size = data_size};
     auto sender_data_buffer_0 = MeshBuffer::create(sender_buffer_config, sender_device_local_config, sender_0.get());
     auto sender_data_buffer_1 = MeshBuffer::create(sender_buffer_config, sender_device_local_config, sender_1.get());
-    auto recv_data_buffer = MeshBuffer::create(recv_buffer_config, recv_device_local_config, receiver.get());
+    auto reduce_data_buffer = MeshBuffer::create(reduce_buffer_config, reduce_device_local_config, receiver.get());
 
     std::vector<uint32_t> src_vec(data_size / sizeof(uint32_t));
     std::iota(src_vec.begin(), src_vec.end(), 0);
@@ -1118,11 +1192,12 @@ void test_multi_sender_single_recv(
     auto recv_program = create_recv_program(
         recv_socket_0,
         recv_socket_1,
-        recv_data_buffer,
+        reduce_data_buffer,
         page_size,
         data_size,
         recv0_logical_coord,
         recv1_logical_coord,
+        reduce_core,
         sender_0_physical_device_id,
         sender_1_physical_device_id,
         receiver_physical_device_id);
@@ -1143,13 +1218,10 @@ void test_multi_sender_single_recv(
     EnqueueMeshWorkload(sender_1->mesh_command_queue(), sender_1_mesh_workload, false);
     EnqueueMeshWorkload(receiver->mesh_command_queue(), recv_mesh_workload, false);
 
-    std::vector<uint32_t> recv_data_readback;
-    ReadShard(receiver->mesh_command_queue(), recv_data_readback, recv_data_buffer, MeshCoordinate(0, 0));
+    std::vector<uint32_t> reduce_data_readback;
+    ReadShard(receiver->mesh_command_queue(), reduce_data_readback, reduce_data_buffer, MeshCoordinate(0, 0));
     for (size_t i = 0; i < src_vec.size(); ++i) {
-        EXPECT_EQ(src_vec[i], recv_data_readback[i]);
-    }
-    for (size_t i = 0; i < src_vec.size(); ++i) {
-        EXPECT_EQ(src_vec[i], recv_data_readback[i + src_vec.size()]);
+        EXPECT_EQ(2 * src_vec[i], reduce_data_readback[i]);
     }
 }
 
