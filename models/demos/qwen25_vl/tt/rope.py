@@ -6,15 +6,7 @@ import torch
 import ttnn
 from ttnn import ReplicateTensorToMesh, ShardTensor2dMesh
 from models.common.lightweightmodule import LightweightModule
-from models.tt_transformers.tt.common import precompute_freqs, get_rot_transformation_mat, gather_cos_sin
 from models.tt_transformers.tt.rope import RotarySetup as TTTransformerRotarySetup
-from models.utility_functions import nearest_32
-from loguru import logger
-
-
-def compute_gather_cos_sin(dhead, end, theta, scale_factor, orig_context_len, position_ids):
-    cos, sin = precompute_freqs(dhead, end, theta, scale_factor, orig_context_len)
-    return gather_cos_sin(position_ids, cos, sin)
 
 
 class RotarySetup(LightweightModule):
@@ -106,7 +98,7 @@ class RotarySetup(LightweightModule):
         assert position_idxs.device != device, "rot_idxs must be on device"
 
         # [INFO] Qwen2.5 VL produces cos and sin matrices with shape [batch_size, 1, seq_len, head_dim]
-        # todo)) { Optimize the slicing work around below
+        # todo)) { Optimize the slicing work-around below
         batch_size = position_idxs.shape[0]
         cos, sin = None, None
         for i in range(batch_size):

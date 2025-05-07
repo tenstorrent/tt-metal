@@ -2,7 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 import ttnn
-from models.tt_transformers.tt.attention import Attention
+from models.tt_transformers.tt.attention import Attention as DefaultAttention
 from models.tt_transformers.tt.mlp import MLP
 from models.common.rmsnorm import RMSNorm
 from models.common.lightweightmodule import LightweightModule
@@ -21,6 +21,7 @@ class TransformerBlock(LightweightModule):
         transformation_mats,
         paged_attention_config=None,
         use_paged_kv_cache=False,
+        attention_class=None,
     ):
         super().__init__()
 
@@ -40,7 +41,9 @@ class TransformerBlock(LightweightModule):
 
         self.layer_num = layer_num
 
-        self.attention = Attention(
+        ActualAttentionClass = attention_class if attention_class is not None else DefaultAttention
+
+        self.attention = ActualAttentionClass(
             mesh_device=mesh_device,
             state_dict=state_dict,
             weight_cache_path=weight_cache_path,

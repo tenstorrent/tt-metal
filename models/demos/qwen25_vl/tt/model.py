@@ -10,6 +10,7 @@ from models.common.lightweightmodule import LightweightModule
 from models.demos.qwen25_vl.tt.vision_block import VisionBlock
 from models.demos.qwen25_vl.tt.patch_merger import PatchMerger
 from models.demos.qwen25_vl.tt.model_config import VisionModelArgs
+from models.demos.qwen25_vl.tt.rope import RotarySetup
 from models.demos.qwen25_vl.reference.functional import qwen2_5_vision_transformer_preprocess
 from models.tt_transformers.tt.common import get_rot_transformation_mat
 from models.tt_transformers.tt.load_checkpoints import (
@@ -17,6 +18,8 @@ from models.tt_transformers.tt.load_checkpoints import (
     standardize_hf_keys,
     convert_rope_style_hf_to_meta,
 )
+from models.tt_transformers.tt.model import Transformer as TTTransformer
+from models.demos.qwen25_vl.tt.attention import Attention as QwenVLAttentionModule
 
 
 class VisionTransformer(LightweightModule):
@@ -289,3 +292,131 @@ class DropInVisionTransformer(torch.nn.Module):
             _, pcc = comp_pcc(reference_output, final_output)
             logger.info(f"DropInVisionTransformer: PCC to reference model: {pcc}")
         return final_output
+
+
+class Transformer(LightweightModule):
+    def __init__(
+        self,
+        args,
+        dtype,
+        mesh_device,
+        state_dict,
+        weight_cache_path,
+        paged_attention_config=None,
+        use_paged_kv_cache=False,
+    ):
+        # favor composition over inheritance: __ is convention for private variables
+        self.__tt_transformer = TTTransformer(
+            args=args,
+            dtype=dtype,
+            mesh_device=mesh_device,
+            state_dict=state_dict,
+            weight_cache_path=weight_cache_path,
+            paged_attention_config=paged_attention_config,
+            use_paged_kv_cache=use_paged_kv_cache,
+            attention_class=QwenVLAttentionModule,
+        )
+
+        # Create a new rotary setup to override the one in the TTTransformer
+        self.__tt_transformer.rope_setup = RotarySetup(
+            mesh_device,
+            args.max_batch_size,
+            args.head_dim,
+            args.max_seq_len,
+            args.rope_theta,
+            args.rope_scaling_factor,
+            args.orig_context_len,
+        )
+
+    @property
+    def rope_setup(self):
+        return self.__tt_transformer.rope_setup
+
+    @property
+    def layers(self):
+        return self.__tt_transformer.layers
+
+    @property
+    def mesh_device(self):
+        return self.__tt_transformer.mesh_device
+
+    # override prepare_inputs_prefill
+    def prepare_inputs_prefill(self, tokens, start_pos=0, page_table=None, chunk_page_table=None):
+        # tokens is actually embeddings
+        assert tokens.dim() == 3, "tokens should be a 3D tensor"
+        S = tokens.shape[-2]
+        tokens_embd = ttnn.from_torch(
+            tokens.unsqueeze(1),
+            device=self.mesh_device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+        )
+
+        # Slice the rot mats to the prefill seqlen
+        assert (
+            self.rope_setup.cos_matrix.shape[2] >= start_pos + S
+        ), f"Padded prefill end idx {start_pos + S} exceeds max seq len {self.rope_setup.cos_matrix.shape[2]}"
+        tt_rot_mats_prefill = [
+            self.rope_setup.cos_matrix[:, :, start_pos : start_pos + S, :],
+            self.rope_setup.sin_matrix[:, :, start_pos : start_pos + S, :],
+        ]
+
+        if page_table is not None:
+            tt_page_table = ttnn.from_torch(
+                page_table,
+                device=self.mesh_device,
+                dtype=ttnn.int32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+            )
+        else:
+            tt_page_table = None
+
+        if chunk_page_table is not None:
+            tt_chunk_page_table = ttnn.from_torch(
+                chunk_page_table,
+                device=self.mesh_device,
+                dtype=ttnn.int32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+            )
+        else:
+            tt_chunk_page_table = None
+
+        return tokens_embd, tt_rot_mats_prefill, tt_page_table, tt_chunk_page_table
+
+    def ttnn_prefill_forward(
+        self,
+        x,
+        rot_mats,
+        user_id,
+        page_table=None,
+        chunk_page_table=None,
+        chunk_start_idx=None,
+        get_last_token=-1,
+        kv_cache=None,
+    ):
+        return self.__tt_transformer.ttnn_prefill_forward(
+            x, rot_mats, user_id, page_table, chunk_page_table, chunk_start_idx, get_last_token, kv_cache
+        )
+
+    def process_output_prefill(self, tt_out, last_token_idx):
+        return self.__tt_transformer.process_output_prefill(tt_out, last_token_idx)
+
+    def prepare_decode_inputs_host(self, tokens, current_pos, page_table=None):
+        return self.__tt_transformer.prepare_decode_inputs_host(tokens, current_pos, page_table)
+
+    def transform_decode_inputs_device(self, tokens, current_pos, rope_idxs, page_table=None):
+        return self.__tt_transformer.transform_decode_inputs_device(tokens, current_pos, rope_idxs, page_table)
+
+    def ttnn_decode_forward(self, x, current_pos, rot_mats, page_table=None, kv_cache=None, argmax_on_device=False):
+        return self.__tt_transformer.ttnn_decode_forward(
+            x, current_pos, rot_mats, page_table, kv_cache, argmax_on_device
+        )
+
+    def prepare_inputs_decode(self, *inputs):
+        return self.__tt_transformer.prepare_inputs_decode(*inputs)
+
+    def process_output_decode(self, tt_out, B, S=1, argmax_on_device=False):
+        return self.__tt_transformer.process_output_decode(tt_out, B, S, argmax_on_device=argmax_on_device)

@@ -4,7 +4,6 @@
 import json
 from loguru import logger
 from datetime import datetime
-
 import torch
 import pytest
 import os
@@ -13,20 +12,21 @@ import ttnn
 from transformers.models.qwen2_5_vl.modeling_qwen2_5_vl import Qwen2_5_VLForConditionalGeneration
 from transformers import AutoProcessor
 from qwen_vl_utils import process_vision_info
-from models.tt_transformers.tt.generator import Generator
-from models.tt_transformers.tt.model_config import ModelOptimizations
-from models.tt_transformers.tt.common import (
+
+from models.demos.qwen25_vl.tt.generator import Generator
+from models.demos.qwen25_vl.tt.common import (
     PagedAttentionConfig,
     sample_host,
+    preprocess_inputs_prefill,
+    merge_vision_tokens,
+    multimodal_rope_from_hf,
 )
-from models.demos.qwen25_vl.tt.common import preprocess_inputs_prefill
-from models.tt_transformers.tt.common import preprocess_inputs_prefill as ttt_preprocess_inputs_prefill
-from models.perf.benchmarking_utils import BenchmarkProfiler
-from models.demos.utils.llm_demo_utils import create_benchmark_data
-from models.demos.qwen25_vl.tt.common import merge_vision_tokens, multimodal_rope_from_hf
-from models.demos.qwen25_vl.tt.model import DropInVisionTransformer
+from models.demos.qwen25_vl.tt.model import DropInVisionTransformer, Transformer
 from models.demos.qwen25_vl.tt.model_config import VisionModelArgs
-from models.demos.qwen25_vl.tt.rope import RotarySetup
+from models.demos.utils.llm_demo_utils import create_benchmark_data
+from models.perf.benchmarking_utils import BenchmarkProfiler
+
+from models.tt_transformers.tt.model_config import ModelOptimizations
 
 
 def create_tt_model(
@@ -39,7 +39,6 @@ def create_tt_model(
     dtype=ttnn.bfloat8_b,
     use_paged_kv_cache=False,
 ):
-    from models.tt_transformers.tt.model import Transformer
     from models.tt_transformers.tt.model_config import ModelArgs
 
     tt_model_args = ModelArgs(
@@ -263,19 +262,6 @@ def test_demo(
         dtype=ttnn.bfloat8_b,
         use_paged_kv_cache=paged_attention,
     )
-    # todo)) { clean up the model
-    # [INFO] One key aspect that Qwen's RoPE is different from Llama's RoPE is that it uses a different embedding for different users,
-    # while Llama's RoPE uses a single embedding for all users. This is because Qwen's RoPE output depends on the positions of the image tokens relatively the text tokens and different users may have different image tokens and/or text tokens.
-    model.rope_setup = RotarySetup(
-        mesh_device,
-        model_args.max_batch_size,
-        model_args.head_dim,
-        model_args.max_seq_len,
-        model_args.rope_theta,
-        model_args.rope_scaling_factor,
-        model_args.orig_context_len,
-    )
-    # } todo))
 
     tokenizer = model_args.tokenizer
     generator = Generator(model, model_args, mesh_device, tokenizer=tokenizer)
@@ -294,7 +280,11 @@ def test_demo(
     )
     if use_tt_vision:
         # Create the TorchVisionTransformer wrapper using the original vision model as reference
-        vision_model_args = VisionModelArgs(mesh_device, max_batch_size=1, max_seq_len=max_seq_len)
+        vision_model_args = VisionModelArgs(
+            mesh_device,
+            max_batch_size=1,  # todo)) this may need to change for multiple users?
+            max_seq_len=max_seq_len,
+        )
         vision_model_args.hf_config.vision_config.depth = config.vision_config.depth
         visual_model = DropInVisionTransformer(reference_model.visual, vision_model_args, debug=False)  # show PCC
     else:

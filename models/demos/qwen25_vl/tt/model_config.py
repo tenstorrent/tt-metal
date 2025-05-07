@@ -4,13 +4,15 @@
 
 import math
 from loguru import logger
-from models.tt_transformers.tt.common import nearest_multiple
-from models.tt_transformers.tt.model_config import ModelArgs
+
+from models.demos.qwen25_vl.tt.common import nearest_multiple
+
 from models.tt_transformers.tt.load_checkpoints import (
     load_hf_state_dict,
     convert_hf_to_meta,
     standardize_hf_keys,
 )
+from models.tt_transformers.tt.model_config import ModelArgs
 
 
 class VisionModelArgs(ModelArgs):
