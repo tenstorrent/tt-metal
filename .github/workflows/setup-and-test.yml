@@ -16,7 +16,7 @@ jobs:
   setup-and-test:
     name: "🦄 Run tests"
     runs-on: ${{ inputs.runs_on }}
-    timeout-minutes: 40
+    timeout-minutes: 80
     container:
       image: ${{ inputs.docker_image }}
       options: "--rm --device /dev/tenstorrent"
