@@ -90,7 +90,7 @@ using Array8D = std::array<uint32_t, 8>;
 
 class MemoryConfig final {
 public:
-    MemoryConfig() = default;
+    MemoryConfig() = default; // Interleaved DRAM
     explicit MemoryConfig(TensorMemoryLayout memory_layout,
         BufferType buffer_type = BufferType::DRAM,
         std::optional<ShardSpec> shard_spec = std::nullopt) :
@@ -112,6 +112,9 @@ public:
     bool is_l1() const;
     bool is_dram() const;
 
+    static constexpr auto attribute_names = std::forward_as_tuple("memory_layout", "buffer_type", "shard_spec");
+    auto attribute_values() const { return std::forward_as_tuple(memory_layout_, buffer_type_, shard_spec_); }
+
     friend std::ostream& operator<<(std::ostream& os, const MemoryConfig& config);
 
 private:
@@ -127,22 +130,6 @@ bool operator!=(const MemoryConfig &config_a, const MemoryConfig &config_b);
 
 } // namespace tt_metal
 } // namespace tt
-
-template<>
-struct std::hash<tt::tt_metal::MemoryConfig> {
-    std::size_t operator()(const tt::tt_metal::MemoryConfig& config) const;
-};
-
-template <>
-struct fmt::formatter<tt::tt_metal::MemoryConfig> {
-    constexpr auto parse(format_parse_context& ctx) { return ctx.end(); }
-
-    auto format(const tt::tt_metal::MemoryConfig& config, format_context& ctx) const -> format_context::iterator {
-        std::stringstream ss;
-        ss << config;
-        return fmt::format_to(ctx.out(), "{}", ss.str());
-    }
-};
 
 template <>
 struct tt::stl::json::to_json_t<tt::tt_metal::MemoryConfig> {

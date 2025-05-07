@@ -76,22 +76,11 @@ bool operator==(const MemoryConfig& config_a, const MemoryConfig& config_b) {
 bool operator!=(const MemoryConfig& config_a, const MemoryConfig& config_b) { return not(config_a == config_b); }
 
 std::ostream& operator<<(std::ostream& os, const MemoryConfig& config) {
-    os << "MemoryConfig(";
-    tt::stl::reflection::operator<<(os, config.buffer_type());
-    os << ", ";
-    tt::stl::reflection::operator<<(os, config.memory_layout());
-    os << ", ";
-    tt::stl::reflection::operator<<(os, config.shard_spec());
-    os << ")";
+    tt::stl::reflection::operator<<(os, config);
     return os;
 }
 
 }  // namespace tt::tt_metal
-
-std::size_t std::hash<tt::tt_metal::MemoryConfig>::operator()(const tt::tt_metal::MemoryConfig& config) const {
-    return tt::stl::hash::hash_objects_with_default_seed(
-        config.buffer_type(), config.memory_layout(), config.shard_spec());
-}
 
 nlohmann::json tt::stl::json::to_json_t<tt::tt_metal::MemoryConfig>::operator()(
     const tt::tt_metal::MemoryConfig& config) const {
