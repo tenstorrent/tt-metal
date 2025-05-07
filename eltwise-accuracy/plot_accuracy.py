@@ -9,6 +9,7 @@ import pandas as pd
 import seaborn as sns
 import numpy as np
 
+import json
 import math
 import sys
 import os.path
@@ -29,6 +30,85 @@ def preprocess_operation(data):
     data["operation_max"] = data["operation"] + " (max)"
 
     return data
+
+
+def parse_plot_config(plot_config_path):
+    with open(plot_config_path, "r") as f:
+        plot_config = json.load(f)
+
+    return plot_config
+
+
+def hash_plot_entry(entry):
+    import hashlib
+
+    entry_str = json.dumps(entry, sort_keys=True)
+    hash_obj = hashlib.sha256(entry_str.encode())
+    return hash_obj.hexdigest()
+
+
+def generate_plot_config_hashes(plot_config):
+    # Dictionary to store hashes for each plot configuration
+    plot_config_hashes = {}
+
+    # Process each plot entry in the configuration
+    for plot_entry in plot_config["plots"]:
+        hash_value = hash_plot_entry(plot_entry)
+
+        # Store the hash with its corresponding plot entry
+        plot_config_hashes[hash_value] = plot_entry["id"]
+
+    return plot_config_hashes
+
+
+def load_plot_config_hashes(input_path):
+    # Load as json file
+    with open(input_path, "r") as f:
+        plot_config_hashes = json.load(f)
+
+    return plot_config_hashes
+
+
+def save_plot_config_hashes(plot_config_hashes, output_path):
+    # Save as json file
+    with open(output_path, "w") as f:
+        json.dump(plot_config_hashes, f)
+
+
+def plot_all(plot_config, base_output_dir, plot_config_hashes):
+    plot_args = []
+
+    for plot_entry in plot_config["plots"]:
+        plot_id = plot_entry["id"]
+
+        do_replot = False
+        if plot_id in plot_config_hashes:
+            # Compute new hash and check against previous one
+            hash_value = hash_plot_entry(plot_entry)
+            last_hash = plot_config_hashes[plot_id]
+
+            if hash_value != last_hash:
+                do_replot = True
+
+        else:
+            do_replot = True
+
+        if do_replot:
+            plot_args.append(plot_entry)
+
+    # For each plot entry, import data
+    for plot_entry in plot_args:
+        plot_entry["data"] = load_data(plot_entry["data_path"])
+
+    # Launch parallel plots
+    num_processes = mp.cpu_count()
+    print(f"Plotting {len(plot_args)} operations with {num_processes} processes")
+
+    with mp.Pool(num_processes) as pool:
+        results = pool.map(plot_data, plot_args)
+
+        for result in results:
+            print(result)
 
 
 def plot_common_accuracy(
