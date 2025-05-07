@@ -20,6 +20,7 @@ namespace tt::tt_metal {
 class Event;
 class Program;
 class Kernel;
+class SystemMemoryManager;
 
 class CommandQueue {
 public:

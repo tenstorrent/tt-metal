@@ -37,7 +37,6 @@
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/logger.hpp>
 #include <tt-metalium/program.hpp>
-#include <tt-metalium/system_memory_manager.hpp>
 #include "test_common.hpp"
 #include "impl/context/metal_context.hpp"
 #include "tt_metal/tt_metal/perf_microbenchmark/common/util.hpp"
@@ -68,7 +67,7 @@ void* align(void* ptr, std::size_t max_alignment) {
     // ex. if the current ptr here is 16, but we specified an alignment of 8,
     // then this is both 8 and 16 byte aligned, so we offset again by our
     // specified alignment to make the max alignment what was specified
-    aligned = aligned & (max_alignment << 1 - 1) ? aligned : aligned + max_alignment;
+    aligned = aligned & ((max_alignment << 1) - 1) ? aligned : aligned + max_alignment;
 
     return reinterpret_cast<void*>(aligned);
 }

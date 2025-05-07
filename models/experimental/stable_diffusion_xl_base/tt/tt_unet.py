@@ -24,7 +24,11 @@ from models.experimental.stable_diffusion_xl_base.tt.sdxl_utility import (
 
 
 class TtUNet2DConditionModel(nn.Module):
-    def __init__(self, device, state_dict, module_path):
+    # During testing it was observed that setting conv_weights to bfloat16 + HiFi4 leads to much better image quality.
+    # Other weights seem not to have as an impact on it.
+    def __init__(
+        self, device, state_dict, module_path, conv_weights_dtype=ttnn.bfloat16, transformer_weights_dtype=ttnn.bfloat16
+    ):
         super().__init__()
 
         self.device = device
@@ -37,20 +41,83 @@ class TtUNet2DConditionModel(nn.Module):
         self.time_proj = TtTimesteps(device, 320, True, 0, 1)
         self.add_time_proj = TtTimesteps(device, 256, True, 0, 1)
 
-        self.time_embedding = TtTimestepEmbedding(device, state_dict, "time_embedding")
-        self.add_embedding = TtTimestepEmbedding(device, state_dict, "add_embedding")
+        self.time_embedding = TtTimestepEmbedding(
+            device, state_dict, "time_embedding", linear_weights_dtype=transformer_weights_dtype
+        )
+        self.add_embedding = TtTimestepEmbedding(
+            device, state_dict, "add_embedding", linear_weights_dtype=transformer_weights_dtype
+        )
 
         self.down_blocks = []
-        self.down_blocks.append(TtDownBlock2D(device, state_dict, "down_blocks.0"))
-        self.down_blocks.append(TtCrossAttnDownBlock2D(device, state_dict, "down_blocks.1", 640, 10, 640, True))
-        self.down_blocks.append(TtCrossAttnDownBlock2D(device, state_dict, "down_blocks.2", 1280, 20, 1280, False))
+        self.down_blocks.append(
+            TtDownBlock2D(device, state_dict, "down_blocks.0", conv_weights_dtype=conv_weights_dtype)
+        )
+        self.down_blocks.append(
+            TtCrossAttnDownBlock2D(
+                device,
+                state_dict,
+                "down_blocks.1",
+                640,
+                10,
+                640,
+                True,
+                transformer_weights_dtype=transformer_weights_dtype,
+                conv_weights_dtype=conv_weights_dtype,
+            )
+        )
+        self.down_blocks.append(
+            TtCrossAttnDownBlock2D(
+                device,
+                state_dict,
+                "down_blocks.2",
+                1280,
+                20,
+                1280,
+                False,
+                transformer_weights_dtype=transformer_weights_dtype,
+                conv_weights_dtype=conv_weights_dtype,
+            )
+        )
 
-        self.mid_block = TtUNetMidBlock2DCrossAttn(device, state_dict, "mid_block", 1280, 20, 1280)
+        self.mid_block = TtUNetMidBlock2DCrossAttn(
+            device,
+            state_dict,
+            "mid_block",
+            1280,
+            20,
+            1280,
+            transformer_weights_dtype=transformer_weights_dtype,
+            conv_weights_dtype=conv_weights_dtype,
+        )
 
         self.up_blocks = []
-        self.up_blocks.append(TtCrossAttnUpBlock2D(device, state_dict, "up_blocks.0", 1280, 20, 1280, True))
-        self.up_blocks.append(TtCrossAttnUpBlock2D(device, state_dict, "up_blocks.1", 640, 10, 640, True))
-        self.up_blocks.append(TtUpBlock2D(device, state_dict, "up_blocks.2"))
+        self.up_blocks.append(
+            TtCrossAttnUpBlock2D(
+                device,
+                state_dict,
+                "up_blocks.0",
+                1280,
+                20,
+                1280,
+                True,
+                transformer_weights_dtype=transformer_weights_dtype,
+                conv_weights_dtype=conv_weights_dtype,
+            )
+        )
+        self.up_blocks.append(
+            TtCrossAttnUpBlock2D(
+                device,
+                state_dict,
+                "up_blocks.1",
+                640,
+                10,
+                640,
+                True,
+                transformer_weights_dtype=transformer_weights_dtype,
+                conv_weights_dtype=conv_weights_dtype,
+            )
+        )
+        self.up_blocks.append(TtUpBlock2D(device, state_dict, "up_blocks.2", conv_weights_dtype=conv_weights_dtype))
 
         conv_weights_in = state_dict["conv_in.weight"]
         conv_bias_in = state_dict["conv_in.bias"].unsqueeze(0).unsqueeze(0).unsqueeze(0)
@@ -67,9 +134,9 @@ class TtUNet2DConditionModel(nn.Module):
             self.tt_conv1_weights,
             self.tt_conv1_bias,
             self.conv1_params,
-        ) = prepare_conv_params(device, conv_weights_in, conv_bias_in, ttnn.bfloat8_b, act_block_h_override=32)
+        ) = prepare_conv_params(device, conv_weights_in, conv_bias_in, conv_weights_dtype, act_block_h_override=32)
         _, _, self.tt_conv2_weights, self.tt_conv2_bias, self.conv2_params = prepare_conv_params(
-            device, conv_weights_out, conv_bias_out, ttnn.bfloat8_b, act_block_h_override=32
+            device, conv_weights_out, conv_bias_out, conv_weights_dtype, act_block_h_override=32
         )
 
         self.norm_core_grid = ttnn.CoreGrid(y=8, x=8)

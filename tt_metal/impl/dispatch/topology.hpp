@@ -10,7 +10,6 @@
 
 #include "data_types.hpp"
 #include "tt-metalium/program.hpp"
-#include "system_memory_manager.hpp"
 #include "tt_metal/impl/dispatch/kernel_config/fd_kernel.hpp"
 
 namespace tt {
