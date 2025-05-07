@@ -34,6 +34,24 @@ inline void check_size_fits_int(std::size_t n) {
 
 } // namespace
 
+MPIDistributedException::MPIDistributedException(Rank rank, int error_code, std::string msg) :
+    rank_(rank), error_code_(error_code), message_(std::move(msg)) {
+    // retrieve human-readable MPI error string
+    char buf[MPI_MAX_ERROR_STRING] = {0};
+    int len = 0;
+    MPI_Error_string(error_code_, buf, &len);
+    error_string_.assign(buf, len);
+}
+
+// implement interface
+Rank MPIDistributedException::rank() const noexcept override { return rank_; }
+
+int MPIDistributedException::error_code() const noexcept override { return error_code_; }
+
+const std::string& MPIDistributedException::message() const noexcept override { return message_; }
+
+const std::string& MPIDistributedException::error_string() const noexcept override { return error_string_; }
+
 /* -------------------------- MPIRequest ---------------------------------- */
 
 Status MPIRequest::wait() {

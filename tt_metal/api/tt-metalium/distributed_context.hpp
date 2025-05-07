@@ -21,6 +21,17 @@ using Color = tt::stl::StrongType<int, struct ColorTag>;
 using Key = tt::stl::StrongType<int, struct KeyTag>;
 using Size = tt::stl::StrongType<int, struct SizeTag>;
 
+class DistributedException : public std::exception {
+public:
+    virtual Rank rank() const noexcept = 0;
+    virtual int error_code() const noexcept = 0;
+    virtual const std::string& message() const noexcept = 0;
+    virtual const std::string& error_string() const noexcept = 0;
+
+    virtual const char* what() const noexcept override { return message().c_str(); }
+    virtual ~DistributedException() = default;
+};
+
 struct Status {
     Rank source = Rank(0);
     Tag tag = Tag(0);

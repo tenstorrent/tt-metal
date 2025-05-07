@@ -9,6 +9,26 @@
 
 namespace tt::tt_metal::distributed::multihost {
 
+class MPIDistributedException : public DistributedException {
+public:
+    MPIDistributedException(Rank rank, int error_code, std::string msg);
+
+    // implement interface
+    Rank rank() const noexcept override;
+
+    int error_code() const noexcept override;
+
+    const std::string& message() const noexcept override;
+
+    const std::string& error_string() const noexcept override;
+
+private:
+    Rank rank_{0};
+    int error_code_{0};
+    std::string message_;
+    std::string error_string_;
+};
+
 // ---------------------------------------------------------------------
 //                           Non‑blocking request
 // ---------------------------------------------------------------------
