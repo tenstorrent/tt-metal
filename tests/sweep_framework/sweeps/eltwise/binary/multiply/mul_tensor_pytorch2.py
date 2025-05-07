@@ -6,6 +6,8 @@ from typing import Optional, Tuple
 from functools import partial
 
 import torch
+import pytest
+import itertools
 import ttnn
 from tests.sweep_framework.sweep_utils.utils import gen_shapes
 from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
@@ -21,10 +23,14 @@ from models.utility_functions import torch_random
 # Developers can create their own generator functions and pass them to the parameters as inputs.
 parameters = {
 <<<<<<< HEAD
+<<<<<<< HEAD
     "test_a8": {
 =======
     "final_check": {
 >>>>>>> 35827fa322 (#0: Run sweep to check for errors)
+=======
+    "check_mul_pytorch2": {
+>>>>>>> 42acc6c465 (#0: Store fails in CSV file)
         "input_shape": [
             {"self": [0], "other": 0.5},
             {"self": [1, 1, 1, 10], "other": -3.4028234663852886e38},
@@ -409,6 +415,31 @@ parameters = {
         "input_a_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
         "input_b_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
     },
+    "failed_with_PCC Drop": {
+        "input_shape": [
+            {"self": [1, 1, 1, 2048], "other": -3.4028234663852886e38},
+        ],
+        "input_a_dtype": [ttnn.bfloat16],
+        "input_b_dtype": [ttnn.bfloat16],
+        "input_a_layout": [ttnn.TILE_LAYOUT],
+        "input_b_layout": [ttnn.TILE_LAYOUT],
+        "input_a_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
+        "input_b_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
+    },
+    "failed_with_shape_issue": {
+        "input_shape": [
+            {"self": [1, 3, 16, 16, 2], "other": []},
+            {"self": [1, 3, 32, 32, 2], "other": []},
+            {"self": [1, 3, 64, 64, 2], "other": []},
+            {"self": [1, 64, 480, 640], "other": [480, 1]},
+        ],
+        "input_a_dtype": [ttnn.bfloat16],
+        "input_b_dtype": [ttnn.bfloat16],
+        "input_a_layout": [ttnn.TILE_LAYOUT],
+        "input_b_layout": [ttnn.TILE_LAYOUT],
+        "input_a_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
+        "input_b_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
+    },
 }
 
 
@@ -416,7 +447,7 @@ parameters = {
 # The run function must take the above-defined parameters as inputs.
 # The runner will call this run function with each test vector, and the returned results from this function will be stored.
 # If you defined a device_mesh_fixture above, the object you yielded will be passed into this function as 'device'. Otherwise, it will be the default ttnn device opened by the infra.
-def run(
+def run_mul(
     input_shape,
     input_a_dtype,
     input_b_dtype,
@@ -471,6 +502,7 @@ def run(
     return [check_with_pcc(torch_output_tensor, output_tensor, pcc=0.99), e2e_perf]
 
 
+<<<<<<< HEAD
 # +--------+------+-------------------------+-------------------+---------+----------------------+----------------+--------------------------------+
 # |        | PASS | FAIL (ASSERT/EXCEPTION) | FAIL (CRASH/HANG) | NOT RUN | FAIL (L1 Out of Mem) | FAIL (Watcher) | FAIL (Unsupported Device Perf) |
 # +--------+------+-------------------------+-------------------+---------+----------------------+----------------+--------------------------------+
@@ -548,3 +580,54 @@ def run(
 # current parameter  {'input_shape': {'self': [1, 3, 64, 64, 2], 'other': []}, 'input_a_dtype': <DataType.BFLOAT16: 0>, 'input_b_dtype': <DataType.BFLOAT16: 0>, 'input_a_layout': <Layout.TILE: 1>, 'input_b_layout': <Layout.TILE: 1>, 'input_a_memory_config': MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt), 'input_b_memory_config': MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt)}
 # STATUS False
 # **************************
+=======
+def run(
+    input_shape,
+    input_a_dtype,
+    input_b_dtype,
+    input_a_layout,
+    input_b_layout,
+    input_a_memory_config,
+    input_b_memory_config,
+    *,
+    device,
+) -> list:
+    return run_mul(
+        input_shape,
+        input_a_dtype,
+        input_b_dtype,
+        input_a_layout,
+        input_b_layout,
+        input_a_memory_config,
+        input_b_memory_config,
+        device=device,
+    )
+
+
+param_keys = parameters["failed_with_shape_issue"].keys()
+param_values = itertools.product(*parameters["failed_with_shape_issue"].values())
+
+
+@pytest.mark.parametrize(",".join(param_keys), list(param_values))
+def test_mul_failure_Case(
+    input_shape,
+    input_a_dtype,
+    input_b_dtype,
+    input_a_layout,
+    input_b_layout,
+    input_a_memory_config,
+    input_b_memory_config,
+    *,
+    device,
+) -> list:
+    return run_mul(
+        input_shape,
+        input_a_dtype,
+        input_b_dtype,
+        input_a_layout,
+        input_b_layout,
+        input_a_memory_config,
+        input_b_memory_config,
+        device=device,
+    )
+>>>>>>> 42acc6c465 (#0: Store fails in CSV file)

@@ -186,7 +186,9 @@ void set_or_update_runtime_arguments(
     const auto& b = tensor_args.input_tensor_b;
     const auto out_rank = c.logical_shape().rank();
     auto aND = extract_nD_dims(a, out_rank);
+    std::cout << "Tensor a dims :" << aND << std::endl;
     auto bND = b.has_value() ? extract_nD_dims(*b, out_rank) : 1;
+    std::cout << "Tensor a dims :" << bND << std::endl;
     auto cND = extract_nD_dims(c, out_rank);
 
     const auto [aN, aC, aHt, aWt] = get_shape_dims(a);
@@ -410,6 +412,7 @@ BinaryNgDeviceOperation::ProgramFactory::cached_program_t BinaryNgDeviceOperatio
 
     const auto& a = tensor_args.input_tensor_a;
     const auto& b = tensor_args.input_tensor_b;
+
     const bool is_sfpu_op = operation_attributes.is_sfpu;
     const bool is_quant_op = operation_attributes.is_quant_op;
     if (is_quant_op) {
