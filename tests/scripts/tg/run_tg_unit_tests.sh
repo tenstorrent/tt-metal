@@ -1,22 +1,22 @@
 #!/bin/bash
 set -eo pipefail
 
-run_tg_llama3.1-70b_tests() {
+run_tg_llama3.3-70b_tests() {
   # Record the start time
   fail=0
   start_time=$(date +%s)
 
-  echo "LOG_METAL: Running run_tg_llama3.1-70b_tests"
+  echo "LOG_METAL: Running run_tg_llama3.3-70b_tests"
 
-  # Llama3.1-70B weights
-  llama70b=/mnt/MLPerf/tt_dnn-models/llama/Llama3.1-70B-Instruct/
+  # Llama3.3-70B weights
+  llama70b=/mnt/MLPerf/tt_dnn-models/llama/Llama3.3-70B-Instruct/
 
   LLAMA_DIR=$llama70b FAKE_DEVICE=TG pytest -n auto models/demos/llama3_subdevices/tests/unit_tests ; fail+=$?
 
   # Record the end time
   end_time=$(date +%s)
   duration=$((end_time - start_time))
-  echo "LOG_METAL: run_tg_llama3.1-70b_tests $duration seconds to complete"
+  echo "LOG_METAL: run_tg_llama3.3-70b_tests $duration seconds to complete"
   if [[ $fail -ne 0 ]]; then
     exit 1
   fi
@@ -119,7 +119,7 @@ run_tg_tests() {
     done
 
   elif [[ "$1" == "llama3-70b" ]]; then
-    run_tg_llama3.1-70b_tests
+    run_tg_llama3.3-70b_tests
 
   elif [[ "$1" == "prefetcher" ]]; then
     run_tg_prefetcher_tests
