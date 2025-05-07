@@ -125,8 +125,8 @@ Tensor get_shard_for_device(const Tensor& tensor, IDevice* target_device, std::o
     auto& storage = tensor.tensor_attributes->get_storage();
     return std::visit(
         tt::stl::overloaded{
-            [buffer_index](const MultiDeviceHostStorage& s) {
-                return Tensor{s.get_buffer(buffer_index.value()), s.get_tensor_spec(buffer_index.value())};
+            [buffer_index, &tensor](const MultiDeviceHostStorage& s) {
+                return Tensor{s.get_buffer(buffer_index.value()), tensor.get_tensor_spec()};
             },
             [&tensor](const HostStorage& s) { return tensor; },
             [&tensor](const DeviceStorage& s) { return tensor; },

@@ -28,10 +28,8 @@ MemoryConfig DeviceStorage::memory_config() const {
 }
 
 DeviceStorage::DeviceStorage(
-    std::shared_ptr<distributed::MeshBuffer> mesh_buffer_,
-    DistributedTensorConfig strategy_,
-    std::vector<std::pair<distributed::MeshCoordinate, TensorSpec>> specs_) :
-    strategy(std::move(strategy_)), specs(std::move(specs_)), mesh_buffer(std::move(mesh_buffer_)) {}
+    std::shared_ptr<distributed::MeshBuffer> mesh_buffer_, std::vector<distributed::MeshCoordinate> shards_) :
+    shards(std::move(shards_)), mesh_buffer(std::move(mesh_buffer_)) {}
 
 Buffer* DeviceStorage::get_buffer() const {
     if (this->mesh_buffer.get() != nullptr) {
@@ -61,18 +59,11 @@ IDevice* DeviceStorage::get_device() const {
     return this->buffer->device();
 }
 
-void DeviceStorage::update_specs(const TensorSpec& new_spec) {
-    for (auto& [_, spec] : this->specs) {
-        spec = new_spec;
-    }
-}
-
 bool DeviceStorage::is_uniform_storage() const {
     if (mesh_buffer.get() == nullptr) {
         return true;
     }
-    return specs.size() == mesh_buffer->device()->num_devices() &&
-           std::all_of(specs.begin(), specs.end(), [this](const auto& spec) { return spec.second == specs[0].second; });
+    return shards.size() == mesh_buffer->device()->num_devices();
 }
 
 }  // namespace tt::tt_metal

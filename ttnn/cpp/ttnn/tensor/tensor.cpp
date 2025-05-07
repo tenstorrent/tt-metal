@@ -75,27 +75,33 @@ Tensor::Tensor(
             tile->get_tile_shape());
     }
 
-    init(
-        Storage(std::move(buffer)),
+    tensor_attributes = std::make_shared<TensorAttributes>(
+        std::move(buffer),
         TensorSpec(
             logical_shape,
             TensorLayout::fromPaddedShape(
                 dtype, PageConfig(layout, tile), MemoryConfig{}, logical_shape, padded_shape)));
+
+    init_device();
 }
 
-Tensor::Tensor(HostBuffer storage, TensorSpec tensor_spec) { init(std::move(storage), std::move(tensor_spec)); }
+Tensor::Tensor(HostBuffer storage, TensorSpec tensor_spec) {
+    tensor_attributes = std::make_shared<TensorAttributes>(std::move(storage), std::move(tensor_spec));
+    init_device();
+}
 
-Tensor::Tensor(Storage storage, TensorSpec tensor_spec) {
+Tensor::Tensor(Storage storage, TensorSpec tensor_spec, DistributedTensorConfig strategy) {
     if (const auto* device_storage = std::get_if<DeviceStorage>(&storage)) {
         tensor_spec = tensor_spec.with_memory_config(device_storage->memory_config());
     }
 
-    init(Storage(std::move(storage)), std::move(tensor_spec));
+    tensor_attributes =
+        std::make_shared<TensorAttributes>(std::move(storage), std::move(tensor_spec), std::move(strategy));
+
+    init_device();
 }
 
-void Tensor::init(Storage storage, TensorSpec tensor_spec) {
-    tensor_attributes = std::make_shared<TensorAttributes>(std::move(storage), std::move(tensor_spec));
-
+void Tensor::init_device() {
     ZoneScoped;
     std::visit(
         [&](auto&& storage) {
@@ -217,6 +223,10 @@ const ttnn::Shape& Tensor::get_padded_shape() const { return padded_shape(); }
 const Storage& Tensor::get_storage() const { return this->tensor_attributes->get_storage(); }
 
 Storage& Tensor::get_storage() { return this->tensor_attributes->get_storage(); }
+
+const DistributedTensorConfig& Tensor::get_distributed_tensor_config() const {
+    return this->tensor_attributes->get_distributed_tensor_config();
+}
 
 template <>
 Tensor Tensor::from_span<float>(
@@ -536,7 +546,7 @@ Tensor create_device_tensor(const TensorSpec& tensor_spec, IDevice* device) {
         output = allocate_tensor_on_mesh(tensor_spec, mesh_device);
     } else {
         auto device_buffer = tensor_impl::allocate_buffer_on_device(device, tensor_spec);
-        output = Tensor(DeviceStorage{device_buffer}, tensor_spec);
+        output = Tensor(DeviceStorage{device_buffer}, tensor_spec, ReplicateTensor());
     }
     output = tt::tt_metal::set_tensor_id(output);
 
@@ -689,13 +699,13 @@ void memcpy(Tensor& dst, const Tensor& src, const std::optional<BufferRegion>& r
 Tensor allocate_tensor_on_mesh(const TensorSpec& tensor_spec, distributed::MeshDevice* mesh_device) {
     // Allocate a mesh buffer synchronously.
     auto mesh_buffer = tensor_impl::allocate_mesh_buffer_on_device(mesh_device, tensor_spec);
-    std::vector<std::pair<distributed::MeshCoordinate, TensorSpec>> specs;
-    specs.reserve(mesh_device->shape().mesh_size());
+    std::vector<distributed::MeshCoordinate> shard_coordinates;
+    shard_coordinates.reserve(mesh_device->shape().mesh_size());
     for (const auto& coord : distributed::MeshCoordinateRange(mesh_device->shape())) {
-        specs.push_back(std::make_pair(coord, tensor_spec));
+        shard_coordinates.push_back(coord);
     }
-    DeviceStorage device_storage(std::move(mesh_buffer), ReplicateTensor(), std::move(specs));
-    return Tensor(std::move(device_storage), tensor_spec);
+    DeviceStorage device_storage(std::move(mesh_buffer), std::move(shard_coordinates));
+    return Tensor(std::move(device_storage), tensor_spec, ReplicateTensor());
 }
 
 void write_tensor(const Tensor& host_tensor, Tensor device_tensor, QueueId cq_id) {
@@ -754,9 +764,9 @@ void write_tensor(const Tensor& host_tensor, Tensor device_tensor, QueueId cq_id
 std::vector<IDevice*> Tensor::active_physical_devices() const {
     auto mesh_device = this->mesh_device();
     std::vector<IDevice*> devices = {};
-    devices.reserve(this->device_storage().specs.size());
-    for (const auto& spec : this->device_storage().specs) {
-        devices.push_back(mesh_device->get_device(spec.first));
+    devices.reserve(this->device_storage().shards.size());
+    for (const auto& shard_coordinate : this->device_storage().shards) {
+        devices.push_back(mesh_device->get_device(shard_coordinate));
     }
     return devices;
 }

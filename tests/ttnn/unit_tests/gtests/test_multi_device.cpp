@@ -34,7 +34,7 @@ Tensor create_host_multi_device_tensor(const Tensor& tensor, const ReplicateTens
         specs.push_back(tensor.get_tensor_spec());
     }
 
-    return Tensor{MultiDeviceHostStorage(strategy, owned_buffers, specs), tensor.get_tensor_spec()};
+    return Tensor{MultiDeviceHostStorage(owned_buffers), tensor.get_tensor_spec(), strategy};
 }
 
 TEST_F(GenericMeshDeviceFixture, TestGetTensorsFromMultiDeviceStorage) {

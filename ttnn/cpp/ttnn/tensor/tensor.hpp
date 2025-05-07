@@ -60,9 +60,9 @@ public:
     Tensor& operator=(Tensor&& other) noexcept;
     ~Tensor();
 
-    // Constructs a tensor with `Storage` and `TensorSpec`.
-    // TODO: #19177 -
-    Tensor(Storage storage, TensorSpec tensor_spec);
+    // Low-level constructor of `Tensor`, with `storage`, `tensor_spec`, and `strategy`.
+    // TODO: Do not expose this, as the details are low-level, hard to misuse, and prone to change.
+    Tensor(Storage storage, TensorSpec tensor_spec, DistributedTensorConfig strategy);
 
     // Constructors of `Tensor` that take physical data encoded in `HostBuffer`.
     // The encoded data type and physical size of the data must match the specified tensor physical shape and data type.
@@ -182,6 +182,7 @@ public:
     // ======================================================================================
     //                                      Getters
     // ======================================================================================
+    // TODO: remove either `get_x` or `x` methods.
     const Storage& get_storage() const;
     Storage& get_storage();
     DataType get_dtype() const;
@@ -189,16 +190,21 @@ public:
     const ttnn::Shape& get_logical_shape() const;
     const ttnn::Shape& get_padded_shape() const;
     const TensorSpec& get_tensor_spec() const;
+    const DistributedTensorConfig& get_distributed_tensor_config() const;
 
     // ======================================================================================
     // Non-Blocking Getters. Query attributes directly, without waiting for worker completion
     // ======================================================================================
     const Storage& storage() const { return this->tensor_attributes->get_storage(); };
+    Storage& storage() { return this->tensor_attributes->get_storage(); };
     const ttnn::Shape& logical_shape() const { return this->tensor_attributes->get_tensor_spec().logical_shape(); };
     const ttnn::Shape& padded_shape() const { return this->tensor_attributes->get_tensor_spec().padded_shape(); };
     DataType dtype() const { return this->tensor_attributes->get_tensor_spec().tensor_layout().get_data_type(); };
     Layout layout() const { return this->tensor_attributes->get_tensor_spec().tensor_layout().get_layout(); };
     const TensorSpec& tensor_spec() const { return this->tensor_attributes->get_tensor_spec(); }
+    const DistributedTensorConfig& distributed_tensor_config() const {
+        return this->tensor_attributes->get_distributed_tensor_config();
+    }
 
     // ======================================================================================
     //                                      Extra Helper Functions
@@ -286,7 +292,7 @@ public:
     }
 
 private:
-    void init(Storage storage, TensorSpec tensor_spec);
+    void init_device();
     void deallocate_impl(bool force);
 };
 
