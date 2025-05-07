@@ -64,10 +64,10 @@ void CumprodDeviceOperation::validate_on_program_cache_miss(
         magic_enum::enum_name(input_tensor.get_layout()));
 
     TT_FATAL(
-        input_tensor.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED,
+        input_tensor.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
         "The ttnn.cumprod operation requires the memory layout of the input tensor to be "
         "interleaved. Instead, it is {}.",
-        magic_enum::enum_name(input_tensor.memory_config().memory_layout));
+        magic_enum::enum_name(input_tensor.memory_config().memory_layout()));
 }
 
 void CumprodDeviceOperation::validate_on_program_cache_hit(
