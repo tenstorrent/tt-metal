@@ -16,4 +16,5 @@ ignore = [
     "PLR0913", # allow many function parameters
     "TD",      # allow any todos
     "PLR2004", # allow magic constants
+    "C408",    # allow literal dict
 ]
