@@ -149,6 +149,8 @@ Conv2dConfig determine_conv_config_for_auto_shard(
     const bool enable_bias,
     const DeviceComputeKernelConfig& compute_config);
 
+ttnn::Shape flatten_4d_shape(const ttnn::Shape& input_shape);
+
 template <typename T>
 std::tuple<ttnn::Tensor, sliding_window::ParallelConfig, sliding_window::ParallelConfig>
 shard_or_reshard_tensor_if_required(
