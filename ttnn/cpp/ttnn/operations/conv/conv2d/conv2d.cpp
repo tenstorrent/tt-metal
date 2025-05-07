@@ -375,10 +375,6 @@ Result conv2d_DRAM(
     return {dram_output_tensor, output_height, output_width, weight_tensor_on_device, bias_tensor_on_device};
 }
 
-static ttnn::Tensor convert_tensor_for_1x1_conv(const ttnn::Tensor& input_tensor, std::array<uint32_t, 2> stride) {
-    return ttnn::fold(input_tensor, stride[0], stride[1]);
-}
-
 template <typename T>
 Result conv2d_L1(
     QueueId queue_id,
@@ -404,9 +400,11 @@ Result conv2d_L1(
     auto input_tensor = input_tensor_;
     bool mm_conv = use_matmul_for_1x1_conv(kernel_size, stride, padding_n4, dilation, groups, conv_config);
     bool is_large_kernel = is_large_kernel_with_easy_matmul(
-        input_tensor.layout(), input_height, input_width, kernel_size, stride, padding_n4, dilation, groups);
+        input_tensor.layout(), input_height, input_width, kernel_size, stride, padding_n4, dilation);
     if (is_large_kernel) {
-        input_tensor = convert_tensor_for_1x1_conv(input_tensor_, stride);
+        // Fold the input tensor to reduce spatial dimensions by stride factors, effectively converting
+        // a large kernel convolution into a matmul operation.
+        input_tensor = ttnn::fold(input_tensor, stride[0], stride[1]);
         input_height = input_height / stride[0];
         input_width = input_width / stride[1];
         stride = {1, 1};

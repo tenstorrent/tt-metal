@@ -48,8 +48,7 @@ bool is_large_kernel_with_easy_matmul(
     const std::array<uint32_t, 2>& kernel_size,
     const std::array<uint32_t, 2>& stride,
     const std::array<uint32_t, 4>& padding,
-    const std::array<uint32_t, 2>& dilation,
-    uint32_t groups);
+    const std::array<uint32_t, 2>& dilation);
 
 bool is_1d_conv(uint32_t kernel_width, uint32_t image_width);
 
