@@ -25,7 +25,7 @@ repos:
     - id: check-copyright
       args: ['--config', 'infra/check_copyright_config.yaml', "--replace"]
 - repo: https://github.com/pre-commit/pre-commit-hooks
-  rev: v3.4.0
+  rev: v5.0.0
   hooks:
     - id: trailing-whitespace
     - id: end-of-file-fixer
