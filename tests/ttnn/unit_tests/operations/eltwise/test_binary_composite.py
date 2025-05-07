@@ -1013,11 +1013,11 @@ def test_binary_lcm_pos(input_shapes, device):
 # when both inputs are 0, torch=0, tt=nan
 def test_binary_lcm_neg(input_shapes, device):
     torch.manual_seed(213919)
-    in_data1 = torch.randint(-1000, -1, input_shapes, dtype=torch.int32)
-    in_data2 = torch.randint(-1024, -1, input_shapes, dtype=torch.int32)
+    in_data1 = torch.randint(-32767, -1, input_shapes, dtype=torch.int32)
+    in_data2 = torch.randint(-32767, -1, input_shapes, dtype=torch.int32)
 
-    input_tensor1 = ttnn.from_torch(in_data1, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
-    input_tensor2 = ttnn.from_torch(in_data2, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    input_tensor1 = ttnn.from_torch(in_data1, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
+    input_tensor2 = ttnn.from_torch(in_data2, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
     output_tensor = ttnn.lcm(input_tensor1, input_tensor2)
     golden_function = ttnn.get_golden_function(ttnn.lcm)
     golden_tensor = golden_function(in_data1, in_data2)
