@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 import gc
+from loguru import logger
 import torch
 import pytest
 import ttnn
@@ -23,7 +24,7 @@ from models.utility_functions import torch_random
             20,
             1280,
             0,
-            0.928,
+            0.930,
         ),
         (
             (1, 1280, 64, 64),
@@ -38,6 +39,8 @@ from models.utility_functions import torch_random
         ),
     ],
 )
+@pytest.mark.parametrize("transformer_weights_dtype", [ttnn.bfloat16])
+@pytest.mark.parametrize("conv_weights_dtype", [ttnn.bfloat16])
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 4 * 16384}], indirect=True)
 def test_crossattnup(
     device,
@@ -52,6 +55,8 @@ def test_crossattnup(
     pcc,
     use_program_cache,
     reset_seeds,
+    transformer_weights_dtype,
+    conv_weights_dtype,
 ):
     unet = UNet2DConditionModel.from_pretrained(
         "stabilityai/stable-diffusion-xl-base-1.0", torch_dtype=torch.float32, use_safetensors=True, subfolder="unet"
@@ -62,7 +67,15 @@ def test_crossattnup(
 
     torch_crosattn = unet.up_blocks[block_id]
     tt_crosattn = TtCrossAttnUpBlock2D(
-        device, state_dict, f"up_blocks.{block_id}", query_dim, num_attn_heads, out_dim, True
+        device,
+        state_dict,
+        f"up_blocks.{block_id}",
+        query_dim,
+        num_attn_heads,
+        out_dim,
+        True,
+        transformer_weights_dtype=transformer_weights_dtype,
+        conv_weights_dtype=conv_weights_dtype,
     )
     torch_input_tensor = torch_random(input_shape, -0.1, 0.1, dtype=torch.float32)
     torch_temb_tensor = torch_random(temb_shape, -0.1, 0.1, dtype=torch.float32)
@@ -109,4 +122,5 @@ def test_crossattnup(
     del unet, tt_crosattn
     gc.collect()
 
-    assert_with_pcc(torch_output_tensor, output_tensor, pcc)
+    _, pcc_message = assert_with_pcc(torch_output_tensor, output_tensor, pcc)
+    logger.info(f"PCC is: {pcc_message}")
