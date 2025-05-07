@@ -19,6 +19,7 @@ tt::tt_metal::Tensor mean_moreh(const tt::tt_metal::Tensor& t, int dim, bool kee
 tt::tt_metal::Tensor mean_ttnn(const tt::tt_metal::Tensor& t, int dim, bool keep_dim);
 
 tt::tt_metal::Tensor sum_moreh(const tt::tt_metal::Tensor& t, int dim, bool keep_dim);
+tt::tt_metal::Tensor sum_moreh(const tt::tt_metal::Tensor& t, std::array<uint32_t, 4> dims, bool keep_dim);
 tt::tt_metal::Tensor sum_ttnn(const tt::tt_metal::Tensor& t, int dim, bool keep_dim);
 
 tt::tt_metal::Tensor to_l1_interleaved(const tt::tt_metal::Tensor& t);

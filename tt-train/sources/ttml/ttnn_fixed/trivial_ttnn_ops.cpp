@@ -72,6 +72,22 @@ tt::tt_metal::Tensor sum_moreh(const tt::tt_metal::Tensor& t, int dim, bool keep
         std::nullopt,
         /* device_compute_kernel_config */ core::ComputeKernelConfig::precise());
 }
+
+tt::tt_metal::Tensor sum_moreh(const tt::tt_metal::Tensor& t, std::array<uint32_t, 4> dims, bool keep_dim) {
+    ttnn::SmallVector<int64_t> dims_vec;
+    for (uint32_t dim : dims) {
+        dims_vec.push_back(static_cast<int64_t>(dim));
+    }
+
+    return ttnn::moreh_sum(
+        t,
+        /*dims=*/dims_vec,
+        /*keep_dim=*/keep_dim,
+        /*output=*/std::nullopt,
+        /*memory_config=*/std::nullopt,
+        /*compute_kernel_config=*/core::ComputeKernelConfig::precise());
+}
+
 tt::tt_metal::Tensor sum_ttnn(const tt::tt_metal::Tensor& t, int dim, bool keep_dim) {
     return ttnn::sum(t, dim, keep_dim, std::nullopt, core::ComputeKernelConfig::precise());
 }
