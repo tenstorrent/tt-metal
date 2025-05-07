@@ -27,9 +27,9 @@ struct Status {
     int count = 0;
 };
 
-class IRequest {
+class Request {
 public:
-    virtual ~IRequest() = default;
+    virtual ~Request() = default;
 
     /// Block until the operation completes, then return its Status.
     [[nodiscard]] virtual Status wait() = 0;
@@ -44,11 +44,11 @@ public:
     [[nodiscard]] virtual bool active() const = 0;
 };
 
-using RequestPtr = std::shared_ptr<IRequest>;
+using RequestPtr = std::shared_ptr<Request>;
 
-class IDistributedContext {
+class DistributedContext {
 public:
-    static std::shared_ptr<IDistributedContext> create(int argc, char** argv);
+    static std::shared_ptr<DistributedContext> create(int argc, char** argv);
     //--- Topology ------------------------------------------------------------
     [[nodiscard]] virtual Rank rank() const = 0;
     [[nodiscard]] virtual Size size() const = 0;
@@ -89,11 +89,11 @@ public:
     virtual void scan(tt::stl::Span<std::byte> send_buf, tt::stl::Span<std::byte> recv_buf, ReduceOp op) const = 0;
 
     //--- Communicator management -------------------------------------------
-    [[nodiscard]] virtual std::shared_ptr<IDistributedContext> duplicate() const = 0;
-    [[nodiscard]] virtual std::shared_ptr<IDistributedContext> split(Color color, Key key) const = 0;
-    [[nodiscard]] virtual std::shared_ptr<IDistributedContext> create_sub_context(tt::stl::Span<Rank> ranks) const = 0;
+    [[nodiscard]] virtual std::shared_ptr<DistributedContext> duplicate() const = 0;
+    [[nodiscard]] virtual std::shared_ptr<DistributedContext> split(Color color, Key key) const = 0;
+    [[nodiscard]] virtual std::shared_ptr<DistributedContext> create_sub_context(tt::stl::Span<Rank> ranks) const = 0;
 
     //--- Error handling -----------------------------------------------------
-    virtual ~IDistributedContext() = default;
+    virtual ~DistributedContext() = default;
 };
 }  // namespace tt::tt_metal::distributed::multihost
