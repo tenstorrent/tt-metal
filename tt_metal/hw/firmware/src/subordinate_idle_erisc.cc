@@ -20,7 +20,7 @@
 // clang-format on
 
 tt_l1_ptr mailboxes_t *const mailboxes = (tt_l1_ptr mailboxes_t *)(MEM_IERISC_MAILBOX_BASE);
-volatile tt_l1_ptr uint8_t *const slave_idle_erisc_run = &mailboxes->slave_sync.dm1;
+volatile tt_l1_ptr uint8_t *const subordinate_idle_erisc_run = &mailboxes->subordinate_sync.dm1;
 
 uint8_t noc_index = 0;  // TODO: hardcoding needed for profiler
 
@@ -59,15 +59,15 @@ namespace kernel_profiler {
 }
 #endif
 
-inline __attribute__((always_inline)) void signal_slave_idle_erisc_completion() {
-    *slave_idle_erisc_run = RUN_SYNC_MSG_DONE;
+inline __attribute__((always_inline)) void signal_subordinate_idle_erisc_completion() {
+    *subordinate_idle_erisc_run = RUN_SYNC_MSG_DONE;
 }
 
 int main(int argc, char *argv[]) {
     configure_csr();
     DIRTY_STACK_MEMORY();
     WAYPOINT("I");
-    do_crt1((uint32_t *)MEM_SLAVE_IERISC_INIT_LOCAL_L1_BASE_SCRATCH);
+    do_crt1((uint32_t *)MEM_SUBORDINATE_IERISC_INIT_LOCAL_L1_BASE_SCRATCH);
 
     noc_bank_table_init(MEM_IERISC_BANK_TO_NOC_SCRATCH);
 
@@ -78,10 +78,10 @@ int main(int argc, char *argv[]) {
     // Cleanup profiler buffer incase we never get the go message
     while (1) {
         WAYPOINT("W");
-        while (*slave_idle_erisc_run != RUN_SYNC_MSG_GO) {
+        while (*subordinate_idle_erisc_run != RUN_SYNC_MSG_GO) {
             invalidate_l1_cache();
         }
-        DeviceZoneScopedMainN("SLAVE-IDLE-ERISC-FW");
+        DeviceZoneScopedMainN("SUBORDINATE-IDLE-ERISC-FW");
 
         flush_erisc_icache();
 
@@ -100,7 +100,7 @@ int main(int argc, char *argv[]) {
         RECORD_STACK_USAGE();
         WAYPOINT("D");
 
-        signal_slave_idle_erisc_completion();
+        signal_subordinate_idle_erisc_completion();
     }
 
     return 0;

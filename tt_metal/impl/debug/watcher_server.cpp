@@ -123,7 +123,7 @@ void create_log_file() {
         f,
         "\trmsg:<c>=brisc host run message, D/H device/host dispatch; brisc NOC ID; I/G/D init/go/done; | separator; "
         "B/b enable/disable brisc; N/n enable/disable ncrisc; T/t enable/disable TRISC\n");
-    fprintf(f, "\tsmsg:<c>=slave run message, I/G/D for NCRISC, TRISC0, TRISC1, TRISC2\n");
+    fprintf(f, "\tsmsg:<c>=subordinate run message, I/G/D for NCRISC, TRISC0, TRISC1, TRISC2\n");
     fprintf(f, "\tk_ids:<brisc id>|<ncrisc id>|<trisc id> (ID map to file at end of section)\n");
     fprintf(f, "\n");
     fflush(f);

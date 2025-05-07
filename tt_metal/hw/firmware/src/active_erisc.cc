@@ -81,7 +81,7 @@ int main() {
 
     risc_init();
 
-    mailboxes->slave_sync.all = RUN_SYNC_MSG_ALL_SLAVES_DONE;
+    mailboxes->subordinate_sync.all = RUN_SYNC_MSG_ALL_SUBORDINATES_DONE;
 
     noc_init(MEM_NOC_ATOMIC_RET_VAL_ADDR);
     for (uint32_t n = 0; n < NUM_NOCS; n++) {

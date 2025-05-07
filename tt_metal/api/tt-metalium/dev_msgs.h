@@ -63,7 +63,7 @@ constexpr uint32_t RUN_SYNC_MSG_WAITING_FOR_RESET = 0x2;
 constexpr uint32_t RUN_SYNC_MSG_INIT_SYNC_REGISTERS = 0x3;
 constexpr uint32_t RUN_SYNC_MSG_DONE = 0;
 constexpr uint32_t RUN_SYNC_MSG_ALL_GO = 0x80808080;
-constexpr uint32_t RUN_SYNC_MSG_ALL_SLAVES_DONE = 0;
+constexpr uint32_t RUN_SYNC_MSG_ALL_SUBORDINATES_DONE = 0;
 
 struct ncrisc_halt_msg_t {
     volatile uint32_t resume_addr;
@@ -172,7 +172,7 @@ struct launch_msg_t {  // must be cacheline aligned
     kernel_config_msg_t kernel_config;
 } __attribute__((packed));
 
-struct slave_sync_msg_t {
+struct subordinate_sync_msg_t {
     union {
         volatile uint32_t all;
         struct {
@@ -249,7 +249,7 @@ enum riscv_id_t {
     DebugTrisc2 = 4,
     DebugErisc = 5,
     DebugIErisc = 6,
-    DebugSlaveIErisc = 7,
+    DebugSubordinateIErisc = 7,
     DebugNumUniqueRiscs
 };
 
@@ -354,7 +354,7 @@ struct core_info_msg_t {
 constexpr uint32_t launch_msg_buffer_num_entries = 8;
 struct mailboxes_t {
     struct ncrisc_halt_msg_t ncrisc_halt;
-    struct slave_sync_msg_t slave_sync;
+    struct subordinate_sync_msg_t subordinate_sync;
     uint32_t launch_msg_rd_ptr;
     struct launch_msg_t launch[launch_msg_buffer_num_entries];
     volatile struct go_msg_t go_message;

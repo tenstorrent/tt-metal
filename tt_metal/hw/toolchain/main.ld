@@ -3,7 +3,7 @@
 #endif
 
 #if (defined(COMPILE_FOR_BRISC) + defined(COMPILE_FOR_NCRISC) +         \
-     defined(COMPILE_FOR_IERISC) + defined(COMPILE_FOR_SLAVE_IERISC) +  \
+     defined(COMPILE_FOR_IERISC) + defined(COMPILE_FOR_SUBORDINATE_IERISC) +  \
      defined(COMPILE_FOR_TRISC) + defined(COMPILE_FOR_AERISC)) != 1
 #error "Exactly one COMPILE_FOR_${PROC}RISC must be defined"
 #endif
