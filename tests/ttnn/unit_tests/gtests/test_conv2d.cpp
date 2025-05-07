@@ -11,8 +11,8 @@
 #include <tt-metalium/logger.hpp>
 #include <tt-metalium/small_vector.hpp>
 #include "ttnn/common/queue_id.hpp"
+#include "ttnn/device.hpp"
 #include "ttnn/tensor/tensor.hpp"
-#include "ttnn/operations/conv/conv.hpp"
 #include "ttnn/operations/conv/conv2d/conv2d.hpp"
 #include "ttnn/operations/data_movement/permute/permute.hpp"
 #include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
@@ -123,14 +123,14 @@ std::vector<float> reference_implementation_conv2d(
 
 TEST_P(Conv2DFixture, Conv2DCalculateCorrectly) {
     const Conv2DParam param = GetParam();
-    const chip_id_t device_id = 0;
 
     // Sets the size for L1 small on the device - 16KB
     // The halo op which is contained in the Conv2D op uses L1 small memory
     // Without this, the convolution operation will fail due to L1_SMALL Out of Memory error
-    const size_t L1_small_size = 16384;
+    const size_t l1_small_size = 16384;
 
-    IDevice* device = CreateDevice(device_id, 1, L1_small_size);
+    auto device = tt::tt_metal::distributed::MeshDevice::create_unit_mesh(
+        /*device_id=*/0, l1_small_size);
 
     try {
         MemoryConfig dram_mem_config =
@@ -145,7 +145,7 @@ TEST_P(Conv2DFixture, Conv2DCalculateCorrectly) {
         random::seed(42);
         // Create input tensor on device
         Tensor input_tensor =
-            ttnn::random::random(dimensions, tt::tt_metal::DataType::BFLOAT16).to_device(device, dram_mem_config);
+            ttnn::random::random(dimensions, tt::tt_metal::DataType::BFLOAT16).to_device(device.get(), dram_mem_config);
 
         // Create weight tensor on device (weight tensor on device would require to be tiled if
         // Conv2DConfig.always_preprocess_weights isn't used)
@@ -159,11 +159,11 @@ TEST_P(Conv2DFixture, Conv2DCalculateCorrectly) {
         input_tensor = ttnn::permute(input_tensor, SmallVector<int64_t>{0, 2, 3, 1});
 
         // Run Conv2D
-        auto [output_tensor, output_dimensions] = std::get<OUTPUT_DIM>(ttnn::conv2d(
+        auto [output_tensor, output_dimensions] = std::get<static_cast<int>(ResultType::OUTPUT_DIM)>(ttnn::conv2d(
             DefaultQueueId,
             input_tensor,
             weight_tensor,
-            device,
+            device.get(),
             param.input_channels,
             param.output_channels,
             param.batch_size,
@@ -215,15 +215,11 @@ TEST_P(Conv2DFixture, Conv2DCalculateCorrectly) {
             param.stride,
             param.padding);
 
-        float pcc_calculated = test_utils::pcc(res, ref_res);
-        TT_FATAL(pcc_calculated > 0.99, "PCC not high enough. Result PCC: {}, Expected PCC: 0.99", pcc_calculated);
+        EXPECT_GT(test_utils::pcc(res, ref_res), 0.99);
     } catch (const std::exception& e) {
-        CloseDevice(device);
-        tt::log_error("Caught exception in Conv2D test: {}", e.what());
+        FAIL() << "Caught exception in Conv2D test: " << e.what();
         throw e;
     }
-    bool pass = CloseDevice(device);
-    TT_FATAL(pass, "Error closing device");
 }
 
 INSTANTIATE_TEST_SUITE_P(

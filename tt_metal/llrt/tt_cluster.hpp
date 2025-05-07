@@ -63,15 +63,17 @@ enum class TargetDevice : std::uint8_t {
 
 enum class ClusterType : std::uint8_t {
     INVALID = 0,
-    N150 = 1,     // Production N150
-    N300 = 2,     // Production N300
-    T3K = 3,      // Production T3K, built with 4 N300s
-    GALAXY = 4,   // Production Galaxy, all chips with mmio
-    TG = 5,       // Will be deprecated
-    P100 = 6,     // Blackhole single card, ethernet disabled
-    P150 = 7,     // Blackhole single card, ethernet enabled
-    P150_X2 = 8,  // 2 Blackhole single card, ethernet connected
-    P150_X4 = 9,  // 4 Blackhole single card, ethernet connected
+    N150 = 1,                    // Production N150
+    N300 = 2,                    // Production N300
+    T3K = 3,                     // Production T3K, built with 4 N300s
+    GALAXY = 4,                  // Production Galaxy, all chips with mmio
+    TG = 5,                      // Will be deprecated
+    P100 = 6,                    // Blackhole single card, ethernet disabled
+    P150 = 7,                    // Blackhole single card, ethernet enabled
+    P150_X2 = 8,                 // 2 Blackhole single card, ethernet connected
+    P150_X4 = 9,                 // 4 Blackhole single card, ethernet connected
+    SIMULATOR_WORMHOLE_B0 = 10,  // Simulator Wormhole B0
+    SIMULATOR_BLACKHOLE = 11,    // Simulator Blackhole
 };
 
 enum class EthRouterMode : uint32_t {
