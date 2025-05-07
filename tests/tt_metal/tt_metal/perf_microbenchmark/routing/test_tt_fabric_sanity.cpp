@@ -46,7 +46,6 @@
 #include <tt-metalium/program.hpp>
 #include "routing_test_common.hpp"
 #include <tt-metalium/allocator.hpp>
-#include <tt-metalium/system_memory_manager.hpp>
 #include "test_common.hpp"
 #include "impl/context/metal_context.hpp"
 #include "tt_metal/fabric/hw/inc/tt_fabric_status.h"

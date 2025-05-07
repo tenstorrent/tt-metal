@@ -10,7 +10,7 @@
 #include <tt-metalium/device.hpp>
 
 #include <tt_stl/span.hpp>
-#include "system_memory_manager.hpp"
+#include "dispatch/system_memory_manager.hpp"
 
 namespace tt {
 namespace tt_metal {

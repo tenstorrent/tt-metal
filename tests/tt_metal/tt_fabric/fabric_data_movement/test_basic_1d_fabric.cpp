@@ -28,7 +28,6 @@
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/mesh_graph.hpp>
 #include <tt_stl/span.hpp>
-#include <tt-metalium/system_memory_manager.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/fabric.hpp>
 #include "tt_metal/fabric/hw/inc/tt_fabric_status.h"

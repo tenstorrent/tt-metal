@@ -8,7 +8,6 @@
 
 #include "dispatch/kernels/packet_queue_ctrl.hpp"
 #include "fd_kernel.hpp"
-#include "system_memory_manager.hpp"
 
 struct demux_static_config_t {
     std::optional<uint32_t> endpoint_id_start_index;

@@ -7,6 +7,7 @@
 #include <tt-metalium/command_queue.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/program.hpp>
+#include "dispatch/system_memory_manager.hpp"
 
 #include <kernel_types.hpp>
 #include "lightmetal/host_api_capture_helpers.hpp"
