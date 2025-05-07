@@ -78,8 +78,8 @@ public:
 
     std::uint32_t get_mesh_ns_size(mesh_id_t mesh_id) const { return mesh_shapes_[mesh_id].first; }
     std::uint32_t get_mesh_ew_size(mesh_id_t mesh_id) const { return mesh_shapes_[mesh_id].second; }
-    const tt_metal::distributed::MeshShape& get_host_shape(mesh_id_t mesh_id) const {
-        return mesh_host_shapes_[mesh_id];
+    const std::vector<std::vector<std::uint32_t>>& get_host_ranks(mesh_id_t mesh_id) const {
+        return mesh_host_ranks_[mesh_id];
     }
 
 private:
@@ -98,6 +98,6 @@ private:
     std::vector<std::pair<std::uint32_t, std::uint32_t>> mesh_shapes_;
     IntraMeshConnectivity intra_mesh_connectivity_;
     InterMeshConnectivity inter_mesh_connectivity_;
-    std::vector<tt_metal::distributed::MeshShape> mesh_host_shapes_;
+    std::vector<std::vector<std::vector<std::uint32_t>>> mesh_host_ranks_;
 };
 }  // namespace tt::tt_fabric

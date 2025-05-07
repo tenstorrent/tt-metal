@@ -191,7 +191,7 @@ void MeshGraph::initialize_from_yaml(const std::string& mesh_graph_desc_file_pat
             this->intra_mesh_connectivity_.resize(mesh_id + 1);
             this->inter_mesh_connectivity_.resize(mesh_id + 1);
             this->mesh_shapes_.resize(mesh_id + 1);
-            this->mesh_host_shapes_.resize(mesh_id + 1);
+            this->mesh_host_ranks_.resize(mesh_id + 1);
             mesh_edge_ports_to_chip_id.resize(mesh_id + 1);
         }
         TT_FATAL(
@@ -199,14 +199,29 @@ void MeshGraph::initialize_from_yaml(const std::string& mesh_graph_desc_file_pat
             "MeshGraph: Board not found: {}",
             mesh["board"].as<std::string>());
 
-        std::uint32_t mesh_ew_size = mesh["topology"][1].as<std::uint32_t>() * board_name_to_topology[mesh_board][1];
-        std::uint32_t mesh_ns_size = mesh["topology"][0].as<std::uint32_t>() * board_name_to_topology[mesh_board][0];
+        std::uint32_t mesh_board_ew_size = mesh["topology"][1].as<std::uint32_t>();
+        std::uint32_t mesh_board_ns_size = mesh["topology"][0].as<std::uint32_t>();
+        std::uint32_t mesh_ew_size = mesh_board_ew_size * board_name_to_topology[mesh_board][1];
+        std::uint32_t mesh_ns_size = mesh_board_ns_size * board_name_to_topology[mesh_board][0];
+
         std::uint32_t mesh_size = mesh_ew_size * mesh_ns_size;
         this->mesh_shapes_[mesh_id] = {mesh_ns_size, mesh_ew_size};
 
-        // Fill in host mapping for Mesh
-        this->mesh_host_shapes_[mesh_id] = tt_metal::distributed::MeshShape(
-            mesh["host_mapping"][1].as<std::uint32_t>(), mesh["host_mapping"][0].as<std::uint32_t>());
+        // Fill in host ranks for Mesh
+        TT_FATAL(
+            mesh["host_ranks"].IsSequence() and mesh["host_ranks"].size() == mesh_board_ns_size,
+            "MeshGraph: Expecting host_ranks to define a 2D array that matches topology");
+
+        this->mesh_host_ranks_[mesh_id].resize(mesh_board_ns_size);
+        for (std::uint32_t i = 0; i < mesh_board_ns_size; i++) {
+            TT_FATAL(
+                mesh["host_ranks"][i].IsSequence() and mesh["host_ranks"][i].size() == mesh_board_ew_size,
+                "MeshGraph: Expecting host_ranks to define a 2D array that matches topology");
+            this->mesh_host_ranks_[mesh_id][i].resize(mesh_board_ew_size);
+            for (std::uint32_t j = 0; j < mesh_board_ew_size; j++) {
+                this->mesh_host_ranks_[mesh_id][i][j] = mesh["host_ranks"][i][j].as<std::uint32_t>();
+            }
+        }
 
         // Fill in connectivity for Mesh
         this->intra_mesh_connectivity_[mesh_id].resize(mesh_size);

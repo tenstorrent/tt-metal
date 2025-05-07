@@ -125,11 +125,11 @@ ControlPlane::ControlPlane(const std::string& mesh_graph_desc_file) {
     // Printing, only enabled with log_debug
     this->routing_table_generator_->print_routing_tables();
 
-    // Initialize the control plane routers based on mesh graph
-    this->initialize_from_mesh_graph_desc_file(mesh_graph_desc_file);
-
     // Initialize host mappings
     this->initialize_host_mapping();
+
+    // Initialize the control plane routers based on mesh graph
+    this->initialize_from_mesh_graph_desc_file(mesh_graph_desc_file);
 
     // Printing, only enabled with log_debug
     this->print_ethernet_channels();
@@ -305,6 +305,10 @@ std::vector<chip_id_t> ControlPlane::get_mesh_physical_chip_ids(
     visited_physical_chips.insert(physical_chip_ids.begin(), physical_chip_ids.end());
     physical_chip_ids.resize(mesh_ns_size * mesh_ew_size);
 
+    std::cout << "dumping phyhsical chip ids " << std::endl;
+    for (const auto& physical_chip_id : physical_chip_ids) {
+        std::cout << " " << std::setfill('0') << std::setw(2) << physical_chip_id;
+    }
     for (int i = 1; i < mesh_ns_size; i++) {
         for (int j = 0; j < mesh_ew_size; j++) {
             chip_id_t physical_chip_id_from_north = physical_chip_ids[(i - 1) * mesh_ew_size + j];
@@ -396,6 +400,14 @@ void ControlPlane::initialize_from_mesh_graph_desc_file(const std::string& mesh_
 void ControlPlane::initialize_host_mapping() {
     // Grab available hosts in the system and map to physical chip ids
     // ping for all hosts in cluster, grab mapping of all physical chip ids/physical hosts
+    const auto& host_ranks = this->routing_table_generator_->mesh_graph_->get_host_ranks(0);
+    std::cout << "Control Plane: Host ranks: ";
+    for (const auto& host_rank : host_ranks) {
+        for (const auto& rank : host_rank) {
+            std::cout << " " << std::setfill('0') << std::setw(2) << rank;
+        }
+        std::cout << std::endl;
+    }
 }
 
 routing_plane_id_t ControlPlane::get_routing_plane_id(chan_id_t eth_chan_id) const {

@@ -19,7 +19,7 @@
 namespace tt::tt_fabric {
 namespace multi_host_tests {
 
-TEST(MultiHost, TestQuantaGalaxyControlPlaneInit) {
+TEST(MultiHost, TestDualGalaxyControlPlaneInit) {
     tt::tt_metal::detail::InitializeFabricConfig(tt::tt_metal::FabricConfig::FABRIC_2D);
     const std::filesystem::path quanta_galaxy_mesh_graph_desc_path =
         std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
