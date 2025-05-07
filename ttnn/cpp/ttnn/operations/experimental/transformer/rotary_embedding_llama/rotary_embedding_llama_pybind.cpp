@@ -25,6 +25,9 @@ void py_bind_rotary_embedding_llama(pybind11::module& module) {
 
             When token_idx is passed, this assumes input is transposed to [seq_len, 1, B, head_dim], and seq_len is 1.
 
+            `cos_cache` and `sin_cache` must be of shape [1, n_heads, seq_len, head_dim] or [1, 1, seq_len, head_dim].
+            If shape[1] is 1 then the sin/cos will be broadcasted across heads.
+
             Args:
                 * :attr:`input_tensor`: Input Tensor
                 * :attr:`cos_cache`: Cosine Cache Tensor
