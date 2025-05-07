@@ -99,9 +99,7 @@ def test_conv2d(
     )
 
     tt_output = tt_model(tt_input_tensor)
-    tt_output_torch = to_torch(tt_output, mesh_device=mesh_device, dtype=dtype, shard_dim=-1)[
-        0:batch_size, :, :, 0:out_channels
-    ]
+    tt_output_torch = to_torch(tt_output, mesh_device=mesh_device, shard_dim=-1)
     tt_output_torch = tt_output_torch.permute(0, 3, 1, 2)
 
-    assert_quality(torch_output, tt_output_torch, pcc=0.999_900, shard_dim=0, num_devices=mesh_device.get_num_devices())
+    assert_quality(torch_output, tt_output_torch, pcc=0.999_900)
