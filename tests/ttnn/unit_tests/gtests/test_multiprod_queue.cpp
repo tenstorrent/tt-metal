@@ -39,7 +39,8 @@ using ::tt::tt_metal::is_device_tensor;
 
 using MultiProducerCommandQueueTest = ttnn::MultiCommandQueueSingleDeviceFixture;
 
-TEST_F(MultiProducerCommandQueueTest, Stress) {
+// #21556: Disabled until we have clarity about user space multi-threading support
+TEST_F(MultiProducerCommandQueueTest, DISABLED_Stress) {
     // Spawn 2 application level threads intefacing with the same device through the async engine.
     // This leads to shared access of the work_executor and host side worker queue.
     // Test thread safety.
@@ -86,7 +87,8 @@ TEST_F(MultiProducerCommandQueueTest, Stress) {
     t1.join();
 }
 
-TEST_F(MultiProducerCommandQueueTest, EventSync) {
+// #21556: Disabled until we have clarity about user space multi-threading support
+TEST_F(MultiProducerCommandQueueTest, DISABLED_EventSync) {
     // Verify that the event_synchronize API stalls the calling thread until
     // the device records the event being polled.
     // Thread 0 = writer thread. Thread 1 = reader thread.

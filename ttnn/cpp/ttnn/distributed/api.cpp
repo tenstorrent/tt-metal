@@ -145,36 +145,6 @@ std::vector<int> get_t3k_physical_device_ids_ring() {
     return physical_device_ids;
 }
 
-std::vector<IDevice*> get_mapped_devices(const Tensor& tensor, MeshDevice& mesh_device) {
-    // For multi-device tensors, returns the number of workers capped by the number of buffers
-    // Otherwise, returns all available workes from mesh_device.
-    auto get_workers_for_tensor = [&tensor](const auto& workers) {
-        if (std::holds_alternative<MultiDeviceHostStorage>(tensor.get_storage())) {
-            const auto num_buffers = std::get<MultiDeviceHostStorage>(tensor.get_storage()).num_buffers();
-            return std::vector<IDevice*>(workers.begin(), workers.begin() + num_buffers);
-        }
-        return workers;
-    };
-    if (std::holds_alternative<MultiDeviceHostStorage>(tensor.get_storage())) {
-        const auto& host_storage = std::get<tt::tt_metal::MultiDeviceHostStorage>(tensor.get_storage());
-
-        // Given a MeshDevice, this linearizes the set of mapped devices for a tensor specified with some
-        // distributed tensor strategy. The different strategies map to different policies on how
-        // this distribution is mapped to physical devices.
-        return std::visit(
-            tt::stl::overloaded{
-                [&](const ShardTensor2D& s) {
-                    const tt::tt_metal::distributed::MeshCoordinateRange range(
-                        MeshShape(s.shard_mesh.y, s.shard_mesh.x));
-                    return mesh_device.get_view().get_devices(range);
-                },
-                [&](const auto&) { return get_workers_for_tensor(mesh_device.get_devices()); }},
-            host_storage.strategy);
-    } else {
-        return get_workers_for_tensor(mesh_device.get_devices());
-    }
-}
-
 DistributedTensorConfig get_distributed_tensor_config_from_tensor(const Tensor& tensor) {
     if (tensor.storage_type() == StorageType::MULTI_DEVICE_HOST) {
         const auto* multi_device_host_storage = std::get_if<MultiDeviceHostStorage>(&tensor.get_storage());

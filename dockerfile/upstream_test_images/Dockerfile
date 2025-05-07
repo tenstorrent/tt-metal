@@ -12,6 +12,8 @@ LABEL org.opencontainers.image.licenses=MIT
 
 ## add user
 RUN adduser --uid 1000 --shell /bin/bash user
+RUN usermod -aG sudo user
+RUN echo 'user ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/user && chmod 0440 /etc/sudoers.d/user
 USER user
 
 RUN git clone https://github.com/tenstorrent/tt-metal --recurse-submodules /home/user/tt-metal
