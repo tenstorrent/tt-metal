@@ -119,14 +119,14 @@ Tensor tensor_to_layout(const Tensor& input_tensor, Layout target_layout, distri
                     std::vector<Tensor> shards(s.buffers.size());
                     for (std::size_t shard_idx = 0; shard_idx < s.buffers.size(); ++shard_idx) {
                         // Multi-Thread Host tilization of shards.
-                        mesh_device->enqueue_to_thread_pool([shard_idx, &s, &shards, target_layout]() {
+                        mesh_device->enqueue_to_thread_pool([shard_idx, &s, &shards, target_layout, &input_tensor]() {
                             ZoneScopedN("HostTilize");
-                            Tensor shard(s.buffers[shard_idx], s.specs[shard_idx]);
+                            Tensor shard(s.buffers[shard_idx], input_tensor.get_tensor_spec());
                             shards[shard_idx] = tensor_impl::to_layout_wrapper(shard, target_layout);
                         });
                     }
                     mesh_device->wait_for_thread_pool();
-                    return ttnn::distributed::aggregate_as_tensor(shards, s.strategy);
+                    return ttnn::distributed::aggregate_as_tensor(shards, input_tensor.get_distributed_tensor_config());
                 },
                 [&](const DeviceStorage& s) -> Tensor { TT_THROW("Unexpected storage type"); },
             },

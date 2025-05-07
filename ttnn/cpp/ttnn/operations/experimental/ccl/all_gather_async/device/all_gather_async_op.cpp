@@ -439,8 +439,8 @@ Tensor all_gather_async(
     const ttnn::ccl::Topology topology,
     std::optional<tt::tt_metal::SubDeviceId> sub_device_id) {
     std::vector<IDevice*> devices;
-    for (const auto& spec : input_tensor.device_storage().specs) {
-        devices.push_back(input_tensor.mesh_device()->get_device(spec.first));
+    for (const auto& shard : input_tensor.device_storage().shards) {
+        devices.push_back(input_tensor.mesh_device()->get_device(shard));
     }
     return all_gather_async_impl(
         input_tensor, dim, multi_device_global_semaphore, num_links, memory_config, topology, sub_device_id, devices);

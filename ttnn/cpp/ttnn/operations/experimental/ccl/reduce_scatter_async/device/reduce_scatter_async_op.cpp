@@ -354,8 +354,8 @@ Tensor reduce_scatter(
     const std::optional<size_t> num_links_preferred,
     std::optional<SubDeviceId> worker_subdevice_id_opt) {
     std::vector<IDevice*> devices;
-    for (const auto& spec : input_tensor.device_storage().specs) {
-        devices.push_back(input_tensor.mesh_device()->get_device(spec.first));
+    for (const auto& shard : input_tensor.device_storage().shards) {
+        devices.push_back(input_tensor.mesh_device()->get_device(shard));
     }
     return reduce_scatter_impl(
         input_tensor,
