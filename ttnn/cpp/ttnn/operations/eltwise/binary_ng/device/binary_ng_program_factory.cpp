@@ -18,13 +18,18 @@ using namespace ttnn::operations::binary_ng;
 // For rank > 4 i.e. dims beyond NCHW will be collapsed into a single dim
 uint32_t extract_nD_dims(const Tensor& x, const int out_rank) {
     const auto& shape = x.get_logical_shape();
+    std::cout << "\t Shape : " << shape << std::endl;
     uint32_t nD_dim = 1;
-    if (out_rank >= 5) {
+    if (out_rank >= 5 && shape.rank() >= 5) {
+        std::cout << "\tInside If condition : rank greater than equal to 5" << std::endl;
         for (int i = -5; i >= -out_rank; --i) {
             auto dim = shape[i];
+            std::cout << "\t\tdim : " << dim << std::endl;
             nD_dim *= dim;
         }
     }
+    std::cout << "\t nD_dim : ";
+    std::cout << nD_dim << std::endl;
     return nD_dim;
 }
 
@@ -185,10 +190,13 @@ void set_or_update_runtime_arguments(
     const auto& a = tensor_args.input_tensor_a;
     const auto& b = tensor_args.input_tensor_b;
     const auto out_rank = c.logical_shape().rank();
+    std::cout << "Output rank : " << out_rank << std::endl;
+    std::cout << "Input A : " << std::endl;
     auto aND = extract_nD_dims(a, out_rank);
-    std::cout << "Tensor a dims :" << aND << std::endl;
+    std::cout << "\tTensor a dims :" << aND << "-->" << a.logical_shape() << std::endl;
+    std::cout << "Input B : " << std::endl;
     auto bND = b.has_value() ? extract_nD_dims(*b, out_rank) : 1;
-    std::cout << "Tensor a dims :" << bND << std::endl;
+    std::cout << "\tTensor b dims :" << bND << "-->" << b->logical_shape() << std::endl;
     auto cND = extract_nD_dims(c, out_rank);
 
     const auto [aN, aC, aHt, aWt] = get_shape_dims(a);
