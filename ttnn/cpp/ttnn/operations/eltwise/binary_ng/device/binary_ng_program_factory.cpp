@@ -636,6 +636,11 @@ BinaryNgDeviceOperation::ProgramFactory::cached_program_t BinaryNgDeviceOperatio
     writer_defines["SRC_SHARDED"] = b_sharded ? "1" : "0";
     writer_defines["DST_SHARDED"] = c_sharded ? "1" : "0";
 
+    // READER KERNEL
+    auto reader_defines = make_dataflow_defines(a_dtype, is_sfpu_op);
+    reader_defines["SRC_SHARDED"] = a_sharded ? "1" : "0";
+    reader_defines["SRC_SHARDED_B"] = b_sharded ? "1" : "0";
+
     auto reader_defines = make_dataflow_defines(a_dtype, b_dtype);
     reader_defines["SRC_SHARDED"] = a_sharded ? "1" : "0";
     reader_defines["SRC_SHARDED_B"] = b_sharded ? "1" : "0";
