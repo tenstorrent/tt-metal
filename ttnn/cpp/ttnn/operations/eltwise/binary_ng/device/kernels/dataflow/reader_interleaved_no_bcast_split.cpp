@@ -69,12 +69,14 @@ void kernel_main() {
     uint32_t end_tw = has_sharding ? start_tw + dst_shard_width : Wt;
 
     // this is the INPUT tile offset
-    uint32_t tile_offset = start_d * nD_stride + start_n * n_stride + start_c * c_stride + start_th * Wt;
+    uint32_t tile_offset = start_d * nD_stride + start_n * n_stride + start_c * c_stride;
+    tile_offset += +start_th * Wt;
     uint32_t next_channel_shift = c_stride - HtWt;
     uint32_t next_batch_shift = n_stride - c_stride * C;
     uint32_t next_depth_shift = nD_stride - (n_stride * N);
 
-    uint32_t tile_offset_b = start_d * nD_stride_b + start_n * n_stride_b + start_c * c_stride_b + start_th * Wt;
+    uint32_t tile_offset_b = start_d * nD_stride_b + start_n * n_stride_b + start_c * c_stride_b;
+    tile_offset_b += +start_th * Wt;
     uint32_t next_channel_shift_b = c_stride_b - HtWt;
     uint32_t next_batch_shift_b = n_stride_b - c_stride_b * C;
     uint32_t next_depth_shift_b = nD_stride_b - (n_stride_b * N);
@@ -83,8 +85,7 @@ void kernel_main() {
     for (uint32_t nd = start_d; nd < cND && num_tiles_read < dst_num_tiles; ++nd, start_n = 0) {
         for (uint32_t n = start_n; n < N && num_tiles_read < dst_num_tiles; ++n, start_c = 0) {
             for (uint32_t c = start_c; c < C && num_tiles_read < dst_num_tiles; ++c, start_th = 0) {
-                for (uint32_t th = start_th; th < Ht && num_tiles_read < dst_num_tiles;
-                     ++th, tile_offset += Wt, tile_offset_b += Wt) {
+                for (uint32_t th = start_th; th < Ht && num_tiles_read < dst_num_tiles; ++th) {
                     for (uint32_t tw = start_tw; tw < end_tw && num_tiles_read < dst_num_tiles;
                          ++tw, ++num_tiles_read) {
 #if !SRC_SHARDED
@@ -112,6 +113,8 @@ void kernel_main() {
                         // next row of tiles should start at the first column
                         start_tw = 0;
                     }
+                    tile_offset += Wt;
+                    tile_offset_b += Wt;
                 }
                 tile_offset += next_channel_shift;
                 tile_offset_b += next_channel_shift_b;

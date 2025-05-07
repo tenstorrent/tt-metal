@@ -113,6 +113,8 @@ std::string get_kernel_file_path(KernelName kernel_name, bool is_sfpu) {
     switch (kernel_name) {
         case KernelName::ReaderNoBcastSplit:
             return fmt::format(dataflow, root, "reader_interleaved_no_bcast_split.cpp");
+        case KernelName::ReaderRowBcastSplit:
+            return fmt::format(dataflow, root, "reader_interleaved_row_bcast_split.cpp");
         case KernelName::WriterNoBcastSplit:
             return fmt::format(dataflow, root, "writer_interleaved_no_bcast_split.cpp");
         case KernelName::ReaderNoBcast: return fmt::format(dataflow, root, "reader_interleaved_no_bcast.cpp");
