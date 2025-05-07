@@ -809,7 +809,6 @@ void Device::initialize_and_launch_firmware() {
     const std::vector<tt::umd::CoreCoord>& eth_cores =
         soc_d.get_cores(CoreType::ETH, CoordSystem::PHYSICAL);  // make these translated and then convert to physical
 
-    // TODO: reduce the size of dev msgs
     TT_ASSERT(
         pcie_cores.size() + dram_cores.size() + eth_cores.size() <= MAX_PHYSICAL_NON_WORKER_CORES,
         "Detected more pcie/dram/eth cores than fit in the device mailbox.");
