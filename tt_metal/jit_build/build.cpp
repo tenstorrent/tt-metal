@@ -241,6 +241,10 @@ void JitBuildEnv::init(
         this->defines_ += "-DENABLE_HW_CACHE_INVALIDATION ";
     }
 
+    if (rtoptions.get_relaxed_memory_ordering_disabled()) {
+        this->defines_ += "-DDISABLE_RELAXED_MEMORY_ORDERING ";
+    }
+
     if (tt::tt_metal::MetalContext::instance().get_cluster().is_base_routing_fw_enabled()) {
         this->defines_ += "-DROUTING_FW_ENABLED ";
     }

@@ -325,6 +325,10 @@ class ModelArgs:
         "LLAMA3_2_90B_PARAMS": "models/tt_transformers/model_params/Llama3.2-90B-Vision-Instruct",
     }
 
+    LOCAL_HF_PARAMS = {
+        "Mistral-7B-Instruct-v0.3": "models/tt_transformers/model_params/Mistral-7B-Instruct-v0.3",
+    }
+
     def __init__(
         self,
         mesh_device,
@@ -355,6 +359,7 @@ class ModelArgs:
         self.prefill_len_cutoff = 512 if self.arch_name == "blackhole" else 1024
         # TODO the following is parametrized for a vocab size of 128256 (used in LLama3). Should generalize for other models
         self.max_columns_per_device_lm_head = 128256 // 8 if self.arch_name == "blackhole" else 128256 // 4
+        self.dummy_weights = dummy_weights
 
         assert not os.getenv(
             "FAKE_DEVICE"
@@ -378,6 +383,8 @@ class ModelArgs:
             self.CACHE_PATH = os.getenv("TT_CACHE_PATH")
             if not self.CACHE_PATH:
                 self.CACHE_PATH = os.path.join("model_cache", HF_MODEL, self.device_name)
+            else:  # For HF models, always append the device name (e.g. N150/N300/T3K/TG) to the cache path
+                self.CACHE_PATH = os.path.join(self.CACHE_PATH, self.device_name)
             self.model_name = HF_MODEL  # May be overridden by config
             self.from_hf_url = True
         else:
@@ -480,7 +487,6 @@ class ModelArgs:
         else:
             self.optimizations = optimizations
 
-        self.dummy_weights = dummy_weights
         self.tile_padded_batch_rows = self.tile_size * int(math.ceil(self.max_batch_size / self.tile_size))
 
         # Enable workarounds by default until di/dt issues are fixed
@@ -1235,7 +1241,7 @@ class ModelArgs:
         )
         return xs_1BSH
 
-    def _set_params_from_dict(self, params):
+    def _set_params_from_dict(self, params, is_hf=False):
         # Common params with different names between Meta and HF
         self.dim = params.get("dim", params.get("hidden_size"))
         self.n_heads = params.get("n_heads", params.get("num_attention_heads"))
@@ -1246,6 +1252,12 @@ class ModelArgs:
         self.vocab_size = params["vocab_size"]
         self.padded_vocab_size = 128 * 1024
         self.head_dim = params.get("head_dim", self.dim // self.n_heads)
+        if is_hf:
+            self.max_context_len = params.get("max_position_embeddings")
+        else:
+            self.max_context_len = (
+                128 * 1024
+            )  # For Llama3 Meta weights TODO: Remove this when we move to HF weights only
 
         # Handle different MLP dimension specifications
         if "intermediate_size" in params:
@@ -1258,7 +1270,16 @@ class ModelArgs:
             self.hidden_dim = calculate_hidden_dim(self.dim, self.ffn_dim_multiplier, self.multiple_of)
 
         if "_name_or_path" in params:
-            self.model_name = os.path.basename(params["_name_or_path"])
+            if is_hf:
+                normalized_path = os.path.normpath(params["_name_or_path"])
+                # For HF paths, they might end with `<model_name>/snapshots/<snapshot_id>/`
+                if "snapshots" in normalized_path:
+                    full_model_name = normalized_path.split(os.path.sep)[-3]
+                    self.model_name = full_model_name.split("--")[-1]
+                else:
+                    self.model_name = os.path.basename(params["_name_or_path"])
+            else:
+                self.model_name = os.path.basename(params["_name_or_path"])
 
         if self.base_model_name == "Qwen2.5-7B" and self.num_devices not in [0, 2, 4]:
             raise AssertionError(
@@ -1380,13 +1401,21 @@ class ModelArgs:
         if self.from_hf_url:
             from transformers import AutoConfig
 
-            config = AutoConfig.from_pretrained(self.model_name).to_dict()
+            if self.dummy_weights:
+                norm_model_name = self.model_name.split("/")[-1]
+                logger.info(
+                    f"Loading state param for dummy {norm_model_name} from {self.LOCAL_HF_PARAMS[norm_model_name]}"
+                )
+                config = AutoConfig.from_pretrained(self.LOCAL_HF_PARAMS[norm_model_name]).to_dict()
+            else:
+                config = AutoConfig.from_pretrained(self.model_name).to_dict()
+
         else:
             config_file = os.path.join(checkpoint_dir, "config.json")
             assert os.path.exists(config_file), f"config.json file not found at {config_file}"
             with open(config_file, "r") as f:
                 config = json.load(f)
-        self._set_params_from_dict(config)
+        self._set_params_from_dict(config, is_hf=True)
 
     def __repr__(self):
         return f"""ModelArgs(
@@ -1439,23 +1468,35 @@ class ModelArgs:
     # TODO Update function for large models: For 1 layer tests we only want to load 1 checkpoint file, instead of all.
     def load_state_dict(self):
         if self.dummy_weights:
-            reference_model = Transformer(self)
-            state_dict = reference_model.state_dict()
-            state_dict_prefix = self.get_state_dict_prefix("", None)
-            state_dict = {f"{state_dict_prefix}{k}": torch.randn_like(v) for k, v in state_dict.items()}
+            if self.checkpoint_type == CheckpointType.HuggingFace:
+                from transformers import AutoConfig, AutoModelForCausalLM
+
+                config = AutoConfig.from_pretrained(self.LOCAL_HF_PARAMS[self.model_name])
+                config.num_layers = self.n_layers
+                config.num_hidden_layers = self.n_layers
+                model = AutoModelForCausalLM.from_config(config)
+                state_dict = model.state_dict()
+            else:
+                reference_model = Transformer(self)
+                state_dict = reference_model.state_dict()
+                state_dict_prefix = self.get_state_dict_prefix("", None)
+                state_dict = {f"{state_dict_prefix}{k}": torch.randn_like(v) for k, v in state_dict.items()}
         elif self.checkpoint_type == CheckpointType.Meta:
             state_dict = load_meta_state_dict(self.CKPT_DIR, self.n_layers)
         else:
             assert self.checkpoint_type == CheckpointType.HuggingFace
             if self.from_hf_url:
-                from transformers import AutoModelForCausalLM
+                from transformers import AutoConfig, AutoModelForCausalLM
 
                 model = AutoModelForCausalLM.from_pretrained(self.CKPT_DIR)
                 state_dict = model.state_dict()
             else:
                 state_dict = load_hf_state_dict(self.CKPT_DIR)
+
+        if self.checkpoint_type == CheckpointType.HuggingFace:
             state_dict = standardize_hf_keys(state_dict)
             state_dict = convert_hf_to_meta(state_dict, self.head_dim)
+
         keys_dict = list(state_dict.keys())[:]
         remv = [f"layers.{i}." for i in list(range(self.n_layers, self.full_model_n_layers))]
         for k in keys_dict:
@@ -1831,11 +1872,13 @@ class ModelArgs:
             # HF is much faster at loading from a checkpoint than generating from config
             # so use that by preference unless we don't have a checkpoint
             if self.dummy_weights and not load_checkpoint:
-                config = AutoConfig.from_pretrained(self.CKPT_DIR)
+                config = AutoConfig.from_pretrained(self.LOCAL_HF_PARAMS[self.model_name])
                 config.num_layers = self.n_layers
+                config.num_hidden_layers = self.n_layers
                 model = AutoModelForCausalLM.from_config(config)
             else:
                 model = AutoModelForCausalLM.from_pretrained(self.CKPT_DIR)
+                model.model.layers = model.model.layers[: self.n_layers]
             if wrap:
                 wrapper = HfModelWrapper(model, self.head_dim)
                 return wrapper
@@ -1889,7 +1932,12 @@ class ModelArgs:
         else:
             model = self.reference_transformer(wrap=False)
             layer = model.model.layers[0]
-            wrapper = HfDecoderWrapper(layer, self.head_dim, model.model.rotary_emb)
+            # TODO: Generalize for other HF models
+            model_name_env = os.getenv("HF_MODEL")
+            if model_name_env is not None and "mistral" in model_name_env.lower():
+                wrapper = HfDecoderWrapper(layer, self.head_dim, layer.self_attn.rotary_emb)
+            else:
+                wrapper = HfDecoderWrapper(layer, self.head_dim, model.model.rotary_emb)
             return wrapper
 
     def reference_attention(self):
@@ -2048,7 +2096,13 @@ class HfDecoderWrapper:
 
     def forward(self, x, start_pos, freqs_cis_i, mask=None):
         position_ids = torch.tensor([list(range(start_pos, start_pos + x.shape[1]))] * x.shape[0])
-        position_embeddings = self.rotary_emb(x, position_ids)
+        # TODO: Generalize for other HF models
+        model_name_env = os.getenv("HF_MODEL")
+        if model_name_env is not None and "mistral" in model_name_env.lower():
+            position_embeddings = self.rotary_emb(x, x.shape[1])
+        else:
+            position_embeddings = self.rotary_emb(x, position_ids)
+
         if mask is not None:
             while len(mask.shape) < 4:
                 mask = mask.unsqueeze(0)
@@ -2101,6 +2155,29 @@ class HfModelWrapper:
 
     def eval(self):
         self.model.eval()
+
+    @property
+    def cache_k(self):
+        [(k, v)] = self.past_key_values.to_legacy_cache()
+        hf_k = k.permute(0, 2, 1, 3)  # match meta-style reference which uses (batch_size, seq, n_kv_heads, head_dim)
+        batch_size, seq_len, n_heads, head_dim = hf_k.shape
+
+        meta_k = torch.zeros_like(hf_k)
+        for b in range(batch_size):
+            for s in range(seq_len):
+                # Flatten just heads and head_dim
+                flat = hf_k[b, s].flatten()
+                # Apply reverse_permute
+                transformed = reverse_permute(flat.unsqueeze(-1), n_heads, flat.shape[0], 1).squeeze(-1)
+                # Restore heads and head_dim shape
+                meta_k[b, s] = transformed.reshape(n_heads, head_dim)
+
+        return meta_k
+
+    @property
+    def cache_v(self):
+        [(k, v)] = self.past_key_values.to_legacy_cache()
+        return v.permute(0, 2, 1, 3)  # match meta-style reference which uses (batch_size, seq, n_kv_heads, head_dim)
 
 
 class DecodersPrecision:

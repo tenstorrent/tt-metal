@@ -21,6 +21,7 @@
 #include "dataflow_api.h"
 #include "ethernet/dataflow_api.h"
 #include "ethernet/tunneling.h"
+#include "dev_mem_map.h"
 
 #include "debug/watcher_common.h"
 #include "debug/waypoint.h"
@@ -65,13 +66,13 @@ uint32_t sumIDs[SUM_COUNT] __attribute__((used));
 #endif
 
 int main() {
-    configure_l1_data_cache();
+    configure_csr();
     DIRTY_STACK_MEMORY();
     WAYPOINT("I");
-    do_crt1((uint32_t*)eth_l1_mem::address_map::MEM_ERISC_INIT_LOCAL_L1_BASE_SCRATCH);
+    do_crt1((uint32_t*)MEM_AERISC_INIT_LOCAL_L1_BASE_SCRATCH);
 
     // put this into scratch space similar to idle erisc
-    noc_bank_table_init(eth_l1_mem::address_map::ERISC_MEM_BANK_TO_NOC_SCRATCH);
+    noc_bank_table_init(MEM_AERISC_BANK_TO_NOC_SCRATCH);
 
     mailboxes->launch_msg_rd_ptr = 0;  // Initialize the rdptr to 0
     noc_index = 0;

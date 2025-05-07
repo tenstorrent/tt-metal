@@ -9,18 +9,17 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/util.hpp>
-#include <tt-metalium/host_api.hpp>
 #include <tt-metalium/work_split.hpp>
 #include "ttnn/device_operation.hpp"
 
 namespace ttnn::operations::experimental::reduction::sort::program {
 using namespace tt::tt_metal;
-
 struct SortProgramFactory {
     struct shared_variables_t {
         KernelHandle reader_kernel_id;
         KernelHandle compute_kernel_id;
         KernelHandle writer_kernel_id;
+        CoreCoord storage_grid_size;
     };
 
     using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
