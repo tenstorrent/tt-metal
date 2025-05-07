@@ -77,8 +77,7 @@ void forward_data(
     tt::tt_fabric::FabricMuxChannelWorkerInterface<NUM_BUFFERS>& worker_interface,
     tt::tt_fabric::FabricMuxToEdmSender& fabric_connection,
     bool& channel_connection_established) {
-    bool has_data_to_send = worker_interface.has_unsent_payload();
-    if (has_data_to_send) {
+    if (worker_interface.has_unsent_payload()) {
         size_t buffer_address = channel.get_buffer_address(worker_interface.local_wrptr.get_buffer_index());
         auto packet_header = reinterpret_cast<PACKET_HEADER_TYPE*>(buffer_address);
 
@@ -91,7 +90,10 @@ void forward_data(
 
         auto& local_rdptr = worker_interface.local_rdptr;
         local_rdptr.increment();
-        worker_interface.template update_worker_copy_of_read_ptr<false>(local_rdptr.get_ptr());
+
+        if (channel_connection_established) {
+            worker_interface.template update_worker_copy_of_read_ptr<false>(local_rdptr.get_ptr());
+        }
 
         // not handling/processing acks for now, re-evaluate if needed
     }

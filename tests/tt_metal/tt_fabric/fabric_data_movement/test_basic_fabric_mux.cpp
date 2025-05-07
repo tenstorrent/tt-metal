@@ -21,6 +21,7 @@
 #include <tt-metalium/fabric_edm_packet_header.hpp>
 #include "tt_metal/fabric/fabric_mux_config.hpp"
 #include "tt_metal/fabric/hw/inc/tt_fabric_status.h"
+#include "impl/context/metal_context.hpp"
 
 namespace tt::tt_fabric {
 namespace fabric_router_tests {

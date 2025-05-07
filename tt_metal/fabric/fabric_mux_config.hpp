@@ -2,9 +2,12 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#pragma once
+
 #include <cstddef>
 #include <vector>
 #include <tt-metalium/fabric.hpp>
+#include "impl/context/metal_context.hpp"
 
 namespace tt::tt_fabric {
 
@@ -62,6 +65,7 @@ enum class FabricMuxChannelType : uint8_t { FULL_SIZE_CHANNEL = 0, HEADER_ONLY_C
         values can impact teardown times.
 */
 struct FabricMuxConfig {
+    static constexpr uint8_t default_num_buffers = 8;
     static constexpr size_t default_num_full_size_channel_iters = 1;
     static constexpr size_t default_num_iters_between_teardown_checks = 32;
 
@@ -80,8 +84,11 @@ struct FabricMuxConfig {
         size_t base_l1_address) :
         num_full_size_channels(num_full_size_channels),
         num_header_only_channels(num_header_only_channels),
-        num_buffers_full_size_channel(num_buffers_full_size_channel),
-        num_buffers_header_only_channel(num_buffers_header_only_channel),
+        // set to default number of buffers only for compilation purposes, no functional impact
+        num_buffers_full_size_channel(
+            num_buffers_full_size_channel == 0 ? default_num_buffers : num_buffers_full_size_channel),
+        num_buffers_header_only_channel(
+            num_buffers_header_only_channel == 0 ? default_num_buffers : num_buffers_header_only_channel),
         buffer_size_bytes_full_size_channel(buffer_size_bytes_full_size_channel) {
         // TODO: asserts on the max size/number of channels allowed?
         noc_aligned_address_size_bytes =
