@@ -25,10 +25,6 @@ on:
 
 jobs:
   ttnn:
-    strategy:
-      # Do not fail-fast because we need to ensure all tests go to completion
-      # so we try not to get hanging machines
-
     name: ttnn stress tests ${{ inputs.arch }} ${{ inputs.runner-label }}
     runs-on: ["in-service", "${{ inputs.runner-label }}", "pipeline-ttnn-stress"]
 
