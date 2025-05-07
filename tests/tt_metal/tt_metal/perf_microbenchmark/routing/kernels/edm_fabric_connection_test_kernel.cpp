@@ -5,7 +5,8 @@
 #include "tt_metal/api/tt-metalium/fabric_edm_packet_header.hpp"
 #include "ttnn/cpp/ttnn/operations/ccl/common/interpreter_backends/kernel_common/noc_addr.hpp"
 #include "dataflow_api.h"
-#include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
+// #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
+#include "tt_metal/fabric/hw/inc/edm_fabric/edm_fabric_worker_adapters.hpp"
 
 #include "tt_metal/fabric/hw/inc/edm_fabric/edm_fabric_flow_control_helpers.hpp"
 
@@ -27,7 +28,7 @@ static FORCE_INLINE void setup_packet_header(
     }
 }
 
-inline uint64_t get_timestamp() {
+static inline uint64_t get_timestamp() {
     uint32_t timestamp_low = reg_read(RISCV_DEBUG_REG_WALL_CLOCK_L);
     uint32_t timestamp_high = reg_read(RISCV_DEBUG_REG_WALL_CLOCK_H);
     return (((uint64_t)timestamp_high) << 32) | timestamp_low;
@@ -64,16 +65,14 @@ void kernel_main() {
     const size_t packet_header_cb = get_arg_val<uint32_t>(arg_idx++);
     const size_t packet_header_size_in_headers = get_arg_val<uint32_t>(arg_idx++);
 
-    auto fabric_connection = FabricConnectionManager::build_from_args(arg_idx);
+    auto fabric_connection = tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(arg_idx);
 
-    ASSERT(fabric_connection.is_logically_connected());
-    if (!fabric_connection.is_logically_connected()) {
-        while (1); // hang because of invalid test setup
-        return;
-    }
 
+    DPRINT << "RESERVING CB1\n";
     cb_reserve_back(source_l1_cb_index, 1);
+    DPRINT << "RESERVING CB2. " << (uint32_t)packet_header_size_in_headers << " slots\n";
     cb_reserve_back(packet_header_cb, packet_header_size_in_headers);
+    DPRINT << "GETTING PTRS\n";
     const auto source_l1_buffer_address = get_write_ptr(source_l1_cb_index);
     const auto packet_header_buffer_address = get_write_ptr(packet_header_cb);
 
@@ -81,6 +80,7 @@ void kernel_main() {
 
 
     if (is_starting_worker) {
+        DPRINT << "Is starting worker\n";
         *connection_token_ptr += 1;
     }
 
@@ -99,40 +99,56 @@ void kernel_main() {
     size_t packet_size_index = 0;
     size_t num_messages_index = 0;
     size_t stall_duration_index = 0;
+    DPRINT << "Starting loop. num_times_to_connect: " << (uint32_t)num_times_to_connect << "\n";
     for (size_t i = 0; i < num_times_to_connect; i++) {
+        if ((i & 0xFF) == 0) {
+            DPRINT << "Iteration: " << (uint32_t)i << "\n";
+        }
         auto stall_duration = stall_durations[stall_duration_index];
         auto packet_size = packet_sizes[packet_size_index];
         auto num_messages_to_send = num_messages[num_messages_index];
+        // DPRINT << "Stall duration: " << (uint32_t)stall_duration << "\n";
+        // DPRINT << "Packet size: " << (uint32_t)packet_size << "\n";
+        // DPRINT << "Num messages to send: " << (uint32_t)num_messages_to_send << "\n";
 
         pkt_hdr_fwd->to_noc_unicast_write(NocUnicastCommandHeader{noc0_dest_addr_fwd}, packet_size);
 
         noc_semaphore_wait(connection_token_ptr, 1);
         *connection_token_ptr = 0;
 
+        // DPRINT << "Stalling\n";
         if (stall_duration) {
             auto start = get_timestamp();
             while (get_timestamp() - start < stall_duration) {}
         }
-
+        // DPRINT << "Done Stall\n";
         fabric_connection.open();
 
+        // DPRINT << "Sending " << (uint32_t)num_messages_to_send << " messages\n";
         for (size_t i = 0; i < num_messages_to_send; i++) {
             // Forward direction
-            fabric_connection.get_forward_connection().wait_for_empty_write_slot();
-            fabric_connection.get_forward_connection().send_payload_without_header_non_blocking_from_address(
+            fabric_connection.wait_for_empty_write_slot();
+            fabric_connection.send_payload_without_header_non_blocking_from_address(
                 source_l1_buffer_address, packet_size);
-            fabric_connection.get_forward_connection().send_payload_flush_non_blocking_from_address(
+            fabric_connection.send_payload_flush_non_blocking_from_address(
                 (uint32_t)pkt_hdr_fwd, sizeof(PACKET_HEADER_TYPE));
         }
 
+        // DPRINT << "Closing connection\n";
         fabric_connection.close();
+        // DPRINT << "Done Closing connection\n";
 
         // notify the next worker
+        // DPRINT << "Notifying next worker at " << (uint64_t)next_worker_token_addr << "\n";
         noc_semaphore_inc(next_worker_token_addr, 1);
+        // DPRINT << "Done Notifying next worker\n";
 
         stall_duration_index = tt::tt_fabric::wrap_increment<NUM_STALL_DURATIONS>(stall_duration_index);
         packet_size_index = tt::tt_fabric::wrap_increment<NUM_PACKET_SIZES>(packet_size_index);
         num_messages_index = tt::tt_fabric::wrap_increment<NUM_MESSAGES>(num_messages_index);
+        // DPRINT << "Next stall duration index: " << (uint32_t)stall_duration_index << "\n";
+        // DPRINT << "Next packet size index: " << (uint32_t)packet_size_index << "\n";
+        // DPRINT << "Next num messages index: " << (uint32_t)num_messages_index << "\n";
     }
 
     noc_async_write_barrier();

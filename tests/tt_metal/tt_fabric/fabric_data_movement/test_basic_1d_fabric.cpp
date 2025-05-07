@@ -473,9 +473,11 @@ TEST_F(Fabric1DFixture, TestEDMConnectionStressTestQuick) {
     std::vector<size_t> message_counts = {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 30, 100, 1000};
     std::vector<size_t> packet_sizes = {16, 1024, 2048, 4096, 4 * 1088};
     size_t num_epochs = 5;
-    size_t num_times_to_connect = 20;  // How many times each worker connects during its turn
+    size_t num_times_to_connect = 100000;  // How many times each worker connects during its turn
 
+    log_info(tt::LogBuildKernels, "Starting EDM connection stress test");
     auto* control_plane = tt::tt_metal::MetalContext::instance().get_cluster().get_control_plane();
+    log_info(tt::LogBuildKernels, "Control plane found");
 
     std::pair<mesh_id_t, chip_id_t> src_mesh_chip_id;
     std::pair<mesh_id_t, chip_id_t> dst_mesh_chip_id;
@@ -495,6 +497,7 @@ TEST_F(Fabric1DFixture, TestEDMConnectionStressTestQuick) {
         GTEST_SKIP() << "No mesh found for 2 chip connection stress test";
     }
 
+    log_info(tt::LogBuildKernels, "Mesh ID: {}", mesh_id.value());
     auto src_physical_device_id =
         control_plane->get_physical_chip_id_from_mesh_chip_id(std::make_pair(mesh_id.value(), 0));
     auto dst_physical_device_id =
@@ -510,7 +513,9 @@ TEST_F(Fabric1DFixture, TestEDMConnectionStressTestQuick) {
     const auto edm_config = get_1d_fabric_config();
 
     // For each epoch, run with increasing number of workers
+    log_info(tt::LogBuildKernels, "Starting EDM connection stress test");
     for (size_t epoch = 0; epoch < num_epochs; epoch++) {
+        log_info(tt::LogBuildKernels, "Epoch {}", epoch);
         size_t num_workers = epoch + 1;
 
         // Set up worker cores for token ring
@@ -540,7 +545,7 @@ TEST_F(Fabric1DFixture, TestEDMConnectionStressTestQuick) {
 
         // Create packet header buffer (one per worker)
         auto packet_header_cb_config = tt_metal::CircularBufferConfig(1024, {{packet_header_cb_index, cb_df}})
-                                           .set_page_size(packet_header_cb_index, 1024);
+                                           .set_page_size(packet_header_cb_index, 32);
         CreateCircularBuffer(program, worker_logical_cores, packet_header_cb_config);
 
         // Configure common compile time args for all workers
@@ -601,9 +606,9 @@ TEST_F(Fabric1DFixture, TestEDMConnectionStressTestQuick) {
             }
 
             // Circular buffer indices for source data and packet headers
-            worker_args.push_back(0);  // Source L1 circular buffer index
-            worker_args.push_back(1);  // Packet header circular buffer index
-            worker_args.push_back(2);  // Number of headers (size units in words)
+            worker_args.push_back(source_l1_cb_index);  // Source L1 circular buffer index
+            worker_args.push_back(packet_header_cb_index);  // Packet header circular buffer index
+            worker_args.push_back(1);  // Number of headers (size units in words)
 
             auto worker_flow_semaphore_id = tt_metal::CreateSemaphore(program, worker_logical_cores_vec[i], 0);
             auto worker_teardown_semaphore_id = tt_metal::CreateSemaphore(program, worker_logical_cores_vec[i], 0);
@@ -627,6 +632,7 @@ TEST_F(Fabric1DFixture, TestEDMConnectionStressTestQuick) {
 
         // Launch program and wait for completion
         auto start_time = std::chrono::high_resolution_clock::now();
+        log_info(tt::LogBuildKernels, "Launching program");
         this->RunProgramNonblocking(sender_device, program);
         this->WaitForSingleProgramDone(sender_device, program);
         auto end_time = std::chrono::high_resolution_clock::now();
