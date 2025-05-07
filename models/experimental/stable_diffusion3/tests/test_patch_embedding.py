@@ -3,9 +3,9 @@
 # SPDX-License-Identifier: Apache-2.0
 from __future__ import annotations
 
+import os
 from typing import TYPE_CHECKING
 
-import os
 import pytest
 import torch
 import ttnn
@@ -85,8 +85,4 @@ def test_patch_embedding(
 
     tt_output = tt_model(tt_input_tensor)
 
-    tt_output_torch = to_torch(tt_output, mesh_device=mesh_device, dtype=dtype, shard_dim=-1).squeeze(1)[
-        :batch_size, :, :embedding_dim
-    ]
-
-    assert_quality(torch_output, tt_output_torch, pcc=0.999_990, shard_dim=0, num_devices=mesh_device.get_num_devices())
+    assert_quality(torch_output, tt_output, pcc=0.999_990, shard_dim=-1)
