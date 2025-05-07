@@ -10,8 +10,8 @@
 namespace ckernel {
 namespace sfpu {
 
-template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
-inline void binary_bitwise_and_uint16(const uint dst_offset) {
+template <bool APPROXIMATION_MODE, BinaryBitwiseOp BITWISE_OP, int ITERATIONS = 8>
+inline void calculate_sfpu_binary_bitwise_uint16(const uint dst_offset) {
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
         constexpr uint dst_tile_size = 64;
@@ -20,7 +20,10 @@ inline void binary_bitwise_and_uint16(const uint dst_offset) {
         // operand B - uint16
         TT_SFPLOAD(p_sfpu::LREG1, LO16, ADDR_MOD_3, dst_offset * dst_tile_size);
 
-        TTI_SFPAND(0, p_sfpu::LREG1, p_sfpu::LREG0, 4);
+        if constexpr (BITWISE_OP == BinaryBitwiseOp::AND) {
+            TTI_SFPAND(0, p_sfpu::LREG1, p_sfpu::LREG0, 4);
+        }
+
         TTI_SFPSTORE(p_sfpu::LREG0, LO16, ADDR_MOD_3, 0);
         dst_reg++;
     }
