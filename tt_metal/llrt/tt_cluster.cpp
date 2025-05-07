@@ -92,6 +92,13 @@ namespace tt {
 ClusterType Cluster::get_cluster_type_from_cluster_desc(
     const llrt::RunTimeOptions& rtoptions, const tt_ClusterDescriptor* cluster_desc) {
     if (rtoptions.get_simulator_enabled()) {
+        tt_SimulationDeviceInit init(rtoptions.get_simulator_path());
+        auto arch = init.get_arch_name();
+        if (arch == tt::ARCH::WORMHOLE_B0) {
+            return ClusterType::SIMULATOR_WORMHOLE_B0;
+        } else if (arch == tt::ARCH::BLACKHOLE) {
+            return ClusterType::SIMULATOR_BLACKHOLE;
+        }
         return ClusterType::INVALID;
     }
     if (cluster_desc == nullptr) {
@@ -1141,6 +1148,9 @@ std::set<tt_fabric::chan_id_t> Cluster::get_fabric_ethernet_channels(chip_id_t c
     std::set<tt_fabric::chan_id_t> fabric_ethernet_channels;
     const auto& active_eth_cores = this->get_active_ethernet_cores(chip_id, false);
     for (const auto& eth_core : active_eth_cores) {
+        if (!this->is_ethernet_link_up(chip_id, eth_core)) {
+            continue;
+        }
         if (this->device_eth_routing_info_.at(chip_id).at(eth_core) == EthRouterMode::FABRIC_ROUTER) {
             fabric_ethernet_channels.insert(this->get_soc_desc(chip_id).logical_eth_core_to_chan_map.at(eth_core));
         }
@@ -1381,6 +1391,8 @@ void Cluster::initialize_control_plane() {
         case tt::ClusterType::P150: mesh_graph_descriptor = "p150_mesh_graph_descriptor.yaml"; break;
         case tt::ClusterType::P150_X2: mesh_graph_descriptor = "p150_x2_mesh_graph_descriptor.yaml"; break;
         case tt::ClusterType::P150_X4: mesh_graph_descriptor = "p150_x4_mesh_graph_descriptor.yaml"; break;
+        case tt::ClusterType::SIMULATOR_WORMHOLE_B0: mesh_graph_descriptor = "n150_mesh_graph_descriptor.yaml"; break;
+        case tt::ClusterType::SIMULATOR_BLACKHOLE: mesh_graph_descriptor = "p150_mesh_graph_descriptor.yaml"; break;
         default: TT_THROW("Unknown cluster type"); // TODO: we could expose this as a custom mesh graph option
     }
     const std::filesystem::path mesh_graph_desc_path = std::filesystem::path(rtoptions_.get_root_dir()) /
