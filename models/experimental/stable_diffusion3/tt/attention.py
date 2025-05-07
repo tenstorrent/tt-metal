@@ -83,12 +83,12 @@ class TtAttentionParameters:
 
 
 class TtAttentionPart:
-    def __init__(self, parameters: TtAttentionPartParameters, device) -> None:
+    def __init__(self, parameters: TtAttentionPartParameters, device: ttnn.MeshDevice) -> None:
         super().__init__()
 
         eps = 1e-6
 
-        self.device = device
+        self._device = device
         self._qkv_proj = TtLinear(parameters.qkv_proj)
         self._out_proj = TtLinear(parameters.out_proj) if parameters.out_proj is not None else None
         self._norm_q = TtRmsNorm(parameters.norm_q, eps=eps)
@@ -137,7 +137,7 @@ class TtAttentionPart:
         #        qkv = ttnn.reallocate(qkv)
         #        qkv = to_memory_config(qkv, ttnn.DRAM_MEMORY_CONFIG, deallocate=True)
 
-        num_local_heads = num_heads // self.device.get_num_devices()
+        num_local_heads = num_heads // self._device.get_num_devices()
         q, k, v = ttnn.transformer.split_query_key_value_and_split_heads(
             qkv, num_heads=num_local_heads, transpose_key=False
         )
@@ -201,12 +201,12 @@ class TtAttention:
     def __init__(self, parameters: TtAttentionParameters, *, num_heads: int, device) -> None:
         super().__init__()
 
-        self.device = device
+        self._device = device
         self._num_heads = num_heads
 
-        self._spatial_attn = TtAttentionPart(parameters.spatial, device=self.device)
+        self._spatial_attn = TtAttentionPart(parameters.spatial, device=self._device)
         self._prompt_attn = (
-            TtAttentionPart(parameters.prompt, device=self.device) if parameters.prompt is not None else None
+            TtAttentionPart(parameters.prompt, device=self._device) if parameters.prompt is not None else None
         )
 
     def __call__(
@@ -303,7 +303,7 @@ class TtAttention:
         spatial = ttnn.unsqueeze(spatial, 1)
         prompt = ttnn.unsqueeze(prompt, 1)
 
-        if self.device.get_num_devices() > 1:
+        if self._device.get_num_devices() > 1:
             spatial = all_gather(spatial, dim=-1)
             prompt = all_gather(prompt, dim=-1)
 
