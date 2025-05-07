@@ -16,8 +16,10 @@ namespace tt::tt_metal::distributed {
 
 struct MeshReadEventDescriptor;
 struct MeshBufferReadDescriptor;
+struct MeshL1DataReadDescriptor;
 
-using MeshCompletionReaderVariant = std::variant<MeshBufferReadDescriptor, MeshReadEventDescriptor>;
+using MeshCompletionReaderVariant =
+    std::variant<MeshBufferReadDescriptor, MeshReadEventDescriptor, MeshL1DataReadDescriptor>;
 
 class FDMeshCommandQueue final : public MeshCommandQueueBase {
 private:
@@ -86,6 +88,9 @@ private:
     // 2. Bypass mode tracker.
     SystemMemoryManager& reference_sysmem_manager();
     MultiProducerSingleConsumerQueue<CompletionReaderVariant>& get_read_descriptor_queue(IDevice* device);
+
+    void submit_l1_data_memcpy_request(
+        const ReadL1DataDescriptor& read_descriptor, const MeshCoordinate& device_coord, bool blocking);
 
     // Shared across all MeshCommandQueue instances for a MeshDevice.
     std::shared_ptr<DispatchArray<LaunchMessageRingBufferState>> worker_launch_message_buffer_state_;
@@ -163,6 +168,23 @@ public:
     WorkerConfigBufferMgr& get_config_buffer_mgr(uint32_t index) override { return config_buffer_mgr_[index]; };
     void enqueue_mesh_workload(MeshWorkload& mesh_workload, bool blocking) override;
 
+    void enqueue_write_shard_to_core(
+        const MeshCoordinate& device_coord,
+        const CoreCoord& virtual_core_coord,
+        const void* src,
+        DeviceAddr address,
+        uint32_t size_bytes,
+        bool blocking,
+        tt::stl::Span<const SubDeviceId> sub_device_ids = {});
+    void enqueue_read_shard_from_core(
+        const MeshCoordinate& device_coord,
+        const CoreCoord& virtual_core_coord,
+        void* dst,
+        DeviceAddr address,
+        uint32_t size_bytes,
+        bool blocking,
+        tt::stl::Span<const SubDeviceId> sub_device_ids = {});
+
     MeshEvent enqueue_record_event(
         tt::stl::Span<const SubDeviceId> sub_device_ids = {},
         const std::optional<MeshCoordinateRange>& device_range = std::nullopt) override;
@@ -186,6 +208,8 @@ public:
     void read_completion_queue_event(MeshReadEventDescriptor& read_event_descriptor);
     // Helper function - read buffer data from Completion Queue
     void copy_buffer_data_to_user_space(MeshBufferReadDescriptor& read_buffer_descriptor);
+    // Helper function - read L1 data from Completion Queue
+    void read_l1_data_from_completion_queue(MeshL1DataReadDescriptor& read_l1_data_descriptor);
 };
 
 }  // namespace tt::tt_metal::distributed

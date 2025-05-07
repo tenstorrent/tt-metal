@@ -59,6 +59,11 @@ struct MeshBufferReadDescriptor {
     std::unordered_map<IDevice*, uint32_t> num_reads_per_dev;
 };
 
+struct MeshL1DataReadDescriptor {
+    ReadL1DataDescriptor single_core_descriptor;
+    MeshCoordinate device_coord;
+};
+
 FDMeshCommandQueue::FDMeshCommandQueue(
     MeshDevice* mesh_device,
     uint32_t id,
@@ -317,6 +322,58 @@ void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
     }
 }
 
+void FDMeshCommandQueue::enqueue_write_shard_to_core(
+    const MeshCoordinate& device_coord,
+    const CoreCoord& virtual_core_coord,
+    const void* src,
+    DeviceAddr address,
+    uint32_t size_bytes,
+    bool blocking,
+    tt::stl::Span<const SubDeviceId> sub_device_ids) {
+    in_use_ = true;
+    TT_FATAL(!trace_id_.has_value(), "Writes are not supported during trace capture.");
+
+    IDevice* device = mesh_device_->get_device(device_coord);
+    sub_device_ids = buffer_dispatch::select_sub_device_ids(mesh_device_, sub_device_ids);
+
+    device_dispatch::write_to_core_l1(
+        device, virtual_core_coord, src, address, size_bytes, id_, expected_num_workers_completed_, sub_device_ids);
+
+    if (blocking) {
+        this->finish();
+    }
+}
+
+void FDMeshCommandQueue::enqueue_read_shard_from_core(
+    const MeshCoordinate& device_coord,
+    const CoreCoord& virtual_core_coord,
+    void* dst,
+    DeviceAddr address,
+    uint32_t size_bytes,
+    bool blocking,
+    tt::stl::Span<const SubDeviceId> sub_device_ids) {
+    in_use_ = true;
+    TT_FATAL(!trace_id_.has_value(), "Reads are not supported during trace capture.");
+
+    IDevice* device = this->mesh_device_->get_device(device_coord);
+    sub_device_ids = buffer_dispatch::select_sub_device_ids(mesh_device_, sub_device_ids);
+
+    if (size_bytes > 0) {
+        device_dispatch::L1ReadDispatchParams dispatch_params(
+            virtual_core_coord,
+            address,
+            size_bytes,
+            device,
+            id_,
+            dispatch_core_type_,
+            expected_num_workers_completed_,
+            sub_device_ids);
+        device_dispatch::issue_l1_read_command_sequence(dispatch_params);
+    }
+
+    this->submit_l1_data_memcpy_request(ReadL1DataDescriptor(dst, size_bytes), device_coord, blocking);
+}
+
 void FDMeshCommandQueue::finish(tt::stl::Span<const SubDeviceId> sub_device_ids) {
     auto event = this->enqueue_record_event_to_host(sub_device_ids);
 
@@ -400,6 +457,17 @@ void FDMeshCommandQueue::submit_memcpy_request(
     }
 }
 
+void FDMeshCommandQueue::submit_l1_data_memcpy_request(
+    const ReadL1DataDescriptor& read_descriptor, const MeshCoordinate& device_coord, bool blocking) {
+    completion_queue_reads_.push(std::make_shared<MeshCompletionReaderVariant>(
+        std::in_place_type<MeshL1DataReadDescriptor>, read_descriptor, device_coord));
+    this->increment_num_entries_in_completion_queue();
+
+    if (blocking) {
+        this->finish();
+    }
+}
+
 MeshEvent FDMeshCommandQueue::enqueue_record_event_helper(
     tt::stl::Span<const SubDeviceId> sub_device_ids,
     bool notify_host,
@@ -474,8 +542,10 @@ void FDMeshCommandQueue::read_completion_queue() {
                         using T = std::decay_t<decltype(mesh_read_descriptor)>;
                         if constexpr (std::is_same_v<T, MeshBufferReadDescriptor>) {
                             this->copy_buffer_data_to_user_space(mesh_read_descriptor);
-                        } else {
+                        } else if constexpr (std::is_same_v<T, MeshReadEventDescriptor>) {
                             this->read_completion_queue_event(mesh_read_descriptor);
+                        } else {
+                            this->read_l1_data_from_completion_queue(mesh_read_descriptor);
                         }
                     },
                     mesh_read_descriptor);
@@ -546,6 +616,21 @@ void FDMeshCommandQueue::read_completion_queue_event(MeshReadEventDescriptor& re
         event_dispatch::read_events_from_completion_queue(
             read_event_descriptor.single_device_descriptor, mmio_device_id, channel, id_, device->sysmem_manager());
     }
+}
+
+void FDMeshCommandQueue::read_l1_data_from_completion_queue(MeshL1DataReadDescriptor& read_l1_data_descriptor) {
+    IDevice* device = mesh_device_->get_device(read_l1_data_descriptor.device_coord);
+    const chip_id_t mmio_device_id =
+        tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(device->id());
+    const uint16_t channel =
+        tt::tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(device->id());
+    device_dispatch::read_l1_data_from_completion_queue(
+        read_l1_data_descriptor.single_core_descriptor,
+        mmio_device_id,
+        channel,
+        id_,
+        device->sysmem_manager(),
+        exit_condition_);
 }
 
 void FDMeshCommandQueue::reset_worker_state(

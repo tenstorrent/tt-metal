@@ -51,8 +51,10 @@ namespace tt::tt_metal::distributed {
 class MeshEvent;
 struct MeshBufferReadDescriptor;
 struct MeshReadEventDescriptor;
+struct MeshL1DataReadDescriptor;
 
-using MeshCompletionReaderVariant = std::variant<MeshBufferReadDescriptor, MeshReadEventDescriptor>;
+using MeshCompletionReaderVariant =
+    std::variant<MeshBufferReadDescriptor, MeshReadEventDescriptor, MeshL1DataReadDescriptor>;
 
 class MeshCommandQueue {
     // Main interface to dispatch data and workloads to a MeshDevice
