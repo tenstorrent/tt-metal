@@ -207,7 +207,7 @@ def run_all_to_all_impl(
         tt_input_tensors = []
         for i, t in enumerate(input_tensors):
             tt_input_tensors.append(ttnn.Tensor(t, input_dtype).to(layout))
-            logger.info(f"using device {mesh_device.get_devices()[i].id()}")
+            logger.info(f"using device {mesh_device.get_device_ids()[i]}")
 
         input_tensor_mesh = ttnn.aggregate_as_tensor(tt_input_tensors).to(mesh_device, input_mem_config)
 
