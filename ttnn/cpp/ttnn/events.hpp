@@ -39,5 +39,7 @@ MeshEvent record_mesh_event(
     const std::optional<ttnn::MeshCoordinateRange>& device_range = std::nullopt);
 void wait_for_mesh_event(QueueId cq_id, const MeshEvent& event);
 
+void event_synchronize(const std::shared_ptr<tt::tt_metal::Event>& event);
+
 }  // namespace events
 }  // namespace ttnn
