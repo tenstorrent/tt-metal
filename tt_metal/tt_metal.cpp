@@ -46,7 +46,6 @@
 #include "logger.hpp"
 #include "tt-metalium/program.hpp"
 #include "semaphore.hpp"
-#include "system_memory_manager.hpp"
 #include "tracy/Tracy.hpp"
 #include <umd/device/tt_xy_pair.h>
 #include <umd/device/types/xy_pair.h>

@@ -16,7 +16,7 @@
 #include "buffer.hpp"
 #include "core_coord.hpp"
 #include <tt_stl/span.hpp>
-#include "system_memory_manager.hpp"
+#include "dispatch/system_memory_manager.hpp"
 
 enum class CoreType;
 namespace tt {

@@ -67,7 +67,7 @@
 #include <tt_stl/strong_type.hpp>
 #include <tt_stl/overloaded.hpp>
 #include "sub_device_types.hpp"
-#include "system_memory_manager.hpp"
+#include "dispatch/system_memory_manager.hpp"
 #include "tile.hpp"
 #include "tt_backend_api_types.hpp"
 #include "tt_memory.h"

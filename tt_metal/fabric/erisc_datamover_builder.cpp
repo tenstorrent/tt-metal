@@ -26,7 +26,6 @@
 #include "core_coord.hpp"
 #include "fabric_edm_types.hpp"
 #include "logger.hpp"
-#include "system_memory_manager.hpp"
 #include <umd/device/tt_core_coordinates.h>
 
 namespace tt {

@@ -8,7 +8,6 @@
 
 #include "dispatch/kernels/packet_queue_ctrl.hpp"
 #include "fd_kernel.hpp"
-#include "system_memory_manager.hpp"
 
 struct eth_router_static_config_t {
     std::optional<uint32_t> vc_count;                   // Set from arch level

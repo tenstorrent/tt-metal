@@ -20,7 +20,6 @@
 #include <tt-metalium/control_plane.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/dispatch_core_common.hpp>
-#include <tt-metalium/system_memory_manager.hpp>
 #include <umd/device/types/cluster_descriptor_types.h>
 
 namespace tt {

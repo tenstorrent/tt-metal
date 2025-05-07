@@ -60,7 +60,7 @@
 #include "profiler_types.hpp"
 #include "tt-metalium/program.hpp"
 #include <tt_stl/strong_type.hpp>
-#include "system_memory_manager.hpp"
+#include "dispatch/system_memory_manager.hpp"
 #include "trace_buffer.hpp"
 #include "tracy/Tracy.hpp"
 #include "tt_memory.h"

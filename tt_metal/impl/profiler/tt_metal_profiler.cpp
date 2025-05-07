@@ -57,7 +57,6 @@
 #include "profiler_types.hpp"
 #include "tt-metalium/program.hpp"
 #include "rtoptions.hpp"
-#include "system_memory_manager.hpp"
 #include "tracy/Tracy.hpp"
 #include "tracy/TracyTTDevice.hpp"
 #include <tt-metalium/distributed.hpp>

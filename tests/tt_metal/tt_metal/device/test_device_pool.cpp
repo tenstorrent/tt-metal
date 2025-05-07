@@ -13,7 +13,6 @@
 #include <tt-metalium/device.hpp>
 #include "hostdevcommon/common_values.hpp"
 #include "impl/context/metal_context.hpp"
-#include <tt-metalium/system_memory_manager.hpp>
 
 namespace tt::tt_metal {
 
