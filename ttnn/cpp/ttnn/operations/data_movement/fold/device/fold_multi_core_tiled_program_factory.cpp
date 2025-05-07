@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -23,6 +23,7 @@ using namespace tt::constants;
 using namespace tt::tt_metal;
 Fold::MultiCoreTiledInterleaved::cached_program_t fold_multi_core_tiled_interleaved(
     const Tensor& input_tensor, const Tensor& output, const uint32_t stride_h, const uint32_t stride_w) {
+    // Get device and create a new program
     auto device = input_tensor.device();
     auto program = tt::tt_metal::CreateProgram();
 
@@ -30,6 +31,7 @@ Fold::MultiCoreTiledInterleaved::cached_program_t fold_multi_core_tiled_interlea
     const uint32_t input_height = input_tensor.get_logical_shape()[1];
     const uint32_t input_width = input_tensor.get_logical_shape()[2];
 
+    // Get compute grid size and buffer pointers
     auto compute_grid_size = device->compute_with_storage_grid_size();
     Buffer* src0_buffer = input_tensor.buffer();
     Buffer* dst_buffer = output.buffer();
@@ -45,18 +47,23 @@ Fold::MultiCoreTiledInterleaved::cached_program_t fold_multi_core_tiled_interlea
     tt::log_info("single_tile_size: {}", single_tile_size);
     tt::log_info("input_tensor_shape: {}", input_padded_shape);
     tt::log_info("output_tensor_shape: {}", output_padded_shape);
+
+    // Calculate memory layout parameters
     auto stick_nbytes =
         output_padded_shape[3] * tt::datum_size(tt::tt_metal::datatype_to_dataformat_converter(output.get_dtype()));
     uint32_t ntiles_per_row = tt::div_up(input_padded_shape[-1], TILE_WIDTH);
     uint32_t ntiles = input_tensor.volume() / TILE_HW;
     uint32_t num_blocks = std::ceil(static_cast<float>(ntiles) / ntiles_per_row);
 
+    // Split work across cores for parallel processing
     auto grid_size = device->compute_with_storage_grid_size();
     auto [ncores, all_cores, core_range, core_range_cliff, nblocks_per_core, nblocks_per_core_cliff] =
         ttnn::split_blocks_for_tilize(grid_size, num_blocks);
     uint32_t src0_cb_index = tt::CBIndex::c_0;
     uint32_t num_input_tiles = ntiles_per_row;
-    uint32_t double_buffer = 2;
+    uint32_t double_buffer = 2;  // Double buffering for improved performance
+
+    // Create circular buffer configurations for source and destination
     tt::tt_metal::CircularBufferConfig cb_src0_config =
         tt::tt_metal::CircularBufferConfig(
             num_input_tiles * single_tile_size * double_buffer, {{src0_cb_index, cb_data_format}})
@@ -70,12 +77,13 @@ Fold::MultiCoreTiledInterleaved::cached_program_t fold_multi_core_tiled_interlea
             .set_page_size(src1_cb_index, single_tile_size);
     auto cb_src1 = tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_src1_config);
 
-    bool src0_is_dram = src0_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
-    bool dst_is_dram = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
+    // Configure compile-time arguments for reader kernel
     std::vector<uint32_t> reader_compile_time_args = {
         ntiles_per_row,
         src0_cb_index,
     };
+
+    // Configure compile-time arguments for writer kernel
     std::vector<uint32_t> writer_compile_time_args = {
         batch_size,
         input_height,
@@ -88,19 +96,21 @@ Fold::MultiCoreTiledInterleaved::cached_program_t fold_multi_core_tiled_interlea
         src1_cb_index,
     };
 
-    // Tilized reader
+    // Create reader kernel for DRAM to circular buffer data movement
     tt::tt_metal::KernelHandle unary_reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/data_movement/fold/device/kernels/dataflow/reader_dram2cb_tiled.cpp",
         all_cores,
         tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
 
+    // Create writer kernel for circular buffer to DRAM data movement
     tt::tt_metal::KernelHandle unary_writer_kernel_id = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/data_movement/fold/device/kernels/dataflow/writer_cb2dram_row_major.cpp",
         all_cores,
         tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 
+    // Configure compute kernel arguments
     std::vector<uint32_t> compute_compile_time_args = {
         nblocks_per_core,
         ntiles_per_row,
@@ -119,6 +129,8 @@ Fold::MultiCoreTiledInterleaved::cached_program_t fold_multi_core_tiled_interlea
     tt::tt_metal::KernelHandle compute_kernel_id, compute_kernel_id_cliff;
     std::string compute_kernel_name =
         "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/pack_untilize.cpp";
+
+    // Create main compute kernel
     compute_kernel_id = tt::tt_metal::CreateKernel(
         program,
         compute_kernel_name,
@@ -128,6 +140,7 @@ Fold::MultiCoreTiledInterleaved::cached_program_t fold_multi_core_tiled_interlea
             .compile_args = compute_compile_time_args,
         });
 
+    // Create cliff compute kernel if needed (for handling edge cases)
     if (core_range_cliff.ranges().size() > 0) {
         compute_kernel_id_cliff = tt::tt_metal::CreateKernel(
             program,
@@ -139,17 +152,22 @@ Fold::MultiCoreTiledInterleaved::cached_program_t fold_multi_core_tiled_interlea
             });
     }
 
+    // Calculate core distribution for work
     uint32_t ncores_full = ncores;
     auto full_cores = all_cores;
     if (nblocks_per_core_cliff > 0 && nblocks_per_core_cliff < nblocks_per_core) {
         ncores_full -= 1;
         full_cores = core_range;
     }
+
+    // Set up runtime arguments for each core
     uint32_t tile_start_id = 0;
     auto ncores_x = grid_size.x;
     auto ncores_y = std::ceil(static_cast<float>(ncores) / ncores_x);
     auto cores = grid_to_cores(ncores_x * ncores_y, ncores_x, ncores_y, true);
     std::vector<CoreCoord> cores_with_rtargs;
+
+    // Configure runtime arguments for each core
     for (auto i = 0; i < cores.size(); i++) {
         CoreCoord core = cores[i];
         if (!full_cores.contains(core)) {
@@ -170,6 +188,8 @@ Fold::MultiCoreTiledInterleaved::cached_program_t fold_multi_core_tiled_interlea
         tile_start_id += nblocks_per_core * ntiles_per_row;
         cores_with_rtargs.push_back(core);
     }
+
+    // Handle edge case for cliff cores
     if (ncores_full < ncores) {
         CoreCoord core = CoreCoord{ncores_full % ncores_x, ncores_full / ncores_x};
         std::vector<uint32_t> reader_runtime_args = {
@@ -213,6 +233,8 @@ void Fold::MultiCoreTiledInterleaved::override_runtime_arguments(
     auto src_dram_buffer = input_tensor.buffer();
 
     auto dst_dram_buffer = output_tensor.buffer();
+
+    // Update runtime arguments for each core
     for (auto i = 0; i < cores_with_rtargs.size(); i++) {
         CoreCoord core = cores_with_rtargs[i];
         {
