@@ -243,12 +243,12 @@ void generate(
     float top_p = 1.0F) {
     model_to_eval(model);
 
-    std::string prompt = "The capital of Canada is ";
-    fmt::print("Prompt: {} ", prompt);
-    // std::getline(std::cin, prompt);
-    // if (prompt.empty()) {
-    //     prompt = "\n";
-    // }
+    std::string prompt;
+    fmt::print("Enter a prompt: ");
+    std::getline(std::cin, prompt);
+    if (prompt.empty()) {
+        prompt = "\n";
+    }
 
     // Encode the prompt
     auto prompt_tokens = tokenizer.encode(prompt);
