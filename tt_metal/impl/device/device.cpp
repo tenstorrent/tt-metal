@@ -1832,6 +1832,18 @@ HalProgrammableCoreType Device::get_programmable_core_type(CoreCoord virtual_cor
     return HalProgrammableCoreType::IDLE_ETH;
 }
 
+HalMemType Device::get_mem_type_of_core(CoreCoord virtual_core) const {
+    if (!tt::tt_metal::MetalContext::instance().get_cluster().is_ethernet_core(virtual_core, this->id_) &&
+        !tt::tt_metal::MetalContext::instance().get_cluster().is_worker_core(virtual_core, this->id_)) {
+        return HalMemType::DRAM;
+    } else {
+        TT_ASSERT(
+            tt::tt_metal::MetalContext::instance().get_cluster().is_ethernet_core(virtual_core, this->id_) ||
+            tt::tt_metal::MetalContext::instance().get_cluster().is_worker_core(virtual_core, this->id_));
+        return HalMemType::L1;
+    }
+}
+
 std::shared_ptr<distributed::MeshDevice> Device::get_mesh_device() { return mesh_device.lock(); }
 
 void Device::set_ethernet_core_count_on_dispatcher(uint32_t num_ethernet_cores) {

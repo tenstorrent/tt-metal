@@ -191,6 +191,7 @@ public:
     virtual std::size_t num_program_cache_entries() = 0;
 
     virtual HalProgrammableCoreType get_programmable_core_type(CoreCoord virtual_core) const = 0;
+    virtual HalMemType get_mem_type_of_core(CoreCoord virtual_core) const = 0;
 
     uint64_t get_dev_addr(CoreCoord virtual_core, HalL1MemAddrType addr_type) const;
     uint64_t get_dev_size(CoreCoord virtual_core, HalL1MemAddrType addr_type) const;

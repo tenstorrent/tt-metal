@@ -164,6 +164,7 @@ public:
     std::size_t num_program_cache_entries() override;
 
     HalProgrammableCoreType get_programmable_core_type(CoreCoord virtual_core) const override;
+    HalMemType get_mem_type_of_core(CoreCoord virtual_core) const override;
 
     uint8_t num_noc_mcast_txns(SubDeviceId sub_device_id) const override;
     uint8_t num_noc_unicast_txns(SubDeviceId sub_device_id) const override;

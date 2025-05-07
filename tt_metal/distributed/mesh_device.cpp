@@ -836,6 +836,10 @@ HalProgrammableCoreType MeshDevice::get_programmable_core_type(CoreCoord virtual
     return reference_device()->get_programmable_core_type(virtual_core);
 }
 
+HalMemType MeshDevice::get_mem_type_of_core(CoreCoord virtual_core) const {
+    return reference_device()->get_mem_type_of_core(virtual_core);
+}
+
 // Methods for SubDevice Management
 uint8_t MeshDevice::num_noc_mcast_txns(SubDeviceId sub_device_id) const {
     return sub_device_manager_tracker_->get_active_sub_device_manager()->num_noc_mcast_txns(sub_device_id);
