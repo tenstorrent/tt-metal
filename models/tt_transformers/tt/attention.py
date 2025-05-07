@@ -304,7 +304,7 @@ class Attention(LightweightModule):
         self.layer_past = [
             ttnn.as_tensor(
                 cache_k,
-                dtype=ttnn.bfloat4_b,
+                dtype=ttnn.bfloat8_b,
                 layout=self.model_config["ATTN_W_LAYOUT_TILE"],
                 device=self.mesh_device,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -471,11 +471,14 @@ class Attention(LightweightModule):
             cur_page = int(current_pos_val.item() // block_size)
             local_block_ids = page_table_val[page_table_val == cur_page].unique()
             assert len(local_block_ids) == 1
-            local_block_id = int(local_block_ids[0])
+            global_block_id = int(local_block_ids[0])
 
             new_keys_shards = []
 
-            for shard in keys_shards:
+            total_blocks = len(keys_shards) * keys_shards[0].shape[0]
+            high_precision_block_ids = set(range(total_blocks - 100, total_blocks))
+
+            for shard_index, shard in enumerate(keys_shards):
                 processed_blocks = []
 
                 for block_id in range(shard.shape[0]):
@@ -485,7 +488,9 @@ class Attention(LightweightModule):
                         slice_end=[block_id + 1, shard.shape[1], shard.shape[2], shard.shape[3]],
                     )
 
-                    if block_id == local_block_id:
+                    global_block_index = shard_index * shard.shape[0] + block_id
+
+                    if global_block_index in high_precision_block_ids:
                         block_bfp8 = ttnn.typecast(block, dtype=ttnn.bfloat8_b)
                     else:
                         block_bfp4 = ttnn.typecast(block, dtype=ttnn.bfloat4_b)
@@ -718,7 +723,7 @@ class Attention(LightweightModule):
         else:
             keys_BKSD, values_BKSD = self.layer_past[0], self.layer_past[1]
 
-        self.k_cache_dtype = ttnn.bfloat4_b
+        self.k_cache_dtype = ttnn.bfloat8_b
         self.v_cache_dtype = ttnn.bfloat8_b
 
         # ---- K ----
