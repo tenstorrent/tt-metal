@@ -134,17 +134,17 @@ void GraphTracker::clear() {
 
 void GraphTracker::clear_hook() {
     std::lock_guard<std::mutex> lock(hooked_buffers_mutex);
-    size_t num_hooked_buffers = hooked_buffers.size();
-    for (auto hooked_buffer : hooked_buffers) {
+    auto hooked_buffers_copy = hooked_buffers;
+    for (auto hooked_buffer : hooked_buffers_copy) {
         DeallocateBuffer(*hooked_buffer);
         tt::log_warning(
             "Forcefully deallocating buffer {}, which was allocated by the hook", hooked_buffer->unique_id());
     }
+
     hooked_buffers.clear();
-
-    TT_FATAL(num_hooked_buffers > 0, "Clearing hook with {} allocated buffers", num_hooked_buffers);
-
     hook = nullptr;
+
+    TT_FATAL(hooked_buffers_copy.size() > 0, "Clearing hook with {} allocated buffers", hooked_buffers_copy.size());
 }
 
 GraphTracker::~GraphTracker() { clear(); }
