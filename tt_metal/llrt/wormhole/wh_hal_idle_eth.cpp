@@ -17,6 +17,7 @@
 #include "noc/noc_parameters.h"
 #include <umd/device/tt_core_coordinates.h>
 #include "wormhole/wh_hal.hpp"
+#include "wormhole/wh_hal_eth_asserts.hpp"
 
 #define GET_IERISC_MAILBOX_ADDRESS_HOST(x) ((std::uint64_t)&(((mailboxes_t*)MEM_IERISC_MAILBOX_BASE)->x))
 
