@@ -1,4 +1,4 @@
-42888955# Order is important; the last matching pattern takes the most
+# Order is important; the last matching pattern takes the most
 # precedence.
 
 # Top-level files
