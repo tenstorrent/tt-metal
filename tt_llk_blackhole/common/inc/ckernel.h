@@ -690,7 +690,7 @@ inline void enable_gathering()
 template <uint start, uint len, bool exec_while_loading = false, typename F>
 inline void load_replay_buf(F fn)
 {
-    disable_gathering();
+    // disable_gathering();
 
     // Issue instruction to load replay buffer
     TTI_REPLAY(start, len, exec_while_loading, 1);
@@ -708,7 +708,7 @@ inline void load_replay_buf(F fn)
 template <typename F>
 inline void load_replay_buf(uint start, uint len, bool exec_while_loading, F fn)
 {
-    disable_gathering();
+    // disable_gathering();
 
     // Issue instruction to load replay buffer
     TT_REPLAY(start, len, exec_while_loading, 1);
