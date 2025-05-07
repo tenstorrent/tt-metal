@@ -199,7 +199,6 @@ struct debug_sanitize_noc_addr_msg_t {
     volatile uint8_t is_multicast;
     volatile uint8_t is_write;
     volatile uint8_t is_target;
-    volatile uint8_t pad;
 };
 
 // Host -> device. Populated with the information on where we want to insert delays.
@@ -257,7 +256,6 @@ enum debug_transaction_type_t { TransactionRead = 0, TransactionWrite = 1, Trans
 
 struct debug_pause_msg_t {
     volatile uint8_t flags[DebugNumUniqueRiscs];
-    volatile uint8_t pad[8 - DebugNumUniqueRiscs];
 };
 
 constexpr static int DEBUG_RING_BUFFER_ELEMENTS = 32;
@@ -271,7 +269,6 @@ struct debug_ring_buf_msg_t {
 struct debug_stack_usage_t {
     volatile uint16_t max_usage[DebugNumUniqueRiscs];
     volatile uint16_t watcher_kernel_id[DebugNumUniqueRiscs];
-    volatile uint16_t pad[16 - DebugNumUniqueRiscs * 2];
 };
 
 enum watcher_enable_msg_t {
@@ -296,7 +293,6 @@ struct watcher_msg_t {
 
 struct dprint_buf_msg_t {
     DebugPrintMemLayout data[DPRINT_BUFFERS_COUNT];
-    uint32_t pad;  // to 1024 bytes
 };
 
 // NOC aligment max from BH

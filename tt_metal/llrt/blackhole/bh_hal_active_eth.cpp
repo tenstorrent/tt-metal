@@ -12,6 +12,7 @@
 #include <vector>
 
 #include "blackhole/bh_hal.hpp"
+#include "blackhole/bh_hal_eth_asserts.hpp"
 #include "core_config.h"
 #include "dev_mem_map.h"
 #include "eth_l1_address_map.h"
