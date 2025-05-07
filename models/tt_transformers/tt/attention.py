@@ -304,19 +304,31 @@ class Attention(LightweightModule):
 
         self.layer_past = [
             ttnn.as_tensor(
-                k_or_v,
-                dtype=self.kv_cache_dtype,
+                cache_k,
+                dtype=ttnn.bfloat8_b,
                 layout=self.model_config["ATTN_W_LAYOUT_TILE"],
                 device=self.mesh_device,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
                 cache_file_name=(
-                    f"{weight_cache_path}/kvcache_{k_or_v.shape}"
+                    f"{weight_cache_path}/kvcache_k_{cache_k.shape}"
                     if weight_cache_path and not configuration.dummy_weights
                     else None
                 ),
-            )
-            for k_or_v in [cache_k, cache_v]
+            ),
+            ttnn.as_tensor(
+                cache_v,
+                dtype=ttnn.bfloat8_b,
+                layout=self.model_config["ATTN_W_LAYOUT_TILE"],
+                device=self.mesh_device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+                cache_file_name=(
+                    f"{weight_cache_path}/kvcache_v_{cache_v.shape}"
+                    if weight_cache_path and not configuration.dummy_weights
+                    else None
+                ),
+            ),
         ]
 
     def forward_decode(
@@ -440,6 +452,58 @@ class Attention(LightweightModule):
         # This is because the SDPA op in decode mode has different number of reductions depending on batch size
         # Which leads to slightly different outputs from attention (due to accumulated errors)
         if page_table:
+
+            def safe_ttnn_concat(tensors, dim=0, max_chunk_size=64):
+                if len(tensors) <= max_chunk_size:
+                    return ttnn.concat(tensors, dim=dim)
+
+                result_chunks = []
+                for i in range(0, len(tensors), max_chunk_size):
+                    chunk = tensors[i : i + max_chunk_size]
+                    result_chunks.append(ttnn.concat(chunk, dim=dim))
+
+                return safe_ttnn_concat(result_chunks, dim=dim, max_chunk_size=max_chunk_size)
+
+            block_size = self.paged_attention_config.block_size
+            mesh_device = self.mesh_device
+            keys_shards = ttnn.get_device_tensors(keys)
+            page_table_val = ttnn.to_torch(ttnn.get_device_tensors(page_table)[0])[0]
+            current_pos_val = ttnn.to_torch(ttnn.get_device_tensors(current_pos)[0])[0]
+            cur_page = int(current_pos_val.item() // block_size)
+            local_block_ids = page_table_val[page_table_val == cur_page].unique()
+            assert len(local_block_ids) == 1
+            global_block_id = int(local_block_ids[0])
+
+            new_keys_shards = []
+
+            total_blocks = len(keys_shards) * keys_shards[0].shape[0]
+            high_precision_block_ids = set(range(total_blocks - 100, total_blocks))
+
+            for shard_index, shard in enumerate(keys_shards):
+                processed_blocks = []
+
+                for block_id in range(shard.shape[0]):
+                    block = ttnn.slice(
+                        shard,
+                        slice_start=[block_id, 0, 0, 0],
+                        slice_end=[block_id + 1, shard.shape[1], shard.shape[2], shard.shape[3]],
+                    )
+
+                    global_block_index = shard_index * shard.shape[0] + block_id
+
+                    if global_block_index in high_precision_block_ids:
+                        block_bfp8 = ttnn.typecast(block, dtype=ttnn.bfloat8_b)
+                    else:
+                        block_bfp4 = ttnn.typecast(block, dtype=ttnn.bfloat4_b)
+                        block_bfp8 = ttnn.typecast(block_bfp4, dtype=ttnn.bfloat8_b)
+
+                    processed_blocks.append(block_bfp8)
+
+                quantized_shard = safe_ttnn_concat(processed_blocks, dim=0, max_chunk_size=32)
+                new_keys_shards.append(quantized_shard)
+
+            keys = ttnn.aggregate_as_tensor(new_keys_shards)
+
             attn_output_1G4D = ttnn.transformer.paged_scaled_dot_product_attention_decode(
                 q_heads_1BQD,
                 keys,
@@ -660,24 +724,24 @@ class Attention(LightweightModule):
         else:
             keys_BKSD, values_BKSD = self.layer_past[0], self.layer_past[1]
 
-        k_heads_1KSD_8b = ttnn.typecast(k_heads_1KSD, dtype=self.kv_cache_dtype)
-        ttnn.deallocate(k_heads_1KSD)
+        self.k_cache_dtype = ttnn.bfloat8_b
+        self.v_cache_dtype = ttnn.bfloat8_b
 
-        # sharding k_fill to deal with update_cache memory limitation
+        # ---- K ----
+        k_heads_1KSD = ttnn.typecast(k_heads_1KSD, dtype=self.k_cache_dtype)
+
         if seq_len >= self.min_kv_prefill_shard_seqlen and not self.TG and not page_table:
-            k_fill = ttnn.interleaved_to_sharded(k_heads_1KSD_8b, self.model_config["KV_PREFILL_MEM_CFG"](seq_len))
+            k_fill = ttnn.interleaved_to_sharded(k_heads_1KSD, self.model_config["KV_PREFILL_MEM_CFG"](seq_len))
         else:
-            k_fill = k_heads_1KSD_8b
+            k_fill = k_heads_1KSD
 
-        v_heads_1VSD_8b = ttnn.typecast(v_heads_1VSD, dtype=self.kv_cache_dtype)
+        # ---- V ----
+        v_heads_1VSD = ttnn.typecast(v_heads_1VSD, dtype=self.v_cache_dtype)
 
-        ttnn.deallocate(v_heads_1VSD)
-
-        # sharding v_fill to deal with update_cache memory limitation
         if seq_len >= self.min_kv_prefill_shard_seqlen and not self.TG and not page_table:
-            v_fill = ttnn.interleaved_to_sharded(v_heads_1VSD_8b, self.model_config["KV_PREFILL_MEM_CFG"](seq_len))
+            v_fill = ttnn.interleaved_to_sharded(v_heads_1VSD_casted, self.model_config["KV_PREFILL_MEM_CFG"](seq_len))
         else:
-            v_fill = v_heads_1VSD_8b
+            v_fill = v_heads_1VSD
 
         if self.TG:
             k_fill = self.prefill_prepare_tensor_for_kv_cache(k_fill, user_id)
@@ -725,6 +789,8 @@ class Attention(LightweightModule):
                 program_config=self.model_config["SDPA_PROGCFG"](seq_len),
             )
         else:
+            k_heads_1KSD_8b = ttnn.typecast(k_heads_1KSD, dtype=self.k_cache_dtype)
+            v_heads_1VSD_8b = ttnn.typecast(v_heads_1VSD, dtype=self.v_cache_dtype)
             attn_output_84SD = ttnn.transformer.scaled_dot_product_attention(
                 q_heads_1QSD_8b,
                 k_heads_1KSD_8b,

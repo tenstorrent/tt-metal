@@ -62,6 +62,23 @@ pareto_commands_from_json = {
     }.items()
 }
 
+test_cache_seq_lens = [
+    (512, 128, 1024),
+    (2048, 256, 2304),
+    (4096, 512, 4608),
+    (8192, 512, 8704),
+    (16384, 512, 16896),
+]
+
+setting_test_cache = "precision_cfg = {kv_cache: bfp8}, fidelity_cfg = {li_ff1_3: hifi2fp16}"
+
+test_cache_commands = {
+    f"test-cache-len-{i}": (
+        f"pytest models/tt_transformers/tests/test_accuracy.py -k '{prefill}-{decode}-{max_seq}' --optimizations  '{setting_test_cache}'"
+    )
+    for i, (prefill, decode, max_seq) in enumerate(test_cache_seq_lens)
+}
+
 
 def ensure_less_installed():
     if shutil.which("less") is None:
@@ -534,6 +551,9 @@ def main(stdscr):
                         if command_input == "pareto_from_json":
                             command_input = ",".join(pareto_commands_from_json.keys())
 
+                        if command_input == "test_cache":
+                            command_input = ",".join(test_cache_commands.keys())
+
                         # Parse models, devices, and commands
                         models = parse_list(model_input)
                         devices = parse_list(device_input)
@@ -934,6 +954,7 @@ def run_entry_command(entry, screen_lock, output_entries, screen_needs_update):
         # Precision and Math Fidelity tests for Pareto analysis
         **pareto_commands,
         **pareto_commands_from_json,
+        **test_cache_commands,
         # Vision tests (require 11B weights)
         "vision-mlp": "pytest models/tt_transformers/tests/multimodal/test_image_mlp.py",
         "vision-attn": "pytest models/tt_transformers/tests/multimodal/test_image_attention.py",

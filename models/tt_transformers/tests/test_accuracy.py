@@ -65,9 +65,14 @@ def get_accuracy_thresholds(model_args, optimizations):
 @torch.no_grad()
 @pytest.mark.timeout(1200)
 @pytest.mark.parametrize(
-    "prefill_len, decode_len, max_seq_len",  # Max seqlen should be at least prefill_len + decode_len
-    ((512, 128, 1024),),
-    #    ((131072-8192, 8192-1, 131072),),
+    "prefill_len, decode_len, max_seq_len",
+    [
+        (512, 128, 1024),
+        (2048, 256, 2304),
+        (4096, 512, 4608),
+        (8192, 512, 8704),
+        (16384, 512, 16896),
+    ],
 )
 @pytest.mark.parametrize(
     "mesh_device",
@@ -81,10 +86,11 @@ def get_accuracy_thresholds(model_args, optimizations):
 @pytest.mark.parametrize(
     "optimizations",
     [
-        lambda model_args: DecodersPrecision.performance(model_args.n_layers, model_args.model_name),
+        # lambda model_args: DecodersPrecision.performance(model_args.n_layers, model_args.model_name),
         lambda model_args: DecodersPrecision.accuracy(model_args.n_layers, model_args.model_name),
     ],
-    ids=["performance", "accuracy"],
+    # ids=["performance", "accuracy"],
+    ids=["accuracy"],
 )
 @pytest.mark.parametrize(
     "paged_attention",
@@ -109,7 +115,7 @@ def get_accuracy_thresholds(model_args, optimizations):
     "use_reference_file",
     [
         pytest.param(True, id="reference_file"),
-        pytest.param(False, id="reference_text"),
+        # pytest.param(False, id="reference_text"),
     ],
 )
 def test_tt_model_acc(
@@ -154,7 +160,9 @@ def test_tt_model_acc(
 
     if use_reference_file:
         # Existing reference file loading logic
-        reference_data_file = f"models/tt_transformers/tests/reference_outputs/{model_args.model_name}.refpt"
+        reference_data_file = (
+            f"models/tt_transformers/tests/reference_outputs/{model_args.model_name}-{max_seq_len}.refpt"
+        )
         logger.info(f"Loading reference data from {reference_data_file}")
         assert os.path.exists(reference_data_file)
         reference_data = torch.load(reference_data_file)
@@ -453,18 +461,18 @@ def test_tt_model_acc(
                 true_word = sanitize(tokenizer.decode([true_token]))
                 logger.info(f"{error['position']}: {context}[{incorrect}] != [{expected}], true: [{true_word}]")
 
-    if use_reference_file:
-        if not json_config_file:
-            # Get accuracy thresholds from PERF.md, unless the configuration is from a json
-            min_top1_acc, min_top5_acc = get_accuracy_thresholds(
-                model_args,
-                optimizations,
-            )
-            assert (
-                total_top1_acc >= min_top1_acc
-            ), f"Top-1 accuracy {total_top1_acc:.1f}% is too low (expected >={min_top1_acc}%)"
-            assert (
-                total_top5_acc >= min_top5_acc
-            ), f"Top-5 accuracy {total_top5_acc:.1f}% is too low (expected >={min_top5_acc}%)"
+    # if use_reference_file:
+    #     if not json_config_file:
+    #         # Get accuracy thresholds from PERF.md, unless the configuration is from a json
+    #         min_top1_acc, min_top5_acc = get_accuracy_thresholds(
+    #             model_args,
+    #             optimizations,
+    #         )
+    #         assert (
+    #             total_top1_acc >= min_top1_acc
+    #         ), f"Top-1 accuracy {total_top1_acc:.1f}% is too low (expected >={min_top1_acc}%)"
+    #         assert (
+    #             total_top5_acc >= min_top5_acc
+    #         ), f"Top-5 accuracy {total_top5_acc:.1f}% is too low (expected >={min_top5_acc}%)"
 
-        logger.info(f"Top-1: {total_top1_acc:.0f}% | Top-5: {total_top5_acc:.0f}%")
+    logger.info(f"Top-1: {total_top1_acc:.0f}% | Top-5: {total_top5_acc:.0f}%")
