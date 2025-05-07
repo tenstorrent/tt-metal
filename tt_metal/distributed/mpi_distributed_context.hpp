@@ -22,7 +22,7 @@ public:
     bool                 active() const override;
 
 private:
-    mutable MPI_Request req_{};   
+    mutable MPI_Request req_{};
     bool                done_{};
 };
 
@@ -71,9 +71,10 @@ public:
     [[nodiscard]] std::shared_ptr<DistributedContext> split(Color color, Key key) const override;
     [[nodiscard]] std::shared_ptr<DistributedContext> create_sub_context(tt::stl::Span<Rank> ranks) const override;
 
-    explicit MPIContext(MPI_Comm comm);   
+    explicit MPIContext(MPI_Comm comm);
+
 private:
-    MPI_Comm comm_{MPI_COMM_NULL};   // underlying communicator
+    MPI_Comm comm_{MPI_COMM_NULL};
     int      rank_{0};
     int      size_{0};
 };

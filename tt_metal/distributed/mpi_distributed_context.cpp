@@ -284,7 +284,6 @@ MPIContext::create_sub_context(tt::stl::Span<Rank> ranks) const
 }
 
 /* -------------------- factory for generic interface --------------------- */
-
 std::shared_ptr<DistributedContext> DistributedContext::create(int argc, char** argv)
 {
     return MPIContext::create(argc, argv);
