@@ -1267,8 +1267,8 @@ Tensor pad(
 
     // TODO: #15840 - Treat multi-device host vs owned/borrowed tensors uniformly.
     if (is_multi_device_host_tensor(tensor)) {
-        return transform(tensor, [&](const Tensor& device_tensor) {
-            return pad<T>(device_tensor, output_padded_shape, input_tensor_start, pad_value);
+        return transform(tensor, [&](const Tensor& tensor_shard) {
+            return pad<T>(tensor_shard, output_padded_shape, input_tensor_start, pad_value);
         });
     }
 
@@ -1346,7 +1346,7 @@ Tensor pad(
                 const auto input_data = host_buffer::get_as<T>(storage.buffer);
                 return HostStorage(host_buffer::create<T>(pad(input_data)));
             },
-            [](const auto& s) -> HostStorage { TT_THROW("Unsupported storage type {}", tt::stl::get_type_name(s)); }},
+            [](const auto& s) -> HostStorage { TT_THROW("Unexpected storage type {}", tt::stl::get_type_name(s)); }},
         tensor.get_storage());
     return Tensor(
         std::move(output_storage),
@@ -1408,6 +1408,15 @@ Tensor pad<bfloat4_b>(
 
 template <typename T>
 Tensor unpad(const Tensor& tensor, const ttnn::Shape& output_tensor_start, const ttnn::Shape& output_tensor_end) {
+    TT_FATAL(!is_device_tensor(tensor), "unpad only supports host tensors");
+
+    // TODO: #15840 - Treat multi-device host vs owned/borrowed tensors uniformly.
+    if (is_multi_device_host_tensor(tensor)) {
+        return transform(tensor, [&](const Tensor& tensor_shard) {
+            return unpad<T>(tensor_shard, output_tensor_start, output_tensor_end);
+        });
+    }
+
     const auto input_shape = tensor.get_padded_shape();
     const auto input_strides = tensor.strides();
 
@@ -1450,14 +1459,9 @@ Tensor unpad(const Tensor& tensor, const ttnn::Shape& output_tensor_start, const
         tt::stl::overloaded{
             [&unpad](const HostStorage& storage) {
                 const auto input_data = host_buffer::get_as<T>(storage.buffer);
-                return HostStorage(host_buffer::create<T>(std::move(unpad(input_data))));
+                return HostStorage(host_buffer::create<T>(unpad(input_data)));
             },
-            [&unpad](const MultiDeviceHostStorage& storage) {
-                TT_FATAL(storage.buffers.size() == 1, "Only single buffer is supported");
-                const auto input_data = host_buffer::get_as<T>(storage.buffers[0]);
-                return HostStorage(host_buffer::create<T>(std::move(unpad(input_data))));
-            },
-            [](const auto& s) -> HostStorage { TT_THROW("Unsupported storage type {}", tt::stl::get_type_name(s)); }},
+            [](const auto& s) -> HostStorage { TT_THROW("Unexpected storage type {}", tt::stl::get_type_name(s)); }},
         tensor.get_storage());
     return Tensor(
         std::move(output_storage),

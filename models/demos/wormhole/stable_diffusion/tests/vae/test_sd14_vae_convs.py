@@ -6,9 +6,11 @@ import pytest
 import torch
 
 import ttnn
-from models.demos.wormhole.stable_diffusion.tt.vae.ttnn_vae_utils import (
+from models.demos.wormhole.stable_diffusion.tt.vae.ttnn_vae_configs import (
     get_default_compute_config,
     get_default_conv_config,
+)
+from models.demos.wormhole.stable_diffusion.tt.vae.ttnn_vae_utils import (
     prepare_split_conv_weights_bias,
     split_conv_and_run,
 )

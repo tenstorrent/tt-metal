@@ -103,47 +103,23 @@ void Tensor::init(Storage storage, TensorSpec tensor_spec) {
         tensor_attributes->get_storage());
 }
 
-Tensor::Tensor(distributed::MeshDevice* mesh_device, TensorSpec spec) :
-    tensor_attributes(std::make_shared<TensorAttributes>(DeviceStorage(), std::move(spec))),
-    workers({mesh_device}),
-    mesh_device_(mesh_device) {
-    TT_FATAL(mesh_device_ != nullptr, "Mesh device is nullptr");
-}
-
-Tensor::Tensor(const std::vector<IDevice*>& workers, TensorSpec spec) :
-    tensor_attributes(std::make_shared<TensorAttributes>(
-        workers.empty() ? Storage(HostStorage()) : DeviceStorage(), std::move(spec))),
-    workers(workers) {
-    TT_FATAL(workers.size() <= 1, "Only single device is supported.");
-}
-
-Tensor::Tensor(
-    uint32_t num_buffers, TensorSpec spec, std::optional<DistributedTensorConfig> distributed_tensor_config) :
-    tensor_attributes(std::make_shared<TensorAttributes>(
-        [&]() {
-            if (num_buffers <= 1) {
-                return Storage(HostStorage());
-            }
-            MultiDeviceHostStorage storage;
-            if (distributed_tensor_config.has_value()) {
-                storage.strategy = distributed_tensor_config.value();
-            }
-            storage.buffers = std::vector<HostBuffer>(num_buffers, HostBuffer());
-            storage.specs = std::vector<ttnn::TensorSpec>(
-                num_buffers,
-                TensorSpec(Shape{}, TensorLayout(DataType::FLOAT32, PageConfig(Layout::ROW_MAJOR), MemoryConfig{})));
-            return Storage(std::move(storage));
-        }(),
-        std::move(spec))) {}
-
 Tensor& Tensor::operator=(const Tensor& other) {
-    // Don't self-assign
     this->tensor_id = other.tensor_id;
     if (this->tensor_attributes != other.tensor_attributes) {
         this->workers = other.workers;
         this->tensor_attributes = other.tensor_attributes;
     }
     this->mesh_device_ = other.mesh_device_;
+    return *this;
+}
+
+Tensor& Tensor::operator=(Tensor&& other) noexcept {
+    this->tensor_id = std::move(other.tensor_id);
+    if (this->tensor_attributes != other.tensor_attributes) {
+        this->workers = std::move(other.workers);
+        this->tensor_attributes = std::move(other.tensor_attributes);
+    }
+    this->mesh_device_ = std::move(other.mesh_device_);
     return *this;
 }
 
@@ -154,57 +130,46 @@ Tensor::Tensor(const Tensor& other) :
 
 Tensor::~Tensor() {
     ZoneScoped;
-    this->deallocate_impl(/*force=*/false, /*deallocation_through_destructor=*/true);
-    tensor_attributes.reset();
+    this->deallocate_impl(/*force=*/false);
 }
 
 Tensor::Tensor(
     Storage storage, const ttnn::Shape& shape, DataType dtype, Layout layout, const std::optional<Tile>& tile) :
     Tensor(std::move(storage), /* logical_shape */ shape, /* padded_shape */ shape, dtype, layout, tile) {}
 
-void Tensor::deallocate(bool force) { deallocate_impl(force, /*deallocation_through_destructor=*/false); }
+void Tensor::deallocate(bool force) { deallocate_impl(force); }
 
-void Tensor::deallocate_impl(bool force, bool deallocation_through_destructor) {
-    ZoneScopedN("TensorDeallocate");
-    // GraphTracker::instance().track_function_start("Tensor::deallocate", *this, force);
-    // Check if the attributes didn't get moved to another tensor.
-    // If not, we can deallocate this tensor.
-    if (tensor_attributes.use_count() == 0) {
-        return;
-    }
-
-    auto get_tensor_ref_count = [](const Tensor& tensor) {
-        // If owned by the main thread, deallocate this tensor only from the main thread. If owned by worker thread,
-        // allow deallocation in worker and use shared_ptr ref count, since this is a thread_local tensor
-        return tensor.tensor_attributes.use_count();
+void Tensor::deallocate_impl(bool force) {
+    auto can_deallocate = []<typename T>(const std::shared_ptr<T>& shared_resource, bool force) {
+        // It is safe to deallocate a shared resource, if either it is not shared or `force` is set.
+        return shared_resource.use_count() == 1 ||  //
+               (shared_resource.use_count() > 1 && force);
     };
 
-    std::visit(
-        tt::stl::overloaded{
-            [this](HostStorage& storage) {
-                if (this->tensor_attributes.use_count() == 1) {
-                    storage.buffer.deallocate();
-                }
-            },
-            [this](MultiDeviceHostStorage& storage) {
-                if (this->tensor_attributes.use_count() == 1) {
-                    for (int i = 0; i < storage.num_buffers(); i++) {
-                        storage.get_buffer(i).deallocate();
+    ZoneScopedN("TensorDeallocate");
+    // GraphTracker::instance().track_function_start("Tensor::deallocate", *this, force);
+    if (can_deallocate(tensor_attributes, force)) {
+        std::visit(
+            // TODO: #21604 - Host-side buffers do not support "forced" deallocation.
+            // The underlying data can still be shared across tensors.
+            tt::stl::overloaded{
+                [this](HostStorage& host_storage) { host_storage.buffer.deallocate(); },
+                [this](MultiDeviceHostStorage& host_storage) {
+                    for (auto& host_buffer : host_storage.buffers) {
+                        host_buffer.deallocate();
                     }
-                }
-            },
-            [force, this](DeviceStorage& storage) {
-                if ((force or this->tensor_attributes.use_count() == 1)) {
-                    if (storage.mesh_buffer and (force or storage.mesh_buffer.use_count() == 1)) {
+                },
+                [this, force, &can_deallocate](DeviceStorage& storage) {
+                    if (can_deallocate(storage.mesh_buffer, force)) {
                         storage.mesh_buffer->deallocate();
-                    } else if (storage.buffer and (force or storage.buffer.use_count() == 1)) {
+                    } else if (can_deallocate(storage.buffer, force)) {
                         DeallocateBuffer(*(storage.buffer));
                     }
                     storage.mesh_buffer.reset();
                     storage.buffer.reset();
-                }
-            }},
-        this->tensor_attributes->get_storage());
+                }},
+            this->tensor_attributes->get_storage());
+    }
     // GraphTracker::instance().track_function_end();
 }
 
@@ -474,12 +439,7 @@ Tensor Tensor::to_device(distributed::MeshDevice* mesh_device, const MemoryConfi
     return tensor_ops::tensor_to_device(*this, mesh_device, mem_config, cq_id);
 }
 
-Tensor Tensor::cpu(bool blocking, QueueId cq_id) const {
-    if (this->mesh_device_.has_value()) {
-        return tensor_ops::tensor_cpu(*this, this->mesh_device_.value(), blocking, cq_id);
-    }
-    return tensor_ops::tensor_cpu(*this, blocking, cq_id);
-}
+Tensor Tensor::cpu(bool blocking, QueueId cq_id) const { return tensor_ops::tensor_cpu(*this, blocking, cq_id); }
 
 Tensor Tensor::extract_shard(const CoreCoord& core) const {
     ZoneScoped;
@@ -535,22 +495,6 @@ bool Tensor::is_allocated() const {
     ZoneScoped;
     auto output = std::visit([](auto&& storage) -> bool { return storage.is_allocated(); }, this->get_storage());
     return output;
-}
-
-std::vector<uint32_t> Tensor::host_page_ordering() {
-    const auto& buffer_page_mapping = *this->buffer()->get_buffer_page_mapping();
-    auto cores = buffer_page_mapping.all_cores_;
-    auto shard_num_pages = buffer()->shard_spec().num_pages();
-    auto num_pages = cores.size() * shard_num_pages;
-
-    std::vector<uint32_t> ret_vec;
-    ret_vec.reserve(num_pages);
-    for (int page_id = 0; page_id < num_pages; page_id++) {
-        if (buffer_page_mapping.dev_page_to_host_page_mapping_[page_id].has_value()) {
-            ret_vec.push_back(buffer_page_mapping.dev_page_to_host_page_mapping_[page_id].value());
-        }
-    }
-    return ret_vec;
 }
 
 StorageType Tensor::storage_type() const {
@@ -737,20 +681,6 @@ void memcpy(Tensor& dst, const Tensor& src, const std::optional<BufferRegion>& r
     } else {
         TT_THROW("Unsupported memcpy");
     }
-}
-
-Tensor allocate_tensor_on_devices(const TensorSpec& tensor_spec, const std::vector<IDevice*>& devices) {
-    Tensor device_tensor = Tensor(devices, tensor_spec);
-
-    const auto& workers_in_use = device_tensor.get_workers();
-    uint32_t num_workers = workers_in_use.size();
-
-    for (int worker_index = 0; worker_index < num_workers; ++worker_index) {
-        auto& worker = devices[worker_index];
-        auto shard = create_device_tensor(tensor_spec, worker);
-        insert_buffer_and_shape_for_device(worker, shard, device_tensor, worker_index);
-    }
-    return device_tensor;
 }
 
 Tensor allocate_tensor_on_mesh(const TensorSpec& tensor_spec, distributed::MeshDevice* mesh_device) {

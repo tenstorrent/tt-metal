@@ -111,6 +111,9 @@ class TtResnetBlock2D(nn.Module):
         )
         self.conv_config.act_block_h_override = 32 if hidden_states.is_sharded() else 0
 
+        if self.conv1_slice_config is not None:
+            hidden_states = ttnn.to_layout(hidden_states, ttnn.ROW_MAJOR_LAYOUT)
+            hidden_states = ttnn.reshape(hidden_states, (B, H, W, C))
         [hidden_states, [H, W], [d_w, d_b]] = ttnn.conv2d(
             input_tensor=hidden_states,
             weight_tensor=self.tt_conv1_weights,
@@ -138,6 +141,9 @@ class TtResnetBlock2D(nn.Module):
         self.tt_conv1_weights = d_w
         self.tt_conv1_bias = d_b
 
+        if self.conv1_slice_config is not None:
+            hidden_states = ttnn.reshape(hidden_states, (1, 1, B * H * W, C))
+            hidden_states = ttnn.to_layout(hidden_states, ttnn.TILE_LAYOUT)
         hidden_states = ttnn.to_memory_config(hidden_states, ttnn.DRAM_MEMORY_CONFIG)
         hidden_states = ttnn.group_norm(
             hidden_states,
@@ -151,10 +157,11 @@ class TtResnetBlock2D(nn.Module):
             inplace=False,
             num_out_blocks=self.norm_blocks_2,
         )
-
-        hidden_states = ttnn.silu(hidden_states)
-
+        hidden_states = ttnn.silu(hidden_states)  # hang if not tile
         self.conv_config.shard_layout = None
+        if self.conv2_slice_config is not None:
+            hidden_states = ttnn.to_layout(hidden_states, ttnn.ROW_MAJOR_LAYOUT)
+            hidden_states = ttnn.reshape(hidden_states, (B, H, W, C))
         [hidden_states, [H, W], [d_w, d_b]] = ttnn.conv2d(
             input_tensor=hidden_states,
             weight_tensor=self.tt_conv2_weights,
@@ -180,6 +187,9 @@ class TtResnetBlock2D(nn.Module):
         C = self.conv2_params["output_channels"]
         self.tt_conv2_weights = d_w
         self.tt_conv2_bias = d_b
+        if self.conv2_slice_config is not None:
+            hidden_states = ttnn.reshape(hidden_states, (1, 1, B * H * W, C))
+            hidden_states = ttnn.to_layout(hidden_states, ttnn.TILE_LAYOUT)
 
         if self.tt_conv3_weights is not None:
             if input_tensor.shape[3] >= 1920:
@@ -213,8 +223,10 @@ class TtResnetBlock2D(nn.Module):
             self.tt_conv3_bias = d_b
             if input_tensor.is_sharded():
                 input_tensor = ttnn.sharded_to_interleaved(input_tensor, ttnn.L1_MEMORY_CONFIG)
-
         hidden_states = ttnn.add(input_tensor, hidden_states)
+
+        ttnn.deallocate(input_tensor)
+        hidden_states = ttnn.move(hidden_states)
 
         self.conv_config.preprocess_weights_on_device = False
         self.conv_config.always_preprocess_weights = False

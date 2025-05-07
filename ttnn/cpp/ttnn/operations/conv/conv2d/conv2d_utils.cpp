@@ -572,7 +572,7 @@ static std::tuple<ttnn::Shape, ttnn::MemoryConfig, bool> get_conv_padded_input_s
     }
 }
 
-static ttnn::Shape flatten_4d_shape(const ttnn::Shape& input_shape) {
+ttnn::Shape flatten_4d_shape(const ttnn::Shape& input_shape) {
     TT_FATAL(input_shape.size() == 4, "Expected 4D shape");
     const uint32_t nhw = input_shape[0] * input_shape[1] * input_shape[2];
     const uint32_t channels = input_shape[3];
