@@ -77,8 +77,8 @@ public:
 
 struct ReadBufferDescriptor;
 struct ReadEventDescriptor;
-struct ReadL1DataDescriptor;
+struct ReadCoreDataDescriptor;
 using CompletionReaderVariant =
-    std::variant<std::monostate, ReadBufferDescriptor, ReadEventDescriptor, ReadL1DataDescriptor>;
+    std::variant<std::monostate, ReadBufferDescriptor, ReadEventDescriptor, ReadCoreDataDescriptor>;
 
 }  // namespace tt::tt_metal

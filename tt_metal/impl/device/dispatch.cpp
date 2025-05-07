@@ -20,11 +20,25 @@ uint32_t calculate_max_prefetch_data_size_bytes(const CoreType& dispatch_core_ty
 
 namespace device_dispatch {
 
-struct L1WriteDispatchParams : public L1ReadDispatchParams {
+struct CoreWriteDispatchParams : public CoreReadDispatchParams {
     const void* src = nullptr;
 };
 
-void issue_l1_write_command_sequence(const L1WriteDispatchParams& dispatch_params) {
+void validate_core_read_write_bounds(
+    IDevice* device, const CoreCoord& virtual_core, DeviceAddr address, uint32_t size_bytes) {
+    const HalMemType mem_type = device->get_mem_type_of_core(virtual_core);
+    if (mem_type == HalMemType::L1) {
+        TT_FATAL(
+            address + size_bytes <= device->get_dev_addr(virtual_core, HalL1MemAddrType::BASE) +
+                                        device->get_dev_size(virtual_core, HalL1MemAddrType::BASE),
+            "Region in L1 is out of bounds");
+    } else {
+        TT_ASSERT(mem_type == HalMemType::DRAM);
+        TT_FATAL(address + size_bytes <= device->dram_size_per_channel(), "Region in DRAM is out of bounds");
+    }
+}
+
+void issue_core_write_command_sequence(const CoreWriteDispatchParams& dispatch_params) {
     const uint32_t num_worker_counters = dispatch_params.sub_device_ids.size();
 
     DeviceCommandCalculator calculator;
@@ -60,7 +74,7 @@ void issue_l1_write_command_sequence(const L1WriteDispatchParams& dispatch_param
     sysmem_manager.fetch_queue_write(cmd_sequence_sizeB, dispatch_params.cq_id);
 }
 
-void write_to_core_l1(
+void write_to_core(
     IDevice* device,
     const CoreCoord& virtual_core,
     const void* src,
@@ -69,10 +83,7 @@ void write_to_core_l1(
     uint32_t cq_id,
     tt::stl::Span<const uint32_t> expected_num_workers_completed,
     tt::stl::Span<const SubDeviceId> sub_device_ids) {
-    TT_FATAL(
-        address + size_bytes <= device->get_dev_addr(virtual_core, HalL1MemAddrType::BASE) +
-                                    device->get_dev_size(virtual_core, HalL1MemAddrType::BASE),
-        "Region to write to in L1 is out of bounds");
+    validate_core_read_write_bounds(device, virtual_core, address, size_bytes);
 
     while (size_bytes > 0) {
         const CoreType dispatch_core_type =
@@ -80,7 +91,7 @@ void write_to_core_l1(
         const uint32_t size_bytes_to_write =
             std::min(size_bytes, calculate_max_prefetch_data_size_bytes(dispatch_core_type));
 
-        L1WriteDispatchParams dispatch_params{
+        CoreWriteDispatchParams dispatch_params{
             virtual_core,
             address,
             size_bytes_to_write,
@@ -90,7 +101,7 @@ void write_to_core_l1(
             expected_num_workers_completed,
             sub_device_ids,
             src};
-        issue_l1_write_command_sequence(dispatch_params);
+        issue_core_write_command_sequence(dispatch_params);
 
         size_bytes -= size_bytes_to_write;
         address += size_bytes_to_write;
@@ -98,7 +109,7 @@ void write_to_core_l1(
     }
 }
 
-void issue_l1_read_command_sequence(const L1ReadDispatchParams& dispatch_params) {
+void issue_core_read_command_sequence(const CoreReadDispatchParams& dispatch_params) {
     const uint32_t num_worker_counters = dispatch_params.sub_device_ids.size();
     DeviceCommandCalculator calculator;
     for (uint32_t i = 0; i < num_worker_counters - 1; ++i) {
@@ -142,8 +153,8 @@ void issue_l1_read_command_sequence(const L1ReadDispatchParams& dispatch_params)
     sysmem_manager.fetch_queue_write(cmd_sequence_sizeB, dispatch_params.cq_id);
 }
 
-void read_l1_data_from_completion_queue(
-    const ReadL1DataDescriptor& read_descriptor,
+void read_core_data_from_completion_queue(
+    const ReadCoreDataDescriptor& read_descriptor,
     chip_id_t mmio_device_id,
     uint16_t channel,
     uint8_t cq_id,

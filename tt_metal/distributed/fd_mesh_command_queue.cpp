@@ -60,7 +60,7 @@ struct MeshBufferReadDescriptor {
 };
 
 struct MeshL1DataReadDescriptor {
-    ReadL1DataDescriptor single_core_descriptor;
+    ReadCoreDataDescriptor single_core_descriptor;
     MeshCoordinate device_coord;
 };
 
@@ -336,7 +336,7 @@ void FDMeshCommandQueue::enqueue_write_shard_to_core(
     IDevice* device = mesh_device_->get_device(device_coord);
     sub_device_ids = buffer_dispatch::select_sub_device_ids(mesh_device_, sub_device_ids);
 
-    device_dispatch::write_to_core_l1(
+    device_dispatch::write_to_core(
         device, virtual_core_coord, src, address, size_bytes, id_, expected_num_workers_completed_, sub_device_ids);
 
     if (blocking) {
@@ -359,7 +359,7 @@ void FDMeshCommandQueue::enqueue_read_shard_from_core(
     sub_device_ids = buffer_dispatch::select_sub_device_ids(mesh_device_, sub_device_ids);
 
     if (size_bytes > 0) {
-        device_dispatch::L1ReadDispatchParams dispatch_params(
+        device_dispatch::CoreReadDispatchParams dispatch_params(
             virtual_core_coord,
             address,
             size_bytes,
@@ -368,10 +368,10 @@ void FDMeshCommandQueue::enqueue_read_shard_from_core(
             dispatch_core_type_,
             expected_num_workers_completed_,
             sub_device_ids);
-        device_dispatch::issue_l1_read_command_sequence(dispatch_params);
+        device_dispatch::issue_core_read_command_sequence(dispatch_params);
     }
 
-    this->submit_l1_data_memcpy_request(ReadL1DataDescriptor(dst, size_bytes), device_coord, blocking);
+    this->submit_l1_data_memcpy_request(ReadCoreDataDescriptor(dst, size_bytes), device_coord, blocking);
 }
 
 void FDMeshCommandQueue::finish(tt::stl::Span<const SubDeviceId> sub_device_ids) {
@@ -458,7 +458,7 @@ void FDMeshCommandQueue::submit_memcpy_request(
 }
 
 void FDMeshCommandQueue::submit_l1_data_memcpy_request(
-    const ReadL1DataDescriptor& read_descriptor, const MeshCoordinate& device_coord, bool blocking) {
+    const ReadCoreDataDescriptor& read_descriptor, const MeshCoordinate& device_coord, bool blocking) {
     completion_queue_reads_.push(std::make_shared<MeshCompletionReaderVariant>(
         std::in_place_type<MeshL1DataReadDescriptor>, read_descriptor, device_coord));
     this->increment_num_entries_in_completion_queue();
@@ -624,7 +624,7 @@ void FDMeshCommandQueue::read_l1_data_from_completion_queue(MeshL1DataReadDescri
         tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(device->id());
     const uint16_t channel =
         tt::tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(device->id());
-    device_dispatch::read_l1_data_from_completion_queue(
+    device_dispatch::read_core_data_from_completion_queue(
         read_l1_data_descriptor.single_core_descriptor,
         mmio_device_id,
         channel,

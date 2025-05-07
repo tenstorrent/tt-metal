@@ -77,8 +77,8 @@ std::vector<uint32_t> read_control_buffer_from_core(
             if (core_type == HalProgrammableCoreType::TENSIX) {
                 distributed::FDMeshCommandQueue& mesh_cq =
                     dynamic_cast<distributed::FDMeshCommandQueue&>(mesh_device->mesh_command_queue());
-                control_buffer.resize(kernel_profiler::PROFILER_L1_CONTROL_VECTOR_SIZE);
                 const distributed::MeshCoordinate device_coord = mesh_device->get_view().find_device(device->id());
+                control_buffer.resize(kernel_profiler::PROFILER_L1_CONTROL_VECTOR_SIZE);
                 mesh_cq.enqueue_read_shard_from_core(
                     device_coord,
                     core,
@@ -96,7 +96,7 @@ std::vector<uint32_t> read_control_buffer_from_core(
         } else {
             control_buffer.resize(kernel_profiler::PROFILER_L1_CONTROL_VECTOR_SIZE);
             dynamic_cast<HWCommandQueue&>(device->command_queue())
-                .enqueue_read_from_core_l1(
+                .enqueue_read_from_core(
                     core,
                     control_buffer.data(),
                     reinterpret_cast<DeviceAddr>(profiler_msg->control_vector),
@@ -141,7 +141,7 @@ void write_control_buffer_to_core(
             }
         } else {
             dynamic_cast<HWCommandQueue&>(device->command_queue())
-                .enqueue_write_to_core_l1(
+                .enqueue_write_to_core(
                     core,
                     control_buffer.data(),
                     reinterpret_cast<DeviceAddr>(profiler_msg->control_vector),

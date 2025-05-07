@@ -90,7 +90,7 @@ private:
     MultiProducerSingleConsumerQueue<CompletionReaderVariant>& get_read_descriptor_queue(IDevice* device);
 
     void submit_l1_data_memcpy_request(
-        const ReadL1DataDescriptor& read_descriptor, const MeshCoordinate& device_coord, bool blocking);
+        const ReadCoreDataDescriptor& read_descriptor, const MeshCoordinate& device_coord, bool blocking);
 
     // Shared across all MeshCommandQueue instances for a MeshDevice.
     std::shared_ptr<DispatchArray<LaunchMessageRingBufferState>> worker_launch_message_buffer_state_;

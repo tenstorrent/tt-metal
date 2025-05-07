@@ -14,7 +14,7 @@ namespace tt {
 namespace tt_metal {
 
 // Used so the host knows how to properly copy data into user space from the completion queue (in hugepages)
-struct ReadL1DataDescriptor {
+struct ReadCoreDataDescriptor {
     void* dst = nullptr;
     uint32_t size_bytes = 0;
 };
@@ -23,7 +23,7 @@ uint32_t calculate_max_prefetch_data_size_bytes(const CoreType& dispatch_core_ty
 
 namespace device_dispatch {
 
-struct L1ReadDispatchParams {
+struct CoreReadDispatchParams {
     const CoreCoord virtual_core;
     DeviceAddr address = 0;
     uint32_t size_bytes = 0;
@@ -34,7 +34,10 @@ struct L1ReadDispatchParams {
     tt::stl::Span<const SubDeviceId> sub_device_ids;
 };
 
-void write_to_core_l1(
+void validate_core_read_write_bounds(
+    IDevice* device, const CoreCoord& virtual_core, DeviceAddr address, uint32_t size_bytes);
+
+void write_to_core(
     IDevice* device,
     const CoreCoord& virtual_core,
     const void* src,
@@ -44,10 +47,10 @@ void write_to_core_l1(
     tt::stl::Span<const uint32_t> expected_num_workers_completed,
     tt::stl::Span<const SubDeviceId> sub_device_ids = {});
 
-void issue_l1_read_command_sequence(const L1ReadDispatchParams& dispatch_params);
+void issue_core_read_command_sequence(const CoreReadDispatchParams& dispatch_params);
 
-void read_l1_data_from_completion_queue(
-    const ReadL1DataDescriptor& read_descriptor,
+void read_core_data_from_completion_queue(
+    const ReadCoreDataDescriptor& read_descriptor,
     chip_id_t mmio_device_id,
     uint16_t channel,
     uint8_t cq_id,
