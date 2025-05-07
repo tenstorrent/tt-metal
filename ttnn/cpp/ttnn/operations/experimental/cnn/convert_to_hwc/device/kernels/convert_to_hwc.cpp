@@ -34,16 +34,16 @@ FORCE_INLINE void transpose(uint32_t cb_in, uint32_t cb_out) {
 }
 
 template <int BATCH_SIZE>
-FORCE_INLINE void tilize(uint32_t cb_in, uint32_t cb_out) {
-    tilize_init_short(cb_in, BATCH_SIZE, cb_out);
+FORCE_INLINE void tilize(uint32_t cb_in, uint32_t num_tiles_in_row, uint32_t cb_out) {
+    tilize_init_short(cb_in, num_tiles_in_row, cb_out);
 
-    cb_wait_front(cb_in, BATCH_SIZE);
-    cb_reserve_back(cb_out, BATCH_SIZE);
+    cb_wait_front(cb_in, 8);
+    cb_reserve_back(cb_out, num_tiles_in_row);
 
-    tilize_block(cb_in, BATCH_SIZE, cb_out);
+    tilize_block(cb_in, num_tiles_in_row, cb_out);
 
-    cb_pop_front(cb_in, BATCH_SIZE);
-    cb_push_back(cb_out, BATCH_SIZE);
+    cb_pop_front(cb_in, 8);
+    cb_push_back(cb_out, num_tiles_in_row);
 
     tilize_uninit(cb_in, cb_out);
 }
@@ -55,12 +55,14 @@ void MAIN {
     constexpr uint32_t cb_tiled_in = get_compile_time_arg_val(1);
     constexpr uint32_t cb_transpose_in = get_compile_time_arg_val(2);
 
+    cb_push_back(cb_in, 8 * total_tiles);
+
     pack_untilize_init(cb_tiled_in, cb_transpose_in);
     transpose_wh_init(cb_tiled_in, cb_transpose_in);
-    tilize_init(cb_in, 1, cb_tiled_in);
+    tilize_init(cb_in, total_tiles, cb_tiled_in);
 
+    tilize<1>(cb_in, total_tiles, cb_tiled_in);
     for (uint32_t idx = 0; idx < total_tiles; idx++) {
-        tilize<1>(cb_in, cb_tiled_in);
         transpose(cb_tiled_in, cb_transpose_in);
     }
 }
