@@ -4,13 +4,9 @@
 
 #pragma once
 
-#include <cstddef>
-#include <vector>
-
 #include <tt_stl/overloaded.hpp>
 #include <tt_stl/reflection.hpp>
 
-#include "ttnn/tensor/storage.hpp"
 #include "ttnn/tensor/tensor.hpp"
 
 namespace tt::tt_metal {
@@ -39,26 +35,7 @@ void validate_datatype(const Tensor& tensor) {
     }
 }
 
-// TODO: these helpers should not be needed. Migrate the code to work with `HostBuffer` directly.
-template <typename T>
-HostBuffer create(std::vector<T>&& data) {
-    return HostBuffer(std::move(data));
-}
-
-template <typename T>
-HostBuffer create(const std::vector<T>& data) {
-    return HostBuffer(data);
-}
-
-template <typename T>
-HostBuffer create(tt::stl::Span<const T> data) {
-    return HostBuffer(std::vector<T>(data.begin(), data.end()));
-}
-
-template <typename T>
-HostBuffer create(tt::stl::Span<T> data) {
-    return HostBuffer(std::vector<T>(data.begin(), data.end()));
-}
+HostBuffer get_host_buffer(const Tensor& tensor);
 
 template <typename T>
 tt::stl::Span<const T> get_as(const HostBuffer& buffer) {
@@ -69,8 +46,6 @@ template <typename T>
 tt::stl::Span<T> get_as(HostBuffer& buffer) {
     return buffer.view_as<T>();
 }
-
-HostBuffer get_host_buffer(const Tensor& tensor);
 
 template <typename T>
 tt::stl::Span<const T> get_as(const Tensor& tensor) {

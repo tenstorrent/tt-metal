@@ -17,6 +17,7 @@
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "ttnn/common/queue_id.hpp"
 #include "ttnn/distributed/distributed_tensor_config.hpp"
+#include "ttnn/tensor/host_buffer/host_buffer.hpp"
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/tensor/storage.hpp"
 #include "ttnn/tensor/tensor_attributes.hpp"
@@ -53,32 +54,32 @@ public:
     //                                  Hi Level APIs
     // ======================================================================================
     explicit Tensor() = default;
+    Tensor(const Tensor& other);
+    Tensor& operator=(const Tensor& other);
+    Tensor(Tensor&& other) noexcept = default;
+    Tensor& operator=(Tensor&& other) noexcept;
+    ~Tensor();
 
+    // Constructs a tensor with `Storage` and `TensorSpec`.
+    // TODO: #19177 -
+    Tensor(Storage storage, TensorSpec tensor_spec);
+
+    // Constructors of `Tensor` that take physical data encoded in `HostBuffer`.
+    // The encoded data type and physical size of the data must match the specified tensor physical shape and data type.
     Tensor(
-        Storage storage,
+        HostBuffer buffer,
         const ttnn::Shape& shape,
         DataType dtype,
         Layout layout,
         const std::optional<Tile>& tile = std::nullopt);
     Tensor(
-        Storage storage,
+        HostBuffer buffer,
         const ttnn::Shape& logical_shape,
         const ttnn::Shape& padded_shape,
         DataType dtype,
         Layout layout,
         const std::optional<Tile>& tile = std::nullopt);
-    Tensor(Storage storage, TensorSpec tensor_spec);
-
-    Tensor(const Tensor& other);
-    Tensor& operator=(const Tensor& other);
-    Tensor(Tensor&& other) noexcept = default;
-    Tensor& operator=(Tensor&& other) noexcept;
-
-    ~Tensor();
-
-    void deallocate(bool force = false);
-
-    std::vector<IDevice*> get_workers(bool blocking = false) const;
+    Tensor(HostBuffer buffer, TensorSpec tensor_spec);
 
     // Converts a buffer of elements of type `T` to a `Tensor`.
     // Elements in the buffer are assumed to be stored in row-major order. The size of the buffer and the type of the
@@ -165,6 +166,10 @@ public:
 
     std::string write_to_string() const;
     void print() const;
+
+    void deallocate(bool force = false);
+
+    std::vector<IDevice*> get_workers(bool blocking = false) const;
 
     Tensor extract_shard(const CoreCoord& core) const;
     Tensor extract_shard(const uint32_t& core_id) const;

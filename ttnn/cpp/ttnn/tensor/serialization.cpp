@@ -140,7 +140,7 @@ HostStorage load_host_storage(FILE* input_file) {
     safe_fread(&size, sizeof(size), 1, input_file);
     std::vector<T> data(size);
     safe_fread(data.data(), sizeof(T) * size, 1, input_file);
-    auto buffer = host_buffer::create<T>(std::move(data));
+    auto buffer = HostBuffer(std::move(data));
     return {buffer};
 }
 
@@ -159,7 +159,7 @@ MultiDeviceHostStorage load_multi_device_host_storage(
         safe_fread(&size, sizeof(size), 1, input_file);
         std::vector<T> data(size);
         safe_fread(data.data(), sizeof(T) * size, 1, input_file);
-        HostBuffer buffer = host_buffer::create<T>(std::move(data));
+        HostBuffer buffer = HostBuffer(std::move(data));
         buffers.push_back(std::move(buffer));
         auto spec = load_tensor_spec(input_file);
         specs.push_back(spec);
@@ -176,7 +176,7 @@ MultiDeviceHostStorage load_multi_device_host_storage(
             safe_fread(&size, sizeof(size), 1, input_file);
             std::vector<T> data(size);
             safe_fread(data.data(), sizeof(T) * size, 1, input_file);
-            auto buffer = host_buffer::create<T>(std::move(data));
+            auto buffer = HostBuffer(std::move(data));
             buffers.push_back(std::move(buffer));
         }
         for (std::size_t i = 0; i < num_buffers; ++i) {
