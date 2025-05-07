@@ -91,7 +91,6 @@ target_sources(
             api/tt-metalium/sub_device.hpp
             api/tt-metalium/sub_device_types.hpp
             api/tt-metalium/system_memory_cq_interface.hpp
-            api/tt-metalium/system_memory_manager.hpp
             api/tt-metalium/system_mesh.hpp
             api/tt-metalium/tile.hpp
             api/tt-metalium/trace.hpp

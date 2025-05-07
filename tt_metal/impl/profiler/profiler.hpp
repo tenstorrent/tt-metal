@@ -33,7 +33,6 @@
 #include "profiler_state.hpp"
 #include "profiler_types.hpp"
 #include "tt-metalium/program.hpp"
-#include "system_memory_manager.hpp"
 #include "tracy/TracyTTDevice.hpp"
 
 namespace tt {
