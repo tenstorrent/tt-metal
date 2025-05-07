@@ -43,6 +43,7 @@
 #include "tt-metalium/program.hpp"
 #include <tt_stl/span.hpp>
 #include <tt-metalium/fabric.hpp>
+#include "system_memory_manager.hpp"
 #include "tt_metal/fabric/fabric_host_utils.hpp"
 #include <umd/device/tt_core_coordinates.h>
 #include <umd/device/tt_xy_pair.h>
@@ -853,6 +854,8 @@ std::unique_ptr<Program> create_and_compile_cq_program(IDevice* device) {
 
     // Compile the program and return it so Device can register it
     detail::CompileProgram(device, *cq_program, /*force_slow_dispatch=*/true);
+    // Write runtime args to device
+    detail::WriteRuntimeArgsToDevice(device, *cq_program, /*force_slow_dispatch=*/true);
     // Erase from map. Note: program in map is no longer valid
     // It is returned from this function and the caller will take ownership of it
     command_queue_pgms.erase(device->id());

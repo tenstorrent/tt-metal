@@ -76,14 +76,15 @@ tests/tt_metal/tools/profiler/ @mo-tenstorrent
 tt_metal/impl/flatbuffer/ @kmabeeTT @nsmithtt @omilyutin-tt
 
 # TTNN
-ttnn/ @ayerofieiev-tt @dmakoviichuk-tt @cfjchu @TT-BrianLiu @omilyutin-tt
+ttnn/ @tenstorrent/metalium-developers-ttnn-core
 ttnn/ttnn/library_tweaks.py @ayerofieiev-tt @tenstorrent/metalium-developers-infra
 ttnn/ttnn/operations/moreh.py @razorback3 @dongjin-na @cfjchu @ayerofieiev-tt @dmakoviichuk-tt
 ttnn/ttnn/operations/conv2d.py @tenstorrent/metalium-developers-convolutions
 ttnn/ttnn/operations/pool.py @tenstorrent/metalium-developers-convolutions
 ttnn/**/kernels/ # Removes the owners above from owning kernels unless specified afterwards
-/ttnn/**/CMakeLists.txt @ayerofieiev-tt @dmakoviichuk-tt @sminakov-tt @tenstorrent/metalium-developers-infra
-ttnn/cpp/ttnn/tensor/ @cfjchu @ayerofieiev-tt @dmakoviichuk-tt @omilyutin-tt
+ttnn/**/CMakeLists.txt @tenstorrent/metalium-developers-ttnn-core @tenstorrent/metalium-developers-infra
+ttnn/cpp/ttnn/tensor/ @tenstorrent/metalium-developers-ttnn-core
+
 ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/moreh*/ @razorback3 @dongjin-na @cfjchu @ayerofieiev-tt @dmakoviichuk-tt
 ttnn/cpp/ttnn/deprecated/tt_lib/csrc/ @ayerofieiev-tt @razorback3 @dongjin-na
 
@@ -100,9 +101,10 @@ ttnn/cpp/ttnn/operations/experimental/conv3d/ @tenstorrent/metalium-developers-c
 ttnn/cpp/ttnn/operations/experimental/cnn/ @tenstorrent/metalium-developers-convolutions @esmalTT
 ttnn/cpp/ttnn/operations/experimental/matmul/ @TT-BrianLiu @bbradelTT @yugaoTT @vsureshTT @edwinleeTT @nsorabaTT
 ttnn/cpp/ttnn/operations/experimental/slice_write/ @tenstorrent/metalium-developers-convolutions @sjameelTT @ntarafdar @amorrisonTT
+ttnn/cpp/ttnn/operations/experimental/reduction/ @bbradelTT @sjameelTT @vsureshTT @edwinleeTT @nsorabaTT @aczajkowskiTT
 ttnn/cpp/ttnn/operations/eltwise/ @patrickroberts @sjameelTT @ntarafdar @dchenTT
-ttnn/cpp/ttnn/operations/eltwise/quantization @wenbinlyuTT @patrickroberts @sjameelTT
-ttnn/cpp/ttnn/operations/reduction/ @bbradelTT @sjameelTT @vsureshTT @edwinleeTT @nsorabaTT
+ttnn/cpp/ttnn/operations/eltwise/quantization/ @wenbinlyuTT @patrickroberts @sjameelTT
+ttnn/cpp/ttnn/operations/reduction/ @bbradelTT @sjameelTT @vsureshTT @edwinleeTT @nsorabaTT @aczajkowskiTT
 ttnn/cpp/ttnn/operations/normalization/ @yugaoTT @tt-aho @bbradelTT @vsureshTT @edwinleeTT @nsorabaTT
 ttnn/cpp/ttnn/operations/embedding/ @ntarafdar @tt-aho @TT-BrianLiu @yugi957 @sjameelTT @jaykru-tt @llongTT @nardoTT
 ttnn/cpp/ttnn/operations/embedding_backward/ @ntarafdar @tt-aho @TT-BrianLiu @yugi957 @sjameelTT @jaykru-tt @llongTT @nardoTT
@@ -115,7 +117,7 @@ ttnn/cpp/ttnn/operations/experimental/transformer/rotary_embedding_llama/ @tenst
 ttnn/cpp/ttnn/operations/experimental/transformer/rotary_embedding_llama_fused_qk/ @tenstorrent/metallium-maintainers-llama-models
 ttnn/tracy/ @mo-tenstorrent
 ttnn/tools/profiler/ @mo-tenstorrent
-tests/ttnn/ @ayerofieiev-tt @dmakoviichuk-tt @rfurko-tt @cfjchu @TT-BrianLiu @razorback3 @dongjin-na @bbradelTT @omilyutin-tt
+tests/ttnn/ @tenstorrent/metalium-developers-ttnn-core @razorback3 @dongjin-na @bbradelTT
 tests/ttnn/unit_tests/gtests/ccl/ @SeanNijjar @jvegaTT @cfjchu @tt-aho @sjameelTT @ntarafdar @nardoTT @llongTT @amorrisonTT
 tests/ttnn/unit_tests/operations/ccl/ @SeanNijjar @jvegaTT @tt-aho @sjameelTT @ntarafdar @nardoTT @llongTT @amorrisonTT
 tests/ttnn/unit_tests/operations/eltwise/ @patrickroberts @sjameelTT @ntarafdar @dchenTT
@@ -123,7 +125,7 @@ tests/ttnn/unit_tests/operations/conv/ @tenstorrent/metalium-developers-convolut
 tests/ttnn/unit_tests/operations/pool/ @tenstorrent/metalium-developers-convolutions
 tests/ttnn/unit_tests/operations/matmul/ @TT-BrianLiu @bbradelTT @yugaoTT @nsorabaTT @vsureshTT @edwinleeTT
 /tests/ttnn/**/unit_tests/operations/fused/ @yugaoTT @bbradelTT @nsorabaTT @vsureshTT @edwinleeTT
-/tests/ttnn/**/unit_tests/operations/reduce/ @bbradelTT @sjameelTT @nsorabaTT @vsureshTT @edwinleeTT
+/tests/ttnn/**/unit_tests/operations/reduce/ @bbradelTT @sjameelTT @nsorabaTT @vsureshTT @edwinleeTT @aczajkowskiTT
 tests/ttnn/nightly/unit_tests/operations/conv/ @tenstorrent/metalium-developers-convolutions
 tests/ttnn/nightly/unit_tests/operations/pool/ @tenstorrent/metalium-developers-convolutions
 tests/ttnn/nightly/unit_tests/operations/matmul/ @TT-BrianLiu @bbradelTT @yugaoTT @nsorabaTT @vsureshTT @edwinleeTT
@@ -135,12 +137,12 @@ tests/sweep_framework/sweeps/conv2d/  @tenstorrent/metalium-developers-convoluti
 tests/sweep_framework/sweeps/data_movement/  @sjameelTT @ntarafdar @yugi957 @llongTT @jvegaTT @nardoTT @amorrisonTT
 tests/sweep_framework/sweeps/fused/  @bbradelTT @nsorabaTT @vsureshTT @edwinleeTT
 tests/sweep_framework/sweeps/matmul/  @bbradelTT @nsorabaTT @vsureshTT @edwinleeTT
-tests/sweep_framework/sweeps/reduction/  @bbradelTT @nsorabaTT @vsureshTT @edwinleeTT
+tests/sweep_framework/sweeps/reduction/  @bbradelTT @nsorabaTT @vsureshTT @edwinleeTT @aczajkowskiTT
 
 # TTNN Distributed
-ttnn/cpp/ttnn/distributed/ @cfjchu @ayerofieiev-tt @dmakoviichuk-tt @omilyutin-tt
-ttnn/ttnn/distributed/ @cfjchu @ayerofieiev-tt @dmakoviichuk-tt @omilyutin-tt
-tests/ttnn/distributed/ @cfjchu @ayerofieiev-tt @dmakoviichuk-tt @omilyutin-tt
+ttnn/cpp/ttnn/distributed/ @tenstorrent/metalium-developers-ttnn-core
+ttnn/ttnn/distributed/ @tenstorrent/metalium-developers-ttnn-core
+tests/ttnn/distributed/ @tenstorrent/metalium-developers-ttnn-core
 
 # models
 /models/ @uaydonat
@@ -204,8 +206,8 @@ models/experimental/yolov8x @tenstorrent/cse-developer-ttnn
 
 # docs
 docs/Makefile @tenstorrent/metalium-developers-infra
-docs/source/ttnn/ttnn/dependencies/tt_lib.rst @patrickroberts @sminakov-tt @ayerofieiev-tt
-docs/source/ttnn/ @patrickroberts @ayerofieiev-tt @razorback3 @dongjin-na
+docs/source/ttnn/ttnn/dependencies/tt_lib.rst @tenstorrent/metalium-developers-ttnn-core
+docs/source/ttnn/ @tenstorrent/metalium-developers-ttnn-core @razorback3 @dongjin-na
 
 # misc
 dockerfile/upstream_test_images/ @tenstorrent/metalium-developers-infra

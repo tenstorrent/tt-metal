@@ -19,6 +19,7 @@ class TtAttention(nn.Module):
         out_dim: int = None,
         kv_heads=None,
         dim_head: int = 64,
+        weights_dtype=ttnn.bfloat16,
     ):
         super().__init__()
         self.device = device
@@ -37,7 +38,7 @@ class TtAttention(nn.Module):
         )
 
         self.compute_kernel_config = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_fidelity=ttnn.MathFidelity.HiFi4,
             math_approx_mode=True,
             fp32_dest_acc_en=False,
             packer_l1_acc=False,
@@ -50,10 +51,10 @@ class TtAttention(nn.Module):
         out_weights = state_dict[f"{module_path}.to_out.0.weight"].unsqueeze(0).unsqueeze(0)
         out_bias = state_dict[f"{module_path}.to_out.0.bias"]
 
-        self.tt_q_weights, _ = prepare_linear_params(device, q_weights, None, ttnn.bfloat8_b)
-        self.tt_k_weights, _ = prepare_linear_params(device, k_weights, None, ttnn.bfloat8_b)
-        self.tt_v_weights, _ = prepare_linear_params(device, v_weights, None, ttnn.bfloat8_b)
-        self.tt_out_weights, self.tt_out_bias = prepare_linear_params(device, out_weights, out_bias, ttnn.bfloat8_b)
+        self.tt_q_weights, _ = prepare_linear_params(device, q_weights, None, weights_dtype)
+        self.tt_k_weights, _ = prepare_linear_params(device, k_weights, None, weights_dtype)
+        self.tt_v_weights, _ = prepare_linear_params(device, v_weights, None, weights_dtype)
+        self.tt_out_weights, self.tt_out_bias = prepare_linear_params(device, out_weights, out_bias, weights_dtype)
 
     def forward(self, hidden_states, attention_mask, encoder_hidden_states=None):
         if encoder_hidden_states is None:
