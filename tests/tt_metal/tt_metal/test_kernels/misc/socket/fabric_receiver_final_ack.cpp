@@ -18,6 +18,14 @@ void kernel_main() {
     constexpr uint32_t worker_core_end_y = get_compile_time_arg_val(9);
     constexpr uint32_t num_worker_cores = get_compile_time_arg_val(10);
 
+    size_t rt_args_idx = 0;
+    tt::tt_fabric::WorkerToFabricEdmSender fabric_connection =
+        tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(rt_args_idx);
+
+    constexpr uint32_t fabric_packet_header_cb_id = 0;
+    volatile tt_l1_ptr PACKET_HEADER_TYPE* socket_packet_header_addr =
+        reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(get_write_ptr(fabric_packet_header_cb_id));
+
     uint32_t worker_config_addr = get_write_ptr(config_cb_id);
     uint64_t worker_config_mcast_noc_addr = get_noc_multicast_addr(
         worker_core_start_x, worker_core_start_y, worker_core_end_x, worker_core_end_y, worker_config_addr);
@@ -32,7 +40,7 @@ void kernel_main() {
         worker_core_end_x,
         worker_core_end_y,
         (uint32_t)worker_config_sem_addr);
-
+    // Write socket config to workers
     noc_async_write_multicast(
         socket_config_addr,
         worker_config_mcast_noc_addr,
@@ -42,6 +50,8 @@ void kernel_main() {
     noc_semaphore_set_multicast((uint32_t)worker_config_sem_addr, worker_config_sem_mcast_noc_addr, num_worker_cores);
 
     constexpr uint32_t num_pages = data_size / page_size;
+    // Open fabric connection to sender
+    fabric_connection.open();
     SocketReceiverInterface receiver_socket = create_receiver_socket_interface(socket_config_addr);
     set_receiver_socket_page_size(receiver_socket, page_size);
 
@@ -63,6 +73,7 @@ void kernel_main() {
     noc_async_write_barrier();
     noc_semaphore_wait(credits_sem_addr, num_worker_cores);
     socket_pop_pages(receiver_socket, num_pages);
-    socket_notify_sender(receiver_socket);
+    fabric_socket_notify_sender(receiver_socket, fabric_connection, socket_packet_header_addr);
     update_socket_config(receiver_socket);
+    fabric_connection.close();
 }

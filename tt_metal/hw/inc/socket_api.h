@@ -123,7 +123,7 @@ void fabric_socket_notify_receiver(
     volatile tt_l1_ptr PACKET_HEADER_TYPE* fabric_header_addr) {
     auto downstream_bytes_sent_noc_addr =
         get_noc_addr(socket.downstream_noc_x, socket.downstream_noc_y, socket.downstream_bytes_sent_addr);
-    fabric_header_addr->to_chip_unicast(static_cast<uint8_t>(1));
+    fabric_header_addr->to_chip_unicast(static_cast<uint8_t>(socket.downstream_chip_id));
     fabric_header_addr->to_noc_unicast_inline_write(
         NocUnicastInlineWriteCommandHeader{downstream_bytes_sent_noc_addr, socket.bytes_sent});
 
@@ -234,7 +234,7 @@ void fabric_socket_notify_sender(
     volatile tt_l1_ptr PACKET_HEADER_TYPE* fabric_header_addr) {
     auto upstream_bytes_acked_noc_addr =
         get_noc_addr(socket.upstream_noc_x, socket.upstream_noc_y, socket.upstream_bytes_acked_addr);
-    fabric_header_addr->to_chip_unicast(static_cast<uint8_t>(1));
+    fabric_header_addr->to_chip_unicast(static_cast<uint8_t>(socket.upstream_chip_id));
     fabric_header_addr->to_noc_unicast_inline_write(
         NocUnicastInlineWriteCommandHeader{upstream_bytes_acked_noc_addr, socket.bytes_acked});
     fabric_connection.wait_for_empty_write_slot();

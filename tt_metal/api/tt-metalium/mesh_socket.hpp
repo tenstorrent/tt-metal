@@ -26,13 +26,13 @@ public:
 // Socket memory is allocated in lockstep across each MeshDevice.
 class socket_memory_config_t {
 public:
-    BufferType socket_type = BufferType::L1;
-    // TODO: These must be optionals. Up to the user: Can tie socket lifetime to sub device lifetime and regen socket
+    BufferType socket_storage_type = BufferType::L1;
+    uint32_t fifo_size = 0;
+    // Up to the user: Can tie socket lifetime to sub device lifetime and regen socket
     // each time SD is loaded Or keep socket persistent in global mem pool and use across SD.
     // TODO: Should data cores be on a different sub device?
-    SubDeviceId sender_sub_device{0};
-    SubDeviceId receiver_sub_device{0};
-    uint32_t fifo_size = 0;
+    std::optional<SubDeviceId> sender_sub_device = std::nullopt;
+    std::optional<SubDeviceId> receiver_sub_device = std::nullopt;
 };
 
 // A socket context fully specifies the following:

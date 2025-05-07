@@ -111,6 +111,7 @@ protected:
         int num_cqs = 1;
         uint32_t trace_region_size = 0;
         uint32_t worker_l1_size = DEFAULT_WORKER_L1_SIZE;
+        FabricConfig fabric_config = FabricConfig::DISABLED;
     };
 
     MeshDeviceFixtureBase(const Config& fixture_config) : config_(fixture_config) {}
@@ -150,7 +151,10 @@ protected:
         bool is_n300_or_t3k_cluster = cluster_type == tt::ClusterType::T3K or cluster_type == tt::ClusterType::N300;
         auto core_type =
             (config_.num_cqs >= 2 and is_n300_or_t3k_cluster) ? DispatchCoreType::ETH : DispatchCoreType::WORKER;
-        tt::tt_metal::detail::InitializeFabricConfig(tt_metal::FabricConfig::FABRIC_1D);
+
+        if (config_.fabric_config != FabricConfig::DISABLED) {
+            tt::tt_metal::detail::InitializeFabricConfig(config_.fabric_config);
+        }
         mesh_device_ = MeshDevice::create(
             MeshDeviceConfig(get_mesh_shape(*mesh_device_type)),
             0,
@@ -167,7 +171,9 @@ protected:
         }
         mesh_device_->close();
         mesh_device_.reset();
-        tt::tt_metal::detail::InitializeFabricConfig(tt::tt_metal::FabricConfig::DISABLED);
+        if (config_.fabric_config != FabricConfig::DISABLED) {
+            tt::tt_metal::detail::InitializeFabricConfig(tt::tt_metal::FabricConfig::DISABLED);
+        }
     }
 
     std::shared_ptr<tt::tt_metal::distributed::MeshDevice> mesh_device_;
@@ -257,6 +263,20 @@ class TGMultiCQMeshDeviceFixture : public MeshDeviceFixtureBase {
 protected:
     TGMultiCQMeshDeviceFixture() :
         MeshDeviceFixtureBase(Config{.mesh_device_types = {MeshDeviceType::TG}, .num_cqs = 2}) {}
+};
+
+class T3000MeshDevice1DFabricFixture : public MeshDeviceFixtureBase {
+protected:
+    T3000MeshDevice1DFabricFixture() :
+        MeshDeviceFixtureBase(Config{
+            .mesh_device_types = {MeshDeviceType::T3000}, .num_cqs = 1, .fabric_config = FabricConfig::FABRIC_1D}) {}
+};
+
+class T3000MeshDevice2DFabricFixture : public MeshDeviceFixtureBase {
+protected:
+    T3000MeshDevice2DFabricFixture() :
+        MeshDeviceFixtureBase(Config{
+            .mesh_device_types = {MeshDeviceType::T3000}, .num_cqs = 1, .fabric_config = FabricConfig::FABRIC_2D}) {}
 };
 
 }  // namespace tt::tt_metal

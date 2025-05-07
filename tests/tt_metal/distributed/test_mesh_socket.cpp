@@ -3,6 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <tt-metalium/distributed.hpp>
+#include <tt-metalium/sub_device.hpp>
+#include <tt-metalium/sub_device_types.hpp>
 #include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
 #include <algorithm>
 #include <random>
@@ -12,10 +14,11 @@
 
 namespace tt::tt_metal::distributed {
 
-using MeshSocketTest = T3000MeshDeviceFixture;
+using MeshSocketTest1DFabric = T3000MeshDevice1DFabricFixture;
+using MeshSocketTest2DFabric = T3000MeshDevice2DFabricFixture;
 
 // Sanity test with a single connection
-TEST_F(MeshSocketTest, SingleConnectionSingleDeviceConfig) {
+TEST_F(MeshSocketTest2DFabric, SingleConnectionSingleDeviceConfig) {
     auto md0 = mesh_device_->create_submesh(MeshShape(1, 1), MeshCoordinate(0, 0));
     auto current_device_id = md0->get_device(MeshCoordinate(0, 0))->id();
     auto sender_logical_coord = CoreCoord(0, 0);
@@ -32,7 +35,7 @@ TEST_F(MeshSocketTest, SingleConnectionSingleDeviceConfig) {
     };
 
     socket_memory_config_t socket_mem_config = {
-        .socket_type = BufferType::L1,
+        .socket_storage_type = BufferType::L1,
         .fifo_size = socket_fifo_size,
     };
 
@@ -83,7 +86,7 @@ TEST_F(MeshSocketTest, SingleConnectionSingleDeviceConfig) {
 }
 
 // Test multiple connections
-TEST_F(MeshSocketTest, MultiConnectionSingleDeviceConfig) {
+TEST_F(MeshSocketTest2DFabric, MultiConnectionSingleDeviceConfig) {
     auto md0 = mesh_device_->create_submesh(MeshShape(1, 1), MeshCoordinate(0, 0));
     auto current_device_id = md0->get_device(MeshCoordinate(0, 0))->id();
     std::size_t socket_fifo_size = 1024;
@@ -111,7 +114,7 @@ TEST_F(MeshSocketTest, MultiConnectionSingleDeviceConfig) {
     }
 
     socket_memory_config_t socket_mem_config = {
-        .socket_type = BufferType::L1,
+        .socket_storage_type = BufferType::L1,
         .fifo_size = socket_fifo_size,
     };
 
@@ -178,7 +181,7 @@ TEST_F(MeshSocketTest, MultiConnectionSingleDeviceConfig) {
     }
 }
 
-TEST_F(MeshSocketTest, MultiConnectionMultiDeviceTest) {
+TEST_F(MeshSocketTest2DFabric, MultiConnectionMultiDeviceTest) {
     auto md0 = mesh_device_->create_submesh(MeshShape(1, 4), MeshCoordinate(0, 0));
     auto md1 = mesh_device_->create_submesh(MeshShape(1, 4), MeshCoordinate(1, 0));
     std::unordered_map<MeshCoordinate, chip_id_t> sender_device_coord_to_id;
@@ -221,11 +224,6 @@ TEST_F(MeshSocketTest, MultiConnectionMultiDeviceTest) {
     std::vector<socket_connection_t> socket_connections;
 
     for (std::size_t coord_idx = 0; coord_idx < sender_logical_coords.size(); coord_idx++) {
-        std::cout << "Create Connection: "
-                  << "Sender: (" << sender_device_coords[coord_idx] << ", " << sender_logical_coords[coord_idx].str()
-                  << ") "
-                  << "Receiver: (" << recv_device_coords[coord_idx] << ", " << recv_logical_coords[coord_idx].str()
-                  << ")" << std::endl;
         socket_connection_t socket_connection = {
             .sender_core = {sender_device_coords[coord_idx], sender_logical_coords[coord_idx]},
             .receiver_core = {recv_device_coords[coord_idx], recv_logical_coords[coord_idx]}};
@@ -236,7 +234,7 @@ TEST_F(MeshSocketTest, MultiConnectionMultiDeviceTest) {
         .socket_connection_config = socket_connections,
         .socket_mem_config =
             {
-                .socket_type = BufferType::L1,
+                .socket_storage_type = BufferType::L1,
                 .fifo_size = socket_fifo_size,
             },
     };
@@ -244,7 +242,7 @@ TEST_F(MeshSocketTest, MultiConnectionMultiDeviceTest) {
         .socket_connection_config = socket_connections,
         .socket_mem_config =
             {
-                .socket_type = BufferType::DRAM,
+                .socket_storage_type = BufferType::DRAM,
                 .fifo_size = socket_fifo_size,
             },
     };
@@ -320,6 +318,101 @@ TEST_F(MeshSocketTest, MultiConnectionMultiDeviceTest) {
     }
 }
 
+TEST_F(MeshSocketTest2DFabric, SocketsOnSubDevice) {
+    auto md0 = mesh_device_->create_submesh(MeshShape(1, 1), MeshCoordinate(0, 0));
+    auto md1 = mesh_device_->create_submesh(MeshShape(1, 1), MeshCoordinate(1, 0));
+    constexpr uint32_t socket_fifo_size = 1024;
+
+    // Create sockets in global memory space. This socket is persistent, it lives regardless
+    // of the sub device config loaded on the mesh_device
+    socket_connection_t global_socket_connection = {
+        .sender_core = {MeshCoordinate(0, 0), CoreCoord(0, 0)},
+        .receiver_core = {MeshCoordinate(0, 0), CoreCoord(0, 0)},
+    };
+    socket_memory_config_t global_socket_mem_cfg = {
+        .socket_storage_type = BufferType::L1,
+        .fifo_size = socket_fifo_size,
+    };
+    socket_config_t global_socket_config = {
+        .socket_connection_config = {global_socket_connection},
+        .socket_mem_config = global_socket_mem_cfg,
+    };
+    auto [send_socket_global, recv_socket_global] = create_sockets(md0, md1, global_socket_config);
+
+    SubDevice sub_device_0(std::array{CoreRangeSet(CoreRange({0, 0}, {0, 0}))});
+    SubDevice sub_device_1(std::array{CoreRangeSet(CoreRange({1, 1}, {1, 1}))});
+
+    // Create and load sub-device managers on both mesh devices
+    auto sub_device_manager_0 = md0->create_sub_device_manager({sub_device_0, sub_device_1}, 3200);
+    auto sub_device_manager_1 = md1->create_sub_device_manager({sub_device_0, sub_device_1}, 3200);
+
+    md0->load_sub_device_manager(sub_device_manager_0);
+    md1->load_sub_device_manager(sub_device_manager_1);
+
+    {
+        // Socket on sub device 0
+        socket_connection_t socket_0_connection = {
+            .sender_core = {MeshCoordinate(0, 0), CoreCoord(0, 0)},
+            .receiver_core = {MeshCoordinate(0, 0), CoreCoord(0, 0)},
+        };
+        socket_memory_config_t socket_mem_config_0 = {
+            .socket_storage_type = BufferType::L1,
+            .fifo_size = socket_fifo_size,
+            .sender_sub_device = md0->get_sub_device_ids()[0],
+            .receiver_sub_device = md1->get_sub_device_ids()[0],
+        };
+
+        // Socket on sub device 1
+        socket_connection_t socket_1_connection = {
+            .sender_core = {MeshCoordinate(0, 0), CoreCoord(1, 1)},
+            .receiver_core = {MeshCoordinate(0, 0), CoreCoord(1, 1)},
+        };
+
+        socket_memory_config_t socket_mem_config_1 = {
+            .socket_storage_type = BufferType::L1,
+            .fifo_size = socket_fifo_size,
+            .sender_sub_device = md1->get_sub_device_ids()[1],
+            .receiver_sub_device = md0->get_sub_device_ids()[1],
+        };
+
+        auto [send_socket_0, recv_socket_0] = create_sockets(
+            md0,
+            md1,
+            socket_config_t{
+                .socket_connection_config = {socket_0_connection},
+                .socket_mem_config = socket_mem_config_0,
+            });
+        auto [send_socket_1, recv_socket_1] = create_sockets(
+            md1,
+            md0,
+            socket_config_t{
+                .socket_connection_config = {socket_1_connection},
+                .socket_mem_config = socket_mem_config_1,
+            });
+        // Assert exppected: Socket cores don't match sub device
+        EXPECT_THROW(
+            create_sockets(
+                md0,
+                md1,
+                socket_config_t{
+                    .socket_connection_config = {socket_1_connection},
+                    .socket_mem_config = socket_mem_config_0,
+                }),
+            std::exception);
+
+        // Ensure that sockets were allocated using the sub device alloactor
+        EXPECT_EQ(send_socket_0.config_buffer->address(), send_socket_1.config_buffer->address());
+        EXPECT_EQ(recv_socket_0.config_buffer->address(), recv_socket_1.config_buffer->address());
+        EXPECT_EQ(recv_socket_0.data_buffer->address(), recv_socket_1.data_buffer->address());
+        // Try clearing the sub devices while sockets are still allocated - this should fail
+        EXPECT_THROW(md0->clear_loaded_sub_device_manager(), std::exception);
+        EXPECT_THROW(md1->clear_loaded_sub_device_manager(), std::exception);
+    }
+    // This should not fail - sub device sockets are now deallocated
+    md0->clear_loaded_sub_device_manager();
+    md1->clear_loaded_sub_device_manager();
+}
+
 void test_single_connection_single_device_socket(
     std::shared_ptr<tt::tt_metal::distributed::MeshDevice> md0,
     std::size_t socket_fifo_size,
@@ -338,7 +431,7 @@ void test_single_connection_single_device_socket(
     };
 
     socket_memory_config_t socket_mem_config = {
-        .socket_type = BufferType::L1,
+        .socket_storage_type = BufferType::L1,
         .fifo_size = socket_fifo_size,
     };
 
@@ -418,7 +511,7 @@ void test_single_connection_single_device_socket(
     EXPECT_EQ(src_vec, recv_data_readback);
 }
 
-TEST_F(MeshSocketTest, SingleConnectionSingleDeviceSocket) {
+TEST_F(MeshSocketTest1DFabric, SingleConnectionSingleDeviceSocket) {
     auto md0 = mesh_device_->create_submesh(MeshShape(1, 1), MeshCoordinate(0, 0));
     // No wrap
     test_single_connection_single_device_socket(md0, 1024, 64, 1024);
@@ -450,7 +543,7 @@ void test_single_connection_single_device_socket_with_workers(
     };
 
     socket_memory_config_t socket_mem_config = {
-        .socket_type = BufferType::L1,
+        .socket_storage_type = BufferType::L1,
         .fifo_size = socket_fifo_size,
     };
 
@@ -578,7 +671,7 @@ void test_single_connection_single_device_socket_with_workers(
     EXPECT_EQ(src_vec, recv_data_readback);
 }
 
-TEST_F(MeshSocketTest, SingleConnectionSingleDeviceSocketWithWorkers) {
+TEST_F(MeshSocketTest1DFabric, SingleConnectionSingleDeviceSocketWithWorkers) {
     auto md0 = mesh_device_->create_submesh(MeshShape(1, 1), MeshCoordinate(0, 0));
     // No wrap
     test_single_connection_single_device_socket_with_workers(md0, 1024, 64, 1024);
@@ -606,7 +699,7 @@ void test_single_connection_multi_device_socket(
     };
 
     socket_memory_config_t socket_mem_config = {
-        .socket_type = BufferType::L1,
+        .socket_storage_type = BufferType::L1,
         .fifo_size = socket_fifo_size,
     };
 
@@ -656,7 +749,7 @@ void test_single_connection_multi_device_socket(
     auto sender_program = CreateProgram();
     auto sender_kernel = CreateKernel(
         sender_program,
-        "tests/tt_metal/tt_metal/test_kernels/misc/socket/sender.cpp",
+        "tests/tt_metal/tt_metal/test_kernels/misc/socket/fabric_sender.cpp",
         sender_logical_coord,
         DataMovementConfig{
             .processor = DataMovementProcessor::RISCV_0,
@@ -684,7 +777,7 @@ void test_single_connection_multi_device_socket(
     auto recv_program = CreateProgram();
     auto recv_kernel = CreateKernel(
         recv_program,
-        "tests/tt_metal/tt_metal/test_kernels/misc/socket/receiver_worker.cpp",
+        "tests/tt_metal/tt_metal/test_kernels/misc/socket/fabric_receiver_worker.cpp",
         recv_logical_coord,
         DataMovementConfig{
             .processor = DataMovementProcessor::RISCV_0,
@@ -746,7 +839,7 @@ void test_single_connection_multi_device_socket_with_workers(
     };
 
     socket_memory_config_t socket_mem_config = {
-        .socket_type = BufferType::L1,
+        .socket_storage_type = BufferType::L1,
         .fifo_size = socket_fifo_size,
     };
 
@@ -798,7 +891,7 @@ void test_single_connection_multi_device_socket_with_workers(
     auto sender_program = CreateProgram();
     auto sender_kernel = CreateKernel(
         sender_program,
-        "tests/tt_metal/tt_metal/test_kernels/misc/socket/sender.cpp",
+        "tests/tt_metal/tt_metal/test_kernels/misc/socket/fabric_sender.cpp",
         sender_logical_coord,
         DataMovementConfig{
             .processor = DataMovementProcessor::RISCV_0,
@@ -849,7 +942,7 @@ void test_single_connection_multi_device_socket_with_workers(
 
     auto recv_kernel = CreateKernel(
         recv_program,
-        "tests/tt_metal/tt_metal/test_kernels/misc/socket/receiver_final_ack.cpp",
+        "tests/tt_metal/tt_metal/test_kernels/misc/socket/fabric_receiver_final_ack.cpp",
         recv_logical_coord,
         DataMovementConfig{
             .processor = DataMovementProcessor::RISCV_0,
@@ -909,13 +1002,13 @@ void test_single_connection_multi_device_socket_with_workers(
     EXPECT_EQ(src_vec, recv_data_readback);
 }
 
-TEST_F(MeshSocketTest, SingleConnectionMultiDeviceSocketWithWorkers) {
+TEST_F(MeshSocketTest1DFabric, SingleConnectionMultiDeviceSocketWithWorkers) {
     auto md1 = mesh_device_->create_submesh(MeshShape(1, 1), MeshCoordinate(1, 0));
     auto md0 = mesh_device_->create_submesh(MeshShape(1, 1), MeshCoordinate(0, 0));
     test_single_connection_multi_device_socket_with_workers(md0, md1, 1024, 64, 1024);
 }
 
-TEST_F(MeshSocketTest, SingleConnectionMultiDeviceSocket) {
+TEST_F(MeshSocketTest1DFabric, SingleConnectionMultiDeviceSocket) {
     auto md0 = mesh_device_->create_submesh(MeshShape(1, 1), MeshCoordinate(0, 0));
     auto md1 = mesh_device_->create_submesh(MeshShape(1, 1), MeshCoordinate(1, 0));
     test_single_connection_multi_device_socket(md0, md1, 1024, 64, 1024);
@@ -936,7 +1029,7 @@ std::shared_ptr<Program> create_sender_program(
     auto sender_program = std::make_shared<Program>();
     auto sender_kernel = CreateKernel(
         *sender_program,
-        "tests/tt_metal/tt_metal/test_kernels/misc/socket/sender.cpp",
+        "tests/tt_metal/tt_metal/test_kernels/misc/socket/fabric_sender.cpp",
         sender_logical_coord,
         DataMovementConfig{
             .processor = DataMovementProcessor::RISCV_0,
@@ -1023,7 +1116,7 @@ std::shared_ptr<Program> create_recv_program(
 
     auto recv_kernel_0 = CreateKernel(
         *recv_program,
-        "tests/tt_metal/tt_metal/test_kernels/misc/socket/receiver_worker.cpp",
+        "tests/tt_metal/tt_metal/test_kernels/misc/socket/fabric_receiver_with_reduce.cpp",
         recv_logical_coord_0,
         DataMovementConfig{
             .processor = DataMovementProcessor::RISCV_0,
@@ -1040,7 +1133,7 @@ std::shared_ptr<Program> create_recv_program(
 
     auto recv_kernel_1 = CreateKernel(
         *recv_program,
-        "tests/tt_metal/tt_metal/test_kernels/misc/socket/receiver_worker.cpp",
+        "tests/tt_metal/tt_metal/test_kernels/misc/socket/fabric_receiver_with_reduce.cpp",
         recv_logical_coord_1,
         DataMovementConfig{
             .processor = DataMovementProcessor::RISCV_0,
@@ -1123,7 +1216,7 @@ void test_multi_sender_single_recv(
         .receiver_core = {MeshCoordinate(0, 0), recv1_logical_coord},
     };
     socket_memory_config_t socket_mem_config = {
-        .socket_type = BufferType::L1,
+        .socket_storage_type = BufferType::L1,
         .fifo_size = socket_fifo_size,
     };
 
@@ -1225,7 +1318,7 @@ void test_multi_sender_single_recv(
     }
 }
 
-TEST_F(MeshSocketTest, MultiSenderSingleRecv) {
+TEST_F(MeshSocketTest1DFabric, MultiSenderSingleRecv) {
     auto sender_0 = mesh_device_->create_submesh(MeshShape(1, 1), MeshCoordinate(1, 0));
     auto sender_1 = mesh_device_->create_submesh(MeshShape(1, 1), MeshCoordinate(0, 1));
     auto receiver = mesh_device_->create_submesh(MeshShape(1, 1), MeshCoordinate(0, 0));
