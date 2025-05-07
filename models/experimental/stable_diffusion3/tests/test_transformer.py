@@ -83,10 +83,10 @@ def test_transformer(
     tt_model = TtSD3Transformer2DModel(parameters, guidance_cond=guidance_cond, num_heads=num_heads, device=mesh_device)
 
     torch.manual_seed(0)
-    spatial = torch.randn((batch_size, 16, height // 8, width // 8))
-    prompt = torch.randn((batch_size, prompt_sequence_length, 4096))
-    pooled_projection = torch.randn((batch_size, 2048))
-    timestep = torch.randint(1000, (batch_size,), dtype=torch_dtype)
+    spatial = torch.randn((batch_size, 16, height // 8, width // 8)) * 0.75
+    prompt = torch.randn((batch_size, prompt_sequence_length, 4096)) * 1.5
+    pooled_projection = torch.randn((batch_size, 2048)) * 0.91
+    timestep = torch.full([batch_size], fill_value=200, dtype=torch_dtype)
 
     with torch.no_grad():
         torch_output = torch_model(
