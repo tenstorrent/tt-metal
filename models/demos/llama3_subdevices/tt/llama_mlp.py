@@ -78,7 +78,8 @@ class TtLlamaMLP(LightweightModule):
             mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=dim, mesh_shape=args.cluster_shape),
             layout=ttnn.TILE_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            cache_file_name=cache_name(name),
+            # Temporarily disable caching this weight for CI
+            # cache_file_name=cache_name(name),
         )
 
         self.four_bit_mlp = args.optimizations.bfp4_mlp
