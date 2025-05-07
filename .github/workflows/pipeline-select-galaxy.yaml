@@ -130,7 +130,7 @@ jobs:
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       topology: ${{ inputs.topology }}
-  tg-quick-test:
+  tg-stress-test:
     needs: build-artifact
     if: ${{ inputs.tg-stress }}
     secrets: inherit
