@@ -21,9 +21,9 @@ void GatherDeviceOperation::validate_on_program_cache_hit(
 void GatherDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
     // Validate shapes of input and output tensors
-    const auto input_tensor_shape = tensor_args.input_tensor.get_padded_shape();
+    const auto input_tensor_shape = tensor_args.input_tensor.get_logical_shape();
     const auto input_tensor_rank = input_tensor_shape.rank();
-    const auto input_index_tensor_shape = tensor_args.input_index_tensor.get_padded_shape();
+    const auto input_index_tensor_shape = tensor_args.input_index_tensor.get_logical_shape();
     const auto input_index_tensor_rank = input_index_tensor_shape.rank();
 
     TT_FATAL(
@@ -33,7 +33,7 @@ void GatherDeviceOperation::validate_on_program_cache_miss(
         input_index_tensor_rank);
 
     if (tensor_args.output_tensor.has_value()) {
-        const auto output_tensor_shape = tensor_args.output_tensor.value().get_padded_shape();
+        const auto output_tensor_shape = tensor_args.output_tensor.value().get_logical_shape();
         TT_FATAL(
             output_tensor_shape == input_index_tensor_shape,
             "Output tensor shape must be the same as index tensor shape. Got output tensor shape: {} and index "
@@ -54,11 +54,19 @@ void GatherDeviceOperation::validate_on_program_cache_miss(
                 input_tensor_shape[i]);
         }
     }
-    TT_FATAL(attributes.output_mem_config.is_sharded() == false, "Sharded implementation not supported yet");
-
-    TT_FATAL(tensor_args.input_tensor.get_layout() == Layout::TILE, "The input tensor must be in tiled format");
     TT_FATAL(
-        tensor_args.input_index_tensor.get_layout() == Layout::TILE, "The input index tensor must be in tiled format");
+        attributes.output_mem_config.is_sharded() == false,
+        "Sharded implementation not supported yet. Shard status: {}",
+        attributes.output_mem_config.is_sharded());
+
+    TT_FATAL(
+        tensor_args.input_tensor.get_layout() == Layout::TILE,
+        "The input tensor must be in tiled format. Current layout: {}",
+        tensor_args.input_tensor.get_layout());
+    TT_FATAL(
+        tensor_args.input_index_tensor.get_layout() == Layout::TILE,
+        "The input index tensor must be in tiled format. Current layout: {}",
+        tensor_args.input_index_tensor.get_layout());
 
     TT_FATAL(
         (tensor_args.input_tensor.buffer() != nullptr) && (tensor_args.input_index_tensor.buffer() != nullptr),
@@ -66,11 +74,13 @@ void GatherDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(
         tensor_args.input_tensor.storage_type() == StorageType::DEVICE,
         "Operation requires input to be on Device. Input storage type: {}",
-        static_cast<int>(tensor_args.input_tensor.storage_type()));
+        tensor_args.input_tensor.storage_type());
     TT_FATAL(
         tensor_args.input_index_tensor.storage_type() == StorageType::DEVICE,
         "Operation requires input to be on Device. Input storage type: {}",
-        static_cast<int>(tensor_args.input_index_tensor.storage_type()));
+        tensor_args.input_index_tensor.storage_type());
+
+    TT_FATAL(attributes.sparse_grad == false, "Sparse gradient is not supported yet.");
 }
 
 GatherDeviceOperation::spec_return_value_t GatherDeviceOperation::compute_output_specs(
