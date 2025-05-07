@@ -65,18 +65,14 @@ Tensor _transform_weights_for_conv_transpose2d(const Tensor& conv_weight_tensor,
                 }
             }
         }
-        return Tensor(
-            tt::tt_metal::HostStorage{tt::tt_metal::host_buffer::create(std::move(owned_buffer))},
-            output_shape,
-            dtype,
-            Layout::ROW_MAJOR);
+        return Tensor(tt::tt_metal::HostBuffer(std::move(owned_buffer)), output_shape, dtype, Layout::ROW_MAJOR);
     };
     auto convert_tensor = [&compute](const auto& conv_weight_tensor) {
         return std::visit(
             [&compute](auto&& storage) -> Tensor {
                 using StorageType = std::decay_t<decltype(storage)>;
                 if constexpr (std::is_same_v<StorageType, tt::tt_metal::HostStorage>) {
-                    return compute(tt::tt_metal::host_buffer::get_as<T>(storage.buffer));
+                    return compute(storage.buffer.template view_as<T>());
                 } else {
                     TT_THROW("Unsupported storage type");
                 }

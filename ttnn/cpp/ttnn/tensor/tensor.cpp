@@ -21,6 +21,7 @@
 #include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/tensor/tensor_impl.hpp"
 #include "ttnn/tensor/tensor_impl_wrapper.hpp"
+#include "ttnn/tensor/host_buffer/host_buffer.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/tensor/types.hpp"
 #include <tt-metalium/constants.hpp>
@@ -43,7 +44,7 @@ Tensor create_owned_tensor_from_row_major_data(
     std::vector<T>&& data, const TensorSpec& spec, distributed::MeshDevice* device, ttnn::QueueId cq_id) {
     auto physical_data = tensor_impl::encode_tensor_data(std::move(data), spec);
 
-    Tensor output(HostStorage(host_buffer::create(std::move(physical_data))), spec);
+    Tensor output(HostBuffer(std::move(physical_data)), spec);
 
     if (device != nullptr) {
         output = output.to_device(device, spec.memory_config(), cq_id);
@@ -55,7 +56,11 @@ Tensor create_owned_tensor_from_row_major_data(
 }  // namespace
 
 Tensor::Tensor(
-    Storage storage,
+    HostBuffer buffer, const ttnn::Shape& shape, DataType dtype, Layout layout, const std::optional<Tile>& tile) :
+    Tensor(std::move(buffer), /* logical_shape */ shape, /* padded_shape */ shape, dtype, layout, tile) {}
+
+Tensor::Tensor(
+    HostBuffer buffer,
     const ttnn::Shape& logical_shape,
     const ttnn::Shape& padded_shape,
     DataType dtype,
@@ -70,21 +75,23 @@ Tensor::Tensor(
             tile->get_tile_shape());
     }
 
-    const auto memory_config = std::visit(
-        tt::stl::overloaded{
-            [](const DeviceStorage& s) { return s.memory_config(); },
-            []<typename Other>(const Other&) { return MemoryConfig{}; }},
-        storage);
-
     init(
-        std::move(storage),
+        Storage(std::move(buffer)),
         TensorSpec(
             logical_shape,
             TensorLayout::fromPaddedShape(
-                dtype, PageConfig(layout, tile), memory_config, logical_shape, padded_shape)));
+                dtype, PageConfig(layout, tile), MemoryConfig{}, logical_shape, padded_shape)));
 }
 
-Tensor::Tensor(Storage storage, TensorSpec tensor_spec) { init(std::move(storage), std::move(tensor_spec)); }
+Tensor::Tensor(HostBuffer storage, TensorSpec tensor_spec) { init(std::move(storage), std::move(tensor_spec)); }
+
+Tensor::Tensor(Storage storage, TensorSpec tensor_spec) {
+    if (const auto* device_storage = std::get_if<DeviceStorage>(&storage)) {
+        tensor_spec = tensor_spec.with_memory_config(device_storage->memory_config());
+    }
+
+    init(Storage(std::move(storage)), std::move(tensor_spec));
+}
 
 void Tensor::init(Storage storage, TensorSpec tensor_spec) {
     tensor_attributes = std::make_shared<TensorAttributes>(std::move(storage), std::move(tensor_spec));
@@ -132,10 +139,6 @@ Tensor::~Tensor() {
     ZoneScoped;
     this->deallocate_impl(/*force=*/false);
 }
-
-Tensor::Tensor(
-    Storage storage, const ttnn::Shape& shape, DataType dtype, Layout layout, const std::optional<Tile>& tile) :
-    Tensor(std::move(storage), /* logical_shape */ shape, /* padded_shape */ shape, dtype, layout, tile) {}
 
 void Tensor::deallocate(bool force) { deallocate_impl(force); }
 
@@ -245,7 +248,7 @@ Tensor Tensor::from_span<float>(
                     ? pack_fp32_vec_as_bfp8_tiles(physical_data, /*row_major_input=*/false, /*is_exp_a=*/false, tile)
                     : pack_fp32_vec_as_bfp4_tiles(physical_data, /*row_major_input=*/false, /*is_exp_a=*/false, tile);
 
-            Tensor tensor(HostStorage(host_buffer::create(std::move(packed_block_floats))), spec);
+            Tensor tensor(HostBuffer(std::move(packed_block_floats)), spec);
             if (device != nullptr) {
                 tensor = tensor.to_device(device, spec.memory_config(), cq_id);
             }
@@ -282,7 +285,7 @@ Tensor Tensor::from_borrowed_data(
     TT_FATAL(
         buffer.size() == volume, "Current buffer size is {} different from shape volume {}", buffer.size(), volume);
     HostBuffer data_buffer(buffer, MemoryPin(on_creation_callback, on_destruction_callback));
-    return Tensor(HostStorage(std::move(data_buffer)), shape, convert_to_data_type<T>(), Layout::ROW_MAJOR, tile);
+    return Tensor(std::move(data_buffer), shape, convert_to_data_type<T>(), Layout::ROW_MAJOR, tile);
 }
 
 template <>
