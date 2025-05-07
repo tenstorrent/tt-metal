@@ -8,6 +8,9 @@
 #include "api/tt-metalium/distributed_context.hpp"
 
 namespace tt::tt_metal::distributed::multihost {
+class MPIContext;
+class MPIDistributedException;
+class MPIRequest;
 
 class MPIDistributedException : public DistributedException {
 public:
@@ -36,8 +39,8 @@ class MPIRequest : public Request {
 public:
     explicit MPIRequest(MPI_Request req) : req_(req), done_(false) {}
 
-    Status               wait()  override;
-    std::optional<Status> test()  override;
+    Status wait() override;
+    std::optional<Status> test() override;
     void                 cancel() override;
     bool                 active() const override;
 
@@ -90,8 +93,10 @@ public:
     [[nodiscard]] std::shared_ptr<DistributedContext> duplicate() const override;
     [[nodiscard]] std::shared_ptr<DistributedContext> split(Color color, Key key) const override;
     [[nodiscard]] std::shared_ptr<DistributedContext> create_sub_context(tt::stl::Span<Rank> ranks) const override;
-
+    void abort(int error_code) const override;
     explicit MPIContext(MPI_Comm comm);
+
+    const MPI_Comm& comm() const { return comm_; }
 
 private:
     MPI_Comm comm_{MPI_COMM_NULL};
