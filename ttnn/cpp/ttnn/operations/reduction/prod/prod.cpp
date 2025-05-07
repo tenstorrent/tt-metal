@@ -188,6 +188,10 @@ Tensor ProdOperation::invoke(
     ttnn::SmallVector<int64_t>& dims,
     const std::optional<MemoryConfig>& memory_config) {
     auto mem_cfg = memory_config.value_or(input.memory_config());
+
+    if (dims.empty()) {
+        return prod_all(input, mem_cfg);
+    }
     return tt::operations::primary::prod_nc(input, output, dims, mem_cfg);
 }
 
