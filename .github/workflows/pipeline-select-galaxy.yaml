@@ -73,8 +73,8 @@ jobs:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      topology-4u: ${{ inputs.topology && inputs.topology == 'config-tg' || false }}
-      topology-6u: ${{ inputs.topology && inputs.topology == 'topology-6u' || false }}
+      topology-4u: ${{ inputs.topology == 'config-tg' }}
+      topology-6u: ${{ inputs.topology == 'topology-6u' }}
   tg-unit-tests:
     if: ${{ inputs.tg-unit }}
     needs: build-artifact
@@ -139,5 +139,5 @@ jobs:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      topology-4u: ${{ inputs.topology && inputs.topology == 'config-tg' || false }}
-      topology-6u: ${{ inputs.topology && inputs.topology == 'topology-6u' || false }}
+      topology-4u: ${{ inputs.topology == 'config-tg' }}
+      topology-6u: ${{ inputs.topology == 'topology-6u' }}
