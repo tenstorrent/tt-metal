@@ -29,6 +29,9 @@ def to_torch(
     if shard_dim is not None:
         mesh_composer = ttnn.ConcatMeshToTensor(mesh_device, dim=shard_dim)
 
+    if mesh_composer is None:
+        tensor = ttnn.get_device_tensor(tensor, tensor.device().id())
+
     result = ttnn.to_torch(tensor, mesh_composer=mesh_composer)
 
     # ttnn.to_torch ignores the dtype argument if a mesh composer is supplied
