@@ -16,10 +16,10 @@ namespace tt::tt_metal::distributed {
 
 struct MeshReadEventDescriptor;
 struct MeshBufferReadDescriptor;
-struct MeshL1DataReadDescriptor;
+struct MeshCoreDataReadDescriptor;
 
 using MeshCompletionReaderVariant =
-    std::variant<MeshBufferReadDescriptor, MeshReadEventDescriptor, MeshL1DataReadDescriptor>;
+    std::variant<MeshBufferReadDescriptor, MeshReadEventDescriptor, MeshCoreDataReadDescriptor>;
 
 class FDMeshCommandQueue final : public MeshCommandQueueBase {
 private:
@@ -89,7 +89,7 @@ private:
     SystemMemoryManager& reference_sysmem_manager();
     MultiProducerSingleConsumerQueue<CompletionReaderVariant>& get_read_descriptor_queue(IDevice* device);
 
-    void submit_l1_data_memcpy_request(
+    void submit_core_data_memcpy_request(
         const ReadCoreDataDescriptor& read_descriptor, const MeshCoordinate& device_coord, bool blocking);
 
     // Shared across all MeshCommandQueue instances for a MeshDevice.
@@ -209,7 +209,7 @@ public:
     // Helper function - read buffer data from Completion Queue
     void copy_buffer_data_to_user_space(MeshBufferReadDescriptor& read_buffer_descriptor);
     // Helper function - read L1 data from Completion Queue
-    void read_l1_data_from_completion_queue(MeshL1DataReadDescriptor& read_l1_data_descriptor);
+    void read_l1_data_from_completion_queue(MeshCoreDataReadDescriptor& read_l1_data_descriptor);
 };
 
 }  // namespace tt::tt_metal::distributed
