@@ -482,7 +482,6 @@ def apply_rotary_emb_qk_real(
 
 
 @skip_for_blackhole("Requires eth connected devices to run, only single chip BH available. See #12349")
-@skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.parametrize(
     "batch, seq_len",
     (
