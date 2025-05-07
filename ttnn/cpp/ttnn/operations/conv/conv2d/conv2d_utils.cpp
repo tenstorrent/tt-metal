@@ -80,16 +80,22 @@ uint32_t get_input_channels_alignment(
         input_tensor_layout == Layout::ROW_MAJOR) {
         if (input_memory_config.has_value() && input_memory_config->is_sharded()) {
             const uint32_t shard_width = input_memory_config.value().shard_spec.value().shape[1];
-            if (shard_width % 32 == 0) {
-                return 32;
+            if (shard_width % tt::constants::TILE_WIDTH == 0) {
+                return tt::constants::TILE_WIDTH;
             } else if (shard_width % 16 == 0) {
-                return 16;
+                return 16U;
             } else if (shard_width % 8 == 0) {
-                return 8;
+                return 8U;
             } else {
-                return 32;
+                return tt::constants::TILE_WIDTH;
             }
         } else {
+            // The minimum valid value for input channels alignment is 8.
+            // This requirement comes from the L1 alignment, which is 16 bytes.
+            // Since the Halo operation outputs data in row-major layout and the smallest data format used is bfloat16
+            // (2 bytes per element), we need at least 8 elements (8 * 2 bytes = 16 bytes) in the input channel
+            // dimension. This ensures that one channel (or "stick") can be efficiently transferred over the NoC
+            // (Network on Chip) in a single, aligned operation.
             return 8U;
         }
     }

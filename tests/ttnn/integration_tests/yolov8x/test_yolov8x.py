@@ -77,7 +77,6 @@ def test_yolov8x_640(device, input_tensor, use_weights_from_ultralytics):
 
     # pad input channels to 16 to avoid slow interleaved2sharded codepath for 3/8 channels
     ttnn_input = torch.nn.functional.pad(input_tensor, (0, 0, 0, 0, 0, 13, 0, 0), value=0)
-    print(f"Input shape: {ttnn_input.shape}")
     ttnn_input = ttnn_input.permute((0, 2, 3, 1))
     ttnn_input = ttnn_input.reshape(
         1, 1, ttnn_input.shape[0] * ttnn_input.shape[1] * ttnn_input.shape[2], ttnn_input.shape[3]

@@ -791,8 +791,8 @@ class resnet50:
             self.conv1_output_height,
             self.conv1_output_width,
             device.compute_with_storage_grid_size(),
-            8,
-            is_grayskull() or is_blackhole(),
+            input_channels_alignment=8,
+            override_num_cores=is_grayskull() or is_blackhole(),
         )
 
     def __del__(self):
