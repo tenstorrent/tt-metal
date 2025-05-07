@@ -11,11 +11,6 @@ from models.utility_functions import skip_for_grayskull
 from tests.ttnn.unit_tests.operations.ccl.test_reduce_scatter_TG_nightly import (
     run_line_reduce_scatter_on_TG_with_mesh_tensor_along_rows,
 )
-from tests.ttnn.unit_tests.operations.ccl.test_ccl_common import (
-    create_and_load_sub_device_manager_with_fabric_interface,
-    teardown_fabric_interface,
-    create_global_semaphore_with_same_address,
-)
 
 
 # Enumerate the post-commit cases explicitly
@@ -40,11 +35,19 @@ from tests.ttnn.unit_tests.operations.ccl.test_ccl_common import (
         ttnn.BufferType.L1,
     ],
 )
+@pytest.mark.parametrize(
+    "use_persistent_output",
+    [
+        True,
+        False,
+    ],
+)
 @pytest.mark.parametrize("replication_factor", [8])  # 1, 8])
-@pytest.mark.parametrize("enable_async", [True])
 @pytest.mark.parametrize("mesh_device", [pytest.param((8, 4), id="8x4_grid")], indirect=True)
 @pytest.mark.parametrize("math_op", [ttnn.ReduceType.Sum])
-@pytest.mark.parametrize("device_params", [{"trace_region_size": 10281600}], indirect=True)
+@pytest.mark.parametrize(
+    "device_params", [{"trace_region_size": 10281600, "fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True
+)
 def test_line_reduce_scatter_on_TG_rows_post_commit(
     mesh_device,
     num_devices,
@@ -57,11 +60,11 @@ def test_line_reduce_scatter_on_TG_rows_post_commit(
     buffer_type,
     use_program_cache,
     function_level_defaults,
-    enable_async,
     replication_factor,
+    use_persistent_output,
     num_iters=16,
 ):
-    if len(mesh_device.get_devices()) != 32:
+    if mesh_device.get_num_devices() != 32:
         pytest.skip("Not TG!")
     run_line_reduce_scatter_on_TG_with_mesh_tensor_along_rows(
         mesh_device,
@@ -76,14 +79,11 @@ def test_line_reduce_scatter_on_TG_rows_post_commit(
         buffer_type,
         use_program_cache,
         function_level_defaults,
-        enable_async=enable_async,
         num_iters=num_iters,
         num_reduce_scatter_instances=replication_factor,
         cluster_axis=1,
         use_reduce_scatter_async=True,
-        enable_persistent_fabric=True,
-        create_persistent_fabric=True,
-        teardown_persistent_fabric=True,
+        use_persistent_output=use_persistent_output,
     )
 
 
@@ -107,10 +107,17 @@ def test_line_reduce_scatter_on_TG_rows_post_commit(
         ttnn.BufferType.DRAM,
     ],
 )
-@pytest.mark.parametrize("enable_async", [True])
+@pytest.mark.parametrize(
+    "use_persistent_output",
+    [
+        True,
+        False,
+    ],
+)
 @pytest.mark.parametrize("replication_factor", [4])
 @pytest.mark.parametrize("mesh_device", [pytest.param((8, 4), id="8x4_grid")], indirect=True)
 @pytest.mark.parametrize("math_op", [ttnn.ReduceType.Sum])
+@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
 def test_line_reduce_scatter_on_TG_cols_post_commit(
     mesh_device,
     num_devices,
@@ -123,11 +130,11 @@ def test_line_reduce_scatter_on_TG_cols_post_commit(
     buffer_type,
     use_program_cache,
     function_level_defaults,
-    enable_async,
     replication_factor,
+    use_persistent_output,
     num_iters=16,
 ):
-    if len(mesh_device.get_devices()) != 32:
+    if mesh_device.get_num_devices() != 32:
         pytest.skip("Not TG!")
 
     run_line_reduce_scatter_on_TG_with_mesh_tensor_along_rows(
@@ -143,12 +150,9 @@ def test_line_reduce_scatter_on_TG_cols_post_commit(
         buffer_type,
         use_program_cache,
         function_level_defaults,
-        enable_async=enable_async,
         num_iters=num_iters,
         num_reduce_scatter_instances=replication_factor,
         cluster_axis=0,
         use_reduce_scatter_async=True,
-        enable_persistent_fabric=True,
-        create_persistent_fabric=True,
-        teardown_persistent_fabric=True,
+        use_persistent_output=use_persistent_output,
     )

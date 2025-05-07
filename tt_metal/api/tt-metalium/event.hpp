@@ -8,7 +8,6 @@
 #include <cstdint>
 
 namespace tt::tt_metal {
-inline namespace v0 {
 
 class IDevice;
 
@@ -23,5 +22,4 @@ struct Event {
     void wait_until_ready();
 };
 
-}  // namespace v0
 }  // namespace tt::tt_metal

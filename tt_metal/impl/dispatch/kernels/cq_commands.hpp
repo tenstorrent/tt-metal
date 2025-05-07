@@ -27,7 +27,10 @@ enum CQPrefetchCmdId : uint8_t {
     CQ_PREFETCH_CMD_STALL = 8,         // drain pipe through dispatcher
     CQ_PREFETCH_CMD_DEBUG = 9,         // log waypoint data to watcher, checksum
     CQ_PREFETCH_CMD_TERMINATE = 10,    // quit
-    CQ_PREFETCH_CMD_MAX_COUNT,         // for checking legal IDs
+    CQ_PREFETCH_CMD_PAGED_TO_RINGBUFFER = 11,    // Copy paged data to the ringbuffer
+    CQ_PREFETCH_CMD_SET_RINGBUFFER_OFFSET = 12,  // Set an offset in the ringbuffer for later reads.
+    CQ_PREFETCH_CMD_RELAY_RINGBUFFER = 13,       // Relay data from the ringbuffer to the dispatcher
+    CQ_PREFETCH_CMD_MAX_COUNT,                   // for checking legal IDs
 };
 
 // Dispatcher CMD ID enums
@@ -40,17 +43,16 @@ enum CQDispatchCmdId : uint8_t {
     CQ_DISPATCH_CMD_WRITE_PACKED = 5,         // write to multiple noc addresses with packed data
     CQ_DISPATCH_CMD_WRITE_PACKED_LARGE = 6,   // write to multiple noc/dst addresses and varying lengnths w/ packed data
     CQ_DISPATCH_CMD_WAIT = 7,                 // wait until workers are done
-    CQ_DISPATCH_CMD_GO = 8,                   // send go message
-    CQ_DISPATCH_CMD_SINK = 9,                 // act as a data sink (for testing)
-    CQ_DISPATCH_CMD_DEBUG = 10,               // log waypoint data to watcher, checksum
-    CQ_DISPATCH_CMD_DELAY = 11,               // insert delay (for testing)
-    CQ_DISPATCH_CMD_EXEC_BUF_END = 12,        // dispatch_d notify prefetch_h that exec_buf has completed
-    CQ_DISPATCH_CMD_SET_WRITE_OFFSET = 13,  // set the offset to add to all non-host destination addresses (relocation)
-    CQ_DISPATCH_CMD_TERMINATE = 14,         // quit
-    CQ_DISPATCH_CMD_SEND_GO_SIGNAL = 15,
-    CQ_DISPATCH_NOTIFY_SLAVE_GO_SIGNAL = 16,
-    CQ_DISPATCH_SET_NUM_WORKER_SEMS = 17,
-    CQ_DISPATCH_SET_GO_SIGNAL_NOC_DATA = 18,
+    CQ_DISPATCH_CMD_SINK = 8,                 // act as a data sink (for testing)
+    CQ_DISPATCH_CMD_DEBUG = 9,                // log waypoint data to watcher, checksum
+    CQ_DISPATCH_CMD_DELAY = 10,               // insert delay (for testing)
+    CQ_DISPATCH_CMD_EXEC_BUF_END = 11,        // dispatch_d notify prefetch_h that exec_buf has completed
+    CQ_DISPATCH_CMD_SET_WRITE_OFFSET = 12,  // set the offset to add to all non-host destination addresses (relocation)
+    CQ_DISPATCH_CMD_TERMINATE = 13,         // quit
+    CQ_DISPATCH_CMD_SEND_GO_SIGNAL = 14,
+    CQ_DISPATCH_NOTIFY_SLAVE_GO_SIGNAL = 15,
+    CQ_DISPATCH_SET_NUM_WORKER_SEMS = 16,
+    CQ_DISPATCH_SET_GO_SIGNAL_NOC_DATA = 17,
     CQ_DISPATCH_CMD_MAX_COUNT,  // for checking legal IDs
 };
 
@@ -70,7 +72,6 @@ enum DispatcherSelect : uint8_t {
 struct CQGenericDebugCmd {
     uint8_t pad;
     uint16_t key;       // prefetcher/dispatcher all write to watcher
-    uint32_t checksum;  // checksum of payload
     uint32_t size;      // size of payload
     uint32_t stride;    // stride to next Cmd (may be within the payload)
 } __attribute__((packed));
@@ -135,6 +136,36 @@ struct CQPrefetchExecBufCmd {
     uint32_t pages;
 } __attribute__((packed));
 
+// Reset the write pointer to the start of the ring buffer. If this isn't set,
+// the ringbuffer will never wrap around.
+constexpr uint32_t CQ_PREFETCH_PAGED_TO_RING_BUFFER_FLAG_RESET_TO_START = 1;
+// Will always flush writes before reading.
+struct CQPrefetchPagedToRingbufferCmd {
+    uint8_t flags;
+    uint8_t pad1;
+    uint8_t log2_page_size;
+    uint32_t start_page;
+    uint32_t base_addr;  // Base address of the interleaved buffer to read from.
+    uint32_t length;     // multiple of DRAM alignment
+} __attribute__((packed));
+
+struct CQPrefetchSetRingbufferOffsetCmd {
+    uint32_t offset;
+} __attribute__((packed));
+
+// Current implementation limit is based on size of the l1_cache which stores the sub_cmds
+constexpr uint32_t CQ_PREFETCH_CMD_RELAY_RINGBUFFER_MAX_SUB_CMDS = 52;
+struct CQPrefetchRelayRingbufferCmd {
+    uint8_t pad1;
+    uint16_t count;
+    uint32_t stride;  // Size of the full command, including subcmds
+} __attribute__((packed));
+
+struct CQPrefetchRelayRingbufferSubCmd {
+    uint32_t start;  // The ringbuffer offset will be added to this.
+    uint32_t length;
+} __attribute__((packed));
+
 struct CQPrefetchCmd {
     CQPrefetchBaseCmd base;
     union {
@@ -144,6 +175,9 @@ struct CQPrefetchCmd {
         CQPrefetchRelayInlineCmd relay_inline;
         CQPrefetchExecBufCmd exec_buf;
         CQGenericDebugCmd debug;
+        CQPrefetchPagedToRingbufferCmd paged_to_ringbuffer;
+        CQPrefetchSetRingbufferOffsetCmd set_ringbuffer_offset;
+        CQPrefetchRelayRingbufferCmd relay_ringbuffer;
     } __attribute__((packed));
 };
 
@@ -171,6 +205,8 @@ struct CQDispatchWriteHostCmd {
     uint32_t length;
 } __attribute__((packed));
 
+constexpr uint16_t CQ_DISPATCH_CMD_PAGED_WRITE_MAX_PAGE_INDEX = 0xFFFF;
+
 struct CQDispatchWritePagedCmd {
     uint8_t is_dram;  // one flag, false=l1
     uint16_t start_page;
@@ -182,6 +218,15 @@ struct CQDispatchWritePagedCmd {
 constexpr uint32_t CQ_DISPATCH_CMD_PACKED_WRITE_FLAG_NONE = 0x00;
 constexpr uint32_t CQ_DISPATCH_CMD_PACKED_WRITE_FLAG_MCAST = 0x01;
 constexpr uint32_t CQ_DISPATCH_CMD_PACKED_WRITE_FLAG_NO_STRIDE = 0x02;
+
+constexpr uint32_t CQ_DISPATCH_CMD_PACKED_WRITE_TYPE_SHIFT = 4;
+enum CQDispatchCmdPackedWriteType {
+    CQ_DISPATCH_CMD_PACKED_WRITE_FLAG_TYPE_MASK = 0xf << CQ_DISPATCH_CMD_PACKED_WRITE_TYPE_SHIFT,
+    CQ_DISPATCH_CMD_PACKED_WRITE_FLAG_TYPE_RTA = 0x1 << CQ_DISPATCH_CMD_PACKED_WRITE_TYPE_SHIFT,
+    CQ_DISPATCH_CMD_PACKED_WRITE_FLAG_TYPE_LAUNCH = 0x2 << CQ_DISPATCH_CMD_PACKED_WRITE_TYPE_SHIFT,
+    CQ_DISPATCH_CMD_PACKED_WRITE_FLAG_TYPE_SEMS = 0x3 << CQ_DISPATCH_CMD_PACKED_WRITE_TYPE_SHIFT,
+    CQ_DISPATCH_CMD_PACKED_WRITE_FLAG_TYPE_EVENT = 0x4 << CQ_DISPATCH_CMD_PACKED_WRITE_TYPE_SHIFT,
+};
 
 struct CQDispatchWritePackedCmd {
     uint8_t flags;   // see above
@@ -223,23 +268,37 @@ get_packed_write_max_multicast_sub_cmds(uint32_t packed_write_max_unicast_sub_cm
 // Current implementation limit is based on size of the l1_cache which stores the sub_cmds
 constexpr uint32_t CQ_DISPATCH_CMD_PACKED_WRITE_LARGE_MAX_SUB_CMDS = 35;
 
+enum CQDispatchCmdPackedWriteLargeType {
+    CQ_DISPATCH_CMD_PACKED_WRITE_LARGE_TYPE_UNKNOWN = 0,
+    CQ_DISPATCH_CMD_PACKED_WRITE_LARGE_TYPE_CBS_SEMS_CRTAS = 1,
+    CQ_DISPATCH_CMD_PACKED_WRITE_LARGE_TYPE_PROGRAM_BINARIES = 2,
+};
+
 // More flexible/slower than WritePacked
 // Removes size constraints
 // Implicitly mcast
 struct CQDispatchWritePackedLargeCmd {
-    uint8_t pad1;
+    uint8_t type;
     uint16_t count;  // number of sub-cmds
     uint16_t alignment;
     uint16_t write_offset_index;
 } __attribute__((packed));
 
+constexpr uint32_t CQ_DISPATCH_CMD_WAIT_FLAG_NONE = 0x00;
+// Issue a write barrier
+constexpr uint32_t CQ_DISPATCH_CMD_WAIT_FLAG_BARRIER = 0x01;
+// Increment prefetch semaphore
+constexpr uint32_t CQ_DISPATCH_CMD_WAIT_FLAG_NOTIFY_PREFETCH = 0x02;
+// Wait for a count value on memory.
+constexpr uint32_t CQ_DISPATCH_CMD_WAIT_FLAG_WAIT_MEMORY = 0x04;
+// Wait for a count value on a stream
+constexpr uint32_t CQ_DISPATCH_CMD_WAIT_FLAG_WAIT_STREAM = 0x08;
+// Clear a count value on a stream.
+constexpr uint32_t CQ_DISPATCH_CMD_WAIT_FLAG_CLEAR_STREAM = 0x10;
+
 struct CQDispatchWaitCmd {
-    uint8_t barrier;          // if true, issue write barrier
-    uint8_t notify_prefetch;  // if true, inc prefetch sem
-    uint8_t clear_count;      // if true, reset count to 0
-    uint8_t wait;             // if true, wait on count value below
-    uint8_t pad1;
-    uint16_t pad2;
+    uint8_t flags;    // see above
+    uint16_t stream;  // stream to read/write
     uint32_t addr;   // address to read
     uint32_t count;  // wait while address is < count
 } __attribute__((packed));
@@ -252,7 +311,7 @@ struct CQDispatchDelayCmd {
 
 struct CQDispatchSetWriteOffsetCmd {
     uint8_t pad1;
-    uint16_t pad2;
+    uint16_t program_host_id;  // Program Host ID for upcoming commands. Used for profiling.
     uint32_t offset0;
     uint32_t offset1;
     uint32_t offset2;
@@ -270,7 +329,7 @@ struct CQDispatchGoSignalMcastCmd {
     uint8_t num_unicast_txns;
     uint8_t noc_data_start_index;
     uint32_t wait_count;
-    uint32_t wait_addr;
+    uint32_t wait_stream;  // Index of the stream to wait on
 } __attribute__((packed));
 
 struct CQDispatchNotifySlaveGoSignalCmd {

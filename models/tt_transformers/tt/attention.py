@@ -8,10 +8,7 @@ import torch
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.tt_transformers.tt.ccl import tt_all_reduce, tt_all_gather
-from loguru import logger
-
-# Potential warning that we don't want to show for every layer and token
-global_padded_head_warning_shown = False
+from models.tt_transformers.tt.model_config import TensorGroup, OpGroup
 
 
 class Attention(LightweightModule):
@@ -60,6 +57,7 @@ class Attention(LightweightModule):
         self.n_local_kv_heads = self.n_kv_heads // self.num_devices_per_group
         self.padded_head_dim = math.ceil(self.head_dim / self.tile_size) * self.tile_size
 
+        self.arch_name = configuration.arch_name
         # TODO: Fix this once all-gather supports < tile_size
         if self.TG:
             weight = torch.zeros(1, 32, 8, 32)
@@ -101,6 +99,36 @@ class Attention(LightweightModule):
         self.model_config = configuration.get_model_config()
         self.ccl_topology = configuration.ccl_topology()
         self.is_multichip = configuration.is_multichip
+        self.activation_dtype = self.model_config["DECODERS_OPTIMIZATIONS"].get_tensor_dtype(
+            decoder_id=layer_num, tensor=TensorGroup.ACTIVATION
+        )
+        self.wqkv_dtype = self.model_config["DECODERS_OPTIMIZATIONS"].get_tensor_dtype(
+            decoder_id=layer_num, tensor=TensorGroup.WQKV
+        )
+        self.wo_dtype = self.model_config["DECODERS_OPTIMIZATIONS"].get_tensor_dtype(
+            decoder_id=layer_num, tensor=TensorGroup.WO
+        )
+        self.kv_cache_dtype = self.model_config["DECODERS_OPTIMIZATIONS"].get_tensor_dtype(
+            decoder_id=layer_num, tensor=TensorGroup.KV_CACHE
+        )
+        self.li_qkv_decode_compute_kernel_cfg = self.model_config["DECODERS_OPTIMIZATIONS"].get_math_fidelity(
+            decoder_id=layer_num, op=OpGroup.LI_QKV_DECODE, configuration=configuration
+        )
+        self.sdpa_decode_compute_kernel_cfg = self.model_config["DECODERS_OPTIMIZATIONS"].get_math_fidelity(
+            decoder_id=layer_num, op=OpGroup.SDPA_DECODE, configuration=configuration
+        )
+        self.li_o_decode_compute_kernel_cfg = self.model_config["DECODERS_OPTIMIZATIONS"].get_math_fidelity(
+            decoder_id=layer_num, op=OpGroup.LI_O_DECODE, configuration=configuration
+        )
+        self.sdpa_prefill_compute_kernel_cfg = self.model_config["DECODERS_OPTIMIZATIONS"].get_math_fidelity(
+            decoder_id=layer_num, op=OpGroup.SDPA_PREFILL, configuration=configuration
+        )
+        self.li_qkv_prefill_compute_kernel_cfg = self.model_config["DECODERS_OPTIMIZATIONS"].get_math_fidelity(
+            decoder_id=layer_num, op=OpGroup.LI_QKV_PREFILL, configuration=configuration
+        )
+        self.li_o_prefill_compute_kernel_cfg = self.model_config["DECODERS_OPTIMIZATIONS"].get_math_fidelity(
+            decoder_id=layer_num, op=OpGroup.LI_O_PREFILL, configuration=configuration
+        )
 
         layer_name = configuration.get_state_dict_prefix(self.__class__.__name__, layer_num)
         if configuration.dummy_weights or (weight_cache_path is None):
@@ -237,7 +265,7 @@ class Attention(LightweightModule):
 
         self.wqkv = ttnn.as_tensor(
             qkv_cat,
-            dtype=self.dtype,
+            dtype=self.wqkv_dtype,
             layout=ttnn.TILE_LAYOUT,
             device=self.mesh_device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG if self.TG else wqkv_mem_config,
@@ -271,7 +299,7 @@ class Attention(LightweightModule):
 
         self.wo = ttnn.as_tensor(
             pt_wo,
-            dtype=self.dtype,
+            dtype=self.wo_dtype,
             layout=ttnn.TILE_LAYOUT,
             device=self.mesh_device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG if (self.use_fused_all_gather_matmul or self.TG) else wo_mem_config,
@@ -372,7 +400,7 @@ class Attention(LightweightModule):
         self.layer_past = [
             ttnn.as_tensor(
                 k_or_v,
-                dtype=self.dtype,
+                dtype=self.kv_cache_dtype,
                 layout=self.model_config["ATTN_W_LAYOUT_TILE"],
                 device=self.mesh_device,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -411,8 +439,8 @@ class Attention(LightweightModule):
             # bias=self.wqkv_bias,
             memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
             program_config=self.model_config["XQKV_DECODE_PROGCFG"],
-            compute_kernel_config=self.compute_kernel_config_hifi2,
-            dtype=self.ccl_dtype if self.TG else ttnn.bfloat16,
+            compute_kernel_config=self.li_qkv_decode_compute_kernel_cfg,
+            dtype=self.ccl_dtype if self.TG else self.activation_dtype or ttnn.bfloat16,
         )
         # FIXME: File bug against dram-sharded matmuls with bias
         if self.wqkv_bias_decode:
@@ -443,7 +471,8 @@ class Attention(LightweightModule):
                 memory_config=self.model_config["CREATE_HEAD_INPUT_MEMCFG"],
             )
         else:
-            xqkv_fused = ttnn.sharded_to_interleaved(xqkv_fused_sharded, ttnn.L1_MEMORY_CONFIG)
+            # bfloat16 is required by nlp_create_qkv_heads_decode
+            xqkv_fused = ttnn.sharded_to_interleaved(xqkv_fused_sharded, ttnn.L1_MEMORY_CONFIG, ttnn.bfloat16)
 
         ttnn.deallocate(xqkv_fused_sharded)
 
@@ -464,7 +493,7 @@ class Attention(LightweightModule):
             xqkv_fused,
             num_heads=self.n_local_heads,
             num_kv_heads=self.n_local_kv_heads,
-            memory_config=ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG,
+            memory_config=self.model_config["CREATE_QKV_DECODE_SHARD"],
         )
 
         ttnn.deallocate(xqkv_fused)
@@ -526,7 +555,7 @@ class Attention(LightweightModule):
                 page_table_tensor=page_table,
                 scale=self.scale,
                 program_config=self.model_config["SDPA_DECODE_PROGCFG"],
-                compute_kernel_config=self.model_config["SDPA_DECODE_COMPUTE_PROGCFG"],
+                compute_kernel_config=self.sdpa_decode_compute_kernel_cfg,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
         else:
@@ -537,7 +566,7 @@ class Attention(LightweightModule):
                 cur_pos_tensor=current_pos,
                 scale=self.scale,
                 program_config=self.model_config["SDPA_DECODE_PROGCFG"],
-                compute_kernel_config=self.model_config["SDPA_DECODE_COMPUTE_PROGCFG"],
+                compute_kernel_config=self.sdpa_decode_compute_kernel_cfg,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,  # FIXME: why not L1 height sharded e.g. SCORES_BATCHED_MM_OUTPUT_MEMCFG?
             )
 
@@ -565,7 +594,7 @@ class Attention(LightweightModule):
                 all_gather_core_grid_offset=(0, 4),
                 num_links=1,
                 program_config=self.model_config["ATTN_ALL_GATHER_MATMUL_PROGCFG"],
-                compute_kernel_config=self.compute_kernel_config_hifi2,
+                compute_kernel_config=self.li_o_decode_compute_kernel_cfg,
                 memory_config_ag=self.model_config["ATTN_ALL_GATHER_MATMUL_OUTPUT_MEMCFG"],
                 memory_config_mm=self.model_config["DECODE_RESIDUAL_MEMCFG"],
             )
@@ -610,7 +639,7 @@ class Attention(LightweightModule):
                 program_config=self.model_config["ATTN_OUTPUT_PROGCFG"] if not self.TG else None,
                 memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG if self.TG else attn_output_cat.memory_config(),
                 dtype=ttnn.bfloat8_b if self.TG else None,
-                compute_kernel_config=self.compute_kernel_config_hifi2,
+                compute_kernel_config=self.li_o_decode_compute_kernel_cfg,
             )
 
             ttnn.deallocate(attn_output_cat)
@@ -679,10 +708,9 @@ class Attention(LightweightModule):
         xqkv_fused = ttnn.linear(
             x_11SH,
             self.wqkv,
-            # bias=self.wqkv_bias_prefill,
-            dtype=self.ccl_dtype if self.TG else ttnn.bfloat16,
+            dtype=self.ccl_dtype if self.TG else self.activation_dtype or ttnn.bfloat16,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            compute_kernel_config=self.compute_kernel_config_hifi2,
+            compute_kernel_config=self.li_qkv_prefill_compute_kernel_cfg,
             program_config=self.model_config["XQKV_PREFILL_PROGCFG"](seq_len),
         )
 
@@ -760,10 +788,17 @@ class Attention(LightweightModule):
         q_heads_1QSD_8b = ttnn.typecast(q_heads_1QSD, dtype=ttnn.bfloat8_b)
         ttnn.deallocate(q_heads_1QSD)
 
-        k_heads_1KSD_8b = ttnn.typecast(k_heads_1KSD, dtype=ttnn.bfloat8_b)
+        k_heads_1KSD_8b = ttnn.typecast(k_heads_1KSD, dtype=self.kv_cache_dtype)
         ttnn.deallocate(k_heads_1KSD)
 
-        v_heads_1VSD_8b = ttnn.typecast(v_heads_1VSD, dtype=ttnn.bfloat8_b)
+        # sharding k_fill to deal with update_cache memory limitation
+        if seq_len >= self.min_kv_prefill_shard_seqlen and not self.TG and not page_table:
+            k_fill = ttnn.interleaved_to_sharded(k_heads_1KSD_8b, self.model_config["KV_PREFILL_MEM_CFG"](seq_len))
+        else:
+            k_fill = k_heads_1KSD_8b
+
+        v_heads_1VSD_8b = ttnn.typecast(v_heads_1VSD, dtype=self.kv_cache_dtype)
+
         ttnn.deallocate(v_heads_1VSD)
 
         # Fill KV-Cache
@@ -818,6 +853,9 @@ class Attention(LightweightModule):
                 ttnn.deallocate(v_fill)
 
         # SDPA
+        q_heads_1QSD_8b = ttnn.typecast(q_heads_1QSD, dtype=self.activation_dtype or ttnn.bfloat8_b)
+        ttnn.deallocate(q_heads_1QSD)
+
         if chunk_start_idx is not None:
             attn_output_84SD = ttnn.transformer.chunked_scaled_dot_product_attention(
                 q_heads_1QSD_8b,
@@ -825,8 +863,7 @@ class Attention(LightweightModule):
                 values_BKSD,
                 page_table,
                 chunk_start_idx,
-                scale=self.scale,
-                compute_kernel_config=self.compute_kernel_config_hifi4,
+                compute_kernel_config=self.sdpa_prefill_compute_kernel_cfg,
                 program_config=self.model_config["SDPA_PROGCFG"](seq_len),
             )
         else:
@@ -837,7 +874,7 @@ class Attention(LightweightModule):
                 is_causal=self.causal_mask,
                 attn_mask=mask,
                 scale=self.scale,
-                compute_kernel_config=self.compute_kernel_config_hifi4,
+                compute_kernel_config=self.sdpa_prefill_compute_kernel_cfg,
                 program_config=self.model_config["SDPA_PROGCFG"](seq_len),
             )
 
@@ -874,8 +911,8 @@ class Attention(LightweightModule):
         output_11SH = ttnn.linear(
             attn_output_11SH,
             self.wo,
-            compute_kernel_config=self.compute_kernel_config_hifi2_fp16,
-            dtype=ttnn.bfloat8_b,
+            compute_kernel_config=self.li_o_prefill_compute_kernel_cfg,
+            dtype=self.activation_dtype or ttnn.bfloat8_b,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             program_config=self.model_config["WO_PREFILL_PROGCFG"](seq_len),
         )

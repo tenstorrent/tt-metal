@@ -1,22 +1,17 @@
 # SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
-import os
 import torch
-import json
 import pytest
 from loguru import logger
-from time import time
-import sys
 from tqdm import tqdm
 import numpy as np
 
 import ttnn
-from ttnn import ReplicateTensorToMesh, ConcatMeshToTensor
+from ttnn import ConcatMeshToTensor
 from models.demos.t3000.mixtral8x7b.tt.mixtral_common import (
     prepare_inputs_ttnn,
     get_single_rot_mat,
-    sample,
     cache_attention,
 )
 from models.demos.t3000.mixtral8x7b.tt.mixtral_model import TtTransformer
@@ -70,9 +65,7 @@ def run_test_perplexity(
         ref_running_nll, ref_running_top1_acc, ref_running_top5_acc = 0.0, 0.0, 0.0
 
     # Load model args, weights, and tokenizer
-    model_args = TtModelArgs(
-        mesh_device.get_device(0), instruct=instruct_mode, max_batch_size=batch_size, max_seq_len=max_seq_len
-    )
+    model_args = TtModelArgs(mesh_device, instruct=instruct_mode, max_batch_size=batch_size, max_seq_len=max_seq_len)
     tokenizer = Tokenizer(model_args.tokenizer_path)
     if instruct_mode:
         tokenizer._model.pad_id = tokenizer._model.eos_id
@@ -282,8 +275,6 @@ def test_mixtral_perplexity(
     assert (
         llm_mode == "decode"
     ), "Only decode mode is supported for now"  # TODO Add prefill support when it reaches main
-
-    t3k_mesh_device.enable_async(True)
 
     # Adjust the batch size based on the max prefill length
     if max_seq_len >= 16 * 1024:

@@ -100,8 +100,6 @@ void set_64b_result(uint32_t* buf, uint64_t val, uint32_t index = 0) {
     }
 }
 
-typedef struct dispatch_packet_header_t dispatch_packet_header_t;
-
 static_assert(sizeof(dispatch_packet_header_t) == PACKET_WORD_SIZE_BYTES);
 
 // A sequence of DispatchRemoteNetworkType's used for stamping out multiple input/output queue templates
@@ -382,7 +380,7 @@ public:
             eth_write_remote_reg(reg_addr, val);
         } else {
             const auto dest_addr = get_noc_addr(this->remote_x, this->remote_y, reg_addr);
-            noc_inline_dw_write(dest_addr, val);
+            noc_inline_dw_write<true>(dest_addr, val);
         }
     }
 

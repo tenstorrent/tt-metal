@@ -4,8 +4,16 @@
 
 #pragma once
 
-#include "lightmetal/host_api_capture_helpers.hpp"
-#include <tt-metalium/buffer.hpp>
+#include <functional>
+#include <memory>
+#include <variant>
+
+namespace tt {
+namespace tt_metal {
+class Buffer;
+class CommandQueue;
+}  // namespace tt_metal
+}  // namespace tt
 
 namespace tt::tt_metal {
 

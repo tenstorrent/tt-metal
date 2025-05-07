@@ -6,7 +6,6 @@ import torch
 import ttnn
 from ttnn import ShardTensorToMesh, ReplicateTensorToMesh
 from models.experimental.grok.tt.grok_common import LightweightModule
-from models.experimental.grok.scripts.tlog import tlog, tlog_mesh_device
 
 
 class TtMoeLayer(LightweightModule):

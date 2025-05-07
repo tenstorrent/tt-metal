@@ -3,20 +3,24 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/distributed/distributed_pybind.hpp"
+#include <pybind11/cast.h>
+#include <cstddef>
+#include <memory>
 #include <pybind11/pytypes.h>
 
 #include <ostream>
 
 #include <tt-metalium/command_queue.hpp>
-#include "tt-metalium/mesh_coord.hpp"
+#include <tt-metalium/hal.hpp>
+#include <tt-metalium/mesh_coord.hpp>
+#include "distributed_tensor.hpp"
 #include "ttnn/distributed/api.hpp"
 #include "ttnn/distributed/types.hpp"
-#include "ttnn/tensor/tensor.hpp"
-#include "ttnn/types.hpp"
 
 // This is required for automatic conversions, as in the creation of mesh devices
 // https://github.com/tenstorrent/tt-metal/issues/18082
 #include "pybind11/stl.h"
+#include "ttnn/tensor/types.hpp"
 
 using namespace tt::tt_metal;
 
@@ -25,11 +29,18 @@ namespace ttnn::distributed {
 namespace py = pybind11;
 
 void py_module_types(py::module& module) {
+    py::class_<MeshToTensor, std::unique_ptr<MeshToTensor>>(module, "CppMeshToTensor");
+    py::class_<TensorToMesh, std::unique_ptr<TensorToMesh>>(module, "CppTensorToMesh");
+
+    py::class_<Shard2dConfig>(module, "Shard2dConfig");
+    py::class_<Concat2dConfig>(module, "Concat2dConfig");
+
     py::class_<MeshDevice, std::shared_ptr<MeshDevice>>(module, "MeshDevice");
-    py::class_<MeshSubDeviceManagerId>(module, "MeshSubDeviceManagerId");
     py::class_<MeshShape>(module, "MeshShape", "Shape of a mesh device.");
     py::class_<MeshCoordinate>(module, "MeshCoordinate", "Coordinate within a mesh device.");
     py::class_<MeshCoordinateRange>(module, "MeshCoordinateRange", "Range of coordinates within a mesh device.");
+    py::class_<MeshCoordinateRangeSet>(
+        module, "MeshCoordinateRangeSet", "Set of coordinate ranges within a mesh device.");
 }
 
 void py_module(py::module& module) {
@@ -112,6 +123,21 @@ void py_module(py::module& module) {
             [](const MeshCoordinateRange& mcr) { return py::make_iterator(mcr.begin(), mcr.end()); },
             py::keep_alive<0, 1>());
 
+    static_cast<py::class_<MeshCoordinateRangeSet>>(module.attr("MeshCoordinateRangeSet"))
+        .def(
+            py::init([]() { return MeshCoordinateRangeSet(); }),
+            "Default constructor for an empty MeshCoordinateRangeSet.")
+        .def(
+            py::init([](const MeshCoordinateRange& range) { return MeshCoordinateRangeSet(range); }),
+            "Constructor with specified range.",
+            py::arg("range"))
+        .def("merge", &MeshCoordinateRangeSet::merge, py::arg("range"))
+        .def("__repr__", [](const MeshCoordinateRangeSet& mcrs) {
+            std::ostringstream str;
+            str << mcrs;
+            return str.str();
+        });
+
     auto py_mesh_device = static_cast<py::class_<MeshDevice, std::shared_ptr<MeshDevice>>>(module.attr("MeshDevice"));
     py_mesh_device
         .def(
@@ -121,17 +147,16 @@ void py_module(py::module& module) {
                         size_t num_command_queues,
                         const DispatchCoreConfig& dispatch_core_config,
                         const std::optional<MeshCoordinate>& offset,
-                        const std::vector<chip_id_t>& physical_device_ids) {
+                        const std::vector<chip_id_t>& physical_device_ids,
+                        size_t worker_l1_size) {
                 return MeshDevice::create(
-                    MeshDeviceConfig{
-                        .mesh_shape = mesh_shape,
-                        .offset = offset,
-                        .physical_device_ids = physical_device_ids,
-                    },
+                    MeshDeviceConfig(mesh_shape, offset, physical_device_ids),
                     l1_small_size,
                     trace_region_size,
                     num_command_queues,
-                    dispatch_core_config);
+                    dispatch_core_config,
+                    {},
+                    worker_l1_size);
             }),
             py::kw_only(),
             py::arg("mesh_shape"),
@@ -140,34 +165,23 @@ void py_module(py::module& module) {
             py::arg("num_command_queues"),
             py::arg("dispatch_core_config"),
             py::arg("offset"),
-            py::arg("physical_device_ids"))
+            py::arg("physical_device_ids"),
+            py::arg("worker_l1_size") = DEFAULT_WORKER_L1_SIZE)
         .def("get_num_devices", &MeshDevice::num_devices)
         .def("id", &MeshDevice::id)
         .def("get_device_ids", &MeshDevice::get_device_ids)
         .def(
-            "get_device",
-            py::overload_cast<chip_id_t>(&MeshDevice::get_device, py::const_),
-            py::return_value_policy::reference)
-        .def(
-            "get_device",
-            py::overload_cast<size_t, size_t>(&MeshDevice::get_device, py::const_),
-            py::return_value_policy::reference)
-        .def(
-            "get_devices",
-            &MeshDevice::get_devices,
-            py::return_value_policy::reference,
-            R"doc(
-           Get the devices in the device mesh.
-
-
-           Returns:
-               List[Device]: The devices in the device mesh.
-       )doc")
+            "get_device_id",
+            [](MeshDevice& self, const MeshCoordinate& coord) {
+                auto device = self.get_device(coord);
+                TT_FATAL(device, "Device ID requested for MeshCoord {} not found.", coord);
+                return device->id();
+            })
         .def(
             "create_submesh",
             &MeshDevice::create_submesh,
             py::arg("submesh_shape"),
-            py::arg("offset"),
+            py::arg("offset") = std::nullopt,
             py::keep_alive<1, 0>())  // Keep MeshDevice alive as long as SubmeshDevice is alive
         .def(
             "create_submeshes",
@@ -205,17 +219,6 @@ void py_module(py::module& module) {
                Arch: The arch of the first device in the device mesh.
        )doc")
         .def(
-            "enable_async",
-            &MeshDevice::enable_async,
-            py::arg("enable"),
-            R"doc(
-               Enable or disable async mode across all devices in the mesh.
-
-
-               Args:
-                   enable (bool): True to enable async mode, False to disable it.
-           )doc")
-        .def(
             "enable_program_cache",
             &MeshDevice::enable_program_cache,
             R"doc(
@@ -226,6 +229,12 @@ void py_module(py::module& module) {
             &MeshDevice::disable_and_clear_program_cache,
             R"doc(
                Disable program cache across all devices in the mesh.
+           )doc")
+        .def(
+            "set_program_cache_misses_allowed",
+            &MeshDevice::set_program_cache_misses_allowed,
+            R"doc(
+               Set whether program cache misses are allowed across all devices in the mesh.
            )doc")
         .def_property_readonly(
             "shape",
@@ -270,7 +279,7 @@ void py_module(py::module& module) {
         .def(
             "create_sub_device_manager",
             [](MeshDevice& self, const std::vector<SubDevice>& sub_devices, DeviceAddr local_l1_size) {
-                return self.mesh_create_sub_device_manager(sub_devices, local_l1_size);
+                return self.create_sub_device_manager(sub_devices, local_l1_size);
             },
             py::arg("sub_devices"),
             py::arg("local_l1_size"),
@@ -285,12 +294,12 @@ void py_module(py::module& module) {
 
 
                Returns:
-                   MeshSubDeviceManagerId: The ID of the created sub-device manager.
+                   SubDeviceManagerId: The ID of the created sub-device manager.
            )doc")
         .def(
             "create_sub_device_manager_with_fabric",
             [](MeshDevice& self, const std::vector<SubDevice>& sub_devices, DeviceAddr local_l1_size) {
-                return self.mesh_create_sub_device_manager_with_fabric(sub_devices, local_l1_size);
+                return self.create_sub_device_manager_with_fabric(sub_devices, local_l1_size);
             },
             py::arg("sub_devices"),
             py::arg("local_l1_size"),
@@ -306,41 +315,41 @@ void py_module(py::module& module) {
 
 
                Returns:
-                   MeshSubDeviceManagerId: The ID of the created sub-device manager.
+                   SubDeviceManagerId: The ID of the created sub-device manager.
                    SubDeviceId: The ID of the sub-device that will be used for fabric.
            )doc")
         .def(
             "load_sub_device_manager",
-            &MeshDevice::mesh_load_sub_device_manager,
-            py::arg("mesh_sub_device_manager_id"),
+            &MeshDevice::load_sub_device_manager,
+            py::arg("sub_device_manager_id"),
             R"doc(
                Loads the sub-device manager with the given ID.
 
 
                Args:
-                   mesh_sub_device_manager_id (MeshSubDeviceManagerId): The ID of the sub-device manager to load.
+                   sub_device_manager_id (SubDeviceManagerId): The ID of the sub-device manager to load.
            )doc")
         .def(
             "clear_loaded_sub_device_manager",
-            &MeshDevice::mesh_clear_loaded_sub_device_manager,
+            &MeshDevice::clear_loaded_sub_device_manager,
             R"doc(
                Clears the loaded sub-device manager for the given mesh device.
            )doc")
         .def(
             "remove_sub_device_manager",
-            &MeshDevice::mesh_remove_sub_device_manager,
-            py::arg("mesh_sub_device_manager_id"),
+            &MeshDevice::remove_sub_device_manager,
+            py::arg("sub_device_manager_id"),
             R"doc(
                Removes the sub-device manager with the given ID.
 
 
                Args:
-                   mesh_sub_device_manager_id (MeshSubDeviceManagerId): The ID of the sub-device manager to remove.
+                   sub_device_manager_id (SubDeviceManagerId): The ID of the sub-device manager to remove.
            )doc")
         .def(
             "set_sub_device_stall_group",
             [](MeshDevice& self, const std::vector<SubDeviceId>& sub_device_ids) {
-                self.mesh_set_sub_device_stall_group(sub_device_ids);
+                self.set_sub_device_stall_group(sub_device_ids);
             },
             py::arg("sub_device_ids"),
             R"doc(
@@ -354,11 +363,33 @@ void py_module(py::module& module) {
            )doc")
         .def(
             "reset_sub_device_stall_group",
-            &MeshDevice::mesh_reset_sub_device_stall_group,
+            &MeshDevice::reset_sub_device_stall_group,
             R"doc(
                Resets the sub_device_ids that will be stalled on by default for Fast Dispatch commands such as reading, writing, synchronizing
                back to all SubDevice IDs.
-           )doc");
+           )doc")
+        .def(
+            "num_program_cache_entries",
+            &MeshDevice::num_program_cache_entries,
+            "Number of entries in the program cache for this device")
+        .def(
+            "sfpu_eps",
+            [](MeshDevice* device) { return tt::tt_metal::hal::get_eps(); },
+            R"doc(Returns machine epsilon value for current architecture.)doc")
+        .def(
+            "sfpu_nan",
+            [](MeshDevice* device) { return tt::tt_metal::hal::get_nan(); },
+            R"doc(Returns NaN value for current architecture.)doc")
+        .def(
+            "sfpu_inf",
+            [](MeshDevice* device) { return tt::tt_metal::hal::get_inf(); },
+            R"doc(Returns Infinity value for current architecture.)doc");
+
+    auto py_tensor_to_mesh =
+        static_cast<py::class_<TensorToMesh, std::unique_ptr<TensorToMesh>>>(module.attr("CppTensorToMesh"));
+
+    auto py_mesh_to_tensor =
+        static_cast<py::class_<MeshToTensor, std::unique_ptr<MeshToTensor>>>(module.attr("CppMeshToTensor"));
 
     module.def(
         "open_mesh_device",
@@ -370,51 +401,177 @@ void py_module(py::module& module) {
         py::arg("num_command_queues"),
         py::arg("offset"),
         py::arg("physical_device_ids"),
-        py::arg("dispatch_core_config"));
-
+        py::arg("dispatch_core_config"),
+        py::arg("worker_l1_size") = DEFAULT_WORKER_L1_SIZE);
     module.def("close_mesh_device", &close_mesh_device, py::arg("mesh_device"), py::kw_only());
+
+    auto py_shard2d_config = static_cast<py::class_<Shard2dConfig>>(module.attr("Shard2dConfig"));
+    py_shard2d_config.def(py::init<int, int>(), py::arg("row_dim"), py::arg("col_dim"))
+        .def_readwrite("row_dim", &Shard2dConfig::row_dim)
+        .def_readwrite("col_dim", &Shard2dConfig::col_dim);
+    auto py_concat2d_config = static_cast<py::class_<Concat2dConfig>>(module.attr("Concat2dConfig"));
+    py_concat2d_config.def(py::init<int, int>(), py::arg("row_dim"), py::arg("col_dim"))
+        .def_readwrite("row_dim", &Concat2dConfig::row_dim)
+        .def_readwrite("col_dim", &Concat2dConfig::col_dim);
+
     module.def(
-        "get_device_tensor",
-        py::overload_cast<const Tensor&, int>(&ttnn::distributed::get_device_tensor),
+        "get_device_tensors",
+        &get_device_tensors,
         py::arg("tensor"),
-        py::arg("device_id"),
         py::kw_only(),
         R"doc(
-       Get the tensor shard corresponding to the device_id.
-
+       Get a list of tensor shards from a multidevice tensor.
 
        Args:
-           tensor (Tensor): The tensor to get the shard from.
-           device_id (int): The device id to get the shard for.
+           tensor (Tensor): The tensor to get the shards from.
+
+       Returns:
+           List[Tensor]: The shards of the tensor corresponding to the devices.
+           )doc");
+    module.def(
+        "replicate_tensor_to_mesh_mapper",
+        [](MeshDevice& mesh_device) -> std::unique_ptr<TensorToMesh> {
+            return replicate_tensor_to_mesh_mapper(mesh_device);
+        },
+        py::arg("mesh_device"),
+        R"doc(
+       Returns a mapper replicating a tensor over the given mesh.
+
+       Args:
+           mesh_device (MeshDevice): The mesh to replicate over.
 
 
        Returns:
-           Tensor: The shard of the tensor corresponding to the device_id.
+           TensorToMesh: A mapper providing the desired sharding.
    )doc");
     module.def(
-        "get_device_tensor",
-        py::overload_cast<const Tensor&, const IDevice*>(&ttnn::distributed::get_device_tensor),
-        py::arg("tensor"),
-        py::arg("device"),
-        py::kw_only(),
+        "shard_tensor_to_mesh_mapper",
+        [](MeshDevice& mesh_device, int dim) -> std::unique_ptr<TensorToMesh> {
+            return shard_tensor_to_mesh_mapper(mesh_device, dim);
+        },
+        py::arg("mesh_device"),
+        py::arg("dim"),
         R"doc(
-       Get the tensor shard corresponding to the device.
-
+       Returns a mapper sharding a tensor over the given dimension for the given mesh.
 
        Args:
-           tensor (Tensor): The tensor to get the shard from.
-           device (Device): The device to get the shard for.
-
+           mesh_device (MeshDevice): The mesh to replicate over.
+           dim (int): The dimension to shard over.
 
        Returns:
-           Tensor: The shard of the tensor corresponding to the device.
+           TensorToMesh: A mapper providing the desired sharding.
    )doc");
-    module.def("get_device_tensors", &get_device_tensors, py::arg("tensor"), py::kw_only());
+    module.def(
+        "shard_tensor_to_2d_mesh_mapper",
+        [](MeshDevice& mesh_device,
+           const MeshShape& mesh_shape,
+           const Shard2dConfig& config) -> std::unique_ptr<TensorToMesh> {
+            return shard_tensor_to_2d_mesh_mapper(mesh_device, mesh_shape, config);
+        },
+        py::arg("mesh_device"),
+        py::arg("mesh_shape"),
+        py::arg("config"),
+        R"doc(
+       Returns a mapper sharding a tensor over the given dimension for the given mesh.
+
+       Args:
+           mesh_device (MeshDevice): The mesh to create the mapper for.
+           mesh_shape (MeshShape): The shape of the 2D mesh as (num_rows, num_cols).
+           config (Shard2dConfig): A config object representing the row and column to shard over.
+
+       Returns:
+           TensorToMesh: A mapper providing the desired sharding.
+   )doc");
+    module.def(
+        "concat_mesh_to_tensor_composer",
+        [](int dim) -> std::unique_ptr<MeshToTensor> { return concat_mesh_to_tensor_composer(dim); },
+        py::arg("dim"));
+    module.def(
+        "concat_2d_mesh_to_tensor_composer",
+        [](MeshDevice& mesh_device, const Concat2dConfig& config) -> std::unique_ptr<MeshToTensor> {
+            return concat_2d_mesh_to_tensor_composer(mesh_device, config);
+        },
+        py::arg("mesh_device"),
+        py::arg("config"),
+        R"doc(
+            Returns a Concat2dMeshToTensor composer with the given mesh device and dimensions.
+
+            Args:
+                mesh_device (MeshDevice): The mesh device to create the composer for.
+                config (Concat2dConfig): A config object representing the row and column to concat over.
+
+            Returns:
+                TensorToMesh: A composer providing the desired concatenation.
+   )doc");
+    module.def(
+        "distribute_tensor",
+        [](const Tensor& tensor,
+           const TensorToMesh& mapper,
+           std::optional<std::reference_wrapper<MeshDevice>> mesh_device = std::nullopt) -> Tensor {
+            return distribute_tensor(tensor, mapper, mesh_device);
+        },
+        py::arg("tensor"),
+        py::arg("mapper"),
+        py::arg("mesh_device") = py::none(),
+        R"doc(
+            Distributes a tensor across a mesh device according to provided mapper.
+
+            Args:
+                tensor (Tensor): The tensor to distribute.
+                mapper (TensorToMesh): The mapper to use for distribution.
+                mesh_device (MeshDevice): The mesh device to distribute the tensor over.
+
+            Returns:
+                Tensor: The distributed tensor.
+        )doc");
+    module.def(
+        "aggregate_tensor",
+        [](const Tensor& tensor, const MeshToTensor& composer) -> Tensor { return aggregate_tensor(tensor, composer); },
+        py::arg("tensor"),
+        py::arg("composer"),
+        R"doc(
+            Aggregates a set of shard tensors into a single host tensor using the provided composer.
+
+            Args:
+                tensor (Tensor): The tensor to aggregate.
+                composer (MeshToTensor): The composer to use for aggregation.
+
+            Returns:
+                Tensor: The aggregated tensor.
+            )doc");
+    module.def(
+        "aggregate_tensor",
+        [](const std::vector<Tensor>& tensors, const MeshToTensor& composer) -> Tensor {
+            Tensor aggregated_tensor = aggregate_as_tensor(tensors, AllGatherTensor{});
+
+            return aggregate_tensor(aggregated_tensor, composer);
+        },
+        py::arg("tensor"),
+        py::arg("composer"),
+        R"doc(
+            Aggregates a set of shard tensors into a single host tensor using the provided composer.
+
+            Args:
+                tensor (Tensor): The tensor to aggregate.
+                composer (MeshToTensor): The composer to use for aggregation.
+
+            Returns:
+                Tensor: The aggregated tensor.
+            )doc");
     module.def(
         "aggregate_as_tensor",
         [](const std::vector<Tensor>& tensors) -> Tensor { return aggregate_as_tensor(tensors, AllGatherTensor{}); },
         py::arg("tensors"),
-        py::kw_only());
+        py::kw_only(),
+        R"doc(
+            Aggregates a set of shards into one tensor. Device shards will remain on device and be packed into a multidevice storage object.
+
+            Args:
+                tensor (Tensor): The tensor to aggregate.
+
+            Returns:
+                Tensor: The aggregated tensor.
+            )doc");
     module.def("get_t3k_physical_device_ids_ring", &get_t3k_physical_device_ids_ring);
 }
 

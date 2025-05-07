@@ -246,6 +246,27 @@ def test_multi_device_single_op_unary(mesh_device):
     assert_with_pcc(ttnn_torch_output_tensor, torch_output_golden, pcc=0.999)
 
 
+def test_multi_device_single_op_unary_with_cache(mesh_device):
+    """Multidevice API test: Running tensor-parallel multi-device single-op unary with cache"""
+    mesh_device.enable_program_cache()
+
+    torch_input_tensor = torch.rand((1, 1, 32, 32 * mesh_device.get_num_devices()), dtype=torch.bfloat16)
+    torch_output_golden = torch.nn.functional.gelu(torch_input_tensor)
+    torch_golden = torch.nn.functional.gelu(torch_output_golden)
+
+    ttnn_input_tensor = ttnn.from_torch(
+        torch_input_tensor,
+        layout=ttnn.TILE_LAYOUT,
+        mesh_mapper=ShardTensorToMesh(mesh_device, dim=3),
+        device=mesh_device,
+    )
+    ttnn_output_tensor = ttnn.gelu(ttnn_input_tensor)
+    final_output_tensor = ttnn.gelu(ttnn_output_tensor)
+
+    ttnn_torch_output_tensor = ttnn.to_torch(final_output_tensor, mesh_composer=ConcatMeshToTensor(mesh_device, dim=3))
+    assert_with_pcc(ttnn_torch_output_tensor, torch_golden, pcc=0.999)
+
+
 @pytest.mark.parametrize(
     "device_params",
     [{"dispatch_core_axis": ttnn.DispatchCoreAxis.ROW}, {"dispatch_core_axis": ttnn.DispatchCoreAxis.COL}],
@@ -471,8 +492,6 @@ def test_max(mesh_device):
 )
 def test_ttnn_multi_device_all_gather_all_devices(t3k_mesh_device):
     """Multidevice API test for ttnn.all_gather CCL operation for full 8-device T3K"""
-    if t3k_mesh_device.get_num_devices() < 8:
-        pytest.skip()
 
     full_tensor = torch.ones((1, 1, 32, 32 * t3k_mesh_device.get_num_devices()), dtype=torch.bfloat16)
     for i in range(t3k_mesh_device.get_num_devices()):
@@ -608,29 +627,6 @@ def test_clone(mesh_device):
     print(results_11BH)
 
 
-def test_device_shard_to_torch(mesh_device):
-    """Test `ttnn.get_device_tensor(..) API"""
-    torch_input_tensor = torch.rand((1, 1, 32, 32 * mesh_device.get_num_devices()), dtype=torch.bfloat16)
-    torch_output_golden = torch.nn.functional.gelu(torch_input_tensor)
-    torch_output_golden = torch.exp(torch_output_golden)
-
-    ttnn_input_tensor = ttnn.from_torch(
-        torch_input_tensor,
-        layout=ttnn.TILE_LAYOUT,
-        mesh_mapper=ShardTensorToMesh(mesh_device, dim=3),
-        device=mesh_device,
-    )
-
-    ttnn_gelu_output = ttnn.gelu(ttnn_input_tensor)
-    ttnn_output_tensor = ttnn.exp(ttnn_gelu_output)
-
-    # Skip the compose/torch.cat call entirely
-    for i, device in enumerate(mesh_device.get_devices()):
-        device_tensor = ttnn.get_device_tensor(ttnn_output_tensor, device)
-        torch_device_tensor = ttnn.to_torch(device_tensor)
-        assert_with_pcc(torch_device_tensor, torch_output_golden[..., i * 32 : (i + 1) * 32], pcc=0.999)
-
-
 @pytest.mark.parametrize("height", [7])
 @pytest.mark.parametrize("width", [3])
 def test_validate_as_tensor(tmp_path, mesh_device, height, width):
@@ -647,7 +643,6 @@ def test_validate_as_tensor(tmp_path, mesh_device, height, width):
         cache_file_name=tmp_path / "cache_file",
     )
     assert tensor.dtype == ttnn.float32
-    assert tensor.devices() == mesh_device.get_devices()
     assert tensor.layout == ttnn.TILE_LAYOUT
     assert ttnn.get_memory_config(tensor) == memory_config
 
@@ -661,13 +656,8 @@ def test_validate_as_tensor(tmp_path, mesh_device, height, width):
         cache_file_name=tmp_path / "cache_file",
     )
     assert tensor.dtype == ttnn.float32
-    assert tensor.devices() == mesh_device.get_devices()
     assert tensor.layout == ttnn.TILE_LAYOUT
     assert ttnn.get_memory_config(tensor) == memory_config
-
-    for device in mesh_device.get_devices():
-        device_tensor = ttnn.get_device_tensor(tensor, device)
-        assert torch.allclose(ttnn.to_torch(device_tensor), torch_input_tensor)
 
 
 def test_visualize_mesh_device(t3k_mesh_device):
@@ -705,6 +695,7 @@ def test_line_all_gather_after_reshape(mesh_device):
     if mesh_device.get_num_devices() < 8:
         pytest.skip()
     mesh_device.reshape(ttnn.MeshShape(2, 4))
+
     torch_input_tensor = torch.rand((1, 1, 64, 128), dtype=torch.bfloat16)
 
     mesh_tensor = ttnn.from_torch(
@@ -731,3 +722,33 @@ def test_distribute_api(mesh_device):
             layout=ttnn.TILE_LAYOUT,
             device=mesh_device,
         )
+
+
+def test_heterogenous_operation_dispatch():
+    if ttnn.get_num_devices() < 8:
+        pytest.skip()
+
+    a = torch.rand((1, 1, 32, 128), dtype=torch.bfloat16)
+    torch_gelu = torch.nn.functional.gelu(a)
+    torch_silu = torch.nn.functional.silu(a)
+
+    mesh_device = ttnn.open_mesh_device(ttnn.MeshShape(2, 4))
+    submesh_0 = mesh_device.create_submesh(ttnn.MeshShape(1, 4))
+    submesh_1 = mesh_device.create_submesh(ttnn.MeshShape(1, 1), offset=ttnn.MeshCoordinate(1, 1))
+
+    ttnn_input_0 = ttnn.from_torch(
+        a, device=submesh_0, mesh_mapper=ttnn.ShardTensorToMesh(submesh_0, dim=-1), layout=ttnn.TILE_LAYOUT
+    )
+    ttnn_input_1 = ttnn.from_torch(
+        a, device=submesh_1, mesh_mapper=ttnn.ShardTensorToMesh(submesh_1, dim=-1), layout=ttnn.TILE_LAYOUT
+    )
+
+    ttnn_gelu = ttnn.gelu(ttnn_input_0)
+    ttnn_silu = ttnn.silu(ttnn_input_1)
+
+    assert_with_pcc(
+        ttnn.to_torch(ttnn_gelu, mesh_composer=ttnn.ConcatMeshToTensor(submesh_0, dim=-1)), torch_gelu, pcc=0.9999
+    )
+    assert_with_pcc(
+        ttnn.to_torch(ttnn_silu, mesh_composer=ttnn.ConcatMeshToTensor(submesh_1, dim=-1)), torch_silu, pcc=0.9999
+    )

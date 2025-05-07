@@ -8,16 +8,15 @@
 #include <cmath>
 
 #include "ccl_host_datastructures.hpp"
-#include "cpp/ttnn/operations/ccl/erisc_datamover_builder.hpp"
+#include <tt-metalium/erisc_datamover_builder.hpp>
 #include "ttnn/operations/data_movement/slice/slice.hpp"
 #include "ttnn/operations/data_movement/concat/concat.hpp"
 
-#include "tt-metalium/hal_exp.hpp"
+#include "tt-metalium/hal.hpp"
+#include "ttnn/types.hpp"
 
 namespace ttnn {
 namespace ccl {
-
-using namespace tt::tt_metal::experimental;
 
 void SyncModeSpec::add_signal(uint32_t sem_id, uint32_t wait_count) {
     this->sem_ids.push_back(sem_id);
@@ -60,31 +59,82 @@ size_t LineTopology::get_distance_to_end_of_line(ttnn::ccl::EdmLineFabricOpInter
 
 ttnn::ccl::Topology LineTopology::topology() const { return ttnn::ccl::Topology::Linear; }
 
-std::tuple<uint32_t, std::optional<chip_id_t>, std::optional<chip_id_t>> get_device_index_and_sender_receiver_ids(
-    const Tensor& input_tensor, const std::vector<IDevice*>& devices, const ttnn::ccl::Topology& topology) {
+tt::tt_metal::operation::MeshWorkloadWithCallbacks create_mesh_workload_from_programs(
+    const ttnn::MeshCoordinateRangeSet& tensor_coords,
+    const std::vector<Tensor>& input_tensors,
+    std::vector<Tensor>& output_tensors,
+    const std::function<tt::tt_metal::operation::ProgramWithCallbacks(const ttnn::MeshCoordinate&)>& create_program) {
+    tt::tt_metal::operation::MeshWorkloadWithCallbacks workload_with_callbacks;
+    for (const auto& range : tensor_coords.ranges()) {
+        for (const auto& coord : range) {
+            const ttnn::MeshCoordinateRange program_range(coord, coord);
+            auto program_with_callbacks = create_program(coord);
+            workload_with_callbacks.workload.add_program(program_range, std::move(program_with_callbacks.program));
+            if (program_with_callbacks.override_runtime_arguments_callback.has_value()) {
+                workload_with_callbacks.per_program_callbacks.emplace(
+                    program_range, std::move(*program_with_callbacks.override_runtime_arguments_callback));
+            }
+        }
+    }
+    return workload_with_callbacks;
+}
+
+SenderRecieverConfig get_device_sender_receiver_config(
+    const IDevice* target_device, const std::vector<IDevice*>& devices, ttnn::ccl::Topology topology) {
     uint32_t num_devices = devices.size();
     bool is_linear = topology == ttnn::ccl::Topology::Linear;
-    uint32_t device_index = 0;  // Initialize device index
+    SenderRecieverConfig config;
     for (uint32_t i = 0; i < num_devices; ++i) {
-        if (devices.at(i) == input_tensor.device()) {
-            device_index = i;
+        if (devices.at(i) == target_device) {
+            config.device_index = i;
             bool is_last_chip_in_clockwise_direction = is_linear && i == (num_devices - 1);
             bool is_last_chip_in_counter_clockwise_direction = is_linear && i == 0;
 
-            std::optional<chip_id_t> receiver_device_id =
-                is_last_chip_in_clockwise_direction ? std::nullopt
-                                                    : std::optional<chip_id_t>(devices.at((i + 1) % num_devices)->id());
+            config.receiver_device_id = is_last_chip_in_clockwise_direction
+                                            ? std::nullopt
+                                            : std::optional<chip_id_t>(devices.at((i + 1) % num_devices)->id());
 
-            std::optional<chip_id_t> sender_device_id =
+            config.sender_device_id =
                 is_last_chip_in_counter_clockwise_direction
                     ? std::nullopt
                     : std::optional<chip_id_t>(devices.at((i + num_devices - 1) % num_devices)->id());
-
-            return {device_index, sender_device_id, receiver_device_id};
         }
     }
 
-    return {device_index, std::nullopt, std::nullopt};  // Return null if the device is not found
+    return config;
+}
+
+SenderRecieverConfig get_device_sender_receiver_config_in_ring(
+    const MeshCoordinate& mesh_coord,
+    const distributed::MeshDevice* mesh_device,
+    uint32_t cluster_axis,
+    int ring_size) {
+    SenderRecieverConfig config;
+    const auto& mesh_view = mesh_device->get_view();
+    TT_FATAL(
+        mesh_view.is_mesh_2d(),
+        "CLL operation invoked with cluster_axis API on >2D mesh, which is currently unsupported");
+    const auto view_index = (cluster_axis == 0) ? mesh_coord[1] : mesh_coord[0];
+    config.device_index = (cluster_axis == 0) ? mesh_coord[0] : mesh_coord[1];
+
+    auto get_chip_id = [&](std::size_t line_index) -> std::optional<chip_id_t> {
+        auto new_row = mesh_coord[0];
+        auto new_col = mesh_coord[1];
+        if (cluster_axis == 0) {
+            new_row = line_index % ring_size;
+        } else {
+            new_col = line_index % ring_size;
+        }
+        return mesh_view.find_device_id(MeshCoordinate(new_row, new_col));
+    };
+
+    bool is_last_chip_in_clockwise_direction = config.device_index == (ring_size - 1);
+    bool is_last_chip_in_counter_clockwise_direction = config.device_index == 0;
+    config.receiver_device_id =
+        is_last_chip_in_clockwise_direction ? std::nullopt : get_chip_id(config.device_index + 1);
+    config.sender_device_id =
+        is_last_chip_in_counter_clockwise_direction ? std::nullopt : get_chip_id(config.device_index + ring_size - 1);
+    return config;
 }
 
 std::vector<ttnn::Tensor> unpad_output_tensor(
@@ -217,8 +267,8 @@ void generate_edm_kernels_for_ring_or_linear_topology(
     const std::vector<ccl::EriscDatamoverBuilder>& counter_clockwise_edm_builders,
     std::optional<uint32_t> receiver_device_id,
     std::optional<uint32_t> sender_device_id) {
-    auto sender_noc = tt::tt_metal::detail::GetPreferredNOCForDRAMRead(hal::get_arch());
-    auto receiver_noc = tt::tt_metal::detail::GetPreferredNOCForDRAMWrite(hal::get_arch());
+    auto sender_noc = tt::tt_metal::detail::GetPreferredNOCForDRAMRead(tt::tt_metal::hal::get_arch());
+    auto receiver_noc = tt::tt_metal::detail::GetPreferredNOCForDRAMWrite(tt::tt_metal::hal::get_arch());
     uint32_t sender_socket_idx = 0;
     uint32_t receiver_socket_idx = 0;
     if (receiver_device_id == sender_device_id) {
@@ -307,14 +357,14 @@ tt::tt_metal::KernelHandle generate_edm_kernel_impl(
 tt::tt_metal::KernelHandle generate_edm_kernel(
     Program& program,
     const IDevice* device,
-    const ccl::FabricEriscDatamoverBuilder& edm_builder,
+    const tt::tt_fabric::FabricEriscDatamoverBuilder& edm_builder,
     const CoreCoord& eth_core,
     tt::tt_metal::NOC noc_id) {
     return generate_edm_kernel_impl(
         program,
         device,
         edm_builder,
-        "ttnn/cpp/ttnn/operations/ccl/kernels/edm_fabric/fabric_erisc_datamover.cpp",
+        "tt_metal/fabric/impl/kernels/edm_fabric/fabric_erisc_datamover.cpp",
         eth_core,
         noc_id,
         tt::tt_metal::KernelBuildOptLevel::O3);
@@ -1417,6 +1467,38 @@ std::vector<Shape4D<uint32_t>> GenericWrappedTensorSlicerV2::create_worker_slice
     log_trace(tt::LogOp, "--------------------------------");
 
     return worker_slice_shapes;
+}
+
+std::tuple<size_t, size_t, bool> get_forward_backward_configuration(
+    size_t ring_size, size_t ring_index, Topology topology) {
+    // Used for experimentation for optimal perf
+    // May be uplifted to an op parameter if needed
+    constexpr bool enable_dynamic_alternate = false;
+    bool dynamic_alternate = false;
+    size_t num_targets_forward = 0;
+    size_t num_targets_backward = 0;
+    if (topology == Topology::Linear) {
+        LineTopology line_topology(ring_size, ring_index);
+        num_targets_forward =
+            line_topology.get_distance_to_end_of_line(ttnn::ccl::EdmLineFabricOpInterface::Direction::FORWARD);
+        num_targets_backward =
+            line_topology.get_distance_to_end_of_line(ttnn::ccl::EdmLineFabricOpInterface::Direction::BACKWARD);
+    } else if (topology == ccl::Topology::Ring) {
+        // TODO: Commonize
+        num_targets_forward = tt::div_up(ring_size - 1, 2);
+        num_targets_backward = ring_size - 1 - num_targets_forward;
+        constexpr bool static_alternate = true;
+        if constexpr (static_alternate) {
+            if (ring_index % 2 == 0) {
+                std::swap(num_targets_forward, num_targets_backward);
+            }
+        }
+        if constexpr (enable_dynamic_alternate) {
+            // Even ring size will result in uneven fwd/backward distances
+            dynamic_alternate = ring_size % 2 == 0;
+        }
+    }
+    return std::make_tuple(num_targets_forward, num_targets_backward, dynamic_alternate);
 }
 
 }  // namespace ccl

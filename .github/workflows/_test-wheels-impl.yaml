@@ -8,6 +8,7 @@ on:
         default: True
         type: boolean
 
+# THIS COMMENT NEEDS REEVALUATION AND THE WORKFLOW NEEDS CLEANUP
 # Since pre-compiled assets are only built on ubuntu-20.04, we force tests
 # to only be run on ubuntu-20.04.
 #
@@ -24,16 +25,16 @@ jobs:
   test-wheels-host:
     strategy:
       matrix:
-        os: ${{ fromJson(inputs.from-precompiled && '["ubuntu-20.04"]' || '["ubuntu-20.04", "ubuntu-22.04"]') }}
+        os: ${{ fromJson(inputs.from-precompiled && '["ubuntu-22.04"]' || '["ubuntu-22.04", "ubuntu-24.04"]') }}
         runner-hw-info: [
           {arch: wormhole_b0}
         ]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
-      - uses: ./.github/actions/install-metal-deps
-        with:
-          os: ${{ matrix.os }}
+      - name: Install system dependencies
+        shell: bash
+        run: sudo ./install_dependencies.sh
       - uses: actions/download-artifact@v4
         timeout-minutes: 10
         with:

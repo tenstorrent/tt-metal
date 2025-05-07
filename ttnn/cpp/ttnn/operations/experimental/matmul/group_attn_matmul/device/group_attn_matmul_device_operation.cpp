@@ -180,8 +180,7 @@ operation::ProgramWithCallbacks GroupAttnMatmulDeviceOperation::create_program(
         this->compute_kernel_config);
 }
 
-const operation::Hash GroupAttnMatmulDeviceOperation::compute_program_hash(
-    const std::vector<Tensor>& input_tensors) const {
+operation::Hash GroupAttnMatmulDeviceOperation::compute_program_hash(const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor_a = input_tensors.at(0);
     const auto& input_tensor_b = input_tensors.at(1);
 

@@ -5,11 +5,8 @@ set(UNIT_TESTS_ETH_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/test_ring_gather_kernels.cpp
 )
 
-# Define the function to create test executables for each architecture
-function(create_unit_test_executable arch_name)
-    # Define the test executable name using the architecture name
-    set(exec_name unit_tests_eth_${arch_name})
-    string(REPLACE "wormhole" "wormhole_b0" exec_name ${exec_name})
+function(create_unit_test_executable)
+    set(exec_name unit_tests_eth)
 
     # Create the test executable
     add_executable(${exec_name} ${UNIT_TESTS_ETH_SRC})
@@ -25,7 +22,6 @@ function(create_unit_test_executable arch_name)
         ${exec_name}
         BEFORE
         PRIVATE
-            ${PROJECT_SOURCE_DIR}/tt_metal/hw/inc/${arch_name}
             "$<TARGET_PROPERTY:Metalium::Metal,INCLUDE_DIRECTORIES>"
             ${PROJECT_SOURCE_DIR}/tests
             ${PROJECT_SOURCE_DIR}/tests/tt_metal/tt_metal/common
@@ -42,14 +38,4 @@ function(create_unit_test_executable arch_name)
     )
 endfunction()
 
-# Define the architectures for which to create test executables
-set(ARCHITECTURES
-    "grayskull"
-    "wormhole"
-    "blackhole"
-)
-
-# Create a test executable for each architecture
-foreach(arch ${ARCHITECTURES})
-    create_unit_test_executable(${arch})
-endforeach()
+create_unit_test_executable()

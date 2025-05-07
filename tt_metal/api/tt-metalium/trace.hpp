@@ -4,18 +4,25 @@
 
 #pragma once
 
+#include <stdint.h>
+#include <atomic>
 #include <functional>
 #include <memory>
 #include <mutex>
 #include <utility>
 #include <variant>
 
-#include "buffer.hpp"
-#include "command_queue.hpp"
-#include "trace_buffer.hpp"
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/command_queue.hpp>
+#include <tt-metalium/trace_buffer.hpp>
+
+namespace tt {
+namespace tt_metal {
+class CommandQueue;
+}  // namespace tt_metal
+}  // namespace tt
 
 namespace tt::tt_metal {
-inline namespace v0 {
 
 class Trace {
 private:
@@ -31,5 +38,4 @@ public:
     static std::shared_ptr<TraceBuffer> create_empty_trace_buffer();
 };
 
-}  // namespace v0
 }  // namespace tt::tt_metal

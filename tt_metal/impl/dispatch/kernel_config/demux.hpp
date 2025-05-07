@@ -2,9 +2,15 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
-#include "fd_kernel.hpp"
+#include <stdint.h>
+#include <array>
+#include <optional>
 
-typedef struct demux_static_config {
+#include "dispatch/kernels/packet_queue_ctrl.hpp"
+#include "fd_kernel.hpp"
+#include "system_memory_manager.hpp"
+
+struct demux_static_config_t {
     std::optional<uint32_t> endpoint_id_start_index;
     std::optional<uint32_t> rx_queue_start_addr_words;
     std::optional<uint32_t> rx_queue_size_words;
@@ -23,9 +29,9 @@ typedef struct demux_static_config {
         output_depacketize_local_sem_id;  // [26:29]
     std::array<std::optional<uint32_t>, tt::packet_queue::MAX_SWITCH_FAN_OUT>
         output_depacketize_remove_header;  // [26:29]
-} demux_static_config_t;
+};
 
-typedef struct demux_dependent_config {
+struct demux_dependent_config_t {
     std::array<std::optional<uint32_t>, tt::packet_queue::MAX_SWITCH_FAN_OUT> remote_tx_x;  // [4:7], dependent
     std::array<std::optional<uint32_t>, tt::packet_queue::MAX_SWITCH_FAN_OUT> remote_tx_y;  // [4:7], dependent
     std::array<std::optional<uint32_t>, tt::packet_queue::MAX_SWITCH_FAN_OUT>
@@ -41,7 +47,7 @@ typedef struct demux_dependent_config {
     std::optional<uint32_t> output_depacketize;                                                    // Dependent
     std::array<std::optional<uint32_t>, tt::packet_queue::MAX_SWITCH_FAN_OUT>
         output_depacketize_downstream_sem_id;  // [26:29], dependent
-} demux_dependent_config_t;
+};
 
 class DemuxKernel : public FDKernel {
 public:

@@ -2,6 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <math.h>
+#include <optional>
+
 #include <tt-metalium/logger.hpp>
 #include <tt-metalium/buffer.hpp>
 #include "tt-metalium/circular_buffer.hpp"
@@ -16,8 +19,6 @@
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/math.hpp>
 #include <tt-metalium/util.hpp>
-
-#include <optional>
 
 using namespace tt::constants;
 namespace ttnn::operations::normalization {
@@ -98,6 +99,7 @@ tt::tt_metal::operation::ProgramWithCallbacks scale_mask_softmax_multi_core(
     tt::log_debug("math_fidelity: {}", math_fidelity);
     tt::log_debug("math_approx_mode: {}", math_approx_mode);
     tt::log_debug("fp32_dest_acc_en: {}", fp32_dest_acc_en);
+    tt::log_debug("num_datum_padded: {}", num_datum_padded);
 
     auto src0_buffer = input_tensor.buffer();
     auto out0_buffer = output_tensor.buffer();
@@ -153,12 +155,12 @@ tt::tt_metal::operation::ProgramWithCallbacks scale_mask_softmax_multi_core(
          num_tile_rows_per_core_group_1,
          num_tile_rows_per_core_group_2] = tt::tt_metal::split_work_to_cores(grid_size, num_tile_rows, true);
 
-    bool src0_is_dram = src0_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
-    bool out0_is_dram = out0_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
+    bool src0_is_dram = src0_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
+    bool out0_is_dram = out0_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
     std::vector<uint32_t> reader_compile_time_args = {// interleaved accessor args
                                                       src0_is_dram};
     if (mask.has_value()) {
-        bool mask_is_dram = mask.value().buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
+        bool mask_is_dram = mask.value().buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM;
         reader_compile_time_args.push_back(mask_is_dram);
     }
     if (causal_mask) {
@@ -169,7 +171,7 @@ tt::tt_metal::operation::ProgramWithCallbacks scale_mask_softmax_multi_core(
 
     std::vector<uint32_t> writer_compile_time_args = {// interleaved accessor args
                                                       out0_is_dram};
-    std::map<string, string> softmax_defines;
+    std::map<string, string> softmax_defines, writer_defines;
     if (mask.has_value()) {
         softmax_defines["FUSED_SCALE_MASK"] = "1";
     }
@@ -187,7 +189,7 @@ tt::tt_metal::operation::ProgramWithCallbacks scale_mask_softmax_multi_core(
         "ttnn/cpp/ttnn/operations/normalization/softmax/device/kernels/dataflow/"
         "writer_unary_interleaved_start_id_blocked_sm.cpp",
         all_device_cores,
-        tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args, softmax_defines));
+        tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args, writer_defines));
 
     // for broadcasting in H direction we need to
     // NCHt, Nt, Wt
@@ -284,7 +286,7 @@ tt::tt_metal::operation::ProgramWithCallbacks scale_mask_softmax_multi_core(
             }
 
             SetRuntimeArgs(program, softmax_kernels_id, core, {0, 0, 0, 0, 0, 0});
-            SetRuntimeArgs(program, writer_kernels_id, core, {0, 0, 0, 0, 0, 0, 0xFF00FF00});
+            SetRuntimeArgs(program, writer_kernels_id, core, {0, 0, 0, 0, 0, 0});
             continue;
         }
         uint32_t num_tile_rows_per_core = 0;
@@ -346,13 +348,7 @@ tt::tt_metal::operation::ProgramWithCallbacks scale_mask_softmax_multi_core(
             program,
             writer_kernels_id,
             core,
-            {out_addr,
-             num_tile_rows_per_core * Wt,
-             tile_offset,
-             block_size,
-             mask_padded_data,
-             num_datum_padded,
-             0xFF00FF00});
+            {out_addr, num_tile_rows_per_core * Wt, tile_offset, block_size, mask_padded_data, num_datum_padded});
 
         curr_row += num_tile_rows_per_core;
     }
@@ -545,7 +541,6 @@ tt::tt_metal::operation::ProgramWithCallbacks scale_mask_softmax_multi_core(
                 writer_kernel_args[3] = block_size;
                 writer_kernel_args[4] = mask_padded_data;
                 writer_kernel_args[5] = num_datum_padded;
-                // writer_kernel_args[6] = 0xFF00FF00; // Hardcoded value doesn't need to be updated
 
                 curr_row += num_tile_rows_per_core;
             }
@@ -684,9 +679,9 @@ tt::tt_metal::operation::ProgramWithCallbacks scale_mask_softmax_sharded_multi_c
         {(std::size_t)start_core_x, (std::size_t)start_core_y},
         {(std::size_t)start_core_x + num_cores_c - 1, (std::size_t)start_core_y + num_cores_r - 1});
     // reader compile arg
-    bool is_dram_mask = 0;
+    bool is_dram_mask = false;
     if (mask.has_value()) {
-        is_dram_mask = mask->buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
+        is_dram_mask = mask->buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM;
     }
     std::vector<uint32_t> reader_compile_time_args = {(std::uint32_t)block_wt, (std::uint32_t)is_dram_mask};
     std::map<string, string> softmax_defines;
@@ -697,7 +692,7 @@ tt::tt_metal::operation::ProgramWithCallbacks scale_mask_softmax_sharded_multi_c
         bool mask_stick_size_is_power_of_two = tt::tt_metal::is_power_of_two_at_least_32(mask_stick_size);
         reader_compile_time_args.push_back((std::uint32_t)mask_stick_size_is_power_of_two);
         if (mask_stick_size_is_power_of_two) {
-            uint32_t mask_log2_stick_size = (std::uint32_t)log2(mask_stick_size);
+            uint32_t mask_log2_stick_size = (std::uint32_t)std::log2(mask_stick_size);
             reader_compile_time_args.push_back((std::uint32_t)mask_log2_stick_size);
         } else {
             reader_compile_time_args.push_back(mask_stick_size);

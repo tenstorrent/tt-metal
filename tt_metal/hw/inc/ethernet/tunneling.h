@@ -83,7 +83,7 @@ FORCE_INLINE void eth_send_packet(uint32_t q_num, uint32_t src_word_addr, uint32
 FORCE_INLINE
 void eth_send_packet_byte_addr(uint32_t q_num, uint32_t src_addr, uint32_t dest_addr, uint32_t num_words) {
     while (eth_txq_is_busy(q_num));
-    volatile uint32_t* ptr = (volatile uint32_t*)ETH_TXQ0_REGS_START;
+    volatile uint32_t* ptr = (volatile uint32_t*)(ETH_TXQ0_REGS_START + (q_num * ETH_TXQ_REGS_SIZE));
     ptr[ETH_TXQ_TRANSFER_START_ADDR >> 2] = src_addr;
     ptr[ETH_TXQ_DEST_ADDR >> 2] = dest_addr;
     ptr[ETH_TXQ_TRANSFER_SIZE_BYTES >> 2] = num_words << 4;
@@ -146,15 +146,16 @@ void notify_dispatch_core_done(uint64_t dispatch_addr) {
         while (!noc_cmd_buf_ready(n, NCRISC_AT_CMD_BUF));
     }
     DEBUG_SANITIZE_NOC_ADDR(noc_index, dispatch_addr, 4);
-    noc_fast_atomic_increment(
+    noc_fast_write_dw_inline<DM_DEDICATED_NOC>(
         noc_index,
         NCRISC_AT_CMD_BUF,
+        1 << REMOTE_DEST_BUF_WORDS_FREE_INC,
         dispatch_addr,
+        0xF,  // byte-enable
         NOC_UNICAST_WRITE_VC,
-        1,
-        31 /*wrap*/,
-        false /*linked*/,
-        true /*posted*/);
+        false,  // mcast
+        true    // posted
+    );
 }
 
 }  // namespace internal_

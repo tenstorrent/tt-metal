@@ -3,7 +3,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
-import torch
 from loguru import logger
 
 
@@ -99,8 +98,6 @@ def test_LlamaModel_demo(
     )
 
     check_mesh_device(t3k_mesh_device, model_config)
-
-    t3k_mesh_device.enable_async(True)
 
     args = construct_arg(
         implementation=implementation,

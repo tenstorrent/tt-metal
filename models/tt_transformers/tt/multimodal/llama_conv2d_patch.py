@@ -2,7 +2,6 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from typing import List, Optional
 import torch
 
 import ttnn
@@ -10,8 +9,6 @@ from models.utility_functions import (
     nearest_32,
 )
 from models.common.lightweightmodule import LightweightModule
-
-from ttnn import ShardTensorToMesh, ConcatMeshToTensor, ReplicateTensorToMesh
 
 
 class TtLlamaConv2dPatch(LightweightModule):
@@ -42,7 +39,7 @@ class TtLlamaConv2dPatch(LightweightModule):
         super().__init__()
 
         self.mesh_device = mesh_device
-        self.num_devices = len(self.mesh_device.get_devices())
+        self.num_devices = self.mesh_device.get_num_devices()
 
         self.in_channels = in_channels
         self.out_channels = out_channels

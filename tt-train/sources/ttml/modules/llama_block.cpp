@@ -4,19 +4,20 @@
 
 #include "llama_block.hpp"
 
-#include "core/tt_tensor_utils.hpp"
+#include "modules/grouped_query_attention.hpp"
+#include "modules/rotary_embedding.hpp"
 #include "ops/binary_ops.hpp"
+#include "ops/rope_op.hpp"
 #include "ops/unary_ops.hpp"
 
 namespace ttml::modules {
-
 LlamaMLP::LlamaMLP(uint32_t embedding_size, float dropout_prob) {
     uint32_t multiple_of = 256;
     const uint32_t unrounded_size = static_cast<uint32_t>(static_cast<float>(4 * embedding_size) * (2.0F / 3.0F));
     const uint32_t hidden_size = ((unrounded_size + multiple_of - 1) / multiple_of) * multiple_of;
-    m_w1 = std::make_shared<LinearLayer>(embedding_size, hidden_size);
-    m_w3 = std::make_shared<LinearLayer>(embedding_size, hidden_size);
-    m_w2 = std::make_shared<LinearLayer>(hidden_size, embedding_size);
+    m_w1 = std::make_shared<LinearLayer>(embedding_size, hidden_size, /*has_bias=*/false);
+    m_w3 = std::make_shared<LinearLayer>(embedding_size, hidden_size, /*has_bias=*/false);
+    m_w2 = std::make_shared<LinearLayer>(hidden_size, embedding_size, /*has_bias=*/false);
     m_dropout = std::make_shared<DropoutLayer>(dropout_prob);
 
     create_name("llama_mlp");
@@ -35,11 +36,23 @@ autograd::TensorPtr LlamaMLP::operator()(const autograd::TensorPtr& input) {
     return x;
 }
 
-LlamaBlock::LlamaBlock(uint32_t embedding_size, uint32_t num_heads, float dropout_prob) {
+LlamaBlock::LlamaBlock(
+    uint32_t embedding_size,
+    uint32_t num_heads,
+    uint32_t num_groups,
+    const ops::RotaryEmbeddingParams& rope_params,
+    float dropout_prob) {
     m_mlp = std::make_shared<LlamaMLP>(embedding_size, dropout_prob);
     m_attention_norm = std::make_shared<RMSNormLayer>(embedding_size);
     m_mlp_norm = std::make_shared<RMSNormLayer>(embedding_size);
-    m_attention = std::make_shared<MultiHeadAttention>(embedding_size, num_heads, dropout_prob);
+    m_attention = std::make_shared<GroupedQueryAttention>(GQAConfig{
+        .embedding_dim = embedding_size,
+        .num_heads = num_heads,
+        .num_groups = num_groups,
+        .dropout_prob = dropout_prob,
+        .rope_params = rope_params,
+        .bias_linears = false,
+    });
 
     create_name("llama_block");
     register_module(m_mlp, "mlp");

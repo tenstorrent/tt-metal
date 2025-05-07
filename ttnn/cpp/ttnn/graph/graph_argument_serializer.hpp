@@ -27,11 +27,6 @@ private:
     template <typename T, std::size_t N>
     void register_small_vector();
 
-    // In case you don't care about all the variations of the type
-    // such as const T, const T&, T, T&, etc
-    template <typename T>
-    void register_special_type();
-
     template <typename T>
     void register_type();
 

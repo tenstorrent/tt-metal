@@ -26,7 +26,6 @@ class TraceDescriptor;
 }
 
 namespace tt::tt_metal {
-inline namespace v0 {
 
 class Buffer;
 class Program;
@@ -89,5 +88,4 @@ private:
 TraceDescriptorByTraceIdOffset to_flatbuffer(
     flatbuffers::FlatBufferBuilder& builder, const TraceDescriptor& trace_desc, uint32_t trace_id);
 
-}  // namespace v0
 }  // namespace tt::tt_metal

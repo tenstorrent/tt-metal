@@ -49,7 +49,9 @@ import torch
 import ttnn
 
 ttnn_dtype_to_torch_dtype = {
+    ttnn.uint16: torch.int16,
     ttnn.uint32: torch.int32,
+    ttnn.int32: torch.int32,
     ttnn.bfloat16: torch.float32,
     ttnn.bfloat8_b: torch.bfloat16,
 }
@@ -161,8 +163,8 @@ def test_fill_pad_bfloat8_b(
         (1, 2, 3, 2, 1, 2, 97, 97),
     ],
 )
-@pytest.mark.parametrize("fill_value", [1])
-@pytest.mark.parametrize("dtype", [ttnn.uint32])
+@pytest.mark.parametrize("fill_value", [1, 0])
+@pytest.mark.parametrize("dtype", [ttnn.uint32, ttnn.int32, ttnn.uint16])
 @pytest.mark.parametrize("input_mem_config", [ttnn.DRAM_MEMORY_CONFIG])
 @pytest.mark.parametrize("output_mem_config", [ttnn.DRAM_MEMORY_CONFIG])
 def test_fill_pad_int(
@@ -279,7 +281,7 @@ def test_fill_pad_complex_sharding(device, fill_value, shape, shard_scheme, dtyp
         ttnn.TensorMemoryLayout.BLOCK_SHARDED,
     ],
 )
-@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.uint32])
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.uint32, ttnn.int32])
 def test_fill_pad_sharded(device, fill_value, shape, shard_scheme, dtype):
     torch.manual_seed(1234)
     torch_input_tensor, padded_torch_tensor = create_nd_padded_tiled_tensor(

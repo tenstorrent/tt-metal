@@ -10,17 +10,19 @@ from models.tt_transformers.tt.common import (
     sample_host,
     PagedAttentionConfig,
 )
-from models.tt_transformers.tt.model_config import ModelArgs, ModelOptimizations
+from models.tt_transformers.tt.model_config import ModelArgs, DecodersPrecision, CheckpointType
 from models.tt_transformers.tt.model import Transformer
+
 from models.utility_functions import (
     comp_pcc,
     comp_allclose,
 )
-from models.utility_functions import skip_for_grayskull
+from models.utility_functions import skip_for_grayskull, skip_for_blackhole
 
 
 @torch.no_grad()
 @skip_for_grayskull("Requires wormhole_b0 to run")
+@skip_for_blackhole("Failing on DRAM harvested P100a, see #21419")
 @pytest.mark.timeout(1800)
 @pytest.mark.models_performance_bare_metal
 @pytest.mark.parametrize(
@@ -57,9 +59,10 @@ from models.utility_functions import skip_for_grayskull
 @pytest.mark.parametrize(
     "optimizations",
     [
-        pytest.param(ModelOptimizations.accuracy, id="accuracy"),
-        pytest.param(ModelOptimizations.performance, id="performance"),
+        lambda model_args: DecodersPrecision.performance(model_args.n_layers, model_args.model_name),
+        lambda model_args: DecodersPrecision.accuracy(model_args.n_layers, model_args.model_name),
     ],
+    ids=["performance", "accuracy"],
 )
 @pytest.mark.parametrize(
     "mesh_device",
@@ -82,14 +85,26 @@ def test_model_inference(
     use_program_cache,
     reset_seeds,
     ensure_gc,
+    request,
 ):
+    model_name_env = os.getenv("HF_MODEL")
+    if model_name_env and "Mistral-7B" in model_name_env and weights == "instruct":
+        pytest.skip(
+            "Skipping Mistral-7B full model test for now. See issue https://github.com/tenstorrent/tt-metal/issues/19806"
+        )
+
     run_ref_pt = True  # Flag to run reference PyTorch model and compare PCC
-    cache_pcc = layers == 1  # Flag to measure KV cache PCC. Avoid running for all layers to speed up test time.
     dtype = ttnn.bfloat8_b
-    mesh_device.enable_async(True)
-    mode_accuracy = optimizations == ModelOptimizations.accuracy
+
+    test_id = request.node.callspec.id
+    mode_accuracy = "accuracy" in test_id
     instruct = False  # True if weights == "instruct" else False
     dummy_weights = True if weights == "random" else False
+
+    # Flag to measure KV cache PCC. Avoid running for all layers to speed up test time.
+    # Also avoid comparing PCC for dummy weights
+    cache_pcc = layers == 1 and not dummy_weights
+
     model_args = ModelArgs(
         mesh_device,
         instruct=instruct,
@@ -105,14 +120,19 @@ def test_model_inference(
     else:
         pcc = 0.94 if mode_accuracy else 0.86
 
+    model_name = model_args.base_model_name
     if layers == 1:  # quick mode has tight PCC checks for known models
-        model_name = {
-            (16, False): "llama32_1b",
-            (28, False): "llama32_3b",
-            (32, False): "llama31_8b",
-            (32, True): "llama32_11b",
-            (80, False): "llama31_70b",
-        }[(model_args.n_layers, model_args.is_vision())]
+        if model_args.checkpoint_type == CheckpointType.HuggingFace:
+            model_name = model_args.base_model_name
+        else:
+            model_name = {
+                (16, False): "llama32_1b",
+                (28, False): "llama32_3b",
+                (32, False): "llama31_8b",
+                (32, True): "llama32_11b",
+                (80, False): "llama31_70b",
+                (80, True): "llama32_90b",
+            }[(model_args.n_layers, model_args.is_vision())]
 
         # Define tight final PCC thresholds for quick mode
         final_model_pcc = {
@@ -121,6 +141,8 @@ def test_model_inference(
             "llama31_8b": 0.9987 if mode_accuracy else 0.9850,
             "llama32_11b": 0.9987 if mode_accuracy else 0.9850,
             "llama31_70b": 0.9843 if mode_accuracy else 0.97607,
+            "llama32_90b": 0.9759,
+            "Mistral-7B": 0.95 if mode_accuracy else 0.95,
         }[model_name]
 
         final_k_cache_pcc = {
@@ -129,6 +151,8 @@ def test_model_inference(
             "llama31_8b": 0.9997,
             "llama32_11b": 0.9995,
             "llama31_70b": 0.9997,
+            "llama32_90b": 0.9995,
+            "Mistral-7B": 0.68,
         }[model_name]
         final_v_cache_pcc = {
             "llama32_1b": 0.9996,
@@ -136,11 +160,19 @@ def test_model_inference(
             "llama31_8b": 0.9997,
             "llama32_11b": 0.9996,
             "llama31_70b": 0.9997,
+            "llama32_90b": 0.9996,
+            "Mistral-7B": 0.68,
         }[model_name]
 
-        quick_iterations = {"llama32_1b": 2, "llama32_3b": 4, "llama31_8b": 6, "llama32_11b": 6, "llama31_70b": 6}[
-            model_name
-        ]
+        quick_iterations = {
+            "llama32_1b": 2,
+            "llama32_3b": 4,
+            "llama31_8b": 6,
+            "llama32_11b": 6,
+            "llama31_70b": 6,
+            "llama32_90b": 6,
+            "Mistral-7B": 2,
+        }[model_name]
 
         iterations = quick_iterations
     else:
@@ -166,9 +198,11 @@ def test_model_inference(
 
     prompts = ["This is a test"] * model_args.max_batch_size
     if dummy_weights:
-        encoded_prompts = [
-            [128000, 2028, 374, 264, 1296]
-        ] * model_args.max_batch_size  # "This is a test" encoded prompt
+        # "This is a test" encoded prompt
+        if model_name == "Mistral-7B":
+            encoded_prompts = [[1619, 1117, 1032, 2137]] * model_args.max_batch_size
+        else:
+            encoded_prompts = [[128000, 2028, 374, 264, 1296]] * model_args.max_batch_size
         assert not instruct, "Instruct prompt not implemented with dummy weights"
     else:
         tokenizer = model_args.tokenizer
@@ -321,7 +355,7 @@ def test_model_inference(
             # Greedy decode (temperature = 0) the generated token and save it to print out later
             if run_ref_pt:
                 # Sample from reference model first
-                _, pt_out_tok = sample_host(ref_output, None, temperature=0, top_p=0.8)
+                _, pt_out_tok = sample_host(ref_output, temperature=0, top_p=0.8)
                 pt_decode_input = embd(pt_out_tok)
                 all_outputs_ref.append(pt_out_tok.squeeze(1).tolist()[0])
 
@@ -330,7 +364,7 @@ def test_model_inference(
                 all_outputs.append(pt_out_tok.squeeze(1).tolist()[0])
             else:
                 # If not running reference model, sample from TT model directly
-                _, tt_out_tok = sample_host(tt_output_torch, None, temperature=0, top_p=0.8)
+                _, tt_out_tok = sample_host(tt_output_torch, temperature=0, top_p=0.8)
                 tt_decode_input = embd(tt_out_tok)
                 all_outputs.append(tt_out_tok.squeeze(1).tolist()[0])
 
@@ -356,14 +390,20 @@ def test_model_inference(
             # Compare KV caches
             if cache_pcc:
                 for l in range(model_args.n_layers):
-                    pytorch_layer_present = [
-                        reference_model.layers[l]
-                        .attention.cache_k.clone()
-                        .permute(0, 2, 1, 3),  # [batch, n_kv_heads, seq, head_dim]
-                        reference_model.layers[l]
-                        .attention.cache_v.clone()
-                        .permute(0, 2, 1, 3),  # [batch, n_kv_heads, seq, head_dim]
-                    ]
+                    if model_args.checkpoint_type == CheckpointType.HuggingFace:
+                        pytorch_layer_present = [
+                            reference_model.cache_k.clone().permute(0, 2, 1, 3),  # [batch, n_kv_heads, seq, head_dim]
+                            reference_model.cache_v.clone().permute(0, 2, 1, 3),  # [batch, n_kv_heads, seq, head_dim]
+                        ]
+                    else:
+                        pytorch_layer_present = [
+                            reference_model.layers[l]
+                            .attention.cache_k.clone()
+                            .permute(0, 2, 1, 3),  # [batch, n_kv_heads, seq, head_dim]
+                            reference_model.layers[l]
+                            .attention.cache_v.clone()
+                            .permute(0, 2, 1, 3),  # [batch, n_kv_heads, seq, head_dim]
+                        ]
                     tt_layer_present = []
                     if paged_attention:
                         for layer_past in tt_model.layers[l].attention.layer_past:
@@ -402,9 +442,7 @@ def test_model_inference(
                             )
 
                     for kv_cache, (cache_pt, cache_tt) in enumerate(zip(pytorch_layer_present, tt_layer_present)):
-                        cache_length_to_check = min(
-                            model_args.max_seq_len, generation_start_pos + generation_length + 1
-                        )
+                        cache_length_to_check = min(model_args.max_seq_len, generation_start_pos + i + 1)
                         cache_pt = cache_pt[:, :, generation_start_pos:cache_length_to_check, :]
                         cache_tt = cache_tt[:, :, generation_start_pos:cache_length_to_check, :]
                         if (

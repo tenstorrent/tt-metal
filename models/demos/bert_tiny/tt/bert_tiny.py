@@ -86,6 +86,7 @@ def bert_attention(
         bias=parameters.output.LayerNorm.bias,
         epsilon=config.layer_norm_eps,
         memory_config=ttnn.L1_MEMORY_CONFIG,
+        compute_kernel_config=ttnn.WormholeComputeKernelConfig(math_fidelity=ttnn.MathFidelity.HiFi4),
     )
 
     return attention_output
@@ -132,6 +133,7 @@ def bert_output(
         bias=parameters.LayerNorm.bias,
         epsilon=config.layer_norm_eps,
         memory_config=ttnn.L1_MEMORY_CONFIG,
+        compute_kernel_config=ttnn.WormholeComputeKernelConfig(math_fidelity=ttnn.MathFidelity.HiFi4),
     )
 
     return output
@@ -222,6 +224,7 @@ def bert(
         bias=parameters.embeddings.LayerNorm.bias,
         epsilon=config.layer_norm_eps,
         memory_config=ttnn.L1_MEMORY_CONFIG,
+        compute_kernel_config=ttnn.WormholeComputeKernelConfig(math_fidelity=ttnn.MathFidelity.HiFi4),
     )
 
     hidden_states = bert_encoder(

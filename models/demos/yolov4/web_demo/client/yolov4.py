@@ -5,12 +5,9 @@
 import time
 import io
 import math
-import json
-import random
 import argparse
 import cv2
 import requests
-import torch
 import orjson
 import av
 import logging
@@ -18,7 +15,6 @@ import streamlit as st
 import numpy as np
 
 
-from torch import nn
 from streamlit_webrtc import VideoProcessorBase, webrtc_streamer
 
 

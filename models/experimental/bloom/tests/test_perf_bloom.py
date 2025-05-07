@@ -3,11 +3,10 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
-from datasets import load_dataset
 from loguru import logger
 import pytest
 import ttnn
-from models.utility_functions import torch_to_tt_tensor_rm, tt_to_torch_tensor, profiler
+from models.utility_functions import profiler
 from models.utility_functions import (
     disable_persistent_kernel_cache,
     enable_persistent_kernel_cache,
@@ -15,14 +14,9 @@ from models.utility_functions import (
 from models.perf.perf_utils import prep_perf_report
 
 from transformers import BloomForCausalLM, BloomTokenizerFast
-from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
-    comp_allclose,
-    comp_pcc,
-)
 
 from loguru import logger
 
-import models.experimental.bloom.bloom_utils as bloom_utils
 import models.experimental.bloom.tt.bloom_model as bloom_model
 
 

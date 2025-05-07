@@ -6,14 +6,14 @@
 
 #include <cstdint>
 
-#include <hal.hpp>
+#include "impl/context/metal_context.hpp"
 
 namespace tt {
 
 // Host MMIO reads/writes don't have alignment restrictions, so no need to check alignment here.
 #define DEBUG_VALID_L1_ADDR(a, l) (((a) >= HAL_MEM_L1_BASE) && ((a) + (l) <= HAL_MEM_L1_BASE + HAL_MEM_L1_SIZE))
 
-#define DEBUG_VALID_REG_ADDR(a) tt::tt_metal::hal.valid_reg_addr(a)
+#define DEBUG_VALID_REG_ADDR(a) tt::tt_metal::MetalContext::instance().hal().valid_reg_addr(a)
 #define DEBUG_VALID_WORKER_ADDR(a, l) (DEBUG_VALID_L1_ADDR(a, l) || (DEBUG_VALID_REG_ADDR(a) && (l) == 4))
 #define DEBUG_VALID_DRAM_ADDR(a, l, b, e) (((a) >= b) && ((a) + (l) <= e))
 
@@ -21,7 +21,7 @@ namespace tt {
     ((((a) >= HAL_MEM_ETH_BASE) && ((a) + (l) <= HAL_MEM_ETH_BASE + HAL_MEM_ETH_SIZE)) || \
      (DEBUG_VALID_REG_ADDR(a) && (l) == 4))
 
-static bool coord_found_p(std::vector<tt::umd::CoreCoord> coords, CoreCoord core) {
+static bool coord_found_p(const std::vector<tt::umd::CoreCoord>& coords, CoreCoord core) {
     for (const tt::umd::CoreCoord& core_coord : coords) {
         CoreCoord item = {core_coord.x, core_coord.y};
         if (item == core) {
@@ -31,8 +31,8 @@ static bool coord_found_p(std::vector<tt::umd::CoreCoord> coords, CoreCoord core
     return false;
 }
 
-static bool coord_found_p(std::vector<CoreCoord> coords, CoreCoord core) {
-    for (CoreCoord item : coords) {
+static bool coord_found_p(const std::vector<CoreCoord>& coords, CoreCoord core) {
+    for (const CoreCoord& item : coords) {
         if (item == core) {
             return true;
         }
@@ -75,12 +75,17 @@ static void watcher_sanitize_host_noc(
     const metal_SocDescriptor& soc_d,
     const std::unordered_set<CoreCoord>& virtual_worker_cores,
     const std::unordered_set<CoreCoord>& virtual_eth_cores,
+    const std::unordered_set<CoreCoord>& virtual_pcie_cores,
+    const std::unordered_set<CoreCoord>& virtual_dram_cores,
     const CoreCoord& core,
     uint64_t addr,
     uint32_t lbytes) {
-    if (coord_found_p(soc_d.get_cores(CoreType::PCIE, soc_d.get_umd_coord_system()), core)) {
+    if (coord_found_p(soc_d.get_cores(CoreType::PCIE, soc_d.get_umd_coord_system()), core) ||
+        coord_found_p(virtual_pcie_cores, core)) {
         TT_THROW("Host watcher: bad {} NOC coord {}", what, core.str());
-    } else if (coord_found_p(soc_d.get_cores(CoreType::DRAM, soc_d.get_umd_coord_system()), core)) {
+    } else if (
+        coord_found_p(soc_d.get_cores(CoreType::DRAM, soc_d.get_umd_coord_system()), core) ||
+        coord_found_p(virtual_dram_cores, core)) {
         uint64_t dram_addr_base = 0;
         uint64_t dram_addr_size = soc_d.dram_core_size;
         uint64_t dram_addr_end = dram_addr_size - dram_addr_base;
@@ -109,20 +114,42 @@ void watcher_sanitize_host_noc_read(
     const metal_SocDescriptor& soc_d,
     const std::unordered_set<CoreCoord>& virtual_worker_cores,
     const std::unordered_set<CoreCoord>& virtual_eth_cores,
+    const std::unordered_set<CoreCoord>& virtual_pcie_cores,
+    const std::unordered_set<CoreCoord>& virtual_dram_cores,
     const CoreCoord& core,
     uint64_t addr,
     uint32_t lbytes) {
-    watcher_sanitize_host_noc("read", soc_d, virtual_worker_cores, virtual_eth_cores, core, addr, lbytes);
+    watcher_sanitize_host_noc(
+        "read",
+        soc_d,
+        virtual_worker_cores,
+        virtual_eth_cores,
+        virtual_pcie_cores,
+        virtual_dram_cores,
+        core,
+        addr,
+        lbytes);
 }
 
 void watcher_sanitize_host_noc_write(
     const metal_SocDescriptor& soc_d,
     const std::unordered_set<CoreCoord>& virtual_worker_cores,
     const std::unordered_set<CoreCoord>& virtual_eth_cores,
+    const std::unordered_set<CoreCoord>& virtual_pcie_cores,
+    const std::unordered_set<CoreCoord>& virtual_dram_cores,
     const CoreCoord& core,
     uint64_t addr,
     uint32_t lbytes) {
-    watcher_sanitize_host_noc("write", soc_d, virtual_worker_cores, virtual_eth_cores, core, addr, lbytes);
+    watcher_sanitize_host_noc(
+        "write",
+        soc_d,
+        virtual_worker_cores,
+        virtual_eth_cores,
+        virtual_pcie_cores,
+        virtual_dram_cores,
+        core,
+        addr,
+        lbytes);
 }
 
 }  // namespace tt

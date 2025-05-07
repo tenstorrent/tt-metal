@@ -39,8 +39,12 @@ run_t3000_falcon40b_perplexity_tests() {
 }
 
 run_t3000_llama70b_perplexity_tests() {
-  # Record the start time
+
+  echo "LOG_METAL: Checking number of devices"
+  python3 -c "import ttnn; print('Number of devices:', ttnn.get_num_devices())"
+
   fail=0
+  # Record the start time
   start_time=$(date +%s)
 
   echo "LOG_METAL: Running run_t3000_llama70b_perplexity_tests"
@@ -78,6 +82,10 @@ run_t3000_mixtral8x7b_perplexity_tests() {
 }
 
 run_t3000_llama3_perplexity_tests_single_card() {
+
+  echo "LOG_METAL: Checking number of devices"
+  python3 -c "import ttnn; print('Number of devices:', ttnn.get_num_devices())"
+
   # Split long set of tests into two groups
   # This one runs all the N150 and N300 tests spoofed on a T3k
   fail=0
@@ -91,10 +99,13 @@ run_t3000_llama3_perplexity_tests_single_card() {
   llama11b=/mnt/MLPerf/tt_dnn-models/llama/Llama3.2-11B-Vision-Instruct/
 
   for MESH_DEVICE in N150 N300; do
-    for LLAMA_DIR in "$llama1b" "$llama3b" "$llama8b" "$llama11b"; do
+    for LLAMA_DIR in "$llama1b" "$llama3b" "$llama8b"; do
       MESH_DEVICE=$MESH_DEVICE LLAMA_DIR=$LLAMA_DIR WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/tt_transformers/tests/test_accuracy.py --timeout=3600 ; fail+=$?
     done
   done
+
+  # 11B test does not run on N150
+  MESH_DEVICE=N300 LLAMA_DIR="$llama11b" WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/tt_transformers/tests/test_accuracy.py --timeout=3600 ; fail+=$?
 
   # Record the end time
   end_time=$(date +%s)
@@ -105,7 +116,23 @@ run_t3000_llama3_perplexity_tests_single_card() {
   fi
 }
 
+run_t3000_mistral_perplexity_tests() {
+  # This one runs all the T3K tests
+
+  echo "LOG_METAL: Running run_t3000_mistral_perplexity_tests"
+
+  wh_arch_yaml=wormhole_b0_80_arch_eth_dispatch.yaml
+  tt_cache_path="/mnt/MLPerf/tt_dnn-models/Mistral/TT_CACHE/Mistral-7B-Instruct-v0.3"
+  hf_model="/mnt/MLPerf/tt_dnn-models/Mistral/hub/models--mistralai--Mistral-7B-Instruct-v0.3/snapshots/e0bc86c23ce5aae1db576c8cca6f06f1f73af2db"
+  WH_ARCH_YAML=$wh_arch_yaml TT_CACHE_PATH=$tt_cache_path HF_MODEL=$hf_model pytest models/tt_transformers/tests/test_accuracy.py --timeout=3600
+
+}
+
 run_t3000_llama3_perplexity_tests_t3000() {
+
+  echo "LOG_METAL: Checking number of devices"
+  python3 -c "import ttnn; print('Number of devices:', ttnn.get_num_devices())"
+
   # Split long set of tests into two groups
   # This one runs all the T3K tests
   fail=0
@@ -118,10 +145,18 @@ run_t3000_llama3_perplexity_tests_t3000() {
   llama8b=/mnt/MLPerf/tt_dnn-models/llama/Meta-Llama-3.1-8B-Instruct/
   llama11b=/mnt/MLPerf/tt_dnn-models/llama/Llama3.2-11B-Vision-Instruct/
   llama70b=/mnt/MLPerf/tt_dnn-models/llama/Llama3.1-70B-Instruct/
+  llama90b=/mnt/MLPerf/tt_dnn-models/llama/Llama3.2-90B-Vision-Instruct/
+
+  wh_arch_yaml=wormhole_b0_80_arch_eth_dispatch.yaml
 
   for MESH_DEVICE in T3K; do
-    for LLAMA_DIR in "$llama1b" "$llama3b" "$llama8b" "$llama11b" "$llama70b"; do
-      MESH_DEVICE=$MESH_DEVICE LLAMA_DIR=$LLAMA_DIR WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/tt_transformers/tests/test_accuracy.py --timeout=3600 ; fail+=$?
+    for LLAMA_DIR in "$llama1b" "$llama3b" "$llama8b" "$llama11b"; do
+      MESH_DEVICE=$MESH_DEVICE LLAMA_DIR=$LLAMA_DIR WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/tests/test_accuracy.py --timeout=3600 ; fail+=$?
+    done
+
+    # 70B and 90B tests has the same configuration between `-k "attention-accuracy"` and `-k "attention-performance"` so we only run one of them
+    for LLAMA_DIR in "$llama70b" "$llama90b"; do
+      MESH_DEVICE=$MESH_DEVICE LLAMA_DIR=$LLAMA_DIR WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/tests/test_accuracy.py -k "attention-accuracy" --timeout=3600 ; fail+=$?
     done
   done
 
@@ -143,6 +178,9 @@ run_t3000_tests() {
 
   # Run Llama-70B perplexity tests
   run_t3000_llama70b_perplexity_tests
+
+  # Run mistral perplexity tests
+  run_t3000_mistral_perplexity_tests
 
   # Run Mixtral8x7B perplexity tests
   run_t3000_mixtral8x7b_perplexity_tests

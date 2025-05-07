@@ -3,16 +3,11 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch.nn as nn
-import math
 import ttnn
 import os
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, Optional, Tuple, Union
 import torch
 import os
-from models.utility_functions import (
-    tt_to_torch_tensor,
-    torch_to_tt_tensor_rm,
-)
 from loguru import logger
 from models.utility_functions import is_grayskull
 
@@ -35,9 +30,7 @@ from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_downblock_2d_new_
 from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_upblock_2d_new_conv import upblock_2d
 
 from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_utility_functions import (
-    pad_group_norm_weight,
     pre_process_input,
-    conv_cache,
     get_default_compute_config,
 )
 
@@ -68,19 +61,6 @@ def permute_conv_weights(weight, bias):
     return weight, bias
 
 
-def torch_to_ttnn(input, device, layout=ttnn.TILE_LAYOUT):
-    input = ttnn.from_torch(input, ttnn.bfloat16)
-    input = ttnn.to_layout(input, layout)
-    input = ttnn.to_device(input, device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-    return input
-
-
-def ttnn_to_torch(input):
-    input = ttnn.from_device(input)
-    input = ttnn.to_torch(input)
-    return input
-
-
 class UNet2DConditionModel:
     def __init__(
         self,
@@ -89,7 +69,6 @@ class UNet2DConditionModel:
         batch_size,
         input_height,
         input_width,
-        reader_patterns_cache,
         down_block_types: Tuple[str] = (
             "CrossAttnDownBlock2D",
             "CrossAttnDownBlock2D",
@@ -133,7 +112,6 @@ class UNet2DConditionModel:
                 down_block = cross_attention_down_block_2d(
                     device,
                     parameters.down_blocks[i],
-                    reader_patterns_cache,
                     batch_size,
                     input_height,
                     input_width,
@@ -143,7 +121,6 @@ class UNet2DConditionModel:
                 down_block = downblock2d(
                     device,
                     parameters.down_blocks[i],
-                    reader_patterns_cache,
                     batch_size,
                     input_height,
                     input_width,
@@ -161,7 +138,6 @@ class UNet2DConditionModel:
         self.mid_block = unet_mid_block_2d_cross_attn(
             device,
             parameters.mid_block,
-            reader_patterns_cache,
             batch_size,
             input_height,
             input_width,
@@ -178,7 +154,6 @@ class UNet2DConditionModel:
                 up_block = cross_attention_upblock2d(
                     device,
                     parameters.up_blocks[i],
-                    reader_patterns_cache,
                     batch_size,
                     input_height,
                     input_width,
@@ -188,7 +163,6 @@ class UNet2DConditionModel:
                 up_block = upblock_2d(
                     device,
                     parameters.up_blocks[i],
-                    reader_patterns_cache,
                     batch_size,
                     input_height,
                     input_width,
@@ -303,7 +277,6 @@ class UNet2DConditionModel:
         upcast_attention: bool = False,
         resnet_time_scale_shift: str = "default",
         return_dict: bool = True,
-        reader_patterns_cache: Optional[Dict] = None,
         dtype: Optional[ttnn.DataType] = None,
     ):
         num_upsamplers = len(block_out_channels) - 1
@@ -431,7 +404,6 @@ class UNet2DConditionModel:
             bias_tensor=self.conv_in_bias,
             **conv_kwargs,
             compute_config=compute_config,
-            conv_op_cache=conv_cache,
         )
         sample = ttnn.reallocate(sample)  # TODO: Test remove
 
@@ -717,7 +689,6 @@ class UNet2DConditionModel:
             weight_tensor=self.conv_out_weights,
             bias_tensor=self.conv_out_bias,
             compute_config=compute_config,
-            conv_op_cache=conv_cache,
         )
         sample = ttnn.to_memory_config(sample, ttnn.L1_MEMORY_CONFIG)
         sample = ttnn.clone(sample, memory_config=ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat16)

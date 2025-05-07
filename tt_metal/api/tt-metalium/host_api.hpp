@@ -7,12 +7,13 @@
 #include <variant>
 #include <vector>
 
-#include "runtime_args_data.hpp"
-#include "program_impl.hpp"
-#include "device.hpp"
-#include "sub_device_types.hpp"
-#include "span.hpp"
-#include "lightmetal_binary.hpp"
+#include <tt-metalium/dispatch_core_common.hpp>
+#include <tt-metalium/runtime_args_data.hpp>
+#include <tt-metalium/program.hpp>
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/sub_device_types.hpp>
+#include <tt_stl/span.hpp>
+#include <tt-metalium/lightmetal_binary.hpp>
 
 /** @file */
 
@@ -35,7 +36,6 @@ namespace tt_metal {
 
 class CommandQueue;
 struct TraceDescriptor;
-inline namespace v0 {
 
 class Program;
 class IDevice;
@@ -89,7 +89,8 @@ IDevice* CreateDevice(
     const size_t l1_small_size = DEFAULT_L1_SMALL_SIZE,
     const size_t trace_region_size = DEFAULT_TRACE_REGION_SIZE,
     const DispatchCoreConfig& dispatch_core_config = DispatchCoreConfig{},
-    const std::vector<uint32_t>& l1_bank_remap = {});
+    const std::vector<uint32_t>& l1_bank_remap = {},
+    const size_t worker_l1_size = DEFAULT_WORKER_L1_SIZE);
 
 // clang-format off
 /**
@@ -274,8 +275,10 @@ void UpdateDynamicCircularBufferAddress(Program& program, CBHandle cb_handle, co
  * | buffer     | Dynamically allocated L1 buffer that shares address space of circular buffer `cb_handle` | const Buffer &               | L1 buffer   | Yes      |
  * | total_size | New size of the circular buffer in bytes                                                 | uint32_t                     |             | Yes      |
  */
+// clang-format on
 void UpdateDynamicCircularBufferAddressAndTotalSize(Program& program, CBHandle cb_handle, const Buffer& buffer, uint32_t total_size);
 
+// clang-format off
 /**
  * Initializes semaphore on all cores within core range (inclusive). Each core can have up to eight 4B semaphores aligned to L1_ALIGNMENT.
  *
@@ -1008,7 +1011,6 @@ void Synchronize(
     const std::optional<uint8_t> cq_id = std::nullopt,
     tt::stl::Span<const SubDeviceId> sub_device_ids = {});
 
-}  // namespace v0
 }  // namespace tt_metal
 
 }  // namespace tt

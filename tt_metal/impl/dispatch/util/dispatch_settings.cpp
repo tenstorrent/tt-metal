@@ -2,15 +2,24 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <tt-metalium/dispatch_settings.hpp>
+#include <limits.h>
 #include <tt-metalium/dev_msgs.h>
+#include <cstddef>
 #include <cstdint>
-#include <hal.hpp>
-#include <tt_cluster.hpp>
+#include <functional>
+#include <limits>
+#include <string_view>
+#include <unordered_map>
+
+#include "assert.hpp"
+#include "fmt/base.h"
+#include "hal_types.hpp"
+#include "impl/context/metal_context.hpp"
+#include "dispatch/dispatch_settings.hpp"
 #include "magic_enum/magic_enum.hpp"
-#include "umd/device/tt_core_coordinates.h"
+#include "size_literals.hpp"
 #include "tt_metal/impl/dispatch/kernels/cq_commands.hpp"
-#include <helpers.hpp>
+#include <umd/device/tt_core_coordinates.h>
 
 namespace tt::tt_metal {
 
@@ -72,14 +81,14 @@ DispatchSettings DispatchSettings::worker_defaults(const tt::Cluster& cluster, c
         .dispatch_size(512_KB)
         .dispatch_s_buffer_size(32_KB)
 
-        .with_alignment(hal.get_alignment(HalMemType::L1))
+        .with_alignment(MetalContext::instance().hal().get_alignment(HalMemType::L1))
 
         .tunneling_buffer_size(256_KB)  // same as prefetch_d_buffer_size
 
         .build();
 }
 
-DispatchSettings DispatchSettings::eth_defaults(const tt::Cluster& cluster, const uint32_t num_hw_cqs) {
+DispatchSettings DispatchSettings::eth_defaults(const tt::Cluster& /*cluster*/, const uint32_t num_hw_cqs) {
     return DispatchSettings()
         .num_hw_cqs(num_hw_cqs)
         .core_type(CoreType::ETH)
@@ -94,7 +103,7 @@ DispatchSettings DispatchSettings::eth_defaults(const tt::Cluster& cluster, cons
 
         .tunneling_buffer_size(128_KB)  // same as prefetch_d_buffer_size
 
-        .with_alignment(hal.get_alignment(HalMemType::L1))
+        .with_alignment(MetalContext::instance().hal().get_alignment(HalMemType::L1))
 
         .build();
 }
@@ -117,8 +126,7 @@ DispatchSettings DispatchSettings::defaults(
 std::vector<std::string> DispatchSettings::get_errors() const {
     std::vector<std::string> msgs;
 
-    if (!prefetch_q_rd_ptr_size_ || !prefetch_q_pcie_rd_ptr_size_ || !dispatch_s_sync_sem_ || !dispatch_message_ ||
-        !other_ptrs_size) {
+    if (!prefetch_q_rd_ptr_size_ || !prefetch_q_pcie_rd_ptr_size_ || !dispatch_s_sync_sem_ || !other_ptrs_size) {
         msgs.push_back(fmt::format("configuration with_alignment() is a required\n"));
     }
 
@@ -190,9 +198,9 @@ void DispatchSettings::initialize(const DispatchSettings& other) {
 bool DispatchSettings::operator==(const DispatchSettings& other) const {
     return num_hw_cqs_ == other.num_hw_cqs_ && prefetch_q_rd_ptr_size_ == other.prefetch_q_rd_ptr_size_ &&
            prefetch_q_pcie_rd_ptr_size_ == other.prefetch_q_pcie_rd_ptr_size_ &&
-           dispatch_s_sync_sem_ == other.dispatch_s_sync_sem_ && dispatch_message_ == other.dispatch_message_ &&
-           other_ptrs_size == other.other_ptrs_size && prefetch_q_entries_ == other.prefetch_q_entries_ &&
-           prefetch_q_size_ == other.prefetch_q_size_ && prefetch_max_cmd_size_ == other.prefetch_max_cmd_size_ &&
+           dispatch_s_sync_sem_ == other.dispatch_s_sync_sem_ && other_ptrs_size == other.other_ptrs_size &&
+           prefetch_q_entries_ == other.prefetch_q_entries_ && prefetch_q_size_ == other.prefetch_q_size_ &&
+           prefetch_max_cmd_size_ == other.prefetch_max_cmd_size_ &&
            prefetch_cmddat_q_size_ == other.prefetch_cmddat_q_size_ &&
            prefetch_scratch_db_size_ == other.prefetch_scratch_db_size_ &&
            prefetch_d_buffer_size_ == other.prefetch_d_buffer_size_ && prefetch_d_pages_ == other.prefetch_d_pages_ &&
@@ -276,7 +284,6 @@ DispatchSettings& DispatchSettings::with_alignment(uint32_t l1_alignment) {
     this->prefetch_q_rd_ptr_size_ = sizeof(prefetch_q_ptr_type);
     this->prefetch_q_pcie_rd_ptr_size_ = l1_alignment - sizeof(prefetch_q_ptr_type);
     this->dispatch_s_sync_sem_ = DISPATCH_MESSAGE_ENTRIES * l1_alignment;
-    this->dispatch_message_ = DISPATCH_MESSAGE_ENTRIES * l1_alignment;
     this->other_ptrs_size = l1_alignment;
 
     return *this;

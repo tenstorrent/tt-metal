@@ -2,19 +2,16 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import pytest
 from loguru import logger
 import torch
 from transformers import BertForQuestionAnswering, BertTokenizer, pipeline
 
-import time
 import ttnn
 from models.experimental.bert.tt.embeddings import PytorchEmbeddings
 from models.experimental.bert.tt.bert_encoder import TtBertEncoder
 from models.experimental.bert.fused_ops.linear import Linear
 from tt_lib.utils import pad_activation, pad_weight
 from models.utility_functions import (
-    enable_persistent_kernel_cache,
     comp_pcc,
     comp_allclose,
     profiler,

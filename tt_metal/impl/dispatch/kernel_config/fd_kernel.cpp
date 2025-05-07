@@ -3,27 +3,38 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "fd_kernel.hpp"
+
 #include <host_api.hpp>
-#include <tt_metal.hpp>
+#include <utility>
+#include <variant>
+
+#include "data_types.hpp"
+#include "demux.hpp"
+#include "device.hpp"
+#include "dispatch.hpp"
 #include "dispatch/kernel_config/fabric_router_vc.hpp"
 #include "dispatch_core_common.hpp"
-#include "dprint_server.hpp"
-
-#include "kernel_types.hpp"
-#include "prefetch.hpp"
-#include "dispatch.hpp"
 #include "dispatch_s.hpp"
-#include "mux.hpp"
-#include "demux.hpp"
+#include "dprint_server.hpp"
 #include "eth_router.hpp"
 #include "eth_tunneler.hpp"
+#include "fabric_types.hpp"
+#include "hal.hpp"
+#include "hal_types.hpp"
+#include "kernel_types.hpp"
+#include "mux.hpp"
+#include "prefetch.hpp"
+#include "impl/context/metal_context.hpp"
+#include <umd/device/tt_core_coordinates.h>
 
 using namespace tt::tt_metal;
 
 // Helper function to get upstream device in the tunnel from current device, not valid for mmio
 chip_id_t FDKernel::GetUpstreamDeviceId(chip_id_t device_id) {
-    chip_id_t mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(device_id);
-    for (auto tunnel : tt::Cluster::instance().get_tunnels_from_mmio_device(mmio_device_id)) {
+    chip_id_t mmio_device_id =
+        tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(device_id);
+    for (auto tunnel :
+         tt::tt_metal::MetalContext::instance().get_cluster().get_tunnels_from_mmio_device(mmio_device_id)) {
         for (int idx = 0; idx < tunnel.size(); idx++) {
             if (tunnel[idx] == device_id) {
                 // MMIO device doesn't have an upsream, just return itself
@@ -37,8 +48,10 @@ chip_id_t FDKernel::GetUpstreamDeviceId(chip_id_t device_id) {
 
 // Same thing for downstream, is ambiuous for mmio device though if it drives more than one tunnel
 chip_id_t FDKernel::GetDownstreamDeviceId(chip_id_t device_id) {
-    chip_id_t mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(device_id);
-    for (auto tunnel : tt::Cluster::instance().get_tunnels_from_mmio_device(mmio_device_id)) {
+    chip_id_t mmio_device_id =
+        tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(device_id);
+    for (auto tunnel :
+         tt::tt_metal::MetalContext::instance().get_cluster().get_tunnels_from_mmio_device(mmio_device_id)) {
         for (int idx = 0; idx < tunnel.size(); idx++) {
             if (tunnel[idx] == device_id) {
                 // End of tunnel doesn't have downstream, just return itself
@@ -52,8 +65,10 @@ chip_id_t FDKernel::GetDownstreamDeviceId(chip_id_t device_id) {
 
 // Helper function to get the tunnel stop of current device
 uint32_t FDKernel::GetTunnelStop(chip_id_t device_id) {
-    chip_id_t mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(device_id);
-    for (auto tunnel : tt::Cluster::instance().get_tunnels_from_mmio_device(mmio_device_id)) {
+    chip_id_t mmio_device_id =
+        tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(device_id);
+    for (auto tunnel :
+         tt::tt_metal::MetalContext::instance().get_cluster().get_tunnels_from_mmio_device(mmio_device_id)) {
         for (uint32_t idx = 0; idx < tunnel.size(); idx++) {
             if (tunnel[idx] == device_id) {
                 return idx;
@@ -106,12 +121,15 @@ void FDKernel::configure_kernel_variant(
     std::map<string, string> defines_in,
     bool is_active_eth_core,
     bool send_to_brisc,
-    bool force_watcher_no_inline) {
+    bool force_watcher_no_inline,
+    KernelBuildOptLevel opt_level) {
     // TODO: just pass in the programmable index
     uint32_t programmable_core_type_index =
-        (GetCoreType() == CoreType::WORKER) ? hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX)
-        : is_active_eth_core                ? hal.get_programmable_core_type_index(HalProgrammableCoreType::ACTIVE_ETH)
-                                            : hal.get_programmable_core_type_index(HalProgrammableCoreType::IDLE_ETH);
+        (GetCoreType() == CoreType::WORKER)
+            ? MetalContext::instance().hal().get_programmable_core_type_index(HalProgrammableCoreType::TENSIX)
+        : is_active_eth_core
+            ? MetalContext::instance().hal().get_programmable_core_type_index(HalProgrammableCoreType::ACTIVE_ETH)
+            : MetalContext::instance().hal().get_programmable_core_type_index(HalProgrammableCoreType::IDLE_ETH);
 
     std::map<string, string> defines = {
         {"DISPATCH_KERNEL", "1"},
@@ -120,10 +138,14 @@ void FDKernel::configure_kernel_variant(
     if (force_watcher_no_inline) {
         defines.insert({"WATCHER_NOINLINE", std::to_string(force_watcher_no_inline)});
     }
-    if (tt::llrt::RunTimeOptions::get_instance().watcher_dispatch_disabled()) {
+    auto& rt_options = tt::tt_metal::MetalContext::instance().rtoptions();
+    if (rt_options.watcher_dispatch_disabled()) {
         defines["FORCE_WATCHER_OFF"] = "1";
     }
-    if (!tt::DPrintServerReadsDispatchCores(device_)) {
+    if (tt::tt_metal::MetalContext::instance().get_cluster().get_fabric_config() != FabricConfig::FABRIC_2D_PUSH) {
+        defines["FVC_MODE_PULL"] = "1";
+    }
+    if (!DPrintServerReadsDispatchCores(device_->id())) {
         defines["FORCE_DPRINT_OFF"] = "1";
     }
     defines.insert(defines_in.begin(), defines_in.end());
@@ -139,7 +161,7 @@ void FDKernel::configure_kernel_variant(
                 .noc = noc_selection_.non_dispatch_noc,
                 .compile_args = compile_args,
                 .defines = defines,
-                .opt_level = KernelBuildOptLevel::Os});
+                .opt_level = opt_level});
     } else {
         tt::tt_metal::CreateKernel(
             *program_,
@@ -150,6 +172,6 @@ void FDKernel::configure_kernel_variant(
                 .noc = noc_selection_.non_dispatch_noc,
                 .compile_args = compile_args,
                 .defines = defines,
-                .opt_level = KernelBuildOptLevel::Os});
+                .opt_level = opt_level});
     }
 }

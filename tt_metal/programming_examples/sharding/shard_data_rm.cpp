@@ -9,11 +9,12 @@
 #include <tt-metalium/command_queue.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/device.hpp>
+#include <tt-metalium/allocator.hpp>
 
 using namespace tt;
 using namespace tt::tt_metal;
 
-int main(int argc, char** argv) {
+int main() {
     // get program/device
     int device_id = 0;
     IDevice* device = CreateDevice(device_id);
@@ -58,7 +59,7 @@ int main(int argc, char** argv) {
     uint32_t src_addr = src_buffer->address();
 
     // configure and create circular buffers with the same address on each of the designated cores
-    bool src_is_dram = src_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
+    bool src_is_dram = src_buffer->buffer_type() == tt_metal::BufferType::DRAM;
     uint32_t input_cb_index = CBIndex::c_0;
     CircularBufferConfig input_cb_config =
         CircularBufferConfig(shard_size * input_unit_size, {{input_cb_index, cb_data_format}})

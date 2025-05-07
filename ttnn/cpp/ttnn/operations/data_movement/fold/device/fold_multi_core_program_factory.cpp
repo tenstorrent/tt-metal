@@ -6,9 +6,9 @@
 #include "ttnn/core.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/types.hpp"
-
 #include "fold_device_op.hpp"
 #include "ttnn/operations/math.hpp"
+#include <tt-metalium/hal.hpp>
 #include <tt-metalium/tt_align.hpp>
 
 using namespace tt::tt_metal;
@@ -40,7 +40,7 @@ Fold::MultiCore::cached_program_t fold_multi_core(
 
     // input CB
     uint32_t cb_src0_index = tt::CBIndex::c_0;
-    uint32_t aligned_pixel_size = tt::align(pixel_size, hal.get_alignment(HalMemType::L1));
+    uint32_t aligned_pixel_size = tt::align(pixel_size, hal::get_l1_alignment());
     auto src_cb_config = CircularBufferConfig(num_pixels * aligned_pixel_size, {{cb_src0_index, cb_data_format}})
                              .set_page_size(cb_src0_index, aligned_pixel_size)
                              .set_globally_allocated_address(*input.buffer());
@@ -48,7 +48,7 @@ Fold::MultiCore::cached_program_t fold_multi_core(
 
     // output CB
     uint32_t cb_dst0_index = tt::CBIndex::c_16;
-    uint32_t aligned_dst_pixel_size = tt::align(dst_pixel_size, hal.get_alignment(HalMemType::L1));
+    uint32_t aligned_dst_pixel_size = tt::align(dst_pixel_size, hal::get_l1_alignment());
     auto dst_cb_config =
         CircularBufferConfig(num_dst_pixels * aligned_dst_pixel_size, {{cb_dst0_index, cb_data_format}})
             .set_page_size(cb_dst0_index, aligned_dst_pixel_size)
@@ -123,7 +123,7 @@ void Fold::MultiCore::override_runtime_arguments(
     uint32_t dst_pixel_size = stride_h * chunk_size;
     uint32_t dst_row_size = stride_h * row_size;
     uint32_t num_dst_rows = num_pixels / (width * stride_h);
-    uint32_t cb_pages_per_dst_row = stride_h * width;
+    uint32_t pixels_per_dst_row = stride_h * width;
 
     uint32_t aligned_pixel_size = round_up_to_mul32(pixel_size);
     uint32_t aligned_dst_pixel_size = round_up_to_mul32(dst_pixel_size);
@@ -150,7 +150,7 @@ void Fold::MultiCore::override_runtime_arguments(
             stride_w,
             num_dst_rows,
             width / stride_w,
-            cb_pages_per_dst_row,
+            pixels_per_dst_row * aligned_pixel_size,
         });
 }
 

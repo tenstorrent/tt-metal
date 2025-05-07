@@ -191,7 +191,8 @@ def run_max_pool(
             compute_grid_size=device.compute_with_storage_grid_size(),
             block_shard_orientation=ttnn.ShardOrientation.ROW_MAJOR,
             enable_channels_padding=False,
-            is_out_tiled=False,
+            is_shard_height_tile_multiple=False,
+            is_shard_width_tile_multiple=False,
         )
         sharded_memory_config = ttnn._ttnn.operations.conv.create_sharded_memory_config_from_parallel_config(
             tensor_shape=ttact_device.shape,
@@ -311,7 +312,10 @@ def run_max_pool(
             [1, 576, 32, 32],
             [1, 384, 32, 32],
             # C=16 test
-            [1, 16, 10, 10],
+            [1, 16, 12, 12],
+            # partial grid tests
+            [1, 32, 10, 10],  # BH
+            [1, 32, 6, 6],  # WH
         )
     ),
 )
@@ -834,7 +838,8 @@ def test_pool_core_nondivis(
             compute_grid_size=device.compute_with_storage_grid_size(),
             block_shard_orientation=ttnn.ShardOrientation.ROW_MAJOR,
             enable_channels_padding=False,
-            is_out_tiled=True,
+            is_shard_height_tile_multiple=True,
+            is_shard_width_tile_multiple=True,
         )
         sharded_memory_config = ttnn._ttnn.operations.conv.create_sharded_memory_config_from_parallel_config(
             tensor_shape=ttact_device.shape,

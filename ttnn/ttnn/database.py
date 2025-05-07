@@ -321,20 +321,6 @@ def insert_tensor(report_path, tensor):
                 "address": tensor.buffer_address(),
             }
         )
-    elif ttnn.has_storage_type_of(tensor, ttnn.MULTI_DEVICE_STORAGE_TYPE) and tensor.is_allocated():
-        memory_config = ttnn.get_memory_config(tensor)
-        buffer_type = memory_config.buffer_type.value
-        for device_tensor in ttnn.get_device_tensors(tensor):
-            if device_id is None:
-                device_id = device_tensor.device().id()
-            if address is None:
-                address = device_tensor.buffer_address()
-            device_tensors.append(
-                {
-                    "device_id": device_tensor.device().id(),
-                    "address": device_tensor.buffer_address(),
-                }
-            )
 
     cursor.execute(
         f"""
@@ -402,11 +388,11 @@ def insert_output_tensors(report_path, operation_id, output_tensors):
             store_tensor(report_path, tensor)
 
 
-def insert_buffers(report_path, operation_id):
+def insert_buffers(report_path, operation_id, devices):
     sqlite_connection = ttnn.database.get_or_create_sqlite_db(report_path)
     cursor = sqlite_connection.cursor()
 
-    for buffer in ttnn._ttnn.reports.get_buffers():
+    for buffer in ttnn._ttnn.reports.get_buffers(list(devices)):
         cursor.execute(
             f"""INSERT INTO buffers VALUES (
                 {operation_id},
@@ -419,10 +405,10 @@ def insert_buffers(report_path, operation_id):
     sqlite_connection.commit()
 
 
-def insert_buffer_pages(report_path, operation_id):
+def insert_buffer_pages(report_path, operation_id, devices):
     sqlite_connection = ttnn.database.get_or_create_sqlite_db(report_path)
     cursor = sqlite_connection.cursor()
-    for buffer_page in ttnn._ttnn.reports.get_buffer_pages():
+    for buffer_page in ttnn._ttnn.reports.get_buffer_pages(list(devices)):
         cursor.execute(
             f"""INSERT INTO buffer_pages VALUES (
                 {operation_id},

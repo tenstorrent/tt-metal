@@ -4,10 +4,20 @@
 
 #include "mesh_graph.hpp"
 
+#include <magic_enum/magic_enum.hpp>
+#include <yaml-cpp/yaml.h>
+#include <array>
 #include <fstream>
-#include <iostream>
+#include <iomanip>
+#include <optional>
 
-#include "yaml-cpp/yaml.h"
+#include "assert.hpp"
+#include "logger.hpp"
+#include <umd/device/types/cluster_descriptor_types.h>
+
+namespace tt {
+enum class ARCH;
+}  // namespace tt
 
 namespace tt::tt_fabric {
 
@@ -78,11 +88,11 @@ void MeshGraph::add_to_connectivity(
 std::unordered_map<chip_id_t, RouterEdge> MeshGraph::get_valid_connections(
     chip_id_t src_chip_id, std::uint32_t row_size, std::uint32_t num_chips_in_board, FabricType fabric_type) const {
     std::unordered_map<chip_id_t, RouterEdge> valid_connections;
-    chip_id_t N = src_chip_id - row_size;
-    chip_id_t E = src_chip_id + 1;
-    chip_id_t S = src_chip_id + row_size;
-    chip_id_t W = src_chip_id - 1;
     if (fabric_type == FabricType::MESH) {
+        chip_id_t N = src_chip_id - row_size;
+        chip_id_t E = src_chip_id + 1;
+        chip_id_t S = src_chip_id + row_size;
+        chip_id_t W = src_chip_id - 1;
         if (N >= 0) {
             valid_connections.insert(
                 {N,
@@ -115,8 +125,39 @@ std::unordered_map<chip_id_t, RouterEdge> MeshGraph::get_valid_connections(
                      .connected_chip_ids = std::vector<chip_id_t>(this->chip_spec_.num_eth_ports_per_direction, W),
                      .weight = 0}});
         }
-    } else if (fabric_type == FabricType::TORUS) {
+    } else if (fabric_type == FabricType::TORUS_1D) {
         // TODO: add support
+    } else if (fabric_type == FabricType::TORUS_2D) {
+        auto row = src_chip_id / row_size;
+        auto col = src_chip_id % row_size;
+        chip_id_t N = (src_chip_id - row_size + num_chips_in_board) % num_chips_in_board;
+        chip_id_t E = row * row_size + (col + 1) % row_size;
+        chip_id_t S = (src_chip_id + row_size) % num_chips_in_board;
+        chip_id_t W = row * row_size + (col - 1 + row_size) % row_size;
+        valid_connections.insert(
+            {N,
+             RouterEdge{
+                 .port_direction = RoutingDirection::N,
+                 .connected_chip_ids = std::vector<chip_id_t>(this->chip_spec_.num_eth_ports_per_direction, N),
+                 .weight = 0}});
+        valid_connections.insert(
+            {E,
+             RouterEdge{
+                 .port_direction = RoutingDirection::E,
+                 .connected_chip_ids = std::vector<chip_id_t>(this->chip_spec_.num_eth_ports_per_direction, E),
+                 .weight = 0}});
+        valid_connections.insert(
+            {S,
+             RouterEdge{
+                 .port_direction = RoutingDirection::S,
+                 .connected_chip_ids = std::vector<chip_id_t>(this->chip_spec_.num_eth_ports_per_direction, S),
+                 .weight = 0}});
+        valid_connections.insert(
+            {W,
+             RouterEdge{
+                 .port_direction = RoutingDirection::W,
+                 .connected_chip_ids = std::vector<chip_id_t>(this->chip_spec_.num_eth_ports_per_direction, W),
+                 .weight = 0}});
     }
     return valid_connections;
 }

@@ -7,25 +7,22 @@
 #include <memory>
 #include <utility>
 
-#include "device.hpp"
-#include "hostdevcommon/common_values.hpp"
-#include "work_executor_types.hpp"
-#include "l1_banking_allocator.hpp"
-#include "data_types.hpp"
-#include "program_device_map.hpp"
-#include "build.hpp"
-#include "hal.hpp"
-#include "command_queue_interface.hpp"
-#include "command_queue.hpp"
-#include "sub_device_manager_tracker.hpp"
-#include "sub_device_types.hpp"
-#include "trace_buffer.hpp"
-#include "span.hpp"
-#include "program_cache.hpp"
+#include <tt-metalium/device.hpp>
+#include <hostdevcommon/common_values.hpp>
+#include <hostdevcommon/kernel_structs.h>  // Leaked up to ttnn level from here
+#include <tt-metalium/work_executor_types.hpp>
+#include <tt-metalium/data_types.hpp>
+#include <tt-metalium/hal_types.hpp>
+#include <tt-metalium/command_queue_interface.hpp>
+#include <tt-metalium/command_queue.hpp>
+#include <tt-metalium/sub_device_types.hpp>
+#include <tt-metalium/sub_device.hpp>
+#include <tt-metalium/trace_buffer.hpp>
+#include <tt_stl/span.hpp>
+#include <tt-metalium/program_cache.hpp>
 
 namespace tt::tt_metal {
-
-inline namespace v0 {
+class SubDeviceManagerTracker;
 
 // A physical PCIexpress Tenstorrent device
 class Device : public IDevice {
@@ -40,7 +37,8 @@ public:
         tt::stl::Span<const std::uint32_t> l1_bank_remap = {},
         bool minimal = false,
         uint32_t worker_thread_core = 0,
-        uint32_t completion_queue_reader_core = 0);
+        uint32_t completion_queue_reader_core = 0,
+        std::size_t worker_l1_size = DEFAULT_WORKER_L1_SIZE);
 
     ~Device() override;
 
@@ -67,10 +65,7 @@ public:
     CoreCoord grid_size() const override;
     CoreCoord logical_grid_size() const override;
     CoreCoord dram_grid_size() const override;
-    CoreType core_type_from_virtual_core(const CoreCoord& virtual_coord) const override;
 
-    // Given a Virtual coordinate in noc_index space, get the equivalent coordinate in Virtual NOC0 space
-    CoreCoord virtual_noc_coordinate(uint8_t noc_index, CoreCoord coord) const override;
     // Given a coordinate in Virtual NOC0 Space, get the equivalent coordinate in Virtual noc_index space
     CoreCoord virtual_noc0_coordinate(uint8_t noc_index, CoreCoord coord) const override;
 
@@ -94,6 +89,7 @@ public:
     std::tuple<chip_id_t, CoreCoord> get_connected_ethernet_core(CoreCoord eth_core) const override;
     std::vector<CoreCoord> get_ethernet_sockets(chip_id_t connected_chip_id) const override;
     bool is_inactive_ethernet_core(CoreCoord logical_core) const override;
+    uint32_t num_virtual_eth_cores(SubDeviceId sub_device_id) override;
 
     CoreCoord compute_with_storage_grid_size() const override;
 
@@ -146,6 +142,7 @@ public:
         const uint8_t num_hw_cqs,
         size_t l1_small_size,
         size_t trace_region_size,
+        size_t worker_l1_size,
         tt::stl::Span<const std::uint32_t> l1_bank_remap = {},
         bool minimal = false) override;
     void reset_cores() override;
@@ -154,19 +151,10 @@ public:
     void init_command_queue_device() override;
 
     void init_fabric() override;
-
+    void set_ethernet_core_count_on_dispatcher(uint32_t num_ethernet_cores);
+    uint32_t get_ethernet_core_count_on_dispatcher() const;
     // Puts device into reset
     bool close() override;
-
-    // Calls to enable_async are ignored in effort to forcefully disable async for single device use-cases
-    // MeshDevice calls force_enable_async directly avoiding enable_async call for multi-device use-case
-    void enable_async(bool enable) override;
-    void force_enable_async(bool enable);
-    void synchronize() override;
-    WorkExecutorMode get_worker_mode() override;
-    bool is_worker_queue_empty() const override;
-
-    void push_work(std::function<void()> work, bool blocking) override;
 
     // Program cache interface. Synchronize with worker worker threads before querying or
     // modifying this structure, since worker threads use this for compiling ops
@@ -176,8 +164,6 @@ public:
     std::size_t num_program_cache_entries() override;
 
     HalProgrammableCoreType get_programmable_core_type(CoreCoord virtual_core) const override;
-
-    std::vector<std::pair<transfer_info_cores, uint32_t>> extract_dst_noc_multicast_info(const std::vector<CoreRange>& ranges, const CoreType core_type) override;
 
     uint8_t num_noc_mcast_txns(SubDeviceId sub_device_id) const override;
     uint8_t num_noc_unicast_txns(SubDeviceId sub_device_id) const override;
@@ -195,34 +181,42 @@ public:
     void set_sub_device_stall_group(tt::stl::Span<const SubDeviceId> sub_device_ids) override;
     void reset_sub_device_stall_group() override;
     uint32_t num_sub_devices() const override;
-
+    bool dispatch_firmware_active() const override { return dispatch_firmware_active_; };
     // TODO #15944: Temporary api until migration to actual fabric is complete
     std::tuple<SubDeviceManagerId, SubDeviceId> create_sub_device_manager_with_fabric(
         tt::stl::Span<const SubDevice> sub_devices, DeviceAddr local_l1_size) override;
 
     bool is_mmio_capable() const override;
+    // TODO #20966: Remove these APIs
+    std::shared_ptr<distributed::MeshDevice> get_mesh_device() override;
+    void set_mesh_device(std::shared_ptr<distributed::MeshDevice> mesh_device) { this->mesh_device = mesh_device; };
 
 private:
     static constexpr uint32_t DEFAULT_NUM_SUB_DEVICES = 1;
 
     void initialize_cluster();
     std::unique_ptr<Allocator> initialize_allocator(
-        size_t l1_small_size, size_t trace_region_size, tt::stl::Span<const std::uint32_t> l1_bank_remap = {});
+        size_t l1_small_size,
+        size_t trace_region_size,
+        size_t worker_l1_unreserved_start,
+        tt::stl::Span<const std::uint32_t> l1_bank_remap = {});
     void initialize_device_bank_to_noc_tables(const HalProgrammableCoreType &core_type, CoreCoord virtual_core);
     void initialize_firmware(const HalProgrammableCoreType &core_type, CoreCoord virtual_core, launch_msg_t *launch_msg, go_msg_t* go_msg);
 
-    void initialize_default_sub_device_state(size_t l1_small_size, size_t trace_region_size, tt::stl::Span<const std::uint32_t> l1_bank_remap);
-
-    void update_dispatch_cores_for_multi_cq_eth_dispatch();
+    void initialize_default_sub_device_state(
+        size_t l1_small_size,
+        size_t trace_region_size,
+        size_t worker_l1_unreserved_start,
+        tt::stl::Span<const std::uint32_t> l1_bank_remap);
 
     void compile_command_queue_programs();
     void configure_command_queue_programs();
     void clear_l1_state();
+    void clear_dram_state();
+    void clear_launch_messages_on_eth_cores();
     void get_associated_dispatch_virtual_cores(
         std::unordered_map<chip_id_t, std::unordered_set<CoreCoord>>& my_dispatch_cores,
         std::unordered_map<chip_id_t, std::unordered_set<CoreCoord>>& other_dispatch_cores);
-
-    void set_worker_mode(const WorkExecutorMode& mode);
 
     void generate_device_bank_to_noc_tables();
 
@@ -231,7 +225,6 @@ private:
 
     CoreCoord physical_worker_core_from_logical_core(const CoreCoord &logical_core) const;
     CoreCoord dram_core_from_dram_channel(uint32_t dram_channel) const;
-    CoreType core_type_from_physical_core(const CoreCoord &physical_core) const;
     CoreCoord virtual_core_from_physical_core(const CoreCoord& physical_coord) const;
 
     chip_id_t id_;
@@ -240,16 +233,19 @@ private:
     std::unique_ptr<SubDeviceManagerTracker> sub_device_manager_tracker_;
 
     bool initialized_ = false;
+    // This variable tracks the state of dispatch firmware on device.
+    // It is set to true when dispatch firmware is launched, and reset
+    // after the terimnate command is sent.
+    bool dispatch_firmware_active_ = false;
 
     std::vector<std::unique_ptr<Program>> command_queue_programs_;
     bool using_fast_dispatch_ = false;
+    // TODO #20966: Remove this member
+    std::weak_ptr<distributed::MeshDevice> mesh_device;
 
-    // Fabric program includes ethernet router kernel and tensix gatekeeper kernel
+    // Fabric program includes ethernet router kernel
     std::unique_ptr<Program> fabric_program_;
 
-    // Work Executor for this device - can asynchronously process host side work for
-    // all tasks scheduled on this device
-    std::unique_ptr<WorkExecutor> work_executor_;
     uint32_t worker_thread_core_ = 0;
     uint32_t completion_queue_reader_core_ = 0;
     std::unique_ptr<SystemMemoryManager> sysmem_manager_;
@@ -273,7 +269,7 @@ private:
     uint32_t trace_buffers_size_ = 0;
     bool uninitialized_error_fired_ =
         false;  // To avoid spam with warnings about calling Device methods when it's not initialized.
+    uint32_t ethernet_core_count_on_dispatcher_ = 0;
 };
 
-}  // namespace v0
 }  // namespace tt::tt_metal

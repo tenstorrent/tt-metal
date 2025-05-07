@@ -36,11 +36,11 @@ TRACY_CSVEXPROT_TOOL = "csvexport-release"
 
 
 def generate_logs_folder(outFolder):
-    return outFolder / ".logs"
+    return Path(outFolder) / ".logs"
 
 
 def generate_reports_folder(outFolder):
-    return outFolder / "reports"
+    return Path(outFolder) / "reports"
 
 
 PROFILER_LOGS_DIR = generate_logs_folder(PROFILER_ARTIFACTS_DIR)

@@ -392,7 +392,6 @@ def get_all_text(tokenizer, tokens, prompt_tokens, max_gen_len):
             toks = toks[start : len(prompt_tokens[i]) + max_gen_len]
         except IndexError:
             logger.info(f"Index out of range for sequence {i}, returning entire sequence.")
-            pass
 
         # cut to eos tok if any
         if tokenizer.eos_id in toks:
@@ -507,8 +506,6 @@ def test_LlamaModel_demo(
     )
 
     check_mesh_device(mesh_device, model_config)
-
-    mesh_device.enable_async(True)
 
     args = construct_arg(
         implementation=implementation,

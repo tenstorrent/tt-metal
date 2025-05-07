@@ -51,8 +51,8 @@ struct Fold {
             tt::tt_metal::KernelHandle writer_kernel_id;
             uint32_t stride_h;
             uint32_t stride_w;
-            uint32_t cb_src0;
-            uint32_t cb_dst0;
+            tt::tt_metal::CBHandle cb_src0;
+            tt::tt_metal::CBHandle cb_dst0;
         };
 
         using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;

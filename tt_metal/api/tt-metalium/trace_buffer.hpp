@@ -4,21 +4,21 @@
 
 #pragma once
 
+#include <stdint.h>
 #include <functional>
 #include <memory>
 #include <mutex>
 #include <unordered_map>
 #include <utility>
 #include <variant>
+#include <vector>
 
-#include "sub_device_types.hpp"
+#include <tt-metalium/sub_device_types.hpp>
 
 namespace tt::tt_metal {
 
 // Forward decl to avoid including header
-inline namespace v0 {
 class Buffer;
-}
 
 struct TraceWorkerDescriptor {
     uint32_t num_completion_worker_cores = 0;

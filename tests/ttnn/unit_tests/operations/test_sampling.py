@@ -14,7 +14,7 @@ from tests.ttnn.unit_tests.operations.test_utils import (
     compute_kernel_ids,
     get_lib_dtype,
 )
-from models.utility_functions import skip_for_grayskull
+from models.utility_functions import skip_for_blackhole
 
 
 def check_determinism(input_values_tensor, input_indices_tensor, k, p, seed, device, sub_core_grids):
@@ -121,7 +121,7 @@ def run_sampling(shape, k, p, seed, device, sub_core_grids=None):
     )
 
 
-@skip_for_grayskull("Requires wormhole_b0 to run")
+@skip_for_blackhole("Requires wormhole_b0 to run. Issue #19640")
 @pytest.mark.parametrize(
     "shape",
     [
@@ -133,7 +133,6 @@ def run_sampling(shape, k, p, seed, device, sub_core_grids=None):
 @pytest.mark.parametrize("p", [[0.0, 0.3, 0.5, 0.7, 0.9] * 6 + [0.1, 0.8]])  # Example of per-user p
 @pytest.mark.parametrize("seed", [2024, 11, 0])
 def test_sampling_callback(shape, k, p, seed, device, use_program_cache):
-    device.enable_async(True)
     torch.manual_seed(seed)
     num_program_cache_entries_list = []
     for _ in range(2):
@@ -147,7 +146,7 @@ def test_sampling_callback(shape, k, p, seed, device, use_program_cache):
     assert num_program_cache_entries_list[0] == num_program_cache_entries_list[1]
 
 
-@skip_for_grayskull("Requires wormhole_b0 to run")
+@skip_for_blackhole("Requires wormhole_b0 to run. Issue #19640")
 @pytest.mark.parametrize(
     "shape",
     [
@@ -161,7 +160,6 @@ def test_sampling_callback(shape, k, p, seed, device, use_program_cache):
     "sub_core_grids", [ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(8 - 1, 4 - 1))})]
 )
 def test_sampling_subcores_callback(shape, k, p, seed, device, sub_core_grids, use_program_cache):
-    device.enable_async(True)
     torch.manual_seed(seed)
     num_program_cache_entries_list = []
     for _ in range(2):

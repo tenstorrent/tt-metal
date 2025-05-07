@@ -5,13 +5,10 @@
 
 import torch
 
-from loguru import logger
-
 
 import ttnn
 from models.experimental.yolov3.reference.models.common import DetectMultiBackend
 from models.experimental.yolov3.tt.yolov3_detection_model import TtDetectionModel
-from models.experimental.yolov3.reference.models.common import autopad
 from models.experimental.yolov3.reference.utils.dataloaders import LoadImages
 from models.experimental.yolov3.reference.utils.general import check_img_size
 from models.utility_functions import (

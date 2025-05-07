@@ -18,7 +18,7 @@ from models.experimental.grok.tt.grok_decoder import TtTransformerBlock
 from models.experimental.grok.reference.model import DecoderLayer
 from models.experimental.grok.tt.model_config import TtModelArgs
 from models.utility_functions import comp_pcc, comp_allclose
-from ttnn import ReplicateTensorToMesh, ConcatMeshToTensor
+from ttnn import ConcatMeshToTensor
 
 
 @pytest.mark.timeout(500 * 8)
@@ -28,10 +28,10 @@ def test_grok_decoder_inference(t3k_mesh_device, use_program_cache, reset_seeds)
     s: sequence length
     h: hidden size
     """
-    t3k_mesh_device.enable_async(True)
+
     pcc = 0.98
     dtype = ttnn.bfloat8_b
-    model_args = TtModelArgs(t3k_mesh_device.get_device(0), dummy_weights=os.getenv("CI") == "true")
+    model_args = TtModelArgs(t3k_mesh_device, dummy_weights=os.getenv("CI") == "true")
     model_args.n_layers = 1
     state_dict = model_args.load_state_dict()
     key_start = "model.layers.0."

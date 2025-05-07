@@ -4,7 +4,6 @@
 import torch
 import pytest
 from loguru import logger
-import os
 import ttnn
 from models.demos.wormhole.mistral7b.tt.mistral_attention import TtMistralAttention
 from models.demos.wormhole.mistral7b.tt.model_config import TtModelArgs

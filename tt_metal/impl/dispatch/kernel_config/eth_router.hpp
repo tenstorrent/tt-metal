@@ -2,9 +2,15 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
-#include "fd_kernel.hpp"
+#include <stdint.h>
+#include <array>
+#include <optional>
 
-typedef struct eth_router_static_config {
+#include "dispatch/kernels/packet_queue_ctrl.hpp"
+#include "fd_kernel.hpp"
+#include "system_memory_manager.hpp"
+
+struct eth_router_static_config_t {
     std::optional<uint32_t> vc_count;                   // Set from arch level
     std::optional<uint32_t> fwd_vc_count;               // # of VCs continuing on to the next chip
     std::optional<uint32_t> rx_queue_start_addr_words;  // 1
@@ -22,9 +28,9 @@ typedef struct eth_router_static_config {
     std::array<std::optional<uint32_t>, tt::packet_queue::MAX_SWITCH_FAN_IN> input_packetize;                // [30:33]
     std::array<std::optional<uint32_t>, tt::packet_queue::MAX_SWITCH_FAN_IN> input_packetize_log_page_size;  // [30:33]
     std::array<std::optional<uint32_t>, tt::packet_queue::MAX_SWITCH_FAN_IN> input_packetize_local_sem;      // [30:33]
-} eth_router_static_config_t;
+};
 
-typedef struct eth_router_dependent_config {
+struct eth_router_dependent_config_t {
     std::array<std::optional<uint32_t>, tt::packet_queue::MAX_SWITCH_FAN_OUT> remote_tx_x;         // [4:7], dependent
     std::array<std::optional<uint32_t>, tt::packet_queue::MAX_SWITCH_FAN_OUT> remote_tx_y;         // [4:7], dependent
     std::array<std::optional<uint32_t>, tt::packet_queue::MAX_SWITCH_FAN_OUT> remote_tx_queue_id;  // [4:7], dependent
@@ -47,7 +53,7 @@ typedef struct eth_router_dependent_config {
         input_packetize_upstream_sem;  // [30:33], dependent
     std::array<std::optional<uint32_t>, tt::packet_queue::MAX_SWITCH_FAN_IN> input_packetize_src_endpoint;  // Dependent
     std::array<std::optional<uint32_t>, tt::packet_queue::MAX_SWITCH_FAN_IN> input_packetize_dst_endpoint;  // Dependent
-} eth_router_dependent_config_t;
+};
 
 class EthRouterKernel : public FDKernel {
 public:

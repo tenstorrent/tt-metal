@@ -2,13 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from dataclasses import dataclass
-import os
-import json
-import torch
-import torch.nn.functional as F
 
-from time import time
 import pytest
 from loguru import logger
 from models.utility_functions import skip_for_grayskull
@@ -91,9 +85,6 @@ def test_llama3_tg_nightly_demo(
     )
 
     check_mesh_device(mesh_device, model_config)
-
-    # TODO: Renable when issue #11089 is resolved
-    mesh_device.enable_async(True)
 
     args = construct_arg(
         implementation=implementation,

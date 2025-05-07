@@ -9,7 +9,6 @@ from loguru import logger
 import ttnn
 
 from models.experimental.yolov3.reference.models.common import (
-    autopad,
     DetectMultiBackend,
 )
 from models.experimental.yolov3.tt.yolov3_detection_model import (

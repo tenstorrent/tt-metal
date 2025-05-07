@@ -13,25 +13,16 @@ on:
         required: false
         type: number
         default: 45
-  workflow_dispatch:
-    inputs:
-      arch:
+      docker-image:
         required: true
-        type: choice
-        options:
-          - wormhole_b0
-          - blackhole
-      runner-label:
+        type: string
+      wheel-artifact-name:
         required: true
-        type: choice
-        options:
-          - N150
-          - N300
-          - BH
-      timeout:
-        required: false
-        type: number
-        default: 45
+        type: string
+      enable-watcher:
+        description: 'Enable watcher'
+        default: false
+        type: boolean
 
 jobs:
   models:
@@ -40,41 +31,41 @@ jobs:
       # so we try not to get hanging machines
       fail-fast: false
       matrix:
-        os: ["ubuntu-20.04"]
         test-group: [
           {name: model},
         ]
     name: ${{ matrix.test-group.name }} ${{ inputs.arch }} ${{ inputs.runner-label }}
-    env:
-      LOGURU_LEVEL: INFO
-    runs-on:
-      - ${{ inputs.runner-label }}
-      - in-service
-      - cloud-virtual-machine
+    runs-on: >-
+      ${{
+        github.event.pull_request.head.repo.fork == true && format('tt-beta-ubuntu-2204-{0}-large-stable', inputs.runner-label)
+        || fromJSON(format('["{0}", "in-service", "cloud-virtual-machine"]', inputs.runner-label))
+      }}
+    container:
+      image: ${{ inputs.docker-image }}
+      env:
+        ARCH_NAME: ${{ inputs.arch }}
+        LOGURU_LEVEL: INFO
+        PYTHONPATH: /work
+      volumes:
+        - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
+        - /dev/hugepages-1G:/dev/hugepages-1G
+      options: "--device /dev/tenstorrent"
+    defaults:
+      run:
+        shell: bash
+        working-directory: /work # https://github.com/actions/runner/issues/878
     steps:
-      - uses: tenstorrent/tt-metal/.github/actions/checkout-with-submodule-lfs@main
-      - uses: ./.github/actions/retry-command
-        with:
-          timeout-seconds: 100
-          max-retries: 10
-          backoff-seconds: 60
-          command: ./.github/scripts/cloud_utils/mount_weka.sh
-      - uses: actions/download-artifact@v4
+      - name: ⬇️  Setup Job
+        uses: tenstorrent/tt-metal/.github/actions/setup-job@main
         timeout-minutes: 10
         with:
-          name: eager-dist-${{ matrix.os }}-any
+          wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
+          enable-watcher: ${{ inputs.enable-watcher }}
       - name: ${{ matrix.test-group.name }} tests
         timeout-minutes: ${{ inputs.timeout }}
-        uses: ./.github/actions/docker-run
-        with:
-          install_wheel: true
-          docker_password: ${{ secrets.GITHUB_TOKEN }}
-          docker_opts: |
-            -e ARCH_NAME=${{ inputs.arch }}
-            -e GITHUB_ACTIONS=true
-          run_args: |
-            source tests/scripts/run_python_model_tests.sh && run_python_model_tests_${{ inputs.arch }}
-      - uses: ./.github/actions/slack-report
+        run: |
+          source tests/scripts/run_python_model_tests.sh && run_python_model_tests_${{ inputs.arch }}
+      - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
         if: ${{ failure() }}
         with:
           slack_webhook_url: ${{ secrets.SLACK_WEBHOOK_URL }}
@@ -83,50 +74,48 @@ jobs:
         timeout-minutes: 10
         if: ${{ !cancelled() }}
         with:
-          path: |
-            generated/test_reports/
+          path: generated/test_reports/
           prefix: "test_reports_"
 
   models-tests-slow-runtime-mode:
-    if: ${{ inputs.runner-label != 'E150' }} # Currently no tests for GS so skip it
     strategy:
       fail-fast: false
       matrix:
-        os: ["ubuntu-20.04"]
         test-group: [
           {name: model},
         ]
     name: models slow dispatch
-    env:
-      LOGURU_LEVEL: INFO
     runs-on:
       - ${{ inputs.runner-label }}
       - in-service
       - cloud-virtual-machine
+    container:
+      image: ${{ inputs.docker-image }}
+      env:
+        ARCH_NAME: ${{ inputs.arch }}
+        LOGURU_LEVEL: INFO
+        PYTHONPATH: /work
+        SLOW_RUNTIME_MODE: true
+      volumes:
+        - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
+        - /dev/hugepages-1G:/dev/hugepages-1G
+      options: "--device /dev/tenstorrent"
+    defaults:
+      run:
+        shell: bash
+        working-directory: /work # https://github.com/actions/runner/issues/878
     steps:
-      - uses: tenstorrent/tt-metal/.github/actions/checkout-with-submodule-lfs@main
-      - uses: ./.github/actions/retry-command
-        with:
-          timeout-seconds: 100
-          max-retries: 10
-          backoff-seconds: 60
-          command: ./.github/scripts/cloud_utils/mount_weka.sh
-      - uses: actions/download-artifact@v4
+      - name: ⬇️  Setup Job
+        uses: tenstorrent/tt-metal/.github/actions/setup-job@main
         timeout-minutes: 10
         with:
-          name: eager-dist-${{ matrix.os }}-any
+          wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
+          enable-watcher: ${{ inputs.enable-watcher }}
       - name: ${{ matrix.test-group.name }} slow runtime mode tests
         timeout-minutes: ${{ inputs.timeout }}
-        uses: ./.github/actions/docker-run
-        with:
-          install_wheel: true
-          docker_password: ${{ secrets.GITHUB_TOKEN }}
-          docker_opts: |
-            -e ARCH_NAME=${{ inputs.arch }}
-            -e SLOW_RUNTIME_MODE=true
-          run_args: |
-            source tests/scripts/run_python_model_tests.sh && run_python_model_tests_slow_runtime_mode_${{ inputs.arch }}
-      - uses: ./.github/actions/slack-report
+        run: |
+          source tests/scripts/run_python_model_tests.sh && run_python_model_tests_slow_runtime_mode_${{ inputs.arch }}
+      - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
         if: ${{ failure() }}
         with:
           slack_webhook_url: ${{ secrets.SLACK_WEBHOOK_URL }}
@@ -135,6 +124,4 @@ jobs:
         timeout-minutes: 10
         if: ${{ !cancelled() }}
         with:
-          path: |
-            generated/test_reports/
           prefix: "test_reports_"

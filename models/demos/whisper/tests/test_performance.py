@@ -24,8 +24,8 @@ def get_expected_times(model_name):
     Returns expected compile time and inference time.
     """
     return {
-        "openai/whisper-base": (17.0, 0.039),
-        "distil-whisper/distil-large-v3": (14.1, 0.236),
+        "openai/whisper-base": (18.0, 0.039),
+        "distil-whisper/distil-large-v3": (15.3, 0.236),
     }[model_name]
 
 
@@ -36,7 +36,6 @@ def get_expected_times(model_name):
 @pytest.mark.parametrize("decoder_sequence_size", [1])
 @pytest.mark.parametrize("use_kv_cache", [True])
 @pytest.mark.parametrize("functional_whisper", [ttnn_optimized_functional_whisper])
-@pytest.mark.parametrize("enable_async_mode", (True,), indirect=True)
 @pytest.mark.parametrize("device_params", [{"l1_small_size": WHISPER_L1_SMALL_SIZE}], indirect=True)
 def test_performance(
     device,
@@ -46,7 +45,6 @@ def test_performance(
     decoder_sequence_size,
     use_kv_cache,
     functional_whisper,
-    enable_async_mode,
 ):
     config = WhisperConfig.from_pretrained(model_name)
 

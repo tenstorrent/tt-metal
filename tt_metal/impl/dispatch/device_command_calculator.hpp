@@ -2,7 +2,14 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "hal.hpp"
+#include <stdint.h>
+#include <type_traits>
+#include <utility>
+#include <vector>
+
+#include "assert.hpp"
+#include "hal_types.hpp"
+#include "impl/context/metal_context.hpp"
 #include "tt_align.hpp"
 #include "tt_metal/impl/dispatch/kernels/cq_commands.hpp"
 
@@ -12,7 +19,8 @@ public:
     uint32_t write_offset_bytes() const { return this->cmd_write_offsetB; }
 
     void add_dispatch_wait() {
-        this->cmd_write_offsetB += sizeof(CQPrefetchCmd) + sizeof(CQDispatchCmd);
+        this->add_prefetch_relay_inline();
+        this->cmd_write_offsetB += sizeof(CQDispatchCmd);
         this->cmd_write_offsetB = tt::align(this->cmd_write_offsetB, this->pcie_alignment);
     }
 
@@ -22,6 +30,11 @@ public:
         this->cmd_write_offsetB = tt::align(this->cmd_write_offsetB, this->pcie_alignment);
     }
     void add_prefetch_relay_linear() {
+        this->cmd_write_offsetB += sizeof(CQPrefetchCmd);
+        this->cmd_write_offsetB = tt::align(this->cmd_write_offsetB, this->pcie_alignment);
+    }
+
+    void add_prefetch_stall() {
         this->cmd_write_offsetB += sizeof(CQPrefetchCmd);
         this->cmd_write_offsetB = tt::align(this->cmd_write_offsetB, this->pcie_alignment);
     }
@@ -44,6 +57,18 @@ public:
             // Need to make sure next command that flushes prefetch is written to correctly aligned location
             this->cmd_write_offsetB = tt::align(this->cmd_write_offsetB, this->pcie_alignment);
         }
+    }
+
+    void add_dispatch_write_linear_host_event(uint32_t data_sizeB) {
+        this->add_prefetch_relay_inline();
+        this->cmd_write_offsetB += sizeof(CQDispatchCmd) + data_sizeB;
+        this->cmd_write_offsetB = tt::align(this->cmd_write_offsetB, this->pcie_alignment);
+    }
+
+    void add_dispatch_write_linear_host() {
+        this->add_prefetch_relay_inline();
+        this->cmd_write_offsetB += sizeof(CQDispatchCmd);
+        this->cmd_write_offsetB = tt::align(this->cmd_write_offsetB, this->pcie_alignment);
     }
 
     void add_dispatch_go_signal_mcast() {
@@ -190,10 +215,14 @@ public:
         const uint32_t packed_write_max_unicast_sub_cmds,
         std::vector<std::pair<uint32_t, uint32_t>>& packed_cmd_payloads);
 
+    // Clear calculator state
+    void clear() { this->cmd_write_offsetB = 0; }
+
 private:
     void add_prefetch_relay_inline() { this->cmd_write_offsetB += sizeof(CQPrefetchCmd); }
     uint32_t cmd_write_offsetB = 0;
-    uint32_t pcie_alignment = tt::tt_metal::hal.get_alignment(tt::tt_metal::HalMemType::HOST);
-    uint32_t l1_alignment = tt::tt_metal::hal.get_alignment(tt::tt_metal::HalMemType::L1);
+    uint32_t pcie_alignment =
+        tt::tt_metal::MetalContext::instance().hal().get_alignment(tt::tt_metal::HalMemType::HOST);
+    uint32_t l1_alignment = tt::tt_metal::MetalContext::instance().hal().get_alignment(tt::tt_metal::HalMemType::L1);
 };
 }  // namespace tt::tt_metal

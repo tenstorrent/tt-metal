@@ -11,7 +11,7 @@
 #include "ttnn/operation.hpp"
 #include "ttnn/common/queue_id.hpp"
 #include <tt-metalium/device_impl.hpp>
-#include <tt-metalium/type_name.hpp>
+#include <tt_stl/type_name.hpp>
 
 namespace tt::tt_metal {
 
@@ -118,42 +118,6 @@ inline auto run_with_autoformat(
         optional_output_tensors,
         cq_id);
 }
-
-template <class OutputType = Tensors>
-__attribute__((noinline)) void launch_op_func(
-    const std::function<OutputType(const Tensors&, const OptionalConstTensors&, const OptionalTensors&)>& op_func,
-    const Tensors input_tensors,
-    OutputType& output_tensors,
-    const OptionalConstTensors optional_input_tensors = {},
-    const OptionalTensors optional_output_tensors = {});
-
-/*
- */
-template <class F, class OutputType>
-void launch_op(
-    F&& op_func,
-    const Tensors input_tensors,
-    OutputType& output_tensors,
-    const OptionalConstTensors optional_input_tensors = {},
-    const OptionalTensors optional_output_tensors = {}) {
-    using FuncType = std::function<OutputType(const Tensors&, const OptionalConstTensors&, const OptionalTensors&)>;
-    launch_op_func(
-        FuncType(std::forward<F>(op_func)),
-        input_tensors,
-        output_tensors,
-        optional_input_tensors,
-        optional_output_tensors);
-}
-
-void launch_with_autoformat(
-    std::function<Tensors(const Tensors&, const OptionalConstTensors&, const OptionalTensors&)>&& op_func,
-    const Tensors& input_tensors,
-    Tensors& output_tensors,
-    const OptionalConstTensors& optional_input_tensors = {},
-    const OptionalTensors& optional_output_tensors = {});
-
-std::vector<IDevice*> get_workers_for_op_output(
-    const std::vector<Tensor>& inputs, const std::vector<std::optional<const Tensor>>& optional_inputs = {});
 
 namespace detail {
 IDevice* get_device(const Tensors& input_tensors, const OptionalConstTensors& optional_input_tensors = {});

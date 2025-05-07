@@ -29,21 +29,22 @@ from models.utility_functions import skip_for_grayskull
 )
 @pytest.mark.parametrize(
     "seq_len",
-    (
-        64 * 1024,
-        32 * 1024,
-        32,
-    ),
+    (64 * 1024, 32 * 1024, 512, 32),
 )
 @pytest.mark.parametrize(
     "batch_size",
     (1,),
 )
 def test_mlp_inference(seq_len, batch_size, mesh_device, use_program_cache, reset_seeds, ensure_gc):
+    # TODO Fix long seqlen for Mistral-7B
+    model_name_env = os.getenv("HF_MODEL")
+    if seq_len >= 1024 and model_name_env and "Mistral-7B" in model_name_env:
+        pytest.skip(
+            "Mistral-7B models do not support seq_len >= 1024, See issue: https://github.com/tenstorrent/tt-metal/issues/19806"
+        )
+
     dtype = ttnn.bfloat8_b
     mode = "decode" if seq_len <= 32 else "prefill"
-
-    mesh_device.enable_async(True)
 
     model_args = ModelArgs(mesh_device, max_batch_size=batch_size, max_seq_len=128)
     model_args.n_layers = 1
@@ -55,7 +56,6 @@ def test_mlp_inference(seq_len, batch_size, mesh_device, use_program_cache, rese
         k[len(first_layer_prefix) + 1 :]: v for k, v in state_dict.items() if (k.startswith(first_layer_prefix))
     }
 
-    model_args.WEIGHTS_DTYPE = dtype
     reference_model = model_args.reference_mlp()
     reference_model.load_state_dict(partial_state_dict)
 

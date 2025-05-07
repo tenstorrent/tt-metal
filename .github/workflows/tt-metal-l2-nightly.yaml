@@ -1,18 +1,6 @@
 name: "Nightly tt-metal L2 tests"
 
 on:
-  workflow_call:
-    inputs:
-      arch:
-        required: true
-        type: string
-      runner-label:
-        required: true
-        type: string
-      timeout:
-        required: false
-        type: number
-        default: 120
   workflow_dispatch:
     inputs:
       arch:
@@ -36,62 +24,20 @@ on:
     - cron: "0 22 * * *"
 
 jobs:
-  build:
+  build-artifact:
     uses: ./.github/workflows/build-artifact.yaml
     secrets: inherit
     with:
       build-wheel: true
+      version: 22.04
   test:
-    needs: build
-    strategy:
-      fail-fast: false
-      matrix:
-        os: ["ubuntu-20.04"]
-        test-group:
-          - name: ttnn nightly conv tests
-            cmd: pytest tests/ttnn/nightly/unit_tests/operations/conv -xv -m "not disable_fast_runtime_mode"
-            owner: U052J2QDDKQ # Pavle Josipovic
-          - name: ttnn nightly matmul tests
-            cmd: pytest tests/ttnn/nightly/unit_tests/operations/matmul -xv -m "not disable_fast_runtime_mode"
-            owner: U06Q7ESTFEV # Borys Bradel
-          - name: ttnn nightly pool tests
-            cmd: pytest tests/ttnn/nightly/unit_tests/operations/pool -xv -m "not disable_fast_runtime_mode"
-            owner: U052J2QDDKQ # Pavle Josipovic
-    name: ${{ matrix.test-group.name }}
-    env:
-      LOGURU_LEVEL: INFO
-    runs-on:
-      - ${{ inputs.runner-label || 'N150' }}
-      - "in-service"
-    steps:
-      - uses: tenstorrent/tt-metal/.github/actions/checkout-with-submodule-lfs@main
-      - uses: actions/download-artifact@v4
-        timeout-minutes: 10
-        with:
-          name: eager-dist-${{ matrix.os }}-any
-      - name: ${{ matrix.test-group.name }} tests
-        timeout-minutes: ${{ fromJSON(inputs.timeout) || 120 }}
-        uses: ./.github/actions/docker-run
-        with:
-          docker_username: ${{ github.actor }}
-          docker_password: ${{ secrets.GITHUB_TOKEN }}
-          docker_opts: |
-            -e ARCH_NAME=${{ inputs.arch || 'wormhole_b0' }}
-            -e GITHUB_ACTIONS=true
-          run_args: |
-            WHEEL_FILENAME=$(ls -1 *.whl)
-            pip3 install --user $WHEEL_FILENAME
-            ${{ matrix.test-group.cmd }}
-      - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
-        timeout-minutes: 10
-        if: ${{ !cancelled() }}
-        with:
-          path: |
-            generated/test_reports/
-          prefix: "test_reports_"
-      - uses: ./.github/actions/slack-report
-        # Only notify during failed scheduled runs
-        if: ${{ failure() && github.event_name == 'schedule' }}
-        with:
-          slack_webhook_url: ${{ secrets.SLACK_WEBHOOK_URL }}
-          owner: ${{ matrix.test-group.owner }}
+    needs: build-artifact
+    secrets: inherit
+    uses: ./.github/workflows/tt-metal-l2-nightly-impl.yaml
+    with:
+      arch: ${{ inputs.arch || 'wormhole_b0' }}
+      runner-label: ${{ inputs.runner-label || 'N150' }}
+      timeout: ${{ (github.event_name == 'schedule' && 120) || fromJSON(inputs.timeout) }}
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}

@@ -58,6 +58,10 @@ Compute APIs
   atan_tile
   acos_tile
 
+  quant_tile
+  requant_tile
+  dequant_tile
+
   ltz_tile
   eqz_tile
   lez_tile
@@ -67,6 +71,8 @@ Compute APIs
   unary_ne_tile
   unary_gt_tile
   unary_lt_tile
+  unary_max_tile
+  unary_min_tile
 
   cb_wait_front
   cb_pop_front

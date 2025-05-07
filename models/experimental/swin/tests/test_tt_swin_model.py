@@ -15,7 +15,6 @@ from models.utility_functions import (
 )
 
 from models.experimental.swin.tt.swin_model import TtSwinModel
-from models.experimental.swin.swin_utils import get_shape
 from transformers import SwinModel
 from transformers import AutoFeatureExtractor
 

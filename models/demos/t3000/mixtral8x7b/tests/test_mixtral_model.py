@@ -1,7 +1,6 @@
 # SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
-import os
 import torch
 import pytest
 import numpy as np
@@ -9,7 +8,7 @@ from loguru import logger
 from sklearn.metrics import top_k_accuracy_score
 
 import ttnn
-from ttnn import ReplicateTensorToMesh, ConcatMeshToTensor
+from ttnn import ConcatMeshToTensor
 
 from models.demos.t3000.mixtral8x7b.tt.mixtral_common import prepare_inputs_ttnn
 from models.demos.t3000.mixtral8x7b.tt.mixtral_model import TtTransformer
@@ -36,8 +35,6 @@ class Emb(torch.nn.Module):
     ),
 )
 def test_mixtral_model_inference(t3k_mesh_device, use_program_cache, reset_seeds, batch):
-    t3k_mesh_device.enable_async(True)
-
     valid_pcc = 0.964
     dtype = ttnn.bfloat8_b
     iterations = 10
@@ -51,7 +48,7 @@ def test_mixtral_model_inference(t3k_mesh_device, use_program_cache, reset_seeds
     else:
         raise ValueError(f"Batch size {batch} not supported")
 
-    model_args = TtModelArgs(t3k_mesh_device.get_device(0), max_seq_len=max_seq_len, max_batch_size=batch)
+    model_args = TtModelArgs(t3k_mesh_device, max_seq_len=max_seq_len, max_batch_size=batch)
     state_dict = model_args.load_state_dict()
     tokenizer = Tokenizer(model_args.tokenizer_path)
 

@@ -2,32 +2,59 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <algorithm>
-#include <cctype>
 #include <chrono>
-#include <functional>
-#include <random>
-#include <stdexcept>
-#include <string>
-#include <vector>
-
-#include <tt-metalium/bfloat8.hpp>
+#include <errno.h>
+#include <fmt/base.h>
+#include <stdlib.h>
 #include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/bfloat8.hpp>
+#include <tt-metalium/global_circular_buffer.hpp>
+#include <tt-metalium/global_circular_buffer_impl.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/sub_device.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/util.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/global_circular_buffer_impl.hpp>
-#include <tt-metalium/global_semaphore.hpp>
-#include <tt-metalium/global_circular_buffer.hpp>
-#include "tt_metal/include/tt_metal/program.hpp"
-#include "tt_metal/tt_metal/perf_microbenchmark/common/util.hpp"
-#include <tt-metalium/work_split.hpp>
-#include "tests/tt_metal/test_utils/tilization.hpp"
-#include "tt_metal/test_utils/deprecated/tensor.hpp"
-#include "tt_metal/tt_metal/common/matmul_test_utils.hpp"
+#include <algorithm>
+#include <array>
+#include <cmath>
+#include <cstdint>
+#include <cstring>
+#include <exception>
+#include <iterator>
+#include <map>
+#include <memory>
+#include <optional>
+#include <set>
+#include <stdexcept>
+#include <string>
+#include <tuple>
+#include <type_traits>
+#include <utility>
+#include <variant>
+#include <vector>
 
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/base_types.hpp>
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/buffer_types.hpp>
+#include <tt-metalium/circular_buffer_types.hpp>
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/data_types.hpp>
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/hal_types.hpp>
+#include <tt-metalium/kernel_types.hpp>
+#include <tt-metalium/logger.hpp>
+#include <tt-metalium/program.hpp>
+#include <tt_stl/span.hpp>
+#include <tt-metalium/sub_device_types.hpp>
 #include "test_common.hpp"
+#include <tt-metalium/tilize_utils.hpp>
+#include "impl/context/metal_context.hpp"
+#include "tt_metal/test_utils/deprecated/tensor.hpp"
+#include "umd/device/types/arch.h"
+#include "umd/device/types/xy_pair.h"
 
 using std::vector;
 using namespace tt;
@@ -97,7 +124,7 @@ std::tuple<uint32_t, uint32_t> get_out_subblock_params(
     return {1, 1};
 }
 
-std::tuple<std::vector<tt_metal::Program>, ::tt_metal::v1::experimental::GlobalCircularBuffer>
+std::tuple<std::vector<tt_metal::Program>, ::tt_metal::experimental::GlobalCircularBuffer>
 create_programs(
     tt_metal::IDevice* device,
     const CoreRangeSet& dram_reader_core,
@@ -164,13 +191,13 @@ create_programs(
     uint32_t in1_receiver_cb_size = in1_block_h * in1_block_w * single_tile_size * cb_num_blocks / num_receivers;
     uint32_t padded_global_cb_size = in1_receiver_cb_size + cb_padding;
 
-    auto global_cb = tt_metal::v1::experimental::CreateGlobalCircularBuffer(
+    auto global_cb = tt_metal::experimental::CreateGlobalCircularBuffer(
         device, sender_receiver_core_mapping, padded_global_cb_size, tt_metal::BufferType::L1);
 
     uint32_t in1_writer_cb_index = 31;
     tt_metal::CircularBufferConfig in1_writer_cb_config = tt_metal::CircularBufferConfig(in1_receiver_cb_size);
     in1_writer_cb_config.remote_index(in1_writer_cb_index).set_page_size(single_tile_size).set_data_format(tile_format);
-    auto writer_cb = tt_metal::v1::experimental::CreateCircularBuffer(
+    auto writer_cb = tt_metal::experimental::CreateCircularBuffer(
         sender_program, dram_reader_core, in1_writer_cb_config, global_cb);
 
     // in0 reader CB
@@ -191,7 +218,7 @@ create_programs(
         .set_page_size(single_tile_size)
         .set_data_format(tile_format);
     in1_receiver_cb_config.index(in1_pusher_cb_index).set_page_size(single_tile_size).set_data_format(tile_format);
-    auto in1_receiver_cb = tt_metal::v1::experimental::CreateCircularBuffer(
+    auto in1_receiver_cb = tt_metal::experimental::CreateCircularBuffer(
         receiver_program, l1_receiver_cores, in1_receiver_cb_config, global_cb);
 
     // output CB
@@ -449,7 +476,7 @@ bool validation_bfp8_b(
     std::vector<uint32_t> result;
     tt::tt_metal::detail::ReadFromBuffer(out_buffer, result);
     auto result_bfp8 = unpack_bfp8_tiles_into_float_vec(result, true, false);
-    result_untilized = tt::test_utils::untilize(result_bfp8, mt * 32, nt * 32);
+    result_untilized = untilize_swizzled(result_bfp8, mt * 32, nt * 32);
 
     const auto& in0_values = in0_tensor.get_values();
     const auto& in1_values = in1_tensor.get_values();
@@ -498,8 +525,8 @@ bool validation_fp16(
     std::vector<uint32_t> result;
     tt::tt_metal::detail::ReadFromBuffer(out_buffer, result);
     auto result_bfp16 = unpack_uint32_vec_into_bfloat16_vec(result);
-    auto result_flat_layout = convert_to_flat_layout(result_bfp16);
-    auto result_untilized = tt::test_utils::untilize(result_flat_layout, mt * 32, nt * 32);
+    auto result_flat_layout = convert_layout_tile_nfaces_to_tile_swizzled(tt::stl::MakeConstSpan(result_bfp16));
+    auto result_untilized = untilize_swizzled(result_flat_layout, mt * 32, nt * 32);
 
     const auto& in0_values = in0_tensor.get_values();
     const auto& in1_values = in1_tensor.get_values();
@@ -577,7 +604,7 @@ std::shared_ptr<tt::tt_metal::Buffer> create_and_transfer_data_sharded_cb(
         input_buffer = CreateBuffer(config);
     }
     tt::tt_metal::detail::WriteToBuffer(input_buffer, input_vec);
-    tt::Cluster::instance().l1_barrier(device->id());
+    tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(device->id());
 
     log_info("created sharded tensor");
 
@@ -747,7 +774,7 @@ int main(int argc, char** argv) {
         if (tile_format == tt::DataFormat::Bfp8_b) {
             // in1 DRAM
             for (uint32_t i = 0; i < num_layers; ++i) {
-                auto input_vec_tilized = tt::test_utils::tilize(in1_tensor_fp8.get_values(), k, n);
+                auto input_vec_tilized = tilize_swizzled(in1_tensor_fp8.get_values(), k, n);
                 std::vector<uint32_t> packed_input_vec_tile_layout =
                     pack_fp32_vec_as_bfp8_tiles(input_vec_tilized, true, false);
                 in1_buffers[i] = create_and_transfer_data_sharded_cb(
@@ -762,7 +789,7 @@ int main(int argc, char** argv) {
             }
 
             // in0
-            auto activations_tilized = tt::test_utils::tilize(in0_tensor_fp8.get_values(), m, k * num_receivers);
+            auto activations_tilized = tilize_swizzled(in0_tensor_fp8.get_values(), m, k * num_receivers);
             std::vector<uint32_t> activations = pack_fp32_vec_as_bfp8_tiles(activations_tilized, true, false);
             in0_buffer = create_and_transfer_data_sharded_cb(
                 device,
@@ -789,8 +816,8 @@ int main(int argc, char** argv) {
         } else {
             // in1
             for (uint32_t i = 0; i < num_layers; ++i) {
-                auto input_vec_tilized = tt::test_utils::tilize(in1_tensor_fp16.get_values(), k, n);
-                auto input_vec_tile_layout = convert_to_tile_layout(input_vec_tilized);
+                auto input_vec_tilized = tilize_swizzled(in1_tensor_fp16.get_values(), k, n);
+                auto input_vec_tile_layout = convert_layout_tile_swizzled_to_tile_nfaces(tt::stl::MakeConstSpan(input_vec_tilized));
                 vector<uint32_t> packed_input_vec_tile_layout =
                     pack_bfloat16_vec_into_uint32_vec(input_vec_tile_layout);
                 in1_buffers[i] = create_and_transfer_data_sharded_cb(
@@ -805,8 +832,8 @@ int main(int argc, char** argv) {
             }
 
             // in0
-            auto activations_tilized = tt::test_utils::tilize(in0_tensor_fp16.get_values(), m, k * num_receivers);
-            auto activations_tile_layout = convert_to_tile_layout(activations_tilized);
+            auto activations_tilized = tilize_swizzled(in0_tensor_fp16.get_values(), m, k * num_receivers);
+            auto activations_tile_layout = convert_layout_tile_swizzled_to_tile_nfaces(tt::stl::MakeConstSpan(activations_tilized));
             vector<uint32_t> activations = pack_bfloat16_vec_into_uint32_vec(activations_tile_layout);
             in0_buffer = create_and_transfer_data_sharded_cb(
                 device,

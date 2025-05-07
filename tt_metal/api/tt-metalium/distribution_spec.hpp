@@ -7,7 +7,7 @@
 #include <vector>
 #include <variant>
 
-#include "shape.hpp"
+#include <tt-metalium/shape.hpp>
 
 namespace tt::tt_metal {
 
@@ -18,6 +18,7 @@ public:
 
     tt::tt_metal::Shape get_shard_shape() const { return shard_shape_; }
     size_t get_num_targets() const { return num_targets_; }
+    size_t get_max_num_shards_per_target() const { return max_num_shards_per_target_; }
 
     // ChunkMapping defined as:
     // - src: Element offset from tensor shape
@@ -51,7 +52,7 @@ public:
     // Metadata for all targets stores one TargetData per num_targets
     // The mapping to target is implied in the position of the TargetData
     // When consuming the metadata, it is user's responsibility to map TargetData to the correct device/core
-    std::vector<TargetData> compute_metadata_for_targets(const MappingMode mapping_mode) const;
+    const std::vector<TargetData>& get_metadata_for_targets(const MappingMode mapping_mode);
 
 private:
     struct ShardSize {
@@ -68,10 +69,19 @@ private:
         const tt::stl::SmallVector<DistributionType>& spec,
         size_t num_targets);
 
+    // Helper function for generating cached metadata_for_targets
+    std::vector<TargetData> compute_metadata_for_targets(const MappingMode mapping_mode) const;
+
     tt::tt_metal::Shape tensor_shape_;
     tt::stl::SmallVector<DistributionType> spec_;
     tt::tt_metal::Shape shard_shape_;  // Determined based on spec_
     size_t num_targets_ = 0;
+    size_t max_num_shards_per_target_ = 0;
+
+    // Cached metadata_for_targets after first time it is computed
+    // Store two versions, one for each MappingMode
+    std::optional<std::vector<TargetData>> noncoalesced_metadata_for_targets_ = std::nullopt;
+    std::optional<std::vector<TargetData>> coalesced_metadata_for_targets_ = std::nullopt;
 };
 
 }  // namespace tt::tt_metal

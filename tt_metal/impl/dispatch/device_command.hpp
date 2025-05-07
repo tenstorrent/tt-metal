@@ -4,17 +4,25 @@
 
 #pragma once
 
+#include <stdint.h>
+#include <tt_stl/aligned_allocator.hpp>
+#include <algorithm>
 #include <bit>
 #include <cstddef>
+#include <tuple>
+#include <type_traits>
+#include <utility>
 #include <vector>
 
-#include "env_lib.hpp"
 #include "command_queue_interface.hpp"
-#include "tt_metal/impl/dispatch/kernels/cq_commands.hpp"
+#include "env_lib.hpp"
+#include "hal_types.hpp"
+#include "impl/context/metal_context.hpp"
 #include "memcpy.hpp"
-#include "aligned_allocator.hpp"
-#include "hal.hpp"
+#include <tt_stl/span.hpp>
 #include "tt_align.hpp"
+#include "tt_metal/impl/dispatch/kernels/cq_commands.hpp"
+#include "vector_aligned.hpp"
 
 namespace tt::tt_metal {
 
@@ -42,19 +50,12 @@ public:
 
     uint32_t write_offset_bytes() const;
 
-    vector_memcpy_aligned<uint32_t> cmd_vector() const;
+    vector_aligned<uint32_t> cmd_vector() const;
 
     void add_dispatch_wait(
-        uint8_t barrier,
-        uint32_t address,
-        uint32_t count,
-        uint8_t clear_count = 0,
-        bool notify_prefetch = false,
-        bool do_wait = true,
-        uint8_t dispatcher_type = 0);
+        uint32_t flags, uint32_t address, uint32_t stream, uint32_t count, uint8_t dispatcher_type = 0);
 
-    void add_dispatch_wait_with_prefetch_stall(
-        uint8_t barrier, uint32_t address, uint32_t count, uint8_t clear_count = 0, bool do_wait = true);
+    void add_dispatch_wait_with_prefetch_stall(uint32_t flags, uint32_t address, uint32_t stream, uint32_t count);
 
     void add_prefetch_relay_linear(uint32_t noc_xy_addr, uint32_t lengthB, uint32_t addr);
 
@@ -68,7 +69,7 @@ public:
 
     void add_prefetch_relay_paged_packed(
         uint32_t length,
-        std::vector<CQPrefetchRelayPagedPackedSubCmd>& sub_cmds,
+        const std::vector<CQPrefetchRelayPagedPackedSubCmd>& sub_cmds,
         uint16_t num_sub_cmds,
         uint32_t offset_idx = 0);
 
@@ -110,7 +111,7 @@ public:
     void add_dispatch_set_num_worker_sems(const uint32_t num_worker_sems, DispatcherSelect dispatcher_type);
 
     void add_dispatch_set_go_signal_noc_data(
-        const vector_memcpy_aligned<uint32_t>& noc_mcast_unicast_data, DispatcherSelect dispatcher_type);
+        const vector_aligned<uint32_t>& noc_mcast_unicast_data, DispatcherSelect dispatcher_type);
 
     void add_dispatch_set_write_offsets(uint32_t write_offset0, uint32_t write_offset1, uint32_t write_offset2);
 
@@ -122,10 +123,12 @@ public:
 
     void update_cmd_sequence(uint32_t cmd_offsetB, const void* new_data, uint32_t data_sizeB);
 
-    void add_data(const void* data, uint32_t data_size_to_copyB, uint32_t cmd_write_offset_incrementB);
+    void add_data(const void* data, uint32_t data_size_to_copyB, uint32_t cmd_write_offset_incrementB)
+        __attribute((nonnull(2)));
 
     template <typename PackedSubCmd>
     void add_dispatch_write_packed(
+        uint8_t type,
         uint16_t num_sub_cmds,
         uint32_t common_addr,
         uint16_t packed_data_sizeB,
@@ -141,6 +144,7 @@ public:
     //  0:address, 1:size, 2:stride
     template <typename PackedSubCmd>
     void add_dispatch_write_packed(
+        uint8_t type,
         uint16_t num_sub_cmds,
         uint32_t common_addr,
         uint16_t packed_data_sizeB,
@@ -154,6 +158,7 @@ public:
 
     // Add write packed large, with no data.
     void add_dispatch_write_packed_large(
+        uint8_t type,
         uint16_t alignment,
         uint16_t num_sub_cmds,
         const std::vector<CQDispatchWritePackedLargeSubCmd>& sub_cmds,
@@ -162,6 +167,7 @@ public:
 
     // Add write packed large, with data inlined.
     void add_dispatch_write_packed_large(
+        uint8_t type,
         uint16_t alignment,
         uint16_t num_sub_cmds,
         const std::vector<CQDispatchWritePackedLargeSubCmd>& sub_cmds,
@@ -193,6 +199,7 @@ private:
 
     // Write packed large cmd and subcmds, but not data.
     void add_dispatch_write_packed_large_internal(
+        uint8_t type,
         bool flush_prefetch,
         uint16_t alignment,
         uint32_t payload_sizeB,
@@ -205,12 +212,12 @@ private:
 
     void deepcopy(const DeviceCommand& other);
 
-    void memcpy(void* __restrict dst, const void* __restrict src, size_t n);
+    void memcpy(void* __restrict dst, const void* __restrict src, size_t n) __attribute__((nonnull(2, 3)));
 
     template <typename Command>
     void zero(Command* cmd) {
         if constexpr (hugepage_write) {
-            vector_memcpy_aligned<char> zero_cmd(sizeof(Command), 0);
+            vector_aligned<char> zero_cmd(sizeof(Command), 0);
             this->memcpy(cmd, zero_cmd.data(), sizeof(Command));
         } else {
             std::fill((uint8_t*)cmd, (uint8_t*)cmd + sizeof(Command), 0);
@@ -220,10 +227,11 @@ private:
     uint32_t cmd_sequence_sizeB = 0;
     void* cmd_region = nullptr;
     uint32_t cmd_write_offsetB = 0;
-    uint32_t pcie_alignment = tt::tt_metal::hal.get_alignment(tt::tt_metal::HalMemType::HOST);
-    uint32_t l1_alignment = tt::tt_metal::hal.get_alignment(tt::tt_metal::HalMemType::L1);
+    uint32_t pcie_alignment =
+        tt::tt_metal::MetalContext::instance().hal().get_alignment(tt::tt_metal::HalMemType::HOST);
+    uint32_t l1_alignment = tt::tt_metal::MetalContext::instance().hal().get_alignment(tt::tt_metal::HalMemType::L1);
 
-    vector_memcpy_aligned<uint32_t> cmd_region_vector;
+    vector_aligned<uint32_t> cmd_region_vector;
 };
 
 template <bool hugepage_write>

@@ -31,16 +31,17 @@ void kernel_launch(uint32_t kernel_base_addr) {
 
     {
         DeviceZoneScopedMainChildN("IDLE-ERISC-KERNEL");
+        WAYPOINT("K");
         kernel_main();
+        WAYPOINT("KD");
         if constexpr (NOC_MODE == DM_DEDICATED_NOC) {
             WAYPOINT("NKFW");
             // Assert that no noc transactions are outstanding, to ensure that all reads and writes have landed and the NOC
             // interface is in a known idle state for the next kernel.
-            ASSERT(ncrisc_noc_reads_flushed(NOC_INDEX));
-            ASSERT(ncrisc_noc_nonposted_writes_sent(NOC_INDEX));
-            ASSERT(ncrisc_noc_nonposted_writes_flushed(NOC_INDEX));
-            ASSERT(ncrisc_noc_nonposted_atomics_flushed(NOC_INDEX));
-            ASSERT(ncrisc_noc_posted_writes_sent(NOC_INDEX));
+            ASSERT(ncrisc_noc_reads_flushed(NOC_INDEX), DebugAssertNCriscNOCReadsFlushedTripped);
+            ASSERT(ncrisc_noc_nonposted_writes_sent(NOC_INDEX), DebugAssertNCriscNOCNonpostedWritesSentTripped);
+            ASSERT(ncrisc_noc_nonposted_atomics_flushed(NOC_INDEX), DebugAssertNCriscNOCNonpostedAtomicsFlushedTripped);
+            ASSERT(ncrisc_noc_posted_writes_sent(NOC_INDEX), DebugAssertNCriscNOCPostedWritesSentTripped);
             WAYPOINT("NKFD");
         }
     }

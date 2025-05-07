@@ -2,8 +2,23 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <boost/container/vector.hpp>
+#include <boost/move/utility_core.hpp>
+#include <stdint.h>
+#include <algorithm>
+#include <cstddef>
+#include <functional>
+#include <type_traits>
+#include <utility>
+#include <variant>
+#include <vector>
+
+#include "assert.hpp"
 #include "distribution_spec.hpp"
 #include "math.hpp"
+#include "shape.hpp"
+#include "shape_base.hpp"
+#include "small_vector.hpp"
 
 namespace tt::tt_metal {
 
@@ -90,6 +105,9 @@ DistributionSpec::DistributionSpec(
 
     // Always set num_targets to num_targets used if num_targets provided > num_shards
     num_targets_ = std::min(num_targets, num_shards);
+
+    // Maximum number of shards per target if we have multiple shards per target
+    max_num_shards_per_target_ = tt::div_up(num_shards, num_targets_);
 }
 
 DistributionSpec DistributionSpec::from_shard_shape(
@@ -240,6 +258,25 @@ std::vector<DistributionSpec::TargetData> DistributionSpec::compute_metadata_for
     iterate_over_shards(metadata_for_targets, actual_shard_shape, shard_id, 0, 0);
 
     return metadata_for_targets;
+}
+
+const std::vector<DistributionSpec::TargetData>& DistributionSpec::get_metadata_for_targets(
+    const MappingMode mapping_mode) {
+    switch (mapping_mode) {
+        case DistributionSpec::MappingMode::COALESCED: {
+            if (!coalesced_metadata_for_targets_.has_value()) {
+                coalesced_metadata_for_targets_ = compute_metadata_for_targets(mapping_mode);
+            }
+            return coalesced_metadata_for_targets_.value();
+        }
+        case DistributionSpec::MappingMode::NONCOALESCED: {
+            if (!noncoalesced_metadata_for_targets_.has_value()) {
+                noncoalesced_metadata_for_targets_ = compute_metadata_for_targets(mapping_mode);
+            }
+            return noncoalesced_metadata_for_targets_.value();
+        }
+    }
+    TT_THROW("MappingMode {} is unsupported in get_metadata_for_targets!", mapping_mode);
 }
 
 }  // namespace tt::tt_metal

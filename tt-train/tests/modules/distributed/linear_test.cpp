@@ -9,6 +9,7 @@
 
 #include <core/ttnn_all_includes.hpp>
 #include <core/xtensor_utils.hpp>
+#include <xtensor-blas/xlinalg.hpp>
 
 #include "autograd/auto_context.hpp"
 #include "core/distributed_mapping.hpp"
@@ -18,7 +19,7 @@
 namespace {
 
 auto check_board_is_n300() {
-    return tt_ClusterDescriptor::create()->get_board_type(0) == BoardType::N300;
+    return tt::umd::Cluster::create_cluster_descriptor()->get_board_type(0) == BoardType::N300;
 }
 
 ttml::autograd::TensorPtr get_parameter(auto& parameters, const std::string& name_substring) {

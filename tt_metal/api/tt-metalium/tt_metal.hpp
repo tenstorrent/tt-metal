@@ -3,31 +3,41 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
-#include <vector>
+#include <stdint.h>
+#include <cstddef>
 #include <map>
+#include <memory>
+#include <optional>
+#include <string>
+#include <vector>
 
-#include "umd/device/types/cluster_descriptor_types.h"
-#include "umd/device/tt_soc_descriptor.h"
-#include "hostdevcommon/common_values.hpp"
-#include "core_coord.hpp"
-#include "dispatch_core_manager.hpp"
-#include "buffer.hpp"
-#include "profiler.hpp"
-#include "llrt/tt_cluster.hpp"
+#include <hostdevcommon/common_values.hpp>
+#include <tt_stl/span.hpp>
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/dispatch_core_common.hpp>
+#include <tt-metalium/fabric_types.hpp>
+#include <tt-metalium/profiler_optional_metadata.hpp>
+#include <tt-metalium/profiler_types.hpp>
+#include <umd/device/tt_core_coordinates.h>
+#include <umd/device/tt_soc_descriptor.h>
+#include <umd/device/types/cluster_descriptor_types.h>
+
+namespace tt {
+namespace tt_metal {
+enum class FabricConfig : uint32_t;
+}  // namespace tt_metal
+}  // namespace tt
 
 namespace tt::tt_metal {
-inline namespace v0 {
-class Program;
 class Buffer;
 class IDevice;
-}  // namespace v0
+class Program;
 
 namespace detail {
 
 bool DispatchStateCheck(bool isFastDispatch);
-
-bool InWorkerThread();
-inline bool InMainThread() { return not InWorkerThread(); }
 
 // Call before CreateDevices to enable fabric, which uses all free ethernet cores
 void InitializeFabricConfig(FabricConfig fabric_config);
@@ -39,7 +49,11 @@ std::map<chip_id_t, IDevice*> CreateDevices(
     const size_t l1_small_size = DEFAULT_L1_SMALL_SIZE,
     const size_t trace_region_size = DEFAULT_TRACE_REGION_SIZE,
     const tt_metal::DispatchCoreConfig& dispatch_core_config = tt_metal::DispatchCoreConfig{},
-    const std::vector<uint32_t>& l1_bank_remap = {});
+    const std::vector<uint32_t>& l1_bank_remap = {},
+    const size_t worker_l1_size = DEFAULT_WORKER_L1_SIZE,
+    bool init_profiler = true,
+    bool use_max_eth_core_count_on_all_devices = false,
+    bool initialize_fabric_and_dispatch_fw = true);
 
 void CloseDevices(const std::map<chip_id_t, IDevice*>& devices);
 
@@ -122,9 +136,14 @@ void ReadShard(Buffer& buffer, std::vector<DType>& host_buffer, const uint32_t& 
 
 // Launches all kernels on cores specified with kernels in the program.
 // All kernels on a given Tensix core must be launched.
-void LaunchProgram(IDevice* device, Program& program, bool wait_until_cores_done = true);
-void LaunchProgram(IDevice* device, const std::shared_ptr<Program>& program, bool wait_until_cores_done = true);
-void WaitProgramDone(IDevice* device, Program& program);
+void LaunchProgram(
+    IDevice* device, Program& program, bool wait_until_cores_done = true, bool force_slow_dispatch = false);
+void LaunchProgram(
+    IDevice* device,
+    const std::shared_ptr<Program>& program,
+    bool wait_until_cores_done = true,
+    bool force_slow_dispatch = false);
+void WaitProgramDone(IDevice* device, Program& program, bool dump_device_profile_results = true);
 
 /**
  *  Compiles all kernels within the program, and generates binaries that are written to
@@ -147,10 +166,11 @@ void WaitProgramDone(IDevice* device, Program& program);
  * |---------------------------|------------------------------------------------------------------|-----------|----------------------------------------------------|----------|
  * | device                    | Which device the program is compiled for                         | IDevice*  | Must be
  * initialized via tt_metal::InitializeDevice | Yes      | | program                   | The program to compile |
- * Program & |                                                    | Yes      | | fd_bootloader_mode        | Set when
- * compiling program to initialize fast dispatch           | bool      | | No       |
+ * Program & |                                                    | Yes      | | force_slow_dispatch        | Set when
+ * a user wants to compile a program with Slow Dispatch Force Enabled (advanced feature, currently used internally to
+ * launch Fast Dispatch Firmware and in the Device Performance Profiler)           | bool      | | No |
  */
-void CompileProgram(IDevice* device, Program& program, bool fd_bootloader_mode = false);
+void CompileProgram(IDevice* device, Program& program, bool force_slow_dispatch = false);
 
 /**
  * Writes runtime args that are saved in the program to device
@@ -164,13 +184,13 @@ void CompileProgram(IDevice* device, Program& program, bool fd_bootloader_mode =
  * | program             | The program holding the runtime args                                   | const Program & | |
  * Yes      |
  */
-void WriteRuntimeArgsToDevice(IDevice* device, Program& program, bool fd_bootloader_mode = false);
+void WriteRuntimeArgsToDevice(IDevice* device, Program& program, bool force_slow_dispatch = false);
 
 // Configures a given device with a given program.
 // - Loads all kernel binaries into L1s of assigned Tensix cores
 // - Configures circular buffers (inits regs with buffer data)
 // - Takes the device out of reset
-bool ConfigureDeviceWithProgram(IDevice* device, Program& program, bool fd_bootloader_mode = false);
+bool ConfigureDeviceWithProgram(IDevice* device, Program& program, bool force_slow_dispatch = false);
 
 /**
  * Clear profiler control buffer
@@ -220,7 +240,10 @@ void ProfilerSync(ProfilerSyncState state);
  * | satate        | Dumpprofiler various states                       | ProfilerDumpState |                  | False |
  * */
 void DumpDeviceProfileResults(
-    IDevice* device, std::vector<CoreCoord>& worker_cores, ProfilerDumpState = ProfilerDumpState::NORMAL);
+    IDevice* device,
+    std::vector<CoreCoord>& worker_cores,
+    ProfilerDumpState = ProfilerDumpState::NORMAL,
+    const std::optional<ProfilerOptionalMetadata>& metadata = {});
 
 /**
  * Traverse all cores and read device side profiler data and dump results into device side CSV log
@@ -232,7 +255,10 @@ void DumpDeviceProfileResults(
  * | device        | The device holding the program being profiled.    | Device * |                           | True |
  * | satate        | Dumpprofiler various states                       | ProfilerDumpState |                  | False |
  * */
-void DumpDeviceProfileResults(IDevice* device, ProfilerDumpState = ProfilerDumpState::NORMAL);
+void DumpDeviceProfileResults(
+    IDevice* device,
+    ProfilerDumpState = ProfilerDumpState::NORMAL,
+    const std::optional<ProfilerOptionalMetadata>& metadata = {});
 
 /**
  * Set the directory for device-side CSV logs produced by the profiler instance in the tt-metal module
@@ -258,6 +284,22 @@ void SetDeviceProfilerDir(const std::string& output_dir = "");
  * */
 void FreshProfilerDeviceLog();
 
+/**
+ * Generate a (unique) per device ID for a program (potentially) running across multiple devices. The generated ID is
+ * used by the performance profiler.
+ *
+ * Return value: uint32_t
+ *
+ * | Argument             | Description                                                                         |  Data
+ * type            | Valid range              | required |
+ * |----------------------|-------------------------------------------------------------------------------------|-----------------------|--------------------------|----------|
+ * | base_program_id      | ID assigned to a program or an op by the user, for use by the performance profiler  |
+ * uint32_t              | 0 - 2^21 - 1             | yes      | | device_id            | The device id this op will be
+ * launched on (0 if this op runs on host only)          | uint32_t              | 0 - 2^32 - 1             | yes      |
+ * | is_host_fallback_op  | (Optional): Specifies if this op runs entirely on host                              | bool
+ * |                          | no       |
+ */
+uint32_t EncodePerDeviceProgramID(uint32_t base_program_id, uint32_t device_id, bool is_host_fallback_op = false);
 /**
  * Copies data from a host buffer into a buffer within the device DRAM channel
  *
@@ -340,6 +382,5 @@ bool ReadFromDeviceL1(
 
 bool ReadRegFromDevice(IDevice* device, const CoreCoord& logical_core, uint32_t address, uint32_t& regval);
 
-void SynchronizeWorkerThreads(const std::vector<IDevice*>& workers);
 }  // namespace detail
 }  // namespace tt::tt_metal

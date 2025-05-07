@@ -110,11 +110,11 @@ tt_metal::operation::ProgramWithCallbacks create_program(
             .set_page_size(interm0_cb_index, out_single_tile_size);
     auto cb_output = tt_metal::CreateCircularBuffer(program, all_cores, output_cb_config);
 
-    bool in0_is_dram = in0_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
-    bool in1_is_dram = in1_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
+    bool in0_is_dram = in0_buffer->buffer_type() == tt_metal::BufferType::DRAM;
+    bool in1_is_dram = in1_buffer->buffer_type() == tt_metal::BufferType::DRAM;
     std::vector<uint32_t> reader_compile_time_args = {(uint32_t)in0_is_dram, (uint32_t)in1_is_dram};
 
-    bool out_is_dram = out_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
+    bool out_is_dram = out_buffer->buffer_type() == tt_metal::BufferType::DRAM;
     std::vector<uint32_t> writer_compile_time_args = {(uint32_t)out_is_dram};
 
     // Create reader and writer kernels per core
@@ -203,13 +203,15 @@ tt_metal::operation::ProgramWithCallbacks create_program(
                                            num_cores_x,
                                            num_blocks_y,
                                            num_blocks_x](
-                                              const tt_metal::Program& program,
-                                              const std::vector<Buffer*>& input_buffers,
-                                              const std::vector<Buffer*>& output_buffers) {
-        auto src_dram_buffer_a = input_buffers.at(0);
-        auto src_dram_buffer_b = input_buffers.at(1);
+                                              const void* operation,
+                                              const tt::tt_metal::Program& program,
+                                              const std::vector<ttnn::Tensor>& input_tensors,
+                                              const std::vector<std::optional<const ttnn::Tensor>>&,
+                                              const std::vector<ttnn::Tensor>& output_tensors) {
+        auto src_dram_buffer_a = input_tensors.at(0).buffer();
+        auto src_dram_buffer_b = input_tensors.at(1).buffer();
 
-        auto dst_dram_buffer = output_buffers.at(0);
+        auto dst_dram_buffer = output_tensors.at(0).buffer();
 
         uint32_t num_blocks_read = 0;
         for (int output_idx_y = 0; output_idx_y < num_blocks_y; output_idx_y++) {

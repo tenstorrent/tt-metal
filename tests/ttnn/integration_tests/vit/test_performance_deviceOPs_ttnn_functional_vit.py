@@ -15,7 +15,7 @@ from transformers import AutoImageProcessor
 
 import ttnn
 
-from models.experimental.functional_vit.tt import ttnn_functional_vit
+from models.demos.vit.tt import ttnn_functional_vit
 
 from ttnn.model_preprocessing import preprocess_model_parameters
 

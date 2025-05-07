@@ -10,7 +10,7 @@ import ttnn
 
 from models.demos.ttnn_falcon7b.tt.falcon_decoder import TtFalconDecoderLayer
 from models.demos.ttnn_falcon7b.tt.common import create_attention_mask
-from ttnn import ShardTensorToMesh, ReplicateTensorToMesh, ConcatMeshToTensor
+from ttnn import ShardTensorToMesh
 
 
 class TtFalconModelShared:
@@ -54,7 +54,7 @@ class TtFalconModelShared:
 
         embeddings = self.embeddings(input_ids)
 
-        if isinstance(self.device, ttnn.Device):
+        if self.device.get_num_devices() == 1:
             mesh_mapper = None
         else:
             shard_dim = 2 if llm_mode == "decode" else 0
@@ -133,6 +133,7 @@ class TtFalconModelShared:
             layer_output,
             epsilon=self.layernorm_eps,
             memory_config=self.model_config["LN_F_OUTPUT_MEMCFG"],
+            compute_kernel_config=ttnn.WormholeComputeKernelConfig(math_fidelity=ttnn.MathFidelity.HiFi4),
         )
         layer_output = ttnn.mul(
             layer_output,

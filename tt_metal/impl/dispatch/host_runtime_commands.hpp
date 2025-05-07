@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <stdint.h>
 #include <algorithm>
 #include <chrono>
 #include <condition_variable>
@@ -14,24 +15,34 @@
 #include <utility>
 #include <vector>
 
-#include "env_lib.hpp"
 #include "command_queue_interface.hpp"
-#include <tt-metalium/dispatch_settings.hpp>
+#include "core_coord.hpp"
 #include "device_command.hpp"
+#include "env_lib.hpp"
 #include "multi_producer_single_consumer_queue.hpp"
+#include "dispatch_settings.hpp"
+#include "tt-metalium/program.hpp"
+#include "sub_device_types.hpp"
+#include "trace_buffer.hpp"
 #include "tt_metal/impl/program/program_command_sequence.hpp"
 #include "worker_config_buffer.hpp"
-#include "program_impl.hpp"
-#include "trace_buffer.hpp"
+
+enum class CoreType;
+namespace tt {
+namespace tt_metal {
+class IDevice;
+class Program;
+class SystemMemoryManager;
+class WorkerConfigBufferMgr;
+enum NOC : uint8_t;
+}  // namespace tt_metal
+}  // namespace tt
 
 namespace tt::tt_metal {
-inline namespace v0 {
 
 class BufferRegion;
 class Event;
 class Trace;
-
-}  // namespace v0
 
 // Only contains the types of commands which are enqueued onto the device
 enum class EnqueueCommandType {
@@ -69,7 +80,6 @@ private:
     CoreType dispatch_core_type;
     uint32_t expected_num_workers_completed;
     uint32_t packed_write_max_unicast_sub_cmds;
-    uint32_t dispatch_message_addr;
     uint32_t multicast_cores_launch_message_wptr = 0;
     uint32_t unicast_cores_launch_message_wptr = 0;
     // TODO: There will be multiple ids once programs support spanning multiple sub_devices

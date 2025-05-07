@@ -1,7 +1,6 @@
 # SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
-import os
 import torch
 from loguru import logger
 import pytest
@@ -28,8 +27,6 @@ from models.utility_functions import (
     ),
 )
 def test_mixtral_mlp_inference(t3k_mesh_device, use_program_cache, reset_seeds, seq_len):
-    t3k_mesh_device.enable_async(True)
-
     # Specify different dtypes for each feedForward weights
     dtypes = {
         "w1": ttnn.bfloat8_b,
@@ -37,7 +34,7 @@ def test_mixtral_mlp_inference(t3k_mesh_device, use_program_cache, reset_seeds, 
         "w3": ttnn.bfloat8_b,
     }
 
-    model_args = TtModelArgs(t3k_mesh_device.get_device(0))
+    model_args = TtModelArgs(t3k_mesh_device)
     state_dict = model_args.load_state_dict()
 
     # Load ttnn MLP

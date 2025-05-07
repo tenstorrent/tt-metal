@@ -8,9 +8,11 @@ The current version is verified to work with the following models:
 - Llama3.1-8B
 - Llama3.2-11B
 - Llama3.1-70B (LoudBox / QuietBox and Galaxy)
+- Llama3.2-90B (LoudBox / QuietBox)
 - Qwen2.5-7B (N300)
 - Qwen2.5-72B (LoudBox / QuietBox)
 - DeepSeek R1 Distill Llama 3.3 70B (LoudBox / QuietBox and Galaxy)
+- [Mistral-7B-Instruct-v0.3](https://huggingface.co/mistralai/Mistral-7B-Instruct-v0.3)
 
 ## Dependencies
 TT-Transformers has some additional python dependencies. Install them from:
@@ -43,11 +45,11 @@ If using Meta-provided weights you should set `LLAMA_DIR` to the path of the dow
 export LLAMA_DIR=<path_to_meta_downloaded_model_directory>
 ```
 
-##### Repack weights (Llama3.1-70B from Meta only)
-Meta's Llama3.1-70B requires repacked weights. We provide a script to facilitate this in `models/tt_transformers/scripts/repack_weights_70b.py`.
+##### Repack weights (Llama3.1-70B and Llama3.2-90B from Meta only)
+Meta's Llama3.1-70B and Llama3.2-90B requires repacked weights. We provide scripts to facilitate this in `models/tt_transformers/scripts/repack_weights_70b.py` and `models/tt_transformers/scripts/repack_weights_90b.py`.
 
 The repacked output directory can be same as the checkpoint directory, since the new files will have different names.
-If providing a different path, please make sure that you keep the string `3.1-70B` in the new path name, since the Llama3 codebase relies on the weights directory name to identify the correct model.
+If providing a different path, please make sure that you keep the string `3.1-70B` or `3.2-90B` in the new path name, since the Llama3 codebase relies on the weights directory name to identify the correct model.
 
 Note: Use the default value of `10` for `chunk_size`.
 
@@ -143,7 +145,7 @@ Example: `export MESH_DEVICE=N150`, will enable running one a single chip of a m
 
 ### 3. Run the demo
 
-The `simple_text_demo.py` script includes 3 main modes of operation and is parametrized to support other configurations.
+The `simple_text_demo.py` script includes the following main modes of operation and is parametrized to support other configurations.
 
 - `batch-1`: Runs a small prompt (128 tokens) for a single user
 - `batch-32`: Runs a small prompt (128 tokens) for a a batch of 32 users
@@ -162,7 +164,7 @@ If you want to provide your own demo configuration, please take a look at the py
 - `page_params (dict)`: Page parameters for paged attention - [`block_size`, `max_num_blocks`]. For smaller context lengths use `block_size=32` and `max_num_blocks=1024`, for larger context use block_size=64 and max_num_blocks=2048
 - `sampling_params (dict)`: Sampling parameters for decoding -[`temperature`, `top_p`]. If temperature is set to 0, argmax (greedy decode) is used.
 - `stop_at_eos (bool)`: Flag to stop decoding when the model generates an EoS token
-- `optimization (ModelOptimizations)`: Optimization level to use for the model [`performance`, `accuracy`]
+- `optimizations (ModelOptimizations)`: Optimization level to use for the model [`accuracy`, `performance`]
 
 Please note that using `argmax` with `batch_size > 1` or using `top-p` sampling with any batch size, these ops will be run on host. This is because those ops are not yet fully supported on device. A decrease in performance is expected when these configurations are enabled.
 
@@ -179,8 +181,7 @@ pytest models/tt_transformers/demo/simple_text_demo.py -k "performance and batch
 pytest models/tt_transformers/demo/simple_text_demo.py -k "performance and long"
 ```
 
-The above examples are run in `ModelOptimizations.performance` mode.
-You can override this by setting the `optimizations` argument in the demo. To use instead the accuracy mode you can call the above tests with `-k "accuracy and ..."` instead of performance.
+The above examples are run in `ModelOptimizations.performance` mode. You can override this by setting the `optimizations` argument in the demo. To use instead the accuracy mode you can call the above tests with `-k "accuracy and ..."` instead of performance.
 
 #### Custom input arguments
 To facilitate testing different configurations, `simple_text_demo.py` supports argument overrides. The full list of overrides is included in `models/tt_transformers/demo/conftest.py`.
@@ -190,6 +191,15 @@ An example usage where the `batch-1` test is modified to run with 16 users and k
 ```
 pytest models/tt_transformers/demo/simple_text_demo.py -k "performance and batch-1" --batch_size 16 --max_generated_tokens 1024 --stop_at_eos 0
 ```
+
+#### Custom optimizations
+`optimizations` offers a wide range of configurations for precision and math fidelity. The user can override the configurations of the data types of the weight tensors and activation tensors and the math fidelity of the kernels that works on those tensors, using the `--optimizations` argument on the command line. For example:
+
+```
+pytest models/tt_transformers/demo/simple_text_demo.py -k "accuracy and batch-1" --optimizations 'precision_cfg = {ff1_3: bfp4, ff2: bfp4, wqkv: bfp8, wo: bfp8, kv_cache: bfp8, activation: mixed}, fidelity_cfg = {li_ff1_3: hifi2, li_ff2: lofi, li_qkv_decode: hifi2, li_o_decode: hifi2, sdpa_decode: hifi2na, li_qkv_prefill: hifi2, li_o_prefill: hifi2fp16, sdpa_prefill: hifi4}'
+```
+
+Please refer to [model_config.py](models/tt_transformers/tt/model_config.py) for the full list of supported key-value pairs in the `--optimizations` argument. Also, please refer to the [PERF.md](PERF.md) file for performance and accuracy across a select range of configurations for an example Pareto front analysis.
 
 ### Expected performance and accuracy
 
@@ -207,7 +217,8 @@ Max Prefill Chunk Sizes (text-only):
 | Llama3.1-8B  | 4k tokens     | 64k tokens    | 128k tokens    | 128k tokens |
 | Llama3.2-11B | 4k tokens     | 64k tokens    | 128k tokens    | 128k tokens |
 | Llama3.1-70B | Not supported | Not supported | 32k tokens     | 128k tokens |
-| DeepSeek-R1-Distill-Llama3.3-70B | Not supported | Not supported | 32k tokens     | 128k tokens |
+| Llama3.2-90B | Not supported | Not supported | 32k tokens     | Not supported |
+| DeepSeek-R1-Distill-Llama3.3-70B | Not supported | Not supported | 32k tokens | 128k tokens |
 
 - These max chunk sizes are specific to max context length 128k and are configured via `MAX_PREFILL_CHUNK_SIZES_DIV1024` in [model_config.py](https://github.com/tenstorrent/tt-metal/blob/main/models/demos/llama3/tt/model_config.py). If the max context length is set to a smaller value using the `max_seq_len` flag (see [Run the demo](#run-the-demo)), these chunk sizes can possibly be increased due to using a smaller KV cache.
 

@@ -2,23 +2,24 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <assert.hpp>
+#include <buffer.hpp>
+#include <buffer_types.hpp>
+#include <core_coord.hpp>
+#include <device.hpp>
 #include <global_semaphore.hpp>
-
+#include <host_api.hpp>
+#include <tt-metalium/distributed.hpp>
+#include <tt_metal.hpp>
 #include <cstdint>
 #include <memory>
+#include <utility>
+#include <variant>
 #include <vector>
 
-#include <assert.hpp>
-#include <core_coord.hpp>
-#include <tt_metal.hpp>
-#include <tt-metalium/distributed.hpp>
-#include <host_api.hpp>
-#include <buffer.hpp>
-#include <buffer_constants.hpp>
-#include <device.hpp>
-#include <hal.hpp>
-
-#include "tt_cluster.hpp"
+#include "mesh_device.hpp"
+#include <tt_stl/reflection.hpp>
+#include "impl/context/metal_context.hpp"
 
 namespace tt::tt_metal {
 
@@ -50,47 +51,30 @@ void GlobalSemaphore::setup_buffer(uint32_t initial_value, BufferType buffer_typ
         .buffer_layout = TensorMemoryLayout::HEIGHT_SHARDED,
         .shard_parameters = std::move(shard_parameters),
     };
-    buffer_ = CreateBuffer(sem_shard_config);
+    buffer_ = distributed::AnyBuffer::create(sem_shard_config);
 
     this->reset_semaphore_value(initial_value);
 }
 
 IDevice* GlobalSemaphore::device() const { return device_; }
 
-DeviceAddr GlobalSemaphore::address() const { return buffer_->address(); }
+DeviceAddr GlobalSemaphore::address() const { return buffer_.get_buffer()->address(); }
 
 void GlobalSemaphore::reset_semaphore_value(uint32_t reset_value) const {
     // Write the initial value to the semaphore to the device
     // Only block for the slow dispatch case
-    auto* device = device_;
-    device->push_work([device, reset_value, num_cores = cores_.num_cores(), buffer = buffer_] {
-        std::vector<uint32_t> host_buffer(num_cores, reset_value);
-        if (device->using_slow_dispatch()) {
-            detail::WriteToBuffer(*buffer, host_buffer);
-            tt::Cluster::instance().l1_barrier(device->id());
-        } else {
-            // Dynamic resolution of device types is unclean and poor design. This will be cleaned up
-            // when MeshBuffer + Buffer and MeshCommandQueue + CommandQueue are unified under the same
-            // API
-            if (dynamic_cast<distributed::MeshDevice*>(device)) {
-                distributed::MeshDevice* mesh_device = dynamic_cast<distributed::MeshDevice*>(device);
 
-                distributed::ReplicatedBufferConfig replicated_buffer_config{.size = buffer->size()};
-                distributed::DeviceLocalBufferConfig local_config{
-                    .page_size = buffer->page_size(),
-                    .buffer_type = buffer->buffer_type(),
-                    .buffer_layout = buffer->buffer_layout(),
-                    .shard_parameters = buffer->shard_spec(),
-                    .bottom_up = buffer->bottom_up()};
-                auto mesh_buffer = distributed::MeshBuffer::create(
-                    replicated_buffer_config, local_config, mesh_device, buffer->address());
-                distributed::EnqueueWriteMeshBuffer(mesh_device->mesh_command_queue(), mesh_buffer, host_buffer);
-                // mesh_device->mesh_command_queue().enqueue_write_buffer_broadcast(buffer, host_buffer.data(), false);
-            } else {
-                EnqueueWriteBuffer(device->command_queue(), buffer, host_buffer, false);
-            }
+    std::vector<uint32_t> host_buffer(cores_.num_cores(), reset_value);
+    if (device_->using_slow_dispatch()) {
+        detail::WriteToBuffer(*buffer_.get_buffer(), host_buffer);
+        tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(device_->id());
+    } else {
+        if (auto mesh_buffer = buffer_.get_mesh_buffer()) {
+            distributed::EnqueueWriteMeshBuffer(mesh_buffer->device()->mesh_command_queue(), mesh_buffer, host_buffer);
+        } else {
+            EnqueueWriteBuffer(device_->command_queue(), *buffer_.get_buffer(), host_buffer, false);
         }
-    });
+    }
 }
 
 }  // namespace tt::tt_metal

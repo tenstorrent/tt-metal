@@ -2,10 +2,13 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "gtest/gtest.h"
+#include <fmt/base.h>
+#include <string>
 
-#include "ttnn/operations/sliding_window/sliding_window.hpp"
+#include "gtest/gtest.h"
+#include <tt-metalium/logger.hpp>
 #include "tt_metal/api/tt-metalium/core_coord.hpp"
+#include "ttnn/operations/sliding_window/sliding_window.hpp"
 
 namespace ttnn::operations::sliding_window::test {
 
@@ -59,7 +62,7 @@ INSTANTIATE_TEST_SUITE_P(
         .input_hw = {32, 32},
         .window_hw = {3, 3},
         .stride_hw = {1, 1},
-        .pad_hw = {1, 1},
+        .padding = {1, 1, 1, 1},
         .output_pad_hw = {0, 0},
         .dilation_hw = {1, 1},
         .num_cores_nhw = 1,

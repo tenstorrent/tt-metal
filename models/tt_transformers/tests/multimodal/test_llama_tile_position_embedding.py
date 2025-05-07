@@ -3,7 +3,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 ##### Python imports #####
-import math
 import pytest
 from loguru import logger
 import os
@@ -11,12 +10,9 @@ import itertools
 
 ##### PyTorch imports #####
 import torch
-import torch.nn.functional as F
-import torch.nn as nn
 
 ##### TTNN imports #####
 import ttnn
-from ttnn import experimental as ttl
 from ttnn import ConcatMeshToTensor, ReplicateTensorToMesh
 from models.utility_functions import skip_for_grayskull
 from models.utility_functions import (
@@ -68,10 +64,8 @@ def test_conv2d_inference(
     gated = True
     pcc_required = 0.9999
 
-    mesh_device.enable_async(True)
-
     model_args = ModelArgs(mesh_device)
-    state_dict = torch.load(model_args.consolidated_weights_path, map_location=torch.device("cpu"))
+    state_dict = model_args.load_state_dict()
 
     # Ref model needs partial state dict, but our models use full state dict keys as cached weight names
     first_layer_prefix = "vision_model.vision_encoder." + (

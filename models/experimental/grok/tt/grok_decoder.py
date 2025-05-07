@@ -4,10 +4,9 @@
 import ttnn
 from models.experimental.grok.tt.grok_attention import TtGrokAttention
 from models.experimental.grok.tt.grok_mlp import TtGrokMLP
-from models.experimental.grok.tt.grok_rms_norm import TtRMSNormSharded, TtRMSNorm
+from models.experimental.grok.tt.grok_rms_norm import TtRMSNormSharded
 from models.experimental.grok.tt.grok_moe import TtMoeLayer
 from models.experimental.grok.tt.grok_common import LightweightModule
-from models.experimental.grok.scripts.tlog import tlog, tlog_mesh_device
 
 
 class TtTransformerBlock(LightweightModule):

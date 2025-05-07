@@ -7,7 +7,7 @@ import os
 import argparse
 from models.tt_transformers.tt.model_config import ModelArgs, CheckpointType
 from loguru import logger
-from transformers import AutoModelForCausalLM, AutoTokenizer
+from transformers import AutoModelForCausalLM, AutoConfig, AutoTokenizer
 
 
 def generate_reference_outputs(total_length, output_file, hf_model_name=None):
@@ -26,12 +26,14 @@ def generate_reference_outputs(total_length, output_file, hf_model_name=None):
             hf_model_name, config=config, torch_dtype=torch.float32 if device == "cpu" else None, device_map="auto"
         )
         model.eval()
+        model_args = ModelArgs(mesh_device=None)
 
     else:
         # Original path - load reference model
         model_args = ModelArgs(mesh_device=None)
         model_args.max_seq_len = total_length
-        tokenizer = Tokenizer(model_args.tokenizer_path)
+        tokenizer = model_args.tokenizer
+        assert tokenizer is not None, "Tokenizer must be provided for non-dummy weights"
 
     # Special-case Hf models as they can load directly from the safetensors much more efficiently
     if model_args.checkpoint_type == CheckpointType.Meta:
@@ -62,10 +64,10 @@ def generate_reference_outputs(total_length, output_file, hf_model_name=None):
         embd.to(device)  # Move embedding to device
         embd.load_state_dict({"emb.weight": state_dict[f"{state_dict_prefix}tok_embeddings.weight"]})
     else:
-        reference_model = model_args.reference_transformer(load_checkpoint=True)
+        reference_model = model_args.reference_transformer(load_checkpoint=True, wrap=False)
         reference_model.to(device)  # Move model to device
         reference_model.eval()  # Set to evaluation mode
-        embd = reference_model.model.model.embed_tokens
+        embd = reference_model.model.embed_tokens
         embd.to(device)  # Move embedding to device
 
     # Load the book text and encode tokens
@@ -108,7 +110,7 @@ def generate_reference_outputs(total_length, output_file, hf_model_name=None):
                 ref_output = outputs.logits
             else:
                 pt_decode_input = embd(chunk_tokens).view(1, actual_chunk_size, -1)
-                ref_output = model(pt_decode_input, start_pos=chunk_start)
+                ref_output = reference_model(pt_decode_input, start_pos=chunk_start)
 
             # Compute top-5 predictions
             probs = torch.softmax(ref_output, dim=-1)
@@ -155,7 +157,7 @@ def generate_reference_outputs(total_length, output_file, hf_model_name=None):
 
     # Move tensors back to CPU before saving
     data = {
-        "top5_tokens": torch.cat(all_top5_tokens, dim=0).cpu(),
+        "top5_tokens": all_top5_tokens.cpu(),
         "reference_tokens": encoded_tokens_tensor[:, :total_length].clone().cpu(),
     }
 

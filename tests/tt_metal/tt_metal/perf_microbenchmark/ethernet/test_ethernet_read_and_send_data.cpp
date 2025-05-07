@@ -3,28 +3,41 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <algorithm>
-#include <functional>
-#include <limits>
-#include <random>
-
-#include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/math.hpp>
-#include <tt-metalium/tt_metal.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/kernel.hpp>
+#include <assert.h>
+#include <fmt/base.h>
+#include <stdint.h>
 #include <tt-metalium/buffer.hpp>
+#include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/device.hpp>
-#include "tt_metal/test_utils/comparison.hpp"
-#include "tt_metal/test_utils/df/df.hpp"
-#include "tt_metal/test_utils/print_helpers.hpp"
-#include "tt_metal/test_utils/stimulus.hpp"
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tt_metal.hpp>
+#include <algorithm>
+#include <cstdlib>
+#include <exception>
+#include <iostream>
+#include <map>
+#include <memory>
+#include <string>
+#include <thread>
+#include <unordered_set>
+#include <variant>
+#include <vector>
+
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/buffer_types.hpp>
+#include <tt-metalium/data_types.hpp>
+#include "df/float32.hpp"
+#include "impl/context/metal_context.hpp"
+
+#include <tt-metalium/kernel_types.hpp>
+#include <tt-metalium/logger.hpp>
+#include <tt-metalium/program.hpp>
+#include <tt_stl/span.hpp>
+#include <tt-metalium/tt_backend_api_types.hpp>
 #include "tt_metal/test_utils/env_vars.hpp"
-
-#include "tt_cluster.hpp"
-
-// TODO: ARCH_NAME specific, must remove
-#include "eth_l1_address_map.h"
+#include "tt_metal/test_utils/stimulus.hpp"
+#include "umd/device/types/arch.h"
+#include "umd/device/types/xy_pair.h"
 
 using namespace tt;
 using namespace tt::test_utils;
@@ -46,7 +59,7 @@ public:
                 auto* device = tt::tt_metal::CreateDevice(id);
                 devices_.push_back(device);
             }
-            tt::Cluster::instance().set_internal_routing_info_for_ethernet_cores(true);
+            tt::tt_metal::MetalContext::instance().get_cluster().set_internal_routing_info_for_ethernet_cores(true);
 
         } else {
             TT_THROW("This suite can only be run on N300 Wormhole devices");
@@ -61,7 +74,7 @@ public:
 
     void TearDown() {
         device_open = false;
-        tt::Cluster::instance().set_internal_routing_info_for_ethernet_cores(false);
+        tt::tt_metal::MetalContext::instance().get_cluster().set_internal_routing_info_for_ethernet_cores(false);
         for (unsigned int id = 0; id < devices_.size(); id++) {
             tt::tt_metal::CloseDevice(devices_.at(id));
         }
@@ -176,8 +189,9 @@ bool RunWriteBWTest(
 
     uint32_t num_pages_per_l1_buffer = num_bytes_per_send / input_buffer_page_size;
     TT_ASSERT(num_messages_to_send * num_pages_per_l1_buffer >= num_pages);
-    std::cout << "eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE: "
-              << eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE << std::endl;
+    uint32_t erisc_unreserved_base = tt::tt_metal::MetalContext::instance().hal().get_dev_addr(
+        tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::UNRESERVED);
+    std::cout << "ERISC_L1_UNRESERVED_BASE: " << erisc_unreserved_base << std::endl;
     std::cout << "src_eth_l1_byte_address: " << src_eth_l1_byte_address << std::endl;
     auto eth_sender_kernel = tt_metal::CreateKernel(
         sender_program,
@@ -318,7 +332,8 @@ int main(int argc, char** argv) {
     const auto& device_0 = test_fixture.devices_.at(0);
     const auto& device_1 = test_fixture.devices_.at(1);
     const size_t precomputed_source_addresses_buffer_address = (size_t)nullptr;
-    const size_t eth_channel_sync_ack_addr = eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE;
+    const size_t eth_channel_sync_ack_addr = tt::tt_metal::MetalContext::instance().hal().get_dev_addr(
+        tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::UNRESERVED);
     const size_t src_eth_l1_byte_address = eth_channel_sync_ack_addr + 16;
     const size_t dst_eth_l1_byte_address = eth_channel_sync_ack_addr + 16;
 

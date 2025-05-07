@@ -7,14 +7,22 @@
 #include <algorithm>
 #include <array>
 #include <cstdint>
-#include <string>
+#include <string_view>
 #include <unordered_set>
 #include <vector>
 
+#include "core_coord.hpp"
+#include <tt_stl/span.hpp>
 // clang-format off
-#include "tt_cluster.hpp"
-#include "umd/device/tt_xy_pair.h"
+#include "impl/context/metal_context.hpp"
 #include "tt_memory.h"
+#include <umd/device/tt_xy_pair.h>
+#include <umd/device/types/cluster_descriptor_types.h>
+#include <umd/device/types/xy_pair.h>
+#include "utils.hpp"
+
+struct go_msg_t;
+struct launch_msg_t;
 // clang-format on
 
 namespace tt {
@@ -51,7 +59,7 @@ using WorkerCores = std::vector<WorkerCore>;
 // Return a reference to a potentially shared binary image.
 // The images are cached by path name.
 const ll_api::memory& get_risc_binary(
-    const string& path, ll_api::memory::Loading loading = ll_api::memory::Loading::DISCRETE);
+    std::string_view path, ll_api::memory::Loading loading = ll_api::memory::Loading::DISCRETE);
 
 // TODO: try using "stop" method from device instead, it's the proper way of asserting reset
 
@@ -65,7 +73,7 @@ void write_hex_vec_to_core(
     const std::vector<DType>& hex_vec,
     uint64_t addr,
     bool small_access = false) {
-    tt::Cluster::instance().write_core(
+    tt::tt_metal::MetalContext::instance().get_cluster().write_core(
         hex_vec.data(), hex_vec.size() * sizeof(DType), tt_cxy_pair(chip, core), addr, small_access);
 }
 template <typename DType>
@@ -75,7 +83,7 @@ void write_hex_vec_to_core(
     tt::stl::Span<const DType> hex_vec,
     uint64_t addr,
     bool small_access = false) {
-    tt::Cluster::instance().write_core(
+    tt::tt_metal::MetalContext::instance().get_cluster().write_core(
         hex_vec.data(), hex_vec.size() * sizeof(DType), tt_cxy_pair(chip, core), addr, small_access);
 }
 
@@ -85,8 +93,6 @@ CoreCoord logical_core_from_ethernet_core(chip_id_t chip_id, CoreCoord& ethernet
 
 void write_launch_msg_to_core(
     chip_id_t chip, CoreCoord core, launch_msg_t* msg, go_msg_t* go_msg, uint64_t addr, bool send_go = true);
-
-void print_worker_cores(chip_id_t chip_id = 0);
 
 bool test_load_write_read_risc_binary(
     const ll_api::memory& mem,

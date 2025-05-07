@@ -4,11 +4,11 @@
 
 #pragma once
 
-#include <vector>
-#include <optional>
-
+#include <stdint.h>
 #include <tt-metalium/tile.hpp>
-#include <tt-metalium/span.hpp>
+#include <tt_stl/span.hpp>
+#include <optional>
+#include <vector>
 
 // TODO: empty struct to facilitate Tensor template logic. Reconsider how/why templating is supported in Tensor
 struct bfloat8_b {};
@@ -20,7 +20,7 @@ std::vector<uint32_t> pack_fp32_vec_as_bfp8_tiles(
     const std::optional<tt::tt_metal::Tile>& tile = std::nullopt);
 
 std::vector<float> unpack_bfp8_tiles_into_float_vec(
-    const std::vector<uint32_t>& bfp8_tiles,
+    tt::stl::Span<const uint32_t> bfp8_tiles,
     bool row_major_output,
     bool is_exp_a,
     const std::optional<tt::tt_metal::Tile>& tile = std::nullopt);

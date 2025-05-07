@@ -393,9 +393,6 @@ void MAIN {
                     pack_untilize_uninit(mm_partials_cb_id);
                 }
                 if constexpr (batch > 1 || num_blocks_w_dim > 1 || num_blocks_h_dim > 1) {
-                    // reconfigure init for matmul
-                    mm_block_init_short(
-                        in0_cb_id, in1_cb_id, in1_transpose_tile, out_subblock_w, out_subblock_h, in0_block_w);
 #ifdef FUSE_BIAS
                     // reconfigure unpacker df for src A and src B
                     reconfig_data_format(mm_partials_cb_id, in1_cb_id, bias_cb_id, in0_cb_id);
@@ -403,6 +400,9 @@ void MAIN {
                     // reconfigure unpacker df for src A
                     reconfig_data_format_srca(mm_partials_cb_id, in1_cb_id);
 #endif
+                    // reconfigure init for matmul
+                    mm_block_init_short(
+                        in0_cb_id, in1_cb_id, in1_transpose_tile, out_subblock_w, out_subblock_h, in0_block_w);
                 }
             }
         }

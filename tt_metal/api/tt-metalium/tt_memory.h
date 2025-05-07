@@ -7,15 +7,15 @@
 #include <cstddef>
 #include <cstdint>
 #include <functional>
-#include <string>
+#include <string_view>
 #include <vector>
 
 namespace ll_api {
 
 class memory {
 public:
-    typedef std::uint64_t address_t;
-    typedef std::uint32_t word_t;
+    using address_t = std::uint64_t;
+    using word_t = std::uint32_t;
     enum class Loading : std::uint8_t { DISCRETE, CONTIGUOUS, CONTIGUOUS_XIP };
 
 private:
@@ -35,7 +35,7 @@ private:
 
 public:
     memory();
-    memory(std::string const &path, Loading loading);
+    memory(std::string_view path, Loading loading);
 
 public:
     // These can be large objects, so ban copying ...

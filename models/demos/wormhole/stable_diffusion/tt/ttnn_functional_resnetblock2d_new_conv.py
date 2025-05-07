@@ -3,35 +3,17 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
-from models.utility_functions import (
-    tt_to_torch_tensor,
-    torch_to_tt_tensor_rm,
-)
 import os
 import torch
-from typing import Optional, Dict
+from typing import Optional
 from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_utility_functions import (
     permute_conv_parameters,
     weight_to_bfp8,
 )
 from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_utility_functions import (
-    conv_cache,
     get_default_compute_config,
 )
 from loguru import logger
-
-
-def torch_to_ttnn(input, device, layout=ttnn.TILE_LAYOUT):
-    input = ttnn.from_torch(input, ttnn.bfloat16)
-    input = ttnn.to_layout(input, layout)
-    input = ttnn.to_device(input, device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-    return input
-
-
-def ttnn_to_torch(input):
-    input = ttnn.from_device(input)
-    input = ttnn.to_torch(input)
-    return input
 
 
 config_override = {
@@ -65,7 +47,6 @@ class resnetBlock2D:
         self,
         device,
         parameters,
-        reader_patterns_cache,
         batch_size,
         input_height,
         input_width,
@@ -80,6 +61,8 @@ class resnetBlock2D:
         self.conv1s = []
         self.conv1s_weights = []
         self.conv1s_bias = []
+        # TODO: instead of hardcoding grid size in many components, configure it in a single place
+        self.grid_size = (8, 8)
 
         self.fallback_on_groupnorm = os.environ.get("FALLBACK_ON_GROUPNORM", "0") == "1"
         parameters.conv1.weight, parameters.conv1.bias = permute_conv_parameters(
@@ -126,10 +109,9 @@ class resnetBlock2D:
                 output_height=self.conv1_output_height,
                 output_width=self.conv1_output_width,
                 output_channels=self.conv1_out_channels,
-                compute_grid_size=self.device.compute_with_storage_grid_size(),
+                compute_grid_size=self.grid_size,
                 block_shard_orientation=ttnn.ShardOrientation.ROW_MAJOR,
                 enable_channels_padding=False,
-                is_out_tiled=True,
             ),
             tile_size=32,
         )
@@ -204,10 +186,9 @@ class resnetBlock2D:
                 output_height=self.conv2_input_height,
                 output_width=self.conv2_input_width,
                 output_channels=self.conv2_out_channels,
-                compute_grid_size=self.device.compute_with_storage_grid_size(),
+                compute_grid_size=self.grid_size,
                 block_shard_orientation=ttnn.ShardOrientation.ROW_MAJOR,
                 enable_channels_padding=False,
-                is_out_tiled=True,
             ),
             tile_size=32,
         )
@@ -511,7 +492,6 @@ class resnetBlock2D:
                 bias_tensor=self.conv1s_bias[0],
                 **conv_kwargs_1,
                 compute_config=compute_config,
-                conv_op_cache=conv_cache,
             )
 
         else:
@@ -614,7 +594,6 @@ class resnetBlock2D:
                     bias_tensor=self.conv1s_bias[i],
                     **conv_kwargs_2,
                     compute_config=compute_config,
-                    conv_op_cache=conv_cache,
                     return_output_dim=True,
                     return_weights_and_bias=False,
                 )
@@ -761,7 +740,6 @@ class resnetBlock2D:
             bias_tensor=self.conv2_bias,
             **conv_kwargs_3,
             compute_config=compute_config,
-            conv_op_cache=conv_cache,
             return_output_dim=True,
             return_weights_and_bias=False,
         )
@@ -836,7 +814,6 @@ class resnetBlock2D:
                 bias_tensor=self.conv_shortcut_bias,
                 **conv_kwargs_4,
                 compute_config=compute_config,
-                conv_op_cache=conv_cache,
                 return_output_dim=True,
                 return_weights_and_bias=False,
             )

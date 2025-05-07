@@ -2,29 +2,48 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <fmt/base.h>
 #include <gtest/gtest.h>
-#include <thread>
-
-#include "device_fixture.hpp"
-#include "command_queue_fixture.hpp"
-#include "dispatch_fixture.hpp"
-#include "multi_device_fixture.hpp"
+#include <stddef.h>
+#include <tt-metalium/host_api.hpp>
 #include <tt-metalium/math.hpp>
 #include <tt-metalium/tt_metal.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/kernel.hpp>
-#include "tt_metal/test_utils/stimulus.hpp"
+#include <cstdint>
+#include <iostream>
+#include <map>
+#include <memory>
+#include <string>
+#include <thread>
+#include <tuple>
+#include <unordered_set>
+#include <variant>
+#include <vector>
 
-// FIXME: ARCH_NAME
-#include "eth_l1_address_map.h"
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/buffer_types.hpp>
+#include "command_queue_fixture.hpp"
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/data_types.hpp>
+#include <tt-metalium/device.hpp>
+#include "device_fixture.hpp"
+#include "dispatch_fixture.hpp"
+#include <tt-metalium/kernel_types.hpp>
+#include <tt-metalium/logger.hpp>
+#include "multi_device_fixture.hpp"
+#include <tt-metalium/program.hpp>
+#include <tt_stl/span.hpp>
+#include <tt-metalium/tt_backend_api_types.hpp>
+#include "impl/context/metal_context.hpp"
+#include "tt_metal/test_utils/stimulus.hpp"
+#include "umd/device/types/arch.h"
+#include "umd/device/types/xy_pair.h"
 
 using namespace tt;
 using namespace tt::test_utils;
 
 namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {
-constexpr std::int32_t MAX_BUFFER_SIZE =
-    (eth_l1_mem::address_map::MAX_L1_LOADING_SIZE - eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE);
 
 struct BankedConfig {
     size_t num_pages = 1;
@@ -83,9 +102,9 @@ bool chip_to_chip_dram_buffer_transfer(
     auto inputs = generate_uniform_random_vector<uint32_t>(0, 100, byte_size / sizeof(uint32_t));
 
     fixture->WriteBuffer(sender_device, input_dram_buffer, inputs);
+    uint32_t MAX_BUFFER = tt::tt_metal::MetalContext::instance().hal().get_dev_size(
+        tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::UNRESERVED);
 
-    const uint32_t MAX_BUFFER =
-        (eth_l1_mem::address_map::MAX_L1_LOADING_SIZE - eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE);
     uint32_t num_loops = (uint32_t)(byte_size / MAX_BUFFER);
     uint32_t remaining_bytes = (uint32_t)(byte_size % MAX_BUFFER);
     // Clear expected value at ethernet L1 address
@@ -310,7 +329,8 @@ TEST_F(TwoDeviceFixture, ActiveEthKernelsSendDramBufferChip0ToChip1) {
     const auto& receiver_device = devices_.at(1);
 
     for (const auto& sender_eth_core : sender_device->get_active_ethernet_cores(true)) {
-        if (not tt::Cluster::instance().is_ethernet_link_up(sender_device->id(), sender_eth_core)) {
+        if (not tt::tt_metal::MetalContext::instance().get_cluster().is_ethernet_link_up(
+                sender_device->id(), sender_eth_core)) {
             continue;
         }
         CoreCoord receiver_eth_core = std::get<1>(sender_device->get_connected_ethernet_core(sender_eth_core));
@@ -354,7 +374,8 @@ TEST_F(TwoDeviceFixture, ActiveEthKernelsSendDramBufferChip1ToChip0) {
     const auto& receiver_device = devices_.at(0);
 
     for (const auto& sender_eth_core : sender_device->get_active_ethernet_cores(true)) {
-        if (not tt::Cluster::instance().is_ethernet_link_up(sender_device->id(), sender_eth_core)) {
+        if (not tt::tt_metal::MetalContext::instance().get_cluster().is_ethernet_link_up(
+                sender_device->id(), sender_eth_core)) {
             continue;
         }
         CoreCoord receiver_eth_core = std::get<1>(sender_device->get_connected_ethernet_core(sender_eth_core));
@@ -395,6 +416,8 @@ TEST_F(N300DeviceFixture, ActiveEthKernelsSendInterleavedBufferChip0ToChip1) {
     GTEST_SKIP();
     const auto& sender_device = devices_.at(0);
     const auto& receiver_device = devices_.at(1);
+    uint32_t MAX_BUFFER_SIZE =
+        MetalContext::instance().hal().get_dev_size(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::UNRESERVED);
 
     for (const auto& sender_eth_core : sender_device->get_active_ethernet_cores(true)) {
         CoreCoord receiver_eth_core = std::get<1>(sender_device->get_connected_ethernet_core(sender_eth_core));
@@ -460,13 +483,16 @@ TEST_F(N300DeviceFixture, ActiveEthKernelsSendInterleavedBufferChip0ToChip1) {
 
 TEST_F(DeviceFixture, ActiveEthKernelsSendInterleavedBufferAllConnectedChips) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
+    uint32_t MAX_BUFFER_SIZE =
+        MetalContext::instance().hal().get_dev_size(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::UNRESERVED);
     for (const auto& sender_device : devices_) {
         for (const auto& receiver_device : devices_) {
             if (sender_device->id() == receiver_device->id()) {
                 continue;
             }
             for (const auto& sender_eth_core : sender_device->get_active_ethernet_cores(true)) {
-                if (not tt::Cluster::instance().is_ethernet_link_up(sender_device->id(), sender_eth_core)) {
+                if (not tt::tt_metal::MetalContext::instance().get_cluster().is_ethernet_link_up(
+                        sender_device->id(), sender_eth_core)) {
                     continue;
                 }
                 auto [device_id, receiver_eth_core] = sender_device->get_connected_ethernet_core(sender_eth_core);
@@ -541,7 +567,8 @@ TEST_F(CommandQueueMultiDeviceProgramFixture, ActiveEthKernelsSendDramBufferAllC
                 continue;
             }
             for (const auto& sender_eth_core : sender_device->get_active_ethernet_cores(true)) {
-                if (not tt::Cluster::instance().is_ethernet_link_up(sender_device->id(), sender_eth_core)) {
+                if (not tt::tt_metal::MetalContext::instance().get_cluster().is_ethernet_link_up(
+                        sender_device->id(), sender_eth_core)) {
                     continue;
                 }
                 auto [device_id, receiver_eth_core] = sender_device->get_connected_ethernet_core(sender_eth_core);
@@ -591,13 +618,16 @@ TEST_F(CommandQueueMultiDeviceProgramFixture, ActiveEthKernelsSendDramBufferAllC
 
 TEST_F(CommandQueueMultiDeviceProgramFixture, ActiveEthKernelsSendInterleavedBufferAllConnectedChips) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
+    uint32_t MAX_BUFFER_SIZE =
+        MetalContext::instance().hal().get_dev_size(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::UNRESERVED);
     for (const auto& sender_device : devices_) {
         for (const auto& receiver_device : devices_) {
             if (sender_device->id() >= receiver_device->id()) {
                 continue;
             }
             for (const auto& sender_eth_core : sender_device->get_active_ethernet_cores(true)) {
-                if (not tt::Cluster::instance().is_ethernet_link_up(sender_device->id(), sender_eth_core)) {
+                if (not tt::tt_metal::MetalContext::instance().get_cluster().is_ethernet_link_up(
+                        sender_device->id(), sender_eth_core)) {
                     continue;
                 }
                 auto [device_id, receiver_eth_core] = sender_device->get_connected_ethernet_core(sender_eth_core);

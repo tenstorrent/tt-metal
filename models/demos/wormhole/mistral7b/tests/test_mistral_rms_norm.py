@@ -2,9 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 import torch
-import pytest
 from loguru import logger
-import os
 import ttnn
 from models.common.rmsnorm import RMSNorm as TtRMSNorm
 from models.demos.wormhole.mistral7b.tt.model_config import TtModelArgs

@@ -2,23 +2,57 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/tt_metal.hpp>
-#include <tt-metalium/device_pool.hpp>
-#include <tt-metalium/device_impl.hpp>
-#include <tt-metalium/rtoptions.hpp>
-#include <tt-metalium/mesh_graph.hpp>
+#include <chrono>
+#include <fmt/base.h>
+#include <nlohmann/json_fwd.hpp>
+#include <stdint.h>
+#include <tt_stl/span.hpp>
 #include <tt-metalium/control_plane.hpp>
-//#include "tt_metal/impl/dispatch/kernels/packet_queue_ctrl.hpp"
-#include "tt_metal/fabric/hw/inc/tt_fabric_status.h"
-#include "test_common.hpp"
-#include "routing_test_common.hpp"
-#include "eth_l1_address_map.h"
-#include "tt_metal/fabric/hw/inc/tt_fabric_interface.h"
-#include <numeric>
+#include <tt-metalium/device_pool.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/mesh_graph.hpp>
+#include <tt-metalium/tt_metal.hpp>
 #include <algorithm>
-#include <random>
+#include <exception>
+#include <filesystem>
+#include <map>
+#include <memory>
+#include <numeric>
+#include <optional>
 #include <queue>
+#include <random>
+#include <set>
+#include <stdexcept>
+#include <string>
+#include <string_view>
+#include <tuple>
+#include <unordered_map>
+#include <utility>
+#include <variant>
+#include <vector>
+
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/data_types.hpp>
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/fabric_host_interface.h>
+#include <tt-metalium/fabric_types.hpp>
+#include <tt-metalium/hal.hpp>
+#include <tt-metalium/hal_types.hpp>
+#include <tt-metalium/kernel_types.hpp>
+#include "llrt.hpp"
+#include <tt-metalium/logger.hpp>
+#include <tt-metalium/metal_soc_descriptor.h>
+#include <tt-metalium/program.hpp>
+#include "routing_test_common.hpp"
+#include <tt-metalium/allocator.hpp>
+#include <tt-metalium/system_memory_manager.hpp>
+#include "test_common.hpp"
+#include "impl/context/metal_context.hpp"
+#include "tt_metal/fabric/hw/inc/tt_fabric_status.h"
+#include "umd/device/tt_core_coordinates.h"
+#include "umd/device/types/xy_pair.h"
+#include <tt-metalium/utils.hpp>
 
 using std::vector;
 using namespace tt;
@@ -89,7 +123,7 @@ inline std::vector<uint32_t> get_random_numbers_from_range(uint32_t start, uint3
     return std::vector<uint32_t>(range.begin(), range.begin() + count);
 }
 
-typedef struct test_board {
+struct test_board_t {
     std::vector<chip_id_t> available_chip_ids;
     std::vector<chip_id_t> physical_chip_ids;
     std::vector<std::pair<chip_id_t, std::vector<chip_id_t>>> tx_rx_map;
@@ -99,7 +133,7 @@ typedef struct test_board {
     uint32_t num_chips_to_use;
     std::string mesh_graph_descriptor;
 
-    test_board(std::string& board_type_) {
+    test_board_t(std::string& board_type_) {
         if ("n300" == board_type_) {
             mesh_graph_descriptor = "n300_mesh_graph_descriptor.yaml";
             num_chips_to_use = 2;
@@ -140,17 +174,17 @@ typedef struct test_board {
         }
 
         if (metal_fabric_init_level == 0) {
-            tt::tt_metal::detail::InitializeFabricConfig(tt::FabricConfig::CUSTOM);
+            tt::tt_metal::detail::InitializeFabricConfig(tt::tt_metal::FabricConfig::CUSTOM);
         } else if (metal_fabric_init_level == 1) {
             tt::tt_metal::detail::InitializeFabricConfig(
-                push_mode ? tt::FabricConfig::FABRIC_2D_PUSH : tt::FabricConfig::FABRIC_2D);
+                push_mode ? tt::tt_metal::FabricConfig::FABRIC_2D_PUSH : tt::tt_metal::FabricConfig::FABRIC_2D);
         }
         device_handle_map = tt::tt_metal::detail::CreateDevices(available_chip_ids);
         if (metal_fabric_init_level == 0) {
-            _init_control_plane(mesh_graph_descriptor);
-            control_plane->configure_routing_tables();
+            control_plane = tt::tt_metal::MetalContext::instance().get_cluster().get_control_plane();
+            control_plane->write_routing_tables_to_all_chips();
         } else {
-            control_plane = tt::DevicePool::instance().get_control_plane();
+            control_plane = tt::tt_metal::MetalContext::instance().get_cluster().get_control_plane();
         }
 
         if (num_chips_to_use != available_chip_ids.size()) {
@@ -191,7 +225,7 @@ typedef struct test_board {
     void _init_control_plane(const std::string& mesh_graph_descriptor) {
         try {
             const std::filesystem::path mesh_graph_desc_path =
-                std::filesystem::path(tt::llrt::RunTimeOptions::get_instance().get_root_dir()) /
+                std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
                 "tt_metal/fabric/mesh_graph_descriptors" / mesh_graph_descriptor;
             cp_owning_ptr = std::make_unique<tt::tt_fabric::ControlPlane>(mesh_graph_desc_path.string());
             control_plane = cp_owning_ptr.get();
@@ -304,7 +338,9 @@ typedef struct test_board {
         // for each physical chip id, store the neighbors
         // TDOD: update the logic to find inter-mesh neighbors
         for (auto chip_id : physical_chip_ids) {
-            auto neighbors = tt::Cluster::instance().get_ethernet_cores_grouped_by_connected_chips(chip_id);
+            auto neighbors =
+                tt::tt_metal::MetalContext::instance().get_cluster().get_ethernet_cores_grouped_by_connected_chips(
+                    chip_id);
             for (const auto& [neighbor, cores] : neighbors) {
                 // only append valid chip IDs since the neighbors could include mmio chips (wh galaxy) or
                 // could be outside of the board type (in case of partial galaxy configurations)
@@ -453,7 +489,7 @@ typedef struct test_board {
         return control_plane->get_fabric_route(src_mesh_id, src_chip_id, dst_mesh_id, dst_chip_id, src_chan_id);
     }
 
-    inline std::vector<chip_id_t> get_intra_chip_neighbors(
+    inline stl::Span<const chip_id_t> get_intra_chip_neighbors(
         mesh_id_t src_mesh_id, chip_id_t src_chip_id, RoutingDirection routing_direction) {
         return control_plane->get_intra_chip_neighbors(src_mesh_id, src_chip_id, routing_direction);
     }
@@ -462,11 +498,20 @@ typedef struct test_board {
         return control_plane->get_routing_plane_id(eth_chan);
     }
 
+    inline eth_chan_directions get_eth_chan_direction(mesh_id_t mesh_id, chip_id_t chip_id, chan_id_t eth_chan) {
+        auto active_eth_chans = control_plane->get_active_fabric_eth_channels(mesh_id, chip_id);
+        for (const auto& [eth_chan_, direction] : active_eth_chans) {
+            if (eth_chan_ == eth_chan) {
+                return direction;
+            }
+        }
+        TT_THROW("Cannot find ethernet channel direction");
+    }
+
     inline void close_devices() { tt::tt_metal::detail::CloseDevices(device_handle_map); }
+};
 
-} test_board_t;
-
-typedef struct test_device {
+struct test_device_t {
     chip_id_t physical_chip_id;
     test_board_t* board_handle;
     tt_metal::IDevice* device_handle;
@@ -485,7 +530,7 @@ typedef struct test_device {
     std::unordered_map<chan_id_t, std::vector<std::pair<uint32_t, CoreCoord>>>
         router_worker_map;  // router chan to worker logical cores
 
-    test_device(chip_id_t chip_id_, test_board_t* board_handle_) {
+    test_device_t(chip_id_t chip_id_, test_board_t* board_handle_) {
         physical_chip_id = chip_id_;
         board_handle = board_handle_;
 
@@ -493,7 +538,7 @@ typedef struct test_device {
         program_handle = tt_metal::CreateProgram();
         std::tie(mesh_id, logical_chip_id) = board_handle->get_mesh_chip_id(physical_chip_id);
         mesh_chip_id = (mesh_id << 16 | logical_chip_id);
-        soc_desc = tt::Cluster::instance().get_soc_desc(physical_chip_id);
+        soc_desc = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(physical_chip_id);
 
         // initalize list of worker cores in 8X8 grid
         // TODO: remove hard-coding
@@ -507,7 +552,9 @@ typedef struct test_device {
         core_range_end_virtual = device_handle->worker_core_from_logical_core(CoreCoord(7, 7));
 
         // populate router cores
-        auto neighbors = tt::Cluster::instance().get_ethernet_cores_grouped_by_connected_chips(device_handle->id());
+        auto neighbors =
+            tt::tt_metal::MetalContext::instance().get_cluster().get_ethernet_cores_grouped_by_connected_chips(
+                device_handle->id());
         for (const auto& [neighbor_chip, connected_logical_cores] : neighbors) {
             if (!(board_handle->is_valid_chip_id(neighbor_chip))) {
                 continue;
@@ -518,6 +565,11 @@ typedef struct test_device {
                 router_virtual_cores.push_back(device_handle->ethernet_core_from_logical_core(logical_core));
                 router_mask += 0x1 << logical_core.y;
             }
+        }
+
+        if (router_virtual_cores.empty()) {
+            log_fatal(LogTest, "Couldnt find any ethernet core for device: {}", physical_chip_id);
+            throw std::runtime_error("Need atleast 1 ethernet core to run fabric");
         }
 
         if (benchmark_mode) {
@@ -547,9 +599,14 @@ typedef struct test_device {
                 router_compile_args.push_back(0);
             }
 
+            uint32_t direction = board_handle->get_eth_chan_direction(
+                mesh_id, logical_chip_id, soc_desc.logical_eth_core_to_chan_map.at(router_logical_cores[i]));
+            router_compile_args.push_back(direction);
+
             // initialize the semaphore
+            auto fabric_router_sync_sem_addr = tt::tt_metal::hal::get_erisc_l1_unreserved_base();
             tt::llrt::write_hex_vec_to_core(
-                device_handle->id(), router_virtual_cores[i], zero_buf, FABRIC_ROUTER_SYNC_SEM);
+                device_handle->id(), router_virtual_cores[i], zero_buf, fabric_router_sync_sem_addr);
 
             auto kernel = tt_metal::CreateKernel(
                 program_handle,
@@ -565,16 +622,18 @@ typedef struct test_device {
     void wait_for_router_sync() {
         uint32_t master_router_status = 0;
         uint32_t expected_val = router_logical_cores.size();
+        auto fabric_router_sync_sem_addr = tt::tt_metal::hal::get_erisc_l1_unreserved_base();
         while (expected_val != master_router_status) {
             master_router_status = tt::llrt::read_hex_vec_from_core(
-                device_handle->id(), router_virtual_cores[master_router_idx], FABRIC_ROUTER_SYNC_SEM, 4)[0];
+                device_handle->id(), router_virtual_cores[master_router_idx], fabric_router_sync_sem_addr, 4)[0];
         }
     }
 
     void terminate_router_kernels() {
         std::vector<uint32_t> zero_buf(1, 0);
+        auto fabric_router_sync_sem_addr = tt::tt_metal::hal::get_erisc_l1_unreserved_base();
         tt::llrt::write_hex_vec_to_core(
-            device_handle->id(), router_virtual_cores[master_router_idx], zero_buf, FABRIC_ROUTER_SYNC_SEM);
+            device_handle->id(), router_virtual_cores[master_router_idx], zero_buf, fabric_router_sync_sem_addr);
     }
 
     std::vector<CoreCoord> select_random_worker_cores(uint32_t count) {
@@ -598,12 +657,12 @@ typedef struct test_device {
 
     inline uint32_t get_noc_offset(CoreCoord& logical_core) {
         CoreCoord phys_core = device_handle->worker_core_from_logical_core(logical_core);
-        return tt_metal::hal.noc_xy_encoding(phys_core.x, phys_core.y);
+        return tt_metal::MetalContext::instance().hal().noc_xy_encoding(phys_core.x, phys_core.y);
     }
 
     void get_available_router_cores(
         uint32_t num_hops,
-        std::shared_ptr<test_device>& rx_device,
+        std::shared_ptr<test_device_t>& rx_device,
         std::vector<chan_id_t>& src_routers,
         std::vector<chan_id_t>& dest_routers) {
         // shortest route possible with least number of internal noc hops
@@ -648,6 +707,7 @@ typedef struct test_device {
 
         // throw error if no potential router core found
         if (src_routers.size() == 0) {
+            log_fatal(LogTest, "No router cores found for num hops: {}, on device: {}", num_hops, physical_chip_id);
             throw std::runtime_error("No router cores found for specified num hops");
         }
     }
@@ -753,13 +813,12 @@ typedef struct test_device {
         }
     }
 
-    inline std::vector<chip_id_t> get_intra_chip_neighbors(RoutingDirection routing_direction) {
+    inline stl::Span<const chip_id_t> get_intra_chip_neighbors(RoutingDirection routing_direction) {
         return board_handle->get_intra_chip_neighbors(mesh_id, logical_chip_id, routing_direction);
     }
+};
 
-} test_device_t;
-
-typedef struct test_traffic {
+struct test_traffic_t {
     std::shared_ptr<test_device_t> tx_device;
     std::vector<std::shared_ptr<test_device_t>> rx_devices;
     uint32_t num_tx_workers;
@@ -782,10 +841,11 @@ typedef struct test_traffic {
     uint32_t num_links_to_use;
     uint32_t link_idx = 0;
     bool sync_with_remote_controller_kernel = false;
-    uint32_t remote_controller_noc_encoding;
-    uint32_t remote_controller_mesh_chip_id;
+    std::optional<chan_id_t> controller_outbound_eth_chan;
+    std::optional<uint32_t> remote_controller_noc_encoding;
+    std::optional<uint32_t> remote_controller_mesh_chip_id;
 
-    test_traffic(
+    test_traffic_t(
         std::shared_ptr<test_device_t>& tx_device_,
         std::vector<std::shared_ptr<test_device_t>>& rx_devices_,
         uint32_t num_src_endpoints,
@@ -842,9 +902,10 @@ typedef struct test_traffic {
         }
     }
 
-    void set_remote_controller(test_traffic& reverse_traffic) {
+    void set_remote_controller(test_traffic_t& reverse_traffic) {
         sync_with_remote_controller_kernel = true;
         auto remote_tx_device = reverse_traffic.tx_device;
+        controller_outbound_eth_chan = std::get<0>(tx_workers[0]);
         remote_controller_noc_encoding = remote_tx_device->get_noc_offset(reverse_traffic.controller_logical_core);
         remote_controller_mesh_chip_id = remote_tx_device->mesh_chip_id;
     }
@@ -865,7 +926,7 @@ typedef struct test_traffic {
         test_results_address = test_results_address_;
 
         {
-            uint32_t mcast_encoding = tt::tt_metal::hal.noc_multicast_encoding(
+            uint32_t mcast_encoding = tt::tt_metal::MetalContext::instance().hal().noc_multicast_encoding(
                 tx_device->core_range_start_virtual.x,
                 tx_device->core_range_start_virtual.y,
                 tx_device->core_range_end_virtual.x,
@@ -885,9 +946,9 @@ typedef struct test_traffic {
 
             // if need to sync with remote controller
             if (sync_with_remote_controller_kernel) {
-                runtime_args.push_back(remote_controller_mesh_chip_id);
-                runtime_args.push_back(remote_controller_noc_encoding);
-                runtime_args.push_back(std::get<0>(tx_workers[0]));
+                runtime_args.push_back(remote_controller_mesh_chip_id.value());
+                runtime_args.push_back(remote_controller_noc_encoding.value());
+                runtime_args.push_back(controller_outbound_eth_chan.value());
             }
 
             // zero out the signal address
@@ -913,7 +974,9 @@ typedef struct test_traffic {
                 traffic_controller_src,
                 {controller_logical_core},
                 tt_metal::DataMovementConfig{
-                    .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default});
+                    .processor = tt_metal::DataMovementProcessor::RISCV_0,
+                    .noc = tt_metal::NOC::RISCV_0_default,
+                    .defines = defines});
 
             tt_metal::SetRuntimeArgs(tx_device->program_handle, kernel, controller_logical_core, runtime_args);
         }
@@ -1040,13 +1103,25 @@ typedef struct test_traffic {
         }
     }
 
+    void wait_for_tx_workers_to_finish() {
+        for (auto& tx_core : tx_virtual_cores) {
+            while (true) {
+                auto tx_status =
+                    tt::llrt::read_hex_vec_from_core(tx_device->physical_chip_id, tx_core, test_results_address, 4);
+                if ((tx_status[0] & 0xFFFF) != 0) {
+                    break;
+                }
+            }
+        }
+    }
+
     void wait_for_rx_workers_to_finish() {
         for (const auto& rx_device : rx_devices) {
             for (auto& rx_core : rx_virtual_cores) {
                 while (true) {
-                    auto tx_status =
+                    auto rx_status =
                         tt::llrt::read_hex_vec_from_core(rx_device->physical_chip_id, rx_core, test_results_address, 4);
-                    if ((tx_status[0] & 0xFFFF) != 0) {
+                    if ((rx_status[0] & 0xFFFF) != 0) {
                         break;
                     }
                 }
@@ -1109,6 +1184,14 @@ typedef struct test_traffic {
                 pass &= (get_64b_result(rx_results[d][i], TX_TEST_IDX_NPKT) == num_tx_packets);
 
                 if (!pass) {
+                    log_fatal(
+                        LogTest,
+                        "Result validation failed b/w TX [Device: Phys: {}, Logical: {}] and RX [Device: Phys: {}, "
+                        "Logical: {}]",
+                        tx_device->physical_chip_id,
+                        (uint32_t)tx_device->logical_chip_id,
+                        rx_devices[d]->physical_chip_id,
+                        (uint32_t)rx_devices[d]->logical_chip_id);
                     break;
                 }
             }
@@ -1161,7 +1244,14 @@ typedef struct test_traffic {
                         stat[fmt::format("tx_many_data_sent_iter_{}", i)] = many_data_sent_iter;
             */
         }
-        total_tx_bw_2 = ((double)total_tx_words_sent) * PACKET_WORD_SIZE_BYTES / max_tx_elapsed_cycles;
+
+        if (push_mode) {
+            // for push mode, report average b/w
+            total_tx_bw_2 = total_tx_bw / num_tx_workers;
+        } else {
+            total_tx_bw_2 = ((double)total_tx_words_sent) * PACKET_WORD_SIZE_BYTES / max_tx_elapsed_cycles;
+        }
+
         for (uint32_t d = 0; d < rx_devices.size(); d++) {
             for (uint32_t i = 0; i < num_rx_workers; i++) {
                 uint64_t words_received = get_64b_result(rx_results[d][i], TT_FABRIC_WORD_CNT_INDEX);
@@ -1234,8 +1324,7 @@ typedef struct test_traffic {
             }
         }
     }
-
-} test_traffic_t;
+};
 
 int main(int argc, char **argv) {
 
@@ -1271,10 +1360,9 @@ int main(int argc, char **argv) {
     constexpr uint32_t default_tunneler_test_results_addr = 0x39000; // 0x8000 * 4 + 0x19000; 0x10000 * 4 + 0x19000 = 0x59000 > 0x40000 (256kB)
     constexpr uint32_t default_tunneler_test_results_size = 0x6000;  // 256kB total L1 in ethernet core - 0x39000
 
-    constexpr uint32_t default_timeout_mcycles = 1000;
+    constexpr uint32_t default_timeout_mcycles = 100000000;
     constexpr uint32_t default_rx_disable_data_check = 0;
     constexpr uint32_t default_rx_disable_header_check = 0;
-    constexpr uint32_t default_check_txrx_timeout = 1;
 
     constexpr uint32_t src_endpoint_start_id = 4;
     constexpr uint32_t dest_endpoint_start_id = 11;
@@ -1338,7 +1426,7 @@ int main(int argc, char **argv) {
         log_info(LogTest, "  --test_results_addr: test results buf address, default = 0x{:x}", default_test_results_addr);
         log_info(LogTest, "  --test_results_size: test results buf size, default = 0x{:x}", default_test_results_size);
         log_info(LogTest, "  --timeout_mcycles: Timeout in MCycles, default = {}", default_timeout_mcycles);
-        log_info(LogTest, "  --check_txrx_timeout: Check if timeout happens during tx & rx (if enabled, timeout_mcycles will also be used), default = {}", default_check_txrx_timeout);
+        log_info(LogTest, "  --disable_txrx_timeout: Disable timeout during tx & rx (enabled by default)");
         log_info(LogTest, "  --rx_disable_data_check: Disable data check on RX, default = {}", default_rx_disable_data_check);
         log_info(LogTest, "  --rx_disable_header_check: Disable header check on RX, default = {}", default_rx_disable_header_check);
         log_info(LogTest, "  --tx_skip_pkt_content_gen: Skip packet content generation during tx, default = {}", false);
@@ -1382,7 +1470,7 @@ int main(int argc, char **argv) {
     bool tx_skip_pkt_content_gen = test_args::has_command_option(input_args, "--tx_skip_pkt_content_gen");
     uint32_t dump_stat_json = test_args::get_command_option_uint32(input_args, "--dump_stat_json", default_dump_stat_json);
     std::string output_dir = test_args::get_command_option(input_args, "--output_dir", std::string(default_output_dir));
-    uint32_t check_txrx_timeout = test_args::get_command_option_uint32(input_args, "--check_txrx_timeout", default_check_txrx_timeout);
+    bool disable_txrx_timeout = test_args::has_command_option(input_args, "--disable_txrx_timeout");
     uint32_t tx_pkt_dest_size_choice = (uint8_t)test_args::get_command_option_uint32(
         input_args, "--tx_pkt_dest_size_choice", default_tx_pkt_dest_size_choice);
     uint32_t tx_data_sent_per_iter_low = test_args::get_command_option_uint32(input_args, "--tx_data_sent_per_iter_low", default_tx_data_sent_per_iter_low);
@@ -1393,6 +1481,7 @@ int main(int argc, char **argv) {
         test_args::get_command_option_uint32(input_args, "--target_address", default_target_address);
     uint32_t atomic_increment =
         test_args::get_command_option_uint32(input_args, "--atomic_increment", default_atomic_increment);
+    uint32_t data_mode = test_args::has_command_option(input_args, "--raw_data");
 
     // Note here that currently mcast_depth considers the mcast origin as a hop, and not the distance from the origin
     // This has side effects that specifying a depth of 0 or 1 will result in the same behavior
@@ -1447,6 +1536,9 @@ int main(int argc, char **argv) {
     uint32_t packet_size_kb =
         test_args::get_command_option_uint32(input_args, "--packet_size_kb", default_packet_size_kb);
     uint32_t max_packet_size_words = packet_size_kb * 1024 / PACKET_WORD_SIZE_BYTES;
+
+    uint32_t timeout_cycles = timeout_mcycles * 1000;
+
     // Only supports line mcast from neighbour
     if (mcast && num_hops != default_num_hops && num_hops != 1) {
         throw std::runtime_error("Only line mcast is supported right now");
@@ -1590,23 +1682,8 @@ int main(int argc, char **argv) {
             num_allocated_devices += 1 + rx_chip_ids.size();
         }
 
-        // TODO: check this in a loop for all the devices involved in the traffic
-        /*
-        auto const& device_active_eth_cores =
-            test_devices[test_device_id_l]->device_handle->get_active_ethernet_cores();
-        if (device_active_eth_cores.size() == 0) {
-            log_info(
-                LogTest,
-                "Device {} does not have enough active cores. Need 1 active ethernet core for this test.",
-                test_device_id_l);
-            for (auto& test_device : test_devices) {
-                tt_metal::CloseDevice(test_device.second->device_handle);
-            }
-            throw std::runtime_error("Test cannot run on specified device.");
-        } */
-
         uint32_t worker_unreserved_base_addr =
-            hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::UNRESERVED);
+            test_devices.begin()->second->device_handle->allocator()->get_base_allocator_addr(tt_metal::HalMemType::L1);
 
         if (metal_fabric_init_level == 0) {
             // manual init fabric
@@ -1621,43 +1698,44 @@ int main(int argc, char **argv) {
                 test_device->create_router_kernels(router_compile_args, defines);
             }
         }
-        if (check_txrx_timeout) {
+        if (!disable_txrx_timeout) {
             defines["CHECK_TIMEOUT"] = "";
         }
 
         uint32_t client_interface_addr = worker_unreserved_base_addr;
         uint32_t client_pull_req_buf_addr =
-            client_interface_addr + sizeof(fabric_pull_client_interface_t) + sizeof(fabric_router_l1_config_t) * 4;
+            client_interface_addr + PULL_CLIENT_INTERFACE_SIZE + sizeof(fabric_router_l1_config_t) * 4;
 
         std::vector<uint32_t> tx_compile_args = {
-            0,                           //(device->id() << 8) + src_endpoint_start_id + i,  // 0: src_endpoint_id
-            num_dest_endpoints,          // 1: num_dest_endpoints
-            dest_endpoint_start_id,      // 2:
-            tx_queue_start_addr,         // 3: queue_start_addr_words
-            (tx_queue_size_bytes >> 4),  // 4: queue_size_words
-            routing_table_start_addr,    // 5: routeing table
-            test_results_addr,           // 6: test_results_addr
-            test_results_size,           // 7: test_results_size
-            prng_seed,                   // 8: prng_seed
-            data_kb_per_tx,              // 9: total_data_kb
-            max_packet_size_words,       // 10: max_packet_size_words
-            timeout_mcycles * 1000 * 1000 * 4,  // 11: timeout_cycles
-            tx_skip_pkt_content_gen,            // 12: skip_pkt_content_gen
-            tx_pkt_dest_size_choice,            // 13: pkt_dest_size_choice
-            tx_data_sent_per_iter_low,          // 14: data_sent_per_iter_low
-            tx_data_sent_per_iter_high,         // 15: data_sent_per_iter_high
-            fabric_command,                     // 16: fabric_command
-            target_address,                     // 17: target_address
-            atomic_increment,                   // 18: atomic_increment
-            tx_signal_address,                  // 19: tx_signal_address
-            client_interface_addr,              // 20:
-            client_pull_req_buf_addr,           // 21:
-            fixed_async_wr_notif_addr,          // 22: use fixed addr for async wr atomic inc
-            mcast,                              // 23: mcast
-            mcast_depth[RoutingDirection::E],   // 24: mcast_e
-            mcast_depth[RoutingDirection::W],   // 25: mcast_w
-            mcast_depth[RoutingDirection::N],   // 26: mcast_n
-            mcast_depth[RoutingDirection::S],   // 27: mcast_s
+            data_mode,                         // 0: Data mode. 0 - Packetized Data. 1 Raw Data.
+            num_dest_endpoints,                // 1: num_dest_endpoints
+            dest_endpoint_start_id,            // 2:
+            tx_queue_start_addr,               // 3: queue_start_addr_words
+            (tx_queue_size_bytes >> 4),        // 4: queue_size_words
+            routing_table_start_addr,          // 5: routeing table
+            test_results_addr,                 // 6: test_results_addr
+            test_results_size,                 // 7: test_results_size
+            prng_seed,                         // 8: prng_seed
+            data_kb_per_tx,                    // 9: total_data_kb
+            max_packet_size_words,             // 10: max_packet_size_words
+            timeout_cycles,                    // 11: timeout_cycles
+            tx_skip_pkt_content_gen,           // 12: skip_pkt_content_gen
+            tx_pkt_dest_size_choice,           // 13: pkt_dest_size_choice
+            tx_data_sent_per_iter_low,         // 14: data_sent_per_iter_low
+            tx_data_sent_per_iter_high,        // 15: data_sent_per_iter_high
+            fabric_command,                    // 16: fabric_command
+            target_address,                    // 17: target_address
+            atomic_increment,                  // 18: atomic_increment
+            tx_signal_address,                 // 19: tx_signal_address
+            client_interface_addr,             // 20:
+            client_pull_req_buf_addr,          // 21:
+            fixed_async_wr_notif_addr,         // 22: use fixed addr for async wr atomic inc
+            mcast,                             // 23: mcast
+            mcast_depth[RoutingDirection::E],  // 24: mcast_e
+            mcast_depth[RoutingDirection::W],  // 25: mcast_w
+            mcast_depth[RoutingDirection::N],  // 26: mcast_n
+            mcast_depth[RoutingDirection::S],  // 27: mcast_s
+            push_mode                          // 28: Router mode. 0 - Pull, 1 - Push
         };
 
         std::vector<uint32_t> rx_compile_args = {
@@ -1672,6 +1750,7 @@ int main(int argc, char **argv) {
             tx_pkt_dest_size_choice,    // 8: pkt dest and size choice
             tx_skip_pkt_content_gen,    // 9: skip packet validation
             fixed_async_wr_notif_addr,  // 10: use fixed addr for async wr atomic inc
+            timeout_cycles,             // 11: idle timeout cycles
         };
 
         // TODO: launch traffic kernels
@@ -1679,7 +1758,7 @@ int main(int argc, char **argv) {
             traffic.create_kernels(tx_compile_args, rx_compile_args, defines, fabric_command, test_results_addr);
         }
 
-        if (check_txrx_timeout) {
+        if (!disable_txrx_timeout) {
             defines.erase("CHECK_TIMEOUT");
         }
 
@@ -1690,6 +1769,8 @@ int main(int argc, char **argv) {
             tt_metal::detail::LaunchProgram(test_device->device_handle, test_device->program_handle, false);
         }
 
+        log_info(LogTest, "Programs launched, waiting for router sync");
+
         if (metal_fabric_init_level == 0) {
             // wait for all routers to handshake with master router
             for (auto& [chip_id, test_device] : test_devices) {
@@ -1697,21 +1778,37 @@ int main(int argc, char **argv) {
             }
         }
 
+        log_info(LogTest, "Routers sync done, notifying tx controllers");
+
         // notify tx controller to signal the tx workers
         for (auto& traffic : fabric_traffic) {
             traffic.notify_tx_controller();
         }
 
+        log_info(LogTest, "Notified TX controllers, waiting for TX workers to finish");
+
+        // wait for rx kernels to finish
+        for (auto& traffic : fabric_traffic) {
+            traffic.wait_for_tx_workers_to_finish();
+        }
+
+        log_info(LogTest, "TX workers done, waiting for RX workers to finish");
+
         // wait for rx kernels to finish
         for (auto& traffic : fabric_traffic) {
             traffic.wait_for_rx_workers_to_finish();
         }
+
+        log_info(LogTest, "RX workers done, terminating routers");
+
         // terminate fabric routers if control plane is not managed by DevicePool
         if (metal_fabric_init_level == 0) {
             for (auto& [chip_id, test_device] : test_devices) {
                 test_device->terminate_router_kernels();
             }
         }
+
+        log_info(LogTest, "Terminated routers, waiting for program done");
 
         // wait for programs to exit
         for (auto& [chip_id, test_device] : test_devices) {
@@ -1722,39 +1819,28 @@ int main(int argc, char **argv) {
         std::chrono::duration<double> elapsed_seconds = (end-start);
         log_info(LogTest, "Ran in {:.2f}us", elapsed_seconds.count() * 1000 * 1000);
 
+        log_info(LogTest, "Programs done, collecting results");
+
         // collect traffic results
         for (auto& traffic : fabric_traffic) {
             pass &= traffic.collect_results(test_results_addr);
             if (!pass) {
-                log_fatal(LogTest, "Result collection failed\n");
+                log_fatal(LogTest, "Result collection failed, skipping any further collection/validation");
+                break;
             }
         }
-
-        /*      TODO: Need to add these once control plane api is available to
-                          get the first and last hop fabric router core.
-                vector<uint32_t> router_results =
-                    tt::llrt::read_hex_vec_from_core(
-                        device->id(), tunneler_phys_core, tunneler_test_results_addr, 128);
-                log_info(LogTest, "L Router status = {}",
-           tt_fabric_status_to_string(router_results[TT_FABRIC_STATUS_INDEX])); pass &=
-           (router_results[TT_FABRIC_STATUS_INDEX] == TT_FABRIC_STATUS_PASS);
-
-                vector<uint32_t> r_router_results =
-                    tt::llrt::read_hex_vec_from_core(
-                        device_r->id(), r_tunneler_phys_core, tunneler_test_results_addr, 128);
-                log_info(LogTest, "R Router status = {}",
-           tt_fabric_status_to_string(r_router_results[TT_FABRIC_STATUS_INDEX])); pass &=
-           (r_router_results[TT_FABRIC_STATUS_INDEX] == TT_FABRIC_STATUS_PASS);
-        */
 
         // close devices
         test_board.close_devices();
 
         // tally-up the packets and words from tx/rx kernels
-        for (auto& traffic : fabric_traffic) {
-            pass &= traffic.validate_results();
-            if (!pass) {
-                log_fatal(LogTest, "Result validation failed\n");
+        if (pass) {
+            for (auto& traffic : fabric_traffic) {
+                pass &= traffic.validate_results();
+                if (!pass) {
+                    log_fatal(LogTest, "Result validation failed, skipping any further validation");
+                    break;
+                }
             }
         }
 
@@ -1770,7 +1856,7 @@ int main(int argc, char **argv) {
         log_fatal(e.what());
     }
 
-    tt::llrt::RunTimeOptions::get_instance().set_kernels_nullified(false);
+    tt::tt_metal::MetalContext::instance().rtoptions().set_kernels_nullified(false);
 
     if (pass) {
         log_info(LogTest, "Test Passed");

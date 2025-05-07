@@ -4,7 +4,7 @@
 
 import torch.nn as nn
 
-from typing import Optional, Tuple, Union
+from typing import Optional, Tuple
 
 import ttnn
 

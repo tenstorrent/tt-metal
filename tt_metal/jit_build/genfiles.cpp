@@ -4,20 +4,35 @@
 
 #include "jit_build/genfiles.hpp"
 
-#include <bit>
-#include <filesystem>
-#include <fstream>
-#include <iostream>
-#include <utility>
-
+#include <circular_buffer_constants.h>
+#include <data_format.hpp>
+#include <jit_build_options.hpp>
+#include <stdint.h>
 #include <tt_backend_api_types.hpp>
 #include <utils.hpp>
-#include "hostdevcommon/common_values.hpp"
-#include <build.hpp>
-#include <data_format.hpp>
-#include <settings.hpp>
+#include <cstddef>
+#include <filesystem>
+#include <functional>
+#include <iostream>
+#include <stdexcept>
+#include <string>
+#include <thread>
+#include <tuple>
+#include <utility>
+#include <vector>
 
-#include <circular_buffer_constants.h>
+#include "assert.hpp"
+#include "build.hpp"
+#include "hlk_desc.hpp"
+#include "jit_build_settings.hpp"
+#include "kernel.hpp"
+#include "logger.hpp"
+#include "impl/context/metal_context.hpp"
+
+enum class UnpackToDestMode : uint8_t;
+namespace tt {
+enum class ARCH;
+}  // namespace tt
 
 namespace fs = std::filesystem;
 
@@ -50,12 +65,17 @@ static fs::path get_file_path_relative_to_dir(const string& dir, const fs::path&
 static fs::path get_relative_file_path_from_config(const fs::path& file_path) {
     fs::path file_path_relative_to_dir;
 
-    if (llrt::RunTimeOptions::get_instance().is_root_dir_specified()) {
-        file_path_relative_to_dir = get_file_path_relative_to_dir(llrt::RunTimeOptions::get_instance().get_root_dir(), file_path);
+    const auto& rtoptions = tt_metal::MetalContext::instance().rtoptions();
+    if (rtoptions.is_root_dir_specified()) {
+        file_path_relative_to_dir = get_file_path_relative_to_dir(rtoptions.get_root_dir(), file_path);
     }
 
-    if (!fs::exists(file_path_relative_to_dir) && llrt::RunTimeOptions::get_instance().is_kernel_dir_specified()) {
-        file_path_relative_to_dir = get_file_path_relative_to_dir(llrt::RunTimeOptions::get_instance().get_kernel_dir(), file_path);
+    if (!fs::exists(file_path_relative_to_dir) && rtoptions.is_kernel_dir_specified()) {
+        file_path_relative_to_dir = get_file_path_relative_to_dir(rtoptions.get_kernel_dir(), file_path);
+    }
+
+    if (!fs::exists(file_path_relative_to_dir)) {
+        file_path_relative_to_dir = get_file_path_relative_to_dir(rtoptions.get_system_kernel_dir(), file_path);
     }
 
     return file_path_relative_to_dir;
@@ -358,7 +378,7 @@ static void emit_pack_tile_dims(const std::string& pack_tile_dims_descs, tt_hlk_
     file_stream.close();
 }
 
-static void generate_tile_dims_descriptors(JitBuildOptions& options, const tt::ARCH arch) {
+static void generate_tile_dims_descriptors(JitBuildOptions& options, const tt::ARCH /*arch*/) {
     string out_file_name_base = "chlkc_";
     string out_file_name_suffix = "_tile_dims.h";
     string unpack_tile_dims_descs = options.path + out_file_name_base + "unpack" + out_file_name_suffix;
@@ -428,6 +448,7 @@ static void generate_math_approx_mode_descriptor(JitBuildOptions& options) {
     file_stream.close();
 }
 
+// clang-format off
 void jit_build_genfiles_descriptors(const JitBuildEnv& env, JitBuildOptions& options) {
     //ZoneScoped;
     //const std::string tracyPrefix = "generate_descriptors_";
@@ -450,5 +471,6 @@ void jit_build_genfiles_descriptors(const JitBuildEnv& env, JitBuildOptions& opt
         std::cerr << "EXCEPTION FROM THREADING IN GENERATE_DESCRIPTORS: " << ex.what() << std::endl;
     }
 }
+// clang-format on
 
 }  // namespace tt::tt_metal

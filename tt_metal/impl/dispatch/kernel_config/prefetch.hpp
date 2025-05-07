@@ -4,11 +4,18 @@
 
 #pragma once
 
+#include <stdint.h>
+#include <optional>
+
+#include "core_coord.hpp"
 #include "fd_kernel.hpp"
 #include "mesh_graph.hpp"
-#include "umd/device/types/cluster_descriptor_types.h"
+#include "system_memory_manager.hpp"
+#include "impl/context/metal_context.hpp"
+#include <umd/device/tt_xy_pair.h>
+#include <umd/device/types/cluster_descriptor_types.h>
 
-typedef struct prefetch_static_config {
+struct prefetch_static_config_t {
     std::optional<uint32_t> my_downstream_cb_sem_id;
 
     std::optional<uint32_t> pcie_base;
@@ -43,9 +50,9 @@ typedef struct prefetch_static_config {
 
     // Populated if fabric is being used to talk to downstream
     std::optional<uint32_t> client_interface_addr;
-} prefetch_static_config_t;
+};
 
-typedef struct prefetch_dependent_config {
+struct prefetch_dependent_config_t {
     std::optional<tt_cxy_pair> upstream_logical_core;
     std::optional<tt_cxy_pair> downstream_logical_core;
     std::optional<tt_cxy_pair> downstream_s_logical_core;
@@ -62,10 +69,11 @@ typedef struct prefetch_dependent_config {
     // Populated if fabric is being used to talk to downstream
     std::optional<uint32_t> fabric_router_noc_xy;
     std::optional<uint32_t> upstream_mesh_id;
-    std::optional<uint32_t> upstream_chip_id;
+    std::optional<uint32_t> upstream_dev_id;
     std::optional<uint32_t> downstream_mesh_id;
-    std::optional<uint32_t> downstream_chip_id;
-} prefetch_dependent_config_t;
+    std::optional<uint32_t> downstream_dev_id;
+    std::optional<uint32_t> outbound_eth_chan;
+};
 
 class PrefetchKernel : public FDKernel {
 public:
@@ -78,15 +86,17 @@ public:
         bool h_variant,
         bool d_variant) :
         FDKernel(node_id, device_id, servicing_device_id, cq_id, noc_selection) {
-        auto& core_manager = tt::tt_metal::dispatch_core_manager::instance();  // Not thread safe
+        auto& core_manager = tt::tt_metal::MetalContext::instance().get_dispatch_core_manager();  // Not thread safe
         static_config_.is_h_variant = h_variant;
         static_config_.is_d_variant = d_variant;
-        uint16_t channel = tt::Cluster::instance().get_assigned_channel_for_device(device_id);
+        uint16_t channel =
+            tt::tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(device_id);
 
         if (h_variant && d_variant) {
             this->logical_core_ = core_manager.prefetcher_core(device_id, channel, cq_id);
         } else if (h_variant) {
-            channel = tt::Cluster::instance().get_assigned_channel_for_device(servicing_device_id);
+            channel = tt::tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(
+                servicing_device_id);
             this->logical_core_ = core_manager.prefetcher_core(servicing_device_id, channel, cq_id);
         } else if (d_variant) {
             this->logical_core_ = core_manager.prefetcher_d_core(device_id, channel, cq_id);
@@ -98,6 +108,7 @@ public:
     void ConfigureCore() override;
     void UpdateArgsForFabric(
         const CoreCoord& fabric_router,
+        uint32_t outbound_eth_chan,
         tt::tt_fabric::mesh_id_t src_mesh_id,
         chip_id_t src_chip_id,
         tt::tt_fabric::mesh_id_t dst_mesh_id,

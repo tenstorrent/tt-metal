@@ -5,7 +5,6 @@
 import torch
 import pytest
 from loguru import logger
-import os
 import ttnn
 from models.demos.wormhole.mistral7b.tt.mistral_mlp import TtMistralMLP
 from models.demos.wormhole.mistral7b.tt.model_config import TtModelArgs

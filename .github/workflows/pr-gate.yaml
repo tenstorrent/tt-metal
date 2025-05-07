@@ -12,12 +12,27 @@ name: PR Gate
 
 on:
   workflow_dispatch:
+    inputs:
+      build-type:
+        required: false
+        default: ASan
+        type: choice
+        options:
+          - Release
+          - Debug
+          - RelWithDebInfo
+          - ASan
+          - TSan
   pull_request:
     types:
       - opened
       - reopened
       - synchronize
       - ready_for_review
+  merge_group:
+  push:
+    branches:
+      - main # Builds on main will populate the shared ccache to speed up builds on branches
 
 concurrency:
   # Use github.run_id on main branch (or any protected branch)
@@ -27,29 +42,83 @@ concurrency:
   # Use github.ref on other branches, so it's unique per branch
   # Possibly PRs can also just use `github.ref`, but for now just copy/pasting from
   # https://www.meziantou.net/how-to-cancel-github-workflows-when-pushing-new-commits-on-a-branch.htm
-  group: ${{ github.workflow }}-${{ github.ref_protected && github.run_id || github.event.pull_request.number || github.ref }}
+  group: ${{ github.workflow }}-${{ github.ref_protected && github.run_id || github.event.pull_request.number || github.ref }}-${{ inputs.build-type || 'default' }}
   cancel-in-progress: true
 
 jobs:
-  build:
+  asan-build:
     if: github.event_name != 'pull_request' || !github.event.pull_request.draft
     uses: ./.github/workflows/build-artifact.yaml
+    secrets: inherit
     with:
       version: "22.04"
+      toolchain: cmake/x86_64-linux-clang-17-libstdcpp-toolchain.cmake
+      build-type: ${{ inputs.build-type || 'ASan' }}
+      publish-artifact: false
+      skip-tt-train: true
+
+  find-changed-files:
+    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
+    runs-on: ubuntu-latest
+    outputs:
+      cmake-changed: ${{ steps.find-changes.outputs.cmake-changed }}
+      tt-metalium-changed: ${{ steps.find-changes.outputs.tt-metalium-changed }}
+      tt-metalium-or-tt-nn-tests-changed: ${{ steps.find-changes.outputs.tt-metalium-or-tt-nn-tests-changed }}
+    steps:
+      - id: find-changes
+        uses: tenstorrent/tt-metal/.github/actions/find-changed-files@main
 
   smoke-tests:
-    needs: build
+    needs: [ asan-build, find-changed-files ]
+    if: ${{
+        needs.find-changed-files.outputs.cmake-changed == 'true' ||
+        needs.find-changed-files.outputs.tt-metalium-changed == 'true' ||
+        needs.find-changed-files.outputs.tt-metalium-or-tt-nn-tests-changed == 'true'
+      }}
     strategy:
       fail-fast: false
       matrix:
         platform: [
-          "tt-beta-ubuntu-2204-n300-large-stable",
+          "N150",
         ]
     uses: ./.github/workflows/smoke.yaml
     with:
-      docker-image: ${{ needs.build.outputs.ci-build-docker-image }}
+      docker-image: ${{ needs.asan-build.outputs.dev-docker-image }}
+      package-artifact-name: ${{ needs.asan-build.outputs.packages-artifact-name }}
+      runner: ${{ matrix.platform }}
+
+  build:
+    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
+    uses: ./.github/workflows/build-artifact.yaml
+    secrets: inherit
+    with:
+      version: "22.04"
+      toolchain: cmake/x86_64-linux-clang-17-libstdcpp-toolchain.cmake
+      # Cannot do a Sanitizer build as that's not compatible with the downstream test.
+      # Also cannot be Release if the other build was chosen to be Release as the GitHub artifact
+      # name clashes.
+      build-type: ${{ (inputs.build-type == 'Release' && 'Debug') || 'Release' }}
+      publish-artifact: false
+      skip-tt-train: true
+
+  metalium-examples:
+    needs: [ build, find-changed-files ]
+    if: ${{
+        needs.find-changed-files.outputs.cmake-changed == 'true' ||
+        needs.find-changed-files.outputs.tt-metalium-changed == 'true'
+      }}
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: [
+          "N150",
+        ]
+    uses: ./.github/workflows/sdk-examples.yaml
+    with:
+      docker-image: ${{ needs.build.outputs.basic-dev-docker-image }}
       package-artifact-name: ${{ needs.build.outputs.packages-artifact-name }}
       runner: ${{ matrix.platform }}
+      product: tt-metalium
 
   # GitHub has so many design limitations it's not even funny.
   # This job is purely so we can capture the essence of the workflow as a whole in our status checks.
@@ -64,13 +133,13 @@ jobs:
         contains(join(needs.*.result, ','), 'success') ||
         contains(join(needs.*.result, ','), 'failure')
       }}
-    needs: [build, smoke-tests]
+    needs: [asan-build, smoke-tests, build, metalium-examples]
     runs-on: ubuntu-latest
     steps:
       - name: Check if all jobs passed
         uses: tenstorrent/tt-metal/.github/actions/workflow-status@main
         with:
-          required-jobs: "build"
-          optional-jobs: "smoke-tests"
+          required-jobs: "asan-build, build"
+          optional-jobs: "smoke-tests, metalium-examples"
         env:
           NEEDS_CONTEXT: '${{ toJSON(needs) }}'

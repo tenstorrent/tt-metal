@@ -72,14 +72,19 @@ done
 # I would prefer to not be using -dev packages for runtime dependencies
 # But I have not been able to verify any alternative package
 
+# Packages needed at runtime and therefore needed by release docker image
 ub_runtime_packages()
 {
     UB_RUNTIME_LIST=(\
+     python3-dev \
      python3-pip \
+     python3-venv \
      libhwloc-dev \
      libnuma-dev \
+     libatomic1 \
      libc++-17-dev \
      libc++abi-17-dev \
+     libstdc++6 \
     )
 }
 
@@ -145,7 +150,7 @@ prep_ubuntu_runtime()
     echo "Preparing ubuntu ..."
     # Update the list of available packages
     apt-get update
-    apt-get install -y --no-install-recommends ca-certificates gpg lsb-release wget software-properties-common gnupg
+    apt-get install -y --no-install-recommends ca-certificates gpg lsb-release wget software-properties-common gnupg jq
     wget -O - https://apt.llvm.org/llvm-snapshot.gpg.key | apt-key add -
     echo "deb http://apt.llvm.org/$UBUNTU_CODENAME/ llvm-toolchain-$UBUNTU_CODENAME-17 main" | tee /etc/apt/sources.list.d/llvm-17.list
     apt-get update
@@ -156,7 +161,7 @@ prep_ubuntu_build()
     echo "Preparing ubuntu ..."
     # Update the list of available packages
     apt-get update
-    apt-get install -y --no-install-recommends ca-certificates gpg lsb-release wget software-properties-common gnupg
+    apt-get install -y --no-install-recommends ca-certificates gpg lsb-release wget software-properties-common gnupg jq
     # The below is to bring cmake from kitware
     wget -O - https://apt.kitware.com/keys/kitware-archive-latest.asc 2>/dev/null | gpg --dearmor - | tee /usr/share/keyrings/kitware-archive-keyring.gpg >/dev/null
     echo "deb [signed-by=/usr/share/keyrings/kitware-archive-keyring.gpg] https://apt.kitware.com/ubuntu/ $UBUNTU_CODENAME main" | tee /etc/apt/sources.list.d/kitware.list >/dev/null
@@ -181,27 +186,76 @@ install_llvm() {
     fi
 }
 
-# Install g++-12 if on Ubuntu 22.04
-install_gcc12() {
-    if [ $VERSION == "22.04" ]; then
-        echo "Detected Ubuntu 22.04, installing g++-12..."
-        apt-get install -y --no-install-recommends g++-12 gcc-12
-        update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-12 12
-        update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-12 12
-        update-alternatives --set gcc /usr/bin/gcc-12
-        update-alternatives --set g++ /usr/bin/g++-12
+install_gcc() {
+    case "$VERSION" in
+        "22.04")
+            GCC_VER=12
+            ;;
+        "24.04")
+            GCC_VER=14
+            ;;
+        *)
+            echo "Unknown or unsupported Ubuntu version: $VERSION"
+            echo "Falling back to installing default g++..."
+            apt-get install -y --no-install-recommends g++
+            echo "Using g++ version: $(g++ --version | head -n1)"
+            return
+            ;;
+    esac
+
+    echo "Detected Ubuntu $VERSION, installing g++-$GCC_VER..."
+
+    apt-get install -y --no-install-recommends g++-$GCC_VER gcc-$GCC_VER
+
+    update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-$GCC_VER $GCC_VER
+    update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-$GCC_VER $GCC_VER
+    update-alternatives --set gcc /usr/bin/gcc-$GCC_VER
+    update-alternatives --set g++ /usr/bin/g++-$GCC_VER
+
+    echo "Using g++ version: $(g++ --version | head -n1)"
+}
+
+install_sfpi() {
+    local version_file=$(dirname $0)/tt_metal/sfpi-version.sh
+    if ! [[ -r $version_file ]] ; then
+	version_file=$(dirname $0)/sfpi-version.sh
+	if ! [[ -r $version_file ]] ; then
+	    echo "sfpi-version.sh not found" >&2
+	    exit 1
+	fi
     fi
+    local $(grep -v '^#' $version_file)
+    local sfpi_arch_os=$(uname -m)_$(uname -s)
+    local sfpi_deb_md5=$(eval echo "\$sfpi_${sfpi_arch_os}_deb_md5")
+    if [ -z "$sfpi_deb_md5" ] ; then
+	echo "SFPI debian package for ${sfpi_arch_os} is not available" >&2
+	exit 1
+    fi
+    local TEMP_DIR=$(mktemp -d)
+    wget -P $TEMP_DIR "$sfpi_url/$sfpi_version/sfpi-${sfpi_arch_os}.deb"
+    if [ $(md5sum -b "${TEMP_DIR}/sfpi-${sfpi_arch_os}.deb" | cut -d' ' -f1) \
+	     != "$sfpi_deb_md5" ] ; then
+	echo "SFPI sfpi-${sfpi_arch_os}.deb md5 mismatch" >&2
+	rm -rf $TEMP_DIR
+	exit 1
+    fi
+    # we must select exactly this version
+    apt-get install -y --allow-downgrades $TEMP_DIR/sfpi-${sfpi_arch_os}.deb
+    rm -rf $TEMP_DIR
 }
 
 # We don't really want to have hugepages dependency
 # This could be removed in the future
 
 configure_hugepages() {
-    TT_TOOLS_VERSION='1.1-5_all'
-    echo "Installing Tenstorrent Hugepages Service $TT_TOOLS_VERSION..."
+    # Fetch the lastest tt-tools release link and name of package
+    TT_TOOLS_LINK=$(wget -qO- https://api.github.com/repos/tenstorrent/tt-system-tools/releases/latest | jq -r '.assets[] | select(.name | endswith(".deb")) | .browser_download_url')
+    TT_TOOLS_NAME=$(wget -qO- https://api.github.com/repos/tenstorrent/tt-system-tools/releases/latest | jq -r '.assets[] | select(.name | endswith(".deb")) | .name')
+
+    echo "Installing Tenstorrent Hugepages Service $TT_TOOLS_NAME..."
     TEMP_DIR=$(mktemp -d)
-    wget -P $TEMP_DIR https://github.com/tenstorrent/tt-system-tools/releases/download/upstream%2F1.1/tenstorrent-tools_${TT_TOOLS_VERSION}.deb
-    apt-get install -y --no-install-recommends $TEMP_DIR/tenstorrent-tools_${TT_TOOLS_VERSION}.deb
+    wget -P $TEMP_DIR $TT_TOOLS_LINK
+    apt-get install -y --no-install-recommends $TEMP_DIR/$TT_TOOLS_NAME
     systemctl enable --now tenstorrent-hugepages.service
     rm -rf "$TEMP_DIR"
 }
@@ -213,16 +267,19 @@ install() {
 	case "$mode" in
             runtime)
                 prep_ubuntu_runtime
+                install_sfpi
                 ;;
             build)
                 prep_ubuntu_build
                 install_llvm
-		install_gcc12
+                install_gcc
                 ;;
             baremetal)
+                prep_ubuntu_runtime
+                install_sfpi
                 prep_ubuntu_build
                 install_llvm
-		install_gcc12
+                install_gcc
                 configure_hugepages
                 ;;
         esac

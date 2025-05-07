@@ -12,8 +12,6 @@ from tests.ttnn.unit_tests.operations.eltwise.backward.utility_funcs import (
 )
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
-from models.utility_functions import skip_for_grayskull, is_wormhole_b0, is_blackhole
-
 
 @pytest.mark.parametrize(
     "input_shapes",
@@ -366,32 +364,51 @@ def test_unary_composite_lgamma_ttnn(input_shapes, device):
         (torch.Size([1, 3, 320, 384])),
     ),
 )
-def test_unary_composite_log1p_ttnn(input_shapes, device):
-    in_data1, input_tensor1 = data_gen_with_range(input_shapes, -1, 1, device)
-
-    output_tensor = ttnn.log1p(input_tensor1)
-    golden_function = ttnn.get_golden_function(ttnn.log1p)
+def test_unary_composite_mish_ttnn(input_shapes, device):
+    in_data1 = torch.Tensor(size=input_shapes).uniform_(-20, 100).to(torch.bfloat16)
+    input_tensor1 = ttnn.from_torch(in_data1, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    output_tensor = ttnn.mish(input_tensor1)
+    golden_function = ttnn.get_golden_function(ttnn.mish)
     golden_tensor = golden_function(in_data1)
 
     comp_pass = compare_pcc([output_tensor], [golden_tensor])
     assert comp_pass
 
 
-@skip_for_grayskull()
 @pytest.mark.parametrize(
     "input_shapes",
     (
-        (torch.Size([1, 1, 32, 32])),
-        (torch.Size([1, 1, 320, 384])),
-        (torch.Size([1, 3, 320, 384])),
+        torch.Size([1, 1, 89600, 32]),
+        torch.Size([1, 1, 89600, 128]),
     ),
 )
-def test_unary_composite_mish_ttnn(input_shapes, device):
-    in_data1, input_tensor1 = data_gen_with_range(input_shapes, -20, 100, device)
-    output_tensor = ttnn.mish(input_tensor1)
-    golden_function = ttnn.get_golden_function(ttnn.mish)
-    golden_tensor = golden_function(in_data1)
+def test_unary_composite_mish_sharded_ttnn(input_shapes, device):
+    in_data = torch.Tensor(size=input_shapes).uniform_(-20, 100).to(torch.bfloat16)
+    shard_grid = ttnn.CoreRangeSet(
+        {
+            ttnn.CoreRange(
+                ttnn.CoreCoord(0, 0),
+                ttnn.CoreCoord(7, 6),
+            ),
+        }
+    )
+    n_cores = 56
+    N, C, H, W = in_data.shape
+    shard_spec = ttnn.ShardSpec(shard_grid, [N * C * H // n_cores, W], ttnn.ShardOrientation.ROW_MAJOR)
+    input_mem_config = ttnn.MemoryConfig(
+        ttnn.types.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.types.BufferType.L1, shard_spec
+    )
+    input_tensor = ttnn.from_torch(
+        in_data,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=input_mem_config,
+    )
 
+    output_tensor = ttnn.mish(input_tensor)
+    golden_function = ttnn.get_golden_function(ttnn.mish)
+    golden_tensor = golden_function(in_data)
     comp_pass = compare_pcc([output_tensor], [golden_tensor])
     assert comp_pass
 
@@ -448,26 +465,6 @@ def test_unary_composite_rad2deg_ttnn(input_shapes, device):
     output_tensor = ttnn.rad2deg(input_tensor1)
     golden_function = ttnn.get_golden_function(ttnn.rad2deg)
     golden_tensor = golden_function(in_data1)
-
-    comp_pass = compare_pcc([output_tensor], [golden_tensor])
-    assert comp_pass
-
-
-@skip_for_grayskull()
-@pytest.mark.parametrize(
-    "input_shapes",
-    (
-        (torch.Size([1, 1, 32, 32])),
-        (torch.Size([1, 1, 320, 384])),
-        (torch.Size([1, 3, 320, 384])),
-    ),
-)
-def test_unary_composite_round_ttnn(input_shapes, device):
-    in_data1, input_tensor1 = data_gen_with_range(input_shapes, -100, 100, device)
-    decimal = 1
-    output_tensor = ttnn.round(input_tensor1, decimals=decimal)
-    golden_function = ttnn.get_golden_function(ttnn.round)
-    golden_tensor = golden_function(in_data1, decimal)
 
     comp_pass = compare_pcc([output_tensor], [golden_tensor])
     assert comp_pass
@@ -626,7 +623,6 @@ def test_unary_composite_triu_ttnn(input_shapes, device):
     assert comp_pass
 
 
-@skip_for_grayskull()
 @pytest.mark.parametrize(
     "input_shapes",
     (
@@ -646,7 +642,6 @@ def test_unary_composite_trunc_ttnn(input_shapes, device):
     assert comp_pass
 
 
-@skip_for_grayskull()
 @pytest.mark.parametrize(
     "input_shapes",
     (
@@ -753,7 +748,6 @@ def test_unary_logical_not_ttnn(input_shapes, device):
     assert comp_pass
 
 
-@skip_for_grayskull("Not supported for Grayskull")
 @pytest.mark.parametrize(
     "input_shapes",
     (
@@ -888,7 +882,6 @@ def test_unary_celu(input_shapes, param, device):
     assert comp_pass
 
 
-@skip_for_grayskull()
 @pytest.mark.parametrize(
     "input_shapes",
     (

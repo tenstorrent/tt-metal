@@ -12,35 +12,12 @@
 namespace tt {
 
 namespace tt_metal {
-const ttnn::Shape infer_dims_for_reshape(const Tensor& tensor, tt::stl::Span<const int32_t> shape);
 
-static int compute_flat_indices(tt::stl::Span<const int> indices, tt::stl::Span<const uint32_t> strides) {
-    int flat_index = 0;
-    for (auto i = 0; i < indices.size(); i++) {
-        flat_index += indices[i] * strides[i];
-    }
-    return flat_index;
-};
+ttnn::Shape infer_dims_for_reshape(const Tensor& tensor, tt::stl::Span<const int32_t> shape);
 
-static std::size_t compute_buffer_size(const ttnn::Shape& shape, DataType data_type, const Tile& tile) {
-    const size_t volume = shape.volume();
-    auto tile_hw = tile.get_tile_hw();
-    if (data_type == DataType::BFLOAT8_B) {
-        auto tile_size_bytes = tile.get_tile_size(DataFormat::Bfp8_b);
-        TT_ASSERT(volume % tile_hw == 0);
-        const auto bfloat8_b_volume = volume / tile_hw * tile_size_bytes;
-        TT_ASSERT(volume % sizeof(std::uint32_t) == 0);
-        return bfloat8_b_volume / sizeof(std::uint32_t);
-    }
-    if (data_type == DataType::BFLOAT4_B) {
-        auto tile_size_bytes = tile.get_tile_size(DataFormat::Bfp4_b);
-        TT_ASSERT(volume % tile_hw == 0);
-        const auto bfloat4_b_volume = volume / tile_hw * tile_size_bytes;
-        TT_ASSERT(volume % sizeof(std::uint32_t) == 0);
-        return bfloat4_b_volume / sizeof(std::uint32_t);
-    }
-    return volume;
-}
+int compute_flat_indices(tt::stl::Span<const int> indices, tt::stl::Span<const uint32_t> strides);
+
+std::size_t compute_buffer_size(const ttnn::Shape& shape, DataType data_type, const Tile& tile);
 
 constexpr auto compute_flat_input_index = [](const auto& indices, const auto& strides) {
     uint32_t flat_index = 0;
@@ -50,25 +27,33 @@ constexpr auto compute_flat_input_index = [](const auto& indices, const auto& st
     return flat_index;
 };
 
+// Returns true if architecture is GRAYSKULL.
 bool is_arch_gs(const tt::ARCH& arch);
+
+// Returns true if architecture is WORMHOLE_B0.
 bool is_arch_whb0(const tt::ARCH& arch);
 
+// Returns true if tensor has Host storage.
 bool is_cpu_tensor(const Tensor& tensor);
+
+// Returns true if tensor has MultiDeviceHost storage.
+// TODO: #19177 - Remove this once host and multi-device host tensors are unified.
+bool is_multi_device_host_tensor(const Tensor& tensor);
+
+// Returns true if tensor is on device.
 bool is_device_tensor(const Tensor& tensor);
 
-// Given a multi-device tensor, and a function that transforms a tensor, applies the function to all per-device
+// Given a multi-device host tensor and a function that transforms a tensor, applies the function to all per-device
 // tensors.
-Tensor transform(const Tensor& tensor, std::function<Tensor(const Tensor&)> transform_func);
+Tensor transform(const Tensor& tensor, const std::function<Tensor(const Tensor&)>& transform_func);
 
-// Given a multi-device tensor, and a callable, applies the function to all per-device tensors.
+// Given a multi-device host tensor and a callable, applies the function to all per-device tensors.
 void apply(const Tensor& tensor, const std::function<void(const Tensor&)>& callable);
 
-// Given a multi-device tensor, returns all the devices it is mapped to.
-std::vector<IDevice*> get_devices(const Tensor& multi_device_tensor);
-
-uint32_t num_buffers_in_tensor(const Tensor& tensor);
-
-Tensor get_shard_for_device(
+// This function is used in legacy context of launching per-device work via push_work threads.
+// This won't be supported. In the long-term, tensor shards for Device tensors should be referred to using
+// `MeshCoordinate`.
+[[deprecated]] Tensor get_shard_for_device(
     const Tensor& tensor, IDevice* target_device, std::optional<int> buffer_index = std::nullopt);
 
 void insert_buffer_and_shape_for_device(
@@ -77,16 +62,8 @@ void insert_buffer_and_shape_for_device(
     Tensor& tensor_to_modify,
     std::optional<int> buffer_index = std::nullopt);
 
-Tensor copy_borrowed_tensor_in_async_mode(IDevice* worker, const Tensor& tensor);
-
-inline bool is_tensor_on_device(const ttnn::Tensor& tensor) { return tensor.storage_type() == StorageType::DEVICE; }
-
-inline bool is_tensor_on_device_or_multidevice(const ttnn::Tensor& tensor) {
-    return tensor.storage_type() == StorageType::DEVICE || tensor.storage_type() == StorageType::MULTI_DEVICE;
-}
-
 template <class T>
-inline uint32_t get_batch_size(const T& shape) {
+uint32_t get_batch_size(const T& shape) {
     uint32_t result = 1;
     for (auto i = 0; i < shape.rank() - 2; i++) {
         result *= shape[i];

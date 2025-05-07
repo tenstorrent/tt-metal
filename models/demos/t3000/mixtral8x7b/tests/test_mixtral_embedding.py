@@ -1,9 +1,7 @@
 # SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
-import os
 import torch
-import pytest
 from loguru import logger
 
 import ttnn
@@ -26,8 +24,6 @@ class Emb(torch.nn.Module):
 
 
 def test_mixtral_embedding(device, use_program_cache, reset_seeds):
-    device.enable_async(True)
-
     dtype = ttnn.bfloat16
 
     model_args = TtModelArgs(device)

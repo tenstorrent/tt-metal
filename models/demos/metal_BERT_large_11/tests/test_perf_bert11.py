@@ -22,7 +22,6 @@ from models.utility_functions import (
     profiler,
     run_for_grayskull,
     run_for_wormhole_b0,
-    is_wormhole_b0,
     is_blackhole,
 )
 from models.perf.perf_utils import prep_perf_report

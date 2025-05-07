@@ -323,6 +323,8 @@ def run_test_sdpa_decode_single_iter(
     causal=True,
     start_core=ttnn.CoreCoord(0, 0),
     sub_core_grids=None,
+    override_q_chunk_size=None,
+    override_k_chunk_size=None,
 ):
     compute_grid_size = device.compute_with_storage_grid_size()
     if sub_core_grids is None:
@@ -349,7 +351,7 @@ def run_test_sdpa_decode_single_iter(
         min_pcc = 0.91 if dtype == ttnn.bfloat4_b else min_pcc
 
     compute_kernel_config = ttnn.WormholeComputeKernelConfig(
-        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_fidelity=ttnn.MathFidelity.HiFi2,
         math_approx_mode=False,
         fp32_dest_acc_en=False,
         packer_l1_acc=False,
@@ -378,11 +380,13 @@ def run_test_sdpa_decode_single_iter(
     max_start_idx = max(start_indices)
     scale = d**-0.5
 
-    k_chunk_size = get_chunk_size(max_start_idx + 1, s)
+    q_chunk_size = padded_num_heads if override_q_chunk_size is None else override_q_chunk_size
+    k_chunk_size = get_chunk_size(max_start_idx + 1, s) if override_k_chunk_size is None else override_k_chunk_size
+
     program_config = ttnn.SDPAProgramConfig(
         compute_with_storage_grid_size=grid_size,
         sub_core_grids=compute_sub_core_grids,
-        q_chunk_size=padded_num_heads,
+        q_chunk_size=q_chunk_size,
         k_chunk_size=k_chunk_size,
         exp_approx_mode=False,
     )
@@ -487,7 +491,6 @@ def run_test_sdpa_decode_single_iter(
     assert out_pass
 
 
-@skip_for_blackhole("Unsupported on BH, see #12349")
 @skip_for_grayskull("Unsupported in GS since L1 runs OOM with most configs")
 @pytest.mark.parametrize(
     "dtype, q_dtype",
@@ -537,7 +540,6 @@ def test_sdpa_decode(
         )
 
 
-@skip_for_blackhole("Unsupported on BH, see #12349")
 @skip_for_grayskull("Unsupported in GS since L1 runs OOM with most configs")
 @pytest.mark.parametrize(
     "dtype, q_dtype",
@@ -570,7 +572,6 @@ def test_sdpa_decode_non_causal(device, b, nh, nkv, s, d, dtype, grid_size, q_dt
     assert device.num_program_cache_entries() == 1
 
 
-@skip_for_blackhole("Unsupported on BH, see #12349")
 @skip_for_grayskull("Unsupported in GS since L1 runs OOM with most configs")
 @pytest.mark.parametrize(
     "dtype, q_dtype",
@@ -830,7 +831,189 @@ def run_test_sdpa_decode_paged_attention(
             causal = False
 
 
-@skip_for_blackhole("Unsupported on BH, see #12349")
+def run_test_sdpa_decode_paged_attention_single_iter(
+    device,
+    b,
+    nh,
+    nkv,
+    s,
+    d,
+    kv_dtype,
+    grid_size,
+    q_dtype,
+    cur_pos,
+    block_size,
+    q_chunk_size,
+    k_chunk_size,
+    sharded_in=True,
+    sharded_out=True,
+    start_core=ttnn.CoreCoord(0, 0),
+    sub_core_grids=None,
+):
+    torch.manual_seed(1234)
+    compute_grid_size = device.compute_with_storage_grid_size()
+    if sub_core_grids is None:
+        if grid_size[0] > compute_grid_size.x or grid_size[1] > compute_grid_size.y:
+            pytest.skip(f"Need {grid_size} grid size to run this test but core grid is {compute_grid_size}")
+    else:
+        if grid_size[0] * grid_size[1] > sub_core_grids.num_cores():
+            pytest.skip(
+                f"Need {grid_size[0]*grid_size[1]} grid size to run this test but core grid is {sub_core_grids.num_cores()}"
+            )
+
+    # Paged cache attributes
+    max_num_blocks_per_seq = s // block_size
+    assert max_num_blocks_per_seq * block_size == s
+    max_num_blocks = b * s // block_size
+    assert max_num_blocks * block_size == b * s
+
+    K = fa_rand(b, nkv, s, d)
+    V = fa_rand(b, nkv, s, d)
+
+    def to_paged_cache(cache, batch, num_kv, max_num_blocks_per_seq, block_size, head_dim, max_seq_len):
+        return (
+            cache.reshape(batch, num_kv, max_num_blocks_per_seq, block_size, head_dim)
+            .transpose(1, 2)
+            .reshape(batch * max_num_blocks_per_seq, num_kv, block_size, head_dim)
+        )
+
+    def to_contiguous_cache(paged_cache, batch, num_kv, max_num_blocks_per_seq, block_size, head_dim, max_seq_len):
+        return (
+            paged_cache.reshape(batch, max_num_blocks_per_seq, num_kv, block_size, head_dim)
+            .transpose(1, 2)
+            .reshape(batch, num_kv, max_seq_len, head_dim)
+        )
+
+    # Create paged K and V based on block size\
+    paged_k = to_paged_cache(K, b, nkv, max_num_blocks_per_seq, block_size, d, s)
+    paged_v = to_paged_cache(V, b, nkv, max_num_blocks_per_seq, block_size, d, s)
+
+    # We need a random permutation to shuffle pages in the cache
+    permutation = torch.randperm(max_num_blocks)
+    reverse_permutation = torch.argsort(permutation)
+    page_table = reverse_permutation.reshape(b, max_num_blocks_per_seq)
+
+    paged_k_shuffled = paged_k[permutation]
+    paged_v_shuffled = paged_v[permutation]
+
+    paged_k_unshuffled = paged_k_shuffled[reverse_permutation]
+    paged_v_unshuffled = paged_v_shuffled[reverse_permutation]
+
+    # Check that page/shuffle/unshuffle/unpage logic is correct
+    K_back = to_contiguous_cache(paged_k_unshuffled, b, nkv, max_num_blocks_per_seq, block_size, d, s)
+    V_back = to_contiguous_cache(paged_v_unshuffled, b, nkv, max_num_blocks_per_seq, block_size, d, s)
+
+    assert torch.allclose(K, K_back)
+    assert torch.allclose(V, V_back)
+
+    padded_num_heads = nearest_pow_2(nearest_n(nh, n=32))
+
+    min_pcc = 0.99
+
+    compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.HiFi2,
+        math_approx_mode=False,
+        fp32_dest_acc_en=False,
+        packer_l1_acc=False,
+    )
+    dram_memcfg = ttnn.DRAM_MEMORY_CONFIG
+
+    if sub_core_grids is None:
+        shard_grid = ttnn.CoreRangeSet({num_to_corerange(b)})
+        compute_sub_core_grids = None
+    else:
+        shard_grid = ttnn.num_cores_to_corerangeset_in_subcoregrids(start_core, b, sub_core_grids, row_wise=True)
+        compute_sub_core_grids = ttnn.num_cores_to_corerangeset_in_subcoregrids(
+            start_core, grid_size[0] * grid_size[1], sub_core_grids, row_wise=True
+        )
+
+    shard_spec = ttnn.ShardSpec(shard_grid, (padded_num_heads, d), ttnn.ShardOrientation.ROW_MAJOR)
+
+    height_sharded_memcfg = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard_spec)
+
+    tt_K = ttnn.as_tensor(
+        paged_k_shuffled, device=device, dtype=kv_dtype, layout=ttnn.TILE_LAYOUT, memory_config=dram_memcfg
+    )
+    tt_V = ttnn.as_tensor(
+        paged_v_shuffled, device=device, dtype=kv_dtype, layout=ttnn.TILE_LAYOUT, memory_config=dram_memcfg
+    )
+    tt_page_table = ttnn.Tensor(page_table, ttnn.int32).to(device)
+
+    scale = d**-0.5
+    start_indices = [cur_pos] * b
+
+    tt_page_table = ttnn.Tensor(page_table, ttnn.int32).to(device)
+
+    program_config = ttnn.SDPAProgramConfig(
+        compute_with_storage_grid_size=grid_size,
+        sub_core_grids=compute_sub_core_grids,
+        q_chunk_size=q_chunk_size,
+        k_chunk_size=k_chunk_size,
+        exp_approx_mode=False,
+    )
+
+    Q = fa_rand(1, b, nh, d)
+
+    tt_Q = ttnn.as_tensor(
+        Q[:, :, :nh],
+        device=device,
+        dtype=q_dtype,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=height_sharded_memcfg if sharded_in else dram_memcfg,
+    )
+
+    start_indices_tt = ttnn.Tensor(torch.tensor(start_indices), ttnn.int32).to(device)
+
+    tt_back = ttnn.transformer.paged_scaled_dot_product_attention_decode(
+        tt_Q,
+        tt_K,
+        tt_V,
+        tt_page_table,
+        cur_pos_tensor=start_indices_tt,
+        scale=scale,
+        program_config=program_config,
+        compute_kernel_config=compute_kernel_config,
+        memory_config=height_sharded_memcfg if sharded_out else dram_memcfg,
+    )
+
+    tt_back = ttnn.to_torch(tt_back)
+    tt_back = tt_back[:, :, :nh, :]
+
+    # PyTorch reference
+    # Test when page_table does not contain blocks for full sequence length
+    padded_layer_len = cur_pos
+    if k_chunk_size > 0:
+        padded_layer_len = nearest_n(cur_pos + 1, k_chunk_size)
+
+    Q_slice = Q[:, :, :nh, :].permute(1, 2, 0, 3)  # b, nh, 1, d
+    K_slice = K[:, :, :padded_layer_len, :]  # b, nkv, S, d
+    K_slice = torch.cat(
+        [K_slice[:, i : i + 1, :, :].repeat(1, nh // nkv, 1, 1) for i in range(nkv)], dim=1
+    )  # b, nh, d, S
+    V_slice = V[:, :, :padded_layer_len, :]  # b, nkv, S, d
+    V_slice = torch.cat(
+        [V_slice[:, i : i + 1, :, :].repeat(1, nh // nkv, 1, 1) for i in range(nkv)], dim=1
+    )  # b, nh, d, S
+
+    attn_mask = torch.zeros((b, padded_num_heads, 1, padded_layer_len))
+    for i in range(b):
+        start_idx = start_indices[i]
+        attn_mask[i, :, :, start_idx + 1 :] = torch.finfo(torch.float32).min
+
+    attn_mask_slice = attn_mask[:, :nh, :, :]  # b, nh, 1, S
+
+    expect = torch.nn.functional.scaled_dot_product_attention(
+        Q_slice, K_slice, V_slice, attn_mask_slice, scale=scale, is_causal=False
+    )  # b, nh, 1, d
+    expect = expect.squeeze(2).unsqueeze(0)
+
+    out_pass, out_pcc = comp_pcc(expect, tt_back, min_pcc)
+
+    logger.debug(f"python vs pytorch: {out_pcc}")
+
+    assert out_pass
+
+
 @skip_for_grayskull("Unsupported in GS since L1 runs OOM with most configs")
 @pytest.mark.parametrize(
     "kv_dtype, q_dtype",
@@ -856,6 +1039,8 @@ def run_test_sdpa_decode_paged_attention(
         # [32, 32, 8, 4096, 128, (8, 8), True],  # llama 3.1 8b
         [8, 16, 4, 4096, 128, (8, 2), True],  # llama 3.1 8b N300
         [1, 8, 1, 128 * 1024, 128, (8, 4), True],  # llama 3.1 8b N300
+        [1, 32, 8, 32 * 1024, 128, (8, 8), True],  # llama3.1 8b (performance-batch-1 settings)
+        # [32, 32, 8, 1024, 128, (8, 8), True],  # llama 3.1 8b (performance-batch-32 settings) -- Issue 21534: Breaking blackhole post commit tests
         # [1, 8, 1, 32768, 128, (8, 1), True],  # Llama2-70B
         # [16, 8, 1, 32768, 128, (8, 6), False, False],  # Llama2-70B
         # [8, 8, 1, 32768, 128, (8, 6), True, False],  # Llama2-70B
@@ -863,7 +1048,7 @@ def run_test_sdpa_decode_paged_attention(
         # [32, 8, 1, 32768, 128, (8, 8), True, True],  # Mixtral8x7b
     ),
 )
-@pytest.mark.parametrize("block_size", (64, 128), ids=["paged_64", "paged_128"])
+@pytest.mark.parametrize("block_size", (32, 64, 128), ids=["paged_32", "paged_64", "paged_128"])
 def test_sdpa_decode_paged_attention(
     device, b, nh, nkv, s, d, kv_dtype, grid_size, q_dtype, cur_pos_tensor, block_size, use_program_cache
 ):
@@ -890,7 +1075,6 @@ def test_sdpa_decode_paged_attention(
     assert device.num_program_cache_entries() == 4
 
 
-@skip_for_blackhole("Unsupported on BH, see #12349")
 @skip_for_grayskull("Unsupported in GS since L1 runs OOM with most configs")
 @pytest.mark.parametrize(
     "dtype, q_dtype",
@@ -923,7 +1107,6 @@ def test_sdpa_decode_sharded(device, b, nh, nkv, s, d, dtype, grid_size, q_dtype
     )
 
 
-@skip_for_blackhole("Unsupported on BH, see #12349")
 @skip_for_grayskull("Unsupported in GS since L1 runs OOM with most configs")
 @pytest.mark.parametrize("device_params", [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL}], indirect=True)
 @pytest.mark.parametrize(
@@ -992,7 +1175,6 @@ def test_sdpa_decode_sharded_on_subcoregrids(
     assert device.num_program_cache_entries() == 1
 
 
-@skip_for_blackhole("Unsupported on BH, see #12349")
 @skip_for_grayskull("Unsupported in GS since L1 runs OOM with most configs")
 @pytest.mark.skip("Skipping Perf Test in CI")
 def test_sdpa_decode_perf(device, use_program_cache):
@@ -1047,7 +1229,6 @@ def test_sdpa_decode_perf(device, use_program_cache):
         )
 
 
-@skip_for_blackhole("Unsupported on BH, see #12349")
 @skip_for_grayskull("Unsupported in GS since L1 runs OOM with most configs")
 @pytest.mark.parametrize(
     "dtype",
@@ -1266,7 +1447,6 @@ def run_test_sdpa_decode_ndpcc(device, b, nh, nkv, s, d, dtype, grid_size, q_dty
     logger.info(f"PCC failed Start Pos: {failed_start_pos}")
 
 
-@skip_for_blackhole("Unsupported on BH, see #12349")
 @pytest.mark.timeout(600)
 @pytest.mark.skip("Skipping due to causing 45 minutes timeout on tt eager unit tests")
 @skip_for_grayskull("Unsupported in GS since L1 runs OOM with most configs")

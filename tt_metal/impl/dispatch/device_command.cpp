@@ -4,6 +4,15 @@
 
 #include "device_command.hpp"
 
+#include <cstring>
+
+#include <tt_stl/aligned_allocator.hpp>
+#include "assert.hpp"
+#include "dispatch/kernels/cq_commands.hpp"
+#include "dispatch/memcpy.hpp"
+#include "dispatch_settings.hpp"
+#include "tt_align.hpp"
+
 namespace tt::tt_metal {
 
 template <bool hugepage_write>
@@ -88,19 +97,13 @@ uint32_t DeviceCommand<hugepage_write>::write_offset_bytes() const {
 }
 
 template <bool hugepage_write>
-vector_memcpy_aligned<uint32_t> DeviceCommand<hugepage_write>::cmd_vector() const {
+vector_aligned<uint32_t> DeviceCommand<hugepage_write>::cmd_vector() const {
     return this->cmd_region_vector;
 }
 
 template <bool hugepage_write>
 void DeviceCommand<hugepage_write>::add_dispatch_wait(
-    uint8_t barrier,
-    uint32_t address,
-    uint32_t count,
-    uint8_t clear_count,
-    bool notify_prefetch,
-    bool do_wait,
-    uint8_t dispatcher_type) {
+    uint32_t flags, uint32_t address, uint32_t stream, uint32_t count, uint8_t dispatcher_type) {
     auto initialize_wait_cmds = [&](CQPrefetchCmd* relay_wait, CQDispatchCmd* wait_cmd) {
         relay_wait->base.cmd_id = CQ_PREFETCH_CMD_RELAY_INLINE;
         relay_wait->relay_inline.dispatcher_type = dispatcher_type;
@@ -109,12 +112,10 @@ void DeviceCommand<hugepage_write>::add_dispatch_wait(
             tt::align(sizeof(CQDispatchCmd) + sizeof(CQPrefetchCmd), this->pcie_alignment);
 
         wait_cmd->base.cmd_id = CQ_DISPATCH_CMD_WAIT;
-        wait_cmd->wait.barrier = barrier;
-        wait_cmd->wait.notify_prefetch = notify_prefetch;
-        wait_cmd->wait.wait = do_wait;
+        wait_cmd->wait.flags = flags;
         wait_cmd->wait.addr = address;
         wait_cmd->wait.count = count;
-        wait_cmd->wait.clear_count = clear_count;
+        wait_cmd->wait.stream = stream;
     };
     CQPrefetchCmd* relay_wait_dst = this->reserve_space<CQPrefetchCmd*>(sizeof(CQPrefetchCmd));
     CQDispatchCmd* wait_cmd_dst = this->reserve_space<CQDispatchCmd*>(sizeof(CQDispatchCmd));
@@ -133,8 +134,8 @@ void DeviceCommand<hugepage_write>::add_dispatch_wait(
 
 template <bool hugepage_write>
 void DeviceCommand<hugepage_write>::add_dispatch_wait_with_prefetch_stall(
-    uint8_t barrier, uint32_t address, uint32_t count, uint8_t clear_count, bool do_wait) {
-    this->add_dispatch_wait(barrier, address, count, clear_count, true, do_wait);
+    uint32_t flags, uint32_t address, uint32_t stream, uint32_t count) {
+    this->add_dispatch_wait(flags | CQ_DISPATCH_CMD_WAIT_FLAG_NOTIFY_PREFETCH, address, stream, count);
     uint32_t increment_sizeB = tt::align(sizeof(CQPrefetchCmd), this->pcie_alignment);
     auto initialize_stall_cmd = [&](CQPrefetchCmd* stall_cmd) {
         *stall_cmd = {};
@@ -205,7 +206,7 @@ void DeviceCommand<hugepage_write>::add_prefetch_relay_paged(
 template <bool hugepage_write>
 void DeviceCommand<hugepage_write>::add_prefetch_relay_paged_packed(
     uint32_t length,
-    std::vector<CQPrefetchRelayPagedPackedSubCmd>& sub_cmds,
+    const std::vector<CQPrefetchRelayPagedPackedSubCmd>& sub_cmds,
     uint16_t num_sub_cmds,
     uint32_t offset_idx) {
     static_assert(sizeof(CQPrefetchRelayPagedPackedSubCmd) % sizeof(uint32_t) == 0);
@@ -290,7 +291,7 @@ template <bool hugepage_write>
 void DeviceCommand<hugepage_write>::add_dispatch_go_signal_mcast(
     uint32_t wait_count,
     uint32_t go_signal,
-    uint32_t wait_addr,
+    uint32_t wait_stream,
     uint8_t num_mcast_txns,
     uint8_t num_unicast_txns,
     uint8_t noc_data_start_index,
@@ -318,7 +319,7 @@ void DeviceCommand<hugepage_write>::add_dispatch_go_signal_mcast(
         mcast_cmd->mcast.num_mcast_txns = num_mcast_txns;
         mcast_cmd->mcast.num_unicast_txns = num_unicast_txns;
         mcast_cmd->mcast.noc_data_start_index = noc_data_start_index;
-        mcast_cmd->mcast.wait_addr = wait_addr;
+        mcast_cmd->mcast.wait_stream = wait_stream;
     };
     CQDispatchCmd* mcast_cmd_dst = this->reserve_space<CQDispatchCmd*>(sizeof(CQDispatchCmd));
 
@@ -464,7 +465,7 @@ void DeviceCommand<hugepage_write>::add_dispatch_set_num_worker_sems(
 
 template <bool hugepage_write>
 void DeviceCommand<hugepage_write>::add_dispatch_set_go_signal_noc_data(
-    const vector_memcpy_aligned<uint32_t>& noc_mcast_unicast_data, DispatcherSelect dispatcher_type) {
+    const vector_aligned<uint32_t>& noc_mcast_unicast_data, DispatcherSelect dispatcher_type) {
     TT_ASSERT(
         noc_mcast_unicast_data.size() <= DispatchSettings::DISPATCH_GO_SIGNAL_NOC_DATA_ENTRIES,
         "Number of words {} exceeds maximum {}",
@@ -605,6 +606,7 @@ void DeviceCommand<hugepage_write>::add_data(
 template <bool hugepage_write>
 template <typename PackedSubCmd>
 void DeviceCommand<hugepage_write>::add_dispatch_write_packed(
+    uint8_t type,
     uint16_t num_sub_cmds,
     uint32_t common_addr,
     uint16_t packed_data_sizeB,
@@ -631,13 +633,15 @@ void DeviceCommand<hugepage_write>::add_dispatch_write_packed(
         max_num_packed_sub_cmds,
         num_sub_cmds);
 
+    TT_ASSERT((type & ~CQ_DISPATCH_CMD_PACKED_WRITE_FLAG_TYPE_MASK) == 0, "Invalid type {}", type);
+
     constexpr bool flush_prefetch = true;
     this->add_prefetch_relay_inline(flush_prefetch, payload_sizeB);
 
     auto initialize_write_packed_cmd = [&](CQDispatchCmd* write_packed_cmd) {
         write_packed_cmd->base.cmd_id = CQ_DISPATCH_CMD_WRITE_PACKED;
         write_packed_cmd->write_packed.flags =
-            (multicast ? CQ_DISPATCH_CMD_PACKED_WRITE_FLAG_MCAST : CQ_DISPATCH_CMD_PACKED_WRITE_FLAG_NONE) |
+            type | (multicast ? CQ_DISPATCH_CMD_PACKED_WRITE_FLAG_MCAST : CQ_DISPATCH_CMD_PACKED_WRITE_FLAG_NONE) |
             (no_stride ? CQ_DISPATCH_CMD_PACKED_WRITE_FLAG_NO_STRIDE : CQ_DISPATCH_CMD_PACKED_WRITE_FLAG_NONE);
         write_packed_cmd->write_packed.count = num_sub_cmds;
         write_packed_cmd->write_packed.write_offset_index = write_offset_index;
@@ -679,6 +683,7 @@ void DeviceCommand<hugepage_write>::add_dispatch_write_packed(
 template <bool hugepage_write>
 template <typename PackedSubCmd>
 void DeviceCommand<hugepage_write>::add_dispatch_write_packed(
+    uint8_t type,
     uint16_t num_sub_cmds,
     uint32_t common_addr,
     uint16_t packed_data_sizeB,
@@ -704,6 +709,7 @@ void DeviceCommand<hugepage_write>::add_dispatch_write_packed(
         "Max number of packed sub commands are {} but requesting {}",
         max_num_packed_sub_cmds,
         num_sub_cmds);
+    TT_ASSERT((type & ~CQ_DISPATCH_CMD_PACKED_WRITE_FLAG_TYPE_MASK) == 0, "Invalid type {}", type);
 
     constexpr bool flush_prefetch = true;
     this->add_prefetch_relay_inline(flush_prefetch, payload_sizeB);
@@ -711,7 +717,7 @@ void DeviceCommand<hugepage_write>::add_dispatch_write_packed(
     auto initialize_write_packed_cmd = [&](CQDispatchCmd* write_packed_cmd) {
         write_packed_cmd->base.cmd_id = CQ_DISPATCH_CMD_WRITE_PACKED;
         write_packed_cmd->write_packed.flags =
-            (multicast ? CQ_DISPATCH_CMD_PACKED_WRITE_FLAG_MCAST : CQ_DISPATCH_CMD_PACKED_WRITE_FLAG_NONE) |
+            type | (multicast ? CQ_DISPATCH_CMD_PACKED_WRITE_FLAG_MCAST : CQ_DISPATCH_CMD_PACKED_WRITE_FLAG_NONE) |
             (no_stride ? CQ_DISPATCH_CMD_PACKED_WRITE_FLAG_NO_STRIDE : CQ_DISPATCH_CMD_PACKED_WRITE_FLAG_NONE);
         write_packed_cmd->write_packed.count = num_sub_cmds;
         write_packed_cmd->write_packed.write_offset_index = write_offset_index;
@@ -755,6 +761,7 @@ void DeviceCommand<hugepage_write>::add_dispatch_write_packed(
 // Add write packed large, with no data.
 template <bool hugepage_write>
 void DeviceCommand<hugepage_write>::add_dispatch_write_packed_large(
+    uint8_t type,
     uint16_t alignment,
     uint16_t num_sub_cmds,
     const std::vector<CQDispatchWritePackedLargeSubCmd>& sub_cmds,
@@ -764,13 +771,14 @@ void DeviceCommand<hugepage_write>::add_dispatch_write_packed_large(
     uint32_t sub_cmds_sizeB = num_sub_cmds * sizeof(CQDispatchWritePackedLargeSubCmd);
     uint32_t payload_size = tt::align(sizeof(CQDispatchCmd) + sub_cmds_sizeB, this->l1_alignment);
     this->add_dispatch_write_packed_large_internal(
-        flush_prefetch, alignment, payload_size, num_sub_cmds, sub_cmds, offset_idx, write_offset_index);
+        type, flush_prefetch, alignment, payload_size, num_sub_cmds, sub_cmds, offset_idx, write_offset_index);
     this->cmd_write_offsetB = tt::align(this->cmd_write_offsetB, this->pcie_alignment);
 }
 
 // Add write packed large, with data inlined.
 template <bool hugepage_write>
 void DeviceCommand<hugepage_write>::add_dispatch_write_packed_large(
+    uint8_t type,
     uint16_t alignment,
     uint16_t num_sub_cmds,
     const std::vector<CQDispatchWritePackedLargeSubCmd>& sub_cmds,
@@ -789,7 +797,7 @@ void DeviceCommand<hugepage_write>::add_dispatch_write_packed_large(
         tt::align(sizeof(CQDispatchCmd) + sub_cmds_sizeB, this->l1_alignment) + data_collection_size,
         this->l1_alignment);
     this->add_dispatch_write_packed_large_internal(
-        flush_prefetch, alignment, payload_size, num_sub_cmds, sub_cmds, offset_idx, write_offset_index);
+        type, flush_prefetch, alignment, payload_size, num_sub_cmds, sub_cmds, offset_idx, write_offset_index);
 
     if (data_collection_buffer_ptr != nullptr) {
         data_collection_buffer_ptr->resize(data_collection.size());
@@ -837,6 +845,7 @@ void DeviceCommand<hugepage_write>::add_prefetch_relay_inline(
 // Write packed large cmd and subcmds, but not data.
 template <bool hugepage_write>
 void DeviceCommand<hugepage_write>::add_dispatch_write_packed_large_internal(
+    uint8_t type,
     bool flush_prefetch,
     uint16_t alignment,
     uint32_t payload_sizeB,
@@ -854,6 +863,7 @@ void DeviceCommand<hugepage_write>::add_dispatch_write_packed_large_internal(
 
     auto initialize_write_packed_large_cmd = [&](CQDispatchCmd* write_packed_large_cmd) {
         write_packed_large_cmd->base.cmd_id = CQ_DISPATCH_CMD_WRITE_PACKED_LARGE;
+        write_packed_large_cmd->write_packed_large.type = type;
         write_packed_large_cmd->write_packed_large.count = num_sub_cmds;
         write_packed_large_cmd->write_packed_large.alignment = alignment;
         write_packed_large_cmd->write_packed_large.write_offset_index = write_offset_index;
@@ -909,15 +919,15 @@ template class DeviceCommand<false>;
 
 template DeviceCommand<false>::DeviceCommand(uint32_t);
 
-template void DeviceCommand<true>::add_dispatch_write_packed<CQDispatchWritePackedUnicastSubCmd>(uint16_t, uint32_t, uint16_t, uint32_t, const std::vector<CQDispatchWritePackedUnicastSubCmd>&, const std::vector<std::pair<const void*, uint32_t>>&, uint32_t, const uint32_t, const bool, uint32_t);
-template void DeviceCommand<true>::add_dispatch_write_packed<CQDispatchWritePackedMulticastSubCmd>(uint16_t, uint32_t, uint16_t, uint32_t, const std::vector<CQDispatchWritePackedMulticastSubCmd>&, const std::vector<std::pair<const void*, uint32_t>>&, uint32_t, const uint32_t, const bool, uint32_t);
-template void DeviceCommand<false>::add_dispatch_write_packed<CQDispatchWritePackedUnicastSubCmd>(uint16_t, uint32_t, uint16_t, uint32_t, const std::vector<CQDispatchWritePackedUnicastSubCmd>&, const std::vector<std::pair<const void*, uint32_t>>&, uint32_t, const uint32_t, const bool, uint32_t);
-template void DeviceCommand<false>::add_dispatch_write_packed<CQDispatchWritePackedMulticastSubCmd>(uint16_t, uint32_t, uint16_t, uint32_t, const std::vector<CQDispatchWritePackedMulticastSubCmd>&, const std::vector<std::pair<const void*, uint32_t>>&, uint32_t, const uint32_t, const bool, uint32_t);
+template void DeviceCommand<true>::add_dispatch_write_packed<CQDispatchWritePackedUnicastSubCmd>(uint8_t, uint16_t, uint32_t, uint16_t, uint32_t, const std::vector<CQDispatchWritePackedUnicastSubCmd>&, const std::vector<std::pair<const void*, uint32_t>>&, uint32_t, const uint32_t, const bool, uint32_t);
+template void DeviceCommand<true>::add_dispatch_write_packed<CQDispatchWritePackedMulticastSubCmd>(uint8_t, uint16_t, uint32_t, uint16_t, uint32_t, const std::vector<CQDispatchWritePackedMulticastSubCmd>&, const std::vector<std::pair<const void*, uint32_t>>&, uint32_t, const uint32_t, const bool, uint32_t);
+template void DeviceCommand<false>::add_dispatch_write_packed<CQDispatchWritePackedUnicastSubCmd>(uint8_t, uint16_t, uint32_t, uint16_t, uint32_t, const std::vector<CQDispatchWritePackedUnicastSubCmd>&, const std::vector<std::pair<const void*, uint32_t>>&, uint32_t, const uint32_t, const bool, uint32_t);
+template void DeviceCommand<false>::add_dispatch_write_packed<CQDispatchWritePackedMulticastSubCmd>(uint8_t, uint16_t, uint32_t, uint16_t, uint32_t, const std::vector<CQDispatchWritePackedMulticastSubCmd>&, const std::vector<std::pair<const void*, uint32_t>>&, uint32_t, const uint32_t, const bool, uint32_t);
 
-template void DeviceCommand<true>::add_dispatch_write_packed<CQDispatchWritePackedUnicastSubCmd>(uint16_t, uint32_t, uint16_t, uint32_t, const std::vector<CQDispatchWritePackedUnicastSubCmd>&, const std::vector<std::vector<std::tuple<const void*, uint32_t, uint32_t>>>&, uint32_t, const uint32_t, const bool, uint32_t);
-template void DeviceCommand<true>::add_dispatch_write_packed<CQDispatchWritePackedMulticastSubCmd>(uint16_t, uint32_t, uint16_t, uint32_t, const std::vector<CQDispatchWritePackedMulticastSubCmd>&, const std::vector<std::vector<std::tuple<const void*, uint32_t, uint32_t>>>&, uint32_t, const uint32_t, const bool, uint32_t);
-template void DeviceCommand<false>::add_dispatch_write_packed<CQDispatchWritePackedUnicastSubCmd>(uint16_t, uint32_t, uint16_t, uint32_t, const std::vector<CQDispatchWritePackedUnicastSubCmd>&, const std::vector<std::vector<std::tuple<const void*, uint32_t, uint32_t>>>&, uint32_t, const uint32_t, const bool, uint32_t);
-template void DeviceCommand<false>::add_dispatch_write_packed<CQDispatchWritePackedMulticastSubCmd>(uint16_t, uint32_t, uint16_t, uint32_t, const std::vector<CQDispatchWritePackedMulticastSubCmd>&, const std::vector<std::vector<std::tuple<const void*, uint32_t, uint32_t>>>&, uint32_t, const uint32_t, const bool, uint32_t);
+template void DeviceCommand<true>::add_dispatch_write_packed<CQDispatchWritePackedUnicastSubCmd>(uint8_t, uint16_t, uint32_t, uint16_t, uint32_t, const std::vector<CQDispatchWritePackedUnicastSubCmd>&, const std::vector<std::vector<std::tuple<const void*, uint32_t, uint32_t>>>&, uint32_t, const uint32_t, const bool, uint32_t);
+template void DeviceCommand<true>::add_dispatch_write_packed<CQDispatchWritePackedMulticastSubCmd>(uint8_t, uint16_t, uint32_t, uint16_t, uint32_t, const std::vector<CQDispatchWritePackedMulticastSubCmd>&, const std::vector<std::vector<std::tuple<const void*, uint32_t, uint32_t>>>&, uint32_t, const uint32_t, const bool, uint32_t);
+template void DeviceCommand<false>::add_dispatch_write_packed<CQDispatchWritePackedUnicastSubCmd>(uint8_t, uint16_t, uint32_t, uint16_t, uint32_t, const std::vector<CQDispatchWritePackedUnicastSubCmd>&, const std::vector<std::vector<std::tuple<const void*, uint32_t, uint32_t>>>&, uint32_t, const uint32_t, const bool, uint32_t);
+template void DeviceCommand<false>::add_dispatch_write_packed<CQDispatchWritePackedMulticastSubCmd>(uint8_t, uint16_t, uint32_t, uint16_t, uint32_t, const std::vector<CQDispatchWritePackedMulticastSubCmd>&, const std::vector<std::vector<std::tuple<const void*, uint32_t, uint32_t>>>&, uint32_t, const uint32_t, const bool, uint32_t);
 
 template void DeviceCommand<true>::add_dispatch_write_host<false>(bool, uint32_t, bool, const void*);
 template void DeviceCommand<true>::add_dispatch_write_host<true>(bool, uint32_t, bool, const void*);

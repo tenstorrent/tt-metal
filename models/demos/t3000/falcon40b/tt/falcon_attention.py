@@ -4,14 +4,12 @@
 
 import torch
 import math
-from torch import nn
 from typing import Optional, Tuple
 
 import ttnn
 from ttnn import ShardTensorToMesh, ReplicateTensorToMesh
 
 from models.utility_functions import nearest_32
-from models.demos.t3000.falcon40b.tt.model_utils import convert_to_layout
 
 from models.demos.t3000.falcon40b.tt.model_utils import falcon_prefill_matmul, determine_tensor_deallocation
 
@@ -515,9 +513,7 @@ class TtFalconAttention:
         attn_weights = ttnn.experimental.group_attn_matmul(
             query_layer,
             key_layer_transposed,
-            compute_with_storage_grid_size=self.mesh_device.get_devices()[
-                0
-            ].compute_with_storage_grid_size(),  # Change this
+            compute_with_storage_grid_size=self.mesh_device.compute_with_storage_grid_size(),  # Change this
             memory_config=self.model_config["PRE_SOFTMAX_MM_OUTPUT_MEMCFG"],
             dtype=self.model_config["PRE_SOFTMAX_MM_OUTPUT_DTYPE"],  # Must be BFLOAT16
         )
@@ -572,7 +568,7 @@ class TtFalconAttention:
         attn_output = ttnn.experimental.group_attn_matmul(
             attn_weights,
             value_layer,
-            compute_with_storage_grid_size=self.mesh_device.get_devices()[0].compute_with_storage_grid_size(),
+            compute_with_storage_grid_size=self.mesh_device.compute_with_storage_grid_size(),
             memory_config=self.model_config["POST_SOFTMAX_MM_OUTPUT_MEMCFG"],
             dtype=self.model_config["POST_SOFTMAX_MM_OUTPUT_DTYPE"],  # Must be BFLOAT16
         )

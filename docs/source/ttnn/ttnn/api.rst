@@ -112,6 +112,7 @@ Pointwise Unary
    ttnn.deg2rad
    ttnn.digamma
    ttnn.experimental.dropout
+   ttnn.experimental.gelu_bw
    ttnn.elu
    ttnn.eqz
    ttnn.erf
@@ -398,6 +399,7 @@ Reduction
    :nosignatures:
    :template: function.rst
 
+   ttnn.experimental.cumprod
    ttnn.max
    ttnn.mean
    ttnn.min
@@ -407,6 +409,8 @@ Reduction
    ttnn.argmax
    ttnn.prod
    ttnn.topk
+   ttnn.experimental.sort
+   ttnn.experimental.cumsum
 
 Data Movement
 =============
@@ -494,6 +498,28 @@ Embedding
    :template: function.rst
 
    ttnn.embedding
+
+Convolution
+===========
+.. autosummary::
+   :toctree: api
+   :nosignatures:
+   :template: function.rst
+
+   ttnn.conv1d
+   ttnn.conv2d
+   ttnn.experimental.conv3d
+   ttnn.conv_transpose2d
+   ttnn.prepare_conv_weights
+   ttnn.prepare_conv_bias
+
+.. autosummary::
+   :toctree: api
+   :nosignatures:
+   :template: class.rst
+
+   ttnn.Conv2dConfig
+   ttnn.Conv2dSliceConfig
 
 Pooling
 =======

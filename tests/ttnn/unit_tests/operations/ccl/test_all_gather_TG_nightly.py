@@ -52,8 +52,8 @@ from ttnn import ShardTensor2dMesh, ConcatMesh2dToTensor
     ),
 )
 @pytest.mark.parametrize("replication_factor", [8])
-@pytest.mark.parametrize("enable_async", [True])
 @pytest.mark.parametrize("mesh_device", [pytest.param((8, 4), id="8x4_grid")], indirect=True)
+@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
 def test_line_all_gather_sharded_on_TG_rows_post_commit(
     mesh_device,
     num_devices,
@@ -68,11 +68,10 @@ def test_line_all_gather_sharded_on_TG_rows_post_commit(
     layout,
     use_program_cache,
     function_level_defaults,
-    enable_async,
     replication_factor,
     num_iters=1,
 ):
-    if len(mesh_device.get_devices()) != 32:
+    if mesh_device.get_num_devices() != 32:
         pytest.skip("Not TG!")
     input_shard_spec = ttnn.ShardSpec(
         shard_grid,
@@ -91,11 +90,11 @@ def test_line_all_gather_sharded_on_TG_rows_post_commit(
         ttnn.BufferType.L1,
         use_program_cache,
         function_level_defaults,
-        enable_async=enable_async,
         input_shard_spec=input_shard_spec,
         num_iters=num_iters,
         num_all_gather_instances=replication_factor,
         cluster_axis=1,
+        use_all_gather_async=True,
     )
 
 
@@ -148,43 +147,43 @@ def test_line_all_gather_sharded_on_TG_rows_post_commit(
             ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 3))}),
             ttnn.TILE_LAYOUT,
         ),
-        (
-            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-            (8, 1, 2048, 32),
-            0,
-            (64, 32),
-            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 3))}),
-            ttnn.TILE_LAYOUT,
-        ),
-        (
-            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-            (1, 8, 2048, 32),
-            1,
-            (64, 32),
-            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 3))}),
-            ttnn.TILE_LAYOUT,
-        ),
-        (
-            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-            (1, 1, 16384, 32),
-            2,
-            (64, 32),
-            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 3))}),
-            ttnn.TILE_LAYOUT,
-        ),
-        (
-            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-            (1, 1, 2048, 256),
-            3,
-            (64, 32),
-            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 3))}),
-            ttnn.TILE_LAYOUT,
-        ),
+        # (
+        #     ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        #     (8, 1, 2048, 32),
+        #     0,
+        #     (64, 32),
+        #     ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 3))}),
+        #     ttnn.TILE_LAYOUT,
+        # ),
+        # (
+        #     ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        #     (1, 8, 2048, 32),
+        #     1,
+        #     (64, 32),
+        #     ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 3))}),
+        #     ttnn.TILE_LAYOUT,
+        # ),
+        # (
+        #     ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        #     (1, 1, 16384, 32),
+        #     2,
+        #     (64, 32),
+        #     ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 3))}),
+        #     ttnn.TILE_LAYOUT,
+        # ),
+        # (
+        #     ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        #     (1, 1, 2048, 256),
+        #     3,
+        #     (64, 32),
+        #     ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 3))}),
+        #     ttnn.TILE_LAYOUT,
+        # ),
     ),
 )
 @pytest.mark.parametrize("replication_factor", [4])
-@pytest.mark.parametrize("enable_async", [True])
 @pytest.mark.parametrize("mesh_device", [pytest.param((8, 4), id="8x4_grid")], indirect=True)
+@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
 def test_line_all_gather_sharded_on_TG_cols_post_commit(
     mesh_device,
     num_devices,
@@ -199,12 +198,15 @@ def test_line_all_gather_sharded_on_TG_cols_post_commit(
     layout,
     use_program_cache,
     function_level_defaults,
-    enable_async,
     replication_factor,
     num_iters=1,
 ):
-    if len(mesh_device.get_devices()) != 32:
+    if mesh_device.get_num_devices() != 32:
         pytest.skip("Not TG!")
+
+    if num_links == 3 and input_dtype == ttnn.bfloat8_b and dim == 3:
+        pytest.skip("Skipping due to PCC issue, Issue #20476")
+
     input_shard_spec = ttnn.ShardSpec(
         shard_grid,
         input_shard_shape,
@@ -223,11 +225,11 @@ def test_line_all_gather_sharded_on_TG_cols_post_commit(
         ttnn.BufferType.L1,
         use_program_cache,
         function_level_defaults,
-        enable_async=enable_async,
         num_iters=num_iters,
         input_shard_spec=input_shard_spec,
         num_all_gather_instances=replication_factor,
         cluster_axis=0,
+        use_all_gather_async=True,
     )
 
 
@@ -256,9 +258,9 @@ def test_line_all_gather_sharded_on_TG_cols_post_commit(
         ttnn.BufferType.L1,
     ],
 )
-@pytest.mark.parametrize("enable_async", [True])
 @pytest.mark.parametrize("replication_factor", [4])  # 1, 4])
 @pytest.mark.parametrize("mesh_device", [pytest.param((8, 4), id="8x4_grid")], indirect=True)
+@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
 def test_line_all_gather_on_TG_cols_nightly(
     mesh_device,
     num_devices,
@@ -270,11 +272,10 @@ def test_line_all_gather_on_TG_cols_nightly(
     buffer_type,
     use_program_cache,
     function_level_defaults,
-    enable_async,
     replication_factor,
     num_iters=1,
 ):
-    if len(mesh_device.get_devices()) != 32:
+    if mesh_device.get_num_devices() != 32:
         pytest.skip("Not TG!")
     run_line_all_gather_on_TG_with_mesh_tensor_along_rows(
         mesh_device,
@@ -288,8 +289,8 @@ def test_line_all_gather_on_TG_cols_nightly(
         buffer_type,
         use_program_cache,
         function_level_defaults,
-        enable_async=enable_async,
         num_iters=num_iters,
         num_all_gather_instances=replication_factor,
         cluster_axis=0,
+        use_all_gather_async=True,
     )

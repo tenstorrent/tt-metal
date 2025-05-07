@@ -5,7 +5,7 @@
 import pytest
 import torch
 import ttnn
-from models.utility_functions import comp_allclose_and_pcc, skip_for_grayskull
+from models.utility_functions import comp_allclose_and_pcc
 from loguru import logger
 from tests.ttnn.unit_tests.operations.test_utils import (
     get_compute_kernel_options,
@@ -392,7 +392,6 @@ def test_moreh_linear_backward_enable_cache(shapes, device, use_program_cache):
     assert num_program_cache_entries_list[0] == num_program_cache_entries_list[1]
 
 
-@skip_for_grayskull("GS does not support fp32")
 @pytest.mark.parametrize(
     "shapes",
     (

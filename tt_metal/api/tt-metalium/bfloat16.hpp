@@ -4,13 +4,16 @@
 
 #pragma once
 
-#include <cstring>
-#include <vector>
-#include <optional>
-#include <functional>
-
 #include <tt-metalium/tile.hpp>
-#include <tt-metalium/span.hpp>
+#include <tt_stl/span.hpp>
+#include <cstdint>
+#include <cstring>
+#include <functional>
+#include <optional>
+#include <ostream>
+#include <string>
+#include <utility>
+#include <vector>
 
 class bfloat16 {
 private:

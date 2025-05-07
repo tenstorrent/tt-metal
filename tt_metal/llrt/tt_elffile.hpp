@@ -9,6 +9,7 @@
 #include <cstdint>
 #include <span>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -67,7 +68,7 @@ public:
 
     // Read an elf file, populate segments vector.
     // Path must remain live throughout processing.
-    void ReadImage(std::string const& path);
+    void ReadImage(std::string_view path);
 
     // Write the (now-processed) elf file.
     void WriteImage(std::string const& path);
@@ -82,6 +83,7 @@ public:
 
 private:
     class Impl;
+
     // We can't use unique_ptr here, because the above move semantics
     // would require Impl be complete at this point, which is what
     // we're trying to avoid.

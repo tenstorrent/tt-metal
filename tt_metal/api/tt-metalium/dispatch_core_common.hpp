@@ -4,10 +4,10 @@
 
 #pragma once
 
-#include "core_descriptor.hpp"
-#include "core_coord.hpp"
-#include "data_types.hpp"
-#include "reflection.hpp"
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/data_types.hpp>
+#include <tt_stl/reflection.hpp>
 
 #include <umd/device/tt_core_coordinates.h>  // CoreType
 
@@ -42,14 +42,14 @@ enum class DispatchCoreAxis { ROW, COL, COUNT };
 class DispatchCoreConfig {
 private:
     DispatchCoreType type_;
-    DispatchCoreAxis axis_;
+    std::optional<DispatchCoreAxis> axis_;
 
     static DispatchCoreAxis get_default_axis();
 
 public:
-    DispatchCoreConfig() : type_(DispatchCoreType::WORKER), axis_(get_default_axis()) {}
+    DispatchCoreConfig() : type_(DispatchCoreType::WORKER) {}
 
-    DispatchCoreConfig(DispatchCoreType type) : type_(type), axis_(get_default_axis()) {}
+    DispatchCoreConfig(DispatchCoreType type) : type_(type) {}
 
     DispatchCoreConfig(DispatchCoreType type, DispatchCoreAxis axis) : type_(type), axis_(axis) {}
 
@@ -68,12 +68,16 @@ public:
 
     void set_dispatch_core_type(DispatchCoreType new_type) { type_ = new_type; }
 
-    DispatchCoreAxis get_dispatch_core_axis() const { return axis_; }
+    DispatchCoreAxis get_dispatch_core_axis() const { return axis_.value_or(get_default_axis()); }
 
     void set_dispatch_core_axis(DispatchCoreAxis new_axis) { axis_ = new_axis; }
 
     bool operator==(const DispatchCoreConfig& other) const { return (type_ == other.type_) && (axis_ == other.axis_); }
 };
+
+// Helper functions to get the dispatch core config/type
+DispatchCoreConfig get_dispatch_core_config();
+CoreType get_dispatch_core_type();
 
 }  // namespace tt::tt_metal
 

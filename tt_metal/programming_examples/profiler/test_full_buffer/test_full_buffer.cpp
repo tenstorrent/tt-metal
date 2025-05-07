@@ -2,6 +2,11 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <cstdint>
+#include <map>
+#include <string>
+#include <vector>
+
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/device.hpp>
@@ -19,7 +24,7 @@ void RunFillUpAllBuffers(tt_metal::IDevice* device, int loop_count, bool fast_di
     tt_metal::Program program = tt_metal::CreateProgram();
 
     constexpr int loop_size = 200;
-    std::map<string, string> kernel_defines = {
+    std::map<std::string, std::string> kernel_defines = {
         {"LOOP_COUNT", std::to_string(loop_count)}, {"LOOP_SIZE", std::to_string(loop_size)}};
 
     tt_metal::KernelHandle brisc_kernel = tt_metal::CreateKernel(
@@ -64,7 +69,7 @@ void RunFillUpAllBuffers(tt_metal::IDevice* device, int loop_count, bool fast_di
     }
 }
 
-int main(int argc, char** argv) {
+int main() {
     bool pass = true;
 
     try {

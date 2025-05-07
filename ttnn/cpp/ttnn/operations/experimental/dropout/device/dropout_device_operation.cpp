@@ -14,7 +14,11 @@ namespace ttnn::operations::experimental::dropout {
 
 DropoutDeviceOperation::program_factory_t DropoutDeviceOperation::select_program_factory(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    return program::DropoutProgramFactory{};
+    if (args.use_per_device_seed) {
+        return program::DropoutMeshWorkloadFactory{};
+    } else {
+        return program::DropoutProgramFactory{};
+    }
 }
 
 void DropoutDeviceOperation::validate_on_program_cache_hit(
@@ -38,12 +42,6 @@ void DropoutDeviceOperation::validate_on_program_cache_miss(
         "Dropout operation requires input and output data types to match. Input data type: {}, Output data type: {}",
         static_cast<int>(input_tensor.dtype()),
         static_cast<int>(output_datatype));
-
-    auto arch = input_tensor.device()->arch();
-    TT_FATAL(
-        arch == tt::ARCH::WORMHOLE_B0,
-        "Dropout operation is only supported on Wormhole. Device arch: {}",
-        magic_enum::enum_name(arch));
 
     TT_FATAL(
         input_tensor.storage_type() == StorageType::DEVICE,
@@ -138,6 +136,7 @@ DropoutDeviceOperation::invoke(
     float prob,
     float scale,
     uint32_t seed,
+    bool use_per_device_seed,
     DataType output_dtype,
     const MemoryConfig& output_memory_config,
     const std::optional<Tensor>& preallocated_output) {
@@ -146,6 +145,7 @@ DropoutDeviceOperation::invoke(
             .output_dtype = output_dtype,
             .output_memory_config = output_memory_config,
             .seed = seed,
+            .use_per_device_seed = use_per_device_seed,
             .prob = prob,
             .scale = scale,
         },

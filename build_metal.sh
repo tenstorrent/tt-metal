@@ -2,18 +2,19 @@
 
 set -eo pipefail
 
+FLAVOR=`grep '^ID=' /etc/os-release | awk -F= '{print $2}' | tr -d '"'`
+VERSION=`grep '^VERSION_ID=' /etc/os-release | awk -F= '{print $2}' | tr -d '"'`
+MAJOR=${VERSION%.*}
+ARCH=`uname -m`
+
 # Function to display help
 show_help() {
     echo "Usage: $0 [options]..."
     echo "  -h, --help                       Show this help message."
     echo "  -e, --export-compile-commands    Enable CMAKE_EXPORT_COMPILE_COMMANDS."
     echo "  -c, --enable-ccache              Enable ccache for the build."
-    echo "  -b, --build-type build_type      Set the build type. Default is Release. Other options are Debug, RelWithDebInfo, and CI."
-    echo "  -t, --trace                      Enable build time trace (clang only)."
-    echo "  -a, --enable-asan                Enable AddressSanitizer."
-    echo "  -m, --enable-msan                Enable MemorySanitizer."
-    echo "  -s, --enable-tsan                Enable ThreadSanitizer."
-    echo "  -u, --enable-ubsan               Enable UndefinedBehaviorSanitizer."
+    echo "  -b, --build-type build_type      Set the build type. Default is Release. Other options are Debug, RelWithDebInfo, ASan and TSan."
+    echo "  -t, --enable-time-trace          Enable build time trace (clang only)."
     echo "  -p, --enable-profiler            Enable Tracy profiler."
     echo "  --install-prefix                 Where to install build artifacts."
     echo "  --build-dir                      Build directory."
@@ -44,7 +45,7 @@ show_help() {
 
 clean() {
     echo "INFO: Removing build artifacts!"
-    rm -rf build_Release* build_Debug* build_RelWithDebInfo* build built
+    rm -rf build_Release* build_Debug* build_RelWithDebInfo* build_ASan* build_TSan* build built
     rm -rf ~/.cache/tt-metal-cache /tmp/tt-metal-cache
     if [[ ! -z $TT_METAL_CACHE ]]; then
         echo "User has TT_METAL_CACHE set, please make sure you delete it in order to delete all artifacts!"
@@ -55,10 +56,6 @@ clean() {
 export_compile_commands="OFF"
 enable_ccache="OFF"
 enable_time_trace="OFF"
-enable_asan="OFF"
-enable_msan="OFF"
-enable_tsan="OFF"
-enable_ubsan="OFF"
 build_type="Release"
 enable_profiler="OFF"
 build_dir=""
@@ -77,7 +74,14 @@ cpm_source_cache=""
 cpm_use_local_packages="OFF"
 c_compiler_path=""
 ttnn_shared_sub_libs="OFF"
-toolchain_path="cmake/x86_64-linux-clang-17-libcpp-toolchain.cmake"
+toolchain_path="cmake/x86_64-linux-clang-17-libstdcpp-toolchain.cmake"
+
+# Requested handling for 20.04 -> 22.04 migration
+if [[ "$FLAVOR" == "ubuntu" && "$VERSION" == "20.04" ]]; then
+    echo "WARNING: You are using Ubuntu 20.04 which is end of life. Default toolchain is set to libcpp, which is an unsupported configuration. This default behavior will be removed by June 2025."
+    toolchain_path="cmake/x86_64-linux-clang-17-libcpp-toolchain.cmake"
+fi
+
 configure_only="OFF"
 enable_coverage="OFF"
 with_python_bindings="ON"
@@ -91,10 +95,6 @@ build-all
 export-compile-commands
 enable-ccache
 enable-time-trace
-enable-asan
-enable-msan
-enable-tsan
-enable-ubsan
 build-type:
 enable-profiler
 install-prefix:
@@ -146,14 +146,6 @@ while true; do
             enable_ccache="ON";;
         -t|--enable-time-trace)
             enable_time_trace="ON";;
-        -a|--enable-asan)
-            enable_asan="ON";;
-        -m|--enable-msan)
-            enable_msan="ON";;
-        -s|--enable-tsan)
-            enable_tsan="ON";;
-        -u|--enable-ubsan)
-            enable_ubsan="ON";;
         --enable-coverage)
             enable_coverage="ON";;
 	--build-dir)
@@ -222,9 +214,9 @@ if [[ $# -gt 0 ]]; then
 fi
 
 # Validate the build_type
-VALID_BUILD_TYPES=("Release" "Debug" "RelWithDebInfo")
+VALID_BUILD_TYPES=("Release" "Debug" "RelWithDebInfo" "ASan" "TSan")
 if [[ ! " ${VALID_BUILD_TYPES[@]} " =~ " ${build_type} " ]]; then
-    echo "ERROR: Invalid build type '$build_type'. Allowed values are Release, Debug, RelWithDebInfo."
+    echo "ERROR: Invalid build type '$build_type'. Allowed values are Release, Debug, RelWithDebInfo, ASan, TSan."
     show_help
     exit 1
 fi
@@ -254,10 +246,6 @@ echo "INFO: Export compile commands: $export_compile_commands"
 echo "INFO: Enable ccache: $enable_ccache"
 echo "INFO: Build type: $build_type"
 echo "INFO: Enable time trace: $enable_time_trace"
-echo "INFO: Enable AddressSanitizer: $enable_asan"
-echo "INFO: Enable MemorySanitizer: $enable_msan"
-echo "INFO: Enable ThreadSanitizer: $enable_tsan"
-echo "INFO: Enable UndefinedBehaviorSanitizer: $enable_ubsan"
 echo "INFO: Enable Coverage: $enable_coverage"
 echo "INFO: Build directory: $build_dir"
 echo "INFO: Install Prefix: $cmake_install_prefix"
@@ -299,22 +287,6 @@ fi
 
 if [ "$enable_time_trace" = "ON" ]; then
     cmake_args+=("-DENABLE_BUILD_TIME_TRACE=ON")
-fi
-
-if [ "$enable_asan" = "ON" ]; then
-    cmake_args+=("-DENABLE_ASAN=ON")
-fi
-
-if [ "$enable_msan" = "ON" ]; then
-    cmake_args+=("-DENABLE_MSAN=ON")
-fi
-
-if [ "$enable_tsan" = "ON" ]; then
-    cmake_args+=("-DENABLE_TSAN=ON")
-fi
-
-if [ "$enable_ubsan" = "ON" ]; then
-    cmake_args+=("-DENABLE_UBSAN=ON")
 fi
 
 if [ "$enable_profiler" = "ON" ]; then
@@ -362,6 +334,7 @@ fi
 
 if [ "$build_static_libs" = "ON" ]; then
     cmake_args+=("-DBUILD_SHARED_LIBS=OFF")
+    cmake_args+=("-DTT_INSTALL=OFF")
 fi
 
 if [ "$unity_builds" = "ON" ]; then

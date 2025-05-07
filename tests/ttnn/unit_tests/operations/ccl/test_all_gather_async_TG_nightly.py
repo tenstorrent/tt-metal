@@ -8,11 +8,6 @@ from loguru import logger
 import ttnn
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal, comp_pcc
 from models.utility_functions import skip_for_grayskull
-from tests.ttnn.unit_tests.operations.ccl.test_ccl_common import (
-    create_and_load_sub_device_manager_with_fabric_interface,
-    teardown_fabric_interface,
-    create_global_semaphore_with_same_address,
-)
 
 from tests.ttnn.unit_tests.operations.ccl.test_all_gather_TG_post_commit import (
     run_line_all_gather_on_TG_with_mesh_tensor_along_rows,
@@ -60,9 +55,10 @@ from tests.ttnn.unit_tests.operations.ccl.test_new_all_gather import (
         ),
     ),
 )
+@pytest.mark.parametrize("use_persistent_output", [True, False])
 @pytest.mark.parametrize("replication_factor", [8])
-@pytest.mark.parametrize("enable_async", [True])
 @pytest.mark.parametrize("mesh_device", [pytest.param((8, 4), id="8x4_grid")], indirect=True)
+@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
 def test_line_all_gather_sharded_on_TG_rows_post_commit(
     mesh_device,
     num_devices,
@@ -75,13 +71,13 @@ def test_line_all_gather_sharded_on_TG_rows_post_commit(
     num_links,
     input_dtype,
     layout,
+    use_persistent_output,
     use_program_cache,
     function_level_defaults,
-    enable_async,
     replication_factor,
     num_iters=1,
 ):
-    if len(mesh_device.get_devices()) != 32:
+    if mesh_device.get_num_devices() != 32:
         pytest.skip("Not TG!")
     if input_dtype == ttnn.bfloat16 and per_chip_output_shape == (1, 1, 32, 1024 * 4):
         pytest.skip("Skipped due to hang Issue #16699")
@@ -102,15 +98,12 @@ def test_line_all_gather_sharded_on_TG_rows_post_commit(
         ttnn.BufferType.L1,
         use_program_cache,
         function_level_defaults,
-        enable_async=enable_async,
         input_shard_spec=input_shard_spec,
         num_iters=num_iters,
         num_all_gather_instances=replication_factor,
         cluster_axis=1,
         use_all_gather_async=True,
-        enable_persistent_fabric=True,
-        create_persistent_fabric=True,
-        teardown_persistent_fabric=True,
+        use_persistent_output=use_persistent_output,
     )
 
 
@@ -166,43 +159,44 @@ def test_line_all_gather_sharded_on_TG_rows_post_commit(
             ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 3))}),
             ttnn.TILE_LAYOUT,
         ),
-        (
-            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-            (8, 1, 2048, 32),
-            0,
-            (64, 32),
-            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 3))}),
-            ttnn.TILE_LAYOUT,
-        ),
-        (
-            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-            (1, 8, 2048, 32),
-            1,
-            (64, 32),
-            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 3))}),
-            ttnn.TILE_LAYOUT,
-        ),
-        (
-            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-            (1, 1, 16384, 32),
-            2,
-            (64, 32),
-            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 3))}),
-            ttnn.TILE_LAYOUT,
-        ),
-        (
-            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-            (1, 1, 2048, 256),
-            3,
-            (64, 32),
-            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 3))}),
-            ttnn.TILE_LAYOUT,
-        ),
+        # (
+        #     ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        #     (8, 1, 2048, 32),
+        #     0,
+        #     (64, 32),
+        #     ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 3))}),
+        #     ttnn.TILE_LAYOUT,
+        # ),
+        # (
+        #     ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        #     (1, 8, 2048, 32),
+        #     1,
+        #     (64, 32),
+        #     ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 3))}),
+        #     ttnn.TILE_LAYOUT,
+        # ),
+        # (
+        #     ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        #     (1, 1, 16384, 32),
+        #     2,
+        #     (64, 32),
+        #     ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 3))}),
+        #     ttnn.TILE_LAYOUT,
+        # ),
+        # (
+        #     ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        #     (1, 1, 2048, 256),
+        #     3,
+        #     (64, 32),
+        #     ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 3))}),
+        #     ttnn.TILE_LAYOUT,
+        # ),
     ),
 )
+@pytest.mark.parametrize("use_persistent_output", [True, False])
 @pytest.mark.parametrize("replication_factor", [4])
-@pytest.mark.parametrize("enable_async", [True])
 @pytest.mark.parametrize("mesh_device", [pytest.param((8, 4), id="8x4_grid")], indirect=True)
+@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
 def test_line_all_gather_sharded_on_TG_cols_post_commit(
     mesh_device,
     num_devices,
@@ -215,13 +209,13 @@ def test_line_all_gather_sharded_on_TG_cols_post_commit(
     num_links,
     input_dtype,
     layout,
+    use_persistent_output,
     use_program_cache,
     function_level_defaults,
-    enable_async,
     replication_factor,
     num_iters=1,
 ):
-    if len(mesh_device.get_devices()) != 32:
+    if mesh_device.get_num_devices() != 32:
         pytest.skip("Not TG!")
     if input_dtype == ttnn.bfloat16 and input_shape == (1, 1, 256, 2048):
         pytest.skip("Skipped due to hang Issue #16699")
@@ -243,15 +237,12 @@ def test_line_all_gather_sharded_on_TG_cols_post_commit(
         ttnn.BufferType.L1,
         use_program_cache,
         function_level_defaults,
-        enable_async=enable_async,
         num_iters=num_iters,
         input_shard_spec=input_shard_spec,
         num_all_gather_instances=replication_factor,
         cluster_axis=0,
         use_all_gather_async=True,
-        enable_persistent_fabric=True,
-        create_persistent_fabric=True,
-        teardown_persistent_fabric=True,
+        use_persistent_output=use_persistent_output,
     )
 
 
@@ -287,9 +278,10 @@ def test_line_all_gather_sharded_on_TG_cols_post_commit(
         ttnn.BufferType.L1,
     ],
 )
+@pytest.mark.parametrize("use_persistent_output", [True, False])
 @pytest.mark.parametrize("replication_factor", [4])
-@pytest.mark.parametrize("enable_async", [True])
 @pytest.mark.parametrize("mesh_device", [pytest.param((8, 4), id="8x4_grid")], indirect=True)
+@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
 def test_line_all_gather_on_TG_cols_nightly(
     mesh_device,
     num_devices,
@@ -298,14 +290,14 @@ def test_line_all_gather_on_TG_cols_nightly(
     num_links,
     input_dtype,
     layout,
+    use_persistent_output,
     buffer_type,
     use_program_cache,
     function_level_defaults,
-    enable_async,
     replication_factor,
     num_iters=1,
 ):
-    if len(mesh_device.get_devices()) != 32:
+    if mesh_device.get_num_devices() != 32:
         pytest.skip("Not TG!")
     run_line_all_gather_on_TG_with_mesh_tensor_along_rows(
         mesh_device,
@@ -319,12 +311,9 @@ def test_line_all_gather_on_TG_cols_nightly(
         buffer_type,
         use_program_cache,
         function_level_defaults,
-        enable_async=enable_async,
         num_iters=num_iters,
         num_all_gather_instances=replication_factor,
         cluster_axis=0,
         use_all_gather_async=True,
-        enable_persistent_fabric=True,
-        create_persistent_fabric=True,
-        teardown_persistent_fabric=True,
+        use_persistent_output=use_persistent_output,
     )

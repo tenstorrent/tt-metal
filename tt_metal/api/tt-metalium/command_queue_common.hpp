@@ -4,7 +4,9 @@
 
 #pragma once
 
-#include "umd/device/types/cluster_descriptor_types.h"
+#include <stdint.h>
+
+#include <umd/device/types/cluster_descriptor_types.h>
 
 namespace tt::tt_metal {
 
@@ -19,9 +21,8 @@ enum class CommandQueueDeviceAddrType : uint8_t {
     COMPLETION_Q0_LAST_EVENT = 4,
     COMPLETION_Q1_LAST_EVENT = 5,
     DISPATCH_S_SYNC_SEM = 6,
-    DISPATCH_MESSAGE = 7,
-    FABRIC_INTERFACE = 8,
-    UNRESERVED = 9
+    FABRIC_INTERFACE = 7,
+    UNRESERVED = 8
 };
 
 // likely only used in impl

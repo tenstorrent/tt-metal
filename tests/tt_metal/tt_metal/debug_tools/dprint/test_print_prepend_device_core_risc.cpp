@@ -2,15 +2,29 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <string>
-#include <vector>
-#include "core_coord.hpp"
-#include "debug_tools_fixture.hpp"
-#include "gtest/gtest.h"
-#include "debug_tools_test_utils.hpp"
-#include <tt-metalium/kernel_types.hpp>
-#include <tt-metalium/tt_metal.hpp>
+#include <fmt/base.h>
 #include <tt-metalium/host_api.hpp>
+#include <tt-metalium/kernel_types.hpp>
+#include <algorithm>
+#include <functional>
+#include <map>
+#include <set>
+#include <string>
+#include <unordered_set>
+#include <variant>
+#include <vector>
+
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/data_types.hpp>
+#include "debug_tools_fixture.hpp"
+#include "debug_tools_test_utils.hpp"
+#include <tt-metalium/device.hpp>
+#include "gtest/gtest.h"
+#include <tt-metalium/logger.hpp>
+#include <tt-metalium/program.hpp>
+#include "impl/context/metal_context.hpp"
+#include "umd/device/types/xy_pair.h"
+#include <tt-metalium/utils.hpp>
 
 ////////////////////////////////////////////////////////////////////////////////
 // A test for checking that prints are prepended with their corresponding device, core and RISC.
@@ -20,7 +34,7 @@ using namespace tt::tt_metal;
 
 namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {
-static void UpdateGoldenOutput(std::vector<string>& golden_output, const IDevice* device, const string& risc) {
+void UpdateGoldenOutput(std::vector<string>& golden_output, const IDevice* device, const string& risc) {
     // Using wildcard characters in lieu of actual values for the virtual coordinates as virtual coordinates can vary
     // by machine
     const string& device_core_risc = std::to_string(device->id()) + ":(x=*,y=*):" + risc + ": ";
@@ -34,7 +48,7 @@ static void UpdateGoldenOutput(std::vector<string>& golden_output, const IDevice
     }
 }
 
-static void RunTest(DPrintFixture* fixture, IDevice* device, const bool add_active_eth_kernel = false) {
+void RunTest(DPrintFixture* fixture, IDevice* device, const bool add_active_eth_kernel = false) {
     std::vector<string> golden_output;
 
     CoreRange cores({0, 0}, {0, 1});
@@ -86,18 +100,22 @@ static void RunTest(DPrintFixture* fixture, IDevice* device, const bool add_acti
 }  // namespace
 
 TEST_F(DPrintFixture, TensixTestPrintPrependDeviceCoreRisc) {
-    tt::llrt::RunTimeOptions::get_instance().set_feature_prepend_device_core_risc(
+    tt::tt_metal::MetalContext::instance().rtoptions().set_feature_prepend_device_core_risc(
         tt::llrt::RunTimeDebugFeatureDprint, true);
     for (IDevice* device : this->devices_) {
         this->RunTestOnDevice(
             [](DPrintFixture* fixture, IDevice* device) { CMAKE_UNIQUE_NAMESPACE::RunTest(fixture, device); }, device);
     }
-    tt::llrt::RunTimeOptions::get_instance().set_feature_prepend_device_core_risc(
+    tt::tt_metal::MetalContext::instance().rtoptions().set_feature_prepend_device_core_risc(
         tt::llrt::RunTimeDebugFeatureDprint, false);
 }
 
 TEST_F(DPrintFixture, TensixActiveEthTestPrintPrependDeviceCoreRisc) {
-    tt::llrt::RunTimeOptions::get_instance().set_feature_prepend_device_core_risc(
+    if (this->arch_ == ARCH::BLACKHOLE) {  // TODO: Re-enable when this is supported on BH
+        log_info(tt::LogTest, "DPrint on BH active eth not yet supported");
+        GTEST_SKIP();
+    }
+    tt::tt_metal::MetalContext::instance().rtoptions().set_feature_prepend_device_core_risc(
         tt::llrt::RunTimeDebugFeatureDprint, true);
     for (IDevice* device : this->devices_) {
         if (device->get_active_ethernet_cores(true).empty()) {
@@ -108,6 +126,6 @@ TEST_F(DPrintFixture, TensixActiveEthTestPrintPrependDeviceCoreRisc) {
             [](DPrintFixture* fixture, IDevice* device) { CMAKE_UNIQUE_NAMESPACE::RunTest(fixture, device, true); },
             device);
     }
-    tt::llrt::RunTimeOptions::get_instance().set_feature_prepend_device_core_risc(
+    tt::tt_metal::MetalContext::instance().rtoptions().set_feature_prepend_device_core_risc(
         tt::llrt::RunTimeDebugFeatureDprint, false);
 }

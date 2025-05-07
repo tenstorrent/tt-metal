@@ -11,4 +11,7 @@ std::tuple<autograd::TensorPtr, autograd::TensorPtr, autograd::TensorPtr> heads_
 
 autograd::TensorPtr heads_fusion(const autograd::TensorPtr& x);
 
+std::tuple<autograd::TensorPtr, autograd::TensorPtr, autograd::TensorPtr> grouped_heads_creation(
+    const autograd::TensorPtr& qs, const autograd::TensorPtr& kvs, uint32_t num_heads, uint32_t num_groups);
+
 }  // namespace ttml::ops

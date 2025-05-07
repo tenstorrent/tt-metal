@@ -13,7 +13,7 @@
 using namespace tt;
 using namespace tt::tt_metal;
 
-int main(int argc, char** argv) {
+int main() {
     // get program/device
     int device_id = 0;
     IDevice* device = CreateDevice(device_id);
@@ -91,9 +91,9 @@ int main(int argc, char** argv) {
     auto cb_src = tt::tt_metal::CreateCircularBuffer(program, cores, cb_config);
 
     // specify compile time args
-    bool src_is_dram = src_buffer->buffer_type() == BufferType::DRAM ? 1 : 0;
-    bool pad_is_dram = pad_buffer->buffer_type() == BufferType::DRAM ? 1 : 0;
-    bool dst_is_dram = dst_buffer->buffer_type() == BufferType::DRAM ? 1 : 0;
+    bool src_is_dram = src_buffer->buffer_type() == BufferType::DRAM;
+    bool pad_is_dram = pad_buffer->buffer_type() == BufferType::DRAM;
+    bool dst_is_dram = dst_buffer->buffer_type() == BufferType::DRAM;
     std::vector<uint32_t> reader_compile_time_args = {(uint32_t)src_is_dram, (uint32_t)pad_is_dram};
     std::vector<uint32_t> writer_compile_time_args = {(uint32_t)dst_is_dram};
 

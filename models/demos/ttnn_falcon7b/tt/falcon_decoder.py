@@ -31,7 +31,7 @@ class TtFalconDecoderLayer:
             max_position_embeddings=config.max_position_embeddings,
             model_config=model_config,
             parameters=parameters.self_attention,
-            core_grid=device.core_grid if isinstance(device, ttnn.Device) else device.get_devices()[0].core_grid,
+            core_grid=device.core_grid,
         )
 
         self.mlp = TtFalconMLP(model_config, parameters=parameters.mlp)
@@ -61,6 +61,7 @@ class TtFalconDecoderLayer:
             hidden_states,
             epsilon=self.layernorm_eps,
             memory_config=self.model_config["INPUT_LAYERNORM_OUTPUT_MEMCFG"],
+            compute_kernel_config=ttnn.WormholeComputeKernelConfig(math_fidelity=ttnn.MathFidelity.HiFi4),
         )
         layernorm_output = ttnn.mul(
             layernorm_output,

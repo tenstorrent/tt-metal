@@ -2,9 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from typing import List, Optional
 import torch
-import torch.nn as nn
 import itertools
 
 import ttnn
@@ -12,8 +10,6 @@ from models.utility_functions import (
     nearest_32,
 )
 from models.common.lightweightmodule import LightweightModule
-
-from ttnn import ShardTensorToMesh, ConcatMeshToTensor, ReplicateTensorToMesh
 
 
 class TtLlamaTilePositionEmbedding(LightweightModule):
@@ -41,7 +37,7 @@ class TtLlamaTilePositionEmbedding(LightweightModule):
         super().__init__()
 
         self.mesh_device = mesh_device
-        self.num_devices = len(self.mesh_device.get_devices())
+        self.num_devices = self.mesh_device.get_num_devices()
 
         self.num_tiles = num_tiles
         self.width = width
@@ -63,7 +59,7 @@ class TtLlamaTilePositionEmbedding(LightweightModule):
             gate = state_dict[f"{state_dict_prefix}gate"]
             self.gate = ttnn.as_tensor(
                 gate,
-                dtype=dtype,
+                dtype=ttnn.bfloat16,
                 layout=ttnn.TILE_LAYOUT,
                 device=self.mesh_device,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,

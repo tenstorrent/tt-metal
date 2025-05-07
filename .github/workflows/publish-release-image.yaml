@@ -22,10 +22,11 @@ jobs:
   create-docker-release-image:
     strategy:
       matrix:
-        os: [ubuntu-20.04]
+        os: [ubuntu-22.04]
     runs-on:
-      - build-docker
-      - in-service
+      - ubuntu-latest
+    outputs:
+      tag_name: ${{ steps.generate-tag-name.outputs.TAG_NAME }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -45,10 +46,11 @@ jobs:
         id: generate-tag-name
         run: |
           echo "WHEEL_FILENAME=$(ls -1 *.whl)" >> $GITHUB_ENV
-          REPO_IMAGE_NAME=ghcr.io/${{ github.repository }}/tt-metalium-${{ matrix.os }}-amd64-release
+          REPO_IMAGE_NAME=ghcr.io/${{ github.repository }}/tt-metalium-${{ matrix.os }}-release-amd64
           echo "REPO_IMAGE_NAME=$REPO_IMAGE_NAME" >> $GITHUB_ENV
           TAG_NAME=$REPO_IMAGE_NAME:${{ inputs.version }}
           echo "TAG_NAME=$TAG_NAME" >> $GITHUB_ENV
+          echo "TAG_NAME=$TAG_NAME" >> $GITHUB_OUTPUT
       - name: Build and push
         uses: docker/build-push-action@v6
         with:
@@ -64,45 +66,64 @@ jobs:
     needs: create-docker-release-image
     strategy:
       matrix:
-        os: [ubuntu-20.04]
+        os: [ubuntu-22.04]
         test_group:
           [
               {
                 runs-on: ["cloud-virtual-machine", "N150", "in-service"],
                 cmd: pytest tests/end_to_end_tests,
+                arch: wormhole_b0,
               },
               {
                 runs-on: ["cloud-virtual-machine", "N300", "in-service"],
                 cmd: pytest tests/end_to_end_tests,
+                arch: wormhole_b0,
               },
           ]
-    env:
-      LOGURU_LEVEL: INFO
     runs-on: ${{ matrix.test_group.runs-on }}
+    container:
+      image: ${{ needs.create-docker-release-image.outputs.tag_name || 'docker-image-unresolved!' }}
+      env:
+        LOGURU_LEVEL: INFO
+        ARCH_NAME: ${{ matrix.test_group.arch }}
+        GITHUB_ACTIONS: true
+        PYTHONPATH: /work
+      volumes:
+        - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
+        - /dev/hugepages-1G:/dev/hugepages-1G
+      options: "--device /dev/tenstorrent"
+    defaults:
+      run:
+        shell: bash
+        working-directory: /work # https://github.com/actions/runner/issues/878
     steps:
-      - name: Checkout
+      - name: Install Tools
+        run: |
+          apt-get update && apt-get install -y git
+      - name: ⬇️ Checkout
         uses: actions/checkout@v4
-      - name: Run smoke test on the image
-        timeout-minutes: ${{ inputs.timeout }}
-        uses: ./.github/actions/docker-run
         with:
-          docker_image: ghcr.io/${{ github.repository }}/tt-metalium-${{ matrix.os }}-amd64-release:${{ inputs.version }}
-          docker_password: ${{ secrets.GITHUB_TOKEN }}
-          run_args: |
-            pip install pytest
-            export PATH="$(pwd)/.local/bin:$PATH"
+          submodules: recursive
+          path: docker-job # Here be dragons; keep it scoped to our desired volume, yet must be under github.workspace and be sure to clean up at the end
+      - name: Test ttnn import
+        timeout-minutes: 1
+        run: |
+            python -c "import ttnn"
+      - name: Run frequent regression tests
+        timeout-minutes: ${{ inputs.timeout }}
+        run: |
+            pip install 'torch==2.2.1+cpu' 'numpy>=1.24.4,<2' pytest
             ${{ matrix.test_group.cmd }}
+      - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
+        if: always()
   tag-docker-image-as-latest:
     needs: [smoke-test-docker-image, create-docker-release-image]
     strategy:
       matrix:
-        os: [ubuntu-20.04]
+        os: [ubuntu-22.04]
     runs-on:
-      - build-docker
-      - in-service
+      - ubuntu-latest
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
       - name: Docker login
         uses: docker/login-action@v3
         with:
@@ -119,7 +140,7 @@ jobs:
             LATEST_TAG=latest-rc
           fi
           echo "Determined that the current tag is " $LATEST_TAG
-          REPO_IMAGE_NAME=ghcr.io/${{ github.repository }}/tt-metalium-${{ matrix.os }}-amd64-release
+          REPO_IMAGE_NAME=ghcr.io/${{ github.repository }}/tt-metalium-${{ matrix.os }}-release-amd64
           TAG_NAME=$REPO_IMAGE_NAME:${{ inputs.version }}
           docker pull $TAG_NAME
           echo "Tagging the image as " $REPO_IMAGE_NAME:$LATEST_TAG

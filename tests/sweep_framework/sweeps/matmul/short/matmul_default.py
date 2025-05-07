@@ -4,10 +4,12 @@
 
 from typing import Optional, Tuple
 
+import pytest
 import torch
 
 import ttnn
 
+from tests.sweep_framework.sweep_utils.utils import gen_pytest_parametrize_args
 from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
 from models.utility_functions import torch_random
 
@@ -55,7 +57,8 @@ parameters = {
 }
 
 
-def run(
+def run_matmul(
+    device,
     batch_sizes,
     m_n_sizes,
     k_size,
@@ -65,8 +68,6 @@ def run(
     input_a_memory_config,
     input_b_memory_config,
     output_memory_config,
-    *,
-    device,
 ) -> list:
     (m_size, n_size) = m_n_sizes
     input_a_dtype = dtype
@@ -105,3 +106,57 @@ def run(
 
     expected_pcc = 0.99
     return [check_with_pcc(torch_output_tensor, output_tensor, expected_pcc), e2e_perf]
+
+
+@pytest.mark.parametrize(**gen_pytest_parametrize_args(parameters))
+def test_matmul(
+    device,
+    batch_sizes,
+    m_n_sizes,
+    k_size,
+    batch_matrix_multiply,
+    dtype,
+    input_layout,
+    input_a_memory_config,
+    input_b_memory_config,
+    output_memory_config,
+):
+    run_matmul(
+        device,
+        batch_sizes,
+        m_n_sizes,
+        k_size,
+        batch_matrix_multiply,
+        dtype,
+        input_layout,
+        input_a_memory_config,
+        input_b_memory_config,
+        output_memory_config,
+    )
+
+
+def run(
+    batch_sizes,
+    m_n_sizes,
+    k_size,
+    batch_matrix_multiply,
+    dtype,
+    input_layout,
+    input_a_memory_config,
+    input_b_memory_config,
+    output_memory_config,
+    *,
+    device,
+) -> list:
+    return run_matmul(
+        device,
+        batch_sizes,
+        m_n_sizes,
+        k_size,
+        batch_matrix_multiply,
+        dtype,
+        input_layout,
+        input_a_memory_config,
+        input_b_memory_config,
+        output_memory_config,
+    )

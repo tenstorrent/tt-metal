@@ -7,12 +7,12 @@
 #include "command_queue_fixture.hpp"
 #include "env_lib.hpp"
 #include <tt-metalium/device_impl.hpp>
-#include <tt-metalium/hal.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/circular_buffer_constants.h>
 #include <tt-metalium/kernel.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
+#include "impl/context/metal_context.hpp"
 #include "dispatch_test_utils.hpp"
 
 namespace tt::tt_metal {

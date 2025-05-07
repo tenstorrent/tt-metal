@@ -38,10 +38,9 @@ namespace tensor_impl {
 // ======================================================================================
 //                        Data type converters, packers, and unpackers
 // ======================================================================================
-// TODO(arakhmati): Should cast_vec be a generator?
 
-template <typename OutputDataType, template <typename> typename BufferType, typename InputDataType>
-std::vector<OutputDataType> cast_vec(const BufferType<InputDataType>& data_to_convert) {
+template <typename OutputDataType, typename InputDataType>
+std::vector<OutputDataType> cast_vec(tt::stl::Span<const InputDataType> data_to_convert) {
     std::vector<OutputDataType> converted_data;
     for (auto datum : data_to_convert) {
         if constexpr (std::is_same_v<OutputDataType, float> and std::is_same_v<InputDataType, bfloat16>) {
@@ -58,34 +57,34 @@ std::vector<OutputDataType> cast_vec(const BufferType<InputDataType>& data_to_co
 uint32_t element_size_bytes(DataType dtype);
 
 template <typename T>
-constexpr inline size_t packed_buffer_size_bytes(size_t volume_unpacked_data) {
+constexpr size_t packed_buffer_size_bytes(size_t volume_unpacked_data) {
     auto num_type_in_u32 = sizeof(uint32_t) / sizeof(T);
     return (volume_unpacked_data / num_type_in_u32) * sizeof(uint32_t);
 }
 
 // Specialization for float because it gets converted to bfloat16 before being packed
 template <>
-constexpr inline size_t packed_buffer_size_bytes<float>(size_t volume_unpacked_data) {
+constexpr size_t packed_buffer_size_bytes<float>(size_t volume_unpacked_data) {
     auto num_type_in_u32 = sizeof(uint32_t) / sizeof(float);
     return (volume_unpacked_data / num_type_in_u32) * sizeof(uint32_t);
 }
 
 template <>
-constexpr inline size_t packed_buffer_size_bytes<bfloat8_b>(size_t volume_unpacked_data) {
+constexpr size_t packed_buffer_size_bytes<bfloat8_b>(size_t volume_unpacked_data) {
     return packed_buffer_size_bytes<uint32_t>(volume_unpacked_data);
 }
 
 template <>
-constexpr inline size_t packed_buffer_size_bytes<bfloat4_b>(size_t volume_unpacked_data) {
+constexpr size_t packed_buffer_size_bytes<bfloat4_b>(size_t volume_unpacked_data) {
     return packed_buffer_size_bytes<uint32_t>(volume_unpacked_data);
 }
 
 // ======================================================================================
 //                                  Layout converters
 // ======================================================================================
-template <typename T, template <typename...> typename BufferType>
-inline std::vector<T> convert_layout_row_major_to_tile(
-    const Shape2D& shape, const Tile& tile, const BufferType<T>& data_to_convert) {
+template <typename T>
+std::vector<T> convert_layout_row_major_to_tile(
+    const Shape2D& shape, const Tile& tile, tt::stl::Span<const T> data_to_convert) {
     if (shape.width() * shape.height() == 0) {
         return std::vector<T>();
     }
@@ -105,17 +104,17 @@ inline std::vector<T> convert_layout_row_major_to_tile(
     return convert_layout(
         data_to_convert,
         shape,
-        tests::utils::TensorLayoutType::LIN_ROW_MAJOR,
-        tests::utils::TensorLayoutType::TILED_NFACES,
+        TensorLayoutType::LIN_ROW_MAJOR,
+        TensorLayoutType::TILED_NFACES,
         tile_shape,
         face_shape,
         transpose_within_face,
         transpose_of_faces);
 }
 
-template <typename T, template <typename...> typename BufferType>
-inline std::vector<T> convert_layout_tile_to_row_major(
-    const Shape2D& shape, const Tile& tile, const BufferType<T>& data_to_convert) {
+template <typename T>
+std::vector<T> convert_layout_tile_to_row_major(
+    const Shape2D& shape, const Tile& tile, tt::stl::Span<const T> data_to_convert) {
     auto tile_shape = tile.get_tile_shape();
     auto face_shape = tile.get_face_shape();
     auto transpose_within_face = tile.get_transpose_within_face();
@@ -124,8 +123,8 @@ inline std::vector<T> convert_layout_tile_to_row_major(
     return convert_layout(
         data_to_convert,
         shape,
-        tests::utils::TensorLayoutType::TILED_NFACES,
-        tests::utils::TensorLayoutType::LIN_ROW_MAJOR,
+        TensorLayoutType::TILED_NFACES,
+        TensorLayoutType::LIN_ROW_MAJOR,
         tile_shape,
         face_shape,
         transpose_within_face,
@@ -157,15 +156,9 @@ std::vector<T> encode_tensor_data(std::vector<T>&& logical_data, const TensorSpe
 template <typename T>
 std::vector<T> decode_tensor_data(std::vector<T>&& physical_data, const TensorSpec& tensor_spec);
 
-// ======================================================================================
-//                                      Validators
-// ======================================================================================
-void validate_on_device_dtype_and_layout(IDevice* device, const ttnn::Shape& shape, DataType dtype, Layout layout);
-// -----------------------------------------------------------------------------------------------------------------------------------------------
 // ===============================================================================================================================================
 //                                                              High Level APIs
 // ===============================================================================================================================================
-// -----------------------------------------------------------------------------------------------------------------------------------------------
 
 // ======================================================================================
 //                           Data reader, writer, and initializers
@@ -177,13 +170,12 @@ std::shared_ptr<distributed::MeshBuffer> allocate_mesh_buffer_on_device(
     distributed::MeshDevice* mesh_device, const TensorSpec& tensor_spec);
 
 template <typename T>
-void read_data_from_device_buffer(
-    CommandQueue& cq, std::shared_ptr<Buffer> device_buffer, void* host_buffer_data, bool blocking) {
+void read_data_from_device_buffer(CommandQueue& cq, Buffer& device_buffer, void* host_buffer_data, bool blocking) {
     EnqueueReadBuffer(cq, device_buffer, host_buffer_data, blocking);
 }
 
 template <typename T>
-void read_data_from_device_buffer(std::shared_ptr<Buffer> device_buffer, std::vector<T>& host_buffer) {
+void read_data_from_device_buffer(Buffer& device_buffer, std::vector<T>& host_buffer) {
     ::tt::tt_metal::detail::ReadFromBuffer(device_buffer, host_buffer);
 }
 
@@ -196,7 +188,7 @@ Tensor to_host(const Tensor& tensor, bool blocking = true, QueueId cq_id = ttnn:
 
 // TODO: #17215 - This will eventually subsume `to_host`, when "mesh buffer" backed tensors become the default.
 template <typename T>
-Tensor to_host_mesh_tensor(const Tensor& tensor, bool blocking = true);
+Tensor to_host_mesh_tensor(const Tensor& tensor, bool blocking = true, QueueId cq_id = ttnn::DefaultQueueId);
 
 template <typename T>
 Tensor to_device(
@@ -208,7 +200,13 @@ Tensor to_device(
 // TODO: #17215 - This will eventually subsume `to_device`, when "mesh buffer" backed tensors become the default.
 template <typename T>
 Tensor to_device_mesh_tensor(
-    const Tensor& tensor, distributed::MeshDevice* mesh_device, const MemoryConfig& memory_config);
+    const Tensor& tensor,
+    distributed::MeshDevice* mesh_device,
+    const MemoryConfig& memory_config,
+    QueueId cq_id = ttnn::DefaultQueueId);
+
+template <typename T>
+void copy_to_mesh_tensor(const Tensor& host_tensor, Tensor& mesh_tensor, QueueId cq_id = ttnn::DefaultQueueId);
 
 // ======================================================================================
 //                                  .to_layout()

@@ -2,12 +2,28 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "gtest/gtest.h"
 #include <tt-metalium/core_coord.hpp>
-#include "dispatch_fixture.hpp"
-#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/core_descriptor.hpp>
 #include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tt_metal.hpp>
+#include <exception>
+#include <map>
+#include <set>
+#include <string>
+#include <variant>
+#include <vector>
+
 #include "compile_program_with_kernel_path_env_var_fixture.hpp"
+#include <tt-metalium/data_types.hpp>
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/dispatch_core_common.hpp>
+#include "dispatch_fixture.hpp"
+#include "gtest/gtest.h"
+#include <tt-metalium/kernel_types.hpp>
+#include <tt-metalium/program.hpp>
+#include "umd/device/tt_core_coordinates.h"
+#include "umd/device/types/xy_pair.h"
+#include <tt-metalium/utils.hpp>
 
 namespace tt::tt_metal {
 
@@ -57,7 +73,7 @@ TEST_F(DispatchFixture, DISABLED_TensixIdleEthCreateKernelsOnDispatchCores) {
     for (unsigned int id = 0; id < this->devices_.size(); id++) {
         tt_metal::Program program = CreateProgram();
         IDevice* device = this->devices_.at(id);
-        const auto& dispatch_core_config = dispatch_core_manager::instance().get_dispatch_core_config(device->id());
+        const auto& dispatch_core_config = get_dispatch_core_config();
         CoreType dispatch_core_type = dispatch_core_config.get_core_type();
         std::vector<CoreCoord> dispatch_cores =
             tt::get_logical_dispatch_cores(device->id(), device->num_hw_cqs(), dispatch_core_config);

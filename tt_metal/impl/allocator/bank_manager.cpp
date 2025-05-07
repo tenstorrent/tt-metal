@@ -4,10 +4,18 @@
 
 #include "bank_manager.hpp"
 
-#include <util.hpp>
-#include <math.hpp>
 #include <magic_enum/magic_enum.hpp>
-#include <hal.hpp>
+#include <util.hpp>
+#include <limits>
+#include <string_view>
+#include <utility>
+
+#include "allocator/algorithms/allocator_algorithm.hpp"
+#include "allocator_types.hpp"
+#include "assert.hpp"
+#include "buffer_types.hpp"
+#include "impl/context/metal_context.hpp"
+#include "logger.hpp"
 #include "tt_metal/impl/allocator/algorithms/free_list_opt.hpp"
 
 namespace tt {
@@ -25,7 +33,8 @@ void validate_num_banks(uint32_t num_banks, const BufferType& buffer_type, bool 
     // Dataflow API does not have a working implementation of generic modulo to determine bank_id for interleaved
     // address gen For non pow2 num banks, special cases need to be added to avoid falling back to generic
     // implementation. See https://github.com/tenstorrent/tt-metal/issues/3321
-    std::unordered_set<uint32_t> acceptable_num_non_pow2_mem_banks = {12, 56, 63, 70, 80, 94, 124, 130, 140};
+    std::unordered_set<uint32_t> acceptable_num_non_pow2_mem_banks = {
+        7, 12, 56, 63, 70, 80, 94, 110, 120, 124, 130, 140};
     bool custom_mod_bank_id_calculation_exists = acceptable_num_non_pow2_mem_banks.count(num_banks) > 0;
     bool valid_num_banks = (is_pow2_num_banks or custom_mod_bank_id_calculation_exists or doesnt_support_interleaved);
     if (not valid_num_banks) {
@@ -52,7 +61,7 @@ BankManager::BankManager(
     }
     interleaved_address_limit_ = 0;
     validate_num_banks(bank_id_to_bank_offset_.size(), buffer_type_, disable_interleaved);
-    this->init_allocator(size_bytes, hal.get_alignment(HalMemType::DRAM), alloc_offset);
+    this->init_allocator(size_bytes, MetalContext::instance().hal().get_alignment(HalMemType::DRAM), alloc_offset);
 }
 
 BankManager::BankManager(
@@ -68,7 +77,7 @@ BankManager::BankManager(
     interleaved_address_limit_(interleaved_address_limit),
     alignment_bytes_(alignment_bytes) {
     validate_num_banks(bank_id_to_bank_offset_.size(), buffer_type_, disable_interleaved);
-    this->init_allocator(size_bytes, hal.get_alignment(HalMemType::DRAM), alloc_offset);
+    this->init_allocator(size_bytes, MetalContext::instance().hal().get_alignment(HalMemType::DRAM), alloc_offset);
 }
 
 uint32_t BankManager::num_banks() const { return bank_id_to_bank_offset_.size(); }

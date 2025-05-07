@@ -2,13 +2,35 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <errno.h>
+#include <fmt/base.h>
+#include <stdint.h>
+#include <tt-metalium/constants.hpp>
 #include <tt-metalium/host_api.hpp>
+#include <cstring>
+#include <exception>
+#include <optional>
+
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/logger.hpp>
+#include <tt-metalium/shape.hpp>
+#include <tt-metalium/tile.hpp>
 #include "ttnn/cpp/ttnn/operations/creation.hpp"
+#include "ttnn/decorators.hpp"
+#include "ttnn/operation.hpp"
+#include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
+#include "ttnn/operations/functions.hpp"
+#include "ttnn/operations/matmul/device/matmul_op.hpp"
+#include "ttnn/tensor/enum_types.hpp"
+#include "ttnn/tensor/shape/shape.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/types.hpp"
-#include "ttnn/operations/matmul/device/matmul_op.hpp"
-#include <tt-metalium/constants.hpp>
-#include "ttnn/operations/functions.hpp"
+
+namespace tt {
+namespace tt_metal {
+class IDevice;
+}  // namespace tt_metal
+}  // namespace tt
 
 using namespace tt;
 using namespace tt_metal;
@@ -25,7 +47,8 @@ int main(int argc, char** argv) {
         //                      Device Setup
         ////////////////////////////////////////////////////////////////////////////
         int device_id = 0;
-        tt_metal::IDevice* device = tt_metal::CreateDevice(device_id);
+        auto device_owner = tt_metal::distributed::MeshDevice::create_unit_mesh(device_id);
+        auto device = device_owner.get();
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Application Setup
@@ -65,9 +88,6 @@ int main(int argc, char** argv) {
         //                      Validation & Teardown
         ////////////////////////////////////////////////////////////////////////////
         Tensor host_a = a.cpu();  // Move tensor a to host to validate
-
-        pass &= tt_metal::CloseDevice(device);
-
     } catch (const std::exception& e) {
         pass = false;
         // Capture the exception error message

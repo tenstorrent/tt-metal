@@ -8,11 +8,6 @@ from loguru import logger
 import ttnn
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal, comp_pcc
 from models.utility_functions import skip_for_grayskull
-from tests.ttnn.unit_tests.operations.ccl.test_ccl_common import (
-    create_and_load_sub_device_manager_with_fabric_interface,
-    teardown_fabric_interface,
-    create_global_semaphore_with_same_address,
-)
 from ttnn import ShardTensor2dMesh, ConcatMesh2dToTensor
 
 
@@ -115,7 +110,6 @@ def run_line_reduce_scatter_on_TG_with_mesh_tensor_along_rows(
     buffer_type: ttnn.BufferType,
     use_program_cache,
     function_level_defaults,
-    enable_async,
     input_shard_spec: ttnn.ShardSpec = None,
     num_reduce_scatter_instances: int = 1,
     num_iters: int = 1,
@@ -123,26 +117,9 @@ def run_line_reduce_scatter_on_TG_with_mesh_tensor_along_rows(
     trace_mode=False,
     # New all-gather-async and persistent fabric params
     use_reduce_scatter_async=False,
-    enable_persistent_fabric=False,
-    create_persistent_fabric=False,
-    teardown_persistent_fabric=False,
+    use_persistent_output=False,
 ):
-    if create_persistent_fabric:
-        assert use_reduce_scatter_async
-        assert enable_persistent_fabric
-    if teardown_persistent_fabric:
-        assert use_reduce_scatter_async
-        assert enable_persistent_fabric
-    if not use_reduce_scatter_async:
-        assert not create_persistent_fabric
-        assert not teardown_persistent_fabric
-        assert not enable_persistent_fabric
-    else:
-        assert enable_persistent_fabric, "Persistent fabric must be enabled for async reduce scatter"
-
-    for d in mesh_device.get_devices():
-        ttnn.enable_program_cache(d)
-    mesh_device.enable_async(enable_async)
+    mesh_device.enable_program_cache()
 
     per_reduce_scatter_output_shape = list(per_chip_input_shape)
     per_reduce_scatter_output_shape[dim] *= num_devices_per_line
@@ -163,17 +140,13 @@ def run_line_reduce_scatter_on_TG_with_mesh_tensor_along_rows(
         )
         worker_sub_device = ttnn.SubDevice([ccl_sub_device_crs])
         worker_sub_device_id = ttnn.SubDeviceId(0)
-        if create_persistent_fabric:
-            logger.info("Create persistent fabric interface")
-            mesh_sub_device_manager_id = create_and_load_sub_device_manager_with_fabric_interface(
-                mesh_device, [worker_sub_device], 0, 0, enable_persistent_fabric
-            )
-            logger.info("Done Create persistent fabric interface")
-            sub_device_stall_group = [worker_sub_device_id]
+        sub_device_stall_group = [worker_sub_device_id]
+        sub_device_manager = mesh_device.create_sub_device_manager([worker_sub_device], 0)
+        mesh_device.load_sub_device_manager(sub_device_manager)
         mesh_device.set_sub_device_stall_group(sub_device_stall_group)
         # create global semaphore handles
-        from_remote_semaphore_handles = create_global_semaphore_with_same_address(mesh_device, ccl_sub_device_crs, 0)
-        to_remote_semaphore_handles = create_global_semaphore_with_same_address(mesh_device, ccl_sub_device_crs, 0)
+        from_remote_semaphore_handles = ttnn.create_global_semaphore(mesh_device, ccl_sub_device_crs, 0)
+        to_remote_semaphore_handles = ttnn.create_global_semaphore(mesh_device, ccl_sub_device_crs, 0)
     else:
         worker_sub_device_id = None
     ##
@@ -250,6 +223,56 @@ def run_line_reduce_scatter_on_TG_with_mesh_tensor_along_rows(
         )
     else:
         logger.info(f"Running {num_iters} iterations of reduce scatter")
+        persistent_buffers = None
+        if use_persistent_output:
+            tile = (32, 32)
+            persistent_buffers = [
+                ttnn.from_torch(
+                    torch.zeros(per_chip_output_shape),
+                    tile=ttnn.Tile(tile),
+                    dtype=input_dtype,
+                    device=mesh_device,
+                    layout=layout,
+                    memory_config=output_mem_config,
+                    mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+                ),
+                ttnn.from_torch(
+                    torch.zeros(per_chip_input_shape),
+                    tile=ttnn.Tile(tile),
+                    dtype=input_dtype,
+                    device=mesh_device,
+                    layout=layout,
+                    memory_config=output_mem_config,
+                    mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+                ),
+                ttnn.from_torch(
+                    torch.zeros(per_chip_input_shape),
+                    tile=ttnn.Tile(tile),
+                    dtype=input_dtype,
+                    device=mesh_device,
+                    layout=layout,
+                    memory_config=output_mem_config,
+                    mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+                ),
+                ttnn.from_torch(
+                    torch.zeros(per_chip_output_shape),
+                    tile=ttnn.Tile(tile),
+                    dtype=input_dtype,
+                    device=mesh_device,
+                    layout=layout,
+                    memory_config=output_mem_config,
+                    mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+                ),
+                ttnn.from_torch(
+                    torch.zeros(per_chip_output_shape),
+                    tile=ttnn.Tile(tile),
+                    dtype=input_dtype,
+                    device=mesh_device,
+                    layout=layout,
+                    memory_config=output_mem_config,
+                    mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+                ),
+            ]
         for _ in range(num_iters):
             if use_reduce_scatter_async:
                 ttnn_tensor_out = ttnn.experimental.reduce_scatter_async(
@@ -260,6 +283,7 @@ def run_line_reduce_scatter_on_TG_with_mesh_tensor_along_rows(
                     from_remote_multi_device_global_semaphore=from_remote_semaphore_handles,
                     to_remote_multi_device_global_semaphore=to_remote_semaphore_handles,
                     math_op=math_op,
+                    persistent_output_tensors=persistent_buffers,
                     memory_config=output_mem_config,
                     topology=ttnn.Topology.Linear,
                     num_links=num_links,
@@ -276,15 +300,11 @@ def run_line_reduce_scatter_on_TG_with_mesh_tensor_along_rows(
                     memory_config=output_mem_config,
                     topology=ttnn.Topology.Linear,
                 )
-            if enable_persistent_fabric:
-                ttnn.synchronize_device(mesh_device, sub_device_ids=sub_device_stall_group)
+
+            ttnn.synchronize_device(mesh_device, sub_device_ids=sub_device_stall_group)
         ttnn.synchronize_device(mesh_device, sub_device_ids=sub_device_stall_group)
 
-    if enable_persistent_fabric and teardown_persistent_fabric:
-        logger.info("Tearing down persistent fabric interface")
-        mesh_device.reset_sub_device_stall_group()
-        teardown_fabric_interface(mesh_device)
-        logger.info("Done tearing down persistent fabric interface")
+    mesh_device.reset_sub_device_stall_group()
 
     # ttnn.visualize_mesh_device(mesh_device, tensor=ttnn_tensor_out)
     tt_output_tensor = ttnn.to_torch(
@@ -293,6 +313,15 @@ def run_line_reduce_scatter_on_TG_with_mesh_tensor_along_rows(
     output_tensors_list = torch.chunk(
         tt_output_tensor, num_reduce_scatter_instances, dim=reduce_scatter_instances_concat_dim
     )
+    # Check the tensor addresses
+    if use_persistent_output:
+        persistent_output_tensors = ttnn.get_device_tensors(persistent_buffers[0])
+        output_tensors = ttnn.get_device_tensors(ttnn_tensor_out)
+
+        for persistent_tensor, output_tensor in zip(persistent_output_tensors, output_tensors):
+            assert (
+                persistent_tensor.buffer_address() == output_tensor.buffer_address()
+            ), "Persistent tensor address mismatch"
 
     passed = True
     for i in range(num_reduce_scatter_instances):
@@ -336,10 +365,11 @@ def run_line_reduce_scatter_on_TG_with_mesh_tensor_along_rows(
     ],
 )
 @pytest.mark.parametrize("replication_factor", [8])  # 1, 8])
-@pytest.mark.parametrize("enable_async", [True])
 @pytest.mark.parametrize("mesh_device", [pytest.param((8, 4), id="8x4_grid")], indirect=True)
 @pytest.mark.parametrize("math_op", [ttnn.ReduceType.Sum])
-@pytest.mark.parametrize("device_params", [{"trace_region_size": 10281600}], indirect=True)
+@pytest.mark.parametrize(
+    "device_params", [{"trace_region_size": 10281600, "fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True
+)
 def test_line_reduce_scatter_on_TG_rows_post_commit(
     mesh_device,
     num_devices,
@@ -352,11 +382,10 @@ def test_line_reduce_scatter_on_TG_rows_post_commit(
     buffer_type,
     use_program_cache,
     function_level_defaults,
-    enable_async,
     replication_factor,
     num_iters=16,
 ):
-    if len(mesh_device.get_devices()) != 32:
+    if mesh_device.get_num_devices() != 32:
         pytest.skip("Not TG!")
     run_line_reduce_scatter_on_TG_with_mesh_tensor_along_rows(
         mesh_device,
@@ -371,10 +400,10 @@ def test_line_reduce_scatter_on_TG_rows_post_commit(
         buffer_type,
         use_program_cache,
         function_level_defaults,
-        enable_async=enable_async,
         num_iters=num_iters,
         num_reduce_scatter_instances=replication_factor,
         cluster_axis=1,
+        use_reduce_scatter_async=True,
     )
 
 
@@ -398,10 +427,10 @@ def test_line_reduce_scatter_on_TG_rows_post_commit(
         ttnn.BufferType.DRAM,
     ],
 )
-@pytest.mark.parametrize("enable_async", [True])
 @pytest.mark.parametrize("replication_factor", [4])
 @pytest.mark.parametrize("mesh_device", [pytest.param((8, 4), id="8x4_grid")], indirect=True)
 @pytest.mark.parametrize("math_op", [ttnn.ReduceType.Sum])
+@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
 def test_line_reduce_scatter_on_TG_cols_post_commit(
     mesh_device,
     num_devices,
@@ -414,11 +443,10 @@ def test_line_reduce_scatter_on_TG_cols_post_commit(
     buffer_type,
     use_program_cache,
     function_level_defaults,
-    enable_async,
     replication_factor,
     num_iters=16,
 ):
-    if len(mesh_device.get_devices()) != 32:
+    if mesh_device.get_num_devices() != 32:
         pytest.skip("Not TG!")
 
     run_line_reduce_scatter_on_TG_with_mesh_tensor_along_rows(
@@ -434,8 +462,8 @@ def test_line_reduce_scatter_on_TG_cols_post_commit(
         buffer_type,
         use_program_cache,
         function_level_defaults,
-        enable_async=enable_async,
         num_iters=num_iters,
         num_reduce_scatter_instances=replication_factor,
         cluster_axis=0,
+        use_reduce_scatter_async=True,
     )

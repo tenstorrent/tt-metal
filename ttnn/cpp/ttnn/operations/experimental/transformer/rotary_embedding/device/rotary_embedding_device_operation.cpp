@@ -118,7 +118,7 @@ RotaryEmbeddingOpParallelizationStrategy RotaryEmbedding::get_parallelization_st
     return RotaryEmbeddingOpParallelizationStrategy::MULTI_CORE;
 }
 
-const operation::Hash RotaryEmbedding::compute_program_hash(const std::vector<Tensor>& input_tensors) const {
+operation::Hash RotaryEmbedding::compute_program_hash(const std::vector<Tensor>& input_tensors) const {
     return operation::hash_operation<RotaryEmbedding>(this->seq_len, this->output_mem_config, input_tensors);
 }
 

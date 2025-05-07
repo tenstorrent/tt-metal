@@ -1,19 +1,18 @@
 # SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
-import json
-import os
 import logging
-from fastapi import FastAPI, File, UploadFile
+import os
+import time
 from io import BytesIO
-from PIL import Image
-from models.demos.yolov4.tests.yolov4_perfomant_webdemo import Yolov4Trace2CQ
-import ttnn
 
-import cv2
 import numpy as np
 import torch
-import time
+from fastapi import FastAPI, File, UploadFile
+from PIL import Image
+
+import ttnn
+from models.demos.yolov4.runner.performant_runner import YOLOv4PerformantRunner
 
 app = FastAPI(
     title="YOLOv4 object detection",
@@ -33,13 +32,15 @@ logging.basicConfig(
 )
 
 
-def get_dispatch_core_type():
+def get_dispatch_core_config():
     # TODO: 11059 move dispatch_core_type to device_params when all tests are updated to not use WH_ARCH_YAML env flag
     dispatch_core_type = ttnn.device.DispatchCoreType.WORKER
-    # if ("WH_ARCH_YAML" in os.environ) and os.environ["WH_ARCH_YAML"] == "wormhole_b0_80_arch_eth_dispatch.yaml":
-    if os.environ["WH_ARCH_YAML"] == "wormhole_b0_80_arch_eth_dispatch.yaml":
+    if ("WH_ARCH_YAML" in os.environ) and os.environ["WH_ARCH_YAML"] == "wormhole_b0_80_arch_eth_dispatch.yaml":
         dispatch_core_type = ttnn.device.DispatchCoreType.ETH
-    return dispatch_core_type
+    dispatch_core_axis = ttnn.DispatchCoreAxis.ROW
+    dispatch_core_config = ttnn.DispatchCoreConfig(dispatch_core_type, dispatch_core_axis)
+
+    return dispatch_core_config
 
 
 @app.on_event("startup")
@@ -50,25 +51,23 @@ async def startup():
         device_id = 0
         device = ttnn.CreateDevice(
             device_id,
-            dispatch_core_type=get_dispatch_core_type(),
+            dispatch_core_config=get_dispatch_core_config(),
             l1_small_size=24576,
             trace_region_size=3211264,
             num_command_queues=2,
         )
-        ttnn.enable_program_cache(device)
-        model = Yolov4Trace2CQ()
-        model.initialize_yolov4_trace_2cqs_inference(device)
+        device.enable_program_cache()
+        model = YOLOv4PerformantRunner(device)
     else:
         device_id = 0
         device = ttnn.CreateDevice(device_id, l1_small_size=24576, trace_region_size=3211264, num_command_queues=2)
-        ttnn.enable_program_cache(device)
-        model = Yolov4Trace2CQ()
-        model.initialize_yolov4_trace_2cqs_inference(device)
+        device.enable_program_cache()
+        model = YOLOv4PerformantRunner(device)
 
 
 @app.on_event("shutdown")
 async def shutdown():
-    model.release_yolov4_trace_2cqs_inference()
+    model.release()
 
 
 def process_output(output):
@@ -189,7 +188,7 @@ async def objdetection_v2(file: UploadFile = File(...)):
         exit(-1)
 
     t1 = time.time()
-    response = model.run_traced_inference(image)
+    response = model.run(image)
     t2 = time.time()
     logging.info("The inference on the sever side took: %.3f seconds", t2 - t1)
     conf_thresh = 0.6
