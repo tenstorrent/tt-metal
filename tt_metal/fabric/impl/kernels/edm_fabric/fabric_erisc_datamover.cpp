@@ -107,7 +107,7 @@ lines, the pattern would be extended.
 
 As mentioned, only one worker can push to a given EDM sender channel at a time. In order to send to an EDM
 sender channel, the worker must establish a connection. The connection protocol is as follows and is started
-by the worker (the EDM is a slave in this protocol).
+by the worker (the EDM is a subordinate in this protocol).
 
 *NOTE*: If multiple workers try to connect to the same EDM sender channel at the same time, the behavior is undefined.
 *NOTE*: Additionally, if a worker pushes packets to a channel it isn't connected to, behaviour is undefined.
@@ -1713,7 +1713,7 @@ void kernel_main() {
     if constexpr (wait_for_host_signal) {
         if constexpr (is_local_handshake_master) {
             wait_for_notification((uint32_t)edm_local_sync_ptr, num_local_edms - 1);
-            notify_slave_routers(
+            notify_subordinate_routers(
                 edm_channels_mask, local_handshake_master_eth_chan, (uint32_t)edm_local_sync_ptr, num_local_edms);
         } else {
             notify_master_router(local_handshake_master_eth_chan, (uint32_t)edm_local_sync_ptr);
@@ -1725,7 +1725,7 @@ void kernel_main() {
         wait_for_notification((uint32_t)edm_status_ptr, tt::tt_fabric::EDMStatus::READY_FOR_TRAFFIC);
 
         if constexpr (is_local_handshake_master) {
-            notify_slave_routers(
+            notify_subordinate_routers(
                 edm_channels_mask,
                 local_handshake_master_eth_chan,
                 (uint32_t)edm_status_ptr,
@@ -1817,7 +1817,7 @@ void kernel_main() {
 
     if constexpr (wait_for_host_signal) {
         if constexpr (is_local_handshake_master) {
-            notify_slave_routers(
+            notify_subordinate_routers(
                 edm_channels_mask,
                 local_handshake_master_eth_chan,
                 (uint32_t)termination_signal_ptr,
