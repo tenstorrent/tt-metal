@@ -452,47 +452,51 @@ class Attention(LightweightModule):
         # Which leads to slightly different outputs from attention (due to accumulated errors)
         if page_table:
 
-            def safe_to_torch_replicated(tensor):
-                shards = ttnn.get_device_tensors(tensor)
-                assert len(shards) == 1 or all(torch.equal(ttnn.to_torch(shards[0]), ttnn.to_torch(s)) for s in shards)
-                return ttnn.to_torch(shards[0])
+            def safe_ttnn_concat(tensors, dim=0, max_chunk_size=64):
+                if len(tensors) <= max_chunk_size:
+                    return ttnn.concat(tensors, dim=dim)
 
-            def to_torch_from_sharded(tensor):
-                shards = ttnn.get_device_tensors(tensor)
-                return torch.cat([ttnn.to_torch(shard) for shard in shards], dim=0)
+                result_chunks = []
+                for i in range(0, len(tensors), max_chunk_size):
+                    chunk = tensors[i : i + max_chunk_size]
+                    result_chunks.append(ttnn.concat(chunk, dim=dim))
 
-            keys_torch = to_torch_from_sharded(keys)
-            page_table_torch = safe_to_torch_replicated(page_table)[0]
+                return safe_ttnn_concat(result_chunks, dim=dim, max_chunk_size=max_chunk_size)
 
-            cur_page = safe_to_torch_replicated(current_pos)[0].item() // self.paged_attention_config.block_size
-            local_block_ids = page_table_torch[page_table_torch == cur_page].unique()
+            block_size = self.paged_attention_config.block_size
+            mesh_device = self.mesh_device
+            keys_shards = ttnn.get_device_tensors(keys)
+            page_table_val = ttnn.to_torch(ttnn.get_device_tensors(page_table)[0])[0]
+            current_pos_val = ttnn.to_torch(ttnn.get_device_tensors(current_pos)[0])[0]
+            cur_page = int(current_pos_val.item() // block_size)
+            local_block_ids = page_table_val[page_table_val == cur_page].unique()
             assert len(local_block_ids) == 1
             local_block_id = int(local_block_ids[0])
 
-            local_block = keys_torch[local_block_id].unsqueeze(0)
-            local_block_ttnn = ttnn.from_torch(
-                local_block, dtype=ttnn.bfloat16, device=self.mesh_device, layout=ttnn.TILE_LAYOUT
-            )
-            local_block_bfp8 = ttnn.typecast(local_block_ttnn, dtype=ttnn.bfloat8_b)
-            local_block_bfp8_torch = ttnn.to_torch(local_block_bfp8)[0]
+            new_keys_shards = []
 
-            all_keys_ttnn = ttnn.from_torch(
-                keys_torch, dtype=ttnn.bfloat16, device=self.mesh_device, layout=ttnn.TILE_LAYOUT
-            )
-            all_keys_bfp4 = ttnn.typecast(all_keys_ttnn, dtype=ttnn.bfloat4_b)
-            all_keys_bfp8 = ttnn.typecast(all_keys_bfp4, dtype=ttnn.bfloat8_b)
-            keys_torch_quantized = ttnn.to_torch(all_keys_bfp8)
+            for shard in keys_shards:
+                processed_blocks = []
 
-            keys_torch_quantized[local_block_id] = local_block_bfp8_torch
+                for block_id in range(shard.shape[0]):
+                    block = ttnn.slice(
+                        shard,
+                        slice_start=[block_id, 0, 0, 0],
+                        slice_end=[block_id + 1, shard.shape[1], shard.shape[2], shard.shape[3]],
+                    )
 
-            keys = ttnn.from_torch(
-                keys_torch_quantized,
-                dtype=ttnn.bfloat8_b,
-                device=self.mesh_device,
-                layout=ttnn.TILE_LAYOUT,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
-            )
+                    if block_id == local_block_id:
+                        block_bfp8 = ttnn.typecast(block, dtype=ttnn.bfloat8_b)
+                    else:
+                        block_bfp4 = ttnn.typecast(block, dtype=ttnn.bfloat4_b)
+                        block_bfp8 = ttnn.typecast(block_bfp4, dtype=ttnn.bfloat8_b)
+
+                    processed_blocks.append(block_bfp8)
+
+                quantized_shard = safe_ttnn_concat(processed_blocks, dim=0, max_chunk_size=32)
+                new_keys_shards.append(quantized_shard)
+
+            keys = ttnn.aggregate_as_tensor(new_keys_shards)
 
             attn_output_1G4D = ttnn.transformer.paged_scaled_dot_product_attention_decode(
                 q_heads_1BQD,
