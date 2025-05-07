@@ -275,7 +275,7 @@ public:
     inline void set_validate_kernel_binaries(bool val) { validate_kernel_binaries = val; }
 
     // Returns the string representation for hash computation.
-    inline std::string get_feature_hash_string(RunTimeDebugFeatures feature) {
+    inline std::string get_feature_hash_string(RunTimeDebugFeatures feature) const {
         switch (feature) {
             case RunTimeDebugFeatureDprint: return std::to_string(get_feature_enabled(feature));
             case RunTimeDebugFeatureReadDebugDelay:
@@ -289,6 +289,14 @@ public:
             case RunTimeDebugFeatureDisableL1DataCache: return std::to_string(get_feature_enabled(feature));
             default: return "";
         }
+    }
+    inline std::string get_compile_hash_string() const {
+        std::string compile_hash_str = std::to_string(get_watcher_enabled());
+        for (int i = 0; i < RunTimeDebugFeatureCount; i++) {
+            compile_hash_str += "_";
+            compile_hash_str += get_feature_hash_string((llrt::RunTimeDebugFeatures)i);
+        }
+        return compile_hash_str;
     }
 
     // Used for both watcher and dprint servers, this dev option (no corresponding env var) sets

@@ -1234,8 +1234,8 @@ bool Device::initialize(
         hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::BASE) +
             hal.get_dev_size(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::BASE) - worker_l1_size,
         max_alignment);
-    BuildEnvManager::get_instance().add_build_env(this->id(), this->num_hw_cqs());
-    this->initialize_cluster();
+    // BuildEnvManager::get_instance().add_build_env(this->id(), this->num_hw_cqs());
+    // this->initialize_cluster();
     this->initialize_default_sub_device_state(
         l1_small_size, trace_region_size, worker_l1_unreserved_start, l1_bank_remap);
     this->generate_device_bank_to_noc_tables();
@@ -1250,7 +1250,7 @@ bool Device::initialize(
     // If ERISC application firmware is activated before the launch messages are cleared, it can enter an undefined
     // state by reading a corrupted launch message. Routing firmware will never run in this case, causing UMD issued
     // transactions to hang.
-    this->clear_launch_messages_on_eth_cores();
+    // this->clear_launch_messages_on_eth_cores();
 
     return true;
 }
