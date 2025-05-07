@@ -268,7 +268,7 @@ BinaryDeviceOperation::spec_return_value_t BinaryDeviceOperation::compute_output
             return TensorSpec(output_shape, TensorLayout(operation_attributes.dtype, PageConfig(Layout::TILE), memory_config));
         }
     }
-    return TensorSpec(output_shape, TensorLayout(operation_attributes.dtype, PageConfig(Layout::TILE), operation_attributes.memory_config));
+    return TensorSpec(output_shape, TensorLayout(operation_attributes.dtype, PageConfig(Layout::ROW_MAJOR), operation_attributes.memory_config));
 }
 
 BinaryDeviceOperation::tensor_return_value_t BinaryDeviceOperation::create_output_tensors(
