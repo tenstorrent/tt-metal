@@ -13,12 +13,12 @@ void kernel_main() {
     uint32_t c_addr = get_arg_val<uint32_t>(0);
     uint32_t n_rows = get_arg_val<uint32_t>(1);
     uint32_t start_row_id = get_arg_val<uint32_t>(2);
-    uint32_t row_size = get_arg_val<uint32_t>(3);
+    uint32_t row_size = 32 * 32;
 
     constexpr uint32_t datum_size_bytes = 2;
 
     // The circular buffer to write the results into
-    constexpr uint32_t cb_out0 = tt::CBIndex::c_3;
+    constexpr uint32_t cb_out0 = tt::CBIndex::c_2;
 
     const uint32_t tile_size_bytes = get_tile_size(cb_out0);
 

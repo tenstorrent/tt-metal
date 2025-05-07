@@ -86,7 +86,7 @@ inline __attribute__((always_inline)) void set_eltwise_binary_runtime_args(
         }
     }
 
-    uint32_t num_tiles = a.volume() / TILE_HW;
+    uint32_t num_tiles = 32; // a.volume() / TILE_HW;
 
     uint32_t num_cores, num_tiles_per_core_group_1, num_tiles_per_core_group_2, num_cores_total;
     if (zero_start_grid) {

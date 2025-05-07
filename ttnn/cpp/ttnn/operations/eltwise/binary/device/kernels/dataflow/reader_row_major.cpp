@@ -14,7 +14,7 @@ void kernel_main() {
     uint32_t b_addr = get_arg_val<uint32_t>(1);
     uint32_t n_rows = get_arg_val<uint32_t>(2);
     uint32_t start_row_id = get_arg_val<uint32_t>(3);
-    uint32_t row_size = get_arg_val<uint32_t>(4);
+    uint32_t row_size = 32 * 32;
 
     constexpr uint32_t datum_size_bytes = 2;
 
