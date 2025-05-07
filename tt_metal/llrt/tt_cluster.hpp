@@ -334,6 +334,7 @@ private:
     void assign_mem_channels_to_devices(chip_id_t mmio_device_id, const std::set<chip_id_t>& controlled_device_ids);
     void open_driver(const bool& skip_driver_allocs = false);
     void start_driver(tt_device_params& device_params) const;
+    void validate_harvesting_masks() const;
 
     void get_metal_desc_from_tt_desc();
     void generate_virtual_to_umd_coord_mapping();
