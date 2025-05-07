@@ -6,6 +6,7 @@
 #include <device.hpp>
 #include <distributed.hpp>
 #include "tools/profiler/event_metadata.hpp"
+#include "distributed/fd_mesh_command_queue.hpp"
 #include <host_api.hpp>
 #include <magic_enum/magic_enum.hpp>
 #include <nlohmann/json.hpp>
@@ -44,27 +45,6 @@ static kernel_profiler::PacketTypes get_packet_type(uint32_t timer_id) {
     return static_cast<kernel_profiler::PacketTypes>((timer_id >> 16) & 0x7);
 }
 
-distributed::AnyBuffer get_control_buffer_view(
-    IDevice* device, const CoreCoord& virtual_core, const profiler_msg_t* profiler_msg) {
-    const umd::CoreCoord logical_core =
-        MetalContext::instance()
-            .get_cluster()
-            .get_soc_desc(device->id())
-            .translate_coord_to(virtual_core, CoordSystem::TRANSLATED, CoordSystem::LOGICAL);
-    const CoreCoord core(logical_core.x, logical_core.y);
-    const ShardSpecBuffer shard_parameters =
-        ShardSpecBuffer({core}, {1, 1}, ShardOrientation::ROW_MAJOR, {1, 1}, {1, 1});
-    const auto mesh_device = device->get_mesh_device();
-    const ShardedBufferConfig buffer_config = ShardedBufferConfig(
-        {mesh_device ? mesh_device.get() : device,
-         kernel_profiler::PROFILER_L1_CONTROL_BUFFER_SIZE,
-         kernel_profiler::PROFILER_L1_CONTROL_BUFFER_SIZE,
-         BufferType::L1,
-         TensorMemoryLayout::HEIGHT_SHARDED,
-         shard_parameters});
-    return distributed::AnyBuffer::create(buffer_config, reinterpret_cast<DeviceAddr>(profiler_msg->control_vector));
-}
-
 void issue_fd_write_to_profiler_buffer(distributed::AnyBuffer& buffer, IDevice* device, std::vector<uint32_t>& data) {
     TT_ASSERT(device->dispatch_firmware_active());
     if (auto mesh_device = device->get_mesh_device()) {
@@ -95,14 +75,16 @@ std::vector<uint32_t> read_control_buffer_from_core(
     if (device->dispatch_firmware_active()) {
         if (auto mesh_device = device->get_mesh_device()) {
             if (core_type == HalProgrammableCoreType::TENSIX) {
+                distributed::FDMeshCommandQueue& mesh_cq =
+                    dynamic_cast<distributed::FDMeshCommandQueue&>(mesh_device->mesh_command_queue());
                 control_buffer.resize(kernel_profiler::PROFILER_L1_CONTROL_VECTOR_SIZE);
-                const distributed::AnyBuffer control_buffer_view = get_control_buffer_view(device, core, profiler_msg);
                 const distributed::MeshCoordinate device_coord = mesh_device->get_view().find_device(device->id());
-                distributed::ReadShard(
-                    mesh_device->mesh_command_queue(),
-                    control_buffer,
-                    control_buffer_view.get_mesh_buffer(),
+                mesh_cq.enqueue_read_shard_from_core(
                     device_coord,
+                    core,
+                    control_buffer.data(),
+                    reinterpret_cast<DeviceAddr>(profiler_msg->control_vector),
+                    kernel_profiler::PROFILER_L1_CONTROL_BUFFER_SIZE,
                     true);
             } else {
                 control_buffer = tt::llrt::read_hex_vec_from_core(
@@ -137,19 +119,21 @@ void write_control_buffer_to_core(
     const CoreCoord& core,
     const HalProgrammableCoreType core_type,
     const ProfilerDumpState state,
-    std::vector<uint32_t>& control_buffer) {
+    const std::vector<uint32_t>& control_buffer) {
     profiler_msg_t* profiler_msg =
         MetalContext::instance().hal().get_dev_addr<profiler_msg_t*>(core_type, HalL1MemAddrType::PROFILER);
     if (device->dispatch_firmware_active()) {
         if (auto mesh_device = device->get_mesh_device()) {
             if (core_type == HalProgrammableCoreType::TENSIX) {
-                const distributed::AnyBuffer control_buffer_view = get_control_buffer_view(device, core, profiler_msg);
+                distributed::FDMeshCommandQueue& mesh_cq =
+                    dynamic_cast<distributed::FDMeshCommandQueue&>(mesh_device->mesh_command_queue());
                 const distributed::MeshCoordinate device_coord = mesh_device->get_view().find_device(device->id());
-                distributed::WriteShard(
-                    mesh_device->mesh_command_queue(),
-                    control_buffer_view.get_mesh_buffer(),
-                    control_buffer,
+                mesh_cq.enqueue_write_shard_to_core(
                     device_coord,
+                    core,
+                    control_buffer.data(),
+                    reinterpret_cast<DeviceAddr>(profiler_msg->control_vector),
+                    kernel_profiler::PROFILER_L1_CONTROL_BUFFER_SIZE,
                     true);
             } else {
                 tt::llrt::write_hex_vec_to_core(
