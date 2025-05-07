@@ -1,0 +1,30 @@
+{
+    "plots":[
+        {
+            "id": "plot-cos-zoom",
+            "output": "cos-zoom.png",
+            "operations": [
+                "cos"
+            ],
+            "dtype": "bfloat16",
+            "plot_params": {
+                "xmin": 0,
+                "xmax": 0,
+                "ymin": 0,
+                "ymax": 0,
+                "xscale": "symlog",
+                "yscale": "log",
+                "xticks": null,
+                "yticks": null
+            },
+            "extra_lines": {
+                "vertical": [
+                    {
+                        "x": 3.14,
+                        "label": "x=pi"
+                    }
+                ]
+            }
+        }
+    ]
+}
