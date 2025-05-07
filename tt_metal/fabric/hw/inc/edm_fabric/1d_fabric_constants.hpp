@@ -204,9 +204,11 @@ constexpr size_t receiver_channel_base_id = NUM_SENDER_CHANNELS;
 
 // TRANSACTION IDS
 // TODO: Pass this value from host
-constexpr uint8_t NUM_TRANSACTION_IDS = enable_ring_support ? 8 : 4;
+constexpr size_t NUM_TRANSACTION_IDS = enable_ring_support ? 8 : 4;
+constexpr size_t RX_CH0_TRID_START = 0;
+constexpr size_t RX_CH1_TRID_START = NUM_TRANSACTION_IDS;
 
-constexpr std::array<uint8_t, MAX_NUM_RECEIVER_CHANNELS> RX_CH_TRID_STARTS =
+constexpr std::array<size_t, MAX_NUM_RECEIVER_CHANNELS> RX_CH_TRID_STARTS =
     initialize_receiver_channel_trid_starts<MAX_NUM_RECEIVER_CHANNELS, NUM_TRANSACTION_IDS>();
 
 constexpr std::array<uint32_t, MAX_NUM_RECEIVER_CHANNELS> to_receiver_packets_sent_streams =
@@ -226,8 +228,17 @@ constexpr std::array<uint32_t, MAX_NUM_SENDER_CHANNELS> to_sender_packets_comple
             to_sender_0_pkts_completed_id, to_sender_1_pkts_completed_id, to_sender_2_pkts_completed_id});
 
 // Miscellaneous configuration
-constexpr uint32_t DEFAULT_ITERATIONS_BETWEEN_CTX_SWITCH_AND_TEARDOWN_CHECKS = 32;
+// 25 good
+// 24 bad -- 1.4 GB/s/dir drop in 2k packet size line mcast wtf
+constexpr size_t DEFAULT_ITERATIONS_BETWEEN_CTX_SWITCH_AND_TEARDOWN_CHECKS = 32;
 constexpr size_t DEFAULT_HANDSHAKE_CONTEXT_SWITCH_TIMEOUT = 0;
+
+// Improves compute bound cases
+constexpr bool DO_SENDER_WORKER_ACK_OUTSIDE_OF_LOOP = true;
+
+// Improves compute bound cases but degrades bandwidth bound cases. With additional buffering, this would be a viable
+// option.
+constexpr bool DO_RECEIVER_ETH_ACK_OUTSIDE_OF_LOOP = false;
 
 namespace tt::tt_fabric {
 static_assert(
