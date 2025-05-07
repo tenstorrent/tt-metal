@@ -198,8 +198,10 @@ inline uint32_t get_estimated_size_of_cbs(
         in0_shard_width_in_tiles = in0_buffer->shard_spec().shape()[1] / in0_tile.get_tile_shape()[1];
     }
     in2_block_tiles = per_core_M * in0_shard_width_in_tiles;
-    uint32_t in0_size = per_core_M * in0_block_w * 2 * in0_single_tile_size;
-    uint32_t in1_size = per_core_N * in0_block_w * 2 * in1_single_tile_size;
+
+    // Calculate individual buffer sizes in bytes - use constant for buffering depth
+    uint32_t in0_size = per_core_M * in0_block_w * MCAST_INPUT_BUFFERING_DEPTH * in0_single_tile_size;
+    uint32_t in1_size = per_core_N * in0_block_w * MCAST_INPUT_BUFFERING_DEPTH * in1_single_tile_size;
     uint32_t out_size = per_core_M * per_core_N * output_single_tile_size;
     uint32_t in2_size = in2_block_tiles * in0_single_tile_size;
     uint32_t interm_size = per_core_M * per_core_N * interm_single_tile_size;

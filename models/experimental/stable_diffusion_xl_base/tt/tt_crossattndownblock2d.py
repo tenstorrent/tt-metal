@@ -10,7 +10,18 @@ from models.experimental.stable_diffusion_xl_base.tt.tt_downsample2d import TtDo
 
 
 class TtCrossAttnDownBlock2D(nn.Module):
-    def __init__(self, device, state_dict, module_path, query_dim, num_attn_heads, out_dim, has_downsample=False):
+    def __init__(
+        self,
+        device,
+        state_dict,
+        module_path,
+        query_dim,
+        num_attn_heads,
+        out_dim,
+        has_downsample=False,
+        transformer_weights_dtype=ttnn.bfloat16,
+        conv_weights_dtype=ttnn.bfloat16,
+    ):
         super().__init__()
 
         num_layers = 2
@@ -20,15 +31,34 @@ class TtCrossAttnDownBlock2D(nn.Module):
         for i in range(num_layers):
             self.attentions.append(
                 TtTransformer2DModel(
-                    device, state_dict, f"{module_path}.attentions.{i}", query_dim, num_attn_heads, out_dim
+                    device,
+                    state_dict,
+                    f"{module_path}.attentions.{i}",
+                    query_dim,
+                    num_attn_heads,
+                    out_dim,
+                    weights_dtype=transformer_weights_dtype,
                 )
             )
 
         for i in range(num_layers):
-            self.resnets.append(TtResnetBlock2D(device, state_dict, f"{module_path}.resnets.{i}", i == 0))
+            self.resnets.append(
+                TtResnetBlock2D(
+                    device, state_dict, f"{module_path}.resnets.{i}", i == 0, conv_weights_dtype=conv_weights_dtype
+                )
+            )
 
         self.downsamplers = (
-            TtDownsample2D(device, state_dict, f"{module_path}.downsamplers.0", (2, 2), (1, 1), (1, 1), 1)
+            TtDownsample2D(
+                device,
+                state_dict,
+                f"{module_path}.downsamplers.0",
+                (2, 2),
+                (1, 1),
+                (1, 1),
+                1,
+                conv_weights_dtype=conv_weights_dtype,
+            )
             if has_downsample
             else None
         )

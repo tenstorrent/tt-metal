@@ -17,7 +17,7 @@
 
 #include "control_plane.hpp"
 #include "core_coord.hpp"
-#include "dispatch_settings.hpp"
+#include "dispatch/dispatch_settings.hpp"
 #include "dprint_server.hpp"
 #include "env_lib.hpp"
 #include "erisc_datamover_builder.hpp"
@@ -239,10 +239,6 @@ void DevicePool::initialize(
     _inst->l1_bank_remap.assign(l1_bank_remap.begin(), l1_bank_remap.end());
     _inst->init_profiler_ = init_profiler;
     _inst->initialize_fabric_and_dispatch_fw_ = initialize_fabric_and_dispatch_fw;
-    // Track the thread where the Device Pool was created. Certain functions
-    // modifying the state of this instance, for example those responsible for
-    // (un)registering worker threads, can only be called in the creation thread
-    _inst->device_pool_creation_thread_id = std::this_thread::get_id();
 
     // Never skip for TG Cluster
     bool skip = not tt::tt_metal::MetalContext::instance().get_cluster().is_galaxy_cluster();
@@ -437,7 +433,6 @@ void DevicePool::add_devices_to_pool(const std::vector<chip_id_t>& device_ids) {
             devices_to_activate.insert(device_id);
         }
     } else {
-        std::vector<chip_id_t> all_device_ids = {};
         for (const auto& device_id : device_ids) {
             // Get list of all devices in the cluster connected to the passed in device_ids
             const auto& mmio_device_id =
@@ -582,39 +577,6 @@ void DevicePool::wait_for_fabric_router_sync() const {
     }
 }
 
-void DevicePool::register_worker_thread_for_device(IDevice* device, std::thread::id worker_thread_id) {
-    TT_FATAL(
-        std::this_thread::get_id() == this->device_pool_creation_thread_id,
-        "Worker threads can only be registered in the thread where the Device(s) were created");
-    auto worker_thread_handle = this->device_to_worker_thread_id.find(device);
-    if (worker_thread_handle != this->device_to_worker_thread_id.end()) {
-        TT_FATAL(
-            worker_thread_handle->second == worker_thread_id,
-            "Cannot register more than one worker thread per device.");
-        ;
-    } else {
-        TT_FATAL(
-            this->worker_thread_ids.find(worker_thread_id) == this->worker_thread_ids.end(),
-            "Cannot register a single worker thread on multiple devices");
-    }
-
-    this->device_to_worker_thread_id.insert({device, worker_thread_id});
-    this->worker_thread_ids.insert(worker_thread_id);
-}
-
-void DevicePool::unregister_worker_thread_for_device(IDevice* device) {
-    TT_FATAL(
-        std::this_thread::get_id() == this->device_pool_creation_thread_id,
-        "Worker threads can only be unregistered in the thread where the Device(s) were created");
-    auto worker_thread_handle = this->device_to_worker_thread_id.find(device);
-    if (worker_thread_handle != this->device_to_worker_thread_id.end()) {
-        this->worker_thread_ids.erase(worker_thread_handle->second);
-        this->device_to_worker_thread_id.erase(device);
-    }
-}
-
-const std::unordered_set<std::thread::id>& DevicePool::get_worker_thread_ids() const { return this->worker_thread_ids; }
-
 void DevicePool::init_firmware_on_active_devices() const {
     const auto& active_devices = this->get_all_active_devices();
     for (const auto& dev : active_devices) {
@@ -716,7 +678,6 @@ bool DevicePool::close_device(chip_id_t device_id) {
         auto device = get_device(mmio_controlled_device_id);
         if (device && device->is_initialized()) {
             pass &= device->close();
-            this->unregister_worker_thread_for_device(device);
         }
     }
     return pass;
@@ -829,9 +790,6 @@ void DevicePool::close_devices(const std::vector<IDevice*>& devices, bool skip_s
     for (const auto& dev_id : devices_to_close) {
         auto dev = tt::DevicePool::instance().get_active_device(dev_id);
         dev->close();
-        // When a device is closed, its worker thread is joined. Stop tracking this
-        // worker thread.
-        this->unregister_worker_thread_for_device(dev);
     }
 }
 

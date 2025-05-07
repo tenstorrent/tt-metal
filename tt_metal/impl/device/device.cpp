@@ -10,7 +10,6 @@
 #include <magic_enum/magic_enum.hpp>
 #include <persistent_kernel_cache.hpp>
 #include <sub_device.hpp>
-#include <sub_device_manager_tracker.hpp>
 #include <sub_device_types.hpp>
 #include <trace.hpp>
 #include <tt-metalium/program_cache.hpp>
@@ -48,18 +47,17 @@
 #include "device.hpp"
 #include "impl/context/metal_context.hpp"
 #include "dispatch_core_common.hpp"
-#include "dispatch_settings.hpp"
+#include "dispatch/dispatch_settings.hpp"
 #include "dprint_server.hpp"
 #include "hal_types.hpp"
 #include "jit_build/build.hpp"
-#include "launch_message_ring_buffer_state.hpp"
+#include "dispatch/launch_message_ring_buffer_state.hpp"
 #include "lightmetal/lightmetal_capture.hpp"
 #include "llrt.hpp"
 #include "logger.hpp"
 #include "metal_soc_descriptor.h"
 #include "multi_producer_single_consumer_queue.hpp"
 #include "profiler_types.hpp"
-#include "program_device_map.hpp"
 #include "tt-metalium/program.hpp"
 #include <tt_stl/strong_type.hpp>
 #include "system_memory_manager.hpp"
@@ -71,6 +69,7 @@
 #include "tt_metal/impl/dispatch/hardware_command_queue.hpp"
 #include "tt_metal/impl/dispatch/topology.hpp"
 #include "tt_metal/impl/sub_device/sub_device_manager.hpp"
+#include "sub_device/sub_device_manager_tracker.hpp"
 #include "tt_metal/jit_build/build_env_manager.hpp"
 #include "tt_metal/tools/profiler/tt_metal_tracy.hpp"
 #include <umd/device/coordinate_manager.h>
@@ -1826,21 +1825,6 @@ HalProgrammableCoreType Device::get_programmable_core_type(CoreCoord virtual_cor
     }
 
     return HalProgrammableCoreType::IDLE_ETH;
-}
-
-// TODO: Find a better home for this function
-// Extracts all the pairs of noc multicast encodings given a set of core ranges
-std::vector<std::pair<transfer_info_cores, uint32_t>> Device::extract_dst_noc_multicast_info(const std::vector<CoreRange>& ranges, const CoreType core_type) {
-    std::vector<std::pair<transfer_info_cores, uint32_t>> dst_noc_multicast_info;
-    dst_noc_multicast_info.reserve(ranges.size());
-    for (const CoreRange& core_range : ranges) {
-        CoreCoord virtual_start = this->virtual_core_from_logical_core(core_range.start_coord, core_type);
-        CoreCoord virtual_end = this->virtual_core_from_logical_core(core_range.end_coord, core_type);
-
-        uint32_t num_receivers = core_range.size();
-        dst_noc_multicast_info.push_back(std::make_pair(CoreRange(virtual_start, virtual_end), num_receivers));
-    }
-    return dst_noc_multicast_info;
 }
 
 std::shared_ptr<distributed::MeshDevice> Device::get_mesh_device() { return mesh_device.lock(); }

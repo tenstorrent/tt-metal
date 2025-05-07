@@ -16,8 +16,8 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_convert_to_chw(
 
     const auto input_shape = a.get_logical_shape();
     const auto input_core_grid = a.shard_spec()->grid;
-    std::vector<CoreCoord> input_cores = grid_to_cores(
-        input_core_grid.num_cores(), compute_with_storage_grid_size.x, compute_with_storage_grid_size.y, true);
+    const auto input_cores = corerange_to_cores(
+        input_core_grid, std::nullopt, a.shard_spec()->orientation == tt::tt_metal::ShardOrientation::ROW_MAJOR);
 
     const auto HW = input_shape[2];
     const auto C = input_shape[3];

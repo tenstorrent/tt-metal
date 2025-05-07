@@ -1,11 +1,13 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
+import gc
+from loguru import logger
 import torch
 import pytest
 import ttnn
 from models.experimental.stable_diffusion_xl_base.tt.tt_resnetblock2d import TtResnetBlock2D
-from diffusers import DiffusionPipeline
+from diffusers import UNet2DConditionModel
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.utility_functions import torch_random
 
@@ -18,16 +20,17 @@ from models.utility_functions import torch_random
         ((1, 640, 64, 64), (1, 1280), 1, 1, False, 1, "down_blocks", 0.995),
         ((1, 640, 32, 32), (1, 1280), 2, 0, True, 1, "down_blocks", 0.997),
         ((1, 1280, 32, 32), (1, 1280), 2, 1, False, 1, "down_blocks", 0.992),
-        ((1, 960, 128, 128), (1, 1280), 2, 0, True, 6, "up_blocks", 0.979),
+        ((1, 960, 128, 128), (1, 1280), 2, 0, True, 6, "up_blocks", 0.980),
         ((1, 640, 128, 128), (1, 1280), 2, 1, True, 2, "up_blocks", 0.997),
-        ((1, 2560, 32, 32), (1, 1280), 0, 0, True, 1, "up_blocks", 0.988),
-        ((1, 1920, 32, 32), (1, 1280), 0, 2, True, 1, "up_blocks", 0.991),
-        ((1, 1920, 64, 64), (1, 1280), 1, 0, True, 1, "up_blocks", 0.985),
-        ((1, 1280, 64, 64), (1, 1280), 1, 1, True, 1, "up_blocks", 0.993),
+        ((1, 2560, 32, 32), (1, 1280), 0, 0, True, 1, "up_blocks", 0.986),
+        ((1, 1920, 32, 32), (1, 1280), 0, 2, True, 1, "up_blocks", 0.990),
+        ((1, 1920, 64, 64), (1, 1280), 1, 0, True, 1, "up_blocks", 0.983),
+        ((1, 1280, 64, 64), (1, 1280), 1, 1, True, 1, "up_blocks", 0.992),
         ((1, 960, 64, 64), (1, 1280), 1, 2, True, 1, "up_blocks", 0.996),
     ],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
+@pytest.mark.parametrize("conv_weights_dtype", [ttnn.bfloat16])
 def test_resnetblock2d(
     device,
     temb_shape,
@@ -40,11 +43,12 @@ def test_resnetblock2d(
     pcc,
     use_program_cache,
     reset_seeds,
+    conv_weights_dtype,
 ):
-    pipe = DiffusionPipeline.from_pretrained(
-        "stabilityai/stable-diffusion-xl-base-1.0", torch_dtype=torch.float32, use_safetensors=True, variant="fp16"
+    unet = UNet2DConditionModel.from_pretrained(
+        "stabilityai/stable-diffusion-xl-base-1.0", torch_dtype=torch.float32, use_safetensors=True, subfolder="unet"
     )
-    unet = pipe.unet
+    # unet = pipe.unet
     unet.eval()
     state_dict = unet.state_dict()
 
@@ -55,7 +59,12 @@ def test_resnetblock2d(
     else:
         assert "Incorrect block name"
     tt_resnet = TtResnetBlock2D(
-        device, state_dict, f"{block}.{down_block_id}.resnets.{resnet_id}", conv_shortcut, split_in
+        device,
+        state_dict,
+        f"{block}.{down_block_id}.resnets.{resnet_id}",
+        conv_shortcut,
+        split_in,
+        conv_weights_dtype=conv_weights_dtype,
     )
 
     torch_input_tensor = torch_random(input_shape, -0.1, 0.1, dtype=torch.float32)
@@ -85,4 +94,8 @@ def test_resnetblock2d(
     output_tensor = output_tensor.reshape(input_shape[0], output_shape[1], output_shape[2], output_shape[0])
     output_tensor = torch.permute(output_tensor, (0, 3, 1, 2))
 
-    assert_with_pcc(torch_output_tensor, output_tensor, pcc)
+    del unet
+    gc.collect()
+
+    _, pcc_message = assert_with_pcc(torch_output_tensor, output_tensor, pcc)
+    logger.info(f"PCC is {pcc_message}")

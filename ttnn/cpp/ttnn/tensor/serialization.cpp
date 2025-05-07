@@ -288,7 +288,7 @@ void dump_tensor(
     auto storage_type = tensor.storage_type();
     safe_fwrite(&storage_type, sizeof(storage_type), 1, output_file);
 
-    bool is_on_device = is_tensor_on_device_or_multidevice(tensor);
+    bool is_on_device = is_device_tensor(tensor);
     Tensor tensor_to_dump = tensor;
     if (is_on_device) {
         tensor_to_dump = tensor_to_dump.cpu();

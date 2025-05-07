@@ -11,7 +11,6 @@
 #include <mesh_device_view.hpp>
 #include <small_vector.hpp>
 #include <sub_device.hpp>
-#include <sub_device_manager_tracker.hpp>
 #include <system_mesh.hpp>
 #include <tt_metal.hpp>
 #include <algorithm>
@@ -26,8 +25,7 @@
 
 #include "allocator.hpp"
 #include "assert.hpp"
-#include "dispatch_settings.hpp"
-#include "launch_message_ring_buffer_state.hpp"
+#include "dispatch/dispatch_settings.hpp"
 #include "mesh_trace.hpp"
 #include "shape_base.hpp"
 #include <tt_stl/span.hpp>
@@ -44,6 +42,8 @@
 
 #include "tt_metal/impl/allocator/l1_banking_allocator.hpp"
 #include "tt_metal/impl/sub_device/sub_device_manager.hpp"
+#include "dispatch/launch_message_ring_buffer_state.hpp"
+#include "sub_device/sub_device_manager_tracker.hpp"
 #include <umd/device/types/xy_pair.h>
 
 enum class CoreType;
@@ -832,10 +832,8 @@ void MeshDevice::init_fabric() {
 }
 
 program_cache::detail::ProgramCache& MeshDevice::get_program_cache() { return *program_cache_; }
-HalProgrammableCoreType MeshDevice::get_programmable_core_type(CoreCoord virtual_core) const { return reference_device()->get_programmable_core_type(virtual_core); }
-std::vector<std::pair<transfer_info_cores, uint32_t>> MeshDevice::extract_dst_noc_multicast_info(
-    const std::vector<CoreRange>& ranges, const CoreType core_type) {
-    return reference_device()->extract_dst_noc_multicast_info(ranges, core_type);
+HalProgrammableCoreType MeshDevice::get_programmable_core_type(CoreCoord virtual_core) const {
+    return reference_device()->get_programmable_core_type(virtual_core);
 }
 
 // Methods for SubDevice Management
