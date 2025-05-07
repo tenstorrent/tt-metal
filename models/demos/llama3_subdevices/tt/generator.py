@@ -72,7 +72,7 @@ class Generator:
         page_table=None,
         kv_cache=None,
         prompt_lens=None,
-        enable_trace=False,
+        enable_trace=True,
         sampling_params=SamplingParams(temperature=0.0, top_k=-1, top_p=1.0),
     ):
         assert sampling_params.temperature == 0, "Currently only supporting greedy decoding (temperature=0) on device"
