@@ -172,6 +172,7 @@ public:
 
     void allocate_circular_buffers(const IDevice* device);
 
+    void finalize_offsets(IDevice* device);
     bool is_finalized() const;
     void set_finalized();
     ProgramBinaryStatus get_program_binary_status(std::size_t device_id) const;
@@ -237,8 +238,6 @@ private:
 
     friend void program_dispatch::assemble_device_commands(
         ProgramCommandSequence& program_command_sequence, Program& program, IDevice* device, SubDeviceId sub_device_id);
-    template <typename T>
-    friend void program_dispatch::finalize_program_offsets(T&, IDevice*);
     template <typename WorkloadType, typename DeviceType>
     friend uint32_t program_dispatch::program_base_addr_on_core(WorkloadType&, DeviceType, HalProgrammableCoreType);
     friend HWCommandQueue;

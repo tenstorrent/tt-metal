@@ -1109,7 +1109,7 @@ void Device::configure_command_queue_programs() {
     configure_dispatch_cores(this);
 
     // Run the cq program
-    program_dispatch::finalize_program_offsets(command_queue_program, this);
+    command_queue_program.finalize_offsets(this);
     detail::ConfigureDeviceWithProgram(this, command_queue_program, true);
     tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(this->id());
 }
@@ -1168,7 +1168,7 @@ void Device::init_fabric() {
 
     configure_fabric_cores(this);
 
-    program_dispatch::finalize_program_offsets(*fabric_program_, this);
+    fabric_program_->finalize_offsets(this);
 
     detail::WriteRuntimeArgsToDevice(this, *fabric_program_, this->using_fast_dispatch());
     detail::ConfigureDeviceWithProgram(this, *fabric_program_, this->using_fast_dispatch());

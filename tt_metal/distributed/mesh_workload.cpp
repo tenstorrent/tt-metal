@@ -97,7 +97,7 @@ void MeshWorkload::compile(MeshDevice* mesh_device) {
         }
         mesh_device->wait_for_thread_pool();
     }
-    program_dispatch::finalize_program_offsets(*this, mesh_device);
+    finalize_program_offsets(mesh_device);
 }
 
 void MeshWorkload::load_binaries(MeshCommandQueue& mesh_cq) {
@@ -357,6 +357,19 @@ uint32_t MeshWorkload::get_cb_size(
         program_idx++;
     }
     return cb_size;
+}
+
+void MeshWorkload::finalize_program_offsets(MeshDevice* mesh_device) {
+    if (is_finalized()) {
+        return;
+    }
+
+    // Finalize each program in the mesh workload
+    for (auto& [_, program] : programs_) {
+        program.finalize_offsets(mesh_device);
+    }
+
+    set_finalized();
 }
 
 }  // namespace tt::tt_metal::distributed

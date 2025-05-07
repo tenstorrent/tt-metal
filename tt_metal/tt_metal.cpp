@@ -715,7 +715,7 @@ void LaunchProgram(IDevice* device, Program& program, bool wait_until_cores_done
         }
         detail::CompileProgram(device, program);
         if (!program.is_finalized()) {
-            program_dispatch::finalize_program_offsets(program, device);
+            program.finalize_offsets(device);
         }
 
         detail::WriteRuntimeArgsToDevice(device, program, force_slow_dispatch);
