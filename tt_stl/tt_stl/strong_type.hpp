@@ -53,24 +53,49 @@ namespace tt::stl {
 //
 // std::cout << user_map.at(UserId(1)) << std::endl;  // "John Doe"
 //
-template <typename T, typename Tag>
+
+template <typename T>
+concept HasConstexprThreeWayCompare = requires(T t) {
+    { std::bool_constant<(T{}.operator<=>(T{}), true)>() } -> std::same_as<std::true_type>;
+};
+
+// lambdas are guarenteed to be unique according to the standard,
+// so the default Tag allows each StrongType instantiation
+// to be truly unique
+template <typename T, typename Tag = decltype([]() {})>
 class StrongType {
 public:
     using value_type = T;
+    using tag_type = Tag;
 
-    constexpr explicit StrongType(T v) : value_(std::move(v)) {}
+    constexpr StrongType() noexcept
+        requires std::default_initializable<T>
+        : value_(T{}) {}
+    constexpr explicit StrongType(T v) noexcept : value_(std::move(v)) {}
 
-    StrongType(const StrongType&) = default;
-    StrongType(StrongType&&) = default;
-    StrongType& operator=(const StrongType&) = default;
-    StrongType& operator=(StrongType&&) = default;
+    constexpr StrongType(const StrongType&) = default;
+    constexpr StrongType(StrongType&&) noexcept = default;
+    constexpr StrongType& operator=(const StrongType&) = default;
+    constexpr StrongType& operator=(StrongType&&) noexcept = default;
 
-    const T& operator*() const { return value_; }
+    constexpr const T& operator*() const { return value_; }
 
-    auto operator<=>(const StrongType&) const = default;
+    // requires() = default on a constexpr function doesn't behave on gcc/clang
+    // so it needed the explicit definition to compile.
+    // We need the separate definition for non/constexpr to accomodate
+    // types that don't have constexpr <=> (eg. std::unique_ptr)
+    constexpr auto operator<=>(const StrongType& rhs) const noexcept
+        requires(HasConstexprThreeWayCompare<T>)
+    {
+        return value_ <=> rhs.value_;
+    }
+
+    auto operator<=>(const StrongType&) const noexcept
+        requires(!HasConstexprThreeWayCompare<T>)
+    = default;
 
     static constexpr auto attribute_names = std::forward_as_tuple("value");
-    auto attribute_values() const { return std::forward_as_tuple(value_); }
+    constexpr auto attribute_values() const { return std::forward_as_tuple(value_); }
 
 private:
     T value_;

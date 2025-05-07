@@ -34,6 +34,19 @@ TEST(StrongTypeTest, Basic) {
     EXPECT_EQ(my_int_id1, my_int_id2);
 }
 
+TEST(StrongTypeTest, GuarenteedUnique) {
+    StrongType<int> one{1};
+    StrongType<int> otherone{1};
+
+    static_assert(not std::same_as<decltype(one), decltype(otherone)>);
+    static_assert(not std::is_convertible_v<decltype(one), decltype(otherone)>);
+
+    auto runtime_same = std::is_same_v<decltype(one), decltype(otherone)>;
+    EXPECT_FALSE(runtime_same);
+
+    EXPECT_EQ(*one, *otherone);
+}
+
 TEST(StrongTypeTest, UseInContainers) {
     std::unordered_set<MyIntId> unordered;
     std::set<MyIntId> ordered;
