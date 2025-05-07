@@ -6,13 +6,17 @@ import time
 import pandas as pd
 import sys
 import os
+import traceback
+
+import utils
+
 
 device_id = 0
 device = ttnn.open_device(device_id=device_id)
 
 EPSILON = 2**-9
 
-ttnn.enable_program_cache(device)  # Useful: we are going to call the same kernel several times
+# ttnn.enable_program_cache(device)  # Useful: we are going to call the same kernel several times
 
 
 datatypes_parameters = {
@@ -46,14 +50,12 @@ datatypes_parameters = {
 def exp_accurate_python(input_tensor, output_tensor):
     # setsgn => get sign of input and then multiply input by it to make numbers positive
     # this shouldn't alter accuracy as -1 and 1 are exact and so are their multiples
-    tensor_sign = ttnn.sign(input_tensor, 0)
-    tensor_input_positive = input_tensor * tensor_sign
 
-    # _sfpu_exp_
-    uint32_tensor = ttnn.to_memory_config(tensor_input_positive, tensor_input_positive.layout, ttnn.UINT32)
-    uint32_exponent = 1
+    tensor_positive_input = setsgn_bf16_(input_tensor, 0)
+    tensor_exponent = exexp_bf16(tensor_positive_input)
 
-    # sfpu_reciprocal
+    mask_positive_exponents = tensor_exponent > 0
+    tensor_positive_input = torch
 
     pass
 
@@ -429,9 +431,11 @@ def measure_op_accuracy_bf16(operation_name, dest_dir, group_size=None):
         yref_array,
         max_abs_error_array,
         mean_abs_error_array,
+        max_ulp_error_array,
+        mean_ulp_error_array,
         max_rel_error_array,
         mean_rel_error_array,
-    ] = [np.zeros([sub_batches], dtype=NUMPY_TYPE) for _ in range(7)]
+    ] = [np.zeros([sub_batches], dtype=NUMPY_TYPE) for _ in range(9)]
 
     start_time = time.time()
 
@@ -445,10 +449,22 @@ def measure_op_accuracy_bf16(operation_name, dest_dir, group_size=None):
     torch_output_ref = torch_unary_op(torch_input_bf16, out=torch_output_ref)
     actual_torch_output = launch_ttnn_op(torch_input_bf16, ttnn_unary_op, ttnn_output)
 
-    # Flatten tensors for analysis
+    # Compute errors
+    torch_diff = torch.abs(torch_output_ref - actual_torch_output)
+    torch_ulp_value = utils.ulp_bf16(torch_input_bf16)
+    torch_eps = torch.full(torch_input_bf16.size(), EPSILON)
+
+    torch_rel_error = torch_diff / torch.max(torch.abs(torch_output_ref), torch_eps)
+    torch_ulp_error = torch_diff / torch_ulp_value
+
+    # Flatten tensors and convert to ndarray for analysis
     np_flat_input = torch_input_bf16.to(torch.float32).flatten().numpy()
     np_flat_output = actual_torch_output.to(torch.float32).flatten().numpy()
     np_flat_ref = torch_output_ref.to(torch.float32).flatten().numpy()
+
+    np_flat_diff = torch_diff.to(torch.float32).flatten().numpy()
+    np_flat_rel_error = torch_rel_error.to(torch.float32).flatten().numpy()
+    np_flat_ulp_error = torch_ulp_error.to(torch.float32).flatten().numpy()
 
     # Process each sub-batch
     for j in range(0, sub_batches):
@@ -459,27 +475,32 @@ def measure_op_accuracy_bf16(operation_name, dest_dir, group_size=None):
         np_sub_input = np_flat_input[beg_index:end_index]
         np_sub_output = np_flat_output[beg_index:end_index]
         np_sub_ref = np_flat_ref[beg_index:end_index]
+        np_sub_diff = np_flat_diff[beg_index:end_index]
+        np_sub_rel_error = np_flat_rel_error[beg_index:end_index]
+        np_sub_ulp_error = np_flat_ulp_error[beg_index:end_index]
 
         # Calculate errors
-        np_diff = np.abs(np_sub_ref - np_sub_output)
-        np_sub_ref_abs = np.abs(np_sub_ref)
 
-        # Handle edge cases
-        finite_mask = np.isfinite(np_diff) & np.isfinite(np_sub_ref_abs)
+        finite_mask = np.isfinite(np_sub_diff)
         if np.any(finite_mask):
-            np_abs_diff = max(np_sub_ref_abs[finite_mask].max(), EPSILON)
+            max_abs_error = np.max(np_sub_diff[finite_mask])
+            mean_abs_error = np.mean(np_sub_diff[finite_mask])
 
-            max_abs_error = np.max(np_diff[finite_mask])
-            mean_abs_error = np.mean(np_diff[finite_mask])
-            max_rel_error = np.max(np_diff[finite_mask] / np_abs_diff)
-            mean_rel_error = np.mean(np_diff[finite_mask] / np_abs_diff)
+            max_ulp_error = np.max(np_sub_ulp_error[finite_mask])
+            mean_ulp_error = np.mean(np_sub_ulp_error[finite_mask])
+
+            max_rel_error = np.max(np_sub_rel_error[finite_mask])
+            mean_rel_error = np.mean(np_sub_rel_error[finite_mask])
+
         else:
-            np_abs_diff = max(np_sub_ref_abs.max(), EPSILON)
+            max_abs_error = np.max(np_sub_diff)
+            mean_abs_error = np.mean(np_sub_diff)
 
-            max_abs_error = np.max(np_diff)
-            mean_abs_error = np.mean(np_diff)
-            max_rel_error = np.max(np_diff / np_abs_diff)
-            mean_rel_error = np.mean(np_diff / np_abs_diff)
+            max_ulp_error = np.max(np_sub_ulp_error)
+            mean_ulp_error = np.mean(np_sub_ulp_error)
+
+            max_rel_error = np.max(np_sub_rel_error)
+            mean_rel_error = np.mean(np_sub_rel_error)
 
         # Store results
         x_array[j] = np_sub_input[0].item()
@@ -487,6 +508,8 @@ def measure_op_accuracy_bf16(operation_name, dest_dir, group_size=None):
         yref_array[j] = np_sub_ref[0].item()
         max_abs_error_array[j] = max_abs_error.item()
         mean_abs_error_array[j] = mean_abs_error.item()
+        max_ulp_error_array[j] = max_ulp_error.item()
+        mean_ulp_error_array[j] = mean_ulp_error.item()
         max_rel_error_array[j] = max_rel_error.item()
         mean_rel_error_array[j] = mean_rel_error.item()
 
@@ -498,6 +521,8 @@ def measure_op_accuracy_bf16(operation_name, dest_dir, group_size=None):
             "base_yref": yref_array,
             "max_abs_error": max_abs_error_array,
             "mean_abs_error": mean_abs_error_array,
+            "max_ulp_error": max_ulp_error_array,
+            "mean_ulp_error": mean_ulp_error_array,
             "max_rel_error": max_rel_error_array,
             "mean_rel_error": mean_rel_error_array,
         }
@@ -618,6 +643,7 @@ def main(args):
             successfull_operations += [operation]
         except Exception as e:
             print(f"{RED}Could not run operation {operation}: {e}{RESET}")
+            print(f"{RED}{traceback.format_exc()}{RESET}")
             failed_operations += [operation]
 
     print(f"Now measuring high-resolution operations")
@@ -630,6 +656,7 @@ def main(args):
             successfull_operations += [f"{operation}[highres]"]
         except Exception as e:
             print(f"{RED}Could not run operation {operation}: {e}{RESET}")
+            print(f"{RED}{traceback.format_exc()}{RESET}")
             failed_operations += [f"{operation}[highres]"]
 
     print(f"Sucessfully ran {success_count} / {len(all_operations)} operations")
