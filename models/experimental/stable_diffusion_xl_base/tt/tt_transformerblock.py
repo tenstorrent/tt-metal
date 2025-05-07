@@ -9,16 +9,24 @@ from models.experimental.stable_diffusion_xl_base.tt.tt_feedforward import TtFee
 
 
 class TtBasicTransformerBlock(nn.Module):
-    def __init__(self, device, state_dict, module_path, query_dim, num_attn_heads, out_dim):
+    def __init__(
+        self, device, state_dict, module_path, query_dim, num_attn_heads, out_dim, weights_dtype=ttnn.bfloat16
+    ):
         super().__init__()
 
-        self.attn1 = TtAttention(device, state_dict, f"{module_path}.attn1", query_dim, num_attn_heads, out_dim)
-        self.attn2 = TtAttention(device, state_dict, f"{module_path}.attn2", query_dim, num_attn_heads, out_dim)
+        self.attn1 = TtAttention(
+            device, state_dict, f"{module_path}.attn1", query_dim, num_attn_heads, out_dim, weights_dtype=weights_dtype
+        )
+        self.attn2 = TtAttention(
+            device, state_dict, f"{module_path}.attn2", query_dim, num_attn_heads, out_dim, weights_dtype=weights_dtype
+        )
 
-        self.ff = TtFeedForward(device, state_dict, f"{module_path}.ff")
+        self.ff = TtFeedForward(device, state_dict, f"{module_path}.ff", weights_dtype=weights_dtype)
 
         norm1_weights = state_dict[f"{module_path}.norm1.weight"]
         norm1_bias = state_dict[f"{module_path}.norm1.bias"]
+
+        # Always use bfloat16 for norm weights and bias
         self.tt_norm1_weights = ttnn.from_torch(norm1_weights, ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
         self.tt_norm1_bias = (
             ttnn.from_torch(norm1_bias, ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
