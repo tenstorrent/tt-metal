@@ -55,11 +55,20 @@ private:
     ~MetalContext();
     void teardown();
 
+    void clear_l1_state(chip_id_t device_id);
+    void clear_dram_state(chip_id_t device_id);
+    void clear_launch_messages_on_eth_cores(chip_id_t device_id);
+
     bool initialized_ = false;
+    bool teardown_registered_ = false;
 
     uint8_t num_hw_cqs_ = 0;
     BankMapping l1_bank_remap_;
     DispatchCoreConfig dispatch_core_config_;
+    size_t fw_compile_hash_ = 0;  // To check if FW recompilation is needed
+
+    // Used to track which FW has been built already
+    std::unordered_set<uint32_t> firmware_built_keys_;
 
     llrt::RunTimeOptions rtoptions_;
     std::unique_ptr<Cluster> cluster_;

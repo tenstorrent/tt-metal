@@ -147,13 +147,7 @@ size_t KernelCompileHash(const std::shared_ptr<Kernel>& kernel, JitBuildOptions&
         build_key,
         std::to_string(std::hash<tt_hlk_desc>{}(build_options.hlk_desc)),
         kernel->compute_hash(),
-        tt::tt_metal::MetalContext::instance().rtoptions().get_watcher_enabled());
-
-    for (int i = 0; i < llrt::RunTimeDebugFeatureCount; i++) {
-        compile_hash_str += "_";
-        compile_hash_str +=
-            tt::tt_metal::MetalContext::instance().rtoptions().get_feature_hash_string((llrt::RunTimeDebugFeatures)i);
-    }
+        tt::tt_metal::MetalContext::instance().rtoptions().get_compile_hash_string());
     size_t compile_hash = std::hash<std::string>{}(compile_hash_str);
 
 #ifdef GENERATE_HASH_LOG
