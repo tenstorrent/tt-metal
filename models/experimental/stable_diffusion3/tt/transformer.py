@@ -114,7 +114,7 @@ class TtSD3Transformer2DModel:
         self._norm_out = TtLayerNorm(parameters.norm_out, eps=1e-6)
         self._proj_out = TtLinear(parameters.proj_out)
 
-        self._patch_size = parameters.pos_embed.patch_size
+        self._patch_size = self._pos_embed.patch_size
 
         # TODO: get dimensions from other parameters
         self._sharding = ShardingProjection(dim=2432, device=device)
