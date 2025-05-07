@@ -395,34 +395,17 @@ void HWCommandQueue::enqueue_write_to_core_l1(
     tt::stl::Span<const SubDeviceId> sub_device_ids) {
     ZoneScopedN("HWCommandQueue_enqueue_write_to_core_l1");
 
-    const HalProgrammableCoreType core_type = this->device_->get_programmable_core_type(virtual_core);
-    TT_FATAL(
-        address + size_bytes <= MetalContext::instance().hal().get_dev_addr(core_type, HalL1MemAddrType::BASE) +
-                                    MetalContext::instance().hal().get_dev_size(core_type, HalL1MemAddrType::BASE),
-        "Region to write to in L1 is out of bounds");
-
     sub_device_ids = buffer_dispatch::select_sub_device_ids(this->device_, sub_device_ids);
 
-    while (size_bytes > 0) {
-        const uint32_t size_bytes_to_write =
-            std::min(size_bytes, calculate_max_prefetch_data_size_bytes(this->get_dispatch_core_type()));
-
-        device_dispatch::L1WriteDispatchParams dispatch_params{
-            virtual_core,
-            address,
-            size_bytes_to_write,
-            this->device_,
-            this->id_,
-            this->get_dispatch_core_type(),
-            this->expected_num_workers_completed_,
-            sub_device_ids,
-            src};
-        device_dispatch::issue_l1_write_command_sequence(dispatch_params);
-
-        size_bytes -= size_bytes_to_write;
-        address += size_bytes_to_write;
-        src = (uint8_t*)src + size_bytes_to_write;
-    }
+    device_dispatch::write_to_core_l1(
+        this->device_,
+        virtual_core,
+        src,
+        address,
+        size_bytes,
+        this->id_,
+        this->expected_num_workers_completed_,
+        sub_device_ids);
 
     if (blocking) {
         this->finish(sub_device_ids);

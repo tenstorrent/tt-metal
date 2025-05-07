@@ -20,6 +20,10 @@ uint32_t calculate_max_prefetch_data_size_bytes(const CoreType& dispatch_core_ty
 
 namespace device_dispatch {
 
+struct L1WriteDispatchParams : public L1ReadDispatchParams {
+    const void* src = nullptr;
+};
+
 void issue_l1_write_command_sequence(const L1WriteDispatchParams& dispatch_params) {
     const uint32_t num_worker_counters = dispatch_params.sub_device_ids.size();
 
@@ -54,6 +58,44 @@ void issue_l1_write_command_sequence(const L1WriteDispatchParams& dispatch_param
     sysmem_manager.issue_queue_push_back(cmd_sequence_sizeB, dispatch_params.cq_id);
     sysmem_manager.fetch_queue_reserve_back(dispatch_params.cq_id);
     sysmem_manager.fetch_queue_write(cmd_sequence_sizeB, dispatch_params.cq_id);
+}
+
+void write_to_core_l1(
+    IDevice* device,
+    const CoreCoord& virtual_core,
+    const void* src,
+    DeviceAddr address,
+    uint32_t size_bytes,
+    uint32_t cq_id,
+    tt::stl::Span<const uint32_t> expected_num_workers_completed,
+    tt::stl::Span<const SubDeviceId> sub_device_ids) {
+    TT_FATAL(
+        address + size_bytes <= device->get_dev_addr(virtual_core, HalL1MemAddrType::BASE) +
+                                    device->get_dev_size(virtual_core, HalL1MemAddrType::BASE),
+        "Region to write to in L1 is out of bounds");
+
+    while (size_bytes > 0) {
+        const CoreType dispatch_core_type =
+            MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_type();
+        const uint32_t size_bytes_to_write =
+            std::min(size_bytes, calculate_max_prefetch_data_size_bytes(dispatch_core_type));
+
+        L1WriteDispatchParams dispatch_params{
+            virtual_core,
+            address,
+            size_bytes_to_write,
+            device,
+            cq_id,
+            dispatch_core_type,
+            expected_num_workers_completed,
+            sub_device_ids,
+            src};
+        issue_l1_write_command_sequence(dispatch_params);
+
+        size_bytes -= size_bytes_to_write;
+        address += size_bytes_to_write;
+        src = (uint8_t*)src + size_bytes_to_write;
+    }
 }
 
 void issue_l1_read_command_sequence(const L1ReadDispatchParams& dispatch_params) {

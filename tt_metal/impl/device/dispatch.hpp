@@ -34,11 +34,15 @@ struct L1ReadDispatchParams {
     tt::stl::Span<const SubDeviceId> sub_device_ids;
 };
 
-struct L1WriteDispatchParams : public L1ReadDispatchParams {
-    const void* src = nullptr;
-};
-
-void issue_l1_write_command_sequence(const L1WriteDispatchParams& dispatch_params);
+void write_to_core_l1(
+    IDevice* device,
+    const CoreCoord& virtual_core,
+    const void* src,
+    DeviceAddr address,
+    uint32_t size_bytes,
+    uint32_t cq_id,
+    tt::stl::Span<const uint32_t> expected_num_workers_completed,
+    tt::stl::Span<const SubDeviceId> sub_device_ids = {});
 
 void issue_l1_read_command_sequence(const L1ReadDispatchParams& dispatch_params);
 
