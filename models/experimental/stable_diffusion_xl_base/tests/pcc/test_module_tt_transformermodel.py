@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 import gc
+from loguru import logger
 import torch
 import pytest
 import ttnn
@@ -15,9 +16,10 @@ from models.utility_functions import torch_random
     "input_shape, encoder_shape, down_block_id, query_dim, num_attn_heads, out_dim, pcc",
     [
         ((1, 640, 64, 64), (1, 77, 2048), 1, 640, 10, 640, 0.999),
-        ((1, 1280, 32, 32), (1, 77, 2048), 2, 1280, 20, 1280, 0.995),
+        ((1, 1280, 32, 32), (1, 77, 2048), 2, 1280, 20, 1280, 0.996),
     ],
 )
+@pytest.mark.parametrize("transformer_weights_dtype", [ttnn.bfloat16])
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 def test_transformermodel(
     device,
@@ -30,6 +32,7 @@ def test_transformermodel(
     pcc,
     use_program_cache,
     reset_seeds,
+    transformer_weights_dtype,
 ):
     unet = UNet2DConditionModel.from_pretrained(
         "stabilityai/stable-diffusion-xl-base-1.0", torch_dtype=torch.float32, use_safetensors=True, subfolder="unet"
@@ -40,7 +43,13 @@ def test_transformermodel(
 
     torch_transformerblock = unet.down_blocks[down_block_id].attentions[0]
     tt_transformerblock = TtTransformer2DModel(
-        device, state_dict, f"down_blocks.{down_block_id}.attentions.0", query_dim, num_attn_heads, out_dim
+        device,
+        state_dict,
+        f"down_blocks.{down_block_id}.attentions.0",
+        query_dim,
+        num_attn_heads,
+        out_dim,
+        weights_dtype=transformer_weights_dtype,
     )
     torch_input_tensor = torch_random(input_shape, -0.1, 0.1, dtype=torch.float32)
     torch_encoder_tensor = torch_random(encoder_shape, -0.1, 0.1, dtype=torch.float32)
@@ -74,4 +83,5 @@ def test_transformermodel(
     del unet
     gc.collect()
 
-    assert_with_pcc(torch_output_tensor, output_tensor, pcc)
+    _, pcc_message = assert_with_pcc(torch_output_tensor, output_tensor, pcc)
+    logger.info(f"PCC is: {pcc_message}")

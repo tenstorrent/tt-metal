@@ -16,7 +16,16 @@ from models.experimental.stable_diffusion_xl_base.tt.sdxl_utility import (
 
 
 class TtResnetBlock2D(nn.Module):
-    def __init__(self, device, state_dict, module_path, conv_shortcut=False, split_in=1, split_out=1):
+    def __init__(
+        self,
+        device,
+        state_dict,
+        module_path,
+        conv_shortcut=False,
+        split_in=1,
+        split_out=1,
+        conv_weights_dtype=ttnn.bfloat16,
+    ):
         super().__init__()
 
         self.device = device
@@ -86,7 +95,7 @@ class TtResnetBlock2D(nn.Module):
                 self.tt_conv1_bias,
                 self.conv1_params,
             ) = prepare_split_conv_params(
-                device, conv_weights_1, conv_bias_1, split_in, split_out, ttnn.bfloat8_b, act_block_h_override=32
+                device, conv_weights_1, conv_bias_1, split_in, split_out, conv_weights_dtype, act_block_h_override=32
             )
         else:
             (
@@ -95,22 +104,22 @@ class TtResnetBlock2D(nn.Module):
                 self.tt_conv1_weights,
                 self.tt_conv1_bias,
                 self.conv1_params,
-            ) = prepare_conv_params(device, conv_weights_1, conv_bias_1, ttnn.bfloat8_b, act_block_h_override=32)
+            ) = prepare_conv_params(device, conv_weights_1, conv_bias_1, conv_weights_dtype, act_block_h_override=32)
         _, _, self.tt_conv2_weights, self.tt_conv2_bias, self.conv2_params = prepare_conv_params(
-            device, conv_weights_2, conv_bias_2, ttnn.bfloat8_b, act_block_h_override=32
+            device, conv_weights_2, conv_bias_2, conv_weights_dtype, act_block_h_override=32
         )
         if conv_shortcut:
             _, _, self.tt_conv3_weights, self.tt_conv3_bias, self.conv3_params = prepare_conv_params(
-                device, conv_weights_3, conv_bias_3, ttnn.bfloat8_b, act_block_h_override=32
+                device, conv_weights_3, conv_bias_3, conv_weights_dtype, act_block_h_override=32
             )
         else:
             self.tt_conv3_weights = self.tt_conv3_bias = None
 
         self.tt_time_emb_weights = ttnn.from_torch(
-            torch.permute(time_emb_weights, (1, 0)), ttnn.bfloat8_b, device=device, layout=ttnn.TILE_LAYOUT
+            torch.permute(time_emb_weights, (1, 0)), conv_weights_dtype, device=device, layout=ttnn.TILE_LAYOUT
         )
         self.tt_time_emb_bias = (
-            ttnn.from_torch(time_emb_bias, ttnn.bfloat8_b, device=device, layout=ttnn.TILE_LAYOUT)
+            ttnn.from_torch(time_emb_bias, conv_weights_dtype, device=device, layout=ttnn.TILE_LAYOUT)
             if time_emb_bias is not None
             else None
         )

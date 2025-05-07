@@ -10,7 +10,18 @@ from models.experimental.stable_diffusion_xl_base.tt.tt_upsample2d import TtUpsa
 
 
 class TtCrossAttnUpBlock2D(nn.Module):
-    def __init__(self, device, state_dict, module_path, query_dim, num_attn_heads, out_dim, has_upsample=False):
+    def __init__(
+        self,
+        device,
+        state_dict,
+        module_path,
+        query_dim,
+        num_attn_heads,
+        out_dim,
+        has_upsample=False,
+        transformer_weights_dtype=ttnn.bfloat16,
+        conv_weights_dtype=ttnn.bfloat16,
+    ):
         super().__init__()
 
         num_layers = 3
@@ -20,15 +31,34 @@ class TtCrossAttnUpBlock2D(nn.Module):
         for i in range(num_layers):
             self.attentions.append(
                 TtTransformer2DModel(
-                    device, state_dict, f"{module_path}.attentions.{i}", query_dim, num_attn_heads, out_dim
+                    device,
+                    state_dict,
+                    f"{module_path}.attentions.{i}",
+                    query_dim,
+                    num_attn_heads,
+                    out_dim,
+                    weights_dtype=transformer_weights_dtype,
                 )
             )
 
         for i in range(num_layers):
-            self.resnets.append(TtResnetBlock2D(device, state_dict, f"{module_path}.resnets.{i}", True))
+            self.resnets.append(
+                TtResnetBlock2D(
+                    device, state_dict, f"{module_path}.resnets.{i}", True, conv_weights_dtype=conv_weights_dtype
+                )
+            )
 
         self.upsamplers = (
-            TtUpsample2D(device, state_dict, f"{module_path}.upsamplers.0", (1, 1), (1, 1), (1, 1), 1)
+            TtUpsample2D(
+                device,
+                state_dict,
+                f"{module_path}.upsamplers.0",
+                (1, 1),
+                (1, 1),
+                (1, 1),
+                1,
+                conv_weights_dtype=conv_weights_dtype,
+            )
             if has_upsample
             else None
         )
