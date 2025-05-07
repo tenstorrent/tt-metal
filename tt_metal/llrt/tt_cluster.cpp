@@ -483,9 +483,14 @@ void Cluster::generate_virtual_to_umd_coord_mapping() {
                  get_soc_desc(chip_id).get_cores(CoreType::PCIE, CoordSystem::TRANSLATED)) {
                 this->virtual_pcie_cores_[chip_id].insert({core.x, core.y});
             }
-            for (const tt::umd::CoreCoord& core :
-                 get_soc_desc(chip_id).get_cores(CoreType::DRAM, CoordSystem::TRANSLATED)) {
-                this->virtual_dram_cores_[chip_id].insert({core.x, core.y});
+            for (auto dram_channel = 0; dram_channel < this->get_soc_desc(chip_id).get_num_dram_views();
+                 dram_channel++) {
+                auto worker_dram_ep = this->get_soc_desc(chip_id).get_preferred_worker_core_for_dram_view(dram_channel);
+                auto eth_dram_ep = this->get_soc_desc(chip_id).get_preferred_eth_core_for_dram_view(dram_channel);
+                this->virtual_dram_cores_[chip_id].insert({worker_dram_ep.x, worker_dram_ep.y});
+                if (worker_dram_ep != eth_dram_ep) {
+                    this->virtual_dram_cores_[chip_id].insert({eth_dram_ep.x, eth_dram_ep.y});
+                }
             }
         }
     }
@@ -624,50 +629,44 @@ void Cluster::assert_risc_reset_at_core(const tt_cxy_pair& core, const TensixSof
     this->driver_->assert_risc_reset_at_core(core.chip, core_coord, soft_resets);
 }
 
-void Cluster::write_dram_vec(std::vector<uint32_t> &vec, tt_target_dram dram, uint64_t addr, bool small_access) const {
-    int chip_id, d_view, d_subchannel;
-    std::tie(chip_id, d_view, d_subchannel) = dram;
-    const metal_SocDescriptor &desc_to_use = get_soc_desc(chip_id);
+void Cluster::write_dram_vec(
+    std::vector<uint32_t>& vec, chip_id_t device_id, int dram_view, uint64_t addr, bool small_access) const {
+    const metal_SocDescriptor& desc_to_use = get_soc_desc(device_id);
     TT_FATAL(
-        d_view < desc_to_use.get_num_dram_views(),
+        dram_view < desc_to_use.get_num_dram_views(),
         "Bounds-Error -- dram_view={} is outside of num_dram_views={}",
-        d_view,
+        dram_view,
         desc_to_use.get_num_dram_views());
-    int d_chan = desc_to_use.get_channel_for_dram_view(d_view);
-    TT_ASSERT(
-        d_subchannel < desc_to_use.get_dram_cores().at(d_chan).size(),
-        "Trying to address dram sub channel that doesnt exist in the device descriptor");
-    tt::umd::CoreCoord dram_core_coord =
-        desc_to_use.get_dram_core_for_channel(d_chan, d_subchannel, CoordSystem::TRANSLATED);
-    tt_cxy_pair dram_core = tt_cxy_pair(chip_id, dram_core_coord.x, dram_core_coord.y);
-    size_t offset = desc_to_use.get_address_offset(d_view);
+
+    CoreCoord dram_core_coord = desc_to_use.get_preferred_worker_core_for_dram_view(dram_view);
+    tt_cxy_pair dram_core = tt_cxy_pair(device_id, dram_core_coord.x, dram_core_coord.y);
+    size_t offset = desc_to_use.get_address_offset(dram_view);
     write_core(
         vec.data(),
         vec.size() * sizeof(uint32_t),
-        tt_cxy_pair(chip_id, dram_core.x, dram_core.y),
+        tt_cxy_pair(device_id, dram_core.x, dram_core.y),
         addr + offset,
         small_access);
 }
 
 void Cluster::read_dram_vec(
-    std::vector<uint32_t> &vec, uint32_t sz_in_bytes, tt_target_dram dram, uint64_t addr, bool small_access) const {
-    int chip_id, d_view, d_subchannel;
-    std::tie(chip_id, d_view, d_subchannel) = dram;
-    const metal_SocDescriptor &desc_to_use = get_soc_desc(chip_id);
+    std::vector<uint32_t>& vec,
+    uint32_t sz_in_bytes,
+    chip_id_t device_id,
+    int dram_view,
+    uint64_t addr,
+    bool small_access) const {
+    const metal_SocDescriptor& desc_to_use = get_soc_desc(device_id);
     TT_FATAL(
-        d_view < desc_to_use.get_num_dram_views(),
+        dram_view < desc_to_use.get_num_dram_views(),
         "Bounds-Error -- dram_view={} is outside of num_dram_views={}",
-        d_view,
+        dram_view,
         desc_to_use.get_num_dram_views());
-    int d_chan = desc_to_use.get_channel_for_dram_view(d_view);
-    TT_ASSERT(
-        d_subchannel < desc_to_use.get_dram_cores().at(d_chan).size(),
-        "Trying to address dram sub channel that doesnt exist in the device descriptor");
-    tt::umd::CoreCoord dram_core_coord =
-        desc_to_use.get_dram_core_for_channel(d_chan, d_subchannel, CoordSystem::TRANSLATED);
-    tt_cxy_pair dram_core = tt_cxy_pair(chip_id, dram_core_coord.x, dram_core_coord.y);
-    size_t offset = desc_to_use.get_address_offset(d_view);
-    read_core(vec, sz_in_bytes, tt_cxy_pair(chip_id, dram_core.x, dram_core.y), addr + offset, small_access);
+
+    CoreCoord dram_core_coord = desc_to_use.get_preferred_worker_core_for_dram_view(dram_view);
+    tt_cxy_pair dram_core = tt_cxy_pair(device_id, dram_core_coord.x, dram_core_coord.y);
+    size_t offset = desc_to_use.get_address_offset(dram_view);
+    read_core(vec, sz_in_bytes, tt_cxy_pair(device_id, dram_core.x, dram_core.y), addr + offset, small_access);
 }
 
 void Cluster::write_core(
@@ -1416,7 +1415,7 @@ void Cluster::initialize_control_plane() {
         case tt::ClusterType::TG: mesh_graph_descriptor = "tg_mesh_graph_descriptor.yaml"; break;
         case tt::ClusterType::P100: mesh_graph_descriptor = "p100_mesh_graph_descriptor.yaml"; break;
         case tt::ClusterType::P150: mesh_graph_descriptor = "p150_mesh_graph_descriptor.yaml"; break;
-        case tt::ClusterType::P150_X2: mesh_graph_descriptor = "p150_x2_mesh_graph_descriptor.yaml"; break;
+        case tt::ClusterType::P150_X2: mesh_graph_descriptor = "p150_mesh_graph_descriptor.yaml"; break;
         case tt::ClusterType::P150_X4: mesh_graph_descriptor = "p150_x4_mesh_graph_descriptor.yaml"; break;
         case tt::ClusterType::SIMULATOR_WORMHOLE_B0: mesh_graph_descriptor = "n150_mesh_graph_descriptor.yaml"; break;
         case tt::ClusterType::SIMULATOR_BLACKHOLE: mesh_graph_descriptor = "p150_mesh_graph_descriptor.yaml"; break;

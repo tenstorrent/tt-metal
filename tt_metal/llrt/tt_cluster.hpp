@@ -141,11 +141,12 @@ public:
         const TensixSoftResetOptions& soft_resets = TENSIX_ASSERT_SOFT_RESET) const;
 
     void write_dram_vec(
-        std::vector<uint32_t>& vec, tt_target_dram dram, uint64_t addr, bool small_access = false) const;
+        std::vector<uint32_t>& vec, chip_id_t device_id, int dram_view, uint64_t addr, bool small_access = false) const;
     void read_dram_vec(
         std::vector<uint32_t>& vec,
         uint32_t size_in_bytes,
-        tt_target_dram dram,
+        chip_id_t device_id,
+        int dram_view,
         uint64_t addr,
         bool small_access = false) const;
 
