@@ -41,6 +41,7 @@ private:
     ProgramConfig& get_program_config(uint32_t index);
     ProgramCommandSequence& get_dispatch_cmds_for_program(Program& program, uint64_t command_hash);
     void compile_program(const MeshCoordinateRange& device_range, MeshDevice* mesh_device);
+    void finalize_program_offsets(MeshDevice* mesh_device);
 
     std::unordered_map<std::size_t, ProgramBinaryStatus> program_binary_status_;
     std::shared_ptr<MeshBuffer> kernel_bin_buf_;
@@ -71,8 +72,5 @@ public:
     uint32_t get_sem_size(std::shared_ptr<MeshDevice>& mesh_device, CoreCoord logical_core, CoreType core_type);
     uint32_t get_cb_base_addr(std::shared_ptr<MeshDevice>& mesh_device, CoreCoord logical_core, CoreType core_type);
     uint32_t get_cb_size(std::shared_ptr<MeshDevice>& mesh_device, CoreCoord logical_core, CoreType core_type);
-
-    // Finalizes program offsets for all programs in the mesh workload
-    void finalize_program_offsets(MeshDevice* mesh_device);
 };
 }  // namespace tt::tt_metal::distributed
