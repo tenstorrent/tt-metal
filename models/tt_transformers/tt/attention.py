@@ -23,8 +23,6 @@ class Attention(LightweightModule):
         configuration,
         paged_attention_config=None,
         use_paged_kv_cache=False,
-        causal_mask=True,
-        use_kv_cache=True,
     ):
         super().__init__()
 
@@ -39,8 +37,6 @@ class Attention(LightweightModule):
         self.max_batch_size = configuration.max_batch_size
         self.n_kv_heads = configuration.n_kv_heads
         self.paged_attention_config = paged_attention_config
-        self.causal_mask = causal_mask
-        self.use_kv_cache = use_kv_cache
         self.min_kv_prefill_shard_seqlen = configuration.min_kv_prefill_shard_seqlen
         self.ccl_dtype = configuration.ccl_dtype
         self.num_reduce_scatter_links = configuration.num_reduce_scatter_links
@@ -55,7 +51,6 @@ class Attention(LightweightModule):
 
         self.n_local_heads = self.n_heads // self.num_devices_per_group
         self.n_local_kv_heads = self.n_kv_heads // self.num_devices_per_group
-        self.padded_head_dim = math.ceil(self.head_dim / self.tile_size) * self.tile_size
 
         self.arch_name = configuration.arch_name
         # TODO: Fix this once all-gather supports < tile_size
@@ -144,37 +139,16 @@ class Attention(LightweightModule):
         # Initialize bias tensors as None
         self.wqkv_bias_decode = None
         self.wqkv_bias_prefill = None
-        self.wo_bias_decode = None
-        self.wo_bias_prefill = None
 
         # Create combined QKV bias if present in state dict
         if f"{wq_str}.bias" in self.state_dict:
-            # Helper function to reshape and pad bias chunk if needed
-            def pad_bias_chunk(b):
-                if self.head_dim != self.padded_head_dim:
-                    # Reshape to separate head dimensions
-                    b = b.reshape(self.n_local_heads, self.head_dim)
-                    # Pad the head_dim dimension
-                    b = torch.nn.functional.pad(b, (0, self.padded_head_dim - self.head_dim))
-                    # Reshape back to 1D
-                    result = b.reshape(-1)
-                    return result
-                else:
-                    return b
-
             qkv_bias = torch.concat(
                 [
                     torch.concat(
                         [
-                            pad_bias_chunk(
-                                torch.chunk(self.state_dict[f"{wq_str}.bias"], configuration.num_devices)[i]
-                            ),
-                            pad_bias_chunk(
-                                torch.chunk(self.state_dict[f"{wk_str}.bias"], configuration.num_devices)[i]
-                            ),
-                            pad_bias_chunk(
-                                torch.chunk(self.state_dict[f"{wv_str}.bias"], configuration.num_devices)[i]
-                            ),
+                            torch.chunk(self.state_dict[f"{wq_str}.bias"], configuration.num_devices)[i],
+                            torch.chunk(self.state_dict[f"{wk_str}.bias"], configuration.num_devices)[i],
+                            torch.chunk(self.state_dict[f"{wv_str}.bias"], configuration.num_devices)[i],
                         ],
                         dim=-1,
                     )
@@ -237,22 +211,6 @@ class Attention(LightweightModule):
             wk_selected = torch.chunk(self.state_dict[f"{wk_str}.weight"], self.num_devices_per_group, dim=0)[i]
             wv_selected = torch.chunk(self.state_dict[f"{wv_str}.weight"], self.num_devices_per_group, dim=0)[i]
 
-            # If head_dim needs padding
-            if self.head_dim != self.padded_head_dim:
-                # Helper function to reshape and pad weights
-                def pad_weight(w):
-                    # Reshape to separate head dimensions
-                    w = w.reshape(self.n_local_heads, self.head_dim, -1)
-                    # Pad the head_dim dimension
-                    w = torch.nn.functional.pad(w, (0, 0, 0, self.padded_head_dim - self.head_dim))
-                    # Reshape back to 2D
-                    result = w.reshape(self.n_local_heads * self.padded_head_dim, -1)
-                    return result
-
-                wq_selected = pad_weight(wq_selected)
-                wk_selected = pad_weight(wk_selected)
-                wv_selected = pad_weight(wv_selected)
-
             # Transpose the selected chunks
             wq = torch.transpose(wq_selected, -2, -1)
             wk = torch.transpose(wk_selected, -2, -1)
@@ -277,24 +235,10 @@ class Attention(LightweightModule):
 
         # For ring topology we can use all gather matmul for wo
         self.use_fused_all_gather_matmul = self.model_config["USE_FUSED_ALL_GATHER_MATMUL"]
-
-        # FIXME: workaround until nlp_concat_heads correctly supports sub-tile head dims
-        # We are going to pad the input dim of the output weights with zeros in the places
-        # that nlp_concat_heads inserts garbage values
-        if self.head_dim != self.padded_head_dim:
-            # note that torch weights are already transposed to have input in last dim
-            pt_wo_t = self.state_dict[f"{wo_str}.weight"]
-            heads = pt_wo_t.reshape(-1, self.n_local_heads, self.head_dim)
-            heads = torch.nn.functional.pad(
-                heads, (0, self.padded_head_dim - self.head_dim)
-            )  # tail-pad last dim with 0
-            pt_wo = heads.reshape(1, 1, -1, self.n_local_heads * self.padded_head_dim).transpose(-1, -2)
-
-        else:
-            pt_wo = self.state_dict[f"{wo_str}.weight"].transpose(-1, -2).unsqueeze(0).unsqueeze(0)
+        pt_wo = self.state_dict[f"{wo_str}.weight"].transpose(-1, -2).unsqueeze(0).unsqueeze(0)
 
         wo_mem_config = configuration.create_dram_sharded_mem_config(
-            pt_wo.shape[-2] // configuration.num_devices, pt_wo.shape[-1]
+            (configuration.n_heads * configuration.head_dim) // configuration.num_devices, configuration.dim
         )
 
         self.wo = ttnn.as_tensor(
@@ -312,45 +256,6 @@ class Attention(LightweightModule):
                 cache_name("wo_width_sharded_2d") if (self.use_fused_all_gather_matmul or self.TG) else cache_name("wo")
             ),
         )
-
-        if f"{wo_str}.bias" in self.state_dict:
-            # Prefill can use broadcasting on the bias add so wants a 1d tensor
-            self.wo_bias_prefill = ttnn.as_tensor(
-                self.state_dict[f"{wo_str}.bias"],
-                device=self.mesh_device,
-                mesh_mapper=ttnn.ShardTensorToMesh(self.mesh_device, dim=-1),
-                dtype=self.dtype,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                layout=ttnn.TILE_LAYOUT,
-                cache_file_name=cache_name("wo_bias_prefill_sharded"),
-            )
-            # as_tensor returns (32, dim) which is incorrect, this reshape updates the padded size to the correct size
-            self.wo_bias_prefill = ttnn.reshape(
-                self.wo_bias_prefill,
-                (1, 1, 1, self.wo_bias_prefill.shape[-1]),
-                (1, 1, self.wo_bias_prefill.shape[-2], self.wo_bias_prefill.shape[-1]),
-            )
-
-            # Broadcasting does not seem to be supported inside execute_trace so expand to the whole batch size
-            # Create a list of bias tensors for each multiple of tile_size up to max_batch_size
-            self.wo_bias_decode = []
-            for batch_size in range(
-                configuration.tile_size,
-                configuration.tile_padded_batch_rows + configuration.tile_size,
-                configuration.tile_size,
-            ):
-                wo_bias_decode = self.state_dict[f"{wo_str}.bias"].unsqueeze(0).expand(batch_size, -1)
-                bias_tensor = ttnn.as_tensor(
-                    wo_bias_decode,
-                    device=self.mesh_device,
-                    mesh_mapper=ttnn.ShardTensorToMesh(self.mesh_device, dim=-1),
-                    dtype=self.dtype,
-                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                    layout=ttnn.TILE_LAYOUT,
-                    cache_file_name=cache_name(f"wo_bias_decode_sharded_{batch_size}"),
-                )
-                self.wo_bias_decode.append(bias_tensor)
-
         if not use_paged_kv_cache:
             # vLLM provides its own kv cache
             self.init_kv_cache(configuration, weight_cache_path)
@@ -426,7 +331,6 @@ class Attention(LightweightModule):
         x: (seq_len, 1, batch, dim)
         current_pos: (batch_size), current token position in the sequence for each user
         """
-        assert self.use_kv_cache, "Decode without kv cache is not supported"
 
         ###
         # QKV matmuls
@@ -497,17 +401,6 @@ class Attention(LightweightModule):
         )
 
         ttnn.deallocate(xqkv_fused)
-
-        if self.head_dim != self.padded_head_dim:
-            if not global_padded_head_warning_shown:
-                logger.warning(
-                    f"For decode mode, pad rot_mats to the padded head dim shape ahead of time for performance reasons. {rot_mats[0].shape=} {self.padded_head_dim=}"
-                )
-                global_padded_head_warning_shown = True
-            pad_head_dim = lambda x: ttnn.pad(
-                x, (x.shape[0], x.shape[1], x.shape[2], self.padded_head_dim), (0, 0, 0, 0), 0.0
-            )
-            rot_mats = [pad_head_dim(r) for r in rot_mats]
 
         # Q Rotary Embeddings
         q_heads_1BQD = ttnn.experimental.rotary_embedding_llama(
@@ -599,15 +492,9 @@ class Attention(LightweightModule):
                 memory_config_mm=self.model_config["DECODE_RESIDUAL_MEMCFG"],
             )
             ttnn.deallocate(attn_output_cat)
-
-            if self.wo_bias_decode:
-                # select the bias tensor based on the number of tiles in the rows
-                # WARNING: must not change the batch size between compiling and executing a trace
-                num_tiles = int(math.ceil(attn_output_cat.shape[-2] / self.tile_size))
-                dense_out_sharded = dense_out_sharded + self.wo_bias_decode[num_tiles - 1]
-
             dense_out_sharded = ttnn.to_memory_config(dense_out_sharded, self.model_config["DECODE_RESIDUAL_MEMCFG"])
             return dense_out_sharded
+
         else:
             attn_output = tt_all_gather(
                 attn_output_cat,
@@ -643,14 +530,6 @@ class Attention(LightweightModule):
             )
 
             ttnn.deallocate(attn_output_cat)
-
-            if self.wo_bias_decode:
-                # select the bias tensor based on the number of tiles in the rows
-                # WARNING: must not change the batch size between compiling and executing a trace
-                num_tiles = int(math.ceil(attn_output_cat.shape[-2] / self.tile_size))
-                dense_out_sharded = dense_out_sharded + self.wo_bias_decode[num_tiles - 1]
-
-            dense_out_sharded = ttnn.to_memory_config(dense_out_sharded, self.model_config["DECODE_RESIDUAL_MEMCFG"])
 
             # All reduce
             dense_out_reduced = tt_all_reduce(
@@ -691,10 +570,9 @@ class Attention(LightweightModule):
         chunk_page_table=None,
         chunk_start_idx=None,
         kv_cache=None,
-        mask=None,
     ):
         seq_len = x_11SH.shape[-2]
-        # assert seq_len % 128 == 0 and seq_len > 0, "Seqlen must be divisible by 128"
+        assert seq_len % 128 == 0 and seq_len > 0, "Seqlen must be divisible by 128"
         ###
         # QKV matmuls
         ###
@@ -755,15 +633,6 @@ class Attention(LightweightModule):
         if q_heads_1QSD_pre_rot.dtype != ttnn.bfloat16:  # Rotary embeddings require bfloat16 inputs
             q_heads_1QSD_pre_rot = ttnn.typecast(q_heads_1QSD_pre_rot, dtype=ttnn.bfloat16)
 
-        # workaround until rotary embeddings support sub-tile head dims
-        if self.head_dim != self.padded_head_dim:
-            pad_head_dim = lambda x, v: ttnn.pad(
-                x, (x.shape[0], x.shape[1], x.shape[2], self.padded_head_dim), (0, 0, 0, 0), v
-            )
-            # pad with cos = 1, sin = 0
-            rot_mats = [pad_head_dim(rot_mats[0], 1.0), pad_head_dim(rot_mats[1], 0.0)]
-            # print(f'{rot_mats[0].shape=}')
-
         q_heads_1QSD = ttnn.experimental.rotary_embedding_llama(
             q_heads_1QSD_pre_rot,
             rot_mats[0],
@@ -785,8 +654,11 @@ class Attention(LightweightModule):
         )
         ttnn.deallocate(k_heads_1KSD_pre_rot)
 
-        q_heads_1QSD_8b = ttnn.typecast(q_heads_1QSD, dtype=ttnn.bfloat8_b)
-        ttnn.deallocate(q_heads_1QSD)
+        # Fill KV-Cache
+        if kv_cache:
+            keys_BKSD, values_BKSD = kv_cache[0], kv_cache[1]
+        else:
+            keys_BKSD, values_BKSD = self.layer_past[0], self.layer_past[1]
 
         k_heads_1KSD_8b = ttnn.typecast(k_heads_1KSD, dtype=self.kv_cache_dtype)
         ttnn.deallocate(k_heads_1KSD)
@@ -801,56 +673,42 @@ class Attention(LightweightModule):
 
         ttnn.deallocate(v_heads_1VSD)
 
-        # Fill KV-Cache
-        if self.use_kv_cache:
-            if kv_cache:
-                keys_BKSD, values_BKSD = kv_cache[0], kv_cache[1]
-            else:
-                keys_BKSD, values_BKSD = self.layer_past[0], self.layer_past[1]
+        # sharding v_fill to deal with update_cache memory limitation
+        if seq_len >= self.min_kv_prefill_shard_seqlen and not self.TG and not page_table:
+            v_fill = ttnn.interleaved_to_sharded(v_heads_1VSD_8b, self.model_config["KV_PREFILL_MEM_CFG"](seq_len))
+        else:
+            v_fill = v_heads_1VSD_8b
 
-            # sharding k_fill to deal with update_cache memory limitation
-            if seq_len >= self.min_kv_prefill_shard_seqlen and not self.TG and not page_table:
-                k_fill = ttnn.interleaved_to_sharded(k_heads_1KSD_8b, self.model_config["KV_PREFILL_MEM_CFG"](seq_len))
-            else:
-                k_fill = k_heads_1KSD_8b
+        if self.TG:
+            k_fill = self.prefill_prepare_tensor_for_kv_cache(k_fill, user_id)
+            v_fill = self.prefill_prepare_tensor_for_kv_cache(v_fill, user_id)
+        if page_table:
+            # In the case that the tokens have been padded along the seq len dimension, we need to fill the cache with the unpadded k/v values.
+            # Assume that the page table does not have padding, so we can use it to get the unpadded page len.
+            block_size = keys_BKSD.shape[2]
+            # If chunked prefill, use chunk_page_table if given, otherwise use page_table.
+            fill_page_table = chunk_page_table if chunk_page_table is not None else page_table
 
-            # sharding v_fill to deal with update_cache memory limitation
-            if seq_len >= self.min_kv_prefill_shard_seqlen and not self.TG and not page_table:
-                v_fill = ttnn.interleaved_to_sharded(v_heads_1VSD_8b, self.model_config["KV_PREFILL_MEM_CFG"](seq_len))
-            else:
-                v_fill = v_heads_1VSD_8b
+            page_len = fill_page_table.shape[1] * block_size
+            k_fill_sliced = k_fill[:, :, :page_len, :] if page_len < k_fill.shape[2] else k_fill
+            v_fill_sliced = v_fill[:, :, :page_len, :] if page_len < v_fill.shape[2] else v_fill
+            ttnn.experimental.paged_fill_cache(keys_BKSD, k_fill_sliced, fill_page_table, batch_idx=user_id)
+            ttnn.experimental.paged_fill_cache(values_BKSD, v_fill_sliced, fill_page_table, batch_idx=user_id)
+        else:
+            ttnn.fill_cache(
+                keys_BKSD,
+                k_fill,
+                user_id % self.batch_size_per_device_group,
+            )
+            ttnn.fill_cache(
+                values_BKSD,
+                v_fill,
+                user_id % self.batch_size_per_device_group,
+            )
 
-            if self.TG:
-                k_fill = self.prefill_prepare_tensor_for_kv_cache(k_fill, user_id)
-                v_fill = self.prefill_prepare_tensor_for_kv_cache(v_fill, user_id)
-
-            if page_table:
-                # In the case that the tokens have been padded along the seq len dimension, we need to fill the cache with the unpadded k/v values.
-                # Assume that the page table does not have padding, so we can use it to get the unpadded page len.
-                block_size = keys_BKSD.shape[2]
-                # If chunked prefill, use chunk_page_table if given, otherwise use page_table.
-                fill_page_table = chunk_page_table if chunk_page_table is not None else page_table
-
-                page_len = fill_page_table.shape[1] * block_size
-                k_fill_sliced = k_fill[:, :, :page_len, :] if page_len < k_fill.shape[2] else k_fill
-                v_fill_sliced = v_fill[:, :, :page_len, :] if page_len < v_fill.shape[2] else v_fill
-                ttnn.experimental.paged_fill_cache(keys_BKSD, k_fill_sliced, fill_page_table, batch_idx=user_id)
-                ttnn.experimental.paged_fill_cache(values_BKSD, v_fill_sliced, fill_page_table, batch_idx=user_id)
-            else:
-                ttnn.fill_cache(
-                    keys_BKSD,
-                    k_fill,
-                    user_id % self.batch_size_per_device_group,
-                )
-                ttnn.fill_cache(
-                    values_BKSD,
-                    v_fill,
-                    user_id % self.batch_size_per_device_group,
-                )
-
-            if seq_len >= self.min_kv_prefill_shard_seqlen and not self.TG and not page_table:
-                ttnn.deallocate(k_fill)
-                ttnn.deallocate(v_fill)
+        if seq_len >= self.min_kv_prefill_shard_seqlen and not self.TG and not page_table:
+            ttnn.deallocate(k_fill)
+            ttnn.deallocate(v_fill)
 
         # SDPA
         q_heads_1QSD_8b = ttnn.typecast(q_heads_1QSD, dtype=self.activation_dtype or ttnn.bfloat8_b)
@@ -871,8 +729,7 @@ class Attention(LightweightModule):
                 q_heads_1QSD_8b,
                 k_heads_1KSD_8b,
                 v_heads_1VSD_8b,
-                is_causal=self.causal_mask,
-                attn_mask=mask,
+                is_causal=True,
                 scale=self.scale,
                 compute_kernel_config=self.sdpa_prefill_compute_kernel_cfg,
                 program_config=self.model_config["SDPA_PROGCFG"](seq_len),
@@ -883,7 +740,7 @@ class Attention(LightweightModule):
         ttnn.deallocate(k_heads_1KSD_8b)
         ttnn.deallocate(v_heads_1VSD_8b)
 
-        attn_output_1QSD = ttnn.reshape(attn_output_84SD, [1, self.n_local_heads, -1, self.padded_head_dim])
+        attn_output_1QSD = ttnn.reshape(attn_output_84SD, [1, self.n_local_heads, -1, self.head_dim])
 
         ###
         # Output matmul
@@ -892,7 +749,6 @@ class Attention(LightweightModule):
             attn_output_1QSD,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-
         ttnn.deallocate(attn_output_1QSD)
         # reshaping long sequence to matmul fit on device
         if seq_len > 1024:
@@ -916,9 +772,6 @@ class Attention(LightweightModule):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             program_config=self.model_config["WO_PREFILL_PROGCFG"](seq_len),
         )
-        # FIXME: surely ttnn.linear bias should work?
-        if self.wo_bias_prefill is not None:
-            output_11SH = output_11SH + self.wo_bias_prefill
 
         if seq_len > 1024:
             output_11SH = ttnn.reshape(output_11SH, [1, 1, seq_len, -1])

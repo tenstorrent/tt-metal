@@ -44,8 +44,6 @@ def test_mlp_inference(rows, batch_size, mesh_device, use_program_cache, reset_s
     dtype = ttnn.bfloat8_b
     mode = "prefill"  # Vision processing is prefill only (generating token embeddings)
 
-    mesh_device.enable_async(True)
-
     model_args = VisionModelArgs(mesh_device, dummy_weights=True, max_batch_size=batch_size, max_seq_len=rows)
     reference_model = model_args.reference_mlp()
     state_dict = convert_hf_to_meta(reference_model.state_dict(), model_args.head_dim)

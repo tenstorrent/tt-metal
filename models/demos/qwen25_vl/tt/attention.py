@@ -769,6 +769,7 @@ class Attention(LightweightModule):
         # Fill KV-Cache
         if self.use_kv_cache:
             if kv_cache:
+                assert len(kv_cache) == 2, "kv_cache must be a sequence of two caches"
                 keys_BKSD, values_BKSD = kv_cache[0], kv_cache[1]
             else:
                 keys_BKSD, values_BKSD = self.layer_past[0], self.layer_past[1]

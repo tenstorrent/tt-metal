@@ -418,5 +418,5 @@ class Transformer(LightweightModule):
     def prepare_inputs_decode(self, *inputs):
         return self.__tt_transformer.prepare_inputs_decode(*inputs)
 
-    def process_output_decode(self, tt_out, B, S=1, argmax_on_device=False):
-        return self.__tt_transformer.process_output_decode(tt_out, B, S, argmax_on_device=argmax_on_device)
+    def process_output_decode(self, tt_out, B, S=1, is_tokens=False):
+        return self.__tt_transformer.process_output_decode(tt_out, B, S, is_tokens=is_tokens)

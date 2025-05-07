@@ -26,7 +26,7 @@ from models.demos.qwen25_vl.tt.model_config import VisionModelArgs
 from models.demos.utils.llm_demo_utils import create_benchmark_data
 from models.perf.benchmarking_utils import BenchmarkProfiler
 
-from models.tt_transformers.tt.model_config import ModelOptimizations
+from models.tt_transformers.tt.model_config import DecodersPrecision
 
 
 def create_tt_model(
@@ -153,8 +153,8 @@ def create_tt_model(
 @pytest.mark.parametrize(
     "optimizations",
     [
-        ModelOptimizations.performance,
-        # ModelOptimizations.accuracy,
+        lambda model_args: DecodersPrecision.performance(model_args.n_layers, model_args.model_name),
+        # lambda model_args: DecodersPrecision.accuracy(model_args.n_layers, model_args.model_name),
     ],
 )
 @pytest.mark.parametrize("device_params", [{"trace_region_size": 23887872, "num_command_queues": 2}], indirect=True)
@@ -190,8 +190,8 @@ def test_demo(
     Simple demo with limited dependence on reference code.
     """
 
-    if is_ci_env and (optimizations == ModelOptimizations.accuracy or not ci_only):
-        pytest.skip("CI only runs the CI-only tests")
+    if is_ci_env and (("accuracy" in (test_id := request.node.callspec.id)) or not ci_only):
+        pytest.skip(f"CI only runs the CI-only tests, skipping {test_id}")
     if not is_ci_env and ci_only:
         pytest.skip("CI only runs the CI-only tests")
 
@@ -199,7 +199,6 @@ def test_demo(
     if os.environ.get("MESH_DEVICE") == "TG" and batch_size not in [1, 32]:
         pytest.skip("TG only supports batch 1 and 32")
 
-    mesh_device.enable_async(True)
     use_tt_vision = True
     enable_trace = True  # Use tracing for better perf
     print_to_file = False  # Enable this flag to print the output of all users to a file
@@ -401,7 +400,7 @@ def test_demo(
                 enable_trace=enable_trace,
                 page_table=page_table,
                 kv_cache=tt_kv_cache,
-                argmax_on_device=argmax_on_device,
+                sampling_params=sampling_params if argmax_on_device else None,
             )
 
             # Get the next token

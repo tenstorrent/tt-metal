@@ -13,6 +13,7 @@ from models.demos.qwen25_vl.tt.common import (
     get_max_prefill_chunk_size,
 )
 from models.tt_transformers.tt.generator import Generator as TTTGenerator
+from models.tt_transformers.tt.generator import SamplingParams
 
 
 class Generator:
@@ -23,8 +24,16 @@ class Generator:
         and max seqlen, and other model specific parameters.
 
         """
+        try:
+            len(model)  # Check if model is iterable
+            model_list = model
+            model_args_list = model_args
+        except TypeError:
+            model_list = (model,)  # TTTGenerator expects a list of models
+            model_args_list = (model_args,)  # TTTGenerator expects a list of model_args
+
         # favor composition over inheritance: __ is convention for private variables
-        self.__ttt_generator = TTTGenerator(model, model_args, mesh_device, tokenizer, formatter)
+        self.__ttt_generator = TTTGenerator(model_list, model_args_list, mesh_device, tokenizer, formatter)
 
     @property
     def model(self):
@@ -46,46 +55,75 @@ class Generator:
     def formatter(self):
         return self.__ttt_generator.formatter
 
+    @property
+    def data_parallel(self):
+        return self.__ttt_generator.data_parallel
+
     def prefill_forward_text(self, tokens: torch.Tensor, page_table=None, kv_cache=None, prompt_lens=None):
+        # todo)) { handle data parallel properly later
+        assert self.data_parallel == 1, "Data parallel must be 1 for Qwen2_5_VL"
+        kv_cache = (kv_cache,)
+        # } todo))
+
         batch, batch_seq_len = tokens.shape[:2]
-        output_logits = torch.zeros(batch, 1, self.model_args.vocab_size)
+
+        # Each model expected to run the same model, safe to use 1st vocab size
+        output_logits = torch.zeros(batch, 1, self.model_args[0].vocab_size)
         prompt_lens = prompt_lens if prompt_lens is not None else torch.tensor([batch_seq_len] * batch)
 
-        if page_table is not None:
-            assert isinstance(
-                page_table, torch.Tensor
-            ), "page_table must be a torch.Tensor when passing into prefill_forward"
+        data_parallel = min(batch, self.data_parallel)
+        batch_per_device = batch // data_parallel
 
-        for user_id in range(batch):
-            logger.info(f"Prefilling User {user_id + 1}")
+        if page_table is not None:
+            assert isinstance(page_table, torch.Tensor), "page_table mush be torch.Tensor"
+            page_table = torch.chunk(page_table, self.data_parallel, 0)
+
+        out_list = []
+        for group_user_id in range(batch_per_device):
+            for model_id in range(data_parallel):
+                user_id = group_user_id + model_id * batch_per_device
+
+                logger.info(f"Prefilling User {user_id + 1}")
+                seq_len = prompt_lens[user_id]
+                last_token_idx = seq_len - 1
+
+                prefill_seq_len = get_padded_prefill_len(seq_len)
+                # For 3D tokens (embeddings) for Qwen2_5_VL uses 3D tokens
+                embed_dim = tokens.shape[-1]
+                prefill_ids = torch.cat(
+                    [tokens[user_id : user_id + 1, :seq_len], torch.zeros(1, prefill_seq_len - seq_len, embed_dim)],
+                    dim=1,
+                )
+                if page_table is not None:
+                    page_table_user = self.__get_prefill_user_page_table(
+                        page_table[model_id], kv_cache[model_id], seq_len
+                    )
+
+                logits = self.__prefill_forward_single_user_text(
+                    prefill_ids,
+                    page_table=page_table_user if page_table is not None else None,
+                    user_id=group_user_id,
+                    last_token_idx=last_token_idx,
+                    kv_cache=kv_cache[model_id] if kv_cache is not None else None,
+                    model_id=model_id,
+                )
+                out_list.append(logits)
+
+        # We gather data back to how at the end of prefill
+        for idx, out in enumerate(out_list):
+            model_id = idx % self.data_parallel
+            group_user_id = idx // self.data_parallel
+            user_id = group_user_id + model_id * batch_per_device
+
             seq_len = prompt_lens[user_id]
             last_token_idx = seq_len - 1
 
-            prefill_seq_len = get_padded_prefill_len(seq_len)
-            # it doesn't matter which value we pad with, we don't use these parts of the kv-cache or their outputs
-            # For 3D tokens (embeddings) as Qwen2_5_Vision uses 3D token embeddings
-            embed_dim = tokens.shape[-1]
-            prefill_ids = torch.cat(
-                [tokens[user_id : user_id + 1, :seq_len], torch.zeros(1, prefill_seq_len - seq_len, embed_dim)],
-                dim=1,
-            )
-
-            if page_table is not None:
-                page_table_user = self.__get_prefill_user_page_table(page_table, kv_cache, seq_len)
-
-            logits = self.__prefill_forward_single_user_text(
-                prefill_ids,
-                page_table=page_table_user if page_table is not None else None,
-                user_id=user_id,
-                last_token_idx=last_token_idx,
-                kv_cache=kv_cache,
-            )
-
             # Since we give unpadded_seq_len, only the tile containing the last token is returned
-            output_logits[user_id] = logits
+            output_logits[user_id] = self.model[model_id].process_output_prefill(
+                out, last_token_idx=(last_token_idx % 32)
+            )
 
         logger.info(f"Finished prefill for all users up to {batch_seq_len} tokens, Starting decode...")
-
         return output_logits
 
     def decode_forward_text(
@@ -96,8 +134,20 @@ class Generator:
         kv_cache=None,
         enable_trace=True,
         read_from_device=True,
-        argmax_on_device=False,
+        sampling_params=None,
     ):
+        # todo)) { handle data parallel properly later
+        assert self.data_parallel == 1, "Data parallel must be 1 for Qwen2_5_VL"
+        kv_cache = (kv_cache,)
+        # } todo))
+
+        if sampling_params is not None:
+            sampling_params = SamplingParams(
+                temperature=sampling_params.get("temperature", 0.0),
+                top_k=sampling_params.get("top_k", -1),
+                top_p=sampling_params.get("top_p", 1.0),
+            )
+
         return self.__ttt_generator.decode_forward_text(
             tokens=tokens,
             start_pos=start_pos,
@@ -105,16 +155,18 @@ class Generator:
             kv_cache=kv_cache,
             enable_trace=enable_trace,
             read_from_device=read_from_device,
-            argmax_on_device=argmax_on_device,
+            sampling_params=sampling_params,
         )
 
     def __get_prefill_user_page_table(self, page_table, kv_cache, prefill_len):
         # Ensure page_table is not padded with extra blocks for paged_fill_cache to work properly
         return self.__ttt_generator._get_prefill_user_page_table(page_table, kv_cache, prefill_len)
 
-    def __prefill_forward_single_user_text(self, tokens, page_table, user_id, last_token_idx, kv_cache=None):
+    def __prefill_forward_single_user_text(
+        self, tokens, page_table, user_id, last_token_idx, kv_cache=None, model_id=-1
+    ):
         seq_len = tokens.shape[1]
-        use_chunked_prefill = seq_len > self.model_args.max_prefill_chunk_size
+        use_chunked_prefill = seq_len > self.model_args[model_id].max_prefill_chunk_size
         if use_chunked_prefill:
             """
             Chunked prefill requires paged attention. There are some strange constraints which we must meet:
@@ -130,7 +182,7 @@ class Generator:
             assert (
                 last_token_idx is not None and last_token_idx < seq_len
             ), "last_token_idx must be provided and less than seq_len"
-            chunk_size = get_max_prefill_chunk_size(seq_len, self.model_args.max_prefill_chunk_size)
+            chunk_size = get_max_prefill_chunk_size(seq_len, self.model_args[model_id].max_prefill_chunk_size)
             block_size = get_block_size(kv_cache)
             last_token_idx_in_chunk = last_token_idx % chunk_size
             # Calculate which chunk contains the last_token_idx
@@ -156,13 +208,13 @@ class Generator:
                     chunk_rot_mats_prefill,
                     page_table_tt,
                     chunk_page_table_tt,
-                ) = self.model.prepare_inputs_prefill(
+                ) = self.model[model_id].prepare_inputs_prefill(
                     chunk_tokens,
                     start_pos=chunk_start,
                     page_table=page_table_user_padded,
                     chunk_page_table=chunk_page_table,
                 )
-                tt_logits = self.model.ttnn_prefill_forward(
+                tt_logits = self.model[model_id].ttnn_prefill_forward(
                     chunk_prefill_input,
                     rot_mats=chunk_rot_mats_prefill,
                     user_id=CHUNK_USER_ID,
@@ -174,17 +226,16 @@ class Generator:
                 )
 
                 if chunk_start == last_chunk_start:
-                    logits = self.model.process_output_prefill(tt_logits, last_token_idx=(last_token_idx_in_chunk % 32))
-                    return logits
+                    return tt_logits
                 else:
                     del tt_logits
         else:
-            prefill_input, rot_mats_prefill, page_table_tt, _ = self.model.prepare_inputs_prefill(
+            prefill_input, rot_mats_prefill, page_table_tt, _ = self.model[model_id].prepare_inputs_prefill(
                 tokens,
                 page_table=page_table,
             )
 
-            tt_logits = self.model.ttnn_prefill_forward(
+            tt_logits = self.model[model_id].ttnn_prefill_forward(
                 prefill_input,
                 rot_mats=[rm[user_id : user_id + 1, ...] for rm in rot_mats_prefill],
                 user_id=user_id,
@@ -192,10 +243,7 @@ class Generator:
                 get_last_token=(last_token_idx // 32) * 32,
                 kv_cache=kv_cache,
             )
-
-            logits = self.model.process_output_prefill(tt_logits, last_token_idx=(last_token_idx % 32))
-
-            return logits
+            return tt_logits
 
     def _decode_forward_no_trace_text(
         self,

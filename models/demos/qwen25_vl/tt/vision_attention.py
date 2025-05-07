@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 import torch
 import ttnn
-from models.tt_transformers.tt.attention import Attention
+from models.demos.qwen25_vl.tt.attention import Attention
 
 
 class VisionAttention(Attention):

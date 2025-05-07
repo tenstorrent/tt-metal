@@ -7,6 +7,7 @@ import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.tt_transformers.tt.common import pad_to_size
 from models.tt_transformers.tt.ccl import tt_all_reduce
+from models.tt_transformers.tt.model_config import TensorGroup
 
 
 class MLP(LightweightModule):
@@ -49,7 +50,11 @@ class MLP(LightweightModule):
             cache_file_name=cache_name(name),
         )
 
-        self.four_bit_mlp = args.optimizations.bfp4_mlp
+        self.model_config = self.args.get_model_config()
+        ff1_3_dtype = self.model_config["DECODERS_OPTIMIZATIONS"].get_tensor_dtype(
+            decoder_id=layer_num, tensor=TensorGroup.FF1_FF3
+        )
+        self.four_bit_mlp = ff1_3_dtype == ttnn.bfloat4_b
 
         # Create weights with appropriate precision
         self.w1 = as_sharded_tensor("w1", (-1, -2), ttnn.bfloat4_b if self.four_bit_mlp else ttnn.bfloat8_b)
@@ -102,7 +107,7 @@ class MLP(LightweightModule):
         w2_in = ttnn.mul(
             w1_out,
             w3_out,
-            input_tensor_a_activation=ttnn.UnaryOpType.SILU,
+            input_tensor_a_activations=[ttnn.UnaryOpType.SILU],
             dtype=ttnn.bfloat8_b,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )

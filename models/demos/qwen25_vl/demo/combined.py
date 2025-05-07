@@ -41,7 +41,6 @@ def test_qwen_vl_end_to_end(
     use_tt_vision,
 ):
     """Test end-to-end Qwen2.5-VL model with options to replace vision component."""
-    mesh_device.enable_async(True)
     max_new_tokens = 128
 
     # Load model and processor

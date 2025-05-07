@@ -43,8 +43,6 @@ def test_vision_block_inference(
     pcc = 0.99
     batch_size = 1  # For prefill we only support batch_size = 1
 
-    mesh_device.enable_async(True)
-
     # Example inputs
     # image_grid_thw (`torch.LongTensor` of shape `(num_images, 3)`, *optional*):
     #     The temporal, height and width of feature shape of each image in LLM.

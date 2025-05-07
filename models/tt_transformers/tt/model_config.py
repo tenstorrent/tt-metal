@@ -1417,15 +1417,17 @@ class ModelArgs:
                 logger.info(
                     f"Loading state param for dummy {norm_model_name} from {self.LOCAL_HF_PARAMS[norm_model_name]}"
                 )
-                config = AutoConfig.from_pretrained(self.LOCAL_HF_PARAMS[norm_model_name]).to_dict()
+                self.hf_config = AutoConfig.from_pretrained(self.LOCAL_HF_PARAMS[norm_model_name])
             else:
-                config = AutoConfig.from_pretrained(self.model_name).to_dict()
+                self.hf_config = AutoConfig.from_pretrained(self.model_name)
+            config = self.hf_config.to_dict()
 
         else:
             config_file = os.path.join(checkpoint_dir, "config.json")
             assert os.path.exists(config_file), f"config.json file not found at {config_file}"
             with open(config_file, "r") as f:
                 config = json.load(f)
+
         self._set_params_from_dict(config, is_hf=True)
 
     def __repr__(self):
@@ -1511,11 +1513,8 @@ class ModelArgs:
                 state_dict = model.state_dict()
             else:
                 state_dict = load_hf_state_dict(self.CKPT_DIR)
-
-        if self.checkpoint_type == CheckpointType.HuggingFace:
             state_dict = standardize_hf_keys(state_dict)
             state_dict = convert_hf_to_meta(state_dict, self.head_dim)
-
         keys_dict = list(state_dict.keys())[:]
         remv = [f"layers.{i}." for i in list(range(self.n_layers, self.full_model_n_layers))]
         for k in keys_dict:
