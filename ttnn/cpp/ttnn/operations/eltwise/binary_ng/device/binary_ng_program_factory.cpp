@@ -19,7 +19,7 @@ using namespace ttnn::operations::binary_ng;
 uint32_t extract_nD_dims(const Tensor& x, const int out_rank) {
     const auto& shape = x.get_logical_shape();
     uint32_t nD_dim = 1;
-    if (out_rank >= 5) {
+    if (out_rank >= 5 && shape.rank() >= 5) {
         for (int i = -5; i >= -out_rank; --i) {
             auto dim = shape[i];
             nD_dim *= dim;
