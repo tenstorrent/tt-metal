@@ -787,13 +787,27 @@ void Device::initialize_and_launch_firmware() {
     core_info->l1_unreserved_start = this->allocator()->get_base_allocator_addr(tt_metal::HalMemType::L1);
 
     const std::vector<tt::umd::CoreCoord>& pcie_cores = soc_d.get_cores(CoreType::PCIE, soc_d.get_umd_coord_system());
-    const std::vector<tt::umd::CoreCoord>& dram_cores = soc_d.get_cores(
-        CoreType::DRAM, soc_d.get_umd_coord_system());  // make these translated and then convert to physical
+    // There are multiple NoC endpoints for DRAM, but not all are exposed through the API. Watcher will flag endpoints
+    // that are not exposed as invalid transactions. This helps to avoid BH issue highlighted by SYS-592 where writing
+    // to multiple DRAM endpoints can hang the card.
+    std::vector<tt::umd::CoreCoord> dram_cores;
+    for (uint32_t dram_channel = 0; dram_channel < this->num_dram_channels(); dram_channel++) {
+        auto worker_dram_ep = soc_d.get_preferred_worker_core_for_dram_view(dram_channel);
+        auto eth_dram_ep = soc_d.get_preferred_eth_core_for_dram_view(dram_channel);
+        auto physical_worker_dram_ep =
+            soc_d.translate_coord_to(worker_dram_ep, CoordSystem::TRANSLATED, CoordSystem::PHYSICAL);
+        auto physical_eth_dram_ep =
+            soc_d.translate_coord_to(eth_dram_ep, CoordSystem::TRANSLATED, CoordSystem::PHYSICAL);
+        dram_cores.push_back(physical_worker_dram_ep);
+        if (physical_worker_dram_ep != physical_eth_dram_ep) {
+            dram_cores.push_back(physical_eth_dram_ep);
+        }
+    }
+
     const std::vector<tt::umd::CoreCoord>& eth_cores =
         soc_d.get_cores(CoreType::ETH, CoordSystem::PHYSICAL);  // make these translated and then convert to physical
-    // The SOC descriptor can list a dram core multiple times, depending on how GDDR is assigned to banks
-    // Get a list of unique DRAM cores.
-    std::unordered_set<CoreCoord> unique_dram_cores(dram_cores.begin(), dram_cores.end());
+
+    // TODO: reduce the size of dev msgs
     TT_ASSERT(
         pcie_cores.size() + dram_cores.size() + eth_cores.size() <= MAX_PHYSICAL_NON_WORKER_CORES,
         "Detected more pcie/dram/eth cores than fit in the device mailbox.");
@@ -812,8 +826,8 @@ void Device::initialize_and_launch_firmware() {
     // sanitization errors because it appears as a mixed use of physical and virtual To workaround this, skip over
     // populating `non_worker_cores` for BH DRAM when virtualization is enabled
     int non_worker_cores_idx = 0;
-    bool skip_physical_dram_pcie = this->arch() == ARCH::BLACKHOLE and hal.is_coordinate_virtualization_enabled();
-    if (not skip_physical_dram_pcie) {
+    bool skip_physical = this->arch() == ARCH::BLACKHOLE and hal.is_coordinate_virtualization_enabled();
+    if (not skip_physical) {
         for (tt::umd::CoreCoord core : pcie_cores) {
             tt::umd::CoreCoord translated_coord =
                 soc_d.translate_coord_to(tt_xy_pair(core.x, core.y), CoordSystem::PHYSICAL, CoordSystem::VIRTUAL);
@@ -822,9 +836,9 @@ void Device::initialize_and_launch_firmware() {
         for (tt::umd::CoreCoord core : dram_cores) {
             core_info->non_worker_cores[non_worker_cores_idx++] = {core.x, core.y, AddressableCoreType::DRAM};
         }
-    }
-    for (tt::umd::CoreCoord core : eth_cores) {
-        core_info->non_worker_cores[non_worker_cores_idx++] = {core.x, core.y, AddressableCoreType::ETH};
+        for (tt::umd::CoreCoord core : eth_cores) {
+            core_info->non_worker_cores[non_worker_cores_idx++] = {core.x, core.y, AddressableCoreType::ETH};
+        }
     }
 
     if (hal.is_coordinate_virtualization_enabled()) {
@@ -841,11 +855,11 @@ void Device::initialize_and_launch_firmware() {
                 core_info->virtual_non_worker_cores[virtual_non_worker_cores_idx++] = {
                     virtual_core.x, virtual_core.y, AddressableCoreType::PCIE};
             }
-            auto translated_dram_cores = soc_d.get_cores(CoreType::DRAM, CoordSystem::TRANSLATED);
 
-            for (const CoreCoord& core : translated_dram_cores) {
+            for (const CoreCoord& core : dram_cores) {
+                auto virtual_core = this->virtual_core_from_physical_core({core.x, core.y});
                 core_info->virtual_non_worker_cores[virtual_non_worker_cores_idx++] = {
-                    core.x, core.y, AddressableCoreType::DRAM};
+                    virtual_core.x, virtual_core.y, AddressableCoreType::DRAM};
             }
         }
     }
