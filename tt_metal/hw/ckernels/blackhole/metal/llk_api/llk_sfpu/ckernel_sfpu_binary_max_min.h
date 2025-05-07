@@ -23,7 +23,6 @@ inline void calculate_binary_max_min(const uint dst_offset) {
 
         // Swap and store maximum in lreg1, minimum in lreg0
         TTI_SFPSWAP(0, p_sfpu::LREG1, p_sfpu::LREG0, 1);
-        TTI_SFPNOP;
 
         if constexpr (IS_MAX_OP) {
             TTI_SFPSTORE(p_sfpu::LREG1, 0, ADDR_MOD_7, 0);
@@ -52,7 +51,6 @@ inline void calculate_binary_max_min_int32(const uint dst_offset) {
 
         // Swap and store maximum in lreg1, minimum in lreg0
         TTI_SFPSWAP(0, p_sfpu::LREG1, p_sfpu::LREG0, 1);
-        TTI_SFPNOP;
 
         if constexpr (IS_MAX_OP) {
             TTI_SFPCAST(p_sfpu::LREG1, p_sfpu::LREG2, INSTR_MOD_CAST);
