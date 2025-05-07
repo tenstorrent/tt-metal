@@ -66,8 +66,6 @@ auto create_sender_buffers(
     uint32_t cb_num_pages,
     uint32_t page_size,
     tt::DataFormat data_format) {
-    // TODO: Return cb ids
-
     // Main data buffer
     auto cb_src0_config = tt::tt_metal::CircularBufferConfig(cb_num_pages * page_size, {{tt::CB::c_in0, data_format}})
                               .set_page_size(tt::CB::c_in0, page_size);
@@ -92,8 +90,6 @@ auto create_receiver_buffer(
     uint32_t pages_per_packet,
     uint32_t page_size,
     tt::DataFormat data_format) {
-    // TODO: Return cb ids
-
     const uint32_t receiver_pages = pages_per_packet * TRIPLE_BUFFER_MULTIPLIER;
 
     auto config = tt::tt_metal::CircularBufferConfig(receiver_pages * page_size, {{tt::CB::c_in0, data_format}})
@@ -193,7 +189,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_to_all_async_minimal(
 
     const uint32_t contig_pages_advanced = pages_per_packet;  // Write 2 tiles per packet
 
-    log_info(
+    log_trace(
         tt::LogOp,
         "chunk_granularity: {}, chunk_num_tiles: {}, num_chunks_per_shard: {}",
         chunk_granularity,
@@ -436,7 +432,6 @@ tt::tt_metal::operation::ProgramWithCallbacks all_to_all_async_minimal(
                                 // semaphore
 
     uint32_t global_semaphore_args_idx;
-    // log_info(tt::LogOp, "num_links: {}", num_links); // 1
     for (uint32_t link = 0; link < num_links; link++) {
         CoreCoord core = sender_worker_cores[link];
         if (link == 0) {
@@ -482,7 +477,6 @@ tt::tt_metal::operation::ProgramWithCallbacks all_to_all_async_minimal(
         };
         global_semaphore_args_idx = writer_rt_args.size() - 1;
 
-        log_info(tt::LogOp, "writer_rt_args size: {}", writer_rt_args.size());
         log_trace(tt::LogOp, "Writer Runtime Args:");
         for (const auto& arg : writer_rt_args) {
             log_trace(tt::LogOp, "\t{}", arg);

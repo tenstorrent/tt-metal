@@ -22,8 +22,8 @@ void AllToAllAsync::validate_with_output_tensors(
     const auto& page_size = input_tensor.buffer()->page_size();
     TT_FATAL(page_size % input_tensor.buffer()->alignment() == 0, "AllToAllAsync currently requires aligned pages");
 
-    TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Operands to all_to_all_async must be on device!");
-    TT_FATAL(input_tensor.buffer() != nullptr, "Operands to all_to_all_async must be allocated in buffers on device!");
+    TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Operands to all_to_all_async must be on device");
+    TT_FATAL(input_tensor.buffer() != nullptr, "Operands to all_to_all_async must be allocated in buffers on device");
     TT_FATAL(this->num_links > 0, "Number of links must be greater than 0, but is {}", this->num_links);
     TT_FATAL(
         this->num_links <= input_tensor.device()->compute_with_storage_grid_size().y,
@@ -35,6 +35,10 @@ void AllToAllAsync::validate_with_output_tensors(
         input_tensor.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED,
         "Unsupported input memory layout {}.",
         input_tensor.memory_config().memory_layout);
+    TT_FATAL(
+        input_tensor.memory_config().buffer_type == BufferType::DRAM,
+        "AllToAllAsync: Input tensor must be in DRAM, but is in {}",
+        input_tensor.memory_config().buffer_type);
 
     TT_FATAL(this->in_dim == 2 || this->in_dim == 3, "AllToAllAsync: in_dim must be 2 or 3, but is {}", this->in_dim);
     TT_FATAL(
@@ -60,8 +64,11 @@ void AllToAllAsync::validate_with_output_tensors(
         const auto& output_tensor = maybe_output_tensor.value();
         TT_FATAL(
             output_tensor.storage_type() == StorageType::DEVICE,
-            "Output tensor for all_to_all_async must be on device!");
-        TT_FATAL(output_tensor.get_layout() == layout, "Output tensor layout must match input tensor layout");
+            "Output tensor for all_to_all_async must be on device");
+        TT_FATAL(
+            output_tensor.memory_config().buffer_type == BufferType::DRAM,
+            "Output tensor for all_to_all_async must be in DRAM, but is in {}",
+            output_tensor.memory_config().buffer_type);
         TT_FATAL(output_tensor.get_dtype() == dtype, "Output tensor dtype must match input tensor dtype");
         TT_FATAL(
             output_tensor.memory_config() == this->output_mem_config,
