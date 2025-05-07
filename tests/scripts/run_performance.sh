@@ -95,7 +95,7 @@ run_perf_models_cnn_javelin() {
 
     # Run tests
     env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/experimental/functional_unet/tests -m $test_marker
-    env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/wormhole/stable_diffusion/tests -m $test_marker --timeout=480
+    env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml TRANSFORMERS_CACHE=/mnt/MLPerf/tt_dnn-models/StableDiffusion HF_HOME=/mnt/MLPerf/tt_dnn-models/StableDiffusion pytest -n auto models/demos/wormhole/stable_diffusion/tests -m $test_marker --timeout=480
 
     ## Merge all the generated reports
     env python3 models/perf/merge_perf_results.py

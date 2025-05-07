@@ -141,7 +141,7 @@ run_roberta_func() {
 
 run_stable_diffusion_func() {
 
-  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto --disable-warnings --input-path="models/demos/wormhole/stable_diffusion/demo/input_data.json" models/demos/wormhole/stable_diffusion/demo/demo.py::test_demo --timeout 900
+  TRANSFORMERS_CACHE=/mnt/MLPerf/tt_dnn-models/StableDiffusion HF_HOME=/mnt/MLPerf/tt_dnn-models/StableDiffusion WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto --disable-warnings --input-path="models/demos/wormhole/stable_diffusion/demo/input_data.json" models/demos/wormhole/stable_diffusion/demo/demo.py::test_demo --timeout 900
 
 }
 
