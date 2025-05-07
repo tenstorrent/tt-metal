@@ -77,7 +77,7 @@ void kernel_main() {
         fabric_mux_x, fabric_mux_y, fabric_mux_status_address, local_fabric_mux_status_address);
 
     for (uint32_t iter = 0; iter < num_open_close_iters; iter++) {
-        tt::tt_fabric::fabric_client_connect<fabric_mux_num_buffers_per_channel>(mux_connection_handle);
+        tt::tt_fabric::fabric_client_connect(mux_connection_handle);
 
         uint64_t noc_dest_addr = base_noc_dest_address;
         uint32_t seed = time_seed ^ sender_id ^ (iter + 1);
@@ -96,7 +96,7 @@ void kernel_main() {
             noc_semaphore_inc(local_credit_handshake_noc_address, -1);
             noc_async_atomic_barrier();
 
-            tt::tt_fabric::fabric_async_write<fabric_mux_num_buffers_per_channel>(
+            tt::tt_fabric::fabric_async_write(
                 mux_connection_handle, packet_header, payload_buffer_address, packet_payload_size_bytes);
 
             // update the slot id for next packet
@@ -107,7 +107,7 @@ void kernel_main() {
         noc_async_write_barrier();
         // wait for all credits to be returned before disconnecting
         while (credit_handshake_ptr[0] != num_credits);
-        tt::tt_fabric::fabric_client_disconnect<fabric_mux_num_buffers_per_channel>(mux_connection_handle);
+        tt::tt_fabric::fabric_client_disconnect(mux_connection_handle);
     }
 
     test_results[TT_FABRIC_STATUS_INDEX] = TT_FABRIC_STATUS_PASS;
