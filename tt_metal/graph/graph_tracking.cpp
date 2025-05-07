@@ -91,14 +91,29 @@ bool GraphTracker::hook_allocate(const Buffer* buffer) {
         return false;
     }
 
-    return hook->hook_allocate(buffer);
+    bool hooked = hook->hook_allocate(buffer);
+    if (hooked) {
+        std::lock_guard<std::mutex> lock(hooked_buffers_mutex);
+        bool inserted = hooked_buffers.insert(buffer).second;
+        TT_FATAL(!inserted, "Can't hook allocation of a buffer which is already allocated");
+    }
+    return hooked;
 }
 
 bool GraphTracker::hook_deallocate(Buffer* buffer) {
     if (hook == nullptr) {
         return false;
     }
-    return hook->hook_deallocate(buffer);
+
+    bool hooked = hook->hook_deallocate(buffer);
+    if (hooked) {
+        std::lock_guard<std::mutex> lock(hooked_buffers_mutex);
+        auto buffer_it = hooked_buffers.find(buffer);
+        TT_FATAL(
+            buffer_it != hooked_buffers.end(), "Can't hook deallocation of a buffer which allocation wasn't hooked");
+        hooked_buffers.erase(buffer_it);
+    }
+    return hooked;
 }
 
 bool GraphTracker::hook_program(tt::tt_metal::Program* program) {
@@ -114,9 +129,16 @@ const std::shared_ptr<IGraphHooks>& GraphTracker::get_hook() const { return hook
 
 void GraphTracker::clear() {
     processors.clear();
-    hook = nullptr;
+    clear_hook();
 }
 
-void GraphTracker::clear_hook() { hook = nullptr; }
+void GraphTracker::clear_hook() {
+    hook = nullptr;
+
+    std::lock_guard<std::mutex> lock(hooked_buffers_mutex);
+    TT_FATAL(hooked_buffers.empty(), "Clearing hook with {} allocated buffers", hooked_buffers.size());
+}
+
+GraphTracker::~GraphTracker() { clear(); }
 
 }  // namespace tt::tt_metal
