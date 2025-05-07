@@ -160,21 +160,22 @@
 <dd class="field-odd">
 <ul class="simple">
 <li><p><strong>input_tensor</strong> (<a class="reference internal" href="../dependencies/tensor.html#ttnn.Tensor" title="ttnn.Tensor"><em>ttnn.Tensor</em></a>) – the input tensor to calculate cumulative product of.</p></li>
-<li><p><strong>dim</strong> (<em>int</em>) – axis of product cumulation.</p></li>
+<li><p><strong>dim</strong> (<em>int</em>) – the axis of product cumulation.</p></li>
 </ul>
 </dd>
 <dt class="field-even">Keyword Arguments<span class="colon">:</span>
 </dt>
 <dd class="field-even">
 <ul class="simple">
-<li><p><strong>queue_id</strong> (<em>int</em><em>, </em><em>optional</em>) – command queue’s ID, defaults to 0.</p></li>
-<li><p><strong>memory_config</strong> (<a class="reference internal" href="../dependencies/tensor.html#ttnn.MemoryConfig" title="ttnn.MemoryConfig"><em>ttnn.MemoryConfig</em></a><em>, </em><em>optional</em>) – memory configuration for the operation. Defaults to <cite>None</cite>.</p></li>
+<li><p><strong>dtype</strong> (<em>ttnn.DataType</em><em>, </em><em>optional</em>) – the underlying type to which the input</p></li>
+<li><p><strong>queue_id</strong> (<em>int</em><em>, </em><em>optional</em>) – the command queue’s ID, defaults to 0.</p></li>
+<li><p><strong>memory_config</strong> (<a class="reference internal" href="../dependencies/tensor.html#ttnn.MemoryConfig" title="ttnn.MemoryConfig"><em>ttnn.MemoryConfig</em></a><em>, </em><em>optional</em>) – the memory configuration for the operation. Defaults to <cite>None</cite>.</p></li>
 </ul>
 </dd>
 <dt class="field-odd">Returns<span class="colon">:</span>
 </dt>
 <dd class="field-odd">
-<p><em>ttnn.Tensor</em> – the output tensor (for now, it is a copy of input_tensor, because only scaffold is implemented).</p>
+<p><em>ttnn.Tensor</em> – the output tensor with a cumulative product.</p>
 </dd>
 </dl>
 <div class="admonition-example admonition">
@@ -204,8 +205,6 @@
 <span class="gp">&gt;&gt;&gt; </span><span class="n">output</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">experimental</span><span class="o">.</span><span class="n">cumprod</span><span class="p">(</span><span class="n">tensor</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="n">out</span><span class="o">=</span><span class="n">tensor_copy</span><span class="p">)</span>
 <span class="gp">&gt;&gt;&gt; </span><span class="k">assert</span> <span class="n">tensor</span><span class="o">.</span><span class="n">shape</span> <span class="o">==</span> <span class="n">output</span><span class="o">.</span><span class="n">shape</span>
 <span class="gp">&gt;&gt;&gt; </span><span class="k">assert</span> <span class="n">tensor</span><span class="o">.</span><span class="n">dtype</span> <span class="o">==</span> <span class="n">output</span><span class="o">.</span><span class="n">dtype</span>
-<span class="gp">&gt;&gt;&gt; </span><span class="k">assert</span> <span class="n">tensor</span><span class="o">.</span><span class="n">shape</span> <span class="o">==</span> <span class="n">output</span><span class="o">.</span><span class="n">shape</span>
-<span class="gp">&gt;&gt;&gt; </span><span class="k">assert</span> <span class="n">tensor</span><span class="o">.</span><span class="n">dtype</span> <span class="o">==</span> <span class="n">output</span><span class="o">.</span><span class="n">dtyoe</span>
 </pre></div>
 </div>
 </div>
