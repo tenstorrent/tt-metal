@@ -30,12 +30,9 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_convert_to_hwc(const Te
 
     TT_FATAL(C <= TILE_HEIGHT, "C must be 32 or smaller");
 
-    const uint32_t total_tiles = HW / TILE_HEIGHT;  // assume HW < 32
-    const uint32_t total_tiles_per_core = tt::div_up(total_tiles, input_cores.size());
-    tt::log_info("STARTING CONVERT OP");
+    const uint32_t total_tiles_per_core = tt::div_up(input_shard_width, TILE_HEIGHT);
 
-    tt::log_info(
-        tt::LogType::LogOp, "Processing {} tiles per core ({} total tiles)", total_tiles_per_core, total_tiles);
+    tt::log_info(tt::LogType::LogOp, "Processing {} tiles per core", total_tiles_per_core);
 
     const auto create_circular_buffer = [&program, &input_core_grid](
                                             uint32_t index,
@@ -74,13 +71,13 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_convert_to_hwc(const Te
         create_circular_buffer(cb_out_id, cb_out_total_size, cb_out_page_size, output_format, output.buffer());
 
     const uint32_t cb_in_tiled_id = tt::CBIndex::c_2;
-    const uint32_t cb_in_tiled_total_size = 2 * intermediary_tile_size;
+    const uint32_t cb_in_tiled_total_size = tt::div_up(input_shard_width, TILE_WIDTH) * intermediary_tile_size;
     const uint32_t cb_in_tiled_page_size = intermediary_tile_size;
     const auto cb_in_tiled =
         create_circular_buffer(cb_in_tiled_id, cb_in_tiled_total_size, cb_in_tiled_page_size, intermediary_format);
 
     const uint32_t cb_in_transpose_id = tt::CBIndex::c_3;
-    const uint32_t cb_in_transpose_total_size = 2 * intermediary_tile_size;
+    const uint32_t cb_in_transpose_total_size = tt::div_up(input_shard_width, TILE_WIDTH) * intermediary_tile_size;
     const uint32_t cb_in_transpose_page_size = intermediary_tile_size;
     const auto cb_in_transpose = create_circular_buffer(
         cb_in_transpose_id, cb_in_transpose_total_size, cb_in_transpose_page_size, intermediary_format);
@@ -111,29 +108,38 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_convert_to_hwc(const Te
             .math_approx_mode = false,
             .compile_args = compute_compile_time_args});
 
-    auto set_runtime_args =
-        [cb_in, cb_out, input_cores, total_tiles_per_core, reader_kernel_id, writer_kernel_id, compute_kernel_id](
-            tt::tt_metal::Program& program, const Tensor& a, const Tensor& output) {
-            tt::tt_metal::Buffer* a_buffer = a.buffer();
-            tt::tt_metal::Buffer* output_buffer = output.buffer();
-            UpdateDynamicCircularBufferAddress(program, cb_in, *a_buffer);
-            UpdateDynamicCircularBufferAddress(program, cb_out, *output_buffer);
+    auto set_runtime_args = [cb_in,
+                             cb_out,
+                             input_cores,
+                             total_tiles_per_core,
+                             input_shard_height,
+                             reader_kernel_id,
+                             writer_kernel_id,
+                             compute_kernel_id](tt::tt_metal::Program& program, const Tensor& a, const Tensor& output) {
+        tt::tt_metal::Buffer* a_buffer = a.buffer();
+        tt::tt_metal::Buffer* output_buffer = output.buffer();
+        UpdateDynamicCircularBufferAddress(program, cb_in, *a_buffer);
+        UpdateDynamicCircularBufferAddress(program, cb_out, *output_buffer);
 
-            std::vector<std::vector<uint32_t>> reader_runtime_args = {input_cores.size(), {0}};  // (num_tiles_per_core)
-            std::vector<std::vector<uint32_t>> writer_runtime_args = {input_cores.size(), {0}};  // (num_tiles_per_core)
-            std::vector<std::vector<uint32_t>> compute_runtime_args = {
-                input_cores.size(), {0}};  // (num_tiles_per_core)
+        std::vector<std::vector<uint32_t>> reader_runtime_args = {input_cores.size(), {0}};  // (num_tiles_per_core)
+        std::vector<std::vector<uint32_t>> writer_runtime_args = {input_cores.size(), {0}};  // (num_tiles_per_core)
+        std::vector<std::vector<uint32_t>> compute_runtime_args = {
+            input_cores.size(), {0, 0}};  // (num_tiles_per_core, num_sticks_per_block)
 
-            for (uint32_t i = 0; i < input_cores.size(); i++) {
-                const CoreCoord& core = input_cores.at(i);
-                reader_runtime_args[i][0] = total_tiles_per_core;
-                writer_runtime_args[i][0] = total_tiles_per_core;
-                compute_runtime_args[i][0] = total_tiles_per_core;
-            }
-            SetRuntimeArgs(program, reader_kernel_id, input_cores, reader_runtime_args);
-            SetRuntimeArgs(program, writer_kernel_id, input_cores, writer_runtime_args);
-            SetRuntimeArgs(program, compute_kernel_id, input_cores, compute_runtime_args);
-        };
+        for (uint32_t i = 0; i < input_cores.size(); i++) {
+            const CoreCoord& core = input_cores.at(i);
+
+            reader_runtime_args[i][0] = total_tiles_per_core;
+
+            writer_runtime_args[i][0] = total_tiles_per_core;
+
+            compute_runtime_args[i][0] = total_tiles_per_core;
+            compute_runtime_args[i][1] = input_shard_height;
+        }
+        SetRuntimeArgs(program, reader_kernel_id, input_cores, reader_runtime_args);
+        SetRuntimeArgs(program, writer_kernel_id, input_cores, writer_runtime_args);
+        SetRuntimeArgs(program, compute_kernel_id, input_cores, compute_runtime_args);
+    };
     set_runtime_args(program, a, output);
 
     auto override_runtime_arguments_callback = [set_runtime_args](
