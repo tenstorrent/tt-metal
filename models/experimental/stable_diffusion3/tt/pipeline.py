@@ -357,9 +357,9 @@ class TtStableDiffusion3Pipeline:
         image_decoding_start_time = time.time()
 
         # latents = ttnn.to_torch(self._trace.spatial_input_output).to(torch.float32)
-        latents = to_torch(
-            latents_step, mesh_device=latents_step.device(), dtype=latents_step.get_dtype(), shard_dim=-1
-        ).to(torch.float32)[..., : latents_step.shape[-1]]
+        latents = to_torch(latents_step, mesh_device=latents_step.device(), dtype=torch.float32, shard_dim=-1).to(
+            torch.float32
+        )[..., : latents_step.shape[-1]]
         latents = (latents.permute([0, 3, 1, 2]) / self._vae_scaling_factor) + self._vae_shift_factor
 
         with torch.no_grad():
