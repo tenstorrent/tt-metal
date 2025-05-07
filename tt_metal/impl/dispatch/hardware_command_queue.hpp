@@ -15,6 +15,7 @@
 #include <variant>
 
 #include "buffer.hpp"
+#include "cq_shared_state.hpp"
 #include "command_queue.hpp"
 #include "command_queue_interface.hpp"
 #include "core_coord.hpp"
@@ -48,7 +49,7 @@ class HWCommandQueue : public CommandQueue {
 public:
     HWCommandQueue(
         IDevice* device,
-        std::shared_ptr<DispatchArray<LaunchMessageRingBufferState>>& worker_launch_message_buffer_state,
+        std::shared_ptr<CQSharedState> cq_shared_state,
         uint32_t id,
         NOC noc_index,
         uint32_t completion_queue_reader_core = 0);
@@ -130,7 +131,7 @@ private:
     std::vector<TraceNode> trace_nodes_;
 
     // Shared across all CommandQueue instances for a Device.
-    std::shared_ptr<DispatchArray<LaunchMessageRingBufferState>> worker_launch_message_buffer_state_;
+    std::shared_ptr<CQSharedState> cq_shared_state_;
 
     DispatchArray<tt::tt_metal::WorkerConfigBufferMgr> config_buffer_mgr_;
     // Expected value of DISPATCH_MESSAGE_ADDR in dispatch core L1
