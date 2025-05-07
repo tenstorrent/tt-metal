@@ -1010,7 +1010,6 @@ def test_binary_lcm_pos(input_shapes, device):
     ),
 )
 @skip_for_grayskull("#ToDo: GS implementation needs to be done for remainder")
-# when both inputs are 0, torch=0, tt=nan
 def test_binary_lcm_neg(input_shapes, device):
     torch.manual_seed(213919)
     in_data1 = torch.randint(-32767, 0, input_shapes, dtype=torch.int32)
