@@ -64,6 +64,11 @@ enum class FabricMuxChannelType : uint8_t { FULL_SIZE_CHANNEL = 0, HEADER_ONLY_C
         frequently mux kernel will check for the termination signal. Can be used to optimize performance, but very large
         values can impact teardown times.
 */
+
+size_t get_max_buffer_size_bytes_full_size_channel() {
+    return tt::tt_fabric::get_1d_fabric_config().channel_buffer_size_bytes;
+}
+
 struct FabricMuxConfig {
     static constexpr uint8_t default_num_buffers = 8;
     static constexpr size_t default_num_full_size_channel_iters = 1;
@@ -90,7 +95,14 @@ struct FabricMuxConfig {
         num_buffers_header_only_channel(
             num_buffers_header_only_channel == 0 ? default_num_buffers : num_buffers_header_only_channel),
         buffer_size_bytes_full_size_channel(buffer_size_bytes_full_size_channel) {
-        // TODO: asserts on the max size/number of channels allowed?
+        size_t max_buffer_size_bytes_full_size_channel = get_max_buffer_size_bytes_full_size_channel();
+        if (buffer_size_bytes_full_size_channel > max_buffer_size_bytes_full_size_channel) {
+            TT_THROW(
+                "Buffer size bytes for full size channel should be less than or equal to: {}, got: {}",
+                max_buffer_size_bytes_full_size_channel,
+                buffer_size_bytes_full_size_channel);
+        }
+
         noc_aligned_address_size_bytes =
             tt::tt_metal::MetalContext::instance().hal().get_alignment(tt::tt_metal::HalMemType::L1);
         auto num_total_channels = num_full_size_channels + num_header_only_channels;
@@ -121,7 +133,19 @@ struct FabricMuxConfig {
             this->header_only_channels_base_address + (num_header_only_channels * this->header_only_channel_size_bytes);
     }
 
-    std::vector<uint32_t> get_fabric_mux_compile_time_args() {
+    size_t get_buffer_size_bytes(FabricMuxChannelType channel_type) const {
+        if (channel_type == FabricMuxChannelType::FULL_SIZE_CHANNEL) {
+            return this->buffer_size_bytes_full_size_channel;
+        } else if (channel_type == FabricMuxChannelType::HEADER_ONLY_CHANNEL) {
+            return sizeof(tt::tt_fabric::PacketHeader);
+        } else {
+            TT_THROW("Unexpected channel type: {}", channel_type);
+        }
+
+        return 0;
+    }
+
+    std::vector<uint32_t> get_fabric_mux_compile_time_args() const {
         return std::vector<uint32_t>{
             this->num_full_size_channels,
             this->num_buffers_full_size_channel,

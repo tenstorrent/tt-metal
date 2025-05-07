@@ -387,7 +387,7 @@ void run_mux_test_variant(FabricMuxFixture* fixture, TestConfig test_config) {
     worker_memory_map.payload_buffer_address = worker_memory_map.base_l1_target_address;
 
     std::vector<tt::tt_metal::Program> program_handles(devices.size());
-    std::vector<size_t> mux_termiation_signal_addresses;
+    std::vector<size_t> mux_termination_signal_addresses;
 
     for (auto i = 0; i < devices.size(); i++) {
         program_handles[i] = tt_metal::CreateProgram();
@@ -405,7 +405,7 @@ void run_mux_test_variant(FabricMuxFixture* fixture, TestConfig test_config) {
             test_config.num_buffers_header_only_channel,
             sizeof(tt::tt_fabric::PacketHeader) + test_config.packet_payload_size_bytes,
             mux_base_l1_address);
-        mux_termiation_signal_addresses.push_back(mux_kernel_config.get_termination_signal_address());
+        mux_termination_signal_addresses.push_back(mux_kernel_config.get_termination_signal_address());
 
         if (test_config.num_full_size_channel_iters > 1) {
             mux_kernel_config.set_num_full_size_channel_iters(test_config.num_full_size_channel_iters);
@@ -495,10 +495,10 @@ void run_mux_test_variant(FabricMuxFixture* fixture, TestConfig test_config) {
     }
 
     log_info(LogTest, "Receivers done, terminating mux kernel");
-    std::vector<uint32_t> mux_termiation_signal(1, tt::tt_fabric::TerminationSignal::IMMEDIATELY_TERMINATE);
+    std::vector<uint32_t> mux_termination_signal(1, tt::tt_fabric::TerminationSignal::IMMEDIATELY_TERMINATE);
     for (auto i = 0; i < devices.size(); i++) {
         tt::tt_metal::detail::WriteToDeviceL1(
-            devices[i], worker_logical_cores[0], mux_termiation_signal_addresses[i], mux_termiation_signal);
+            devices[i], worker_logical_cores[0], mux_termination_signal_addresses[i], mux_termination_signal);
     }
 
     log_info(LogTest, "Waiting for programs");
