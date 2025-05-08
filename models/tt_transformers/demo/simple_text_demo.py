@@ -544,6 +544,13 @@ def test_demo_text(
         page_params=page_params,
         paged_attention=paged_attention,
     )
+
+    for m_args in model_args:
+        if m_args.max_context_len < max_seq_len:
+            pytest.skip(
+                f"Max seq len {max_seq_len} not supported by model {m_args.model_name}. The model's max context len is {m_args.max_context_len}"
+            )
+
     generator = Generator(model, model_args, mesh_device, tokenizer=tokenizer)
 
     num_tokens_generated_decode = []
