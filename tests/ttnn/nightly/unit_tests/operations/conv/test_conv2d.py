@@ -623,7 +623,7 @@ def test_conv_activation(
         pytest.skip("Row major layout not compatible with bfloat8_b")
 
     if activations_dtype == ttnn.bfloat8_b and shard_layout == HS and activation == "sqrt":
-        pytest.skip("Skipping until Issue: #21209 is fixed")
+        pytest.skip("Skipping sqrt activation for bfloat8_b and height sharded due to PCC error")
 
     run_conv(
         device,
@@ -1876,25 +1876,25 @@ def test_unet_conv_groups_2_wh(
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 @pytest.mark.parametrize(
-    "output_channels, input_channels, input_height, input_width, filter_height, filter_width, stride_h, stride_w, pad_h, pad_w, shard_layout, config_override, use_shallow_conv_variant, in_place, input_layout",
+    "output_channels, input_channels, input_height, input_width, filter_height, filter_width, stride_h, stride_w, pad_h, pad_w, shard_layout, config_override, use_shallow_conv_variant, in_place",
     (
-        (16, 4, 1056, 160, 3, 3, 1, 1, 1, 1, HS, {"act_block_h": 2 * 32}, True, False, ttnn.TILE_LAYOUT),
-        (16, 16, 1056, 160, 3, 3, 1, 1, 1, 1, HS, {"act_block_h": 2 * 32}, True, False, ttnn.TILE_LAYOUT),
-        (16, 16, 528, 80, 3, 3, 1, 1, 1, 1, HS, {"act_block_h": 2 * 32}, True, False, ttnn.TILE_LAYOUT),
-        (32, 16, 264, 40, 3, 3, 1, 1, 1, 1, HS, None, False, False, ttnn.TILE_LAYOUT),
-        (32, 32, 264, 40, 3, 3, 1, 1, 1, 1, HS, None, False, False, ttnn.TILE_LAYOUT),
-        (32, 32, 132, 20, 3, 3, 1, 1, 1, 1, HS, None, False, False, ttnn.TILE_LAYOUT),
-        (64, 32, 66, 10, 3, 3, 1, 1, 1, 1, HS, None, False, False, ttnn.TILE_LAYOUT),
-        (64, 64, 66, 10, 3, 3, 1, 1, 1, 1, HS, None, False, False, ttnn.TILE_LAYOUT),
-        (32, 96, 132, 20, 3, 3, 1, 1, 1, 1, HS, None, False, False, ttnn.TILE_LAYOUT),
-        (32, 32, 132, 20, 3, 3, 1, 1, 1, 1, HS, None, False, False, ttnn.TILE_LAYOUT),
-        (32, 64, 264, 40, 3, 3, 1, 1, 1, 1, HS, None, False, False, ttnn.TILE_LAYOUT),
-        (32, 32, 264, 40, 3, 3, 1, 1, 1, 1, HS, None, False, False, ttnn.TILE_LAYOUT),
-        (16, 48, 528, 80, 3, 3, 1, 1, 1, 1, HS, {"act_block_h": 2 * 32}, True, False, ttnn.TILE_LAYOUT),
-        (16, 16, 528, 80, 3, 3, 1, 1, 1, 1, HS, {"act_block_h": 2 * 32}, True, False, ttnn.TILE_LAYOUT),
-        (16, 32, 1056, 160, 3, 3, 1, 1, 1, 1, HS, {"act_block_h": 2 * 32}, True, True, ttnn.TILE_LAYOUT),
-        (16, 32, 1056, 160, 3, 3, 1, 1, 1, 1, HS, {"act_block_h": 2 * 32}, True, True, ttnn.TILE_LAYOUT),
-        (1, 16, 1056, 160, 1, 1, 1, 1, 0, 0, HS, {"act_block_h": 2 * 32}, False, False, ttnn.TILE_LAYOUT),
+        (16, 4, 1056, 160, 3, 3, 1, 1, 1, 1, HS, {"act_block_h": 2 * 32}, True, False),
+        (16, 16, 1056, 160, 3, 3, 1, 1, 1, 1, HS, {"act_block_h": 2 * 32}, True, False),
+        (16, 16, 528, 80, 3, 3, 1, 1, 1, 1, HS, {"act_block_h": 2 * 32}, True, False),
+        (32, 16, 264, 40, 3, 3, 1, 1, 1, 1, HS, None, False, False),
+        (32, 32, 264, 40, 3, 3, 1, 1, 1, 1, HS, None, False, False),
+        (32, 32, 132, 20, 3, 3, 1, 1, 1, 1, HS, None, False, False),
+        (64, 32, 66, 10, 3, 3, 1, 1, 1, 1, HS, None, False, False),
+        (64, 64, 66, 10, 3, 3, 1, 1, 1, 1, HS, None, False, False),
+        (32, 96, 132, 20, 3, 3, 1, 1, 1, 1, HS, None, False, False),
+        (32, 32, 132, 20, 3, 3, 1, 1, 1, 1, HS, None, False, False),
+        (32, 64, 264, 40, 3, 3, 1, 1, 1, 1, HS, None, False, False),
+        (32, 32, 264, 40, 3, 3, 1, 1, 1, 1, HS, None, False, False),
+        (16, 48, 528, 80, 3, 3, 1, 1, 1, 1, HS, {"act_block_h": 2 * 32}, True, False),
+        (16, 16, 528, 80, 3, 3, 1, 1, 1, 1, HS, {"act_block_h": 2 * 32}, True, False),
+        (16, 32, 1056, 160, 3, 3, 1, 1, 1, 1, HS, {"act_block_h": 2 * 32}, True, True),
+        (16, 32, 1056, 160, 3, 3, 1, 1, 1, 1, HS, {"act_block_h": 2 * 32}, True, True),
+        (1, 16, 1056, 160, 1, 1, 1, 1, 0, 0, HS, {"act_block_h": 2 * 32}, False, False),
     ),
 )
 @pytest.mark.parametrize(
@@ -1928,7 +1928,6 @@ def test_unet_conv_groups_4_6_wh(
     shard_layout,
     config_override,
     use_shallow_conv_variant,
-    input_layout,
     output_layout,
     groups,
     in_place,
@@ -1961,7 +1960,7 @@ def test_unet_conv_groups_4_6_wh(
         shard_layout=shard_layout,
         use_shallow_conv_variant=use_shallow_conv_variant,
         transpose_shards=True,  ## use RM (transpose_mcast=False) with 2D on WH
-        input_layout=input_layout,
+        input_layout=ttnn.TILE_LAYOUT if activations_dtype == ttnn.bfloat8_b else ttnn.ROW_MAJOR_LAYOUT,
         output_layout=output_layout,
         groups=groups,
         in_place=in_place,
@@ -3098,7 +3097,7 @@ def test_conv2d_model_fruit(
         weight_mesh_mapper=None,
         output_mesh_composer=None,
         enable_split_reader=enable_split_reader,
-        input_layout= ttnn.TILE_LAYOUT,
+        input_layout= ttnn.TILE_LAYOUT if activations_dtype == ttnn.bfloat8_b else None,
     )
 
 
