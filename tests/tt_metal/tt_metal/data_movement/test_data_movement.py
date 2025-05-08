@@ -89,6 +89,9 @@ test_bounds = {
         14: {
             "riscv_0": {"latency": {"lower": 200, "upper": 100000}, "bandwidth": 0.04},
         },
+        15: {
+            "riscv_1": {"latency": {"lower": 700, "upper": 30000}, "bandwidth": 0.7},
+        },
     },
     "blackhole": {
         0: {
