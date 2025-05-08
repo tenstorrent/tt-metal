@@ -78,8 +78,6 @@ void MAIN {
     constexpr uint32_t pad_w = get_compile_time_arg_val(21);
     constexpr uint32_t stride_h = get_compile_time_arg_val(22);
     constexpr uint32_t stride_w = get_compile_time_arg_val(23);
-    uint32_t out_x = get_arg_val<uint32_t>(0);
-    uint32_t out_y = get_arg_val<uint32_t>(1);
 
     constexpr bool is_partial_tile = in_c < 32;
     static_assert((!is_partial_tile || (in_c == 16)), "Partial tile must have c_dim 16");
@@ -96,10 +94,13 @@ void MAIN {
     static_assert(REDUCE_OP == PoolType::MAX || REDUCE_OP == PoolType::SUM, "Only supports REDUCE_OP = MAX or Sum");
     constexpr bool neginf_srca_maxpool = (REDUCE_OP == PoolType::MAX) ? true : false;
     constexpr bool zero_srca_avgpool = (REDUCE_OP == PoolType::SUM) ? true : false;
-    bool includes_padding = false;
-    bool reached_padding = false;
+
+    uint32_t out_x = get_arg_val<uint32_t>(0);
+    uint32_t out_y = get_arg_val<uint32_t>(1);
     bool first = true;
-    bool should_wait_for_new_scalar = false;
+    bool last_overlaps_padding = false;
+    uint32_t last_x = 1000;
+    uint32_t last_y = 1000;
 
     tilizeA_B_reduce_init<neginf_srca_maxpool, zero_srca_avgpool>(
         in_cb_id_0, in_scalar_cb_id, max_tiles_per_iter, out_cb_id, num_faces_in_tile, window_size_hw);
@@ -108,27 +109,28 @@ void MAIN {
     cb_wait_front(in_scalar_cb_id, 1);
 
     for (uint32_t i = 0; i < nsticks_per_core; ++i) {
-        DPRINT << "i: " << i << " out_x: " << out_x << " out_y: " << out_y << ENDL();
-        // check if we reached padding
+        // DPRINT << "i: " << i << " out_x: " << out_x << " out_y: " << out_y << ENDL();
+        //  check if we reached padding
         if (REDUCE_OP == PoolType::SUM) {
-            includes_padding = (out_y * stride_h - pad_h) < 0 || (out_y * stride_h - pad_h + kernel_h) > in_h ||
-                               (out_x * stride_w - pad_w) < 0 || (out_x * stride_w - pad_w + kernel_w) > in_w;
+            bool on_top_edge = (out_y * stride_h - pad_h) < 0;
+            bool on_left_edge = (out_x * stride_w - pad_w) < 0;
+            bool on_bottom_edge = (out_y * stride_h - pad_h + kernel_h) > in_h;
+            bool on_right_edge = (out_x * stride_w - pad_w + kernel_w) > in_w;
 
-            if (((reached_padding && !includes_padding) || includes_padding) && !first) {
-                should_wait_for_new_scalar = true;
-            }
-            if (includes_padding) {
-                reached_padding = true;
-            }
-            if (first) {
-                first = false;
-            }
+            bool overlaps_padding = on_top_edge || on_left_edge || on_bottom_edge || on_right_edge;
 
-            if (should_wait_for_new_scalar) {
+            // Use a combination of current tile's (x, y) to track where the kernel layout changes
+            bool is_new_config =
+                !first && (overlaps_padding != last_overlaps_padding || (out_y != last_y || out_x != last_x));
+
+            first = false;
+            if (is_new_config) {
                 DPRINT << "should wait for new scalar" << ENDL();
-                should_wait_for_new_scalar = false;
                 cb_pop_front(in_scalar_cb_id, 1);
                 cb_wait_front(in_scalar_cb_id, 1);
+                last_overlaps_padding = overlaps_padding;
+                last_y = out_y;
+                last_x = out_x;
             }
         }
 

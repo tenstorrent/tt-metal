@@ -32,13 +32,16 @@ std::vector<uint32_t> get_bf16_pool_scalar(
     std::vector<uint32_t> scalars;
     float value;
     float previous_value = 0.;
-    bool includes_padding = false;
-    bool reached_padding = false;
     bool first = true;
-    bool should_add_new_scalar = false;
+    bool last_overlaps_padding = false;
+    uint32_t last_x = std::numeric_limits<uint32_t>::max();
+    uint32_t last_y = std::numeric_limits<uint32_t>::max();
 
     switch (pool_type) {
-        case Pool2DType::MAX_POOL2D: value = 1.; break;
+        case Pool2DType::MAX_POOL2D:
+            value = 1.;
+            scalars.push_back(bfloat16(value).to_packed());
+            break;
         case Pool2DType::AVG_POOL2D:
             if (divisor_override.has_value()) {
                 value = 1. / (float)divisor_override.value();
@@ -71,25 +74,24 @@ std::vector<uint32_t> get_bf16_pool_scalar(
                     //         value = 1. / (float)((kernel_size_h * kernel_size_w) - kernel_size_w * ceil_w);
                     //     }
                     // }
-                    bool includes_padding = (out_stick_y_start * stride_h - pad_h) < 0 ||
-                                            (out_stick_x_start * stride_w - pad_w) < 0 ||
-                                            (out_stick_y_start * stride_h - pad_h + kernel_size_h) > (in_h) ||
-                                            (out_stick_x_start * stride_w - pad_w + kernel_size_w) > (in_w);
+                    bool on_top_edge = (out_stick_y_start * stride_h - pad_h) < 0;
+                    bool on_left_edge = (out_stick_x_start * stride_w - pad_w) < 0;
+                    bool on_bottom_edge = (out_stick_y_start * stride_h - pad_h + kernel_size_h) > (int)in_h;
+                    bool on_right_edge = (out_stick_x_start * stride_w - pad_w + kernel_size_w) > (int)in_w;
 
-                    if (((reached_padding && !includes_padding) || includes_padding) && !first) {
-                        first = false;
-                        should_add_new_scalar = true;
-                    }
-                    if (includes_padding) {
-                        reached_padding = true;
-                    }
+                    bool overlaps_padding = on_top_edge || on_left_edge || on_bottom_edge || on_right_edge;
 
-                    if (should_add_new_scalar || first) {
-                        should_add_new_scalar = false;
-                        first = false;
+                    // Use a combination of current tile's (x, y) to track where the kernel layout changes
+                    bool is_new_config = first || overlaps_padding != last_overlaps_padding ||
+                                         out_stick_y_start != last_y || out_stick_x_start != last_x;
+
+                    if (is_new_config) {
                         scalars.push_back(bfloat16(value).to_packed());
+                        first = false;
+                        last_overlaps_padding = overlaps_padding;
+                        last_y = out_stick_y_start;
+                        last_x = out_stick_x_start;
                     }
-
                     out_stick_y_start = (out_stick_y_start + 1) % out_h;
                     if (out_stick_y_start == 0) {
                         out_stick_x_start = (out_stick_x_start + 1) % out_w;

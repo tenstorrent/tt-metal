@@ -73,7 +73,6 @@ void kernel_main() {
             fill_with_val(get_write_ptr(in_scalar_cb_id), TILE_WIDTH, scalar_val >> 16);
             scalar_index++;
             cb_push_back(in_scalar_cb_id, 1);
-            print_full_tile(in_scalar_cb_id, scalar_index - 1);
         }
         if (counter < reader_nindices) {
             cb_reserve_back(in_cb_id, npages_to_reserve);

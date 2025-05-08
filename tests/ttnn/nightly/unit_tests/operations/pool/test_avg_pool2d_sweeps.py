@@ -19,10 +19,12 @@ parameters = {
     "input_specs": [
         # Contains following parameters
         # [batch_size, input_channels, input_height, input_width, kernel_height, kernel_width, stride_h, stride_w, pad_h, pad_w, ceil_mode, count_include_pad]
-        [1, 416, 14, 14, 2, 2, 2, 2, 0, 0, False, True, None],
+        # [1, 416, 14, 14, 2, 2, 2, 2, 0, 0, False, True, None],
         # [1, 128, 56, 56, 2, 2, 2, 2, 0, 0, True, True, None],
-        # [1, 32, 3, 3, 2, 2, 2, 2, 0, 0, True, True, None],
-        # [1, 32, 4, 4, 2, 2, 2, 2, 1, 1, False, False, None],
+        [1, 32, 3, 3, 2, 2, 2, 2, 0, 0, True, True, None],
+        [1, 32, 3, 3, 2, 2, 2, 2, 0, 0, True, False, None],
+        [1, 32, 4, 4, 2, 2, 2, 2, 1, 1, False, False, None],
+        [1, 32, 4, 4, 2, 2, 2, 2, 1, 1, True, False, None],
         # [1, 32, 4, 4, 2, 2, 2, 2, 1, 1, True, False, None],
         # [1, 32, 3, 3, 2, 2, 2, 2, 1, 1, False, False, None],
         # [1, 192, 56, 56, 2, 2, 2, 2, 0, 0, True, True, None],
@@ -85,5 +87,5 @@ def test_ttnn_pytorch_sweep(device, tensor_map, input_spec):
         ceil_mode=ceil_mode,
         divisor_override=divisor_override,
         count_include_pad=count_include_pad,
-        shard_scheme=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        shard_scheme=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
     )
