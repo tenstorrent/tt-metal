@@ -15,7 +15,7 @@ struct CumSumOperation {
     static Tensor invoke(
         QueueId queue_id,
         const Tensor& input,
-        const int64_t dim,
+        int64_t dim,
         std::optional<ttnn::DataType> dtype = std::nullopt,
         std::optional<Tensor> preallocated_output = std::nullopt);
 };
