@@ -157,6 +157,9 @@ uint32_t get_sender_receiver_chip_fabric_encoding(
     bool get_sender_encoding) {
     const auto sender_physical_device_id = sender_device->get_device(sender_coord)->id();
     const auto recv_physical_device_id = recv_device->get_device(recv_coord)->id();
+    if (sender_coord != recv_coord) {
+        TT_FATAL(fabric_config != FabricConfig::DISABLED, "Can only create multi-device sockets with fabric enabled.");
+    }
     if (fabric_config == FabricConfig::FABRIC_1D or fabric_config == FabricConfig::FABRIC_1D_RING) {
         // 1D Fabric requires passing in the number of hops between the sender and receiver
         auto sender_global_coord = SystemMesh::instance().get_global_device_coordinate(sender_physical_device_id);
