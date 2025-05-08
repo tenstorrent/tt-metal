@@ -177,7 +177,7 @@ TEST_F(DeviceFixture, TensixDataMovementOneFromAllPacketSizes) {
         for (uint32_t transaction_size_pages = 1; transaction_size_pages <= max_transaction_size_pages;
              transaction_size_pages *= 2) {
             if (num_of_transactions * transaction_size_pages * page_size_bytes * total_slave_cores >= 1024 * 1024) {
-                break;
+                continue;
             }
 
             // Test config
