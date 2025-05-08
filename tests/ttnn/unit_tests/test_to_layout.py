@@ -436,7 +436,7 @@ def test_to_layout_wh2(shape, input_layout, output_layout, device):
 
 
 @pytest.mark.parametrize("shape", [[32, 128], [2, 4, 96, 256], [1, 160, 64]])
-def test_untilize_with_unpad1_int32(shape, device):
+def test_untilize_with_unpad_int32(shape, device):
     torch.manual_seed(2005)
     end_shape = [x - 1 for x in shape]
     input_a = torch.randint(1, 64, shape, dtype=torch.int32)
