@@ -2221,11 +2221,8 @@ class TtModelArgs:
                 tokenizer.stop_tokens = [tokenizer.eos_token_id]
             return tokenizer
 
-    def encode_prompt(
-        self, prompt_text, system_prompt_text=None, instruct=True, truncate=False, max_generated_tokens=0
-    ):
+    def encode_prompt(self, prompt_text, system_prompt_text=None, instruct=True):
         if self.checkpoint_type == CheckpointType.Meta:
-            # TODO: truncate not needed for this case.
             if instruct:
                 return encode_prompt_instruct(self.tokenizer, prompt_text, system_prompt_text)
             else:
@@ -2233,18 +2230,11 @@ class TtModelArgs:
         else:
             if instruct:
                 try:
-                    return encode_prompt_hf(
-                        self.tokenizer,
-                        prompt_text,
-                        system_prompt_text,
-                        truncate=truncate,
-                        max_generated_tokens=max_generated_tokens,
-                        max_seq_len=self.max_seq_len,
-                    )
+                    return encode_prompt_hf(self.tokenizer, prompt_text, system_prompt_text)
                 except ValueError as e:
                     logger.warning(f"Failed to encode chat prompt, are you sure this is an instruct model? Error: {e}")
                     logger.warning(f"Falling back to base model encoding with no chat template")
-            # TODO: truncate not implemented for this case.
+
             return self.tokenizer.encode(prompt_text, add_special_tokens=False)
 
 

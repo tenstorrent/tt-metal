@@ -559,7 +559,7 @@ def test_demo_text(
             decoding_pos,
             prefill_lens,
         ) = preprocess_inputs_prefill(
-            input_prompts, tokenizer, model_args, instruct, max_generated_tokens, truncate=True
+            input_prompts, tokenizer, model_args, instruct, max_generated_tokens, max_prefill_len=max_seq_len
         )
 
         max_encoded_prompt_len = max(len(p) for p in encoded_prompts)
