@@ -67,7 +67,7 @@ def summarize_to_csv(test_params, current_bw):
     # append results
     with open(OUTPUT_FILE_PATH, "a") as f:
         writer = csv.writer(f)
-        results = test_params
+        results = test_params.copy()
         results["Bandwidth (B/c)"] = current_bw
         output = [results[x] for x in HEADERS]
         writer.writerow(output)
