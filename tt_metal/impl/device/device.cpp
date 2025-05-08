@@ -1837,9 +1837,6 @@ HalMemType Device::get_mem_type_of_core(CoreCoord virtual_core) const {
         !tt::tt_metal::MetalContext::instance().get_cluster().is_worker_core(virtual_core, this->id_)) {
         return HalMemType::DRAM;
     } else {
-        TT_ASSERT(
-            tt::tt_metal::MetalContext::instance().get_cluster().is_ethernet_core(virtual_core, this->id_) ||
-            tt::tt_metal::MetalContext::instance().get_cluster().is_worker_core(virtual_core, this->id_));
         return HalMemType::L1;
     }
 }
