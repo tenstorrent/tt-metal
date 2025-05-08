@@ -469,8 +469,6 @@ def run_rms_fuse_impl(
             residual_input_tensor=residual_tensor[i],
             stats=tt_stats,
         )
-        print(tt_out)
-        print(residual_tensor[i])
         print(tt_stats)
         tt_out_array.append(tt_out)
     for i in range(num_iters):

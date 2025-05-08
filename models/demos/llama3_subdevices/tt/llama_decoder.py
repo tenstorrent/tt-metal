@@ -138,14 +138,9 @@ class TtTransformerBlock(LightweightModule):
             x.memory_config() == skip_mem_cfg
         ), f"decoder input memcfg mismatch: {x.memory_config()} != {skip_mem_cfg}"
         # Norms take fractured inputs and output replicated across devices
-        try:
-            # attn_in_sharded=norm(x+h), h = x+h happens implicitly
-            attn_in_sharded, _ = self.attention_norm(x, h, mode)
-        except Exception as e:
-            print(e)
-            print("failed to run attention norm")
-            assert False, "Failed to run attention norm"
-        x.deallocate(True)
+        # attn_in_sharded=norm(x+h), h = x+h happens implicitly
+        attn_in_sharded, _ = self.attention_norm(x, h, mode)
+        # x.deallocate(True)
         attn_out = self.attention.forward(
             attn_in_sharded,
             current_pos,

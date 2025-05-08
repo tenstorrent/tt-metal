@@ -995,9 +995,9 @@ operation::ProgramWithCallbacks frmsnorm_multi_core_sharded(
         uint32_t out_ready_sem_wait_value = ring_size * num_links;
         // all_gather_rts Start at RT index 3 of writer
         std::vector<uint32_t> all_gather_rts = {
-            semaphore.address(),        // out_ready_sem_bank_addr (absolute address)
-            out_ready_sem_wait_value,   // out_ready_sem_wait_value
-            output.buffer()->address()  // tensor_address0
+            semaphore.address(),               // out_ready_sem_bank_addr (absolute address)
+            out_ready_sem_wait_value,          // out_ready_sem_wait_value
+            stats.value().buffer()->address()  // tensor_address0
         };
 
         if (i < num_links) {
@@ -1235,13 +1235,13 @@ operation::ProgramWithCallbacks frmsnorm_multi_core_sharded(
                 if (writer_kernel_id == writer_mcast_sender_kernels_id) {
                     auto& runtime_args = writer_sender_args_by_core[core.x][core.y];
                     runtime_args[8] = semaphore.address();
-                    runtime_args[10] = dst_buffer->address();
+                    runtime_args[10] = optional_input_tensors.at(2).value().buffer()->address();
                     // runtime_args[0] holds the start of the post arguments, apply that offset
                     runtime_args[runtime_args[0] + 2] = gamma_address;
                 } else if (writer_kernel_id == writer_mcast_receiver_kernels_id) {
                     auto& runtime_args = writer_receiver_args_by_core[core.x][core.y];
                     runtime_args[8] = semaphore.address();
-                    runtime_args[10] = dst_buffer->address();
+                    runtime_args[10] = optional_input_tensors.at(2).value().buffer()->address();
                     runtime_args[runtime_args[0] + 2] = gamma_address;
                 }
             }
