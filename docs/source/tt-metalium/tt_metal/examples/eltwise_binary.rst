@@ -5,7 +5,7 @@ Eltwise binary
 
 We now build a program that performs elementwise binary operations on a pair of equal-sized tensors using the FPU (matrix engine). The FPU can perform a variety of complex operations efficiently, including matrix multiplication and reduction. It can also perform common elementwise operations like addition. This example will add two tensors together using the FPU.
 
-Although looking trivial, this example introduces essential concepts that are used in more complicated programs. Namely the compute kernel and the use of circular buffers. Tenstorrent devices are designed with explicit data movement in mind. Leading to a seperate compute kernel. And for circular buffers is the primary way to move data between kernels.
+Although looking trivial, this example introduces essential concepts that are used in more complicated programs. Namely the compute kernel and the use of circular buffers. Tenstorrent devices are designed with explicit data movement in mind. Leading to a separate compute kernel. And for circular buffers is the primary way to move data between kernels.
 
 We'll go through any new code section by section. This builds on top of
 previous examples. Note that we have this exact, full example program is located under
@@ -80,7 +80,7 @@ Data preperation and upload is the same as before. For this example, buffer 0 wi
 Circular buffers
 ----------------
 
-Here we introduce a new concept: circular buffers. They are communication channels between the different kernel on a Tensix. Conceptually they act as pipes between differnt kernels. There are in total 16 circular buffers supported on a Tensix. To utilize them, the host program must allocate the circular buffers and utilzie the appropriate ciricular buffer index in the kernel.
+Here we introduce a new concept: circular buffers. They are communication channels between the different kernel on a Tensix. Conceptually they act as pipes between different kernels. There are in total 16 circular buffers supported on a Tensix. To utilize them, the host program must allocate the circular buffers and utilzie the appropriate ciricular buffer index in the kernel.
 
 
 
@@ -105,7 +105,7 @@ Here we introduce a new concept: circular buffers. They are communication channe
         /*data_format_spec=*/{{dst_cb_index, tt::DataFormat::Float16_b}})
         .set_page_size(dst_cb_index, tile_size_bytes));
 
-The API to create a circular buffer is more complicated then for a buffer, providing finer grained control for advanced usecases. At the core, there are a few critical parameters:
+The API to create a circular buffer is more complicated then for a buffer, providing finer grained control for advanced use cases. At the core, there are a few critical parameters:
 
 * The index of the circular buffer
 * The total size of the circular buffer in bytes (an thus the number of pages within)
@@ -118,10 +118,10 @@ For instance, to create a circular buffer of 2 tiles of bfloat16 data, we need t
 Data movement and compute kernels
 ---------------------------------
 
-In the previous example (DRAM loopback), we used a single kernel to perform the entire operation; to read data from DRAM and write it back out. The Tensix core in fact contains 5 RISC-V cores. 2 of them are the data movement cores, which connects to the NoC and can issue commands to access other on chip resources (includign DRAM). The other 3 are compute cores, which operates cooperatively and runs a single compute kernel. They have access to the matrix and vector engines, which performs the majority of the compute work on a Tensix.
+In the previous example (DRAM loopback), we used a single kernel to perform the entire operation; to read data from DRAM and write it back out. The Tensix core in fact contains 5 RISC-V cores. 2 of them are the data movement cores, which connects to the NoC and can issue commands to access other on chip resources (including DRAM). The other 3 are compute cores, which operates cooperatively and runs a single compute kernel. They have access to the matrix and vector engines, which performs the majority of the compute work on a Tensix.
 
 .. note::
-    Unlike traditional multi core processors. Where a problem is broken down into subtasks as assigned to the cores while each core runs the same code (SPMD, single program multiple data). The compute cores on a Tensix are designed to run different code. The compute kernel is compiled 3 times. Once for each of the 3 compute cores and generating 3 different binaries.  They work collaboratively to perform a single task. The 3 compute cores are the Unpack, Math and Pack cores. They are responsible for moving data from L1 into the matrix or vector engines, issue commands for computation and moving the results back out to L1. Which can be done at the smae time for high throughput.
+    Unlike traditional multi core processors. Where a problem is broken down into subtasks as assigned to the cores while each core runs the same code (SPMD, single program multiple data). The compute cores on a Tensix are designed to run different code. The compute kernel is compiled 3 times. Once for each of the 3 compute cores and generating 3 different binaries.  They work collaboratively to perform a single task. The 3 compute cores are the Unpack, Math and Pack cores. They are responsible for moving data from L1 into the matrix or vector engines, issue commands for computation and moving the results back out to L1. Which can be done at the same time for high throughput.
 
 .. code-block:: cpp
 
@@ -251,7 +251,7 @@ The writer kernel is looks similar to the reader kernel. Instead of reading, it 
 Then the host program sets the kernel arguments and launches the program. There is no different in setting the arguments for the compute kernel.
 
 .. note::
-    Unlike OpenCL/CUDA. Each kernel (reader, compute and writer) can have it's own set of arguments. Fruthermore, on a multi cored program (i.e. using more then 1 Tensix core), kernels within each core can have different arguments. This enables Metalium to exploit the grid like nature of the Tenstorrent processors to achieve high performance.
+    Unlike OpenCL/CUDA. Each kernel (reader, compute and writer) can have it's own set of arguments. Furthermore, on a multi cored program (i.e. using more then 1 Tensix core), kernels within each core can have different arguments. This enables Metalium to exploit the grid like nature of the Tenstorrent processors to achieve high performance.
 
 .. code-block:: cpp
 
