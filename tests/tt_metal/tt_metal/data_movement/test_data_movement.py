@@ -78,6 +78,9 @@ test_bounds = {
         5: {
             "riscv_1": {"latency": {"lower": 300, "upper": 4700}, "bandwidth": 0.17},
         },
+        6: {
+            "riscv_1": {"latency": {"lower": 800, "upper": 35000}, "bandwidth": 1.19},
+        },
     },
 }
 
@@ -231,7 +234,7 @@ def performance_check(dm_stats, arch="blackhole", verbose=False):
                 results_bounds[test_id] = {
                     riscv: {"latency": {"lower": float("inf"), "upper": 0}, "bandwidth": float("inf")}
                 }
-            else:
+            elif riscv not in results_bounds[test_id].keys():
                 results_bounds[test_id][riscv] = {
                     "latency": {"lower": float("inf"), "upper": 0},
                     "bandwidth": float("inf"),
@@ -297,9 +300,6 @@ def performance_check(dm_stats, arch="blackhole", verbose=False):
 
 def print_stats(dm_stats):
     # Print stats per runtime host id
-    for i in range(len(dm_stats["riscv_1"]["analysis"]["series"])):
-        run_host_id = dm_stats["riscv_1"]["analysis"]["series"][i]["duration_type"][0]["run_host_id"]
-
     for riscv1_run, riscv0_run in itertools.zip_longest(
         dm_stats["riscv_1"]["analysis"]["series"], dm_stats["riscv_0"]["analysis"]["series"], fillvalue=None
     ):
