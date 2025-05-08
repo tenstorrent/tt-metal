@@ -4,7 +4,7 @@
 
 #include "ttnn/operations/pool/global_avg_pool/global_avg_pool.hpp"
 #include "ttnn/operations/reduction/generic/generic_reductions.hpp"
-#include "cpp/ttnn/operations/experimental/reshape/view.hpp"
+#include "ttnn/operations/experimental/reshape/view.hpp"
 
 namespace tt {
 namespace tt_metal {

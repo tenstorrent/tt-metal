@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include "cpp/ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
+#include "ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
 
 #include "dataflow_api.h"
 #include "noc_nonblocking_api.h"
