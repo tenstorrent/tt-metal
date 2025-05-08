@@ -4,7 +4,7 @@
 #pragma once
 
 #include <tt-metalium/core_coord.hpp>
-#include "ttnn/operations/ccl/common/types/ccl_types.hpp"
+#include "cpp/ttnn/operations/ccl/common/types/ccl_types.hpp"
 
 #include <vector>
 #include <string>

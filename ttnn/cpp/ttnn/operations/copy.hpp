@@ -8,7 +8,7 @@
 #include "ttnn/common/queue_id.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/operations/eltwise/unary/device/unary_device_operation.hpp"
-#include "ttnn/operations/experimental/copy/typecast/typecast.hpp"
+#include "cpp/ttnn/operations/experimental/copy/typecast/typecast.hpp"
 
 namespace ttnn {
 namespace operations {

@@ -3,11 +3,11 @@
 // SPDX-License-Identifier: Apache-2.0
 ///
 
-#include "ttnn/operations/ccl/common/host/ccl_command_stream_builders.hpp"
+#include "cpp/ttnn/operations/ccl/common/host/ccl_command_stream_builders.hpp"
 
 #include <tt-metalium/assert.hpp>
 
-#include "ttnn/tensor/tensor.hpp"
+#include "cpp/ttnn/tensor/tensor.hpp"
 
 #include <ranges>
 #include <vector>

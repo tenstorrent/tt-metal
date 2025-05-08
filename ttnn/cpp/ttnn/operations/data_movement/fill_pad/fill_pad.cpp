@@ -9,7 +9,7 @@
 #include "ttnn/common/queue_id.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include <utility>
-#include "ttnn/operations/copy.hpp"
+#include "cpp/ttnn/operations/copy.hpp"
 
 namespace ttnn::operations::data_movement {
 
