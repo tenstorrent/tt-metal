@@ -86,7 +86,7 @@ void GraphTracker::track_program(Program* program, const IDevice* device) {
     }
 }
 
-bool GraphTracker::hook_allocate(Buffer* buffer) {
+bool GraphTracker::hook_allocate(const Buffer* buffer) {
     if (hook == nullptr) {
         return false;
     }
@@ -95,7 +95,7 @@ bool GraphTracker::hook_allocate(Buffer* buffer) {
     if (hooked) {
         std::lock_guard<std::mutex> lock(hooked_buffers_mutex);
         bool inserted = hooked_buffers.insert(buffer).second;
-        TT_FATAL(!inserted, "Can't hook allocation of a buffer which is already allocated");
+        TT_FATAL(inserted, "Can't hook allocation of a buffer which is already allocated");
     }
     return hooked;
 }
@@ -133,20 +133,8 @@ void GraphTracker::clear() {
 }
 
 void GraphTracker::clear_hook() {
-    std::lock_guard<std::mutex> lock(hooked_buffers_mutex);
-    auto hooked_buffers_copy = hooked_buffers;
-    for (auto hooked_buffer : hooked_buffers_copy) {
-        DeallocateBuffer(*hooked_buffer);
-        tt::log_warning(
-            "Forcefully deallocating buffer {}, which was allocated by the hook", hooked_buffer->unique_id());
-    }
-
     hooked_buffers.clear();
     hook = nullptr;
-
-    TT_FATAL(hooked_buffers_copy.size() > 0, "Clearing hook with {} allocated buffers", hooked_buffers_copy.size());
 }
-
-GraphTracker::~GraphTracker() { clear(); }
 
 }  // namespace tt::tt_metal

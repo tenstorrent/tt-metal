@@ -445,6 +445,7 @@ std::shared_ptr<Buffer> Buffer::create(
 void Buffer::allocate_impl() {
     if (GraphTracker::instance().hook_allocate(this)) {
         address_ = 0;
+        hooked_allocation_ = true;
     } else {
         validate_sub_device_manager_id(sub_device_manager_id_, device_);
 
@@ -485,7 +486,7 @@ void Buffer::deallocate_impl() {
     if (device_->is_initialized() && size_ != 0) {
         // address_ is only modified from this thread, no sync required
         GraphTracker::instance().track_deallocate(this);
-        if (not GraphTracker::instance().hook_deallocate(this)) {
+        if (!GraphTracker::instance().hook_deallocate(this) && !hooked_allocation_) {
 #if defined(TRACY_ENABLE)
             if (tt::tt_metal::MetalContext::instance().rtoptions().get_profiler_buffer_usage_enabled()) {
                 TracyFreeN(
