@@ -156,9 +156,9 @@ TYPED_TEST(VectorConversionTest, RoundtripWithShardedLayout) {
             convert_to_data_type<TypeParam>(),
             Layout::TILE,
             MemoryConfig{
-                .memory_layout = TensorMemoryLayout::HEIGHT_SHARDED,
-                .buffer_type = BufferType::L1,
-                .shard_spec = ShardSpec{
+                TensorMemoryLayout::HEIGHT_SHARDED,
+                BufferType::L1,
+                ShardSpec{
                     ttnn::CoreRangeSet{ttnn::CoreRange{ttnn::CoreCoord{0, 0}, ttnn::CoreCoord{63, 63}}},
                     /*shard_shape_=*/{49, 30},
                     ShardOrientation::ROW_MAJOR,
@@ -335,7 +335,9 @@ TEST_F(DeviceVectorConversionTest, RoundtripWithMemoryConfig) {
     auto input = arange<float>(0, shape.volume(), 1);
 
     TensorSpec spec(
-        shape, TensorLayout(DataType::FLOAT32, Layout::ROW_MAJOR, MemoryConfig{.buffer_type = BufferType::L1}));
+        shape,
+        TensorLayout(
+            DataType::FLOAT32, Layout::ROW_MAJOR, MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::L1}));
     auto output = Tensor::from_vector(input, spec, device_);
 
     EXPECT_TRUE(is_device_tensor(output));

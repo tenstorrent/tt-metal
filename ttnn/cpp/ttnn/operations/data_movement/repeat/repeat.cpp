@@ -165,12 +165,12 @@ ttnn::Tensor RepeatOperation::invoke(
 
     // Sharded -> interleaved
     if (tensor.memory_config().is_sharded()) {
-        auto working_memory_config = tensor.memory_config();
-        working_memory_config.memory_layout = TensorMemoryLayout::INTERLEAVED;
+        MemoryConfig working_memory_config{TensorMemoryLayout::INTERLEAVED, tensor.memory_config().buffer_type()};
         working_tensor = ttnn::sharded_to_interleaved(queue_id, tensor, working_memory_config, std::nullopt);
     }
     if (working_output_mem_config.is_sharded()) {
-        working_output_mem_config.memory_layout = TensorMemoryLayout::INTERLEAVED;
+        working_output_mem_config =
+            MemoryConfig{TensorMemoryLayout::INTERLEAVED, working_output_mem_config.buffer_type()};
     }
 
     // tiled -> RM

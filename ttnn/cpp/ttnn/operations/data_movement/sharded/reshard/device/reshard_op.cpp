@@ -33,30 +33,30 @@ void ReshardDeviceOperation::validate_with_output_tensors(
         has_output_tensor ? output_tensors[0].value().memory_config() : this->output_mem_config;
     TT_FATAL(out_mem_config.is_sharded(), "output must be sharded");
 
-    if ((input_tensor.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED &&
-         out_mem_config.memory_layout == TensorMemoryLayout::HEIGHT_SHARDED)) {
+    if ((input_tensor.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED &&
+         out_mem_config.memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED)) {
         TT_FATAL(
-            (input_tensor.memory_config().buffer_type == BufferType::L1 ||
-             out_mem_config.buffer_type == BufferType::L1),
+            (input_tensor.memory_config().buffer_type() == BufferType::L1 ||
+             out_mem_config.buffer_type() == BufferType::L1),
             "Resharding height shard to height shard must have at least one buffer in L1");
-    } else if ((input_tensor.memory_config().memory_layout == TensorMemoryLayout::WIDTH_SHARDED &&
-                out_mem_config.memory_layout == TensorMemoryLayout::WIDTH_SHARDED)) {
+    } else if ((input_tensor.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED &&
+                out_mem_config.memory_layout() == TensorMemoryLayout::WIDTH_SHARDED)) {
         TT_FATAL(
-            (input_tensor.memory_config().buffer_type == BufferType::L1 ||
-             out_mem_config.buffer_type == BufferType::L1),
+            (input_tensor.memory_config().buffer_type() == BufferType::L1 ||
+             out_mem_config.buffer_type() == BufferType::L1),
             "Resharding width shard to width shard must have at least one buffer in L1");
     } else {
-        TT_FATAL(out_mem_config.buffer_type == BufferType::L1, "Resharding requires output buffer to be in L1");
+        TT_FATAL(out_mem_config.buffer_type() == BufferType::L1, "Resharding requires output buffer to be in L1");
     }
 
     if (input_tensor.get_layout() == Layout::ROW_MAJOR) {
-        if (input_tensor.memory_config().memory_layout == TensorMemoryLayout::WIDTH_SHARDED) {
-            bool same_row_size =
-                input_tensor.memory_config().shard_spec.value().shape[0] == out_mem_config.shard_spec.value().shape[0];
+        if (input_tensor.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED) {
+            bool same_row_size = input_tensor.memory_config().shard_spec().value().shape[0] ==
+                                 out_mem_config.shard_spec().value().shape[0];
             TT_FATAL(same_row_size, "row major must have shard_spec[0] be the same on both input and output");
         } else {
-            bool same_height_size =
-                input_tensor.memory_config().shard_spec.value().shape[1] == out_mem_config.shard_spec.value().shape[1];
+            bool same_height_size = input_tensor.memory_config().shard_spec().value().shape[1] ==
+                                    out_mem_config.shard_spec().value().shape[1];
             TT_FATAL(same_height_size, "row major must have shard_spec[1] be the same on both input and output");
         }
     }

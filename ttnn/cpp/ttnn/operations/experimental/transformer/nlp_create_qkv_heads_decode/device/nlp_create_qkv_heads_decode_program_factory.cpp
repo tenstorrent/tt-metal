@@ -68,7 +68,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_nlp_create_qkv_heads_de
 
     tt_metal::IDevice* device = input_tensor.device();
 
-    bool is_dram = input_tensor.memory_config().buffer_type == tt::tt_metal::BufferType::DRAM;
+    bool is_dram = input_tensor.memory_config().buffer_type() == tt::tt_metal::BufferType::DRAM;
 
     tt::DataFormat cb_data_format = tt_metal::datatype_to_dataformat_converter(input_tensor.get_dtype());
 

@@ -53,10 +53,10 @@ void DropoutDeviceOperation::validate_on_program_cache_miss(
         "Operands to dropout need to be allocated in buffers on the device. Buffer is null.");
 
     TT_FATAL(
-        input_tensor.memory_config().memory_layout == out_memory_config.memory_layout,
+        input_tensor.memory_config().memory_layout() == out_memory_config.memory_layout(),
         "Dropout operation requires Input and Output memory layout to match. Input layout: {}, Output layout: {}",
-        static_cast<int>(input_tensor.memory_config().memory_layout),
-        static_cast<int>(out_memory_config.memory_layout));
+        static_cast<int>(input_tensor.memory_config().memory_layout()),
+        static_cast<int>(out_memory_config.memory_layout()));
 
     if (!input_tensor.is_sharded()) {
         TT_FATAL(
@@ -66,10 +66,10 @@ void DropoutDeviceOperation::validate_on_program_cache_miss(
             static_cast<int>(input_tensor.get_layout()));
 
         TT_FATAL(
-            input_tensor.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED,
+            input_tensor.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
             "Dropout operation requires Interleaved memory layout when working with non-sharded input tensor. Input "
             "memory layout: `{}`",
-            static_cast<int>(input_tensor.memory_config().memory_layout));
+            static_cast<int>(input_tensor.memory_config().memory_layout()));
     }
 
     if (preallocated_output_tensor.has_value()) {

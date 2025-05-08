@@ -21,9 +21,9 @@ MemoryConfig DeviceStorage::memory_config() const {
         shard_spec = buffer_to_use->shard_spec().tensor_shard_spec;
     }
     return MemoryConfig{
-        .memory_layout = buffer_to_use->buffer_layout(),
-        .buffer_type = buffer_to_use->buffer_type(),
-        .shard_spec = shard_spec,
+        buffer_to_use->buffer_layout(),
+        buffer_to_use->buffer_type(),
+        shard_spec,
     };
 }
 

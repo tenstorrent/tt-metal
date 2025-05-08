@@ -306,11 +306,11 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_llama_sharded(
 
     // Tensor Info
     const auto input_tensor_num_pages = input_tensor.buffer()->num_pages();
-    const auto input_tensor_cores = input_tensor.memory_config().shard_spec->grid;
-    const auto input_tensor_shard_shape = input_tensor.memory_config().shard_spec->shape;
+    const auto input_tensor_cores = input_tensor.memory_config().shard_spec()->grid;
+    const auto input_tensor_shard_shape = input_tensor.memory_config().shard_spec()->shape;
     const auto input_tensor_shard_num_pages = input_tensor_shard_shape[0] * input_tensor_shard_shape[1] / TILE_HW;
-    const auto output_tensor_cores = output_tensor.memory_config().shard_spec->grid;
-    const auto output_tensor_shard_shape = output_tensor.memory_config().shard_spec->shape;
+    const auto output_tensor_cores = output_tensor.memory_config().shard_spec()->grid;
+    const auto output_tensor_shard_shape = output_tensor.memory_config().shard_spec()->shape;
     const auto output_tensor_shard_num_pages = output_tensor_shard_shape[0] * output_tensor_shard_shape[1] / TILE_HW;
 
     tt::log_debug(tt::LogOp, "input_tensor_num_pages: {}", input_tensor_num_pages);

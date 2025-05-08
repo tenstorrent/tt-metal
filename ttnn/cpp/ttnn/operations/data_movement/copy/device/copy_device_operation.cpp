@@ -23,17 +23,17 @@ void CopyDeviceOperation::validate_with_output_tensors(
              this->output_dtype);
     TT_FATAL(input_tensor_a.storage_type() == StorageType::DEVICE, "Operands to copy need to be on device!");
     TT_FATAL(input_tensor_a.buffer() != nullptr, "Operands to copy need to be allocated in buffers on device!");
-    TT_FATAL(input_tensor_a.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED, "Error");
+    TT_FATAL(input_tensor_a.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED, "Error");
     TT_FATAL(
-        input_tensor_a.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED,
+        input_tensor_a.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
         "Copy does not currently support sharding");
     if (input_tensors.size() == 2) {
         const auto& dst_tensor = input_tensors[1];
         TT_FATAL(input_tensor_a.get_padded_shape() == dst_tensor.get_padded_shape(), "Error");
         TT_FATAL(input_tensor_a.get_layout() == dst_tensor.get_layout(), "Error");
-        TT_FATAL(input_tensor_a.memory_config().memory_layout == dst_tensor.memory_config().memory_layout, "Error");
+        TT_FATAL(input_tensor_a.memory_config().memory_layout() == dst_tensor.memory_config().memory_layout(), "Error");
         TT_FATAL(
-            dst_tensor.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED,
+            dst_tensor.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
             "Copy does not currently support sharding");
     }
     DataType output_dtype = this->output_dtype;
@@ -57,7 +57,7 @@ void CopyDeviceOperation::validate_with_output_tensors(
                               ? output_tensors.at(0).value().memory_config()
                               : this->output_mem_config;
     TT_FATAL(
-        out_mem_config.memory_layout == TensorMemoryLayout::INTERLEAVED, "Copy does not currently support sharding");
+        out_mem_config.memory_layout() == TensorMemoryLayout::INTERLEAVED, "Copy does not currently support sharding");
 }
 
 std::vector<ttnn::TensorSpec> CopyDeviceOperation::compute_output_specs(

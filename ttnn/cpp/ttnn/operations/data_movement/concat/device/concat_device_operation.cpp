@@ -55,14 +55,14 @@ void ConcatDeviceOperation::validate(const std::vector<Tensor>& input_tensors) c
                 in_ref.shard_spec().value().grid == first_input.shard_spec().value().grid,
                 "Sharded tensors must have the same grid.");
             TT_FATAL(
-                in_ref.memory_config().memory_layout == first_input.memory_config().memory_layout,
+                in_ref.memory_config().memory_layout() == first_input.memory_config().memory_layout(),
                 "Sharded tensors must have the same memory layout.");
             // TODO(jerrysky3): Remove this when we replace the two tensors concat kernel with the general one.
             TT_FATAL(
-                input_tensors.size() > 2 || in_ref.memory_config().memory_layout != TensorMemoryLayout::WIDTH_SHARDED,
+                input_tensors.size() > 2 || in_ref.memory_config().memory_layout() != TensorMemoryLayout::WIDTH_SHARDED,
                 "Width sharded inputs are not supported for two tensors concat yet");
             TT_FATAL(
-                in_ref.memory_config().memory_layout != TensorMemoryLayout::BLOCK_SHARDED,
+                in_ref.memory_config().memory_layout() != TensorMemoryLayout::BLOCK_SHARDED,
                 "Block sharded inputs are not supported");
         }
     }
@@ -74,13 +74,13 @@ void ConcatDeviceOperation::validate(const std::vector<Tensor>& input_tensors) c
             this->dim);
     }
     if (shard_first) {
-        const auto memory_layout = first_input.memory_config().memory_layout;
+        const auto memory_layout = first_input.memory_config().memory_layout();
         TT_FATAL(
-            this->output_mem_config.memory_layout == memory_layout,
+            this->output_mem_config.memory_layout() == memory_layout,
             "Sharded output and inputs must have the same memory layout.");
         TT_FATAL(this->output_mem_config.is_sharded(), "Output must be sharded if input is sharded.");
         TT_FATAL(
-            this->output_mem_config.shard_spec.value().grid == first_input.shard_spec().value().grid,
+            this->output_mem_config.shard_spec().value().grid == first_input.shard_spec().value().grid,
             "Sharded output and inputs must have the same grid.");
         if (this->dim == shape_first.rank() - 1) {
             TT_FATAL(

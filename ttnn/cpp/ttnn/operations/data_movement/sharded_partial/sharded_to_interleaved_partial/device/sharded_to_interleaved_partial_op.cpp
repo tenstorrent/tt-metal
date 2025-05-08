@@ -29,7 +29,7 @@ void ShardedToInterleavedPartialDeviceOperation::validate(const std::vector<Tens
     TT_FATAL(input_tensor.buffer() != nullptr, "Operands to shard need to be allocated in buffers on device!");
 
     TT_FATAL(input_tensor.memory_config().is_sharded(), "Error");
-    if (input_tensor.memory_config().memory_layout != TensorMemoryLayout::HEIGHT_SHARDED) {
+    if (input_tensor.memory_config().memory_layout() != TensorMemoryLayout::HEIGHT_SHARDED) {
         if (input_tensor.get_padded_shape()[-1] % shard_spec.shape[1] != 0 ||
             ((input_tensor.volume() / input_tensor.get_padded_shape()[-1]) % shard_spec.shape[0]) != 0) {
             TT_FATAL(input_tensor.shard_spec().value().grid.ranges().size() == 1, "Error");

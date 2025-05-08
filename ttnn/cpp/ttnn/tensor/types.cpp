@@ -56,7 +56,7 @@ tt::DataFormat datatype_to_dataformat_converter(tt::tt_metal::DataType datatype)
 }
 
 bool MemoryConfig::is_sharded() const {
-    switch (this->memory_layout) {
+    switch (this->memory_layout_) {
         case TensorMemoryLayout::HEIGHT_SHARDED:
         case TensorMemoryLayout::WIDTH_SHARDED:
         case TensorMemoryLayout::BLOCK_SHARDED: return true;
@@ -64,13 +64,13 @@ bool MemoryConfig::is_sharded() const {
     }
 }
 
-bool MemoryConfig::is_l1() const { return buffer_type == BufferType::L1 or buffer_type == BufferType::L1_SMALL; }
+bool MemoryConfig::is_l1() const { return buffer_type_ == BufferType::L1 or buffer_type_ == BufferType::L1_SMALL; }
 
-bool MemoryConfig::is_dram() const { return buffer_type == BufferType::DRAM; }
+bool MemoryConfig::is_dram() const { return buffer_type_ == BufferType::DRAM; }
 
 bool operator==(const MemoryConfig& config_a, const MemoryConfig& config_b) {
-    return config_a.buffer_type == config_b.buffer_type && config_a.memory_layout == config_b.memory_layout &&
-           config_a.shard_spec == config_b.shard_spec;
+    return config_a.buffer_type() == config_b.buffer_type() && config_a.memory_layout() == config_b.memory_layout() &&
+           config_a.shard_spec() == config_b.shard_spec();
 }
 
 bool operator!=(const MemoryConfig& config_a, const MemoryConfig& config_b) { return not(config_a == config_b); }
@@ -81,3 +81,25 @@ std::ostream& operator<<(std::ostream& os, const MemoryConfig& config) {
 }
 
 }  // namespace tt::tt_metal
+
+nlohmann::json tt::stl::json::to_json_t<tt::tt_metal::MemoryConfig>::operator()(
+    const tt::tt_metal::MemoryConfig& config) const {
+    nlohmann::json json_object;
+    json_object["memory_layout"] = config.memory_layout();
+    json_object["buffer_type"] = config.buffer_type();
+    if (config.shard_spec().has_value()) {
+        json_object["shard_spec"] = tt::stl::json::to_json(config.shard_spec().value());
+    }
+    return json_object;
+}
+
+tt::tt_metal::MemoryConfig tt::stl::json::from_json_t<tt::tt_metal::MemoryConfig>::operator()(
+    const nlohmann::json& json_object) const {
+    auto memory_layout = json_object["memory_layout"].get<tt::tt_metal::TensorMemoryLayout>();
+    auto buffer_type = json_object["buffer_type"].get<tt::tt_metal::BufferType>();
+    std::optional<tt::tt_metal::ShardSpec> shard_spec;
+    if (json_object.contains("shard_spec")) {
+        shard_spec = tt::stl::json::from_json<tt::tt_metal::ShardSpec>(json_object["shard_spec"]);
+    }
+    return tt::tt_metal::MemoryConfig(memory_layout, buffer_type, std::move(shard_spec));
+}

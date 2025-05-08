@@ -834,7 +834,7 @@ operation::ProgramWithCallbacks untilize_multi_core(
 
     if (src_sharded) {
         auto shard_spec = a.shard_spec().value();
-        src_block_sharded = a.memory_config().memory_layout != TensorMemoryLayout::HEIGHT_SHARDED;
+        src_block_sharded = a.memory_config().memory_layout() != TensorMemoryLayout::HEIGHT_SHARDED;
         row_major = shard_spec.orientation == ShardOrientation::ROW_MAJOR;
         ncores_y = device->compute_with_storage_grid_size().y;
         all_cores = shard_spec.grid;

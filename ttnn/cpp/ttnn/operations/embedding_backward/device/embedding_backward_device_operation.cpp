@@ -44,9 +44,9 @@ void EmbeddingBackward::validate(const std::vector<Tensor> &input_tensors) const
         grad_tensor.get_dtype() == this->output_dtype, "Output and input gradient tensors must have the same dtype");
 
     TT_FATAL(
-        grad_tensor.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED or
-            index_tensor.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED or
-            this->output_mem_config.memory_layout == TensorMemoryLayout::INTERLEAVED,
+        grad_tensor.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED or
+            index_tensor.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED or
+            this->output_mem_config.memory_layout() == TensorMemoryLayout::INTERLEAVED,
         "Embedding b/w does not currently support sharding");
 
     TT_FATAL(

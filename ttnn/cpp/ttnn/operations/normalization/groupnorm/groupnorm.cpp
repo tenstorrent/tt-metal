@@ -46,9 +46,9 @@ ttnn::Tensor ExecuteGroupNorm::invoke(
         "Automatic grid size determination is not supported. Please specify the grid size explicitly.");
 
     TT_FATAL(
-        input_tensor.memory_config().memory_layout != TensorMemoryLayout::WIDTH_SHARDED,
+        input_tensor.memory_config().memory_layout() != TensorMemoryLayout::WIDTH_SHARDED,
         "Unsupported memory layout: Input tensor must be width-sharded, but it is not. (memory_layout={})",
-        input_tensor.memory_config().memory_layout);
+        input_tensor.memory_config().memory_layout());
 
     const auto& input_shape = input_tensor.get_logical_shape();
     TT_FATAL(
@@ -80,8 +80,8 @@ ttnn::Tensor ExecuteGroupNorm::invoke(
     const std::optional<ttnn::Tensor>& beta =
         bias.has_value() ? std::optional<ttnn::Tensor>(ttnn::unsqueeze_to_4D(bias.value())) : std::nullopt;
 
-    const MemoryConfig& dram_memory_config = tt::tt_metal::MemoryConfig{
-        .memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED, .buffer_type = tt::tt_metal::BufferType::DRAM};
+    const MemoryConfig& dram_memory_config =
+        tt::tt_metal::MemoryConfig{tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::DRAM};
     const MemoryConfig& output_mem_config = memory_config.value_or(dram_memory_config);
 
     if (input_tensor.is_sharded()) {

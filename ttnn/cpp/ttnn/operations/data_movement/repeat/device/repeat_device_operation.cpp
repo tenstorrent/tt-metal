@@ -24,7 +24,7 @@ void RepeatDeviceOperation::validate(const std::vector<Tensor>& input_tensors) c
         "Can only work with bfloat16/float32 or uint32 tensors");
     // is this relevant?
     TT_FATAL(
-        this->m_output_mem_config.memory_layout == input_tensor_a.memory_config().memory_layout,
+        this->m_output_mem_config.memory_layout() == input_tensor_a.memory_config().memory_layout(),
         "Output tensor must have the same memory layout as input tensor");
 }
 
@@ -37,7 +37,7 @@ std::vector<TensorSpec> RepeatDeviceOperation::compute_output_specs(const std::v
     if (input_tensor_a.memory_config().is_sharded()) {
         auto shard_spec = input_tensor_a.shard_spec().value();
         shard_spec.shape[0] = output_shape[0];
-        mem_config.shard_spec = shard_spec;
+        mem_config = mem_config.with_shard_spec(shard_spec);
     }
     return {TensorSpec(
         output_shape,

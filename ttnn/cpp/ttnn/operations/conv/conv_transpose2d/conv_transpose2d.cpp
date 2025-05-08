@@ -228,7 +228,7 @@ Result conv_transpose2d(
     Tensor halo_output;
     if (!mm_conv) {
         sliding_window_config.num_cores_nhw = get_num_cores_nhw_from_parallel_config(parallel_config);
-        sliding_window_config.core_range_set = input_tensor_post_tm.memory_config().shard_spec.value().grid;
+        sliding_window_config.core_range_set = input_tensor_post_tm.memory_config().shard_spec().value().grid;
         sliding_window_config.snap_to_tile = true;
 
         halo_output = ttnn::halo(
@@ -270,7 +270,7 @@ Result conv_transpose2d(
         in_channels,
         get_num_cores_channels_from_parallel_config(parallel_config) * conv_config.input_channels_alignment);
     uint32_t nhw_out_padded_ntile = get_num_cores_nhw_from_parallel_config(output_parallel_config) *
-                                    conv_out_memory_config.shard_spec.value().shape[0] / tt::constants::TILE_HEIGHT;
+                                    conv_out_memory_config.shard_spec().value().shape[0] / tt::constants::TILE_HEIGHT;
     auto opt_conv_op_block_config = determine_per_core_conv_block_config(
         parallel_config,
         opt_conv_op_parallel_config,

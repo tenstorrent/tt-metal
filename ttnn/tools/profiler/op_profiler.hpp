@@ -273,9 +273,10 @@ static inline json get_tensor_json(const Tensor& tensor) {
     std::string tensorStorageStr;
     if (tensor.storage_type() == StorageType::DEVICE) {
         ret["storage_type"]["device_id"] = tensor.device()->id();
-        ret["storage_type"]["memory_config"]["buffer_type"] = magic_enum::enum_name(tensor.memory_config().buffer_type);
+        ret["storage_type"]["memory_config"]["buffer_type"] =
+            magic_enum::enum_name(tensor.memory_config().buffer_type());
         ret["storage_type"]["memory_config"]["memory_layout"] =
-            magic_enum::enum_name(tensor.memory_config().memory_layout);
+            magic_enum::enum_name(tensor.memory_config().memory_layout());
     } else {
         ret["storage_type"] = fmt::format("{}", magic_enum::enum_name(tensor.storage_type()));
     }
