@@ -161,6 +161,25 @@ inline void calculate_comp_unary_int(int scalar) {
             }
             v_endif;
         }
+        // a[i] > scalar
+        if constexpr (COMP_MODE == SfpuType::unary_gt) {
+            v_if(v >= 0 && s < 0) { val = 1; }
+            v_elseif(v >= 0) {
+                v_if(v > s) { val = 1; }
+                v_endif;
+            }  // negative comparison not working as expected in WH hence alternate implementation
+            v_else {
+                v_if(s < 0) {
+                    vInt pos_val = setsgn(v, 0);
+                    vInt pos_s = 0 - s;
+                    v_if(pos_val < pos_s) { val = 1; }
+                    v_endif;
+                }
+                v_else { val = 0; }
+                v_endif;
+            }
+            v_endif;
+        }
         dst_reg[0] = val;
         dst_reg++;
     }
