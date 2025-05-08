@@ -1140,9 +1140,9 @@ def test_slice_height_sharded(device, dims, slice_dim, slice_size, cores, layout
 @pytest.mark.parametrize(
     "dims, slice_size, cores",
     [
-        [[2, 256, 256, 64], 128, 16],
-        [[2, 256, 128, 32], 16, 8],
-        [[2, 256, 256, 128], 64, 64],
+        [[2, 256, 256, 56], 128, 16],
+        [[2, 256, 128, 23], 16, 8],
+        [[2, 256, 256, 37], 64, 64],
         [[2, 8, 8, 32], 2, 4],
         [[2, 8, 16, 2], 2, 8],
     ],
@@ -1164,26 +1164,25 @@ def test_slice_height_sharded_for_conv2d(device, dims, slice_dim, slice_size, co
     parallel_config = ttnn.SlidingWindowParallelConfig(
         grid=core_range, shard_scheme=ttnn.TensorMemoryLayout.HEIGHT_SHARDED, shard_orientation=orientation
     )
-    print("Parallel config ", parallel_config)
+    padded_channels = round_up(dims[-1], 32)
+    padded_torch_input = torch.nn.functional.pad(torch_input, (0, padded_channels - dims[-1]))
+    print("Padded Torch Shape", padded_torch_input.shape)
     for i in range(num_slices):
         begins = [0, 0, 0, 0]
         ends = [dims[0], dims[1], dims[2], dims[3]]
         begins[slice_dim] = i * slice_size
         ends[slice_dim] = (i + 1) * slice_size
-        this_torch_output = torch_input[
-            begins[0] : ends[0], begins[1] : ends[1], begins[2] : ends[2], begins[3] : ends[3]
-        ]
+        this_torch_output = padded_torch_input[begins[0] : ends[0], begins[1] : ends[1], begins[2] : ends[2]]
         output_shape = this_torch_output.shape
         output_shape = [1, 1, output_shape[0] * output_shape[1] * output_shape[2], round_up(output_shape[3], 32)]
 
         memory_config = ttnn._ttnn.operations.conv.create_sharded_memory_config_from_parallel_config(
             output_shape, parallel_config, 1
         )
-        print("Slice output shape ", output_shape, memory_config)
         this_ttnn_output = ttnn.padded_slice(ttnn_input, begins, ends, strides, memory_config=memory_config)
         output = ttnn.to_torch(this_ttnn_output)
-        output = torch.reshape(output[:, :, :, : this_torch_output.shape[3]], this_torch_output.shape)
-        assert_with_pcc(this_torch_output, output[:, :, :, : this_torch_output.shape[3]], 0.9999)
+        output = torch.reshape(output, this_torch_output.shape)
+        assert_with_pcc(this_torch_output, output, 0.9999)
         if output.shape[3] > this_torch_output.shape[3]:
             this_torch_output = torch.nn.functional.pad(
                 this_torch_output,

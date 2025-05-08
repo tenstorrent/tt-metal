@@ -20,17 +20,20 @@ void kernel_main() {
     DPRINT << "num_units: " << num_units << ", num_elements_per_row: " << num_elements_per_row
            << ", unpadded_row_size_bytes: " << unpadded_row_size_bytes
            << ", padded_row_size_bytes: " << padded_row_size_bytes << ", pad_size_bytes: " << pad_size_bytes << ENDL();
-    // const uint32_t pad_addr = get_read_ptr(cb_temp_pad);
-    // const uint32_t out_addr = get_read_ptr(cb_id_out);
-    // volatile tt_l1_ptr uint16_t* pad_ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(pad_addr);
-    // for (uint32_t i = 0; i < num_elements_per_row; ++i) {
-    //     pad_ptr[i] = 0;
-    // }
-    // uint32_t write_addr = out_addr + unpadded_row_size_bytes;
-    // uint64_t pad_noc_addr = get_noc_addr(pad_addr + unpadded_row_size_bytes);
-    // for(uint32_t i = 0; i < num_units; ++i) {
-    //     noc_async_read(pad_noc_addr, write_addr, pad_size_bytes);
-    //     write_addr += padded_row_size_bytes;
-    // }
+
+    const uint32_t pad_addr = get_read_ptr(cb_temp_pad);
+    const uint32_t out_addr = get_read_ptr(cb_id_out);
+    volatile tt_l1_ptr uint16_t* pad_ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(pad_addr);
+    for (uint32_t i = 0; i < num_elements_per_row; ++i) {
+        pad_ptr[i] = 0;  // Changing this to any other value causes a hang. Figure out why.
+    }
+    uint32_t write_addr = out_addr + unpadded_row_size_bytes;
+    uint64_t pad_noc_addr = get_noc_addr(pad_addr + unpadded_row_size_bytes);
+    for (uint32_t i = 0; i < num_units; ++i) {
+        noc_async_read(pad_noc_addr, write_addr, pad_size_bytes);
+        write_addr += padded_row_size_bytes;
+    }
+    // cb_reserve_back(cb_id_out, num_units);
+    // cb_push_back(cb_id_out, num_units);
     cb_wait_front(cb_id_out, num_units);
 }
