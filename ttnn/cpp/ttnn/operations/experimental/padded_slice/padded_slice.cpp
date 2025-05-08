@@ -12,6 +12,7 @@
 #include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/operations/data_movement/fill_pad/fill_pad.hpp"
 #include "ttnn/operations/experimental/reshape/view.hpp"
+#include "ttnn/tensor/types.hpp"
 #include "padded_slice.hpp"
 
 namespace ttnn::operations::experimental {
@@ -23,7 +24,7 @@ ttnn::Tensor PaddedSliceOperation::invoke(
     tt::stl::Span<const T> begins,
     tt::stl::Span<const T> ends,
     tt::stl::Span<const T> step,
-    const std::optional<MemoryConfig>& memory_config_arg,
+    const MemoryConfig& memory_config,
     const std::optional<Tensor>& optional_output_tensor,
     const std::optional<float>& pad_value) {
     // Ensure start and end vectors have matching sizes and correct tensor rank
@@ -56,9 +57,6 @@ ttnn::Tensor PaddedSliceOperation::invoke(
 
     const auto& tile_shape = input_tensor.get_tensor_spec().tile().get_tile_shape();
 
-    auto memory_config = optional_output_tensor.has_value() ? optional_output_tensor.value().memory_config()
-                                                            : memory_config_arg.value_or(input_tensor.memory_config());
-
     auto ret_adjustment([&](const ttnn::Tensor& ret_input_tensor) {
         if (ret_input_tensor.storage_type() == StorageType::DEVICE) {
             auto tensor = ttnn::to_memory_config(ret_input_tensor, memory_config, std::nullopt);
@@ -78,18 +76,18 @@ ttnn::Tensor PaddedSliceOperation::invoke(
     ttnn::SmallVector<uint32_t> modified_ends(input_rank, 0);
     ttnn::SmallVector<uint32_t> modified_step(input_rank, 1);
 
-    // // Wrap indices and adjust begins, ends, and step
-    // for (size_t i = 0; i < begins.size(); ++i) {
-    //     if constexpr (std::is_signed_v<T>) {
-    //         modified_begins[i] = wrap_index(begins[i], input_shape[i]);
-    //         modified_ends[i] = wrap_index(ends[i], input_shape[i]);
-    //         modified_step[i] = static_cast<uint32_t>(step[i]);
-    //     } else {
-    //         modified_begins[i] = begins[i];
-    //         modified_ends[i] = ends[i];
-    //         modified_step[i] = step[i];
-    //     }
-    // }
+    // Wrap indices and adjust begins, ends, and step
+    for (size_t i = 0; i < begins.size(); ++i) {
+        if constexpr (std::is_signed_v<T>) {
+            modified_begins[i] = data_movement::wrap_index(begins[i], input_shape[i]);
+            modified_ends[i] = data_movement::wrap_index(ends[i], input_shape[i]);
+            modified_step[i] = static_cast<uint32_t>(step[i]);
+        } else {
+            modified_begins[i] = begins[i];
+            modified_ends[i] = ends[i];
+            modified_step[i] = step[i];
+        }
+    }
 
     auto output_dim_i = [&modified_begins, &modified_step](size_t i, const ttnn::SmallVector<uint32_t>& modified_ends) {
         return (modified_ends[i] - modified_begins[i] + modified_step[i] - 1) / modified_step[i];
@@ -154,14 +152,9 @@ ttnn::Tensor PaddedSliceOperation::invoke(
 
     if (empty) {
         TT_FATAL(
-            input.storage_type() == StorageType::DEVICE,
-            "Host tensor padded_slice cannot return a scalar or empty tensor");
+            input.storage_type() == StorageType::DEVICE, "Host tensor slice cannot return a scalar or empty tensor");
         return ttnn::empty(
-            actual_shape,
-            input_tensor.dtype(),
-            input_tensor.layout(),
-            input_tensor.device(),
-            memory_config_arg.value_or(input_tensor.memory_config()));
+            actual_shape, input_tensor.dtype(), input_tensor.layout(), input_tensor.mesh_device(), memory_config);
     }
 
     auto res =
@@ -203,7 +196,7 @@ ttnn::Tensor PaddedSliceOperation::invoke(
     tt::stl::Span<const T> begins,
     tt::stl::Span<const T> ends,
     tt::stl::Span<const T> step,
-    const std::optional<MemoryConfig>& memory_config_arg,
+    const MemoryConfig& memory_config_arg,
     const std::optional<Tensor>& optional_output_tensor,
     const std::optional<float>& pad_value) {
     return PaddedSliceOperation::invoke<T>(
@@ -217,7 +210,7 @@ ttnn::Tensor PaddedSliceOperation::invoke(
     const std::array<T, N>& output_tensor_start,
     const std::array<T, N>& output_tensor_end,
     const std::array<T, N>& step,
-    const std::optional<MemoryConfig>& memory_config_arg,
+    const MemoryConfig& memory_config_arg,
     const std::optional<Tensor>& optional_output_tensor,
     const std::optional<float>& pad_value) {
     tt::stl::Span<const T> start(output_tensor_start.begin(), output_tensor_start.end());
@@ -233,7 +226,7 @@ ttnn::Tensor PaddedSliceOperation::invoke(
     const std::array<T, N>& output_tensor_start,
     const std::array<T, N>& output_tensor_end,
     const std::array<T, N>& step,
-    const std::optional<MemoryConfig>& memory_config_arg,
+    const MemoryConfig& memory_config_arg,
     const std::optional<Tensor>& optional_output_tensor,
     const std::optional<float>& pad_value) {
     return PaddedSliceOperation::invoke<T, N>(
@@ -253,7 +246,7 @@ template ttnn::Tensor PaddedSliceOperation::invoke<int>(
     tt::stl::Span<const int> begins,
     tt::stl::Span<const int> ends,
     tt::stl::Span<const int> step,
-    const std::optional<MemoryConfig>& memory_config_arg,
+    const MemoryConfig& memory_config_arg,
     const std::optional<Tensor>& optional_output_tensor,
     const std::optional<float>& pad_value);
 
@@ -262,7 +255,7 @@ template ttnn::Tensor PaddedSliceOperation::invoke<int>(
     tt::stl::Span<const int> begins,
     tt::stl::Span<const int> ends,
     tt::stl::Span<const int> step,
-    const std::optional<MemoryConfig>& memory_config_arg,
+    const MemoryConfig& memory_config_arg,
     const std::optional<Tensor>& optional_output_tensor,
     const std::optional<float>& pad_value);
 
@@ -272,7 +265,7 @@ template ttnn::Tensor PaddedSliceOperation::invoke<uint32_t>(
     tt::stl::Span<const uint32_t> begins,
     tt::stl::Span<const uint32_t> ends,
     tt::stl::Span<const uint32_t> step,
-    const std::optional<MemoryConfig>& memory_config_arg,
+    const MemoryConfig& memory_config_arg,
     const std::optional<Tensor>& optional_output_tensor,
     const std::optional<float>& pad_value);
 
@@ -281,7 +274,7 @@ template ttnn::Tensor PaddedSliceOperation::invoke<uint32_t>(
     tt::stl::Span<const uint32_t> begins,
     tt::stl::Span<const uint32_t> ends,
     tt::stl::Span<const uint32_t> step,
-    const std::optional<MemoryConfig>& memory_config_arg,
+    const MemoryConfig& memory_config_arg,
     const std::optional<Tensor>& optional_output_tensor,
     const std::optional<float>& pad_value);
 
@@ -291,7 +284,7 @@ template ttnn::Tensor PaddedSliceOperation::invoke<uint32_t, 4>(
     const std::array<uint32_t, 4>& output_tensor_start,
     const std::array<uint32_t, 4>& output_tensor_end,
     const std::array<uint32_t, 4>& step,
-    const std::optional<MemoryConfig>& memory_config_arg,
+    const MemoryConfig& memory_config_arg,
     const std::optional<Tensor>& optional_output_tensor,
     const std::optional<float>& pad_value);
 
@@ -300,7 +293,7 @@ template ttnn::Tensor PaddedSliceOperation::invoke<uint32_t, 4>(
     const std::array<uint32_t, 4>& output_tensor_start,
     const std::array<uint32_t, 4>& output_tensor_end,
     const std::array<uint32_t, 4>& step,
-    const std::optional<MemoryConfig>& memory_config_arg,
+    const MemoryConfig& memory_config_arg,
     const std::optional<Tensor>& optional_output_tensor,
     const std::optional<float>& pad_value);
 
@@ -310,7 +303,7 @@ template ttnn::Tensor PaddedSliceOperation::invoke<uint32_t, 3>(
     const std::array<uint32_t, 3>& output_tensor_start,
     const std::array<uint32_t, 3>& output_tensor_end,
     const std::array<uint32_t, 3>& step,
-    const std::optional<MemoryConfig>& memory_config_arg,
+    const MemoryConfig& memory_config_arg,
     const std::optional<Tensor>& optional_output_tensor,
     const std::optional<float>& pad_value);
 
@@ -319,7 +312,7 @@ template ttnn::Tensor PaddedSliceOperation::invoke<uint32_t, 3>(
     const std::array<uint32_t, 3>& output_tensor_start,
     const std::array<uint32_t, 3>& output_tensor_end,
     const std::array<uint32_t, 3>& step,
-    const std::optional<MemoryConfig>& memory_config_arg,
+    const MemoryConfig& memory_config_arg,
     const std::optional<Tensor>& optional_output_tensor,
     const std::optional<float>& pad_value);
 
@@ -329,7 +322,7 @@ template ttnn::Tensor PaddedSliceOperation::invoke<uint32_t, 1>(
     const std::array<uint32_t, 1>& output_tensor_start,
     const std::array<uint32_t, 1>& output_tensor_end,
     const std::array<uint32_t, 1>& step,
-    const std::optional<MemoryConfig>& memory_config_arg,
+    const MemoryConfig& memory_config_arg,
     const std::optional<Tensor>& optional_output_tensor,
     const std::optional<float>& pad_value);
 
@@ -338,7 +331,7 @@ template ttnn::Tensor PaddedSliceOperation::invoke<uint32_t, 1>(
     const std::array<uint32_t, 1>& output_tensor_start,
     const std::array<uint32_t, 1>& output_tensor_end,
     const std::array<uint32_t, 1>& step,
-    const std::optional<MemoryConfig>& memory_config_arg,
+    const MemoryConfig& memory_config_arg,
     const std::optional<Tensor>& optional_output_tensor,
     const std::optional<float>& pad_value);
 

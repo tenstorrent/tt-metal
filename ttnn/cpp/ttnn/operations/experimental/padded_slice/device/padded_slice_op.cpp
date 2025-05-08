@@ -143,16 +143,23 @@ std::vector<ttnn::TensorSpec> PaddedSliceDeviceOperation::compute_output_specs(
     out_shape[0] = 1;
     out_shape[1] = 1;
 
-    if (this->output_mem_config.memory_layout == TensorMemoryLayout::HEIGHT_SHARDED) {
-        auto output_shard_shape = this->output_mem_config.shard_spec->shape;
+    if (this->output_mem_config.memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED) {
+        auto output_shard_shape = this->output_mem_config.shard_spec().value().shape;
         out_shape[out_shape.size() - 1] = output_shard_shape[1];
     }
-
     ttnn::Shape output_tensor_shape(std::move(out_shape));
-    return {ttnn::TensorSpec(
+    tt::log_info("padded_slice : Output shape: {}", output_tensor_shape);
+    tt::log_info("padded_slice : Output mem config: {}", this->output_mem_config);
+    auto tensor_layout = TensorLayout::fromPaddedShape(
+        input_tensor.get_dtype(),
+        PageConfig(Layout::ROW_MAJOR),
+        this->output_mem_config,
         output_tensor_shape,
-        tt::tt_metal::TensorLayout(
-            input_tensor.get_dtype(), PageConfig(input_tensor.get_layout()), this->output_mem_config))};
+        output_tensor_shape);
+    return {ttnn::TensorSpec(output_tensor_shape, tensor_layout)};
+
+    // tt::tt_metal::TensorLayout(
+    // input_tensor.get_dtype(), PageConfig(input_tensor.get_layout()), this->output_mem_config))};
 }
 
 operation::ProgramWithCallbacks PaddedSliceDeviceOperation::create_program(

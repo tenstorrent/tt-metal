@@ -4,6 +4,7 @@
 
 #include <stdint.h>
 #include "dataflow_api.h"
+#include "debug/dprint.h"
 #include "ttnn/cpp/ttnn/operations/data_movement/common/kernels/common.hpp"
 
 void kernel_main() {
@@ -32,6 +33,8 @@ void kernel_main() {
     uint32_t src_stick_id = start_id;
     uint32_t sticks_read = 0;
 
+#define DEBUG
+#ifdef DEBUG
     DPRINT << "src_addr: " << src_addr << ", padded_stick_size: " << padded_stick_size
            << ", unpadded_stick_size: " << unpadded_stick_size << ", stick_size_offset: " << stick_size_offset
            << ", num_dims: " << num_dims << ", start_id: " << start_id
@@ -41,15 +44,28 @@ void kernel_main() {
 
     DPRINT << "misalignment: " << misalignment << ", read_size: " << read_size << ", src_stick_id: " << src_stick_id
            << ", sticks_read: " << sticks_read << ENDL();
+
+    DPRINT << "num_unpadded_sticks: " << num_unpadded_sticks[0] << " " << num_unpadded_sticks[1] << " "
+           << num_unpadded_sticks[2] << " " << num_unpadded_sticks[3] << " " << ENDL();
+    DPRINT << "num_padded_sticks: " << num_padded_sticks[0] << " " << num_padded_sticks[1] << " "
+           << num_padded_sticks[2] << " " << num_padded_sticks[3] << " " << ENDL();
+    DPRINT << "Out CB Page size: " << get_local_cb_interface(cb_id_in0).fifo_page_size << ENDL();
+#endif
+    const uint32_t base_src_buffer_l1_addr = get_write_ptr(cb_id_in0);
+    const uint64_t base_noc_addr = get_noc_addr(0, s0);
+
     for (uint32_t iter = 0; iter < num_sticks_per_core_read and sticks_read < num_sticks_per_core; ++iter) {
         cb_reserve_back(cb_id_in0, num_read_per_barrier);
         uint32_t src_buffer_l1_addr = get_write_ptr(cb_id_in0);
 
         for (uint32_t i = 0; i < num_read_per_barrier and sticks_read < num_sticks_per_core; ++i) {
             sticks_read++;
-            DPRINT << "Stick ID " << src_stick_id << ENDL();
             uint64_t src_noc_addr = get_noc_addr(src_stick_id, s0);
-            noc_async_read(src_noc_addr, src_buffer_l1_addr, read_size);
+            DPRINT << "Stick ID " << src_stick_id << ENDL();
+            DPRINT << "Read offset " << src_noc_addr - base_noc_addr << ENDL();
+            DPRINT << "Write offset " << src_buffer_l1_addr - base_src_buffer_l1_addr << ENDL();
+
+            noc_async_read(src_noc_addr, src_buffer_l1_addr, padded_stick_size);
             if constexpr (misalignment != 0) {
                 noc_async_read_barrier();
                 tt::data_movement::common::tt_memmove<false, false, false, 0>(
@@ -57,6 +73,11 @@ void kernel_main() {
             }
             src_buffer_l1_addr += stick_size_offset;
             src_stick_id++;
+            DPRINT << "id_per_dim: ";
+            for (uint32_t j = 0; j < num_dims; j++) {
+                DPRINT << id_per_dim[j] << " ";
+            }
+            DPRINT << ENDL();
             for (uint32_t j = 0; j < num_dims; j++) {
                 id_per_dim[j]++;
                 if (id_per_dim[j] == num_unpadded_sticks[j]) {
