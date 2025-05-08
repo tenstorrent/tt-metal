@@ -23,10 +23,6 @@ TensorAttributes::TensorAttributes(
             std::holds_alternative<ReplicateTensor>(distributed_tensor_config_),
             "Host storage is a single shard that must be in replicated configuration.");
     }
-
-    if (const auto* device_storage = std::get_if<DeviceStorage>(&storage_)) {
-        tensor_spec_ = tensor_spec_.with_memory_config(device_storage->memory_config());
-    }
 }
 
 const Storage& TensorAttributes::get_storage() const { return storage_; }
