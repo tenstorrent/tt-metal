@@ -39,22 +39,6 @@ Operations in Metalium are almost always capable to be run asynchronously and th
 
 Next, we create a ``Program`` object that we will fill in later. A program is a set of kernels that are executed on the device. If you are familiar with OpenCL, the program in Metalium is different from OpenCL in that All Tensix cores need to to run the exact same kernel at the same time. However in this example, we are only going to use one of all the cores in the device.
 
-Creating a data movement kernel
--------------------------------
-
-Create a kernel that will copy data from DRAM to L1 and back. Since we are only using one Tensix core, ``{0, 0}`` is the only core (core on the most top left) we use. And as we are moving data from DRAM to L1, This is a data movement kernel using the movement processor 0, and the default NoC interface.
-
-.. code-block:: cpp
-
-    constexpr CoreCoord core = {0, 0};
-
-    KernelHandle dram_copy_kernel_id = CreateKernel(
-        program,
-        "tt_metal/programming_examples/loopback/kernels/loopback_dram_copy.cpp",
-        core,
-        DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default}
-    );
-
 Create buffers in DRAM and L1 (SRAM)
 ------------------------------------
 
@@ -122,6 +106,49 @@ Sending real data into DRAM
 Send in a randomly-generated BFP16 (Brain 16bit floating point) vector that will act as our input data tensor.
 
 Note the final ``false`` argument. This indicates to tt-Metalium that the upload is non-blocking. The function may retrun as soon as possible while data transfer is still in progress. This is useful for performance, but the profram is responsible for ensuring that the the source buffer is not freed before the transfer is complete. In this case, there are future blocking calls/calls to ``Finish`` that will ensure commands are completed before the program exits, which is also when the source buffer is freed.
+
+Creating a data movement kernel
+-------------------------------
+
+Create a kernel that will copy data from DRAM to L1 and back. Since we are only using one Tensix core, ``{0, 0}`` is the only core (core on the most top left) we use. And as we are moving data from DRAM to L1, This is a data movement kernel using the movement processor 0, and the default NoC interface.
+
+.. code-block:: cpp
+
+    constexpr CoreCoord core = {0, 0};
+
+    KernelHandle dram_copy_kernel_id = CreateKernel(
+        program,
+        "tt_metal/programming_examples/loopback/kernels/loopback_dram_copy.cpp",
+        core,
+        DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default}
+    );
+
+
+The kernel itself is simple. It takes the address and bank indices we just created. Copies data from the input DRAM buffer to the L1 buffer and then back out to the output DRAM buffer. You might notice that the kernel is using ``uint32_t`` instead of pointers for addresses. This is intended deisgn as the DRAM is not directly addressable by the kernels. Instead, access requests are sent to the NoC (Network on Chip) and be brought to the L1 before the kernel can access it in a meaningful way. However, letting the RISC-V ore directly access the L1 is not the most efficiently way to move data around. Thus the L1 address is also an integer.
+
+.. code-block:: cpp
+
+    void kernel_main() {
+        std::uint32_t l1_buffer_addr = get_arg_val<uint32_t>(0);
+        std::uint32_t dram_buffer_src_addr  = get_arg_val<uint32_t>(1);
+        std::uint32_t dram_buffer_src_bank  = get_arg_val<uint32_t>(2);
+        std::uint32_t dram_buffer_dst_addr  = get_arg_val<uint32_t>(3);
+        std::uint32_t dram_buffer_dst_bank  = get_arg_val<uint32_t>(4);
+        std::uint32_t dram_buffer_size      = get_arg_val<uint32_t>(5);
+
+        std::uint64_t dram_buffer_src_noc_addr =
+            get_noc_addr_from_bank_id</*dram=*/true>(dram_buffer_src_bank, dram_buffer_src_addr);
+        // Read data into L1 buffer
+        noc_async_read(dram_buffer_src_noc_addr, l1_buffer_addr, dram_buffer_size);
+        noc_async_read_barrier(); // wait for transfer to complete
+
+        std::uint64_t dram_buffer_dst_noc_addr =
+            get_noc_addr_from_bank_id</*dram=*/true>(dram_buffer_dst_bank, dram_buffer_dst_addr);
+        // write data from L1 back into DRAM
+        noc_async_write(l1_buffer_addr, dram_buffer_dst_noc_addr, dram_buffer_size);
+        noc_async_write_barrier(); // wait for transfer to complete
+    }
+
 
 Setting runtime arguments for the data movement kernel
 ------------------------------------------------------
