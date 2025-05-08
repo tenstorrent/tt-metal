@@ -7,7 +7,7 @@
 
 TEST(DistributedContextTest, TestSendRecv) {
     // assuming context is already initialized in main with argc, argv
-    // in this case we will jsut get a world context
+    // in this case we will just get a world context
     auto context = tt::tt_metal::distributed::multihost::DistributedContext::create(0, nullptr);
     using Rank = tt::tt_metal::distributed::multihost::Rank;
     using Tag = tt::tt_metal::distributed::multihost::Tag;
