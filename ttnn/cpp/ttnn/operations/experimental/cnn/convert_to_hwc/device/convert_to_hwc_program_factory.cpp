@@ -59,28 +59,28 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_convert_to_hwc(const Te
     const uint32_t cb_in_id = tt::CBIndex::c_0;
     const tt::DataFormat input_format = tt::tt_metal::datatype_to_dataformat_converter(a.get_dtype());
     const uint32_t input_element_size = tt::datum_size(input_format);
-    const uint32_t cb_in_total_size = input_shard_height * input_shard_width * input_element_size;
     const uint32_t cb_in_page_size = input_shard_width * input_element_size;
+    const uint32_t cb_in_total_size = input_shard_height * cb_in_page_size;
     const auto cb_in = create_circular_buffer(cb_in_id, cb_in_total_size, cb_in_page_size, input_format, a.buffer());
 
-    const uint32_t cb_out_id = tt::CBIndex::c_1;
-    const tt::DataFormat output_format = input_format;
-    const uint32_t cb_out_total_size = cb_in_total_size;  // same size as input
-    const uint32_t cb_out_page_size = input_shard_height * input_element_size;
-    const auto cb_out =
-        create_circular_buffer(cb_out_id, cb_out_total_size, cb_out_page_size, output_format, output.buffer());
-
-    const uint32_t cb_in_tiled_id = tt::CBIndex::c_2;
+    const uint32_t cb_in_tiled_id = tt::CBIndex::c_1;
     const uint32_t cb_in_tiled_total_size = tt::div_up(input_shard_width, TILE_WIDTH) * intermediary_tile_size;
     const uint32_t cb_in_tiled_page_size = intermediary_tile_size;
     const auto cb_in_tiled =
         create_circular_buffer(cb_in_tiled_id, cb_in_tiled_total_size, cb_in_tiled_page_size, intermediary_format);
 
-    const uint32_t cb_in_transpose_id = tt::CBIndex::c_3;
+    const uint32_t cb_in_transpose_id = tt::CBIndex::c_2;
     const uint32_t cb_in_transpose_total_size = tt::div_up(input_shard_width, TILE_WIDTH) * intermediary_tile_size;
     const uint32_t cb_in_transpose_page_size = intermediary_tile_size;
     const auto cb_in_transpose = create_circular_buffer(
         cb_in_transpose_id, cb_in_transpose_total_size, cb_in_transpose_page_size, intermediary_format);
+
+    const uint32_t cb_out_id = tt::CBIndex::c_3;
+    const tt::DataFormat output_format = input_format;
+    const uint32_t cb_out_total_size = cb_in_total_size;  // same size as input
+    const uint32_t cb_out_page_size = input_shard_height * input_element_size;
+    const auto cb_out =
+        create_circular_buffer(cb_out_id, cb_out_total_size, cb_out_page_size, output_format, output.buffer());
 
     std::vector<uint32_t> reader_compile_time_args = {cb_in_id};
     std::vector<uint32_t> writer_compile_time_args = {cb_in_transpose_id, cb_out_id, C};
@@ -113,6 +113,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_convert_to_hwc(const Te
                              input_cores,
                              total_tiles_per_core,
                              input_shard_height,
+                             input_shard_width,
                              reader_kernel_id,
                              writer_kernel_id,
                              compute_kernel_id](tt::tt_metal::Program& program, const Tensor& a, const Tensor& output) {
@@ -121,8 +122,8 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_convert_to_hwc(const Te
         UpdateDynamicCircularBufferAddress(program, cb_in, *a_buffer);
         UpdateDynamicCircularBufferAddress(program, cb_out, *output_buffer);
 
-        std::vector<std::vector<uint32_t>> reader_runtime_args = {input_cores.size(), {0}};  // (num_tiles_per_core)
-        std::vector<std::vector<uint32_t>> writer_runtime_args = {input_cores.size(), {0}};  // (num_tiles_per_core)
+        std::vector<std::vector<uint32_t>> reader_runtime_args = {input_cores.size(), {0}};     // (num_tiles_per_core)
+        std::vector<std::vector<uint32_t>> writer_runtime_args = {input_cores.size(), {0, 0}};  // (num_tiles_per_core)
         std::vector<std::vector<uint32_t>> compute_runtime_args = {
             input_cores.size(), {0, 0}};  // (num_tiles_per_core, num_sticks_per_block)
 
@@ -132,6 +133,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_convert_to_hwc(const Te
             reader_runtime_args[i][0] = total_tiles_per_core;
 
             writer_runtime_args[i][0] = total_tiles_per_core;
+            writer_runtime_args[i][1] = input_shard_width;
 
             compute_runtime_args[i][0] = total_tiles_per_core;
             compute_runtime_args[i][1] = input_shard_height;
