@@ -64,6 +64,9 @@ void kernel_main() {
     const size_t source_l1_cb_index = get_arg_val<uint32_t>(arg_idx++);
     const size_t packet_header_cb = get_arg_val<uint32_t>(arg_idx++);
     const size_t packet_header_size_in_headers = get_arg_val<uint32_t>(arg_idx++);
+    size_t packet_size_index = get_arg_val<uint32_t>(arg_idx++);;
+    size_t num_messages_index = get_arg_val<uint32_t>(arg_idx++);;
+    size_t stall_duration_index = get_arg_val<uint32_t>(arg_idx++);;
 
     auto fabric_connection = tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(arg_idx);
 
@@ -96,10 +99,8 @@ void kernel_main() {
         0);
 
     uint64_t next_worker_token_addr = get_noc_addr(next_worker_noc_x, next_worker_noc_y, next_worker_connection_token_addr);
-    size_t packet_size_index = 0;
-    size_t num_messages_index = 0;
-    size_t stall_duration_index = 0;
     DPRINT << "Starting loop. num_times_to_connect: " << (uint32_t)num_times_to_connect << "\n";
+    bool wrap_val = 4;
     for (size_t i = 0; i < num_times_to_connect; i++) {
         if ((i & 0xFF) == 0) {
             DPRINT << "Iteration: " << (uint32_t)i << "\n";
@@ -113,16 +114,18 @@ void kernel_main() {
 
         pkt_hdr_fwd->to_noc_unicast_write(NocUnicastCommandHeader{noc0_dest_addr_fwd}, packet_size);
 
-        noc_semaphore_wait(connection_token_ptr, 1);
+        while (*connection_token_ptr != 1) {
+            noc_async_write(source_l1_buffer_address, noc0_dest_addr_fwd, packet_size);
+        }
         *connection_token_ptr = 0;
 
-        // DPRINT << "Stalling\n";
         if (stall_duration) {
             auto start = get_timestamp();
             while (get_timestamp() - start < stall_duration) {}
         }
         // DPRINT << "Done Stall\n";
         fabric_connection.open();
+        // DPRINT << "Stalling\n";
 
         // DPRINT << "Sending " << (uint32_t)num_messages_to_send << " messages\n";
         for (size_t i = 0; i < num_messages_to_send; i++) {
@@ -143,9 +146,11 @@ void kernel_main() {
         noc_semaphore_inc(next_worker_token_addr, 1);
         // DPRINT << "Done Notifying next worker\n";
 
-        stall_duration_index = tt::tt_fabric::wrap_increment<NUM_STALL_DURATIONS>(stall_duration_index);
-        packet_size_index = tt::tt_fabric::wrap_increment<NUM_PACKET_SIZES>(packet_size_index);
-        num_messages_index = tt::tt_fabric::wrap_increment<NUM_MESSAGES>(num_messages_index);
+        if ((i & (wrap_val - 1)) == 0) {
+            stall_duration_index = tt::tt_fabric::wrap_increment<NUM_STALL_DURATIONS>(stall_duration_index);
+            packet_size_index = tt::tt_fabric::wrap_increment<NUM_PACKET_SIZES>(packet_size_index);
+            num_messages_index = tt::tt_fabric::wrap_increment<NUM_MESSAGES>(num_messages_index);
+        }
         // DPRINT << "Next stall duration index: " << (uint32_t)stall_duration_index << "\n";
         // DPRINT << "Next packet size index: " << (uint32_t)packet_size_index << "\n";
         // DPRINT << "Next num messages index: " << (uint32_t)num_messages_index << "\n";
