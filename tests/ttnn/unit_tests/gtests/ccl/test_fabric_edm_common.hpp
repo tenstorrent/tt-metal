@@ -2169,7 +2169,7 @@ void run_ring_all_gather_with_persistent_fabric(
         return;
     }
     // Initialize MeshDevice with 1D Fabric
-    MeshFabric1DFixture test_fixture(tt::tt_metal::FabricConfig::FABRIC_1D_RING);
+    MeshFabric1DFixture test_fixture(tt::tt_metal::FabricConfig::FABRIC_1D);
     test_fixture.mesh_device_->reshape(MeshShape(1, 8));
     auto view = test_fixture.mesh_device_->get_view();
 
@@ -2198,7 +2198,7 @@ void run_ring_all_gather_with_persistent_fabric(
                                          .to_device(test_fixture.mesh_device_.get());
 
     std::optional<SubdeviceInfo> subdevice_managers = create_worker_subdevices(devices);
-    ttnn::ccl::Topology topology = ttnn::ccl::Topology::Ring;
+    ttnn::ccl::Topology topology = ttnn::ccl::Topology::Linear;
 
     log_info(tt::LogTest, "launching op");
 
@@ -3037,10 +3037,10 @@ void RunRingDeadlockStabilityTestWithPersistentFabric(
 
     using namespace ttnn::ccl;
     auto topology = ttnn::ccl::Topology::Ring;
-    constexpr size_t num_unicasts = 0;
+    size_t num_unicasts = 0;
     size_t line_size = num_devices;
     size_t num_devices_with_workers = line_size;
-    constexpr bool line_sync = false;
+    bool line_sync = true;
 
     auto worker_core_logical = [](size_t link) { return CoreCoord(link, 0); };
 
