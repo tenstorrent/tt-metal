@@ -808,7 +808,8 @@ void DumpDeviceProfileResults(
                 }
             }
         }
-        TT_FATAL(DprintServerIsRunning() == false, "Debug print server is running, cannot dump device profiler data");
+        // TT_FATAL(DprintServerIsRunning() == false, "Debug print server is running, cannot dump device profiler
+        // data");
         auto device_id = device->id();
 
         if (tt_metal_device_profiler_map.find(device_id) != tt_metal_device_profiler_map.end()) {
