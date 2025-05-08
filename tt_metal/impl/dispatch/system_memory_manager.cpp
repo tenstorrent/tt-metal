@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "impl/context/metal_context.hpp"
-#include <tt-metalium/command_queue_common.hpp>
 #include "system_memory_manager.hpp"
 #include <tt-metalium/tt_align.hpp>
 #include <algorithm>
@@ -19,6 +18,7 @@
 #include "hal.hpp"
 #include "hal_types.hpp"
 #include "memcpy.hpp"
+#include "command_queue_common.hpp"
 #include "system_memory_cq_interface.hpp"
 // #include <umd/device/driver_atomics.h> - Should be included as it is used here, but the file is missing include
 // guards
