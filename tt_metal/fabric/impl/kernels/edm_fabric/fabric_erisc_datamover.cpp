@@ -1741,6 +1741,23 @@ void kernel_main() {
     WriteTransactionIdTracker<RECEIVER_NUM_BUFFERS, NUM_TRANSACTION_IDS, NUM_TRANSACTION_IDS>
         receiver_channel_1_trid_tracker;
 
+    // For 1D fabric, init edm interfaces early.
+    // Doing it later (around 2D) in the code affects bandwidth tests.
+    // This is a startup artifact, since in a real operation, this init code will be long gone w.r.t actual work.
+    // But since bandwidth tests are sensitive to fast startup, keeping it here.
+    // Context switch may also be playing a factor here.
+    // The eth sender/receiver handskake beneath this block does context switches. So if bandwidth test catches
+    // us at the wrong time, we might be in base context.
+    if constexpr (!is_2d_fabric) {
+        if (has_downstream_edm_vc0_buffer_connection) {
+            for (auto& downstream_edm_noc_interface : downstream_edm_noc_interfaces) {
+                downstream_edm_noc_interface.template open<true, tt::tt_fabric::worker_handshake_noc>();
+                *downstream_edm_noc_interface.from_remote_buffer_slot_rdptr_ptr = 0;
+                ASSERT(*downstream_edm_noc_interface.from_remote_buffer_slot_rdptr_ptr == 0);
+            }
+        }
+    }
+
     if constexpr (is_handshake_sender) {
         erisc::datamover::handshake::sender_side_finish(handshake_addr, DEFAULT_HANDSHAKE_CONTEXT_SWITCH_TIMEOUT);
     } else {
@@ -1799,14 +1816,6 @@ void kernel_main() {
                 downstream_edm_noc_interfaces[NUM_USED_RECEIVER_CHANNELS - 1]
                     .template open<true, tt::tt_fabric::worker_handshake_noc>();
                 *downstream_edm_noc_interfaces[NUM_USED_RECEIVER_CHANNELS - 1].from_remote_buffer_slot_rdptr_ptr = 0;
-            }
-        }
-    } else {
-        if (has_downstream_edm_vc0_buffer_connection) {
-            for (auto& downstream_edm_noc_interface : downstream_edm_noc_interfaces) {
-                downstream_edm_noc_interface.template open<true, tt::tt_fabric::worker_handshake_noc>();
-                *downstream_edm_noc_interface.from_remote_buffer_slot_rdptr_ptr = 0;
-                ASSERT(*downstream_edm_noc_interface.from_remote_buffer_slot_rdptr_ptr == 0);
             }
         }
     }
