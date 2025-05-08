@@ -10,6 +10,8 @@
 
 namespace tt::tt_fabric {
 
+using FabricEndpointStatus = EDMStatus;
+
 template <uint8_t FABRIC_MUX_CHANNEL_NUM_BUFFERS = 0>
 WorkerToFabricMuxSender<FABRIC_MUX_CHANNEL_NUM_BUFFERS> build_connection_to_fabric_endpoint(
     uint8_t fabric_mux_x,
@@ -45,15 +47,15 @@ WorkerToFabricMuxSender<FABRIC_MUX_CHANNEL_NUM_BUFFERS> build_connection_to_fabr
 }
 
 FORCE_INLINE void wait_for_fabric_endpoint_ready(
-    uint8_t fabric_mux_x,
-    uint8_t fabric_mux_y,
-    size_t fabric_mux_status_address,
-    uint32_t local_fabric_mux_status_address) {
-    uint64_t noc_addr = get_noc_addr(fabric_mux_x, fabric_mux_y, fabric_mux_status_address);
-    auto local_fabric_mux_status_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(local_fabric_mux_status_address);
+    uint8_t fabric_ep_x,
+    uint8_t fabric_ep_y,
+    size_t fabric_ep_status_address,
+    uint32_t local_fabric_ep_status_address) {
+    uint64_t noc_addr = get_noc_addr(fabric_ep_x, fabric_ep_y, fabric_ep_status_address);
+    auto local_fabric_ep_status_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(local_fabric_ep_status_address);
 
-    while (local_fabric_mux_status_ptr[0] != tt::tt_fabric::FabricMuxStatus::READY_FOR_TRAFFIC) {
-        noc_async_read_one_packet(noc_addr, local_fabric_mux_status_address, 4);
+    while (local_fabric_ep_status_ptr[0] != tt::tt_fabric::FabricEndpointStatus::READY_FOR_TRAFFIC) {
+        noc_async_read_one_packet(noc_addr, local_fabric_ep_status_address, 4);
         noc_async_read_barrier();
     }
 }

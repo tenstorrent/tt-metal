@@ -140,18 +140,21 @@ void create_mux_kernel(
     // getting mux ct args like this will result in compilation error if fabric is not enabled
     // std::vector<uint32_t> mux_ct_args = mux_kernel_config->get_fabric_mux_compile_time_args();
     auto default_channel_type = tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL;
+    size_t mux_status_address = mux_kernel_config->get_status_address();
     std::vector<uint32_t> mux_ct_args = {
         test_params.num_full_size_channels,
         test_params.num_buffers_full_size_channel,
         test_params.buffer_size_bytes_full_size_channel,
         test_params.num_header_only_channels,
         test_params.num_buffers_header_only_channel,
-        mux_kernel_config->get_status_address(),
+        mux_status_address,
         mux_kernel_config->get_termination_signal_address(),
         mux_kernel_config->get_connection_info_address(default_channel_type, 0),
         mux_kernel_config->get_connection_handshake_address(default_channel_type, 0),
         mux_kernel_config->get_flow_control_address(default_channel_type, 0),
         mux_kernel_config->get_channel_base_address(default_channel_type, 0),
+        mux_status_address + noc_address_padding_bytes, /* risky, could change if mux address map is updated */
+        drainer_kernel_config->get_status_address(),
         drainer_kernel_config->num_buffers_full_size_channel,
         test_params.num_full_size_channel_iters,
         test_params.num_iters_between_teardown_checks};

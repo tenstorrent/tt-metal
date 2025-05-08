@@ -114,7 +114,8 @@ struct FabricMuxConfig {
         this->memory_map_start_address = base_l1_address;
 
         this->status_address = this->memory_map_start_address;
-        this->termination_signal_address = this->status_address + noc_aligned_address_size_bytes;
+        this->local_fabric_router_status_address = this->status_address + noc_aligned_address_size_bytes;
+        this->termination_signal_address = this->local_fabric_router_status_address + noc_aligned_address_size_bytes;
 
         this->connection_info_base_address = this->termination_signal_address + noc_aligned_address_size_bytes;
         size_t connection_info_address_block_size_bytes =
@@ -147,6 +148,7 @@ struct FabricMuxConfig {
     }
 
     std::vector<uint32_t> get_fabric_mux_compile_time_args() const {
+        auto fabric_config = tt::tt_fabric::get_1d_fabric_config();
         return std::vector<uint32_t>{
             this->num_full_size_channels,
             this->num_buffers_full_size_channel,
@@ -159,7 +161,9 @@ struct FabricMuxConfig {
             this->connection_handshake_base_address,
             this->flow_control_base_address,
             this->full_size_channels_base_address,
-            tt::tt_fabric::get_1d_fabric_config().sender_channels_num_buffers[0],
+            this->local_fabric_router_status_address,
+            fabric_config.edm_status_address,
+            fabric_config.sender_channels_num_buffers[0],
             this->num_full_size_channel_iters,
             this->num_iters_between_teardown_checks};
     }
@@ -247,6 +251,7 @@ private:
     // memory map
     size_t memory_map_start_address = 0;
     size_t status_address = 0;
+    size_t local_fabric_router_status_address = 0;
     size_t termination_signal_address = 0;
     size_t connection_info_base_address = 0;
     size_t connection_handshake_base_address = 0;

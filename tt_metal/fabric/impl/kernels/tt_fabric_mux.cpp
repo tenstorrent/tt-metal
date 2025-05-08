@@ -7,6 +7,7 @@
 #include "tt_metal/fabric/hw/inc/tt_fabric_mux.hpp"
 #include "tt_metal/fabric/hw/inc/tt_fabric_utils.h"
 #include "tt_metal/api/tt-metalium/fabric_edm_packet_header.hpp"
+#include "tt_metal/fabric/hw/inc/tt_fabric_mux_interface.hpp"
 
 #include <cstddef>
 #include <array>
@@ -25,10 +26,12 @@ constexpr size_t connection_info_base_address = get_compile_time_arg_val(7);
 constexpr size_t connection_handshake_base_address = get_compile_time_arg_val(8);
 constexpr size_t sender_flow_control_base_address = get_compile_time_arg_val(9);
 constexpr size_t channels_base_l1_address = get_compile_time_arg_val(10);
+constexpr size_t local_fabric_router_status_address = get_compile_time_arg_val(11);
+constexpr size_t fabric_router_status_address = get_compile_time_arg_val(12);
 
-constexpr uint8_t NUM_EDM_BUFFERS = get_compile_time_arg_val(11);
-constexpr size_t NUM_FULL_SIZE_CHANNELS_ITERS = get_compile_time_arg_val(12);
-constexpr size_t NUM_ITERS_BETWEEN_TEARDOWN_CHECKS = get_compile_time_arg_val(13);
+constexpr uint8_t NUM_EDM_BUFFERS = get_compile_time_arg_val(13);
+constexpr size_t NUM_FULL_SIZE_CHANNELS_ITERS = get_compile_time_arg_val(14);
+constexpr size_t NUM_ITERS_BETWEEN_TEARDOWN_CHECKS = get_compile_time_arg_val(15);
 
 constexpr size_t NOC_ALIGN_PADDING_BYTES = 12;
 
@@ -155,6 +158,13 @@ void kernel_main() {
 
     volatile auto termination_signal_ptr =
         reinterpret_cast<volatile tt::tt_fabric::TerminationSignal*>(termination_signal_address);
+
+    // wait for fabric router to be ready before setting up the connection
+    tt::tt_fabric::wait_for_fabric_endpoint_ready(
+        fabric_connection.edm_noc_x,
+        fabric_connection.edm_noc_y,
+        fabric_router_status_address,
+        local_fabric_router_status_address);
 
     fabric_connection.open();
 
