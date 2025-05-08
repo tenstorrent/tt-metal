@@ -5,6 +5,7 @@
 #include "lightmetal_replay_impl.hpp"
 
 #include <iostream>
+#include "distributed.hpp"
 #include "light_metal_binary_generated.h"
 #include "command_generated.h"
 #include <trace_buffer.hpp>
@@ -19,6 +20,8 @@
 #include "flatbuffer/base_types_from_flatbuffer.hpp"
 #include "flatbuffer/program_types_from_flatbuffer.hpp"
 #include "flatbuffer/buffer_types_from_flatbuffer.hpp"
+#include "mesh_device.hpp"
+#include "mesh_trace_id.hpp"
 
 namespace tt::tt_metal {
 
@@ -289,10 +292,21 @@ void LightMetalReplayImpl::clear_object_maps() {
 // execute a command by dispatching to appropriate handler based on type.
 void LightMetalReplayImpl::execute(const tt::tt_metal::flatbuffer::Command* command) {
     switch (command->cmd_type()) {
+        // TODO: (jjiang) - finish
+        case ::tt::tt_metal::flatbuffer::CommandType::BeginTraceCaptureCommand: {
+            execute(command->cmd_as_LightMetalCompareCommand());
+            break;
+        }
+        // TODO: (jjiang) - finish
+        case ::tt::tt_metal::flatbuffer::CommandType::EndTraceCaptureCommand: {
+            execute(command->cmd_as_EndTraceCaptureCommand());
+            break;
+        }
         case ::tt::tt_metal::flatbuffer::CommandType::EnqueueTraceCommand: {
             execute(command->cmd_as_EnqueueTraceCommand());
             break;
         }
+        // TODO: (jjiang) - check compatability
         case ::tt::tt_metal::flatbuffer::CommandType::ReplayTraceCommand: {
             execute(command->cmd_as_ReplayTraceCommand());
             break;
@@ -301,8 +315,79 @@ void LightMetalReplayImpl::execute(const tt::tt_metal::flatbuffer::Command* comm
             execute(command->cmd_as_LoadTraceCommand());
             break;
         }
+        // TODO: (jjiang) - check compatability
         case ::tt::tt_metal::flatbuffer::CommandType::ReleaseTraceCommand: {
             execute(command->cmd_as_ReleaseTraceCommand());
+            break;
+        }
+        // TODO: (jjiang) - implement
+        case ::tt::tt_metal::flatbuffer::CommandType::EnqueueRecordEventCommand: {
+            execute(command->cmd_as_EnqueueRecordEventCommand());
+            break;
+        }
+        // TODO: (jjiang) - implement
+        case ::tt::tt_metal::flatbuffer::CommandType::EnqueueRecordEventToHostCommand: {
+            execute(command->cmd_as_EnqueueRecordEventToHostCommand());
+            break;
+        }
+        // TODO: (jjiang) - implement
+        case ::tt::tt_metal::flatbuffer::CommandType::EnqueueWaitForEventCommand: {
+            execute(command->cmd_as_EnqueueWaitForEventCommand());
+            break;
+        }
+        // TODO: (jjiang) - implement
+        case ::tt::tt_metal::flatbuffer::CommandType::EventSynchronizeCommand: {
+            execute(command->cmd_as_EventSynchronizeCommand());
+            break;
+        }
+        // TODO: (jjiang) - maybe implement?
+        case ::tt::tt_metal::flatbuffer::CommandType::SynchronizeCommand: {
+            execute(command->cmd_as_SynchronizeCommand());
+            break;
+        }
+        // TODO: (jjiang) - implement
+        case ::tt::tt_metal::flatbuffer::CommandType::EnqueueMeshWorkloadCommand: {
+            execute(command->cmd_as_EnqueueMeshWorkloadCommand());
+            break;
+        }
+        // TODO: (jjiang) - implement
+        case ::tt::tt_metal::flatbuffer::CommandType::EnqueueReadMeshBufferCommand: {
+            execute(command->cmd_as_EnqueueReadMeshBufferCommand());
+            break;
+        }
+        // TODO: (jjiang) - implement
+        case ::tt::tt_metal::flatbuffer::CommandType::EnqueueWriteMeshBufferCommand: {
+            execute(command->cmd_as_EnqueueWriteMeshBufferCommand());
+            break;
+        }
+        // TODO: (jjiang) - implement
+        case ::tt::tt_metal::flatbuffer::CommandType::ReadShardCommand: {
+            execute(command->cmd_as_ReadShardCommand());
+            break;
+        }
+        // TODO: (jjiang) - implement
+        case ::tt::tt_metal::flatbuffer::CommandType::WriteShardCommand: {
+            execute(command->cmd_as_WriteShardCommand());
+            break;
+        }
+        // TODO: (jjiang) - implement
+        case ::tt::tt_metal::flatbuffer::CommandType::MeshWorkloadCreateCommand: {
+            execute(command->cmd_as_MeshBufferCreateCommand());
+            break;
+        }
+        // TODO: (jjiang) - implement
+        case ::tt::tt_metal::flatbuffer::CommandType::AddProgramToMeshWorkloadCommand: {
+            execute(command->cmd_as_AddProgramToMeshWorkloadCommand());
+            break;
+        }
+        // TODO: (jjiang) - implement
+        case ::tt::tt_metal::flatbuffer::CommandType::EnqueueMeshWorkloadCommand: {
+            execute(command->cmd_as_EnqueueMeshWorkloadCommand());
+            break;
+        }
+        // TODO: (jjiang) - implement
+        case ::tt::tt_metal::flatbuffer::CommandType::MeshBufferCreateCommand: {
+            execute(command->cmd_as_EnqueueReadBufferCommand());
             break;
         }
         case ::tt::tt_metal::flatbuffer::CommandType::BufferCreateCommand: {
@@ -368,6 +453,20 @@ void LightMetalReplayImpl::execute(const tt::tt_metal::flatbuffer::Command* comm
 }
 
 // Per API command handlers.
+void LightMetalReplayImpl::execute(const tt::tt_metal::flatbuffer::BeginTraceCaptureCommand* cmd) {
+    log_debug(
+        tt::LogMetalTrace,
+        "LightMetalReplay(BeginTraceCapture) cq_id: {}",
+        dynamic_cast<distributed::MeshDevice*>(device_)->mesh_command_queue(cmd->cq_global_id()));
+    distributed::MeshTraceId trace_id = tt::tt_metal::distributed::BeginTraceCapture(device_, cmd->cq_global_id());
+    this->mesh_trace_ids_.push_back(trace_id);
+};
+
+void LightMetalReplayImpl::execute(const tt::tt_metal::flatbuffer::EndTraceCaptureCommand* cmd) {
+    log_debug(tt::LogMetalTrace, "LightMetalReplay(EndTraceCapture) cq_id: {}", cmd->cq_global_id());
+    tt::tt_metal::distributed::EndTraceCapture(
+        device_, cmd->cq_global_id(), get_mesh_trace_by_id(cmd->trace_id()));  // use getter from map
+}
 void LightMetalReplayImpl::execute(const tt::tt_metal::flatbuffer::EnqueueTraceCommand* cmd) {
     log_debug(
         tt::LogMetalTrace,

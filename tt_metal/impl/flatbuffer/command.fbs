@@ -5,9 +5,26 @@ include "flatbuffer/base_types.fbs";
 
 namespace tt.tt_metal.flatbuffer;
 
+//TODO: (jjiang) - in tt-metal/tt_metal/impl/lightmetal/lightmetal_replay_impl.cpp,
+//TODO: add this to the global_id list and make it return a traceId object in lightmetal_capture.cpp
+//TODO: add the capture in lightmetal_capture.cpp
+table BeginTraceCaptureCommand {
+  mesh_device_id: int;  // Reference to IDevice of type MeshDevice
+  mesh_cq_global_id: uint32; // Reference to MeshCommandQueue of IDevice
+}
+
+//TODO: (jjiang) - in tt-metal/tt_metal/impl/lightmetal/lightmetal_replay_impl.cpp,
+//TODO: remove the traceid from the global_id list and make it take a traceId object in lightmetal_cpature.cpp and act accordingly
+//TODO: add the capture in lightmetal_capture.cpp
+table EndTraceCaptureCommand {
+  mesh_device_id: int;  // Reference to IDevice of type MeshDevice
+  mesh_cq_global_id: uint32; // Reference to MeshCommandQueue of IDevice
+  trace_id: uint32;
+}
+
 table ReplayTraceCommand {
-  // TODO (kmabee) - add device.
-  cq_id: int;
+  device_id: int;  // Reference to IDevice
+  cq_id: int; // Can be regular cq or mesh cq
   tid: int;
   blocking: bool;
 }
@@ -25,7 +42,7 @@ table LoadTraceCommand {
 }
 
 table ReleaseTraceCommand {
-  // TODO (kmabee) - add device.
+  mesh_device_id: int;  // Reference to IDevice
   tid: int; // Pointer to trace data.
 }
 
@@ -63,8 +80,100 @@ table EnqueueReadBufferCommand {
   blocking: bool;
 }
 
+//TODO START NEW (jjiang): Interim constructs, potentially will be changed as they're implemented
+//basically none of these have been added to capture.cpp or replay_impl.cpp yet, but the
+//translation tables necessary for tracking have been added to
+table MeshBufferCreateCommand {
+  mesh_buffer_config: MeshBufferConfig;
+  device_local_config: DeviceLocalBufferConfig;
+  mesh_device_id: int; // Reference to IDevice of type MeshDevice *mesh_device;
+  address: uint64; //std::optional<DeviceAddr>
+}
+
+table MeshWorkloadCreateCommand {
+}
+
+table AddProgramToMeshWorkloadCommand {
+  mesh_workload_global_id: uint32; // Reference to MeshWorkload
+  program_global_id: uint32; // Reference to Program TODO: requires std::move(program) in orig, reference to a reference
+  device_range : MeshCoordinateRange;
+}
+
+table EnqueueMeshWorkloadCommand {
+  mesh_cq_id: uint32; // reference to MeshCommandQueue
+  mesh_workload_global_id: uint32; // Reference to MeshWorkload
+  blocking: bool;
+}
+
+//TODO: (jjiang) - this is just a data structure, offsets need to be calculated and it probably needs to be
+//hand serialized like the existing data structures; should be similar though
+table MeshEvent {
+  id: uint32 = 0;
+  mesh_device_id: int; // Reference to IDevice of type MeshDevice *mesh_device;
+  mesh_cq_id: uint32 = 0;
+  device_range: MeshCoordinateRange;
+}
+
+table EnqueueRecordEventCommand {
+  mesh_cq_id: uint32;       // reference to MeshCommandQueue
+  sub_device_ids: [ubyte];    // array of uint8 values representing SubDeviceId::Id
+  device_range: MeshCoordinateRange;
+}
+
+table EnqueueRecordEventToHostCommand {
+  mesh_cq_id: uint32;       // reference to MeshCommandQueue
+  sub_device_ids: [ubyte];    // array of uint8 values representing SubDeviceId::Id
+  device_range: MeshCoordinateRange;
+}
+
+table EnqueueWaitForEventCommand {
+  cq_global_id: uint32;       // reference to MeshCommandQueue
+  event: MeshEvent;
+}
+
+table EventSynchronizeCommand {
+  event: MeshEvent;
+}
+
+table SynchronizeCommand {
+  mesh_device_id: int;  // Reference to IDevice
+  cq_global_id: uint32; // reference to CommandQueue
+  sub_device_ids: [ubyte];
+}
+
+table EnqueueReadMeshBufferCommand {
+  cq_global_id: uint32; // reference to CommandQueue of type MeshCommandQueue
+  dst: [uint32];  // Data to be written. Support only some types for now.
+  mesh_buffer_global_id: uint32; // Reference to MeshBuffer used as src
+  blocking: bool = true;
+}
+
+table EnqueueWriteMeshBufferCommand {
+  cq_global_id: uint32; // reference to CommandQueue of type MeshCommandQueue
+  mesh_buffer_global_id: uint32; // Reference to MeshBuffer used as dest
+  src: [uint32];  // Data to be written. Support only some types for now.
+  blocking: bool = false;
+}
+
+table ReadShardCommand {
+  cq_global_id: uint32; // reference to CommandQueue of type MeshCommandQueue
+  dst: [uint32];  // Data to be written. Support only some types for now.
+  mesh_buffer_global_id: uint32; // Reference to MeshBuffer used as src
+  coord: MeshCoordinate;
+  blocking: bool = true;
+}
+
+table WriteShardCommand {
+  cq_global_id: uint32; // reference to CommandQueue of type MeshCommandQueue
+  mesh_buffer_global_id: uint32; // Reference to MeshBuffer used as dest
+  src: [uint32];  // Data to be written. Support only some types for now.
+  coord: MeshCoordinate;
+  blocking: bool = false;
+}
+//TODO END (jjiang)
+
 table FinishCommand {
-  cq_global_id: uint32;       // reference to CommandQueue
+  cq_global_id: uint32;       // reference to CommandQueue or MeshCommandQueue
   sub_device_ids: [ubyte];    // array of uint8 values representing SubDeviceId::Id
 }
 
@@ -121,15 +230,30 @@ table LightMetalCompareCommand {
 }
 
 union CommandType {
+  BeginTraceCaptureCommand,
+  EndTraceCaptureCommand,
   ReplayTraceCommand,
   EnqueueTraceCommand,
   LoadTraceCommand,
   ReleaseTraceCommand,
+  EnqueueRecordEventCommand,
+  EnqueueRecordEventToHostCommand,
+  EnqueueWaitForEventCommand,
+  EventSynchronizeCommand,
+  SynchronizeCommand,
   BufferCreateCommand,
   BufferDeallocateCommand,
   BufferDeleteCommand,
   EnqueueWriteBufferCommand,
   EnqueueReadBufferCommand,
+  MeshBufferCreateCommand,
+  MeshWorkloadCreateCommand,
+  AddProgramToMeshWorkloadCommand,
+  EnqueueMeshWorkloadCommand,
+  EnqueueReadMeshBufferCommand,
+  EnqueueWriteMeshBufferCommand,
+  ReadShardCommand,
+  WriteShardCommand,
   FinishCommand,
   ProgramConstructorCommand,
   EnqueueProgramCommand,

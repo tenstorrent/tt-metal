@@ -2,6 +2,19 @@ include "flatbuffer/base_types.fbs";
 
 namespace tt.tt_metal.flatbuffer;
 
+//TODO: (jjiang) - data structure that probably needs to be hand serialized
+table MeshCoordinate {
+  x: int;
+  y: int;
+  z: int = -127; //Set default to -127 so if no coordinate passed, coords including z will error out
+}
+
+//TODO: (jjiang) - data structure that probably needs to be hand serialized
+table MeshCoordinateRange {
+  start: MeshCoordinate;
+  end: MeshCoordinate;
+}
+
 table CoreCoord {
   x: int;
   y: int;

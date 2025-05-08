@@ -5,11 +5,14 @@
 #pragma once
 
 #include "flatbuffers/flatbuffers.h"
+#include "host_api.hpp"
 #include "lightmetal/lightmetal_capture.hpp"
 #include <tt-metalium/logger.hpp>
 #include <tt_stl/span.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <kernel_types.hpp>
+#include <tt-metalium/mesh_buffer.hpp>
+#include <tt-metalium/mesh_workload.hpp>
 
 namespace tt::tt_metal {
 
@@ -69,6 +72,10 @@ struct TraceScope {
 namespace tt::tt_metal {
 
 // Per Command type capture helper functions
+void CaptureBeginTraceCapture(IDevice* device, uint8_t cq_id);
+
+void CaptureEndTraceCapture(IDevice* device, uint8_t cq_id, uint32_t tid);
+
 void CaptureReplayTrace(IDevice* device, uint8_t cq_id, uint32_t tid, bool blocking);
 
 void CaptureEnqueueTrace(CommandQueue& cq, uint32_t tid, bool blocking);
@@ -92,6 +99,62 @@ void CaptureBufferCreate(
 void CaptureBufferDeallocate(const Buffer& buffer);
 void CaptureBufferDelete(const Buffer& buffer);
 
+// TODO START
+void CaptureMeshWorkloadCreate();
+
+void CaptureAddProgramToMeshWorkload(
+    distributed::MeshWorkload& mesh_workload, Program&& program, const distributed::MeshCoordinateRange& device_range);
+
+void CaptureEnqueueMeshWorkload(
+    distributed::MeshCommandQueue& cq,
+    distributed::MeshWorkload& mesh_workload,
+    const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec,
+    const std::variant<DataMovementConfig, ComputeConfig, EthernetConfig>& config);
+
+void CaptureEnqueueRecordEvent(
+    distributed::MeshCommandQueue& mesh_cq,
+    tt::stl::Span<const SubDeviceId> sub_device_ids,
+    const std::optional<distributed::MeshCoordinateRange>& device_range);
+
+void CaptureEnqueueRecordEventToHost(
+    distributed::MeshCommandQueue& mesh_cq,
+    tt::stl::Span<const SubDeviceId> sub_device_ids,
+    const std::optional<distributed::MeshCoordinateRange>& device_range);
+
+void CaptureEnqueueWaitForEvent(CommandQueue& cq, const std::shared_ptr<Event>& event);
+
+void CaptureEventSynchronize(const std::shared_ptr<Event>& event);
+
+void CaptureSynchronize(
+    IDevice* device, const std::optional<uint8_t> cq_id, tt::stl::Span<const SubDeviceId> sub_device_ids);
+
+void CaptureEnqueueReadMeshBuffer(
+    distributed::MeshCommandQueue& mesh_cq,
+    std::vector<HostDataType>& dst,
+    std::variant<std::reference_wrapper<distributed::MeshBuffer>, std::shared_ptr<distributed::MeshBuffer>> mesh_buffer,
+    bool blocking = true);
+
+void CaptureEnqueueWriteMeshBuffer(
+    distributed::MeshCommandQueue& mesh_cq,
+    std::variant<std::reference_wrapper<distributed::MeshBuffer>, std::shared_ptr<distributed::MeshBuffer>> mesh_buffer,
+    std::vector<HostDataType>& src,
+    bool blocking = false);
+
+void CaptureEnqueueReadShard(
+    distributed::MeshCommandQueue& mesh_cq,
+    std::vector<HostDataType>& dst,
+    std::variant<std::reference_wrapper<distributed::MeshBuffer>, std::shared_ptr<distributed::MeshBuffer>> mesh_buffer,
+    const distributed::MeshCoordinate& coord,
+    bool blocking = true);
+
+void CaptureEnqueueWriteShard(
+    distributed::MeshCommandQueue& mesh_cq,
+    std::variant<std::reference_wrapper<distributed::MeshBuffer>, std::shared_ptr<distributed::MeshBuffer>> mesh_buffer,
+    std::vector<HostDataType>& src,
+    const distributed::MeshCoordinate& coord,
+    bool blocking = false);
+// END TODO
+
 void CaptureEnqueueWriteBuffer(
     CommandQueue& cq,
     std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>> buffer,
@@ -105,7 +168,9 @@ void CaptureEnqueueReadBuffer(
     bool blocking);
 
 void CaptureFinish(CommandQueue& cq, tt::stl::Span<const SubDeviceId> sub_device_ids);
+
 void CaptureProgramConstructor(Program& program);
+
 void CaptureEnqueueProgram(CommandQueue& cq, Program& program, bool blocking);
 
 void CaptureCreateKernel(

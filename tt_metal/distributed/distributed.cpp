@@ -15,6 +15,10 @@ namespace tt::tt_metal::distributed {
 
 MeshWorkload CreateMeshWorkload() { return MeshWorkload(); }
 
+// TODO: add lightmetalcapture with the below to all functions, maybe check to see if it's been activated in
+// tt_metal.cpp? (should have been)
+// TODO:    LIGHT_METAL_TRACE_FUNCTION_ENTRY();
+// TODO:    LIGHT_METAL_TRACE_FUNCTION_CALL(Capture${FunctionName}, arg1, arg2, etc..);
 void AddProgramToMeshWorkload(MeshWorkload& mesh_workload, Program&& program, const MeshCoordinateRange& device_range) {
     mesh_workload.add_program(device_range, std::move(program));
 }

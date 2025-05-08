@@ -4,10 +4,14 @@
 
 #pragma once
 
+#include <cstdint>
 #include <vector>
 #include <memory>
 #include <flatbuffers/flatbuffers.h>
 #include <lightmetal_binary.hpp>
+#include <tt-metalium/mesh_workload.hpp>
+#include "mesh_buffer.hpp"
+#include "mesh_trace_id.hpp"
 
 // Forward decl for command_generated.h
 namespace tt::tt_metal::flatbuffer {
@@ -63,6 +67,19 @@ public:
     uint32_t add_to_map(const CBHandle handle);
     void remove_from_map(const CBHandle handle);
     uint32_t get_global_id(const CBHandle handle);
+    // TODO: to be implemented, require translations between these objects and the backing schema
+    bool is_in_map(const distributed::MeshTraceId id);
+    uint32_t add_to_map(const distributed::MeshTraceId id);
+    void remove_from_map(const distributed::MeshTraceId id);
+    uint32_t get_global_id(const distributed::MeshTraceId id);
+    bool is_in_map(const distributed::MeshBuffer obj);
+    uint32_t add_to_map(const distributed::MeshBuffer obj);
+    void remove_from_map(const distributed::MeshBuffer obj);
+    uint32_t get_global_id(const distributed::MeshBuffer obj);
+    bool is_in_map(const distributed::MeshWorkload id);
+    uint32_t add_to_map(const distributed::MeshWorkload id);
+    void remove_from_map(const distributed::MeshWorkload id);
+    uint32_t get_global_id(const distributed::MeshWorkload id);
 
 private:
     LightMetalCaptureContext();  // Private constructor
@@ -80,6 +97,14 @@ private:
     std::unordered_map<const Kernel*, uint32_t> kernel_to_global_id_map_;
     std::unordered_map<CBHandle, uint32_t> cb_handle_to_global_id_map_;
     // TODO (kmabee) - consider adding map for CommandQueue object.
+
+    // TODO: (jjiang) - for tracing programs, calling begintrace will populate this and traceids will be tracked through
+    // it
+    std::unordered_map<uint64_t, uint32_t> mesh_trace_id_to_global_id_map_;
+    // TODO: (jjiang) - for meshbuffers, calling createmeshbuffer (TBD) will populate this
+    std::unordered_map<uint64_t, uint32_t> mesh_buffer_id_to_global_id_map_;
+    // TODO: (jjiang) - for mesh workload, calling createmeshworkload will populate this
+    std::unordered_map<distributed::MeshWorkload, uint32_t> mesh_workload_to_global_id_map_;
 
     LightMetalCaptureContext(const LightMetalCaptureContext&) = delete;
     LightMetalCaptureContext& operator=(const LightMetalCaptureContext&) = delete;
