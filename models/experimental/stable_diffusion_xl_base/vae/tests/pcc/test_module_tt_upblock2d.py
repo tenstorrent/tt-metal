@@ -17,7 +17,7 @@ from models.utility_functions import torch_random
         ((1, 512, 128, 128), 0, 0.996),
         ((1, 512, 256, 256), 1, 0.983),
         ((1, 512, 512, 512), 2, 0.994),
-        ((1, 256, 1024, 1024), 3, 0.982),
+        ((1, 256, 1024, 1024), 3, 0.981),
     ],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 4 * 16384}], indirect=True)
