@@ -2636,7 +2636,6 @@ void Run1DFabricPacketSendTest(
             bool unicast_forward;
             size_t num_fwd_hops;
             size_t num_bwd_hops;
-            size_t unicast_hops;
             size_t sync_num_fwd_hops;
             size_t sync_num_bwd_hops;
             size_t sync_count_per_link;
@@ -2704,10 +2703,8 @@ void Run1DFabricPacketSendTest(
                 }
                 if (num_fwd_hops >= num_bwd_hops) {
                     unicast_forward = true;
-                    unicast_hops = num_fwd_hops;
                 } else {
                     unicast_forward = false;
-                    unicast_hops = num_bwd_hops;
                 }
             } else {
                 backward_device = i == 0 ? nullptr : devices[i - 1];
@@ -3164,19 +3161,15 @@ void RunRingDeadlockStabilityTestWithPersistentFabric(
 
         IDevice* backward_device;
         IDevice* forward_device;
-        bool unicast_forward;
         size_t mcast_fwd_hops;
         size_t mcast_bwd_hops;
-        size_t unicast_hops;
 
         backward_device = i == 0 ? devices.back() : devices[i - 1];
         forward_device = i == line_size - 1 ? devices.front() : devices[i + 1];
 
         // Initialize the fabric handle for worker connection
-        unicast_forward = false;
         mcast_fwd_hops = has_forward_connection ? line_size - 1 : 0;
         mcast_bwd_hops = has_backward_connection ? line_size - 1 : 0;
-        unicast_hops = has_forward_connection ? mcast_fwd_hops : mcast_bwd_hops;
 
         // reserve CB
         tt_metal::CircularBufferConfig cb_src0_config =

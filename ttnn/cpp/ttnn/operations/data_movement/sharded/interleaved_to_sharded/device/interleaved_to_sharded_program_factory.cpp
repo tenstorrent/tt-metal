@@ -22,7 +22,7 @@ operation::ProgramWithCallbacks interleaved_to_sharded_multi_core(
     const Tensor& input, const Tensor& output, bool keep_l1_aligned, uint32_t num_slices, uint32_t slice_index) {
     tt::tt_metal::Program program{};
     keep_l1_aligned = true;
-    uint32_t num_units, num_units_per_shard, input_unit_size, output_unit_size, num_units_per_shard_width,
+    uint32_t num_units_per_shard, input_unit_size, output_unit_size, num_units_per_shard_width,
         num_units_per_shard_height, num_units_offset, num_units_per_row, num_units_per_shard_height_last,
         num_units_per_shard_width_last, padded_offset_bytes;
 
@@ -45,7 +45,6 @@ operation::ProgramWithCallbacks interleaved_to_sharded_multi_core(
     bool is_blackhole = (input.device()->arch() == tt::ARCH::BLACKHOLE);
 
     if (input.get_layout() == Layout::TILE) {
-        num_units = input.volume() / TILE_HW;
         input_unit_size = tt::tt_metal::detail::TileSize(input_cb_data_format);
         output_unit_size = tt::tt_metal::detail::TileSize(output_cb_data_format);
         TT_FATAL(
@@ -66,8 +65,6 @@ operation::ProgramWithCallbacks interleaved_to_sharded_multi_core(
             num_units_per_shard_width - (tt::round_up(num_units_per_row, num_units_per_shard_width) - num_units_per_row);
         padded_offset_bytes = (num_units_per_shard_width - num_units_per_shard_width_last) * input_unit_size;
     } else {
-        num_units = (input.volume() / input.get_padded_shape()[-1] / shard_spec.shape[0]) *
-                    (input.get_padded_shape()[-1] / shard_spec.shape[1]);
         input_unit_size = shard_spec.shape[1] * input.element_size();
         output_unit_size = shard_spec.shape[1] * output.element_size();
         num_units_per_shard_height = shard_spec.shape[0];

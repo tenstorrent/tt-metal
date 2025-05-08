@@ -622,13 +622,10 @@ tt_metal::operation::ProgramWithCallbacks s2i_rm_concat_multi_core(
     uint32_t core_id = 0;
     for (auto core : cores) {
         auto input_shard_spec = input_tensors[0].shard_spec().value();
-        uint32_t curr_num_input_tensors;
         uint32_t curr_num_output_rows;
         if (input_cores.contains(core)) {
-            curr_num_input_tensors = num_input_tensors;
             curr_num_output_rows = num_output_rows_per_core;
         } else {
-            curr_num_input_tensors = 0;
             curr_num_output_rows = 0;
         }
 

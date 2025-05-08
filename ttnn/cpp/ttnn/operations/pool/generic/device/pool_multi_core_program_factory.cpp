@@ -78,10 +78,8 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
 
     TT_FATAL(nblocks == 1, "Multiple blocks not yet supported");
 
-    uint32_t tile_w = tt::constants::TILE_WIDTH;
     if (input_shape[3] < tt::constants::TILE_WIDTH) {
         TT_FATAL(input_shape[3] == 16, "Error");
-        tile_w = tt::constants::FACE_WIDTH;
     }
     uint32_t out_w_loop_count = std::ceil((float)out_w / nblocks);
 

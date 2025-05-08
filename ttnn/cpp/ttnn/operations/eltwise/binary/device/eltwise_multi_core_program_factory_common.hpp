@@ -95,7 +95,7 @@ inline __attribute__((always_inline)) void set_eltwise_binary_runtime_args(
         num_cores_total = all_device_cores.num_cores();
     }
 
-    uint32_t block_size_per_core_group_1 = 1, block_size_per_core_group_2 = 1, max_block_size = 1;
+    uint32_t block_size_per_core_group_1 = 1, block_size_per_core_group_2 = 1;
 
     uint32_t block_cnt_per_core_group_1, block_cnt_per_core_group_2;
 
@@ -113,7 +113,6 @@ inline __attribute__((always_inline)) void set_eltwise_binary_runtime_args(
         num_tiles_per_core_group_1 = shard_spec.value().shape[0] * shard_spec.value().shape[1] / TILE_HW;
         num_tiles_per_core_group_2 = 0;
         block_size_per_core_group_1 = find_max_block_size(num_tiles_per_core_group_1);
-        max_block_size = block_size_per_core_group_1;
 
         block_cnt_per_core_group_1 = num_tiles_per_core_group_1 / block_size_per_core_group_1;
         block_cnt_per_core_group_2 = num_tiles_per_core_group_2 / block_size_per_core_group_2;
@@ -180,23 +179,18 @@ inline __attribute__((always_inline)) void set_eltwise_binary_runtime_args(
         uint32_t num_tiles_per_core = 0;
         uint32_t block_cnt_per_core = 0;
         uint32_t block_size_per_core = 0;
-        uint32_t num_shards_per_height = 0;
         uint32_t num_shards_per_width = 0;
         uint32_t start_id = 0;
         if (shard_spec.has_value()) {
             if (sharded_layout == tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED) {
-                num_shards_per_height = num_cores;
                 num_shards_per_width = 1;
             } else if (sharded_layout == tt::tt_metal::TensorMemoryLayout::WIDTH_SHARDED) {
                 num_shards_per_width = num_cores;
-                num_shards_per_height = 1;
             } else {  // block sharded
                 auto bbox = core_group_1.bounding_box();
                 if (shard_spec.value().orientation == ShardOrientation::ROW_MAJOR) {
-                    num_shards_per_height = bbox.end_coord.y - bbox.start_coord.y + 1;
                     num_shards_per_width = bbox.end_coord.x - bbox.start_coord.x + 1;
                 } else {
-                    num_shards_per_height = bbox.end_coord.x - bbox.start_coord.x + 1;
                     num_shards_per_width = bbox.end_coord.y - bbox.start_coord.y + 1;
                 }
             }

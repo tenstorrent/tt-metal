@@ -24,14 +24,10 @@ MorehFoldOperation::ProgramFactory::cached_program_t MorehFoldOperation::Program
     auto output_shape = output.get_logical_shape();
     auto output_shape_rank = output.get_logical_shape().rank();
 
-    uint32_t kernel_size_product = 1;
     std::vector<uint32_t> ls;
-    uint32_t L = 1;
     for (uint32_t i = 0; i < 2; ++i) {
         uint32_t l = (((output_size[i] + 2 * padding[i] - dilation[i] * (kernel_size[i] - 1) - 1) / stride[i]) + 1);
-        L *= l;
         ls.push_back(l);
-        kernel_size_product *= kernel_size[i];
     }
     uint32_t N = output_shape_rank == 4 ? output_shape[0] : 1;
     uint32_t C = output_shape_rank == 4 ? output_shape[1] : output_shape[0];

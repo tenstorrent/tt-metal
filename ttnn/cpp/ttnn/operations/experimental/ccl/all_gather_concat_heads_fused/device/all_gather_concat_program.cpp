@@ -589,7 +589,6 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_concat_llama_sharded(
 
             uint32_t q_base_addr = temp_tensor.buffer()->address();
             uint32_t q_start_addr = q_base_addr;
-            uint32_t idx = 0;
             for (const auto& core : sender_worker_cores) {
                 auto& worker_reader_sender_runtime_args = worker_reader_sender_runtime_args_by_core[core.x][core.y];
                 worker_reader_sender_runtime_args[0] = input.buffer()->address();
@@ -598,8 +597,6 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_concat_llama_sharded(
                 auto& worker_writer_sender_runtime_args = worker_writer_sender_runtime_args_by_core[core.x][core.y];
                 worker_writer_sender_runtime_args[0] = q_start_addr;
                 worker_writer_sender_runtime_args[1] = semaphore.address();
-
-                idx++;
             }
 
             for (uint32_t i = 0; i < num_concat_worker_cores; ++i) {

@@ -69,7 +69,6 @@ operation::ProgramWithCallbacks paged_update_cache_multi_core(
 
     // Pagetable-specific parameters
     bool is_paged_cache = page_table.has_value();
-    uint32_t batch_size = 0;
     uint32_t block_size = 0;
     uint32_t block_size_t = 0;
     uint32_t max_blocks_per_seq = 0;
@@ -80,7 +79,6 @@ operation::ProgramWithCallbacks paged_update_cache_multi_core(
     if (is_paged_cache) {
         const auto& page_table_tensor = page_table.value();
 
-        batch_size = page_table_tensor.get_padded_shape()[0];
         block_size = cache_tensor.get_padded_shape()[2];
         block_size_t = block_size / TILE_HEIGHT;
         max_blocks_per_seq = page_table_tensor.get_padded_shape()[1];
