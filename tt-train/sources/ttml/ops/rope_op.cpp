@@ -11,7 +11,6 @@
 #include "autograd/graph_utils.hpp"
 #include "autograd/tensor.hpp"
 #include "core/compute_kernel_config.hpp"
-#include "core/distributed_mapping.hpp"
 #include "core/tt_tensor_utils.hpp"
 
 namespace ttml::ops {
