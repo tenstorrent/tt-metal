@@ -48,6 +48,31 @@ struct BufferReadWriteParams {
     BufferReadWriteExpected expected;
 };
 
+std::shared_ptr<tt::tt_metal::distributed::MeshBuffer> create_mesh_buffer_from_inputs(
+    const BufferDistributionSpecInputs& inputs, tt::tt_metal::distributed::MeshDevice* mesh_device) {
+    auto buffer_distribution_spec = tt::tt_metal::BufferDistributionSpec::from_shard_spec(
+        inputs.physical_tensor_shape,
+        inputs.physical_shard_shape,
+        inputs.page_shape,
+        inputs.grid,
+        inputs.shard_orientation);
+
+    // These values would be passed from tensor correctly based on PageConfig
+    const auto host_size = inputs.physical_tensor_shape.volume() * inputs.bytes_per_element;
+    const auto page_size = inputs.page_shape.height() * inputs.page_shape.width() * inputs.bytes_per_element;
+
+    // MeshBuffer params
+    const tt::tt_metal::distributed::DeviceLocalBufferConfig device_local_config{
+        .page_size = page_size,
+        .buffer_type = inputs.buffer_type,
+        .buffer_layout = tt::tt_metal::TensorMemoryLayout::BLOCK_SHARDED,
+        .buffer_distribution_spec = buffer_distribution_spec,
+    };
+
+    const tt::tt_metal::distributed::ReplicatedBufferConfig mesh_buffer_config{.size = host_size};
+    return tt::tt_metal::distributed::MeshBuffer::create(mesh_buffer_config, device_local_config, mesh_device);
+}
+
 std::shared_ptr<tt::tt_metal::Buffer> create_buffer_from_inputs(
     const BufferDistributionSpecInputs& inputs, tt::tt_metal::IDevice* device) {
     auto buffer_distribution_spec = tt::tt_metal::BufferDistributionSpec::from_shard_spec(

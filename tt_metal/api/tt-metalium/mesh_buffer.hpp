@@ -33,6 +33,8 @@ struct DeviceLocalBufferConfig {
     // Must be set for sharded buffer layouts.
     std::optional<ShardSpecBuffer> shard_parameters;
 
+    std::optional<BufferDistributionSpec> buffer_distribution_spec;
+
     // The direction in which memory for this buffer is allocated.
     std::optional<bool> bottom_up;
 };
@@ -79,7 +81,7 @@ class MeshBuffer {
 public:
     static std::shared_ptr<MeshBuffer> create(
         const MeshBufferConfig& mesh_buffer_config,
-        const DeviceLocalBufferConfig& device_local_layout,
+        const DeviceLocalBufferConfig& device_local_config,
         MeshDevice* mesh_device,
         std::optional<DeviceAddr> address = std::nullopt);
     ~MeshBuffer();
