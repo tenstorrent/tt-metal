@@ -508,6 +508,24 @@ def test_unary_ceil(input_shapes, device):
     assert_with_pcc(golden_tensor, output_tensor, 0.999)
 
 
+@pytest.mark.parametrize("h", [64])
+@pytest.mark.parametrize("w", [128])
+@pytest.mark.parametrize("dtype", [ttnn.float32, ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat4_b])
+def test_alt_complex_rotate90(device, h: int, w: int, dtype: ttnn.DataType):
+    ttnn_function = ttnn.alt_complex_rotate90
+    golden_function = ttnn.get_golden_function(ttnn_function)
+
+    torch.manual_seed(0)
+
+    tt_input = ttnn.from_torch(torch.randn([h, w]), device=device, layout=ttnn.TILE_LAYOUT, dtype=dtype)
+    torch_input = ttnn.to_torch(tt_input)
+
+    torch_output = golden_function(torch_input, device=device)
+    tt_output = ttnn_function(tt_input)
+
+    assert torch.equal(torch_output, ttnn.to_torch(tt_output))
+
+
 @pytest.mark.parametrize(
     "input_shapes",
     [
