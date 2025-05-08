@@ -12,8 +12,8 @@ void kernel_main() {
     constexpr uint32_t cb_out0 = tt::CBIndex::c_16;
     const uint32_t tile_size_bytes = get_tile_size(cb_out0);
 
-    // Address generator for the output buffer. This is faster than doing plain DRAM writes.
-    const InterleavedAddrGenFast<true> c = {
+    // Address of the output buffer
+    const InterleavedAddrGenFast<true> out0 = {
         .bank_base_address = c_addr,
         .page_size = tile_size_bytes,
         .data_format = DataFormat::Float16_b,
@@ -25,7 +25,7 @@ void kernel_main() {
         cb_wait_front(cb_out0, 1);
         uint32_t cb_out0_addr = get_read_ptr(cb_out0);
         // write the tile to DRAM
-        noc_async_write_tile(i, c, cb_out0_addr);
+        noc_async_write_tile(i, out0, cb_out0_addr);
         noc_async_write_barrier();  // This will wait until the write is done. As an alternative,
                                     // noc_async_write_flushed() can be faster because it waits
                                     // until the write request is sent. In that case, you have to
