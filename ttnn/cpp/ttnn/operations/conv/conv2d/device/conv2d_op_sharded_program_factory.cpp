@@ -569,7 +569,6 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
         "Expected input channels to be padded for 16 byte alignment in L1 ({} % 16 != 0)",
         input_channels_padded);
     if (enable_split_reader) {
-        TT_FATAL(not weight_width_sliced, "split reader does not work with 2d conv");
         TT_FATAL(
             (act_block_h_ntiles / block_config.out_subblock_h_ntiles) >= 2,
             "split reader needs to have at leaset two subblocks");
