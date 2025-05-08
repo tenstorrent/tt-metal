@@ -23,7 +23,7 @@ void HCSumReduce::validate(const std::vector<Tensor>& input_tensors) const {
         input_tensor_a.buffer() != nullptr, "Operands to ssm_1d_sum_reduce need to be allocated in buffers on device!");
 
     TT_FATAL(
-        input_tensor_a.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED,
+        input_tensor_a.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
         "Unsupported memory layout for input a!");
     TT_FATAL(
         input_tensor_a.get_dtype() == tt::tt_metal::DataType::BFLOAT16 ||
@@ -31,7 +31,8 @@ void HCSumReduce::validate(const std::vector<Tensor>& input_tensors) const {
         "Unsupported data format for input a!");
 
     TT_FATAL(
-        this->memory_config.memory_layout == TensorMemoryLayout::INTERLEAVED, "Unsupported memory layout for output!");
+        this->memory_config.memory_layout() == TensorMemoryLayout::INTERLEAVED,
+        "Unsupported memory layout for output!");
     TT_FATAL(
         this->dtype == tt::tt_metal::DataType::BFLOAT16 || this->dtype == tt::tt_metal::DataType::BFLOAT8_B,
         "Unsupported data format for output!");

@@ -18,7 +18,6 @@ void CumprodDeviceOperation::validate_on_program_cache_miss(
     const auto& input_tensor{tensor_args.input_tensor};
     auto& optional_out{tensor_args.optional_out};
     auto out_memory_config{optional_out.has_value() ? optional_out->memory_config() : attributes.output_memory_config};
-    auto out_dtype = DataType::INVALID;
     const auto& input_dtype{attributes.dtype};
     const auto& dim = attributes.dim;
 
@@ -32,10 +31,6 @@ void CumprodDeviceOperation::validate_on_program_cache_miss(
             "Preallocated tensor's shape: {}",
             computed_output_shape,
             preallocated_output_shape);
-
-        out_dtype = optional_out->get_dtype();
-    } else {
-        out_dtype = input_tensor.get_dtype();
     }
 
     TT_FATAL(
@@ -64,10 +59,10 @@ void CumprodDeviceOperation::validate_on_program_cache_miss(
         magic_enum::enum_name(input_tensor.get_layout()));
 
     TT_FATAL(
-        input_tensor.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED,
+        input_tensor.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
         "The ttnn.cumprod operation requires the memory layout of the input tensor to be "
         "interleaved. Instead, it is {}.",
-        magic_enum::enum_name(input_tensor.memory_config().memory_layout));
+        magic_enum::enum_name(input_tensor.memory_config().memory_layout()));
 }
 
 void CumprodDeviceOperation::validate_on_program_cache_hit(

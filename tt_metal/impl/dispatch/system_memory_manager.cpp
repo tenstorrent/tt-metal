@@ -4,7 +4,7 @@
 
 #include "impl/context/metal_context.hpp"
 #include <tt-metalium/command_queue_common.hpp>
-#include <tt-metalium/system_memory_manager.hpp>
+#include "system_memory_manager.hpp"
 #include <tt-metalium/tt_align.hpp>
 #include <algorithm>
 #include <atomic>

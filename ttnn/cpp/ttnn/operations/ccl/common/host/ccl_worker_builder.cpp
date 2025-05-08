@@ -161,7 +161,6 @@ void generate_ccl_slice_sequence_commands_impl(
             auto header_index = args_out.size();
             args_out.push_back(static_cast<uint32_t>(ttnn::ccl::cmd::CclCommandHeader::to_uint32(
                 ttnn::ccl::cmd::CclCommandHeader{command_type, dest_args, 1})));
-            std::size_t num_args = 0;
 
             // tensor shape
             if (last_slice.tensor_shape != slice.tensor_shape) {
@@ -175,8 +174,6 @@ void generate_ccl_slice_sequence_commands_impl(
                 for (std::size_t j = args_out.size() - num_words_for_args; j < args_out.size(); j++) {
                     log_trace(tt::LogOp, "\t{}", args_out[j]);
                 }
-
-                num_args++;
             }
 
             // tensor slice shape
@@ -192,8 +189,6 @@ void generate_ccl_slice_sequence_commands_impl(
                 for (std::size_t i = args_out.size() - num_words_for_args; i < args_out.size(); i++) {
                     log_trace(tt::LogOp, "\t{}", args_out[i]);
                 }
-
-                num_args++;
             }
 
             // tensor slice offset
@@ -209,8 +204,6 @@ void generate_ccl_slice_sequence_commands_impl(
                 for (std::size_t j = args_out.size() - num_words_for_args; j < args_out.size(); j++) {
                     log_trace(tt::LogOp, "\t{}", args_out[j]);
                 }
-
-                num_args++;
             }
 
             // worker slice offset
@@ -228,7 +221,6 @@ void generate_ccl_slice_sequence_commands_impl(
                 for (std::size_t j = args_out.size() - num_words_for_args; j < args_out.size(); j++) {
                     log_trace(tt::LogOp, "\t{}", args_out[j]);
                 }
-                num_args++;
             }
 
             // worker_pages_per_slice
@@ -244,8 +236,6 @@ void generate_ccl_slice_sequence_commands_impl(
                 for (std::size_t j = args_out.size() - num_words_for_args; j < args_out.size(); j++) {
                     log_trace(tt::LogOp, "\t{}", args_out[j]);
                 }
-
-                num_args++;
             }
 
             args_out[header_index] = static_cast<uint32_t>(ttnn::ccl::cmd::CclCommandHeader::to_uint32(
@@ -1771,7 +1761,7 @@ std::vector<uint32_t> CCLWorkerArgBuilder::generate_sender_writer_kernel_rt_args
 std::vector<uint32_t> CCLWorkerArgBuilder::generate_sender_reader_kernel_ct_args() const {
     auto const& input_tensor = this->op_config.get_input_tensor(0);
     std::vector<uint32_t> args = {
-        static_cast<uint32_t>(input_tensor.memory_config().memory_layout),  // tensor memory layout
+        static_cast<uint32_t>(input_tensor.memory_config().memory_layout()),  // tensor memory layout
         static_cast<uint32_t>(input_tensor.buffer()->buffer_type()),        // buffer type
         static_cast<uint32_t>(input_tensor.layout()),                       // page layout
         static_cast<uint32_t>(tt::CB::c_in0)                                // cb_id
@@ -1786,7 +1776,7 @@ std::vector<uint32_t> CCLWorkerArgBuilder::generate_sender_reader_kernel_ct_args
 std::vector<uint32_t> CCLWorkerArgBuilder::generate_sender_writer_kernel_ct_args() const {
     auto const& output_tensor = this->op_config.get_output_tensor(0);
     std::vector<uint32_t> args = {
-        static_cast<uint32_t>(output_tensor.memory_config().memory_layout),  // tensor memory layout
+        static_cast<uint32_t>(output_tensor.memory_config().memory_layout()),  // tensor memory layout
         static_cast<uint32_t>(output_tensor.buffer()->buffer_type()),        // buffer type
         static_cast<uint32_t>(output_tensor.layout()),                       // page layout
         static_cast<uint32_t>(tt::CB::c_in0)                                 // cb_id

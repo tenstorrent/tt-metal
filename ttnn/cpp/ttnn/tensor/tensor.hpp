@@ -141,12 +141,12 @@ public:
 
     Tensor to_device(
         IDevice* target_device,
-        const MemoryConfig& mem_config = {.memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED},
+        const MemoryConfig& mem_config = MemoryConfig{},
         ttnn::QueueId cq_id = ttnn::DefaultQueueId) const;
 
     Tensor to_device(
         distributed::MeshDevice* mesh_device,
-        const MemoryConfig& mem_config = {.memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED},
+        const MemoryConfig& mem_config = MemoryConfig{},
         ttnn::QueueId cq_id = ttnn::DefaultQueueId) const;
 
     Tensor to_layout(Layout target_layout, IDevice* worker = nullptr) const;
@@ -267,7 +267,7 @@ public:
     std::vector<IDevice*> active_physical_devices() const;
 
     const MemoryConfig& memory_config() const { return get_tensor_spec().tensor_layout().get_memory_config(); }
-    const std::optional<ShardSpec>& shard_spec() const { return this->memory_config().shard_spec; }
+    const std::optional<ShardSpec>& shard_spec() const { return this->memory_config().shard_spec(); }
 
     bool is_sharded() const;
 
@@ -293,7 +293,7 @@ Tensor create_device_tensor(
     DataType dtype,
     Layout layout,
     IDevice* device,
-    const MemoryConfig& memory_config = {.memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED},
+    const MemoryConfig& memory_config = MemoryConfig{},
     const std::optional<Tile>& tile = std::nullopt);
 
 // The set of memcpy functions below are used to copy data between host buffers/tensors and single-device tensors
