@@ -62,6 +62,9 @@ public:
     // Trivial setter for prefetch_scratch_db_size
     DispatchSettings& prefetch_scratch_db_size(uint32_t val);
 
+    // Trivial setter for prefetch_ringbuffer_size
+    DispatchSettings& prefetch_ringbuffer_size(uint32_t val);
+
     // Setter for prefetch_q_entries and update prefetch_q_size
     DispatchSettings& prefetch_q_entries(uint32_t val);
 
@@ -158,6 +161,7 @@ public:
     uint32_t prefetch_max_cmd_size_;
     uint32_t prefetch_cmddat_q_size_;
     uint32_t prefetch_scratch_db_size_;
+    uint32_t prefetch_ringbuffer_size_;
     uint32_t prefetch_d_buffer_size_;
     uint32_t prefetch_d_pages_;  // prefetch_d_buffer_size_ / PREFETCH_D_BUFFER_LOG_PAGE_SIZE
 
