@@ -23,7 +23,7 @@
 #include <tt_stl/strong_type.hpp>
 #include "ttnn/async_runtime.hpp"
 #include "ttnn/common/queue_id.hpp"
-#include "ttnn/operations/creation.hpp"
+#include "ttnn/cpp/ttnn/operations/creation.hpp"
 #include "ttnn/decorators.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/operations/moreh/moreh_sum/moreh_sum.hpp"

@@ -10,8 +10,8 @@
 
 #include "ttnn/tensor/tensor_utils.hpp"
 
-#include "ttnn/operations/data_movement/pad/pad.hpp"
-#include "ttnn/operations/copy.hpp"
+#include "cpp/ttnn/operations/data_movement/pad/pad.hpp"
+#include "cpp/ttnn/operations/copy.hpp"
 
 namespace ttnn {
 
