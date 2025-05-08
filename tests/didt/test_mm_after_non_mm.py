@@ -32,7 +32,7 @@ class FF1Test(OpTestBase):
         compute_config,
         loop_count=1,
         determinism_check_enabled=False,
-        determinism_check_iterations=False,
+        determinism_check_interval=False,
         non_mm_loops=1000,
         mm_loops=10,
     ):
@@ -52,7 +52,7 @@ class FF1Test(OpTestBase):
             compute_config,
             loop_count,
             determinism_check_enabled,
-            determinism_check_iterations,
+            determinism_check_interval,
         )
         self.non_mm_loops = (non_mm_loops,)
         self.mm_loops = (mm_loops,)
@@ -121,8 +121,8 @@ def test_ff1_matmul(
     mesh_device,
     gelu,
     math_fidelity,
-    iterations,
-    determinism_check_iterations,
+    didt_workload_iterations,
+    determinism_check_interval,
     use_program_cache,
     loop_counts,
     grid_size=(13, 10),
@@ -142,19 +142,6 @@ def test_ff1_matmul(
     # Initialize matmul configurations
     out_subblock_h = 1
     out_subblock_w = 8
-
-    subblock_1x1 = os.getenv("TT_USE_1X1_SUBBLOCK") == "1"
-    if subblock_1x1:
-        out_subblock_h = 1
-        out_subblock_w = 1
-
-    fidelity_env = int(os.getenv("TT_MATH_FIDELITY", default=1))
-    if fidelity_env == 2:
-        math_fidelity = ttnn.MathFidelity.HiFi2
-    elif fidelity_env == 3:
-        math_fidelity = ttnn.MathFidelity.HiFi3
-    elif fidelity_env == 4:
-        math_fidelity = ttnn.MathFidelity.HiFi4
 
     program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
         compute_with_storage_grid_size=(compute_grid.x, compute_grid.y),
@@ -201,9 +188,9 @@ def test_ff1_matmul(
         in1_layout=ttnn.TILE_LAYOUT,
         program_config=program_config,
         compute_config=compute_config,
-        loop_count=iterations,
-        determinism_check_enabled=True if determinism_check_iterations > 0 else False,
-        determinism_check_iterations=determinism_check_iterations,
+        loop_count=didt_workload_iterations,
+        determinism_check_enabled=True if determinism_check_interval > 0 else False,
+        determinism_check_interval=determinism_check_interval,
         non_mm_loops=loop_counts[0],
         mm_loops=loop_counts[1],
     )

@@ -31,7 +31,7 @@ class BinaryMulTest(OpTestBase):
         gelu,
         loop_count=1000,
         determinism_check_enabled=False,
-        determinism_check_iterations=False,
+        determinism_check_interval=False,
     ):
         super().__init__(
             mesh_device,
@@ -49,7 +49,7 @@ class BinaryMulTest(OpTestBase):
             gelu,
             loop_count,
             determinism_check_enabled,
-            determinism_check_iterations,
+            determinism_check_interval,
         )
         self.gelu = gelu
 
@@ -84,8 +84,8 @@ def test_binary_mul(
     mesh_device,
     gelu,
     math_fidelity,
-    iterations,
-    determinism_check_iterations,
+    didt_workload_iterations,
+    determinism_check_interval,
     use_program_cache,
     grid_size=(13, 10),
 ):
@@ -120,9 +120,9 @@ def test_binary_mul(
         in1_layout=ttnn.TILE_LAYOUT,
         compute_config=compute_config,
         gelu=gelu,
-        loop_count=iterations,
-        determinism_check_enabled=True if determinism_check_iterations > 0 else False,
-        determinism_check_iterations=determinism_check_iterations,
+        loop_count=didt_workload_iterations,
+        determinism_check_enabled=True if determinism_check_interval > 0 else False,
+        determinism_check_interval=determinism_check_interval,
     )
 
     # Run test

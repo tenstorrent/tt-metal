@@ -29,7 +29,7 @@ class FF1Test(OpTestBase):
         compute_config,
         loop_count=1000,
         determinism_check_enabled=False,
-        determinism_check_iterations=False,
+        determinism_check_interval=False,
     ):
         super().__init__(
             mesh_device,
@@ -47,7 +47,7 @@ class FF1Test(OpTestBase):
             compute_config,
             loop_count,
             determinism_check_enabled,
-            determinism_check_iterations,
+            determinism_check_interval,
         )
 
 
@@ -74,8 +74,8 @@ def test_ff1_matmul(
     mesh_device,
     gelu,
     math_fidelity,
-    iterations,
-    determinism_check_iterations,
+    didt_workload_iterations,
+    determinism_check_interval,
     use_program_cache,
     grid_size=(8, 8),
 ):
@@ -115,21 +115,6 @@ def test_ff1_matmul(
     out_subblock_h = 1
     out_subblock_w = 8
 
-    subblock_1x1 = os.getenv("TT_USE_1X1_SUBBLOCK") == "1"
-    if subblock_1x1:
-        out_subblock_h = 1
-        out_subblock_w = 1
-
-    fidelity_env = int(os.getenv("TT_MATH_FIDELITY", default=1))
-    if fidelity_env == 0:
-        math_fidelity = ttnn.MathFidelity.LoFi
-    if fidelity_env == 2:
-        math_fidelity = ttnn.MathFidelity.HiFi2
-    elif fidelity_env == 3:
-        math_fidelity = ttnn.MathFidelity.HiFi3
-    elif fidelity_env == 4:
-        math_fidelity = ttnn.MathFidelity.HiFi4
-
     program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
         compute_with_storage_grid_size=(compute_grid.x, compute_grid.y),
         in0_block_w=3,
@@ -166,9 +151,9 @@ def test_ff1_matmul(
         in1_layout=ttnn.TILE_LAYOUT,
         program_config=program_config,
         compute_config=compute_config,
-        loop_count=iterations,
-        determinism_check_enabled=True if determinism_check_iterations > 0 else False,
-        determinism_check_iterations=determinism_check_iterations,
+        loop_count=didt_workload_iterations,
+        determinism_check_enabled=True if determinism_check_interval > 0 else False,
+        determinism_check_interval=determinism_check_interval,
     )
 
     # Run test
@@ -193,7 +178,13 @@ def test_ff1_matmul(
     indirect=["mesh_device"],
 )
 def test_specific_chip_ff1_matmul(
-    mesh_device, logical_chip_id, gelu, math_fidelity, iterations, determinism_check_iterations, use_program_cache
+    mesh_device,
+    logical_chip_id,
+    gelu,
+    math_fidelity,
+    didt_workload_iterations,
+    determinism_check_interval,
+    use_program_cache,
 ):
     assert len(mesh_device.get_device_ids()) > logical_chip_id, "Not enough devices!"
 
@@ -201,8 +192,8 @@ def test_specific_chip_ff1_matmul(
         mesh_device.get_device(logical_chip_id),
         gelu,
         math_fidelity,
-        iterations,
-        determinism_check_iterations,
+        didt_workload_iterations,
+        determinism_check_interval,
         use_program_cache,
         False,
     )
@@ -221,14 +212,19 @@ def test_specific_chip_ff1_matmul(
     indirect=["t3k_single_board_mesh_device"],
 )
 def test_specific_board_ff1_matmul(
-    t3k_single_board_mesh_device, gelu, math_fidelity, iterations, determinism_check_iterations, use_program_cache
+    t3k_single_board_mesh_device,
+    gelu,
+    math_fidelity,
+    didt_workload_iterations,
+    determinism_check_interval,
+    use_program_cache,
 ):
     test_ff1_matmul(
         t3k_single_board_mesh_device,
         gelu,
         math_fidelity,
-        iterations,
-        determinism_check_iterations,
+        didt_workload_iterations,
+        determinism_check_interval,
         use_program_cache,
         False,
     )
@@ -256,14 +252,14 @@ def test_specific_board_ff1_matmul(
     indirect=["mesh_device"],
 )
 def test_grid_size_ff1_matmul(
-    mesh_device, gelu, math_fidelity, grid_size, iterations, determinism_check_iterations, use_program_cache
+    mesh_device, gelu, math_fidelity, grid_size, didt_workload_iterations, determinism_check_interval, use_program_cache
 ):
     test_ff1_matmul(
         mesh_device,
         gelu,
         math_fidelity,
-        iterations,
-        determinism_check_iterations,
+        didt_workload_iterations,
+        determinism_check_interval,
         use_program_cache,
         False,
         grid_size=grid_size,
@@ -293,14 +289,14 @@ def test_grid_size_ff1_matmul(
     indirect=["mesh_device"],
 )
 def test_blackhole_grid_size_ff1_matmul(
-    mesh_device, gelu, math_fidelity, grid_size, iterations, determinism_check_iterations, use_program_cache
+    mesh_device, gelu, math_fidelity, grid_size, didt_workload_iterations, determinism_check_interval, use_program_cache
 ):
     test_ff1_matmul(
         mesh_device,
         gelu,
         math_fidelity,
-        iterations,
-        determinism_check_iterations,
+        didt_workload_iterations,
+        determinism_check_interval,
         use_program_cache,
         False,
         grid_size=grid_size,

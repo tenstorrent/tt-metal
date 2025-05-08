@@ -28,7 +28,7 @@ class OpTestBase:
         compute_config,
         loop_count=1000,
         determinism_check_enabled=False,
-        determinism_check_iterations=False,
+        determinism_check_interval=False,
     ):
         self.mesh_device = mesh_device
         # This will be removed once we rebase onto new main with the new open_mesh_device API
@@ -55,7 +55,7 @@ class OpTestBase:
         self.compute_config = compute_config
         self.loop_count = loop_count
         self.determinism_check_enabled = determinism_check_enabled
-        self.determinism_check_iterations = determinism_check_iterations
+        self.determinism_check_interval = determinism_check_interval
 
         # Weights and activations tensors are needed for subclasses to run the operation
         self.activations = None
@@ -177,7 +177,7 @@ class OpTestBase:
                 logger.info(f"End sync device id: {device_idx}")
 
             # Check if the output matches the first run output
-            if self.determinism_check_enabled and i % self.determinism_check_iterations == 0:
+            if self.determinism_check_enabled and i % self.determinism_check_interval == 0:
                 outputs = [ttnn.to_torch(shard) for shard in ttnn.get_device_tensors(out.cpu())]
 
                 for output_id in range(num_devices):

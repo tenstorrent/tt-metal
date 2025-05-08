@@ -523,14 +523,13 @@ def pytest_addoption(parser):
         help="Enable process timeout",
     )
     parser.addoption(
-        "--iterations",
+        "--didt-workload-iterations",
         action="store",
         default=None,
-        help="Number of iterations to run",
+        help="Number of workload iterations to run for didt tests",
     )
-
     parser.addoption(
-        "--determinism-check-iterations",
+        "--determinism-check-interval",
         action="store",
         default=None,
         help="Check determinism every nth iteration",
@@ -539,17 +538,18 @@ def pytest_addoption(parser):
 
 # Indicates the iteration interval at which determinism is verified for the op output
 @pytest.fixture
-def determinism_check_iterations(request):
-    iterations = request.config.getoption("--determinism-check-iterations")
+def determinism_check_interval(request):
+    iterations = request.config.getoption("--determinism-check-interval")
     if iterations is not None:
         # this will throw an error if bad value is passed
         return int(iterations)
     return -1
 
 
+# Indicated the number of workload iterations to run within didt tests
 @pytest.fixture
-def iterations(request):
-    iterations = request.config.getoption("--iterations")
+def didt_workload_iterations(request):
+    iterations = request.config.getoption("--didt-workload-iterations")
     if iterations is not None:
         # this will throw an error if bad value is passed
         return int(iterations)

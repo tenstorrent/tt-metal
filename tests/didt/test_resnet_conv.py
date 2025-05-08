@@ -46,7 +46,7 @@ class ResnetConvTest(OpTestBase):
         weights_df_on_device,
         loop_count=1000,
         determinism_check_enabled=False,
-        determinism_check_iterations=False,
+        determinism_check_interval=False,
         compute_with_storage_grid_size=(8, 8),
     ):
         super().__init__(
@@ -65,7 +65,7 @@ class ResnetConvTest(OpTestBase):
             compute_config,
             loop_count,
             determinism_check_enabled,
-            determinism_check_iterations,
+            determinism_check_interval,
         )
         self.compute_with_storage_grid_size = compute_with_storage_grid_size
         self.input_channels = input_channels
@@ -154,7 +154,7 @@ class ResnetConvTest(OpTestBase):
     ],
     indirect=["mesh_device"],
 )
-def test_resnet_conv(mesh_device, iterations, determinism_check_iterations, use_program_cache):
+def test_resnet_conv(mesh_device, didt_workload_iterations, determinism_check_interval, use_program_cache):
     groups = 1
     dilation = 1
     pad_w = 0
@@ -167,12 +167,6 @@ def test_resnet_conv(mesh_device, iterations, determinism_check_iterations, use_
     input_width = 115
     batch_size = 16
     compute_with_storage_grid_size = (13, 10) if is_blackhole() else (8, 8)
-
-    if os.getenv("TT_CONV_6x8") == "1":
-        batch_size = 12
-        compute_with_storage_grid_size = (6, 8)
-        logger.info("Using batch size 12 for TT_CONV_6x8=1")
-        assert False, "Needs conv fixes for TT_CONV_6x8 to work"
 
     output_channels = 64
     input_channels = 16
@@ -246,9 +240,9 @@ def test_resnet_conv(mesh_device, iterations, determinism_check_iterations, use_
         weights_block_h,
         weights_block_w,
         weights_dtype,
-        loop_count=iterations,
-        determinism_check_enabled=True if determinism_check_iterations > 0 else False,
-        determinism_check_iterations=determinism_check_iterations,
+        loop_count=didt_workload_iterations,
+        determinism_check_enabled=True if determinism_check_interval > 0 else False,
+        determinism_check_interval=determinism_check_interval,
         compute_with_storage_grid_size=compute_with_storage_grid_size,
     )
 
@@ -269,12 +263,16 @@ def test_resnet_conv(mesh_device, iterations, determinism_check_iterations, use_
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 def test_specific_chip_resnet_conv(
-    mesh_device, logical_chip_id, iterations, determinism_check_iterations, use_program_cache
+    mesh_device, logical_chip_id, didt_workload_iterations, determinism_check_interval, use_program_cache
 ):
     assert len(mesh_device.get_device_ids()) > logical_chip_id, "Not enough devices!"
 
     test_resnet_conv(
-        mesh_device.get_device(logical_chip_id), iterations, determinism_check_iterations, use_program_cache, False
+        mesh_device.get_device(logical_chip_id),
+        didt_workload_iterations,
+        determinism_check_interval,
+        use_program_cache,
+        False,
     )
 
 
@@ -287,6 +285,8 @@ def test_specific_chip_resnet_conv(
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 def test_specific_board_resnet_conv(
-    t3k_single_board_mesh_device, iterations, determinism_check_iterations, use_program_cache
+    t3k_single_board_mesh_device, didt_workload_iterations, determinism_check_interval, use_program_cache
 ):
-    test_resnet_conv(t3k_single_board_mesh_device, iterations, determinism_check_iterations, use_program_cache, False)
+    test_resnet_conv(
+        t3k_single_board_mesh_device, didt_workload_iterations, determinism_check_interval, use_program_cache, False
+    )

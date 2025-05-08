@@ -18,8 +18,8 @@ from tests.didt.test_lm_head_matmul import test_lm_head_matmul, test_specific_ch
     ],
     indirect=["mesh_device"],
 )
-def test_reproduce_lm_head_nd_32(mesh_device, iterations, use_program_cache):
-    test_lm_head_matmul(mesh_device, iterations, -1, use_program_cache)
+def test_reproduce_lm_head_nd_32(mesh_device, didt_workload_iterations, use_program_cache):
+    test_lm_head_matmul(mesh_device, didt_workload_iterations, -1, use_program_cache)
 
 
 @pytest.mark.parametrize(
@@ -36,8 +36,8 @@ def test_reproduce_lm_head_nd_32(mesh_device, iterations, use_program_cache):
         "logical_chip7",
     ],
 )
-def test_specific_chip_lm_head_nd_32(mesh_device, logical_chip_index, iterations, use_program_cache):
-    test_specific_chip_lm_head_matmul(mesh_device, logical_chip_index, iterations, -1, use_program_cache)
+def test_specific_chip_lm_head_nd_32(mesh_device, logical_chip_index, didt_workload_iterations, use_program_cache):
+    test_specific_chip_lm_head_matmul(mesh_device, logical_chip_index, didt_workload_iterations, -1, use_program_cache)
 
 
 @pytest.mark.parametrize(
@@ -49,11 +49,11 @@ def test_specific_chip_lm_head_nd_32(mesh_device, logical_chip_index, iterations
     ],
     indirect=["mesh_device"],
 )
-def test_determinism(mesh_device, iterations, determinism_check_iterations, use_program_cache):
-    if determinism_check_iterations == -1:
-        determinism_check_iterations = 1
+def test_determinism(mesh_device, didt_workload_iterations, determinism_check_interval, use_program_cache):
+    if determinism_check_interval == -1:
+        determinism_check_interval = 1
 
-    test_lm_head_matmul(mesh_device, iterations, determinism_check_iterations, use_program_cache)
+    test_lm_head_matmul(mesh_device, didt_workload_iterations, determinism_check_interval, use_program_cache)
 
 
 @pytest.mark.parametrize(
@@ -71,11 +71,11 @@ def test_determinism(mesh_device, iterations, determinism_check_iterations, use_
     ],
 )
 def test_determinism_specific_chip(
-    mesh_device, logical_chip_index, iterations, determinism_check_iterations, use_program_cache
+    mesh_device, logical_chip_index, didt_workload_iterations, determinism_check_interval, use_program_cache
 ):
-    if determinism_check_iterations == -1:
-        determinism_check_iterations = 1
+    if determinism_check_interval == -1:
+        determinism_check_interval = 1
 
     test_specific_chip_lm_head_matmul(
-        mesh_device, logical_chip_index, iterations, determinism_check_iterations, use_program_cache
+        mesh_device, logical_chip_index, didt_workload_iterations, determinism_check_interval, use_program_cache
     )

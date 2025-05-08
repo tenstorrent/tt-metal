@@ -29,7 +29,7 @@ class LMHeadTest(OpTestBase):
         compute_config,
         loop_count=1000,
         determinism_check_enabled=False,
-        determinism_check_iterations=False,
+        determinism_check_interval=False,
     ):
         super().__init__(
             mesh_device,
@@ -47,7 +47,7 @@ class LMHeadTest(OpTestBase):
             compute_config,
             loop_count,
             determinism_check_enabled,
-            determinism_check_iterations,
+            determinism_check_interval,
         )
 
     def generate_torch_weights(self, shape):
@@ -64,7 +64,9 @@ class LMHeadTest(OpTestBase):
     ],
     indirect=["mesh_device"],
 )
-def test_lm_head_matmul(mesh_device, iterations, determinism_check_iterations, use_program_cache, grid_size=(8, 8)):
+def test_lm_head_matmul(
+    mesh_device, didt_workload_iterations, determinism_check_interval, use_program_cache, grid_size=(8, 8)
+):
     if is_blackhole() and mesh_device.get_num_devices() > 1:
         pytest.skip("Multi-chip Blackhole has not been tested")
 
@@ -85,30 +87,12 @@ def test_lm_head_matmul(mesh_device, iterations, determinism_check_iterations, u
     per_core_N = 32
     weights_n = (per_core_N * (compute_grid.x * compute_grid.y) * 32) - 512
 
-    sync_short_pause = os.getenv("TT_SYNC_SHORT_PAUSE") == "1"
-    if sync_short_pause:
-        per_core_N = 8
-        weights_n = (per_core_N * (compute_grid.x * compute_grid.y) * 32) - 128
-        in1_dtype = ttnn.DataType.BFLOAT4_B
-
     out_subblock_h = 1
     out_subblock_w = 8
     assert per_core_M % out_subblock_h == 0
     assert per_core_N % out_subblock_w == 0
 
-    subblock_1x1 = os.getenv("TT_USE_1X1_SUBBLOCK") == "1"
-    if subblock_1x1:
-        out_subblock_h = 1
-        out_subblock_w = 1
-
-    fidelity_env = int(os.getenv("TT_MATH_FIDELITY", default=1))
     math_fidelity = ttnn.MathFidelity.LoFi
-    if fidelity_env == 2:
-        math_fidelity = ttnn.MathFidelity.HiFi2
-    elif fidelity_env == 3:
-        math_fidelity = ttnn.MathFidelity.HiFi3
-    elif fidelity_env == 4:
-        math_fidelity = ttnn.MathFidelity.HiFi4
 
     program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
         compute_with_storage_grid_size=(compute_grid.x, compute_grid.y),
@@ -147,9 +131,9 @@ def test_lm_head_matmul(mesh_device, iterations, determinism_check_iterations, u
         in1_layout=ttnn.TILE_LAYOUT,
         program_config=program_config,
         compute_config=compute_config,
-        loop_count=iterations,
-        determinism_check_enabled=True if determinism_check_iterations > 0 else False,
-        determinism_check_iterations=determinism_check_iterations,
+        loop_count=didt_workload_iterations,
+        determinism_check_enabled=True if determinism_check_interval > 0 else False,
+        determinism_check_interval=determinism_check_interval,
     )
 
     # Run test
@@ -169,12 +153,16 @@ def test_lm_head_matmul(mesh_device, iterations, determinism_check_iterations, u
     indirect=["mesh_device"],
 )
 def test_specific_chip_lm_head_matmul(
-    mesh_device, logical_chip_id, iterations, determinism_check_iterations, use_program_cache
+    mesh_device, logical_chip_id, didt_workload_iterations, determinism_check_interval, use_program_cache
 ):
     assert len(mesh_device.get_device_ids()) > logical_chip_id, "Not enough devices!"
 
     test_lm_head_matmul(
-        mesh_device.get_device(logical_chip_id), iterations, determinism_check_iterations, use_program_cache, False
+        mesh_device.get_device(logical_chip_id),
+        didt_workload_iterations,
+        determinism_check_interval,
+        use_program_cache,
+        False,
     )
 
 
@@ -186,10 +174,10 @@ def test_specific_chip_lm_head_matmul(
     indirect=["t3k_single_board_mesh_device"],
 )
 def test_specific_board_lm_head_matmul(
-    t3k_single_board_mesh_device, iterations, determinism_check_iterations, use_program_cache
+    t3k_single_board_mesh_device, didt_workload_iterations, determinism_check_interval, use_program_cache
 ):
     test_lm_head_matmul(
-        t3k_single_board_mesh_device, iterations, determinism_check_iterations, use_program_cache, False
+        t3k_single_board_mesh_device, didt_workload_iterations, determinism_check_interval, use_program_cache, False
     )
 
 
@@ -209,9 +197,11 @@ def test_specific_board_lm_head_matmul(
     ],
     indirect=["mesh_device"],
 )
-def test_grid_size_lm_head_matmul(mesh_device, grid_size, iterations, determinism_check_iterations, use_program_cache):
+def test_grid_size_lm_head_matmul(
+    mesh_device, grid_size, didt_workload_iterations, determinism_check_interval, use_program_cache
+):
     test_lm_head_matmul(
-        mesh_device, iterations, determinism_check_iterations, use_program_cache, False, grid_size=grid_size
+        mesh_device, didt_workload_iterations, determinism_check_interval, use_program_cache, False, grid_size=grid_size
     )
 
 
@@ -233,8 +223,8 @@ def test_grid_size_lm_head_matmul(mesh_device, grid_size, iterations, determinis
     indirect=["mesh_device"],
 )
 def test_blackhole_grid_size_lm_head_matmul(
-    mesh_device, grid_size, iterations, determinism_check_iterations, use_program_cache
+    mesh_device, grid_size, didt_workload_iterations, determinism_check_interval, use_program_cache
 ):
     test_lm_head_matmul(
-        mesh_device, iterations, determinism_check_iterations, use_program_cache, False, grid_size=grid_size
+        mesh_device, didt_workload_iterations, determinism_check_interval, use_program_cache, False, grid_size=grid_size
     )

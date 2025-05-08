@@ -39,15 +39,15 @@ On T3000 systems, you can target a specific board (local and remote chip togethe
 
 ### Iterations
 
-By default, we run 100000 iterations of the loop, but you can override that behavior using --iterations option:
+By default, we run 100000 iterations of the workload loop, but you can override that behavior using `--didt-workload-iterations` option:
 
-`WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest tests/didt/test_ff1_matmul.py::test_ff1_matmul -k "without_gelu and 2chips" --iterations 5000000`
+`WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest tests/didt/test_ff1_matmul.py::test_ff1_matmul -k "without_gelu and 2chips" --didt-workload-iterations 5000000`
 
 ### Determinism
 
-If you wish to check if the output is deterministic, simply pass in the --determinism-check-iteration option - the option tells on how many iterations we do the determinism check. Example:
+If you wish to check if the output is deterministic, simply pass in the `--determinism-check-interval` option - the option tells on how many iterations we do the determinism check. Example:
 
-`WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest tests/didt/test_ff1_matmul.py::test_ff1_matmul -k "without_gelu and 2chips" --determinism-check-iterations 50`
+`WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest tests/didt/test_ff1_matmul.py::test_ff1_matmul -k "without_gelu and 2chips" --determinism-check-interval 50`
 
 ## Blackhole
 
