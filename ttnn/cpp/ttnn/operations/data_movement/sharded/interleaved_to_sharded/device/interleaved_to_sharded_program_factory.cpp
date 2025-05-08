@@ -32,7 +32,7 @@ operation::ProgramWithCallbacks interleaved_to_sharded_multi_core(
     tt::DataFormat output_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.get_dtype());
 
     auto shard_spec = output.shard_spec().value();
-    auto shard_strategy = output.memory_config().memory_layout;
+    auto shard_strategy = output.memory_config().memory_layout();
 
     bool rm_orientation = shard_spec.orientation == ShardOrientation::ROW_MAJOR;
 

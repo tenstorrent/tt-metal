@@ -24,10 +24,10 @@ void FullLikeOperation::validate(const operation_attributes_t& operation_attribu
     TT_FATAL(input.storage_type() == StorageType::DEVICE, "Full Like: Input must be on device");
     TT_FATAL(input.buffer() != nullptr, "Full Like: Input must be allocated in buffer on device");
     TT_FATAL(
-        input.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED,
+        input.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
         "Full Like: Not currently supporting sharding");
     TT_FATAL(
-        operation_attributes.memory_config.memory_layout == TensorMemoryLayout::INTERLEAVED,
+        operation_attributes.memory_config.memory_layout() == TensorMemoryLayout::INTERLEAVED,
         "Full Like: Not currently supporting sharding");
     TT_FATAL(operation_attributes.layout == Layout::TILE, "Full Like: Not currently supporting row major layout");
 }

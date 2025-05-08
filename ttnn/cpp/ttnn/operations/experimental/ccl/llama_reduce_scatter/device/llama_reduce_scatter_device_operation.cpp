@@ -51,11 +51,11 @@ void LlamaReduceScatterDeviceOperation::validate_on_program_cache_miss(
         tile_shape[1]);
     if (attributes.output_mem_config.has_value()) {
         TT_FATAL(
-            attributes.output_mem_config.value().shard_spec.has_value(), "output_mem_config must have a shard spec");
+            attributes.output_mem_config.value().shard_spec().has_value(), "output_mem_config must have a shard spec");
         TT_FATAL(
-            attributes.output_mem_config.value().shard_spec.value().shape[0] == 32,
+            attributes.output_mem_config.value().shard_spec().value().shape[0] == 32,
             "output_mem_config shard height must be 32 but got {}",
-            attributes.output_mem_config.value().shard_spec.value().shape[0]);
+            attributes.output_mem_config.value().shard_spec().value().shape[0]);
     }
 }
 
@@ -108,8 +108,7 @@ LlamaReduceScatterDeviceOperation::spec_return_value_t LlamaReduceScatterDeviceO
 
     // this op only supports one tile per output core for now
     ShardSpec shard_spec{core_range, {input_shape[-2], tile_shape[1]}};
-    tt::tt_metal::MemoryConfig out_memory_config = input_tensor.memory_config();
-    out_memory_config.shard_spec = shard_spec;
+    tt::tt_metal::MemoryConfig out_memory_config = input_tensor.memory_config().with_shard_spec(shard_spec);
 
     return {TensorSpec(
         Shape(output_shape),

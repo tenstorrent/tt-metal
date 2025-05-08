@@ -52,16 +52,16 @@ inline __attribute__((always_inline)) void set_eltwise_binary_runtime_args(
     bool block_or_width_sharded = false;
     if (src0_sharded) {
         shard_spec = a.shard_spec().value();
-        block_or_width_sharded = a.memory_config().memory_layout != TensorMemoryLayout::HEIGHT_SHARDED;
-        sharded_layout = a.memory_config().memory_layout;
+        block_or_width_sharded = a.memory_config().memory_layout() != TensorMemoryLayout::HEIGHT_SHARDED;
+        sharded_layout = a.memory_config().memory_layout();
     } else if (src1_sharded) {
         shard_spec = b.shard_spec().value();
-        block_or_width_sharded = b.memory_config().memory_layout != TensorMemoryLayout::HEIGHT_SHARDED;
-        sharded_layout = b.memory_config().memory_layout;
+        block_or_width_sharded = b.memory_config().memory_layout() != TensorMemoryLayout::HEIGHT_SHARDED;
+        sharded_layout = b.memory_config().memory_layout();
     } else if (out_sharded) {
         shard_spec = output.shard_spec().value();
-        block_or_width_sharded = output.memory_config().memory_layout != TensorMemoryLayout::HEIGHT_SHARDED;
-        sharded_layout = output.memory_config().memory_layout;
+        block_or_width_sharded = output.memory_config().memory_layout() != TensorMemoryLayout::HEIGHT_SHARDED;
+        sharded_layout = output.memory_config().memory_layout();
     }
 
     // zero_start_grid is a flag to indicate that we are using a single rectangular grid that starts at (0, 0)

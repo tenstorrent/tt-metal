@@ -20,7 +20,7 @@ void NonZeroIndices::validate(const std::vector<Tensor>& input_tensors) const {
     TT_FATAL(input_tensor_a.storage_type() == StorageType::DEVICE, "Operands to Non-zero need to be on device!");
     TT_FATAL(input_tensor_a.buffer() != nullptr, "Operands to Non-zero need to be allocated in buffers on device!");
     TT_FATAL(
-        input_tensor_a.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED,
+        input_tensor_a.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
         "Non-zero does not currently support sharding");
 }
 

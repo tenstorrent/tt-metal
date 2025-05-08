@@ -150,9 +150,9 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_width_sh
     // TODO: Can conv_act_c_blocks be same as num_blocks_act_w?
     auto shard_shape = a.shard_spec().value().shape;
 
-    CoreRangeSet input_cores = a.memory_config().shard_spec.value().grid;
-    CoreRangeSet output_cores = output.memory_config().shard_spec.value().grid;
-    CoreRangeSet all_cores = output.memory_config().shard_spec.value().grid;
+    CoreRangeSet input_cores = a.memory_config().shard_spec().value().grid;
+    CoreRangeSet output_cores = output.memory_config().shard_spec().value().grid;
+    CoreRangeSet all_cores = output.memory_config().shard_spec().value().grid;
     if (input_cores.num_cores() > output_cores.num_cores()) {
         all_cores = input_cores;
     }

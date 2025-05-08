@@ -59,9 +59,9 @@ void ReduceScatterAsync::validate_with_output_tensors(
 
             // check memory layout
             TT_FATAL(
-                output_tensor.value().memory_config().memory_layout == input_tensor.memory_config().memory_layout,
+                output_tensor.value().memory_config().memory_layout() == input_tensor.memory_config().memory_layout(),
                 "Error, Output tensor memory layout should be same as input tensor memory layout but has {}",
-                output_tensor.value().memory_config().memory_layout);
+                output_tensor.value().memory_config().memory_layout());
 
             // check the output tensor size
             auto output_shape = output_tensor.value().get_padded_shape();

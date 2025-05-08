@@ -37,7 +37,7 @@ void UpdateCache::validate(const std::vector<Tensor>& input_tensors) const {
     TT_FATAL(input_tensor.get_padded_shape()[-1] == cache_tensor.get_padded_shape()[-1], "Error");
     TT_FATAL(input_tensor.get_padded_shape()[0] == 1, "Error");
     TT_FATAL(input_tensor.get_padded_shape()[1] == cache_tensor.get_padded_shape()[1], "Error");
-    TT_FATAL(cache_tensor.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED, "Error");
+    TT_FATAL(cache_tensor.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED, "Error");
     if (this->op_type == UpdateCacheOpType::FILL) {
         // TODO: If we want to support mixed precision like decode, we need to add simple compute kernel for conversion
         TT_FATAL(input_tensor.get_dtype() == cache_tensor.get_dtype(), "Input and cache tensors must have same dtype!");
@@ -47,7 +47,7 @@ void UpdateCache::validate(const std::vector<Tensor>& input_tensors) const {
         // Can generalize interleaved to infer and check arbitrary number of tiles along seq_len per core; or, add more
         // robust logic in reader/writer loops to handle generic blocking of work For sharded, we infer number of tiles
         // each core handles from shard so no issues there
-        if (input_tensor.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED and
+        if (input_tensor.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED and
             input_tensor.get_padded_shape()[1] > 1) {
             const uint32_t num_blocks_of_work =
                 input_tensor.get_padded_shape()[1] * input_tensor.get_padded_shape()[-2] / TILE_HEIGHT;
@@ -57,7 +57,7 @@ void UpdateCache::validate(const std::vector<Tensor>& input_tensors) const {
         }
 
         if (input_tensor.is_sharded()) {
-            TT_FATAL(input_tensor.memory_config().memory_layout != TensorMemoryLayout::WIDTH_SHARDED, "Error");
+            TT_FATAL(input_tensor.memory_config().memory_layout() != TensorMemoryLayout::WIDTH_SHARDED, "Error");
             TT_FATAL(input_tensor.shard_spec().value().shape[1] == input_tensor.get_padded_shape()[-1], "Error");
             // Require even work division along seq_len and also only 1 head per core
             TT_FATAL(
@@ -75,7 +75,7 @@ void UpdateCache::validate(const std::vector<Tensor>& input_tensors) const {
                 "cache tensor");
         }
         if (input_tensor.is_sharded()) {
-            TT_FATAL(input_tensor.memory_config().memory_layout != TensorMemoryLayout::WIDTH_SHARDED, "Error");
+            TT_FATAL(input_tensor.memory_config().memory_layout() != TensorMemoryLayout::WIDTH_SHARDED, "Error");
             TT_FATAL(input_tensor.shard_spec().value().shape[1] == input_tensor.get_padded_shape()[-1], "Error");
             // Require even work division for now
             TT_FATAL(
@@ -84,7 +84,7 @@ void UpdateCache::validate(const std::vector<Tensor>& input_tensors) const {
                     0,
                 "Error");
         } else {
-            TT_FATAL(input_tensor.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED, "Error");
+            TT_FATAL(input_tensor.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED, "Error");
         }
         TT_FATAL(cache_tensor.get_padded_shape()[0] <= input_tensor.get_padded_shape()[-2], "Error");
         // batch offset is only valid if num_user less than 32 and batch_offset + num_user <= 32
