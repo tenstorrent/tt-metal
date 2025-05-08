@@ -1099,9 +1099,11 @@ void DeviceProfiler::pushTracyDeviceResults() {
     for (auto& event : device_events_vec) {
         std::reference_wrapper<const tracy::TTDeviceEvent> event_to_push = event;
 
+        // Using std::optional to avoid calling the default constructor of tracy::TTDeviceEvent
+        std::optional<tracy::TTDeviceEvent> event_with_adjusted_timestamp;
         const uint64_t adjusted_timestamp = event.get().timestamp * this->freqScale + this->shift;
         if (adjusted_timestamp != event.get().timestamp) {
-            tracy::TTDeviceEvent new_event(
+            event_with_adjusted_timestamp.emplace(
                 event.get().run_num,
                 event.get().chip_id,
                 event.get().core_x,
@@ -1113,7 +1115,7 @@ void DeviceProfiler::pushTracyDeviceResults() {
                 event.get().file,
                 event.get().zone_name,
                 event.get().zone_phase);
-            event_to_push = std::cref(new_event);
+            event_to_push = std::cref(event_with_adjusted_timestamp.value());
         }
 
         std::pair<chip_id_t, CoreCoord> device_core = {
