@@ -326,6 +326,16 @@ TEST_F(CommandQueueSingleCardFixture, IdleEthTestReadWriteMultipleCoresL1) {
         }
 
         std::unordered_set<CoreCoord> idle_ethernet_cores = device->get_inactive_ethernet_cores();
+        dispatch_core_manager& dispatch_core_manager = MetalContext::instance().get_dispatch_core_manager();
+        const CoreType dispatch_core_type = dispatch_core_manager.get_dispatch_core_type();
+        if (dispatch_core_type == CoreType::ETH) {
+            const std::vector<CoreCoord> eth_dispatch_cores =
+                dispatch_core_manager.get_all_logical_dispatch_cores(device->id());
+            for (const CoreCoord& core : eth_dispatch_cores) {
+                idle_ethernet_cores.erase(core);
+            }
+        }
+
         for (const CoreCoord& core : idle_ethernet_cores) {
             const CoreCoord virtual_core = device->ethernet_core_from_logical_core(core);
             dynamic_cast<HWCommandQueue&>(device->command_queue())
