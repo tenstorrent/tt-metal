@@ -17,13 +17,10 @@ void MAIN {
     constexpr auto cb_in1 = tt::CBIndex::c_1;
     // and write to the output circular buffer
     constexpr auto cb_out0 = tt::CBIndex::c_16;
-    // The destination register.
-    // Quote the doc: "This register is an array of 16 tiles of 32x32 elements each."
-    // If you are fimilar with the concept of rotating register file from computer
-    // architecture. Think it like that. Later on we will ensure that registers are
-    // free and then we will submit compute to the FPU/SFPU that writes to the register.
-    // see:
-    // https://tenstorrent-metal.github.io/tt-metal/latest/tt-metalium/tt_metal/apis/kernel_apis/compute/acquire_dst.html
+
+    // The destination register is a set of 16 tiles. Which the matrix engine (FPU) can output
+    // to. For our case, we are going perform the addition of two tiles and write the result
+    // to destination register 0.
     constexpr uint32_t dst_reg = 0;
 
     // Tell the SFPU that we will be using circular buffers c_in0, c_in1 and c_out0
@@ -36,7 +33,9 @@ void MAIN {
 
     // Loop over all the tiles and perform the computation
     for (uint32_t i = 0; i < n_tiles; i++) {
-        // Make sure there is a valid register we can use.
+        // Make sure there is registers we can use and hold it. The register can be being used by other
+        // components. So we need to be sure before we use it. Thus even though there is 16 registers, each
+        // time acquire a register, we get 8 of them that we can use until released.
         acquire_dst();
         // Wait until there is a tile in both input circular buffers
         cb_wait_front(cb_in0, 1);
