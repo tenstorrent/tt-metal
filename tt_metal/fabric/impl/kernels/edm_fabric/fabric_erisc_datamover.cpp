@@ -804,6 +804,7 @@ template <
     uint8_t SENDER_NUM_BUFFERS,
     size_t NUM_SENDER_CHANNELS,
     uint8_t to_receiver_pkts_sent_id,
+    uint8_t receiver_channel,
     typename WriteTridTracker>
 void run_receiver_channel_step(
     tt::tt_fabric::EthChannelBuffer<RECEIVER_NUM_BUFFERS>& local_receiver_channel,
@@ -863,7 +864,7 @@ void run_receiver_channel_step(
             can_send_to_all_local_chip_receivers = can_forward_packet_completely(hop_cmd, downstream_edm_interface);
         } else {
             can_send_to_all_local_chip_receivers =
-                can_forward_packet_completely(cached_routing_fields, downstream_edm_interface[rx_channel_id]);
+                can_forward_packet_completely(cached_routing_fields, downstream_edm_interface[receiver_channel]);
         }
         bool trid_flushed = receiver_channel_trid_tracker.transaction_flushed(receiver_buffer_index);
         if (can_send_to_all_local_chip_receivers && trid_flushed) {
@@ -875,7 +876,11 @@ void run_receiver_channel_step(
                     packet_header, cached_routing_fields, downstream_edm_interface, trid, rx_channel_id, hop_cmd);
             } else {
                 receiver_forward_packet(
-                    packet_header, cached_routing_fields, downstream_edm_interface[rx_channel_id], trid, rx_channel_id);
+                    packet_header,
+                    cached_routing_fields,
+                    downstream_edm_interface[receiver_channel],
+                    trid,
+                    rx_channel_id);
             }
             wr_sent_counter.increment();
         }
@@ -1072,7 +1077,8 @@ void run_fabric_edm_main_loop(
                     RECEIVER_NUM_BUFFERS,
                     SENDER_NUM_BUFFERS,
                     NUM_SENDER_CHANNELS,
-                    to_receiver_packets_sent_streams[0]>(
+                    to_receiver_packets_sent_streams[0],
+                    0>(
                     local_receiver_channels[0],
                     remote_sender_channels,
                     downstream_edm_noc_interfaces,
@@ -1089,7 +1095,8 @@ void run_fabric_edm_main_loop(
                     RECEIVER_NUM_BUFFERS,
                     SENDER_NUM_BUFFERS,
                     NUM_SENDER_CHANNELS,
-                    to_receiver_packets_sent_streams[1]>(
+                    to_receiver_packets_sent_streams[1],
+                    1>(
                     local_receiver_channels[1],
                     remote_sender_channels,
                     downstream_edm_noc_interfaces,
