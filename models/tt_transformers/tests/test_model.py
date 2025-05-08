@@ -211,12 +211,13 @@ def test_model_inference(
         else:
             encoded_prompts = [model_args.encode_prompt(prompt, instruct=False) for prompt in prompts]
 
+    reference_model = None
     if run_ref_pt:
         reference_model = model_args.reference_transformer()
         reference_model.load_state_dict(reference_state_dict)
 
     # Embedding on host
-    embd = model_args.reference_embedding()
+    embd = model_args.reference_embedding(reference_model)
     embd.load_state_dict({"emb.weight": state_dict[f"{state_dict_prefix}tok_embeddings.weight"]})
 
     generation_start_pos = 0
