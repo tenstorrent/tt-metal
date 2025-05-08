@@ -121,7 +121,7 @@ bool is_chip_on_corner_of_mesh(
 ControlPlane::ControlPlane(const std::string& mesh_graph_desc_file) {
     this->routing_table_generator_ = std::make_unique<RoutingTableGenerator>(mesh_graph_desc_file);
     // Printing, only enabled with log_debug
-    this->routing_table_generator_->print_connectivity();
+    this->routing_table_generator_->mesh_graph->print_connectivity();
     // Printing, only enabled with log_debug
     this->routing_table_generator_->print_routing_tables();
 
@@ -148,9 +148,10 @@ chip_id_t ControlPlane::get_physical_chip_id_from_eth_coord(const eth_coord_t& e
 }
 
 void ControlPlane::validate_mesh_connections(mesh_id_t mesh_id) const {
-    std::uint32_t mesh_ns_size = routing_table_generator_->get_mesh_ns_size(mesh_id);
-    std::uint32_t mesh_ew_size = routing_table_generator_->get_mesh_ew_size(mesh_id);
-    std::uint32_t num_ports_per_side = routing_table_generator_->get_chip_spec().num_eth_ports_per_direction;
+    std::uint32_t mesh_ns_size = routing_table_generator_->mesh_graph->get_mesh_ns_size(mesh_id);
+    std::uint32_t mesh_ew_size = routing_table_generator_->mesh_graph->get_mesh_ew_size(mesh_id);
+    std::uint32_t num_ports_per_side =
+        routing_table_generator_->mesh_graph->get_chip_spec().num_eth_ports_per_direction;
     for (int i = 0; i < mesh_ns_size; i++) {
         for (int j = 0; j < mesh_ew_size - 1; j++) {
             chip_id_t logical_chip_id = i * mesh_ew_size + j;
@@ -197,7 +198,8 @@ std::vector<chip_id_t> ControlPlane::get_mesh_physical_chip_ids(
     std::uint32_t mesh_ns_size,
     std::uint32_t mesh_ew_size,
     chip_id_t nw_chip_physical_chip_id) const {
-    std::uint32_t num_ports_per_side = routing_table_generator_->get_chip_spec().num_eth_ports_per_direction;
+    std::uint32_t num_ports_per_side =
+        routing_table_generator_->mesh_graph->get_chip_spec().num_eth_ports_per_direction;
 
     const auto user_chips = tt::tt_metal::MetalContext::instance().get_cluster().user_exposed_chip_ids();
     std::set<chip_id_t> corner_chips;
@@ -362,8 +364,8 @@ void ControlPlane::initialize_from_mesh_graph_desc_file(const std::string& mesh_
         this->logical_mesh_chip_id_to_physical_chip_id_mapping_.push_back({eth_coord_y_for_gateway_chips[0]});
 
         nw_chip_physical_id = this->get_physical_chip_id_from_eth_coord({0, 3, 7, 0, 1});
-        mesh_ns_size = routing_table_generator_->get_mesh_ns_size(/*mesh_id=*/4);
-        mesh_ew_size = routing_table_generator_->get_mesh_ew_size(/*mesh_id=*/4);
+        mesh_ns_size = routing_table_generator_->mesh_graph->get_mesh_ns_size(/*mesh_id=*/4);
+        mesh_ew_size = routing_table_generator_->mesh_graph->get_mesh_ew_size(/*mesh_id=*/4);
         // Main board
         this->logical_mesh_chip_id_to_physical_chip_id_mapping_.push_back(
             this->get_mesh_physical_chip_ids(mesh_ns_size, mesh_ew_size, nw_chip_physical_id));
@@ -376,8 +378,8 @@ void ControlPlane::initialize_from_mesh_graph_desc_file(const std::string& mesh_
         mesh_graph_desc_filename == "p150_x4_mesh_graph_descriptor.yaml") {
         // TODO: update to pick out chip automatically
         nw_chip_physical_id = 0;
-        mesh_ns_size = routing_table_generator_->get_mesh_ns_size(/*mesh_id=*/0);
-        mesh_ew_size = routing_table_generator_->get_mesh_ew_size(/*mesh_id=*/0);
+        mesh_ns_size = routing_table_generator_->mesh_graph->get_mesh_ns_size(/*mesh_id=*/0);
+        mesh_ew_size = routing_table_generator_->mesh_graph->get_mesh_ew_size(/*mesh_id=*/0);
         // Main board
         this->logical_mesh_chip_id_to_physical_chip_id_mapping_.push_back(
             this->get_mesh_physical_chip_ids(mesh_ns_size, mesh_ew_size, nw_chip_physical_id));
@@ -387,8 +389,8 @@ void ControlPlane::initialize_from_mesh_graph_desc_file(const std::string& mesh_
         mesh_graph_desc_filename == "n150_mesh_graph_descriptor.yaml" ||
         mesh_graph_desc_filename == "n300_mesh_graph_descriptor.yaml") {
         nw_chip_physical_id = this->get_physical_chip_id_from_eth_coord({0, 0, 0, 0, 0});
-        mesh_ns_size = routing_table_generator_->get_mesh_ns_size(/*mesh_id=*/0);
-        mesh_ew_size = routing_table_generator_->get_mesh_ew_size(/*mesh_id=*/0);
+        mesh_ns_size = routing_table_generator_->mesh_graph->get_mesh_ns_size(/*mesh_id=*/0);
+        mesh_ew_size = routing_table_generator_->mesh_graph->get_mesh_ew_size(/*mesh_id=*/0);
         // Main board
         this->logical_mesh_chip_id_to_physical_chip_id_mapping_.push_back(
             this->get_mesh_physical_chip_ids(mesh_ns_size, mesh_ew_size, nw_chip_physical_id));
@@ -400,20 +402,22 @@ void ControlPlane::initialize_from_mesh_graph_desc_file(const std::string& mesh_
 void ControlPlane::initialize_host_mapping() {
     // Grab available hosts in the system and map to physical chip ids
     // ping for all hosts in cluster, grab mapping of all physical chip ids/physical hosts
-    const auto& host_ranks = this->routing_table_generator_->mesh_graph_->get_host_ranks(0);
-    std::cout << "Control Plane: Host ranks: ";
-    for (const auto& host_rank : host_ranks) {
-        for (const auto& rank : host_rank) {
-            std::cout << " " << std::setfill('0') << std::setw(2) << rank;
+    const auto& mesh_ids = this->routing_table_generator_->mesh_graph->get_mesh_ids();
+
+    for (const auto& mesh_id : mesh_ids) {
+        MeshShape mesh_shape = this->routing_table_generator_->mesh_graph->get_mesh_shape(mesh_id);
+        const auto& host_ranks = this->routing_table_generator_->mesh_graph->get_host_ranks(mesh_id);
+        for (const auto& [coord, rank] : host_ranks) {
+            this->host_rank_to_sub_mesh_shape_[rank].push_back(coord);
         }
-        std::cout << std::endl;
     }
 }
 
 routing_plane_id_t ControlPlane::get_routing_plane_id(chan_id_t eth_chan_id) const {
     // Assumes that ethernet channels are incrementing by one in the same direction
     // Same mapping for all variants of active eth cores
-    std::uint32_t num_eth_ports_per_direction = routing_table_generator_->get_chip_spec().num_eth_ports_per_direction;
+    std::uint32_t num_eth_ports_per_direction =
+        routing_table_generator_->mesh_graph->get_chip_spec().num_eth_ports_per_direction;
     return eth_chan_id % num_eth_ports_per_direction;
 }
 
@@ -561,8 +565,8 @@ void ControlPlane::configure_routing_tables_for_fabric_ethernet_channels() {
     this->inter_mesh_routing_tables_.clear();
     this->router_port_directions_to_physical_eth_chan_map_.clear();
 
-    const auto& intra_mesh_connectivity = this->routing_table_generator_->get_intra_mesh_connectivity();
-    const auto& inter_mesh_connectivity = this->routing_table_generator_->get_inter_mesh_connectivity();
+    const auto& intra_mesh_connectivity = this->routing_table_generator_->mesh_graph->get_intra_mesh_connectivity();
+    const auto& inter_mesh_connectivity = this->routing_table_generator_->mesh_graph->get_inter_mesh_connectivity();
 
     auto add_ethernet_channel_to_router_mapping = [&](mesh_id_t mesh_id,
                                                       chip_id_t chip_id,
@@ -696,8 +700,8 @@ void ControlPlane::write_routing_tables_to_chip(mesh_id_t mesh_id, chip_id_t chi
 
             fabric_router_config.my_mesh_id = mesh_id;
             fabric_router_config.my_device_id = chip_id;
-            fabric_router_config.north_dim = this->routing_table_generator_->get_mesh_ns_size(mesh_id);
-            fabric_router_config.east_dim = this->routing_table_generator_->get_mesh_ew_size(mesh_id);
+            fabric_router_config.north_dim = this->routing_table_generator_->mesh_graph->get_mesh_ns_size(mesh_id);
+            fabric_router_config.east_dim = this->routing_table_generator_->mesh_graph->get_mesh_ew_size(mesh_id);
 
             // Write data to physical eth core
             CoreCoord virtual_eth_core =
@@ -879,7 +883,7 @@ std::vector<std::pair<routing_plane_id_t, CoreCoord>> ControlPlane::get_routers_
 stl::Span<const chip_id_t> ControlPlane::get_intra_chip_neighbors(
     mesh_id_t src_mesh_id, chip_id_t src_chip_id, RoutingDirection routing_direction) const {
     for (const auto& [_, routing_edge] :
-         this->routing_table_generator_->get_intra_mesh_connectivity()[src_mesh_id][src_chip_id]) {
+         this->routing_table_generator_->mesh_graph->get_intra_mesh_connectivity()[src_mesh_id][src_chip_id]) {
         if (routing_edge.port_direction == routing_direction) {
             return routing_edge.connected_chip_ids;
         }
@@ -946,10 +950,10 @@ std::vector<mesh_id_t> ControlPlane::get_user_physical_mesh_ids() const {
     return physical_mesh_ids;
 }
 
-tt::tt_metal::distributed::MeshShape ControlPlane::get_physical_mesh_shape(mesh_id_t mesh_id) const {
-    uint32_t x = this->routing_table_generator_->get_mesh_ns_size(mesh_id);
-    uint32_t y = this->routing_table_generator_->get_mesh_ew_size(mesh_id);
-    return tt::tt_metal::distributed::MeshShape(x, y);
+MeshShape ControlPlane::get_physical_mesh_shape(mesh_id_t mesh_id) const {
+    uint32_t x = this->routing_table_generator_->mesh_graph->get_mesh_ns_size(mesh_id);
+    uint32_t y = this->routing_table_generator_->mesh_graph->get_mesh_ew_size(mesh_id);
+    return MeshShape(x, y);
 };
 
 void ControlPlane::print_routing_tables() const {

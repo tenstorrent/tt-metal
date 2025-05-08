@@ -26,25 +26,12 @@ public:
     void dump_to_yaml();
     void load_from_yaml();
 
-    void print_connectivity() const { this->mesh_graph_->print_connectivity(); }
-
-    const IntraMeshConnectivity& get_intra_mesh_connectivity() const {
-        return this->mesh_graph_->get_intra_mesh_connectivity();
-    }
-    const InterMeshConnectivity& get_inter_mesh_connectivity() const {
-        return this->mesh_graph_->get_inter_mesh_connectivity();
-    }
-    const ChipSpec& get_chip_spec() const { return this->mesh_graph_->get_chip_spec(); }
-
-    std::uint32_t get_mesh_ns_size(mesh_id_t mesh_id) const { return this->mesh_graph_->get_mesh_ns_size(mesh_id); }
-    std::uint32_t get_mesh_ew_size(mesh_id_t mesh_id) const { return this->mesh_graph_->get_mesh_ew_size(mesh_id); }
-
     RoutingTable get_intra_mesh_table() const { return this->intra_mesh_table_; }
     RoutingTable get_inter_mesh_table() const { return this->inter_mesh_table_; }
 
     void print_routing_tables() const;
 
-    std::unique_ptr<MeshGraph> mesh_graph_;
+    std::unique_ptr<MeshGraph> mesh_graph;
 
 private:
     // configurable in future architectures

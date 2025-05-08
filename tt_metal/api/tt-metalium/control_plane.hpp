@@ -34,7 +34,7 @@ public:
     chip_id_t get_physical_chip_id_from_mesh_chip_id(const std::pair<mesh_id_t, chip_id_t>& mesh_chip_id) const;
 
     std::vector<mesh_id_t> get_user_physical_mesh_ids() const;
-    tt::tt_metal::distributed::MeshShape get_physical_mesh_shape(mesh_id_t mesh_id) const;
+    MeshShape get_physical_mesh_shape(mesh_id_t mesh_id) const;
 
     // Return valid ethernet channels on the specificed routing plane
     std::vector<chan_id_t> get_valid_eth_chans_on_routing_plane(
@@ -96,6 +96,9 @@ private:
     void convert_fabric_routing_table_to_chip_routing_table();
     // TODO: remove this converter, we should consolidate the directions here
     eth_chan_directions routing_direction_to_eth_direction(RoutingDirection direction) const;
+
+    // Host rank to sub mesh shape
+    std::unordered_map<uint32_t, std::vector<MeshCoordinate>> host_rank_to_sub_mesh_shape_;
 };
 
 }  // namespace tt::tt_fabric

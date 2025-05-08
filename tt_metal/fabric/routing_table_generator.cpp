@@ -17,10 +17,10 @@
 
 namespace tt::tt_fabric {
 RoutingTableGenerator::RoutingTableGenerator(const std::string& mesh_graph_desc_yaml_file) {
-    this->mesh_graph_ = std::make_unique<MeshGraph>(mesh_graph_desc_yaml_file);
+    this->mesh_graph = std::make_unique<MeshGraph>(mesh_graph_desc_yaml_file);
     // Use IntraMeshConnectivity to size all variables
-    const auto& intra_mesh_connectivity = this->mesh_graph_->get_intra_mesh_connectivity();
-    const auto& inter_mesh_connectivity = this->mesh_graph_->get_inter_mesh_connectivity();
+    const auto& intra_mesh_connectivity = this->mesh_graph->get_intra_mesh_connectivity();
+    const auto& inter_mesh_connectivity = this->mesh_graph->get_inter_mesh_connectivity();
     this->intra_mesh_table_.resize(intra_mesh_connectivity.size());
     this->inter_mesh_table_.resize(intra_mesh_connectivity.size());
     for (mesh_id_t mesh_id = 0; mesh_id < intra_mesh_connectivity.size(); mesh_id++) {
@@ -46,7 +46,7 @@ void RoutingTableGenerator::generate_intramesh_routing_table(const IntraMeshConn
     for (mesh_id_t mesh_id = 0; mesh_id < this->intra_mesh_table_.size(); mesh_id++) {
         for (chip_id_t src_chip_id = 0; src_chip_id < this->intra_mesh_table_[mesh_id].size(); src_chip_id++) {
             for (chip_id_t dst_chip_id = 0; dst_chip_id < this->intra_mesh_table_[mesh_id].size(); dst_chip_id++) {
-                int row_size = this->mesh_graph_->get_mesh_ew_size(mesh_id);
+                int row_size = this->mesh_graph->get_mesh_ew_size(mesh_id);
                 uint32_t src_x = src_chip_id / row_size;
                 uint32_t src_y = src_chip_id % row_size;
                 uint32_t dst_x = dst_chip_id / row_size;

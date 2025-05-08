@@ -191,8 +191,9 @@ void MeshGraph::initialize_from_yaml(const std::string& mesh_graph_desc_file_pat
             this->intra_mesh_connectivity_.resize(mesh_id + 1);
             this->inter_mesh_connectivity_.resize(mesh_id + 1);
             this->mesh_shapes_.resize(mesh_id + 1);
-            this->mesh_host_ranks_.resize(mesh_id + 1);
+            this->mesh_host_ranks_.resize(mesh_id + 1, MeshContainer<std::uint32_t>({}, {}));
             mesh_edge_ports_to_chip_id.resize(mesh_id + 1);
+            this->mesh_ids_.push_back(mesh_id);
         }
         TT_FATAL(
             board_name_to_topology.find(mesh_board) != board_name_to_topology.end(),
@@ -212,16 +213,18 @@ void MeshGraph::initialize_from_yaml(const std::string& mesh_graph_desc_file_pat
             mesh["host_ranks"].IsSequence() and mesh["host_ranks"].size() == mesh_board_ns_size,
             "MeshGraph: Expecting host_ranks to define a 2D array that matches topology");
 
-        this->mesh_host_ranks_[mesh_id].resize(mesh_board_ns_size);
+        std::vector<std::uint32_t> mesh_host_ranks_values;
+        mesh_host_ranks_values.reserve(mesh_board_ns_size * mesh_board_ew_size);
         for (std::uint32_t i = 0; i < mesh_board_ns_size; i++) {
             TT_FATAL(
                 mesh["host_ranks"][i].IsSequence() and mesh["host_ranks"][i].size() == mesh_board_ew_size,
                 "MeshGraph: Expecting host_ranks to define a 2D array that matches topology");
-            this->mesh_host_ranks_[mesh_id][i].resize(mesh_board_ew_size);
             for (std::uint32_t j = 0; j < mesh_board_ew_size; j++) {
-                this->mesh_host_ranks_[mesh_id][i][j] = mesh["host_ranks"][i][j].as<std::uint32_t>();
+                mesh_host_ranks_values.push_back(mesh["host_ranks"][i][j].as<std::uint32_t>());
             }
         }
+        this->mesh_host_ranks_[mesh_id] =
+            MeshContainer<std::uint32_t>(MeshShape(mesh_board_ns_size, mesh_board_ew_size), mesh_host_ranks_values);
 
         // Fill in connectivity for Mesh
         this->intra_mesh_connectivity_[mesh_id].resize(mesh_size);
