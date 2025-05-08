@@ -70,13 +70,13 @@ ShardSpec adjust_to_shape(const ShardSpec& shard_spec, const ttnn::Shape& from_s
 
 TensorMemoryLayout get_memory_layout(const Tensor& a, const std::optional<Tensor>& b, const Tensor& c) {
     if (a.memory_config().is_sharded()) {
-        return a.memory_config().memory_layout;
+        return a.memory_config().memory_layout();
     }
     if (b.has_value() && b->memory_config().is_sharded()) {
-        return b->memory_config().memory_layout;
+        return b->memory_config().memory_layout();
     }
     if (c.memory_config().is_sharded()) {
-        return c.memory_config().memory_layout;
+        return c.memory_config().memory_layout();
     }
     return TensorMemoryLayout::INTERLEAVED;
 }
@@ -134,7 +134,7 @@ public:
         // core ranges are sorted, so the last one is indeed the last core
         end_core(shard_spec.grid.ranges().rbegin()->end_coord),
         row_major(shard_spec.orientation == ShardOrientation::ROW_MAJOR),
-        memory_layout(tensor.memory_config().memory_layout) {
+        memory_layout(tensor.memory_config().memory_layout()) {
         auto tile_height = tensor.tensor_spec().tile().get_height();
         auto tile_width = tensor.tensor_spec().tile().get_width();
 

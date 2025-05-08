@@ -17,7 +17,7 @@ namespace operations {
 
 using namespace tt::tt_metal;
 
-inline bool is_dram(const Tensor& tensor) { return tensor.memory_config().buffer_type == BufferType::DRAM; }
+inline bool is_dram(const Tensor& tensor) { return tensor.memory_config().buffer_type() == BufferType::DRAM; }
 inline bool is_dram(const std::optional<const Tensor> tensor) {
     return tensor.has_value() ? is_dram(tensor.value()) : true;
 }

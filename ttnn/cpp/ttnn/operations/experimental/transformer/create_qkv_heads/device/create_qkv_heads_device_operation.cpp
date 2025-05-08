@@ -26,7 +26,7 @@ void CreateQKVHeadsDeviceOperation::validate(const std::vector<Tensor>& input_te
         (bbox.end_coord.x < input_tensor.device()->compute_with_storage_grid_size().x &&
          bbox.end_coord.y < input_tensor.device()->compute_with_storage_grid_size().y),
         "Error");
-    TT_FATAL(input_tensor.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED, "Error");
+    TT_FATAL(input_tensor.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED, "Error");
     ShardOrientation shard_orientation = input_tensor.shard_spec().value().orientation;
     bool rm = shard_orientation == ShardOrientation::ROW_MAJOR;
     uint32_t num_h_cores = rm ? bbox.end_coord.y + 1 : bbox.end_coord.x + 1;
@@ -45,7 +45,7 @@ void CreateQKVHeadsDeviceOperation::validate(const std::vector<Tensor>& input_te
         num_w_cores,
         tt::constants::TILE_WIDTH);
 
-    TT_FATAL(this->output_mem_config.memory_layout == TensorMemoryLayout::HEIGHT_SHARDED, "Error");
+    TT_FATAL(this->output_mem_config.memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED, "Error");
     TT_FATAL(input_shape[0] == num_h_cores, "Batch size {} must be equal to num cores {}", input_shape[0], num_h_cores);
 }
 
@@ -91,14 +91,9 @@ std::vector<ttnn::TensorSpec> CreateQKVHeadsDeviceOperation::compute_output_spec
     auto k_spec = tt::tt_metal::ShardSpec(all_cores, {k_shard_h, k_shape[-1]}, shard_orientation);
     auto v_spec = tt::tt_metal::ShardSpec(all_cores, {v_shard_h, v_shape[-1]}, shard_orientation);
     // create sharded tensors
-    auto mem_config_q = this->output_mem_config;
-    mem_config_q.shard_spec = q_spec;
-
-    auto mem_config_k = this->output_mem_config;
-    mem_config_k.shard_spec = k_spec;
-
-    auto mem_config_v = this->output_mem_config;
-    mem_config_v.shard_spec = v_spec;
+    auto mem_config_q = this->output_mem_config.with_shard_spec(q_spec);
+    auto mem_config_k = this->output_mem_config.with_shard_spec(k_spec);
+    auto mem_config_v = this->output_mem_config.with_shard_spec(v_spec);
 
     TensorSpec out_tensor_q(
         q_shape,

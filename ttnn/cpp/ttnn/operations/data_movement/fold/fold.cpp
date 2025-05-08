@@ -54,8 +54,8 @@ std::vector<Tensor> fold_with_transpose_(
     tt::log_info("padded_h32: {}", padded_h32);
     tt::log_info("padded_w32: {}", padded_w32);
 
-    auto L1_mem_config = tt::tt_metal::MemoryConfig{
-        .memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED, .buffer_type = BufferType::L1};
+    auto L1_mem_config =
+        tt::tt_metal::MemoryConfig{tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::L1};
 
     tt::log_debug("input: {}", input.get_logical_shape());
 
@@ -134,9 +134,9 @@ ttnn::MemoryConfig create_sharded_memory_config(
     uint32_t shard_width = tensor_width;
 
     auto sharded_memory_config = ttnn::MemoryConfig{
-        .memory_layout = ttnn::TensorMemoryLayout::HEIGHT_SHARDED,
-        .buffer_type = ttnn::BufferType::L1,
-        .shard_spec = tt::tt_metal::ShardSpec{grid_size, {shard_height, shard_width}, orientation}};
+        ttnn::TensorMemoryLayout::HEIGHT_SHARDED,
+        ttnn::BufferType::L1,
+        tt::tt_metal::ShardSpec{grid_size, {shard_height, shard_width}, orientation}};
 
     tt::log_debug(tt::LogOp, "sharded_memory_config: {}", sharded_memory_config);
 
@@ -301,7 +301,7 @@ Tensor FoldOperation::invoke(
     const std::optional<MemoryConfig>& override_memory_config) {
     if (use_transpose_as_fold) {
         if (input_tensor.is_sharded()) {
-            if (input_tensor.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED) {
+            if (input_tensor.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED) {
                 return fold_with_transpose_sharded_(
                            queue_id,
                            input_tensor,

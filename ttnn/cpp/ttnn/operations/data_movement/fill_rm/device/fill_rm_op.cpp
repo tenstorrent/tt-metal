@@ -95,10 +95,10 @@ void FillRM::validate(const std::vector<Tensor>& input_tensors) const {
     TT_FATAL((this->hFill <= this->H && this->wFill <= this->W), "Error");
     TT_FATAL(input_tensor_a.get_dtype() == DataType::BFLOAT16, "Error");
     TT_FATAL(
-        input_tensor_a.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED,
+        input_tensor_a.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
         "FillRM does not currently support sharding");
     TT_FATAL(
-        this->output_mem_config.memory_layout == TensorMemoryLayout::INTERLEAVED,
+        this->output_mem_config.memory_layout() == TensorMemoryLayout::INTERLEAVED,
         "FillRM does not currently support sharding");
 }
 

@@ -73,7 +73,7 @@ Tensor create_typed_tt_tensor_from_py_data(
     const std::function<void()>& on_destruction_callback,
     const bool force_disable_borrow) {
     TT_FATAL(
-        !tensor_spec.memory_config().is_sharded() or tensor_spec.memory_config().shard_spec.has_value(),
+        !tensor_spec.memory_config().is_sharded() or tensor_spec.memory_config().shard_spec().has_value(),
         "Sharded tensors must have a shard spec when converting to tt tensors!");
 
     const bool pydata_borrowable = tensor_spec.layout() == Layout::ROW_MAJOR &&
@@ -358,7 +358,7 @@ template <typename T>
 HostBuffer create_row_major_host_buffer(
     HostBuffer host_buffer, const ttnn::TensorSpec& tensor_spec, const bool padded_output) {
     TT_FATAL(
-        !tensor_spec.memory_config().is_sharded() or tensor_spec.memory_config().shard_spec.has_value(),
+        !tensor_spec.memory_config().is_sharded() or tensor_spec.memory_config().shard_spec().has_value(),
         "Sharded tensors must have a shard spec when converting to tt tensors!");
 
     if (padded_output) {
@@ -912,7 +912,7 @@ void pytensor_module(py::module& m_tensor) {
             "to",
             py::overload_cast<IDevice*, const MemoryConfig&, QueueId>(&Tensor::to_device, py::const_),
             py::arg("device").noconvert(),
-            py::arg("mem_config").noconvert() = MemoryConfig{.memory_layout = TensorMemoryLayout::INTERLEAVED},
+            py::arg("mem_config").noconvert() = MemoryConfig{},
             py::arg("cq_id") = ttnn::DefaultQueueId,
             py::keep_alive<0, 2>(),
             R"doc(
@@ -940,7 +940,7 @@ void pytensor_module(py::module& m_tensor) {
             "to",
             py::overload_cast<MeshDevice*, const MemoryConfig&, QueueId>(&Tensor::to_device, py::const_),
             py::arg("device").noconvert(),
-            py::arg("mem_config").noconvert() = MemoryConfig{.memory_layout = TensorMemoryLayout::INTERLEAVED},
+            py::arg("mem_config").noconvert() = MemoryConfig{},
             py::arg("cq_id") = ttnn::DefaultQueueId,
             py::keep_alive<0, 2>(),
             R"doc(

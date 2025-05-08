@@ -16,11 +16,11 @@ void InterleavedToShardedDeviceOperation::validate(const std::vector<Tensor>& in
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Operands to shard need to be on device!");
     TT_FATAL(input_tensor.buffer() != nullptr, "Operands to shard need to be allocated in buffers on device!");
 
-    TT_FATAL(input_tensor.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED, "Error");
+    TT_FATAL(input_tensor.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED, "Error");
     TT_FATAL(this->output_mem_config.is_sharded(), "Error");
-    TT_FATAL(this->output_mem_config.buffer_type == BufferType::L1, "Error");
+    TT_FATAL(this->output_mem_config.buffer_type() == BufferType::L1, "Error");
     if (input_tensor.get_layout() == Layout::ROW_MAJOR) {
-        TT_FATAL((*this->output_mem_config.shard_spec).shape[1] * input_tensor.element_size() % hal::get_l1_alignment() == 0, "Shard page size must currently have L1 aligned page size");
+        TT_FATAL((*this->output_mem_config.shard_spec()).shape[1] * input_tensor.element_size() % hal::get_l1_alignment() == 0, "Shard page size must currently have L1 aligned page size");
     }
     if (input_tensor.get_dtype() != this->output_dtype) {
         TT_FATAL(input_tensor.get_layout() == Layout::TILE, "Error");

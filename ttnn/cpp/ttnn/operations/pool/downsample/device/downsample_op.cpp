@@ -24,10 +24,10 @@ void Downsample::validate(const std::vector<Tensor>& input_tensors) const {
     TT_FATAL(input_tensor_a.volume() % TILE_HW == 0, "Error");
     TT_FATAL(input_tensor_a.memory_config().is_sharded(), "Error");
     TT_FATAL(
-        input_tensor_a.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED ||
-            input_tensor_a.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED,
+        input_tensor_a.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED ||
+            input_tensor_a.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED,
         "Unsupported memory layout {}.",
-        input_tensor_a.memory_config().memory_layout);
+        input_tensor_a.memory_config().memory_layout());
 }
 
 std::vector<TensorSpec> Downsample::compute_output_specs(const std::vector<Tensor>& input_tensors) const {
@@ -43,17 +43,16 @@ std::vector<TensorSpec> Downsample::compute_output_specs(const std::vector<Tenso
 
     auto [num_cores_height_sliced, num_cores_width_sliced] = detail::get_num_cores_height_width_sliced(
         input_tensor.shard_spec().value().grid,
-        input_tensor.memory_config().memory_layout,
+        input_tensor.memory_config().memory_layout(),
         input_tensor.shard_spec().value().orientation);
     uint32_t output_shard_height =
         tt::round_up(output_shape[2], num_cores_height_sliced * TILE_HEIGHT) / num_cores_height_sliced;
     uint32_t output_shard_width =
         tt::round_up(output_shape[3], num_cores_width_sliced * TILE_WIDTH) / num_cores_width_sliced;
-    auto mem_config = input_tensor.memory_config();
-    mem_config.shard_spec = ShardSpec{
+    auto mem_config = input_tensor.memory_config().with_shard_spec(ShardSpec{
         input_tensor.shard_spec().value().grid,
         std::array<uint32_t, 2>{{output_shard_height, output_shard_width}},
-        input_tensor.shard_spec().value().orientation};
+        input_tensor.shard_spec().value().orientation});
     return {TensorSpec(output_shape, TensorLayout(dtype, PageConfig(Layout::TILE), mem_config))};
 }
 

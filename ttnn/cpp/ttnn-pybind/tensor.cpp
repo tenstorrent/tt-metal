@@ -130,12 +130,10 @@ void tensor_mem_config_module(py::module& m_tensor) {
     auto pyMemoryConfig = static_cast<py::class_<MemoryConfig>>(m_tensor.attr("MemoryConfig"));
     pyMemoryConfig
         .def(
-            py::init<>([](TensorMemoryLayout memory_layout,
-                          BufferType buffer_type,
-                          std::optional<ShardSpec> shard_spec) {
-                return MemoryConfig{
-                    .memory_layout = memory_layout, .buffer_type = buffer_type, .shard_spec = std::move(shard_spec)};
-            }),
+            py::init<>(
+                [](TensorMemoryLayout memory_layout, BufferType buffer_type, std::optional<ShardSpec> shard_spec) {
+                    return MemoryConfig{memory_layout, buffer_type, std::move(shard_spec)};
+                }),
             py::arg("memory_layout") = TensorMemoryLayout::INTERLEAVED,
             py::arg("buffer_type") = BufferType::DRAM,
             py::arg("shard_spec") = std::nullopt,
@@ -156,15 +154,20 @@ void tensor_mem_config_module(py::module& m_tensor) {
                 return tt::stl::hash::detail::hash_object(memory_config);
             })
         .def("is_sharded", &MemoryConfig::is_sharded, "Whether tensor data is sharded across multiple cores in L1")
+        .def(
+            "with_shard_spec",
+            &MemoryConfig::with_shard_spec,
+            "Returns a new MemoryConfig with the shard spec set to the given value")
         .def_property_readonly(
             "interleaved",
             [](const MemoryConfig& memory_config) {
-                return memory_config.memory_layout == TensorMemoryLayout::INTERLEAVED;
+                return memory_config.memory_layout() == TensorMemoryLayout::INTERLEAVED;
             },
             "Whether tensor data is interleaved across multiple DRAM channels")
-        .def_readonly("buffer_type", &MemoryConfig::buffer_type, "Buffer type to store tensor data. Can be DRAM or L1")
-        .def_readonly("memory_layout", &MemoryConfig::memory_layout, "Memory layout of tensor data.")
-        .def_readwrite("shard_spec", &MemoryConfig::shard_spec, "Memory layout of tensor data.")
+        .def_property_readonly(
+            "buffer_type", &MemoryConfig::buffer_type, "Buffer type to store tensor data. Can be DRAM or L1")
+        .def_property_readonly("memory_layout", &MemoryConfig::memory_layout, "Memory layout of tensor data.")
+        .def_property_readonly("shard_spec", &MemoryConfig::shard_spec, "Memory layout of tensor data.")
         .def(py::self == py::self)
         .def(py::self != py::self);
 

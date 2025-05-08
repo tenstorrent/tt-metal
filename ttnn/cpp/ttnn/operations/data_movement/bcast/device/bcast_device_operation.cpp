@@ -59,22 +59,22 @@ void EltwiseBinaryBroadcast::validate_with_output_tensors(
             out_tensor.get_padded_shape());
     }
     if (this->in_place) {
-        TT_FATAL(input_tensor_a.memory_config().memory_layout == this->output_mem_config.memory_layout, "Error");
-        TT_FATAL(input_tensor_a.memory_config().buffer_type == this->output_mem_config.buffer_type, "Error");
+        TT_FATAL(input_tensor_a.memory_config().memory_layout() == this->output_mem_config.memory_layout(), "Error");
+        TT_FATAL(input_tensor_a.memory_config().buffer_type() == this->output_mem_config.buffer_type(), "Error");
     }
     auto out_mem_config = (!output_tensors.empty() && output_tensors.at(0).has_value())
                               ? output_tensors.at(0).value().memory_config()
                               : this->output_mem_config;
     if (this->dim == BcastOpDim::W) {
         TT_FATAL(
-            input_tensor_a.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED &&
-                out_mem_config.memory_layout == TensorMemoryLayout::INTERLEAVED,
+            input_tensor_a.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED &&
+                out_mem_config.memory_layout() == TensorMemoryLayout::INTERLEAVED,
             "Bcast does not currently support input0 sharding, except if dim is W");
     } else if (this->dim == BcastOpDim::H) {
-        if (input_tensor_a.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED) {
+        if (input_tensor_a.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED) {
             TT_FATAL(
-                input_tensor_a.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED &&
-                    out_mem_config.memory_layout == TensorMemoryLayout::INTERLEAVED,
+                input_tensor_a.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED &&
+                    out_mem_config.memory_layout() == TensorMemoryLayout::INTERLEAVED,
                 "Bcast does not currently support input0 sharding, except if dim is HW");
         } else {
             TT_FATAL(
@@ -83,11 +83,11 @@ void EltwiseBinaryBroadcast::validate_with_output_tensors(
         }
     } else {
         TT_FATAL(
-            input_tensor_a.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED ||
-                input_tensor_a.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED,
+            input_tensor_a.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED ||
+                input_tensor_a.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED,
             "HW bcast in0 supports Height Sharding or Interleaving");
         TT_FATAL(
-            input_tensor_a.memory_config().memory_layout == out_mem_config.memory_layout,
+            input_tensor_a.memory_config().memory_layout() == out_mem_config.memory_layout(),
             "Input and output mem layouts must be the same for bcast HW op!");
     }
 
@@ -137,8 +137,7 @@ std::vector<ttnn::TensorSpec> EltwiseBinaryBroadcast::compute_output_specs(
             // Derive output shard_spec based on input
             shard_spec = input_tensor.shard_spec().value();
         }
-        auto mem_config = this->output_mem_config;
-        mem_config.shard_spec = shard_spec;
+        auto mem_config = this->output_mem_config.with_shard_spec(shard_spec);
         return {TensorSpec(
             input_tensor.get_logical_shape(),
             TensorLayout::fromPaddedShape(

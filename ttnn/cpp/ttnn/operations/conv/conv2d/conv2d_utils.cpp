@@ -282,8 +282,8 @@ MemoryConfig create_sharded_memory_config_from_parallel_config(
 
 OptimizedConvParallelizationConfig determine_conv_op_parallel_config_from_conv_output_mem_config(
     const MemoryConfig& conv_output_mem_config, uint32_t num_cores_nhw, uint32_t num_cores_c) {
-    TT_ASSERT(conv_output_mem_config.shard_spec.has_value());
-    const auto& shard_spec = conv_output_mem_config.shard_spec.value();
+    TT_ASSERT(conv_output_mem_config.shard_spec().has_value());
+    const auto& shard_spec = conv_output_mem_config.shard_spec().value();
     const auto& shard_shape = shard_spec.shape;
     return {
         .grid_size = shard_spec.grid.bounding_box().grid_size(),
@@ -465,9 +465,9 @@ static std::tuple<ttnn::Shape, ttnn::MemoryConfig, bool> get_conv_padded_input_s
         if (!input_memory_config.is_sharded()) {
             needs_shard_or_reshard = true;
         } else {
-            const auto input_shard_scheme = input_memory_config.memory_layout;
-            const auto input_shard_orientation = input_memory_config.shard_spec.value().orientation;
-            const auto input_shard_grid = input_memory_config.shard_spec.value().grid;
+            const auto input_shard_scheme = input_memory_config.memory_layout();
+            const auto input_shard_orientation = input_memory_config.shard_spec().value().orientation;
+            const auto input_shard_grid = input_memory_config.shard_spec().value().grid;
             ParallelConfig pconfig = {
                 .grid = input_shard_grid,
                 .shard_scheme = input_shard_scheme,
@@ -599,9 +599,9 @@ std::tuple<ttnn::Tensor, ParallelConfig, ParallelConfig> shard_or_reshard_tensor
         get_conv_padded_input_shape_and_mem_config(
             device, input_tensor_, conv_config, batch_size, height, width, in_channels, out_channels, is_mm_conv);
     ParallelConfig parallel_config = {
-        .grid = input_tensor_sharded_memory_config.shard_spec.value().grid,
-        .shard_scheme = input_tensor_sharded_memory_config.memory_layout,
-        .shard_orientation = input_tensor_sharded_memory_config.shard_spec.value().orientation};
+        .grid = input_tensor_sharded_memory_config.shard_spec().value().grid,
+        .shard_scheme = input_tensor_sharded_memory_config.memory_layout(),
+        .shard_orientation = input_tensor_sharded_memory_config.shard_spec().value().orientation};
 
     ParallelConfig output_parallel_config =
         determine_output_parallel_config(parallel_config, compute_grid_size, out_channels, is_mm_conv);
@@ -642,11 +642,12 @@ std::tuple<ttnn::Tensor, ParallelConfig, ParallelConfig> shard_or_reshard_tensor
                 if (!input_tensor.is_sharded()) {
                     // In case we need to run Interleaved2Sharded switch fron physical sharding
                     // to logical sharding, in order to get smaller allocation size of sharded buffer.
-                    input_tensor_sharded_memory_config_to_layout.shard_spec = tt::tt_metal::ShardSpec(
-                        input_tensor_sharded_memory_config.shard_spec.value().grid,
-                        input_tensor_sharded_memory_config.shard_spec.value().shape,
-                        input_tensor_sharded_memory_config.shard_spec.value().shape,
-                        input_tensor_sharded_memory_config.shard_spec.value().orientation);
+                    input_tensor_sharded_memory_config_to_layout =
+                        input_tensor_sharded_memory_config_to_layout.with_shard_spec(tt::tt_metal::ShardSpec(
+                            input_tensor_sharded_memory_config.shard_spec().value().grid,
+                            input_tensor_sharded_memory_config.shard_spec().value().shape,
+                            input_tensor_sharded_memory_config.shard_spec().value().shape,
+                            input_tensor_sharded_memory_config.shard_spec().value().orientation));
                 }
                 Tensor resharded_input_tensor =
                     ttnn::to_memory_config(input_tensor, input_tensor_sharded_memory_config_to_layout, std::nullopt);
@@ -923,7 +924,7 @@ std::tuple<OptimizedConvParallelizationConfig, OptimizedConvBlockConfig, MemoryC
         in_channels, get_num_cores_channels_from_parallel_config(input_parallel_config) * input_channels_alignment);
 
     uint32_t nhw_out_padded_ntile_per_core =
-        conv_out_memory_config.shard_spec.value().shape[0] / tt::constants::TILE_HEIGHT;
+        conv_out_memory_config.shard_spec().value().shape[0] / tt::constants::TILE_HEIGHT;
 
     OptimizedConvBlockConfig opt_conv_op_block_config = determine_per_core_conv_block_config(
         input_parallel_config,
@@ -1142,7 +1143,7 @@ conv_op_l1_usage conv2d::calculate_L1_usage(
                                  temp_sum_cb_size;
         return conv2d::conv_op_l1_usage{.tensor_allocation_size = output_size, .CB_allocation_size = total_CB_size};
     } else if (sharding_scheme == TensorMemoryLayout::BLOCK_SHARDED) {
-        auto output_shard_shape = output_memory_config.shard_spec.value().shape;
+        auto output_shard_shape = output_memory_config.shard_spec().value().shape;
 
         uint32_t output_size = 0;
         if (untilize_out) {

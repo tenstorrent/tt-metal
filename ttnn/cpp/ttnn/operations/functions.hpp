@@ -37,8 +37,7 @@ static Tensor index_trilu(
     DataType data_type,
     const Layout layout = Layout::ROW_MAJOR,
     IDevice* device = nullptr,
-    const MemoryConfig& output_mem_config = MemoryConfig{
-        .memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED}) {
+    const MemoryConfig& output_mem_config = MemoryConfig{}) {
     // Current implementation restrictions
     auto output_buffer = std::vector<T>(padded_shape.volume());
 
@@ -84,8 +83,7 @@ static Tensor index_width(
     DataType data_type,
     const Layout layout = Layout::ROW_MAJOR,
     IDevice* device = nullptr,
-    const MemoryConfig& output_mem_config = MemoryConfig{
-        .memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED}) {
+    const MemoryConfig& output_mem_config = MemoryConfig{}) {
     auto output_buffer = std::vector<T>(padded_shape.volume());
     std::fill(output_buffer.begin(), output_buffer.end(), -std::numeric_limits<float>::infinity());
     auto index = 0;
@@ -126,8 +124,7 @@ static Tensor index_height(
     DataType data_type,
     const Layout layout = Layout::ROW_MAJOR,
     IDevice* device = nullptr,
-    const MemoryConfig& output_mem_config = MemoryConfig{
-        .memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED}) {
+    const MemoryConfig& output_mem_config = MemoryConfig{}) {
     auto output_buffer = std::vector<T>(padded_shape.volume());
     std::fill(output_buffer.begin(), output_buffer.end(), -std::numeric_limits<float>::infinity());
     auto index = 0;
@@ -168,8 +165,7 @@ static Tensor index_all(
     DataType data_type,
     const Layout layout = Layout::ROW_MAJOR,
     IDevice* device = nullptr,
-    const MemoryConfig& output_mem_config = MemoryConfig{
-        .memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED}) {
+    const MemoryConfig& output_mem_config = MemoryConfig{}) {
     auto output_buffer = std::vector<T>(padded_shape.volume());
     std::fill(output_buffer.begin(), output_buffer.end(), -std::numeric_limits<float>::infinity());
     auto index = 0;
@@ -209,8 +205,7 @@ static Tensor mask_padded_input(
     DataType data_type,
     const Layout layout = Layout::ROW_MAJOR,
     IDevice* device = nullptr,
-    const MemoryConfig& output_mem_config = MemoryConfig{
-        .memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED}) {
+    const MemoryConfig& output_mem_config = MemoryConfig{}) {
     auto output_buffer = std::vector<T>(padded_shape.volume());
 
     auto index = 0;
@@ -249,8 +244,7 @@ static Tensor fill_first_val_into_tensor(
     DataType data_type,
     const Layout layout,
     IDevice* device = nullptr,
-    const MemoryConfig& output_mem_config = MemoryConfig{
-        .memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED}) {
+    const MemoryConfig& output_mem_config = MemoryConfig{}) {
     auto physical_volume = input_tensor.volume();
     auto output_buffer = std::vector<T>(physical_volume);
     auto input_cpu_tensor = input_tensor.cpu();
@@ -282,8 +276,7 @@ static Tensor prod_result_computation_WH_B0(
     DataType data_type,
     const Layout layout,
     IDevice* device = nullptr,
-    const MemoryConfig& output_mem_config = MemoryConfig{
-        .memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED}) {
+    const MemoryConfig& output_mem_config = MemoryConfig{}) {
     auto output_buffer = std::vector<T>(tt::constants::TILE_HW);
     auto input_cpu_tensor = input_tensor.cpu();
     tt::stl::Span<const T> input_buffer = tt::tt_metal::host_buffer::get_as<T>(input_cpu_tensor);
@@ -320,8 +313,7 @@ static Tensor index_channel(
     DataType data_type,
     const Layout layout = Layout::ROW_MAJOR,
     IDevice* device = nullptr,
-    const MemoryConfig& output_mem_config = MemoryConfig{
-        .memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED}) {
+    const MemoryConfig& output_mem_config = MemoryConfig{}) {
     auto output_buffer = std::vector<T>(padded_shape.volume());
     std::fill(output_buffer.begin(), output_buffer.end(), -std::numeric_limits<float>::infinity());
     auto index = 0;
@@ -362,8 +354,7 @@ static Tensor index_batch(
     DataType data_type,
     const Layout layout = Layout::ROW_MAJOR,
     IDevice* device = nullptr,
-    const MemoryConfig& output_mem_config = MemoryConfig{
-        .memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED}) {
+    const MemoryConfig& output_mem_config = MemoryConfig{}) {
     auto output_buffer = std::vector<T>(padded_shape.volume());
     std::fill(output_buffer.begin(), output_buffer.end(), -std::numeric_limits<float>::infinity());
     auto index = 0;
@@ -404,8 +395,7 @@ static Tensor manual_insertion(
     DataType data_type,
     const Layout layout = Layout::ROW_MAJOR,
     IDevice* device = nullptr,
-    const MemoryConfig& output_mem_config = MemoryConfig{
-        .memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED}) {
+    const MemoryConfig& output_mem_config = MemoryConfig{}) {
     TT_ASSERT(input_tensor.get_layout() == Layout::ROW_MAJOR);
     TT_ASSERT(
         padded_shape[0] * padded_shape[1] * padded_shape[2] * padded_shape[3] == input_tensor.volume(),
@@ -432,8 +422,7 @@ static Tensor index_tril(
     DataType data_type,
     const Layout layout = Layout::ROW_MAJOR,
     IDevice* device = nullptr,
-    const MemoryConfig& output_mem_config = MemoryConfig{
-        .memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED}) {
+    const MemoryConfig& output_mem_config = MemoryConfig{}) {
     return index_trilu<T, false>(logical_shape, padded_shape, diag, data_type, layout, device, output_mem_config);
 }
 
@@ -445,8 +434,7 @@ static Tensor index_triu(
     DataType data_type,
     const Layout layout = Layout::ROW_MAJOR,
     IDevice* device = nullptr,
-    const MemoryConfig& output_mem_config = MemoryConfig{
-        .memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED}) {
+    const MemoryConfig& output_mem_config = MemoryConfig{}) {
     return index_trilu<T, true>(logical_shape, padded_shape, diag, data_type, layout, device, output_mem_config);
 }
 
