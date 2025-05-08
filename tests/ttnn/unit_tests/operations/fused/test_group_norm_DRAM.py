@@ -11,9 +11,10 @@ from loguru import logger
 import ttnn
 
 from tests.ttnn.utils_for_testing import assert_with_pcc, check_with_pcc
-from models.utility_functions import skip_for_wormhole_b0
+from models.utility_functions import skip_for_wormhole_b0, skip_for_blackhole
 
 
+@skip_for_blackhole("Fails on Blackhole. Issue #20913")
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 0}], indirect=True)
 @pytest.mark.parametrize(
     "N, C, H, W, num_groups, num_out_blocks, cores_y, cores_x",
@@ -122,6 +123,7 @@ def generate_sdxl_dram_test_inputs():
     return inputs
 
 
+@skip_for_blackhole("Fails on Blackhole. Issue #20913")
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 0}], indirect=True)
 @pytest.mark.parametrize("input_shape, core_grid_y, num_out_blocks", generate_sdxl_dram_test_inputs())
 def test_sdxl_base_group_norm(device, input_shape, core_grid_y, num_out_blocks, use_program_cache):
