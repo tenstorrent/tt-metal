@@ -52,7 +52,7 @@
 > - TP = Tensor Parallel, DP = Data Parallel; Defines parallelization factors across multiple devices.
 > - The reported LLM performance is for an input sequence length (number of rows filled in the KV cache) of 128 for all models except Mamba (which can accept any sequence length).
 > - The t/s/u reported is the throughput of the first token generated after prefill, i.e. 1 / inter token latency.
-> - Performance numbers were collected using the tt-metal model demos (accessible via the model links). If running with a vLLM inference server, performance may be slightly lower due to additional processing on host.
+> - Performance numbers were collected using the tt-metal model demos (accessible via the model links). If running with a vLLM inference server, performance may be different.
 
 ## Speech-to-Text
 
