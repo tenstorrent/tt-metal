@@ -18,7 +18,7 @@ struct PaddedSliceOperation {
         tt::stl::Span<const T> begins,
         tt::stl::Span<const T> ends,
         tt::stl::Span<const T> step,
-        const std::optional<MemoryConfig>& memory_config_arg = std::nullopt,
+        const MemoryConfig& memory_config_arg,
         const std::optional<Tensor>& optional_output_tensor = std::nullopt,
         const std::optional<float>& pad_value = std::nullopt);
 
@@ -28,7 +28,7 @@ struct PaddedSliceOperation {
         tt::stl::Span<const T> output_tensor_start,
         tt::stl::Span<const T> output_tensor_end,
         tt::stl::Span<const T> step,
-        const std::optional<MemoryConfig>& memory_config_arg = std::nullopt,
+        const MemoryConfig& memory_config_arg,
         const std::optional<Tensor>& optional_output_tensor = std::nullopt,
         const std::optional<float>& pad_value = std::nullopt);
 
@@ -39,7 +39,7 @@ struct PaddedSliceOperation {
         const ttnn::SmallVector<T>& begins,
         const ttnn::SmallVector<T>& ends,
         const ttnn::SmallVector<T>& step,
-        const std::optional<MemoryConfig>& memory_config_arg = std::nullopt,
+        const MemoryConfig& memory_config_arg,
         const std::optional<Tensor>& optional_output_tensor = std::nullopt,
         const std::optional<float>& pad_value = std::nullopt) {
         return invoke(
@@ -59,7 +59,7 @@ struct PaddedSliceOperation {
         const ttnn::SmallVector<T>& begins,
         const ttnn::SmallVector<T>& ends,
         const ttnn::SmallVector<T>& step,
-        const std::optional<MemoryConfig>& memory_config_arg = std::nullopt,
+        const MemoryConfig& memory_config_arg,
         const std::optional<Tensor>& optional_output_tensor = std::nullopt,
         const std::optional<float>& pad_value = std::nullopt) {
         return invoke(
@@ -79,7 +79,7 @@ struct PaddedSliceOperation {
         const std::array<T, N>& output_tensor_start,
         const std::array<T, N>& output_tensor_end,
         const std::array<T, N>& step,
-        const std::optional<MemoryConfig>& memory_config_arg = std::nullopt,
+        const MemoryConfig& memory_config_arg,
         const std::optional<Tensor>& optional_output_tensor = std::nullopt,
         const std::optional<float>& pad_value = std::nullopt);
 
@@ -89,7 +89,7 @@ struct PaddedSliceOperation {
         const std::array<T, N>& output_tensor_start,
         const std::array<T, N>& output_tensor_end,
         const std::array<T, N>& step,
-        const std::optional<MemoryConfig>& memory_config_arg = std::nullopt,
+        const MemoryConfig& memory_config_arg,
         const std::optional<Tensor>& optional_output_tensor = std::nullopt,
         const std::optional<float>& pad_value = std::nullopt);
 };

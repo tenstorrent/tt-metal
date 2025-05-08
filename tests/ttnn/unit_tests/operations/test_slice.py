@@ -1140,10 +1140,11 @@ def test_slice_height_sharded(device, dims, slice_dim, slice_size, cores, layout
 @pytest.mark.parametrize(
     "dims, slice_size, cores",
     [
-        # [[2, 256, 256, 64], 128, 16],
-        # [[2, 256, 128, 32], 16, 8],
-        # [[2, 256, 256, 128], 64, 64],
-        [[2, 8, 8, 15], 2, 2]
+        [[2, 256, 256, 64], 128, 16],
+        [[2, 256, 128, 32], 16, 8],
+        [[2, 256, 256, 128], 64, 64],
+        [[2, 8, 8, 32], 2, 4],
+        [[2, 8, 16, 2], 2, 8],
     ],
 )
 @pytest.mark.parametrize("slice_dim", [1, 2])
@@ -1152,8 +1153,9 @@ def test_slice_height_sharded(device, dims, slice_dim, slice_size, cores, layout
 def test_slice_height_sharded_for_conv2d(device, dims, slice_dim, slice_size, cores, layout, orientation):
     strides = [1, 1, 1, 1]
     torch.manual_seed(2005)
-    torch_input = torch.tensor(range(dims[1] * dims[2])).reshape(1, dims[1], dims[2], 1)
-    torch_input = torch.broadcast_to(torch_input, dims)
+    # torch_input = torch.tensor(range(dims[1] * dims[2])).reshape(1, dims[1], dims[2], 1)
+    # torch_input = torch.broadcast_to(torch_input, dims)
+    torch_input = torch.randint(-10, 10, dims)
     core_range = num_to_core_range_set(cores)
     num_slices = dims[slice_dim] // slice_size
     ttnn_input = ttnn.from_torch(
@@ -1175,13 +1177,12 @@ def test_slice_height_sharded_for_conv2d(device, dims, slice_dim, slice_size, co
         output_shape = [1, 1, output_shape[0] * output_shape[1] * output_shape[2], round_up(output_shape[3], 32)]
 
         memory_config = ttnn._ttnn.operations.conv.create_sharded_memory_config_from_parallel_config(
-            output_shape, parallel_config, 32
+            output_shape, parallel_config, 1
         )
         print("Slice output shape ", output_shape, memory_config)
-        this_ttnn_output = ttnn.experimental.padded_slice(
-            ttnn_input, begins, ends, strides, memory_config=memory_config
-        )
+        this_ttnn_output = ttnn.padded_slice(ttnn_input, begins, ends, strides, memory_config=memory_config)
         output = ttnn.to_torch(this_ttnn_output)
+        output = torch.reshape(output[:, :, :, : this_torch_output.shape[3]], this_torch_output.shape)
         assert_with_pcc(this_torch_output, output[:, :, :, : this_torch_output.shape[3]], 0.9999)
         if output.shape[3] > this_torch_output.shape[3]:
             this_torch_output = torch.nn.functional.pad(
@@ -1221,6 +1222,6 @@ def test_slice_block_sharded(device, dims, slice_dim, slice_size, core_x, core_y
         memory_config = ttnn.create_sharded_memory_config_(
             this_torch_output.shape, core_grid, ttnn.ShardStrategy.BLOCK, orientation
         )
-        this_ttnn_output = ttnn.slice(ttnn_input, begins, ends, strides, memory_config=memory_config)
+        this_ttnn_output = ttnn.padded_slice(ttnn_input, begins, ends, strides, memory_config=memory_config)
         output = ttnn.to_torch(this_ttnn_output)
         assert_with_pcc(this_torch_output, output, 0.9999)
