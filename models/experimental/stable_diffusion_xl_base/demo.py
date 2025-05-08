@@ -134,7 +134,13 @@ def run_demo_inference(
     )
 
     # 2. Load tt_unet
-    tt_unet = TtUNet2DConditionModel(ttnn_device, pipeline.unet.state_dict(), "unet")
+    tt_unet = TtUNet2DConditionModel(
+        ttnn_device,
+        pipeline.unet.state_dict(),
+        "unet",
+        conv_weights_dtype=ttnn.bfloat16,
+        transformer_weights_dtype=ttnn.bfloat16,
+    )
 
     cpu_device = "cpu"
 

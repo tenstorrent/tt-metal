@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 import gc
+from loguru import logger
 import torch
 import pytest
 import ttnn
@@ -21,6 +22,7 @@ from models.utility_functions import torch_random
     ],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
+@pytest.mark.parametrize("weights_dtype", [ttnn.bfloat16])
 def test_attention(
     device,
     input_shape,
@@ -32,6 +34,7 @@ def test_attention(
     out_dim,
     use_program_cache,
     reset_seeds,
+    weights_dtype,
 ):
     unet = UNet2DConditionModel.from_pretrained(
         "stabilityai/stable-diffusion-xl-base-1.0", torch_dtype=torch.float32, use_safetensors=True, subfolder="unet"
@@ -51,6 +54,7 @@ def test_attention(
         query_dim,
         num_attn_heads,
         out_dim,
+        weights_dtype=weights_dtype,
     )
     torch_input_tensor = torch_random(input_shape, -0.1, 0.1, dtype=torch.float32)
     torch_encoder_tensor = (
@@ -83,4 +87,5 @@ def test_attention(
     del unet, tt_attention
     gc.collect()
 
-    assert_with_pcc(torch_output_tensor, output_tensor, 0.999)
+    _, pcc_message = assert_with_pcc(torch_output_tensor, output_tensor, 0.999)
+    logger.info(f"PCC is: {pcc_message}")

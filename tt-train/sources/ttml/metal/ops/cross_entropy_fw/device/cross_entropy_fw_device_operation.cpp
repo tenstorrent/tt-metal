@@ -53,10 +53,10 @@ void CrossEntropyForwardDeviceOperation::validate_on_program_cache_miss(
             magic_enum::enum_name(tensor.get_dtype()));
 
         TT_FATAL(
-            tensor.memory_config().memory_layout == ttnn::TensorMemoryLayout::INTERLEAVED,
+            tensor.memory_config().memory_layout() == ttnn::TensorMemoryLayout::INTERLEAVED,
             "Tensor '{}' must use INTERLEAVED memory layout, but got '{}'",
             name,
-            magic_enum::enum_name(tensor.memory_config().memory_layout));
+            magic_enum::enum_name(tensor.memory_config().memory_layout()));
     };
 
     const auto& input_tensor = tensor_args.input;

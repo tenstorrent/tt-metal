@@ -245,7 +245,9 @@ foreach(ARCH IN LISTS ARCHS)
                 ${GPP_CMD} ${GPP_FLAGS} ${GPP_DEFINES} ${GPP_INCLUDES} -c -o ${HW_LIB_DIR}/${HWLIB}.o ${${HWLIB}_SOURCE}
             DEPENDS
                 ${${HWLIB}_SOURCE}
-            COMMENT "Building hw lib ${HWLIB}.o"
+                # If the compiler changes, rebuild
+                ../sfpi-version.sh
+            COMMENT "Building ${ARCH} hw lib ${HWLIB}.o"
             VERBATIM
         )
         list(APPEND PREPROCESSED_O_FILES ${HW_OUTPUT_FILE})
@@ -299,6 +301,7 @@ if(CMAKE_VERSION VERSION_GREATER_EQUAL 3.23)
                 ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_add1.h
                 ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_add_int32.h
                 ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_add_uint16.h
+                ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_alt_complex_rotate90.h
                 ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_binary.h
                 ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_binary_bitwise.h
                 ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_binary_max_min.h
@@ -453,6 +456,7 @@ if(CMAKE_VERSION VERSION_GREATER_EQUAL 3.23)
                 ckernels/wormhole_b0/metal/llk_api/llk_sfpu/llk_math_eltwise_unary_sfpu_right_shift.h
                 ckernels/wormhole_b0/metal/llk_api/llk_sfpu/llk_math_eltwise_unary_sfpu_left_shift.h
                 ckernels/wormhole_b0/metal/llk_api/llk_sfpu/llk_math_eltwise_unary_sfpu_fill.h
+                ckernels/wormhole_b0/metal/llk_api/llk_sfpu/llk_math_eltwise_unary_sfpu_alt_complex_rotate90.h
                 ckernels/wormhole_b0/metal/llk_api/llk_sfpu/llk_math_eltwise_unary_sfpu_prelu.h
                 ckernels/wormhole_b0/metal/llk_api/llk_sfpu/llk_math_eltwise_unary_sfpu_i1.h
                 inc/atomic_rwptr.h
