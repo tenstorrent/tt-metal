@@ -133,7 +133,6 @@ std::tuple<std::vector<std::vector<uint32_t>>, std::vector<std::array<uint32_t, 
         for (uint32_t shard_idx = 0; shard_idx < num_shards; shard_idx++) {
             ret_vec[shard_idx].reserve(pages_per_shard);
 
-            uint32_t host_idx = 0;
             uint32_t i = 0;
             uint32_t j = 0;
             for (i = i_offset; i < (shard_in_pages[0] + i_offset); i++) {
@@ -143,7 +142,6 @@ std::tuple<std::vector<std::vector<uint32_t>>, std::vector<std::array<uint32_t, 
                 for (j = j_offset; j < (shard_in_pages[1] + j_offset) and (j < (tensor2d_size[1])); j++) {
                     uint32_t host_page = i * tensor2d_size[1] + j;
                     ret_vec[shard_idx].push_back(host_page);
-                    host_idx++;
                 }
             }
             ret_shard_shape[shard_idx] = {i - i_offset, j - j_offset};

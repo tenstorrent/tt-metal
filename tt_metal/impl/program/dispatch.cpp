@@ -2189,10 +2189,8 @@ void reset_worker_dispatch_state_on_device(
     const DispatchArray<uint32_t>& expected_num_workers_completed,
     bool reset_launch_msg_state) {
     auto num_sub_devices = device->num_sub_devices();
-    uint32_t go_signals_cmd_size = 0;
     if (reset_launch_msg_state) {
         uint32_t pcie_alignment = MetalContext::instance().hal().get_alignment(HalMemType::HOST);
-        go_signals_cmd_size = align(sizeof(CQPrefetchCmd) + sizeof(CQDispatchCmd), pcie_alignment) * num_sub_devices;
     }
 
     tt::tt_metal::DeviceCommandCalculator calculator;
