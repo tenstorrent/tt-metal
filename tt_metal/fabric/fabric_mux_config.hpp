@@ -66,7 +66,7 @@ enum class FabricMuxChannelType : uint8_t { FULL_SIZE_CHANNEL = 0, HEADER_ONLY_C
         values can impact teardown times.
 */
 
-size_t get_max_buffer_size_bytes_full_size_channel() {
+inline size_t get_max_buffer_size_bytes_full_size_channel() {
     return tt::tt_fabric::FabricEriscDatamoverBuilder::default_packet_payload_size_bytes;
 }
 
