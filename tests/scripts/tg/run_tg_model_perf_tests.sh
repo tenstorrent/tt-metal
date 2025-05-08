@@ -30,8 +30,8 @@ run_tg_cnn_tests() {
 
 run_tg_llama_70b_model_perf_tests() {
 
-  # Llama3.1-70B
-  llama70b=/mnt/MLPerf/tt_dnn-models/llama/Llama3.1-70B-Instruct/
+  # Llama3.3-70B
+  llama70b=/mnt/MLPerf/tt_dnn-models/llama/Llama3.3-70B-Instruct/
 
   echo "LOG_METAL: Running run_tg_llama_70b_model_perf_tests"
 
