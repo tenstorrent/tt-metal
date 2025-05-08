@@ -612,7 +612,7 @@ def test_conv_activation(
         pytest.skip("Row major layout not compatible with bfloat8_b")
 
     if activations_dtype == ttnn.bfloat8_b and shard_layout == HS and activation == "sqrt":
-        pytest.skip("Skipping until Issue: #21209 is fixed")
+        pytest.skip("Skipping sqrt activation for bfloat8_b and height sharded due to PCC error")
 
     run_conv(
         device,
@@ -1897,6 +1897,7 @@ def test_unet_conv_groups_4_6_wh(
     shard_layout,
     config_override,
     input_layout,
+    use_shallow_conv_variant,
     output_layout,
     groups,
     in_place,
@@ -1927,7 +1928,9 @@ def test_unet_conv_groups_4_6_wh(
         (pad_h, pad_w),
         config_override,
         shard_layout=shard_layout,
-        input_layout=input_layout,
+        use_shallow_conv_variant=use_shallow_conv_variant,
+        transpose_shards=True,  ## use RM (transpose_mcast=False) with 2D on WH
+        input_layout=ttnn.TILE_LAYOUT if activations_dtype == ttnn.bfloat8_b else ttnn.ROW_MAJOR_LAYOUT,
         output_layout=output_layout,
         groups=groups,
         in_place=in_place,
@@ -3054,7 +3057,7 @@ def test_conv2d_model_fruit(
         weight_mesh_mapper=None,
         output_mesh_composer=None,
         enable_split_reader=enable_split_reader,
-        input_layout= ttnn.TILE_LAYOUT,
+        input_layout= ttnn.TILE_LAYOUT if activations_dtype == ttnn.bfloat8_b else None,
     )
 
 
