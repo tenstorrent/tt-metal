@@ -210,6 +210,8 @@ operation::ProgramWithCallbacks topk_single_core_interleaved(
     return {std::move(program), override_runtime_args_callback};
 }
 
+static inline uint32_t largest_power_of_two(std::uint32_t x) { return x == 0 ? 0 : (1 << (31 - __builtin_clz(x))); }
+
 /**
  * Split the work along the width such that the width is divisible by min_dim and the number of cores used is less than
  * or equal to max_cores. Each core must have a minimum of two tiles - min_dim = 64 as that's the minimum size for the
@@ -229,7 +231,7 @@ static inline std::tuple<uint16_t, uint16_t, uint16_t, uint16_t> cores_utilized(
     const uint32_t value_tile_size,
     const uint32_t index_tile_size) {
     const auto max_cores = core_range.end_coord.y - core_range.start_coord.y - 1;
-    uint16_t start_split_size = width / max_cores;
+    uint16_t start_split_size = width / largest_power_of_two(max_cores);
     for (uint16_t split_size = start_split_size; split_size <= max_dim; split_size *= 2) {
         uint16_t rem = width % split_size;
         uint16_t num_cores = width / split_size + (rem > 0);
