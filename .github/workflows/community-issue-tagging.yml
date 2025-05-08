@@ -1,0 +1,12 @@
+name: "Community Issue / PR Labeling Workflow""
+
+on:
+  issues:
+    types: [opened]
+  pull_request:
+    types: [opened]
+
+jobs:
+  call-central-workflow:
+    uses: tenstorrent/tt-github-actions/.github/workflows/on-community-issue.yml@main
+
