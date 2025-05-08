@@ -88,13 +88,39 @@ using Array6D = std::array<uint32_t, 6>;
 using Array7D = std::array<uint32_t, 7>;
 using Array8D = std::array<uint32_t, 8>;
 
-struct MemoryConfig {
-    TensorMemoryLayout memory_layout = TensorMemoryLayout::INTERLEAVED;  // Interleave the data across multiple banks
-    BufferType buffer_type = BufferType::DRAM;                           // Can be either DRAM or L1
-    std::optional<ShardSpec> shard_spec = std::nullopt;
+class MemoryConfig final {
+public:
+    MemoryConfig() = default; // Interleaved DRAM
+    explicit MemoryConfig(TensorMemoryLayout memory_layout,
+        BufferType buffer_type = BufferType::DRAM,
+        std::optional<ShardSpec> shard_spec = std::nullopt) :
+        memory_layout_(memory_layout), buffer_type_(buffer_type), shard_spec_(std::move(shard_spec)) {}
+    MemoryConfig(const MemoryConfig& other) = default;
+    MemoryConfig& operator=(const MemoryConfig& other) = default;
+    MemoryConfig(MemoryConfig&& other) noexcept = default;
+    MemoryConfig& operator=(MemoryConfig&& other) noexcept = default;
+
+    TensorMemoryLayout memory_layout() const { return memory_layout_; }
+    BufferType buffer_type() const { return buffer_type_; }
+    const std::optional<ShardSpec>& shard_spec() const { return shard_spec_; }
+
+    MemoryConfig with_shard_spec(std::optional<ShardSpec> shard_spec) const {
+        return MemoryConfig(memory_layout_, buffer_type_, std::move(shard_spec));
+    }
+
     bool is_sharded() const;
     bool is_l1() const;
     bool is_dram() const;
+
+    static constexpr auto attribute_names = std::forward_as_tuple("memory_layout", "buffer_type", "shard_spec");
+    auto attribute_values() const { return std::forward_as_tuple(memory_layout_, buffer_type_, shard_spec_); }
+
+    friend std::ostream& operator<<(std::ostream& os, const MemoryConfig& config);
+
+private:
+    TensorMemoryLayout memory_layout_ = TensorMemoryLayout::INTERLEAVED;  // Interleave the data across multiple banks
+    BufferType buffer_type_ = BufferType::DRAM;                           // Can be either DRAM or L1
+    std::optional<ShardSpec> shard_spec_ = std::nullopt;
 };
 
 std::ostream& operator<<(std::ostream& os, const MemoryConfig& config);
@@ -104,3 +130,13 @@ bool operator!=(const MemoryConfig &config_a, const MemoryConfig &config_b);
 
 } // namespace tt_metal
 } // namespace tt
+
+template <>
+struct tt::stl::json::to_json_t<tt::tt_metal::MemoryConfig> {
+    nlohmann::json operator()(const tt::tt_metal::MemoryConfig& config) const;
+};
+
+template <>
+struct tt::stl::json::from_json_t<tt::tt_metal::MemoryConfig> {
+    tt::tt_metal::MemoryConfig operator()(const nlohmann::json& json_object) const;
+};

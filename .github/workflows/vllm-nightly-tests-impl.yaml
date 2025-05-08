@@ -1,0 +1,63 @@
+name: "[internal] vLLM nightly tests impl"
+
+on:
+  workflow_call:
+    inputs:
+      docker-image:
+        required: true
+        type: string
+      wheel-artifact-name:
+        required: true
+        type: string
+      build-artifact-name:
+        required: true
+        type: string
+
+jobs:
+  vllm-tests:
+    strategy:
+      fail-fast: false
+      matrix:
+        test-group: [
+          {
+            name: "Llama3 vLLM T3K test",
+            arch: wormhole_b0,
+            runner-label: config-t3000,
+            owner_id: U08E1JCDVNX # Pavle Petrovic
+          },
+          {
+            name: "Llama3 vLLM TG test",
+            arch: wormhole_b0,
+            runner-label: config-tg,
+            owner_id: U08E1JCDVNX # Pavle Petrovic
+          },
+        ]
+    runs-on:
+      - arch-${{ matrix.test-group.arch }}
+      - ${{ matrix.test-group.runner-label }}
+      - in-service
+      - bare-metal
+      - pipeline-functional
+    container:
+      image: ${{ inputs.docker-image }}
+      env:
+        LOGURU_LEVEL: INFO
+      volumes:
+        - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
+      options: "--device /dev/tenstorrent"
+    defaults:
+      run:
+        shell: bash
+        working-directory: /work # https://github.com/actions/runner/issues/878
+    steps:
+      - name: 👋 Hello World
+        run: echo "Hello from vLLM nightly tests!"
+
+      - uses: ./.github/actions/slack-report
+        if: ${{ failure() }}
+        with:
+          slack_webhook_url: ${{ secrets.SLACK_WEBHOOK_URL }}
+          owner: ${{ matrix.test-group.owner_id }}
+
+      - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
+        if: always()
