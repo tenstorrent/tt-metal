@@ -5,7 +5,7 @@
 #pragma once
 #include <core_coord.hpp>
 #include <stdint.h>
-#include <system_memory_manager.hpp>  // For chip_id_t
+#include <umd/device/types/cluster_descriptor_types.h>
 #include <string>
 
 struct metal_SocDescriptor;
