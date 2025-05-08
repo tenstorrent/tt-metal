@@ -1129,7 +1129,6 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
 
     uint32_t in0_block_w = act_block_w_ntiles / conv_act_c_blocks;
     uint32_t in0_block_num_tiles = act_block_num_tiles / conv_act_c_blocks;
-    uint32_t in0_subblock_num_tiles = act_subblock_num_tiles / conv_act_c_blocks;
     uint32_t in1_block_num_tiles = weight_block_num_tiles / conv_act_c_blocks;
     uint32_t in0_num_blocks_w =
         num_blocks_act_w * conv_act_c_blocks;  // Fold outer c_block loop together with weight_block_num_tiles = 9
@@ -1302,7 +1301,6 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
         const uint32_t window_size = filter_h * filter_w;
         in0_block_w *= window_size;
         in0_block_num_tiles *= window_size;
-        in0_subblock_num_tiles *= window_size;
         in1_block_num_tiles *= window_size;
         in0_num_blocks_w /= window_size;
     }

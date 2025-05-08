@@ -30,10 +30,8 @@ void TanhAccurateDeviceOperation::validate_on_program_cache_miss(
     const auto& preallocated_output_tensor = tensor_args.preallocated_output;
 
     auto out_memory_config = args.output_memory_config;
-    auto output_datatype = args.output_dtype;
     if (preallocated_output_tensor.has_value()) {
         out_memory_config = preallocated_output_tensor->memory_config();
-        output_datatype = preallocated_output_tensor->get_dtype();
     }
 
     TT_FATAL(

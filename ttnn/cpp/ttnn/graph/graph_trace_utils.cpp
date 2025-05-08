@@ -101,14 +101,12 @@ std::pair<uint32_t, uint32_t> count_intermediate_and_output_tensors(const nlohma
     std::unordered_set<int> intermediate_tensors;
     std::unordered_set<int> output_tensors;
 
-    int first_begin_index = -1;
     int last_end_index = -1;
 
     for (int i = 0; i < trace.size(); ++i) {
         const auto& v = trace[i];
         if (v[kNodeType] == kNodeFunctionStart && !first_begin_found) {
             first_begin_found = true;
-            first_begin_index = i;
         } else if (v[kNodeType] == kNodeFunctionEnd) {
             last_end_found = true;
             last_end_index = i;

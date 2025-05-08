@@ -389,7 +389,7 @@ tt::tt_metal::operation::ProgramWithCallbacks reshape_tiled_program_factory(
         "writer_reshape_tiled.cpp",
         total_cores,
         tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
-    uint32_t page_idx_start = 0, page_idx_end = 0, total_pages = 0;
+    uint32_t page_idx_start = 0, page_idx_end = 0;
     std::vector<CoreCoord> utilized_cores;
     for (auto c : corerange_to_cores(all_cores, std::nullopt)) {
         uint32_t increment = 0;
@@ -407,7 +407,6 @@ tt::tt_metal::operation::ProgramWithCallbacks reshape_tiled_program_factory(
         tt::tt_metal::SetRuntimeArgs(program, reader_kernel_id, c, reader_runtime_args);
 
         const std::vector<uint32_t> writer_runtime_args = {output_buffer->address(), page_idx_start, page_idx_end};
-        total_pages += (page_idx_end - page_idx_start);
 
         tt::tt_metal::SetRuntimeArgs(program, writer_kernel_id, c, writer_runtime_args);
 

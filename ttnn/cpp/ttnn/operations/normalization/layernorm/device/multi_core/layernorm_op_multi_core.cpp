@@ -690,13 +690,7 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
 
     // get sharded addr
     auto in0_addr = a.buffer()->address();
-    uint32_t in1_addr;
     bool b_sharded;
-    if (b) {
-        in1_addr = b.value().buffer()->address();
-    } else {
-        in1_addr = 0;
-    }
     auto out_addr = output.buffer()->address();
     // b, gamma, beta addr
     auto in1_dram_addr = b ? b.value().buffer()->address() : 0;
@@ -1480,10 +1474,9 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
     tt::tt_metal::CircularBufferConfig output_reshard_cb_config =
         tt::tt_metal::CircularBufferConfig(out_reshard_CB_size, {{output_reshard_cb_index, out_data_format}})
             .set_page_size(output_reshard_cb_index, out_single_tile_size);
-    CBHandle cb_output_reshard = 0;
     if (is_post_all_gather && !skip_write_back) {
         output_reshard_cb_config = output_reshard_cb_config.set_globally_allocated_address(*output.buffer());
-        cb_output_reshard =
+
             tt::tt_metal::CreateCircularBuffer(program, all_worker_and_storage_cores, output_reshard_cb_config);
     }
 

@@ -525,16 +525,13 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_col_interleav
 
     bool has_cliff = core_range_cliff.size() > 0;
 
-    uint32_t padded_row_size_bytes;
     uint32_t unpadded_row_size_bytes;
 
     uint32_t el_size = a.element_size();
     if (a.get_dtype() == DataType::BFLOAT8_B) {
-        padded_row_size_bytes = input_shape[-1] * output.element_size();
         unpadded_row_size_bytes = output_shape[-1] * output.element_size();
         el_size = output.element_size();
     } else {
-        padded_row_size_bytes = input_shape[-1] * a.element_size();
         unpadded_row_size_bytes = output_shape[-1] * a.element_size();
     }
 

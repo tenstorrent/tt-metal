@@ -368,14 +368,12 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
         auto cb_in8_id = CreateCircularBuffer(program, core_grid, c_in8_config);
     }
 
-    uint32_t page_table_tile_size = 0;
     uint32_t log2_page_table_page_size = 0;
     uint32_t page_table_stick_size = 0;
     if (is_paged_attention) {
         auto page_table_buffer = page_table_tensor.value().buffer();
         tt::DataFormat page_table_df =
             tt_metal::datatype_to_dataformat_converter(page_table_tensor.value().get_dtype());
-        page_table_tile_size = tt_metal::detail::TileSize(page_table_df);
         page_table_stick_size = page_table_buffer->aligned_page_size();
 
         // cb page_table
