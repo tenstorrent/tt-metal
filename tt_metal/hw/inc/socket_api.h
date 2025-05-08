@@ -1,52 +1,26 @@
+// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#pragma once
+
 #include <cstdint>
-#include "dataflow_api.h"
+#include "circular_buffer.h"
 #include "debug/assert.h"
 #include "noc_parameters.h"
 #include "risc_attribs.h"
 #include "socket.h"
+#include "utils/utils.h"
+
+#ifndef COMPILE_FOR_TRISC
+#include "dataflow_api.h"
 #include "tt_metal/fabric/hw/inc/tt_fabric.h"
 #include "tt_metal/api/tt-metalium/fabric_edm_packet_header.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
 
 static_assert(offsetof(sender_socket_md, bytes_acked) % L1_ALIGNMENT == 0);
-
 static_assert(offsetof(receiver_socket_md, bytes_sent) % L1_ALIGNMENT == 0);
-
-struct SocketSenderInterface {
-    uint32_t config_addr;
-    uint32_t write_ptr;
-    uint32_t bytes_sent;
-    uint32_t bytes_acked_addr;
-    uint32_t page_size;
-
-    // Downstream Socket Metadata
-    uint32_t downstream_mesh_id;
-    uint32_t downstream_chip_id;
-    uint32_t downstream_noc_y;
-    uint32_t downstream_noc_x;
-    uint32_t downstream_bytes_sent_addr;
-    uint32_t downstream_fifo_addr;
-    uint32_t downstream_fifo_total_size;
-    uint32_t downstream_fifo_curr_size;
-};
-
-struct SocketReceiverInterface {
-    uint32_t config_addr;
-    uint32_t read_ptr;
-    uint32_t bytes_acked;
-    uint32_t bytes_sent_addr;
-    uint32_t page_size;
-    uint32_t fifo_addr;
-    uint32_t fifo_total_size;
-    uint32_t fifo_curr_size;
-
-    // Upstream Socket Metadata
-    uint32_t upstream_mesh_id;
-    uint32_t upstream_chip_id;
-    uint32_t upstream_noc_y;
-    uint32_t upstream_noc_x;
-    uint32_t upstream_bytes_acked_addr;
-};
+#endif
 
 SocketSenderInterface create_sender_socket_interface(uint32_t config_addr) {
     tt_l1_ptr sender_socket_md* socket_config = reinterpret_cast<tt_l1_ptr sender_socket_md*>(config_addr);
@@ -109,7 +83,7 @@ void socket_push_pages(SocketSenderInterface& socket, uint32_t num_pages) {
     }
 }
 
-// User controlled?
+#ifndef COMPILE_FOR_TRISC
 void socket_notify_receiver(const SocketSenderInterface& socket) {
     // TODO: Store noc encoding in struct?
     auto downstream_bytes_sent_noc_addr =
@@ -130,6 +104,7 @@ void fabric_socket_notify_receiver(
     fabric_connection.wait_for_empty_write_slot();
     fabric_connection.send_payload_blocking_from_address((uint32_t)fabric_header_addr, sizeof(PACKET_HEADER_TYPE));
 }
+#endif
 
 void socket_barrier(const SocketSenderInterface& socket) {
     volatile tt_l1_ptr uint32_t* bytes_acked_ptr =
@@ -205,7 +180,6 @@ void socket_pop_pages(SocketReceiverInterface& socket, uint32_t num_pages) {
     }
 }
 
-// TODO: Wrap properly
 void assign_local_cb_to_socket(const SocketReceiverInterface& socket, uint32_t cb_id) {
     LocalCBInterface& local_cb = get_local_cb_interface(cb_id);
     uint32_t fifo_size = socket.fifo_curr_size >> cb_addr_shift;
@@ -220,7 +194,7 @@ void assign_local_cb_to_socket(const SocketReceiverInterface& socket, uint32_t c
     local_cb.fifo_rd_ptr = fifo_ptr;
 }
 
-// User controlled?
+#ifndef COMPILE_FOR_TRISC
 void socket_notify_sender(const SocketReceiverInterface& socket) {
     // TODO: Store noc encoding in struct?
     auto upstream_bytes_acked_noc_addr =
@@ -240,6 +214,7 @@ void fabric_socket_notify_sender(
     fabric_connection.wait_for_empty_write_slot();
     fabric_connection.send_payload_blocking_from_address((uint32_t)fabric_header_addr, sizeof(PACKET_HEADER_TYPE));
 }
+#endif
 
 void update_socket_config(const SocketReceiverInterface& socket) {
     volatile tt_l1_ptr receiver_socket_md* socket_config =
