@@ -1247,21 +1247,6 @@ std::unique_ptr<Program> create_and_compile_tt_fabric_program(IDevice* device, F
 
         auto eth_logical_core = soc_desc.get_eth_core_for_channel(eth_chan, CoordSystem::LOGICAL);
 
-        log_debug(
-            tt::LogDevice,
-            "MeshId {}, Chip Id {}, Eth Channel {}, Direction {}",
-            mesh_chip_id.first,
-            mesh_chip_id.second,
-            eth_chan,
-            edm_builder.get_direction());
-        std::ostringstream oss;
-        oss << "[";
-        for (auto val : edm_kernel_rt_args) {
-            oss << " 0x" << std::hex << val;
-        }
-        oss << " ]";
-        log_debug(tt::LogDevice, "EDM RT Args {}", oss.str());
-
         if (is_local_handshake_master) {
             std::vector<uint32_t> router_zero_buf(1, 0);
             detail::WriteToDeviceL1(

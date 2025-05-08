@@ -530,11 +530,11 @@ struct LowLatencyMeshRoutingFields {
 struct LowLatencyMeshPacketHeader : public PacketHeaderBase<LowLatencyMeshPacketHeader> {
     LowLatencyMeshRoutingFields routing_fields;
     uint8_t route_buffer[32];
-    inline void to_chip_unicast_impl(uint8_t distance_in_hops) {}
-    inline void to_chip_multicast_impl(const MulticastRoutingCommandHeader& chip_multicast_command_header) {}
+    void to_chip_unicast_impl(uint8_t distance_in_hops) {}
+    void to_chip_multicast_impl(const MulticastRoutingCommandHeader& chip_multicast_command_header) {}
 
-    inline void to_chip_unicast_impl(uint8_t distance_in_hops) volatile {}
-    inline void to_chip_multicast_impl(const MulticastRoutingCommandHeader& chip_multicast_command_header) volatile {}
+    void to_chip_unicast_impl(uint8_t distance_in_hops) volatile {}
+    void to_chip_multicast_impl(const MulticastRoutingCommandHeader& chip_multicast_command_header) volatile {}
 };
 
 // TODO: When we remove the 32B padding requirement, reduce to 16B size check
