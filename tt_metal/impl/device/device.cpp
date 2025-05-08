@@ -1267,6 +1267,9 @@ bool Device::close() {
 
     tt_metal::detail::DumpDeviceProfileResults(this, ProfilerDumpState::LAST_CLOSE_DEVICE);
 
+    this->disable_and_clear_program_cache();
+    this->set_program_cache_misses_allowed(true);
+
     sub_device_manager_tracker_.reset(nullptr);
 
     std::unordered_map<chip_id_t, std::unordered_set<CoreCoord>> not_done_dispatch_cores;
@@ -1329,8 +1332,6 @@ bool Device::close() {
     this->compute_cores_.clear();
     this->storage_only_cores_.clear();
     this->ethernet_cores_.clear();
-    this->disable_and_clear_program_cache();
-    this->set_program_cache_misses_allowed(true);
     this->command_queue_programs_.clear();
     this->command_queues_.clear();
     this->sysmem_manager_.reset();
