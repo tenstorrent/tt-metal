@@ -10,6 +10,7 @@
 #include <ttnn/tensor/tensor.hpp>
 #include <wandbcpp.hpp>
 
+#include "3tier/remote_optimizer.hpp"
 #include "autograd/tensor.hpp"
 #include "core/clip_grad_norm.hpp"
 #include "core/distributed/distributed.hpp"
@@ -462,7 +463,20 @@ int main(int argc, char **argv) {
         throw std::logic_error("DDP and TP cannot be enabled at the same time. Disable DDP or TP.");
     }
 
-    initialize_device(ddp, enable_tp);
+    auto yaml_config = YAML::LoadFile(config_name);
+    TrainingConfig config = parse_config(yaml_config);
+    EvalConfig eval_config = parse_eval_config(yaml_config);
+
+    if (config.enable_mpi) {
+        auto &ctx = ttml::autograd::ctx();
+        ctx.init_mpi_context(argc, argv);
+
+        auto &mpi_ctx = ctx.get_mpi_context();
+        fmt::print("Size {}, Rank {}: Initializing MPI context\n", mpi_ctx.get_size(), mpi_ctx.get_rank());
+
+        // disable wandb for now in case of mpi example
+        enable_wandb = false;
+    }
 
     if (enable_wandb) {
         auto result = signal(SIGINT, signal_handler);
@@ -472,9 +486,7 @@ int main(int argc, char **argv) {
         }
     }
 
-    auto yaml_config = YAML::LoadFile(config_name);
-    TrainingConfig config = parse_config(yaml_config);
-    EvalConfig eval_config = parse_eval_config(yaml_config);
+    initialize_device(ddp, enable_tp);
 
     if (enable_tp) {
         if (!config.model_path.empty()) {
@@ -539,6 +551,11 @@ int main(int argc, char **argv) {
 
     // set seed
     ttml::autograd::ctx().set_seed(config.seed);
+    if (config.enable_mpi) {
+        auto rank = ttml::autograd::ctx().get_mpi_context().get_rank();
+        auto seed = config.seed + rank;
+        ttml::autograd::ctx().set_seed(seed);
+    }
     auto schedule_func = schedulers.at(config.scheduler_type);
 
     std::string text;
@@ -703,16 +720,22 @@ int main(int argc, char **argv) {
     adamw_params.lr = config.learning_rate;
     adamw_params.weight_decay = config.weight_decay;
     adamw_params.use_kahan_summation = config.use_kahan_summation;
-    fmt::print("AdamW configuration:\n");
-    fmt::print("    Learning rate: {}\n", adamw_params.lr);
-    fmt::print("    Weight decay: {}\n", adamw_params.weight_decay);
-    fmt::print("    Use Kahan summation: {}\n", adamw_params.use_kahan_summation);
+    if (!config.enable_mpi) {
+        fmt::print("AdamW configuration:\n");
+        fmt::print("    Learning rate: {}\n", adamw_params.lr);
+        fmt::print("    Weight decay: {}\n", adamw_params.weight_decay);
+        fmt::print("    Use Kahan summation: {}\n", adamw_params.use_kahan_summation);
+    } else {
+        fmt::println("Remote optimizer configured!");
+    }
 
     fmt::print("Number of parameters: {}\n", get_number_of_parameters(model, enable_tp));
 
-    auto select_optimizer = [&model,
-                             &adamw_params](bool use_moreh_adamw) -> std::unique_ptr<ttml::optimizers::OptimizerBase> {
-        if (use_moreh_adamw) {
+    auto select_optimizer =
+        [&model, &adamw_params, &config](bool use_moreh_adamw) -> std::unique_ptr<ttml::optimizers::OptimizerBase> {
+        if (config.enable_mpi) {
+            return std::make_unique<RemoteOptimizer>(get_model_parameters(model), config.num_mpi_workers);
+        } else if (use_moreh_adamw) {
             return std::make_unique<ttml::optimizers::MorehAdamW>(get_model_parameters(model), adamw_params);
         } else {
             return std::make_unique<ttml::optimizers::AdamW>(get_model_parameters(model), adamw_params);
@@ -721,10 +744,24 @@ int main(int argc, char **argv) {
 
     auto optimizer = select_optimizer(config.use_moreh_adamw);
     auto scheduler = schedule_func(optimizer.get(), config.max_steps);
-    if (!config.model_path.empty() && std::filesystem::exists(config.model_path)) {
-        fmt::print("Loading model from {}\n", config.model_path);
-        load_training_state(config.model_path, model, scheduler, "transformer", "adamw");
-        fmt::print("Model loaded after {} steps\n", optimizer->get_steps());
+
+    if (config.enable_mpi) {
+        // receive weights from optimizer thread
+    } else {
+        // otherwise proceed with normal loading training state if necessary
+        if (!config.model_path.empty() && std::filesystem::exists(config.model_path)) {
+            fmt::print("Loading model from {}\n", config.model_path);
+            load_training_state(config.model_path, model, scheduler, "transformer", "adamw");
+            fmt::print("Model loaded after {} steps\n", optimizer->get_steps());
+        }
+    }
+
+    if (config.enable_mpi && is_eval) {
+        throw std::logic_error("Evaluation is not supported with 3 tier training");
+    }
+
+    if (config.enable_mpi && config.use_clip_grad_norm) {
+        throw std::logic_error("Clip grad norm is not supported with 3 tier training");
     }
 
     if (is_eval) {
@@ -808,8 +845,12 @@ int main(int argc, char **argv) {
                          {"Learning rate", optimizer->get_lr()}});
                     loss_meter.reset();
                 }
-                if (!config.model_path.empty() && global_step % config.model_save_interval == 0) {
-                    save_training_state(config.model_path, model, scheduler, "transformer", "adamw");
+
+                if (!config.enable_mpi) {
+                    // save training state if it's not 3 tier training
+                    if (!config.model_path.empty() && global_step % config.model_save_interval == 0) {
+                        save_training_state(config.model_path, model, scheduler, "transformer", "adamw");
+                    }
                 }
 
                 if (global_step >= config.max_steps) {
@@ -830,8 +871,11 @@ int main(int argc, char **argv) {
         }
     }
 
-    if (!config.model_path.empty()) {
-        save_training_state(config.model_path, model, scheduler, "transformer", "adamw");
+    if (!config.enable_mpi) {
+        // save training state if it's not 3 tier training
+        if (!config.model_path.empty()) {
+            save_training_state(config.model_path, model, scheduler, "transformer", "adamw");
+        }
     }
 
     auto end_timer = std::chrono::high_resolution_clock::now();
@@ -842,8 +886,17 @@ int main(int argc, char **argv) {
         (double)duration / 1000000.,
         device->num_program_cache_entries());
 
+    if (config.enable_mpi) {
+        auto &ctx = ttml::autograd::ctx();
+        auto &mpi_ctx = ctx.get_mpi_context();
+        mpi_ctx.barrier();
+        mpi_ctx.finalize();
+        fmt::print("Rank {}: Finalizing MPI context\n", mpi_ctx.get_rank());
+    }
+
     if (enable_wandb) {
         wandbcpp::finish();
     }
+
     return 0;
 }
