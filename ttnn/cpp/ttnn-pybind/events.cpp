@@ -94,6 +94,17 @@ void py_module(py::module& module) {
                 cq_id (int): The Command Queue on which the barrier is being issued.
                 mesh_event (MeshEvent): The Command Queue will stall until this event is completed.
             )doc");
+
+    module.def(
+        "event_synchronize",
+        py::overload_cast<const std::shared_ptr<tt::tt_metal::Event>&>(&event_synchronize),
+        py::arg("event"),
+        R"doc(
+            Synchronizes an event, blocking until the event is completed.
+
+            Args:
+                event (event): The event to synchronize.
+        )doc");
 }
 
 }  // namespace ttnn::events
