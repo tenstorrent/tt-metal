@@ -41,6 +41,9 @@ run_tg_llama_70b_model_perf_tests() {
   # Run non-overlapped dispatch perf test
   TT_METAL_KERNELS_EARLY_RETURN=1 TT_METAL_ENABLE_ERISC_IRAM=1 FAKE_DEVICE=TG LLAMA_DIR=$llama70b pytest models/demos/llama3_subdevices/tests/test_decoder_device_perf.py::test_llama_TG_perf_device_non_overlapped_dispatch ; fail+=$?
 
+  # Run kernel and op to op latency test for prefill
+  TT_METAL_ENABLE_ERISC_IRAM=1 FAKE_DEVICE=TG LLAMA_DIR=$llama70b pytest models/demos/llama3_subdevices/tests/test_prefill_device_perf.py::test_llama_TG_perf_device ; fail+=$?
+
   # # Merge all the generated reports
   # env python3 models/perf/merge_perf_results.py; fail+=$?
 
