@@ -343,7 +343,7 @@ class ModelArgs:
         self.arch_name = ttnn.get_arch_name()
         self.device_name = {
             0: "CPU",
-            1: "P150" if self.arch_name == "blackhole" else "N150",
+            1: "P100" if self.arch_name == "blackhole" else "N150",
             2: "P300" if self.arch_name == "blackhole" else "N300",
             4: "P150x4",  # Config only exists in BH at the moment
             8: "T3K",
@@ -1507,7 +1507,7 @@ class ModelArgs:
 
     def create_dram_sharded_mem_config(self, k, n):
         """Create DRAM-sharded memory config for width-sharded tensors"""
-        dram_cores = 8 if self.arch_name == "blackhole" else 12  # WH has 12 dram cores
+        dram_cores = 7 if self.arch_name == "blackhole" else 12  # WH has 12 dram cores
         padded_size = math.ceil(n / (self.tile_size * dram_cores)) * (self.tile_size * dram_cores)
         shard_spec = ttnn.ShardSpec(
             self.dram_weight_grid, (k, padded_size // dram_cores), ttnn.ShardOrientation.ROW_MAJOR
