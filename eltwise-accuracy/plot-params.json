@@ -1,30 +1,1528 @@
 {
-    "plots":[
-        {
-            "id": "plot-cos-zoom",
-            "output": "cos-zoom.png",
-            "operations": [
-                "cos"
-            ],
+    "relative_plots": {
+        "default_params": {
             "dtype": "bfloat16",
+            "xname": "base_x",
+
             "plot_params": {
-                "xmin": 0,
-                "xmax": 0,
-                "ymin": 0,
-                "ymax": 0,
                 "xscale": "symlog",
-                "yscale": "log",
-                "xticks": null,
-                "yticks": null
-            },
-            "extra_lines": {
-                "vertical": [
-                    {
-                        "x": 3.14,
-                        "label": "x=pi"
-                    }
-                ]
+                "ylim": [0, 1],
+                "yticksformat": "percent"
             }
-        }
-    ]
+        },
+        "list":
+        [
+            {
+                "id": "exp-bfloat16",
+                "output": "accuracy_results/plots/exp-bfloat16.png",
+                "files": [
+                    "accuracy_results/results/exp-bfloat16-[32].csv",
+                    "accuracy_results/results/exp_approx-bfloat16-[32].csv"
+                ],
+                "dtype": "bfloat16",
+                "xname": "base_x",
+                "ynames": [
+                    ["max_rel_error", "(max)"],
+                    ["mean_abs_error", "(mean)"]
+                ],
+                "hue": "operation",
+                "plot_params": {
+                    "xmin": -100,
+                    "xmax": 100,
+                    "xscale": "symlog",
+                    "xbase": 2,
+                    "yticks": [0, 0.01, 0.05, 0.1, 0.5, 1],
+                    "xlabel": "x",
+                    "ylabel": "Relative Error \n vs. torch [%]",
+                    "yticksformat": "percent"
+                }
+            },
+            {
+                "id": "exp-bfloat16-zoom",
+                "output": "accuracy_results/plots/exp-bfloat16-zoom.png",
+                "files": [
+                    "accuracy_results/results/exp-bfloat16-[1].csv",
+                    "accuracy_results/results/exp_approx-bfloat16-[1].csv"
+                ],
+                "dtype": "bfloat16",
+                "xname": "base_x",
+                "ynames": [
+                    "max_rel_error"
+                ],
+                "hue": "operation",
+                "plot_params": {
+                    "xmin": -100,
+                    "xmax": 100,
+                    "xscale": "symlog",
+                    "xbase": 2,
+                    "yticks": [0, 0.01, 0.05, 0.1, 0.5, 1],
+                    "xlabel": "x",
+                    "ylabel": "Max Relative Error \n vs. torch [%]",
+                    "yticksformat": "percent"
+                }
+            },
+            {
+                "id": "pow-bfloat16",
+                "output": "accuracy_results/plots/pow-bfloat16.png",
+                "files": [
+                    "accuracy_results/results/pow_2-bfloat16-[32].csv",
+                    "accuracy_results/results/pow_3-bfloat16-[32].csv",
+                    "accuracy_results/results/pow_10-bfloat16-[32].csv"
+
+                ],
+                "dtype": "bfloat16",
+                "xname": "base_x",
+                "ynames": [
+                    "max_rel_error",
+                    "mean_abs_error"
+                ],
+                "hue": "operation",
+                "plot_params": {
+                    "xmin": -100,
+                    "xmax": 100,
+                    "xscale": "symlog",
+                    "xbase": 2,
+                    "yticks": [0, 0.01, 0.05, 0.1, 0.5, 1],
+                    "xlabel": "x",
+                    "ylabel": "Max Relative Error \n vs. torch [%]",
+                    "yticksformat": "percent"
+                }
+            },
+            {
+                "id": "pow-bfloat16-zoom",
+                "output": "accuracy_results/plots/pow-bfloat16-zoom.png",
+                "files": [
+                    "accuracy_results/results/pow_2-bfloat16-[1].csv",
+                    "accuracy_results/results/pow_3-bfloat16-[1].csv",
+                    "accuracy_results/results/pow_10-bfloat16-[1].csv"
+                ],
+                "dtype": "bfloat16",
+                "xname": "base_x",
+                "ynames": [
+                    "max_rel_error"
+                ],
+                "hue": "operation",
+                "plot_params": {
+                    "xmin": -100,
+                    "xmax": 100,
+                    "xscale": "symlog",
+                    "xbase": 2,                "yticks": [0, 0.01, 0.05, 0.1, 0.5, 1],
+                    "xlabel": "x",
+                    "ylabel": "Max Relative Error \n vs. torch [%]",
+                    "yticksformat": "percent"
+                }
+            },
+            {
+                "id": "tanh-bfloat16",
+                "output": "accuracy_results/plots/tanh-bfloat16.png",
+                "files": [
+                    "accuracy_results/results/tanh-bfloat16-[32].csv"
+                ],
+                "dtype": "bfloat16",
+                "xname": "base_x",
+                "ynames": [
+                    "max_rel_error",
+                    "mean_abs_error"
+                ],
+                "hue": "operation",
+                "plot_params": {
+                    "xmin": 0,
+                    "xmax": 10,
+                    "ymin": 0,
+                    "ymax": 1,
+                    "xscale": "symlog",
+                    "xbase": 10,
+                    "yscale": "log",
+                    "ybase": 10,
+                    "xticks": null,
+                    "yticks": [0, 0.01, 0.05, 0.1, 0.5, 1],
+                    "xlabel": "x",
+                    "ylabel": "Max Relative Error \n vs. torch [%]",
+                    "yticksformat": "percent"
+                }
+            },
+            {
+                "id": "tanh-bfloat16-zoom",
+                "output": "accuracy_results/plots/tanh-bfloat16-zoom.png",
+                "files": [
+                    "accuracy_results/results/tanh-bfloat16-[1].csv"
+                ],
+                "dtype": "bfloat16",
+                "xname": "base_x",
+                "ynames": [
+                    "max_rel_error"
+                ],
+                "hue": "operation",
+                "plot_params": {
+                    "xmin": 0,
+                    "xmax": 10,
+                    "ymin": 0,
+                    "ymax": 1,
+                    "xscale": "symlog",
+                    "xbase": 10,
+                    "yscale": "log",
+                    "ybase": 10,
+                    "xticks": null,
+                    "yticks": [0, 0.01, 0.05, 0.1, 0.5, 1],
+                    "xlabel": "x",
+                    "ylabel": "Max Relative Error \n vs. torch [%]",
+                    "yticksformat": "percent"
+                }
+            },
+            {
+                "id": "cosh-bfloat16",
+                "output": "accuracy_results/plots/cosh-bfloat16.png",
+                "files": [
+                    "accuracy_results/results/cosh-bfloat16-[32].csv"
+                ],
+                "dtype": "bfloat16",
+                "xname": "base_x",
+                "ynames": [
+                    "max_rel_error",
+                    "mean_abs_error"
+                ],
+                "hue": "operation",
+                "plot_params": {
+                    "xmin": 0,
+                    "xmax": 10,
+                    "ymin": 0,
+                    "ymax": 1,
+                    "xscale": "symlog",
+                    "xbase": 10,
+                    "yscale": "log",
+                    "ybase": 10,
+                    "xticks": null,
+                    "yticks": [0, 0.01, 0.05, 0.1, 0.5, 1],
+                    "xlabel": "x",
+                    "ylabel": "Max Relative Error \n vs. torch [%]",
+                    "yticksformat": "percent"
+                }
+            },
+            {
+                "id": "cosh-bfloat16-zoom",
+                "output": "accuracy_results/plots/cosh-bfloat16-zoom.png",
+                "files": [
+                    "accuracy_results/results/cosh-bfloat16-[1].csv"
+                ],
+                "dtype": "bfloat16",
+                "xname": "base_x",
+                "ynames": [
+                    "max_rel_error"
+                ],
+                "hue": "operation",
+                "plot_params": {
+                    "xmin": 0,
+                    "xmax": 10,
+                    "ymin": 0,
+                    "ymax": 1,
+                    "xscale": "symlog",
+                    "xbase": 10,
+                    "yscale": "log",
+                    "ybase": 10,
+                    "xticks": null,
+                    "yticks": [0, 0.01, 0.05, 0.1, 0.5, 1],
+                    "xlabel": "x",
+                    "ylabel": "Max Relative Error \n vs. torch [%]",
+                    "yticksformat": "percent"
+                }
+            },
+            {
+                "id": "sinh-bfloat16",
+                "output": "accuracy_results/plots/sinh-bfloat16.png",
+                "files": [
+                    "accuracy_results/results/sinh-bfloat16-[32].csv"
+                ],
+                "dtype": "bfloat16",
+                "xname": "base_x",
+                "ynames": [
+                    "max_rel_error",
+                    "mean_abs_error"
+                ],
+                "hue": "operation",
+                "plot_params": {
+                    "xmin": 0,
+                    "xmax": 10,
+                    "ymin": 0,
+                    "ymax": 1,
+                    "xscale": "symlog",
+                    "xbase": 10,
+                    "yscale": "log",
+                    "ybase": 10,
+                    "xticks": null,
+                    "yticks": [0, 0.01, 0.05, 0.1, 0.5, 1],
+                    "xlabel": "x",
+                    "ylabel": "Max Relative Error \n vs. torch [%]",
+                    "yticksformat": "percent"
+                }
+            },
+            {
+                "id": "sinh-bfloat16-zoom",
+                "output": "accuracy_results/plots/sinh-bfloat16-zoom.png",
+                "files": [
+                    "accuracy_results/results/sinh-bfloat16-[1].csv"
+                ],
+                "dtype": "bfloat16",
+                "xname": "base_x",
+                "ynames": [
+                    "max_rel_error"
+                ],
+                "hue": "operation",
+                "plot_params": {
+                    "xmin": 0,
+                    "xmax": 10,
+                    "ymin": 0,
+                    "ymax": 1,
+                    "xscale": "symlog",
+                    "xbase": 10,
+                    "yscale": "log",
+                    "ybase": 10,
+                    "xticks": null,
+                    "yticks": [0, 0.01, 0.05, 0.1, 0.5, 1],
+                    "xlabel": "x",
+                    "ylabel": "Max Relative Error \n vs. torch [%]",
+                    "yticksformat": "percent"
+                }
+            },
+            {
+                "id": "log-bfloat16",
+                "output": "accuracy_results/plots/log-bfloat16.png",
+                "files": [
+                    "accuracy_results/results/log-bfloat16-[32].csv"
+                ],
+                "dtype": "bfloat16",
+                "xname": "base_x",
+                "ynames": [
+                    "max_rel_error",
+                    "mean_abs_error"
+                ],
+                "hue": "operation",
+                "plot_params": {
+                    "xmin": 0,
+                    "xmax": 10,
+                    "ymin": 0,
+                    "ymax": 1,
+                    "xscale": "symlog",
+                    "xbase": 10,
+                    "yscale": "log",
+                    "ybase": 10,
+                    "xticks": null,
+                    "yticks": [0, 0.01, 0.05, 0.1, 0.5, 1],
+                    "xlabel": "x",
+                    "ylabel": "Max Relative Error \n vs. torch [%]",
+                    "yticksformat": "percent"
+                }
+            },
+            {
+                "id": "log10-bfloat16-zoom",
+                "output": "accuracy_results/plots/log10-bfloat16-zoom.png",
+                "files": [
+                    "accuracy_results/results/log10-bfloat16-[1].csv"
+                ],
+                "dtype": "bfloat16",
+                "xname": "base_x",
+                "ynames": [
+                    "max_rel_error"
+                ],
+                "hue": "operation",
+                "plot_params": {
+                    "xmin": 0,
+                    "xmax": 10,
+                    "ymin": 0,
+                    "ymax": 1,
+                    "xscale": "symlog",
+                    "xbase": 10,
+                    "yscale": "log",
+                    "ybase": 10,
+                    "xticks": null,
+                    "yticks": [0, 0.01, 0.05, 0.1, 0.5, 1],
+                    "xlabel": "x",
+                    "ylabel": "Max Relative Error \n vs. torch [%]",
+                    "yticksformat": "percent"
+                }
+            },
+            {
+                "id": "log10-bfloat16",
+                "output": "accuracy_results/plots/log10-bfloat16.png",
+                "files": [
+                    "accuracy_results/results/log10-bfloat16-[32].csv"
+                ],
+                "dtype": "bfloat16",
+                "xname": "base_x",
+                "ynames": [
+                    "max_rel_error",
+                    "mean_abs_error"
+                ],
+                "hue": "operation",
+                "plot_params": {
+                    "xmin": 0,
+                    "xmax": 10,
+                    "ymin": 0,
+                    "ymax": 1,
+                    "xscale": "symlog",
+                    "xbase": 10,
+                    "yscale": "log",
+                    "ybase": 10,
+                    "xticks": null,
+                    "yticks": [0, 0.01, 0.05, 0.1, 0.5, 1],
+                    "xlabel": "x",
+                    "ylabel": "Max Relative Error \n vs. torch [%]",
+                    "yticksformat": "percent"
+                }
+            },
+            {
+                "id": "log2-bfloat16",
+                "output": "accuracy_results/plots/log2-bfloat16.png",
+                "files": [
+                    "accuracy_results/results/log2-bfloat16-[32].csv"
+                ],
+                "dtype": "bfloat16",
+                "xname": "base_x",
+                "ynames": [
+                    "max_rel_error",
+                    "mean_abs_error"
+                ],
+                "hue": "operation",
+                "plot_params": {
+                    "xmin": 0,
+                    "xmax": 10,
+                    "ymin": 0,
+                    "ymax": 1,
+                    "xscale": "symlog",
+                    "xbase": 10,
+                    "yscale": "log",
+                    "ybase": 10,
+                    "xticks": null,
+                    "yticks": [0, 0.01, 0.05, 0.1, 0.5, 1],
+                    "xlabel": "x",
+                    "ylabel": "Max Relative Error \n vs. torch [%]",
+                    "yticksformat": "percent"
+                }
+            },
+            {
+                "id": "log2-bfloat16-zoom",
+                "output": "accuracy_results/plots/log2-bfloat16-zoom.png",
+                "files": [
+                    "accuracy_results/results/cosh-bfloat16-[1].csv"
+                ],
+                "dtype": "bfloat16",
+                "xname": "base_x",
+                "ynames": [
+                    "max_rel_error"
+                ],
+                "hue": "operation",
+                "plot_params": {
+                    "xmin": 0,
+                    "xmax": 10,
+                    "ymin": 0,
+                    "ymax": 1,
+                    "xscale": "symlog",
+                    "xbase": 10,
+                    "yscale": "log",
+                    "ybase": 10,
+                    "xticks": null,
+                    "yticks": [0, 0.01, 0.05, 0.1, 0.5, 1],
+                    "xlabel": "x",
+                    "ylabel": "Max Relative Error \n vs. torch [%]",
+                    "yticksformat": "percent"
+                }
+            },
+            {
+                "id": "log1p-bfloat16",
+                "output": "accuracy_results/plots/log1p-bfloat16.png",
+                "files": [
+                    "accuracy_results/results/log1p-bfloat16-[32].csv"
+                ],
+                "dtype": "bfloat16",
+                "xname": "base_x",
+                "ynames": [
+                    "max_rel_error",
+                    "mean_abs_error"
+                ],
+                "hue": "operation",
+                "plot_params": {
+                    "xmin": 0,
+                    "xmax": 10,
+                    "ymin": 0,
+                    "ymax": 1,
+                    "xscale": "symlog",
+                    "xbase": 10,
+                    "yscale": "log",
+                    "ybase": 10,
+                    "xticks": null,
+                    "yticks": [0, 0.01, 0.05, 0.1, 0.5, 1],
+                    "xlabel": "x",
+                    "ylabel": "Max Relative Error \n vs. torch [%]",
+                    "yticksformat": "percent"
+                }
+            },
+            {
+                "id": "log1p-bfloat16-zoom",
+                "output": "accuracy_results/plots/log1p-bfloat16-zoom.png",
+                "files": [
+                    "accuracy_results/results/log1p-bfloat16-[1].csv"
+                ],
+                "dtype": "bfloat16",
+                "xname": "base_x",
+                "ynames": [
+                    "max_rel_error"
+                ],
+                "hue": "operation",
+                "plot_params": {
+                    "xmin": 0,
+                    "xmax": 10,
+                    "ymin": 0,
+                    "ymax": 1,
+                    "xscale": "symlog",
+                    "xbase": 10,
+                    "yscale": "log",
+                    "ybase": 10,
+                    "xticks": null,
+                    "yticks": [0, 0.01, 0.05, 0.1, 0.5, 1],
+                    "xlabel": "x",
+                    "ylabel": "Max Relative Error \n vs. torch [%]",
+                    "yticksformat": "percent"
+                }
+            },
+            {
+                "id": "tan-bfloat16",
+                "output": "accuracy_results/plots/tan-bfloat16.png",
+                "files": [
+                    "accuracy_results/results/tan-bfloat16-[32].csv"
+                ],
+                "dtype": "bfloat16",
+                "xname": "base_x",
+                "ynames": [
+                    "max_rel_error",
+                    "mean_abs_error"
+                ],
+                "hue": "operation",
+                "plot_params": {
+                    "xmin": 0,
+                    "xmax": 10,
+                    "ymin": 0,
+                    "ymax": 1,
+                    "xscale": "symlog",
+                    "xbase": 10,
+                    "yscale": "log",
+                    "ybase": 10,
+                    "xticks": null,
+                    "yticks": [0, 0.01, 0.05, 0.1, 0.5, 1],
+                    "xlabel": "x",
+                    "ylabel": "Max Relative Error \n vs. torch [%]",
+                    "yticksformat": "percent"
+                }
+            },
+            {
+                "id": "tan-bfloat16-zoom",
+                "output": "accuracy_results/plots/tan-bfloat16-zoom.png",
+                "files": [
+                    "accuracy_results/results/cosh-bfloat16-[1].csv"
+                ],
+                "dtype": "bfloat16",
+                "xname": "base_x",
+                "ynames": [
+                    "max_rel_error"
+                ],
+                "hue": "operation",
+                "plot_params": {
+                    "xmin": 0,
+                    "xmax": 10,
+                    "ymin": 0,
+                    "ymax": 1,
+                    "xscale": "symlog",
+                    "xbase": 10,
+                    "yscale": "log",
+                    "ybase": 10,
+                    "xticks": null,
+                    "yticks": [0, 0.01, 0.05, 0.1, 0.5, 1],
+                    "xlabel": "x",
+                    "ylabel": "Max Relative Error \n vs. torch [%]",
+                    "yticksformat": "percent"
+                }
+            },
+            {
+                "id": "atan-bfloat16",
+                "output": "accuracy_results/plots/atan-bfloat16.png",
+                "files": [
+                    "accuracy_results/results/atan-bfloat16-[32].csv"
+                ],
+                "dtype": "bfloat16",
+                "xname": "base_x",
+                "ynames": [
+                    "max_rel_error",
+                    "mean_abs_error"
+                ],
+                "hue": "operation",
+                "plot_params": {
+                    "xmin": 0,
+                    "xmax": 10,
+                    "ymin": 0,
+                    "ymax": 1,
+                    "xscale": "symlog",
+                    "xbase": 10,
+                    "yscale": "log",
+                    "ybase": 10,
+                    "xticks": null,
+                    "yticks": [0, 0.01, 0.05, 0.1, 0.5, 1],
+                    "xlabel": "x",
+                    "ylabel": "Max Relative Error \n vs. torch [%]",
+                    "yticksformat": "percent"
+                }
+            },
+            {
+                "id": "atan-bfloat16-zoom",
+                "output": "accuracy_results/plots/atan-bfloat16-zoom.png",
+                "files": [
+                    "accuracy_results/results/atan-bfloat16-[1].csv"
+                ],
+                "dtype": "bfloat16",
+                "xname": "base_x",
+                "ynames": [
+                    "max_rel_error"
+                ],
+                "hue": "operation",
+                "plot_params": {
+                    "xmin": 0,
+                    "xmax": 10,
+                    "ymin": 0,
+                    "ymax": 1,
+                    "xscale": "symlog",
+                    "xbase": 10,
+                    "yscale": "log",
+                    "ybase": 10,
+                    "xticks": null,
+                    "yticks": [0, 0.01, 0.05, 0.1, 0.5, 1],
+                    "xlabel": "x",
+                    "ylabel": "Max Relative Error \n vs. torch [%]",
+                    "yticksformat": "percent"
+                }
+            },
+            {
+                "id": "cos-bfloat16",
+                "output": "accuracy_results/plots/cos-bfloat16.png",
+                "files": [
+                    "accuracy_results/results/cos-bfloat16-[32].csv"
+                ],
+                "dtype": "bfloat16",
+                "xname": "base_x",
+                "ynames": [
+                    "max_rel_error",
+                    "mean_abs_error"
+                ],
+                "hue": "operation",
+                "plot_params": {
+                    "xmin": 0,
+                    "xmax": 10,
+                    "ymin": 0,
+                    "ymax": 1,
+                    "xscale": "symlog",
+                    "xbase": 10,
+                    "yscale": "log",
+                    "ybase": 10,
+                    "xticks": null,
+                    "yticks": [0, 0.01, 0.05, 0.1, 0.5, 1],
+                    "xlabel": "x",
+                    "ylabel": "Max Relative Error \n vs. torch [%]",
+                    "yticksformat": "percent"
+                }
+            },
+            {
+                "id": "cos-bfloat16-zoom",
+                "output": "accuracy_results/plots/cos-bfloat16-zoom.png",
+                "files": [
+                    "accuracy_results/results/cos-bfloat16-[1].csv"
+                ],
+                "dtype": "bfloat16",
+                "xname": "base_x",
+                "ynames": [
+                    "max_rel_error"
+                ],
+                "hue": "operation",
+                "plot_params": {
+                    "xmin": 0,
+                    "xmax": 10,
+                    "ymin": 0,
+                    "ymax": 1,
+                    "xscale": "symlog",
+                    "xbase": 10,
+                    "yscale": "log",
+                    "ybase": 10,
+                    "xticks": null,
+                    "yticks": [0, 0.01, 0.05, 0.1, 0.5, 1],
+                    "xlabel": "x",
+                    "ylabel": "Max Relative Error \n vs. torch [%]",
+                    "yticksformat": "percent"
+                }
+            },
+            {
+                "id": "sin-bfloat16",
+                "output": "accuracy_results/plots/sin-bfloat16.png",
+                "files": [
+                    "accuracy_results/results/sin-bfloat16-[32].csv"
+                ],
+                "dtype": "bfloat16",
+                "xname": "base_x",
+                "ynames": [
+                    "max_rel_error",
+                    "mean_abs_error"
+                ],
+                "hue": "operation",
+                "plot_params": {
+                    "xmin": 0,
+                    "xmax": 10,
+                    "ymin": 0,
+                    "ymax": 1,
+                    "xscale": "symlog",
+                    "xbase": 10,
+                    "yscale": "log",
+                    "ybase": 10,
+                    "xticks": null,
+                    "yticks": [0, 0.01, 0.05, 0.1, 0.5, 1],
+                    "xlabel": "x",
+                    "ylabel": "Max Relative Error \n vs. torch [%]",
+                    "yticksformat": "percent"
+                }
+            },
+            {
+                "id": "sin-bfloat16-zoom",
+                "output": "accuracy_results/plots/sin-bfloat16-zoom.png",
+                "files": [
+                    "accuracy_results/results/sin-bfloat16-[1].csv"
+                ],
+                "dtype": "bfloat16",
+                "xname": "base_x",
+                "ynames": [
+                    "max_rel_error"
+                ],
+                "hue": "operation",
+                "plot_params": {
+                    "xmin": 0,
+                    "xmax": 10,
+                    "ymin": 0,
+                    "ymax": 1,
+                    "xscale": "symlog",
+                    "xbase": 10,
+                    "yscale": "log",
+                    "ybase": 10,
+                    "xticks": null,
+                    "yticks": [0, 0.01, 0.05, 0.1, 0.5, 1],
+                    "xlabel": "x",
+                    "ylabel": "Max Relative Error \n vs. torch [%]",
+                    "yticksformat": "percent"
+                }
+            },
+            {
+                "id": "silu-bfloat16",
+                "output": "accuracy_results/plots/silu-bfloat16.png",
+                "files": [
+                    "accuracy_results/results/silu-bfloat16-[32].csv"
+                ],
+                "dtype": "bfloat16",
+                "xname": "base_x",
+                "ynames": [
+                    "max_rel_error",
+                    "mean_abs_error"
+                ],
+                "hue": "operation",
+                "plot_params": {
+                    "xmin": 0,
+                    "xmax": 10,
+                    "ymin": 0,
+                    "ymax": 1,
+                    "xscale": "symlog",
+                    "xbase": 10,
+                    "yscale": "log",
+                    "ybase": 10,
+                    "xticks": null,
+                    "yticks": [0, 0.01, 0.05, 0.1, 0.5, 1],
+                    "xlabel": "x",
+                    "ylabel": "Max Relative Error \n vs. torch [%]",
+                    "yticksformat": "percent"
+                }
+            },
+            {
+                "id": "silu-bfloat16-zoom",
+                "output": "accuracy_results/plots/silu-bfloat16-zoom.png",
+                "files": [
+                    "accuracy_results/results/silu-bfloat16-[1].csv"
+                ],
+                "dtype": "bfloat16",
+                "xname": "base_x",
+                "ynames": [
+                    "max_rel_error"
+                ],
+                "hue": "operation",
+                "plot_params": {
+                    "xmin": 0,
+                    "xmax": 10,
+                    "ymin": 0,
+                    "ymax": 1,
+                    "xscale": "symlog",
+                    "xbase": 10,
+                    "yscale": "log",
+                    "ybase": 10,
+                    "xticks": null,
+                    "yticks": [0, 0.01, 0.05, 0.1, 0.5, 1],
+                    "xlabel": "x",
+                    "ylabel": "Max Relative Error \n vs. torch [%]",
+                    "yticksformat": "percent"
+                }
+            },
+            {
+                "id": "selu-bfloat16",
+                "output": "accuracy_results/plots/selu-bfloat16.png",
+                "files": [
+                    "accuracy_results/results/selu-bfloat16-[32].csv"
+                ],
+                "dtype": "bfloat16",
+                "xname": "base_x",
+                "ynames": [
+                    "max_rel_error",
+                    "mean_abs_error"
+                ],
+                "hue": "operation",
+                "plot_params": {
+                    "xmin": 0,
+                    "xmax": 10,
+                    "ymin": 0,
+                    "ymax": 1,
+                    "xscale": "symlog",
+                    "xbase": 10,
+                    "yscale": "log",
+                    "ybase": 10,
+                    "xticks": null,
+                    "yticks": [0, 0.01, 0.05, 0.1, 0.5, 1],
+                    "xlabel": "x",
+                    "ylabel": "Max Relative Error \n vs. torch [%]",
+                    "yticksformat": "percent"
+                }
+            },
+            {
+                "id": "selu-bfloat16-zoom",
+                "output": "accuracy_results/plots/selu-bfloat16-zoom.png",
+                "files": [
+                    "accuracy_results/results/selu-bfloat16-[1].csv"
+                ],
+                "dtype": "bfloat16",
+                "xname": "base_x",
+                "ynames": [
+                    "max_rel_error"
+                ],
+                "hue": "operation",
+                "plot_params": {
+                    "xmin": 0,
+                    "xmax": 10,
+                    "ymin": 0,
+                    "ymax": 1,
+                    "xscale": "symlog",
+                    "xbase": 10,
+                    "yscale": "log",
+                    "ybase": 10,
+                    "xticks": null,
+                    "yticks": [0, 0.01, 0.05, 0.1, 0.5, 1],
+                    "xlabel": "x",
+                    "ylabel": "Max Relative Error \n vs. torch [%]",
+                    "yticksformat": "percent"
+                }
+            },
+            {
+                "id": "softplus-bfloat16",
+                "output": "accuracy_results/plots/softplus-bfloat16.png",
+                "files": [
+                    "accuracy_results/results/softplus-bfloat16-[32].csv"
+                ],
+                "dtype": "bfloat16",
+                "xname": "base_x",
+                "ynames": [
+                    "max_rel_error",
+                    "mean_abs_error"
+                ],
+                "hue": "operation",
+                "plot_params": {
+                    "xmin": 0,
+                    "xmax": 10,
+                    "ymin": 0,
+                    "ymax": 1,
+                    "xscale": "symlog",
+                    "xbase": 10,
+                    "yscale": "log",
+                    "ybase": 10,
+                    "xticks": null,
+                    "yticks": [0, 0.01, 0.05, 0.1, 0.5, 1],
+                    "xlabel": "x",
+                    "ylabel": "Max Relative Error \n vs. torch [%]",
+                    "yticksformat": "percent"
+                }
+            },
+            {
+                "id": "softplus-bfloat16-zoom",
+                "output": "accuracy_results/plots/softplus-bfloat16-zoom.png",
+                "files": [
+                    "accuracy_results/results/softplus-bfloat16-[1].csv"
+                ],
+                "dtype": "bfloat16",
+                "xname": "base_x",
+                "ynames": [
+                    "max_rel_error"
+                ],
+                "hue": "operation",
+                "plot_params": {
+                    "xmin": 0,
+                    "xmax": 10,
+                    "ymin": 0,
+                    "ymax": 1,
+                    "xscale": "symlog",
+                    "xbase": 10,
+                    "yscale": "log",
+                    "ybase": 10,
+                    "xticks": null,
+                    "yticks": [0, 0.01, 0.05, 0.1, 0.5, 1],
+                    "xlabel": "x",
+                    "ylabel": "Max Relative Error \n vs. torch [%]",
+                    "yticksformat": "percent"
+                }
+            },
+            {
+                "id": "softsign-bfloat16",
+                "output": "accuracy_results/plots/softsign-bfloat16.png",
+                "files": [
+                    "accuracy_results/results/softsign-bfloat16-[32].csv"
+                ],
+                "dtype": "bfloat16",
+                "xname": "base_x",
+                "ynames": [
+                    "max_rel_error",
+                    "mean_abs_error"
+                ],
+                "hue": "operation",
+                "plot_params": {
+                    "xmin": 0,
+                    "xmax": 10,
+                    "ymin": 0,
+                    "ymax": 1,
+                    "xscale": "symlog",
+                    "xbase": 10,
+                    "yscale": "log",
+                    "ybase": 10,
+                    "xticks": null,
+                    "yticks": [0, 0.01, 0.05, 0.1, 0.5, 1],
+                    "xlabel": "x",
+                    "ylabel": "Max Relative Error \n vs. torch [%]",
+                    "yticksformat": "percent"
+                }
+            },
+            {
+                "id": "softsign-bfloat16-zoom",
+                "output": "accuracy_results/plots/softsign-bfloat16-zoom.png",
+                "files": [
+                    "accuracy_results/results/softsign-bfloat16-[1].csv"
+                ],
+                "dtype": "bfloat16",
+                "xname": "base_x",
+                "ynames": [
+                    "max_rel_error"
+                ],
+                "hue": "operation",
+                "plot_params": {
+                    "xmin": 0,
+                    "xmax": 10,
+                    "ymin": 0,
+                    "ymax": 1,
+                    "xscale": "symlog",
+                    "xbase": 10,
+                    "yscale": "log",
+                    "ybase": 10,
+                    "xticks": null,
+                    "yticks": [0, 0.01, 0.05, 0.1, 0.5, 1],
+                    "xlabel": "x",
+                    "ylabel": "Max Relative Error \n vs. torch [%]",
+                    "yticksformat": "percent"
+                }
+            },
+            {
+                "id": "gelu-bfloat16",
+                "output": "accuracy_results/plots/gelu-bfloat16.png",
+                "files": [
+                    "accuracy_results/results/gelu-bfloat16-[32].csv"
+                ],
+                "dtype": "bfloat16",
+                "xname": "base_x",
+                "ynames": [
+                    "max_rel_error",
+                    "mean_abs_error"
+                ],
+                "hue": "operation",
+                "plot_params": {
+                    "xmin": 0,
+                    "xmax": 10,
+                    "ymin": 0,
+                    "ymax": 1,
+                    "xscale": "symlog",
+                    "xbase": 10,
+                    "yscale": "log",
+                    "ybase": 10,
+                    "xticks": null,
+                    "yticks": [0, 0.01, 0.05, 0.1, 0.5, 1],
+                    "xlabel": "x",
+                    "ylabel": "Max Relative Error \n vs. torch [%]",
+                    "yticksformat": "percent"
+                }
+            },
+            {
+                "id": "gelu-bfloat16-zoom",
+                "output": "accuracy_results/plots/gelu-bfloat16-zoom.png",
+                "files": [
+                    "accuracy_results/results/gelu-bfloat16-[1].csv"
+                ],
+                "dtype": "bfloat16",
+                "xname": "base_x",
+                "ynames": [
+                    "max_rel_error"
+                ],
+                "hue": "operation",
+                "plot_params": {
+                    "xmin": 0,
+                    "xmax": 10,
+                    "ymin": 0,
+                    "ymax": 1,
+                    "xscale": "symlog",
+                    "xbase": 10,
+                    "yscale": "log",
+                    "ybase": 10,
+                    "xticks": null,
+                    "yticks": [0, 0.01, 0.05, 0.1, 0.5, 1],
+                    "xlabel": "x",
+                    "ylabel": "Max Relative Error \n vs. torch [%]",
+                    "yticksformat": "percent"
+                }
+            },
+            {
+                "id": "logit-bfloat16",
+                "output": "accuracy_results/plots/logit-bfloat16.png",
+                "files": [
+                    "accuracy_results/results/logit-bfloat16-[32].csv"
+                ],
+                "dtype": "bfloat16",
+                "xname": "base_x",
+                "ynames": [
+                    "max_rel_error",
+                    "mean_abs_error"
+                ],
+                "hue": "operation",
+                "plot_params": {
+                    "xmin": 0,
+                    "xmax": 10,
+                    "ymin": 0,
+                    "ymax": 1,
+                    "xscale": "symlog",
+                    "xbase": 10,
+                    "yscale": "log",
+                    "ybase": 10,
+                    "xticks": null,
+                    "yticks": [0, 0.01, 0.05, 0.1, 0.5, 1],
+                    "xlabel": "x",
+                    "ylabel": "Max Relative Error \n vs. torch [%]",
+                    "yticksformat": "percent"
+                }
+            },
+            {
+                "id": "logit-bfloat16-zoom",
+                "output": "accuracy_results/plots/logit-bfloat16-zoom.png",
+                "files": [
+                    "accuracy_results/results/logit-bfloat16-[1].csv"
+                ],
+                "dtype": "bfloat16",
+                "xname": "base_x",
+                "ynames": [
+                    "max_rel_error"
+                ],
+                "hue": "operation",
+                "plot_params": {
+                    "xmin": 0,
+                    "xmax": 10,
+                    "ymin": 0,
+                    "ymax": 1,
+                    "xscale": "symlog",
+                    "xbase": 10,
+                    "yscale": "log",
+                    "ybase": 10,
+                    "xticks": null,
+                    "yticks": [0, 0.01, 0.05, 0.1, 0.5, 1],
+                    "xlabel": "x",
+                    "ylabel": "Max Relative Error \n vs. torch [%]",
+                    "yticksformat": "percent"
+                }
+            },
+            {
+                "id": "swish-bfloat16",
+                "output": "accuracy_results/plots/swish-bfloat16.png",
+                "files": [
+                    "accuracy_results/results/swish-bfloat16-[32].csv"
+                ],
+                "dtype": "bfloat16",
+                "xname": "base_x",
+                "ynames": [
+                    "max_rel_error",
+                    "mean_abs_error"
+                ],
+                "hue": "operation",
+                "plot_params": {
+                    "xmin": 0,
+                    "xmax": 10,
+                    "ymin": 0,
+                    "ymax": 1,
+                    "xscale": "symlog",
+                    "xbase": 10,
+                    "yscale": "log",
+                    "ybase": 10,
+                    "xticks": null,
+                    "yticks": [0, 0.01, 0.05, 0.1, 0.5, 1],
+                    "xlabel": "x",
+                    "ylabel": "Max Relative Error \n vs. torch [%]",
+                    "yticksformat": "percent"
+                }
+            },
+            {
+                "id": "swish-bfloat16-zoom",
+                "output": "accuracy_results/plots/swish-bfloat16-zoom.png",
+                "files": [
+                    "accuracy_results/results/swish-bfloat16-[1].csv"
+                ],
+                "dtype": "bfloat16",
+                "xname": "base_x",
+                "ynames": [
+                    "max_rel_error"
+                ],
+                "hue": "operation",
+                "plot_params": {
+                    "xmin": 0,
+                    "xmax": 10,
+                    "ymin": 0,
+                    "ymax": 1,
+                    "xscale": "symlog",
+                    "xbase": 10,
+                    "yscale": "log",
+                    "ybase": 10,
+                    "xticks": null,
+                    "yticks": [0, 0.01, 0.05, 0.1, 0.5, 1],
+                    "xlabel": "x",
+                    "ylabel": "Max Relative Error \n vs. torch [%]",
+                    "yticksformat": "percent"
+                }
+            },
+            {
+                "id": "mish-bfloat16",
+                "output": "accuracy_results/plots/mish-bfloat16.png",
+                "files": [
+                    "accuracy_results/results/mish-bfloat16-[32].csv"
+                ],
+                "dtype": "bfloat16",
+                "xname": "base_x",
+                "ynames": [
+                    "max_rel_error",
+                    "mean_abs_error"
+                ],
+                "hue": "operation",
+                "plot_params": {
+                    "xmin": 0,
+                    "xmax": 10,
+                    "ymin": 0,
+                    "ymax": 1,
+                    "xscale": "symlog",
+                    "xbase": 10,
+                    "yscale": "log",
+                    "ybase": 10,
+                    "xticks": null,
+                    "yticks": [0, 0.01, 0.05, 0.1, 0.5, 1],
+                    "xlabel": "x",
+                    "ylabel": "Max Relative Error \n vs. torch [%]",
+                    "yticksformat": "percent"
+                }
+            },
+            {
+                "id": "mish-bfloat16-zoom",
+                "output": "accuracy_results/plots/mish-bfloat16-zoom.png",
+                "files": [
+                    "accuracy_results/results/mish-bfloat16-[1].csv"
+                ],
+                "dtype": "bfloat16",
+                "xname": "base_x",
+                "ynames": [
+                    "max_rel_error"
+                ],
+                "hue": "operation",
+                "plot_params": {
+                    "xmin": 0,
+                    "xmax": 10,
+                    "ymin": 0,
+                    "ymax": 1,
+                    "xscale": "symlog",
+                    "xbase": 10,
+                    "yscale": "log",
+                    "ybase": 10,
+                    "xticks": null,
+                    "yticks": [0, 0.01, 0.05, 0.1, 0.5, 1],
+                    "xlabel": "x",
+                    "ylabel": "Max Relative Error \n vs. torch [%]",
+                    "yticksformat": "percent"
+                }
+            },
+            {
+                "id": "elu-bfloat16",
+                "output": "accuracy_results/plots/elu-bfloat16.png",
+                "files": [
+                    "accuracy_results/results/elu-bfloat16-[32].csv"
+                ],
+                "dtype": "bfloat16",
+                "xname": "base_x",
+                "ynames": [
+                    "max_rel_error",
+                    "mean_abs_error"
+                ],
+                "hue": "operation",
+                "plot_params": {
+                    "xmin": 0,
+                    "xmax": 10,
+                    "ymin": 0,
+                    "ymax": 1,
+                    "xscale": "symlog",
+                    "xbase": 10,
+                    "yscale": "log",
+                    "ybase": 10,
+                    "xticks": null,
+                    "yticks": [0, 0.01, 0.05, 0.1, 0.5, 1],
+                    "xlabel": "x",
+                    "ylabel": "Max Relative Error \n vs. torch [%]",
+                    "yticksformat": "percent"
+                }
+            },
+            {
+                "id": "elu-bfloat16-zoom",
+                "output": "accuracy_results/plots/elu-bfloat16-zoom.png",
+                "files": [
+                    "accuracy_results/results/elu-bfloat16-[1].csv"
+                ],
+                "dtype": "bfloat16",
+                "xname": "base_x",
+                "ynames": [
+                    "max_rel_error"
+                ],
+                "hue": "operation",
+                "plot_params": {
+                    "xmin": 0,
+                    "xmax": 10,
+                    "ymin": 0,
+                    "ymax": 1,
+                    "xscale": "symlog",
+                    "xbase": 10,
+                    "yscale": "log",
+                    "ybase": 10,
+                    "xticks": null,
+                    "yticks": [0, 0.01, 0.05, 0.1, 0.5, 1],
+                    "xlabel": "x",
+                    "ylabel": "Max Relative Error \n vs. torch [%]",
+                    "yticksformat": "percent"
+                }
+            },
+            {
+                "id": "sqrt-bfloat16",
+                "output": "accuracy_results/plots/sqrt-bfloat16.png",
+                "files": [
+                    "accuracy_results/results/sqrt-bfloat16-[1].csv"
+                ],
+                "dtype": "bfloat16",
+                "xname": "base_x",
+                "ynames": [
+                    "max_rel_error",
+                    "mean_abs_error"
+                ],
+                "hue": "operation",
+                "plot_params": {
+                    "xmin": 0,
+                    "xmax": 100,
+                    "ymin": 0,
+                    "ymax": 1,
+                    "yticks": [0, 0.01, 0.05, 0.1, 0.5, 1],
+                    "xlabel": "x",
+                    "ylabel": "Max Relative Error \n vs. torch [%]",
+                    "yticksformat": "percent"
+                }
+            },
+            {
+                "id": "sqrt-bfloat16-zoom",
+                "output": "accuracy_results/plots/sqrt-bfloat16-zoom.png",
+                "files": [
+                    "accuracy_results/results/sqrt-bfloat16-[32].csv"
+                ],
+                "dtype": "bfloat16",
+                "xname": "base_x",
+                "ynames": [
+                    "max_rel_error"
+                ],
+                "hue": "operation",
+                "plot_params": {
+                    "xmin": 0,
+                    "xmax": 100,
+                    "ymin": 0,
+                    "ymax": 1,
+                    "xscale": "log",
+                    "xbase": 2,
+                    "xticks": [0, 1, 2, 4, 8, 16, 32, 64],
+                    "yticks": [0, 0.01, 0.05, 0.1, 0.5, 1],
+                    "xlabel": "x",
+                    "ylabel": "Max Relative Error \n vs. torch [%]",
+                    "yticksformat": "percent"
+                }
+            },
+            {
+                "id": "rsqrt-bfloat16",
+                "output": "accuracy_results/plots/rsqrt-bfloat16.png",
+                "files": [
+                    "accuracy_results/results/rsqrt-bfloat16-[32].csv"
+                ],
+                "dtype": "bfloat16",
+                "xname": "base_x",
+                "ynames": [
+                    "max_rel_error",
+                    "mean_abs_error"
+                ],
+                "hue": "operation",
+                "plot_params": {
+                    "xmin": 0,
+                    "xmax": 10,
+                    "ymin": 0,
+                    "ymax": 1,
+                    "xscale": "symlog",
+                    "xbase": 10,
+                    "yscale": "log",
+                    "ybase": 10,
+                    "xticks": null,
+                    "yticks": [0, 0.01, 0.05, 0.1, 0.5, 1],
+                    "xlabel": "x",
+                    "ylabel": "Max Relative Error \n vs. torch [%]",
+                    "yticksformat": "percent"
+                }
+            },
+            {
+                "id": "rsqrt-bfloat16-zoom",
+                "output": "accuracy_results/plots/rsqrt-bfloat16-zoom.png",
+                "files": [
+                    "accuracy_results/results/rsqrt-bfloat16-[1].csv"
+                ],
+                "dtype": "bfloat16",
+                "xname": "base_x",
+                "ynames": [
+                    "max_rel_error"
+                ],
+                "hue": "operation",
+                "plot_params": {
+                    "xmin": 0,
+                    "xmax": 10,
+                    "ymin": 0,
+                    "ymax": 1,
+                    "xscale": "symlog",
+                    "xbase": 10,
+                    "yscale": "log",
+                    "ybase": 10,
+                    "xticks": null,
+                    "yticks": [0, 0.01, 0.05, 0.1, 0.5, 1],
+                    "xlabel": "x",
+                    "ylabel": "Max Relative Error \n vs. torch [%]",
+                    "yticksformat": "percent"
+                }
+            },
+            {
+                "id": "reciprocal-bfloat16",
+                "output": "accuracy_results/plots/reciprocal-bfloat16.png",
+                "files": [
+                    "accuracy_results/results/reciprocal-bfloat16-[32].csv"
+                ],
+                "dtype": "bfloat16",
+                "xname": "base_x",
+                "ynames": [
+                    "max_rel_error",
+                    "mean_abs_error"
+                ],
+                "hue": "operation",
+                "plot_params": {
+                    "xmin": -1e7,
+                    "xmax": 1e7,
+                    "yticks": [0, 0.01, 0.05, 0.1, 0.5, 1],
+                    "xlabel": "x",
+                    "ylabel": "Max Relative Error \n vs. torch [%]",
+                    "yticksformat": "percent"
+                }
+            },
+            {
+                "id": "reciprocal-bfloat16-zoom",
+                "output": "accuracy_results/plots/reciprocal-bfloat16-zoom.png",
+                "files": [
+                    "accuracy_results/results/reciprocal-bfloat16-[1].csv"
+                ],
+                "dtype": "bfloat16",
+                "xname": "base_x",
+                "ynames": [
+                    "max_rel_error"
+                ],
+                "hue": "operation",
+                "plot_params": {
+                    "xmin": -0.8,
+                    "xmax": 0.8,
+                    "yticks": [0, 0.01, 0.05, 0.1, 0.5, 1],
+                    "xlabel": "x",
+                    "ylabel": "Max Relative Error \n vs. torch [%]",
+                    "yticksformat": "percent"
+                }
+            },
+            {
+                "id": "digamma-bfloat16",
+                "output": "accuracy_results/plots/digamma-bfloat16.png",
+                "files": [
+                    "accuracy_results/results/digamma-bfloat16-[32].csv"
+                ],
+                "dtype": "bfloat16",
+                "xname": "base_x",
+                "ynames": [
+                    "max_rel_error",
+                    "mean_abs_error"
+                ],
+                "hue": "operation",
+                "plot_params": {
+                    "xmin": 1e-12,
+                    "ymin": 1e-8,
+                    "ymax": 20,
+                    "yticks": [0, 0.01, 0.05, 0.1, 0.5, 1],
+                    "xlabel": "x",
+                    "ylabel": "Max Relative Error \n vs. torch [%]",
+                    "yticksformat": "percent"
+                }
+            },
+            {
+                "id": "digamma-bfloat16-zoom",
+                "output": "accuracy_results/plots/digamma-bfloat16-zoom.png",
+                "files": [
+                    "accuracy_results/results/rsqrt-bfloat16-[1].csv"
+                ],
+                "dtype": "bfloat16",
+                "xname": "base_x",
+                "ynames": [
+                    "max_rel_error"
+                ],
+                "hue": "operation",
+                "plot_params": {
+                    "xmin": 0.25,
+                    "xmax": 10,
+                    "ymin": 1e-8,
+                    "ymax": 1e3,                "yticks": [0, 0.01, 0.05, 0.1, 0.5, 1],
+                    "xlabel": "x",
+                    "ylabel": "Max Relative Error \n vs. torch [%]",
+                    "yticksformat": "percent"
+                }
+            },
+            {
+                "id": "lgamma-bfloat16",
+                "output": "accuracy_results/plots/lgamma-bfloat16.png",
+                "files": [
+                    "accuracy_results/results/lgamma-bfloat16-[32].csv"
+                ],
+                "dtype": "bfloat16",
+                "xname": "base_x",
+                "ynames": [
+                    "max_rel_error",
+                    "mean_abs_error"
+                ],
+                "hue": "operation",
+                "plot_params": {
+                    "xmin": 0,
+                    "xmax": 10,
+                    "xscale": "symlog",
+                    "xbase": 10,
+                    "yticks": [0, 0.01, 0.05, 0.1, 0.5, 1],
+                    "xlabel": "x",
+                    "ylabel": "Max Relative Error \n vs. torch [%]",
+                    "yticksformat": "percent"
+                }
+            },
+            {
+                "id": "lgamma-bfloat16-zoom",
+                "output": "accuracy_results/plots/lgamma-bfloat16-zoom.png",
+                "files": [
+                    "accuracy_results/results/lgamma-bfloat16-[32].csv"
+                ],
+                "dtype": "bfloat16",
+                "xname": "base_x",
+                "ynames": [
+                    "max_rel_error"
+                ],
+                "hue": "operation",
+                "plot_params": {
+                    "xmin": 0,
+                    "xmax": 10,
+                    "ymin": 0,
+                    "ymax": 1,
+                    "xscale": "symlog",
+                    "xbase": 10,
+                    "yscale": "log",
+                    "ybase": 10,
+                    "xticks": null,
+                    "yticks": [0, 0.01, 0.05, 0.1, 0.5, 1],
+                    "xlabel": "x",
+                    "ylabel": "Max Relative Error \n vs. torch [%]",
+                    "yticksformat": "percent"
+                }
+            },
+            {
+                "id": "tanhshrink-bfloat16",
+                "output": "accuracy_results/plots/tanhshrink-bfloat16.png",
+                "files": [
+                    "accuracy_results/results/tanhshrink-bfloat16-[32].csv"
+                ],
+                "dtype": "bfloat16",
+                "xname": "base_x",
+                "ynames": [
+                    "max_rel_error",
+                    "mean_abs_error"
+                ],
+                "hue": "operation",
+                "plot_params": {
+                    "xmin": -1e4,
+                    "xmax": 1e4,
+                    "ymin": 1e-3,
+                    "ymax": 50,
+                    "yticks": [0, 0.01, 0.05, 0.1, 0.5, 1],
+                    "xlabel": "x",
+                    "ylabel": "Max Relative Error \n vs. torch [%]",
+                    "yticksformat": "percent"
+                }
+            },
+            {
+                "id": "tanhshrink-bfloat16-zoom",
+                "output": "accuracy_results/plots/tanhshrink-bfloat16-zoom.png",
+                "files": [
+                    "accuracy_results/results/tanhshrink-bfloat16-[1].csv"
+                ],
+                "dtype": "bfloat16",
+                "xname": "base_x",
+                "ynames": [
+                    "max_rel_error"
+                ],
+                "hue": "operation",
+                "plot_params": {
+                    "xmin": 0,
+                    "xmax": 10,
+                    "ymin": 0,
+                    "ymax": 1,
+                    "xscale": "symlog",
+                    "xbase": 10,
+                    "yscale": "log",
+                    "ybase": 10,
+                    "xticks": null,
+                    "yticks": [0, 0.01, 0.05, 0.1, 0.5, 1],
+                    "xlabel": "x",
+                    "ylabel": "Max Relative Error \n vs. torch [%]",
+                    "yticksformat": "percent"
+                }
+            }
+        ]
+    }
 }
