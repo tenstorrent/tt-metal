@@ -9,6 +9,8 @@ using namespace tt::tt_metal;
 
 namespace topk_utils {
 
+static inline uint32_t largest_power_of_two(std::uint32_t x) { return x == 0 ? 0 : (1 << (31 - __builtin_clz(x))); }
+
 static inline bool verify_multi_core_cost(
     const std::vector<Tensor>& input_tensors,
     uint16_t width,
@@ -26,7 +28,7 @@ static inline bool verify_multi_core_cost(
 
     const auto core_range = core_range_set.ranges().at(0);
     const auto max_cores = core_range.end_coord.y - core_range.start_coord.y - 1;
-    uint16_t start_split_size = width / max_cores;
+    uint16_t start_split_size = width / largest_power_of_two(max_cores);
     for (uint16_t split_size = start_split_size; split_size <= max_dim; split_size *= 2) {
         uint16_t rem = width % split_size;
         uint16_t num_cores = width / split_size + (rem > 0);
