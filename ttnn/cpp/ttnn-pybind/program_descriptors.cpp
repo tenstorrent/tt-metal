@@ -9,8 +9,8 @@
 
 #include <tt-metalium/program_descriptors.hpp>
 #include "program_descriptors.hpp"
-#include "pybind11/export_enum.hpp"
-#include "pybind11/decorators.hpp"
+#include "ttnn-pybind/export_enum.hpp"
+#include "ttnn-pybind/decorators.hpp"
 
 namespace ttnn::program_descriptors {
 
@@ -52,14 +52,17 @@ void py_module_types(py::module& module) {
 
     py::class_<tt::tt_metal::WriterConfigDescriptor>(module, "WriterConfigDescriptor").def(py::init<>());
 
-    // TODO: expose these options, shouldn't be hard, i'm just lazy
-    py::class_<tt::tt_metal::ComputeConfigDescriptor>(module, "ComputeConfigDescriptor").def(py::init<>());
-    // .def_readwrite("math_fidelity", &tt::tt_metal::ComputeConfigDescriptor::math_fidelity)
-    // .def_readwrite("fp32_dest_acc_en", &tt::tt_metal::ComputeConfigDescriptor::fp32_dest_acc_en)
-    // .def_readwrite("dst_full_sync_en", &tt::tt_metal::ComputeConfigDescriptor::dst_full_sync_en)
-    // .def_readwrite("unpack_to_dest_mode", &tt::tt_metal::ComputeConfigDescriptor::unpack_to_dest_mode)
-    // .def_readwrite("bfp8_pack_precise", &tt::tt_metal::ComputeConfigDescriptor::bfp8_pack_precise)
-    // .def_readwrite("math_approx_mode", &tt::tt_metal::ComputeConfigDescriptor::math_approx_mode);
+    export_enum<UnpackToDestMode>(module, "UnpackToDestMode");
+    py::bind_vector<std::vector<UnpackToDestMode>>(module, "VectorUnpackToDestMode");
+
+    py::class_<tt::tt_metal::ComputeConfigDescriptor>(module, "ComputeConfigDescriptor")
+        .def(py::init<>())
+        .def_readwrite("math_fidelity", &tt::tt_metal::ComputeConfigDescriptor::math_fidelity)
+        .def_readwrite("fp32_dest_acc_en", &tt::tt_metal::ComputeConfigDescriptor::fp32_dest_acc_en)
+        .def_readwrite("dst_full_sync_en", &tt::tt_metal::ComputeConfigDescriptor::dst_full_sync_en)
+        .def_readwrite("unpack_to_dest_mode", &tt::tt_metal::ComputeConfigDescriptor::unpack_to_dest_mode)
+        .def_readwrite("bfp8_pack_precise", &tt::tt_metal::ComputeConfigDescriptor::bfp8_pack_precise)
+        .def_readwrite("math_approx_mode", &tt::tt_metal::ComputeConfigDescriptor::math_approx_mode);
 
     export_enum<tt::tt_metal::KernelDescriptor::SourceType>(module, "SourceType");
     py::class_<tt::tt_metal::KernelDescriptor>(module, "KernelDescriptor")

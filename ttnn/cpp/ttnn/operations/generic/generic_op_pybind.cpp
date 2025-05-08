@@ -4,23 +4,33 @@
 
 #include "generic_op_pybind.hpp"
 #include "generic_op.hpp"
-#include "pybind11/decorators.hpp"
+#include "ttnn-pybind/decorators.hpp"
 
 namespace ttnn::operations::generic {
 
 void bind_generic_operation(py::module& module) {
     std::string doc =
         R"doc(
-        Generates a tensor to draw binary random numbers (0 or 1) from a Bernoulli distribution.
+        Executes a custom operation with user-defined kernels on the device.
+
+        The generic_op provides a flexible interface for constructing and executing custom operations
+        on device hardware. It allows specifying custom compute kernels, data movement, and control flow.
+
         Args:
-            io_tensors (ttnn.Tensor): List of input tensors and output tensor. Output tensor must be the last element.
-            program_descriptor
+            io_tensors (List[ttnn.Tensor]): List of input tensors and output tensor(s). Output tensor(s) must be
+                pre-allocated and included as the last element(s) in the list.
+            program_descriptor (ttnn.ProgramDescriptor): Descriptor containing kernel specifications,
+                computational buffer configurations, semaphores, and other execution parameters.
+
         Returns:
-            ttnn.Tensor: handle to the output tensor.
+            ttnn.Tensor: Handle to the output tensor.
+
         Example:
-            >>> input = ttnn.to_device(ttnn.from_torch(torch.empty(3, 3).uniform_(0, 1), dtype=torch.bfloat16)), device=device)
-            >>> program_descriptor = ...
-            >>> output = ttnn.generic_op(io_tensors, program_descriptor)
+            >>> input = ttnn.to_device(ttnn.from_torch(torch.rand(3, 3), dtype=torch.bfloat16), device=device)
+            >>> output = ttnn.allocate_tensor_on_device(ttnn.Shape([3, 3]), ttnn.bfloat16, ttnn.TILE_LAYOUT, device)
+            >>> io_tensors = [input, output]
+            >>> program_descriptor = ttnn.ProgramDescriptor(...)
+            >>> result = ttnn.generic_op(io_tensors, program_descriptor)
         )doc";
 
     bind_registered_operation(

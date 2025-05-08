@@ -8,8 +8,10 @@ import ttnn
 import numpy as np
 from loguru import logger
 
+from models.utility_functions import skip_for_grayskull, skip_for_blackhole
 
-def test_eltwise_exp(device):
+
+def _test_eltwise_exp(device):
     num_tiles = 4
     src_bank_id = 0
     dst_bank_id = 0
@@ -118,13 +120,13 @@ def test_eltwise_exp(device):
     assert matching
 
 
-def run():
+@skip_for_blackhole("Not tested / built for Blackhole")
+@skip_for_grayskull("Not tested / built for Grayskull")
+def test_generic_op():
+    # Choose not to parametrize the input tensors
+    # this was chosen to highlight the operation of the Generic Op instead of testing Eltwise Op's func
     device = ttnn.open_device(device_id=0)
 
-    test_eltwise_exp(device)
+    _test_eltwise_exp(device)
 
     ttnn.close_device(device)
-
-
-# THIS NEEDS TO BE A PYTEST
-run()
