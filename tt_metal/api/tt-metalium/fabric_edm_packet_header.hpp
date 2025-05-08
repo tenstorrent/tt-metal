@@ -10,7 +10,7 @@
 #include <limits>
 
 #if defined(KERNEL_BUILD) || defined(FW_BUILD)
-#include "ttnn/operations/ccl/common/interpreter_backends/kernel_common/noc_addr.hpp"
+#include "ttnn/cpp/ttnn/operations/ccl/common/interpreter_backends/kernel_common/noc_addr.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/edm_fabric_utils.hpp"
 #include "tt_metal/fabric/hw/inc/fabric_routing_mode.h"
 #else
