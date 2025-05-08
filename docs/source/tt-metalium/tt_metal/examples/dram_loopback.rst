@@ -221,5 +221,4 @@ Validation and teardown
 
 We now use ``CloseDevice`` to teardown our device. This releases resources associated with the device.
 
-Now we can start adding some compute to our program. Please refer to the
-:ref:`Eltwise sfpu example<Eltwise sfpu example>`.
+Now we can start adding some compute to our program. Please refer to the :ref:`Eltwise binary example<Eltwise binary example>`.
