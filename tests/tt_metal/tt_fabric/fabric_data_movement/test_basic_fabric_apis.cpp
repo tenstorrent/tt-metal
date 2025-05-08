@@ -149,8 +149,13 @@ void RunAsyncWriteTest(
     auto control_plane = tt::tt_metal::MetalContext::instance().get_cluster().get_control_plane();
 
     // Find a device with a neighbour in the specified direction
-    if (!fixture->find_device_with_neighbor_in_direction(
-            start_mesh_chip_id, end_mesh_chip_id, physical_start_device_id, physical_end_device_id, direction)) {
+    if (!find_device_with_neighbor_in_direction(
+            fixture,
+            start_mesh_chip_id,
+            end_mesh_chip_id,
+            physical_start_device_id,
+            physical_end_device_id,
+            direction)) {
         GTEST_SKIP() << "No path found between sender and receivers";
     }
 
@@ -261,7 +266,8 @@ void RunAtomicIncTest(BaseFabricFixture* fixture, fabric_mode mode) {
     auto control_plane = tt::tt_metal::MetalContext::instance().get_cluster().get_control_plane();
 
     // Find a device with a neighbour in the East direction
-    if (!fixture->find_device_with_neighbor_in_direction(
+    if (!find_device_with_neighbor_in_direction(
+            fixture,
             start_mesh_chip_id,
             end_mesh_chip_id,
             physical_start_device_id,
@@ -360,7 +366,8 @@ void RunAsyncWriteAtomicIncTest(BaseFabricFixture* fixture, fabric_mode mode, bo
     auto control_plane = tt::tt_metal::MetalContext::instance().get_cluster().get_control_plane();
 
     // Find a device with a neighbour in the East direction
-    if (!fixture->find_device_with_neighbor_in_direction(
+    if (!find_device_with_neighbor_in_direction(
+            fixture,
             start_mesh_chip_id,
             end_mesh_chip_id,
             physical_start_device_id,

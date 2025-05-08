@@ -36,6 +36,31 @@
 namespace tt::tt_fabric {
 namespace fabric_router_tests {
 
+bool find_device_with_neighbor_in_direction(
+    BaseFabricFixture* fixture,
+    std::pair<mesh_id_t, chip_id_t>& src_mesh_chip_id,
+    std::pair<mesh_id_t, chip_id_t>& dst_mesh_chip_id,
+    chip_id_t& src_physical_device_id,
+    chip_id_t& dst_physical_device_id,
+    RoutingDirection direction) {
+    auto* control_plane = tt::tt_metal::MetalContext::instance().get_cluster().get_control_plane();
+    auto devices = fixture->get_devices();
+    for (auto* device : devices) {
+        src_mesh_chip_id = control_plane->get_mesh_chip_id_from_physical_chip_id(device->id());
+
+        // Get neighbours within a mesh in the given direction
+        auto neighbors =
+            control_plane->get_intra_chip_neighbors(src_mesh_chip_id.first, src_mesh_chip_id.second, direction);
+        if (neighbors.size() > 0) {
+            src_physical_device_id = device->id();
+            dst_mesh_chip_id = {src_mesh_chip_id.first, neighbors[0]};
+            dst_physical_device_id = control_plane->get_physical_chip_id_from_mesh_chip_id(dst_mesh_chip_id);
+            return true;
+        }
+    }
+    return false;
+}
+
 // Find a device with enough neighbours in the specified direction
 bool find_device_with_neighbor_in_multi_direction(
     BaseFabricFixture* fixture,
@@ -293,8 +318,8 @@ void RunTestUnicastConnAPI(BaseFabricFixture* fixture, uint32_t num_hops, Routin
     chip_id_t not_used_1;
     chip_id_t not_used_2;
     // Find a device with a neighbour in the East direction
-    bool connection_found = fixture->find_device_with_neighbor_in_direction(
-        src_mesh_chip_id, dst_mesh_chip_id, not_used_1, not_used_2, direction);
+    bool connection_found = find_device_with_neighbor_in_direction(
+        fixture, src_mesh_chip_id, dst_mesh_chip_id, not_used_1, not_used_2, direction);
     if (!connection_found) {
         GTEST_SKIP() << "No path found between sender and receivers";
     }

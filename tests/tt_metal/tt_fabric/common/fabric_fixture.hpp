@@ -58,30 +58,6 @@ public:
         }
     }
 
-    bool find_device_with_neighbor_in_direction(
-        std::pair<mesh_id_t, chip_id_t>& src_mesh_chip_id,
-        std::pair<mesh_id_t, chip_id_t>& dst_mesh_chip_id,
-        chip_id_t& src_physical_device_id,
-        chip_id_t& dst_physical_device_id,
-        RoutingDirection direction) {
-        auto* control_plane = tt::tt_metal::MetalContext::instance().get_cluster().get_control_plane();
-        for (auto* device : devices_) {
-            src_mesh_chip_id = control_plane->get_mesh_chip_id_from_physical_chip_id(device->id());
-
-            // Get neighbours within a mesh in the given direction
-            auto neighbors =
-                control_plane->get_intra_chip_neighbors(src_mesh_chip_id.first, src_mesh_chip_id.second, direction);
-            if (neighbors.size() > 0) {
-                src_physical_device_id = device->id();
-                dst_mesh_chip_id = {src_mesh_chip_id.first, neighbors[0]};
-                dst_physical_device_id = control_plane->get_physical_chip_id_from_mesh_chip_id(dst_mesh_chip_id);
-                return true;
-            }
-        }
-
-        return false;
-    }
-
     void RunProgramNonblocking(tt::tt_metal::IDevice* device, tt::tt_metal::Program& program) {
         if (this->slow_dispatch_) {
             tt::tt_metal::detail::LaunchProgram(device, program, false);
@@ -135,6 +111,14 @@ bool find_device_with_neighbor_in_multi_direction(
     chip_id_t& src_physical_device_id,
     std::unordered_map<RoutingDirection, std::vector<chip_id_t>>& dst_physical_device_ids_by_dir,
     const std::unordered_map<RoutingDirection, uint32_t>& mcast_hops);
+
+bool find_device_with_neighbor_in_direction(
+    BaseFabricFixture* fixture,
+    std::pair<mesh_id_t, chip_id_t>& src_mesh_chip_id,
+    std::pair<mesh_id_t, chip_id_t>& dst_mesh_chip_id,
+    chip_id_t& src_physical_device_id,
+    chip_id_t& dst_physical_device_id,
+    RoutingDirection direction);
 
 }  // namespace fabric_router_tests
 }  // namespace tt::tt_fabric
