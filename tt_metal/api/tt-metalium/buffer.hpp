@@ -269,6 +269,27 @@ public:
     DeviceAddr aligned_size_per_bank() const;
 
     // SHARDED API STARTS HERE
+    // If buffer contains BufferDistributionSpec, it is considered ND sharded
+    bool is_nd_sharded() const;
+
+    /* BankDataMapping is a struct that provides an explicit mapping of data per bank:
+     * - banks: Logical coordinates of banks to use
+     * - bank_mapping_in_bytes: Mapping of data in bytes for each bank; it is a list of ChunkMapping which contains:
+     *   - src: host address offset in bytes
+     *   - dst: bank address offset in bytes
+     *   - size: size of data in bytes
+     * Some notes:
+     * - Size of banks and bank_mapping_in_bytes must be equal, with each bank having a corresponding mapping
+     * - Each TargetData is a list of ChunkMapping which fully describes all data relevant to that bank
+     * - In Buffer, all ChunkMapping are in bytes and takes into account page size and aligned page size
+     * - Also see DistributionSpec class for more details about TargetData and ChunkMapping
+     */
+    struct BankDataMapping {
+        std::vector<CoreCoord> banks;
+        std::vector<DistributionSpec::TargetData> bank_mapping_in_bytes;
+    };
+    BankDataMapping get_bank_data_mapping();
+
     // TODO: WILL SEPARATE INTO SHARDED BUFFER CLASS
 
     DeviceAddr sharded_page_address(uint32_t bank_id, uint32_t page_index) const;
@@ -352,6 +373,8 @@ private:
     std::shared_ptr<const BufferPageMapping> buffer_page_mapping_;
 
     std::optional<BufferDistributionSpec> buffer_distribution_spec_;
+    std::optional<std::vector<DistributionSpec::TargetData>> bank_mapping_in_bytes_ = std::nullopt;
+
     size_t unique_id_ = 0;
     static std::atomic<size_t> next_unique_id;
 };
