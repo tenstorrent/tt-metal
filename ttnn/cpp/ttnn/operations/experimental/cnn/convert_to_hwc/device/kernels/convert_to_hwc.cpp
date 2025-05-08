@@ -23,7 +23,7 @@ FORCE_INLINE void transpose(uint32_t cb_in, uint32_t cb_out) {
     transpose_wh_tile(cb_in, 0, 0);
 
     cb_reserve_back(cb_out, BATCH_SIZE);
-    pack_untilize_dst<1>(cb_out, BATCH_SIZE);
+    pack_untilize_dst<BATCH_SIZE>(cb_out);
 
     tile_regs_commit();
     tile_regs_release();
@@ -37,6 +37,7 @@ FORCE_INLINE void tilize(
     tilize_init_short(cb_in, total_tiles_per_block, cb_out);
 
     cb_wait_front(cb_in, total_sticks_per_block);
+
     cb_reserve_back(cb_out, total_tiles_per_block);
 
     tilize_block(cb_in, total_tiles_per_block, cb_out);
