@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -76,6 +76,7 @@ class Transformer(LightweightModule):
             RMSNorm(
                 device=mesh_device,
                 dim=args.dim,
+                eps=args.norm_eps,
                 state_dict=state_dict,
                 state_dict_prefix=args.get_state_dict_prefix("", None),
                 weight_cache_path=None if args.dummy_weights else weight_cache_path,
@@ -357,6 +358,7 @@ class Transformer(LightweightModule):
         get_last_token=-1,
         kv_cache=None,
     ):
+        breakpoint()
         for i, layer in enumerate(self.layers):
             # No-op if callers already provide the right memory config
             activation_dtype = self.model_config["DECODERS_OPTIMIZATIONS"].get_tensor_dtype(

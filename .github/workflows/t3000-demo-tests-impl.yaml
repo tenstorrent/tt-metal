@@ -27,6 +27,7 @@ jobs:
           { name: "t3k_falcon40b_tests", arch: wormhole_b0, cmd: run_t3000_falcon40b_tests, timeout: 50, owner_id: U053W15B6JF}, #Djordje Ivanovic
           { name: "t3k_llama3_tests", arch: wormhole_b0, cmd: run_t3000_llama3_tests, timeout: 60, owner_id: U03PUAKE719}, # Miguel Tairum
           { name: "t3k_qwen25_tests", arch: wormhole_b0, cmd: run_t3000_qwen25_tests, timeout: 60, owner_id: U03HY7MK4BT}, # Mark O'Connor
+          { name: "t3k_qwen3_tests", arch: wormhole_b0, cmd: run_t3000_qwen3_tests, timeout: 60, owner_id: U03HY7MK4BT}, # Mark O'Connor
           { name: "t3k_llama3_vision_tests", arch: wormhole_b0, cmd: run_t3000_llama3_vision_tests, timeout: 30, owner_id: U03FJB5TM5Y}, #Colman Glagovich
           { name: "t3k_llama3_90b_vision_tests", arch: wormhole_b0, cmd: run_t3000_llama3_90b_vision_tests, timeout: 60, owner_id: U07RY6B5FLJ},  #Gongyu Wang
           { name: "t3k_llama3_70b_tests", arch: wormhole_b0, cmd: run_t3000_llama3_70b_tests, timeout: 60, owner_id: U03FJB5TM5Y}, #Colman Glagovich
@@ -77,7 +78,7 @@ jobs:
             -e TT_METAL_HOME=${{ github.workspace }}
             -e ARCH_NAME=${{ matrix.test-group.arch }}
             -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
-            -v /mnt/MLPerf:/mnt/MLPerf:ro
+            -v /mnt/MLPerf:/mnt/MLPerf:rw
           install_wheel: true
           run_args: |
             source ${{ github.workspace }}/tests/scripts/t3000/run_t3000_demo_tests.sh
@@ -95,12 +96,12 @@ jobs:
             -e TT_METAL_HOME=${{ github.workspace }}
             -e ARCH_NAME=${{ matrix.test-group.arch }}
             -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
-            -v /mnt/MLPerf:/mnt/MLPerf:ro
+            -v /mnt/MLPerf:/mnt/MLPerf:rw
           install_wheel: true
           run_args: python3 .github/scripts/data_analysis/create_benchmark_with_environment_json.py
 
       - name: Upload benchmark data
-        if: ${{ (matrix.test-group.name == 't3k_falcon7b_tests' || matrix.test-group.name == 't3k_mixtral_tests' || matrix.test-group.name == 't3k_llama3_tests' || matrix.test-group.name == 't3k_llama3_70b_tests' || matrix.test-group.name == 't3k_llama3_vision_tests') && !cancelled() }}
+        if: ${{ (matrix.test-group.name == 't3k_falcon7b_tests' || matrix.test-group.name == 't3k_mixtral_tests' || matrix.test-group.name == 't3k_qwen25_tests' || matrix.test-group.name == 't3k_qwen3_tests' || matrix.test-group.name == 't3k_llama3_tests' || matrix.test-group.name == 't3k_llama3_70b_tests' || matrix.test-group.name == 't3k_llama3_vision_tests') && !cancelled() }}
         uses: ./.github/actions/upload-data-via-sftp
         with:
           ssh-private-key: ${{ secrets.SFTP_BENCHMARK_WRITER_KEY }}
