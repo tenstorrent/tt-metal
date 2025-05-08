@@ -387,29 +387,89 @@ void FDMeshCommandQueue::finish(tt::stl::Span<const SubDeviceId> sub_device_ids)
 }
 
 void FDMeshCommandQueue::write_shard_to_device(
-    Buffer* shard_view, const void* src, const BufferRegion& region, tt::stl::Span<const SubDeviceId> sub_device_ids) {
+    const MeshBuffer& buffer,
+    const MeshCoordinate& device_coord,
+    const void* src,
+    const std::optional<BufferRegion>& region,
+    tt::stl::Span<const SubDeviceId> sub_device_ids) {
     in_use_ = true;
     TT_FATAL(!trace_id_.has_value(), "Writes are not supported during trace capture.");
-    auto device = shard_view->device();
-    sub_device_ids = buffer_dispatch::select_sub_device_ids(mesh_device_, sub_device_ids);
-    buffer_dispatch::write_to_device_buffer(
-        src, *shard_view, region, id_, expected_num_workers_completed_, this->dispatch_core_type(), sub_device_ids);
+
+    const auto shard_view = buffer.get_device_buffer(device_coord);
+    const auto region_value = region.value_or(BufferRegion(0, shard_view->size()));
+
+    if (shard_view->is_nd_sharded()) {
+        TT_FATAL(
+            shard_view->is_l1(),
+            "Local device shard with BufferDistributionSpec must be L1 for write_shard_to_device!");
+        const auto& [banks, bank_mapping_in_bytes] = shard_view->get_bank_data_mapping();
+        for (size_t i = 0; i < banks.size(); i++) {
+            const auto virtual_core =
+                shard_view->device()->virtual_core_from_logical_core(banks[i], shard_view->core_type());
+            for (const auto& chunk_mapping_in_bytes : bank_mapping_in_bytes[i]) {
+                enqueue_write_shard_to_core(
+                    DeviceMemoryAddress{
+                        .device_coord = device_coord,
+                        .virtual_core_coord = virtual_core,
+                        .address = shard_view->address() + chunk_mapping_in_bytes.dst},
+                    (char*)src + chunk_mapping_in_bytes.src,
+                    chunk_mapping_in_bytes.size,
+                    /*blocking=*/false,
+                    sub_device_ids);
+            }
+        }
+    } else {
+        sub_device_ids = buffer_dispatch::select_sub_device_ids(mesh_device_, sub_device_ids);
+        buffer_dispatch::write_to_device_buffer(
+            src,
+            *shard_view,
+            region_value,
+            id_,
+            expected_num_workers_completed_,
+            this->dispatch_core_type(),
+            sub_device_ids);
+    }
 }
 
 void FDMeshCommandQueue::read_shard_from_device(
-    Buffer* shard_view,
+    const MeshBuffer& buffer,
+    const MeshCoordinate& device_coord,
     void* dst,
-    const BufferRegion& region,
+    const std::optional<BufferRegion>& region,
     std::unordered_map<IDevice*, uint32_t>& num_txns_per_device,
     tt::stl::Span<const SubDeviceId> sub_device_ids) {
     in_use_ = true;
     TT_FATAL(!trace_id_.has_value(), "Reads are not supported during trace capture.");
+
+    const auto shard_view = buffer.get_device_buffer(device_coord);
+    const auto region_value = region.value_or(BufferRegion(0, shard_view->size()));
+
     auto device = shard_view->device();
     sub_device_ids = buffer_dispatch::select_sub_device_ids(mesh_device_, sub_device_ids);
 
-    if (is_sharded(shard_view->buffer_layout())) {
+    if (shard_view->is_nd_sharded()) {
+        TT_FATAL(
+            shard_view->is_l1(),
+            "Local device shard with BufferDistributionSpec must be L1 for read_shard_from_device!");
+        const auto& [banks, bank_mapping_in_bytes] = shard_view->get_bank_data_mapping();
+        for (size_t i = 0; i < banks.size(); i++) {
+            const auto virtual_core =
+                shard_view->device()->virtual_core_from_logical_core(banks[i], shard_view->core_type());
+            for (const auto& chunk_mapping_in_bytes : bank_mapping_in_bytes[i]) {
+                enqueue_read_shard_from_core(
+                    DeviceMemoryAddress{
+                        .device_coord = device_coord,
+                        .virtual_core_coord = virtual_core,
+                        .address = shard_view->address() + chunk_mapping_in_bytes.dst},
+                    (char*)dst + chunk_mapping_in_bytes.src,
+                    chunk_mapping_in_bytes.size,
+                    /*blocking=*/false,
+                    sub_device_ids);
+            }
+        }
+    } else if (is_sharded(shard_view->buffer_layout())) {
         auto dispatch_params = buffer_dispatch::initialize_sharded_buf_read_dispatch_params(
-            *shard_view, id_, expected_num_workers_completed_, region);
+            *shard_view, id_, expected_num_workers_completed_, region_value);
         auto cores = buffer_dispatch::get_cores_for_sharded_buffer(
             dispatch_params.width_split, dispatch_params.buffer_page_mapping, *shard_view);
         for (uint32_t core_id = 0; core_id < shard_view->num_cores(); ++core_id) {
@@ -425,7 +485,7 @@ void FDMeshCommandQueue::read_shard_from_device(
     } else {
         buffer_dispatch::BufferReadDispatchParamsVariant dispatch_params_variant =
             buffer_dispatch::initialize_interleaved_buf_read_dispatch_params(
-                *shard_view, id_, expected_num_workers_completed_, region);
+                *shard_view, id_, expected_num_workers_completed_, region_value);
 
         buffer_dispatch::BufferReadDispatchParams* dispatch_params = std::visit(
             [](auto& val) { return static_cast<buffer_dispatch::BufferReadDispatchParams*>(&val); },
