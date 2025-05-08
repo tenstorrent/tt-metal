@@ -78,7 +78,9 @@ void RunTestUnicastRaw(BaseFabricFixture* fixture, uint32_t num_hops, RoutingDir
         GTEST_SKIP() << "No active eth chans to connect to";
     }
 
-    auto edm_port = *(eth_chans.begin());
+    // Pick a port from end of the list. On T3K, there are missimg routing planes due to FD tunneling
+    auto edm_port = *std::prev(eth_chans.end());
+
     auto edm_direction =
         control_plane->get_eth_chan_direction(src_mesh_chip_id.first, src_mesh_chip_id.second, edm_port);
     CoreCoord edm_eth_core = tt::tt_metal::MetalContext::instance().get_cluster().get_virtual_eth_core_from_channel(

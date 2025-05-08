@@ -223,13 +223,14 @@ struct WorkerToFabricEdmSenderImpl {
     FORCE_INLINE void send_payload_non_blocking_from_address(uint32_t source_address, size_t size_bytes) {
         send_payload_from_address_impl<EDM_IO_BLOCKING_MODE::NON_BLOCKING>(source_address, size_bytes);
     }
-    template <bool enable_ring_support, uint8_t EDM_TO_DOWNSTREAM_NOC>
+    template <bool enable_ring_support, uint8_t EDM_TO_DOWNSTREAM_NOC, bool stateful_api>
     FORCE_INLINE void send_payload_non_blocking_from_address_with_trid(
         uint32_t source_address, size_t size_bytes, uint8_t trid) {
         send_payload_from_address_with_trid_impl<
             EDM_IO_BLOCKING_MODE::NON_BLOCKING,
             enable_ring_support,
-            EDM_TO_DOWNSTREAM_NOC>(source_address, size_bytes, trid);
+            EDM_TO_DOWNSTREAM_NOC,
+            stateful_api>(source_address, size_bytes, trid);
     }
 
     static constexpr size_t edm_sender_channel_field_stride_bytes = 16;
@@ -457,32 +458,38 @@ private:
         send_chunk_from_address<blocking_mode>(source_address, 1, size_bytes, buffer_address);
         post_send_payload_increment_pointers();
     }
-    template <EDM_IO_BLOCKING_MODE blocking_mode, bool enable_ring_support, uint8_t EDM_TO_DOWNSTREAM_NOC>
+    template <
+        EDM_IO_BLOCKING_MODE blocking_mode,
+        bool enable_ring_support,
+        uint8_t EDM_TO_DOWNSTREAM_NOC,
+        bool stateful_api>
     FORCE_INLINE void send_payload_from_address_with_trid_impl(
         uint32_t source_address, size_t size_bytes, uint8_t trid) {
         ASSERT(size_bytes <= this->buffer_size_bytes);
         ASSERT(tt::tt_fabric::is_valid(
             *const_cast<PACKET_HEADER_TYPE*>(reinterpret_cast<volatile PACKET_HEADER_TYPE*>(source_address))));
         if constexpr (USER_DEFINED_NUM_BUFFER_SLOTS) {
-            send_chunk_from_address_with_trid<blocking_mode>(
+            send_chunk_from_address_with_trid<blocking_mode, stateful_api>(
                 source_address,
                 1,
                 size_bytes,
+                get_noc_addr(this->edm_noc_x, this->edm_noc_y, 0) >> 32,
                 this->edm_buffer_slot_addrs[this->get_buffer_slot_index()],
                 trid,
                 EDM_TO_DOWNSTREAM_NOC,
                 this->data_noc_cmd_buf);
         } else {
-            send_chunk_from_address_with_trid<blocking_mode>(
+            send_chunk_from_address_with_trid<blocking_mode, stateful_api>(
                 source_address,
                 1,
                 size_bytes,
+                get_noc_addr(this->edm_noc_x, this->edm_noc_y, 0) >> 32,
                 this->edm_buffer_addr,
                 trid,
                 EDM_TO_DOWNSTREAM_NOC,
                 this->data_noc_cmd_buf);
         }
-        post_send_payload_increment_pointers<true, enable_ring_support>(EDM_TO_DOWNSTREAM_NOC);
+        post_send_payload_increment_pointers<stateful_api, enable_ring_support>(EDM_TO_DOWNSTREAM_NOC);
     }
 
     template <EDM_IO_BLOCKING_MODE blocking_mode>

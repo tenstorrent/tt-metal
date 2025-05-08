@@ -521,7 +521,7 @@ FORCE_INLINE void receiver_forward_packet(
         uint16_t payload_size_bytes = packet_start->payload_size_bytes;
         bool not_last_destination_device = cached_routing_fields.value != tt::tt_fabric::RoutingFields::LAST_MCAST_VAL;
         if (not_last_destination_device) {
-            forward_payload_to_downstream_edm<SENDER_NUM_BUFFERS, enable_ring_support>(
+            forward_payload_to_downstream_edm<SENDER_NUM_BUFFERS, enable_ring_support, true>(
                 packet_start, payload_size_bytes, cached_routing_fields, downstream_edm_interface, transaction_id);
         }
         if (start_distance_is_terminal_value) {
@@ -535,11 +535,11 @@ FORCE_INLINE void receiver_forward_packet(
                 execute_chip_unicast_to_local_chip(packet_start, payload_size_bytes, transaction_id, rx_channel_id);
                 break;
             case tt::tt_fabric::LowLatencyRoutingFields::FORWARD_ONLY:
-                forward_payload_to_downstream_edm<SENDER_NUM_BUFFERS, enable_ring_support>(
+                forward_payload_to_downstream_edm<SENDER_NUM_BUFFERS, enable_ring_support, true>(
                     packet_start, payload_size_bytes, cached_routing_fields, downstream_edm_interface, transaction_id);
                 break;
             case tt::tt_fabric::LowLatencyRoutingFields::WRITE_AND_FORWARD:
-                forward_payload_to_downstream_edm<SENDER_NUM_BUFFERS, enable_ring_support>(
+                forward_payload_to_downstream_edm<SENDER_NUM_BUFFERS, enable_ring_support, true>(
                     packet_start, payload_size_bytes, cached_routing_fields, downstream_edm_interface, transaction_id);
                 execute_chip_unicast_to_local_chip(packet_start, payload_size_bytes, transaction_id, rx_channel_id);
                 break;
@@ -565,7 +565,7 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) void receiver_forward_pack
             if constexpr (my_direction == eth_chan_directions::EAST) {
                 execute_chip_unicast_to_local_chip(packet_start, payload_size_bytes, transaction_id, rx_channel_id);
             } else {
-                forward_payload_to_downstream_edm<SENDER_NUM_BUFFERS, enable_ring_support>(
+                forward_payload_to_downstream_edm<SENDER_NUM_BUFFERS, enable_ring_support, false>(
                     packet_start,
                     payload_size_bytes,
                     cached_routing_fields,
@@ -577,7 +577,7 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) void receiver_forward_pack
             if constexpr (my_direction == eth_chan_directions::WEST) {
                 execute_chip_unicast_to_local_chip(packet_start, payload_size_bytes, transaction_id, rx_channel_id);
             } else {
-                forward_payload_to_downstream_edm<SENDER_NUM_BUFFERS, enable_ring_support>(
+                forward_payload_to_downstream_edm<SENDER_NUM_BUFFERS, enable_ring_support, false>(
                     packet_start,
                     payload_size_bytes,
                     cached_routing_fields,
@@ -587,14 +587,14 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) void receiver_forward_pack
             break;
         case LowLatencyMeshRoutingFields::WRITE_AND_FORWARD_EW:
             if constexpr (my_direction == eth_chan_directions::WEST) {
-                forward_payload_to_downstream_edm<SENDER_NUM_BUFFERS, enable_ring_support>(
+                forward_payload_to_downstream_edm<SENDER_NUM_BUFFERS, enable_ring_support, false>(
                     packet_start,
                     payload_size_bytes,
                     cached_routing_fields,
                     downstream_edm_interface[eth_chan_directions::EAST],
                     transaction_id);
             } else {
-                forward_payload_to_downstream_edm<SENDER_NUM_BUFFERS, enable_ring_support>(
+                forward_payload_to_downstream_edm<SENDER_NUM_BUFFERS, enable_ring_support, false>(
                     packet_start,
                     payload_size_bytes,
                     cached_routing_fields,
@@ -607,7 +607,7 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) void receiver_forward_pack
             if constexpr (my_direction == eth_chan_directions::NORTH) {
                 execute_chip_unicast_to_local_chip(packet_start, payload_size_bytes, transaction_id, rx_channel_id);
             } else {
-                forward_payload_to_downstream_edm<SENDER_NUM_BUFFERS, enable_ring_support>(
+                forward_payload_to_downstream_edm<SENDER_NUM_BUFFERS, enable_ring_support, false>(
                     packet_start,
                     payload_size_bytes,
                     cached_routing_fields,
@@ -619,7 +619,7 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) void receiver_forward_pack
             if constexpr (my_direction == eth_chan_directions::SOUTH) {
                 execute_chip_unicast_to_local_chip(packet_start, payload_size_bytes, transaction_id, rx_channel_id);
             } else {
-                forward_payload_to_downstream_edm<SENDER_NUM_BUFFERS, enable_ring_support>(
+                forward_payload_to_downstream_edm<SENDER_NUM_BUFFERS, enable_ring_support, false>(
                     packet_start,
                     payload_size_bytes,
                     cached_routing_fields,
@@ -629,14 +629,14 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) void receiver_forward_pack
             break;
         case LowLatencyMeshRoutingFields::WRITE_AND_FORWARD_NS:
             if constexpr (my_direction == eth_chan_directions::SOUTH) {
-                forward_payload_to_downstream_edm<SENDER_NUM_BUFFERS, enable_ring_support>(
+                forward_payload_to_downstream_edm<SENDER_NUM_BUFFERS, enable_ring_support, false>(
                     packet_start,
                     payload_size_bytes,
                     cached_routing_fields,
                     downstream_edm_interface[eth_chan_directions::NORTH],
                     transaction_id);
             } else {
-                forward_payload_to_downstream_edm<SENDER_NUM_BUFFERS, enable_ring_support>(
+                forward_payload_to_downstream_edm<SENDER_NUM_BUFFERS, enable_ring_support, false>(
                     packet_start,
                     payload_size_bytes,
                     cached_routing_fields,
