@@ -17,12 +17,13 @@ from models.experimental.functional_unet.tests.common import (
     verify_with_pcc,
     UNET_FULL_MODEL_PCC,
     UNET_FULL_MODEL_PCC_BH,
+    UNET_L1_SMALL_REGION_SIZE,
 )
 
 
 @pytest.mark.parametrize("batch", [1])
 @pytest.mark.parametrize("groups", [4])
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 79104}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": UNET_L1_SMALL_REGION_SIZE}], indirect=True)
 def test_unet_model(batch, groups, device, use_program_cache, reset_seeds):
     if (
         not is_wormhole_b0(device)
