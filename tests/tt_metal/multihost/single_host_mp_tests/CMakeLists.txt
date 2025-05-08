@@ -1,16 +1,21 @@
 # Smoke tests (fast, not necessarily thorough)
-add_library(single_host_mp_tests OBJECT)
-add_library(TT::Metalium::Test::Distributed::Multihost::mp ALIAS single_host_mp_tests)
-TT_ENABLE_UNITY_BUILD(single_host_mp_tests)
+add_library(single_host_mp OBJECT)
+add_library(TT::Metalium::Test::Distributed::Multihost::mp ALIAS single_host_mp)
+TT_ENABLE_UNITY_BUILD(single_host_mp)
 
-target_sources(single_host_mp_tests PRIVATE test_send_recv.cpp)
+target_sources(
+    single_host_mp
+    PRIVATE
+        test_send_recv.cpp
+        main.cpp
+)
 target_include_directories(
-    single_host_mp_tests
+    single_host_mp
     PRIVATE
         "$<TARGET_PROPERTY:Metalium::Metal,INCLUDE_DIRECTORIES>"
         ${PROJECT_SOURCE_DIR}/tests
 )
-target_link_libraries(single_host_mp_tests PRIVATE test_metal_common_libs)
+target_link_libraries(single_host_mp PRIVATE test_metal_common_libs)
 
 # Target for all STL tests regardless of duration
 add_executable(single_host_mp_tests)

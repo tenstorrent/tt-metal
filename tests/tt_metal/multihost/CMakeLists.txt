@@ -1,0 +1,1 @@
+add_subdirectory(single_host_mp_tests)

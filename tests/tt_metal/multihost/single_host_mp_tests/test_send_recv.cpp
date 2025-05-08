@@ -15,24 +15,20 @@ TEST(DistributedContextTest, TestSendRecv) {
 
     auto size = context->size();
 
-    ASSERT_TRUE(*size > 1, "This test requires at least 2 ranks");
+    EXPECT_TRUE(*size > 1);
     std::vector<std::byte> orig_bytes(10);
     for (int i = 0; i < 10; ++i) {
         orig_bytes[i] = static_cast<std::byte>(i);
     }
     if (*context->rank() == 0) {
-        fmt::print("Sending bytes to rank 1\n");
         tt::stl::Span<std::byte> view(orig_bytes.data(), orig_bytes.size());
         context->send(view, Rank{1}, Tag{0});
     } else {
-        fmt::print("Hello from rank {}\n", context->rank());
         std::vector<std::byte> bytes(10);
-        fmt::print("Receiving bytes from rank 0\n");
         tt::stl::Span<std::byte> view(bytes.data(), bytes.size());
         context->recv(view, Rank{0}, Tag{0});
-        fmt::print("Bytes: ");
-        for (size_t i = 0; i < bytes.size(); ++i) {
-            fmt::print("{}{}", static_cast<int>(bytes[i]), (i < bytes.size() - 1) ? ", " : "\n");
+        for (int i = 0; i < 10; ++i) {
+            EXPECT_EQ(orig_bytes[i], bytes[i]);
         }
     }
 }
