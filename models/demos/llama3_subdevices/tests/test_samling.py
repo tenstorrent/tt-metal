@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -89,7 +89,6 @@ def reference_sampling(input_tensor, sampling_params, num_devices, padded_vocab_
 )
 def test_llama_sampling_inference(dtype, batch_size, mesh_device, use_program_cache, reset_seeds):
     sampling_params = {"top_k": 32, "top_p": 0.08, "seed": 42}
-    mesh_device.enable_async(True)
     model_args = TtModelArgs(mesh_device, max_batch_size=batch_size, max_seq_len=32, dummy_weights=True)
     torch_input = torch.randn(1, 1, 32, model_args.padded_vocab_size)
 
