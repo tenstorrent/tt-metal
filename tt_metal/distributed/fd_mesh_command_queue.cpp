@@ -28,6 +28,7 @@
 #include "mesh_config.hpp"
 #include "mesh_coord.hpp"
 #include "mesh_workload.hpp"
+#include "sub_device/sub_device_manager_tracker.hpp"
 #include "tt-metalium/program.hpp"
 #include "shape2d.hpp"
 #include <tt_stl/strong_type.hpp>
@@ -323,21 +324,26 @@ void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
 }
 
 void FDMeshCommandQueue::enqueue_write_shard_to_core(
-    const MeshCoordinate& device_coord,
-    const CoreCoord& virtual_core_coord,
+    const DeviceMemoryAddress& address,
     const void* src,
-    DeviceAddr address,
     uint32_t size_bytes,
     bool blocking,
     tt::stl::Span<const SubDeviceId> sub_device_ids) {
     in_use_ = true;
     TT_FATAL(!trace_id_.has_value(), "Writes are not supported during trace capture.");
 
-    IDevice* device = mesh_device_->get_device(device_coord);
+    IDevice* device = mesh_device_->get_device(address.device_coord);
     sub_device_ids = buffer_dispatch::select_sub_device_ids(mesh_device_, sub_device_ids);
 
     device_dispatch::write_to_core(
-        device, virtual_core_coord, src, address, size_bytes, id_, expected_num_workers_completed_, sub_device_ids);
+        device,
+        address.virtual_core_coord,
+        src,
+        address.address,
+        size_bytes,
+        id_,
+        expected_num_workers_completed_,
+        sub_device_ids);
 
     if (blocking) {
         this->finish();
@@ -345,23 +351,21 @@ void FDMeshCommandQueue::enqueue_write_shard_to_core(
 }
 
 void FDMeshCommandQueue::enqueue_read_shard_from_core(
-    const MeshCoordinate& device_coord,
-    const CoreCoord& virtual_core_coord,
+    const DeviceMemoryAddress& address,
     void* dst,
-    DeviceAddr address,
     uint32_t size_bytes,
     bool blocking,
     tt::stl::Span<const SubDeviceId> sub_device_ids) {
     in_use_ = true;
     TT_FATAL(!trace_id_.has_value(), "Reads are not supported during trace capture.");
 
-    IDevice* device = this->mesh_device_->get_device(device_coord);
+    IDevice* device = this->mesh_device_->get_device(address.device_coord);
     sub_device_ids = buffer_dispatch::select_sub_device_ids(mesh_device_, sub_device_ids);
 
     if (size_bytes > 0) {
         device_dispatch::CoreReadDispatchParams dispatch_params(
-            virtual_core_coord,
-            address,
+            address.virtual_core_coord,
+            address.address,
             size_bytes,
             device,
             id_,
@@ -371,7 +375,7 @@ void FDMeshCommandQueue::enqueue_read_shard_from_core(
         device_dispatch::issue_core_read_command_sequence(dispatch_params);
     }
 
-    this->submit_core_data_memcpy_request(ReadCoreDataDescriptor(dst, size_bytes), device_coord, blocking);
+    this->submit_core_data_memcpy_request(ReadCoreDataDescriptor(dst, size_bytes), address.device_coord, blocking);
 }
 
 void FDMeshCommandQueue::finish(tt::stl::Span<const SubDeviceId> sub_device_ids) {

@@ -21,6 +21,12 @@ struct MeshCoreDataReadDescriptor;
 using MeshCompletionReaderVariant =
     std::variant<MeshBufferReadDescriptor, MeshReadEventDescriptor, MeshCoreDataReadDescriptor>;
 
+struct DeviceMemoryAddress {
+    MeshCoordinate device_coord;
+    CoreCoord virtual_core_coord;
+    DeviceAddr address;
+};
+
 class FDMeshCommandQueue final : public MeshCommandQueueBase {
 private:
     void populate_read_descriptor_queue();
@@ -169,18 +175,14 @@ public:
     void enqueue_mesh_workload(MeshWorkload& mesh_workload, bool blocking) override;
 
     void enqueue_write_shard_to_core(
-        const MeshCoordinate& device_coord,
-        const CoreCoord& virtual_core_coord,
+        const DeviceMemoryAddress& address,
         const void* src,
-        DeviceAddr address,
         uint32_t size_bytes,
         bool blocking,
         tt::stl::Span<const SubDeviceId> sub_device_ids = {});
     void enqueue_read_shard_from_core(
-        const MeshCoordinate& device_coord,
-        const CoreCoord& virtual_core_coord,
+        const DeviceMemoryAddress& address,
         void* dst,
-        DeviceAddr address,
         uint32_t size_bytes,
         bool blocking,
         tt::stl::Span<const SubDeviceId> sub_device_ids = {});

@@ -78,14 +78,11 @@ std::vector<uint32_t> read_control_buffer_from_core(
                 distributed::FDMeshCommandQueue& mesh_cq =
                     dynamic_cast<distributed::FDMeshCommandQueue&>(mesh_device->mesh_command_queue());
                 const distributed::MeshCoordinate device_coord = mesh_device->get_view().find_device(device->id());
+                const distributed::DeviceMemoryAddress address = {
+                    device_coord, core, reinterpret_cast<DeviceAddr>(profiler_msg->control_vector)};
                 control_buffer.resize(kernel_profiler::PROFILER_L1_CONTROL_VECTOR_SIZE);
                 mesh_cq.enqueue_read_shard_from_core(
-                    device_coord,
-                    core,
-                    control_buffer.data(),
-                    reinterpret_cast<DeviceAddr>(profiler_msg->control_vector),
-                    kernel_profiler::PROFILER_L1_CONTROL_BUFFER_SIZE,
-                    true);
+                    address, control_buffer.data(), kernel_profiler::PROFILER_L1_CONTROL_BUFFER_SIZE, true);
             } else {
                 control_buffer = tt::llrt::read_hex_vec_from_core(
                     device->id(),
@@ -128,13 +125,10 @@ void write_control_buffer_to_core(
                 distributed::FDMeshCommandQueue& mesh_cq =
                     dynamic_cast<distributed::FDMeshCommandQueue&>(mesh_device->mesh_command_queue());
                 const distributed::MeshCoordinate device_coord = mesh_device->get_view().find_device(device->id());
+                const distributed::DeviceMemoryAddress address = {
+                    device_coord, core, reinterpret_cast<DeviceAddr>(profiler_msg->control_vector)};
                 mesh_cq.enqueue_write_shard_to_core(
-                    device_coord,
-                    core,
-                    control_buffer.data(),
-                    reinterpret_cast<DeviceAddr>(profiler_msg->control_vector),
-                    kernel_profiler::PROFILER_L1_CONTROL_BUFFER_SIZE,
-                    true);
+                    address, control_buffer.data(), kernel_profiler::PROFILER_L1_CONTROL_BUFFER_SIZE, true);
             } else {
                 tt::llrt::write_hex_vec_to_core(
                     device->id(), core, control_buffer, reinterpret_cast<DeviceAddr>(profiler_msg->control_vector));
