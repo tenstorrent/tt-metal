@@ -11,7 +11,7 @@ from tests.tt_metal.microbenchmarks.ethernet.test_all_ethernet_links_common impo
     write_results_to_csv,
 )
 
-from models.utility_functions import is_grayskull
+from models.utility_functions import is_single_chip
 
 from tt_metal.tools.profiler.common import PROFILER_LOGS_DIR, PROFILER_DEVICE_SIDE_LOG
 
@@ -70,7 +70,7 @@ def run_erisc_write_worker_bw(
 
 ##################################### No Worker BW test #######################################################
 # uni-direction test for eth-sender <---> eth-receiver
-@pytest.mark.skipif(is_grayskull(), reason="Unsupported on GS")
+@pytest.mark.skipif(is_single_chip(), reason="Unsupported on single chip systems")
 @pytest.mark.parametrize("num_packets", [256])
 @pytest.mark.parametrize("channel_count", [16])
 @pytest.mark.parametrize("num_iterations", [1])
@@ -95,7 +95,7 @@ def test_erisc_bw_uni_dir(num_packets, packet_size, channel_count, num_iteration
 
 
 # bi-direction test for eth-sender <---> eth-receiver
-@pytest.mark.skipif(is_grayskull(), reason="Unsupported on GS")
+@pytest.mark.skipif(is_single_chip(), reason="Unsupported on single chip systems")
 @pytest.mark.parametrize("num_packets", [1000])
 @pytest.mark.parametrize("channel_count", [16])
 @pytest.mark.parametrize("num_iterations", [1])
@@ -137,7 +137,7 @@ def test_erisc_bw_bi_dir(num_packets, packet_size, channel_count, num_iterations
 
 ##################################### BW test #######################################################
 # uni-direction test for eth-sender <---> eth-receiver ---> worker
-@pytest.mark.skipif(is_grayskull(), reason="Unsupported on GS")
+@pytest.mark.skipif(is_single_chip(), reason="Unsupported on single chip systems")
 @pytest.mark.parametrize("num_packets", [256])
 @pytest.mark.parametrize("channel_count", [16])
 @pytest.mark.parametrize("disable_trid", [0])
@@ -162,7 +162,7 @@ def test_erisc_write_worker_bw_uni_dir(num_packets, packet_size, channel_count, 
 
 
 # bi-direction test for eth-sender <---> eth-receiver ---> worker
-@pytest.mark.skipif(is_grayskull(), reason="Unsupported on GS")
+@pytest.mark.skipif(is_single_chip(), reason="Unsupported on single chip systems")
 @pytest.mark.parametrize("num_packets", [1000])
 @pytest.mark.parametrize("channel_count", [16])
 @pytest.mark.parametrize("disable_trid", [0])
@@ -188,7 +188,7 @@ def test_erisc_write_worker_bw_bi_dir(num_packets, packet_size, channel_count, d
 
 ##################################### No Transaction ID BW test #######################################################
 # uni-direction test for eth-sender <---> eth-receiver ---> worker
-@pytest.mark.skipif(is_grayskull(), reason="Unsupported on GS")
+@pytest.mark.skipif(is_single_chip(), reason="Unsupported on single chip systems")
 @pytest.mark.parametrize("num_packets", [256])
 @pytest.mark.parametrize("channel_count", [16])
 @pytest.mark.parametrize("disable_trid", [1])
@@ -215,7 +215,7 @@ def test_erisc_write_worker_bw_uni_dir_no_trid(
 
 
 # bi-direction test for eth-sender <---> eth-receiver ---> worker
-@pytest.mark.skipif(is_grayskull(), reason="Unsupported on GS")
+@pytest.mark.skipif(is_single_chip(), reason="Unsupported on single chip systems")
 @pytest.mark.parametrize("num_packets", [1000])
 @pytest.mark.parametrize("channel_count", [16])
 @pytest.mark.parametrize("disable_trid", [1])
