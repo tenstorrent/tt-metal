@@ -28,7 +28,7 @@ void InterleavedToShardedPartialDeviceOperation::validate(const std::vector<Tens
     TT_FATAL(input_tensor.buffer() != nullptr, "Operands to shard need to be allocated in buffers on device!");
 
     TT_FATAL(
-        input_tensor.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED,
+        input_tensor.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
         "Input tensor must be Interleaved");
     if (input_tensor.get_dtype() != this->output_dtype) {
         TT_FATAL(input_tensor.get_layout() == Layout::TILE, "Error");
@@ -52,8 +52,7 @@ std::vector<ttnn::TensorSpec> InterleavedToShardedPartialDeviceOperation::comput
     shape[1] = 1;
     shape[2] = new_height;
 
-    auto mem_config = this->output_mem_config;
-    mem_config.shard_spec = this->shard_spec;
+    auto mem_config = this->output_mem_config.with_shard_spec(this->shard_spec);
 
     return {TensorSpec(shape, TensorLayout(output_dtype, PageConfig(input_tensor.get_layout()), mem_config))};
 }

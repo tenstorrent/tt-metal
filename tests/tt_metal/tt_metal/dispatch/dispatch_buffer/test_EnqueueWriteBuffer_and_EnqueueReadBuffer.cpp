@@ -9,8 +9,8 @@
 #include <sys/types.h>
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/device.hpp>
-#include <tt-metalium/dispatch_settings.hpp>
 #include <tt-metalium/host_api.hpp>
+#include "dispatch/system_memory_manager.hpp"
 #include <tt-metalium/tt_metal.hpp>
 #include <algorithm>
 #include <array>
@@ -38,12 +38,12 @@
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/dispatch_core_common.hpp>
 #include "dispatch_test_utils.hpp"
+#include "impl/dispatch/dispatch_settings.hpp"
 #include "gtest/gtest.h"
 #include <tt-metalium/logger.hpp>
 #include <tt-metalium/math.hpp>
 #include "multi_command_queue_fixture.hpp"
 #include <tt-metalium/shape2d.hpp>
-#include <tt-metalium/system_memory_manager.hpp>
 #include "impl/context/metal_context.hpp"
 #include "umd/device/types/arch.h"
 

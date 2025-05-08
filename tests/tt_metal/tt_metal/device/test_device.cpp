@@ -30,7 +30,6 @@
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/logger.hpp>
 #include <tt-metalium/program.hpp>
-#include <tt-metalium/system_memory_manager.hpp>
 #include "impl/context/metal_context.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
 #include "umd/device/tt_core_coordinates.h"
@@ -309,6 +308,50 @@ TEST_F(DeviceFixture, TensixTestL1ToPCIeAt16BAlignedAddress) {
         result.data(), size_bytes, base_pcie_dst_address, mmio_device_id, channel);
 
     EXPECT_EQ(src, result);
+}
+
+// One risc caches L1 address then polls for expected value that other risc on same core writes after some delay
+// Expected test scenarios:
+// 1. `invalidate_cache` is true: pass
+// 2. `invalidate_cache` is false: hang because periodic HW cache flush is default disabled
+// 3. `invalidate_cache` is false and env var `TT_METAL_ENABLE_HW_CACHE_INVALIDATION` is set: pass
+TEST_F(BlackholeSingleCardFixture, TensixL1DataCache) {
+    CoreCoord core{0, 0};
+
+    uint32_t l1_unreserved_base = device_->allocator()->get_base_allocator_addr(HalMemType::L1);
+    std::vector<uint32_t> random_vec(1, 0xDEADBEEF);
+    tt_metal::detail::WriteToDeviceL1(device_, core, l1_unreserved_base, random_vec);
+
+    uint32_t value_to_write = 39;
+    bool invalidate_cache =
+        true;  // To make sure this test passes on CI set this to true but can be modified for local debug
+    tt_metal::Program program = tt_metal::CreateProgram();
+
+    uint32_t sem0_id = tt_metal::CreateSemaphore(program, core, 0);
+
+    tt_metal::KernelHandle kernel0 = tt_metal::CreateKernel(
+        program,
+        "tests/tt_metal/tt_metal/test_kernels/dataflow/poll_l1.cpp",
+        core,
+        tt_metal::DataMovementConfig{
+            .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::NOC_0});
+
+    tt_metal::SetRuntimeArgs(
+        program, kernel0, core, {l1_unreserved_base, value_to_write, sem0_id, (uint32_t)invalidate_cache});
+
+    tt_metal::KernelHandle kernel1 = tt_metal::CreateKernel(
+        program,
+        "tests/tt_metal/tt_metal/test_kernels/dataflow/write_to_break_poll.cpp",
+        core,
+        tt_metal::DataMovementConfig{
+            .processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::NOC_1});
+
+    tt_metal::SetRuntimeArgs(program, kernel1, core, {l1_unreserved_base, value_to_write, sem0_id});
+
+    tt_metal::detail::LaunchProgram(device_, program);
+
+    tt_metal::detail::ReadFromDeviceL1(device_, core, l1_unreserved_base, sizeof(uint32_t), random_vec);
+    EXPECT_EQ(random_vec[0], value_to_write);
 }
 
 }  // namespace tt::tt_metal

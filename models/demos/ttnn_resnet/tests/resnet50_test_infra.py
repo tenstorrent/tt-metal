@@ -194,7 +194,7 @@ class ResNet50TestInfra:
         self.pcc_passed = False
         self.pcc_message = "Did you forget to call validate()?"
         self.device = device
-        self.num_devices = 1 if isinstance(device, ttnn.Device) else device.get_num_devices()
+        self.num_devices = device.get_num_devices()
         self.batch_size = batch_size
         self.act_dtype = act_dtype
         self.weight_dtype = weight_dtype

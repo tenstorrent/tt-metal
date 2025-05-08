@@ -67,7 +67,7 @@
 #include <tt_stl/strong_type.hpp>
 #include <tt_stl/overloaded.hpp>
 #include "sub_device_types.hpp"
-#include "system_memory_manager.hpp"
+#include "dispatch/system_memory_manager.hpp"
 #include "tile.hpp"
 #include "tt_backend_api_types.hpp"
 #include "tt_memory.h"
@@ -1119,9 +1119,8 @@ void detail::ProgramImpl::populate_dispatch_data(IDevice* device) {
         for (const auto& kernel_group : this->get_kernel_groups(index)) {
             // TODO: add a bit in the hal that says if this core type is unicast/multicast
             if (core_type == CoreType::WORKER) {
-                std::vector<std::pair<transfer_info_cores, uint32_t>> dst_noc_multicast_info =
-                    device->extract_dst_noc_multicast_info(
-                       kernel_group->core_ranges.ranges(), core_type);
+                std::vector<multicast_transfer_info> dst_noc_multicast_info =
+                    extract_dst_noc_multicast_info(device, kernel_group->core_ranges.ranges(), core_type);
                 std::vector<KernelHandle> kernel_ids;
                 for (int dispatch_class = 0; dispatch_class < kernel_group->kernel_ids.size(); dispatch_class++) {
                     auto &optional_id = kernel_group->kernel_ids[dispatch_class];
@@ -1137,10 +1136,10 @@ void detail::ProgramImpl::populate_dispatch_data(IDevice* device) {
                     }
                 }
 
-                for (const auto &[cores, num_mcast_dsts] : dst_noc_multicast_info) {
+                for (const auto& transfer_info : dst_noc_multicast_info) {
                     for (const auto &kernel_id : kernel_ids) {
                         this->program_transfer_info.kernel_bins.emplace_back(
-                            cores, num_mcast_dsts, kernel_transfer_info.at(kernel_id));
+                            transfer_info.cores, transfer_info.num_dests, kernel_transfer_info.at(kernel_id));
                     }
                 }
             } else {

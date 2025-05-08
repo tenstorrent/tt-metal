@@ -19,6 +19,11 @@ namespace operations {
 
 namespace matmul {
 
+// Define the buffering depth for input CBs (0 and 1) for mcast variants.
+// 2 = double buffer, 3 = triple buffer, etc.
+// Allows easily changing buffering strategy in one place for relevant factories.
+constexpr uint32_t MCAST_INPUT_BUFFERING_DEPTH = 2;
+
 using ttnn::operations::unary::UnaryWithParam;
 
 /**
@@ -171,11 +176,8 @@ struct MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig {
 
 struct MatmulMultiCoreProgramConfig {};
 
-struct MatmulMultiCoreNonOptimizedReuseProgramConfig {};
-
 using MatmulProgramConfig = std::variant<
     MatmulMultiCoreProgramConfig,
-    MatmulMultiCoreNonOptimizedReuseProgramConfig,
     MatmulMultiCoreReuseProgramConfig,
     MatmulMultiCoreReuseMultiCastProgramConfig,
     MatmulMultiCoreReuseMultiCast1DProgramConfig,

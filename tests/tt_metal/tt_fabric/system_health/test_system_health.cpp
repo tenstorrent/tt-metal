@@ -11,7 +11,6 @@
 #include <utility>
 
 #include <tt-metalium/logger.hpp>
-#include <tt-metalium/system_memory_manager.hpp>
 #include "impl/context/metal_context.hpp"
 
 namespace tt::tt_fabric {
@@ -22,12 +21,18 @@ TEST(Cluster, ReportSystemHealth) {
     // It is a report of system health
     const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
 
-    const auto& unique_chip_ids = tt::tt_metal::MetalContext::instance().get_cluster().get_unique_chip_ids();
+    auto unique_chip_ids = tt::tt_metal::MetalContext::instance().get_cluster().get_unique_chip_ids();
     std::stringstream ss;
     ss << "Found " << unique_chip_ids.size() << " chips in cluster:" << std::endl;
     std::vector<std::uint32_t> read_vec;
     auto retrain_count_addr = tt::tt_metal::MetalContext::instance().hal().get_dev_addr(
         tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::RETRAIN_COUNT);
+    if (unique_chip_ids.empty()) {
+        // Temporary patch to workaround unique chip ids not being set for non-6U systems
+        for (const auto& chip_id : cluster.user_exposed_chip_ids()) {
+            unique_chip_ids[chip_id] = chip_id;
+        }
+    }
 
     std::vector<std::string> unexpected_system_states;
     for (const auto& [chip_id, unique_chip_id] : unique_chip_ids) {
@@ -61,7 +66,7 @@ TEST(Cluster, ReportSystemHealth) {
 
     // Print a summary of unexpected system states
     for (const auto& err_str : unexpected_system_states) {
-        log_error(tt::LogTest, "{}", err_str);
+        log_warning(tt::LogTest, "{}", err_str);
     }
 }
 

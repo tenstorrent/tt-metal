@@ -1487,7 +1487,7 @@ int TestLoopbackEntrypoint(
     return success ? 0 : -1;
 }
 
-bool TestMultiInputReaderKernel(
+inline bool TestMultiInputReaderKernel(
     size_t fabric_num_devices,
     Tensor& input_tensor0,
     const MemoryConfig& input_tensor0_mem_config,
@@ -1651,14 +1651,6 @@ bool RunMultiInputReaderTestPropagateFullTensorIn(
             .to_layout(layout);
     Tensor output_tensor0 = ttnn::experimental::view(ttnn::ones(tensor_shape, DataType::UINT32, layout), tensor_shape);
     Tensor output_tensor1 = ttnn::experimental::view(ttnn::ones(tensor_shape, DataType::UINT32, layout), tensor_shape);
-    input_tensor0.set_tensor_spec(TensorSpec(
-        tensor_shape, TensorLayout(DataType::UINT32, PageConfig(layout, tt_metal::Tile()), in0_memory_config)));
-    input_tensor1.set_tensor_spec(TensorSpec(
-        tensor_shape, TensorLayout(DataType::UINT32, PageConfig(layout, tt_metal::Tile()), in1_memory_config)));
-    output_tensor0.set_tensor_spec(TensorSpec(
-        tensor_shape, TensorLayout(DataType::UINT32, PageConfig(layout, tt_metal::Tile()), out0_memory_config)));
-    output_tensor1.set_tensor_spec(TensorSpec(
-        tensor_shape, TensorLayout(DataType::UINT32, PageConfig(layout, tt_metal::Tile()), out1_memory_config)));
 
     size_t page_size = tile_size(DataFormat::RawUInt32);
 
@@ -1726,14 +1718,6 @@ void RunFabricMcastFullTensorPropagateTest(
         ttnn::experimental::view(ttnn::arange(0, num_elems, 1, DataType::UINT32), tensor_shape).to_layout(layout);
     Tensor output_tensor1 = ttnn::experimental::view(ttnn::ones(tensor_shape, DataType::UINT32, layout), tensor_shape);
     Tensor output_tensor0 = ttnn::experimental::view(ttnn::ones(tensor_shape, DataType::UINT32, layout), tensor_shape);
-    input_tensor0.set_tensor_spec(TensorSpec(
-        tensor_shape, TensorLayout(DataType::UINT32, PageConfig(layout, tt_metal::Tile()), in0_memory_config)));
-    input_tensor1.set_tensor_spec(TensorSpec(
-        tensor_shape, TensorLayout(DataType::UINT32, PageConfig(layout, tt_metal::Tile()), in1_memory_config)));
-    output_tensor0.set_tensor_spec(TensorSpec(
-        tensor_shape, TensorLayout(DataType::UINT32, PageConfig(layout, tt_metal::Tile()), out0_memory_config)));
-    output_tensor1.set_tensor_spec(TensorSpec(
-        tensor_shape, TensorLayout(DataType::UINT32, PageConfig(layout, tt_metal::Tile()), out1_memory_config)));
     ASSERT_EQ(input_tensor0.get_logical_shape(), tensor_shape);
     ASSERT_EQ(input_tensor1.get_logical_shape(), tensor_shape);
     ASSERT_EQ(output_tensor0.get_logical_shape(), tensor_shape);
@@ -1865,7 +1849,6 @@ bool RunPipelinedWorkersTest(
     }
     TT_FATAL(mem_configs.size() == num_tensors, "Must have a memory config for each tensor");
     for (size_t i = 0; i < num_tensors; i++) {
-        host_tensors[i].set_tensor_spec(tensor_specs[i]);
         device_tensors.push_back(host_tensors[i].to_device(device, mem_configs[i]));
         log_info("Tensor[{}] allocated starting at address {}", i, device_tensors[i].buffer()->address());
     }
@@ -2139,8 +2122,6 @@ void run_all_gather_with_persistent_fabric(const size_t dim, const size_t num_li
     std::vector<Tensor> device_input_tensors;
     for (size_t i = 0; i < num_devices; i++) {
         auto t = ttnn::experimental::view(ttnn::arange(0, num_elems, 1), input_shape).to_layout(layout);
-        t.set_tensor_spec(TensorSpec(
-            input_shape, TensorLayout(DataType::BFLOAT16, PageConfig(layout, tt_metal::Tile()), in_memory_config)));
 
         device_input_tensors.push_back(t);
     }
@@ -2209,8 +2190,6 @@ void run_ring_all_gather_with_persistent_fabric(
     std::vector<Tensor> device_input_tensors;
     for (size_t i = 0; i < num_devices; i++) {
         auto t = ttnn::experimental::view(ttnn::arange(0, num_elems, 1), input_shape).to_layout(layout);
-        t.set_tensor_spec(TensorSpec(
-            input_shape, TensorLayout(DataType::BFLOAT16, PageConfig(layout, tt_metal::Tile()), in_memory_config)));
 
         device_input_tensors.push_back(t);
     }
@@ -2442,7 +2421,7 @@ static std::vector<std::vector<IDevice*>> generate_line_fabrics_under_test(
     std::vector<std::vector<IDevice*>> fabrics_under_test;
     if (use_default_device_selection) {
         fabrics_under_test.push_back(
-            std::move(generate_default_line_fabric_under_test(use_galaxy, use_tg, line_size, topology, view)));
+            generate_default_line_fabric_under_test(use_galaxy, use_tg, line_size, topology, view));
     } else {
         fabrics_under_test.reserve(params.num_fabric_rows + params.num_fabric_cols);
         TT_FATAL(
@@ -2657,7 +2636,6 @@ void Run1DFabricPacketSendTest(
             bool unicast_forward;
             size_t num_fwd_hops;
             size_t num_bwd_hops;
-            size_t unicast_hops;
             size_t sync_num_fwd_hops;
             size_t sync_num_bwd_hops;
             size_t sync_count_per_link;
@@ -2725,10 +2703,8 @@ void Run1DFabricPacketSendTest(
                 }
                 if (num_fwd_hops >= num_bwd_hops) {
                     unicast_forward = true;
-                    unicast_hops = num_fwd_hops;
                 } else {
                     unicast_forward = false;
-                    unicast_hops = num_bwd_hops;
                 }
             } else {
                 backward_device = i == 0 ? nullptr : devices[i - 1];
@@ -3185,19 +3161,15 @@ void RunRingDeadlockStabilityTestWithPersistentFabric(
 
         IDevice* backward_device;
         IDevice* forward_device;
-        bool unicast_forward;
         size_t mcast_fwd_hops;
         size_t mcast_bwd_hops;
-        size_t unicast_hops;
 
         backward_device = i == 0 ? devices.back() : devices[i - 1];
         forward_device = i == line_size - 1 ? devices.front() : devices[i + 1];
 
         // Initialize the fabric handle for worker connection
-        unicast_forward = false;
         mcast_fwd_hops = has_forward_connection ? line_size - 1 : 0;
         mcast_bwd_hops = has_backward_connection ? line_size - 1 : 0;
-        unicast_hops = has_forward_connection ? mcast_fwd_hops : mcast_bwd_hops;
 
         // reserve CB
         tt_metal::CircularBufferConfig cb_src0_config =

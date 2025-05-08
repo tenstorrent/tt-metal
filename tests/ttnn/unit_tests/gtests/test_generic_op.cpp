@@ -136,9 +136,9 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpUnaryReluSharded) {
     uint32_t num_cores_y = compute_with_storage_grid_size.y;
 
     ttnn::MemoryConfig mem_config = ttnn::MemoryConfig{
-        .memory_layout = tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED,
-        .buffer_type = tt::tt_metal::BufferType::L1,
-        .shard_spec = tt::tt_metal::ShardSpec(
+        tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED,
+        tt::tt_metal::BufferType::L1,
+        tt::tt_metal::ShardSpec(
             all_cores,
             {(num_cores_x * num_cores_y) * tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH},
             tt::tt_metal::ShardOrientation::ROW_MAJOR),
@@ -675,8 +675,8 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpEltwiseSFPU) {
 
     auto shape = ttnn::Shape{1, num_tiles, tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH};
     Tensor input_tensor = ttnn::random::random(shape, DataType::BFLOAT16);
-    ttnn::MemoryConfig dram_memory_config = ttnn::MemoryConfig{
-        .memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED, .buffer_type = tt::tt_metal::BufferType::DRAM};
+    ttnn::MemoryConfig dram_memory_config =
+        ttnn::MemoryConfig{tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::DRAM};
 
     Tensor device_input_tensor = input_tensor.to_layout(Layout::TILE).to_device(this->device_, dram_memory_config);
     Tensor device_output_tensor = tt::tt_metal::create_device_tensor(

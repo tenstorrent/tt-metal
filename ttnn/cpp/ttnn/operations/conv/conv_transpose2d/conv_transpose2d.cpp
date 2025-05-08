@@ -87,9 +87,8 @@ Tensor _transform_weights_for_conv_transpose2d(const Tensor& conv_weight_tensor,
         !is_device_tensor(conv_weight_tensor), "transform_weights_for_conv_transpose2d only supports host tensors");
 
     // TODO: #15840 - Treat multi-device host vs owned/borrowed tensors uniformly.
-    return ttnn::distributed::is_multi_device_host_tensor(conv_weight_tensor)
-               ? transform(conv_weight_tensor, convert_tensor)
-               : convert_tensor(conv_weight_tensor);
+    return tt::tt_metal::is_multi_device_host_tensor(conv_weight_tensor) ? transform(conv_weight_tensor, convert_tensor)
+                                                                         : convert_tensor(conv_weight_tensor);
 }
 
 Tensor transform_weights_for_conv_transpose2d(const Tensor& conv_weight_tensor, bool mirror_kernel) {
@@ -202,8 +201,8 @@ Result conv_transpose2d(
             full_input_width,
             compute_grid_size,
             input_tensor.layout(),
-            ttnn::is_tensor_on_device_or_multidevice(input_tensor) ? std::make_optional(input_tensor.memory_config())
-                                                                   : std::nullopt,
+            tt::tt_metal::is_device_tensor(input_tensor) ? std::make_optional(input_tensor.memory_config())
+                                                         : std::nullopt,
             kernel_size,
             groups,
             bias_tensor.has_value(),
@@ -229,7 +228,7 @@ Result conv_transpose2d(
     Tensor halo_output;
     if (!mm_conv) {
         sliding_window_config.num_cores_nhw = get_num_cores_nhw_from_parallel_config(parallel_config);
-        sliding_window_config.core_range_set = input_tensor_post_tm.memory_config().shard_spec.value().grid;
+        sliding_window_config.core_range_set = input_tensor_post_tm.memory_config().shard_spec().value().grid;
         sliding_window_config.snap_to_tile = true;
 
         halo_output = ttnn::halo(
@@ -271,7 +270,7 @@ Result conv_transpose2d(
         in_channels,
         get_num_cores_channels_from_parallel_config(parallel_config) * conv_config.input_channels_alignment);
     uint32_t nhw_out_padded_ntile = get_num_cores_nhw_from_parallel_config(output_parallel_config) *
-                                    conv_out_memory_config.shard_spec.value().shape[0] / tt::constants::TILE_HEIGHT;
+                                    conv_out_memory_config.shard_spec().value().shape[0] / tt::constants::TILE_HEIGHT;
     auto opt_conv_op_block_config = determine_per_core_conv_block_config(
         parallel_config,
         opt_conv_op_parallel_config,
@@ -284,7 +283,7 @@ Result conv_transpose2d(
         get_fp32_dest_acc_en(compute_config),
         conv_config.enable_split_reader);
 
-    bool weight_is_on_device = ttnn::is_tensor_on_device_or_multidevice(weight_tensor);
+    bool weight_is_on_device = tt::tt_metal::is_device_tensor(weight_tensor);
     ttnn::Tensor weight_tensor_on_device = weight_tensor;
     std::optional<ttnn::Tensor> bias_tensor_on_device = bias_tensor;
     if (!weight_is_on_device) {

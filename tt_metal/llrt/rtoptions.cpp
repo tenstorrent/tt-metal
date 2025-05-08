@@ -57,6 +57,7 @@ RunTimeOptions::RunTimeOptions() {
         this->is_kernel_dir_env_var_set = true;
         this->kernel_dir = std::string(kernel_dir_str) + "/";
     }
+    this->system_kernel_dir = "/usr/share/tenstorrent/kernels/";
 
     build_map_enabled = (getenv("TT_METAL_KERNEL_MAP") != nullptr);
 
@@ -117,15 +118,16 @@ RunTimeOptions::RunTimeOptions() {
 
     kernels_early_return = (std::getenv("TT_METAL_KERNELS_EARLY_RETURN") != nullptr);
 
-    clear_l1 = false;
+    this->clear_l1 = false;
     const char* clear_l1_enabled_str = std::getenv("TT_METAL_CLEAR_L1");
-    if (clear_l1_enabled_str != nullptr) {
-        if (clear_l1_enabled_str[0] == '0') {
-            clear_l1 = false;
-        }
-        if (clear_l1_enabled_str[0] == '1') {
-            clear_l1 = true;
-        }
+    if (clear_l1_enabled_str != nullptr && clear_l1_enabled_str[0] == '1') {
+        this->clear_l1 = true;
+    }
+
+    this->clear_dram = false;
+    const char* clear_dram_enabled_str = std::getenv("TT_METAL_CLEAR_DRAM");
+    if (clear_dram_enabled_str != nullptr && clear_dram_enabled_str[0] == '1') {
+        this->clear_dram = true;
     }
 
     const char* skip_eth_cores_with_retrain_str = std::getenv("TT_METAL_SKIP_ETH_CORES_WITH_RETRAIN");
@@ -173,7 +175,9 @@ RunTimeOptions::RunTimeOptions() {
         this->skip_deleting_built_cache = true;
     }
 
-    this->enable_hw_cache_invalidation = (std::getenv("TT_METAL_ENABLE_HW_CACHE_INVALIDATION") != nullptr);
+    if (getenv("TT_METAL_ENABLE_HW_CACHE_INVALIDATION")) {
+        this->enable_hw_cache_invalidation = true;
+    }
 
     if (std::getenv("TT_METAL_SIMULATOR")) {
         this->simulator_enabled = true;
@@ -182,6 +186,10 @@ RunTimeOptions::RunTimeOptions() {
 
     if (getenv("TT_METAL_ENABLE_ERISC_IRAM")) {
         this->erisc_iram_enabled = true;
+    }
+
+    if (getenv("TT_METAL_DISABLE_RELAXED_MEM_ORDERING")) {
+        this->disable_relaxed_memory_ordering = true;
     }
 }
 
@@ -207,6 +215,8 @@ const std::string& RunTimeOptions::get_kernel_dir() const {
 
     return this->kernel_dir;
 }
+
+const std::string& RunTimeOptions::get_system_kernel_dir() const { return this->system_kernel_dir; }
 
 void RunTimeOptions::ParseWatcherEnv() {
     watcher_interval_ms = 0;

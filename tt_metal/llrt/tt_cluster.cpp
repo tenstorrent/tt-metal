@@ -92,6 +92,13 @@ namespace tt {
 ClusterType Cluster::get_cluster_type_from_cluster_desc(
     const llrt::RunTimeOptions& rtoptions, const tt_ClusterDescriptor* cluster_desc) {
     if (rtoptions.get_simulator_enabled()) {
+        tt_SimulationDeviceInit init(rtoptions.get_simulator_path());
+        auto arch = init.get_arch_name();
+        if (arch == tt::ARCH::WORMHOLE_B0) {
+            return ClusterType::SIMULATOR_WORMHOLE_B0;
+        } else if (arch == tt::ARCH::BLACKHOLE) {
+            return ClusterType::SIMULATOR_BLACKHOLE;
+        }
         return ClusterType::INVALID;
     }
     if (cluster_desc == nullptr) {
@@ -258,14 +265,41 @@ void Cluster::generate_cluster_descriptor() {
     }
 }
 
+void Cluster::validate_harvesting_masks() const {
+    // Metal expects all chips to have same number of harvested cores for a given core type
+    std::optional<tt::umd::HarvestingMasks> harvesting_mask_tracker = std::nullopt;
+    for (const auto device_id : this->user_exposed_chip_ids()) {
+        tt::umd::HarvestingMasks masks = sdesc_per_chip_.at(device_id).harvesting_masks;
+        if (!harvesting_mask_tracker.has_value()) {
+            harvesting_mask_tracker = masks;
+        } else {
+            TT_FATAL(
+                std::popcount(masks.tensix_harvesting_mask) ==
+                    std::popcount(harvesting_mask_tracker->tensix_harvesting_mask),
+                "Number of harvested Tensix mismatch across devices");
+            TT_FATAL(
+                std::popcount(masks.dram_harvesting_mask) ==
+                    std::popcount(harvesting_mask_tracker->dram_harvesting_mask),
+                "Number of harvested Dram mismatch across devices");
+            TT_FATAL(
+                std::popcount(masks.eth_harvesting_mask) == std::popcount(harvesting_mask_tracker->eth_harvesting_mask),
+                "Number of harvested Eth mismatch across devices");
+            TT_FATAL(
+                std::popcount(masks.pcie_harvesting_mask) ==
+                    std::popcount(harvesting_mask_tracker->pcie_harvesting_mask),
+                "Number of harvested Pcie mismatch across devices");
+        }
+    }
+}
+
 void Cluster::initialize_device_drivers() {
     this->open_driver();
     this->generate_cluster_descriptor();
     this->get_metal_desc_from_tt_desc();
+    this->validate_harvesting_masks();
 
     for (const auto &[mmio_device_id, controlled_devices] : this->devices_grouped_by_assoc_mmio_device_) {
         this->assign_mem_channels_to_devices(mmio_device_id, controlled_devices);
-        auto masks = this->driver_->get_soc_descriptor(mmio_device_id).harvesting_masks;
     }
 
     tt_device_params default_params;
@@ -1141,6 +1175,9 @@ std::set<tt_fabric::chan_id_t> Cluster::get_fabric_ethernet_channels(chip_id_t c
     std::set<tt_fabric::chan_id_t> fabric_ethernet_channels;
     const auto& active_eth_cores = this->get_active_ethernet_cores(chip_id, false);
     for (const auto& eth_core : active_eth_cores) {
+        if (!this->is_ethernet_link_up(chip_id, eth_core)) {
+            continue;
+        }
         if (this->device_eth_routing_info_.at(chip_id).at(eth_core) == EthRouterMode::FABRIC_ROUTER) {
             fabric_ethernet_channels.insert(this->get_soc_desc(chip_id).logical_eth_core_to_chan_map.at(eth_core));
         }
@@ -1381,6 +1418,8 @@ void Cluster::initialize_control_plane() {
         case tt::ClusterType::P150: mesh_graph_descriptor = "p150_mesh_graph_descriptor.yaml"; break;
         case tt::ClusterType::P150_X2: mesh_graph_descriptor = "p150_x2_mesh_graph_descriptor.yaml"; break;
         case tt::ClusterType::P150_X4: mesh_graph_descriptor = "p150_x4_mesh_graph_descriptor.yaml"; break;
+        case tt::ClusterType::SIMULATOR_WORMHOLE_B0: mesh_graph_descriptor = "n150_mesh_graph_descriptor.yaml"; break;
+        case tt::ClusterType::SIMULATOR_BLACKHOLE: mesh_graph_descriptor = "p150_mesh_graph_descriptor.yaml"; break;
         default: TT_THROW("Unknown cluster type"); // TODO: we could expose this as a custom mesh graph option
     }
     const std::filesystem::path mesh_graph_desc_path = std::filesystem::path(rtoptions_.get_root_dir()) /

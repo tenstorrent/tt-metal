@@ -35,21 +35,19 @@ namespace {
 using ::testing::Eq;
 using ::testing::FloatEq;
 using ::testing::Pointwise;
-using ::tt::tt_metal::is_tensor_on_device;
+using ::tt::tt_metal::is_device_tensor;
 
 using MultiProducerCommandQueueTest = ttnn::MultiCommandQueueSingleDeviceFixture;
 
-TEST_F(MultiProducerCommandQueueTest, Stress) {
+// #21556: Disabled until we have clarity about user space multi-threading support
+TEST_F(MultiProducerCommandQueueTest, DISABLED_Stress) {
     // Spawn 2 application level threads intefacing with the same device through the async engine.
     // This leads to shared access of the work_executor and host side worker queue.
     // Test thread safety.
     IDevice* device = this->device_;
 
     const ttnn::Shape tensor_shape{1, 1, 1024, 1024};
-    const MemoryConfig mem_cfg = MemoryConfig{
-        .memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED,
-        .buffer_type = BufferType::DRAM,
-        .shard_spec = std::nullopt};
+    const MemoryConfig mem_cfg = MemoryConfig{tt::tt_metal::TensorMemoryLayout::INTERLEAVED, BufferType::DRAM};
     const TensorLayout tensor_layout(DataType::FLOAT32, PageConfig(Layout::ROW_MAJOR), mem_cfg);
     const TensorSpec tensor_spec(tensor_shape, tensor_layout);
 
@@ -69,7 +67,7 @@ TEST_F(MultiProducerCommandQueueTest, Stress) {
     std::thread t0([&]() {
         for (int j = 0; j < kNumIterations; j++) {
             Tensor t0_tensor = t0_host_tensor.to_device(device, mem_cfg, t0_io_cq);
-            EXPECT_TRUE(is_tensor_on_device(t0_tensor));
+            EXPECT_TRUE(is_device_tensor(t0_tensor));
             EXPECT_THAT(t0_tensor.to_vector<float>(t0_io_cq), Pointwise(FloatEq(), t0_host_data));
         }
     });
@@ -77,7 +75,7 @@ TEST_F(MultiProducerCommandQueueTest, Stress) {
     std::thread t1([&]() {
         for (int j = 0; j < kNumIterations; j++) {
             Tensor t1_tensor = t1_host_tensor.to_device(device, mem_cfg, t1_io_cq);
-            EXPECT_TRUE(is_tensor_on_device(t1_tensor));
+            EXPECT_TRUE(is_device_tensor(t1_tensor));
             EXPECT_THAT(t1_tensor.to_vector<float>(t1_io_cq), Pointwise(FloatEq(), t1_host_data));
         }
     });
@@ -86,7 +84,8 @@ TEST_F(MultiProducerCommandQueueTest, Stress) {
     t1.join();
 }
 
-TEST_F(MultiProducerCommandQueueTest, EventSync) {
+// #21556: Disabled until we have clarity about user space multi-threading support
+TEST_F(MultiProducerCommandQueueTest, DISABLED_EventSync) {
     // Verify that the event_synchronize API stalls the calling thread until
     // the device records the event being polled.
     // Thread 0 = writer thread. Thread 1 = reader thread.
@@ -96,10 +95,7 @@ TEST_F(MultiProducerCommandQueueTest, EventSync) {
     auto device = this->device_;
 
     const ttnn::Shape tensor_shape{1, 1, 1024, 1024};
-    const MemoryConfig mem_cfg = MemoryConfig{
-        .memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED,
-        .buffer_type = BufferType::DRAM,
-        .shard_spec = std::nullopt};
+    const MemoryConfig mem_cfg = MemoryConfig{tt::tt_metal::TensorMemoryLayout::INTERLEAVED, BufferType::DRAM};
     const TensorLayout tensor_layout(DataType::UINT32, PageConfig(Layout::ROW_MAJOR), mem_cfg);
     const TensorSpec tensor_spec(tensor_shape, tensor_layout);
 
@@ -136,7 +132,7 @@ TEST_F(MultiProducerCommandQueueTest, EventSync) {
             std::iota(host_data.begin(), host_data.end(), j);
             const Tensor host_tensor = Tensor::from_vector(host_data, tensor_spec);
             memcpy(device->mesh_command_queue(*write_cq), device_tensor, host_tensor);
-            EXPECT_TRUE(is_tensor_on_device(device_tensor));
+            EXPECT_TRUE(is_device_tensor(device_tensor));
 
             {
                 std::unique_lock<std::mutex> lock(event_mutex);
@@ -164,7 +160,7 @@ TEST_F(MultiProducerCommandQueueTest, EventSync) {
 
             // Read back from device and verify
             const Tensor readback_tensor = device_tensor.cpu(/*blocking=*/true, read_cq);
-            EXPECT_FALSE(is_tensor_on_device(readback_tensor));
+            EXPECT_FALSE(is_device_tensor(readback_tensor));
             std::iota(expected_readback_data.begin(), expected_readback_data.end(), j);
             EXPECT_THAT(readback_tensor.to_vector<uint32_t>(), Pointwise(Eq(), expected_readback_data))
                 << "At iteration " << j;

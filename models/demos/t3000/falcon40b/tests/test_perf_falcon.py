@@ -50,7 +50,6 @@ def run_test_FalconCausalLM_end_to_end(
 
     # Clear global profiler state before starting measurements
     profiler.clear()
-    devices = mesh_device.get_devices()
     model_name = model_location_generator(model_version, model_subdir="Falcon")
 
     profiler.start("hugging_face_model_setup")
@@ -184,8 +183,7 @@ def run_test_FalconCausalLM_end_to_end(
         signpost("WARMUP_RUNS")
 
     for _ in range(warmup_iterations):
-        for device in devices:
-            ttnn.DumpDeviceProfiler(device)
+        ttnn.DumpDeviceProfiler(mesh_device)
         if llm_mode == "prefill":
             model_inputs = torch.split(model_input, 1)
             tt_inputs, tt_attention_mask = zip(
@@ -229,8 +227,7 @@ def run_test_FalconCausalLM_end_to_end(
     ttnn.synchronize_device(mesh_device)
 
     # Run for perf iteration - profiler enabled
-    for device in devices:
-        ttnn.DumpDeviceProfiler(device)
+    ttnn.DumpDeviceProfiler(mesh_device)
     profiler.enable()
     enable_persistent_kernel_cache()
     logger.info(f"Enable profiler and enable binary and compile cache")
@@ -442,8 +439,7 @@ def test_device_perf_bare_metal(
 
     input_shape = [batch, seq_len]
     model_config = get_model_config(model_config_str, llm_mode, input_shape, num_devices)
-    devices = t3k_mesh_device.get_devices()
-    compute_grid_size = devices[0].compute_with_storage_grid_size()
+    compute_grid_size = t3k_mesh_device.compute_with_storage_grid_size()
     if compute_grid_size.x < model_config["MAX_GRID_SIZE"][0] or compute_grid_size.y < model_config["MAX_GRID_SIZE"][1]:
         pytest.skip(f"Requires grid size of at least {model_config['MAX_GRID_SIZE']} to run")
 

@@ -4,7 +4,7 @@
 
 #include "cumsum_pybind.hpp"
 #include <optional>
-#include "pybind11/decorators.hpp"
+#include "ttnn-pybind/decorators.hpp"
 #include <pybind11/stl.h>
 #include "ttnn/common/queue_id.hpp"
 #include "ttnn/operations/experimental/reduction/cumsum/device/cumsum_device_operation.hpp"

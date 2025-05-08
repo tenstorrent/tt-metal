@@ -15,7 +15,6 @@
 #include <tt-metalium/bfloat8.hpp>
 #include <tt-metalium/tilize_utils.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
-#include "ttnn/any_device.hpp"
 #include "ttnn/common/queue_id.hpp"
 #include "ttnn/distributed/distributed_tensor_config.hpp"
 #include "ttnn/tensor/types.hpp"
@@ -70,33 +69,12 @@ public:
         const std::optional<Tile>& tile = std::nullopt);
     Tensor(Storage storage, TensorSpec tensor_spec);
 
-    // Constructors to initialize unpopulated tensor with workers and storage specified. Use this when creating tensor
-    // handles in async mode.
-    explicit Tensor(
-        uint32_t num_buffers, std::optional<DistributedTensorConfig> distributed_tensor_config = std::nullopt);
-    explicit Tensor(const std::vector<IDevice*>& workers);
-    explicit Tensor(distributed::MeshDevice* mesh_device);
-
     Tensor(const Tensor& other);
-
     Tensor& operator=(const Tensor& other);
-
     Tensor(Tensor&& other) noexcept = default;
-
-    Tensor& operator=(Tensor&& other) {
-        // Don't self assign
-        this->tensor_id = std::move(other.tensor_id);
-        if (this->tensor_attributes != other.tensor_attributes) {
-            this->workers = std::move(other.workers);
-            this->tensor_attributes = std::move(other.tensor_attributes);
-        }
-        this->mesh_device_ = std::move(other.mesh_device_);
-        return *this;
-    }
+    Tensor& operator=(Tensor&& other) noexcept;
 
     ~Tensor();
-
-    void populate_buffers_and_metadata(const Tensor& other);
 
     void deallocate(bool force = false);
 
@@ -111,7 +89,7 @@ public:
     static Tensor from_span(
         tt::stl::Span<const T> buffer,
         const TensorSpec& spec,
-        std::optional<ttnn::AnyDevice> device = std::nullopt,
+        distributed::MeshDevice* device = nullptr,
         ttnn::QueueId cq_id = ttnn::DefaultQueueId);
 
     // Creates a `Tensor` with storage "borrowed" from the buffer of elements of type `T`.
@@ -139,7 +117,7 @@ public:
     static Tensor from_vector(
         const std::vector<T>& buffer,
         const TensorSpec& spec,
-        std::optional<ttnn::AnyDevice> device = std::nullopt,
+        distributed::MeshDevice* device = nullptr,
         ttnn::QueueId cq_id = ttnn::DefaultQueueId) {
         return from_span(tt::stl::Span<const T>(buffer), spec, device);
     }
@@ -150,7 +128,7 @@ public:
     static Tensor from_vector(
         std::vector<T>&& buffer,
         const TensorSpec& spec,
-        std::optional<ttnn::AnyDevice> device = std::nullopt,
+        distributed::MeshDevice* device = nullptr,
         ttnn::QueueId cq_id = ttnn::DefaultQueueId);
 
     // Converts a `Tensor` to a `std::vector<T>`.
@@ -163,17 +141,12 @@ public:
 
     Tensor to_device(
         IDevice* target_device,
-        const MemoryConfig& mem_config = {.memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED},
+        const MemoryConfig& mem_config = MemoryConfig{},
         ttnn::QueueId cq_id = ttnn::DefaultQueueId) const;
 
     Tensor to_device(
         distributed::MeshDevice* mesh_device,
-        const MemoryConfig& mem_config = {.memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED},
-        ttnn::QueueId cq_id = ttnn::DefaultQueueId) const;
-
-    Tensor to_device(
-        const std::vector<IDevice*>& workers,
-        const MemoryConfig& mem_config = {.memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED},
+        const MemoryConfig& mem_config = MemoryConfig{},
         ttnn::QueueId cq_id = ttnn::DefaultQueueId) const;
 
     Tensor to_layout(Layout target_layout, IDevice* worker = nullptr) const;
@@ -223,17 +196,9 @@ public:
     const TensorSpec& tensor_spec() const { return this->tensor_attributes->get_tensor_spec(); }
 
     // ======================================================================================
-    //                                      Setters
-    // ======================================================================================
-    void set_storage(const Storage& storage) { this->tensor_attributes->set_storage(storage); }
-    // We intend to remove this API once we migrate all ops to compute_output_specs, and provide TensorSpec at creation
-    void set_tensor_spec(const TensorSpec& tensor_spec) { this->tensor_attributes->set_tensor_spec(tensor_spec); }
-    // ======================================================================================
     //                                      Extra Helper Functions
     // ======================================================================================
     StorageType storage_type() const;
-    bool is_host_tensor() const;
-    bool is_device_tensor() const;
     ttnn::Shape strides() const;
     uint32_t volume() const;
 
@@ -272,6 +237,7 @@ public:
     }
     const DeviceStorage& device_storage() const { return std::get<DeviceStorage>(this->get_storage()); }
 
+    // TODO: #21099 - Remove the overload `mesh_device()`, and instead use `device()`.
     distributed::MeshDevice* mesh_device() const {
         if (this->mesh_device_.has_value()) {
             return this->mesh_device_.value();
@@ -301,7 +267,7 @@ public:
     std::vector<IDevice*> active_physical_devices() const;
 
     const MemoryConfig& memory_config() const { return get_tensor_spec().tensor_layout().get_memory_config(); }
-    const std::optional<ShardSpec>& shard_spec() const { return this->memory_config().shard_spec; }
+    const std::optional<ShardSpec>& shard_spec() const { return this->memory_config().shard_spec(); }
 
     bool is_sharded() const;
 
@@ -314,11 +280,9 @@ public:
             this->tensor_attributes->get_storage(), this->tensor_attributes->get_tensor_spec());
     }
 
-    std::vector<uint32_t> host_page_ordering();
-
 private:
     void init(Storage storage, TensorSpec tensor_spec);
-    void deallocate_impl(bool force, bool deallocation_through_destructor);
+    void deallocate_impl(bool force);
 };
 
 Tensor create_device_tensor(const TensorSpec& tensor_spec, IDevice* device);
@@ -329,7 +293,7 @@ Tensor create_device_tensor(
     DataType dtype,
     Layout layout,
     IDevice* device,
-    const MemoryConfig& memory_config = {.memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED},
+    const MemoryConfig& memory_config = MemoryConfig{},
     const std::optional<Tile>& tile = std::nullopt);
 
 // The set of memcpy functions below are used to copy data between host buffers/tensors and single-device tensors
@@ -368,8 +332,6 @@ void memcpy(
 void memcpy(Tensor& dst, const void* src, const std::optional<BufferRegion>& region = std::nullopt);
 
 void memcpy(Tensor& dst, const Tensor& src, const std::optional<BufferRegion>& region = std::nullopt);
-
-Tensor allocate_tensor_on_devices(const TensorSpec& spec, const std::vector<IDevice*>& devices);
 
 // Allocates a tensor on a mesh device through mesh buffer.
 Tensor allocate_tensor_on_mesh(const TensorSpec& tensor_spec, distributed::MeshDevice* mesh_device);

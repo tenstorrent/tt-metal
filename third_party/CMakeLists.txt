@@ -28,7 +28,7 @@ CPMAddPackage(
         "BOOST_ENABLE_CMAKE ON"
         "BOOST_SKIP_INSTALL_RULES ON"
         "BUILD_SHARED_LIBS OFF"
-        "BOOST_INCLUDE_LIBRARIES core\\\;container\\\;smart_ptr\\\;interprocess\\\;asio\\\;lockfree"
+        "BOOST_INCLUDE_LIBRARIES core\\\;container\\\;smart_ptr\\\;interprocess\\\;asio\\\;lockfree\\\;"
     FIND_PACKAGE_ARGUMENTS "CONFIG REQUIRED"
 )
 
@@ -155,6 +155,7 @@ CPMAddPackage(
     OPTIONS
         "CMAKE_MESSAGE_LOG_LEVEL NOTICE"
         "JSON_Install ON"
+        "JSON_BuildTests OFF"
 )
 set(CMAKE_INSTALL_DEFAULT_COMPONENT_NAME ${DEFAULT_COMPONENT_NAME})
 
@@ -165,7 +166,9 @@ set(CMAKE_INSTALL_DEFAULT_COMPONENT_NAME ${DEFAULT_COMPONENT_NAME})
 CPMAddPackage(
     NAME xtl
     GITHUB_REPOSITORY xtensor-stack/xtl
-    GIT_TAG 0.7.7
+    GIT_TAG 0.8.0
+    PATCHES
+        xtl.patch
     OPTIONS
         "CMAKE_MESSAGE_LOG_LEVEL NOTICE"
         "XTL_ENABLE_TESTS OFF"
@@ -173,7 +176,9 @@ CPMAddPackage(
 CPMAddPackage(
     NAME xtensor
     GITHUB_REPOSITORY xtensor-stack/xtensor
-    GIT_TAG 0.25.0
+    GIT_TAG 0.26.0
+    PATCHES
+        xtensor.patch
     OPTIONS
         "CMAKE_MESSAGE_LOG_LEVEL NOTICE"
         "XTENSOR_ENABLE_TESTS OFF"
@@ -181,7 +186,9 @@ CPMAddPackage(
 CPMAddPackage(
     NAME xtensor-blas
     GITHUB_REPOSITORY xtensor-stack/xtensor-blas
-    GIT_TAG 0.21.0
+    GIT_TAG 0.22.0
+    PATCHES
+        xtensor-blas.patch
     OPTIONS
         "CMAKE_MESSAGE_LOG_LEVEL NOTICE"
         "XTENSOR_ENABLE_TESTS OFF"
@@ -220,6 +227,8 @@ CPMAddPackage(
     GIT_TAG v3.7.0
     OPTIONS
         "CMAKE_MESSAGE_LOG_LEVEL NOTICE" # Taskflow's CMakeLists.txt is super noisy
+        "TF_BUILD_TESTS OFF"
+        "TF_BUILD_EXAMPLES OFF"
 )
 if(Taskflow_ADDED AND NOT TARGET Taskflow::Taskflow)
     add_library(Taskflow::Taskflow ALIAS Taskflow)

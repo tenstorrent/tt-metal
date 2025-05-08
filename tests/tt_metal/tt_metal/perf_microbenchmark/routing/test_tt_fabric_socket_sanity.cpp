@@ -37,7 +37,6 @@
 #include <tt-metalium/program.hpp>
 #include "routing_test_common.hpp"
 #include <tt_stl/span.hpp>
-#include <tt-metalium/system_memory_manager.hpp>
 #include "test_common.hpp"
 #include "impl/context/metal_context.hpp"
 // #include "tt_metal/impl/dispatch/kernels/packet_queue_ctrl.hpp"
@@ -637,11 +636,9 @@ int main(int argc, char** argv) {
 
         if (pass) {
             double total_tx_bw = 0.0;
-            uint64_t total_tx_words_sent = 0;
             uint64_t total_rx_words_checked = 0;
             for (uint32_t i = 0; i < num_src_endpoints; i++) {
                 uint64_t tx_words_sent = get_64b_result(tx_results[i], TT_FABRIC_WORD_CNT_INDEX);
-                total_tx_words_sent += tx_words_sent;
                 uint64_t tx_elapsed_cycles = get_64b_result(tx_results[i], TT_FABRIC_CYCLES_INDEX);
                 double tx_bw = ((double)tx_words_sent) * PACKET_WORD_SIZE_BYTES / tx_elapsed_cycles;
                 total_tx_bw += tx_bw;
