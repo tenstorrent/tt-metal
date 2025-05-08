@@ -24,12 +24,12 @@ void kernel_main() {
     // Setting the page size to be tile_size_bytes works because we set it up
     // explicitly in host code. This is usually a good idea as it makes coding
     // easy.
-    const InterleavedAddrGenFast<true> a = {
+    const InterleavedAddrGenFast<true> in0 = {
         .bank_base_address = a_addr,           // The base address of the buffer
         .page_size = tile_size_bytes,          // The size of a buffer page
         .data_format = DataFormat::Float16_b,  // The data format of the buffer
     };
-    const InterleavedAddrGenFast<true> b = {
+    const InterleavedAddrGenFast<true> in1 = {
         .bank_base_address = b_addr,
         .page_size = tile_size_bytes,
         .data_format = DataFormat::Float16_b,
