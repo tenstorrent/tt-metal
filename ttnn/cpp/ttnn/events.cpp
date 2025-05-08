@@ -19,6 +19,7 @@ using ::tt::tt_metal::EnqueueWaitForEvent;
 using ::tt::tt_metal::EventSynchronize;
 using ::tt::tt_metal::distributed::EnqueueRecordEventToHost;
 using ::tt::tt_metal::distributed::EnqueueWaitForEvent;
+using ::tt::tt_metal::distributed::EventSynchronize;
 
 std::shared_ptr<tt::tt_metal::Event> record_event(
     tt::tt_metal::IDevice* device, QueueId cq_id, const std::vector<tt::tt_metal::SubDeviceId>& sub_device_ids) {
@@ -61,5 +62,7 @@ void wait_for_mesh_event(QueueId cq_id, const MeshEvent& event) {
 }
 
 void event_synchronize(const std::shared_ptr<tt::tt_metal::Event>& event) { EventSynchronize(event); }
+
+void event_synchronize(const MeshEvent& event) { EventSynchronize(event); }
 
 }  // namespace ttnn::events

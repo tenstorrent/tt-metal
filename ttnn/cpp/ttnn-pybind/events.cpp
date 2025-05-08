@@ -97,13 +97,24 @@ void py_module(py::module& module) {
 
     module.def(
         "event_synchronize",
-        py::overload_cast<const std::shared_ptr<tt::tt_metal::Event>&>(&event_synchronize),
+        py::overload_cast<const std::shared_ptr<Event>&>(&event_synchronize),
         py::arg("event"),
         R"doc(
             Synchronizes an event, blocking until the event is completed.
 
             Args:
                 event (event): The event to synchronize.
+        )doc");
+
+    module.def(
+        "event_synchronize",
+        py::overload_cast<const MeshEvent&>(&event_synchronize),
+        py::arg("mesh_event"),
+        R"doc(
+            Synchronizes a mesh event, blocking until the event is completed.
+
+            Args:
+                mesh_event (MeshEvent): The mesh event to synchronize.
         )doc");
 }
 
