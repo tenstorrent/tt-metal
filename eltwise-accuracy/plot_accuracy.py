@@ -17,6 +17,10 @@ import re
 import time
 import multiprocessing as mp
 
+
+RED = "\033[91m"
+RESET = "\033[0m"
+
 plt.rcParams["svg.fonttype"] = "none"  # Make text editing in SVG easier
 
 
@@ -62,9 +66,19 @@ def generate_plot_config_hashes(plot_config):
 
 
 def load_plot_config_hashes(input_path):
+    if not os.path.exists(input_path):
+        plot_config_hashes = {}
+        plot_config_hashes["last_modified"] = 0
+        return plot_config_hashes
+
+    # Get time stamp of last modification of hash file
+    hash_last_modified = os.path.getmtime(input_path)
+
     # Load as json file
     with open(input_path, "r") as f:
         plot_config_hashes = json.load(f)
+
+    plot_config_hashes["last_modified"] = hash_last_modified
 
     return plot_config_hashes
 
@@ -75,22 +89,102 @@ def save_plot_config_hashes(plot_config_hashes, output_path):
         json.dump(plot_config_hashes, f)
 
 
-def plot_all(plot_config, base_output_dir, plot_config_hashes):
+def try_plot(plot_entry):
+    try:
+        plot(plot_entry)
+    except Exception as e:
+        print(f"Error plotting {RED}{plot_entry['id']}: {e}{RESET}")
+
+
+def plot(plot_entry):
+    output_path = plot_entry["output"]
+    data = plot_entry["data"]
+
+    # Read parameters
+    xscale = plot_entry["xscale"] if "xscale" in plot_entry else "symlog"
+    xbase = plot_entry["xbase"] if "xbase" in plot_entry else 10
+
+    plot_params = plot_entry["plot_params"]
+
+    yscale = plot_params["yscale"] if "yscale" in plot_params else "asinh"
+    ybase = plot_params["ybase"] if "ybase" in plot_params else 10
+
+    xmin = plot_params["xmin"] if "xmin" in plot_params else None
+    xmax = plot_params["xmax"] if "xmax" in plot_params else None
+
+    ymin = plot_params["ymin"] if "ymin" in plot_params else None
+    ymax = plot_params["ymax"] if "ymax" in plot_params else None
+
+    yticks = plot_params["yticks"] if "yticks" in plot_params else None
+
+    xname = plot_entry["xname"]
+    ynames = plot_entry["ynames"]
+    hseries = plot_entry["hue"] if "hue" in plot_entry else None
+
+    xlabel = plot_params["xlabel"] if "xlabel" in plot_params else xname
+    ylabel = plot_params["ylabel"] if "ylabel" in plot_params else ynames[0]
+
+    yticksformat = plot_params["yticksformat"] if "yticksformat" in plot_params else None
+
+    fig, ax = plt.subplots(figsize=(25, 15))
+
+    # color_palette = sns.color_palette("deep", len(ynames))
+
+    for y in ynames:
+        data = plot_entry["data"]
+        d2 = data
+        data["operation"] += y
+        if hseries is not None:
+            ax = sns.lineplot(data=plot_entry["data"], x=xname, y=y, ax=ax, hue=hseries)
+        else:
+            ax = sns.lineplot(data=plot_entry["data"], x=xname, y=y, ax=ax, label=y)
+
+    ax.set_xscale(xscale, base=xbase)
+    ax.set_yscale(yscale, base=ybase)
+
+    ax.set_xlim(xmin, xmax)
+    ax.set_ylim(ymin, ymax)
+
+    ax.set_xlabel(xlabel)
+    ax.set_ylabel(ylabel)
+
+    if yticks is not None:
+        print(f"yticks = {yticks}")
+        # ax.set_yticks(yticks)
+
+    if yticksformat == "percent":
+        plt.gca().set_yticklabels([f"{100*x}%" for x in ax.get_yticks()])
+        pass
+
+    plt.savefig(output_path, bbox_inches="tight", pad_inches=0.0)
+    plt.close()
+
+    pass
+
+
+def insert_default_params(all_plot_config, plot_config):
+    for default_param in all_plot_config["default_params"]:
+        if default_param not in plot_config:
+            plot_config[default_param] = all_plot_config["default_params"][default_param]
+
+
+def plot_all(plot_config, base_output_dir, plot_config_hashes, force_replot=False):
     plot_args = []
 
     for plot_entry in plot_config["plots"]:
         plot_id = plot_entry["id"]
 
-        do_replot = False
+        do_replot = True
+
+        hash_value = hash_plot_entry(plot_entry)
         if plot_id in plot_config_hashes:
             # Compute new hash and check against previous one
-            hash_value = hash_plot_entry(plot_entry)
             last_hash = plot_config_hashes[plot_id]
 
-            if hash_value != last_hash:
-                do_replot = True
+            if hash_value == last_hash:
+                do_replot = False
 
-        else:
+        if force_replot:
             do_replot = True
 
         if do_replot:
@@ -98,14 +192,31 @@ def plot_all(plot_config, base_output_dir, plot_config_hashes):
 
     # For each plot entry, import data
     for plot_entry in plot_args:
-        plot_entry["data"] = load_data(plot_entry["data_path"])
+        data_series = plot_entry["files"]
+        list_all_data = []
+
+        # TODO: Cache data
+        for series in data_series:
+            data_op = load_csv(series)
+            list_all_data.append(data_op)
+
+        data = pd.concat(list_all_data, axis=0)
+
+        # Remove data with NaN or infinity (might speedup plotting)
+        data = data[(data["base_x"].notna()) & (np.isfinite(data["base_x"]))]
+        data = data.reset_index()
+
+        # data = data.set_index(["base_x", "operation"])
+
+        # Transform data if necessary
+        plot_entry["data"] = data
 
     # Launch parallel plots
     num_processes = mp.cpu_count()
     print(f"Plotting {len(plot_args)} operations with {num_processes} processes")
 
     with mp.Pool(num_processes) as pool:
-        results = pool.map(plot_data, plot_args)
+        results = pool.map(try_plot, plot_args)
 
         for result in results:
             print(result)
@@ -1093,13 +1204,27 @@ def main():
     if not os.path.exists(dest_dir):
         os.makedirs(dest_dir)
 
-    plot_all_ops(accuracy_dir, all_operations, dest_dir)
-    plot_all_ops(accuracy_dir, highres_operations, dest_dir, highres=True)
+    # plot_all_ops(accuracy_dir, all_operations, dest_dir)
+    # plot_all_ops(accuracy_dir, highres_operations, dest_dir, highres=True)
 
     if not os.path.exists(f"{dest_dir}/abs/"):
         os.makedirs(f"{dest_dir}/abs/")
 
-    plot_all_ops(f"{accuracy_dir}", all_operations, f"{dest_dir}/abs/", highres=False, plot_absolute=True)
+    # plot_all_ops(f"{accuracy_dir}", all_operations, f"{dest_dir}/abs/", highres=False, plot_absolute=True)
+
+    plot_config = parse_plot_config("eltwise-accuracy/plot-params.json")
+
+    plot_config_hashes = load_plot_config_hashes("eltwise-accuracy/plot-params.json")
+
+    # Get time stamp of last modification of this script
+    script_mtime = os.path.getmtime(__file__)
+    force_replot = False
+    if script_mtime > plot_config_hashes["last_modified"]:
+        force_replot = True
+
+    plot_all(plot_config, dest_dir, plot_config_hashes, force_replot)
+
+    save_plot_config_hashes(plot_config_hashes, f"{dest_dir}/plot-hashes.csv")
 
 
 main()
