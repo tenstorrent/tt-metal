@@ -360,7 +360,7 @@ void HWCommandQueue::enqueue_read_from_core(
     sub_device_ids = buffer_dispatch::select_sub_device_ids(this->device_, sub_device_ids);
 
     if (size_bytes > 0) {
-        device_dispatch::CoreReadDispatchParams dispatch_params(
+        device_dispatch::CoreReadDispatchParams dispatch_params{
             virtual_core,
             address,
             size_bytes,
@@ -368,7 +368,7 @@ void HWCommandQueue::enqueue_read_from_core(
             this->id_,
             this->get_dispatch_core_type(),
             this->expected_num_workers_completed_,
-            sub_device_ids);
+            sub_device_ids};
         device_dispatch::issue_core_read_command_sequence(dispatch_params);
 
         this->issued_completion_q_reads_.push(

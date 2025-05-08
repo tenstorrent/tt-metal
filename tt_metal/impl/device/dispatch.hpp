@@ -23,8 +23,8 @@ uint32_t calculate_max_prefetch_data_size_bytes(const CoreType& dispatch_core_ty
 
 namespace device_dispatch {
 
-struct CoreReadDispatchParams {
-    const CoreCoord virtual_core;
+struct CoreDispatchParams {
+    CoreCoord virtual_core;
     DeviceAddr address = 0;
     uint32_t size_bytes = 0;
     IDevice* device = nullptr;
@@ -33,6 +33,8 @@ struct CoreReadDispatchParams {
     tt::stl::Span<const uint32_t> expected_num_workers_completed;
     tt::stl::Span<const SubDeviceId> sub_device_ids;
 };
+
+struct CoreReadDispatchParams : public CoreDispatchParams {};
 
 void validate_core_read_write_bounds(
     IDevice* device, const CoreCoord& virtual_core, DeviceAddr address, uint32_t size_bytes);

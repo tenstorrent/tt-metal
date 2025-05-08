@@ -363,7 +363,7 @@ void FDMeshCommandQueue::enqueue_read_shard_from_core(
     sub_device_ids = buffer_dispatch::select_sub_device_ids(mesh_device_, sub_device_ids);
 
     if (size_bytes > 0) {
-        device_dispatch::CoreReadDispatchParams dispatch_params(
+        device_dispatch::CoreReadDispatchParams dispatch_params{
             address.virtual_core_coord,
             address.address,
             size_bytes,
@@ -371,7 +371,7 @@ void FDMeshCommandQueue::enqueue_read_shard_from_core(
             id_,
             dispatch_core_type_,
             expected_num_workers_completed_,
-            sub_device_ids);
+            sub_device_ids};
         device_dispatch::issue_core_read_command_sequence(dispatch_params);
     }
 

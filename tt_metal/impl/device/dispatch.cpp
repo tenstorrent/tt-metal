@@ -20,7 +20,7 @@ uint32_t calculate_max_prefetch_data_size_bytes(const CoreType& dispatch_core_ty
 
 namespace device_dispatch {
 
-struct CoreWriteDispatchParams : public CoreReadDispatchParams {
+struct CoreWriteDispatchParams : public CoreDispatchParams {
     const void* src = nullptr;
 };
 
