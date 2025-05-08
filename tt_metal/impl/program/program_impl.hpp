@@ -49,9 +49,6 @@ class GlobalCircularBuffer;
 namespace detail {
 
 struct ProgramOffsetsState {
-    // TODO (AS): Enacapsulate the variables below in a struct to avoid implicit updates on references.
-    // TODO (AS): Rather than in-place updating atrtibutes in the program, update them explicitly through a
-    // returned set of offsets.
     // Base offset for Program Configs across all core types, wrt kernel config slot start address
     uint32_t config_base_offset = 0;
     // Incremental offset. Will correspond to the size of the program config per core, once the
@@ -74,7 +71,7 @@ struct ProgramOffsetsState {
     uint32_t kernel_text_size = 0;
 };
 
-// Add these type declarations before the ProgramImpl class
+// Callable types for dependency injection
 using KernelsGetter = std::function<std::unordered_map<KernelHandle, std::shared_ptr<Kernel>>&(uint32_t index)>;
 using KernelGroupsGetter = std::function<std::vector<std::shared_ptr<KernelGroup>>&(uint32_t index)>;
 using SemaphoresGetter = std::function<const std::vector<Semaphore>&()>;
@@ -142,7 +139,6 @@ public:
     CommandQueue* get_last_used_command_queue() const;
     void populate_dispatch_data(IDevice* device);
 
-    // Finalizes program offsets for a device
     void finalize_offsets(IDevice* device);
 
     // Helper function to finalize program offsets with custom getters
@@ -167,9 +163,6 @@ private:
     // Used only when devices do not have virtualization enabled and used to check that programs are only rerun on
     // the same device
     std::optional<uint64_t> cached_device_hash_;
-
-    // Maximum size for the program in kernel config buffer
-    size_t ring_buffer_size_ = 0;
 
     // TODO: Should map based on the hash of the configured sub-devices
     // This way we can cache it agnostic of the device
