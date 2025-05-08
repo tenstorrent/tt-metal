@@ -103,7 +103,6 @@ void kernel_main() {
     }
 
     index_b_offset = 0;
-    DPRINT << "num_cols_tile_gamma_beta" << num_cols_tile_gamma_beta << ENDL();
     constexpr uint32_t row_tile_max_index = num_cols_tile_gamma_beta;
 
     for (uint32_t b = 0; b < num_batches_per_core; ++b) {
