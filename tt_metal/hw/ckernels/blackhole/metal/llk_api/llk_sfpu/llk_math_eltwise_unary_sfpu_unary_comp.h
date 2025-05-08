@@ -52,6 +52,13 @@ inline void llk_math_eltwise_unary_sfpu_unary_eq(uint dst_index, uint param0, in
 
 // Unary greater than
 template <bool APPROXIMATE>
+inline void llk_math_eltwise_unary_sfpu_unary_gt_int32(
+    uint dst_index, uint param0, int vector_mode = (int)VectorMode::RC) {
+    llk_math_eltwise_unary_sfpu_params<APPROXIMATE>(
+        ckernel::sfpu::calculate_comp_unary_int<APPROXIMATE, SfpuType::unary_gt>, dst_index, vector_mode, param0);
+}
+
+template <bool APPROXIMATE>
 inline void llk_math_eltwise_unary_sfpu_unary_gt_init() {
     llk_math_eltwise_unary_sfpu_init<SfpuType::unary_gt, APPROXIMATE>();
 }
@@ -63,6 +70,13 @@ inline void llk_math_eltwise_unary_sfpu_unary_gt(uint dst_index, uint param0, in
 }
 
 // Unary lesser than
+template <bool APPROXIMATE>
+inline void llk_math_eltwise_unary_sfpu_unary_lt_int32(
+    uint dst_index, uint param0, int vector_mode = (int)VectorMode::RC) {
+    llk_math_eltwise_unary_sfpu_params<APPROXIMATE>(
+        ckernel::sfpu::calculate_comp_unary_int<APPROXIMATE, SfpuType::unary_lt>, dst_index, vector_mode, param0);
+}
+
 template <bool APPROXIMATE>
 inline void llk_math_eltwise_unary_sfpu_unary_lt_init() {
     llk_math_eltwise_unary_sfpu_init<SfpuType::unary_lt, APPROXIMATE>();
