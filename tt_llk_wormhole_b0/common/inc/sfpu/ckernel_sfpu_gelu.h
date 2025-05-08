@@ -189,10 +189,6 @@ inline void _init_gelu_()
 template <bool APPROXIMATION_MODE>
 inline void _init_gelu_derivative_()
 {
-    sfpi::vConstFloatPrgm0 = 1.442695f; // ln2_recip
-    sfpi::vConstFloatPrgm1 = 2.0f;
-    sfpi::vConstFloatPrgm2 = 0.863281f;
-
     uint imm0;
     uint imm1;
     uint imm2;
@@ -230,6 +226,8 @@ inline void _init_gelu_derivative_()
     }
     else
     {
+        _init_exponential_<false>();
+
         imm0 = 0x28FF;
         imm1 = 0x3020;
         _sfpu_load_imm16_(0, imm0);
