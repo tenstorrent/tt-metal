@@ -346,7 +346,7 @@ void FDMeshCommandQueue::enqueue_write_shard_to_core(
         sub_device_ids);
 
     if (blocking) {
-        this->finish();
+        this->finish(sub_device_ids);
     }
 }
 
@@ -375,7 +375,8 @@ void FDMeshCommandQueue::enqueue_read_shard_from_core(
         device_dispatch::issue_core_read_command_sequence(dispatch_params);
     }
 
-    this->submit_core_data_memcpy_request(ReadCoreDataDescriptor(dst, size_bytes), address.device_coord, blocking);
+    this->submit_core_data_memcpy_request(
+        ReadCoreDataDescriptor(dst, size_bytes), address.device_coord, blocking, sub_device_ids);
 }
 
 void FDMeshCommandQueue::finish(tt::stl::Span<const SubDeviceId> sub_device_ids) {
@@ -462,13 +463,16 @@ void FDMeshCommandQueue::submit_memcpy_request(
 }
 
 void FDMeshCommandQueue::submit_core_data_memcpy_request(
-    const ReadCoreDataDescriptor& read_descriptor, const MeshCoordinate& device_coord, bool blocking) {
+    const ReadCoreDataDescriptor& read_descriptor,
+    const MeshCoordinate& device_coord,
+    bool blocking,
+    tt::stl::Span<const SubDeviceId> sub_device_ids) {
     completion_queue_reads_.push(std::make_shared<MeshCompletionReaderVariant>(
         std::in_place_type<MeshCoreDataReadDescriptor>, read_descriptor, device_coord));
     this->increment_num_entries_in_completion_queue();
 
     if (blocking) {
-        this->finish();
+        this->finish(sub_device_ids);
     }
 }
 

@@ -96,7 +96,10 @@ private:
     MultiProducerSingleConsumerQueue<CompletionReaderVariant>& get_read_descriptor_queue(IDevice* device);
 
     void submit_core_data_memcpy_request(
-        const ReadCoreDataDescriptor& read_descriptor, const MeshCoordinate& device_coord, bool blocking);
+        const ReadCoreDataDescriptor& read_descriptor,
+        const MeshCoordinate& device_coord,
+        bool blocking,
+        tt::stl::Span<const SubDeviceId> sub_device_ids = {});
 
     // Shared across all MeshCommandQueue instances for a MeshDevice.
     std::shared_ptr<DispatchArray<LaunchMessageRingBufferState>> worker_launch_message_buffer_state_;
