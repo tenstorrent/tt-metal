@@ -43,7 +43,6 @@
 #include <tt-metalium/logger.hpp>
 #include "noc/noc_parameters.h"
 #include <tt-metalium/program.hpp>
-#include <tt-metalium/system_memory_manager.hpp>
 #include "impl/dispatch/dispatch_settings.hpp"
 #include "test_common.hpp"
 #include "impl/context/metal_context.hpp"
