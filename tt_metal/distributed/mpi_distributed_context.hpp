@@ -8,8 +8,8 @@
 #include "api/tt-metalium/distributed_context.hpp"
 
 namespace tt::tt_metal::distributed::multihost {
+
 class MPIContext;
-class MPIDistributedException;
 class MPIRequest;
 
 class MPIDistributedException : public DistributedException {
@@ -57,8 +57,9 @@ public:
     // factory (initialises MPI environment once per process)
     static std::shared_ptr<DistributedContext> create(int argc, char** argv);
 
-    // destructor – communicator freed automatically by MPI_Finalize
-    ~MPIContext() override = default;
+    // destructor – communicator MPI_COMM_WORLD is freed automatically by MPI_Finalize
+    // All other communicators are freed here
+    ~MPIContext() override;
 
     /* ---------------- basic info / sync ---------------- */
     [[nodiscard]] Rank rank() const override;
@@ -95,7 +96,6 @@ public:
     [[nodiscard]] std::shared_ptr<DistributedContext> create_sub_context(tt::stl::Span<Rank> ranks) const override;
     void abort(int error_code) const override;
     explicit MPIContext(MPI_Comm comm);
-
     const MPI_Comm& comm() const { return comm_; }
 
 private:

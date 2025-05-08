@@ -5,7 +5,6 @@
 #pragma once
 
 #include <memory>
-#include <vector>
 #include <tt_stl/strong_type.hpp>
 #include <tt_stl/span.hpp>
 #include <optional>
@@ -13,7 +12,7 @@
 
 namespace tt::tt_metal::distributed::multihost {
 
-enum class ReduceOp { SUM, MAX, MIN, PROD };
+enum class ReduceOp : std::uint8_t { SUM, MAX, MIN, PROD };
 
 using Rank = tt::stl::StrongType<int, struct RankTag>;
 using Tag = tt::stl::StrongType<int, struct TagTag>;
@@ -28,8 +27,8 @@ public:
     virtual const std::string& message() const noexcept = 0;
     virtual const std::string& error_string() const noexcept = 0;
 
-    virtual const char* what() const noexcept override { return message().c_str(); }
-    virtual ~DistributedException() = default;
+    const char* what() const noexcept override { return message().c_str(); }
+    ~DistributedException() override = default;
 };
 
 struct Status {
@@ -105,6 +104,8 @@ public:
     [[nodiscard]] virtual std::shared_ptr<DistributedContext> create_sub_context(tt::stl::Span<Rank> ranks) const = 0;
 
     //--- Error handling -----------------------------------------------------
+    virtual void abort(int error_code) const = 0;
+
     virtual ~DistributedContext() = default;
 };
 }  // namespace tt::tt_metal::distributed::multihost
