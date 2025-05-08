@@ -767,4 +767,53 @@ Tensor set_tensor_id(const Tensor& tensor) {
     return output;
 };
 
+const Storage& Tensor::storage() const { return this->tensor_attributes->get_storage(); }
+
+const ttnn::Shape& Tensor::logical_shape() const { return this->tensor_attributes->get_tensor_spec().logical_shape(); }
+
+const ttnn::Shape& Tensor::padded_shape() const { return this->tensor_attributes->get_tensor_spec().padded_shape(); }
+
+DataType Tensor::dtype() const { return this->tensor_attributes->get_tensor_spec().tensor_layout().get_data_type(); }
+
+Layout Tensor::layout() const { return this->tensor_attributes->get_tensor_spec().tensor_layout().get_layout(); }
+
+const TensorSpec& Tensor::tensor_spec() const { return this->tensor_attributes->get_tensor_spec(); }
+
+Buffer* Tensor::buffer() const { return device_storage().get_buffer(); }
+
+const DeviceStorage& Tensor::device_storage() const {
+    auto storage_type = this->storage_type();
+    TT_FATAL(
+        storage_type == tt::tt_metal::StorageType::DEVICE, "Expected Tensor with DeviceStorage, got {}", storage_type);
+    return std::get<DeviceStorage>(this->get_storage());
+}
+
+distributed::MeshDevice* Tensor::mesh_device() const {
+    if (this->mesh_device_.has_value()) {
+        return this->mesh_device_.value();
+    }
+    return nullptr;
+}
+
+std::shared_ptr<distributed::MeshBuffer> Tensor::mesh_buffer() const { return device_storage().get_mesh_buffer(); }
+
+IDevice* Tensor::device() const {
+    if (this->mesh_device_.has_value()) {
+        return this->mesh_device_.value();
+    }
+    if (this->storage_type() == tt::tt_metal::StorageType::DEVICE) {
+        auto buffer = this->buffer();
+        if (buffer == nullptr) {
+            TT_THROW("Cannot get the device from a tensor without an allocated buffer");
+        }
+        return buffer->device();
+    } else {
+        TT_THROW("Cannot get the device from a tensor with host storage");
+    }
+}
+
+const MemoryConfig& Tensor::memory_config() const { return get_tensor_spec().tensor_layout().get_memory_config(); }
+
+const std::optional<ShardSpec>& Tensor::shard_spec() const { return this->memory_config().shard_spec(); }
+
 }  // namespace tt::tt_metal
