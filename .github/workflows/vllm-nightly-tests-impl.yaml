@@ -53,9 +53,9 @@ jobs:
       image: ${{ inputs.docker-image }}
       env:
         TT_METAL_HOME: ${{ env.TT_METAL_HOME }}
-        vllm_dir: ${{ env.vllm_dir }}
+        vllm_dir: ${{ env.VLLM_DIR }}
         ARCH_NAME: ${{ matrix.test-group.arch }}
-        PYTHONPATH: ${{ env.TT_METAL_HOME }}:${{ env.vllm_dir }}
+        PYTHONPATH: ${{ env.TT_METAL_HOME }}:${{ env.VLLM_DIR }}
         LD_LIBRARY_PATH: ${{ env.TT_METAL_HOME }}/build/lib
         LOGURU_LEVEL: INFO
       volumes:
@@ -66,7 +66,7 @@ jobs:
     defaults:
       run:
         shell: bash
-        working-directory: ${{ env.vllm_dir }} # https://github.com/actions/runner/issues/878
+        working-directory: ${{ env.VLLM_DIR }} # https://github.com/actions/runner/issues/878
     steps:
       - name: ⬇️ Setup Metal
         uses: tenstorrent/tt-metal/.github/actions/setup-job@main
@@ -80,7 +80,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: tenstorrent/vllm
-          path: ${{ env.vllm_dir }}
+          path: ${{ env.VLLM_DIR }}
           ref: ppetrovic/best-of
           fetch-depth: 1
 
