@@ -8,7 +8,9 @@
 
 namespace ttml::metal::ops::cross_entropy_bw::device {
 
-struct operation_attributes_t {};
+struct operation_attributes_t {
+    const float scaler{1.0F};
+};
 
 struct tensor_args_t {
     const ttnn::Tensor& input;

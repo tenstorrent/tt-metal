@@ -114,9 +114,12 @@ tt::stl::hash::hash_t CrossEntropyBackwardDeviceOperation::compute_program_hash(
 std::tuple<operation_attributes_t, tensor_args_t> CrossEntropyBackwardDeviceOperation::invoke(
     const ttnn::Tensor& input_tensor,
     const ttnn::Tensor& target_tensor,
+    float scaler,
     const std::optional<ttnn::Tensor>& preallocated_output) {
     return {
-        operation_attributes_t{},
+        operation_attributes_t{
+            .scaler = scaler,
+        },
         tensor_args_t{
             .input = input_tensor,
             .target = target_tensor,

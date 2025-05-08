@@ -10,8 +10,8 @@ namespace ttml::metal::ops::cross_entropy_bw {
 
 struct CrossEntropyBackwardOperation {
     static ttnn::Tensor invoke(
-        const ttnn::Tensor& input,  // logits : model output (N, 1, H, W)
-        const ttnn::Tensor& target  // target : ground truth (N, H)
-    );
+        const ttnn::Tensor& input,   // logits : model output (N, 1, H, W)
+        const ttnn::Tensor& target,  // target : ground truth (N, H)
+        float scaler);
 };
 }  // namespace ttml::metal::ops::cross_entropy_bw

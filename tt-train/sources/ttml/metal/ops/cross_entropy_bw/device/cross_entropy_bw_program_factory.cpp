@@ -38,7 +38,8 @@ constexpr auto kMaxValueBeforeReductionCbIndex = tt::CBIndex::c_5;
 constexpr auto kMaxValueAfterReductionCbIndex = tt::CBIndex::c_6;
 constexpr auto kExpSumBeforeReductionCbIndex = tt::CBIndex::c_7;
 constexpr auto KExpSumAfterReductionCbIndex = tt::CBIndex::c_8;
-constexpr auto kOutputCbIndex = tt::CBIndex::c_9;
+constexpr auto KReductionScalerCbIndex = tt::CBIndex::c_9;
+constexpr auto kOutputCbIndex = tt::CBIndex::c_10;
 
 constexpr uint32_t kNumTargetIndexesTiles = 2U;
 constexpr uint32_t kNumMaskTiles = 1U;
@@ -62,6 +63,12 @@ uint32_t get_block_size(uint32_t num_inner) {
         }
     }
     return 1U;
+}
+
+uint32_t pack_two_bfloat16_to_uint32(float value) {
+    uint32_t uint32_data = std::bit_cast<uint32_t>(value);
+    uint32_t casted_uint16_data = uint32_data >> 16U;
+    return casted_uint16_data | (casted_uint16_data << 16);
 }
 
 }  // namespace
@@ -241,6 +248,10 @@ CrossEntropyBackwardProgramFactory::cached_program_t CrossEntropyBackwardProgram
     // mask_w - this mask used to avoid calculation of extra data(data which will be added to create full tile 32x32)??
     uint32_t mask_w = num_inner % tt::constants::TILE_WIDTH;  // width index of first trash value in tile
 
+    // fmt::print("scaler: {}\n", operation_attributes.scaler);
+    uint32_t packed_scaler = pack_two_bfloat16_to_uint32(operation_attributes.scaler);
+    // fmt::print("packed scaler: {}\n", packed_scaler);
+
     // compile arguments
     uint32_t block_size = get_block_size(Wt);
 
@@ -327,6 +338,9 @@ CrossEntropyBackwardProgramFactory::cached_program_t CrossEntropyBackwardProgram
         bfloat16_single_tile_size_bytes,
         kNumExpSumAfterReductionTiles);
 
+    auto cb_reduction_scaler = create_circular_buffer(
+        program, all_cores, KReductionScalerCbIndex, data_format, bfloat16_single_tile_size_bytes, kNumScalerTiles);
+
     auto cb_output = create_circular_buffer(
         program, all_cores, kOutputCbIndex, data_format, bfloat16_single_tile_size_bytes, num_output_tiles);
 
@@ -375,7 +389,7 @@ CrossEntropyBackwardProgramFactory::cached_program_t CrossEntropyBackwardProgram
         program,
         all_cores,
         /* reader_compile_args */
-        {block_size, Wt, mask_w, target_indexes_inner_dim_size, Ht, uint32_read_page_size},
+        {block_size, Wt, mask_w, target_indexes_inner_dim_size, Ht, uint32_read_page_size, packed_scaler},
         defines,
         kReaderKernelPath);
 

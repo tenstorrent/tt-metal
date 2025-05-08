@@ -41,7 +41,8 @@ constexpr auto cb_max_value_before_reduction = tt::CBIndex::c_5;
 constexpr auto cb_max_value_after_reduction = tt::CBIndex::c_6;
 constexpr auto cb_exp_sum_before_reduction = tt::CBIndex::c_7;
 constexpr auto cb_exp_sum_after_reduction = tt::CBIndex::c_8;
-constexpr auto cb_output = tt::CBIndex::c_9;
+constexpr auto cb_reduction_scaler = tt::CBIndex::c_9;
+constexpr auto cb_output = tt::CBIndex::c_10;
 
 constexpr uint32_t onetile = 1;
 
@@ -162,12 +163,12 @@ void reduce_max_value() {
 
     const uint32_t reduction_register = 0;
     tile_regs_acquire();
-    reconfig_data_format(cb_max_value_before_reduction, cb_scaler);
+    reconfig_data_format(cb_max_value_before_reduction, cb_reduction_scaler);
     reduce_init_delta<false, PoolType::MAX, ReduceDim::REDUCE_ROW>(
-        cb_max_value_before_reduction, cb_scaler, cb_max_value_after_reduction);
+        cb_max_value_before_reduction, cb_reduction_scaler, cb_max_value_after_reduction);
     reduce_tile<PoolType::MAX, ReduceDim::REDUCE_ROW>(
         cb_max_value_before_reduction,
-        cb_scaler,
+        cb_reduction_scaler,
         /* tile_idx */ 0,
         /* tile_idx */ 0,
         reduction_register);
@@ -313,12 +314,12 @@ void reduce_sum_exp_x() {
 
     tile_regs_acquire();
     const uint32_t reduction_register = 0;
-    reconfig_data_format(cb_exp_sum_before_reduction, cb_scaler);
+    reconfig_data_format(cb_exp_sum_before_reduction, cb_reduction_scaler);
     reduce_init_delta<false, PoolType::SUM, ReduceDim::REDUCE_ROW>(
-        cb_exp_sum_before_reduction, cb_scaler, cb_exp_sum_after_reduction);
+        cb_exp_sum_before_reduction, cb_reduction_scaler, cb_exp_sum_after_reduction);
     reduce_tile<PoolType::SUM, ReduceDim::REDUCE_ROW>(
         cb_exp_sum_before_reduction,
-        cb_scaler,
+        cb_reduction_scaler,
         /* tile_idx */ 0,
         /* tile_idx */ 0,
         /* reduction_register */ reduction_register);
@@ -339,6 +340,7 @@ void MAIN {
         cb_wait_front(cb_max_mask, onetile);
     }
     cb_wait_front(cb_scaler, onetile);
+    cb_wait_front(cb_reduction_scaler, onetile);
 
     init_sfpu(cb_input, cb_output);
     binary_op_init_common(cb_input, cb_max_mask, cb_output);
@@ -356,6 +358,7 @@ void MAIN {
         const uint32_t working_register = 0;
         const uint32_t max_value_register = 4U;
         const uint32_t sum_exp_register = 5U;
+        const uint32_t scaler_register = 6U;
         cb_reserve_back(cb_output, block_size);
 
         for (uint32_t col = 0; col < Wt; col += block_size) {
@@ -371,6 +374,9 @@ void MAIN {
             unary_bcast_init<BroadcastType::COL>(cb_exp_sum_after_reduction, cb_exp_sum_after_reduction);
             unary_bcast<BroadcastType::COL>(
                 cb_exp_sum_after_reduction, /* tile idx */ 0, /* reg tile idx */ sum_exp_register);
+
+            copy_tile_init(cb_scaler);
+            copy_tile(cb_scaler, /* tile_idx */ 0, /* register_idx */ scaler_register);
 
             for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
 #ifdef EVERYTHING_FITS_IN_L1
@@ -389,6 +395,9 @@ void MAIN {
 
                 div_binary_tile_init();
                 div_binary_tile(block_idx, sum_exp_register);  // divide exp by sum(exp(x - max(x)))
+
+                mul_binary_tile_init();
+                mul_binary_tile(block_idx, scaler_register);  // multiply by scaler
 
                 if constexpr (do_mask_w) {
                     if (col + 1 == Wt) {
@@ -431,7 +440,7 @@ void MAIN {
         cb_pop_front(cb_mask, onetile);
         cb_pop_front(cb_max_mask, onetile);
     }
-    cb_pop_front(cb_scaler, onetile);
+    cb_pop_front(cb_reduction_scaler, onetile);
 }
 
 }  // namespace NAMESPACE

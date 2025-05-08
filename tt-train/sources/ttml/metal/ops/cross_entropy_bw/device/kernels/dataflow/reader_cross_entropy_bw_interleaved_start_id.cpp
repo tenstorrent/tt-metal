@@ -12,20 +12,16 @@
 #include "debug/dprint_pages.h"
 #include "tt-train/sources/ttml/metal/ops/common/common_utils.hpp"
 
-// constexpr uint32_t FACE_HEIGHT = 16;
-// constexpr uint32_t FACE_WIDTH = 16;
-// constexpr uint32_t TILE_HEIGHT = 32;
-// constexpr uint32_t TILE_WIDTH = 32;
-
-// // calculate page and offset for target indexes
-// std::pair<uint32_t, uint32_t> get_page_and_offset(uint32_t tiled_row, uint32_t tiled_H) {
-//     uint32_t n = tiled_row / tiled_H;
-//     uint32_t h = (tiled_row % tiled_H) * 32;
-
-//     uint32_t page = n;
-//     uint32_t offset = h * sizeof(uint32_t);
-//     return {page, offset};
-// }
+void generate_tile_with_value(uint32_t cb, uint32_t packed_value) {
+    constexpr uint32_t onetile = 1U;
+    cb_reserve_back(cb, onetile);
+    uint32_t* ptr = reinterpret_cast<uint32_t*>(get_write_ptr(cb));
+    // 512 = 32x16
+    for (uint32_t i = 0; i < 512U; ++i, ++ptr) {
+        *ptr = packed_value;
+    }
+    cb_push_back(cb, onetile);
+}
 
 void kernel_main() {
     uint32_t runtime_args_counter = 0U;
@@ -39,7 +35,8 @@ void kernel_main() {
     constexpr uint32_t cb_target_idx = tt::CBIndex::c_1;
     constexpr uint32_t cb_mask_idx = tt::CBIndex::c_2;
     constexpr uint32_t cb_max_mask_idx = tt::CBIndex::c_3;
-    constexpr uint32_t cb_scaler_idx = tt::CBIndex::c_4;  // used for reduction
+    constexpr uint32_t cb_scaler_idx = tt::CBIndex::c_4;
+    constexpr uint32_t cb_reduction_scaler_idx = tt::CBIndex::c_9;  // used for reduction
 
     constexpr uint32_t block_size = get_compile_time_arg_val(0);
     constexpr uint32_t Wt = get_compile_time_arg_val(1);
@@ -47,6 +44,7 @@ void kernel_main() {
     constexpr uint32_t target_indexes_page_size = get_compile_time_arg_val(3);
     constexpr uint32_t tiled_H = get_compile_time_arg_val(4);
     constexpr uint32_t target_indexes_read_page_size = get_compile_time_arg_val(5);
+    constexpr uint32_t packed_scaler = get_compile_time_arg_val(6);
 
     constexpr uint32_t onetile = 1U;
 #ifdef DO_MASK_W
@@ -56,8 +54,9 @@ void kernel_main() {
 #endif
 
     // generate scaler and mask tile
-    cb_reserve_back(cb_scaler_idx, onetile);
-    uint16_t* scaler_ptr = reinterpret_cast<uint16_t*>(get_write_ptr(cb_scaler_idx));  // write scalar tile
+    cb_reserve_back(cb_reduction_scaler_idx, onetile);
+    uint16_t* reduction_scaler_ptr =
+        reinterpret_cast<uint16_t*>(get_write_ptr(cb_reduction_scaler_idx));  // write scalar tile
 
     uint16_t* mask_ptr = nullptr;
     uint16_t* max_mask_ptr = nullptr;
@@ -80,7 +79,7 @@ void kernel_main() {
                     *max_mask_ptr++ = (offset + w < mask_w) ? zero : minus_inf;
                 }
 
-                *scaler_ptr++ = one;
+                *reduction_scaler_ptr++ = one;
             }
         }
     }
@@ -88,7 +87,10 @@ void kernel_main() {
         cb_push_back(cb_mask_idx, onetile);
         cb_push_back(cb_max_mask_idx, onetile);
     }
-    cb_push_back(cb_scaler_idx, onetile);
+    cb_push_back(cb_reduction_scaler_idx, onetile);
+
+    cb_reserve_back(cb_scaler_idx, onetile);
+    generate_tile_with_value(cb_scaler_idx, packed_scaler);
 
     const uint32_t tile_bytes = get_tile_size(cb_input_idx);
     const DataFormat data_format = get_dataformat(cb_input_idx);
