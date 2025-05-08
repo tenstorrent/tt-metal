@@ -10,6 +10,8 @@ from diffusers import AutoencoderKL
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.utility_functions import torch_random
 
+from loguru import logger
+
 
 @torch.no_grad()
 @pytest.mark.parametrize(
@@ -27,10 +29,15 @@ def test_vae(device, input_shape, reset_seeds):
     state_dict = vae.state_dict()
 
     torch_vae = vae.decoder
+
+    logger.info("Loading weights to device")
     tt_vae = TtVAEDecoder(device, state_dict)
+    logger.info("Loaded weights")
     torch_input_tensor = torch_random(input_shape, -0.1, 0.1, dtype=torch.bfloat16)
 
+    logger.info("Running reference model")
     torch_output_tensor = torch_vae(torch_input_tensor)
+    logger.info("Torch model done")
 
     ttnn_input_tensor = ttnn.from_torch(
         torch_input_tensor,
@@ -44,7 +51,9 @@ def test_vae(device, input_shape, reset_seeds):
     ttnn_input_tensor = ttnn.permute(ttnn_input_tensor, (0, 2, 3, 1))
     ttnn_input_tensor = ttnn.reshape(ttnn_input_tensor, (B, 1, H * W, C))
 
+    logger.info("Running TT model")
     output_tensor = tt_vae.forward(ttnn_input_tensor, [B, C, H, W])
+    logger.info("TT model done")
 
     del vae
     gc.collect()

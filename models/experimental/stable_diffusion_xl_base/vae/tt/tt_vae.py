@@ -14,6 +14,7 @@ from models.experimental.stable_diffusion_xl_base.tt.sdxl_utility import (
     prepare_gn_beta_gamma,
     prepare_gn_mask,
 )
+from loguru import logger
 
 
 class TtVAEDecoder(nn.Module):
@@ -119,12 +120,15 @@ class TtVAEDecoder(nn.Module):
             hidden_states = ttnn.reshape(hidden_states, (1, 1, B * H * W, C))
         hidden_states = ttnn.to_layout(hidden_states, ttnn.TILE_LAYOUT)
 
+        logger.info("Starting mid-block")
         hidden_states, [C, H, W] = self.mid_block.forward(hidden_states, [B, C, H, W])
 
-        for up_block in self.up_blocks:
+        for idx, up_block in enumerate(self.up_blocks):
+            logger.info(f"Starting {idx}. up-block")
             hidden_states = ttnn.to_layout(hidden_states, ttnn.TILE_LAYOUT)
             hidden_states, [C, H, W] = up_block.forward(hidden_states, [B, C, H, W])
 
+        logger.info("Executing out ops")
         hidden_states = ttnn.to_memory_config(hidden_states, ttnn.DRAM_MEMORY_CONFIG)
         hidden_states = ttnn.group_norm(
             hidden_states,
