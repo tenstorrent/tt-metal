@@ -6,7 +6,7 @@
 
 #include <utility>
 
-#include "cpp/ttnn/common/constants.hpp"
+#include "ttnn/common/constants.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/embedding_backward/device/embedding_backward_device_operation.hpp"
 #include "ttnn/run_operation.hpp"

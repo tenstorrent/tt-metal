@@ -12,7 +12,7 @@
 #include "tt_metal/tt_metal/common/multi_device_fixture.hpp"
 
 #include "ttnn/cpp/ttnn/operations/creation.hpp"
-#include "ttnn/cpp/ttnn/tensor/types.hpp"
+#include "ttnn/tensor/types.hpp"
 #include "ttnn/distributed/api.hpp"
 #include "ttnn/tensor/enum_types.hpp"
 #include "ttnn_test_fixtures.hpp"
