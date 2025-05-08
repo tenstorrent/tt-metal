@@ -25,7 +25,7 @@ sfpi_inline sfpi::vFloat _sfpu_exp_(sfpi::vFloat val)
     v_endif;
 
     // Run series in Horner form
-    sfpi::vFloat tmp = val * sfpi::vConst0p8373 + sfpi::s2vFloat16b(0.863281);
+    sfpi::vFloat tmp = val * sfpi::vConst0p8373 + sfpi::vConstFloatPrgm2;
     val              = val * tmp + sfpi::vConst1;
 
     v_if (exp >= 0)
@@ -360,8 +360,7 @@ inline void _init_exponential_()
     }
     else
     {
-        sfpi::vConstFloatPrgm0 = 1.442695f; // ln2_recip
-        sfpi::vConstFloatPrgm1 = 2.0f;
+        _init_reciprocal_<APPROXIMATION_MODE>();
         sfpi::vConstFloatPrgm2 = 0.863281f;
     }
 }
