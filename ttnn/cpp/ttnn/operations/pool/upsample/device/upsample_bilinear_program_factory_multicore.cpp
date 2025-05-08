@@ -48,7 +48,7 @@ Tensor HaloTensorCreation(const Tensor& input) {
         .dilation_hw = {1, 1},      // dilation
         .num_cores_nhw = num_cores_nhw,
         .num_cores_c = num_cores_c,
-        .core_range_set = input_tensor.memory_config().shard_spec.value().grid,
+        .core_range_set = input_tensor.memory_config().shard_spec().value().grid,
         .snap_to_tile = false,
         .is_bilinear = true};
 
@@ -109,7 +109,7 @@ tt::tt_metal::operation::ProgramWithCallbacks bilinear_multi_core(
     uint32_t out_nsticks_per_core = in_nsticks_per_core * scale_factor_h * scale_factor_w;
 
     // extra limitation to avoid post upsample step of resharding
-    if (input.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED) {
+    if (input.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED) {
         TT_FATAL(
             in_nsticks_per_core % in_w == 0,
             "Restriction: Input sticks per core {} should be divisible by input width {}. TODO to remove this "
@@ -288,7 +288,7 @@ tt::tt_metal::operation::ProgramWithCallbacks bilinear_multi_core(
 
     uint32_t start_input_stick_id = 0;
 
-    if (input.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED) {
+    if (input.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED) {
         for (int32_t core = 0; core < ncores_nhw; ++core) {
             CoreCoord core_coord(core % ncores_x, core / ncores_x);  // logical
             reader_rt_args[6] = start_input_stick_id;

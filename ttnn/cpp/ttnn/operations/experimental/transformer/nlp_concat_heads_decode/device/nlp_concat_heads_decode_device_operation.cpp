@@ -27,7 +27,7 @@ void NLPConcatHeadsDecodeDeviceOperation::validate(const std::vector<Tensor>& in
 
     // input tensor shard spec
     TT_FATAL(input_tensor.is_sharded(), "Error");
-    TT_FATAL(input_tensor.memory_config().memory_layout == tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED, "Error");
+    TT_FATAL(input_tensor.memory_config().memory_layout() == tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED, "Error");
     auto shard_spec = input_tensor.shard_spec().value();
     TT_FATAL(shard_spec.shape[1] == input_tensor.get_padded_shape()[-1], "Error");
     TT_FATAL(shard_spec.shape[0] == input_tensor.get_padded_shape()[-2], "Error");
@@ -69,9 +69,8 @@ std::vector<ttnn::TensorSpec> NLPConcatHeadsDecodeDeviceOperation::compute_outpu
     }
 
     tt::tt_metal::ShardSpec shard_spec{output_core_grid, {batch, head_dim}};
-    auto mem_config =
-        tt::tt_metal::MemoryConfig{tt::tt_metal::TensorMemoryLayout::WIDTH_SHARDED, tt::tt_metal::BufferType::L1};
-    mem_config.shard_spec = shard_spec;
+    auto mem_config = tt::tt_metal::MemoryConfig{
+        tt::tt_metal::TensorMemoryLayout::WIDTH_SHARDED, tt::tt_metal::BufferType::L1, shard_spec};
 
     return {TensorSpec(
         output_shape, tt::tt_metal::TensorLayout(input_tensor.get_dtype(), tt::tt_metal::Layout::TILE, mem_config))};

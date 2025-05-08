@@ -67,80 +67,57 @@ static void RunTest(WatcherFixture *fixture, IDevice* device, riscv_id_t riscv_t
     log_info(LogTest, "Running test on device {} core {}[{}]...", device->id(), logical_core, virtual_core);
 
     // Set up the kernel on the correct risc
-    KernelHandle assert_kernel;
     switch(riscv_type) {
         case DebugBrisc:
-            assert_kernel = CreateKernel(
+            CreateKernel(
                 program,
                 "tests/tt_metal/tt_metal/test_kernels/misc/watcher_ringbuf.cpp",
                 logical_core,
                 DataMovementConfig{
-                    .processor = tt_metal::DataMovementProcessor::RISCV_0,
-                    .noc = tt_metal::NOC::RISCV_0_default
-                }
-            );
+                    .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default});
             break;
         case DebugNCrisc:
-            assert_kernel = CreateKernel(
+            CreateKernel(
                 program,
                 "tests/tt_metal/tt_metal/test_kernels/misc/watcher_ringbuf.cpp",
                 logical_core,
                 DataMovementConfig{
-                    .processor = tt_metal::DataMovementProcessor::RISCV_1,
-                    .noc = tt_metal::NOC::RISCV_1_default
-                }
-            );
+                    .processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default});
             break;
         case DebugTrisc0:
-            assert_kernel = CreateKernel(
+            CreateKernel(
                 program,
                 "tests/tt_metal/tt_metal/test_kernels/misc/watcher_ringbuf.cpp",
                 logical_core,
-                ComputeConfig{
-                    .defines = {{"TRISC0", "1"}}
-                }
-            );
+                ComputeConfig{.defines = {{"TRISC0", "1"}}});
             break;
         case DebugTrisc1:
-            assert_kernel = CreateKernel(
+            CreateKernel(
                 program,
                 "tests/tt_metal/tt_metal/test_kernels/misc/watcher_ringbuf.cpp",
                 logical_core,
-                ComputeConfig{
-                    .defines = {{"TRISC1", "1"}}
-                }
-            );
+                ComputeConfig{.defines = {{"TRISC1", "1"}}});
             break;
         case DebugTrisc2:
-            assert_kernel = CreateKernel(
+            CreateKernel(
                 program,
                 "tests/tt_metal/tt_metal/test_kernels/misc/watcher_ringbuf.cpp",
                 logical_core,
-                ComputeConfig{
-                    .defines = {{"TRISC2", "1"}}
-                }
-            );
+                ComputeConfig{.defines = {{"TRISC2", "1"}}});
             break;
         case DebugErisc:
-            assert_kernel = CreateKernel(
+            CreateKernel(
                 program,
                 "tests/tt_metal/tt_metal/test_kernels/misc/watcher_ringbuf.cpp",
                 logical_core,
-                EthernetConfig{
-                    .noc = tt_metal::NOC::NOC_0
-                }
-            );
+                EthernetConfig{.noc = tt_metal::NOC::NOC_0});
             break;
         case DebugIErisc:
-            assert_kernel = CreateKernel(
+            CreateKernel(
                 program,
                 "tests/tt_metal/tt_metal/test_kernels/misc/watcher_ringbuf.cpp",
                 logical_core,
-                EthernetConfig{
-                    .eth_mode = Eth::IDLE,
-                    .noc = tt_metal::NOC::NOC_0
-                }
-            );
+                EthernetConfig{.eth_mode = Eth::IDLE, .noc = tt_metal::NOC::NOC_0});
             break;
         default:
             log_info("Unsupported risc type: {}, skipping test...", riscv_type);
