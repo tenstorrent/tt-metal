@@ -19,6 +19,10 @@ inline MPI_Op reduce_to_mpi(ReduceOp op) {
         case ReduceOp::MAX:  return MPI_MAX;
         case ReduceOp::MIN:  return MPI_MIN;
         case ReduceOp::PROD: return MPI_PROD;
+        case ReduceOp::LAND: return MPI_LAND;
+        case ReduceOp::LOR: return MPI_LOR;
+        case ReduceOp::BAND: return MPI_BAND;
+        case ReduceOp::BOR: return MPI_BOR;
     }
     return MPI_SUM; // default
 }

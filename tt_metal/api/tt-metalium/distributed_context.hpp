@@ -12,7 +12,7 @@
 
 namespace tt::tt_metal::distributed::multihost {
 
-enum class ReduceOp : std::uint8_t { SUM, MAX, MIN, PROD };
+enum class ReduceOp : std::uint8_t { SUM, MAX, MIN, PROD, LAND, LOR, BAND, BOR };
 
 using Rank = tt::stl::StrongType<int, struct RankTag>;
 using Tag = tt::stl::StrongType<int, struct TagTag>;

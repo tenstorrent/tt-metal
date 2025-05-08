@@ -28,8 +28,8 @@ ttnn::Tensor GroupAttnMatmulOperation::invoke(
     } else if (input_tensor_b.is_sharded()) {
         row_major = input_tensor_b.shard_spec().value().orientation == ShardOrientation::ROW_MAJOR;
     } else if (mem_config.is_sharded()) {
-        if (mem_config.shard_spec.has_value()) {
-            row_major = mem_config.shard_spec.value().orientation == ShardOrientation::ROW_MAJOR;
+        if (mem_config.shard_spec().has_value()) {
+            row_major = mem_config.shard_spec().value().orientation == ShardOrientation::ROW_MAJOR;
         }
     }
 

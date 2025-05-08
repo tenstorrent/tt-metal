@@ -35,9 +35,9 @@ void ScaledDotProductAttentionDecode::validate(
     // Input 0 must be sharded by height or DRAM interleaved. All other inputs must be in DRAM.
     const auto Q_memcfg = input_tensors.at(0).memory_config();
     if (input_tensors.at(0).is_sharded()) {
-        TT_FATAL(Q_memcfg.memory_layout == TensorMemoryLayout::HEIGHT_SHARDED, "Error");
+        TT_FATAL(Q_memcfg.memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED, "Error");
     } else {
-        TT_FATAL(Q_memcfg.buffer_type == tt::tt_metal::BufferType::DRAM, "Error");
+        TT_FATAL(Q_memcfg.buffer_type() == tt::tt_metal::BufferType::DRAM, "Error");
     }
 
     for (std::size_t i = 1; i < input_tensors.size(); i++) {
@@ -45,7 +45,7 @@ void ScaledDotProductAttentionDecode::validate(
     }
     // Output memconfig must be height sharded or DRAM
     if (this->output_mem_config.is_sharded()) {
-        TT_FATAL(this->output_mem_config.memory_layout == TensorMemoryLayout::HEIGHT_SHARDED, "Error");
+        TT_FATAL(this->output_mem_config.memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED, "Error");
     }
 
     if (!this->is_causal) {

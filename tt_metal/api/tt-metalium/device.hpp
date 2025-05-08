@@ -46,6 +46,7 @@ class Program;
 class SubDevice;
 
 class CommandQueue;
+class SystemMemoryManager;
 class TraceBuffer;
 struct TraceDescriptor;
 

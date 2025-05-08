@@ -1,7 +1,9 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
+
 import gc
+from loguru import logger
 import torch
 import pytest
 import ttnn
@@ -19,7 +21,8 @@ from functools import reduce
         ((4096, 640), "down_blocks.1.attentions.0.transformer_blocks.0.ff.net.0"),
     ],
 )
-def test_geglu(device, input_shape, module_path, use_program_cache, reset_seeds):
+@pytest.mark.parametrize("transformer_weights_dtype", [ttnn.bfloat16])
+def test_geglu(device, input_shape, module_path, use_program_cache, reset_seeds, transformer_weights_dtype):
     unet = UNet2DConditionModel.from_pretrained(
         "stabilityai/stable-diffusion-xl-base-1.0", torch_dtype=torch.float32, use_safetensors=True, subfolder="unet"
     )
@@ -36,7 +39,7 @@ def test_geglu(device, input_shape, module_path, use_program_cache, reset_seeds)
 
     assert torch_geglu is not None, f"{module_path} is not a valid UNet module"
 
-    tt_geglu = TtGEGLU(device, state_dict, module_path)
+    tt_geglu = TtGEGLU(device, state_dict, module_path, weights_dtype=transformer_weights_dtype)
 
     torch_input_tensor = torch_random(input_shape, -0.1, 0.1, dtype=torch.float32)
     torch_output_tensor = torch_geglu(torch_input_tensor)
@@ -54,4 +57,5 @@ def test_geglu(device, input_shape, module_path, use_program_cache, reset_seeds)
     del unet
     gc.collect()
 
-    assert_with_pcc(torch_output_tensor, output_tensor, 0.999)
+    _, pcc_message = assert_with_pcc(torch_output_tensor, output_tensor, 0.999)
+    logger.info(f"PCC is {pcc_message}")

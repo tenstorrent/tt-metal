@@ -186,13 +186,13 @@ INSTANTIATE_TEST_SUITE_P(
                 .a_Shape = ttnn::Shape(tt::tt_metal::Array4D{3, 1, 32 * 32, 32 * 32}),
                 .b_Shape = ttnn::Shape(tt::tt_metal::Array4D{3, 1, 32 * 32, 32 * 32}),
                 .memory_config =
-                    {.memory_layout = tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED,
-                     .buffer_type = tt::tt_metal::BufferType::L1,
-                     .shard_spec =
-                         tt::tt_metal::ShardSpec{
-                             CoreRangeSet{std::set<CoreRange>{CoreRange{CoreCoord{0, 0}, CoreCoord{3, 3}}}},
-                             {6 * 32, 32 * 32},
-                             ShardOrientation::COL_MAJOR}},
+                    tt::tt_metal::MemoryConfig{
+                        tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED,
+                        tt::tt_metal::BufferType::L1,
+                        tt::tt_metal::ShardSpec{
+                            CoreRangeSet{std::set<CoreRange>{CoreRange{CoreCoord{0, 0}, CoreCoord{3, 3}}}},
+                            {6 * 32, 32 * 32},
+                            ShardOrientation::COL_MAJOR}},
                 .expected_calltrace =
                     {"ttnn::add",
                      "ttnn::prim::binary_ng",
@@ -217,13 +217,13 @@ INSTANTIATE_TEST_SUITE_P(
         ss << uid++;
 
         const auto& param = std::get<0>(info.param);
-        switch (param.memory_config.buffer_type) {
+        switch (param.memory_config.buffer_type()) {
             case tt::tt_metal::BufferType::DRAM: ss << "_DRAM"; break;
             case tt::tt_metal::BufferType::L1: ss << "_L1"; break;
             default: break;
         }
 
-        switch (param.memory_config.memory_layout) {
+        switch (param.memory_config.memory_layout()) {
             case tt::tt_metal::TensorMemoryLayout::INTERLEAVED: ss << "_I"; break;
             case tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED: ss << "_HS"; break;
             case tt::tt_metal::TensorMemoryLayout::WIDTH_SHARDED: ss << "_WS"; break;
