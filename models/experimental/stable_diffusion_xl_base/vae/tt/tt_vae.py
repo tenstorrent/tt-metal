@@ -70,7 +70,9 @@ class TtVAEDecoder(nn.Module):
             self.tt_conv_in_weights,
             self.tt_conv_in_bias,
             self.conv_in_params,
-        ) = prepare_conv_params(device, conv_in_weights, conv_in_bias, ttnn.bfloat16, act_block_h_override=32)
+        ) = prepare_conv_params(
+            device, conv_in_weights, conv_in_bias, ttnn.bfloat16, act_block_h_override=32, fp32_dest_acc_en=True
+        )
         self.conv_in_slice_config = get_DRAM_conv_config(None, 1)
 
     def forward(self, sample, input_shape):
@@ -103,7 +105,7 @@ class TtVAEDecoder(nn.Module):
             return_weights_and_bias=True,
         )
         C = self.conv_in_params["output_channels"]
-        print("1")
+
         self.tt_conv_in_weights = d_w
         self.tt_conv_in_bias = d_b
 
@@ -112,13 +114,10 @@ class TtVAEDecoder(nn.Module):
         hidden_states = ttnn.to_layout(hidden_states, ttnn.TILE_LAYOUT)
 
         hidden_states, [C, H, W] = self.mid_block.forward(hidden_states, [B, C, H, W])
-        print("2")
-        I = 3
+
         for up_block in self.up_blocks:
             hidden_states = ttnn.to_layout(hidden_states, ttnn.TILE_LAYOUT)
             hidden_states, [C, H, W] = up_block.forward(hidden_states, [B, C, H, W])
-            print(I)
-            I += 1
 
         hidden_states = ttnn.to_memory_config(hidden_states, ttnn.DRAM_MEMORY_CONFIG)
         hidden_states = ttnn.group_norm(
@@ -133,21 +132,14 @@ class TtVAEDecoder(nn.Module):
             inplace=False,
             num_out_blocks=self.norm_blocks,
         )
-        print(I)
-        I = I + 1
+
         hidden_states = ttnn.to_layout(hidden_states, ttnn.TILE_LAYOUT)
         hidden_states = ttnn.silu(hidden_states)
-        print(I)
-        I = I + 1
 
-        # HOST FALLBACK
-        hidden_states = ttnn.to_torch(hidden_states).float()
+        # HOST FALLBACK: Conv2d
+        hidden_states = ttnn.to_torch(hidden_states)  # .float()
         hidden_states = hidden_states.reshape(B, H, W, C)
         hidden_states = torch.permute(hidden_states, (0, 3, 1, 2))
-        print(I)
-        I = I + 1
 
         hidden_states = F.conv2d(hidden_states, self.conv_out_weights, bias=self.conv_out_bias, stride=1, padding=1)
-        print(I)
-        I = I + 1
         return hidden_states

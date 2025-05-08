@@ -66,4 +66,4 @@ def test_vae_attention(device, input_shape, encoder_shape, use_program_cache, re
     del vae, tt_attention
     gc.collect()
 
-    assert_with_pcc(torch_output_tensor, output_tensor, 0.97)
+    assert_with_pcc(torch_output_tensor, output_tensor, 0.995)

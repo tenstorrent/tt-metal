@@ -45,9 +45,15 @@ class TtAttention(nn.Module):
             exp_approx_mode=False,
         )
 
-        self.compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+        self.sdpa_compute_kernel_config = ttnn.WormholeComputeKernelConfig(
             math_fidelity=ttnn.MathFidelity.HiFi2,
             math_approx_mode=True,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=False,
+        )
+        self.compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_approx_mode=False,
             fp32_dest_acc_en=False,
             packer_l1_acc=False,
         )
@@ -95,16 +101,19 @@ class TtAttention(nn.Module):
             hidden_states,
             self.tt_q_weights,
             bias=self.tt_q_bias,
+            compute_kernel_config=self.compute_kernel_config,
         )
         key = ttnn.linear(
             encoder_hidden_states,
             self.tt_k_weights,
             bias=self.tt_k_bias,
+            compute_kernel_config=self.compute_kernel_config,
         )
         value = ttnn.linear(
             encoder_hidden_states,
             self.tt_v_weights,
             bias=self.tt_v_bias,
+            compute_kernel_config=self.compute_kernel_config,
         )
         inner_dim = list(key.shape)[-1]
         head_dim = inner_dim // self.heads
@@ -125,7 +134,7 @@ class TtAttention(nn.Module):
             is_causal=False,
             attn_mask=None,
             program_config=self.sdpa_program_config,
-            compute_kernel_config=self.compute_kernel_config,
+            compute_kernel_config=self.sdpa_compute_kernel_config,
         )
         hidden_states = ttnn.transpose(hidden_states, 1, 2)
         hidden_states = ttnn.reshape(hidden_states, [B, -1, self.heads * head_dim])
@@ -134,6 +143,7 @@ class TtAttention(nn.Module):
             hidden_states,
             self.tt_out_weights,
             bias=self.tt_out_bias,
+            compute_kernel_config=self.compute_kernel_config,
         )
         hidden_states = ttnn.add(hidden_states, input_tensor)
 
