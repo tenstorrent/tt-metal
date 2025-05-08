@@ -6,7 +6,7 @@
 #include <utility>
 #include "ttnn/operations/experimental/ccl/all_gather_concat_heads_fused/device/all_gather_concat_op.hpp"
 #include "ttnn/distributed/types.hpp"
-#include "cpp/ttnn/global_semaphore.hpp"
+#include "ttnn/global_semaphore.hpp"
 
 namespace ttnn::operations::experimental::ccl {
 

@@ -26,7 +26,7 @@
 #define DYNAMIC_NOC_Y(noc, y) NOC_0_Y(noc, noc_size_y, (y))
 
 #endif
-#include "ttnn/cpp/ttnn/operations/ccl/kernel_common/sharding_addrgen.hpp"
+#include "ttnn/operations/ccl/kernel_common/sharding_addrgen.hpp"
 
 namespace sharding_testing_parameters {
 mapping_table_t map[9] = {0x00000001, 0x00020003, 0x00040200, 0x02010202, 0x02030204, 0x03000301, 0x03020303, 0x04000401, 0x04020403};
