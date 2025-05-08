@@ -45,7 +45,6 @@ target_sources(
             api/tt-metalium/circular_buffer_constants.h
             api/tt-metalium/circular_buffer_types.hpp
             api/tt-metalium/command_queue.hpp
-            api/tt-metalium/command_queue_common.hpp
             api/tt-metalium/command_queue_interface.hpp
             api/tt-metalium/constants.hpp
             api/tt-metalium/core_coord.hpp
@@ -91,7 +90,6 @@ target_sources(
             api/tt-metalium/small_vector.hpp
             api/tt-metalium/sub_device.hpp
             api/tt-metalium/sub_device_types.hpp
-            api/tt-metalium/system_memory_cq_interface.hpp
             api/tt-metalium/system_mesh.hpp
             api/tt-metalium/tile.hpp
             api/tt-metalium/trace.hpp
