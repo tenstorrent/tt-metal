@@ -42,8 +42,8 @@ public:
 
     // Creates a multi-host distributed buffer with the specified parameters.
     // The size of `global_buffers` indicates the global size of the buffer; `local_size` and `local_offset` must be
-    // consistent with the global size. Buffers that are remote to this host will be deallocated and ignored for all
-    // subsequent operations.
+    // consistent with the global size. `global_buffers` that are remote to this host will be deallocated and ignored
+    // for all subsequent operations. Only local buffers will be retained by this `HostMeshBuffer` instance.
     static HostMeshBuffer create_sharded(
         std::vector<HostBuffer> global_buffers, size_t local_size, size_t local_offset);
 
