@@ -524,6 +524,7 @@ class cross_attention:
             attention_scores_temp = attention_scores
 
             # TODO DELETE THIS DEBUG STUFF
+            ttnn.set_printoptions(profile="full")
             repeat_scale = ttnn.repeat(self.scale, [1, 16, 1, 1])
             assert not (ttnn.to_torch(repeat_scale) == 0).any()
             attention_scores = ttnn.multiply(

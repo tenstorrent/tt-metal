@@ -102,6 +102,8 @@ ttnn::Tensor repeat_last_dim_rm(
 
 std::tuple<ttnn::Tensor, ttnn::SmallVector<uint32_t>> match_input_rank(
     const ttnn::Tensor& tensor, const SmallVector<uint32_t>& repetition_vector) {
+    tt::log_info(tt::LogOp, " ****** input  - {} - {} ", tensor.get_logical_shape(), tensor.get_padded_shape());
+    tensor.print();
     auto working_tensor = tensor;
     const auto& input_shape = working_tensor.get_logical_shape();
     SmallVector<uint32_t> working_repetition_vector;
@@ -211,8 +213,19 @@ ttnn::Tensor RepeatOperation::invoke(
     if (tensor.get_dtype() == DataType::BFLOAT8_B) {
         // Uncomment next line and this will work
         // working_tensor = ttnn::fill_implicit_tile_padding(working_tensor, 0);
-
+        tt::log_info(
+            tt::LogOp,
+            " ****** before typecast- {} - {} ",
+            working_tensor.get_logical_shape(),
+            working_tensor.get_padded_shape());
+        working_tensor.print();
         working_tensor = ttnn::typecast(working_tensor, DataType::BFLOAT8_B);
+        tt::log_info(
+            tt::LogOp,
+            " ****** after typecast - {} - {} ",
+            working_tensor.get_logical_shape(),
+            working_tensor.get_padded_shape());
+        working_tensor.print();
 
         auto tensor_vec = working_tensor.to_vector<float>();
         TT_ASSERT(std::none_of(tensor_vec.begin(), tensor_vec.end(), [](auto& x) { return x == 0; }));
