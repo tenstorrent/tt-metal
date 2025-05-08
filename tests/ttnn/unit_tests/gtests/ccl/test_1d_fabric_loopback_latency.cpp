@@ -349,7 +349,6 @@ inline void RunPersistent1dFabricLatencyTest(
         size_t dest_bank_addr = dest_buffer_addresses.at(i);
         size_t loopback_distance_to_self = is_ring ? line_size : ((line_size - 1) - line_index) * 2;
         if (is_latency_packet_sender) {
-            bool in_downstream_writers = false;
             std::vector<size_t> downstream_writer_semaphore_addresses;
             std::vector<size_t> downstream_writer_noc_x_list;
             std::vector<size_t> downstream_writer_noc_y_list;
@@ -359,7 +358,6 @@ inline void RunPersistent1dFabricLatencyTest(
                     continue;
                 }
                 if (std::holds_alternative<LatencyPacketTestWriterSpec>(ws->spec)) {
-                    in_downstream_writers = true;
                 } else if (std::holds_alternative<DatapathBusyDataWriterSpec>(ws->spec)) {
                     const auto& datapath_spec = std::get<DatapathBusyDataWriterSpec>(ws->spec);
                     const auto downstream_worker_core_noc =

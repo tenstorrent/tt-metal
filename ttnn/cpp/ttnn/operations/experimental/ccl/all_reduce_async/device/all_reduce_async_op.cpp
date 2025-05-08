@@ -36,27 +36,27 @@ void AllReduceAsync::validate(const std::vector<Tensor>& input_tensors) const {
         "Worker cores used by links are parallelizaed over rows");
 
     TT_FATAL(
-        input_tensor.memory_config().memory_layout == TensorMemoryLayout::WIDTH_SHARDED,
+        input_tensor.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED,
         "Unsupported memory layout for input tensor{}.",
-        input_tensor.memory_config().memory_layout);
+        input_tensor.memory_config().memory_layout());
 
     TT_FATAL(
-        buffer_tensor.memory_config().memory_layout == TensorMemoryLayout::WIDTH_SHARDED,
+        buffer_tensor.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED,
         "Unsupported memory layout for buffer tensor {}.",
-        buffer_tensor.memory_config().memory_layout);
+        buffer_tensor.memory_config().memory_layout());
     TT_FATAL(
-        this->output_mem_config.memory_layout == TensorMemoryLayout::WIDTH_SHARDED,
+        this->output_mem_config.memory_layout() == TensorMemoryLayout::WIDTH_SHARDED,
         "Unsupported memory layout for output tensor {}.",
-        this->output_mem_config.memory_layout);
+        this->output_mem_config.memory_layout());
 
     TT_FATAL(
-        buffer_tensor.memory_config().shard_spec->grid.contains(this->output_mem_config.shard_spec->grid),
+        buffer_tensor.memory_config().shard_spec()->grid.contains(this->output_mem_config.shard_spec()->grid),
         "The output tensor must reside on a subset of the cores of the buffer tensor");
 
     const uint32_t output_shard_shape_volume =
-        this->output_mem_config.shard_spec->shape[0] * this->output_mem_config.shard_spec->shape[1];
+        this->output_mem_config.shard_spec()->shape[0] * this->output_mem_config.shard_spec()->shape[1];
     const uint32_t buffer_shard_shape_volume =
-        buffer_tensor.memory_config().shard_spec->shape[0] * buffer_tensor.memory_config().shard_spec->shape[1];
+        buffer_tensor.memory_config().shard_spec()->shape[0] * buffer_tensor.memory_config().shard_spec()->shape[1];
     TT_FATAL(
         output_shard_shape_volume * this->ring_size <= buffer_shard_shape_volume,
         "The shard size for the buffer must be large enough to hold the intermediate tensor. Require at least {} but "
@@ -121,8 +121,8 @@ tt::tt_metal::operation::ProgramWithCallbacks AllReduceAsync::create_program_at(
 
     auto input_tensor_memory_config = input_tensors[0].memory_config();
     auto output_tensor_memory_config = output_tensors[0].memory_config();
-    uint32_t input_shard_num_cores = input_tensor_memory_config.shard_spec->grid.num_cores();
-    uint32_t output_shard_num_cores = output_tensor_memory_config.shard_spec->grid.num_cores();
+    uint32_t input_shard_num_cores = input_tensor_memory_config.shard_spec()->grid.num_cores();
+    uint32_t output_shard_num_cores = output_tensor_memory_config.shard_spec()->grid.num_cores();
 
     tt::log_debug(tt::LogOp, "input_tensor_shape: {}", input_tensor_shape);
     tt::log_debug(tt::LogOp, "input_tensor_memory_config: {}", input_tensor_memory_config);
@@ -130,9 +130,13 @@ tt::tt_metal::operation::ProgramWithCallbacks AllReduceAsync::create_program_at(
     tt::log_debug(tt::LogOp, "input_shard_num_cores: {}", input_shard_num_cores);
     tt::log_debug(tt::LogOp, "output_shard_num_cores: {}", output_shard_num_cores);
     tt::log_debug(
-        tt::LogOp, "input_tensor_memory_config.shard_spec->shape: {}", input_tensor_memory_config.shard_spec->shape);
+        tt::LogOp,
+        "input_tensor_memory_config.shard_spec()->shape: {}",
+        input_tensor_memory_config.shard_spec()->shape);
     tt::log_debug(
-        tt::LogOp, "output_tensor_memory_config.shard_spec->shape: {}", output_tensor_memory_config.shard_spec->shape);
+        tt::LogOp,
+        "output_tensor_memory_config.shard_spec()->shape: {}",
+        output_tensor_memory_config.shard_spec()->shape);
 
     tt::log_debug(tt::LogOp, "Running TG Llama specific all_reduce_async_minimal_multi_core_with_workers");
     return all_reduce_async_minimal_multi_core_with_workers(

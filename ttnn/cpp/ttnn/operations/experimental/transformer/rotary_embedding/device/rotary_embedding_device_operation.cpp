@@ -42,7 +42,7 @@ void RotaryEmbedding::validate(const std::vector<Tensor>& input_tensors) const {
         TT_FATAL(cos.get_padded_shape()[-2] >= seq_len, "Cos dims must match input dims");
     }
     if (input_tensor.is_sharded()) {
-        TT_FATAL(input_tensor.memory_config().memory_layout != TensorMemoryLayout::WIDTH_SHARDED, "Error");
+        TT_FATAL(input_tensor.memory_config().memory_layout() != TensorMemoryLayout::WIDTH_SHARDED, "Error");
         TT_FATAL(input_tensor.shard_spec().value().shape[1] == input_tensor.get_padded_shape()[-1], "Error");
         // Require even work division for now
         TT_FATAL(
@@ -51,13 +51,13 @@ void RotaryEmbedding::validate(const std::vector<Tensor>& input_tensors) const {
                 0,
             "Error");
         if (this->output_mem_config.is_sharded()) {
-            TT_FATAL(this->output_mem_config.memory_layout != TensorMemoryLayout::WIDTH_SHARDED, "Error");
+            TT_FATAL(this->output_mem_config.memory_layout() != TensorMemoryLayout::WIDTH_SHARDED, "Error");
         }
     } else if (this->output_mem_config.is_sharded()) {
-        TT_FATAL(this->output_mem_config.memory_layout != TensorMemoryLayout::WIDTH_SHARDED, "Error");
+        TT_FATAL(this->output_mem_config.memory_layout() != TensorMemoryLayout::WIDTH_SHARDED, "Error");
     } else {
-        TT_FATAL(input_tensor.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED, "Error");
-        TT_FATAL(this->output_mem_config.memory_layout == TensorMemoryLayout::INTERLEAVED, "Error");
+        TT_FATAL(input_tensor.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED, "Error");
+        TT_FATAL(this->output_mem_config.memory_layout() == TensorMemoryLayout::INTERLEAVED, "Error");
     }
 }
 
@@ -88,8 +88,7 @@ std::vector<ttnn::TensorSpec> RotaryEmbedding::compute_output_specs(const std::v
             shard_spec.shape = {Ht * TILE_HEIGHT, input_tensor.get_padded_shape()[-1]};
             shard_spec.orientation = ShardOrientation::ROW_MAJOR;
         }
-        auto mem_config = this->output_mem_config;
-        mem_config.shard_spec = shard_spec;
+        auto mem_config = this->output_mem_config.with_shard_spec(shard_spec);
         return {TensorSpec(
             shape, TensorLayout(input_tensor.get_dtype(), PageConfig(input_tensor.get_layout()), mem_config))};
     }

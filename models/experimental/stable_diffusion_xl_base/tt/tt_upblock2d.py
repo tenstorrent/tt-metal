@@ -8,7 +8,7 @@ from models.experimental.stable_diffusion_xl_base.tt.tt_resnetblock2d import TtR
 
 
 class TtUpBlock2D(nn.Module):
-    def __init__(self, device, state_dict, module_path):
+    def __init__(self, device, state_dict, module_path, conv_weights_dtype=ttnn.bfloat16):
         super().__init__()
 
         num_layers = 3
@@ -16,7 +16,14 @@ class TtUpBlock2D(nn.Module):
 
         for i in range(num_layers):
             self.resnets.append(
-                TtResnetBlock2D(device, state_dict, f"{module_path}.resnets.{i}", True, 6 if i == 0 else 2)
+                TtResnetBlock2D(
+                    device,
+                    state_dict,
+                    f"{module_path}.resnets.{i}",
+                    True,
+                    6 if i == 0 else 2,
+                    conv_weights_dtype=conv_weights_dtype,
+                )
             )
 
     def forward(self, hidden_states, res_hidden_states_tuple, input_shape, temb):

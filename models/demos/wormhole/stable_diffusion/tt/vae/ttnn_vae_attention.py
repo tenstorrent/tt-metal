@@ -3,7 +3,12 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
-from models.demos.wormhole.stable_diffusion.tt.vae.ttnn_vae_utils import prepare_group_norm, get_default_compute_config
+from models.demos.wormhole.stable_diffusion.tt.vae.ttnn_vae_configs import (
+    GROUPNORM_EPSILON,
+    GROUPNORM_GROUPS,
+    get_default_compute_config,
+)
+from models.demos.wormhole.stable_diffusion.tt.vae.ttnn_vae_utils import prepare_group_norm
 
 
 class Attention:
@@ -104,13 +109,13 @@ class Attention:
 
         hidden_states = ttnn.group_norm(
             hidden_states,
-            num_groups=32,
+            num_groups=GROUPNORM_GROUPS,
             input_mask=self.norm_input_mask,
             weight=self.norm_weights,
             bias=self.norm_bias,
-            epsilon=1e-5,
+            epsilon=GROUPNORM_EPSILON,
             core_grid=self.norm_grid_core,
-            dtype=ttnn.bfloat8_b,
+            dtype=ttnn.bfloat16,
             inplace=False,
             num_out_blocks=self.norm_num_blocks,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,

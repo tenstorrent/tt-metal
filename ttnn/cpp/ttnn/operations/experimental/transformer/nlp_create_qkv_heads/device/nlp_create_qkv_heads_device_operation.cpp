@@ -36,7 +36,7 @@ void NlpCreateHeadsDeviceOperation::validate_on_program_cache_miss(
             "Error");
         TT_FATAL(
             operation_attributes.output_mem_config.is_sharded() &&
-                operation_attributes.output_mem_config.memory_layout != TensorMemoryLayout::WIDTH_SHARDED,
+                operation_attributes.output_mem_config.memory_layout() != TensorMemoryLayout::WIDTH_SHARDED,
             "Error");
         TT_FATAL(input_tensor.shard_spec().value().orientation == ShardOrientation::ROW_MAJOR, "Error");
         auto core_grid = input_tensor.device()->compute_with_storage_grid_size();
@@ -70,7 +70,7 @@ void NlpCreateHeadsDeviceOperation::validate_on_program_cache_miss(
         }
         TT_FATAL(!operation_attributes.transpose_k_heads, "Error");
     } else {
-        TT_FATAL(operation_attributes.output_mem_config.memory_layout == TensorMemoryLayout::INTERLEAVED, "Error");
+        TT_FATAL(operation_attributes.output_mem_config.memory_layout() == TensorMemoryLayout::INTERLEAVED, "Error");
     }
 
     if (tensor_args.input_tensor_kv.has_value()) {
@@ -139,13 +139,11 @@ NlpCreateHeadsDeviceOperation::spec_return_value_t NlpCreateHeadsDeviceOperation
         auto core_grid = input_tensor.device()->compute_with_storage_grid_size();
         auto q_shard_grid = tt::tt_metal::num_cores_to_corerangeset(operation_attributes.num_q_heads, core_grid, true);
         tt::tt_metal::ShardSpec q_shard_spec{q_shard_grid, {TILE_HEIGHT, operation_attributes.head_dim}};
-        auto q_mem_config = operation_attributes.output_mem_config;
-        q_mem_config.shard_spec = q_shard_spec;
+        auto q_mem_config = operation_attributes.output_mem_config.with_shard_spec(q_shard_spec);
         auto kv_shard_grid =
             tt::tt_metal::num_cores_to_corerangeset(operation_attributes.num_kv_heads, core_grid, true);
         tt::tt_metal::ShardSpec kv_shard_spec{kv_shard_grid, {TILE_HEIGHT, operation_attributes.head_dim}};
-        auto kv_mem_config = operation_attributes.output_mem_config;
-        kv_mem_config.shard_spec = kv_shard_spec;
+        auto kv_mem_config = operation_attributes.output_mem_config.with_shard_spec(kv_shard_spec);
         return {
             TensorSpec(
                 q_output_shape,

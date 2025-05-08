@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 import gc
+from loguru import logger
 import torch
 import pytest
 import ttnn
@@ -15,12 +16,15 @@ from models.experimental.stable_diffusion_xl_base.tt.sdxl_utility import (
 )
 
 
-@pytest.mark.parametrize("input_shape, up_block_id", [((1, 1280, 32, 32), 0), ((1, 640, 64, 64), 1)])
+@pytest.mark.parametrize("input_shape, up_block_id, pcc", [((1, 1280, 32, 32), 0, 0.995), ((1, 640, 64, 64), 1, 0.998)])
 @pytest.mark.parametrize("stride", [(1, 1)])
 @pytest.mark.parametrize("padding", [(1, 1)])
 @pytest.mark.parametrize("dilation", [(1, 1)])
+@pytest.mark.parametrize("conv_weights_dtype", [ttnn.bfloat16])
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
-def test_upsample2d(device, input_shape, up_block_id, stride, padding, dilation, use_program_cache, reset_seeds):
+def test_upsample2d(
+    device, input_shape, pcc, conv_weights_dtype, up_block_id, stride, padding, dilation, use_program_cache, reset_seeds
+):
     unet = UNet2DConditionModel.from_pretrained(
         "stabilityai/stable-diffusion-xl-base-1.0", torch_dtype=torch.float32, use_safetensors=True, subfolder="unet"
     )
@@ -31,7 +35,14 @@ def test_upsample2d(device, input_shape, up_block_id, stride, padding, dilation,
     torch_upsample = unet.up_blocks[up_block_id].upsamplers[0]
     groups = 1
     tt_upsample = TtUpsample2D(
-        device, state_dict, f"up_blocks.{up_block_id}.upsamplers.0", stride, padding, dilation, groups
+        device,
+        state_dict,
+        f"up_blocks.{up_block_id}.upsamplers.0",
+        stride,
+        padding,
+        dilation,
+        groups,
+        conv_weights_dtype=conv_weights_dtype,
     )
 
     torch_input_tensor = torch_random(input_shape, -0.1, 0.1, dtype=torch.float32)
@@ -48,4 +59,5 @@ def test_upsample2d(device, input_shape, up_block_id, stride, padding, dilation,
     del unet
     gc.collect()
 
-    assert_with_pcc(torch_output_tensor, output_tensor, 0.996)
+    _, pcc_message = assert_with_pcc(torch_output_tensor, output_tensor, pcc)
+    logger.info(f"PCC is {pcc_message}")

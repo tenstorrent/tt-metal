@@ -25,7 +25,9 @@ enum class KernelName {
     WriterScalar,
     ComputeNoBcast,
     ComputeBcast,
-    ComputeScalar
+    ComputeScalar,
+    ReaderNoBcastSplit,
+    WriterNoBcastSplit,
 };
 
 struct BinaryNgKernelConfig {

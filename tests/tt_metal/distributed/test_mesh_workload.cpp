@@ -580,7 +580,6 @@ TEST_F(MeshWorkloadTestSuite, MeshWorkloadSanity) {
     AddProgramToMeshWorkload(mesh_workload, std::move(program), devices_0);
     AddProgramToMeshWorkload(mesh_workload, std::move(*program_1), devices_1);
 
-    std::size_t buffer_idx = 0;
     std::vector<uint32_t> src_vec = create_constant_vector_of_bfloat16(dram_buffer_size, 1);
 
     for (std::size_t col_idx = 0; col_idx < worker_grid_size.x; col_idx++) {
@@ -600,7 +599,6 @@ TEST_F(MeshWorkloadTestSuite, MeshWorkloadSanity) {
             }
         }
         EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), mesh_workload, false);
-        buffer_idx = 0;
         for (const auto& device_coord : devices_0) {
             for (std::size_t col_idx = 0; col_idx < worker_grid_size.x; col_idx++) {
                 for (std::size_t row_idx = 0; row_idx < worker_grid_size.y; row_idx++) {

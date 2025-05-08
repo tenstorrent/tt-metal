@@ -20,6 +20,7 @@ class TtUpsample2D(nn.Module):
         padding,
         dilation,
         groups,
+        conv_weights_dtype=ttnn.bfloat16,
     ):
         super().__init__()
 
@@ -35,7 +36,7 @@ class TtUpsample2D(nn.Module):
         bias = state_dict[f"{module_path}.conv.bias"].unsqueeze(0).unsqueeze(0).unsqueeze(0)
 
         self.compute_config, self.conv_config, self.tt_weights, self.tt_bias, self.conv_params = prepare_conv_params(
-            device, weights, bias, ttnn.bfloat8_b
+            device, weights, bias, conv_weights_dtype
         )
 
     def interpolate(self, hidden_states):

@@ -22,6 +22,7 @@ target_sources(
         graph/graph_tracking.cpp
         hal.cpp
 )
+
 target_sources(
     tt_metal
     PUBLIC
@@ -91,7 +92,6 @@ target_sources(
             api/tt-metalium/sub_device.hpp
             api/tt-metalium/sub_device_types.hpp
             api/tt-metalium/system_memory_cq_interface.hpp
-            api/tt-metalium/system_memory_manager.hpp
             api/tt-metalium/system_mesh.hpp
             api/tt-metalium/tile.hpp
             api/tt-metalium/trace.hpp
@@ -105,6 +105,7 @@ target_sources(
             api/tt-metalium/work_executor_types.hpp
             api/tt-metalium/work_split.hpp
             api/tt-metalium/worker_config_buffer.hpp
+            api/tt-metalium/distributed_context.hpp
 )
 
 # TODO(afuller): this should be self-describing modules.
