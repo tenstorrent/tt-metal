@@ -348,7 +348,7 @@ Tensor convert_python_tensors_to_tt_tensors(
     auto distributed_tensor_config = get_distributed_tensor_config(strategy);
     auto storage = MultiDeviceHostStorage{distributed_tensor_config, std::move(host_owned_buffers), host_owned_specs};
 
-    auto output = Tensor(std::move(storage), tt_shards.at(0).get_tensor_spec());
+    auto output = Tensor(std::move(storage), tt_shards.at(0).get_tensor_spec(), distributed_tensor_config);
     output = tt::tt_metal::set_tensor_id(output);
     GraphTracker::instance().track_function_end(output);
     return output;

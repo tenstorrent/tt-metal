@@ -108,8 +108,7 @@ Tensor transform(const Tensor& tensor, const std::function<Tensor(const Tensor&)
         input_tensors.begin(), input_tensors.end(), std::back_inserter(output_tensors), [&](const auto& device_tensor) {
             return transform_func(device_tensor);
         });
-    return ttnn::distributed::aggregate_as_tensor(
-        output_tensors, ttnn::distributed::get_distributed_tensor_config_from_tensor(tensor));
+    return ttnn::distributed::aggregate_as_tensor(output_tensors, tensor.get_distributed_tensor_config());
 }
 
 void apply(const Tensor& tensor, const std::function<void(const Tensor&)>& callable) {

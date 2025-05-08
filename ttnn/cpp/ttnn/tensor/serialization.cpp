@@ -230,14 +230,22 @@ MultiDeviceHostStorage load_multi_device_host_storage(
     }
 }
 
+// Helper type to bundle storage and strategy together.
+struct DistributedStorage {
+    Storage storage;
+    DistributedTensorConfig strategy;
+};
+
 template <typename T>
-Storage load_storage(FILE* input_file, DataType data_type, Layout layout, StorageType storage_type, T device) {
+DistributedStorage load_storage(
+    FILE* input_file, DataType data_type, Layout layout, StorageType storage_type, T device) {
     if (storage_type == StorageType::MULTI_DEVICE_HOST or storage_type == StorageType::DEVICE) {
         if constexpr (std::is_same_v<T, MeshDevice*>) {
-            return load_multi_device_host_storage(input_file, data_type, layout, device);
+            auto multi_device_storage = load_multi_device_host_storage(input_file, data_type, layout, device);
+            return DistributedStorage{std::move(multi_device_storage), multi_device_storage.strategy};
         }
     }
-    return load_host_storage(input_file, data_type);
+    return DistributedStorage{load_host_storage(input_file, data_type), ReplicateTensor{}};
 }
 
 template <typename T>
@@ -263,7 +271,7 @@ Tensor load_tensor_helper(const std::string& file_name, T device) {
     StorageType storage_type = StorageType::HOST;
     safe_fread(&storage_type, sizeof(storage_type), 1, input_file);
     auto storage = load_storage(input_file, spec.data_type(), spec.layout(), storage_type, device);
-    Tensor tensor(std::move(storage), spec);
+    Tensor tensor(std::move(storage.storage), spec, storage.strategy);
     if (device != nullptr) {
         tensor = tensor.to_device(device, spec.memory_config());
     }

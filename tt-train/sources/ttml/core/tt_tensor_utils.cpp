@@ -157,7 +157,7 @@ template <class T, ttnn::DataType TensorType>
         distributed_tensor_config, std::move(host_owned_buffers), host_owned_specs);
 
     // remove possible paddings from the shape (it conflicts with ROW MAJOR)
-    auto output = ttnn::Tensor(std::move(storage), host_owned_specs[0]);
+    auto output = ttnn::Tensor(std::move(storage), host_owned_specs[0], distributed_tensor_config);
     return output;
 }
 

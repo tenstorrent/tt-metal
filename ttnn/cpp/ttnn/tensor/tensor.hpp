@@ -61,8 +61,7 @@ public:
     ~Tensor();
 
     // Constructs a tensor with `Storage` and `TensorSpec`.
-    // TODO: #19177 -
-    Tensor(Storage storage, TensorSpec tensor_spec);
+    Tensor(Storage storage, TensorSpec tensor_spec, DistributedTensorConfig distributed_tensor_config);
 
     // Constructors of `Tensor` that take physical data encoded in `HostBuffer`.
     // The encoded data type and physical size of the data must match the specified tensor physical shape and data type.
@@ -182,6 +181,7 @@ public:
     // ======================================================================================
     //                                      Getters
     // ======================================================================================
+    // TODO: remove either get_<x> or <x> getters. They are now equivalent.
     const Storage& get_storage() const;
     Storage& get_storage();
     DataType get_dtype() const;
@@ -189,6 +189,7 @@ public:
     const ttnn::Shape& get_logical_shape() const;
     const ttnn::Shape& get_padded_shape() const;
     const TensorSpec& get_tensor_spec() const;
+    const DistributedTensorConfig& get_distributed_tensor_config() const;
 
     // ======================================================================================
     // Non-Blocking Getters. Query attributes directly, without waiting for worker completion
@@ -199,6 +200,9 @@ public:
     DataType dtype() const { return this->tensor_attributes->get_tensor_spec().tensor_layout().get_data_type(); };
     Layout layout() const { return this->tensor_attributes->get_tensor_spec().tensor_layout().get_layout(); };
     const TensorSpec& tensor_spec() const { return this->tensor_attributes->get_tensor_spec(); }
+    const DistributedTensorConfig& distributed_tensor_config() const {
+        return this->tensor_attributes->get_distributed_tensor_config();
+    }
 
     // ======================================================================================
     //                                      Extra Helper Functions
@@ -286,7 +290,7 @@ public:
     }
 
 private:
-    void init(Storage storage, TensorSpec tensor_spec);
+    void init(Storage storage, TensorSpec tensor_spec, DistributedTensorConfig distributed_tensor_config);
     void deallocate_impl(bool force);
 };
 
