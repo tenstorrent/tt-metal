@@ -7,11 +7,11 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 
-#include "cpp/ttnn-pybind/decorators.hpp"
+#include "ttnn-pybind/decorators.hpp"
 #include "ttnn/operations/experimental/ccl/all_gather_async/all_gather_async.hpp"
 #include "ttnn/operations/ccl/ccl_host_datastructures.hpp"
 #include "ttnn/distributed/types.hpp"
-#include "cpp/ttnn/global_semaphore.hpp"
+#include "ttnn/global_semaphore.hpp"
 
 namespace ttnn::operations::experimental::ccl {
 
