@@ -14,68 +14,107 @@ from ttnn.dot_access import DotAccessDict
 
 
 def update_model_config(config, batch_size):
-    core_grid = ttnn.CoreGrid(y=batch_size, x=6)
-    seqL_t = int(224 / 32)  # 7
-    dim_t = int(768 / 32)  # 24
-    dim_t__x = int(dim_t / core_grid.x)  # 4
+    wh_core_grid_y = 8
+    if batch_size <= wh_core_grid_y:
+        grid_y = batch_size
+        grid_x = 4  ## it can be 6 for better latency
+    else:
+        grid_y = 8
+        batch_per_y_core = batch_size // wh_core_grid_y
+        batch_size = grid_y * batch_per_y_core
+        grid_x = 4
+    core_grid = ttnn.CoreGrid(y=grid_y, x=grid_x)
+
+    seqL_t = 224 // 32  # 7
+    dim_t = 768 // 32  # 24
+    dim_t__x = dim_t // core_grid.x  # 4
     head_num = 12
-    head_seqL_t = int(head_num * seqL_t / core_grid.x)  # 7
-    head_size_t__x = int(dim_t / head_num)  # 2
-    class__x = int(1152 / 32 / core_grid.x)  # 3
+    head_seqL_t__x = (head_num * seqL_t) // core_grid.x  # 14
+    head_size_t = dim_t // head_num  # 2
+    class__x = (1152 // 32) // core_grid.x  # 3
+    class_subb_w = class__x
+    if class_subb_w > 8:  # max ration of sub_block_w / sub_block_h = 8
+        if class_subb_w % 3 == 0:
+            class_subb_w = class__x // 3
+        elif class_subb_w % 2 == 0:
+            class_subb_w = class__x // 2
+        else:
+            class_subb_w = 1
 
     # sharding configs
     program_configs = {
+        "layernorm_before_program_config": ttnn.LayerNormShardedMultiCoreProgramConfig(
+            compute_with_storage_grid_size=(core_grid.x, core_grid.y),
+            subblock_w=dim_t__x // 2,  # 1,
+            # subblock_w = dim_t__x // 2,  # 1,
+            block_h=seqL_t,  # 7,
+            block_w=dim_t__x,  # 2,
+            inplace=False,
+        ),
         "query_key_value_matmul_program_config": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
             compute_with_storage_grid_size=(core_grid.x, core_grid.y),
-            in0_block_w=int(dim_t__x / 2),  # 2,
+            in0_block_w=dim_t__x // 2,  # 2,
             out_subblock_h=1,
-            out_subblock_w=int(2 * dim_t__x / 2),  # 6,
+            out_subblock_w=dim_t__x,  # 6,
             per_core_M=seqL_t,  # 7,
-            per_core_N=int(3 * dim_t__x),  # 12,
+            per_core_N=3 * dim_t__x,  # 12,
             transpose_mcast=False,
             fused_activation=None,
         ),
         "query_by_key_matmul_program_config": ttnn.MatmulMultiCoreReuseProgramConfig(
             compute_with_storage_grid_size=(core_grid.x, core_grid.y),
-            in0_block_w=int(dim_t__x / 2),  # 2,
+            in0_block_w=head_size_t,  # 2,
             out_subblock_h=1,
             out_subblock_w=seqL_t,  # 7,
-            per_core_M=int(2 * seqL_t),  # 14,
-            per_core_N=int(head_seqL_t / 2),  # 7,
+            per_core_M=head_seqL_t__x,  ##int((head_num//) * seqL_t),  # 14,
+            per_core_N=seqL_t,  # 7,
+        ),
+        "softmax_program_config": ttnn.SoftmaxShardedMultiCoreProgramConfig(
+            compute_with_storage_grid_size=(core_grid.x, core_grid.y),
+            subblock_w=seqL_t,  # 7,
+            block_h=head_seqL_t__x,  # 14,
+            block_w=seqL_t,  # 7,
         ),
         "attention_probabilities_by_value_matmul_program_config": ttnn.MatmulMultiCoreReuseProgramConfig(
             compute_with_storage_grid_size=(core_grid.x, core_grid.y),
             in0_block_w=seqL_t,  # 7,
             out_subblock_h=1,
-            out_subblock_w=head_size_t__x,  # 2,
-            per_core_M=int(2 * seqL_t),  # 14,
-            per_core_N=head_size_t__x,  # 2,
+            out_subblock_w=head_size_t,  # 2,
+            per_core_M=head_seqL_t__x,  # 14,
+            per_core_N=head_size_t,  # 2,
         ),
         "self_output_matmul_program_config": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
             compute_with_storage_grid_size=(core_grid.x, core_grid.y),
-            in0_block_w=int(dim_t__x / 2),  # 2,
-            out_subblock_h=1,  # seqL_t,  # 7,
-            out_subblock_w=dim_t__x,  # 4,
+            in0_block_w=dim_t__x // 2,  # 1,
+            out_subblock_h=1,
+            out_subblock_w=dim_t__x,  # 2,
             per_core_M=seqL_t,  # 7,
             per_core_N=dim_t__x,  # 4,
             transpose_mcast=False,
             fused_activation=None,
         ),
+        "layernorm_after_output_program_config": ttnn.LayerNormShardedMultiCoreProgramConfig(
+            compute_with_storage_grid_size=(core_grid.x, core_grid.y),
+            subblock_w=dim_t__x // 2,  # 1,
+            block_h=seqL_t,  # 7,
+            block_w=dim_t__x,  # 2,
+            inplace=False,
+        ),
         "ff1_matmul_program_config": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
             compute_with_storage_grid_size=(core_grid.x, core_grid.y),
-            in0_block_w=int(dim_t__x / 2),  # 2,
+            in0_block_w=dim_t__x // 2,  # 1,
             out_subblock_h=1,
-            out_subblock_w=int(4 * dim_t__x / 4),  # 4,
+            out_subblock_w=dim_t__x,  # 4,
             per_core_M=seqL_t,  # 7,
-            per_core_N=int(4 * dim_t__x),  # 16,
+            per_core_N=4 * dim_t__x,  # 16,
             transpose_mcast=False,
             fused_activation=(ttnn.UnaryOpType.GELU, True),
         ),
         "ff2_matmul_program_config": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
             compute_with_storage_grid_size=(core_grid.x, core_grid.y),
-            in0_block_w=int(4 * dim_t__x / 2),  # 8,
+            in0_block_w=2 * dim_t__x,  # 4,
             out_subblock_h=1,  # seqL_t,  # 7,
-            out_subblock_w=dim_t__x,  # 4,
+            out_subblock_w=dim_t__x,  # 2,
             per_core_M=seqL_t,  # 7,
             per_core_N=dim_t__x,  # 4,
             transpose_mcast=False,
@@ -83,33 +122,13 @@ def update_model_config(config, batch_size):
         ),
         "classifer_matmul_program_config": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
             compute_with_storage_grid_size=(core_grid.x, core_grid.y),
-            in0_block_w=int(dim_t__x / 2),  # 2,
+            in0_block_w=dim_t__x // 2,  # 1,
             out_subblock_h=1,
-            out_subblock_w=class__x,  # 3,
+            out_subblock_w=class_subb_w,
             per_core_M=seqL_t,  # 7,
             per_core_N=class__x,  # 6,
             transpose_mcast=False,
             fused_activation=(ttnn.UnaryOpType.GELU, True),
-        ),
-        "layernorm_program_config": ttnn.LayerNormShardedMultiCoreProgramConfig(
-            compute_with_storage_grid_size=(core_grid.x, core_grid.y),
-            subblock_w=int(dim_t__x / 2),  # 2,
-            block_h=seqL_t,  # 7,
-            block_w=dim_t__x,  # 4,
-            inplace=False,
-        ),
-        "layernorm_after_output_program_config": ttnn.LayerNormShardedMultiCoreProgramConfig(
-            compute_with_storage_grid_size=(core_grid.x, core_grid.y),
-            subblock_w=int(dim_t__x / 2),  # 2,
-            block_h=seqL_t,  # 7,
-            block_w=dim_t__x,  # 4,
-            inplace=False,
-        ),
-        "softmax_program_config": ttnn.SoftmaxShardedMultiCoreProgramConfig(
-            compute_with_storage_grid_size=(core_grid.x, core_grid.y),
-            subblock_w=int(head_seqL_t / 2),  # 7,
-            block_h=int(2 * seqL_t),  # 14,
-            block_w=int(head_seqL_t / 2),  # 7,
         ),
     }
 
@@ -175,6 +194,7 @@ def vit_embeddings(
     return embedding_output
 
 
+"""
 def vit_layernorm_before(
     config,
     hidden_states,
@@ -187,7 +207,7 @@ def vit_layernorm_before(
         bias=parameters.layernorm_before.bias,
         epsilon=config.layer_norm_eps,
         memory_config=ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG,
-        program_config=config.program_configs["layernorm_program_config"],
+        program_config=config.program_configs["layernorm_before_program_config"],
     )
 
     return attention_output
@@ -209,6 +229,7 @@ def vit_layernorm_after(
     )
 
     return attention_output
+"""
 
 
 def vit_attention(
@@ -241,6 +262,8 @@ def vit_attention(
         num_heads=num_heads,
     )
     ttnn.deallocate(query_key_value)
+    ttnn.deallocate(hidden_states)
+    value = ttnn.reallocate(value)
 
     attention_scores = ttnn.matmul(
         query,
@@ -283,6 +306,7 @@ def vit_attention(
         program_config=config.program_configs["self_output_matmul_program_config"],
     )
     ttnn.deallocate(context_layer)
+    self_output = ttnn.reallocate(self_output)
 
     return self_output
 
@@ -352,7 +376,7 @@ def vit_layer(
         weight=parameters.layernorm_before.weight,
         bias=parameters.layernorm_before.bias,
         memory_config=ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG,
-        program_config=config.program_configs["layernorm_program_config"],
+        program_config=config.program_configs["layernorm_before_program_config"],
     )
 
     multi_head_attention_output = vit_attention(
@@ -445,7 +469,7 @@ def vit(
         bias=parameters.vit.layernorm.bias,
         epsilon=config.layer_norm_eps,
         memory_config=ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG,
-        program_config=config.program_configs["layernorm_program_config"],
+        program_config=config.program_configs["layernorm_before_program_config"],
     )
 
     # Classifier
