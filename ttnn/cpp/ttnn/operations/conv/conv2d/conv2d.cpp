@@ -14,6 +14,7 @@
 #include "tt-metalium/logger.hpp"
 #include "tt-metalium/math.hpp"
 #include "ttnn/operations/data_movement/slice/slice.hpp"
+#include "ttnn/tensor/enum_types.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/types.hpp"
 
@@ -28,6 +29,8 @@
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/data_movement/move/move.hpp"
 #include "ttnn/operations/experimental/slice_write/slice_write.hpp"
+#include "ttnn/operations/experimental/padded_slice/padded_slice.hpp"
+#include "ttnn/operations/creation.hpp"
 #include "ttnn/types.hpp"
 namespace ttnn {
 namespace operations::conv {
@@ -208,7 +211,13 @@ Result conv2d_DRAM(
                     BufferType::DRAM,
                 })),
         device);
-
+    // Tensor dram_output_tensor = ttnn::zeros(     //Kept for debugging. Will remove later.
+    //         ttnn::Shape({batch_size, output_height, output_width, out_channels}),
+    //         conv_config.dtype,
+    //         tt_metal::Layout::ROW_MAJOR,
+    //         std::nullopt);
+    // dram_output_tensor = ttnn::to_device(
+    //     dram_output_tensor, device, MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM});
     bool first_run = true;
 
     const uint32_t min_output_slice_size = output_sliced_dim / dram_slice_config.num_slices;
@@ -305,18 +314,44 @@ Result conv2d_DRAM(
                 " Conv2D DRAM Slicing must have fixed a shard layout after the first run.");
             conv_config.always_preprocess_weights = false;
         }
-        auto sliced_input_tensor = ttnn::slice(
-            queue_id,
-            input_tensor_on_device,
-            std::array<uint32_t, 4>{0, input_slice_height_start, input_slice_width_start, 0},  // Start
-            std::array<uint32_t, 4>{batch_size, input_slice_height_end, input_slice_width_end, in_channels},
-            std::array<uint32_t, 4>{
-                1,
-                1,
-                1,
-                1,
-            }  // Step,
-        );
+        Tensor sliced_input_tensor;
+        if (conv_config.shard_layout.value() == TensorMemoryLayout::WIDTH_SHARDED) {
+            sliced_input_tensor = ttnn::slice(
+                queue_id,
+                input_tensor_on_device,
+                std::array<uint32_t, 4>{0, input_slice_height_start, input_slice_width_start, 0},  // Start
+                std::array<uint32_t, 4>{batch_size, input_slice_height_end, input_slice_width_end, in_channels},
+                std::array<uint32_t, 4>{
+                    1,
+                    1,
+                    1,
+                    1,
+                });
+        } else {
+            auto sliced_input_tensor_memory_config = determine_input_memory_config(
+                conv_config,
+                batch_size,
+                ttnn::Shape({batch_size, input_slice_height, input_slice_width, in_channels}),
+                ttnn::Shape({batch_size, output_slice_height, output_slice_width, out_channels}),
+                mm_conv,
+                device,
+                // Setting layout to TILE forces input_channels_alignment to 32.
+                //  The padded_slice op needs aligned reads from L1.
+                Layout::TILE);
+
+            sliced_input_tensor = ttnn::experimental::padded_slice(
+                queue_id,
+                input_tensor_on_device,
+                std::array<uint32_t, 4>{0, input_slice_height_start, input_slice_width_start, 0},  // Start
+                std::array<uint32_t, 4>{batch_size, input_slice_height_end, input_slice_width_end, in_channels},
+                std::array<uint32_t, 4>{
+                    1,
+                    1,
+                    1,
+                    1,
+                },  // Step
+                sliced_input_tensor_memory_config);
+        }
         auto conv_config_l1 = conv_config;
         ttnn::Tensor sliced_output_tensor;
         std::tie(sliced_output_tensor, std::ignore, std::ignore, weight_tensor_on_device, bias_tensor_on_device) =
