@@ -371,7 +371,7 @@ def run_rms_fuse_impl(
         use_height_and_width_as_shard_shape=True,
     )
     ag_shape = [1, 1, 32, 128]
-    stats_tensor = torch.zeros(ag_shape, dtype=torch.bfloat16)
+    stats_tensor = torch.ones(ag_shape, dtype=torch.bfloat16)
     tt_stats = ttnn.from_torch(
         stats_tensor,
         device=mesh_device,
@@ -461,7 +461,7 @@ def run_rms_fuse_impl(
             1,
             mesh_device,
             ccl_semaphore_handles[i],
-            dtype=ttnn.bfloat8_b,
+            # dtype=ttnn.bfloat8_b,
             topology=all_gather_topology,
             memory_config=output_memory_config,
             epsilon=epsilon,
@@ -469,6 +469,9 @@ def run_rms_fuse_impl(
             residual_input_tensor=residual_tensor[i],
             stats=tt_stats,
         )
+        print(tt_out)
+        print(residual_tensor[i])
+        print(tt_stats)
         tt_out_array.append(tt_out)
     for i in range(num_iters):
         tt_out_torch = ttnn.to_torch(

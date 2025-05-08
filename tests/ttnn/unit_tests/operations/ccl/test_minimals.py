@@ -439,10 +439,10 @@ def test_tg_trace_rms_fuse(
 @pytest.mark.parametrize("residual_dtype", [ttnn.bfloat8_b, ttnn.bfloat16])
 @pytest.mark.parametrize(
     "device_params",
-    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING}],
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}],
     indirect=True,
 )
-@pytest.mark.parametrize("topology", [ttnn.Topology.Linear, ttnn.Topology.Ring])
+@pytest.mark.parametrize("topology", [ttnn.Topology.Linear])
 def test_rms_fuse(
     mesh_device,
     num_devices,

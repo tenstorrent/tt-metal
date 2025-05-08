@@ -753,6 +753,7 @@ def tt_sharded_distributed_rmsnorm(
         cluster_axis,
         tt_ccl.mesh_device,
         semaphore,
+        topology=ttnn.Topology.Linear,
         residual_input_tensor=res,
         num_links=1,
         epsilon=epsilon,
