@@ -412,14 +412,34 @@ class ModelArgs:
         self.num_devices = mesh_device.get_num_devices() if mesh_device else 0
         self.mesh_device = mesh_device
         self.arch_name = ttnn.get_arch_name()
-        self.device_name = {
-            0: "CPU",
-            1: "P150" if self.arch_name == "blackhole" else "N150",
-            2: "P300" if self.arch_name == "blackhole" else "N300",
-            4: "P150x4",  # Config only exists in BH at the moment
-            8: "T3K",
-            32: "TG",
-        }[self.num_devices]
+        self.dram_grid_size = mesh_device.dram_grid_size() if mesh_device else None  # CoreCoord with (x, y)
+
+        if self.num_devices == 0:
+            self.device_name = "CPU"
+        else:
+            if self.arch_name == "blackhole":
+                dict_device_names = {
+                    1: "P100" if self.dram_grid_size.x == 7 else "P150",  # P100 DRAM grid is 7x1, P150 is 8x1
+                    2: "P300",
+                    4: "P150x4",
+                }
+            elif self.arch_name == "wormhole_b0":
+                dict_device_names = {
+                    1: "N150",
+                    2: "N300",
+                    4: "N150x4",
+                    8: "T3K",
+                    32: "TG",
+                }
+            else:
+                raise ValueError(f"Unsupported architecture: {self.arch_name}")
+
+            if self.num_devices in dict_device_names:
+                self.device_name = dict_device_names[self.num_devices]
+            else:
+                raise ValueError(f"Unsupported number of devices: {self.num_devices} for {self.arch_name}")
+
+        logger.info(f"Inferring device name: {self.device_name}")
         self.model_name = "Unknown"  # Llama model name will be dependent on the checkpoint directory
         self.max_seq_len = max_seq_len
         self.max_batch_size = max_batch_size
@@ -606,7 +626,7 @@ class ModelArgs:
                 {
                     ttnn.CoreRange(
                         ttnn.CoreCoord(0, 0),
-                        ttnn.CoreCoord(device.dram_grid_size().x - 1, device.dram_grid_size().y - 1),
+                        ttnn.CoreCoord(self.dram_grid_size.x - 1, self.dram_grid_size.y - 1),
                     )
                 }
             )
