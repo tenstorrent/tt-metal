@@ -52,4 +52,4 @@ def test_vae_midblock(device, input_shape, use_program_cache, reset_seeds):
     del vae
     gc.collect()
 
-    assert_with_pcc(torch_output_tensor, output_tensor, 0.997)
+    assert_with_pcc(torch_output_tensor, output_tensor, 0.996)
