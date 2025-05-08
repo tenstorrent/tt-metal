@@ -426,8 +426,6 @@ def run_prefetcher_mm(
 
             passing, output = comp_pcc(pt_out, tt_out, pcc_threshold)
             logger.info(output)
-            # logger.info(pt_out)
-            # logger.info(tt_out)
             all_passing = passing and all_passing
 
     device.clear_loaded_sub_device_manager()
