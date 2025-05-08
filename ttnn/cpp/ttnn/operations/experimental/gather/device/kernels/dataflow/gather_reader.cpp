@@ -126,6 +126,7 @@ void kernel_main() {
     constexpr uint32_t compute_with_storage_grid_size_y = get_compile_time_arg_val(9);
 
     constexpr uint32_t one_tile = 1;
+    constexpr uint32_t TILE_WIDTH_MASK = tt::constants::TILE_WIDTH - 1;
 
     // Index tensor config
     constexpr uint32_t input_index_tensor_tile_size_bytes = get_tile_size(input_index_tensor_cb_index);
@@ -167,6 +168,7 @@ void kernel_main() {
             uint32_t count = 0;
             constexpr uint32_t tile_faces = 2;
             constexpr uint32_t face_size = 16;
+            constexpr uint32_t FACE_SIZE_MASK = face_size - 1;
             for (uint32_t i = 0; i < tile_faces; ++i) {
                 for (uint32_t j = 0; j < tile_faces; ++j) {
                     for (uint32_t k = 0; k < face_size; ++k) {
@@ -176,10 +178,19 @@ void kernel_main() {
                                 input_index_tensor_l1_read_addr, count, input_index_tensor_data_format_size);
 
                             // Calculate local index
+                            const uint32_t tile_idx = global_index >> __builtin_ctz(tt::constants::TILE_WIDTH);
+                            const uint32_t index_in_local_tile = global_index & TILE_WIDTH_MASK;
+                            const uint32_t which_row = index_in_local_tile >> __builtin_ctz(face_size);
+                            const uint32_t which_col = index_in_local_tile & FACE_SIZE_MASK;
+                            /* Equivalent to:
                             const uint32_t tile_idx = global_index / tt::constants::TILE_WIDTH;
                             const uint32_t index_in_local_tile = global_index % tt::constants::TILE_WIDTH;
                             const uint32_t which_row = index_in_local_tile / face_size;
                             const uint32_t which_col = index_in_local_tile % face_size;
+
+                            Division is replaced with bit shift,
+                            Modulo replaced with bitwise AND with mask.
+                            */
                             const uint16_t local_index = tile_idx * tt::constants::TILE_HW +
                                                          which_row * (face_size * face_size) + k * face_size +
                                                          which_col + i * (tt::constants::TILE_WIDTH * face_size);
