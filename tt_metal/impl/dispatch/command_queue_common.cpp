@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <tt-metalium/command_queue_common.hpp>
+#include "command_queue_common.hpp"
 #include "dispatch_settings.hpp"
 
 #include "impl/context/metal_context.hpp"

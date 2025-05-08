@@ -41,7 +41,7 @@
 #include "assert.hpp"
 #include "buffer_types.hpp"
 #include "command_queue.hpp"
-#include "command_queue_common.hpp"
+#include "dispatch/command_queue_common.hpp"
 #include "common/core_assignment.hpp"
 #include "core_coord.hpp"
 #include "device.hpp"
