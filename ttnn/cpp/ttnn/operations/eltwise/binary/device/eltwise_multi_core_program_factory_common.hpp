@@ -88,7 +88,8 @@ inline __attribute__((always_inline)) void set_eltwise_binary_runtime_args(
         }
     }
 
-    uint32_t num_tiles = 32; // a.volume() / TILE_HW;
+    // TODO: Rename to num_partitions (which is either the number of tiles for TILES or number of rows for ROW_MAJOR)
+    uint32_t num_tiles = a.volume() / a.get_padded_shape()[-1];
 
     uint32_t num_cores, num_tiles_per_core_group_1, num_tiles_per_core_group_2, num_cores_total;
     if (zero_start_grid) {
@@ -165,7 +166,7 @@ inline __attribute__((always_inline)) void set_eltwise_binary_runtime_args(
     std::vector<std::vector<uint32_t>> unary_writer_args;
     if constexpr (initialize_args) {
         binary_reader_args = {cores.size(), std::vector<uint32_t>(8)};
-        eltwise_binary_args = {cores.size(), std::vector<uint32_t>(2)};
+        eltwise_binary_args = {cores.size(), std::vector<uint32_t>(3)};
         if (block_or_width_sharded and not out_sharded) {
             unary_writer_args = {cores.size(), std::vector<uint32_t>(7)};
         } else {
@@ -240,7 +241,7 @@ inline __attribute__((always_inline)) void set_eltwise_binary_runtime_args(
                 num_shards_per_width,
 		row_size,
 	    };
-            eltwise_binary_args[i] = {block_cnt_per_core, block_size_per_core};
+            eltwise_binary_args[i] = {block_cnt_per_core, block_size_per_core, row_size};
         } else {
             auto& reader_args = cached_reader_args.at(core.x).at(core.y);
             reader_args[0] = src_buffer_a->address();
@@ -254,6 +255,7 @@ inline __attribute__((always_inline)) void set_eltwise_binary_runtime_args(
             auto& eltwise_args = cached_eltwise_args.at(core.x).at(core.y);
             eltwise_args[0] = block_cnt_per_core;
             eltwise_args[1] = block_size_per_core;
+	    eltwise_args[2] = row_size;
         }
         if (block_or_width_sharded and not out_sharded) {
             uint32_t unpadded_block_height = block_height;
