@@ -105,9 +105,6 @@ jobs:
         if: ${{ !cancelled() }}
         with:
           prefix: "test_reports_"
-      - name: Generate system logs on failure
-        uses: tenstorrent/tt-metal/.github/actions/generate-system-logs@main
-        if: ${{ failure() }}
       - name: Generate gtest annotations on failure
         uses: tenstorrent/tt-metal/.github/actions/generate-gtest-failure-message@main
         if: ${{ failure() }}
