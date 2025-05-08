@@ -48,8 +48,8 @@ jobs:
       - pipeline-functional
     env:
       WORK_DIR: /work
-      TT_METAL_HOME: ${{ env.WORK_DIR }}/tt-metal
-      VLLM_DIR: ${{ env.WORK_DIR }}/vllm
+      TT_METAL_HOME: /work/tt-metal
+      VLLM_DIR: /work/vllm
     container:
       image: ${{ inputs.docker-image }}
       env:
