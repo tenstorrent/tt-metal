@@ -139,10 +139,10 @@ function(get_alias INPUT_STRING OUTPUT_VAR)
 endfunction()
 
 # Define the compiler command
-set(GPP_CMD ${PROJECT_SOURCE_DIR}/runtime/sfpi/compiler/bin/riscv32-unknown-elf-g++)
+set(GPP_CMD ${PROJECT_SOURCE_DIR}/runtime/sfpi/compiler/bin/riscv32-tt-elf-g++)
 
 # May switch to this someday
-# set(GPP_CMD /opt/tenstorrent/sfpi/compiler/bin/riscv32-unknown-elf-g++)
+# set(GPP_CMD /opt/tenstorrent/sfpi/compiler/bin/riscv32-tt-elf-g++)
 
 set(GPP_DEFINES -DTENSIX_FIRMWARE)
 
