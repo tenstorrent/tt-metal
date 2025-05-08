@@ -16,7 +16,7 @@ from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
         ("ScaledDotProductAttentionDecode", 13.2, 0.05),
         ("NLPCreateHeadsDecodeDeviceOperation", 8.32, 0.05),
         ("NLPConcatHeadsDecodeDeviceOperation", 6.07, 0.05),
-        ("PagedUpdateCacheDeviceOperation", 4.5, 0.1),
+        ("PagedUpdateCacheDeviceOperation", 4.9, 0.1),
         ("RotaryEmbeddingLlamaFusedQK", 4.15, 0.05),
     ],
 )
