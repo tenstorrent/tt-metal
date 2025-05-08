@@ -159,9 +159,6 @@ def test_vit(device, use_program_cache):
 
     run_trace_2cq_model(device, test_infra, num_warmup_iterations, num_measurement_iterations)
 
-    ## ??
-    # enable_persistent_kernel_cache()
-
     #####
     #####
     first_iter_time = profiler.get(f"compile") + profiler.get(f"cache")
