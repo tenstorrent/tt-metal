@@ -99,11 +99,11 @@ def test_vit(device):
             {
                 ttnn.CoreRange(
                     ttnn.CoreCoord(0, 0),
-                    ttnn.CoreCoord(7, 0),
+                    ttnn.CoreCoord(7, 1),
                 ),
             }
         )
-        n_cores = 8
+        n_cores = 16
         shard_spec = ttnn.ShardSpec(shard_grid, [N * H * W // n_cores, C], ttnn.ShardOrientation.ROW_MAJOR)
 
         output = None

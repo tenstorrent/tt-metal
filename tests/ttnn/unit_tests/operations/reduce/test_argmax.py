@@ -7,9 +7,11 @@ import torch
 import ttnn
 
 from loguru import logger
+from models.utility_functions import skip_for_blackhole
 from tests.ttnn.utils_for_testing import check_with_pcc
 
 
+@skip_for_blackhole("Fails on Blackhole. Issue #21862")
 @pytest.mark.parametrize(
     argnames="tensor_shape, dim, keepdim, use_multicore",
     argvalues=[

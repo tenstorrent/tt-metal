@@ -456,64 +456,33 @@ JitBuildCompute::JitBuildCompute(const JitBuildEnv& env, const JitBuiltStateConf
         "-I" + env_.root_ + "tt_metal/third_party/tt_llk/tt_llk_" + env.arch_name_ + "/llk_lib ";
     // clang-format on
 
-    if (this->is_fw_) {
-        this->srcs_.push_back("tt_metal/hw/firmware/src/trisc.cc");
-    } else {
-        this->srcs_.push_back("tt_metal/hw/firmware/src/trisck.cc");
-    }
+    this->srcs_.push_back(std::string("tt_metal/hw/firmware/src/trisc") + (this->is_fw_ ? "" : "k") + ".cc");
 
-    switch (this->core_id_) {
-        case 0:
-            this->target_name_ = "trisc0";
+    // Incrementing the '0' is much cheaper that piecemeal
+    // construction. Sue me.
+    this->target_name_ = "trisc0";
+    TT_ASSERT(this->target_name_[this->target_name_.size() - 1] == '0');
+    this->target_name_[this->target_name_.size() - 1] += this->core_id_;
 
-            this->defines_ += "-DUCK_CHLKC_UNPACK ";
-            this->defines_ += "-DNAMESPACE=chlkc_unpack ";
-            this->defines_ += "-DCOMPILE_FOR_TRISC=0 ";
+    // It is cheaper to duplicate the common parts of these strings,
+    // vs more complicated concatenation.
+    static const std::string_view defines[] =
+        {"-DUCK_CHLKC_UNPACK -DNAMESPACE=chlkc_unpack ",
+         "-DUCK_CHLKC_MATH -DNAMESPACE=chlkc_math ",
+         "-DUCK_CHLKC_PACK -DNAMESPACE=chlkc_pack "};
+    this->defines_ += defines[this->core_id_];
 
-            if (this->is_fw_) {
-                this->lflags_ +=
-                    "-T" + env_.root_ + "runtime/hw/toolchain/" + get_alias(env_.arch_) + "/firmware_trisc0.ld ";
-            } else {
-                this->lflags_ +=
-                    "-T" + env_.root_ + "runtime/hw/toolchain/" + get_alias(env_.arch_) + "/kernel_trisc0.ld ";
-            }
+    this->defines_ += "-DCOMPILE_FOR_TRISC=0 ";
+    this->defines_[this->defines_.size() - 2] += this->core_id_;
 
-            break;
-
-        case 1:
-            this->target_name_ = "trisc1";
-
-            this->defines_ += "-DUCK_CHLKC_MATH ";
-            this->defines_ += "-DNAMESPACE=chlkc_math ";
-            this->defines_ += "-DCOMPILE_FOR_TRISC=1 ";
-
-            if (this->is_fw_) {
-                this->lflags_ +=
-                    "-T" + env_.root_ + "runtime/hw/toolchain/" + get_alias(env_.arch_) + "/firmware_trisc1.ld ";
-            } else {
-                this->lflags_ +=
-                    "-T" + env_.root_ + "runtime/hw/toolchain/" + get_alias(env_.arch_) + "/kernel_trisc1.ld ";
-            }
-
-            break;
-
-        case 2:
-            this->target_name_ = "trisc2";
-
-            this->defines_ += "-DUCK_CHLKC_PACK ";
-            this->defines_ += "-DNAMESPACE=chlkc_pack ";
-            this->defines_ += "-DCOMPILE_FOR_TRISC=2 ";
-
-            if (this->is_fw_) {
-                this->lflags_ +=
-                    "-T" + env_.root_ + "runtime/hw/toolchain/" + get_alias(env_.arch_) + "/firmware_trisc2.ld ";
-            } else {
-                this->lflags_ +=
-                    "-T" + env_.root_ + "runtime/hw/toolchain/" + get_alias(env_.arch_) + "/kernel_trisc2.ld ";
-            }
-
-            break;
-    }
+    static const std::string_view ld_script[] = {"/kernel_trisc0.ld ", "/firmware_trisc0.ld "};
+    constexpr auto script_number_index = 5;
+    // Sadly operator+(std::string &&, std::string_view const &) is
+    // not a thing, until c++ 26.  Hence the cast to std::string.
+    this->lflags_ += "-T" + env_.root_ + "runtime/hw/toolchain/" + get_alias(env_.arch_) +
+        std::string(ld_script[this->is_fw_]);
+    TT_ASSERT(this->lflags_[this->lflags_.size() - script_number_index] == '0');
+    this->lflags_[this->lflags_.size() - script_number_index] += this->core_id_;
 
     this->process_defines_at_compile = false;
 
