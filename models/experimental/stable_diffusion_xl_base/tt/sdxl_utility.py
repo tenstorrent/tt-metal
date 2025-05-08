@@ -58,11 +58,18 @@ def prepare_linear_params(device, weights, bias, dtype):
 
 
 def prepare_conv_params(
-    device, weights, bias, dtype, act_dtype=ttnn.bfloat16, act_block_h_override=0, fp32_dest_acc_en=False
+    device,
+    weights,
+    bias,
+    dtype,
+    act_dtype=ttnn.bfloat16,
+    act_block_h_override=0,
+    fp32_dest_acc_en=False,
+    math_fidelity=ttnn.MathFidelity.HiFi4,
 ):
     compute_config = ttnn.init_device_compute_kernel_config(
         device.arch(),
-        math_fidelity=ttnn.MathFidelity.LoFi,
+        math_fidelity=math_fidelity,
         fp32_dest_acc_en=fp32_dest_acc_en,
         packer_l1_acc=False,
     )
@@ -108,10 +115,11 @@ def prepare_split_conv_params(
     act_dtype=ttnn.bfloat16,
     act_block_h_override=0,
     fp32_dest_acc_en=False,
+    math_fidelity=ttnn.MathFidelity.HiFi4,
 ):
     compute_config = ttnn.init_device_compute_kernel_config(
         device.arch(),
-        math_fidelity=ttnn.MathFidelity.LoFi,
+        math_fidelity=math_fidelity,
         fp32_dest_acc_en=fp32_dest_acc_en,
         packer_l1_acc=False,
     )

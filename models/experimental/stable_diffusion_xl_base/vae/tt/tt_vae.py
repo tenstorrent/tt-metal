@@ -71,7 +71,13 @@ class TtVAEDecoder(nn.Module):
             self.tt_conv_in_bias,
             self.conv_in_params,
         ) = prepare_conv_params(
-            device, conv_in_weights, conv_in_bias, ttnn.bfloat16, act_block_h_override=32, fp32_dest_acc_en=True
+            device,
+            conv_in_weights,
+            conv_in_bias,
+            ttnn.bfloat16,
+            act_block_h_override=32,
+            fp32_dest_acc_en=True,
+            math_fidelity=ttnn.MathFidelity.LoFi,
         )
         self.conv_in_slice_config = get_DRAM_conv_config(None, 1)
 

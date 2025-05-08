@@ -73,18 +73,36 @@ class TtResnetBlock2D(nn.Module):
             self.tt_conv1_bias,
             self.conv1_params,
         ) = prepare_conv_params(
-            device, conv_weights_1, conv_bias_1, ttnn.bfloat16, act_block_h_override=32, fp32_dest_acc_en=True
+            device,
+            conv_weights_1,
+            conv_bias_1,
+            ttnn.bfloat16,
+            act_block_h_override=32,
+            fp32_dest_acc_en=True,
+            math_fidelity=ttnn.MathFidelity.LoFi,
         )
         self.conv1_slice_config = get_DRAM_conv_config(module_path, 1)
 
         _, _, self.tt_conv2_weights, self.tt_conv2_bias, self.conv2_params = prepare_conv_params(
-            device, conv_weights_2, conv_bias_2, ttnn.bfloat16, act_block_h_override=32, fp32_dest_acc_en=True
+            device,
+            conv_weights_2,
+            conv_bias_2,
+            ttnn.bfloat16,
+            act_block_h_override=32,
+            fp32_dest_acc_en=True,
+            math_fidelity=ttnn.MathFidelity.LoFi,
         )
         self.conv2_slice_config = get_DRAM_conv_config(module_path, 2)
 
         if conv_shortcut:
             _, _, self.tt_conv3_weights, self.tt_conv3_bias, self.conv3_params = prepare_conv_params(
-                device, conv_weights_3, conv_bias_3, ttnn.bfloat16, act_block_h_override=32, fp32_dest_acc_en=True
+                device,
+                conv_weights_3,
+                conv_bias_3,
+                ttnn.bfloat16,
+                act_block_h_override=32,
+                fp32_dest_acc_en=True,
+                math_fidelity=ttnn.MathFidelity.LoFi,
             )
         else:
             self.tt_conv3_weights = self.tt_conv3_bias = None
