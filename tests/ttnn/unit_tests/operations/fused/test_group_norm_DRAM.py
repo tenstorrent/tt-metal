@@ -123,6 +123,7 @@ def generate_sdxl_dram_test_inputs():
     return inputs
 
 
+@skip_for_blackhole("Fails on Blackhole. Issue #20913")
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 0}], indirect=True)
 @pytest.mark.parametrize("input_shape, core_grid_y, num_out_blocks", generate_sdxl_dram_test_inputs())
 def test_sdxl_base_group_norm(device, input_shape, core_grid_y, num_out_blocks, use_program_cache):
