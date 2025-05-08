@@ -101,7 +101,8 @@ struct SliceOperation {
         const ttnn::Tensor& output_tensor_end,
         const std::optional<ttnn::SmallVector<T>>& step,
         const std::optional<MemoryConfig>& memory_config_arg = std::nullopt,
-        const std::optional<Tensor>& optional_output_tensor = std::nullopt);
+        const std::optional<Tensor>& optional_output_tensor = std::nullopt,
+        const std::optional<float>& pad_value = std::nullopt);
 
     template <typename T>
     static ttnn::Tensor invoke(
@@ -110,7 +111,8 @@ struct SliceOperation {
         const ttnn::Tensor& output_tensor_end,
         const std::optional<ttnn::SmallVector<T>>& step,
         const std::optional<MemoryConfig>& memory_config_arg = std::nullopt,
-        const std::optional<Tensor>& optional_output_tensor = std::nullopt);
+        const std::optional<Tensor>& optional_output_tensor = std::nullopt,
+        const std::optional<float>& pad_value = std::nullopt);
 };
 
 }  // namespace data_movement

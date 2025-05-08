@@ -53,15 +53,22 @@ void bind_slice(py::module& module) {
         ttnn::pybind_overload_t{
             [](const OperationType& self,
                const ttnn::Tensor& input_tensor,
-               const ttnn::Tensor& begins,
-               const ttnn::Tensor& ends,
+               const ttnn::Tensor& slice_start,
+               const ttnn::Tensor& slice_end,
                const std::optional<ttnn::SmallVector<uint32_t>>& step,
                const std::optional<ttnn::MemoryConfig>& memory_config,
                const std::optional<Tensor>& optional_output_tensor,
                const std::optional<float>& pad_value,
                QueueId queue_id) {
                 return self(
-                    queue_id, input_tensor, begins, ends, step, memory_config, optional_output_tensor);
+                    queue_id,
+                    input_tensor,
+                    slice_start,
+                    slice_end,
+                    step,
+                    memory_config,
+                    optional_output_tensor,
+                    pad_value);
             },
             py::arg("input_tensor"),
             py::arg("starts"),

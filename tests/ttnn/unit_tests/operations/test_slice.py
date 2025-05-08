@@ -1077,7 +1077,7 @@ def test_ttnn_slice_whisper(
         ([10], 1, [2], [7], 1, ttnn.ROW_MAJOR_LAYOUT),
     ),
 )
-def test_slice_tensor(input_shape, dim, start, end, step, layout, device):
+def test_slice_tensor_args(input_shape, dim, start, end, step, layout, device):
     torch_input = torch.randn(input_shape, dtype=torch.bfloat16)
 
     torch_start_tensor = torch.tensor(start)
