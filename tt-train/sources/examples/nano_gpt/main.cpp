@@ -715,25 +715,6 @@ int main(int argc, char **argv) {
         fmt::print("Model loaded\n");
     }
 
-    if (is_eval) {
-        fmt::print("\nEvaluation started\n");
-        for (;;) {
-            generate(
-                model,
-                *tokenizer,
-                std::visit([](auto &&arg) { return arg.max_sequence_length; }, config.transformer_config),
-                num_heads,
-                /*tokens_to_generate: */ 20,
-                enable_tp,
-                eval_config.temperature,
-                eval_config.repetition_penalty,
-                eval_config.top_k,
-                eval_config.top_p);
-        }
-        fmt::print("\nEvaluation finished\n");
-        return 0;
-    }
-
     auto adamw_params = ttml::optimizers::AdamWConfig();
     adamw_params.lr = config.learning_rate;
     adamw_params.weight_decay = config.weight_decay;
@@ -767,6 +748,24 @@ int main(int argc, char **argv) {
         fmt::print("Model loaded after {} steps\n", optimizer->get_steps());
     }
 
+    if (is_eval) {
+        fmt::print("\nEvaluation started\n");
+        for (;;) {
+            generate(
+                model,
+                *tokenizer,
+                std::visit([](auto &&arg) { return arg.max_sequence_length; }, config.transformer_config),
+                num_heads,
+                sequence_length,
+                enable_tp,
+                eval_config.temperature,
+                eval_config.repetition_penalty,
+                eval_config.top_k,
+                eval_config.top_p);
+        }
+        fmt::print("\nEvaluation finished\n");
+        return 0;
+    }
     auto get_samples_count = [&config](uint32_t global_step) {
         return global_step * config.batch_size * config.gradient_accumulation_steps;
     };

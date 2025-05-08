@@ -21,7 +21,6 @@ training_config:
     vocab_size: 96
     max_sequence_length: 256
     runner_type: default
-    theta: 10000.0
 eval_config:
   repetition_penalty: 1.0
   temperature: 0.7
