@@ -329,6 +329,7 @@ private:
     Allocator* allocator_;
 
     AllocationStatus allocation_status_ = AllocationStatus::ALLOCATION_REQUESTED;
+    bool hooked_allocation_ = false;
     DeviceAddr address_ = 0;
 
     // Private helper function to commonize code path for buffer creation with either ShardSpecBuffer or
