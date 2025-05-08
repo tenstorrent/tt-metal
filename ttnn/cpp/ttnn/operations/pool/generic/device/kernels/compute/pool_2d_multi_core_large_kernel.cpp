@@ -35,6 +35,7 @@ inline void reduce_h_fused_interm(
 
     const uint32_t curr_in_cb_id = (split_reader && (in_stick_index & 0x1)) ? in_cb_id_1 : in_cb_id_0;
     cb_wait_front(curr_in_cb_id, 1);
+
     tile_regs_acquire();
     unpack_tilizeA_B_block(
         curr_in_cb_id,
@@ -110,6 +111,16 @@ void MAIN {
     constexpr uint32_t out_cb_id = get_compile_time_arg_val(13);
     constexpr uint32_t interm_cb_id = get_compile_time_arg_val(14);
     constexpr uint32_t in_one_cb_id = get_compile_time_arg_val(15);
+    constexpr uint32_t kernel_h = get_compile_time_arg_val(16);
+    constexpr uint32_t kernel_w = get_compile_time_arg_val(17);
+    constexpr uint32_t in_h = get_compile_time_arg_val(18);
+    constexpr uint32_t in_w = get_compile_time_arg_val(19);
+    constexpr uint32_t pad_h = get_compile_time_arg_val(20);
+    constexpr uint32_t pad_w = get_compile_time_arg_val(21);
+    constexpr uint32_t stride_h = get_compile_time_arg_val(22);
+    constexpr uint32_t stride_w = get_compile_time_arg_val(23);
+    uint32_t out_x = get_arg_val<uint32_t>(0);
+    uint32_t out_y = get_arg_val<uint32_t>(1);
 
     constexpr bool is_partial_tile = in_c < 32;
     static_assert((!is_partial_tile || (in_c == 16)), "Partial tile must have c_dim 16");
@@ -131,8 +142,34 @@ void MAIN {
         in_cb_id_0, in_scalar_cb_id, max_tiles_per_iter, interm_cb_id, num_faces_in_input_tile, max_rows_for_reduction);
 
     uint32_t interm_reduction_chunks = window_size_hw / max_rows_for_reduction;
+    bool includes_padding = false;
+    bool reached_padding = false;
+    bool first = true;
+    bool should_wait_for_new_scalar = false;
+
     cb_wait_front(in_scalar_cb_id, 1);
     for (uint32_t i = 0; i < nsticks_per_core_by_nblocks; ++i) {
+        if (REDUCE_OP == PoolType::SUM) {
+            includes_padding = (out_y * stride_h - pad_h) < 0 || (out_y * stride_h - pad_h + kernel_h) > in_h ||
+                               (out_x * stride_w - pad_w) < 0 || (out_x * stride_w - pad_w + kernel_w) > in_w;
+
+            if (((reached_padding && !includes_padding) || includes_padding) && !first) {
+                should_wait_for_new_scalar = true;
+            }
+            if (includes_padding) {
+                reached_padding = true;
+            }
+            if (first) {
+                first = false;
+            }
+
+            if (should_wait_for_new_scalar) {
+                should_wait_for_new_scalar = false;
+                cb_pop_front(in_scalar_cb_id, 1);
+                cb_wait_front(in_scalar_cb_id, 1);
+            }
+        }
+
         for (uint32_t b_i = 0; b_i < in_nblocks_c - 1; b_i++) {
             // perform the intermediate reductions over the first N - 1 whole chunks
             pack_untilize_uninit(interm_cb_id);

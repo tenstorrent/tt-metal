@@ -37,6 +37,7 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
     uint32_t num_shards_c,
     const MemoryConfig& out_mem_config,
     uint32_t nblocks,
+    bool count_include_pad,
     std::optional<int32_t> divisor_override) {
     // This should allocate a DRAM buffer on the device
     IDevice* device = input.device();
@@ -271,7 +272,6 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
     /**
      * Reader Kernel: input rows -> input cb
      */
-    uint32_t bf16_scalar = get_bf16_pool_scalar(pool_type, kernel_size_hw, divisor_override) << 16;
     float one = 1.;
     uint32_t bf16_one_u32 = *reinterpret_cast<uint32_t*>(&one);
     uint32_t bf16_init_value = get_bf16_pool_init_value(pool_type);
@@ -286,7 +286,6 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         input_shape[3] / num_shards_c,
         split_reader,  // enable split reader
         0,             // split reader id
-        bf16_scalar,
         bf16_one_u32,
         bf16_init_value,
         in_nblocks_c,
@@ -311,7 +310,6 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         input_shape[3] / num_shards_c,
         split_reader,  // enable split reader
         1,             // split reader id
-        bf16_scalar,
         bf16_one_u32,
         bf16_init_value,
         in_nblocks_c,
@@ -373,7 +371,16 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         in_scalar_cb_id,
         out_cb_id,
         max_pool_partials_cb_id,
-        in_one_cb_id};
+        in_one_cb_id,
+        kernel_size_h,
+        kernel_size_w,
+        in_h,
+        in_w,
+        pad_h / 2,
+        pad_w / 2,
+        stride_h,
+        stride_w,
+        ceil_pad_w};
 
     auto compute_config = tt::tt_metal::ComputeConfig{
         .math_fidelity = MathFidelity::HiFi4,
@@ -391,6 +398,57 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
     }
 
     auto compute_kernel = CreateKernel(program, compute_kernel_fname, all_cores, compute_config);
+    uint32_t x = 0;
+    uint32_t y = 0;
+    uint32_t channel = 0;
+    for (uint32_t index = 0; index < all_cores.ranges().size(); ++index) {
+        for (auto iterator = all_cores.ranges()[index].begin(); iterator != all_cores.ranges()[index].end();
+             ++iterator) {
+            // uint32_t out_stick_x_start = ((i % (ncores / num_shards_c)) * out_nhw_per_core) / out_w;
+            // uint32_t out_stick_y_start = ((i % (ncores / num_shards_c)) * out_nhw_per_core) % out_w;
+
+            std::vector<uint32_t> scalar_values = get_bf16_pool_scalar(
+                pool_type,
+                in_h,
+                in_w,
+                kernel_size_h,
+                kernel_size_w,
+                ceil_mode,
+                out_h,
+                out_w,
+                stride_h,
+                stride_w,
+                ceil_pad_w,
+                pad_h / 2,
+                pad_w / 2,
+                x,
+                y,
+                count_include_pad,
+                out_nhw_per_core,
+                divisor_override);
+
+            std::vector<uint32_t> runtime_args = {scalar_values.size()};
+            for (int j = 0; j < scalar_values.size(); j++) {
+                runtime_args.push_back(scalar_values[j] << 16);
+            }
+            tt::tt_metal::SetRuntimeArgs(program, compute_kernel, *iterator, {x, y});
+            tt::tt_metal::SetRuntimeArgs(program, reader0_kernel, *iterator, runtime_args);
+            tt::tt_metal::SetRuntimeArgs(program, reader1_kernel, *iterator, runtime_args);
+            // i++;
+            channel++;
+            if (channel % num_shards_c == 0) {
+                channel = 0;
+                x++;
+                if (x % out_w == 0) {
+                    x = 0;
+                    y++;
+                    if (y % out_h == 0) {
+                        y = 0;
+                    }
+                }
+            }
+        }
+    }
 
     // Capture reader_indices_buffer to cache this with the program
     return {
@@ -410,6 +468,7 @@ Pool2D::MultiCore::cached_program_t Pool2D::MultiCore::create(
     const auto& sliding_window_config = op_attr.sliding_window_config_;
     const auto& pool_type = op_attr.pool_type_;
     const auto& out_mem_config = op_attr.memory_config_;
+    bool count_include_pad = op_attr.count_include_pad_;
     std::optional<int32_t> divisor_override = op_attr.divisor_override_;
 
     tt::tt_metal::Program program{};
@@ -476,6 +535,7 @@ Pool2D::MultiCore::cached_program_t Pool2D::MultiCore::create(
         num_shards_c,
         out_mem_config,
         1,
+        count_include_pad,
         divisor_override);
 }
 

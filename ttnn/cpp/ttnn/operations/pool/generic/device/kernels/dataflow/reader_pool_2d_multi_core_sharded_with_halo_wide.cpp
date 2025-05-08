@@ -25,6 +25,14 @@ ALWI bool fill_with_val(uint32_t begin_addr, uint32_t n, uint16_t val) {
     return true;
 }
 
+inline void print_full_tile(uint32_t cb_id, uint32_t tile_id = 0, bool untilize = false) {
+    DPRINT << "======" << ENDL();
+    for (uint32_t r = 0; r < 32; ++r) {
+        SliceRange sr = SliceRange{.h0 = (uint8_t)r, .h1 = (uint8_t)(r + 1), .hs = 1, .w0 = 0, .w1 = 32, .ws = 1};
+        DPRINT_DATA0({ DPRINT << r << " " << TileSlice(cb_id, tile_id, sr, true, untilize) << ENDL(); });
+    }
+    DPRINT << "++++++" << ENDL();
+}
 /**
  * Pool 2D (Max pool 2D and Avg pool 2D)
  */
@@ -48,26 +56,18 @@ void kernel_main() {
 
     // compile time args
     // BF16 value packed in UINT32. For maxpool, value is 1, for avgpool value is 1/kernel_size.
-    constexpr uint32_t bf16_scalar = get_compile_time_arg_val(9);
 
-    constexpr uint32_t in_nblocks_c = get_compile_time_arg_val(12);
+    constexpr uint32_t in_nblocks_c = get_compile_time_arg_val(11);
 
-    constexpr uint32_t ceil_pad_w = get_compile_time_arg_val(15);
+    constexpr uint32_t ceil_pad_w = get_compile_time_arg_val(14);
 
     constexpr uint32_t TILE_WIDTH = 32;
     constexpr uint32_t MAX_ELE_PER_REDUCTION = 512;  // TILE_WIDTH * 8 * numbytes
 
-    constexpr uint32_t in_cb_id = (reader_id == 1) ? get_compile_time_arg_val(17) : get_compile_time_arg_val(16);
-    constexpr uint32_t in_shard_cb_id = get_compile_time_arg_val(18);
-    constexpr uint32_t in_reader_indices_cb_id = get_compile_time_arg_val(19);
-    constexpr uint32_t in_scalar_cb_id = get_compile_time_arg_val(20);
-
-    if (reader_id == 0) {
-        cb_reserve_back(in_scalar_cb_id, 1);
-        fill_with_val(get_write_ptr(in_scalar_cb_id), TILE_WIDTH, bf16_scalar >> 16);
-        cb_push_back(in_scalar_cb_id, 1);
-    }
-
+    constexpr uint32_t in_cb_id = (reader_id == 1) ? get_compile_time_arg_val(16) : get_compile_time_arg_val(15);
+    constexpr uint32_t in_shard_cb_id = get_compile_time_arg_val(17);
+    constexpr uint32_t in_reader_indices_cb_id = get_compile_time_arg_val(18);
+    constexpr uint32_t in_scalar_cb_id = get_compile_time_arg_val(19);
     const uint32_t in_l1_read_base_addr = get_read_ptr(in_shard_cb_id);
     uint32_t reader_indices_l1_addr = get_read_ptr(in_reader_indices_cb_id);
     volatile tt_l1_ptr uint16_t* reader_indices_ptr =
@@ -78,27 +78,41 @@ void kernel_main() {
     constexpr uint32_t npages_to_reserve = 1;
     uint32_t counter = reader_id;
     constexpr uint32_t read_bytes = MAX_ELE_PER_REDUCTION;
-    while (counter < reader_nindices) {
-        const uint16_t top_left_local_index = reader_indices_ptr[counter++];
-        for (uint32_t c_i = 0; c_i < in_nblocks_c; ++c_i) {
-            cb_reserve_back(in_cb_id, npages_to_reserve);
-            uint32_t out_l1_write_addr = get_write_ptr(in_cb_id);
-            for (uint32_t h = 0; h < window_h; ++h) {
-                for (uint32_t w = 0; w < window_w; ++w) {
-                    const uint32_t stick_offset = top_left_local_index + w + h * in_w_padded;
-                    const uint32_t read_offset =
-                        in_l1_read_base_addr +
-                        (stick_offset * in_nbytes_c + c_i * MAX_ELE_PER_REDUCTION);  // 2 bytes, max 8 tiles
-                    noc_async_read_one_packet(get_noc_addr(read_offset), out_l1_write_addr, read_bytes);
-                    out_l1_write_addr += MAX_ELE_PER_REDUCTION;
+    uint32_t scalars_cnt = get_arg_val<uint32_t>(0);
+    DPRINT << "cnt " << scalars_cnt << ENDL();
+    uint32_t scalar_index = 0;
+    while (counter < reader_nindices || (reader_id == 0 && scalar_index < scalars_cnt)) {
+        if (reader_id == 0 && scalar_index < scalars_cnt) {
+            uint32_t scalar_val = get_arg_val<uint32_t>(scalar_index + 1);
+            cb_reserve_back(in_scalar_cb_id, 1);
+            fill_with_val(get_write_ptr(in_scalar_cb_id), TILE_WIDTH, scalar_val >> 16);
+            scalar_index++;
+            cb_push_back(in_scalar_cb_id, 1);
+            print_full_tile(in_scalar_cb_id, scalar_index - 1);
+        }
+        if (counter < reader_nindices) {
+            const uint16_t top_left_local_index = reader_indices_ptr[counter++];
+            for (uint32_t c_i = 0; c_i < in_nblocks_c; ++c_i) {
+                cb_reserve_back(in_cb_id, npages_to_reserve);
+                uint32_t out_l1_write_addr = get_write_ptr(in_cb_id);
+                for (uint32_t h = 0; h < window_h; ++h) {
+                    for (uint32_t w = 0; w < window_w; ++w) {
+                        const uint32_t stick_offset = top_left_local_index + w + h * in_w_padded;
+                        const uint32_t read_offset =
+                            in_l1_read_base_addr +
+                            (stick_offset * in_nbytes_c + c_i * MAX_ELE_PER_REDUCTION);  // 2 bytes, max 8 tiles
+                        noc_async_read_one_packet(get_noc_addr(read_offset), out_l1_write_addr, read_bytes);
+                        out_l1_write_addr += MAX_ELE_PER_REDUCTION;
+                    }
                 }
-            }
-            noc_async_read_barrier();  // At this line, read is complete.
+                noc_async_read_barrier();  // At this line, read is complete.
 
-            cb_push_back(in_cb_id, npages_to_reserve);
-        }
-        if (split_reader) {
-            counter++;  // interleave the indices
-        }
+                cb_push_back(in_cb_id, npages_to_reserve);
+            }
+            if (split_reader) {
+                counter++;  // interleave the indices
+            }
+
+        }  // kernel_main()
     }
-}  // kernel_main()
+}
