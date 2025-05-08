@@ -329,4 +329,12 @@ def dump_model():
 if __name__ == "__main__":
     if args.dump_tokenizer_path is not None:
         tweak_and_dump_tokenizer()
-    dump_model()
+
+    if args.input_path is not None and args.output_path is not None:
+        dump_model()
+    elif not args.dump_tokenizer_path:
+        print("Nothing to do. Please either specify --dump_tokenizer_path or both of --input_path and --output_path.")
+        exit(1)
+    elif any([args.input_path, args.output_path]) and not all([args.input_path, args.output_path]):
+        print("Note: both of input_path and output_path are required to export the weights.")
+        exit(1)
