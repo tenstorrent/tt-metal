@@ -494,7 +494,8 @@ void RunAsyncWriteMulticastTest(
     auto control_plane = tt::tt_metal::MetalContext::instance().get_cluster().get_control_plane();
 
     // Find a device with enough neighbours in the specified directions
-    if (!fixture->find_device_with_neighbor_in_multi_direction(
+    if (!find_device_with_neighbor_in_multi_direction(
+            fixture,
             start_mesh_chip_id,
             end_mesh_chip_ids_by_dir,
             physical_start_device_id,
