@@ -1917,9 +1917,10 @@ class ModelArgs:
         else:
             if reference_model is None:
                 model = self.reference_transformer(wrap=False)
+                layer = model.model.embed_tokens
             else:
-                model = reference_model
-            layer = model.model.embed_tokens
+                layer = reference_model.model.model.embed_tokens
+
             layer._load_state_dict = layer.load_state_dict
             layer.load_state_dict = lambda x: layer._load_state_dict(convert_meta_to_hf(x, self.head_dim))
             return layer
