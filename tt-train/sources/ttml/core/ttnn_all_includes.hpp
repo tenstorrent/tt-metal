@@ -9,6 +9,10 @@
 #pragma GCC diagnostic ignored "-Wdeprecated-volatile"
 #pragma GCC diagnostic ignored "-Wdeprecated-this-capture"
 
+#include <cpp/ttnn/operations/copy.hpp>                                                            // NOLINT
+#include <cpp/ttnn/operations/core/core.hpp>                                                       // NOLINT
+#include <cpp/ttnn/operations/moreh/moreh_softmax/moreh_softmax.hpp>                               // NOLINT
+#include <cpp/ttnn/operations/moreh/moreh_softmax_backward/moreh_softmax_backward.hpp>             // NOLINT
 #include <hostdevcommon/common_values.hpp>                                                         // NOLINT
 #include <tt-metalium/base_types.hpp>                                                              // NOLINT
 #include <tt-metalium/bfloat16.hpp>                                                                // NOLINT
@@ -21,9 +25,7 @@
 #include <ttnn/distributed/api.hpp>                                                                // NOLINT
 #include <ttnn/distributed/types.hpp>                                                              // NOLINT
 #include <ttnn/operations/ccl/all_gather/all_gather.hpp>                                           // NOLINT
-#include <ttnn/operations/copy.hpp>                                                                // NOLINT
 #include <ttnn/operations/core/compute_kernel/compute_kernel_config.hpp>                           // NOLINT
-#include <ttnn/operations/core/core.hpp>                                                           // NOLINT
 #include <ttnn/operations/core/to_dtype/to_dtype_op.hpp>                                           // NOLINT
 #include <ttnn/operations/creation.hpp>                                                            // NOLINT
 #include <ttnn/operations/data_movement/concat/concat.hpp>                                         // NOLINT
@@ -58,8 +60,6 @@
 #include <ttnn/operations/moreh/moreh_mean_backward/moreh_mean_backward.hpp>                       // NOLINT
 #include <ttnn/operations/moreh/moreh_nll_loss/moreh_nll_loss.hpp>                                 // NOLINT
 #include <ttnn/operations/moreh/moreh_nll_loss_backward/moreh_nll_loss_backward.hpp>               // NOLINT
-#include <ttnn/operations/moreh/moreh_softmax/moreh_softmax.hpp>                                   // NOLINT
-#include <ttnn/operations/moreh/moreh_softmax_backward/moreh_softmax_backward.hpp>                 // NOLINT
 #include <ttnn/operations/moreh/moreh_sum/moreh_sum.hpp>                                           // NOLINT
 #include <ttnn/operations/normalization/softmax/softmax.hpp>                                       // NOLINT
 #include <ttnn/operations/reduction/generic/generic_reductions.hpp>                                // NOLINT

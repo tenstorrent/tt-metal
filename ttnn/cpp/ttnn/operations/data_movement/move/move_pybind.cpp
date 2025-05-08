@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn-pybind/decorators.hpp"
+#include "cpp/ttnn-pybind/decorators.hpp"
 
 #include "move.hpp"
 

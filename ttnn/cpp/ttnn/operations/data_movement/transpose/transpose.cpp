@@ -10,7 +10,7 @@
 #include "ttnn/operations/data_movement/permute/permute.hpp"
 #include "ttnn/operations/data_movement/permute/device/permute_device_operation.hpp"
 #include "ttnn/operations/data_movement/transpose/transpose.hpp"
-#include "ttnn/operations/copy.hpp"
+#include "cpp/ttnn/operations/copy.hpp"
 
 #include <tt-metalium/hal.hpp>
 

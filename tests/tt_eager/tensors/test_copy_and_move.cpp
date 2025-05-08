@@ -18,8 +18,8 @@
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/logger.hpp>
 #include <tt-metalium/shape.hpp>
-#include "ttnn/operations/creation.hpp"
-#include "ttnn/operations/experimental/reshape/view.hpp"
+#include "ttnn/cpp/ttnn/operations/creation.hpp"
+#include "ttnn/cpp/ttnn/operations/experimental/reshape/view.hpp"
 #include "ttnn/decorators.hpp"
 #include "ttnn/operations/functions.hpp"
 #include "ttnn/tensor/enum_types.hpp"
