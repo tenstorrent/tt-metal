@@ -406,20 +406,14 @@ split_across_cores(CoreCoord grid_size, uint32_t nbatch, uint32_t nchannel, uint
 
             TT_ASSERT(nbatch <= grid_size.y, "Unsupported case with nbatch > grid_size.y!");
 
-            uint32_t ncores_h = 1;
-            uint32_t ntiles_per_core_h = ntiles_h / ncores_h;
             if (nbatch_per_core_h == 0) {
                 // there are multiple cores along h per batch
                 nbatch_per_core_h = 1;
-                ncores_h = ncores_per_batch_h * nbatch;
-                ntiles_per_core_h = ntiles_h / ncores_per_batch_h;
             } else if (ncores_per_batch_h == 0) {
                 // unsupported case. TODO.
                 TT_ASSERT(false);
                 // there are multiple batch per core along h
                 // ncores_per_batch_h = 1;
-                // ncores_h = (uint32_t) ceil((float) nbatch / nbatch_per_core_h);
-                // ntiles_per_core_h = nbatch_per_core_h * ntiles_h;
             } else {
                 TT_THROW("Something went terribly wrong in splitting acrtoss cores");
             }

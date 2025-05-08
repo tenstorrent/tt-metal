@@ -69,7 +69,6 @@ tt::tt_metal::operation::ProgramWithCallbacks all_reduce_create_qkv_heads_minima
 
     //  Create CBs for reader/writer for batch_offset
     uint32_t batch_offset_cb_index_reader = tt::CBIndex::c_15;
-    tt::tt_metal::CBHandle cb_batch_offset_reader = 0;
 
     tt::DataFormat cb_batch_offset_data_format =
         tt::tt_metal::datatype_to_dataformat_converter(batch_offset_tensor.get_dtype());
@@ -80,7 +79,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_reduce_create_qkv_heads_minima
         tt::tt_metal::CircularBufferConfig(
             single_batch_offset_tile_size, {{batch_offset_cb_index_reader, cb_batch_offset_data_format}})
             .set_page_size(batch_offset_cb_index_reader, 1);
-    cb_batch_offset_reader = tt::tt_metal::CreateCircularBuffer(
+    tt::tt_metal::CreateCircularBuffer(
         program, output_tensor.memory_config().shard_spec->grid, cb_batch_offset_config_reader);
 
     uint32_t q_base_addr = q_output_tensor.buffer()->address();

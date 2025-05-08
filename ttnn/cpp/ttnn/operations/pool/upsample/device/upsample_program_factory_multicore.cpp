@@ -170,7 +170,6 @@ operation::ProgramWithCallbacks upsample_multi_core(
     auto all_cores = shard_spec.grid;
     uint32_t ncores = shard_spec.num_cores();
     uint32_t ncores_x = device->compute_with_storage_grid_size().x;
-    uint32_t ncores_nhw = ncores;
 
     auto out_shard_spec = output.shard_spec().value();
     TT_FATAL(
@@ -186,7 +185,6 @@ operation::ProgramWithCallbacks upsample_multi_core(
     // extra limitation to avoid post upsample step of resharding
     if (input.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED) {
         ncores_x = all_cores.ranges().begin()->end_coord.x - all_cores.ranges().begin()->start_coord.x + 1;
-        ncores_nhw = all_cores.ranges().begin()->end_coord.y - all_cores.ranges().begin()->start_coord.y + 1;
         input_stick_nbytes = input_stick_nbytes / ncores_x;
         output_stick_nbytes = output_stick_nbytes / ncores_x;
     }

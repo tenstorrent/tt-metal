@@ -207,11 +207,9 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_width_sh
     uint32_t pad_h = (uint32_t)sliding_window_config.get_pad_h();
     uint32_t pad_w = (uint32_t)sliding_window_config.get_pad_w();
 
-    uint32_t input_size_h = conv_act_size_h + pad_h;
     uint32_t input_size_w = conv_act_size_w + pad_w;
     if (sliding_window_config.is_transpose) {
         auto input_shape = sliding_window_config.get_transposed_full_input_shape();
-        input_size_h = input_shape[1];
         input_size_w = input_shape[2];
     }
 
