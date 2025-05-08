@@ -8,7 +8,6 @@
 
 #include "dispatch/kernels/packet_queue_ctrl.hpp"
 #include "fd_kernel.hpp"
-#include "system_memory_manager.hpp"
 
 struct mux_static_config_t {
     std::optional<uint32_t> reserved;

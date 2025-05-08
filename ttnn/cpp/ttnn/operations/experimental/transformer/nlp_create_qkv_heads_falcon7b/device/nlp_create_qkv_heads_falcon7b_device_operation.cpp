@@ -24,7 +24,7 @@ void NlpCreateHeadsFalcon7BDeviceOperation::validate(const std::vector<Tensor>& 
 
     TT_FATAL(input_shape[2] % tt::constants::TILE_HEIGHT == 0, "Error");
     TT_FATAL((input_shape == ttnn::Shape({input_shape[0], 1, input_shape[2], 4672})), "Unsupported input shape");
-    TT_FATAL(this->output_mem_config.memory_layout == TensorMemoryLayout::INTERLEAVED, "Error");
+    TT_FATAL(this->output_mem_config.memory_layout() == TensorMemoryLayout::INTERLEAVED, "Error");
 }
 
 std::vector<ttnn::TensorSpec> NlpCreateHeadsFalcon7BDeviceOperation::compute_output_specs(

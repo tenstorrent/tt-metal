@@ -24,7 +24,7 @@ void validate_fold(const std::vector<Tensor>& input_tensors, bool is_sharded, ui
     TT_FATAL(input_tensor.get_layout() == Layout::ROW_MAJOR, "Fold: Expect input tensor in row-major layout.");
     if (is_sharded) {
         TT_FATAL(
-            input_tensor.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED,
+            input_tensor.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED,
             "Fold: Only height-sharded input tensors are supported.");
 
         auto shard_shape = input_tensor.shard_spec().value().shape;
@@ -58,9 +58,10 @@ Fold::spec_return_value_t Fold::compute_output_specs(
          input_shape[3] * op_attr.stride_h * op_attr.stride_w});
 
     if (op_attr.is_sharded) {
-        MemoryConfig mem_config = input_tensor.memory_config();
-        mem_config.shard_spec->shape[0] /= op_attr.stride_h * op_attr.stride_w;
-        mem_config.shard_spec->shape[1] *= op_attr.stride_h * op_attr.stride_w;
+        auto shard_spec = input_tensor.shard_spec().value();
+        shard_spec.shape[0] /= op_attr.stride_h * op_attr.stride_w;
+        shard_spec.shape[1] *= op_attr.stride_h * op_attr.stride_w;
+        auto mem_config = input_tensor.memory_config().with_shard_spec(shard_spec);
 
         return {TensorSpec(
             output_shape,

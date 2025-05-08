@@ -44,7 +44,9 @@ namespace ttnn::operations::fused::normalization {
 
 namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {
-inline bool is_dram(const Tensor& input_tensor) { return input_tensor.memory_config().buffer_type == BufferType::DRAM; }
+inline bool is_dram(const Tensor& input_tensor) {
+    return input_tensor.memory_config().buffer_type() == BufferType::DRAM;
+}
 inline bool is_dram(const std::optional<const Tensor>& input_tensor) {
     return input_tensor.has_value() ? is_dram(input_tensor.value()) : true;
 }
@@ -131,9 +133,9 @@ operation::ProgramWithCallbacks frmsnorm_multi_core_sharded(
     const auto& cores = corerange_to_cores(all_cores, all_cores.num_cores(), true);
 
     // Tensor Info
-    const auto input_tensor_cores = a.memory_config().shard_spec->grid;
-    const auto output_tensor_cores = output.memory_config().shard_spec->grid;
-    const auto output_tensor_shard_shape = output.memory_config().shard_spec->shape;
+    const auto input_tensor_cores = a.memory_config().shard_spec()->grid;
+    const auto output_tensor_cores = output.memory_config().shard_spec()->grid;
+    const auto output_tensor_shard_shape = output.memory_config().shard_spec()->shape;
     const auto output_tensor_shard_num_pages = output_tensor_shard_shape[0] * output_tensor_shard_shape[1] / TILE_HW;
 
     // L1 Scratch CB Creation
@@ -900,8 +902,7 @@ operation::ProgramWithCallbacks frmsnorm_multi_core_sharded(
 
         tt::log_debug("core: {}, {}", core.x, core.y);
 
-        uint32_t height_index = 0, width_index = 0;
-        height_index = 0;
+        uint32_t width_index = 0;
         width_index = i;
 
         uint32_t width_index_two_stage = width_index % num_blocks_first_stage;
@@ -1045,7 +1046,6 @@ operation::ProgramWithCallbacks frmsnorm_multi_core_sharded(
             }
         }
         // Set writer runtime args
-
         std::vector<uint32_t> write_back_writer_args;
 
         uint32_t num_storage_cores = all_storage_cores.num_cores();

@@ -94,6 +94,7 @@ enum class UnaryOpType {
     FILL,
     PRELU_SFPU,
     ZERO_POINT,
+    ALT_COMPLEX_ROTATE90,
     MISH,
     MAXIMUM,
     MINIMUM,

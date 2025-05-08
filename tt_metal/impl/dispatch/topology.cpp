@@ -43,6 +43,7 @@
 #include "tt-metalium/program.hpp"
 #include <tt_stl/span.hpp>
 #include <tt-metalium/fabric.hpp>
+#include "system_memory_manager.hpp"
 #include "tt_metal/fabric/fabric_host_utils.hpp"
 #include <umd/device/tt_core_coordinates.h>
 #include <umd/device/tt_xy_pair.h>
@@ -582,6 +583,16 @@ std::vector<DispatchKernelNode> generate_nodes(const std::set<chip_id_t>& device
 
                 // Pull nodes from the template, updating their index and device id
                 for (DispatchKernelNode node : *nodes_for_one_mmio) {
+                    TT_ASSERT(
+                        node.device_id < template_id_to_device_id.size(),
+                        "Device id {} out of bounds (max = {})",
+                        node.device_id,
+                        template_id_to_device_id.size());
+                    TT_ASSERT(
+                        node.servicing_device_id < template_id_to_device_id.size(),
+                        "Servicing device id {} out of bounds (max = {})",
+                        node.servicing_device_id,
+                        template_id_to_device_id.size());
                     node.device_id = template_id_to_device_id[node.device_id];
                     node.servicing_device_id = template_id_to_device_id[node.servicing_device_id];
                     increment_node_ids(node, index_offset);
@@ -684,13 +695,23 @@ void populate_fd_kernels(const std::vector<DispatchKernelNode>& nodes) {
 
     // Connect the graph with upstream/downstream kernels
     for (const auto& node : nodes) {
-        for (int idx = 0; idx < k_dispatch_max_upstream_kernels; idx++) {
+        for (int idx = 0; idx < node.upstream_ids.size(); idx++) {
             if (node.upstream_ids[idx] >= 0) {
+                TT_ASSERT(
+                    node.upstream_ids[idx] < node_id_to_kernel.size(),
+                    "Upstream kernel id {} out of bounds (max = {})",
+                    node.upstream_ids[idx],
+                    node_id_to_kernel.size());
                 node_id_to_kernel.at(node.id)->AddUpstreamKernel(node_id_to_kernel.at(node.upstream_ids[idx]));
             }
         }
-        for (int idx = 0; idx < k_dispatch_max_downstream_kernels; idx++) {
+        for (int idx = 0; idx < node.downstream_ids.size(); idx++) {
             if (node.downstream_ids[idx] >= 0) {
+                TT_ASSERT(
+                    node.downstream_ids[idx] < node_id_to_kernel.size(),
+                    "Downstream kernel id {} out of bounds (max = {})",
+                    node.downstream_ids[idx],
+                    node_id_to_kernel.size());
                 node_id_to_kernel.at(node.id)->AddDownstreamKernel(node_id_to_kernel.at(node.downstream_ids[idx]));
             }
         }
@@ -853,6 +874,8 @@ std::unique_ptr<Program> create_and_compile_cq_program(IDevice* device) {
 
     // Compile the program and return it so Device can register it
     detail::CompileProgram(device, *cq_program, /*force_slow_dispatch=*/true);
+    // Write runtime args to device
+    detail::WriteRuntimeArgsToDevice(device, *cq_program, /*force_slow_dispatch=*/true);
     // Erase from map. Note: program in map is no longer valid
     // It is returned from this function and the caller will take ownership of it
     command_queue_pgms.erase(device->id());
