@@ -19,6 +19,8 @@ import argparse
 import re
 from collections import Counter
 import ipdb
+import json
+import os
 
 msgpack_numpy.patch()
 
@@ -45,15 +47,12 @@ args = parser.parse_args()
 
 @ipdb.iex
 def tweak_and_dump_tokenizer():
-    tokenizer = AutoTokenizer.from_pretrained(parser.parse_args().hf_model)
     """
     Get the tokenizer JSON and modify the decoder part to remove the strip clause.
     This function loads the tokenizer from the HF model, modifies its configuration,
     and saves it to a JSON file.
     """
-    import json
-    import os
-
+    tokenizer = AutoTokenizer.from_pretrained(parser.parse_args().hf_model)
     assert args.dump_tokenizer_path is not None
 
     # Get the tokenizer configuration as a dictionary
