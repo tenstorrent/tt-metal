@@ -15,12 +15,11 @@ from ttnn.model_preprocessing import preprocess_model_parameters
 
 from models.demos.vit.tt import ttnn_optimized_sharded_vit_wh as ttnn_optimized_sharded_vit
 from models.demos.vit.reference import torch_functional_vit
-from models.utility_functions import torch_random, skip_for_grayskull
+from models.utility_functions import torch_random
 
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
-@skip_for_grayskull("Requires wormhole_b0 to run")
 @pytest.mark.parametrize("model_name", ["google/vit-base-patch16-224"])
 @pytest.mark.parametrize("batch_size", [8])
 @pytest.mark.parametrize("image_size", [224])
@@ -79,7 +78,6 @@ def test_vit_patch_embeddings(device, model_name, batch_size, image_size, image_
     assert_with_pcc(torch_output, output[0], 0.999)
 
 
-@skip_for_grayskull("Requires wormhole_b0 to run")
 @pytest.mark.parametrize("model_name", ["google/vit-base-patch16-224"])
 @pytest.mark.parametrize("batch_size", [8])
 @pytest.mark.parametrize("image_size", [224])
@@ -167,7 +165,6 @@ def test_vit_embeddings(device, model_name, batch_size, image_size, image_channe
     assert_with_pcc(torch_output, output[0][:197:], 0.99)
 
 
-@skip_for_grayskull("Requires wormhole_b0 to run")
 @pytest.mark.parametrize("model_name", ["google/vit-base-patch16-224"])
 @pytest.mark.parametrize("batch_size", [8])
 @pytest.mark.parametrize("sequence_size", [224])  # padded from 197 to 224
@@ -228,7 +225,6 @@ def test_vit_attention(device, model_name, batch_size, sequence_size):
     assert_with_pcc(torch_output, output, 0.99)
 
 
-@skip_for_grayskull("Requires wormhole_b0 to run")
 @pytest.mark.parametrize("model_name", ["google/vit-base-patch16-224"])
 @pytest.mark.parametrize("batch_size", [8])
 @pytest.mark.parametrize("sequence_size", [224])  # padded from 197 to 224
@@ -259,7 +255,6 @@ def test_vit_intermediate(device, model_name, batch_size, sequence_size):
     assert_with_pcc(torch_output, output.to(torch_output.dtype), 0.99)
 
 
-@skip_for_grayskull("Requires wormhole_b0 to run")
 @pytest.mark.parametrize("model_name", ["google/vit-base-patch16-224"])
 @pytest.mark.parametrize("batch_size", [8])
 @pytest.mark.parametrize("sequence_size", [224])  # padded from 197 to 224
@@ -306,7 +301,6 @@ def test_vit_output(device, model_name, batch_size, sequence_size):
     assert_with_pcc(torch_output, output.to(torch_output.dtype), 0.9999)
 
 
-@skip_for_grayskull("Requires wormhole_b0 to run")
 @pytest.mark.parametrize("model_name", ["google/vit-base-patch16-224"])
 @pytest.mark.parametrize("batch_size", [8])
 @pytest.mark.parametrize("sequence_size", [224])  # padded from 197 to 224
@@ -366,7 +360,6 @@ def test_vit_layer(device, model_name, batch_size, sequence_size):
     assert_with_pcc(torch_output, output, 0.998)
 
 
-@skip_for_grayskull("Requires wormhole_b0 to run")
 @pytest.mark.parametrize("model_name", ["google/vit-base-patch16-224"])
 @pytest.mark.parametrize("batch_size", [8])
 @pytest.mark.parametrize("sequence_size", [224])  ## padded from 197 to 224
@@ -422,7 +415,6 @@ def test_vit_encoder(device, model_name, batch_size, sequence_size):
     assert_with_pcc(torch_output, output, 0.981)
 
 
-@skip_for_grayskull("Requires wormhole_b0 to run")
 @pytest.mark.parametrize("model_name", ["google/vit-base-patch16-224"])
 @pytest.mark.parametrize("batch_size", [8])
 @pytest.mark.parametrize("image_size", [224])
