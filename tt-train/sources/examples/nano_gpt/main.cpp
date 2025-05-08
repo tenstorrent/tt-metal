@@ -386,6 +386,10 @@ struct TrainingConfig {
     bool use_clip_grad_norm = false;
     float clip_grad_norm_max_norm = 1.0F;
     std::variant<ttml::models::gpt2::TransformerConfig, ttml::models::llama::LlamaConfig> transformer_config;
+
+    // mpi config
+    bool enable_mpi = false;
+    uint32_t num_mpi_workers = 0U;
 };
 
 TrainingConfig parse_config(const YAML::Node &yaml_config) {
@@ -420,6 +424,11 @@ TrainingConfig parse_config(const YAML::Node &yaml_config) {
     } else {
         throw std::runtime_error("Unknown model type: " + config.model_type);
     }
+
+    auto mpi_config = yaml_config["mpi_config"];
+    config.enable_mpi = mpi_config["enable_mpi"].as<bool>(false);
+    config.num_mpi_workers = mpi_config["num_mpi_workers"].as<uint32_t>(0U);
+
     return config;
 }
 

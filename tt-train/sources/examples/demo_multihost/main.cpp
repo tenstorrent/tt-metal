@@ -169,6 +169,7 @@ void regression_training() {
     auto& device = ctx.get_device();
     auto& mpi_ctx = ctx.get_mpi_context();
     int rank = mpi_ctx.get_rank();
+
     LinearRegressionParameters params{};
     auto training_params = ttml::datasets::MakeRegressionParams{
         .n_samples = params.training_samples_count,
@@ -218,7 +219,7 @@ void regression_training() {
 
         for (int i = 0; i < params.num_epochs; i++) {
             fmt::print("Rank {}: Optimizer epoch {}\n", rank, i);
-            for (int i = 0; i < params.training_samples_count / params.batch_size; i++) {
+            for (int _ = 0; _ < params.training_samples_count / params.batch_size; _++) {
                 optimizer.optimization_step();
                 optimizer.send_weights();
             }

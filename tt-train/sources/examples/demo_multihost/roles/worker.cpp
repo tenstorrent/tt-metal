@@ -74,6 +74,7 @@ Worker::Worker(DataLoader train_dataloader, std::shared_ptr<ttml::modules::Linea
     m_train_dataloader(std::move(train_dataloader)), m_model(std::move(model)), m_aggregator_rank(aggregator_rank) {
     m_optimizer = std::make_shared<RemoteOptimizer>(m_model->parameters(), m_aggregator_rank);
 }
+
 void Worker::training_step() {
     auto& ctx = ttml::autograd::ctx();
     auto& mpi_ctx = ctx.get_mpi_context();

@@ -1,0 +1,154 @@
+#include <CLI/CLI.hpp>
+
+// TODO: improve include path
+#include "../utils.hpp"
+#include "autograd/auto_context.hpp"
+#include "config.hpp"
+#include "core/distributed/distributed.hpp"
+#include "datasets/utils.hpp"
+#include "models/gpt2.hpp"
+#include "tokenizers/bpe_tokenizer.hpp"
+#include "tokenizers/char_tokenizer.hpp"
+
+using SortedParameters = std::map<std::string, ttml::autograd::TensorPtr>;
+
+uint32_t get_steps_per_dataset(const TrainingConfig &config) {
+    std::string text;
+    std::variant<std::string, std::vector<uint32_t>> text_or_tokens;
+    try {
+        text = read_file_to_str(config.data_path);
+        // check file extension:
+        if (config.data_path.ends_with(".txt")) {
+            text_or_tokens = read_file_to_str(config.data_path);
+        } else {
+            text_or_tokens = ttml::datasets::load_tokens_from_space_separated_file(config.data_path);
+        }
+    } catch (const std::exception &e) {
+        std::cerr << e.what() << std::endl;
+        return -1;
+    }
+    auto sequence_length = config.transformer_config.max_sequence_length;
+
+    auto create_dataset_and_tokenizer =
+        [](const auto &text, const auto sequence_length, const auto &tokenizer_path, const auto &tokenizer_type) {
+            if (tokenizer_type == "char") {
+                return ttml::datasets::create_in_memory_token_dataset<ttml::tokenizers::CharTokenizer>(
+                    std::get<0>(text), sequence_length);
+            } else if (tokenizer_type == "bpe") {
+                return std::visit(
+                    [&](const auto &tokens) {
+                        return ttml::datasets::create_in_memory_token_dataset<ttml::tokenizers::BPETokenizer>(
+                            tokens, sequence_length, tokenizer_path);
+                    },
+                    text);
+            } else {
+                throw std::runtime_error("Unknown tokenizer type: " + tokenizer_type);
+            }
+        };
+
+    auto [dataset, tokenizer] =
+        create_dataset_and_tokenizer(text_or_tokens, sequence_length, config.tokenizer_path, config.tokenizer_type);
+
+    auto dataset_size = dataset->size();
+    auto steps_per_dataset = dataset_size / (config.batch_size * config.gradient_accumulation_steps);
+    return steps_per_dataset;
+}
+
+void send_aggregated_gradients_from_workers_to_optimizer(const SortedParameters &sorted_model_parameters, int workers) {
+    auto &ctx = ttml::autograd::ctx();
+    auto &mpi_ctx = ctx.get_mpi_context();
+
+    uint32_t optimizer_rank = mpi_ctx.get_rank() + 1U;
+
+    assert(workers > 0);
+    for (auto &[name, tensor_ptr] : sorted_model_parameters) {
+        if (!tensor_ptr->get_requires_grad()) {
+            continue;
+        }
+
+        // TODO: allow usage of tensor from model parameters (avoids redundant storage of a model)
+        auto tensor = ttnn::empty_like(tensor_ptr->get_value());
+        ttml::core::distributed::recv_tensor(tensor, 0);
+
+        for (uint32_t worker_id = 1U; worker_id < workers; ++worker_id) {
+            auto tensor_to_add = ttnn::empty_like(tensor_ptr->get_value());
+            ttml::core::distributed::recv_tensor(tensor_to_add, worker_id);
+            tensor = ttnn::add(tensor, tensor_to_add);
+        }
+
+        ttml::core::distributed::send_tensor(tensor, optimizer_rank);
+    }
+}
+
+void send_weights_from_optimizer_to_workers(const SortedParameters &sorted_model_parameters, int workers) {
+    auto &ctx = ttml::autograd::ctx();
+    auto &mpi_ctx = ctx.get_mpi_context();
+
+    uint32_t optimizer_rank = mpi_ctx.get_rank() + 1U;
+
+    assert(workers > 0);
+    for (auto &[name, tensor_ptr] : sorted_model_parameters) {
+        if (!tensor_ptr->get_requires_grad()) {
+            continue;
+        }
+
+        auto tensor = tensor_ptr->get_value();
+        ttml::core::distributed::recv_tensor(tensor, optimizer_rank);
+
+        for (uint32_t worker_id = 0; worker_id < workers; ++worker_id) {
+            ttml::core::distributed::send_tensor(tensor, worker_id);
+        }
+    }
+}
+
+int main(int argc, char **argv) {
+    auto &ctx = ttml::autograd::ctx();
+    auto &mpi_ctx = ctx.get_mpi_context();
+
+    CLI::App app{"Multihost Example"};
+    fmt::print("Size {}, Rank {}: Initializing MPI context\n", mpi_ctx.get_size(), mpi_ctx.get_rank());
+    argv = app.ensure_utf8(argv);
+
+    std::string config_name = std::string(CONFIGS_FOLDER) + "/training_shakespear_nanogpt_3tier.yaml";
+
+    app.add_option("-c,--config", config_name, "Yaml Config name")->default_val(config_name);
+
+    CLI11_PARSE(app, argc, argv);
+
+    auto yaml_config = YAML::LoadFile(config_name);
+    TrainingConfig config = parse_config(yaml_config);
+
+    auto *device = ttml::autograd::ctx().get_device();
+    device->enable_program_cache();
+
+    auto model = ttml::models::gpt2::create(config.transformer_config);
+
+    auto model_parameters = model->parameters();
+    auto sorted_model_parameters = SortedParameters(model_parameters.begin(), model_parameters.end());
+
+    auto workers = config.num_mpi_workers;
+    send_weights_from_optimizer_to_workers(sorted_model_parameters, workers);
+
+    auto steps_per_dataset = get_steps_per_dataset(config);
+
+    uint32_t global_step = 0;
+    for (uint32_t epoch = 0; epoch < config.num_epochs; ++epoch) {
+        for (uint32_t step = 0; step < steps_per_dataset; ++step, ++global_step) {
+            send_aggregated_gradients_from_workers_to_optimizer(sorted_model_parameters, workers);
+            send_weights_from_optimizer_to_workers(sorted_model_parameters, workers);
+            if (global_step >= config.max_steps) {
+                break;
+            }
+        }
+        if (global_step >= config.max_steps) {
+            break;
+        }
+        fmt::print("[aggregator] Rank {}: Training epoch {} finished\n", mpi_ctx.get_rank(), epoch);
+    }
+
+    fmt::print("[aggregator] Rank {}: Training finished\n", mpi_ctx.get_rank());
+    mpi_ctx.barrier();
+    mpi_ctx.finalize();
+    fmt::print("Rank {}: Finalized MPI context\n", mpi_ctx.get_rank());
+    return 0;
+}
