@@ -240,7 +240,8 @@ ttnn::Tensor SliceOperation::invoke(
     const ttnn::Tensor& output_tensor_end,
     const std::optional<ttnn::SmallVector<T>>& step,
     const std::optional<MemoryConfig>& memory_config_arg,
-    const std::optional<Tensor>& optional_output_tensor) {
+    const std::optional<Tensor>& optional_output_tensor,
+    const std::optional<float>& pad_value) {
     TT_FATAL(
         output_tensor_start.get_logical_shape().rank() == 1,
         "The start tensor for slicing must be in 1D shape, but got {}D",
@@ -282,7 +283,7 @@ ttnn::Tensor SliceOperation::invoke(
     const std::optional<MemoryConfig>& memory_config_arg,
     const std::optional<Tensor>& optional_output_tensor,
     const std::optional<float>& pad_value) {
-    return SliceOperation::invoke<T, N>(
+    return SliceOperation::invoke<T>(
         ttnn::DefaultQueueId,
         input_tensor,
         output_tensor_start,
