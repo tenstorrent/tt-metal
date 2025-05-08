@@ -11,5 +11,3 @@
 
 #include <tt-metalium/buffer.hpp>
 #include <umd/device/tt_core_coordinates.h>
-
-#include <tt-metalium/system_memory_cq_interface.hpp>
