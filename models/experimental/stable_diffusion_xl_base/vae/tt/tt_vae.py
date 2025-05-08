@@ -147,7 +147,7 @@ class TtVAEDecoder(nn.Module):
         hidden_states = ttnn.silu(hidden_states)
 
         # HOST FALLBACK: Conv2d
-        hidden_states = ttnn.to_torch(hidden_states)  # .float()
+        hidden_states = ttnn.to_torch(hidden_states).float()
         hidden_states = hidden_states.reshape(B, H, W, C)
         hidden_states = torch.permute(hidden_states, (0, 3, 1, 2))
 

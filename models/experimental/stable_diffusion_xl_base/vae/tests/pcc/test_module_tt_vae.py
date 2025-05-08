@@ -23,7 +23,7 @@ from loguru import logger
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 4 * 16384}], indirect=True)
 def test_vae(device, input_shape, reset_seeds):
     vae = AutoencoderKL.from_pretrained(
-        "stabilityai/stable-diffusion-xl-base-1.0", torch_dtype=torch.bfloat16, use_safetensors=True, subfolder="vae"
+        "stabilityai/stable-diffusion-xl-base-1.0", torch_dtype=torch.float32, use_safetensors=True, subfolder="vae"
     )
     vae.eval()
     state_dict = vae.state_dict()
@@ -33,7 +33,7 @@ def test_vae(device, input_shape, reset_seeds):
     logger.info("Loading weights to device")
     tt_vae = TtVAEDecoder(device, state_dict)
     logger.info("Loaded weights")
-    torch_input_tensor = torch_random(input_shape, -0.1, 0.1, dtype=torch.bfloat16)
+    torch_input_tensor = torch_random(input_shape, -0.1, 0.1, dtype=torch.float32)
 
     logger.info("Running reference model")
     torch_output_tensor = torch_vae(torch_input_tensor)
