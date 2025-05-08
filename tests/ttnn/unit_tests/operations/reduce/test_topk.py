@@ -133,12 +133,11 @@ def test_topk(N, C, H, W, dim, k, dtype, sorted, largest, device, sub_core_grids
     [
         ttnn.CoreRangeSet(
             [
-                ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(3, 9)),
+                ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(3, 7)),
             ]
         ),
     ],
 )
-@pytest.mark.parametrize("device_params", [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL}], indirect=True)
 def test_topk_sub_core_grids(N, C, H, W, dim, k, dtype, sorted, largest, device, sub_core_grids):
     if dim == 0 or dim == 1:
         # As of now, when we try to get top-k for dim = 0 or 1, we get following error from transpose_op.cpp's validate():
