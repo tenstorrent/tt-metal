@@ -168,10 +168,22 @@ class TtResnetBlock2D(nn.Module):
         # TBD: reshard
         if C >= 1920:
             hidden_states = ttnn.sharded_to_interleaved(hidden_states, ttnn.L1_MEMORY_CONFIG)
+            if C == 1920:
+                if H == 32:
+                    self.conv_config.act_block_h_override = 8 * 32
+                else:
+                    self.conv_config.act_block_h_override = 8 * 32
+            else:
+                self.conv_config.act_block_h_override = 8 * 32
+            # self.conv_config.enable_act_double_buffer=True
+        else:
+            self.conv_config.act_block_h_override = 32 if hidden_states.is_sharded() else 0
+            # self.conv_config.enable_act_double_buffer=False
+
         self.conv_config.shard_layout = (
             hidden_states.memory_config().memory_layout if hidden_states.is_sharded() else None
         )
-        self.conv_config.act_block_h_override = 32 if hidden_states.is_sharded() else 0
+        # self.conv_config.act_block_h_override = 32 if hidden_states.is_sharded() else 0
 
         if self.split_conv:
             hidden_states = ttnn.to_layout(hidden_states, ttnn.ROW_MAJOR_LAYOUT)
@@ -254,6 +266,20 @@ class TtResnetBlock2D(nn.Module):
         hidden_states = ttnn.silu(hidden_states)
 
         hidden_states = ttnn.sharded_to_interleaved(hidden_states, ttnn.L1_MEMORY_CONFIG)
+        if C >= 1920:
+            hidden_states = ttnn.sharded_to_interleaved(hidden_states, ttnn.L1_MEMORY_CONFIG)
+            if C == 1920:
+                if H == 32:
+                    self.conv_config.act_block_h_override = 16 * 32
+                else:
+                    self.conv_config.act_block_h_override = 8 * 32
+            else:
+                self.conv_config.act_block_h_override = 8 * 32
+            # self.conv_config.enable_act_double_buffer=True
+        else:
+            self.conv_config.act_block_h_override = 32 if hidden_states.is_sharded() else 0
+            # self.conv_config.enable_act_double_buffer=False
+
         self.conv_config.shard_layout = None
         [hidden_states, [H, W], [d_w, d_b]] = ttnn.conv2d(
             input_tensor=hidden_states,

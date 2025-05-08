@@ -129,9 +129,9 @@ def test_unet(
         device, torch_input_tensor, torch_timestep_tensor, torch_temb_tensor, torch_encoder_tensor, torch_time_ids
     )
 
-    # import tracy
+    import tracy
 
-    # tracy.signpost("Compilation pass")
+    tracy.signpost("Compilation pass")
     _, _ = tt_unet.forward(
         ttnn_input_tensor,
         [B, C, H, W],
@@ -150,7 +150,7 @@ def test_unet(
         device, torch_input_tensor, torch_timestep_tensor, torch_temb_tensor, torch_encoder_tensor, torch_time_ids
     )
 
-    # tracy.signpost("Second pass")
+    tracy.signpost("Second pass")
     ttnn_output_tensor, output_shape = tt_unet.forward(
         ttnn_input_tensor,
         [B, C, H, W],

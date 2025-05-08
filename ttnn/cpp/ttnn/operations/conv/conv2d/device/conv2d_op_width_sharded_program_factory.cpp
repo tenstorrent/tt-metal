@@ -626,6 +626,14 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_width_sh
         a.buffer());
 
     cb_indices.act_cb = cb_indices.get_next_cb_index();
+    // uint32_t act_cb_size = act_block_num_tiles_split;
+    // if (enable_act_double_buffer) {
+    //     act_cb_size *= 2;
+    // }
+
+    // tt::tt_metal::create_cb(cb_indices.act_cb, program, all_cores, tilized_act_tile_size, act_cb_size,
+    // tilized_act_df); log_debug(LogOp, "Act CB: {}, npages: {}, pagesize: {}", cb_indices.act_cb, act_cb_size,
+    // tilized_act_tile_size);
     tt::tt_metal::create_cb(
         cb_indices.act_cb, program, all_cores, tilized_act_tile_size, act_block_num_tiles_split, tilized_act_df);
     log_debug(
