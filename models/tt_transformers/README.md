@@ -11,6 +11,7 @@ The current version is verified to work with the following models:
 - Llama3.2-90B (LoudBox / QuietBox)
 - Qwen2.5-7B (N300)
 - Qwen2.5-72B (LoudBox / QuietBox)
+- Qwen3-32B (LoudBox / QuietBox)
 - DeepSeek R1 Distill Llama 3.3 70B (LoudBox / QuietBox and Galaxy)
 - [Mistral-7B-Instruct-v0.3](https://huggingface.co/mistralai/Mistral-7B-Instruct-v0.3)
 
