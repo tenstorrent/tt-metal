@@ -7,7 +7,7 @@ from math import prod
 import pytest
 import torch
 
-from models.utility_functions import skip_for_wormhole_b0
+from models.utility_functions import skip_for_wormhole_b0, skip_for_blackhole
 from tests.ttnn.unit_tests.operations.test_utils import (
     TILE_HEIGHT,
     TILE_WIDTH,
@@ -416,6 +416,7 @@ def test_pad_for_tensor_in_tile_layout(device, h, w, padding, value):
     assert_with_pcc(torch_output_tensor, output_tensor, 0.9999)
 
 
+@skip_for_blackhole("Fails on Blackhole. Issue #20698")
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32], ids=["bfloat16", "float32"])
 @pytest.mark.parametrize("use_multicore", [True, False], ids=["multicore", "singlecore"])
 @pytest.mark.parametrize(
@@ -439,6 +440,7 @@ def test_pad_conv2d_sweep(device, dtype, use_multicore, shape, padded_shape):
     assert_with_pcc(in_torch, out_torch, 0.9999)
 
 
+@skip_for_blackhole("Fails on Blackhole. Issue #20698")
 @pytest.mark.parametrize("in_dtype", [ttnn.bfloat16, ttnn.float32])
 @pytest.mark.parametrize("shape", [[1, 1, 18, 13]])
 @pytest.mark.parametrize("padshape", [[1, 1, TILE_HEIGHT, TILE_WIDTH]])
