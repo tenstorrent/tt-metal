@@ -92,7 +92,7 @@ ALWI void transpose_wh_tile(uint32_t icb, uint32_t itile, uint32_t idst) {
         copy_tile_init(icb);
         copy_tile(icb, itile, idst);
 
-        transpose_wh_dest_init_short();
+        transpose_wh_dest_init_short<true>();
         transpose_wh_dest<true>(idst);
     } else {
         UNPACK((llk_unpack_A<BroadcastType::NONE, false>(icb, itile, false)));

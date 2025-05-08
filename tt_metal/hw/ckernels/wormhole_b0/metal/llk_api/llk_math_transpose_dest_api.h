@@ -10,4 +10,5 @@
 template <bool is_32bit = false>
 inline void llk_math_transpose_dest(uint dst_index) { _llk_math_transpose_dest_<is_32bit>(dst_index); }
 
-inline void llk_math_transpose_dest_init() { _llk_math_transpose_dest_init_(); }
+template <bool is_32bit = false>
+inline void llk_math_transpose_dest_init() { _llk_math_transpose_dest_init_<is_32bit>(); }
