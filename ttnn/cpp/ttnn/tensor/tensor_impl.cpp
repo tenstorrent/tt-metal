@@ -814,7 +814,7 @@ DeviceStorage to_device_mesh_buffer(
             [&mesh_buffer, &tensor_spec, cq_id, &host_tensor_attributes](const MultiDeviceHostStorage& storage) {
                 // Shard multi device host shards across devices in a mesh.
                 auto* mesh_device = mesh_buffer->device();
-                auto coords = host_tensor_attributes.determine_coords(mesh_device->shape());
+                auto coords = host_tensor_attributes.determine_distribution(mesh_device->shape());
                 return shard_to_mesh_buffer<T>(storage, mesh_device, mesh_buffer, tensor_spec, coords, cq_id);
             },
             [](const auto& s) -> DeviceStorage { TT_THROW("Unexpected storage type {}", tt::stl::get_type_name(s)); }},

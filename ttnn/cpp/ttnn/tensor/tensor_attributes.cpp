@@ -32,7 +32,7 @@ const DistributedTensorConfig& TensorAttributes::get_distributed_tensor_config()
     return distributed_tensor_config_;
 }
 
-std::vector<distributed::MeshCoordinate> TensorAttributes::determine_coords(
+std::vector<distributed::MeshCoordinate> TensorAttributes::determine_distribution(
     const distributed::MeshShape& mesh_shape) const {
     const auto coord_range = [this, &mesh_shape]() {
         if (auto* shard2d_strategy = std::get_if<ShardTensor2D>(&distributed_tensor_config_)) {
