@@ -344,7 +344,6 @@ operation::ProgramWithCallbacks tilize_multi_core_block(const Tensor& a, Tensor&
 
     // RUNTIME ARGS
     const auto& cores = grid_to_cores(ncores, grid_size.x, grid_size.y, true);
-    uint32_t number_blocks_per_core;
     uint32_t start_row_id = 0;
     uint32_t start_column_id = 0;
     uint32_t tile_start_id = 0;
@@ -374,7 +373,6 @@ operation::ProgramWithCallbacks tilize_multi_core_block(const Tensor& a, Tensor&
             single_block_size_row_arg = single_block_size;
             single_block_size_col_arg = single_block_size_cliff_col;
         }
-        number_blocks_per_core = single_block_size_row_arg * single_block_size_col_arg;
         uint32_t size_per_row_per_block = nblocks_per_core * TILE_WIDTH * a.element_size();
 
         //  reader runtime args
