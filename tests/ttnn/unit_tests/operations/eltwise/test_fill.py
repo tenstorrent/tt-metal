@@ -55,3 +55,31 @@ def test_fill_fp32(device, input_shapes, fill_value):
     output_tensor = ttnn.to_torch(output)
     equal_passed, equal_message = assert_equal(torch_output_tensor, output_tensor)
     assert equal_passed
+
+
+@pytest.mark.parametrize(
+    "input_shapes",
+    (
+        (torch.Size([1, 1, 1, 1])),
+        # (torch.Size([1, 16, 1, 1])),
+    ),
+)
+@pytest.mark.parametrize("fill_value", [0.07980])
+def test_typecast(device, input_shapes, fill_value):
+    ttnn.set_printoptions(profile="full")
+    torch_input_tensor = torch.randn((input_shapes), dtype=torch.bfloat16)
+    torch_zero = torch.zeros(([1, 16, 1, 1]), dtype=torch.bfloat16)
+    golden_function = ttnn.get_golden_function(ttnn.fill)
+    torch_output_tensor = golden_function(torch_input_tensor, fill_value)
+
+    input_tensor = ttnn.from_torch(torch_input_tensor, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    input_tensor2 = ttnn.from_torch(torch_zero, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    output = ttnn.fill(input_tensor, fill_value)
+    output = ttnn.repeat(output, [1, 16, 1, 1])
+    # output = ttnn.add(input_tensor2, output, use_legacy=True) # to cast to [1, 16, 1, 1]
+    print("output before typcast", output)
+    output1 = ttnn.typecast(output, ttnn.bfloat8_b)
+    print("output after", output1)
+    # output_tensor = ttnn.to_torch(output)
+    # equal_passed, equal_message = assert_equal(torch_output_tensor, output_tensor)
+    # assert equal_passed

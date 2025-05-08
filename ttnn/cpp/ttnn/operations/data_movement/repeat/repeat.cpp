@@ -215,7 +215,7 @@ ttnn::Tensor RepeatOperation::invoke(
         // working_tensor = ttnn::fill_implicit_tile_padding(working_tensor, 0);
         tt::log_info(
             tt::LogOp,
-            " ****** before typecast- {} - {} ",
+            " ****** before typecast - {} - {} ",
             working_tensor.get_logical_shape(),
             working_tensor.get_padded_shape());
         working_tensor.print();

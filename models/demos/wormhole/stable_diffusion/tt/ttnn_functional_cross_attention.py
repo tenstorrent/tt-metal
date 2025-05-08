@@ -525,7 +525,13 @@ class cross_attention:
 
             # TODO DELETE THIS DEBUG STUFF
             ttnn.set_printoptions(profile="full")
-            repeat_scale = ttnn.repeat(self.scale, [1, 16, 1, 1])
+            # torch_zero = torch.zeros(([1, 16, 1, 1]), dtype=torch.bfloat16)
+            # input_tensor2 = ttnn.from_torch(torch_zero, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+            # zero_tensor = ttnn.to_device(input_tensor2, self.device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            # repeat_scale = ttnn.add(zero_tensor, self.scale, use_legacy=False)
+            print("self.scale", self.scale)
+            repeat_scale = ttnn.repeat(self.scale, [1, 2, 1, 1])
+
             assert not (ttnn.to_torch(repeat_scale) == 0).any()
             attention_scores = ttnn.multiply(
                 attention_scores_temp,
