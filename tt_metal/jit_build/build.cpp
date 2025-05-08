@@ -461,6 +461,7 @@ JitBuildCompute::JitBuildCompute(const JitBuildEnv& env, const JitBuiltStateConf
     // Incrementing the '0' is much cheaper that piecemeal
     // construction. Sue me.
     this->target_name_ = "trisc0";
+    TT_ASSERT(this->target_name_[this->target_name_.size() - 1] == '0');
     this->target_name_[this->target_name_.size() - 1] += this->core_id_;
 
     // It is cheaper to duplicate the common parts of these strings,
@@ -480,6 +481,7 @@ JitBuildCompute::JitBuildCompute(const JitBuildEnv& env, const JitBuiltStateConf
     // not a thing, until c++ 26.  Hence the cast to std::string.
     this->lflags_ += "-T" + env_.root_ + "runtime/hw/toolchain/" + get_alias(env_.arch_) +
         std::string(ld_script[this->is_fw_]);
+    TT_ASSERT(this->lflags_[this->lflags_.size() - script_number_index] == '0');
     this->lflags_[this->lflags_.size() - script_number_index] += this->core_id_;
 
     this->process_defines_at_compile = false;
