@@ -8,6 +8,7 @@
 #include <vector>
 #include <algorithm>
 #include <unordered_map>
+#include <string_view>
 #include <tt-metalium/control_plane.hpp>
 #include <tt-metalium/device_pool.hpp>
 #include <tt-metalium/fabric.hpp>
@@ -71,6 +72,37 @@ struct WorkerMemoryMap {
     uint32_t base_l1_target_address = 0;
     uint32_t payload_buffer_address = 0;
 };
+
+struct WorkerTestConfig {
+    WorkerMemoryMap* memory_map = nullptr;
+    CoreCoord worker_logical_core;
+    uint8_t worker_id = 0;
+    tt::tt_fabric::FabricMuxChannelType channel_type = tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL;
+    uint32_t num_buffers = 0;
+    uint32_t buffer_size_bytes = 0;
+    uint8_t num_hops = 0;
+    std::string_view kernel_src = sender_kernel_src;
+};
+
+WorkerMemoryMap create_worker_memory_map(const uint32_t base_l1_address) {
+    WorkerMemoryMap worker_memory_map;
+
+    worker_memory_map.test_results_address = base_l1_address;
+    worker_memory_map.local_mux_status_address = worker_memory_map.test_results_address + test_results_size_bytes;
+    worker_memory_map.local_flow_control_address =
+        worker_memory_map.local_mux_status_address + noc_address_padding_bytes;
+    worker_memory_map.local_teardown_address = worker_memory_map.local_flow_control_address + noc_address_padding_bytes;
+    worker_memory_map.local_buffer_index_address = worker_memory_map.local_teardown_address + noc_address_padding_bytes;
+    worker_memory_map.credit_handshake_address =
+        worker_memory_map.local_buffer_index_address + noc_address_padding_bytes;
+    worker_memory_map.packet_header_buffer_address =
+        worker_memory_map.credit_handshake_address + noc_address_padding_bytes;
+    worker_memory_map.base_l1_target_address =
+        worker_memory_map.packet_header_buffer_address + packet_header_buffer_size_bytes;
+    worker_memory_map.payload_buffer_address = worker_memory_map.base_l1_target_address;
+
+    return worker_memory_map;
+}
 
 // first generates the physical chip id matrix and then returns the sequence of connected chip ids
 std::vector<chip_id_t> get_physical_chip_sequence(uint32_t num_seq_chips) {
@@ -195,38 +227,70 @@ std::vector<chip_id_t> get_physical_chip_sequence(uint32_t num_seq_chips) {
 
 uint32_t get_sender_id(CoreCoord logical_core) { return logical_core.x << 16 || logical_core.y; }
 
-void zero_out_worker_address(tt::tt_metal::IDevice* device, const CoreCoord& worker_logical_core, uint32_t address) {
-    std::vector<uint32_t> worker_zero_vec(1, 0);
-    tt::tt_metal::detail::WriteToDeviceL1(device, worker_logical_core, address, worker_zero_vec);
+void create_kernel(
+    tt::tt_metal::IDevice* device,
+    tt::tt_metal::Program& program_handle,
+    const std::string kernel_src,
+    const CoreCoord& logical_core,
+    const std::vector<uint32_t>& ct_args,
+    const std::vector<uint32_t>& rt_args,
+    const std::vector<std::pair<size_t, size_t>>& addresses_to_clear) {
+    auto kernel_handle = tt::tt_metal::CreateKernel(
+        program_handle,
+        kernel_src,
+        {logical_core},
+        tt::tt_metal::DataMovementConfig{
+            .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
+            .noc = tt::tt_metal::NOC::RISCV_0_default,
+            .compile_args = ct_args,
+            .opt_level = tt::tt_metal::KernelBuildOptLevel::O3});
+    tt::tt_metal::SetRuntimeArgs(program_handle, kernel_handle, logical_core, rt_args);
+
+    for (const auto& [start_address, num_bytes] : addresses_to_clear) {
+        std::vector<uint32_t> zero_vec((num_bytes / sizeof(uint32_t)), 0);
+        tt::tt_metal::detail::WriteToDeviceL1(device, logical_core, start_address, zero_vec);
+    }
+}
+
+void create_mux_kernel(
+    const tt::tt_fabric::FabricMuxConfig& mux_kernel_config,
+    const CoreCoord& mux_logical_core,
+    tt::tt_metal::IDevice* device,
+    tt::tt_metal::IDevice* dest_device,
+    tt::tt_metal::Program& program_handle) {
+    std::vector<uint32_t> mux_ct_args = mux_kernel_config.get_fabric_mux_compile_time_args();
+    std::vector<uint32_t> mux_rt_args = {};
+    append_fabric_connection_rt_args(
+        device->id(),
+        dest_device->id(),
+        0 /* link_idx (routing plane) */,
+        program_handle,
+        {mux_logical_core},
+        mux_rt_args);
+
+    std::vector<std::pair<size_t, size_t>> addresses_to_clear = {
+        std::make_pair(mux_kernel_config.get_start_address_to_clear(), mux_kernel_config.get_num_bytes_to_clear())};
+    create_kernel(
+        device, program_handle, mux_kernel_src, mux_logical_core, mux_ct_args, mux_rt_args, addresses_to_clear);
 }
 
 void create_worker_kernel(
     const TestConfig& test_config,
-    tt::tt_metal::IDevice* device,
-    tt::tt_metal::Program& program_handle,
+    const WorkerTestConfig& worker_test_config,
     const tt::tt_fabric::FabricMuxConfig& mux_kernel_config,
     const CoreCoord& mux_virtual_core,
-    const WorkerMemoryMap& worker_memory_map,
-    const CoreCoord& worker_logical_core,
-    uint8_t num_hops,
-    uint32_t worker_id,
-    bool is_sender) {
-    CoreCoord worker_virtual_core = device->worker_core_from_logical_core(worker_logical_core);
-
-    auto channel_type = is_sender ? tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL
-                                  : tt::tt_fabric::FabricMuxChannelType::HEADER_ONLY_CHANNEL;
-
-    auto num_buffers =
-        is_sender ? test_config.num_buffers_full_size_channel : test_config.num_buffers_header_only_channel;
-
-    auto buffer_size_bytes = is_sender ? sizeof(tt::tt_fabric::PacketHeader) + test_config.packet_payload_size_bytes
-                                       : sizeof(tt::tt_fabric::PacketHeader);
+    tt::tt_metal::IDevice* device,
+    tt::tt_metal::Program& program_handle) {
+    auto worker_memory_map = worker_test_config.memory_map;
+    CoreCoord worker_logical_core = worker_test_config.worker_logical_core;
+    auto channel_type = worker_test_config.channel_type;
+    auto worker_id = worker_test_config.worker_id;
 
     std::vector<uint32_t> worker_ct_args = {
         mux_virtual_core.x,
         mux_virtual_core.y,
-        num_buffers,
-        buffer_size_bytes,
+        worker_test_config.num_buffers,
+        worker_test_config.buffer_size_bytes,
         mux_kernel_config.get_channel_base_address(channel_type, worker_id),
         mux_kernel_config.get_connection_info_address(channel_type, worker_id),
         mux_kernel_config.get_connection_handshake_address(channel_type, worker_id),
@@ -234,48 +298,45 @@ void create_worker_kernel(
         mux_kernel_config.get_buffer_index_address(channel_type, worker_id),
         mux_kernel_config.get_status_address()};
 
+    // virtual coordinates will be the same for the receiver device
+    // hence, we can use the noc encoding derived using current device
+    CoreCoord worker_virtual_core = device->worker_core_from_logical_core(worker_logical_core);
+    uint32_t receiver_noc_xy_encoding =
+        tt_metal::MetalContext::instance().hal().noc_xy_encoding(worker_virtual_core.x, worker_virtual_core.y);
+
     std::vector<uint32_t> worker_rt_args = {
         test_config.num_open_close_iters,
         test_config.num_packets,
         test_config.num_credits,
         test_config.packet_payload_size_bytes,
         test_config.time_seed,
+        test_config.num_return_credits_per_packet,
         test_results_size_bytes,
-        worker_memory_map.test_results_address,
-        worker_memory_map.local_mux_status_address,
-        worker_memory_map.local_flow_control_address,
-        worker_memory_map.local_teardown_address,
-        worker_memory_map.local_buffer_index_address,
-        worker_memory_map.base_l1_target_address,
-        worker_memory_map.credit_handshake_address,
-        worker_memory_map.packet_header_buffer_address};
+        worker_memory_map->test_results_address,
+        worker_memory_map->local_mux_status_address,
+        worker_memory_map->local_flow_control_address,
+        worker_memory_map->local_teardown_address,
+        worker_memory_map->local_buffer_index_address,
+        worker_memory_map->base_l1_target_address,
+        worker_memory_map->credit_handshake_address,
+        worker_memory_map->packet_header_buffer_address,
+        worker_memory_map->payload_buffer_address,
+        worker_test_config.num_hops,
+        get_sender_id(worker_logical_core),
+        receiver_noc_xy_encoding};
 
-    if (is_sender) {
-        worker_rt_args.push_back(worker_memory_map.payload_buffer_address);
-    } else {
-        worker_rt_args.push_back(test_config.num_return_credits_per_packet);
-    }
-    worker_rt_args.push_back(num_hops);
-    worker_rt_args.push_back(get_sender_id(worker_logical_core));
-
-    // virtual coordinates will be the same for the receiver device
-    // hence, we can use the noc encoding derived using current device
-    worker_rt_args.push_back(
-        tt_metal::MetalContext::instance().hal().noc_xy_encoding(worker_virtual_core.x, worker_virtual_core.y));
-
-    auto kernel_handle = tt_metal::CreateKernel(
+    std::vector<std::pair<size_t, size_t>> addresses_to_clear = {
+        std::make_pair(worker_memory_map->local_flow_control_address, noc_address_padding_bytes),
+        std::make_pair(worker_memory_map->local_teardown_address, noc_address_padding_bytes),
+        std::make_pair(worker_memory_map->local_buffer_index_address, noc_address_padding_bytes)};
+    create_kernel(
+        device,
         program_handle,
-        is_sender ? sender_kernel_src : receiver_kernel_src,
-        {worker_logical_core},
-        tt_metal::DataMovementConfig{
-            .processor = tt_metal::DataMovementProcessor::RISCV_0,
-            .noc = tt_metal::NOC::RISCV_0_default,
-            .compile_args = worker_ct_args});
-    tt_metal::SetRuntimeArgs(program_handle, kernel_handle, worker_logical_core, worker_rt_args);
-
-    zero_out_worker_address(device, worker_logical_core, worker_memory_map.local_flow_control_address);
-    zero_out_worker_address(device, worker_logical_core, worker_memory_map.local_teardown_address);
-    zero_out_worker_address(device, worker_logical_core, worker_memory_map.local_buffer_index_address);
+        std::string(worker_test_config.kernel_src),
+        worker_logical_core,
+        worker_ct_args,
+        worker_rt_args,
+        addresses_to_clear);
 }
 
 void run_mux_test_variant(FabricMuxFixture* fixture, TestConfig test_config) {
@@ -369,25 +430,16 @@ void run_mux_test_variant(FabricMuxFixture* fixture, TestConfig test_config) {
 
     const uint32_t l1_unreserved_base_address =
         devices[0]->allocator()->get_base_allocator_addr(tt_metal::HalMemType::L1);
-    const size_t mux_base_l1_address = l1_unreserved_base_address;
 
-    WorkerMemoryMap worker_memory_map;
-    worker_memory_map.test_results_address = l1_unreserved_base_address;
-    worker_memory_map.local_mux_status_address = worker_memory_map.test_results_address + test_results_size_bytes;
-    worker_memory_map.local_flow_control_address =
-        worker_memory_map.local_mux_status_address + noc_address_padding_bytes;
-    worker_memory_map.local_teardown_address = worker_memory_map.local_flow_control_address + noc_address_padding_bytes;
-    worker_memory_map.local_buffer_index_address = worker_memory_map.local_teardown_address + noc_address_padding_bytes;
-    worker_memory_map.credit_handshake_address =
-        worker_memory_map.local_buffer_index_address + noc_address_padding_bytes;
-    worker_memory_map.packet_header_buffer_address =
-        worker_memory_map.credit_handshake_address + noc_address_padding_bytes;
-    worker_memory_map.base_l1_target_address =
-        worker_memory_map.packet_header_buffer_address + packet_header_buffer_size_bytes;
-    worker_memory_map.payload_buffer_address = worker_memory_map.base_l1_target_address;
+    const size_t mux_base_l1_address = l1_unreserved_base_address;
+    auto worker_memory_map = create_worker_memory_map(l1_unreserved_base_address);
 
     std::vector<tt::tt_metal::Program> program_handles(devices.size());
     std::vector<size_t> mux_termination_signal_addresses;
+
+    size_t buffer_size_bytes_full_size_channel =
+        sizeof(tt::tt_fabric::PacketHeader) + test_config.packet_payload_size_bytes;
+    size_t buffer_size_bytes_header_only_channel = sizeof(tt::tt_fabric::PacketHeader);
 
     for (auto i = 0; i < devices.size(); i++) {
         program_handles[i] = tt_metal::CreateProgram();
@@ -403,67 +455,46 @@ void run_mux_test_variant(FabricMuxFixture* fixture, TestConfig test_config) {
             num_header_only_channels,
             test_config.num_buffers_full_size_channel,
             test_config.num_buffers_header_only_channel,
-            sizeof(tt::tt_fabric::PacketHeader) + test_config.packet_payload_size_bytes,
+            buffer_size_bytes_full_size_channel,
             mux_base_l1_address);
-        mux_termination_signal_addresses.push_back(mux_kernel_config.get_termination_signal_address());
-
         if (test_config.num_full_size_channel_iters > 1) {
             mux_kernel_config.set_num_full_size_channel_iters(test_config.num_full_size_channel_iters);
         }
 
-        std::vector<uint32_t> mux_ct_args = mux_kernel_config.get_fabric_mux_compile_time_args();
-        std::vector<uint32_t> mux_rt_args;
-        append_fabric_connection_rt_args(
-            devices[i]->id(),
-            dest_devices[devices[i]]->id(),
-            0 /* link_idx (routing plane) */,
-            program_handles[i],
-            {mux_logical_core},
-            mux_rt_args);
+        mux_termination_signal_addresses.push_back(mux_kernel_config.get_termination_signal_address());
 
-        auto mux_kernel = tt_metal::CreateKernel(
-            program_handles[i],
-            mux_kernel_src,
-            {mux_logical_core},
-            tt_metal::DataMovementConfig{
-                .processor = tt_metal::DataMovementProcessor::RISCV_0,
-                .noc = tt_metal::NOC::RISCV_0_default,
-                .compile_args = mux_ct_args});
-        tt_metal::SetRuntimeArgs(program_handles[i], mux_kernel, mux_logical_core, mux_rt_args);
-
-        std::vector<uint32_t> mux_zero_vec((mux_kernel_config.get_num_bytes_to_clear() / sizeof(uint32_t)), 0);
-        tt::tt_metal::detail::WriteToDeviceL1(
-            devices[i], mux_logical_core, mux_kernel_config.get_start_address_to_clear(), mux_zero_vec);
+        create_mux_kernel(
+            mux_kernel_config, mux_logical_core, devices[i], dest_devices[devices[i]], program_handles[i]);
 
         uint32_t sender_id = 0;
         for (const auto& [sender_logical_core, num_hops] : device_senders_map[devices[i]]) {
+            WorkerTestConfig sender_config = {
+                .memory_map = &worker_memory_map,
+                .worker_logical_core = sender_logical_core,
+                .worker_id = sender_id,
+                .channel_type = tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL,
+                .num_buffers = test_config.num_buffers_full_size_channel,
+                .buffer_size_bytes = buffer_size_bytes_full_size_channel,
+                .num_hops = num_hops,
+                .kernel_src = sender_kernel_src};
             create_worker_kernel(
-                test_config,
-                devices[i],
-                program_handles[i],
-                mux_kernel_config,
-                mux_virtual_core,
-                worker_memory_map,
-                sender_logical_core,
-                num_hops,
-                sender_id,
-                true /* is_sender */);
+                test_config, sender_config, mux_kernel_config, mux_virtual_core, devices[i], program_handles[i]);
             sender_id++;
         }
 
         uint32_t receiver_id = 0;
         for (const auto& [receiver_logical_core, num_hops] : device_receivers_map[devices[i]]) {
+            WorkerTestConfig receiver_config = {
+                .memory_map = &worker_memory_map,
+                .worker_logical_core = receiver_logical_core,
+                .worker_id = receiver_id,
+                .channel_type = tt::tt_fabric::FabricMuxChannelType::HEADER_ONLY_CHANNEL,
+                .num_buffers = test_config.num_buffers_header_only_channel,
+                .buffer_size_bytes = buffer_size_bytes_header_only_channel,
+                .num_hops = num_hops,
+                .kernel_src = receiver_kernel_src};
             create_worker_kernel(
-                test_config,
-                devices[i],
-                program_handles[i],
-                mux_kernel_config,
-                mux_virtual_core,
-                worker_memory_map,
-                receiver_logical_core,
-                num_hops,
-                receiver_id,
-                false /* is_sender */);
+                test_config, receiver_config, mux_kernel_config, mux_virtual_core, devices[i], program_handles[i]);
             receiver_id++;
         }
     }

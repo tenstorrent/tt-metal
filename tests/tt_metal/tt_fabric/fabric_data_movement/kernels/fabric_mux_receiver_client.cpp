@@ -31,6 +31,7 @@ void kernel_main() {
     uint32_t num_credits = get_arg_val<uint32_t>(rt_args_idx++);
     uint32_t packet_payload_size_bytes = get_arg_val<uint32_t>(rt_args_idx++);
     uint32_t time_seed = get_arg_val<uint32_t>(rt_args_idx++);
+    uint32_t return_credits_per_packet = get_arg_val<uint32_t>(rt_args_idx++);
     uint32_t test_results_size_bytes = get_arg_val<uint32_t>(rt_args_idx++);
     uint32_t test_results_address = get_arg_val<uint32_t>(rt_args_idx++);
     uint32_t local_fabric_mux_status_address = get_arg_val<uint32_t>(rt_args_idx++);
@@ -40,7 +41,7 @@ void kernel_main() {
     uint32_t base_l1_target_address = get_arg_val<uint32_t>(rt_args_idx++);
     uint32_t credit_handshake_address = get_arg_val<uint32_t>(rt_args_idx++);
     uint32_t packet_header_buffer_address = get_arg_val<uint32_t>(rt_args_idx++);
-    uint32_t return_credits_per_packet = get_arg_val<uint32_t>(rt_args_idx++);
+    uint32_t payload_buffer_address = get_arg_val<uint32_t>(rt_args_idx++); /* unused for this kernel */
     uint32_t num_hops = get_arg_val<uint32_t>(rt_args_idx++);
     uint32_t sender_id = get_arg_val<uint32_t>(rt_args_idx++);
     uint32_t sender_noc_xy_encoding = get_arg_val<uint32_t>(rt_args_idx++);
