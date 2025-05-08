@@ -11,6 +11,7 @@ import pandas as pd
 import numpy as np
 import csv
 from tabulate import tabulate
+import shutil
 
 OUTPUT_FILE_DIR = os.path.join(os.environ["TT_METAL_HOME"], "generated")
 OUTPUT_FILE_NAME = "fabric_mux_bandwidth.csv"
@@ -293,6 +294,11 @@ def test_mux_bw_both_channel_types(
 
 @pytest.fixture(scope="session", autouse=True)
 def setup(request):
+    clear_dir = False
+    if not os.path.exists(OUTPUT_FILE_DIR):
+        clear_dir = True
+        os.mkdir(OUTPUT_FILE_DIR)
+
     # Delete old CSV file at start
     if os.path.exists(OUTPUT_FILE_PATH):
         os.remove(OUTPUT_FILE_PATH)
@@ -309,3 +315,7 @@ def setup(request):
     # clear the log file
     if os.path.exists(LOG_FILE_PATH):
         os.remove(LOG_FILE_PATH)
+
+    # remove the directory if it was created during the test
+    if clear_dir and os.path.exists(OUTPUT_FILE_DIR):
+        shutil.rmtree(OUTPUT_FILE_DIR)

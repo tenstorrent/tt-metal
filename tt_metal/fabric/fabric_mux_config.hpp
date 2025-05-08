@@ -7,6 +7,7 @@
 #include <cstddef>
 #include <vector>
 #include <tt-metalium/fabric.hpp>
+#include <tt-metalium/erisc_datamover_builder.hpp>
 #include "impl/context/metal_context.hpp"
 
 namespace tt::tt_fabric {
@@ -66,7 +67,7 @@ enum class FabricMuxChannelType : uint8_t { FULL_SIZE_CHANNEL = 0, HEADER_ONLY_C
 */
 
 size_t get_max_buffer_size_bytes_full_size_channel() {
-    return tt::tt_fabric::get_1d_fabric_config().channel_buffer_size_bytes;
+    return tt::tt_fabric::FabricEriscDatamoverBuilder::default_packet_payload_size_bytes;
 }
 
 struct FabricMuxConfig {
