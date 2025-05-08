@@ -13,24 +13,13 @@ This directory contains **all integration and fault‑tolerance tests** for the 
 | **multi\_hosts\_tests/**     | End‑to‑end tests that require **one process per host** and access to hardware devices (mesh, fabric, RDMA). They verify cross‑host barriers, collective latency, and multi‑device kernels.                               | `mpirun --hostfile hosts.txt -ppn 1 ./multihost_suite` |
 | **single\_host\_mp\_tests/** | Fast checks that need **multiple ranks** but run on a single box (no devices). Used to validate the distributed context, serializers, span wrappers, etc.                                                                | `mpirun -np 8 ./single_host_suite`                     |
 
----
-
-## Prerequisites
-
-* **MPI implementation** – Open MPI ≥ 4.1 or MPICH ≥ 4.2, built with C++ bindings.
-* **CMake ≥ 3.18** (to consume the top‑level `CMakeLists.txt`).
-* **GoogleTest** available via `find_package(GTest CONFIG REQUIRED)`.
-* **Device drivers & udev rules** for the mesh hardware **(multi\_hosts\_tests only)**.
-* **ULFM‑enabled MPI** if you want to run fault‑tolerance tests (otherwise they will be skipped).
 
 ---
 
 ## Building
 
 ```bash
-mkdir build && cd build
-cmake -DMULTIHOST_TESTS=ON ..
-make -j
+TODO (if we need something special)
 ```
 
 Targets created:
