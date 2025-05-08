@@ -42,7 +42,7 @@ void RotaryEmbeddingLlama::validate(const std::vector<Tensor>& input_tensors) co
             sin.get_dtype() == trans_mat.get_dtype() && trans_mat.get_dtype() == DataType::BFLOAT16,
         "All input tensors must have dtype = bfloat16");
     TT_FATAL(
-        input_tensor.memory_config().memory_layout == this->output_mem_config.memory_layout,
+        input_tensor.memory_config().memory_layout() == this->output_mem_config.memory_layout(),
         "Input tensor and output tensor must have same memory layout");
 
     // Check that cos and sin have same dims
@@ -57,7 +57,7 @@ void RotaryEmbeddingLlama::validate(const std::vector<Tensor>& input_tensors) co
 
         for (const auto& input : input_tensors) {
             TT_FATAL(
-                (input.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED),
+                (input.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED),
                 "Sharded inputs for RoPE must be HEIGHT_SHARDED.");
         }
 
@@ -95,19 +95,24 @@ void RotaryEmbeddingLlama::validate(const std::vector<Tensor>& input_tensors) co
             "Transformation matrix must have 4rd dim equal to TILE_WIDTH");
     } else {  // Prefill mode validation
         TT_FATAL(
-            input_tensor.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED,
+            input_tensor.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
             "Input tensor must be interleaved in prefill mode");
 
         // Checks for cos and sin
         TT_FATAL(
-            cos.get_logical_shape()[0] == 1 && cos.get_logical_shape()[1] == 1 &&
-                cos.get_logical_shape()[-1] == head_dim,
+            cos.get_logical_shape()[0] == 1 && cos.get_logical_shape()[-1] == head_dim,
             "Cos dims must match input dims");
+        // Check num_heads in cos/sin
         TT_FATAL(
-            input_tensor.memory_config().memory_layout == sin.memory_config().memory_layout,
+            cos.get_logical_shape()[1] == input_tensor.get_logical_shape()[1] || cos.get_logical_shape()[1] == 1,
+            "Num heads in cos/sin must match input tensor num heads or be 1. Expected {}, got {}",
+            input_tensor.get_logical_shape()[1],
+            cos.get_logical_shape()[1]);
+        TT_FATAL(
+            input_tensor.memory_config().memory_layout() == sin.memory_config().memory_layout(),
             "Input tensor and sin tensor must have same memory layout");
         TT_FATAL(
-            input_tensor.memory_config().memory_layout == cos.memory_config().memory_layout,
+            input_tensor.memory_config().memory_layout() == cos.memory_config().memory_layout(),
             "Input tensor and cos tensor must have same memory layout");
 
         // Checks for transformation matrix

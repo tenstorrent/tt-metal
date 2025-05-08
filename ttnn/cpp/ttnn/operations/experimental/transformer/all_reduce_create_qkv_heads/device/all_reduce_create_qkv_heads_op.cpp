@@ -37,27 +37,27 @@ void AllReduceCreateQkvHeads::validate(const std::vector<Tensor>& input_tensors)
         "Worker cores used by links are parallelizaed over rows");
 
     TT_FATAL(
-        input_tensor.memory_config().memory_layout == TensorMemoryLayout::WIDTH_SHARDED,
+        input_tensor.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED,
         "Unsupported memory layout for input tensor{}.",
-        input_tensor.memory_config().memory_layout);
+        input_tensor.memory_config().memory_layout());
 
     TT_FATAL(
-        buffer_tensor.memory_config().memory_layout == TensorMemoryLayout::WIDTH_SHARDED,
+        buffer_tensor.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED,
         "Unsupported memory layout for buffer tensor {}.",
-        buffer_tensor.memory_config().memory_layout);
+        buffer_tensor.memory_config().memory_layout());
     TT_FATAL(
-        this->all_reduce_mem_config.memory_layout == TensorMemoryLayout::WIDTH_SHARDED,
+        this->all_reduce_mem_config.memory_layout() == TensorMemoryLayout::WIDTH_SHARDED,
         "Unsupported memory layout for output tensor {}.",
-        this->all_reduce_mem_config.memory_layout);
+        this->all_reduce_mem_config.memory_layout());
 
     TT_FATAL(
-        buffer_tensor.memory_config().shard_spec->grid.contains(this->all_reduce_mem_config.shard_spec->grid),
+        buffer_tensor.memory_config().shard_spec()->grid.contains(this->all_reduce_mem_config.shard_spec()->grid),
         "The output tensor must reside on a subset of the cores of the buffer tensor");
 
     const uint32_t output_shard_shape_volume =
-        this->all_reduce_mem_config.shard_spec->shape[0] * this->all_reduce_mem_config.shard_spec->shape[1];
+        this->all_reduce_mem_config.shard_spec()->shape[0] * this->all_reduce_mem_config.shard_spec()->shape[1];
     const uint32_t buffer_shard_shape_volume =
-        buffer_tensor.memory_config().shard_spec->shape[0] * buffer_tensor.memory_config().shard_spec->shape[1];
+        buffer_tensor.memory_config().shard_spec()->shape[0] * buffer_tensor.memory_config().shard_spec()->shape[1];
     TT_FATAL(
         output_shard_shape_volume * this->ring_size <= buffer_shard_shape_volume,
         "The shard size for the buffer must be large enough to hold the intermediate tensor. Require at least {} but "
@@ -92,9 +92,9 @@ void AllReduceCreateQkvHeads::validate(const std::vector<Tensor>& input_tensors)
     const auto QKV_memcfg = input_tensor.memory_config();
     if (input_tensor.is_sharded()) {
         TT_FATAL(
-            QKV_memcfg.memory_layout == TensorMemoryLayout::WIDTH_SHARDED,
+            QKV_memcfg.memory_layout() == TensorMemoryLayout::WIDTH_SHARDED,
             "Current input memory layout is {}. It must be width sharded",
-            QKV_memcfg.memory_layout);
+            QKV_memcfg.memory_layout());
         TT_FATAL(
             input_tensor.shard_spec().value().shape[0] == input_tensor.volume() / input_tensor.get_padded_shape()[-1],
             "Shard shape must be correct");
@@ -116,7 +116,7 @@ void AllReduceCreateQkvHeads::validate(const std::vector<Tensor>& input_tensors)
     // output
     TT_FATAL(
         this->final_mem_config.is_sharded() &&
-            this->final_mem_config.memory_layout == TensorMemoryLayout::HEIGHT_SHARDED,
+            this->final_mem_config.memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED,
         "Output tensor must be height sharded");
 
     // Support maximum 32 heads for now
@@ -168,7 +168,7 @@ std::vector<ttnn::TensorSpec> AllReduceCreateQkvHeads::compute_output_specs(
     auto num_kv_heads_padded = ((this->num_heads - 1) / tt::constants::TILE_HEIGHT + 1) * tt::constants::TILE_HEIGHT;
 
     CoreRangeSet q_shard_grid, k_shard_grid, v_shard_grid;
-    auto sub_core_grid = this->final_mem_config.shard_spec->grid;
+    auto sub_core_grid = this->final_mem_config.shard_spec()->grid;
     auto start_core_coord = sub_core_grid.bounding_box().start_coord;
     auto next_core_coord = start_core_coord;
 
@@ -189,15 +189,12 @@ std::vector<ttnn::TensorSpec> AllReduceCreateQkvHeads::compute_output_specs(
     }
     v_shard_grid = tt::tt_metal::num_cores_to_corerangeset_in_subcoregrids(next_core_coord, batch, sub_core_grid, true);
 
-    MemoryConfig q_mem_config = this->final_mem_config;
-    MemoryConfig k_mem_config = this->final_mem_config;
-    MemoryConfig v_mem_config = this->final_mem_config;
     tt::tt_metal::ShardSpec q_shard_spec{q_shard_grid, {num_q_heads_padded, this->head_dim}};
-    q_mem_config.shard_spec = q_shard_spec;
     tt::tt_metal::ShardSpec k_shard_spec{k_shard_grid, {num_kv_heads_padded, this->head_dim}};
-    k_mem_config.shard_spec = k_shard_spec;
     tt::tt_metal::ShardSpec v_shard_spec{v_shard_grid, {num_kv_heads_padded, this->head_dim}};
-    v_mem_config.shard_spec = v_shard_spec;
+    MemoryConfig q_mem_config = this->final_mem_config.with_shard_spec(q_shard_spec);
+    MemoryConfig k_mem_config = this->final_mem_config.with_shard_spec(k_shard_spec);
+    MemoryConfig v_mem_config = this->final_mem_config.with_shard_spec(v_shard_spec);
 
     return {
         all_reduce_tensor_spec,
@@ -262,8 +259,8 @@ tt::tt_metal::operation::ProgramWithCallbacks AllReduceCreateQkvHeads::create_pr
 
     auto input_tensor_memory_config = input_tensor.memory_config();
     auto output_tensor_memory_config = output_tensors[0].memory_config();
-    uint32_t input_shard_num_cores = input_tensor_memory_config.shard_spec->grid.num_cores();
-    uint32_t output_shard_num_cores = output_tensor_memory_config.shard_spec->grid.num_cores();
+    uint32_t input_shard_num_cores = input_tensor_memory_config.shard_spec()->grid.num_cores();
+    uint32_t output_shard_num_cores = output_tensor_memory_config.shard_spec()->grid.num_cores();
 
     tt::log_debug(tt::LogOp, "input_tensor_shape: {}", input_tensor_shape);
     tt::log_debug(tt::LogOp, "input_tensor_memory_config: {}", input_tensor_memory_config);
@@ -271,9 +268,13 @@ tt::tt_metal::operation::ProgramWithCallbacks AllReduceCreateQkvHeads::create_pr
     tt::log_debug(tt::LogOp, "input_shard_num_cores: {}", input_shard_num_cores);
     tt::log_debug(tt::LogOp, "output_shard_num_cores: {}", output_shard_num_cores);
     tt::log_debug(
-        tt::LogOp, "input_tensor_memory_config.shard_spec->shape: {}", input_tensor_memory_config.shard_spec->shape);
+        tt::LogOp,
+        "input_tensor_memory_config.shard_spec()->shape: {}",
+        input_tensor_memory_config.shard_spec()->shape);
     tt::log_debug(
-        tt::LogOp, "output_tensor_memory_config.shard_spec->shape: {}", output_tensor_memory_config.shard_spec->shape);
+        tt::LogOp,
+        "output_tensor_memory_config.shard_spec()->shape: {}",
+        output_tensor_memory_config.shard_spec()->shape);
 
     tt::log_debug(tt::LogOp, "Running TG Llama specific all_reduce_create_qkv_heads_minimal_multi_core_with_workers");
     return all_reduce_create_qkv_heads_minimal_multi_core_with_workers(

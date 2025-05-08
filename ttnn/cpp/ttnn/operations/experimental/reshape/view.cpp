@@ -17,10 +17,10 @@ namespace ttnn::operations::experimental::reshape {
 
 static MemoryConfig infer_output_memory_config(
     const MemoryConfig& input_memory_config, const ttnn::Shape& output_padded_shape) {
-    if (input_memory_config.memory_layout == TensorMemoryLayout::HEIGHT_SHARDED) {
-        auto shard_spec = input_memory_config.shard_spec.value();
+    if (input_memory_config.memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED) {
+        auto shard_spec = input_memory_config.shard_spec().value();
         shard_spec.shape[1] = output_padded_shape[-1];  // update output shard to match new shard width
-        return MemoryConfig{input_memory_config.memory_layout, input_memory_config.buffer_type, shard_spec};
+        return MemoryConfig{input_memory_config.memory_layout(), input_memory_config.buffer_type(), shard_spec};
     } else {
         return input_memory_config;
     }
@@ -65,7 +65,7 @@ Tensor tensor_reshape(
             if constexpr (std::is_same_v<T, tt::tt_metal::DeviceStorage>) {
                 auto device_storage = std::get<tt::tt_metal::DeviceStorage>(tensor.get_storage());
                 if (input_tensor.get_layout() == Layout::ROW_MAJOR) {
-                    if (tensor.memory_config().memory_layout != TensorMemoryLayout::HEIGHT_SHARDED) {
+                    if (tensor.memory_config().memory_layout() != TensorMemoryLayout::HEIGHT_SHARDED) {
                         auto device_buffer = device_storage.get_buffer();
                         const auto& tensor_spec = tensor.tensor_spec();
                         auto page_size_bytes = tensor_spec.compute_page_size_bytes();
@@ -97,8 +97,7 @@ Tensor tensor_reshape(
 
                         device_buffer->set_shard_spec(shard_spec_buffer);
 
-                        MemoryConfig mem_config = input_tensor.memory_config();
-                        mem_config.shard_spec = shard_spec;
+                        MemoryConfig mem_config = input_tensor.memory_config().with_shard_spec(shard_spec);
 
                         auto upd_spec = ttnn::TensorSpec(
                             new_logical_shape,

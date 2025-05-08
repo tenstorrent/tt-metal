@@ -39,17 +39,15 @@ using ::tt::tt_metal::is_device_tensor;
 
 using MultiProducerCommandQueueTest = ttnn::MultiCommandQueueSingleDeviceFixture;
 
-TEST_F(MultiProducerCommandQueueTest, Stress) {
+// #21556: Disabled until we have clarity about user space multi-threading support
+TEST_F(MultiProducerCommandQueueTest, DISABLED_Stress) {
     // Spawn 2 application level threads intefacing with the same device through the async engine.
     // This leads to shared access of the work_executor and host side worker queue.
     // Test thread safety.
     IDevice* device = this->device_;
 
     const ttnn::Shape tensor_shape{1, 1, 1024, 1024};
-    const MemoryConfig mem_cfg = MemoryConfig{
-        .memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED,
-        .buffer_type = BufferType::DRAM,
-        .shard_spec = std::nullopt};
+    const MemoryConfig mem_cfg = MemoryConfig{tt::tt_metal::TensorMemoryLayout::INTERLEAVED, BufferType::DRAM};
     const TensorLayout tensor_layout(DataType::FLOAT32, PageConfig(Layout::ROW_MAJOR), mem_cfg);
     const TensorSpec tensor_spec(tensor_shape, tensor_layout);
 
@@ -86,7 +84,8 @@ TEST_F(MultiProducerCommandQueueTest, Stress) {
     t1.join();
 }
 
-TEST_F(MultiProducerCommandQueueTest, EventSync) {
+// #21556: Disabled until we have clarity about user space multi-threading support
+TEST_F(MultiProducerCommandQueueTest, DISABLED_EventSync) {
     // Verify that the event_synchronize API stalls the calling thread until
     // the device records the event being polled.
     // Thread 0 = writer thread. Thread 1 = reader thread.
@@ -96,10 +95,7 @@ TEST_F(MultiProducerCommandQueueTest, EventSync) {
     auto device = this->device_;
 
     const ttnn::Shape tensor_shape{1, 1, 1024, 1024};
-    const MemoryConfig mem_cfg = MemoryConfig{
-        .memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED,
-        .buffer_type = BufferType::DRAM,
-        .shard_spec = std::nullopt};
+    const MemoryConfig mem_cfg = MemoryConfig{tt::tt_metal::TensorMemoryLayout::INTERLEAVED, BufferType::DRAM};
     const TensorLayout tensor_layout(DataType::UINT32, PageConfig(Layout::ROW_MAJOR), mem_cfg);
     const TensorSpec tensor_spec(tensor_shape, tensor_layout);
 

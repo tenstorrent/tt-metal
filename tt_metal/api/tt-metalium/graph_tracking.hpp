@@ -10,9 +10,11 @@
 #include <array>
 #include <functional>
 #include <memory>
+#include <mutex>
 #include <span>
 #include <string>
 #include <string_view>
+#include <unordered_set>
 #include <vector>
 
 #include <tt-metalium/buffer.hpp>
@@ -160,5 +162,8 @@ private:
     std::vector<std::shared_ptr<IGraphProcessor>> processors;
 
     std::shared_ptr<IGraphHooks> hook;
+
+    std::mutex hooked_buffers_mutex;
+    std::unordered_set<const Buffer*> hooked_buffers;
 };
 }  // namespace tt::tt_metal

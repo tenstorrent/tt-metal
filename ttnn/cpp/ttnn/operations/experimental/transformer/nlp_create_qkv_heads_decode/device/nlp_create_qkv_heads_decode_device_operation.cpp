@@ -39,9 +39,9 @@ void NLPCreateHeadsDecodeDeviceOperation::validate(
     const auto QKV_memcfg = input_tensor.memory_config();
     if (input_tensor.is_sharded()) {
         TT_FATAL(
-            QKV_memcfg.memory_layout == TensorMemoryLayout::WIDTH_SHARDED,
+            QKV_memcfg.memory_layout() == TensorMemoryLayout::WIDTH_SHARDED,
             "Current input memory layout is {}. It must be width sharded",
-            QKV_memcfg.memory_layout);
+            QKV_memcfg.memory_layout());
         TT_FATAL(
             input_tensor.shard_spec().value().shape[0] == input_tensor.volume() / input_tensor.get_padded_shape()[-1],
             "Shard shape must be correct");
@@ -70,7 +70,7 @@ void NLPCreateHeadsDecodeDeviceOperation::validate(
     // output
     TT_FATAL(
         this->output_mem_config.is_sharded() &&
-            this->output_mem_config.memory_layout == TensorMemoryLayout::HEIGHT_SHARDED,
+            this->output_mem_config.memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED,
         "Output tensor must be height sharded");
 
     // Support maximum 32 heads for now
@@ -81,7 +81,7 @@ void NLPCreateHeadsDecodeDeviceOperation::validate(
         this->num_q_heads,
         this->num_kv_heads);
 
-    uint32_t num_cores = this->output_mem_config.shard_spec.value().grid.num_cores();
+    uint32_t num_cores = this->output_mem_config.shard_spec().value().grid.num_cores();
 
     // 1 User Per Core Max and 32 users for now
     if (this->overlap_qk_coregrid) {
@@ -116,10 +116,7 @@ std::vector<ttnn::TensorSpec> NLPCreateHeadsDecodeDeviceOperation::compute_outpu
     auto num_q_heads_padded = ((this->num_q_heads - 1) / TILE_HEIGHT + 1) * TILE_HEIGHT;
     auto num_kv_heads_padded = ((this->num_q_heads - 1) / TILE_HEIGHT + 1) * TILE_HEIGHT;
 
-    MemoryConfig q_mem_config = this->output_mem_config;
-    MemoryConfig k_mem_config = this->output_mem_config;
-    MemoryConfig v_mem_config = this->output_mem_config;
-    CoreRangeSet output_core_grid = this->output_mem_config.shard_spec.value().grid;
+    CoreRangeSet output_core_grid = this->output_mem_config.shard_spec().value().grid;
     CoreRangeSet q_shard_grid, k_shard_grid, v_shard_grid;
     auto start_core_coord = output_core_grid.ranges().front().start_coord;
 
@@ -140,11 +137,11 @@ std::vector<ttnn::TensorSpec> NLPCreateHeadsDecodeDeviceOperation::compute_outpu
     v_shard_grid = q_shard_grid;
 
     tt::tt_metal::ShardSpec q_shard_spec{q_shard_grid, {num_q_heads_padded, this->head_dim}};
-    q_mem_config.shard_spec = q_shard_spec;
     tt::tt_metal::ShardSpec k_shard_spec{k_shard_grid, {num_kv_heads_padded, this->head_dim}};
-    k_mem_config.shard_spec = k_shard_spec;
     tt::tt_metal::ShardSpec v_shard_spec{v_shard_grid, {num_kv_heads_padded, this->head_dim}};
-    v_mem_config.shard_spec = v_shard_spec;
+    MemoryConfig q_mem_config = this->output_mem_config.with_shard_spec(q_shard_spec);
+    MemoryConfig k_mem_config = this->output_mem_config.with_shard_spec(k_shard_spec);
+    MemoryConfig v_mem_config = this->output_mem_config.with_shard_spec(v_shard_spec);
 
     return {
         TensorSpec(

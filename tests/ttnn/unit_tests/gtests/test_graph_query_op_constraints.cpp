@@ -78,7 +78,7 @@ static std::ostream& operator<<(std::ostream& os, const tt::tt_metal::BufferType
 }
 
 static std::ostream& operator<<(std::ostream& os, const tt::tt_metal::TensorLayout& tensor_layout) {
-    os << tensor_layout.get_memory_config().buffer_type << "_" << tensor_layout.get_memory_config().memory_layout;
+    os << tensor_layout.get_memory_config().buffer_type() << "_" << tensor_layout.get_memory_config().memory_layout();
     return os;
 }
 
@@ -104,9 +104,9 @@ const auto g_height_shard_3_1_1024_1024_tiled_to_16_cores = ttnn::TensorSpec(
         tt::tt_metal::DataType::BFLOAT16,
         tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE),
         tt::tt_metal::MemoryConfig{
-            .memory_layout = TensorMemoryLayout::HEIGHT_SHARDED,
-            .buffer_type = tt::tt_metal::BufferType::L1,
-            .shard_spec = tt::tt_metal::ShardSpec{
+            TensorMemoryLayout::HEIGHT_SHARDED,
+            tt::tt_metal::BufferType::L1,
+            tt::tt_metal::ShardSpec{
                 CoreRangeSet{std::set<CoreRange>{CoreRange{CoreCoord{0, 0}, CoreCoord{3, 3}}}},
                 {6 * 32, 32 * 32},
                 ShardOrientation::ROW_MAJOR}}));
@@ -117,9 +117,9 @@ const auto g_height_shard_1_1_1024_32_tiled_to_32_cores = ttnn::TensorSpec(
         tt::tt_metal::DataType::BFLOAT16,
         tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE),
         tt::tt_metal::MemoryConfig{
-            .memory_layout = TensorMemoryLayout::HEIGHT_SHARDED,
-            .buffer_type = tt::tt_metal::BufferType::L1,
-            .shard_spec = tt::tt_metal::ShardSpec{
+            TensorMemoryLayout::HEIGHT_SHARDED,
+            tt::tt_metal::BufferType::L1,
+            tt::tt_metal::ShardSpec{
                 CoreRangeSet{std::set<CoreRange>{CoreRange{CoreCoord{0, 0}, CoreCoord{7, 3}}}},
                 {32, 64},
                 ShardOrientation::ROW_MAJOR}}));
@@ -172,9 +172,9 @@ const auto g_width_shard_1_1_64_2048_tiled_to_32_cores = ttnn::TensorSpec(
         tt::tt_metal::DataType::BFLOAT16,
         tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE),
         tt::tt_metal::MemoryConfig{
-            .memory_layout = tt::tt_metal::TensorMemoryLayout::WIDTH_SHARDED,
-            .buffer_type = tt::tt_metal::BufferType::L1,
-            .shard_spec = tt::tt_metal::ShardSpec{
+            tt::tt_metal::TensorMemoryLayout::WIDTH_SHARDED,
+            tt::tt_metal::BufferType::L1,
+            tt::tt_metal::ShardSpec{
                 CoreRangeSet{std::set<CoreRange>{CoreRange{CoreCoord{0, 0}, CoreCoord{7, 3}}}},
                 {64, 64},
                 ShardOrientation::ROW_MAJOR}}));
@@ -185,9 +185,9 @@ const auto g_block_shard_1_1_1600_256_tiled_to_32_cores = ttnn::TensorSpec(
         tt::tt_metal::DataType::BFLOAT16,
         tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE),
         tt::tt_metal::MemoryConfig{
-            .memory_layout = tt::tt_metal::TensorMemoryLayout::BLOCK_SHARDED,
-            .buffer_type = tt::tt_metal::BufferType::L1,
-            .shard_spec = tt::tt_metal::ShardSpec{
+            tt::tt_metal::TensorMemoryLayout::BLOCK_SHARDED,
+            tt::tt_metal::BufferType::L1,
+            tt::tt_metal::ShardSpec{
                 CoreRangeSet{std::set<CoreRange>{CoreRange{CoreCoord{0, 0}, CoreCoord{7, 4}}}},
                 {320, 32},
                 ShardOrientation::ROW_MAJOR}}));

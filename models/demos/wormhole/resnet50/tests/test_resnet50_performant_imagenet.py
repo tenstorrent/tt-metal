@@ -14,6 +14,9 @@ from transformers import AutoImageProcessor
 from models.utility_functions import (
     profiler,
 )
+from tqdm import tqdm
+
+NUM_VALIDATION_IMAGES_IMAGENET = 49920
 
 
 @run_for_wormhole_b0()
@@ -33,9 +36,15 @@ def test_run_resnet50_trace_2cqs_inference(
     act_dtype,
     weight_dtype,
     model_location_generator,
+    entire_imagenet_dataset=False,
+    expected_accuracy=0.7555288461538462,
 ):
     batch_size = batch_size_per_device * mesh_device.get_num_devices()
     iterations = iterations // mesh_device.get_num_devices()
+
+    if entire_imagenet_dataset:
+        iterations = NUM_VALIDATION_IMAGES_IMAGENET // batch_size
+
     profiler.clear()
     with torch.no_grad():
         resnet50_trace_2cq = ResNet50Trace2CQ()
@@ -52,11 +61,11 @@ def test_run_resnet50_trace_2cqs_inference(
         image_processor = AutoImageProcessor.from_pretrained(model_version)
         logger.info("ImageNet-1k validation Dataset")
         input_loc = str(model_location_generator("ImageNet_data"))
-        data_loader = get_data_loader(input_loc, batch_size, iterations)
+        data_loader = get_data_loader(input_loc, batch_size, iterations, entire_imagenet_dataset)
 
         input_tensors_all = []
         input_labels_all = []
-        for iter in range(iterations):
+        for iter in tqdm(range(iterations), desc="Preparing images"):
             inputs, labels = get_batch(data_loader, image_processor)
             input_tensors_all.append(inputs)
             input_labels_all.append(labels)
@@ -93,6 +102,10 @@ def test_run_resnet50_trace_2cqs_inference(
         accuracy = correct / (batch_size * iterations)
         logger.info(f"=============")
         logger.info(f"Accuracy for {batch_size}x{iterations} inputs: {accuracy}")
+        if entire_imagenet_dataset:
+            assert (
+                accuracy == expected_accuracy
+            ), f"Accuracy {accuracy} does not match expected accuracy {expected_accuracy}"
 
         first_iter_time = profiler.get(f"compile")
         # ensuring inference time fluctuations is not noise
@@ -103,3 +116,42 @@ def test_run_resnet50_trace_2cqs_inference(
         f"ttnn_{model_version}_batch_size{batch_size} tests inference time (avg): {inference_time_avg}, FPS: {batch_size/inference_time_avg}"
     )
     logger.info(f"ttnn_{model_version}_batch_size{batch_size} compile time: {compile_time}")
+
+
+@run_for_wormhole_b0()
+@pytest.mark.parametrize(
+    "device_params", [{"l1_small_size": 24576, "trace_region_size": 1605632, "num_command_queues": 2}], indirect=True
+)
+@pytest.mark.parametrize(
+    "batch_size_per_device, iterations, act_dtype, weight_dtype",
+    ((16, 100, ttnn.bfloat8_b, ttnn.bfloat8_b),),
+)
+@pytest.mark.parametrize("enable_async_mode", (True,), indirect=True)
+@pytest.mark.parametrize("entire_imagenet_dataset", [True])
+@pytest.mark.parametrize("expected_accuracy", [0.7555288461538462])
+def test_run_resnet50_trace_2cqs_accuracy(
+    mesh_device,
+    use_program_cache,
+    batch_size_per_device,
+    iterations,
+    imagenet_label_dict,
+    act_dtype,
+    weight_dtype,
+    enable_async_mode,
+    model_location_generator,
+    entire_imagenet_dataset,
+    expected_accuracy,
+):
+    test_run_resnet50_trace_2cqs_inference(
+        mesh_device,
+        use_program_cache,
+        batch_size_per_device,
+        iterations,
+        imagenet_label_dict,
+        act_dtype,
+        weight_dtype,
+        enable_async_mode,
+        model_location_generator,
+        entire_imagenet_dataset,
+        expected_accuracy,
+    )
