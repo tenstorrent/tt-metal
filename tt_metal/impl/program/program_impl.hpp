@@ -33,6 +33,7 @@
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
+#include <tt_stl/span.hpp>
 
 namespace tt {
 namespace tt_metal {
@@ -72,6 +73,11 @@ struct ProgramOffsetsState {
     uint32_t kernel_text_offset = 0;
     uint32_t kernel_text_size = 0;
 };
+
+// Add these type declarations before the ProgramImpl class
+using KernelsGetter = std::function<std::unordered_map<KernelHandle, std::shared_ptr<Kernel>>&(uint32_t index)>;
+using KernelGroupsGetter = std::function<std::vector<std::shared_ptr<KernelGroup>>&(uint32_t index)>;
+using SemaphoresGetter = std::function<const std::vector<Semaphore>&()>;
 
 class ProgramImpl {
 public:
@@ -139,6 +145,14 @@ public:
     // Finalizes program offsets for a device
     void finalize_offsets(IDevice* device);
 
+    // Helper function to finalize program offsets with custom getters
+    static void finalize_program_offsets(
+        IDevice* device,
+        const KernelsGetter& kernels_getter,
+        const KernelGroupsGetter& kernel_groups_getter,
+        const SemaphoresGetter& semaphores_getter,
+        tt::stl::Span<ProgramImpl*> programs);
+
 private:
     CommandQueue* last_used_command_queue_for_testing = nullptr;
 
@@ -153,6 +167,9 @@ private:
     // Used only when devices do not have virtualization enabled and used to check that programs are only rerun on
     // the same device
     std::optional<uint64_t> cached_device_hash_;
+
+    // Maximum size for the program in kernel config buffer
+    size_t ring_buffer_size_ = 0;
 
     // TODO: Should map based on the hash of the configured sub-devices
     // This way we can cache it agnostic of the device

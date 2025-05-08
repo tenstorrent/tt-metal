@@ -192,6 +192,7 @@ public:
     const std::vector<SubDeviceId>& determine_sub_device_ids(const IDevice* device);
     void set_kernels_bin_buffer(const std::shared_ptr<Buffer>& buffer);
     uint32_t get_cb_memory_size() const;
+    detail::ProgramImpl& impl() { return *pimpl_; }
 
 private:
     std::unique_ptr<detail::ProgramImpl> pimpl_;

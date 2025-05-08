@@ -1630,20 +1630,55 @@ void detail::ProgramImpl::set_program_attrs_across_core_types(IDevice* device) {
     }
 }
 
+void Program::finalize_offsets(IDevice* device) { pimpl_->finalize_offsets(device); }
+
+using KernelsGetter = std::function<std::unordered_map<KernelHandle, std::shared_ptr<Kernel>>&(uint32_t index)>;
+using KernelGroupsGetter = std::function<std::vector<std::shared_ptr<KernelGroup>>&(uint32_t index)>;
+using SemaphoresGetter = std::function<const std::vector<Semaphore>&()>;
+
 void detail::ProgramImpl::finalize_offsets(IDevice* device) {
     if (is_finalized()) {
         return;
     }
 
+    // Create proper function objects that capture 'this'
+    KernelsGetter kernels_getter =
+        [this](uint32_t index) -> std::unordered_map<KernelHandle, std::shared_ptr<Kernel>>& {
+        return this->get_kernels(index);
+    };
+
+    KernelGroupsGetter kernel_groups_getter = [this](uint32_t index) -> std::vector<std::shared_ptr<KernelGroup>>& {
+        return this->get_kernel_groups(index);
+    };
+
+    SemaphoresGetter semaphores_getter = [this]() -> const std::vector<Semaphore>& { return this->semaphores(); };
+
+    // Create a span with just this program
+    std::array<ProgramImpl*, 1> programs_array = {this};
+    tt::stl::Span<ProgramImpl*> programs(programs_array);
+
+    ProgramImpl::finalize_program_offsets(device, kernels_getter, kernel_groups_getter, semaphores_getter, programs);
+
+    set_finalized();
+}
+
+// Compute relative offsets (wrt the start of the kernel config ring buffer) and sizes of all
+// program data structures in L1. Will be used when assembling dispatch commands for this program
+void detail::ProgramImpl::finalize_program_offsets(
+    IDevice* device,
+    const KernelsGetter& kernels_getter,
+    const KernelGroupsGetter& kernel_groups_getter,
+    const SemaphoresGetter& semaphores_getter,
+    tt::stl::Span<ProgramImpl*> programs) {
     ProgramOffsetsState state;
+
     const auto& hal = MetalContext::instance().hal();
 
     for (uint32_t index = 0; index < hal.get_programmable_core_type_count(); index++) {
         HalProgrammableCoreType programmable_core_type = hal.get_programmable_core_type(index);
-        // Finalize runtime args
         state.offset = program_dispatch::finalize_rt_args(
-            get_kernels(index),
-            get_kernel_groups(index),
+            kernels_getter(index),
+            kernel_groups_getter(index),
             state.config_base_offset,
             index,
             state.rta_offset,
@@ -1652,32 +1687,29 @@ void detail::ProgramImpl::finalize_offsets(IDevice* device) {
 
         TT_ASSERT(state.offset == tt::align(state.offset, hal.get_alignment(HalMemType::L1)));
 
-        // Finalize semaphores
         state.offset =
-            program_dispatch::finalize_sems(index, state.offset, semaphores(), state.sem_offset, state.sem_size);
+            program_dispatch::finalize_sems(index, state.offset, semaphores_getter(), state.sem_offset, state.sem_size);
 
         TT_ASSERT(state.offset == tt::align(state.offset, hal.get_alignment(HalMemType::L1)));
 
-        // Finalize circular buffers
         state.offset = program_dispatch::finalize_cbs(
-            index, get_kernel_groups(index), state.offset, state.cb_offset, state.cb_size, state.local_cb_size);
+            index, kernel_groups_getter(index), state.offset, state.cb_offset, state.cb_size, state.local_cb_size);
 
         TT_ASSERT(state.offset == tt::align(state.offset, hal.get_alignment(HalMemType::L1)));
 
-        // Finalize kernel binaries
         state.offset = program_dispatch::finalize_kernel_bins(
             device,
             index,
-            get_kernels(index),
-            get_kernel_groups(index),
+            kernels_getter(index),
+            kernel_groups_getter(index),
             state.offset,
             state.kernel_text_offset,
             state.kernel_text_size);
 
         TT_ASSERT(state.offset == tt::align(state.offset, hal.get_alignment(HalMemType::L1)));
 
-        // Verify program size fits in kernel config buffer
         size_t max_size = get_ringbuffer_size(device, programmable_core_type);
+
         TT_FATAL(
             state.offset < max_size,
             "Program size ({}) too large for kernel config buffer ({}) on {}",
@@ -1685,16 +1717,15 @@ void detail::ProgramImpl::finalize_offsets(IDevice* device) {
             max_size,
             magic_enum::enum_name(programmable_core_type));
 
-        set_program_offsets_and_sizes(index, state);
+        for (auto& program : programs) {
+            program->set_program_offsets_and_sizes(index, state);
+        }
     }
 
-    // Configure attributes that cross core types
-    set_program_attrs_across_core_types(device);
-
-    // Mark program as finalized
-    set_finalized();
+    // The sem offsets cross programmable_core_types so must be set after the loop above
+    for (auto& program : programs) {
+        program->set_program_attrs_across_core_types(device);
+    }
 }
-
-void Program::finalize_offsets(IDevice* device) { pimpl_->finalize_offsets(device); }
 
 }  // namespace tt::tt_metal
