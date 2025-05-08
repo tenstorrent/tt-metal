@@ -5,14 +5,18 @@
 #include <cstdint>
 
 void kernel_main() {
+    // Read parameters from the kernel arguments
     std::uint32_t l1_buffer_addr = get_arg_val<uint32_t>(0);
 
+    // Address and the DRAM bank ID of the source buffer
     std::uint32_t dram_buffer_src_addr  = get_arg_val<uint32_t>(1);
     std::uint32_t dram_buffer_src_bank  = get_arg_val<uint32_t>(2);
 
+    // Address and the DRAM bank ID of the destination buffer
     std::uint32_t dram_buffer_dst_addr  = get_arg_val<uint32_t>(3);
     std::uint32_t dram_buffer_dst_bank  = get_arg_val<uint32_t>(4);
 
+    // Size of the buffer in bytes
     std::uint32_t dram_buffer_size      = get_arg_val<uint32_t>(5);
 
     std::uint64_t dram_buffer_src_noc_addr =
