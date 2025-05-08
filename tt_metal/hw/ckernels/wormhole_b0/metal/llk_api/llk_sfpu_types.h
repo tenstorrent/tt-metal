@@ -103,6 +103,4 @@ enum SfpuType {
     alt_complex_rotate90,
     round,
     cpy_values,
-    gcd,
-    lcm,
 };
