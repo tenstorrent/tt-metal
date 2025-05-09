@@ -16,6 +16,7 @@
 
 namespace tt::tt_metal::distributed {
 
+using MeshSocketTest = T3000MeshDeviceFixture;
 using MeshSocketTest1DFabric = T3000MeshDevice1DFabricFixture;
 using MeshSocketTest2DFabric = T3000MeshDevice2DFabricFixture;
 
@@ -553,6 +554,8 @@ void test_single_connection_multi_device_socket(
     auto recv_virtual_coord = md1->worker_core_from_logical_core(recv_logical_coord);
 
     auto l1_alignment = MetalContext::instance().hal().get_alignment(HalMemType::L1);
+    auto fabric_max_packet_size =
+        tt::tt_fabric::get_1d_fabric_config().channel_buffer_size_bytes - sizeof(tt::tt_fabric::PacketHeader);
 
     // Create Socket between Sender and Receiver
     socket_connection_t socket_connection = {
@@ -616,11 +619,12 @@ void test_single_connection_multi_device_socket(
         DataMovementConfig{
             .processor = DataMovementProcessor::RISCV_0,
             .noc = NOC::RISCV_0_default,
-            .compile_args = {
-                static_cast<uint32_t>(send_socket.config_buffer->address()),
-                static_cast<uint32_t>(sender_data_buffer->address()),
-                static_cast<uint32_t>(page_size),
-                static_cast<uint32_t>(data_size)}});
+            .compile_args =
+                {static_cast<uint32_t>(send_socket.config_buffer->address()),
+                 static_cast<uint32_t>(sender_data_buffer->address()),
+                 static_cast<uint32_t>(page_size),
+                 static_cast<uint32_t>(data_size)},
+            .defines = {{"FABRIC_MAX_PACKET_SIZE", std::to_string(fabric_max_packet_size)}}});
 
     auto sender_packet_header_CB_handle =
         CreateCircularBuffer(sender_program, sender_logical_coord, sender_cb_reserved_packet_header_config);
@@ -749,7 +753,8 @@ void test_single_connection_multi_device_socket_with_workers(
     auto output_virtual_coord = md1->worker_core_from_logical_core(output_logical_coord);
 
     auto l1_alignment = MetalContext::instance().hal().get_alignment(HalMemType::L1);
-
+    auto fabric_max_packet_size =
+        tt::tt_fabric::get_1d_fabric_config().channel_buffer_size_bytes - sizeof(tt::tt_fabric::PacketHeader);
     // Create Socket between Sender and Receiver
     socket_connection_t socket_connection = {
         .sender_core = {MeshCoordinate(0, 0), sender_logical_coord},
@@ -814,11 +819,12 @@ void test_single_connection_multi_device_socket_with_workers(
         DataMovementConfig{
             .processor = DataMovementProcessor::RISCV_0,
             .noc = NOC::RISCV_0_default,
-            .compile_args = {
-                static_cast<uint32_t>(send_socket.config_buffer->address()),
-                static_cast<uint32_t>(sender_data_buffer->address()),
-                static_cast<uint32_t>(page_size),
-                static_cast<uint32_t>(data_size)}});
+            .compile_args =
+                {static_cast<uint32_t>(send_socket.config_buffer->address()),
+                 static_cast<uint32_t>(sender_data_buffer->address()),
+                 static_cast<uint32_t>(page_size),
+                 static_cast<uint32_t>(data_size)},
+            .defines = {{"FABRIC_MAX_PACKET_SIZE", std::to_string(fabric_max_packet_size)}}});
 
     auto sender_packet_header_CB_handle =
         CreateCircularBuffer(sender_program, sender_logical_coord, sender_cb_reserved_packet_header_config);
@@ -933,6 +939,8 @@ std::shared_ptr<Program> create_sender_program(
     chip_id_t sender_physical_device_id,
     chip_id_t recv_physical_device_id) {
     static constexpr auto packet_header_size_bytes = sizeof(tt::tt_fabric::PacketHeader);
+    auto fabric_max_packet_size =
+        tt::tt_fabric::get_1d_fabric_config().channel_buffer_size_bytes - sizeof(tt::tt_fabric::PacketHeader);
     const auto reserved_packet_header_CB_index = tt::CB::c_in0;
     auto sender_program = std::make_shared<Program>();
     auto sender_kernel = CreateKernel(
@@ -942,11 +950,12 @@ std::shared_ptr<Program> create_sender_program(
         DataMovementConfig{
             .processor = DataMovementProcessor::RISCV_0,
             .noc = NOC::RISCV_0_default,
-            .compile_args = {
-                static_cast<uint32_t>(sender_socket.config_buffer->address()),
-                static_cast<uint32_t>(sender_data_buffer->address()),
-                static_cast<uint32_t>(page_size),
-                static_cast<uint32_t>(data_size)}});
+            .compile_args =
+                {static_cast<uint32_t>(sender_socket.config_buffer->address()),
+                 static_cast<uint32_t>(sender_data_buffer->address()),
+                 static_cast<uint32_t>(page_size),
+                 static_cast<uint32_t>(data_size)},
+            .defines = {{"FABRIC_MAX_PACKET_SIZE", std::to_string(fabric_max_packet_size)}}});
 
     tt::tt_metal::CircularBufferConfig sender_cb_reserved_packet_header_config =
         tt::tt_metal::CircularBufferConfig(
@@ -1429,9 +1438,10 @@ void test_multi_connection_multi_device_data_copy(
         EXPECT_EQ(output_data_readback, src_vec);
     }
 }
+// ========= Config Validation Tests =========
 
 // Sanity test with a single connection
-TEST_F(MeshSocketTest2DFabric, SingleConnectionSingleDeviceConfig) {
+TEST_F(MeshSocketTest, SingleConnectionSingleDeviceConfig) {
     auto md0 = mesh_device_->create_submesh(MeshShape(1, 1), MeshCoordinate(0, 0));
     auto current_device_id = md0->get_device(MeshCoordinate(0, 0))->id();
     auto sender_logical_coord = CoreCoord(0, 0);
@@ -1481,7 +1491,7 @@ TEST_F(MeshSocketTest2DFabric, SingleConnectionSingleDeviceConfig) {
 }
 
 // Test multiple connections
-TEST_F(MeshSocketTest2DFabric, MultiConnectionSingleDeviceConfig) {
+TEST_F(MeshSocketTest, MultiConnectionSingleDeviceConfig) {
     auto md0 = mesh_device_->create_submesh(MeshShape(1, 1), MeshCoordinate(0, 0));
     auto current_device_id = md0->get_device(MeshCoordinate(0, 0))->id();
     std::size_t socket_fifo_size = 1024;
@@ -1557,7 +1567,7 @@ TEST_F(MeshSocketTest2DFabric, MultiConnectionSingleDeviceConfig) {
             socket_fifo_size);
     }
 }
-
+// Test random connections across multiple devices
 TEST_F(MeshSocketTest2DFabric, MultiConnectionMultiDeviceTest) {
     auto md0 = mesh_device_->create_submesh(MeshShape(1, 4), MeshCoordinate(0, 0));
     auto md1 = mesh_device_->create_submesh(MeshShape(1, 4), MeshCoordinate(1, 0));
@@ -1678,6 +1688,7 @@ TEST_F(MeshSocketTest2DFabric, MultiConnectionMultiDeviceTest) {
     }
 }
 
+// Verify that sockets are correctly created on different sub devices
 TEST_F(MeshSocketTest2DFabric, SocketsOnSubDevice) {
     auto md0 = mesh_device_->create_submesh(MeshShape(1, 1), MeshCoordinate(0, 0));
     auto md1 = mesh_device_->create_submesh(MeshShape(1, 1), MeshCoordinate(1, 0));
@@ -1772,8 +1783,9 @@ TEST_F(MeshSocketTest2DFabric, SocketsOnSubDevice) {
     md0->clear_loaded_sub_device_manager();
     md1->clear_loaded_sub_device_manager();
 }
+// ========= Single Device Data Movement Tests =========
 
-TEST_F(MeshSocketTest1DFabric, SingleConnectionSingleDeviceSocket) {
+TEST_F(MeshSocketTest, SingleConnectionSingleDeviceSocket) {
     auto md0 = mesh_device_->create_submesh(MeshShape(1, 1), MeshCoordinate(0, 0));
     // No wrap
     test_single_connection_single_device_socket(md0, 1024, 64, 1024, false);
@@ -1783,7 +1795,7 @@ TEST_F(MeshSocketTest1DFabric, SingleConnectionSingleDeviceSocket) {
     test_single_connection_single_device_socket(md0, 4096, 1088, 9792, false);
 }
 
-TEST_F(MeshSocketTest1DFabric, SingleConnectionSingleDeviceSocketWithCBs) {
+TEST_F(MeshSocketTest, SingleConnectionSingleDeviceSocketWithCBs) {
     auto md0 = mesh_device_->create_submesh(MeshShape(1, 1), MeshCoordinate(0, 0));
     auto tile_size_bytes = tile_size(tt::DataFormat::UInt32);
     test_single_connection_single_device_socket(
@@ -1798,7 +1810,7 @@ TEST_F(MeshSocketTest1DFabric, SingleConnectionSingleDeviceSocketWithCBs) {
         md0, 6 * tile_size_bytes, 5 * tile_size_bytes, 25 * tile_size_bytes, true);
 }
 
-TEST_F(MeshSocketTest1DFabric, SingleConnectionSingleDeviceSocketWithWorkersFinalAck) {
+TEST_F(MeshSocketTest, SingleConnectionSingleDeviceSocketWithWorkersFinalAck) {
     auto md0 = mesh_device_->create_submesh(MeshShape(1, 1), MeshCoordinate(0, 0));
     std::vector<socket_core_mapping> socket_core_mappings = {
         {.sender_core = {0, 0},
@@ -1812,7 +1824,7 @@ TEST_F(MeshSocketTest1DFabric, SingleConnectionSingleDeviceSocketWithWorkersFina
     test_single_device_socket_with_workers(md0, 1024, 64, 1024, socket_core_mappings, true);
 }
 
-TEST_F(MeshSocketTest1DFabric, SingleConnectionSingleDeviceSocketWithWorkersLoopAck) {
+TEST_F(MeshSocketTest, SingleConnectionSingleDeviceSocketWithWorkersLoopAck) {
     auto md0 = mesh_device_->create_submesh(MeshShape(1, 1), MeshCoordinate(0, 0));
     std::vector<socket_core_mapping> socket_core_mappings = {
         {.sender_core = {0, 0},
@@ -1830,7 +1842,7 @@ TEST_F(MeshSocketTest1DFabric, SingleConnectionSingleDeviceSocketWithWorkersLoop
     test_single_device_socket_with_workers(md0, 4096, 1088, 9792, socket_core_mappings, false);
 }
 
-TEST_F(MeshSocketTest1DFabric, MultiConnectionSingleDeviceSocketWithWorkersFinalAck) {
+TEST_F(MeshSocketTest, MultiConnectionSingleDeviceSocketWithWorkersFinalAck) {
     auto md0 = mesh_device_->create_submesh(MeshShape(1, 1), MeshCoordinate(0, 0));
     std::vector<socket_core_mapping> socket_core_mappings = {
         {.sender_core = {0, 0},
@@ -1849,7 +1861,7 @@ TEST_F(MeshSocketTest1DFabric, MultiConnectionSingleDeviceSocketWithWorkersFinal
     test_single_device_socket_with_workers(md0, 1024, 64, 1024, socket_core_mappings, true);
 }
 
-TEST_F(MeshSocketTest1DFabric, MultiConnectionSingleDeviceSocketWithWorkersLoopAck) {
+TEST_F(MeshSocketTest, MultiConnectionSingleDeviceSocketWithWorkersLoopAck) {
     auto md0 = mesh_device_->create_submesh(MeshShape(1, 1), MeshCoordinate(0, 0));
     std::vector<socket_core_mapping> socket_core_mappings = {
         {.sender_core = {0, 0},
@@ -1871,6 +1883,8 @@ TEST_F(MeshSocketTest1DFabric, MultiConnectionSingleDeviceSocketWithWorkersLoopA
     // Uneven wrap
     test_single_device_socket_with_workers(md0, 4096, 1088, 9792, socket_core_mappings, false);
 }
+
+// ========= Multi Device Data Movement Tests =========
 
 TEST_F(MeshSocketTest1DFabric, SingleConnectionMultiDeviceSocketWithWorkers) {
     auto md1 = mesh_device_->create_submesh(MeshShape(1, 1), MeshCoordinate(1, 0));
@@ -1928,4 +1942,5 @@ TEST_F(MeshSocketTest1DFabric, MultiConnectionMultiDeviceDataCopy) {
     test_multi_connection_multi_device_data_copy(sender_mesh, recv_mesh, 1024, 64, 2048);
     test_multi_connection_multi_device_data_copy(sender_mesh, recv_mesh, 4096, 1088, 9792);
 }
+
 }  // namespace tt::tt_metal::distributed
