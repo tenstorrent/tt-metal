@@ -6,7 +6,7 @@ TT_ENABLE_UNITY_BUILD(single_host_mp)
 target_sources(
     single_host_mp
     PRIVATE
-        test_send_recv.cpp
+        test_context.cpp
         main.cpp
 )
 target_include_directories(
@@ -14,6 +14,7 @@ target_include_directories(
     PRIVATE
         "$<TARGET_PROPERTY:Metalium::Metal,INCLUDE_DIRECTORIES>"
         ${PROJECT_SOURCE_DIR}/tests
+        ${PROJECT_SOURCE_DIR}/tests/tt_metal/multihost
 )
 target_link_libraries(single_host_mp PRIVATE test_metal_common_libs)
 

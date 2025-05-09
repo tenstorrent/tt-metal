@@ -47,6 +47,26 @@ constexpr MPI_Datatype dtype_to_mpi(DType dt) noexcept {
     return MPI_DATATYPE_NULL;
 }
 
+constexpr inline int mpi_dtype_size(DType dt) noexcept {
+    switch (dt) {
+        case DType::INT8:
+        case DType::UINT8:
+        case DType::BOOL:
+        case DType::BYTE: return 1;
+        case DType::INT16:
+        case DType::UINT16: return 2;
+        case DType::INT32:
+        case DType::UINT32:
+        case DType::FLOAT32: return 4;
+        case DType::INT64:
+        case DType::UINT64:
+        case DType::FLOAT64: return 8;
+        case DType::COMPLEX_FLOAT: return 8;
+        case DType::COMPLEX_DOUBLE: return 16;
+    }
+    return 0;
+}
+
 inline void check_size_fits_int(std::size_t n) {
     if (n > static_cast<std::size_t>(std::numeric_limits<int>::max())) {
         TT_THROW("MPI buffer size > INT_MAX");
@@ -188,101 +208,150 @@ void MPIContext::broadcast(tt::stl::Span<std::byte> buf, Rank root) const
 
 void MPIContext::all_reduce(
     tt::stl::Span<std::byte> send_buf, tt::stl::Span<std::byte> recv_buf, ReduceOp op, DType dtype) const {
-    if (send_buf.size() != recv_buf.size()) {
-        TT_THROW("send/recv buffer size mismatch, {} != {}", send_buf.size(), recv_buf.size());
-    }
     check_size_fits_int(send_buf.size());
 
-    MPI_CHECK(MPI_Allreduce(
-        send_buf.data(),
-        recv_buf.data(),
-        static_cast<int>(send_buf.size()),
-        dtype_to_mpi(dtype),
-        reduce_to_mpi(op),
-        comm_));
+    TT_FATAL(
+        send_buf.size() == recv_buf.size(),
+        "all_reduce: send/recv sizes differ ({} vs {})",
+        send_buf.size(),
+        recv_buf.size());
+
+    const int elem_size = mpi_dtype_size(dtype);  // e.g. 4 for FLOAT32
+    TT_FATAL(
+        send_buf.size() % elem_size == 0,
+        "all_reduce: buffer size {} is not a multiple of element size {}",
+        send_buf.size(),
+        elem_size);
+
+    const int count = static_cast<int>(send_buf.size() / elem_size);
+
+    // allow in‑place (send == recv) by switching to MPI_IN_PLACE
+    void* send_ptr = (send_buf.data() == recv_buf.data()) ? MPI_IN_PLACE : static_cast<void*>(send_buf.data());
+
+    MPI_CHECK(MPI_Allreduce(send_ptr, recv_buf.data(), count, dtype_to_mpi(dtype), reduce_to_mpi(op), comm_));
 }
 
 void MPIContext::reduce(
     tt::stl::Span<std::byte> send_buf, tt::stl::Span<std::byte> recv_buf, ReduceOp op, DType dtype, Rank root) const {
-    if (recv_buf.size() < send_buf.size()) {
-        TT_THROW("recv buffer too small: {} < {}", recv_buf.size(), send_buf.size());
-    }
-    check_size_fits_int(send_buf.size());
+    const int elem_sz = mpi_dtype_size(dtype);
+    TT_FATAL(
+        send_buf.size() % elem_sz == 0,
+        "reduce: send size {} not multiple of element size {}",
+        send_buf.size(),
+        elem_sz);
 
-    MPI_CHECK(MPI_Reduce(
-        send_buf.data(),
-        recv_buf.data(),
-        static_cast<int>(send_buf.size()),
-        dtype_to_mpi(dtype),
-        reduce_to_mpi(op),
-        *root,
-        comm_));
-}
+    const int count = static_cast<int>(send_buf.size() / elem_sz);
+    check_size_fits_int(count);
 
-void MPIContext::gather(tt::stl::Span<std::byte> send_buf,
-                        tt::stl::Span<std::byte> recv_buf, Rank root) const
-{
-    check_size_fits_int(send_buf.size());
-    MPI_CHECK(MPI_Gather(
-        send_buf.data(),
-        static_cast<int>(send_buf.size()),
-        MPI_CHAR,
-        recv_buf.data(),
-        static_cast<int>(send_buf.size()),
-        MPI_CHAR,
-        *root,
-        comm_));
-}
-
-void MPIContext::scatter(tt::stl::Span<std::byte> send_buf,
-                         tt::stl::Span<std::byte> recv_buf, Rank root) const
-{
-    check_size_fits_int(recv_buf.size());
-    MPI_CHECK(MPI_Scatter(
-        send_buf.data(),
-        static_cast<int>(recv_buf.size()),
-        MPI_CHAR,
-        recv_buf.data(),
-        static_cast<int>(recv_buf.size()),
-        MPI_CHAR,
-        *root,
-        comm_));
-}
-
-void MPIContext::all_gather(tt::stl::Span<std::byte> send_buf,
-                            tt::stl::Span<std::byte> recv_buf) const
-{
-    check_size_fits_int(send_buf.size());
-    MPI_CHECK(MPI_Allgather(
-        send_buf.data(),
-        static_cast<int>(send_buf.size()),
-        MPI_CHAR,
-        recv_buf.data(),
-        static_cast<int>(send_buf.size()),
-        MPI_CHAR,
-        comm_));
-}
-
-void MPIContext::all_to_all(tt::stl::Span<std::byte> send_buf,
-                            tt::stl::Span<std::byte> recv_buf) const
-{
-    int n = size_;
-    if (send_buf.size() % n || recv_buf.size() % n) {
-        TT_THROW("send buffer size {} or recv buffer size {} not divisible by world size {}", send_buf.size(), recv_buf.size(), n);
+    // On non‑root ranks 'recv_buf' can be any pointer (or even nullptr).  On root it must fit.
+    if (rank() == root) {
+        TT_FATAL(
+            recv_buf.size() == send_buf.size(),
+            "reduce: on root rank, recv size {} != send size {}",
+            recv_buf.size(),
+            send_buf.size());
     }
 
-    int block = static_cast<int>(send_buf.size() / n);
+    void* send_ptr = (send_buf.data() == recv_buf.data()) ? MPI_IN_PLACE : send_buf.data();
+
+    MPI_CHECK(MPI_Reduce(send_ptr, recv_buf.data(), count, dtype_to_mpi(dtype), reduce_to_mpi(op), *root, comm_));
+}
+
+void MPIContext::gather(tt::stl::Span<std::byte> send_buf, tt::stl::Span<std::byte> recv_buf, Rank root) const {
+    const int send_count = static_cast<int>(send_buf.size());
+    check_size_fits_int(send_count);
+
+    // Root must have room for 'size()' times the per‑rank payload.
+    if (rank() == root) {
+        const std::size_t expected = static_cast<std::size_t>(send_count) * (*size());
+        TT_FATAL(
+            recv_buf.size() == expected, "gather: root recv buffer {} bytes, expected {}", recv_buf.size(), expected);
+    }
+
+    MPI_CHECK(MPI_Gather(send_buf.data(), send_count, MPI_CHAR, recv_buf.data(), send_count, MPI_CHAR, *root, comm_));
+}
+
+void MPIContext::scatter(tt::stl::Span<std::byte> send_buf, tt::stl::Span<std::byte> recv_buf, Rank root) const {
+    const int recv_count = static_cast<int>(recv_buf.size());
+    check_size_fits_int(recv_count);
+
+    if (rank() == root) {
+        const std::size_t expected = static_cast<std::size_t>(recv_count) * (*size());
+        TT_FATAL(
+            send_buf.size() == expected, "scatter: root send buffer {} bytes, expected {}", send_buf.size(), expected);
+    }
+
+    MPI_CHECK(MPI_Scatter(send_buf.data(), recv_count, MPI_CHAR, recv_buf.data(), recv_count, MPI_CHAR, *root, comm_));
+}
+
+void MPIContext::all_gather(tt::stl::Span<std::byte> send_buf, tt::stl::Span<std::byte> recv_buf) const {
+    const int send_count = static_cast<int>(send_buf.size());
+    check_size_fits_int(send_count);
+
+    const std::size_t expected_recv = static_cast<std::size_t>(send_count) * (*size());
+
+    TT_FATAL(
+        recv_buf.size() == expected_recv,
+        "all_gather: recv buffer {} bytes, expected {} (world × send)",
+        recv_buf.size(),
+        expected_recv);
+
+    // allow MPI_IN_PLACE if caller wants to receive in the same buffer
+    void* send_ptr = (send_buf.data() == recv_buf.data()) ? MPI_IN_PLACE : send_buf.data();
+
+    MPI_CHECK(MPI_Allgather(send_ptr, send_count, MPI_CHAR, recv_buf.data(), send_count, MPI_CHAR, comm_));
+}
+
+void MPIContext::all_to_all(tt::stl::Span<std::byte> send_buf, tt::stl::Span<std::byte> recv_buf) const {
+    const int world = *size();
+
+    TT_FATAL(
+        send_buf.size() % world == 0 && recv_buf.size() % world == 0,
+        "all_to_all: send ({}) or recv ({}) size not divisible by world size {}",
+        send_buf.size(),
+        recv_buf.size(),
+        world);
+
+    TT_FATAL(
+        send_buf.size() == recv_buf.size(),
+        "all_to_all: send size {} != recv size {}",
+        send_buf.size(),
+        recv_buf.size());
+
+    const int block = static_cast<int>(send_buf.size() / world);
+    check_size_fits_int(block);
+
     MPI_CHECK(MPI_Alltoall(send_buf.data(), block, MPI_CHAR, recv_buf.data(), block, MPI_CHAR, comm_));
 }
 
 void MPIContext::reduce_scatter(
     tt::stl::Span<std::byte> send_buf, tt::stl::Span<std::byte> recv_buf, ReduceOp op, DType dtype) const {
-    int n = size_;
-    if (send_buf.size() % n) {
-        TT_THROW("send buffer size {} not divisible by world size {}", send_buf.size(), n);
-    }
+    const int world = *size();
+    const int elem_sz = mpi_dtype_size(dtype);
 
-    int recv_count = static_cast<int>(send_buf.size() / n);
+    TT_FATAL(
+        send_buf.size() % elem_sz == 0,
+        "reduce_scatter: send size {} is not multiple of element size {}",
+        send_buf.size(),
+        elem_sz);
+
+    const std::size_t total_elems = send_buf.size() / elem_sz;
+    TT_FATAL(
+        total_elems % world == 0,
+        "reduce_scatter: element count {} not divisible by world size {}",
+        total_elems,
+        world);
+
+    const std::size_t recv_elems = total_elems / world;
+    const std::size_t expected_recv_bytes = recv_elems * elem_sz;
+
+    TT_FATAL(
+        recv_buf.size() == expected_recv_bytes,
+        "reduce_scatter: recv size {} != expected {}",
+        recv_buf.size(),
+        expected_recv_bytes);
+
+    const int recv_count = static_cast<int>(recv_elems);
     check_size_fits_int(recv_count);
 
     MPI_CHECK(MPI_Reduce_scatter(
@@ -291,20 +360,23 @@ void MPIContext::reduce_scatter(
 
 void MPIContext::scan(
     tt::stl::Span<std::byte> send_buf, tt::stl::Span<std::byte> recv_buf, ReduceOp op, DType dtype) const {
-    if (send_buf.size() != recv_buf.size()) {
-        TT_THROW("send {}/recv {} buffer size mismatch ", send_buf.size(), recv_buf.size());
-    }
-    check_size_fits_int(send_buf.size());
+    TT_FATAL(
+        send_buf.size() == recv_buf.size(), "scan: send size {} != recv size {}", send_buf.size(), recv_buf.size());
 
-    MPI_CHECK(MPI_Scan(
-        send_buf.data(),
-        recv_buf.data(),
-        static_cast<int>(send_buf.size()),
-        dtype_to_mpi(dtype),
-        reduce_to_mpi(op),
-        comm_));
+    const int elem_sz = mpi_dtype_size(dtype);
+    TT_FATAL(
+        send_buf.size() % elem_sz == 0,
+        "scan: buffer size {} not multiple of element size {}",
+        send_buf.size(),
+        elem_sz);
+
+    const int count = static_cast<int>(send_buf.size() / elem_sz);
+    check_size_fits_int(count);
+
+    void* send_ptr = (send_buf.data() == recv_buf.data()) ? MPI_IN_PLACE : send_buf.data();
+
+    MPI_CHECK(MPI_Scan(send_ptr, recv_buf.data(), count, dtype_to_mpi(dtype), reduce_to_mpi(op), comm_));
 }
-
 /* ---- communicator management ------------------------------------------ */
 
 std::shared_ptr<DistributedContext> MPIContext::duplicate() const

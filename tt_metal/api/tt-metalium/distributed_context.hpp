@@ -102,7 +102,7 @@ inline constexpr bool is_supported_dtype_v = is_supported_dtype<T>::value;
 
 template <typename T>
 tt::stl::Span<std::byte> as_bytes(tt::stl::Span<T> view) {
-    return tt::stl::Span<std::byte>(reinterpret_cast<std::byte>(view.data()), view.size() * sizeof(T));
+    return tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(view.data()), view.size() * sizeof(T));
 }
 
 using Rank = tt::stl::StrongType<int, struct RankTag>;
@@ -226,7 +226,5 @@ public:
     virtual void abort(int error_code) const = 0;
 
     virtual ~DistributedContext() = default;
-
-    // user friendly functions
 };
 }  // namespace tt::tt_metal::distributed::multihost
