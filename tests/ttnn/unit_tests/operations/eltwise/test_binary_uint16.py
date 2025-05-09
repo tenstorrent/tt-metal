@@ -338,16 +338,24 @@ def test_binary_sub_uint16_sharded(a_shape, b_shape, sharded_config, device):
         (0, 255, 0, 255),
         (0, 100, 100, 300),
         (0, 150, 300, 430),
+        (0, 32, 1000, 2000),
+        (0, 4, 10000, 16000),
+        (0, 2, 16000, 32767),
+        (0, 1, 32767, 65535),
     ],
 )
 def test_binary_mul_uint16_bcast(a_shape, b_shape, low_a, high_a, low_b, high_b, device):
-    num_elements = max(int(torch.prod(torch.tensor(a_shape)).item()), 1)
-    torch_input_tensor_a = torch.linspace(high_a, low_a, num_elements, dtype=torch.int32)
-    torch_input_tensor_a = torch_input_tensor_a[:num_elements].reshape(a_shape).nan_to_num(0.0)
+    num_elements_a = max(int(torch.prod(torch.tensor(a_shape)).item()), 1)
+    if high_a in (32, 4, 2, 1):
+        values_a = torch.arange(low_a, high_a + 1, dtype=torch.int32)
+        torch_input_tensor_a = values_a[torch.randint(0, len(values_a), (num_elements_a,))]
+    else:
+        torch_input_tensor_a = torch.linspace(high_a, low_a, num_elements_a, dtype=torch.int32)
+    torch_input_tensor_a = torch_input_tensor_a[:num_elements_a].reshape(a_shape).nan_to_num(0.0)
 
-    num_elements = max(int(torch.prod(torch.tensor(b_shape)).item()), 1)
-    torch_input_tensor_b = torch.linspace(high_b, low_b, num_elements, dtype=torch.int32)
-    torch_input_tensor_b = torch_input_tensor_b[:num_elements].reshape(b_shape).nan_to_num(0.0)
+    num_elements_b = max(int(torch.prod(torch.tensor(b_shape)).item()), 1)
+    torch_input_tensor_b = torch.linspace(high_b, low_b, num_elements_b, dtype=torch.int32)
+    torch_input_tensor_b = torch_input_tensor_b[:num_elements_b].reshape(b_shape).nan_to_num(0.0)
 
     golden_function = ttnn.get_golden_function(ttnn.mul)
     torch_output_tensor = golden_function(torch_input_tensor_a, torch_input_tensor_b, device=device)

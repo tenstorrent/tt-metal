@@ -20,13 +20,14 @@ inline void mul_uint16(const uint dst_offset) {
         TTI_SFPLOAD(p_sfpu::LREG0, LO16, ADDR_MOD_3, 0);
         // operand B - uint16
         TT_SFPLOAD(p_sfpu::LREG1, LO16, ADDR_MOD_3, dst_offset * dst_tile_size);
-        // uint16 -> fp32
+
+        // The following cast+mul+cast method provides accurate results if both inputs ≤ (2**16)-1 but could cause
+        // precision loss beyond (2**16)-1. For such cases, we could split 16-bit input into two 8-bit chunks, cast to
+        // fp32, multiply and then cast back. uint16 -> fp32
         TTI_SFPCAST(p_sfpu::LREG0, p_sfpu::LREG0, 0);
         TTI_SFPCAST(p_sfpu::LREG1, p_sfpu::LREG1, 0);
-
         TTI_SFPMUL(p_sfpu::LREG0, p_sfpu::LREG1, p_sfpu::LCONST_0, p_sfpu::LREG0, 0);
         TTI_NOP;
-
         // fp32 -> uint16
         TTI_SFP_STOCH_RND(0, 0, 0, p_sfpu::LREG0, p_sfpu::LREG0, 6);
         TTI_SFPSTORE(p_sfpu::LREG0, LO16, ADDR_MOD_3, 0);
