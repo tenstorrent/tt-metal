@@ -2,41 +2,28 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import numpy as np
+import pytest
 import torch
 import transformers
-import pytest
 from loguru import logger
-import numpy as np
 from sklearn.metrics import top_k_accuracy_score
 from ttnn.model_preprocessing import preprocess_model_parameters
-from models.demos.ttnn_falcon7b.tt.common import create_custom_preprocessor
 
+import ttnn
+from models.demos.ttnn_falcon7b.tt.common import create_custom_preprocessor, create_kv_cache
 from models.demos.ttnn_falcon7b.tt.falcon_causallm import TtFalconCausalLM
-
-from models.demos.ttnn_falcon7b.tt.model_config import (
-    get_model_config,
-    get_tt_cache_path,
-)
-
-from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
-    comp_pcc,
-)
-from models.demos.ttnn_falcon7b.tt.common import (
-    create_custom_preprocessor,
-    create_kv_cache,
-)
-
+from models.demos.ttnn_falcon7b.tt.model_config import get_model_config, get_tt_cache_path
+from models.perf.perf_utils import prep_perf_report
 from models.utility_functions import (
-    profiler,
-    enable_persistent_kernel_cache,
     disable_persistent_kernel_cache,
+    enable_persistent_kernel_cache,
+    is_blackhole,
     is_e75,
     is_wormhole_b0,
-    is_wormhole_b0,
-    is_blackhole,
+    profiler,
 )
-from models.perf.perf_utils import prep_perf_report
-import ttnn
+from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
 
 
 # TODO: Replace this with actual Falcon application-level tests

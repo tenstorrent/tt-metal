@@ -2,20 +2,17 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from loguru import logger
 import pytest
 import torch
-import ttnn
+from loguru import logger
 
-from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
-    comp_allclose,
-    comp_pcc,
-)
+import ttnn
 from models.demos.wormhole.mamba.tt.preprocessing import (
-    split_sequence_length,
     select_chunk_size,
     split_input_into_prefill_and_decode_segments,
+    split_sequence_length,
 )
+from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_allclose, comp_pcc
 
 
 @pytest.mark.parametrize(

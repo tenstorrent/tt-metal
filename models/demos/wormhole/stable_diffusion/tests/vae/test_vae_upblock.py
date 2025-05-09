@@ -2,21 +2,19 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch
-from diffusers import (
-    AutoencoderKL,
-)
-
 import pytest
+import torch
+from diffusers import AutoencoderKL
+
 import ttnn
-from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.demos.wormhole.stable_diffusion.tt.vae.ttnn_vae_configs import (
-    UPBLOCK_RESNET_NORM_NUM_BLOCKS,
     UPBLOCK_RESNET_CONV_CHANNEL_SPLIT_FACTORS,
+    UPBLOCK_RESNET_NORM_NUM_BLOCKS,
     UPBLOCK_UPSAMPLE_CONV_CHANNEL_SPLIT_FACTORS,
 )
 from models.demos.wormhole.stable_diffusion.tt.vae.ttnn_vae_upblock import UpDecoderBlock
 from models.utility_functions import skip_for_blackhole
+from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
 @skip_for_blackhole("Blackhole PCC bad until GN issues fixed (#20760)")

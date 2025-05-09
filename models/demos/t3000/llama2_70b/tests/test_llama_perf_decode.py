@@ -17,9 +17,7 @@ from models.demos.t3000.llama2_70b.tt.llama_common import (
     setup_llama_env,
     should_skip_model_load,
 )
-from models.demos.t3000.llama2_70b.tt.llama_model_optimized import (
-    TtLlamaModel_optimized,
-)
+from models.demos.t3000.llama2_70b.tt.llama_model_optimized import TtLlamaModel_optimized
 from models.perf.perf_utils import prep_perf_report
 from models.utility_functions import profiler, skip_for_grayskull
 

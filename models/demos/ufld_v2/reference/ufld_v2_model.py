@@ -2,9 +2,10 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+from typing import Callable, List, Optional
+
 import torch
 import torch.nn as nn
-from typing import Callable, Optional, List
 
 
 def conv3x3(in_planes: int, out_planes: int, stride: int = 1, groups: int = 1, dilation: int = 1) -> nn.Conv2d:

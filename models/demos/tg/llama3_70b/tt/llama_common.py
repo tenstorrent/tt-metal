@@ -2,12 +2,13 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import ttnn
-import torch
 import os
 from pathlib import Path
+
+import torch
 from loguru import logger
 
+import ttnn
 from models.demos.tg.llama3_70b.tt.model_config import get_model_config
 
 

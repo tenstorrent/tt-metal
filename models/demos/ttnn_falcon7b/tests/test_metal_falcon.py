@@ -2,27 +2,16 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import pytest
 import torch
 import transformers
-import pytest
 from ttnn.model_preprocessing import preprocess_model_parameters
-from models.demos.ttnn_falcon7b.tt.common import create_custom_preprocessor
 
-from models.demos.ttnn_falcon7b.tt.falcon_causallm import TtFalconCausalLM
-
-from models.demos.ttnn_falcon7b.tt.model_config import (
-    get_model_config,
-    get_tt_cache_path,
-)
-from models.demos.ttnn_falcon7b.tt.common import (
-    create_custom_preprocessor,
-    create_kv_cache,
-)
-
-from models.utility_functions import (
-    is_e75,
-)
 import ttnn
+from models.demos.ttnn_falcon7b.tt.common import create_custom_preprocessor, create_kv_cache
+from models.demos.ttnn_falcon7b.tt.falcon_causallm import TtFalconCausalLM
+from models.demos.ttnn_falcon7b.tt.model_config import get_model_config, get_tt_cache_path
+from models.utility_functions import is_e75
 
 
 def run_test_FalconCausalLM_end_to_end(

@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
+
 import models.perf.device_perf_utils as perf_utils
 
 

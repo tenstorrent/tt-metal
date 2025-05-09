@@ -2,10 +2,11 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import pytest
-from PIL import Image
-import torchvision.transforms as transforms
 import ast
+
+import pytest
+import torchvision.transforms as transforms
+from PIL import Image
 
 
 @pytest.fixture

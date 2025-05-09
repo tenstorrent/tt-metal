@@ -2,9 +2,11 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from loguru import logger
 import queue
 import uuid
+
+from loguru import logger
+
 from models.demos.wormhole.stable_diffusion.demo.web_demo.model import generate_image_from_prompt
 
 

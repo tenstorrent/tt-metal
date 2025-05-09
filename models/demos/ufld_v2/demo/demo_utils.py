@@ -2,14 +2,17 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import ttnn
-import os, json
+import json
+import os
+
+import numpy as np
 import torch
 import torchvision.transforms as transforms
-import numpy as np
 from PIL import Image
-from tqdm import tqdm
 from sklearn.linear_model import LinearRegression
+from tqdm import tqdm
+
+import ttnn
 
 
 def loader_func(path):

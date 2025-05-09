@@ -9,7 +9,6 @@ from typing import Optional
 import torch
 
 import ttnn
-
 from models.experimental.functional_common.attention_mask_functions import (
     get_extended_attention_mask,
     invert_attention_mask,
@@ -474,7 +473,7 @@ def convert_to_ttnn(model, name):
 
 def custom_preprocessor(model, name):
     import transformers
-    from ttnn.model_preprocessing import preprocess_linear_weight, preprocess_layernorm_parameter
+    from ttnn.model_preprocessing import preprocess_layernorm_parameter, preprocess_linear_weight
 
     parameters = {}
     if isinstance(model, transformers.models.t5.modeling_t5.T5LayerNorm):

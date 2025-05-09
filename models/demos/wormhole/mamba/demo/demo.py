@@ -2,28 +2,28 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import time
 import textwrap
-from typing import List, Optional, Callable
-from loguru import logger
-import ttnn
+import time
+from dataclasses import dataclass
+from typing import Callable, List, Optional
+
 import pytest
 import torch
+from loguru import logger
 from tqdm import tqdm
 from transformers import AutoTokenizer
-from dataclasses import dataclass
 
-from models.demos.wormhole.mamba.reference.decode_model import MambaPretrainedModelName
+import ttnn
+from models.demos.utils.llm_demo_utils import create_benchmark_data, verify_perf
 from models.demos.wormhole.mamba.reference.args import ModelMode
+from models.demos.wormhole.mamba.reference.decode_model import MambaPretrainedModelName
 from models.demos.wormhole.mamba.tt import model_config
 from models.demos.wormhole.mamba.tt.preprocessing import (
-    split_sequence_length,
     select_chunk_size,
     split_input_into_prefill_and_decode_segments,
+    split_sequence_length,
 )
-
 from models.perf.benchmarking_utils import BenchmarkProfiler
-from models.demos.utils.llm_demo_utils import create_benchmark_data, verify_perf
 
 
 class TokenDisplay:
@@ -63,8 +63,8 @@ def get_tt_metal_model(
     seq_len: int = 1,
     num_layers: int = 64,
 ):
-    from models.demos.wormhole.mamba.tt.mamba_model import MambaTT
     from models.demos.wormhole.mamba.tt import model_config
+    from models.demos.wormhole.mamba.tt.mamba_model import MambaTT
 
     reference_model = get_cpu_reference_model(version, batch_size=batch_size)
     config = model_config.create_model_config(batch_size, reference_model.args.d_model, mode=mode, seq_len=seq_len)

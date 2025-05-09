@@ -2,11 +2,12 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from models.demos.metal_BERT_large_11.demo.demo import test_demo as demo_json
-from models.demos.metal_BERT_large_11.demo.demo import test_demo_squadv2 as demo_squadv2
 import pytest
 from loguru import logger
-from models.utility_functions import is_e75, is_wormhole_b0, skip_for_grayskull, is_blackhole
+
+from models.demos.metal_BERT_large_11.demo.demo import test_demo as demo_json
+from models.demos.metal_BERT_large_11.demo.demo import test_demo_squadv2 as demo_squadv2
+from models.utility_functions import is_blackhole, is_e75, is_wormhole_b0, skip_for_grayskull
 
 
 @skip_for_grayskull()

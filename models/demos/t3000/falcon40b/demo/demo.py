@@ -3,26 +3,23 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import json
-import pytest
+import time
 from functools import partial
-import ttnn
+
+import pytest
 import torch
 import torch.nn.functional as F
 from loguru import logger
-import time
+from tqdm import tqdm
 from transformers import AutoTokenizer
 from transformers.generation.utils import top_k_top_p_filtering
-from tqdm import tqdm
 
-from models.demos.t3000.falcon40b.tt.falcon_causallm import TtFalconCausalLM
+import ttnn
 from models.demos.t3000.falcon40b.reference.hf_modeling_falcon import FalconConfig, FalconForCausalLM
+from models.demos.t3000.falcon40b.tt.falcon_causallm import TtFalconCausalLM
 from models.demos.t3000.falcon40b.tt.falcon_common import PytorchFalconCausalLM
 from models.demos.t3000.falcon40b.tt.model_config import get_model_config, model_config_entries
-from models.utility_functions import (
-    enable_persistent_kernel_cache,
-    profiler,
-    nearest_32,
-)
+from models.utility_functions import enable_persistent_kernel_cache, nearest_32, profiler
 
 END_OF_TEXT = 11
 SPACE = 204
