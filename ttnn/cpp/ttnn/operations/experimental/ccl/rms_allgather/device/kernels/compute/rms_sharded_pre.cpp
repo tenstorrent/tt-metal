@@ -13,7 +13,8 @@
 #include "compute_kernel_api/eltwise_binary.h"
 #include "compute_kernel_api/layernorm.h"
 #include "compute_kernel_api/tile_move_copy.h"
-
+#include "hw/inc/debug/waypoint.h"
+#include "tt_metal/hw/inc/debug/assert.h"
 // SPLIT REDUCE across Cores
 namespace NAMESPACE {
 void MAIN {
@@ -99,39 +100,61 @@ void MAIN {
     index_h_offset = 0;
     cb_reserve_back(cb_x2, num_tiles_per_block);
     index_subblock_w_offset = 0;
+    WAYPOINT("4__0");
     for (uint32_t j = 0; j < num_subblocks_w; j++) {
+        // WAYPOINT("5__0");
         tile_regs_acquire();
         for (uint32_t w = 0; w < subblock_w; w++) {
+            // WAYPOINT("5_00");
             index = w + index_subblock_w_offset + index_h_offset;
             mul_tiles(cb_in, cb_in, index, index, w);
+            // WAYPOINT("5_09");
         }
         tile_regs_commit();
         tile_regs_wait();
         for (uint32_t i = 0; i < subblock_w; i++) {
+            // WAYPOINT("5_10");
             pack_tile(i, cb_x2);
+            // WAYPOINT("5_19");
         }
         tile_regs_release();
         index_subblock_w_offset += subblock_w;
+        // WAYPOINT("5__9");
     }
+    WAYPOINT("6__0");
     index_h_offset += block_w;
     cb_push_back(cb_x2, num_tiles_per_block);
+    WAYPOINT("6__1");  // UNPACKER LAST HERE
 
     // E(x^2)
     reconfig_data_format_srca(cb_in, cb_x2);
+    WAYPOINT("6__2");  // UNPACKER LAST HERE
     reconfig_data_format_srcb(cb_in, cb_scaler);
+    WAYPOINT("6__3");  // UNPACKER LAST HERE
 
     cb_wait_front(cb_x2, num_tiles_per_block);
+    WAYPOINT("6__4");  // UNPACKER LAST HERE
     cb_wait_front(cb_scaler, 1);
+    WAYPOINT("6__5");  // UNPACKER LAST HERE
 
+    WAYPOINT("6__6");                    // UNPACKER LAST HERE
     cb_reserve_back(cb_ex_partial2, 1);  // RMS E(x2) #Layernorm //E(x) and E(x^2)
+
+    WAYPOINT("6__7");  // UNPACKER LAST HERE
 
     reduce_init_delta<false>(cb_x2, cb_scaler, cb_ex_partial2);
     index_h_offset = 0;
+    WAYPOINT("6__8");  // UNPACKER LAST HERE
     tile_regs_acquire();
+    WAYPOINT("6__9");  // MATH LAST HERE
+    ASSERT(num_reduce_tiles_per_block_h <= num_tiles_per_block);
     for (uint32_t w = 0; w < num_reduce_tiles_per_block_h; w++) {
+        // WAYPOINT("7__0");
         reduce_tile(cb_x2, cb_scaler, w + index_h_offset, scaler0, dst0);
+        // WAYPOINT("7__9");
     }
 
+    WAYPOINT("8__0");
     tile_regs_commit();
     tile_regs_wait();
     pack_tile(dst0, cb_ex_partial2);
@@ -140,9 +163,11 @@ void MAIN {
     reduce_revert_delta(cb_ex_partial2);
     cb_pop_front(cb_x2, num_tiles_per_block);
     cb_push_back(cb_ex_partial2, 1);
+    // WAYPOINT("8__9");
 
     // global reduce, cb_ex <-- cb_ex_external2, cb_ex_partial2
     if constexpr (is_allgather_worker) {
+        WAYPOINT("A__0");  // PACKER LAST HERE -- WAITING FOR CB FRONT PROBABLY
         const uint32_t num_tiles_per_allgather_worker = get_arg_val<uint32_t>(1);
         const bool use_two_stage_reduce = get_arg_val<uint32_t>(2) == 1;
         const bool is_second_stage_reader = get_arg_val<uint32_t>(3) == 1;
@@ -155,11 +180,14 @@ void MAIN {
         reconfig_data_format_srcb(cb_scaler, cb_scaler_global);
         reduce_init_delta<false>(cb_ex_external2, cb_scaler_global, cb_reduction_out);
         cb_reserve_back(cb_reduction_out, num_tiles_per_allgather_worker);
+        WAYPOINT("A__1");
 
         for (uint32_t i = 0; i < num_tiles_per_allgather_worker; i++) {  // loops over height
+            WAYPOINT("B__0");
             tile_regs_acquire();
             for (uint32_t w = 0; w < num_blocks_reduce;
                  w++) {  // Need to read this interleaved now, we have SUM(X) and SUM(X^2) interleaved
+                WAYPOINT("C__0");
                 cb_wait_front(cb_ex_external2, 1);
                 reduce_tile(
                     cb_ex_external2,
@@ -169,15 +197,20 @@ void MAIN {
                     0);  // E(x) and E(x^2) interleaved so we reduce each one into
                          // different dest reg
                 cb_pop_front(cb_ex_external2, 1);
+                // WAYPOINT("C__9");
             }
+            // WAYPOINT("B__8");
             tile_regs_commit();
             tile_regs_wait();
             pack_tile(dst0, cb_reduction_out);
             tile_regs_release();
+            WAYPOINT("B__9");
         }
         reduce_revert_delta(cb_reduction_out);
+        // Not getting here?
         cb_push_back(cb_reduction_out, num_tiles_per_allgather_worker);
     }
+    WAYPOINT("A__9");
 }
 
 }  // namespace NAMESPACE

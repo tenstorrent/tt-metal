@@ -5,9 +5,11 @@
 #include <stdint.h>
 #include "dataflow_api.h"
 #include "hostdevcommon/common_values.hpp"
+#include "hw/inc/debug/waypoint.h"
 
 // split REDUCE across cores
 void kernel_main() {
+    WAYPOINT("STRT");
     constexpr uint32_t reduce_receiver_semaphore_id = get_compile_time_arg_val(0);
     constexpr uint32_t reduce_sender_semaphore_id = get_compile_time_arg_val(1);
     constexpr uint32_t num_blocks = get_compile_time_arg_val(2);
@@ -53,6 +55,8 @@ void kernel_main() {
             }
         }
     }
+    WAYPOINT("STUP");
+    WAYPOINT("STU2");
 
     const uint64_t multicast_data_noc = get_noc_multicast_addr(
         mcast_dest_noc_start_x, mcast_dest_noc_start_y, mcast_dest_noc_end_x, mcast_dest_noc_end_y, 0);
@@ -71,7 +75,8 @@ void kernel_main() {
                                            const uint32_t cb_reduce_first_stage) __attribute__((always_inline)) {
         // global reduce
         // wait for local data ready
-        cb_wait_front(cb_partial, 1);  // TODO test for layernorm
+        // Stuck here...
+        cb_wait_front2(cb_partial, 1);  // TODO test for layernorm
 
         // inc semaphore of other cores, tell other all-to-all workers to start
         if constexpr (num_blocks > 1) {
@@ -83,28 +88,33 @@ void kernel_main() {
 
         // read data from other cores - first stage reduce
         uint32_t l1_read_addr_ex_par = get_read_ptr(cb_partial);
+        ASSERT(l1_read_addr_ex_par <= 1499136);
         // read from both stage
         // first stage
         cb_reserve_back(cb_external, num_blocks_first_stage);
         uint32_t l1_write_addr_external = get_write_ptr(cb_external);
         for (uint32_t block = 0; block < num_blocks_first_stage; ++block) {
+            ASSERT(block < num_blocks);
             uint64_t noc_addr_ex_par = remote_noc_addrs[block] | (l1_read_addr_ex_par);
             noc_async_read_one_packet(noc_addr_ex_par, l1_write_addr_external, single_tile_size_bytes);
             l1_write_addr_external += single_tile_size_bytes;
         }
         l1_read_addr_ex_par += single_tile_size_bytes;
+        ASSERT(l1_read_addr_ex_par <= 1499136);
         noc_async_read_barrier();
         cb_push_back(cb_external, num_blocks_first_stage);
 
         // sync with second-stage all-to-all workers
         if constexpr (use_two_stage_reduce) {
             uint32_t l1_read_addr_ex = get_read_ptr(cb_reduce_first_stage);
+            ASSERT(l1_read_addr_ex <= 1499136);
             uint32_t block_index_stride = num_x;
             noc_semaphore_wait(reduce_second_stage_semaphore_addr_ptr, num_blocks_second_stage - 1);
             noc_semaphore_set(reduce_second_stage_semaphore_addr_ptr, 0);
 
             uint32_t curr_block_index = block_index_stride;
             for (uint32_t block = 0; block < num_blocks_second_stage - 1; ++block) {
+                ASSERT(block < num_blocks);
                 uint64_t noc_addr_ex = remote_noc_addrs[curr_block_index] | (l1_read_addr_ex);
                 noc_async_read_one_packet(noc_addr_ex, l1_write_addr_external, single_tile_size_bytes);
                 l1_write_addr_external += single_tile_size_bytes;
@@ -112,10 +122,14 @@ void kernel_main() {
             }
             l1_read_addr_ex += single_tile_size_bytes;
             noc_async_read_barrier();
-            cb_push_back(
+            cb_push_back2(
                 cb_external,
                 (num_blocks_second_stage - 1));  // push back partials from all cores -> compute can start reducing now
         }
     };
     global_reduce_sender(cb_ex_partial2, cb_ex_external2, cb_ex2);
+    noc_async_write_barrier();
+    noc_async_atomic_barrier();
+    noc_async_read_barrier();
+    WAYPOINT("DONE");
 }

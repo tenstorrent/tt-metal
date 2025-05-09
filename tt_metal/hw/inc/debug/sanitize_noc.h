@@ -243,6 +243,7 @@ inline void debug_sanitize_post_noc_addr_and_hang(
     if (return_code == DebugSanitizeNocOK) {
         return;
     }
+    // WAYPOINT("HANG");
 
     debug_sanitize_noc_addr_msg_t tt_l1_ptr* v = *GET_MAILBOX_ADDRESS_DEV(watcher.sanitize_noc);
 

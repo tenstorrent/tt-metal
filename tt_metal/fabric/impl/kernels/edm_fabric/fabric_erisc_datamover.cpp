@@ -1060,6 +1060,13 @@ void __attribute__((noinline)) init_local_sender_channel_worker_interfaces(
     }
 }
 
+FORCE_INLINE void open_downstream_edm_noc_interface_connection(
+    tt::tt_fabric::EdmToEdmSender<SENDER_NUM_BUFFERS>& downstream_edm_noc_interface) {
+    downstream_edm_noc_interface.template open<true, tt::tt_fabric::worker_handshake_noc>();
+    ASSERT(downstream_edm_noc_interface.worker_credits_stream_id < 32);
+    init_ptr_val(downstream_edm_noc_interface.worker_credits_stream_id, SENDER_NUM_BUFFERS);
+}
+
 void kernel_main() {
     eth_txq_reg_write(DEFAULT_ETH_TXQ, ETH_TXQ_DATA_PACKET_ACCEPT_AHEAD, DEFAULT_NUM_ETH_TXQ_DATA_PACKET_ACCEPT_AHEAD);
     //
@@ -1370,11 +1377,11 @@ void kernel_main() {
     WriteTransactionIdTracker<RECEIVER_NUM_BUFFERS, NUM_TRANSACTION_IDS, NUM_TRANSACTION_IDS>
         receiver_channel_1_trid_tracker;
 
-    auto FORCE_INLINE open_downstream_edm_noc_interface_connection = [&](auto& downstream_edm_noc_interface) {
-        downstream_edm_noc_interface.template open<true, tt::tt_fabric::worker_handshake_noc>();
-        ASSERT(downstream_edm_noc_interface.worker_credits_stream_id < 32);
-        init_ptr_val(downstream_edm_noc_interface.worker_credits_stream_id, SENDER_NUM_BUFFERS);
-    };
+    // auto FORCE_INLINE open_downstream_edm_noc_interface_connection = [&](auto& downstream_edm_noc_interface) {
+    //     downstream_edm_noc_interface.template open<true, tt::tt_fabric::worker_handshake_noc>();
+    //     ASSERT(downstream_edm_noc_interface.worker_credits_stream_id < 32);
+    //     init_ptr_val(downstream_edm_noc_interface.worker_credits_stream_id, SENDER_NUM_BUFFERS);
+    // };
 
     if (has_downstream_edm_vc0_buffer_connection) {
         open_downstream_edm_noc_interface_connection(downstream_edm_noc_interfaces[0]);

@@ -11,6 +11,7 @@
 #include "cpp/ttnn/operations/experimental/ccl/all_gather_async/device/kernels/minimal_ccl_common.hpp"
 #include "cpp/ttnn/deprecated/tt_dnn/kernels/dataflow/generate_reduce_scaler.hpp"
 #include <cstdint>
+#include "hw/inc/debug/waypoint.h"
 #include <utility>
 void kernel_main() {
     constexpr bool is_all_to_all_worker = get_compile_time_arg_val(0) == 1;
@@ -37,10 +38,12 @@ void kernel_main() {
 
     const uint32_t iteration_number = get_arg_val<uint32_t>(arg_idx++);
     const size_t out_ready_sem_bank_addr = get_arg_val<uint32_t>(arg_idx++);
+    ASSERT(out_ready_sem_bank_addr > 1000000 && out_ready_sem_bank_addr < 1500000);
     uint32_t out_ready_sem_wait_value = get_arg_val<uint32_t>(arg_idx++);
     ttnn::ccl::address_t tensor_address0 = get_arg_val<ttnn::ccl::address_t>(arg_idx++);
 
     // Start the all gather part
+    WAYPOINT("HR_1");
     if (iteration_number == 0) {
         // Do this only on one of the cores
 
@@ -49,6 +52,8 @@ void kernel_main() {
         uint32_t num_cores = get_arg_val<uint32_t>(arg_idx++);
         const uint8_t out_ready_sem_noc0_x = get_arg_val<uint32_t>(arg_idx++);
         const uint8_t out_ready_sem_noc0_y = get_arg_val<uint32_t>(arg_idx++);
+        ASSERT(out_ready_sem_noc0_x >= 18 && out_ready_sem_noc0_x <= 36);
+        ASSERT(out_ready_sem_noc0_y >= 18 && out_ready_sem_noc0_y <= 36);
         tt_l1_ptr uint32_t* core_noc_x = (tt_l1_ptr uint32_t*)(get_arg_addr(arg_idx));
         arg_idx += num_cores;
         tt_l1_ptr uint32_t* core_noc_y = (tt_l1_ptr uint32_t*)(get_arg_addr(arg_idx));
@@ -57,15 +62,18 @@ void kernel_main() {
             FabricConnectionManager::build_from_args<FabricConnectionManager::BUILD_AND_OPEN_CONNECTION_START_ONLY>(
                 arg_idx);
 
+        WAYPOINT("HR_2");
         // packet header cb
         cb_reserve_back(reserved_packet_header_cb_id, 1);
         auto packet_header_buffer_addr_forward = get_write_ptr(reserved_packet_header_cb_id);
         cb_push_back(reserved_packet_header_cb_id, 1);
         cb_reserve_back(reserved_packet_header_cb_id, 1);
         auto packet_header_buffer_addr_backward = get_write_ptr(reserved_packet_header_cb_id);
+        ASSERT(packet_header_buffer_addr_backward != packet_header_buffer_addr_forward);
         cb_push_back(reserved_packet_header_cb_id, 1);
         cb_reserve_back(reserved_packet_header_cb_id, 1);
         auto packet_header_buffer_seminc = get_write_ptr(reserved_packet_header_cb_id);
+        ASSERT(packet_header_buffer_seminc != packet_header_buffer_addr_forward);
         cb_push_back(reserved_packet_header_cb_id, 1);
         // pre-populate packet headers
         volatile PACKET_HEADER_TYPE* pkt_hdr_forward =
@@ -77,6 +85,7 @@ void kernel_main() {
         pkt_hdr_backward->to_chip_multicast(
             tt::tt_fabric::MulticastRoutingCommandHeader{1, static_cast<uint8_t>(num_targets_backward_direction)});
         fabric_connection.open_finish();
+        WAYPOINT("HR_3");
         // 1. mcast via fabric to remote tensor addresses
         uint32_t tiles_read = 0;
         uint32_t shard_tile_id = first_core_tile_start_offset;
@@ -86,7 +95,7 @@ void kernel_main() {
             safe_get_noc_addr(out_ready_sem_noc0_x, out_ready_sem_noc0_y, out_ready_sem_bank_addr, 0);
         // Send data and the semaphore with the last tile
         uint32_t num_tiles_to_read_this_core = 1;
-        cb_wait_front(cb_to_allgather_writer, num_tiles_to_read_this_core);
+        cb_wait_front3(cb_to_allgather_writer, num_tiles_to_read_this_core);  // STUCK HERE
         size_t l1_read_addr = get_read_ptr(cb_to_allgather_writer);
         uint64_t noc0_dest_noc_addr =
             get_noc_addr(core_noc_x[core_id], core_noc_y[core_id], tensor_address0, 0 /*noc_id*/);
@@ -104,19 +113,27 @@ void kernel_main() {
             false);
 
         fabric_connection.close_start();
+        noc_async_writes_flushed();
         cb_pop_front(cb_to_allgather_writer, num_tiles_to_read_this_core);
         // increment locally
         uint64_t out_ready_sem_noc_addr =
             safe_get_noc_addr(out_ready_sem_noc0_x, out_ready_sem_noc0_y, out_ready_sem_bank_addr);
         if constexpr (num_links == 1) {
             // We deduct the local increment from the target semaphore value as we don't need internal synchronization
-            noc_semaphore_wait(
-                reinterpret_cast<volatile uint32_t*>(out_ready_sem_bank_addr), out_ready_sem_wait_value - 1);
+            WAYPOINT("HR_7");
+            while (*reinterpret_cast<volatile uint32_t*>(out_ready_sem_bank_addr) != out_ready_sem_wait_value - 1);
+            WAYPOINT("HR_8");
+            // noc_semaphore_wait(
+            //     reinterpret_cast<volatile uint32_t*>(out_ready_sem_bank_addr), out_ready_sem_wait_value - 1);
         } else {
             // if multiple links then we need to also ensure the local ones have completed by having them also
             // increment the semaphore and including them in the total
             noc_semaphore_inc(out_ready_sem_noc_addr, 1);
-            noc_semaphore_wait(reinterpret_cast<volatile uint32_t*>(out_ready_sem_bank_addr), out_ready_sem_wait_value);
+            WAYPOINT("HR_4");
+            while (*reinterpret_cast<volatile uint32_t*>(out_ready_sem_bank_addr) != out_ready_sem_wait_value);
+            WAYPOINT("HR_5");
+            // noc_semaphore_wait(reinterpret_cast<volatile uint32_t*>(out_ready_sem_bank_addr),
+            // out_ready_sem_wait_value);
         }
 
         // 4. global semaphore reset
@@ -125,6 +142,10 @@ void kernel_main() {
         }
         fabric_connection.close_finish();  // Includes a noc async write barrier
     }
-    noc_async_write_barrier();
+    WAYPOINT("BAR1");
+    noc_async_write_barrier3();
+    WAYPOINT("BAR2");
     noc_async_atomic_barrier();
+    WAYPOINT("DONE");
+    noc_async_read_barrier();
 }

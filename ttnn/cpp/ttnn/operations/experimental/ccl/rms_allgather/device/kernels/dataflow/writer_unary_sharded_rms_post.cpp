@@ -60,7 +60,7 @@ void kernel_main() {
         constexpr uint32_t mask_read_tile_offset_bytes = FLOAT32_DTYPE_GAMMA ? 1024 : 512;
 
         uint32_t l1_write_addr_gamma = get_write_ptr(cb_gamma);
-        cb_reserve_back(cb_gamma, block_w);
+        cb_reserve_back3(cb_gamma, block_w);
         for (uint32_t w = 0; w < block_w; w++) {
             uint32_t tile_id = gamma_tile_start_id + w;
             uint64_t gamma_noc_addr = get_noc_addr(tile_id, gamma);
@@ -78,4 +78,5 @@ void kernel_main() {
     write_minimal_resharded_data<cb_out, cb_out_resharded, worker_core_stride_w_bytes, storage_core_stride_w_bytes>(
         num_segments_to_write_back, storage_core_start_offset, segment_args);
 #endif
+    noc_async_read_barrier();
 }

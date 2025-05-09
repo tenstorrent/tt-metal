@@ -60,6 +60,8 @@ void kernel_launch(uint32_t kernel_base_addr) {
     // runs on NCRISC, does not track all transactions correctly.
 #ifndef DISPATCH_KERNEL
     if constexpr (NOC_MODE == DM_DEDICATED_NOC) {
+        // while(!ncrisc_noc_nonposted_writes_sent(NOC_INDEX)) {}
+        // while(!ncrisc_noc_nonposted_atomics_flushed(NOC_INDEX)) {}
         WAYPOINT("NKFW");
         // Assert that no noc transactions are outstanding, to ensure that all reads and writes have landed and the NOC
         // interface is in a known idle state for the next kernel.

@@ -192,6 +192,23 @@ void cb_push_back(const int32_t operand, const int32_t num_pages) {
         get_local_cb_interface(operand).fifo_wr_ptr -= get_local_cb_interface(operand).fifo_size;
     }
 }
+FORCE_INLINE
+void cb_push_back2(const int32_t operand, const int32_t num_pages) {
+    uint32_t num_words = num_pages * get_local_cb_interface(operand).fifo_page_size;
+
+    volatile tt_reg_ptr uint32_t* pages_received_ptr = get_cb_tiles_received_ptr(operand);
+    pages_received_ptr[0] += num_pages;
+
+    get_local_cb_interface(operand).fifo_wr_ptr += num_words;
+
+    // this will basically reset fifo_wr_ptr to fifo_addr -- no other wrap is legal
+    // producer always writes into contiguous memory, it cannot wrap
+    ASSERT(get_local_cb_interface(operand).fifo_wr_ptr <= get_local_cb_interface(operand).fifo_limit);
+    if (get_local_cb_interface(operand).fifo_wr_ptr == get_local_cb_interface(operand).fifo_limit) {
+        // TODO: change this to fifo_wr_ptr
+        get_local_cb_interface(operand).fifo_wr_ptr -= get_local_cb_interface(operand).fifo_size;
+    }
+}
 
 // clang-format off
 /**
@@ -384,6 +401,66 @@ void cb_reserve_back(int32_t operand, int32_t num_pages) {
     } while (free_space_pages < num_pages);
     WAYPOINT("CRBD");
 }
+FORCE_INLINE
+void cb_reserve_back2(int32_t operand, int32_t num_pages) {
+    uint32_t pages_acked_ptr = (uint32_t)get_cb_tiles_acked_ptr(operand);
+
+    // while the producer (write-side interface) is waiting for space to free up "tiles_pushed" is not changing
+    // "tiles_pushed" is updated by the producer only when the tiles are pushed
+    uint32_t pages_received = get_cb_tiles_received_ptr(operand)[0];
+
+    int32_t free_space_pages;
+    WAYPOINT("CRbW");
+    do {
+        // uint16_t's here because Tensix updates the val at tiles_acked_ptr as uint16 in llk_pop_tiles
+        // TODO: I think we could have TRISC update tiles_acked_ptr, and we wouldn't need uint16 here
+        uint16_t pages_acked = (uint16_t)reg_read(pages_acked_ptr);
+        uint16_t free_space_pages_wrap =
+            get_local_cb_interface(operand).fifo_num_pages - (pages_received - pages_acked);
+        free_space_pages = (int32_t)free_space_pages_wrap;
+    } while (free_space_pages < num_pages);
+    WAYPOINT("CRbD");
+}
+FORCE_INLINE
+void cb_reserve_back3(int32_t operand, int32_t num_pages) {
+    uint32_t pages_acked_ptr = (uint32_t)get_cb_tiles_acked_ptr(operand);
+
+    // while the producer (write-side interface) is waiting for space to free up "tiles_pushed" is not changing
+    // "tiles_pushed" is updated by the producer only when the tiles are pushed
+    uint32_t pages_received = get_cb_tiles_received_ptr(operand)[0];
+
+    int32_t free_space_pages;
+    WAYPOINT("CrbW");
+    do {
+        // uint16_t's here because Tensix updates the val at tiles_acked_ptr as uint16 in llk_pop_tiles
+        // TODO: I think we could have TRISC update tiles_acked_ptr, and we wouldn't need uint16 here
+        uint16_t pages_acked = (uint16_t)reg_read(pages_acked_ptr);
+        uint16_t free_space_pages_wrap =
+            get_local_cb_interface(operand).fifo_num_pages - (pages_received - pages_acked);
+        free_space_pages = (int32_t)free_space_pages_wrap;
+    } while (free_space_pages < num_pages);
+    WAYPOINT("CrbD");
+}
+FORCE_INLINE
+void cb_reserve_back4(int32_t operand, int32_t num_pages) {
+    uint32_t pages_acked_ptr = (uint32_t)get_cb_tiles_acked_ptr(operand);
+
+    // while the producer (write-side interface) is waiting for space to free up "tiles_pushed" is not changing
+    // "tiles_pushed" is updated by the producer only when the tiles are pushed
+    uint32_t pages_received = get_cb_tiles_received_ptr(operand)[0];
+
+    int32_t free_space_pages;
+    WAYPOINT("CrBW");
+    do {
+        // uint16_t's here because Tensix updates the val at tiles_acked_ptr as uint16 in llk_pop_tiles
+        // TODO: I think we could have TRISC update tiles_acked_ptr, and we wouldn't need uint16 here
+        uint16_t pages_acked = (uint16_t)reg_read(pages_acked_ptr);
+        uint16_t free_space_pages_wrap =
+            get_local_cb_interface(operand).fifo_num_pages - (pages_received - pages_acked);
+        free_space_pages = (int32_t)free_space_pages_wrap;
+    } while (free_space_pages < num_pages);
+    WAYPOINT("CrBD");
+}
 
 // clang-format off
 /**
@@ -454,6 +531,45 @@ void cb_wait_front(int32_t operand, int32_t num_pages) {
         pages_received = ((uint16_t)reg_read(pages_received_ptr)) - pages_acked;
     } while (pages_received < num_pages);
     WAYPOINT("CWFD");
+}
+FORCE_INLINE
+void cb_wait_front2(int32_t operand, int32_t num_pages) {
+    uint32_t pages_acked = get_cb_tiles_acked_ptr(operand)[0];
+    uint32_t pages_received_ptr = (uint32_t)get_cb_tiles_received_ptr(operand);
+
+    uint16_t pages_received;
+
+    WAYPOINT("CwfW");
+    do {
+        pages_received = ((uint16_t)reg_read(pages_received_ptr)) - pages_acked;
+    } while (pages_received < num_pages);
+    WAYPOINT("CwfD");
+}
+FORCE_INLINE
+void cb_wait_front3(int32_t operand, int32_t num_pages) {
+    uint32_t pages_acked = get_cb_tiles_acked_ptr(operand)[0];
+    uint32_t pages_received_ptr = (uint32_t)get_cb_tiles_received_ptr(operand);
+
+    uint16_t pages_received;
+
+    WAYPOINT("CwFW");
+    do {
+        pages_received = ((uint16_t)reg_read(pages_received_ptr)) - pages_acked;
+    } while (pages_received < num_pages);
+    WAYPOINT("CwFD");
+}
+FORCE_INLINE
+void cb_wait_front4(int32_t operand, int32_t num_pages) {
+    uint32_t pages_acked = get_cb_tiles_acked_ptr(operand)[0];
+    uint32_t pages_received_ptr = (uint32_t)get_cb_tiles_received_ptr(operand);
+
+    uint16_t pages_received;
+
+    WAYPOINT("CWfW");
+    do {
+        pages_received = ((uint16_t)reg_read(pages_received_ptr)) - pages_acked;
+    } while (pages_received < num_pages);
+    WAYPOINT("CWfD");
 }
 
 // NOC transfers
@@ -932,7 +1048,38 @@ inline void noc_async_write(
         DEBUG_SANITIZE_NOC_WRITE_TRANSACTION(noc, dst_noc_addr, src_local_l1_addr, size);
         ncrisc_noc_fast_write_any_len<noc_mode>(
             noc, write_cmd_buf, src_local_l1_addr, dst_noc_addr, size, NOC_UNICAST_WRITE_VC, false, false, 1, true);
-        WAYPOINT("NAWD");
+        WAYPOINT("NAWd");
+    }
+}
+template <uint32_t max_page_size = NOC_MAX_BURST_SIZE + 1>
+inline void noc_async_write2(
+    std::uint32_t src_local_l1_addr, std::uint64_t dst_noc_addr, std::uint32_t size, uint8_t noc = noc_index) {
+    if constexpr (max_page_size <= NOC_MAX_BURST_SIZE) {
+        noc_async_write_one_packet(src_local_l1_addr, dst_noc_addr, size, noc);
+    } else {
+        RECORD_NOC_EVENT_WITH_ADDR(NocEventType::WRITE_, dst_noc_addr, size, NOC_UNICAST_WRITE_VC);
+
+        WAYPOINT("Naww");
+        DEBUG_SANITIZE_NOC_WRITE_TRANSACTION(noc, dst_noc_addr, src_local_l1_addr, size);
+        WAYPOINT("Naw2");
+        ncrisc_noc_fast_write_any_len<noc_mode>(
+            noc, write_cmd_buf, src_local_l1_addr, dst_noc_addr, size, NOC_UNICAST_WRITE_VC, false, false, 1, true);
+        WAYPOINT("Nawd");
+    }
+}
+template <uint32_t max_page_size = NOC_MAX_BURST_SIZE + 1>
+inline void noc_async_write3(
+    std::uint32_t src_local_l1_addr, std::uint64_t dst_noc_addr, std::uint32_t size, uint8_t noc = noc_index) {
+    if constexpr (max_page_size <= NOC_MAX_BURST_SIZE) {
+        noc_async_write_one_packet(src_local_l1_addr, dst_noc_addr, size, noc);
+    } else {
+        RECORD_NOC_EVENT_WITH_ADDR(NocEventType::WRITE_, dst_noc_addr, size, NOC_UNICAST_WRITE_VC);
+
+        WAYPOINT("naww");
+        DEBUG_SANITIZE_NOC_WRITE_TRANSACTION(noc, dst_noc_addr, src_local_l1_addr, size);
+        ncrisc_noc_fast_write_any_len<noc_mode>(
+            noc, write_cmd_buf, src_local_l1_addr, dst_noc_addr, size, NOC_UNICAST_WRITE_VC, false, false, 1, true);
+        WAYPOINT("nawd");
     }
 }
 
@@ -1167,12 +1314,14 @@ inline void noc_async_write_multicast_loopback_src(
 void noc_async_read_barrier(uint8_t noc = noc_index) {
     RECORD_NOC_EVENT(NocEventType::READ_BARRIER_START);
 
-    WAYPOINT("NRBW");
     if constexpr (noc_mode == DM_DYNAMIC_NOC) {
+        WAYPOINT("nrbW");
         while (!ncrisc_dynamic_noc_reads_flushed(noc)) {
             invalidate_l1_cache();
         }
     } else {
+        WAYPOINT("NRBW");
+        ASSERT(NOC_STATUS_READ_REG(noc, NIU_MST_RD_RESP_RECEIVED) <= noc_reads_num_issued[noc]);
         while (!ncrisc_noc_reads_flushed(noc));
     }
     invalidate_l1_cache();
@@ -1203,6 +1352,48 @@ void noc_async_write_barrier(uint8_t noc = noc_index) {
     }
     invalidate_l1_cache();
     WAYPOINT("NWBD");
+
+    RECORD_NOC_EVENT(NocEventType::WRITE_BARRIER_END);
+}
+FORCE_INLINE
+void noc_async_write_barrier2(uint8_t noc = noc_index) {
+    RECORD_NOC_EVENT(NocEventType::WRITE_BARRIER_START);
+
+    WAYPOINT("nwbW");
+    if constexpr (noc_mode == DM_DYNAMIC_NOC) {
+        while (!ncrisc_dynamic_noc_nonposted_writes_flushed(noc)) {
+            invalidate_l1_cache();
+        }
+    } else {
+        while (!ncrisc_noc_nonposted_writes_flushed(noc));
+    }
+    invalidate_l1_cache();
+    WAYPOINT("nwbD");
+
+    RECORD_NOC_EVENT(NocEventType::WRITE_BARRIER_END);
+}
+FORCE_INLINE
+void noc_async_write_barrier3(uint8_t noc = noc_index) {
+    RECORD_NOC_EVENT(NocEventType::WRITE_BARRIER_START);
+
+    WAYPOINT("NwbW");
+    if constexpr (noc_mode == DM_DYNAMIC_NOC) {
+        ASSERT(false);
+        while (!ncrisc_dynamic_noc_nonposted_writes_flushed(noc)) {
+            invalidate_l1_cache();
+        }
+    } else {
+        size_t count = 0;
+        while (!ncrisc_noc_nonposted_writes_flushed(noc)) {
+            count++;
+            if (count > 1000000) {
+                ASSERT(NOC_STATUS_READ_REG(noc, NIU_MST_WR_ACK_RECEIVED) <= noc_nonposted_writes_acked[noc]);
+                ASSERT(false);
+            }
+        }
+    }
+    invalidate_l1_cache();
+    WAYPOINT("NwbD");
 
     RECORD_NOC_EVENT(NocEventType::WRITE_BARRIER_END);
 }
@@ -1334,6 +1525,16 @@ void noc_semaphore_wait(volatile tt_l1_ptr uint32_t* sem_addr, uint32_t val) {
         invalidate_l1_cache();
     } while ((*sem_addr) != val);
     WAYPOINT("NSD");
+}
+FORCE_INLINE
+void noc_semaphore_wait2(volatile tt_l1_ptr uint32_t* sem_addr, uint32_t val) {
+    RECORD_NOC_EVENT(NocEventType::SEMAPHORE_WAIT);
+
+    WAYPOINT("NSW2");
+    do {
+        invalidate_l1_cache();
+    } while ((*sem_addr) != val);
+    WAYPOINT("NSD2");
 }
 
 // clang-format off
@@ -1694,10 +1895,10 @@ FORCE_INLINE void noc_async_write_one_packet_with_trid_set_state(
     uint8_t cmd_buf = write_cmd_buf,
     uint8_t noc = noc_index,
     uint8_t vc = NOC_UNICAST_WRITE_VC) {
-    WAYPOINT("NAWW");
+    WAYPOINT("NSSW");
     RECORD_NOC_EVENT_WITH_ADDR(NocEventType::WRITE_WITH_TRID_SET_STATE, dst_noc_addr, 0, vc);
     while (!noc_cmd_buf_ready(noc, cmd_buf));
-    WAYPOINT("NAWD");
+    WAYPOINT("NSSD");
     uint32_t noc_cmd_field = NOC_CMD_CPY | NOC_CMD_WR | NOC_CMD_VC_STATIC | NOC_CMD_STATIC_VC(vc) |
                              0x0 |  // (linked ? NOC_CMD_VC_LINKED : 0x0)
                              0x0 |  // (mcast ? (NOC_CMD_PATH_RESERVE | NOC_CMD_BRCST_PACKET) : 0x0)

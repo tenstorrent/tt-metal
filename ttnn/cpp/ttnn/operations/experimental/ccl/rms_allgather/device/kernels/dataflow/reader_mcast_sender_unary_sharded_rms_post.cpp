@@ -47,10 +47,11 @@ void kernel_main() {
                                                noc_async_write_barrier();
                                            };
 
-    cb_wait_front(cb_stats_reduced, 1);
-    cb_reserve_back(cb_ex_global, 1);
+    cb_wait_front2(cb_stats_reduced, 1);
+    cb_reserve_back2(cb_ex_global, 1);
     global_reduce_sender(cb_stats_reduced, cb_ex_global);
     cb_push_back(cb_ex_global, 1);
     cb_pop_front(cb_stats_reduced, 1);
     global_semaphore_set();
+    noc_async_write_barrier();
 }

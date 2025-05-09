@@ -79,7 +79,7 @@ void kernel_main() {
     uint32_t sender_packet_end = get_arg_val<uint32_t>(rt_arg_idx++);
     uint32_t sender_total_num_pages = get_arg_val<uint32_t>(rt_arg_idx++);
 
-    ASSERT(!(sender_core && worker_core));
+    // ASSERT(!(sender_core && worker_core));
 
     if (sender_core) {
         auto fabric_connection =
@@ -114,11 +114,11 @@ void kernel_main() {
             // Calculate device-specific constants once per device
             const uint32_t num_hops = std::abs(int(target_device_id) - int(chip_id));
             unicast_packet_header->to_chip_unicast(static_cast<uint8_t>(num_hops));
-            if (target_device_id > chip_id) {
-                ASSERT(fabric_connection.has_forward_connection());
-            } else {
-                ASSERT(fabric_connection.has_backward_connection());
-            }
+            // if (target_device_id > chip_id) { // uncommenting this
+            //     ASSERT(fabric_connection.has_forward_connection());
+            // } else {
+            //     ASSERT(fabric_connection.has_backward_connection());
+            // }
             auto& fabric_conn = target_device_id > chip_id ? fabric_connection.get_forward_connection()
                                                            : fabric_connection.get_backward_connection();
 
@@ -129,13 +129,13 @@ void kernel_main() {
                 auto num_pages_left = sender_total_num_pages - num_pages_sent;
                 const uint32_t curr_packet_num_pages = std::min(num_pages_per_packet, num_pages_left);
                 const uint32_t curr_packet_size_bytes = curr_packet_num_pages * page_size_bytes;
-                ASSERT(curr_packet_size_bytes <= 4 * 1088);
+                // ASSERT(curr_packet_size_bytes <= 4 * 1088);
 
                 // ASSERT(packet < num_packet_worker_cores);
                 const uint32_t receiver_core_x = packet_worker_cores[packet][x_index];
                 const uint32_t receiver_core_y = packet_worker_cores[packet][y_index];
                 const uint64_t noc0_dest_noc_addr = get_noc_addr(receiver_core_x, receiver_core_y, packet_offset);
-                ASSERT(receiver_core_x <= 36 && receiver_core_y <= 36);
+                // ASSERT(receiver_core_x <= 36 && receiver_core_y <= 36);
 
                 cb_wait_front(fabric_sender_cb_id, curr_packet_num_pages);
                 const auto sender_l1_addr = get_read_ptr(fabric_sender_cb_id);

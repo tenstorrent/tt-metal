@@ -6,6 +6,7 @@
 
 #include <stdint.h>
 #include "dataflow_api.h"
+#include "debug/ring_buffer.h"
 
 template <
     uint32_t cb_out,
@@ -21,10 +22,16 @@ inline void write_minimal_resharded_data(
     uint32_t cb_out_read_base_addr = get_read_ptr(cb_out);
     uint32_t cb_out_reshard_write_base_addr = get_write_ptr(cb_out_resharded);
 
+    WATCHER_RING_BUFFER_PUSH(0xc0ffee01);
+    WATCHER_RING_BUFFER_PUSH(0xF0000000 + reinterpret_cast<unsigned int>(segment_args));
     for (uint32_t i = 0; i < num_segments_to_write_back; ++i) {
+        WATCHER_RING_BUFFER_PUSH(0xdad00000 + i);
         uint32_t write_size = segment_args[args_idx++];
         uint32_t storage_core_x = segment_args[args_idx++];
         uint32_t storage_core_y = segment_args[args_idx++];
+        WATCHER_RING_BUFFER_PUSH((storage_core_y << 24) | (storage_core_x << 16) | 0x0000ff00 | (write_size));
+        // WATCHER_RING_BUFFER_PUSH(storage_core_x);
+        // WATCHER_RING_BUFFER_PUSH(storage_core_y);
 
         uint32_t num_tiles_to_write_in_current_segment = write_size;
 
@@ -39,7 +46,7 @@ inline void write_minimal_resharded_data(
             get_noc_addr(storage_core_x, storage_core_y, local_storage_core_write_addr);
 
         for (uint32_t w = 0; w < num_tiles_to_write_in_current_segment; ++w) {
-            cb_wait_front(cb_out, 1);
+            cb_wait_front3(cb_out, 1);
             noc_async_write(worker_core_read_addr, remote_storage_core_write_addr, out_single_tile_size_bytes);
             worker_core_read_addr += out_single_tile_size_bytes;
             remote_storage_core_write_addr += out_single_tile_size_bytes;

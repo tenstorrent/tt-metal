@@ -586,6 +586,7 @@ operation::ProgramWithCallbacks frmsnorm_pre_multi_core_sharded(
     KernelHandle reader_mcast_receiver_kernels_id_all_to_all = -1;
     KernelHandle reader_mcast_receiver_kernels_id = -1;
     if (use_mcast) {
+        TT_FATAL(!all_to_all_workers_except_sender.intersects(sender_cores), "BAD BAD BAD");
         reader_mcast_receiver_kernels_id_all_to_all = CreateKernel(
             program,
             reciever_reader_kernel_file,
@@ -596,6 +597,7 @@ operation::ProgramWithCallbacks frmsnorm_pre_multi_core_sharded(
                 .compile_args = reader_mcast_receiver_all_to_all_compile_time_args});
     }
     if (num_none_all_to_all_workers > 0) {
+        TT_FATAL(!not_all_to_all_workers.intersects(sender_cores), "BAD BAD BAD");
         reader_mcast_receiver_kernels_id = CreateKernel(
             program,
             reciever_reader_kernel_file,
@@ -621,6 +623,7 @@ operation::ProgramWithCallbacks frmsnorm_pre_multi_core_sharded(
             .compile_args = writer_compile_time_args});
     KernelHandle writer_mcast_receiver_kernels_id = -1;
     if (num_none_all_to_all_workers > 0) {
+        TT_FATAL(!not_all_to_all_workers.intersects(all_to_all_cores), "BAD BAD BAD");
         writer_compile_time_args.at(0) = 0;
         writer_mcast_receiver_kernels_id = CreateKernel(
             program,
@@ -1333,6 +1336,9 @@ operation::ProgramWithCallbacks frmsnorm_post_multi_core_sharded(
 
     tt::tt_metal::NOC reader_noc = tt::tt_metal::detail::GetPreferredNOCForDRAMRead(device->arch());
     tt::tt_metal::NOC writer_noc = tt::tt_metal::detail::GetPreferredNOCForDRAMWrite(device->arch());
+    TT_FATAL(
+        reader_noc != writer_noc,
+        "Reader and writer NOCs must not be the same due to kernel implementation and using dedicated noc mode");
 
     if (!skip_write_back) {
         reader_noc = NOC::NOC_0;
@@ -1359,6 +1365,7 @@ operation::ProgramWithCallbacks frmsnorm_post_multi_core_sharded(
     KernelHandle reader_mcast_receiver_kernels_id_all_to_all = -1;
     KernelHandle reader_mcast_receiver_kernels_id = -1;
     if (use_mcast) {
+        TT_FATAL(!all_to_all_workers_except_sender.intersects(sender_cores), "BAD BAD BAD");
         reader_mcast_receiver_kernels_id_all_to_all = CreateKernel(
             program,
             reciever_reader_kernel_file,
@@ -1370,6 +1377,7 @@ operation::ProgramWithCallbacks frmsnorm_post_multi_core_sharded(
                 .defines = reader_mcast_receiver_defines});
     }
     if (num_none_all_to_all_workers > 0) {
+        TT_FATAL(!not_all_to_all_workers.intersects(all_to_all_cores), "BAD BAD BAD");
         reader_mcast_receiver_kernels_id = CreateKernel(
             program,
             reciever_reader_kernel_file,
@@ -1685,9 +1693,14 @@ operation::ProgramWithCallbacks frmsnorm_post_multi_core_sharded(
             writer_mcast_sender_args.push_back(gamma_tile_start_id);
 
             // Add args for write back (reshard)
+            TT_FATAL(write_back_writer_args.at(0) != 0, "num_segments_to_write_back is 0");
             writer_mcast_sender_args.insert(
                 writer_mcast_sender_args.end(), write_back_writer_args.begin(), write_back_writer_args.end());
 
+            tt::log_info("writer_mcast_sender_args: {}", writer_mcast_sender_args.size());
+            for (auto idx = 0; idx < write_back_writer_args.size(); idx++) {
+                tt::log_info("\t{}: {}", idx, write_back_writer_args[idx]);
+            }
             tt::tt_metal::SetRuntimeArgs(program, writer_mcast_sender_kernels_id, core, writer_mcast_sender_args);
             writer_kernel_ids.push_back(writer_mcast_sender_kernels_id);
         } else {
@@ -1699,6 +1712,7 @@ operation::ProgramWithCallbacks frmsnorm_post_multi_core_sharded(
             writer_mcast_receiver_args.push_back(gamma_tile_start_id);
 
             // Add args for write back (reshard)
+            TT_FATAL(write_back_writer_args.at(0) != 0, "num_segments_to_write_back is 0");
             writer_mcast_receiver_args.insert(
                 writer_mcast_receiver_args.end(), write_back_writer_args.begin(), write_back_writer_args.end());
 

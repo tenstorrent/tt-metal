@@ -112,6 +112,8 @@ void kernel_main() {
             uint64_t noc_addr_ex_par =
                 remote_noc_addrs_first_stage[block] | (l1_read_addr_ex_par);  // Updating read address for reading
                                                                               // SUm(X) and Sum(X2) per core
+            ASSERT(l1_read_addr_ex_par <= 1499136);
+            ASSERT(single_tile_size_bytes < 8192);
             noc_async_read_one_packet(noc_addr_ex_par, l1_write_addr_external, single_tile_size_bytes);
             l1_write_addr_external += single_tile_size_bytes;
         }
@@ -122,11 +124,12 @@ void kernel_main() {
         // read data from other cores - reduce first stage
         if constexpr (use_two_stage_reduce) {
             if (is_second_stage_reader) {  // gather data from a column of cores (if row major)
-                noc_semaphore_wait(reduce_second_stage_semaphore_addr_ptr, num_blocks_second_stage - 1);
+                noc_semaphore_wait2(reduce_second_stage_semaphore_addr_ptr, num_blocks_second_stage - 1);
                 noc_semaphore_set(reduce_second_stage_semaphore_addr_ptr, 0);
                 // read data from other cores - second stage reduce
                 for (uint32_t block = 0; block < num_blocks_second_stage - 1; ++block) {
                     uint64_t noc_addr_ex = remote_noc_addrs_second_stage[block + 1] | l1_read_addr_ex;
+                    ASSERT(l1_read_addr_ex <= 1499136);
                     noc_async_read_one_packet(noc_addr_ex, l1_write_addr_external, single_tile_size_bytes);
                     l1_write_addr_external += single_tile_size_bytes;
                 }

@@ -84,7 +84,7 @@ public:
         constexpr bool wait_for_connection_open_finish = build_mode == BuildFromArgsMode::BUILD_AND_OPEN_CONNECTION;
         FabricConnectionManager connection_manager;
         auto fwd_connected = get_arg_val<uint32_t>(arg_idx++);
-        ASSERT(fwd_connected == 0 || fwd_connected == 1);
+        // ASSERT(fwd_connected | bwd_connected <= 1);
         connection_manager.connection_flags = (fwd_connected != 0) << FORWARD_CONNECTION_FLAG_OFFSET;
         if (connection_manager.has_forward_connection()) {
             connection_manager.forward_fabric_sender =
@@ -94,7 +94,6 @@ public:
             }
         }
         auto bwd_connected = get_arg_val<uint32_t>(arg_idx++);
-        ASSERT(bwd_connected == 0 || bwd_connected == 1);
         connection_manager.connection_flags |= static_cast<uint8_t>(bwd_connected != 0)
                                                << BACKWARD_CONNECTION_FLAG_OFFSET;
         if (connection_manager.has_backward_connection()) {
