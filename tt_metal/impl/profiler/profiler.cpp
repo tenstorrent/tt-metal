@@ -67,6 +67,27 @@ void issue_fd_read_from_profiler_buffer(
     }
 }
 
+std::vector<uint32_t> read_control_buffer_from_core_slow_dispatch(
+    IDevice* device, const CoreCoord& core, const HalProgrammableCoreType core_type) {
+    std::vector<uint32_t> control_buffer;
+    profiler_msg_t* profiler_msg =
+        MetalContext::instance().hal().get_dev_addr<profiler_msg_t*>(core_type, HalL1MemAddrType::PROFILER);
+    if (MetalContext::instance().hal().get_arch() == tt::ARCH::WORMHOLE_B0 && device->is_mmio_capable()) {
+        control_buffer = tt::llrt::dma_read_hex_vec_from_core(
+            device->id(),
+            core,
+            reinterpret_cast<DeviceAddr>(profiler_msg->control_vector),
+            kernel_profiler::PROFILER_L1_CONTROL_BUFFER_SIZE);
+    } else {
+        control_buffer = tt::llrt::read_hex_vec_from_core(
+            device->id(),
+            core,
+            reinterpret_cast<DeviceAddr>(profiler_msg->control_vector),
+            kernel_profiler::PROFILER_L1_CONTROL_BUFFER_SIZE);
+    }
+    return control_buffer;
+}
+
 std::vector<uint32_t> read_control_buffer_from_core(
     IDevice* device, const CoreCoord& core, const HalProgrammableCoreType core_type, const ProfilerDumpState state) {
     std::vector<uint32_t> control_buffer;
@@ -84,11 +105,7 @@ std::vector<uint32_t> read_control_buffer_from_core(
                 mesh_cq.enqueue_read_shard_from_core(
                     address, control_buffer.data(), kernel_profiler::PROFILER_L1_CONTROL_BUFFER_SIZE, true);
             } else {
-                control_buffer = tt::llrt::read_hex_vec_from_core(
-                    device->id(),
-                    core,
-                    reinterpret_cast<DeviceAddr>(profiler_msg->control_vector),
-                    kernel_profiler::PROFILER_L1_CONTROL_BUFFER_SIZE);
+                control_buffer = read_control_buffer_from_core_slow_dispatch(device, core, core_type);
             }
         } else {
             control_buffer.resize(kernel_profiler::PROFILER_L1_CONTROL_VECTOR_SIZE);
@@ -101,14 +118,26 @@ std::vector<uint32_t> read_control_buffer_from_core(
                     true);
         }
     } else {
-        control_buffer = tt::llrt::read_hex_vec_from_core(
-            device->id(),
-            core,
-            reinterpret_cast<uint64_t>(profiler_msg->control_vector),
-            kernel_profiler::PROFILER_L1_CONTROL_BUFFER_SIZE);
+        control_buffer = read_control_buffer_from_core_slow_dispatch(device, core, core_type);
     }
 
     return control_buffer;
+}
+
+void write_control_buffer_to_core_slow_dispatch(
+    IDevice* device,
+    const CoreCoord& core,
+    const HalProgrammableCoreType core_type,
+    const std::vector<uint32_t>& control_buffer) {
+    profiler_msg_t* profiler_msg =
+        MetalContext::instance().hal().get_dev_addr<profiler_msg_t*>(core_type, HalL1MemAddrType::PROFILER);
+    if (MetalContext::instance().hal().get_arch() == tt::ARCH::WORMHOLE_B0 && device->is_mmio_capable()) {
+        tt::llrt::dma_write_hex_vec_to_core(
+            device->id(), core, control_buffer, reinterpret_cast<DeviceAddr>(profiler_msg->control_vector));
+    } else {
+        tt::llrt::write_hex_vec_to_core(
+            device->id(), core, control_buffer, reinterpret_cast<DeviceAddr>(profiler_msg->control_vector));
+    }
 }
 
 void write_control_buffer_to_core(
@@ -130,8 +159,7 @@ void write_control_buffer_to_core(
                 mesh_cq.enqueue_write_shard_to_core(
                     address, control_buffer.data(), kernel_profiler::PROFILER_L1_CONTROL_BUFFER_SIZE, true);
             } else {
-                tt::llrt::write_hex_vec_to_core(
-                    device->id(), core, control_buffer, reinterpret_cast<DeviceAddr>(profiler_msg->control_vector));
+                write_control_buffer_to_core_slow_dispatch(device, core, core_type, control_buffer);
             }
         } else {
             dynamic_cast<HWCommandQueue&>(device->command_queue())
@@ -143,8 +171,7 @@ void write_control_buffer_to_core(
                     true);
         }
     } else {
-        tt::llrt::write_hex_vec_to_core(
-            device->id(), core, control_buffer, reinterpret_cast<uint64_t>(profiler_msg->control_vector));
+        write_control_buffer_to_core_slow_dispatch(device, core, core_type, control_buffer);
     }
 }
 
