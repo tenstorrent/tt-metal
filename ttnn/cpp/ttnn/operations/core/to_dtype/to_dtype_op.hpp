@@ -88,27 +88,32 @@ Tensor create_tensor_from_span(
         case DataType::UINT16: {
             auto data = cast<uint16_t, T>(input_buffer);
             return Tensor(
-                tt::tt_metal::HostBuffer(std::move(data)), logical_shape, padded_shape, dtype, Layout::ROW_MAJOR);
+                       tt::tt_metal::HostBuffer(std::move(data)), logical_shape, padded_shape, dtype, Layout::ROW_MAJOR)
+                .to_layout(input_layout);
         }
         case DataType::INT32: {
             auto data = cast<int32_t, T>(input_buffer);
             return Tensor(
-                tt::tt_metal::HostBuffer(std::move(data)), logical_shape, padded_shape, dtype, Layout::ROW_MAJOR);
+                       tt::tt_metal::HostBuffer(std::move(data)), logical_shape, padded_shape, dtype, Layout::ROW_MAJOR)
+                .to_layout(input_layout);
         }
         case DataType::UINT32: {
             auto data = cast<uint32_t, T>(input_buffer);
             return Tensor(
-                tt::tt_metal::HostBuffer(std::move(data)), logical_shape, padded_shape, dtype, Layout::ROW_MAJOR);
+                       tt::tt_metal::HostBuffer(std::move(data)), logical_shape, padded_shape, dtype, Layout::ROW_MAJOR)
+                .to_layout(input_layout);
         }
         case DataType::FLOAT32: {
             auto data = cast<float, T>(input_buffer);
             return Tensor(
-                tt::tt_metal::HostBuffer(std::move(data)), logical_shape, padded_shape, dtype, Layout::ROW_MAJOR);
+                       tt::tt_metal::HostBuffer(std::move(data)), logical_shape, padded_shape, dtype, Layout::ROW_MAJOR)
+                .to_layout(input_layout);
         }
         case DataType::BFLOAT16: {
             auto data = cast<::bfloat16, T>(input_buffer);
             return Tensor(
-                tt::tt_metal::HostBuffer(std::move(data)), logical_shape, padded_shape, dtype, Layout::ROW_MAJOR);
+                       tt::tt_metal::HostBuffer(std::move(data)), logical_shape, padded_shape, dtype, Layout::ROW_MAJOR)
+                .to_layout(input_layout);
         }
         case DataType::BFLOAT8_B:
         case DataType::BFLOAT4_B: {
