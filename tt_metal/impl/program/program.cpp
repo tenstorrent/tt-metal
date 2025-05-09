@@ -4,7 +4,7 @@
 
 #include <allocator.hpp>
 #include <circular_buffer.hpp>
-#include <circular_buffer_types.hpp>
+#include <circular_buffer_config.hpp>
 #include <device.hpp>
 #include <graph_tracking.hpp>
 #include <magic_enum/magic_enum.hpp>

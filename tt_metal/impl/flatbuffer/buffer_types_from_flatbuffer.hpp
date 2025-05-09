@@ -5,7 +5,7 @@
 #pragma once
 
 #include "buffer_types_generated.h"
-#include <circular_buffer_types.hpp>
+#include <circular_buffer_config.hpp>
 #include "flatbuffer/base_types_from_flatbuffer.hpp"
 
 namespace tt::tt_metal {
