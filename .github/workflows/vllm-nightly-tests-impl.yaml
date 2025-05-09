@@ -20,19 +20,19 @@ jobs:
       matrix:
         test-group: [
           {
-            name: "Llama3 vLLM T3K test",
+            name: "vLLM test: Llama-3.1-8B-Instruct @ T3K",
             arch: wormhole_b0,
-            model: llama3,
-            server_timeout: 10,
+            model: "meta-llama/Llama-3.1-8B-Instruct",
+            server_timeout: 5,
             benchmark_timeout: 10,
             runner-label: config-t3000,
             co-owner-1_id: U08E1JCDVNX, # Pavle Petrovic
             co-owner-2_id: U08CEGF78ET, # Salar Hosseini Khorasgani
           },
           {
-            name: "Llama3 vLLM TG test",
+            name: "vLLM test: Llama-3.1-70B-Instruct @ TG",
             arch: wormhole_b0,
-            model: llama3,
+            model: "meta-llama/Llama-3.1-70B-Instruct",
             server_timeout: 10,
             benchmark_timeout: 10,
             runner-label: config-tg,
