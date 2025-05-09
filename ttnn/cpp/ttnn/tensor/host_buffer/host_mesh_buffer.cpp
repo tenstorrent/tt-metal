@@ -14,8 +14,8 @@
 namespace tt::tt_metal {
 namespace {
 
-// Returns a vector of local buffers from the global buffers, validating that the local size and offset are consistent
-// with the global size.
+// Returns a vector of local buffers from the global buffers, deallocating the global buffers that are remote to this
+// host. Validates that the local size and offset are consistent with the global size.
 std::vector<HostBuffer> get_local_buffers(
     std::vector<HostBuffer>&& global_buffers, size_t local_size, size_t local_offset) {
     TT_FATAL(
@@ -24,12 +24,11 @@ std::vector<HostBuffer> get_local_buffers(
         local_size,
         local_offset,
         global_buffers.size());
-    std::vector<HostBuffer> local_buffers;
-    local_buffers.reserve(local_size);
-    for (size_t i = 0; i < local_size; ++i) {
-        local_buffers.push_back(std::move(global_buffers.at(i + local_offset)));
-    }
-    return local_buffers;
+    using It = std::move_iterator<std::vector<HostBuffer>::iterator>;
+    It first{global_buffers.begin() + local_offset};
+    It last{global_buffers.begin() + local_offset + local_size};
+
+    return std::vector<HostBuffer>(first, last);
 }
 
 }  // namespace
