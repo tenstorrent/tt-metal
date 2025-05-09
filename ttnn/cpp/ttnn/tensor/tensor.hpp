@@ -17,7 +17,6 @@
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "ttnn/common/queue_id.hpp"
 #include "ttnn/distributed/distributed_tensor_config.hpp"
-#include "ttnn/tensor/host_buffer/host_buffer.hpp"
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/tensor/storage.hpp"
 #include "ttnn/tensor/tensor_attributes.hpp"
@@ -54,31 +53,32 @@ public:
     //                                  Hi Level APIs
     // ======================================================================================
     explicit Tensor() = default;
-    Tensor(const Tensor& other);
-    Tensor& operator=(const Tensor& other);
-    Tensor(Tensor&& other) noexcept = default;
-    Tensor& operator=(Tensor&& other) noexcept;
-    ~Tensor();
 
-    // Constructs a tensor with `Storage` and `TensorSpec`.
-    Tensor(Storage storage, TensorSpec tensor_spec, DistributedTensorConfig distributed_tensor_config);
-
-    // Constructors of `Tensor` that take physical data encoded in `HostBuffer`.
-    // The encoded data type and physical size of the data must match the specified tensor physical shape and data type.
     Tensor(
-        HostBuffer buffer,
+        Storage storage,
         const ttnn::Shape& shape,
         DataType dtype,
         Layout layout,
         const std::optional<Tile>& tile = std::nullopt);
     Tensor(
-        HostBuffer buffer,
+        Storage storage,
         const ttnn::Shape& logical_shape,
         const ttnn::Shape& padded_shape,
         DataType dtype,
         Layout layout,
         const std::optional<Tile>& tile = std::nullopt);
-    Tensor(HostBuffer buffer, TensorSpec tensor_spec);
+    Tensor(Storage storage, TensorSpec tensor_spec);
+
+    Tensor(const Tensor& other);
+    Tensor& operator=(const Tensor& other);
+    Tensor(Tensor&& other) noexcept = default;
+    Tensor& operator=(Tensor&& other) noexcept;
+
+    ~Tensor();
+
+    void deallocate(bool force = false);
+
+    std::vector<IDevice*> get_workers(bool blocking = false) const;
 
     // Converts a buffer of elements of type `T` to a `Tensor`.
     // Elements in the buffer are assumed to be stored in row-major order. The size of the buffer and the type of the
@@ -166,10 +166,6 @@ public:
     std::string write_to_string() const;
     void print() const;
 
-    void deallocate(bool force = false);
-
-    std::vector<IDevice*> get_workers(bool blocking = false) const;
-
     Tensor extract_shard(const CoreCoord& core) const;
     Tensor extract_shard(const uint32_t& core_id) const;
 
@@ -181,7 +177,6 @@ public:
     // ======================================================================================
     //                                      Getters
     // ======================================================================================
-    // TODO: remove either get_<x> or <x> getters. They are now equivalent.
     const Storage& get_storage() const;
     Storage& get_storage();
     DataType get_dtype() const;
@@ -189,7 +184,6 @@ public:
     const ttnn::Shape& get_logical_shape() const;
     const ttnn::Shape& get_padded_shape() const;
     const TensorSpec& get_tensor_spec() const;
-    const DistributedTensorConfig& get_distributed_tensor_config() const;
 
     // ======================================================================================
     // Non-Blocking Getters. Query attributes directly, without waiting for worker completion
@@ -200,9 +194,6 @@ public:
     DataType dtype() const { return this->tensor_attributes->get_tensor_spec().tensor_layout().get_data_type(); };
     Layout layout() const { return this->tensor_attributes->get_tensor_spec().tensor_layout().get_layout(); };
     const TensorSpec& tensor_spec() const { return this->tensor_attributes->get_tensor_spec(); }
-    const DistributedTensorConfig& distributed_tensor_config() const {
-        return this->tensor_attributes->get_distributed_tensor_config();
-    }
 
     // ======================================================================================
     //                                      Extra Helper Functions
@@ -290,7 +281,7 @@ public:
     }
 
 private:
-    void init(Storage storage, TensorSpec tensor_spec, DistributedTensorConfig distributed_tensor_config);
+    void init(Storage storage, TensorSpec tensor_spec);
     void deallocate_impl(bool force);
 };
 
