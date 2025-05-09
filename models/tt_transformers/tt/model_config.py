@@ -437,8 +437,8 @@ class ModelArgs:
         ), "FAKE_DEVICE has been renamed to MESH_DEVICE for consistency with vLLM, please update your environment variables and run again."
 
         # Remove trailing slashes so basename gets the right model name
-        LLAMA_DIR = os.getenv("LLAMA_DIR").strip("/")
-        HF_MODEL = os.getenv("HF_MODEL").strip("/")
+        LLAMA_DIR = os.getenv("LLAMA_DIR")
+        HF_MODEL = os.getenv("HF_MODEL")
         self.CACHE_PATH = os.getenv("TT_CACHE_PATH")
         assert not (LLAMA_DIR and HF_MODEL), "Only one of LLAMA_DIR or HF_MODEL should be set"
         if LLAMA_DIR:
@@ -448,7 +448,7 @@ class ModelArgs:
             self.TOKENIZER_PATH = LLAMA_DIR
             if not self.CACHE_PATH:
                 self.CACHE_PATH = os.path.join(LLAMA_DIR, self.device_name)
-            self.model_name = os.path.basename(LLAMA_DIR)  # May be overridden by config
+            self.model_name = os.path.basename(LLAMA_DIR.strip("/"))  # May be overridden by config
         elif HF_MODEL:
             self.CKPT_DIR = HF_MODEL
             self.TOKENIZER_PATH = HF_MODEL
@@ -456,7 +456,7 @@ class ModelArgs:
                 self.CACHE_PATH = os.path.join("model_cache", HF_MODEL, self.device_name)
             else:  # For HF models, always append the device name (e.g. N150/N300/T3K/TG) to the cache path
                 self.CACHE_PATH = os.path.join(self.CACHE_PATH, self.device_name)
-            self.model_name = HF_MODEL.split("/")[
+            self.model_name = HF_MODEL.strip("/").split("/")[
                 -1
             ]  # HF model names use / even on windows. May be overridden by config.
             self.from_hf_url = True
