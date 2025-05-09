@@ -32,13 +32,15 @@ void kernel_main() {
     constexpr uint32_t act_block_h_datums = get_compile_time_arg_val(19);
     constexpr uint32_t split_reader = act_block_h_datums != 0;
     constexpr uint32_t act_block_num_tiles = get_compile_time_arg_val(20);
-    constexpr uint32_t conv_act_size_c_bytes = get_compile_time_arg_val(21);
-    constexpr uint32_t coalesced_read_bytes = get_compile_time_arg_val(22);
-    constexpr uint32_t window_outer_offset = get_compile_time_arg_val(23);
+    constexpr uint32_t conv_act_c_read_bytes = get_compile_time_arg_val(21);
+    constexpr uint32_t weight_size_w = get_compile_time_arg_val(22);
+    constexpr uint32_t conv_act_size_w_padded = get_compile_time_arg_val(23);
     constexpr uint32_t act_block_w_extra_align_bytes = get_compile_time_arg_val(24);
     constexpr uint32_t act_block_h_datums_first_reader = get_compile_time_arg_val(25);
     constexpr uint32_t act_block_h_datums_last_block = get_compile_time_arg_val(26);
     constexpr bool needs_act_block_zero_out = get_compile_time_arg_val(27) == 1;
+    constexpr uint32_t dilation_h = get_compile_time_arg_val(28);
+    constexpr uint32_t dilation_w = get_compile_time_arg_val(29);
 
     constexpr uint32_t act_block_h_datums_read_last_block =
         act_block_h_datums_last_block > act_block_h_datums
@@ -64,6 +66,8 @@ void kernel_main() {
     if constexpr (split_reader && needs_act_block_zero_out) {
         zero_out_tiles<cb_id_act_second_reader>();
     }
+
+    constexpr uint32_t window_outer_offset = conv_act_size_w_padded * conv_act_c_read_bytes * dilation_h;
 
     // mcast args
     const uint32_t weights_mcast_dest_noc_start_x = get_arg_val<uint32_t>(i++);
@@ -120,6 +124,11 @@ void kernel_main() {
     const InterleavedAddrGenFast<true> s_weight = {
         .bank_base_address = weight_addr_dram_base, .page_size = weight_tile_nbytes, .data_format = weight_df};
 
+    constexpr uint32_t stride_w_bytes = dilation_w * conv_act_c_read_bytes;
+    constexpr uint32_t num_coalesced_reads = weight_size_w;
+    constexpr uint32_t coalesced_read_bytes =
+        ((dilation_w == 1) ? num_coalesced_reads * conv_act_c_read_bytes : conv_act_c_read_bytes);
+
     // OUTER most loop is looping over out blocks in width dim because blocks from compute are in col major order.
     // Write out col major blocks in row major layout to output
     uint32_t weight_start_tile_id = out_start_tile_id_w;
@@ -129,7 +138,6 @@ void kernel_main() {
     // DPRINT << "weight_start_tile_id=" << weight_start_tile_id << ENDL();
     for (uint32_t bw = 0; bw < out_num_blocks_w; bw++) {
         // coalesce reads along weight_size_w
-        uint32_t act_l1_offset;
         uint32_t start_reader_idx;
         if constexpr (split_reader) {
             start_reader_idx = 0;
@@ -159,22 +167,18 @@ void kernel_main() {
                         uint32_t l1_write_addr_act = get_write_ptr(cb_id_act_second_reader);
                         uint32_t act_block_h_datums_read_curr =
                             bh == out_num_blocks_h - 1 ? act_block_h_datums_read_last_block : act_block_h_datums_read;
-                        for (uint32_t bhd = 0; bhd < act_block_h_datums_read_curr; bhd++) {
-                            // local read from reader_index + reader_offset;
-                            uint32_t two_reader_indices = packed_reader_indices_ptr[reader_idx];
-                            uint32_t reader_idx_1 = two_reader_indices & 0xffff;
-                            uint32_t reader_idx_2 = two_reader_indices >> 16;
-
-                            act_l1_offset = reader_offset + (reader_idx_1 * conv_act_size_c_bytes);
-                            noc_async_read_one_packet_with_state<true>(act_l1_offset, l1_write_addr_act);
-                            l1_write_addr_act += (coalesced_read_bytes + act_block_w_extra_align_bytes);
-
-                            act_l1_offset = reader_offset + (reader_idx_2 * conv_act_size_c_bytes);
-                            noc_async_read_one_packet_with_state<true>(act_l1_offset, l1_write_addr_act);
-                            l1_write_addr_act += (coalesced_read_bytes + act_block_w_extra_align_bytes);
-
-                            reader_idx++;
-                        }
+                        read_sticks<
+                            dilation_w,
+                            coalesced_read_bytes,
+                            conv_act_c_read_bytes,
+                            act_block_w_extra_align_bytes,
+                            stride_w_bytes,
+                            weight_size_w>(
+                            act_block_h_datums_read_curr,
+                            packed_reader_indices_ptr,
+                            reader_offset,
+                            l1_write_addr_act,
+                            reader_idx);
                         noc_async_read_barrier();
                         cb_push_back(cb_id_act_second_reader, act_block_num_tiles);
 

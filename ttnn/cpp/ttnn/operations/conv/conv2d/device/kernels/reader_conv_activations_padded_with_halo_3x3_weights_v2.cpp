@@ -5,7 +5,6 @@
 #include "dataflow_api.h"
 #include "height_sharded_reader_common.hpp"
 
-constexpr uint32_t DILATION_W = get_compile_time_arg_val(1);
 void kernel_main() {
     constexpr uint32_t dilation_h = get_compile_time_arg_val(0);
     constexpr uint32_t dilation_w = get_compile_time_arg_val(1);
@@ -66,7 +65,6 @@ void kernel_main() {
     // the other path away this has shown to be a big perf win
 
     // coalesce reads along weight_size_w
-    uint32_t act_l1_offset = 0;
     uint32_t act_l1_read_addr = get_read_ptr(cb_id_sharded_act);
 
     static_assert(coalesced_read_bytes <= NOC_MAX_BURST_SIZE);
@@ -84,43 +82,18 @@ void kernel_main() {
             cb_reserve_back(cb_id_act, act_block_num_tiles);
             uint32_t l1_write_addr_act = get_write_ptr(cb_id_act);
 
-            // #pragma GCC unroll 4 // unroll didn't help, but act_block_h_datums (loop bound) being const does help
             uint32_t act_block_h_datums_read_curr =
                 bh == act_num_blocks_h - 1 ? act_block_h_datums_read_last_block : act_block_h_datums_read;
 
-            for (uint32_t bhd = 0; bhd < act_block_h_datums_read_curr; bhd++) {
-                // local read from reader_index + reader_offset;
-                uint32_t two_reader_indices = packed_reader_indices_ptr[reader_idx];
-                uint32_t reader_idx_1 = two_reader_indices & 0xffff;
-                uint32_t reader_idx_2 = two_reader_indices >> 16;
+            read_sticks<
+                dilation_w,
+                coalesced_read_bytes,
+                conv_act_c_read_bytes,
+                act_block_w_extra_align_bytes,
+                stride_w_bytes,
+                weight_size_w>(
+                act_block_h_datums_read_curr, packed_reader_indices_ptr, reader_offset, l1_write_addr_act, reader_idx);
 
-                if constexpr (DILATION_W == 1) {
-                    act_l1_offset = reader_offset + (reader_idx_1 * conv_act_c_read_bytes);
-                    noc_async_read_one_packet_with_state<true>(act_l1_offset, l1_write_addr_act);
-                    l1_write_addr_act += (coalesced_read_bytes + act_block_w_extra_align_bytes);
-
-                    act_l1_offset = reader_offset + (reader_idx_2 * conv_act_c_read_bytes);
-                    noc_async_read_one_packet_with_state<true>(act_l1_offset, l1_write_addr_act);
-                    l1_write_addr_act += (coalesced_read_bytes + act_block_w_extra_align_bytes);
-                } else {
-                    act_l1_offset = reader_offset + (reader_idx_1 * conv_act_c_read_bytes);
-                    for (uint32_t inner = 0; inner < weight_size_w; inner++) {
-                        noc_async_read_one_packet_with_state<true>(act_l1_offset, l1_write_addr_act);
-                        l1_write_addr_act += conv_act_c_read_bytes;
-                        act_l1_offset += stride_w_bytes;
-                    }
-                    l1_write_addr_act += act_block_w_extra_align_bytes;
-
-                    act_l1_offset = reader_offset + (reader_idx_2 * conv_act_c_read_bytes);
-                    for (uint32_t inner = 0; inner < weight_size_w; inner++) {
-                        noc_async_read_one_packet_with_state<true>(act_l1_offset, l1_write_addr_act);
-                        l1_write_addr_act += conv_act_c_read_bytes;
-                        act_l1_offset += stride_w_bytes;
-                    }
-                    l1_write_addr_act += act_block_w_extra_align_bytes;
-                }
-                reader_idx++;
-            }
             noc_async_read_barrier();
 
             cb_push_back(cb_id_act, act_block_num_tiles);
