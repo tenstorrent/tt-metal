@@ -103,5 +103,8 @@ jobs:
             -e GTEST_OUTPUT=xml:generated/test_reports/
             ${{ (inputs.arch == 'wormhole_b0' && '-e WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml') || '' }}
           run_args: |
-            pip3 install pytest-repeat
-            ${{ inputs.command }}
+            for i in {1..50}; do
+              echo "Running test iteration $i of 50"
+              tt-smi-metal -r0
+              pytest 'tests/tt_eager/python_api_testing/unit_testing/misc/test_rmsnorm.py::test_rmsnorm_test[RMSN_GB-BFLOAT16-in0_DRAM-out_DRAM]'
+            done
