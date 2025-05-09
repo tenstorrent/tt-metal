@@ -92,7 +92,6 @@ def ttnn_vgg16(
                 weights_dtype=model_config["WEIGHTS_DTYPE"],
                 activation="relu",
                 deallocate_activation=False,
-                input_channels_alignment=32,
                 reallocate_halo_output=False,
                 transpose_shards=True,
                 shard_layout=(
@@ -245,7 +244,6 @@ def ttnn_vgg11(
                 weights_dtype=model_config["WEIGHTS_DTYPE"],
                 activation="relu",
                 deallocate_activation=False,
-                input_channels_alignment=32,
                 reallocate_halo_output=False,
                 transpose_shards=True,
                 shard_layout=(

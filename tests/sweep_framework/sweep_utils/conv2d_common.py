@@ -66,7 +66,6 @@ def run_conv2d_full_sweep(
     groups,
     override_sharding_config,
     core_grid,
-    use_shallow_conv_variant,
     deallocate_activation,
     enable_auto_formatting,
     device,
