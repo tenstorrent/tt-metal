@@ -915,8 +915,10 @@ def test_nei_ttnn(input_shapes, scalar, device):
 )
 @skip_for_grayskull("#ToDo: GS implementation needs to be done for remainder")
 def test_binary_gcd_ttnn(input_shapes, device):
-    in_data1, input_tensor1 = data_gen_with_range_int(input_shapes, -1024, 1024, device)
-    in_data2, input_tensor2 = data_gen_with_range_int(input_shapes, -1000, 1000, device)
+    in_data1 = torch.randint(-2147483647, 2147483648, input_shapes, dtype=torch.int32)
+    in_data2 = torch.randint(-2147483647, 2147483648, input_shapes, dtype=torch.int32)
+    input_tensor1 = ttnn.from_torch(in_data1, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
+    input_tensor2 = ttnn.from_torch(in_data2, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
     output_tensor = ttnn.gcd(input_tensor1, input_tensor2)
     golden_function = ttnn.get_golden_function(ttnn.gcd)
     golden_tensor = golden_function(in_data1, in_data2)
@@ -936,10 +938,10 @@ def test_binary_gcd_ttnn(input_shapes, device):
 @skip_for_grayskull("#ToDo: GS implementation needs to be done for remainder")
 def test_binary_lcm_ttnn(input_shapes, device):
     torch.manual_seed(213919)
-    in_data1 = torch.randint(-100, 100, input_shapes, dtype=torch.int32)
-    in_data2 = torch.randint(-80, 180, input_shapes, dtype=torch.int32)
-    input_tensor1 = ttnn.from_torch(in_data1, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-    input_tensor2 = ttnn.from_torch(in_data2, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    in_data1 = torch.randint(-32767, 32768, input_shapes, dtype=torch.int32)
+    in_data2 = torch.randint(-32767, 32768, input_shapes, dtype=torch.int32)
+    input_tensor1 = ttnn.from_torch(in_data1, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
+    input_tensor2 = ttnn.from_torch(in_data2, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
     output_tensor = ttnn.lcm(input_tensor1, input_tensor2)
     golden_function = ttnn.get_golden_function(ttnn.lcm)
     golden_tensor = golden_function(in_data1, in_data2)
@@ -958,12 +960,12 @@ def test_binary_lcm_ttnn(input_shapes, device):
     ),
 )
 @skip_for_grayskull("#ToDo: GS implementation needs to be done for remainder")
-def test_binary_gcd_fp32(input_shapes, device):
+def test_binary_gcd_int32(input_shapes, device):
     torch.manual_seed(213919)
-    in_data1 = torch.randint(-1000, 1000, input_shapes, dtype=torch.int32)
-    in_data2 = torch.randint(-1024, 1024, input_shapes, dtype=torch.int32)
-    input_tensor1 = ttnn.from_torch(in_data1, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
-    input_tensor2 = ttnn.from_torch(in_data2, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    in_data1 = torch.randint(-2147483647, 2147483648, input_shapes, dtype=torch.int32)
+    in_data2 = torch.randint(-2147483647, 2147483648, input_shapes, dtype=torch.int32)
+    input_tensor1 = ttnn.from_torch(in_data1, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
+    input_tensor2 = ttnn.from_torch(in_data2, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
 
     output_tensor = ttnn.gcd(input_tensor1, input_tensor2)
     golden_function = ttnn.get_golden_function(ttnn.gcd)
@@ -985,11 +987,11 @@ def test_binary_gcd_fp32(input_shapes, device):
 @skip_for_grayskull("#ToDo: GS implementation needs to be done for remainder")
 def test_binary_lcm_pos(input_shapes, device):
     torch.manual_seed(213919)
-    in_data1 = torch.randint(1, 1000, input_shapes, dtype=torch.int32)
-    in_data2 = torch.randint(1, 1024, input_shapes, dtype=torch.int32)
+    in_data1 = torch.randint(1, 32768, input_shapes, dtype=torch.int32)
+    in_data2 = torch.randint(1, 32768, input_shapes, dtype=torch.int32)
 
-    input_tensor1 = ttnn.from_torch(in_data1, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
-    input_tensor2 = ttnn.from_torch(in_data2, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    input_tensor1 = ttnn.from_torch(in_data1, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
+    input_tensor2 = ttnn.from_torch(in_data2, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
     output_tensor = ttnn.lcm(input_tensor1, input_tensor2)
     golden_function = ttnn.get_golden_function(ttnn.lcm)
     golden_tensor = golden_function(in_data1, in_data2)
@@ -1008,14 +1010,13 @@ def test_binary_lcm_pos(input_shapes, device):
     ),
 )
 @skip_for_grayskull("#ToDo: GS implementation needs to be done for remainder")
-# when both inputs are 0, torch=0, tt=nan
 def test_binary_lcm_neg(input_shapes, device):
     torch.manual_seed(213919)
-    in_data1 = torch.randint(-1000, -1, input_shapes, dtype=torch.int32)
-    in_data2 = torch.randint(-1024, -1, input_shapes, dtype=torch.int32)
+    in_data1 = torch.randint(-32767, 0, input_shapes, dtype=torch.int32)
+    in_data2 = torch.randint(-32767, 0, input_shapes, dtype=torch.int32)
 
-    input_tensor1 = ttnn.from_torch(in_data1, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
-    input_tensor2 = ttnn.from_torch(in_data2, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    input_tensor1 = ttnn.from_torch(in_data1, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
+    input_tensor2 = ttnn.from_torch(in_data2, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
     output_tensor = ttnn.lcm(input_tensor1, input_tensor2)
     golden_function = ttnn.get_golden_function(ttnn.lcm)
     golden_tensor = golden_function(in_data1, in_data2)

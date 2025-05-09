@@ -102,4 +102,6 @@ enum SfpuType {
     cpy_values,
     unary_max,
     unary_min,
+    gcd,
+    lcm,
 };
