@@ -556,7 +556,7 @@ void test_single_connection_multi_device_socket(
 
     auto l1_alignment = MetalContext::instance().hal().get_alignment(HalMemType::L1);
     auto fabric_max_packet_size =
-        tt::tt_fabric::get_1d_fabric_config().channel_buffer_size_bytes - sizeof(tt::tt_fabric::PacketHeader);
+        tt::tt_fabric::get_tt_fabric_config().channel_buffer_size_bytes - sizeof(tt::tt_fabric::PacketHeader);
 
     // Create Socket between Sender and Receiver
     socket_connection_t socket_connection = {
@@ -755,7 +755,7 @@ void test_single_connection_multi_device_socket_with_workers(
 
     auto l1_alignment = MetalContext::instance().hal().get_alignment(HalMemType::L1);
     auto fabric_max_packet_size =
-        tt::tt_fabric::get_1d_fabric_config().channel_buffer_size_bytes - sizeof(tt::tt_fabric::PacketHeader);
+        tt::tt_fabric::get_tt_fabric_config().channel_buffer_size_bytes - sizeof(tt::tt_fabric::PacketHeader);
     // Create Socket between Sender and Receiver
     socket_connection_t socket_connection = {
         .sender_core = {MeshCoordinate(0, 0), sender_logical_coord},
@@ -941,7 +941,7 @@ std::shared_ptr<Program> create_sender_program(
     chip_id_t recv_physical_device_id) {
     static constexpr auto packet_header_size_bytes = sizeof(tt::tt_fabric::PacketHeader);
     auto fabric_max_packet_size =
-        tt::tt_fabric::get_1d_fabric_config().channel_buffer_size_bytes - sizeof(tt::tt_fabric::PacketHeader);
+        tt::tt_fabric::get_tt_fabric_config().channel_buffer_size_bytes - sizeof(tt::tt_fabric::PacketHeader);
     const auto reserved_packet_header_CB_index = tt::CB::c_in0;
     auto sender_program = std::make_shared<Program>();
     auto sender_kernel = CreateKernel(

@@ -24,7 +24,7 @@ void kernel_main() {
         reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(get_write_ptr(fabric_packet_header_cb_id));
     volatile tt_l1_ptr PACKET_HEADER_TYPE* socket_packet_header_addr =
         reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(
-            get_write_ptr(fabric_packet_header_cb_id) + tt::tt_fabric::header_size_bytes);
+            get_write_ptr(fabric_packet_header_cb_id) + sizeof(PACKET_HEADER_TYPE));
 
     // Create Socket Interface
     SocketSenderInterface sender_socket = create_sender_socket_interface(socket_config_addr);
