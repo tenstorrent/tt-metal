@@ -35,7 +35,8 @@ struct CrossEntropyBackwardDeviceOperation {
         const ttnn::Tensor& input_tensor,
         const ttnn::Tensor& target_tensor,
         float scaler = 1.0F,
-        const std::optional<ttnn::Tensor>& preallocated_output = std::nullopt);
+        const std::optional<ttnn::Tensor>& preallocated_output = std::nullopt,
+        const std::optional<ttnn::Tensor>& preallocated_softmax = std::nullopt);
 };
 
 }  // namespace ttml::metal::ops::cross_entropy_bw::device

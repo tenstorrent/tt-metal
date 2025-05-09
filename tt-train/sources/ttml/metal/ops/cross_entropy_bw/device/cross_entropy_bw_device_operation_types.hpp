@@ -17,9 +17,10 @@ struct tensor_args_t {
     const ttnn::Tensor& target;
 
     std::optional<ttnn::Tensor> preallocated_output;
+    std::optional<ttnn::Tensor> preallocated_softmax;
 };
 
-using tensor_return_value_t = ttnn::Tensor;  // return grad: tensor with shape (N, 1, H, W)
-using spec_return_value_t = ttnn::TensorSpec;
+using tensor_return_value_t = std::vector<ttnn::Tensor>;  // return grad: tensor with shape (N, 1, H, W)
+using spec_return_value_t = std::vector<ttnn::TensorSpec>;
 
 }  // namespace ttml::metal::ops::cross_entropy_bw::device

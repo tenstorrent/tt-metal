@@ -69,14 +69,15 @@ void kernel_main() {
 
     constexpr uint16_t one = 0x00003F80;  // (bfloat16)1.0 -> uint16_t
     constexpr uint16_t zero = 0x0;
-    constexpr uint16_t minus_inf = 0xFF80;  // (bfloat16)-inf -> uint16_t
+    constexpr uint16_t minus_inf = 0xFF80;          // (bfloat16)-inf -> uint16_t
+    constexpr uint16_t minus_one_hundred = 0xC47A;  // (bfloat16)-100 -> uint16_t
     for (uint32_t face = 0; face < 4; ++face) {
         uint32_t offset = (face & 1U) << 4U;
         for (uint32_t h = 0; h < 16; ++h) {
             for (uint32_t w = 0; w < 16; ++w) {
                 if constexpr (do_mask_w) {
                     *mask_ptr++ = (offset + w < mask_w) ? one : zero;  // how to create the proper mask?
-                    *max_mask_ptr++ = (offset + w < mask_w) ? zero : minus_inf;
+                    *max_mask_ptr++ = (offset + w < mask_w) ? zero : minus_one_hundred;
                 }
 
                 *reduction_scaler_ptr++ = one;

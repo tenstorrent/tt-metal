@@ -11,6 +11,7 @@
 #include "autograd/graph_utils.hpp"
 #include "core/compute_kernel_config.hpp"
 #include "core/tt_tensor_utils.hpp"
+#include "metal/operations.hpp"
 #include "ops/binary_ops.hpp"
 #include "ops/unary_ops.hpp"
 #include "ttnn_fixed/trivial_ttnn_ops.hpp"
@@ -29,18 +30,110 @@ autograd::TensorPtr mse_loss(
     }
 }
 
+// autograd::TensorPtr cross_entropy_loss_without_reduce_(
+//     const autograd::TensorPtr& prediction, const autograd::TensorPtr& target) {
+//     const float eps = 1e-6F;
+//     auto prediction_tensor = ttnn_fixed::softmax(prediction->get_value(), 3);
+//     auto prediction_tensor_clipped = ttnn::clip(prediction_tensor, eps, 1.0F);
+//     auto loss = ttnn::multiply(target->get_value(), ttnn::log(prediction_tensor_clipped));
+//     loss = ttnn::neg(loss);
+//     loss = ttnn_fixed::sum_over_dim(loss, 3);
+//     auto out = autograd::create_tensor(loss);
+
+//     autograd::GradFunction grad = [target, prediction_tensor, prediction, out]() {
+//         auto grad = ttnn::subtract(prediction_tensor, target->get_value());
+//         grad = ttnn::multiply(grad, out->get_grad());
+//         prediction->add_grad(grad);
+//     };
+
+//     auto links = autograd::get_links(prediction);
+//     out->set_node(autograd::ctx().add_backward_node(std::move(grad), links));
+
+//     return out;
+// }
+
 autograd::TensorPtr cross_entropy_loss_without_reduce_(
     const autograd::TensorPtr& prediction, const autograd::TensorPtr& target) {
-    const float eps = 1e-6F;
-    auto prediction_tensor = ttnn_fixed::softmax(prediction->get_value(), 3);
-    auto prediction_tensor_clipped = ttnn::clip(prediction_tensor, eps, 1.0F);
-    auto loss = ttnn::multiply(target->get_value(), ttnn::log(prediction_tensor_clipped));
-    loss = ttnn::neg(loss);
-    loss = ttnn_fixed::sum_over_dim(loss, 3);
+    // const float eps = 1e-6F;
+    // auto prediction_tensor = ttnn_fixed::softmax(prediction->get_value(), 3);
+    // auto prediction_tensor_clipped = ttnn::clip(prediction_tensor, eps, 1.0F);
+    // auto loss = ttnn::multiply(target->get_value(), ttnn::log(prediction_tensor_clipped));
+    // loss = ttnn::neg(loss);
+    // loss = ttnn_fixed::sum_over_dim(loss, 3);
+    // auto out = autograd::create_tensor(loss);
+
+    // create one_hot targets for debug
+    auto shape = prediction->get_value().get_logical_shape();
+    const uint32_t N = shape[0];
+    const uint32_t W = shape[3];
+    auto target_indeces = core::to_xtensor<uint32_t>(target->get_value());
+    std::vector<float> targets;
+    targets.reserve(N * W);
+    for (uint32_t n = 0; n < N; ++n) {
+        std::vector<float> one_hot_target(W, 0.0F);
+        one_hot_target[target_indeces(n, 0)] = 1.0F;
+        std::copy(one_hot_target.begin(), one_hot_target.end(), std::back_inserter(targets));
+    }
+
+    auto target_one_hot_tensor =
+        ttml::core::from_vector<float>(targets, ttnn::Shape({N, 1U, 1U, W}), &autograd::ctx().get_device());
+
+    auto loss = ttml::metal::cross_entropy_fw(prediction->get_value(), target->get_value());
     auto out = autograd::create_tensor(loss);
 
-    autograd::GradFunction grad = [target, prediction_tensor, prediction, out]() {
-        auto grad = ttnn::subtract(prediction_tensor, target->get_value());
+    autograd::GradFunction grad = [target, target_indeces, target_one_hot_tensor, prediction, out]() {
+        float scaler = 1.0F;  // / (static_cast<float>(prediction->get_value().get_logical_shape()[0]));
+        // auto grad = ttml::metal::cross_entropy_bw(prediction->get_value(), target->get_value(), scaler);
+
+        auto prediction_tensor = core::to_xtensor(ttnn_fixed::softmax(prediction->get_value(), 3));
+        auto custom_grad = ttnn::subtract(ttnn_fixed::softmax(prediction->get_value(), 3), target_one_hot_tensor);
+        auto custom_grad_xtensor = core::to_xtensor(custom_grad);
+
+        auto res = ttml::metal::cross_entropy_bw(prediction->get_value(), target->get_value(), scaler);
+        auto grad = res[0];
+
+        // debug print of softmax difference
+        auto bw_softmax = core::to_xtensor(res[0]);
+        auto input = core::to_xtensor(prediction->get_value());
+
+        for (size_t n = 0; n < bw_softmax.shape()[0]; ++n) {
+            for (size_t h = 0; h < bw_softmax.shape()[2]; ++h) {
+                bool isError = false;
+                for (size_t w = 0; w < bw_softmax.shape()[3]; ++w) {
+                    if (std::abs(bw_softmax(n, 0, h, w) - custom_grad_xtensor(n, 0, h, w)) >
+                        1e-2F + 1e-2F * std::abs(custom_grad_xtensor(n, 0, h, w))) {
+                        fmt::print("Batch_num: {} | Row_num: {} | Col_num: {}\n", n, h, w);
+                        fmt::print(
+                            "[Softmax] Op: {:.4f} | Custom {:.4f} | Row target: {:2d}\n",
+                            bw_softmax(n, 0, h, w),
+                            custom_grad_xtensor(n, 0, h, w),
+                            target_indeces(n, h));
+
+                        isError = true;
+                    }
+                }
+
+                if (isError) {
+                    fmt::print("[Input]: ");
+                    for (size_t w = 0; w < bw_softmax.shape()[3]; ++w) {
+                        fmt::print("{:.4f}, ", input(n, 0, h, w));
+                    }
+                    fmt::print("\n");
+                    fmt::print("[Op res]: ");
+                    for (size_t w = 0; w < bw_softmax.shape()[3]; ++w) {
+                        fmt::print("{:.4f}, ", bw_softmax(n, 0, h, w));
+                    }
+                    fmt::print("\n");
+                    fmt::print("[Custom res]: ");
+                    for (size_t w = 0; w < bw_softmax.shape()[3]; ++w) {
+                        fmt::print("{:.4f}, ", custom_grad_xtensor(n, 0, h, w));
+                    }
+                    fmt::print("\n");
+                }
+            }
+        }
+        // ---------------------- end of debug prints-----------------
+
         grad = ttnn::multiply(grad, out->get_grad());
         prediction->add_grad(grad);
     };

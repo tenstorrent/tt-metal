@@ -75,29 +75,60 @@ void CrossEntropyBackwardDeviceOperation::validate_on_program_cache_miss(
 
 CrossEntropyBackwardDeviceOperation::spec_return_value_t CrossEntropyBackwardDeviceOperation::compute_output_specs(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    if (tensor_args.preallocated_output.has_value()) {
-        return tensor_args.preallocated_output->get_tensor_spec();
-    }
+    // if (tensor_args.preallocated_output.has_value()) {
+    //     return tensor_args.preallocated_output->get_tensor_spec();
+    // }
+    // auto input_logical_shape = tensor_args.input.get_logical_shape();
+    // return ttnn::TensorSpec(
+    //     ttnn::Shape(input_logical_shape),
+    //     tt::tt_metal::TensorLayout(
+    //         tensor_args.input.get_dtype(), tt::tt_metal::Layout::TILE, tensor_args.input.memory_config()));
+    spec_return_value_t output_specs;
+    output_specs.reserve(2U);
     auto input_logical_shape = tensor_args.input.get_logical_shape();
-    return ttnn::TensorSpec(
-        ttnn::Shape(input_logical_shape),
-        tt::tt_metal::TensorLayout(
-            tensor_args.input.get_dtype(), tt::tt_metal::Layout::TILE, tensor_args.input.memory_config()));
+    if (tensor_args.preallocated_output.has_value()) {
+        output_specs.emplace_back(tensor_args.preallocated_output->get_tensor_spec());
+        output_specs.emplace_back(tensor_args.preallocated_softmax->get_tensor_spec());
+    } else {
+        output_specs.emplace_back(ttnn::TensorSpec(
+            ttnn::Shape(input_logical_shape),
+            tt::tt_metal::TensorLayout(
+                tensor_args.input.get_dtype(), tt::tt_metal::Layout::TILE, tensor_args.input.memory_config())));
+
+        output_specs.emplace_back(ttnn::TensorSpec(
+            ttnn::Shape(input_logical_shape),
+            tt::tt_metal::TensorLayout(
+                tensor_args.input.get_dtype(), tt::tt_metal::Layout::TILE, tensor_args.input.memory_config())));
+    }
+
+    return output_specs;
 }
 
 CrossEntropyBackwardDeviceOperation::tensor_return_value_t CrossEntropyBackwardDeviceOperation::create_output_tensors(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    tensor_return_value_t output_tensor;
+    // tensor_return_value_t output_tensor;
 
-    spec_return_value_t output_specs = compute_output_specs(args, tensor_args);
+    // spec_return_value_t output_specs = compute_output_specs(args, tensor_args);
 
+    // if (tensor_args.preallocated_output.has_value()) {
+    //     output_tensor = tensor_args.preallocated_output.value();
+    // } else {
+    //     output_tensor = create_device_tensor(output_specs, tensor_args.input.device());
+    // }
+
+    // return output_tensor;
+
+    tensor_return_value_t output_tensors;
+    output_tensors.reserve(2U);
     if (tensor_args.preallocated_output.has_value()) {
-        output_tensor = tensor_args.preallocated_output.value();
+        output_tensors.emplace_back(tensor_args.preallocated_output.value());
+        output_tensors.emplace_back(tensor_args.preallocated_softmax.value());
     } else {
-        output_tensor = create_device_tensor(output_specs, tensor_args.input.device());
+        spec_return_value_t output_specs = compute_output_specs(args, tensor_args);
+        output_tensors.emplace_back(create_device_tensor(output_specs[0], tensor_args.input.device()));
+        output_tensors.emplace_back(create_device_tensor(output_specs[1], tensor_args.input.device()));
     }
-
-    return output_tensor;
+    return output_tensors;
 }
 
 tt::stl::hash::hash_t CrossEntropyBackwardDeviceOperation::compute_program_hash(
@@ -115,7 +146,8 @@ std::tuple<operation_attributes_t, tensor_args_t> CrossEntropyBackwardDeviceOper
     const ttnn::Tensor& input_tensor,
     const ttnn::Tensor& target_tensor,
     float scaler,
-    const std::optional<ttnn::Tensor>& preallocated_output) {
+    const std::optional<ttnn::Tensor>& preallocated_output,
+    const std::optional<ttnn::Tensor>& preallocated_softmax) {
     return {
         operation_attributes_t{
             .scaler = scaler,
@@ -124,6 +156,7 @@ std::tuple<operation_attributes_t, tensor_args_t> CrossEntropyBackwardDeviceOper
             .input = input_tensor,
             .target = target_tensor,
             .preallocated_output = preallocated_output,
+            .preallocated_softmax = preallocated_softmax,
         }};
 }
 

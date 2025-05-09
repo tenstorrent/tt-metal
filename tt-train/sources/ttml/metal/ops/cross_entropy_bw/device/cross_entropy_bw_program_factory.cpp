@@ -33,12 +33,12 @@ constexpr auto kInputCbIndex = tt::CBIndex::c_0;
 constexpr auto kTargetCbIndex = tt::CBIndex::c_1;
 constexpr auto kMaskCbIndex = tt::CBIndex::c_2;
 constexpr auto kMaxMaskCbIndex = tt::CBIndex::c_3;
-constexpr auto kScalerCbIndex = tt::CBIndex::c_4;  // used to reduction
+constexpr auto kScalerCbIndex = tt::CBIndex::c_4;
 constexpr auto kMaxValueBeforeReductionCbIndex = tt::CBIndex::c_5;
 constexpr auto kMaxValueAfterReductionCbIndex = tt::CBIndex::c_6;
 constexpr auto kExpSumBeforeReductionCbIndex = tt::CBIndex::c_7;
 constexpr auto KExpSumAfterReductionCbIndex = tt::CBIndex::c_8;
-constexpr auto KReductionScalerCbIndex = tt::CBIndex::c_9;
+constexpr auto KReductionScalerCbIndex = tt::CBIndex::c_9;  // used to reduction
 constexpr auto kOutputCbIndex = tt::CBIndex::c_10;
 
 constexpr uint32_t kNumTargetIndexesTiles = 2U;
@@ -167,7 +167,8 @@ void assign_per_core_runtime_args(
     uint32_t num_rows_per_core_group_1,
     uint32_t num_rows_per_core_group_2,
     const tt::tt_metal::CoreRangeSet& core_group_1,
-    const tt::tt_metal::CoreRangeSet& core_group_2) {
+    const tt::tt_metal::CoreRangeSet& core_group_2,
+    /* [temp debug]*/ const tt::tt_metal::Buffer* temp_output_buffer) {
     for (uint32_t i = 0, num_rows_written = 0; i < num_cores; i++) {
         CoreCoord core = {i / num_cores_y, i % num_cores_y};
 
@@ -193,7 +194,10 @@ void assign_per_core_runtime_args(
             program,
             kernels.writer,
             core,
-            {output_buffer->address(), /*temporary*/ num_rows_per_core, num_rows_written});
+            {output_buffer->address(),
+             /*temporary*/ num_rows_per_core,
+             num_rows_written,
+             temp_output_buffer->address()});
 
         num_rows_written += num_rows_per_core;
     }
@@ -326,16 +330,16 @@ CrossEntropyBackwardProgramFactory::cached_program_t CrossEntropyBackwardProgram
         program,
         all_cores,
         kExpSumBeforeReductionCbIndex,
-        data_format,
-        bfloat16_single_tile_size_bytes,
+        precise_data_format,
+        float32_single_tile_size_bytes,
         kNumExpSumBeforeReductionTiles);
 
     auto cb_exp_sum_after_refuction = create_circular_buffer(
         program,
         all_cores,
         KExpSumAfterReductionCbIndex,
-        data_format,
-        bfloat16_single_tile_size_bytes,
+        precise_data_format,
+        float32_single_tile_size_bytes,
         kNumExpSumAfterReductionTiles);
 
     auto cb_reduction_scaler = create_circular_buffer(
@@ -343,6 +347,10 @@ CrossEntropyBackwardProgramFactory::cached_program_t CrossEntropyBackwardProgram
 
     auto cb_output = create_circular_buffer(
         program, all_cores, kOutputCbIndex, data_format, bfloat16_single_tile_size_bytes, num_output_tiles);
+
+    // temporary output buffer, used to store debug data
+    auto cb_temp_output = create_circular_buffer(
+        program, all_cores, tt::CBIndex::c_11, data_format, bfloat16_single_tile_size_bytes, num_output_tiles);
 
     // -------------------------------------------------------------------------
     // 3) Create reader/writer kernels
@@ -360,7 +368,14 @@ CrossEntropyBackwardProgramFactory::cached_program_t CrossEntropyBackwardProgram
         "Target buffer must be in DRAM. Target buffer of type {}",
         magic_enum::enum_name(target_buffer->buffer_type()));
 
-    auto* output_buffer = output.buffer();
+    // auto* output_buffer = output.buffer();
+    // TT_FATAL(
+    //     output_buffer->buffer_type() == ttnn::BufferType::DRAM,
+    //     "Output buffer must be in DRAM. Output buffer of type {}",
+    //     magic_enum::enum_name(output_buffer->buffer_type()));
+
+    // [temp debug]
+    auto* output_buffer = output[0].buffer();
     TT_FATAL(
         output_buffer->buffer_type() == ttnn::BufferType::DRAM,
         "Output buffer must be in DRAM. Output buffer of type {}",
@@ -435,7 +450,8 @@ CrossEntropyBackwardProgramFactory::cached_program_t CrossEntropyBackwardProgram
         num_rows_per_core_group_1,
         num_rows_per_core_group_2,
         core_group_1,
-        core_group_2);
+        core_group_2,
+        /* [temp debug]*/ output[1].buffer());
 
     // -------------------------------------------------------------------------
     // 6) Return the fully configured program & relevant shared variables
@@ -472,7 +488,10 @@ void CrossEntropyBackwardProgramFactory::override_runtime_arguments(
 
     auto* input_buffer = tensor_args.input.buffer();
     auto* target_buffer = tensor_args.target.buffer();
-    auto* output_buffer = tensor_return_value.buffer();
+    // auto* output_buffer = tensor_return_value.buffer();
+
+    // [temp debug]
+    auto* output_buffer = tensor_return_value[0].buffer();
 
     // Only address arguments need updating here; tile counts remain the same as in create().
     auto& reader_runtime_args = GetRuntimeArgs(program, cross_entropy_bw_reader_kernel_id);
@@ -497,6 +516,8 @@ void CrossEntropyBackwardProgramFactory::override_runtime_arguments(
         {
             auto& runtime_args = writer_runtime_args[core.x][core.y];
             runtime_args[kOutputBufferIdx] = output_buffer->address();
+
+            runtime_args[3] = tensor_return_value[1].buffer()->address();
         }
     }
 }
