@@ -649,11 +649,6 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) void receiver_forward_pack
     }
 }
 
-FORCE_INLINE bool connect_is_requested(uint32_t cached) {
-    return cached == tt::tt_fabric::EdmToEdmSender<0>::open_connection_value ||
-           cached == tt::tt_fabric::EdmToEdmSender<0>::close_connection_request_value;
-}
-
 template <uint8_t SENDER_NUM_BUFFERS>
 FORCE_INLINE void establish_connection(
     tt::tt_fabric::EdmChannelWorkerInterface<SENDER_NUM_BUFFERS>& local_sender_channel_worker_interface) {
@@ -922,18 +917,6 @@ void run_receiver_channel_step(
         }
     }
 };
-
-/* Termination signal handling*/
-FORCE_INLINE bool got_immediate_termination_signal(volatile tt::tt_fabric::TerminationSignal* termination_signal_ptr) {
-    return *termination_signal_ptr == tt::tt_fabric::TerminationSignal::IMMEDIATELY_TERMINATE;
-}
-FORCE_INLINE bool got_graceful_termination_signal(volatile tt::tt_fabric::TerminationSignal* termination_signal_ptr) {
-    return *termination_signal_ptr == tt::tt_fabric::TerminationSignal::GRACEFULLY_TERMINATE;
-}
-FORCE_INLINE bool got_termination_signal(volatile tt::tt_fabric::TerminationSignal* termination_signal_ptr) {
-    return got_immediate_termination_signal(termination_signal_ptr) ||
-           got_graceful_termination_signal(termination_signal_ptr);
-}
 
 template <
     uint8_t RECEIVER_NUM_BUFFERS,

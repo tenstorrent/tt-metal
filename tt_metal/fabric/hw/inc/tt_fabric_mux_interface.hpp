@@ -52,12 +52,9 @@ FORCE_INLINE void wait_for_fabric_endpoint_ready(
     uint64_t noc_addr = get_noc_addr(fabric_mux_x, fabric_mux_y, fabric_mux_status_address);
     auto local_fabric_mux_status_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(local_fabric_mux_status_address);
 
-    while (true) {
+    while (local_fabric_mux_status_ptr[0] != tt::tt_fabric::FabricMuxStatus::READY_FOR_TRAFFIC) {
         noc_async_read_one_packet(noc_addr, local_fabric_mux_status_address, 4);
         noc_async_read_barrier();
-        if (local_fabric_mux_status_ptr[0] == tt::tt_fabric::FabricMuxStatus::READY_FOR_TRAFFIC) {
-            break;
-        }
     }
 }
 
@@ -81,7 +78,7 @@ FORCE_INLINE void fabric_async_write(
     connection_handle.wait_for_empty_write_slot();
     connection_handle.send_payload_without_header_non_blocking_from_address(
         source_payload_address, packet_payload_size_bytes);
-    connection_handle.send_payload_blocking_from_address((uint32_t)packet_header, sizeof(tt::tt_fabric::PacketHeader));
+    connection_handle.send_payload_blocking_from_address((uint32_t)packet_header, sizeof(PACKET_HEADER_TYPE));
 }
 
 // assumes packet header is correctly populated
@@ -90,8 +87,7 @@ FORCE_INLINE void fabric_atomic_inc(
     WorkerToFabricMuxSender<FABRIC_MUX_CHANNEL_NUM_BUFFERS>& connection_handle,
     volatile tt_l1_ptr PACKET_HEADER_TYPE* packet_header) {
     connection_handle.wait_for_empty_write_slot();
-    connection_handle.send_payload_flush_non_blocking_from_address(
-        (uint32_t)packet_header, sizeof(tt::tt_fabric::PacketHeader));
+    connection_handle.send_payload_flush_non_blocking_from_address((uint32_t)packet_header, sizeof(PACKET_HEADER_TYPE));
 }
 
 }  // namespace tt::tt_fabric

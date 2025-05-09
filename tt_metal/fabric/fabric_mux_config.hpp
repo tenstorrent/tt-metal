@@ -62,29 +62,30 @@ enum class FabricMuxChannelType : uint8_t { FULL_SIZE_CHANNEL = 0, HEADER_ONLY_C
         values can impact teardown times.
 */
 struct FabricMuxConfig {
-    static constexpr std::uint8_t noc_aligned_address_size_bytes = 16;
-    static constexpr std::size_t default_num_full_size_channel_iters = 1;
-    static constexpr std::size_t default_num_iters_between_teardown_checks = 32;
+    static constexpr size_t default_num_full_size_channel_iters = 1;
+    static constexpr size_t default_num_iters_between_teardown_checks = 32;
 
-    std::uint8_t num_full_size_channels = 0;
-    std::uint8_t num_header_only_channels = 0;
-    std::uint8_t num_buffers_full_size_channel = 0;
-    std::uint8_t num_buffers_header_only_channel = 0;
-    std::size_t buffer_size_bytes_full_size_channel = 0;
+    uint8_t num_full_size_channels = 0;
+    uint8_t num_header_only_channels = 0;
+    uint8_t num_buffers_full_size_channel = 0;
+    uint8_t num_buffers_header_only_channel = 0;
+    size_t buffer_size_bytes_full_size_channel = 0;
 
     FabricMuxConfig(
-        std::uint8_t num_full_size_channels,
-        std::uint8_t num_header_only_channels,
-        std::uint8_t num_buffers_full_size_channel,
-        std::uint8_t num_buffers_header_only_channel,
-        std::size_t buffer_size_bytes_full_size_channel,
-        std::size_t base_l1_address) :
+        uint8_t num_full_size_channels,
+        uint8_t num_header_only_channels,
+        uint8_t num_buffers_full_size_channel,
+        uint8_t num_buffers_header_only_channel,
+        size_t buffer_size_bytes_full_size_channel,
+        size_t base_l1_address) :
         num_full_size_channels(num_full_size_channels),
         num_header_only_channels(num_header_only_channels),
         num_buffers_full_size_channel(num_buffers_full_size_channel),
         num_buffers_header_only_channel(num_buffers_header_only_channel),
         buffer_size_bytes_full_size_channel(buffer_size_bytes_full_size_channel) {
         // TODO: asserts on the max size/number of channels allowed?
+        noc_aligned_address_size_bytes =
+            tt::tt_metal::MetalContext::instance().hal().get_alignment(tt::tt_metal::HalMemType::L1);
         auto num_total_channels = num_full_size_channels + num_header_only_channels;
 
         this->full_size_channel_size_bytes = num_buffers_full_size_channel * buffer_size_bytes_full_size_channel;
@@ -131,11 +132,11 @@ struct FabricMuxConfig {
             this->num_iters_between_teardown_checks};
     }
 
-    std::size_t get_status_address() const { return this->status_address; }
+    size_t get_status_address() const { return this->status_address; }
 
-    std::size_t get_termination_signal_address() const { return this->termination_signal_address; }
+    size_t get_termination_signal_address() const { return this->termination_signal_address; }
 
-    std::size_t get_channel_base_address(FabricMuxChannelType channel_type, uint8_t channel_id) const {
+    size_t get_channel_base_address(FabricMuxChannelType channel_type, uint8_t channel_id) const {
         if (channel_type == FabricMuxChannelType::FULL_SIZE_CHANNEL) {
             return this->full_size_channels_base_address + (channel_id * this->full_size_channel_size_bytes);
         } else if (channel_type == FabricMuxChannelType::HEADER_ONLY_CHANNEL) {
@@ -147,7 +148,7 @@ struct FabricMuxConfig {
         return 0;
     }
 
-    std::size_t get_connection_info_address(FabricMuxChannelType channel_type, uint8_t channel_id) const {
+    size_t get_connection_info_address(FabricMuxChannelType channel_type, uint8_t channel_id) const {
         return get_address_from_block(
             channel_type,
             channel_id,
@@ -155,33 +156,33 @@ struct FabricMuxConfig {
             sizeof(tt::tt_fabric::EDMChannelWorkerLocationInfo));
     }
 
-    std::size_t get_connection_handshake_address(FabricMuxChannelType channel_type, uint8_t channel_id) const {
+    size_t get_connection_handshake_address(FabricMuxChannelType channel_type, uint8_t channel_id) const {
         return get_address_from_block(
             channel_type, channel_id, this->connection_handshake_base_address, noc_aligned_address_size_bytes);
     }
 
-    std::size_t get_flow_control_address(FabricMuxChannelType channel_type, uint8_t channel_id) const {
+    size_t get_flow_control_address(FabricMuxChannelType channel_type, uint8_t channel_id) const {
         return get_address_from_block(
             channel_type, channel_id, this->flow_control_base_address, noc_aligned_address_size_bytes);
     }
 
-    std::size_t get_buffer_index_address(FabricMuxChannelType channel_type, uint8_t channel_id) const {
+    size_t get_buffer_index_address(FabricMuxChannelType channel_type, uint8_t channel_id) const {
         return get_address_from_block(
             channel_type, channel_id, this->buffer_index_base_address, noc_aligned_address_size_bytes);
     }
 
-    std::size_t get_num_bytes_to_clear() const { return this->memory_map_end_address - this->memory_map_start_address; }
+    size_t get_num_bytes_to_clear() const { return this->memory_map_end_address - this->memory_map_start_address; }
 
-    std::size_t get_start_address_to_clear() const { return this->memory_map_start_address; }
+    size_t get_start_address_to_clear() const { return this->memory_map_start_address; }
 
-    void set_num_full_size_channel_iters(std::size_t new_val) {
+    void set_num_full_size_channel_iters(size_t new_val) {
         if (this->num_full_size_channels > 0 && new_val == 0) {
             TT_THROW("Full size channels are present, but trying to set num iters as 0");
         }
         this->num_full_size_channel_iters = new_val;
     }
 
-    void set_num_iters_between_teardown_checks(std::size_t new_val) {
+    void set_num_iters_between_teardown_checks(size_t new_val) {
         if (new_val == 0) {
             TT_THROW("Setting num iters b/w teardown checks to 0 will result in no data being sent over fabric");
         }
@@ -189,12 +190,9 @@ struct FabricMuxConfig {
     }
 
 private:
-    std::size_t get_address_from_block(
-        FabricMuxChannelType channel_type,
-        uint8_t channel_id,
-        std::size_t base_address,
-        std::size_t unit_size_bytes) const {
-        std::size_t offset = 0;
+    size_t get_address_from_block(
+        FabricMuxChannelType channel_type, uint8_t channel_id, size_t base_address, size_t unit_size_bytes) const {
+        size_t offset = 0;
         if (channel_type == FabricMuxChannelType::FULL_SIZE_CHANNEL) {
             offset = channel_id;
         } else if (channel_type == FabricMuxChannelType::HEADER_ONLY_CHANNEL) {
@@ -206,23 +204,25 @@ private:
         return base_address + (offset * unit_size_bytes);
     }
 
-    std::size_t full_size_channel_size_bytes = 0;
-    std::size_t header_only_channel_size_bytes = 0;
+    uint8_t noc_aligned_address_size_bytes = 0;
 
-    std::size_t num_full_size_channel_iters = default_num_full_size_channel_iters;
-    std::size_t num_iters_between_teardown_checks = default_num_iters_between_teardown_checks;
+    size_t full_size_channel_size_bytes = 0;
+    size_t header_only_channel_size_bytes = 0;
+
+    size_t num_full_size_channel_iters = default_num_full_size_channel_iters;
+    size_t num_iters_between_teardown_checks = default_num_iters_between_teardown_checks;
 
     // memory map
-    std::size_t memory_map_start_address = 0;
-    std::size_t status_address = 0;
-    std::size_t termination_signal_address = 0;
-    std::size_t connection_info_base_address = 0;
-    std::size_t connection_handshake_base_address = 0;
-    std::size_t flow_control_base_address = 0;
-    std::size_t buffer_index_base_address = 0;
-    std::size_t full_size_channels_base_address = 0;
-    std::size_t header_only_channels_base_address = 0;
-    std::size_t memory_map_end_address = 0;
+    size_t memory_map_start_address = 0;
+    size_t status_address = 0;
+    size_t termination_signal_address = 0;
+    size_t connection_info_base_address = 0;
+    size_t connection_handshake_base_address = 0;
+    size_t flow_control_base_address = 0;
+    size_t buffer_index_base_address = 0;
+    size_t full_size_channels_base_address = 0;
+    size_t header_only_channels_base_address = 0;
+    size_t memory_map_end_address = 0;
 };
 
 }  // namespace tt::tt_fabric

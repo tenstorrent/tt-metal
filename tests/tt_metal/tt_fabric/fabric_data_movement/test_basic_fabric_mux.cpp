@@ -54,7 +54,7 @@ struct TestConfig {
     uint32_t time_seed = 0;
     uint8_t num_buffers_full_size_channel = 0;
     uint8_t num_buffers_header_only_channel = 0;
-    bool unifom_sender_receiver_split = true;
+    bool uniform_sender_receiver_split = true;
     uint32_t num_open_close_iters = 0;
     uint32_t num_full_size_channel_iters = 0;
 };
@@ -199,7 +199,7 @@ void zero_out_worker_address(tt::tt_metal::IDevice* device, const CoreCoord& wor
     tt::tt_metal::detail::WriteToDeviceL1(device, worker_logical_core, address, worker_zero_vec);
 }
 
-void compile_worker_program(
+void create_worker_kernel(
     const TestConfig& test_config,
     tt::tt_metal::IDevice* device,
     tt::tt_metal::Program& program_handle,
@@ -318,7 +318,7 @@ void run_mux_test_variant(FabricMuxFixture* fixture, TestConfig test_config) {
     // will be the same across devices, else the deivces (following the 1st one
     // in the sequence) will have unequal number of full size and header only channels
     int8_t offset = 0;
-    if (!test_config.unifom_sender_receiver_split) {
+    if (!test_config.uniform_sender_receiver_split) {
         // for every pair of devices, flip-flop b/w the assigned workers, i.e, if uniform distribution is 2
         // chip 1 gets 3 (2 + 1) and chip 2 gets 1 (2 - 1)
         offset = 1;
@@ -436,7 +436,7 @@ void run_mux_test_variant(FabricMuxFixture* fixture, TestConfig test_config) {
 
         uint32_t sender_id = 0;
         for (const auto& [sender_logical_core, num_hops] : device_senders_map[devices[i]]) {
-            compile_worker_program(
+            create_worker_kernel(
                 test_config,
                 devices[i],
                 program_handles[i],
@@ -452,7 +452,7 @@ void run_mux_test_variant(FabricMuxFixture* fixture, TestConfig test_config) {
 
         uint32_t receiver_id = 0;
         for (const auto& [receiver_logical_core, num_hops] : device_receivers_map[devices[i]]) {
-            compile_worker_program(
+            create_worker_kernel(
                 test_config,
                 devices[i],
                 program_handles[i],
@@ -535,7 +535,7 @@ TEST_F(FabricMuxFixture, TestFabricMuxTwoChipVariant1) {
         .time_seed = std::chrono::system_clock::now().time_since_epoch().count(),
         .num_buffers_full_size_channel = 1,
         .num_buffers_header_only_channel = 1,
-        .unifom_sender_receiver_split = true,
+        .uniform_sender_receiver_split = true,
         .num_open_close_iters = 1,
         .num_full_size_channel_iters = 1,
     };
@@ -553,7 +553,7 @@ TEST_F(FabricMuxFixture, TestFabricMuxTwoChipVariant2) {
         .time_seed = std::chrono::system_clock::now().time_since_epoch().count(),
         .num_buffers_full_size_channel = 4,
         .num_buffers_header_only_channel = 4,
-        .unifom_sender_receiver_split = true,
+        .uniform_sender_receiver_split = true,
         .num_open_close_iters = 1,
         .num_full_size_channel_iters = 1,
     };
@@ -571,7 +571,7 @@ TEST_F(FabricMuxFixture, TestFabricMuxTwoChipVariant3) {
         .time_seed = std::chrono::system_clock::now().time_since_epoch().count(),
         .num_buffers_full_size_channel = 8,
         .num_buffers_header_only_channel = 8,
-        .unifom_sender_receiver_split = true,
+        .uniform_sender_receiver_split = true,
         .num_open_close_iters = 1,
         .num_full_size_channel_iters = 1,
     };
@@ -589,7 +589,7 @@ TEST_F(FabricMuxFixture, TestFabricMuxTwoChipVariant4) {
         .time_seed = std::chrono::system_clock::now().time_since_epoch().count(),
         .num_buffers_full_size_channel = 8,
         .num_buffers_header_only_channel = 8,
-        .unifom_sender_receiver_split = true,
+        .uniform_sender_receiver_split = true,
         .num_open_close_iters = 1,
         .num_full_size_channel_iters = 1,
     };
@@ -607,7 +607,7 @@ TEST_F(FabricMuxFixture, TestFabricMuxThreeChipVariant) {
         .time_seed = std::chrono::system_clock::now().time_since_epoch().count(),
         .num_buffers_full_size_channel = 8,
         .num_buffers_header_only_channel = 8,
-        .unifom_sender_receiver_split = true,
+        .uniform_sender_receiver_split = true,
         .num_open_close_iters = 1,
         .num_full_size_channel_iters = 1,
     };
@@ -625,7 +625,7 @@ TEST_F(FabricMuxFixture, TestFabricMuxFourChipVariant1) {
         .time_seed = std::chrono::system_clock::now().time_since_epoch().count(),
         .num_buffers_full_size_channel = 8,
         .num_buffers_header_only_channel = 8,
-        .unifom_sender_receiver_split = true,
+        .uniform_sender_receiver_split = true,
         .num_open_close_iters = 1,
         .num_full_size_channel_iters = 1,
     };
@@ -643,7 +643,7 @@ TEST_F(FabricMuxFixture, TestFabricMuxFourChipVariant2) {
         .time_seed = std::chrono::system_clock::now().time_since_epoch().count(),
         .num_buffers_full_size_channel = 8,
         .num_buffers_header_only_channel = 8,
-        .unifom_sender_receiver_split = false,
+        .uniform_sender_receiver_split = false,
         .num_open_close_iters = 1,
         .num_full_size_channel_iters = 1,
     };
@@ -661,7 +661,7 @@ TEST_F(FabricMuxFixture, TestFabricMuxFiveChipVariant) {
         .time_seed = std::chrono::system_clock::now().time_since_epoch().count(),
         .num_buffers_full_size_channel = 8,
         .num_buffers_header_only_channel = 8,
-        .unifom_sender_receiver_split = true,
+        .uniform_sender_receiver_split = true,
         .num_open_close_iters = 1,
         .num_full_size_channel_iters = 1,
     };
@@ -679,7 +679,7 @@ TEST_F(FabricMuxFixture, TestFabricMuxSixChipVariant) {
         .time_seed = std::chrono::system_clock::now().time_since_epoch().count(),
         .num_buffers_full_size_channel = 4,
         .num_buffers_header_only_channel = 4,
-        .unifom_sender_receiver_split = true,
+        .uniform_sender_receiver_split = true,
         .num_open_close_iters = 1,
         .num_full_size_channel_iters = 2,
     };
@@ -697,7 +697,7 @@ TEST_F(FabricMuxFixture, TestFabricMuxSevenChipVariant) {
         .time_seed = std::chrono::system_clock::now().time_since_epoch().count(),
         .num_buffers_full_size_channel = 4,
         .num_buffers_header_only_channel = 4,
-        .unifom_sender_receiver_split = true,
+        .uniform_sender_receiver_split = true,
         .num_open_close_iters = 1,
         .num_full_size_channel_iters = 3,
     };
@@ -715,7 +715,7 @@ TEST_F(FabricMuxFixture, TestFabricMuxEightChipVariant) {
         .time_seed = std::chrono::system_clock::now().time_since_epoch().count(),
         .num_buffers_full_size_channel = 4,
         .num_buffers_header_only_channel = 4,
-        .unifom_sender_receiver_split = false,
+        .uniform_sender_receiver_split = false,
         .num_open_close_iters = 1,
         .num_full_size_channel_iters = 3,
     };
@@ -733,7 +733,7 @@ TEST_F(FabricMuxFixture, TestFabricMuxStressOpenClose) {
         .time_seed = std::chrono::system_clock::now().time_since_epoch().count(),
         .num_buffers_full_size_channel = 8,
         .num_buffers_header_only_channel = 8,
-        .unifom_sender_receiver_split = false,
+        .uniform_sender_receiver_split = false,
         .num_open_close_iters = 10000,
         .num_full_size_channel_iters = 1,
     };
@@ -751,7 +751,7 @@ TEST_F(FabricMuxFixture, TestFabricMuxNumFullSizeChannelIters) {
         .time_seed = std::chrono::system_clock::now().time_since_epoch().count(),
         .num_buffers_full_size_channel = 8,
         .num_buffers_header_only_channel = 8,
-        .unifom_sender_receiver_split = true,
+        .uniform_sender_receiver_split = true,
         .num_open_close_iters = 1,
         .num_full_size_channel_iters = 2,
     };

@@ -5,6 +5,7 @@
 // clang-format off
 #include "dataflow_api.h"
 #include "tt_metal/fabric/hw/inc/tt_fabric_mux.hpp"
+#include "tt_metal/fabric/hw/inc/tt_fabric_utils.h"
 #include "tt_metal/api/tt-metalium/fabric_edm_packet_header.hpp"
 
 #include <cstddef>
@@ -34,14 +35,6 @@ constexpr size_t NOC_ALIGN_PADDING_BYTES = 12;
 namespace tt::tt_fabric {
 using FabricMuxToEdmSender = WorkerToFabricEdmSenderImpl<NUM_EDM_BUFFERS>;
 }  // namespace tt::tt_fabric
-
-FORCE_INLINE bool got_immediate_termination_signal(volatile tt::tt_fabric::TerminationSignal* termination_signal_ptr) {
-    return *termination_signal_ptr == tt::tt_fabric::TerminationSignal::IMMEDIATELY_TERMINATE;
-}
-
-FORCE_INLINE bool got_graceful_termination_signal(volatile tt::tt_fabric::TerminationSignal* termination_signal_ptr) {
-    return *termination_signal_ptr == tt::tt_fabric::TerminationSignal::GRACEFULLY_TERMINATE;
-}
 
 template <uint8_t NUM_BUFFERS>
 void setup_channel(
@@ -78,11 +71,6 @@ void setup_channel(
     channel_connection_established = false;
 }
 
-FORCE_INLINE bool connect_is_requested(uint32_t cached) {
-    return cached == tt::tt_fabric::FabricMuxToEdmSender::open_connection_value ||
-           cached == tt::tt_fabric::FabricMuxToEdmSender::close_connection_request_value;
-}
-
 template <uint8_t NUM_BUFFERS>
 FORCE_INLINE void establish_connection(tt::tt_fabric::FabricMuxChannelWorkerInterface<NUM_BUFFERS>& worker_interface) {
     worker_interface.cache_producer_noc_addr();
@@ -95,7 +83,7 @@ FORCE_INLINE void check_worker_connections(
     bool& channel_connection_established) {
     if (!channel_connection_established) {
         uint32_t cached = *worker_interface.connection_live_semaphore;
-        if (connect_is_requested(cached)) {
+        if (tt::tt_fabric::connect_is_requested(cached)) {
             channel_connection_established = true;
             establish_connection(worker_interface);
         }
@@ -105,7 +93,7 @@ FORCE_INLINE void check_worker_connections(
     }
 }
 
-template <uint8_t NUM_BUFFERS, bool FULL_SIZE_CHANNEL>
+template <uint8_t NUM_BUFFERS>
 void forward_data(
     tt::tt_fabric::FabricMuxChannelBuffer<NUM_BUFFERS>& channel,
     tt::tt_fabric::FabricMuxChannelWorkerInterface<NUM_BUFFERS>& worker_interface,
@@ -117,15 +105,8 @@ void forward_data(
         auto packet_header = reinterpret_cast<PACKET_HEADER_TYPE*>(buffer_address);
 
         fabric_connection.wait_for_empty_write_slot();
-        if constexpr (FULL_SIZE_CHANNEL) {
-            auto payload_address = buffer_address + sizeof(PACKET_HEADER_TYPE);
-            fabric_connection.send_payload_without_header_non_blocking_from_address(
-                payload_address, packet_header->get_payload_size_excluding_header());
-            fabric_connection.send_payload_blocking_from_address((uint32_t)packet_header, sizeof(PACKET_HEADER_TYPE));
-        } else {
-            fabric_connection.send_payload_flush_non_blocking_from_address(
-                (uint32_t)packet_header, sizeof(PACKET_HEADER_TYPE));
-        }
+        fabric_connection.send_payload_blocking_from_address(
+            (uint32_t)packet_header, packet_header->get_payload_size_including_header());
 
         auto& local_wrptr = worker_interface.local_wrptr;
         local_wrptr.increment();
@@ -218,7 +199,7 @@ void kernel_main() {
         for (size_t i = 0; i < DEFAULT_NUM_ITERS_BETWEEN_TEARDOWN_CHECKS; i++) {
             for (size_t iter = 0; iter < NUM_FULL_SIZE_CHANNELS_ITERS; iter++) {
                 for (uint8_t channel_id = 0; channel_id < NUM_FULL_SIZE_CHANNELS; channel_id++) {
-                    forward_data<NUM_BUFFERS_FULL_SIZE_CHANNEL, true>(
+                    forward_data<NUM_BUFFERS_FULL_SIZE_CHANNEL>(
                         full_size_channels[channel_id],
                         full_size_channel_worker_interfaces[channel_id],
                         fabric_connection,
@@ -227,7 +208,7 @@ void kernel_main() {
             }
 
             for (uint8_t channel_id = 0; channel_id < NUM_HEADER_ONLY_CHANNELS; channel_id++) {
-                forward_data<NUM_BUFFERS_HEADER_ONLY_CHANNEL, false>(
+                forward_data<NUM_BUFFERS_HEADER_ONLY_CHANNEL>(
                     header_only_channels[channel_id],
                     header_only_channel_worker_interfaces[channel_id],
                     fabric_connection,
@@ -237,6 +218,8 @@ void kernel_main() {
     }
 
     fabric_connection.close();
+    noc_async_write_barrier();
+    noc_async_atomic_barrier();
 
     status_ptr[0] = tt::tt_fabric::FabricMuxStatus::TERMINATED;
 }
