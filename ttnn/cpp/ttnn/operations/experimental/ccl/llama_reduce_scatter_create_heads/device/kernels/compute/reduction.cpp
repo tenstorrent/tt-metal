@@ -4,7 +4,6 @@
 
 #include <cstdint>
 #include "compute_kernel_api/eltwise_binary.h"
-#include "tt_metal/hw/inc/debug/dprint_pages.h"
 
 namespace NAMESPACE {
 void MAIN {

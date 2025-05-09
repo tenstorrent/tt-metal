@@ -29,7 +29,6 @@ FORCE_INLINE std::uint64_t static_noc_multicast_addr(
 }
 
 void kernel_main() {
-    DPRINT << "writer_llama_reduce_scatter" << ENDL();
     // Constants for indexing
     constexpr uint8_t x_index = 0;
     constexpr uint8_t y_index = 1;
@@ -176,7 +175,6 @@ void kernel_main() {
             fabric_connection.close();
         }
     } else if (worker_core) {
-        DPRINT << "worker_core writer" << ENDL();
         constexpr uint8_t q_output_core_xy[output_cores_per_device][2] = Q_OUTPUT_CORE_XY;
         constexpr uint8_t k_output_core_xy[output_cores_per_device][2] = K_OUTPUT_CORE_XY;
         constexpr uint8_t v_output_core_xy[output_cores_per_device][2] = V_OUTPUT_CORE_XY;

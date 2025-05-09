@@ -24,7 +24,6 @@ FORCE_INLINE std::uint64_t static_noc_multicast_addr(
 }
 
 void kernel_main() {
-    DPRINT << "reader_llama_reduce_scatter" << ENDL();
     // Constants for indexing
     constexpr uint8_t x_index = 0;
     constexpr uint8_t y_index = 1;
@@ -135,7 +134,6 @@ void kernel_main() {
             }
         }
     } else if (worker_core) {
-        DPRINT << "worker_core reader" << ENDL();
         // Calculate base addresses once
         const uint32_t base_input_tensor_addr = get_read_ptr(input_tensor_cb_id);
         const uint32_t base_receiver_l1_addresses = get_read_ptr(fabric_receiver_cb_id) + chip_id_offset;
