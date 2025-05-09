@@ -293,13 +293,9 @@ operation::ProgramWithCallbacks slice_rm_multi_core(
             for (uint32_t i = 0, num_tiles_written = 0; i < num_cores_total; i++) {
                 CoreCoord core = {i / num_cores_y, i % num_cores_y};
 
-                {
-                    SetRuntimeArgs(program, unary_reader_kernel_id, core, all_runtime_args[i].first);
-                }
+                { SetRuntimeArgs(program, unary_reader_kernel_id, core, all_runtime_args[i].first); }
 
-                {
-                    SetRuntimeArgs(program, unary_writer_kernel_id, core, all_runtime_args[i].second);
-                }
+                { SetRuntimeArgs(program, unary_writer_kernel_id, core, all_runtime_args[i].second); }
             }
         };
 
@@ -391,16 +387,16 @@ operation::ProgramWithCallbacks slice_rm_strided_single_core_n_dims(
             auto input_buffer = input_tensors.at(0).buffer();
             auto output_buffer = output_tensors.at(0).buffer();
 
-            CoreCoord core = {0, 0};
+        CoreCoord core = {0, 0};
 
-            {
-                auto& reader_runtime_args = GetRuntimeArgs(program, unary_reader_kernel_id, core);
-                reader_runtime_args[0] = input_buffer->address();
+        {
+            auto& reader_runtime_args = GetRuntimeArgs(program, unary_reader_kernel_id, core);
+            reader_runtime_args[0] = input_buffer->address();
 
-                auto& writer_runtime_args = GetRuntimeArgs(program, unary_writer_kernel_id, core);
-                writer_runtime_args[0] = output_buffer->address();
-            }
-        };
+            auto& writer_runtime_args = GetRuntimeArgs(program, unary_writer_kernel_id, core);
+            writer_runtime_args[0] = output_buffer->address();
+        }
+    };
 
     return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_arguments_callback};
 }
