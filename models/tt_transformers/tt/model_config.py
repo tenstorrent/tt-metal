@@ -1346,14 +1346,13 @@ class ModelArgs:
 
         if "_name_or_path" in params:
             if is_hf:
-                logger.info(f"HF model name: {params['_name_or_path']}")
                 normalized_path = os.path.normpath(params["_name_or_path"])
                 # For HF paths, they might end with `<model_name>/snapshots/<snapshot_id>/`
                 if "snapshots" in normalized_path:
                     full_model_name = normalized_path.split(os.path.sep)[-3]
                     self.model_name = full_model_name.split("--")[-1]
                 else:
-                    self.model_name = os.path.basename(params["_name_or_path"])
+                    self.model_name = os.path.basename(normalized_path)
             else:
                 self.model_name = os.path.basename(params["_name_or_path"])
             logger.info(f"Model name from params: {self.model_name}")
