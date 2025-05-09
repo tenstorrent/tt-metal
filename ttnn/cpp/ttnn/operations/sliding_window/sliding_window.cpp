@@ -1185,9 +1185,9 @@ Tensor construct_on_host_config_tensor(
     const auto factor = get_repeat_factor_for_replicating_nhw_config_across_grid(p_config);
     auto repeat_config = replicate_config(config_vector, factor);
 
-    auto config_buffer = tt::tt_metal::host_buffer::create<uint16_t>(std::move(repeat_config));
+    auto config_buffer = tt::tt_metal::HostBuffer(std::move(repeat_config));
     config_shape = ttnn::Shape({config_shape[0] * factor, config_shape[1]});
-    return Tensor(tt::tt_metal::HostStorage{config_buffer}, config_shape, DataType::UINT16, Layout::ROW_MAJOR);
+    return Tensor(std::move(config_buffer), config_shape, DataType::UINT16, Layout::ROW_MAJOR);
 }
 
 Tensor move_config_tensor_to_device(

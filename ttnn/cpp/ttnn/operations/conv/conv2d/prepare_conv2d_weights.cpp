@@ -76,23 +76,21 @@ Tensor create_tensor_from_owned_buffer(
     if constexpr (std::is_same<T, float>::value) {
         if (output_dtype == DataType::BFLOAT8_B || output_dtype == DataType::BFLOAT4_B) {
             auto tensor =
-                Tensor(tt::tt_metal::HostStorage{std::move(buf)}, output_shape, DataType::FLOAT32, Layout::ROW_MAJOR)
-                    .to_layout(Layout::TILE);
+                Tensor(std::move(buf), output_shape, DataType::FLOAT32, Layout::ROW_MAJOR).to_layout(Layout::TILE);
             auto output_float_data = tt::tt_metal::host_buffer::get_as<float>(tensor);
             auto output_packed_data =
                 output_dtype == DataType::BFLOAT8_B
                     ? pack_fp32_vec_as_bfp8_tiles(output_float_data, /*row_major_input=*/false, /*is_exp_a=*/false)
                     : pack_fp32_vec_as_bfp4_tiles(output_float_data, /*row_major_input=*/false, /*is_exp_a=*/false);
-            auto output_uint32_buffer = tt::tt_metal::host_buffer::create<uint32_t>(std::move(output_packed_data));
-            return Tensor(
-                tt::tt_metal::HostStorage{std::move(output_uint32_buffer)}, output_shape, output_dtype, Layout::TILE);
+            auto output_uint32_buffer = tt::tt_metal::HostBuffer(std::move(output_packed_data));
+            return Tensor(std::move(output_uint32_buffer), output_shape, output_dtype, Layout::TILE);
         }
     } else {
         TT_FATAL(
             (output_dtype != DataType::BFLOAT8_B) || (output_dtype != DataType::BFLOAT4_B),
             "Unsupported output datatype");
     }
-    auto rm_tensor = Tensor(tt::tt_metal::HostStorage{std::move(buf)}, output_shape, output_dtype, Layout::ROW_MAJOR);
+    auto rm_tensor = Tensor(std::move(buf), output_shape, output_dtype, Layout::ROW_MAJOR);
     return rm_tensor.to_layout(Layout::TILE);
 }
 
@@ -129,7 +127,7 @@ Tensor to_weight_special_padding_tile_layout(
             }
         }
         return create_tensor_from_owned_buffer<T>(
-            tt::tt_metal::host_buffer::create<T>(std::move(output_buffer)), output_dtype, output_shape);
+            tt::tt_metal::HostBuffer(std::move(output_buffer)), output_dtype, output_shape);
     };
     return convert_tensor<T>(conv_weight_tensor, compute);
 }
@@ -169,7 +167,7 @@ Tensor to_weight_tile_layout(
             }
         }
         return create_tensor_from_owned_buffer<T>(
-            tt::tt_metal::host_buffer::create<T>(std::move(output_buffer)), output_dtype, output_shape);
+            tt::tt_metal::HostBuffer(std::move(output_buffer)), output_dtype, output_shape);
     };
 
     return convert_tensor<T>(conv_weight_tensor, compute);
@@ -242,7 +240,7 @@ Tensor to_weight_tile_layout_block_sharded(
             }
         }
         return create_tensor_from_owned_buffer<T>(
-            tt::tt_metal::host_buffer::create<T>(std::move(output_buffer)), output_dtype, output_shape);
+            tt::tt_metal::HostBuffer(std::move(output_buffer)), output_dtype, output_shape);
     };
     return convert_tensor<T>(conv_weight_tensor, compute);
 }
@@ -289,7 +287,7 @@ Tensor to_bias_tile_layout_block_sharded(
             }
         }
         return create_tensor_from_owned_buffer<T>(
-            tt::tt_metal::host_buffer::create<T>(std::move(output_buffer)), output_dtype, output_shape);
+            tt::tt_metal::HostBuffer(std::move(output_buffer)), output_dtype, output_shape);
     };
 
     return convert_tensor<T>(conv_bias_tensor, compute);
@@ -370,10 +368,7 @@ static Tensor conv_group_weight_zero_pad_helper(
             }
         }
         return Tensor(
-            tt::tt_metal::HostStorage{tt::tt_metal::host_buffer::create<T>(std::move(output_buffer))},
-            output_weight_shape,
-            output_dtype,
-            Layout::ROW_MAJOR);
+            tt::tt_metal::HostBuffer(std::move(output_buffer)), output_weight_shape, output_dtype, Layout::ROW_MAJOR);
     };
 
     return convert_tensor<T>(weight, pad_weight);
@@ -409,12 +404,11 @@ static Tensor conv_depthwise_weight_bcast_helper(
                     }
                 }
             }
-            auto output_tensor = Tensor(
-                tt::tt_metal::HostStorage{tt::tt_metal::host_buffer::create<T>(std::move(output_buffer))},
+            return Tensor(
+                tt::tt_metal::HostBuffer(std::move(output_buffer)),
                 output_weight_shape,
                 output_dtype,
                 Layout::ROW_MAJOR);
-            return output_tensor;
         };
     return convert_tensor<T>(conv_weight_tensor, compute);
 }
