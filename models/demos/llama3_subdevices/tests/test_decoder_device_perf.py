@@ -21,41 +21,23 @@ from models.demos.llama3_subdevices.demo.demo_decode import run_llama3_demo
 from models.demos.llama3_subdevices.demo.demo_decode import LlamaOptimizations
 
 DECODE_OP_START_INDEX = 4
-DECODE_OP_END_INDEX = -12
+DECODE_OP_END_INDEX = -11
 
 perf_targets = {
     "RMSAllGather_0": {
-        "op_name": "PreRMS_0",
-        "kernel_duration": 11694.534722222223,
-        "op_to_op": 759.6666666666666,
+        "op_name": "RMS_0",
+        "kernel_duration": 18763.21875,
+        "op_to_op": 781.8888888888889,
         "non-overlapped-dispatch-time": 7260,
         "kernel_duration_relative_margin": 0.05,
         "op_to_op_duration_relative_margin": 0.2,
         "dispatch_duration_relative_margin": 0.2,
     },
     "RMSAllGather_1": {
-        "op_name": "PostRMS_0",
-        "kernel_duration": 9400.361111111111,
-        "op_to_op": 634.3333333333334,
-        "non-overlapped-dispatch-time": 6301.3,
-        "kernel_duration_relative_margin": 0.05,
-        "op_to_op_duration_relative_margin": 0.2,
-        "dispatch_duration_relative_margin": 0.2,
-    },
-    "RMSAllGather_2": {
-        "op_name": "PreRMS_1",
-        "kernel_duration": 11078.270833333334,
-        "op_to_op": 748.3333333333334,
-        "non-overlapped-dispatch-time": 7326,
-        "kernel_duration_relative_margin": 0.05,
-        "op_to_op_duration_relative_margin": 0.2,
-        "dispatch_duration_relative_margin": 0.2,
-    },
-    "RMSAllGather_3": {
-        "op_name": "PostRMS_1",
-        "kernel_duration": 9197.204861111111,
-        "op_to_op": 641.0,
-        "non-overlapped-dispatch-time": 6431.2,
+        "op_name": "RMS_1",
+        "kernel_duration": 18590.774305555555,
+        "op_to_op": 747.8888888888889,
+        "non-overlapped-dispatch-time": 7694.8,
         "kernel_duration_relative_margin": 0.05,
         "op_to_op_duration_relative_margin": 0.2,
         "dispatch_duration_relative_margin": 0.2,
@@ -91,7 +73,7 @@ perf_targets = {
         "op_name": "DO_MM",
         "kernel_duration": 8902,
         "op_to_op": 723.0,
-        "non-overlapped-dispatch-time": 6412.2,
+        "non-overlapped-dispatch-time": 5760.2,
         "kernel_duration_relative_margin": 0.05,
         "op_to_op_duration_relative_margin": 0.2,
         "dispatch_duration_relative_margin": 0.1,
@@ -100,14 +82,14 @@ perf_targets = {
         "op_name": "FF1_MM",
         "kernel_duration": 10829,
         "op_to_op": 711.8888888888889,
-        "non-overlapped-dispatch-time": 6109.0,
+        "non-overlapped-dispatch-time": 5380.6,
         "kernel_duration_relative_margin": 0.05,
         "op_to_op_duration_relative_margin": 0.2,
         "dispatch_duration_relative_margin": 0.1,
     },
     "Matmul_3": {
         "op_name": "FF3_MM",
-        "kernel_duration": 10848,
+        "kernel_duration": 10682.444444444445,
         "op_to_op": 688.7777777777778,
         "non-overlapped-dispatch-time": 6144.8,
         "kernel_duration_relative_margin": 0.05,
@@ -206,7 +188,7 @@ perf_targets = {
     },
     "BinaryDeviceOperation_1": {
         "op_name": "Binary_Mult_Silu",
-        "kernel_duration": 2929,
+        "kernel_duration": 2923.5555555555557,
         "op_to_op": 661.0,
         "non-overlapped-dispatch-time": 6111.2,
         "kernel_duration_relative_margin": 0.1,
