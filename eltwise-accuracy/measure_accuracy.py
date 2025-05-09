@@ -47,17 +47,100 @@ datatypes_parameters = {
 }
 
 
-def exp_accurate_python(input_tensor, output_tensor):
+def exp_regression_0p5_to_1(tensor_input):
+    tensor_constA = torch.full(tensor_input.size(), 0.863281, dtype=torch.bfloat16)
+    tensor_const1 = torch.full(tensor_input.size(), 1.0, dtype=torch.bfloat16)
+    tensor_const0p8373 = torch.full(tensor_input.size(), 0.837300003, dtype=torch.bfloat16)
+
+    # print(f"tensor_constA =\n{tensor_constA}")
+    # print(f"tensor_const1 =\n{tensor_const1}")
+    # print(f"tensor_const0p8373 =\n{tensor_const0p8373}")
+
+    # Linear regression approximation of torch.exp on [0.5; 1]
+    # y = x * (0.8373 * x + 0.863281) + 1
+    tensor_tmp = torch.add(torch.mul(tensor_input, tensor_const0p8373), tensor_constA)
+    # print(f"tensor_tmp =\n{tensor_tmp}")
+    tensor_val = torch.add(torch.mul(tensor_input, tensor_tmp), tensor_const1)
+
+    return tensor_val
+
+
+def exp_regression_0p5_to_1_alt1(tensor_input):
+    fun = lambda x: 1.1173422532270 + 0.535411571001 * x + 1.063234614758 * x**2
+
+    tensor_output = tensor_input.clone()
+    tensor_output = tensor_output.apply_(fun)
+
+    return tensor_output
+
+
+def exp_accurate_python(ttnn_input, output_tensor, exp_regression=exp_regression_0p5_to_1):
     # setsgn => get sign of input and then multiply input by it to make numbers positive
     # this shouldn't alter accuracy as -1 and 1 are exact and so are their multiples
+    torch.set_printoptions(precision=6)
 
-    tensor_positive_input = setsgn_bf16_(input_tensor, 0)
-    tensor_exponent = exexp_bf16(tensor_positive_input)
+    input_tensor = ttnn.to_torch(ttnn_input)
 
-    mask_positive_exponents = tensor_exponent > 0
-    tensor_positive_input = torch
+    tensor_positive_val = input_tensor.clone()
 
-    pass
+    tensor_positive_val = utils.setsgn_bf16_(tensor_positive_val, 0)
+    tensor_exponent = utils.exexp_bf16(tensor_positive_val)
+
+    # print(f"tensor_positive_val =\n{tensor_positive_val}")
+    # print(f"tensor_exponent =\n{tensor_exponent}")
+    mask_positive_exponents = tensor_exponent >= 0
+
+    tensor_input_adjusted_exponent = tensor_positive_val.clone()
+    tensor_input_adjusted_exponent = utils.setexp_bf16_(tensor_input_adjusted_exponent, -1)
+    tensor_positive_val = torch.where(mask_positive_exponents, tensor_input_adjusted_exponent, tensor_positive_val)
+
+    # print(f"tensor_positive_val =\n{tensor_positive_val}")
+
+    tensor_positive_val = exp_regression(tensor_positive_val)
+
+    # print(f"tensor regression 0 =\n{tensor_positive_val}")
+
+    # Expand values with squaring method
+    mask_positive_exponent = tensor_exponent >= 0
+
+    tensor_square = torch.mul(tensor_positive_val, tensor_positive_val)
+    tensor_positive_val = torch.where(mask_positive_exponent, tensor_square, tensor_positive_val)
+
+    for s_iter in range(0, 7):
+        tensor_exponent = torch.where(mask_positive_exponent, tensor_exponent - 1, tensor_exponent)
+
+        # print(f"[{s_iter}] tensor_positive_val =\n{tensor_positive_val}")
+
+        mask_positive_exponent = (tensor_exponent >= 0) & mask_positive_exponent
+        tensor_square = torch.mul(tensor_positive_val, tensor_positive_val)
+        tensor_positive_val = torch.where(mask_positive_exponent, tensor_square, tensor_positive_val)
+
+    tensor_out = tensor_positive_val
+    mask_negative_input = input_tensor < 0
+    tensor_reciprocal = torch.reciprocal(tensor_out)
+    tensor_out = torch.where(mask_negative_input, tensor_reciprocal, tensor_out)
+
+    output_tensor = ttnn.from_torch(tensor_out, device=device, dtype=ttnn_input.dtype, layout=ttnn_input.layout)
+
+    return output_tensor
+
+
+def test_exp_accurate_python():
+    tensor_input = torch.from_numpy(np.array([4.25], dtype=np.float32)).type(torch.bfloat16)
+    ttnn_input = ttnn.from_torch(tensor_input, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+    tensor_output = None
+    print(f"tensor_input =\n{tensor_input}")
+
+    tensor_output = exp_accurate_python(ttnn_input, tensor_output)
+
+    ttnn_output = ttnn.exp(ttnn_input)
+
+    tensor_output_torch = ttnn.to_torch(tensor_output)
+    ttnn_output_torch = ttnn.to_torch(ttnn_output)
+
+    print(f"torch.exp() =\n{torch.exp(tensor_input)}")
+    print(f"tensor_output =\n{tensor_output_torch}")
+    print(f"ttnn_output =\n{ttnn_output_torch}")
 
 
 operations_dict = {
@@ -75,12 +158,24 @@ operations_dict = {
         None,
         "exp",
     ),
+    "exp_python_alt1": (
+        torch.exp,
+        lambda x, output_tensor: exp_accurate_python(x, output_tensor, exp_regression=exp_regression_0p5_to_1_alt1),
+        None,
+        "exp",
+    ),
     "tanh": (
         torch.tanh,
-        lambda x, output_tensor: ttnn.tanh(x),
+        ttnn.tanh,
         math.tanh,
         "tanh",
     ),  # ttnn.tanh() does not support output_tensor ?
+    "tanh_accurate": (
+        torch.tanh,
+        lambda x, output_tensor: ttnn.tanh(x, accuracy=True, output_tensor=output_tensor),
+        math.tanh,
+        "tanh",
+    ),
     "cosh": (
         torch.cosh,
         lambda x, output_tensor: ttnn.cosh(x),
@@ -319,6 +414,7 @@ def measure_op_accuracy(operation_name, target_dtype, dest_dir, samples=None):
         np_flat_ref = torch_output_ref.to(torch.float32).flatten().numpy()
         # np_flat_exponent = torch_exponent.flatten().view(TORCH_TYPE).numpy()
 
+        # TODO: Just switch to pandas and do groupby() & cie
         for j in range(0, sub_batches):
             chunk_size = TENSOR_WIDTH * TENSOR_HEIGHT // sub_batches
             (beg_index, end_index) = (j * chunk_size, (j + 1) * chunk_size)
@@ -451,7 +547,7 @@ def measure_op_accuracy_bf16(operation_name, dest_dir, group_size=None):
 
     # Compute errors
     torch_diff = torch.abs(torch_output_ref - actual_torch_output)
-    torch_ulp_value = utils.ulp_bf16(torch_input_bf16)
+    torch_ulp_value = utils.ulp_bf16(actual_torch_output)
     torch_eps = torch.full(torch_input_bf16.size(), EPSILON)
 
     torch_rel_error = torch_diff / torch.max(torch.abs(torch_output_ref), torch_eps)
@@ -559,8 +655,11 @@ def main(args):
     all_operations = [
         "exp",
         "exp_approx",
+        "exp_accurate_python",
+        "exp_python_alt1",
         "log",
         "tanh",
+        "tanh_accurate",
         "cosh",
         "sinh",
         "log10",
@@ -592,11 +691,14 @@ def main(args):
     highres_operations = [
         "exp",
         "exp_approx",
+        "exp_accurate_python",
+        "exp_python_alt1",
         "log",
         "log10",
         "log2",
         "log1p",
         "tanh",
+        "tanh_accurate",
         "cosh",
         "sinh",
         "tan",
@@ -666,5 +768,7 @@ def main(args):
 
 args = sys.argv
 main(args)
+
+# test_exp_accurate_python()
 
 ttnn.close_device(device)
