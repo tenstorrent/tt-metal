@@ -9,17 +9,6 @@
 
 // #include <unistd.h>
 
-inline void print_bf16_pages(uint32_t l1_addr, uint32_t elts_per_page, uint32_t npages, uint32_t start = 0) {
-    volatile tt_l1_ptr uint16_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(l1_addr) + start * elts_per_page;
-    for (uint32_t page = 0; page < npages; ++page) {
-        DPRINT << start + page << ": **************************************************************" << ENDL();
-        for (uint32_t j = 0; j < elts_per_page; ++j, ++ptr) {
-            DPRINT << BF16(*ptr) << " ";
-        }
-        DPRINT << ENDL();
-    }
-}
-
 template <uint8_t noc_ind = noc_index>
 FORCE_INLINE std::uint64_t static_noc_multicast_addr(
     std::uint32_t noc_x_start,
@@ -68,30 +57,6 @@ void kernel_main() {
     constexpr uint32_t num_sender_cores = get_compile_time_arg_val(17);
     constexpr uint32_t total_num_read_txns = get_compile_time_arg_val(18);
 
-    // DPRINT the selected compile-time arguments
-    DPRINT << ENDL();
-    DPRINT << "Compile-time arguments:" << ENDL();
-    DPRINT << "input_tensor_cb_id: " << input_tensor_cb_id << ENDL();
-    DPRINT << "fabric_sender_cb_id: " << fabric_sender_cb_id << ENDL();
-    DPRINT << "packet_header_cb_id: " << packet_header_cb_id << ENDL();
-    DPRINT << "fabric_receiver_cb_id: " << fabric_receiver_cb_id << ENDL();
-    DPRINT << "accumulator_cb_id: " << accumulator_cb_id << ENDL();
-    // DPRINT << "output_tensor_cb_id: " << output_tensor_cb_id << ENDL();
-    DPRINT << "chip_id: " << chip_id << ENDL();
-    DPRINT << "tiles_per_core_width: " << tiles_per_core_width << ENDL();
-    DPRINT << "tiles_per_core_width_output: " << tiles_per_core_width_output << ENDL();
-    DPRINT << "num_pages_per_packet: " << num_pages_per_packet << ENDL();
-    DPRINT << "input_shard_cores_per_device: " << input_shard_cores_per_device << ENDL();
-    DPRINT << "num_devices: " << num_devices << ENDL();
-    DPRINT << "page_size_bytes: " << page_size_bytes << ENDL();
-    DPRINT << "output_cores_per_device: " << output_cores_per_device << ENDL();
-    DPRINT << "packet_worker_start_x: " << packet_worker_start_x << ENDL();
-    DPRINT << "packet_worker_start_y: " << packet_worker_start_y << ENDL();
-    DPRINT << "packet_worker_end_x: " << packet_worker_end_x << ENDL();
-    DPRINT << "packet_worker_end_y: " << packet_worker_end_y << ENDL();
-    DPRINT << "num_sender_cores: " << num_sender_cores << ENDL();
-    DPRINT << "total_num_read_txns: " << total_num_read_txns << ENDL();
-
     // Derived compile-time constants
     constexpr uint32_t input_tensor_cores = input_shard_cores_per_device * num_devices;
     constexpr uint32_t num_packets_total_per_device =
@@ -128,19 +93,6 @@ void kernel_main() {
     uint32_t k_base_addr = get_arg_val<uint32_t>(rt_arg_idx++);
     uint32_t v_base_addr = get_arg_val<uint32_t>(rt_arg_idx++);
 
-    // DPRINT the selected runtime arguments
-    DPRINT << ENDL();
-    DPRINT << "Runtime arguments:" << ENDL();
-    DPRINT << "receiver_semaphore_address: " << receiver_semaphore_address << ENDL();
-    DPRINT << "local_semaphore_address: " << local_semaphore_address << ENDL();
-    DPRINT << "sender_core: " << (sender_core ? "true" : "false") << ENDL();
-    DPRINT << "worker_core: " << (worker_core ? "true" : "false") << ENDL();
-    DPRINT << "linear_input_packet_start_idx: " << linear_input_packet_start_idx << ENDL();
-    DPRINT << "receiver_core: " << (receiver_core ? "true" : "false") << ENDL();
-    DPRINT << "sender_shard_start: " << sender_shard_start << ENDL();
-    DPRINT << "sender_shard_end: " << sender_shard_end << ENDL();
-    DPRINT << "sender_total_num_pages: " << sender_total_num_pages << ENDL();
-
     // Bank base addresses (compute once)
     const uint32_t bank_base_address = get_write_ptr(input_tensor_cb_id);
 
@@ -170,8 +122,6 @@ void kernel_main() {
 
                 cb_reserve_back(fabric_sender_cb_id, num_pages_reserve_push);
                 noc_async_read(shard_noc_addr, sender_read_addr, transfer_size);
-                // DPRINT << "shard_noc_addr: " << shard_noc_addr << " print_bf16_pages: " << ENDL();
-                // tt::data_movement::common::print_bf16_pages(sender_read_addr, page_size_bytes/2, read_size);
 
                 if (num_pages_reserve_push >= curr_packet_num_pages) {
                     noc_async_read_barrier();
@@ -192,8 +142,6 @@ void kernel_main() {
 
         for (uint32_t i = 0; i < num_pages_per_packet; i++) {
             const uint32_t rem = linear_input_packet_start_idx + i;
-            // const uint32_t linear_input_core_idcs = rem / tiles_per_core_width;
-            // const uint32_t linear_input_tile_offsets = rem % tiles_per_core_width;
             const uint32_t linear_input_core_idcs = rem % 20;
             const uint32_t linear_input_tile_offsets = rem / 20;
 
@@ -215,9 +163,6 @@ void kernel_main() {
 
         noc_async_read_barrier();
         cb_push_back(fabric_receiver_cb_id, num_pages_per_packet * num_devices);
-        // DPRINT << "DPRINT all pages before reduction" << ENDL();
-        // print_bf16_pages(get_read_ptr(fabric_receiver_cb_id), page_size_bytes / 2, num_pages_per_packet *
-        // num_devices);
 
         uint32_t head_idx = linear_output_page_start_idx / 2;  // each head has 2 pages/blocks
         cb_wait_front(accumulator_cb_id, num_pages_per_packet);

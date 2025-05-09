@@ -8,7 +8,6 @@
 
 namespace NAMESPACE {
 void MAIN {
-    DPRINT << "reduction kernel" << ENDL();
     // Define all compile-time arguments at the beginning
     constexpr uint32_t fabric_receiver_cb_id = get_compile_time_arg_val(0);
     constexpr uint32_t accumulator_cb_id = get_compile_time_arg_val(1);
@@ -59,6 +58,5 @@ void MAIN {
 
     cb_pop_front(fabric_receiver_cb_id, total_pages);
     cb_push_back(accumulator_cb_id, num_pages_per_packet);
-    // tt::data_movement::common::print_bf16_pages(get_read_ptr(accumulator_cb_id), 1024, num_pages_per_packet);
 }
 }  // namespace NAMESPACE

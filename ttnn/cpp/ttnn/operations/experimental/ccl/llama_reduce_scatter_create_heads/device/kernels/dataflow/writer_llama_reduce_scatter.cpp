@@ -12,17 +12,6 @@
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
 #include "cpp/ttnn/operations/ccl/common/interpreter_backends/kernel_common/noc_addr.hpp"
 
-inline void print_bf16_pages(uint32_t l1_addr, uint32_t elts_per_page, uint32_t npages, uint32_t start = 0) {
-    volatile tt_l1_ptr uint16_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(l1_addr) + start * elts_per_page;
-    for (uint32_t page = 0; page < npages; ++page) {
-        DPRINT << start + page << ": **************************************************************" << ENDL();
-        for (uint32_t j = 0; j < elts_per_page; ++j, ++ptr) {
-            DPRINT << BF16(*ptr) << " ";
-        }
-        DPRINT << ENDL();
-    }
-}
-
 constexpr bool flush = false;
 
 template <uint8_t noc_ind = noc_index>
@@ -70,27 +59,6 @@ void kernel_main() {
     constexpr uint32_t num_packet_worker_cores = get_compile_time_arg_val(15);
     constexpr bool RING_TOPOLOGY = get_compile_time_arg_val(16) == 0 ? false : true;
 
-    // DPRINT the selected compile-time arguments
-    DPRINT << ENDL();
-    DPRINT << "Compile-time arguments:" << ENDL();
-    DPRINT << "input_tensor_cb_id: " << input_tensor_cb_id << ENDL();
-    DPRINT << "fabric_sender_cb_id: " << fabric_sender_cb_id << ENDL();
-    DPRINT << "packet_header_cb_id: " << packet_header_cb_id << ENDL();
-    DPRINT << "fabric_receiver_cb_id: " << fabric_receiver_cb_id << ENDL();
-    DPRINT << "accumulator_cb_id: " << accumulator_cb_id << ENDL();
-    // DPRINT << "output_tensor_cb_id: " << output_tensor_cb_id << ENDL();
-    DPRINT << "chip_id: " << chip_id << ENDL();
-    DPRINT << "tiles_per_core_width: " << tiles_per_core_width << ENDL();
-    DPRINT << "tiles_per_core_width_output: " << tiles_per_core_width_output << ENDL();
-    DPRINT << "num_pages_per_packet: " << num_pages_per_packet << ENDL();
-    DPRINT << "input_shard_cores_per_device: " << input_shard_cores_per_device << ENDL();
-    DPRINT << "num_devices: " << num_devices << ENDL();
-    DPRINT << "page_size_bytes: " << page_size_bytes << ENDL();
-    DPRINT << "output_cores_per_device: " << output_cores_per_device << ENDL();
-    DPRINT << "packet_receiver_core_x: " << packet_receiver_core_x << ENDL();
-    DPRINT << "packet_receiver_core_y: " << packet_receiver_core_y << ENDL();
-    DPRINT << "num_packet_worker_cores: " << num_packet_worker_cores << ENDL();
-
     // Derived compile-time constants
     constexpr uint32_t input_tensor_cores = input_shard_cores_per_device * num_devices;
     constexpr uint32_t num_packets_total_per_device =
@@ -118,18 +86,6 @@ void kernel_main() {
     uint32_t q_base_addr = get_arg_val<uint32_t>(rt_arg_idx++);
     uint32_t k_base_addr = get_arg_val<uint32_t>(rt_arg_idx++);
     uint32_t v_base_addr = get_arg_val<uint32_t>(rt_arg_idx++);
-
-    // DPRINT the selected runtime arguments
-    DPRINT << ENDL();
-    DPRINT << "Runtime arguments:" << ENDL();
-    DPRINT << "receiver_semaphore_address: " << receiver_semaphore_address << ENDL();
-    DPRINT << "local_semaphore_address: " << local_semaphore_address << ENDL();
-    DPRINT << "sender_core: " << (sender_core ? "true" : "false") << ENDL();
-    DPRINT << "worker_core: " << (worker_core ? "true" : "false") << ENDL();
-    DPRINT << "linear_output_page_start_idx: " << linear_output_page_start_idx << ENDL();
-    DPRINT << "sender_packet_start: " << sender_packet_start << ENDL();
-    DPRINT << "sender_packet_end: " << sender_packet_end << ENDL();
-    DPRINT << "sender_total_num_pages: " << sender_total_num_pages << ENDL();
 
     if (sender_core) {
         auto fabric_connection =
@@ -209,9 +165,6 @@ void kernel_main() {
                 fabric_conn.send_payload_flush_blocking_from_address(
                     (uint32_t)unicast_packet_header, packet_header_size);
 
-                // DPRINT << "curr_packet_num_pages: " << curr_packet_num_pages << ENDL();
-                // tt::data_movement::common::print_bf16_pages(get_read_ptr(fabric_sender_cb_id), page_size_bytes/2,
-                // curr_packet_num_pages);
                 cb_pop_front(fabric_sender_cb_id, curr_packet_num_pages);
 
                 num_pages_sent += curr_packet_num_pages;
@@ -227,27 +180,6 @@ void kernel_main() {
         constexpr uint8_t q_output_core_xy[output_cores_per_device][2] = Q_OUTPUT_CORE_XY;
         constexpr uint8_t k_output_core_xy[output_cores_per_device][2] = K_OUTPUT_CORE_XY;
         constexpr uint8_t v_output_core_xy[output_cores_per_device][2] = V_OUTPUT_CORE_XY;
-        // #ifndef SKIP_WRITE_BACK
-        // constexpr uint8_t output_core_xy[output_cores_per_device][2] = OUTPUT_CORE_XY;
-        // uint64_t noc_addresses[num_pages_per_packet];
-        // uint32_t accumulator_l1_addresses[num_pages_per_packet];
-        // uint32_t output_tensor_base_addr = get_read_ptr(output_tensor_cb_id);
-        // auto accumulator_l1_addr = get_read_ptr(accumulator_cb_id);
-        // uint32_t num_packets = num_pages_per_packet;
-        // for (uint32_t i = 0; i < num_pages_per_packet; i++) {
-        //     uint32_t rem = linear_output_page_start_idx + i;
-        //     uint32_t linear_output_core_idcs = rem / tiles_per_core_width_output;
-        //     if (linear_output_core_idcs >= output_cores_per_device) {
-        //         num_packets = i;
-        //         break;
-        //     }
-        //     uint32_t linear_output_tile_offsets = rem % tiles_per_core_width_output;
-        //     noc_addresses[i] = get_noc_addr(
-        //         output_core_xy[linear_output_core_idcs][x_index],
-        //         output_core_xy[linear_output_core_idcs][y_index],
-        //         output_tensor_base_addr + (linear_output_tile_offsets * page_size_bytes));
-        //     accumulator_l1_addresses[i] = accumulator_l1_addr + i * page_size_bytes;
-        // }
 
         uint32_t head_idx = linear_output_page_start_idx / 2;  // each head has 2 pages/blocks
         cb_wait_front(accumulator_cb_id, num_pages_per_packet);
@@ -282,16 +214,6 @@ void kernel_main() {
                 noc_async_write(l1_read_addr, noc_address, stick_size_byte);
             }
         }
-
-        // // Process all tiles
-        // for (uint32_t tile = 0; tile < num_packets; tile++) {
-        //     noc_async_write(accumulator_l1_addresses[tile], noc_addresses[tile], page_size_bytes);
-        //     // print_bf16_pages(accumulator_l1_addresses[tile], page_size_bytes / 2, 1);
-        // }
         noc_async_write_barrier();
-        // cb_pop_front(accumulator_cb_id, num_pages_per_packet);
-        // #else
-        //         cb_wait_front(output_tensor_cb_id, num_pages_per_packet);
-        // #endif
     }
 }

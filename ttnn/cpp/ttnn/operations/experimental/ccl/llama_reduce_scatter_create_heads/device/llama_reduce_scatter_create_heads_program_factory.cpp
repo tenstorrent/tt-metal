@@ -468,8 +468,6 @@ LlamaReduceScatterCreateHeadsDeviceOperation::LlamaReduceScatterCreateHeads::cre
     // UNCOMMENT this once we can allocate persistent buffers across all device lifetimes
     uint32_t num_packets_total_per_device =
         (input_blocks_per_stick + num_blocks_per_packet - 1) / num_blocks_per_packet;
-    tt::log_info("num_blocks_per_packet: {} LLONG", num_blocks_per_packet);
-    tt::log_info("num_packets_total_per_device: {} LLONG", num_packets_total_per_device);
     auto packet_worker_cores_grid = detail::rs_heads_fusion::get_worker_cores(
         intermediate_packet_buffer_grid,
         num_packets_total_per_device,
@@ -483,18 +481,6 @@ LlamaReduceScatterCreateHeadsDeviceOperation::LlamaReduceScatterCreateHeads::cre
 
     auto schedule = detail::rs_heads_fusion::distribute_work_evenly(
         ncores_input, num_workers_per_link * num_links, 1, num_blocks_per_packet);
-    if (ring_index == 0) {
-        int iworker = 0;
-
-        for (auto& worker_schedule : schedule) {
-            std::cout << "worker_ID " << iworker << std::endl;
-            for (auto& request : worker_schedule) {
-                std::cout << "worker_schedule: " << request.bank_id << " " << request.read_offset << " "
-                          << request.read_size << std::endl;
-            }
-            iworker++;
-        }
-    }
     auto schedule_string = detail::rs_heads_fusion::schedule_to_string(schedule);
 
     // input sharded buffer
@@ -703,14 +689,6 @@ LlamaReduceScatterCreateHeadsDeviceOperation::LlamaReduceScatterCreateHeads::cre
     reader_defines["PACKET_WORKER_CORES"] =
         detail::rs_heads_fusion::cores_to_string(to_worker_cores(packet_worker_cores));
     reader_defines["SCHEDULE"] = schedule_string;
-    if (ring_index == 0) {
-        std::cout << "INPUT_CORE_XY: " << reader_defines["INPUT_CORE_XY"] << std::endl;
-        std::cout << "Q_OUTPUT_CORE_XY: " << reader_defines["Q_OUTPUT_CORE_XY"] << std::endl;
-        std::cout << "K_OUTPUT_CORE_XY: " << reader_defines["K_OUTPUT_CORE_XY"] << std::endl;
-        std::cout << "V_OUTPUT_CORE_XY: " << reader_defines["V_OUTPUT_CORE_XY"] << std::endl;
-        std::cout << "PACKET_WORKER_CORES: " << reader_defines["PACKET_WORKER_CORES"] << std::endl;
-        std::cout << "SCHEDULE: " << reader_defines["SCHEDULE"] << std::endl;
-    }
     // create local semaphore
     auto local_semaphore = tt::tt_metal::CreateSemaphore(program, all_cores_grid, INVALID);
 
@@ -821,7 +799,6 @@ LlamaReduceScatterCreateHeadsDeviceOperation::LlamaReduceScatterCreateHeads::cre
     } else if (operation_attributes.topology == ttnn::ccl::Topology::Ring) {
         forward_fabric_connection = true;
         backward_fabric_connection = true;
-        tt::log_info("Ring topology LLONG");
     }
 
     for (auto core : all_cores) {
@@ -848,21 +825,6 @@ LlamaReduceScatterCreateHeadsDeviceOperation::LlamaReduceScatterCreateHeads::cre
             writer_runtime_args[writer_sender_packet_end_idx] =
                 writer_sender_packet_start + sender_total_num_pages / num_blocks_per_packet;
             writer_runtime_args[writer_sender_total_num_pages_idx] = sender_total_num_pages;
-            if (ring_index == 0) {
-                std::cout << "sender_core_idx: " << sender_core_idx << std::endl;
-                std::cout << "reader_sender_packet_start: " << reader_runtime_args[reader_sender_packet_start_idx]
-                          << std::endl;
-                std::cout << "reader_sender_packet_end: " << reader_runtime_args[reader_sender_packet_end_idx]
-                          << std::endl;
-                std::cout << "reader_sender_total_num_pages: " << reader_runtime_args[reader_sender_total_num_pages_idx]
-                          << std::endl;
-                std::cout << "writer_sender_packet_start: " << writer_runtime_args[writer_sender_packet_start_idx]
-                          << std::endl;
-                std::cout << "writer_sender_packet_end: " << writer_runtime_args[writer_sender_packet_end_idx]
-                          << std::endl;
-                std::cout << "writer_sender_total_num_pages: " << writer_runtime_args[writer_sender_total_num_pages_idx]
-                          << std::endl;
-            }
 
             reader_sender_packet_start += num_shards_to_read_per_worker;
             // writer_sender_packet_start += num_packets_to_send_per_worker;
