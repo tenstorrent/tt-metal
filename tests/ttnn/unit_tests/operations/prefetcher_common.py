@@ -47,6 +47,7 @@ def run_prefetcher_mm(
     dtypes,
     is_functional_test=False,
     enable_performance_mode=False,
+    batch_weights=False,
 ):
     logger.info(f"Running test_run_prefetcher with num_tensors={num_tensors}, num_layers={num_layers}")
     assert len(input_shapes) == len(dtypes)
@@ -279,8 +280,13 @@ def run_prefetcher_mm(
 
     in0_tensors = []
     in0_t_tensors = []
+    prev_shape = in0_shapes[0]
+    prev_in0 = torch.randn(prev_shape)
     for shape, shard_shape in zip(in0_shapes, shard_shapes):
         in0 = torch.randn(shape)
+        if batch_weights and prev_shape == shape:
+            in0 = prev_in0
+            prev_shape = shape
         in0_tensors.append(in0)
 
         _, _, M, _ = shape
@@ -345,20 +351,36 @@ def run_prefetcher_mm(
         outputs_dram = []
         for l in range(num_layers):
             outputs_l1 = []
-            for t in range(num_tensors):
+            t = 0
+            while t < num_tensors:
                 idx = l * num_tensors + t
-
-                output_t = ttnn.matmul(
-                    in0_t_tensors[t],
-                    tt_tensors_all[idx],
-                    program_config=program_configs[t],
-                    memory_config=output_mem_configs[t],
-                    compute_kernel_config=compute_kernel_config,
-                    global_cb=global_circular_buffer,
-                    sub_device_id=worker_sub_device_id,
-                )
-                outputs_l1.append(output_t)
-
+                if batch_weights and t < num_tensors - 1 and in0_t_tensors[t].shape == in0_t_tensors[t + 1].shape:
+                    logger.info(f"running matmul_batched_weights for layer {l}, tensor {t} and tensor {t+1}")
+                    [output_t1, output_t2] = ttnn.matmul_batched_weights(
+                        in0_t_tensors[t],
+                        [tt_tensors_all[idx], tt_tensors_all[idx + 1]],
+                        program_config=program_configs[t],
+                        memory_config=output_mem_configs[t],
+                        compute_kernel_config=compute_kernel_config,
+                        global_cb=global_circular_buffer,
+                        sub_device_id=worker_sub_device_id,
+                    )
+                    outputs_l1.append(output_t1)
+                    outputs_l1.append(output_t2)
+                    t += 2
+                else:
+                    logger.info(f"running normal matmul for layer {l}, tensor {t}")
+                    output_t = ttnn.matmul(
+                        in0_t_tensors[t],
+                        tt_tensors_all[idx],
+                        program_config=program_configs[t],
+                        memory_config=output_mem_configs[t],
+                        compute_kernel_config=compute_kernel_config,
+                        global_cb=global_circular_buffer,
+                        sub_device_id=worker_sub_device_id,
+                    )
+                    outputs_l1.append(output_t)
+                    t += 1
             # Send outputs to DRAM to so that we don't run out of L1 memory when testing for large number of layers
             for t in range(num_tensors):
                 outputs_dram.append(ttnn.to_memory_config(outputs_l1[t], ttnn.DRAM_MEMORY_CONFIG))
