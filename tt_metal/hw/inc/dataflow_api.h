@@ -1568,9 +1568,10 @@ FORCE_INLINE void noc_inline_dw_write_with_state(
  */
 // clang-format on
 template <bool posted = false>
-FORCE_INLINE void noc_semaphore_inc(uint64_t addr, uint32_t incr, uint8_t noc_id = noc_index) {
+FORCE_INLINE void noc_semaphore_inc(
+    uint64_t addr, uint32_t incr, uint8_t noc_id = noc_index, uint8_t vc = NOC_UNICAST_WRITE_VC) {
     /* [REFER TO grayskull/noc/noc.h for the documentation of noc_atomic_increment()] */
-    RECORD_NOC_EVENT_WITH_ADDR(NocEventType::SEMAPHORE_INC,addr,0, NOC_UNICAST_WRITE_VC);
+    RECORD_NOC_EVENT_WITH_ADDR(NocEventType::SEMAPHORE_INC, addr, 0, vc);
 
     WAYPOINT("NSIW");
     DEBUG_SANITIZE_NOC_ADDR(noc_id, addr, 4);
