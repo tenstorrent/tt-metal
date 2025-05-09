@@ -16,7 +16,7 @@ using namespace tt::test_utils;
 
 namespace unit_tests::dm::core_to_core {
 // Test config, i.e. test parameters
-struct OneToOneConfig {
+struct OneFromOneConfig {
     uint32_t test_id = 0;
     CoreCoord master_core_coord = CoreCoord();
     CoreCoord subordinate_core_coord = CoreCoord();
@@ -28,14 +28,13 @@ struct OneToOneConfig {
     // TODO: Add the following parameters
     //  1. Virtual Channel
     //  2. Which NOC to use
-    //  3. Posted flag
 };
 
-/// @brief Does L1 Sender Core --> L1 Receiver Core
+/// @brief Does Requestor Core --> L1 Responder Core --> L1 Requestor Core
 /// @param device
 /// @param test_config - Configuration of the test -- see struct
 /// @return
-bool run_dm(IDevice* device, const OneToOneConfig& test_config) {
+bool run_dm(IDevice* device, const OneFromOneConfig& test_config) {
     // Program
     Program program = CreateProgram();
 
@@ -80,50 +79,28 @@ bool run_dm(IDevice* device, const OneToOneConfig& test_config) {
     uint32_t subordinate_l1_byte_address = subordinate_l1_buffer->address();
 
     // Compile-time arguments for kernels
-    vector<uint32_t> sender_compile_args = {
-        (uint32_t)master_l1_byte_address,
+    vector<uint32_t> requestor_compile_args = {
         (uint32_t)subordinate_l1_byte_address,
-        (uint32_t)test_config.num_of_transactions,
-        (uint32_t)test_config.transaction_size_pages,
-        (uint32_t)test_config.page_size_bytes,
-        (uint32_t)test_config.test_id};
-
-    vector<uint32_t> receiver_compile_args = {
         (uint32_t)master_l1_byte_address,
-        (uint32_t)subordinate_l1_byte_address,
         (uint32_t)test_config.num_of_transactions,
         (uint32_t)test_config.transaction_size_pages,
         (uint32_t)test_config.page_size_bytes,
         (uint32_t)test_config.test_id};
 
     // Kernels
-    auto sender_kernel = CreateKernel(
+    auto requestor_kernel = CreateKernel(
         program,
-        "tests/tt_metal/tt_metal/data_movement/one_to_one/kernels/sender.cpp",
+        "tests/tt_metal/tt_metal/data_movement/one_from_one/kernels/requestor.cpp",
         master_core_set,
-        DataMovementConfig{
-            .processor = DataMovementProcessor::RISCV_0,
-            .noc = NOC::RISCV_0_default,
-            .compile_args = sender_compile_args});
-
-    auto receiver_kernel = CreateKernel(
-        program,
-        "tests/tt_metal/tt_metal/data_movement/one_to_one/kernels/receiver.cpp",
-        subordinate_core_set,
         DataMovementConfig{
             .processor = DataMovementProcessor::RISCV_1,
             .noc = NOC::RISCV_1_default,
-            .compile_args = receiver_compile_args});
-
-    // Semaphores
-    CoreRangeSet sem_core_set = subordinate_core_set.merge<CoreRangeSet>(master_core_set);
-    const uint32_t sem_id = CreateSemaphore(program, sem_core_set, 0);
-    CoreCoord physical_subordinate_core = device->worker_core_from_logical_core(test_config.subordinate_core_coord);
+            .compile_args = requestor_compile_args});
 
     // Runtime Arguments
+    CoreCoord physical_subordinate_core = device->worker_core_from_logical_core(test_config.subordinate_core_coord);
     SetRuntimeArgs(
-        program, sender_kernel, master_core_set, {sem_id, physical_subordinate_core.x, physical_subordinate_core.y});
-    SetRuntimeArgs(program, receiver_kernel, subordinate_core_set, {sem_id});
+        program, requestor_kernel, master_core_set, {physical_subordinate_core.x, physical_subordinate_core.y});
 
     // Assign unique id
     log_info("Running Test ID: {}, Run ID: {}", test_config.test_id, unit_tests::dm::runtime_host_id);
@@ -138,10 +115,10 @@ bool run_dm(IDevice* device, const OneToOneConfig& test_config) {
 
     // Launch program and record outputs
     vector<uint32_t> packed_output;
-    detail::WriteToBuffer(master_l1_buffer, packed_input);
+    detail::WriteToBuffer(subordinate_l1_buffer, packed_input);
     MetalContext::instance().get_cluster().l1_barrier(device->id());
     detail::LaunchProgram(device, program);
-    detail::ReadFromBuffer(subordinate_l1_buffer, packed_output);
+    detail::ReadFromBuffer(master_l1_buffer, packed_output);
 
     // Results comparison
     bool pcc = is_close_packed_vectors<bfloat16, uint32_t>(
@@ -159,8 +136,8 @@ bool run_dm(IDevice* device, const OneToOneConfig& test_config) {
 }
 }  // namespace unit_tests::dm::core_to_core
 
-/* ========== Test case for one to one data movement; Test id = 4 ========== */
-TEST_F(DeviceFixture, TensixDataMovementOneToOnePacketSizes) {
+/* ========== Test case for one from one data movement; Test id = 5 ========== */
+TEST_F(DeviceFixture, TensixDataMovementOneFromOnePacketSizes) {
     // Parameters
     uint32_t max_transactions = 64;
     uint32_t max_transaction_size_pages = 64;
@@ -177,8 +154,8 @@ TEST_F(DeviceFixture, TensixDataMovementOneToOnePacketSizes) {
         for (uint32_t transaction_size_pages = 1; transaction_size_pages <= max_transaction_size_pages;
              transaction_size_pages *= 2) {
             // Test config
-            unit_tests::dm::core_to_core::OneToOneConfig test_config = {
-                .test_id = 4,
+            unit_tests::dm::core_to_core::OneFromOneConfig test_config = {
+                .test_id = 5,
                 .master_core_coord = master_core_coord,
                 .subordinate_core_coord = subordinate_core_coord,
                 .num_of_transactions = num_of_transactions,
