@@ -144,7 +144,7 @@ inline void _calculate_sfpu_binary_(const uint dst_offset)
             }
             v_else
             {
-                result = in0 * sfpi::setsgn(_sfpu_reciprocal_<3>(in1), in1);
+                result = in0 * sfpi::setsgn(_sfpu_reciprocal_<4>(in1), in1);
             }
             v_endif;
         }
@@ -165,14 +165,9 @@ inline void _calculate_sfpu_binary_(const uint dst_offset)
 template <bool APPROXIMATION_MODE /*unused*/, BinaryOp BINOP>
 inline void _sfpu_binary_init_()
 {
-    if constexpr (BINOP == BinaryOp::DIV)
+    if constexpr (BINOP == BinaryOp::DIV || BINOP == BinaryOp::POW)
     {
         _init_reciprocal_<APPROXIMATION_MODE>();
-    }
-    if constexpr (BINOP == BinaryOp::POW)
-    {
-        // note: calls _init_reciprocal_
-        _init_exponential_<APPROXIMATION_MODE>();
     }
 }
 

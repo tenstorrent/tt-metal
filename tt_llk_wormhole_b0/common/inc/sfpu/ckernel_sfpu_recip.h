@@ -17,35 +17,38 @@ sfpi_inline sfpi::vFloat _sfpu_reciprocal_(const sfpi::vFloat in)
     // Force sign to 1 (make number negative)
     sfpi::vFloat val = sfpi::setsgn(in, 1);
 
-    val                 = setexp(val, 126); // Set exponent to 126 to make the number in 0.5-1
-    sfpi::vFloat a      = sfpi::vConstFloatPrgm0;
-    sfpi::vFloat b      = sfpi::vConstFloatPrgm1;
-    sfpi::vFloat result = a + b * val;
+    val = setexp(val, 126); // Set exponent to 126 to make the number in 0.5-1
+    // Use 1.44 as first guess at x, ideal value would be 1.33.
+    // Grayskull has hardwired 1.44 and uses it to avoid a load.
+    // We use it here for consistency.
+    sfpi::vFloat vConstLn2Recip = sfpi::vConstFloatPrgm0;
+    sfpi::vFloat two            = sfpi::vConstFloatPrgm1;
+    sfpi::vFloat result         = vConstLn2Recip * (val * vConstLn2Recip + two);
 
-    for (int s_iter = 0; s_iter < max_iter; s_iter++)
+    for (int s_iter = 0; s_iter < (max_iter - 1); s_iter++)
     {
-        result += result * (val * result + sfpi::vConst1);
+        result = result * (val * result + two);
     }
 
     sfpi::vInt orig_exp = exexp(in);
     sfpi::vInt new_exp  = exexp(result);
+
+    // "Subtract" exponents, and re-bias.
+    // Execute: -1 - exp, then exp += 127
     new_exp -= orig_exp;
     new_exp += 126;
 
-    v_if (new_exp >= 0)
-    {
-        // Set newly denormalized exponent to result exponent field
-        result = setexp(result, new_exp);
-    }
-    v_else
+    v_if (new_exp < 0)
     {
         // If rebiased exponent is negative, we need to saturate at 0.
         // This means the initial number was too big so reciprocal result should be 0
-        result = 0.0f;
+        result  = 0.0F;
+        new_exp = 0;
     }
     v_endif;
 
-    return result;
+    // Set newly denormalized exponent to result exponent field
+    return setexp(result, new_exp);
 }
 
 template <bool APPROXIMATION_MODE, int ITERATIONS, bool is_fp32_dest_acc_en = true>
@@ -56,7 +59,13 @@ inline void _calculate_reciprocal_(const int iterations)
     {
         sfpi::vFloat in  = sfpi::dst_reg[0];
         sfpi::vFloat out = _sfpu_reciprocal_<APPROXIMATION_MODE ? 2 : 3>(in);
-        out              = setsgn(out, sfpi::reinterpret<sfpi::vInt>(in));
+
+        v_if (in < 0.0F)
+        {
+            // Invert sign on calculated value if CC=1 (number is negative)
+            out = -out;
+        }
+        v_endif;
 
         if constexpr (is_fp32_dest_acc_en || APPROXIMATION_MODE)
         {
@@ -74,13 +83,8 @@ inline void _calculate_reciprocal_(const int iterations)
 template <bool APPROXIMATION_MODE>
 inline void _init_reciprocal_()
 {
-    // The following constants are used to calculate an initial estimate for 1/D using a linear approximation.
-    // The linear approximation with minimum worst-case absolute error on the interval [0.5, 1] is:
-    //   X_0 = 48/17 - 32/17 D
-    // See https://en.wikipedia.org/wiki/Division_algorithm#Initial_estimate for the full derivation.
-
-    sfpi::vConstFloatPrgm0 = 48.0f / 17.0f;
-    sfpi::vConstFloatPrgm1 = 32.0f / 17.0f;
+    sfpi::vConstFloatPrgm0 = 1.442695f; // ln2_recip
+    sfpi::vConstFloatPrgm1 = 2.0f;
 }
 
 } // namespace sfpu
