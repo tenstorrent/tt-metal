@@ -54,3 +54,21 @@ jobs:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+  ttnn-stress-tests:
+    needs: build-artifact
+    secrets: inherit
+    uses: ./.github/workflows/ttnn-stress-tests-impl.yaml
+    strategy:
+      fail-fast: false
+      matrix:
+        test-group: [
+          { runner-label: P100 },
+          { runner-label: P150 },
+        ]
+    with:
+      arch: blackhole
+      runner-label: ${{ matrix.test-group.runner-label }}
+      timeout: 45
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
