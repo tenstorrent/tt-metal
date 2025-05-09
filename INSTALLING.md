@@ -38,7 +38,7 @@ sudo ./install_dependencies.sh
 #### Install the Driver (TT-KMD)
 - DKMS must be installed:
 
-| OS              | Command                |
+| OS                     | Command                                            |
 |------------------------|----------------------------------------------------|
 | Ubuntu / Debian        | ```apt install dkms```                             |
 | Fedora                 | ```dnf install dkms```                             |
@@ -60,8 +60,6 @@ cd ..
 
 #### Update Device TT-Firmware with TT-Flash
 
-> [!CAUTION]
-> Be sure to align the FW version with the compatible version in the table above for your particular configuration.
 
 - Install TT-Flash:
 
@@ -69,22 +67,21 @@ cd ..
 pip install git+https://github.com/tenstorrent/tt-flash.git
 ```
 
-- Reboot to load changes:
-```
-sudo reboot
-```
+- Update TT-Firmware:
 
-- Check if TT-Flash is installed:
-```
-tt-flash --version
-```
+  - First, set the appropriate TT-Firmware version per device:
 
-- Download and install the TT-Firmware version according to the table above. We will use latest here as example:
-```
-file_name=$(curl -s "https://raw.githubusercontent.com/tenstorrent/tt-firmware/main/latest.fwbundle")
-curl -L -o "$file_name" "https://github.com/tenstorrent/tt-firmware/raw/main/$file_name"
-tt-flash flash --fw-tar $file_name
-```
+  | Device                        | Command                                                    |
+  |-------------------------------|------------------------------------------------------------|
+  | Blackhole                     | ```fw_tag=v80.18.0.0 fw_pack=fw_pack-80.18.0.0.fwbundle``` |
+  | Galaxy (6U) / Wormhole / T300 | ```fw_tag=v80.17.0.0 fw_pack=fw_pack-80.17.0.0.fwbundle``` |
+
+  - Then Download and install TT-Firmware:
+
+  ```
+  wget https://github.com/tenstorrent/tt-firmware/raw/refs/tags/$fw_tag/$fw_pack
+  tt-flash flash --fw-tar $fw_pack
+  ```
 
 - For more information visit Tenstorrent's [TT-Firmware GitHub Repository](https://github.com/tenstorrent/tt-firmware) and [TT-Flash Github Repository](https://github.com/tenstorrent/tt-flash).
 
