@@ -26,16 +26,19 @@ mem_configs = [
 
 @pytest.mark.parametrize(
     "dim",
-    (3, 2, 1, 0, -1, -2, -3, -4),
+    (3, 2, 1, 0, -1, -2, -3, -4, None),
 )
-@pytest.mark.parametrize("all_dimensions", [False, True])
 @pytest.mark.parametrize("keepdim", [False, True])
 @pytest.mark.parametrize(
     "input_shapes",
     [
+        [[64, 64]],
+        [[32, 32, 2]],
         [[1, 1, 32, 32]],
         [[4, 3, 32, 32]],
         [[2, 2, 32, 32]],
+        [[2, 8, 16, 5, 4]],
+        [[1, 8, 7, 5, 3, 2]],
         # [[6, 4, 32, 32]], #Fails for all_dimensions = True ( expected result is inf but the result generated in nan )
         # [[1, 1, 320, 320]], #Fails for all_dimensions = True ( expected result is inf but the result generated in nan )
         # [[1, 3, 320, 64]], #Fails for all_dimensions = True ( expected result is inf but the result generated in nan )
@@ -48,15 +51,17 @@ mem_configs = [
 class TestProd:
     def test_run_prod_op(
         self,
-        all_dimensions,
         dim,
         keepdim,
         input_shapes,
         dst_mem_config,
         device,
     ):
-        if keepdim and all_dimensions:
-            pytest.skip("keepdim=True with all_dimensions=True is not a valid configuration")
+        if keepdim and (dim is None):
+            pytest.skip("Not a valid configuration to keepdim while reducing all dimensions")
+
+        if dim and (dim >= len(input_shapes[0]) or dim < -len(input_shapes[0])):
+            pytest.skip(f"Dimension {dim} is out of bounds for tensor of rank {len(input_shapes[0])}")
 
         datagen_func = [
             generation_funcs.gen_func_with_cast(partial(generation_funcs.gen_rand, low=1, high=1.5), torch.bfloat16)
@@ -64,7 +69,6 @@ class TestProd:
         test_args = generation_funcs.gen_default_dtype_layout_device(input_shapes)[0]
         test_args.update(
             {
-                "all_dimensions": all_dimensions,
                 "dim": dim,
                 "keepdim": keepdim,
             }

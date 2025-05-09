@@ -54,7 +54,7 @@ def test_prod(shapes, device):
     torch_output = torch.prod(torch_input)
 
     cpu_layout = ttnn.ROW_MAJOR_LAYOUT
-    tt_output_cpu = ttnn.prod(tt_input, all_dimensions=True).cpu().to(cpu_layout).to_torch()
+    tt_output_cpu = ttnn.prod(tt_input).cpu().to(cpu_layout).to_torch()
     N = tt_output_cpu.shape
     torch.set_printoptions(threshold=10000, precision=5, sci_mode=False)
     logger.info("Input shape")

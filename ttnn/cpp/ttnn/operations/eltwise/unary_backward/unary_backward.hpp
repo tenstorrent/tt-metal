@@ -547,8 +547,7 @@ struct ExecuteUnaryBackwardProd {
     static std::vector<Tensor> invoke(
         const Tensor& grad_tensor_arg,
         const Tensor& input_tensor_arg,
-        bool all_dimensions = true,
-        int64_t dim = 0,
+        const std::optional<int64_t> dim = std::nullopt,
         const std::optional<MemoryConfig>& memory_config = std::nullopt);
 };
 
