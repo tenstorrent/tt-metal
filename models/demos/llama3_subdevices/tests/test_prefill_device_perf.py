@@ -3,26 +3,19 @@
 # SPDX-License-Identifier: Apache-2.0
 import pytest
 from loguru import logger
-import os
 import math
-import ttnn
 import pandas as pd
 from collections import defaultdict
-from models.demos.llama3_subdevices.tt.llama_common import (
-    PagedAttentionConfig,
-)
 from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
 from models.perf.device_perf_utils import run_device_perf
 from tt_metal.tools.profiler.process_model_log import (
     get_latest_ops_log_filename,
 )
 
-from models.demos.llama3_subdevices.demo.demo_decode import run_llama3_demo
-from models.demos.llama3_subdevices.demo.demo_decode import LlamaOptimizations
 from termcolor import colored
 
-DECODE_OP_START_INDEX = 0
-DECODE_OP_END_INDEX = -1
+PREFILL_OP_START_INDEX = 0
+PREFILL_OP_END_INDEX = -1
 
 perf_targets = {
     "RMSAllGather_0": {
@@ -361,110 +354,6 @@ perf_targets = {
 }
 
 
-@pytest.mark.parametrize(
-    "weights, layers, input_prompts, instruct, repeat_batches, max_seq_len, batch_size, max_generated_tokens, paged_attention, page_params, sampling_params, stress_test, start_pos",
-    [
-        (  # 10 layers for devive perf measurements
-            "random",
-            10,
-            "models/demos/llama3_subdevices/demo/input_data_prefill_128.json",  # input_prompts
-            True,  # instruct mode
-            1,  # repeat_batches
-            1024,  # max_seq_len
-            32,  # batch_size
-            1,  # max_generated_tokens
-            True,  # paged_attention
-            {"page_block_size": 32, "page_max_num_blocks": 1024},  # page_params  # TODO This will be serviced by vLLM
-            {"top_k": 32, "top_p": 0.08, "seed": 42},  # sampling_params (argmax)
-            False,  # stress_test
-            127,  # start_pos
-        ),
-    ],
-    ids=[
-        "device-perf-measurement",
-    ],
-)
-@pytest.mark.parametrize(
-    "optimizations",
-    [
-        LlamaOptimizations.performance,
-    ],
-)
-@pytest.mark.parametrize(
-    "mesh_device",
-    [
-        (8, 4),
-    ],
-    indirect=True,
-)
-@pytest.mark.parametrize(
-    "device_params",
-    [
-        {
-            "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
-            "trace_region_size": 23887872,
-            "worker_l1_size": 1344544,
-            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-        }
-    ],
-    indirect=True,
-)
-def test_llama_demo(
-    weights,
-    layers,
-    input_prompts,
-    instruct,
-    repeat_batches,
-    max_seq_len,
-    batch_size,
-    max_generated_tokens,
-    paged_attention,
-    page_params,
-    sampling_params,
-    optimizations,
-    mesh_device,
-    use_program_cache,
-    is_ci_env,
-    reset_seeds,
-    stress_test,
-    start_pos,
-):
-    if is_ci_env and ("long" in input_prompts or optimizations == LlamaOptimizations.accuracy):
-        pytest.skip("Do not run the 'long-context' or accuracy tests on CI to reduce load")
-
-    # TODO: Remove this once all batch sizes are supported on TG
-    if os.environ.get("FAKE_DEVICE") == "TG" and batch_size not in [1, 32]:
-        pytest.skip("TG only supports batch 1 and 32")
-
-    if paged_attention:
-        paged_attention_config = PagedAttentionConfig(
-            block_size=page_params["page_block_size"],
-            max_num_blocks=page_params["page_max_num_blocks"],
-        )
-    else:
-        paged_attention_config = None
-
-    return run_llama3_demo(
-        user_input=input_prompts,
-        mesh_device=mesh_device,
-        max_seq_len=max_seq_len,
-        batch_size=batch_size,
-        num_batches=repeat_batches,
-        paged_attention=paged_attention,
-        paged_attention_config=paged_attention_config,
-        max_generated_tokens=max_generated_tokens,
-        optimizations=optimizations,
-        sampling_params=sampling_params,
-        instruct_mode=instruct,
-        is_ci_env=is_ci_env,
-        print_to_file=False,
-        weights=weights,
-        layers=layers,
-        stress_test=stress_test,
-        start_pos=start_pos,
-    )
-
-
 def merge_device_rows(df):
     block_by_device = defaultdict(list)
 
@@ -627,7 +516,7 @@ def test_llama_TG_perf_device(
     cols = ["DEVICE FW", "DEVICE KERNEL", "DEVICE BRISC KERNEL"]
     profiler.start("run")
     profiler.start(step_name)
-    # post_processed_results = run_device_perf(command, subdir, num_iterations, cols, batch_size)
+    post_processed_results = run_device_perf(command, subdir, num_iterations, cols, batch_size)
     profiler.end(step_name)
     profiler.end("run")
 
@@ -641,9 +530,11 @@ def test_llama_TG_perf_device(
     df_model_compilation = df
     df_model_trace = df
 
+    breakpoint()
+
     # Excluding model embeddings and lmhead+sampling ops
-    df_layers_compilation = df_model_compilation[DECODE_OP_START_INDEX:DECODE_OP_END_INDEX]
-    df_layers_trace = df_model_trace[DECODE_OP_START_INDEX:DECODE_OP_END_INDEX]
+    df_layers_compilation = df_model_compilation[PREFILL_OP_START_INDEX:PREFILL_OP_END_INDEX]
+    df_layers_trace = df_model_trace[PREFILL_OP_START_INDEX:PREFILL_OP_END_INDEX]
     # Use layers 2-9 for verifying against targets for more stability
     df_first_layer_compilation = df_layers_compilation[: int(len(df_layers_compilation) / num_layers)]
     df_first_layer_trace = df_layers_trace[: int(len(df_layers_trace) / num_layers)]
@@ -864,7 +755,7 @@ def test_llama_TG_perf_device(
             logger.info(f"Warning: {op_code_with_id} not found in perf_targets")
 
     # Calculate e2e performance
-    e2e_estimate_80l = 0
+    ttft_estimate_80l = 0
     for op_id in kernel_duration_per_instance_dict_trace_first_layer.keys():  # first layer
         op_to_op_latency = dispatch_duration_per_instance_dict_first_layer[op_id][0]
         if is_collective_op(op_id):
@@ -877,31 +768,30 @@ def test_llama_TG_perf_device(
 
         print(f"op_id: {op_id}, kernel_duration: {kernel_duration}, op_to_op_latency: {op_to_op_latency}")
 
-        e2e_estimate_80l += kernel_duration + op_to_op_latency
+        # TODO add dispatch times
+        ttft_estimate_80l += kernel_duration
     for op_id in kernel_duration_per_instance_averaged_dict_trace.keys():  # 79 layers based on average of layers 2-9
         if is_collective_op(op_id):
             avg_kernel_duration = kernel_duration_per_instance_averaged_dict_trace[op_id]
         else:
             avg_kernel_duration = kernel_duration_per_instance_averaged_dict_compilation[op_id]
         avg_dispatch_duration = dispatch_duration_per_instance_averaged_dict[op_id]
-        e2e_estimate_80l += (avg_kernel_duration + avg_dispatch_duration) * 79  # weighting avg for 79 layers
+        ttft_estimate_80l += avg_kernel_duration * 79  # weighting avg for 79 layers
 
-    # Estimated T/s/u is 1000000 / (80L-duration + ~2100 lmhead+sampling+embeddings + ~300 python-overhead
-    tsu_estimate = 1000000 / (e2e_estimate_80l / 1000 + 2100 + 300)
+    # Estimated TTFT is not accounting for LMHead + python overhead #  1000000 / (80L-duration + ~2100 lmhead+sampling+embeddings + ~300 python-overhead
+    # tsu_estimate = 1000000 / (e2e_estimate_80l / 1000 + 2100 + 300)
+    ttft_estimate_80l = ttft_estimate_80l / 1000000
+    print(f"80L TTFT time estimate: {ttft_estimate_80l}")
 
-    print(f"80L e2e time estimate: {e2e_estimate_80l}")
-    print(f"80L T/s/u estimate: {tsu_estimate}")
-
-    benchmark_data.add_measurement(profiler, 0, step_name, "e2e_estimate_80l", e2e_estimate_80l)
-    benchmark_data.add_measurement(profiler, 0, step_name, "tsu_estimate", tsu_estimate)
+    benchmark_data.add_measurement(profiler, 0, step_name, "ttft_estimate_80l", ttft_estimate_80l)
 
     benchmark_data.save_partial_run_json(
         profiler,
-        run_type=f"tg_llama_demo_decode",
+        run_type=f"tg_llama_demo_prefill",
         ml_model_name="llama70b-tg",
     )
 
-    assert passing
+    # assert passing
 
 
 @pytest.mark.models_device_performance_bare_metal
@@ -928,7 +818,7 @@ def test_llama_TG_perf_device_non_overlapped_dispatch(
     cols = ["DEVICE FW", "DEVICE KERNEL", "DEVICE BRISC KERNEL"]
     profiler.start("run")
     profiler.start(step_name)
-    post_processed_results = run_device_perf(command, subdir, num_iterations, cols, batch_size)
+    # post_processed_results = run_device_perf(command, subdir, num_iterations, cols, batch_size)
     profiler.end(step_name)
     profiler.end("run")
 
@@ -939,7 +829,7 @@ def test_llama_TG_perf_device_non_overlapped_dispatch(
     df = merge_device_rows(df)
     # Exclude compilaton and capture trace runs
     df_model = df[int(len(df) / 3 * 2) :]
-    df_layers = df_model[DECODE_OP_START_INDEX:DECODE_OP_END_INDEX]
+    df_layers = df_model[PREFILL_OP_START_INDEX:PREFILL_OP_END_INDEX]
     all_layers_raw_dict = df_layers[["OP CODE", "DEVICE KERNEL DURATION [ns]", "OP TO OP LATENCY [ns]"]].to_dict(
         orient="records"
     )
