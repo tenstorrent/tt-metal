@@ -6,6 +6,8 @@
 
 #include <optional>
 
+#include "core/distributed/mpi_context.hpp"
+
 namespace ttml::autograd {
 
 std::mt19937& AutoContext::get_generator() {
@@ -78,4 +80,18 @@ void AutoContext::set_mesh_shape(tt::tt_metal::distributed::MeshShape shape) {
 tt::tt_metal::distributed::MeshShape AutoContext::get_mesh_shape() const {
     return m_mesh_shape;
 }
+core::distributed::MPIContext& AutoContext::get_mpi_context() const {
+    if (!m_mpi_context) {
+        throw std::runtime_error("MPIContext is not initialized.");
+    }
+    return *m_mpi_context;
+}
+
+void AutoContext::init_mpi_context(int argc, char** argv) {
+    if (m_mpi_context) {
+        throw std::runtime_error("MPIContext is already initialized.");
+    }
+    m_mpi_context = std::make_unique<core::distributed::MPIContext>(argc, argv);
+}
+
 }  // namespace ttml::autograd

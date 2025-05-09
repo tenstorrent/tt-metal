@@ -29,6 +29,7 @@
 #include <ttnn/operations/core/to_dtype/to_dtype_op.hpp>                                           // NOLINT
 #include <ttnn/operations/creation.hpp>                                                            // NOLINT
 #include <ttnn/operations/data_movement/concat/concat.hpp>                                         // NOLINT
+#include <ttnn/operations/data_movement/copy/copy.hpp>                                             // NOLINT
 #include <ttnn/operations/data_movement/pad/pad.hpp>                                               // NOLINT
 #include <ttnn/operations/data_movement/permute/permute.hpp>                                       // NOLINT
 #include <ttnn/operations/data_movement/repeat/repeat.hpp>                                         // NOLINT
