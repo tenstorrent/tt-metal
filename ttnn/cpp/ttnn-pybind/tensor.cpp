@@ -9,7 +9,7 @@
 #include <utility>
 
 #include "tensor.hpp"
-#include "cpp/ttnn-pybind/json_class.hpp"
+#include "ttnn-pybind/json_class.hpp"
 #include "export_enum.hpp"
 
 #include "ttnn/tensor/host_buffer/host_buffer.hpp"
