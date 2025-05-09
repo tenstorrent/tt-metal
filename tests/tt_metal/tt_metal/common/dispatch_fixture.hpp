@@ -76,9 +76,8 @@ protected:
         this->DetectDispatchMode();
         // Set up all available devices
         this->arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
-        auto num_devices = tt::tt_metal::GetNumAvailableDevices();
         std::vector<chip_id_t> ids;
-        for (unsigned int id = 0; id < num_devices; id++) {
+        for (chip_id_t id : tt::tt_metal::MetalContext::instance().get_cluster().user_exposed_chip_ids()) {
             if (SkipTest(id)) {
                 continue;
             }
