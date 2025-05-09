@@ -105,6 +105,5 @@ jobs:
           run_args: |
             for i in {1..50}; do
               echo "Running test iteration $i of 50"
-              tt-smi-metal -r0
               pytest 'tests/tt_eager/python_api_testing/unit_testing/misc/test_rmsnorm.py::test_rmsnorm_test[RMSN_GB-BFLOAT16-in0_DRAM-out_DRAM]'
             done
