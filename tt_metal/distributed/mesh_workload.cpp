@@ -27,6 +27,7 @@
 #include "mesh_device.hpp"
 #include "program/program_device_map.hpp"
 #include "tt-metalium/program.hpp"
+#include "tt_metal/impl/program/program_impl.hpp"
 #include "semaphore.hpp"
 #include "sub_device_types.hpp"
 #include "tt_metal/impl/dispatch/device_command.hpp"
@@ -97,7 +98,7 @@ void MeshWorkload::compile(MeshDevice* mesh_device) {
         }
         mesh_device->wait_for_thread_pool();
     }
-    program_dispatch::finalize_program_offsets(*this, mesh_device);
+    finalize_offsets(mesh_device);
 }
 
 void MeshWorkload::load_binaries(MeshCommandQueue& mesh_cq) {
@@ -357,6 +358,37 @@ uint32_t MeshWorkload::get_cb_size(
         program_idx++;
     }
     return cb_size;
+}
+
+void MeshWorkload::finalize_offsets(MeshDevice* mesh_device) {
+    if (is_finalized()) {
+        return;
+    }
+
+    tt::tt_metal::detail::KernelsGetter kernels_getter =
+        [this](uint32_t index) -> std::unordered_map<KernelHandle, std::shared_ptr<Kernel>>& {
+        return this->get_kernels(index);
+    };
+
+    tt::tt_metal::detail::KernelGroupsGetter kernel_groups_getter =
+        [this](uint32_t index) -> std::vector<std::shared_ptr<KernelGroup>>& { return this->get_kernel_groups(index); };
+
+    tt::tt_metal::detail::SemaphoresGetter semaphores_getter = [this]() -> const std::vector<Semaphore>& {
+        return this->semaphores();
+    };
+
+    // Create a span with all programs
+    std::vector<tt::tt_metal::detail::ProgramImpl*> program_impls;
+    program_impls.reserve(programs_.size());
+    for (auto& [_, program] : programs_) {
+        program_impls.push_back(&program.impl());
+    }
+    tt::stl::Span<tt::tt_metal::detail::ProgramImpl*> programs(program_impls.data(), program_impls.size());
+
+    tt::tt_metal::detail::ProgramImpl::finalize_program_offsets(
+        mesh_device, kernels_getter, kernel_groups_getter, semaphores_getter, programs);
+
+    set_finalized();
 }
 
 }  // namespace tt::tt_metal::distributed
