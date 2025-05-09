@@ -225,6 +225,8 @@ public:
     //--- Error handling -----------------------------------------------------
     virtual void abort(int error_code) const = 0;
 
+    virtual void revoke_and_shrink() = 0;
+
     virtual ~DistributedContext() = default;
 };
 }  // namespace tt::tt_metal::distributed::multihost

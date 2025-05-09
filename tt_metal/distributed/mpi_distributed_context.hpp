@@ -99,6 +99,8 @@ public:
     [[nodiscard]] std::shared_ptr<DistributedContext> split(Color color, Key key) const override;
     [[nodiscard]] std::shared_ptr<DistributedContext> create_sub_context(tt::stl::Span<Rank> ranks) const override;
     void abort(int error_code) const override;
+    void revoke_and_shrink() override;
+
     explicit MPIContext(MPI_Comm comm);
     const MPI_Comm& comm() const { return comm_; }
 

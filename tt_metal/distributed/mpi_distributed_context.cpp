@@ -157,8 +157,8 @@ std::shared_ptr<DistributedContext> MPIContext::create(int argc, char** argv)
     return std::make_shared<MPIContext>(MPI_COMM_WORLD);
 }
 
-MPIContext::MPIContext(MPI_Comm comm) : comm_(comm)
-{
+MPIContext::MPIContext(MPI_Comm comm) : comm_(comm) {
+    MPI_Comm_set_errhandler(comm_, MPI_ERRORS_RETURN);  // don't abort on error
     MPI_CHECK(MPI_Comm_rank(comm_, &rank_));
     MPI_CHECK(MPI_Comm_size(comm_, &size_));
 }
@@ -415,11 +415,44 @@ MPIContext::create_sub_context(tt::stl::Span<Rank> ranks) const
     return std::make_shared<MPIContext>(sub_comm);
 }
 
-void MPIContext::abort(int error_code) const { MPI_CHECK(MPI_Abort(comm_, error_code)); }
+void MPIContext::abort(int error_code) const { MPI_Abort(comm_, error_code); }
+
 /* -------------------- factory for generic interface --------------------- */
-std::shared_ptr<DistributedContext> DistributedContext::create(int argc, char** argv)
-{
+std::shared_ptr<DistributedContext> DistributedContext::create(int argc, char** argv) {
     return MPIContext::create(argc, argv);
+}
+
+void MPIContext::revoke_and_shrink() {
+    // need to understand that MPI_WORLD_COMM is not a valid communicator anymore after this call
+    // and that the context is not valid anymore
+    /**
+        int rc = MPIX_Comm_revoke(comm_);
+        if (rc != MPI_SUCCESS && rc != MPI_ERR_REVOKED) {  // another rank may have revoked first
+            abort(rc);
+        }
+
+
+        MPI_Comm new_comm = MPI_COMM_NULL;
+        MPI_CHECK(MPIX_Comm_shrink(comm_, &new_comm));
+
+        MPI_Comm_set_errhandler(new_comm, MPI_ERRORS_RETURN);
+
+        // overall probably I don't neet MPI_CHECK, we are recovering here. If we cannot recover, we should abort
+        // and not throw an exception.
+        int new_rank = 0, new_size = 0;
+        MPI_Comm_rank(new_comm, &new_rank);
+        MPI_Comm_size(new_comm, &new_size);
+
+        // Free the old communicator *after* shrink completes
+        MPI_Comm old_comm = this->comm_;
+        if (old_comm != MPI_COMM_NULL && old_comm != new_comm) {
+            MPI_Comm_free(&old_comm);
+        }
+
+        this->comm_ = new_comm;
+        this->rank_ = new_rank;
+        this->size_ = new_size;
+        */
 }
 
 MPIContext::~MPIContext() {

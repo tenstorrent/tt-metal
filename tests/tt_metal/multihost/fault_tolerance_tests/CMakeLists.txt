@@ -3,7 +3,12 @@ add_library(fault_tolerance OBJECT)
 add_library(TT::Metalium::Test::Distributed::FaultTolerance ALIAS fault_tolerance)
 TT_ENABLE_UNITY_BUILD(fault_tolerance)
 
-target_sources(fault_tolerance PRIVATE main.cpp)
+target_sources(
+    fault_tolerance
+    PRIVATE
+        ulfm_tests.cpp
+        main.cpp
+)
 target_include_directories(
     fault_tolerance
     PRIVATE
