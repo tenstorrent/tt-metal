@@ -45,7 +45,8 @@ void bind_reduction_operation(py::module& module, const reduction_operation_t& o
             py::kw_only(),
             py::arg("memory_config") = std::nullopt,
             py::arg("compute_kernel_config") = std::nullopt,
-            py::arg("scalar") = 1.0f});
+            py::arg("scalar") = 1.0f,
+            py::arg("correction") = true});
 }
 
 }  // namespace ttnn::operations::reduction::detail

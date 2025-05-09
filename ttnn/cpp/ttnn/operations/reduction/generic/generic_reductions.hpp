@@ -30,7 +30,8 @@ struct Reduce {
         const bool keepdim = true,
         const std::optional<MemoryConfig>& memory_config_arg = std::nullopt,
         const std::optional<DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt,
-        float scalar = 1.0f);
+        float scalar = 1.0f,
+        bool correction = true);
 };
 
 // Entry point for pool op, which uses non-standard tensors that cannot be padded.
