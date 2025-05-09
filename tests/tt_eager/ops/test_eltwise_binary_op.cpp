@@ -38,7 +38,7 @@ Tensor host_function(const Tensor& input_tensor_a, const Tensor& input_tensor_b)
         output_buffer[index] = bfloat16(value);
     }
     return Tensor(
-        tt::tt_metal::HostStorage{tt::tt_metal::host_buffer::create(std::move(output_buffer))},
+        tt::tt_metal::HostBuffer(std::move(output_buffer)),
         input_tensor_a.get_logical_shape(),
         input_tensor_a.get_dtype(),
         input_tensor_a.get_layout());
