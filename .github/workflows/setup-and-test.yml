@@ -11,16 +11,23 @@ on:
         description: "The runner to use for the job"
         required: true
         type: string
+      test_group:
+        description: "Array of test groups. Pass the array as a JSON string (e.g., '[1, 2, 3, 4, 5]')"
+        required: true
+        type: string
 
 jobs:
   setup-and-test:
-    name: "🦄 Run tests"
     runs-on: ${{ inputs.runs_on }}
     timeout-minutes: 80
+    strategy:
+      fail-fast: false
+      matrix:
+        test_group: ${{ fromJSON(inputs.test_group) }}
     container:
       image: ${{ inputs.docker_image }}
       options: "--rm --device /dev/tenstorrent"
-
+    name: "🦄 Run tests (group ${{ matrix.test_group }}${{ fromJSON(inputs.test_group).length }})"
     steps:
       # Step 1: Checkout the repository
       - name: Checkout code
@@ -37,9 +44,14 @@ jobs:
       # Step 3: Run the tests
       - name: Run tests
         shell: bash
+        env:
+          TEST_GROUPS: ${{ inputs.test_group }}
         run: |
+          # Parse the JSON string into an array to get its length
+          SPLITS=$(echo "$TEST_GROUPS" | jq '. | length')
           cd tests/python_tests/
-          pytest --override-ini="addopts=-v" --timeout=60 .
+          pytest --splits $SPLITS --group ${{ matrix.test_group }} \
+                 --override-ini="addopts=-v" --timeout=60 .
 
       # Step 4: Upload test log as an artifact
       - name: Upload logs if tests fail
@@ -47,4 +59,4 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: test-log
-          path: tests/python_tests/pytest_errors.log
+          path: tests/python_tests/pytest_errors_${{ matrix.test_group }}.log

@@ -3,11 +3,13 @@
 
 import logging
 import os
+import pytest
 import subprocess
 
-import pytest
 from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
 from helpers.log_utils import _format_log
+
+from ttexalens.tt_exalens_lib import arc_msg
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -91,6 +93,20 @@ def pytest_runtest_protocol(item, nextitem):
     return None
 
 
+def pytest_sessionstart(session):
+    # Send ARC message for GO BUSY signal. This should increase device clock speed.
+    ARC_COMMON_PREFIX = 0xAA00
+    GO_BUSY_MESSAGE_CODE = 0x52
+    arc_msg(
+        device_id=0,
+        msg_code=ARC_COMMON_PREFIX | GO_BUSY_MESSAGE_CODE,
+        wait_for_done=True,
+        arg0=0,
+        arg1=0,
+        timeout=10,
+    )
+
+
 def pytest_sessionfinish(session, exitstatus):
     BOLD = "\033[1m"
     YELLOW = "\033[93m"
@@ -99,6 +115,18 @@ def pytest_sessionfinish(session, exitstatus):
         print(f"\n\n{BOLD}{YELLOW} Cases Where Dest Accumulation Turned On:{RESET}")
         for input_fmt, output_fmt in _format_log:
             print(f"{BOLD}{YELLOW}  {input_fmt} -> {output_fmt}{RESET}")
+
+    # Send ARC message for GO IDLE signal. This should decrease device clock speed.
+    ARC_COMMON_PREFIX = 0xAA00
+    GO_IDLE_MESSAGE_CODE = 0x54
+    arc_msg(
+        device_id=0,
+        msg_code=ARC_COMMON_PREFIX | GO_IDLE_MESSAGE_CODE,
+        wait_for_done=True,
+        arg0=0,
+        arg1=0,
+        timeout=10,
+    )
 
 
 # Skip decorators for specific architectures
