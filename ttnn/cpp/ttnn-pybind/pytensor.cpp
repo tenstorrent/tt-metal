@@ -1538,7 +1538,6 @@ void pytensor_module(py::module& m_tensor) {
                 is_sharded = tt_tensor.is_sharded()
 
         )doc")
-        .def("is_contiguous", [](const Tensor& self) -> bool { return self.is_contiguous(); })
         .def(
             "is_sharded", [](const Tensor& self) { return self.is_sharded(); }, R"doc(
             Check if TT Tensor is sharded.
