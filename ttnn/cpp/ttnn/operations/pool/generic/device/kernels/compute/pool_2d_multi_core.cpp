@@ -97,6 +97,7 @@ void MAIN {
 
     uint32_t out_x = get_arg_val<uint32_t>(0);
     uint32_t out_y = get_arg_val<uint32_t>(1);
+    uint32_t scalar_cnt = get_arg_val<uint32_t>(2);
     bool first = true;
     bool last_overlaps_padding = false;
     uint32_t last_x = 1000;
@@ -107,9 +108,9 @@ void MAIN {
     pack_untilize_dst_init_short<max_tiles_per_iter>(out_cb_id, num_out_rows, num_faces_in_tile);
 
     cb_wait_front(in_scalar_cb_id, 1);
-
+    scalar_cnt--;
     for (uint32_t i = 0; i < nsticks_per_core; ++i) {
-        // DPRINT << "i: " << i << " out_x: " << out_x << " out_y: " << out_y << ENDL();
+        DPRINT << " out_x: " << out_x << " out_y: " << out_y << ENDL();
         //  check if we reached padding
         if (REDUCE_OP == PoolType::SUM) {
             bool on_top_edge = (out_y * stride_h - pad_h) < 0;
@@ -120,11 +121,12 @@ void MAIN {
             bool overlaps_padding = on_top_edge || on_left_edge || on_bottom_edge || on_right_edge;
 
             // Use a combination of current tile's (x, y) to track where the kernel layout changes
-            bool is_new_config =
-                !first && (overlaps_padding != last_overlaps_padding || (out_y != last_y || out_x != last_x));
+            bool is_new_config = !first && scalar_cnt > 0 &&
+                                 (overlaps_padding != last_overlaps_padding || (out_y != last_y || out_x != last_x));
 
             first = false;
             if (is_new_config) {
+                scalar_cnt--;
                 DPRINT << "should wait for new scalar" << ENDL();
                 cb_pop_front(in_scalar_cb_id, 1);
                 cb_wait_front(in_scalar_cb_id, 1);
@@ -145,9 +147,9 @@ void MAIN {
         reduce_h_fused<partial_iter_output_tiles, is_partial_tile, split_reader, window_size_hw>(
             in_cb_id_0, in_cb_id_1, in_scalar_cb_id, i, out_cb_id);
         if (REDUCE_OP == PoolType::SUM) {
-            out_y = out_y + 1 % out_w;
-            if (out_y == 0) {
-                out_x = out_x + 1 % out_h;
+            out_x = (out_x + 1) % out_h;
+            if (out_x == 0) {
+                out_y = (out_y + 1) % out_w;
             }
         }
     }

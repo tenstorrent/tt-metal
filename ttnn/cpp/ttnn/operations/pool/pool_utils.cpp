@@ -46,7 +46,7 @@ std::vector<uint32_t> get_bf16_pool_scalar(
             if (divisor_override.has_value()) {
                 value = 1. / (float)divisor_override.value();
                 scalars.push_back(bfloat16(value).to_packed());
-            } else if (ceil_mode || !count_include_pad) {
+            } else if ((ceil_mode && ceil_w > 0) || (!count_include_pad && (pad_h > 0 || pad_w > 0))) {
                 for (uint32_t i = 0; i < out_nhw_per_core.value(); i++) {
                     // value = 1. / (float)(kernel_size_h * kernel_size_w);
                     int hstart = out_stick_y_start * stride_h - pad_h;
@@ -92,9 +92,9 @@ std::vector<uint32_t> get_bf16_pool_scalar(
                         last_y = out_stick_y_start;
                         last_x = out_stick_x_start;
                     }
-                    out_stick_y_start = (out_stick_y_start + 1) % out_h;
-                    if (out_stick_y_start == 0) {
-                        out_stick_x_start = (out_stick_x_start + 1) % out_w;
+                    out_stick_x_start = (out_stick_x_start + 1) % out_h;
+                    if (out_stick_x_start == 0) {
+                        out_stick_y_start = (out_stick_y_start + 1) % out_w;
                     }
                 }
 

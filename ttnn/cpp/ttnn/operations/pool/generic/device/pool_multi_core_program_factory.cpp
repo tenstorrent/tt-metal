@@ -427,22 +427,26 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
                 out_nhw_per_core,
                 divisor_override);
 
-            std::vector<uint32_t> runtime_args = {scalar_values.size()};
-            for (int j = 0; j < scalar_values.size(); j++) {
+            uint32_t scalar_cnt = scalar_values.size();
+            std::vector<uint32_t> runtime_args = {scalar_cnt};
+            for (int j = 0; j < scalar_cnt; j++) {
                 runtime_args.push_back(scalar_values[j] << 16);
             }
-            tt::tt_metal::SetRuntimeArgs(program, compute_kernel, *iterator, {x, y});
+            tt::tt_metal::SetRuntimeArgs(program, compute_kernel, *iterator, {x, y, scalar_cnt});
             tt::tt_metal::SetRuntimeArgs(program, reader0_kernel, *iterator, runtime_args);
             tt::tt_metal::SetRuntimeArgs(program, reader1_kernel, *iterator, runtime_args);
             // i++;
             channel++;
             if (channel % num_shards_c == 0) {
                 channel = 0;
-                x++;
-                if (x % out_w == 0) {
-                    x = 0;
-                    y++;
-                    if (y % out_h == 0) {
+                uint32_t delta_x = x + out_nhw_per_core;
+                x = delta_x % out_h;
+                if (delta_x / out_h != 0) {
+                    uint32_t delta_y = y + delta_x / out_h;
+                    y = delta_y % out_w;
+                    if (delta_y / out_w != 0) {
+                        channel += 1;
+                        x = 0;
                         y = 0;
                     }
                 }
