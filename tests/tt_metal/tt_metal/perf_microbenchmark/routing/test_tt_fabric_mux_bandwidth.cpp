@@ -105,7 +105,7 @@ WorkerMemoryMap create_worker_memory_map(const uint32_t base_l1_address) {
 void create_kernel(
     tt::tt_metal::IDevice* device,
     tt::tt_metal::Program& program_handle,
-    const std::string kernel_src,
+    const std::string& kernel_src,
     const CoreCoord& logical_core,
     const std::vector<uint32_t>& ct_args,
     const std::vector<uint32_t>& rt_args,
