@@ -1586,19 +1586,29 @@ void Matmul::validate(
         for (uint32_t i = 1; i < input_tensors.size(); ++i) {
             TT_FATAL(
                 input_tensor_b.get_logical_shape() == input_tensors[i].get_logical_shape(),
-                "for multi-tensor matmul, all weight tensors must have the same logical_shape");
+                "for multi-tensor matmul, all weight tensors must have the same logical_shape, {} is not equal to {}",
+                input_tensor_b.get_logical_shape(),
+                input_tensors[i].get_logical_shape());
             TT_FATAL(
                 input_tensor_b.get_padded_shape() == input_tensors[i].get_padded_shape(),
-                "for multi-tensor matmul, all weight tensors must have the same padded_shape");
+                "for multi-tensor matmul, all weight tensors must have the same padded_shape {} is not equal to {}",
+                input_tensor_b.get_padded_shape(),
+                input_tensors[i].get_padded_shape());
             TT_FATAL(
                 input_tensor_b.get_tensor_spec() == input_tensors[i].get_tensor_spec(),
-                "for multi-tensor matmul, all weight tensors must have the same tensor_spec");
+                "for multi-tensor matmul, all weight tensors must have the same tensor_spec {} is not equal to {}",
+                input_tensor_b.get_tensor_spec(),
+                input_tensors[i].get_tensor_spec());
             TT_FATAL(
                 input_tensor_b.get_layout() == input_tensors[i].get_layout(),
-                "for multi-tensor matmul, all weight tensors must have the same layout");
+                "for multi-tensor matmul, all weight tensors must have the same layout {} is not equal to {}",
+                input_tensor_b.get_layout(),
+                input_tensors[i].get_layout());
             TT_FATAL(
                 input_tensor_b.get_dtype() == input_tensors[i].get_dtype(),
-                "for multi-tensor matmul, all weight tensors must have the same _dtype");
+                "for multi-tensor matmul, all weight tensors must have the same _dtype {} is not equal to {}",
+                input_tensor_b.get_dtype(),
+                input_tensors[i].get_dtype());
         }
     } else {
         TT_FATAL(input_tensors.size() == 2, "Error");

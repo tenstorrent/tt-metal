@@ -52,9 +52,9 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast(
 
 tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_optimized(
     const Tensor& input_tensor_a,
-    const std::vector<Tensor>& input_tensor_b,
+    const std::vector<Tensor>& input_tensors_b,
     const std::optional<const Tensor>& bias,
-    const std::vector<Tensor>& output_tensor,
+    const std::vector<Tensor>& output_tensors,
     bool bcast_batch,
     CoreCoord compute_with_storage_grid_size,
     DeviceComputeKernelConfig compute_kernel_config,
@@ -230,9 +230,9 @@ Matmul create_matmul_struct(
 tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_optimized_helper(
     tt::tt_metal::Program& program,
     const Tensor& input_tensor_a,
-    const std::vector<Tensor>& input_tensor_b,
+    const std::vector<Tensor>& input_tensors_b,
     const std::optional<const Tensor>& bias,
-    const std::vector<Tensor>& output_tensor,
+    const std::vector<Tensor>& output_tensors,
     bool bcast_batch,
     DeviceComputeKernelConfig compute_kernel_config,
     const MatmulProgramConfig& program_config,

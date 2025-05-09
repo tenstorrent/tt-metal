@@ -1942,6 +1942,11 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_gather_in0(
         for (uint32_t i = 0; i < out_buffers.size(); ++i) {
             const auto& out_buffer = out_buffers[i];
             output_cb_index += i * 2;  // 5, 7, 9...
+            TT_FATAL(
+                output_cb_index <= tt::CBIndex::c_31,
+                "Output circular buffer index {} exceeds maximum value {}",
+                output_cb_index,
+                tt::CBIndex::c_31);
             // output
             std::map<uint8_t, tt::DataFormat> output_cb_data_format_spec{
                 {output_cb_index, output_data_format},
@@ -1960,6 +1965,16 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_gather_in0(
             const auto& out_buffer = out_buffers[i];
             output_cb_index += i * 2;   // 5, 7, 9...
             interm0_cb_index += i * 2;  // 6, 8, 10...
+            TT_FATAL(
+                output_cb_index <= tt::CBIndex::c_31,
+                "Output circular buffer index {} exceeds maximum value {}",
+                output_cb_index,
+                tt::CBIndex::c_31);
+            TT_FATAL(
+                interm0_cb_index <= tt::CBIndex::c_31,
+                "Interm circular buffer index {} exceeds maximum value {}",
+                interm0_cb_index,
+                tt::CBIndex::c_31);
             // share buffer
             std::map<uint8_t, tt::DataFormat> output_cb_data_format_spec{
                 {output_cb_index, output_data_format}, {interm0_cb_index, interm0_data_format}};
@@ -2579,9 +2594,9 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_o
 
 tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_optimized(
     const Tensor& a,
-    const std::vector<Tensor>& b,
+    const std::vector<Tensor>& b_tensors,
     const std::optional<const Tensor>& bias,
-    const std::vector<Tensor>& output_tensor,
+    const std::vector<Tensor>& output_tensors,
     bool broadcast_batch,
     CoreCoord compute_with_storage_grid_size,
     DeviceComputeKernelConfig compute_kernel_config,
@@ -2607,9 +2622,9 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_o
     return matmul_multi_core_reuse_mcast_1d_optimized_(
         program,
         a,
-        b,
+        b_tensors,
         bias,
-        output_tensor,
+        output_tensors,
         broadcast_batch,
         compute_with_storage_grid_size,
         compute_kernel_config,
@@ -2635,9 +2650,9 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_o
 tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_optimized_helper(
     tt::tt_metal::Program& program,
     const Tensor& a,
-    const std::vector<Tensor>& b,
+    const std::vector<Tensor>& b_tensors,
     const std::optional<const Tensor>& bias,
-    const std::vector<Tensor>& output_tensor,
+    const std::vector<Tensor>& output_tensors,
     bool broadcast_batch,
     DeviceComputeKernelConfig compute_kernel_config,
     const MatmulProgramConfig& program_config,
@@ -2651,9 +2666,9 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_o
     return matmul_multi_core_reuse_mcast_1d_optimized_(
         program,
         a,
-        b,
+        b_tensors,
         bias,
-        output_tensor,
+        output_tensors,
         broadcast_batch,
         config.compute_with_storage_grid_size,
         compute_kernel_config,
