@@ -125,7 +125,7 @@ jobs:
         run: |
           echo "Waiting for server..."
 
-          timeout_seconds=$(( ${{ matrix.test-group.timeout }} * 60 ))
+          timeout_seconds=$(( ${{ matrix.test-group.server_timeout }} * 60 ))
           elapsed=0
           interval=10
 
@@ -143,7 +143,7 @@ jobs:
           exit 1
 
       - name: 📐 Run benchmark
-        timeout-minutes: ${{ matrix.test-group.timeout }}
+        timeout-minutes: ${{ matrix.test-group.benchmark_timeout }}
         run: |
           python3 ./vllm/benchmarks/benchmark_serving.py \
             --dummy-argument \
