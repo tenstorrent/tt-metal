@@ -191,8 +191,11 @@ public:
     virtual std::size_t num_program_cache_entries() = 0;
 
     virtual HalProgrammableCoreType get_programmable_core_type(CoreCoord virtual_core) const = 0;
+    virtual HalMemType get_mem_type_of_core(CoreCoord virtual_core) const = 0;
 
+    // Returns the starting address and memory region size on the device for a given virtual core and L1 memory type
     uint64_t get_dev_addr(CoreCoord virtual_core, HalL1MemAddrType addr_type) const;
+    uint64_t get_dev_size(CoreCoord virtual_core, HalL1MemAddrType addr_type) const;
 
     virtual uint8_t num_noc_mcast_txns(SubDeviceId sub_device_id) const = 0;
     virtual uint8_t num_noc_unicast_txns(SubDeviceId sub_device_id) const = 0;

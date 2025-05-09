@@ -87,6 +87,10 @@ uint64_t IDevice::get_dev_addr(CoreCoord virtual_core, HalL1MemAddrType addr_typ
     return MetalContext::instance().hal().get_dev_addr(this->get_programmable_core_type(virtual_core), addr_type);
 }
 
+uint64_t IDevice::get_dev_size(CoreCoord virtual_core, HalL1MemAddrType addr_type) const {
+    return MetalContext::instance().hal().get_dev_size(this->get_programmable_core_type(virtual_core), addr_type);
+}
+
 void IDevice::set_program_cache_misses_allowed(bool allowed) {
     this->get_program_cache().set_cache_misses_allowed(allowed);
 }
@@ -1826,6 +1830,15 @@ HalProgrammableCoreType Device::get_programmable_core_type(CoreCoord virtual_cor
     }
 
     return HalProgrammableCoreType::IDLE_ETH;
+}
+
+HalMemType Device::get_mem_type_of_core(CoreCoord virtual_core) const {
+    if (!tt::tt_metal::MetalContext::instance().get_cluster().is_ethernet_core(virtual_core, this->id_) &&
+        !tt::tt_metal::MetalContext::instance().get_cluster().is_worker_core(virtual_core, this->id_)) {
+        return HalMemType::DRAM;
+    } else {
+        return HalMemType::L1;
+    }
 }
 
 std::shared_ptr<distributed::MeshDevice> Device::get_mesh_device() { return mesh_device.lock(); }

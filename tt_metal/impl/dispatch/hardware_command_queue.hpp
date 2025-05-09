@@ -97,7 +97,7 @@ public:
         bool blocking,
         tt::stl::Span<const SubDeviceId> sub_device_ids = {}) override;
 
-    void enqueue_read_from_core_l1(
+    void enqueue_read_from_core(
         const CoreCoord& virtual_core,
         void* dst,
         DeviceAddr address,
@@ -105,7 +105,7 @@ public:
         bool blocking,
         tt::stl::Span<const SubDeviceId> sub_device_ids = {});
 
-    void enqueue_write_to_core_l1(
+    void enqueue_write_to_core(
         const CoreCoord& virtual_core,
         const void* src,
         DeviceAddr address,
