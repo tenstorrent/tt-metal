@@ -2204,6 +2204,7 @@ def test_conv_core_nondivis(
     ],
 )
 @pytest.mark.parametrize("auto_shard", [True, False], ids=["auto_shard", "no_auto_shard"])
+@pytest.mark.parametrize("split_reader", [True, False], ids=["split_reader_on", "split_reader_on_off"])
 def test_conv_dilation(
     device,
     torch_tensor_map,
@@ -2224,6 +2225,7 @@ def test_conv_dilation(
     output_layout,
     dilation_hw,
     auto_shard,
+    split_reader,
 ):
     config_override = {"act_block_w_div": act_block_w_div}
     run_conv(
@@ -2249,6 +2251,7 @@ def test_conv_dilation(
         dilation_w=dilation_hw[1],
         has_bias=False,
         auto_shard=auto_shard,
+        enable_split_reader=split_reader,
     )
 
 

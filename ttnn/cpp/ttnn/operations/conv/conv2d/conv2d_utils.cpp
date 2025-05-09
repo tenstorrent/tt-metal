@@ -780,6 +780,10 @@ Conv2dConfig determine_conv_config_for_auto_shard(
             // Set act_block_h_override to min value to
             // be conservative with L1 memory usage.
             conv_config.act_block_h_override = constants::TILE_HEIGHT;
+            if (conv_config.enable_split_reader) {
+                // Split reader needs at least 2 tiles in height to work.
+                conv_config.act_block_h_override *= 2;
+            }
         }
 
         const uint32_t in_channels_padded = round_up(in_channels, conv_config.input_channels_alignment);
@@ -936,7 +940,7 @@ std::tuple<OptimizedConvParallelizationConfig, OptimizedConvBlockConfig, MemoryC
         kernel_size[0],
         kernel_size[1],
         get_fp32_dest_acc_en(compute_config),
-        conv_config.enable_split_reader);
+        conv_config.enable_split_reader && input_parallel_config.shard_scheme == TensorMemoryLayout::HEIGHT_SHARDED);
     return {opt_conv_op_parallel_config, opt_conv_op_block_config, conv_out_memory_config};
 }
 
