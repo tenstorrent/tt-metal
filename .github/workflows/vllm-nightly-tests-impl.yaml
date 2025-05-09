@@ -115,11 +115,8 @@ jobs:
 
           python3 vllm/examples/server_example_tt.py \
             --model ${{ matrix.test-group.model }} \
-            --override_tt_config '{ \
-              "dispatch_core_axis": $(( DISPATCH_CORE_AXIS )), \
-              "sample_on_device_mode": "all", \
-              "fabric_config": "FABRIC_1D" \
-            }' > ./output/vllm_server.log 2>&1 &
+            --override_tt_config "{\"dispatch_core_axis\": $(( DISPATCH_CORE_AXIS )), \"sample_on_device_mode\": \"all\", \"fabric_config\": \"FABRIC_1D\"}" \
+            > ./output/vllm_server.log 2>&1 &
 
       - name: ⏰ Wait for server to be ready
         run: |
