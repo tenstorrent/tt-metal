@@ -48,9 +48,9 @@ def data_gen_pt_tt(input_shapes, device, required_grad=False):
     return pt_tensor, tt_tensor
 
 
-def data_gen_with_range(input_shapes, low, high, device, required_grad=False, is_row_major=False):
+def data_gen_with_range(input_shapes, low, high, device, required_grad=False, is_row_major=False, seed=213919):
     assert high > low, "Incorrect range provided"
-    torch.manual_seed(213919)
+    torch.manual_seed(seed)
     pt_tensor = torch.rand(input_shapes, requires_grad=required_grad).bfloat16() * (high - low) + low
     if is_row_major:
         tt_tensor = ttnn.Tensor(pt_tensor, ttnn.bfloat16).to(ttnn.ROW_MAJOR_LAYOUT).to(device)
