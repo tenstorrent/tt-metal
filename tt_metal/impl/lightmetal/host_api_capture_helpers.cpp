@@ -102,7 +102,8 @@ void CaptureBufferCreate(
     const TensorMemoryLayout buffer_layout,
     const std::optional<ShardSpecBuffer>& shard_parameters,
     const std::optional<bool> bottom_up,
-    const std::optional<SubDeviceId> sub_device_id) {
+    const std::optional<SubDeviceId> sub_device_id,
+    const std::optional<BufferDistributionSpec>& buffer_distribution_spec) {
     auto& ctx = LightMetalCaptureContext::get();
     auto& fbb = ctx.get_builder();
 

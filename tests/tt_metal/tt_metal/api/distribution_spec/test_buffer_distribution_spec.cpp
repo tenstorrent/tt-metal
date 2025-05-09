@@ -85,7 +85,16 @@ std::shared_ptr<tt::tt_metal::Buffer> create_buffer_from_inputs(
     // These values would be passed from tensor correctly based on PageConfig
     const auto host_size = inputs.physical_tensor_shape.volume() * inputs.bytes_per_element;
     const auto page_size = inputs.page_shape.height() * inputs.page_shape.width() * inputs.bytes_per_element;
-    return tt::tt_metal::Buffer::create(device, host_size, page_size, inputs.buffer_type, buffer_distribution_spec);
+    return tt::tt_metal::Buffer::create(
+        device,
+        host_size,
+        page_size,
+        inputs.buffer_type,
+        tt::tt_metal::TensorMemoryLayout::BLOCK_SHARDED,
+        std::nullopt,
+        std::nullopt,
+        std::nullopt,
+        buffer_distribution_spec);
 }
 
 }  // namespace distribution_spec_tests
