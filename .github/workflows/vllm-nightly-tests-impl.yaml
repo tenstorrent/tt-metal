@@ -67,7 +67,7 @@ jobs:
     defaults:
       run:
         shell: bash
-        working-directory: ${{ env.VLLM_DIR }} # https://github.com/actions/runner/issues/878
+        working-directory: /work # https://github.com/actions/runner/issues/878
     steps:
       - name: ⬇️ Setup Metal
         uses: tenstorrent/tt-metal/.github/actions/setup-job@main
@@ -113,7 +113,7 @@ jobs:
           export VLLM_RPC_TIMEOUT=300000
           export VLLM_TARGET_DEVICE="tt"
 
-          python3 ./examples/server_example_tt.py \
+          python3 ./vllm/examples/server_example_tt.py \
             --model ${{ matrix.test-group.model }} \
             --override_tt_config '{ \
               "dispatch_core_axis": $(( DISPATCH_CORE_AXIS )), \
@@ -145,7 +145,7 @@ jobs:
       - name: 📐 Run benchmark
         timeout-minutes: ${{ matrix.test-group.timeout }}
         run: |
-          python3 ./benchmarks/benchmark_serving.py \
+          python3 ./vllm/benchmarks/benchmark_serving.py \
             --dummy-argument \
             --backend vllm \
             --model ${{ matrix.test-group.model }} \
