@@ -172,6 +172,7 @@ def run_reduce_scatter_test(
         scattered_output = torch.cat(scattered_output, dim=1)
 
         output_tensor_goldens_list.append(scattered_output)
+
         tt_input = ttnn.from_torch(
             input,
             device=mesh_device,
@@ -386,7 +387,7 @@ def test_fabric_reduce_scatter_tg_no_trace(mesh_device, trace_mode):
 
     dim = 3
     shard_height = 32
-    shard_width = 64
+    shard_width = 160
     num_devices_scatter = 4
     num_devices_fracture = 8
     num_cores = 24
