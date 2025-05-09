@@ -17,7 +17,7 @@ from models.experimental.stable_diffusion_xl_base.tt.sdxl_utility import (
 from loguru import logger
 
 
-class TtVAEDecoder(nn.Module):
+class TtDecoder(nn.Module):
     def __init__(self, device, state_dict):
         super().__init__()
 

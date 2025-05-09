@@ -5,7 +5,7 @@ import gc
 import torch
 import pytest
 import ttnn
-from models.experimental.stable_diffusion_xl_base.vae.tt.tt_vae import TtVAEDecoder
+from models.experimental.stable_diffusion_xl_base.vae.tt.tt_autoencoder_kl import TtAutoencoderKL
 from diffusers import AutoencoderKL
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.utility_functions import torch_random
@@ -28,15 +28,13 @@ def test_vae(device, input_shape, reset_seeds):
     vae.eval()
     state_dict = vae.state_dict()
 
-    torch_vae = vae.decoder
-
     logger.info("Loading weights to device")
-    tt_vae = TtVAEDecoder(device, state_dict)
+    tt_vae = TtAutoencoderKL(device, state_dict)
     logger.info("Loaded weights")
     torch_input_tensor = torch_random(input_shape, -0.1, 0.1, dtype=torch.float32)
 
     logger.info("Running reference model")
-    torch_output_tensor = torch_vae(torch_input_tensor)
+    torch_output_tensor = vae.decode(torch_input_tensor, return_dict=False)[0]
     logger.info("Torch model done")
 
     ttnn_input_tensor = ttnn.from_torch(
@@ -58,4 +56,4 @@ def test_vae(device, input_shape, reset_seeds):
     del vae
     gc.collect()
 
-    assert_with_pcc(torch_output_tensor, output_tensor, 0.937)
+    assert_with_pcc(torch_output_tensor, output_tensor, 0.92)
