@@ -64,7 +64,7 @@ def get_accuracy_thresholds(model_args, optimizations):
 @pytest.mark.timeout(1200)
 @pytest.mark.parametrize(
     "prefill_len, decode_len, max_seq_len",  # Max seqlen should be at least prefill_len + decode_len
-    ((512, 128, 1024),),
+    ((512, 511, 1024),),
     #    ((131072-8192, 8192-1, 131072),),
 )
 @pytest.mark.parametrize(
@@ -431,7 +431,7 @@ def test_tt_model_acc(
     total_top1_acc = 100 * sum(top1_correct) / num_tokens
     total_top5_acc = 100 * sum(top5_correct) / num_tokens
     logger.info(
-        f"Total tokens {num_tokens}: Top-1 accuracy: {total_top1_acc:3.0f} %, Top-5 accuracy: {total_top5_acc:3.0f} %"
+        f"Total tokens {num_tokens}: Top-1 accuracy: {total_top1_acc:3.1f} %, Top-5 accuracy: {total_top5_acc:3.1f} %"
     )
 
     # Only show error summary when using reference files
@@ -452,6 +452,8 @@ def test_tt_model_acc(
                 logger.info(f"{error['position']}: {context}[{incorrect}] != [{expected}], true: [{true_word}]")
 
     if use_reference_file:
+        logger.info(f"Top-1: {total_top1_acc:.0f}% | Top-5: {total_top5_acc:.0f}%")
+
         if not json_config_file:
             # Get accuracy thresholds from PERF.md, unless the configuration is from a json
             min_top1_acc, min_top5_acc = get_accuracy_thresholds(
@@ -464,5 +466,3 @@ def test_tt_model_acc(
             assert (
                 total_top5_acc >= min_top5_acc
             ), f"Top-5 accuracy {total_top5_acc:.1f}% is too low (expected >={min_top5_acc}%)"
-
-        logger.info(f"Top-1: {total_top1_acc:.0f}% | Top-5: {total_top5_acc:.0f}%")
