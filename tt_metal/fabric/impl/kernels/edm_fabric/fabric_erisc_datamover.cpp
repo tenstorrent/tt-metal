@@ -649,52 +649,6 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) void receiver_forward_pack
     }
 }
 
-FORCE_INLINE bool connect_is_requested(uint32_t cached) {
-    return cached == tt::tt_fabric::EdmToEdmSender<0>::open_connection_value ||
-           cached == tt::tt_fabric::EdmToEdmSender<0>::close_connection_request_value;
-}
-
-template <uint8_t SENDER_NUM_BUFFERS>
-FORCE_INLINE void establish_connection(
-    tt::tt_fabric::EdmChannelWorkerInterface<SENDER_NUM_BUFFERS>& local_sender_channel_worker_interface) {
-    local_sender_channel_worker_interface.cache_producer_noc_addr();
-    if constexpr (enable_first_level_ack) {
-        local_sender_channel_worker_interface.template update_worker_copy_of_read_ptr<enable_ring_support>(
-            local_sender_channel_worker_interface.local_ackptr.get_ptr());
-    } else {
-        local_sender_channel_worker_interface.template update_worker_copy_of_read_ptr<enable_ring_support>(
-            local_sender_channel_worker_interface.local_rdptr.get_ptr());
-    }
-}
-
-template <uint8_t SENDER_NUM_BUFFERS>
-FORCE_INLINE void check_worker_connections(
-    tt::tt_fabric::EdmChannelWorkerInterface<SENDER_NUM_BUFFERS>& local_sender_channel_worker_interface,
-    bool& channel_connection_established) {
-    if (!channel_connection_established) {
-        // Can get rid of one of these two checks if we duplicate the logic above here in the function
-        // and depending on which of the two versions we are in (the connected version or disconnected version)
-        // We also check if the interface has a teardown request in case worker
-        // 1. opened connection
-        // 2. sent of all packets (EDM sender channel was sufficiently empty)
-        // 3. closed the connection
-        //
-        // In such a case like that, we still want to formally teardown the connection to keep things clean
-        uint32_t cached = *local_sender_channel_worker_interface.connection_live_semaphore;
-        if (connect_is_requested(cached)) {
-            // if constexpr (enable_fabric_counters) {
-            //     sender_channel_counters->add_connection();
-            // }
-            channel_connection_established = true;
-            establish_connection(local_sender_channel_worker_interface);
-        }
-    } else if (local_sender_channel_worker_interface.has_worker_teardown_request()) {
-        channel_connection_established = false;
-        local_sender_channel_worker_interface.template teardown_connection<true>(
-            local_sender_channel_worker_interface.local_rdptr.get_ptr());
-    }
-}
-
 ////////////////////////////////////
 ////////////////////////////////////
 //  Main Control Loop
@@ -792,7 +746,8 @@ void run_sender_channel_step(
         auto check_connection_status =
             !channel_connection_established || local_sender_channel_worker_interface.has_worker_teardown_request();
         if (check_connection_status) {
-            check_worker_connections(local_sender_channel_worker_interface, channel_connection_established);
+            check_worker_connections<enable_ring_support, enable_first_level_ack>(
+                local_sender_channel_worker_interface, channel_connection_established);
         }
     }
 };
@@ -922,18 +877,6 @@ void run_receiver_channel_step(
         }
     }
 };
-
-/* Termination signal handling*/
-FORCE_INLINE bool got_immediate_termination_signal(volatile tt::tt_fabric::TerminationSignal* termination_signal_ptr) {
-    return *termination_signal_ptr == tt::tt_fabric::TerminationSignal::IMMEDIATELY_TERMINATE;
-}
-FORCE_INLINE bool got_graceful_termination_signal(volatile tt::tt_fabric::TerminationSignal* termination_signal_ptr) {
-    return *termination_signal_ptr == tt::tt_fabric::TerminationSignal::GRACEFULLY_TERMINATE;
-}
-FORCE_INLINE bool got_termination_signal(volatile tt::tt_fabric::TerminationSignal* termination_signal_ptr) {
-    return got_immediate_termination_signal(termination_signal_ptr) ||
-           got_graceful_termination_signal(termination_signal_ptr);
-}
 
 template <
     uint8_t RECEIVER_NUM_BUFFERS,
@@ -1193,7 +1136,8 @@ void __attribute__((noinline)) wait_for_static_connection_to_ready(
     for (size_t i = 0; i < NUM_SENDER_CHANNELS; i++) {
         if (sender_ch_live_check_skip[i]) {
             while (!connect_is_requested(*local_sender_channel_worker_interfaces[i].connection_live_semaphore));
-            establish_connection(local_sender_channel_worker_interfaces[i]);
+            establish_connection<enable_ring_support, enable_first_level_ack>(
+                local_sender_channel_worker_interfaces[i]);
         }
     }
 }
