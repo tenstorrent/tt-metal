@@ -5,12 +5,10 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import os
-import sys
 import csv
-import pytest  # type: ignore
-from argparse import ArgumentParser
 from loguru import logger  # type: ignore
 import matplotlib.pyplot as plt  # type: ignore
+import itertools
 
 from tt_metal.tools.profiler.process_device_log import import_log_run_stats
 import tt_metal.tools.profiler.device_post_proc_config as device_post_proc_config
@@ -23,6 +21,7 @@ test_id_to_name = {
     2: "DRAM Sharded",
     3: "DRAM Directed Ideal",
     4: "One to One Packet Sizes",
+    5: "One from One Packet Sizes",
 }
 
 # Correspondng test bounds for each arch, test id, riscv core
@@ -50,6 +49,9 @@ test_bounds = {
             "riscv_1": {"latency": {"lower": 4000, "upper": 12000}, "bandwidth": 0.007},
             "riscv_0": {"latency": {"lower": 300, "upper": 4700}, "bandwidth": 0.17},
         },
+        5: {
+            "riscv_1": {"latency": {"lower": 200, "upper": 5000}, "bandwidth": 0.1},
+        },
     },
     "blackhole": {
         0: {
@@ -71,6 +73,9 @@ test_bounds = {
         4: {
             "riscv_1": {"latency": {"lower": 4000, "upper": 12000}, "bandwidth": 0.007},
             "riscv_0": {"latency": {"lower": 300, "upper": 4700}, "bandwidth": 0.17},
+        },
+        5: {
+            "riscv_1": {"latency": {"lower": 300, "upper": 4700}, "bandwidth": 0.17},
         },
     },
 }
@@ -195,12 +200,12 @@ def gather_stats_from_csv(file_path, verbose=False):
             "start": {"risc": "ANY", "zone_name": "RISCV0"},
             "end": {"risc": "ANY", "zone_name": "RISCV0"},
         },
-        "riscv_1_events": {
+        "riscv_0_events": {
             "across": "device",
             "type": "event",
             "marker": {"risc": "BRISC"},
         },
-        "riscv_0_events": {
+        "riscv_1_events": {
             "across": "device",
             "type": "event",
             "marker": {"risc": "NCRISC"},
@@ -217,9 +222,15 @@ def gather_stats_from_csv(file_path, verbose=False):
 def performance_check(dm_stats, arch="blackhole", verbose=False):
     # Tidy results' ranges
     results_bounds = {}
-    for i in range(len(dm_stats["riscv_1"]["analysis"]["series"])):
-        run_host_id = dm_stats["riscv_1"]["analysis"]["series"][i]["duration_type"][0]["run_host_id"]
-        test_id = dm_stats["riscv_1"]["attributes"][run_host_id]["Test id"]
+    for riscv1_run, riscv0_run in itertools.zip_longest(
+        dm_stats["riscv_1"]["analysis"]["series"], dm_stats["riscv_0"]["analysis"]["series"], fillvalue=None
+    ):
+        if riscv1_run:
+            run_host_id = riscv1_run["duration_type"][0]["run_host_id"]
+            test_id = dm_stats["riscv_1"]["attributes"][run_host_id]["Test id"]
+        else:
+            run_host_id = riscv0_run["duration_type"][0]["run_host_id"]
+            test_id = dm_stats["riscv_0"]["attributes"][run_host_id]["Test id"]
 
         if not test_id in results_bounds.keys():
             results_bounds[test_id] = {
@@ -227,87 +238,89 @@ def performance_check(dm_stats, arch="blackhole", verbose=False):
                 "riscv_0": {"latency": {"lower": float("inf"), "upper": 0}, "bandwidth": float("inf")},
             }
 
-        riscv1_cycles = dm_stats["riscv_1"]["analysis"]["series"][i]["duration_cycles"]
-        riscv0_cycles = dm_stats["riscv_0"]["analysis"]["series"][i]["duration_cycles"]
+        if riscv1_run:
+            riscv1_cycles = riscv1_run["duration_cycles"]
+            results_bounds[test_id]["riscv_1"]["latency"]["lower"] = min(
+                results_bounds[test_id]["riscv_1"]["latency"]["lower"], riscv1_cycles
+            )
+            results_bounds[test_id]["riscv_1"]["latency"]["upper"] = max(
+                results_bounds[test_id]["riscv_1"]["latency"]["upper"], riscv1_cycles
+            )
 
-        results_bounds[test_id]["riscv_1"]["latency"]["lower"] = min(
-            results_bounds[test_id]["riscv_1"]["latency"]["lower"], riscv1_cycles
-        )
-        results_bounds[test_id]["riscv_0"]["latency"]["lower"] = min(
-            results_bounds[test_id]["riscv_0"]["latency"]["lower"], riscv0_cycles
-        )
-        results_bounds[test_id]["riscv_1"]["latency"]["upper"] = max(
-            results_bounds[test_id]["riscv_1"]["latency"]["upper"], riscv1_cycles
-        )
-        results_bounds[test_id]["riscv_0"]["latency"]["upper"] = max(
-            results_bounds[test_id]["riscv_0"]["latency"]["upper"], riscv0_cycles
-        )
+            riscv1_attributes = dm_stats["riscv_1"]["attributes"][run_host_id]
+            riscv1_bw = (
+                riscv1_attributes["Number of transactions"]
+                * riscv1_attributes["Transaction size in bytes"]
+                / riscv1_cycles
+            )
+            results_bounds[test_id]["riscv_1"]["bandwidth"] = min(
+                results_bounds[test_id]["riscv_1"]["bandwidth"], riscv1_bw
+            )
 
-        riscv1_attributes = dm_stats["riscv_1"]["attributes"][run_host_id]
-        riscv1_bw = (
-            riscv1_attributes["Number of transactions"] * riscv1_attributes["Transaction size in bytes"] / riscv1_cycles
-        )
-        results_bounds[test_id]["riscv_1"]["bandwidth"] = min(
-            results_bounds[test_id]["riscv_1"]["bandwidth"], riscv1_bw
-        )
+        if riscv0_run:
+            riscv0_cycles = riscv0_run["duration_cycles"]
+            results_bounds[test_id]["riscv_0"]["latency"]["lower"] = min(
+                results_bounds[test_id]["riscv_0"]["latency"]["lower"], riscv0_cycles
+            )
+            results_bounds[test_id]["riscv_0"]["latency"]["upper"] = max(
+                results_bounds[test_id]["riscv_0"]["latency"]["upper"], riscv0_cycles
+            )
 
-        riscv0_attributes = dm_stats["riscv_0"]["attributes"][run_host_id]
-        riscv0_bw = (
-            riscv0_attributes["Number of transactions"] * riscv0_attributes["Transaction size in bytes"] / riscv0_cycles
-        )
-        results_bounds[test_id]["riscv_0"]["bandwidth"] = min(
-            results_bounds[test_id]["riscv_0"]["bandwidth"], riscv0_bw
-        )
+            riscv0_attributes = dm_stats["riscv_0"]["attributes"][run_host_id]
+            riscv0_bw = (
+                riscv0_attributes["Number of transactions"]
+                * riscv0_attributes["Transaction size in bytes"]
+                / riscv0_cycles
+            )
+            results_bounds[test_id]["riscv_0"]["bandwidth"] = min(
+                results_bounds[test_id]["riscv_0"]["bandwidth"], riscv0_bw
+            )
 
     # Performance checks per test
     for test_id, bounds in results_bounds.items():
-        # Bounds check
-        riscv1_cycles_within_bounds = (
-            test_bounds[arch][test_id]["riscv_1"]["latency"]["lower"] <= bounds["riscv_1"]["latency"]["lower"]
-            and bounds["riscv_1"]["latency"]["upper"] <= test_bounds[arch][test_id]["riscv_1"]["latency"]["upper"]
-        )
-        riscv0_cycles_within_bounds = (
-            test_bounds[arch][test_id]["riscv_0"]["latency"]["lower"] <= bounds["riscv_0"]["latency"]["lower"]
-            and bounds["riscv_0"]["latency"]["upper"] <= test_bounds[arch][test_id]["riscv_0"]["latency"]["upper"]
-        )
-        riscv1_bw_within_bounds = test_bounds[arch][test_id]["riscv_1"]["bandwidth"] <= bounds["riscv_1"]["bandwidth"]
-        riscv0_bw_within_bounds = test_bounds[arch][test_id]["riscv_0"]["bandwidth"] <= bounds["riscv_0"]["bandwidth"]
-
         # Print latency and bandwidth perf results
         if verbose:
             logger.info(f"Perf results for test id: {test_id}")
             logger.info(f"Latency")
-            logger.info(
-                f"  RISCV 1: {bounds['riscv_1']['latency']['lower']}-{bounds['riscv_1']['latency']['upper']} cycles"
-            )
-            logger.info(
-                f"  RISCV 0: {bounds['riscv_0']['latency']['lower']}-{bounds['riscv_0']['latency']['upper']} cycles"
-            )
+            for riscv in bounds.keys():
+                if bounds[riscv]["latency"]["lower"] != float("inf"):
+                    logger.info(
+                        f"  {riscv}: {bounds[riscv]['latency']['lower']}-{bounds[riscv]['latency']['upper']} cycles"
+                    )
+
             logger.info(f"Bandwidth")
-            logger.info(f"  RISCV 1: {bounds['riscv_1']['bandwidth']} Bytes/cycle")
-            logger.info(f"  RISCV 0: {bounds['riscv_0']['bandwidth']} Bytes/cycle")
+            for riscv in bounds.keys():
+                if bounds[riscv]["bandwidth"] != float("inf"):
+                    logger.info(f"  {riscv}: {bounds[riscv]['bandwidth']} Bytes/cycle")
 
-            if not riscv1_cycles_within_bounds:
-                logger.warning(f"RISCV 1 cycles not within perf bounds.")
-            else:
-                logger.info(f"RISCV 1 cycles within perf bounds.")
-            if not riscv0_cycles_within_bounds:
-                logger.warning(f"RISCV 0 cycles not within perf bounds.")
-            else:
-                logger.info(f"RISCV 0 cycles within perf bounds.")
-            if not riscv1_bw_within_bounds:
-                logger.warning(f"RISCV 1 bandwidth not within perf bounds.")
-            else:
-                logger.info(f"RISCV 1 bandwidth within perf bounds.")
-            if not riscv0_bw_within_bounds:
-                logger.warning(f"RISCV 0 bandwidth not within perf bounds.\n")
-            else:
-                logger.info(f"RISCV 0 bandwidth within perf bounds.\n")
+            logger.info("")
 
-        assert riscv1_cycles_within_bounds
-        assert riscv0_cycles_within_bounds
-        assert riscv1_bw_within_bounds
-        assert riscv0_bw_within_bounds
+        if test_id not in test_bounds[arch].keys():
+            logger.warning(f"Test id {test_id} not found in {arch} test bounds.")
+            continue
+
+        for riscv in bounds.keys():
+            if riscv not in test_bounds[arch][test_id].keys():
+                continue
+            cycles_within_bounds = (
+                test_bounds[arch][test_id][riscv]["latency"]["lower"] <= bounds[riscv]["latency"]["lower"]
+                and bounds[riscv]["latency"]["upper"] <= test_bounds[arch][test_id][riscv]["latency"]["upper"]
+            )
+            bw_within_bounds = test_bounds[arch][test_id][riscv]["bandwidth"] <= bounds[riscv]["bandwidth"]
+
+            # Print bounds check results
+            if verbose:
+                if not cycles_within_bounds:
+                    logger.warning(f"{riscv} cycles not within perf bounds.")
+                else:
+                    logger.info(f"{riscv} cycles within perf bounds.")
+                if not bw_within_bounds:
+                    logger.warning(f"{riscv} bandwidth not within perf bounds.")
+                else:
+                    logger.info(f"{riscv} bandwidth within perf bounds.")
+
+            assert cycles_within_bounds
+            assert bw_within_bounds
 
 
 def print_stats(dm_stats):
@@ -315,13 +328,23 @@ def print_stats(dm_stats):
     for i in range(len(dm_stats["riscv_1"]["analysis"]["series"])):
         run_host_id = dm_stats["riscv_1"]["analysis"]["series"][i]["duration_type"][0]["run_host_id"]
 
+    for riscv1_run, riscv0_run in itertools.zip_longest(
+        dm_stats["riscv_1"]["analysis"]["series"], dm_stats["riscv_0"]["analysis"]["series"], fillvalue=None
+    ):
+        run_host_id = (riscv1_run if riscv1_run else riscv0_run)["duration_type"][0]["run_host_id"]
+
         logger.info(f"Run host id: {run_host_id}")
-        logger.info(f'RISCV 1 duration: {dm_stats["riscv_1"]["analysis"]["series"][i]["duration_cycles"]}')
-        logger.info(f'RISCV 0 duration: {dm_stats["riscv_0"]["analysis"]["series"][i]["duration_cycles"]}')
+
+        if riscv1_run:
+            logger.info(f'RISCV 1 duration: {riscv1_run["duration_cycles"]}')
+
+        if riscv0_run:
+            logger.info(f'RISCV 0 duration: {riscv0_run["duration_cycles"]}')
+
         logger.info(f"Attributes:")
-        for attr, val in dm_stats["riscv_1"]["attributes"][run_host_id].items():
+        for attr, val in dm_stats["riscv_1" if riscv1_run else "riscv_0"]["attributes"][run_host_id].items():
             logger.info(f"  {attr}: {val}")
-        logger.info(f"\n")
+        logger.info("")
 
 
 def plot_dm_stats(dm_stats, output_file="dm_stats_plot.png"):
