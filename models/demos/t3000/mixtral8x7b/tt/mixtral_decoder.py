@@ -2,11 +2,11 @@
 
 # SPDX-License-Identifier: Apache-2.0
 import ttnn
+from models.common.lightweightmodule import LightweightModule
+from models.common.rmsnorm import RMSNorm
 from models.demos.t3000.mixtral8x7b.tt.mixtral_attention import TtMixtralAttention
 from models.demos.t3000.mixtral8x7b.tt.mixtral_mlp import TtMixtralMLP
 from models.demos.t3000.mixtral8x7b.tt.mixtral_moe import TtMoeLayer
-from models.common.rmsnorm import RMSNorm
-from models.common.lightweightmodule import LightweightModule
 
 
 class TtTransformerBlock(LightweightModule):

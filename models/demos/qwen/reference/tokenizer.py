@@ -2,11 +2,12 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from transformers import AutoTokenizer
 from pathlib import Path
 from typing import List
+
 import torch
 from torch import nn
+from transformers import AutoTokenizer
 
 from models.demos.qwen.reference.model import Transformer
 

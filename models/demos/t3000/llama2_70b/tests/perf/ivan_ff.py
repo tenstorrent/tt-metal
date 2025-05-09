@@ -4,7 +4,6 @@
 import torch
 
 import ttnn
-
 from models.utility_functions import torch2tt_tensor
 
 FF_DIM = int(32 * 1024 / 8)

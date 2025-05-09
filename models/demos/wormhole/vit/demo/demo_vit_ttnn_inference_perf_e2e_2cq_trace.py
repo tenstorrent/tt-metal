@@ -3,23 +3,14 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
-
 import torch
 from loguru import logger
 
 import ttnn
-
 from models.demos.vit.tt import ttnn_optimized_sharded_vit_wh
-from models.utility_functions import is_blackhole
-
-from models.utility_functions import (
-    disable_persistent_kernel_cache,
-    profiler,
-)
-
 from models.demos.wormhole.vit.demo.vit_test_infra import create_test_infra
-
 from models.perf.perf_utils import prep_perf_report
+from models.utility_functions import disable_persistent_kernel_cache, is_blackhole, profiler
 
 try:
     from tracy import signpost

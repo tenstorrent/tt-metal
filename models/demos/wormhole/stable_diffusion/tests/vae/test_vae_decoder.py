@@ -4,16 +4,14 @@
 
 import pytest
 import torch
-from diffusers import (
-    AutoencoderKL,
-)
+from diffusers import AutoencoderKL
 
 import ttnn
 from models.demos.wormhole.stable_diffusion.tt.vae.ttnn_vae_configs import (
-    MIDBLOCK_RESNET_NORM_NUM_BLOCKS,
     MIDBLOCK_RESNET_CONV_CHANNEL_SPLIT_FACTORS,
-    UPBLOCK_RESNET_NORM_NUM_BLOCKS,
+    MIDBLOCK_RESNET_NORM_NUM_BLOCKS,
     UPBLOCK_RESNET_CONV_CHANNEL_SPLIT_FACTORS,
+    UPBLOCK_RESNET_NORM_NUM_BLOCKS,
     UPBLOCK_UPSAMPLE_CONV_CHANNEL_SPLIT_FACTORS,
 )
 from models.demos.wormhole.stable_diffusion.tt.vae.ttnn_vae_decoder import VaeDecoder

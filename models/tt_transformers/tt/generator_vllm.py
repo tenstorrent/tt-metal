@@ -4,21 +4,21 @@
 
 import os
 from typing import List, Union
-import torch
-import PIL
-from tqdm import tqdm
-from llama_models.llama3.api.chat_format import create_vision_mask
-import ttnn
 
+import PIL
+import torch
+from llama_models.llama3.api.chat_format import create_vision_mask
+from tqdm import tqdm
+from vllm.inputs import INPUT_REGISTRY, DecoderOnlyInputs, EncoderDecoderInputs, InputContext
+from vllm.model_executor.models.interfaces import SupportsMultiModal
+from vllm.model_executor.models.mllama import MLLAMA_IMAGE_TOKEN, MLLAMA_IMAGE_TOKEN_ID
+
+import ttnn
+from models.tt_transformers.demo.simple_vision_demo import create_multimodal_model
 from models.tt_transformers.tt.generator import Generator
 from models.tt_transformers.tt.model import Transformer
 from models.tt_transformers.tt.model_config import DecodersPrecision, ModelArgs
-from models.tt_transformers.demo.simple_vision_demo import create_multimodal_model
 from models.utility_functions import nearest_32
-
-from vllm.inputs import INPUT_REGISTRY, DecoderOnlyInputs, EncoderDecoderInputs, InputContext
-from vllm.model_executor.models.interfaces import SupportsMultiModal
-from vllm.model_executor.models.mllama import MLLAMA_IMAGE_TOKEN_ID, MLLAMA_IMAGE_TOKEN
 
 
 def generate_submeshes(mesh_device, data_parallel):

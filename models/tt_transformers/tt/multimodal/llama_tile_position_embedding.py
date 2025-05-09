@@ -2,14 +2,13 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch
 import itertools
 
+import torch
+
 import ttnn
-from models.utility_functions import (
-    nearest_32,
-)
 from models.common.lightweightmodule import LightweightModule
+from models.utility_functions import nearest_32
 
 
 class TtLlamaTilePositionEmbedding(LightweightModule):

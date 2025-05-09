@@ -1,25 +1,23 @@
 # SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
-import torch
-import pytest
-from loguru import logger
 import os
+
+import pytest
+import torch
+from loguru import logger
+
 import ttnn
+from models.demos.wormhole.mistral7b.reference.model import Transformer, precompute_freqs_cis
+from models.demos.wormhole.mistral7b.reference.tokenizer import Tokenizer
 from models.demos.wormhole.mistral7b.tt.mistral_common import (
     get_prefill_rot_mat,
-    prepare_inputs_ttnn_prefill,
     get_rot_transformation_mat,
+    prepare_inputs_ttnn_prefill,
 )
 from models.demos.wormhole.mistral7b.tt.mistral_model import TtTransformer
 from models.demos.wormhole.mistral7b.tt.model_config import TtModelArgs
-from models.demos.wormhole.mistral7b.reference.model import Transformer, precompute_freqs_cis
-from models.demos.wormhole.mistral7b.reference.tokenizer import Tokenizer
-from models.utility_functions import (
-    comp_pcc,
-    comp_allclose,
-)
-from models.utility_functions import skip_for_grayskull, skip_for_wormhole_b0
+from models.utility_functions import comp_allclose, comp_pcc, skip_for_grayskull, skip_for_wormhole_b0
 
 
 class Emb(torch.nn.Module):

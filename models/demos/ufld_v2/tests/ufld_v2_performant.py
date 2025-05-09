@@ -5,7 +5,6 @@
 import ttnn
 from models.demos.ufld_v2.tests.ufld_v2_test_infra import create_test_infra
 
-
 try:
     from tracy import signpost
 

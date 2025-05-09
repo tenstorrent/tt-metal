@@ -2,13 +2,14 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import json
 import os
+from pathlib import Path
+
 import torch
+from loguru import logger
 from safetensors.torch import load_file as safetensors_load_file
 from tqdm import tqdm
-import json
-from pathlib import Path
-from loguru import logger
 
 
 # TODO Update function for large models: For 1 layer tests we only want to load 1 checkpoint file, instead of all.

@@ -2,19 +2,19 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from typing import Union
-import time
-import ttnn
-import torch
-import numpy as np
-from loguru import logger
 import math
 import struct
+import time
+from typing import Union
+
+import numpy as np
 import pytest
-
+import torch
+from loguru import logger
 from ttnn.device import Arch
-
 from typing_extensions import deprecated
+
+import ttnn
 
 
 ### Math operations ###

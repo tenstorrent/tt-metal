@@ -3,12 +3,12 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
-import ttnn
-import torch
 from typing import Optional
-from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_utility_functions import (
-    get_default_compute_config,
-)
+
+import torch
+
+import ttnn
+from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_utility_functions import get_default_compute_config
 
 
 def permute_conv_parameters(weight, bias):

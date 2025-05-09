@@ -8,7 +8,6 @@ import math
 import torch
 
 import ttnn
-
 from models.experimental.functional_common.attention_mask_functions import (
     get_extended_attention_mask,
     invert_attention_mask,
