@@ -14,6 +14,11 @@ repos:
   hooks:
     -  id: autoflake
        args: [--remove-all-unused-imports, --in-place, --recursive, --exclude=__init__.py]
+- repo: https://github.com/PyCQA/pylint
+  rev: v3.0.0  # Use the latest version
+  hooks:
+    - id: pylint
+      args: [--disable=all, --enable=wildcard-import]
 - repo: https://github.com/adrienverge/yamllint
   rev: v1.35.1
   hooks:

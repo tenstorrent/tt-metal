@@ -1,22 +1,25 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-import pytest
-import os
 import logging
+import os
 import subprocess
+
+import pytest
+from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
+from helpers.log_utils import _format_log
 
 
 @pytest.fixture(scope="session", autouse=True)
 def setup_chip_arch():
     def detect_architecture(output):
         if "Blackhole" in output:
-            return "blackhole"
+            return ChipArchitecture.BLACKHOLE
         elif "Wormhole" in output:
-            return "wormhole"
+            return ChipArchitecture.WORMHOLE
         return None
 
-    chip_arch = os.getenv("CHIP_ARCH")
+    chip_arch = get_chip_architecture()
     if chip_arch:
         print(f"CHIP_ARCH is already set to {chip_arch}")
         return
@@ -41,7 +44,7 @@ def setup_chip_arch():
             "Error: Unable to detect architecture from tt-smi output.", file=sys.stderr
         )
         sys.exit(1)
-    os.environ["CHIP_ARCH"] = architecture
+    os.environ["CHIP_ARCH"] = architecture.value
 
 
 def pytest_configure(config):
@@ -88,14 +91,6 @@ def pytest_runtest_protocol(item, nextitem):
     return None
 
 
-_format_log = []
-
-
-def add_to_format_log(input_fmt, output_fmt):
-    global _format_log
-    _format_log.append((input_fmt, output_fmt))
-
-
 def pytest_sessionfinish(session, exitstatus):
     BOLD = "\033[1m"
     YELLOW = "\033[93m"
@@ -104,3 +99,19 @@ def pytest_sessionfinish(session, exitstatus):
         print(f"\n\n{BOLD}{YELLOW} Cases Where Dest Accumulation Turned On:{RESET}")
         for input_fmt, output_fmt in _format_log:
             print(f"{BOLD}{YELLOW}  {input_fmt} -> {output_fmt}{RESET}")
+
+
+# Skip decorators for specific architectures
+# These decorators can be used to skip tests based on the architecture
+# For example, if you want to skip a test for the "wormhole" architecture,
+# decorate the test with @skip_for_wormhole.
+
+skip_for_wormhole = pytest.mark.skipif(
+    lambda: get_chip_architecture() == ChipArchitecture.WORMHOLE,
+    reason="Test is not supported on Wormhole architecture",
+)
+
+skip_for_blackhole = pytest.mark.skipif(
+    lambda: get_chip_architecture() == ChipArchitecture.BLACKHOLE,
+    reason="Test is not supported on Blackhole architecture",
+)

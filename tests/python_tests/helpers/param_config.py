@@ -2,14 +2,16 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 from typing import List, Optional, Tuple
-from .format_arg_mapping import *
+
+from helpers.log_utils import add_to_format_log
+
+from .format_arg_mapping import DestAccumulation
 from .format_config import (
-    FormatConfig,
     DataFormat,
+    FormatConfig,
     InputOutputFormat,
     is_dest_acc_needed,
 )
-from conftest import add_to_format_log
 
 checked_formats_and_dest_acc = {}
 

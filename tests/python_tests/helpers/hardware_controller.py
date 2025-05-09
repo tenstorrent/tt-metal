@@ -1,7 +1,8 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
-from .utils import get_chip_architecture, run_shell_command
+from .chip_architecture import ChipArchitecture, get_chip_architecture
+from .utils import run_shell_command
 
 
 class HardwareController:
@@ -13,10 +14,10 @@ class HardwareController:
         self.chip_architecture = get_chip_architecture()
 
     def reset_card(self):
-        if self.chip_architecture == "blackhole":
+        if self.chip_architecture == ChipArchitecture.BLACKHOLE:
             print("Resetting BH card")
             run_shell_command("tt-smi -r 0")
-        elif self.chip_architecture == "wormhole":
+        elif self.chip_architecture == ChipArchitecture.WORMHOLE:
             print("Resetting WH card")
             run_shell_command("tt-smi -r 0")
         else:
