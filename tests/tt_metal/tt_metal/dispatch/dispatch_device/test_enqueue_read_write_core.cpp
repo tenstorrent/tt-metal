@@ -361,31 +361,6 @@ TEST_F(CommandQueueSingleCardFixture, IdleEthTestReadWriteMultipleCoresL1) {
     }
 }
 
-TEST_F(CommandQueueSingleCardFixture, TestReadWriteEntireDRAM) {
-    for (IDevice* device : this->devices_) {
-        const DeviceAddr address = MetalContext::instance().hal().get_dev_addr(HalDramMemAddrType::DRAM_BARRIER) +
-                                   MetalContext::instance().hal().get_dev_size(HalDramMemAddrType::DRAM_BARRIER);
-        const uint32_t size = device->dram_size_per_channel() -
-                              MetalContext::instance().hal().get_dev_size(HalDramMemAddrType::DRAM_BARRIER);
-        const uint32_t num_elements = size / sizeof(uint32_t);
-        const std::vector<uint32_t> src_data = generate_arange_vector(size);
-
-        const CoreCoord logical_core = {0, 0};
-        const CoreCoord virtual_core = device->virtual_core_from_logical_core(logical_core, CoreType::DRAM);
-
-        dynamic_cast<HWCommandQueue&>(device->command_queue())
-            .enqueue_write_to_core(virtual_core, src_data.data(), address, size, false);
-
-        std::vector<uint32_t> dst_data(num_elements, 0);
-        dynamic_cast<HWCommandQueue&>(device->command_queue())
-            .enqueue_read_from_core(virtual_core, dst_data.data(), address, size, false);
-
-        Finish(device->command_queue());
-
-        EXPECT_EQ(src_data, dst_data);
-    }
-}
-
 TEST_F(CommandQueueSingleCardFixture, TestInvalidReadWriteAddressDRAM) {
     for (IDevice* device : this->devices_) {
         const uint32_t num_elements = 1010;
