@@ -11,13 +11,13 @@ import pytest
 import torch.nn as nn
 from models.utility_functions import run_for_wormhole_b0
 from tests.ttnn.utils_for_testing import assert_with_pcc
-from models.experimental.functional_yolov9c.tt.model_preprocessing import (
+from models.demos.yolov9c.tt.model_preprocessing import (
     create_yolov9c_input_tensors,
     create_yolov9c_model_parameters,
     create_yolov9c_model_parameters_detect,
 )
-from models.experimental.functional_yolov9c.tt import ttnn_yolov9c
-from models.experimental.functional_yolov9c.reference import yolov9c
+from models.demos.yolov9c.tt import ttnn_yolov9c
+from models.demos.yolov9c.reference import yolov9c
 from ultralytics import YOLO
 
 

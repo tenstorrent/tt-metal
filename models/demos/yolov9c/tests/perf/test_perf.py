@@ -14,9 +14,9 @@ from models.utility_functions import run_for_wormhole_b0
 from models.utility_functions import enable_persistent_kernel_cache, disable_persistent_kernel_cache
 from models.perf.device_perf_utils import run_device_perf, check_device_perf, prep_device_perf_report
 
-from models.experimental.functional_yolov9c.tt import ttnn_yolov9c
-from models.experimental.functional_yolov9c.reference import yolov9c
-from models.experimental.functional_yolov9c.tt.model_preprocessing import (
+from models.demos.yolov9c.tt import ttnn_yolov9c
+from models.demos.yolov9c.reference import yolov9c
+from models.demos.yolov9c.tt.model_preprocessing import (
     create_yolov9c_input_tensors,
     create_yolov9c_model_parameters,
 )
@@ -72,7 +72,7 @@ def test_perf(device, use_weights_from_ultralytics):
     expected_compile_time, expected_inference_time = get_expected_times("yolov9c")
 
     prep_perf_report(
-        model_name="models/experimental/functional_yolov9c",
+        model_name="models/demos/yolov9c",
         batch_size=batch_size,
         inference_and_compile_time=inference_and_compile_time,
         inference_time=inference_time,
