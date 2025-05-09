@@ -23,8 +23,6 @@ void validate_shard_spec_with_tensor_shape(const TensorSpec& tensor_spec) {
     const auto& physical_shard_shape = tensor_spec.tensor_layout().get_physical_shard_shape();
     const auto physical_shard_height = physical_shard_shape.height();
     const auto physical_shard_width = physical_shard_shape.width();
-    tt::log_info("Physical Shard Shape = {}", physical_shard_shape);
-    tt::log_info("Physical Shape = {}", physical_shape);
 
     const auto& shard_spec = memory_config.shard_spec().value();
     uint32_t num_cores = shard_spec.num_cores();
