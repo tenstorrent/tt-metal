@@ -1233,15 +1233,15 @@ def outer(x, y, *args, **kwargs):
     return torch.outer(x.squeeze(), y.squeeze())
 
 
-def reduce_sum(x, dims=None, keepdim=True, *args, **kwargs):
+def reduce_sum(x, dims=None, keepdim=False, *args, **kwargs):
     return torch.sum(x, dims, keepdim)
 
 
-def reduce_max(x, dims=None, keepdim=True, *args, **kwargs):
+def reduce_max(x, dims=None, keepdim=False, *args, **kwargs):
     return torch.amax(x, dims, keepdim)
 
 
-def reduce_min(x, dims=None, keepdim=True, *args, **kwargs):
+def reduce_min(x, dims=None, keepdim=False, *args, **kwargs):
     return torch.amin(x, dims, keepdim)
 
 
