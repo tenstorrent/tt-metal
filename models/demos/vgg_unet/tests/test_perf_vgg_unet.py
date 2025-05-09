@@ -12,9 +12,9 @@ from models.utility_functions import (
     profiler,
 )
 from models.utility_functions import run_for_wormhole_b0
-from models.experimental.functional_vgg_unet.reference.vgg_unet import UNetVGG19
-from models.experimental.functional_vgg_unet.ttnn.model_preprocessing import create_vgg_unet_model_parameters
-from models.experimental.functional_vgg_unet.ttnn.ttnn_vgg_unet import Tt_vgg_unet
+from models.demos.vgg_unet.reference.vgg_unet import UNetVGG19
+from models.demos.vgg_unet.ttnn.model_preprocessing import create_vgg_unet_model_parameters
+from models.demos.vgg_unet.ttnn.ttnn_vgg_unet import Tt_vgg_unet
 
 
 def get_expected_times(name):
@@ -51,7 +51,7 @@ def test_vgg_unet(device, reset_seeds, model_location_generator, use_pretrained_
 
     # Pre-trained weights processing
     if use_pretrained_weight:
-        weights_pth = "models/experimental/functional_vgg_unet/vgg_unet_torch.pth"
+        weights_pth = "models/experimental/vgg_unet/vgg_unet_torch.pth"
         torch_dict = torch.load(weights_pth)
         new_state_dict = dict(zip(torch_model.state_dict().keys(), torch_dict.values()))
         torch_model.load_state_dict(new_state_dict)
@@ -99,7 +99,7 @@ def test_vgg_unet(device, reset_seeds, model_location_generator, use_pretrained_
     expected_compile_time, expected_inference_time = get_expected_times("vgg_unet")
 
     prep_perf_report(
-        model_name="models/experimental/functional_vgg_unet",
+        model_name="models/experimental/vgg_unet",
         batch_size=batch_size,
         inference_and_compile_time=inference_and_compile_time,
         inference_time=inference_time,
