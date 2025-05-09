@@ -5,6 +5,29 @@
 #include "dataflow_api.h"
 #include "socket_api.h"
 
+void fabric_write_any_len(
+    volatile tt_l1_ptr PACKET_HEADER_TYPE* data_packet_header_addr,
+    tt::tt_fabric::WorkerToFabricEdmSender& fabric_connection,
+    uint32_t src_addr,
+    uint64_t dst_addr,
+    uint32_t xfer_size) {
+    data_packet_header_addr->to_chip_unicast(static_cast<uint8_t>(1));
+    while (xfer_size > 4096) {
+        data_packet_header_addr->to_noc_unicast_write(NocUnicastCommandHeader{dst_addr}, 4096);
+        fabric_connection.wait_for_empty_write_slot();
+        fabric_connection.send_payload_without_header_non_blocking_from_address(src_addr, 4096);
+        fabric_connection.send_payload_blocking_from_address(
+            (uint32_t)data_packet_header_addr, sizeof(PACKET_HEADER_TYPE));
+        dst_addr += 4096;
+        src_addr += 4096;
+        xfer_size -= 4096;
+    }
+    data_packet_header_addr->to_noc_unicast_write(NocUnicastCommandHeader{dst_addr}, xfer_size);
+    fabric_connection.wait_for_empty_write_slot();
+    fabric_connection.send_payload_without_header_non_blocking_from_address(src_addr, xfer_size);
+    fabric_connection.send_payload_blocking_from_address((uint32_t)data_packet_header_addr, sizeof(PACKET_HEADER_TYPE));
+}
+
 void kernel_main() {
     // Get this value from mesh_socket_t struct on host
     constexpr uint32_t socket_config_addr = get_compile_time_arg_val(0);
@@ -41,16 +64,16 @@ void kernel_main() {
     while (outstanding_data_size) {
         socket_reserve_pages(sender_socket, 1);
         // Write Data over Fabric
-        data_packet_header_addr->to_chip_unicast(static_cast<uint8_t>(1));
-        data_packet_header_addr->to_noc_unicast_write(
-            NocUnicastCommandHeader{receiver_noc_coord_addr | sender_socket.write_ptr}, page_size);
-        fabric_connection.wait_for_empty_write_slot();
-        fabric_connection.send_payload_without_header_non_blocking_from_address(data_addr, page_size);
-        fabric_connection.send_payload_blocking_from_address(
-            (uint32_t)data_packet_header_addr, sizeof(PACKET_HEADER_TYPE));
+        fabric_write_any_len(
+            data_packet_header_addr,
+            fabric_connection,
+            data_addr,
+            receiver_noc_coord_addr | sender_socket.write_ptr,
+            page_size);
         data_addr += page_size;
         outstanding_data_size -= page_size;
         socket_push_pages(sender_socket, 1);
+        // for (volatile int i = 0; i < 10000; i++) {}
         fabric_socket_notify_receiver(sender_socket, fabric_connection, socket_packet_header_addr);
     }
     socket_barrier(sender_socket);
