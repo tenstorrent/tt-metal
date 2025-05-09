@@ -22,9 +22,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from sentencepiece import SentencePieceProcessor
 from pathlib import Path
 from typing import List
+
+from sentencepiece import SentencePieceProcessor
 
 
 class Tokenizer:

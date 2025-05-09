@@ -2,26 +2,26 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
-from loguru import logger
 import torch
-import ttnn
+from loguru import logger
 
+import ttnn
+from models.demos.t3000.llama2_70b.demo.demo_continuous_batching_paged_attention import (
+    ModelArgs,
+    PagedAttentionConfig,
+    TTArgs,
+)
 from models.demos.t3000.llama2_70b.reference.llama.llama import Llama
+from models.demos.t3000.llama2_70b.tt.llama_common import (
+    check_mesh_device,
+    comp_pcc,
+    load_llama_state_dict,
+    setup_llama_env,
+)
 from models.demos.t3000.llama2_70b.tt.llama_generation import (
     TtLlamaModelForGeneration,
     get_block_size,
     num_blocks_in_seq,
-)
-from models.demos.t3000.llama2_70b.tt.llama_common import (
-    setup_llama_env,
-    check_mesh_device,
-    comp_pcc,
-    load_llama_state_dict,
-)
-from models.demos.t3000.llama2_70b.demo.demo_continuous_batching_paged_attention import (
-    PagedAttentionConfig,
-    ModelArgs,
-    TTArgs,
 )
 
 

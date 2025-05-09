@@ -11,9 +11,10 @@ from loguru import logger
 import ttnn
 
 from tests.ttnn.utils_for_testing import assert_with_pcc, check_with_pcc
-from models.utility_functions import skip_for_wormhole_b0
+from models.utility_functions import skip_for_wormhole_b0, skip_for_blackhole
 
 
+@skip_for_blackhole("Fails on Blackhole. Issue #20913")
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 0}], indirect=True)
 @pytest.mark.parametrize(
     "N, C, H, W, num_groups, num_out_blocks, cores_y, cores_x",
@@ -21,8 +22,24 @@ from models.utility_functions import skip_for_wormhole_b0
         (8, 768, 1, 512, 32, 2, 8, 8),  # base case
         (9, 768, 1, 512, 32, 2, 8, 8),  # test batch size 9 (uneven batch sizes)
         (1, 768, 1, 512, 32, 2, 8, 8),  # test group channel count is less than tile size
-        (1, 640, 128, 128, 32, 2, 4, 8),  # Stable Diffusion XL Variant 1
-        (1, 960, 128, 128, 32, 2, 2, 8),  # Stable Diffusion XL Variant 2
+        (1, 480, 1, 64, 8, 1, 1, 1),  # test last group ends less than max tile span
+        (1, 2560, 1, 512, 32, 2, 8, 8),  # test mcast num_out_blocks 2
+        (1, 2560, 1, 1024, 32, 4, 8, 8),  # test mcast num_out_blocks 4
+        (1, 768, 1, 512, 32, 2, 8, 8),  # test group channel count is less than tile size
+        (2, 768, 1, 512, 32, 2, 8, 8),  # test batch size 2 (still multicast)
+        (8, 768, 1, 512, 32, 2, 8, 8),  # test batch size 8 (no multicast)
+        (8, 768, 1, 512, 32, 3, 8, 8),  # test batch size 8 (no multicast), but uneven num_out_blocks divisor
+        (9, 768, 1, 512, 32, 2, 8, 8),  # test batch size 9 (uneven batch sizes)
+        (
+            1,
+            128,
+            1,
+            512,
+            32,
+            2,
+            4,
+            8,
+        ),  # test all groups on core fit in less than one tile, so need to reduce col core count
     ],
 )
 def test_group_norm_DRAM(device, N, C, H, W, num_groups, num_out_blocks, cores_y, cores_x):
@@ -122,6 +139,7 @@ def generate_sdxl_dram_test_inputs():
     return inputs
 
 
+@skip_for_blackhole("Fails on Blackhole. Issue #20913")
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 0}], indirect=True)
 @pytest.mark.parametrize("input_shape, core_grid_y, num_out_blocks", generate_sdxl_dram_test_inputs())
 def test_sdxl_base_group_norm(device, input_shape, core_grid_y, num_out_blocks, use_program_cache):

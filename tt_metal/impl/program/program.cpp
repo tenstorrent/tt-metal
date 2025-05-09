@@ -4,7 +4,7 @@
 
 #include <allocator.hpp>
 #include <circular_buffer.hpp>
-#include <circular_buffer_types.hpp>
+#include <circular_buffer_config.hpp>
 #include <device.hpp>
 #include <graph_tracking.hpp>
 #include <magic_enum/magic_enum.hpp>
@@ -96,6 +96,22 @@ class GlobalCircularBuffer;
 }  // namespace experimental
 }  // namespace tt_metal
 }  // namespace tt
+
+namespace {
+
+using namespace tt::tt_metal;
+
+size_t get_ringbuffer_size(IDevice* device, HalProgrammableCoreType programmable_core_type) {
+    if (programmable_core_type == HalProgrammableCoreType::TENSIX) {
+        return device->allocator()->get_config().l1_unreserved_base -
+               MetalContext::instance().hal().get_dev_addr(
+                   HalProgrammableCoreType::TENSIX, HalL1MemAddrType::KERNEL_CONFIG);
+    } else {
+        return MetalContext::instance().hal().get_dev_size(programmable_core_type, HalL1MemAddrType::KERNEL_CONFIG);
+    }
+}
+
+}  // namespace
 
 namespace tt::tt_metal {
 
@@ -193,16 +209,16 @@ detail::ProgramImpl::ProgramImpl() :
     local_circular_buffer_allocation_needed_(false),
     finalized_(false),
     cached_device_hash_(std::nullopt) {
-    uint32_t programmable_core_count = MetalContext::instance().hal().get_programmable_core_type_count();
-    for (uint32_t i = 0; i < programmable_core_count; i++) {
+    programmable_core_count_ = MetalContext::instance().hal().get_programmable_core_type_count();
+    for (uint32_t i = 0; i < programmable_core_count_; i++) {
         kernels_.push_back({});
         grid_extent_.push_back({});
         kernel_groups_.push_back({});
         core_to_kernel_group_index_table_.push_back({});
     }
 
-    program_configs_.resize(programmable_core_count);
-    program_config_sizes_.resize(programmable_core_count + 2);
+    program_configs_.resize(programmable_core_count_);
+    program_config_sizes_.resize(programmable_core_count_ + 2);
 }
 
 Program::Program() : pimpl_(std::make_unique<detail::ProgramImpl>()) {
@@ -1587,6 +1603,129 @@ std::vector<uint32_t> &Program::get_program_config_sizes() const noexcept { retu
 
 std::unordered_map<uint64_t, ProgramCommandSequence> &Program::get_cached_program_command_sequences() noexcept {
     return pimpl_->cached_program_command_sequences_;
+}
+
+void detail::ProgramImpl::set_program_offsets_and_sizes(uint32_t index, const ProgramOffsetsState& state) {
+    auto& program_config = get_program_config(index);
+    program_config.rta_offset = state.rta_offset;
+    program_config.crta_offsets = state.crta_offsets;
+    program_config.crta_sizes = state.crta_sizes;
+    program_config.sem_offset = state.sem_offset;
+    program_config.sem_size = state.sem_size;
+    program_config.cb_offset = state.cb_offset;
+    program_config.cb_size = state.cb_size;
+    program_config.local_cb_size = state.local_cb_size;
+    program_config.kernel_text_offset = state.kernel_text_offset;
+    program_config.kernel_text_size = state.kernel_text_size;
+    program_config_sizes_[index] = state.offset;
+}
+
+void detail::ProgramImpl::set_program_attrs_across_core_types(IDevice* device) {
+    program_config_sizes_[programmable_core_count_] = runs_on_noc_multicast_only_cores();
+    program_config_sizes_[programmable_core_count_ + 1] = runs_on_noc_unicast_only_cores();
+    set_launch_msg_sem_offsets();
+    // TODO: This check is wrong - it populates dispatch data for dispatch kernels
+    if (std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr) {
+        populate_dispatch_data(device);  // TODO: maybe rename
+    }
+}
+
+void Program::finalize_offsets(IDevice* device) { pimpl_->finalize_offsets(device); }
+
+using KernelsGetter = std::function<std::unordered_map<KernelHandle, std::shared_ptr<Kernel>>&(uint32_t index)>;
+using KernelGroupsGetter = std::function<std::vector<std::shared_ptr<KernelGroup>>&(uint32_t index)>;
+using SemaphoresGetter = std::function<const std::vector<Semaphore>&()>;
+
+void detail::ProgramImpl::finalize_offsets(IDevice* device) {
+    if (is_finalized()) {
+        return;
+    }
+
+    // Create proper function objects that capture 'this'
+    KernelsGetter kernels_getter =
+        [this](uint32_t index) -> std::unordered_map<KernelHandle, std::shared_ptr<Kernel>>& {
+        return this->get_kernels(index);
+    };
+
+    KernelGroupsGetter kernel_groups_getter = [this](uint32_t index) -> std::vector<std::shared_ptr<KernelGroup>>& {
+        return this->get_kernel_groups(index);
+    };
+
+    SemaphoresGetter semaphores_getter = [this]() -> const std::vector<Semaphore>& { return this->semaphores(); };
+
+    // Create a span with just this program
+    std::array<ProgramImpl*, 1> programs_array = {this};
+    tt::stl::Span<ProgramImpl*> programs(programs_array);
+
+    ProgramImpl::finalize_program_offsets(device, kernels_getter, kernel_groups_getter, semaphores_getter, programs);
+
+    set_finalized();
+}
+
+// Compute relative offsets (wrt the start of the kernel config ring buffer) and sizes of all
+// program data structures in L1. Will be used when assembling dispatch commands for this program
+void detail::ProgramImpl::finalize_program_offsets(
+    IDevice* device,
+    const KernelsGetter& kernels_getter,
+    const KernelGroupsGetter& kernel_groups_getter,
+    const SemaphoresGetter& semaphores_getter,
+    tt::stl::Span<ProgramImpl*> programs) {
+    ProgramOffsetsState state;
+
+    const auto& hal = MetalContext::instance().hal();
+
+    for (uint32_t index = 0; index < hal.get_programmable_core_type_count(); index++) {
+        HalProgrammableCoreType programmable_core_type = hal.get_programmable_core_type(index);
+        state.offset = program_dispatch::finalize_rt_args(
+            kernels_getter(index),
+            kernel_groups_getter(index),
+            state.config_base_offset,
+            index,
+            state.rta_offset,
+            state.crta_offsets,
+            state.crta_sizes);
+
+        TT_ASSERT(state.offset == tt::align(state.offset, hal.get_alignment(HalMemType::L1)));
+
+        state.offset =
+            program_dispatch::finalize_sems(index, state.offset, semaphores_getter(), state.sem_offset, state.sem_size);
+
+        TT_ASSERT(state.offset == tt::align(state.offset, hal.get_alignment(HalMemType::L1)));
+
+        state.offset = program_dispatch::finalize_cbs(
+            index, kernel_groups_getter(index), state.offset, state.cb_offset, state.cb_size, state.local_cb_size);
+
+        TT_ASSERT(state.offset == tt::align(state.offset, hal.get_alignment(HalMemType::L1)));
+
+        state.offset = program_dispatch::finalize_kernel_bins(
+            device,
+            index,
+            kernels_getter(index),
+            kernel_groups_getter(index),
+            state.offset,
+            state.kernel_text_offset,
+            state.kernel_text_size);
+
+        TT_ASSERT(state.offset == tt::align(state.offset, hal.get_alignment(HalMemType::L1)));
+
+        size_t max_size = get_ringbuffer_size(device, programmable_core_type);
+
+        TT_FATAL(
+            state.offset < max_size,
+            "Program size ({}) too large for kernel config buffer ({}) on {}",
+            state.offset,
+            max_size,
+            magic_enum::enum_name(programmable_core_type));
+
+        for (auto& program : programs) {
+            program->set_program_offsets_and_sizes(index, state);
+        }
+    }
+
+    // The sem offsets cross programmable_core_types so must be set after the loop above
+    for (auto& program : programs) {
+        program->set_program_attrs_across_core_types(device);
+    }
 }
 
 }  // namespace tt::tt_metal

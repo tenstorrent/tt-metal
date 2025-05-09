@@ -41,7 +41,7 @@
 #include "assert.hpp"
 #include "buffer_types.hpp"
 #include "command_queue.hpp"
-#include "command_queue_common.hpp"
+#include "dispatch/command_queue_common.hpp"
 #include "common/core_assignment.hpp"
 #include "core_coord.hpp"
 #include "device.hpp"
@@ -85,6 +85,10 @@ namespace tt_metal {
 
 uint64_t IDevice::get_dev_addr(CoreCoord virtual_core, HalL1MemAddrType addr_type) const {
     return MetalContext::instance().hal().get_dev_addr(this->get_programmable_core_type(virtual_core), addr_type);
+}
+
+uint64_t IDevice::get_dev_size(CoreCoord virtual_core, HalL1MemAddrType addr_type) const {
+    return MetalContext::instance().hal().get_dev_size(this->get_programmable_core_type(virtual_core), addr_type);
 }
 
 void IDevice::set_program_cache_misses_allowed(bool allowed) {
@@ -1109,7 +1113,7 @@ void Device::configure_command_queue_programs() {
     configure_dispatch_cores(this);
 
     // Run the cq program
-    program_dispatch::finalize_program_offsets(command_queue_program, this);
+    command_queue_program.finalize_offsets(this);
     detail::ConfigureDeviceWithProgram(this, command_queue_program, true);
     tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(this->id());
 }
@@ -1168,7 +1172,7 @@ void Device::init_fabric() {
 
     configure_fabric_cores(this);
 
-    program_dispatch::finalize_program_offsets(*fabric_program_, this);
+    fabric_program_->finalize_offsets(this);
 
     detail::WriteRuntimeArgsToDevice(this, *fabric_program_, this->using_fast_dispatch());
     detail::ConfigureDeviceWithProgram(this, *fabric_program_, this->using_fast_dispatch());
@@ -1192,6 +1196,7 @@ void Device::init_fabric() {
                 this->id(), physical_core, msg, go_msg, this->get_dev_addr(physical_core, HalL1MemAddrType::LAUNCH));
         }
     }
+    log_info(tt::LogMetal, "Fabric initialized on Device {}", this->id_);
 }
 
 bool Device::initialize(
@@ -1826,6 +1831,15 @@ HalProgrammableCoreType Device::get_programmable_core_type(CoreCoord virtual_cor
     }
 
     return HalProgrammableCoreType::IDLE_ETH;
+}
+
+HalMemType Device::get_mem_type_of_core(CoreCoord virtual_core) const {
+    if (!tt::tt_metal::MetalContext::instance().get_cluster().is_ethernet_core(virtual_core, this->id_) &&
+        !tt::tt_metal::MetalContext::instance().get_cluster().is_worker_core(virtual_core, this->id_)) {
+        return HalMemType::DRAM;
+    } else {
+        return HalMemType::L1;
+    }
 }
 
 std::shared_ptr<distributed::MeshDevice> Device::get_mesh_device() { return mesh_device.lock(); }

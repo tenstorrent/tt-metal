@@ -2,10 +2,11 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import transformers
-import ttnn
 import torch
+import transformers
 from transformers.modeling_attn_mask_utils import AttentionMaskConverter
+
+import ttnn
 
 
 def strip_state_dict_prefix(state_dict, prefix):

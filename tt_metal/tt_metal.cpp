@@ -32,7 +32,7 @@
 #include <variant>
 
 #include "buffer_types.hpp"
-#include "circular_buffer_types.hpp"
+#include "circular_buffer_config.hpp"
 #include "data_types.hpp"
 #include "device.hpp"
 #include "impl/context/metal_context.hpp"
@@ -532,7 +532,21 @@ void WriteToDeviceInterleavedContiguous(const Buffer& buffer, tt::stl::Span<cons
 
 void WriteToDevice(Buffer& buffer, tt::stl::Span<const uint8_t> host_buffer) {
     ZoneScoped;
-    if (buffer.buffer_layout() == TensorMemoryLayout::INTERLEAVED ||
+    if (buffer.is_nd_sharded()) {
+        TT_FATAL(buffer.is_l1(), "Buffer with BufferDistributionSpec must be L1 for WriteToDevice!");
+        const auto& [banks, bank_mapping_in_bytes] = buffer.get_bank_data_mapping();
+        for (size_t i = 0; i < banks.size(); i++) {
+            const auto virtual_core = buffer.device()->virtual_core_from_logical_core(banks[i], buffer.core_type());
+            for (const auto& chunk_mapping_in_bytes : bank_mapping_in_bytes[i]) {
+                // TODO: subspan is in elements; here 1 element is 1 byte (ie. uint8_t) so using bytes here is fine
+                auto chunk_span = tt::stl::MakeConstSpan(
+                    host_buffer.subspan(chunk_mapping_in_bytes.src, chunk_mapping_in_bytes.size));
+                llrt::write_hex_vec_to_core(
+                    buffer.device()->id(), virtual_core, chunk_span, buffer.address() + chunk_mapping_in_bytes.dst);
+            }
+        }
+    } else if (
+        buffer.buffer_layout() == TensorMemoryLayout::INTERLEAVED ||
         buffer.buffer_layout() == TensorMemoryLayout::SINGLE_BANK) {
         WriteToDeviceInterleavedContiguous(buffer, host_buffer);
     } else if (is_sharded(buffer.buffer_layout())) {
@@ -641,7 +655,22 @@ void ReadFromDeviceSharded(Buffer& buffer, uint8_t* host_buffer, bool shard_orde
 
 void ReadFromDevice(Buffer& buffer, uint8_t* host_buffer, bool shard_order) {
     ZoneScoped;
-    if (buffer.buffer_layout() == TensorMemoryLayout::INTERLEAVED ||
+    if (buffer.is_nd_sharded()) {
+        TT_FATAL(buffer.is_l1(), "Buffer with BufferDistributionSpec must be L1 for ReadFromDevice!");
+        const auto& [banks, bank_mapping_in_bytes] = buffer.get_bank_data_mapping();
+        for (size_t i = 0; i < banks.size(); i++) {
+            const auto virtual_core = buffer.device()->virtual_core_from_logical_core(banks[i], buffer.core_type());
+            for (const auto& chunk_mapping_in_bytes : bank_mapping_in_bytes[i]) {
+                // Using cluster read_core API (as opposed to ReadFromDeviceL1) because it is inplace
+                tt::tt_metal::MetalContext::instance().get_cluster().read_core(
+                    host_buffer + chunk_mapping_in_bytes.src,
+                    chunk_mapping_in_bytes.size,
+                    tt_cxy_pair(buffer.device()->id(), virtual_core),
+                    buffer.address() + chunk_mapping_in_bytes.dst);
+            }
+        }
+    } else if (
+        buffer.buffer_layout() == TensorMemoryLayout::INTERLEAVED ||
         buffer.buffer_layout() == TensorMemoryLayout::SINGLE_BANK) {
         ReadFromDeviceInterleavedContiguous(buffer, host_buffer);
     } else if (is_sharded(buffer.buffer_layout())) {
@@ -714,7 +743,7 @@ void LaunchProgram(IDevice* device, Program& program, bool wait_until_cores_done
         }
         detail::CompileProgram(device, program);
         if (!program.is_finalized()) {
-            program_dispatch::finalize_program_offsets(program, device);
+            program.finalize_offsets(device);
         }
 
         detail::WriteRuntimeArgsToDevice(device, program, force_slow_dispatch);

@@ -106,7 +106,6 @@ Following are the conv2d operation configuration parameters:
 * `dtype = ttnn.bfloat16` input activations data type.
 * `weights_dtype = ttnn.bfloat16` weights and bias data type.
 * `activation = ""` _optional_ `string`. Any activation function to apply. Options are `"relu"`.
-* `input_channels_alignment = 32` _optional_ `uint32_t`. Alignment value for channels dimension in the input tensor. This is applicable when `in_channels <= 16` when the alignment can be set to 16 instead of 32.
 * `deallocate_activation = False` _optional_ bool indicating whether the input activation tensor memory should be deallocated.
 * `reallocate_halo_output = False` _optional_ bool indicating if the intermediate tensor generated within the op should be reallocated to reduce memory fragmentation.
 * `act_block_h_override = 0` _optional_ `uint32_t` to override the `act_block_h` parameter, which determines the size of blocks used in computations -- smaller values require less memory, larger values require more memory but are more performant. This argument is ignored when `shard_layout = WIDTH_SHARDED`.

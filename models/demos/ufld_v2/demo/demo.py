@@ -2,21 +2,20 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch
-import pytest
 import json
-import numpy as np
 import os
+
+import numpy as np
+import pytest
+import torch
 from loguru import logger
-from models.demos.ufld_v2.reference.ufld_v2_model import TuSimple34
+from ttnn.model_preprocessing import infer_ttnn_module_args, preprocess_model_parameters
+
 from models.demos.ufld_v2.demo import model_config as cfg
-from models.demos.ufld_v2.demo.demo_utils import (
-    run_test_tusimple,
-    LaneEval,
-)
+from models.demos.ufld_v2.demo.demo_utils import LaneEval, run_test_tusimple
+from models.demos.ufld_v2.reference.ufld_v2_model import TuSimple34
 from models.demos.ufld_v2.ttnn.ttnn_ufld_v2 import TtnnUFLDv2
 from tests.ttnn.integration_tests.ufld_v2.test_ttnn_ufld_v2 import custom_preprocessor_whole_model
-from ttnn.model_preprocessing import preprocess_model_parameters, infer_ttnn_module_args
 
 
 @pytest.mark.parametrize(

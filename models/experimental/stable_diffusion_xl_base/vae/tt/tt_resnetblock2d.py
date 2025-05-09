@@ -4,13 +4,13 @@
 
 import torch.nn as nn
 import ttnn
+import torch
+import torch.nn.functional as F
 
 from models.experimental.stable_diffusion_xl_base.tt.sdxl_utility import (
-    prepare_gn_mask,
-    prepare_gn_beta_gamma,
     prepare_conv_params,
 )
-from models.experimental.stable_diffusion_xl_base.vae.tt.vae_utility import get_DRAM_GN_config, get_DRAM_conv_config
+from models.experimental.stable_diffusion_xl_base.vae.tt.vae_utility import get_DRAM_conv_config
 
 
 class TtResnetBlock2D(nn.Module):
@@ -29,14 +29,14 @@ class TtResnetBlock2D(nn.Module):
         self.norm_eps = 1e-5
 
         # loading weights
-        norm_weights_1 = state_dict[f"{module_path}.norm1.weight"]
-        norm_bias_1 = state_dict[f"{module_path}.norm1.bias"]
+        self.norm_weights_1 = state_dict[f"{module_path}.norm1.weight"]
+        self.norm_bias_1 = state_dict[f"{module_path}.norm1.bias"]
 
         conv_weights_1 = state_dict[f"{module_path}.conv1.weight"]
         conv_bias_1 = state_dict[f"{module_path}.conv1.bias"].unsqueeze(0).unsqueeze(0).unsqueeze(0)
 
-        norm_weights_2 = state_dict[f"{module_path}.norm2.weight"]
-        norm_bias_2 = state_dict[f"{module_path}.norm2.bias"]
+        self.norm_weights_2 = state_dict[f"{module_path}.norm2.weight"]
+        self.norm_bias_2 = state_dict[f"{module_path}.norm2.bias"]
 
         conv_weights_2 = state_dict[f"{module_path}.conv2.weight"]
         conv_bias_2 = state_dict[f"{module_path}.conv2.bias"].unsqueeze(0).unsqueeze(0).unsqueeze(0)
@@ -45,25 +45,26 @@ class TtResnetBlock2D(nn.Module):
             conv_weights_3 = state_dict[f"{module_path}.conv_shortcut.weight"]
             conv_bias_3 = state_dict[f"{module_path}.conv_shortcut.bias"].unsqueeze(0).unsqueeze(0).unsqueeze(0)
 
-        core_y, self.norm_blocks_1 = get_DRAM_GN_config(module_path, 1)
-        self.norm_core_grid_1 = ttnn.CoreGrid(y=core_y, x=8)
+        # DEVICE CODE: GroupNorm preparation
+        # core_y, self.norm_blocks_1 = get_DRAM_GN_config(module_path, 1)
+        # self.norm_core_grid_1 = ttnn.CoreGrid(y=core_y, x=8)
 
-        self.gamma_t_1, self.beta_t_1 = prepare_gn_beta_gamma(
-            device, norm_weights_1, norm_bias_1, self.norm_core_grid_1.y
-        )
-        self.input_mask_1 = prepare_gn_mask(
-            self.device, norm_weights_1.shape[0], self.norm_groups, self.norm_core_grid_1.y
-        )
+        # self.gamma_t_1, self.beta_t_1 = prepare_gn_beta_gamma(
+        #     device, norm_weights_1, norm_bias_1, self.norm_core_grid_1.y
+        # )
+        # self.input_mask_1 = prepare_gn_mask(
+        #     self.device, norm_weights_1.shape[0], self.norm_groups, self.norm_core_grid_1.y
+        # )
 
-        core_y, self.norm_blocks_2 = get_DRAM_GN_config(module_path, 2)
-        self.norm_core_grid_2 = ttnn.CoreGrid(y=core_y, x=8)
+        # core_y, self.norm_blocks_2 = get_DRAM_GN_config(module_path, 2)
+        # self.norm_core_grid_2 = ttnn.CoreGrid(y=core_y, x=8)
 
-        self.gamma_t_2, self.beta_t_2 = prepare_gn_beta_gamma(
-            device, norm_weights_2, norm_bias_2, self.norm_core_grid_2.y
-        )
-        self.input_mask_2 = prepare_gn_mask(
-            self.device, norm_weights_2.shape[0], self.norm_groups, self.norm_core_grid_2.y
-        )
+        # self.gamma_t_2, self.beta_t_2 = prepare_gn_beta_gamma(
+        #     device, norm_weights_2, norm_bias_2, self.norm_core_grid_2.y
+        # )
+        # self.input_mask_2 = prepare_gn_mask(
+        #     self.device, norm_weights_2.shape[0], self.norm_groups, self.norm_core_grid_2.y
+        # )
 
         (
             self.compute_config,
@@ -71,38 +72,81 @@ class TtResnetBlock2D(nn.Module):
             self.tt_conv1_weights,
             self.tt_conv1_bias,
             self.conv1_params,
-        ) = prepare_conv_params(device, conv_weights_1, conv_bias_1, ttnn.bfloat16, act_block_h_override=32)
+        ) = prepare_conv_params(
+            device,
+            conv_weights_1,
+            conv_bias_1,
+            ttnn.bfloat16,
+            act_block_h_override=32,
+            fp32_dest_acc_en=True,
+            math_fidelity=ttnn.MathFidelity.LoFi,
+        )
         self.conv1_slice_config = get_DRAM_conv_config(module_path, 1)
 
         _, _, self.tt_conv2_weights, self.tt_conv2_bias, self.conv2_params = prepare_conv_params(
-            device, conv_weights_2, conv_bias_2, ttnn.bfloat16, act_block_h_override=32
+            device,
+            conv_weights_2,
+            conv_bias_2,
+            ttnn.bfloat16,
+            act_block_h_override=32,
+            fp32_dest_acc_en=True,
+            math_fidelity=ttnn.MathFidelity.LoFi,
         )
         self.conv2_slice_config = get_DRAM_conv_config(module_path, 2)
 
         if conv_shortcut:
             _, _, self.tt_conv3_weights, self.tt_conv3_bias, self.conv3_params = prepare_conv_params(
-                device, conv_weights_3, conv_bias_3, ttnn.bfloat16, act_block_h_override=32
+                device,
+                conv_weights_3,
+                conv_bias_3,
+                ttnn.bfloat16,
+                act_block_h_override=32,
+                fp32_dest_acc_en=True,
+                math_fidelity=ttnn.MathFidelity.LoFi,
             )
         else:
             self.tt_conv3_weights = self.tt_conv3_bias = None
 
     def forward(self, input_tensor, input_shape):
         B, C, H, W = input_shape
-        hidden_states = input_tensor
+        # input_tensor = ttnn.reshape(input_tensor, (B, H, W, C))
 
-        hidden_states = ttnn.to_memory_config(hidden_states, ttnn.DRAM_MEMORY_CONFIG)
-        hidden_states = ttnn.group_norm(
+        # HOST FALLBACK: GroupNorm
+        hidden_states = ttnn.to_torch(input_tensor)
+        hidden_states = hidden_states.reshape(B, H, W, C)
+        hidden_states = torch.permute(hidden_states, (0, 3, 1, 2))
+        hidden_states = F.group_norm(
             hidden_states,
             num_groups=self.norm_groups,
-            input_mask=self.input_mask_1,
-            weight=self.gamma_t_1,
-            bias=self.beta_t_1,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            core_grid=self.norm_core_grid_1,
-            epsilon=self.norm_eps,
-            inplace=False,
-            num_out_blocks=self.norm_blocks_1,
+            weight=self.norm_weights_1,
+            bias=self.norm_bias_1,
+            eps=self.norm_eps,
         )
+        hidden_states = torch.permute(hidden_states, (0, 2, 3, 1))
+        hidden_states = hidden_states.reshape(1, 1, B * H * W, C)
+        hidden_states = ttnn.from_torch(
+            hidden_states,
+            dtype=ttnn.bfloat16,
+            device=self.device,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
+        # DEVICE CODE: GroupNorm
+        # input_tensor = ttnn.reshape(input_tensor, (B, 1, H * W, C))
+        # hidden_states = ttnn.to_memory_config(input_tensor, ttnn.DRAM_MEMORY_CONFIG)
+        # hidden_states = ttnn.group_norm(
+        #     hidden_states,
+        #     num_groups=self.norm_groups,
+        #     input_mask=self.input_mask_1,
+        #     weight=self.gamma_t_1,
+        #     bias=self.beta_t_1,
+        #     memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        #     core_grid=self.norm_core_grid_1,
+        #     epsilon=self.norm_eps,
+        #     inplace=False,
+        #     num_out_blocks=self.norm_blocks_1,
+        # )
 
         hidden_states = ttnn.silu(hidden_states)
 
@@ -144,20 +188,46 @@ class TtResnetBlock2D(nn.Module):
         if self.conv1_slice_config is not None:
             hidden_states = ttnn.reshape(hidden_states, (1, 1, B * H * W, C))
             hidden_states = ttnn.to_layout(hidden_states, ttnn.TILE_LAYOUT)
-        hidden_states = ttnn.to_memory_config(hidden_states, ttnn.DRAM_MEMORY_CONFIG)
-        hidden_states = ttnn.group_norm(
+
+        # DEVICE CODE: GroupNorm
+        # hidden_states = ttnn.reshape(hidden_states, (B, 1, H * W, C))
+        # hidden_states = ttnn.to_memory_config(hidden_states, ttnn.DRAM_MEMORY_CONFIG)
+        # hidden_states = ttnn.group_norm(
+        #     hidden_states,
+        #     num_groups=self.norm_groups,
+        #     input_mask=self.input_mask_2,
+        #     weight=self.gamma_t_2,
+        #     bias=self.beta_t_2,
+        #     memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        #     core_grid=self.norm_core_grid_2,
+        #     epsilon=self.norm_eps,
+        #     inplace=False,
+        #     num_out_blocks=self.norm_blocks_2,
+        # )
+
+        # HOST FALLBACK: GroupNorm
+        hidden_states = ttnn.to_torch(hidden_states)
+        hidden_states = hidden_states.reshape(B, H, W, C)
+        hidden_states = torch.permute(hidden_states, (0, 3, 1, 2))
+        hidden_states = F.group_norm(
             hidden_states,
             num_groups=self.norm_groups,
-            input_mask=self.input_mask_2,
-            weight=self.gamma_t_2,
-            bias=self.beta_t_2,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            core_grid=self.norm_core_grid_2,
-            epsilon=self.norm_eps,
-            inplace=False,
-            num_out_blocks=self.norm_blocks_2,
+            weight=self.norm_weights_2,
+            bias=self.norm_bias_2,
+            eps=self.norm_eps,
         )
-        hidden_states = ttnn.silu(hidden_states)  # hang if not tile
+        hidden_states = torch.permute(hidden_states, (0, 2, 3, 1))
+        hidden_states = hidden_states.reshape(1, 1, B * H * W, C)
+        hidden_states = ttnn.from_torch(
+            hidden_states,
+            dtype=ttnn.bfloat16,
+            device=self.device,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
+        hidden_states = ttnn.to_layout(hidden_states, ttnn.TILE_LAYOUT)
+        hidden_states = ttnn.silu(hidden_states)  # note: silu hangs if not tile
         self.conv_config.shard_layout = None
         if self.conv2_slice_config is not None:
             hidden_states = ttnn.to_layout(hidden_states, ttnn.ROW_MAJOR_LAYOUT)
@@ -189,7 +259,6 @@ class TtResnetBlock2D(nn.Module):
         self.tt_conv2_bias = d_b
         if self.conv2_slice_config is not None:
             hidden_states = ttnn.reshape(hidden_states, (1, 1, B * H * W, C))
-            hidden_states = ttnn.to_layout(hidden_states, ttnn.TILE_LAYOUT)
 
         if self.tt_conv3_weights is not None:
             if input_tensor.shape[3] >= 1920:
@@ -221,8 +290,13 @@ class TtResnetBlock2D(nn.Module):
             C = self.conv3_params["output_channels"]
             self.tt_conv3_weights = d_w
             self.tt_conv3_bias = d_b
-            if input_tensor.is_sharded():
-                input_tensor = ttnn.sharded_to_interleaved(input_tensor, ttnn.L1_MEMORY_CONFIG)
+        if input_tensor.is_sharded():
+            input_tensor = ttnn.sharded_to_interleaved(input_tensor, ttnn.L1_MEMORY_CONFIG)
+        if hidden_states.is_sharded():
+            hidden_states = ttnn.sharded_to_interleaved(hidden_states, ttnn.L1_MEMORY_CONFIG)
+
+        hidden_states = ttnn.to_layout(hidden_states, ttnn.TILE_LAYOUT)
+        input_tensor = ttnn.to_layout(input_tensor, ttnn.TILE_LAYOUT)
         hidden_states = ttnn.add(input_tensor, hidden_states)
 
         ttnn.deallocate(input_tensor)

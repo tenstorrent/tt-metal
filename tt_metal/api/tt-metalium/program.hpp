@@ -8,7 +8,7 @@
 #include <optional>
 
 #include <tt-metalium/kernel_types.hpp>
-#include <tt-metalium/circular_buffer_types.hpp>
+#include <tt-metalium/circular_buffer_config.hpp>
 #include <tt-metalium/semaphore.hpp>
 #include <tt-metalium/worker_config_buffer.hpp>
 #include <tt-metalium/dev_msgs.h>
@@ -172,6 +172,7 @@ public:
 
     void allocate_circular_buffers(const IDevice* device);
 
+    void finalize_offsets(IDevice* device);
     bool is_finalized() const;
     void set_finalized();
     ProgramBinaryStatus get_program_binary_status(std::size_t device_id) const;
@@ -191,6 +192,7 @@ public:
     const std::vector<SubDeviceId>& determine_sub_device_ids(const IDevice* device);
     void set_kernels_bin_buffer(const std::shared_ptr<Buffer>& buffer);
     uint32_t get_cb_memory_size() const;
+    detail::ProgramImpl& impl() { return *pimpl_; }
 
 private:
     std::unique_ptr<detail::ProgramImpl> pimpl_;
@@ -237,8 +239,6 @@ private:
 
     friend void program_dispatch::assemble_device_commands(
         ProgramCommandSequence& program_command_sequence, Program& program, IDevice* device, SubDeviceId sub_device_id);
-    template <typename T>
-    friend void program_dispatch::finalize_program_offsets(T&, IDevice*);
     template <typename WorkloadType, typename DeviceType>
     friend uint32_t program_dispatch::program_base_addr_on_core(WorkloadType&, DeviceType, HalProgrammableCoreType);
     friend HWCommandQueue;

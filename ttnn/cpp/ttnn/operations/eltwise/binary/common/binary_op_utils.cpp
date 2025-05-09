@@ -6,7 +6,7 @@
 
 #include <tt-metalium/assert.hpp>
 #include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
-#include "cpp/ttnn/tensor/types.hpp"
+#include "ttnn/tensor/types.hpp"
 
 using namespace tt::tt_metal;
 
@@ -262,6 +262,14 @@ std::map<std::string, std::string> get_defines_fp32(
             } else {
                 op_name = "binary_min_tile";
             }
+            break;
+        case BinaryOpType::GCD:
+            new_defines.insert({"BINOP_INIT", fmt::format("gcd_tile_init();")});
+            op_name = "gcd_tile";
+            break;
+        case BinaryOpType::LCM:
+            new_defines.insert({"BINOP_INIT", fmt::format("lcm_tile_init();")});
+            op_name = "lcm_tile";
             break;
         case BinaryOpType::LOGADDEXP:
             // PRE_IN0_0 ===> Applies prescaling for first input
