@@ -2,6 +2,11 @@ name: Build test and publish upstream tests
 
 on:
   workflow_dispatch:
+    inputs:
+      tag-as-latest:
+        default: false
+        type: boolean
+        description: "Tag this run as latest"
   schedule:
     - cron: '0 12 * * *'
 
@@ -139,15 +144,6 @@ jobs:
             TEST_COMMAND=${{ matrix.image-config.test-command }}
           tags: ${{ matrix.image-config.image-tag }}
           context: ${{ github.workspace }}
-      - name: Tag and push latest
-        if: ${{ github.ref == 'refs/heads/main' }}
-        run: |
-          IMAGE_NAME="${{ matrix.image-config.image-base-name }}"
-          LATEST_TAG="${IMAGE_NAME}:latest"
-          echo "Tagging ${{ matrix.image-config.image-tag }} as ${LATEST_TAG}"
-          docker pull ${{ matrix.image-config.image-tag }}
-          docker tag ${{ matrix.image-config.image-tag }} ${LATEST_TAG}
-          docker push ${LATEST_TAG}
   test-wh-6u-image:
     needs:
       - get-image-tags
@@ -187,3 +183,39 @@ jobs:
       - name: Run profiler image
         timeout-minutes: 10
         run: docker run -v /dev/hugepages-1G:/dev/hugepages-1G --device /dev/tenstorrent ${{ needs.get-image-tags.outputs.bh-profiler-image-tag }}
+  push-latest:
+    if: ${{ github.ref == 'refs/heads/main' || inputs.tag-as-latest }}
+    needs:
+      - get-image-tags
+      - test-wh-6u-image
+      - test-bh-image
+    permissions:
+      packages: write
+      contents: read
+    strategy:
+      matrix:
+        image-config:
+          - image-tag: ${{ needs.get-image-tags.outputs.wh-6u-image-tag }}
+            image-base-name: ${{ needs.get-image-tags.outputs.wh-6u-base-image-name }}
+          - image-tag: ${{ needs.get-image-tags.outputs.wh-6u-profiler-image-tag }}
+            image-base-name: ${{ needs.get-image-tags.outputs.wh-6u-profiler-base-image-name }}
+          - image-tag: ${{ needs.get-image-tags.outputs.bh-image-tag }}
+            image-base-name: ${{ needs.get-image-tags.outputs.bh-base-image-name }}
+          - image-tag: ${{ needs.get-image-tags.outputs.bh-profiler-image-tag }}
+            image-base-name: ${{ needs.get-image-tags.outputs.bh-profiler-base-image-name }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Tag and push latest
+        run: |
+          IMAGE_NAME="${{ matrix.image-config.image-base-name }}"
+          LATEST_TAG="${IMAGE_NAME}:latest"
+          echo "Tagging ${{ matrix.image-config.image-tag }} as ${LATEST_TAG}"
+          docker pull ${{ matrix.image-config.image-tag }}
+          docker tag ${{ matrix.image-config.image-tag }} ${LATEST_TAG}
+          docker push ${LATEST_TAG}
