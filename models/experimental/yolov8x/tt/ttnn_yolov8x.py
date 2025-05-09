@@ -101,7 +101,6 @@ class TtConv:
             weights_dtype=ttnn.bfloat16,
             activation="",
             shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-            input_channels_alignment=16 if self.input_params[4] < 16 else 32,
             act_block_w_div=1,
             transpose_shards=False,
             deallocate_activation=False,
@@ -544,7 +543,7 @@ class TtDetectionModel:
             device,
             parameters,
             "model.0",
-            input_params=[3, 2, 1, 80, 3],
+            input_params=[3, 2, 1, 80, 16],
             act_block_h=True,
             deallocate_activation=True,
         )
