@@ -186,8 +186,6 @@ void BinaryNgDeviceOperation::validate_on_program_cache_miss(
             "If both output dtype and output tensor provided dtype should match");
     }
 
-    TT_FATAL(input_tensor_a.get_layout() == Layout::TILE, "First operand to eltwise binary must be tilized");
-
     bool tensor_a_sharded = input_tensor_a.memory_config().is_sharded();
     if (not tensor_a_sharded) {
         TT_FATAL(
@@ -209,7 +207,6 @@ void BinaryNgDeviceOperation::validate_on_program_cache_miss(
         TT_FATAL(
             input_tensor_a.device() == input_tensor_b->device(),
             "Operands to eltwise binary need to be on the same device!");
-        TT_FATAL(input_tensor_b->get_layout() == Layout::TILE, "Second operand to eltwise binary must be tilized");
 
         if (not tensor_b_sharded) {
             TT_FATAL(
