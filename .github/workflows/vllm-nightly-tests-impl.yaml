@@ -14,7 +14,7 @@ on:
         type: string
 
 env:
-  TT_METAL_DIR: /work/tt-metal
+  TT_METAL_DIR: /work/
   VLLM_DIR: /work/vllm
 
 jobs:
@@ -56,18 +56,19 @@ jobs:
         TT_METAL_HOME: ${{ env.TT_METAL_DIR }}
         vllm_dir: ${{ env.VLLM_DIR }}
         ARCH_NAME: ${{ matrix.test-group.arch }}
+        VLLM_TARGET_DEVICE: "tt"
         PYTHONPATH: ${{ env.TT_METAL_DIR }}:${{ env.VLLM_DIR }}
         LD_LIBRARY_PATH: ${{ env.TT_METAL_DIR }}/build/lib
         LOGURU_LEVEL: INFO
       volumes:
-        - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
+        - ${{ github.workspace }}/docker-job:${{ env.TT_METAL_DIR }} # Subdir to workaround https://github.com/actions/runner/issues/691
         - /dev/hugepages-1G:/dev/hugepages-1G
         - /mnt/MLPerf:/mnt/MLPerf
       options: "--device /dev/tenstorrent"
     defaults:
       run:
         shell: bash
-        working-directory: /work # https://github.com/actions/runner/issues/878
+        working-directory: ${{ env.TT_METAL_DIR }} # https://github.com/actions/runner/issues/878
     steps:
       - name: ⬇️ Setup Metal
         uses: tenstorrent/tt-metal/.github/actions/setup-job@main
@@ -75,15 +76,18 @@ jobs:
         with:
           build-artifact-name: ${{ inputs.build-artifact-name }}
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
-          path: ${{ github.workspace }}/docker-job/tt-metal
 
       - name: ⬇️ Checkout vLLM
         uses: actions/checkout@v4
         with:
           repository: tenstorrent/vllm
-          path: ${{ github.workspace }}/docker-job/vllm
           ref: ppetrovic/best-of
           fetch-depth: 1
+
+      - name: 📀 Install vLLM
+        run: |
+          pip3 install -r ${{ env.VLLM_DIR }}/requirements-tt.txt
+          pip3 install -e ${{ env.VLLM_DIR }}/
 
       - name: 📂 Create output directory
         run: |
@@ -111,9 +115,8 @@ jobs:
 
           # vLLM environment variables
           export VLLM_RPC_TIMEOUT=300000
-          export VLLM_TARGET_DEVICE="tt"
 
-          python3 ./vllm/examples/server_example_tt.py \
+          python3 ${{ env.VLLM_DIR }}/examples/server_example_tt.py \
             --model ${{ matrix.test-group.model }} \
             --override_tt_config '{ \
               "dispatch_core_axis": $(( DISPATCH_CORE_AXIS )), \
@@ -145,7 +148,7 @@ jobs:
       - name: 📐 Run benchmark
         timeout-minutes: ${{ matrix.test-group.benchmark_timeout }}
         run: |
-          python3 ./vllm/benchmarks/benchmark_serving.py \
+          python3 ${{ env.VLLM_DIR }}/benchmarks/benchmark_serving.py \
             --dummy-argument \
             --backend vllm \
             --model ${{ matrix.test-group.model }} \
