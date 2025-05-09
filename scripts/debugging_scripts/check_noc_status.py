@@ -6,7 +6,7 @@
 Script Name: check_noc_status.py
 
 Usage:
-    check_noc_status.py <elf-file>
+    ./scripts/debugging_scripts/check_noc_status.py <elf-file>
 
 Arguments:
     <elf-file>    Path to risc firmware elf file
