@@ -529,7 +529,6 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
     } else {
         input_channels_padded = shard_shape[1];
     }
-
     ttnn::Shape ashape_with_channels_padded({ashape[0], ashape[1], ashape[2], input_channels_padded});
     uint32_t conv_act_size_h = ashape_with_channels_padded[1];
     uint32_t conv_act_size_w = ashape_with_channels_padded[2];

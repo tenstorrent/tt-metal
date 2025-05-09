@@ -27,6 +27,12 @@ uint32_t find_closest_largest_divisor_with_num_padding(uint32_t num, uint32_t st
 
 uint32_t find_closest_largest_divisor_with_num_padding(uint32_t num1, uint32_t num2, uint32_t start_divisor);
 
+uint32_t get_input_channels_alignment(
+    TensorMemoryLayout input_tensor_memory_layout,
+    Layout input_tensor_layout,
+    bool is_mm_conv,
+    const std::optional<MemoryConfig>& input_memory_config);
+
 bool use_matmul_for_1x1_conv(
     const std::array<uint32_t, 2>& kernel_size,
     const std::array<uint32_t, 2>& stride,
@@ -107,7 +113,7 @@ std::tuple<OptimizedConvParallelizationConfig, OptimizedConvBlockConfig, MemoryC
     const DeviceComputeKernelConfig& compute_config,
     const sliding_window::ParallelConfig& input_parallel_config,
     const sliding_window::ParallelConfig& output_parallel_config,
-    uint32_t in_channels,
+    uint32_t in_channels_padded,
     uint32_t out_channels,
     uint32_t batch_size,
     uint32_t output_height,

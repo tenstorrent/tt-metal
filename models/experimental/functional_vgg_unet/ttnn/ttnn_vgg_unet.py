@@ -38,6 +38,7 @@ class Conv:
         device,
         conv_param,
         conv_pth,
+        input_tensor_layout=ttnn.TILE_LAYOUT,
     ) -> None:
         self.conv_param = conv_param
         self.conv_pth = conv_pth
@@ -56,7 +57,6 @@ class Conv:
             weights_dtype=ttnn.bfloat8_b,
             activation=conv_param.activation,
             shard_layout=conv_param.shard_layout,
-            input_channels_alignment=16 if conv_param.in_channels < 16 else 32,
             reshard_if_not_optimal=conv_param.reshard_if_not_optimal,
             deallocate_activation=conv_param.deallocate_activation,
             enable_act_double_buffer=conv_param.enable_act_double_buffer,
@@ -107,7 +107,7 @@ class Conv:
                 weight_tensor=self.weight,
                 weights_format="OIHW",
                 input_memory_config=self.input_memory_config,
-                input_layout=ttnn.TILE_LAYOUT,
+                input_layout=input_tensor_layout,
                 has_bias=True,
                 **self.conv_kwargs,
             )
@@ -161,7 +161,6 @@ class Conv_transpose:
             dtype=conv_param.dtype,
             weights_dtype=ttnn.bfloat8_b,
             shard_layout=conv_param.shard_layout,
-            input_channels_alignment=8 if conv_param.in_channels < 16 else 32,
             reshard_if_not_optimal=conv_param.reshard_if_not_optimal,
             deallocate_activation=conv_param.deallocate_activation,
             output_layout=ttnn.ROW_MAJOR_LAYOUT,
@@ -245,7 +244,7 @@ class Tt_vgg_unet:
     def __init__(self, device, parameters, conv_args) -> None:
         self.conv_args = conv_args
         self.parameters = parameters
-        self.s1_0 = Conv(device, conv_args.s1["0"], parameters["0"])
+        self.s1_0 = Conv(device, conv_args.s1["0"], parameters["0"], input_tensor_layout=ttnn.ROW_MAJOR_LAYOUT)
         self.s1_2 = Conv(device, conv_args.s1["2"], parameters["2"])
         self.s2_5 = Conv(device, conv_args.s2["5"], parameters["5"])
         self.s2_7 = Conv(device, conv_args.s2["7"], parameters["7"])

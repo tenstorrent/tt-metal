@@ -695,13 +695,11 @@ class resnet50:
         if is_blackhole() and self.batch_size == 32:
             act_block_h_override = 49 * 32
 
-        input_channels_alignment = 16
         self.conv1_config = ttnn.Conv2dConfig(
             dtype=self.model_config["ACTIVATIONS_DTYPE"],
             weights_dtype=self.model_config["WEIGHTS_DTYPE"],
             activation="relu",
             deallocate_activation=dealloc_input,
-            input_channels_alignment=input_channels_alignment,
             act_block_h_override=act_block_h_override,
             transpose_shards=self.transpose_shards,
             enable_act_double_buffer=is_wormhole_b0() or is_blackhole(),
@@ -793,8 +791,8 @@ class resnet50:
             self.conv1_output_height,
             self.conv1_output_width,
             device.compute_with_storage_grid_size(),
-            self.conv1_config.input_channels_alignment,
-            is_grayskull() or is_blackhole(),
+            input_channels_alignment=8,
+            override_num_cores=is_grayskull() or is_blackhole(),
         )
 
     def __del__(self):
