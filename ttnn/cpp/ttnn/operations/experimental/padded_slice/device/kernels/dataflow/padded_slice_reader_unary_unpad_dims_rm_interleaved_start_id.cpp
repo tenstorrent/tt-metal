@@ -33,7 +33,6 @@ void kernel_main() {
     uint32_t src_stick_id = start_id;
     uint32_t sticks_read = 0;
 
-#define DEBUG
 #ifdef DEBUG
     DPRINT << "src_addr: " << src_addr << ", padded_stick_size: " << padded_stick_size
            << ", unpadded_stick_size: " << unpadded_stick_size << ", stick_size_offset: " << stick_size_offset
@@ -61,10 +60,6 @@ void kernel_main() {
         for (uint32_t i = 0; i < num_read_per_barrier and sticks_read < num_sticks_per_core; ++i) {
             sticks_read++;
             uint64_t src_noc_addr = get_noc_addr(src_stick_id, s0);
-            DPRINT << "Stick ID " << src_stick_id << ENDL();
-            DPRINT << "Read offset " << src_noc_addr - base_noc_addr << ENDL();
-            DPRINT << "Write offset " << src_buffer_l1_addr - base_src_buffer_l1_addr << ENDL();
-
             noc_async_read(src_noc_addr, src_buffer_l1_addr, padded_stick_size);
             if constexpr (misalignment != 0) {
                 noc_async_read_barrier();
@@ -73,11 +68,6 @@ void kernel_main() {
             }
             src_buffer_l1_addr += stick_size_offset;
             src_stick_id++;
-            DPRINT << "id_per_dim: ";
-            for (uint32_t j = 0; j < num_dims; j++) {
-                DPRINT << id_per_dim[j] << " ";
-            }
-            DPRINT << ENDL();
             for (uint32_t j = 0; j < num_dims; j++) {
                 id_per_dim[j]++;
                 if (id_per_dim[j] == num_unpadded_sticks[j]) {
