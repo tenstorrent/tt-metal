@@ -847,6 +847,10 @@ def is_x2_harvested(device):
     return device.arch() == Arch.WORMHOLE_B0 and (grid.x, grid.y) == (8, 7)
 
 
+def is_single_chip():
+    return ttnn.GetNumAvailableDevices() == 1
+
+
 def is_blackhole():
     ARCH_NAME = ttnn.get_arch_name()
     return "blackhole" in ARCH_NAME
