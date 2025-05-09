@@ -3,46 +3,6 @@
    are permitted in any medium without royalty provided the copyright
    notice and this notice are preserved.  */
 
-/*
-  This file contains pre-processor directives that are compiled to create tensix-sections.ld,
-  any modifications should be made to tensix-sections-pre-proc.ld, tensix-sections.ld is a generated file
-*/
-
-#if defined(TYPE_FIRMWARE) || (defined(NCRISC_FIRMWARE_KERNEL_SPLIT) && defined(COMPILE_FOR_NCRISC))
-/* Start of the appropriate region. */
-#define TEXT_START ORIGIN(REGION_CODE)
-#elif defined(TYPE_KERNEL)
-/* Where firmware ended. */
-#define TEXT_START __fw_export_end_text
-#else
-#error "Neither TYPE_FIRMARE nor TYPE_KERNEL defined, what am I to be?"
-#endif
-
-#if defined(TYPE_FIRMWARE)
-/* Start of the appropriate region. */
-#define DATA_START ORIGIN(REGION_DATA)
-#elif defined(TYPE_KERNEL)
-/* Where firmware ended. */
-#define DATA_START __fw_export_ldm_end
-#else
-#error "Neither TYPE_FIRMARE nor TYPE_KERNEL defined, what am I to be?"
-#endif
-
-#if defined(TYPE_FIRMWARE)
-/* Need separation beteen end of firmware and start of kernel, so that
-   they don't share unflushable i$ cache lines.  */
-#if defined(COMPILE_FOR_IERISC) || defined(COMPILE_FOR_SLAVE_IERISC) || defined(COMPILE_FOR_AERISC)
-#define MEM_PAD MEM_IERISC_KERNEL_PAD
-#else
-#define MEM_PAD 0
-#endif
-/* FW must align to 16 byte boundary so kernel begins aligned to meet noc alignment constraints */
-#define MEM_ALIGN 16
-#else
-#define MEM_PAD 0
-#define MEM_ALIGN 4
-#endif
-
 OUTPUT_FORMAT("elf32-littleriscv", "elf32-littleriscv",
 	      "elf32-littleriscv")
 OUTPUT_ARCH(riscv)
@@ -59,15 +19,15 @@ PHDRS {
 
 SECTIONS
 {
-#if defined(TYPE_FIRMWARE)
-  .firmware_text TEXT_START : ALIGN(4)
+#if defined(TYPE_FIRMWARE) || (defined(COMPILE_FOR_NCRISC) && defined(NCRISC_FIRMWARE_KERNEL_SPLIT))
+  .text TEXT_START :
 #else
-  .text TEXT_START : ALIGN(4)
+  .text __fw_export_text_end :
 #endif
   {
-    #if defined(TYPE_KERNEL)
+#if defined(TYPE_KERNEL)
     __kernel_text_start = ABSOLUTE(.);
-    #endif
+#endif
     /* Because TEXT_START might not be the start of a region, we
        need to force this section to be emitted so that following sections
        do not restart the region, if this one is empty.  */
@@ -81,44 +41,52 @@ SECTIONS
     /* .gnu.warning sections are handled specially by elf32.em.  */
     *(.gnu.warning)
     . = ALIGN(4);
-  } > REGION_CODE :text
+  } :text
   .empty.init.fini :
   {
     /* Out elf loader checks that .empty* sections are empty, and
        can give a helpful error, rather than an ASSERT here.  */
     KEEP (*(.init .fini))
-  } > REGION_CODE :text
+  } :text
 
-#if defined(TYPE_KERNEL)
-   __kernel_data_lma = .;
-#endif
-  . = ALIGN(ABSOLUTE(.) + MEM_PAD, MEM_ALIGN);
-
+/* Finish off the text area.  */
 #if defined(TYPE_FIRMWARE)
-  __fw_export_end_text = ABSOLUTE(.);
-#if defined(COMPILE_FOR_NCRISC)
-#if !defined(NCRISC_FIRMWARE_KERNEL_SPLIT)
-  PROVIDE (KERNEL_ENTRY_SYMBOL = ABSOLUTE(__fw_export_end_text));
+/* Need separation beteen end of firmware and start of kernel, so that
+   they don't share unflushable i$ cache lines.  */
+#if defined(COMPILE_FOR_IERISC) || defined(COMPILE_FOR_SLAVE_IERISC) || defined(COMPILE_FOR_AERISC)
+#define MEM_PAD MEM_IERISC_KERNEL_PAD
 #else
-  PROVIDE (KERNEL_ENTRY_SYMBOL = MEM_NCRISC_KERNEL_BASE);
+#define MEM_PAD 0
 #endif
-#endif
+/* FW must align to 16 byte boundary so kernel begins aligned to meet noc alignment constraints */
+  . = ALIGN(ABSOLUTE(.) + MEM_PAD, 16);
+  __fw_export_text_end = ABSOLUTE(.);
+#else
+  __kernel_data_lma = .;
 #endif
 
-#if defined(TYPE_KERNEL)
-  __kernel_init_local_l1_base = ABSOLUTE(.);
-#endif
-
+/* Begin the data area.  */
 #if defined(TYPE_FIRMWARE)
-  PROVIDE(__global_pointer$ = ORIGIN(REGION_DATA) + 0x7f0);
+#if defined(COMPILE_FOR_NCRISC)
+  PROVIDE (_Z11kernel_initm =
+#if !defined(NCRISC_FIRMWARE_KERNEL_SPLIT)
+           ABSOLUTE(__fw_export_text_end)
+#else
+           MEM_NCRISC_KERNEL_BASE
 #endif
+           );
+#endif
+  PROVIDE(__global_pointer$ = DATA_START + 0x7f0);
   .data DATA_START :
-#if defined (TYPE_KERNEL)
-        AT(__kernel_data_lma)
+#define SECTION(NEW, PREV) NEW :
+#else
+  __kernel_init_local_l1_base = ABSOLUTE(.);
+  /* Where firmware ended. */
+  .data __fw_export_ldm_end : AT(__kernel_data_lma)
+/* We can't rely on the linker's LMA computation because that fails when data is before text.  */
+#define SECTION(NEW, PREV) NEW : AT(LOADADDR(PREV) + (ADDR(NEW) - ADDR(PREV)))
 #endif
-	ALIGN(4)
   {
-     . = .; /* Force section emission.  */
      __ldm_data_start = .;
      *(.rodata .rodata.* .gnu.linkonce.r.*)
      *(.rodata1)
@@ -136,13 +104,13 @@ SECTIONS
     *(.got.plt) *(.igot.plt) *(.got) *(.igot)
     . = ALIGN(4);
     __ldm_data_end = .;
-  } > REGION_DATA :data
-  .empty.ctors.dtors :
+  } :data
+  SECTION(.empty.ctors.dtors, .data)
   {
     /* We don't use .ctors/.dtors either (this still isn't the '90s), make sure there aren't any.  */
     KEEP (*(.ctors .ctors.* .dtors .dtors.*))
-  } > REGION_DATA :data
-  .empty.init_array.fini_array :
+  } :data
+  SECTION(.empty.init_array.fini_array, .empty.ctors.dtors)
   {
     /* We don't support global static constructors or destructors. make sure there aren't any.  */
     KEEP (*(.preinit_array))
@@ -150,8 +118,8 @@ SECTIONS
     KEEP (*(.init_array))
     KEEP (*(SORT_BY_INIT_PRIORITY(.fini_array.*)))
     KEEP (*(.fini_array))
-  } > REGION_DATA :data
-  .bss : ALIGN(4)
+  } :data
+  SECTION(.bss, .empty.init_array.fini_array) ALIGN(4)
   {
     __ldm_bss_start = .;
     *(.sbss2 .sbss2.* .gnu.linkonce.sb2.*)
@@ -163,20 +131,36 @@ SECTIONS
     *(COMMON)
     . = ALIGN(4);
     __ldm_bss_end = .;
-  } > REGION_DATA :data
+  } :data
 
 #ifdef TYPE_FIRMWARE
-  . = ALIGN(ABSOLUTE(.), MEM_ALIGN);
+  . = ALIGN(ABSOLUTE(.), 16);
   __fw_export_ldm_end = ABSOLUTE(.);
 #endif
 
 #ifdef TYPE_FIRMWARE
-  .stack :
+  .stack STACK_TOP - STACK_SIZE :
   {
-   . += FIRMWARE_STACK_SIZE;
+   . += STACK_SIZE;
     __stack_top = .;
-  } > REGION_STACK :stack
+  } :stack
 #endif
+
+  /* The loader uses this data to check for size overflows.
+     We don't do it here, as the failure mode would be bad (no executable to examine).  */
+  .phdrs 0 (INFO) :
+  {
+    LONG(TEXT_SIZE
+#if defined(TYPE_KERNEL) && !(defined(COMPILE_FOR_NCRISC) && defined(NCRISC_FIRMWARE_KERNEL_SPLIT))
+         - (__fw_export_text_end - TEXT_START)
+#endif
+         )
+    LONG(DATA_SIZE
+#if defined(TYPE_KERNEL)
+         - (__fw_export_ldm_end - DATA_START)
+#endif
+         )
+  }
 
   .riscv.attributes 0 : { *(.riscv.attributes) } :attributes
 
