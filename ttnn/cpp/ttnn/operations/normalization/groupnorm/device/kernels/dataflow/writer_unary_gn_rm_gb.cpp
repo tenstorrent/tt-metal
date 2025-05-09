@@ -194,7 +194,9 @@ void kernel_main() {
 
                 for (uint32_t mt = 0; mt < out_block_h_actual; mt++) {
                     for (uint32_t nt = 0; nt < block_w_curr; nt++) {
-                        if (index_g_offset + nt < row_tile_max_index) {
+                        // Checks, only relavent to the last group, that we are not indexing out of bounds
+                        // for the cases where our last group does not span the length of our max tile span for a group
+                        if ((index_g_offset + nt) < row_tile_max_index) {
                             noc_async_write_tile(
                                 out_start_id + out_block_start_id_offset + (mt * num_channels_tiles) + nt +
                                     index_b_offset + index_g_offset,
