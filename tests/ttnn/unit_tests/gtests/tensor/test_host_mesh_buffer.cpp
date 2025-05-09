@@ -233,8 +233,7 @@ TEST(HostMeshBufferTest, ReplicatedTransform) {
     auto buffer = HostMeshBuffer::create_replicated(HostBuffer(std::vector<int>{1, 2, 3}));
 
     std::vector<size_t> indices;
-    std::function<HostBuffer(const HostBuffer&, size_t)> transform_fn = [&indices](
-                                                                            const HostBuffer& buffer, size_t index) {
+    buffer.transform([&indices](const HostBuffer& buffer, size_t index) {
         indices.push_back(index);
         auto span = buffer.view_as<int>();
         std::vector<int> new_data(span.begin(), span.end());
@@ -242,9 +241,7 @@ TEST(HostMeshBufferTest, ReplicatedTransform) {
             val *= 2;
         }
         return HostBuffer(std::move(new_data));
-    };
-
-    buffer.transform(transform_fn);
+    });
 
     EXPECT_THAT(indices, ElementsAre(0));
 
@@ -261,8 +258,7 @@ TEST(HostMeshBufferTest, ShardedTransform) {
     auto buffer = HostMeshBuffer::create_sharded(std::move(buffers));
 
     std::vector<size_t> indices;
-    std::function<HostBuffer(const HostBuffer&, size_t)> transform_fn = [&indices](
-                                                                            const HostBuffer& buffer, size_t index) {
+    buffer.transform([&indices](const HostBuffer& buffer, size_t index) {
         indices.push_back(index);
         auto span = buffer.view_as<int>();
         std::vector<int> new_data(span.begin(), span.end());
@@ -270,9 +266,7 @@ TEST(HostMeshBufferTest, ShardedTransform) {
             val *= 2;
         }
         return HostBuffer(std::move(new_data));
-    };
-
-    buffer.transform(transform_fn);
+    });
 
     EXPECT_THAT(indices, ElementsAre(0, 1));
 
@@ -294,8 +288,7 @@ TEST(HostMeshBufferTest, ShardedWithLocalSizeTransform) {
     auto buffer = HostMeshBuffer::create_sharded(std::move(buffers), 2, 1);
 
     std::vector<size_t> indices;
-    std::function<HostBuffer(const HostBuffer&, size_t)> transform_fn = [&indices](
-                                                                            const HostBuffer& buffer, size_t index) {
+    buffer.transform([&indices](const HostBuffer& buffer, size_t index) {
         indices.push_back(index);
         auto span = buffer.view_as<int>();
         std::vector<int> new_data(span.begin(), span.end());
@@ -303,9 +296,7 @@ TEST(HostMeshBufferTest, ShardedWithLocalSizeTransform) {
             val *= 2;
         }
         return HostBuffer(std::move(new_data));
-    };
-
-    buffer.transform(transform_fn);
+    });
 
     EXPECT_THAT(indices, ElementsAre(0, 1));
 
@@ -324,14 +315,11 @@ TEST(HostMeshBufferTest, ReplicatedApply) {
     std::vector<size_t> indices;
     std::vector<std::vector<int>> values;
 
-    std::function<void(const HostBuffer&, size_t)> apply_fn = [&indices, &values](
-                                                                  const HostBuffer& buffer, size_t index) {
+    buffer.apply([&indices, &values](const HostBuffer& buffer, size_t index) {
         indices.push_back(index);
         auto span = buffer.view_as<int>();
         values.push_back(std::vector<int>(span.begin(), span.end()));
-    };
-
-    buffer.apply(apply_fn);
+    });
 
     EXPECT_THAT(indices, ElementsAre(0));
     ASSERT_THAT(values, SizeIs(1));
@@ -347,14 +335,11 @@ TEST(HostMeshBufferTest, ShardedApply) {
 
     std::vector<size_t> indices;
     std::vector<std::vector<int>> values;
-    std::function<void(const HostBuffer&, size_t)> apply_fn = [&indices, &values](
-                                                                  const HostBuffer& buffer, size_t index) {
+    buffer.apply([&indices, &values](const HostBuffer& buffer, size_t index) {
         indices.push_back(index);
         auto span = buffer.view_as<int>();
         values.push_back(std::vector<int>(span.begin(), span.end()));
-    };
-
-    buffer.apply(apply_fn);
+    });
 
     EXPECT_THAT(indices, ElementsAre(0, 1));
     ASSERT_THAT(values, SizeIs(2));
@@ -372,14 +357,11 @@ TEST(HostMeshBufferTest, ShardedWithLocalSizeApply) {
 
     std::vector<size_t> indices;
     std::vector<std::vector<int>> values;
-    std::function<void(const HostBuffer&, size_t)> apply_fn = [&indices, &values](
-                                                                  const HostBuffer& buffer, size_t index) {
+    buffer.apply([&indices, &values](const HostBuffer& buffer, size_t index) {
         indices.push_back(index);
         auto span = buffer.view_as<int>();
         values.push_back(std::vector<int>(span.begin(), span.end()));
-    };
-
-    buffer.apply(apply_fn);
+    });
 
     EXPECT_THAT(indices, ElementsAre(0, 1));
     ASSERT_THAT(values, SizeIs(2));
