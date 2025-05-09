@@ -4,9 +4,7 @@
 
 import pytest
 import torch
-from diffusers import (
-    AutoencoderKL,
-)
+from diffusers import AutoencoderKL
 
 import ttnn
 from models.demos.wormhole.stable_diffusion.tt.vae.ttnn_vae import Vae
