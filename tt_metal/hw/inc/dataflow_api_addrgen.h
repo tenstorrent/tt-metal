@@ -612,7 +612,7 @@ FORCE_INLINE std::uint64_t get_noc_addr(
  *
  * | Argument                 | Description                             | Data type | Valid range                                            | required |
  * |--------------------------|-----------------------------------------|-----------|--------------------------------------------------------|----------|
- * | bank_id                  | DRAM/L1 bank id                         | uint32_t  | DOX-TODO (DRAM banks 0-5 WH, 0-7 BH. L1 banks unused?) | True     |
+ * | bank_id                  | DRAM/L1 bank id                         | uint32_t  | Refer to relevant yaml in "tt_metal/soc_descriptors"   | True     |
  * | bank_address_offset      | DRAM/L1 bank address offset             | uint32_t  | 0..1MB                                                 | True     |
  * | noc                      | Which NOC to use for the transaction    | uint8_t   | 0 or 1                                                 | False    |
  * | DRAM (template argument) | Signifies if address is from DRAM or L1 | bool      | True or False                                          | True     |
