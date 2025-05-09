@@ -121,7 +121,13 @@ def plot(plot_entry):
 
     plot_params = plot_entry["plot_params"]
 
+    id = plot_entry["id"]
     title = plot_params["title"] if "title" in plot_params else None
+    short_name = plot_entry["name"] if "name" in plot_params else id
+
+    if title is not None:
+        title = title.format(short_name)
+
     xbase = plot_params["xbase"] if "xbase" in plot_params else 10
     xscale = plot_params["xscale"] if "xscale" in plot_params else "symlog"
 
@@ -133,6 +139,8 @@ def plot(plot_entry):
 
     xticks = plot_params["xticks"] if "xticks" in plot_params else None
     yticks = plot_params["yticks"] if "yticks" in plot_params else None
+
+    palette_offset = plot_params["palette_offset"] if "palette_offset" in plot_params else 0
 
     xname = plot_entry["xname"]
     ynames = plot_entry["ynames"]
@@ -146,6 +154,8 @@ def plot(plot_entry):
     fig, ax = plt.subplots(figsize=(25, 15))
 
     # color_palette = sns.color_palette("deep", len(ynames))
+    ncolors = len(data[hseries].unique())
+    color_palette = sns.color_palette("deep", ncolors + palette_offset)[palette_offset:]
 
     for y in ynames:
         data = plot_entry["data"]
@@ -154,15 +164,21 @@ def plot(plot_entry):
         [yname, ysuffix, linestyle] = y
         d2["operation"] += ysuffix
         if hseries is not None:
-            ax = sns.lineplot(data=d2, x=xname, y=yname, ax=ax, hue=hseries, linestyle=linestyle)
+            ax = sns.lineplot(data=d2, x=xname, y=yname, ax=ax, hue=hseries, linestyle=linestyle, palette=color_palette)
         else:
-            ax = sns.lineplot(data=d2, x=xname, y=yname, ax=ax, label=yname, linestyle=linestyle)
+            ax = sns.lineplot(data=d2, x=xname, y=yname, ax=ax, label=yname, linestyle=linestyle, palette=color_palette)
 
     print(f"{output_path} - XSCALE = {xscale}, base = {xbase}")
-    ax.set_xscale(xscale, base=xbase)
+
+    if xscale == "linear":
+        ax.set_xscale("linear")
+    else:
+        ax.set_xscale(xscale, base=xbase)
 
     if yscale == "asinh":
         ax.set_yscale(yscale, linear_width=0.01)
+    elif yscale == "linear":
+        ax.set_yscale("linear")
     else:
         ax.set_yscale(yscale, base=ybase)
 
@@ -174,6 +190,11 @@ def plot(plot_entry):
 
     ax.set_xlabel(xlabel)
     ax.set_ylabel(ylabel)
+
+    if "vertical_lines" in plot_params:
+        for vertical_line in plot_params["vertical_lines"]:
+            ax.axvline(x=vertical_line[0], color="k", linestyle="--")
+            ax.text(vertical_line[0], ax.get_ylim()[1], vertical_line[1], fontsize=14)
 
     if yticks is not None:
         # print(f"yticks = {yticks}")
@@ -224,6 +245,12 @@ def plot_all(plot_config, base_output_dir, last_hashes, current_hashes, force_re
                 if hash_value == last_hash:
                     print(f"{BLUE}Skipping {plot_id} because hash value is the same{RESET}")
                     do_replot = False
+
+            last_modified = last_hashes["last_modified"]
+            for file in plot_entry["files"]:
+                if os.path.getmtime(file) > last_modified:
+                    do_replot = True
+                    break
 
             if force_replot:
                 do_replot = True
