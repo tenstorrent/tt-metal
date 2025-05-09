@@ -97,6 +97,8 @@ private:
     void wait_for_fabric_router_sync() const;
     tt_metal::IDevice* get_device(chip_id_t id) const;
 
+    void teardown_fd(const std::unordered_set<chip_id_t>& devices_to_close);
+
     static DevicePool* _inst;
 };
 

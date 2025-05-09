@@ -25,7 +25,6 @@
 #include "fabric_host_interface.h"
 #include "fabric_types.hpp"
 #include "hal.hpp"
-#include "hal_types.hpp"
 #include "host_api.hpp"
 #include "logger.hpp"
 #include "profiler_types.hpp"
@@ -37,6 +36,7 @@
 #include "tt_metal/impl/debug/watcher_server.hpp"
 #include "tt_metal/impl/dispatch/topology.hpp"
 #include "tt_metal/jit_build/build_env_manager.hpp"
+#include "tt_metal/api/tt-metalium/system_memory_manager.hpp"
 #include <umd/device/tt_core_coordinates.h>
 
 using namespace tt::tt_metal;
@@ -665,6 +665,24 @@ std::vector<IDevice* > DevicePool::get_all_active_devices() const {
     return user_devices;
 }
 
+void DevicePool::teardown_fd(const std::unordered_set<chip_id_t>& devices_to_close) {
+    for (const auto& dev_id : devices_to_close) {
+        // Device is still active at this point
+        auto dev = tt::DevicePool::instance().get_active_device(dev_id);
+        if (!dev->using_fast_dispatch()) {
+            continue;
+        }
+
+        for (int cq_id = 0; cq_id < dev->num_hw_cqs(); cq_id++) {
+            auto& cq = dev->command_queue(cq_id);
+            if (cq.sysmem_manager().get_bypass_mode()) {
+                cq.record_end();
+            }
+            cq.terminate();
+        }
+    }
+}
+
 bool DevicePool::close_device(chip_id_t device_id) {
     // Sync and close one device
     // Currently can only call this on mmio chips, once we split dispatch kernel shutdown
@@ -678,6 +696,7 @@ bool DevicePool::close_device(chip_id_t device_id) {
          tt::tt_metal::MetalContext::instance().get_cluster().get_devices_controlled_by_mmio_device(mmio_device_id)) {
         auto device = get_device(mmio_controlled_device_id);
         if (device && device->is_initialized()) {
+            teardown_fd({device->id()});
             pass &= device->close();
         }
     }
@@ -730,6 +749,10 @@ void DevicePool::close_devices(const std::vector<IDevice*>& devices, bool skip_s
             Synchronize(dev);    // Synchronize device
         }
     }
+
+    // Terminate dispatch before fabric
+    teardown_fd(std::unordered_set<chip_id_t>(devices_to_close.begin(), devices_to_close.end()));
+
     // Terminate fabric routers
     FabricConfig fabric_config = tt::tt_metal::MetalContext::instance().get_cluster().get_fabric_config();
     if (tt_fabric::is_tt_fabric_config(fabric_config)) {
