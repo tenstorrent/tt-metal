@@ -79,7 +79,7 @@ uint32_t get_input_channels_alignment(
     if (!is_mm_conv && input_tensor_memory_layout == TensorMemoryLayout::HEIGHT_SHARDED &&
         input_tensor_layout == Layout::ROW_MAJOR) {
         if (input_memory_config.has_value() && input_memory_config->is_sharded()) {
-            const uint32_t shard_width = input_memory_config.value().shard_spec.value().shape[1];
+            const uint32_t shard_width = input_memory_config->shard_spec()->shape[1];
             if (shard_width % tt::constants::TILE_WIDTH == 0) {
                 return tt::constants::TILE_WIDTH;
             } else if (shard_width % 16 == 0) {
