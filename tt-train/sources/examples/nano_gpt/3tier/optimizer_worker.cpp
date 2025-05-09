@@ -1,3 +1,5 @@
+#include <fmt/core.h>
+
 #include <CLI/CLI.hpp>
 
 // TODO: improve include path
@@ -62,6 +64,8 @@ void send_weights_to_aggregator(const SortedParameters &sorted_model_parameters)
 
     assert(mpi_ctx.get_rank() > 0);
     uint32_t aggregator_rank = mpi_ctx.get_rank() - 1U;
+    fmt::print(
+        "[optimizer] Rank {}: Sending weights to aggregator with rank {}\n", mpi_ctx.get_rank(), aggregator_rank);
     for (auto &[name, tensor_ptr] : sorted_model_parameters) {
         if (!tensor_ptr->get_requires_grad()) {
             continue;
@@ -107,6 +111,14 @@ int main(int argc, char **argv) {
     auto yaml_config = YAML::LoadFile(config_name);
     TrainingConfig config = parse_config(yaml_config);
 
+    auto steps_per_dataset = get_steps_per_dataset(config);
+    fmt::println(
+        "[optimizer] Rank {}: Epochs {}: Steps per dataset: {} max steps: {}",
+        mpi_ctx.get_rank(),
+        config.num_epochs,
+        steps_per_dataset,
+        config.max_steps);
+
     auto *device = &ctx.get_device();
     device->enable_program_cache();
 
@@ -132,8 +144,6 @@ int main(int argc, char **argv) {
     auto optimizer = select_optimizer(config.use_moreh_adamw);
 
     send_weights_to_aggregator(sorted_model_parameters);
-
-    auto steps_per_dataset = get_steps_per_dataset(config);
 
     uint32_t global_step = 0;
     for (uint32_t epoch = 0; epoch < config.num_epochs; ++epoch) {

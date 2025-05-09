@@ -1,6 +1,9 @@
+#include <fmt/core.h>
+
 #include <CLI/CLI.hpp>
 
 // TODO: improve include path
+
 #include "../utils.hpp"
 #include "autograd/auto_context.hpp"
 #include "config.hpp"
@@ -60,6 +63,7 @@ void send_aggregated_gradients_from_workers_to_optimizer(const SortedParameters 
     auto &mpi_ctx = ctx.get_mpi_context();
 
     uint32_t optimizer_rank = mpi_ctx.get_rank() + 1U;
+    fmt::print("Rank {}: Sending aggregated gradients to optimizer with rank {}\n", mpi_ctx.get_rank(), optimizer_rank);
 
     assert(workers > 0);
     for (auto &[name, tensor_ptr] : sorted_model_parameters) {
@@ -120,6 +124,16 @@ int main(int argc, char **argv) {
     auto yaml_config = YAML::LoadFile(config_name);
     TrainingConfig config = parse_config(yaml_config);
 
+    fmt::println("Aggregator config setup finished");
+
+    auto steps_per_dataset = get_steps_per_dataset(config);
+    fmt::println(
+        "[aggregator] Rank {}: Epochs {}: Steps per dataset: {} max steps: {}",
+        mpi_ctx.get_rank(),
+        config.num_epochs,
+        steps_per_dataset,
+        config.max_steps);
+
     auto *device = &ttml::autograd::ctx().get_device();
     device->enable_program_cache();
 
@@ -130,8 +144,6 @@ int main(int argc, char **argv) {
 
     auto workers = config.num_mpi_workers;
     send_weights_from_optimizer_to_workers(sorted_model_parameters, workers);
-
-    auto steps_per_dataset = get_steps_per_dataset(config);
 
     uint32_t global_step = 0;
     for (uint32_t epoch = 0; epoch < config.num_epochs; ++epoch) {
