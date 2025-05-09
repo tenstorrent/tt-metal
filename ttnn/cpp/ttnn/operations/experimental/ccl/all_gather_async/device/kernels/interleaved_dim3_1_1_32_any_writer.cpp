@@ -214,10 +214,12 @@ inline void fabric_send_dim2_bf8(
     //      |   24|   25|   26|   27|     <- rest_half_contig_ids: 2 (18, 19)
     //    __|   28|   29|            __   <- rest_orphan_tiles: 1 (26, 27)
 
+    bool skip_num_banks = false;
     uint32_t rest_half_contig_ids, rest_orphan_tiles;
     if (num_banks * 3 < rest_tiles) {
         rest_half_contig_ids = (num_banks - rest_full_contig_ids);
         rest_orphan_tiles = rest_half_contig_ids;
+        skip_num_banks = true;
     } else if (num_banks * 2 <= rest_tiles) {
         rest_half_contig_ids = num_banks;
         rest_orphan_tiles = (rest_tiles) % (num_banks * 2);
@@ -232,12 +234,14 @@ inline void fabric_send_dim2_bf8(
     uint32_t outer_id = 0;
 
     // send half (2) contig tiles twice in one loop
-    while (total < num_tiles) {
+    uint32_t total_local = 0;
+    uint32_t tile_id = total;
+    while (total_local < rest_half_contig_ids) {
         uint32_t num_2contig = min(rest_half_contig_ids - outer_id, 2);
         cb_wait_front(cb0_id, packet_size_in_pages);
         size_t l1_read_addr = get_read_ptr(cb0_id);
 
-        uint32_t id = total + tile_id_start;
+        uint32_t id = tile_id;
         for (uint32_t j = 0; j < num_2contig; j++) {
             uint64_t noc0_dest_noc_addr = get_noc_addr(id, tensor0_addrgen, 0 /*offset*/, 0 /*noc_id*/);
             fabric_write_wrapper(
@@ -248,15 +252,20 @@ inline void fabric_send_dim2_bf8(
                 l1_read_addr,
                 2 * tensor0_page_size);
             id++;
+            tile_id++;
         }
         outer_id += num_2contig;
-        total += num_2contig;
-        if (total % num_banks == 0) {
-            total += num_banks + rest_full_contig_ids;
+        total_local++;
+        if (total_local % num_banks == 0) {
+            total_local += num_banks;
         }
         cb_pop_front(cb0_id, packet_size_in_pages);
     }
-    total += tile_id_start;
+    if (skip_num_banks) {
+        total += 2 * num_banks;
+    } else {
+        total += total_local;
+    }
     fabric_send_non_contig(
         rest_orphan_tiles, total, tensor0_addrgen, pkt_hdr_forward, pkt_hdr_backward, fabric_connection);
 }
@@ -310,12 +319,11 @@ inline void fabric_send_dim2(
     auto filled_bank_tiles = filled_bank_rows * num_banks * packet_size_in_pages;
     auto rest_full_contig_ids = 0;
     auto rest_full_contig_rows = 0;
-    uint32_t total = 0;
+    uint32_t total = tile_id_start;
     if (num_banks * (packet_size_in_pages - 1) < rest_tiles) {
         rest_full_contig_ids = (rest_tiles) % (num_banks * (packet_size_in_pages - 1));
     }
     // send fully contig tiles. e.g. tileID: 0-15, 16-18, 20-22
-    total += tile_id_start;
     fabric_send_full_contig(
         filled_bank_rows * num_banks + rest_full_contig_ids,
         total,
@@ -323,11 +331,9 @@ inline void fabric_send_dim2(
         pkt_hdr_forward,
         pkt_hdr_backward,
         fabric_connection);
-    total -= tile_id_start;
 
     if constexpr (packet_size_in_pages == 2) {  // bf16
         // e.g. tileID: 19
-        total += tile_id_start;
         fabric_send_dim2_bf16(
             num_tiles_per_chip,
             total,
