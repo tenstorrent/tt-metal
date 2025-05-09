@@ -186,8 +186,8 @@ jobs:
   push-latest:
     if: ${{ github.ref == 'refs/heads/main' || inputs.tag-as-latest }}
     needs:
-      - test-wh-6u-image
-      - test-bh-image
+      # REVERT MNEEEEEEEEE - make this depend on tests instead
+      - build-images
     permissions:
       packages: write
       contents: read
