@@ -194,7 +194,6 @@ def test_resnet_conv(mesh_device, didt_workload_iterations, determinism_check_in
         dtype=activations_dtype,
         weights_dtype=weights_dtype,
         shard_layout=shard_layout,
-        input_channels_alignment=(16),
         deallocate_activation=False,
         enable_act_double_buffer=True,
         enable_split_reader=True,
