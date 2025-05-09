@@ -2,12 +2,13 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import ttnn
-from models.demos.t3000.mixtral8x7b.tt.mixtral_decoder import TtTransformerBlock
-from models.common.rmsnorm import RMSNorm
-from models.common.lightweightmodule import LightweightModule
-from models.demos.t3000.mixtral8x7b.tt.mixtral_common import get_single_rot_mat_multi_pos, get_single_rot_mat_torch
 import torch
+
+import ttnn
+from models.common.lightweightmodule import LightweightModule
+from models.common.rmsnorm import RMSNorm
+from models.demos.t3000.mixtral8x7b.tt.mixtral_common import get_single_rot_mat_multi_pos, get_single_rot_mat_torch
+from models.demos.t3000.mixtral8x7b.tt.mixtral_decoder import TtTransformerBlock
 
 
 class TtTransformer(LightweightModule):

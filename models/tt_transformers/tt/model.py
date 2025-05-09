@@ -2,19 +2,19 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import ttnn
 import torch
 from tqdm import tqdm
-from models.tt_transformers.tt.decoder import TransformerBlock
-from models.common.rmsnorm import RMSNorm
+
 import ttnn
 from models.common.lightweightmodule import LightweightModule
-from models.tt_transformers.tt.distributed_norm import DistributedNorm
-from models.tt_transformers.tt.lm_head import LMHead
+from models.common.rmsnorm import RMSNorm
 from models.tt_transformers.tt.common import copy_host_to_device
-from models.tt_transformers.tt.rope import RotarySetup
+from models.tt_transformers.tt.decoder import TransformerBlock
+from models.tt_transformers.tt.distributed_norm import DistributedNorm
 from models.tt_transformers.tt.embedding import Embedding
+from models.tt_transformers.tt.lm_head import LMHead
 from models.tt_transformers.tt.model_config import TensorGroup
+from models.tt_transformers.tt.rope import RotarySetup
 
 
 class Transformer(LightweightModule):

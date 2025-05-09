@@ -3,28 +3,24 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import os
-import ttnn
-import torch
+
 import pytest
+import torch
+from diffusers import StableDiffusionPipeline
 from loguru import logger
-
-from diffusers import (
-    StableDiffusionPipeline,
-)
-
 from ttnn.model_preprocessing import preprocess_model_parameters
-from ttnn import unsqueeze_to_4D
-from models.demos.wormhole.stable_diffusion.sd_pndm_scheduler import TtPNDMScheduler
+
+import ttnn
 from models.demos.wormhole.stable_diffusion.custom_preprocessing import custom_preprocessor
+from models.demos.wormhole.stable_diffusion.sd_pndm_scheduler import TtPNDMScheduler
 from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_unet_2d_condition_model_new_conv import (
     UNet2DConditionModel as UNet2D,
 )
-
-
+from models.perf.device_perf_utils import check_device_perf, prep_device_perf_report, run_device_perf
 from models.perf.perf_utils import prep_perf_report
-from models.perf.device_perf_utils import run_device_perf, check_device_perf, prep_device_perf_report
-from models.utility_functions import profiler, is_wormhole_b0, is_blackhole
+from models.utility_functions import is_blackhole, is_wormhole_b0, profiler
 from tests.ttnn.utils_for_testing import assert_with_pcc
+from ttnn import unsqueeze_to_4D
 
 
 def constant_prop_time_embeddings(timesteps, sample, time_proj):

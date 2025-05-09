@@ -3,10 +3,11 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
+
 import ttnn
-from ttnn import ReplicateTensorToMesh
 from models.common.lightweightmodule import LightweightModule
-from models.demos.t3000.llama2_70b.tt.llama_common import precompute_freqs, get_rot_transformation_mat, gather_cos_sin
+from models.demos.t3000.llama2_70b.tt.llama_common import gather_cos_sin, get_rot_transformation_mat, precompute_freqs
+from ttnn import ReplicateTensorToMesh
 
 
 def compute_gather_cos_sin(dhead, end, theta, position_ids, use_scaled_rope):

@@ -2,20 +2,17 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import pytest
 import torch
 import transformers
-import pytest
 from loguru import logger
-
-import ttnn
 from ttnn.model_preprocessing import preprocess_model_parameters
-from tests.ttnn.utils_for_testing import assert_with_pcc
-import ttnn
 
+import ttnn
+from models.demos.ttnn_falcon7b.tt.common import create_custom_preprocessor, strip_state_dict_prefix
 from models.demos.ttnn_falcon7b.tt.falcon_rotary_embedding import TtFalconRotaryEmbedding
 from models.demos.ttnn_falcon7b.tt.model_config import get_model_config, get_tt_cache_path
-from models.demos.ttnn_falcon7b.tt.common import create_custom_preprocessor, strip_state_dict_prefix
-
+from tests.ttnn.utils_for_testing import assert_with_pcc
 
 PRETRAINED_MODEL_NAME = f"tiiuae/falcon-7b-instruct"
 

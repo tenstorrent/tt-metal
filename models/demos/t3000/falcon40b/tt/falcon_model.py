@@ -2,23 +2,19 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch
 from abc import abstractmethod
 from typing import Optional, Tuple
+
+import torch
 from tqdm import tqdm
 
 import ttnn
-
-from ttnn import ReplicateTensorToMesh
+from models.demos.t3000.falcon40b.tt.falcon_attention import generate_cos_sin_cache
 from models.demos.t3000.falcon40b.tt.falcon_decoder import TtFalconDecoderLayer
 from models.demos.t3000.falcon40b.tt.falcon_embeddings import TtFalconEmbeddings
-from models.demos.t3000.falcon40b.tt.falcon_attention import generate_cos_sin_cache
+from models.demos.t3000.falcon40b.tt.model_utils import generate_layernorm_persistent_tensors, partial_layernorm
 from models.utility_functions import nearest_32
-
-from models.demos.t3000.falcon40b.tt.model_utils import (
-    partial_layernorm,
-    generate_layernorm_persistent_tensors,
-)
+from ttnn import ReplicateTensorToMesh
 
 
 class TtFalconModelShared:

@@ -4,9 +4,9 @@
 
 
 import torch
+from tt_lib.utils import pad_weight
 
 import ttnn
-from tt_lib.utils import pad_weight
 from models.demos.metal_BERT_large_11.tt import custom_matmuls
 from models.demos.metal_BERT_large_11.tt.tensor_utils import load_or_compute_and_cache
 

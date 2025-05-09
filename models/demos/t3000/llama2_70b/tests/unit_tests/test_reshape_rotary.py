@@ -3,24 +3,21 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
-from loguru import logger
 import torch
+from loguru import logger
+
 import ttnn
-
 from models.demos.t3000.llama2_70b.reference.llama.llama import Llama
-from models.demos.t3000.llama2_70b.reference.llama.llama.model import precompute_freqs_cis, apply_rotary_emb
-from models.demos.t3000.llama2_70b.tt.model_config import (
-    get_model_config,
-)
-from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
-    comp_pcc,
-)
-from models.utility_functions import torch2tt_tensor, tt2torch_tensor, skip_for_grayskull, get_devices_for_t3000
+from models.demos.t3000.llama2_70b.reference.llama.llama.model import apply_rotary_emb, precompute_freqs_cis
 from models.demos.t3000.llama2_70b.tt.llama_common import (
+    freqs_to_rotation_matrix,
+    gather_rotary_emb,
     get_llama_path,
+    precompute_freqs,
 )
-
-from models.demos.t3000.llama2_70b.tt.llama_common import precompute_freqs, freqs_to_rotation_matrix, gather_rotary_emb
+from models.demos.t3000.llama2_70b.tt.model_config import get_model_config
+from models.utility_functions import get_devices_for_t3000, skip_for_grayskull, torch2tt_tensor, tt2torch_tensor
+from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
 
 
 def get_rotation_mat(dhead, end, start_pos, seqlen, batch):

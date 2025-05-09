@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from typing import List
+
 import ttnn
 from models.demos.t3000.llama2_70b.tt.llama_common import ShardTensor2dMesh
 from models.demos.tg.llama3_70b.tt.llama_common import tt_all_reduce, tt_composite_sharded_all_reduce

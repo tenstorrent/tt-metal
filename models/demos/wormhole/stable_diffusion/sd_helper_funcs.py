@@ -5,9 +5,10 @@
 import warnings
 from dataclasses import dataclass
 from typing import List, Optional, Tuple, Union
-import ttnn
+
 import numpy as np
 import torch
+
 import ttnn
 
 

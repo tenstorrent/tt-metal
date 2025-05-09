@@ -3,23 +3,19 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
-
 import torch
 from diffusers import UNet2DConditionModel
-import ttnn
 from ttnn.model_preprocessing import preprocess_model_parameters
-from models.utility_functions import torch_random
-from tests.ttnn.utils_for_testing import assert_with_pcc
-from models.utility_functions import (
-    skip_for_grayskull,
-)
 
+import ttnn
 from models.demos.wormhole.stable_diffusion.custom_preprocessing import custom_preprocessor
+from models.demos.wormhole.stable_diffusion.tests.parameterizations import TRANSFORMER_PARAMETERIZATIONS
 from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_feedforward import feedforward
 from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_utility_functions import (
     preprocess_and_push_input_to_device,
 )
-from models.demos.wormhole.stable_diffusion.tests.parameterizations import TRANSFORMER_PARAMETERIZATIONS
+from models.utility_functions import skip_for_grayskull, torch_random
+from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
 @skip_for_grayskull()

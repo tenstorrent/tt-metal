@@ -3,9 +3,10 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
-import ttnn
 import torch.nn.functional as F
 from torch import nn
+
+import ttnn
 
 
 def convnet_mnist(

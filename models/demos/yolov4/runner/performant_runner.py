@@ -4,15 +4,9 @@
 
 
 import ttnn
-from models.demos.yolov4.common import (
-    YOLOV4_BOXES_PCC,
-    YOLOV4_CONFS_PCC,
-    get_model_result,
-)
+from models.demos.yolov4.common import YOLOV4_BOXES_PCC, YOLOV4_CONFS_PCC, get_model_result
 from models.demos.yolov4.post_processing import gen_yolov4_boxes_confs, get_region_boxes
-from models.demos.yolov4.runner.performant_runner_infra import (
-    YOLOv4PerformanceRunnerInfra,
-)
+from models.demos.yolov4.runner.performant_runner_infra import YOLOv4PerformanceRunnerInfra
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 

@@ -2,19 +2,17 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch
 import pytest
+import torch
 from loguru import logger
 
 import ttnn
-from ttnn import ShardTensorToMesh, ConcatMeshToTensor
-from models.demos.t3000.falcon40b.reference.hf_modeling_falcon import FalconForCausalLM, FalconConfig
+from models.demos.t3000.falcon40b.reference.hf_modeling_falcon import FalconConfig, FalconForCausalLM
 from models.demos.t3000.falcon40b.tt.falcon_causallm import TtFalconCausalLM
 from models.demos.t3000.falcon40b.tt.model_config import get_model_config, model_config_entries
 from models.utility_functions import skip_for_grayskull
-from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
-    comp_pcc,
-)
+from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
+from ttnn import ConcatMeshToTensor, ShardTensorToMesh
 
 
 def run_test_falcon_prefill_end_to_end_determinism(

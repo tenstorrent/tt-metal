@@ -4,9 +4,10 @@
 
 import os
 from datetime import datetime
+from typing import List
+
 import pytz
 from loguru import logger
-from typing import List
 
 # Decouple dependency of model tests on infra folder unless running in CI
 IS_CI_ENV = os.getenv("CI") == "true"

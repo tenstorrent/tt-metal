@@ -2,11 +2,10 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import transformers
 import torch
+import transformers
 
 import ttnn
-
 
 # https://github.com/huggingface/transformers/blob/v4.37.2/src/transformers/models/vit/modeling_vit.py
 

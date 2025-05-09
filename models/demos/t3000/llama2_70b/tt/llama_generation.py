@@ -2,19 +2,17 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import copy
 import math
-import torch
-import ttnn
-from ttnn import ConcatMeshToTensor
 
+import torch
 from loguru import logger
 
-import copy
-from models.demos.t3000.llama2_70b.tt.llama_model_optimized import TtLlamaModel_optimized as TtLlamaModel
+import ttnn
 from models.demos.t3000.llama2_70b.tt.llama_common import BASE_URL
-from models.demos.t3000.llama2_70b.tt.model_config import (
-    get_model_config,
-)
+from models.demos.t3000.llama2_70b.tt.llama_model_optimized import TtLlamaModel_optimized as TtLlamaModel
+from models.demos.t3000.llama2_70b.tt.model_config import get_model_config
+from ttnn import ConcatMeshToTensor
 
 
 class TtLlamaModelForGeneration:

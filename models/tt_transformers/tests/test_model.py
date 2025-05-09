@@ -1,23 +1,17 @@
 # SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
-import torch
-import pytest
-from loguru import logger
 import os
-import ttnn
-from models.tt_transformers.tt.common import (
-    sample_host,
-    PagedAttentionConfig,
-)
-from models.tt_transformers.tt.model_config import ModelArgs, DecodersPrecision, CheckpointType
-from models.tt_transformers.tt.model import Transformer
 
-from models.utility_functions import (
-    comp_pcc,
-    comp_allclose,
-)
-from models.utility_functions import skip_for_grayskull, skip_for_blackhole
+import pytest
+import torch
+from loguru import logger
+
+import ttnn
+from models.tt_transformers.tt.common import PagedAttentionConfig, sample_host
+from models.tt_transformers.tt.model import Transformer
+from models.tt_transformers.tt.model_config import CheckpointType, DecodersPrecision, ModelArgs
+from models.utility_functions import comp_allclose, comp_pcc, skip_for_blackhole, skip_for_grayskull
 
 
 @torch.no_grad()

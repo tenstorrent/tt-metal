@@ -2,30 +2,30 @@
 
 # SPDX-License-Identifier: Apache-2.0
 import os
-import torch
-import pytest
-from loguru import logger
 from time import time
 
+import pytest
+import torch
+from loguru import logger
+
 import ttnn
-from ttnn import ReplicateTensorToMesh, ConcatMeshToTensor
+from models.demos.t3000.mixtral8x7b.reference.tokenizer import Tokenizer
 from models.demos.t3000.mixtral8x7b.tt.mixtral_common import (
+    cache_attention,
+    get_prefill_rot_mat,
+    get_rot_transformation_mat,
+    get_single_rot_mat,
     load_inputs,
-    preprocess_inputs_prefill,
     prepare_inputs_ttnn,
     prepare_inputs_ttnn_prefill,
-    get_single_rot_mat,
+    preprocess_inputs_prefill,
     sample,
-    cache_attention,
-    get_rot_transformation_mat,
-    get_prefill_rot_mat,
 )
-from models.demos.t3000.mixtral8x7b.tt.mixtral_model import TtTransformer
 from models.demos.t3000.mixtral8x7b.tt.mixtral_embedding import TtMixtralEmbedding
-from models.demos.t3000.mixtral8x7b.reference.tokenizer import Tokenizer
-
-from models.perf.benchmarking_utils import BenchmarkProfiler
+from models.demos.t3000.mixtral8x7b.tt.mixtral_model import TtTransformer
 from models.demos.utils.llm_demo_utils import create_benchmark_data
+from models.perf.benchmarking_utils import BenchmarkProfiler
+from ttnn import ConcatMeshToTensor, ReplicateTensorToMesh
 
 
 class Emb(torch.nn.Module):

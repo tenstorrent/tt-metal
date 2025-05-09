@@ -3,11 +3,12 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import argparse
-from loguru import logger
-import subprocess
-import signal
-import sys
 import os
+import signal
+import subprocess
+import sys
+
+from loguru import logger
 
 # Create the argument parser
 parser = argparse.ArgumentParser(description="Stable Diffusion web demo")

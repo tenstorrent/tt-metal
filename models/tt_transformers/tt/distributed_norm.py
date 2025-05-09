@@ -4,7 +4,7 @@
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
-from models.tt_transformers.tt.ccl import tt_sharded_distributed_rmsnorm, tt_distributed_rmsnorm
+from models.tt_transformers.tt.ccl import tt_distributed_rmsnorm, tt_sharded_distributed_rmsnorm
 
 
 class DistributedNorm(LightweightModule):
