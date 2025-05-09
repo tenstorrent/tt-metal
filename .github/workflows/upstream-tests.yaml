@@ -187,8 +187,8 @@ jobs:
     if: ${{ github.ref == 'refs/heads/main' || inputs.tag-as-latest }}
     needs:
       - get-image-tags
-      # REVERT MNEEEEEEEEE - make this depend on tests instead
-      - build-images
+      - test-wh-6u-image
+      - test-bh-image
     permissions:
       packages: write
       contents: read
