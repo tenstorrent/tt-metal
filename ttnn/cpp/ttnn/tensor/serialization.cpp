@@ -242,7 +242,8 @@ DistributedStorage load_storage(
     if (storage_type == StorageType::MULTI_DEVICE_HOST or storage_type == StorageType::DEVICE) {
         if constexpr (std::is_same_v<T, MeshDevice*>) {
             auto multi_device_storage = load_multi_device_host_storage(input_file, data_type, layout, device);
-            return DistributedStorage{std::move(multi_device_storage), multi_device_storage.strategy};
+            const auto strategy = multi_device_storage.strategy;
+            return DistributedStorage{std::move(multi_device_storage), strategy};
         }
     }
     return DistributedStorage{load_host_storage(input_file, data_type), ReplicateTensor{}};
