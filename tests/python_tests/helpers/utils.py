@@ -1,10 +1,11 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-import os
-import torch
-import numpy as np
 import subprocess
+
+import numpy as np
+import torch
+
 from .format_config import DataFormat, FormatConfig
 
 torch.set_printoptions(linewidth=500, sci_mode=False, precision=2, threshold=10000)
@@ -118,10 +119,3 @@ def compare_pcc(golden, calculated, pcc=0.99):
         return True, 1.0
 
     return cal_pcc >= pcc, cal_pcc
-
-
-def get_chip_architecture():
-    chip_architecture = os.getenv("CHIP_ARCH")
-    if chip_architecture is None:
-        raise ValueError("CHIP_ARCH environment variable is not set")
-    return chip_architecture
