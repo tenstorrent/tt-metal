@@ -250,31 +250,6 @@ def test_binary_sub_uint16_edge_cases(device):
     assert torch.equal(output_tensor, torch_output_tensor)
 
 
-height_sharded_memory_config = ttnn.create_sharded_memory_config(
-    [128, 160],
-    core_grid=ttnn.CoreRangeSet({ttnn.CoreRange((1, 0), (1, 6)), ttnn.CoreRange((3, 0), (3, 6))}),
-    strategy=ttnn.ShardStrategy.HEIGHT,
-    orientation=ttnn.ShardOrientation.COL_MAJOR,
-    use_height_and_width_as_shard_shape=True,
-)
-
-width_sharded_memory_config = ttnn.create_sharded_memory_config(
-    [2240, 32],
-    core_grid=ttnn.CoreRangeSet({ttnn.CoreRange((2, 2), (2, 3)), ttnn.CoreRange((0, 0), (0, 1))}),
-    strategy=ttnn.ShardStrategy.WIDTH,
-    orientation=ttnn.ShardOrientation.ROW_MAJOR,
-    use_height_and_width_as_shard_shape=True,
-)
-
-block_sharded_memory_config = ttnn.create_sharded_memory_config(
-    [320, 32],
-    core_grid=ttnn.CoreRangeSet({ttnn.CoreRange((1, 0), (4, 6))}),
-    strategy=ttnn.ShardStrategy.BLOCK,
-    orientation=ttnn.ShardOrientation.ROW_MAJOR,
-    use_height_and_width_as_shard_shape=True,
-)
-
-
 @pytest.mark.parametrize(
     "a_shape, b_shape",
     ((torch.Size([5, 7, 64, 128]), torch.Size([5, 7, 64, 128])),),
@@ -430,6 +405,94 @@ def test_bitwise_and_uint16_sharded(a_shape, b_shape, sharded_config, device):
     )
     # Since typecast does not support sharded config, we can convert the sharded tensor to interleaved
     output_tensor = ttnn.to_memory_config(output_tensor_sharded, ttnn.DRAM_MEMORY_CONFIG)
+    output_tensor = ttnn.typecast(output_tensor, dtype=ttnn.uint32)
+    output_tensor = ttnn.to_torch(output_tensor, dtype=torch.int32)
+
+    assert torch.equal(output_tensor, torch_output_tensor)
+
+
+@pytest.mark.parametrize(
+    "a_shape, b_shape",
+    [
+        (torch.Size([1, 2, 32]), torch.Size([1, 2, 32])),
+        (torch.Size([1]), torch.Size([1, 5, 12])),
+        (torch.Size([1, 2, 32, 64, 125]), torch.Size([1, 2, 32, 1, 1])),
+        (torch.Size([]), torch.Size([])),
+        (torch.Size([5]), torch.Size([1])),
+    ],
+)
+@pytest.mark.parametrize(
+    "low_a, high_a, low_b, high_b",
+    [
+        (0, 255, 0, 255),
+        (0, 100, 100, 300),
+        (0, 150, 300, 430),
+        (0, 32, 1000, 2000),
+        (0, 4, 10000, 16000),
+        (0, 2, 16000, 32767),
+        (0, 1, 32767, 65535),
+    ],
+)
+def test_binary_mul_uint16_bcast(a_shape, b_shape, low_a, high_a, low_b, high_b, device):
+    num_elements_a = max(int(torch.prod(torch.tensor(a_shape)).item()), 1)
+    if high_a in (32, 4, 2, 1):
+        values_a = torch.arange(low_a, high_a + 1, dtype=torch.int32)
+        torch_input_tensor_a = values_a[torch.randint(0, len(values_a), (num_elements_a,))]
+    else:
+        torch_input_tensor_a = torch.linspace(high_a, low_a, num_elements_a, dtype=torch.int32)
+    torch_input_tensor_a = torch_input_tensor_a[:num_elements_a].reshape(a_shape).nan_to_num(0.0)
+
+    num_elements_b = max(int(torch.prod(torch.tensor(b_shape)).item()), 1)
+    torch_input_tensor_b = torch.linspace(high_b, low_b, num_elements_b, dtype=torch.int32)
+    torch_input_tensor_b = torch_input_tensor_b[:num_elements_b].reshape(b_shape).nan_to_num(0.0)
+
+    golden_function = ttnn.get_golden_function(ttnn.mul)
+    torch_output_tensor = golden_function(torch_input_tensor_a, torch_input_tensor_b, device=device)
+
+    input_tensor_a = ttnn.from_torch(
+        torch_input_tensor_a,
+        dtype=ttnn.uint16,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    input_tensor_b = ttnn.from_torch(
+        torch_input_tensor_b,
+        dtype=ttnn.uint16,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    output_tensor = ttnn.mul(input_tensor_a, input_tensor_b, use_legacy=False)
+    output_tensor = ttnn.typecast(output_tensor, dtype=ttnn.uint32)
+    output_tensor = ttnn.to_torch(output_tensor, dtype=torch.int32)
+
+    assert torch.equal(output_tensor, torch_output_tensor)
+
+
+def test_binary_mul_uint16_edge_cases(device):
+    torch_input_tensor_a = torch.tensor([0, 1, 0, 32767, 65535, 65535])
+    input_tensor_a = ttnn.from_torch(
+        torch_input_tensor_a,
+        dtype=ttnn.uint16,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    torch_input_tensor_b = torch.tensor([0, 0, 1, 2, 1, 0])
+    input_tensor_b = ttnn.from_torch(
+        torch_input_tensor_b,
+        dtype=ttnn.uint16,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    golden_function = ttnn.get_golden_function(ttnn.mul)
+    torch_output_tensor = golden_function(torch_input_tensor_a, torch_input_tensor_b, device=device)
+    output_tensor = ttnn.mul(input_tensor_a, input_tensor_b)
     output_tensor = ttnn.typecast(output_tensor, dtype=ttnn.uint32)
     output_tensor = ttnn.to_torch(output_tensor, dtype=torch.int32)
 
