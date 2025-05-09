@@ -438,7 +438,6 @@ Config{cache_path=/home/ubuntu/.cache/ttnn,model_cache_path=/home/ubuntu/.cache/
             <span class="n">shard_layout</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">shard_layout</span><span class="p">,</span>
             <span class="n">fp32_dest_acc_enabled</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span>
             <span class="n">packer_l1_accum_enabled</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span>
-            <span class="n">input_channels_alignment</span><span class="o">=</span><span class="mi">16</span> <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">input_shape</span><span class="p">[</span><span class="mi">3</span><span class="p">]</span> <span class="o">&lt;</span> <span class="mi">16</span> <span class="k">else</span> <span class="mi">32</span><span class="p">,</span>
             <span class="n">deallocate_activation</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">deallocate</span><span class="p">,</span>
         <span class="p">)</span>
         <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">act_block_h</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
