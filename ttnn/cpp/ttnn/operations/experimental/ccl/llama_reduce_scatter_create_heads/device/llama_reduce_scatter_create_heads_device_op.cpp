@@ -127,7 +127,6 @@ LlamaReduceScatterCreateHeadsDeviceOperation::create_output_tensors(
         auto tensor = create_device_tensor(output_spec, tensor_args.input_tensor.device());
         tensors.push_back(tensor);
     }
-    // auto tensor = create_device_tensor(output_spec[0], tensor_args.input_tensor.device());
     return tensors;
 }
 
