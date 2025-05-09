@@ -9,10 +9,101 @@
 #include <tt_stl/span.hpp>
 #include <optional>
 #include <cstddef>
+#include <complex>
 
 namespace tt::tt_metal::distributed::multihost {
 
 enum class ReduceOp : std::uint8_t { SUM, MAX, MIN, PROD, LAND, LOR, BAND, BOR };
+
+enum class DType : std::uint8_t {
+    INT8,
+    UINT8,
+    INT16,
+    UINT16,
+    INT32,
+    UINT32,
+    INT64,
+    UINT64,
+    FLOAT32,
+    FLOAT64,
+    BOOL,
+    BYTE,
+    COMPLEX_FLOAT,
+    COMPLEX_DOUBLE,
+};
+
+template <typename T, typename = void>
+struct dtype_of;  // intentionally incomplete – gives a clear error on unknown T
+
+template <>
+struct dtype_of<std::int8_t> {
+    static constexpr DType value = DType::INT8;
+};
+template <>
+struct dtype_of<std::uint8_t> {
+    static constexpr DType value = DType::UINT8;
+};
+template <>
+struct dtype_of<std::int16_t> {
+    static constexpr DType value = DType::INT16;
+};
+template <>
+struct dtype_of<std::uint16_t> {
+    static constexpr DType value = DType::UINT16;
+};
+template <>
+struct dtype_of<std::int32_t> {
+    static constexpr DType value = DType::INT32;
+};
+template <>
+struct dtype_of<std::uint32_t> {
+    static constexpr DType value = DType::UINT32;
+};
+template <>
+struct dtype_of<std::int64_t> {
+    static constexpr DType value = DType::INT64;
+};
+template <>
+struct dtype_of<std::uint64_t> {
+    static constexpr DType value = DType::UINT64;
+};
+template <>
+struct dtype_of<float> {
+    static constexpr DType value = DType::FLOAT32;
+};
+template <>
+struct dtype_of<double> {
+    static constexpr DType value = DType::FLOAT64;
+};
+template <>
+struct dtype_of<bool> {
+    static constexpr DType value = DType::BOOL;
+};
+template <>
+struct dtype_of<std::complex<float>> {
+    static constexpr DType value = DType::COMPLEX_FLOAT;
+};
+template <>
+struct dtype_of<std::complex<double>> {
+    static constexpr DType value = DType::COMPLEX_DOUBLE;
+};
+
+template <typename T>
+inline constexpr DType dtype_of_v = dtype_of<T>::value;
+
+template <typename T, typename = void>
+struct is_supported_dtype : std::false_type {};
+
+template <typename T>
+struct is_supported_dtype<T, std::void_t<decltype(dtype_of_v<T>)>> : std::true_type {};
+
+template <typename T>
+inline constexpr bool is_supported_dtype_v = is_supported_dtype<T>::value;
+
+template <typename T>
+tt::stl::Span<std::byte> as_bytes(tt::stl::Span<T> view) {
+    return tt::stl::Span<std::byte>(reinterpret_cast<std::byte>(view.data()), view.size() * sizeof(T));
+}
 
 using Rank = tt::stl::StrongType<int, struct RankTag>;
 using Tag = tt::stl::StrongType<int, struct TagTag>;
@@ -79,12 +170,6 @@ public:
     //--- Collective operations ---------------------------------------------
     virtual void broadcast(tt::stl::Span<std::byte> buffer, Rank root) const = 0;
 
-    virtual void all_reduce(
-        tt::stl::Span<std::byte> send_buf, tt::stl::Span<std::byte> recv_buf, ReduceOp op) const = 0;
-
-    virtual void reduce(
-        tt::stl::Span<std::byte> send_buf, tt::stl::Span<std::byte> recv_buf, ReduceOp op, Rank root) const = 0;
-
     virtual void gather(tt::stl::Span<std::byte> send_buf, tt::stl::Span<std::byte> recv_buf, Rank root) const = 0;
 
     virtual void scatter(tt::stl::Span<std::byte> send_buf, tt::stl::Span<std::byte> recv_buf, Rank root) const = 0;
@@ -93,10 +178,44 @@ public:
 
     virtual void all_to_all(tt::stl::Span<std::byte> send_buf, tt::stl::Span<std::byte> recv_buf) const = 0;
 
-    virtual void reduce_scatter(
-        tt::stl::Span<std::byte> send_buf, tt::stl::Span<std::byte> recv_buf, ReduceOp op) const = 0;
+    /// --- Reduce functions ------------------------------------------------
+    virtual void all_reduce(
+        tt::stl::Span<std::byte> send_buf, tt::stl::Span<std::byte> recv_buf, ReduceOp op, DType dtype) const = 0;
 
-    virtual void scan(tt::stl::Span<std::byte> send_buf, tt::stl::Span<std::byte> recv_buf, ReduceOp op) const = 0;
+    virtual void reduce(
+        tt::stl::Span<std::byte> send_buf,
+        tt::stl::Span<std::byte> recv_buf,
+        ReduceOp op,
+        DType dtype,
+        Rank root) const = 0;
+
+    virtual void reduce_scatter(
+        tt::stl::Span<std::byte> send_buf, tt::stl::Span<std::byte> recv_buf, ReduceOp op, DType dtype) const = 0;
+
+    virtual void scan(
+        tt::stl::Span<std::byte> send_buf, tt::stl::Span<std::byte> recv_buf, ReduceOp op, DType dtype) const = 0;
+
+    // --- Reduce functions with type deduction -------------------------------
+    template <class T>
+        requires is_supported_dtype_v<T>
+    void all_reduce(tt::stl::Span<T> send_buf, tt::stl::Span<T> recv_buf, ReduceOp op) const {
+        all_reduce(as_bytes(send_buf), as_bytes(recv_buf), op, dtype_of_v<T>);
+    }
+    template <class T>
+        requires is_supported_dtype_v<T>
+    void reduce(tt::stl::Span<T> send_buf, tt::stl::Span<T> recv_buf, ReduceOp op, Rank root) const {
+        reduce(as_bytes(send_buf), as_bytes(recv_buf), op, dtype_of_v<T>, root);
+    }
+    template <class T>
+        requires is_supported_dtype_v<T>
+    void scan(tt::stl::Span<T> send_buf, tt::stl::Span<T> recv_buf, ReduceOp op) const {
+        scan(as_bytes(send_buf), as_bytes(recv_buf), op, dtype_of_v<T>);
+    }
+    template <class T>
+        requires is_supported_dtype_v<T>
+    void reduce_scatter(tt::stl::Span<T> send_buf, tt::stl::Span<T> recv_buf, ReduceOp op) const {
+        reduce_scatter(as_bytes(send_buf), as_bytes(recv_buf), op, dtype_of_v<T>);
+    }
 
     //--- Communicator management -------------------------------------------
     [[nodiscard]] virtual std::shared_ptr<DistributedContext> duplicate() const = 0;
@@ -107,5 +226,7 @@ public:
     virtual void abort(int error_code) const = 0;
 
     virtual ~DistributedContext() = default;
+
+    // user friendly functions
 };
 }  // namespace tt::tt_metal::distributed::multihost

@@ -75,20 +75,24 @@ public:
 
     /* ---------------- collectives ---------------------- */
     void broadcast    (tt::stl::Span<std::byte> buf,                              Rank root) const override;
-    void all_reduce   (tt::stl::Span<std::byte> send_buf, tt::stl::Span<std::byte> recv_buf,
-                       ReduceOp op) const override;
-    void reduce       (tt::stl::Span<std::byte> send_buf, tt::stl::Span<std::byte> recv_buf,
-                       ReduceOp op, Rank root) const override;
+    void all_reduce(
+        tt::stl::Span<std::byte> send_buf, tt::stl::Span<std::byte> recv_buf, ReduceOp op, DType dtype) const override;
+    void reduce(
+        tt::stl::Span<std::byte> send_buf,
+        tt::stl::Span<std::byte> recv_buf,
+        ReduceOp op,
+        DType dtype,
+        Rank root) const override;
     void gather       (tt::stl::Span<std::byte> send_buf, tt::stl::Span<std::byte> recv_buf,
                        Rank root) const override;
     void scatter      (tt::stl::Span<std::byte> send_buf, tt::stl::Span<std::byte> recv_buf,
                        Rank root) const override;
     void all_gather   (tt::stl::Span<std::byte> send_buf, tt::stl::Span<std::byte> recv_buf) const override;
     void all_to_all   (tt::stl::Span<std::byte> send_buf, tt::stl::Span<std::byte> recv_buf) const override;
-    void reduce_scatter(tt::stl::Span<std::byte> send_buf, tt::stl::Span<std::byte> recv_buf,
-                        ReduceOp op) const override;
-    void scan         (tt::stl::Span<std::byte> send_buf, tt::stl::Span<std::byte> recv_buf,
-                       ReduceOp op) const override;
+    void reduce_scatter(
+        tt::stl::Span<std::byte> send_buf, tt::stl::Span<std::byte> recv_buf, ReduceOp op, DType dtype) const override;
+    void scan(
+        tt::stl::Span<std::byte> send_buf, tt::stl::Span<std::byte> recv_buf, ReduceOp op, DType dtype) const override;
 
     /* ------------- communicator management ------------- */
     [[nodiscard]] std::shared_ptr<DistributedContext> duplicate() const override;
