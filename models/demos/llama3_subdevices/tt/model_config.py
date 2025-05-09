@@ -723,19 +723,232 @@ class TtModelArgs:
                 fused_activation=None,
                 fuse_batch=seq_len <= 2048,
             )
-            self.model_config[
-                "PREFILL_MLP_W2_PRG_CONFIG"
-            ] = lambda seq_len: ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-                compute_with_storage_grid_size=(7, 10),
-                in0_block_w=8,  # FIXME: optimize this config for prefill, careful use DI_DT_WORKAROUND if necessary
-                out_subblock_h=1,  # Must be divisible by per_core_M
-                out_subblock_w=2,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4
-                per_core_M=max(1, 8 if seq_len >= 2048 else seq_len // self.tile_size // 8),  # 8~10 rows
-                per_core_N=math.ceil(2048 / 32 / 7),  # N / TILE_WIDTH / grid width
-                transpose_mcast=False,
-                fused_activation=None,
-                fuse_batch=seq_len <= 2048,
-            )
+
+            def w2_prg_config(seq_len):
+                if seq_len == 128:
+                    return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+                        compute_with_storage_grid_size=(7, 7),
+                        in0_block_w=2,
+                        out_subblock_h=4,
+                        out_subblock_w=2,
+                        out_block_h=4,
+                        out_block_w=2,
+                        per_core_M=4,
+                        per_core_N=2,
+                        fuse_batch=True,
+                        fused_activation=None,
+                        mcast_in0=True,
+                        gather_in0=False,
+                        num_global_cb_receivers=0,
+                    )
+                elif seq_len == 4096:
+                    return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+                        compute_with_storage_grid_size=(7, 7),
+                        in0_block_w=4,
+                        out_subblock_h=1,
+                        out_subblock_w=5,
+                        out_block_h=19,
+                        out_block_w=10,
+                        per_core_M=19,
+                        per_core_N=10,
+                        transpose_mcast=False,
+                        fused_activation=None,
+                        fuse_batch=True,
+                    )
+                elif seq_len == 6144:
+                    return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+                        compute_with_storage_grid_size=(7, 7),
+                        in0_block_w=4,
+                        out_subblock_h=1,
+                        out_subblock_w=2,
+                        out_block_h=28,
+                        out_block_w=10,
+                        per_core_M=28,
+                        per_core_N=10,
+                        transpose_mcast=False,
+                        fused_activation=None,
+                        fuse_batch=True,
+                    )
+                elif seq_len == 8192:
+                    return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+                        compute_with_storage_grid_size=(7, 7),
+                        in0_block_w=4,
+                        out_subblock_h=1,
+                        out_subblock_w=5,
+                        out_block_h=37,
+                        out_block_w=5,
+                        per_core_M=37,
+                        per_core_N=10,
+                        transpose_mcast=False,
+                        fused_activation=None,
+                        fuse_batch=True,
+                    )
+                elif seq_len == 10240:
+                    return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+                        compute_with_storage_grid_size=(7, 7),
+                        in0_block_w=4,
+                        out_subblock_h=1,
+                        out_subblock_w=5,
+                        out_block_h=23,
+                        out_block_w=10,
+                        per_core_M=46,
+                        per_core_N=10,
+                        transpose_mcast=False,
+                        fused_activation=None,
+                        fuse_batch=True,
+                    )
+                elif seq_len == 12288:
+                    return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+                        compute_with_storage_grid_size=(7, 7),
+                        in0_block_w=4,
+                        out_subblock_h=1,
+                        out_subblock_w=5,
+                        out_block_h=55,
+                        out_block_w=5,
+                        per_core_M=55,
+                        per_core_N=10,
+                        transpose_mcast=False,
+                        fused_activation=None,
+                        fuse_batch=True,
+                    )
+                elif seq_len == 14336:
+                    return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+                        compute_with_storage_grid_size=(7, 7),
+                        in0_block_w=4,
+                        out_subblock_h=1,
+                        out_subblock_w=2,
+                        out_block_h=32,
+                        out_block_w=10,
+                        per_core_M=64,
+                        per_core_N=10,
+                        transpose_mcast=False,
+                        fused_activation=None,
+                        fuse_batch=True,
+                    )
+                elif seq_len == 16384:
+                    return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+                        compute_with_storage_grid_size=(7, 7),
+                        in0_block_w=4,
+                        out_subblock_h=1,
+                        out_subblock_w=5,
+                        out_block_h=37,
+                        out_block_w=5,
+                        per_core_M=74,
+                        per_core_N=10,
+                        transpose_mcast=False,
+                        fused_activation=None,
+                        fuse_batch=True,
+                    )
+                elif seq_len == 24576:
+                    return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+                        compute_with_storage_grid_size=(7, 7),
+                        in0_block_w=2,
+                        out_subblock_h=2,
+                        out_subblock_w=4,
+                        out_block_h=16,
+                        out_block_w=16,
+                        per_core_M=16,
+                        per_core_N=64,
+                        fuse_batch=True,
+                        fused_activation=None,
+                        mcast_in0=False,
+                        gather_in0=False,
+                        num_global_cb_receivers=0,
+                    )
+                elif seq_len == 32768:
+                    return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+                        compute_with_storage_grid_size=(7, 7),
+                        in0_block_w=2,
+                        out_subblock_h=1,
+                        out_subblock_w=8,
+                        out_block_h=21,
+                        out_block_w=16,
+                        per_core_M=21,
+                        per_core_N=64,
+                        fuse_batch=True,
+                        fused_activation=None,
+                        mcast_in0=False,
+                        gather_in0=False,
+                        num_global_cb_receivers=0,
+                    )
+                elif seq_len == 51200:
+                    return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+                        compute_with_storage_grid_size=(7, 7),
+                        in0_block_w=2,
+                        out_subblock_h=1,
+                        out_subblock_w=8,
+                        out_block_h=11,
+                        out_block_w=32,
+                        per_core_M=33,
+                        per_core_N=64,
+                        fuse_batch=True,
+                        fused_activation=None,
+                        mcast_in0=False,
+                        gather_in0=False,
+                        num_global_cb_receivers=0,
+                    )
+                elif seq_len == 65536:
+                    return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+                        compute_with_storage_grid_size=(7, 7),
+                        in0_block_w=2,
+                        out_subblock_h=1,
+                        out_subblock_w=8,
+                        out_block_h=21,
+                        out_block_w=16,
+                        per_core_M=42,
+                        per_core_N=64,
+                        fuse_batch=True,
+                        fused_activation=None,
+                        mcast_in0=False,
+                        gather_in0=False,
+                        num_global_cb_receivers=0,
+                    )
+                elif seq_len == 86106:
+                    return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+                        compute_with_storage_grid_size=(7, 7),
+                        in0_block_w=2,
+                        out_subblock_h=1,
+                        out_subblock_w=8,
+                        out_block_h=11,
+                        out_block_w=32,
+                        per_core_M=55,
+                        per_core_N=64,
+                        fuse_batch=True,
+                        fused_activation=None,
+                        mcast_in0=False,
+                        gather_in0=False,
+                        num_global_cb_receivers=0,
+                    )
+                elif seq_len == 131072:
+                    return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+                        compute_with_storage_grid_size=(7, 7),
+                        in0_block_w=2,
+                        out_subblock_h=2,
+                        out_subblock_w=4,
+                        out_block_h=12,
+                        out_block_w=32,
+                        per_core_M=84,
+                        per_core_N=64,
+                        fuse_batch=True,
+                        fused_activation=None,
+                        mcast_in0=False,
+                        gather_in0=False,
+                        num_global_cb_receivers=0,
+                    )
+                else:
+                    return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+                        compute_with_storage_grid_size=(7, 10),
+                        in0_block_w=8,  # FIXME: optimize this config for prefill, careful use DI_DT_WORKAROUND if necessary
+                        out_subblock_h=1,  # Must be divisible by per_core_M
+                        out_subblock_w=2,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4
+                        per_core_M=max(1, 8 if seq_len >= 2048 else seq_len // self.tile_size // 8),  # 8~10 rows
+                        per_core_N=math.ceil(2048 / 32 / 7),  # N / TILE_WIDTH / grid width
+                        transpose_mcast=False,
+                        fused_activation=None,
+                        fuse_batch=seq_len <= 2048,
+                    )
+
+            self.model_config["PREFILL_MLP_W2_PRG_CONFIG"] = w2_prg_config
 
             self.model_config["WO_PREFILL_PROGCFG"] = lambda seq_len: ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
                 compute_with_storage_grid_size=(7, 10),

@@ -71,6 +71,17 @@ class TtLlamaMLP(LightweightModule):
             cache_file_name=cache_name(name),
         )
 
+        as_interleaved_tensor = lambda name, type, dim: ttnn.as_tensor(
+            torch_weight(name[:2]).unsqueeze(0).unsqueeze(0),  # Grab only the wX part of the name
+            dtype=type,
+            device=self.mesh_device,
+            mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=dim, mesh_shape=args.cluster_shape),
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            # Temporarily disable caching this weight for CI
+            # cache_file_name=cache_name(name),
+        )
+
         self.four_bit_mlp = args.optimizations.bfp4_mlp
 
         # Sharded weights
@@ -83,6 +94,8 @@ class TtLlamaMLP(LightweightModule):
         )  # bfp4 normally ok here but sub .99 pcc for llama 3.1 weights
         self.w2 = as_sharded_tensor("w2_sharded", ttnn.bfloat8_b, dim=w2_dim)
         self.w3 = as_sharded_tensor("w3_sharded", ttnn.bfloat4_b if self.four_bit_mlp else ttnn.bfloat8_b, dim=w1_dim)
+
+        self.w2_interleaved = as_interleaved_tensor("w2_interleaved", ttnn.bfloat8_b, dim=w2_dim)
 
         if tt_ccl.mode == "decode":
             self.prefetch(prefetcher_setup, tt_ccl)
@@ -249,15 +262,17 @@ class TtLlamaMLP(LightweightModule):
         )
         # ttnn.deallocate(w3_out)
         # ttnn.deallocate(w1_out)
+
         w2_out = ttnn.linear(
             w2_in_gathered,
-            self.w2,
+            self.w2_interleaved,
             compute_kernel_config=self.args.compute_kernel_config_hifi2_fp16,
             dtype=ttnn.bfloat8_b,
             program_config=pc_2,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             # core_grid=ttnn.CoreGrid(y=8, x=4),  # FIXME: validate on TG ttnn.CoreGrid(y=8, x=8) if not pc_2 else None,
         )
+
         ttnn.deallocate(w2_in)
         w2_out_reduced = self.tt_ccl.line_all_reduce(
             w2_out, cluster_axis=0, num_links=3, memory_config=ttnn.DRAM_MEMORY_CONFIG, buffer_key="FF2"
