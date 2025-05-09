@@ -31,7 +31,7 @@
 #if defined(TYPE_FIRMWARE)
 /* Need separation beteen end of firmware and start of kernel, so that
    they don't share unflushable i$ cache lines.  */
-#if defined(COMPILE_FOR_IERISC) || defined(COMPILE_FOR_SLAVE_IERISC) || defined(COMPILE_FOR_AERISC)
+#if defined(COMPILE_FOR_IERISC) || defined(COMPILE_FOR_SUBORDINATE_IERISC) || defined(COMPILE_FOR_AERISC)
 #define MEM_PAD MEM_IERISC_KERNEL_PAD
 #else
 #define MEM_PAD 0

@@ -46,7 +46,7 @@ static std::vector<string> dispatch_kernel_file_names = {
     "tt_metal/impl/dispatch/kernels/cq_dispatch.cpp",        // DISPATCH_HD
     "tt_metal/impl/dispatch/kernels/cq_dispatch.cpp",        // DISPATCH_H
     "tt_metal/impl/dispatch/kernels/cq_dispatch.cpp",        // DISPATCH_D
-    "tt_metal/impl/dispatch/kernels/cq_dispatch_slave.cpp",  // DISPATCH_S
+    "tt_metal/impl/dispatch/kernels/cq_dispatch_subordinate.cpp",  // DISPATCH_S
     "",                                                      // MUX
     "tt_metal/impl/dispatch/kernels/packet_mux.cpp",         // MUX_D
     "tt_metal/impl/dispatch/kernels/packet_demux.cpp",       // DEMUX

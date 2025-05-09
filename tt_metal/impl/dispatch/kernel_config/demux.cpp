@@ -185,8 +185,8 @@ void DemuxKernel::CreateKernel() {
         {"UPSTREAM_NOC_Y", std::to_string(hal.noc_coordinate(noc_selection_.upstream_noc, grid_size.y, 0))},
         {"DOWNSTREAM_NOC_X", std::to_string(hal.noc_coordinate(noc_selection_.downstream_noc, grid_size.x, 0))},
         {"DOWNSTREAM_NOC_Y", std::to_string(hal.noc_coordinate(noc_selection_.downstream_noc, grid_size.y, 0))},
-        {"DOWNSTREAM_SLAVE_NOC_X", std::to_string(hal.noc_coordinate(noc_selection_.downstream_noc, grid_size.x, 0))},
-        {"DOWNSTREAM_SLAVE_NOC_Y", std::to_string(hal.noc_coordinate(noc_selection_.downstream_noc, grid_size.y, 0))},
+        {"DOWNSTREAM_SUBORDINATE_NOC_X", std::to_string(hal.noc_coordinate(noc_selection_.downstream_noc, grid_size.x, 0))},
+        {"DOWNSTREAM_SUBORDINATE_NOC_Y", std::to_string(hal.noc_coordinate(noc_selection_.downstream_noc, grid_size.y, 0))},
         {"SKIP_NOC_LOGGING", "1"}};
     configure_kernel_variant(dispatch_kernel_file_names[DEMUX], compile_args, defines, false, false, false);
 }

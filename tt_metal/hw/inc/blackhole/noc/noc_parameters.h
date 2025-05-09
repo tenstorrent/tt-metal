@@ -144,7 +144,7 @@
 #define NIU_CFG_0_TILE_CLK_OFF 12
 #define NIU_CFG_0_TILE_HEADER_STORE_OFF 13  // NOC2AXI only
 #define NIU_CFG_0_NOC_ID_TRANSLATE_EN 14
-#define NIU_CFG_0_AXI_SLAVE_ENABLE 15
+#define NIU_CFG_0_AXI_SUBORDINATE_ENABLE 15
 #define NIU_CFG_0_CMD_BUFFER_FIFO_EN 16
 // NCRISC is using NIU_CFG_0[31:24] to store debug postcodes, if you need these bits for hardware move ncrisc postcode
 // write location in ncrisc.cc.

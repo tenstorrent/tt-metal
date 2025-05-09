@@ -38,7 +38,7 @@ notify_brisc_and_halt_to_iram:
 	sw s11, 12 * 4( sp )
 	sw a1,  13 * 4( sp )
 	sw  sp, MEM_NCRISC_HALT_STACK_MAILBOX_ADDRESS( zero )
-	sb a0, MEM_SLAVE_RUN_MAILBOX_ADDRESS( zero )   /* Tell brisc we're done */
+	sb a0, MEM_SUBORDINATE_RUN_MAILBOX_ADDRESS( zero )   /* Tell brisc we're done */
 
 halt:
 	/*Program flow will end here as ncrisc will go into reset*/
