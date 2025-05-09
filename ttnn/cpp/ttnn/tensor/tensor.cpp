@@ -821,4 +821,8 @@ const MemoryConfig& Tensor::memory_config() const { return get_tensor_spec().ten
 
 const std::optional<ShardSpec>& Tensor::shard_spec() const { return this->memory_config().shard_spec(); }
 
+const DistributedTensorConfig& Tensor::distributed_tensor_config() const {
+    return this->tensor_attributes->get_distributed_tensor_config();
+}
+
 }  // namespace tt::tt_metal
