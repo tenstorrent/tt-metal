@@ -102,8 +102,8 @@ bool run_dm(IDevice* device, const OneFromOneConfig& test_config) {
         program, requestor_kernel, master_core_set, {physical_subordinate_core.x, physical_subordinate_core.y});
 
     // Assign unique id
-    log_info("Running Test ID: {}, Run ID: {}", test_config.test_id, runtime_host_id);
-    program.set_runtime_id(runtime_host_id++);
+    log_info("Running Test ID: {}, Run ID: {}", test_config.test_id, unit_tests::dm::runtime_host_id);
+    program.set_runtime_id(unit_tests::dm::runtime_host_id++);
 
     // Input
     vector<uint32_t> packed_input = generate_packed_uniform_random_vector<uint32_t, bfloat16>(
