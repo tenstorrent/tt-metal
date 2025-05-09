@@ -26,6 +26,7 @@ from models.demos.wormhole.stable_diffusion.sd_pndm_scheduler import TtPNDMSched
 from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_unet_2d_condition_model_new_conv import (
     UNet2DConditionModel as UNet2D,
 )
+from models.demos.wormhole.stable_diffusion.tt.vae.ttnn_vae import Vae
 from models.utility_functions import enable_persistent_kernel_cache, profiler
 
 
@@ -96,7 +97,7 @@ def run_demo_inference(device, reset_seeds, input_path, num_prompts, num_inferen
     vae = AutoencoderKL.from_pretrained("CompVis/stable-diffusion-v1-4", subfolder="vae")
     vae.to(torch_device)
     vae_scale_factor = 2 ** (len(vae.config.block_out_channels) - 1)
-
+    tt_vae = Vae(torch_vae=vae, device=device)
     # 2. Load the tokenizer and text encoder to tokenize and encode the text.
     tokenizer = CLIPTokenizer.from_pretrained("openai/clip-vit-large-patch14")
     text_encoder = CLIPTextModel.from_pretrained("openai/clip-vit-large-patch14")
@@ -222,12 +223,19 @@ def run_demo_inference(device, reset_seeds, input_path, num_prompts, num_inferen
 
         # scale and decode the image latents with vae
         latents = 1 / 0.18215 * latents
-        image = vae.decode(latents).sample
+
+        latents_tt = ttnn.from_torch(
+            latents.permute([0, 2, 3, 1]), device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16
+        )
+        ttnn_output = tt_vae.decode(latents_tt)
+        ttnn_output = ttnn.reshape(ttnn_output, [1, image_size[0], image_size[1], ttnn_output.shape[3]])
+        ttnn_output = ttnn.permute(ttnn_output, [0, 3, 1, 2])
+        image = ttnn.to_torch(ttnn_output)
         profiler.end(f"inference_prompt_{i}")
 
         # Image post-processing
         image = (image / 2 + 0.5).clamp(0, 1)
-        image = image.detach().cpu().permute(0, 2, 3, 1).numpy()
+        image = image.detach().cpu().float().permute(0, 2, 3, 1).numpy()
         images = (image * 255).round().astype("uint8")
         pil_images = [Image.fromarray(image) for image in images][0]
         ttnn_output_path = f"{experiment_name}_ttnn.png"
@@ -578,7 +586,7 @@ def run_demo_inference_diffusiondb(
         logger.info(f"CLIP Score (TTNN): {clip_score_ttnn}")
 
 
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 11 * 8192}], indirect=True)
 @pytest.mark.parametrize(
     "input_path",
     (("models/demos/wormhole/stable_diffusion/demo/input_data.json"),),
