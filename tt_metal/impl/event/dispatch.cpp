@@ -185,7 +185,7 @@ void read_events_from_completion_queue(
         channel);
     uint32_t event_completed = dispatch_cmd_and_event[sizeof(CQDispatchCmd) / sizeof(uint32_t)];
 
-    TT_ASSERT(
+    TT_FATAL(
         event_completed == event_descriptor.event_id,
         "Event Order Issue: expected to read back completion signal for event {} but got {}!",
         event_descriptor.event_id,
