@@ -11,6 +11,32 @@
 #include <tt-metalium/mesh_coord.hpp>
 
 namespace tt::tt_fabric {
+// TODO: sanitize this
+class LocalMeshView {
+    // Some APIs will check that targeted mesh chip id is local to this host
+public:
+    explicit LocalMeshView(const std::string& mesh_graph_desc_yaml_file);
+    ~LocalMeshView() = default;
+
+    // Returns the mesh id and chip id of the local mesh
+    std::pair<mesh_id_t, chip_id_t> get_local_mesh_chip_id() const;
+
+    // Returns the mesh id and chip id of the local mesh
+    std::pair<mesh_id_t, chip_id_t> get_local_mesh_chip_id(mesh_id_t mesh_id) const;
+
+    // Returns the mesh id and chip id of the local mesh
+std::pair<mesh_id_t, chip_id_t> get_local_mesh_chip_id(chip_id_t physical_chip_id) const
+
+    private : std::vector<std::vector<chip_id_t>> logical_mesh_chip_id_to_physical_chip_id_mapping_;
+    // map[mesh_id][chip_id][direction] has a list of ethernet channels in that direction
+    std::vector<std::vector<std::unordered_map<RoutingDirection, std::vector<chan_id_t>>>>
+        router_port_directions_to_physical_eth_chan_map_;
+    // tables[mesh_id][chip_id][eth_chan]
+    std::vector<std::vector<std::vector<std::vector<chan_id_t>>>>
+        intra_mesh_routing_tables_;  // table that will be written to each ethernet core
+    std::vector<std::vector<std::vector<std::vector<chan_id_t>>>>
+        inter_mesh_routing_tables_;  // table that will be written to each ethernet core
+};
 
 class ControlPlane {
 public:
@@ -67,15 +93,6 @@ public:
 
 private:
     std::unique_ptr<RoutingTableGenerator> routing_table_generator_;
-    std::vector<std::vector<chip_id_t>> logical_mesh_chip_id_to_physical_chip_id_mapping_;
-    // map[mesh_id][chip_id][direction] has a list of ethernet channels in that direction
-    std::vector<std::vector<std::unordered_map<RoutingDirection, std::vector<chan_id_t>>>>
-        router_port_directions_to_physical_eth_chan_map_;
-    // tables[mesh_id][chip_id][eth_chan]
-    std::vector<std::vector<std::vector<std::vector<chan_id_t>>>>
-        intra_mesh_routing_tables_;  // table that will be written to each ethernet core
-    std::vector<std::vector<std::vector<std::vector<chan_id_t>>>>
-        inter_mesh_routing_tables_;  // table that will be written to each ethernet core
 
     // Tries to get a valid downstream channel from the candidate_target_chans
     // First along same routing plane, but if not available, take round robin from candidates

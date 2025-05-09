@@ -26,6 +26,7 @@ namespace tt::tt_fabric {
 
 using tt::tt_metal::distributed::MeshContainer;
 using tt::tt_metal::distributed::MeshCoordinate;
+using tt::tt_metal::distributed::MeshCoordinateRange;
 using tt::tt_metal::distributed::MeshShape;
 
 struct ChipSpec {
@@ -88,6 +89,9 @@ public:
         return MeshShape{mesh_shapes_[mesh_id].first, mesh_shapes_[mesh_id].second};
     }
     const MeshContainer<std::uint32_t>& get_host_ranks(mesh_id_t mesh_id) const { return mesh_host_ranks_[mesh_id]; }
+    const MeshCoordinateRange& get_host_rank_coord_range(mesh_id_t mesh_id, std::uint32_t host_rank) const {
+        return host_rank_coord_ranges_[mesh_id][host_rank];
+    }
     const std::vector<mesh_id_t>& get_mesh_ids() const { return mesh_ids_; }
 
 private:
@@ -108,5 +112,6 @@ private:
     InterMeshConnectivity inter_mesh_connectivity_;
     std::vector<mesh_id_t> mesh_ids_;
     std::vector<MeshContainer<std::uint32_t>> mesh_host_ranks_;
+    std::vector<std::vector<MeshCoordinateRange>> host_rank_coord_ranges_;
 };
 }  // namespace tt::tt_fabric

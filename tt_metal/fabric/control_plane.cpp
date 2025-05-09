@@ -409,6 +409,12 @@ void ControlPlane::initialize_host_mapping() {
         const auto& host_ranks = this->routing_table_generator_->mesh_graph->get_host_ranks(mesh_id);
         for (const auto& [coord, rank] : host_ranks) {
             this->host_rank_to_sub_mesh_shape_[rank].push_back(coord);
+            std::cout
+                << "rank " << rank << " "
+                << this->routing_table_generator_->mesh_graph->get_host_rank_coord_range(mesh_id, rank).start_coord()
+                << " "
+                << this->routing_table_generator_->mesh_graph->get_host_rank_coord_range(mesh_id, rank).end_coord()
+                << std::endl;
         }
     }
 }
@@ -747,6 +753,9 @@ std::pair<mesh_id_t, chip_id_t> ControlPlane::get_mesh_chip_id_from_physical_chi
 
 chip_id_t ControlPlane::get_physical_chip_id_from_mesh_chip_id(
     const std::pair<mesh_id_t, chip_id_t>& mesh_chip_id) const {
+    if (mesh_chip_id.first >= logical_mesh_chip_id_to_physical_chip_id_mapping_.size()) {
+        TT_FATAL(false, "Mesh id {} out of range", mesh_chip_id.first);
+    }
     return logical_mesh_chip_id_to_physical_chip_id_mapping_[mesh_chip_id.first][mesh_chip_id.second];
 }
 

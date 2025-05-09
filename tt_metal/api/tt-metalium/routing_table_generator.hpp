@@ -18,6 +18,16 @@ namespace tt::tt_fabric {
 using RoutingTable =
     std::vector<std::vector<std::vector<RoutingDirection>>>;  // [mesh_id][chip_id][target_chip_or_mesh_id]
 
+// TODO: first pass at switching over mesh_id_t/chip_id_t to proper struct
+// Need to update the usage in routing table generator
+class FabricMeshId {
+public:
+    explicit FabricMeshId(mesh_id_t mesh_id, chip_id_t chip_id);
+    MeshCoordinate(uint32_t x, uint32_t y);
+    mesh_id_t mesh_id_;
+    chip_id_t chip_id_;
+};
+
 class RoutingTableGenerator {
 public:
     explicit RoutingTableGenerator(const std::string& mesh_graph_desc_yaml_file);

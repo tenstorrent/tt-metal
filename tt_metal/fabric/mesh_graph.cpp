@@ -192,6 +192,7 @@ void MeshGraph::initialize_from_yaml(const std::string& mesh_graph_desc_file_pat
             this->inter_mesh_connectivity_.resize(mesh_id + 1);
             this->mesh_shapes_.resize(mesh_id + 1);
             this->mesh_host_ranks_.resize(mesh_id + 1, MeshContainer<std::uint32_t>({}, {}));
+            this->host_rank_coord_ranges_.resize(mesh_id + 1);
             mesh_edge_ports_to_chip_id.resize(mesh_id + 1);
             this->mesh_ids_.push_back(mesh_id);
         }
@@ -215,13 +216,35 @@ void MeshGraph::initialize_from_yaml(const std::string& mesh_graph_desc_file_pat
 
         std::vector<std::uint32_t> mesh_host_ranks_values;
         mesh_host_ranks_values.reserve(mesh_board_ns_size * mesh_board_ew_size);
+
+        // Track the start and end coordinates of each host rank
+        std::unordered_map<std::uint32_t, std::pair<MeshCoordinate, MeshCoordinate>> host_rank_submesh_start_end_coords;
         for (std::uint32_t i = 0; i < mesh_board_ns_size; i++) {
             TT_FATAL(
                 mesh["host_ranks"][i].IsSequence() and mesh["host_ranks"][i].size() == mesh_board_ew_size,
                 "MeshGraph: Expecting host_ranks to define a 2D array that matches topology");
             for (std::uint32_t j = 0; j < mesh_board_ew_size; j++) {
-                mesh_host_ranks_values.push_back(mesh["host_ranks"][i][j].as<std::uint32_t>());
+                std::uint32_t host_rank = mesh["host_ranks"][i][j].as<std::uint32_t>();
+                std::cout << " host_rank: " << host_rank << std::endl;
+                if (host_rank_submesh_start_end_coords.find(host_rank) == host_rank_submesh_start_end_coords.end()) {
+                    host_rank_submesh_start_end_coords.insert(
+                        {host_rank, std::make_pair(MeshCoordinate(i, j), MeshCoordinate(i, j))});
+                } else {
+                    host_rank_submesh_start_end_coords.at(host_rank).second = MeshCoordinate(i, j);
+                }
+                mesh_host_ranks_values.push_back(host_rank);
             }
+        }
+        // Fill in all host rank coordinate ranges
+        this->host_rank_coord_ranges_[mesh_id].resize(mesh_host_ranks_values.size(), MeshCoordinateRange({}));
+        for (const auto& [host_rank, coords] : host_rank_submesh_start_end_coords) {
+            this->host_rank_coord_ranges_[mesh_id][host_rank] = MeshCoordinateRange(
+                MeshCoordinate(
+                    coords.first[0] * board_name_to_topology[mesh_board][0],
+                    coords.first[1] * board_name_to_topology[mesh_board][1]),
+                MeshCoordinate(
+                    (coords.second[0] + 1) * board_name_to_topology[mesh_board][0] - 1,
+                    (coords.second[1] + 1) * board_name_to_topology[mesh_board][1] - 1));
         }
         this->mesh_host_ranks_[mesh_id] =
             MeshContainer<std::uint32_t>(MeshShape(mesh_board_ns_size, mesh_board_ew_size), mesh_host_ranks_values);
