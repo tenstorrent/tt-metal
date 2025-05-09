@@ -2,30 +2,18 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-##### Python imports #####
-import pytest
-from loguru import logger
 import os
 
-##### PyTorch imports #####
+import pytest
 import torch
 import torch.nn as nn
+from loguru import logger
 
-##### TTNN imports #####
 import ttnn
-from ttnn import ConcatMeshToTensor, ReplicateTensorToMesh
-from models.utility_functions import skip_for_grayskull
-from models.utility_functions import (
-    comp_pcc,
-    comp_allclose,
-)
-from models.utility_functions import (
-    nearest_32,
-)
-from models.tt_transformers.tt.multimodal.llama_class_embedding import (
-    TtLlamaClassEmbedding,
-)
 from models.tt_transformers.tt.model_config import ModelArgs
+from models.tt_transformers.tt.multimodal.llama_class_embedding import TtLlamaClassEmbedding
+from models.utility_functions import comp_allclose, comp_pcc, nearest_32, skip_for_grayskull
+from ttnn import ConcatMeshToTensor, ReplicateTensorToMesh
 
 
 ##### Torch op #####

@@ -2,27 +2,28 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import pytest
-from loguru import logger
-import torch
-import ttnn
+import gc
 
+import pytest
+import torch
+from loguru import logger
+
+import ttnn
 from models.demos.t3000.llama2_70b.reference.llama.llama import Llama
-from models.demos.tg.llama3_70b.tt.llama_mlp_galaxy import TtLlamaMLP_galaxy
-from models.utility_functions import skip_for_grayskull
-from models.demos.tg.llama3_70b.tt.llama_common import setup_llama_env
 from models.demos.t3000.llama2_70b.tt.llama_common import (
-    check_mesh_device,
-    MAX_SEQ_LEN,
     BASE_URL,
-    UNIT_TEST_N_LAYER,
+    MAX_SEQ_LEN,
     UNIT_TEST_LAYER_NUM,
+    UNIT_TEST_N_LAYER,
+    ConcatMesh2DToTensor,
+    ShardTensor2dMesh,
+    check_mesh_device,
     comp_pcc,
     should_skip_model_load,
-    ShardTensor2dMesh,
-    ConcatMesh2DToTensor,
 )
-import gc
+from models.demos.tg.llama3_70b.tt.llama_common import setup_llama_env
+from models.demos.tg.llama3_70b.tt.llama_mlp_galaxy import TtLlamaMLP_galaxy
+from models.utility_functions import skip_for_grayskull
 
 
 class PytorchLlamaMLPModel(torch.nn.Module):

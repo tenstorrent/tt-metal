@@ -3,20 +3,17 @@
 # SPDX-License-Identifier: Apache-2.0
 import torch
 from loguru import logger
+
 import ttnn
+from models.demos.wormhole.mistral7b.reference.model import Attention
 from models.demos.wormhole.mistral7b.tt.mistral_attention import TtMistralAttention
-from models.demos.wormhole.mistral7b.tt.model_config import TtModelArgs
 from models.demos.wormhole.mistral7b.tt.mistral_common import (
+    freqs_to_rotation_matrix,
     precompute_freqs,
     prepare_inputs_ttnn,
-    freqs_to_rotation_matrix,
 )
-from models.demos.wormhole.mistral7b.reference.model import Attention
-from models.utility_functions import (
-    comp_pcc,
-    comp_allclose,
-)
-from models.utility_functions import skip_for_grayskull
+from models.demos.wormhole.mistral7b.tt.model_config import TtModelArgs
+from models.utility_functions import comp_allclose, comp_pcc, skip_for_grayskull
 
 
 @skip_for_grayskull("Requires wormhole_b0 to run")

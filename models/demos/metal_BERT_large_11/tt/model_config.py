@@ -2,12 +2,13 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import pytest
-import ttnn
-from loguru import logger
 from pathlib import Path
-from models.utility_functions import is_grayskull, is_e75
 
+import pytest
+from loguru import logger
+
+import ttnn
+from models.utility_functions import is_e75, is_grayskull
 
 OP_MEMCFG_KEYS = (
     # EMBEDDINGS

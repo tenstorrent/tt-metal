@@ -3,7 +3,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
-
 from models.demos.wormhole.stable_diffusion.tt.vae.ttnn_conv_block import ConvBlock
 from models.demos.wormhole.stable_diffusion.tt.vae.ttnn_vae_configs import GROUPNORM_EPSILON, GROUPNORM_GROUPS
 from models.demos.wormhole.stable_diffusion.tt.vae.ttnn_vae_midblock import MidBlock

@@ -2,17 +2,18 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from transformers import AutoImageProcessor, SegformerForImageClassification
-import torch
 import pytest
+import torch
+from loguru import logger
+from transformers import AutoImageProcessor, SegformerForImageClassification
+from ttnn.model_preprocessing import preprocess_model_parameters
+
 import ttnn
+from models.demos.segformer.demo.classification_demo_utils import get_batch, get_data_loader
 from models.demos.segformer.reference.segformer_for_image_classification import SegformerForImageClassificationReference
 from models.demos.segformer.tt.ttnn_segformer_for_image_classification import TtSegformerForImageClassification
-from models.demos.segformer.demo.classification_demo_utils import get_data_loader, get_batch
 from tests.ttnn.integration_tests.segformer.test_segformer_for_image_classification import create_custom_preprocessor
 from tests.ttnn.integration_tests.segformer.test_segformer_model import move_to_device
-from ttnn.model_preprocessing import preprocess_model_parameters
-from loguru import logger
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)

@@ -2,17 +2,12 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch
 import pytest
-import ttnn
+import torch
 
-from models.utility_functions import (
-    skip_for_grayskull,
-)
-from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_utility_functions import (
-    round_up_to_tile_dim,
-)
-from models.utility_functions import comp_pcc, tt2torch_tensor, torch2tt_tensor
+import ttnn
+from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_utility_functions import round_up_to_tile_dim
+from models.utility_functions import comp_pcc, skip_for_grayskull, torch2tt_tensor, tt2torch_tensor
 
 
 # Test matmul attention sequence with InterleavedToShardedPartialOp

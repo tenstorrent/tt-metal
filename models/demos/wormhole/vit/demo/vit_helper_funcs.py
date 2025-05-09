@@ -2,12 +2,14 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from PIL import Image
-import torch
-import os
 import glob
-from models.sample_data.huggingface_imagenet_classes import IMAGENET2012_CLASSES
+import os
+
+import torch
 from datasets import load_dataset
+from PIL import Image
+
+from models.sample_data.huggingface_imagenet_classes import IMAGENET2012_CLASSES
 
 
 class InputExample(object):

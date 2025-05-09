@@ -3,10 +3,11 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
-from torch.utils.data import Dataset
 from typing import Any
+
 from datasets import load_dataset
 from loguru import logger
+from torch.utils.data import Dataset
 
 
 class SQUADV2Dataset(Dataset):

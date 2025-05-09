@@ -3,11 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
-from ttnn.model_preprocessing import (
-    fold_batch_norm2d_into_conv2d,
-    infer_ttnn_module_args,
-    preprocess_model_parameters,
-)
+from ttnn.model_preprocessing import fold_batch_norm2d_into_conv2d, infer_ttnn_module_args, preprocess_model_parameters
 
 import ttnn
 from models.demos.yolov4.reference import yolov4

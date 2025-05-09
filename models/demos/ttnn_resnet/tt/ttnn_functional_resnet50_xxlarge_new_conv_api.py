@@ -2,15 +2,13 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import ttnn
-import torch
-from models.utility_functions import (
-    is_grayskull,
-    is_wormhole_b0,
-    pad_and_fold_conv_activation_for_unity_stride,
-)
 from typing import List
+
+import torch
 from loguru import logger
+
+import ttnn
+from models.utility_functions import is_grayskull, is_wormhole_b0, pad_and_fold_conv_activation_for_unity_stride
 
 hardcoded_matmul_config_linear = {
     1: ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(

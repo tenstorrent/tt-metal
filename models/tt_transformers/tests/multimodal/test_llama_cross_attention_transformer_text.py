@@ -1,27 +1,20 @@
 # SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
-import torch
-import pytest
-from loguru import logger
 import os
-import ttnn
 
 import llama_models.llama3.reference_impl.multimodal.model as llama_reference_mod
+import pytest
+import torch
+from loguru import logger
+
+import ttnn
+from models.tt_transformers.tt.common import get_prefill_rot_mat, get_single_rot_mat
+from models.tt_transformers.tt.model_config import ModelArgs
 from models.tt_transformers.tt.multimodal.llama_cross_attention_transformer_text import (
     TtLlamaCrossAttentionTransformerText,
 )
-from models.tt_transformers.tt.model_config import ModelArgs
-from models.tt_transformers.tt.common import (
-    get_prefill_rot_mat,
-    get_single_rot_mat,
-)
-from models.utility_functions import (
-    comp_pcc,
-    comp_allclose,
-    nearest_32,
-)
-from models.utility_functions import skip_for_grayskull
+from models.utility_functions import comp_allclose, comp_pcc, nearest_32, skip_for_grayskull
 
 
 @skip_for_grayskull("Requires wormhole_b0 to run")

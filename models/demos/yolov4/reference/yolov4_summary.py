@@ -2,9 +2,11 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+from collections import OrderedDict
+
 import torch
 import torch.nn as nn
-from collections import OrderedDict
+
 from models.demos.yolov4.reference.yolov4 import Yolov4
 
 

@@ -2,24 +2,21 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import ttnn
-import torch
 import pytest
+import torch
 from diffusers import StableDiffusionPipeline
-
-from tests.ttnn.utils_for_testing import assert_with_pcc
-from models.utility_functions import (
-    skip_for_grayskull,
-)
 from ttnn.model_preprocessing import preprocess_model_parameters
-from models.demos.wormhole.stable_diffusion.custom_preprocessing import custom_preprocessor
 
+import ttnn
+from models.demos.wormhole.stable_diffusion.custom_preprocessing import custom_preprocessor
+from models.demos.wormhole.stable_diffusion.tests.parameterizations import TRANSFORMER_PARAMETERIZATIONS
 from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_transformer_2d_new_conv import transformer_2d_model
 from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_utility_functions import (
     post_process_output_and_move_to_host,
     preprocess_and_push_input_to_device,
 )
-from models.demos.wormhole.stable_diffusion.tests.parameterizations import TRANSFORMER_PARAMETERIZATIONS
+from models.utility_functions import skip_for_grayskull
+from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
 @skip_for_grayskull()

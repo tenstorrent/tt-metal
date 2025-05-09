@@ -2,30 +2,31 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch
 import json
-from time import time
-from datetime import datetime
-from loguru import logger
 import os
-import ttnn
-import pytest
-from models.demos.wormhole.mistral7b.tt.mistral_common import (
-    prepare_inputs_ttnn,
-    sample,
-    precompute_freqs,
-    freqs_to_rotation_matrix,
-    cache_attention,
-    get_prefill_rot_mat,
-    prepare_inputs_ttnn_prefill,
-    get_rot_transformation_mat,
-)
-from models.demos.wormhole.mistral7b.tt.mistral_model import TtTransformer
-from models.demos.wormhole.mistral7b.tt.mistral_embedding import TtMistralEmbedding
-from models.demos.wormhole.mistral7b.reference.tokenizer import Tokenizer
+from datetime import datetime
+from time import time
 
-from models.perf.benchmarking_utils import BenchmarkProfiler
+import pytest
+import torch
+from loguru import logger
+
+import ttnn
 from models.demos.utils.llm_demo_utils import create_benchmark_data
+from models.demos.wormhole.mistral7b.reference.tokenizer import Tokenizer
+from models.demos.wormhole.mistral7b.tt.mistral_common import (
+    cache_attention,
+    freqs_to_rotation_matrix,
+    get_prefill_rot_mat,
+    get_rot_transformation_mat,
+    precompute_freqs,
+    prepare_inputs_ttnn,
+    prepare_inputs_ttnn_prefill,
+    sample,
+)
+from models.demos.wormhole.mistral7b.tt.mistral_embedding import TtMistralEmbedding
+from models.demos.wormhole.mistral7b.tt.mistral_model import TtTransformer
+from models.perf.benchmarking_utils import BenchmarkProfiler
 
 
 class Emb(torch.nn.Module):

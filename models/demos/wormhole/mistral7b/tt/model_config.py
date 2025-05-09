@@ -3,9 +3,11 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import os
-import ttnn
 from pathlib import Path
+
 from loguru import logger
+
+import ttnn
 
 
 class TtModelArgs:

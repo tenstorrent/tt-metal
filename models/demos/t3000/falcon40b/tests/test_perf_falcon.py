@@ -2,29 +2,22 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch
 import pytest
+import torch
 from loguru import logger
 
 import ttnn
-from ttnn import ConcatMeshToTensor
-
-from models.demos.t3000.falcon40b.reference.hf_modeling_falcon import (
-    FalconForCausalLM,
-)
+from models.demos.t3000.falcon40b.reference.hf_modeling_falcon import FalconForCausalLM
 from models.demos.t3000.falcon40b.tt.falcon_causallm import TtFalconCausalLM
-
-from models.demos.t3000.falcon40b.tt.model_config import (
-    get_model_config,
-)
-
+from models.demos.t3000.falcon40b.tt.model_config import get_model_config
+from models.perf.perf_utils import prep_perf_report
 from models.utility_functions import (
-    profiler,
-    enable_persistent_kernel_cache,
     disable_persistent_kernel_cache,
+    enable_persistent_kernel_cache,
+    profiler,
     skip_for_grayskull,
 )
-from models.perf.perf_utils import prep_perf_report
+from ttnn import ConcatMeshToTensor
 
 
 # TODO: Replace this with actual Falcon application-level tests

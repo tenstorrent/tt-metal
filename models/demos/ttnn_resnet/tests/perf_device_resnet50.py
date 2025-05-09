@@ -2,7 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from models.perf.device_perf_utils import run_device_perf, check_device_perf, prep_device_perf_report
+from models.perf.device_perf_utils import check_device_perf, prep_device_perf_report, run_device_perf
 
 
 def run_perf_device(batch_size, test, command, expected_perf):
