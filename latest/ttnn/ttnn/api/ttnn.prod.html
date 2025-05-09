@@ -20,8 +20,6 @@
         <script src="../../_static/doctools.js?v=888ff710"></script>
         <script src="../../_static/sphinx_highlight.js?v=4825356b"></script>
         <script crossorigin="anonymous" integrity="sha256-Ae2Vz/4ePdIu6ZyI/5ZGsYnb+m0JlOmKPjt6XZ9JJkA=" src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
-        <script>window.MathJax = {"tex": {"inlineMath": [["$", "$"], ["\\(", "\\)"]], "processEscapes": true}, "options": {"ignoreHtmlClass": "tex2jax_ignore|mathjax_ignore|document", "processHtmlClass": "tex2jax_process|mathjax_process|math|output_area"}}</script>
-        <script defer="defer" src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
     <script src="../../_static/js/theme.js"></script>
     <link rel="index" title="Index" href="../../genindex.html" />
     <link rel="search" title="Search" href="../../search.html" />
@@ -154,24 +152,24 @@
 <span class="sig-prename descclassname"><span class="pre">ttnn.</span></span><span class="sig-name descname"><span class="pre">prod</span></span><em class="property"><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="pre">Operation(python_fully_qualified_name='ttnn.prod',</span> <span class="pre">function=&lt;ttnn._ttnn.operations.reduction.prod_t</span> <span class="pre">object&gt;,</span> <span class="pre">preprocess_golden_function_inputs=&lt;function</span> <span class="pre">default_preprocess_golden_function_inputs&gt;,</span> <span class="pre">golden_function=None,</span> <span class="pre">postprocess_golden_function_outputs=&lt;function</span> <span class="pre">default_postprocess_golden_function_outputs&gt;,</span> <span class="pre">is_cpp_operation=True,</span> <span class="pre">is_experimental=False)</span></em><a class="headerlink" href="#ttnn.prod" title="Permalink to this definition"></a>
 </dt>
 <dd>
-<p>Computes the prod function along specified <code class="docutils literal notranslate"><span class="pre">dim</span></code> or all dimensions on the <code class="docutils literal notranslate"><span class="pre">input</span></code> tensor.</p>
-<div class="math notranslate nohighlight">
-\[\begin{split}prod(\\mathrm{input\\_tensor}_i)\end{split}\]</div>
+<p>Computes the product of all elements on specified <code class="docutils literal notranslate"><span class="pre">dim</span></code> of the <code class="docutils literal notranslate"><span class="pre">input</span></code> tensor.</p>
+<p>If no <code class="docutils literal notranslate"><span class="pre">dim</span></code> is provided (or <code class="docutils literal notranslate"><span class="pre">dim</span></code> is set to <cite>None</cite>), it will compute the product of all elements in the <code class="docutils literal notranslate"><span class="pre">input</span></code> tensor.
+If <code class="docutils literal notranslate"><span class="pre">keepdim</span></code> is <cite>True</cite>, the resulting tensor will have a similar shape as the <code class="docutils literal notranslate"><span class="pre">input</span></code> tensor, but with the specified <code class="docutils literal notranslate"><span class="pre">dim</span></code> reduced to 1. This is not supported when taking the product across all dimensions.
+Otherwise, the target <code class="docutils literal notranslate"><span class="pre">dim</span></code> will be squeezed, resulting in an output tensor with one less dimension than the <code class="docutils literal notranslate"><span class="pre">input</span></code> tensor.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Parameters<span class="colon">:</span>
 </dt>
 <dd class="field-odd">
-<ul class="simple">
-<li><p><strong>input_tensor</strong> (<a class="reference internal" href="../dependencies/tensor.html#ttnn.Tensor" title="ttnn.Tensor"><em>ttnn.Tensor</em></a>) – the input tensor.</p></li>
-<li><p><strong>all_dimensions</strong> (<em>bool</em><em>, </em><em>optional</em>) – prod along all dimensions. Defaults to <cite>False</cite>.</p></li>
-<li><p><strong>dim</strong> (<em>int</em><em>, </em><em>optional</em>) – Dimension to perform prod. Defaults to <cite>0</cite>.</p></li>
-<li><p><strong>keepdim</strong> (<em>bool</em><em>, </em><em>optional</em>) – keep original dimension size. Defaults to <cite>False</cite>.</p></li>
-</ul>
+<p><strong>input_tensor</strong> (<a class="reference internal" href="../dependencies/tensor.html#ttnn.Tensor" title="ttnn.Tensor"><em>ttnn.Tensor</em></a>) – the input tensor.</p>
 </dd>
 <dt class="field-even">Keyword Arguments<span class="colon">:</span>
 </dt>
 <dd class="field-even">
-<p><strong>memory_config</strong> (<a class="reference internal" href="../dependencies/tensor.html#ttnn.MemoryConfig" title="ttnn.MemoryConfig"><em>ttnn.MemoryConfig</em></a><em>, </em><em>optional</em>) – Memory configuration for the operation. Defaults to <cite>None</cite>.</p>
+<ul class="simple">
+<li><p><strong>dim</strong> (<em>int</em><em>, </em><em>optional</em>) – Dimension to perform prod. Defaults to <cite>None</cite>.</p></li>
+<li><p><strong>keepdim</strong> (<em>bool</em><em>, </em><em>optional</em>) – keep original dimension size. Defaults to <cite>False</cite>.</p></li>
+<li><p><strong>memory_config</strong> (<a class="reference internal" href="../dependencies/tensor.html#ttnn.MemoryConfig" title="ttnn.MemoryConfig"><em>ttnn.MemoryConfig</em></a><em>, </em><em>optional</em>) – Memory configuration for the operation. Defaults to <cite>None</cite>.</p></li>
+</ul>
 </dd>
 <dt class="field-odd">Returns<span class="colon">:</span>
 </dt>
@@ -182,7 +180,8 @@
 <p>Example:</p>
 <div class="highlight-default notranslate">
 <div class="highlight"><pre><span></span><span class="gp">&gt;&gt;&gt; </span><span class="n">tensor</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">from_torch</span><span class="p">(</span><span class="n">torch</span><span class="o">.</span><span class="n">tensor</span><span class="p">((</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">),</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">bfloat16</span><span class="p">),</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">)</span>
-<span class="gp">&gt;&gt;&gt; </span><span class="n">output</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">prod</span><span class="p">(</span><span class="n">tensor</span><span class="p">)</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">output</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">prod</span><span class="p">(</span><span class="n">tensor</span><span class="p">,</span> <span class="n">dim</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">output_all_dims</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">prod</span><span class="p">(</span><span class="n">tensor</span><span class="p">)</span>
 </pre></div>
 </div>
 </dd>
