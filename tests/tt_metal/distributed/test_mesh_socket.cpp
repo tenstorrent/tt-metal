@@ -1735,6 +1735,8 @@ TEST_F(MeshSocketTest1DFabric, SingleConnectionSingleDeviceSocketWithCBs) {
         md0, 2 * tile_size_bytes, 1 * tile_size_bytes, 4 * tile_size_bytes, true);
     test_single_connection_single_device_socket(
         md0, 6 * tile_size_bytes, 3 * tile_size_bytes, 15 * tile_size_bytes, true);
+    test_single_connection_single_device_socket(
+        md0, 5 * tile_size_bytes, 2 * tile_size_bytes, 10 * tile_size_bytes, true);
 }
 
 TEST_F(MeshSocketTest1DFabric, SingleConnectionSingleDeviceSocketWithWorkersFinalAck) {

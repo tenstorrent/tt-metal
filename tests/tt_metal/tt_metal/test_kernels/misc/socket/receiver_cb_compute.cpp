@@ -38,7 +38,7 @@ void MAIN {
         tile_regs_release();
         cb_push_back(output_cb_index, num_tiles_per_page);
         cb_pop_front(input_cb_index, num_tiles_per_page);
-        socket_pop_pages<false>(socket, 1);
+        socket_pop_pages(socket, 1);
     }
 }
 }  // namespace NAMESPACE

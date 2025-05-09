@@ -172,20 +172,15 @@ void socket_wait_for_pages(const SocketReceiverInterface& socket, uint32_t num_p
 #endif
 }
 
-template <bool advance_read_ptr = true>
 void socket_pop_pages(SocketReceiverInterface& socket, uint32_t num_pages) {
 #if !(defined TRISC_PACK || defined TRISC_MATH)
     uint32_t num_bytes = num_pages * socket.page_size;
     ASSERT(num_bytes <= socket.fifo_curr_size);
     if (socket.read_ptr + num_bytes >= socket.fifo_curr_size + socket.fifo_addr) {
-        if (advance_read_ptr) {
-            socket.read_ptr = socket.read_ptr + num_bytes - socket.fifo_curr_size;
-        }
+        socket.read_ptr = socket.read_ptr + num_bytes - socket.fifo_curr_size;
         socket.bytes_acked += num_bytes + socket.fifo_total_size - socket.fifo_curr_size;
     } else {
-        if (advance_read_ptr) {
-            socket.read_ptr += num_bytes;
-        }
+        socket.read_ptr += num_bytes;
         socket.bytes_acked += num_bytes;
     }
 #endif
