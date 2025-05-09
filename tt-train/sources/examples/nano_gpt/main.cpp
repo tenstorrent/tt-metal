@@ -746,7 +746,11 @@ int main(int argc, char **argv) {
     auto scheduler = schedule_func(optimizer.get(), config.max_steps);
 
     if (config.enable_mpi) {
-        // receive weights from optimizer thread
+        auto *optimizer_ptr = dynamic_cast<RemoteOptimizer *>(optimizer.get());
+        if (!optimizer_ptr) {
+            throw std::runtime_error("Optimizer is not RemoteOptimizer");
+        }
+        optimizer_ptr->receive_weights();
     } else {
         // otherwise proceed with normal loading training state if necessary
         if (!config.model_path.empty() && std::filesystem::exists(config.model_path)) {

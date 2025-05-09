@@ -1,6 +1,7 @@
 
 #include <string>
 
+#include "autograd/auto_context.hpp"
 #include "core/distributed/distributed.hpp"
 #include "core/distributed/mpi_context.hpp"
 #include "optimizers/optimizer_base.hpp"
@@ -9,7 +10,8 @@ using SortedParameters = std::map<std::string, ttml::autograd::TensorPtr>;
 
 class RemoteOptimizer : public ttml::optimizers::OptimizerBase {
 public:
-    explicit RemoteOptimizer(ttml::serialization::NamedParameters parameters, int aggregator_rank) {
+    RemoteOptimizer(ttml::serialization::NamedParameters parameters, int aggregator_rank) :
+        ttml::optimizers::OptimizerBase(std::move(parameters)) {
         m_aggregator_rank = aggregator_rank;
         m_sorted_parameters = get_sorted_parameters();
     }
@@ -47,7 +49,9 @@ public:
         m_steps = steps;
     }
 
-    SortedParameters get_sorted_parameters() const;
+    SortedParameters get_sorted_parameters() const {
+        return m_sorted_parameters;
+    }
 
     void send_gradients() {
         auto& ctx = ttml::autograd::ctx();
@@ -55,7 +59,7 @@ public:
         for (auto& [name, tensor_ptr] : m_sorted_parameters) {
             if (tensor_ptr->get_requires_grad() && tensor_ptr->is_grad_initialized()) {
                 auto grad = tensor_ptr->get_grad();
-                ttml::core::distributed::send_tensor(grad, m_aggregator_rank);)
+                ttml::core::distributed::send_tensor(grad, m_aggregator_rank);
             }
         }
     }

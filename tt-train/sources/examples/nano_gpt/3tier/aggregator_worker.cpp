@@ -5,6 +5,7 @@
 #include "autograd/auto_context.hpp"
 #include "config.hpp"
 #include "core/distributed/distributed.hpp"
+#include "core/distributed/mpi_context.hpp"
 #include "datasets/utils.hpp"
 #include "models/gpt2.hpp"
 #include "tokenizers/bpe_tokenizer.hpp"
@@ -49,7 +50,7 @@ uint32_t get_steps_per_dataset(const TrainingConfig &config) {
     auto [dataset, tokenizer] =
         create_dataset_and_tokenizer(text_or_tokens, sequence_length, config.tokenizer_path, config.tokenizer_type);
 
-    auto dataset_size = dataset->size();
+    auto dataset_size = dataset.get_size();
     auto steps_per_dataset = dataset_size / (config.batch_size * config.gradient_accumulation_steps);
     return steps_per_dataset;
 }
@@ -103,6 +104,7 @@ void send_weights_from_optimizer_to_workers(const SortedParameters &sorted_model
 
 int main(int argc, char **argv) {
     auto &ctx = ttml::autograd::ctx();
+    ctx.init_mpi_context(argc, argv);
     auto &mpi_ctx = ctx.get_mpi_context();
 
     CLI::App app{"Multihost Example"};
@@ -118,7 +120,7 @@ int main(int argc, char **argv) {
     auto yaml_config = YAML::LoadFile(config_name);
     TrainingConfig config = parse_config(yaml_config);
 
-    auto *device = ttml::autograd::ctx().get_device();
+    auto *device = &ttml::autograd::ctx().get_device();
     device->enable_program_cache();
 
     auto model = ttml::models::gpt2::create(config.transformer_config);
