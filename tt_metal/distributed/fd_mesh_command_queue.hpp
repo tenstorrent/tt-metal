@@ -148,7 +148,7 @@ private:
     inline static std::mutex reader_thread_pool_mutex_;
     // Used to Maintain state: Mark/Check if this data structure is being used for dispatch.
     // This is temporary - will not be needed when we MeshCommandQueue is the only dispatch interface.
-    bool in_use_ = false;
+    std::atomic<bool> in_use_ = false;
 
 protected:
     void write_shard_to_device(
