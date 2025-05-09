@@ -106,6 +106,25 @@ def create_tt_page_table(global_batch_size, data_parallel, paged_attention_confi
     return page_table
 
 
+def tg_create_submeshes(mesh_device, data_parallel):
+    # Assumes that device is open in (8, 4) shape
+    if data_parallel == 4:
+        submeshes = mesh_device.create_submeshes(ttnn.MeshShape(2, 4))
+    elif data_parallel == 8:
+        submeshes = mesh_device.create_submeshes(ttnn.MeshShape(2, 2))
+    elif data_parallel == 16:
+        submeshes = mesh_device.create_submeshes(ttnn.MeshShape(1, 2))
+    elif data_parallel == 32:
+        submeshes = mesh_device.create_submeshes(ttnn.MeshShape(1, 1))
+    else:
+        raise ValueError(f"Unsupported data_parallel value: {data_parallel}")
+
+    for submesh in submeshes:
+        submesh.reshape(ttnn.MeshShape(1, 32 // data_parallel))
+
+    return submeshes
+
+
 def prepare_generator_args(
     num_devices,
     data_parallel,
@@ -117,12 +136,16 @@ def prepare_generator_args(
     page_params,
     paged_attention,
 ):
-    # Partition the mesh, singular model implemented for TP on 1xN mesh
-    submesh_devices = (
-        mesh_device.create_submeshes(ttnn.MeshShape(1, num_devices // data_parallel))
-        if isinstance(mesh_device, ttnn.MeshDevice) and data_parallel > 1
-        else [mesh_device]
-    )
+    device_env = os.environ.get("MESH_DEVICE")
+    if device_env == "TG":
+        submesh_devices = tg_create_submeshes(mesh_device, data_parallel)
+    else:
+        # Partition the mesh, singular model implemented for TP on 1xN mesh
+        submesh_devices = (
+            mesh_device.create_submeshes(ttnn.MeshShape(1, num_devices // data_parallel))
+            if isinstance(mesh_device, ttnn.MeshDevice) and data_parallel > 1
+            else [mesh_device]
+        )
     state_dict = None
 
     # Hybrid requires a model per submesh
@@ -355,6 +378,34 @@ def prepare_generator_args(
             True,  # ci_only
             8,  # data_parallel
         ),
+        (  # CI Batch-1 run - Measures the performance of a single user over 4096 iterations
+            "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
+            True,  # instruct mode
+            1,  # repeat_batches
+            8192,  # max_seq_len
+            1,  # batch_size
+            4096,  # max_generated_tokens
+            True,  # paged_attention
+            {"page_block_size": 32, "page_max_num_blocks_per_dp": 1024},  # page_params
+            {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
+            False,  # stop_at_eos
+            True,  # ci_only
+            16,  # data_parallel
+        ),
+        (  # CI Batch-1 run - Measures the performance of a single user over 4096 iterations
+            "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
+            True,  # instruct mode
+            1,  # repeat_batches
+            8192,  # max_seq_len
+            1,  # batch_size
+            4096,  # max_generated_tokens
+            True,  # paged_attention
+            {"page_block_size": 32, "page_max_num_blocks_per_dp": 1024},  # page_params
+            {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
+            False,  # stop_at_eos
+            True,  # ci_only
+            32,  # data_parallel
+        ),
     ],
     ids=[
         "batch-1",  # latency
@@ -369,6 +420,8 @@ def prepare_generator_args(
         "DP-4-b32",  # DP 4 throughput
         "ci-b1-DP-4",  # CI DP 4 batch 1
         "ci-b1-DP-8",  # CI DP 8 batch 1
+        "ci-b1-DP-16",  # CI DP 16 batch 1
+        "ci-b1-DP-32",  # CI DP 32 batch 1
     ],
 )
 @pytest.mark.parametrize(
@@ -463,9 +516,10 @@ def test_demo_text(
         if (
             is_ci_env
             and num_devices == 32
-            and (data_parallel > 4 or (data_parallel == 4 and "3.1-70B" not in llama_dir))
+            and (data_parallel != 4 or "3.1-70B" not in llama_dir)
+            and (data_parallel not in [16, 32] or "3.1-8B" not in llama_dir)
         ):
-            pytest.skip("CI runs only Llama3 70b DP = 4, TP = 8 on TG")
+            pytest.skip("CI runs only Llama3 70b DP = 4, TP = 8 or Llama3 8b DP = 32, TP = 1 and DP = 16, TP = 2 on TG")
         if (
             is_ci_env
             and num_devices == 8
