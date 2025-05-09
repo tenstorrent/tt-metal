@@ -549,7 +549,7 @@ def run_llama3_demo(
 # sampling_params (dict): Sampling parameters for decoding (temperature, top_p). If temperature is set to 0, argmax (greedy decode) is used.
 #
 # optimization (LlamaOptimizations): Optimization level to use for the model (performance or accuracy)
-# FAKE_DEVICE (str): Fake device to use for testing (N150, N300, T3K, TG). Usage: `export FAKE_DEVICE=N150`, will enable running a single-chip demo on a multi-chip system.
+# MESH_DEVICE (str): Fake device to use for testing (N150, N300, T3K, TG). Usage: `export MESH_DEVICE=N150`, will enable running a single-chip demo on a multi-chip system.
 @pytest.mark.parametrize(
     "weights, layers, input_prompts, instruct, repeat_batches, max_seq_len, batch_size, max_generated_tokens, paged_attention, page_params, sampling_params, stress_test, start_pos",
     [
@@ -705,7 +705,7 @@ def test_llama_demo(
         pytest.skip("Do not run the 'long-context' or accuracy tests on CI to reduce load")
 
     # TODO: Remove this once all batch sizes are supported on TG
-    if os.environ.get("FAKE_DEVICE") == "TG" and batch_size not in [1, 32]:
+    if os.environ.get("MESH_DEVICE") == "TG" and batch_size not in [1, 32]:
         pytest.skip("TG only supports batch 1 and 32")
 
     if galaxy_type != "6U" and galaxy_type != "4U":
