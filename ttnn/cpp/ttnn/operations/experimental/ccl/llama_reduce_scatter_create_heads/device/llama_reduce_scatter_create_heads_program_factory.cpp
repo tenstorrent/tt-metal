@@ -22,7 +22,8 @@ namespace ttnn::operations::experimental::ccl {
 
 namespace detail {
 namespace rs_heads_fusion {
-std::string device_order_array_string(uint32_t ring_size, uint32_t ring_index) {
+
+std::string device_order_array_string(uint32_t ring_size, uint32_t ring_index, tt::tt_fabric::Topology topology) {
     ttnn::SmallVector<uint32_t> device_order;
     device_order.reserve(ring_size - 1);
     // Add all indices except ring_index
@@ -32,11 +33,34 @@ std::string device_order_array_string(uint32_t ring_size, uint32_t ring_index) {
         }
     }
 
-    // Sort based on absolute difference from ring_index in descending order
-    std::sort(device_order.begin(), device_order.end(), [ring_index](uint32_t a, uint32_t b) {
-        return std::abs(static_cast<int>(a) - static_cast<int>(ring_index)) >
-               std::abs(static_cast<int>(b) - static_cast<int>(ring_index));
-    });
+    if (topology == tt::tt_fabric::Topology::Linear) {
+        // Sort based on absolute difference from ring_index in descending order
+        std::sort(device_order.begin(), device_order.end(), [ring_index](uint32_t a, uint32_t b) {
+            return std::abs(static_cast<int>(a) - static_cast<int>(ring_index)) >
+                   std::abs(static_cast<int>(b) - static_cast<int>(ring_index));
+        });
+    } else if (topology == tt::tt_fabric::Topology::Ring) {
+        // Sort based on ring distance
+        // 0 -> 1 -> 2 -> ... -> ring_size - 1 -> 0
+        std::sort(device_order.begin(), device_order.end(), [ring_index, ring_size](uint32_t a, uint32_t b) {
+            // Calculate shortest distance for 'a' from 'ring_index' in a ring of 'ring_size'
+            // Cast to int for std::abs to work as expected with unsigned differences.
+            // This is safe as ring_index and device IDs (a, b) are expected to be much smaller than INT_MAX.
+            uint32_t diff_a = std::abs(static_cast<int>(a) - static_cast<int>(ring_index));
+            uint32_t dist_a = std::min(diff_a, ring_size - diff_a);
+
+            // Calculate shortest distance for 'b' from 'ring_index'
+            uint32_t diff_b = std::abs(static_cast<int>(b) - static_cast<int>(ring_index));
+            uint32_t dist_b = std::min(diff_b, ring_size - diff_b);
+
+            if (dist_a != dist_b) {
+                return dist_a > dist_b;
+            }
+            // Tie-breaking: if distances are equal, sort by the device ID itself.
+            // This ensures a stable and predictable order for devices at the same distance.
+            return a < b;
+        });
+    }
 
     // Convert to string format
     std::string result = "{";
@@ -308,7 +332,8 @@ LlamaReduceScatterCreateHeadsDeviceOperation::LlamaReduceScatterCreateHeads::cre
     }
 
     // uint32_t ring_index = operation_attributes.ring_index;
-    std::string device_order = detail::rs_heads_fusion::device_order_array_string(ring_size, ring_index);
+    std::string device_order =
+        detail::rs_heads_fusion::device_order_array_string(ring_size, ring_index, operation_attributes.topology);
 
     std::map<std::string, std::string> reader_defines = {{"DEVICE_ORDER", device_order}};
 
@@ -443,6 +468,8 @@ LlamaReduceScatterCreateHeadsDeviceOperation::LlamaReduceScatterCreateHeads::cre
     // UNCOMMENT this once we can allocate persistent buffers across all device lifetimes
     uint32_t num_packets_total_per_device =
         (input_blocks_per_stick + num_blocks_per_packet - 1) / num_blocks_per_packet;
+    tt::log_info("num_blocks_per_packet: {} LLONG", num_blocks_per_packet);
+    tt::log_info("num_packets_total_per_device: {} LLONG", num_packets_total_per_device);
     auto packet_worker_cores_grid = detail::rs_heads_fusion::get_worker_cores(
         intermediate_packet_buffer_grid,
         num_packets_total_per_device,
@@ -456,6 +483,18 @@ LlamaReduceScatterCreateHeadsDeviceOperation::LlamaReduceScatterCreateHeads::cre
 
     auto schedule = detail::rs_heads_fusion::distribute_work_evenly(
         ncores_input, num_workers_per_link * num_links, 1, num_blocks_per_packet);
+    if (ring_index == 0) {
+        int iworker = 0;
+
+        for (auto& worker_schedule : schedule) {
+            std::cout << "worker_ID " << iworker << std::endl;
+            for (auto& request : worker_schedule) {
+                std::cout << "worker_schedule: " << request.bank_id << " " << request.read_offset << " "
+                          << request.read_size << std::endl;
+            }
+            iworker++;
+        }
+    }
     auto schedule_string = detail::rs_heads_fusion::schedule_to_string(schedule);
 
     // input sharded buffer
@@ -664,7 +703,14 @@ LlamaReduceScatterCreateHeadsDeviceOperation::LlamaReduceScatterCreateHeads::cre
     reader_defines["PACKET_WORKER_CORES"] =
         detail::rs_heads_fusion::cores_to_string(to_worker_cores(packet_worker_cores));
     reader_defines["SCHEDULE"] = schedule_string;
-
+    if (ring_index == 0) {
+        std::cout << "INPUT_CORE_XY: " << reader_defines["INPUT_CORE_XY"] << std::endl;
+        std::cout << "Q_OUTPUT_CORE_XY: " << reader_defines["Q_OUTPUT_CORE_XY"] << std::endl;
+        std::cout << "K_OUTPUT_CORE_XY: " << reader_defines["K_OUTPUT_CORE_XY"] << std::endl;
+        std::cout << "V_OUTPUT_CORE_XY: " << reader_defines["V_OUTPUT_CORE_XY"] << std::endl;
+        std::cout << "PACKET_WORKER_CORES: " << reader_defines["PACKET_WORKER_CORES"] << std::endl;
+        std::cout << "SCHEDULE: " << reader_defines["SCHEDULE"] << std::endl;
+    }
     // create local semaphore
     auto local_semaphore = tt::tt_metal::CreateSemaphore(program, all_cores_grid, INVALID);
 
@@ -765,7 +811,6 @@ LlamaReduceScatterCreateHeadsDeviceOperation::LlamaReduceScatterCreateHeads::cre
     uint32_t sender_core_idx = 0;
 
     uint32_t link_idx = 0;
-
     bool forward_fabric_connection = false, backward_fabric_connection = false;
     if (operation_attributes.topology == ttnn::ccl::Topology::Linear) {
         LineTopology line_topology(ring_size, ring_index);
@@ -776,6 +821,7 @@ LlamaReduceScatterCreateHeadsDeviceOperation::LlamaReduceScatterCreateHeads::cre
     } else if (operation_attributes.topology == ttnn::ccl::Topology::Ring) {
         forward_fabric_connection = true;
         backward_fabric_connection = true;
+        tt::log_info("Ring topology LLONG");
     }
 
     for (auto core : all_cores) {
@@ -800,11 +846,27 @@ LlamaReduceScatterCreateHeadsDeviceOperation::LlamaReduceScatterCreateHeads::cre
             writer_runtime_args[is_writer_worker_core_idx] = false;
             writer_runtime_args[writer_sender_packet_start_idx] = writer_sender_packet_start;
             writer_runtime_args[writer_sender_packet_end_idx] =
-                writer_sender_packet_start + num_packets_to_send_per_worker;
+                writer_sender_packet_start + sender_total_num_pages / num_blocks_per_packet;
             writer_runtime_args[writer_sender_total_num_pages_idx] = sender_total_num_pages;
+            if (ring_index == 0) {
+                std::cout << "sender_core_idx: " << sender_core_idx << std::endl;
+                std::cout << "reader_sender_packet_start: " << reader_runtime_args[reader_sender_packet_start_idx]
+                          << std::endl;
+                std::cout << "reader_sender_packet_end: " << reader_runtime_args[reader_sender_packet_end_idx]
+                          << std::endl;
+                std::cout << "reader_sender_total_num_pages: " << reader_runtime_args[reader_sender_total_num_pages_idx]
+                          << std::endl;
+                std::cout << "writer_sender_packet_start: " << writer_runtime_args[writer_sender_packet_start_idx]
+                          << std::endl;
+                std::cout << "writer_sender_packet_end: " << writer_runtime_args[writer_sender_packet_end_idx]
+                          << std::endl;
+                std::cout << "writer_sender_total_num_pages: " << writer_runtime_args[writer_sender_total_num_pages_idx]
+                          << std::endl;
+            }
 
             reader_sender_packet_start += num_shards_to_read_per_worker;
-            writer_sender_packet_start += num_packets_to_send_per_worker;
+            // writer_sender_packet_start += num_packets_to_send_per_worker;
+            writer_sender_packet_start += sender_total_num_pages / num_blocks_per_packet;
             sender_core_idx++;
 
             writer_runtime_args.push_back(forward_fabric_connection);
