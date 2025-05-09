@@ -1,0 +1,26 @@
+// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#pragma once
+
+#include "metal/ttnn_all_includes.hpp"
+
+namespace ttml::metal::ops::cross_entropy_bw::device {
+
+struct operation_attributes_t {
+    const float scaler{1.0F};
+};
+
+struct tensor_args_t {
+    const ttnn::Tensor& input;
+    const ttnn::Tensor& target;
+
+    std::optional<ttnn::Tensor> preallocated_output;
+    std::optional<ttnn::Tensor> preallocated_softmax;
+};
+
+using tensor_return_value_t = std::vector<ttnn::Tensor>;  // return grad: tensor with shape (N, 1, H, W)
+using spec_return_value_t = std::vector<ttnn::TensorSpec>;
+
+}  // namespace ttml::metal::ops::cross_entropy_bw::device
