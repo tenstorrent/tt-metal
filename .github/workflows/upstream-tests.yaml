@@ -186,6 +186,7 @@ jobs:
   push-latest:
     if: ${{ github.ref == 'refs/heads/main' || inputs.tag-as-latest }}
     needs:
+      - get-image-tags
       # REVERT MNEEEEEEEEE - make this depend on tests instead
       - build-images
     permissions:
