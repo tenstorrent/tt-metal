@@ -14,7 +14,7 @@ from models.experimental.functional_unet.tt.model_preprocessing import (
 )
 
 from models.experimental.functional_unet.tt import unet_shallow_ttnn
-from models.experimental.functional_unet.tests.common import verify_with_pcc
+from models.experimental.functional_unet.tests.common import verify_with_pcc, UNET_L1_SMALL_REGION_SIZE
 
 
 def nearest_16(x):
@@ -23,7 +23,7 @@ def nearest_16(x):
 
 @pytest.mark.parametrize("batch", [1])
 @pytest.mark.parametrize("groups", [2, 4, 8])
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 79104}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": UNET_L1_SMALL_REGION_SIZE}], indirect=True)
 def test_unet_preprocessing(batch, groups, device, use_program_cache, reset_seeds):
     torch_input, ttnn_input = create_unet_input_tensors(batch, groups, channel_order="first", pad=False, fold=False)
     logger.info(f"Created input tensor with shape {list(ttnn_input.shape)}")
