@@ -384,14 +384,18 @@ class resnetBlock2D:
             nonlinearity = ttnn.silu
 
         out_channels = in_channels if out_channels is None else out_channels
-        hidden_states = ttnn.to_layout(input_tensor, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)
+
+        # workaround for #21088; we call to_layout on tensor in DRAM
+        dram_input_tensor = ttnn.to_memory_config(input_tensor, ttnn.DRAM_MEMORY_CONFIG)
+        hidden_states = ttnn.to_layout(dram_input_tensor, ttnn.ROW_MAJOR_LAYOUT)
+        dram_input_tensor.deallocate()
+
         if ttnn.get_memory_config(hidden_states) != self.first_gn_expected_input_sharded_memory_config:
             hidden_states = ttnn.to_memory_config(hidden_states, self.first_gn_expected_input_sharded_memory_config)
 
         hidden_states = ttnn.reshape(
             hidden_states, (self.batch_size, 1, self.conv2_input_height * self.conv2_input_width, in_channels)
         )
-        hidden_states = ttnn.reallocate(hidden_states)
 
         hidden_states = ttnn.group_norm(
             hidden_states,
