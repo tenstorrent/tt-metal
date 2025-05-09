@@ -350,6 +350,7 @@ static Tensor std_var_impl(
     if (correction) {
         reduced_volume -= 1;
     }
+    TT_FATAL(reduced_volume > 0, "Reduction is performed on too few elements, yielding divisor of {}", reduced_volume);
 
     scalar /= reduced_volume;
 
