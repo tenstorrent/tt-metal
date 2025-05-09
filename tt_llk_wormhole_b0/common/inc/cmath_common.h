@@ -38,7 +38,7 @@ constexpr uint DstTileSizeLog2[3] = {
 };
 
 constexpr uint replay_buf_offset = 16; // split replay buffer usage between fpu/sfpu
-                                       // fist 16 for sfpu, next 16 for fpu
+                                       // first 16 for sfpu, next 16 for fpu
 
 inline void reset_counters(const uint setrwc)
 {
