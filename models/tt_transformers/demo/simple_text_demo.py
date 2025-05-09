@@ -436,6 +436,7 @@ def test_demo_text(
     max_seq_len = request.config.getoption("--max_seq_len") or max_seq_len
     batch_size = request.config.getoption("--batch_size") or batch_size
     max_generated_tokens = request.config.getoption("--max_generated_tokens") or max_generated_tokens
+    data_parallel = request.config.getoption("--data_parallel") or data_parallel
     paged_attention = request.config.getoption("--paged_attention") or paged_attention
     page_params = request.config.getoption("--page_params") or page_params
     sampling_params = request.config.getoption("--sampling_params") or sampling_params
