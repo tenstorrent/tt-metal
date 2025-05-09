@@ -13,6 +13,10 @@ on:
         required: true
         type: string
 
+env:
+  TT_METAL_DIR: /work/tt-metal
+  VLLM_DIR: /work/vllm
+
 jobs:
   vllm-tests:
     strategy:
@@ -46,17 +50,14 @@ jobs:
       - in-service
       - bare-metal
       - pipeline-functional
-    env:
-      TT_METAL_HOME: /work/tt-metal
-      VLLM_DIR: /work/vllm
     container:
       image: ${{ inputs.docker-image }}
       env:
-        TT_METAL_HOME: ${{ env.TT_METAL_HOME }}
+        TT_METAL_HOME: ${{ env.TT_METAL_DIR }}
         vllm_dir: ${{ env.VLLM_DIR }}
         ARCH_NAME: ${{ matrix.test-group.arch }}
-        PYTHONPATH: ${{ env.TT_METAL_HOME }}:${{ env.VLLM_DIR }}
-        LD_LIBRARY_PATH: ${{ env.TT_METAL_HOME }}/build/lib
+        PYTHONPATH: ${{ env.TT_METAL_DIR }}:${{ env.VLLM_DIR }}
+        LD_LIBRARY_PATH: ${{ env.TT_METAL_DIR }}/build/lib
         LOGURU_LEVEL: INFO
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
@@ -74,13 +75,13 @@ jobs:
         with:
           build-artifact-name: ${{ inputs.build-artifact-name }}
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
-          path: ${{ env.TT_METAL_HOME }}
+          path: ${{ github.workspace }}/tt-metal
 
       - name: ⬇️ Checkout vLLM
         uses: actions/checkout@v4
         with:
           repository: tenstorrent/vllm
-          path: ${{ env.VLLM_DIR }}
+          path: ${{ github.workspace }}/vllm
           ref: ppetrovic/best-of
           fetch-depth: 1
 
