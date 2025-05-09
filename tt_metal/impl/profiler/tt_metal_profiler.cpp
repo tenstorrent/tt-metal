@@ -908,7 +908,7 @@ void DumpDeviceProfileResults(
                 tt_metal_device_profiler_map.at(device_id).output_dram_buffer = {};
                 tt_metal_device_profiler_map.at(device_id).sync_program.reset();
             } else {
-                InitDeviceProfiler(device);
+                // InitDeviceProfiler(device);
             }
             if (tt::tt_metal::MetalContext::instance().rtoptions().get_profiler_tracy_mid_run_push()) {
                 tt_metal_device_profiler_map.at(device_id).pushTracyDeviceResults();

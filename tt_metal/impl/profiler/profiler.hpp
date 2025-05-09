@@ -119,6 +119,12 @@ private:
     // translates potentially-virtual coordinates recorded on Device into physical coordinates
     CoreCoord getPhysicalAddressFromVirtual(chip_id_t device_id, const CoreCoord& c) const;
 
+    // Storage for all core's control buffers
+    std::map<CoreCoord, std::vector<uint32_t>> core_control_buffers;
+
+    // Read all control buffers
+    void readControlBuffers(IDevice* device, const CoreCoord& worker_core, const ProfilerDumpState state);
+
     // Dumping profile result to file
     void logPacketData(
         std::ofstream& log_file_ofs,
