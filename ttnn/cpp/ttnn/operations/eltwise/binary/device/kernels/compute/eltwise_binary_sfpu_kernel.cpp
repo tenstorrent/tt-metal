@@ -18,6 +18,8 @@
 #include "compute_kernel_api/sub_int32_sfpu.h"
 #include "compute_kernel_api/sub_uint16_sfpu.h"
 #include "compute_kernel_api/binary_max_min.h"
+#include "compute_kernel_api/gcd.h"
+#include "compute_kernel_api/lcm.h"
 
 #define PRE_SCALE defined SFPU_OP_INIT_PRE_IN0_0 || defined SFPU_OP_INIT_PRE_IN1_0
 

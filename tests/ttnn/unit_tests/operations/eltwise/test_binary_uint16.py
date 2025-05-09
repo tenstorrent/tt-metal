@@ -392,8 +392,8 @@ def test_binary_bitwise_and_uint16(a_shape, b_shape, low_a, high_a, low_b, high_
     "sharded_config",
     [
         height_sharded_memory_config,
-        # width_sharded_memory_config,
-        # block_sharded_memory_config,
+        width_sharded_memory_config,
+        block_sharded_memory_config,
     ],
 )
 def test_bitwise_and_uint16_sharded(a_shape, b_shape, sharded_config, device):
