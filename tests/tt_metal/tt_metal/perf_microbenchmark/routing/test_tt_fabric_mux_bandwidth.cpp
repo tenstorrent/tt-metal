@@ -168,6 +168,7 @@ void create_mux_kernel(
     auto drainer_channel_type = tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL;
     std::vector<uint32_t> mux_rt_args = {
         true /* ignored, connected_to_persistent_fabric */,
+        0, /* ignored, direction */
         tt::tt_fabric::WorkerXY(drainer_test_config.drainer_virtual_core.x, drainer_test_config.drainer_virtual_core.y)
             .to_uint32(),
         drainer_kernel_config->get_channel_base_address(drainer_channel_type, 0),

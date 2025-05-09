@@ -148,7 +148,7 @@ struct FabricMuxConfig {
     }
 
     std::vector<uint32_t> get_fabric_mux_compile_time_args() const {
-        auto fabric_config = tt::tt_fabric::get_1d_fabric_config();
+        auto fabric_config = tt::tt_fabric::get_tt_fabric_config();
         return std::vector<uint32_t>{
             this->num_full_size_channels,
             this->num_buffers_full_size_channel,

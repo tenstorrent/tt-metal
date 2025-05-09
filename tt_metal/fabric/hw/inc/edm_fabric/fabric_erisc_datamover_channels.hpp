@@ -20,8 +20,8 @@
 #include "edm_fabric_worker_adapters.hpp"
 #include "edm_fabric_flow_control_helpers.hpp"
 
-// !!! TODO: delete this once 1D and 2D merge happens, needed for current 2d routers compilation
-#if (ROUTING_MODE & ROUTING_MODE_2D)
+// !!! TODO: delete this once push/pull 2D tests/code is deprecated !!!
+#if (ROUTING_MODE & ROUTING_MODE_PULL) || (ROUTING_MODE & ROUTING_MODE_PUSH)
 namespace tt::tt_fabric {
 static constexpr uint8_t worker_handshake_noc = 0;
 }  // namespace tt::tt_fabric

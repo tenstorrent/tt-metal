@@ -30,6 +30,7 @@ WorkerToFabricMuxSender<FABRIC_MUX_CHANNEL_NUM_BUFFERS> build_connection_to_fabr
     auto local_teardown_ptr = reinterpret_cast<volatile uint32_t* const>(local_teardown_address);
     return WorkerToFabricMuxSender<FABRIC_MUX_CHANNEL_NUM_BUFFERS>(
         true, /* ignored, connected_to_persistent_fabric */
+        0,    /* ignored, direction */
         fabric_mux_x,
         fabric_mux_y,
         fabric_mux_channel_base_address,
