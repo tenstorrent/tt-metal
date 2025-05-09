@@ -41,7 +41,7 @@ void bind_reduction_operation(py::module& module, const reduction_operation_t& o
         ttnn::pybind_arguments_t{
             py::arg("input_tensor"),
             py::arg("dim") = std::nullopt,
-            py::arg("keepdim") = true,
+            py::arg("keepdim") = false,
             py::kw_only(),
             py::arg("memory_config") = std::nullopt,
             py::arg("compute_kernel_config") = std::nullopt,
