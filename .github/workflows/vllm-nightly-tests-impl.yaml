@@ -75,13 +75,13 @@ jobs:
         with:
           build-artifact-name: ${{ inputs.build-artifact-name }}
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
-          path: ${{ github.workspace }}/tt-metal
+          path: ${{ github.workspace }}/docker-job/tt-metal
 
       - name: ⬇️ Checkout vLLM
         uses: actions/checkout@v4
         with:
           repository: tenstorrent/vllm
-          path: ${{ github.workspace }}/vllm
+          path: ${{ github.workspace }}/docker-job/vllm
           ref: ppetrovic/best-of
           fetch-depth: 1
 
