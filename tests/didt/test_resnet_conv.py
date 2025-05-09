@@ -163,10 +163,11 @@ def test_resnet_conv(mesh_device, didt_workload_iterations, determinism_check_in
     stride_h = 1
     filter_height = 4
     filter_width = 4
-    input_height = 115
-    input_width = 115
-    batch_size = 16
+    input_height = 35
+    input_width = 83
     compute_with_storage_grid_size = (13, 10) if is_blackhole() else (8, 8)
+    # scale batch_size with num cores to keep sub_block dims
+    batch_size = compute_with_storage_grid_size[0] * compute_with_storage_grid_size[1]
 
     output_channels = 64
     input_channels = 16
@@ -200,7 +201,7 @@ def test_resnet_conv(mesh_device, didt_workload_iterations, determinism_check_in
         enable_subblock_padding=False,
     )
     # This sets subblocks to [2, 4] in underlying matmul
-    conv_config.act_block_h_override = 32 * 49
+    conv_config.act_block_h_override = 40 * 32
 
     ComputeConfigClass = ttnn.types.BlackholeComputeKernelConfig if is_blackhole() else ttnn.WormholeComputeKernelConfig
     compute_kernel_config = ComputeConfigClass(
