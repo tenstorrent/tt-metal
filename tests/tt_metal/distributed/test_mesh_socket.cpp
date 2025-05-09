@@ -141,7 +141,7 @@ void test_single_connection_single_device_socket(
                 static_cast<uint32_t>(data_size)}});
 
     if (use_cbs) {
-        auto data_format = tt::DataFormat::RawUInt32;
+        auto data_format = tt::DataFormat::UInt32;
         auto tile_size_bytes = tile_size(data_format);
         if (page_size % tile_size_bytes != 0) {
             GTEST_SKIP() << "Page size must be a multiple of tile size";
@@ -212,7 +212,7 @@ void test_single_connection_single_device_socket(
     EXPECT_EQ(src_vec, recv_data_readback);
 }
 
-void test_single_connection_single_device_socket_with_workers(
+void test_single_device_socket_with_workers(
     std::shared_ptr<tt::tt_metal::distributed::MeshDevice> md0,
     std::size_t socket_fifo_size,
     std::size_t page_size,
@@ -548,6 +548,8 @@ void test_single_connection_multi_device_socket(
     auto sender_logical_coord = CoreCoord(0, 0);
     auto recv_logical_coord = CoreCoord(0, 0);
 
+    auto recv_virtual_coord = md1->worker_core_from_logical_core(recv_logical_coord);
+
     auto l1_alignment = MetalContext::instance().hal().get_alignment(HalMemType::L1);
 
     // Create Socket between Sender and Receiver
@@ -601,7 +603,7 @@ void test_single_connection_multi_device_socket(
 
     tt::tt_metal::CircularBufferConfig sender_cb_reserved_packet_header_config =
         tt::tt_metal::CircularBufferConfig(
-            2 * packet_header_size_bytes, {{reserved_packet_header_CB_index, tt::DataFormat::RawUInt32}})
+            2 * packet_header_size_bytes, {{reserved_packet_header_CB_index, tt::DataFormat::UInt32}})
             .set_page_size(reserved_packet_header_CB_index, packet_header_size_bytes);
 
     auto sender_program = CreateProgram();
@@ -629,7 +631,7 @@ void test_single_connection_multi_device_socket(
 
     tt::tt_metal::CircularBufferConfig recv_cb_packet_header_config =
         tt::tt_metal::CircularBufferConfig(
-            packet_header_size_bytes, {{reserved_packet_header_CB_index, tt::DataFormat::RawUInt32}})
+            packet_header_size_bytes, {{reserved_packet_header_CB_index, tt::DataFormat::UInt32}})
             .set_page_size(tt::CB::c_in0, packet_header_size_bytes);
 
     auto recv_program = CreateProgram();
@@ -642,9 +644,12 @@ void test_single_connection_multi_device_socket(
             .noc = NOC::RISCV_0_default,
             .compile_args = {
                 static_cast<uint32_t>(recv_socket.config_buffer->address()),
-                static_cast<uint32_t>(recv_data_buffer->address()),
+                static_cast<uint32_t>(reserved_packet_header_CB_index),
                 static_cast<uint32_t>(page_size),
-                static_cast<uint32_t>(data_size)}});
+                static_cast<uint32_t>(data_size),
+                static_cast<uint32_t>(recv_virtual_coord.x),
+                static_cast<uint32_t>(recv_virtual_coord.y),
+                static_cast<uint32_t>(recv_data_buffer->address())}});
 
     auto recv_packet_header_CB_handle =
         CreateCircularBuffer(recv_program, recv_logical_coord, recv_cb_packet_header_config);
@@ -743,7 +748,7 @@ void test_single_connection_multi_device_socket_with_workers(
 
     tt::tt_metal::CircularBufferConfig sender_cb_reserved_packet_header_config =
         tt::tt_metal::CircularBufferConfig(
-            2 * packet_header_size_bytes, {{reserved_packet_header_CB_index, tt::DataFormat::RawUInt32}})
+            2 * packet_header_size_bytes, {{reserved_packet_header_CB_index, tt::DataFormat::UInt32}})
             .set_page_size(reserved_packet_header_CB_index, packet_header_size_bytes);
 
     auto sender_program = CreateProgram();
@@ -776,7 +781,7 @@ void test_single_connection_multi_device_socket_with_workers(
 
     tt::tt_metal::CircularBufferConfig recv_cb_packet_header_config =
         tt::tt_metal::CircularBufferConfig(
-            packet_header_size_bytes, {{reserved_packet_header_CB_index, tt::DataFormat::RawUInt32}})
+            packet_header_size_bytes, {{reserved_packet_header_CB_index, tt::DataFormat::UInt32}})
             .set_page_size(reserved_packet_header_CB_index, packet_header_size_bytes);
 
     auto recv_packet_header_CB_handle =
@@ -818,9 +823,14 @@ void test_single_connection_multi_device_socket_with_workers(
                 static_cast<uint32_t>(worker_virtual_coord.y),
                 static_cast<uint32_t>(1)}});
 
+    std::vector<uint32_t> recv_rtas;
+    tt_fabric::append_fabric_connection_rt_args(
+        recv_physical_device_id, sender_physical_device_id, 0, recv_program, {recv_logical_coord}, recv_rtas);
+    tt_metal::SetRuntimeArgs(recv_program, recv_kernel, recv_logical_coord, recv_rtas);
+
     auto worker_kernel = CreateKernel(
         recv_program,
-        "tests/tt_metal/tt_metal/test_kernels/misc/socket/fabric_worker_final_ack.cpp",
+        "tests/tt_metal/tt_metal/test_kernels/misc/socket/worker_final_ack.cpp",
         worker_logical_coord,
         DataMovementConfig{
             .processor = DataMovementProcessor::RISCV_0,
@@ -834,16 +844,15 @@ void test_single_connection_multi_device_socket_with_workers(
                 static_cast<uint32_t>(data_size),
                 static_cast<uint32_t>(recv_virtual_coord.x),
                 static_cast<uint32_t>(recv_virtual_coord.y),
-                static_cast<uint32_t>(recv_virtual_coord.x),
-                static_cast<uint32_t>(recv_virtual_coord.y),
-                static_cast<uint32_t>(output_virtual_coord.x),
-                static_cast<uint32_t>(output_virtual_coord.y),
                 static_cast<uint32_t>(output_buffer->address())}});
 
-    std::vector<uint32_t> recv_rtas;
-    tt_fabric::append_fabric_connection_rt_args(
-        recv_physical_device_id, sender_physical_device_id, 0, recv_program, {recv_logical_coord}, recv_rtas);
-    tt_metal::SetRuntimeArgs(recv_program, recv_kernel, recv_logical_coord, recv_rtas);
+    std::vector<uint32_t> worker_rtas = {
+        static_cast<uint32_t>(recv_virtual_coord.x),
+        static_cast<uint32_t>(recv_virtual_coord.y),
+        static_cast<uint32_t>(output_virtual_coord.x),
+        static_cast<uint32_t>(output_virtual_coord.y),
+    };
+    tt_metal::SetRuntimeArgs(recv_program, worker_kernel, worker_logical_coord, worker_rtas);
 
     auto sender_mesh_workload = CreateMeshWorkload();
     MeshCoordinateRange devices(md0->shape());
@@ -886,7 +895,7 @@ std::shared_ptr<Program> create_sender_program(
 
     tt::tt_metal::CircularBufferConfig sender_cb_reserved_packet_header_config =
         tt::tt_metal::CircularBufferConfig(
-            2 * packet_header_size_bytes, {{reserved_packet_header_CB_index, tt::DataFormat::RawUInt32}})
+            2 * packet_header_size_bytes, {{reserved_packet_header_CB_index, tt::DataFormat::UInt32}})
             .set_page_size(reserved_packet_header_CB_index, packet_header_size_bytes);
     auto sender_packet_header_CB_handle =
         CreateCircularBuffer(*sender_program, sender_logical_coord, sender_cb_reserved_packet_header_config);
@@ -925,7 +934,7 @@ std::shared_ptr<Program> create_reduce_program(
     auto recv_program = std::make_shared<Program>();
 
     auto recv_cb_packet_header_config =
-        CircularBufferConfig(packet_header_size_bytes, {{reserved_packet_header_CB_index, tt::DataFormat::RawUInt32}})
+        CircularBufferConfig(packet_header_size_bytes, {{reserved_packet_header_CB_index, tt::DataFormat::UInt32}})
             .set_page_size(tt::CB::c_in0, packet_header_size_bytes);
     auto config_cb_config0 =
         CircularBufferConfig(sizeof(receiver_socket_md), {{config0_cb_index, tt::DataFormat::UInt32}})
@@ -1051,7 +1060,7 @@ std::shared_ptr<Program> create_recv_program(
     auto recv_program = std::make_shared<Program>();
 
     auto recv_cb_packet_header_config =
-        CircularBufferConfig(packet_header_size_bytes, {{reserved_packet_header_CB_index, tt::DataFormat::RawUInt32}})
+        CircularBufferConfig(packet_header_size_bytes, {{reserved_packet_header_CB_index, tt::DataFormat::UInt32}})
             .set_page_size(tt::CB::c_in0, packet_header_size_bytes);
     CoreRangeSet recv_crs = CoreRangeSet(std::array{CoreRange(recv_logical_coord)}).merge_ranges();
 
@@ -1060,7 +1069,7 @@ std::shared_ptr<Program> create_recv_program(
 
     auto recv_kernel = CreateKernel(
         *recv_program,
-        "tests/tt_metal/tt_metal/test_kernels/misc/socket/receiver_worker2.cpp",
+        "tests/tt_metal/tt_metal/test_kernels/misc/socket/fabric_receiver_worker.cpp",
         recv_logical_coord,
         DataMovementConfig{
             .processor = DataMovementProcessor::RISCV_0,
@@ -1721,7 +1730,7 @@ TEST_F(MeshSocketTest1DFabric, SingleConnectionSingleDeviceSocket) {
 
 TEST_F(MeshSocketTest1DFabric, SingleConnectionSingleDeviceSocketWithCBs) {
     auto md0 = mesh_device_->create_submesh(MeshShape(1, 1), MeshCoordinate(0, 0));
-    auto tile_size_bytes = tile_size(tt::DataFormat::RawUInt32);
+    auto tile_size_bytes = tile_size(tt::DataFormat::UInt32);
     test_single_connection_single_device_socket(
         md0, 2 * tile_size_bytes, 1 * tile_size_bytes, 4 * tile_size_bytes, true);
     test_single_connection_single_device_socket(
@@ -1738,8 +1747,8 @@ TEST_F(MeshSocketTest1DFabric, SingleConnectionSingleDeviceSocketWithWorkersFina
          .output_cores = CoreRangeSet(CoreRange({0, 4}, {3, 5}))},
     };
     // These tests must not wrap and continue sending data
-    test_single_connection_single_device_socket_with_workers(md0, 1024, 64, 512, socket_core_mappings, true);
-    test_single_connection_single_device_socket_with_workers(md0, 1024, 64, 1024, socket_core_mappings, true);
+    test_single_device_socket_with_workers(md0, 1024, 64, 512, socket_core_mappings, true);
+    test_single_device_socket_with_workers(md0, 1024, 64, 1024, socket_core_mappings, true);
 }
 
 TEST_F(MeshSocketTest1DFabric, SingleConnectionSingleDeviceSocketWithWorkersLoopAck) {
@@ -1752,12 +1761,12 @@ TEST_F(MeshSocketTest1DFabric, SingleConnectionSingleDeviceSocketWithWorkersLoop
          .output_cores = CoreRangeSet(CoreRange({0, 4}, {3, 5}))},
     };
     // No wrap
-    test_single_connection_single_device_socket_with_workers(md0, 1024, 64, 512, socket_core_mappings, false);
-    test_single_connection_single_device_socket_with_workers(md0, 1024, 64, 1024, socket_core_mappings, false);
+    test_single_device_socket_with_workers(md0, 1024, 64, 512, socket_core_mappings, false);
+    test_single_device_socket_with_workers(md0, 1024, 64, 1024, socket_core_mappings, false);
     // Even wrap
-    test_single_connection_single_device_socket_with_workers(md0, 1024, 64, 2048, socket_core_mappings, false);
+    test_single_device_socket_with_workers(md0, 1024, 64, 2048, socket_core_mappings, false);
     // Uneven wrap
-    test_single_connection_single_device_socket_with_workers(md0, 4096, 1088, 9792, socket_core_mappings, false);
+    test_single_device_socket_with_workers(md0, 4096, 1088, 9792, socket_core_mappings, false);
 }
 
 TEST_F(MeshSocketTest1DFabric, MultiConnectionSingleDeviceSocketWithWorkersFinalAck) {
@@ -1775,8 +1784,8 @@ TEST_F(MeshSocketTest1DFabric, MultiConnectionSingleDeviceSocketWithWorkersFinal
          .output_cores = CoreRangeSet(CoreRange({2, 4}, {4, 5}))},
     };
     // These tests must not wrap and continue sending data
-    test_single_connection_single_device_socket_with_workers(md0, 1024, 64, 512, socket_core_mappings, true);
-    test_single_connection_single_device_socket_with_workers(md0, 1024, 64, 1024, socket_core_mappings, true);
+    test_single_device_socket_with_workers(md0, 1024, 64, 512, socket_core_mappings, true);
+    test_single_device_socket_with_workers(md0, 1024, 64, 1024, socket_core_mappings, true);
 }
 
 TEST_F(MeshSocketTest1DFabric, MultiConnectionSingleDeviceSocketWithWorkersLoopAck) {
@@ -1794,12 +1803,12 @@ TEST_F(MeshSocketTest1DFabric, MultiConnectionSingleDeviceSocketWithWorkersLoopA
          .output_cores = CoreRangeSet(CoreRange({2, 4}, {4, 5}))},
     };
     // No wrap
-    test_single_connection_single_device_socket_with_workers(md0, 1024, 64, 512, socket_core_mappings, false);
-    test_single_connection_single_device_socket_with_workers(md0, 1024, 64, 1024, socket_core_mappings, false);
+    test_single_device_socket_with_workers(md0, 1024, 64, 512, socket_core_mappings, false);
+    test_single_device_socket_with_workers(md0, 1024, 64, 1024, socket_core_mappings, false);
     // Even wrap
-    test_single_connection_single_device_socket_with_workers(md0, 1024, 64, 2048, socket_core_mappings, false);
+    test_single_device_socket_with_workers(md0, 1024, 64, 2048, socket_core_mappings, false);
     // Uneven wrap
-    test_single_connection_single_device_socket_with_workers(md0, 4096, 1088, 9792, socket_core_mappings, false);
+    test_single_device_socket_with_workers(md0, 4096, 1088, 9792, socket_core_mappings, false);
 }
 
 TEST_F(MeshSocketTest1DFabric, SingleConnectionMultiDeviceSocketWithWorkers) {

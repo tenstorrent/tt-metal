@@ -59,9 +59,10 @@ void kernel_main() {
         // Just accumulate instead of writing to L1
         *curr_credits_sem_addr = 0;
         cb_pop_front(worker_local_data_cb_id, 1);
-        noc_async_write_barrier();
+        noc_async_writes_flushed();
         noc_semaphore_inc(credits_sem_noc_addr | (uint32_t)curr_credits_sem_addr, 1);
         std::swap(curr_credits_sem_addr, next_credits_sem_addr);
     }
+    noc_async_write_barrier();
     noc_async_atomic_barrier();
 }

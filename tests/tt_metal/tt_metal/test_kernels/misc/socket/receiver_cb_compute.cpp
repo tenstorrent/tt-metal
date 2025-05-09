@@ -19,18 +19,14 @@ void MAIN {
     constexpr uint32_t num_tiles_per_page = get_compile_time_arg_val(5);
     constexpr uint32_t num_pages = data_size / page_size;
 
-#ifndef TRISC_MATH
     SocketReceiverInterface socket = create_receiver_socket_interface(socket_config_addr);
     set_receiver_socket_page_size(socket, page_size);
     assign_local_cb_to_socket(socket, input_cb_index);
-#endif
+
     unary_op_init_common(input_cb_index, output_cb_index);
     copy_tile_init(input_cb_index);
     for (uint32_t p = 0; p < num_pages; ++p) {
-// Pop tile after tile, copy to DST and pack
-#ifdef TRISC_UNPACK
         socket_wait_for_pages(socket, 1);
-#endif
         cb_reserve_back(output_cb_index, num_tiles_per_page);
         tile_regs_acquire();
         tile_regs_wait();
@@ -39,12 +35,10 @@ void MAIN {
             pack_tile(i, output_cb_index);
         }
         tile_regs_commit();
-        cb_push_back(output_cb_index, num_tiles_per_page);
         tile_regs_release();
+        cb_push_back(output_cb_index, num_tiles_per_page);
         cb_pop_front(input_cb_index, num_tiles_per_page);
-#ifdef TRISC_UNPACK
-        socket_pop_pages(socket, 1);
-#endif
+        socket_pop_pages<false>(socket, 1);
     }
 }
 }  // namespace NAMESPACE

@@ -120,8 +120,9 @@ void update_socket_config(const SocketSenderInterface& socket) {
 }
 
 SocketReceiverInterface create_receiver_socket_interface(uint32_t config_addr) {
-    tt_l1_ptr receiver_socket_md* socket_config = reinterpret_cast<tt_l1_ptr receiver_socket_md*>(config_addr);
     SocketReceiverInterface socket;
+#if !(defined TRISC_PACK || defined TRISC_MATH)
+    tt_l1_ptr receiver_socket_md* socket_config = reinterpret_cast<tt_l1_ptr receiver_socket_md*>(config_addr);
     socket.config_addr = config_addr;
     socket.read_ptr = socket_config->read_ptr;
     socket.bytes_acked = socket_config->bytes_acked;
@@ -133,12 +134,12 @@ SocketReceiverInterface create_receiver_socket_interface(uint32_t config_addr) {
     socket.upstream_noc_x = socket_config->upstream_noc_x;
     socket.upstream_noc_y = socket_config->upstream_noc_y;
     socket.upstream_bytes_acked_addr = socket_config->upstream_bytes_acked_addr;
+#endif
     return socket;
 }
 
 void set_receiver_socket_page_size(SocketReceiverInterface& socket, uint32_t page_size) {
-    // TODO: DRAM
-    ASSERT(page_size % L1_ALIGNMENT == 0);
+#if !(defined TRISC_PACK || defined TRISC_MATH)
     uint32_t fifo_start_addr = socket.fifo_addr;
     uint32_t fifo_total_size = socket.fifo_total_size;
     ASSERT(page_size <= fifo_total_size);
@@ -153,9 +154,11 @@ void set_receiver_socket_page_size(SocketReceiverInterface& socket, uint32_t pag
     fifo_rd_ptr = next_fifo_rd_ptr;
     socket.page_size = page_size;
     socket.fifo_curr_size = fifo_page_aligned_size;
+#endif
 }
 
 void socket_wait_for_pages(const SocketReceiverInterface& socket, uint32_t num_pages) {
+#if !(defined TRISC_PACK || defined TRISC_MATH)
     uint32_t num_bytes = num_pages * socket.page_size;
     if (socket.read_ptr + num_bytes >= socket.fifo_curr_size + socket.fifo_addr) {
         num_bytes += socket.fifo_total_size - socket.fifo_curr_size;
@@ -166,21 +169,30 @@ void socket_wait_for_pages(const SocketReceiverInterface& socket, uint32_t num_p
     do {
         bytes_recv = *bytes_sent_ptr - socket.bytes_acked;
     } while (bytes_recv < num_bytes);
+#endif
 }
 
+template <bool advance_read_ptr = true>
 void socket_pop_pages(SocketReceiverInterface& socket, uint32_t num_pages) {
+#if !(defined TRISC_PACK || defined TRISC_MATH)
     uint32_t num_bytes = num_pages * socket.page_size;
     ASSERT(num_bytes <= socket.fifo_curr_size);
     if (socket.read_ptr + num_bytes >= socket.fifo_curr_size + socket.fifo_addr) {
-        socket.read_ptr = socket.read_ptr + num_bytes - socket.fifo_curr_size;
+        if (advance_read_ptr) {
+            socket.read_ptr = socket.read_ptr + num_bytes - socket.fifo_curr_size;
+        }
         socket.bytes_acked += num_bytes + socket.fifo_total_size - socket.fifo_curr_size;
     } else {
-        socket.read_ptr += num_bytes;
+        if (advance_read_ptr) {
+            socket.read_ptr += num_bytes;
+        }
         socket.bytes_acked += num_bytes;
     }
+#endif
 }
 
 void assign_local_cb_to_socket(const SocketReceiverInterface& socket, uint32_t cb_id) {
+#if !(defined TRISC_PACK || defined TRISC_MATH)
     LocalCBInterface& local_cb = get_local_cb_interface(cb_id);
     uint32_t fifo_size = socket.fifo_curr_size >> cb_addr_shift;
     uint32_t fifo_limit = (socket.fifo_addr >> cb_addr_shift) + fifo_size;
@@ -192,6 +204,7 @@ void assign_local_cb_to_socket(const SocketReceiverInterface& socket, uint32_t c
     local_cb.fifo_num_pages = fifo_num_pages;
     local_cb.fifo_wr_ptr = fifo_ptr;
     local_cb.fifo_rd_ptr = fifo_ptr;
+#endif
 }
 
 #ifndef COMPILE_FOR_TRISC

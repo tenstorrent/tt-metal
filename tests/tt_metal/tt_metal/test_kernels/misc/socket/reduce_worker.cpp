@@ -88,8 +88,10 @@ void kernel_main() {
         output_data_noc_addr += page_size;
         cb_pop_front(in0_cb_id, 1);
         cb_pop_front(in1_cb_id, 1);
-        noc_async_write_barrier();
+        noc_async_writes_flushed();
         noc_semaphore_inc(credits0_sem_noc_addr, 1);
         noc_semaphore_inc(credits1_sem_noc_addr, 1);
     }
+    noc_async_write_barrier();
+    noc_async_atomic_barrier();
 }

@@ -52,7 +52,7 @@ void kernel_main() {
 
     // Loop can be optimized to not be page based, and send all available credits at once.
     for (uint32_t i = 0; i < num_pages; ++i) {
-        // Should be safe even if we don't flush before modifying the value in l1 since it's and always increasing word
+        // Should be safe even if we don't flush before modifying the value in l1 since it's an always increasing word
         // Otherwise insert a flush before modifying
         *credits_sem_ptr = i + 1;
         socket_wait_for_pages(receiver_socket, i + 1);

@@ -52,9 +52,10 @@ void kernel_main() {
         cb_push_back(worker_local_data_cb_id, 1);
         noc_async_write(write_addr, output_data_noc_addr, page_size);
         output_data_noc_addr += page_size;
-        noc_async_write_barrier();
+        noc_async_writes_flushed();
         cb_pop_front(worker_local_data_cb_id, 1);
     }
     noc_semaphore_inc(config_sem_noc_addr, 1);
+    noc_async_write_barrier();
     noc_async_atomic_barrier();
 }
