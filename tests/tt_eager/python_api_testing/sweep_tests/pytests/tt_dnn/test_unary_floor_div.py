@@ -12,7 +12,7 @@ from tests.tt_eager.python_api_testing.sweep_tests import (
 from tests.tt_eager.python_api_testing.sweep_tests.run_pytorch_ci_tests import (
     run_single_pytorch_test,
 )
-from models.utility_functions import skip_for_grayskull, skip_for_blackhole
+
 
 mem_configs = [
     ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
@@ -20,7 +20,6 @@ mem_configs = [
 ]
 
 
-@skip_for_blackhole("Unsupported on non WH arch, see #12349")
 @pytest.mark.parametrize(
     "input_shapes",
     [
@@ -37,7 +36,6 @@ mem_configs = [
     "dst_mem_config",
     mem_configs,
 )
-@skip_for_grayskull("#ToDo: GS implementation needs to be done for Floor")
 class TestUnary_Floor_Div:
     def test_run_unary_floor_div(
         self,
