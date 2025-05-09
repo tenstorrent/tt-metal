@@ -18,7 +18,7 @@ namespace unit_tests::dm::core_to_core {
 struct OneFromOneConfig {
     uint32_t test_id = 0;
     CoreCoord master_core_coord = CoreCoord();
-    CoreCoord slave_core_coord = CoreCoord();
+    CoreCoord subordinate_core_coord = CoreCoord();
     uint32_t num_of_transactions = 0;
     uint32_t transaction_size_pages = 0;
     uint32_t page_size_bytes = 0;
@@ -27,7 +27,6 @@ struct OneFromOneConfig {
     // TODO: Add the following parameters
     //  1. Virtual Channel
     //  2. Which NOC to use
-    //  3. Posted flag
 };
 
 /// @brief Does Requestor Core --> L1 Responder Core --> L1 Requestor Core
@@ -44,7 +43,7 @@ bool run_dm(IDevice* device, const OneFromOneConfig& test_config) {
     const size_t total_size_pages = test_config.num_of_transactions * test_config.transaction_size_pages;
 
     CoreRangeSet master_core_set({CoreRange(test_config.master_core_coord)});
-    CoreRangeSet slave_core_set({CoreRange(test_config.slave_core_coord)});
+    CoreRangeSet subordinate_core_set({CoreRange(test_config.subordinate_core_coord)});
 
     auto master_shard_parameters = ShardSpecBuffer(
         master_core_set,
@@ -62,25 +61,25 @@ bool run_dm(IDevice* device, const OneFromOneConfig& test_config) {
     });
     uint32_t master_l1_byte_address = master_l1_buffer->address();
 
-    auto slave_shard_parameters = ShardSpecBuffer(
-        slave_core_set,
+    auto subordinate_shard_parameters = ShardSpecBuffer(
+        subordinate_core_set,
         {1, total_size_bytes / 2},
         ShardOrientation::ROW_MAJOR,
         {1, test_config.page_size_bytes / 2},
         {1, total_size_pages});
-    auto slave_l1_buffer = CreateBuffer(ShardedBufferConfig{
+    auto subordinate_l1_buffer = CreateBuffer(ShardedBufferConfig{
         .device = device,
         .size = total_size_bytes,
         .page_size = test_config.page_size_bytes,
         .buffer_type = BufferType::L1,
         .buffer_layout = TensorMemoryLayout::WIDTH_SHARDED,
-        .shard_parameters = std::move(slave_shard_parameters),
+        .shard_parameters = std::move(subordinate_shard_parameters),
     });
-    uint32_t slave_l1_byte_address = slave_l1_buffer->address();
+    uint32_t subordinate_l1_byte_address = subordinate_l1_buffer->address();
 
     // Compile-time arguments for kernels
     vector<uint32_t> requestor_compile_args = {
-        (uint32_t)slave_l1_byte_address,
+        (uint32_t)subordinate_l1_byte_address,
         (uint32_t)master_l1_byte_address,
         (uint32_t)test_config.num_of_transactions,
         (uint32_t)test_config.transaction_size_pages,
@@ -98,8 +97,9 @@ bool run_dm(IDevice* device, const OneFromOneConfig& test_config) {
             .compile_args = requestor_compile_args});
 
     // Runtime Arguments
-    CoreCoord physical_slave_core = device->worker_core_from_logical_core(test_config.slave_core_coord);
-    SetRuntimeArgs(program, requestor_kernel, master_core_set, {physical_slave_core.x, physical_slave_core.y});
+    CoreCoord physical_subordinate_core = device->worker_core_from_logical_core(test_config.subordinate_core_coord);
+    SetRuntimeArgs(
+        program, requestor_kernel, master_core_set, {physical_subordinate_core.x, physical_subordinate_core.y});
 
     // Assign unique id
     log_info("Running Test ID: {}, Run ID: {}", test_config.test_id, runtime_host_id);
@@ -114,7 +114,7 @@ bool run_dm(IDevice* device, const OneFromOneConfig& test_config) {
 
     // Launch program and record outputs
     vector<uint32_t> packed_output;
-    detail::WriteToBuffer(slave_l1_buffer, packed_input);
+    detail::WriteToBuffer(subordinate_l1_buffer, packed_input);
     MetalContext::instance().get_cluster().l1_barrier(device->id());
     detail::LaunchProgram(device, program);
     detail::ReadFromBuffer(master_l1_buffer, packed_output);
@@ -147,7 +147,7 @@ TEST_F(DeviceFixture, TensixDataMovementOneFromOnePacketSizes) {
 
     // Cores
     CoreCoord master_core_coord = {0, 0};
-    CoreCoord slave_core_coord = {1, 1};
+    CoreCoord subordinate_core_coord = {1, 1};
 
     for (uint32_t num_of_transactions = 1; num_of_transactions <= max_transactions; num_of_transactions *= 2) {
         for (uint32_t transaction_size_pages = 1; transaction_size_pages <= max_transaction_size_pages;
@@ -156,7 +156,7 @@ TEST_F(DeviceFixture, TensixDataMovementOneFromOnePacketSizes) {
             unit_tests::dm::core_to_core::OneFromOneConfig test_config = {
                 .test_id = 5,
                 .master_core_coord = master_core_coord,
-                .slave_core_coord = slave_core_coord,
+                .subordinate_core_coord = subordinate_core_coord,
                 .num_of_transactions = num_of_transactions,
                 .transaction_size_pages = transaction_size_pages,
                 .page_size_bytes = page_size_bytes,
