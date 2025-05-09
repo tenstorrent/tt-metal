@@ -343,14 +343,7 @@ LlamaReduceScatterCreateHeadsDeviceOperation::LlamaReduceScatterCreateHeads::cre
     auto& q_output_tensor = tensor_return_value[0];
     auto& k_output_tensor = tensor_return_value[1];
     auto& v_output_tensor = tensor_return_value[2];
-    // auto& output_shape = output_tensor.get_logical_shape();
-    // auto& padded_output_shape = output_tensor.get_padded_shape();
-    // const auto& input_tile_shape = input_tensor.get_tensor_spec().tile().get_tile_shape();
-    // const auto& output_tile_shape = output_tensor.get_tensor_spec().tile().get_tile_shape();
     auto input_tensor_width = input_tensor.get_logical_shape()[-1];
-    // auto output_tensor_width = output_tensor.get_logical_shape()[-1];
-    // auto input_tensor_width_in_tiles = input_tensor.get_logical_shape()[-1] / input_tile_shape[1];
-    // auto output_tensor_width_in_tiles = output_tensor.get_logical_shape()[-1] / output_tile_shape[1];
     auto input_shard_spec = input_tensor.shard_spec().value();
     auto q_output_shard_spec = q_output_tensor.shard_spec().value();
     auto k_output_shard_spec = k_output_tensor.shard_spec().value();
@@ -362,7 +355,6 @@ LlamaReduceScatterCreateHeadsDeviceOperation::LlamaReduceScatterCreateHeads::cre
 
     uint32_t input_shard_height = input_shard_spec.shape[0];
     uint32_t input_shard_width = input_shard_spec.shape[1];
-    // uint32_t input_tiles_per_core_width = input_shard_width / input_tile_shape[1];
 
     uint32_t q_output_shard_height = q_output_shard_spec.shape[0];
     uint32_t q_output_shard_width = q_output_shard_spec.shape[1];
@@ -370,13 +362,8 @@ LlamaReduceScatterCreateHeadsDeviceOperation::LlamaReduceScatterCreateHeads::cre
     uint32_t k_output_shard_width = k_output_shard_spec.shape[1];
     uint32_t v_output_shard_height = v_output_shard_spec.shape[0];
     uint32_t v_output_shard_width = v_output_shard_spec.shape[1];
-    // uint32_t output_tiles_per_core_width = output_shard_width / input_tile_shape[1];
 
     uint32_t ncores_input = (input_tensor_width + input_shard_width - 1) / input_shard_width;
-    // if (ncores_input % num_devices != 0) {
-    //     ncores_input = ((ncores_input + num_devices - 1) / num_devices) * num_devices;
-    // }
-    // uint32_t ncores_output = (output_tensor_width + output_shard_width - 1) / output_shard_width;
 
     // uint32_t input_shard_cores_per_device = ncores_input / num_devices;
     uint32_t input_sticks_per_device = input_shape[-2] / num_devices;  // should be 8
@@ -418,24 +405,17 @@ LlamaReduceScatterCreateHeadsDeviceOperation::LlamaReduceScatterCreateHeads::cre
     auto packet_buffer = tensor_args.intermediate_packet_buffer.buffer();
     tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.get_dtype());
 
-    // uint32_t input_page_size = tile_size(cb_data_format);
-    // uint32_t output_page_size = tile_size(cb_data_format);
     uint32_t input_block_size = input_sticks_per_device * input_shard_width * input_tensor.element_size();
-    // uint32_t output_block_size = input_sticks_per_device * output_shard_width * output_tensor.element_size();
     uint32_t input_page_size = input_shard_width * input_tensor.element_size();
-    // uint32_t output_page_size = output_shard_width * output_tensor.element_size();
 
     // Get OP Config, topology config
     std::vector<Tensor> input_tensors = {input_tensor};
     std::vector<Tensor> output_tensors = {q_output_tensor, k_output_tensor, v_output_tensor};
 
-    // const auto& op_config = ttnn::ccl::CCLOpConfig(input_tensors, output_tensors, ttnn::ccl::Topology::Linear);
     const auto& op_config = ttnn::ccl::CCLOpConfig(input_tensors, output_tensors, operation_attributes.topology);
-    // LineTopology line_topology(ring_size, ring_index);
 
     // need to drop unused cores in shard spec
     auto input_grid = input_shard_spec.grid;
-    // auto output_grid = output_shard_spec.grid;
 
     auto sub_device_cores = mesh_device->worker_cores(
         tt::tt_metal::HalProgrammableCoreType::TENSIX,
@@ -456,11 +436,6 @@ LlamaReduceScatterCreateHeadsDeviceOperation::LlamaReduceScatterCreateHeads::cre
     }
     uint32_t num_packets_to_send = (ncores_input + num_blocks_per_packet - 1) / num_blocks_per_packet;
     uint32_t num_packets_to_send_per_worker = (num_packets_to_send + num_links - 1) / num_links;
-
-    // TT_FATAL(
-    //     num_blocks_per_packet % input_tiles_per_core_width == 0 || input_tiles_per_core_width >
-    //     num_blocks_per_packet, "must have num_pages per packet divisible by num_tiles per core, or num_tiles per core
-    //     larger than num_pages " "per packet");
 
     uint32_t num_workers_per_link = 1;
 
@@ -500,12 +475,6 @@ LlamaReduceScatterCreateHeadsDeviceOperation::LlamaReduceScatterCreateHeads::cre
         tt::tt_metal::CircularBufferConfig(1 * input_block_size, {{input_tensor_cb_id, cb_data_format}})
             .set_page_size(input_tensor_cb_id, input_block_size)
             .set_globally_allocated_address(*input_tensor_buffer);
-    // CB to represent the output sharded buffer
-    // tt::tt_metal::CircularBufferConfig cb_output_tensor_config =
-    //     tt::tt_metal::CircularBufferConfig(
-    //         output_shard_height * output_page_size, {{output_tensor_cb_id, cb_data_format}})
-    //         .set_page_size(output_tensor_cb_id, output_page_size)
-    //         .set_globally_allocated_address(*output_tensor_buffer);
 
     constexpr uint32_t buffering_factor = 2;
     // Allocate space for the client interface
@@ -902,7 +871,6 @@ void LlamaReduceScatterCreateHeadsDeviceOperation::LlamaReduceScatterCreateHeads
         auto& output_tensor = tensor_return_value;
 
         auto input_tensor_buffer = input_tensor.buffer();
-        // auto output_tensor_buffer = output_tensor[0].buffer();
         auto packet_buffer = intermediate_packet_buffer.buffer();
 
         auto& all_cores_grid = shared_variables.core_range;
@@ -910,8 +878,6 @@ void LlamaReduceScatterCreateHeadsDeviceOperation::LlamaReduceScatterCreateHeads
         auto cores = corerange_to_cores(all_cores_grid, std::nullopt);
 
         UpdateDynamicCircularBufferAddress(program, shared_variables.cb_handles[0], *input_tensor_buffer);
-        // UpdateDynamicCircularBufferAddress(program, cached_program.shared_variables.cb_handles[1],
-        // *output_tensor_buffer);
         UpdateDynamicCircularBufferAddress(program, shared_variables.cb_handles[1], *packet_buffer);
 
         for (const auto& core : cores) {
