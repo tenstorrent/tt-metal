@@ -734,7 +734,7 @@ Conv2dConfig determine_conv_config_for_auto_shard(
     uint32_t input_height,
     uint32_t input_width,
     const CoreCoord& compute_grid_size,
-    Layout input_tensor_layout,
+    Layout input_layout,
     std::optional<const MemoryConfig> input_memory_config,
     const std::array<uint32_t, 2>& kernel_size,
     const uint32_t groups,
@@ -767,7 +767,7 @@ Conv2dConfig determine_conv_config_for_auto_shard(
         if (conv_config.act_block_h_override == 0) {
             if (in_channels < constants::TILE_WIDTH && conv_config.input_channels_alignment == constants::TILE_WIDTH &&
                 !is_mm_conv && conv_config.shard_layout == TensorMemoryLayout::HEIGHT_SHARDED &&
-                input_tensor_layout == Layout::ROW_MAJOR) {
+                input_layout == Layout::ROW_MAJOR) {
                 log_debug(LogOp, "Auto shard, enable shallow conv");
                 // height sharded, non matmul conv, with input channels < 32, and default setting for
                 // input_channels_alignment

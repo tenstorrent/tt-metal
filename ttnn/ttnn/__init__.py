@@ -346,6 +346,8 @@ from ttnn.operations.conv2d import (
     Conv2dSliceWidth,
     prepare_conv_weights,
     prepare_conv_bias,
+    prepare_conv_transpose2d_weights,
+    prepare_conv_transpose2d_bias,
 )
 from ttnn._ttnn.operations.conv import (
     convert_conv_weight_tensor_to_tiled_layout,
