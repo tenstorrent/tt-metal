@@ -116,8 +116,8 @@ std::optional<HostBuffer> HostMeshBuffer::get_buffer(size_t linear_index) {
         data_);
 }
 
-void HostMeshBuffer::transform(std::function<HostBuffer(const HostBuffer& buffer, size_t linear_index)>& fn) {
-    return std::visit(
+void HostMeshBuffer::transform(const TransformFn& fn) {
+    std::visit(
         tt::stl::overloaded{
             [&fn](Replicated& replicated) { replicated.buffer = fn(replicated.buffer, 0); },
             [&fn](Sharded& sharded) {
@@ -128,8 +128,8 @@ void HostMeshBuffer::transform(std::function<HostBuffer(const HostBuffer& buffer
         data_);
 }
 
-void HostMeshBuffer::apply(std::function<void(const HostBuffer& buffer, size_t linear_index)>& fn) {
-    return std::visit(
+void HostMeshBuffer::apply(const ApplyFn& fn) {
+    std::visit(
         tt::stl::overloaded{
             [&fn](Replicated& replicated) { fn(replicated.buffer, 0); },
             [&fn](Sharded& sharded) {

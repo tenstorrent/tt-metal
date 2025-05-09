@@ -68,8 +68,11 @@ public:
     // For global multi-host buffers, these functions will only be invoked for the local shards.
     //
     // TODO: provide an optional way to parallelize the operation.
-    void transform(std::function<HostBuffer(const HostBuffer& buffer, size_t linear_index)>& fn);
-    void apply(std::function<void(const HostBuffer& buffer, size_t linear_index)>& fn);
+    using TransformFn = std::function<HostBuffer(const HostBuffer& buffer, size_t linear_index)>;
+    void transform(const TransformFn& fn);
+
+    using ApplyFn = std::function<void(const HostBuffer& buffer, size_t linear_index)>;
+    void apply(const ApplyFn& fn);
 
     // Returns true if the buffer is allocated.
     bool is_allocated() const;
