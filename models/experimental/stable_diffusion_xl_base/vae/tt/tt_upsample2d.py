@@ -36,7 +36,7 @@ class TtUpsample2D(nn.Module):
         bias = state_dict[f"{module_path}.conv.bias"].unsqueeze(0).unsqueeze(0).unsqueeze(0)
 
         self.compute_config, self.conv_config, self.tt_weights, self.tt_bias, self.conv_params = prepare_conv_params(
-            device, weights, bias, ttnn.bfloat16
+            device, weights, bias, ttnn.bfloat16, fp32_dest_acc_en=True, math_fidelity=ttnn.MathFidelity.LoFi
         )
         self.conv_slice_config = get_DRAM_conv_config(module_path, 1)
 
