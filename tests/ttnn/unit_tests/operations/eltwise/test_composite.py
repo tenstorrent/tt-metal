@@ -904,3 +904,53 @@ def test_unary_rdiv(input_shapes, param, round_mode, device):
 
     comp_pass = compare_pcc([output_tensor], [golden_tensor])
     assert comp_pass
+
+
+@pytest.mark.parametrize(
+    "input_shapes",
+    (
+        (torch.Size([1, 1, 32, 32])),
+        (torch.Size([1, 1, 320, 384])),
+        (torch.Size([1, 3, 320, 384])),
+    ),
+)
+@pytest.mark.parametrize(
+    "min_val, max_val",
+    [
+        (None, None),
+        (-10, None),
+        (None, 10),
+        (-10, 10),
+        (1, -1),
+        (0, 0),
+        (-1, None),
+        (None, 1),
+        (None, None),
+        (0, None),
+        (None, 0),
+        (1, 0),
+        (0, 1),
+    ],
+)
+def test_unary_composite_clamp_int_ttnn(input_shapes, min_val, max_val, device):
+    in_data1 = torch.randint(-100, 100, input_shapes, dtype=torch.int32)
+    input_tensor1 = ttnn.from_torch(in_data1, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
+    if min_val is None:
+        min, min_tensor = None, None
+    else:
+        min, min_tensor = min_val, min_val
+
+    if max_val is None:
+        max, max_tensor = None, None
+    else:
+        max, max_tensor = max_val, max_val
+
+    if min is None and max is None:
+        with pytest.raises(RuntimeError, match="Only one of 'min' or 'max' can be None. Please provide one value"):
+            ttnn.clamp(input_tensor1, min_tensor, max_tensor)
+    else:
+        output_tensor = ttnn.clamp(input_tensor1, min_tensor, max_tensor)
+        golden_function = ttnn.get_golden_function(ttnn.clamp)
+        golden_tensor = golden_function(in_data1, min, max)
+        comp_pass = compare_pcc([output_tensor], [golden_tensor])
+        assert comp_pass

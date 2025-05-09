@@ -12,6 +12,7 @@
 #include <tt-metalium/bfloat16.hpp>
 #include "ttnn/operations/data_movement/reshape_on_device/reshape.hpp"
 #include "ttnn/operations/data_movement/bcast/bcast.hpp"
+#include "cpp/ttnn/operations/copy.hpp"
 #include "ttnn/operations/functions.hpp"
 #include "ttnn/operations/data_movement/slice/slice.hpp"
 #include "ttnn/operations/eltwise/unary/unary_composite.hpp"
@@ -478,10 +479,15 @@ Tensor ExecuteUnaryCompositeClip::invoke(
 
 // clamp
 Tensor ExecuteUnaryCompositeClamp::invoke(
-    const Tensor& a,
+    const Tensor& input_a,
     std::optional<float> min,
     std::optional<float> max,
     const std::optional<MemoryConfig>& output_mem_config) {
+    Tensor a = input_a;
+    if (input_a.get_dtype() == DataType::INT32) {
+        a = ttnn::typecast(a, DataType::FLOAT32);
+    }
+
     auto output_memory_config = output_mem_config.value_or(a.memory_config());
     TT_FATAL((max.has_value() || min.has_value()), "Only one of 'min' or 'max' can be None. Please provide one value");
     if (!max.has_value()) {
@@ -493,11 +499,12 @@ Tensor ExecuteUnaryCompositeClamp::invoke(
     } else if (min.value() > max.value()) {
         return full_like(a, max.value());
     }
-    Tensor a_max = ttnn::minimum(ttnn::DefaultQueueId, a, max.value(), std::nullopt, output_memory_config);
+
+    Tensor a_max = ttnn::minimum(a, max.value(), std::nullopt, output_memory_config);
     if (min.value() == 0.0f) {
         return ttnn::relu(a_max, output_memory_config);
     } else {
-        return ttnn::maximum(ttnn::DefaultQueueId, a_max, min.value(), std::nullopt, output_memory_config);
+        return ttnn::maximum(a_max, min.value(), std::nullopt, output_memory_config);
     }
 }
 
