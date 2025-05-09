@@ -1914,6 +1914,48 @@ TEST_F(MeshSocketTest2DFabric, SocketsOnSubDevice) {
     md1->clear_loaded_sub_device_manager();
 }
 
+TEST_F(MeshSocketTest, AssertOnDuplicateCores) {
+    auto md0 = mesh_device_->create_submesh(MeshShape(1, 1), MeshCoordinate(0, 0));
+    auto md1 = mesh_device_->create_submesh(MeshShape(1, 1), MeshCoordinate(1, 0));
+    constexpr uint32_t socket_fifo_size = 1024;
+
+    socket_connection_t socket_connection = {
+        .sender_core = {MeshCoordinate(0, 0), CoreCoord(0, 0)},
+        .receiver_core = {MeshCoordinate(0, 0), CoreCoord(0, 0)},
+    };
+
+    socket_connection_t duplicate_socket_connection_0 = {
+        .sender_core = {MeshCoordinate(0, 0), CoreCoord(0, 0)},
+        .receiver_core = {MeshCoordinate(0, 0), CoreCoord(1, 0)},
+    };
+
+    socket_connection_t duplicate_socket_connection_1 = {
+        .sender_core = {MeshCoordinate(0, 0), CoreCoord(1, 0)},
+        .receiver_core = {MeshCoordinate(0, 0), CoreCoord(0, 0)},
+    };
+
+    socket_memory_config_t socket_mem_config = {
+        .socket_storage_type = BufferType::L1,
+        .fifo_size = socket_fifo_size,
+    };
+
+    socket_config_t socket_config_0 = {
+        .socket_connection_config = {socket_connection, duplicate_socket_connection_0},
+        .socket_mem_config = socket_mem_config};
+
+    socket_config_t socket_config_1 = {
+        .socket_connection_config = {socket_connection, duplicate_socket_connection_1},
+        .socket_mem_config = socket_mem_config};
+
+    socket_config_t socket_config_2 = {
+        .socket_connection_config = {socket_connection}, .socket_mem_config = socket_mem_config};
+
+    EXPECT_THROW(mesh_socket_t::create_sockets(md0, md1, socket_config_0), std::exception);
+    EXPECT_THROW(mesh_socket_t::create_sockets(md0, md1, socket_config_1), std::exception);
+    // Having the sender and receiver on the same core is valid. Ensure that this doesn't fail.
+    EXPECT_NO_THROW(mesh_socket_t::create_sockets(md0, md0, socket_config_2));
+}
+
 // ========= Single Device Data Movement Tests =========
 
 TEST_F(MeshSocketTest, SingleConnectionSingleDeviceSocket) {

@@ -18,9 +18,15 @@ std::shared_ptr<MeshBuffer> create_socket_config_buffer(
 
     uint32_t config_buffer_size = is_sender ? sizeof(sender_socket_md) : sizeof(receiver_socket_md);
     std::set<CoreRange> all_cores_set;
-
+    std::unordered_map<MeshCoordinate, std::set<CoreRange>> socket_cores_per_device;
     for (const auto& connection : socket_connections) {
-        all_cores_set.insert(is_sender ? connection.sender_core.second : connection.receiver_core.second);
+        const auto& socket_device = is_sender ? connection.sender_core.first : connection.receiver_core.first;
+        const auto& socket_core = is_sender ? connection.sender_core.second : connection.receiver_core.second;
+        TT_FATAL(
+            socket_cores_per_device[socket_device].find(socket_core) == socket_cores_per_device[socket_device].end(),
+            "Cannot reuse sender or receiver cores in a single socket.");
+        all_cores_set.insert(socket_core);
+        socket_cores_per_device[socket_device].insert(socket_core);
     }
 
     auto all_cores = CoreRangeSet(all_cores_set);
