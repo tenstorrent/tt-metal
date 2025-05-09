@@ -35,8 +35,8 @@
 #include "tt_metal/impl/debug/noc_logging.hpp"
 #include "tt_metal/impl/debug/watcher_server.hpp"
 #include "tt_metal/impl/dispatch/topology.hpp"
+#include "tt_metal/impl/dispatch/system_memory_manager.hpp"
 #include "tt_metal/jit_build/build_env_manager.hpp"
-#include "tt_metal/api/tt-metalium/system_memory_manager.hpp"
 #include <umd/device/tt_core_coordinates.h>
 
 using namespace tt::tt_metal;
