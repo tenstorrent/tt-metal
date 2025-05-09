@@ -17,6 +17,7 @@ from models.experimental.functional_unet.tt import unet_shallow_ttnn
 from models.experimental.functional_unet.tests.common import (
     check_pcc_conv,
     is_n300_with_eth_dispatch_cores,
+    UNET_L1_SMALL_REGION_SIZE,
 )
 
 
@@ -31,7 +32,7 @@ from models.experimental.functional_unet.tests.common import (
         ("upblock4", 16, 528, 80, 16),
     ],
 )
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": UNET_L1_SMALL_REGION_SIZE}], indirect=True)
 def test_unet_upblock(
     batch: int,
     groups: int,

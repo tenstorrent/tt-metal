@@ -12,11 +12,11 @@ from models.experimental.functional_unet.tt.model_preprocessing import (
 from models.experimental.functional_unet.tt import unet_shallow_torch
 from models.experimental.functional_unet.tt import unet_shallow_ttnn
 
-from models.experimental.functional_unet.tests.common import verify_with_pcc
+from models.experimental.functional_unet.tests.common import verify_with_pcc, UNET_L1_SMALL_REGION_SIZE
 
 
 @pytest.mark.parametrize("batch, groups", [(1, 4)])
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": UNET_L1_SMALL_REGION_SIZE}], indirect=True)
 def test_unet_output_layer(batch, groups, device, reset_seeds):
     torch_input, ttnn_input = create_unet_input_tensors(batch, groups)
     model = unet_shallow_torch.UNet.from_random_weights(groups=groups)

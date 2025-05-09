@@ -12,7 +12,7 @@ from models.utility_functions import (
     skip_for_grayskull,
 )
 
-from models.experimental.functional_unet.tests.common import UNET_TRACE_REGION_SIZE
+from models.experimental.functional_unet.tests.common import UNET_TRACE_REGION_SIZE, UNET_L1_SMALL_REGION_SIZE
 
 
 @skip_for_grayskull("UNet not currently supported on GS")
@@ -48,7 +48,13 @@ def test_unet_perf_device(batch: int, groups: int, expected_device_perf_fps: flo
 @pytest.mark.models_performance_bare_metal
 @pytest.mark.parametrize(
     "device_params",
-    [{"l1_small_size": 68864, "trace_region_size": UNET_TRACE_REGION_SIZE, "num_command_queues": 2}],
+    [
+        {
+            "l1_small_size": UNET_L1_SMALL_REGION_SIZE,
+            "trace_region_size": UNET_TRACE_REGION_SIZE,
+            "num_command_queues": 2,
+        }
+    ],
     indirect=True,
 )
 @pytest.mark.parametrize(
@@ -92,7 +98,13 @@ def test_unet_trace_perf(
 @pytest.mark.models_performance_bare_metal
 @pytest.mark.parametrize(
     "device_params",
-    [{"l1_small_size": 68864, "trace_region_size": UNET_TRACE_REGION_SIZE, "num_command_queues": 2}],
+    [
+        {
+            "l1_small_size": UNET_L1_SMALL_REGION_SIZE,
+            "trace_region_size": UNET_TRACE_REGION_SIZE,
+            "num_command_queues": 2,
+        }
+    ],
     indirect=True,
 )
 @pytest.mark.parametrize(
