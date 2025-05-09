@@ -272,13 +272,17 @@ void launch_on_worker_thread(
     bool program_cache_hit = false;
 
     auto is_program_cache_enabled = program_cache.is_enabled();
+    auto is_program_cache_misses_allowed = program_cache.cache_misses_allowed();
     if (is_program_cache_enabled) {
         program_hash = compute_program_hash<device_operation_t>(operation_attributes, tensor_args);
         program_cache_hit = program_cache.contains(program_hash);
-        if (!program_cache_hit && !program_cache.cache_misses_allowed()) {
+        if (!program_cache_hit && !is_program_cache_misses_allowed) {
             auto op_name = get_operation_name<device_operation_t>(operation_attributes);
             TT_THROW("Device operation \"{}\": program cache miss occurred, but cache misses are forbidden", op_name);
         }
+    } else if (!is_program_cache_misses_allowed) {
+        auto op_name = get_operation_name<device_operation_t>(operation_attributes);
+        TT_THROW("Device operation \"{}\": program cache is disabled, but cache misses are forbidden", op_name);
     }
 
     log_operation<device_operation_t>(
@@ -520,14 +524,18 @@ void launch_operation_with_adapter(
     bool program_cache_hit = false;
 
     auto is_program_cache_enabled = program_cache.is_enabled();
+    auto is_program_cache_misses_allowed = program_cache.cache_misses_allowed();
     if (is_program_cache_enabled) {
         // Use device_operation's compute_program_hash if available
         program_hash = mesh_device_operation_t::compute_mesh_workload_hash(mesh_device, operation_attributes, tensor_args);
         program_cache_hit = program_cache.contains(program_hash);
-        if (!program_cache_hit && !program_cache.cache_misses_allowed()) {
+        if (!program_cache_hit && !is_program_cache_misses_allowed) {
             auto op_name = get_operation_name<mesh_device_operation_t>(operation_attributes);
             TT_THROW("Device operation \"{}\": program cache miss occurred, but cache misses are forbidden", op_name);
         }
+    } else if (!is_program_cache_misses_allowed) {
+        auto op_name = get_operation_name<mesh_device_operation_t>(operation_attributes);
+        TT_THROW("Device operation \"{}\": program cache is disabled, but cache misses are forbidden", op_name);
     }
 
     log_operation<mesh_device_operation_t>(mesh_device->id(), operation_attributes, tensor_args, program_hash, program_cache_hit);
