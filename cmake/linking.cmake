@@ -1,6 +1,4 @@
 if(TT_ENABLE_LTO)
-    cmake_policy(SET CMP0069 NEW)
-    set(CMAKE_POLICY_DEFAULT_CMP0069 NEW)
     include(CheckIPOSupported)
     check_ipo_supported(RESULT result OUTPUT output)
 
