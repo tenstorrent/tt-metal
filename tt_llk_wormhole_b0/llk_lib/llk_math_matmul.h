@@ -18,7 +18,7 @@
 
 using namespace ckernel;
 
-template <int MATH_FIDELITY_DESC, DstTileFaceLayout FaceLayout = DstTileFaceLayout::ColMajor>
+template <int MATH_FIDELITY_DESC, DstTileFaceLayout FaceLayout = DstTileFaceLayout::ColMajor, int THROTTLE_LEVEL>
 inline void matmul_configure_addrmod(
     const bool transpose,
     const std::uint32_t ct_dim,
@@ -72,6 +72,19 @@ inline void matmul_configure_addrmod(
         .bias     = {.incr = 1},
     }
         .set(ADDR_MOD_5);
+
+    if constexpr (THROTTLE_LEVEL)
+    {
+        // reset all, including fidelity
+        addr_mod_t {
+            .srca     = {.incr = 0, .clr = 1, .cr = 1},
+            .srcb     = {.incr = 0, .clr = 1, .cr = 1},
+            .dest     = {.incr = 0, .clr = 1, .cr = 1},
+            .fidelity = {.incr = 0, .clr = 1},
+            .bias     = {.incr = 1},
+        }
+            .set(ADDR_MOD_6);
+    }
 
     const uint8_t srca_increment = transpose == false ? 16 : 32;
     const uint8_t srca_set       = transpose == false ? 32 : 16;
@@ -451,7 +464,229 @@ inline void matmul_configure_mop(
     tmp.program(instrn_buffer);
 }
 
-template <int MATH_FIDELITY_DESC, DstTileFaceLayout FaceLayout = DstTileFaceLayout::ColMajor>
+template <int THROTTLE_LEVEL, bool HIGH_FIDELITY>
+void run_throttled_sequence(const std::uint32_t t_dim, const bool reuse_a)
+{
+    if constexpr (THROTTLE_LEVEL == 1)
+    {
+        TTI_NOP;
+        TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0);
+        TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_1, 0);
+        TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0);
+        TTI_NOP;
+        TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_2, 0);
+        TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0);
+        TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_1, 0);
+        TTI_NOP;
+        TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_3, 0);
+    }
+    else if constexpr (THROTTLE_LEVEL == 2)
+    {
+        TTI_NOP;
+        TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0);
+        TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_1, 0);
+        TTI_NOP;
+        TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0);
+        TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_2, 0);
+        TTI_NOP;
+        TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0);
+        TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_1, 0);
+        TTI_NOP;
+        TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_3, 0);
+    }
+    else if constexpr (THROTTLE_LEVEL == 3)
+    {
+        TTI_NOP;
+        TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0);
+        TTI_NOP;
+        TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_1, 0);
+        TTI_NOP;
+        TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0);
+        TTI_NOP;
+        TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_2, 0);
+        TTI_NOP;
+        TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0);
+        TTI_NOP;
+        TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_1, 0);
+        TTI_NOP;
+        TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_3, 0);
+        TTI_NOP;
+    }
+    else if constexpr (THROTTLE_LEVEL == 4)
+    {
+        TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_3, 0);
+        TTI_NOP;
+        TTI_NOP;
+        TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0);
+        TTI_NOP;
+        TTI_NOP;
+        TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_1, 0);
+        TTI_NOP;
+        TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0);
+        TTI_NOP;
+        TTI_NOP;
+        TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_2, 0);
+        TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_3, 0);
+        TTI_NOP;
+        TTI_NOP;
+        if constexpr (HIGH_FIDELITY)
+        {
+            TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_1, 0);
+        }
+        else
+        {
+            if (t_dim > 1)
+            {
+                TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_1, 0);
+            }
+            else if (reuse_a)
+            {
+                TTI_MVMUL(p_setrwc::CLR_A, 0, ADDR_MOD_1, 0);
+            }
+            else
+            {
+                TTI_MVMUL(p_setrwc::CLR_B, 0, ADDR_MOD_1, 0);
+            }
+        }
+    }
+    else if constexpr (THROTTLE_LEVEL == 5)
+    {
+        TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_3, 0);
+        TTI_NOP;
+        TTI_NOP;
+        TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0);
+        TTI_NOP;
+        TTI_NOP;
+        TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_1, 0);
+        TTI_NOP;
+        TTI_NOP;
+        TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0);
+        TTI_NOP;
+        TTI_NOP;
+        TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_2, 0);
+        TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_3, 0);
+        TTI_NOP;
+        if constexpr (HIGH_FIDELITY)
+        {
+            TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_1, 0);
+        }
+        else
+        {
+            if (t_dim > 1)
+            {
+                TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_1, 0);
+            }
+            else if (reuse_a)
+            {
+                TTI_MVMUL(p_setrwc::CLR_A, 0, ADDR_MOD_1, 0);
+            }
+            else
+            {
+                TTI_MVMUL(p_setrwc::CLR_B, 0, ADDR_MOD_1, 0);
+            }
+        }
+    }
+}
+
+/*
+ * Programming of the MOP for the case we limit matmul compute throughput
+ * Done by inserting NOP instructions between MVMUL instructions of matmul kernel
+ *
+ * Valid range of THROTTLE_LEVEL is {1,2,3,4,5}
+ * Each value corresponds to level of throttling as:
+ * Level 1: throttle to 73% of max
+ * Level 2: throttle to 67% of max
+ * Level 3: throttle to 50% of max
+ * Level 4: throttle to 40% of max
+ * Level 5: throttle to 33% of max
+ */
+template <int NUM_FIDELITY_PHASES, DstTileFaceLayout FaceLayout = DstTileFaceLayout::ColMajor, int THROTTLE_LEVEL>
+inline void matmul_configure_mop_throttled(
+    bool transpose,
+    const std::uint32_t ct_dim,
+    const std::uint32_t rt_dim,
+    const std::uint32_t kt_dim,
+    const std::uint32_t in0_tile_r_dim = TILE_R_DIM,
+    const std::uint32_t in0_tile_c_dim = TILE_C_DIM,
+    const std::uint32_t in1_tile_r_dim = TILE_R_DIM,
+    const std::uint32_t in1_tile_c_dim = TILE_C_DIM,
+    const bool partial_face            = false)
+{
+    // in0 - loaded to SrcB
+    // in1 - loaded to SrcA
+    // Unpacker will always load faces in f0,f1,f2,f3 order
+    // if in1 is transposed then faces 1&2 need to be swapped during read
+    // by changing address increment amount via addr_mods
+    // Col major layout in dest only impacs destination address increment
+    // if col major layout faces are ordered as f0,f2,f1,f3
+
+    constexpr bool high_fidelity = NUM_FIDELITY_PHASES > 0;
+    static_assert((THROTTLE_LEVEL > 0) && (THROTTLE_LEVEL <= 5), "MM throttling only enabled for THROTTLE_LEVEL={1,2,3,4,5}");
+
+    const bool reuse_a        = ct_dim >= rt_dim;
+    const std::uint32_t t_dim = reuse_a ? rt_dim : ct_dim;
+
+    const bool is_in0_16x32 = (in0_tile_r_dim <= FACE_R_DIM) && (in0_tile_c_dim > FACE_C_DIM);
+    const bool is_in1_32x16 = (in1_tile_r_dim > FACE_R_DIM) && (in1_tile_c_dim <= FACE_C_DIM);
+    const bool is_in0_32x16 = (in0_tile_r_dim > FACE_R_DIM) && (in0_tile_c_dim <= FACE_C_DIM);
+    const bool is_in1_16x32 = (in1_tile_r_dim <= FACE_R_DIM) && (in1_tile_c_dim > FACE_C_DIM);
+
+    constexpr std::uint32_t replay_buff_len_throttle = (THROTTLE_LEVEL > 3) ? (16) : ((THROTTLE_LEVEL > 1) ? (3 + THROTTLE_LEVEL * 4) : 10);
+    const std::uint32_t replay_buf_len =
+        (is_in0_16x32 && is_in1_32x16) ? 4
+                                       : ((is_in0_16x32 || is_in1_32x16 || is_in0_32x16 || is_in1_16x32) ? (partial_face ? 4 : 8) : replay_buff_len_throttle);
+
+    TT_REPLAY(ckernel::math::replay_buf_offset, replay_buf_len, 0, 1);
+    if (!is_in1_32x16 && !is_in1_16x32 && !is_in0_32x16 && !is_in0_16x32)
+    {
+        run_throttled_sequence<THROTTLE_LEVEL, high_fidelity>(t_dim, reuse_a);
+    }
+
+    constexpr uint outer_loops        = (THROTTLE_LEVEL > 3) ? 2 : (high_fidelity ? NUM_FIDELITY_PHASES : 1);
+    const uint inner_loops            = (!is_in1_16x32) ? 2 : 1;
+    constexpr uint loop_instruction_0 = (THROTTLE_LEVEL == 5)   ? TT_OP_REPLAY(ckernel::math::replay_buf_offset + 1, 8, 0, 0)
+                                        : (THROTTLE_LEVEL == 4) ? TT_OP_REPLAY(ckernel::math::replay_buf_offset + 2, 6, 0, 0)
+                                                                : TT_OP_REPLAY(ckernel::math::replay_buf_offset, replay_buff_len_throttle, 0, 0);
+    constexpr uint loop_instruction_1 = (THROTTLE_LEVEL == 5)   ? TT_OP_REPLAY(ckernel::math::replay_buf_offset + 9, 4, 0, 0)
+                                        : (THROTTLE_LEVEL == 4) ? TT_OP_REPLAY(ckernel::math::replay_buf_offset + 8, 4, 0, 0)
+                                                                : TT_OP_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0);
+    ckernel_template tmp(outer_loops, inner_loops, loop_instruction_0, loop_instruction_1);
+
+    if constexpr (THROTTLE_LEVEL == 5)
+    {
+        tmp.set_last_inner_loop_instr(TT_OP_REPLAY(ckernel::math::replay_buf_offset, 4, 0, 0));
+        tmp.set_last_outer_loop_instr(TT_OP_REPLAY(ckernel::math::replay_buf_offset + 13, 3, 0, 0));
+    }
+    else if constexpr (THROTTLE_LEVEL == 4)
+    {
+        tmp.set_last_inner_loop_instr(TT_OP_REPLAY(ckernel::math::replay_buf_offset, 4, 0, 0));
+        tmp.set_last_outer_loop_instr(TT_OP_REPLAY(ckernel::math::replay_buf_offset + 12, 4, 0, 0));
+    }
+    else
+    {
+        if constexpr (high_fidelity)
+        {
+            tmp.set_last_inner_loop_instr(TT_OP_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_1, 0));
+        }
+
+        if (t_dim > 1)
+        {
+            tmp.set_last_outer_loop_instr(TT_OP_MVMUL(p_setrwc::CLR_NONE, 0, high_fidelity ? ADDR_MOD_2 : ADDR_MOD_1, 0));
+        }
+        else if (reuse_a)
+        {
+            tmp.set_last_outer_loop_instr(TT_OP_MVMUL(p_setrwc::CLR_A, 0, high_fidelity ? ADDR_MOD_2 : ADDR_MOD_1, 0));
+        }
+        else
+        {
+            tmp.set_last_outer_loop_instr(TT_OP_MVMUL(p_setrwc::CLR_B, 0, high_fidelity ? ADDR_MOD_2 : ADDR_MOD_1, 0));
+        }
+    }
+
+    tmp.program(instrn_buffer);
+}
+
+template <int MATH_FIDELITY_DESC, DstTileFaceLayout FaceLayout = DstTileFaceLayout::ColMajor, int THROTTLE_LEVEL = 0>
 inline void _llk_math_matmul_init_(
     const std::uint32_t in0_tile_r_dim = TILE_R_DIM,
     const std::uint32_t in0_tile_c_dim = TILE_C_DIM,
@@ -463,7 +698,7 @@ inline void _llk_math_matmul_init_(
     const std::uint32_t rt_dim         = 1,
     const std::uint32_t kt_dim         = 1)
 {
-    matmul_configure_addrmod<MATH_FIDELITY_DESC, FaceLayout>(
+    matmul_configure_addrmod<MATH_FIDELITY_DESC, FaceLayout, THROTTLE_LEVEL>(
         transpose, ct_dim, rt_dim, kt_dim, in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
     const bool reuse_a        = ct_dim >= rt_dim;
     const std::uint32_t t_dim = reuse_a ? rt_dim : ct_dim;
@@ -484,18 +719,28 @@ inline void _llk_math_matmul_init_(
     }
 
     constexpr int MATH_FIDELITY_PHASES = get_math_num_fidelity_phases(MATH_FIDELITY_DESC);
-    matmul_configure_mop<MATH_FIDELITY_PHASES, FaceLayout>(
-        transpose > 0, ct_dim, rt_dim, kt_dim, in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
+    if constexpr (THROTTLE_LEVEL > 0)
+    {
+        matmul_configure_mop_throttled<MATH_FIDELITY_PHASES, FaceLayout, THROTTLE_LEVEL>(
+            transpose > 0, ct_dim, rt_dim, kt_dim, in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
+    }
+    else
+    {
+        matmul_configure_mop<MATH_FIDELITY_PHASES, FaceLayout>(
+            transpose > 0, ct_dim, rt_dim, kt_dim, in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
+    }
     math::reset_counters(p_setrwc::SET_ABD_F);
 }
 
-template <int MATH_FIDELITY_DESC, DstTileFaceLayout FaceLayout = DstTileFaceLayout::ColMajor>
+template <int MATH_FIDELITY_DESC, DstTileFaceLayout FaceLayout = DstTileFaceLayout::ColMajor, int THROTTLE_LEVEL = 0>
 inline void _llk_math_matmul_(
     uint dst_index, const bool transpose = false, const std::uint32_t ct_dim = 1, const std::uint32_t rt_dim = 1, const std::uint32_t kt_dim = 1)
 {
-    const bool reuse_a          = ct_dim >= rt_dim;
-    const std::uint32_t t_dim   = reuse_a ? rt_dim : ct_dim;
-    const std::uint32_t rut_dim = reuse_a ? ct_dim : rt_dim; // reuse-dim
+    const bool reuse_a                = ct_dim >= rt_dim;
+    const std::uint32_t t_dim         = reuse_a ? rt_dim : ct_dim;
+    const std::uint32_t rut_dim       = reuse_a ? ct_dim : rt_dim; // reuse-dim
+    constexpr int NUM_FIDELITY_PHASES = get_math_num_fidelity_phases(MATH_FIDELITY_DESC);
+    constexpr bool high_fidelity      = NUM_FIDELITY_PHASES > 0;
 
     for (uint t = 0; t < t_dim; t++)
     {
@@ -505,7 +750,25 @@ inline void _llk_math_matmul_(
 
             if (t_dim == 1)
             {
-                ckernel_template::run(instrn_buffer);
+                if constexpr (THROTTLE_LEVEL > 3 && high_fidelity)
+                {
+                    for (uint phase = 0; phase < NUM_FIDELITY_PHASES; phase++)
+                    {
+                        ckernel_template::run(instrn_buffer);
+                    }
+                    if (reuse_a)
+                    {
+                        TTI_SETRWC(p_setrwc::CLR_A, 0, 0, 0, 0, p_setrwc::SET_ABD_F);
+                    }
+                    else
+                    {
+                        TTI_SETRWC(p_setrwc::CLR_B, 0, 0, 0, 0, p_setrwc::SET_ABD_F);
+                    }
+                }
+                else
+                {
+                    ckernel_template::run(instrn_buffer);
+                }
 
                 // Done with reuse. Clear srcA or srcB valid
                 if (rut == (rut_dim - 1))
@@ -522,7 +785,18 @@ inline void _llk_math_matmul_(
             }
             else
             {
-                ckernel_template::run(instrn_buffer);
+                if constexpr (THROTTLE_LEVEL > 3 && high_fidelity)
+                {
+                    for (uint phase = 0; phase < NUM_FIDELITY_PHASES; phase++)
+                    {
+                        ckernel_template::run(instrn_buffer);
+                    }
+                    TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_ABD_F);
+                }
+                else
+                {
+                    ckernel_template::run(instrn_buffer);
+                }
 
                 if ((t + 1) < t_dim)
                 {
@@ -556,7 +830,18 @@ inline void _llk_math_matmul_(
 
                     math::set_dst_write_addr<DstTileLayout::Default, DstTileShape::Tile32x32>(
                         dst_index + (reuse_a ? ct_dim * (t + 1) + rut : t + 1 + rut * ct_dim));
-                    ckernel_template::run(instrn_buffer);
+                    if constexpr (THROTTLE_LEVEL > 3 && high_fidelity)
+                    {
+                        for (uint phase = 0; phase < NUM_FIDELITY_PHASES; phase++)
+                        {
+                            ckernel_template::run(instrn_buffer);
+                        }
+                        TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_ABD_F);
+                    }
+                    else
+                    {
+                        ckernel_template::run(instrn_buffer);
+                    }
                 }
 
                 if (reuse_a)
