@@ -8,26 +8,20 @@
 namespace tt::tt_metal::distributed {
 
 // Create send/receive socket config buffers
-std::shared_ptr<MeshBuffer> create_sender_socket_config_buffer(
-    std::shared_ptr<MeshDevice> sender, const socket_config_t& config);
-std::shared_ptr<MeshBuffer> create_receiver_socket_config_buffer(
-    std::shared_ptr<MeshDevice> receiver, const socket_config_t& config);
+std::shared_ptr<MeshBuffer> create_socket_config_buffer(
+    std::shared_ptr<MeshDevice> device, const socket_config_t& config, bool is_sender);
 
 // Create socket data buffer on receiver
 std::shared_ptr<MeshBuffer> create_socket_data_buffer(
     std::shared_ptr<MeshDevice> receiver, const socket_config_t& config);
 
 // Write socket config data to allocated buffers
-void populate_sender_socket_config_buffer(
-    std::shared_ptr<MeshBuffer> sender_config_buffer,
-    std::shared_ptr<MeshBuffer> recv_config_buffer,
+void write_socket_configs(
+    std::shared_ptr<MeshBuffer> config_buffer,
+    std::shared_ptr<MeshBuffer> peer_config_buffer,
     std::shared_ptr<MeshBuffer> socket_data_buffer,
-    const socket_config_t& config);
-void populate_receiver_socket_config_buffer(
-    std::shared_ptr<MeshBuffer> recv_config_buffer,
-    std::shared_ptr<MeshBuffer> sender_config_buffer,
-    std::shared_ptr<MeshBuffer> socket_data_buffer,
-    const socket_config_t& config);
+    const socket_config_t& config,
+    bool is_sender);
 
 //  =============== Additional utility functions  ===============
 

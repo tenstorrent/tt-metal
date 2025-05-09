@@ -75,7 +75,7 @@ void kernel_main() {
         data_addr += page_size;
         outstanding_data_size -= page_size;
         socket_push_pages(sender_socket, 1);
-        // for (volatile int i = 0; i < 10000; i++) {}
+
         fabric_socket_notify_receiver(sender_socket, fabric_connection, socket_packet_header_addr);
     }
     socket_barrier(sender_socket);

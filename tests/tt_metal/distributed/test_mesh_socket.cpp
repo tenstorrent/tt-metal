@@ -41,14 +41,14 @@ void verify_socket_configs(
     // Validate Sender Configs
     auto l1_alignment = MetalContext::instance().hal().get_alignment(HalMemType::L1);
     EXPECT_EQ(sender_config.bytes_acked, 0);
-    EXPECT_EQ(sender_config.write_ptr, send_socket.data_buffer->address());
+    EXPECT_EQ(sender_config.write_ptr, recv_socket.get_data_buffer()->address());
     EXPECT_EQ(sender_config.bytes_sent, 0);
     EXPECT_EQ(sender_config.downstream_mesh_id, 0);
     EXPECT_EQ(sender_config.downstream_chip_id, downstream_device_id);
     EXPECT_EQ(sender_config.downstream_noc_y, recv_virtual_coord.y);
     EXPECT_EQ(sender_config.downstream_noc_x, recv_virtual_coord.x);
-    EXPECT_EQ(sender_config.downstream_bytes_sent_addr, recv_socket.config_buffer->address());
-    EXPECT_EQ(sender_config.downstream_fifo_addr, send_socket.data_buffer->address());
+    EXPECT_EQ(sender_config.downstream_bytes_sent_addr, recv_socket.get_config_buffer()->address());
+    EXPECT_EQ(sender_config.downstream_fifo_addr, recv_socket.get_data_buffer()->address());
     EXPECT_EQ(sender_config.downstream_fifo_total_size, socket_fifo_size);
     EXPECT_EQ(sender_config.is_sender, 1);
     EXPECT_EQ(sender_config.downstream_bytes_sent_addr % l1_alignment, 0);
@@ -56,14 +56,14 @@ void verify_socket_configs(
     // Validate Recv Configs
     EXPECT_EQ(recv_config.bytes_sent, 0);
     EXPECT_EQ(recv_config.bytes_acked, 0);
-    EXPECT_EQ(recv_config.read_ptr, recv_socket.data_buffer->address());
-    EXPECT_EQ(recv_config.fifo_addr, recv_socket.data_buffer->address());
+    EXPECT_EQ(recv_config.read_ptr, recv_socket.get_data_buffer()->address());
+    EXPECT_EQ(recv_config.fifo_addr, recv_socket.get_data_buffer()->address());
     EXPECT_EQ(recv_config.fifo_total_size, socket_fifo_size);
     EXPECT_EQ(recv_config.upstream_mesh_id, 0);
     EXPECT_EQ(recv_config.upstream_chip_id, upstream_device_id);
     EXPECT_EQ(recv_config.upstream_noc_y, sender_virtual_coord.y);
     EXPECT_EQ(recv_config.upstream_noc_x, sender_virtual_coord.x);
-    EXPECT_EQ(recv_config.upstream_bytes_acked_addr, send_socket.config_buffer->address());
+    EXPECT_EQ(recv_config.upstream_bytes_acked_addr, send_socket.get_config_buffer()->address());
     EXPECT_EQ(recv_config.upstream_bytes_acked_addr % l1_alignment, 0);
 }
 
@@ -94,7 +94,7 @@ void test_single_connection_single_device_socket(
         .socket_connection_config = {socket_connection},
         .socket_mem_config = socket_mem_config,
     };
-    auto [send_socket, recv_socket] = create_sockets(md0, md0, socket_config);
+    auto [send_socket, recv_socket] = mesh_socket_t::create_sockets(md0, md0, socket_config);
 
     auto sender_data_shard_params =
         ShardSpecBuffer(CoreRangeSet(sender_logical_coord), {1, 1}, ShardOrientation::ROW_MAJOR, {1, 1}, {1, 1});
@@ -136,7 +136,7 @@ void test_single_connection_single_device_socket(
             .processor = DataMovementProcessor::RISCV_0,
             .noc = NOC::RISCV_0_default,
             .compile_args = {
-                static_cast<uint32_t>(send_socket.config_buffer->address()),
+                static_cast<uint32_t>(send_socket.get_config_buffer()->address()),
                 static_cast<uint32_t>(sender_data_buffer->address()),
                 static_cast<uint32_t>(page_size),
                 static_cast<uint32_t>(data_size)}});
@@ -167,7 +167,7 @@ void test_single_connection_single_device_socket(
             ComputeConfig{
                 .dst_full_sync_en = true,
                 .compile_args = {
-                    static_cast<uint32_t>(recv_socket.config_buffer->address()),
+                    static_cast<uint32_t>(recv_socket.get_config_buffer()->address()),
                     static_cast<uint32_t>(input_cb_index),
                     static_cast<uint32_t>(output_cb_index),
                     static_cast<uint32_t>(page_size),
@@ -181,7 +181,7 @@ void test_single_connection_single_device_socket(
                 .processor = DataMovementProcessor::RISCV_0,
                 .noc = NOC::RISCV_0_default,
                 .compile_args = {
-                    static_cast<uint32_t>(recv_socket.config_buffer->address()),
+                    static_cast<uint32_t>(recv_socket.get_config_buffer()->address()),
                     static_cast<uint32_t>(output_cb_index),
                     static_cast<uint32_t>(recv_data_buffer->address()),
                     static_cast<uint32_t>(page_size),
@@ -196,7 +196,7 @@ void test_single_connection_single_device_socket(
                 .processor = DataMovementProcessor::RISCV_0,
                 .noc = NOC::RISCV_0_default,
                 .compile_args = {
-                    static_cast<uint32_t>(recv_socket.config_buffer->address()),
+                    static_cast<uint32_t>(recv_socket.get_config_buffer()->address()),
                     static_cast<uint32_t>(recv_data_buffer->address()),
                     static_cast<uint32_t>(page_size),
                     static_cast<uint32_t>(data_size)}});
@@ -295,7 +295,7 @@ void test_single_device_socket_with_workers(
         .socket_mem_config = socket_mem_config,
     };
 
-    auto [send_socket, recv_socket] = create_sockets(md0, md0, socket_config);
+    auto [send_socket, recv_socket] = mesh_socket_t::create_sockets(md0, md0, socket_config);
 
     auto sender_data_shard_params =
         ShardSpecBuffer(CoreRangeSet(sender_logical_data_core), {1, 1}, ShardOrientation::ROW_MAJOR, {1, 1}, {1, 1});
@@ -383,7 +383,7 @@ void test_single_device_socket_with_workers(
                 .processor = DataMovementProcessor::RISCV_0,
                 .noc = NOC::RISCV_0_default,
                 .compile_args = {
-                    static_cast<uint32_t>(send_socket.config_buffer->address()),
+                    static_cast<uint32_t>(send_socket.get_config_buffer()->address()),
                     static_cast<uint32_t>(sender_data_buffer->address() + data_offset),
                     static_cast<uint32_t>(page_size),
                     static_cast<uint32_t>(data_size),
@@ -406,7 +406,7 @@ void test_single_device_socket_with_workers(
                     .processor = DataMovementProcessor::RISCV_0,
                     .noc = NOC::RISCV_0_default,
                     .compile_args = {
-                        static_cast<uint32_t>(recv_socket.config_buffer->address()),
+                        static_cast<uint32_t>(recv_socket.get_config_buffer()->address()),
                         static_cast<uint32_t>(config_cb_index),
                         static_cast<uint32_t>(config_sem),
                         static_cast<uint32_t>(credits0_sem),
@@ -455,7 +455,7 @@ void test_single_device_socket_with_workers(
                     .processor = DataMovementProcessor::RISCV_0,
                     .noc = NOC::RISCV_0_default,
                     .compile_args = {
-                        static_cast<uint32_t>(recv_socket.config_buffer->address()),
+                        static_cast<uint32_t>(recv_socket.get_config_buffer()->address()),
                         static_cast<uint32_t>(config_cb_index),
                         static_cast<uint32_t>(config_sem),
                         static_cast<uint32_t>(credits0_sem),
@@ -572,7 +572,7 @@ void test_single_connection_multi_device_socket(
         .socket_connection_config = {socket_connection},
         .socket_mem_config = socket_mem_config,
     };
-    auto [send_socket, recv_socket] = create_sockets(md0, md1, socket_config);
+    auto [send_socket, recv_socket] = mesh_socket_t::create_sockets(md0, md1, socket_config);
 
     auto sender_data_shard_params =
         ShardSpecBuffer(CoreRangeSet(sender_logical_coord), {1, 1}, ShardOrientation::ROW_MAJOR, {1, 1}, {1, 1});
@@ -620,7 +620,7 @@ void test_single_connection_multi_device_socket(
             .processor = DataMovementProcessor::RISCV_0,
             .noc = NOC::RISCV_0_default,
             .compile_args =
-                {static_cast<uint32_t>(send_socket.config_buffer->address()),
+                {static_cast<uint32_t>(send_socket.get_config_buffer()->address()),
                  static_cast<uint32_t>(sender_data_buffer->address()),
                  static_cast<uint32_t>(page_size),
                  static_cast<uint32_t>(data_size)},
@@ -674,7 +674,7 @@ void test_single_connection_multi_device_socket(
             ComputeConfig{
                 .dst_full_sync_en = true,
                 .compile_args = {
-                    static_cast<uint32_t>(recv_socket.config_buffer->address()),
+                    static_cast<uint32_t>(recv_socket.get_config_buffer()->address()),
                     static_cast<uint32_t>(input_cb_index),
                     static_cast<uint32_t>(output_cb_index),
                     static_cast<uint32_t>(page_size),
@@ -688,7 +688,7 @@ void test_single_connection_multi_device_socket(
                 .processor = DataMovementProcessor::RISCV_0,
                 .noc = NOC::RISCV_0_default,
                 .compile_args = {
-                    static_cast<uint32_t>(recv_socket.config_buffer->address()),
+                    static_cast<uint32_t>(recv_socket.get_config_buffer()->address()),
                     static_cast<uint32_t>(reserved_packet_header_CB_index),
                     static_cast<uint32_t>(output_cb_index),
                     static_cast<uint32_t>(recv_data_buffer->address()),
@@ -704,7 +704,7 @@ void test_single_connection_multi_device_socket(
                 .processor = DataMovementProcessor::RISCV_0,
                 .noc = NOC::RISCV_0_default,
                 .compile_args = {
-                    static_cast<uint32_t>(recv_socket.config_buffer->address()),
+                    static_cast<uint32_t>(recv_socket.get_config_buffer()->address()),
                     static_cast<uint32_t>(reserved_packet_header_CB_index),
                     static_cast<uint32_t>(page_size),
                     static_cast<uint32_t>(data_size),
@@ -770,7 +770,7 @@ void test_single_connection_multi_device_socket_with_workers(
         .socket_connection_config = {socket_connection},
         .socket_mem_config = socket_mem_config,
     };
-    auto [send_socket, recv_socket] = create_sockets(md0, md1, socket_config);
+    auto [send_socket, recv_socket] = mesh_socket_t::create_sockets(md0, md1, socket_config);
 
     auto sender_data_shard_params =
         ShardSpecBuffer(CoreRangeSet(sender_logical_coord), {1, 1}, ShardOrientation::ROW_MAJOR, {1, 1}, {1, 1});
@@ -820,7 +820,7 @@ void test_single_connection_multi_device_socket_with_workers(
             .processor = DataMovementProcessor::RISCV_0,
             .noc = NOC::RISCV_0_default,
             .compile_args =
-                {static_cast<uint32_t>(send_socket.config_buffer->address()),
+                {static_cast<uint32_t>(send_socket.get_config_buffer()->address()),
                  static_cast<uint32_t>(sender_data_buffer->address()),
                  static_cast<uint32_t>(page_size),
                  static_cast<uint32_t>(data_size)},
@@ -872,7 +872,7 @@ void test_single_connection_multi_device_socket_with_workers(
             .processor = DataMovementProcessor::RISCV_0,
             .noc = NOC::RISCV_0_default,
             .compile_args = {
-                static_cast<uint32_t>(recv_socket.config_buffer->address()),
+                static_cast<uint32_t>(recv_socket.get_config_buffer()->address()),
                 static_cast<uint32_t>(config_cb_index),
                 static_cast<uint32_t>(config_sem),
                 static_cast<uint32_t>(credits_sem),
@@ -951,7 +951,7 @@ std::shared_ptr<Program> create_sender_program(
             .processor = DataMovementProcessor::RISCV_0,
             .noc = NOC::RISCV_0_default,
             .compile_args =
-                {static_cast<uint32_t>(sender_socket.config_buffer->address()),
+                {static_cast<uint32_t>(sender_socket.get_config_buffer()->address()),
                  static_cast<uint32_t>(sender_data_buffer->address()),
                  static_cast<uint32_t>(page_size),
                  static_cast<uint32_t>(data_size)},
@@ -1039,7 +1039,7 @@ std::shared_ptr<Program> create_reduce_program(
             .processor = DataMovementProcessor::RISCV_0,
             .noc = NOC::RISCV_0_default,
             .compile_args = {
-                static_cast<uint32_t>(recv_socket_0.config_buffer->address()),
+                static_cast<uint32_t>(recv_socket_0.get_config_buffer()->address()),
                 static_cast<uint32_t>(page_size),
                 static_cast<uint32_t>(data_size),
                 static_cast<uint32_t>(config0_cb_index),
@@ -1056,7 +1056,7 @@ std::shared_ptr<Program> create_reduce_program(
             .processor = DataMovementProcessor::RISCV_0,
             .noc = NOC::RISCV_0_default,
             .compile_args = {
-                static_cast<uint32_t>(recv_socket_1.config_buffer->address()),
+                static_cast<uint32_t>(recv_socket_1.get_config_buffer()->address()),
                 static_cast<uint32_t>(page_size),
                 static_cast<uint32_t>(data_size),
                 static_cast<uint32_t>(config1_cb_index),
@@ -1139,7 +1139,7 @@ std::shared_ptr<Program> create_recv_program(
             .processor = DataMovementProcessor::RISCV_0,
             .noc = NOC::RISCV_0_default,
             .compile_args = {
-                static_cast<uint32_t>(recv_socket.config_buffer->address()),
+                static_cast<uint32_t>(recv_socket.get_config_buffer()->address()),
                 static_cast<uint32_t>(reserved_packet_header_CB_index),
                 static_cast<uint32_t>(page_size),
                 static_cast<uint32_t>(data_size),
@@ -1208,9 +1208,9 @@ void test_multi_sender_single_recv(
         .socket_mem_config = socket_mem_config,
     };
 
-    auto [send_socket_0, recv_socket_0] = create_sockets(sender_0, reducer, socket_config_0);
-    auto [send_socket_1, recv_socket_1] = create_sockets(sender_1, reducer, socket_config_1);
-    auto [send_socket_2, recv_socket_2] = create_sockets(reducer, receiver, socket_config_2);
+    auto [send_socket_0, recv_socket_0] = mesh_socket_t::create_sockets(sender_0, reducer, socket_config_0);
+    auto [send_socket_1, recv_socket_1] = mesh_socket_t::create_sockets(sender_1, reducer, socket_config_1);
+    auto [send_socket_2, recv_socket_2] = mesh_socket_t::create_sockets(reducer, receiver, socket_config_2);
 
     auto sender_data_shard_params =
         ShardSpecBuffer(CoreRangeSet(sender_logical_coord), {1, 1}, ShardOrientation::ROW_MAJOR, {1, 1}, {1, 1});
@@ -1362,7 +1362,7 @@ void test_multi_connection_multi_device_data_copy(
         .fifo_size = socket_fifo_size,
     };
 
-    auto [send_socket, recv_socket] = create_sockets(
+    auto [send_socket, recv_socket] = mesh_socket_t::create_sockets(
         sender_mesh,
         recv_mesh,
         socket_config_t{
@@ -1438,6 +1438,7 @@ void test_multi_connection_multi_device_data_copy(
         EXPECT_EQ(output_data_readback, src_vec);
     }
 }
+
 // ========= Config Validation Tests =========
 
 // Sanity test with a single connection
@@ -1464,13 +1465,13 @@ TEST_F(MeshSocketTest, SingleConnectionSingleDeviceConfig) {
         .socket_connection_config = {socket_connection},
         .socket_mem_config = socket_mem_config,
     };
-    auto [send_socket, recv_socket] = create_sockets(md0, md0, socket_config);
+    auto [send_socket, recv_socket] = mesh_socket_t::create_sockets(md0, md0, socket_config);
 
     std::vector<sender_socket_md> sender_config_readback;
     std::vector<receiver_socket_md> recv_config_readback;
 
-    ReadShard(md0->mesh_command_queue(), sender_config_readback, send_socket.config_buffer, MeshCoordinate(0, 0));
-    ReadShard(md0->mesh_command_queue(), recv_config_readback, recv_socket.config_buffer, MeshCoordinate(0, 0));
+    ReadShard(md0->mesh_command_queue(), sender_config_readback, send_socket.get_config_buffer(), MeshCoordinate(0, 0));
+    ReadShard(md0->mesh_command_queue(), recv_config_readback, recv_socket.get_config_buffer(), MeshCoordinate(0, 0));
 
     EXPECT_EQ(sender_config_readback.size(), 1);
     EXPECT_EQ(recv_config_readback.size(), 1);
@@ -1527,22 +1528,22 @@ TEST_F(MeshSocketTest, MultiConnectionSingleDeviceConfig) {
         .socket_mem_config = socket_mem_config,
     };
 
-    auto [send_socket, recv_socket] = create_sockets(md0, md0, socket_config);
+    auto [send_socket, recv_socket] = mesh_socket_t::create_sockets(md0, md0, socket_config);
 
     std::vector<sender_socket_md> sender_configs;
     std::vector<receiver_socket_md> recv_configs;
 
-    ReadShard(md0->mesh_command_queue(), sender_configs, send_socket.config_buffer, MeshCoordinate(0, 0));
-    ReadShard(md0->mesh_command_queue(), recv_configs, recv_socket.config_buffer, MeshCoordinate(0, 0));
+    ReadShard(md0->mesh_command_queue(), sender_configs, send_socket.get_config_buffer(), MeshCoordinate(0, 0));
+    ReadShard(md0->mesh_command_queue(), recv_configs, recv_socket.get_config_buffer(), MeshCoordinate(0, 0));
 
     EXPECT_EQ(sender_configs.size(), sender_logical_coords.size());
     EXPECT_EQ(recv_configs.size(), recv_logical_coords.size());
 
     const auto& sender_core_to_core_id =
-        send_socket.config_buffer->get_backing_buffer()->get_buffer_page_mapping()->core_to_core_id_;
+        send_socket.get_config_buffer()->get_backing_buffer()->get_buffer_page_mapping()->core_to_core_id_;
 
     const auto& recv_core_to_core_id =
-        recv_socket.config_buffer->get_backing_buffer()->get_buffer_page_mapping()->core_to_core_id_;
+        recv_socket.get_config_buffer()->get_backing_buffer()->get_buffer_page_mapping()->core_to_core_id_;
 
     for (const auto& connection : socket_connections) {
         const auto& sender = connection.sender_core;
@@ -1567,6 +1568,7 @@ TEST_F(MeshSocketTest, MultiConnectionSingleDeviceConfig) {
             socket_fifo_size);
     }
 }
+
 // Test random connections across multiple devices
 TEST_F(MeshSocketTest2DFabric, MultiConnectionMultiDeviceTest) {
     auto md0 = mesh_device_->create_submesh(MeshShape(1, 4), MeshCoordinate(0, 0));
@@ -1633,14 +1635,14 @@ TEST_F(MeshSocketTest2DFabric, MultiConnectionMultiDeviceTest) {
             },
     };
 
-    auto [send_socket_l1, recv_socket_l1] = create_sockets(md0, md1, socket_config_l1);
-    auto [send_socket_dram, recv_socket_dram] = create_sockets(md0, md1, socket_config_dram);
+    auto [send_socket_l1, recv_socket_l1] = mesh_socket_t::create_sockets(md0, md1, socket_config_l1);
+    auto [send_socket_dram, recv_socket_dram] = mesh_socket_t::create_sockets(md0, md1, socket_config_dram);
 
     const auto& sender_core_to_core_id =
-        send_socket_l1.config_buffer->get_backing_buffer()->get_buffer_page_mapping()->core_to_core_id_;
+        send_socket_l1.get_config_buffer()->get_backing_buffer()->get_buffer_page_mapping()->core_to_core_id_;
 
     const auto& recv_core_to_core_id =
-        recv_socket_l1.config_buffer->get_backing_buffer()->get_buffer_page_mapping()->core_to_core_id_;
+        recv_socket_l1.get_config_buffer()->get_backing_buffer()->get_buffer_page_mapping()->core_to_core_id_;
 
     std::unordered_map<MeshCoordinate, std::vector<sender_socket_md>> sender_configs_per_dev_coord;
     std::unordered_map<MeshCoordinate, std::vector<receiver_socket_md>> recv_configs_per_dev_coord;
@@ -1649,8 +1651,8 @@ TEST_F(MeshSocketTest2DFabric, MultiConnectionMultiDeviceTest) {
         std::vector<sender_socket_md> sender_configs;
         std::vector<receiver_socket_md> recv_configs;
 
-        ReadShard(md0->mesh_command_queue(), sender_configs, send_socket_l1.config_buffer, device_coord);
-        ReadShard(md1->mesh_command_queue(), recv_configs, recv_socket_l1.config_buffer, device_coord);
+        ReadShard(md0->mesh_command_queue(), sender_configs, send_socket_l1.get_config_buffer(), device_coord);
+        ReadShard(md1->mesh_command_queue(), recv_configs, recv_socket_l1.get_config_buffer(), device_coord);
 
         sender_configs_per_dev_coord[device_coord] = std::move(sender_configs);
         recv_configs_per_dev_coord[device_coord] = std::move(recv_configs);
@@ -1708,7 +1710,7 @@ TEST_F(MeshSocketTest2DFabric, SocketsOnSubDevice) {
         .socket_connection_config = {global_socket_connection},
         .socket_mem_config = global_socket_mem_cfg,
     };
-    auto [send_socket_global, recv_socket_global] = create_sockets(md0, md1, global_socket_config);
+    auto [send_socket_global, recv_socket_global] = mesh_socket_t::create_sockets(md0, md1, global_socket_config);
 
     SubDevice sub_device_0(std::array{CoreRangeSet(CoreRange({0, 0}, {0, 0}))});
     SubDevice sub_device_1(std::array{CoreRangeSet(CoreRange({1, 1}, {1, 1}))});
@@ -1746,14 +1748,14 @@ TEST_F(MeshSocketTest2DFabric, SocketsOnSubDevice) {
             .receiver_sub_device = md0->get_sub_device_ids()[1],
         };
 
-        auto [send_socket_0, recv_socket_0] = create_sockets(
+        auto [send_socket_0, recv_socket_0] = mesh_socket_t::create_sockets(
             md0,
             md1,
             socket_config_t{
                 .socket_connection_config = {socket_0_connection},
                 .socket_mem_config = socket_mem_config_0,
             });
-        auto [send_socket_1, recv_socket_1] = create_sockets(
+        auto [send_socket_1, recv_socket_1] = mesh_socket_t::create_sockets(
             md1,
             md0,
             socket_config_t{
@@ -1762,7 +1764,7 @@ TEST_F(MeshSocketTest2DFabric, SocketsOnSubDevice) {
             });
         // Assert exppected: Socket cores don't match sub device
         EXPECT_THROW(
-            create_sockets(
+            mesh_socket_t::create_sockets(
                 md0,
                 md1,
                 socket_config_t{
@@ -1772,9 +1774,9 @@ TEST_F(MeshSocketTest2DFabric, SocketsOnSubDevice) {
             std::exception);
 
         // Ensure that sockets were allocated using the sub device alloactor
-        EXPECT_EQ(send_socket_0.config_buffer->address(), send_socket_1.config_buffer->address());
-        EXPECT_EQ(recv_socket_0.config_buffer->address(), recv_socket_1.config_buffer->address());
-        EXPECT_EQ(recv_socket_0.data_buffer->address(), recv_socket_1.data_buffer->address());
+        EXPECT_EQ(send_socket_0.get_config_buffer()->address(), send_socket_1.get_config_buffer()->address());
+        EXPECT_EQ(recv_socket_0.get_config_buffer()->address(), recv_socket_1.get_config_buffer()->address());
+        EXPECT_EQ(recv_socket_0.get_data_buffer()->address(), recv_socket_1.get_data_buffer()->address());
         // Try clearing the sub devices while sockets are still allocated - this should fail
         EXPECT_THROW(md0->clear_loaded_sub_device_manager(), std::exception);
         EXPECT_THROW(md1->clear_loaded_sub_device_manager(), std::exception);
@@ -1783,6 +1785,7 @@ TEST_F(MeshSocketTest2DFabric, SocketsOnSubDevice) {
     md0->clear_loaded_sub_device_manager();
     md1->clear_loaded_sub_device_manager();
 }
+
 // ========= Single Device Data Movement Tests =========
 
 TEST_F(MeshSocketTest, SingleConnectionSingleDeviceSocket) {
