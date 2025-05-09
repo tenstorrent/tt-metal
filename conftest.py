@@ -25,9 +25,9 @@ from tests.scripts.common import get_updated_device_params
 
 @pytest.fixture(scope="function")
 def reset_seeds():
-    torch.manual_seed(213919)
-    np.random.seed(213919)
-    random.seed(213919)
+    torch.manual_seed(42)
+    np.random.seed(42)
+    random.seed(42)
 
     yield
 
