@@ -242,7 +242,7 @@ void write_control_buffer_to_core(
     const CoreCoord& core,
     const HalProgrammableCoreType core_type,
     const ProfilerDumpState state,
-    std::vector<uint32_t>& control_buffer);
+    const std::vector<uint32_t>& control_buffer);
 
 }  // namespace tt_metal
 
