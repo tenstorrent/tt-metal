@@ -16,6 +16,7 @@ from tests.tt_eager.python_api_testing.sweep_tests import (
 from tests.tt_eager.python_api_testing.sweep_tests.run_pytorch_ci_tests import (
     run_single_pytorch_test,
 )
+from models.utility_functions import skip_for_blackhole
 
 
 mem_configs = [
@@ -28,6 +29,7 @@ mem_configs = [
     "dim",
     (3, 2, 1, 0, -1, -2, -3, -4, None),
 )
+@skip_for_blackhole("Mismatching on BH, see #12349")
 @pytest.mark.parametrize("keepdim", [False, True])
 @pytest.mark.parametrize(
     "input_shapes",
