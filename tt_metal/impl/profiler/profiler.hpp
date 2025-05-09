@@ -9,7 +9,6 @@
 #include <chrono>
 #include <cstddef>
 #include <filesystem>
-#include <iostream>
 #include <map>
 #include <memory>
 #include <optional>
@@ -53,6 +52,16 @@ namespace tt {
 
 namespace tt_metal {
 
+template <typename T1, typename T2>
+struct pair_hash {
+    size_t operator()(const std::pair<T1, T2>& p) const {
+        auto h1 = std::hash<T1>{}(p.first);
+        auto h2 = std::hash<T2>{}(p.second);
+        constexpr std::size_t hash_combine_prime = 0x9e3779b9;
+        return h1 ^ (h2 + hash_combine_prime + (h1 << 6) + (h1 >> 2));
+    }
+};
+
 struct DisptachMetaData {
     // Dispatch command queue command type
     std::string cmd_type = "";
@@ -63,6 +72,15 @@ struct DisptachMetaData {
     // dispatch command subtype.
     std::string cmd_subtype = "";
 };
+
+struct ZoneDetails {
+    std::string zone_name;
+    std::string source_file;
+    uint64_t source_line_num;
+    bool is_zone_in_brisc_or_erisc;
+};
+
+const ZoneDetails UnidentifiedZoneDetails = ZoneDetails{"", "", 0, false};
 
 class DeviceProfiler {
 private:
@@ -79,16 +97,17 @@ private:
     std::filesystem::path output_dir;
 
     // Device-Core tracy context
-    std::map<std::pair<uint16_t, CoreCoord>, TracyTTCtx> device_tracy_contexts;
+    std::unordered_map<std::pair<uint16_t, CoreCoord>, TracyTTCtx, pair_hash<uint16_t, CoreCoord>>
+        device_tracy_contexts;
 
     // Hash to zone source locations
-    std::unordered_map<uint16_t, std::string> hash_to_zone_src_locations;
+    std::unordered_map<uint16_t, ZoneDetails> hash_to_zone_src_locations;
 
     // Zone sourece locations
     std::unordered_set<std::string> zone_src_locations;
 
     // Iterator on the current zone being processed
-    std::set<tracy::TTDeviceEvent>::iterator current_zone_it;
+    std::unordered_set<tracy::TTDeviceEvent>::iterator current_zone_it;
 
     // Holding current data collected for dispatch command queue zones
     DisptachMetaData current_dispatch_meta_data;
@@ -117,6 +136,8 @@ private:
 
     // translates potentially-virtual coordinates recorded on Device into physical coordinates
     CoreCoord getPhysicalAddressFromVirtual(chip_id_t device_id, const CoreCoord& c) const;
+
+    ZoneDetails getZoneDetails(uint16_t timer_id) const;
 
     // Dumping profile result to file
     void logPacketData(
@@ -183,7 +204,7 @@ private:
     void updateTracyContext(std::pair<uint32_t, CoreCoord> device_core);
 
 public:
-    DeviceProfiler(const bool new_logs);
+    DeviceProfiler(const IDevice* device, const bool new_logs);
 
     DeviceProfiler() = delete;
 
@@ -199,8 +220,11 @@ public:
     // DRAM Vector
     std::vector<uint32_t> profile_buffer;
 
+    // (Device ID, Core Coord) pairs that keep track of cores which need to have their Tracy contexts updated
+    std::unordered_set<std::pair<chip_id_t, CoreCoord>, pair_hash<chip_id_t, CoreCoord>> device_cores;
+
     // Device events
-    std::set<tracy::TTDeviceEvent> device_events;
+    std::unordered_set<tracy::TTDeviceEvent> device_events;
 
     std::set<tracy::TTDeviceEvent> device_sync_events;
 
@@ -232,7 +256,7 @@ public:
     void pushTracyDeviceResults();
 
     // Update sync info for this device
-    void setSyncInfo(std::tuple<double, double, double> sync_info);
+    void setSyncInfo(const std::tuple<double, double, double>& sync_info);
 };
 
 void issue_fd_write_to_profiler_buffer(distributed::AnyBuffer& buffer, IDevice* device, std::vector<uint32_t>& data);
