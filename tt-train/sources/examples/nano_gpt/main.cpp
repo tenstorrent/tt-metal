@@ -427,8 +427,8 @@ TrainingConfig parse_config(const YAML::Node &yaml_config) {
     }
 
     auto mpi_config = yaml_config["mpi_config"];
-    config.enable_mpi = mpi_config["enable_mpi"].as<bool>(false);
-    config.num_mpi_workers = mpi_config["num_mpi_workers"].as<uint32_t>(0U);
+    config.enable_mpi = mpi_config["enabled"].as<bool>(false);
+    config.num_mpi_workers = mpi_config["num_workers"].as<uint32_t>(0U);
 
     return config;
 }
@@ -477,6 +477,10 @@ int main(int argc, char **argv) {
         // disable wandb for now in case of mpi example
         enable_wandb = false;
     }
+
+    fmt::print("MPI config:\n");
+    fmt::print("  enable_mpi: {}\n", config.enable_mpi);
+    fmt::print("  num_mpi_workers: {}\n", config.num_mpi_workers);
 
     if (enable_wandb) {
         auto result = signal(SIGINT, signal_handler);

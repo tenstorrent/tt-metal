@@ -26,6 +26,6 @@ echo "Running nano_gpt 3tier demo..."
 mpirun --hostfile ~/mpi_hosts \
   -x TT_METAL_LOGGER_LEVEL=FATAL \
   -x TT_METAL_HOME=/home/ttuser/git/tt-metal \
-  -np 2 /bin/bash -c 'cd /home/ttuser/git/tt-metal && ./tt-train/build/sources/examples/nano_gpt/nano_gpt' \
+  -np 1 /bin/bash -c 'cd /home/ttuser/git/tt-metal && ./tt-train/build/sources/examples/nano_gpt/nano_gpt' \
   : -np 1 /bin/bash -c 'cd /home/ttuser/git/tt-metal && ./tt-train/build/sources/examples/nano_gpt/nano_gpt_aggregator' \
   : -np 1 /bin/bash -c 'cd /home/ttuser/git/tt-metal && ./tt-train/build/sources/examples/nano_gpt/nano_gpt_optimizer'

@@ -73,7 +73,7 @@ TrainingConfig parse_config(const YAML::Node &yaml_config) {
 
     auto mpi_config = yaml_config["mpi_config"];
     config.enable_mpi = mpi_config["enabled"].as<bool>(config.enable_mpi);
-    config.num_mpi_workers = mpi_config["num_mpi_workers"].as<uint32_t>(config.num_mpi_workers);
+    config.num_mpi_workers = mpi_config["num_workers"].as<uint32_t>(config.num_mpi_workers);
 
     return config;
 }
