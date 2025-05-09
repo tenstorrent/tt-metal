@@ -258,9 +258,6 @@ def run_conv2d_short_sweep(
         input_layout = ttnn.Layout(input_layout)
         input_dtype = ttnn.DataType(input_dtype)
         input_memory_config = ttnn.DRAM_MEMORY_CONFIG if input_buffer_type == "dram" else ttnn.L1_MEMORY_CONFIG
-        torch_input_tensor = torch.reshape(
-            torch_input_tensor, (1, 1, batch_size * input_height * input_width, input_channels)
-        )
         tt_input_tensor = ttnn.from_torch(
             torch_input_tensor, dtype=input_dtype, layout=input_layout, device=device, memory_config=input_memory_config
         )

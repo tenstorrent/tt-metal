@@ -207,7 +207,6 @@ Tensor to_weight_tile_layout_block_sharded(
             // width padding for conv output shard padding
             weight_matrix_cols = conv_output_shard_width_padded * num_channel_shards;
         }
-
         auto weight_matrix_rows = w_shape[1] * w_shape[2] * w_shape[3];
         TT_ASSERT(w_shape[1] % num_channel_shards == 0);
         auto conv_input_shard_width = w_shape[1] / num_channel_shards;
@@ -748,7 +747,8 @@ std::pair<ttnn::Tensor, std::optional<ttnn::Tensor>> prepare_conv_weights_biases
     uint32_t groups,
     uint32_t act_block_h_ntiles,
     uint32_t input_width,
-    const bool has_bias) {
+    const bool has_bias,
+    const bool is_large_kernel_with_easy_matmul) {
     ttnn::Tensor weight_tensor_ = weight_tensor;  // tensor to return
     Shape weight_shape = weight_tensor.get_logical_shape();
     // In case of 1D convolution and 3D weight tensor, reinterpret it as 4D tensor
@@ -804,6 +804,9 @@ std::pair<ttnn::Tensor, std::optional<ttnn::Tensor>> prepare_conv_weights_biases
 
     uint32_t out_channels_padded = tt::round_up(out_channels, output_num_cores_channels * tt::constants::TILE_WIDTH);
     uint32_t in_channels_padded = tt::round_up(in_channels, input_num_cores_channels * input_channels_alignment);
+    if (is_large_kernel_with_easy_matmul) {
+        in_channels_padded = in_channels;
+    }
     uint32_t out_channel_padding = out_channels_padded - out_channels;
 
     if (weights_bias_dtype == DataType::BFLOAT8_B) {
@@ -822,6 +825,8 @@ std::pair<ttnn::Tensor, std::optional<ttnn::Tensor>> prepare_conv_weights_biases
     // Block sharding re-orders the weights by dividing the input_channels along number of in_channel_cores.
     if (input_parallel_config.shard_scheme == TensorMemoryLayout::BLOCK_SHARDED) {
         weight_tensor_ = ttnn::permute(weight_tensor_, ttnn::SmallVector<int64_t>({2, 3, 1, 0}));
+
+        weight_shape = weight_tensor_.get_logical_shape();
 
         ttnn::Shape weights_channels_padded_shape(
             std::array<uint32_t, 4>({window_h, window_w, out_channels_padded, in_channels_padded}));
@@ -893,6 +898,7 @@ std::pair<ttnn::Tensor, std::optional<ttnn::Tensor>> prepare_conv_weights_biases
         weight_tensor_ = ttnn::reshape(
             weight_tensor_,
             ttnn::Shape({1, 1, rounded_weight_block_height * input_num_cores_channels, final_out_channels_padded}));
+        weight_shape = weight_tensor_.get_logical_shape();
     } else {
         weight_tensor_ = ttnn::permute(weight_tensor_, ttnn::SmallVector<int64_t>({2, 3, 1, 0}));
 
@@ -950,6 +956,7 @@ std::pair<ttnn::Tensor, std::optional<ttnn::Tensor>> prepare_conv_weights_biases
             output_parallel_config,
             device);
     }
+    weight_shape = weight_tensor_.get_logical_shape();
     return {weight_tensor_, bias_tensor.has_value() ? bias_tensor_ : std::optional<ttnn::Tensor>()};
 }
 
@@ -968,6 +975,7 @@ std::pair<ttnn::Tensor, std::optional<ttnn::Tensor>> prepare_conv_weights_biases
     uint32_t act_block_h_ntiles,
     uint32_t input_width,
     const bool has_bias,
+    const bool is_large_kernel_with_easy_matmul,
     const bool parameters_on_device) {
     ttnn::Tensor weight_tensor_ = weight_tensor;  // tensor to return
     Shape weight_shape = weight_tensor.get_logical_shape();
@@ -1019,6 +1027,9 @@ std::pair<ttnn::Tensor, std::optional<ttnn::Tensor>> prepare_conv_weights_biases
 
     uint32_t out_channels_padded = tt::round_up(out_channels, output_num_cores_channels * tt::constants::TILE_WIDTH);
     uint32_t in_channels_padded = tt::round_up(in_channels, input_num_cores_channels * input_channels_alignment);
+    if (is_large_kernel_with_easy_matmul) {
+        in_channels_padded = in_channels;
+    }
     uint32_t out_channel_padding = out_channels_padded - out_channels;
 
     ttnn::Shape weights_channels_padded_shape({out_channels_padded, in_channels_padded, window_h, window_w});
@@ -1106,6 +1117,8 @@ ttnn::Tensor prepare_conv_weights(
     DeviceComputeKernelConfig compute_config = compute_config_.value_or(get_conv_default_compute_kernel_config(device));
     std::array<uint32_t, 4> padding_n4 = sliding_window::get_pair_n4_padding(padding);
     const bool mm_conv = use_matmul_for_1x1_conv(kernel_size, stride, padding_n4, dilation, groups, conv_config);
+    const bool is_large_kernel = is_large_kernel_with_easy_matmul(
+        input_tensor_layout, input_height, input_width, kernel_size, stride, padding_n4, dilation);
 
     auto [output_height, output_width] =
         calculate_output_image_size({input_height, input_width}, kernel_size, stride, padding_n4, dilation);
@@ -1217,7 +1230,8 @@ ttnn::Tensor prepare_conv_weights(
             groups,
             opt_conv_op_block_config.act_block_h_ntiles,
             input_width,
-            has_bias);
+            has_bias,
+            is_large_kernel);
     } else {
         tie(weight_tensor_on_device, bias_tensor_on_device) = prepare_conv_weights_biases_and_move_to_device(
             weight_tensor,
@@ -1232,7 +1246,8 @@ ttnn::Tensor prepare_conv_weights(
             groups,
             opt_conv_op_block_config.act_block_h_ntiles,
             input_width,
-            has_bias);
+            has_bias,
+            is_large_kernel);
     }
 
     return weight_tensor_on_device;
@@ -1397,7 +1412,8 @@ template std::pair<ttnn::Tensor, std::optional<ttnn::Tensor>> prepare_conv_weigh
     uint32_t groups,
     uint32_t act_block_h_ntiles,
     uint32_t input_width,
-    const bool has_bias);
+    const bool has_bias,
+    const bool is_large_kernel_with_easy_matmul);
 
 template std::pair<ttnn::Tensor, std::optional<ttnn::Tensor>> prepare_conv_weights_biases_on_device<MeshDevice>(
     const ttnn::Tensor& weight_tensor,
@@ -1412,7 +1428,8 @@ template std::pair<ttnn::Tensor, std::optional<ttnn::Tensor>> prepare_conv_weigh
     uint32_t groups,
     uint32_t act_block_h_ntiles,
     uint32_t input_width,
-    const bool has_bias);
+    const bool has_bias,
+    const bool is_large_kernel_with_easy_matmul);
 
 template std::pair<ttnn::Tensor, std::optional<ttnn::Tensor>> prepare_conv_weights_biases_and_move_to_device<IDevice>(
     const ttnn::Tensor& weight_tensor,
@@ -1428,6 +1445,7 @@ template std::pair<ttnn::Tensor, std::optional<ttnn::Tensor>> prepare_conv_weigh
     uint32_t act_block_h_ntiles,
     uint32_t input_width,
     const bool has_bias,
+    const bool is_large_kernel_with_easy_matmul,
     const bool parameters_on_device);
 
 template std::pair<ttnn::Tensor, std::optional<ttnn::Tensor>>
@@ -1445,6 +1463,7 @@ prepare_conv_weights_biases_and_move_to_device<MeshDevice>(
     uint32_t act_block_h_ntiles,
     uint32_t input_width,
     const bool has_bias,
+    const bool is_large_kernel_with_easy_matmul,
     const bool parameters_on_device);
 
 template ttnn::Tensor prepare_conv_bias<IDevice>(
