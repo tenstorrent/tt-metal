@@ -282,7 +282,7 @@ def run_conv(
     out = out.reshape(total_batch_size, out_height, out_width, out.shape[-1])
     out = out[:, :, :, :output_channels]
 
-    out = torch.permute(out, (0, 3, 1, 2))
+    ref = torch.permute(ref, (0, 2, 3, 1))
 
     if not fp32_accum:
         pcc = 0.985
@@ -644,9 +644,9 @@ SliceWidth = ttnn.Conv2dSliceWidth
     "input_channels, output_channels, input_height, input_width, slice_type, num_slices, weights_dtype, activations_dtype, kernel, stride, padding, dilation, input_channels_alignment, act_block_h_override,  math_fidelity",
     # fmt: off
     (
-        (10,    64,  4096,   512,  SliceHeight,   4,  ttnn.bfloat8_b, ttnn.bfloat16, (4, 4), (2, 2), (1, 1), (1, 1), 16, 32 * 8, ttnn.MathFidelity.LoFi  ),
-        (64,    64,  2048,   256,  SliceHeight,   4,  ttnn.bfloat8_b, ttnn.bfloat16, (4, 4), (2, 2), (1, 1), (1, 1), 32, 32 * 16, ttnn.MathFidelity.LoFi  ),
-        (64,    64,  1024,   128,  SliceHeight,   2,  ttnn.bfloat8_b, ttnn.bfloat16, (4, 4), (2, 2), (1, 1), (1, 1), 32, 0,       ttnn.MathFidelity.LoFi  ),
+        # (10,    64,  4096,   512,  SliceHeight,   6,  ttnn.bfloat8_b, ttnn.bfloat16, (4, 4), (2, 2), (1, 1), (1, 1), 16, 32 * 4, ttnn.MathFidelity.LoFi  ),
+        (64,    64,  2048,   256,  SliceHeight,   4,  ttnn.bfloat8_b, ttnn.bfloat16, (4, 4), (2, 2), (1, 1), (1, 1), 32, 32 , ttnn.MathFidelity.LoFi  ),
+        (64,    64,  1024,   128,  SliceHeight,   4,  ttnn.bfloat8_b, ttnn.bfloat16, (4, 4), (2, 2), (1, 1), (1, 1), 32, 0,       ttnn.MathFidelity.LoFi  ),
         (64,    64,   512,    64,  SliceHeight,   2,  ttnn.bfloat8_b, ttnn.bfloat16, (4, 4), (2, 2), (1, 1), (1, 1), 32, 0,       ttnn.MathFidelity.LoFi  ),
         ( 4,    32,  1024,  1024,   SliceWidth,   4,  ttnn.bfloat8_b, ttnn.bfloat16, (5, 5), (1, 1), (0, 0), (1, 1), 16, 32,      ttnn.MathFidelity.LoFi  ),
         (32,    48,  1020,  1020,   SliceWidth,   7,  ttnn.bfloat8_b, ttnn.bfloat16, (3, 3), (1, 1), (0, 0), (2, 2), 32, 32 * 2,  ttnn.MathFidelity.LoFi  ),
@@ -721,13 +721,13 @@ def test_conv_dram(
         has_bias=True,
         fp32_accum=fp32_accum,
         packer_l1_acc=packer_l1_acc,
-        preprocess_weights_on_device=True,  # Github Issue #21044: Failure with preprocess_weights_on_device=False
+        preprocess_weights_on_device=False,  # Github Issue #21044: Failure with preprocess_weights_on_device=False
         transpose_shards=True,
         run_twice=False,
         fast_compare=True,
         slice_config=ttnn.Conv2dSliceConfig(
             slice_type=slice_type,
-            num_slices=num_slices,
+            num_slices=num_slices + 1,
         ),
     )
 

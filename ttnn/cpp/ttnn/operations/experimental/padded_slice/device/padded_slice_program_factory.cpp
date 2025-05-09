@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "optional"
-#include "tt-metalium/circular_buffer_types.hpp"
 #include "tt-metalium/logger.hpp"
 #include "ttnn/operations/math.hpp"
 #include <tt-metalium/work_split.hpp>
@@ -268,18 +267,15 @@ get_padded_slice_runtime_args_rm_sharded_output(
 
         const uint32_t num_sticks_written = core_h_index * num_sticks_per_core;
         const uint32_t width_offset = core_w_index * output_row_size_bytes_offset;
-        tt::log_debug(" Core : {}, num_sticks_written: {}, width_offset: {}", core, num_sticks_written, width_offset);
 
         id_per_dim[0] = num_sticks_written % num_output_sticks_per_dim[0];
         uint32_t output_written = num_sticks_written / num_output_sticks_per_dim[0];
         uint32_t start_id = id_per_dim[0] + start_offset;
-        tt::log_debug("Output Written: {}, start_id: {}", output_written, start_id);
         for (uint32_t j = 1; j < num_dims; j++) {
             id_per_dim[j] = output_written % num_output_sticks_per_dim[j];
             output_written = output_written / num_output_sticks_per_dim[j];
             start_id += id_per_dim[j] * accumulated_total_per_dim[j - 1];
         }
-        tt::log_debug("Final Output Written: {}, start_id: {}", output_written, start_id);
 
         std::vector<uint32_t> reader_kernel_args = common_reader_kernel_args;
         reader_kernel_args[0] += width_offset;

@@ -546,7 +546,7 @@ void write_interleaved_buffer_to_device(
             continue;
         }
 
-        tt::log_debug(tt::LogDispatch, "EnqueueWriteBuffer for command queue {}", dispatch_params.cq_id);
+        // tt::log_debug(tt::LogDispatch, "EnqueueWriteBuffer for command queue {}", dispatch_params.cq_id);
 
         dispatch_params.calculate_num_pages_for_write_transaction(num_pages_available_in_cq);
         issue_buffer_dispatch_command_sequence(src, buffer, dispatch_params, sub_device_ids, dispatch_core_type);
@@ -689,7 +689,7 @@ void write_sharded_buffer_to_core(
         dispatch_params.address = bank_base_address + curr_page_idx_in_shard * dispatch_params.page_size_to_write;
         dispatch_params.core = core;
 
-        tt::log_debug(tt::LogDispatch, "EnqueueWriteBuffer for channel {}", dispatch_params.cq_id);
+        // tt::log_debug(tt::LogDispatch, "EnqueueWriteBuffer for channel {}", dispatch_params.cq_id);
 
         issue_buffer_dispatch_command_sequence(src, buffer, dispatch_params, sub_device_ids, dispatch_core_type);
         curr_page_idx_in_shard += dispatch_params.pages_per_txn;

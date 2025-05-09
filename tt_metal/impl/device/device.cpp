@@ -507,7 +507,7 @@ void Device::initialize_firmware(const HalProgrammableCoreType &core_type, CoreC
                         // In this context, ncrisc_kernel_size16 is the size of the fw
                         launch_msg->kernel_config.ncrisc_kernel_size16 = (fw_size + 15) >> 4;
                     }
-                    log_debug(LogDevice, "RISC {} fw binary size: {} in bytes", riscv_id, fw_size);
+                    // log_debug(LogDevice, "RISC {} fw binary size: {} in bytes", riscv_id, fw_size);
 
                     if (not rtoptions.get_skip_loading_fw()) {
                         llrt::test_load_write_read_risc_binary(
@@ -559,7 +559,7 @@ void Device::initialize_firmware(const HalProgrammableCoreType &core_type, CoreC
                                            .get_target_out_path("");
                         const ll_api::memory& binary_mem = llrt::get_risc_binary(fw_path);
                         uint32_t fw_size = binary_mem.get_text_size();
-                        log_debug(LogDevice, "ERISC fw binary size: {} in bytes", fw_size);
+                        // log_debug(LogDevice, "ERISC fw binary size: {} in bytes", fw_size);
                         llrt::test_load_write_read_risc_binary(
                             binary_mem, this->id(), virtual_core, core_type_idx, processor_class, eriscv_id);
                     }
