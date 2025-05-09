@@ -1,27 +1,26 @@
 # SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
-import torch
-import pytest
-from loguru import logger
 from time import time
 
+import pytest
+import torch
+from loguru import logger
+
 import ttnn
-from ttnn import ConcatMeshToTensor
-from models.demos.t3000.mixtral8x7b.tt.mixtral_common import (
-    load_inputs,
-    preprocess_inputs,
-    prepare_inputs_ttnn,
-    get_single_rot_mat,
-    sample,
-    cache_attention,
-)
-from models.demos.t3000.mixtral8x7b.tt.mixtral_model import TtTransformer
-from models.demos.t3000.mixtral8x7b.tt.mixtral_embedding import TtMixtralEmbedding
 from models.demos.t3000.mixtral8x7b.reference.tokenizer import Tokenizer
-
-
+from models.demos.t3000.mixtral8x7b.tt.mixtral_common import (
+    cache_attention,
+    get_single_rot_mat,
+    load_inputs,
+    prepare_inputs_ttnn,
+    preprocess_inputs,
+    sample,
+)
+from models.demos.t3000.mixtral8x7b.tt.mixtral_embedding import TtMixtralEmbedding
+from models.demos.t3000.mixtral8x7b.tt.mixtral_model import TtTransformer
 from models.demos.t3000.mixtral8x7b.tt.model_config import TtModelArgs
+from ttnn import ConcatMeshToTensor
 
 
 class Emb(torch.nn.Module):

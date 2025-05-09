@@ -83,16 +83,6 @@ CoreCoord get_sub_device_worker_origin(
     return grid.bounding_box().start_coord;
 }
 
-size_t get_ringbuffer_size(IDevice* device, HalProgrammableCoreType programmable_core_type) {
-    if (programmable_core_type == HalProgrammableCoreType::TENSIX) {
-        return device->allocator()->get_config().l1_unreserved_base -
-               MetalContext::instance().hal().get_dev_addr(
-                   HalProgrammableCoreType::TENSIX, HalL1MemAddrType::KERNEL_CONFIG);
-    } else {
-        return MetalContext::instance().hal().get_dev_size(programmable_core_type, HalL1MemAddrType::KERNEL_CONFIG);
-    }
-}
-
 struct CommandConstants {
     CoreType dispatch_core_type;
     NOC noc_index;
@@ -357,125 +347,6 @@ uint32_t finalize_kernel_bins(
     kernel_text_offset = base_offset;
     kernel_text_size = max_offset - base_offset;
     return max_offset;
-}
-
-// Compute relative offsets (wrt the start of the kernel config ring buffer) and sizes of all
-// program data structures in L1. Will be used when assembling dispatch commands for this program
-template <typename T>
-void finalize_program_offsets(T& workload, IDevice* device) {
-    if (workload.is_finalized()) {
-        return;
-    }
-    // TODO (AS): Enacapsulate the variables below in a struct to avoid implicit updates on references.
-    // TODO (AS): Rather than in-place updating atrtibutes in the program, update them explicitly through a
-    // returned set of offsets.
-    // Base offset for Program Configs across all core types, wrt kernel config slot start address
-    uint32_t config_base_offset = 0;
-    // Incremental offset. Will correspond to the size of the program config per core, once the
-    // program is finalized.
-    uint32_t offset = 0;
-    // Unique RTA offset.
-    uint32_t rta_offset = 0;
-    // Common RTA offsets and sizes.
-    std::array<uint32_t, DISPATCH_CLASS_MAX> crta_offsets;
-    std::array<uint32_t, DISPATCH_CLASS_MAX> crta_sizes;
-    // Semaphore offsets and sizes.
-    uint32_t sem_offset = 0;
-    uint32_t sem_size = 0;
-    // CB offsets and sizes.
-    uint32_t cb_offset = 0;
-    uint32_t cb_size = 0;
-    uint32_t local_cb_size = 0;
-    // Kernel binary offsets and sizes.
-    uint32_t kernel_text_offset = 0;
-    uint32_t kernel_text_size = 0;
-    // TODO (AS): Explicitly encode what's needed by the lambdas below.
-    auto set_program_offsets_and_sizes = [&](Program& program, uint32_t index) {
-        auto& program_config = program.get_program_config(index);
-        program_config.rta_offset = rta_offset;
-        program_config.crta_offsets = crta_offsets;
-        program_config.crta_sizes = crta_sizes;
-        program_config.sem_offset = sem_offset;
-        program_config.sem_size = sem_size;
-        program_config.cb_offset = cb_offset;
-        program_config.cb_size = cb_size;
-        program_config.local_cb_size = local_cb_size;
-        program_config.kernel_text_offset = kernel_text_offset;
-        program_config.kernel_text_size = kernel_text_size;
-        program.get_program_config_sizes()[index] = offset;
-    };
-
-    const auto& hal = MetalContext::instance().hal();
-    auto set_program_attrs_across_core_types = [&](Program& program) {
-        program.get_program_config_sizes()[hal.get_programmable_core_type_count()] =
-            workload.runs_on_noc_multicast_only_cores();
-        program.get_program_config_sizes()[hal.get_programmable_core_type_count() + 1] =
-            workload.runs_on_noc_unicast_only_cores();
-        program.set_launch_msg_sem_offsets();
-        // TODO: This check is wrong - it populates dispatch data for dispatch kernels
-        if (std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr) {
-            program.populate_dispatch_data(device);  // TODO: maybe rename
-        }
-    };
-
-    for (uint32_t index = 0; index < hal.get_programmable_core_type_count(); index++) {
-        HalProgrammableCoreType programmable_core_type = hal.get_programmable_core_type(index);
-        offset = finalize_rt_args(
-            workload.get_kernels(index),
-            workload.get_kernel_groups(index),
-            config_base_offset,
-            index,
-            rta_offset,
-            crta_offsets,
-            crta_sizes);
-
-        TT_ASSERT(offset == tt::align(offset, hal.get_alignment(HalMemType::L1)));
-
-        offset = finalize_sems(index, offset, workload.semaphores(), sem_offset, sem_size);
-
-        TT_ASSERT(offset == tt::align(offset, hal.get_alignment(HalMemType::L1)));
-
-        offset = finalize_cbs(index, workload.get_kernel_groups(index), offset, cb_offset, cb_size, local_cb_size);
-
-        TT_ASSERT(offset == tt::align(offset, hal.get_alignment(HalMemType::L1)));
-
-        offset = finalize_kernel_bins(
-            device,
-            index,
-            workload.get_kernels(index),
-            workload.get_kernel_groups(index),
-            offset,
-            kernel_text_offset,
-            kernel_text_size);
-
-        TT_ASSERT(offset == tt::align(offset, hal.get_alignment(HalMemType::L1)));
-
-        size_t max_size = get_ringbuffer_size(device, programmable_core_type);
-
-        TT_FATAL(
-            offset < max_size,
-            "Program size ({}) too large for kernel config buffer ({}) on {}",
-            offset,
-            max_size,
-            magic_enum::enum_name(programmable_core_type));
-
-        if constexpr (std::is_same_v<T, Program>) {
-            set_program_offsets_and_sizes(workload, index);
-        } else {
-            for (auto& [_, program] : workload.get_programs()) {
-                set_program_offsets_and_sizes(program, index);
-            }
-        }
-    }
-    // The sem offsets cross programmable_core_types so must be set after the loop above
-    if constexpr (std::is_same_v<T, Program>) {
-        set_program_attrs_across_core_types(workload);
-    } else {
-        for (auto& [_, program] : workload.get_programs()) {
-            set_program_attrs_across_core_types(program);
-        }
-    }
-    workload.set_finalized();
 }
 
 uint32_t get_packed_write_max_unicast_sub_cmds(IDevice* device) {
@@ -2307,8 +2178,6 @@ void set_go_signal_noc_data_on_dispatch(
     manager.fetch_queue_write(cmd_sequence_sizeB, cq_id);
 }
 
-template void finalize_program_offsets<Program>(Program&, IDevice*);
-template void finalize_program_offsets<distributed::MeshWorkload>(distributed::MeshWorkload&, IDevice*);
 template uint32_t program_base_addr_on_core<Program, IDevice*>(Program&, IDevice*, HalProgrammableCoreType);
 template uint32_t program_base_addr_on_core<distributed::MeshWorkload, distributed::MeshDevice*>(
     distributed::MeshWorkload&, distributed::MeshDevice*, HalProgrammableCoreType);

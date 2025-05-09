@@ -4,7 +4,7 @@
 
 #include <cstdint>
 #include "tt-metalium/circular_buffer.hpp"
-#include "tt-metalium/circular_buffer_types.hpp"
+#include "tt-metalium/circular_buffer_config.hpp"
 #include "ttnn/operations/cb_utils.hpp"
 #include "ttnn/operations/conv/conv2d/conv2d_op_program_factory_common.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
@@ -176,7 +176,6 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_width_sh
         input_channels_padded % 16 == 0,
         "Expected input channels to be padded for 16 byte alignment in L1");  // TODO: For bfp16, check if its divisible
                                                                               // by 8 not 16.
-    // Always use split reader for first conv in resnet which has input channels = 16
     // TODO: Expose option to split readers for 1D convs to python?
     if (enable_split_reader) {
         TT_FATAL(not weight_width_sliced, "split reader does not work with 2d conv");

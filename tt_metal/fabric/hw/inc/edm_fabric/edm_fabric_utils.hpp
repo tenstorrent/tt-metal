@@ -14,17 +14,28 @@ static constexpr uint8_t edm_to_local_chip_noc = 1;
 
 enum EDM_IO_BLOCKING_MODE { FLUSH_BLOCKING, BLOCKING, NON_BLOCKING };
 
-template <EDM_IO_BLOCKING_MODE blocking_mode = EDM_IO_BLOCKING_MODE::BLOCKING>
+template <EDM_IO_BLOCKING_MODE blocking_mode = EDM_IO_BLOCKING_MODE::BLOCKING, bool stateful_api>
 FORCE_INLINE void send_chunk_from_address_with_trid(
     const uint32_t& local_l1_address,
     const uint32_t& num_pages,
     const uint32_t& page_size,
-    uint32_t remote_l1_write_addr,
+    uint32_t remote_l1_write_addr_h,
+    uint32_t remote_l1_write_addr_l,
     uint8_t trid,
     uint8_t noc,
     uint8_t cmd_buf) {
-    noc_async_write_one_packet_with_trid_with_state<false, false>(
-        local_l1_address, remote_l1_write_addr, page_size * num_pages, trid, cmd_buf, noc);
+    if constexpr (stateful_api) {
+        noc_async_write_one_packet_with_trid_with_state<false, false>(
+            local_l1_address, remote_l1_write_addr_l, page_size * num_pages, trid, cmd_buf, noc);
+    } else {
+        noc_async_write_one_packet_with_trid<false, false>(
+            local_l1_address,
+            ((uint64_t)remote_l1_write_addr_h << 32) | remote_l1_write_addr_l,
+            page_size * num_pages,
+            trid,
+            cmd_buf,
+            noc);
+    }
     // TODO: this barrier will no longer be functional since we are not incrementing noc counters, remove
     if constexpr (blocking_mode == EDM_IO_BLOCKING_MODE::FLUSH_BLOCKING) {
         noc_async_writes_flushed();
