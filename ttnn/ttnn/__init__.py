@@ -115,6 +115,7 @@ from ttnn._ttnn.events import (
     MeshEvent,
     record_event,
     wait_for_event,
+    event_synchronize,
 )
 
 from ttnn._ttnn.operations.trace import (
