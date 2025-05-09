@@ -17,10 +17,11 @@ void kernel_main() {
     constexpr uint32_t cb_id_out = get_compile_time_arg_val(0);
     constexpr uint32_t cb_temp_pad = get_compile_time_arg_val(2);
 
+#ifdef DEBUG
     DPRINT << "num_units: " << num_units << ", num_elements_per_row: " << num_elements_per_row
            << ", unpadded_row_size_bytes: " << unpadded_row_size_bytes
            << ", padded_row_size_bytes: " << padded_row_size_bytes << ", pad_size_bytes: " << pad_size_bytes << ENDL();
-
+#endif
     const uint32_t pad_addr = get_read_ptr(cb_temp_pad);
     const uint32_t out_addr = get_read_ptr(cb_id_out);
     volatile tt_l1_ptr uint16_t* pad_ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(pad_addr);
