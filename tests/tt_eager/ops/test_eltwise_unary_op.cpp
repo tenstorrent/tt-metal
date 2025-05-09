@@ -64,7 +64,7 @@ Tensor host_function(const Tensor& input_tensor) {
     }
 
     return Tensor(
-        tt::tt_metal::HostStorage{tt::tt_metal::host_buffer::create(std::move(output_buffer))},
+        tt::tt_metal::HostBuffer(std::move(output_buffer)),
         input_tensor.get_logical_shape(),
         input_tensor.get_dtype(),
         input_tensor.get_layout());

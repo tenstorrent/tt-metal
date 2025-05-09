@@ -34,7 +34,7 @@ static Tensor manual_insertion(
     auto host_buffer = tt::tt_metal::host_buffer::get_host_buffer(cpu_tensor);
     auto output =
         Tensor(
-            tt::tt_metal::HostStorage{std::move(host_buffer)},
+            std::move(host_buffer),
             TensorSpec(
                 logical_shape,
                 TensorLayout::fromPaddedShape(
