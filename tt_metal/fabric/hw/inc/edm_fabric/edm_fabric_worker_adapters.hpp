@@ -75,6 +75,8 @@ struct WorkerToFabricEdmSenderImpl {
         const size_t writer_send_sem_id = my_fc_stream_id_ll_sender_worker_flow_control_semaphore_id & 0xFFFF;
         auto writer_send_sem_addr =
             reinterpret_cast<volatile uint32_t* const>(get_semaphore<my_core_type>(writer_send_sem_id));
+
+        // DEAD CODE
         const StreamId my_fc_stream_channel_id = StreamId{
             worker_credits_stream_id_counter - (my_fc_stream_id_ll_sender_worker_flow_control_semaphore_id >> 16)};
 
@@ -154,7 +156,9 @@ struct WorkerToFabricEdmSenderImpl {
         edm_noc_y(edm_worker_y),
         data_noc_cmd_buf(data_noc_cmd_buf),
         sync_noc_cmd_buf(sync_noc_cmd_buf) {
-        init_ptr_val(this->worker_credits_stream_id, 0);
+        if (!IS_WORKER) {
+            init_ptr_val(this->worker_credits_stream_id, 0);
+        }
         ASSERT(buffer_size_bytes > 0);
         if constexpr (USER_DEFINED_NUM_BUFFER_SLOTS) {
             ASSERT(num_buffers_per_channel == EDM_NUM_BUFFER_SLOTS);
@@ -193,7 +197,9 @@ struct WorkerToFabricEdmSenderImpl {
             DPRINT << "\t*from_remote_buffer_free_slots_ptr=" << (uint32_t)*this->from_remote_buffer_free_slots_ptr
                    << "\n";
         }
+        WAYPOINT("FWSW");
         while (!this->edm_has_space_for_packet());
+        WAYPOINT("FWSD");
         if constexpr (IS_WORKER) {
             DPRINT << "wait_for_empty_write_slot: EDM does have space for packet\n";
         }
@@ -319,6 +325,7 @@ struct WorkerToFabricEdmSenderImpl {
             dest_noc_addr_coord_only | reinterpret_cast<uint64_t>(&(worker_location_info_ptr->worker_xy));
         noc_inline_dw_write<false, posted>(
             connection_worker_xy_address, WorkerXY(my_x[0], my_y[0]).to_uint32(), 0xf, WORKER_HANDSHAKE_NOC);
+        // WAYPOINT("FOSD");
     }
 
     // Advanced usage API:
@@ -387,7 +394,7 @@ struct WorkerToFabricEdmSenderImpl {
         }
         const uint64_t dest_edm_connection_state_addr = dest_noc_addr_coord_only | edm_connection_handshake_l1_addr;
         noc_inline_dw_write(dest_edm_connection_state_addr, close_connection_request_value);
-
+        // WAYPOINT("FCSD");
     }
 
     // Advanced usage API:
@@ -395,9 +402,14 @@ struct WorkerToFabricEdmSenderImpl {
     // !!! IMPORTANT !!!
     // Must be called alongside (after) close_start().
     void close_finish() {
+        WAYPOINT("FCFW");
         // Need to wait for the ack to teardown notice, from edm
-        noc_semaphore_wait(this->worker_teardown_addr, 1);
-        noc_async_write_barrier();
+        // noc_semaphore_wait(this->worker_teardown_addr, 1);
+        while (*this->worker_teardown_addr != 1) {
+        }
+        WAYPOINT("FCFD");
+        noc_async_write_barrier2();
+        // WAYPOINT("FCFd");
     }
 
     void close() {
