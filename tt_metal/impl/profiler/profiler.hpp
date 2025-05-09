@@ -139,6 +139,15 @@ private:
 
     ZoneDetails getZoneDetails(uint16_t timer_id) const;
 
+    // Storage for all core's control buffers
+    std::map<CoreCoord, std::vector<uint32_t>> core_control_buffers;
+
+    // Read all control buffers
+    void readControlBuffers(IDevice* device, const CoreCoord& worker_core, const ProfilerDumpState state);
+
+    // reset control buffers
+    void resetControlBuffers(IDevice* device, const CoreCoord& worker_core, const ProfilerDumpState state);
+
     // Dumping profile result to file
     void logPacketData(
         std::ofstream& log_file_ofs,
