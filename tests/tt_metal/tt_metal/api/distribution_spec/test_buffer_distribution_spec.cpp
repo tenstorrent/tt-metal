@@ -4,6 +4,7 @@
 
 #include "gtest/gtest.h"
 #include "command_queue_fixture.hpp"
+#include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
 #include "dispatch/system_memory_manager.hpp"
 
 #include "tt_metal/test_utils/stimulus.hpp"
@@ -48,7 +49,7 @@ struct BufferReadWriteParams {
     BufferReadWriteExpected expected;
 };
 
-std::shared_ptr<tt::tt_metal::distributed::MeshBuffer> create_mesh_buffer_from_inputs(
+std::shared_ptr<tt::tt_metal::distributed::MeshBuffer> create_replicated_mesh_buffer_from_inputs(
     const BufferDistributionSpecInputs& inputs, tt::tt_metal::distributed::MeshDevice* mesh_device) {
     auto buffer_distribution_spec = tt::tt_metal::BufferDistributionSpec::from_shard_spec(
         inputs.physical_tensor_shape,
@@ -103,13 +104,14 @@ std::shared_ptr<tt::tt_metal::Buffer> create_buffer_from_inputs(
 using namespace distribution_spec_tests;
 using namespace tt::tt_metal;
 
-class BufferAllocationTests : public CommandQueueSingleCardBufferFixture,
+class BufferAllocationTests : public GenericMeshDeviceFixture,
                               public ::testing::WithParamInterface<BufferAllocationParams> {};
 
 TEST_P(BufferAllocationTests, BufferAllocation) {
     const auto& params = GetParam();
 
-    auto buffer = create_buffer_from_inputs(params.inputs, devices_[0]);
+    auto mesh_buffer = create_replicated_mesh_buffer_from_inputs(params.inputs, mesh_device_.get());
+    const auto buffer = mesh_buffer->get_device_buffer(tt::tt_metal::distributed::MeshCoordinate{0, 0});
 
     // Check that the stored cores in Buffer matches expected cores to be used
     const auto& [cores, _] = buffer->get_bank_data_mapping();
