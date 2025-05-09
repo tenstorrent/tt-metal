@@ -11,7 +11,7 @@ from tests.tt_metal.microbenchmarks.ethernet.test_all_ethernet_links_common impo
     write_results_to_csv,
 )
 
-from models.utility_functions import is_grayskull
+from models.utility_functions import is_single_chip
 
 from tt_metal.tools.profiler.common import PROFILER_LOGS_DIR, PROFILER_DEVICE_SIDE_LOG
 
@@ -71,7 +71,7 @@ def run_erisc_write_worker_latency(
 
 
 # uni-direction test for eth-sender <---> eth-receiver
-@pytest.mark.skipif(is_grayskull(), reason="Unsupported on GS")
+@pytest.mark.skipif(is_single_chip(), reason="Unsupported on single chip systems")
 @pytest.mark.parametrize("num_packets", [1])
 @pytest.mark.parametrize("channel_count", [16])
 @pytest.mark.parametrize("num_iterations", [1])
@@ -104,7 +104,7 @@ def test_erisc_latency_uni_dir(num_packets, packet_size, channel_count, num_iter
 
 
 # uni-direction test for eth-sender <---> eth-receiver ---> worker
-@pytest.mark.skipif(is_grayskull(), reason="Unsupported on GS")
+@pytest.mark.skipif(is_single_chip(), reason="Unsupported on single chip systems")
 @pytest.mark.parametrize("num_packets", [1])
 @pytest.mark.parametrize("channel_count", [16])
 @pytest.mark.parametrize("disable_trid", [0])
