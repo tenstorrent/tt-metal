@@ -6,7 +6,7 @@
 #include <pybind11/stl.h>
 
 #include "copy.hpp"
-#include "cpp/ttnn-pybind/decorators.hpp"
+#include "ttnn-pybind/decorators.hpp"
 
 namespace {
 std::string get_binary_doc_string(

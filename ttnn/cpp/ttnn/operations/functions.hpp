@@ -14,7 +14,7 @@
 #include <ttnn/tensor/tensor_utils.hpp>
 #include <ttnn/tensor/types.hpp>
 #include <ttnn/tensor/tensor_impl.hpp>
-#include "cpp/ttnn/common/constants.hpp"
+#include "ttnn/common/constants.hpp"
 #include "ttnn/tensor/host_buffer/host_buffer.hpp"
 
 namespace ttnn {

@@ -4,7 +4,7 @@
 
 #include "cpp/ttnn/operations/experimental/ccl/reduce_scatter_async/device/reduce_scatter_async_op.hpp"
 #include <tt-metalium/sub_device_types.hpp>
-#include "cpp/ttnn/global_semaphore.hpp"
+#include "ttnn/global_semaphore.hpp"
 
 #include <ranges>
 #include <algorithm>

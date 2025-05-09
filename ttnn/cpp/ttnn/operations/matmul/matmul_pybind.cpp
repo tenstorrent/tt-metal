@@ -11,7 +11,7 @@
 
 #include "ttnn-pybind/decorators.hpp"
 #include <tt-metalium/core_coord.hpp>
-#include "cpp/ttnn-pybind/json_class.hpp"
+#include "ttnn-pybind/json_class.hpp"
 #include "ttnn/operations/matmul/matmul.hpp"
 #include "ttnn/types.hpp"
 
