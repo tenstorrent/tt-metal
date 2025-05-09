@@ -87,6 +87,7 @@ jobs:
       package-artifact-name: ${{ needs.asan-build.outputs.packages-artifact-name }}
       runner: ${{ matrix.platform }}
       caller-name: "PR Gate"
+
   build:
     if: github.event_name != 'pull_request' || !github.event.pull_request.draft
     uses: ./.github/workflows/build-artifact.yaml
