@@ -8,7 +8,7 @@ import ttnn
 import numpy as np
 from loguru import logger
 
-from models.utility_functions import skip_for_grayskull, skip_for_blackhole
+from models.utility_functions import skip_for_blackhole
 
 
 def _test_eltwise_exp(device):
@@ -121,7 +121,6 @@ def _test_eltwise_exp(device):
 
 
 @skip_for_blackhole("Not tested / built for Blackhole")
-@skip_for_grayskull("Not tested / built for Grayskull")
 def test_generic_op():
     # Choose not to parametrize the input tensors
     # this was chosen to highlight the operation of the Generic Op instead of testing Eltwise Op's func

@@ -26,11 +26,7 @@ void bind_generic_operation(py::module& module) {
             ttnn.Tensor: Handle to the output tensor.
 
         Example:
-            >>> input = ttnn.to_device(ttnn.from_torch(torch.rand(3, 3), dtype=torch.bfloat16), device=device)
-            >>> output = ttnn.allocate_tensor_on_device(ttnn.Shape([3, 3]), ttnn.bfloat16, ttnn.TILE_LAYOUT, device)
-            >>> io_tensors = [input, output]
-            >>> program_descriptor = ttnn.ProgramDescriptor(...)
-            >>> result = ttnn.generic_op(io_tensors, program_descriptor)
+            Refer to tests/ttnn/unit_tests/operations/test_generic_op.py for usage examples
         )doc";
 
     bind_registered_operation(
