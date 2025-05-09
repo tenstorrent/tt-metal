@@ -5,31 +5,39 @@ import gc
 import torch
 import pytest
 import ttnn
-from models.experimental.stable_diffusion_xl_base.vae.tt.tt_midblock2d import TtUNetMidBlock2D
+from models.experimental.stable_diffusion_xl_base.vae.tt.tt_decoder import TtDecoder
 from diffusers import AutoencoderKL
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.utility_functions import torch_random
 
+from loguru import logger
 
+
+@torch.no_grad()
 @pytest.mark.parametrize(
     "input_shape",
     [
-        (1, 512, 128, 128),
+        (1, 4, 128, 128),
     ],
 )
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
-def test_vae_midblock(device, input_shape, use_program_cache, reset_seeds):
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 4 * 16384}], indirect=True)
+def test_vae_decoder(device, input_shape, reset_seeds):
     vae = AutoencoderKL.from_pretrained(
         "stabilityai/stable-diffusion-xl-base-1.0", torch_dtype=torch.float32, use_safetensors=True, subfolder="vae"
     )
     vae.eval()
     state_dict = vae.state_dict()
 
-    torch_crosattn = vae.decoder.mid_block
-    tt_crosattn = TtUNetMidBlock2D(device, state_dict, "decoder.mid_block")
+    torch_vae = vae.decoder
+
+    logger.info("Loading weights to device")
+    tt_vae = TtDecoder(device, state_dict)
+    logger.info("Loaded weights")
     torch_input_tensor = torch_random(input_shape, -0.1, 0.1, dtype=torch.float32)
 
-    torch_output_tensor = torch_crosattn(torch_input_tensor, temb=None)
+    logger.info("Running reference model")
+    torch_output_tensor = torch_vae(torch_input_tensor)
+    logger.info("Torch model done")
 
     ttnn_input_tensor = ttnn.from_torch(
         torch_input_tensor,
@@ -43,12 +51,11 @@ def test_vae_midblock(device, input_shape, use_program_cache, reset_seeds):
     ttnn_input_tensor = ttnn.permute(ttnn_input_tensor, (0, 2, 3, 1))
     ttnn_input_tensor = ttnn.reshape(ttnn_input_tensor, (B, 1, H * W, C))
 
-    ttnn_output_tensor, output_shape = tt_crosattn.forward(ttnn_input_tensor, [B, C, H, W])
-    output_tensor = ttnn.to_torch(ttnn_output_tensor)
-    output_tensor = output_tensor.reshape(B, output_shape[1], output_shape[2], output_shape[0])
-    output_tensor = torch.permute(output_tensor, (0, 3, 1, 2))
+    logger.info("Running TT model")
+    output_tensor = tt_vae.forward(ttnn_input_tensor, [B, C, H, W])
+    logger.info("TT model done")
 
     del vae
     gc.collect()
 
-    assert_with_pcc(torch_output_tensor, output_tensor, 0.999)
+    assert_with_pcc(torch_output_tensor, output_tensor, 0.937)

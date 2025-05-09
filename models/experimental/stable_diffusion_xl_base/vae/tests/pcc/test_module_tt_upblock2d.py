@@ -14,10 +14,10 @@ from models.utility_functions import torch_random
 @pytest.mark.parametrize(
     "input_shape, block_id, pcc",
     [
-        ((1, 512, 128, 128), 0, 0.996),
-        ((1, 512, 256, 256), 1, 0.983),
-        ((1, 512, 512, 512), 2, 0.994),
-        ((1, 256, 1024, 1024), 3, 0.981),
+        ((1, 512, 128, 128), 0, 0.999),
+        ((1, 512, 256, 256), 1, 0.998),
+        ((1, 512, 512, 512), 2, 0.998),
+        ((1, 256, 1024, 1024), 3, 0.999),
     ],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 4 * 16384}], indirect=True)
@@ -25,7 +25,6 @@ def test_vae_upblock(device, input_shape, block_id, pcc, reset_seeds):
     vae = AutoencoderKL.from_pretrained(
         "stabilityai/stable-diffusion-xl-base-1.0", torch_dtype=torch.float32, use_safetensors=True, subfolder="vae"
     )
-    # vae = pipe.vae
     vae.eval()
     state_dict = vae.state_dict()
 
@@ -57,4 +56,5 @@ def test_vae_upblock(device, input_shape, block_id, pcc, reset_seeds):
     del vae
     gc.collect()
 
-    assert_with_pcc(torch_output_tensor, output_tensor, pcc)
+    pcc_passed, pcc_message = assert_with_pcc(torch_output_tensor, output_tensor, pcc)
+    print(pcc_passed, pcc_message)
