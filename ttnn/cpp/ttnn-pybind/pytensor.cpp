@@ -348,7 +348,7 @@ Tensor convert_python_tensors_to_tt_tensors(
     auto distributed_tensor_config = get_distributed_tensor_config(strategy);
     auto storage = MultiDeviceHostStorage{distributed_tensor_config, std::move(host_owned_buffers), host_owned_specs};
 
-    auto output = Tensor(std::move(storage), tt_shards.at(0).get_tensor_spec());
+    auto output = Tensor(std::move(storage), tt_shards.at(0).get_tensor_spec(), distributed_tensor_config);
     output = tt::tt_metal::set_tensor_id(output);
     GraphTracker::instance().track_function_end(output);
     return output;
@@ -365,7 +365,7 @@ HostBuffer create_row_major_host_buffer(
         if (tensor_spec.layout() == Layout::TILE) {
             auto data = tensor_impl::convert_layout_tile_to_row_major(
                 tensor_spec.physical_shape(), tensor_spec.tile(), tt::stl::MakeConstSpan(host_buffer.view_as<T>()));
-            return host_buffer::create(std::move(data));
+            return HostBuffer(std::move(data));
         }
         return host_buffer;
     }
@@ -382,7 +382,7 @@ HostBuffer create_row_major_host_buffer(
     // See implementation for documentation
     auto logical_data = tensor_impl::decode_tensor_data(std::move(physical_data), tensor_spec);
 
-    return host_buffer::create(std::move(logical_data));
+    return HostBuffer(std::move(logical_data));
 }
 
 HostBuffer get_host_buffer_from_tensor(const Tensor& tt_tensor, const bool padded_output) {
@@ -419,7 +419,7 @@ HostBuffer get_host_buffer_from_tensor(const Tensor& tt_tensor, const bool padde
                                                      uint32_data, /*row_major_output=*/false, /*is_exp_a=*/false, tile)
                                                : unpack_bfp4_tiles_into_float_vec(
                                                      uint32_data, /*row_major_output=*/false, /*is_exp_a=*/false, tile);
-                auto input_float_buffer = tt::tt_metal::host_buffer::create<float>(std::move(float_unpacked_data));
+                auto input_float_buffer = tt::tt_metal::HostBuffer(std::move(float_unpacked_data));
                 return create_row_major_host_buffer<float>(input_float_buffer, tensor_spec, padded_output);
             }
             default: {
@@ -1538,7 +1538,6 @@ void pytensor_module(py::module& m_tensor) {
                 is_sharded = tt_tensor.is_sharded()
 
         )doc")
-        .def("is_contiguous", [](const Tensor& self) -> bool { return self.is_contiguous(); })
         .def(
             "is_sharded", [](const Tensor& self) { return self.is_sharded(); }, R"doc(
             Check if TT Tensor is sharded.

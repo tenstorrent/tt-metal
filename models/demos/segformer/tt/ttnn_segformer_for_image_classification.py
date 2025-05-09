@@ -2,10 +2,11 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from typing import Optional, Union, Tuple
+from dataclasses import dataclass
+from typing import Optional, Tuple, Union
+
 import ttnn
 from models.demos.segformer.tt.ttnn_segformer_model import TtSegformerModel
-from dataclasses import dataclass
 
 
 @dataclass

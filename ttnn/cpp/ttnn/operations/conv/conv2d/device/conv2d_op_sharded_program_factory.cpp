@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "tt-metalium/circular_buffer.hpp"
-#include "tt-metalium/circular_buffer_types.hpp"
+#include "tt-metalium/circular_buffer_config.hpp"
 #include "ttnn/operations/cb_utils.hpp"
 #include "ttnn/operations/conv/conv2d/conv2d_op_program_factory_common.hpp"
 #include "ttnn/operations/conv/conv2d/conv2d_utils.hpp"
@@ -507,8 +507,8 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
 
     uint32_t per_core_out_matrix_width_ntiles = parallelization_config.per_core_out_matrix_width_ntile;
     uint32_t per_core_out_matrix_height_ntiles = parallelization_config.per_core_out_matrix_height_ntile;
-    bool block_sharded = a.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED;
-    bool height_sharded = a.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED;
+    const bool block_sharded = a.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED;
+    const bool height_sharded = a.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED;
 
     // weight_width_sliced determines is 1d-sysarr-conv or 2d-sysarr-conv
     bool weight_width_sliced = per_core_out_matrix_width_ntiles < weight_matrix_width_ntiles;
@@ -528,27 +528,6 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
         }
     } else {
         input_channels_padded = shard_shape[1];
-    }
-    TT_FATAL(input_channels_padded >= ashape[3], "Incorrect padding of input channels!");
-    // check is for 16-byte alignment
-    TT_FATAL(
-        // Since fp16 is smalleset data format used for halo output, 8 input_channels is enough for 16 byte alignment
-        input_channels_padded % 8 == 0,
-        "Expected input channels to be padded for 16 byte alignment in L1 ({} % 16 != 0)",
-        input_channels_padded);
-    // Always use split reader for first conv in resnet which has input channels = 16
-    // TODO: Expose option to split readers for 1D convs to python?
-    if (enable_split_reader) {
-        TT_FATAL(not weight_width_sliced, "split reader does not work with 2d conv");
-        TT_FATAL(
-            (act_block_h_ntiles / block_config.out_subblock_h_ntiles) >= 2,
-            "split reader needs to have at leaset two subblocks");
-    }
-    bool split_reader = enable_split_reader;
-    if (split_reader) {
-        TT_FATAL(
-            block_config.act_block_h_ntiles % block_config.out_subblock_h_ntiles == 0,
-            "Out_block_h must be divisible by out_subblock_h!");
     }
     ttnn::Shape ashape_with_channels_padded({ashape[0], ashape[1], ashape[2], input_channels_padded});
     uint32_t conv_act_size_h = ashape_with_channels_padded[1];
@@ -570,6 +549,33 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
         pad_h = 0;
         pad_w = 0;
     }
+
+    uint32_t input_width = ashape[2];
+    uint32_t input_channels = ashape[3];
+    const bool is_conv1d = is_1d_conv(filter_w, input_width);
+    const bool is_conv_1d_depthwise_conv =
+        is_1d_deptwise_conv(groups, input_channels, output_channels, filter_w, input_width, has_bias);
+    if ((block_sharded || is_conv_1d_depthwise_conv) && enable_split_reader) {
+        enable_split_reader = false;
+        log_warning(tt::LogOp, "Split reader is not supported for block sharded or 1d depthwise conv");
+    }
+
+    TT_FATAL(input_channels_padded >= ashape[3], "Incorrect padding of input channels!");
+    // check is for 16-byte alignment
+    TT_FATAL(
+        // Since fp16 is smalleset data format used for halo output, 8 input_channels is enough for 16 byte alignment
+        input_channels_padded % 8 == 0,
+        "Expected input channels to be padded for 16 byte alignment in L1 ({} % 16 != 0)",
+        input_channels_padded);
+    if (enable_split_reader) {
+        TT_FATAL(
+            (act_block_h_ntiles / block_config.out_subblock_h_ntiles) >= 2,
+            "split reader needs to have at leaset two subblocks");
+        TT_FATAL(
+            block_config.act_block_h_ntiles % block_config.out_subblock_h_ntiles == 0,
+            "Out_block_h must be divisible by out_subblock_h!");
+    }
+
     // Compute the 2d matrix shape
     auto [act_matrix_shape, act_matrix_shape_unpadded] =
         optimized_conv_op_utils::compute_opt_conv_activation_as_mm_shape(
@@ -587,14 +593,6 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
     }
     uint32_t act_matrix_height_unpadded = (uint32_t)act_matrix_shape_unpadded[1];
     uint32_t act_matrix_width_unpadded = (uint32_t)act_matrix_shape_unpadded[2];
-
-    // TODO: Move all these TT_FATALs/checks to validate?
-
-    uint32_t input_width = ashape[2];
-    uint32_t input_channels = ashape[3];
-    bool is_conv1d = is_1d_conv(filter_w, input_width);
-    bool is_conv_1d_depthwise_conv =
-        is_1d_deptwise_conv(groups, input_channels, output_channels, filter_w, input_width, has_bias);
 
     if (has_bias) {
         if (is_conv_1d_depthwise_conv) {
@@ -670,7 +668,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
     uint32_t act_block_h_nsubblocks = block_config.act_block_h_ntiles / block_config.out_subblock_h_ntiles;
     uint32_t act_block_h_nsubblocks_split = act_block_h_nsubblocks;
     uint32_t act_block_h_nsubblocks_split_last = 0;
-    if (split_reader) {
+    if (enable_split_reader) {
         act_block_h_nsubblocks_split_last = act_block_h_nsubblocks / 2;
         act_block_h_nsubblocks_split = act_block_h_nsubblocks - act_block_h_nsubblocks_split_last;
     }
@@ -778,7 +776,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
     {
         log_debug(LogOp, "grid_size: {}", p_config.grid_size);
         log_debug(LogOp, "packer_l1: {}", packer_l1_acc);
-        log_debug(LogOp, "split_reader: {}", split_reader);
+        log_debug(LogOp, "enable_split_reader: {}", enable_split_reader);
         log_debug(LogOp, "enable_act_double_buffer: {}", enable_act_double_buffer);
         log_debug(LogOp, "enable block padding: {}", (per_core_out_matrix_height_ntiles % act_block_h_ntiles != 0));
         log_debug(LogOp, "enable subblock padding: {}", enable_subblock_padding);
@@ -801,7 +799,6 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
     // For debug
     {
         log_debug(LogOp, "multi_core_optimized_conv_sharded_v2_");
-        log_debug(LogOp, "split readers: {}", split_reader);
         log_debug(LogOp, "conv_act_size_h: {}", conv_act_size_h);
         log_debug(LogOp, "conv_act_size_w: {}", conv_act_size_w);
         log_debug(LogOp, "conv_act_c_blocks: {}", conv_act_c_blocks);
@@ -1085,7 +1082,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
         num_weight_cb_tiles = num_weight_cb_tiles * 2;
     }
 
-    if (split_reader) {
+    if (enable_split_reader) {
         if (enable_act_double_buffer) {
             num_act_cb_tiles = act_block_num_tiles_split;
             num_act_cb_second_reader_tiles = act_block_num_tiles_split_last;
@@ -1163,7 +1160,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
             output,
             bias_ntiles_per_core,
             has_bias,
-            split_reader,
+            enable_split_reader,
             fp32_dest_acc_en,
             packer_l1_acc_en,
             cb_indices);
@@ -1192,7 +1189,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
             output,
             bias_ntiles_per_core,
             has_bias,
-            split_reader,
+            enable_split_reader,
             fp32_dest_acc_en,
             packer_l1_acc_en,
             cb_indices);
@@ -1251,7 +1248,6 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
         } else if (is_conv_1d_depthwise_conv) {
             // 1D Depthwise Conv (height sharded)
             TT_FATAL(act_block_w_datums == round_up(conv_act_size_c * filter_w, TILE_WIDTH), "Error");
-            TT_FATAL(split_reader == false, "Split reader not supported for this conv yet!");
 
             compute_kernel = "ttnn/cpp/ttnn/operations/conv/conv2d/device/kernels/compute_depthwise_conv1d.cpp";
             reader_kernel = "ttnn/cpp/ttnn/operations/conv/conv2d/device/kernels/reader_depthwise_conv1d.cpp";
@@ -1304,7 +1300,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
         in1_block_num_tiles *= window_size;
         in0_num_blocks_w /= window_size;
     }
-    uint32_t reader_arg_act_block_h_datums = (split_reader ? act_block_h_datums_split : act_block_h_datums);
+    uint32_t reader_arg_act_block_h_datums = (enable_split_reader ? act_block_h_datums_split : act_block_h_datums);
     TT_FATAL(reader_arg_act_block_h_datums % 2 == 0, "2 Indices are packed in one uint32_t word.");
     if (block_sharded) {
         in0_block_num_tiles = act_block_num_tiles;
@@ -1319,8 +1315,8 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
         (uint32_t)window_outer,
         (uint32_t)window_inner,
         (uint32_t)reader_arg_act_block_h_datums,
-        (uint32_t)(split_reader ? act_block_num_tiles_split / conv_act_c_blocks
-                                : act_block_num_tiles / conv_act_c_blocks),
+        (uint32_t)(enable_split_reader ? act_block_num_tiles_split / conv_act_c_blocks
+                                       : act_block_num_tiles / conv_act_c_blocks),
         (uint32_t)filter_h,
         (uint32_t)filter_w,
         (uint32_t)conv_act_size_w + (pad_w),
@@ -1369,7 +1365,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
         compute_defines["PRE_TILIZE"] = "1";
     }
 
-    if (split_reader) {
+    if (enable_split_reader) {
         reader_defines["SPLIT_READER"] = "1";
         compute_defines["SPLIT_READER"] = "1";
     }
@@ -1407,21 +1403,23 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
         aligned_output_num_pages,
     };
 
-    if (split_reader) {
+    if (enable_split_reader) {
         std::vector<uint32_t> split_reader_args = {
             (uint32_t)act_block_h_datums_split_last,
             (uint32_t)act_block_num_tiles_split_last / conv_act_c_blocks,
             (uint32_t)conv_act_c_read_bytes,
-            (uint32_t)filter_w * conv_act_c_read_bytes,                   // coalesced_read_bytes
-            (uint32_t)(conv_act_size_w + pad_w) * conv_act_c_read_bytes,  // window_outer_offset
-            (uint32_t)act_block_w_extra_align_bytes,                      // only used for 1d systolic variant
-            (uint32_t)act_block_h_datums_split,                           // only used for 1d systolic variant
+            (uint32_t)filter_w,                       // weight_size_w
+            (uint32_t)(conv_act_size_w + pad_w),      // conv_act_size_w_padded
+            (uint32_t)act_block_w_extra_align_bytes,  // only used for 1d systolic variant
+            (uint32_t)act_block_h_datums_split,       // only used for 1d systolic variant
             (uint32_t)act_block_h_datums_last_block,
-            (uint32_t)needs_act_block_zero_out};
+            (uint32_t)needs_act_block_zero_out,
+            (uint32_t)dilation_h,
+            (uint32_t)dilation_w};
         writer_compile_time_args.insert(
             writer_compile_time_args.end(), split_reader_args.begin(), split_reader_args.end());
     } else {
-        std::vector<uint32_t> split_reader_args(9, 0);
+        std::vector<uint32_t> split_reader_args(11, 0);
         writer_compile_time_args.insert(
             writer_compile_time_args.end(), split_reader_args.begin(), split_reader_args.end());
     }

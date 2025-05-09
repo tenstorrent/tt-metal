@@ -5,7 +5,7 @@
 #include <math.h>
 
 #include "tt-metalium/circular_buffer.hpp"
-#include "tt-metalium/circular_buffer_types.hpp"
+#include "tt-metalium/circular_buffer_config.hpp"
 #include "upsample_op.hpp"
 #include "ttnn/operations/math.hpp"
 #include "ttnn/operations/cb_utils.hpp"

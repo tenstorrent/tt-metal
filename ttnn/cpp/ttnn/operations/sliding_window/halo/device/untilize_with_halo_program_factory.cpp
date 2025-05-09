@@ -24,7 +24,7 @@ namespace ttnn::operations::data_movement::detail {
 // Circular buffer indices should be assigned right before their creation.
 struct CBIndices {
     // Invalid value for cb id is 32, number greater than the maximum number of index circular buffer can have.
-    // Not assigning get_next_cb_index() value before creating cb will throw exception in circular_buffer_types.cpp
+    // Not assigning get_next_cb_index() value before creating cb will throw exception in circular_buffer_config.cpp
     // which can be used as a reminder.
     uint32_t src_cb_id = 32;
     uint32_t pad_cb_id = 32;

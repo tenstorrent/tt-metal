@@ -43,9 +43,8 @@ target_sources(
             api/tt-metalium/buffer_types.hpp
             api/tt-metalium/circular_buffer.hpp
             api/tt-metalium/circular_buffer_constants.h
-            api/tt-metalium/circular_buffer_types.hpp
+            api/tt-metalium/circular_buffer_config.hpp
             api/tt-metalium/command_queue.hpp
-            api/tt-metalium/command_queue_common.hpp
             api/tt-metalium/command_queue_interface.hpp
             api/tt-metalium/constants.hpp
             api/tt-metalium/core_coord.hpp
@@ -60,6 +59,7 @@ target_sources(
             api/tt-metalium/distribution_spec.hpp
             api/tt-metalium/event.hpp
             api/tt-metalium/fabric_host_interface.h
+            api/tt-metalium/fabric_edm_packet_header.hpp
             api/tt-metalium/global_circular_buffer.hpp
             api/tt-metalium/global_circular_buffer_impl.hpp
             api/tt-metalium/global_semaphore.hpp
@@ -91,7 +91,6 @@ target_sources(
             api/tt-metalium/small_vector.hpp
             api/tt-metalium/sub_device.hpp
             api/tt-metalium/sub_device_types.hpp
-            api/tt-metalium/system_memory_cq_interface.hpp
             api/tt-metalium/system_mesh.hpp
             api/tt-metalium/tile.hpp
             api/tt-metalium/trace.hpp
@@ -121,6 +120,7 @@ target_sources(
             api/tt-metalium/circular_buffer_constants.h
             api/tt-metalium/dev_msgs.h
             api/tt-metalium/fabric_host_interface.h
+            api/tt-metalium/fabric_edm_packet_header.hpp
             core_descriptors/blackhole_140_arch.yaml
             core_descriptors/wormhole_b0_80_arch.yaml
             fabric/mesh_graph_descriptors/n150_mesh_graph_descriptor.yaml

@@ -17,7 +17,6 @@ class TtMobileNetV2:
             (model_params["fused_conv_0_weight"], model_params["fused_conv_0_bias"]),
             device,
             batchsize,
-            use_shallow_covariant=True,
             deallocate_activation=True,
         )
         self.conv2 = TtMobileNetV2Conv2D(

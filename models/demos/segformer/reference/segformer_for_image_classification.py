@@ -2,15 +2,14 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from models.demos.segformer.reference.segformer_model import (
-    SegformerModelReference,
-    SegformerPreTrainedModel,
-)
+from typing import Optional, Tuple, Union
+
 import torch
 import torch.nn as nn
-from typing import Optional, Union, Tuple
 from torch.nn import BCEWithLogitsLoss, CrossEntropyLoss, MSELoss
 from transformers.models.segformer.modeling_segformer import SegFormerImageClassifierOutput
+
+from models.demos.segformer.reference.segformer_model import SegformerModelReference, SegformerPreTrainedModel
 
 
 class SegformerForImageClassificationReference(SegformerPreTrainedModel):

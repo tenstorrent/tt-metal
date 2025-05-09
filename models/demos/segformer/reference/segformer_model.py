@@ -2,10 +2,12 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+from typing import Optional, Tuple, Union
+
 import torch
-from typing import Union, Tuple, Optional
 from transformers.modeling_outputs import BaseModelOutput
 from transformers.models.segformer.modeling_segformer import SegformerPreTrainedModel
+
 from models.demos.segformer.reference.segformer_encoder import SegformerEncoder
 
 

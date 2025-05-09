@@ -7,7 +7,7 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.utility_functions import comp_pcc, torch2tt_tensor, tt2torch_tensor, pad_by_zero, get_devices_for_t3000
+from models.utility_functions import comp_pcc, get_devices_for_t3000, pad_by_zero, torch2tt_tensor, tt2torch_tensor
 
 
 @pytest.mark.parametrize(

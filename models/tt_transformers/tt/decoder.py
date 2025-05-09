@@ -2,11 +2,11 @@
 
 # SPDX-License-Identifier: Apache-2.0
 import ttnn
-from models.tt_transformers.tt.attention import Attention
-from models.tt_transformers.tt.mlp import MLP
-from models.common.rmsnorm import RMSNorm
 from models.common.lightweightmodule import LightweightModule
+from models.common.rmsnorm import RMSNorm
+from models.tt_transformers.tt.attention import Attention
 from models.tt_transformers.tt.distributed_norm import DistributedNorm
+from models.tt_transformers.tt.mlp import MLP
 from models.tt_transformers.tt.model_config import TensorGroup
 
 

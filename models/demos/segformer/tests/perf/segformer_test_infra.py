@@ -2,31 +2,29 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch
 import math
-import requests
 import time
-import ttnn
 
+import requests
+import torch
+from loguru import logger
+from PIL import Image
+from transformers import SegformerForSemanticSegmentation, SegformerImageProcessor
+from ttnn.model_preprocessing import ParameterDict, ParameterList, preprocess_model_parameters
+
+import ttnn
 from models.demos.segformer.reference.segformer_for_semantic_segmentation import (
     SegformerForSemanticSegmentationReference,
 )
 from models.demos.segformer.tt.ttnn_segformer_for_semantic_segmentation import TtSegformerForSemanticSegmentation
-from models.utility_functions import (
-    is_wormhole_b0,
-    divup,
-)
-from loguru import logger
-from PIL import Image
-from tests.ttnn.integration_tests.segformer.test_segformer_model import (
-    create_custom_preprocessor as create_custom_preprocessor_model,
-)
+from models.utility_functions import divup, is_wormhole_b0
 from tests.ttnn.integration_tests.segformer.test_segformer_decode_head import (
     create_custom_preprocessor as create_custom_preprocessor_decode_head,
 )
+from tests.ttnn.integration_tests.segformer.test_segformer_model import (
+    create_custom_preprocessor as create_custom_preprocessor_model,
+)
 from tests.ttnn.utils_for_testing import assert_with_pcc
-from ttnn.model_preprocessing import preprocess_model_parameters, ParameterDict, ParameterList
-from transformers import SegformerForSemanticSegmentation, SegformerImageProcessor
 
 
 def create_custom_preprocessor(device):
