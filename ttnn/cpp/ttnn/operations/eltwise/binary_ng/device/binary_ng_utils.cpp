@@ -283,6 +283,20 @@ OpConfig::OpConfig(BinaryOpType binary_op_type, std::in_place_type_t<EnumT>) : b
                 TT_THROW("Unsupported binary op for FPU {}", binary_op_type);
             }
             break;
+        case BinaryOpType::GCD:
+            if (is_sfpu_op()) {
+                binary_op = SfpuBinaryOp::GCD;
+            } else {
+                TT_THROW("Unsupported binary op for FPU {}", binary_op_type);
+            }
+            break;
+        case BinaryOpType::LCM:
+            if (is_sfpu_op()) {
+                binary_op = SfpuBinaryOp::LCM;
+            } else {
+                TT_THROW("Unsupported binary op for FPU {}", binary_op_type);
+            }
+            break;
         default: TT_THROW("Unsupported binary op {}", binary_op_type);
     }
 }
@@ -312,6 +326,8 @@ std::pair<std::string, std::string> get_sfpu_init_fn(OpConfig::SfpuBinaryOp sfpu
         case DIV: return {"div_binary_tile_init();", "div_binary_tile"};
         case POWER: return {"power_binary_tile_init();", "power_binary_tile"};
         case RSUB: return {"rsub_binary_tile_init();", "rsub_binary_tile"};
+        case GCD: return {"gcd_tile_init();", "gcd_tile"};
+        case LCM: return {"lcm_tile_init();", "lcm_tile"};
         case LEFT_SHIFT: return {"binary_shift_tile_init();", "binary_left_shift_tile"};
         case RIGHT_SHIFT: return {"binary_shift_tile_init();", "binary_right_shift_tile"};
         case BITWISE_AND: return {"binary_bitwise_tile_init();", "and_binary_tile"};
