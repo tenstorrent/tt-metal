@@ -292,28 +292,7 @@ std::vector<std::optional<Tensor>> ExecuteUnaryBackwardExp::invoke(
     input_grad = input_grad.value_or(ttnn::empty_like(input));
     float t_inf = std::numeric_limits<float>::infinity();
     Tensor exp_result = ttnn::exp(queue_id, input, false, output_mem_config);
-    Tensor result = ttnn::multiply(queue_id, grad, exp_result, std::nullopt, output_mem_config);
-    result = where(
-        queue_id, ttnn::ge(queue_id, result, 1e+38, std::nullopt, output_mem_config), t_inf, result, output_mem_config);
-    result = where(
-        queue_id,
-        ttnn::ge(queue_id, result, -1e+38, std::nullopt, output_mem_config),
-        -t_inf,
-        result,
-        output_mem_config);
-    where(
-        queue_id,
-        ttnn::logical_and(
-            ttnn::ge(
-                queue_id, ttnn::abs(queue_id, exp_result, output_mem_config), 1e+38, std::nullopt, output_mem_config),
-            ttnn::ltz(queue_id, grad, output_mem_config),
-            std::nullopt,
-            output_mem_config),
-        -t_inf,
-        result,
-        output_mem_config,
-        input_grad);
-
+    Tensor result = ttnn::multiply(queue_id, grad, exp_result, std::nullopt, output_mem_config, input_grad);
     grad_tensor.emplace_back(input_grad);
     return grad_tensor;
 }
@@ -827,12 +806,12 @@ std::vector<Tensor> ExecuteUnaryBackwardLeakyRelu::invoke(
 }
 
 // ELU
-// result : grad * (torch.where(input >= 0, 1, alpha * torch.exp(input)))
+// result : grad * (torch.where(input > 0, 1, alpha * torch.exp(input)))
 std::vector<Tensor> ExecuteUnaryBackwardElu::invoke(
     const Tensor& grad, const Tensor& input, float alpha, const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
     Tensor grad_result = where(
-        ttnn::gez(input, output_mem_config),
+        ttnn::gtz(input, output_mem_config),
         grad,
         ttnn::multiply(
             grad,
