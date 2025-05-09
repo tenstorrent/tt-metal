@@ -13,7 +13,7 @@ public:
     RemoteOptimizer(ttml::serialization::NamedParameters parameters, int aggregator_rank) :
         ttml::optimizers::OptimizerBase(std::move(parameters)) {
         m_aggregator_rank = aggregator_rank;
-        m_sorted_parameters = get_sorted_parameters();
+        m_sorted_parameters = SortedParameters(m_parameters.begin(), m_parameters.end());
     }
 
     void zero_grad() override {
@@ -65,11 +65,15 @@ public:
     }
 
     void receive_weights() {
+        fmt::println("[worker] sorted parameters size: {}", m_sorted_parameters.size());
         for (auto& [name, tensor_ptr] : m_sorted_parameters) {
             auto tensor = tensor_ptr->get_value();
+            fmt::println("[worker] receiving weights {}", name);
             ttml::core::distributed::recv_tensor(tensor, m_aggregator_rank);
+            fmt::println("[worker] received weights {}", name);
             tensor_ptr->set_value(tensor);
         }
+        fmt::println("[worker] received weights");
     }
 
     void set_lr(float lr) override {

@@ -754,7 +754,9 @@ int main(int argc, char **argv) {
         if (!optimizer_ptr) {
             throw std::runtime_error("Optimizer is not RemoteOptimizer");
         }
+        fmt::println("[worker] Remote optimizer receiving weights from rank {}", config.num_mpi_workers);
         optimizer_ptr->receive_weights();
+        fmt::println("[worker] Remote optimizer received weights from rank {}", config.num_mpi_workers);
     } else {
         // otherwise proceed with normal loading training state if necessary
         if (!config.model_path.empty() && std::filesystem::exists(config.model_path)) {

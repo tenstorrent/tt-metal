@@ -90,20 +90,29 @@ void send_weights_from_optimizer_to_workers(const SortedParameters &sorted_model
     auto &mpi_ctx = ctx.get_mpi_context();
 
     uint32_t optimizer_rank = mpi_ctx.get_rank() + 1U;
-
+    fmt::println("[aggregator] Rank {}: Receiving weights and sending to workers", mpi_ctx.get_rank(), optimizer_rank);
     assert(workers > 0);
+
+    fmt::println("Sorted model parameters size: {}", sorted_model_parameters.size());
+
     for (auto &[name, tensor_ptr] : sorted_model_parameters) {
         if (!tensor_ptr->get_requires_grad()) {
             continue;
         }
 
         auto tensor = tensor_ptr->get_value();
+        fmt::println("[aggregator] Rank {}: Receiving weights {} from optimizer", mpi_ctx.get_rank(), name);
         ttml::core::distributed::recv_tensor(tensor, optimizer_rank);
+        fmt::println("[aggregator] Rank {}: Received weights {} from optimizer", mpi_ctx.get_rank(), name);
 
+        fmt::println("[aggregator] Rank {}: Sending weights {} to workers({})", mpi_ctx.get_rank(), name, workers);
         for (uint32_t worker_id = 0; worker_id < workers; ++worker_id) {
             ttml::core::distributed::send_tensor(tensor, worker_id);
         }
+
+        fmt::println("[aggregator] Rank {}: Sent weights {} to all workers", mpi_ctx.get_rank(), name);
     }
+    fmt::println("[aggregator] Rank {}: send_weights_from_optimizer_to_workers done!", mpi_ctx.get_rank());
 }
 
 int main(int argc, char **argv) {
@@ -148,11 +157,13 @@ int main(int argc, char **argv) {
     uint32_t global_step = 0;
     for (uint32_t epoch = 0; epoch < config.num_epochs; ++epoch) {
         for (uint32_t step = 0; step < steps_per_dataset; ++step, ++global_step) {
+            fmt::println("[aggregator] Rank {}: Step {} in progress", mpi_ctx.get_rank(), global_step);
             send_aggregated_gradients_from_workers_to_optimizer(sorted_model_parameters, workers);
             send_weights_from_optimizer_to_workers(sorted_model_parameters, workers);
             if (global_step >= config.max_steps) {
                 break;
             }
+            fmt::println("[aggregator] Rank {}: Step {} done", mpi_ctx.get_rank(), global_step);
         }
         if (global_step >= config.max_steps) {
             break;
