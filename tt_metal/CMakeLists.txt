@@ -43,7 +43,7 @@ target_sources(
             api/tt-metalium/buffer_types.hpp
             api/tt-metalium/circular_buffer.hpp
             api/tt-metalium/circular_buffer_constants.h
-            api/tt-metalium/circular_buffer_types.hpp
+            api/tt-metalium/circular_buffer_config.hpp
             api/tt-metalium/command_queue.hpp
             api/tt-metalium/command_queue_interface.hpp
             api/tt-metalium/constants.hpp

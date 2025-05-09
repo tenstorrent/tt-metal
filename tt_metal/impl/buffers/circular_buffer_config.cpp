@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "circular_buffer_types.hpp"
+#include "circular_buffer_config.hpp"
 
 #include <unordered_map>
 

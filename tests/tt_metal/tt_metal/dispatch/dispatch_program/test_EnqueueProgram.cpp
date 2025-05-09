@@ -28,7 +28,7 @@
 
 #include <tt-metalium/assert.hpp>
 #include <tt-metalium/circular_buffer_constants.h>
-#include <tt-metalium/circular_buffer_types.hpp>
+#include <tt-metalium/circular_buffer_config.hpp>
 #include "command_queue_fixture.hpp"
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/data_types.hpp>

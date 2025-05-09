@@ -30,7 +30,7 @@
 
 #include <tt-metalium/assert.hpp>
 #include <tt-metalium/base_types.hpp>
-#include <tt-metalium/circular_buffer_types.hpp>
+#include <tt-metalium/circular_buffer_config.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/logger.hpp>
