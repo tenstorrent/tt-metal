@@ -372,11 +372,11 @@ def run_mamba_demo(
     )
     logger.info(f"Time to first token: {(1e3 * time_to_first_token):.2f} ms")
 
-    chunk_size_to_prefill_targets_tok_per_s = {32: 135.0, 128: 400.8}  # perf is different for different chunk sizes
+    chunk_size_to_prefill_targets_tok_per_s = {32: 135.0, 128: 448.0}  # perf is different for different chunk sizes
     targets = {
         "prefill_t/s": chunk_size_to_prefill_targets_tok_per_s[prefill_chunk_size],
-        "decode_t/s": 375,
-        "decode_t/s/u": 11.9,
+        "decode_t/s": 442.0,
+        "decode_t/s/u": 13.8,
     }
     warmup_iterations = {"inference_prefill": 0, "inference_decode": 0}
 
@@ -396,7 +396,7 @@ def run_mamba_demo(
     )
 
     if assert_on_performance_measurements:
-        verify_perf(measurements, targets)
+        verify_perf(measurements, targets, high_tol_percentage=1.20)
     else:
         logger.warning(f"Skipping performance checks (this is expected for functional tests)")
 
