@@ -114,7 +114,6 @@ jobs:
       package-artifact-name: ${{ needs.build-tsan.outputs.packages-artifact-name }}
       runner: ${{ matrix.platform }}
       per-test-timeout: 10 # TSan can be slow; relax the timeout somewhat
-      caller-name: "Merge Gate"
 
   build-asan:
     if: ${{ github.ref_name == 'main' ||
