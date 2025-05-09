@@ -100,9 +100,13 @@ tt::tt_metal::operation::ProgramWithCallbacks AllGatherConcat::create_program_at
             device_index = i;
             if (i != 0) {
                 backward_device = devices.at(i - 1);
+            } else if (this->topology == ttnn::ccl::Topology::Ring) {
+                backward_device = devices.at(this->ring_size - 1);
             }
             if (i != this->ring_size - 1) {
                 forward_device = devices.at(i + 1);
+            } else if (this->topology == ttnn::ccl::Topology::Ring) {
+                forward_device = devices.at(0);
             }
         }
     }
@@ -163,9 +167,6 @@ Tensor all_gather_concat(
     const std::optional<uint32_t> num_links,
     const ttnn::ccl::Topology topology,
     std::optional<tt::tt_metal::SubDeviceId> sub_device_id) {
-    TT_FATAL(
-        topology == ttnn::ccl::Topology::Linear,
-        "This all_gather API with cluster_axis is currently supported only for the Linear topology");
     const auto mesh_view = mesh_device.get_view();
     uint32_t num_devices = (cluster_axis == 0) ? mesh_view.num_rows() : mesh_view.num_cols();
 
