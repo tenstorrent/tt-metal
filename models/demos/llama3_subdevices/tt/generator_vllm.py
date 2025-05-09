@@ -73,9 +73,6 @@ def initialize_vllm_text_transformer(
             max_seq_len=max_seq_len,
         )
 
-        assert model_args_i.model_name.replace("-", "") in hf_config._name_or_path.replace(
-            "-", ""
-        ), f"The model specified in vLLM ({hf_config._name_or_path}) does not match the model name ({model_args_i.model_name}) with model weights ({model_args_i.DEFAULT_CKPT_DIR})."
         if n_layers is not None:
             model_args_i.n_layers = n_layers
 
@@ -110,6 +107,8 @@ class LlamaForCausalLM(Generator):
 
     @classmethod
     def initialize_vllm_model(cls, hf_config, mesh_device, max_batch_size, n_layers=None, tt_data_parallel=1):
+        # max_seq_len = 128
+        # n_layers = 1
         tt_model, model_args = initialize_vllm_text_transformer(
             hf_config,
             tt_data_parallel,

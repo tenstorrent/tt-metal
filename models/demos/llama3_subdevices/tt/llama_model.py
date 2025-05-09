@@ -271,7 +271,6 @@ class TtTransformer(LightweightModule):
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
         )
         tokens = ttnn.unsqueeze_to_4D(tokens)
-        current_pos[:] = current_pos[0]
         rot_current_pos = torch.maximum(
             current_pos, torch.tensor(0, dtype=torch.int64)
         )  # Ensure position indices are non-negative
