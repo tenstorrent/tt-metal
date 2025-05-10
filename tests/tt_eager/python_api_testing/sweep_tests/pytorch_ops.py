@@ -86,7 +86,7 @@ def normalize_global(x, *args, **kwargs):
 
 # Ternary Ops
 def sum(x, *args, dim, **kwargs):
-    return torch.sum(x, dim=dim, keepdim=True)
+    return torch.sum(x, dim=dim)
 
 
 def where(x, y, z, *args, **kwargs):
