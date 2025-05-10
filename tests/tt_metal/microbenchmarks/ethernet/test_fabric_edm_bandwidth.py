@@ -383,6 +383,7 @@ def run_fabric_edm(
 @pytest.mark.parametrize("num_op_invocations", [1])
 @pytest.mark.parametrize("line_sync", [True])
 @pytest.mark.parametrize("packet_size", [4096])
+@pytest.mark.parametrize("noc_message_type", ["noc_unicast_write", "noc_unicast_scatter_write"])
 @pytest.mark.parametrize("line_size, num_links", [(4, 1), (4, 2), (4, 3), (4, 4)])
 def test_fabric_edm_mcast_half_ring_bw(
     num_messages,
@@ -391,11 +392,12 @@ def test_fabric_edm_mcast_half_ring_bw(
     line_sync,
     line_size,
     packet_size,
+    noc_message_type,
 ):
     run_fabric_edm(
         is_unicast=False,
         num_messages=num_messages,
-        noc_message_type="noc_unicast_write",
+        noc_message_type=noc_message_type,
         num_links=num_links,
         num_op_invocations=num_op_invocations,
         line_sync=line_sync,
@@ -414,19 +416,29 @@ def test_fabric_edm_mcast_half_ring_bw(
 @pytest.mark.parametrize("line_sync", [True])
 @pytest.mark.parametrize("line_size", [4])
 @pytest.mark.parametrize("num_links", [1])
-@pytest.mark.parametrize("packet_size", [16, 2048, 4096])
+@pytest.mark.parametrize(
+    "test_params",
+    [
+        pytest.param(("noc_unicast_write", 16), id="noc_unicast_write_16"),
+        pytest.param(("noc_unicast_write", 2048), id="noc_unicast_write_2048"),
+        pytest.param(("noc_unicast_write", 4096), id="noc_unicast_write_4096"),
+        pytest.param(("noc_unicast_scatter_write", 2048), id="noc_unicast_scatter_write_2048"),
+        pytest.param(("noc_unicast_scatter_write", 4096), id="noc_unicast_scatter_write_4096"),
+    ],
+)
 def test_fabric_4chip_one_link_mcast_full_ring_bw(
     num_messages,
     num_links,
     num_op_invocations,
     line_sync,
     line_size,
-    packet_size,
+    test_params,
 ):
+    noc_message_type, packet_size = test_params
     run_fabric_edm(
         is_unicast=False,
         num_messages=num_messages,
-        noc_message_type="noc_unicast_write",
+        noc_message_type=noc_message_type,
         num_links=num_links,
         num_op_invocations=num_op_invocations,
         line_sync=line_sync,
@@ -443,6 +455,7 @@ def test_fabric_4chip_one_link_mcast_full_ring_bw(
 @pytest.mark.parametrize("line_sync", [True])
 @pytest.mark.parametrize("line_size", [4])
 @pytest.mark.parametrize("num_links", [2, 3, 4])
+@pytest.mark.parametrize("noc_message_type", ["noc_unicast_write", "noc_unicast_scatter_write"])
 @pytest.mark.parametrize("packet_size", [4096])
 def test_fabric_4chip_multi_link_mcast_full_ring_bw(
     num_messages,
@@ -451,11 +464,12 @@ def test_fabric_4chip_multi_link_mcast_full_ring_bw(
     line_sync,
     line_size,
     packet_size,
+    noc_message_type,
 ):
     run_fabric_edm(
         is_unicast=False,
         num_messages=num_messages,
-        noc_message_type="noc_unicast_write",
+        noc_message_type=noc_message_type,
         num_links=num_links,
         num_op_invocations=num_op_invocations,
         line_sync=line_sync,
@@ -472,19 +486,29 @@ def test_fabric_4chip_multi_link_mcast_full_ring_bw(
 @pytest.mark.parametrize("line_sync", [True])
 @pytest.mark.parametrize("line_size", [8])
 @pytest.mark.parametrize("num_links", [1])
-@pytest.mark.parametrize("packet_size", [16, 2048, 4096])
+@pytest.mark.parametrize(
+    "test_params",
+    [
+        pytest.param(("noc_unicast_write", 16), id="noc_unicast_write_16"),
+        pytest.param(("noc_unicast_write", 2048), id="noc_unicast_write_2048"),
+        pytest.param(("noc_unicast_write", 4096), id="noc_unicast_write_4096"),
+        pytest.param(("noc_unicast_scatter_write", 2048), id="noc_unicast_scatter_write_2048"),
+        pytest.param(("noc_unicast_scatter_write", 4096), id="noc_unicast_scatter_write_4096"),
+    ],
+)
 def test_fabric_8chip_one_link_edm_mcast_full_ring_bw(
     num_messages,
     num_links,
     num_op_invocations,
     line_sync,
     line_size,
-    packet_size,
+    test_params,
 ):
+    noc_message_type, packet_size = test_params
     run_fabric_edm(
         is_unicast=False,
         num_messages=num_messages,
-        noc_message_type="noc_unicast_write",
+        noc_message_type=noc_message_type,
         num_links=num_links,
         num_op_invocations=num_op_invocations,
         line_sync=line_sync,
@@ -500,6 +524,7 @@ def test_fabric_8chip_one_link_edm_mcast_full_ring_bw(
 @pytest.mark.parametrize("line_sync", [True])
 @pytest.mark.parametrize("line_size", [8])
 @pytest.mark.parametrize("num_links", [2, 3, 4])
+@pytest.mark.parametrize("noc_message_type", ["noc_unicast_write", "noc_unicast_scatter_write"])
 @pytest.mark.parametrize("packet_size", [4096])
 def test_fabric_8chip_multi_link_edm_mcast_full_ring_bw(
     num_messages,
@@ -508,6 +533,7 @@ def test_fabric_8chip_multi_link_edm_mcast_full_ring_bw(
     line_sync,
     line_size,
     packet_size,
+    noc_message_type,
 ):
     run_fabric_edm(
         is_unicast=False,
@@ -530,20 +556,30 @@ def test_fabric_8chip_multi_link_edm_mcast_full_ring_bw(
 @pytest.mark.parametrize("line_sync", [True])
 @pytest.mark.parametrize("num_links", [1])
 @pytest.mark.parametrize("line_size", [4])
-@pytest.mark.parametrize("packet_size", [16, 2048, 4096])
+@pytest.mark.parametrize(
+    "test_params",
+    [
+        pytest.param(("noc_unicast_write", 16), id="noc_unicast_write_16"),
+        pytest.param(("noc_unicast_write", 2048), id="noc_unicast_write_2048"),
+        pytest.param(("noc_unicast_write", 4096), id="noc_unicast_write_4096"),
+        pytest.param(("noc_unicast_scatter_write", 2048), id="noc_unicast_scatter_write_2048"),
+        pytest.param(("noc_unicast_scatter_write", 4096), id="noc_unicast_scatter_write_4096"),
+    ],
+)
 def test_fabric_4_chip_one_link_mcast_saturate_chip_to_chip_ring_bw(
     num_messages,
     num_links,
     num_op_invocations,
     line_sync,
     line_size,
-    packet_size,
+    test_params,
 ):
+    noc_message_type, packet_size = test_params
     run_fabric_edm(
         is_unicast=False,
         num_messages=num_messages,
         num_links=num_links,
-        noc_message_type="noc_unicast_write",
+        noc_message_type=noc_message_type,
         num_op_invocations=num_op_invocations,
         line_sync=line_sync,
         line_size=line_size,
@@ -558,6 +594,7 @@ def test_fabric_4_chip_one_link_mcast_saturate_chip_to_chip_ring_bw(
 @pytest.mark.parametrize("line_sync", [True])
 @pytest.mark.parametrize("num_links", [2, 3, 4])
 @pytest.mark.parametrize("line_size", [4])
+@pytest.mark.parametrize("noc_message_type", ["noc_unicast_write", "noc_unicast_scatter_write"])
 @pytest.mark.parametrize("packet_size", [4096])
 def test_fabric_4_chip_multi_link_mcast_saturate_chip_to_chip_ring_bw(
     num_messages,
@@ -566,12 +603,13 @@ def test_fabric_4_chip_multi_link_mcast_saturate_chip_to_chip_ring_bw(
     line_sync,
     line_size,
     packet_size,
+    noc_message_type,
 ):
     run_fabric_edm(
         is_unicast=False,
         num_messages=num_messages,
         num_links=num_links,
-        noc_message_type="noc_unicast_write",
+        noc_message_type=noc_message_type,
         num_op_invocations=num_op_invocations,
         line_sync=line_sync,
         line_size=line_size,
@@ -754,7 +792,16 @@ def test_fabric_6u_4chip_rows_mcast_bw(
 @pytest.mark.parametrize("line_sync", [True])
 @pytest.mark.parametrize("line_size", [4])
 @pytest.mark.parametrize("num_links", [1])
-@pytest.mark.parametrize("packet_size", [16, 2048, 4096])
+@pytest.mark.parametrize(
+    "test_params",
+    [
+        pytest.param(("noc_unicast_write", 16), id="noc_unicast_write_16"),
+        pytest.param(("noc_unicast_write", 2048), id="noc_unicast_write_2048"),
+        pytest.param(("noc_unicast_write", 4096), id="noc_unicast_write_4096"),
+        pytest.param(("noc_unicast_scatter_write", 2048), id="noc_unicast_scatter_write_2048"),
+        pytest.param(("noc_unicast_scatter_write", 4096), id="noc_unicast_scatter_write_4096"),
+    ],
+)
 @pytest.mark.parametrize("fabric_test_mode", [FabricTestMode.Linear, FabricTestMode.RingAsLinear])
 def test_fabric_4chip_one_link_mcast_bw(
     num_messages,
@@ -762,14 +809,15 @@ def test_fabric_4chip_one_link_mcast_bw(
     num_op_invocations,
     line_sync,
     line_size,
-    packet_size,
+    test_params,
     fabric_test_mode,
 ):
+    noc_message_type, packet_size = test_params
     run_fabric_edm(
         is_unicast=False,
         num_messages=num_messages,
         num_links=num_links,
-        noc_message_type="noc_unicast_write",
+        noc_message_type=noc_message_type,
         num_op_invocations=num_op_invocations,
         line_sync=line_sync,
         line_size=line_size,
@@ -786,7 +834,16 @@ def test_fabric_4chip_one_link_mcast_bw(
 @pytest.mark.parametrize("line_sync", [True])
 @pytest.mark.parametrize("line_size", [4])
 @pytest.mark.parametrize("num_links", [1])
-@pytest.mark.parametrize("packet_size", [16, 2048, 4096])
+@pytest.mark.parametrize(
+    "test_params",
+    [
+        pytest.param(("noc_unicast_write", 16), id="noc_unicast_write_16"),
+        pytest.param(("noc_unicast_write", 2048), id="noc_unicast_write_2048"),
+        pytest.param(("noc_unicast_write", 4096), id="noc_unicast_write_4096"),
+        pytest.param(("noc_unicast_scatter_write", 2048), id="noc_unicast_scatter_write_2048"),
+        pytest.param(("noc_unicast_scatter_write", 4096), id="noc_unicast_scatter_write_4096"),
+    ],
+)
 @pytest.mark.parametrize("fabric_test_mode", [FabricTestMode.Linear, FabricTestMode.RingAsLinear])
 def test_fabric_4chip_one_link_bidirectional_single_producer_mcast_bw(
     num_messages,
@@ -794,14 +851,15 @@ def test_fabric_4chip_one_link_bidirectional_single_producer_mcast_bw(
     num_op_invocations,
     line_sync,
     line_size,
-    packet_size,
+    test_params,
     fabric_test_mode,
 ):
+    noc_message_type, packet_size = test_params
     run_fabric_edm(
         is_unicast=False,
         num_messages=num_messages,
         num_links=num_links,
-        noc_message_type="noc_unicast_write",
+        noc_message_type=noc_message_type,
         num_op_invocations=num_op_invocations,
         line_sync=line_sync,
         line_size=line_size,
@@ -818,7 +876,16 @@ def test_fabric_4chip_one_link_bidirectional_single_producer_mcast_bw(
 @pytest.mark.parametrize("line_sync", [True])
 @pytest.mark.parametrize("line_size", [4])
 @pytest.mark.parametrize("num_links", [1])
-@pytest.mark.parametrize("packet_size", [16, 2048, 4096])
+@pytest.mark.parametrize(
+    "test_params",
+    [
+        pytest.param(("noc_unicast_write", 16), id="noc_unicast_write_16"),
+        pytest.param(("noc_unicast_write", 2048), id="noc_unicast_write_2048"),
+        pytest.param(("noc_unicast_write", 4096), id="noc_unicast_write_4096"),
+        pytest.param(("noc_unicast_scatter_write", 2048), id="noc_unicast_scatter_write_2048"),
+        pytest.param(("noc_unicast_scatter_write", 4096), id="noc_unicast_scatter_write_4096"),
+    ],
+)
 @pytest.mark.parametrize("fabric_test_mode", [FabricTestMode.Linear, FabricTestMode.RingAsLinear])
 def test_fabric_4chip_one_link_unidirectional_single_producer_mcast_bw(
     num_messages,
@@ -826,14 +893,15 @@ def test_fabric_4chip_one_link_unidirectional_single_producer_mcast_bw(
     num_op_invocations,
     line_sync,
     line_size,
-    packet_size,
+    test_params,
     fabric_test_mode,
 ):
+    noc_message_type, packet_size = test_params
     run_fabric_edm(
         is_unicast=False,
         num_messages=num_messages,
         num_links=num_links,
-        noc_message_type="noc_unicast_write",
+        noc_message_type=noc_message_type,
         num_op_invocations=num_op_invocations,
         line_sync=line_sync,
         line_size=line_size,
@@ -850,7 +918,16 @@ def test_fabric_4chip_one_link_unidirectional_single_producer_mcast_bw(
 @pytest.mark.parametrize("line_sync", [True])
 @pytest.mark.parametrize("line_size", [4])
 @pytest.mark.parametrize("num_links", [2, 3, 4])
-@pytest.mark.parametrize("packet_size", [16, 2048, 4096])
+@pytest.mark.parametrize(
+    "test_params",
+    [
+        pytest.param(("noc_unicast_write", 16), id="noc_unicast_write_16"),
+        pytest.param(("noc_unicast_write", 2048), id="noc_unicast_write_2048"),
+        pytest.param(("noc_unicast_write", 4096), id="noc_unicast_write_4096"),
+        pytest.param(("noc_unicast_scatter_write", 2048), id="noc_unicast_scatter_write_2048"),
+        pytest.param(("noc_unicast_scatter_write", 4096), id="noc_unicast_scatter_write_4096"),
+    ],
+)
 @pytest.mark.parametrize("fabric_test_mode", [FabricTestMode.Linear, FabricTestMode.RingAsLinear])
 def test_fabric_4chip_two_link_mcast_bw(
     num_messages,
@@ -858,13 +935,14 @@ def test_fabric_4chip_two_link_mcast_bw(
     num_op_invocations,
     line_sync,
     line_size,
-    packet_size,
+    test_params,
     fabric_test_mode,
 ):
+    noc_message_type, packet_size = test_params
     run_fabric_edm(
         is_unicast=False,
         num_messages=num_messages,
-        noc_message_type="noc_unicast_write",
+        noc_message_type=noc_message_type,
         num_links=num_links,
         num_op_invocations=num_op_invocations,
         line_sync=line_sync,
@@ -882,7 +960,16 @@ def test_fabric_4chip_two_link_mcast_bw(
 @pytest.mark.parametrize("line_sync", [True])
 @pytest.mark.parametrize("line_size", [2])
 @pytest.mark.parametrize("num_links", [1])
-@pytest.mark.parametrize("packet_size", [16, 2048, 4096])
+@pytest.mark.parametrize(
+    "test_params",
+    [
+        pytest.param(("noc_unicast_write", 16), id="noc_unicast_write_16"),
+        pytest.param(("noc_unicast_write", 2048), id="noc_unicast_write_2048"),
+        pytest.param(("noc_unicast_write", 4096), id="noc_unicast_write_4096"),
+        pytest.param(("noc_unicast_scatter_write", 2048), id="noc_unicast_scatter_write_2048"),
+        pytest.param(("noc_unicast_scatter_write", 4096), id="noc_unicast_scatter_write_4096"),
+    ],
+)
 @pytest.mark.parametrize("fabric_test_mode", [FabricTestMode.Linear, FabricTestMode.RingAsLinear])
 def test_fabric_one_link_non_forwarding_unicast_bw(
     num_messages,
@@ -890,14 +977,15 @@ def test_fabric_one_link_non_forwarding_unicast_bw(
     num_op_invocations,
     line_sync,
     line_size,
-    packet_size,
+    test_params,
     fabric_test_mode,
 ):
+    noc_message_type, packet_size = test_params
     run_fabric_edm(
         is_unicast=True,
         num_messages=num_messages,
         num_links=num_links,
-        noc_message_type="noc_unicast_write",
+        noc_message_type=noc_message_type,
         num_op_invocations=num_op_invocations,
         line_sync=line_sync,
         line_size=line_size,
@@ -913,7 +1001,16 @@ def test_fabric_one_link_non_forwarding_unicast_bw(
 @pytest.mark.parametrize("line_sync", [True])
 @pytest.mark.parametrize("line_size", [2])
 @pytest.mark.parametrize("num_links", [2])
-@pytest.mark.parametrize("packet_size", [16, 2048, 4096])
+@pytest.mark.parametrize(
+    "test_params",
+    [
+        pytest.param(("noc_unicast_write", 16), id="noc_unicast_write_16"),
+        pytest.param(("noc_unicast_write", 2048), id="noc_unicast_write_2048"),
+        pytest.param(("noc_unicast_write", 4096), id="noc_unicast_write_4096"),
+        pytest.param(("noc_unicast_scatter_write", 2048), id="noc_unicast_scatter_write_2048"),
+        pytest.param(("noc_unicast_scatter_write", 4096), id="noc_unicast_scatter_write_4096"),
+    ],
+)
 @pytest.mark.parametrize("fabric_test_mode", [FabricTestMode.Linear, FabricTestMode.RingAsLinear])
 def test_fabric_two_link_non_forwarding_unicast_bw(
     num_messages,
@@ -921,14 +1018,15 @@ def test_fabric_two_link_non_forwarding_unicast_bw(
     num_op_invocations,
     line_sync,
     line_size,
-    packet_size,
+    test_params,
     fabric_test_mode,
 ):
+    noc_message_type, packet_size = test_params
     run_fabric_edm(
         is_unicast=True,
         num_messages=num_messages,
         num_links=num_links,
-        noc_message_type="noc_unicast_write",
+        noc_message_type=noc_message_type,
         num_op_invocations=num_op_invocations,
         line_sync=line_sync,
         line_size=line_size,
@@ -945,7 +1043,16 @@ def test_fabric_two_link_non_forwarding_unicast_bw(
 @pytest.mark.parametrize("line_sync", [True])
 @pytest.mark.parametrize("line_size", [4])
 @pytest.mark.parametrize("num_links", [1])
-@pytest.mark.parametrize("packet_size", [16, 2048, 4096])
+@pytest.mark.parametrize(
+    "test_params",
+    [
+        pytest.param(("noc_unicast_write", 16), id="noc_unicast_write_16"),
+        pytest.param(("noc_unicast_write", 2048), id="noc_unicast_write_2048"),
+        pytest.param(("noc_unicast_write", 4096), id="noc_unicast_write_4096"),
+        pytest.param(("noc_unicast_scatter_write", 2048), id="noc_unicast_scatter_write_2048"),
+        pytest.param(("noc_unicast_scatter_write", 4096), id="noc_unicast_scatter_write_4096"),
+    ],
+)
 @pytest.mark.parametrize("fabric_test_mode", [FabricTestMode.Linear, FabricTestMode.RingAsLinear])
 def test_fabric_one_link_forwarding_unicast_multiproducer_multihop_bw(
     num_messages,
@@ -953,14 +1060,15 @@ def test_fabric_one_link_forwarding_unicast_multiproducer_multihop_bw(
     num_op_invocations,
     line_sync,
     line_size,
-    packet_size,
+    test_params,
     fabric_test_mode,
 ):
+    noc_message_type, packet_size = test_params
     run_fabric_edm(
         is_unicast=True,
         num_messages=num_messages,
         num_links=num_links,
-        noc_message_type="noc_unicast_write",
+        noc_message_type=noc_message_type,
         num_op_invocations=num_op_invocations,
         line_sync=line_sync,
         line_size=line_size,
@@ -977,7 +1085,16 @@ def test_fabric_one_link_forwarding_unicast_multiproducer_multihop_bw(
 @pytest.mark.parametrize("line_sync", [True])
 @pytest.mark.parametrize("line_size", [4])
 @pytest.mark.parametrize("num_links", [1])
-@pytest.mark.parametrize("packet_size", [16, 2048, 4096])
+@pytest.mark.parametrize(
+    "test_params",
+    [
+        pytest.param(("noc_unicast_write", 16), id="noc_unicast_write_16"),
+        pytest.param(("noc_unicast_write", 2048), id="noc_unicast_write_2048"),
+        pytest.param(("noc_unicast_write", 4096), id="noc_unicast_write_4096"),
+        pytest.param(("noc_unicast_scatter_write", 2048), id="noc_unicast_scatter_write_2048"),
+        pytest.param(("noc_unicast_scatter_write", 4096), id="noc_unicast_scatter_write_4096"),
+    ],
+)
 @pytest.mark.parametrize("fabric_test_mode", [FabricTestMode.Linear, FabricTestMode.RingAsLinear])
 def test_fabric_one_link_forwarding_unicast_single_producer_multihop_bw(
     num_messages,
@@ -985,14 +1102,15 @@ def test_fabric_one_link_forwarding_unicast_single_producer_multihop_bw(
     num_op_invocations,
     line_sync,
     line_size,
-    packet_size,
+    test_params,
     fabric_test_mode,
 ):
+    noc_message_type, packet_size = test_params
     run_fabric_edm(
         is_unicast=True,
         num_messages=num_messages,
         num_links=num_links,
-        noc_message_type="noc_unicast_write",
+        noc_message_type=noc_message_type,
         num_op_invocations=num_op_invocations,
         line_sync=line_sync,
         line_size=line_size,
@@ -1009,7 +1127,16 @@ def test_fabric_one_link_forwarding_unicast_single_producer_multihop_bw(
 @pytest.mark.parametrize("line_sync", [True])
 @pytest.mark.parametrize("line_size", [4])
 @pytest.mark.parametrize("num_links", [1])
-@pytest.mark.parametrize("packet_size", [16, 2048, 4096])
+@pytest.mark.parametrize(
+    "test_params",
+    [
+        pytest.param(("noc_unicast_write", 16), id="noc_unicast_write_16"),
+        pytest.param(("noc_unicast_write", 2048), id="noc_unicast_write_2048"),
+        pytest.param(("noc_unicast_write", 4096), id="noc_unicast_write_4096"),
+        pytest.param(("noc_unicast_scatter_write", 2048), id="noc_unicast_scatter_write_2048"),
+        pytest.param(("noc_unicast_scatter_write", 4096), id="noc_unicast_scatter_write_4096"),
+    ],
+)
 @pytest.mark.parametrize("fabric_test_mode", [FabricTestMode.Linear, FabricTestMode.RingAsLinear])
 def test_fabric_one_link_forwarding_unicast_unidirectional_single_producer_multihop_bw(
     num_messages,
@@ -1017,14 +1144,15 @@ def test_fabric_one_link_forwarding_unicast_unidirectional_single_producer_multi
     num_op_invocations,
     line_sync,
     line_size,
-    packet_size,
+    test_params,
     fabric_test_mode,
 ):
+    noc_message_type, packet_size = test_params
     run_fabric_edm(
         is_unicast=True,
         num_messages=num_messages,
         num_links=num_links,
-        noc_message_type="noc_unicast_write",
+        noc_message_type=noc_message_type,
         num_op_invocations=num_op_invocations,
         line_sync=line_sync,
         line_size=line_size,
