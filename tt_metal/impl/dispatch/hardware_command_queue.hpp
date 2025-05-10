@@ -31,6 +31,7 @@
 #include <umd/device/tt_core_coordinates.h>
 #include "vector_aligned.hpp"
 #include "worker_config_buffer.hpp"
+#include "ringbuffer_cache.hpp"
 
 namespace tt {
 namespace tt_metal {
@@ -115,6 +116,12 @@ public:
 
     void finish(tt::stl::Span<const SubDeviceId> sub_device_ids) override;
 
+    std::pair<bool, size_t> query_prefetcher_cache(uint64_t pgm_id, uint32_t lengthB) override;
+
+    void reset_prefetcher_cache() override;
+
+    int get_prefetcher_cache_sizeB() const override;
+
     IDevice* device() override;
 
 private:
@@ -161,6 +168,12 @@ private:
     CoreCoord virtual_enqueue_program_dispatch_core_;
     CoreCoord completion_queue_writer_core_;
     NOC noc_index_;
+
+    const int prefetcher_dram_aligned_block_size_;
+    const int prefetcher_ringbuffer_cache_sizeB_;
+    const int prefetcher_dram_aligned_num_blocks_;
+    const int prefetcher_cache_manager_size_;
+    std::unique_ptr<RingbufferCacheManager> prefetcher_cache_manager_;
 
     void read_completion_queue();
 
