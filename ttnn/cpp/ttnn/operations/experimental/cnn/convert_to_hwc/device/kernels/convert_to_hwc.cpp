@@ -10,32 +10,30 @@
 #include "compute_kernel_api/transpose_wh.h"
 #include "compute_kernel_api/tilize.h"
 
-template <size_t BATCH_SIZE = 1>
+template <uint32_t BatchSize = 1>
 FORCE_INLINE void transpose(uint32_t cb_in, uint32_t cb_out) {
-    pack_untilize_dst_init_short<BATCH_SIZE>(cb_in);
-
-    cb_wait_front(cb_in, BATCH_SIZE);
+    cb_wait_front(cb_in, BatchSize);
 
     tile_regs_acquire();
     tile_regs_wait();
 
     transpose_wh_init_short(cb_in);
-    transpose_wh_tile(cb_in, 0, 0);
+    for (uint32_t i = 0; i < BatchSize; i++) {
+        transpose_wh_tile(cb_in, i, i);
+    }
 
-    cb_reserve_back(cb_out, BATCH_SIZE);
-    pack_untilize_dst<BATCH_SIZE>(cb_out);
+    cb_reserve_back(cb_out, BatchSize);
+    pack_untilize_dst<1>(cb_out, BatchSize);
 
     tile_regs_commit();
     tile_regs_release();
 
-    cb_push_back(cb_out, BATCH_SIZE);
-    cb_pop_front(cb_in, BATCH_SIZE);
+    cb_push_back(cb_out, BatchSize);
+    cb_pop_front(cb_in, BatchSize);
 }
 
 FORCE_INLINE void tilize(
     uint32_t cb_in, uint32_t total_tiles_per_block, uint32_t total_sticks_per_block, uint32_t cb_out) {
-    tilize_init_short(cb_in, total_tiles_per_block, cb_out);
-
     cb_wait_front(cb_in, total_sticks_per_block);
 
     cb_reserve_back(cb_out, total_tiles_per_block);
@@ -44,8 +42,6 @@ FORCE_INLINE void tilize(
 
     cb_pop_front(cb_in, total_sticks_per_block);
     cb_push_back(cb_out, total_tiles_per_block);
-
-    tilize_uninit(cb_in, cb_out);
 }
 
 namespace NAMESPACE {
@@ -58,14 +54,22 @@ void MAIN {
 
     cb_push_back(cb_in, total_sticks_per_block);
 
-    pack_untilize_init(cb_tiled_in, cb_transpose_in);
-    transpose_wh_init(cb_tiled_in, cb_transpose_in);
     tilize_init(cb_in, total_tiles, cb_tiled_in);
-
     tilize(cb_in, total_tiles, total_sticks_per_block, cb_tiled_in);
+    tilize_uninit(cb_in, cb_tiled_in);
 
-    for (uint32_t idx = 0; idx < total_tiles; idx++) {
-        transpose(cb_tiled_in, cb_transpose_in);
+    pack_untilize_init(cb_in, cb_transpose_in);
+    transpose_wh_init(cb_in, cb_transpose_in);
+    pack_untilize_dst_init_short<1>(cb_in);
+
+    constexpr int BATCH_SIZE = 8;
+    constexpr uint32_t num_batches = total_tiles / BATCH_SIZE;
+    constexpr uint32_t leftover = total_tiles % BATCH_SIZE;
+    for (uint32_t idx = 0; idx < num_batches; idx++) {
+        transpose<BATCH_SIZE>(cb_tiled_in, cb_transpose_in);
+    }
+    for (uint32_t idx = 0; idx < leftover; idx++) {
+        transpose<1>(cb_tiled_in, cb_transpose_in);
     }
 }
 }  // namespace NAMESPACE
