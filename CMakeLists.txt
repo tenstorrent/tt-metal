@@ -174,7 +174,9 @@ add_compile_options(
     -Werror
     # The following list is not indicative of what we _desire_ only the status quo to build.
     -Wno-deprecated-declarations
-    -Wno-unused-but-set-variable
+    # Vars that are used only in Asserts will appear as dead stores in builds
+    # where the preprocessor has stripped away the assert.
+    "$<$<CONFIG:Release>:-Wno-unused-but-set-variable>"
     -Wno-unused-function
     -Wno-unused-variable
     "$<$<CXX_COMPILER_ID:Clang>:-Wno-c++11-narrowing>"

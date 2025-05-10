@@ -177,6 +177,10 @@ Result conv2d_DRAM(
     } else {
         input_tensor_on_device = input_tensor;
     }
+
+    const auto unflattened_input_shape = ttnn::Shape{batch_size, input_height, input_width, in_channels};
+    input_tensor_on_device = ttnn::reshape(input_tensor_on_device, unflattened_input_shape, unflattened_input_shape);
+
     DeviceComputeKernelConfig compute_config = compute_config_.value_or(get_conv_default_compute_kernel_config(device));
     const auto compute_grid_size = device->compute_with_storage_grid_size();
 
@@ -190,7 +194,7 @@ Result conv2d_DRAM(
         input_tensor_on_device.layout() == tt_metal::Layout::ROW_MAJOR,
         "Input Tensor to Conv DRAM should be in Row Major Layout");
     TT_FATAL(
-        input_tensor_on_device.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED,
+        input_tensor_on_device.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
         "Input Tensor to Conv DRAM should be in Interleaved Memory Layout");
 
     Tensor dram_output_tensor = tt_metal::create_device_tensor(
@@ -200,8 +204,8 @@ Result conv2d_DRAM(
                 conv_config.dtype,
                 tt_metal::PageConfig(tt_metal::Layout::ROW_MAJOR),
                 MemoryConfig{
-                    .memory_layout = TensorMemoryLayout::INTERLEAVED,
-                    .buffer_type = BufferType::DRAM,
+                    TensorMemoryLayout::INTERLEAVED,
+                    BufferType::DRAM,
                 })),
         device);
 
@@ -338,11 +342,10 @@ Result conv2d_DRAM(
                 conv_config_l1,
                 compute_config_,
                 memory_config_);
-        if (sliced_output_tensor.memory_config().memory_layout != TensorMemoryLayout::HEIGHT_SHARDED &&
-            sliced_output_tensor.memory_config().memory_layout != TensorMemoryLayout::BLOCK_SHARDED) {
+        if (sliced_output_tensor.memory_config().memory_layout() != TensorMemoryLayout::HEIGHT_SHARDED &&
+            sliced_output_tensor.memory_config().memory_layout() != TensorMemoryLayout::BLOCK_SHARDED) {
             sliced_output_tensor = ttnn::to_memory_config(
-                sliced_output_tensor,
-                MemoryConfig{.memory_layout = TensorMemoryLayout::INTERLEAVED, .buffer_type = BufferType::L1});
+                sliced_output_tensor, MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::L1});
         }
         if (sliced_output_tensor.layout() != Layout::ROW_MAJOR) {
             sliced_output_tensor =
@@ -362,6 +365,11 @@ Result conv2d_DRAM(
         output_slice_dim_start += output_slice_size;
         slice_index++;
     }
+
+    const auto flattened_output_shape = flatten_4d_shape(dram_output_tensor.get_logical_shape());
+    const auto flattened_padded_output_shape = flatten_4d_shape(dram_output_tensor.get_padded_shape());
+
+    dram_output_tensor = ttnn::reshape(dram_output_tensor, flattened_output_shape, flattened_padded_output_shape);
 
     return {dram_output_tensor, output_height, output_width, weight_tensor_on_device, bias_tensor_on_device};
 }
@@ -436,12 +444,20 @@ Result conv2d_L1(
         mm_conv,
         auto_shard);
 
+    const uint32_t input_channels_alignment = get_input_channels_alignment(
+        input_tensor_post_tm.memory_config().memory_layout(),
+        input_tensor.layout(),
+        mm_conv,
+        input_tensor_post_tm.memory_config());
+    const uint32_t in_channels_padded = tt::round_up(
+        in_channels, get_num_cores_channels_from_parallel_config(parallel_config) * input_channels_alignment);
+
     auto [opt_conv_op_parallel_config, opt_conv_op_block_config, conv_out_memory_config] = get_conv_configs(
         conv_config,
         compute_config,
         parallel_config,
         output_parallel_config,
-        in_channels,
+        in_channels_padded,
         out_channels,
         batch_size,
         output_height,
@@ -460,7 +476,7 @@ Result conv2d_L1(
             tie(weight_tensor_on_device, bias_tensor_on_device) = prepare_conv_weights_biases_and_move_to_device(
                 weight_tensor,
                 bias_tensor,
-                conv_config.input_channels_alignment,
+                input_channels_alignment,
                 conv_config.weights_dtype,
                 opt_conv_op_block_config.act_block_w_ntiles,
                 opt_conv_op_block_config.out_subblock_w_ntiles,
@@ -476,7 +492,7 @@ Result conv2d_L1(
             tie(weight_tensor_on_device, bias_tensor_on_device) = prepare_conv_weights_biases_on_device(
                 weight_tensor,
                 bias_tensor,
-                conv_config.input_channels_alignment,
+                input_channels_alignment,
                 conv_config.weights_dtype,
                 opt_conv_op_block_config.act_block_w_ntiles,
                 opt_conv_op_block_config.out_subblock_w_ntiles,
@@ -504,7 +520,7 @@ Result conv2d_L1(
             .padding = {{padding_n4[0], padding_n4[1], padding_n4[2], padding_n4[3]}},
             .dilation_hw = {dilation[0], dilation[1]},
             .num_cores_nhw = opt_conv_op_parallel_config.num_cores_nhw,
-            .core_range_set = input_tensor_post_tm.memory_config().shard_spec.value().grid,
+            .core_range_set = input_tensor_post_tm.memory_config().shard_spec().value().grid,
             .snap_to_tile = true,
         };
 

@@ -1,7 +1,7 @@
 # set SFPI release version information
-sfpi_version=v6.10.0
+sfpi_version=v6.10.2
 sfpi_url=https://github.com/tenstorrent/sfpi/releases/download
-sfpi_x86_64_Linux_tgz_md5=1922419ee8f33a5dc97616c729b0bc11
-sfpi_x86_64_Linux_deb_md5=ada3fdb8b424049cc9b82c38639f1e01
-sfpi_aarch64_Linux_tgz_md5=3bb009fd36768f011a2dca6215642add
-sfpi_aarch64_Linux_deb_md5=635dcb031c222c2bc03e78a878b2d850
+sfpi_x86_64_Linux_tgz_md5=8937def463673c2726218ea7b9a504ea
+sfpi_x86_64_Linux_deb_md5=0f091cd70dfb641c87f052e2394a981a
+sfpi_aarch64_Linux_tgz_md5=816721dbbf602f6b320d56c9ece94651
+sfpi_aarch64_Linux_deb_md5=d2960200de58eb01e814374000866997

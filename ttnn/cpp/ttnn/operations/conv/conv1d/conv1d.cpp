@@ -20,7 +20,6 @@
 
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/conv/conv1d/conv1d.hpp"
-#include "ttnn/operations/conv/conv.hpp"
 #include "ttnn/operations/conv/conv2d/device/conv2d_op.hpp"
 #include "ttnn/operations/matmul/matmul.hpp"
 #include "ttnn/operations/sliding_window/halo/halo.hpp"
@@ -79,7 +78,7 @@ Result conv1d(
     };
 
     auto [output_tensor, output_dimensions, weights_and_bias] =
-        std::get<ResultType::OUTPUT_DIM_WEIGHTS_AND_BIAS>(ttnn::conv2d(
+        std::get<static_cast<int>(ResultType::OUTPUT_DIM_WEIGHTS_AND_BIAS)>(ttnn::conv2d(
             queue_id,
             input_tensor_4d,
             weight_tensor,

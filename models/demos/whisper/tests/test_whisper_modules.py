@@ -2,21 +2,19 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from loguru import logger
 import pytest
-from models.demos.whisper.tt import ttnn_optimized_functional_whisper
-from models.demos.whisper.tt.ttnn_optimized_functional_whisper import (
-    init_kv_cache,
-    WHISPER_L1_SMALL_SIZE,
-)
-import transformers
-from transformers import AutoFeatureExtractor, WhisperModel, WhisperConfig
-from datasets import load_dataset
 import torch
-import ttnn
-from tests.ttnn.utils_for_testing import assert_with_pcc, comp_pcc
-from models.utility_functions import torch_random, is_blackhole
+import transformers
+from datasets import load_dataset
+from loguru import logger
+from transformers import AutoFeatureExtractor, WhisperConfig, WhisperModel
 from ttnn.model_preprocessing import preprocess_model_parameters
+
+import ttnn
+from models.demos.whisper.tt import ttnn_optimized_functional_whisper
+from models.demos.whisper.tt.ttnn_optimized_functional_whisper import WHISPER_L1_SMALL_SIZE, init_kv_cache
+from models.utility_functions import is_blackhole, torch_random
+from tests.ttnn.utils_for_testing import assert_with_pcc, comp_pcc
 
 # MODEL_NAME = "openai/whisper-base"
 MODEL_NAME = "distil-whisper/distil-large-v3"

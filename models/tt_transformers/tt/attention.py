@@ -3,12 +3,13 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import math
+
 import torch
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
-from models.tt_transformers.tt.ccl import tt_all_reduce, tt_all_gather
-from models.tt_transformers.tt.model_config import TensorGroup, OpGroup
+from models.tt_transformers.tt.ccl import tt_all_gather, tt_all_reduce
+from models.tt_transformers.tt.model_config import OpGroup, TensorGroup
 
 
 class Attention(LightweightModule):
