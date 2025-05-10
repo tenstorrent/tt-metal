@@ -100,7 +100,8 @@ std::shared_ptr<MeshBuffer> MeshBuffer::create(
             device_local_config.buffer_type,
             device_local_config.buffer_layout,
             device_local_config.shard_parameters,
-            device_local_config.bottom_up);
+            device_local_config.bottom_up,
+            device_local_config.sub_device_id);
 
         mesh_buffer = std::shared_ptr<MeshBuffer>(new MeshBuffer(
             mesh_buffer_config, device_local_config, device_local_size, mesh_device, std::move(backing_buffer)));

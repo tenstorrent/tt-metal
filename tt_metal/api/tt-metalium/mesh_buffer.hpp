@@ -35,6 +35,9 @@ struct DeviceLocalBufferConfig {
 
     // The direction in which memory for this buffer is allocated.
     std::optional<bool> bottom_up;
+
+    // Optional: Specify the worker sub device this buffer will be allocated on
+    std::optional<SubDeviceId> sub_device_id = std::nullopt;
 };
 
 // Specifies MeshBuffer that is replicated across the virtual mesh.
