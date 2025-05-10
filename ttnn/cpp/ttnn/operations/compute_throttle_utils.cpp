@@ -86,7 +86,7 @@ void add_dram_skip_defines_if_needed(
 
 bool should_sync_after_in1_dram(const tt::ARCH arch) {
     const bool sync_in1_dram = std::getenv("TT_MM_SYNC_AFTER_IN1_DRAM");
-    return sync_in1_dram && (arch == tt::ARCH::WORMHOLE_B0 || arch == tt::ARCH::BLACKHOLE)
+    return sync_in1_dram && (arch == tt::ARCH::WORMHOLE_B0 || arch == tt::ARCH::BLACKHOLE);
 }
 
 }  // namespace compute_throttle_utils
