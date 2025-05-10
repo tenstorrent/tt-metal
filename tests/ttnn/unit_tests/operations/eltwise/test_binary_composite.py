@@ -185,7 +185,6 @@ def test_binary_subalpha_ttnn(input_shapes, alpha, device):
     assert comp_pass
 
 
-@skip_for_blackhole("Fails on BH. Issue #19642")
 @pytest.mark.parametrize("accurate_mode", [False, True])
 @pytest.mark.parametrize("round_mode", [None, "trunc", "floor"])
 @pytest.mark.parametrize(

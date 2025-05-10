@@ -94,7 +94,9 @@ Tensor MorehClipGradNorm::invoke(
     // max_norm / (total_norm + 1e-6)
     Tensor max_norm_tensor = ttnn::full(Shape({1}), max_norm, inputs.at(0).get_dtype(), Layout::TILE, *device);
     Tensor added = ttnn::add(output_total_norm, 1e-6f);
-    auto clip_coef = ttnn::div(max_norm_tensor, added);
+    constexpr auto none = tt::stl::Span<const ttnn::operations::unary::UnaryWithParam>{};
+    auto clip_coef =
+        ttnn::divide(max_norm_tensor, added, std::nullopt, std::nullopt, std::nullopt, none, none, none, true);
     // min(clip_coef, 1.0f)
     Tensor scalar = ttnn::full(Shape({1}), 1.0f, inputs.at(0).get_dtype(), Layout::TILE, *device);
     auto clip_coef_clamped = ttnn::minimum(clip_coef, scalar);
