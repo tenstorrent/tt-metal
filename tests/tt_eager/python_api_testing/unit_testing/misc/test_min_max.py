@@ -48,31 +48,30 @@ def test_min_max_for_dim_hw(device, use_program_cache, shape_dim, kind, layout):
     W = shape[3]
 
     input_shape = (N, C, H, W)
-    x = 1.0 + torch.rand(input_shape).bfloat16()
+    torch_input = 1.0 + torch.rand(input_shape).bfloat16()
 
     if kind == "max":
-        value = x.max()
+        torch_output = torch_input.max()
     elif kind == "min":
-        value = x.min()
+        torch_output = torch_input.min()
     elif kind == "mean":
-        value = x.mean()
+        torch_output = torch_input.mean()
     else:
         raise AttributeError()
 
     # print(f"x.max/min = {value}")
 
-    dev_x = ttnn.Tensor(x, ttnn.bfloat16).to(layout).to(device)
+    tt_input = ttnn.Tensor(torch_input, ttnn.bfloat16).to(layout).to(device)
     if kind == "max":
-        tt_npu = ttnn.max(dev_x)
+        tt_npu = ttnn.max(tt_input)
     elif kind == "min":
-        tt_npu = ttnn.min(dev_x)
+        tt_npu = ttnn.min(tt_input)
     else:
         assert kind == "mean"
-        tt_npu = ttnn.mean(dev_x)
+        tt_npu = ttnn.mean(tt_input)
 
-    tt_dev = tt_npu.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch()
-
+    tt_output = tt_npu.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch()
     comparison_fn = torch.equal
     if kind == "mean":
         comparison_fn = partial(torch.isclose, atol=1e-1, rtol=1e-2)
-    assert comparison_fn(tt_dev[0, 0, 0, 0], torch.Tensor([value]).bfloat16()[0])
+    assert comparison_fn(tt_output, torch_output)
