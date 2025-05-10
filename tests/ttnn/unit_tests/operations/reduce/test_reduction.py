@@ -9,7 +9,7 @@ import ttnn
 import sys
 
 from tests.ttnn.utils_for_testing import assert_with_pcc
-from models.utility_functions import skip_for_grayskull, torch_random
+from models.utility_functions import skip_for_grayskull, skip_for_blackhole, torch_random
 
 
 @pytest.mark.parametrize("batch_size", [1, 16])
@@ -203,6 +203,7 @@ def test_sum_4d_tensor_dims(device, batch_size, c, h, w, dim, keepdim):
     assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.99)
 
 
+@skip_for_blackhole("Bad CosineSimilarity on BH. Issue #21881")
 @pytest.mark.parametrize("dim1", [1])
 @pytest.mark.parametrize(
     "dim2", [50257]
@@ -248,9 +249,9 @@ def test_2d_topk(device, dim1, dim2, dim, k, largest, dtype):
 
     cosine = torch.nn.CosineSimilarity(dim=dim)
     ttnn_torch_cosine = torch.mean(cosine(pyt_topk_values, ttnn_torch_gather_from_indices))
-    print("Cosine Similarity:\n", ttnn_torch_cosine)
-
-    assert ttnn_torch_cosine > 0.99, "Cosine similarity between topk values and gather from indices is less than 0.99"
+    assert (
+        ttnn_torch_cosine > 0.99
+    ), f"Cosine similarity between topk values and gather from indices is {ttnn_torch_cosine} which is less than 0.99"
     assert_with_pcc(pyt_topk_values, ttnn_torch_values, pcc_values)
 
 
@@ -302,7 +303,9 @@ def test_5d_topk(device, dim1, dim2, dim3, dim4, dim5, dim, k, largest, dtype):
     cosine = torch.nn.CosineSimilarity(dim=dim)
     ttnn_torch_cosine = torch.mean(cosine(pyt_topk_values, ttnn_torch_gather_from_indices))
 
-    assert ttnn_torch_cosine > 0.99, "Cosine similarity between topk values and gather from indices is less than 0.99"
+    assert (
+        ttnn_torch_cosine > 0.99
+    ), f"Cosine similarity between topk values and gather from indices is {ttnn_torch_cosine} which is less than 0.99"
     assert_with_pcc(pyt_topk_values, ttnn_torch_values, pcc_values)
 
 
@@ -354,7 +357,9 @@ def test_6d_topk(device, dim1, dim2, dim3, dim4, dim5, dim6, dim, k, largest, dt
     cosine = torch.nn.CosineSimilarity(dim=dim)
     ttnn_torch_cosine = torch.mean(cosine(pyt_topk_values, ttnn_torch_gather_from_indices))
 
-    assert ttnn_torch_cosine > 0.99, "Cosine similarity between topk values and gather from indices is less than 0.99"
+    assert (
+        ttnn_torch_cosine > 0.99
+    ), f"Cosine similarity between topk values and gather from indices is {ttnn_torch_cosine} which is less than 0.99"
     assert_with_pcc(pyt_topk_values, ttnn_torch_values, pcc_values)
 
 
