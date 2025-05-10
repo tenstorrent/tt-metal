@@ -73,7 +73,7 @@ inline bool is_subset_of(const std::vector<MeshCoordinate>& a, const std::vector
     // Check if b_set is a subset of a_set
     // This is true if every range in b_set is completely contained in some range
     // in a_set
-    bool is_subset;
+    bool is_subset = false;
     for (const auto& b_range : b_set.ranges()) {
         is_subset = false;
         for (const auto& a_range : a_set.ranges()) {

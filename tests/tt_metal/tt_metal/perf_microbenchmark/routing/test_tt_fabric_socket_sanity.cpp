@@ -324,7 +324,7 @@ int main(int argc, char** argv) {
         bool router_core_found = false;
         CoreCoord router_logical_core;
         CoreCoord router_phys_core;
-        routing_plane_id_t routing_plane;
+        routing_plane_id_t routing_plane{};
         CoreCoord gk_phys_core;
         uint32_t routing_table_addr =
             device_map[test_device_id_l]->allocator()->get_base_allocator_addr(tt_metal::HalMemType::L1);

@@ -618,7 +618,7 @@ std::vector<DispatchKernelNode> generate_nodes(const std::set<chip_id_t>& device
             uint32_t index_offset = 0;
             for (auto mmio_device_id : mmio_devices) {
                 // Find the corresponding remote chip
-                chip_id_t remote_device_id;
+                chip_id_t remote_device_id{};
                 bool found_remote = false;
                 for (auto id : remote_devices) {
                     if (tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(id) ==
@@ -720,7 +720,7 @@ void populate_fd_kernels(const std::vector<DispatchKernelNode>& nodes) {
     // For kernels on mmio chip, need to confirm which remote device each is servicing
     std::map<chip_id_t, uint32_t> device_id_to_tunnel_stop;
     std::map<chip_id_t, std::vector<chip_id_t>> mmio_device_id_to_serviced_devices;
-    uint32_t tunnel_depth;
+    uint32_t tunnel_depth{};
     for (auto mmio_device_id : mmio_device_ids) {
         if (tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(mmio_device_id) !=
             mmio_device_id) {
