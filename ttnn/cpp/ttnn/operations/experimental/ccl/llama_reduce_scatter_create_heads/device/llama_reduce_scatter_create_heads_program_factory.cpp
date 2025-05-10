@@ -423,7 +423,7 @@ LlamaReduceScatterCreateHeadsDeviceOperation::LlamaReduceScatterCreateHeads::cre
 
     tt::tt_metal::Program program{};
 
-    auto fabric_max_packet_size = tt::tt_fabric::get_1d_fabric_config().channel_buffer_size_bytes;
+    auto fabric_max_packet_size = tt::tt_fabric::get_tt_fabric_config().channel_buffer_size_bytes;
     size_t packet_size_bytes = input_tensor.get_dtype() == DataType::BFLOAT16 ? std::bit_floor(fabric_max_packet_size)
                                                                               : fabric_max_packet_size;
     uint32_t num_blocks_per_packet = packet_size_bytes / input_block_size;

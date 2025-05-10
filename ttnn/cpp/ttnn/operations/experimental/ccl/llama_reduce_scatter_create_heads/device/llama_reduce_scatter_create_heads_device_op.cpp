@@ -46,11 +46,11 @@ void LlamaReduceScatterCreateHeadsDeviceOperation::validate_on_program_cache_mis
         tensor_args.intermediate_packet_buffer.shard_spec().value().shape[0]);
     if (attributes.qkv_memory_config.has_value()) {
         TT_FATAL(
-            attributes.qkv_memory_config.value().shard_spec.has_value(), "qkv_memory_config must have a shard spec");
+            attributes.qkv_memory_config.value().shard_spec().has_value(), "qkv_memory_config must have a shard spec");
         TT_FATAL(
-            attributes.qkv_memory_config.value().shard_spec.value().shape[0] == 32,
+            attributes.qkv_memory_config.value().shard_spec().value().shape[0] == 32,
             "qkv_memory_config shard height must be 32 but got {}",
-            attributes.qkv_memory_config.value().shard_spec.value().shape[0]);
+            attributes.qkv_memory_config.value().shard_spec().value().shape[0]);
     }
 }
 
@@ -72,7 +72,7 @@ LlamaReduceScatterCreateHeadsDeviceOperation::compute_output_specs(
     const Shape v_output_shape({input_shape[0], batch, attributes.num_kv_heads, head_dim});
     const Shape k_output_shape = v_output_shape;
     CoreRangeSet q_shard_grid, k_shard_grid, v_shard_grid;
-    auto sub_core_grid = attributes.qkv_memory_config->shard_spec->grid;
+    auto sub_core_grid = attributes.qkv_memory_config.value().shard_spec()->grid;
     auto start_core_coord = sub_core_grid.bounding_box().start_coord;
     auto next_core_coord = start_core_coord;
 
@@ -97,11 +97,11 @@ LlamaReduceScatterCreateHeadsDeviceOperation::compute_output_specs(
     tt::tt_metal::MemoryConfig k_mem_config = attributes.qkv_memory_config.value();
     tt::tt_metal::MemoryConfig v_mem_config = attributes.qkv_memory_config.value();
     tt::tt_metal::ShardSpec q_shard_spec{q_shard_grid, {attributes.num_heads, head_dim}};
-    q_mem_config.shard_spec = q_shard_spec;
+    q_mem_config.with_shard_spec(q_shard_spec);
     tt::tt_metal::ShardSpec k_shard_spec{k_shard_grid, {attributes.num_kv_heads, head_dim}};
-    k_mem_config.shard_spec = k_shard_spec;
+    k_mem_config.with_shard_spec(k_shard_spec);
     tt::tt_metal::ShardSpec v_shard_spec{v_shard_grid, {attributes.num_kv_heads, head_dim}};
-    v_mem_config.shard_spec = v_shard_spec;
+    v_mem_config.with_shard_spec(v_shard_spec);
 
     return {
         TensorSpec(
