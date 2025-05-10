@@ -191,6 +191,11 @@ RunTimeOptions::RunTimeOptions() {
     if (getenv("TT_METAL_DISABLE_RELAXED_MEM_ORDERING")) {
         this->disable_relaxed_memory_ordering = true;
     }
+
+    const char *arc_debug_enabled_str = std::getenv("TT_METAL_ARC_DEBUG_BUFFER_SIZE");
+    if (arc_debug_enabled_str != nullptr) {
+        sscanf(arc_debug_enabled_str, "%u", &arc_debug_buffer_size);
+    }
 }
 
 const std::string& RunTimeOptions::get_root_dir() const {

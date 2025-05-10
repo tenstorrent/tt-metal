@@ -173,6 +173,7 @@ set(TTNN_BASE_SRCS
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/graph/graph_processor.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/graph/graph_argument_serializer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/graph/graph_trace_utils.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/compute_throttle_utils.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/sharding_utilities.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/trace.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/ccl/sharding_addrgen_helper.cpp

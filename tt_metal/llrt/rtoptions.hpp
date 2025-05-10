@@ -153,6 +153,9 @@ class RunTimeOptions {
     // This option will disable the relaxed ordering
     bool disable_relaxed_memory_ordering = false;
 
+    // Buffer in DRAM to store various ARC processor samples. Feature not ready yet
+    uint32_t arc_debug_buffer_size = 0;
+
 public:
     RunTimeOptions();
     RunTimeOptions(const RunTimeOptions&) = delete;
@@ -351,6 +354,9 @@ public:
     inline bool get_erisc_iram_enabled() const { return erisc_iram_enabled; }
 
     inline bool get_skip_eth_cores_with_retrain() const { return skip_eth_cores_with_retrain; }
+
+    inline uint32_t get_arc_debug_buffer_size() { return arc_debug_buffer_size; }
+    inline void set_arc_debug_buffer_size(uint32_t size) { arc_debug_buffer_size = size; }
 
 private:
     // Helper functions to parse feature-specific environment vaiables.
