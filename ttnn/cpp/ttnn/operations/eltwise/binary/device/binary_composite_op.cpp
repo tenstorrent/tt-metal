@@ -319,7 +319,7 @@ Tensor ExecuteDiv::invoke(
 
         // Div operation without inf/nan handling as reciprocal(0) = 1.7014118346046923e+38 not inf/nan
         Tensor result =
-            ttnn::multiply(queue_id, a, ttnn::reciprocal(b), std::nullopt, output_mem_config, output_tensor);
+            ttnn::multiply(queue_id, a, ttnn::reciprocal(queue_id, b, output_mem_config, output_tensor), std::nullopt, output_mem_config, output_tensor);
 
         if (round_mode == "trunc") {
             result = ttnn::trunc(queue_id, result, output_mem_config, output_tensor);

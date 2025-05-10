@@ -200,12 +200,8 @@ def test_binary_div_ttnn(accurate_mode, round_mode, input_shapes, device):
     if is_grayskull():
         if round_mode in ["trunc", "floor"]:
             pytest.skip("does not work for Grayskull -skipping")
-    if accurate_mode == False:  # If input_b is non-zero tensor
-        in_data1, input_tensor1 = data_gen_with_range(input_shapes, -100, 100, device)
-        in_data2, input_tensor2 = data_gen_with_range(input_shapes, -150, -1, device)
-    else:
-        in_data1, input_tensor1 = data_gen_with_range(input_shapes, -100, 100, device)
-        in_data2, input_tensor2 = data_gen_with_range(input_shapes, -100, 100, device)
+    in_data1, input_tensor1 = data_gen_with_range(input_shapes, -100, 100, device)
+    in_data2, input_tensor2 = data_gen_with_range(input_shapes, -150, 150, device)
 
     output_tensor = ttnn.div(input_tensor1, input_tensor2, accurate_mode=accurate_mode, round_mode=round_mode)
     golden_function = ttnn.get_golden_function(ttnn.div)
