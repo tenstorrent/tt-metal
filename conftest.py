@@ -20,7 +20,7 @@ from datetime import datetime
 from loguru import logger
 
 from tests.scripts.common import run_process_and_get_result
-from tests.scripts.common import get_updated_device_params
+from tests.scripts.common import get_dispatch_core_type, get_updated_device_params
 
 # Constants for device configurations
 GALAXY_NUM_DEVICES = 32
@@ -285,6 +285,36 @@ def mesh_device(request, silicon_arch_name, device_params):
 
 
 @pytest.fixture(scope="function")
+def t3k_single_board_mesh_device(request, silicon_arch_name, silicon_arch_wormhole_b0, device_params):
+    import ttnn
+
+    device_ids = ttnn.get_device_ids()
+
+    assert len(device_ids) == 8, "This fixture is only applicable for T3K systems"
+
+    try:
+        pcie_id = request.param
+    except (ValueError, AttributeError):
+        pcie_id = 0  # Default to using first board
+
+    assert pcie_id < 4, "Requested board id is out of range"
+
+    mesh_device_ids = [device_ids[pcie_id], device_ids[pcie_id + 4]]
+    mesh_shape = ttnn.MeshShape(1, 2)
+    mesh_device = ttnn.open_mesh_device(
+        mesh_shape, mesh_device_ids, dispatch_core_type=get_dispatch_core_type(), **device_params
+    )
+
+    logger.debug(f"multidevice with {mesh_device.get_num_devices()} devices is created")
+    yield mesh_device
+
+    ttnn.DumpDeviceProfiler(mesh_device)
+
+    ttnn.close_mesh_device(mesh_device)
+    del mesh_device
+
+
+@pytest.fixture(scope="function")
 def pcie_mesh_device(request, silicon_arch_name, silicon_arch_wormhole_b0, device_params):
     import ttnn
 
@@ -410,6 +440,8 @@ def get_devices(request):
         devices = [request.getfixturevalue("t3k_mesh_device")]
     elif "pcie_mesh_device" in request.fixturenames:
         devices = [request.getfixturevalue("pcie_mesh_device")]
+    elif "t3k_single_board_mesh_device" in request.fixturenames:
+        devices = request.getfixturevalue("t3k_single_board_mesh_device").get_devices()
     else:
         devices = []
     return devices
@@ -490,6 +522,39 @@ def pytest_addoption(parser):
         default=None,
         help="Enable process timeout",
     )
+    parser.addoption(
+        "--didt-workload-iterations",
+        action="store",
+        default=None,
+        help="Number of workload iterations to run for didt tests",
+    )
+    parser.addoption(
+        "--determinism-check-interval",
+        action="store",
+        default=None,
+        help="Check determinism every nth iteration",
+    )
+
+
+# Indicates the iteration interval at which determinism is verified for the op output
+@pytest.fixture
+def determinism_check_interval(request):
+    iterations = request.config.getoption("--determinism-check-interval")
+    if iterations is not None:
+        # this will throw an error if bad value is passed
+        return int(iterations)
+    return -1
+
+
+# Indicated the number of workload iterations to run within didt tests
+@pytest.fixture
+def didt_workload_iterations(request):
+    iterations = request.config.getoption("--didt-workload-iterations")
+    if iterations is not None:
+        # this will throw an error if bad value is passed
+        return int(iterations)
+    # default is 100000
+    return 100000
 
 
 @pytest.fixture
