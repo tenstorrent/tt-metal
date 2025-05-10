@@ -50,12 +50,11 @@ FORCE_INLINE void tilize(
 
 namespace NAMESPACE {
 void MAIN {
-    const uint32_t total_tiles = get_arg_val<uint32_t>(0);
-    const uint32_t total_sticks_per_block = get_arg_val<uint32_t>(1);
-
     constexpr uint32_t cb_in = get_compile_time_arg_val(0);
     constexpr uint32_t cb_tiled_in = get_compile_time_arg_val(1);
     constexpr uint32_t cb_transpose_in = get_compile_time_arg_val(2);
+    constexpr uint32_t total_tiles = get_compile_time_arg_val(3);
+    constexpr uint32_t total_sticks_per_block = get_compile_time_arg_val(4);
 
     cb_push_back(cb_in, total_sticks_per_block);
 
@@ -64,6 +63,7 @@ void MAIN {
     tilize_init(cb_in, total_tiles, cb_tiled_in);
 
     tilize(cb_in, total_tiles, total_sticks_per_block, cb_tiled_in);
+
     for (uint32_t idx = 0; idx < total_tiles; idx++) {
         transpose(cb_tiled_in, cb_transpose_in);
     }

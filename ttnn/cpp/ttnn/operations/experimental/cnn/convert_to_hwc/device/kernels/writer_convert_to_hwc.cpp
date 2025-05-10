@@ -23,17 +23,15 @@ FORCE_INLINE void copy_padded_sticks(
 }
 
 void kernel_main() {
-    const uint32_t total_tiles = get_arg_val<uint32_t>(0);
-    const uint32_t hw = get_arg_val<uint32_t>(1);
-
     constexpr uint32_t cb_in_transpose = get_compile_time_arg_val(0);
     constexpr uint32_t cb_out = get_compile_time_arg_val(1);
     constexpr uint32_t channels = get_compile_time_arg_val(2);
+    constexpr uint32_t hw = get_compile_time_arg_val(3);
 
     constexpr uint32_t channel_size = channels * ELEMENT_SIZE_BYTES;
 
-    const uint32_t num_full_tiles = hw / TILE_SIZE;     // TODO: make compile time
-    const uint32_t hw_per_final_tile = hw % TILE_SIZE;  // TODO: make compile time
+    constexpr uint32_t num_full_tiles = hw / TILE_SIZE;     // TODO: make compile time
+    constexpr uint32_t hw_per_final_tile = hw % TILE_SIZE;  // TODO: make compile time
 
     const uint32_t base_l1_write_addr = get_write_ptr(cb_out);
     uint32_t l1_write_addr = base_l1_write_addr;
