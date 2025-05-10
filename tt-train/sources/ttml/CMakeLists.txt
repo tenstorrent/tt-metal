@@ -147,7 +147,7 @@ target_link_libraries(
         Metalium::Metal
         Metalium::TTNN
         Python3::Python
-        fmt::fmt-header-only
+        fmt::fmt
         magic_enum::magic_enum
         yaml-cpp::yaml-cpp
         xtensor
