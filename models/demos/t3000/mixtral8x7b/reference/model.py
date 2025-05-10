@@ -22,11 +22,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from typing import Optional, Tuple
+
 import torch
 from torch import nn
-from typing import Optional, Tuple
-from models.demos.t3000.mixtral8x7b.reference.moe import MoeLayer
 from torch.nn.utils import skip_init
+
+from models.demos.t3000.mixtral8x7b.reference.moe import MoeLayer
 
 
 def repeat_kv(keys: torch.Tensor, values: torch.Tensor, repeats: int):

@@ -97,8 +97,11 @@ enum SfpuType {
     cumsum,
     fill,
     prelu,
+    alt_complex_rotate90,
     round,
     cpy_values,
     unary_max,
     unary_min,
+    gcd,
+    lcm,
 };

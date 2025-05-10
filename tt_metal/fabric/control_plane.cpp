@@ -783,6 +783,18 @@ std::set<std::pair<chan_id_t, eth_chan_directions>> ControlPlane::get_active_fab
     return active_fabric_eth_channels;
 }
 
+eth_chan_directions ControlPlane::get_eth_chan_direction(mesh_id_t mesh_id, chip_id_t chip_id, int chan) const {
+    for (const auto& [direction, eth_chans] :
+         this->router_port_directions_to_physical_eth_chan_map_[mesh_id][chip_id]) {
+        for (const auto& eth_chan : eth_chans) {
+            if (chan == eth_chan) {
+                return this->routing_direction_to_eth_direction(direction);
+            }
+        }
+    }
+    TT_THROW("Cannot Find Ethernet Channel Direction");
+}
+
 std::vector<std::pair<chip_id_t, chan_id_t>> ControlPlane::get_fabric_route(
     mesh_id_t src_mesh_id,
     chip_id_t src_chip_id,

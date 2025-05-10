@@ -72,7 +72,6 @@ def prepare_conv_weights_func(
     conv_config = ttnn.Conv2dConfig(
         dtype=ttnn.bfloat16,
         weights_dtype=ttnn.bfloat16,
-        input_channels_alignment=(16 if input_channels == 16 and input_height == 115 else 32),
         enable_act_double_buffer=False,
         enable_split_reader=False,
         enable_subblock_padding=False,
@@ -303,7 +302,6 @@ def test_prepare_bias(
     conv_config = ttnn.Conv2dConfig(
         dtype=ttnn.bfloat16,
         weights_dtype=ttnn.bfloat16,
-        input_channels_alignment=(16 if input_channels == 16 and input_height == 115 else 32),
         enable_act_double_buffer=False,
         enable_split_reader=False,
         enable_subblock_padding=False,

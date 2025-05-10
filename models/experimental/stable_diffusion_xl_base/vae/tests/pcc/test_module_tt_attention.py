@@ -1,11 +1,12 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
+import gc
 import torch
 import pytest
 import ttnn
 from models.experimental.stable_diffusion_xl_base.vae.tt.tt_attention import TtAttention
-from diffusers import DiffusionPipeline
+from diffusers import AutoencoderKL
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.utility_functions import torch_random
 
@@ -18,10 +19,9 @@ from models.utility_functions import torch_random
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 def test_vae_attention(device, input_shape, encoder_shape, use_program_cache, reset_seeds):
-    pipe = DiffusionPipeline.from_pretrained(
-        "stabilityai/stable-diffusion-xl-base-1.0", torch_dtype=torch.float32, use_safetensors=True
+    vae = AutoencoderKL.from_pretrained(
+        "stabilityai/stable-diffusion-xl-base-1.0", torch_dtype=torch.float32, use_safetensors=True, subfolder="vae"
     )
-    vae = pipe.vae
     vae.eval()
     state_dict = vae.state_dict()
 
@@ -62,4 +62,7 @@ def test_vae_attention(device, input_shape, encoder_shape, use_program_cache, re
     output_tensor = output_tensor.reshape(B, H, W, C)
     output_tensor = torch.permute(output_tensor, (0, 3, 1, 2))
 
-    assert_with_pcc(torch_output_tensor, output_tensor, 0.97)
+    del vae, tt_attention
+    gc.collect()
+
+    assert_with_pcc(torch_output_tensor, output_tensor, 0.995)

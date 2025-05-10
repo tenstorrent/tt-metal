@@ -9,7 +9,7 @@
 #include "mesh_device.hpp"
 #include "mesh_trace.hpp"
 #include "tt-metalium/program.hpp"
-#include "system_memory_manager.hpp"
+#include "dispatch/system_memory_manager.hpp"
 
 namespace tt::tt_metal::distributed {
 

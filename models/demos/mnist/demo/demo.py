@@ -4,16 +4,15 @@
 
 import pytest
 import torch
-import ttnn
-from torchvision import transforms, datasets
 from loguru import logger
 from torch.utils.data import DataLoader
-
+from torchvision import datasets, transforms
 from ttnn.model_preprocessing import preprocess_model_parameters
-from models.utility_functions import disable_persistent_kernel_cache
 
+import ttnn
 from models.demos.mnist.reference.mnist import MnistModel
 from models.demos.mnist.tt import tt_mnist
+from models.utility_functions import disable_persistent_kernel_cache
 
 
 def run_demo_dataset(device, batch_size, iterations, model_location_generator):
