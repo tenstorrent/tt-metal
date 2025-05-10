@@ -72,6 +72,12 @@ public:
         tt::stl::Span<const SubDeviceId> sub_device_ids = {}) = 0;
 
     virtual void finish(tt::stl::Span<const SubDeviceId> sub_device_ids) = 0;
+
+    virtual std::pair<bool, size_t> query_prefetcher_cache(uint64_t pgm_id, uint32_t lengthB) = 0;
+
+    virtual void reset_prefetcher_cache() = 0;
+
+    virtual int get_prefetcher_cache_sizeB() const = 0;
 };
 
 struct ReadBufferDescriptor;

@@ -1256,7 +1256,7 @@ void detail::ProgramImpl::allocate_kernel_bin_buf_on_device(IDevice* device) {
 void Program::set_launch_msg_sem_offsets() { pimpl_->set_launch_msg_sem_offsets(); }
 void Program::populate_dispatch_data(IDevice* device) { pimpl_->populate_dispatch_data(device); }
 
-void Program::generate_dispatch_commands(IDevice* device) {
+ProgramCommandSequence& Program::generate_dispatch_commands(IDevice* device, uint64_t prefetcher_cache_sizeB) {
     uint64_t command_hash = *device->get_active_sub_device_manager_id();
 
     uint64_t device_hash = BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_key;
@@ -1280,11 +1280,14 @@ void Program::generate_dispatch_commands(IDevice* device) {
         ProgramCommandSequence program_command_sequence;
         program_dispatch::insert_empty_program_dispatch_preamble_cmd(program_command_sequence);
         program_dispatch::insert_stall_cmds(program_command_sequence, sub_device_id, device);
-        program_dispatch::assemble_device_commands(program_command_sequence, *this, device, sub_device_id);
+        program_dispatch::assemble_device_commands(
+            program_command_sequence, *this, device, sub_device_id, prefetcher_cache_sizeB);
         // TODO: We currently do not have a mechanism of removing entries in the cache when a manager is removed
         // This means programs will contain stale entries in the cache until the program is deleted
         cached_program_command_sequences.insert({command_hash, std::move(program_command_sequence)});
     }
+
+    return cached_program_command_sequences[command_hash];
 }
 
 void Program::allocate_kernel_bin_buf_on_device(IDevice* device) { pimpl_->allocate_kernel_bin_buf_on_device(device); }
@@ -1436,11 +1439,14 @@ CommandQueue* detail::ProgramImpl::get_last_used_command_queue() const {
     return this->last_used_command_queue_for_testing;
 }
 
+CommandQueue* detail::ProgramImpl::get_last_used_command_queue() { return this->last_used_command_queue_for_testing; }
+
 void Program::set_last_used_command_queue_for_testing(CommandQueue* queue) {
     pimpl_->set_last_used_command_queue_for_testing(queue);
 }
 
 CommandQueue* Program::get_last_used_command_queue() const { return pimpl_->get_last_used_command_queue(); }
+CommandQueue* Program::get_last_used_command_queue() { return pimpl_->get_last_used_command_queue(); }
 
 uint32_t detail::ProgramImpl::get_sem_size(IDevice* device, CoreCoord logical_core, CoreType core_type) const {
     CoreCoord virtual_core = device->virtual_core_from_logical_core(logical_core, core_type);

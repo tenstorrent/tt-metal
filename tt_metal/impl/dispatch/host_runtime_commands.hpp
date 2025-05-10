@@ -99,7 +99,8 @@ public:
         uint32_t unicast_cores_launch_message_wptr,
         SubDeviceId sub_device_id);
 
-    void process();
+    void process(std::pair<bool, uint32_t> prefetcher_caching_info = {});
+    void process() { process({}); }
 
     EnqueueCommandType type() { return EnqueueCommandType::ENQUEUE_PROGRAM; }
 
@@ -116,6 +117,7 @@ public:
     EnqueueTerminateCommand(uint32_t command_queue_id, IDevice* device, SystemMemoryManager& manager);
 
     void process();
+    void process(std::pair<bool, uint32_t> prefetcher_caching_info) { process(); }
 
     EnqueueCommandType type() { return EnqueueCommandType::TERMINATE; }
 

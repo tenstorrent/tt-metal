@@ -8,7 +8,9 @@
 
 namespace tt::tt_metal {
 
-void RingbufferCacheManager::add_manager_entry_common(uint64_t pgm_id, uint32_t offset, uint32_t length) {
+// this function encapsulates the common code for adding a new entry to the ringbuffer manager
+// also, this function should be called when the cache is empty
+void RingbufferCacheManager::add_manager_entry_no_evict(uint64_t pgm_id, uint32_t offset, uint32_t length) {
     TT_ASSERT(
         offset + length <= cache_size_blocks_, "RingbufferCacheManager new allocation: offset + length > cache size");
 
@@ -22,19 +24,18 @@ void RingbufferCacheManager::add_manager_entry_common(uint64_t pgm_id, uint32_t 
     this->manager_.update_next_idx();
 }
 
+// this function should be called to allocate a new cache entry if the cache is not empty
 void RingbufferCacheManager::add_manager_entry(uint64_t pgm_id, uint32_t offset, uint32_t length) {
     auto idx = this->manager_.next_idx;
     if (idx == this->manager_.oldest_idx) {
         // if the next index is the same as the oldest index, then we need to invalidate the oldest entry
         this->invalidate_manager_entry();
     }
-    add_manager_entry_common(pgm_id, offset, length);
+    add_manager_entry_no_evict(pgm_id, offset, length);
 }
 
-void RingbufferCacheManager::add_manager_entry_no_evict(uint64_t pgm_id, uint32_t offset, uint32_t length) {
-    add_manager_entry_common(pgm_id, offset, length);
-}
-
+// this function will invalidate the oldest entry in the ringbuffer manager
+// caution: oldest entry must be valid
 void RingbufferCacheManager::invalidate_manager_entry(void) {
     auto& entry = this->manager_.entry[this->manager_.oldest_idx];
     auto valid_idx = entry.valid_idx;
@@ -54,6 +55,8 @@ void RingbufferCacheManager::invalidate_manager_entry(void) {
     this->manager_.update_oldest_idx();
 }
 
+// this function will invalidate all oldest entries until the cache wraps around
+// caution: should not be called if the cache is empty
 bool RingbufferCacheManager::invalidate_oldest_until_wraparound(void) {
     if (this->manager_.oldest_idx == this->manager_.next_idx) {
         this->invalidate_manager_entry();
@@ -69,7 +72,8 @@ bool RingbufferCacheManager::invalidate_oldest_until_wraparound(void) {
         return false;
     }
 }
-
+// this function is used to invalidate the oldest entry until there is sufficient space
+// caution: should not be called if the cache is empty
 bool RingbufferCacheManager::invalidate_sufficient_blocks(int required_space, int offset) {
     if (this->manager_.oldest_idx == this->manager_.next_idx) {
         this->invalidate_manager_entry();

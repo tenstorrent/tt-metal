@@ -120,7 +120,7 @@ EnqueueProgramCommand::EnqueueProgramCommand(
     this->packed_write_max_unicast_sub_cmds = get_packed_write_max_unicast_sub_cmds(this->device);
 }
 
-void EnqueueProgramCommand::process() {
+void EnqueueProgramCommand::process(std::pair<bool, uint32_t> prefetcher_caching_info) {
     // Dispatch metadata contains runtime information based on
     // the kernel config ring buffer state
     program_dispatch::ProgramDispatchMetadata dispatch_metadata;
@@ -158,7 +158,8 @@ void EnqueueProgramCommand::process() {
         this->dispatch_core_type,
         this->sub_device_id,
         dispatch_metadata,
-        program.get_program_binary_status(device->id()));
+        program.get_program_binary_status(device->id()),
+        prefetcher_caching_info);
     // Issue dispatch commands for this program
     program_dispatch::write_program_command_sequence(
         cached_program_command_sequence,

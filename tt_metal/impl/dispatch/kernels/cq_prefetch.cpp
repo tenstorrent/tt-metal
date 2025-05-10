@@ -1197,6 +1197,8 @@ uint32_t process_paged_to_ringbuffer_cmd(uint32_t cmd_ptr, uint32_t& downstream_
     ASSERT(length % DRAM_ALIGNMENT == 0);
     ASSERT(length + ringbuffer_wp <= scratch_db_end);
 
+    ringbuffer_offset = ringbuffer_wp - scratch_db_base;  // this is to avoid inserting offset command after cache load
+
     const bool is_dram = true;
     InterleavedPow2AddrGen<is_dram> addr_gen{.bank_base_address = base_addr, .log_base_2_of_page_size = log2_page_size};
 
@@ -1217,7 +1219,7 @@ uint32_t process_paged_to_ringbuffer_cmd(uint32_t cmd_ptr, uint32_t& downstream_
 
     ringbuffer_wp = scratch_read_addr;
 
-    // The consumer will perforam a read barrier.
+    // The consumer will perform a read barrier.
 
     return CQ_PREFETCH_CMD_BARE_MIN_SIZE;
 }

@@ -39,6 +39,7 @@
 #include "tt_metal/impl/trace/dispatch.hpp"
 #include <umd/device/tt_xy_pair.h>
 #include "work_executor.hpp"
+#include "ringbuffer_cache.hpp"
 
 namespace tt {
 namespace tt_metal {
@@ -67,7 +68,14 @@ HWCommandQueue::HWCommandQueue(
     uint32_t completion_queue_reader_core) :
     manager_(device->sysmem_manager()),
     completion_queue_thread_{},
-    completion_queue_reader_core_(completion_queue_reader_core) {
+    completion_queue_reader_core_(completion_queue_reader_core),
+    prefetcher_dram_aligned_block_size_(MetalContext::instance().hal().get_alignment(HalMemType::DRAM)),
+    prefetcher_ringbuffer_cache_sizeB_(
+        MetalContext::instance().dispatch_mem_map(this->get_dispatch_core_type()).ringbuffer_size()),
+    prefetcher_dram_aligned_num_blocks_(prefetcher_ringbuffer_cache_sizeB_ / prefetcher_dram_aligned_block_size_),
+    prefetcher_cache_manager_size_(std::min(1024u, std::max(2u, prefetcher_dram_aligned_num_blocks_ >> 4))),
+    prefetcher_cache_manager_(std::make_unique<RingbufferCacheManager>(
+        prefetcher_dram_aligned_block_size_, prefetcher_dram_aligned_num_blocks_, prefetcher_cache_manager_size_)) {
     ZoneScopedN("CommandQueue_constructor");
     this->device_ = device;
     this->worker_launch_message_buffer_state_ = worker_launch_message_buffer_state;
@@ -201,8 +209,12 @@ void HWCommandQueue::set_exit_condition() {
 IDevice* HWCommandQueue::device() { return this->device_; }
 
 template <typename T>
-void HWCommandQueue::enqueue_command(T& command, bool blocking, tt::stl::Span<const SubDeviceId> sub_device_ids) {
-    command.process();
+void HWCommandQueue::enqueue_command(
+    T& command,
+    bool blocking,
+    tt::stl::Span<const SubDeviceId> sub_device_ids,
+    std::pair<bool, uint32_t>& prefetcher_caching_info) {
+    command.process(prefetcher_caching_info);
     if (blocking) {
         this->finish(sub_device_ids);
     }
@@ -405,11 +417,13 @@ void HWCommandQueue::enqueue_program(Program& program, bool blocking) {
         }
         program.set_program_binary_status(device_->id(), ProgramBinaryStatus::InFlight);
     }
+
+    program.set_last_used_command_queue_for_testing(this);
     // Lower the program to device: Generate dispatch commands.
     // Values in these commands will get updated based on kernel config ring
     // buffer state at runtime.
-    program.generate_dispatch_commands(device_);
-    program.set_last_used_command_queue_for_testing(this);
+    ProgramCommandSequence& cached_program_command_sequences =
+        program.generate_dispatch_commands(device_, this->prefetcher_ringbuffer_cache_sizeB_);
 
 #ifdef DEBUG
     if (tt::tt_metal::MetalContext::instance().rtoptions().get_validate_kernel_binaries()) {
@@ -474,7 +488,16 @@ void HWCommandQueue::enqueue_program(Program& program, bool blocking) {
     if (program.runs_on_noc_unicast_only_cores()) {
         worker_launch_message_buffer_state.inc_unicast_wptr(1);
     }
-    this->enqueue_command(command, blocking, sub_device_ids);
+
+    std::pair<bool, uint32_t> caching_info = {};
+    if (cached_program_command_sequences.kernel_bins_sizeB > 0) {
+        caching_info =
+            this->query_prefetcher_cache(program.get_runtime_id(), cached_program_command_sequences.kernel_bins_sizeB);
+    } else {
+        // prefetcher cache will be overwritten, reset for next program
+        this->reset_prefetcher_cache();
+    }
+    this->enqueue_command(command, blocking, sub_device_ids, caching_info);
 
 #ifdef DEBUG
     if (tt::tt_metal::MetalContext::instance().rtoptions().get_validate_kernel_binaries()) {
@@ -727,5 +750,19 @@ void HWCommandQueue::terminate() {
 }
 
 WorkerConfigBufferMgr& HWCommandQueue::get_config_buffer_mgr(uint32_t index) { return config_buffer_mgr_[index]; }
+
+std::pair<bool, size_t> HWCommandQueue::query_prefetcher_cache(uint64_t pgm_id, uint32_t lengthB) {
+    auto result = prefetcher_cache_manager_->get_cache_offset(pgm_id, lengthB);
+    TT_FATAL(
+        result.has_value(),
+        "Prefetcher cache query failed. Cache size: {}, requested: {}",
+        this->prefetcher_cache_manager_->get_cache_sizeB(),
+        lengthB);
+    return std::make_pair(result.value().is_cached, result.value().offset * this->prefetcher_dram_aligned_block_size_);
+}
+
+void HWCommandQueue::reset_prefetcher_cache() { prefetcher_cache_manager_->reset(); }
+
+int HWCommandQueue::get_prefetcher_cache_sizeB() const { return this->prefetcher_cache_manager_->get_cache_sizeB(); }
 
 }  // namespace tt::tt_metal

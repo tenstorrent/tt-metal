@@ -18,7 +18,7 @@ namespace tt::tt_metal {
 /*! @brief Ringbuffer cache manager
  *  This class manages the ringbuffer cache for the prefetcher.
  *  It keeps track of the entries in the ringbuffer and their offsets.
- *  The ringbuffer is divided into blocks of size cache_block_sizeBB.
+ *  The ringbuffer is divided into blocks of size cache_block_sizeB.
  *  The cache manager keeps track of the entries in the ringbuffer and their offsets.
  */
 class RingbufferCacheManager {
@@ -69,6 +69,8 @@ public:
      */
     std::optional<CacheOffset> get_cache_offset(uint64_t pgm_id, uint32_t lengthB);
 
+    int get_cache_sizeB(void) const { return this->cache_size_blocks_ * this->cache_block_sizeB_; }
+
 private:
     const int cache_block_sizeB_;
     const int cache_size_blocks_;
@@ -100,10 +102,12 @@ private:
         void update_next_idx(void) {
             auto local_next_idx = this->next_idx + 1;
             // wraparound next_idx if it is at the end and if cache is full
-            if (local_next_idx >= entry.size() and this->oldest_idx == 0 and this->next_block_offset != 0)
-                [[unlikely]] {
-                // if cache offset of oldest index is 0 and next_block_offset is not 0, then cache is partially filled
-                this->entry.resize(entry.size() * 2);
+            if (local_next_idx >= entry.size() and this->oldest_idx == 0) [[unlikely]] {
+                if (this->next_block_offset != 0) [[likely]] {
+                    // if cache offset of oldest index is 0 and next_block_offset is not 0, then cache is partially
+                    // filled
+                    this->entry.resize(entry.size() * 2);
+                }
             }
             this->next_idx = local_next_idx & (entry.size() - 1);
         }
@@ -118,7 +122,6 @@ private:
     std::vector<int32_t> valid_;
     constexpr static int32_t invalid_cache_entry_ = -1;
 
-    void add_manager_entry_common(uint64_t pgm_id, uint32_t offset, uint32_t length);
     void add_manager_entry(uint64_t pgm_id, uint32_t offset, uint32_t length);
     void add_manager_entry_no_evict(uint64_t pgm_id, uint32_t offset, uint32_t length);
     void invalidate_manager_entry(void);

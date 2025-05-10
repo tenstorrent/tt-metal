@@ -43,6 +43,10 @@ struct ProgramCommandSequence {
     std::vector<CQDispatchWritePackedCmd*> unicast_launch_msg_write_packed_cmd_ptrs;
     CQDispatchGoSignalMcastCmd* mcast_go_signal_cmd_ptr;
 
+    uint32_t prefetcher_cache_setup_command_offset = 0;
+    size_t kernel_bins_sizeB = 0;
+    uint32_t kernel_bins_base_addr;
+
     uint32_t get_rt_args_size() const {
         return std::accumulate(
             runtime_args_command_sequences.begin(),

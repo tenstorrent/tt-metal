@@ -31,6 +31,7 @@
 #include <umd/device/tt_core_coordinates.h>
 #include "vector_aligned.hpp"
 #include "worker_config_buffer.hpp"
+#include "ringbuffer_cache.hpp"
 
 namespace tt {
 namespace tt_metal {
@@ -115,6 +116,12 @@ public:
 
     void finish(tt::stl::Span<const SubDeviceId> sub_device_ids) override;
 
+    std::pair<bool, size_t> query_prefetcher_cache(uint64_t pgm_id, uint32_t lengthB) override;
+
+    void reset_prefetcher_cache() override;
+
+    int get_prefetcher_cache_sizeB() const override;
+
     IDevice* device() override;
 
 private:
@@ -162,11 +169,30 @@ private:
     CoreCoord completion_queue_writer_core_;
     NOC noc_index_;
 
+    const uint32_t prefetcher_dram_aligned_block_size_;
+    const uint64_t prefetcher_ringbuffer_cache_sizeB_;
+    const uint32_t prefetcher_dram_aligned_num_blocks_;
+    const uint32_t prefetcher_cache_manager_size_;
+    std::unique_ptr<RingbufferCacheManager> prefetcher_cache_manager_;
+
     void read_completion_queue();
 
     // sub_device_ids only needs to be passed when blocking and there are specific sub_devices to wait on
     template <typename T>
-    void enqueue_command(T& command, bool blocking, tt::stl::Span<const SubDeviceId> sub_device_ids);
+    void enqueue_command(
+        T& command,
+        bool blocking,
+        tt::stl::Span<const SubDeviceId> sub_device_ids,
+        std::pair<bool, uint32_t>& prefetcher_caching_info);
+
+    template <typename T>
+    void enqueue_command(
+        T& command,
+        bool blocking,
+        tt::stl::Span<const SubDeviceId> sub_device_ids,
+        std::pair<bool, uint32_t>&& prefetcher_caching_info = {}) {
+        this->enqueue_command(command, blocking, sub_device_ids, prefetcher_caching_info);
+    }
 
     void increment_num_entries_in_completion_q();
     void set_exit_condition();

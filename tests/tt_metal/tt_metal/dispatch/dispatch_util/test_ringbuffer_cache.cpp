@@ -326,6 +326,7 @@ protected:
 
     // define accessors to the private members of the RingbufferCacheManager
     auto get_next_block_offset() const { return rbCache->manager_.next_block_offset; }
+    auto get_oldest_block_offset() const { return rbCache->manager_.entry[rbCache->manager_.oldest_idx].offset; }
     auto get_oldest_idx() const { return rbCache->manager_.oldest_idx; }
     auto get_next_idx() const { return rbCache->manager_.next_idx; }
     auto get_manager_entry_size() const { return rbCache->manager_.entry.size(); }
@@ -380,6 +381,24 @@ INSTANTIATE_TEST_SUITE_P(
             .initial_manager_size = 2048,
             .pgm_ids = std::make_pair(0, 4000),
             .pgm_sizes = std::make_pair(16, 64)},
+        CacheTestParams{// high hits test
+                        .cache_block_sizeB = 4,
+                        .cache_size_blocks = 1024,
+                        .initial_manager_size = 2,
+                        .pgm_ids = std::make_pair(0, 512),
+                        .pgm_sizes = std::make_pair(1, 8)},
+        CacheTestParams{// high hits test
+                        .cache_block_sizeB = 4,
+                        .cache_size_blocks = 4096,
+                        .initial_manager_size = 32,
+                        .pgm_ids = std::make_pair(0, 512),
+                        .pgm_sizes = std::make_pair(4, 24)},
+        CacheTestParams{// high hits test
+                        .cache_block_sizeB = 4,
+                        .cache_size_blocks = 4096,
+                        .initial_manager_size = 16,
+                        .pgm_ids = std::make_pair(0, 256),
+                        .pgm_sizes = std::make_pair(4, 16)},
         CacheTestParams{
             .cache_block_sizeB = 4,
             .cache_size_blocks = 512,
@@ -419,6 +438,7 @@ TEST_P(RingbufferCacheRandomizedTestsFixture, RandomizedQueries) {
     for (size_t i = 0; i < 10'000'000; ++i) {
         pgm_id = dist_pgm_id(gen_pgm_id);
         pgm_size = pgm_id_size_map[pgm_id];
+
         auto result = rbCache->get_cache_offset(pgm_id, pgm_size * params.cache_block_sizeB);
         ASSERT_TRUE(result);
         ASSERT_GE(result->offset, 0);
@@ -429,7 +449,11 @@ TEST_P(RingbufferCacheRandomizedTestsFixture, RandomizedQueries) {
                 << ", pgm_size: " << pgm_size << ", offset: " << result->offset
                 << ", next_block_offset: " << get_next_block_offset() << std::endl;
         }
-
+        ASSERT_TRUE(get_manager_entry_size() >= std::min(params.initial_manager_size, params.cache_size_blocks))
+            << "Manager size: " << get_manager_entry_size() << ", cache size: " << params.cache_size_blocks
+            << ", initial manager size: " << params.initial_manager_size << ", oldest_idx: " << get_oldest_idx()
+            << ", next_index: " << get_next_idx() << ", oldest_block_offset: " << get_oldest_block_offset()
+            << ", next_block_offset: " << get_next_block_offset() << std::endl;
         if (result->is_cached) {
             ++hits_count;
         }
@@ -437,6 +461,10 @@ TEST_P(RingbufferCacheRandomizedTestsFixture, RandomizedQueries) {
     auto end_rbcache = std::chrono::high_resolution_clock::now();
     auto duration_rbcache = std::chrono::duration_cast<std::chrono::milliseconds>(end_rbcache - start_rbcache).count();
     std::cout << "Ringbuffer cache runtime: " << duration_rbcache << " ms, hits: " << hits_count << std::endl;
+    ASSERT_TRUE(get_manager_entry_size() <= params.cache_size_blocks)
+        << "Manager size: " << get_manager_entry_size() << ", cache size: " << params.cache_size_blocks << std::endl;
+    std::cout << "Cache size: " << params.cache_size_blocks << ", initial manager size: " << params.initial_manager_size
+              << ", final manager size: " << get_manager_entry_size() << std::endl;
 }
 
 TEST(DISABLED_MapComparison, OrderedUnorderedMapPerformance) {
