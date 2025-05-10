@@ -24,7 +24,7 @@ class DebugToolsFixture : public DispatchFixture {
 
     template <typename T>
     void RunTestOnDevice(const std::function<void(T*, IDevice*)>& run_function, IDevice* device) {
-        auto run_function_no_args = [=]() { run_function(static_cast<T*>(this), device); };
+        auto run_function_no_args = [=,this]() { run_function(static_cast<T*>(this), device); };
         DispatchFixture::RunTestOnDevice(run_function_no_args, device);
     }
 };
