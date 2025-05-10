@@ -2,6 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#pragma once
+
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/fabric_types.hpp>
 
