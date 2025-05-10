@@ -93,15 +93,12 @@ LlamaReduceScatterCreateHeadsDeviceOperation::compute_output_specs(
     }
     v_shard_grid = tt::tt_metal::num_cores_to_corerangeset_in_subcoregrids(next_core_coord, batch, sub_core_grid, true);
 
-    tt::tt_metal::MemoryConfig q_mem_config = attributes.qkv_memory_config.value();
-    tt::tt_metal::MemoryConfig k_mem_config = attributes.qkv_memory_config.value();
-    tt::tt_metal::MemoryConfig v_mem_config = attributes.qkv_memory_config.value();
     tt::tt_metal::ShardSpec q_shard_spec{q_shard_grid, {attributes.num_heads, head_dim}};
-    q_mem_config.with_shard_spec(q_shard_spec);
     tt::tt_metal::ShardSpec k_shard_spec{k_shard_grid, {attributes.num_kv_heads, head_dim}};
-    k_mem_config.with_shard_spec(k_shard_spec);
     tt::tt_metal::ShardSpec v_shard_spec{v_shard_grid, {attributes.num_kv_heads, head_dim}};
-    v_mem_config.with_shard_spec(v_shard_spec);
+    tt::tt_metal::MemoryConfig q_mem_config = attributes.qkv_memory_config.value().with_shard_spec(q_shard_spec);
+    tt::tt_metal::MemoryConfig k_mem_config = attributes.qkv_memory_config.value().with_shard_spec(k_shard_spec);
+    tt::tt_metal::MemoryConfig v_mem_config = attributes.qkv_memory_config.value().with_shard_spec(v_shard_spec);
 
     return {
         TensorSpec(
