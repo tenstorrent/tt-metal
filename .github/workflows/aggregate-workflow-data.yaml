@@ -1,0 +1,83 @@
+name: Aggregate Workflow Data
+
+on:
+  workflow_dispatch:
+
+jobs:
+  APC-Analysis:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - name: Run local aggregate-workflow-data action
+        uses: ./.github/actions/aggregate-workflow-data
+        with:
+          workflow_name: "All post-commit tests"
+          hours: "24"
+          branch: "main"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  Blackhole-APC-Analysis:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - name: Run local aggregate-workflow-data action
+        uses: ./.github/actions/aggregate-workflow-data
+        with:
+          workflow_name: "Blackhole post-commit tests"
+          hours: "24"
+          branch: "main"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  Blackhole-Analysis:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - name: Run local aggregate-workflow-data action
+        uses: ./.github/actions/aggregate-workflow-data
+        with:
+          name_prefix: "(Blackhole)"
+          hours: "24"
+          branch: "main"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  TG-Analysis:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - name: Run local aggregate-workflow-data action
+        uses: ./.github/actions/aggregate-workflow-data
+        with:
+          name_prefix: "(TG)"
+          hours: "24"
+          branch: "main"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  T3K-Analysis:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - name: Run local aggregate-workflow-data action
+        uses: ./.github/actions/aggregate-workflow-data
+        with:
+          name_prefix: "(T3K)"
+          hours: "24"
+          branch: "main"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  Single-card-Analysis:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - name: Run local aggregate-workflow-data action
+        uses: ./.github/actions/aggregate-workflow-data
+        with:
+          name_prefix: "(Single-card)"
+          hours: "24"
+          branch: "main"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

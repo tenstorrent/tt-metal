@@ -1,0 +1,158 @@
+name: Aggregate Workflow Data
+description: Aggregate GitHub workflow data based on name or prefix and time range
+
+inputs:
+  workflow_name:
+    description: Exact workflow name to match
+    required: false
+  name_prefix:
+    description: Workflow name prefix to match
+    required: false
+  hours:
+    description: How many hours back to check
+    required: false
+    default: "24"
+  branch:
+    description: Filter by branch
+    required: false
+    default: "main"
+  actor:
+    description: Filter by GitHub actor
+    required: false
+  show_runs:
+    description: Whether to show individual run rows with links
+    required: false
+    default: "false"
+
+runs:
+  using: "composite"
+  steps:
+    - name: Aggregate workflow stats
+      uses: actions/github-script@v6
+      with:
+        script: |
+          const workflowName = '${{ inputs.workflow_name }}';
+          const namePrefix = '${{ inputs.name_prefix }}';
+          const hours = parseInt('${{ inputs.hours }}' || "24");
+          const branch = '${{ inputs.branch }}';
+          const actor = '${{ inputs.actor }}';
+          const showRuns = '${{ inputs.show_runs }}' === 'true';
+
+          core.info(`workflow_name: '${workflowName}', name_prefix: '${namePrefix}'`);
+
+          if (!workflowName && !namePrefix) {
+            core.setFailed("You must provide either 'workflow_name' or 'name_prefix'.");
+            return;
+          }
+
+          const useWorkflowName = !!workflowName;
+          const usePrefix = !useWorkflowName && !!namePrefix;
+
+          const since = new Date(Date.now() - hours * 60 * 60 * 1000);
+
+          let runs = [];
+          let page = 1;
+          const maxPages = 20;
+
+          while (page <= maxPages) {
+            const { data } = await github.rest.actions.listWorkflowRunsForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              per_page: 100,
+              page,
+            });
+
+            if (data.workflow_runs.length === 0) break;
+            runs = runs.concat(data.workflow_runs);
+            page++;
+          }
+
+          const matchedRuns = runs.filter(run => {
+            const nameMatches =
+              (useWorkflowName && run.name === workflowName) ||
+              (usePrefix && run.name.startsWith(namePrefix));
+            const branchMatches = !branch || run.head_branch === branch;
+            const actorMatches = !actor || run.actor?.login === actor;
+            const timeMatches = new Date(run.created_at) >= since;
+            const completed = run.status === 'completed';
+            return nameMatches && branchMatches && actorMatches && timeMatches && completed;
+          });
+
+          const grouped = new Map();
+          for (const run of matchedRuns) {
+            if (!grouped.has(run.name)) grouped.set(run.name, []);
+            grouped.get(run.name).push(run);
+          }
+
+          let report = "# Workflow Summary\n";
+
+          for (const [name, runs] of grouped.entries()) {
+            const successes = runs.filter(r => r.conclusion === 'success');
+
+            // Find last run on main branch
+            const mainBranchRuns = runs
+              .filter(r => r.head_branch === 'main')
+              .sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+            const lastMainRun = mainBranchRuns[0];
+            const lastMainPassing = lastMainRun?.conclusion === 'success' ? '✅' : '❌';
+
+            const rows = runs.map(r =>
+              `| [${r.name}](${r.html_url}) | ${r.event} | ${r.status} | ${r.conclusion} | ${new Date(r.created_at).toLocaleString()} |`
+            );
+
+            report += `
+              ### ${name}
+              - **Total Completed Runs**: ${runs.length}
+              - **Successful Runs**: ${successes.length}
+              - **Success Rate**: ${(runs.length === 0 ? "N/A" : (successes.length / runs.length * 100).toFixed(2) + "%")}
+              - **Last Run on \`main\` Passed**: ${lastMainPassing}
+              `;
+
+            if (lastMainPassing === '❌' && mainBranchRuns.length > 0) {
+              const recent = mainBranchRuns.slice(0, 5);
+              report += `
+                **Last 5 Runs on \`main\` (latest first):**
+
+                | PR Author | PR Title | Commit | PR | Conclusion | Retries | Failure Reason | Link |
+                |-----------|----------|--------|----|------------|---------|----------------|------|
+                `;
+
+              for (const r of recent) {
+                const shortSha = r.head_sha.substring(0, 7);
+                let prNumber = '—';
+                let prAuthor = '—';
+                let prTitle = '—';
+
+                try {
+                  const prs = await github.rest.repos.listPullRequestsAssociatedWithCommit({
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    commit_sha: r.head_sha,
+                  });
+
+                  if (prs.data.length > 0) {
+                    const pr = prs.data[0];
+                    prNumber = `[#${pr.number}](https://github.com/${context.repo.owner}/${context.repo.repo}/pull/${pr.number})`;
+                    prAuthor = pr.user?.login || 'unknown';
+                    prTitle = pr.title || '—';
+                  }
+                } catch (e) {
+                  core.warning(`Could not fetch PR for commit ${shortSha}`);
+                }
+
+                const failureReason = r.failure_message || r.conclusion || '—';
+                const retryAttempt = r.run_attempt ? r.run_attempt - 1 : 0;
+
+                report += `| ${prAuthor} | ${prTitle} | \`${shortSha}\` | ${prNumber} | ${r.conclusion} | ${retryAttempt} | ${failureReason} | [Run](${r.html_url}) |\n`;
+              }
+            }
+
+            if (showRuns) {
+              report += `
+              | Workflow | Trigger | Status | Conclusion | Timestamp |
+              |----------|---------|--------|------------|-----------|
+              ${rows.join('\n')}\n`;
+                          }
+                        }
+
+          core.summary.addRaw(report).write();
