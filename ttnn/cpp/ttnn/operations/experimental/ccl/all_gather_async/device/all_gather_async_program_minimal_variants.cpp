@@ -68,7 +68,10 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_interleav
     const GlobalSemaphore& semaphore,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
     tt::tt_metal::Program program{};
-    auto mesh_device = input_tensor.mesh_device();
+    IDevice* mesh_device = input_tensor.mesh_device();
+    if (!mesh_device) {
+        mesh_device = input_tensor.device();
+    }
     const bool enable_async_output_tensor = false;
     const bool enable_persistent_fabric_mode = true;
     bool is_first_chip = ring_index == 0;
@@ -116,6 +119,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_interleav
         CreateCircularBuffer(program, sender_worker_core_range, cb_reserved_packet_header_config);
 
     // Tensor Info
+    const auto input_tensor_shape = input_tensor.get_padded_shape();
     const auto input_tensor_layout = input_tensor.buffer()->buffer_layout();
     const auto input_tensor_buffer_type = input_tensor.buffer()->buffer_type();
     const auto input_tensor_page_layout = input_tensor.layout();
@@ -124,8 +128,14 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_interleav
     const auto output_tensor_buffer_type = output_tensor.buffer()->buffer_type();
     const auto output_tensor_page_layout = output_tensor.layout();
 
+    bool use_best_effort =
+        AllGatherAsync::best_effort_interleave(input_tensor, dim, output_tensor_buffer_type, true) && num_links == 1;
+
     // KERNEL CREATION
     // Reader
+    bool last_dim = dim == input_tensor_shape.rank() - 1;
+    const auto& allocator = mesh_device->allocator();
+    uint32_t num_banks = allocator->get_num_banks(input_tensor_buffer_type);
     auto reader_kernel_config = tt::tt_metal::ReaderDataMovementConfig{};
     reader_kernel_config.compile_args = {
         ring_index,                                       // my_chip_id
@@ -133,6 +143,9 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_interleav
         src0_cb_index,                                    // cb0_id
         num_pages_per_packet,                             // packet_size_in_pages
         op_config.get_page_size(),                        // tensor0_page_size
+        last_dim,                                         // last_dim
+        num_banks,                                        // num_banks
+        use_best_effort,                                  // use_best_effort
     };
     log_trace(tt::LogOp, "Reader Compile Args:");
     for (const auto& arg : reader_kernel_config.compile_args) {
@@ -146,6 +159,8 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_interleav
         reader_kernel_config);
 
     // Writer
+    uint32_t tile_rows = input_tensor_shape[dim - 1] / input_tensor.get_tensor_spec().tile().get_height();
+    uint32_t tile_cols_per_chip = input_tensor_shape[dim] / input_tensor.get_tensor_spec().tile().get_width();
     auto writer_kernel_config = tt::tt_metal::WriterDataMovementConfig{};
     writer_kernel_config.compile_args = {
         ring_index,                                        // my_chip_id
@@ -157,7 +172,10 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_interleav
         op_config.get_page_size(),                         // tensor0_page_size
         num_targets_forward,                               // num_targets_forward_direction
         num_targets_backward,                              // num_targets_backward_direction
-        dynamic_alternate                                  // alternate
+        dynamic_alternate,                                 // alternate
+        last_dim,                                          // last_dim
+        num_banks,                                         // num_bansks
+        use_best_effort,                                   // use_best_effort
     };
     for (const auto& arg : writer_kernel_config.compile_args) {
         log_trace(tt::LogOp, "\t{}", arg);
@@ -188,6 +206,9 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_interleav
             input_tensor.buffer()->address(),  // tensor_address0
             input_tile_id_start,               // tile_id_start
             input_tile_id_end,                 // tile_id_end
+            base_pages_per_worker,
+            ring_size,           // ring_size
+            tile_cols_per_chip,  // tile_cols_per_chip
         };
         log_trace(tt::LogOp, "Reader Runtime Args:");
         for (const auto& arg : reader_rt_args) {
@@ -201,6 +222,10 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_interleav
         uint32_t out_ready_sem_wait_value = (dynamic_alternate ? (ring_size + 1) : ring_size) * num_links;
         uint32_t output_tile_id_start = ring_index * input_tensor_num_pages + input_tile_id_start;
         uint32_t output_tile_id_end = ring_index * input_tensor_num_pages + input_tile_id_end;
+        if (last_dim) {
+            output_tile_id_start = tile_cols_per_chip * ring_index + (base_pages_per_worker * ring_size) * link;
+            output_tile_id_end = tile_rows * tile_cols_per_chip + input_tile_id_end;
+        }
         std::vector<uint32_t> writer_rt_args = {
             output_tensor.buffer()->address(),  // tensor_address0
             semaphore.address(),                // out_ready_sem_bank_addr (absolute address)
@@ -211,6 +236,9 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_interleav
             drain_sync_core.x,                  // out_ready_sem_noc0_x
             drain_sync_core.y,                  // out_ready_sem_noc0_y
             out_ready_sem_wait_value,           // out_ready_sem_wait_value
+            base_pages_per_worker,              // base_pages_per_worker
+            ring_size,                          // ring_size
+            tile_cols_per_chip,                 // tile_cols_per_chip
         };
         log_trace(tt::LogOp, "Writer Runtime Args:");
         for (const auto& arg : writer_rt_args) {
