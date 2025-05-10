@@ -1854,7 +1854,7 @@ def test_sharded_reduce_h(N, in_sharded, out_sharded, dtype, device, function_le
 
     tt_got_back = yt.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch()
 
-    y = torch.max(x, 2)
+    y = torch.max(x, 2)[0]
 
     if dtype == ttnn.bfloat16:
         passing, output = comp_equal(y, tt_got_back)
