@@ -60,9 +60,12 @@ auto capture_op_trace(Op op, MeshDevice* device, Args&&... args) {
         // Ensure trace capture is stopped and released before returning to avoid a memory leak
         ttnn::operations::trace::end_trace_capture(device, trace_id, ttnn::DefaultQueueId);
         ttnn::operations::trace::release_trace(device, trace_id);
+        device->disable_and_clear_program_cache();
         throw e;
     }
     ttnn::operations::trace::end_trace_capture(device, trace_id, ttnn::DefaultQueueId);
+
+    device->disable_and_clear_program_cache();
 
     return trace_id;
 }
