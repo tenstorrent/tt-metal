@@ -439,16 +439,20 @@ operation::ProgramWithCallbacks sdpa_multi_core(
                                  ? tt::tt_metal::datatype_to_dataformat_converter(attn_mask.value().get_dtype())
                                  : tt::DataFormat::Bfp4_b;
     tt::DataFormat out_df = tt::tt_metal::datatype_to_dataformat_converter(output_tensor.get_dtype());
+
+    tt::DataFormat identity_df = tt::DataFormat::Float16_b;
     tt::DataFormat scalar_df = tt::DataFormat::Float16_b;
-    tt::DataFormat im_df = tt::DataFormat::Float16_b;  // need to disable fp32 cbs (Issue #13364) fp32_dest_acc_en ?
-                                                       // tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
-    tt::DataFormat stats_df = im_df;
+
+    tt::DataFormat im_df =
+        program_config->fp32_matmul_intermediates ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
+    tt::DataFormat stats_df = tt::DataFormat::Float16_b;
 
     uint32_t q_tile_size = tt::tt_metal::detail::TileSize(q_df);
     uint32_t k_tile_size = tt::tt_metal::detail::TileSize(k_df);
     uint32_t v_tile_size = tt::tt_metal::detail::TileSize(v_df);
     uint32_t mask_tile_size = tt::tt_metal::detail::TileSize(mask_df);
     uint32_t out_tile_size = tt::tt_metal::detail::TileSize(out_df);
+    uint32_t identity_tile_size = tt::tt_metal::detail::TileSize(identity_df);
     uint32_t scalar_tile_size = tt::tt_metal::detail::TileSize(scalar_df);
     uint32_t im_tile_size = tt::tt_metal::detail::TileSize(im_df);
     uint32_t stats_tile_size = tt::tt_metal::detail::TileSize(stats_df);
@@ -490,8 +494,8 @@ operation::ProgramWithCallbacks sdpa_multi_core(
     auto cb_in4_id = CreateCircularBuffer(program, core_grid, c_in4_config);
 
     // identity scale input
-    auto c_in5_config = CircularBufferConfig(scale_tiles * scalar_tile_size, {{tt::CBIndex::c_5, scalar_df}})
-                            .set_page_size(tt::CBIndex::c_5, scalar_tile_size);
+    auto c_in5_config = CircularBufferConfig(scale_tiles * identity_tile_size, {{tt::CBIndex::c_5, identity_df}})
+                            .set_page_size(tt::CBIndex::c_5, identity_tile_size);
     auto cb_in5_id = CreateCircularBuffer(program, core_grid, c_in5_config);
 
     if (is_chunked) {

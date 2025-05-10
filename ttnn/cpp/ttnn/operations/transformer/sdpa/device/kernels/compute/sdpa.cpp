@@ -139,6 +139,7 @@ void MAIN {
                         true /*transpose*/);
 
                     /* QK *= SCALE */
+                    reconfig_data_format(cb_qk_im, cb_scale_in);
                     mul_block_bcast_scalar_inplace<cb_qk_im, cb_scale_in, qk_chunk_tiles>();
 
                     // Finding the diagonal is harder now that q_chunk_size and k_chunk_size can differ
@@ -166,6 +167,7 @@ void MAIN {
                     }
 
                     reconfig_data_format(cb_qk_im, cb_identity_scale_in);
+                    pack_reconfig_data_format(alias_cur_max);
                     reduce_c<
                         PoolType::MAX,
                         ReduceDim::REDUCE_ROW,
@@ -175,13 +177,18 @@ void MAIN {
                         Sk_chunk_t>(alias_cur_max);
 
                     if (k_chunk > 0) {
+                        reconfig_data_format(alias_cur_max, alias_prev_max);
                         max_block_inplace<Sq_chunk_t>(alias_cur_max, alias_prev_max);
                     }
 
                     /* QK -= cb_cur_max */
                     /* QK = exp(QK)*/
+                    reconfig_data_format(cb_qk_im, alias_cur_max);
+                    pack_reconfig_data_format(cb_qk_im);
                     sub_exp_block_bcast_cols_inplace<cb_qk_im, Sq_chunk_t, Sk_chunk_t>(alias_cur_max);
 
+                    reconfig_data_format(cb_qk_im, cb_identity_scale_in);
+                    pack_reconfig_data_format(alias_cur_sum);
                     /* cb_cur_sum = sum(cb_qk_im, dim=-1) */
                     reduce_c<
                         PoolType::SUM,
@@ -192,6 +199,7 @@ void MAIN {
                         Sk_chunk_t>(alias_cur_sum);
 
                     /* OUT_IM = QK @ V_CHUNK */
+                    pack_reconfig_data_format(alias_mm2_cur_out);
                     matmul_blocks(
                         cb_qk_im,
                         cb_v_in,
@@ -208,11 +216,12 @@ void MAIN {
                         false /*transpose*/);
 
                     cb_pop_front(cb_qk_im, qk_chunk_tiles);
-                    reconfig_data_format(alias_prev_max, alias_cur_max);
 
                     /* OUT_ACC += OUT_IM */
                     if (k_chunk > 0) {
                         /* cb_exp_max_diff = torch.exp(cb_prev_max - cb_cur_max) */
+                        reconfig_data_format(alias_prev_max, alias_cur_max);
+                        pack_reconfig_data_format(cb_exp_max_diff);
                         sub_exp_block(alias_prev_max, alias_cur_max, cb_exp_max_diff, Sq_chunk_t);
                         cb_pop_front(alias_prev_max, Sq_chunk_t);
 
@@ -222,7 +231,10 @@ void MAIN {
                         add_block_inplace(alias_cur_sum, alias_prev_sum, Sq_chunk_t);
 
                         /* cb_out_accumulate_im *= cb_exp_max_diff */
+                        reconfig_data_format(alias_mm2_prev_out, cb_exp_max_diff);
+                        pack_reconfig_data_format(alias_mm2_prev_out);
                         mul_block_bcast_cols_inplace<Sq_chunk_t, DHt>(alias_mm2_prev_out, cb_exp_max_diff);
+                        reconfig_data_format(alias_mm2_cur_out, alias_mm2_prev_out);
                         add_block_inplace(alias_mm2_cur_out, alias_mm2_prev_out, out_chunk_tiles);
                     }
 
@@ -233,11 +245,16 @@ void MAIN {
                 }
 
                 /* cb_cur_sum = 1.0 / cb_cur_sum */
+                reconfig_data_format(alias_prev_sum, alias_prev_sum);
+                pack_reconfig_data_format(alias_prev_sum);
                 recip_block_inplace(alias_prev_sum, Sq_chunk_t);
 
                 /* cb_out_accumulate_im *= cb_cur_sum */
                 // NOTE: PCC bug if we modify below function to directy output to cb_out.
+                reconfig_data_format(alias_mm2_prev_out, alias_prev_sum);
+                pack_reconfig_data_format(alias_mm2_prev_out);
                 mul_block_bcast_cols_inplace<Sq_chunk_t, DHt>(alias_mm2_prev_out, alias_prev_sum);
+                reconfig_data_format(alias_mm2_prev_out, alias_mm2_prev_out);
                 pack_reconfig_data_format(cb_out);
                 copy_block(alias_mm2_prev_out, cb_out, out_chunk_tiles);
 
