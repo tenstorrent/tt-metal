@@ -8,9 +8,9 @@ import torch
 import pytest
 import ttnn
 from loguru import logger
-from models.experimental.mobilenetv2.reference.mobilenetv2 import Mobilenetv2
-from models.experimental.mobilenetv2.tt import ttnn_mobilenetv2
-from models.experimental.mobilenetv2.tt.model_preprocessing import create_mobilenetv2_model_parameters
+from models.demos.mobilenetv2.reference.mobilenetv2 import Mobilenetv2
+from models.demos.mobilenetv2.tt import ttnn_mobilenetv2
+from models.demos.mobilenetv2.tt.model_preprocessing import create_mobilenetv2_model_parameters
 from models.perf.perf_utils import prep_perf_report
 from models.utility_functions import disable_persistent_kernel_cache
 from models.perf.device_perf_utils import run_device_perf, check_device_perf, prep_device_perf_report
@@ -39,9 +39,9 @@ def test_mobilenetv2(device, input_tensor, use_pretrained_weight, reset_seeds):
     disable_persistent_kernel_cache()
     profiler.clear()
     batch_size = input_tensor.shape[0]
-    weights_path = "models/experimental/mobilenetv2/mobilenet_v2-b0353104.pth"
+    weights_path = "models/demos/mobilenetv2/mobilenet_v2-b0353104.pth"
     if not os.path.exists(weights_path):
-        os.system("bash models/experimental/mobilenetv2/weights_download.sh")
+        os.system("bash models/demos/mobilenetv2/weights_download.sh")
     if use_pretrained_weight:
         state_dict = torch.load(weights_path)
         ds_state_dict = {k: v for k, v in state_dict.items()}
@@ -95,7 +95,7 @@ def test_mobilenetv2(device, input_tensor, use_pretrained_weight, reset_seeds):
     expected_compile_time, expected_inference_time = get_expected_times("mobilenetv2")
 
     prep_perf_report(
-        model_name="models/experimental/functional_mobilenetv2",
+        model_name="models/demos/functional_mobilenetv2",
         batch_size=batch_size,
         inference_and_compile_time=inference_and_compile_time,
         inference_time=inference_time,
@@ -117,7 +117,7 @@ def test_mobilenetv2(device, input_tensor, use_pretrained_weight, reset_seeds):
 @pytest.mark.parametrize(
     "batch_size, expected_perf",
     [
-        [1, 712],
+        [1, 720],
     ],
 )
 @pytest.mark.models_device_performance_bare_metal
