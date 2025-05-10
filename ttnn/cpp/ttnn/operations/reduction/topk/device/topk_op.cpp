@@ -9,8 +9,15 @@ using namespace tt::tt_metal;
 
 namespace topk_utils {
 
+static inline uint32_t largest_power_of_two(std::uint32_t x) { return x == 0 ? 0 : (1 << (31 - __builtin_clz(x))); }
+
 static inline bool verify_multi_core_cost(
-    const std::vector<Tensor>& input_tensors, uint16_t width, uint16_t min_dim, uint16_t max_dim, uint32_t k) {
+    const std::vector<Tensor>& input_tensors,
+    uint16_t width,
+    uint16_t min_dim,
+    uint16_t max_dim,
+    uint32_t k,
+    CoreRangeSet core_range_set) {
     auto device = input_tensors.at(0).device();
     tt::DataFormat value_cb_data_format =
         tt::tt_metal::datatype_to_dataformat_converter(input_tensors.at(0).get_dtype());
@@ -19,10 +26,10 @@ static inline bool verify_multi_core_cost(
     uint32_t value_tile_size = tile_size(value_cb_data_format);
     uint32_t index_tile_size = tile_size(index_cb_data_format);
 
-    const auto max_cores =
-        device->compute_with_storage_grid_size().y - 1;  // reserve one core for the gather - switch to grid.x as it
-                                                         // allows for more cores and allow spillover to next row
-    for (uint16_t split_size = max_dim; split_size >= min_dim; split_size /= 2) {
+    const auto core_range = core_range_set.ranges().at(0);
+    const auto max_cores = core_range.end_coord.y - core_range.start_coord.y - 1;
+    uint16_t start_split_size = width / largest_power_of_two(max_cores);
+    for (uint16_t split_size = start_split_size; split_size <= max_dim; split_size *= 2) {
         uint16_t rem = width % split_size;
         uint16_t num_cores = width / split_size + (rem > 0);
         uint32_t memory_cost_gather =
@@ -34,7 +41,7 @@ static inline bool verify_multi_core_cost(
                                                   // as a matching set of indices, is processed by a core
         if (num_cores <= max_cores &&
             (memory_cost_gather + (memory_cost_local * num_cores)) < (device->l1_size_per_core() * num_cores) &&
-            num_cores > 1) {
+            num_cores > 1 && split_size >= min_dim) {
             return true;
         }
     }
@@ -66,6 +73,7 @@ static inline bool verify_single_core_cost(const std::vector<Tensor>& input_tens
 }
 
 constexpr uint32_t multi_core_min_width = 8192;
+constexpr uint32_t min_dim_per_core = 64;
 }  // namespace topk_utils
 namespace ttnn::operations::reduction {
 
@@ -75,7 +83,7 @@ void TopK::validate_with_output_tensors(
     TT_FATAL(input_shape.rank() == 4, "Input shape must be 4D, got {}", input_shape.rank());
 
     TT_FATAL(
-        input_shape[-1] >= 64,
+        input_shape[-1] >= topk_utils::min_dim_per_core,
         "Input shape inner dim {} must be a multiple of 64, pad with +/-infinity if necessary",
         input_shape[-1]);
     TT_FATAL(
@@ -90,7 +98,17 @@ void TopK::validate_with_output_tensors(
 
     if (input_shape[dim] >= topk_utils::multi_core_min_width) {  // multicore implementation
         can_run = topk_utils::verify_multi_core_cost(
-            input_tensors, input_shape[this->dim], 64, input_shape[this->dim] / 2, this->k);
+            input_tensors,
+            input_shape[this->dim],
+            topk_utils::min_dim_per_core,
+            input_shape[this->dim] / 2,
+            this->k,
+            this->sub_core_grids);
+
+        TT_FATAL(
+            this->sub_core_grids.ranges().size() == 1,
+            "Only one core range is supported right now, got {}",
+            this->sub_core_grids.ranges().size());
 
         if (!can_run) {  // can we default to new topk implementation on single core
             can_run = topk_utils::verify_single_core_cost(input_tensors, this->k);
@@ -154,16 +172,35 @@ operation::ProgramWithCallbacks TopK::create_program(
     // tensor size, so it can handle larger input tensor sizes.
     // TODO: implement new topk implementation for multicore
     multicore_supported &= topk_utils::verify_multi_core_cost(
-        input_tensors, input_shape[this->dim], 64, input_shape[this->dim] / 2, this->k);
+        input_tensors,
+        input_shape[this->dim],
+        topk_utils::min_dim_per_core,
+        input_shape[this->dim] / 2,
+        this->k,
+        this->sub_core_grids);
 
     multicore_supported &= (this->k <= 64);  // old implementation cannot handle k>64
 
     if (!multicore_supported) {
         return detail::topk_single_core_interleaved(
-            input_tensor, this->k, this->dim, this->largest, this->sorted, output_tensors.at(0), output_tensors.at(1));
+            input_tensor,
+            this->k,
+            this->dim,
+            this->largest,
+            this->sorted,
+            this->sub_core_grids,
+            output_tensors.at(0),
+            output_tensors.at(1));
     } else {
         return detail::topk_multicore_interleaved(
-            input_tensor, this->k, this->dim, this->largest, this->sorted, output_tensors.at(0), output_tensors.at(1));
+            input_tensor,
+            this->k,
+            this->dim,
+            this->largest,
+            this->sorted,
+            this->sub_core_grids,
+            output_tensors.at(0),
+            output_tensors.at(1));
     }
 }
 
