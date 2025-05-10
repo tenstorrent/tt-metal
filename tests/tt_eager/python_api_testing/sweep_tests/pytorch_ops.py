@@ -53,7 +53,7 @@ def std_hw(x, *args, **kwargs):
 
 
 def mean_hw(x, *args, **kwargs):
-    return torch.mean(x, [2, 3], keepdim=True)
+    return torch.mean(x, [2, 3])
 
 
 def normalize_hw(x, *args, **kwargs):
