@@ -14,7 +14,7 @@ def update_model_config(config, batch_size):
     wh_core_grid_y = 8
     if batch_size <= wh_core_grid_y:
         grid_y = batch_size
-        grid_x = 4  ## it can be 6 for better latency
+        grid_x = 6  ## it can be 4 or 3, for higher core utilization but less latency
     else:
         grid_y = 8
         batch_per_y_core = batch_size // wh_core_grid_y
