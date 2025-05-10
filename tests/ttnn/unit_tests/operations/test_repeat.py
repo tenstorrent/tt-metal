@@ -101,9 +101,8 @@ def test_pc_repeat(device, layout, shape, repeat_shape, use_program_cache):
             base_program_cache_entires = device.num_program_cache_entries()
         else:
             assert (
-                device.num_program_cache_entries() == base_program_cache_entires,
-                "program cache entries differ on same configs",
-            )
+                device.num_program_cache_entries() == base_program_cache_entires
+            ), "program cache entries differ on same configs"
 
 
 # 17975 test cases
@@ -125,9 +124,8 @@ def test_pc_with_different_shapes_in_sequence(device, use_program_cache):
     for _ in range(num_iters):
         y_tt = ttnn.from_torch(y, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
         assert (
-            device.num_program_cache_entries() == base_program_cache_entires,
-            "program cache entries differ on same configs",
-        )
+            device.num_program_cache_entries() == base_program_cache_entires
+        ), "program cache entries differ on same configs"
 
         x = torch.zeros((64, 1, 256, 384), dtype=torch.bfloat16)
         x_tt = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
@@ -155,9 +153,8 @@ def test_pc_with_different_shapes_in_sequence(device, use_program_cache):
     for _ in range(num_iters):
         y_tt = ttnn.from_torch(y, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
         assert (
-            device.num_program_cache_entries() == base_program_cache_entires,
-            "program cache entries differ on same configs",
-        )
+            device.num_program_cache_entries() == base_program_cache_entires
+        ), "program cache entries differ on same configs"
 
         x = torch.zeros((4, 1, 32, 32), dtype=torch.bfloat16)
         x_tt = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
@@ -182,9 +179,8 @@ def test_pc_with_different_shapes_in_sequence(device, use_program_cache):
         y = torch.rand((1, 1, 256, 384), dtype=torch.bfloat16)
         y_tt = ttnn.from_torch(y, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
         assert (
-            device.num_program_cache_entries() == base_program_cache_entires,
-            "program cache entries differ on same configs",
-        )
+            device.num_program_cache_entries() == base_program_cache_entires
+        ), "program cache entries differ on same configs"
         z_tt = ttnn.repeat(y_tt, ttnn.Shape([64, 1, 1, 1]))
 
         for i in range(64):
