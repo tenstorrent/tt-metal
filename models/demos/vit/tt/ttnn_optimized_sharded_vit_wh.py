@@ -136,7 +136,6 @@ def update_model_config(config, batch_size):
 
 
 def vit_patch_embeddings(config, pixel_values, *, parameters, unittest_check=False):
-    # batch_size, img_c, img_h, img_w = pixel_values.shape # NCHW
     batch_size, img_h, img_w, img_c = pixel_values.shape  # permuted input NHWC
     patch_size = 16
     patch_count = img_h // patch_size  # 14

@@ -63,6 +63,13 @@ def test_run_vit_trace_2cqs_inference(
         input_labels_all = []
         for iter in tqdm(range(iterations), desc="Preparing images"):
             inputs, labels = get_batch(data_loader, image_processor)
+            # preprocessing
+            inputs = torch.permute(inputs, (0, 2, 3, 1))
+            inputs = torch.nn.functional.pad(inputs, (0, 1, 0, 0, 0, 0, 0, 0))
+            batch_size, img_h, img_w, img_c = inputs.shape  # permuted input NHWC
+            patch_size = 16
+            inputs = inputs.reshape(batch_size, img_h, img_w // patch_size, 4 * patch_size)
+            #
             input_tensors_all.append(inputs)
             input_labels_all.append(labels)
         logger.info("Processed ImageNet-1k validation Dataset")
@@ -75,12 +82,6 @@ def test_run_vit_trace_2cqs_inference(
             inputs = input_tensors_all[iter]
             labels = input_labels_all[iter]
             profiler.start(f"run")
-            ### TODO optimize input streamer for better e2e performance
-            inputs = torch.permute(inputs, (0, 2, 3, 1))
-            inputs = torch.nn.functional.pad(inputs, (0, 1, 0, 0, 0, 0, 0, 0))
-            batch_size, img_h, img_w, img_c = inputs.shape  # permuted input NHWC
-            patch_size = 16
-            inputs = inputs.reshape(batch_size, img_h, img_w // patch_size, 4 * patch_size)
             tt_inputs_host = ttnn.from_torch(
                 inputs,
                 dtype=ttnn.bfloat16,
