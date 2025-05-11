@@ -1583,7 +1583,6 @@ def reduce_max_w(x, *args, device, dtype, layout, input_mem_config, output_mem_c
     t1 = ttnn.max(t0, 3, memory_config=output_mem_config)
 
     output = tt2torch_tensor(t1)
-    print("TT output", output)
 
     return output
 
