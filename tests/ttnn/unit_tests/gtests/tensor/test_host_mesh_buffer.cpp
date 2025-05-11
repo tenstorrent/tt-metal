@@ -36,76 +36,36 @@ TEST(HostMeshBufferTest, OwnedLifecycle) {
     EXPECT_FALSE(buffer.is_allocated());
 }
 
-TEST(HostMeshBufferTest, ShardedWithInvalidLocalSize) {
-    std::vector<HostBuffer> buffers;
-    for (int i = 0; i < 4; ++i) {
-        buffers.push_back(HostBuffer(std::vector<int>{i * 3 + 1, i * 3 + 2, i * 3 + 3}));
-    }
-
-    // Local size (5) exceeds global size (4)
-    EXPECT_ANY_THROW(HostMeshBuffer::create_sharded(std::move(buffers), 5, 0));
-}
-
-TEST(HostMeshBufferTest, ShardedWithInvalidLocalOffset) {
-    std::vector<HostBuffer> buffers;
-    for (int i = 0; i < 4; ++i) {
-        buffers.push_back(HostBuffer(std::vector<int>{i * 3 + 1, i * 3 + 2, i * 3 + 3}));
-    }
-
-    // Local offset (3) + local size (2) exceeds global size (4)
-    EXPECT_ANY_THROW(HostMeshBuffer::create_sharded(std::move(buffers), 2, 3));
-}
-
-TEST(HostMeshBufferTest, ShardedWithMeshShapeInvalidLocalShape) {
-    std::vector<HostBuffer> buffers;
-    for (int i = 0; i < 6; ++i) {
-        buffers.push_back(HostBuffer(std::vector<int>{i * 3 + 1, i * 3 + 2, i * 3 + 3}));
-    }
-
+TEST(HostMeshBufferTest, ShardedWithInvalidLocalShape) {
     distributed::MeshShape global_shape(2, 3);
     distributed::MeshShape local_shape(2, 4);  // 2x4 > 2x3
     distributed::MeshCoordinate local_offset(0, 0);
 
-    EXPECT_ANY_THROW(HostMeshBuffer::create_sharded(std::move(buffers), global_shape, local_shape, local_offset));
+    EXPECT_ANY_THROW(HostMeshBuffer::create_sharded(global_shape, local_shape, local_offset));
 }
 
-TEST(HostMeshBufferTest, ShardedWithMeshShapeInvalidLocalOffset) {
-    std::vector<HostBuffer> buffers;
-    for (int i = 0; i < 6; ++i) {
-        buffers.push_back(HostBuffer(std::vector<int>{i * 3 + 1, i * 3 + 2, i * 3 + 3}));
-    }
-
+TEST(HostMeshBufferTest, ShardedWithInvalidLocalOffset) {
     distributed::MeshShape global_shape(2, 3);
     distributed::MeshShape local_shape(1, 2);
     distributed::MeshCoordinate local_offset(2, 0);  // Offset 2 in first dimension exceeds global shape
 
-    EXPECT_ANY_THROW(HostMeshBuffer::create_sharded(std::move(buffers), global_shape, local_shape, local_offset));
+    EXPECT_ANY_THROW(HostMeshBuffer::create_sharded(global_shape, local_shape, local_offset));
 }
 
-TEST(HostMeshBufferTest, ShardedWithMeshShapeInvalidCombination) {
-    std::vector<HostBuffer> buffers;
-    for (int i = 0; i < 6; ++i) {
-        buffers.push_back(HostBuffer(std::vector<int>{i * 3 + 1, i * 3 + 2, i * 3 + 3}));
-    }
-
+TEST(HostMeshBufferTest, ShardedWithInvalidCombination) {
     distributed::MeshShape global_shape(2, 3);
     distributed::MeshShape local_shape(1, 2);
     distributed::MeshCoordinate local_offset(1, 2);  // Offset + shape exceeds global shape
 
-    EXPECT_ANY_THROW(HostMeshBuffer::create_sharded(std::move(buffers), global_shape, local_shape, local_offset));
+    EXPECT_ANY_THROW(HostMeshBuffer::create_sharded(global_shape, local_shape, local_offset));
 }
 
-TEST(HostMeshBufferTest, ShardedWithMeshShapeDimensionMismatch) {
-    std::vector<HostBuffer> buffers;
-    for (int i = 0; i < 6; ++i) {
-        buffers.push_back(HostBuffer(std::vector<int>{i * 3 + 1, i * 3 + 2, i * 3 + 3}));
-    }
-
+TEST(HostMeshBufferTest, ShardedWithDimensionMismatch) {
     distributed::MeshShape global_shape(2, 3);
     distributed::MeshShape local_shape(1, 1, 1);  // 3D shape vs 2D global shape
     distributed::MeshCoordinate local_offset(1, 0);
 
-    EXPECT_ANY_THROW(HostMeshBuffer::create_sharded(std::move(buffers), global_shape, local_shape, local_offset));
+    EXPECT_ANY_THROW(HostMeshBuffer::create_sharded(global_shape, local_shape, local_offset));
 }
 
 TEST(HostMeshBufferTest, ReplicatedGetBuffer) {
@@ -124,12 +84,11 @@ TEST(HostMeshBufferTest, ReplicatedGetBuffer) {
 }
 
 TEST(HostMeshBufferTest, ShardedGetBuffer) {
-    std::vector<HostBuffer> buffers;
-    buffers.push_back(HostBuffer(std::vector<int>{1, 2, 3}));
-    buffers.push_back(HostBuffer(std::vector<int>{4, 5, 6}));
-    buffers.push_back(HostBuffer(std::vector<int>{7, 8, 9}));
+    auto buffer = HostMeshBuffer::create_sharded(3);
 
-    auto buffer = HostMeshBuffer::create_sharded(std::move(buffers));
+    buffer.emplace_buffer(0, HostBuffer(std::vector<int>{1, 2, 3}));
+    buffer.emplace_buffer(1, HostBuffer(std::vector<int>{4, 5, 6}));
+    buffer.emplace_buffer(2, HostBuffer(std::vector<int>{7, 8, 9}));
 
     auto optional_buffer = buffer.get_buffer(0);
     ASSERT_TRUE(optional_buffer.has_value());
@@ -147,41 +106,16 @@ TEST(HostMeshBufferTest, ShardedGetBuffer) {
     EXPECT_ANY_THROW(buffer.get_buffer(3));
 }
 
-TEST(HostMeshBufferTest, ShardedWithLocalSizeGetBuffer) {
-    std::vector<HostBuffer> buffers;
-    buffers.push_back(HostBuffer(std::vector<int>{1, 2, 3}));
-    buffers.push_back(HostBuffer(std::vector<int>{4, 5, 6}));
-    buffers.push_back(HostBuffer(std::vector<int>{7, 8, 9}));
-    buffers.push_back(HostBuffer(std::vector<int>{10, 11, 12}));
+TEST(HostMeshBufferTest, ShardedWithMeshShape) {
+    distributed::MeshShape global_shape(2, 3);
+    distributed::MeshShape local_shape(2, 3);  // Full shape
+    distributed::MeshCoordinate local_offset(0, 0);
 
-    auto buffer = HostMeshBuffer::create_sharded(std::move(buffers), /*local_size=*/2, /*local_offset=*/1);
+    auto buffer = HostMeshBuffer::create_sharded(global_shape, local_shape, local_offset);
 
-    auto optional_buffer = buffer.get_buffer(0);
-    EXPECT_FALSE(optional_buffer.has_value());
-
-    optional_buffer = buffer.get_buffer(1);
-    ASSERT_TRUE(optional_buffer.has_value());
-    EXPECT_THAT(optional_buffer->view_as<int>(), Pointwise(Eq(), {4, 5, 6}));
-
-    optional_buffer = buffer.get_buffer(2);
-    ASSERT_TRUE(optional_buffer.has_value());
-    EXPECT_THAT(optional_buffer->view_as<int>(), Pointwise(Eq(), {7, 8, 9}));
-
-    optional_buffer = buffer.get_buffer(3);
-    EXPECT_FALSE(optional_buffer.has_value());
-
-    // Out of global bounds.
-    EXPECT_ANY_THROW(buffer.get_buffer(4));
-}
-
-TEST(HostMeshBufferTest, ShardedWithMeshShapeGetBuffer) {
-    std::vector<HostBuffer> buffers;
     for (int i = 0; i < 6; ++i) {
-        buffers.push_back(HostBuffer(std::vector<int>{i * 3 + 1, i * 3 + 2, i * 3 + 3}));
+        buffer.emplace_buffer(i, HostBuffer(std::vector<int>{i * 3 + 1, i * 3 + 2, i * 3 + 3}));
     }
-
-    distributed::MeshShape shape(2, 3);
-    auto buffer = HostMeshBuffer::create_sharded(std::move(buffers), shape);
 
     for (int i = 0; i < 6; ++i) {
         auto optional_buffer = buffer.get_buffer(i);
@@ -193,17 +127,18 @@ TEST(HostMeshBufferTest, ShardedWithMeshShapeGetBuffer) {
     EXPECT_ANY_THROW(buffer.get_buffer(6));
 }
 
-TEST(HostMeshBufferTest, ShardedWithLocalMeshShapeGetBuffer) {
-    std::vector<HostBuffer> buffers;
-    for (int i = 0; i < 6; ++i) {
-        buffers.push_back(HostBuffer(std::vector<int>{i * 3 + 1, i * 3 + 2, i * 3 + 3}));
-    }
-
+TEST(HostMeshBufferTest, ShardedWithLocalMeshShape) {
     distributed::MeshShape global_shape(2, 3);
     distributed::MeshShape local_shape(1, 2);
     distributed::MeshCoordinate local_offset(1, 0);
 
-    auto buffer = HostMeshBuffer::create_sharded(std::move(buffers), global_shape, local_shape, local_offset);
+    auto buffer = HostMeshBuffer::create_sharded(global_shape, local_shape, local_offset);
+
+    // Create and emplace all buffers
+    for (int i = 0; i < 6; ++i) {
+        // Try to emplace all buffers - only the ones in our local shard will succeed
+        buffer.emplace_buffer(i, HostBuffer(std::vector<int>{i * 3 + 1, i * 3 + 2, i * 3 + 3}));
+    }
 
     auto optional_buffer = buffer.get_buffer(0);
     EXPECT_FALSE(optional_buffer.has_value());
@@ -251,11 +186,10 @@ TEST(HostMeshBufferTest, ReplicatedTransform) {
 }
 
 TEST(HostMeshBufferTest, ShardedTransform) {
-    std::vector<HostBuffer> buffers;
-    buffers.push_back(HostBuffer(std::vector<int>{1, 2, 3}));
-    buffers.push_back(HostBuffer(std::vector<int>{4, 5, 6}));
+    auto buffer = HostMeshBuffer::create_sharded(2);
 
-    auto buffer = HostMeshBuffer::create_sharded(std::move(buffers));
+    buffer.emplace_buffer(0, HostBuffer(std::vector<int>{1, 2, 3}));
+    buffer.emplace_buffer(1, HostBuffer(std::vector<int>{4, 5, 6}));
 
     std::vector<size_t> indices;
     buffer.transform([&indices](const HostBuffer& buffer, size_t index) {
@@ -279,13 +213,17 @@ TEST(HostMeshBufferTest, ShardedTransform) {
     EXPECT_THAT(optional_buffer->view_as<int>(), Pointwise(Eq(), {8, 10, 12}));
 }
 
-TEST(HostMeshBufferTest, ShardedWithLocalSizeTransform) {
-    std::vector<HostBuffer> buffers;
-    buffers.push_back(HostBuffer(std::vector<int>{1, 2, 3}));
-    buffers.push_back(HostBuffer(std::vector<int>{4, 5, 6}));
-    buffers.push_back(HostBuffer(std::vector<int>{7, 8, 9}));
+TEST(HostMeshBufferTest, ShardedWithLocalShapeTransform) {
+    distributed::MeshShape global_shape(3, 1);
+    distributed::MeshShape local_shape(2, 1);
+    distributed::MeshCoordinate local_offset(1, 0);
 
-    auto buffer = HostMeshBuffer::create_sharded(std::move(buffers), 2, 1);
+    auto buffer = HostMeshBuffer::create_sharded(global_shape, local_shape, local_offset);
+
+    // Emplace buffers - only indices 1 and 2 are within our local shard
+    for (int i = 0; i < 3; ++i) {
+        buffer.emplace_buffer(i, HostBuffer(std::vector<int>{i * 3 + 1, i * 3 + 2, i * 3 + 3}));
+    }
 
     std::vector<size_t> indices;
     buffer.transform([&indices](const HostBuffer& buffer, size_t index) {
@@ -298,7 +236,7 @@ TEST(HostMeshBufferTest, ShardedWithLocalSizeTransform) {
         return HostBuffer(std::move(new_data));
     });
 
-    EXPECT_THAT(indices, ElementsAre(0, 1));
+    EXPECT_THAT(indices, ElementsAre(0, 1));  // Local indices, not global
 
     auto optional_buffer = buffer.get_buffer(1);
     ASSERT_TRUE(optional_buffer.has_value());
@@ -327,11 +265,10 @@ TEST(HostMeshBufferTest, ReplicatedApply) {
 }
 
 TEST(HostMeshBufferTest, ShardedApply) {
-    std::vector<HostBuffer> buffers;
-    buffers.push_back(HostBuffer(std::vector<int>{1, 2, 3}));
-    buffers.push_back(HostBuffer(std::vector<int>{4, 5, 6}));
+    auto buffer = HostMeshBuffer::create_sharded(2);
 
-    auto buffer = HostMeshBuffer::create_sharded(std::move(buffers));
+    buffer.emplace_buffer(0, HostBuffer(std::vector<int>{1, 2, 3}));
+    buffer.emplace_buffer(1, HostBuffer(std::vector<int>{4, 5, 6}));
 
     std::vector<size_t> indices;
     std::vector<std::vector<int>> values;
@@ -347,13 +284,17 @@ TEST(HostMeshBufferTest, ShardedApply) {
     EXPECT_THAT(values[1], ElementsAre(4, 5, 6));
 }
 
-TEST(HostMeshBufferTest, ShardedWithLocalSizeApply) {
-    std::vector<HostBuffer> buffers;
-    buffers.push_back(HostBuffer(std::vector<int>{1, 2, 3}));
-    buffers.push_back(HostBuffer(std::vector<int>{4, 5, 6}));
-    buffers.push_back(HostBuffer(std::vector<int>{7, 8, 9}));
+TEST(HostMeshBufferTest, ShardedWithLocalShapeApply) {
+    distributed::MeshShape global_shape(3, 1);
+    distributed::MeshShape local_shape(2, 1);
+    distributed::MeshCoordinate local_offset(1, 0);
 
-    auto buffer = HostMeshBuffer::create_sharded(std::move(buffers), 2, 1);
+    auto buffer = HostMeshBuffer::create_sharded(global_shape, local_shape, local_offset);
+
+    // Emplace buffers - only indices 1 and 2 are within our local shard
+    for (int i = 0; i < 3; ++i) {
+        buffer.emplace_buffer(i, HostBuffer(std::vector<int>{i * 3 + 1, i * 3 + 2, i * 3 + 3}));
+    }
 
     std::vector<size_t> indices;
     std::vector<std::vector<int>> values;
@@ -363,10 +304,10 @@ TEST(HostMeshBufferTest, ShardedWithLocalSizeApply) {
         values.push_back(std::vector<int>(span.begin(), span.end()));
     });
 
-    EXPECT_THAT(indices, ElementsAre(0, 1));
+    EXPECT_THAT(indices, ElementsAre(0, 1));  // Local indices
     ASSERT_THAT(values, SizeIs(2));
-    EXPECT_THAT(values[0], ElementsAre(4, 5, 6));
-    EXPECT_THAT(values[1], ElementsAre(7, 8, 9));
+    EXPECT_THAT(values[0], ElementsAre(4, 5, 6));  // Global index 1
+    EXPECT_THAT(values[1], ElementsAre(7, 8, 9));  // Global index 2
 }
 
 }  // namespace

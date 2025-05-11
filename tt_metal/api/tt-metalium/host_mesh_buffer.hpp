@@ -18,13 +18,12 @@ namespace tt::tt_metal {
 // distributed over multiple hosts.
 // The class supports 2 main modes of operation:
 //
-// 1. Replicated buffer. A single `HostBuffer` represents data to be broadcasted across devices; wheter it is a local
+// 1. Replicated buffer. A single `HostBuffer` represents data to be broadcasted across devices; whether it is a local
 // `MeshDevice` or a global mesh in the multi-host configuration.
 //
 // 2. Sharded buffer. Each device receives a local shard with the data. `HostMeshBuffer` provides `transform` and
 // `apply` methods in case host-local physical data manipulation needs to be performed.
 //
-// TODO: this abstraction can be lowered to Metal and re-used in `MeshCommandQueue` interfaces directly.
 // TODO: provide a way to allocate individual buffers on a memory arena.
 class HostMeshBuffer {
 public:
@@ -36,31 +35,33 @@ public:
     // Creates a replicated buffer from the specified `host_buffer`.
     static HostMeshBuffer create_replicated(HostBuffer host_buffer);
 
-    // Creates a sharded buffer with provided `host_buffers`.
-    static HostMeshBuffer create_sharded(std::vector<HostBuffer> host_buffers);
+    // Creates a sharded buffer of the provided `global_size` spanning a single host.
+    // TODO: remove in the long term. For now, this is supporting TTNN's "MultiDeviceHostStorage" API that does not
+    // include the shape.
+    static HostMeshBuffer create_sharded(size_t global_size);
 
     // Creates a multi-host distributed buffer with the specified parameters.
-    // The size of `global_buffers` indicates the global size of the buffer; `local_size` and `local_offset` must be
-    // consistent with the global size. `global_buffers` that are remote to this host will be deallocated and ignored
+    // The size of `global_buffers` indicates the global size of the buffer; `local_shape` and `local_offset` must be
+    // consistent with the global shape. `global_buffers` that are remote to this host will be deallocated and ignored
     // for all subsequent operations. Only local buffers will be retained by this `HostMeshBuffer` instance.
     static HostMeshBuffer create_sharded(
-        std::vector<HostBuffer> global_buffers, size_t local_size, size_t local_offset);
-
-    // The following overloads are the same as above, but take `MeshShape` to specify sizes and the offset.
-    // TODO: switch to these overloads. Currently, the problem is that on creation of "multi host device" buffer, the
-    // shape is not specified.
-    static HostMeshBuffer create_sharded(
-        std::vector<HostBuffer> host_buffers, const distributed::MeshShape& global_shape);
-    static HostMeshBuffer create_sharded(
-        std::vector<HostBuffer> global_buffers,
         const distributed::MeshShape& global_shape,
         const distributed::MeshShape& local_shape,
         const distributed::MeshCoordinate& local_offset);
 
+    // TODO: use `MeshCoordinate` to specify `linear_index`. Currently, the problem is that on creation of "multi host
+    // device" buffer in TTNN, the shape is not specified, so we cannot onboard `HostMeshBuffer` to use coordinate
+    // system natively.
+
     // Returns the buffer at the specified `linear_index`.
     // Returns `std::nullopt` if the index is out of local bounds.
     // Throws if the index is out of global bounds.
-    std::optional<HostBuffer> get_buffer(size_t linear_index);
+    std::optional<HostBuffer> get_buffer(size_t linear_index) const;
+
+    // Emplaces the buffer at the specified `linear_index`.
+    // No-op if the index is out of local bounds.
+    // Throws if the index is out of global bounds, or if the buffer is replicated.
+    void emplace_buffer(size_t linear_index, HostBuffer buffer);
 
     // `transform` and `apply` functions abstract away the details of the underlying data storage.
     // `linear_index` will be supplied by `HostMeshBuffer` to indicate the position of the buffer.
@@ -84,9 +85,7 @@ private:
         HostBuffer buffer;
     };
     struct Sharded {
-        size_t global_size = 0;
-        size_t local_size = 0;
-        size_t local_offset = 0;
+        std::function<std::optional<size_t>(size_t)> global_to_local_index;
         std::vector<HostBuffer> local_buffers;
     };
 

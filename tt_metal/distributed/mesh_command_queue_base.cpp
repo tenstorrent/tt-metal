@@ -228,6 +228,27 @@ void MeshCommandQueueBase::enqueue_write_shards(
     }
 }
 
+void MeshCommandQueueBase::enqueue_write(
+    const std::shared_ptr<MeshBuffer>& mesh_buffer,
+    const HostMeshBuffer& host_buffer,
+    const MeshShape& host_buffer_shape,
+    bool blocking) {
+    // Iterate over global coordinates; skip host-remote coordinates, as per `host_buffer` configuration.
+    std::vector<ShardDataTransfer> shard_data_transfers;
+    for (const auto& host_buffer_coord : MeshCoordinateRange(host_buffer_shape)) {
+        const int linear_index = to_linear_index(host_buffer_shape, host_buffer_coord);
+        auto buf = host_buffer.get_buffer(linear_index);
+        if (buf.has_value()) {
+            shard_data_transfers.push_back(
+                {.shard_coord = host_buffer_coord,
+                 .host_data = buf->view_bytes().data(),
+                 .region = BufferRegion(0, buf->view_bytes().size())});
+        }
+    }
+
+    this->enqueue_write_shards(mesh_buffer, shard_data_transfers, blocking);
+}
+
 void MeshCommandQueueBase::enqueue_read_shards(
     const std::vector<ShardDataTransfer>& shard_data_transfers,
     const std::shared_ptr<MeshBuffer>& buffer,
@@ -244,6 +265,23 @@ void MeshCommandQueueBase::enqueue_read_shards(
             num_txns_per_device);
     }
     this->submit_memcpy_request(num_txns_per_device, blocking);
+}
+
+void MeshCommandQueueBase::enqueue_read(
+    const std::shared_ptr<MeshBuffer>& buffer, HostMeshBuffer& host_buffer, bool blocking) {
+    std::vector<ShardDataTransfer> shard_data_transfers;
+    for (const auto& coord : MeshCoordinateRange(buffer->device()->shape())) {
+        const int linear_index = to_linear_index(buffer->device()->shape(), coord);
+        auto buf = host_buffer.get_buffer(linear_index);
+        if (buf.has_value()) {
+            shard_data_transfers.push_back(
+                {.shard_coord = coord,
+                 .host_data = buf->view_bytes().data(),
+                 .region = BufferRegion(0, buf->view_bytes().size())});
+        }
+    }
+
+    this->enqueue_read_shards(shard_data_transfers, buffer, blocking);
 }
 
 }  // namespace tt::tt_metal::distributed
