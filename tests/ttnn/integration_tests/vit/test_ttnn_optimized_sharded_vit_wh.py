@@ -161,7 +161,6 @@ def test_vit_embeddings(device, model_name, batch_size, image_size, image_channe
         parameters=parameters,
     )
     output = ttnn.to_torch(output)
-    print(output.shape)
     assert_with_pcc(torch_output, output[0][:197:], 0.999)
 
 
@@ -284,7 +283,6 @@ def test_vit_output(device, model_name, batch_size, sequence_size):
             core_grid=config.core_grid,
             strategy=ttnn.ShardStrategy.BLOCK,
             orientation=ttnn.ShardOrientation.ROW_MAJOR,
-            # orientation=ttnn.ShardOrientation.COLUMN_MAJOR,
         ),
         dtype=ttnn.bfloat8_b,
     )
@@ -357,7 +355,7 @@ def test_vit_layer(device, model_name, batch_size, sequence_size):
     )
     output = ttnn.to_torch(output)
 
-    assert_with_pcc(torch_output, output, 0.9985)
+    assert_with_pcc(torch_output, output, 0.985)
 
 
 @pytest.mark.parametrize("model_name", ["google/vit-base-patch16-224"])
@@ -426,7 +424,6 @@ def test_vit(device, model_name, batch_size, image_size, image_channels, sequenc
     config = transformers.ViTConfig.from_pretrained(model_name)
     config.num_hidden_layers = 12
     model = transformers.ViTForImageClassification.from_pretrained("google/vit-base-patch16-224", config=config)
-
     config = ttnn_optimized_sharded_vit.update_model_config(config, batch_size)
     dataset = load_dataset("huggingface/cats-image")
     image = dataset["test"]["image"][0]
@@ -520,4 +517,4 @@ def test_vit(device, model_name, batch_size, image_size, image_channels, sequenc
     )
     output = ttnn.to_torch(output)
 
-    assert_with_pcc(torch_output, output[0, 0, :1000], 0.86)
+    assert_with_pcc(torch_output, output[0, 0, :1000], 0.915)

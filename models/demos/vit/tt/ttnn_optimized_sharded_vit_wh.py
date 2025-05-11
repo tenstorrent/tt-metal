@@ -23,8 +23,8 @@ def update_model_config(config, batch_size):
     core_grid = ttnn.CoreGrid(y=grid_y, x=grid_x)
     TILE_HEIGHT = 32
 
-    seqL_t = 224 // TILE_HEIGHT  # 7
-    dim_t = 768 // TILE_HEIGHT  # 24
+    seqL_t = 224 // TILE_HEIGHT  # 224 / 32 = 7
+    dim_t = 768 // TILE_HEIGHT  # 768 / 32 = 24
     dim_t__x = dim_t // core_grid.x  # 4
     head_num = 12
     head_seqL_t__x = (head_num * seqL_t) // core_grid.x  # 14
@@ -44,7 +44,6 @@ def update_model_config(config, batch_size):
         "layernorm_before_program_config": ttnn.LayerNormShardedMultiCoreProgramConfig(
             compute_with_storage_grid_size=(core_grid.x, core_grid.y),
             subblock_w=dim_t__x // 2,  # 1,
-            # subblock_w = dim_t__x // 2,  # 1,
             block_h=seqL_t,  # 7,
             block_w=dim_t__x,  # 2,
             inplace=False,
@@ -126,7 +125,7 @@ def update_model_config(config, batch_size):
             per_core_M=seqL_t,  # 7,
             per_core_N=class__x,  # 6,
             transpose_mcast=False,
-            fused_activation=(ttnn.UnaryOpType.GELU, True),
+            fused_activation=None,
         ),
     }
 
