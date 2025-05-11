@@ -46,7 +46,9 @@ class mesh_socket_t {
 public:
     // Sockets can only be created in sender/receiver pairs.
     static std::pair<mesh_socket_t, mesh_socket_t> create_sockets(
-        std::shared_ptr<MeshDevice> sender, std::shared_ptr<MeshDevice> receiver, const socket_config_t& config);
+        const std::shared_ptr<MeshDevice>& sender,
+        const std::shared_ptr<MeshDevice>& receiver,
+        const socket_config_t& config);
     // Access the data-buffer associated with the socket on the reciver mesh. Can only be queried for receiver sockets.
     std::shared_ptr<MeshBuffer> get_data_buffer() const;
     // Access the config buffer associated with this socket.

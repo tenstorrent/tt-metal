@@ -8,7 +8,9 @@
 namespace tt::tt_metal::distributed {
 
 std::pair<mesh_socket_t, mesh_socket_t> mesh_socket_t::create_sockets(
-    std::shared_ptr<MeshDevice> sender, std::shared_ptr<MeshDevice> receiver, const socket_config_t& config) {
+    const std::shared_ptr<MeshDevice>& sender,
+    const std::shared_ptr<MeshDevice>& receiver,
+    const socket_config_t& config) {
     auto l1_alignment = MetalContext::instance().hal().get_alignment(HalMemType::L1);
     auto sender_config_buffer = create_socket_config_buffer(sender, config, true /* is_sender */);
     auto recv_config_buffer = create_socket_config_buffer(receiver, config, false /* is_sender */);

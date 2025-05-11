@@ -69,7 +69,7 @@ void verify_socket_configs(
 }
 
 void test_single_connection_single_device_socket(
-    std::shared_ptr<tt::tt_metal::distributed::MeshDevice> md0,
+    const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& md0,
     std::size_t socket_fifo_size,
     std::size_t page_size,
     std::size_t data_size,
@@ -216,7 +216,7 @@ void test_single_connection_single_device_socket(
 }
 
 void test_single_device_socket_with_workers(
-    std::shared_ptr<tt::tt_metal::distributed::MeshDevice> md0,
+    const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& md0,
     std::size_t socket_fifo_size,
     std::size_t page_size,
     std::size_t data_size,
@@ -539,8 +539,8 @@ void test_single_device_socket_with_workers(
 }
 
 void test_single_connection_multi_device_socket(
-    std::shared_ptr<tt::tt_metal::distributed::MeshDevice> md0,
-    std::shared_ptr<tt::tt_metal::distributed::MeshDevice> md1,
+    const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& md0,
+    const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& md1,
     std::size_t socket_fifo_size,
     std::size_t page_size,
     std::size_t data_size,
@@ -735,8 +735,8 @@ void test_single_connection_multi_device_socket(
 }
 
 void test_single_connection_multi_device_socket_with_workers(
-    std::shared_ptr<tt::tt_metal::distributed::MeshDevice> md0,
-    std::shared_ptr<tt::tt_metal::distributed::MeshDevice> md1,
+    const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& md0,
+    const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& md1,
     std::size_t socket_fifo_size,
     std::size_t page_size,
     std::size_t data_size) {
@@ -933,7 +933,7 @@ void test_single_connection_multi_device_socket_with_workers(
 
 std::shared_ptr<Program> create_sender_program(
     const mesh_socket_t& sender_socket,
-    std::shared_ptr<MeshBuffer> sender_data_buffer,
+    const std::shared_ptr<MeshBuffer>& sender_data_buffer,
     std::size_t page_size,
     std::size_t data_size,
     const CoreCoord& sender_logical_coord,
@@ -975,7 +975,7 @@ std::shared_ptr<Program> create_sender_program(
 std::shared_ptr<Program> create_split_reduce_program(
     const mesh_socket_t& recv_socket_0,
     const mesh_socket_t& recv_socket_1,
-    std::shared_ptr<MeshBuffer> recv_data_buffer,
+    const std::shared_ptr<MeshBuffer>& recv_data_buffer,
     std::size_t page_size,
     std::size_t data_size,
     const CoreCoord& recv_logical_coord_0,
@@ -1110,7 +1110,7 @@ std::shared_ptr<Program> create_reduce_program(
     const mesh_socket_t& recv_socket_0,
     const mesh_socket_t& recv_socket_1,
     const mesh_socket_t& send_socket_2,
-    std::shared_ptr<MeshDevice> reducer,
+    const std::shared_ptr<MeshDevice>& reducer,
     std::size_t page_size,
     std::size_t data_size,
     const CoreCoord& reduce_logical_coord,
@@ -1194,7 +1194,7 @@ std::shared_ptr<Program> create_reduce_program(
 
 std::shared_ptr<Program> create_recv_program(
     const mesh_socket_t& recv_socket,
-    std::shared_ptr<MeshBuffer> output_data_buffer,
+    const std::shared_ptr<MeshBuffer>& output_data_buffer,
     std::size_t page_size,
     std::size_t data_size,
     const CoreCoord& recv_logical_coord,
@@ -1246,10 +1246,10 @@ std::shared_ptr<Program> create_recv_program(
 }
 
 void test_multi_sender_single_recv(
-    std::shared_ptr<tt::tt_metal::distributed::MeshDevice> sender_0,
-    std::shared_ptr<tt::tt_metal::distributed::MeshDevice> sender_1,
-    std::shared_ptr<tt::tt_metal::distributed::MeshDevice> reducer,
-    std::shared_ptr<tt::tt_metal::distributed::MeshDevice> receiver,
+    const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& sender_0,
+    const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& sender_1,
+    const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& reducer,
+    const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& receiver,
     std::size_t socket_fifo_size,
     std::size_t page_size,
     std::size_t data_size,
@@ -1469,8 +1469,8 @@ void test_multi_sender_single_recv(
 }
 
 void test_multi_connection_multi_device_data_copy(
-    std::shared_ptr<MeshDevice> sender_mesh,
-    std::shared_ptr<MeshDevice> recv_mesh,
+    const std::shared_ptr<MeshDevice>& sender_mesh,
+    const std::shared_ptr<MeshDevice>& recv_mesh,
     std::size_t socket_fifo_size,
     std::size_t page_size,
     std::size_t data_size) {

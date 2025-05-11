@@ -11,17 +11,17 @@ namespace tt::tt_metal::distributed {
 
 // Create send/receive socket config buffers
 std::shared_ptr<MeshBuffer> create_socket_config_buffer(
-    std::shared_ptr<MeshDevice> device, const socket_config_t& config, bool is_sender);
+    const std::shared_ptr<MeshDevice>& device, const socket_config_t& config, bool is_sender);
 
 // Create socket data buffer on receiver
 std::shared_ptr<MeshBuffer> create_socket_data_buffer(
-    std::shared_ptr<MeshDevice> receiver, const socket_config_t& config);
+    const std::shared_ptr<MeshDevice>& receiver, const socket_config_t& config);
 
 // Write socket config data to allocated buffers
 void write_socket_configs(
-    std::shared_ptr<MeshBuffer> config_buffer,
-    std::shared_ptr<MeshBuffer> peer_config_buffer,
-    std::shared_ptr<MeshBuffer> socket_data_buffer,
+    const std::shared_ptr<MeshBuffer>& config_buffer,
+    const std::shared_ptr<MeshBuffer>& peer_config_buffer,
+    const std::shared_ptr<MeshBuffer>& socket_data_buffer,
     const socket_config_t& config,
     bool is_sender);
 

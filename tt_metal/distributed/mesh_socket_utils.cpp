@@ -11,7 +11,7 @@
 namespace tt::tt_metal::distributed {
 
 std::shared_ptr<MeshBuffer> create_socket_config_buffer(
-    std::shared_ptr<MeshDevice> device, const socket_config_t& config, bool is_sender) {
+    const std::shared_ptr<MeshDevice>& device, const socket_config_t& config, bool is_sender) {
     const auto& socket_connections = config.socket_connection_config;
     const auto& socket_mem_config = config.socket_mem_config;
     auto l1_alignment = MetalContext::instance().hal().get_alignment(HalMemType::L1);
@@ -59,7 +59,7 @@ std::shared_ptr<MeshBuffer> create_socket_config_buffer(
 }
 
 std::shared_ptr<MeshBuffer> create_socket_data_buffer(
-    std::shared_ptr<MeshDevice> receiver, const socket_config_t& config) {
+    const std::shared_ptr<MeshDevice>& receiver, const socket_config_t& config) {
     const auto& socket_mem_config = config.socket_mem_config;
 
     uint32_t num_data_cores = 0;
@@ -106,9 +106,9 @@ std::unordered_map<MeshCoordinate, std::vector<socket_connection_t>> group_socke
 }
 
 void write_socket_configs(
-    std::shared_ptr<MeshBuffer> config_buffer,
-    std::shared_ptr<MeshBuffer> peer_config_buffer,
-    std::shared_ptr<MeshBuffer> socket_data_buffer,
+    const std::shared_ptr<MeshBuffer>& config_buffer,
+    const std::shared_ptr<MeshBuffer>& peer_config_buffer,
+    const std::shared_ptr<MeshBuffer>& socket_data_buffer,
     const socket_config_t& config,
     bool is_sender) {
     auto mesh_device = config_buffer->device();
