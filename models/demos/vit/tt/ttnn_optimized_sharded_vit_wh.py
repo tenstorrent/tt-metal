@@ -21,16 +21,17 @@ def update_model_config(config, batch_size):
         batch_size = grid_y * batch_per_y_core
         grid_x = 4
     core_grid = ttnn.CoreGrid(y=grid_y, x=grid_x)
+    TILE_HEIGHT = 32
 
-    seqL_t = 224 // 32  # 7
-    dim_t = 768 // 32  # 24
+    seqL_t = 224 // TILE_HEIGHT  # 7
+    dim_t = 768 // TILE_HEIGHT  # 24
     dim_t__x = dim_t // core_grid.x  # 4
     head_num = 12
     head_seqL_t__x = (head_num * seqL_t) // core_grid.x  # 14
     head_size_t = dim_t // head_num  # 2
-    class__x = (1152 // 32) // core_grid.x  # 3
+    class__x = (1152 // TILE_HEIGHT) // core_grid.x  # 3
     class_subb_w = class__x
-    if class_subb_w > 8:  # max ration of sub_block_w / sub_block_h = 8
+    if class_subb_w > 8:  # max ratio of sub_block_w / sub_block_h = 8
         if class_subb_w % 3 == 0:
             class_subb_w = class__x // 3
         elif class_subb_w % 2 == 0:
@@ -188,44 +189,6 @@ def vit_embeddings(
     )
 
     return embedding_output
-
-
-"""
-def vit_layernorm_before(
-    config,
-    hidden_states,
-    *,
-    parameters,
-):
-    attention_output = ttnn.layer_norm(
-        hidden_states,
-        weight=parameters.layernorm_before.weight,
-        bias=parameters.layernorm_before.bias,
-        epsilon=config.layer_norm_eps,
-        memory_config=ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG,
-        program_config=config.program_configs["layernorm_before_program_config"],
-    )
-
-    return attention_output
-
-
-def vit_layernorm_after(
-    config,
-    hidden_states,
-    *,
-    parameters,
-):
-    attention_output = ttnn.layer_norm(
-        hidden_states,
-        weight=parameters.layernorm_after.weight,
-        bias=parameters.layernorm_after.bias,
-        epsilon=config.layer_norm_eps,
-        memory_config=ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG,
-        program_config=config.program_configs["layernorm_program_config"],
-    )
-
-    return attention_output
-"""
 
 
 def vit_attention(
