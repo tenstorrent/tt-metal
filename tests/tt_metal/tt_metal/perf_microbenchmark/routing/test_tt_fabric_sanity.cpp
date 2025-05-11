@@ -52,6 +52,7 @@
 #include "umd/device/tt_core_coordinates.h"
 #include "umd/device/types/xy_pair.h"
 #include <tt-metalium/utils.hpp>
+#include "tt_metal/fabric/fabric_host_utils.hpp"
 
 using std::vector;
 using namespace tt;
@@ -1552,9 +1553,15 @@ int main(int argc, char **argv) {
     uint32_t num_available_devices, num_allocated_devices = 0;
 
     std::map<string, string> defines;
+    uint16_t routing_mode;
     if (!push_mode) {
         defines["FVC_MODE_PULL"] = "";
+        routing_mode = (ROUTING_MODE_MESH | ROUTING_MODE_2D | ROUTING_MODE_PULL);
+    } else {
+        routing_mode = (ROUTING_MODE_MESH | ROUTING_MODE_2D | ROUTING_MODE_PUSH | ROUTING_MODE_LOW_LATENCY);
     }
+    tt::tt_fabric::set_routing_mode(routing_mode);
+    defines["ROUTING_MODE"] = std::to_string(static_cast<int>(routing_mode));
 
     if (benchmark_mode) {
         prng_seed = 100;

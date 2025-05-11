@@ -283,7 +283,4 @@ std::tuple<uint32_t, uint32_t> get_matmul_subblock_params(
     const bool per_core_N_equals_subblock_w_constraint,
     const bool fp32_dest_acc_en);
 
-void add_stagger_defines_if_needed(
-    const tt::ARCH arch, const int num_cores, std::map<string, string>& mm_kernel_defines);
-
 }  // namespace bmm_op_utils

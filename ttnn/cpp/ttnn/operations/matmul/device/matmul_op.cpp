@@ -1240,23 +1240,6 @@ std::tuple<uint32_t, uint32_t> get_matmul_subblock_params(
     return {1, 1};
 }
 
-void add_stagger_defines_if_needed(
-    const tt::ARCH arch, const int num_cores, std::map<string, string>& mm_kernel_defines) {
-    // Empirically deduced di/dt problems appear for matmuls using more than 48
-    // cores; when there is 48 cores or less, we never enable stagger since the
-    // delay impacts op performance
-    constexpr uint32_t WH_B0_MM_MAX_CORES_NO_STAGGER = 48;
-
-    // Apply stagger delay on Wormhole B0 on odd rows, so that only half of cores
-    // start doing work at once. This is done to mitigate di/dt issues, in case
-    // the environment var is set. See issue #9857.
-    const bool enable_stagger = std::getenv("TT_ENABLE_MATMUL_STAGGER");
-    if (enable_stagger && arch == tt::ARCH::WORMHOLE_B0 && num_cores > WH_B0_MM_MAX_CORES_NO_STAGGER) {
-        mm_kernel_defines["MM_STAGGER_ODD_ROWS"] = "1";
-        log_warning(tt::LogOp, "Stagger enabled for matmul op using {} cores.", num_cores);
-    }
-}
-
 }  // namespace bmm_op_utils
 
 namespace ttnn {
