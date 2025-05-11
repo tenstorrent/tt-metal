@@ -6,9 +6,8 @@
 
 #include <tt_stl/span.hpp>
 #include <tt-metalium/mesh_coord.hpp>
+#include <tt-metalium/host_buffer.hpp>
 #include <tt-metalium/assert.hpp>
-
-#include "ttnn/tensor/host_buffer/host_buffer.hpp"
 
 #include <functional>
 #include <vector>

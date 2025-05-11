@@ -4,8 +4,9 @@
 
 #include <tt_stl/span.hpp>
 #include <tt-metalium/mesh_coord.hpp>
-#include <tt-metalium/host_mesh_buffer.hpp>
 #include <tt-metalium/assert.hpp>
+
+#include <tt-metalium/host_mesh_buffer.hpp>
 
 #include <functional>
 #include <vector>

@@ -9,7 +9,7 @@
 #include <functional>
 #include <vector>
 
-#include "ttnn/tensor/host_buffer/host_mesh_buffer.hpp"
+#include <tt-metalium/host_mesh_buffer.hpp>
 
 namespace tt::tt_metal {
 namespace {

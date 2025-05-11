@@ -189,9 +189,6 @@ set(TENSOR_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/tensor/tensor_spec.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/tensor/tensor_utils.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/tensor/host_buffer/functions.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/tensor/host_buffer/host_buffer.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/tensor/host_buffer/host_mesh_buffer.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/tensor/host_buffer/memory_pin.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/tensor/serialization.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/tensor/layout/alignment.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/tensor/layout/page_config.cpp
