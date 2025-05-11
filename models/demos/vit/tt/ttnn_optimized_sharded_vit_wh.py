@@ -23,13 +23,17 @@ def update_model_config(config, batch_size):
     core_grid = ttnn.CoreGrid(y=grid_y, x=grid_x)
     TILE_HEIGHT = 32
 
-    seqL_t = 224 // TILE_HEIGHT  # 224 / 32 = 7
-    dim_t = 768 // TILE_HEIGHT  # 768 / 32 = 24
+    patch_count = config.image_size // config.patch_size  # 224/16=14
+    seqL = patch_count * patch_count  # 196
+    seqL_padded = (((seqL - 1) // TILE_HEIGHT) + 1) * TILE_HEIGHT  # 224
+    seqL_t = seqL_padded // TILE_HEIGHT  # 224 / 32 = 7
+    dim_t = config.hidden_size // TILE_HEIGHT  # 768 / 32 = 24
     dim_t__x = dim_t // core_grid.x  # 4
-    head_num = 12
+    head_num = config.num_attention_heads  # 12
     head_seqL_t__x = (head_num * seqL_t) // core_grid.x  # 14
     head_size_t = dim_t // head_num  # 2
-    class__x = (1152 // TILE_HEIGHT) // core_grid.x  # 3
+    # 1000 classes padded to 1152
+    class__x = (1152 // TILE_HEIGHT) // core_grid.x  #   3
     class_subb_w = class__x
     if class_subb_w > 8:  # max ratio of sub_block_w / sub_block_h = 8
         if class_subb_w % 3 == 0:
@@ -137,7 +141,7 @@ def update_model_config(config, batch_size):
 
 def vit_patch_embeddings(config, pixel_values, *, parameters, unittest_check=False):
     batch_size, img_h, img_w, img_c = pixel_values.shape  # permuted input NHWC
-    patch_size = 16
+    patch_size = config.patch_size
     patch_count = img_h // patch_size  # 14
     patch_size_sq_trpl = int(patch_size * patch_size * 3)  # 768
     patch_count_all = int(patch_count * patch_count)  # 196
@@ -196,8 +200,7 @@ def vit_attention(
     attention_mask,
     parameters,
 ):
-    num_heads = config.num_attention_heads
-    num_heads = 12
+    num_heads = config.num_attention_heads  # num_heads = 12
     *_, hidden_size = hidden_states.shape
     head_size = hidden_size // num_heads
 
@@ -375,14 +378,13 @@ def vit_encoder(
     head_masks,
     parameters,
 ):
+    TILE_HEIGHT = 32
+    emb_N, emb_S, emb_D = embeddings.shape
+    emb_S = (((emb_S - 1) // TILE_HEIGHT) + 1) * TILE_HEIGHT
     encoder_input = ttnn.to_memory_config(
         embeddings,
         memory_config=ttnn.create_sharded_memory_config(
-            [
-                config.core_grid.y,
-                224,
-                768,
-            ],  # embeddings.shape, # hardcoded because a bug where it still sees the 197 not 224
+            [emb_N, emb_S, emb_D],
             core_grid=config.core_grid,
             strategy=ttnn.ShardStrategy.BLOCK,
             orientation=ttnn.ShardOrientation.ROW_MAJOR,

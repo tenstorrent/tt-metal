@@ -5,6 +5,7 @@
 
 import pytest
 import torch
+import transformers
 from loguru import logger
 from tqdm import tqdm
 from transformers import AutoImageProcessor
@@ -54,6 +55,7 @@ def test_run_vit_trace_2cqs_inference(
 
         model_version = "google/vit-base-patch16-224"
         image_processor = AutoImageProcessor.from_pretrained(model_version)
+        config = transformers.ViTConfig.from_pretrained(model_version)
 
         logger.info("ImageNet-1k validation Dataset")
         input_loc = str(model_location_generator("ImageNet_data"))
@@ -67,7 +69,7 @@ def test_run_vit_trace_2cqs_inference(
             inputs = torch.permute(inputs, (0, 2, 3, 1))
             inputs = torch.nn.functional.pad(inputs, (0, 1, 0, 0, 0, 0, 0, 0))
             batch_size, img_h, img_w, img_c = inputs.shape  # permuted input NHWC
-            patch_size = 16
+            patch_size = config.patch_size
             inputs = inputs.reshape(batch_size, img_h, img_w // patch_size, 4 * patch_size)
             #
             input_tensors_all.append(inputs)
@@ -90,6 +92,7 @@ def test_run_vit_trace_2cqs_inference(
             )
             output = vit_trace_2cq.execute_vit_trace_2cqs_inference(tt_inputs_host)
             output = ttnn.to_torch(output, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))
+            # 1000 classes trimming
             prediction = output[:, 0, :1000].argmax(dim=-1)
             profiler.end(f"run")
             total_inference_time += profiler.get(f"run")
