@@ -162,29 +162,26 @@ public:
         bool small_access = false) const;
 
     std::optional<std::tuple<uint32_t, uint32_t>> get_tlb_data(const tt_cxy_pair& target) const {
-        tt::umd::Cluster* device = dynamic_cast<tt::umd::Cluster*>(driver_.get());
         tt::umd::CoreCoord target_coord = get_soc_desc(target.chip).get_coord_at(target, CoordSystem::TRANSLATED);
-        return device->get_tlb_data_from_target(target.chip, target_coord);
+        auto tlb_configuration = driver_->get_tlb_configuration(target.chip, target_coord);
+        return std::tuple((uint32_t)tlb_configuration.tlb_offset, (uint32_t)tlb_configuration.size);
     }
 
     std::function<void(uint32_t, uint32_t, const uint8_t*)> get_fast_pcie_static_tlb_write_callable(int chip_id) const {
         chip_id_t mmio_device_id = device_to_mmio_device_.at(chip_id);
-        tt::umd::Cluster* device = dynamic_cast<tt::umd::Cluster*>(driver_.get());
-        return device->get_fast_pcie_static_tlb_write_callable(mmio_device_id);
+        return driver_->get_fast_pcie_static_tlb_write_callable(mmio_device_id);
     }
 
     // Returns a writer object which holds a pointer to a static tlb
     // Allows for fast writes when targeting same device core by only doing the lookup once and avoiding repeated stack
     // traversals
     tt::Writer get_static_tlb_writer(tt_cxy_pair target) const {
-        tt::umd::Cluster* device = dynamic_cast<tt::umd::Cluster*>(driver_.get());
         tt::umd::CoreCoord target_coord = get_soc_desc(target.chip).get_coord_at(target, CoordSystem::TRANSLATED);
-        return device->get_static_tlb_writer(target.chip, target_coord);
+        return driver_->get_static_tlb_writer(target.chip, target_coord);
     }
 
     std::uint32_t get_numa_node_for_device(uint32_t device_id) const {
         uint32_t mmio_device_id = this->get_associated_mmio_device(device_id);
-        tt::umd::Cluster* device = dynamic_cast<tt::umd::Cluster*>(driver_.get());
         return driver_->get_numa_node_for_pcie_device(mmio_device_id);
     }
 
@@ -359,7 +356,7 @@ private:
     TargetDevice target_type_;
 
     // There is a single device driver for all connected chips. It might contain multiple MMIO devices/cards.
-    std::unique_ptr<tt_device> driver_;
+    std::unique_ptr<tt::umd::Cluster> driver_;
 
     // Need to hold reference to cluster descriptor to detect total number of devices available in cluster
     // UMD static APIs `detect_available_device_ids` and `detect_number_of_chips` only returns number of MMIO mapped
