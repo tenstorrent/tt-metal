@@ -218,6 +218,17 @@ void py_module(py::module& module) {
                CoreCoord: The dram grid size of the first device in the device mesh.
        )doc")
         .def(
+            "set_speculation_mode",
+            &MeshDevice::set_speculation_modes,
+            py::arg("states"),
+            py::arg("skip_tensor_addr") = 0,
+            R"doc(
+           Set the speculation mode for the mesh device.
+           Args:
+               states (List[bool]): A list of boolean values representing the speculation state for each device.
+                skip_tensor_addr (int): The address of the tensor to read for skipping status.
+       )doc")
+        .def(
             "arch",
             &MeshDevice::arch,
             R"doc(

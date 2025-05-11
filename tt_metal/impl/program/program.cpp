@@ -1261,6 +1261,16 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
     for (auto & kernels : kernels_) {
         for (auto &[id, kernel] : kernels) {
             validate_kernel_placement(kernel);
+
+            // ALSpec
+            if (device->get_speculation_mode().first) {
+                kernel->add_defines({{"SPECULATION_MODE", "1"}});
+                kernel->add_defines({{"SKIP_TENSOR_ADDR", std::to_string(device->get_speculation_mode().second)}});
+            } else {
+                kernel->remove_define("SPECULATION_MODE");
+                kernel->remove_define("SKIP_TENSOR_ADDR");
+            }
+
             launch_build_step(
                 [kernel, device, this] {
                     JitBuildOptions build_options(

@@ -66,6 +66,12 @@ public:
     CoreCoord logical_grid_size() const override;
     CoreCoord dram_grid_size() const override;
 
+    // ALSpec
+    void set_speculation_modes(std::vector<bool> states, uint32_t skip_tensor_addr) override;
+    std::vector<std::pair<bool, uint32_t>> get_speculation_modes() const override;
+    void set_speculation_mode(bool state, uint32_t skip_tensor_addr) override;
+    std::pair<bool, uint32_t> get_speculation_mode() const override;
+
     // Given a coordinate in Virtual NOC0 Space, get the equivalent coordinate in Virtual noc_index space
     CoreCoord virtual_noc0_coordinate(uint8_t noc_index, CoreCoord coord) const override;
 
@@ -200,6 +206,10 @@ public:
 
 private:
     static constexpr uint32_t DEFAULT_NUM_SUB_DEVICES = 1;
+
+    // ALSpec
+    bool speculation_mode_ = false;
+    uint32_t skip_tensor_addr_ = 0;
 
     void initialize_cluster();
     std::unique_ptr<Allocator> initialize_allocator(

@@ -46,7 +46,9 @@ void kernel_launch(uint32_t kernel_base_addr) {
         DeviceZoneScopedMainChildN("BRISC-KERNEL");
         EARLY_RETURN_FOR_DEBUG
         WAYPOINT("K");
-        kernel_main();
+        if (!skip_kernel()) {
+            kernel_main();
+        }
         WAYPOINT("KD");
         if constexpr (NOC_MODE == DM_DEDICATED_NOC) {
             WAYPOINT("NKFW");

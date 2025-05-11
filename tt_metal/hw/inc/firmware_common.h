@@ -113,6 +113,19 @@ FORCE_INLINE void notify_dispatch_core_done(uint64_t dispatch_addr, uint8_t noc_
 }
 #endif
 
+#if defined(SPECULATION_MODE)
+bool skip_kernel() {
+    int32_t skip_tensor_data = (int32_t)(*reinterpret_cast<volatile tt_l1_ptr uint32_t*>(SKIP_TENSOR_ADDR));
+
+    if (skip_tensor_data == 0) {
+        return true;
+    }
+    return false;
+}
+#else
+bool skip_kernel() { return false; }
+#endif
+
 #if defined(DEBUG_EARLY_RETURN_KERNELS) && !defined(DISPATCH_KERNEL)
 // Used to early-return when NULLing out kernels. Will always return true while a kernel is running, but can't be
 // optimized away.

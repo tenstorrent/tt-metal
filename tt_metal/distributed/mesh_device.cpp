@@ -503,6 +503,30 @@ CoreCoord MeshDevice::dram_grid_size() const {
         scoped_devices_->root_devices(), [](const auto& device) { return device->dram_grid_size(); });
 }
 
+void MeshDevice::set_speculation_modes(std::vector<bool> states, uint32_t skip_tensor_addr) {
+    for (size_t i = 0; i < this->num_devices(); i++) {
+        scoped_devices_->root_devices()[i]->set_speculation_mode(states[i], skip_tensor_addr);
+    }
+}
+
+std::vector<std::pair<bool, uint32_t>> MeshDevice::get_speculation_modes() const {
+    std::vector<std::pair<bool, uint32_t>> speculation_modes;
+    for (auto device : scoped_devices_->root_devices()) {
+        speculation_modes.push_back(device->get_speculation_mode());
+    }
+    return speculation_modes;
+}
+
+void MeshDevice::set_speculation_mode(bool state, uint32_t skip_tensor_addr) {
+    for (auto device : scoped_devices_->root_devices()) {
+        device->set_speculation_mode(state, skip_tensor_addr);
+    }
+}
+
+std::pair<bool, uint32_t> MeshDevice::get_speculation_mode() const {
+    return scoped_devices_->root_devices()[0]->get_speculation_mode();
+}
+
 bool MeshDevice::using_slow_dispatch() const {
     return validate_and_get_reference_value(
         scoped_devices_->root_devices(), [](const auto& device) { return device->using_slow_dispatch(); });

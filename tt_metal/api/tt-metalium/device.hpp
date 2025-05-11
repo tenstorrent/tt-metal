@@ -77,6 +77,12 @@ public:
     virtual CoreCoord logical_grid_size() const = 0;
     virtual CoreCoord dram_grid_size() const = 0;
 
+    // ALSpec
+    virtual void set_speculation_modes(std::vector<bool> states, uint32_t skip_tensor_addr) = 0;
+    virtual std::vector<std::pair<bool, uint32_t>> get_speculation_modes() const = 0;
+    virtual void set_speculation_mode(bool state, uint32_t skip_tensor_addr) = 0;
+    virtual std::pair<bool, uint32_t> get_speculation_mode() const = 0;
+
     // Given a coordinate in Virtual NOC0 Space, get the equivalent coordinate in Virtual noc_index space
     virtual CoreCoord virtual_noc0_coordinate(uint8_t noc_index, CoreCoord coord) const = 0;
 

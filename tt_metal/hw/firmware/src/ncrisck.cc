@@ -54,7 +54,9 @@ void kernel_launch(uint32_t kernel_base_addr) {
     DeviceZoneScopedMainChildN("NCRISC-KERNEL");
     EARLY_RETURN_FOR_DEBUG
     WAYPOINT("K");
-    kernel_main();
+    if (!skip_kernel()) {
+        kernel_main();
+    }
     WAYPOINT("KD");
     // Checking is disabled on NCRISC for dispatch because dispatch_s, which
     // runs on NCRISC, does not track all transactions correctly.

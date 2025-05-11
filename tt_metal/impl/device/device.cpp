@@ -1353,6 +1353,23 @@ CoreCoord Device::compute_with_storage_grid_size() const {
     return tt::get_compute_grid_size(id_, num_hw_cqs_, dispatch_core_config);
 }
 
+void Device::set_speculation_modes(std::vector<bool> states, uint32_t skip_tensor_addr) {
+    this->set_speculation_mode(states[0], skip_tensor_addr);  // Only one device is supported for now
+}
+
+std::vector<std::pair<bool, uint32_t>> Device::get_speculation_modes() const {
+    return {this->get_speculation_mode()};  // Only one device is supported for now
+}
+
+void Device::set_speculation_mode(bool state, uint32_t skip_tensor_addr) {
+    this->speculation_mode_ = state;
+    this->skip_tensor_addr_ = skip_tensor_addr;
+}
+
+std::pair<bool, uint32_t> Device::get_speculation_mode() const {
+    return {this->speculation_mode_, this->skip_tensor_addr_};
+}
+
 CoreCoord Device::virtual_noc0_coordinate(uint8_t noc_index, CoreCoord coord) const {
     if (coord.x >= this->grid_size().x || coord.y >= this->grid_size().y) {
         // Coordinate already in virtual space: NOC0 and NOC1 are the same

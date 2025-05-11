@@ -152,6 +152,13 @@ public:
     CoreCoord grid_size() const override;
     CoreCoord logical_grid_size() const override;
     CoreCoord dram_grid_size() const override;
+
+    // ALSpec
+    void set_speculation_modes(std::vector<bool> states, uint32_t skip_tensor_addr) override;
+    std::vector<std::pair<bool, uint32_t>> get_speculation_modes() const override;
+    void set_speculation_mode(bool state, uint32_t skip_tensor_addr) override;
+    std::pair<bool, uint32_t> get_speculation_mode() const override;
+
     CoreCoord virtual_noc0_coordinate(uint8_t noc_index, CoreCoord coord) const override;
 
     std::vector<CoreCoord> worker_cores_from_logical_cores(const std::vector<CoreCoord>&logical_cores) const override;

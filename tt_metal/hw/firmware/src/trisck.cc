@@ -26,6 +26,19 @@ uint32_t math_sync_tile_dst_index = 0;
 uint32_t gl_alu_format_spec_reg = 0;
 uint32_t op_info_offset = 0;
 
+bool skip_kernel_trisc() {
+#ifdef SPECULATION_MODE
+    int32_t skip_tensor_data = (int32_t)(*reinterpret_cast<volatile tt_l1_ptr uint32_t*>(SKIP_TENSOR_ADDR));
+
+    if (skip_tensor_data == 0) {
+        return true;
+    }
+    return false;
+#else
+    return false;
+#endif
+}
+
 namespace ckernel
 {
 volatile tt_reg_ptr uint * regfile = reinterpret_cast<volatile uint *>(REGFILE_BASE);
@@ -61,7 +74,10 @@ void kernel_launch(uint32_t kernel_base_addr) {
     DeviceZoneScopedMainChildN("TRISC-KERNEL");
     EARLY_RETURN_FOR_DEBUG
     WAYPOINT("K");
-    run_kernel();
+    if (!skip_kernel_trisc()) {
+        run_kernel();
+    }
+
     WAYPOINT("KD");
 #endif
 }

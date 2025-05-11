@@ -170,6 +170,13 @@ void device_module(py::module& m_device) {
             .def(
                 "dram_grid_size", &IDevice::dram_grid_size, "Grid size (x, y) denoting dram cores that can be targeted")
             .def(
+                "set_speculation_mode",
+                &IDevice::set_speculation_mode,
+                py::arg("state"),
+                py::arg("skip_tensor_addr") = 0,
+                "Set speculation mode for the device")
+            .def("get_speculation_mode", &IDevice::get_speculation_mode, "Get speculation mode for the device")
+            .def(
                 "worker_core_from_logical_core",
                 &IDevice::worker_core_from_logical_core,
                 "Convert a logical core coordinate into a physical worker core coordinate")
