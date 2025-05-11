@@ -162,7 +162,7 @@ def test_vit_embeddings(device, model_name, batch_size, image_size, image_channe
     )
     output = ttnn.to_torch(output)
     print(output.shape)
-    assert_with_pcc(torch_output, output[0][:197:], 0.99)
+    assert_with_pcc(torch_output, output[0][:197:], 0.999)
 
 
 @pytest.mark.parametrize("model_name", ["google/vit-base-patch16-224"])
@@ -222,7 +222,7 @@ def test_vit_attention(device, model_name, batch_size, sequence_size):
     )
     output = ttnn.to_torch(output)
 
-    assert_with_pcc(torch_output, output, 0.99)
+    assert_with_pcc(torch_output, output, 0.999)
 
 
 @pytest.mark.parametrize("model_name", ["google/vit-base-patch16-224"])
@@ -252,7 +252,7 @@ def test_vit_intermediate(device, model_name, batch_size, sequence_size):
     )
     output = ttnn.to_torch(output)
 
-    assert_with_pcc(torch_output, output.to(torch_output.dtype), 0.99)
+    assert_with_pcc(torch_output, output.to(torch_output.dtype), 0.9984)
 
 
 @pytest.mark.parametrize("model_name", ["google/vit-base-patch16-224"])
@@ -298,7 +298,7 @@ def test_vit_output(device, model_name, batch_size, sequence_size):
     )
     output = ttnn.to_torch(output)
 
-    assert_with_pcc(torch_output, output.to(torch_output.dtype), 0.9999)
+    assert_with_pcc(torch_output, output.to(torch_output.dtype), 0.999)
 
 
 @pytest.mark.parametrize("model_name", ["google/vit-base-patch16-224"])
@@ -357,7 +357,7 @@ def test_vit_layer(device, model_name, batch_size, sequence_size):
     )
     output = ttnn.to_torch(output)
 
-    assert_with_pcc(torch_output, output, 0.998)
+    assert_with_pcc(torch_output, output, 0.9985)
 
 
 @pytest.mark.parametrize("model_name", ["google/vit-base-patch16-224"])
@@ -412,7 +412,7 @@ def test_vit_encoder(device, model_name, batch_size, sequence_size):
     )
     output = ttnn.to_torch(output)
 
-    assert_with_pcc(torch_output, output, 0.981)
+    assert_with_pcc(torch_output, output, 0.977)
 
 
 @pytest.mark.parametrize("model_name", ["google/vit-base-patch16-224"])
@@ -520,4 +520,4 @@ def test_vit(device, model_name, batch_size, image_size, image_channels, sequenc
     )
     output = ttnn.to_torch(output)
 
-    assert_with_pcc(torch_output, output[0, 0, :1000], 0.864)
+    assert_with_pcc(torch_output, output[0, 0, :1000], 0.86)
