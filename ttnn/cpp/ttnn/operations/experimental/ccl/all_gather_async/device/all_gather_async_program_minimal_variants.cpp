@@ -129,7 +129,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_interleav
     const auto output_tensor_page_layout = output_tensor.layout();
 
     bool use_best_effort =
-        AllGatherAsync::best_effort_interleave(input_tensor, dim, output_tensor_buffer_type, true) && num_links == 1;
+        AllGatherAsync::best_effort_interleave(input_tensor, dim, output_tensor_buffer_type, num_links, true);
 
     // KERNEL CREATION
     // Reader

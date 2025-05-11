@@ -91,12 +91,16 @@ inline void pack_non_contig(uint32_t num_tiles, uint32_t& tile_id, InterleavedAd
 
 template <bool DRAM>
 inline void pack_dim3_bf16_remain_even(
-    uint32_t num_tiles, uint32_t ring_size, uint32_t tile_cols_per_chip, InterleavedAddrGenFast<DRAM>& addrgen) {
+    uint32_t num_tiles,
+    uint32_t tile_id_start,
+    uint32_t ring_size,
+    uint32_t tile_cols_per_chip,
+    InterleavedAddrGenFast<DRAM>& addrgen) {
     const uint32_t num_contig2 = (tile_cols_per_chip / (num_banks * packet_size_in_pages)) * num_banks;
     const uint32_t num_contig1 = ((tile_cols_per_chip - num_contig2 * 2) / num_banks) * num_banks;
     const uint32_t num_orphan = tile_cols_per_chip - num_contig2 * 2 - num_contig1;
     const uint32_t row = num_tiles / tile_cols_per_chip;
-    uint32_t tile_id = 0;
+    uint32_t tile_id = tile_id_start;
     for (uint32_t i = 0; i < row; i++) {
         pack_full_contig(num_contig2, tile_id, addrgen);
         pack_non_contig(num_contig1, tile_id, addrgen);
@@ -106,8 +110,12 @@ inline void pack_dim3_bf16_remain_even(
 
 template <bool DRAM>
 inline void pack_dim3_bf8_dram_remain048(
-    uint32_t num_tiles, uint32_t ring_size, uint32_t tile_cols_per_chip, InterleavedAddrGenFast<DRAM>& addrgen) {
-    uint32_t tile_id = 0;
+    uint32_t num_tiles,
+    uint32_t tile_id_start,
+    uint32_t ring_size,
+    uint32_t tile_cols_per_chip,
+    InterleavedAddrGenFast<DRAM>& addrgen) {
+    uint32_t tile_id = tile_id_start;
     uint32_t row = num_tiles / tile_cols_per_chip;
     uint32_t num_full_contig = (tile_cols_per_chip / (num_banks * packet_size_in_pages)) * num_banks;
     uint32_t num_contig2 =
@@ -196,7 +204,6 @@ inline void pack_dim2_bf16(
     } else {
         rest_orphan_tiles = num_tiles_per_chip % (num_banks * packet_size_in_pages);
     }
-    // total += tile_id_start;
     pack_non_contig(rest_orphan_tiles, total, tensor0_addrgen);
 }
 
@@ -264,10 +271,11 @@ void kernel_main() {
     if constexpr (use_best_effort) {
         if constexpr (last_dim) {
             if constexpr (packet_size_in_pages == 2) {
-                pack_dim3_bf16_remain_even(num_tiles_per_chip, ring_size, tile_cols_per_chip, tensor0_addrgen);
+                pack_dim3_bf16_remain_even(
+                    num_tiles_per_chip, tile_id_start, ring_size, tile_cols_per_chip, tensor0_addrgen);
             } else {
                 pack_dim3_bf8_dram_remain048<is_dram>(
-                    num_tiles_per_chip, ring_size, tile_cols_per_chip, tensor0_addrgen);
+                    num_tiles_per_chip, tile_id_start, ring_size, tile_cols_per_chip, tensor0_addrgen);
             }
         } else {
             pack_dim2(num_tiles_per_chip, tile_id_start, tensor0_addrgen);

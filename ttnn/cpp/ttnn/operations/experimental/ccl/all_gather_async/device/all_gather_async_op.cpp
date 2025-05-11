@@ -38,11 +38,11 @@ bool AllGatherAsync::best_effort_interleave(
     bool is_dim2 = false;
     uint32_t dim3_tiles = input_tensor_shape[3] / TILE_WIDTH;
     if (dim == 3) {
-        is_dim3_bf16 = input_tensor.dtype() == DataType::BFLOAT16 && fit_tile && dim3_tiles % num_banks == 0;
+        is_dim3_bf16 = input_tensor.dtype() == DataType::BFLOAT16 && fit_tile && (dim3_tiles % num_banks) % 2 == 0;
 
         // DRAM only yet
         if (output_buffer_type == BufferType::DRAM) {
-            is_dim3_bf8 = input_tensor.dtype() == DataType::BFLOAT8_B && fit_tile && dim3_tiles % num_banks == 0;
+            is_dim3_bf8 = input_tensor.dtype() == DataType::BFLOAT8_B && fit_tile && (dim3_tiles % num_banks) % 4 == 0;
         }
     }
     if (0 <= dim && dim < 3) {
@@ -57,7 +57,6 @@ bool AllGatherAsync::best_effort_interleave(
     bool multi_link_support = (input_tensor.buffer()->num_pages() / dim3_tiles) % num_links == 0;
 
     bool canbe_optimized = (is_dim3_bf16 || is_dim3_bf8 || is_dim2) && is_interleaved && is_tiled && multi_link_support;
-    ;
     if (use_optimized) {
         return canbe_optimized;
     }

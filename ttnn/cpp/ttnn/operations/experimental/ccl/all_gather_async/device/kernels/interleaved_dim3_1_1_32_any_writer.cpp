@@ -145,6 +145,7 @@ inline void fabric_send_non_contig(
 template <bool DRAM>
 inline void fabric_send_dim3_bf16_remain_even(
     uint32_t num_tiles,
+    uint32_t tile_id_start,
     uint32_t ring_size,
     uint32_t tile_cols_per_chip,
     InterleavedAddrGenFast<DRAM>& addrgen,
@@ -155,7 +156,7 @@ inline void fabric_send_dim3_bf16_remain_even(
     const uint32_t num_contig1 = ((tile_cols_per_chip - num_contig2 * 2) / num_banks) * num_banks;
     const uint32_t num_orphan = tile_cols_per_chip - num_contig2 * 2 - num_contig1;
     const uint32_t row = num_tiles / tile_cols_per_chip;
-    uint32_t tile_id = tile_cols_per_chip * my_chip_id;
+    uint32_t tile_id = tile_id_start;
 
     for (uint32_t i = 0; i < row; i++) {
         fabric_send_full_contig(num_contig2, tile_id, addrgen, pkt_hdr_forward, pkt_hdr_backward, fabric_connection);
@@ -168,6 +169,7 @@ inline void fabric_send_dim3_bf16_remain_even(
 template <bool DRAM>
 inline void fabric_send_dim3_bf8_dram_remain048(
     uint32_t num_tiles,
+    uint32_t tile_id_start,
     uint32_t ring_size,
     uint32_t tile_cols_per_chip,
     InterleavedAddrGenFast<DRAM>& addrgen,
@@ -176,7 +178,7 @@ inline void fabric_send_dim3_bf8_dram_remain048(
     FabricConnectionManager& fabric_connection) {
     uint32_t row = num_tiles / tile_cols_per_chip;
     const uint32_t input_width = tile_cols_per_chip;
-    uint32_t tile_id = input_width * my_chip_id;
+    uint32_t tile_id = tile_id_start;
     uint32_t num_full_contig = (tile_cols_per_chip / (num_banks * packet_size_in_pages)) * num_banks;
     uint32_t num_contig2 =
         ((tile_cols_per_chip - num_full_contig * packet_size_in_pages) / (num_banks * 2)) * num_banks;
@@ -474,6 +476,7 @@ void kernel_main() {
             if constexpr (packet_size_in_pages == 2) {  // bf16
                 fabric_send_dim3_bf16_remain_even<is_dram>(
                     num_tiles_per_chip,
+                    tile_id_start,
                     ring_size,
                     tile_cols_per_chip,
                     tensor0_addrgen,
@@ -483,6 +486,7 @@ void kernel_main() {
             } else {
                 fabric_send_dim3_bf8_dram_remain048<is_dram>(
                     num_tiles_per_chip,
+                    tile_id_start,
                     ring_size,
                     tile_cols_per_chip,
                     tensor0_addrgen,
