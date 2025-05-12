@@ -100,18 +100,62 @@ def first_available_tg_device():
 
 
 @pytest.fixture(scope="session")
-def model_location_generator():
-    def model_location_generator_(model_version, model_subdir=""):
+def is_ci_v2_env():
+    yield "TT_GH_CI_INFRA" in os.environ
+
+
+# We don't want other people using this stuff... wonder if we should just stuff it in the fixture that's calling it instead
+class CIv2ModelDownloadUtils_:
+    @staticmethod
+    def download_from_ci_v2_cache(
+        model_path,
+        dest_dir_suffix="",
+        endpoint_prefix="http://large-file-cache.large-file-cache.svc.cluster.local//mldata/model_checkpoints/pytorch/huggingface",
+    ):
+        # RK: Will this be portable? LOL
+        dest_path = pathlib.Path("/tmp/ttnn_model_cache/") / dest_dir_suffix
+
+        dest_path.mkdir(parents=True, exist_ok=True)
+
+        download_dir_str = str(dest_path)
+
+        endpoint = f"{endpoint_prefix}/{model_path}"
+
+        subprocess.run(
+            ["wget", "-r", "-nH", "-x", "--cut-dirs=5", "-np", "-R", "index.html*", "-P", download_dir_str, endpoint]
+        )
+
+        return dest_path
+
+
+@pytest.fixture(scope="session")
+def model_location_generator(is_ci_v2_env):
+    def model_location_generator_(model_version, model_subdir="", download_if_ci_v2=False):
         model_folder = Path("tt_dnn-models") / model_subdir
         internal_weka_path = Path("/mnt/MLPerf") / model_folder / model_version
         has_internal_weka = internal_weka_path.exists()
-        internal_cache_path = Path("/opt/tt-metal-models") / model_folder / model_version
-        has_internal_cache = internal_cache_path.exists()
-        if has_internal_weka:
+
+        download_from_ci_v2 = download_if_ci_v2 and is_ci_v2_env
+
+        if download_from_ci_v2:
+            assert (
+                not has_internal_weka
+            ), "For some reason, we see a file existing at the expected MLPerf location: {internal_weka_path} on CIv2. Please use the opportunity to clean up your model and get rid of MLPerf if you're moving to CIv2"
+            assert (
+                not model_subdir
+            ), f"model_subdir is set to {model_subdir}, but we don't support further levels of directories in the large file cache in CIv2"
+            civ2_download_path = CIv2ModelDownloadUtils.download_from_ci_v2_cache(
+                model_version, dest_dir_suffix="model_weights"
+            )
+            logger.info(f"For model location, using CIv2 large file cache: {civ2_download_path}")
+            return civ2_download_path
+        elif has_internal_weka:
+            logger.info(f"For model location, using internal MLPerf path: {internal_weka_path}")
             return internal_weka_path
-        elif has_internal_cache:
-            return internal_cache_path
         else:
+            logger.info(
+                f"For model location, local copy not found, so likely downloading straight from HF: {model_version}"
+            )
             return model_version
 
     return model_location_generator_
@@ -123,14 +167,9 @@ def get_tt_cache_path():
         model_folder = Path("tt_dnn-models/tt") / model_subdir
         internal_weka_path = Path("/mnt/MLPerf") / model_folder / model_version
         has_internal_weka = internal_weka_path.exists()
-        internal_cache_path = Path("/opt/tt-metal-models") / model_folder / model_version
-        has_internal_cache = internal_cache_path.exists()
         if has_internal_weka:
-            logger.debug(f"Using internal weka path: {internal_weka_path}")
+            logger.debug(f"Using internal MLPerf path: {internal_weka_path}")
             return internal_weka_path
-        elif has_internal_cache:
-            logger.debug(f"Using internal cache path: {internal_cache_path}")
-            return internal_cache_path
         else:
             default_path = Path(default_dir) / model_folder / model_version
             default_path.mkdir(parents=True, exist_ok=True)
