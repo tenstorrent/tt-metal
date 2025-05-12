@@ -125,6 +125,8 @@ inline void calculate_comp_unary_int(int scalar) {
     for (int d = 0; d < ITERATIONS; d++) {
         vInt v = dst_reg[0];
         vInt val = 0;
+        vInt s = scalar;
+        vInt zero = 0;
 
         // a[i] != scalar
         if constexpr (COMP_MODE == SfpuType::unary_ne) {
@@ -138,12 +140,16 @@ inline void calculate_comp_unary_int(int scalar) {
         }
         // a[i] > scalar
         else if constexpr (COMP_MODE == SfpuType::unary_gt) {
-            v_if(v > scalar) { val = 1; }
+            v_if(v >= zero && s < zero) { val = 1; }
+            v_elseif(v < zero && s >= zero) { val = 0; }
+            v_elseif(v > s) { val = 1; }
             v_endif;
         }
         // a[i] < scalar
         else if constexpr (COMP_MODE == SfpuType::unary_lt) {
-            v_if(v < scalar) { val = 1; }
+            v_if(v >= zero && s < zero) { val = 0; }
+            v_elseif(v < zero && s >= zero) { val = 1; }
+            v_elseif(v < s) { val = 1; }
             v_endif;
         }
         dst_reg[0] = val;
