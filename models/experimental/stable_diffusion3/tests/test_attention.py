@@ -118,14 +118,12 @@ def test_attention(
     tt_spatial_output_torch = ttnn.to_torch(
         tt_spatial_output, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=-1)
     )[:, :, 0:spatial_sequence_length, :embedding_dim]
-    assert_quality(
-        spatial_output, tt_spatial_output_torch, pcc=0.990, shard_dim=0, num_devices=mesh_device.get_num_devices()
-    )
+
+    assert_quality(spatial_output, tt_spatial_output_torch, pcc=0.9995, mse=5e-6)
 
     if joint_attention:
         tt_prompt_output_torch = ttnn.to_torch(
             tt_prompt_output, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=-1)
         )[:, :, 0:prompt_sequence_length, :embedding_dim]
-        assert_quality(
-            prompt_output, tt_prompt_output_torch, pcc=0.990, shard_dim=0, num_devices=mesh_device.get_num_devices()
-        )
+
+        assert_quality(prompt_output, tt_prompt_output_torch, pcc=0.9995, mse=7e-6)
