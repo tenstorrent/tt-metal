@@ -40,14 +40,14 @@ inline void _llk_unpack_get_tile_(std::uint32_t address, std::uint32_t *p_tile)
 
     if constexpr (mail2math)
     {
-        mailbox_write(ThreadId::MathThreadId, byte_address);
         semaphore_post(semaphore::UNPACK_OPERAND_SYNC);
+        mailbox_write(ThreadId::MathThreadId, byte_address);
     }
 
     if constexpr (mail2pack)
     {
-        mailbox_write(ThreadId::PackThreadId, byte_address);
         semaphore_post(semaphore::UNPACK_OPERAND_SYNC);
+        mailbox_write(ThreadId::PackThreadId, byte_address);
     }
 
     *p_tile = byte_address;
