@@ -322,8 +322,18 @@ class TtStableDiffusion3Pipeline:
 
         latents_step = tt_initial_latents
 
+        transformer_batch_size = batch_size * num_images_per_prompt
+        if do_classifier_free_guidance:
+            transformer_batch_size *= 2
+
         for i, t in enumerate(tqdm.tqdm(timesteps)):
-            tt_timestep = ttnn.full([1, 1], fill_value=t, dtype=ttnn.float32, device=self._device)
+            tt_timestep = ttnn.full(
+                [transformer_batch_size, 1],
+                fill_value=t,
+                dtype=ttnn.float32,
+                device=self._device,
+                layout=ttnn.TILE_LAYOUT,
+            )
 
             sigma_difference = self._scheduler.sigmas[i + 1] - self._scheduler.sigmas[i]
             tt_sigma_difference = ttnn.full(
@@ -394,7 +404,6 @@ class TtStableDiffusion3Pipeline:
         spatial_sequence_length: int,
     ) -> None:
         latent_model_input = ttnn.concat([latents, latents]) if do_classifier_free_guidance else latents
-        timestep = ttnn.to_layout(timestep, ttnn.TILE_LAYOUT)
 
         noise_pred = self._tt_transformer(
             spatial=latent_model_input,
