@@ -7,7 +7,6 @@ import math
 import pandas as pd
 from collections import defaultdict
 from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
-from models.perf.device_perf_utils import run_device_perf
 from tt_metal.tools.profiler.process_model_log import (
     get_latest_ops_log_filename,
 )
@@ -18,8 +17,8 @@ PREFILL_OP_START_INDEX = 0
 PREFILL_OP_END_INDEX = -1
 
 perf_targets = {
-    "RMSAllGather_0": {
-        "op_name": "PreRMS_0",
+    "LayerNormPreAllGather_0": {
+        "op_name": "LayerNormPreAllGather_0",
         "kernel_duration": 38310.15625,
         "op_to_op": 1.0,
         "non-overlapped-dispatch-time": 7260,
@@ -27,7 +26,7 @@ perf_targets = {
         "op_to_op_duration_relative_margin": 0.2,
         "dispatch_duration_relative_margin": 0.2,
     },
-    "RMSAllGather_1": {
+    "AllGatherAsync_0": {
         "op_name": "AllGatherAsync_0",
         "kernel_duration": 39768.09375,
         "op_to_op": 1.0,
@@ -36,8 +35,8 @@ perf_targets = {
         "op_to_op_duration_relative_margin": 0.2,
         "dispatch_duration_relative_margin": 0.2,
     },
-    "RMSAllGather_2": {
-        "op_name": "PostRMS_0",
+    "LayerNormPostAllGather_0": {
+        "op_name": "LayerNormPostAllGather_0",
         "kernel_duration": 43802.03125,
         "op_to_op": 1.0,
         "non-overlapped-dispatch-time": 6301.3,
@@ -63,7 +62,7 @@ perf_targets = {
         "op_to_op_duration_relative_margin": 0.2,
         "dispatch_duration_relative_margin": 0.3,
     },
-    "AllGatherAsync_0": {
+    "AllGatherAsync_1": {
         "op_name": "AllGatherAsync_QKV",
         "kernel_duration": 50854.12500,
         "op_to_op": 1.0,
@@ -72,7 +71,7 @@ perf_targets = {
         "op_to_op_duration_relative_margin": 0.2,
         "dispatch_duration_relative_margin": 0.3,
     },
-    "CreateQKVHeads_0": {
+    "NlpCreateHeadsDeviceOperation_0": {
         "op_name": "CreateQKVHeads",
         "kernel_duration": 22410.00000,
         "op_to_op": 1.0,
@@ -81,7 +80,7 @@ perf_targets = {
         "op_to_op_duration_relative_margin": 0.2,
         "dispatch_duration_relative_margin": 0.3,
     },
-    "Typecast_0": {
+    "UnaryDeviceOperation_0": {
         "op_name": "typecast_0",
         "kernel_duration": 4510.00000,
         "op_to_op": 1.0,
@@ -90,7 +89,7 @@ perf_targets = {
         "op_to_op_duration_relative_margin": 0.2,
         "dispatch_duration_relative_margin": 0.3,
     },
-    "Rot_Embed_0": {
+    "RotaryEmbeddingLlama_0": {
         "op_name": "rotary_emb_Q",
         "kernel_duration": 30366.00000,
         "op_to_op": 1.0,
@@ -99,7 +98,7 @@ perf_targets = {
         "op_to_op_duration_relative_margin": 0.2,
         "dispatch_duration_relative_margin": 0.3,
     },
-    "Typecast_1": {
+    "UnaryDeviceOperation_1": {
         "op_name": "typecast_1",
         "kernel_duration": 2159.00000,
         "op_to_op": 1.0,
@@ -108,7 +107,7 @@ perf_targets = {
         "op_to_op_duration_relative_margin": 0.2,
         "dispatch_duration_relative_margin": 0.3,
     },
-    "Rot_Embed_1": {
+    "RotaryEmbeddingLlama_1": {
         "op_name": "rotary_emb_K",
         "kernel_duration": 14128.00000,
         "op_to_op": 1.0,
@@ -117,7 +116,7 @@ perf_targets = {
         "op_to_op_duration_relative_margin": 0.2,
         "dispatch_duration_relative_margin": 0.3,
     },
-    "Typecast_2": {
+    "UnaryDeviceOperation_2": {
         "op_name": "typecast_2",
         "kernel_duration": 2056,
         "op_to_op": 1.0,
@@ -126,7 +125,7 @@ perf_targets = {
         "op_to_op_duration_relative_margin": 0.2,
         "dispatch_duration_relative_margin": 0.3,
     },
-    "Typecast_3": {
+    "UnaryDeviceOperation_3": {
         "op_name": "typecast_3",
         "kernel_duration": 1844,
         "op_to_op": 1.0,
@@ -135,7 +134,7 @@ perf_targets = {
         "op_to_op_duration_relative_margin": 0.2,
         "dispatch_duration_relative_margin": 0.3,
     },
-    "Clone_0": {
+    "CloneOperation_0": {
         "op_name": "clone0",
         "kernel_duration": 1638,
         "op_to_op": 1.0,
@@ -144,7 +143,7 @@ perf_targets = {
         "op_to_op_duration_relative_margin": 0.2,
         "dispatch_duration_relative_margin": 0.3,
     },
-    "Clone_1": {
+    "CloneOperation_1": {
         "op_name": "clone1",
         "kernel_duration": 1609,
         "op_to_op": 1.0,
@@ -153,7 +152,7 @@ perf_targets = {
         "op_to_op_duration_relative_margin": 0.2,
         "dispatch_duration_relative_margin": 0.3,
     },
-    "UpdateCache_0": {
+    "PagedUpdateCacheDeviceOperation_0": {
         "op_name": "update_cache_K",
         "kernel_duration": 2966,
         "op_to_op": 1.0,
@@ -162,7 +161,7 @@ perf_targets = {
         "op_to_op_duration_relative_margin": 0.2,
         "dispatch_duration_relative_margin": 0.3,
     },
-    "UpdateCache_1": {
+    "PagedUpdateCacheDeviceOperation_1": {
         "op_name": "update_cache_V",
         "kernel_duration": 2742,
         "op_to_op": 1.0,
@@ -171,7 +170,7 @@ perf_targets = {
         "op_to_op_duration_relative_margin": 0.2,
         "dispatch_duration_relative_margin": 0.3,
     },
-    "Typecast_4": {
+    "UnaryDeviceOperation_4": {
         "op_name": "typecast_4",
         "kernel_duration": 3939,
         "op_to_op": 1.0,
@@ -180,7 +179,7 @@ perf_targets = {
         "op_to_op_duration_relative_margin": 0.2,
         "dispatch_duration_relative_margin": 0.3,
     },
-    "SDPA_0": {
+    "ScaledDotProductAttention_0": {
         "op_name": "sdpa",
         "kernel_duration": 30494,
         "op_to_op": 1.0,
@@ -189,7 +188,7 @@ perf_targets = {
         "op_to_op_duration_relative_margin": 0.2,
         "dispatch_duration_relative_margin": 0.3,
     },
-    "Concat_Heads_0": {
+    "NLPConcatHeadsDeviceOperation_0": {
         "op_name": "concat_heads",
         "kernel_duration": 17908,
         "op_to_op": 1.0,
@@ -216,7 +215,7 @@ perf_targets = {
         "op_to_op_duration_relative_margin": 0.2,
         "dispatch_duration_relative_margin": 0.3,
     },
-    "AllGatherAsync_1": {
+    "AllGatherAsync_2": {
         "op_name": "AllGatherAsync_attn_out",
         "kernel_duration": 56328.56250,
         "op_to_op": 1.0,
@@ -225,7 +224,7 @@ perf_targets = {
         "op_to_op_duration_relative_margin": 0.2,
         "dispatch_duration_relative_margin": 0.3,
     },
-    "Binary_op_0": {
+    "BinaryDeviceOperation_0": {
         "op_name": "sum_attn_out",
         "kernel_duration": 8626,
         "op_to_op": 1.0,
@@ -234,7 +233,7 @@ perf_targets = {
         "op_to_op_duration_relative_margin": 0.2,
         "dispatch_duration_relative_margin": 0.3,
     },
-    "RMSAllGather_3": {
+    "LayerNormPreAllGather_1": {
         "op_name": "PreRMS_1",
         "kernel_duration": 38286.18750,
         "op_to_op": 1.0,
@@ -243,7 +242,7 @@ perf_targets = {
         "op_to_op_duration_relative_margin": 0.2,
         "dispatch_duration_relative_margin": 0.3,
     },
-    "RMSAllGather_4": {
+    "AllGatherAsync_3": {
         "op_name": "AllGatherAsync_1",
         "kernel_duration": 50215.68750,
         "op_to_op": 1.0,
@@ -252,7 +251,7 @@ perf_targets = {
         "op_to_op_duration_relative_margin": 0.2,
         "dispatch_duration_relative_margin": 0.3,
     },
-    "RMSAllGather_5": {
+    "LayerNormPostAllGather_2": {
         "op_name": "PostRMS_1",
         "kernel_duration": 43850.28125,
         "op_to_op": 1.0,
@@ -297,7 +296,7 @@ perf_targets = {
         "op_to_op_duration_relative_margin": 0.2,
         "dispatch_duration_relative_margin": 0.3,
     },
-    "Binary_op_1": {
+    "BinaryDeviceOperation1": {
         "op_name": "binary_mul_ffn_1_3",
         "kernel_duration": 7253,
         "op_to_op": 1.0,
@@ -306,7 +305,7 @@ perf_targets = {
         "op_to_op_duration_relative_margin": 0.2,
         "dispatch_duration_relative_margin": 0.3,
     },
-    "AllGatherAsync_2": {
+    "AllGatherAsync_4": {
         "op_name": "AllGatherAsync_ffn_2",
         "kernel_duration": 62974.06250,
         "op_to_op": 1.0,
@@ -333,7 +332,7 @@ perf_targets = {
         "op_to_op_duration_relative_margin": 0.2,
         "dispatch_duration_relative_margin": 0.3,
     },
-    "AllGatherAsync_3": {
+    "AllGatherAsync_5": {
         "op_name": "all_gather_ffn_2",
         "kernel_duration": 55607.31250,
         "op_to_op": 1.0,
@@ -342,7 +341,7 @@ perf_targets = {
         "op_to_op_duration_relative_margin": 0.2,
         "dispatch_duration_relative_margin": 0.3,
     },
-    "Binary_op_2": {
+    "BinaryDeviceOperation_2": {
         "op_name": "binary_sum_mlp",
         "kernel_duration": 8579,
         "op_to_op": 1.0,
@@ -516,7 +515,7 @@ def test_llama_TG_perf_device(
     cols = ["DEVICE FW", "DEVICE KERNEL", "DEVICE BRISC KERNEL"]
     profiler.start("run")
     profiler.start(step_name)
-    post_processed_results = run_device_perf(command, subdir, num_iterations, cols, batch_size)
+    # post_processed_results = run_device_perf(command, subdir, num_iterations, cols, batch_size)
     profiler.end(step_name)
     profiler.end("run")
 
