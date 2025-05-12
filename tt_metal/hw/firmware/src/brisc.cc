@@ -82,9 +82,13 @@ int32_t bank_to_l1_offset[NUM_L1_BANKS] __attribute__((used));
 #if defined(PROFILE_KERNEL)
 namespace kernel_profiler {
     uint32_t wIndex __attribute__((used));
+    uint32_t time_out __attribute__((used));
     uint32_t stackSize __attribute__((used));
     uint32_t sums[SUM_COUNT] __attribute__((used));
     uint32_t sumIDs[SUM_COUNT] __attribute__((used));
+    uint32_t core_flat_id __attribute__((used));
+    uint32_t profiler_core_count_per_dram __attribute__((used));
+    uint32_t dram_buffer_page_size __attribute__((used));
 }
 #endif
 
@@ -355,6 +359,7 @@ int main() {
     noc_local_state_init(noc_index);
     uint8_t prev_noc_mode = DM_DEDICATED_NOC;
     trigger_sync_register_init();
+    DeviceProfilerInit();
 
     while (1) {
         WAYPOINT("GW");
@@ -382,13 +387,15 @@ int main() {
                 DEBUG_SANITIZE_NOC_ADDR(noc_index, dispatch_addr, 4);
                 notify_dispatch_core_done(dispatch_addr, noc_index);
             }
+            DeviceZonesTimeoutPush();
         }
 
         WAYPOINT("GD");
 
         {
-            // Only include this iteration in the device profile if the launch message is valid. This is because all workers get a go signal regardless of whether
-            // they're running a kernel or not. We don't want to profile "invalid" iterations.
+            // Only include this iteration in the device profile if the launch message is valid. This is because all
+            // workers get a go signal regardless of whether they're running a kernel or not. We don't want to profile
+            // "invalid" iterations.
             DeviceZoneScopedMainN("BRISC-FW");
             uint32_t launch_msg_rd_ptr = mailboxes->launch_msg_rd_ptr;
             launch_msg_t* launch_msg_address = &(mailboxes->launch[launch_msg_rd_ptr]);

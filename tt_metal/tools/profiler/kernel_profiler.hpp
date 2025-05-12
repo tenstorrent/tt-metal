@@ -4,6 +4,12 @@
 
 #pragma once
 
+#if defined(PROFILE_KERNEL_EXPERIMENTAL)
+
+#include "tt_metal/tools/profiler/experimental/kernel_profiler_experimental.hpp"
+
+#else
+
 #include <climits>
 
 #if defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_BRISC) || defined(COMPILE_FOR_ERISC) || \
@@ -479,7 +485,7 @@ inline __attribute__((always_inline)) void recordEvent(uint16_t event_id) {
 // Dispatch and enabled
 #elif (defined(DISPATCH_KERNEL) && (PROFILE_KERNEL == PROFILER_OPT_DO_DISPATCH_CORES))
 
-#define DeviceZoneScopedN(name)                                                         \
+#define DeviceZoneScopedN(name)                                                          \
     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                                         \
     auto constexpr hash = kernel_profiler::Hash16_CT(PROFILER_MSG_NAME(name));           \
     kernel_profiler::profileScope<hash, kernel_profiler::DoingDispatch::DISPATCH> zone = \
@@ -529,6 +535,14 @@ inline __attribute__((always_inline)) void recordEvent(uint16_t event_id) {
 
 #define DeviceZoneSetCounter(counter) kernel_profiler::set_host_counter(counter);
 
+#define DeviceZoneScopedPush()
+
+#define DeviceZonesTimeoutPush()
+
+#define DeviceZonesPush()
+
+#define DeviceProfilerInit()
+
 #else
 
 #define DeviceValidateProfiler(condition)
@@ -554,4 +568,13 @@ inline __attribute__((always_inline)) void recordEvent(uint16_t event_id) {
 #define RECORD_NOC_EVENT_WITH_ID(type, noc_id, num_bytes, vc)
 #define RECORD_NOC_EVENT(type)
 
+#define DeviceZoneScopedPush()
+
+#define DeviceZonesTimeoutPush()
+
+#define DeviceZonesPush()
+
+#define DeviceProfilerInit()
+
+#endif
 #endif
