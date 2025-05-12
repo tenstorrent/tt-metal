@@ -759,6 +759,7 @@ class ModelArgs:
 
             mlp_w_dram_sharded = not self.is_galaxy
             n_w1_w3 = self.hidden_dim // self.cluster_shape[1]
+            # Using dram_shard_grid_width to ensure per_core_N matches DRAM shard width for P100, otherwise matmuls silently give bad PCC
             dram_shard_grid_width = 8 if is_wormhole_b0() else self.dram_grid_size.x  # 7 for P100, 8 for P150
             self.model_config["PREFILL_MLP_W1_W3_PRG_CONFIG"] = lambda seq_len: self.matmul_config(
                 m=min(seq_len, self.prefill_len_cutoff),  # 512 if BH, 1024 if WH
@@ -768,7 +769,7 @@ class ModelArgs:
                 per_core_N=math.ceil(n_w1_w3 / (self.tile_size * dram_shard_grid_width))
                 if mlp_w_dram_sharded
                 else None,
-            )  # per_core_N is explicitly specified here to ensure it matches DRAM shard width
+            )
             n_w2 = self.dim
             self.model_config["PREFILL_MLP_W2_PRG_CONFIG"] = lambda seq_len: self.matmul_config(
                 m=min(seq_len, self.prefill_len_cutoff),  # 512 if BH, 1024 if WH
@@ -776,7 +777,7 @@ class ModelArgs:
                 n=n_w2,
                 grid_size=mlp2_grid(seq_len),
                 per_core_N=math.ceil(n_w2 / (self.tile_size * dram_shard_grid_width)) if mlp_w_dram_sharded else None,
-            )  # per_core_N is explicitly specified here to ensure it matches DRAM shard width
+            )
 
             k_dim = self.dim // self.cluster_shape[0] if self.is_galaxy else self.dim // self.num_devices
             # n_dim = self.dim // self.cluster_shape[1] if self.is_galaxy else self.dim
@@ -799,7 +800,7 @@ class ModelArgs:
                 in0_block_w=1 if self.is_galaxy else None,
                 fuse_batch=seq_len <= 1024,
                 per_core_N=math.ceil(n_dim / (self.tile_size * dram_shard_grid_width)) if dram_sharded_wo else None,
-            )  # per_core_N is explicitly specified here to ensure it matches DRAM shard width
+            )
 
             # Calculate largest number of lm_head_num_rows such that self.dim % (lm_head_num_rows * lm_head_cores_per_row) == 0
             if self.num_devices == 32:
