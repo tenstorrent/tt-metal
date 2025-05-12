@@ -235,38 +235,10 @@ inline void fabric_send_dim2_bf8(
     uint32_t num_tiles = rest_half_contig_ids + (filled_bank_tiles + rest_full_contig_ids);
     uint32_t outer_id = 0;
 
-    // send half (2) contig tiles twice in one loop
-    uint32_t total_local = 0;
-    uint32_t tile_id = total;
-    while (total_local < rest_half_contig_ids) {
-        uint32_t num_2contig = min(rest_half_contig_ids - outer_id, 2);
-        cb_wait_front(cb0_id, packet_size_in_pages);
-        size_t l1_read_addr = get_read_ptr(cb0_id);
-
-        uint32_t id = tile_id;
-        for (uint32_t j = 0; j < num_2contig; j++) {
-            uint64_t noc0_dest_noc_addr = get_noc_addr(id, tensor0_addrgen, 0 /*offset*/, 0 /*noc_id*/);
-            fabric_write_wrapper(
-                noc0_dest_noc_addr,
-                pkt_hdr_forward,
-                pkt_hdr_backward,
-                fabric_connection,
-                l1_read_addr,
-                2 * tensor0_page_size);
-            id++;
-            tile_id++;
-        }
-        outer_id += num_2contig;
-        total_local++;
-        if (total_local % num_banks == 0) {
-            total_local += num_banks;
-        }
-        cb_pop_front(cb0_id, packet_size_in_pages);
-    }
+    fabric_send_2contig_bf8(
+        rest_half_contig_ids, total, tensor0_addrgen, pkt_hdr_forward, pkt_hdr_backward, fabric_connection);
     if (skip_num_banks) {
-        total += 2 * num_banks;
-    } else {
-        total += total_local;
+        total += 2 * num_banks - rest_half_contig_ids;
     }
     fabric_send_non_contig(
         rest_orphan_tiles, total, tensor0_addrgen, pkt_hdr_forward, pkt_hdr_backward, fabric_connection);
