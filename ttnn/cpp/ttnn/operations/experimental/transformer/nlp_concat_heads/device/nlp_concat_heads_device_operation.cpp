@@ -38,7 +38,7 @@ void NLPConcatHeadsDeviceOperation::validate(const std::vector<Tensor>& input_te
 std::vector<ttnn::TensorSpec> NLPConcatHeadsDeviceOperation::compute_output_specs(
     const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
-    const auto input_shape = input_tensor.get_padded_shape();
+    const auto input_shape = input_tensor.get_logical_shape();
 
     auto num_heads = input_shape[1];
     auto sequence_length = input_shape[2];
