@@ -216,3 +216,8 @@ def all_gather(
         x = ttnn.reshape(x, shape, x.padded_shape)
 
     return x
+
+
+def silu(x: ttnn.Tensor) -> ttnn.Tensor:
+    """More accurate version of `ttnn.silu`"""
+    return ttnn.div(x, ttnn.exp(ttnn.neg(x)) + 1)
