@@ -9,6 +9,7 @@
 
 #include "command_queue_interface.hpp"
 #include "tt_backend_api_types.hpp"
+#include "program/program_impl.hpp"
 
 enum class CoreType;
 
@@ -36,14 +37,14 @@ enum data_collector_t {
  *      riscv - riscv core that this transaction is used for, only relevant for DISPATCH_DATA_BINARY transactions.
  */
 void RecordDispatchData(
-    tt_metal::Program& program, data_collector_t type, uint32_t transaction_size, RISCV riscv = RISCV::MAX);
+    uint64_t program_id, data_collector_t type, uint32_t transaction_size, RISCV riscv = RISCV::MAX);
 
 // Record the KernelGroups present in this program (per core type). Should only be called per program created, not
 // program enqueued.
 void RecordKernelGroups(
-    tt_metal::Program& program, CoreType core_type, std::vector<tt_metal::KernelGroup>& kernel_groups);
+    tt_metal::detail::ProgramImpl& program, CoreType core_type, std::vector<tt_metal::KernelGroup>& kernel_groups);
 
 // Update stats with an enqueue of given program.
-void RecordProgramRun(tt_metal::Program& program);
+void RecordProgramRun(uint64_t program_id);
 
 }  // end namespace tt
