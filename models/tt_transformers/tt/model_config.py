@@ -32,7 +32,7 @@ from models.tt_transformers.tt.load_checkpoints import (
     reverse_permute,
     standardize_hf_keys,
 )
-from models.utility_functions import nearest_32
+from models.utility_functions import is_blackhole, is_wormhole_b0, nearest_32
 
 
 class TensorGroup(Enum):
@@ -417,13 +417,13 @@ class ModelArgs:
         if self.num_devices == 0:
             self.device_name = "CPU"
         else:
-            if self.arch_name == "blackhole":
+            if is_blackhole():
                 dict_device_names = {
                     1: "P100" if self.dram_grid_size.x == 7 else "P150",  # P100 DRAM grid is 7x1, P150 is 8x1
                     2: "P300",
                     4: "P150x4",
                 }
-            elif self.arch_name == "wormhole_b0":
+            elif is_wormhole_b0():
                 dict_device_names = {
                     1: "N150",
                     2: "N300",
@@ -447,9 +447,9 @@ class ModelArgs:
         self.is_70b = False
         self.is_90b = False
         self.from_hf_url = False  # updated below if true
-        self.prefill_len_cutoff = 512 if self.arch_name == "blackhole" else 1024
+        self.prefill_len_cutoff = 512 if is_blackhole() else 1024
         # TODO the following is parametrized for a vocab size of 128256 (used in LLama3). Should generalize for other models
-        self.max_columns_per_device_lm_head = 128256 // 8 if self.arch_name == "blackhole" else 128256 // 4
+        self.max_columns_per_device_lm_head = 128256 // 8 if is_blackhole() else 128256 // 4
         self.dummy_weights = dummy_weights
         self.cached_hf_model = None  # Save any HF model object to avoid loading it multiple times for reference methods
 
@@ -757,18 +757,25 @@ class ModelArgs:
                 else self.find_prefill_grid(prefill_rows, self.hidden_dim // self.tile_size)
             )
 
+            mlp_w_dram_sharded = not self.is_galaxy
+            n_w1_w3 = self.hidden_dim // self.cluster_shape[1]
             self.model_config["PREFILL_MLP_W1_W3_PRG_CONFIG"] = lambda seq_len: self.matmul_config(
                 m=min(seq_len, self.prefill_len_cutoff),  # 512 if BH, 1024 if WH
                 k=self.dim // self.cluster_shape[0],
-                n=self.hidden_dim // self.cluster_shape[1],
+                n=n_w1_w3,
                 grid_size=mlp1_3_grid(seq_len),
-            )
+                per_core_N=math.ceil(n_w1_w3 / (self.tile_size * self.dram_grid_size.x))
+                if mlp_w_dram_sharded
+                else None,
+            )  # per_core_N is explicitly specified here to ensure it matches DRAM shard width
+            n_w2 = self.dim
             self.model_config["PREFILL_MLP_W2_PRG_CONFIG"] = lambda seq_len: self.matmul_config(
                 m=min(seq_len, self.prefill_len_cutoff),  # 512 if BH, 1024 if WH
                 k=self.hidden_dim // (self.cluster_shape[1] if self.is_galaxy else 1),
-                n=self.dim,
+                n=n_w2,
                 grid_size=mlp2_grid(seq_len),
-            )
+                per_core_N=math.ceil(n_w2 / (self.tile_size * self.dram_grid_size.x)) if mlp_w_dram_sharded else None,
+            )  # per_core_N is explicitly specified here to ensure it matches DRAM shard width
 
             k_dim = self.dim // self.cluster_shape[0] if self.is_galaxy else self.dim // self.num_devices
             # n_dim = self.dim // self.cluster_shape[1] if self.is_galaxy else self.dim
@@ -782,6 +789,7 @@ class ModelArgs:
                 )
             )
             num_rows = lambda seq_len: min(seq_len, 1024)
+            dram_sharded_wo = not (self.model_config["USE_FUSED_ALL_GATHER_MATMUL"] or self.is_galaxy)
             self.model_config["WO_PREFILL_PROGCFG"] = lambda seq_len: self.matmul_config(
                 m=num_rows(seq_len),
                 k=k_dim,
@@ -789,7 +797,8 @@ class ModelArgs:
                 grid_size=self.find_prefill_grid(num_rows(seq_len), n_dim // self.tile_size),
                 in0_block_w=1 if self.is_galaxy else None,
                 fuse_batch=seq_len <= 1024,
-            )
+                per_core_N=math.ceil(n_dim / (self.tile_size * self.dram_grid_size.x)) if dram_sharded_wo else None,
+            )  # per_core_N is explicitly specified here to ensure it matches DRAM shard width
 
             # Calculate largest number of lm_head_num_rows such that self.dim % (lm_head_num_rows * lm_head_cores_per_row) == 0
             if self.num_devices == 32:
@@ -823,6 +832,7 @@ class ModelArgs:
             self.qkv_size = self.head_dim * (2 * self.n_kv_heads + self.n_heads)
             self.min_kv_prefill_shard_seqlen = (self.tile_size * 8 * 8) / (self.n_kv_heads // self.cluster_shape[1])
             self.MAX_QKV_MM_SEQ_LEN = 2048
+            grid_width = 8 if is_wormhole_b0() else self.dram_grid_size.x  # 7 for P100, 8 for P150
             self.model_config["XQKV_PREFILL_PROGCFG"] = lambda seq_len: ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
                 compute_with_storage_grid_size=(8, 8),
                 in0_block_w=1,  # FIXME: optimize this config for prefill, careful use DI_DT_WORKAROUND if necessary
@@ -831,7 +841,9 @@ class ModelArgs:
                 per_core_M=max(
                     1, 8 if seq_len >= self.MAX_QKV_MM_SEQ_LEN else seq_len // self.tile_size // 8  # 8 rows
                 ),  # M / TILE_HEIGHT / Grid_Size (dynamic based on seqlen)
-                per_core_N=math.ceil(self.qkv_size / self.cluster_shape[1] / 32 / 8),  # N / TILE_WIDTH / grid width
+                per_core_N=math.ceil(
+                    self.qkv_size / self.cluster_shape[1] / 32 / grid_width
+                ),  # N / TILE_WIDTH / grid width
                 transpose_mcast=False,
                 fused_activation=None,
                 fuse_batch=seq_len <= self.MAX_QKV_MM_SEQ_LEN,
@@ -854,15 +866,15 @@ class ModelArgs:
                     orientation=ttnn.ShardOrientation.ROW_MAJOR,
                     use_height_and_width_as_shard_shape=True,
                 )
-                if self.arch_name == "blackhole"
+                if is_blackhole()
                 else ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG
             )
 
             self.model_config["SDPA_DECODE_PROGCFG"] = ttnn.SDPAProgramConfig(
                 compute_with_storage_grid_size=(8, 8),
                 exp_approx_mode=False,
-                q_chunk_size=128 if self.arch_name == "blackhole" else 256,
-                k_chunk_size=128 if self.arch_name == "blackhole" else 256,
+                q_chunk_size=128 if is_blackhole() else 256,
+                k_chunk_size=128 if is_blackhole() else 256,
             )
 
             self.model_config["SDPA_DECODE_COMPUTE_PROGCFG"] = ttnn.WormholeComputeKernelConfig(
@@ -1604,7 +1616,8 @@ class ModelArgs:
 
     def create_dram_sharded_mem_config(self, k, n):
         """Create DRAM-sharded memory config for width-sharded tensors"""
-        dram_cores = 8 if self.arch_name == "blackhole" else 12  # WH has 12 dram cores
+        dram_cores = self.dram_grid_size.x  # WH has 12 dram cores, P150 has 8, P100 has 7
+        assert self.dram_grid_size.y == 1, "Current dram sharding assumes y dim is 1"
         padded_size = math.ceil(n / (self.tile_size * dram_cores)) * (self.tile_size * dram_cores)
         shard_spec = ttnn.ShardSpec(
             self.dram_weight_grid, (k, padded_size // dram_cores), ttnn.ShardOrientation.ROW_MAJOR
@@ -1620,9 +1633,13 @@ class ModelArgs:
         in0_block_w: int = None,
         fuse_batch: bool = False,
         fused_activation=None,
+        per_core_M=None,
+        per_core_N=None,
     ):
-        per_core_M = math.ceil(m / (self.tile_size * grid_size[1]))
-        per_core_N = math.ceil(n / (self.tile_size * grid_size[0]))
+        if per_core_M is None:
+            per_core_M = math.ceil(m / (self.tile_size * grid_size[1]))
+        if per_core_N is None:
+            per_core_N = math.ceil(n / (self.tile_size * grid_size[0]))
 
         out_subblock_h = 1
         out_subblock_w = (
