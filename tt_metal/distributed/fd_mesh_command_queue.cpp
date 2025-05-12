@@ -244,7 +244,7 @@ void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
     for (auto& [device_range, program] : mesh_workload.get_programs()) {
         auto& program_cmd_seq = mesh_workload.get_dispatch_cmds_for_program(program, command_hash);
         program_dispatch::update_program_dispatch_commands(
-            program,
+            program.impl(),
             program_cmd_seq,
             (*worker_launch_message_buffer_state_)[*sub_device_id].get_mcast_wptr(),
             (*worker_launch_message_buffer_state_)[*sub_device_id].get_unicast_wptr(),

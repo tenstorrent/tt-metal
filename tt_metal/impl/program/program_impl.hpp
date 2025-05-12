@@ -2,6 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#pragma once
+
 #include "program_command_sequence.hpp"
 
 #include "tt-metalium/buffer.hpp"
@@ -44,6 +46,16 @@ class JitBuildOptions;
 
 namespace experimental {
 class GlobalCircularBuffer;
+}
+
+namespace program_dispatch {
+
+void assemble_device_commands(
+    ProgramCommandSequence& program_command_sequence,
+    detail::ProgramImpl& program,
+    IDevice* device,
+    SubDeviceId sub_device_id);
+
 }
 
 namespace detail {
@@ -148,6 +160,8 @@ public:
         const KernelGroupsGetter& kernel_groups_getter,
         const SemaphoresGetter& semaphores_getter,
         tt::stl::Span<ProgramImpl*> programs);
+
+    std::vector<uint32_t>& get_program_config_sizes() noexcept { return program_config_sizes_; }
 
 private:
     CommandQueue* last_used_command_queue_for_testing = nullptr;
@@ -265,9 +279,20 @@ private:
     void set_program_offsets_and_sizes(uint32_t index, const ProgramOffsetsState& state);
     void set_program_attrs_across_core_types(IDevice* device);
 
+    const ProgramTransferInfo& get_program_transfer_info() const noexcept;
+    std::shared_ptr<Buffer> get_kernels_buffer(IDevice* device) const noexcept;
+
+    friend void program_dispatch::assemble_device_commands(
+        ProgramCommandSequence& program_command_sequence,
+        ProgramImpl& program,
+        IDevice* device,
+        SubDeviceId sub_device_id);
+
+    friend HWCommandQueue;
     friend EnqueueProgramCommand;
     friend Program;
     friend Internal_;
+    friend distributed::MeshWorkload;
 };
 
 }  // namespace detail
