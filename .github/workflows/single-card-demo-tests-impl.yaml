@@ -113,7 +113,9 @@ jobs:
             -e TT_METAL_HOME=${{ github.workspace }}
             -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
             -e ARCH_NAME=${{ inputs.arch }}
+            -e HF_CACHE=/mnt/hf_cache
             -v /mnt/MLPerf:/mnt/MLPerf:ro
+            -v /mnt/MLPerf/tt-dnn_models/hf_cache:/mnt/hf_cache:rw
             --cap-add=ALL
             --security-opt seccomp=unconfined
             --ulimit nproc=65536:65536
