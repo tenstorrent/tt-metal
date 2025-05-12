@@ -70,11 +70,15 @@ def from_torch_fast(
     if isinstance(device, ttnn.MeshDevice) and mesh_mapper is None:
         mesh_mapper = ttnn.ReplicateTensorToMesh(device)
 
+    float32_in = t.dtype == torch.float32
+    float32_out = dtype == ttnn.float32 or (dtype is None and float32_in)
+
     # ttnn.to_layout does not support changing the datatype or memory_config if the layout already matches. ttnn.clone
     # does not support changing the datatype if the input is not tiled. An option could be to tilize the input before
     # changing the datatype and then untilize again, but it was not tested if this would be faster than converting the
-    # datatype on the host. Also ttnn.to_dtype does not support device tensors.
-    if device is None or layout is None or layout == ttnn.ROW_MAJOR_LAYOUT:
+    # datatype on the host. Also ttnn.to_dtype does not support device tensors. Additionally, `ttnn.to_layout` is lossy
+    # for float32.
+    if device is None or layout is None or layout == ttnn.ROW_MAJOR_LAYOUT or (float32_in and float32_out):
         return ttnn.from_torch(
             t,
             device=None if to_host else device,
