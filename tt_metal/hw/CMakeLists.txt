@@ -116,8 +116,6 @@ foreach(ARCH IN LISTS ARCHS)
                     -o ${HW_OUTPUT_DIR}/${HW_OUTPUT_FILE} ${CMAKE_CURRENT_SOURCE_DIR}/toolchain/main.ld
                 DEPENDS
                     ${CMAKE_CURRENT_SOURCE_DIR}/toolchain/main.ld
-                    ${CMAKE_CURRENT_SOURCE_DIR}/toolchain/memory.ld
-                    ${CMAKE_CURRENT_SOURCE_DIR}/toolchain/sections.ld
                     ${DEV_MEM_MAP}
                 COMMENT "Preprocessing toolchain/${HW_OUTPUT_FILE}"
                 VERBATIM
