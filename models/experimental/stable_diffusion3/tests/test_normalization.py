@@ -101,4 +101,4 @@ def test_rms_norm(
         mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0),
     )[: input_shape[0]]
 
-    assert_quality(torch_output, tt_output_torch, pcc=0.99985)
+    assert_quality(torch_output, tt_output_torch, pcc=0.9998, mse=3e-4)
