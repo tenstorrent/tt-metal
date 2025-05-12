@@ -66,6 +66,8 @@ static std::chrono::time_point start_time = std::chrono::system_clock::now();
 static std::vector<string> kernel_names;
 static FILE* kernel_file = nullptr;
 static string kernel_file_name = "kernel_names.txt";
+static FILE* kernel_elf_file = nullptr;
+static string kernel_elf_file_name = "kernel_elf_paths.txt";
 
 // Flag to signal whether the watcher server has been killed due to a thrown exception.
 static std::atomic<bool> watcher_killed_due_to_error = false;
@@ -147,6 +149,20 @@ void create_kernel_file() {
     fflush(f);
 
     watcher::kernel_file = f;
+}
+
+void create_kernel_elf_file() {
+    FILE* f;
+    const auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
+    std::filesystem::path output_dir(rtoptions.get_root_dir() + watcher::logfile_path);
+    std::filesystem::create_directories(output_dir);
+    string fname = output_dir.string() + watcher::kernel_elf_file_name;
+    if ((f = fopen(fname.c_str(), "w")) == nullptr) {
+        TT_THROW("Watcher failed to create kernel ELF file\n");
+    }
+    watcher::kernel_elf_file = f;
+    fprintf(f, "0: blank\n");
+    fflush(f);
 }
 
 // noinline so that this fn exists to be called from dgb
@@ -495,6 +511,19 @@ int watcher_register_kernel(const string& name) {
     fflush(watcher::kernel_file);
 
     return k_id;
+}
+
+void watcher_register_kernel_elf_paths(int id, std::vector<std::string> paths) {
+    const std::lock_guard<std::mutex> lock(watcher::watch_mutex);
+    if (!watcher::kernel_elf_file) {
+        watcher::create_kernel_elf_file();
+    }
+    std::string combined_paths = paths[0];
+    for (int i = 1; i < paths.size(); i++) {
+        combined_paths += ":" + paths[i];
+    }
+    fprintf(watcher::kernel_elf_file, "%d: %s\n", id, combined_paths.c_str());
+    fflush(watcher::kernel_elf_file);
 }
 
 bool watcher_server_killed_due_to_error() { return watcher::watcher_killed_due_to_error; }
