@@ -3,16 +3,16 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import os
-import ttnn
+
 import torch
 from loguru import logger
-from tests.ttnn.utils_for_testing import assert_with_pcc
-from models.utility_functions import is_wormhole_b0, divup
+
+import ttnn
 from models.demos.mobilenetv2.reference.mobilenetv2 import Mobilenetv2
+from models.demos.mobilenetv2.tt.model_preprocessing import create_mobilenetv2_model_parameters
 from models.demos.mobilenetv2.tt.ttnn_mobilenetv2 import TtMobileNetV2
-from models.demos.mobilenetv2.tt.model_preprocessing import (
-    create_mobilenetv2_model_parameters,
-)
+from models.utility_functions import divup, is_wormhole_b0
+from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
 def load_torch_model():

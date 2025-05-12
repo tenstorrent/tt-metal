@@ -3,15 +3,17 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import os
-import torch
+
 import pytest
-import ttnn
+import torch
 from loguru import logger
 from PIL import Image
 from torchvision import transforms
+
+import ttnn
+from models.demos.mobilenetv2.demo.demo_utils import get_batch, get_data_loader
 from models.demos.mobilenetv2.reference.mobilenetv2 import Mobilenetv2
 from models.demos.mobilenetv2.tt import ttnn_mobilenetv2
-from models.demos.mobilenetv2.demo.demo_utils import get_data_loader, get_batch
 from models.demos.mobilenetv2.tt.model_preprocessing import create_mobilenetv2_model_parameters
 from tests.ttnn.utils_for_testing import assert_with_pcc
 

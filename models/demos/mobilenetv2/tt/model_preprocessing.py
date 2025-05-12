@@ -3,14 +3,15 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
+import torch.nn as nn
+from ttnn.model_preprocessing import preprocess_linear_bias, preprocess_linear_weight
+
 import ttnn
-from ttnn.model_preprocessing import preprocess_linear_weight, preprocess_linear_bias
-from models.demos.mobilenetv2.reference.mobilenetv2 import (
-    Mobilenetv2,
+from models.demos.mobilenetv2.reference.mobilenetv2 import (  # Import Conv2dNormActivation
     Conv2dNormActivation,
     InvertedResidual,
-)  # Import Conv2dNormActivation
-import torch.nn as nn
+    Mobilenetv2,
+)
 
 
 def create_mobilenetv2_input_tensors(batch=1, input_channels=3, input_height=224, input_width=224):
