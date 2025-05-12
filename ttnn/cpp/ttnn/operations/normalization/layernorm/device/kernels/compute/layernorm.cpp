@@ -133,74 +133,57 @@ void MAIN {
         // We first reduce input from cb_x, then store the intermediates in cb_ex
         uint32_t cb_reduce_input = cb_x;
         uint32_t cb_length = Wt;
-        reconfig_data_format(cb_x, cb_x);
+        reconfig_data_format(cb_x, cb_scaler);
         pack_reconfig_data_format(cb_ex);
-        add_tiles_init(cb_x, cb_x, false);
-        // 4 dst regs if FP32 and 8 is BFLOAT 16
-        constexpr uint32_t num_dst_regs = FLOAT32_DTYPE ? 4 : 8;
-        bool first_sum = true;
-        while (cb_length > 1) {
-            // This does a ceiling divide,
-            const uint32_t num_passes = 1 + ((cb_length - 1) / (num_dst_regs * 2));
-            // We need to reset this every loop since it can change in the following loop
-            uint32_t regs_to_use = num_dst_regs;
-            for (uint32_t pass = 0; pass < num_passes; pass++) {
-                const uint32_t start_index = first_sum ? pass * num_dst_regs * 2 : 0;
 
-                const uint32_t length_to_be_processed = cb_length - (pass * num_dst_regs * 2);
-                if (length_to_be_processed < regs_to_use) {
-                    // This will floor divide, we will need to account to the one leftover tile incase
-                    regs_to_use = length_to_be_processed / 2;
+        reconfig_data_format(cb_ex, cb_ex);
+        pack_reconfig_data_format(cb_ex);
+        // 4 dst regs if FP32 and 8 is BFLOAT 16
+        add_tiles_init(cb_ex, cb_ex, true);
+        constexpr uint32_t num_dst_regs = FLOAT32_DTYPE ? 4 : 8;
+        while (cb_length > 1) {
+            uint32_t dstreg = 0;
+            for (uint32_t i = 0; i < cb_length; i += 2) {
+                // We acquire dst regs only if we are processing new block
+                if (dstreg == 0) {
+                    tile_regs_acquire();
                 }
-                tile_regs_acquire();
-                UNPACK(DPRINT << "----------------pass" << pass << ENDL());
-                UNPACK(DPRINT << "----------------num_regs" << regs_to_use << ENDL());
-                cb_wait_front(cb_reduce_input, start_index + (regs_to_use * 2));
-                UNPACK(DPRINT << "----------------pass" << pass << ENDL());
-                cb_reserve_back(cb_ex, regs_to_use);
-                UNPACK(DPRINT << "----------------pass" << pass << ENDL());
-                for (uint32_t dst = 0; dst < regs_to_use; dst++) {
-                    add_tiles(
-                        cb_reduce_input, cb_reduce_input, start_index + (dst * 2), start_index + (dst * 2) + 1, dst);
+                // If we have an odd cb_length, we want to just copy the first index into dst0
+                if (i == 0 && cb_length & 1 == 1) {
+                    cb_wait_front(cb_ex, 1);
+                    copy_tile_init(cb_ex);
+                    copy_tile(cb_ex, 0, dst0);
+                    cb_pop_front(cb_ex, 1);
+                    add_tile_init(cb_ex, cb_ex, true);
                 }
-                // Check if we are processing the odd tile and we do & 1 to account for floor divide earlier
-                if (length_to_be_processed < regs_to_use && (length_to_be_processed & 1)) {
-                    const uint32_t last_index = start_index + (regs_to_use * 2) + 1;
-                    cb_wait_front(cb_reduce_input, last_index);
-                    binary_dest_reuse_tiles_init<EltwiseBinaryType::ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(
-                        cb_reduce_input);
-                    binary_dest_reuse_tiles<EltwiseBinaryType::ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(
-                        cb_reduce_input, last_index, dst0);
-                    add_tiles_init(cb_ex, cb_ex, false);
-                    if (!first_sum) {
-                        cb_pop_front(cb_reduce_input, 1);
+                cb_wait_front(cb_ex, 2);
+                add_tiles(cb_ex, cb_ex, 0, 1, dstreg);
+                cb_pop_front(cb_ex, 2);
+                // In case the next iteration, we may not want to accumulate
+                if (i == 0 && cb_length & 1 == 1) {
+                    add_tile_init(cb_ex, cb_ex, false);
+                    cb_length--;
+                }
+                // We commit our registers either when we are finished or we are about to run out of dst registers
+                if (dstreg == num_dst_regs - 1 || i + 2 == cb_length) {
+                    tile_regs_wait();
+                    tile_regs_commit();
+                    for (uint32_t dst = 0; dst < dstreg + 1; dst++) {
+                        pack_tile(dst, cb_ex);
                     }
+                    cb_push_back(cb_ex, dstreg + 1);
+                    tile_regs_release();
+                    dstreg = 0;
                 }
-                tile_regs_wait();
-                tile_regs_commit();
-                if (!first_sum) {
-                    cb_pop_front(cb_reduce_input, (regs_to_use * 2));
+                // increment to the next dst register
+                else {
+                    dstreg++;
                 }
-                uint32_t dst = 0;
-                // We use a do while in the case that there is only one cb to be processed on this pass since then
-                // regs_to_use would equal 0
-                do {
-                    pack_tile(dst, cb_ex);
-                    dst++;
-                    cb_reserve_back(cb_ex, 1);
-                    cb_push_back(cb_ex, 1);
-                } while (dst < regs_to_use);
-                tile_regs_release();
             }
-            if (first_sum) {
-                reconfig_data_format(cb_ex, cb_ex);
-                add_tiles_init(cb_ex, cb_ex, false);
-                first_sum = false;
-                cb_reduce_input = cb_ex;
-            }
-            // We floor divide since we squish all odd tiles into dst0
+            // We are okay with floor divide since we subtracted one if cb_length is odd
             cb_length = cb_length / 2;
         }
+        // TODO change this to a cb
         reconfig_data_format(cb_ex, cb_scaler);
         cb_reserve_back(cb_ex, onetile);
         reduce_init_delta<false>(cb_ex, cb_scaler, cb_ex);
