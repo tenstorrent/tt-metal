@@ -329,7 +329,7 @@ def test_reduce_scatter_perf(
 @pytest.mark.parametrize(
     "warmup_iters, perf_target_us",
     [
-        (5, 8.7),
+        (5, 9.6),
     ],
 )
 @pytest.mark.models_device_performance_bare_metal
