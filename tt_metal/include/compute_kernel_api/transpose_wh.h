@@ -65,13 +65,7 @@ ALWI void transpose_wh_init_short(uint32_t icb) {
  */
  // clang-format on
 ALWI void transpose_wh_tile(uint32_t icb, uint32_t itile, uint32_t idst) {
-    UNPACK((
-#ifdef ARCH_GRAYSKULL
-        llk_unpack_A<BroadcastType::NONE, false>(icb, itile, true)
-#else
-        llk_unpack_A<BroadcastType::NONE, false>(icb, itile, false)
-#endif
-            ));
+    UNPACK((llk_unpack_A<BroadcastType::NONE, false>(icb, itile, false)));
     MATH((llk_math_eltwise_unary_datacopy<A2D, BroadcastType::NONE, DST_ACCUM_MODE>(idst)));
 }
 

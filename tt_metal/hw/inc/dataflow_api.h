@@ -1659,10 +1659,8 @@ FORCE_INLINE void noc_async_read_tile_dram_sharded_with_state_with_trid(
     RECORD_NOC_EVENT(NocEventType::READ_DRAM_SHARDED_WITH_STATE);
 
     WAYPOINT("NRDW");
-#ifndef ARCH_GRAYSKULL
     ncrisc_noc_fast_read_with_transaction_id<noc_mode, skip_ptr_update>(
         noc, read_cmd_buf, src_base_addr, src_addr, dest_addr, trid);
-#endif
     WAYPOINT("NRDD");
 }
 
@@ -1671,9 +1669,7 @@ void noc_async_read_tile_dram_sharded_set_trid(uint32_t trid = 0, uint8_t noc = 
     RECORD_NOC_EVENT(NocEventType::READ_SET_TRID);
 
     WAYPOINT("NSTW");
-#ifndef ARCH_GRAYSKULL
     ncrisc_noc_set_transaction_id(noc, read_cmd_buf, trid);
-#endif
     WAYPOINT("NSTD");
 }
 
@@ -1681,9 +1677,8 @@ FORCE_INLINE
 void noc_async_read_barrier_with_trid(uint32_t trid, uint8_t noc = noc_index) {
     WAYPOINT("NBTW");
     RECORD_NOC_EVENT(NocEventType::READ_BARRIER_WITH_TRID);
-#ifndef ARCH_GRAYSKULL
-    while (!ncrisc_noc_read_with_transaction_id_flushed(noc, trid));
-#endif
+    while (!ncrisc_noc_read_with_transaction_id_flushed(noc, trid))
+        continue;
     invalidate_l1_cache();
     WAYPOINT("NBTD");
 }
@@ -1811,9 +1806,8 @@ FORCE_INLINE void noc_async_write_one_packet_with_trid(
 FORCE_INLINE
 void noc_async_write_barrier_with_trid(uint32_t trid, uint8_t noc = noc_index) {
     WAYPOINT("NWTW");
-#ifndef ARCH_GRAYSKULL
-    while (!ncrisc_noc_nonposted_write_with_transaction_id_flushed(noc, trid));
-#endif
+    while (!ncrisc_noc_nonposted_write_with_transaction_id_flushed(noc, trid))
+        continue;
     invalidate_l1_cache();
     WAYPOINT("NWTD");
 }
