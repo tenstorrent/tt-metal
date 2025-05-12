@@ -214,6 +214,11 @@ void MAIN {
 #endif
         const uint32_t mm_out_cb_id = mm_out_cb_ids[b];
         const uint32_t mm_partials_cb_id = mm_partials_cb_ids[b];
+        if (spill) {
+            pack_untilize_dst_init_short<out_subblock_num_tiles>(mm_partials_cb_id);
+        } else {
+            pack_untilize_dst_init_short<out_subblock_num_tiles>(mm_out_cb_id);
+        }
 
         bool enable_reload = false;
         uint32_t out_num_tiles_to_wait = out_subblock_num_tiles;
@@ -345,6 +350,7 @@ void MAIN {
 
                         uint32_t start_dst_index = 0;
                         matmul_pack_tile(start_dst_index, mm_out_cb_id, out_subblock_num_tiles);
+                        pack_untilize_dst<out_subblock_num_tiles>(mm_out_cb_id);
 
                         tile_regs_release();
                         cb_push_back(mm_out_cb_id, out_subblock_num_tiles);
@@ -365,6 +371,7 @@ void MAIN {
 
                         uint32_t start_dst_index = 0;
                         matmul_pack_tile(start_dst_index, mm_partials_cb_id, out_subblock_num_tiles);
+                        pack_untilize_dst<out_subblock_num_tiles>(mm_partials_cb_id);
 
                         tile_regs_release();
                         cb_push_back(mm_partials_cb_id, out_subblock_num_tiles);
@@ -409,6 +416,12 @@ void MAIN {
         UNPACK((update_rd_ptr_to_ring_index(
             in1_cb_id, in1_block_size_bytes, ring_size, in1_tensor_split)));  // update to next tensor addr
 #endif
+
+        if (spill) {
+            pack_untilize_uninit(mm_partials_cb_id);
+        } else {
+            pack_untilize_uninit(mm_out_cb_id);
+        }
     }
 }
 }  // namespace NAMESPACE
