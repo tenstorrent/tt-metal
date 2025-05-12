@@ -8,7 +8,7 @@ set -o pipefail  # Fail if any command in a pipeline fails
 
 SFPI_VERSION=$(cat sfpi_version.txt)
 
-SFPI_RELEASE_URL="https://github.com/tenstorrent/sfpi/releases/download/${SFPI_VERSION}/sfpi-x86_64-Linux.tgz"
+SFPI_RELEASE_URL="https://github.com/tenstorrent/sfpi/releases/download/${SFPI_VERSION}/sfpi-x86_64_Linux.tgz"
 
 if [ ! -d "sfpi" ]; then
     echo "sfpi directory not found. Downloading and extracting SFPI ${SFPI_VERSION} release..."
