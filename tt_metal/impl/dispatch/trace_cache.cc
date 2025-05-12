@@ -7,6 +7,7 @@
 #include <functional>
 #include <string>
 #include <limits>
+#include <map>
 #include <assert.h>
 
 // TODOs (some sprinkled throughout below):
@@ -426,10 +427,16 @@ bool WorkerBufferManager::check_rb_evictable_at_idx(
 
 void WorkerBufferManager::post_process_ring_buffer(
     const RingBufferState& rb, std::vector<TraceNode>& trace, const std::vector<Program>& programs) {
-    // Ugh.  Simulate the RB to figure out the stalls
-    // START HERE
+
+    // Simulate an RB to figure out stalls. We precisely simulate the required region, so the tail may be kept around
+    // after the ringbuffer wraps.
+    struct RingbufferEntry {
+        uint32_t length;
+        int32_t idx;
+    };
+    std::map<uint32_t, RingbufferEntry> rb_entries;
     std::uint32_t max_size = 0;
-    std::uint32_t last_rb_use = 0xffffffff;
+
     for (std::int32_t trace_idx = 0; trace_idx < (std::int32_t)trace.size(); trace_idx++) {
         if (trace[trace_idx].is_allocated()) {
             std::uint32_t pgm_id = trace[trace_idx].get_pgm_id();
@@ -438,14 +445,41 @@ void WorkerBufferManager::post_process_ring_buffer(
                 max_size = trace[trace_idx].get_addr() + programs[pgm_id].get_size();
             }
 
-            if (trace[trace_idx].get_addr() == 0) {
-                // Wrapped
-                if (last_rb_use != 0xffffffff) {
-                    trace[trace_idx].set_stall_idx(last_rb_use);
+            std::optional<int32_t> stall_idx = std::nullopt;
+
+            uint32_t addr = trace[trace_idx].get_addr();
+            uint32_t upper = addr + programs[pgm_id].get_size();
+
+            auto it = rb_entries.upper_bound(trace[trace_idx].get_addr());
+            if (it != rb_entries.begin()) {
+                --it;
+                // it is now the last entry that is <= addr
+                while (it != rb_entries.end()) {
+                    if (it->first >= upper) {
+                        // it is now too high.
+                        break;
+                    }
+                    if (it->first + it->second.length > addr) {
+                        // This entry overlaps.
+                        if (stall_idx == std::nullopt) {
+                            stall_idx = it->second.idx;
+                        } else {
+                            stall_idx = std::max(stall_idx.value(), it->second.idx);
+                        }
+                        it = rb_entries.erase(it);
+
+                    } else {
+                        // This entry is too low.
+                        ++it;
+                    }
                 }
             }
 
-            last_rb_use = trace_idx;
+            if (stall_idx != std::nullopt) {
+                trace[trace_idx].set_stall_idx(*stall_idx);
+            }
+
+            rb_entries[addr] = {programs[pgm_id].get_size(), trace_idx};
         }
     }
     this->rb_max_size_ = max_size;
