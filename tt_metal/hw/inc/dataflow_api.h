@@ -1555,7 +1555,7 @@ FORCE_INLINE void noc_inline_dw_write_with_state(
  * The Tensix core executing this function call initiates an atomic increment
  * (with 32-bit wrap) of a remote Tensix core L1 memory address. This L1 memory
  * address is used as a semaphore of size 4 Bytes, as a synchronization
- * mechanism.
+ * mechanism. Refer to <arch>/noc/noc.h for the documentation of noc_atomic_increment.
  *
  * Return value: None
  *
@@ -1570,7 +1570,6 @@ FORCE_INLINE void noc_inline_dw_write_with_state(
 template <bool posted = false>
 FORCE_INLINE void noc_semaphore_inc(
     uint64_t addr, uint32_t incr, uint8_t noc_id = noc_index, uint8_t vc = NOC_UNICAST_WRITE_VC) {
-    /* [REFER TO grayskull/noc/noc.h for the documentation of noc_atomic_increment()] */
     RECORD_NOC_EVENT_WITH_ADDR(NocEventType::SEMAPHORE_INC, addr, 0, vc);
 
     WAYPOINT("NSIW");

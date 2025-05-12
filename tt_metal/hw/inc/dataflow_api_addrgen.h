@@ -11,7 +11,6 @@
 #include "debug/waypoint.h"
 #include "utils/utils.h"
 #include "debug/assert.h"
-// #include "tools/profiler/kernel_profiler.hpp"
 
 namespace interleaved_addr_gen {
 
