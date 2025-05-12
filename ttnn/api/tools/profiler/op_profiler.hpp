@@ -221,12 +221,11 @@ static inline json get_kernels_json(chip_id_t device_id, const Program& program)
     for (size_t kernel_id = 0; kernel_id < program.num_kernels(); kernel_id++) {
         auto kernel = tt::tt_metal::detail::GetKernel(program, kernel_id).get();
         if (kernel->processor() == RISCV::COMPUTE) {
-            ComputeKernel* computeKernel = static_cast<ComputeKernel*>(kernel);
-            MathFidelity mathFidelity = std::get<ComputeConfig>(computeKernel->config()).math_fidelity;
+            MathFidelity mathFidelity = std::get<ComputeConfig>(kernel->config()).math_fidelity;
             json computeKernelObj;
             computeKernelObj["math_fidelity"] = fmt::format("{}", magic_enum::enum_name(mathFidelity));
-            computeKernelObj["source"] = computeKernel->kernel_source().source_;
-            computeKernelObj["name"] = computeKernel->get_full_kernel_name();
+            computeKernelObj["source"] = kernel->kernel_source().source_;
+            computeKernelObj["name"] = kernel->get_full_kernel_name();
             computeKernels.push_back(computeKernelObj);
             if (device != nullptr) {
                 if (kernelSizes["trisc_0_max_kernel_size"] < kernel->get_binary_packed_size(device, 0)) {

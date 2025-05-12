@@ -62,6 +62,7 @@
 #include "vector_aligned.hpp"
 #include "dispatch/worker_config_buffer.hpp"
 #include "tt_metal/distributed/mesh_workload_impl.hpp"
+#include "kernels/kernel_impl.hpp"
 
 namespace tt {
 namespace tt_metal {
@@ -298,12 +299,12 @@ uint32_t finalize_kernel_bins(
             auto& optional_id = kg->kernel_ids[class_id];
             if (optional_id) {
                 const auto kernel = kernels.at(optional_id.value());
-                const std::vector<const ll_api::memory*>& binaries = kernel->binaries(
+                const std::vector<const ll_api::memory*>& binaries = kernel->impl().binaries(
                     BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_key);
                 // TODO: this is really ugly, save me future-HAL!
                 if (programmable_core_type_index ==
                     hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX)) {
-                    uint32_t binary_packed_size = kernel->get_binary_packed_size(device, 0);
+                    uint32_t binary_packed_size = kernel->impl().get_binary_packed_size(device, 0);
 
                     if (class_id == DISPATCH_CLASS_TENSIX_DM0) {
                         kg->kernel_bin_sizes[0] = binary_packed_size;
@@ -318,14 +319,15 @@ uint32_t finalize_kernel_bins(
                         offset += binary_packed_size;
                         offset = tt::align(offset, l1_alignment);
 
-                        uint32_t binary_text_size = kernel->get_binary_text_size(device, 0);
+                        uint32_t binary_text_size = kernel->impl().get_binary_text_size(device, 0);
                         TT_ASSERT(binary_text_size >> 4 <= std::numeric_limits<uint16_t>::max());
                         kg->launch_msg.kernel_config.ncrisc_kernel_size16 = (binary_text_size + 15) >> 4;
                     } else {
                         constexpr uint32_t max_math_processors_count = 3;
                         for (uint32_t proc_type_index = 0; proc_type_index < max_math_processors_count;
                              proc_type_index++) {
-                            uint32_t binary_packed_size = kernel->get_binary_packed_size(device, proc_type_index);
+                            uint32_t binary_packed_size =
+                                kernel->impl().get_binary_packed_size(device, proc_type_index);
                             kg->kernel_bin_sizes[2 + proc_type_index] = binary_packed_size;
                             kg->kernel_text_offsets[2 + proc_type_index] = offset;
                             kg->launch_msg.kernel_config.kernel_text_offset[2 + proc_type_index] = offset;
@@ -334,7 +336,7 @@ uint32_t finalize_kernel_bins(
                         }
                     }
                 } else {
-                    uint32_t binary_packed_size = kernel->get_binary_packed_size(device, 0);
+                    uint32_t binary_packed_size = kernel->impl().get_binary_packed_size(device, 0);
                     kg->kernel_bin_sizes[class_id] = binary_packed_size;
 
                     // No kernel config buffer on active eth yet
