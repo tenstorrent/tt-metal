@@ -189,94 +189,51 @@ public:
     const ttnn::Shape& get_logical_shape() const;
     const ttnn::Shape& get_padded_shape() const;
     const TensorSpec& get_tensor_spec() const;
+    uint32_t get_logical_volume() const;
     const DistributedTensorConfig& get_distributed_tensor_config() const;
 
     // ======================================================================================
     // Non-Blocking Getters. Query attributes directly, without waiting for worker completion
     // ======================================================================================
-    const Storage& storage() const { return this->tensor_attributes->get_storage(); };
-    const ttnn::Shape& logical_shape() const { return this->tensor_attributes->get_tensor_spec().logical_shape(); };
-    const ttnn::Shape& padded_shape() const { return this->tensor_attributes->get_tensor_spec().padded_shape(); };
-    DataType dtype() const { return this->tensor_attributes->get_tensor_spec().tensor_layout().get_data_type(); };
-    Layout layout() const { return this->tensor_attributes->get_tensor_spec().tensor_layout().get_layout(); };
-    const TensorSpec& tensor_spec() const { return this->tensor_attributes->get_tensor_spec(); }
-    const DistributedTensorConfig& distributed_tensor_config() const {
-        return this->tensor_attributes->get_distributed_tensor_config();
-    }
+    const Storage& storage() const;
+    const ttnn::Shape& logical_shape() const;
+    const ttnn::Shape& padded_shape() const;
+    DataType dtype() const;
+    Layout layout() const;
+    const TensorSpec& tensor_spec() const;
+    uint32_t volume() const;
+    const MemoryConfig& memory_config() const;
+    const std::optional<ShardSpec>& shard_spec() const;
+    const DistributedTensorConfig& distributed_tensor_config() const;
 
     // ======================================================================================
     //                                      Extra Helper Functions
     // ======================================================================================
     StorageType storage_type() const;
     ttnn::Shape strides() const;
-    uint32_t volume() const;
-
-    // todo: rename volume to get_volume to indicate that its blocking
-    uint32_t get_logical_volume() const;
 
     bool is_scalar() const;
 
     bool is_allocated() const;
 
-    bool is_contiguous() const {
-        if (this->get_layout() == tt::tt_metal::Layout::ROW_MAJOR) {
-            return this->get_logical_shape() == this->get_padded_shape();
-        } else {
-            return false;
-        }
-    }
+    // Returns device `Buffer`.
+    // Throws if the tensor is not allocated on a device.
+    Buffer* buffer() const;
 
-    // TODO(arakhmati): clean up the methods below
-    std::vector<Buffer*> buffers() const {
-        auto storage_type = this->storage_type();
-        if (storage_type == tt::tt_metal::StorageType::DEVICE) {
-            auto storage = std::get<DeviceStorage>(this->get_storage());
-            return std::vector<Buffer*>{storage.get_buffer()};
-        } else {
-            TT_THROW("Cannot get buffers from a tensor with non-device storage.");
-        }
-    }
-    Buffer* buffer() const {
-        auto storage_type = this->storage_type();
-        TT_FATAL(
-            storage_type == tt::tt_metal::StorageType::DEVICE,
-            "ttnn::Tensor::buffer(): Expected Tensor with DeviceStorage, got {}",
-            storage_type);
-        return std::get<DeviceStorage>(this->get_storage()).get_buffer();
-    }
-    const DeviceStorage& device_storage() const { return std::get<DeviceStorage>(this->get_storage()); }
+    // Returns device `Storage`.
+    // Throws if the tensor is not allocated on a device.
+    const DeviceStorage& device_storage() const;
+
+    // Returns device `MeshBuffer`.
+    // Throws if the tensor is not allocated on a device.
+    std::shared_ptr<distributed::MeshBuffer> mesh_buffer() const;
 
     // TODO: #21099 - Remove the overload `mesh_device()`, and instead use `device()`.
-    distributed::MeshDevice* mesh_device() const {
-        if (this->mesh_device_.has_value()) {
-            return this->mesh_device_.value();
-        }
-        return nullptr;
-    }
+    distributed::MeshDevice* mesh_device() const;
 
-    std::shared_ptr<distributed::MeshBuffer> mesh_buffer() const {
-        return std::get<DeviceStorage>(get_storage()).get_mesh_buffer();
-    }
-
-    IDevice* device() const {
-        if (this->mesh_device_.has_value()) {
-            return this->mesh_device_.value();
-        }
-        if (this->storage_type() == tt::tt_metal::StorageType::DEVICE) {
-            auto buffer = this->buffer();
-            if (buffer == nullptr) {
-                TT_THROW("Cannot get the device from a tensor without an allocated buffer");
-            }
-            return buffer->device();
-        } else {
-            TT_THROW("Cannot get the device from a tensor with host storage");
-        }
-    }
+    IDevice* device() const;
 
     std::vector<IDevice*> active_physical_devices() const;
-
-    const MemoryConfig& memory_config() const { return get_tensor_spec().tensor_layout().get_memory_config(); }
-    const std::optional<ShardSpec>& shard_spec() const { return this->memory_config().shard_spec(); }
 
     bool is_sharded() const;
 

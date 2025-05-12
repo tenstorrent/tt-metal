@@ -2,18 +2,13 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import ttnn
-
-
-from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_upsample_2d_new_conv import upsample2d
-
-from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_resnetblock2d_new_conv import resnetBlock2D
-
-from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_transformer_2d_new_conv import (
-    transformer_2d_model,
-)
-from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_utility_functions import dealloc_input
 from loguru import logger
+
+import ttnn
+from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_resnetblock2d_new_conv import resnetBlock2D
+from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_transformer_2d_new_conv import transformer_2d_model
+from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_upsample_2d_new_conv import upsample2d
+from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_utility_functions import dealloc_input
 
 
 class cross_attention_upblock2d:

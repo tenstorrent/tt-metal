@@ -2,19 +2,18 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import ttnn
 import os
-import torch
 from typing import Optional
+
+import torch
+from loguru import logger
+
+import ttnn
 from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_utility_functions import (
+    get_default_compute_config,
     permute_conv_parameters,
     weight_to_bfp8,
 )
-from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_utility_functions import (
-    get_default_compute_config,
-)
-from loguru import logger
-
 
 config_override = {
     (320, 320, 64, 64): {"act_block_h": 64},
@@ -437,7 +436,6 @@ class resnetBlock2D:
                 weights_dtype=ttnn.bfloat8_b,
                 activation="",
                 shard_layout=self.conv1_shard_layout,
-                input_channels_alignment=32,
                 transpose_shards=False,
                 reshard_if_not_optimal=False,
             )
@@ -537,7 +535,6 @@ class resnetBlock2D:
                     weights_dtype=ttnn.bfloat8_b,
                     activation="",
                     shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
-                    input_channels_alignment=32,
                     transpose_shards=False,
                     reshard_if_not_optimal=False,
                 )
@@ -692,7 +689,6 @@ class resnetBlock2D:
             weights_dtype=ttnn.bfloat8_b,
             activation="",
             shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
-            input_channels_alignment=32,
             transpose_shards=False,
             reshard_if_not_optimal=False,
         )
@@ -761,7 +757,6 @@ class resnetBlock2D:
                 weights_dtype=ttnn.bfloat8_b,
                 activation="",
                 shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
-                input_channels_alignment=32,
                 transpose_shards=False,
                 reshard_if_not_optimal=False,
             )
