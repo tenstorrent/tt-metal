@@ -32,6 +32,6 @@ std::shared_ptr<MeshBuffer> MeshSocket::get_data_buffer() const {
 
 std::shared_ptr<MeshBuffer> MeshSocket::get_config_buffer() const { return config_buffer_; }
 
-const SocketConfig& MeshSocket::get_physical_config() const { return physical_config_; }
+const SocketConfig& MeshSocket::get_config() const { return config_; }
 
 }  // namespace tt::tt_metal::distributed

@@ -59,19 +59,19 @@ public:
     std::shared_ptr<MeshBuffer> get_data_buffer() const;
     // Access the config buffer associated with this socket.
     std::shared_ptr<MeshBuffer> get_config_buffer() const;
-    // Access the physical configuration of the instantiated socket (connectivity of senders/receivers and the socket
+    // Access the underlying configuration of the instantiated socket (connectivity of senders/receivers and the socket
     // memory config).
-    const SocketConfig& get_physical_config() const;
+    const SocketConfig& get_config() const;
 
 private:
     MeshSocket(
         std::shared_ptr<MeshBuffer> data_buffer,
         std::shared_ptr<MeshBuffer> config_buffer,
-        const SocketConfig& physical_config) :
-        data_buffer_(data_buffer), config_buffer_(config_buffer), physical_config_(physical_config) {}
+        const SocketConfig& config) :
+        data_buffer_(data_buffer), config_buffer_(config_buffer), config_(config) {}
     std::shared_ptr<MeshBuffer> data_buffer_;
     std::shared_ptr<MeshBuffer> config_buffer_;
-    SocketConfig physical_config_;
+    SocketConfig config_;
 };
 
 }  // namespace tt::tt_metal::distributed
