@@ -15,6 +15,7 @@ import multiprocess
 import signal
 import time
 import psutil
+import subprocess
 from datetime import datetime
 
 from loguru import logger
@@ -113,7 +114,7 @@ class CIv2ModelDownloadUtils_:
         endpoint_prefix="http://large-file-cache.large-file-cache.svc.cluster.local//mldata/model_checkpoints/pytorch/huggingface",
     ):
         # RK: Will this be portable? LOL
-        dest_path = pathlib.Path("/tmp/ttnn_model_cache/") / dest_dir_suffix
+        dest_path = Path("/tmp/ttnn_model_cache/") / dest_dir_suffix
 
         dest_path.mkdir(parents=True, exist_ok=True)
 
@@ -122,7 +123,8 @@ class CIv2ModelDownloadUtils_:
         endpoint = f"{endpoint_prefix}/{model_path}"
 
         subprocess.run(
-            ["wget", "-r", "-nH", "-x", "--cut-dirs=5", "-np", "-R", "index.html*", "-P", download_dir_str, endpoint]
+            ["wget", "-r", "-nH", "-x", "--cut-dirs=5", "-np", "-R", "index.html*", "-P", download_dir_str, endpoint],
+            check=True,
         )
 
         return dest_path
@@ -135,7 +137,7 @@ def model_location_generator(is_ci_v2_env):
         internal_weka_path = Path("/mnt/MLPerf") / model_folder / model_version
         has_internal_weka = internal_weka_path.exists()
 
-        download_from_ci_v2 = download_if_ci_v2 and is_ci_v2_env
+        download_from_ci_v2 = download_if_ci_v2
 
         if download_from_ci_v2:
             assert (
@@ -144,7 +146,7 @@ def model_location_generator(is_ci_v2_env):
             assert (
                 not model_subdir
             ), f"model_subdir is set to {model_subdir}, but we don't support further levels of directories in the large file cache in CIv2"
-            civ2_download_path = CIv2ModelDownloadUtils.download_from_ci_v2_cache(
+            civ2_download_path = CIv2ModelDownloadUtils_.download_from_ci_v2_cache(
                 model_version, dest_dir_suffix="model_weights"
             )
             logger.info(f"For model location, using CIv2 large file cache: {civ2_download_path}")
