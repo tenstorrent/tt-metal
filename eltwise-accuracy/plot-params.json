@@ -5,15 +5,15 @@
         {
           "id": "ulp_plots",
           "default_params": {
+            "type": "scatterplot",
             "dtype": "bfloat16",
             "xname": "base_x",
             "ynames": [
-                ["max_ulp_error", "(max)", "-"],
-                ["mean_ulp_error", "(mean)", "--"]
+                ["max_ulp_error", "", "-"]
             ],
             "hue": "operation",
             "plot_params": {
-                "title": "ULP Error of {} against torch\n[bfloat16]",
+                "title": "ULP Error of ttnn.{} against torch\n[bfloat16]",
                 "xscale": "symlog",
                 "xlabel": "x",
                 "ylabel": "ULP Error",
@@ -27,8 +27,8 @@
                 "name": "exp",
                 "output": "accuracy_results/plots/ulp/exp-bfloat16.png",
                 "files": [
-                    "accuracy_results/results/exp-bfloat16-[32].csv",
-                    "accuracy_results/results/exp_approx-bfloat16-[32].csv"
+                    "accuracy_results/results/exp-bfloat16-[1].csv",
+                    "accuracy_results/results/exp_approx-bfloat16-[1].csv"
                 ],
                 "plot_params": {
                     "xlim": [-100, 100],
@@ -40,9 +40,9 @@
                 "name": "pow",
                 "output": "accuracy_results/plots/ulp/pow-bfloat16.png",
                 "files": [
-                    "accuracy_results/results/pow_2-bfloat16-[32].csv",
-                    "accuracy_results/results/pow_3-bfloat16-[32].csv",
-                    "accuracy_results/results/pow_10-bfloat16-[32].csv"
+                    "accuracy_results/results/pow_2-bfloat16-[1].csv",
+                    "accuracy_results/results/pow_3-bfloat16-[1].csv",
+                    "accuracy_results/results/pow_10-bfloat16-[1].csv"
                 ],
                 "plot_params": {
                     "xlim": [-100, 100],
@@ -54,8 +54,8 @@
                 "name": "tanh",
                 "output": "accuracy_results/plots/ulp/tanh-bfloat16.png",
                 "files": [
-                    "accuracy_results/results/tanh-bfloat16-[32].csv",
-                    "accuracy_results/results/tanh_accurate-bfloat16-[32].csv"
+                    "accuracy_results/results/tanh-bfloat16-[1].csv",
+                    "accuracy_results/results/tanh_accurate-bfloat16-[1].csv"
                 ],
                 "plot_params": {
                     "xbase": 2,
@@ -67,7 +67,7 @@
                 "name": "cosh",
                 "output": "accuracy_results/plots/ulp/cosh-bfloat16.png",
                 "files": [
-                    "accuracy_results/results/cosh-bfloat16-[32].csv"
+                    "accuracy_results/results/cosh-bfloat16-[1].csv"
                 ],
                 "plot_params": {
                     "xbase": 2
@@ -78,7 +78,7 @@
                 "name": "sinh",
                 "output": "accuracy_results/plots/ulp/sinh-bfloat16.png",
                 "files": [
-                    "accuracy_results/results/sinh-bfloat16-[32].csv"
+                    "accuracy_results/results/sinh-bfloat16-[1].csv"
                 ],
                 "plot_params": {
                     "xbase": 2
@@ -89,7 +89,7 @@
                 "name": "log",
                 "output": "accuracy_results/plots/ulp/log-bfloat16.png",
                 "files": [
-                    "accuracy_results/results/log-bfloat16-[32].csv"
+                    "accuracy_results/results/log-bfloat16-[1].csv"
                 ],
                 "plot_params": {
                     "xlim": [0, 100]
@@ -100,7 +100,7 @@
                 "name": "log10",
                 "output": "accuracy_results/plots/ulp/log10-bfloat16.png",
                 "files": [
-                    "accuracy_results/results/log10-bfloat16-[32].csv"
+                    "accuracy_results/results/log10-bfloat16-[1].csv"
                 ],
                 "plot_params": {
                     "xlim": [0, 100]
@@ -111,7 +111,7 @@
                 "name": "log2",
                 "output": "accuracy_results/plots/ulp/log2-bfloat16.png",
                 "files": [
-                    "accuracy_results/results/log2-bfloat16-[32].csv"
+                    "accuracy_results/results/log2-bfloat16-[1].csv"
                 ],
                 "plot_params": {
                     "xlim": [0, 100]
@@ -122,7 +122,7 @@
                 "name": "log1p",
                 "output": "accuracy_results/plots/ulp/log1p-bfloat16.png",
                 "files": [
-                    "accuracy_results/results/log1p-bfloat16-[32].csv"
+                    "accuracy_results/results/log1p-bfloat16-[1].csv"
                 ],
                 "plot_params": {
                     "xlim": [-0.9, 100]
@@ -133,7 +133,7 @@
                 "name": "tan",
                 "output": "accuracy_results/plots/ulp/tan-bfloat16.png",
                 "files": [
-                    "accuracy_results/results/tan-bfloat16-[32].csv"
+                    "accuracy_results/results/tan-bfloat16-[1].csv"
                 ],
                 "plot_params": {
                 }
@@ -143,7 +143,7 @@
                 "name": "atan",
                 "output": "accuracy_results/plots/ulp/atan-bfloat16.png",
                 "files": [
-                    "accuracy_results/results/atan-bfloat16-[32].csv"
+                    "accuracy_results/results/atan-bfloat16-[1].csv"
                 ],
                 "plot_params": {
                     "xlim": [-10, 10]
@@ -154,7 +154,7 @@
                 "name": "cos",
                 "output": "accuracy_results/plots/ulp/cos-bfloat16.png",
                 "files": [
-                    "accuracy_results/results/cos-bfloat16-[32].csv"
+                    "accuracy_results/results/cos-bfloat16-[1].csv"
                 ],
                 "plot_params": {
                 }
@@ -164,7 +164,7 @@
                 "name": "sin",
                 "output": "accuracy_results/plots/ulp/sin-bfloat16.png",
                 "files": [
-                    "accuracy_results/results/sin-bfloat16-[32].csv"
+                    "accuracy_results/results/sin-bfloat16-[1].csv"
                 ],
                 "plot_params": {
                 }
@@ -174,7 +174,7 @@
                 "name": "silu",
                 "output": "accuracy_results/plots/ulp/silu-bfloat16.png",
                 "files": [
-                    "accuracy_results/results/silu-bfloat16-[32].csv"
+                    "accuracy_results/results/silu-bfloat16-[1].csv"
                 ],
                 "plot_params": {
                 }
@@ -184,7 +184,7 @@
                 "name": "selu",
                 "output": "accuracy_results/plots/ulp/selu-bfloat16.png",
                 "files": [
-                    "accuracy_results/results/selu-bfloat16-[32].csv"
+                    "accuracy_results/results/selu-bfloat16-[1].csv"
                 ],
                 "plot_params": {
                     "xlim": [-10, 10]
@@ -195,7 +195,7 @@
                 "name": "softplus",
                 "output": "accuracy_results/plots/ulp/softplus-bfloat16.png",
                 "files": [
-                    "accuracy_results/results/softplus-bfloat16-[32].csv"
+                    "accuracy_results/results/softplus-bfloat16-[1].csv"
                 ],
                 "plot_params": {
                     "xlim": [-200, 100]
@@ -206,7 +206,7 @@
                 "name": "softsign",
                 "output": "accuracy_results/plots/ulp/softsign-bfloat16.png",
                 "files": [
-                    "accuracy_results/results/softsign-bfloat16-[32].csv"
+                    "accuracy_results/results/softsign-bfloat16-[1].csv"
                 ],
                 "plot_params": {
                     "xlim": [-10, 10]
@@ -217,8 +217,8 @@
                 "name": "gelu",
                 "output": "accuracy_results/plots/ulp/gelu-bfloat16.png",
                 "files": [
-                    "accuracy_results/results/gelu-bfloat16-[32].csv",
-                    "accuracy_results/results/gelu_approx-bfloat16-[32].csv"
+                    "accuracy_results/results/gelu-bfloat16-[1].csv",
+                    "accuracy_results/results/gelu_approx-bfloat16-[1].csv"
                 ],
                 "plot_params": {
                     "xlim": [-10, 10]
@@ -229,7 +229,7 @@
                 "name": "logit",
                 "output": "accuracy_results/plots/ulp/logit-bfloat16.png",
                 "files": [
-                    "accuracy_results/results/logit-bfloat16-[32].csv"
+                    "accuracy_results/results/logit-bfloat16-[1].csv"
                 ],
                 "plot_params": {
                     "xlim": [0, 1],
@@ -241,7 +241,7 @@
                 "name": "swish",
                 "output": "accuracy_results/plots/ulp/swish-bfloat16.png",
                 "files": [
-                    "accuracy_results/results/swish-bfloat16-[32].csv"
+                    "accuracy_results/results/swish-bfloat16-[1].csv"
                 ],
                 "plot_params": {
                     "xlim": [-10, 10]
@@ -252,7 +252,7 @@
                 "name": "mish",
                 "output": "accuracy_results/plots/ulp/mish-bfloat16.png",
                 "files": [
-                    "accuracy_results/results/mish-bfloat16-[32].csv"
+                    "accuracy_results/results/mish-bfloat16-[1].csv"
                 ],
                 "plot_params": {
                     "xlim": [-1e4, 1e4]
@@ -263,7 +263,7 @@
                 "name": "elu",
                 "output": "accuracy_results/plots/ulp/elu-bfloat16.png",
                 "files": [
-                    "accuracy_results/results/elu-bfloat16-[32].csv"
+                    "accuracy_results/results/elu-bfloat16-[1].csv"
                 ],
                 "plot_params": {
                     "xlim": [-10, 10]
@@ -274,10 +274,11 @@
                 "name": "sqrt",
                 "output": "accuracy_results/plots/ulp/sqrt-bfloat16.png",
                 "files": [
-                    "accuracy_results/results/sqrt-bfloat16-[32].csv"
+                    "accuracy_results/results/sqrt-bfloat16-[1].csv"
                 ],
                 "plot_params": {
-                    "xlim": [0, 100]
+                    "xbase": 2,
+                    "xlim": [-1, 1000]
                 }
             },
             {
@@ -285,11 +286,10 @@
                 "name": "rsqrt",
                 "output": "accuracy_results/plots/ulp/rsqrt-bfloat16.png",
                 "files": [
-                    "accuracy_results/results/rsqrt-bfloat16-[32].csv",
-                    "accuracy_results/results/rsqrt_approx-bfloat16-[32].csv"
+                    "accuracy_results/results/rsqrt-bfloat16-[1].csv",
+                    "accuracy_results/results/rsqrt_approx-bfloat16-[1].csv"
                 ],
                 "plot_params": {
-                    "xlim": [0, 100]
                 }
             },
             {
@@ -297,10 +297,9 @@
                 "name": "reciprocal",
                 "output": "accuracy_results/plots/ulp/reciprocal-bfloat16.png",
                 "files": [
-                    "accuracy_results/results/reciprocal-bfloat16-[32].csv"
+                    "accuracy_results/results/reciprocal-bfloat16-[1].csv"
                 ],
                 "plot_params": {
-                    "xlim": [-100, 100]
                 }
             },
             {
@@ -308,9 +307,11 @@
                 "name": "digamma",
                 "output": "accuracy_results/plots/ulp/digamma-bfloat16.png",
                 "files": [
-                    "accuracy_results/results/digamma-bfloat16-[32].csv"
+                    "accuracy_results/results/digamma-bfloat16-[1].csv"
                 ],
                 "plot_params": {
+                    "xlim": [-200, 1e4],
+                    "ylim": [0, 1e8]
                 }
             },
             {
@@ -318,9 +319,11 @@
                 "name": "lgamma",
                 "output": "accuracy_results/plots/ulp/lgamma-bfloat16.png",
                 "files": [
-                    "accuracy_results/results/lgamma-bfloat16-[32].csv"
+                    "accuracy_results/results/lgamma-bfloat16-[1].csv"
                 ],
                 "plot_params": {
+                    "xlim": [-1e3, 1e3],
+                    "ylim": [0, 1e40]
                 }
             },
             {
@@ -328,10 +331,11 @@
                 "name": "tanhshrink",
                 "output": "accuracy_results/plots/ulp/tanhshrink-bfloat16.png",
                 "files": [
-                    "accuracy_results/results/tanhshrink-bfloat16-[32].csv"
+                    "accuracy_results/results/tanhshrink-bfloat16-[1].csv"
                 ],
                 "plot_params": {
-                    "xbase": 2
+                    "xbase": 2,
+                    "xlim": [-1e4, 1e4]
                 }
             }
           ]
@@ -348,7 +352,7 @@
                 ],
                 "hue": "operation",
                 "plot_params": {
-                    "title": "Relative Error of {} against torch\n[bfloat16]",
+                    "title": "Relative Error of ttnn.{} against torch\n[bfloat16]",
                     "xscale": "symlog",
                     "yscale": "asinh",
                     "ylim": [0, 1],
@@ -721,7 +725,7 @@
                 ],
                 "hue": "operation",
                 "plot_params": {
-                    "title": "Relative Error of {}\nvs. torch [bfloat16]",
+                    "title": "Relative Error of ttnn.{}\nvs. torch [bfloat16]",
                     "xscale": "symlog",
                     "yscale": "asinh",
                     "ylim": [0, 1],
@@ -867,8 +871,12 @@
                         "xlim": [-10, 10],
                         "xbase": 2,
                         "vertical_lines": [
-                            [-1.57, "-\\frac{{{\\pi}}}{{{2}}}"],
-                            [1.57, "\\frac{{{\\pi}}}{{{2}}}"]
+                            [-1.57, "$-\\frac{{{\\pi}}}{{{2}}}$"],
+                            [1.57, "$\\frac{{{\\pi}}}{{{2}}}$"],
+                            [4.7123, "$\\frac{{{3\\pi}}}{{{2}}}$"],
+                            [-4.7123, "$-\\frac{{{3\\pi}}}{{{2}}}$"],
+                            [7.8539, "$\\frac{{{5\\pi}}}{{{2}}}$"],
+                            [-7.8539, "$-\\frac{{{5\\pi}}}{{{2}}}$"]
                         ]
                     }
                 },
@@ -1115,7 +1123,7 @@
                 ],
                 "hue": "operation",
                 "plot_params": {
-                    "title": "Absolute Error of {} vs torch",
+                    "title": "Absolute Error of ttnn.{} vs torch",
                     "xscale": "symlog",
                     "yscale": "log",
                     "ylim": [0, null],
