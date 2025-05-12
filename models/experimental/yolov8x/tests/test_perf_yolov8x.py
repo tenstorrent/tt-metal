@@ -45,6 +45,7 @@ def test_yolov8x(device, input_tensor, use_weights_from_ultralytics):
         state_dict = torch_model.state_dict()
     parameters = custom_preprocessor(device, state_dict)
 
+    input_tensor = torch.nn.functional.pad(input_tensor, (0, 13, 0, 0, 0, 0, 0, 0), value=0)
     ttnn_input = ttnn.from_torch(input_tensor, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
     ttnn_model = TtYolov8xModel(device, parameters)
     logger.info(f"Compiling model with warmup run")
