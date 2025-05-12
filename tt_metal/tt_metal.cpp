@@ -321,7 +321,7 @@ bool WriteToDeviceDRAMChannel(IDevice* device, int dram_channel, uint32_t addres
         "Cannot write to reserved DRAM region, addresses [0, {}) are reserved!",
         device->allocator()->get_base_allocator_addr(HalMemType::DRAM));
     tt::tt_metal::MetalContext::instance().get_cluster().write_dram_vec(
-        host_buffer, tt_target_dram{device->id(), dram_channel, 0}, address);
+        host_buffer, device->id(), dram_channel, address);
     return pass;
 }
 
@@ -330,7 +330,7 @@ bool ReadFromDeviceDRAMChannel(
     bool pass = true;
     tt::tt_metal::MetalContext::instance().get_cluster().dram_barrier(device->id());
     tt::tt_metal::MetalContext::instance().get_cluster().read_dram_vec(
-        host_buffer, size, tt_target_dram{device->id(), dram_channel, 0}, address);
+        host_buffer, size, device->id(), dram_channel, address);
     return pass;
 }
 
