@@ -66,6 +66,7 @@ void socket_reserve_pages(const SocketSenderInterface& socket, uint32_t num_page
     uint32_t bytes_diff;
     uint32_t bytes_free;
     do {
+        invalidate_l1_cache();
         bytes_diff = socket.bytes_sent - *bytes_acked_ptr;
         bytes_free = socket.downstream_fifo_curr_size - bytes_diff;
     } while (bytes_diff > socket.downstream_fifo_curr_size || bytes_free < num_bytes);
@@ -167,6 +168,7 @@ void socket_wait_for_pages(const SocketReceiverInterface& socket, uint32_t num_p
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(socket.bytes_sent_addr);
     uint32_t bytes_recv;
     do {
+        invalidate_l1_cache();
         bytes_recv = *bytes_sent_ptr - socket.bytes_acked;
     } while (bytes_recv < num_bytes);
 #endif
