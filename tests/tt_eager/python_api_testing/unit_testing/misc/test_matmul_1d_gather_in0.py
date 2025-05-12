@@ -362,7 +362,7 @@ def run_multi_core_matmul_1d(
             dtype=output_dtype,
         )
     signpost("stop")
-
+    breakpoint()
     tt_out = ttnn.to_torch(output_t)
     pt_out = in0 @ in1
 
@@ -944,7 +944,7 @@ def test_matmul_1d_ring_llama_perf(
             16 * 1024,
             ttnn.bfloat8_b,
             ttnn.bfloat8_b,
-            ttnn.bfloat8_b,
+            ttnn.bfloat16,
             ttnn.MathFidelity.HiFi2,
             True,
             True,
