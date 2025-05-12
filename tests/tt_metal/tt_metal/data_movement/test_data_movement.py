@@ -22,6 +22,15 @@ test_id_to_name = {
     3: "DRAM Directed Ideal",
     4: "One to One Packet Sizes",
     5: "One from One Packet Sizes",
+    6: "TensixDataMovementOneToAll2x2PacketSizes",
+    7: "TensixDataMovementOneToAll4x4PacketSizes",
+    8: "TensixDataMovementOneToAll10x10PacketSizes",
+    9: "TensixDataMovementOneToAllMulticast2x2PacketSizes",
+    10: "TensixDataMovementOneToAllMulticast5x5PacketSizes",
+    11: "TensixDataMovementOneToAllMulticast11x10PacketSizes",
+    12: "TensixDataMovementOneToAllMulticastLinked2x2PacketSizes",
+    13: "TensixDataMovementOneToAllMulticastLinked5x5PacketSizes",
+    14: "TensixDataMovementOneToAllMulticastLinked11x10PacketSizes",
 }
 
 # Correspondng test bounds for each arch, test id, riscv core

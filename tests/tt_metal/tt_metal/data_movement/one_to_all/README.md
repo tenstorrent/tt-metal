@@ -18,13 +18,24 @@ Test expectations are that pcc checks pass and sufficient test attribute data is
 | page_size_bytes           | uint32_t              | Size of a page in bytes. Arbitrary value with a minimum of flit size per architecture. |
 | l1_data_format            | DataFormat            | Data format data that will be moved. |
 | master_core_coord         | CoreCoord             | Logical coordinates for the sender core. |
-| slave_core_coord          | CoreCoord             | Logical coordinates for the receiver core. |
+| grid_size                 | CoreCoord             | Grid size of the receiver cores, with origin at 0-0 |
 | virtual_channel           | N/A                   | (1) Option to specify unicast VC for each transaction, (2) Option for a sub-test that uses a separate VC for each transaction (TODO)|
-| noc                       | N/A                   | Specify which NOC to use for the test, (1) Use only one specified NOC, (2) Use both NOCs (TODO)|
-| posted                    | N/A                   | Posted flag. Determines if write is posted or non-posted (TODO)|
+| noc_id                    | N/A                   | Specify which NOC to use for the test |
+| posted                    | N/A                   | Posted flag. Determines if write is posted or non-posted (TODO) |
+| loopback                  | bool                  | Whether to include the sender core in the receiver core list. |
+| is_multicast              | bool                  | Whether to do a multicast rather than sending to each core individually. |
+| is_linked                 | bool                  | Whether multicast is linked. |
 
 ## Test Cases
 Each test case uses bfloat16 as L1 data format and flit size (32B for WH, 64B for BH) as page size.
 Each test case has multiple runs, and each run has a unique runtime host id, assigned by a global counter.
 
-1. One to All Packet Sizes: Tests different number of transactions and transaction sizes by varying the num_of_transactions and transaction_size_pages parameters.
+1. TensixDataMovementOneToAll2x2PacketSizes: Tests one to all on a 2x2 grid.
+2. TensixDataMovementOneToAll4x4PacketSizes: Tests one to all on a 4x4 grid.
+3. TensixDataMovementOneToAll10x10PacketSizes: Tests one to all on a 10x10 grid.
+4. TensixDataMovementOneToAllMulticast2x2PacketSizes: Tests one to all multicast on a 2x2 grid.
+5. TensixDataMovementOneToAllMulticast5x5PacketSizes: Tests one to all multicast on a 5x5 grid.
+6. TensixDataMovementOneToAllMulticast11x10PacketSizes: Tests one to all multicast on a 11x10 grid.
+7. TensixDataMovementOneToAllMulticastLinked2x2PacketSizes: Tests one to all linked multicast on a 2x2 grid.
+8. TensixDataMovementOneToAllMulticastLinked5x5PacketSizes: Tests one to all linked multicast on a 5x5 grid.
+9. TensixDataMovementOneToAllMulticastLinked11x10PacketSizes: Tests one to all linked multicast on a 11x10 grid.

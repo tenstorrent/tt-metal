@@ -16,7 +16,7 @@ using namespace tt::test_utils;
 
 namespace unit_tests::dm::core_to_all {
 
-constexpr uint32_t START_ID = 5;
+constexpr uint32_t START_ID = 6;
 
 // Test config, i.e. test parameters
 struct OneToAllConfig {
@@ -102,15 +102,15 @@ bool run_dm(IDevice* device, const OneToAllConfig& test_config) {
     uint32_t slave_l1_byte_address = slave_l1_buffer->address();
 
     // Compile-time arguments for kernels
-    log_info("sender master_l1_byte_address = {}", master_l1_byte_address);
-    log_info("sender slave_l1_byte_address = {}", slave_l1_byte_address);
-    log_info("sender num_of_transactions = {}", test_config.num_of_transactions);
-    log_info("sender transaction_size_pages = {}", test_config.transaction_size_pages);
-    log_info("sender page_size_bytes = {}", test_config.page_size_bytes);
-    log_info("sender test_id = {}", test_config.test_id);
-    log_info("sender number of slaves = {}", num_slaves);
-    log_info("sender total_sender_size_bytes = {}", total_sender_size_bytes);
-    log_info("sender is_linked = {}", test_config.is_linked);
+    // log_info("sender master_l1_byte_address = {}", master_l1_byte_address);
+    // log_info("sender slave_l1_byte_address = {}", slave_l1_byte_address);
+    // log_info("sender num_of_transactions = {}", test_config.num_of_transactions);
+    // log_info("sender transaction_size_pages = {}", test_config.transaction_size_pages);
+    // log_info("sender page_size_bytes = {}", test_config.page_size_bytes);
+    // log_info("sender test_id = {}", test_config.test_id);
+    // log_info("sender number of slaves = {}", num_slaves);
+    // log_info("sender total_sender_size_bytes = {}", total_sender_size_bytes);
+    // log_info("sender is_linked = {}", test_config.is_linked);
     vector<uint32_t> sender_compile_args = {
         (uint32_t)master_l1_byte_address,
         (uint32_t)slave_l1_byte_address,
@@ -122,12 +122,12 @@ bool run_dm(IDevice* device, const OneToAllConfig& test_config) {
         (uint32_t)total_sender_size_bytes,
         (uint32_t)test_config.is_linked};
 
-    log_info("receiver master_l1_byte_address = {}", master_l1_byte_address);
-    log_info("receiver slave_l1_byte_address = {}", slave_l1_byte_address);
-    log_info("receiver num_of_transactions = {}", test_config.num_of_transactions);
-    log_info("receiver transaction_size_pages = {}", test_config.transaction_size_pages);
-    log_info("receiver page_size_bytes = {}", test_config.page_size_bytes);
-    log_info("receiver test_id = {}", test_config.test_id);
+    // log_info("receiver master_l1_byte_address = {}", master_l1_byte_address);
+    // log_info("receiver slave_l1_byte_address = {}", slave_l1_byte_address);
+    // log_info("receiver num_of_transactions = {}", test_config.num_of_transactions);
+    // log_info("receiver transaction_size_pages = {}", test_config.transaction_size_pages);
+    // log_info("receiver page_size_bytes = {}", test_config.page_size_bytes);
+    // log_info("receiver test_id = {}", test_config.test_id);
     vector<uint32_t> receiver_compile_args = {
         (uint32_t)master_l1_byte_address,
         (uint32_t)slave_l1_byte_address,

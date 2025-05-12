@@ -45,8 +45,6 @@ void kernel_main() {
     }
 
     DeviceTimestampedData("Number of transactions", num_of_transactions);
-    DeviceTimestampedData(
-        "Transaction size in bytes",
-        transaction_size_bytes);  // Not total_transaction_size_bytes because multicast replicates the data for you
+    DeviceTimestampedData("Transaction size in bytes", transaction_size_bytes);
     DeviceTimestampedData("Test id", test_id);
 }
