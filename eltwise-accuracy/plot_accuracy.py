@@ -123,7 +123,7 @@ def plot(plot_entry):
 
     id = plot_entry["id"]
     title = plot_params["title"] if "title" in plot_params else None
-    short_name = plot_entry["name"] if "name" in plot_params else id
+    short_name = plot_entry["name"] if "name" in plot_entry else id
 
     if title is not None:
         title = title.format(short_name)
@@ -151,6 +151,9 @@ def plot(plot_entry):
 
     yticksformat = plot_params["yticksformat"] if "yticksformat" in plot_params else None
 
+    plot_type = plot_entry["type"] if "type" in plot_entry else "lineplot"
+    print(f"Plot type: {id} - {plot_type}")
+
     fig, ax = plt.subplots(figsize=(25, 15))
 
     # color_palette = sns.color_palette("deep", len(ynames))
@@ -163,12 +166,18 @@ def plot(plot_entry):
 
         [yname, ysuffix, linestyle] = y
         d2["operation"] += ysuffix
-        if hseries is not None:
-            ax = sns.lineplot(data=d2, x=xname, y=yname, ax=ax, hue=hseries, linestyle=linestyle, palette=color_palette)
-        else:
-            ax = sns.lineplot(data=d2, x=xname, y=yname, ax=ax, label=yname, linestyle=linestyle, palette=color_palette)
 
-    print(f"{output_path} - XSCALE = {xscale}, base = {xbase}")
+        if plot_type == "lineplot":
+            if hseries is not None:
+                ax = sns.lineplot(
+                    data=d2, x=xname, y=yname, ax=ax, hue=hseries, linestyle=linestyle, palette=color_palette
+                )
+            else:
+                ax = sns.lineplot(
+                    data=d2, x=xname, y=yname, ax=ax, label=yname, linestyle=linestyle, palette=color_palette
+                )
+        elif plot_type == "scatterplot":
+            ax = sns.scatterplot(data=d2, x=xname, y=yname, ax=ax, hue=hseries, palette=color_palette, edgecolor="none")
 
     if xscale == "linear":
         ax.set_xscale("linear")
@@ -194,7 +203,8 @@ def plot(plot_entry):
     if "vertical_lines" in plot_params:
         for vertical_line in plot_params["vertical_lines"]:
             ax.axvline(x=vertical_line[0], color="k", linestyle="--")
-            ax.text(vertical_line[0], ax.get_ylim()[1], vertical_line[1], fontsize=14)
+            label_y = ax.get_ylim()[1] / 2
+            ax.text(vertical_line[0], label_y, vertical_line[1])
 
     if yticks is not None:
         # print(f"yticks = {yticks}")
@@ -1191,6 +1201,8 @@ def main():
             "lines.linewidth": 4,
             "axes.linewidth": 1,
             "font.serif": ["Latin Modern Math"],
+            "lines.markersize": 20,
+            "lines.markeredgecolor": "none",
         },
     )
 
