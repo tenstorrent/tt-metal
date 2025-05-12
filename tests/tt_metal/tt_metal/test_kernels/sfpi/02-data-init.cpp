@@ -14,7 +14,7 @@ volatile uint32_t global __attribute__((used)) = 0x12345678;
 volatile uint32_t zero __attribute__((used));
 
 // Do not let compiler propagate knowledge of the initialized value;
-static uint32_t __attribute__((noinline)) get(uint32_t *ptr) {
+static uint32_t __attribute__((noinline)) get(volatile uint32_t *ptr) {
     return *ptr;
 }
     
