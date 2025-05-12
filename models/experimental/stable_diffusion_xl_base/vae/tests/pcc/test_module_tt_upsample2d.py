@@ -26,7 +26,6 @@ def test_vae_upsample2d(device, input_shape, up_block_id, stride, padding, dilat
     vae = AutoencoderKL.from_pretrained(
         "stabilityai/stable-diffusion-xl-base-1.0", torch_dtype=torch.float32, use_safetensors=True, subfolder="vae"
     )
-    # vae = pipe.vae
     vae.eval()
     state_dict = vae.state_dict()
 
