@@ -13,13 +13,17 @@
 
 #include <tt_stl/overloaded.hpp>
 
+#include "mesh_shape_generated.h"
+#include "ttnn/distributed/distributed_tensor_config.hpp"
 #include "ttnn/tensor/host_buffer/functions.hpp"
 #include "ttnn/tensor/storage.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/distributed/types.hpp"
-#include "ttnn/tensor/flatbuffer/tensor_types_from_flatbuffer.hpp"
-#include "ttnn/tensor/flatbuffer/tensor_types_to_flatbuffer.hpp"
+#include "ttnn/tensor/flatbuffer/tensor_spec_flatbuffer.hpp"
+#include "ttnn/tensor/flatbuffer/mesh_coord_flatbuffer.hpp"
+
+#include "tensor_generated.h"
 
 namespace tt::tt_metal {
 
@@ -279,6 +283,187 @@ Tensor load_tensor_helper(const std::string& file_name, T device) {
     return tensor;
 }
 
+namespace serialization_v2 {
+
+HostBuffer create_host_buffer_from_bytes(uint64_t size_bytes, const TensorSpec& spec) {
+    DataType data_type = spec.data_type();
+
+    switch (data_type) {
+        case DataType::UINT32:
+        case DataType::BFLOAT8_B:
+        case DataType::BFLOAT4_B: {
+            std::vector<uint32_t> data(size_bytes / sizeof(uint32_t));
+            return HostBuffer(std::move(data));
+        }
+        case DataType::INT32: {
+            std::vector<int32_t> data(size_bytes / sizeof(int32_t));
+            return HostBuffer(std::move(data));
+        }
+        case DataType::UINT8: {
+            std::vector<uint8_t> data(size_bytes / sizeof(uint8_t));
+            return HostBuffer(std::move(data));
+        }
+        case DataType::UINT16: {
+            std::vector<uint16_t> data(size_bytes / sizeof(uint16_t));
+            return HostBuffer(std::move(data));
+        }
+        case DataType::FLOAT32: {
+            std::vector<float> data(size_bytes / sizeof(float));
+            return HostBuffer(std::move(data));
+        }
+        case DataType::BFLOAT16: {
+            std::vector<bfloat16> data(size_bytes / sizeof(bfloat16));
+            return HostBuffer(std::move(data));
+        }
+        case DataType::INVALID: TT_THROW("Unsupported DataType");
+    }
+}
+
+flatbuffers::Offset<ttnn::flatbuffer::Tensor> tensor_to_flatbuffer(
+    const Tensor& tensor, flatbuffers::FlatBufferBuilder& builder) {
+    const auto& storage = tensor.get_storage();
+
+    TT_FATAL(!is_device_tensor(tensor), "Device tensors are not supported in flatbuffer serialization");
+
+    auto strategy = tensor.get_distributed_tensor_config();
+    if (std::holds_alternative<ReplicateTensor>(strategy)) {
+        auto tensor_spec_offset = ttnn::to_flatbuffer(tensor.get_tensor_spec(), builder);
+
+        std::size_t buffer_size = 0;
+        if (std::holds_alternative<HostStorage>(storage)) {
+            const auto& host_storage = std::get<HostStorage>(storage);
+            buffer_size = host_storage.buffer.view_bytes().size();
+        } else {
+            const auto buffer = std::get<MultiDeviceHostStorage>(storage).get_buffer(0);
+            buffer_size = buffer.view_bytes().size();
+        }
+
+        auto inline_storage = ttnn::flatbuffer::InlineStorage(/*offset=*/0, buffer_size);
+
+        auto replicated_tensor = ttnn::flatbuffer::CreateReplicatedTensor(
+            builder,
+            tensor_spec_offset,
+            ttnn::flatbuffer::TensorBuffer::InlineStorage,
+            builder.CreateStruct(inline_storage).Union());
+
+        auto tensor_offset = ttnn::flatbuffer::CreateTensor(
+            builder, ttnn::flatbuffer::TensorType::ReplicatedTensor, replicated_tensor.Union());
+
+        return tensor_offset;
+    } else {
+        TT_FATAL(
+            std::holds_alternative<MultiDeviceHostStorage>(storage), "Sharded tensor requires MultiDeviceHostStorage");
+
+        const auto& multi_device_storage = std::get<MultiDeviceHostStorage>(storage);
+
+        std::vector<flatbuffers::Offset<ttnn::flatbuffer::TensorShard>> shards_vector;
+        uint64_t data_offset = 0;
+        for (std::size_t i = 0; i < multi_device_storage.specs.size(); i++) {
+            auto tensor_spec_offset = ttnn::to_flatbuffer(multi_device_storage.specs[i], builder);
+
+            const auto& buffer = multi_device_storage.get_buffer(i);
+            const std::size_t buffer_size = buffer.view_bytes().size();
+
+            auto inline_storage = ttnn::flatbuffer::InlineStorage(data_offset, buffer_size);
+
+            auto shard_offset = ttnn::flatbuffer::CreateTensorShard(
+                builder,
+                tensor_spec_offset,
+                ttnn::flatbuffer::TensorBuffer::InlineStorage,
+                builder.CreateStruct(inline_storage).Union());
+
+            shards_vector.push_back(shard_offset);
+            data_offset += buffer_size;
+        }
+        auto shards = builder.CreateVector(shards_vector);
+
+        flatbuffers::Offset<ttnn::flatbuffer::MeshShape> mesh_shape_offset;
+        if (const auto* shard_2d = std::get_if<ShardTensor2D>(&strategy)) {
+            distributed::MeshShape mesh_shape{shard_2d->shard_mesh.x, shard_2d->shard_mesh.y};
+            mesh_shape_offset = ttnn::to_flatbuffer(mesh_shape, builder);
+        }
+        auto sharded_tensor = ttnn::flatbuffer::CreateShardedTensor(builder, mesh_shape_offset, shards);
+
+        auto tensor_offset = ttnn::flatbuffer::CreateTensor(
+            builder, ttnn::flatbuffer::TensorType::ShardedTensor, sharded_tensor.Union());
+
+        return tensor_offset;
+    }
+}
+
+Tensor flatbuffer_to_tensor(
+    const ttnn::flatbuffer::Tensor* fb_tensor, const uint8_t* data_region, MeshDevice* device = nullptr) {
+    switch (fb_tensor->tensor_type_type()) {
+        case ttnn::flatbuffer::TensorType::NONE: TT_THROW("Invalid TensorType");
+        case ttnn::flatbuffer::TensorType::ReplicatedTensor: {
+            auto replicated = fb_tensor->tensor_type_as_ReplicatedTensor();
+
+            auto spec = ttnn::from_flatbuffer(replicated->tensor_spec());
+
+            auto* inline_storage = replicated->buffer_as<ttnn::flatbuffer::InlineStorage>();
+            TT_FATAL(inline_storage != nullptr, "Only InlineStorage is supported in flatbuffer deserialization");
+
+            const uint64_t offset = inline_storage->offset();
+            const uint64_t size = inline_storage->size();
+
+            HostBuffer host_buffer = create_host_buffer_from_bytes(size, spec);
+            std::memcpy(host_buffer.view_bytes().data(), data_region + offset, size);
+
+            Tensor tensor(std::move(host_buffer), spec);
+
+            if (device != nullptr) {
+                tensor = tensor.to_device(device);
+            }
+
+            return tensor;
+        }
+        case ttnn::flatbuffer::TensorType::ShardedTensor: {
+            auto sharded = fb_tensor->tensor_type_as_ShardedTensor();
+
+            DistributedTensorConfig strategy;
+            auto* mesh_shape = sharded->mesh_shape();
+            if (mesh_shape != nullptr) {
+                const distributed::MeshShape ttnn_mesh_shape = ttnn::from_flatbuffer(mesh_shape);
+                strategy = ShardTensor2D{ShardMesh{.y = ttnn_mesh_shape[0], .x = ttnn_mesh_shape[1]}};
+            }
+
+            const size_t num_shards = sharded->shards()->size();
+
+            std::vector<HostBuffer> buffers;
+            std::vector<TensorSpec> specs;
+            specs.reserve(num_shards);
+            buffers.reserve(num_shards);
+            for (size_t i = 0; i < num_shards; i++) {
+                auto* shard = sharded->shards()->Get(i);
+
+                auto spec = ttnn::from_flatbuffer(shard->tensor_spec());
+                specs.push_back(std::move(spec));
+
+                auto* inline_storage = shard->buffer_as<ttnn::flatbuffer::InlineStorage>();
+                TT_FATAL(inline_storage != nullptr, "Only InlineStorage is supported in flatbuffer deserialization");
+
+                const uint64_t offset = inline_storage->offset();
+                const uint64_t size = inline_storage->size();
+
+                HostBuffer host_buffer = create_host_buffer_from_bytes(size, spec);
+                std::memcpy(static_cast<void*>(host_buffer.view_bytes().data()), data_region + offset, size);
+                buffers.push_back(std::move(host_buffer));
+            }
+
+            MultiDeviceHostStorage multi_device_storage{strategy, std::move(buffers), std::move(specs)};
+
+            Tensor tensor(std::move(multi_device_storage), specs.front(), strategy);
+
+            if (device != nullptr) {
+                tensor = tensor.to_device(device);
+            }
+
+            return tensor;
+        }
+    }
+}
+
+}  // namespace serialization_v2
 }  // namespace
 
 void dump_tensor(
@@ -370,6 +555,86 @@ MemoryConfig load_memory_config(const std::string& file_name) {
     }
     std::unique_ptr<FILE, FileCloser> file_guard(input_file);
     return load_memory_config(input_file);
+}
+
+void dump_tensor_flatbuffer(const std::string& file_name, const Tensor& tensor) {
+    FILE* output_file = fopen(file_name.c_str(), "wb");
+    if (not output_file) {
+        TT_THROW("Cannot open \"{}\"", file_name);
+    }
+    std::unique_ptr<FILE, FileCloser> file_guard(output_file);
+
+    Tensor cpu_tensor = tensor.cpu();
+
+    flatbuffers::FlatBufferBuilder builder;
+    auto tensor_offset = serialization_v2::tensor_to_flatbuffer(cpu_tensor, builder);
+    builder.Finish(tensor_offset);
+
+    uint64_t header_size = builder.GetSize();
+    safe_fwrite(&header_size, sizeof(header_size), 1, output_file);
+    safe_fwrite(builder.GetBufferPointer(), header_size, 1, output_file);
+
+    std::visit(
+        tt::stl::overloaded{
+            [&output_file](const HostStorage& storage) {
+                auto buffer_view = storage.buffer.view_bytes();
+                safe_fwrite(buffer_view.data(), buffer_view.size(), 1, output_file);
+            },
+            [&output_file](const DeviceStorage&) {
+                TT_THROW("Device storage isn't supported in flatbuffer serialization");
+            },
+            [&output_file](const MultiDeviceHostStorage& storage) {
+                for (std::size_t i = 0; i < storage.num_buffers(); i++) {
+                    const auto& buffer = storage.get_buffer(i);
+                    auto buffer_view = buffer.view_bytes();
+                    safe_fwrite(buffer_view.data(), buffer_view.size(), 1, output_file);
+                }
+            }},
+        cpu_tensor.get_storage());
+}
+
+Tensor load_tensor_flatbuffer(const std::string& file_name, MeshDevice* device) {
+    FILE* input_file = fopen(file_name.c_str(), "rb");
+    if (not input_file) {
+        TT_THROW("Cannot open \"{}\"", file_name);
+    }
+    std::unique_ptr<FILE, FileCloser> file_guard(input_file);
+
+    uint64_t header_size = 0;
+    safe_fread(&header_size, sizeof(header_size), 1, input_file);
+
+    std::vector<uint8_t> header_buffer(header_size);
+    safe_fread(header_buffer.data(), header_size, 1, input_file);
+
+    flatbuffers::Verifier verifier(header_buffer.data(), header_size);
+    if (!ttnn::flatbuffer::VerifyTensorBuffer(verifier)) {
+        TT_THROW("Tensor deserialization failed: invalid flatbuffer");
+    }
+
+    auto fb_tensor = ttnn::flatbuffer::GetTensor(header_buffer.data());
+
+    uint64_t data_size = 0;
+    if (fb_tensor->tensor_type_type() == ttnn::flatbuffer::TensorType::ReplicatedTensor) {
+        const auto* replicated = fb_tensor->tensor_type_as_ReplicatedTensor();
+        const auto* inline_storage = replicated->buffer_as<ttnn::flatbuffer::InlineStorage>();
+        TT_FATAL(inline_storage != nullptr, "Only InlineStorage is supported in flatbuffer deserialization");
+        data_size = inline_storage->size();
+    } else if (fb_tensor->tensor_type_type() == ttnn::flatbuffer::TensorType::ShardedTensor) {
+        const auto* sharded = fb_tensor->tensor_type_as_ShardedTensor();
+        for (flatbuffers::uoffset_t i = 0; i < sharded->shards()->size(); i++) {
+            const auto* shard = sharded->shards()->Get(i);
+            const auto* inline_storage = shard->buffer_as<ttnn::flatbuffer::InlineStorage>();
+            TT_FATAL(inline_storage != nullptr, "Only InlineStorage is supported in flatbuffer deserialization");
+            data_size += inline_storage->size();
+        }
+    } else {
+        TT_THROW("Unknown TensorType in flatbuffer deserialization");
+    }
+
+    std::vector<uint8_t> data_buffer(data_size);
+    safe_fread(data_buffer.data(), data_size, 1, input_file);
+
+    return serialization_v2::flatbuffer_to_tensor(fb_tensor, data_buffer.data(), device);
 }
 
 }  // namespace tt::tt_metal

@@ -196,8 +196,8 @@ set(TENSOR_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/tensor/layout/page_config.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/tensor/layout/tensor_layout.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/tensor/xtensor/partition.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/tensor/flatbuffer/tensor_types_to_flatbuffer.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/tensor/flatbuffer/tensor_types_from_flatbuffer.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/tensor/flatbuffer/tensor_spec_flatbuffer.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/tensor/flatbuffer/mesh_coord_flatbuffer.cpp
 )
 
 set(CCL_SRC
@@ -750,6 +750,19 @@ set(TTNN_OP_SRCS
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/bcast_to/bcast_to.cpp
 )
 
+set(TENSOR_FLATBUFFER_SCHEMAS
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/tensor/flatbuffer/mesh_coordinate.fbs
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/tensor/flatbuffer/mesh_shape.fbs
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/tensor/flatbuffer/tensor_spec.fbs
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/tensor/flatbuffer/tensor.fbs
+)
+
+set(TENSOR_FLATBUFFER_GENERATED_HEADERS)
+foreach(FBS_FILE ${TENSOR_FLATBUFFER_SCHEMAS})
+    GENERATE_FBS_HEADER(${FBS_FILE})
+    list(APPEND TENSOR_FLATBUFFER_GENERATED_HEADERS ${FBS_GENERATED_HEADER_FILE})
+endforeach()
+
 set(TTNN_SRC)
 list(
     APPEND
@@ -757,12 +770,10 @@ list(
     ${TTNN_BASE_SRCS}
     ${TTNN_OP_SRCS}
     ${TENSOR_SRC}
+    ${TENSOR_FLATBUFFER_GENERATED_HEADERS}
     ${CCL_SRC}
     ${CCL_SRC_EXPERIMENTAL}
 )
-
-GENERATE_FBS_HEADER(${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/tensor/flatbuffer/tensor_types.fbs)
-list(APPEND TTNN_SRC ${FBS_GENERATED_HEADER_FILE})
 
 set(TTNN_SUBLIBRARIES
     ttnn/operations/ccl/
@@ -1037,7 +1048,7 @@ foreach(SUBLIBRARY_PATH ${TTNN_SUBLIBRARIES})
 
         # Append FBS_GENERATED_HEADER_FILE only if the sublibrary is "tt_tensor"
         if(${SUBLIBRARY_NAME} STREQUAL "ttnn_tensor")
-            list(APPEND SUBLIBRARY_SRCS ${FBS_GENERATED_HEADER_FILE})
+            list(APPEND SUBLIBRARY_SRCS ${TENSOR_FLATBUFFER_GENERATED_HEADERS})
         endif()
 
         add_ttnn_sublibrary(${SUBLIBRARY_NAME} ${SUBLIBRARY_SRCS})
