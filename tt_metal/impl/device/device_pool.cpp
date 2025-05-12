@@ -808,13 +808,14 @@ void DevicePool::close_devices(const std::vector<IDevice*>& devices, bool skip_s
         }
     }
 
-    detail::ProfilerSync(ProfilerSyncState::CLOSE_DEVICE);
-
     tt::tt_metal::MetalContext::instance().get_cluster().set_internal_routing_info_for_ethernet_cores(false);
     for (const auto& dev_id : devices_to_close) {
         auto dev = tt::DevicePool::instance().get_active_device(dev_id);
         dev->close();
     }
+
+    // All devices closed and CQs are null (dispatch_firmware_active_ = false). Profiler will use slow dispatch path.
+    detail::ProfilerSync(ProfilerSyncState::CLOSE_DEVICE);
 }
 
 DevicePool::~DevicePool() {

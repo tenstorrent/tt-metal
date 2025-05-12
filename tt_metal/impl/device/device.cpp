@@ -1261,6 +1261,8 @@ bool Device::close() {
         TT_THROW("Cannot close device {} that has not been initialized!", this->id_);
     }
 
+    dispatch_firmware_active_ = false;
+
     tt_metal::detail::DumpDeviceProfileResults(this, ProfilerDumpState::LAST_CLOSE_DEVICE);
 
     this->disable_and_clear_program_cache();
@@ -1276,9 +1278,6 @@ bool Device::close() {
     std::unordered_set<CoreCoord> wait_for_cores = not_done_dispatch_cores[mmio_device_id];
 
     llrt::internal_::wait_until_cores_done(mmio_device_id, RUN_MSG_GO, wait_for_cores);
-
-    // Dispatch firmware must be inactive because all relevant cores are done
-    dispatch_firmware_active_ = false;
 
     DprintServerDetach(this->id());
     watcher_detach(this->id());
