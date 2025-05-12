@@ -8,6 +8,10 @@
 #error "Exactly one COMPILE_FOR_${PROC}RISC must be defined"
 #endif
 
+OUTPUT_FORMAT("elf32-littleriscv", "elf32-littleriscv",
+	      "elf32-littleriscv")
+OUTPUT_ARCH(riscv)
+
 #include "dev_mem_map.h"
 
 #if defined(COMPILE_FOR_BRISC)
@@ -91,9 +95,6 @@
 #error "compiling for unknown"
 #endif
 
-OUTPUT_FORMAT("elf32-littleriscv", "elf32-littleriscv",
-	      "elf32-littleriscv")
-OUTPUT_ARCH(riscv)
 ENTRY(_start)
 
 PHDRS {
