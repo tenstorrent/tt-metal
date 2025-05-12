@@ -14,3 +14,4 @@ compile_commands.json
 *.log
 *.csv
 *.whl
+**/hw_specific/**
