@@ -1,22 +1,12 @@
-# SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
 import ttnn
 import torch
-import math
 
-from tests.ttnn.utils_for_testing import assert_equal, assert_with_pcc
-from models.utility_functions import (
-    skip_for_grayskull,
-    skip_for_blackhole,
-)
-
-
-def arange_row_major(shape, *, dtype=torch.bfloat16, device=None):
-    numel = math.prod(shape)  # or: functools.reduce(operator.mul, shape, 1)
-    return torch.arange(1, numel + 1, dtype=dtype, device=device).reshape(shape)
+from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
 @pytest.mark.parametrize("C", [8, 16])
@@ -78,5 +68,3 @@ def test_convert_to_hwc(device, C, HW, core_grid, padded_sharded_dim):
     actual = ttnn.to_torch(actual)
 
     assert_with_pcc(expected, actual, 0.99999)
-
-    # return actual
