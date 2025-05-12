@@ -111,38 +111,72 @@ FORCE_INLINE void send_packets_unicast_write_impl(
         params.dest_bank_addr_bwd,
         0);
 
+    uint32_t send_size1 = 1024;
+    uint32_t send_size2 = params.payload_size_bytes - send_size1;
+
     if constexpr (scatter_write) {
         uint32_t single_payload_size = params.payload_size_bytes >> 1;
         pkt_hdr_fwd->to_noc_unicast_scatter_write(
-            NocUnicastScatterCommandHeader{noc0_dest_addr_fwd, noc0_dest_addr_fwd + single_payload_size},
+            NocUnicastScatterCommandHeader{noc0_dest_addr_fwd, noc0_dest_addr_fwd + send_size1, send_size1},
             params.payload_size_bytes);
         pkt_hdr_bwd->to_noc_unicast_scatter_write(
-            NocUnicastScatterCommandHeader{noc0_dest_addr_bwd, noc0_dest_addr_bwd + single_payload_size},
+            NocUnicastScatterCommandHeader{noc0_dest_addr_bwd, noc0_dest_addr_bwd + send_size1, send_size1},
             params.payload_size_bytes);
+
+        for (size_t i = 0; i < params.send_count; i++) {
+            // Forward direction
+            if (params.num_fwd_hops > 0) {
+                fabric_connection.get_forward_connection().wait_for_empty_write_slot();
+                fabric_connection.get_forward_connection().send_payload_flush_non_blocking_from_address(
+                    (uint32_t)pkt_hdr_fwd, sizeof(PACKET_HEADER_TYPE));
+            }
+
+            // Backward direction
+            if (params.num_bwd_hops > 0) {
+                fabric_connection.get_backward_connection().wait_for_empty_write_slot();
+                fabric_connection.get_backward_connection().send_payload_flush_non_blocking_from_address(
+                    (uint32_t)pkt_hdr_bwd, sizeof(PACKET_HEADER_TYPE));
+            }
+
+            noc_async_writes_flushed();
+        }
     } else {
-        pkt_hdr_fwd->to_noc_unicast_write(NocUnicastCommandHeader{noc0_dest_addr_fwd}, params.payload_size_bytes);
-        pkt_hdr_bwd->to_noc_unicast_write(NocUnicastCommandHeader{noc0_dest_addr_bwd}, params.payload_size_bytes);
-    }
-    for (size_t i = 0; i < params.send_count; i++) {
-        // Forward direction
-        if (params.num_fwd_hops > 0) {
-            fabric_connection.get_forward_connection().wait_for_empty_write_slot();
-            // fabric_connection.get_forward_connection().send_payload_without_header_non_blocking_from_address(
-            //     source_buffer_address, params.payload_size_bytes);
-            fabric_connection.get_forward_connection().send_payload_flush_non_blocking_from_address(
-                (uint32_t)pkt_hdr_fwd, sizeof(PACKET_HEADER_TYPE));
-        }
+        auto* pkt_hdr_fwd2 =
+            reinterpret_cast<volatile PACKET_HEADER_TYPE*>(pkt_hdr_fwd + sizeof(PACKET_HEADER_TYPE) * 4);
+        auto* pkt_hdr_bwd2 =
+            reinterpret_cast<volatile PACKET_HEADER_TYPE*>(pkt_hdr_fwd + sizeof(PACKET_HEADER_TYPE) * 5);
+        setup_packet_header(pkt_hdr_fwd2, params.num_fwd_hops, params.chip_send_type);
+        setup_packet_header(pkt_hdr_bwd2, params.num_bwd_hops, params.chip_send_type);
 
-        // Backward direction
-        if (params.num_bwd_hops > 0) {
-            fabric_connection.get_backward_connection().wait_for_empty_write_slot();
-            // fabric_connection.get_backward_connection().send_payload_without_header_non_blocking_from_address(
-            //     source_buffer_address, params.payload_size_bytes);
-            fabric_connection.get_backward_connection().send_payload_flush_non_blocking_from_address(
-                (uint32_t)pkt_hdr_bwd, sizeof(PACKET_HEADER_TYPE));
-        }
+        pkt_hdr_fwd->to_noc_unicast_write(NocUnicastCommandHeader{noc0_dest_addr_fwd}, send_size1);
+        pkt_hdr_fwd2->to_noc_unicast_write(NocUnicastCommandHeader{noc0_dest_addr_fwd + send_size1}, send_size2);
+        pkt_hdr_bwd->to_noc_unicast_write(NocUnicastCommandHeader{noc0_dest_addr_bwd}, send_size1);
+        pkt_hdr_bwd2->to_noc_unicast_write(NocUnicastCommandHeader{noc0_dest_addr_bwd + send_size1}, send_size2);
+        // need to be looped as the hardcoded code exceed memory limit
+        volatile PACKET_HEADER_TYPE* fwd[2] = {pkt_hdr_fwd, pkt_hdr_fwd2};
+        volatile PACKET_HEADER_TYPE* bwd[2] = {pkt_hdr_bwd, pkt_hdr_bwd2};
 
-        noc_async_writes_flushed();
+        for (size_t i = 0; i < params.send_count; i++) {
+            // Forward direction
+            if (params.num_fwd_hops > 0) {
+                for (size_t j = 0; j < 2; j++) {
+                    fabric_connection.get_forward_connection().wait_for_empty_write_slot();
+                    fabric_connection.get_forward_connection().send_payload_flush_non_blocking_from_address(
+                        (uint32_t)fwd[j], sizeof(PACKET_HEADER_TYPE));
+                }
+            }
+
+            // Backward direction
+            if (params.num_bwd_hops > 0) {
+                for (size_t j = 0; j < 2; j++) {
+                    fabric_connection.get_backward_connection().wait_for_empty_write_slot();
+                    fabric_connection.get_backward_connection().send_payload_flush_non_blocking_from_address(
+                        (uint32_t)bwd[j], sizeof(PACKET_HEADER_TYPE));
+                }
+            }
+
+            noc_async_writes_flushed();
+        }
     }
 }
 

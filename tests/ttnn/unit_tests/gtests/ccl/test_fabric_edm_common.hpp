@@ -2701,7 +2701,7 @@ void Run1DFabricPacketSendTest(
     // static constexpr size_t source_l1_buffer_address = 1000000;
     static constexpr uint32_t packet_header_cb_index = tt::CB::c_in0;
     static constexpr uint32_t source_payload_cb_index = tt::CB::c_in1;
-    static constexpr size_t packet_header_cb_size_in_headers = 5;
+    static constexpr size_t packet_header_cb_size_in_headers = 7;
     static constexpr bool enable_persistent_fabric_mode = true;
     auto max_packet_payload_size_bytes =
         std::max_element(test_specs.begin(), test_specs.end(), [](const auto& a, const auto& b) {
@@ -3751,7 +3751,7 @@ void RunRingDeadlockStabilityTestWithPersistentFabric(
     // static constexpr size_t source_l1_buffer_address = 1000000;
     static constexpr uint32_t packet_header_cb_index = tt::CB::c_in0;
     static constexpr uint32_t source_payload_cb_index = tt::CB::c_in1;
-    static constexpr size_t packet_header_cb_size_in_headers = 5;
+    static constexpr size_t packet_header_cb_size_in_headers = 7;
     static constexpr bool enable_persistent_fabric_mode = true;
     size_t dest_buffer_size = packet_payload_size_bytes * 4;
     static constexpr tt::DataFormat cb_df = tt::DataFormat::Bfp8;

@@ -96,6 +96,7 @@ struct NocUnicastCommandHeader {
 struct NocUnicastScatterCommandHeader {
     uint64_t noc_address1;
     uint64_t noc_address2;
+    uint32_t chunk_size1;
 };
 struct NocUnicastInlineWriteCommandHeader {
     uint64_t noc_address;
@@ -303,7 +304,7 @@ struct PacketHeaderBase {
     }
 
     inline volatile Derived* to_noc_unicast_scatter_write(
-        const NocUnicastScatterCommandHeader& noc_unicast_scatter_command_header, size_t chunk_size_bytes) volatile {
+        const NocUnicastScatterCommandHeader& noc_unicast_scatter_command_header, size_t payload_size_bytes) volatile {
 #if defined(KERNEL_BUILD) || defined(FW_BUILD)
         this->noc_send_type = NOC_UNICAST_SCATTER_WRITE;
         auto noc_address_components = get_noc_address_components(noc_unicast_scatter_command_header.noc_address1);
@@ -322,7 +323,8 @@ struct PacketHeaderBase {
 
         this->command_fields.unicast_scatter_write.noc_address1 = noc_addr1;
         this->command_fields.unicast_scatter_write.noc_address2 = noc_addr2;
-        this->payload_size_bytes = chunk_size_bytes;
+        this->command_fields.unicast_scatter_write.chunk_size1 = noc_unicast_scatter_command_header.chunk_size1;
+        this->payload_size_bytes = payload_size_bytes;
 #else
         TT_THROW("Calling to_noc_unicast_write from host is unsupported");
 #endif
