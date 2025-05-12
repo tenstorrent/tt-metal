@@ -108,8 +108,7 @@ Tensor transform(const Tensor& tensor, const std::function<Tensor(const Tensor&)
         input_tensors.begin(), input_tensors.end(), std::back_inserter(output_tensors), [&](const auto& device_tensor) {
             return transform_func(device_tensor);
         });
-    return ttnn::distributed::aggregate_as_tensor(
-        output_tensors, ttnn::distributed::get_distributed_tensor_config_from_tensor(tensor));
+    return ttnn::distributed::aggregate_as_tensor(output_tensors, tensor.get_distributed_tensor_config());
 }
 
 void apply(const Tensor& tensor, const std::function<void(const Tensor&)>& callable) {
@@ -126,41 +125,12 @@ Tensor get_shard_for_device(const Tensor& tensor, IDevice* target_device, std::o
     return std::visit(
         tt::stl::overloaded{
             [buffer_index](const MultiDeviceHostStorage& s) {
-                return Tensor{HostStorage{s.get_buffer(buffer_index.value())}, s.get_tensor_spec(buffer_index.value())};
+                return Tensor{s.get_buffer(buffer_index.value()), s.get_tensor_spec(buffer_index.value())};
             },
             [&tensor](const HostStorage& s) { return tensor; },
             [&tensor](const DeviceStorage& s) { return tensor; },
         },
         storage);
-}
-
-void insert_buffer_and_shape_for_device(
-    IDevice* target_device, const Tensor& shard, Tensor& tensor_to_modify, std::optional<int> buffer_index) {
-    ZoneScopedN("InsertBufferAndShapeForDevice");
-    std::visit(
-        tt::stl::overloaded{
-            [target_device, &shard, buffer_index](MultiDeviceHostStorage& s) {
-                TT_FATAL(shard.storage_type() == StorageType::HOST, "Shard must be a host tensor");
-                s.insert_buffer_and_spec_for_device(
-                    buffer_index.value(),
-                    std::get<HostStorage>(shard.tensor_attributes->get_storage()).get_buffer(),
-                    shard.tensor_attributes->get_tensor_spec());
-            },
-            [&shard](HostStorage& s) {
-                TT_FATAL(shard.storage_type() == StorageType::HOST, "Shard must be a host tensor");
-                s.insert_buffer(std::get<HostStorage>(shard.tensor_attributes->get_storage()).get_buffer());
-            },
-            [&shard](DeviceStorage& s) {
-                TT_FATAL(shard.storage_type() == StorageType::DEVICE, "Shard must be a device tensor");
-                auto& shard_storage = std::get<DeviceStorage>(shard.tensor_attributes->get_storage());
-                if (shard_storage.mesh_buffer) {
-                    s.mesh_buffer = shard_storage.mesh_buffer;
-                    s.specs = shard_storage.specs;
-                } else {
-                    s.insert_buffer(shard_storage.buffer);
-                }
-            }},
-        tensor_to_modify.tensor_attributes->get_storage());
 }
 
 ShardDivisionSpec compute_shard_division_spec(const Shape2D& shape, const Shape2D& shard_shape) {

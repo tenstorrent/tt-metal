@@ -13,7 +13,6 @@ using namespace tt::tt_metal;
 namespace ttnn::operations::transformer {
 
 void JointScaledDotProductAttention::validate(const std::vector<Tensor>& input_tensors) const {
-    tt::log_info("Validating Joint SDPA inputs");
     TT_FATAL(input_tensors.size() == 6, "Must have 6 input tensors (Q, K, V, joint_Q, joint_K, joint_V)");
 
     const auto& input_tensor_q = input_tensors.at(0);

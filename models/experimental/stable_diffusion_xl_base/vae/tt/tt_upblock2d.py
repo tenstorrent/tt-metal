@@ -34,6 +34,7 @@ class TtUpDecoderBlock2D(nn.Module):
         hidden_states = input_tensor
 
         for resnet in self.resnets:
+            hidden_states = ttnn.reshape(hidden_states, (1, 1, B * H * W, C))
             hidden_states, [C, H, W] = resnet.forward(hidden_states, [B, C, H, W])
 
         ttnn.deallocate(input_tensor)

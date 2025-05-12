@@ -3,12 +3,12 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import argparse
-import streamlit as st
-import requests
-from PIL import Image
 import io
 import time
 
+import requests
+import streamlit as st
+from PIL import Image
 
 # parse args
 parser = argparse.ArgumentParser(description="Streamlit app for Stable Diffusion")

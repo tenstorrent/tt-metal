@@ -43,8 +43,7 @@ Tensor arange_impl(
     const int64_t step,
     const Layout layout = Layout::ROW_MAJOR,
     std::optional<std::reference_wrapper<MeshDevice>> device = std::nullopt,
-    const MemoryConfig& output_mem_config = MemoryConfig{
-        .memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED}) {
+    const MemoryConfig& output_mem_config = MemoryConfig{}) {
     constexpr DataType data_type = tt::tt_metal::convert_to_data_type<T>();
 
     TT_FATAL(step != 0, "Step must be nonzero");
@@ -65,7 +64,7 @@ Tensor arange_impl(
     }
 
     auto output = Tensor(
-                      tt::tt_metal::HostStorage{tt::tt_metal::host_buffer::create(std::move(owned_buffer))},
+                      tt::tt_metal::HostBuffer(std::move(owned_buffer)),
                       ttnn::Shape{static_cast<uint32_t>(size)},
                       data_type,
                       Layout::ROW_MAJOR)
@@ -90,11 +89,7 @@ Tensor full_impl(
     auto owned_buffer = std::vector<T>(tensor_spec.physical_shape().height() * tensor_spec.physical_shape().width());
     std::fill(std::begin(owned_buffer), std::end(owned_buffer), value);
 
-    Tensor host_tensor(
-        tt::tt_metal::HostStorage{tt::tt_metal::host_buffer::create(std::move(owned_buffer))},
-        shape,
-        data_type,
-        layout);
+    Tensor host_tensor(tt::tt_metal::HostBuffer(std::move(owned_buffer)), shape, data_type, layout);
 
     if (optional_output_tensor.has_value()) {
         tt::tt_metal::write_tensor(host_tensor, *optional_output_tensor, queue_id);
@@ -291,23 +286,9 @@ struct EmptyLike {
         Layout layout_value = layout.value_or(tensor.get_layout());
         DataType dtype_value = dtype.value_or(tensor.get_dtype());
         MemoryConfig mem_cfg = memory_config.value_or(tensor.memory_config());
-        if (device.has_value()) {
-            return allocate_tensor_on_mesh(
-                TensorSpec(tensor.get_logical_shape(), TensorLayout(dtype_value, PageConfig(layout_value), mem_cfg)),
-                &device->get());
-        } else {
-            auto tensor_device = tensor.device();
-            // TODO #20966: Remove single device support and branches + dynamic_cast
-            if (auto mesh_device = dynamic_cast<MeshDevice*>(tensor_device)) {
-                return allocate_tensor_on_mesh(
-                    TensorSpec(
-                        tensor.get_logical_shape(), TensorLayout(dtype_value, PageConfig(layout_value), mem_cfg)),
-                    mesh_device);
-            }
-            return allocate_tensor_on_devices(
-                TensorSpec(tensor.get_logical_shape(), TensorLayout(dtype_value, PageConfig(layout_value), mem_cfg)),
-                tensor.get_workers(/*blocking=*/true));
-        }
+        return allocate_tensor_on_mesh(
+            TensorSpec(tensor.get_logical_shape(), TensorLayout(dtype_value, PageConfig(layout_value), mem_cfg)),
+            device.has_value() ? &device->get() : tensor.mesh_device());
     }
 };
 

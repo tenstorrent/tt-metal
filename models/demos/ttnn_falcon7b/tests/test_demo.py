@@ -2,9 +2,11 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from models.demos.ttnn_falcon7b.demo.demo import test_demo as demo
-import pytest
 import json
+
+import pytest
+
+from models.demos.ttnn_falcon7b.demo.demo import test_demo as demo
 
 
 @pytest.mark.parametrize(
