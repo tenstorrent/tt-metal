@@ -343,8 +343,12 @@ void ElfFile::Impl::LoadImage() {
                 uint32_t limit = words[ix];
                 auto const &seg = GetSegments()[ix];
                 if (seg.membytes > limit) {
-                    TT_THROW("{}: phdr[{}] [{},+{}) overflows limit of {} bytes", path_, ix,
-                             seg.address, seg.membytes, limit);
+                    TT_THROW("{}: phdr[{}] [{},+{}) overflows limit of {} bytes, {}",
+                             path_, ix, seg.address, seg.membytes, limit,
+                             ix == 0 ? "reduce the code size" :
+                             ix == 1 ? "reduce the number of statically allocated variables (e.g, globals)" :
+                             "examine executable for segment details"
+                        );
                 }
             }
         }
