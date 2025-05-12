@@ -362,8 +362,8 @@ def run_multi_core_matmul_1d(
             dtype=output_dtype,
         )
     signpost("stop")
-    breakpoint()
     tt_out = ttnn.to_torch(output_t)
+    # breakpoint()
     pt_out = in0 @ in1
 
     if activation:
@@ -941,7 +941,7 @@ def test_matmul_1d_ring_llama_perf(
             1,
             32,
             2048,
-            16 * 1024,
+            7 * 1024,
             ttnn.bfloat8_b,
             ttnn.bfloat8_b,
             ttnn.bfloat16,
