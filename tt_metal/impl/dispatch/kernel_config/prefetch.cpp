@@ -13,7 +13,7 @@
 #include <vector>
 
 #include "assert.hpp"
-#include "command_queue_common.hpp"
+#include "dispatch/command_queue_common.hpp"
 #include "device.hpp"
 #include "dispatch.hpp"
 #include "dispatch/kernel_config/fd_kernel.hpp"
@@ -26,6 +26,7 @@
 #include "impl/context/metal_context.hpp"
 #include <umd/device/tt_core_coordinates.h>
 #include <umd/device/types/xy_pair.h>
+#include "dispatch/system_memory_manager.hpp"
 #include "utils.hpp"
 
 using namespace tt::tt_metal;

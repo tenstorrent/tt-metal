@@ -16,7 +16,7 @@
 #include "buffer.hpp"
 #include "core_coord.hpp"
 #include <tt_stl/span.hpp>
-#include "system_memory_manager.hpp"
+#include "dispatch/system_memory_manager.hpp"
 
 enum class CoreType;
 namespace tt {
@@ -62,7 +62,7 @@ struct ReadBufferDescriptor {
 };
 
 using CompletionReaderVariant =
-    std::variant<std::monostate, ReadBufferDescriptor, ReadEventDescriptor, ReadL1DataDescriptor>;
+    std::variant<std::monostate, ReadBufferDescriptor, ReadEventDescriptor, ReadCoreDataDescriptor>;
 
 // Contains helper functions to interface with buffers on device
 namespace buffer_dispatch {

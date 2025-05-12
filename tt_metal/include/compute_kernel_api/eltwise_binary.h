@@ -56,8 +56,7 @@ ALWI void binary_op_init_common(uint32_t icb0, uint32_t icb1, uint32_t ocb) {
 // clang-format on
 template <bool full_init, EltwiseBinaryType eltwise_binary_type>
 ALWI void binary_tiles_init(uint32_t icb0, uint32_t icb1, bool acc_to_dest = false) {
-    MATH((llk_math_eltwise_binary_init_with_operands<eltwise_binary_type, NONE, MATH_FIDELITY>(
-        icb0, icb1, 0 /*transpose*/, acc_to_dest)));
+    MATH((llk_math_eltwise_binary_init<eltwise_binary_type, NONE, MATH_FIDELITY>(0 /*transpose*/, acc_to_dest)));
 
     if constexpr (full_init) {
         UNPACK((llk_unpack_AB_init<BroadcastType::NONE>(icb0, icb1, 0 /*transpose*/, acc_to_dest)));

@@ -2,17 +2,16 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import copy
+
 import torch
-import ttnn
 from loguru import logger
 
-import copy
-from models.demos.tg.llama3_70b.tt.llama_model_galaxy import TtLlamaModel_galaxy as TtLlamaModel
+import ttnn
 from models.demos.t3000.llama2_70b.tt.llama_common import BASE_URL, ConcatMesh2DToTensor
-from models.demos.tg.llama3_70b.tt.model_config import (
-    get_model_config,
-)
 from models.demos.tg.llama3_70b.tt.llama_common import upper_pad_sequence_length
+from models.demos.tg.llama3_70b.tt.llama_model_galaxy import TtLlamaModel_galaxy as TtLlamaModel
+from models.demos.tg.llama3_70b.tt.model_config import get_model_config
 
 
 class TtLlamaModelForGeneration:

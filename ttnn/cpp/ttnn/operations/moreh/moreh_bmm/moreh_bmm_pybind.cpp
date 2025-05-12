@@ -5,7 +5,7 @@
 #include "moreh_bmm_pybind.hpp"
 
 #include "moreh_bmm.hpp"
-#include "pybind11/decorators.hpp"
+#include "ttnn-pybind/decorators.hpp"
 
 namespace ttnn::operations::moreh::moreh_bmm {
 void bind_moreh_bmm_operation(py::module& module) {

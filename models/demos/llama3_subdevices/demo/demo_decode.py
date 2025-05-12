@@ -33,7 +33,7 @@ TSU_PERF_DROP_LIMIT_COUNT = 20
 
 # Constants for TSU thresholds based on the number of layers
 TSU_THRESHOLDS = {
-    "4U": {1: {"min": 480, "max": 500}, 10: {"min": 195, "max": 215}, 80: {"min": 47, "max": 51}},
+    "4U": {1: {"min": 480, "max": 505}, 10: {"min": 195, "max": 215}, 80: {"min": 47, "max": 51}},
     # TODO: Update thresholds for 6U 10L and 80L based on actual perf when 6U are available and added into CI
     "6U": {1: {"min": 545, "max": 570}, 10: {"min": 230, "max": 250}, 80: {"min": 49, "max": 53}},
 }
@@ -484,7 +484,7 @@ def run_llama3_demo(
             #         text = text.replace("\n", " ")
             #         logger.info("[User {}] {}".format(user, text))
 
-        if not is_ci_env or iteration % 1000 == 0:
+        if not is_ci_env or iteration < 200 or iteration % 1000 == 0:
             # Always print perf at every iteration if not in CI
             logger.info(
                 f"Iteration {iteration}: {1000*iteration_time:.0f}ms @ {tokens_per_second_per_user:.1f} tok/s/user ({batch_size*tokens_per_second_per_user:.1f} tok/s throughput)"

@@ -92,6 +92,13 @@ namespace tt {
 ClusterType Cluster::get_cluster_type_from_cluster_desc(
     const llrt::RunTimeOptions& rtoptions, const tt_ClusterDescriptor* cluster_desc) {
     if (rtoptions.get_simulator_enabled()) {
+        tt_SimulationDeviceInit init(rtoptions.get_simulator_path());
+        auto arch = init.get_arch_name();
+        if (arch == tt::ARCH::WORMHOLE_B0) {
+            return ClusterType::SIMULATOR_WORMHOLE_B0;
+        } else if (arch == tt::ARCH::BLACKHOLE) {
+            return ClusterType::SIMULATOR_BLACKHOLE;
+        }
         return ClusterType::INVALID;
     }
     if (cluster_desc == nullptr) {
@@ -202,15 +209,14 @@ void Cluster::generate_cluster_descriptor() {
     // Cluster descriptor yaml not available for Blackhole bring up
     if (this->target_type_ == TargetDevice::Simulator) {
         // Passing simulator reported physical devices as logical devices.
-        this->mock_cluster_desc_ptr_ =
-            tt_ClusterDescriptor::create_mock_cluster(tt_SimulationDevice::detect_available_device_ids(), this->arch_);
+        this->mock_cluster_desc_ptr_ = tt_ClusterDescriptor::create_mock_cluster({0}, this->arch_);
         this->cluster_desc_ = this->mock_cluster_desc_ptr_.get();
     } else {
         this->cluster_desc_ = this->driver_->get_cluster_description();
     }
     this->cluster_type_ = Cluster::get_cluster_type_from_cluster_desc(this->rtoptions_, this->cluster_desc_);
 
-    if (this->arch_ == tt::ARCH::BLACKHOLE) {
+    if (this->target_type_ != TargetDevice::Simulator && this->arch_ == tt::ARCH::BLACKHOLE) {
         TT_FATAL(
             this->cluster_desc_->get_noc_translation_table_en().at(0),
             "Running Metal on Blackhole requires FW >= 80.18.0.0");
@@ -258,14 +264,41 @@ void Cluster::generate_cluster_descriptor() {
     }
 }
 
+void Cluster::validate_harvesting_masks() const {
+    // Metal expects all chips to have same number of harvested cores for a given core type
+    std::optional<tt::umd::HarvestingMasks> harvesting_mask_tracker = std::nullopt;
+    for (const auto device_id : this->user_exposed_chip_ids()) {
+        tt::umd::HarvestingMasks masks = sdesc_per_chip_.at(device_id).harvesting_masks;
+        if (!harvesting_mask_tracker.has_value()) {
+            harvesting_mask_tracker = masks;
+        } else {
+            TT_FATAL(
+                std::popcount(masks.tensix_harvesting_mask) ==
+                    std::popcount(harvesting_mask_tracker->tensix_harvesting_mask),
+                "Number of harvested Tensix mismatch across devices");
+            TT_FATAL(
+                std::popcount(masks.dram_harvesting_mask) ==
+                    std::popcount(harvesting_mask_tracker->dram_harvesting_mask),
+                "Number of harvested Dram mismatch across devices");
+            TT_FATAL(
+                std::popcount(masks.eth_harvesting_mask) == std::popcount(harvesting_mask_tracker->eth_harvesting_mask),
+                "Number of harvested Eth mismatch across devices");
+            TT_FATAL(
+                std::popcount(masks.pcie_harvesting_mask) ==
+                    std::popcount(harvesting_mask_tracker->pcie_harvesting_mask),
+                "Number of harvested Pcie mismatch across devices");
+        }
+    }
+}
+
 void Cluster::initialize_device_drivers() {
     this->open_driver();
     this->generate_cluster_descriptor();
     this->get_metal_desc_from_tt_desc();
+    this->validate_harvesting_masks();
 
     for (const auto &[mmio_device_id, controlled_devices] : this->devices_grouped_by_assoc_mmio_device_) {
         this->assign_mem_channels_to_devices(mmio_device_id, controlled_devices);
-        auto masks = this->driver_->get_soc_descriptor(mmio_device_id).harvesting_masks;
     }
 
     tt_device_params default_params;
@@ -307,35 +340,23 @@ const std::unordered_map<CoreCoord, int32_t>& Cluster::get_virtual_routing_to_pr
 }
 
 void Cluster::open_driver(const bool &skip_driver_allocs) {
-    std::unique_ptr<tt_device> device_driver;
+    std::unique_ptr<tt::umd::Cluster> device_driver;
     if (this->target_type_ == TargetDevice::Silicon) {
-        const std::string sdesc_path = get_soc_description_file(this->arch_, this->target_type_);
-        // umd::Cluster::detect_available_device_ids only lists MMIO device ids, since we need remote chip ids
-        // generate the cluster desc and pull chip ids from there
-        auto temp_cluster_desc = tt::umd::Cluster::create_cluster_descriptor();
-        std::unordered_set<chip_id_t> all_chips = temp_cluster_desc->get_all_chips();
-        std::set<chip_id_t> all_chips_set(all_chips.begin(), all_chips.end());
         // This is the target/desired number of mem channels per arch/device.
         // Silicon driver will attempt to open this many hugepages as channels per mmio chip,
         // and assert if workload uses more than available.
-        uint32_t num_host_mem_ch_per_mmio_device = std::min(HOST_MEM_CHANNELS, (uint32_t)all_chips_set.size());
-        // This will remove harvested rows/cols from the soc descriptor
-        const bool perform_harvesting = true;
-        const bool clean_system_resources = true;
-        device_driver = std::make_unique<tt::umd::Cluster>(
-            sdesc_path,
-            all_chips_set,
-            num_host_mem_ch_per_mmio_device,
-            skip_driver_allocs,
-            clean_system_resources,
-            perform_harvesting);
-
-        // Adding this check is a workaround for current UMD bug that only uses this getter to populate private metadata
-        // that is later expected to be populated by unrelated APIs
-        // TT_FATAL(device_driver->get_target_mmio_device_ids().size() == 1, "Only one target mmio device id allowed.");
+        uint32_t num_devices = tt::umd::Cluster::create_cluster_descriptor()->get_all_chips().size();
+        uint32_t num_host_mem_ch_per_mmio_device = std::min(HOST_MEM_CHANNELS, num_devices);
+        device_driver = std::make_unique<tt::umd::Cluster>(tt::umd::ClusterOptions{
+            .num_host_mem_ch_per_mmio_device = num_host_mem_ch_per_mmio_device,
+            .sdesc_path = get_soc_description_file(this->arch_, this->target_type_),
+        });
     } else if (this->target_type_ == TargetDevice::Simulator) {
-        auto simulator_directory = rtoptions_.get_simulator_path();
-        device_driver = std::make_unique<tt_SimulationDevice>(simulator_directory);
+        device_driver = std::make_unique<tt::umd::Cluster>(tt::umd::ClusterOptions{
+            .chip_type = tt::umd::ChipType::SIMULATION,
+            .target_devices = {0},
+            .simulator_directory = rtoptions_.get_simulator_path(),
+        });
     }
 
     barrier_address_params barrier_params;
@@ -1141,6 +1162,9 @@ std::set<tt_fabric::chan_id_t> Cluster::get_fabric_ethernet_channels(chip_id_t c
     std::set<tt_fabric::chan_id_t> fabric_ethernet_channels;
     const auto& active_eth_cores = this->get_active_ethernet_cores(chip_id, false);
     for (const auto& eth_core : active_eth_cores) {
+        if (!this->is_ethernet_link_up(chip_id, eth_core)) {
+            continue;
+        }
         if (this->device_eth_routing_info_.at(chip_id).at(eth_core) == EthRouterMode::FABRIC_ROUTER) {
             fabric_ethernet_channels.insert(this->get_soc_desc(chip_id).logical_eth_core_to_chan_map.at(eth_core));
         }
@@ -1381,6 +1405,8 @@ void Cluster::initialize_control_plane() {
         case tt::ClusterType::P150: mesh_graph_descriptor = "p150_mesh_graph_descriptor.yaml"; break;
         case tt::ClusterType::P150_X2: mesh_graph_descriptor = "p150_x2_mesh_graph_descriptor.yaml"; break;
         case tt::ClusterType::P150_X4: mesh_graph_descriptor = "p150_x4_mesh_graph_descriptor.yaml"; break;
+        case tt::ClusterType::SIMULATOR_WORMHOLE_B0: mesh_graph_descriptor = "n150_mesh_graph_descriptor.yaml"; break;
+        case tt::ClusterType::SIMULATOR_BLACKHOLE: mesh_graph_descriptor = "p150_mesh_graph_descriptor.yaml"; break;
         default: TT_THROW("Unknown cluster type"); // TODO: we could expose this as a custom mesh graph option
     }
     const std::filesystem::path mesh_graph_desc_path = std::filesystem::path(rtoptions_.get_root_dir()) /

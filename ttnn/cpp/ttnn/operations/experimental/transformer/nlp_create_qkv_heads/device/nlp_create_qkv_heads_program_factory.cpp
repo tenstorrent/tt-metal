@@ -627,11 +627,6 @@ void NlpCreateHeadsDeviceOperation::Sharded::override_runtime_arguments(
     tensor_return_value_t& tensor_return_value) {
     auto src_buffer = tensor_args.input_tensor_q.buffer();
 
-    uint32_t src_kv_buffer_addr = 0;
-    if (cached_program.shared_variables.read_from_input_tensor_kv) {
-        src_kv_buffer_addr = tensor_args.input_tensor_kv.value().buffer()->address();
-    }
-
     auto dst_buffer_query = std::get<0>(tensor_return_value).buffer();
     auto dst_buffer_key = std::get<1>(tensor_return_value).buffer();
     auto dst_buffer_value = std::get<2>(tensor_return_value).buffer();

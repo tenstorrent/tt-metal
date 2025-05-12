@@ -33,7 +33,7 @@
 #include <tt-metalium/base_types.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/buffer_types.hpp>
-#include <tt-metalium/circular_buffer_types.hpp>
+#include <tt-metalium/circular_buffer_config.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/data_types.hpp>
 #include "hostdevcommon/common_values.hpp"
@@ -898,7 +898,7 @@ tt_metal::Program create_program_mcast_in0_in1(
             }
         }
     }
-    return std::move(program);
+    return program;
 }
 
 std::vector<bfloat16> select_columns(std::vector<bfloat16> data, int M, int K, int N) {

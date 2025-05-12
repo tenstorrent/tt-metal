@@ -6,19 +6,19 @@ from abc import abstractmethod
 from typing import Optional, Tuple
 
 import torch
-import ttnn
-from ttnn import ReplicateTensorToMesh, ShardTensorToMesh
+from tqdm import tqdm
 
+import ttnn
+from models.demos.falcon7b_common.tests.test_utils import (
+    create_prefill_attn_mask_for_sharded_softmax,
+    dump_device_profiler,
+    get_num_devices,
+    tt_from_torch,
+)
 from models.demos.falcon7b_common.tt.falcon_decoder import TtFalconDecoderLayer
 from models.demos.falcon7b_common.tt.model_utils import get_weights_cached, layernorm
 from models.utility_functions import nearest_32
-from models.demos.falcon7b_common.tests.test_utils import (
-    create_prefill_attn_mask_for_sharded_softmax,
-    tt_from_torch,
-    get_num_devices,
-    dump_device_profiler,
-)
-from tqdm import tqdm
+from ttnn import ReplicateTensorToMesh, ShardTensorToMesh
 
 
 class TtFalconModelShared(torch.nn.Module):

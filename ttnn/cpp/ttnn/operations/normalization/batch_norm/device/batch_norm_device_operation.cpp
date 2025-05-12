@@ -65,36 +65,36 @@ void BatchNormOperation::validate_on_program_cache_miss(
 
     TT_FATAL(input.get_layout() == Layout::TILE, "Input tensor must be must be tilized");
     TT_FATAL(
-        input.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED, "Input tensor must be interleaved");
+        input.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED, "Input tensor must be interleaved");
     TT_FATAL(
-        operation_attributes.memory_config.memory_layout == TensorMemoryLayout::INTERLEAVED,
+        operation_attributes.memory_config.memory_layout() == TensorMemoryLayout::INTERLEAVED,
         "Output tensor to eltwise binary must be interleaved");
 
     TT_FATAL(batch_mean.get_layout() == Layout::TILE, "batch_mean tensor must be tilized");
     TT_FATAL(
-        batch_mean.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED,
+        batch_mean.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
         "batch_mean tensor must be interleaved");
 
     TT_FATAL(batch_var.get_layout() == Layout::TILE, "batch_var tensor must be tilized");
     TT_FATAL(
-        batch_var.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED,
+        batch_var.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
         "batch_var tensor must be interleaved");
 
     if (weight.has_value()) {
         TT_FATAL(weight.value().get_layout() == Layout::TILE, "weight tensor must be tilized");
         TT_FATAL(
-            weight.value().memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED,
+            weight.value().memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
             "weight tensor must be interleaved");
     }
 
     if (bias.has_value()) {
         TT_FATAL(bias.value().get_layout() == Layout::TILE, "bias tensor must be tilized");
         TT_FATAL(
-            bias.value().memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED,
+            bias.value().memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
             "bias tensor must be interleaved");
     }
 
-    validate_tensors(operation_attributes, tensor_args);
+    BatchNormOperation::validate_on_program_cache_hit(operation_attributes, tensor_args);
 };
 
 void BatchNormOperation::validate_on_program_cache_hit(
@@ -123,6 +123,51 @@ BatchNormOperation::tensor_return_value_t BatchNormOperation::create_output_tens
     }
 
     return create_device_tensor(compute_output_specs(operation_attributes, tensor_args), tensor_args.input.device());
+}
+
+tt::stl::hash::hash_t BatchNormOperation::compute_program_hash(
+    const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
+    const auto& [input, batch_mean, batch_var, weight, bias, output] = tensor_args;
+
+    TT_ASSERT(
+        std::holds_alternative<DeviceStorage>(input.get_storage()),
+        "Unexpected type {}",
+        tt::stl::get_active_type_name_in_variant(input.get_storage()));
+
+    // For input tensor
+    auto base_tuple = std::make_tuple(
+        attributes, input.dtype(), std::get<tt::tt_metal::DeviceStorage>(input.storage()).memory_config());
+
+    // To extract (optional<DataType>, optional<MemoryConfig>) from optional tensors
+    auto get_optional_tensor_info = [](const std::optional<const Tensor>& tensor_opt)
+        -> std::tuple<std::optional<DataType>, std::optional<MemoryConfig>> {
+        if (!tensor_opt.has_value()) {
+            return std::make_tuple(std::nullopt, std::nullopt);
+        }
+
+        const auto& tensor = tensor_opt.value();
+        return std::make_tuple(
+            std::optional{tensor.dtype()},
+            std::optional{std::get<tt::tt_metal::DeviceStorage>(tensor.storage()).memory_config()});
+    };
+
+    auto args_tuple = std::tuple_cat(
+        base_tuple,
+        get_optional_tensor_info(batch_mean),
+        get_optional_tensor_info(batch_var),
+        get_optional_tensor_info(weight),
+        get_optional_tensor_info(bias));
+
+    // Apply the hash operation
+    return std::apply(
+        [](auto&&... args) {
+            return operation::hash_operation<BatchNormOperation>(std::forward<decltype(args)>(args)...);
+        },
+        std::move(args_tuple));
+}
+
+tt::stl::hash::hash_t BatchNormOperation::operation_attributes_t::to_hash() const {
+    return tt::stl::hash::hash_objects_with_default_seed(eps, memory_config, get_dtype());
 }
 
 std::tuple<BatchNormOperation::operation_attributes_t, BatchNormOperation::tensor_args_t> BatchNormOperation::invoke(

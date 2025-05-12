@@ -12,9 +12,12 @@ The current version is verified to work with the following models:
 - Qwen2.5-7B (N300)
 - Qwen2.5-72B (LoudBox / QuietBox)
 - DeepSeek R1 Distill Llama 3.3 70B (LoudBox / QuietBox and Galaxy)
+- [Mistral-7B-Instruct-v0.3](https://huggingface.co/mistralai/Mistral-7B-Instruct-v0.3)
 
 ## Dependencies
-TT-Transformers has some additional python dependencies. Install them from:
+
+1. Install [TT-Metalium and TTNN](../../INSTALLING.md).
+2. Install additional python dependencies:
 
 ```
 pip install -r models/tt_transformers/requirements.txt

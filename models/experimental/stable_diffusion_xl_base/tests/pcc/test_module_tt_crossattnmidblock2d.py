@@ -1,11 +1,13 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
+import gc
+from loguru import logger
 import torch
 import pytest
 import ttnn
 from models.experimental.stable_diffusion_xl_base.tt.tt_crossattnmidblock2d import TtUNetMidBlock2DCrossAttn
-from diffusers import DiffusionPipeline
+from diffusers import UNet2DConditionModel
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.utility_functions import torch_random
 
@@ -16,19 +18,40 @@ from models.utility_functions import torch_random
         ((1, 1280, 32, 32), (1, 1280), (1, 77, 2048), 1280, 20, 1280),
     ],
 )
+@pytest.mark.parametrize("transformer_weights_dtype", [ttnn.bfloat16])
+@pytest.mark.parametrize("conv_weights_dtype", [ttnn.bfloat16])
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 def test_crossattnmid(
-    device, input_shape, temb_shape, encoder_shape, query_dim, num_attn_heads, out_dim, use_program_cache, reset_seeds
+    device,
+    input_shape,
+    temb_shape,
+    encoder_shape,
+    query_dim,
+    num_attn_heads,
+    out_dim,
+    use_program_cache,
+    reset_seeds,
+    transformer_weights_dtype,
+    conv_weights_dtype,
 ):
-    pipe = DiffusionPipeline.from_pretrained(
-        "stabilityai/stable-diffusion-xl-base-1.0", torch_dtype=torch.float32, use_safetensors=True, variant="fp16"
+    unet = UNet2DConditionModel.from_pretrained(
+        "stabilityai/stable-diffusion-xl-base-1.0", torch_dtype=torch.float32, use_safetensors=True, subfolder="unet"
     )
-    unet = pipe.unet
+    # unet = pipe.unet
     unet.eval()
     state_dict = unet.state_dict()
 
     torch_crosattn = unet.mid_block
-    tt_crosattn = TtUNetMidBlock2DCrossAttn(device, state_dict, f"mid_block", query_dim, num_attn_heads, out_dim)
+    tt_crosattn = TtUNetMidBlock2DCrossAttn(
+        device,
+        state_dict,
+        f"mid_block",
+        query_dim,
+        num_attn_heads,
+        out_dim,
+        transformer_weights_dtype=transformer_weights_dtype,
+        conv_weights_dtype=conv_weights_dtype,
+    )
     torch_input_tensor = torch_random(input_shape, -0.1, 0.1, dtype=torch.float32)
     torch_temb_tensor = torch_random(temb_shape, -0.1, 0.1, dtype=torch.float32)
     torch_encoder_tensor = torch_random(encoder_shape, -0.1, 0.1, dtype=torch.float32)
@@ -70,4 +93,8 @@ def test_crossattnmid(
     output_tensor = output_tensor.reshape(B, output_shape[1], output_shape[2], output_shape[0])
     output_tensor = torch.permute(output_tensor, (0, 3, 1, 2))
 
-    assert_with_pcc(torch_output_tensor, output_tensor, 0.973)
+    del unet, tt_crosattn
+    gc.collect()
+
+    _, pcc_message = assert_with_pcc(torch_output_tensor, output_tensor, 0.976)
+    logger.info(f"PCC is: {pcc_message}")

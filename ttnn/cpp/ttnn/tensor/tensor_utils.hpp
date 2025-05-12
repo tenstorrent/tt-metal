@@ -56,12 +56,6 @@ void apply(const Tensor& tensor, const std::function<void(const Tensor&)>& calla
 [[deprecated]] Tensor get_shard_for_device(
     const Tensor& tensor, IDevice* target_device, std::optional<int> buffer_index = std::nullopt);
 
-void insert_buffer_and_shape_for_device(
-    IDevice* target_device,
-    const Tensor& shard,
-    Tensor& tensor_to_modify,
-    std::optional<int> buffer_index = std::nullopt);
-
 template <class T>
 uint32_t get_batch_size(const T& shape) {
     uint32_t result = 1;

@@ -324,12 +324,7 @@ inline void barrier_remote_cb_interface_setup(uint8_t noc_index, uint32_t end_cb
 }
 
 int main() {
-    // Workaround for tt-metal#16439, making sure gathering multiple instructions issued to Tensix is disabled
-    // Brisc does not issue Tensix instructions but to be consistent for all riscs around Tensix we disable it
-#ifdef ARCH_BLACKHOLE
-    disable_gathering();
-#endif
-    configure_l1_data_cache();
+    configure_csr();
     DIRTY_STACK_MEMORY();
     WAYPOINT("I");
 

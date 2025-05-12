@@ -21,6 +21,7 @@
 #include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/tensor/tensor_impl.hpp"
 #include "ttnn/tensor/tensor_impl_wrapper.hpp"
+#include "ttnn/tensor/host_buffer/host_buffer.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/tensor/types.hpp"
 #include <tt-metalium/constants.hpp>
@@ -40,17 +41,13 @@ namespace {
 
 template <typename T>
 Tensor create_owned_tensor_from_row_major_data(
-    std::vector<T>&& data, const TensorSpec& spec, std::optional<ttnn::AnyDevice> device, ttnn::QueueId cq_id) {
+    std::vector<T>&& data, const TensorSpec& spec, distributed::MeshDevice* device, ttnn::QueueId cq_id) {
     auto physical_data = tensor_impl::encode_tensor_data(std::move(data), spec);
 
-    Tensor output(HostStorage(host_buffer::create(std::move(physical_data))), spec);
+    Tensor output(HostBuffer(std::move(physical_data)), spec);
 
-    if (device.has_value()) {
-        if (auto mesh_device = device->get_mesh_device()) {
-            output = output.to_device(mesh_device, spec.memory_config(), cq_id);
-        } else {
-            output = output.to_device(device->get_devices(), spec.memory_config(), cq_id);
-        }
+    if (device != nullptr) {
+        output = output.to_device(device, spec.memory_config(), cq_id);
     }
 
     return output;
@@ -59,7 +56,11 @@ Tensor create_owned_tensor_from_row_major_data(
 }  // namespace
 
 Tensor::Tensor(
-    Storage storage,
+    HostBuffer buffer, const ttnn::Shape& shape, DataType dtype, Layout layout, const std::optional<Tile>& tile) :
+    Tensor(std::move(buffer), /* logical_shape */ shape, /* padded_shape */ shape, dtype, layout, tile) {}
+
+Tensor::Tensor(
+    HostBuffer buffer,
     const ttnn::Shape& logical_shape,
     const ttnn::Shape& padded_shape,
     DataType dtype,
@@ -74,24 +75,25 @@ Tensor::Tensor(
             tile->get_tile_shape());
     }
 
-    const auto memory_config = std::visit(
-        tt::stl::overloaded{
-            [](const DeviceStorage& s) { return s.memory_config(); },
-            []<typename Other>(const Other&) { return MemoryConfig{}; }},
-        storage);
-
     init(
-        std::move(storage),
+        Storage(std::move(buffer)),
         TensorSpec(
             logical_shape,
             TensorLayout::fromPaddedShape(
-                dtype, PageConfig(layout, tile), memory_config, logical_shape, padded_shape)));
+                dtype, PageConfig(layout, tile), MemoryConfig{}, logical_shape, padded_shape)),
+        ReplicateTensor{});
 }
 
-Tensor::Tensor(Storage storage, TensorSpec tensor_spec) { init(std::move(storage), std::move(tensor_spec)); }
+Tensor::Tensor(HostBuffer storage, TensorSpec tensor_spec) :
+    Tensor(Storage(std::move(storage)), std::move(tensor_spec), ReplicateTensor{}) {}
 
-void Tensor::init(Storage storage, TensorSpec tensor_spec) {
-    tensor_attributes = std::make_shared<TensorAttributes>(std::move(storage), std::move(tensor_spec));
+Tensor::Tensor(Storage storage, TensorSpec tensor_spec, DistributedTensorConfig distributed_tensor_config) {
+    init(Storage(std::move(storage)), std::move(tensor_spec), std::move(distributed_tensor_config));
+}
+
+void Tensor::init(Storage storage, TensorSpec tensor_spec, DistributedTensorConfig distributed_tensor_config) {
+    tensor_attributes = std::make_shared<TensorAttributes>(
+        std::move(storage), std::move(tensor_spec), std::move(distributed_tensor_config));
 
     ZoneScoped;
     std::visit(
@@ -107,47 +109,23 @@ void Tensor::init(Storage storage, TensorSpec tensor_spec) {
         tensor_attributes->get_storage());
 }
 
-Tensor::Tensor(distributed::MeshDevice* mesh_device, TensorSpec spec) :
-    tensor_attributes(std::make_shared<TensorAttributes>(DeviceStorage(), std::move(spec))),
-    workers({mesh_device}),
-    mesh_device_(mesh_device) {
-    TT_FATAL(mesh_device_ != nullptr, "Mesh device is nullptr");
-}
-
-Tensor::Tensor(const std::vector<IDevice*>& workers, TensorSpec spec) :
-    tensor_attributes(std::make_shared<TensorAttributes>(
-        workers.empty() ? Storage(HostStorage()) : DeviceStorage(), std::move(spec))),
-    workers(workers) {
-    TT_FATAL(workers.size() <= 1, "Only single device is supported.");
-}
-
-Tensor::Tensor(
-    uint32_t num_buffers, TensorSpec spec, std::optional<DistributedTensorConfig> distributed_tensor_config) :
-    tensor_attributes(std::make_shared<TensorAttributes>(
-        [&]() {
-            if (num_buffers <= 1) {
-                return Storage(HostStorage());
-            }
-            MultiDeviceHostStorage storage;
-            if (distributed_tensor_config.has_value()) {
-                storage.strategy = distributed_tensor_config.value();
-            }
-            storage.buffers = std::vector<HostBuffer>(num_buffers, HostBuffer());
-            storage.specs = std::vector<ttnn::TensorSpec>(
-                num_buffers,
-                TensorSpec(Shape{}, TensorLayout(DataType::FLOAT32, PageConfig(Layout::ROW_MAJOR), MemoryConfig{})));
-            return Storage(std::move(storage));
-        }(),
-        std::move(spec))) {}
-
 Tensor& Tensor::operator=(const Tensor& other) {
-    // Don't self-assign
     this->tensor_id = other.tensor_id;
     if (this->tensor_attributes != other.tensor_attributes) {
         this->workers = other.workers;
         this->tensor_attributes = other.tensor_attributes;
     }
     this->mesh_device_ = other.mesh_device_;
+    return *this;
+}
+
+Tensor& Tensor::operator=(Tensor&& other) noexcept {
+    this->tensor_id = std::move(other.tensor_id);
+    if (this->tensor_attributes != other.tensor_attributes) {
+        this->workers = std::move(other.workers);
+        this->tensor_attributes = std::move(other.tensor_attributes);
+    }
+    this->mesh_device_ = std::move(other.mesh_device_);
     return *this;
 }
 
@@ -158,57 +136,42 @@ Tensor::Tensor(const Tensor& other) :
 
 Tensor::~Tensor() {
     ZoneScoped;
-    this->deallocate_impl(/*force=*/false, /*deallocation_through_destructor=*/true);
-    tensor_attributes.reset();
+    this->deallocate_impl(/*force=*/false);
 }
 
-Tensor::Tensor(
-    Storage storage, const ttnn::Shape& shape, DataType dtype, Layout layout, const std::optional<Tile>& tile) :
-    Tensor(std::move(storage), /* logical_shape */ shape, /* padded_shape */ shape, dtype, layout, tile) {}
+void Tensor::deallocate(bool force) { deallocate_impl(force); }
 
-void Tensor::deallocate(bool force) { deallocate_impl(force, /*deallocation_through_destructor=*/false); }
-
-void Tensor::deallocate_impl(bool force, bool deallocation_through_destructor) {
-    ZoneScopedN("TensorDeallocate");
-    // GraphTracker::instance().track_function_start("Tensor::deallocate", *this, force);
-    // Check if the attributes didn't get moved to another tensor.
-    // If not, we can deallocate this tensor.
-    if (tensor_attributes.use_count() == 0) {
-        return;
-    }
-
-    auto get_tensor_ref_count = [](const Tensor& tensor) {
-        // If owned by the main thread, deallocate this tensor only from the main thread. If owned by worker thread,
-        // allow deallocation in worker and use shared_ptr ref count, since this is a thread_local tensor
-        return tensor.tensor_attributes.use_count();
+void Tensor::deallocate_impl(bool force) {
+    auto can_deallocate = []<typename T>(const std::shared_ptr<T>& shared_resource, bool force) {
+        // It is safe to deallocate a shared resource, if either it is not shared or `force` is set.
+        return shared_resource.use_count() == 1 ||  //
+               (shared_resource.use_count() > 1 && force);
     };
 
-    std::visit(
-        tt::stl::overloaded{
-            [this](HostStorage& storage) {
-                if (this->tensor_attributes.use_count() == 1) {
-                    storage.buffer.deallocate();
-                }
-            },
-            [this](MultiDeviceHostStorage& storage) {
-                if (this->tensor_attributes.use_count() == 1) {
-                    for (int i = 0; i < storage.num_buffers(); i++) {
-                        storage.get_buffer(i).deallocate();
+    ZoneScopedN("TensorDeallocate");
+    // GraphTracker::instance().track_function_start("Tensor::deallocate", *this, force);
+    if (can_deallocate(tensor_attributes, force)) {
+        std::visit(
+            // TODO: #21604 - Host-side buffers do not support "forced" deallocation.
+            // The underlying data can still be shared across tensors.
+            tt::stl::overloaded{
+                [this](HostStorage& host_storage) { host_storage.buffer.deallocate(); },
+                [this](MultiDeviceHostStorage& host_storage) {
+                    for (auto& host_buffer : host_storage.buffers) {
+                        host_buffer.deallocate();
                     }
-                }
-            },
-            [force, this](DeviceStorage& storage) {
-                if ((force or this->tensor_attributes.use_count() == 1)) {
-                    if (storage.mesh_buffer and (force or storage.mesh_buffer.use_count() == 1)) {
+                },
+                [this, force, &can_deallocate](DeviceStorage& storage) {
+                    if (can_deallocate(storage.mesh_buffer, force)) {
                         storage.mesh_buffer->deallocate();
-                    } else if (storage.buffer and (force or storage.buffer.use_count() == 1)) {
+                    } else if (can_deallocate(storage.buffer, force)) {
                         DeallocateBuffer(*(storage.buffer));
                     }
                     storage.mesh_buffer.reset();
                     storage.buffer.reset();
-                }
-            }},
-        this->tensor_attributes->get_storage());
+                }},
+            this->tensor_attributes->get_storage());
+    }
     // GraphTracker::instance().track_function_end();
 }
 
@@ -240,7 +203,6 @@ std::vector<IDevice*> Tensor::get_workers(bool blocking) const {
     return workers;
 }
 
-// Getters - Spin until tensor is populated before querying tensor metadata
 DataType Tensor::get_dtype() const { return dtype(); }
 Layout Tensor::get_layout() const { return layout(); }
 
@@ -254,12 +216,13 @@ const Storage& Tensor::get_storage() const { return this->tensor_attributes->get
 
 Storage& Tensor::get_storage() { return this->tensor_attributes->get_storage(); }
 
+const DistributedTensorConfig& Tensor::get_distributed_tensor_config() const {
+    return this->tensor_attributes->get_distributed_tensor_config();
+}
+
 template <>
 Tensor Tensor::from_span<float>(
-    tt::stl::Span<const float> buffer,
-    const TensorSpec& spec,
-    std::optional<ttnn::AnyDevice> device,
-    ttnn::QueueId cq_id) {
+    tt::stl::Span<const float> buffer, const TensorSpec& spec, distributed::MeshDevice* device, ttnn::QueueId cq_id) {
     size_t volume = spec.logical_shape().volume();
     TT_FATAL(
         buffer.size() == volume, "Current buffer size is {} different from shape volume {}", buffer.size(), volume);
@@ -287,9 +250,9 @@ Tensor Tensor::from_span<float>(
                     ? pack_fp32_vec_as_bfp8_tiles(physical_data, /*row_major_input=*/false, /*is_exp_a=*/false, tile)
                     : pack_fp32_vec_as_bfp4_tiles(physical_data, /*row_major_input=*/false, /*is_exp_a=*/false, tile);
 
-            Tensor tensor(HostStorage(host_buffer::create(std::move(packed_block_floats))), spec);
-            if (device.has_value()) {
-                tensor = tensor.to_device(device->get_devices(), spec.memory_config(), cq_id);
+            Tensor tensor(HostBuffer(std::move(packed_block_floats)), spec);
+            if (device != nullptr) {
+                tensor = tensor.to_device(device, spec.memory_config(), cq_id);
             }
             return tensor;
         }
@@ -301,7 +264,7 @@ Tensor Tensor::from_span<float>(
 
 template <typename T>
 Tensor Tensor::from_span(
-    tt::stl::Span<const T> buffer, const TensorSpec& spec, std::optional<ttnn::AnyDevice> device, ttnn::QueueId cq_id) {
+    tt::stl::Span<const T> buffer, const TensorSpec& spec, distributed::MeshDevice* device, ttnn::QueueId cq_id) {
     size_t volume = spec.logical_shape().volume();
     TT_FATAL(
         buffer.size() == volume, "Current buffer size is {} different from shape volume {}", buffer.size(), volume);
@@ -324,12 +287,12 @@ Tensor Tensor::from_borrowed_data(
     TT_FATAL(
         buffer.size() == volume, "Current buffer size is {} different from shape volume {}", buffer.size(), volume);
     HostBuffer data_buffer(buffer, MemoryPin(on_creation_callback, on_destruction_callback));
-    return Tensor(HostStorage(std::move(data_buffer)), shape, convert_to_data_type<T>(), Layout::ROW_MAJOR, tile);
+    return Tensor(std::move(data_buffer), shape, convert_to_data_type<T>(), Layout::ROW_MAJOR, tile);
 }
 
 template <>
 Tensor Tensor::from_vector<float>(
-    std::vector<float>&& buffer, const TensorSpec& spec, std::optional<ttnn::AnyDevice> device, ttnn::QueueId cq_id) {
+    std::vector<float>&& buffer, const TensorSpec& spec, distributed::MeshDevice* device, ttnn::QueueId cq_id) {
     size_t volume = spec.logical_shape().volume();
     TT_FATAL(
         buffer.size() == volume, "Current buffer size is {} different from shape volume {}", buffer.size(), volume);
@@ -343,7 +306,7 @@ Tensor Tensor::from_vector<float>(
 
 template <typename T>
 Tensor Tensor::from_vector(
-    std::vector<T>&& buffer, const TensorSpec& spec, std::optional<ttnn::AnyDevice> device, ttnn::QueueId cq_id) {
+    std::vector<T>&& buffer, const TensorSpec& spec, distributed::MeshDevice* device, ttnn::QueueId cq_id) {
     size_t volume = spec.logical_shape().volume();
     TT_FATAL(
         buffer.size() == volume, "Current buffer size is {} different from shape volume {}", buffer.size(), volume);
@@ -408,30 +371,15 @@ std::vector<T> Tensor::to_vector(ttnn::QueueId cq_id) const {
 
 // Instantiate explicitly for the supported types.
 template Tensor Tensor::from_span<bfloat16>(
-    tt::stl::Span<const bfloat16> buffer,
-    const TensorSpec& spec,
-    std::optional<ttnn::AnyDevice> device,
-    ttnn::QueueId cq_id);
+    tt::stl::Span<const bfloat16> buffer, const TensorSpec& spec, distributed::MeshDevice* device, ttnn::QueueId cq_id);
 template Tensor Tensor::from_span<int32_t>(
-    tt::stl::Span<const int32_t> buffer,
-    const TensorSpec& spec,
-    std::optional<ttnn::AnyDevice> device,
-    ttnn::QueueId cq_id);
+    tt::stl::Span<const int32_t> buffer, const TensorSpec& spec, distributed::MeshDevice* device, ttnn::QueueId cq_id);
 template Tensor Tensor::from_span<uint8_t>(
-    tt::stl::Span<const uint8_t> buffer,
-    const TensorSpec& spec,
-    std::optional<ttnn::AnyDevice> device,
-    ttnn::QueueId cq_id);
+    tt::stl::Span<const uint8_t> buffer, const TensorSpec& spec, distributed::MeshDevice* device, ttnn::QueueId cq_id);
 template Tensor Tensor::from_span<uint16_t>(
-    tt::stl::Span<const uint16_t> buffer,
-    const TensorSpec& spec,
-    std::optional<ttnn::AnyDevice> device,
-    ttnn::QueueId cq_id);
+    tt::stl::Span<const uint16_t> buffer, const TensorSpec& spec, distributed::MeshDevice* device, ttnn::QueueId cq_id);
 template Tensor Tensor::from_span<uint32_t>(
-    tt::stl::Span<const uint32_t> buffer,
-    const TensorSpec& spec,
-    std::optional<ttnn::AnyDevice> device,
-    ttnn::QueueId cq_id);
+    tt::stl::Span<const uint32_t> buffer, const TensorSpec& spec, distributed::MeshDevice* device, ttnn::QueueId cq_id);
 template Tensor Tensor::from_borrowed_data<float>(
     tt::stl::Span<float> buffer,
     const ttnn::Shape& shape,
@@ -469,15 +417,15 @@ template Tensor Tensor::from_borrowed_data<uint32_t>(
     const std::function<void()>& on_destruction_callback,
     const std::optional<Tile>& tile);
 template Tensor Tensor::from_vector<bfloat16>(
-    std::vector<bfloat16>&& buffer, const TensorSpec& spec, std::optional<ttnn::AnyDevice> device, ttnn::QueueId cq_id);
+    std::vector<bfloat16>&& buffer, const TensorSpec& spec, distributed::MeshDevice* device, ttnn::QueueId cq_id);
 template Tensor Tensor::from_vector<int32_t>(
-    std::vector<int32_t>&& buffer, const TensorSpec& spec, std::optional<ttnn::AnyDevice> device, ttnn::QueueId cq_id);
+    std::vector<int32_t>&& buffer, const TensorSpec& spec, distributed::MeshDevice* device, ttnn::QueueId cq_id);
 template Tensor Tensor::from_vector<uint8_t>(
-    std::vector<uint8_t>&& buffer, const TensorSpec& spec, std::optional<ttnn::AnyDevice> device, ttnn::QueueId cq_id);
+    std::vector<uint8_t>&& buffer, const TensorSpec& spec, distributed::MeshDevice* device, ttnn::QueueId cq_id);
 template Tensor Tensor::from_vector<uint16_t>(
-    std::vector<uint16_t>&& buffer, const TensorSpec& spec, std::optional<ttnn::AnyDevice> device, ttnn::QueueId cq_id);
+    std::vector<uint16_t>&& buffer, const TensorSpec& spec, distributed::MeshDevice* device, ttnn::QueueId cq_id);
 template Tensor Tensor::from_vector<uint32_t>(
-    std::vector<uint32_t>&& buffer, const TensorSpec& spec, std::optional<ttnn::AnyDevice> device, ttnn::QueueId cq_id);
+    std::vector<uint32_t>&& buffer, const TensorSpec& spec, distributed::MeshDevice* device, ttnn::QueueId cq_id);
 
 template std::vector<bfloat16> Tensor::to_vector<bfloat16>(ttnn::QueueId cq_id) const;
 template std::vector<int32_t> Tensor::to_vector<int32_t>(ttnn::QueueId cq_id) const;
@@ -496,21 +444,7 @@ Tensor Tensor::to_device(distributed::MeshDevice* mesh_device, const MemoryConfi
     return tensor_ops::tensor_to_device(*this, mesh_device, mem_config, cq_id);
 }
 
-Tensor Tensor::to_device(const std::vector<IDevice*>& workers, const MemoryConfig& mem_config, QueueId cq_id) const {
-    if (workers.size() == 1) {
-        if (auto mesh_device = dynamic_cast<distributed::MeshDevice*>(workers[0])) {
-            return to_device(mesh_device, mem_config, cq_id);
-        }
-    }
-    return tensor_ops::tensor_to_device(*this, workers, mem_config, cq_id);
-}
-
-Tensor Tensor::cpu(bool blocking, QueueId cq_id) const {
-    if (this->mesh_device_.has_value()) {
-        return tensor_ops::tensor_cpu(*this, this->mesh_device_.value(), blocking, cq_id);
-    }
-    return tensor_ops::tensor_cpu(*this, blocking, cq_id);
-}
+Tensor Tensor::cpu(bool blocking, QueueId cq_id) const { return tensor_ops::tensor_cpu(*this, blocking, cq_id); }
 
 Tensor Tensor::extract_shard(const CoreCoord& core) const {
     ZoneScoped;
@@ -568,22 +502,6 @@ bool Tensor::is_allocated() const {
     return output;
 }
 
-std::vector<uint32_t> Tensor::host_page_ordering() {
-    const auto& buffer_page_mapping = *this->buffer()->get_buffer_page_mapping();
-    auto cores = buffer_page_mapping.all_cores_;
-    auto shard_num_pages = buffer()->shard_spec().num_pages();
-    auto num_pages = cores.size() * shard_num_pages;
-
-    std::vector<uint32_t> ret_vec;
-    ret_vec.reserve(num_pages);
-    for (int page_id = 0; page_id < num_pages; page_id++) {
-        if (buffer_page_mapping.dev_page_to_host_page_mapping_[page_id].has_value()) {
-            ret_vec.push_back(buffer_page_mapping.dev_page_to_host_page_mapping_[page_id].value());
-        }
-    }
-    return ret_vec;
-}
-
 StorageType Tensor::storage_type() const {
     return std::visit(
         tt::stl::overloaded{
@@ -620,7 +538,7 @@ Tensor create_device_tensor(const TensorSpec& tensor_spec, IDevice* device) {
         output = allocate_tensor_on_mesh(tensor_spec, mesh_device);
     } else {
         auto device_buffer = tensor_impl::allocate_buffer_on_device(device, tensor_spec);
-        output = Tensor(DeviceStorage{device_buffer}, tensor_spec);
+        output = Tensor(DeviceStorage{device_buffer}, tensor_spec, ReplicateTensor{});
     }
     output = tt::tt_metal::set_tensor_id(output);
 
@@ -770,20 +688,6 @@ void memcpy(Tensor& dst, const Tensor& src, const std::optional<BufferRegion>& r
     }
 }
 
-Tensor allocate_tensor_on_devices(const TensorSpec& tensor_spec, const std::vector<IDevice*>& devices) {
-    Tensor device_tensor = Tensor(devices, tensor_spec);
-
-    const auto& workers_in_use = device_tensor.get_workers();
-    uint32_t num_workers = workers_in_use.size();
-
-    for (int worker_index = 0; worker_index < num_workers; ++worker_index) {
-        auto& worker = devices[worker_index];
-        auto shard = create_device_tensor(tensor_spec, worker);
-        insert_buffer_and_shape_for_device(worker, shard, device_tensor, worker_index);
-    }
-    return device_tensor;
-}
-
 Tensor allocate_tensor_on_mesh(const TensorSpec& tensor_spec, distributed::MeshDevice* mesh_device) {
     // Allocate a mesh buffer synchronously.
     auto mesh_buffer = tensor_impl::allocate_mesh_buffer_on_device(mesh_device, tensor_spec);
@@ -793,7 +697,7 @@ Tensor allocate_tensor_on_mesh(const TensorSpec& tensor_spec, distributed::MeshD
         specs.push_back(std::make_pair(coord, tensor_spec));
     }
     DeviceStorage device_storage(std::move(mesh_buffer), ReplicateTensor(), std::move(specs));
-    return Tensor(std::move(device_storage), tensor_spec);
+    return Tensor(std::move(device_storage), tensor_spec, ReplicateTensor{});
 }
 
 void write_tensor(const Tensor& host_tensor, Tensor device_tensor, QueueId cq_id) {
@@ -867,5 +771,58 @@ Tensor set_tensor_id(const Tensor& tensor) {
     output.tensor_id = ttnn::CoreIDs::instance().fetch_and_increment_tensor_id();
     return output;
 };
+
+const Storage& Tensor::storage() const { return this->tensor_attributes->get_storage(); }
+
+const ttnn::Shape& Tensor::logical_shape() const { return this->tensor_attributes->get_tensor_spec().logical_shape(); }
+
+const ttnn::Shape& Tensor::padded_shape() const { return this->tensor_attributes->get_tensor_spec().padded_shape(); }
+
+DataType Tensor::dtype() const { return this->tensor_attributes->get_tensor_spec().tensor_layout().get_data_type(); }
+
+Layout Tensor::layout() const { return this->tensor_attributes->get_tensor_spec().tensor_layout().get_layout(); }
+
+const TensorSpec& Tensor::tensor_spec() const { return this->tensor_attributes->get_tensor_spec(); }
+
+Buffer* Tensor::buffer() const { return device_storage().get_buffer(); }
+
+const DeviceStorage& Tensor::device_storage() const {
+    auto storage_type = this->storage_type();
+    TT_FATAL(
+        storage_type == tt::tt_metal::StorageType::DEVICE, "Expected Tensor with DeviceStorage, got {}", storage_type);
+    return std::get<DeviceStorage>(this->get_storage());
+}
+
+distributed::MeshDevice* Tensor::mesh_device() const {
+    if (this->mesh_device_.has_value()) {
+        return this->mesh_device_.value();
+    }
+    return nullptr;
+}
+
+std::shared_ptr<distributed::MeshBuffer> Tensor::mesh_buffer() const { return device_storage().get_mesh_buffer(); }
+
+IDevice* Tensor::device() const {
+    if (this->mesh_device_.has_value()) {
+        return this->mesh_device_.value();
+    }
+    if (this->storage_type() == tt::tt_metal::StorageType::DEVICE) {
+        auto buffer = this->buffer();
+        if (buffer == nullptr) {
+            TT_THROW("Cannot get the device from a tensor without an allocated buffer");
+        }
+        return buffer->device();
+    } else {
+        TT_THROW("Cannot get the device from a tensor with host storage");
+    }
+}
+
+const MemoryConfig& Tensor::memory_config() const { return get_tensor_spec().tensor_layout().get_memory_config(); }
+
+const std::optional<ShardSpec>& Tensor::shard_spec() const { return this->memory_config().shard_spec(); }
+
+const DistributedTensorConfig& Tensor::distributed_tensor_config() const {
+    return this->tensor_attributes->get_distributed_tensor_config();
+}
 
 }  // namespace tt::tt_metal
