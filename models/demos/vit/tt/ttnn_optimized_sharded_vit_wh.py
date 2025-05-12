@@ -14,23 +14,28 @@ def update_model_config(config, batch_size):
     wh_core_grid_y = 8
     if batch_size <= wh_core_grid_y:
         grid_y = batch_size
-        grid_x = 4  ## it can be 6 for better latency
+        grid_x = 6  ## it can be 4 or 3, for higher core utilization but less latency
     else:
         grid_y = 8
         batch_per_y_core = batch_size // wh_core_grid_y
         batch_size = grid_y * batch_per_y_core
         grid_x = 4
     core_grid = ttnn.CoreGrid(y=grid_y, x=grid_x)
+    TILE_HEIGHT = 32
 
-    seqL_t = 224 // 32  # 7
-    dim_t = 768 // 32  # 24
+    patch_count = config.image_size // config.patch_size  # 224/16=14
+    seqL = patch_count * patch_count  # 196
+    seqL_padded = (((seqL - 1) // TILE_HEIGHT) + 1) * TILE_HEIGHT  # 224
+    seqL_t = seqL_padded // TILE_HEIGHT  # 224 / 32 = 7
+    dim_t = config.hidden_size // TILE_HEIGHT  # 768 / 32 = 24
     dim_t__x = dim_t // core_grid.x  # 4
-    head_num = 12
+    head_num = config.num_attention_heads  # 12
     head_seqL_t__x = (head_num * seqL_t) // core_grid.x  # 14
     head_size_t = dim_t // head_num  # 2
-    class__x = (1152 // 32) // core_grid.x  # 3
+    # 1000 classes padded to 1152
+    class__x = (1152 // TILE_HEIGHT) // core_grid.x  #   3
     class_subb_w = class__x
-    if class_subb_w > 8:  # max ration of sub_block_w / sub_block_h = 8
+    if class_subb_w > 8:  # max ratio of sub_block_w / sub_block_h = 8
         if class_subb_w % 3 == 0:
             class_subb_w = class__x // 3
         elif class_subb_w % 2 == 0:
@@ -43,7 +48,6 @@ def update_model_config(config, batch_size):
         "layernorm_before_program_config": ttnn.LayerNormShardedMultiCoreProgramConfig(
             compute_with_storage_grid_size=(core_grid.x, core_grid.y),
             subblock_w=dim_t__x // 2,  # 1,
-            # subblock_w = dim_t__x // 2,  # 1,
             block_h=seqL_t,  # 7,
             block_w=dim_t__x,  # 2,
             inplace=False,
@@ -125,7 +129,7 @@ def update_model_config(config, batch_size):
             per_core_M=seqL_t,  # 7,
             per_core_N=class__x,  # 6,
             transpose_mcast=False,
-            fused_activation=(ttnn.UnaryOpType.GELU, True),
+            fused_activation=None,
         ),
     }
 
@@ -136,9 +140,8 @@ def update_model_config(config, batch_size):
 
 
 def vit_patch_embeddings(config, pixel_values, *, parameters, unittest_check=False):
-    # batch_size, img_c, img_h, img_w = pixel_values.shape # NCHW
     batch_size, img_h, img_w, img_c = pixel_values.shape  # permuted input NHWC
-    patch_size = 16
+    patch_size = config.patch_size
     patch_count = img_h // patch_size  # 14
     patch_size_sq_trpl = int(patch_size * patch_size * 3)  # 768
     patch_count_all = int(patch_count * patch_count)  # 196
@@ -191,52 +194,13 @@ def vit_embeddings(
     return embedding_output
 
 
-"""
-def vit_layernorm_before(
-    config,
-    hidden_states,
-    *,
-    parameters,
-):
-    attention_output = ttnn.layer_norm(
-        hidden_states,
-        weight=parameters.layernorm_before.weight,
-        bias=parameters.layernorm_before.bias,
-        epsilon=config.layer_norm_eps,
-        memory_config=ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG,
-        program_config=config.program_configs["layernorm_before_program_config"],
-    )
-
-    return attention_output
-
-
-def vit_layernorm_after(
-    config,
-    hidden_states,
-    *,
-    parameters,
-):
-    attention_output = ttnn.layer_norm(
-        hidden_states,
-        weight=parameters.layernorm_after.weight,
-        bias=parameters.layernorm_after.bias,
-        epsilon=config.layer_norm_eps,
-        memory_config=ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG,
-        program_config=config.program_configs["layernorm_program_config"],
-    )
-
-    return attention_output
-"""
-
-
 def vit_attention(
     config,
     hidden_states,
     attention_mask,
     parameters,
 ):
-    num_heads = config.num_attention_heads
-    num_heads = 12
+    num_heads = config.num_attention_heads  # num_heads = 12
     *_, hidden_size = hidden_states.shape
     head_size = hidden_size // num_heads
 
@@ -414,14 +378,13 @@ def vit_encoder(
     head_masks,
     parameters,
 ):
+    TILE_HEIGHT = 32
+    emb_N, emb_S, emb_D = embeddings.shape
+    emb_S = (((emb_S - 1) // TILE_HEIGHT) + 1) * TILE_HEIGHT
     encoder_input = ttnn.to_memory_config(
         embeddings,
         memory_config=ttnn.create_sharded_memory_config(
-            [
-                config.core_grid.y,
-                224,
-                768,
-            ],  # embeddings.shape, # hardcoded because a bug where it still sees the 197 not 224
+            [emb_N, emb_S, emb_D],
             core_grid=config.core_grid,
             strategy=ttnn.ShardStrategy.BLOCK,
             orientation=ttnn.ShardOrientation.ROW_MAJOR,

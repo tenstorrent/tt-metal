@@ -1,15 +1,9 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
-import pytest
-import torch
-from loguru import logger
-
 import ttnn
 from models.demos.vit.tests.vit_test_infra import create_test_infra
-from models.perf.perf_utils import prep_perf_report
-from models.utility_functions import disable_persistent_kernel_cache, is_blackhole, profiler
 
 try:
     from tracy import signpost
@@ -19,14 +13,17 @@ except ModuleNotFoundError:
     use_signpost = False
 
 
-def run_trace_2cq_model(device, test_infra, num_warmup_iterations, num_measurement_iterations):
-    ops_parallel_config = {}
+def run_trace_2cq_model(device, batch_size=8):
+    test_infra = create_test_infra(
+        device,
+        batch_size,
+    )
+
     tt_inputs_host, sharded_mem_config_DRAM, input_mem_config = test_infra.setup_dram_sharded_input(device)
     tt_image_res = tt_inputs_host.to(device, sharded_mem_config_DRAM)
-
-    # Initialize the op event so we can write
     op_event = ttnn.record_event(device, 0)
 
+    # First run configures convs JIT
     profiler.start("compile")
     ttnn.wait_for_event(1, op_event)
     ttnn.copy_host_to_device_tensor(tt_inputs_host, tt_image_res, 1)
@@ -70,7 +67,7 @@ def run_trace_2cq_model(device, test_infra, num_warmup_iterations, num_measureme
     assert trace_input_addr == reshard_out.buffer_address()
     ttnn.DumpDeviceProfiler(device)
 
-    for iter in range(0, num_warmup_iterations):
+    for iter in range(0, 2):
         ttnn.wait_for_event(1, op_event)
         ttnn.copy_host_to_device_tensor(tt_inputs_host, tt_image_res, 1)
         write_event = ttnn.record_event(device, 1)
@@ -85,7 +82,7 @@ def run_trace_2cq_model(device, test_infra, num_warmup_iterations, num_measureme
         signpost(header="start")
     outputs = []
     profiler.start(f"run")
-    for iter in range(0, num_measurement_iterations):
+    for iter in range(0, 5):
         ttnn.wait_for_event(1, op_event)
         ttnn.copy_host_to_device_tensor(tt_inputs_host, tt_image_res, 1)
         write_event = ttnn.record_event(device, 1)
@@ -102,56 +99,3 @@ def run_trace_2cq_model(device, test_infra, num_warmup_iterations, num_measureme
     ttnn.DumpDeviceProfiler(device)
 
     ttnn.release_trace(device, tid)
-
-
-@pytest.mark.skipif(is_blackhole(), reason="Unsupported on BH")
-@pytest.mark.models_performance_bare_metal
-@pytest.mark.models_performance_virtual_machine
-@pytest.mark.parametrize(
-    "device_params", [{"l1_small_size": 32768, "num_command_queues": 2, "trace_region_size": 1700000}], indirect=True
-)
-def test_vit(device, use_program_cache):
-    torch.manual_seed(0)
-
-    profiler.clear()
-    disable_persistent_kernel_cache()
-
-    batch_size = 8
-
-    first_key = f"first_iter_batchsize{batch_size}"
-    second_key = f"second_iter_batchsize{batch_size}"
-
-    test_infra = create_test_infra(
-        device,
-        batch_size,
-    )
-
-    ttnn.synchronize_device(device)
-
-    num_warmup_iterations = 5
-    num_measurement_iterations = 15
-
-    run_trace_2cq_model(device, test_infra, num_warmup_iterations, num_measurement_iterations)
-
-    first_iter_time = profiler.get(f"compile") + profiler.get(f"cache")
-
-    # ensuring inference time fluctuations is not noise
-    inference_time_avg = profiler.get("run") / num_measurement_iterations
-
-    compile_time = first_iter_time - 2 * inference_time_avg
-    prep_perf_report(
-        model_name=f"ttnn_vit_base_batch_size{batch_size}",
-        batch_size=batch_size,
-        inference_and_compile_time=first_iter_time,
-        inference_time=inference_time_avg,
-        expected_compile_time=0,
-        expected_inference_time=0,
-        comments="",
-        inference_time_cpu=0,
-    )
-
-    model_name = f"ttnn_vit_base_batch_size_{batch_size}"
-    comments = ""
-    logger.info(f"{model_name} {comments} inference time (avg): {inference_time_avg}")
-    logger.info(f"{model_name} compile time: {compile_time}")
-    logger.info(f"Samples per second: {1 / inference_time_avg * batch_size}")
