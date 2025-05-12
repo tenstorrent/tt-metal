@@ -3,19 +3,14 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
-
-import ttnn
-from ttnn.model_preprocessing import (
-    preprocess_model_parameters,
-)
-from models.utility_functions import (
-    divup,
-)
-
-from models.demos.vit.tt import ttnn_optimized_sharded_vit_wh
-from models.demos.wormhole.vit.demo.vit_helper_funcs import get_data_loader, get_batch
 import transformers
 from transformers import AutoImageProcessor
+from ttnn.model_preprocessing import preprocess_model_parameters
+
+import ttnn
+from models.demos.vit.tt import ttnn_optimized_sharded_vit_wh
+from models.demos.wormhole.vit.demo.vit_helper_funcs import get_batch, get_data_loader
+from models.utility_functions import divup
 
 
 class VitTestInfra:
@@ -101,11 +96,11 @@ class VitTestInfra:
             {
                 ttnn.CoreRange(
                     ttnn.CoreCoord(0, 0),
-                    ttnn.CoreCoord(7, 0),
+                    ttnn.CoreCoord(7, 1),
                 ),
             }
         )
-        n_cores = 8
+        n_cores = 16
         shard_spec = ttnn.ShardSpec(shard_grid, [N * H * W // n_cores, C], ttnn.ShardOrientation.ROW_MAJOR)
         input_mem_config = ttnn.MemoryConfig(
             ttnn.types.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.types.BufferType.L1, shard_spec

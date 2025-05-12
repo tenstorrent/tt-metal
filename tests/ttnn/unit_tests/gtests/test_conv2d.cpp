@@ -13,7 +13,6 @@
 #include "ttnn/common/queue_id.hpp"
 #include "ttnn/device.hpp"
 #include "ttnn/tensor/tensor.hpp"
-#include "ttnn/operations/conv/conv.hpp"
 #include "ttnn/operations/conv/conv2d/conv2d.hpp"
 #include "ttnn/operations/data_movement/permute/permute.hpp"
 #include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
@@ -134,8 +133,7 @@ TEST_P(Conv2DFixture, Conv2DCalculateCorrectly) {
         /*device_id=*/0, l1_small_size);
 
     try {
-        MemoryConfig dram_mem_config =
-            MemoryConfig{.memory_layout = TensorMemoryLayout::INTERLEAVED, .buffer_type = BufferType::DRAM};
+        MemoryConfig dram_mem_config = MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM};
 
         // (N,Ci,H,W)
         Shape dimensions{param.batch_size, param.input_channels, param.input_height, param.input_width};
@@ -160,7 +158,7 @@ TEST_P(Conv2DFixture, Conv2DCalculateCorrectly) {
         input_tensor = ttnn::permute(input_tensor, SmallVector<int64_t>{0, 2, 3, 1});
 
         // Run Conv2D
-        auto [output_tensor, output_dimensions] = std::get<OUTPUT_DIM>(ttnn::conv2d(
+        auto [output_tensor, output_dimensions] = std::get<static_cast<int>(ResultType::OUTPUT_DIM)>(ttnn::conv2d(
             DefaultQueueId,
             input_tensor,
             weight_tensor,

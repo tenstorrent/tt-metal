@@ -14,10 +14,10 @@ void CloneOperation::validate_inputs(
     TT_FATAL(input.storage_type() == StorageType::DEVICE, "Clone: input must be on device");
     TT_FATAL(input.buffer() != nullptr, "Clone: input must be allocated in buffer on device");
     TT_FATAL(
-        input.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED,
+        input.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
         "Clone: not currently support sharding");
     TT_FATAL(
-        operation_attributes.memory_config.memory_layout == TensorMemoryLayout::INTERLEAVED,
+        operation_attributes.memory_config.memory_layout() == TensorMemoryLayout::INTERLEAVED,
         "Clone: not currently support sharding");
 }
 

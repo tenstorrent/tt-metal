@@ -7,9 +7,10 @@
 #include "tt-metalium/buffer.hpp"
 #include "tt-metalium/circular_buffer.hpp"
 #include "tt-metalium/circular_buffer_constants.h"
-#include "tt-metalium/circular_buffer_types.hpp"
+#include "tt-metalium/circular_buffer_config.hpp"
 #include "tt-metalium/command_queue.hpp"
 #include "tt-metalium/core_coord.hpp"
+#include "tt-metalium/dev_msgs.h"              // DISPATCH_CLASS_MAX
 #include "tt-metalium/hal_types.hpp"           // HalProgrammableCoreType
 #include "tt-metalium/kernel.hpp"              // Kernel
 #include "tt-metalium/kernel_types.hpp"        // KernelHandle
@@ -32,6 +33,7 @@
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
+#include <tt_stl/span.hpp>
 
 namespace tt {
 namespace tt_metal {
@@ -45,6 +47,34 @@ class GlobalCircularBuffer;
 }
 
 namespace detail {
+
+struct ProgramOffsetsState {
+    // Base offset for Program Configs across all core types, wrt kernel config slot start address
+    uint32_t config_base_offset = 0;
+    // Incremental offset. Will correspond to the size of the program config per core, once the
+    // program is finalized.
+    uint32_t offset = 0;
+    // Unique RTA offset.
+    uint32_t rta_offset = 0;
+    // Common RTA offsets and sizes.
+    std::array<uint32_t, DISPATCH_CLASS_MAX> crta_offsets;
+    std::array<uint32_t, DISPATCH_CLASS_MAX> crta_sizes;
+    // Semaphore offsets and sizes.
+    uint32_t sem_offset = 0;
+    uint32_t sem_size = 0;
+    // CB offsets and sizes.
+    uint32_t cb_offset = 0;
+    uint32_t cb_size = 0;
+    uint32_t local_cb_size = 0;
+    // Kernel binary offsets and sizes.
+    uint32_t kernel_text_offset = 0;
+    uint32_t kernel_text_size = 0;
+};
+
+// Callable types for dependency injection
+using KernelsGetter = std::function<std::unordered_map<KernelHandle, std::shared_ptr<Kernel>>&(uint32_t index)>;
+using KernelGroupsGetter = std::function<std::vector<std::shared_ptr<KernelGroup>>&(uint32_t index)>;
+using SemaphoresGetter = std::function<const std::vector<Semaphore>&()>;
 
 class ProgramImpl {
 public:
@@ -109,6 +139,16 @@ public:
     CommandQueue* get_last_used_command_queue() const;
     void populate_dispatch_data(IDevice* device);
 
+    void finalize_offsets(IDevice* device);
+
+    // Helper function to finalize program offsets with custom getters
+    static void finalize_program_offsets(
+        IDevice* device,
+        const KernelsGetter& kernels_getter,
+        const KernelGroupsGetter& kernel_groups_getter,
+        const SemaphoresGetter& semaphores_getter,
+        tt::stl::Span<ProgramImpl*> programs);
+
 private:
     CommandQueue* last_used_command_queue_for_testing = nullptr;
 
@@ -152,7 +192,7 @@ private:
         // Reset when circular buffer allocation is invalidated
         void reset_available_addresses() { this->l1_regions.clear(); }
     };
-
+    uint32_t programmable_core_count_;
     uint64_t id;  // Need to make non-const due to move constructor
     uint64_t runtime_id;
     static std::atomic<uint64_t> program_counter;
@@ -222,6 +262,8 @@ private:
     bool runs_on_noc_unicast_only_cores();
     bool runs_on_noc_multicast_only_cores();
     bool kernel_binary_always_stored_in_ringbuffer();
+    void set_program_offsets_and_sizes(uint32_t index, const ProgramOffsetsState& state);
+    void set_program_attrs_across_core_types(IDevice* device);
 
     friend EnqueueProgramCommand;
     friend Program;

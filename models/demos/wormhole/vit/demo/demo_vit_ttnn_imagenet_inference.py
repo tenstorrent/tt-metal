@@ -2,21 +2,19 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import pytest
+import ast
 
+import pytest
 import torch
 import transformers
-from transformers import AutoImageProcessor
 from loguru import logger
-
-import ttnn
+from transformers import AutoImageProcessor
 from ttnn.model_preprocessing import preprocess_model_parameters
 
+import ttnn
 from models.demos.vit.tt import ttnn_optimized_sharded_vit_wh
-from models.utility_functions import torch2tt_tensor, is_blackhole
-from models.demos.wormhole.vit.demo.vit_helper_funcs import get_data_loader, get_batch
-
-import ast
+from models.demos.wormhole.vit.demo.vit_helper_funcs import get_batch, get_data_loader
+from models.utility_functions import is_blackhole, torch2tt_tensor
 
 
 def get_imagenet_label_dict():
@@ -99,11 +97,11 @@ def test_vit(device):
             {
                 ttnn.CoreRange(
                     ttnn.CoreCoord(0, 0),
-                    ttnn.CoreCoord(7, 0),
+                    ttnn.CoreCoord(7, 1),
                 ),
             }
         )
-        n_cores = 8
+        n_cores = 16
         shard_spec = ttnn.ShardSpec(shard_grid, [N * H * W // n_cores, C], ttnn.ShardOrientation.ROW_MAJOR)
 
         output = None

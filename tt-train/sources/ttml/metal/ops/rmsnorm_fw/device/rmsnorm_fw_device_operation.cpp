@@ -51,11 +51,11 @@ void RMSNormForwardDeviceOperation::validate_on_program_cache_miss(
             static_cast<int>(tensor.get_dtype()));
 
         TT_FATAL(
-            tensor.memory_config().memory_layout == ttnn::TensorMemoryLayout::INTERLEAVED,
+            tensor.memory_config().memory_layout() == ttnn::TensorMemoryLayout::INTERLEAVED,
             "RMSNormForward operation requires Interleaved memory layout. {} "
             "memory layout: `{}`",
             name,
-            static_cast<int>(tensor.memory_config().memory_layout));
+            static_cast<int>(tensor.memory_config().memory_layout()));
     };
 
     const auto& input_tensor = tensor_args.input;

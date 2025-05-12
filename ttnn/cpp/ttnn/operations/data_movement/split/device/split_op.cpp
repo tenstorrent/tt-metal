@@ -20,10 +20,10 @@ void SplitDeviceOperation::validate(const std::vector<Tensor>& input_tensors) co
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Operands to TM need to be on device!");
     TT_FATAL(input_tensor.buffer() != nullptr, "Operands to TM need to be allocated in buffers on device!");
     TT_FATAL(
-        input_tensor.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED,
+        input_tensor.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
         "Split does not currently support sharding");
     TT_FATAL(
-        this->output_mem_config.memory_layout == TensorMemoryLayout::INTERLEAVED,
+        this->output_mem_config.memory_layout() == TensorMemoryLayout::INTERLEAVED,
         "Split does not currently support sharding");
 
     TT_FATAL(input_tensor.get_padded_shape()[0] == 1, "shape[0] must be 1 (batch 1 only)");
