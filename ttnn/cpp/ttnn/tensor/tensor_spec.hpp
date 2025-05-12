@@ -32,7 +32,7 @@ public:
     Tile tile() const { return tensor_layout_.get_tile(); }
 
     Strides compute_strides() const { return tensor_layout_.compute_strides(logical_shape_); }
-    std::optional<ShardSpecBuffer> compute_shard_spec_buffer() const {
+    std::variant<std::monostate, ShardSpecBuffer, BufferDistributionSpec> compute_shard_spec_buffer() const {
         return tensor_layout_.compute_shard_spec_buffer(logical_shape_);
     }
     size_t compute_packed_buffer_size_bytes() const {

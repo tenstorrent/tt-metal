@@ -55,6 +55,31 @@ tt::DataFormat datatype_to_dataformat_converter(tt::tt_metal::DataType datatype)
     }
 }
 
+MemoryConfig::MemoryConfig(
+    TensorMemoryLayout memory_layout, BufferType buffer_type, std::optional<ShardSpec> shard_spec) :
+    memory_layout_(memory_layout), buffer_type_(buffer_type), shard_spec_(std::move(shard_spec)) {
+    if (shard_spec_.has_value() && shard_spec_->mode == ShardMode::PHYSICAL) {
+        nd_shard_spec_ = NdShardSpec{
+            .physical_shard_shape = ttnn::Shape({shard_spec_->shape[0], shard_spec_->shape[1]}),
+            .cores = shard_spec_->grid,
+            .shard_orientation = shard_spec_->orientation,
+        };
+    }
+}
+
+MemoryConfig::MemoryConfig(BufferType buffer_type, NdShardSpec nd_shard_spec) :
+    memory_layout_(TensorMemoryLayout::BLOCK_SHARDED),
+    buffer_type_(buffer_type),
+    nd_shard_spec_(std::move(nd_shard_spec)) {
+    const auto& nd_shard_shape = nd_shard_spec_->physical_shard_shape;
+    if (nd_shard_shape.size() <= 2) {
+        std::array<uint32_t, 2> shard_shape;
+        shard_shape[0] = nd_shard_shape.size() >= 2 ? nd_shard_shape[nd_shard_shape.size() - 2] : 1;
+        shard_shape[1] = nd_shard_shape.size() >= 1 ? nd_shard_shape[nd_shard_shape.size() - 1] : 1;
+        shard_spec_ = ShardSpec(nd_shard_spec_->cores, shard_shape, nd_shard_spec_->shard_orientation);
+    }
+}
+
 bool MemoryConfig::is_sharded() const {
     switch (this->memory_layout_) {
         case TensorMemoryLayout::HEIGHT_SHARDED:

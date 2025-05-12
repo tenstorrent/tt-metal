@@ -42,7 +42,8 @@ public:
 
     Strides compute_strides(const ttnn::Shape& shape) const;
 
-    std::optional<ShardSpecBuffer> compute_shard_spec_buffer(const ttnn::Shape& shape) const;
+    std::variant<std::monostate, ShardSpecBuffer, BufferDistributionSpec> compute_shard_spec_buffer(
+        const ttnn::Shape& shape) const;
 
     size_t compute_packed_buffer_size_bytes(const ttnn::Shape& shape) const;
     size_t compute_page_size_bytes(const ttnn::Shape& shape) const;
