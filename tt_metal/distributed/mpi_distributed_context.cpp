@@ -423,36 +423,31 @@ std::shared_ptr<DistributedContext> DistributedContext::create(int argc, char** 
 }
 
 void MPIContext::revoke_and_shrink() {
-    // need to understand that MPI_WORLD_COMM is not a valid communicator anymore after this call
-    // and that the context is not valid anymore
-    /**
-        int rc = MPIX_Comm_revoke(comm_);
-        if (rc != MPI_SUCCESS && rc != MPI_ERR_REVOKED) {  // another rank may have revoked first
-            abort(rc);
-        }
+    int rc = MPIX_Comm_revoke(comm_);
+    if (rc != MPI_SUCCESS && rc != MPI_ERR_REVOKED) {  // another rank may have revoked first
+        abort(rc);
+    }
 
+    MPI_Comm new_comm = MPI_COMM_NULL;
+    MPI_CHECK(MPI_Comm_shrink(comm_, &new_comm));
 
-        MPI_Comm new_comm = MPI_COMM_NULL;
-        MPI_CHECK(MPIX_Comm_shrink(comm_, &new_comm));
+    MPI_Comm_set_errhandler(new_comm, MPI_ERRORS_RETURN);
 
-        MPI_Comm_set_errhandler(new_comm, MPI_ERRORS_RETURN);
+    // overall probably I don't neet MPI_CHECK, we are recovering here. If we cannot recover, we should abort
+    // and not throw an exception.
+    int new_rank = 0, new_size = 0;
+    MPI_Comm_rank(new_comm, &new_rank);
+    MPI_Comm_size(new_comm, &new_size);
 
-        // overall probably I don't neet MPI_CHECK, we are recovering here. If we cannot recover, we should abort
-        // and not throw an exception.
-        int new_rank = 0, new_size = 0;
-        MPI_Comm_rank(new_comm, &new_rank);
-        MPI_Comm_size(new_comm, &new_size);
+    // Free the old communicator *after* shrink completes
+    MPI_Comm old_comm = this->comm_;
+    if (old_comm != MPI_COMM_NULL && old_comm != new_comm) {
+        MPI_Comm_free(&old_comm);
+    }
 
-        // Free the old communicator *after* shrink completes
-        MPI_Comm old_comm = this->comm_;
-        if (old_comm != MPI_COMM_NULL && old_comm != new_comm) {
-            MPI_Comm_free(&old_comm);
-        }
-
-        this->comm_ = new_comm;
-        this->rank_ = new_rank;
-        this->size_ = new_size;
-        */
+    this->comm_ = new_comm;
+    this->rank_ = new_rank;
+    this->size_ = new_size;
 }
 
 MPIContext::~MPIContext() {

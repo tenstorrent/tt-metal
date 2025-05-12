@@ -265,3 +265,47 @@ if(simd-everywhere_ADDED)
     add_library(simde::simde ALIAS simde)
     target_include_directories(simde SYSTEM INTERFACE ${simd-everywhere_SOURCE_DIR})
 endif()
+
+############################################################################################################################
+# MPI with ULFM support
+############################################################################################################################
+# ULFM is a fork of OpenMPI with support for fault tolerance
+
+CPMAddPackage(
+    NAME OpenMPI-ULFM
+    GITHUB_REPOSITORY open-mpi/ompi
+    GIT_TAG v5.0.7
+    DOWNLOAD_ONLY
+        YES # we'll build via ExternalProject
+)
+include(ProcessorCount)
+processorcount(NPROC)
+if(NPROC EQUAL 0)
+    set(NPROC 1)
+endif()
+ExternalProject_Add(
+    openmpi_ulfm_build
+    SOURCE_DIR
+        ${OpenMPI-ULFM_SOURCE_DIR} # CPM cache
+    BINARY_DIR
+        ${CMAKE_BINARY_DIR}/openmpi-ulfm-build # out‑of‑tree
+    INSTALL_DIR ${CMAKE_BINARY_DIR}/openmpi-ulfm-install
+    # --- 0. guarantee a clean source tree -------------------------------
+    # (runs only if config.status is present; ignores error otherwise)
+    PATCH_COMMAND
+        ${CMAKE_COMMAND} -E chdir <SOURCE_DIR> make distclean || true
+    # --- 1. generate configure script -----------------------------------
+    CONFIGURE_COMMAND
+        ${CMAKE_COMMAND} -E chdir <SOURCE_DIR> ./autogen.pl
+    # --- 2. configure (out‑of‑tree) ---------------------------------
+    COMMAND
+        ${CMAKE_COMMAND} -E chdir <BINARY_DIR> <SOURCE_DIR>/configure --prefix=<INSTALL_DIR> --with-ft=ulfm
+        --disable-dlopen
+    # --- 3. build & install ---------------------------------------------
+    BUILD_COMMAND
+        ${CMAKE_COMMAND} -E chdir <BINARY_DIR> make -j${NPROC}
+    INSTALL_COMMAND
+        ${CMAKE_COMMAND} -E chdir <BINARY_DIR> make install
+    UPDATE_COMMAND
+        "" # skip git pulls on incremental builds
+)

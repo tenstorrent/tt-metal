@@ -15,8 +15,33 @@ set(DISTRIBUTED_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/mpi_distributed_context.cpp
 )
 
-find_package(MPI REQUIRED)
 add_library(distributed OBJECT ${DISTRIBUTED_SRC})
+add_dependencies(distributed openmpi_ulfm_build)
+
+set(ULFM_PREFIX ${CMAKE_BINARY_DIR}/openmpi-ulfm-install)
+
+add_library(OpenMPI::MPI SHARED IMPORTED)
+
+# Path to the actual library file, not the directory
+find_library(ULFM_MPI_LIB NAMES mpi PATHS ${ULFM_PREFIX}/lib NO_DEFAULT_PATH)
+
+set_target_properties(
+    OpenMPI::MPI
+    PROPERTIES
+        IMPORTED_LOCATION
+            ${ULFM_MPI_LIB}
+        INTERFACE_INCLUDE_DIRECTORIES
+            ${ULFM_PREFIX}/include
+        INTERFACE_LINK_LIBRARIES
+            ${ULFM_PREFIX}/lib/libmpi.so
+        INTERFACE_C_INCLUDE_DIRECTORIES
+            ${ULFM_PREFIX}/include
+        INTERFACE_CXX_INCLUDE_DIRECTORIES
+            ${ULFM_PREFIX}/include
+        INTERFACE_SYSTEM_INCLUDE_DIRECTORIES
+            ${ULFM_PREFIX}/include
+)
+
 target_link_libraries(
     distributed
     PUBLIC
@@ -25,5 +50,7 @@ target_link_libraries(
         Metalium::Metal::Impl
         Metalium::Metal::LLRT
         TT::Metalium::HostDevCommon
-        MPI::MPI_CXX
+        OpenMPI::MPI
 )
+
+# print OpenMPI include directories
