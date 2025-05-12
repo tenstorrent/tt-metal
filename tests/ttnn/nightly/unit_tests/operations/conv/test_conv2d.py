@@ -612,7 +612,9 @@ def test_conv_activation(
         pytest.skip("Row major layout not compatible with bfloat8_b")
 
     if activations_dtype == ttnn.bfloat8_b and shard_layout == HS and activation == "sqrt":
-        pytest.skip("Skipping sqrt activation for bfloat8_b and height sharded due to PCC error")
+        pytest.skip(
+            "Skipping sqrt activation for bfloat8_b and height sharded due to PCC error that occurs due to how sqrt over negative numbers is handled in bfloat8_b vs bfloat16"
+        )
 
     run_conv(
         device,
@@ -1845,25 +1847,25 @@ def test_unet_conv_groups_2_wh(
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 @pytest.mark.parametrize(
-    "output_channels, input_channels, input_height, input_width, filter_height, filter_width, stride_h, stride_w, pad_h, pad_w, shard_layout, config_override, in_place, input_layout",
+    "output_channels, input_channels, input_height, input_width, filter_height, filter_width, stride_h, stride_w, pad_h, pad_w, shard_layout, config_override, in_place",
     (
-        (16, 4, 1056, 160, 3, 3, 1, 1, 1, 1, HS, {"act_block_h": 2 * 32}, False, ttnn.ROW_MAJOR_LAYOUT),
-        (16, 16, 1056, 160, 3, 3, 1, 1, 1, 1, HS, {"act_block_h": 2 * 32}, False, ttnn.ROW_MAJOR_LAYOUT),
-        (16, 16, 528, 80, 3, 3, 1, 1, 1, 1, HS, {"act_block_h": 2 * 32}, False, ttnn.ROW_MAJOR_LAYOUT),
-        (32, 16, 264, 40, 3, 3, 1, 1, 1, 1, HS, None, False, ttnn.ROW_MAJOR_LAYOUT),
-        (32, 32, 264, 40, 3, 3, 1, 1, 1, 1, HS, None, False, ttnn.ROW_MAJOR_LAYOUT),
-        (32, 32, 132, 20, 3, 3, 1, 1, 1, 1, HS, None, False, ttnn.ROW_MAJOR_LAYOUT),
-        (64, 32, 66, 10, 3, 3, 1, 1, 1, 1, HS, None, False, ttnn.ROW_MAJOR_LAYOUT),
-        (64, 64, 66, 10, 3, 3, 1, 1, 1, 1, HS, None, False, ttnn.ROW_MAJOR_LAYOUT),
-        (32, 96, 132, 20, 3, 3, 1, 1, 1, 1, HS, None, False, ttnn.ROW_MAJOR_LAYOUT),
-        (32, 32, 132, 20, 3, 3, 1, 1, 1, 1, HS, None, False, ttnn.ROW_MAJOR_LAYOUT),
-        (32, 64, 264, 40, 3, 3, 1, 1, 1, 1, HS, None, False, ttnn.ROW_MAJOR_LAYOUT),
-        (32, 32, 264, 40, 3, 3, 1, 1, 1, 1, HS, None, False, ttnn.ROW_MAJOR_LAYOUT),
-        (16, 48, 528, 80, 3, 3, 1, 1, 1, 1, HS, {"act_block_h": 2 * 32}, False, ttnn.ROW_MAJOR_LAYOUT),
-        (16, 16, 528, 80, 3, 3, 1, 1, 1, 1, HS, {"act_block_h": 2 * 32}, False, ttnn.ROW_MAJOR_LAYOUT),
-        (16, 32, 1056, 160, 3, 3, 1, 1, 1, 1, HS, {"act_block_h": 2 * 32}, True, ttnn.ROW_MAJOR_LAYOUT),
-        (16, 32, 1056, 160, 3, 3, 1, 1, 1, 1, HS, {"act_block_h": 2 * 32}, True, ttnn.TILE_LAYOUT),
-        (1, 16, 1056, 160, 1, 1, 1, 1, 0, 0, HS, {"act_block_h": 2 * 32}, False, ttnn.ROW_MAJOR_LAYOUT),
+        (16, 4, 1056, 160, 3, 3, 1, 1, 1, 1, HS, {"act_block_h": 2 * 32}, False),
+        (16, 16, 1056, 160, 3, 3, 1, 1, 1, 1, HS, {"act_block_h": 2 * 32}, False),
+        (16, 16, 528, 80, 3, 3, 1, 1, 1, 1, HS, {"act_block_h": 2 * 32}, False),
+        (32, 16, 264, 40, 3, 3, 1, 1, 1, 1, HS, None, False),
+        (32, 32, 264, 40, 3, 3, 1, 1, 1, 1, HS, None, False),
+        (32, 32, 132, 20, 3, 3, 1, 1, 1, 1, HS, None, False),
+        (64, 32, 66, 10, 3, 3, 1, 1, 1, 1, HS, None, False),
+        (64, 64, 66, 10, 3, 3, 1, 1, 1, 1, HS, None, False),
+        (32, 96, 132, 20, 3, 3, 1, 1, 1, 1, HS, None, False),
+        (32, 32, 132, 20, 3, 3, 1, 1, 1, 1, HS, None, False),
+        (32, 64, 264, 40, 3, 3, 1, 1, 1, 1, HS, None, False),
+        (32, 32, 264, 40, 3, 3, 1, 1, 1, 1, HS, None, False),
+        (16, 48, 528, 80, 3, 3, 1, 1, 1, 1, HS, {"act_block_h": 2 * 32}, False),
+        (16, 16, 528, 80, 3, 3, 1, 1, 1, 1, HS, {"act_block_h": 2 * 32}, False),
+        (16, 32, 1056, 160, 3, 3, 1, 1, 1, 1, HS, {"act_block_h": 2 * 32}, True),
+        (16, 32, 1056, 160, 3, 3, 1, 1, 1, 1, HS, {"act_block_h": 2 * 32}, True),
+        (1, 16, 1056, 160, 1, 1, 1, 1, 0, 0, HS, {"act_block_h": 2 * 32}, False),
     ),
 )
 @pytest.mark.parametrize(
@@ -1897,7 +1899,6 @@ def test_unet_conv_groups_4_6_wh(
     shard_layout,
     config_override,
     input_layout,
-    use_shallow_conv_variant,
     output_layout,
     groups,
     in_place,
@@ -1928,8 +1929,6 @@ def test_unet_conv_groups_4_6_wh(
         (pad_h, pad_w),
         config_override,
         shard_layout=shard_layout,
-        use_shallow_conv_variant=use_shallow_conv_variant,
-        transpose_shards=True,  ## use RM (transpose_mcast=False) with 2D on WH
         input_layout=ttnn.TILE_LAYOUT if activations_dtype == ttnn.bfloat8_b else ttnn.ROW_MAJOR_LAYOUT,
         output_layout=output_layout,
         groups=groups,
