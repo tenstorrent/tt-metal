@@ -20,6 +20,7 @@ void watcher_sanitize_host_noc_read(const metal_SocDescriptor& soc_d, CoreCoord 
 void watcher_sanitize_host_noc_write(const metal_SocDescriptor& soc_d, CoreCoord core, uint64_t addr, uint32_t len);
 
 int watcher_register_kernel(const std::string& name);
+void watcher_register_kernel_elf_paths(int id, std::vector<std::string> paths);
 
 // Helper functions for manually dumping watcher contents.
 void watcher_dump();
