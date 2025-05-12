@@ -1905,7 +1905,6 @@ def test_unet_conv_groups_4_6_wh(
     pad_w,
     shard_layout,
     config_override,
-    input_layout,
     output_layout,
     groups,
     in_place,
