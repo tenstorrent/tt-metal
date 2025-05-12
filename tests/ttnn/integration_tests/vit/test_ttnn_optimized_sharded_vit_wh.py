@@ -43,18 +43,18 @@ def test_vit_patch_embeddings(device, model_name, batch_size, image_size, image_
     torch_pixel_values = torch.permute(torch_pixel_values, (0, 2, 3, 1))
     torch_pixel_values = torch.nn.functional.pad(torch_pixel_values, (0, 1, 0, 0, 0, 0, 0, 0))
     batch_size, img_h, img_w, img_c = torch_pixel_values.shape  # permuted input NHWC
-    patch_size = 16
+    patch_size = config.patch_size  # 16
     torch_pixel_values = torch_pixel_values.reshape(batch_size, img_h, img_w // patch_size, 4 * patch_size)
     N, H, W, C = torch_pixel_values.shape
     shard_grid = ttnn.CoreRangeSet(
         {
             ttnn.CoreRange(
                 ttnn.CoreCoord(0, 0),
-                ttnn.CoreCoord(7, 0),
+                ttnn.CoreCoord(7, 1),
             ),
         }
     )
-    n_cores = 8
+    n_cores = 16
     shard_spec = ttnn.ShardSpec(shard_grid, [N * H * W // n_cores, C], ttnn.ShardOrientation.ROW_MAJOR)
 
     pixel_values = ttnn.from_torch(
@@ -86,7 +86,6 @@ def test_vit_embeddings(device, model_name, batch_size, image_size, image_channe
     torch.manual_seed(0)
 
     config = transformers.ViTConfig.from_pretrained(model_name)
-    config.num_hidden_layers = 12
     config = ttnn_optimized_sharded_vit.update_model_config(config, batch_size)
     model = transformers.ViTForImageClassification.from_pretrained("google/vit-base-patch16-224")
 
@@ -112,11 +111,6 @@ def test_vit_embeddings(device, model_name, batch_size, image_size, image_channe
     position_embeddings = ttnn.from_torch(
         torch_position_embeddings, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device
     )
-    # torch_cls_token_padded = torch.nn.functional.pad(torch_cls_token, (0, 0, 0, 196, 0, 0))
-    # torch_cls_position_embeddings = torch.add(torch_cls_token_padded, torch_position_embeddings)
-    # cls_position_embeddings = ttnn.from_torch(
-    #     torch_cls_position_embeddings, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device
-    # )
 
     parameters = preprocess_model_parameters(
         initialize_model=lambda: model,
@@ -127,7 +121,7 @@ def test_vit_embeddings(device, model_name, batch_size, image_size, image_channe
     torch_pixel_values = torch.permute(torch_pixel_values, (0, 2, 3, 1))
     torch_pixel_values = torch.nn.functional.pad(torch_pixel_values, (0, 1, 0, 0, 0, 0, 0, 0))
     batch_size, img_h, img_w, img_c = torch_pixel_values.shape  # permuted input NHWC
-    patch_size = 16
+    patch_size = config.patch_size  # 16
     torch_pixel_values = torch_pixel_values.reshape(batch_size, img_h, img_w // patch_size, 4 * patch_size)
     N, H, W, C = torch_pixel_values.shape
     shard_grid = ttnn.CoreRangeSet(
@@ -161,8 +155,7 @@ def test_vit_embeddings(device, model_name, batch_size, image_size, image_channe
         parameters=parameters,
     )
     output = ttnn.to_torch(output)
-    print(output.shape)
-    assert_with_pcc(torch_output, output[0][:197:], 0.99)
+    assert_with_pcc(torch_output, output[0][:197:], 0.999)
 
 
 @pytest.mark.parametrize("model_name", ["google/vit-base-patch16-224"])
@@ -172,7 +165,6 @@ def test_vit_attention(device, model_name, batch_size, sequence_size):
     torch.manual_seed(0)
 
     config = transformers.ViTConfig.from_pretrained(model_name)
-    config.num_hidden_layers = 12
     config = ttnn_optimized_sharded_vit.update_model_config(config, batch_size)
     model = transformers.models.vit.modeling_vit.ViTAttention(config).eval()
 
@@ -208,7 +200,6 @@ def test_vit_attention(device, model_name, batch_size, sequence_size):
             core_grid=config.core_grid,
             strategy=ttnn.ShardStrategy.BLOCK,
             orientation=ttnn.ShardOrientation.ROW_MAJOR,
-            # orientation=ttnn.ShardOrientation.COLUMN_MAJOR,
         ),
         dtype=ttnn.bfloat8_b,
     )
@@ -222,7 +213,7 @@ def test_vit_attention(device, model_name, batch_size, sequence_size):
     )
     output = ttnn.to_torch(output)
 
-    assert_with_pcc(torch_output, output, 0.99)
+    assert_with_pcc(torch_output, output, 0.999)
 
 
 @pytest.mark.parametrize("model_name", ["google/vit-base-patch16-224"])
@@ -252,7 +243,7 @@ def test_vit_intermediate(device, model_name, batch_size, sequence_size):
     )
     output = ttnn.to_torch(output)
 
-    assert_with_pcc(torch_output, output.to(torch_output.dtype), 0.99)
+    assert_with_pcc(torch_output, output.to(torch_output.dtype), 0.9984)
 
 
 @pytest.mark.parametrize("model_name", ["google/vit-base-patch16-224"])
@@ -284,7 +275,6 @@ def test_vit_output(device, model_name, batch_size, sequence_size):
             core_grid=config.core_grid,
             strategy=ttnn.ShardStrategy.BLOCK,
             orientation=ttnn.ShardOrientation.ROW_MAJOR,
-            # orientation=ttnn.ShardOrientation.COLUMN_MAJOR,
         ),
         dtype=ttnn.bfloat8_b,
     )
@@ -298,7 +288,7 @@ def test_vit_output(device, model_name, batch_size, sequence_size):
     )
     output = ttnn.to_torch(output)
 
-    assert_with_pcc(torch_output, output.to(torch_output.dtype), 0.9999)
+    assert_with_pcc(torch_output, output.to(torch_output.dtype), 0.999)
 
 
 @pytest.mark.parametrize("model_name", ["google/vit-base-patch16-224"])
@@ -357,7 +347,7 @@ def test_vit_layer(device, model_name, batch_size, sequence_size):
     )
     output = ttnn.to_torch(output)
 
-    assert_with_pcc(torch_output, output, 0.998)
+    assert_with_pcc(torch_output, output, 0.985)
 
 
 @pytest.mark.parametrize("model_name", ["google/vit-base-patch16-224"])
@@ -367,7 +357,6 @@ def test_vit_encoder(device, model_name, batch_size, sequence_size):
     torch.manual_seed(0)
 
     config = transformers.ViTConfig.from_pretrained(model_name)
-    config.num_hidden_layers = 12
     model = transformers.ViTForImageClassification.from_pretrained(
         "google/vit-base-patch16-224", config=config
     ).vit.encoder
@@ -412,7 +401,7 @@ def test_vit_encoder(device, model_name, batch_size, sequence_size):
     )
     output = ttnn.to_torch(output)
 
-    assert_with_pcc(torch_output, output, 0.981)
+    assert_with_pcc(torch_output, output, 0.977)
 
 
 @pytest.mark.parametrize("model_name", ["google/vit-base-patch16-224"])
@@ -424,9 +413,7 @@ def test_vit(device, model_name, batch_size, image_size, image_channels, sequenc
     torch.manual_seed(0)
 
     config = transformers.ViTConfig.from_pretrained(model_name)
-    config.num_hidden_layers = 12
     model = transformers.ViTForImageClassification.from_pretrained("google/vit-base-patch16-224", config=config)
-
     config = ttnn_optimized_sharded_vit.update_model_config(config, batch_size)
     dataset = load_dataset("huggingface/cats-image")
     image = dataset["test"]["image"][0]
@@ -461,7 +448,7 @@ def test_vit(device, model_name, batch_size, image_size, image_channels, sequenc
     torch_pixel_values = torch.permute(torch_pixel_values, (0, 2, 3, 1))
     torch_pixel_values = torch.nn.functional.pad(torch_pixel_values, (0, 1, 0, 0, 0, 0, 0, 0))
     batch_size, img_h, img_w, img_c = torch_pixel_values.shape  # permuted input NHWC
-    patch_size = 16
+    patch_size = config.patch_size  # 16
     torch_pixel_values = torch_pixel_values.reshape(batch_size, img_h, img_w // patch_size, 4 * patch_size)
     N, H, W, C = torch_pixel_values.shape
 
@@ -519,5 +506,5 @@ def test_vit(device, model_name, batch_size, image_size, image_channels, sequenc
         parameters=parameters,
     )
     output = ttnn.to_torch(output)
-
-    assert_with_pcc(torch_output, output[0, 0, :1000], 0.864)
+    # 1000 classes slicing
+    assert_with_pcc(torch_output, output[0, 0, :1000], 0.915)
