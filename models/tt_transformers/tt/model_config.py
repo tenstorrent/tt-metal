@@ -759,12 +759,13 @@ class ModelArgs:
 
             mlp_w_dram_sharded = not self.is_galaxy
             n_w1_w3 = self.hidden_dim // self.cluster_shape[1]
+            dram_shard_grid_width = 8 if is_wormhole_b0() else self.dram_grid_size.x  # 7 for P100, 8 for P150
             self.model_config["PREFILL_MLP_W1_W3_PRG_CONFIG"] = lambda seq_len: self.matmul_config(
                 m=min(seq_len, self.prefill_len_cutoff),  # 512 if BH, 1024 if WH
                 k=self.dim // self.cluster_shape[0],
                 n=n_w1_w3,
                 grid_size=mlp1_3_grid(seq_len),
-                per_core_N=math.ceil(n_w1_w3 / (self.tile_size * self.dram_grid_size.x))
+                per_core_N=math.ceil(n_w1_w3 / (self.tile_size * dram_shard_grid_width))
                 if mlp_w_dram_sharded
                 else None,
             )  # per_core_N is explicitly specified here to ensure it matches DRAM shard width
@@ -774,7 +775,7 @@ class ModelArgs:
                 k=self.hidden_dim // (self.cluster_shape[1] if self.is_galaxy else 1),
                 n=n_w2,
                 grid_size=mlp2_grid(seq_len),
-                per_core_N=math.ceil(n_w2 / (self.tile_size * self.dram_grid_size.x)) if mlp_w_dram_sharded else None,
+                per_core_N=math.ceil(n_w2 / (self.tile_size * dram_shard_grid_width)) if mlp_w_dram_sharded else None,
             )  # per_core_N is explicitly specified here to ensure it matches DRAM shard width
 
             k_dim = self.dim // self.cluster_shape[0] if self.is_galaxy else self.dim // self.num_devices
@@ -797,7 +798,7 @@ class ModelArgs:
                 grid_size=self.find_prefill_grid(num_rows(seq_len), n_dim // self.tile_size),
                 in0_block_w=1 if self.is_galaxy else None,
                 fuse_batch=seq_len <= 1024,
-                per_core_N=math.ceil(n_dim / (self.tile_size * self.dram_grid_size.x)) if dram_sharded_wo else None,
+                per_core_N=math.ceil(n_dim / (self.tile_size * dram_shard_grid_width)) if dram_sharded_wo else None,
             )  # per_core_N is explicitly specified here to ensure it matches DRAM shard width
 
             # Calculate largest number of lm_head_num_rows such that self.dim % (lm_head_num_rows * lm_head_cores_per_row) == 0
@@ -832,7 +833,6 @@ class ModelArgs:
             self.qkv_size = self.head_dim * (2 * self.n_kv_heads + self.n_heads)
             self.min_kv_prefill_shard_seqlen = (self.tile_size * 8 * 8) / (self.n_kv_heads // self.cluster_shape[1])
             self.MAX_QKV_MM_SEQ_LEN = 2048
-            grid_width = 8 if is_wormhole_b0() else self.dram_grid_size.x  # 7 for P100, 8 for P150
             self.model_config["XQKV_PREFILL_PROGCFG"] = lambda seq_len: ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
                 compute_with_storage_grid_size=(8, 8),
                 in0_block_w=1,  # FIXME: optimize this config for prefill, careful use DI_DT_WORKAROUND if necessary
@@ -842,7 +842,7 @@ class ModelArgs:
                     1, 8 if seq_len >= self.MAX_QKV_MM_SEQ_LEN else seq_len // self.tile_size // 8  # 8 rows
                 ),  # M / TILE_HEIGHT / Grid_Size (dynamic based on seqlen)
                 per_core_N=math.ceil(
-                    self.qkv_size / self.cluster_shape[1] / 32 / grid_width
+                    self.qkv_size / self.cluster_shape[1] / 32 / dram_shard_grid_width
                 ),  # N / TILE_WIDTH / grid width
                 transpose_mcast=False,
                 fused_activation=None,
