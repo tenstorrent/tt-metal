@@ -11,7 +11,7 @@
 namespace tt::tt_metal::distributed {
 
 std::shared_ptr<MeshBuffer> create_socket_config_buffer(
-    const std::shared_ptr<MeshDevice>& device, const socket_config_t& config, bool is_sender) {
+    const std::shared_ptr<MeshDevice>& device, const SocketConfig& config, bool is_sender) {
     const auto& socket_connections = config.socket_connection_config;
     const auto& socket_mem_config = config.socket_mem_config;
     auto l1_alignment = MetalContext::instance().hal().get_alignment(HalMemType::L1);
@@ -20,8 +20,9 @@ std::shared_ptr<MeshBuffer> create_socket_config_buffer(
     std::set<CoreRange> all_cores_set;
     std::unordered_map<MeshCoordinate, std::set<CoreRange>> socket_cores_per_device;
     for (const auto& connection : socket_connections) {
-        const auto& socket_device = is_sender ? connection.sender_core.first : connection.receiver_core.first;
-        const auto& socket_core = is_sender ? connection.sender_core.second : connection.receiver_core.second;
+        const auto& socket_device =
+            is_sender ? connection.sender_core.device_coord : connection.receiver_core.device_coord;
+        const auto& socket_core = is_sender ? connection.sender_core.core_coord : connection.receiver_core.core_coord;
         TT_FATAL(
             socket_cores_per_device[socket_device].find(socket_core) == socket_cores_per_device[socket_device].end(),
             "Cannot reuse sender or receiver cores in a single socket.");
@@ -59,7 +60,7 @@ std::shared_ptr<MeshBuffer> create_socket_config_buffer(
 }
 
 std::shared_ptr<MeshBuffer> create_socket_data_buffer(
-    const std::shared_ptr<MeshDevice>& receiver, const socket_config_t& config) {
+    const std::shared_ptr<MeshDevice>& receiver, const SocketConfig& config) {
     const auto& socket_mem_config = config.socket_mem_config;
 
     uint32_t num_data_cores = 0;
@@ -95,12 +96,13 @@ std::shared_ptr<MeshBuffer> create_socket_data_buffer(
     return MeshBuffer::create(socket_data_mesh_buffer_specs, socket_data_buffer_specs, receiver.get());
 }
 
-std::unordered_map<MeshCoordinate, std::vector<socket_connection_t>> group_socket_connections(
-    const socket_config_t& config, bool group_by_sender) {
-    std::unordered_map<MeshCoordinate, std::vector<socket_connection_t>> grouped_connections;
+std::unordered_map<MeshCoordinate, std::vector<SocketConnection>> group_socket_connections(
+    const SocketConfig& config, bool group_by_sender) {
+    std::unordered_map<MeshCoordinate, std::vector<SocketConnection>> grouped_connections;
     for (const auto& connection : config.socket_connection_config) {
-        grouped_connections[group_by_sender ? connection.sender_core.first : connection.receiver_core.first].push_back(
-            connection);
+        grouped_connections
+            [group_by_sender ? connection.sender_core.device_coord : connection.receiver_core.device_coord]
+                .push_back(connection);
     }
     return grouped_connections;
 }
@@ -109,7 +111,7 @@ void write_socket_configs(
     const std::shared_ptr<MeshBuffer>& config_buffer,
     const std::shared_ptr<MeshBuffer>& peer_config_buffer,
     const std::shared_ptr<MeshBuffer>& socket_data_buffer,
-    const socket_config_t& config,
+    const SocketConfig& config,
     bool is_sender) {
     auto mesh_device = config_buffer->device();
     auto peer_device = peer_config_buffer->device();
@@ -124,13 +126,13 @@ void write_socket_configs(
 
         for (const auto& [device_coord, connections] : grouped_connections) {
             for (const auto& [sender_core, recv_core] : connections) {
-                TT_FATAL(sender_core.first == device_coord, "Internal Error: Sender cores incorrectly grouped.");
+                TT_FATAL(sender_core.device_coord == device_coord, "Internal Error: Sender cores incorrectly grouped.");
                 auto downstream_chip_id = get_sender_receiver_chip_fabric_encoding(
-                    mesh_device, peer_device, sender_core.first, recv_core.first, fabric_config, false);
-                auto downstream_mesh_id = get_physical_mesh_id(peer_device, recv_core.first);
-                auto recv_virtual_core = mesh_device->worker_core_from_logical_core(recv_core.second);
+                    mesh_device, peer_device, sender_core.device_coord, recv_core.device_coord, fabric_config, false);
+                auto downstream_mesh_id = get_physical_mesh_id(peer_device, recv_core.device_coord);
+                auto recv_virtual_core = mesh_device->worker_core_from_logical_core(recv_core.core_coord);
 
-                uint32_t idx = core_to_core_id.at(sender_core.second);
+                uint32_t idx = core_to_core_id.at(sender_core.core_coord);
                 auto& md = config_data[idx];
                 md.write_ptr = socket_data_buffer->address();
                 md.downstream_fifo_addr = socket_data_buffer->address();
@@ -150,13 +152,13 @@ void write_socket_configs(
 
         for (const auto& [device_coord, connections] : grouped_connections) {
             for (const auto& [sender_core, recv_core] : connections) {
-                TT_FATAL(recv_core.first == device_coord, "Internal Error: Receiver cores incorrectly grouped.");
+                TT_FATAL(recv_core.device_coord == device_coord, "Internal Error: Receiver cores incorrectly grouped.");
                 auto upstream_chip_id = get_sender_receiver_chip_fabric_encoding(
-                    peer_device, mesh_device, sender_core.first, recv_core.first, fabric_config, true);
-                auto upstream_mesh_id = get_physical_mesh_id(peer_device, sender_core.first);
-                auto sender_virtual_core = mesh_device->worker_core_from_logical_core(sender_core.second);
+                    peer_device, mesh_device, sender_core.device_coord, recv_core.device_coord, fabric_config, true);
+                auto upstream_mesh_id = get_physical_mesh_id(peer_device, sender_core.device_coord);
+                auto sender_virtual_core = mesh_device->worker_core_from_logical_core(sender_core.core_coord);
 
-                uint32_t idx = core_to_core_id.at(recv_core.second);
+                uint32_t idx = core_to_core_id.at(recv_core.core_coord);
                 auto& md = config_data[idx];
                 md.read_ptr = socket_data_buffer->address();
                 md.fifo_addr = socket_data_buffer->address();

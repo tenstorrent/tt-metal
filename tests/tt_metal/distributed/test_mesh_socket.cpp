@@ -32,8 +32,8 @@ struct socket_core_mapping {
 void verify_socket_configs(
     const sender_socket_md& sender_config,
     const receiver_socket_md& recv_config,
-    const mesh_socket_t& send_socket,
-    const mesh_socket_t& recv_socket,
+    const MeshSocket& send_socket,
+    const MeshSocket& recv_socket,
     uint32_t downstream_device_id,
     uint32_t upstream_device_id,
     const CoreCoord& sender_virtual_coord,
@@ -81,21 +81,21 @@ void test_single_connection_single_device_socket(
 
     auto l1_alignment = MetalContext::instance().hal().get_alignment(HalMemType::L1);
 
-    socket_connection_t socket_connection = {
+    SocketConnection socket_connection = {
         .sender_core = {MeshCoordinate(0, 0), sender_logical_coord},
         .receiver_core = {MeshCoordinate(0, 0), recv_logical_coord},
     };
 
-    socket_memory_config_t socket_mem_config = {
+    SocketMemoryConfig socket_mem_config = {
         .socket_storage_type = BufferType::L1,
         .fifo_size = socket_fifo_size,
     };
 
-    socket_config_t socket_config = {
+    SocketConfig socket_config = {
         .socket_connection_config = {socket_connection},
         .socket_mem_config = socket_mem_config,
     };
-    auto [send_socket, recv_socket] = mesh_socket_t::create_sockets(md0, md0, socket_config);
+    auto [send_socket, recv_socket] = MeshSocket::create_sockets(md0, md0, socket_config);
 
     auto sender_data_shard_params =
         ShardSpecBuffer(CoreRangeSet(sender_logical_coord), {1, 1}, ShardOrientation::ROW_MAJOR, {1, 1}, {1, 1});
@@ -251,7 +251,7 @@ void test_single_device_socket_with_workers(
 
     auto l1_alignment = MetalContext::instance().hal().get_alignment(HalMemType::L1);
 
-    std::vector<socket_connection_t> socket_connections;
+    std::vector<SocketConnection> socket_connections;
     socket_connections.reserve(socket_core_mappings.size());
 
     CoreRangeSet sender_crs;
@@ -267,7 +267,7 @@ void test_single_device_socket_with_workers(
         std::vector<CoreRange> output_logical_cr;
 
         for (const auto& mapping : socket_core_mappings) {
-            socket_connection_t socket_connection = {
+            SocketConnection socket_connection = {
                 .sender_core = {MeshCoordinate(0, 0), mapping.sender_core},
                 .receiver_core = {MeshCoordinate(0, 0), mapping.receiver_core}};
             socket_connections.push_back(socket_connection);
@@ -286,17 +286,17 @@ void test_single_device_socket_with_workers(
         output_crs = CoreRangeSet(output_logical_cr);
     }
 
-    socket_memory_config_t socket_mem_config = {
+    SocketMemoryConfig socket_mem_config = {
         .socket_storage_type = BufferType::L1,
         .fifo_size = socket_fifo_size,
     };
 
-    socket_config_t socket_config = {
+    SocketConfig socket_config = {
         .socket_connection_config = socket_connections,
         .socket_mem_config = socket_mem_config,
     };
 
-    auto [send_socket, recv_socket] = mesh_socket_t::create_sockets(md0, md0, socket_config);
+    auto [send_socket, recv_socket] = MeshSocket::create_sockets(md0, md0, socket_config);
 
     auto sender_data_shard_params =
         ShardSpecBuffer(CoreRangeSet(sender_logical_data_core), {1, 1}, ShardOrientation::ROW_MAJOR, {1, 1}, {1, 1});
@@ -559,21 +559,21 @@ void test_single_connection_multi_device_socket(
         tt::tt_fabric::get_tt_fabric_config().channel_buffer_size_bytes - sizeof(tt::tt_fabric::PacketHeader);
 
     // Create Socket between Sender and Receiver
-    socket_connection_t socket_connection = {
+    SocketConnection socket_connection = {
         .sender_core = {MeshCoordinate(0, 0), sender_logical_coord},
         .receiver_core = {MeshCoordinate(0, 0), recv_logical_coord},
     };
 
-    socket_memory_config_t socket_mem_config = {
+    SocketMemoryConfig socket_mem_config = {
         .socket_storage_type = BufferType::L1,
         .fifo_size = socket_fifo_size,
     };
 
-    socket_config_t socket_config = {
+    SocketConfig socket_config = {
         .socket_connection_config = {socket_connection},
         .socket_mem_config = socket_mem_config,
     };
-    auto [send_socket, recv_socket] = mesh_socket_t::create_sockets(md0, md1, socket_config);
+    auto [send_socket, recv_socket] = MeshSocket::create_sockets(md0, md1, socket_config);
 
     auto sender_data_shard_params =
         ShardSpecBuffer(CoreRangeSet(sender_logical_coord), {1, 1}, ShardOrientation::ROW_MAJOR, {1, 1}, {1, 1});
@@ -757,21 +757,21 @@ void test_single_connection_multi_device_socket_with_workers(
     auto fabric_max_packet_size =
         tt::tt_fabric::get_tt_fabric_config().channel_buffer_size_bytes - sizeof(tt::tt_fabric::PacketHeader);
     // Create Socket between Sender and Receiver
-    socket_connection_t socket_connection = {
+    SocketConnection socket_connection = {
         .sender_core = {MeshCoordinate(0, 0), sender_logical_coord},
         .receiver_core = {MeshCoordinate(0, 0), recv_logical_coord},
     };
 
-    socket_memory_config_t socket_mem_config = {
+    SocketMemoryConfig socket_mem_config = {
         .socket_storage_type = BufferType::L1,
         .fifo_size = socket_fifo_size,
     };
 
-    socket_config_t socket_config = {
+    SocketConfig socket_config = {
         .socket_connection_config = {socket_connection},
         .socket_mem_config = socket_mem_config,
     };
-    auto [send_socket, recv_socket] = mesh_socket_t::create_sockets(md0, md1, socket_config);
+    auto [send_socket, recv_socket] = MeshSocket::create_sockets(md0, md1, socket_config);
 
     auto sender_data_shard_params =
         ShardSpecBuffer(CoreRangeSet(sender_logical_coord), {1, 1}, ShardOrientation::ROW_MAJOR, {1, 1}, {1, 1});
@@ -932,7 +932,7 @@ void test_single_connection_multi_device_socket_with_workers(
 }
 
 std::shared_ptr<Program> create_sender_program(
-    const mesh_socket_t& sender_socket,
+    const MeshSocket& sender_socket,
     const std::shared_ptr<MeshBuffer>& sender_data_buffer,
     std::size_t page_size,
     std::size_t data_size,
@@ -973,8 +973,8 @@ std::shared_ptr<Program> create_sender_program(
 }
 
 std::shared_ptr<Program> create_split_reduce_program(
-    const mesh_socket_t& recv_socket_0,
-    const mesh_socket_t& recv_socket_1,
+    const MeshSocket& recv_socket_0,
+    const MeshSocket& recv_socket_1,
     const std::shared_ptr<MeshBuffer>& recv_data_buffer,
     std::size_t page_size,
     std::size_t data_size,
@@ -1107,9 +1107,9 @@ std::shared_ptr<Program> create_split_reduce_program(
 }
 
 std::shared_ptr<Program> create_reduce_program(
-    const mesh_socket_t& recv_socket_0,
-    const mesh_socket_t& recv_socket_1,
-    const mesh_socket_t& send_socket_2,
+    const MeshSocket& recv_socket_0,
+    const MeshSocket& recv_socket_1,
+    const MeshSocket& send_socket_2,
     const std::shared_ptr<MeshDevice>& reducer,
     std::size_t page_size,
     std::size_t data_size,
@@ -1193,7 +1193,7 @@ std::shared_ptr<Program> create_reduce_program(
 }
 
 std::shared_ptr<Program> create_recv_program(
-    const mesh_socket_t& recv_socket,
+    const MeshSocket& recv_socket,
     const std::shared_ptr<MeshBuffer>& output_data_buffer,
     std::size_t page_size,
     std::size_t data_size,
@@ -1277,39 +1277,39 @@ void test_multi_sender_single_recv(
         reduce_recv1_coord = reduce_logical_coord;
     }
 
-    socket_connection_t socket_connection_0 = {
+    SocketConnection socket_connection_0 = {
         .sender_core = {MeshCoordinate(0, 0), sender_logical_coord},
         .receiver_core = {MeshCoordinate(0, 0), reduce_recv0_coord},
     };
-    socket_connection_t socket_connection_1 = {
+    SocketConnection socket_connection_1 = {
         .sender_core = {MeshCoordinate(0, 0), sender_logical_coord},
         .receiver_core = {MeshCoordinate(0, 0), reduce_recv1_coord},
     };
-    socket_connection_t socket_connection_2 = {
+    SocketConnection socket_connection_2 = {
         .sender_core = {MeshCoordinate(0, 0), reduce_logical_coord},
         .receiver_core = {MeshCoordinate(0, 0), recv0_logical_coord},
     };
-    socket_memory_config_t socket_mem_config = {
+    SocketMemoryConfig socket_mem_config = {
         .socket_storage_type = BufferType::L1,
         .fifo_size = socket_fifo_size,
     };
 
-    socket_config_t socket_config_0 = {
+    SocketConfig socket_config_0 = {
         .socket_connection_config = {socket_connection_0},
         .socket_mem_config = socket_mem_config,
     };
-    socket_config_t socket_config_1 = {
+    SocketConfig socket_config_1 = {
         .socket_connection_config = {socket_connection_1},
         .socket_mem_config = socket_mem_config,
     };
-    socket_config_t socket_config_2 = {
+    SocketConfig socket_config_2 = {
         .socket_connection_config = {socket_connection_2},
         .socket_mem_config = socket_mem_config,
     };
 
-    auto [send_socket_0, recv_socket_0] = mesh_socket_t::create_sockets(sender_0, reducer, socket_config_0);
-    auto [send_socket_1, recv_socket_1] = mesh_socket_t::create_sockets(sender_1, reducer, socket_config_1);
-    auto [send_socket_2, recv_socket_2] = mesh_socket_t::create_sockets(reducer, receiver, socket_config_2);
+    auto [send_socket_0, recv_socket_0] = MeshSocket::create_sockets(sender_0, reducer, socket_config_0);
+    auto [send_socket_1, recv_socket_1] = MeshSocket::create_sockets(sender_1, reducer, socket_config_1);
+    auto [send_socket_2, recv_socket_2] = MeshSocket::create_sockets(reducer, receiver, socket_config_2);
 
     auto sender_data_shard_params =
         ShardSpecBuffer(CoreRangeSet(sender_logical_coord), {1, 1}, ShardOrientation::ROW_MAJOR, {1, 1}, {1, 1});
@@ -1477,7 +1477,7 @@ void test_multi_connection_multi_device_data_copy(
     auto sender_logical_core = CoreCoord(0, 0);
     auto recv_logical_core = CoreCoord(0, 0);
 
-    std::vector<socket_connection_t> socket_connections;
+    std::vector<SocketConnection> socket_connections;
 
     for (std::size_t x = 0; x < 4; x++) {
         socket_connections.push_back(
@@ -1485,15 +1485,15 @@ void test_multi_connection_multi_device_data_copy(
              .receiver_core = {MeshCoordinate(0, 4 - x - 1), recv_logical_core}});
     }
 
-    socket_memory_config_t socket_mem_config = {
+    SocketMemoryConfig socket_mem_config = {
         .socket_storage_type = BufferType::L1,
         .fifo_size = socket_fifo_size,
     };
 
-    auto [send_socket, recv_socket] = mesh_socket_t::create_sockets(
+    auto [send_socket, recv_socket] = MeshSocket::create_sockets(
         sender_mesh,
         recv_mesh,
-        socket_config_t{
+        SocketConfig{
             .socket_connection_config = socket_connections,
             .socket_mem_config = socket_mem_config,
         });
@@ -1532,8 +1532,8 @@ void test_multi_connection_multi_device_data_copy(
     auto recv_mesh_workload = CreateMeshWorkload();
 
     for (const auto& connection : socket_connections) {
-        auto sender_physical_id = sender_mesh->get_device(connection.sender_core.first)->id();
-        auto recv_physical_id = recv_mesh->get_device(connection.receiver_core.first)->id();
+        auto sender_physical_id = sender_mesh->get_device(connection.sender_core.device_coord)->id();
+        auto recv_physical_id = recv_mesh->get_device(connection.receiver_core.device_coord)->id();
 
         auto sender_program = create_sender_program(
             send_socket,
@@ -1554,9 +1554,9 @@ void test_multi_connection_multi_device_data_copy(
             recv_physical_id);
 
         AddProgramToMeshWorkload(
-            sender_mesh_workload, std::move(*sender_program), MeshCoordinateRange(connection.sender_core.first));
+            sender_mesh_workload, std::move(*sender_program), MeshCoordinateRange(connection.sender_core.device_coord));
         AddProgramToMeshWorkload(
-            recv_mesh_workload, std::move(*recv_program), MeshCoordinateRange(connection.receiver_core.first));
+            recv_mesh_workload, std::move(*recv_program), MeshCoordinateRange(connection.receiver_core.device_coord));
     }
     EnqueueMeshWorkload(sender_mesh->mesh_command_queue(), sender_mesh_workload, false);
     EnqueueMeshWorkload(recv_mesh->mesh_command_queue(), recv_mesh_workload, false);
@@ -1579,21 +1579,21 @@ TEST_F(MeshSocketTest, SingleConnectionSingleDeviceConfig) {
     auto recv_virtual_coord = md0->worker_core_from_logical_core(recv_logical_coord);
     std::size_t socket_fifo_size = 1024;
 
-    socket_connection_t socket_connection = {
+    SocketConnection socket_connection = {
         .sender_core = {MeshCoordinate(0, 0), sender_logical_coord},
         .receiver_core = {MeshCoordinate(0, 0), recv_logical_coord},
     };
 
-    socket_memory_config_t socket_mem_config = {
+    SocketMemoryConfig socket_mem_config = {
         .socket_storage_type = BufferType::L1,
         .fifo_size = socket_fifo_size,
     };
 
-    socket_config_t socket_config = {
+    SocketConfig socket_config = {
         .socket_connection_config = {socket_connection},
         .socket_mem_config = socket_mem_config,
     };
-    auto [send_socket, recv_socket] = mesh_socket_t::create_sockets(md0, md0, socket_config);
+    auto [send_socket, recv_socket] = MeshSocket::create_sockets(md0, md0, socket_config);
 
     std::vector<sender_socket_md> sender_config_readback;
     std::vector<receiver_socket_md> recv_config_readback;
@@ -1638,25 +1638,25 @@ TEST_F(MeshSocketTest, MultiConnectionSingleDeviceConfig) {
         }
     }
 
-    std::vector<socket_connection_t> socket_connections;
+    std::vector<SocketConnection> socket_connections;
 
     for (std::size_t core_idx = 0; core_idx < sender_logical_coords.size(); core_idx++) {
-        socket_connections.push_back(socket_connection_t{
+        socket_connections.push_back(SocketConnection{
             .sender_core = {MeshCoordinate(0, 0), sender_logical_coords[core_idx]},
             .receiver_core = {MeshCoordinate(0, 0), recv_logical_coords[core_idx]}});
     }
 
-    socket_memory_config_t socket_mem_config = {
+    SocketMemoryConfig socket_mem_config = {
         .socket_storage_type = BufferType::L1,
         .fifo_size = socket_fifo_size,
     };
 
-    socket_config_t socket_config = {
+    SocketConfig socket_config = {
         .socket_connection_config = socket_connections,
         .socket_mem_config = socket_mem_config,
     };
 
-    auto [send_socket, recv_socket] = mesh_socket_t::create_sockets(md0, md0, socket_config);
+    auto [send_socket, recv_socket] = MeshSocket::create_sockets(md0, md0, socket_config);
 
     std::vector<sender_socket_md> sender_configs;
     std::vector<receiver_socket_md> recv_configs;
@@ -1676,14 +1676,14 @@ TEST_F(MeshSocketTest, MultiConnectionSingleDeviceConfig) {
     for (const auto& connection : socket_connections) {
         const auto& sender = connection.sender_core;
         const auto& recv = connection.receiver_core;
-        auto sender_idx = sender_core_to_core_id.at(sender.second);
-        auto recv_idx = recv_core_to_core_id.at(recv.second);
+        auto sender_idx = sender_core_to_core_id.at(sender.core_coord);
+        auto recv_idx = recv_core_to_core_id.at(recv.core_coord);
 
         const auto& sender_config = sender_configs[sender_idx];
         const auto& recv_config = recv_configs[recv_idx];
 
-        auto sender_virtual_coord = md0->worker_core_from_logical_core(sender.second);
-        auto recv_virtual_coord = md0->worker_core_from_logical_core(recv.second);
+        auto sender_virtual_coord = md0->worker_core_from_logical_core(sender.core_coord);
+        auto recv_virtual_coord = md0->worker_core_from_logical_core(recv.core_coord);
         verify_socket_configs(
             sender_config,
             recv_config,
@@ -1737,16 +1737,16 @@ TEST_F(MeshSocketTest2DFabric, MultiConnectionMultiDeviceTest) {
     std::shuffle(sender_device_coords.begin(), sender_device_coords.end(), generator);
     std::shuffle(recv_device_coords.begin(), recv_device_coords.end(), generator);
 
-    std::vector<socket_connection_t> socket_connections;
+    std::vector<SocketConnection> socket_connections;
 
     for (std::size_t coord_idx = 0; coord_idx < sender_logical_coords.size(); coord_idx++) {
-        socket_connection_t socket_connection = {
+        SocketConnection socket_connection = {
             .sender_core = {sender_device_coords[coord_idx], sender_logical_coords[coord_idx]},
             .receiver_core = {recv_device_coords[coord_idx], recv_logical_coords[coord_idx]}};
         socket_connections.push_back(socket_connection);
     }
 
-    socket_config_t socket_config_l1 = {
+    SocketConfig socket_config_l1 = {
         .socket_connection_config = socket_connections,
         .socket_mem_config =
             {
@@ -1754,7 +1754,7 @@ TEST_F(MeshSocketTest2DFabric, MultiConnectionMultiDeviceTest) {
                 .fifo_size = socket_fifo_size,
             },
     };
-    socket_config_t socket_config_dram = {
+    SocketConfig socket_config_dram = {
         .socket_connection_config = socket_connections,
         .socket_mem_config =
             {
@@ -1763,8 +1763,8 @@ TEST_F(MeshSocketTest2DFabric, MultiConnectionMultiDeviceTest) {
             },
     };
 
-    auto [send_socket_l1, recv_socket_l1] = mesh_socket_t::create_sockets(md0, md1, socket_config_l1);
-    auto [send_socket_dram, recv_socket_dram] = mesh_socket_t::create_sockets(md0, md1, socket_config_dram);
+    auto [send_socket_l1, recv_socket_l1] = MeshSocket::create_sockets(md0, md1, socket_config_l1);
+    auto [send_socket_dram, recv_socket_dram] = MeshSocket::create_sockets(md0, md1, socket_config_dram);
 
     const auto& sender_core_to_core_id =
         send_socket_l1.get_config_buffer()->get_backing_buffer()->get_buffer_page_mapping()->core_to_core_id_;
@@ -1789,10 +1789,10 @@ TEST_F(MeshSocketTest2DFabric, MultiConnectionMultiDeviceTest) {
     for (const auto& connection : socket_connections) {
         const auto& sender_core = connection.sender_core;
         const auto& recv_core = connection.receiver_core;
-        const auto& sender_device_coord = sender_core.first;
-        const auto& recv_device_coord = recv_core.first;
-        const auto& sender_core_coord = sender_core.second;
-        const auto& recv_core_coord = recv_core.second;
+        const auto& sender_device_coord = sender_core.device_coord;
+        const auto& recv_device_coord = recv_core.device_coord;
+        const auto& sender_core_coord = sender_core.core_coord;
+        const auto& recv_core_coord = recv_core.core_coord;
 
         auto sender_idx = sender_core_to_core_id.at(sender_core_coord);
         auto recv_idx = recv_core_to_core_id.at(recv_core_coord);
@@ -1826,19 +1826,19 @@ TEST_F(MeshSocketTest2DFabric, SocketsOnSubDevice) {
 
     // Create sockets in global memory space. This socket is persistent, it lives regardless
     // of the sub device config loaded on the mesh_device
-    socket_connection_t global_socket_connection = {
+    SocketConnection global_socket_connection = {
         .sender_core = {MeshCoordinate(0, 0), CoreCoord(0, 0)},
         .receiver_core = {MeshCoordinate(0, 0), CoreCoord(0, 0)},
     };
-    socket_memory_config_t global_socket_mem_cfg = {
+    SocketMemoryConfig global_socket_mem_cfg = {
         .socket_storage_type = BufferType::L1,
         .fifo_size = socket_fifo_size,
     };
-    socket_config_t global_socket_config = {
+    SocketConfig global_socket_config = {
         .socket_connection_config = {global_socket_connection},
         .socket_mem_config = global_socket_mem_cfg,
     };
-    auto [send_socket_global, recv_socket_global] = mesh_socket_t::create_sockets(md0, md1, global_socket_config);
+    auto [send_socket_global, recv_socket_global] = MeshSocket::create_sockets(md0, md1, global_socket_config);
 
     SubDevice sub_device_0(std::array{CoreRangeSet(CoreRange({0, 0}, {0, 0}))});
     SubDevice sub_device_1(std::array{CoreRangeSet(CoreRange({1, 1}, {1, 1}))});
@@ -1852,11 +1852,11 @@ TEST_F(MeshSocketTest2DFabric, SocketsOnSubDevice) {
 
     {
         // Socket on sub device 0
-        socket_connection_t socket_0_connection = {
+        SocketConnection socket_0_connection = {
             .sender_core = {MeshCoordinate(0, 0), CoreCoord(0, 0)},
             .receiver_core = {MeshCoordinate(0, 0), CoreCoord(0, 0)},
         };
-        socket_memory_config_t socket_mem_config_0 = {
+        SocketMemoryConfig socket_mem_config_0 = {
             .socket_storage_type = BufferType::L1,
             .fifo_size = socket_fifo_size,
             .sender_sub_device = md0->get_sub_device_ids()[0],
@@ -1864,38 +1864,38 @@ TEST_F(MeshSocketTest2DFabric, SocketsOnSubDevice) {
         };
 
         // Socket on sub device 1
-        socket_connection_t socket_1_connection = {
+        SocketConnection socket_1_connection = {
             .sender_core = {MeshCoordinate(0, 0), CoreCoord(1, 1)},
             .receiver_core = {MeshCoordinate(0, 0), CoreCoord(1, 1)},
         };
 
-        socket_memory_config_t socket_mem_config_1 = {
+        SocketMemoryConfig socket_mem_config_1 = {
             .socket_storage_type = BufferType::L1,
             .fifo_size = socket_fifo_size,
             .sender_sub_device = md1->get_sub_device_ids()[1],
             .receiver_sub_device = md0->get_sub_device_ids()[1],
         };
 
-        auto [send_socket_0, recv_socket_0] = mesh_socket_t::create_sockets(
+        auto [send_socket_0, recv_socket_0] = MeshSocket::create_sockets(
             md0,
             md1,
-            socket_config_t{
+            SocketConfig{
                 .socket_connection_config = {socket_0_connection},
                 .socket_mem_config = socket_mem_config_0,
             });
-        auto [send_socket_1, recv_socket_1] = mesh_socket_t::create_sockets(
+        auto [send_socket_1, recv_socket_1] = MeshSocket::create_sockets(
             md1,
             md0,
-            socket_config_t{
+            SocketConfig{
                 .socket_connection_config = {socket_1_connection},
                 .socket_mem_config = socket_mem_config_1,
             });
         // Assert exppected: Socket cores don't match sub device
         EXPECT_THROW(
-            mesh_socket_t::create_sockets(
+            MeshSocket::create_sockets(
                 md0,
                 md1,
-                socket_config_t{
+                SocketConfig{
                     .socket_connection_config = {socket_1_connection},
                     .socket_mem_config = socket_mem_config_0,
                 }),
@@ -1919,41 +1919,41 @@ TEST_F(MeshSocketTest, AssertOnDuplicateCores) {
     auto md1 = mesh_device_->create_submesh(MeshShape(1, 1), MeshCoordinate(1, 0));
     constexpr uint32_t socket_fifo_size = 1024;
 
-    socket_connection_t socket_connection = {
+    SocketConnection socket_connection = {
         .sender_core = {MeshCoordinate(0, 0), CoreCoord(0, 0)},
         .receiver_core = {MeshCoordinate(0, 0), CoreCoord(0, 0)},
     };
 
-    socket_connection_t duplicate_socket_connection_0 = {
+    SocketConnection duplicate_socket_connection_0 = {
         .sender_core = {MeshCoordinate(0, 0), CoreCoord(0, 0)},
         .receiver_core = {MeshCoordinate(0, 0), CoreCoord(1, 0)},
     };
 
-    socket_connection_t duplicate_socket_connection_1 = {
+    SocketConnection duplicate_socket_connection_1 = {
         .sender_core = {MeshCoordinate(0, 0), CoreCoord(1, 0)},
         .receiver_core = {MeshCoordinate(0, 0), CoreCoord(0, 0)},
     };
 
-    socket_memory_config_t socket_mem_config = {
+    SocketMemoryConfig socket_mem_config = {
         .socket_storage_type = BufferType::L1,
         .fifo_size = socket_fifo_size,
     };
 
-    socket_config_t socket_config_0 = {
+    SocketConfig socket_config_0 = {
         .socket_connection_config = {socket_connection, duplicate_socket_connection_0},
         .socket_mem_config = socket_mem_config};
 
-    socket_config_t socket_config_1 = {
+    SocketConfig socket_config_1 = {
         .socket_connection_config = {socket_connection, duplicate_socket_connection_1},
         .socket_mem_config = socket_mem_config};
 
-    socket_config_t socket_config_2 = {
+    SocketConfig socket_config_2 = {
         .socket_connection_config = {socket_connection}, .socket_mem_config = socket_mem_config};
 
-    EXPECT_THROW(mesh_socket_t::create_sockets(md0, md1, socket_config_0), std::exception);
-    EXPECT_THROW(mesh_socket_t::create_sockets(md0, md1, socket_config_1), std::exception);
+    EXPECT_THROW(MeshSocket::create_sockets(md0, md1, socket_config_0), std::exception);
+    EXPECT_THROW(MeshSocket::create_sockets(md0, md1, socket_config_1), std::exception);
     // Having the sender and receiver on the same core is valid. Ensure that this doesn't fail.
-    EXPECT_NO_THROW(mesh_socket_t::create_sockets(md0, md0, socket_config_2));
+    EXPECT_NO_THROW(MeshSocket::create_sockets(md0, md0, socket_config_2));
 }
 
 // ========= Single Device Data Movement Tests =========

@@ -30,7 +30,7 @@ void fabric_write_any_len(
 }
 
 void kernel_main() {
-    // Get this value from mesh_socket_t struct on host
+    // Get this value from MeshSocket struct on host
     constexpr uint32_t socket_config_addr = get_compile_time_arg_val(0);
     constexpr uint32_t local_l1_buffer_addr = get_compile_time_arg_val(1);
     constexpr uint32_t page_size = get_compile_time_arg_val(2);
