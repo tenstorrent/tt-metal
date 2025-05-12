@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <stdint.h>
-#include <array>
 #include "dataflow_api.h"
 
 template <bool DRAM, uint32_t tile_hw = 1024>
@@ -74,18 +73,18 @@ inline __attribute__((always_inline)) void process_kv_block(
     k_out_tensor_current_tile_id = k_tensor_tile_id;
 #endif
     for (uint32_t c_dim = 0; c_dim < kv_out_c; c_dim++) {
-#ifndef TRANSPOSED_K_HEADS
+#ifndef TRANSPOSE_K_HEADS
         k_out_tensor_current_tile_id = out_tensor_current_tile_id_along_c;
 #endif
         for (uint32_t w_dim = 0; w_dim < kv_out_w_tiles; w_dim++) {
             write_tiles(cb_id_k, s_k, k_out_tensor_current_tile_id, num_tiles_read);
-#ifndef TRANSPOSED_K_HEADS
+#ifndef TRANSPOSE_K_HEADS
             k_out_tensor_current_tile_id++;
 #else
             k_out_tensor_current_tile_id += kv_out_h_tiles;
 #endif
         }
-#ifndef TRANSPOSED_K_HEADS
+#ifndef TRANSPOSE_K_HEADS
         out_tensor_current_tile_id_along_c += kv_out_HtWt;
 #endif
     }
@@ -170,12 +169,9 @@ void kernel_main() {
     constexpr uint32_t block_size = 1;  // micro-block size for read/write; nothing to do with num_blocks
     // TODO: This might negatively impact perf
     constexpr uint32_t out_num_tiles_read = block_size;  // always read and pop by micro-block size for generality
-    uint32_t l1_read_addr;
-    uint32_t q_out_tensor_current_tile_id;  // need this to update q_out_tensor_tile_id
-    uint32_t k_out_tensor_current_tile_id;  // need this to update k_out_tensor_tile_id
-    uint32_t v_out_tensor_current_tile_id;  // need this to update v_out_tensor_tile_id
-    uint32_t out_tensor_current_tile_id_along_c;
 
+    // Read in interleaved fashion from q and kv tensors, up to min(num_blocks_q, num_blocks_kv)
+    // and then read from other tensor to fill the rest of the blocks
     for (uint32_t block = 0; block < num_blocks_common; block++) {
         // q + create q head --> outputs: [B, num_q_heads, Sq, head_dim]
         process_q_block(
