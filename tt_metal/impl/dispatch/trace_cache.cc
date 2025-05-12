@@ -6,6 +6,7 @@
 #include <optional>
 #include <functional>
 #include <string>
+#include <limits>
 #include <assert.h>
 
 // TODOs (some sprinkled throughout below):
