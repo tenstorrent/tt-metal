@@ -11,7 +11,6 @@ namespace ttnn::operations::experimental::cnn::detail {
 using namespace tt::constants;
 
 tt::tt_metal::operation::ProgramWithCallbacks multi_core_convert_to_hwc(const Tensor& a, Tensor& output) {
-    tt::log_info("STARTING CONVERT OP");
     tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
 
     const auto input_shape = a.get_logical_shape();
@@ -20,20 +19,18 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_convert_to_hwc(const Te
     const auto input_core_grid = a.shard_spec()->grid;
     const auto input_cores = corerange_to_cores(
         input_core_grid, std::nullopt, a.shard_spec()->orientation == tt::tt_metal::ShardOrientation::ROW_MAJOR);
-    tt::log_info("STARTING CONVERT OP");
 
     const auto C = input_shape[2];
     const auto HW = input_shape[3];
 
-    tt::log_info(tt::LogType::LogOp, "Running op with C={}, HW={}, shard_shape={}", C, HW, a.shard_spec()->shape);
-    tt::log_info("STARTING CONVERT OP");
+    tt::log_debug(tt::LogType::LogOp, "Running op with C={}, HW={}, shard_shape={}", C, HW, a.shard_spec()->shape);
 
     TT_FATAL(input_shard_height <= TILE_HEIGHT, "Shard height must be 32 or smaller");
     TT_FATAL(input_shard_width % TILE_WIDTH == 0, "Shard width must be multiple of tile width");
 
     const uint32_t total_tiles_per_core = tt::div_up(input_shard_width, TILE_HEIGHT);
 
-    tt::log_info(tt::LogType::LogOp, "Processing {} tiles per core", total_tiles_per_core);
+    tt::log_debug(tt::LogType::LogOp, "Processing {} tiles per core", total_tiles_per_core);
 
     const auto create_circular_buffer = [&program, &input_core_grid](
                                             uint32_t index,
@@ -41,7 +38,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_convert_to_hwc(const Te
                                             uint32_t page_size,
                                             const tt::DataFormat& format,
                                             tt::tt_metal::Buffer* buffer = nullptr) -> tt::tt_metal::CBHandle {
-        tt::log_info(
+        tt::log_debug(
             tt::LogType::LogOp,
             "Creating CB at index {} with total size {} B and page size {} B",
             index,
