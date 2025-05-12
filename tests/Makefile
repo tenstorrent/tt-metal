@@ -35,7 +35,7 @@ OPTIONS_ALL += $(filter -mcpu=%, $(ARCH_OPTS))
 OPTIONS_COMPILE += $(filter -DARCH_%, $(ARCH_OPTS))
 
 OPTIONS_LINK=-fexceptions -Wl,-z,max-page-size=16 -Wl,-z,common-page-size=16 -nostartfiles -Wl,--trace
-INCLUDES = -I../$(ARCH_LLK_ROOT)/llk_lib -I../$(ARCH_LLK_ROOT)/common/inc -I../$(ARCH_LLK_ROOT)/common/inc/sfpu -I../$(ARCH_LLK_ROOT)/hw_specific/inc
+INCLUDES = -I../$(ARCH_LLK_ROOT)/llk_lib -I../$(ARCH_LLK_ROOT)/common/inc -I../$(ARCH_LLK_ROOT)/common/inc/sfpu -I$(HEADER_DIR)
 INCLUDES += -Ifirmware/riscv/common -Ifirmware/riscv/$(CHIP_ARCH)/ -Isfpi/include -Ihelpers/include
 
 FORMAT_ARG += $(foreach var, unpack_A_src unpack_A_dst unpack_B_src unpack_B_dst fpu pack_src pack_dst, $(if $($(var)),-D$($(var))))
@@ -65,6 +65,20 @@ OPTIONS_COMPILE+=$(INCLUDES)
 ifeq ($(dest_acc), DEST_ACC)
 	OPTIONS_COMPILE+=-DDEST_ACC
 endif
+
+# Define hardware specific headers
+# These headers are shared between tt-llk and tt-metal and reside in the tt-metal repository
+BASE_URL = https://raw.githubusercontent.com/tenstorrent/tt-metal/refs/heads/main/tt_metal/hw/inc/$(CHIP_ARCH)
+BASE_URL_WORMHOLE_SPECIFIC = https://raw.githubusercontent.com/tenstorrent/tt-metal/refs/heads/main/tt_metal/hw/inc/$(CHIP_ARCH)/wormhole_b0_defines
+
+HEADER_DIR = hw_specific/inc
+HW_INC_STAMP_FILE = $(HEADER_DIR)/.headers_downloaded
+
+HEADERS = \
+    cfg_defines.h \
+    dev_mem_map.h \
+    tensix.h \
+    tensix_types.h
 
 # Define project paths
 HELPERS=helpers
@@ -122,8 +136,31 @@ $(BUILD_DIR)/tmu-crt0.o: $(HELPERS)/tmu-crt0.S | $(BUILD_DIR)
 $(BUILD_DIR)/brisc.o: $(RISCV_SOURCES)/brisc.cpp | $(BUILD_DIR)
 	$(GXX) $(OPTIONS_ALL) $(OPTIONS_COMPILE) -c -o $@ $<
 
+$(HW_INC_STAMP_FILE):
+	@mkdir -p $(HEADER_DIR)
+	@case "$(CHIP_ARCH)" in \
+		wormhole) \
+			SPECIFIC_URL="$(BASE_URL_WORMHOLE_SPECIFIC)"; \
+			;; \
+		blackhole) \
+			SPECIFIC_URL=""; \
+			;; \
+		*) \
+			echo "Unsupported CHIP_ARCH detected: $(CHIP_ARCH)"; \
+			exit 1; \
+			;; \
+	esac; \
+	for header in $(HEADERS); do \
+		curl -sfL $(BASE_URL)/$$header -o $(HEADER_DIR)/$$header || \
+		curl -sfL $$SPECIFIC_URL/$$header -o $(HEADER_DIR)/$$header || \
+		{ echo "Failed to download $$header"; exit 1; }; \
+	done;
+	@touch $(HW_INC_STAMP_FILE)
+
 clean:
 	$(RMDIR) $(BUILD_DIR)
 	$(RMDIR) __pycache__
 	$(RMDIR) .pytest_cache
+	$(RMDIR)  hw_specific
+	$(RMDIR) $(HW_INC_STAMP_FILE)
 	$(MAKE) -C python_tests clean
