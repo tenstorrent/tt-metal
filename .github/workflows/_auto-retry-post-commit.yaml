@@ -65,7 +65,7 @@ jobs:
             echo "::notice title=no-continue-max-tries::This workflow has exceeded max tries. Not re-trying"
             should_continue=false
           elif [[ "$original_trigger" == "workflow_dispatch" && "$workflow_name" != "All post-commit tests (with retries)" ]]; then
-            echo "::notice title=no-continue-is-on-branch::This workflow was a workflow dispatched on a branch, not main. Not re-trying"
+            echo "::notice title=no-continue-is-on-branch::This workflow was a workflow dispatched on a branch without retries enabled. Not re-trying"
             should_continue=false
           elif [[ "$conclusion" != "failure" ]]; then
             echo "::notice title=no-continue-did-not-fail::This workflow did not fail. Not re-trying"
@@ -105,7 +105,7 @@ jobs:
                   path=$(echo "$annotation" | jq -r '.path')
 
                   if [[ "$level" == "failure" && "$path" != ".github"* ]]; then
-                    echo "::notice title=no-continue-test-failure::This workflow failed a test on job https://github.com/tenstorrent/tt-metal/actions/runs/${{ steps.get-run-id-and-attempt.outputs.run-id }}/job/$job_id Not re-trying"
+                    echo "::notice title=no-continue-test-failure::This workflow failed a test on job https://github.com/tenstorrent/tt-metal/actions/runs/${{ steps.get-run-id-and-attempt.outputs.run-id }}/job/$job_id Not re-running"
                     echo "should_rerun=false" >> "$GITHUB_OUTPUT"
                     exit 0
                   fi
