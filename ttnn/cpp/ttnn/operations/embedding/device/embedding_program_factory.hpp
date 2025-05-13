@@ -437,7 +437,7 @@ tt::tt_metal::operation::ProgramWithCallbacks embeddings_rm(
 
     uint32_t num_cores, num_blocks_per_core_group_1, num_blocks_per_core_group_2;
     CoreRangeSet all_cores, core_group_1, core_group_2;
-    bool row_major;
+    bool row_major = false;
     if (output_sharded) {
         const auto& shard_spec = output.shard_spec().value();
         all_cores = shard_spec.grid;
@@ -455,7 +455,6 @@ tt::tt_metal::operation::ProgramWithCallbacks embeddings_rm(
             num_blocks_per_core_group_1,
             num_blocks_per_core_group_2) =
             tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, problem_size);
-        row_major = false;
     }
     uint32_t g1_numcores = core_group_1.num_cores();
     uint32_t g2_numcores = core_group_2.num_cores();
@@ -468,8 +467,15 @@ tt::tt_metal::operation::ProgramWithCallbacks embeddings_rm(
 
     constexpr uint32_t out_cb_index = CBIndex::c_0;
     uint32_t rounded_weight_page_size = round_up_to_mul32(weight_page_size);
+    uint32_t out_cb_size;
+    if (output_sharded) {
+        out_cb_size = output.buffer()->aligned_size_per_bank();
+    } else {
+        uint32_t buffering_size = (num_blocks_per_core_group_1 > 1 || num_blocks_per_core_group_2 > 1) ? 2 : 1;
+        out_cb_size = buffering_size * rounded_weight_page_size;
+    }
     tt_metal::CircularBufferConfig cb_out_config =
-        tt_metal::CircularBufferConfig(rounded_weight_page_size, {{out_cb_index, weights_cb_data_format}})
+        tt_metal::CircularBufferConfig(out_cb_size, {{out_cb_index, weights_cb_data_format}})
             .set_page_size(out_cb_index, rounded_weight_page_size);
     if (output_sharded) {
         cb_out_config.set_globally_allocated_address(*out_buffer);

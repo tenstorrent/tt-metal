@@ -431,10 +431,11 @@ def test_tg_llama_sharded_rm_embedding(device, use_program_cache):
     compute_grid_size = device.compute_with_storage_grid_size()
     if unharvested_grid_size[0] > compute_grid_size.x or unharvested_grid_size[1] > compute_grid_size.y:
         pytest.skip(f"Need {unharvested_grid_size} grid size to run this test but core grid is {compute_grid_size}")
-    batch_size = 8
+    batch_size = 16
+    num_heads = 8
     vocabulary_size = 4096
     hidden_embedding_dim = 128
-    torch_input_tensor = torch.randint(0, vocabulary_size - 1, (1, batch_size))
+    torch_input_tensor = torch.randint(0, vocabulary_size - 1, (batch_size, num_heads))
     torch_weights = torch.randn(vocabulary_size, hidden_embedding_dim)
     torch_output_tensor = torch.nn.functional.embedding(torch_input_tensor, torch_weights)
 
@@ -449,7 +450,7 @@ def test_tg_llama_sharded_rm_embedding(device, use_program_cache):
     shard_grid = ttnn.num_cores_to_corerangeset_in_subcoregrids(start_core, num_cores, core_grid, row_wise=True)
     shard_spec = ttnn.ShardSpec(
         shard_grid,
-        (batch_size // num_cores, hidden_embedding_dim),
+        ((batch_size * num_heads) // num_cores, hidden_embedding_dim),
         ttnn.ShardOrientation.ROW_MAJOR,
     )
     output_mem_config = ttnn.MemoryConfig(
