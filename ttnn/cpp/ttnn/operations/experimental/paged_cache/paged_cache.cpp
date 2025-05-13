@@ -36,7 +36,7 @@ ttnn::Tensor PagedUpdateCacheOperation::invoke(
         {cache_tensor, input_tensor},
         {update_idxs_tensor, page_table});  // Optional inputs for UPDATE
 
-    return cache_tensor;
+    return cache_tensor;  // Updated cache tensor in-place
 }
 
 std::tuple<ttnn::Tensor, ttnn::Tensor> PagedFusedUpdateCacheOperation::invoke(
@@ -65,7 +65,7 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> PagedFusedUpdateCacheOperation::invoke(
         {cache_tensor1, input_tensor1, cache_tensor2, input_tensor2},
         {update_idxs_tensor, page_table});  // Optional inputs for FUSED_UPDATE
 
-    return {cache_tensor1, cache_tensor2};
+    return {cache_tensor1, cache_tensor2};  // Updated cache tensors in-place
 }
 
 ttnn::Tensor PagedFillCacheOperation::invoke(
@@ -91,7 +91,7 @@ ttnn::Tensor PagedFillCacheOperation::invoke(
         {cache_tensor, input_tensor, page_table},  // Mandatory inputs for FILL
         {std::nullopt, std::nullopt});
 
-    return cache_tensor;
+    return cache_tensor;  // Updated cache tensor in-place
 }
 
 }  // namespace operations::experimental::paged_cache
