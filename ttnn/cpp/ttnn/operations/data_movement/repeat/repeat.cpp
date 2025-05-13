@@ -9,7 +9,9 @@
 #include <tt-metalium/host_api.hpp>
 
 #include "ttnn/common/queue_id.hpp"
+#include "ttnn/operations/copy.hpp"
 #include "ttnn/operations/core/core.hpp"
+#include "ttnn/operations/data_movement/fill_pad/fill_pad.hpp"
 #include "ttnn/operations/data_movement/sharded/sharded_to_interleaved/sharded_to_interleaved.hpp"
 #include "ttnn/operations/data_movement/sharded/interleaved_to_sharded/interleaved_to_sharded.hpp"
 #include "ttnn/operations/data_movement/view/view.hpp"
@@ -173,6 +175,10 @@ ttnn::Tensor RepeatOperation::invoke(
             MemoryConfig{TensorMemoryLayout::INTERLEAVED, working_output_mem_config.buffer_type()};
     }
 
+    if (working_tensor.get_dtype() == DataType::BFLOAT8_B) {
+        working_tensor = ttnn::typecast(working_tensor, DataType::BFLOAT16);
+    }
+
     // tiled -> RM
     if (working_tensor.layout() == ttnn::TILE_LAYOUT) {
         working_tensor =
@@ -199,7 +205,12 @@ ttnn::Tensor RepeatOperation::invoke(
     // RM -> OG page layout
     if (tensor.layout() == ttnn::TILE_LAYOUT) {
         working_tensor =
-            ttnn::to_layout(working_tensor, ttnn::TILE_LAYOUT, tensor.get_dtype(), std::nullopt, (IDevice*)nullptr);
+            ttnn::to_layout(working_tensor, ttnn::TILE_LAYOUT, std::nullopt, std::nullopt, (IDevice*)nullptr);
+    }
+
+    if (tensor.get_dtype() == DataType::BFLOAT8_B) {
+        working_tensor = ttnn::fill_implicit_tile_padding(working_tensor, 0);
+        working_tensor = ttnn::typecast(working_tensor, DataType::BFLOAT8_B);
     }
 
     // Interleaved to OG mem layout
