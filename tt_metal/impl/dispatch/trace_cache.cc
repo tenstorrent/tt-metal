@@ -324,9 +324,9 @@ std::vector<TraceProgramData> WorkerBufferManager::build_use_data(
 
         if (program_data[pgm_id].get_count() != 0) {
             trace[trace_idx].set_next_idx(program_data[pgm_id].get_used());
-            if (programs[pgm_id].get_cost() > max_cost) {
-                max_cost = programs[pgm_id].get_cost();
-            }
+        }
+        if (programs[pgm_id].get_cost() > max_cost) {
+            max_cost = programs[pgm_id].get_cost();
         }
 
         trace[trace_idx].set_remaining(program_data[pgm_id].get_count());
