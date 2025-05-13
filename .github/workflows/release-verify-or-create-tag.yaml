@@ -64,42 +64,5 @@ jobs:
             const version = "${{ steps.get-version-number.outputs.version }}";
             const sha = "${{ github.sha }}";
 
-            try {
-              const { data: matchingTags } = await github.rest.git.getRef({
-                owner,
-                repo,
-                ref: `tags/${version}`,
-              });
-              console.log("Tag already exists");
-            } catch (e) {
-              console.log("Logging github API error");
-              console.log(e);
-              const { response: { status, data: { message } } } = e;
-
-              const isMissingTag = status === 404 && message == "Not Found";
-
-              if (isMissingTag) {
-                const tag = await github.rest.git.createTag({
-                  owner: owner,
-                  repo: repo,
-                  tag: version,
-                  message: `Release for ${version}`,
-                  object: sha,
-                  type: "commit",
-                  tagger: {
-                    name: "Tenstorrent Inc.",
-                    email: "info@tenstorrent.com",
-                  }
-                });
-                github.rest.git.createRef({
-                  owner: owner,
-                  repo: repo,
-                  ref: `refs/tags/${version}`,
-                  sha: tag.data.sha,
-                });
-              } else {
-                console.error(e);
-                console.error("Received an error that's not 404 Not Found for a tag");
-                throw e;
-              }
-            }
+            console.log(`Manually create tag ${version} for commit ${sha}`);
+            await new Promise(resolve => setTimeout(resolve, 120000));
