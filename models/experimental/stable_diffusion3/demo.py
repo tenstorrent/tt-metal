@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import itertools
 import os
 
 import pytest
@@ -65,7 +66,7 @@ def test_sd3(
         "atmospheric, wide-angle scene with deep cinematic depth and warmth."
     )
 
-    while True:
+    for i in itertools.count():
         new_prompt = input("Enter the input prompt, or q to exit:")
         if new_prompt:
             prompt = new_prompt
@@ -82,7 +83,7 @@ def test_sd3(
             negative_prompt_2=[negative_prompt],
             negative_prompt_3=[negative_prompt],
             num_inference_steps=num_inference_steps,
-            seed=0,
+            seed=i,
         )
 
         images[0].save(f"sd35_{image_w}_{image_h}.png")
