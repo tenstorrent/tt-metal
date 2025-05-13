@@ -173,7 +173,7 @@ jobs:
             --percentile-metrics ttft,tpot,itl,e2el \
             --save-result \
             --result-filename output/vllm_result.json \
-            > output/vllm_benchmark.log 2>&1 &
+            2>&1 | tee output/vllm_benchmark.log
 
       - name: Show report
         if: always()
