@@ -76,7 +76,7 @@ public:
     bool is_allocated() const;
 
     // Deallocates all `HostBuffer`s;
-    bool deallocate();
+    void deallocate();
 
 private:
     std::vector<HostBuffer> buffers_;

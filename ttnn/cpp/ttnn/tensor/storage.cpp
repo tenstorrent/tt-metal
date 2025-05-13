@@ -90,11 +90,10 @@ bool MultiDeviceHostStorage::is_allocated() const {
     return std::all_of(buffers_.begin(), buffers_.end(), [](auto&& buffer) { return buffer.is_allocated(); });
 }
 
-bool MultiDeviceHostStorage::deallocate() {
+void MultiDeviceHostStorage::deallocate() {
     for (auto& buffer : buffers_) {
         buffer.deallocate();
     }
-    return true;
 }
 
 }  // namespace tt::tt_metal
