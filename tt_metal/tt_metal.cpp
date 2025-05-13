@@ -45,6 +45,7 @@
 #include "llrt.hpp"
 #include "logger.hpp"
 #include "tt-metalium/program.hpp"
+#include "program/program_impl.hpp"
 #include "semaphore.hpp"
 #include "tracy/Tracy.hpp"
 #include <umd/device/tt_xy_pair.h>
@@ -320,7 +321,7 @@ bool WriteToDeviceDRAMChannel(IDevice* device, int dram_channel, uint32_t addres
         "Cannot write to reserved DRAM region, addresses [0, {}) are reserved!",
         device->allocator()->get_base_allocator_addr(HalMemType::DRAM));
     tt::tt_metal::MetalContext::instance().get_cluster().write_dram_vec(
-        host_buffer, tt_target_dram{device->id(), dram_channel, 0}, address);
+        host_buffer, device->id(), dram_channel, address);
     return pass;
 }
 
@@ -329,7 +330,7 @@ bool ReadFromDeviceDRAMChannel(
     bool pass = true;
     tt::tt_metal::MetalContext::instance().get_cluster().dram_barrier(device->id());
     tt::tt_metal::MetalContext::instance().get_cluster().read_dram_vec(
-        host_buffer, size, tt_target_dram{device->id(), dram_channel, 0}, address);
+        host_buffer, size, device->id(), dram_channel, address);
     return pass;
 }
 
@@ -890,7 +891,7 @@ void WriteRuntimeArgsToDevice(IDevice* device, Program& program, bool force_slow
     for (uint32_t index = 0; index < hal.get_programmable_core_type_count(); index++) {
         CoreType core_type = hal.get_core_type(index);
         uint32_t processor_classes = hal.get_processor_classes_count(index);
-        for (const auto& kg : program.get_kernel_groups(index)) {
+        for (const auto& kg : program.impl().get_kernel_groups(index)) {
             uint32_t kernel_config_base = kg->launch_msg.kernel_config.kernel_config_base[index];
             for (const CoreRange& core_range : kg->core_ranges.ranges()) {
                 for (auto x = core_range.start_coord.x; x <= core_range.end_coord.x; x++) {

@@ -39,7 +39,6 @@ def test_vit(device, use_program_cache):
     sequence_size = 224
 
     config = transformers.ViTConfig.from_pretrained(model_name)
-    config.num_hidden_layers = 12
     model = transformers.ViTForImageClassification.from_pretrained(model_name, config=config)
     config = ttnn_optimized_sharded_vit_wh.update_model_config(config, batch_size)
     image_processor = AutoImageProcessor.from_pretrained(model_name)
@@ -92,7 +91,7 @@ def test_vit(device, use_program_cache):
         torch_pixel_values = torch.permute(torch_pixel_values, (0, 2, 3, 1))
         torch_pixel_values = torch.nn.functional.pad(torch_pixel_values, (0, 1, 0, 0, 0, 0, 0, 0))
         batch_size, img_h, img_w, img_c = torch_pixel_values.shape  # permuted input NHWC
-        patch_size = 16
+        patch_size = config.patch_size
         torch_pixel_values = torch_pixel_values.reshape(batch_size, img_h, img_w // patch_size, 4 * patch_size)
         N, H, W, C = torch_pixel_values.shape
         shard_grid = ttnn.CoreRangeSet(

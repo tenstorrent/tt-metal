@@ -458,23 +458,17 @@ def test_demo_text(
     if data_parallel > num_devices or num_devices % data_parallel != 0:
         pytest.skip(f"Invalid number of DP groups: {data_parallel}, for {num_devices} devices")
 
-    llama_dir = os.getenv("LLAMA_DIR")
-    if llama_dir:
-        if (
-            is_ci_env
-            and num_devices == 32
-            and (data_parallel > 4 or (data_parallel == 4 and "3.1-70B" not in llama_dir))
-        ):
-            pytest.skip("CI runs only Llama3 70b DP = 4, TP = 8 on TG")
-        if (
-            is_ci_env
-            and num_devices == 8
-            and data_parallel > 1
-            and not ("3.2-1B" in llama_dir or "3.1-8B" in llama_dir)
-        ):
-            pytest.skip("CI runs only hybrid Llama3 1b and 8b on T3K")
-        if is_ci_env and data_parallel > 1 and batch_size > 1:
-            pytest.skip("CI runs only hybrid with batch 1 per submesh")
+    if is_ci_env:
+        llama_dir = os.getenv("LLAMA_DIR", "")
+        is_31_70b = "3.1-70B" in llama_dir
+        is_32_1b = "3.2-1B" in llama_dir
+        is_31_8b = "3.1-8B" in llama_dir
+        if num_devices == 32 and (data_parallel > 4 or (data_parallel == 4 and not is_31_70b)):
+            pytest.skip("CI only runs Llama3 70b DP = 4, TP = 8 on TG")
+        if num_devices == 8 and data_parallel > 1 and not (is_32_1b or is_31_8b):
+            pytest.skip("CI only runs hybrid Llama3 1b and 8b on T3K")
+        if data_parallel > 1 and batch_size > 1:
+            pytest.skip("CI only runs hybrid with batch 1 per submesh")
 
     if not stop_at_eos:
         logger.info(f"The decode generation will only stop at the max_generated_tokens limit == {max_generated_tokens}")
@@ -545,6 +539,13 @@ def test_demo_text(
             max_generated_tokens + max_encoded_prompt_len <= max_seq_len
         ), f"Prompt prefill tokens ({max_encoded_prompt_len}) + maximum number of decoded iterations ({max_generated_tokens}) needs to be <= than max_seq_len ({max_seq_len})"
 
+        if paged_attention:
+            paged_cache_max_seq_len = (
+                page_params["page_block_size"] * page_params["page_max_num_blocks_per_dp"] / batch_size
+            )
+            assert (
+                max_generated_tokens + max_encoded_prompt_len <= paged_cache_max_seq_len
+            ), f"max_generated_tokens ({max_generated_tokens}) needs to be <= than paged_cache_max_seq_len ({paged_cache_max_seq_len})"
         profiler.end(f"preprocess_prefill_inputs", iteration=batch_idx)
 
         # when doing repeating batches, set kv-caches to zero, to avoid context leaking
