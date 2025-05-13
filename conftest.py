@@ -113,6 +113,8 @@ class CIv2ModelDownloadUtils_:
         dest_dir_suffix="",
         endpoint_prefix="http://large-file-cache.large-file-cache.svc.cluster.local//mldata/model_checkpoints/pytorch/huggingface",
     ):
+        assert model_path, f"model_path cannot be empty when downloading - what is wrong with you?: {model_path}"
+
         # RK: Will this be portable? LOL
         dest_path = Path("/tmp/ttnn_model_cache/") / dest_dir_suffix
 
@@ -120,11 +122,18 @@ class CIv2ModelDownloadUtils_:
 
         download_dir_str = str(dest_path)
 
+        # Add trailing slash to model_path if it doesn't have one, as wget
+        # seems to not download recursively via subprocess if it doesn't have
+        # it
+        if model_path and not model_path.endswith("/"):
+            model_path = model_path + "/"
+
         endpoint = f"{endpoint_prefix}/{model_path}"
 
         subprocess.run(
             ["wget", "-r", "-nH", "-x", "--cut-dirs=5", "-np", "-R", "index.html*", "-P", download_dir_str, endpoint],
             check=True,
+            text=True,
         )
 
         return dest_path
