@@ -28,6 +28,7 @@
 #include "mesh_config.hpp"
 #include "mesh_coord.hpp"
 #include "mesh_workload.hpp"
+#include "mesh_workload_impl.hpp"
 #include "sub_device/sub_device_manager_tracker.hpp"
 #include "tt-metalium/program.hpp"
 #include "shape2d.hpp"
@@ -190,7 +191,7 @@ void FDMeshCommandQueue::clear_expected_num_workers_completed() {
 void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool blocking) {
     in_use_ = true;
     uint64_t command_hash = *mesh_device_->get_active_sub_device_manager_id();
-    std::unordered_set<SubDeviceId> sub_device_ids = mesh_workload.determine_sub_device_ids(mesh_device_);
+    std::unordered_set<SubDeviceId> sub_device_ids = mesh_workload.impl().determine_sub_device_ids(mesh_device_);
     TT_FATAL(sub_device_ids.size() == 1, "Programs must be executed on a single sub-device");
     SubDeviceId sub_device_id = *(sub_device_ids.begin());
     auto mesh_device_id = this->mesh_device_->id();
@@ -199,13 +200,13 @@ void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
     CoreType dispatch_core_type = dispatch_core_config.get_core_type();
 
     TT_FATAL(
-        mesh_workload.get_program_binary_status(mesh_device_id) != ProgramBinaryStatus::NotSent,
+        mesh_workload.impl().get_program_binary_status(mesh_device_id) != ProgramBinaryStatus::NotSent,
         "Expected program binaries to be written to the MeshDevice.");
 
     // Compute number of workers being used for this workload.
     uint32_t num_workers = 0;
-    bool unicast_go_signals = mesh_workload.runs_on_noc_unicast_only_cores();
-    bool mcast_go_signals = mesh_workload.runs_on_noc_multicast_only_cores();
+    bool unicast_go_signals = mesh_workload.impl().runs_on_noc_unicast_only_cores();
+    bool mcast_go_signals = mesh_workload.impl().runs_on_noc_multicast_only_cores();
 
     uint32_t num_virtual_eth_cores = 0;
 
@@ -230,8 +231,8 @@ void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
     // Reserve space in the L1 Kernel Config Ring Buffer for this workload.
     program_dispatch::reserve_space_in_kernel_config_buffer(
         this->get_config_buffer_mgr(*sub_device_id),
-        mesh_workload.get_program_config_sizes(),
-        mesh_workload.get_program_binary_status(mesh_device_id),
+        mesh_workload.impl().get_program_config_sizes(),
+        mesh_workload.impl().get_program_binary_status(mesh_device_id),
         num_workers,
         expected_num_workers_completed,
         dispatch_metadata);
@@ -242,7 +243,7 @@ void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
     // current device state. Write the finalized program command sequence to each
     // physical device tied to the program.
     for (auto& [device_range, program] : mesh_workload.get_programs()) {
-        auto& program_cmd_seq = mesh_workload.get_dispatch_cmds_for_program(program, command_hash);
+        auto& program_cmd_seq = mesh_workload.impl().get_dispatch_cmds_for_program(program, command_hash);
         program_dispatch::update_program_dispatch_commands(
             program.impl(),
             program_cmd_seq,
@@ -253,7 +254,7 @@ void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
             dispatch_core_type,
             sub_device_id,
             dispatch_metadata,
-            mesh_workload.get_program_binary_status(mesh_device_id),
+            mesh_workload.impl().get_program_binary_status(mesh_device_id),
             std::pair<bool, int>(unicast_go_signals, num_virtual_eth_cores));
 
         if (sysmem_manager.get_bypass_mode()) {
@@ -315,7 +316,7 @@ void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
         expected_num_workers_completed_[*sub_device_id] += num_workers;
     }
     // From the dispatcher's perspective, binaries are now committed to DRAM
-    mesh_workload.set_program_binary_status(mesh_device_id, ProgramBinaryStatus::Committed);
+    mesh_workload.impl().set_program_binary_status(mesh_device_id, ProgramBinaryStatus::Committed);
     mesh_workload.set_last_used_command_queue_for_testing(this);
 
     if (blocking) {
