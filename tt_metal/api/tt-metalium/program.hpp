@@ -48,6 +48,7 @@ uint32_t program_base_addr_on_core(
 
 namespace distributed {
 class MeshWorkload;
+class MeshWorkloadImpl;
 }  // namespace distributed
 
 class JitBuildOptions;
@@ -230,6 +231,7 @@ private:
     friend HWCommandQueue;
     friend EnqueueProgramCommand;
     friend distributed::MeshWorkload;
+    friend distributed::MeshWorkloadImpl;
     friend detail::Internal_;
 };
 

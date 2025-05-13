@@ -8,6 +8,7 @@
 #include "device.hpp"
 #include "mesh_device.hpp"
 #include "mesh_trace.hpp"
+#include "mesh_workload_impl.hpp"
 #include "tt-metalium/program.hpp"
 #include "dispatch/system_memory_manager.hpp"
 
@@ -21,9 +22,9 @@ void AddProgramToMeshWorkload(MeshWorkload& mesh_workload, Program&& program, co
 
 void EnqueueMeshWorkload(MeshCommandQueue& mesh_cq, MeshWorkload& mesh_workload, bool blocking) {
     if (mesh_cq.device()->using_fast_dispatch()) {
-        mesh_workload.compile(mesh_cq.device());
-        mesh_workload.load_binaries(mesh_cq);
-        mesh_workload.generate_dispatch_commands(mesh_cq);
+        mesh_workload.impl().compile(mesh_cq.device());
+        mesh_workload.impl().load_binaries(mesh_cq);
+        mesh_workload.impl().generate_dispatch_commands(mesh_cq);
     }
     mesh_cq.enqueue_mesh_workload(mesh_workload, blocking);
 }
