@@ -301,8 +301,8 @@ void MeshGraph::initialize_from_yaml(const std::string& mesh_graph_desc_file_pat
         TT_FATAL(mesh_connection.size() == 2, "MeshGraph: Expecting 2 elements in each Graph connection");
         const auto& [src_mesh_id, src_port_id] = convert_yaml_to_port_id(mesh_connection[0]);
         const auto& [dst_mesh_id, dst_port_id] = convert_yaml_to_port_id(mesh_connection[1]);
-        const auto& src_chip_id = mesh_edge_ports_to_chip_id[src_mesh_id][src_port_id];
-        const auto& dst_chip_id = mesh_edge_ports_to_chip_id[dst_mesh_id][dst_port_id];
+        const auto& src_chip_id = mesh_edge_ports_to_chip_id[src_mesh_id].at(src_port_id);
+        const auto& dst_chip_id = mesh_edge_ports_to_chip_id[dst_mesh_id].at(dst_port_id);
         this->add_to_connectivity(src_mesh_id, src_chip_id, dst_mesh_id, dst_chip_id, src_port_id.first);
     }
 }
