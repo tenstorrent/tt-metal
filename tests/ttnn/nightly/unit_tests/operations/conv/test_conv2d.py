@@ -169,14 +169,14 @@ def run_conv(
 
     tt_weight_tensor = ttnn.from_torch(
         torch_weight_tensor,
-        weights_dtype if weights_dtype != ttnn.bfloat8_b else ttnn.float32,
+        ttnn.float32,
         mesh_mapper=weight_mesh_mapper,
     )
     tt_bias_tensor = None
     if has_bias:
         tt_bias_tensor = ttnn.from_torch(
             torch_bias_tensor,
-            weights_dtype if weights_dtype != ttnn.bfloat8_b else ttnn.float32,
+            ttnn.float32,
             mesh_mapper=weight_mesh_mapper,
         )
 
