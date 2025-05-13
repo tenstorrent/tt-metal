@@ -1086,11 +1086,12 @@ bool Device::initialize(
 }
 
 bool Device::close() {
-    constexpr uint32_t k_DeviceTimeoutMs = 300000;  // 5 minutes
     log_info(tt::LogMetal, "Closing device {}", this->id_);
     if (not this->initialized_) {
         TT_THROW("Cannot close device {} that has not been initialized!", this->id_);
     }
+
+    dispatch_firmware_active_ = false;
 
     for (const auto& hw_command_queue : command_queues_) {
         if (hw_command_queue->sysmem_manager().get_bypass_mode()) {
@@ -1099,8 +1100,6 @@ bool Device::close() {
         hw_command_queue->terminate();
     }
 
-    dispatch_firmware_active_ = false;
-
     tt_metal::detail::DumpDeviceProfileResults(this, ProfilerDumpState::LAST_CLOSE_DEVICE);
 
     this->disable_and_clear_program_cache();
@@ -1108,18 +1107,13 @@ bool Device::close() {
 
     sub_device_manager_tracker_.reset(nullptr);
 
-    // Wait for dispatch cores on this device to complete
-    // Defer routing cores to be reset at the device pool level because they can still be needed by other devices for
-    // now
-    auto dispatch_cores = tt::tt_metal::get_virtual_dispatch_cores(this->id());
-    auto routing_cores = tt::tt_metal::get_virtual_dispatch_routing_cores(this->id());
-    llrt::internal_::wait_until_cores_done(this->id(), RUN_MSG_GO, dispatch_cores, k_DeviceTimeoutMs);
-    // Remaining cores in dispatch_cores have not closed in time
-
     DprintServerDetach(this->id());
     watcher_detach(this->id());
 
-    // Assert worker cores
+    // Assert worker cores only for this device
+    auto dispatch_cores = tt::tt_metal::get_virtual_dispatch_cores(this->id());
+    auto routing_cores = tt::tt_metal::get_virtual_dispatch_routing_cores(this->id());
+
     CoreCoord grid_size = this->logical_grid_size();
     for (uint32_t y = 0; y < grid_size.y; y++) {
         for (uint32_t x = 0; x < grid_size.x; x++) {
@@ -1146,21 +1140,6 @@ bool Device::close() {
                     ~std::underlying_type<TensixSoftResetOptions>::type(TensixSoftResetOptions::BRISC));
             tt::tt_metal::MetalContext::instance().get_cluster().assert_risc_reset_at_core(
                 tt_cxy_pair(this->id(), virtual_eth_core), reset_val);
-        }
-    }
-
-    const auto mmio_device_id =
-        tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(this->id_);
-    // Additional reset when for remaining cores that have not closed properly
-    if (this->id_ != mmio_device_id) {
-        for (const auto virtual_core : dispatch_cores) {
-            if (tt::tt_metal::MetalContext::instance().get_cluster().is_ethernet_core(virtual_core, this->id_)) {
-                log_debug(tt::LogMetal, "Ethernet dispatch core {} on Device {} is idle. Closing Device {}", virtual_core.str(), mmio_device_id, this->id());
-            } else {
-                log_debug(tt::LogMetal, "Resetting core {} on Device {} when closing Device {}", virtual_core.str(), mmio_device_id, this->id());
-                tt::tt_metal::MetalContext::instance().get_cluster().assert_risc_reset_at_core(
-                    tt_cxy_pair(mmio_device_id, virtual_core));
-            }
         }
     }
 
