@@ -1136,6 +1136,8 @@ public:
                         page_offset = kg_transfer_info.page_offsets[kernel_idx];
                     }
 
+                    binary_transfer_bytes += relayed_bytes;
+
                     calculator.add_prefetch_relay_paged();
                     kernel_bins_unicast_cmds.back().add_prefetch_relay_paged(
                         true,  // is_dram
@@ -1153,6 +1155,7 @@ public:
                     uint32_t aligned_length =
                         tt::align(kg_transfer_info.lengths[kernel_idx], hal.get_alignment(HalMemType::DRAM));
                     uint32_t padding = aligned_length - kg_transfer_info.lengths[kernel_idx];
+                    binary_transfer_bytes += kg_transfer_info.lengths[kernel_idx];
                     while (aligned_length != 0) {
                         if (kernel_bins_cmds.empty() || kernel_bins_cmds.back().dispatch_subcmds.size() ==
                                                             CQ_DISPATCH_CMD_PACKED_WRITE_LARGE_MAX_SUB_CMDS) {
@@ -1226,6 +1229,10 @@ public:
         }
     }
 
+    uint32_t get_binary_transfer_bytes() const {
+        return binary_transfer_bytes;
+    }
+
 private:
     struct KernelBinsCmds {
         std::vector<CQPrefetchRelayPagedPackedSubCmd> prefetch_subcmds;
@@ -1234,6 +1241,8 @@ private:
     };
     std::vector<KernelBinsCmds> kernel_bins_cmds;
     std::vector<HostMemDeviceCommand> kernel_bins_unicast_cmds;
+
+    uint32_t binary_transfer_bytes = 0;
 };
 
 class BatchedTransferGenerator {
@@ -1718,6 +1727,9 @@ void assemble_device_commands(
     TT_ASSERT(
         program_command_sequence.go_msg_command_sequence.size_bytes() ==
         program_command_sequence.go_msg_command_sequence.write_offset_bytes());
+
+        fmt::println(stderr, "TEST PROGRAM: Program {} config size {} binary bytes {}", program.get_id(), program.get_program_config_sizes()[0],
+            program_binary_command_generator.get_binary_transfer_bytes());
 }
 
 void initialize_worker_config_buf_mgr(WorkerConfigBufferMgr& config_buffer_mgr, uint32_t worker_l1_unreserved_start) {
