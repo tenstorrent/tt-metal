@@ -162,7 +162,6 @@ jobs:
         timeout-minutes: ${{ matrix.test-group.benchmark_timeout }}
         run: |
           python3 vllm/benchmarks/benchmark_serving.py \
-            --dummy-argument \
             --backend vllm \
             --model ${{ matrix.test-group.model }} \
             --dataset-name random \
