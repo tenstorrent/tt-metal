@@ -676,3 +676,194 @@ def test_paged_fill_cache_program_cache(
     )
 
     assert device.num_program_cache_entries() == 1
+
+
+# Helper function to compute expected output for paged_fill_cache
+def get_expected_paged_fill_cache_output(
+    initial_cache_torch,
+    input_torch,
+    page_table_torch,
+    effective_batch_idx,
+    skip_if_page_table_val_is_neg_one=True,  # To match our earlier kernel mod
+):
+    expected_cache_torch = initial_cache_torch.clone()
+    TILE_HEIGHT = 32
+    TILE_WIDTH = 32
+
+    # Assuming input_torch shape: [1, num_heads, input_seq_len, head_dim]
+    # Assuming cache_torch shape: [max_num_blocks, 1, block_size, head_dim]
+    # Assuming page_table_torch shape: [batch_size, max_num_blocks_per_seq]
+
+    num_input_heads = input_torch.shape[1]
+    input_seq_len = input_torch.shape[2]
+    head_dim = input_torch.shape[3]
+
+    max_cache_blocks = expected_cache_torch.shape[0]
+    cache_block_size = expected_cache_torch.shape[2]
+
+    input_seq_len_t = input_seq_len // TILE_HEIGHT
+    Wt = head_dim // TILE_WIDTH
+    cache_block_size_t = cache_block_size // TILE_HEIGHT  # Number of tile-rows in a cache block
+
+    # Parameters for virtual_seq_tile_id_to_physical_tile_id logic
+    # const uint32_t num_heads = num_input_heads;
+    # const uint32_t block_size_t = cache_block_size_t;
+    # const uint32_t Wt = Wt;
+
+    # block_stride in virtual_seq_tile_id_to_physical_tile_id calculation
+    # This is the stride in tiles if all heads were packed into each physical block layer
+    conceptual_block_stride_in_tiles = num_input_heads * cache_block_size_t * Wt
+
+    for h_idx in range(num_input_heads):  # cur_head
+        for s_tr_idx in range(input_seq_len_t):  # seq_tile_id or seq_tile_idx
+            virtual_block_in_seq = s_tr_idx // cache_block_size_t
+
+            if virtual_block_in_seq >= page_table_torch.shape[1]:
+                # print(f"Skipping: virtual_block {virtual_block_in_seq} for head {h_idx}, seq_tile {s_tr_idx} is out of page_table width {page_table_torch.shape[1]}")
+                continue
+
+            physical_block_mapped_idx = page_table_torch[effective_batch_idx, virtual_block_in_seq].item()
+
+            if skip_if_page_table_val_is_neg_one and physical_block_mapped_idx == -1:
+                # print(f"Skipping: page_table entry is -1 for effective_batch_idx {effective_batch_idx}, virtual_block {virtual_block_in_seq}")
+                continue
+
+            if physical_block_mapped_idx >= max_cache_blocks:
+                # print(f"Skipping: physical_block_mapped_idx {physical_block_mapped_idx} for head {h_idx}, seq_tile {s_tr_idx} is out of cache height {max_cache_blocks}")
+                continue
+
+            tile_row_within_virtual_block = s_tr_idx % cache_block_size_t  # this is block_row_offset in kernel
+
+            # Calculate physical_tile_id_start using logic from virtual_seq_tile_id_to_physical_tile_id
+            head_offset_in_tiles = h_idx * cache_block_size_t * Wt
+            block_offset_in_tiles = tile_row_within_virtual_block * Wt
+
+            physical_tile_id_start = (
+                physical_block_mapped_idx * conceptual_block_stride_in_tiles
+                + head_offset_in_tiles
+                + block_offset_in_tiles
+            )
+
+            # Get the source data slice from input_torch
+            # This is a (TILE_HEIGHT, head_dim) slice
+            input_data_slice = input_torch[0, h_idx, s_tr_idx * TILE_HEIGHT : (s_tr_idx + 1) * TILE_HEIGHT, :]
+
+            # Write Wt tiles from input_data_slice to expected_cache_torch
+            for w_col_tile_idx in range(Wt):
+                current_global_tile_id = physical_tile_id_start + w_col_tile_idx
+
+                # Map global tile ID to 4D cache coordinates (K, 1, R, C)
+                # Actual cache block stride: 1 (dummy_head_dim) * cache_block_size_t * Wt
+                actual_tiles_per_physical_block_layer = cache_block_size_t * Wt
+
+                target_k = current_global_tile_id // actual_tiles_per_physical_block_layer
+                remaining_tiles_in_target_block = current_global_tile_id % actual_tiles_per_physical_block_layer
+
+                target_r_tile = remaining_tiles_in_target_block // Wt
+                target_c_tile = remaining_tiles_in_target_block % Wt
+
+                if target_k >= max_cache_blocks:
+                    # This check is important if conceptual_block_stride makes g_id large
+                    # print(f"Skipping due to target_k {target_k} out of bounds.")
+                    continue
+
+                # Extract the source tile (TILE_HEIGHT, TILE_WIDTH)
+                source_tile = input_data_slice[:, w_col_tile_idx * TILE_WIDTH : (w_col_tile_idx + 1) * TILE_WIDTH]
+
+                # Place it in the expected cache
+                expected_cache_torch[
+                    target_k,
+                    0,
+                    target_r_tile * TILE_HEIGHT : (target_r_tile + 1) * TILE_HEIGHT,
+                    target_c_tile * TILE_WIDTH : (target_c_tile + 1) * TILE_WIDTH,
+                ] = source_tile
+
+    return expected_cache_torch
+
+
+@pytest.mark.parametrize(
+    "num_input_heads, input_seq_len, head_dim, cache_max_blocks, cache_block_size, page_table_batch_size, pt_max_blocks_per_seq, effective_batch_idx_to_test, use_tensor_for_batch_idx",
+    [
+        (1, 128, 128, 1024, 64, 32, 32, 0, True),  # Llama, batch_idx_tensor, batch 0
+        (1, 2048, 128, 1024, 64, 32, 32, 15, True),  # Llama, batch_idx_tensor, batch 15
+    ],
+)
+def test_paged_fill_cache_variants(
+    device,
+    num_input_heads,
+    input_seq_len,
+    head_dim,
+    cache_max_blocks,
+    cache_block_size,
+    page_table_batch_size,
+    pt_max_blocks_per_seq,
+    effective_batch_idx_to_test,
+    use_tensor_for_batch_idx,
+):
+    torch.manual_seed(0)
+    TILE_HEIGHT = 32
+    TILE_WIDTH = 32
+
+    assert head_dim % TILE_WIDTH == 0, "head_dim must be multiple of TILE_WIDTH"
+    assert input_seq_len % TILE_HEIGHT == 0, "input_seq_len must be multiple of TILE_HEIGHT"
+    assert cache_block_size % TILE_HEIGHT == 0, "cache_block_size must be multiple of TILE_HEIGHT"
+    assert effective_batch_idx_to_test < page_table_batch_size, "effective_batch_idx_to_test out of bounds"
+
+    # Prepare Tensors
+    initial_cache_torch = torch.randn(cache_max_blocks, 1, cache_block_size, head_dim).bfloat16() * 100
+    input_torch = (
+        torch.arange(1 * num_input_heads * input_seq_len * head_dim, dtype=torch.float32)
+        .reshape(1, num_input_heads, input_seq_len, head_dim)
+        .bfloat16()
+        / 1000.0
+    )
+
+    page_table_torch_data = []
+    next_block_idx = 0
+    for b in range(page_table_batch_size):
+        row = []
+        for m in range(pt_max_blocks_per_seq):
+            row.append(next_block_idx % cache_max_blocks)
+            next_block_idx += 1
+        page_table_torch_data.append(row)
+    page_table_torch = torch.tensor(page_table_torch_data, dtype=torch.int32)
+
+    if page_table_batch_size > 0 and pt_max_blocks_per_seq > 1 and use_tensor_for_batch_idx:
+        page_table_torch[effective_batch_idx_to_test, pt_max_blocks_per_seq - 1] = -1
+
+    # Assuming cache_dtype for the ttnn.Tensor will be bfloat16 based on input torch tensor.
+    # The op should handle this dtype for the cache.
+    cache_tt = ttnn.from_torch(initial_cache_torch, device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+    input_tt = ttnn.from_torch(input_torch, device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+    page_table_tt = ttnn.from_torch(page_table_torch, device=device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.int32)
+
+    batch_idx_tensor_dev = None
+    batch_idx_fallback_val = 0
+
+    if use_tensor_for_batch_idx:
+        batch_idx_torch_scalar = torch.tensor([effective_batch_idx_to_test], dtype=torch.int32)
+        batch_idx_tensor_dev = ttnn.from_torch(
+            batch_idx_torch_scalar.to(torch.int32), device=device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.uint32
+        )
+        batch_idx_fallback_val = (effective_batch_idx_to_test + 1) % page_table_batch_size
+    else:
+        batch_idx_fallback_val = effective_batch_idx_to_test
+
+    output_cache_tt = ttnn.experimental.paged_fill_cache(
+        cache_tt,
+        input_tt,
+        page_table_tt,
+        batch_idx_tensor=batch_idx_tensor_dev,
+        batch_idx=batch_idx_fallback_val,
+    )
+
+    expected_cache_torch = get_expected_paged_fill_cache_output(
+        initial_cache_torch, input_torch, page_table_torch, effective_batch_idx_to_test
+    )
+
+    output_cache_torch = ttnn.to_torch(output_cache_tt)
+
+    # Use comp_equal for bfloat16 comparisons, similar to other tests in the file
+    Passing, Message = comp_equal(output_cache_torch, expected_cache_torch)
+    logger.info(Message)  # Log the comparison message regardless
+    assert Passing, Message

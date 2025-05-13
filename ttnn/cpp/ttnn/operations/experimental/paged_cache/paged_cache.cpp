@@ -25,7 +25,14 @@ ttnn::Tensor PagedUpdateCacheOperation::invoke(
     const bool share_cache_arg = share_cache.has_value() ? share_cache.value() : false;  // Default share cache to false
     tt::tt_metal::operation::run(
         PagedUpdateCacheDeviceOperation{
-            0, update_idxs, batch_offset, PagedUpdateCacheOpType::UPDATE, kernel_config_val, share_cache_arg},
+            0,                               // .batch_idx_fallback
+            std::nullopt,                    // .batch_idx_tensor_opt
+            update_idxs,                     // .update_idxs
+            batch_offset,                    // .batch_offset
+            PagedUpdateCacheOpType::UPDATE,  // .op_type
+            kernel_config_val,               // .compute_kernel_config
+            share_cache_arg                  // .share_cache
+        },
         {cache_tensor, input_tensor},
         {update_idxs_tensor, page_table});
 
@@ -47,7 +54,14 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> PagedFusedUpdateCacheOperation::invoke(
     const bool share_cache_arg = share_cache.has_value() ? share_cache.value() : false;  // Default share cache to false
     tt::tt_metal::operation::run(
         PagedUpdateCacheDeviceOperation{
-            0, update_idxs, batch_offset, PagedUpdateCacheOpType::FUSED_UPDATE, kernel_config_val, share_cache_arg},
+            0,                                     // .batch_idx_fallback
+            std::nullopt,                          // .batch_idx_tensor_opt
+            update_idxs,                           // .update_idxs
+            batch_offset,                          // .batch_offset
+            PagedUpdateCacheOpType::FUSED_UPDATE,  // .op_type
+            kernel_config_val,                     // .compute_kernel_config
+            share_cache_arg                        // .share_cache
+        },
         {cache_tensor1, input_tensor1, cache_tensor2, input_tensor2},
         {update_idxs_tensor, page_table});
 
@@ -58,13 +72,29 @@ ttnn::Tensor PagedFillCacheOperation::invoke(
     const Tensor& cache_tensor,
     const Tensor& input_tensor,
     const Tensor& page_table,
-    const uint32_t batch_idx,
+    std::optional<const Tensor> batch_idx_tensor,
+    const uint32_t batch_idx_fallback,
     std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config = std::nullopt) {
     auto kernel_config_val = init_device_compute_kernel_config(input_tensor.device()->arch(), compute_kernel_config);
+
+    std::vector<std::optional<const Tensor>> optional_inputs_for_run;
+    optional_inputs_for_run.push_back(
+        std::nullopt);  // Corresponds to update_idxs_tensor for the generic PagedUpdateCacheDeviceOperation
+    optional_inputs_for_run.push_back(
+        std::nullopt);  // Corresponds to optional page_table for the generic PagedUpdateCacheDeviceOperation
+
     tt::tt_metal::operation::run(
-        PagedUpdateCacheDeviceOperation{batch_idx, {}, 0, PagedUpdateCacheOpType::FILL, kernel_config_val},
+        PagedUpdateCacheDeviceOperation{
+            batch_idx_fallback,
+            batch_idx_tensor,
+            {},                            // .update_idxs (empty for fill)
+            0,                             // .batch_offset (0 for fill)
+            PagedUpdateCacheOpType::FILL,  // .op_type
+            kernel_config_val,             // .compute_kernel_config
+            false                          // .share_cache (false for fill, or make it a param if needed)
+        },
         {cache_tensor, input_tensor, page_table},
-        {std::nullopt, std::nullopt});
+        optional_inputs_for_run);  // Pass the constructed optional_inputs for consistency
 
     return cache_tensor;  // Updated cache tensor in-place
 }

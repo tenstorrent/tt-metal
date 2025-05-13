@@ -17,7 +17,10 @@ enum class PagedUpdateCacheOpParallelizationStrategy { MULTI_CORE };
 enum class PagedUpdateCacheOpType { UPDATE, FUSED_UPDATE, FILL };
 
 struct PagedUpdateCacheDeviceOperation {
-    const uint32_t batch_idx;
+    uint32_t batch_idx_fallback;
+    std::optional<Tensor>
+        batch_idx_tensor_opt;  // This will be handled by create_program, not directly in attributes for simple hashing
+
     const std::vector<uint32_t> update_idxs;
     const uint32_t batch_offset;
     const PagedUpdateCacheOpType op_type;
@@ -38,10 +41,16 @@ struct PagedUpdateCacheDeviceOperation {
         std::vector<Tensor>& output_tensors) const;
 
     static constexpr auto attribute_names = std::forward_as_tuple(
-        "batch_idx", "update_idxs", "batch_offset", "op_type", "compute_kernel_config", "share_cache");
+        "batch_idx_fallback", /* "batch_idx_tensor_opt" - Removed for simplicity in reflection */
+        "update_idxs",
+        "batch_offset",
+        "op_type",
+        "compute_kernel_config",
+        "share_cache");
 
     const auto attribute_values() const {
-        return std::forward_as_tuple(batch_idx, update_idxs, batch_offset, op_type, compute_kernel_config, share_cache);
+        return std::forward_as_tuple(
+            batch_idx_fallback, update_idxs, batch_offset, op_type, compute_kernel_config, share_cache);
     }
 
     tt::tt_metal::operation::Hash compute_program_hash(
