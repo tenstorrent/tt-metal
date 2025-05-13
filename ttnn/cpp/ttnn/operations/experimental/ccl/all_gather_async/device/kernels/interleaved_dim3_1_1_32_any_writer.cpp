@@ -17,22 +17,23 @@ using tt::tt_metal::BufferType;
 // COMPILE TIME ARGS
 ///////////////////////////////////////////////////
 
-constexpr uint32_t my_chip_id = get_compile_time_arg_val(0);
-constexpr uint32_t reserved_packet_header_cb_id = get_compile_time_arg_val(1);
-constexpr uint32_t num_packet_headers_storable = get_compile_time_arg_val(2);
-constexpr BufferType buffer0_type = static_cast<BufferType>(get_compile_time_arg_val(3));
-constexpr uint32_t cb0_id = get_compile_time_arg_val(4);
-constexpr uint32_t packet_size_in_pages = get_compile_time_arg_val(5);
-constexpr uint32_t tensor0_page_size = get_compile_time_arg_val(6);
-constexpr uint32_t num_targets_forward_direction = get_compile_time_arg_val(7);
-constexpr uint32_t num_targets_backward_direction = get_compile_time_arg_val(8);
-constexpr bool dynamic_alternate = get_compile_time_arg_val(9);
+constexpr uint32_t ring_size = get_compile_time_arg_val(0);
+constexpr uint32_t my_chip_id = get_compile_time_arg_val(1);
+constexpr uint32_t reserved_packet_header_cb_id = get_compile_time_arg_val(2);
+constexpr uint32_t num_packet_headers_storable = get_compile_time_arg_val(3);
+constexpr BufferType buffer0_type = static_cast<BufferType>(get_compile_time_arg_val(4));
+constexpr uint32_t cb0_id = get_compile_time_arg_val(5);
+constexpr uint32_t packet_size_in_pages = get_compile_time_arg_val(6);
+constexpr uint32_t tensor0_page_size = get_compile_time_arg_val(7);
+constexpr uint32_t num_targets_forward_direction = get_compile_time_arg_val(8);
+constexpr uint32_t num_targets_backward_direction = get_compile_time_arg_val(9);
+constexpr bool dynamic_alternate = get_compile_time_arg_val(10);
 constexpr uint32_t num_max_targets = std::max(num_targets_forward_direction, num_targets_backward_direction);
 constexpr uint32_t num_sync_targets_forward = dynamic_alternate ? num_max_targets : num_targets_forward_direction;
 constexpr uint32_t num_sync_targets_backward = dynamic_alternate ? num_max_targets : num_targets_backward_direction;
-constexpr bool last_dim = get_compile_time_arg_val(10);
-constexpr uint32_t num_banks = get_compile_time_arg_val(11);
-constexpr bool use_best_effort = get_compile_time_arg_val(12);
+constexpr bool last_dim = get_compile_time_arg_val(11);
+constexpr uint32_t num_banks = get_compile_time_arg_val(12);
+constexpr bool use_best_effort = get_compile_time_arg_val(13);
 
 // for performance experiment by dynamic_alternate switch
 inline void fabric_write_wrapper(
@@ -145,8 +146,7 @@ inline void fabric_send_non_contig(
 template <bool DRAM>
 inline void fabric_send_dim3_bf16_remain_even(
     uint32_t num_tiles,
-    uint32_t tile_id_start,
-    uint32_t ring_size,
+    uint32_t tile_id,
     uint32_t tile_cols_per_chip,
     InterleavedAddrGenFast<DRAM>& addrgen,
     volatile PACKET_HEADER_TYPE* pkt_hdr_forward,
@@ -156,8 +156,6 @@ inline void fabric_send_dim3_bf16_remain_even(
     const uint32_t num_contig1 = ((tile_cols_per_chip - num_contig2 * 2) / num_banks) * num_banks;
     const uint32_t num_orphan = tile_cols_per_chip - num_contig2 * 2 - num_contig1;
     const uint32_t row = num_tiles / tile_cols_per_chip;
-    uint32_t tile_id = tile_id_start;
-
     for (uint32_t i = 0; i < row; i++) {
         fabric_send_full_contig(num_contig2, tile_id, addrgen, pkt_hdr_forward, pkt_hdr_backward, fabric_connection);
         fabric_send_non_contig(num_contig1, tile_id, addrgen, pkt_hdr_forward, pkt_hdr_backward, fabric_connection);
@@ -169,8 +167,7 @@ inline void fabric_send_dim3_bf16_remain_even(
 template <bool DRAM>
 inline void fabric_send_dim3_bf8_dram_remain048(
     uint32_t num_tiles,
-    uint32_t tile_id_start,
-    uint32_t ring_size,
+    uint32_t tile_id,
     uint32_t tile_cols_per_chip,
     InterleavedAddrGenFast<DRAM>& addrgen,
     volatile PACKET_HEADER_TYPE* pkt_hdr_forward,
@@ -178,7 +175,6 @@ inline void fabric_send_dim3_bf8_dram_remain048(
     FabricConnectionManager& fabric_connection) {
     uint32_t row = num_tiles / tile_cols_per_chip;
     const uint32_t input_width = tile_cols_per_chip;
-    uint32_t tile_id = tile_id_start;
     uint32_t num_full_contig = (tile_cols_per_chip / (num_banks * packet_size_in_pages)) * num_banks;
     uint32_t num_contig2 =
         ((tile_cols_per_chip - num_full_contig * packet_size_in_pages) / (num_banks * 2)) * num_banks;
@@ -196,11 +192,8 @@ template <bool DRAM>
 inline void fabric_send_dim2_bf8(
     uint32_t filled_bank_tiles,
     uint32_t rest_full_contig_ids,
-    uint32_t tile_id_start,
-    uint32_t& total,
+    uint32_t& tile_id,
     uint32_t rest_tiles,
-    uint32_t ring_size,
-    uint32_t tile_cols_per_chip,
     InterleavedAddrGenFast<DRAM>& tensor0_addrgen,
     volatile PACKET_HEADER_TYPE* pkt_hdr_forward,
     volatile PACKET_HEADER_TYPE* pkt_hdr_backward,
@@ -232,25 +225,21 @@ inline void fabric_send_dim2_bf8(
         rest_half_contig_ids = 0;
         rest_orphan_tiles = rest_tiles;
     }
-    uint32_t num_tiles = rest_half_contig_ids + (filled_bank_tiles + rest_full_contig_ids);
-    uint32_t outer_id = 0;
 
     fabric_send_2contig_bf8(
-        rest_half_contig_ids, total, tensor0_addrgen, pkt_hdr_forward, pkt_hdr_backward, fabric_connection);
+        rest_half_contig_ids, tile_id, tensor0_addrgen, pkt_hdr_forward, pkt_hdr_backward, fabric_connection);
     if (skip_num_banks) {
-        total += 2 * num_banks - rest_half_contig_ids;
+        tile_id += 2 * num_banks - rest_half_contig_ids;
     }
     fabric_send_non_contig(
-        rest_orphan_tiles, total, tensor0_addrgen, pkt_hdr_forward, pkt_hdr_backward, fabric_connection);
+        rest_orphan_tiles, tile_id, tensor0_addrgen, pkt_hdr_forward, pkt_hdr_backward, fabric_connection);
 }
 
 template <bool DRAM>
 inline void fabric_send_dim2_bf16(
     uint32_t num_tiles_per_chip,
-    uint32_t& total,
+    uint32_t& tile_id,
     uint32_t rest_tiles,
-    uint32_t ring_size,
-    uint32_t tile_cols_per_chip,
     InterleavedAddrGenFast<DRAM>& tensor0_addrgen,
     volatile PACKET_HEADER_TYPE* pkt_hdr_forward,
     volatile PACKET_HEADER_TYPE* pkt_hdr_backward,
@@ -263,15 +252,13 @@ inline void fabric_send_dim2_bf16(
     }
 
     fabric_send_non_contig(
-        rest_orphan_tiles, total, tensor0_addrgen, pkt_hdr_forward, pkt_hdr_backward, fabric_connection);
+        rest_orphan_tiles, tile_id, tensor0_addrgen, pkt_hdr_forward, pkt_hdr_backward, fabric_connection);
 }
 
 template <bool DRAM>
 inline void fabric_send_dim2(
     uint32_t num_tiles_per_chip,
-    uint32_t tile_id_start,
-    uint32_t ring_size,
-    uint32_t tile_cols_per_chip,
+    uint32_t tile_id,
     InterleavedAddrGenFast<DRAM>& tensor0_addrgen,
     volatile PACKET_HEADER_TYPE* pkt_hdr_forward,
     volatile PACKET_HEADER_TYPE* pkt_hdr_backward,
@@ -293,14 +280,13 @@ inline void fabric_send_dim2(
     auto filled_bank_tiles = filled_bank_rows * num_banks * packet_size_in_pages;
     auto rest_full_contig_ids = 0;
     auto rest_full_contig_rows = 0;
-    uint32_t total = tile_id_start;
     if (num_banks * (packet_size_in_pages - 1) < rest_tiles) {
         rest_full_contig_ids = (rest_tiles) % (num_banks * (packet_size_in_pages - 1));
     }
     // send fully contig tiles. e.g. tileID: 0-15, 16-18, 20-22
     fabric_send_full_contig(
         filled_bank_rows * num_banks + rest_full_contig_ids,
-        total,
+        tile_id,
         tensor0_addrgen,
         pkt_hdr_forward,
         pkt_hdr_backward,
@@ -310,10 +296,8 @@ inline void fabric_send_dim2(
         // e.g. tileID: 19
         fabric_send_dim2_bf16(
             num_tiles_per_chip,
-            total,
+            tile_id,
             rest_tiles,
-            ring_size,
-            tile_cols_per_chip,
             tensor0_addrgen,
             pkt_hdr_forward,
             pkt_hdr_backward,
@@ -322,11 +306,8 @@ inline void fabric_send_dim2(
         fabric_send_dim2_bf8(
             filled_bank_tiles,
             rest_full_contig_ids,
-            tile_id_start,
-            total,
+            tile_id,
             rest_tiles,
-            ring_size,
-            tile_cols_per_chip,
             tensor0_addrgen,
             pkt_hdr_forward,
             pkt_hdr_backward,
@@ -337,14 +318,12 @@ inline void fabric_send_dim2(
 template <bool DRAM>
 inline void fabric_send_generic(
     uint32_t num_tiles_per_chip,
-    uint32_t tile_id_start,
-    InterleavedAddrGenFast<DRAM>& tensor0_addrgen,
-    uint32_t ring_size,
+    uint32_t tile_id,
     uint32_t tile_cols_per_chip,
+    InterleavedAddrGenFast<DRAM>& tensor0_addrgen,
     volatile PACKET_HEADER_TYPE* pkt_hdr_forward,
     volatile PACKET_HEADER_TYPE* pkt_hdr_backward,
     FabricConnectionManager& fabric_connection) {
-    uint32_t tile_id = tile_id_start;
     for (uint32_t i = 0; i < num_tiles_per_chip; i += packet_size_in_pages) {
         uint32_t num_pages_to_read = min(num_tiles_per_chip - i, packet_size_in_pages);
         cb_wait_front(cb0_id, num_pages_to_read);
@@ -390,7 +369,6 @@ void kernel_main() {
     const uint8_t out_ready_sem_noc0_y = get_arg_val<uint32_t>(arg_idx++);
     uint32_t out_ready_sem_wait_value = get_arg_val<uint32_t>(arg_idx++);
     uint32_t num_tiles_per_chip = get_arg_val<uint32_t>(arg_idx++);
-    uint32_t ring_size = get_arg_val<uint32_t>(arg_idx++);
     uint32_t tile_cols_per_chip = get_arg_val<uint32_t>(arg_idx++);
     size_t arg_for_fab = arg_idx;
     auto fabric_connection = FabricConnectionManager::build_from_args(arg_idx);
@@ -443,13 +421,13 @@ void kernel_main() {
     //      |   24|   25|   26|   27|   28|   29|   30|   31|
     //
 
+    uint32_t tile_id = tile_id_start;
     if constexpr (use_best_effort) {
         if constexpr (last_dim) {
             if constexpr (packet_size_in_pages == 2) {  // bf16
                 fabric_send_dim3_bf16_remain_even<is_dram>(
                     num_tiles_per_chip,
-                    tile_id_start,
-                    ring_size,
+                    tile_id,
                     tile_cols_per_chip,
                     tensor0_addrgen,
                     pkt_hdr_forward,
@@ -458,8 +436,7 @@ void kernel_main() {
             } else {
                 fabric_send_dim3_bf8_dram_remain048<is_dram>(
                     num_tiles_per_chip,
-                    tile_id_start,
-                    ring_size,
+                    tile_id,
                     tile_cols_per_chip,
                     tensor0_addrgen,
                     pkt_hdr_forward,
@@ -468,22 +445,14 @@ void kernel_main() {
             }
         } else {
             fabric_send_dim2(
-                num_tiles_per_chip,
-                tile_id_start,
-                ring_size,
-                tile_cols_per_chip,
-                tensor0_addrgen,
-                pkt_hdr_forward,
-                pkt_hdr_backward,
-                fabric_connection);
+                num_tiles_per_chip, tile_id, tensor0_addrgen, pkt_hdr_forward, pkt_hdr_backward, fabric_connection);
         }
     } else {
         fabric_send_generic<is_dram>(
             num_tiles_per_chip,
-            tile_id_start,
-            tensor0_addrgen,
-            ring_size,
+            tile_id,
             tile_cols_per_chip,
+            tensor0_addrgen,
             pkt_hdr_forward,
             pkt_hdr_backward,
             fabric_connection);

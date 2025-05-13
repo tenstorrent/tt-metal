@@ -163,6 +163,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_interleav
     uint32_t tile_cols_per_chip = input_tensor_shape[dim] / input_tensor.get_tensor_spec().tile().get_width();
     auto writer_kernel_config = tt::tt_metal::WriterDataMovementConfig{};
     writer_kernel_config.compile_args = {
+        ring_size,                                         // ring_size
         ring_index,                                        // my_chip_id
         reserved_packet_header_CB_index,                   // reserved_packet_header_cb_id
         num_packet_headers_storable,                       // num_packet_headers_storable
@@ -207,7 +208,6 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_interleav
             input_tile_id_start,               // tile_id_start
             input_tile_id_end,                 // tile_id_end
             base_pages_per_worker,
-            ring_size,           // ring_size
             tile_cols_per_chip,  // tile_cols_per_chip
         };
         log_trace(tt::LogOp, "Reader Runtime Args:");
@@ -237,7 +237,6 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_interleav
             drain_sync_core.y,                  // out_ready_sem_noc0_y
             out_ready_sem_wait_value,           // out_ready_sem_wait_value
             base_pages_per_worker,              // base_pages_per_worker
-            ring_size,                          // ring_size
             tile_cols_per_chip,                 // tile_cols_per_chip
         };
         log_trace(tt::LogOp, "Writer Runtime Args:");
