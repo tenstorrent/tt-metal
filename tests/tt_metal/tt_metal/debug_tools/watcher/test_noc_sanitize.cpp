@@ -228,7 +228,7 @@ void RunTestOnCore(WatcherFixture* fixture, IDevice* device, CoreCoord &core, bo
     int noc = (use_ncrisc) ? 1 : 0;
     CoreCoord input_core_virtual_coords = device->virtual_noc0_coordinate(noc, input_buf_noc_xy);
     CoreCoord output_core_virtual_coords = device->virtual_noc0_coordinate(noc, output_buf_noc_xy);
-    string risc_name = (is_eth_core) ? "erisc" : "brisc";
+    string risc_name = (is_eth_core) ? "erisc" : " brisc";
     if (use_ncrisc) {
         risc_name = "ncrisc";
     }
@@ -244,7 +244,7 @@ void RunTestOnCore(WatcherFixture* fixture, IDevice* device, CoreCoord &core, bo
                 core.y,
                 virtual_core.x,
                 virtual_core.y,
-                (is_eth_core) ? "erisc" : "brisc",
+                (is_eth_core) ? "erisc" : " brisc",
                 buffer_size,
                 buffer_addr,
                 output_buf_noc_xy.str(),
@@ -316,7 +316,7 @@ void RunTestOnCore(WatcherFixture* fixture, IDevice* device, CoreCoord &core, bo
                 core.y,
                 virtual_core.x,
                 virtual_core.y,
-                (is_eth_core) ? "erisc" : "brisc",
+                (is_eth_core) ? "erisc" : " brisc",
                 buffer_size,
                 buffer_addr,
                 input_buf_noc_xy.str(),

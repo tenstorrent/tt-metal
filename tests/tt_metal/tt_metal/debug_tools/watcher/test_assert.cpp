@@ -78,7 +78,7 @@ static void RunTest(
                     .noc = tt_metal::NOC::RISCV_0_default
                 }
             );
-            risc = "brisc";
+            risc = " brisc";
             break;
         case DebugNCrisc:
             assert_kernel = CreateKernel(
