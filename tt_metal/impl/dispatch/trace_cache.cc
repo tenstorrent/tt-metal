@@ -450,28 +450,28 @@ void WorkerBufferManager::post_process_ring_buffer(
             uint32_t addr = trace[trace_idx].get_addr();
             uint32_t upper = addr + programs[pgm_id].get_size();
 
-            auto it = rb_entries.upper_bound(trace[trace_idx].get_addr());
+            auto it = rb_entries.upper_bound(addr);
             if (it != rb_entries.begin()) {
                 --it;
-                // it is now the last entry that is <= addr
-                while (it != rb_entries.end()) {
-                    if (it->first >= upper) {
-                        // it is now too high.
-                        break;
-                    }
-                    if (it->first + it->second.length > addr) {
-                        // This entry overlaps.
-                        if (stall_idx == std::nullopt) {
-                            stall_idx = it->second.idx;
-                        } else {
-                            stall_idx = std::max(stall_idx.value(), it->second.idx);
-                        }
-                        it = rb_entries.erase(it);
-
+            }
+            // it is now the last entry that is <= addr, or the first above if there is none.
+            while (it != rb_entries.end()) {
+                if (it->first >= upper) {
+                    // it is now too high.
+                    break;
+                }
+                if (it->first + it->second.length > addr) {
+                    // This entry overlaps.
+                    if (stall_idx == std::nullopt) {
+                        stall_idx = it->second.idx;
                     } else {
-                        // This entry is too low.
-                        ++it;
+                        stall_idx = std::max(stall_idx.value(), it->second.idx);
                     }
+                    it = rb_entries.erase(it);
+
+                } else {
+                    // This entry is too low.
+                    ++it;
                 }
             }
 
