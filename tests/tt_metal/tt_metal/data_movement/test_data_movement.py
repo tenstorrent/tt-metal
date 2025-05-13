@@ -471,12 +471,21 @@ def plot_dm_stats(dm_stats, output_file="dm_stats_plot.png", arch="blackhole"):
 
         # Plot durations
         ax = axes[0]
-        ax.plot(riscv_1_durations, label="RISCV 1 Duration (cycles)", marker="o")
-        ax.plot(riscv_0_durations, label="RISCV 0 Duration (cycles)", marker="o")
+        lines = []
+        labels = []
+        if riscv_1_durations:
+            (line1,) = ax.plot(riscv_1_durations, label="RISCV 1 Duration (cycles)", marker="o")
+            lines.append(line1)
+            labels.append("RISCV 1 Duration (cycles)")
+        if riscv_0_durations:
+            (line0,) = ax.plot(riscv_0_durations, label="RISCV 0 Duration (cycles)", marker="o")
+            lines.append(line0)
+            labels.append("RISCV 0 Duration (cycles)")
         ax.set_xlabel("Index")
         ax.set_ylabel("Duration (cycles)")
         ax.set_title("Kernel Durations")
-        ax.legend()
+        if lines:
+            ax.legend(lines, labels)
         ax.grid()
 
         # Plot size of data transferred vs bandwidth
