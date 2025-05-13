@@ -335,3 +335,26 @@ def test_llama_tg_RotaryEmbeddingLlamaFusedQK(
     run_test_rotary_embedding_llama(
         device, batch, seq_len, pcc, n_heads, n_kv_heads, head_dim, 1, datatype, fuse_qk=True
     )
+
+
+@skip_for_blackhole("Requires eth connected devices to run, only single chip BH available. See #12349")
+@pytest.mark.parametrize("batch, seq_len", ((8, 1),))
+@pytest.mark.parametrize(
+    "n_heads, n_kv_heads, head_dim",
+    ((8, 1, 128),),
+)
+@pytest.mark.parametrize("datatype", (ttnn.bfloat16,))
+@pytest.mark.parametrize("pcc", (0.9997,))
+def test_llama_tg_RowMajorRotaryEmbeddingLlamaFusedQK(
+    batch,
+    seq_len,
+    n_heads,
+    n_kv_heads,
+    head_dim,
+    datatype,
+    pcc,
+    device,
+):
+    run_test_rotary_embedding_llama(
+        device, batch, seq_len, pcc, n_heads, n_kv_heads, head_dim, 1, datatype, fuse_qk=True
+    )
