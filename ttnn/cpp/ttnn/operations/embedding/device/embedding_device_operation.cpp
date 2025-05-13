@@ -44,6 +44,9 @@ void Embeddings::validate(const std::vector<Tensor> &input_tensors) const {
     }
     if(a.get_layout() == Layout::ROW_MAJOR) {
         TT_FATAL(a.get_padded_shape()[1] == 1 && a.get_padded_shape()[2] == 1, "Only dim 0 && 3 for the input can be non 1");
+        if (is_sharded(this->output_mem_config.memory_layout())) {
+            TT_FATAL(this->output_mem_config.memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED, "Embedding only supports height sharded Row Major outputs");
+        }
     }
     switch (this->embeddings_type) {
         case EmbeddingsType::PADDED: TT_FATAL(this->pad_token.has_value(), "Pad token must be specified when PADDED Embeddings Type is specified"); break;
