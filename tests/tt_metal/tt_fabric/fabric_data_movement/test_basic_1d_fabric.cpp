@@ -673,7 +673,7 @@ TEST_F(Fabric1DFixture, TestEDMConnectionStressTestQuick) {
     uint32_t fabric_write_dest_bank_addr = 0x50000;
 
     // Set up the EDM connection config
-    const auto edm_config = get_1d_fabric_config();
+    const auto edm_config = get_tt_fabric_config();
 
     // For each epoch, run with increasing number of workers
     log_debug(tt::LogTest, "Starting EDM connection stress test");
