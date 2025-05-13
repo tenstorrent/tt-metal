@@ -39,8 +39,10 @@ void kernel_launch(uint32_t kernel_base_addr) {
     while (c_tensix_core::read_wall_clock() < end_time);
 #endif
 #else
-    extern uint32_t __kernel_data_lma[];
-    do_crt1((uint32_t tt_l1_ptr *)__kernel_data_lma);
+    extern uint32_t __kernel_init_local_l1_base[];
+    extern uint32_t __kernel_text_start[];
+    do_crt1((uint32_t tt_l1_ptr*)(kernel_base_addr + (uint32_t)__kernel_init_local_l1_base -
+                                  (uint32_t)__kernel_text_start));
 
     if constexpr (NOC_MODE == DM_DEDICATED_NOC) {
         noc_local_state_init(NOC_INDEX);
