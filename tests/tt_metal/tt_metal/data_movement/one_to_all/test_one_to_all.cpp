@@ -293,9 +293,13 @@ TEST_F(DeviceFixture, TensixDataMovementOneToAll10x10PacketSizes) {
     uint32_t max_transaction_size_pages = 64;
     uint32_t page_size_bytes = arch_ == tt::ARCH::BLACKHOLE ? 64 : 32;  // =Flit size: 32 bytes for WH, 64 for BH
     CoreCoord master_core_coord = {0, 0};
-    CoreCoord grid_size = {10, 10};
     bool loopback = true;
     NOC noc_id = NOC::NOC_0;
+
+    CoreCoord cs_grid_size = {
+        devices_.at(0)->compute_with_storage_grid_size().x, devices_.at(0)->compute_with_storage_grid_size().y};
+    uint32_t same_grid_size = cs_grid_size.x > cs_grid_size.y ? cs_grid_size.y : cs_grid_size.x;
+    CoreCoord grid_size = {same_grid_size, same_grid_size};
 
     for (uint32_t num_of_transactions = 1; num_of_transactions <= max_transactions; num_of_transactions *= 4) {
         for (uint32_t transaction_size_pages = 1; transaction_size_pages <= max_transaction_size_pages;
@@ -404,7 +408,8 @@ TEST_F(DeviceFixture, TensixDataMovementOneToAllMulticast11x10PacketSizes) {
     uint32_t max_transaction_size_pages = 64;
     uint32_t page_size_bytes = arch_ == tt::ARCH::BLACKHOLE ? 64 : 32;  // =Flit size: 32 bytes for WH, 64 for BH
     CoreCoord master_core_coord = {0, 0};
-    CoreCoord grid_size = {devices_.at(0)->logical_grid_size().x - 1, devices_.at(0)->logical_grid_size().y};
+    CoreCoord grid_size = {
+        devices_.at(0)->compute_with_storage_grid_size().x, devices_.at(0)->compute_with_storage_grid_size().y};
     NOC noc_id = NOC::NOC_0;
     bool is_linked = false;
 
@@ -515,7 +520,8 @@ TEST_F(DeviceFixture, TensixDataMovementOneToAllMulticastLinked11x10PacketSizes)
     uint32_t max_transaction_size_pages = 64;
     uint32_t page_size_bytes = arch_ == tt::ARCH::BLACKHOLE ? 64 : 32;  // =Flit size: 32 bytes for WH, 64 for BH
     CoreCoord master_core_coord = {0, 0};
-    CoreCoord grid_size = {devices_.at(0)->logical_grid_size().x - 1, devices_.at(0)->logical_grid_size().y};
+    CoreCoord grid_size = {
+        devices_.at(0)->compute_with_storage_grid_size().x, devices_.at(0)->compute_with_storage_grid_size().y};
     NOC noc_id = NOC::NOC_0;
     bool is_linked = true;
 
