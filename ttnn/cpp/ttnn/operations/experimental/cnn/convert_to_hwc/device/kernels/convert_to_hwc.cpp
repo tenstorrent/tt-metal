@@ -63,15 +63,9 @@ void MAIN {
     transpose_wh_init(cb_in, cb_transpose_in0);
     pack_untilize_dst_init_short<1>(cb_in);
 
-    constexpr int BATCH_SIZE = 8;
-    constexpr uint32_t num_batches = total_tiles / BATCH_SIZE;
-    constexpr uint32_t leftover = total_tiles % BATCH_SIZE;
     for (uint32_t idx = 0; idx < total_tiles; idx++) {
         const uint32_t cb_transpose_in = idx % 2 == 0 ? cb_transpose_in0 : cb_transpose_in1;
         transpose<1>(cb_tiled_in, cb_transpose_in);
     }
-    // for (uint32_t idx = 0; idx < leftover; idx++) {
-    // transpose<1>(cb_tiled_in, cb_transpose_in0);
-    //}
 }
 }  // namespace NAMESPACE

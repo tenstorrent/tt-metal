@@ -85,21 +85,21 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_convert_to_hwc(const Te
     const auto cb_out =
         create_circular_buffer(cb_out_id, cb_out_total_size, cb_out_page_size, output_format, output.buffer());
 
-    const uint32_t total_tiles_writer0 = total_tiles_per_core / 2;
+    // Divide work between data movement cores
+    const uint32_t total_tiles_writer0 = tt::div_up(total_tiles_per_core, 2);
     const uint32_t total_tiles_writer1 = total_tiles_per_core - total_tiles_writer0;
-    uint32_t output_stride_sticks = 32;
-
-    tt::log_info(
-        "total tiles = {} / {}, output stride sticks = {}",
-        total_tiles_writer0,
-        total_tiles_writer1,
-        output_stride_sticks);
+    uint32_t output_stride_sticks = TILE_WIDTH;  // needed to stride output address when doing split writers
 
     std::vector<uint32_t> writer_compile_time_args0 = {
-        cb_in_transpose_id0, cb_out_id, C, input_shard_width, output_stride_sticks};
+        cb_in_transpose_id0, cb_out_id, C, input_shard_width, total_tiles_writer0, output_stride_sticks, 0};
     std::vector<uint32_t> writer_compile_time_args1 = {
-        cb_in_transpose_id1, cb_out_id, C, input_shard_width, output_stride_sticks};
-    tt::log_info("{} {}", writer_compile_time_args0, writer_compile_time_args1);
+        cb_in_transpose_id1,
+        cb_out_id,
+        C,
+        input_shard_width,
+        total_tiles_writer1,
+        output_stride_sticks,
+        output_stride_sticks};
     std::vector<uint32_t> compute_compile_time_args = {
         cb_in_id, cb_in_tiled_id, cb_in_transpose_id0, cb_in_transpose_id1, total_tiles_per_core, input_shard_height};
 

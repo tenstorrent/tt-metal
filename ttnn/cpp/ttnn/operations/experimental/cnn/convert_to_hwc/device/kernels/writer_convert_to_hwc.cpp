@@ -24,36 +24,26 @@ void kernel_main() {
     constexpr uint32_t cb_out = get_compile_time_arg_val(1);
     constexpr uint32_t channels = get_compile_time_arg_val(2);  // stick size
     constexpr uint32_t hw = get_compile_time_arg_val(3);        // total number of sticks to copy into output
-    constexpr uint32_t output_stride_sticks = get_compile_time_arg_val(4);
+    constexpr uint32_t num_full_tiles = get_compile_time_arg_val(4);
+    constexpr uint32_t output_stride_sticks = get_compile_time_arg_val(5);
+    constexpr uint32_t initial_l1_write_stick_offset = get_compile_time_arg_val(6);
+
+    static_assert(hw % TILE_SIZE == 0, "Shard width must be multiple of tile width");
 
     constexpr uint32_t channel_size = channels * ELEMENT_SIZE_BYTES;
-    constexpr uint32_t num_full_tiles = hw / TILE_SIZE;
-    constexpr uint32_t hw_per_final_tile = hw % TILE_SIZE;
     constexpr uint32_t l1_write_addr_stride = output_stride_sticks * channel_size;
+    constexpr uint32_t ini = output_stride_sticks * channel_size;
+    constexpr uint32_t initial_l1_write_addr_offset = initial_l1_write_stick_offset * channel_size;
 
-    DPRINT << "num full tiles = " << num_full_tiles << " hw_per_final_tile=" << hw_per_final_tile << ENDL();
+    const uint32_t base_l1_write_addr = get_write_ptr(cb_out) + initial_l1_write_addr_offset;
 
-    const uint32_t base_l1_write_addr = get_write_ptr(cb_out);
     uint32_t l1_write_addr = base_l1_write_addr;
-
-    if (cb_in_transpose == 3) {
-        l1_write_addr += l1_write_addr_stride;
-    }
-
-    for (uint32_t i = 0; i < num_full_tiles / 2; i++) {
+    for (uint32_t i = 0; i < num_full_tiles; i++) {
         cb_wait_front(cb_in_transpose, 1);
         const uint64_t l1_read_addr = get_noc_addr(get_read_ptr(cb_in_transpose));
-        DPRINT << "i=" << i << " read=" << l1_read_addr << " write=" << l1_write_addr - base_l1_write_addr << ENDL();
         copy_padded_sticks<channel_size, TILE_STICK_SIZE_BYTES, TILE_SIZE>(l1_read_addr, l1_write_addr);
         cb_pop_front(cb_in_transpose, 1);
         l1_write_addr += l1_write_addr_stride;  // skip some number of sticks if splitting writers across cores
-    }
-    if constexpr (hw_per_final_tile > 0 && cb_in_transpose == 2) {
-        cb_wait_front(cb_in_transpose, 1);
-        const uint64_t l1_read_addr = get_noc_addr(get_read_ptr(cb_in_transpose));
-        copy_padded_sticks<channel_size, TILE_STICK_SIZE_BYTES, hw_per_final_tile>(l1_read_addr, l1_write_addr);
-        cb_pop_front(cb_in_transpose, 1);
-        l1_write_addr += output_stride_sticks * channel_size;
     }
     noc_async_read_barrier();
 }
