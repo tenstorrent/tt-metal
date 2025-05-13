@@ -7,7 +7,7 @@
 #include <functional>
 #include <utility>
 
-#include "ttnn/tensor/host_buffer/memory_pin.hpp"
+#include <tt-metalium/memory_pin.hpp>
 
 namespace tt::tt_metal {
 namespace {
