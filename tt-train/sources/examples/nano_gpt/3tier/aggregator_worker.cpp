@@ -80,6 +80,7 @@ void send_aggregated_gradients_from_workers_to_optimizer(const SortedParameters 
             ttml::core::distributed::recv_tensor(tensor_to_add, worker_id);
             tensor = ttnn::add(tensor, tensor_to_add);
         }
+        tensor = ttnn::multiply(tensor, 1.0F / static_cast<float>(workers));
 
         ttml::core::distributed::send_tensor(tensor, optimizer_rank);
     }
