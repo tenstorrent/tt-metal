@@ -540,7 +540,7 @@ void WriteToDevice(Buffer& buffer, tt::stl::Span<const uint8_t> host_buffer) {
             const auto virtual_core = buffer.device()->virtual_core_from_logical_core(banks[i], buffer.core_type());
             for (const auto& chunk_mapping_in_bytes : bank_mapping_in_bytes[i]) {
                 // TODO: subspan is in elements; here 1 element is 1 byte (ie. uint8_t) so using bytes here is fine
-                auto chunk_span = tt::stl::MakeConstSpan(
+                auto chunk_span = tt::stl::make_const_span(
                     host_buffer.subspan(chunk_mapping_in_bytes.src, chunk_mapping_in_bytes.size));
                 llrt::write_hex_vec_to_core(
                     buffer.device()->id(), virtual_core, chunk_span, buffer.address() + chunk_mapping_in_bytes.dst);
