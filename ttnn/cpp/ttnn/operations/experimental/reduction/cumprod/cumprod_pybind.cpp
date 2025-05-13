@@ -3,7 +3,13 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "cumprod_pybind.hpp"
-#include "ttnn/common/queue_id.hpp"
+
+#include <pybind11/pybind11.h>
+#include <pybind11/stl.h>
+
+#include "cpp/ttnn-pybind/decorators.hpp"
+#include "ttnn/operations/experimental/reduction/cumprod/cumprod.hpp"
+#include "ttnn/types.hpp"
 
 namespace ttnn::operations::experimental::reduction::cumprod::detail {
 void bind_cumprod_operation(py::module& module) {
@@ -16,14 +22,15 @@ void bind_cumprod_operation(py::module& module) {
 
             Args:
                 input_tensor (ttnn.Tensor): the input tensor to calculate cumulative product of.
-                dim (int): axis of product cumulation.
+                dim (int): the axis of product cumulation.
 
             Keyword Args:
-                queue_id (int, optional): command queue's ID, defaults to 0.
-                memory_config (ttnn.MemoryConfig, optional): memory configuration for the operation. Defaults to `None`.
+                dtype (ttnn.DataType, optional): the underlying type to which the input
+                queue_id (int, optional): the command queue's ID, defaults to 0.
+                memory_config (ttnn.MemoryConfig, optional): the memory configuration for the operation. Defaults to `None`.
 
             Returns:
-                ttnn.Tensor: the output tensor (for now, it is a copy of input_tensor, because only scaffold is implemented).
+                ttnn.Tensor: the output tensor with a cumulative product.
 
             Example:
                 >>> # return a ref
@@ -44,8 +51,6 @@ void bind_cumprod_operation(py::module& module) {
                 >>> output = ttnn.experimental.cumprod(tensor, 1, out=tensor_copy)
                 >>> assert tensor.shape == output.shape
                 >>> assert tensor.dtype == output.dtype
-                >>> assert tensor.shape == output.shape
-                >>> assert tensor.dtype == output.dtyoe
             )doc";
 
     using OperationType = decltype(ttnn::experimental::cumprod);
@@ -57,14 +62,16 @@ void bind_cumprod_operation(py::module& module) {
             [](const OperationType& self,
                const ttnn::Tensor& input_tensor,
                const int32_t dim,
+               std::optional<DataType>& dtype,
                std::optional<Tensor> optional_out,
                const std::optional<MemoryConfig>& memory_config,
                const QueueId& queue_id = DefaultQueueId) {
-                return self(input_tensor, dim, optional_out, memory_config, queue_id);
+                return self(input_tensor, dim, dtype, optional_out, memory_config, queue_id);
             },
             py::arg("input_tensor").noconvert(),
             py::arg("dim"),
             py::kw_only(),
+            py::arg("dtype") = std::nullopt,
             py::arg("out") = std::nullopt,
             py::arg("memory_config") = std::nullopt,
             py::arg("queue_id") = DefaultQueueId});
