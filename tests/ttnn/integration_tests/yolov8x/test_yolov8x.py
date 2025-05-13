@@ -13,12 +13,12 @@ from loguru import logger
 from ultralytics import YOLO
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.utility_functions import disable_persistent_kernel_cache
-from models.experimental.yolov8x.tt.ttnn_yolov8x import TtYolov8xModel, TtConv, TtC2f, TtSppf, TtDFL
-from models.experimental.yolov8x.tt.ttnn_yolov8x_utils import (
+from models.demos.yolov8x.tt.ttnn_yolov8x import TtYolov8xModel, TtConv, TtC2f, TtSppf, TtDFL
+from models.demos.yolov8x.tt.ttnn_yolov8x_utils import (
     ttnn_decode_bboxes,
     custom_preprocessor,
 )
-from models.experimental.yolov8x.reference import yolov8x
+from models.demos.yolov8x.reference import yolov8x
 
 
 def decode_bboxes(distance, anchor_points, xywh=True, dim=1):
