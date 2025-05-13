@@ -13,21 +13,6 @@
 #include "cpp/ttnn/operations/ccl/common/interpreter_backends/kernel_common/noc_addr.hpp"
 
 constexpr bool flush = false;
-
-template <uint8_t noc_ind = noc_index>
-FORCE_INLINE std::uint64_t static_noc_multicast_addr(
-    std::uint32_t noc_x_start,
-    std::uint32_t noc_y_start,
-    std::uint32_t noc_x_end,
-    std::uint32_t noc_y_end,
-    std::uint32_t addr) {
-    if constexpr (noc_ind == 0) {
-        return get_noc_multicast_addr(noc_x_start, noc_y_start, noc_x_end, noc_y_end, addr);
-    } else {
-        return get_noc_multicast_addr(noc_x_end, noc_y_end, noc_x_start, noc_y_start, addr);
-    }
-}
-
 void kernel_main() {
     // Constants for indexing
     constexpr uint8_t x_index = 0;
@@ -36,6 +21,8 @@ void kernel_main() {
     constexpr uint32_t num_sticks_per_block = 8;
     constexpr uint32_t stick_size_byte = 64 * 2;
     constexpr uint32_t head_dim_bytes = 128 * 2;
+    constexpr uint32_t num_packet_headers_storable = 8;
+    constexpr uint32_t buffering_factor = 2;
     size_t rt_arg_idx = 0;
 
     // Define all compile-time arguments at the beginning
@@ -94,6 +81,7 @@ void kernel_main() {
         constexpr uint8_t device_order[other_devices] =
             DEVICE_ORDER;  // this is code gen'd in the program factory using the defines
         constexpr uint8_t packet_worker_cores[num_packet_worker_cores][2] = PACKET_WORKER_CORES;
+        cb_reserve_back(packet_header_cb_id, buffering_factor * num_packet_headers_storable);
         const auto packet_header_buffer_addr = get_read_ptr(packet_header_cb_id);
         auto* unicast_packet_header = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(packet_header_buffer_addr);
         auto* sem_inc_packet_header =
@@ -110,13 +98,12 @@ void kernel_main() {
         // Precompute the packet offset once
         const uint32_t packet_offset = base_receiver_l1_addr + chip_id_offset;
 
-        if (fabric_connection.is_logically_connected()) {
-            fabric_connection.open_finish();
-        }
+        ASSERT(fabric_connection.is_logically_connected());
+        fabric_connection.open_finish();
         for (uint32_t target_device_id : device_order) {
             // Calculate device-specific constants once per device
             bool forward_connection = true;
-            if (RING_TOPOLOGY) {
+            if constexpr (RING_TOPOLOGY) {
                 const int diff = int(target_device_id) - int(chip_id);
                 const uint32_t num_hops = std::abs(diff) == 2 ? 2 : 1;
                 // To evenly distribute the load, we use the following logic:

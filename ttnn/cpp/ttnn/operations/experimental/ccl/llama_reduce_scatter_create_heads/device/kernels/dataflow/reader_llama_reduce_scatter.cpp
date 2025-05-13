@@ -7,22 +7,6 @@
 #include "cpp/ttnn/operations/ccl/shared_with_host/sharded_tensor_addr_gen.hpp"
 #include "ttnn/cpp/ttnn/operations/ccl/kernel_common/sharding_addrgen.hpp"
 
-// #include <unistd.h>
-
-template <uint8_t noc_ind = noc_index>
-FORCE_INLINE std::uint64_t static_noc_multicast_addr(
-    std::uint32_t noc_x_start,
-    std::uint32_t noc_y_start,
-    std::uint32_t noc_x_end,
-    std::uint32_t noc_y_end,
-    std::uint32_t addr) {
-    if constexpr (noc_ind == 0) {
-        return get_noc_multicast_addr(noc_x_start, noc_y_start, noc_x_end, noc_y_end, addr);
-    } else {
-        return get_noc_multicast_addr(noc_x_end, noc_y_end, noc_x_start, noc_y_start, addr);
-    }
-}
-
 void kernel_main() {
     // Constants for indexing
     constexpr uint8_t x_index = 0;
@@ -57,7 +41,7 @@ void kernel_main() {
     constexpr uint32_t total_num_read_txns = get_compile_time_arg_val(18);
 
     // Derived compile-time constants
-    constexpr uint32_t input_tensor_cores = input_shard_cores_per_device * num_devices;
+    constexpr uint32_t input_tensor_cores = input_shard_cores_per_device;
     constexpr uint32_t num_packets_total_per_device =
         (input_shard_cores_per_device * tiles_per_core_width + num_pages_per_packet - 1) / num_pages_per_packet;
 
@@ -108,6 +92,9 @@ void kernel_main() {
                 const uint8_t curr_core = schedule[shard_idx][0];
                 const uint32_t read_offset = base_offset + schedule[shard_idx][1];
                 const uint32_t read_size = schedule[shard_idx][2];
+                ASSERT(curr_core < input_tensor_cores, "Invalid core index");
+                ASSERT(read_offset < num_devices, "Invalid read offset");
+                ASSERT(read_size <= num_pages_per_packet, "Invalid read size");
                 num_pages_reserve_push += read_size;
 
                 auto num_pages_left = sender_total_num_pages - num_pages_read;
@@ -140,8 +127,8 @@ void kernel_main() {
 
         for (uint32_t i = 0; i < num_pages_per_packet; i++) {
             const uint32_t rem = linear_input_packet_start_idx + i;
-            const uint32_t linear_input_core_idcs = rem % 20;
-            const uint32_t linear_input_tile_offsets = rem / 20;
+            const uint32_t linear_input_core_idcs = rem % input_tensor_cores;
+            const uint32_t linear_input_tile_offsets = rem / input_tensor_cores;
 
             if (linear_input_core_idcs >= input_tensor_cores) {
                 break;
