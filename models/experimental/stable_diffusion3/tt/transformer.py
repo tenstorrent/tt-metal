@@ -147,7 +147,8 @@ class TtSD3Transformer2DModel:
             )
             if prompt_out is not None:
                 prompt = prompt_out
-        spatial_time = self._time_embed_out(ttnn.silu(time_embed))
+
+        spatial_time = self._time_embed_out(utils.silu(time_embed))
         [scale, shift] = chunk_time(spatial_time, 2)
         if self._distributed:
             spatial = utils.all_gather(spatial, dim=-1)
