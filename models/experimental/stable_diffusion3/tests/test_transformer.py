@@ -152,5 +152,4 @@ def test_transformer(
     # print(f" TOTAL TIME: {total_time} AVG TIME: {avg_time}\n")
 
     torch_output = torch.unsqueeze(torch_output, 1)
-    print(f"tt_output shape {tt_output.shape} torch_output {torch_output.shape}")
-    assert_quality(torch_output, tt_output, pcc=0.997, mse=0.06, shard_dim=0, num_devices=mesh_device.get_num_devices())
+    assert_quality(torch_output, tt_output, pcc=0.997, mse=0.06)
