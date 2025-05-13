@@ -1109,7 +1109,10 @@ bool Device::close() {
     sub_device_manager_tracker_.reset(nullptr);
 
     // Wait for dispatch cores on this device to complete
-    auto dispatch_cores = tt::tt_metal::get_virtual_dispatch_cores(this->id_);
+    // Defer routing cores to be reset at the device pool level because they can still be needed by other devices for
+    // now
+    auto dispatch_cores = tt::tt_metal::get_virtual_dispatch_cores(this->id());
+    auto routing_cores = tt::tt_metal::get_virtual_dispatch_routing_cores(this->id());
     llrt::internal_::wait_until_cores_done(this->id(), RUN_MSG_GO, dispatch_cores, k_DeviceTimeoutMs);
     // Remaining cores in dispatch_cores have not closed in time
 
@@ -1123,7 +1126,7 @@ bool Device::close() {
             CoreCoord logical_core(x, y);
             CoreCoord worker_core = this->worker_core_from_logical_core(logical_core);
 
-            if (!dispatch_cores.contains(worker_core)) {
+            if (!dispatch_cores.contains(worker_core) && !routing_cores.contains(worker_core)) {
                 if (this->storage_only_cores_.find(logical_core) == this->storage_only_cores_.end()) {
                     tt::tt_metal::MetalContext::instance().get_cluster().assert_risc_reset_at_core(
                         tt_cxy_pair(this->id(), worker_core));
