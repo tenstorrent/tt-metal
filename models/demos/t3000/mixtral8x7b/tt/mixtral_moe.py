@@ -113,7 +113,7 @@ class TtMoeLayer(LightweightModule):
             topk_values, topk_indices = ttnn.topk(gate_logits_1SB8, 32)
             topk_values = ttnn.add(topk_values, self.top2_mask_11BB)
             mask_B2 = ttnn.eqz(topk_indices)
-            weights_1SB1 = ttnn.sum(ttnn.softmax(topk_values, dim=-1, keepdim=True) * mask_B2, dim=3)
+            weights_1SB1 = ttnn.sum(ttnn.softmax(topk_values, dim=-1) * mask_B2, dim=3, keepdim=True)
 
             topk_values.deallocate(True)
             topk_indices.deallocate(True)
