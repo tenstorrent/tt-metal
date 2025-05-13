@@ -209,14 +209,7 @@ operation::ProgramWithCallbacks paged_fill_cache_multi_core(
             const auto op_specific = static_cast<const PagedUpdateCacheDeviceOperation*>(operation);
 
             if (use_batch_idx_tensor) {
-                // When use_batch_idx_tensor is true, PagedUpdateCacheDeviceOperation::batch_idx_tensor_opt should have
-                // a value. This value is passed directly to the program factory's paged_fill_cache_multi_core from
-                // PagedUpdateCacheDeviceOperation::create_program. The optional_input_tensors here are those passed to
-                // operation::run, which for FILL op are {std::nullopt, std::nullopt} So, if use_batch_idx_tensor is
-                // true, the tensor was part of op_specific->batch_idx_tensor_opt. The program factory already set up
-                // the kernel to expect either a tensor address or a scalar based on use_batch_idx_tensor. The
-                // current_kernel_batch_arg here needs to get that address if op_specific->batch_idx_tensor_opt has
-                // value.
+
                 TT_FATAL(
                     op_specific->batch_idx_tensor_opt.has_value(),
                     "batch_idx_tensor_opt is expected in PagedUpdateCacheDeviceOperation but not provided for callback "
