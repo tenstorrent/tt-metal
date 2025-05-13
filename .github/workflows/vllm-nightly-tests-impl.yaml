@@ -23,7 +23,7 @@ jobs:
             name: "vLLM test: Llama-3.1-8B-Instruct @ T3K",
             arch: wormhole_b0,
             model: "meta-llama/Llama-3.1-8B-Instruct",
-            server_timeout: 5,
+            server_timeout: 10,
             benchmark_timeout: 10,
             runner-label: config-t3000,
             co-owner-1_id: U08E1JCDVNX, # Pavle Petrovic
