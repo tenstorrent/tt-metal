@@ -1045,6 +1045,7 @@ std::pair<ttnn::Tensor, std::optional<ttnn::Tensor>> prepare_conv_weights_biases
         weight_tensor_ = ttnn::operations::core::to_device(weight_tensor_, device, std::nullopt);
     }
 
+    tt::log_info("Weights Dtype : {}, conv_config weights dtype : {}", weight_tensor_.get_dtype(), weights_bias_dtype);
     if (bias_tensor.has_value()) {
         bias_tensor_ = bias_tensor.value();
         bool is_bias_tensor_is_on_device = tt::tt_metal::is_device_tensor(bias_tensor_);
@@ -1063,8 +1064,8 @@ std::pair<ttnn::Tensor, std::optional<ttnn::Tensor>> prepare_conv_weights_biases
             bias_tensor_ = ttnn::operations::core::to_device(bias_tensor_, device, std::nullopt);
         }
         TT_ASSERT(
-            bias_tensor_.get_dtype() == weights_bias_dtype,
-            "Bias tensor should be in the dtype specified by Conv2dConfig");
+            bias_tensor_.get_dtype() == weight_tensor_.get_dtype(),
+            "Bias tensor should be in the same dtype as the weights tensor");
     }
     return {weight_tensor_, bias_tensor.has_value() ? bias_tensor_ : std::optional<ttnn::Tensor>()};
 }
