@@ -15,6 +15,7 @@
 #include <cstdint>
 #include <initializer_list>
 #include <map>
+#include <typeinfo>
 #include <memory>
 #include <string>
 #include <unordered_map>
@@ -880,6 +881,10 @@ std::unique_ptr<Program> create_and_compile_cq_program(IDevice* device) {
 
     // Register core coordinates for this device
     for (auto node_and_kernel : node_id_to_kernel) {
+        if (node_and_kernel->GetDeviceId() != device->id()) {
+            continue;
+        }
+
         switch (node_and_kernel->GetKernelType()) {
             case FDKernelType::DISPATCH: dispatch_cores[device->id()].insert(node_and_kernel->GetVirtualCore()); break;
             case FDKernelType::ROUTING: routing_cores[device->id()].insert(node_and_kernel->GetVirtualCore()); break;
@@ -889,8 +894,9 @@ std::unique_ptr<Program> create_and_compile_cq_program(IDevice* device) {
             default:
                 TT_FATAL(
                     false,
-                    "Unknown kernel type {} on Device {}",
+                    "Unknown kernel type {} {} on Device {}",
                     magic_enum::enum_name(node_and_kernel->GetKernelType()),
+                    typeid(*node_and_kernel).name(),
                     device->id());
                 break;
         }

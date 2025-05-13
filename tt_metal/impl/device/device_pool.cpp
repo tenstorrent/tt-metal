@@ -713,6 +713,18 @@ bool DevicePool::close_devices(const std::vector<IDevice*>& devices, bool skip_s
         auto dev = tt::DevicePool::instance().get_active_device(dev_id);
         pass &= dev->close();
     }
+    // At this point the routing core clients (dispatch) have been terminated
+    // Terminate worker routing cores on device. Remaining ethernet cores will get reset during init
+    for (const auto& dev_id : devices_to_close) {
+        auto routing_cores = tt::tt_metal::get_virtual_dispatch_routing_cores(dev_id);
+        for (const auto& core : routing_cores) {
+            if (tt::tt_metal::MetalContext::instance().get_cluster().is_ethernet_core(core, dev_id)) {
+                continue;
+            }
+            tt::tt_metal::MetalContext::instance().get_cluster().assert_risc_reset_at_core(tt_cxy_pair(dev_id, core));
+        }
+    }
+
     return pass;
 }
 
