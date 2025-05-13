@@ -475,11 +475,14 @@ std::string to_string(
                 const auto& coords = storage.coords;
                 auto coords_it = coords.begin();
                 std::stringstream ss;
-                apply(cpu_tensor, [&](const Tensor& device_shard) {
-                    const distributed::MeshCoordinate coord = *coords_it++;
-                    ss << "device_id: " << mesh_device->get_device(coord)->id() << ", " << coord << std::endl;
-                    ss << to_string<T>(device_shard) << std::endl;
-                });
+                apply(
+                    cpu_tensor,
+                    [&](const Tensor& device_shard) {
+                        const distributed::MeshCoordinate coord = *coords_it++;
+                        ss << "device_id: " << mesh_device->get_device(coord)->id() << ", " << coord << std::endl;
+                        ss << to_string<T>(device_shard) << std::endl;
+                    },
+                    DeviceShardExecutionPolicy::SEQUENTIAL);
                 return ss.str();
             },
             [&](const MultiDeviceHostStorage& storage) -> std::string {

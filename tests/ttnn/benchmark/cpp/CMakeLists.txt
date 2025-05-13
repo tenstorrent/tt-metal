@@ -2,6 +2,7 @@ set(BENCHMARK_SRCS
     "host_tilizer_untilizer/tilizer_untilizer.cpp"
     "padding/pad_rm.cpp"
     "host_alloc_on_tensor_readback.cpp"
+    "multi_device/multi_device_parallel.cpp"
 )
 
 foreach(TEST_SRC ${BENCHMARK_SRCS})
@@ -17,6 +18,7 @@ foreach(TEST_SRC ${BENCHMARK_SRCS})
             test_common_libs
             benchmark::benchmark
             Python3::Python
+            OpenMP::OpenMP_CXX
     )
     target_include_directories(
         ${TEST_TARGET}

@@ -159,8 +159,8 @@ private:
         // for each one, copy its value to all other shards along the axes.
         if (!replicate_dims.empty()) {
             for (const auto& [coord, xtensor_view] : sharded_xtensor_views) {
-                const bool replication_source =
-                    std::all_of(replicate_dims.begin(), replicate_dims.end(), [&](size_t replicate_mesh_dim) {
+                const bool replication_source = std::all_of(
+                    replicate_dims.begin(), replicate_dims.end(), [&coord = coord](size_t replicate_mesh_dim) {
                         return coord[replicate_mesh_dim] == 0;
                     });
                 if (xtensor_view.has_value() && replication_source) {
@@ -184,7 +184,7 @@ private:
             tt::tt_metal::DistributedHostBuffer::create(shape_, shape_, MeshCoordinate::zero_coordinate(shape_.dims()));
         for (const auto& [coord, xtensor_view] : sharded_xtensor_views) {
             if (xtensor_view.has_value()) {
-                distributed_buffer.emplace_shard(coord, [&xtensor_view, &shard_spec, &coord]() {
+                distributed_buffer.emplace_shard(coord, [&xtensor_view = xtensor_view, &shard_spec, &coord = coord]() {
                     xt::xarray<T> data(xtensor_view->get());
                     auto shard_tensor = experimental::xtensor::from_xtensor<T>(data, shard_spec);
                     return tt::tt_metal::host_buffer::get_host_buffer(shard_tensor);

@@ -10,11 +10,27 @@
 #include "ttnn/tensor/host_buffer/functions.hpp"
 #include "ttnn/tensor/storage.hpp"
 #include "ttnn/tensor/types.hpp"
+#include <omp.h>
 
 #include <tracy/Tracy.hpp>
 
 namespace tt {
 namespace tt_metal {
+
+namespace {
+
+// Ensures that OpenMP is initialized with the number of cores on the machine.
+// Performs initialization only once on the first call.
+void ensure_omp_initialized() {
+    static std::once_flag omp_initialized;
+    std::call_once(omp_initialized, []() {
+        const int num_cores = std::thread::hardware_concurrency();
+        omp_set_num_threads(num_cores);
+        tt::log_info("OMP initialized with {} threads", num_cores);
+    });
+}
+
+}  // namespace
 
 ttnn::Shape infer_dims_for_reshape(const Tensor& tensor, tt::stl::Span<const int32_t> shape) {
     int64_t old_volume = tensor.get_logical_volume();
@@ -100,31 +116,45 @@ bool is_multi_device_host_tensor(const Tensor& tensor) {
 
 bool is_device_tensor(const Tensor& tensor) { return tensor.storage_type() == StorageType::DEVICE; }
 
-Tensor transform(const Tensor& tensor, const std::function<Tensor(const Tensor&)>& transform_func) {
+Tensor transform(
+    const Tensor& tensor,
+    const std::function<Tensor(const Tensor&)>& transform_func,
+    DeviceShardExecutionPolicy policy) {
     TT_FATAL(is_multi_device_host_tensor(tensor), "transform only supports multi-device host tensors");
     const auto& storage = std::get<MultiDeviceHostStorage>(tensor.storage());
-
-    std::vector<TensorSpec> transformed_specs;
+    std::vector<std::optional<TensorSpec>> transformed_specs;
     std::vector<HostBuffer> transformed_buffers;
-    transformed_buffers.reserve(storage.num_buffers());
-    transformed_specs.reserve(storage.num_buffers());
+    transformed_buffers.resize(storage.num_buffers());
+    transformed_specs.resize(storage.num_buffers());
+    if (policy == DeviceShardExecutionPolicy::PARALLEL) {
+        ensure_omp_initialized();
+    }
+#pragma omp parallel for if (policy == DeviceShardExecutionPolicy::PARALLEL) default(none) \
+    shared(storage, transform_func, tensor, transformed_specs, transformed_buffers)
     for (size_t i = 0; i < storage.num_buffers(); i++) {
         Tensor transformed_tensor_shard = transform_func(Tensor(storage.get_buffer(i), tensor.get_tensor_spec()));
-        transformed_specs.push_back(transformed_tensor_shard.get_tensor_spec());
-        auto* host_storage = std::get_if<HostStorage>(&transformed_tensor_shard.get_storage());
+        transformed_specs[i] = transformed_tensor_shard.get_tensor_spec();
+        auto* host_storage = std::get_if<HostStorage>(&transformed_tensor_shard.storage());
         TT_FATAL(host_storage != nullptr, "transform function must return a host tensor");
-        transformed_buffers.push_back(std::move(host_storage->buffer));
+        transformed_buffers[i] = std::move(host_storage->buffer);
     }
-    TensorSpec reference_spec = transformed_specs.front();
+
+    TensorSpec reference_spec = *transformed_specs.front();
     MultiDeviceHostStorage transformed_storage(std::move(transformed_buffers));
     return Tensor(std::move(transformed_storage), reference_spec, tensor.get_distributed_tensor_config());
 }
 
-void apply(const Tensor& tensor, const std::function<void(const Tensor&)>& callable) {
+void apply(
+    const Tensor& tensor, const std::function<void(const Tensor&)>& callable, DeviceShardExecutionPolicy policy) {
     TT_FATAL(is_multi_device_host_tensor(tensor), "apply only supports multi-device host tensors");
     const auto& storage = std::get<MultiDeviceHostStorage>(tensor.storage());
+    if (policy == DeviceShardExecutionPolicy::PARALLEL) {
+        ensure_omp_initialized();
+    }
+#pragma omp parallel for if (policy == DeviceShardExecutionPolicy::PARALLEL) default(none) \
+    shared(storage, callable, tensor)
     for (size_t i = 0; i < storage.num_buffers(); i++) {
-        callable(Tensor(storage.get_buffer(i), tensor.get_tensor_spec()));
+        callable(Tensor(storage.get_buffer(i), tensor.tensor_spec()));
     }
 }
 

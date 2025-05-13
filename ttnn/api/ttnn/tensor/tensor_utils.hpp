@@ -43,12 +43,24 @@ bool is_multi_device_host_tensor(const Tensor& tensor);
 // Returns true if tensor is on device.
 bool is_device_tensor(const Tensor& tensor);
 
+// Specifies execution policy for host-side operations on multi-device host tensors.
+enum class DeviceShardExecutionPolicy {
+    SEQUENTIAL,
+    PARALLEL,
+};
+
 // Given a multi-device host tensor and a function that transforms a tensor, applies the function to all per-device
 // tensors.
-Tensor transform(const Tensor& tensor, const std::function<Tensor(const Tensor&)>& transform_func);
+Tensor transform(
+    const Tensor& tensor,
+    const std::function<Tensor(const Tensor&)>& transform_func,
+    DeviceShardExecutionPolicy policy = DeviceShardExecutionPolicy::PARALLEL);
 
 // Given a multi-device host tensor and a callable, applies the function to all per-device tensors.
-void apply(const Tensor& tensor, const std::function<void(const Tensor&)>& callable);
+void apply(
+    const Tensor& tensor,
+    const std::function<void(const Tensor&)>& callable,
+    DeviceShardExecutionPolicy policy = DeviceShardExecutionPolicy::PARALLEL);
 
 template <class T>
 uint32_t get_batch_size(const T& shape) {
