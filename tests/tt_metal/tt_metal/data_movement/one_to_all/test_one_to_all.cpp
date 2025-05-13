@@ -147,15 +147,6 @@ bool run_dm(IDevice* device, const OneToAllConfig& test_config) {
             .noc = test_config.noc_id,
             .compile_args = sender_compile_args});
 
-    auto receiver_kernel = CreateKernel(
-        program,
-        "tests/tt_metal/tt_metal/data_movement/one_to_all/kernels/receiver.cpp",
-        slave_core_set,
-        DataMovementConfig{
-            .processor = DataMovementProcessor::RISCV_1,
-            .noc = test_config.noc_id,
-            .compile_args = receiver_compile_args});
-
     // Semaphores
     CoreRangeSet sem_core_set = slave_core_set.merge<CoreRangeSet>(master_core_set);
     const uint32_t sem_id = CreateSemaphore(program, sem_core_set, 0);
@@ -172,7 +163,6 @@ bool run_dm(IDevice* device, const OneToAllConfig& test_config) {
         master_run_args.push_back(worker.y);
     }
     SetRuntimeArgs(program, sender_kernel, master_core_set, master_run_args);
-    SetRuntimeArgs(program, receiver_kernel, slave_core_set, {sem_id});
 
     // Assign unique id
     log_info("Running Test ID: {}, Run ID: {}", test_config.test_id, unit_tests::dm::runtime_host_id);
