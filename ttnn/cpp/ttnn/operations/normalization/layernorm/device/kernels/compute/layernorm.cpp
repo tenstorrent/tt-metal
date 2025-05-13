@@ -131,15 +131,32 @@ void MAIN {
         //       We have a lot of these since it can reduce computation
         //   If its not const, it will change
         // We first reduce input from cb_x, then store the intermediates in cb_ex
-        uint32_t cb_reduce_input = cb_x;
-        uint32_t cb_length = Wt;
         reconfig_data_format(cb_x, cb_scaler);
         pack_reconfig_data_format(cb_ex);
+        mul_tiles_init(cb_x, cb_scaler);
+        for (uint32_t wt = 0; wt < Wt; wt += blk) {
+            tile_regs_acqurie();
+            cb_wait_front(cb_x, blk);
+            for (uint32_t wtr = 0; wtr < blk; wtr++) {
+                mul_tiles(cb_x, cb_scaler, wtr, 0, wtr);
+            }
+            cb_pop_front(cb_x, blk);
+            tile_regs_commit();
+            tile_regs_wait();
+            cb_reserve_back(cb_ex, blk);
+            for (uint32_t wtr = 0; wtr < blk; wtr++) {
+                pack_tile(wtr, cb_ex);
+            }
+            cb_push_back(cb_ex, blk);
+            tile_regs_release();
+        }
 
         reconfig_data_format(cb_ex, cb_ex);
         pack_reconfig_data_format(cb_ex);
         // 4 dst regs if FP32 and 8 is BFLOAT 16
         add_tiles_init(cb_ex, cb_ex, true);
+        uint32_t cb_reduce_input = cb_x;
+        uint32_t cb_length = Wt;
         constexpr uint32_t num_dst_regs = FLOAT32_DTYPE ? 4 : 8;
         while (cb_length > 1) {
             uint32_t dstreg = 0;
@@ -155,15 +172,12 @@ void MAIN {
                     copy_tile(cb_ex, 0, dst0);
                     cb_pop_front(cb_ex, 1);
                     add_tile_init(cb_ex, cb_ex, true);
+                    // We decriment here since we no longer have an odd tile, it just is added to dst0
+                    cb_length--;
                 }
                 cb_wait_front(cb_ex, 2);
                 add_tiles(cb_ex, cb_ex, 0, 1, dstreg);
                 cb_pop_front(cb_ex, 2);
-                // In case the next iteration, we may not want to accumulate
-                if (i == 0 && cb_length & 1 == 1) {
-                    add_tile_init(cb_ex, cb_ex, false);
-                    cb_length--;
-                }
                 // We commit our registers either when we are finished or we are about to run out of dst registers
                 if (dstreg == num_dst_regs - 1 || i + 2 == cb_length) {
                     tile_regs_wait();
