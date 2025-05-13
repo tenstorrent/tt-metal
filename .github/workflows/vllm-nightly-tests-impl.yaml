@@ -33,7 +33,7 @@ jobs:
             name: "vLLM test: Llama-3.1-70B-Instruct @ TG",
             arch: wormhole_b0,
             model: "meta-llama/Llama-3.1-70B-Instruct",
-            server_timeout: 10,
+            server_timeout: 20,
             benchmark_timeout: 10,
             runner-label: config-tg,
             co-owner-1_id: U08E1JCDVNX, # Pavle Petrovic
@@ -110,7 +110,11 @@ jobs:
           # HuggingFace weights
           export HF_HOME=/mnt/MLPerf/huggingface
 
-          case "${{ matrix.test-group.model }}" in
+          MODEL_ID="${{ matrix.test-group.model }}"
+          MODEL_NAME="${MODEL_ID/\//--}"
+          export TT_CACHE_PATH="$HF_HOME/tt_cache/$MODEL_NAME"
+
+          case "$MODEL_ID" in
             "meta-llama/Llama-3.1-8B-Instruct")
               MODEL_SNAPSHOT="hub/models--meta-llama--Llama-3.1-8B-Instruct/snapshots/0e9e39f249a16976918f6564b8830bc894c89659/"
               ;;
@@ -123,7 +127,7 @@ jobs:
               ;;
           esac
 
-          export HF_MODEL="$HF_HOME/$MODEL_SNAPSHOT"        
+          export HF_MODEL="$HF_HOME/$MODEL_SNAPSHOT"
 
           # vLLM environment variables
           export VLLM_RPC_TIMEOUT=300000
