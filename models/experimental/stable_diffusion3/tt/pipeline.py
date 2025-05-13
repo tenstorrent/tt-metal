@@ -259,9 +259,9 @@ class TtStableDiffusion3Pipeline:
         patch_size = 2
         latents_shape = (
             batch_size * num_images_per_prompt,
+            self._num_channels_latents,
             height // self._vae_scale_factor,
             width // self._vae_scale_factor,
-            self._num_channels_latents,
         )
 
         logger.info("encoding prompts...")
@@ -289,7 +289,9 @@ class TtStableDiffusion3Pipeline:
 
         if seed is not None:
             torch.manual_seed(seed)
-        latents = torch.randn(latents_shape, dtype=prompt_embeds.dtype)  # .permute([0, 2, 3, 1])
+        # We let randn generate a permuted latent tensor, so that the generated noise matches the
+        # reference implementation.
+        latents = torch.randn(latents_shape, dtype=prompt_embeds.dtype).permute(0, 2, 3, 1)
 
         tt_prompt_embeds = ttnn.from_torch(
             prompt_embeds,
