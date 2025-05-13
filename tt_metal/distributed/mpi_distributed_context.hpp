@@ -5,6 +5,7 @@
 #pragma once
 
 #include <mpi.h>
+#include <memory>
 #include "api/tt-metalium/distributed_context.hpp"
 
 namespace tt::tt_metal::distributed::multihost {
@@ -55,7 +56,8 @@ private:
 class MPIContext : public DistributedContext {
 public:
     // factory (initialises MPI environment once per process)
-    static std::shared_ptr<DistributedContext> create(int argc, char** argv);
+    static void create(int argc, char** argv);
+    static const ContextPtr& get_current_world();
 
     // destructor – communicator MPI_COMM_WORLD is freed automatically by MPI_Finalize
     // All other communicators are freed here
@@ -95,19 +97,24 @@ public:
         tt::stl::Span<std::byte> send_buf, tt::stl::Span<std::byte> recv_buf, ReduceOp op, DType dtype) const override;
 
     /* ------------- communicator management ------------- */
-    [[nodiscard]] std::shared_ptr<DistributedContext> duplicate() const override;
-    [[nodiscard]] std::shared_ptr<DistributedContext> split(Color color, Key key) const override;
-    [[nodiscard]] std::shared_ptr<DistributedContext> create_sub_context(tt::stl::Span<Rank> ranks) const override;
+    [[nodiscard]] ContextPtr duplicate() const override;
+    [[nodiscard]] ContextPtr split(Color color, Key key) const override;
+    [[nodiscard]] ContextPtr create_sub_context(tt::stl::Span<Rank> ranks) const override;
     void abort(int error_code) const override;
     void revoke_and_shrink() override;
-
+    [[nodiscard]] virtual bool is_revoked() override;
     explicit MPIContext(MPI_Comm comm);
     const MPI_Comm& comm() const { return comm_; }
+
+    static void set_current_world(const ContextPtr& ctx);
 
 private:
     MPI_Comm comm_{MPI_COMM_NULL};
     int      rank_{0};
     int      size_{0};
+
+    // caching our own world communicator which is duplicator of MPI_COMM_WORLD
+    inline static ContextPtr current_world_;
 };
 
 } // namespace tt::tt_metal::distributed::multihost

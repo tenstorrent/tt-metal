@@ -4,7 +4,7 @@
 
 #include <tt-metalium/distributed_context.hpp>
 #include <gtest/gtest.h>
-#include "common/multihost_asserts.hpp"
+#include "common/multihost_test_tools.hpp"
 
 TEST(FaultTolerance, shrink_after_rank_failure) {
     using tt::tt_metal::distributed::multihost::DistributedContext;
@@ -14,7 +14,7 @@ TEST(FaultTolerance, shrink_after_rank_failure) {
     //----------------------------------------------------------------------
     // 0 · Create world communicator and install MPI_ERRORS_RETURN
     //----------------------------------------------------------------------
-    auto ctx = DistributedContext::create(0, nullptr);
+    auto ctx = DistributedContext::get_current_world();
 
     const int world = *ctx->size();
     const int me = *ctx->rank();
@@ -36,9 +36,15 @@ TEST(FaultTolerance, shrink_after_rank_failure) {
         ctx->barrier();  // may throw or return error
     } catch (const DistributedException& e) {
         // 2a · Repair the communicator for every *surviving* rank
-        ctx->revoke_and_shrink();
-    }
 
+        // need to make sure other threads don't use the same context,
+        // good idea to make a duplication of the context so each thread has its own comm.
+        ctx->revoke_and_shrink();
+
+        // we know that our ctx is okay. Now need to check the world one.
+        // If world is revoked we need to set a new world communicator
+        // In our case ctx is the world communicator
+    }
     //----------------------------------------------------------------------
     // 3 · All survivors now run on the shrunken communicator
     //----------------------------------------------------------------------

@@ -4,6 +4,6 @@
 
 #include <tt-metalium/distributed_context.hpp>
 #include <gtest/gtest.h>
-#include "common/multihost_asserts.hpp"
+#include "common/multihost_test_tools.hpp"
 #include <fmt/format.h>
 int main(int argc, char** argv) { return multihost::common::multihost_main(argc, argv); }

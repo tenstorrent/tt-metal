@@ -8,6 +8,8 @@
 #include <mpi-ext.h>
 #include <algorithm>
 #include <limits>
+#include <memory>
+#include <mutex>
 #include "assert.hpp"
 
 namespace tt::tt_metal::distributed::multihost {
@@ -83,6 +85,13 @@ inline void mpi_check(int error_code, const char* call_text) {
     }
 }
 
+bool was_mpi_finalized() noexcept {
+    int flag = 0;
+    /* Safe to call at any time—even before MPI_Init() */
+    MPI_Finalized(&flag);  // sets flag = 1 if MPI_Finalize has completed
+    return flag != 0;
+}
+
 #define MPI_CHECK(call) mpi_check((call), #call)
 
 MPIDistributedException::MPIDistributedException(Rank rank, int error_code, std::string msg) :
@@ -92,6 +101,7 @@ MPIDistributedException::MPIDistributedException(Rank rank, int error_code, std:
     int len = 0;
     MPI_Error_string(error_code_, buf, &len);
     error_string_.assign(buf, len);
+    message_ += ": " + error_string_;
 }
 
 // implement interface
@@ -138,24 +148,37 @@ bool MPIRequest::active() const { return !done_; }
 
 /* -------------------------- MPIContext ---------------------------------- */
 
-static void init_env(int& argc, char**& argv)
-{
-    static bool initialized = false;
-    if (!initialized) {
+inline void init_env(int& argc, char**& argv) {
+    static std::once_flag mpi_once;
+
+    std::call_once(mpi_once, [&] {
         int provided = 0;
-        int rc = MPI_Init_thread(&argc, &argv, MPI_THREAD_MULTIPLE, &provided);
-        if (rc != MPI_SUCCESS) {
+        if (MPI_Init_thread(&argc, &argv, MPI_THREAD_MULTIPLE, &provided) != MPI_SUCCESS) {
             TT_THROW("MPI_Init_thread failed");
         }
-        initialized = true;
+
+        // Ensure MPI_Finalize is called when the program exits
         std::atexit([] { MPI_Finalize(); });
-    }
+    });
 }
 
-std::shared_ptr<DistributedContext> MPIContext::create(int argc, char** argv)
-{
+void MPIContext::create(int argc, char** argv) {
     init_env(argc, argv);
-    return std::make_shared<MPIContext>(MPI_COMM_WORLD);
+    // it is a good idea to duplicate the world communicator
+    // don't want to rely on the global comm_world which cannot be replaced
+    current_world_ = std::make_shared<MPIContext>(MPI_COMM_WORLD)->duplicate();
+}
+
+const ContextPtr& MPIContext::get_current_world() {
+    TT_FATAL(current_world_, "MPIContext::get_current_world() called before MPIContext::create()");
+    return current_world_;
+}
+
+void MPIContext::set_current_world(const ContextPtr& ctx) {
+    TT_FATAL(
+        ctx != nullptr && std::dynamic_pointer_cast<MPIContext>(ctx) != nullptr,
+        "set_current_world: context is not a MPIContext or a nullptr");
+    MPIContext::current_world_ = ctx;
 }
 
 MPIContext::MPIContext(MPI_Comm comm) : comm_(comm) {
@@ -380,23 +403,19 @@ void MPIContext::scan(
 }
 /* ---- communicator management ------------------------------------------ */
 
-std::shared_ptr<DistributedContext> MPIContext::duplicate() const
-{
+ContextPtr MPIContext::duplicate() const {
     MPI_Comm dup;
     MPI_CHECK(MPI_Comm_dup(comm_, &dup));
     return std::make_shared<MPIContext>(dup);
 }
 
-std::shared_ptr<DistributedContext> MPIContext::split(Color color, Key key) const
-{
+ContextPtr MPIContext::split(Color color, Key key) const {
     MPI_Comm split_comm;
     MPI_CHECK(MPI_Comm_split(comm_, *color, *key, &split_comm));
     return std::make_shared<MPIContext>(split_comm);
 }
 
-std::shared_ptr<DistributedContext>
-MPIContext::create_sub_context(tt::stl::Span<Rank> ranks) const
-{
+ContextPtr MPIContext::create_sub_context(tt::stl::Span<Rank> ranks) const {
     MPI_Group world_grp, sub_grp;
     MPI_CHECK(MPI_Comm_group(comm_, &world_grp));
 
@@ -419,9 +438,11 @@ MPIContext::create_sub_context(tt::stl::Span<Rank> ranks) const
 void MPIContext::abort(int error_code) const { MPI_Abort(comm_, error_code); }
 
 /* -------------------- factory for generic interface --------------------- */
-std::shared_ptr<DistributedContext> DistributedContext::create(int argc, char** argv) {
-    return MPIContext::create(argc, argv);
-}
+void DistributedContext::create(int argc, char** argv) { MPIContext::create(argc, argv); }
+
+const ContextPtr& DistributedContext::get_current_world() { return MPIContext::get_current_world(); }
+
+void DistributedContext::set_current_world(const ContextPtr& ctx) { MPIContext::set_current_world(ctx); }
 
 void MPIContext::revoke_and_shrink() {
     int rc = MPIX_Comm_revoke(comm_);
@@ -442,6 +463,7 @@ void MPIContext::revoke_and_shrink() {
 
     // Free the old communicator *after* shrink completes
     MPI_Comm old_comm = this->comm_;
+
     if (old_comm != MPI_COMM_NULL && old_comm != new_comm) {
         MPI_Comm_free(&old_comm);
     }
@@ -451,7 +473,18 @@ void MPIContext::revoke_and_shrink() {
     this->size_ = new_size;
 }
 
+bool MPIContext::is_revoked() {
+    int flag = 0;
+    // MPI_Comm_test_inter is safe to call even if the communicator is revoked
+    // don't need to check error code
+    MPI_Comm_test_inter(comm_, &flag);
+    return flag != 0;
+}
+
 MPIContext::~MPIContext() {
+    if (was_mpi_finalized()) {
+        return;  // MPI_Finalize() already called
+    }
     if (comm_ != MPI_COMM_WORLD && comm_ != MPI_COMM_NULL) {
         MPI_Comm_free(&comm_);
     }

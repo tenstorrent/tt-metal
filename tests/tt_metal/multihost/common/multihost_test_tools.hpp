@@ -95,7 +95,7 @@ inline void barrier(const ContextPtr& ctx) { ctx->barrier(); }
 //  multihost test main function
 // ----------------------------------------------------------------------
 inline int multihost_main(int argc, char** argv) {
-    auto context = tt::tt_metal::distributed::multihost::DistributedContext::create(argc, argv);
+    tt::tt_metal::distributed::multihost::DistributedContext::create(argc, argv);
     using Rank = tt::tt_metal::distributed::multihost::Rank;
     using Tag = tt::tt_metal::distributed::multihost::Tag;
 
@@ -103,9 +103,14 @@ inline int multihost_main(int argc, char** argv) {
 
     // Run tests on every rank
     int local_rc = RUN_ALL_TESTS();
+
+    // need to make sure that  we get context after the tests, old one could be revoked
+    auto context = tt::tt_metal::distributed::multihost::DistributedContext::get_current_world();
     fmt::print("Rank {}: local rc = {}\n", *context->rank(), local_rc);
     // Propagate the worst return code to all ranks
-    ASSERT_EQ_ALL_RANKS(local_rc, context);  // TODO: fix it for fault tolerance tests
+
+    ASSERT_EQ_ALL_RANKS(local_rc, context);
+
     return local_rc;
 }
 

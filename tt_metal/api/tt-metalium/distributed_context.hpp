@@ -145,11 +145,15 @@ public:
     [[nodiscard]] virtual bool active() const = 0;
 };
 
-using RequestPtr = std::shared_ptr<Request>;
+class DistributedContext;
 
+using RequestPtr = std::shared_ptr<Request>;
+using ContextPtr = std::shared_ptr<DistributedContext>;
 class DistributedContext {
 public:
-    static std::shared_ptr<DistributedContext> create(int argc, char** argv);
+    static void create(int argc, char** argv);
+    static const ContextPtr& get_current_world();
+    static void set_current_world(const ContextPtr& ctx);
     //--- Topology ------------------------------------------------------------
     [[nodiscard]] virtual Rank rank() const = 0;
     [[nodiscard]] virtual Size size() const = 0;
@@ -218,14 +222,15 @@ public:
     }
 
     //--- Communicator management -------------------------------------------
-    [[nodiscard]] virtual std::shared_ptr<DistributedContext> duplicate() const = 0;
-    [[nodiscard]] virtual std::shared_ptr<DistributedContext> split(Color color, Key key) const = 0;
-    [[nodiscard]] virtual std::shared_ptr<DistributedContext> create_sub_context(tt::stl::Span<Rank> ranks) const = 0;
+    [[nodiscard]] virtual ContextPtr duplicate() const = 0;
+    [[nodiscard]] virtual ContextPtr split(Color color, Key key) const = 0;
+    [[nodiscard]] virtual ContextPtr create_sub_context(tt::stl::Span<Rank> ranks) const = 0;
 
     //--- Error handling -----------------------------------------------------
     virtual void abort(int error_code) const = 0;
 
     virtual void revoke_and_shrink() = 0;
+    [[nodiscard]] virtual bool is_revoked() = 0;
 
     virtual ~DistributedContext() = default;
 };
