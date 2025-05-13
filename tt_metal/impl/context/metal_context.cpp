@@ -87,9 +87,6 @@ void MetalContext::initialize(
 }
 
 void MetalContext::teardown() {
-    if (not initialized_) {
-        return;
-    }
     initialized_ = false;
 
     for (auto& mem_map : dispatch_mem_map_) {
@@ -99,7 +96,6 @@ void MetalContext::teardown() {
     }
     dispatch_query_manager_.reset();
     dispatch_core_manager_.reset();
-    log_warning("MetalContext::teardown() finished.");
 }
 
 MetalContext& MetalContext::instance() {
@@ -117,7 +113,6 @@ MetalContext::MetalContext() {
 MetalContext::~MetalContext() {
     cluster_.reset();
     hal_.reset();
-    log_warning("MetalContext::~MetalContext() finished.");
 }
 
 llrt::RunTimeOptions& MetalContext::rtoptions() { return rtoptions_; }
