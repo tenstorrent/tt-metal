@@ -107,15 +107,30 @@ jobs:
             export TT_LLAMA_TEXT_VER="llama3_subdevices"
           fi
 
-          # Model weights directory
-          export LLAMA_DIR="/mnt/MLPerf/tt_dnn-models/llama/Llama3.1-70B-Instruct"
+          # HuggingFace weights
+          export HF_HOME=/mnt/MLPerf/huggingface
+
+          case "${{ matrix.test-group.model }}" in
+            "meta-llama/Llama-3.1-8B-Instruct")
+              MODEL_SNAPSHOT="hub/models--meta-llama--Llama-3.1-8B-Instruct/snapshots/0e9e39f249a16976918f6564b8830bc894c89659/"
+              ;;
+            "meta-llama/Llama-3.1-70B-Instruct")
+              MODEL_SNAPSHOT="hub/models--meta-llama--Llama-3.1-70B-Instruct/snapshots/1605565b47bb9346c5515c34102e054115b4f98b/"
+              ;;
+            *)
+              echo "❌ Unknown model: ${{ matrix.test-group.model }}"
+              exit 1
+              ;;
+          esac
+
+          export HF_MODEL="$HF_HOME/$MODEL_SNAPSHOT"        
 
           # vLLM environment variables
           export VLLM_RPC_TIMEOUT=300000
 
           python3 vllm/examples/server_example_tt.py \
             --model ${{ matrix.test-group.model }} \
-            --override_tt_config "{\"dispatch_core_axis\": $(( DISPATCH_CORE_AXIS )), \"sample_on_device_mode\": \"all\", \"fabric_config\": \"FABRIC_1D\"}" \
+            --override_tt_config "{\"dispatch_core_axis\": \"$DISPATCH_CORE_AXIS\", \"sample_on_device_mode\": \"all\", \"fabric_config\": \"FABRIC_1D\"}" \
             > ./output/vllm_server.log 2>&1 &
 
       - name: ⏰ Wait for server to be ready
