@@ -9,14 +9,14 @@ from models.experimental.stable_diffusion_xl_base.tt.sdxl_utility import prepare
 
 
 class TtGEGLU(nn.Module):
-    def __init__(self, device, state_dict, module_path):
+    def __init__(self, device, state_dict, module_path, weights_dtype=ttnn.bfloat16):
         super().__init__()
 
         self.device = device
         weights = state_dict[f"{module_path}.proj.weight"].unsqueeze(0).unsqueeze(0)
         bias = state_dict[f"{module_path}.proj.bias"]
 
-        self.tt_weights, self.tt_bias = prepare_linear_params(device, weights, bias, ttnn.bfloat8_b)
+        self.tt_weights, self.tt_bias = prepare_linear_params(device, weights, bias, weights_dtype)
 
     def forward(self, hidden_states):
         hidden_states = ttnn.linear(

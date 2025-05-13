@@ -208,6 +208,16 @@ def get_job_row_from_github_job(github_job, github_job_id_to_annotations, workfl
     else:
         ubuntu_version = None
 
+    # Clean up ephemeral runner names
+    if host_name and host_name.startswith("tt-beta"):
+        parts = host_name.split("-")
+        # Issue: https://github.com/tenstorrent/tt-metal/issues/21694
+        # Remove non-constant ephemeral runner suffix from tt-beta runner names only if the second last part is "runner"
+        # We don't want to remove the suffix for non-ephemeral tt-beta runners (e.g. tt-beta-ubuntu-2204-xlarge)
+        # E.g. tt-beta-ubuntu-2204-n150-large-stable-nk6pd-runner-5g5f9 -> tt-beta-ubuntu-2204-n150-large-stable-nk6pd
+        if len(parts) >= 2 and parts[-2] == "runner":
+            host_name = "-".join(parts[:-1])
+
     os = ubuntu_version
 
     name = github_job["name"]
@@ -230,7 +240,7 @@ def get_job_row_from_github_job(github_job, github_job_id_to_annotations, workfl
 
     if labels_have_overlap(["E150", "grayskull", "arch-grayskull"], labels):
         detected_arch = "grayskull"
-    elif labels_have_overlap(["N150", "N300", "wormhole_b0", "arch-wormhole_b0"], labels):
+    elif labels_have_overlap(["N150", "N300", "wormhole_b0", "arch-wormhole_b0", "config-t3000"], labels):
         detected_arch = "wormhole_b0"
     elif labels_have_overlap(["BH", "arch-blackhole"], labels):
         detected_arch = "blackhole"
@@ -243,8 +253,11 @@ def get_job_row_from_github_job(github_job, github_job_id_to_annotations, workfl
     # In order of preference
     if detected_config:
         if not detected_arch:
-            raise Exception(f"There must be an arch detected for config {detected_config}")
-        card_type = f"{detected_config}-{detected_arch}"
+            # This will occur for jobs where runs-on: has a config-* label but doesn't have an arch-* or card-specific label
+            logger.warning(f"No arch label found for config {detected_config} in job label, unable to infer card type")
+            card_type = None
+        else:
+            card_type = f"{detected_config}-{detected_arch}"
     elif single_cards_overlap:
         logger.info(f"Detected overlap in single cards: {single_cards_overlap}")
         card_type = list(single_cards_overlap)[0]

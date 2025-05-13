@@ -33,17 +33,4 @@ Tensor aggregate_as_tensor(
 
 std::vector<int> get_t3k_physical_device_ids_ring();
 
-// Maps a tensor to the set of devices in the device-mesh that the shards will be distributed across.
-std::vector<tt::tt_metal::IDevice*> get_mapped_devices(const Tensor& tensor, MeshDevice& mesh_device);
-
-// Returns the distributed tensor config from a tensor.
-tt::tt_metal::DistributedTensorConfig get_distributed_tensor_config_from_tensor(const Tensor& tensor);
-
-// Returns true if tensor has MultiDeviceHost storage.
-bool is_multi_device_host_tensor(const Tensor& tensor);
-
-// Returns true if tensor has MultiDevice storage type and is allocated on a mesh buffer.
-// TODO: remove when the infrastructure uniformly works with mesh buffer backed tensors.
-bool is_mesh_buffer_tensor(const Tensor& tensor);
-
 }  // namespace ttnn::distributed

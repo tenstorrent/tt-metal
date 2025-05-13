@@ -6,7 +6,7 @@
 #include "ttnn/operations/functions.hpp"
 #include "ttnn/operations/math.hpp"
 #include "ttnn/operations/core/core.hpp"
-#include "cpp/ttnn/global_semaphore.hpp"
+#include "ttnn/global_semaphore.hpp"
 #include <tt-metalium/work_split.hpp>
 
 #include "ttnn/tensor/tensor_utils.hpp"
@@ -30,9 +30,9 @@ void AllGatherConcat::validate(const std::vector<Tensor>& input_tensors) const {
         "Worker cores used by links are parallelizaed over rows");
 
     TT_FATAL(
-        input_tensor.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED,
+        input_tensor.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED,
         "Unsupported memory layout {}.",
-        input_tensor.memory_config().memory_layout);
+        input_tensor.memory_config().memory_layout());
 
     TT_FATAL(
         input_core_ranges[0].start_coord.x == 1 && input_core_ranges[0].end_coord.x == 3 &&
@@ -43,9 +43,8 @@ void AllGatherConcat::validate(const std::vector<Tensor>& input_tensors) const {
     CoreCoord grid_size = input_tensors[0].device()->compute_with_storage_grid_size();
     TT_FATAL(grid_size.x >= 3 && grid_size.y >= 3, "Input core grid out of bound!");
     TT_FATAL(
-        padded_input_shape[0] == 1 && padded_input_shape[1] == 8 && padded_input_shape[2] == 32 &&
-            padded_input_shape[3] == 128,
-        "Unsupported input shape, should be [1, 8, 32, 128]!");
+        padded_input_shape[0] == 1 && padded_input_shape[1] == 8 && padded_input_shape[3] == 128,
+        "Unsupported input shape, should be [1, 8, 32, 128] or [1, 8, 8, 128]!");
 }
 
 std::vector<ttnn::TensorSpec> AllGatherConcat::compute_output_specs(const std::vector<Tensor>& input_tensors) const {

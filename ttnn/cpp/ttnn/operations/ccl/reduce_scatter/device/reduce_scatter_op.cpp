@@ -52,48 +52,14 @@ tt::tt_metal::operation::ProgramWithCallbacks ReduceScatter::create_program_at(
     const std::vector<Tensor>& input_tensors,
     std::vector<Tensor>& output_tensors) const {
     uint32_t device_index = 0;
-    std::optional<chip_id_t> sender_device_id;
     std::optional<chip_id_t> receiver_device_id;
-
+    std::optional<chip_id_t> sender_device_id;
     auto target_device = input_tensors.at(0).mesh_device() ? input_tensors.at(0).mesh_device()->get_device(mesh_coord)
                                                            : input_tensors.at(0).device();
-    if (this->cluster_axis.has_value()) {
-        auto mesh_view = mesh_device->get_view();
-        TT_FATAL(
-            mesh_view.is_mesh_2d(),
-            "reduce-scatter invoked with cluster_axis API on >2D mesh, which is currently unsupported");
-        const auto view_index = (cluster_axis == 0) ? mesh_coord[1] : mesh_coord[0];
-        device_index = (cluster_axis == 0) ? mesh_coord[0] : mesh_coord[1];
-
-        auto get_chip_id = [&](std::size_t line_index) -> std::optional<chip_id_t> {
-            auto new_row = mesh_coord[0];
-            auto new_col = mesh_coord[1];
-            if (cluster_axis == 0) {
-                new_row = line_index % this->num_links;
-            } else {
-                new_col = line_index % this->num_links;
-            }
-            return mesh_view.find_device_id(MeshCoordinate(new_row, new_col));
-        };
-
-        bool is_last_chip_in_clockwise_direction = device_index == (this->num_links - 1);
-        bool is_last_chip_in_counter_clockwise_direction = device_index == 0;
-        receiver_device_id = is_last_chip_in_clockwise_direction ? std::nullopt : get_chip_id(device_index + 1);
-        sender_device_id = is_last_chip_in_counter_clockwise_direction
-                               ? std::nullopt
-                               : get_chip_id(device_index + this->num_links - 1);
-
-    } else {
-        std::tie(device_index, sender_device_id, receiver_device_id) =
-            ccl::get_device_index_and_sender_receiver_ids(target_device, this->devices, this->topology);
-
-        TT_FATAL(
-            receiver_device_id != std::nullopt || sender_device_id != std::nullopt,
-            "Error, Reduce-scatter was unable to identify either a sender or receiver device ID and atleast one must "
-            "be identified for a valid Reduce-scatter configuration. The input mesh tensor or Reduce-scatter arguments "
-            "may be incorrect");
-    }
-    chip_id_t target_device_id = target_device->id();
+    ccl::SenderRecieverConfig config =
+        this->cluster_axis.has_value()
+            ? ccl::get_device_sender_receiver_config_in_ring(mesh_coord, mesh_device, *cluster_axis, ring_size)
+            : ccl::get_device_sender_receiver_config(target_device, this->devices, topology);
 
     return ccl::reduce_scatter_detail::reduce_scatter_with_workers(
         input_tensors.at(0),
@@ -102,10 +68,10 @@ tt::tt_metal::operation::ProgramWithCallbacks ReduceScatter::create_program_at(
         this->scatter_dim,
         this->num_links,
         this->ring_size,
-        device_index,
-        target_device_id,
-        receiver_device_id,
-        sender_device_id,
+        config.device_index,
+        target_device->id(),
+        config.receiver_device_id,
+        config.sender_device_id,
         this->topology,
         this->user_defined_num_workers,
         this->user_defined_num_buffers_per_channel);

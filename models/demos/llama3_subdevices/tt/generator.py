@@ -292,6 +292,7 @@ class Generator:
         enable_trace=True,
         read_from_device=True,
         sampling_params: SamplingParams = None,  # Should be None if not greedy decoding / sampling on device.
+        reset_inputs=True,
     ):
         assert (
             sampling_params is None or sampling_params.temperature == 0
@@ -309,7 +310,7 @@ class Generator:
             "argmax_on_device": argmax_on_device,
         }
         if enable_trace:
-            tt_logits = self._easy_trace_text(**decode_kwargs)
+            tt_logits = self._easy_trace_text(**decode_kwargs, reset_inputs=reset_inputs)
         else:
             tt_logits = self._decode_forward_no_trace_text(**decode_kwargs)
 
@@ -330,13 +331,13 @@ class Generator:
         Performs text decode step.
         Returns tt_logits on device
         """
-        tt_tokens, tt_current_pos, tt_rot_mats, tt_page_table = self.model.prepare_inputs_decode(
+        tt_tokens, tt_current_pos, rot_mat_idxs, tt_page_table = self.model.prepare_inputs_decode(
             tokens, current_pos, page_table
         )
         tt_logits = self.model.ttnn_decode_forward(
             tt_tokens,
             tt_current_pos,
-            rot_mats=tt_rot_mats,
+            rot_mat_idxs=rot_mat_idxs,
             page_table=tt_page_table,
             kv_cache=kv_cache,
             argmax_on_device=argmax_on_device,
@@ -364,13 +365,11 @@ class Generator:
 
         # Get inputs ready for trace run
         host_inputs = self.model.prepare_decode_inputs_host(tokens, current_pos, page_table=page_table)
-
         device_inputs = copy_host_to_device(host_inputs, mesh_device=self.mesh_device)
 
         trace_id = ttnn.begin_trace_capture(self.mesh_device, cq_id=0)
-        transformed_inputs = self.model.transform_decode_inputs_device(*device_inputs)
         tt_out_trace = self.model.ttnn_decode_forward(
-            *transformed_inputs, kv_cache=kv_cache, argmax_on_device=argmax_on_device
+            *device_inputs, kv_cache=kv_cache, argmax_on_device=argmax_on_device
         )
 
         ttnn.end_trace_capture(self.mesh_device, trace_id, cq_id=0)
@@ -389,13 +388,6 @@ class Generator:
         """
         Executes the trace for the decode_forward method but does not read back outputs.
         """
-        host_inputs = self.model.prepare_decode_inputs_host(tokens, current_pos, page_table)
-
-        device_inputs = copy_host_to_device(
-            host_tensors=host_inputs,
-            device_tensors=device_inputs,
-        )
-
         ttnn.execute_trace(self.mesh_device, trace_id, cq_id=0, blocking=False)
 
         return tt_out_trace
@@ -407,6 +399,7 @@ class Generator:
         page_table=None,
         kv_cache=None,
         argmax_on_device=False,
+        reset_inputs=False,
     ):
         """
         Tracing is easy! Just call this method and we'll handle tracing for you.
@@ -419,6 +412,12 @@ class Generator:
             self.trace_inputs_text = device_inputs
             self.trace_output_text = tt_out_trace
 
+        if reset_inputs:
+            host_inputs = self.model.prepare_decode_inputs_host(tokens, current_pos, page_table)
+            device_inputs = copy_host_to_device(
+                host_tensors=host_inputs,
+                device_tensors=self.trace_inputs_text,
+            )
         trace_logits_rm = self._decode_forward_trace_text(
             self.trace_id_text,
             self.trace_inputs_text,

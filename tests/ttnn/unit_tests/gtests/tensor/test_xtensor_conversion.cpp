@@ -4,16 +4,16 @@
 
 #include <boost/container/vector.hpp>
 #include <gtest/gtest.h>
-#include <xtensor/xarray.hpp>
-#include <xtensor/xbuilder.hpp>
-#include <xtensor/xcontainer.hpp>
-#include <xtensor/xiterator.hpp>
-#include <xtensor/xlayout.hpp>
-#include <xtensor/xmath.hpp>
-#include <xtensor/xshape.hpp>
-#include <xtensor/xstorage.hpp>
-#include <xtensor/xtensor_forward.hpp>
-#include <xtensor/xtensor_simd.hpp>
+#include <xtensor/containers/xarray.hpp>
+#include <xtensor/generators/xbuilder.hpp>
+#include <xtensor/containers/xcontainer.hpp>
+#include <xtensor/core/xiterator.hpp>
+#include <xtensor/core/xlayout.hpp>
+#include <xtensor/core/xmath.hpp>
+#include <xtensor/core/xshape.hpp>
+#include <xtensor/containers/xstorage.hpp>
+#include <xtensor/core/xtensor_forward.hpp>
+#include <xtensor/utils/xtensor_simd.hpp>
 #include <cstddef>
 #include <tuple>
 #include <vector>

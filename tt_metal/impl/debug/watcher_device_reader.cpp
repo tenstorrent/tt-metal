@@ -52,7 +52,7 @@ using std::string;
 namespace {  // Helper functions
 
 // Helper function to get string rep of riscv type
-static const char* get_riscv_name(const CoreCoord& core, uint32_t type) {
+const char* get_riscv_name(const CoreCoord& core, uint32_t type) {
     switch (type) {
         case DebugBrisc: return "brisc";
         case DebugNCrisc: return "ncrisc";
@@ -68,7 +68,7 @@ static const char* get_riscv_name(const CoreCoord& core, uint32_t type) {
 }
 
 // Helper function to get stack size by riscv core type
-static uint32_t get_riscv_stack_size(const CoreDescriptor& core, uint32_t type) {
+uint32_t get_riscv_stack_size(const CoreDescriptor& core, uint32_t type) {
     auto stack_size = MetalContext::instance().hal().get_stack_size(type);
     if (stack_size == 0xdeadbeef) {
         TT_THROW("Watcher data corrupted, unexpected riscv type on core {}: {}", core.coord.str(), type);
@@ -77,7 +77,7 @@ static uint32_t get_riscv_stack_size(const CoreDescriptor& core, uint32_t type) 
 }
 
 // Helper function to determine core type from virtual coord. TODO: Remove this once we fix code types.
-static CoreType core_type_from_virtual_core(chip_id_t device_id, const CoreCoord& virtual_coord) {
+CoreType core_type_from_virtual_core(chip_id_t device_id, const CoreCoord& virtual_coord) {
     if (tt::tt_metal::MetalContext::instance().get_cluster().is_worker_core(virtual_coord, device_id)) {
         return CoreType::WORKER;
     } else if (tt::tt_metal::MetalContext::instance().get_cluster().is_ethernet_core(virtual_coord, device_id)) {
@@ -85,6 +85,14 @@ static CoreType core_type_from_virtual_core(chip_id_t device_id, const CoreCoord
     }
 
     const metal_SocDescriptor& soc_desc = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(device_id);
+
+    const std::vector<tt::umd::CoreCoord>& translated_dram_cores =
+        soc_desc.get_cores(CoreType::DRAM, CoordSystem::TRANSLATED);
+    if (std::find(translated_dram_cores.begin(), translated_dram_cores.end(), virtual_coord) !=
+        translated_dram_cores.end()) {
+        return CoreType::DRAM;
+    }
+
     CoreType core_type =
         soc_desc.translate_coord_to(virtual_coord, CoordSystem::PHYSICAL, CoordSystem::PHYSICAL).core_type;
     if (core_type == CoreType::TENSIX) {
@@ -94,7 +102,10 @@ static CoreType core_type_from_virtual_core(chip_id_t device_id, const CoreCoord
 }
 
 // Helper function to convert noc coord -> virtual coord. TODO: Remove this once we fix code types.
-static CoreCoord virtual_noc_coordinate(chip_id_t device_id, uint8_t noc_index, CoreCoord coord) {
+CoreCoord virtual_noc_coordinate(chip_id_t device_id, uint8_t noc_index, CoreCoord coord) {
+    if (tt::tt_metal::MetalContext::instance().get_cluster().arch() == tt::ARCH::BLACKHOLE) {
+        return coord;
+    }
     auto grid_size = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(device_id).grid_size;
     if (coord.x >= grid_size.x || coord.y >= grid_size.y) {
         // Coordinate already in virtual space: NOC0 and NOC1 are the same
@@ -112,7 +123,7 @@ static CoreCoord virtual_noc_coordinate(chip_id_t device_id, uint8_t noc_index, 
 }
 
 // Helper function to get string rep of noc target.
-static string get_noc_target_str(
+string get_noc_target_str(
     chip_id_t device_id, CoreDescriptor& core, int noc, const debug_sanitize_noc_addr_msg_t* san) {
     auto get_core_and_mem_type = [](chip_id_t device_id, CoreCoord& noc_coord, int noc) -> std::pair<string, string> {
         // Get the virtual coord from the noc coord
@@ -409,8 +420,9 @@ void WatcherDeviceReader::DumpCore(CoreDescriptor& logical_core, bool is_active_
         }
     }
 
+    constexpr uint32_t mailbox_read_size = offsetof(mailboxes_t, watcher) + sizeof(watcher_msg_t);
     std::vector<uint32_t> data;
-    data = tt::llrt::read_hex_vec_from_core(device_id, virtual_core.coord, mailbox_addr, sizeof(mailboxes_t));
+    data = tt::llrt::read_hex_vec_from_core(device_id, virtual_core.coord, mailbox_addr, mailbox_read_size);
     mailboxes_t* mbox_data = (mailboxes_t*)(&data[0]);
     // Get the launch message buffer read pointer.
     // For more accurate reporting of launch messages and running kernel ids, dump data from the previous valid
@@ -585,6 +597,10 @@ void WatcherDeviceReader::DumpNocSanitizeStatus(
             error_msg = get_noc_target_str(device_id, core, noc, san);
             error_msg += " (mixing virtual and virtual coordinates in Mcast).";
             break;
+        case DebugSanitizeInlineWriteDramUnsupported:
+            error_msg = get_noc_target_str(device_id, core, noc, san);
+            error_msg += " (inline dw writes do not support DRAM destination addresses).";
+            break;
         case DebugSanitizeNocAddrMailbox:
             error_msg = get_noc_target_str(device_id, core, noc, san);
             error_msg += string(san->is_target ? " (NOC target" : " (Local L1") + " overwrites mailboxes).";
@@ -611,32 +627,65 @@ void WatcherDeviceReader::DumpNocSanitizeStatus(
 }
 
 void WatcherDeviceReader::DumpAssertStatus(CoreDescriptor& core, const string& core_str, const mailboxes_t* mbox_data) {
-    uint32_t launch_msg_read_ptr = mbox_data->launch_msg_rd_ptr;
     const launch_msg_t* launch_msg = get_valid_launch_message(mbox_data);
     const debug_assert_msg_t* assert_status = &mbox_data->watcher.assert_status;
     switch (assert_status->tripped) {
         case DebugAssertTripped: {
             // TODO: Get rid of this once #6098 is implemented.
-            std::string line_num_warning =
+            const string line_num_warning =
                 "Note that file name reporting is not yet implemented, and the reported line number for the assert may "
                 "be from a different file.";
-            string error_msg = fmt::format(
+            const string error_msg = fmt::format(
                 "{}: {} tripped an assert on line {}. Current kernel: {}. {}",
                 core_str,
                 get_riscv_name(core.coord, assert_status->which),
                 assert_status->line_num,
                 GetKernelName(core, launch_msg, assert_status->which).c_str(),
                 line_num_warning.c_str());
-            log_warning("Watcher stopped the device due to tripped assert, see watcher log for more details");
-            log_warning(error_msg.c_str());
-            DumpWaypoints(core, mbox_data, true);
-            DumpRingBuffer(core, mbox_data, true);
-            LogRunningKernels(core, launch_msg);
-            set_watcher_exception_message(error_msg);
-            TT_THROW("Watcher detected tripped assert and stopped device.");
+            this->DumpAssertTrippedDetails(core, error_msg, mbox_data);
             break;
         }
-        case DebugAssertOK:
+        case DebugAssertNCriscNOCReadsFlushedTripped: {
+            const string error_msg = fmt::format(
+                "{}: {} detected an inter-kernel data race due to kernel completing with pending "
+                "NOC transactions (missing NOC reads flushed barrier). Current kernel: {}.",
+                core_str,
+                get_riscv_name(core.coord, assert_status->which),
+                GetKernelName(core, launch_msg, assert_status->which).c_str());
+            this->DumpAssertTrippedDetails(core, error_msg, mbox_data);
+            break;
+        }
+        case DebugAssertNCriscNOCNonpostedWritesSentTripped: {
+            const string error_msg = fmt::format(
+                "{}: {} detected an inter-kernel data race due to kernel completing with pending "
+                "NOC transactions (missing NOC non-posted writes sent barrier). Current kernel: {}.",
+                core_str,
+                get_riscv_name(core.coord, assert_status->which),
+                GetKernelName(core, launch_msg, assert_status->which).c_str());
+            this->DumpAssertTrippedDetails(core, error_msg, mbox_data);
+            break;
+        }
+        case DebugAssertNCriscNOCNonpostedAtomicsFlushedTripped: {
+            const string error_msg = fmt::format(
+                "{}: {} detected an inter-kernel data race due to kernel completing with pending "
+                "NOC transactions (missing NOC non-posted atomics flushed barrier). Current kernel: {}.",
+                core_str,
+                get_riscv_name(core.coord, assert_status->which),
+                GetKernelName(core, launch_msg, assert_status->which).c_str());
+            this->DumpAssertTrippedDetails(core, error_msg, mbox_data);
+            break;
+        }
+        case DebugAssertNCriscNOCPostedWritesSentTripped: {
+            const string error_msg = fmt::format(
+                "{}: {} detected an inter-kernel data race due to kernel completing with pending "
+                "NOC transactions (missing NOC posted writes sent barrier). Current kernel: {}.",
+                core_str,
+                get_riscv_name(core.coord, assert_status->which),
+                GetKernelName(core, launch_msg, assert_status->which).c_str());
+            this->DumpAssertTrippedDetails(core, error_msg, mbox_data);
+            break;
+        }
+        case DebugAssertOK: {
             if (assert_status->line_num != DEBUG_SANITIZE_NOC_SENTINEL_OK_16 ||
                 assert_status->which != DEBUG_SANITIZE_NOC_SENTINEL_OK_8) {
                 TT_THROW(
@@ -646,6 +695,7 @@ void WatcherDeviceReader::DumpAssertStatus(CoreDescriptor& core, const string& c
                     assert_status->line_num);
             }
             break;
+        }
         default:
             LogRunningKernels(core, launch_msg);
             TT_THROW(
@@ -653,6 +703,18 @@ void WatcherDeviceReader::DumpAssertStatus(CoreDescriptor& core, const string& c
                 core.coord.str(),
                 assert_status->tripped);
     }
+}
+
+void WatcherDeviceReader::DumpAssertTrippedDetails(
+    CoreDescriptor& core, const string& error_msg, const mailboxes_t* mbox_data) {
+    log_warning("Watcher stopped the device due to tripped assert, see watcher log for more details");
+    log_warning(error_msg.c_str());
+    DumpWaypoints(core, mbox_data, true);
+    DumpRingBuffer(core, mbox_data, true);
+    const launch_msg_t* launch_msg = get_valid_launch_message(mbox_data);
+    LogRunningKernels(core, launch_msg);
+    set_watcher_exception_message(error_msg);
+    TT_THROW("Watcher detected tripped assert and stopped device.");
 }
 
 void WatcherDeviceReader::DumpPauseStatus(CoreDescriptor& core, const string& core_str, const mailboxes_t* mbox_data) {

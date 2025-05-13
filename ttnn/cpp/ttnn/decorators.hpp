@@ -149,7 +149,7 @@ private:
     auto invoke(QueueId queue_id, args_t&&... args) const {
         static_assert(
             requires { operation_t::invoke(std::forward<decltype(args)>(args)...); },
-            "Primitive Operation must implement operator() method to be invoked.");
+            "Primitive Operation must implement invoke() method to be invoked.");
         ZoneScopedN("Run primitive ttnn operation");
         ZoneName(static_cast<const char*>(cpp_fully_qualified_name.data.data()), cpp_fully_qualified_name.size());
         auto [operation_attributes, tensors_args] = operation_t::invoke(std::forward<decltype(args)>(args)...);
@@ -240,16 +240,8 @@ constexpr auto register_operation() {
     return register_operation_impl<cpp_fully_qualified_name, operation_t>();
 }
 
-// TODO: This can just get replaced with register_operation(), but opting to defer this until after the migration
-// to minimize blast radius.
-template <reflect::fixed_string cpp_fully_qualified_name, typename operation_t>
-constexpr auto register_operation_with_auto_launch_op() {
-    return register_operation_impl<cpp_fully_qualified_name, operation_t>();
-}
-
 }  // namespace decorators
 
 using ttnn::decorators::register_operation;
-using ttnn::decorators::register_operation_with_auto_launch_op;
 
 }  // namespace ttnn

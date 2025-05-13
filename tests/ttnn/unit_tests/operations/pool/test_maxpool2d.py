@@ -14,6 +14,7 @@ from typing import Optional, Tuple, List
 from models.utility_functions import is_wormhole_b0, is_grayskull, is_x2_harvested, torch_random
 from tests.ttnn.utils_for_testing import assert_with_pcc, check_with_pcc, start_measuring_time, stop_measuring_time
 from tests.sweep_framework.sweep_utils.max_pool2d_common import run_max_pool2d, mesh_device_fixture
+from models.utility_functions import is_blackhole
 
 import ttnn
 
@@ -282,6 +283,10 @@ def test_max_pool2d_localrun(device, dtype, in_place, input_spec):
     ) = input_spec
     if (kernel_height > 5 or kernel_width > 5) and in_place and dtype == ttnn.bfloat8_b:
         pytest.skip("this case runs out of memory due to combination of large remote temp CB and large untilize out CB")
+    if input_spec[:4] == [1, 512, 10, 10] and in_place and dtype == ttnn.bfloat8_b and is_blackhole():
+        pytest.skip(
+            "this case runs out of memory on blackhole due to large remote temp CB, this is only an issue on blackhole since the larger number of cores results in a smaller nhe per core which results in more remote references and hence a larger remote temp CB"
+        )
     run_max_pool2d(
         batch_size,
         input_channels,

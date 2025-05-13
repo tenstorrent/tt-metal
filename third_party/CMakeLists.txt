@@ -3,6 +3,7 @@
 # their own .clang-tidy within themselves and still not be clean against it <cough>flatbuffers</cough>
 set(CMAKE_C_CLANG_TIDY "")
 set(CMAKE_CXX_CLANG_TIDY "")
+set(DEFAULT_COMPONENT_NAME ${CMAKE_INSTALL_DEFAULT_COMPONENT_NAME})
 
 ############################################################################################################################
 # Boost
@@ -27,7 +28,7 @@ CPMAddPackage(
         "BOOST_ENABLE_CMAKE ON"
         "BOOST_SKIP_INSTALL_RULES ON"
         "BUILD_SHARED_LIBS OFF"
-        "BOOST_INCLUDE_LIBRARIES core\\\;container\\\;smart_ptr\\\;interprocess\\\;asio\\\;lockfree"
+        "BOOST_INCLUDE_LIBRARIES core\\\;container\\\;smart_ptr\\\;interprocess\\\;asio\\\;lockfree\\\;"
     FIND_PACKAGE_ARGUMENTS "CONFIG REQUIRED"
 )
 
@@ -40,10 +41,18 @@ ensureboosttarget(smart_ptr)
 ensureboosttarget(interprocess)
 
 add_library(span INTERFACE)
-target_link_libraries(span INTERFACE Boost::core)
+target_link_libraries(
+    span
+    INTERFACE
+        "$<BUILD_INTERFACE:Boost::core>" # FIXME: this is a hack so we do not need to package up Boost
+)
 
 add_library(small_vector INTERFACE)
-target_link_libraries(small_vector INTERFACE Boost::container)
+target_link_libraries(
+    small_vector
+    INTERFACE
+        "$<BUILD_INTERFACE:Boost::container>" # FIXME: this is a hack so we do not need to package up Boost
+)
 
 ############################################################################################################################
 # yaml-cpp
@@ -87,14 +96,25 @@ CPMAddPackage(NAME reflect GITHUB_REPOSITORY boost-ext/reflect GIT_TAG v1.1.1)
 if(reflect_ADDED)
     add_library(reflect INTERFACE)
     add_library(Reflect::Reflect ALIAS reflect)
-    target_include_directories(reflect SYSTEM INTERFACE ${reflect_SOURCE_DIR})
+    target_include_directories(reflect SYSTEM INTERFACE "$<BUILD_INTERFACE:${reflect_SOURCE_DIR}>")
+
+    target_sources(
+        reflect
+        INTERFACE
+            FILE_SET api
+            TYPE HEADERS
+            BASE_DIRS ${reflect_SOURCE_DIR}
+            FILES ${reflect_SOURCE_DIR}/reflect
+    )
 endif()
 
 ############################################################################################################################
 # magic_enum : https://github.com/Neargye/magic_enum
 ############################################################################################################################
 
-CPMAddPackage(NAME magic_enum GITHUB_REPOSITORY Neargye/magic_enum GIT_TAG v0.9.7)
+set(CMAKE_INSTALL_DEFAULT_COMPONENT_NAME magic-enum-dev)
+CPMAddPackage(NAME magic_enum GITHUB_REPOSITORY Neargye/magic_enum GIT_TAG v0.9.7 OPTIONS "MAGIC_ENUM_OPT_INSTALL TRUE")
+set(CMAKE_INSTALL_DEFAULT_COMPONENT_NAME ${DEFAULT_COMPONENT_NAME})
 
 ############################################################################################################################
 # fmt : https://github.com/fmtlib/fmt
@@ -127,13 +147,17 @@ CPMAddPackage(NAME pybind11 GITHUB_REPOSITORY pybind/pybind11 GIT_TAG v2.13.6 OP
 # nlohmann/json : https://github.com/nlohmann/json
 ############################################################################################################################
 
+set(CMAKE_INSTALL_DEFAULT_COMPONENT_NAME json-dev)
 CPMAddPackage(
     NAME nlohmann_json
     GITHUB_REPOSITORY nlohmann/json
     GIT_TAG v3.11.3
     OPTIONS
         "CMAKE_MESSAGE_LOG_LEVEL NOTICE"
+        "JSON_Install ON"
+        "JSON_BuildTests OFF"
 )
+set(CMAKE_INSTALL_DEFAULT_COMPONENT_NAME ${DEFAULT_COMPONENT_NAME})
 
 ############################################################################################################################
 # xtensor : https://github.com/xtensor-stack/xtensor
@@ -142,7 +166,9 @@ CPMAddPackage(
 CPMAddPackage(
     NAME xtl
     GITHUB_REPOSITORY xtensor-stack/xtl
-    GIT_TAG 0.7.7
+    GIT_TAG 0.8.0
+    PATCHES
+        xtl.patch
     OPTIONS
         "CMAKE_MESSAGE_LOG_LEVEL NOTICE"
         "XTL_ENABLE_TESTS OFF"
@@ -150,7 +176,9 @@ CPMAddPackage(
 CPMAddPackage(
     NAME xtensor
     GITHUB_REPOSITORY xtensor-stack/xtensor
-    GIT_TAG 0.25.0
+    GIT_TAG 0.26.0
+    PATCHES
+        xtensor.patch
     OPTIONS
         "CMAKE_MESSAGE_LOG_LEVEL NOTICE"
         "XTENSOR_ENABLE_TESTS OFF"
@@ -158,7 +186,9 @@ CPMAddPackage(
 CPMAddPackage(
     NAME xtensor-blas
     GITHUB_REPOSITORY xtensor-stack/xtensor-blas
-    GIT_TAG 0.21.0
+    GIT_TAG 0.22.0
+    PATCHES
+        xtensor-blas.patch
     OPTIONS
         "CMAKE_MESSAGE_LOG_LEVEL NOTICE"
         "XTENSOR_ENABLE_TESTS OFF"
@@ -197,6 +227,8 @@ CPMAddPackage(
     GIT_TAG v3.7.0
     OPTIONS
         "CMAKE_MESSAGE_LOG_LEVEL NOTICE" # Taskflow's CMakeLists.txt is super noisy
+        "TF_BUILD_TESTS OFF"
+        "TF_BUILD_EXAMPLES OFF"
 )
 if(Taskflow_ADDED AND NOT TARGET Taskflow::Taskflow)
     add_library(Taskflow::Taskflow ALIAS Taskflow)

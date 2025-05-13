@@ -26,6 +26,6 @@ struct MorehNllLoss {
 }  // namespace ttnn::operations::moreh::moreh_nll_loss
 
 namespace ttnn {
-constexpr auto moreh_nll_loss = ttnn::
-    register_operation_with_auto_launch_op<"ttnn::moreh_nll_loss", operations::moreh::moreh_nll_loss::MorehNllLoss>();
+constexpr auto moreh_nll_loss =
+    ttnn::register_operation<"ttnn::moreh_nll_loss", operations::moreh::moreh_nll_loss::MorehNllLoss>();
 }  // namespace ttnn

@@ -4,7 +4,7 @@
 
 #include "cpp/ttnn/operations/experimental/ccl/reduce_scatter_async/device/reduce_scatter_async_op.hpp"
 #include <tt-metalium/sub_device_types.hpp>
-#include "cpp/ttnn/global_semaphore.hpp"
+#include "ttnn/global_semaphore.hpp"
 
 #include <ranges>
 #include <algorithm>
@@ -59,9 +59,9 @@ void ReduceScatterAsync::validate_with_output_tensors(
 
             // check memory layout
             TT_FATAL(
-                output_tensor.value().memory_config().memory_layout == input_tensor.memory_config().memory_layout,
+                output_tensor.value().memory_config().memory_layout() == input_tensor.memory_config().memory_layout(),
                 "Error, Output tensor memory layout should be same as input tensor memory layout but has {}",
-                output_tensor.value().memory_config().memory_layout);
+                output_tensor.value().memory_config().memory_layout());
 
             // check the output tensor size
             auto output_shape = output_tensor.value().get_padded_shape();
@@ -157,11 +157,11 @@ operation::ProgramWithCallbacks ReduceScatterAsync::create_program_at(
     auto target_device =
         input_tensors[0].mesh_device() ? input_tensors[0].mesh_device()->get_device(coord) : input_tensors[0].device();
 
-    auto [device_index, sender_device_id, receiver_device_id] =
-        ccl::get_device_index_and_sender_receiver_ids(target_device, devices, topology);
+    ttnn::ccl::SenderRecieverConfig config =
+        ttnn::ccl::get_device_sender_receiver_config(target_device, devices, this->topology);
 
     TT_FATAL(
-        receiver_device_id != std::nullopt || sender_device_id != std::nullopt,
+        config.receiver_device_id != std::nullopt || config.sender_device_id != std::nullopt,
         "Error, Reduce-scatter was unable to identify either a sender or receiver device ID and atleast one must be "
         "identified for a valid Reduce-scatter configuration. The input mesh tensor or Reduce-scatter arguments may be "
         "incorrect");
@@ -193,12 +193,12 @@ operation::ProgramWithCallbacks ReduceScatterAsync::create_program_at(
         foreward_direction_remote_output_tensor,
         backward_direction_remote_output_tensor,
         target_device,
-        find_device(devices, receiver_device_id),
-        find_device(devices, sender_device_id),
+        find_device(devices, config.receiver_device_id),
+        find_device(devices, config.sender_device_id),
         this->binary_op_type,
         this->scatter_dim,
         this->ring_size,
-        device_index,
+        config.device_index,
         this->topology,
         this->num_links_preferred,
         this->from_remote_sem,

@@ -5,6 +5,7 @@
 #include <chrono>
 #include <fmt/base.h>
 #include <gtest/gtest.h>
+#include <magic_enum/magic_enum.hpp>
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/host_api.hpp>
@@ -26,6 +27,7 @@
 #include <tt-metalium/data_types.hpp>
 #include "debug_tools_fixture.hpp"
 #include <tt-metalium/device.hpp>
+#include <tt-metalium/hal.hpp>
 #include <tt-metalium/hal_types.hpp>
 #include <tt-metalium/kernel_types.hpp>
 #include "llrt.hpp"
@@ -45,13 +47,48 @@
 using namespace tt;
 using namespace tt::tt_metal;
 
-typedef enum sanitization_features {
+enum watcher_features_t {
     SanitizeAddress,
     SanitizeAlignmentL1Write,
     SanitizeAlignmentL1Read,
     SanitizeZeroL1Write,
-    SanitizeMailboxWrite
-} watcher_features_t;
+    SanitizeMailboxWrite,
+    SanitizeInlineWriteDram,
+};
+
+tt::tt_metal::HalMemType get_buffer_mem_type_for_test(watcher_features_t feature) {
+    return feature == watcher_features_t::SanitizeInlineWriteDram ? tt_metal::HalMemType::DRAM
+                                                                  : tt_metal::HalMemType::L1;
+}
+
+tt::tt_metal::BufferType get_buffer_type_for_test(watcher_features_t feature) {
+    return feature == watcher_features_t::SanitizeInlineWriteDram ? tt_metal::BufferType::DRAM
+                                                                  : tt_metal::BufferType::L1;
+}
+
+uint32_t get_address_for_test(bool use_eth_core, tt::tt_metal::HalL1MemAddrType type, bool high_address = false) {
+    const auto& hal = tt::tt_metal::MetalContext::instance().hal();
+    if (use_eth_core) {
+        const auto active_eth_addr = hal.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, type);
+        const auto idle_eth_addr = hal.get_dev_addr(HalProgrammableCoreType::IDLE_ETH, type);
+        if (high_address) {
+            return std::max(active_eth_addr, idle_eth_addr);
+        } else {
+            return std::min(active_eth_addr, idle_eth_addr);
+        }
+    } else {
+        return hal.get_dev_addr(HalProgrammableCoreType::TENSIX, type);
+    }
+}
+
+CoreCoord get_core_coord_for_test(const std::shared_ptr<tt::tt_metal::Buffer>& buffer) {
+    if (buffer->is_l1()) {
+        return buffer->device()->worker_core_from_logical_core(buffer->allocator()->get_logical_core_from_bank_id(0));
+    } else {
+        auto logical_dram_core = buffer->device()->logical_core_from_dram_channel(0);
+        return buffer->device()->virtual_core_from_logical_core(logical_dram_core, CoreType::DRAM);
+    }
+}
 
 void RunTestOnCore(WatcherFixture* fixture, IDevice* device, CoreCoord &core, bool is_eth_core, watcher_features_t feature, bool use_ncrisc = false) {
     // It's not simple to check the watcher server status from the finish loop for slow dispatch, so just run these
@@ -63,41 +100,45 @@ void RunTestOnCore(WatcherFixture* fixture, IDevice* device, CoreCoord &core, bo
     // Set up program
     Program program = Program();
     CoreCoord virtual_core;
-    if (is_eth_core)
+    if (is_eth_core) {
         virtual_core = device->ethernet_core_from_logical_core(core);
-    else
+    } else {
         virtual_core = device->worker_core_from_logical_core(core);
+    }
     log_info(LogTest, "Running test on device {} core {}...", device->id(), virtual_core.str());
 
     // Set up dram buffers
     uint32_t single_tile_size = 2 * 1024;
     uint32_t num_tiles = 50;
-    uint32_t l1_buffer_size = single_tile_size * num_tiles;
-    uint32_t l1_buffer_addr = device->allocator()->get_base_allocator_addr(tt_metal::HalMemType::L1);
-
-    // For ethernet core, need to have smaller buffer at a different address
+    auto buffer_mem_type = get_buffer_mem_type_for_test(feature);
+    uint32_t buffer_size = single_tile_size * num_tiles;
+    auto config_buffer_type = get_buffer_type_for_test(feature);
+    tt_metal::InterleavedBufferConfig local_buffer_config{
+        .device = device, .size = buffer_size, .page_size = buffer_size, .buffer_type = tt::tt_metal::BufferType::L1};
+    auto local_scratch_buffer = CreateBuffer(local_buffer_config);
+    uint32_t buffer_addr = local_scratch_buffer->address();
+    // For ethernet core, need to have smaller buffer and force buffer to be at a different address
     if (is_eth_core) {
-        l1_buffer_size = 1024;
-        l1_buffer_addr = MetalContext::instance().hal().get_dev_addr(
-            HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::UNRESERVED);
+        buffer_size = 1024;
+        buffer_addr = get_address_for_test(true, HalL1MemAddrType::UNRESERVED, true);
     }
 
-    tt_metal::InterleavedBufferConfig l1_config{
-        .device = device, .size = l1_buffer_size, .page_size = l1_buffer_size, .buffer_type = tt_metal::BufferType::L1};
-    auto input_l1_buffer = CreateBuffer(l1_config);
-    uint32_t input_l1_buffer_addr = input_l1_buffer->address();
+    tt_metal::InterleavedBufferConfig buffer_config{
+        .device = device, .size = buffer_size, .page_size = buffer_size, .buffer_type = config_buffer_type};
+    auto input_buffer = CreateBuffer(buffer_config);
+    uint32_t input_buffer_addr = input_buffer->address();
 
-    auto output_l1_buffer = CreateBuffer(l1_config);
-    uint32_t output_l1_buffer_addr = output_l1_buffer->address();
+    auto output_buffer = CreateBuffer(buffer_config);
+    uint32_t output_buffer_addr = output_buffer->address();
 
-    auto input_buf_noc_xy =
-        device->worker_core_from_logical_core(input_l1_buffer->allocator()->get_logical_core_from_bank_id(0));
-    auto output_buf_noc_xy =
-        device->worker_core_from_logical_core(output_l1_buffer->allocator()->get_logical_core_from_bank_id(0));
-    log_info("Input DRAM: {}", input_buf_noc_xy);
-    log_info("Output DRAM: {}", output_buf_noc_xy);
+    auto input_buf_noc_xy = get_core_coord_for_test(input_buffer);
+    auto output_buf_noc_xy = get_core_coord_for_test(output_buffer);
+    log_info("Input/Output Buffer mem type: {}", magic_enum::enum_name(buffer_mem_type));
+    log_info("Input Buffer NOC XY: {}", input_buf_noc_xy);
+    log_info("Output Buffer NOC XY: {}", output_buf_noc_xy);
+    log_info("Local scratch buffer addr: {:#x}", buffer_addr);
 
-    // A DRAM copy kernel, we'll feed it incorrect inputs to test sanitization.
+    // A copy kernel, we'll feed it incorrect inputs to test sanitization.
     KernelHandle dram_copy_kernel;
     if (is_eth_core) {
         std::map<string, string> dram_copy_kernel_defines = {
@@ -123,41 +164,34 @@ void RunTestOnCore(WatcherFixture* fixture, IDevice* device, CoreCoord &core, bo
                 .defines = dram_copy_kernel_defines});
     }
 
-    // Write to the input DRAM buffer
-    std::vector<uint32_t> input_vec = create_random_vector_of_bfloat16(
-        l1_buffer_size, 100, std::chrono::system_clock::now().time_since_epoch().count());
-    tt_metal::detail::WriteToBuffer(input_l1_buffer, input_vec);
+    // Write to the input buffer
+    std::vector<uint32_t> input_vec =
+        create_random_vector_of_bfloat16(buffer_size, 100, std::chrono::system_clock::now().time_since_epoch().count());
+    tt_metal::detail::WriteToBuffer(input_buffer, input_vec);
 
     // Write runtime args - update to a core that doesn't exist or an improperly aligned address,
     // depending on the flags passed in.
+    bool use_inline_dw_write = false;
     switch(feature) {
         case SanitizeAddress:
             output_buf_noc_xy.x = 26;
             output_buf_noc_xy.y = 18;
             break;
         case SanitizeAlignmentL1Write:
-            output_l1_buffer_addr++;  // This is illegal because reading DRAM->L1 needs DRAM alignment
-                                      // requirements (32 byte aligned).
-            l1_buffer_size--;
+            output_buffer_addr++;  // This is illegal because reading DRAM->L1 needs DRAM alignment
+                                   // requirements (32 byte aligned).
+            buffer_size--;
             break;
         case SanitizeAlignmentL1Read:
-            input_l1_buffer_addr++;
-            l1_buffer_size--;
+            input_buffer_addr++;
+            buffer_size--;
             break;
-        case SanitizeZeroL1Write: output_l1_buffer_addr = 0; break;
+        case SanitizeZeroL1Write: output_buffer_addr = 0; break;
         case SanitizeMailboxWrite:
             // This is illegal because we'd be writing to the mailbox memory
-            if (is_eth_core) {
-                l1_buffer_addr = std::min(
-                    MetalContext::instance().hal().get_dev_addr(
-                        HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::MAILBOX),
-                    MetalContext::instance().hal().get_dev_addr(
-                        HalProgrammableCoreType::IDLE_ETH, HalL1MemAddrType::MAILBOX));
-            } else {
-                l1_buffer_addr = MetalContext::instance().hal().get_dev_addr(
-                    HalProgrammableCoreType::TENSIX, HalL1MemAddrType::MAILBOX);
-            }
+            buffer_addr = get_address_for_test(is_eth_core, HalL1MemAddrType::MAILBOX);
             break;
+        case SanitizeInlineWriteDram: use_inline_dw_write = true; break;
         default:
             log_warning(LogTest, "Unrecognized feature to test ({}), skipping...", feature);
             GTEST_SKIP();
@@ -168,14 +202,15 @@ void RunTestOnCore(WatcherFixture* fixture, IDevice* device, CoreCoord &core, bo
         program,
         dram_copy_kernel,
         core,
-        {l1_buffer_addr,
-         input_l1_buffer_addr,
+        {buffer_addr,
+         input_buffer_addr,
          input_buf_noc_xy.x,
          input_buf_noc_xy.y,
-         output_l1_buffer_addr,
-         (std::uint32_t)output_buf_noc_xy.x,
-         (std::uint32_t)output_buf_noc_xy.y,
-         l1_buffer_size});
+         output_buffer_addr,
+         output_buf_noc_xy.x,
+         output_buf_noc_xy.y,
+         buffer_size,
+         use_inline_dw_write});
 
     // Run the kernel, expect an exception here
     try {
@@ -191,7 +226,8 @@ void RunTestOnCore(WatcherFixture* fixture, IDevice* device, CoreCoord &core, bo
     // We should be able to find the expected watcher error in the log as well.
     string expected;
     int noc = (use_ncrisc) ? 1 : 0;
-    CoreCoord target_core = device->virtual_noc0_coordinate(noc, input_buf_noc_xy);
+    CoreCoord input_core_virtual_coords = device->virtual_noc0_coordinate(noc, input_buf_noc_xy);
+    CoreCoord output_core_virtual_coords = device->virtual_noc0_coordinate(noc, output_buf_noc_xy);
     string risc_name = (is_eth_core) ? "erisc" : "brisc";
     if (use_ncrisc) {
         risc_name = "ncrisc";
@@ -209,10 +245,10 @@ void RunTestOnCore(WatcherFixture* fixture, IDevice* device, CoreCoord &core, bo
                 virtual_core.x,
                 virtual_core.y,
                 (is_eth_core) ? "erisc" : "brisc",
-                l1_buffer_size,
-                l1_buffer_addr,
+                buffer_size,
+                buffer_addr,
                 output_buf_noc_xy.str(),
-                output_l1_buffer_addr);
+                output_buffer_addr);
             break;
         case SanitizeAlignmentL1Write: {
             expected = fmt::format(
@@ -227,10 +263,10 @@ void RunTestOnCore(WatcherFixture* fixture, IDevice* device, CoreCoord &core, bo
                 virtual_core.y,
                 risc_name,
                 noc,
-                l1_buffer_size,
-                l1_buffer_addr,
-                target_core,
-                output_l1_buffer_addr);
+                buffer_size,
+                buffer_addr,
+                input_core_virtual_coords,
+                output_buffer_addr);
             break;
         }
         case SanitizeAlignmentL1Read: {
@@ -246,10 +282,10 @@ void RunTestOnCore(WatcherFixture* fixture, IDevice* device, CoreCoord &core, bo
                 virtual_core.y,
                 risc_name,
                 noc,
-                l1_buffer_size,
-                l1_buffer_addr,
-                target_core,
-                input_l1_buffer_addr);
+                buffer_size,
+                buffer_addr,
+                input_core_virtual_coords,
+                input_buffer_addr);
         } break;
         case SanitizeZeroL1Write: {
             expected = fmt::format(
@@ -264,10 +300,10 @@ void RunTestOnCore(WatcherFixture* fixture, IDevice* device, CoreCoord &core, bo
                 virtual_core.y,
                 risc_name,
                 noc,
-                l1_buffer_size,
-                l1_buffer_addr,
-                target_core,
-                output_l1_buffer_addr);
+                buffer_size,
+                buffer_addr,
+                input_core_virtual_coords,
+                output_buffer_addr);
         } break;
         case SanitizeMailboxWrite: {
             expected = fmt::format(
@@ -281,10 +317,26 @@ void RunTestOnCore(WatcherFixture* fixture, IDevice* device, CoreCoord &core, bo
                 virtual_core.x,
                 virtual_core.y,
                 (is_eth_core) ? "erisc" : "brisc",
-                l1_buffer_size,
-                l1_buffer_addr,
+                buffer_size,
+                buffer_addr,
                 input_buf_noc_xy.str(),
-                input_l1_buffer_addr);
+                input_buffer_addr);
+        } break;
+        case SanitizeInlineWriteDram: {
+            expected = fmt::format(
+                "Device {} {} core(x={:2},y={:2}) virtual(x={:2},y={:2}): {} using noc0 tried to unicast write 4 bytes "
+                "from local L1[{:#08x}] to DRAM core w/ virtual coords {} DRAM[addr=0x{:08x}] (inline dw writes do not "
+                "support DRAM destination addresses).",
+                device->id(),
+                (is_eth_core) ? "active ethnet" : "worker",
+                core.x,
+                core.y,
+                virtual_core.x,
+                virtual_core.y,
+                risc_name,
+                0,
+                output_core_virtual_coords.str(),
+                output_buffer_addr);
         } break;
         default:
             log_warning(LogTest, "Unrecognized feature to test ({}), skipping...", feature);
@@ -301,7 +353,7 @@ void RunTestOnCore(WatcherFixture* fixture, IDevice* device, CoreCoord &core, bo
     EXPECT_EQ(get_watcher_exception_message(), expected);
 }
 
-static void RunTestEth(WatcherFixture* fixture, IDevice* device, watcher_features_t feature) {
+void RunTestEth(WatcherFixture* fixture, IDevice* device, watcher_features_t feature) {
     if (fixture->IsSlowDispatch()) {
         GTEST_SKIP();
     }
@@ -314,7 +366,7 @@ static void RunTestEth(WatcherFixture* fixture, IDevice* device, watcher_feature
     RunTestOnCore(fixture, device, core, true, feature);
 }
 
-static void RunTestIEth(WatcherFixture* fixture, IDevice* device) {
+void RunTestIEth(WatcherFixture* fixture, IDevice* device, watcher_features_t feature) {
     if (fixture->IsSlowDispatch()) {
         GTEST_SKIP();
     }
@@ -324,7 +376,7 @@ static void RunTestIEth(WatcherFixture* fixture, IDevice* device) {
         GTEST_SKIP();
     }
     CoreCoord core = *(device->get_inactive_ethernet_cores().begin());
-    RunTestOnCore(fixture, device, core, true, SanitizeAddress);
+    RunTestOnCore(fixture, device, core, true, feature);
 }
 
 // Run tests for host-side sanitization (uses functions that are from watcher_server.hpp).
@@ -400,6 +452,15 @@ TEST_F(WatcherFixture, TensixTestWatcherSanitizeMailboxWrite) {
         this->devices_[0]);
 }
 
+TEST_F(WatcherFixture, TensixTestWatcherSanitizeInlineWriteDram) {
+    this->RunTestOnDevice(
+        [](WatcherFixture* fixture, IDevice* device) {
+            CoreCoord core{0, 0};
+            RunTestOnCore(fixture, device, core, false, SanitizeInlineWriteDram);
+        },
+        this->devices_[0]);
+}
+
 TEST_F(WatcherFixture, ActiveEthTestWatcherSanitizeEth) {
     this->RunTestOnDevice(
         [](WatcherFixture* fixture, IDevice* device) { RunTestEth(fixture, device, SanitizeAddress); },
@@ -412,10 +473,28 @@ TEST_F(WatcherFixture, ActiveEthTestWatcherSanitizeMailboxWrite) {
         this->devices_[0]);
 }
 
+TEST_F(WatcherFixture, ActiveEthTestWatcherSanitizeInlineWriteDram) {
+    this->RunTestOnDevice(
+        [](WatcherFixture* fixture, IDevice* device) { RunTestEth(fixture, device, SanitizeInlineWriteDram); },
+        this->devices_[0]);
+}
+
 TEST_F(WatcherFixture, IdleEthTestWatcherSanitizeIEth) {
     if (!this->IsSlowDispatch()) {
         log_info(tt::LogTest, "FD-on-idle-eth not supported.");
         GTEST_SKIP();
     }
-    this->RunTestOnDevice(RunTestIEth, this->devices_[0]);
+    this->RunTestOnDevice(
+        [](WatcherFixture* fixture, IDevice* device) { RunTestIEth(fixture, device, SanitizeAddress); },
+        this->devices_[0]);
+}
+
+TEST_F(WatcherFixture, IdleEthTestWatcherSanitizeInlineWriteDram) {
+    if (!this->IsSlowDispatch()) {
+        log_info(tt::LogTest, "FD-on-idle-eth not supported.");
+        GTEST_SKIP();
+    }
+    this->RunTestOnDevice(
+        [](WatcherFixture* fixture, IDevice* device) { RunTestIEth(fixture, device, SanitizeInlineWriteDram); },
+        this->devices_[0]);
 }

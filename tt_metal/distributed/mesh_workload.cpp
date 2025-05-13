@@ -25,8 +25,10 @@
 #include "kernel_types.hpp"
 #include "mesh_coord.hpp"
 #include "mesh_device.hpp"
-#include "program_device_map.hpp"
+#include "program/program_device_map.hpp"
+#include "program/program_impl.hpp"
 #include "tt-metalium/program.hpp"
+#include "tt_metal/impl/program/program_impl.hpp"
 #include "semaphore.hpp"
 #include "sub_device_types.hpp"
 #include "tt_metal/impl/dispatch/device_command.hpp"
@@ -97,7 +99,7 @@ void MeshWorkload::compile(MeshDevice* mesh_device) {
         }
         mesh_device->wait_for_thread_pool();
     }
-    program_dispatch::finalize_program_offsets(*this, mesh_device);
+    finalize_offsets(mesh_device);
 }
 
 void MeshWorkload::load_binaries(MeshCommandQueue& mesh_cq) {
@@ -116,7 +118,8 @@ void MeshWorkload::load_binaries(MeshCommandQueue& mesh_cq) {
         // Allocate kernel binary buffers of max size across all devices, to ensure we have lock step allocation.
         uint32_t max_kernel_bin_buf_size = 0;
         for (auto& [device_range, program] : programs_) {
-            uint32_t curr_kernel_bin_size = program.get_program_transfer_info().binary_data.size() * sizeof(uint32_t);
+            uint32_t curr_kernel_bin_size =
+                program.impl().get_program_transfer_info().binary_data.size() * sizeof(uint32_t);
             max_kernel_bin_buf_size = std::max(max_kernel_bin_buf_size, curr_kernel_bin_size);
         }
         // In production cases, max_kernel_bin_buf_size will always be non-zero (programs have kernels). This check is
@@ -137,7 +140,8 @@ void MeshWorkload::load_binaries(MeshCommandQueue& mesh_cq) {
                 MeshBuffer::create(global_kernel_bin_buf_config, device_local_kernel_bin_buf_config, mesh_device);
             // Iterate over the sub-grids and EnqueueWriteMeshBuffer to each sub-grid that runs an individual program
             for (auto& [device_range, program] : this->programs_) {
-                std::size_t kernel_bin_size = program.get_program_transfer_info().binary_data.size() * sizeof(uint32_t);
+                std::size_t kernel_bin_size =
+                    program.impl().get_program_transfer_info().binary_data.size() * sizeof(uint32_t);
                 global_kernel_bin_buf_config.size = kernel_bin_size;
                 auto kernel_bin_buf_view = MeshBuffer::create(
                     global_kernel_bin_buf_config,
@@ -146,7 +150,10 @@ void MeshWorkload::load_binaries(MeshCommandQueue& mesh_cq) {
                     kernel_bin_buf_->address());
 
                 mesh_device->mesh_command_queue().enqueue_write_shard_to_sub_grid(
-                    *kernel_bin_buf_view, program.get_program_transfer_info().binary_data.data(), device_range, false);
+                    *kernel_bin_buf_view,
+                    program.impl().get_program_transfer_info().binary_data.data(),
+                    device_range,
+                    false);
 
                 std::shared_ptr<Buffer> buffer_view = Buffer::create(
                     mesh_device,
@@ -237,7 +244,7 @@ std::vector<std::shared_ptr<KernelGroup>>& MeshWorkload::get_kernel_groups(uint3
         uint32_t device_range_idx = 0;
         for (auto& [device_range, program] : programs_) {
             const uint32_t device_range_handle = (device_range_idx++) << 16;
-            for (auto& kg : program.get_kernel_groups(programmable_core_type_index)) {
+            for (auto& kg : program.impl().get_kernel_groups(programmable_core_type_index)) {
                 for (auto& optional_kernel_id : kg->kernel_ids) {
                     if (optional_kernel_id.has_value()) {
                         optional_kernel_id = (device_range_handle | optional_kernel_id.value());
@@ -267,11 +274,11 @@ std::vector<uint32_t> MeshWorkload::get_program_config_sizes() {
         if (global_program_config_sizes.size()) {
             for (int i = 0; i < global_program_config_sizes.size(); i++) {
                 TT_FATAL(
-                    global_program_config_sizes[i] == program_on_grid.second.get_program_config_sizes()[i],
+                    global_program_config_sizes[i] == program_on_grid.second.impl().get_program_config_sizes()[i],
                     "Expected config sizes to be identical across all programs in a MeshWorkload.");
             }
         } else {
-            global_program_config_sizes = program_on_grid.second.get_program_config_sizes();
+            global_program_config_sizes = program_on_grid.second.impl().get_program_config_sizes();
         }
     }
     return global_program_config_sizes;
@@ -357,6 +364,37 @@ uint32_t MeshWorkload::get_cb_size(
         program_idx++;
     }
     return cb_size;
+}
+
+void MeshWorkload::finalize_offsets(MeshDevice* mesh_device) {
+    if (is_finalized()) {
+        return;
+    }
+
+    tt::tt_metal::detail::KernelsGetter kernels_getter =
+        [this](uint32_t index) -> std::unordered_map<KernelHandle, std::shared_ptr<Kernel>>& {
+        return this->get_kernels(index);
+    };
+
+    tt::tt_metal::detail::KernelGroupsGetter kernel_groups_getter =
+        [this](uint32_t index) -> std::vector<std::shared_ptr<KernelGroup>>& { return this->get_kernel_groups(index); };
+
+    tt::tt_metal::detail::SemaphoresGetter semaphores_getter = [this]() -> const std::vector<Semaphore>& {
+        return this->semaphores();
+    };
+
+    // Create a span with all programs
+    std::vector<tt::tt_metal::detail::ProgramImpl*> program_impls;
+    program_impls.reserve(programs_.size());
+    for (auto& [_, program] : programs_) {
+        program_impls.push_back(&program.impl());
+    }
+    tt::stl::Span<tt::tt_metal::detail::ProgramImpl*> programs(program_impls.data(), program_impls.size());
+
+    tt::tt_metal::detail::ProgramImpl::finalize_program_offsets(
+        mesh_device, kernels_getter, kernel_groups_getter, semaphores_getter, programs);
+
+    set_finalized();
 }
 
 }  // namespace tt::tt_metal::distributed

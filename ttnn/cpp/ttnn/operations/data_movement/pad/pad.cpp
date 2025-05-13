@@ -28,7 +28,7 @@ ttnn::Shape update_original_shape(const ttnn::Shape& padded_shape, const ttnn::S
     return ttnn::Shape(std::move(updated_shape));
 }
 
-static ttnn::Tensor pad_impl(
+ttnn::Tensor pad_impl(
     QueueId queue_id,
     const ttnn::Tensor& input_tensor,
     std::span<const uint32_t> output_padded_shape,
@@ -143,7 +143,7 @@ static ttnn::Tensor pad_impl(
 
         auto output_w = output_padded_shape[3];
         TT_ASSERT(
-            !input_tensor.is_sharded() || output_w == output_memory_config.shard_spec->shape[1],
+            !input_tensor.is_sharded() || output_w == output_memory_config.shard_spec()->shape[1],
             "output_w != output_memory_config.shard_spec().shape[1]");
 
         ttnn::Shape output_shape{output_padded_shape};
@@ -164,7 +164,7 @@ static ttnn::Tensor pad_impl(
     }
 }
 
-static ttnn::Tensor pad_impl(
+ttnn::Tensor pad_impl(
     QueueId queue_id,
     const ttnn::Tensor& input_tensor,
     ttnn::SmallVector<PadSpecDim> padding,
@@ -331,8 +331,8 @@ ttnn::Tensor invoke_tile(
         // "slice" down to logical shape
         output_tensor = ttnn::experimental::view(output_tensor, requested_logical_shape, requested_padded_shape);
     }
-    if (output_tensor.memory_config().shard_spec.has_value() !=
-        memory_config_arg.value_or(input_tensor.memory_config()).shard_spec.has_value()) {
+    if (output_tensor.memory_config().shard_spec().has_value() !=
+        memory_config_arg.value_or(input_tensor.memory_config()).shard_spec().has_value()) {
         const auto sharded_mem_config = create_sharded_memory_config(
             ttnn::Shape{requested_logical_shape},
             input_tensor.shard_spec()->grid,

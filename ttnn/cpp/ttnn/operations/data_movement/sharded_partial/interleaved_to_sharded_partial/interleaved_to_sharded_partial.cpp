@@ -22,8 +22,6 @@ ttnn::Tensor InterleavedToShardedPartialOperation::invoke(
     tt::tt_metal::TensorMemoryLayout shard_scheme,
     tt::tt_metal::ShardOrientation shard_orientation,
     const std::optional<DataType>& data_type_arg) {
-    std::vector<Tensor> output_tensors = {Tensor(tt::tt_metal::operation::get_workers_for_op_output({input_tensor}))};
-
     bool row_wise = shard_orientation == tt::tt_metal::ShardOrientation::ROW_MAJOR;
     CoreCoord grid_size;
     CoreRangeSet grid_set;
@@ -55,8 +53,7 @@ ttnn::Tensor InterleavedToShardedPartialOperation::invoke(
         grid);
 
     tt::tt_metal::ShardSpec shard_spec(grid_set, shard_shape, shard_orientation);
-    tt::tt_metal::MemoryConfig sharded_mem_config =
-        tt::tt_metal::MemoryConfig{.memory_layout = shard_scheme, .buffer_type = BufferType::L1};
+    tt::tt_metal::MemoryConfig sharded_mem_config = tt::tt_metal::MemoryConfig{shard_scheme, BufferType::L1};
     return operation::run(
                InterleavedToShardedPartialDeviceOperation{
                    .grid_size = grid_size,

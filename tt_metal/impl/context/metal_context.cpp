@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "metal_context.hpp"
-#include <tt-metalium/dispatch_settings.hpp>
+#include "dispatch/dispatch_settings.hpp"
 #include "tt_metal/impl/allocator/l1_banking_allocator.hpp"
 #include "tt_metal/impl/dispatch/topology.hpp"
 #include "tt_metal/impl/debug/dprint_server.hpp"
@@ -52,7 +52,9 @@ MetalContext& MetalContext::instance() {
 }
 
 MetalContext::MetalContext() {
-    hal_ = std::make_unique<Hal>(get_platform_architecture(rtoptions_));
+    bool is_base_routing_fw_enabled =
+        Cluster::is_base_routing_fw_enabled(Cluster::get_cluster_type_from_cluster_desc(rtoptions_));
+    hal_ = std::make_unique<Hal>(get_platform_architecture(rtoptions_), is_base_routing_fw_enabled);
     cluster_ = std::make_unique<Cluster>(rtoptions_, *hal_);
 }
 

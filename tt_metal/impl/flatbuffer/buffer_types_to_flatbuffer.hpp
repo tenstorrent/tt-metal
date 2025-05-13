@@ -6,7 +6,7 @@
 
 #include "buffer_types_generated.h"
 #include "flatbuffer/base_types_to_flatbuffer.hpp"
-#include <circular_buffer_types.hpp>
+#include <circular_buffer_config.hpp>
 
 namespace tt::tt_metal {
 

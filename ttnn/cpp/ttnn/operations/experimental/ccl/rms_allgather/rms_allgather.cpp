@@ -25,7 +25,7 @@ ttnn::Tensor ExecuteFusedRMSNorm::invoke(
     const std::optional<const ttnn::Tensor>& weight,
     const std::optional<const ttnn::Tensor>& stats,
     bool is_pre) {
-    auto arch = is_tensor_on_device_or_multidevice(input_tensor)
+    auto arch = is_device_tensor(input_tensor)
                     ? input_tensor.device()->arch()
                     : ttnn::operations::experimental::auto_format::AutoFormat::GetDefaultDevice()->arch();
     auto kernel_config_val =

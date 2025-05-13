@@ -93,7 +93,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_interleav
         choose_worker_cores(num_links, num_workers_per_link, enable_persistent_fabric_mode, mesh_device, sub_device_id);
 
     // L1 Scratch CB Creation
-    const size_t packet_size_bytes = tt::tt_fabric::get_1d_fabric_config().channel_buffer_size_bytes;
+    const size_t packet_size_bytes = tt::tt_fabric::get_tt_fabric_config().channel_buffer_size_bytes;
     uint32_t l1_scratch_cb_page_size_bytes = op_config.get_page_size();
     uint32_t num_pages_per_packet = packet_size_bytes / l1_scratch_cb_page_size_bytes;
     uint32_t cb_num_pages = 3 * num_pages_per_packet;  // tripple buffering
@@ -274,7 +274,12 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_llama_sharded(
     const GlobalSemaphore& semaphore,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
     tt::tt_metal::Program program{};
-    auto mesh_device = input_tensor.mesh_device();
+
+    IDevice* mesh_device = input_tensor.mesh_device();
+    if (!mesh_device) {
+        mesh_device = input_tensor.device();
+    }
+
     const bool enable_async_output_tensor = false;
     const bool enable_persistent_fabric_mode = true;
 
@@ -301,11 +306,11 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_llama_sharded(
 
     // Tensor Info
     const auto input_tensor_num_pages = input_tensor.buffer()->num_pages();
-    const auto input_tensor_cores = input_tensor.memory_config().shard_spec->grid;
-    const auto input_tensor_shard_shape = input_tensor.memory_config().shard_spec->shape;
+    const auto input_tensor_cores = input_tensor.memory_config().shard_spec()->grid;
+    const auto input_tensor_shard_shape = input_tensor.memory_config().shard_spec()->shape;
     const auto input_tensor_shard_num_pages = input_tensor_shard_shape[0] * input_tensor_shard_shape[1] / TILE_HW;
-    const auto output_tensor_cores = output_tensor.memory_config().shard_spec->grid;
-    const auto output_tensor_shard_shape = output_tensor.memory_config().shard_spec->shape;
+    const auto output_tensor_cores = output_tensor.memory_config().shard_spec()->grid;
+    const auto output_tensor_shard_shape = output_tensor.memory_config().shard_spec()->shape;
     const auto output_tensor_shard_num_pages = output_tensor_shard_shape[0] * output_tensor_shard_shape[1] / TILE_HW;
 
     tt::log_debug(tt::LogOp, "input_tensor_num_pages: {}", input_tensor_num_pages);
@@ -317,7 +322,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_llama_sharded(
     tt::log_debug(tt::LogOp, "output_tensor_shard_num_pages: {}", output_tensor_shard_num_pages);
 
     // L1 Scratch CB Creation
-    const size_t packet_size_bytes = tt::tt_fabric::get_1d_fabric_config().channel_buffer_size_bytes;
+    const size_t packet_size_bytes = tt::tt_fabric::get_tt_fabric_config().channel_buffer_size_bytes;
     uint32_t l1_scratch_cb_page_size_bytes = op_config.get_page_size();
     uint32_t num_pages_per_packet = packet_size_bytes / l1_scratch_cb_page_size_bytes;
     uint32_t cb_num_pages =

@@ -22,8 +22,6 @@
 #include <tt-metalium/command_queue.hpp>
 #include <tt-metalium/command_queue_interface.hpp>
 #include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/dispatch_settings.hpp>
-#include <tt-metalium/launch_message_ring_buffer_state.hpp>
 #include <tt-metalium/mesh_buffer.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/mesh_device.hpp>
@@ -53,8 +51,10 @@ namespace tt::tt_metal::distributed {
 class MeshEvent;
 struct MeshBufferReadDescriptor;
 struct MeshReadEventDescriptor;
+struct MeshCoreDataReadDescriptor;
 
-using MeshCompletionReaderVariant = std::variant<MeshBufferReadDescriptor, MeshReadEventDescriptor>;
+using MeshCompletionReaderVariant =
+    std::variant<MeshBufferReadDescriptor, MeshReadEventDescriptor, MeshCoreDataReadDescriptor>;
 
 class MeshCommandQueue {
     // Main interface to dispatch data and workloads to a MeshDevice

@@ -18,7 +18,6 @@ from models.demos.llama3_subdevices.tt.model_config import LlamaOptimizations
 from models.tt_transformers.tt.common import (
     preprocess_inputs_prefill,
     PagedAttentionConfig,
-    sample_host,
 )
 from models.perf.benchmarking_utils import BenchmarkProfiler
 
@@ -309,7 +308,6 @@ def test_demo_text(
     if os.environ.get("MESH_DEVICE") == "TG" and batch_size not in [32]:
         pytest.skip("Llama TG only supports batch-32")
 
-    mesh_device.enable_async(True)
     enable_trace = True  # Use tracing for better perf
     prefill_enable_trace = repeat_batches > 1
     print_to_file = False  # Enable this flag to print the output of all users to a file
@@ -494,31 +492,18 @@ def test_demo_text(
 
             # Run decode forward
             try:
-                logits = generator.decode_forward_text(
+                out_tok_cpu = generator.decode_forward_text(
                     out_tok,
                     current_pos,
                     enable_trace=enable_trace,
                     page_table=page_table,
                     kv_cache=tt_kv_cache,
                     sampling_params=device_sampling_params,
+                    reset_inputs=iteration == 0,
                 )
             except Exception as e:
                 logger.error(f"Error during decoding: {str(e)}")
                 break
-
-            # Get the next token
-            if argmax_on_device:
-                out_tok = logits.unsqueeze(1)
-                for b in range(1, 32):
-                    out_tok[b][0] = 0
-            else:
-                # TODO Fix use case with temperature > 0
-                _, out_tok = sample_host(
-                    logits,
-                    temperature=sampling_params["temperature"],
-                    top_p=sampling_params["top_p"],
-                    on_host=True,
-                )
 
             if iteration == 0:  # First iteration will account the compile time
                 profiler.end(f"compile_decode", iteration=batch_idx)
@@ -526,19 +511,20 @@ def test_demo_text(
             else:
                 profiler.end(f"inference_decode_time_{iteration}", iteration=batch_idx)
                 decode_iteration_time = profiler.get_duration(f"inference_decode_time_{iteration}", iteration=batch_idx)
+            tt_output_torch = out_tok_cpu
 
             # Always print perf after every iteration
             tokens_per_second_per_user = 1 / decode_iteration_time
-            if repeat_batches == 1:
-                logger.info(
-                    f"Iteration {iteration}: {1000*decode_iteration_time:.0f}ms @ {tokens_per_second_per_user:.1f} tok/s/user ({batch_size*tokens_per_second_per_user:.1f} tok/s throughput)"
-                )
+            # if repeat_batches == 1:
+            logger.info(
+                f"Iteration {iteration}: {1000*decode_iteration_time:.0f}ms @ {tokens_per_second_per_user:.1f} tok/s/user ({batch_size*tokens_per_second_per_user:.1f} tok/s throughput)"
+            )
 
             current_pos += 1
 
             # Save output token to print out later
             for user in range(batch_size):
-                user_tok = out_tok[user].item()
+                user_tok = tt_output_torch.tolist()[0]
                 if (
                     user_tok not in tokenizer.stop_tokens and user_done[user] == False
                 ):  # Read until an eos token (e.g. <|eot_id|>); create_tokenizer adds stop_tokens to HF tokenizers
@@ -553,7 +539,7 @@ def test_demo_text(
                             users_decoding = False
 
             # Print out generated outputs for each user at the end of every iteration
-            if not is_ci_env and repeat_batches == 1:
+            if not is_ci_env:
                 for user in range(1):
                     text = "".join(tokenizer.decode(all_outputs[user]))
                     if len(text) > 100:

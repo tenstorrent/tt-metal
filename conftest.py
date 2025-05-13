@@ -20,7 +20,12 @@ from datetime import datetime
 from loguru import logger
 
 from tests.scripts.common import run_process_and_get_result
-from tests.scripts.common import get_updated_device_params
+from tests.scripts.common import get_dispatch_core_type, get_updated_device_params
+
+# Constants for device configurations
+GALAXY_NUM_DEVICES = 32
+TG_NUM_PCIE_DEVICES = 4
+SIX_U_NUM_PCIE_DEVICES = 32
 
 
 @pytest.fixture(scope="function")
@@ -54,16 +59,38 @@ def is_single_card_n300(device):
     return num_pcie == 1 and num_devices == 2 and device.arch().name == "WORMHOLE_B0"
 
 
+@pytest.fixture(scope="function")
+def galaxy_type():
+    if is_6u():
+        return "6U"
+    elif is_tg_cluster():
+        return "4U"
+    else:
+        return None
+
+
+def is_galaxy():
+    import ttnn
+
+    num_devices = ttnn.GetNumAvailableDevices()
+    # Galaxy systems have 32 devices
+    return num_devices == GALAXY_NUM_DEVICES
+
+
+# TODO: Remove this when TG clusters are deprecated.
+def is_6u():
+    import ttnn
+
+    # 6U has 32 PCIe devices
+    return is_galaxy() and ttnn.GetNumPCIeDevices() == SIX_U_NUM_PCIE_DEVICES
+
+
 # TODO: Remove this when TG clusters are deprecated.
 def is_tg_cluster():
     import ttnn
 
-    num_pcie = ttnn.GetNumPCIeDevices()
-    num_devices = ttnn.GetNumAvailableDevices()
-    # TG has 32 available chips and 4 PCIe mapped chips (not exposed to the user)
-    TG_NUM_PCIE_DEVICES = 4
-    TG_NUM_DEVICES = 32
-    return num_pcie == TG_NUM_PCIE_DEVICES and num_devices == TG_NUM_DEVICES
+    # TG has 4 PCIe devices
+    return is_galaxy() and ttnn.GetNumPCIeDevices() == TG_NUM_PCIE_DEVICES
 
 
 def first_available_tg_device():
@@ -250,11 +277,40 @@ def mesh_device(request, silicon_arch_name, device_params):
     logger.debug(f"multidevice with {mesh_device.get_num_devices()} devices is created")
     yield mesh_device
 
-    for device in mesh_device.get_devices():
-        ttnn.DumpDeviceProfiler(device)
+    ttnn.DumpDeviceProfiler(mesh_device)
 
     ttnn.close_mesh_device(mesh_device)
     reset_fabric(fabric_config)
+    del mesh_device
+
+
+@pytest.fixture(scope="function")
+def t3k_single_board_mesh_device(request, silicon_arch_name, silicon_arch_wormhole_b0, device_params):
+    import ttnn
+
+    device_ids = ttnn.get_device_ids()
+
+    assert len(device_ids) == 8, "This fixture is only applicable for T3K systems"
+
+    try:
+        pcie_id = request.param
+    except (ValueError, AttributeError):
+        pcie_id = 0  # Default to using first board
+
+    assert pcie_id < 4, "Requested board id is out of range"
+
+    mesh_device_ids = [device_ids[pcie_id], device_ids[pcie_id + 4]]
+    mesh_shape = ttnn.MeshShape(1, 2)
+    mesh_device = ttnn.open_mesh_device(
+        mesh_shape, mesh_device_ids, dispatch_core_type=get_dispatch_core_type(), **device_params
+    )
+
+    logger.debug(f"multidevice with {mesh_device.get_num_devices()} devices is created")
+    yield mesh_device
+
+    ttnn.DumpDeviceProfiler(mesh_device)
+
+    ttnn.close_mesh_device(mesh_device)
     del mesh_device
 
 
@@ -286,8 +342,7 @@ def pcie_mesh_device(request, silicon_arch_name, silicon_arch_wormhole_b0, devic
     logger.debug(f"multidevice with {mesh_device.get_num_devices()} devices is created")
     yield mesh_device
 
-    for device in mesh_device.get_devices():
-        ttnn.DumpDeviceProfiler(device)
+    ttnn.DumpDeviceProfiler(mesh_device)
 
     ttnn.close_mesh_device(mesh_device)
     reset_fabric(fabric_config)
@@ -312,8 +367,7 @@ def n300_mesh_device(request, silicon_arch_name, silicon_arch_wormhole_b0, devic
     logger.debug(f"multidevice with {mesh_device.get_num_devices()} devices is created")
     yield mesh_device
 
-    for device in mesh_device.get_devices():
-        ttnn.DumpDeviceProfiler(device)
+    ttnn.DumpDeviceProfiler(mesh_device)
 
     ttnn.close_mesh_device(mesh_device)
     reset_fabric(fabric_config)
@@ -339,8 +393,7 @@ def t3k_mesh_device(request, silicon_arch_name, silicon_arch_wormhole_b0, device
     logger.debug(f"multidevice with {mesh_device.get_num_devices()} devices is created")
     yield mesh_device
 
-    for device in mesh_device.get_devices():
-        ttnn.DumpDeviceProfiler(device)
+    ttnn.DumpDeviceProfiler(mesh_device)
 
     ttnn.close_mesh_device(mesh_device)
     reset_fabric(fabric_config)
@@ -387,6 +440,8 @@ def get_devices(request):
         devices = [request.getfixturevalue("t3k_mesh_device")]
     elif "pcie_mesh_device" in request.fixturenames:
         devices = [request.getfixturevalue("pcie_mesh_device")]
+    elif "t3k_single_board_mesh_device" in request.fixturenames:
+        devices = request.getfixturevalue("t3k_single_board_mesh_device").get_devices()
     else:
         devices = []
     return devices
@@ -402,19 +457,6 @@ def use_program_cache(request):
     yield
     for dev in devices:
         dev.disable_and_clear_program_cache()
-
-
-@pytest.fixture(scope="function")
-def enable_async_mode(request):
-    devices = get_devices(request)
-    if not devices:
-        logger.warning("No device fixture found to apply async mode to: ASYNC MODE DISABLED")
-
-    for dev in devices:
-        dev.enable_async(request.param)
-    yield request.param
-    for dev in devices:
-        dev.enable_async(False)
 
 
 @pytest.fixture(scope="function")
@@ -480,6 +522,39 @@ def pytest_addoption(parser):
         default=None,
         help="Enable process timeout",
     )
+    parser.addoption(
+        "--didt-workload-iterations",
+        action="store",
+        default=None,
+        help="Number of workload iterations to run for didt tests",
+    )
+    parser.addoption(
+        "--determinism-check-interval",
+        action="store",
+        default=None,
+        help="Check determinism every nth iteration",
+    )
+
+
+# Indicates the iteration interval at which determinism is verified for the op output
+@pytest.fixture
+def determinism_check_interval(request):
+    iterations = request.config.getoption("--determinism-check-interval")
+    if iterations is not None:
+        # this will throw an error if bad value is passed
+        return int(iterations)
+    return -1
+
+
+# Indicated the number of workload iterations to run within didt tests
+@pytest.fixture
+def didt_workload_iterations(request):
+    iterations = request.config.getoption("--didt-workload-iterations")
+    if iterations is not None:
+        # this will throw an error if bad value is passed
+        return int(iterations)
+    # default is 100000
+    return 100000
 
 
 @pytest.fixture
@@ -689,6 +764,10 @@ def pytest_handlecrashitem(crashitem, report, sched):
 
 def reset_tensix(tt_open_devices=None):
     import shutil
+
+    if is_galaxy():
+        logger.info("Skipping reset for Galaxy systems, need a new reset.json scheme")
+        return
 
     # Check if tt-smi exists
     if not shutil.which("tt-smi"):

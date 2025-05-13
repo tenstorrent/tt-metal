@@ -10,9 +10,9 @@
 constexpr uint32_t tile_height = 32;
 
 #if defined BFP16
-typedef uint16_t input_token_t;
+using input_token_t = uint16_t;
 #else
-typedef uint32_t input_token_t;
+using input_token_t = uint32_t;
 #endif
 
 // TODO: Can probably make this not global

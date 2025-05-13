@@ -18,7 +18,6 @@
 #include <hostdevcommon/kernel_structs.h>  // Not used here, but leaked to programming examples
 #include <tt-metalium/work_executor_types.hpp>
 #include <tt-metalium/data_types.hpp>
-#include <tt-metalium/program_device_map.hpp>
 #include <tt-metalium/hal_types.hpp>
 #include <tt-metalium/command_queue_interface.hpp>
 #include <tt-metalium/sub_device_types.hpp>
@@ -47,6 +46,7 @@ class Program;
 class SubDevice;
 
 class CommandQueue;
+class SystemMemoryManager;
 class TraceBuffer;
 struct TraceDescriptor;
 
@@ -182,13 +182,6 @@ public:
     // Puts device into reset
     virtual bool close() = 0;
 
-    virtual void enable_async(bool enable) = 0;
-    virtual void synchronize() = 0;
-    virtual WorkExecutorMode get_worker_mode() = 0;
-    virtual bool is_worker_queue_empty() const = 0;
-
-    virtual void push_work(std::function<void()> work, bool blocking = false) = 0;
-
     // Program cache interface. Syncrhonize with worker worker threads before querying or
     // modifying this structure, since worker threads use this for compiling ops
     virtual void enable_program_cache() = 0;
@@ -198,10 +191,11 @@ public:
     virtual std::size_t num_program_cache_entries() = 0;
 
     virtual HalProgrammableCoreType get_programmable_core_type(CoreCoord virtual_core) const = 0;
+    virtual HalMemType get_mem_type_of_core(CoreCoord virtual_core) const = 0;
 
+    // Returns the starting address and memory region size on the device for a given virtual core and L1 memory type
     uint64_t get_dev_addr(CoreCoord virtual_core, HalL1MemAddrType addr_type) const;
-
-    virtual std::vector<std::pair<transfer_info_cores, uint32_t>> extract_dst_noc_multicast_info(const std::vector<CoreRange>& ranges, const CoreType core_type) = 0;
+    uint64_t get_dev_size(CoreCoord virtual_core, HalL1MemAddrType addr_type) const;
 
     virtual uint8_t num_noc_mcast_txns(SubDeviceId sub_device_id) const = 0;
     virtual uint8_t num_noc_unicast_txns(SubDeviceId sub_device_id) const = 0;

@@ -13,9 +13,9 @@
 #include "dispatch_core_common.hpp"
 #include "hal.hpp"
 #include "hal_types.hpp"
-#include "launch_message_ring_buffer_state.hpp"
+#include "dispatch/launch_message_ring_buffer_state.hpp"
 #include <tt_stl/strong_type.hpp>
-#include "system_memory_manager.hpp"
+#include "dispatch/system_memory_manager.hpp"
 #include "trace_buffer.hpp"
 #include "tt_align.hpp"
 #include "tt_metal/impl/dispatch/device_command.hpp"

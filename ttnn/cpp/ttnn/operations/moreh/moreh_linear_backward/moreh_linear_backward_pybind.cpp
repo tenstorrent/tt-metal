@@ -4,7 +4,7 @@
 
 #include "moreh_linear_backward_pybind.hpp"
 
-#include "pybind11/decorators.hpp"
+#include "ttnn-pybind/decorators.hpp"
 #include "ttnn/operations/moreh/moreh_linear_backward/moreh_linear_backward.hpp"
 
 namespace ttnn::operations::moreh::moreh_linear_backward {

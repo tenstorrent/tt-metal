@@ -13,9 +13,11 @@ set(TTNN_UNIT_TESTS_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/test_graph_query_op_runtime.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/test_reflect.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/test_to_and_from_json.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/test_broadcast_to.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/test_sliding_window_infra.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/test_conv2d.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/common_test_utils.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/test_generic_op.cpp
 )
 
 set(TTNN_CCL_UNIT_TESTS_SRC
@@ -38,10 +40,12 @@ set(TTNN_1D_FABRIC_LATENCY_TEST_SRC ${CMAKE_CURRENT_SOURCE_DIR}/ccl/test_1d_fabr
 set(TTNN_TENSOR_UNIT_TESTS_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/tensor/common_tensor_test_utils.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/tensor/test_create_tensor.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/tensor/test_host_buffer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/tensor/test_tensor_layout.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/tensor/test_create_tensor_multi_device.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/tensor/test_create_tensor_with_layout.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/tensor/test_distributed_tensor.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/tensor/test_memory_pin.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/tensor/test_mesh_tensor.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/tensor/test_partition.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/tensor/test_tensor_sharding.cpp

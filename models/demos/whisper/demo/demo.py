@@ -3,32 +3,30 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import os
+import time
 from os import listdir
 from os.path import isfile, join
+
+import jiwer
 import pytest
 import torch
 from datasets import load_dataset
 from loguru import logger
 from scipy.io import wavfile
+from tqdm import tqdm
 from transformers import (
     AutoFeatureExtractor,
     AutoProcessor,
-    WhisperForConditionalGeneration,
     WhisperForAudioClassification,
+    WhisperForConditionalGeneration,
 )
-from tqdm import tqdm
-import time
-import jiwer
+from ttnn.model_preprocessing import preprocess_model_parameters
 
 import ttnn
-from ttnn.model_preprocessing import preprocess_model_parameters
-from models.demos.whisper.tt import ttnn_optimized_functional_whisper
-from models.demos.whisper.tt.ttnn_optimized_functional_whisper import (
-    init_kv_cache,
-    WHISPER_L1_SMALL_SIZE,
-)
-from models.generation_utils import get_logits_processor
 from models.demos.utils.llm_demo_utils import verify_perf
+from models.demos.whisper.tt import ttnn_optimized_functional_whisper
+from models.demos.whisper.tt.ttnn_optimized_functional_whisper import WHISPER_L1_SMALL_SIZE, init_kv_cache
+from models.generation_utils import get_logits_processor
 from models.utility_functions import is_blackhole
 
 
@@ -443,11 +441,8 @@ def run_demo_whisper_for_conditional_generation_dataset(ttnn_model, device):
     "num_inputs",
     ((1),),
 )
-@pytest.mark.parametrize("enable_async_mode", (True,), indirect=True)
 @pytest.mark.parametrize("device_params", [{"l1_small_size": WHISPER_L1_SMALL_SIZE}], indirect=True)
-def test_demo_for_audio_classification(
-    input_path, ttnn_model, device, num_inputs, use_program_cache, enable_async_mode
-):
+def test_demo_for_audio_classification(input_path, ttnn_model, device, num_inputs, use_program_cache):
     return run_demo_whisper_for_audio_classification_inference(input_path, ttnn_model, device, num_inputs)
 
 
@@ -455,9 +450,8 @@ def test_demo_for_audio_classification(
     "ttnn_model",
     (ttnn_optimized_functional_whisper,),
 )
-@pytest.mark.parametrize("enable_async_mode", (True,), indirect=True)
 @pytest.mark.parametrize("device_params", [{"l1_small_size": WHISPER_L1_SMALL_SIZE}], indirect=True)
-def test_demo_for_audio_classification_dataset(ttnn_model, device, use_program_cache, enable_async_mode, is_ci_env):
+def test_demo_for_audio_classification_dataset(ttnn_model, device, use_program_cache, is_ci_env):
     if is_ci_env:
         pytest.skip("Skipping test in CI since it provides redundant testing")
     return run_demo_whisper_for_audio_classification_dataset(ttnn_model, device)
@@ -471,11 +465,8 @@ def test_demo_for_audio_classification_dataset(ttnn_model, device, use_program_c
     "num_inputs",
     (2,),
 )
-@pytest.mark.parametrize("enable_async_mode", (True,), indirect=True)
 @pytest.mark.parametrize("device_params", [{"l1_small_size": WHISPER_L1_SMALL_SIZE}], indirect=True)
-def test_demo_for_conditional_generation(
-    input_path, ttnn_model, device, num_inputs, use_program_cache, enable_async_mode, is_ci_env
-):
+def test_demo_for_conditional_generation(input_path, ttnn_model, device, num_inputs, use_program_cache, is_ci_env):
     ttft, decode_throughput = run_demo_whisper_for_conditional_generation_inference(
         input_path, ttnn_model, device, num_inputs
     )
@@ -493,9 +484,8 @@ def test_demo_for_conditional_generation(
     "ttnn_model",
     (ttnn_optimized_functional_whisper,),
 )
-@pytest.mark.parametrize("enable_async_mode", (True,), indirect=True)
 @pytest.mark.parametrize("device_params", [{"l1_small_size": WHISPER_L1_SMALL_SIZE}], indirect=True)
-def test_demo_for_conditional_generation_dataset(ttnn_model, device, use_program_cache, enable_async_mode, is_ci_env):
+def test_demo_for_conditional_generation_dataset(ttnn_model, device, use_program_cache, is_ci_env):
     if is_ci_env:
         pytest.skip("Skipping test in CI since it provides redundant testing")
     return run_demo_whisper_for_conditional_generation_dataset(ttnn_model, device)

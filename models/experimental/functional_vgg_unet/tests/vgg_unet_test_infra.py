@@ -44,7 +44,7 @@ class VGG_UnetTestInfra:
             core_grid = ttnn.CoreGrid(y=8, x=8)
         else:
             exit("Unsupported device")
-        num_devices = 1 if isinstance(device, ttnn.Device) else device.get_num_devices()
+        num_devices = device.get_num_devices()
         # torch tensor
         torch_input_tensor = self.torch_input if self.torch_input is None else self.torch_input
 

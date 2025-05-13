@@ -185,6 +185,8 @@ struct OpPerformanceModelGeneral {
                     this->ideal_bandwidth_ns = tensor_ns(t);
                 }
             }
+        } else if constexpr (std::is_same_v<OutputTensors, Tensor>) {
+            this->outputs_bytes.push_back(output_tensors.volume() * output_tensors.element_size());
         } else {
             for (const auto& ot : output_tensors) {
                 if (!ot.has_value()) {
@@ -245,8 +247,7 @@ struct ProfilerInfo {
     std::optional<std::string> parallelization_strategy;
 };
 
-inline auto DEFAULT_OUTPUT_MEMORY_CONFIG =
-    MemoryConfig{.memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED, .buffer_type = BufferType::DRAM};
+inline MemoryConfig DEFAULT_OUTPUT_MEMORY_CONFIG;
 
 static void set_default_operation_output_memory_config(const MemoryConfig& memory_config) {
     DEFAULT_OUTPUT_MEMORY_CONFIG = memory_config;

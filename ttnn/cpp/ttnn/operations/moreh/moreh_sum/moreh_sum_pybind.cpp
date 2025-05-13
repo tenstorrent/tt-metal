@@ -4,7 +4,7 @@
 
 #include "moreh_sum_pybind.hpp"
 
-#include "pybind11/decorators.hpp"
+#include "ttnn-pybind/decorators.hpp"
 #include "ttnn/operations/moreh/moreh_sum/moreh_sum.hpp"
 
 namespace ttnn::operations::moreh::moreh_sum {

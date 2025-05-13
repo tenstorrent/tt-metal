@@ -18,6 +18,7 @@ jobs:
     secrets: inherit
     uses: ./.github/workflows/blackhole-demo-tests-impl.yaml
     with:
+      runner-label: BH-baremetal
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}

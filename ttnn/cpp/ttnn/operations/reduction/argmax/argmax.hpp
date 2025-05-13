@@ -25,7 +25,6 @@ struct ArgMaxOperation {
 
 }  // namespace operations::reduction
 
-constexpr auto argmax =
-    ttnn::register_operation_with_auto_launch_op<"ttnn::argmax", ttnn::operations::reduction::ArgMaxOperation>();
+constexpr auto argmax = ttnn::register_operation<"ttnn::argmax", ttnn::operations::reduction::ArgMaxOperation>();
 
 }  // namespace ttnn

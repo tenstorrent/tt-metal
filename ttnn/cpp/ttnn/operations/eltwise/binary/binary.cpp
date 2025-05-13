@@ -88,7 +88,7 @@ constexpr bool is_associative(BinaryOpType op) {
     return op == BinaryOpType::ADD || op == BinaryOpType::MUL || op == BinaryOpType::EQ || op == BinaryOpType::NE ||
            op == BinaryOpType::LOGICAL_AND || op == BinaryOpType::LOGICAL_OR || op == BinaryOpType::LOGADDEXP ||
            op == BinaryOpType::LOGADDEXP2 || op == BinaryOpType::LOGICAL_XOR || op == BinaryOpType::MAXIMUM ||
-           op == BinaryOpType::MINIMUM;
+           op == BinaryOpType::MINIMUM || op == BinaryOpType::GCD || op == BinaryOpType::LCM;
 }
 
 // Tensor - Scalar
@@ -112,7 +112,7 @@ inline Tensor binary_impl(
     } else if (binary_op_type == BinaryOpType::LTE) {
         output_tensor = ttnn::lez(queue_id, ttnn::sub_sfpu(queue_id, lhs, rhs, memory_config), memory_config, output);
     } else if (binary_op_type == BinaryOpType::EQ) {
-        output_tensor = ttnn::eqz(queue_id, ttnn::sub_sfpu(queue_id, lhs, rhs, memory_config), memory_config, output);
+        output_tensor = ttnn::eq_unary(queue_id, lhs, rhs, memory_config, output);
     } else {
         TT_THROW("Unsupported operation");
     }
@@ -588,5 +588,7 @@ template struct BinaryOperationSfpu<BinaryOpType::LEFT_SHIFT>;
 template struct BinaryOperationSfpu<BinaryOpType::RIGHT_SHIFT>;
 template struct BinaryOperationSfpu<BinaryOpType::MAXIMUM>;
 template struct BinaryOperationSfpu<BinaryOpType::MINIMUM>;
+template struct BinaryOperationSfpu<BinaryOpType::GCD>;
+template struct BinaryOperationSfpu<BinaryOpType::LCM>;
 
 }  // namespace ttnn::operations::binary

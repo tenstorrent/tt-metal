@@ -28,8 +28,6 @@
 #include <tt-metalium/device.hpp>
 #include "device_fixture.hpp"
 #include "dispatch_fixture.hpp"
-// FIXME: ARCH_NAME
-#include "eth_l1_address_map.h"
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/logger.hpp>
 #include "multi_device_fixture.hpp"
@@ -46,8 +44,6 @@ using namespace tt::test_utils;
 
 namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {
-constexpr std::int32_t MAX_BUFFER_SIZE =
-    (eth_l1_mem::address_map::MAX_L1_LOADING_SIZE - eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE);
 
 struct BankedConfig {
     size_t num_pages = 1;
@@ -106,9 +102,9 @@ bool chip_to_chip_dram_buffer_transfer(
     auto inputs = generate_uniform_random_vector<uint32_t>(0, 100, byte_size / sizeof(uint32_t));
 
     fixture->WriteBuffer(sender_device, input_dram_buffer, inputs);
+    uint32_t MAX_BUFFER = tt::tt_metal::MetalContext::instance().hal().get_dev_size(
+        tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::UNRESERVED);
 
-    const uint32_t MAX_BUFFER =
-        (eth_l1_mem::address_map::MAX_L1_LOADING_SIZE - eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE);
     uint32_t num_loops = (uint32_t)(byte_size / MAX_BUFFER);
     uint32_t remaining_bytes = (uint32_t)(byte_size % MAX_BUFFER);
     // Clear expected value at ethernet L1 address
@@ -420,6 +416,8 @@ TEST_F(N300DeviceFixture, ActiveEthKernelsSendInterleavedBufferChip0ToChip1) {
     GTEST_SKIP();
     const auto& sender_device = devices_.at(0);
     const auto& receiver_device = devices_.at(1);
+    uint32_t MAX_BUFFER_SIZE =
+        MetalContext::instance().hal().get_dev_size(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::UNRESERVED);
 
     for (const auto& sender_eth_core : sender_device->get_active_ethernet_cores(true)) {
         CoreCoord receiver_eth_core = std::get<1>(sender_device->get_connected_ethernet_core(sender_eth_core));
@@ -485,6 +483,8 @@ TEST_F(N300DeviceFixture, ActiveEthKernelsSendInterleavedBufferChip0ToChip1) {
 
 TEST_F(DeviceFixture, ActiveEthKernelsSendInterleavedBufferAllConnectedChips) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
+    uint32_t MAX_BUFFER_SIZE =
+        MetalContext::instance().hal().get_dev_size(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::UNRESERVED);
     for (const auto& sender_device : devices_) {
         for (const auto& receiver_device : devices_) {
             if (sender_device->id() == receiver_device->id()) {
@@ -618,6 +618,8 @@ TEST_F(CommandQueueMultiDeviceProgramFixture, ActiveEthKernelsSendDramBufferAllC
 
 TEST_F(CommandQueueMultiDeviceProgramFixture, ActiveEthKernelsSendInterleavedBufferAllConnectedChips) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
+    uint32_t MAX_BUFFER_SIZE =
+        MetalContext::instance().hal().get_dev_size(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::UNRESERVED);
     for (const auto& sender_device : devices_) {
         for (const auto& receiver_device : devices_) {
             if (sender_device->id() >= receiver_device->id()) {

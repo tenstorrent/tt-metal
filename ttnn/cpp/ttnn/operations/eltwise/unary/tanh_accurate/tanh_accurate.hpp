@@ -24,6 +24,6 @@ struct Tanh_accurate {
 }  // namespace operations
 
 constexpr auto tanh_accurate =
-    ttnn::register_operation_with_auto_launch_op<"ttnn::tanh_accurate", ttnn::operations::unary::Tanh_accurate>();
+    ttnn::register_operation<"ttnn::tanh_accurate", ttnn::operations::unary::Tanh_accurate>();
 
 }  // namespace ttnn

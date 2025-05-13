@@ -35,7 +35,7 @@ struct CreateQKVHeadsSeparateTensorsOperation {
 
 namespace experimental {
 
-constexpr auto create_qkv_heads_from_separate_tensors = ttnn::register_operation_with_auto_launch_op<
+constexpr auto create_qkv_heads_from_separate_tensors = ttnn::register_operation<
     "ttnn::experimental::create_qkv_heads_from_separate_tensors",
     ttnn::operations::experimental::transformer::CreateQKVHeadsSeparateTensorsOperation>();
 

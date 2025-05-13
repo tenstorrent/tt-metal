@@ -23,7 +23,7 @@ from models.utility_functions import skip_for_grayskull
 @pytest.mark.parametrize("enable_cache", [True])
 def test_ttnn_reshape_with_cache(device, enable_cache, input_shape, output_shape):
     if enable_cache:
-        ttnn.enable_program_cache(device)
+        device.enable_program_cache()
 
     a = torch.randn(input_shape, dtype=torch.bfloat16)
     b = torch.randn(input_shape, dtype=torch.bfloat16)
@@ -50,7 +50,7 @@ def test_ttnn_reshape_with_cache(device, enable_cache, input_shape, output_shape
 @pytest.mark.parametrize("enable_cache", [True])
 def test_tensor_reshape_with_cache(device, enable_cache, input_shape, output_shape):
     if enable_cache:
-        ttnn.enable_program_cache(device)
+        device.enable_program_cache()
 
     a = torch.randn(input_shape, dtype=torch.bfloat16)
     b = torch.randn(output_shape, dtype=torch.bfloat16)
@@ -374,6 +374,9 @@ def test_reshape_tile_layout_only_change_shape(device):
     "dtype", [(torch.bfloat16, ttnn.bfloat16), (torch.int32, ttnn.uint32), (torch.float32, ttnn.float32)]
 )
 def test_reshape_tile(device, input_shape, output_shape, layout, memory_config, dtype):
+    if memory_config == ttnn.L1_MEMORY_CONFIG and input_shape in [(2888, 49, 96), (1, 1500, 1, 512)]:
+        pytest.xfail("Test case is too big for L1")
+
     torch_dtype, ttnn_dtype = dtype
 
     size = math.prod(input_shape)
@@ -383,7 +386,9 @@ def test_reshape_tile(device, input_shape, output_shape, layout, memory_config, 
         torch_input_tensor = torch_input_tensor.abs()
 
     torch_result = torch_input_tensor.reshape(output_shape)
-    input_tensor = ttnn.from_torch(torch_input_tensor, layout=layout, dtype=ttnn_dtype, device=device)
+    input_tensor = ttnn.from_torch(
+        torch_input_tensor, layout=layout, dtype=ttnn_dtype, device=device, memory_config=memory_config
+    )
     ttnn_output = ttnn.reshape(input_tensor, output_shape)
     output = ttnn.to_torch(ttnn_output)
     assert_with_pcc(torch_result, output, 0.9999)

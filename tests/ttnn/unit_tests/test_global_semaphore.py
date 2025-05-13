@@ -33,11 +33,9 @@ def run_global_semaphore(device):
     ttnn.reset_global_semaphore_value(global_sem0, 3)
 
 
-@pytest.mark.parametrize("enable_async_mode", (False, True), indirect=True)
-def test_global_semaphore(device, enable_async_mode):
+def test_global_semaphore(device):
     run_global_semaphore(device)
 
 
-@pytest.mark.parametrize("enable_async_mode", (False, True), indirect=True)
-def test_global_semaphore_mesh(mesh_device, enable_async_mode):
+def test_global_semaphore_mesh(mesh_device):
     run_global_semaphore(mesh_device)

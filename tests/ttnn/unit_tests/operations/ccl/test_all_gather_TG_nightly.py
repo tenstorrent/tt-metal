@@ -52,7 +52,6 @@ from ttnn import ShardTensor2dMesh, ConcatMesh2dToTensor
     ),
 )
 @pytest.mark.parametrize("replication_factor", [8])
-@pytest.mark.parametrize("enable_async", [True])
 @pytest.mark.parametrize("mesh_device", [pytest.param((8, 4), id="8x4_grid")], indirect=True)
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
 def test_line_all_gather_sharded_on_TG_rows_post_commit(
@@ -69,11 +68,10 @@ def test_line_all_gather_sharded_on_TG_rows_post_commit(
     layout,
     use_program_cache,
     function_level_defaults,
-    enable_async,
     replication_factor,
     num_iters=1,
 ):
-    if len(mesh_device.get_devices()) != 32:
+    if mesh_device.get_num_devices() != 32:
         pytest.skip("Not TG!")
     input_shard_spec = ttnn.ShardSpec(
         shard_grid,
@@ -92,7 +90,6 @@ def test_line_all_gather_sharded_on_TG_rows_post_commit(
         ttnn.BufferType.L1,
         use_program_cache,
         function_level_defaults,
-        enable_async=enable_async,
         input_shard_spec=input_shard_spec,
         num_iters=num_iters,
         num_all_gather_instances=replication_factor,
@@ -185,7 +182,6 @@ def test_line_all_gather_sharded_on_TG_rows_post_commit(
     ),
 )
 @pytest.mark.parametrize("replication_factor", [4])
-@pytest.mark.parametrize("enable_async", [True])
 @pytest.mark.parametrize("mesh_device", [pytest.param((8, 4), id="8x4_grid")], indirect=True)
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
 def test_line_all_gather_sharded_on_TG_cols_post_commit(
@@ -202,11 +198,10 @@ def test_line_all_gather_sharded_on_TG_cols_post_commit(
     layout,
     use_program_cache,
     function_level_defaults,
-    enable_async,
     replication_factor,
     num_iters=1,
 ):
-    if len(mesh_device.get_devices()) != 32:
+    if mesh_device.get_num_devices() != 32:
         pytest.skip("Not TG!")
 
     if num_links == 3 and input_dtype == ttnn.bfloat8_b and dim == 3:
@@ -230,7 +225,6 @@ def test_line_all_gather_sharded_on_TG_cols_post_commit(
         ttnn.BufferType.L1,
         use_program_cache,
         function_level_defaults,
-        enable_async=enable_async,
         num_iters=num_iters,
         input_shard_spec=input_shard_spec,
         num_all_gather_instances=replication_factor,
@@ -264,7 +258,6 @@ def test_line_all_gather_sharded_on_TG_cols_post_commit(
         ttnn.BufferType.L1,
     ],
 )
-@pytest.mark.parametrize("enable_async", [True])
 @pytest.mark.parametrize("replication_factor", [4])  # 1, 4])
 @pytest.mark.parametrize("mesh_device", [pytest.param((8, 4), id="8x4_grid")], indirect=True)
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
@@ -279,11 +272,10 @@ def test_line_all_gather_on_TG_cols_nightly(
     buffer_type,
     use_program_cache,
     function_level_defaults,
-    enable_async,
     replication_factor,
     num_iters=1,
 ):
-    if len(mesh_device.get_devices()) != 32:
+    if mesh_device.get_num_devices() != 32:
         pytest.skip("Not TG!")
     run_line_all_gather_on_TG_with_mesh_tensor_along_rows(
         mesh_device,
@@ -297,7 +289,6 @@ def test_line_all_gather_on_TG_cols_nightly(
         buffer_type,
         use_program_cache,
         function_level_defaults,
-        enable_async=enable_async,
         num_iters=num_iters,
         num_all_gather_instances=replication_factor,
         cluster_axis=0,

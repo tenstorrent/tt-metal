@@ -47,7 +47,7 @@ SETW:
 HEX/OCT/DEC:
 1e240361100123456)";
 
-static void RunTest(
+void RunTest(
     DPrintFixture* fixture,
     IDevice* device,
     bool active,

@@ -40,7 +40,7 @@
 #include <tt-metalium/base_types.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/buffer_types.hpp>
-#include <tt-metalium/circular_buffer_types.hpp>
+#include <tt-metalium/circular_buffer_config.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/data_types.hpp>
 #include <tt-metalium/device.hpp>
@@ -1104,7 +1104,7 @@ tt_metal::Program create_program_single_core(
             .compile_args = compute_kernel_args,
             .defines = mm_kernel_defines});
 
-    return std::move(program);
+    return program;
 }
 
 tt_metal::Program create_program(
@@ -1385,7 +1385,7 @@ tt_metal::Program create_program(
             tt_metal::SetRuntimeArgs(program, mm_in1_reader_writer_kernel_id, core, mm_in1_reader_writer_args);
         }
     }
-    return std::move(program);
+    return program;
 }
 
 std::vector<float> generate_fp32_random(uint32_t num_elems, int32_t rand_max_val = 100) {

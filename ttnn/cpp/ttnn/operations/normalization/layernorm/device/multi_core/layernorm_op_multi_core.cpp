@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <tt-metalium/circular_buffer_types.hpp>
+#include <tt-metalium/circular_buffer_config.hpp>
 #include "ttnn/operations/normalization/layernorm/device/layernorm_op.hpp"
 #include <tt-metalium/work_split.hpp>
 #include "ttnn/operations/math.hpp"
@@ -21,7 +21,9 @@ namespace ttnn::operations::normalization {
 
 namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {
-inline bool is_dram(const Tensor& input_tensor) { return input_tensor.memory_config().buffer_type == BufferType::DRAM; }
+inline bool is_dram(const Tensor& input_tensor) {
+    return input_tensor.memory_config().buffer_type() == BufferType::DRAM;
+}
 inline bool is_dram(const std::optional<const Tensor>& input_tensor) {
     return input_tensor.has_value() ? is_dram(input_tensor.value()) : true;
 }
@@ -690,13 +692,7 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
 
     // get sharded addr
     auto in0_addr = a.buffer()->address();
-    uint32_t in1_addr;
     bool b_sharded;
-    if (b) {
-        in1_addr = b.value().buffer()->address();
-    } else {
-        in1_addr = 0;
-    }
     auto out_addr = output.buffer()->address();
     // b, gamma, beta addr
     auto in1_dram_addr = b ? b.value().buffer()->address() : 0;
@@ -1480,14 +1476,13 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
     tt::tt_metal::CircularBufferConfig output_reshard_cb_config =
         tt::tt_metal::CircularBufferConfig(out_reshard_CB_size, {{output_reshard_cb_index, out_data_format}})
             .set_page_size(output_reshard_cb_index, out_single_tile_size);
-    CBHandle cb_output_reshard = 0;
     if (is_post_all_gather && !skip_write_back) {
         output_reshard_cb_config = output_reshard_cb_config.set_globally_allocated_address(*output.buffer());
-        cb_output_reshard =
+
             tt::tt_metal::CreateCircularBuffer(program, all_worker_and_storage_cores, output_reshard_cb_config);
     }
 
-    const auto& cores = corerange_to_cores(all_cores, all_cores.num_cores(), row_wise = row_wise);
+    const auto& cores = corerange_to_cores(all_cores, all_cores.num_cores(), row_wise);
 
     // Runtime Args
     std::vector<KernelHandle> writer_kernel_ids;

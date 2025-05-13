@@ -52,8 +52,7 @@ def test_binary_max_int32(input_shapes, low_a, high_a, low_b, high_b, device):
     )
     tt_result = ttnn.maximum(tt_in_a, tt_in_b)
     output_tensor = ttnn.to_torch(tt_result)
-    pcc = ttnn.pearson_correlation_coefficient(golden, output_tensor)
-    assert pcc == 1
+    assert torch.equal(golden, output_tensor)
 
 
 @pytest.mark.parametrize(
@@ -95,8 +94,7 @@ def test_binary_max_fill_val_int32(input_shapes, input_a_val, input_b_val, devic
 
     tt_result = ttnn.maximum(tt_in_a, tt_in_b)
     output_tensor = ttnn.to_torch(tt_result)
-    pcc = ttnn.pearson_correlation_coefficient(golden, output_tensor)
-    assert pcc == 1
+    assert torch.equal(golden, output_tensor)
 
 
 @pytest.mark.parametrize(
@@ -145,8 +143,7 @@ def test_binary_max_int32_bcast(input_shape_a, input_shape_b, low_a, high_a, low
     )
     tt_result = ttnn.maximum(tt_in_a, tt_in_b, use_legacy=False)
     output_tensor = ttnn.to_torch(tt_result)
-    pcc = ttnn.pearson_correlation_coefficient(golden, output_tensor)
-    assert pcc == 1
+    assert torch.equal(golden, output_tensor)
 
 
 @pytest.mark.parametrize(
@@ -203,8 +200,7 @@ def test_binary_max_int32_opt(input_shapes, low_a, high_a, low_b, high_b, device
 
     ttnn.maximum(tt_in_a, tt_in_b, output_tensor=tt_out, queue_id=cq_id)
     output_tensor = ttnn.to_torch(tt_out)
-    pcc = ttnn.pearson_correlation_coefficient(golden, output_tensor)
-    assert pcc == 1
+    assert torch.equal(golden, output_tensor)
 
 
 @pytest.mark.parametrize(

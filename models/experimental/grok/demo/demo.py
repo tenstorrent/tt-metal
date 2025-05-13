@@ -118,7 +118,7 @@ def run_grok_demo(user_input, batch_size, mesh_device, instruct_mode):
         input_prompts = load_inputs(user_input, 32)
 
     # Load model args, weights, and tokenizer
-    model_args = TtModelArgs(mesh_device.get_device(0), instruct=instruct_mode)
+    model_args = TtModelArgs(mesh_device, instruct=instruct_mode)
     tokenizer = Tokenizer(model_args.tokenizer_path)
 
     model_args.n_layers = 32  # Full model
@@ -201,7 +201,7 @@ def run_grok_demo(user_input, batch_size, mesh_device, instruct_mode):
 
     # TODO Debug (only device 0 is doing argmax, otherwise it throws an error)
     # Alternatively, send the output back to device: ttnn.Tensor.to()
-    ttnn.SetDefaultDevice(mesh_device.get_device(0))
+    ttnn.SetDefaultDevice(mesh_device)
 
     # Keep running inference as long as there is a user in the batch still decoding or max tokens per user are decoded
     for iteration in range(max_generated_tokens):

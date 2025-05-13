@@ -14,9 +14,10 @@ runs:
       run: |
         echo "HOSTNAME=$(hostname)" >> $GITHUB_ENV
         echo "TIMESTAMP=$(date +'%Y%m%d%H%M%S')" >> $GITHUB_ENV
-    - name: Determine Docker Tag to use
+    - name: Generate System Logs
       shell: bash
       run: |
+        set +e
         rm -rf ~/run-log
         mkdir -p ~/run-log/
         sudo dmesg > ~/run-log/${{ env.TIMESTAMP}}_${{ env.HOSTNAME }}_dmesg.log
@@ -24,7 +25,9 @@ runs:
         sudo lshw > ~/run-log/${{ env.TIMESTAMP}}_${{ env.HOSTNAME }}_lshw.log
     - name: 'Tar files'
       shell: bash
-      run: tar -cvf ~/run-log/sys_logs.tar ~/run-log/${{ env.TIMESTAMP}}_${{ env.HOSTNAME }}_*
+      run: |
+        set +e
+        tar -cvf ~/run-log/sys_logs.tar ~/run-log/${{ env.TIMESTAMP}}_${{ env.HOSTNAME }}_*
     - name: 'Upload Artifact'
       uses: actions/upload-artifact@v4
       with:

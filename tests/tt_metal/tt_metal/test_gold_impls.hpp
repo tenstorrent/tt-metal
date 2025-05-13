@@ -174,4 +174,4 @@ inline std::vector<uint16_t> gold_bmm(
     return result;
 }
 
-typedef BcastOp EltwiseOp;
+using EltwiseOp = BcastOp;

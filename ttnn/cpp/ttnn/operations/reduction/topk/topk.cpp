@@ -23,12 +23,7 @@ namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {
 
 uint32_t get_nearest_supported_k_value(uint32_t k) {
-    // LLK only support k = 32, 64 for now
-    if (k <= 32) {
-        return 32;
-    } else {
-        return 64;
-    }
+    return tt::constants::TILE_WIDTH * tt::div_up(k, tt::constants::TILE_WIDTH);
 }
 
 // one stop for all transformations needed after executing top-k
@@ -48,8 +43,9 @@ std::vector<Tensor> post_topk_transform_tensor(
     Shape final_lshape = original_lshape;
     final_lshape[dim] = std::min(original_lshape[dim], k);
 
-    // case 1 : K is not a supported shape
+    // K is not a supported shape
     if (adjusted_k != k) {
+        // slicing into padded shapes that will allow reshape below to work
         auto output_shape = result[0].get_padded_shape();
         ttnn::SmallVector<uint32_t> step = {1, 1, 1, 1};
         ttnn::SmallVector<uint32_t> start_index = {0, 0, 0, 0};
@@ -58,7 +54,7 @@ std::vector<Tensor> post_topk_transform_tensor(
         result[1] = ttnn::slice(result[1], start_index, end_index, step, input_memory_config);
     }
 
-    // case 2 : rank is not 4
+    // rank is not 4
     if (orig_rank < 4) {
         result[0] = ttnn::squeeze_from_4D(result[0], orig_rank);
         result[1] = ttnn::squeeze_from_4D(result[1], orig_rank);
@@ -69,10 +65,28 @@ std::vector<Tensor> post_topk_transform_tensor(
         result[1] = ttnn::reshape(result[1], ttnn::Shape{result_shape});
     }
 
-    // case 3 : dim is not last index
+    // dim is not last index
     if (!is_dim_last_idx) {
         result[0] = ttnn::transpose(result[0], dim, -1, input_tensor.memory_config());
         result[1] = ttnn::transpose(result[1], dim, -1, input_tensor.memory_config());
+    }
+
+    // final slice based on desired logical shape to fix up output shape after rank as already been fixed
+    if (result[0].get_logical_shape() != final_lshape) {
+        int rank = final_lshape.rank();
+
+        ttnn::SmallVector<uint32_t> step;
+        ttnn::SmallVector<uint32_t> start_index;
+        ttnn::SmallVector<uint32_t> end_index;
+
+        for (int i = 0; i < rank; i++) {
+            step.push_back(1);
+            start_index.push_back(0);
+            end_index.push_back(final_lshape[i]);
+        }
+
+        result[0] = ttnn::slice(result[0], start_index, end_index, step, input_memory_config);
+        result[1] = ttnn::slice(result[1], start_index, end_index, step, input_memory_config);
     }
 
     TT_FATAL(
@@ -130,14 +144,6 @@ std::vector<Tensor> ExecuteTopK::invoke(
         adjusted_k,
         original_lshape,
         input_memory_config);
-}
-
-std::vector<Tensor> ExecuteTopK::create_async_output_tensors(
-    const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_inputs) {
-    const auto& input_tensor = input_tensors.at(0);
-    return {
-        Tensor(tt::tt_metal::operation::get_workers_for_op_output({input_tensor})),
-        Tensor(tt::tt_metal::operation::get_workers_for_op_output({input_tensor}))};
 }
 
 }  // namespace ttnn::operations::reduction

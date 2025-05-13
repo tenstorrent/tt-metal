@@ -7,7 +7,7 @@
 namespace ttnn::operations::data_movement::reshape::detail {
 
 struct SegmentMapData {
-    typedef uint32_t value_type;
+    using value_type = uint32_t;
 
     value_type input_page_index;
     value_type input_page_offset;

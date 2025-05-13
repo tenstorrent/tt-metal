@@ -677,6 +677,51 @@ ALWI void unary_ne_tile_int32(uint32_t idst, uint32_t param0) {
     MATH((llk_math_eltwise_unary_sfpu_unary_ne_int32<APPROX>(idst, param0)));
 }
 
+// unary eq : if x == value --> 1.0, else 0.0
+// clang-format off
+/**
+ * Performs element-wise computation of:  result = 1.0 if x==value , where x is each element of a tile
+ * in DST register at index tile_index. The value is provided as const param0 The DST register buffer must be in
+ * acquired state via *acquire_dst* call. This call is blocking and is only
+ * available on the compute engine.
+ *
+ * Return value: None
+ *
+ * | Argument        | Description                                                                | Type     | Valid Range                                           | Required |
+ * |-----------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
+ * | idst            | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
+ * | param0          | The value to be compared with the input tensor                             | uint32_t |                                                       | True     |
+ */
+// clang-format on
+ALWI void unary_eq_tile(uint32_t idst, uint32_t param0) {
+    MATH((llk_math_eltwise_unary_sfpu_unary_eq<APPROX>(idst, param0)));
+}
+
+/**
+ * Please refer to documentation for any_init.
+ */
+ALWI void unary_eq_tile_init() { MATH((llk_math_eltwise_unary_sfpu_unary_eq_init<APPROX>())); }
+
+// unary eq : if x == value --> 1, else 0
+// clang-format off
+/**
+ * Performs element-wise computation of:  result = 1 if x==value , where x is each element of a tile
+ * in DST register at index tile_index. The value is provided as const param0 The DST register buffer must be in
+ * acquired state via *acquire_dst* call. This call is blocking and is only
+ * available on the compute engine.
+ *
+ * Return value: None
+ *
+ * | Argument        | Description                                                                | Type     | Valid Range                                           | Required |
+ * |-----------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
+ * | idst            | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
+ * | param0          | The value to be compared with the input tensor                             | uint32_t |                                                       | True     |
+ */
+// clang-format on
+ALWI void unary_eq_tile_int32(uint32_t idst, uint32_t param0) {
+    MATH((llk_math_eltwise_unary_sfpu_unary_eq_int32<APPROX>(idst, param0)));
+}
+
 // expm1 : (exp(x) - 1)
 // clang-format off
 /**
@@ -1009,6 +1054,30 @@ ALWI void unary_lt_tile(uint32_t idst, uint32_t param0) {
  * Please refer to documentation for any_init.
  */
 ALWI void unary_lt_tile_init() { MATH((llk_math_eltwise_unary_sfpu_unary_lt_init<APPROX>())); }
+
+// clang-format off
+/**
+ * Treats pairs of numbers as complex numbers and rotates them 90 degrees
+ * in the complex plane. The operation is performed on a tile
+ * in DST register at index tile_index. The DST register buffer must be in
+ * acquired state via *acquire_dst* call. This call is blocking and is only
+ * available on the compute engine.
+ *
+ * Return value: None
+ *
+ * | Argument        | Description                                                                | Type     | Valid Range                                           | Required |
+ * |-----------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
+ * | idst            | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
+ */
+// clang-format on
+ALWI void alt_complex_rotate90_tile(uint32_t idst) {
+    MATH((llk_math_eltwise_unary_sfpu_alt_complex_rotate90<APPROX>(idst)));
+}
+
+/**
+ * Please refer to documentation for any_init.
+ */
+ALWI void alt_complex_rotate90_tile_init() { MATH((llk_math_eltwise_unary_sfpu_alt_complex_rotate90_init<APPROX>())); }
 
 // unary_min : if x < value --> x, else value
 // clang-format off

@@ -25,6 +25,7 @@
 #include <tt-metalium/assert.hpp>
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/buffer_types.hpp>
+#include <tt-metalium/buffer_distribution_spec.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/hal_types.hpp>
 #include <tt-metalium/sub_device_types.hpp>
@@ -146,7 +147,7 @@ struct BufferConfig {
     TensorMemoryLayout buffer_layout = TensorMemoryLayout::INTERLEAVED;
 };
 
-typedef BufferConfig InterleavedBufferConfig;
+using InterleavedBufferConfig = BufferConfig;
 
 // copied from above instead of using inheritance such that we can use
 // designator constructor
@@ -211,6 +212,19 @@ public:
         std::optional<bool> bottom_up = std::nullopt,
         std::optional<SubDeviceId> sub_device_id = std::nullopt);
 
+    // Forked APIs for BufferDistributionSpec
+    // - Only usable for tensor allocation in OPs
+    // TODO: Need to support proper read/write for buffers with BufferDistributionSpec
+    static std::shared_ptr<Buffer> create(
+        IDevice* device,
+        DeviceAddr size,
+        DeviceAddr page_size,
+        BufferType buffer_type,
+        const BufferDistributionSpec& buffer_distribution_spec,
+        std::optional<bool> bottom_up = std::nullopt,
+        std::optional<SubDeviceId> sub_device_id = std::nullopt);
+    // TODO: Add create with address or just port over existing one?
+
     Buffer(const Buffer& other) = delete;
     Buffer& operator=(const Buffer& other) = delete;
     Buffer(Buffer&& other) = delete;
@@ -255,6 +269,27 @@ public:
     DeviceAddr aligned_size_per_bank() const;
 
     // SHARDED API STARTS HERE
+    // If buffer contains BufferDistributionSpec, it is considered ND sharded
+    bool is_nd_sharded() const;
+
+    /* BankDataMapping is a struct that provides an explicit mapping of data per bank:
+     * - banks: Logical coordinates of banks to use
+     * - bank_mapping_in_bytes: Mapping of data in bytes for each bank; it is a list of ChunkMapping which contains:
+     *   - src: host address offset in bytes
+     *   - dst: bank address offset in bytes
+     *   - size: size of data in bytes
+     * Some notes:
+     * - Size of banks and bank_mapping_in_bytes must be equal, with each bank having a corresponding mapping
+     * - Each TargetData is a list of ChunkMapping which fully describes all data relevant to that bank
+     * - In Buffer, all ChunkMapping are in bytes and takes into account page size and aligned page size
+     * - Also see DistributionSpec class for more details about TargetData and ChunkMapping
+     */
+    struct BankDataMapping {
+        std::vector<CoreCoord> banks;
+        std::vector<DistributionSpec::TargetData> bank_mapping_in_bytes;
+    };
+    BankDataMapping get_bank_data_mapping();
+
     // TODO: WILL SEPARATE INTO SHARDED BUFFER CLASS
 
     DeviceAddr sharded_page_address(uint32_t bank_id, uint32_t page_index) const;
@@ -262,6 +297,7 @@ public:
     ShardSpecBuffer shard_spec() const;
     void set_shard_spec(const ShardSpecBuffer& shard_spec);
 
+    // TODO: Consolidate with interleaved and delete this (maybe get from BufferDistributionSpec)
     std::optional<uint32_t> num_cores() const;
 
     const std::shared_ptr<const BufferPageMapping>& get_buffer_page_mapping();
@@ -280,6 +316,7 @@ public:
         BufferType buffer_type,
         TensorMemoryLayout buffer_layout,
         const std::optional<ShardSpecBuffer>& shard_parameter,
+        const std::optional<BufferDistributionSpec>& buffer_distribution_spec,
         std::optional<bool> bottom_up,
         std::optional<SubDeviceId> sub_device_id,
         bool owns_data,
@@ -288,7 +325,6 @@ public:
 private:
     enum class AllocationStatus : uint8_t {
         ALLOCATION_REQUESTED,
-        ALLOCATION_FAILED,
         ALLOCATED,
         DEALLOCATED,
     };
@@ -297,7 +333,6 @@ private:
 
     // Deallocate is allowed to be called multiple times on the same buffer
     void deallocate();
-    static void deleter(Buffer* buffer);
     void deallocate_impl();
     friend void DeallocateBuffer(Buffer& buffer);
 
@@ -314,19 +349,32 @@ private:
     std::optional<SubDeviceManagerId> sub_device_manager_id_;
     Allocator* allocator_;
 
-    std::atomic<AllocationStatus> allocation_status_ = AllocationStatus::ALLOCATION_REQUESTED;
+    AllocationStatus allocation_status_ = AllocationStatus::ALLOCATION_REQUESTED;
+    bool hooked_allocation_ = false;
     DeviceAddr address_ = 0;
-    mutable std::mutex allocation_mutex_;
-    mutable std::condition_variable allocation_cv_;
-    // Used exclusively for is_allocated() method
-    std::atomic<bool> deallocation_requested_ = false;
+
+    // Private helper function to commonize code path for buffer creation with either ShardSpecBuffer or
+    // BufferDistributionSpec
+    // TODO: Delete if/when we remove ShardSpecBuffer
+    static std::shared_ptr<Buffer> create_buffer(
+        IDevice* device,
+        DeviceAddr size,
+        DeviceAddr page_size,
+        const BufferType buffer_type,
+        const TensorMemoryLayout buffer_layout,
+        const std::optional<ShardSpecBuffer>& shard_parameters,
+        const std::optional<BufferDistributionSpec>& buffer_distribution_spec,
+        const std::optional<bool> bottom_up,
+        const std::optional<SubDeviceId> sub_device_id);
 
     // These members must be only accessed on the device worker thread
     DeviceAddr page_size_;  // Size of unit being interleaved. For non-interleaved buffers: size == page_size
     std::optional<ShardSpecBuffer> shard_parameters_;
     std::shared_ptr<const BufferPageMapping> buffer_page_mapping_;
 
-    std::weak_ptr<Buffer> weak_self;
+    std::optional<BufferDistributionSpec> buffer_distribution_spec_;
+    std::optional<std::vector<DistributionSpec::TargetData>> bank_mapping_in_bytes_ = std::nullopt;
+
     size_t unique_id_ = 0;
     static std::atomic<size_t> next_unique_id;
 };

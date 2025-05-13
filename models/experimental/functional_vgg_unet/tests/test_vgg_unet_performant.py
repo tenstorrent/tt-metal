@@ -20,11 +20,9 @@ def test_run_vgg_unet_inference(device, use_program_cache, model_location_genera
 
 @run_for_wormhole_b0()
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 32768, "trace_region_size": 1843200}], indirect=True)
-@pytest.mark.parametrize("enable_async_mode", (False, True), indirect=True)
 def test_run_vgg_unet_trace_inference(
     device,
     use_program_cache,
-    enable_async_mode,
     model_location_generator,
 ):
     run_vgg_unet_trace_inference(
@@ -37,11 +35,9 @@ def test_run_vgg_unet_trace_inference(
 @pytest.mark.parametrize(
     "device_params", [{"l1_small_size": 32768, "trace_region_size": 3686400, "num_command_queues": 2}], indirect=True
 )
-@pytest.mark.parametrize("enable_async_mode", (False, True), indirect=True)
 def test_run_vgg_unet_trace_2cqs_inference(
     device,
     use_program_cache,
-    enable_async_mode,
     model_location_generator,
 ):
     vgg_unet_trace_2cq = VggUnetTrace2CQ()

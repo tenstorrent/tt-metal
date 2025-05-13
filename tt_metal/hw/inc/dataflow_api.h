@@ -377,6 +377,7 @@ void cb_reserve_back(int32_t operand, int32_t num_pages) {
     do {
         // uint16_t's here because Tensix updates the val at tiles_acked_ptr as uint16 in llk_pop_tiles
         // TODO: I think we could have TRISC update tiles_acked_ptr, and we wouldn't need uint16 here
+        invalidate_l1_cache();
         uint16_t pages_acked = (uint16_t)reg_read(pages_acked_ptr);
         uint16_t free_space_pages_wrap =
             get_local_cb_interface(operand).fifo_num_pages - (pages_received - pages_acked);
@@ -1156,73 +1157,6 @@ inline void noc_async_write_multicast_loopback_src(
     WAYPOINT("NMLD");
 }
 
-// clang-format off
-/**
- * Initiates an asynchronous write from a source address in L1 memory on the
- * Tensix core executing this function call to an L-shaped destination which is defined by
- * a grid and an exclusion zone.
- * The destinations are specified using a uint64_t encoding referencing an
- * on-chip grid of nodes located at NOC coordinate range
- * (x_start,y_start,x_end,y_end) and a local address created using
- * *get_noc_multicast_addr* function. Also, *see noc_async_write_barrier*.
- * Similarly, the exclusion zone is specified using uint32_t encoding referencing
- * an on-chip core and directions relative to it created using *get_noc_exclude_region* function.
- *
- * The destination nodes can only be a set of Tensix cores + L1 memory address.
- * The destination nodes must form an L-shaped grid (where dst_noc_addr_multicast defines a grid
- * and exclude_region define a subgrid to exclude, the inner part of the L). The destination L1
- * memory address must be the same on all destination nodes.
- *
- * With this API, the multicast sender cannot be part of the multicast
- * destinations.
- *
- * Note: The number of destinations needs to be non-zero. Besides that,
- * there is no restriction on the number of destinations, i.e. the
- * multicast destinations can span the full chip. However, as mentioned
- * previously, the multicast source cannot be part of the destinations. So, the
- * maximum number of destinations is number of cores - 1.
- *
- * Return value: None
- *
- * NOTE: only supported on Blackhole
- *
- * | Argument               | Description                                                               | Type     | Valid Range                                                   | Required |
- * |------------------------|---------------------------------------------------------------------------|----------|---------------------------------------------------------------|----------|
- * | src_local_l1_addr      | Source address in local L1 memory                                         | uint32_t | 0..1MB                                                        | True     |
- * | dst_noc_addr_multicast | Encoding of the destinations nodes (x_start,y_start,x_end,y_end)+address  | uint64_t | DOX-TODO(insert a reference to what constitutes valid coords) | True     |
- * | size                   | Size of data transfer in bytes                                            | uint32_t | 0..1MB                                                        | True     |
- * | num_dests              | Number of destinations that the multicast source is targetting            | uint32_t | 0..(number of cores - 1)                                      | True     |
- * | exclude_region         | Encoding of the excluded region (x_start,y_start,x_direction,y_direction) | uint32_t | DOX-TODO(insert a reference to what constitutes valid coords) | True     |
- */
-// clang-format on
-#ifdef ARCH_BLACKHOLE
-inline void noc_async_write_multicast_exclude_region(
-    std::uint32_t src_local_l1_addr,
-    std::uint64_t dst_noc_addr_multicast,
-    std::uint32_t size,
-    std::uint32_t num_dests,
-    std::uint32_t exclude_region,
-    bool linked = false,
-    bool multicast_path_reserve = true,
-    uint8_t noc = noc_index) {
-    WAYPOINT("NMEW");
-    DEBUG_SANITIZE_NOC_MULTI_WRITE_TRANSACTION(noc, dst_noc_addr_multicast, src_local_l1_addr, size);
-    ncrisc_noc_fast_write_any_len_exclude_region<noc_mode>(
-        noc,
-        write_cmd_buf,
-        src_local_l1_addr,
-        dst_noc_addr_multicast,
-        size,
-        NOC_MULTICAST_WRITE_VC,
-        true,
-        linked,
-        num_dests,
-        multicast_path_reserve,
-        exclude_region);
-    WAYPOINT("NMED");
-}
-#endif
-
 /**
  * This blocking call waits for all the outstanding enqueued *noc_async_read*
  * calls issued on the current Tensix core to complete. After returning from
@@ -1462,7 +1396,7 @@ void noc_semaphore_set(volatile tt_l1_ptr uint32_t* sem_addr, uint32_t val) {
  * Unlike using \a noc_async_write, there are also no address alignment concerns.
  * Also, see \a noc_async_write_barrier.
  *
- * The destination node can be either a DRAM bank, Tensix core+L1 memory
+ * The destination node can be either a Tensix core+L1 memory
  * address or a PCIe controller.
  *
  * Return value: None
@@ -1475,9 +1409,12 @@ void noc_semaphore_set(volatile tt_l1_ptr uint32_t* sem_addr, uint32_t val) {
  */
 // clang-format on
 template <bool write_to_stream_reg = false, bool posted = false>
-FORCE_INLINE void noc_inline_dw_write(uint64_t addr, uint32_t val, uint8_t be = 0xF, uint8_t noc = noc_index) {
+FORCE_INLINE void noc_inline_dw_write(
+    uint64_t addr, uint32_t val, uint8_t be = 0xF, uint8_t noc = noc_index, uint8_t vc = NOC_UNICAST_WRITE_VC) {
     WAYPOINT("NWIW");
     DEBUG_SANITIZE_NOC_ADDR(noc, addr, 4);
+    // This API does not support DRAM addresses
+    DEBUG_SANITIZE_NO_DRAM_ADDR(noc, addr, 4);
 #ifdef ARCH_BLACKHOLE
     // On Blackhole issuing inline writes and atomics requires all 4 memory ports to accept the transaction at the same
     // time. If one port on the receipient has no back-pressure then the transaction will hang because there is no
@@ -1491,7 +1428,7 @@ FORCE_INLINE void noc_inline_dw_write(uint64_t addr, uint32_t val, uint8_t be = 
             val,
             addr,
             be,  // byte-enable
-            NOC_UNICAST_WRITE_VC,
+            vc,
             false,  // mcast
             false   // posted
         );
@@ -1511,7 +1448,7 @@ FORCE_INLINE void noc_inline_dw_write(uint64_t addr, uint32_t val, uint8_t be = 
         src_addr,
         addr,
         4,
-        NOC_UNICAST_WRITE_VC,
+        vc,
         false,  // mcast
         false,  // linked
         1,      // num_dests
@@ -1526,7 +1463,7 @@ FORCE_INLINE void noc_inline_dw_write(uint64_t addr, uint32_t val, uint8_t be = 
         val,
         addr,
         be,  // byte-enable
-        NOC_UNICAST_WRITE_VC,
+        vc,
         false,  // mcast
         posted  // posted
     );
@@ -1537,13 +1474,17 @@ FORCE_INLINE void noc_inline_dw_write(uint64_t addr, uint32_t val, uint8_t be = 
 // on BH this api can only write to stream register, writing to L1 will cause hangs!
 template <bool posted = false>
 FORCE_INLINE void noc_inline_dw_write_set_state(
-    uint64_t addr, uint8_t be = 0xF, uint8_t cmd_buf = write_at_cmd_buf, uint8_t noc = noc_index) {
+    uint64_t addr,
+    uint8_t be = 0xF,
+    uint8_t cmd_buf = write_at_cmd_buf,
+    uint8_t noc = noc_index,
+    uint8_t vc = NOC_UNICAST_WRITE_VC) {
     WAYPOINT("NWIW");
     // DEBUG_SANITIZE_NOC_ADDR is not needed here because it doesn't send out the request
     // The address could be set here or later in noc_inline_dw_write_with_state
 
-    uint32_t noc_cmd_field = NOC_CMD_VC_STATIC | NOC_CMD_STATIC_VC(NOC_UNICAST_WRITE_VC) | NOC_CMD_CPY | NOC_CMD_WR |
-                             NOC_CMD_WR_INLINE | 0x0 | (posted ? 0x0 : NOC_CMD_RESP_MARKED);
+    uint32_t noc_cmd_field = NOC_CMD_VC_STATIC | NOC_CMD_STATIC_VC(vc) | NOC_CMD_CPY | NOC_CMD_WR | NOC_CMD_WR_INLINE |
+                             0x0 | (posted ? 0x0 : NOC_CMD_RESP_MARKED);
 
     uint32_t be32 = be;
     uint32_t be_shift = (addr & (NOC_WORD_BYTES - 1));
@@ -1613,12 +1554,13 @@ FORCE_INLINE void noc_inline_dw_write_with_state(
  */
 // clang-format on
 template <bool posted = false>
-FORCE_INLINE void noc_semaphore_inc(uint64_t addr, uint32_t incr, uint8_t noc_id = noc_index) {
+FORCE_INLINE void noc_semaphore_inc(
+    uint64_t addr, uint32_t incr, uint8_t noc_id = noc_index, uint8_t vc = NOC_UNICAST_WRITE_VC) {
     /*
     [REFER TO grayskull/noc/noc.h for the documentation of noc_atomic_increment()]
     Generic increment with 32-bit wrap.
   */
-    RECORD_NOC_EVENT_WITH_ADDR(NocEventType::SEMAPHORE_INC,addr,0, NOC_UNICAST_WRITE_VC);
+    RECORD_NOC_EVENT_WITH_ADDR(NocEventType::SEMAPHORE_INC, addr, 0, vc);
 
     WAYPOINT("NSIW");
     DEBUG_SANITIZE_NOC_ADDR(noc_id, addr, 4);
@@ -1627,7 +1569,7 @@ FORCE_INLINE void noc_semaphore_inc(uint64_t addr, uint32_t incr, uint8_t noc_id
         noc_id,
         write_at_cmd_buf,
         addr,
-        NOC_UNICAST_WRITE_VC,
+        vc,
         incr,
         31 /*wrap*/,
         false /*linked*/,
@@ -1738,12 +1680,15 @@ void noc_async_read_barrier_with_trid(uint32_t trid, uint8_t noc = noc_index) {
 
 template <bool posted = false>
 FORCE_INLINE void noc_async_write_one_packet_with_trid_set_state(
-    std::uint64_t dst_noc_addr, uint8_t cmd_buf = write_cmd_buf, uint8_t noc = noc_index) {
+    std::uint64_t dst_noc_addr,
+    uint8_t cmd_buf = write_cmd_buf,
+    uint8_t noc = noc_index,
+    uint8_t vc = NOC_UNICAST_WRITE_VC) {
     WAYPOINT("NAWW");
-    RECORD_NOC_EVENT_WITH_ADDR(NocEventType::WRITE_WITH_TRID_SET_STATE, dst_noc_addr, 0, NOC_UNICAST_WRITE_VC);
+    RECORD_NOC_EVENT_WITH_ADDR(NocEventType::WRITE_WITH_TRID_SET_STATE, dst_noc_addr, 0, vc);
     while (!noc_cmd_buf_ready(noc, cmd_buf));
     WAYPOINT("NAWD");
-    uint32_t noc_cmd_field = NOC_CMD_CPY | NOC_CMD_WR | NOC_CMD_VC_STATIC | NOC_CMD_STATIC_VC(NOC_UNICAST_WRITE_VC) |
+    uint32_t noc_cmd_field = NOC_CMD_CPY | NOC_CMD_WR | NOC_CMD_VC_STATIC | NOC_CMD_STATIC_VC(vc) |
                              0x0 |  // (linked ? NOC_CMD_VC_LINKED : 0x0)
                              0x0 |  // (mcast ? (NOC_CMD_PATH_RESERVE | NOC_CMD_BRCST_PACKET) : 0x0)
                              (posted ? 0 : NOC_CMD_RESP_MARKED);
@@ -1781,7 +1726,7 @@ FORCE_INLINE void noc_async_write_one_packet_with_trid_with_state(
     WAYPOINT("NWPD");
 
     // In order to sanitize, need to grab full noc addr + xfer size from state.
-    DEBUG_SANITIZE_NOC_WRITE_TRANSACTION_WITH_ADDR_AND_SIZE_STATE(noc, dst_noc_addr, src_local_l1_addr);
+    DEBUG_SANITIZE_NOC_WRITE_TRANSACTION_WITH_ADDR_STATE(noc, dst_noc_addr, src_local_l1_addr, size);
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_PACKET_TAG, NOC_PACKET_TAG_TRANSACTION_ID(trid));
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_TARG_ADDR_LO, src_local_l1_addr);
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_RET_ADDR_LO, (uint32_t)dst_noc_addr);
@@ -1806,7 +1751,8 @@ FORCE_INLINE void noc_async_write_one_packet_with_trid(
     std::uint32_t size,
     std::uint32_t trid,
     uint8_t cmd_buf = write_cmd_buf,
-    uint8_t noc = noc_index) {
+    uint8_t noc = noc_index,
+    uint8_t vc = NOC_UNICAST_WRITE_VC) {
     if constexpr (noc_mode == DM_DYNAMIC_NOC) {
         if constexpr (update_counter) {
             if constexpr (posted) {
@@ -1823,7 +1769,7 @@ FORCE_INLINE void noc_async_write_one_packet_with_trid(
     while (!noc_cmd_buf_ready(noc, cmd_buf));
     WAYPOINT("NWPD");
 
-    uint32_t noc_cmd_field = NOC_CMD_CPY | NOC_CMD_WR | NOC_CMD_VC_STATIC | NOC_CMD_STATIC_VC(NOC_UNICAST_WRITE_VC) |
+    uint32_t noc_cmd_field = NOC_CMD_CPY | NOC_CMD_WR | NOC_CMD_VC_STATIC | NOC_CMD_STATIC_VC(vc) |
                              0x0 |  // (linked ? NOC_CMD_VC_LINKED : 0x0)
                              0x0 |  // (mcast ? (NOC_CMD_PATH_RESERVE | NOC_CMD_BRCST_PACKET) : 0x0)
                              (posted ? 0 : NOC_CMD_RESP_MARKED);

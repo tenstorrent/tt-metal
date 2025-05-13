@@ -86,6 +86,7 @@ class RunTimeOptions {
 
     bool is_kernel_dir_env_var_set = false;
     std::string kernel_dir;
+    std::string system_kernel_dir;
 
     bool build_map_enabled = false;
 
@@ -106,6 +107,7 @@ class RunTimeOptions {
     bool profiler_enabled = false;
     bool profile_dispatch_cores = false;
     bool profiler_sync_enabled = false;
+    bool profiler_mid_run_tracy_push = false;
     bool profiler_buffer_usage_enabled = false;
     bool profiler_noc_events_enabled = false;
     std::string profiler_noc_events_report_path;
@@ -116,6 +118,7 @@ class RunTimeOptions {
     bool kernels_early_return = false;
 
     bool clear_l1 = false;
+    bool clear_dram = false;
 
     bool skip_loading_fw = false;
     bool skip_reset_cores_on_init = false;
@@ -145,6 +148,14 @@ class RunTimeOptions {
 
     bool skip_eth_cores_with_retrain = false;
 
+    // Relaxed ordering on BH allows loads to bypass stores when going to separate addresses
+    // e.g. Store A followed by Load A will be unchanges but Store A followed by Load B may return B before A is written
+    // This option will disable the relaxed ordering
+    bool disable_relaxed_memory_ordering = false;
+
+    // Buffer in DRAM to store various ARC processor samples. Feature not ready yet
+    uint32_t arc_debug_buffer_size = 0;
+
 public:
     RunTimeOptions();
     RunTimeOptions(const RunTimeOptions&) = delete;
@@ -158,6 +169,8 @@ public:
 
     inline bool is_kernel_dir_specified() const { return this->is_kernel_dir_env_var_set; }
     const std::string& get_kernel_dir() const;
+    // Location where kernels are installed via package manager.
+    const std::string& get_system_kernel_dir() const;
 
     inline bool get_build_map_enabled() const { return build_map_enabled; }
 
@@ -292,6 +305,7 @@ public:
     inline bool get_profiler_enabled() const { return profiler_enabled; }
     inline bool get_profiler_do_dispatch_cores() const { return profile_dispatch_cores; }
     inline bool get_profiler_sync_enabled() const { return profiler_sync_enabled; }
+    inline bool get_profiler_tracy_mid_run_push() const { return profiler_mid_run_tracy_push; }
     inline bool get_profiler_buffer_usage_enabled() const { return profiler_buffer_usage_enabled; }
     inline bool get_profiler_noc_events_enabled() const { return profiler_noc_events_enabled; }
     inline std::string get_profiler_noc_events_report_path() const { return profiler_noc_events_report_path; }
@@ -304,6 +318,9 @@ public:
 
     inline bool get_clear_l1() const { return clear_l1; }
     inline void set_clear_l1(bool clear) { clear_l1 = clear; }
+
+    inline bool get_clear_dram() const { return clear_dram; }
+    inline void set_clear_dram(bool clear) { clear_dram = clear; }
 
     inline bool get_skip_loading_fw() const { return skip_loading_fw; }
     inline bool get_skip_reset_cores_on_init() const { return skip_reset_cores_on_init; }
@@ -325,6 +342,8 @@ public:
 
     inline bool get_hw_cache_invalidation_enabled() const { return this->enable_hw_cache_invalidation; }
 
+    inline bool get_relaxed_memory_ordering_disabled() const { return this->disable_relaxed_memory_ordering; }
+
     tt_metal::DispatchCoreConfig get_dispatch_core_config() const;
 
     inline bool get_skip_deleting_built_cache() const { return skip_deleting_built_cache; }
@@ -335,6 +354,9 @@ public:
     inline bool get_erisc_iram_enabled() const { return erisc_iram_enabled; }
 
     inline bool get_skip_eth_cores_with_retrain() const { return skip_eth_cores_with_retrain; }
+
+    inline uint32_t get_arc_debug_buffer_size() { return arc_debug_buffer_size; }
+    inline void set_arc_debug_buffer_size(uint32_t size) { arc_debug_buffer_size = size; }
 
 private:
     // Helper functions to parse feature-specific environment vaiables.

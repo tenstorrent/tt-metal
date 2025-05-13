@@ -252,7 +252,7 @@ SliceWriteRuntimeArgs get_slice_write_runtime_args_rm_sharded_input(
     auto num_cores_total = cores.size();
 
     bool rm_orientation = shard_spec.orientation == ShardOrientation::ROW_MAJOR;
-    bool is_block_sharded = input_tensor.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED;
+    bool is_block_sharded = input_tensor.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED;
 
     auto total_num_input_sticks = input_tensor.volume() / input_shape[-1];
     const auto num_sticks_per_core = shard_spec.shape[0];
@@ -277,7 +277,6 @@ SliceWriteRuntimeArgs get_slice_write_runtime_args_rm_sharded_input(
             core_w_index = rm_orientation ? core.x : core.y;
             core_h_index = rm_orientation ? core.y : core.x;
         }
-        tt::log_debug(" Core : {}", core);
         const uint32_t num_sticks_read = core_h_index * num_sticks_per_core;
         const uint32_t width_offset = core_w_index * input_row_size_bytes;
 
@@ -291,8 +290,6 @@ SliceWriteRuntimeArgs get_slice_write_runtime_args_rm_sharded_input(
         }
         std::vector<uint32_t> writer_kernel_args = common_writer_kernel_args;
         writer_kernel_args[0] += width_offset;
-        tt::log_debug("Output address: {}", writer_kernel_args[0]);
-        tt::log_debug("Output Start ID: {}\n", start_id);
 
         uint32_t addr_offset = 5;  // output buffer addr, output_row_size_bytes, input_row_size_bytes, num_dims
         writer_kernel_args[addr_offset++] = start_id;
@@ -327,11 +324,11 @@ operation::ProgramWithCallbacks slice_write_rm_sharded_input_multi_core(
 
     TT_FATAL(input.shard_spec().has_value(), "Input tensor should be sharded");
     TT_FATAL(
-        input.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED ||
-            input.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED,
+        input.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED ||
+            input.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED,
         "Input tensor should be height or block sharded");
-    bool is_height_sharded = input.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED;
-    bool is_block_sharded = input.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED;
+    bool is_height_sharded = input.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED;
+    bool is_block_sharded = input.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED;
     auto shard_spec = input.shard_spec().value();
     auto input_cores = shard_spec.grid;
     bool rm_orientation = shard_spec.orientation == ShardOrientation::ROW_MAJOR;

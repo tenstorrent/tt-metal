@@ -359,43 +359,39 @@ def test_fold(act_shape, stride_h, stride_w, device):
     torch.testing.assert_allclose(actual, expected)
 
 
-@pytest.mark.skipif(is_wormhole_b0(), reason="Not enough cores for wormhole_b0")
-def test_fold_sharded(device):
+def test_fold_sharded(device, use_program_cache):
     torch.manual_seed(0)
 
-    shape = (20, 230, 115, 8)
-    N, H, W, C = shape
-    stride_h = 2
-    stride_w = 1
+    for run in range(2):
+        shape = (8, 224, 14, 64)
+        N, H, W, C = shape
+        stride_h = 16
+        stride_w = 1
 
-    torch_input = torch.randn(shape, dtype=torch.bfloat16)
+        torch_input = torch.randn(shape, dtype=torch.bfloat16)
 
-    expected = fold_torch(torch_input, stride_h, stride_w)
-    expected = expected.reshape(1, 1, -1, expected.shape[-1])
+        expected = fold_torch(torch_input, stride_h, stride_w)
+        expected = expected.reshape(1, 1, -1, expected.shape[-1])
 
-    shard_grid = ttnn.CoreRangeSet(
-        {
-            ttnn.CoreRange(
-                ttnn.CoreCoord(0, 0),
-                ttnn.CoreCoord(11, 7),
-            ),
-            ttnn.CoreRange(
-                ttnn.CoreCoord(0, 8),
-                ttnn.CoreCoord(3, 8),
-            ),
-        }
-    )
-    n_cores = 100
+        shard_grid = ttnn.CoreRangeSet(
+            {
+                ttnn.CoreRange(
+                    ttnn.CoreCoord(0, 0),
+                    ttnn.CoreCoord(7, 0),
+                ),
+            }
+        )
+        n_cores = 8
 
-    shard_spec = ttnn.ShardSpec(shard_grid, [N * H * W // n_cores, C], ttnn.ShardOrientation.ROW_MAJOR)
+        shard_spec = ttnn.ShardSpec(shard_grid, [N * H * W // n_cores, C], ttnn.ShardOrientation.ROW_MAJOR)
 
-    tt_input = torch2tt_tensor(
-        torch_input,
-        device,
-        ttnn.ROW_MAJOR_LAYOUT,
-        tt_memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard_spec),
-    )
-    tt_out = ttnn.fold(tt_input, stride_h, stride_w)
-    actual = tt2torch_tensor(tt_out)
+        tt_input = torch2tt_tensor(
+            torch_input,
+            device,
+            ttnn.ROW_MAJOR_LAYOUT,
+            tt_memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard_spec),
+        )
+        tt_out = ttnn.fold(tt_input, stride_h, stride_w)
+        actual = tt2torch_tensor(tt_out)
 
-    torch.testing.assert_allclose(actual, expected)
+        torch.testing.assert_allclose(actual, expected)

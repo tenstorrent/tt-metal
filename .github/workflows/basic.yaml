@@ -55,7 +55,7 @@ jobs:
           TT_METAL_WATCHER: 5
           TT_METAL_WATCHER_TEST_MODE: 1
         run: |
-          /usr/libexec/tt-metalium/validation/tt-metalium-validation-basic
+          /usr/bin/tt-metalium-validation-basic
 
       - name: workaround
         run: |
@@ -68,7 +68,7 @@ jobs:
         if: ${{ !cancelled() && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false) }}
         uses: phoenix-actions/test-reporting@f957cd93fc2d848d556fa0d03c57bc79127b6b5e # v15
         with:
-          name: Metalium ${{ matrix.platform }} basic tests
+          name: Metalium ${{ inputs.runner }} basic tests
           path: /work/test-reports/*.xml
           reporter: jest-junit
           working-directory: /work

@@ -20,6 +20,7 @@ namespace tt::tt_metal {
 class Event;
 class Program;
 class Kernel;
+class SystemMemoryManager;
 
 class CommandQueue {
 public:
@@ -76,7 +77,8 @@ public:
 
 struct ReadBufferDescriptor;
 struct ReadEventDescriptor;
-
-using CompletionReaderVariant = std::variant<std::monostate, ReadBufferDescriptor, ReadEventDescriptor>;
+struct ReadCoreDataDescriptor;
+using CompletionReaderVariant =
+    std::variant<std::monostate, ReadBufferDescriptor, ReadEventDescriptor, ReadCoreDataDescriptor>;
 
 }  // namespace tt::tt_metal

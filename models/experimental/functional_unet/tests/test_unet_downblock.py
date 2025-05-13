@@ -16,6 +16,7 @@ from models.experimental.functional_unet.tests.common import (
     check_pcc_conv,
     check_pcc_pool,
     is_n300_with_eth_dispatch_cores,
+    UNET_L1_SMALL_REGION_SIZE,
 )
 
 
@@ -29,7 +30,7 @@ from models.experimental.functional_unet.tests.common import (
         ("downblock4", 32, 132, 20),
     ],
 )
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": UNET_L1_SMALL_REGION_SIZE}], indirect=True)
 def test_unet_downblock(
     batch: int,
     groups: int,
@@ -73,10 +74,9 @@ def test_unet_downblock(
         ("downblock4", 32, 132, 20),
     ],
 )
-@pytest.mark.parametrize("enable_async_mode", (True,), indirect=True)
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": UNET_L1_SMALL_REGION_SIZE}], indirect=True)
 def test_unet_downblock_multi_device(
-    batch, groups, block_name, input_channels, input_height, input_width, mesh_device, reset_seeds, enable_async_mode
+    batch, groups, block_name, input_channels, input_height, input_width, mesh_device, reset_seeds
 ):
     if not is_n300_with_eth_dispatch_cores(mesh_device):
         pytest.skip("Test is only valid for N300")

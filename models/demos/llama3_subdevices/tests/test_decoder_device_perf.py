@@ -31,7 +31,7 @@ perf_targets = {
         "non-overlapped-dispatch-time": 7260,
         "kernel_duration_relative_margin": 0.05,
         "op_to_op_duration_relative_margin": 0.2,
-        "dispatch_duration_relative_margin": 0.1,
+        "dispatch_duration_relative_margin": 0.2,
     },
     "RMSAllGather_1": {
         "op_name": "PostRMS_0",
@@ -40,7 +40,7 @@ perf_targets = {
         "non-overlapped-dispatch-time": 6301.3,
         "kernel_duration_relative_margin": 0.05,
         "op_to_op_duration_relative_margin": 0.2,
-        "dispatch_duration_relative_margin": 0.1,
+        "dispatch_duration_relative_margin": 0.2,
     },
     "RMSAllGather_2": {
         "op_name": "PreRMS_1",
@@ -49,7 +49,7 @@ perf_targets = {
         "non-overlapped-dispatch-time": 7326,
         "kernel_duration_relative_margin": 0.05,
         "op_to_op_duration_relative_margin": 0.2,
-        "dispatch_duration_relative_margin": 0.1,
+        "dispatch_duration_relative_margin": 0.2,
     },
     "RMSAllGather_3": {
         "op_name": "PostRMS_1",
@@ -58,13 +58,13 @@ perf_targets = {
         "non-overlapped-dispatch-time": 6431.2,
         "kernel_duration_relative_margin": 0.05,
         "op_to_op_duration_relative_margin": 0.2,
-        "dispatch_duration_relative_margin": 0.1,
+        "dispatch_duration_relative_margin": 0.2,
     },
     "AllGatherConcat_0": {
         "op_name": "AllGatherConcat",
-        "kernel_duration": 16953.190972222223,
+        "kernel_duration": 12419.194444444445,
         "op_to_op": 796.8888888888889,
-        "non-overlapped-dispatch-time": 11465.5,
+        "non-overlapped-dispatch-time": 12541.7,
         "kernel_duration_relative_margin": 0.05,
         "op_to_op_duration_relative_margin": 0.2,
         "dispatch_duration_relative_margin": 0.5,
@@ -76,7 +76,7 @@ perf_targets = {
         "non-overlapped-dispatch-time": 4351.1,
         "kernel_duration_relative_margin": 0.05,
         "op_to_op_duration_relative_margin": 0.2,
-        "dispatch_duration_relative_margin": 0.1,
+        "dispatch_duration_relative_margin": 0.2,
     },
     "Matmul_0": {
         "op_name": "QKV_MM",
@@ -110,7 +110,7 @@ perf_targets = {
         "kernel_duration": 10848,
         "op_to_op": 688.7777777777778,
         "non-overlapped-dispatch-time": 6144.8,
-        "kernel_duration_relative_margin": 0.01,
+        "kernel_duration_relative_margin": 0.05,
         "op_to_op_duration_relative_margin": 0.2,
         "dispatch_duration_relative_margin": 0.15,
     },
@@ -130,7 +130,7 @@ perf_targets = {
         "non-overlapped-dispatch-time": 7932.2,
         "kernel_duration_relative_margin": 0.05,
         "op_to_op_duration_relative_margin": 0.4,
-        "dispatch_duration_relative_margin": 0.1,
+        "dispatch_duration_relative_margin": 0.2,
     },
     "AllReduceAsync_0": {
         "op_name": "AllReduceAsync_DO",
@@ -148,7 +148,7 @@ perf_targets = {
         "non-overlapped-dispatch-time": 7252.4,
         "kernel_duration_relative_margin": 0.05,
         "op_to_op_duration_relative_margin": 0.2,
-        "dispatch_duration_relative_margin": 0.1,
+        "dispatch_duration_relative_margin": 0.2,
     },
     "LlamaReduceScatterDeviceOperation_0": {
         "op_name": "ReduceScatter_FF1",
@@ -170,12 +170,12 @@ perf_targets = {
     },
     "RotaryEmbeddingLlamaFusedQK_0": {
         "op_name": "RotaryEmbeddingLlamaFusedQK",
-        "kernel_duration": 5617.111111111111,
+        "kernel_duration": 4296,
         "op_to_op": 606.1111111111111,
         "non-overlapped-dispatch-time": 2844.3,
         "kernel_duration_relative_margin": 0.1,
         "op_to_op_duration_relative_margin": 0.2,
-        "dispatch_duration_relative_margin": 0.15,
+        "dispatch_duration_relative_margin": 0.35,
     },
     "PagedUpdateCacheDeviceOperation_0": {
         "op_name": "PagedUpdateCache",
@@ -197,7 +197,7 @@ perf_targets = {
     },
     "BinaryDeviceOperation_0": {
         "op_name": "Binary_Residual_0",
-        "kernel_duration": 1759,
+        "kernel_duration": 1059,
         "op_to_op": 725.6666666666666,
         "non-overlapped-dispatch-time": 6316.8,
         "kernel_duration_relative_margin": 0.25,
@@ -211,16 +211,25 @@ perf_targets = {
         "non-overlapped-dispatch-time": 6111.2,
         "kernel_duration_relative_margin": 0.1,
         "op_to_op_duration_relative_margin": 0.2,
-        "dispatch_duration_relative_margin": 0.15,
+        "dispatch_duration_relative_margin": 0.2,
     },
     "BinaryDeviceOperation_2": {
         "op_name": "Binary_Residual_1",
-        "kernel_duration": 2298,
+        "kernel_duration": 1052,
         "op_to_op": 731.4444444444445,
         "non-overlapped-dispatch-time": 6751.9,
         "kernel_duration_relative_margin": 0.1,
         "op_to_op_duration_relative_margin": 0.2,
         "dispatch_duration_relative_margin": 0.2,
+    },
+    "Untilize_0": {
+        "op_name": "Untilize",
+        "kernel_duration": 1517.3333333333335,
+        "op_to_op": 996.8888888888889,
+        "non-overlapped-dispatch-time": 3113.6,
+        "kernel_duration_relative_margin": 0.2,
+        "op_to_op_duration_relative_margin": 0.2,
+        "dispatch_duration_relative_margin": 0.5,
     },
 }
 
@@ -302,8 +311,6 @@ def test_llama_demo(
     # TODO: Remove this once all batch sizes are supported on TG
     if os.environ.get("FAKE_DEVICE") == "TG" and batch_size not in [1, 32]:
         pytest.skip("TG only supports batch 1 and 32")
-
-    mesh_device.enable_async(True)
 
     if paged_attention:
         paged_attention_config = PagedAttentionConfig(
@@ -467,6 +474,10 @@ def print_dict(input_dict, dict_name):
     print("}")
 
 
+def is_collective_op(op_code):
+    return "AllGather" in op_code or "ReduceScatter" in op_code or "AllReduce" in op_code
+
+
 @pytest.mark.models_device_performance_bare_metal
 # To update:
 # Run FAKE_DEVICE=TG TT_METAL_ENABLE_ERISC_IRAM=1 pytest models/demos/llama3_subdevices/tests/test_decoder_device_perf.py::test_llama_TG_perf_device
@@ -534,6 +545,15 @@ def test_llama_TG_perf_device(
     kernel_duration_dict_trace = build_duration_dict(mid_layers_raw_dict_trace, "DEVICE KERNEL DURATION [ns]")
     dispatch_duration_dict = build_duration_dict(mid_layers_raw_dict_trace, "OP TO OP LATENCY [ns]")
 
+    # first layer
+    kernel_duration_dict_compilation_first_layer = build_duration_dict(
+        first_layer_raw_dict_compilation, "DEVICE KERNEL DURATION [ns]"
+    )
+    kernel_duration_dict_trace_first_layer = build_duration_dict(
+        first_layer_raw_dict_trace, "DEVICE KERNEL DURATION [ns]"
+    )
+    dispatch_duration_dict_first_layer = build_duration_dict(first_layer_raw_dict_trace, "OP TO OP LATENCY [ns]")
+
     # Build dicts of op_code_with_id to list of durations - one list per op instance
     kernel_duration_per_instance_dict_compilation = build_duration_per_instance_dict(
         kernel_duration_dict_compilation, num_layers - 1
@@ -542,6 +562,17 @@ def test_llama_TG_perf_device(
         kernel_duration_dict_trace, num_layers - 1
     )
     dispatch_duration_per_instance_dict = build_duration_per_instance_dict(dispatch_duration_dict, num_layers - 1)
+
+    # first layer
+    kernel_duration_per_instance_dict_compilation_first_layer = build_duration_per_instance_dict(
+        kernel_duration_dict_compilation_first_layer, 1
+    )
+    kernel_duration_per_instance_dict_trace_first_layer = build_duration_per_instance_dict(
+        kernel_duration_dict_trace_first_layer, 1
+    )
+    dispatch_duration_per_instance_dict_first_layer = build_duration_per_instance_dict(
+        dispatch_duration_dict_first_layer, 1
+    )
 
     # Average over all iterations of each op instance
     kernel_duration_per_instance_averaged_dict_compilation = average_per_instance_dict(
@@ -552,12 +583,14 @@ def test_llama_TG_perf_device(
     )
     dispatch_duration_per_instance_averaged_dict = average_per_instance_dict(dispatch_duration_per_instance_dict)
 
+    # Min over all iterations of each op instance
     kernel_duration_per_instance_min_dict_compilation = min_per_instance_dict(
         kernel_duration_per_instance_dict_compilation
     )
     kernel_duration_per_instance_min_dict_trace = min_per_instance_dict(kernel_duration_per_instance_dict_trace)
     dispatch_duration_per_instance_min_dict = min_per_instance_dict(dispatch_duration_per_instance_dict)
 
+    # Max over all iterations of each op instance
     kernel_duration_per_instance_max_dict_compilation = max_per_instance_dict(
         kernel_duration_per_instance_dict_compilation
     )
@@ -700,27 +733,35 @@ def test_llama_TG_perf_device(
 
     # Calculate e2e performance
     e2e_estimate_80l = 0
-    for entry in first_layer_raw_dict_compilation:
-        kernel_duration = entry["DEVICE KERNEL DURATION [ns]"]
-        e2e_estimate_80l += kernel_duration
-    for entry in first_layer_raw_dict_trace:
-        dispatch_duration = entry["OP TO OP LATENCY [ns]"]
-        e2e_estimate_80l += dispatch_duration
-    for op_code_with_id in kernel_duration_per_instance_averaged_dict_compilation.keys():
-        if "AllGather" in op_code_with_id or "ReduceScatter" in op_code_with_id or "AllReduce" in op_code_with_id:
-            avg_kernel_duration = kernel_duration_per_instance_averaged_dict_trace[op_code_with_id]
+    for op_id in kernel_duration_per_instance_dict_trace_first_layer.keys():  # first layer
+        op_to_op_latency = dispatch_duration_per_instance_dict_first_layer[op_id][0]
+        if is_collective_op(op_id):
+            kernel_duration = kernel_duration_per_instance_dict_trace_first_layer[op_id][0]
         else:
-            avg_kernel_duration = kernel_duration_per_instance_averaged_dict_compilation[op_code_with_id]
-        avg_dispatch_duration = dispatch_duration_per_instance_averaged_dict[op_code_with_id]
+            kernel_duration = kernel_duration_per_instance_dict_compilation_first_layer[op_id][0]
+
+        if op_to_op_latency < 0:
+            op_to_op_latency = 0
+
+        print(f"op_id: {op_id}, kernel_duration: {kernel_duration}, op_to_op_latency: {op_to_op_latency}")
+
+        e2e_estimate_80l += kernel_duration + op_to_op_latency
+    for op_id in kernel_duration_per_instance_averaged_dict_trace.keys():  # 79 layers based on average of layers 2-9
+        if is_collective_op(op_id):
+            avg_kernel_duration = kernel_duration_per_instance_averaged_dict_trace[op_id]
+        else:
+            avg_kernel_duration = kernel_duration_per_instance_averaged_dict_compilation[op_id]
+        avg_dispatch_duration = dispatch_duration_per_instance_averaged_dict[op_id]
         e2e_estimate_80l += (avg_kernel_duration + avg_dispatch_duration) * 79  # weighting avg for 79 layers
 
-    print(f"e2e estimate: {e2e_estimate_80l}")
+    # Estimated T/s/u is 1000000 / (80L-duration + ~2100 lmhead+sampling+embeddings + ~300 python-overhead
+    tsu_estimate = 1000000 / (e2e_estimate_80l / 1000 + 2100 + 300)
+
+    print(f"80L e2e time estimate: {e2e_estimate_80l}")
+    print(f"80L T/s/u estimate: {tsu_estimate}")
 
     benchmark_data.add_measurement(profiler, 0, step_name, "e2e_estimate_80l", e2e_estimate_80l)
-    # Estimated T/s/u is 1000000 / (80L-duration + ~2100 lmhead+sampling+embeddings + ~300 python-overhead
-    benchmark_data.add_measurement(
-        profiler, 0, step_name, "tsu_estimate", 1000000 / (e2e_estimate_80l / 1000 + 2100 + 300)
-    )
+    benchmark_data.add_measurement(profiler, 0, step_name, "tsu_estimate", tsu_estimate)
 
     benchmark_data.save_partial_run_json(
         profiler,

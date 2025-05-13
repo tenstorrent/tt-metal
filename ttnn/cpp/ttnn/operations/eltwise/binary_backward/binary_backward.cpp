@@ -18,7 +18,7 @@
 #include "ttnn/operations/eltwise/binary_backward/binary_backward.hpp"
 #include "ttnn/operations/eltwise/complex_unary/complex_unary.hpp"
 #include <tt-metalium/constants.hpp>
-#include "cpp/ttnn/common/constants.hpp"
+#include "ttnn/common/constants.hpp"
 #include "ttnn/common/queue_id.hpp"
 #include "ttnn/operations/eltwise/ternary/where.hpp"
 #include "ttnn/operations/creation.hpp"
@@ -585,8 +585,7 @@ std::vector<Tensor> ExecuteBackwardBiasGelu::invoke(
         "Incorrect rounding mode (expected 'none' or 'tanh')",
         "Error");
     Tensor input = ttnn::add(input_tensor, bias);
-    std::vector<std::optional<Tensor>> gelu_result =
-        ttnn::gelu_bw(grad, input, approximate = approximate, output_mem_config);
+    std::vector<std::optional<Tensor>> gelu_result = ttnn::gelu_bw(grad, input, approximate, output_mem_config);
     if (gelu_result[0].has_value()) {
         grad_tensor.push_back(gelu_result[0].value());
     }

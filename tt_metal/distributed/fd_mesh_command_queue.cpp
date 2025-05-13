@@ -7,7 +7,6 @@
 #include <mesh_device.hpp>
 #include <mesh_event.hpp>
 #include <tt-metalium/allocator.hpp>
-#include <tt-metalium/dispatch_settings.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <algorithm>
 #include <array>
@@ -23,15 +22,17 @@
 #include "device.hpp"
 #include "impl/context/metal_context.hpp"
 #include "dispatch_core_common.hpp"
+#include "dispatch/dispatch_settings.hpp"
 #include "event/dispatch.hpp"
 #include "hal_types.hpp"
 #include "mesh_config.hpp"
 #include "mesh_coord.hpp"
 #include "mesh_workload.hpp"
+#include "sub_device/sub_device_manager_tracker.hpp"
 #include "tt-metalium/program.hpp"
 #include "shape2d.hpp"
 #include <tt_stl/strong_type.hpp>
-#include "system_memory_manager.hpp"
+#include "dispatch/system_memory_manager.hpp"
 #include "trace_buffer.hpp"
 #include "tt_metal/common/thread_pool.hpp"
 #include "tt_metal/distributed/mesh_workload_utils.hpp"
@@ -39,6 +40,7 @@
 #include "tt_metal/impl/program/dispatch.hpp"
 #include "tt_metal/impl/trace/dispatch.hpp"
 #include "tt_metal/impl/program/program_command_sequence.hpp"
+#include "tt_metal/impl/device/dispatch.hpp"
 #include <umd/device/types/xy_pair.h>
 
 namespace tt {
@@ -56,6 +58,11 @@ struct MeshReadEventDescriptor {
 
 struct MeshBufferReadDescriptor {
     std::unordered_map<IDevice*, uint32_t> num_reads_per_dev;
+};
+
+struct MeshCoreDataReadDescriptor {
+    ReadCoreDataDescriptor single_core_descriptor;
+    MeshCoordinate device_coord;
 };
 
 FDMeshCommandQueue::FDMeshCommandQueue(
@@ -237,7 +244,7 @@ void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
     for (auto& [device_range, program] : mesh_workload.get_programs()) {
         auto& program_cmd_seq = mesh_workload.get_dispatch_cmds_for_program(program, command_hash);
         program_dispatch::update_program_dispatch_commands(
-            program,
+            program.impl(),
             program_cmd_seq,
             (*worker_launch_message_buffer_state_)[*sub_device_id].get_mcast_wptr(),
             (*worker_launch_message_buffer_state_)[*sub_device_id].get_unicast_wptr(),
@@ -314,6 +321,62 @@ void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
     if (blocking) {
         this->finish({sub_device_id});
     }
+}
+
+void FDMeshCommandQueue::enqueue_write_shard_to_core(
+    const DeviceMemoryAddress& address,
+    const void* src,
+    uint32_t size_bytes,
+    bool blocking,
+    tt::stl::Span<const SubDeviceId> sub_device_ids) {
+    in_use_ = true;
+    TT_FATAL(!trace_id_.has_value(), "Writes are not supported during trace capture.");
+
+    IDevice* device = mesh_device_->get_device(address.device_coord);
+    sub_device_ids = buffer_dispatch::select_sub_device_ids(mesh_device_, sub_device_ids);
+
+    device_dispatch::write_to_core(
+        device,
+        address.virtual_core_coord,
+        src,
+        address.address,
+        size_bytes,
+        id_,
+        expected_num_workers_completed_,
+        sub_device_ids);
+
+    if (blocking) {
+        this->finish(sub_device_ids);
+    }
+}
+
+void FDMeshCommandQueue::enqueue_read_shard_from_core(
+    const DeviceMemoryAddress& address,
+    void* dst,
+    uint32_t size_bytes,
+    bool blocking,
+    tt::stl::Span<const SubDeviceId> sub_device_ids) {
+    in_use_ = true;
+    TT_FATAL(!trace_id_.has_value(), "Reads are not supported during trace capture.");
+
+    IDevice* device = this->mesh_device_->get_device(address.device_coord);
+    sub_device_ids = buffer_dispatch::select_sub_device_ids(mesh_device_, sub_device_ids);
+
+    if (size_bytes > 0) {
+        device_dispatch::CoreReadDispatchParams dispatch_params{
+            address.virtual_core_coord,
+            address.address,
+            size_bytes,
+            device,
+            id_,
+            dispatch_core_type_,
+            expected_num_workers_completed_,
+            sub_device_ids};
+        device_dispatch::issue_core_read_command_sequence(dispatch_params);
+    }
+
+    this->submit_core_data_memcpy_request(
+        ReadCoreDataDescriptor(dst, size_bytes), address.device_coord, blocking, sub_device_ids);
 }
 
 void FDMeshCommandQueue::finish(tt::stl::Span<const SubDeviceId> sub_device_ids) {
@@ -399,6 +462,20 @@ void FDMeshCommandQueue::submit_memcpy_request(
     }
 }
 
+void FDMeshCommandQueue::submit_core_data_memcpy_request(
+    const ReadCoreDataDescriptor& read_descriptor,
+    const MeshCoordinate& device_coord,
+    bool blocking,
+    tt::stl::Span<const SubDeviceId> sub_device_ids) {
+    completion_queue_reads_.push(std::make_shared<MeshCompletionReaderVariant>(
+        std::in_place_type<MeshCoreDataReadDescriptor>, read_descriptor, device_coord));
+    this->increment_num_entries_in_completion_queue();
+
+    if (blocking) {
+        this->finish(sub_device_ids);
+    }
+}
+
 MeshEvent FDMeshCommandQueue::enqueue_record_event_helper(
     tt::stl::Span<const SubDeviceId> sub_device_ids,
     bool notify_host,
@@ -473,8 +550,10 @@ void FDMeshCommandQueue::read_completion_queue() {
                         using T = std::decay_t<decltype(mesh_read_descriptor)>;
                         if constexpr (std::is_same_v<T, MeshBufferReadDescriptor>) {
                             this->copy_buffer_data_to_user_space(mesh_read_descriptor);
-                        } else {
+                        } else if constexpr (std::is_same_v<T, MeshReadEventDescriptor>) {
                             this->read_completion_queue_event(mesh_read_descriptor);
+                        } else {
+                            this->read_l1_data_from_completion_queue(mesh_read_descriptor);
                         }
                     },
                     mesh_read_descriptor);
@@ -545,6 +624,21 @@ void FDMeshCommandQueue::read_completion_queue_event(MeshReadEventDescriptor& re
         event_dispatch::read_events_from_completion_queue(
             read_event_descriptor.single_device_descriptor, mmio_device_id, channel, id_, device->sysmem_manager());
     }
+}
+
+void FDMeshCommandQueue::read_l1_data_from_completion_queue(MeshCoreDataReadDescriptor& read_l1_data_descriptor) {
+    IDevice* device = mesh_device_->get_device(read_l1_data_descriptor.device_coord);
+    const chip_id_t mmio_device_id =
+        tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(device->id());
+    const uint16_t channel =
+        tt::tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(device->id());
+    device_dispatch::read_core_data_from_completion_queue(
+        read_l1_data_descriptor.single_core_descriptor,
+        mmio_device_id,
+        channel,
+        id_,
+        device->sysmem_manager(),
+        exit_condition_);
 }
 
 void FDMeshCommandQueue::reset_worker_state(
@@ -764,7 +858,7 @@ SystemMemoryManager& FDMeshCommandQueue::reference_sysmem_manager() {
 void FDMeshCommandQueue::update_launch_messages_for_device_profiler(
     ProgramCommandSequence& program_cmd_seq, uint32_t program_runtime_id, IDevice* device) {
 #if defined(TRACY_ENABLE)
-    for (auto& launch_msg : program_cmd_seq.go_signals) {
+    for (auto& launch_msg : program_cmd_seq.launch_messages) {
         launch_msg->kernel_config.host_assigned_id =
             tt_metal::detail::EncodePerDeviceProgramID(program_runtime_id, device->id());
     }
