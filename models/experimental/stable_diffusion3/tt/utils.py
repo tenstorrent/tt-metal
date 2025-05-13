@@ -164,11 +164,12 @@ def assert_quality(
 
     std_a = math.sqrt(cov[0, 0])
     std_b = math.sqrt(cov[1, 1])
-    pcc_calculated = cov[0, 1] / (std_a * std_b)
-    beta = cov[0, 1] / cov[0, 0]
     mean_a = a.mean().item()
     mean_b = b.mean().item()
 
+    pcc_found = cov[0, 1] / (std_a * std_b)
+    beta_found = cov[0, 1] / cov[0, 0]
+    ccc_found = 2 * pcc_found * std_a * std_b / (std_a**2 + std_b**2 + (mean_a - mean_b) ** 2)
     relative_rmse_found = torch.nn.functional.mse_loss(a, b).sqrt().item() / std_a
 
     if mse is not None:
@@ -176,10 +177,13 @@ def assert_quality(
 
     logger.info(f"μ₁ = {mean_a:.3g}, μ₂ = {mean_b:.3g}, σ₁ = {std_a:.3g}, σ₂ = {std_b:.3g}")
     logger.info(
-        f"PCC = {pcc_calculated * 100:.4f} %, β = {beta * 100:.1f} %, RMSE/σ₁ = {relative_rmse_found * 100:.1f} %"
+        f"PCC = {pcc_found * 100:.4f} %, "
+        f"β = {beta_found * 100:.1f} %, "
+        f"CCC = {ccc_found * 100:.4f} %, "
+        f"RMSE/σ₁ = {relative_rmse_found * 100:.1f} %"
     )
-    if pcc is not None and pcc_calculated < pcc:
-        msg = f"PCC = {pcc_calculated * 100:.4f} % >= {pcc * 100:.4f} %"
+    if pcc is not None and pcc_found < pcc:
+        msg = f"PCC = {pcc_found * 100:.4f} % >= {pcc * 100:.4f} %"
         raise Exception(msg)  # noqa: TRY002
 
     if relative_rmse is not None and relative_rmse_found > relative_rmse:
