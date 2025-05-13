@@ -166,7 +166,7 @@ jobs:
             --backend vllm \
             --model ${{ matrix.test-group.model }} \
             --dataset-name random \
-            --num-prompts 1 \
+            --num-prompts 8 \
             --random-input-len 100 \
             --random-output-len 100 \
             --ignore-eos \
@@ -174,6 +174,12 @@ jobs:
             --save-result \
             --result-filename output/vllm_result.json \
             > output/vllm_benchmark.log 2>&1 &
+
+      - name: Show report
+        if: always()
+        continue-on-error: true
+        run: |
+          cat output/vllm_result.json
 
       - uses: ./.github/actions/slack-report
         if: ${{ failure() }}
@@ -191,8 +197,7 @@ jobs:
         timeout-minutes: 10
         if: ${{ !cancelled() }}
         with:
-          path: |
-            output/
+          path: docker-job/output/
           prefix: "vllm_output_"
 
       - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
