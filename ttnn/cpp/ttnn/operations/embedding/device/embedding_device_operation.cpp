@@ -44,6 +44,9 @@ void Embeddings::validate(const std::vector<Tensor> &input_tensors) const {
             TT_FATAL(this->output_mem_config.memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED, "Embedding only supports height sharded Row Major outputs");
         }
         TT_FATAL(!is_block_float(this->output_dtype), "Output cannot be a block float dtype when not tilized");
+        if (is_sharded(this->output_mem_config.memory_layout())) {
+            TT_FATAL(this->output_mem_config.memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED, "Embedding only supports height sharded Row Major outputs");
+        }
     }
     if(a.get_layout() == Layout::ROW_MAJOR) {
         TT_FATAL(a.get_padded_shape()[1] == 1 && a.get_padded_shape()[2] == 1, "Only dim 0 && 3 for the input can be non 1");
