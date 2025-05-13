@@ -719,17 +719,14 @@ def get_expected_paged_fill_cache_output(
             virtual_block_in_seq = s_tr_idx // cache_block_size_t
 
             if virtual_block_in_seq >= page_table_torch.shape[1]:
-                # print(f"Skipping: virtual_block {virtual_block_in_seq} for head {h_idx}, seq_tile {s_tr_idx} is out of page_table width {page_table_torch.shape[1]}")
                 continue
 
             physical_block_mapped_idx = page_table_torch[effective_batch_idx, virtual_block_in_seq].item()
 
             if skip_if_page_table_val_is_neg_one and physical_block_mapped_idx == -1:
-                # print(f"Skipping: page_table entry is -1 for effective_batch_idx {effective_batch_idx}, virtual_block {virtual_block_in_seq}")
                 continue
 
             if physical_block_mapped_idx >= max_cache_blocks:
-                # print(f"Skipping: physical_block_mapped_idx {physical_block_mapped_idx} for head {h_idx}, seq_tile {s_tr_idx} is out of cache height {max_cache_blocks}")
                 continue
 
             tile_row_within_virtual_block = s_tr_idx % cache_block_size_t  # this is block_row_offset in kernel
@@ -764,7 +761,6 @@ def get_expected_paged_fill_cache_output(
 
                 if target_k >= max_cache_blocks:
                     # This check is important if conceptual_block_stride makes g_id large
-                    # print(f"Skipping due to target_k {target_k} out of bounds.")
                     continue
 
                 # Extract the source tile (TILE_HEIGHT, TILE_WIDTH)

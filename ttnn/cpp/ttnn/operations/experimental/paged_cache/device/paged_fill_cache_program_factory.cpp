@@ -196,11 +196,6 @@ operation::ProgramWithCallbacks paged_fill_cache_multi_core(
         const std::vector<Tensor>& input_tensors,                                // cache, input, page_table
         const std::vector<std::optional<const Tensor>>& optional_input_tensors,  // batch_idx_tensor if used
         const std::vector<Tensor>& output_tensors) {                             // output_tensors not used by fill op
-            // input_tensors[0] = cache_tensor
-            // input_tensors[1] = input_tensor
-            // input_tensors[2] = page_table_tensor
-            // optional_input_tensors[0] = batch_idx_tensor (if use_batch_idx_tensor is true)
-
             auto dst_addr = input_tensors.at(0).buffer()->address();         // cache_tensor
             auto src_addr = input_tensors.at(1).buffer()->address();         // input_tensor
             auto page_table_addr = input_tensors.at(2).buffer()->address();  // page_table_tensor
