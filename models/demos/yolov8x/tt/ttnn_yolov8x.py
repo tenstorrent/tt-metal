@@ -2,16 +2,11 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import ttnn
 import math
 
-from models.experimental.yolov8x.tt.ttnn_yolov8x_utils import (
-    ttnn_decode_bboxes,
-)
-from models.experimental.yolo_common.yolo_utils import (
-    determine_num_cores,
-    get_core_grid_from_num_cores,
-)
+import ttnn
+from models.demos.yolov8x.tt.ttnn_yolov8x_utils import ttnn_decode_bboxes
+from models.experimental.yolo_common.yolo_utils import determine_num_cores, get_core_grid_from_num_cores
 
 
 def sharded_concat(input_tensors, num_cores=64, dim=3):  # expected input tensors to be in fp16, RM, same (h*w)
