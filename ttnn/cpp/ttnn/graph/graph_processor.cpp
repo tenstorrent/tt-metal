@@ -193,7 +193,7 @@ void GraphProcessor::track_function_start(std::string_view function_name, std::s
 
     auto counter = graph.size();
     {
-            graph.push_back(Vertex{
+        graph.push_back(Vertex{
             .counter = counter,
             .node_type = kNodeFunctionStart,
             .params = params,
