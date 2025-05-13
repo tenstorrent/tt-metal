@@ -101,6 +101,9 @@ void create_log_file() {
     std::filesystem::path output_dir(rtoptions.get_root_dir() + watcher::logfile_path);
     std::filesystem::create_directories(output_dir);
     string fname = output_dir.string() + watcher::logfile_name;
+    if (rtoptions.get_watcher_skip_logging()) {
+        fname = "/dev/null";
+    }
     if ((f = fopen(fname.c_str(), fmode)) == nullptr) {
         TT_THROW("Watcher failed to create log file\n");
     }
