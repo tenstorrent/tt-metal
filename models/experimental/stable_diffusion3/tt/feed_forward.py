@@ -51,7 +51,7 @@ class TtFeedForward:
         grid_size = x.device().compute_with_storage_grid_size()
         core_grid = ttnn.CoreGrid(x=grid_size.x, y=grid_size.y)
 
-        x = self.in_proj(x, core_grid=core_grid)
+        x = self.in_proj(x, core_grid=core_grid, highest_quality=False)  # not enough L1 for highest quality
         # Turning on fast_and_approximate_mode leads to big changes in the generated image.
         # The image quality might still be okay.
         x = ttnn.gelu(x, fast_and_approximate_mode=False)
