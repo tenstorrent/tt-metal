@@ -1,17 +1,15 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
-import ttnn
 import torch
 from loguru import logger
 from ultralytics import YOLO
+
+import ttnn
+from models.demos.yolov8x.tt.ttnn_yolov8x import TtYolov8xModel
+from models.demos.yolov8x.tt.ttnn_yolov8x_utils import custom_preprocessor
+from models.utility_functions import divup, is_wormhole_b0
 from tests.ttnn.utils_for_testing import assert_with_pcc
-from models.experimental.yolov8x.tt.ttnn_yolov8x import TtYolov8xModel
-from models.experimental.yolov8x.tt.ttnn_yolov8x_utils import custom_preprocessor
-from models.utility_functions import (
-    is_wormhole_b0,
-    divup,
-)
 
 
 def load_torch_model():
