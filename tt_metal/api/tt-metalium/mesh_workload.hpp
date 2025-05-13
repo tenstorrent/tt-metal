@@ -42,9 +42,6 @@ public:
     uint32_t get_cb_size(std::shared_ptr<MeshDevice>& mesh_device, CoreCoord logical_core, CoreType core_type);
     MeshWorkloadImpl& impl() { return *pimpl_; }
 
-    // Add public method for usage in program_dispatch::program_base_addr_on_core
-    std::unordered_set<SubDeviceId> determine_sub_device_ids(MeshDevice* mesh_device);
-
 private:
     std::unique_ptr<MeshWorkloadImpl> pimpl_;
 

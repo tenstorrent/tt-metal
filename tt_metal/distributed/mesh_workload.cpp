@@ -442,8 +442,4 @@ uint32_t MeshWorkload::get_cb_size(
     return pimpl_->get_cb_size(mesh_device, logical_core, core_type);
 }
 
-std::unordered_set<SubDeviceId> MeshWorkload::determine_sub_device_ids(MeshDevice* mesh_device) {
-    return pimpl_->determine_sub_device_ids(mesh_device);
-}
-
 }  // namespace tt::tt_metal::distributed

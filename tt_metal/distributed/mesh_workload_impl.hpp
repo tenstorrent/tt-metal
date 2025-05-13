@@ -32,6 +32,7 @@ private:
     std::vector<std::shared_ptr<KernelGroup>>& get_kernel_groups(uint32_t programmable_core_type_index);
     std::vector<Semaphore>& semaphores();
     std::vector<uint32_t> get_program_config_sizes();
+    std::unordered_set<SubDeviceId> determine_sub_device_ids(MeshDevice* mesh_device);
     bool kernel_binary_always_stored_in_ringbuffer();
     bool is_finalized() const { return this->finalized_; }
     void set_finalized() { this->finalized_ = true; };
@@ -52,6 +53,8 @@ private:
     std::unordered_map<MeshCoordinateRange, std::unordered_map<KernelHandle, RuntimeArgsPerCore>> runtime_args_;
     MeshCommandQueue* last_used_command_queue_ = nullptr;
 
+    template <typename WorkloadType, typename DeviceType>
+    friend uint32_t program_dispatch::program_base_addr_on_core(WorkloadType&, DeviceType, HalProgrammableCoreType);
     friend void EnqueueMeshWorkload(MeshCommandQueue& mesh_cq, MeshWorkload& mesh_workload, bool blocking);
     friend FDMeshCommandQueue;
     friend class tt::tt_metal::Program;
@@ -71,8 +74,5 @@ public:
     uint32_t get_sem_size(std::shared_ptr<MeshDevice>& mesh_device, CoreCoord logical_core, CoreType core_type);
     uint32_t get_cb_base_addr(std::shared_ptr<MeshDevice>& mesh_device, CoreCoord logical_core, CoreType core_type);
     uint32_t get_cb_size(std::shared_ptr<MeshDevice>& mesh_device, CoreCoord logical_core, CoreType core_type);
-
-    // Made public for usage in dispatch.cpp
-    std::unordered_set<SubDeviceId> determine_sub_device_ids(MeshDevice* mesh_device);
 };
 }  // namespace tt::tt_metal::distributed
