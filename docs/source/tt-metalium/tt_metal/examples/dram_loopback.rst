@@ -25,7 +25,7 @@ Device initalization
    constexpr int device_id = 0;
    auto device = CreateDevice(device_id);
 
-First we open a device. This is our gateway to all operations on the accelerator. The device ID is simply an index into the list of available devices (from 0 to N). Thus device 0 is the first device and always available if one is installed.
+First we open a device. This is our gateway to all operations on the accelerator. The device ID is simply an index into the list of available devices (from 0 to N-1). Thus device 0 is the first device and always available if one is installed.
 
 Program setup
 -------------
@@ -51,7 +51,7 @@ There's in total 3 buffers to be created:
 
 Note that almost all operations on the Tensix are aligned with tiles. And a tile is a 32x32 grid of values. The data type used in this example is bfloat16 as it is what the math engine uses internally (though we won't touch the math engine in this example). Making each tile 32 x 32 x 2 bytes = 2048 bytes. And we wish to allocate 50 tiles in each buffer.
 
-There are two types of buffers in the Tensix: L1 and DRAM. L1 is a misnomer as it can be mistaken as similar to L1 cache in a CPU. In fact, the L1 is a SRAM scratchpad on the Tensix. Each generation of Tenstorrent processors has a different amount of L1 memory per Tensix. Grayskull had 1MB and Wormhole/Blackhole has 1.5MN.
+There are two types of buffers in the Tensix: L1 and DRAM. L1 is a misnomer as it can be mistaken as similar to L1 cache in a CPU. In fact, the L1 is a SRAM scratchpad on the Tensix. Each generation of Tenstorrent processors has a different amount of L1 memory per Tensix. Grayskull had 1MB and Wormhole/Blackhole has 1.5MB.
 
 Note the ``page_size`` argument in the buffer config and the ``Interleaved`` in the buffer type. Both L1 and DRAM are splitted into banks. Each bank is a physical memory unit that can be accessed independently. However, managing banks separately is trick and not scalable. Interleaved buffers simply round-robin the data across all banks every ``page_size`` bytes. This allows the programmer to treat the buffer as a single unit, while taking advantage of the parallelism of the banks for higher bandwidth. Setting page size equal to the buffer size means that the entire buffer will live on a single bank. This is not recommended for performance and in most cases, page size is set to the size of a tile. However, this configuration allows easy illustration of NoC operations. However, these are implementation details and the programmer should not be overly concerned with them.
 
@@ -148,6 +148,9 @@ The kernel itself is simple. It takes the address and bank indices we just creat
         noc_async_write(l1_buffer_addr, dram_buffer_dst_noc_addr, dram_buffer_size);
         noc_async_write_barrier(); // wait for transfer to complete
     }
+
+.. note::
+    Accessing DRAM using an address and bank pair is complicated and not scalable. Most kernels uses interleaved buffers and ``InterleavedAddrGenFast`` instead (introduced in the next example). This acts much more like a pointer and is much easier to use. The interleaved buffer is simply a buffer with page size qual to the tile size.
 
 
 Setting runtime arguments for the data movement kernel
