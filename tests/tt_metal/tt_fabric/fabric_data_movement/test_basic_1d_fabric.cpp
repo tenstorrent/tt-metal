@@ -628,5 +628,208 @@ TEST_F(Fabric1DFixture, TestUnicastRaw) { RunTestUnicastRaw(this, 1); }
 TEST_F(Fabric1DFixture, TestUnicastConnAPI) { RunTestUnicastConnAPI(this, 1); }
 TEST_F(Fabric1DFixture, TestMCastConnAPI) { RunTestMCastConnAPI(this); }
 
+TEST_F(Fabric1DFixture, TestEDMConnectionStressTestQuick) {
+    // Each epoch is a separate program launch with increasing number of workers
+    std::vector<size_t> stall_durations_cycles = {0,    100,  200,  300,   400,   700,   1000,  2000,  3000,  4000,
+                                                  5000, 7000, 8000, 10000, 20000, 30000, 40000, 50000, 60000, 100000};
+
+    std::vector<size_t> message_counts = {8, 100};
+    std::vector<size_t> packet_sizes = {16, 4 * 1088};
+    size_t num_epochs = 5;
+    size_t num_times_to_connect = 20000;  // How many times each worker connects during its turn
+
+    log_debug(tt::LogTest, "Starting EDM connection stress test");
+    auto* control_plane = tt::tt_metal::MetalContext::instance().get_cluster().get_control_plane();
+    log_debug(tt::LogTest, "Control plane found");
+
+    std::pair<mesh_id_t, chip_id_t> src_mesh_chip_id;
+    std::pair<mesh_id_t, chip_id_t> dst_mesh_chip_id;
+    chip_id_t not_used_1;
+    chip_id_t not_used_2;
+    // use control plane to find a mesh with 3 devices
+    auto user_meshes = control_plane->get_user_physical_mesh_ids();
+    std::optional<mesh_id_t> mesh_id;
+    for (const auto& mesh : user_meshes) {
+        auto mesh_shape = control_plane->get_physical_mesh_shape(mesh);
+        if (mesh_shape.mesh_size() > 1) {
+            mesh_id = mesh;
+            break;
+        }
+    }
+    if (!mesh_id.has_value()) {
+        GTEST_SKIP() << "No mesh found for 2 chip connection stress test";
+    }
+
+    log_debug(tt::LogTest, "Mesh ID: {}", mesh_id.value());
+    auto src_physical_device_id =
+        control_plane->get_physical_chip_id_from_mesh_chip_id(std::make_pair(mesh_id.value(), 0));
+    auto dst_physical_device_id =
+        control_plane->get_physical_chip_id_from_mesh_chip_id(std::make_pair(mesh_id.value(), 1));
+
+    auto* sender_device = DevicePool::instance().get_active_device(src_physical_device_id);
+    auto* receiver_device = DevicePool::instance().get_active_device(dst_physical_device_id);
+
+    // Set the destination address for fabric writes (constant for all workers)
+    uint32_t fabric_write_dest_bank_addr = 0x50000;
+
+    // Set up the EDM connection config
+    const auto edm_config = get_1d_fabric_config();
+
+    // For each epoch, run with increasing number of workers
+    log_debug(tt::LogTest, "Starting EDM connection stress test");
+    for (size_t iter = 0; iter < 10; iter++) {
+        log_debug(tt::LogTest, "iter {}", iter);
+        for (size_t num_workers : {1, 3}) {
+            log_debug(tt::LogTest, "num_workers {}", num_workers);
+            size_t num_rows = 7;
+            size_t num_cols = 8 - (num_workers - 1);
+            for (size_t r : {0, 4, 5, 6}) {
+                for (size_t c = 0; c < num_cols; c++) {
+                    log_debug(tt::LogTest, "r={}, c={}", r, c);
+
+                    // Set up worker cores for token ring
+                    auto worker_logical_cores = CoreRangeSet(CoreRange({{c, r}, {c + num_workers - 1, r}}));
+                    auto worker_logical_cores_vec = corerange_to_cores(worker_logical_cores, std::nullopt, false);
+
+                    // Map logical to virtual cores
+                    std::vector<CoreCoord> worker_virtual_cores;
+                    for (const auto& logical_core : worker_logical_cores_vec) {
+                        worker_virtual_cores.push_back(sender_device->worker_core_from_logical_core(logical_core));
+                    }
+
+                    // Create program
+                    auto program = tt_metal::CreateProgram();
+
+                    // Create semaphores for token passing (one per worker)
+                    auto connection_token_semaphore_id =
+                        tt_metal::CreateSemaphore(program, CoreRangeSet(worker_logical_cores), 0);
+
+                    // Create source packet buffer (one per worker)
+                    static constexpr uint32_t source_l1_cb_index = tt::CB::c_in0;
+                    static constexpr uint32_t packet_header_cb_index = tt::CB::c_in1;
+                    static constexpr tt::DataFormat cb_df = tt::DataFormat::Bfp8;
+                    auto max_payload_size = *std::max_element(packet_sizes.begin(), packet_sizes.end());
+                    auto source_l1_cb_config =
+                        tt_metal::CircularBufferConfig(max_payload_size * 2, {{source_l1_cb_index, cb_df}})
+                            .set_page_size(source_l1_cb_index, max_payload_size);
+                    CreateCircularBuffer(program, worker_logical_cores, source_l1_cb_config);
+
+                    // Create packet header buffer (one per worker)
+                    auto packet_header_cb_config =
+                        tt_metal::CircularBufferConfig(1024, {{packet_header_cb_index, cb_df}})
+                            .set_page_size(packet_header_cb_index, 32);
+                    CreateCircularBuffer(program, worker_logical_cores, packet_header_cb_config);
+
+                    // Configure common compile time args for all workers
+                    std::vector<uint32_t> compile_time_args = {
+                        static_cast<uint32_t>(stall_durations_cycles.size()),
+                        static_cast<uint32_t>(packet_sizes.size()),
+                        static_cast<uint32_t>(message_counts.size()),
+                    };
+
+                    // Create a kernel for each worker
+                    std::vector<std::vector<uint32_t>> runtime_args_per_worker(num_workers);
+
+                    for (size_t i = 0; i < num_workers; i++) {
+                        // Compute destination NOC coordinates for this worker
+                        auto dest_virtual_core = worker_virtual_cores[i];
+
+                        // Compute next worker index in the token ring
+                        size_t next_worker_idx = (i + 1) % num_workers;
+                        auto next_worker_virtual_core = worker_virtual_cores[next_worker_idx];
+
+                        // Prepare runtime args for this worker
+                        std::vector<uint32_t>& worker_args = runtime_args_per_worker[i];
+
+                        // Basic configuration
+                        worker_args.push_back(fabric_write_dest_bank_addr);  // Fabric write destination bank address
+                        worker_args.push_back(dest_virtual_core.x);          // Fabric write destination NOC X
+                        worker_args.push_back(dest_virtual_core.y);          // Fabric write destination NOC Y
+
+                        // Token ring configuration
+                        worker_args.push_back(i == 0 ? 1 : 0);              // Is starting worker (first worker starts)
+                        worker_args.push_back(num_times_to_connect);        // How many times to connect during turn
+                        worker_args.push_back(next_worker_virtual_core.x);  // Next worker NOC X
+                        worker_args.push_back(next_worker_virtual_core.y);  // Next worker NOC Y
+                        worker_args.push_back(connection_token_semaphore_id);  // Address of next worker's token
+
+                        // Traffic pattern arrays (rotate starting index by worker ID for variation)
+                        worker_args.push_back(stall_durations_cycles.size());  // Number of stall durations
+
+                        // Rotate starting point for each worker to prevent lock-step behavior
+                        size_t stall_offset = i % stall_durations_cycles.size();
+                        for (size_t j = 0; j < stall_durations_cycles.size(); j++) {
+                            size_t idx = (stall_offset + j) % stall_durations_cycles.size();
+                            worker_args.push_back(stall_durations_cycles[idx]);
+                        }
+
+                        worker_args.push_back(packet_sizes.size());  // Number of packet sizes
+                        size_t packet_size_offset = i % packet_sizes.size();
+                        for (size_t j = 0; j < packet_sizes.size(); j++) {
+                            size_t idx = (packet_size_offset + j) % packet_sizes.size();
+                            worker_args.push_back(packet_sizes[idx]);
+                        }
+
+                        worker_args.push_back(message_counts.size());  // Number of message counts
+                        size_t message_count_offset = i % message_counts.size();
+                        for (size_t j = 0; j < message_counts.size(); j++) {
+                            size_t idx = (message_count_offset + j) % message_counts.size();
+                            worker_args.push_back(message_counts[idx]);
+                        }
+
+                        // Circular buffer indices for source data and packet headers
+                        worker_args.push_back(source_l1_cb_index);      // Source L1 circular buffer index
+                        worker_args.push_back(packet_header_cb_index);  // Packet header circular buffer index
+                        worker_args.push_back(1);                       // Number of headers (size units in words)
+
+                        worker_args.push_back(i % stall_durations_cycles.size());
+                        worker_args.push_back(i % packet_sizes.size());
+                        worker_args.push_back(i % message_counts.size());
+
+                        auto worker_flow_semaphore_id =
+                            tt_metal::CreateSemaphore(program, worker_logical_cores_vec[i], 0);
+                        auto worker_teardown_semaphore_id =
+                            tt_metal::CreateSemaphore(program, worker_logical_cores_vec[i], 0);
+                        auto worker_buffer_index_semaphore_id =
+                            tt_metal::CreateSemaphore(program, worker_logical_cores_vec[i], 0);
+
+                        append_fabric_connection_rt_args(
+                            sender_device->id(),
+                            receiver_device->id(),
+                            0,
+                            program,
+                            {worker_logical_cores_vec[i]},
+                            worker_args);
+
+                        auto kernel = tt_metal::CreateKernel(
+                            program,
+                            "tests/tt_metal/tt_metal/perf_microbenchmark/routing/kernels/"
+                            "edm_fabric_connection_test_kernel.cpp",
+                            worker_logical_cores_vec[i],
+                            tt_metal::DataMovementConfig{
+                                .processor = tt_metal::DataMovementProcessor::RISCV_0,
+                                .noc = tt_metal::NOC::RISCV_0_default,
+                                .compile_args = compile_time_args});
+                        tt_metal::SetRuntimeArgs(
+                            program, kernel, worker_logical_cores_vec[i], runtime_args_per_worker[i]);
+                    }
+
+                    // Launch program and wait for completion
+                    auto start_time = std::chrono::high_resolution_clock::now();
+                    log_debug(tt::LogTest, "Launching program");
+                    this->RunProgramNonblocking(sender_device, program);
+                    this->WaitForSingleProgramDone(sender_device, program);
+                    auto end_time = std::chrono::high_resolution_clock::now();
+                    auto duration_ms =
+                        std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time).count();
+
+                    log_debug(
+                        tt::LogTest, "Iter {} with {} workers completed in {} ms", iter, num_workers, duration_ms);
+                }
+            }
+        }
+    }
+}
+
 }  // namespace fabric_router_tests
 }  // namespace tt::tt_fabric
