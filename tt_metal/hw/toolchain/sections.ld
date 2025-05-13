@@ -25,13 +25,9 @@ SECTIONS
   .text __fw_export_text_end :
 #endif
   {
-#if defined(TYPE_KERNEL)
+#if defined(TYPE_KERNEL) && defined(COMPILE_FOR_NCRISC)
     __kernel_text_start = ABSOLUTE(.);
 #endif
-    /* Because TEXT_START might not be the start of a region, we
-       need to force this section to be emitted so that following sections
-       do not restart the region, if this one is empty.  */
-    . = .;
     *(.start)
     *(.text.unlikely .text.*_unlikely .text.unlikely.*)
     *(.text.exit .text.exit.*)
@@ -44,7 +40,7 @@ SECTIONS
   } :text
   .empty.init.fini :
   {
-    /* Out elf loader checks that .empty* sections are empty, and
+    /* Our elf loader checks that .empty* sections are empty, and
        can give a helpful error, rather than an ASSERT here.  */
     KEEP (*(.init .fini))
   } :text
