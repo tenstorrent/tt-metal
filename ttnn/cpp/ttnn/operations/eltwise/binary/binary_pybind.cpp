@@ -1919,7 +1919,7 @@ void py_module(py::module& module) {
         R"doc(Perform bitwise_and operation on :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
         R"doc(\mathrm{{output\_tensor}}_i = \verb|bitwise_and|(\mathrm{{input\_tensor\_a, input\_tensor\_b}}))doc",
         ". ",
-        R"doc(INT32)doc");
+        R"doc(INT32, UINT16 (range: 0 - 65535))doc");
 
     detail::bind_bitwise_binary_ops_operation(
         module,

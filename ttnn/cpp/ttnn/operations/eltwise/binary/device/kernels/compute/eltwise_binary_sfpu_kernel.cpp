@@ -135,6 +135,9 @@ void MAIN {
 #ifdef BITWISE_INIT
             BITWISE_INIT
 #endif
+#ifdef BITWISE_UINT16_INIT
+            BITWISE_UINT16_INIT
+#endif
 #ifdef SHIFT_INIT
             SHIFT_INIT
 #endif
