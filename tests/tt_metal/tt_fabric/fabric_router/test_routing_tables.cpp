@@ -31,6 +31,7 @@ TEST_F(ControlPlaneFixture, TestTGControlPlaneInit) {
         "tt_metal/fabric/mesh_graph_descriptors/tg_mesh_graph_descriptor.yaml";
     auto control_plane = std::make_unique<ControlPlane>(tg_mesh_graph_desc_path.string());
     control_plane->configure_routing_tables_for_fabric_ethernet_channels();
+    tt::tt_metal::detail::InitializeFabricConfig(tt::tt_metal::FabricConfig::DISABLED);
 }
 
 TEST_F(ControlPlaneFixture, TestTGMeshAPIs) {
@@ -55,6 +56,7 @@ TEST_F(ControlPlaneFixture, TestTGFabricRoutes) {
     for (auto chan : valid_chans) {
         auto path = control_plane->get_fabric_route(0, 0, 4, 31, chan);
     }
+    tt::tt_metal::detail::InitializeFabricConfig(tt::tt_metal::FabricConfig::DISABLED);
 }
 
 TEST_F(ControlPlaneFixture, TestT3kMeshGraphInit) {
@@ -70,6 +72,7 @@ TEST_F(ControlPlaneFixture, TestT3kControlPlaneInit) {
         "tt_metal/fabric/mesh_graph_descriptors/t3k_mesh_graph_descriptor.yaml";
     auto control_plane = std::make_unique<ControlPlane>(t3k_mesh_graph_desc_path.string());
     control_plane->configure_routing_tables_for_fabric_ethernet_channels();
+    tt::tt_metal::detail::InitializeFabricConfig(tt::tt_metal::FabricConfig::DISABLED);
 }
 
 TEST_F(ControlPlaneFixture, TestT3kFabricRoutes) {
@@ -86,6 +89,7 @@ TEST_F(ControlPlaneFixture, TestT3kFabricRoutes) {
     for (auto chan : valid_chans) {
         auto path = control_plane->get_fabric_route(0, 0, 0, 7, chan);
     }
+    tt::tt_metal::detail::InitializeFabricConfig(tt::tt_metal::FabricConfig::DISABLED);
 }
 
 TEST_F(ControlPlaneFixture, TestT3kSplitMeshGraphInit) {
@@ -133,6 +137,7 @@ TEST_F(ControlPlaneFixture, TestQuantaGalaxyControlPlaneInit) {
         "tt_metal/fabric/mesh_graph_descriptors/quanta_galaxy_mesh_graph_descriptor.yaml";
     auto control_plane = std::make_unique<ControlPlane>(quanta_galaxy_mesh_graph_desc_path.string());
     control_plane->configure_routing_tables_for_fabric_ethernet_channels();
+    tt::tt_metal::detail::InitializeFabricConfig(tt::tt_metal::FabricConfig::DISABLED);
 }
 
 TEST_F(ControlPlaneFixture, TestQuantaGalaxyMeshAPIs) {
