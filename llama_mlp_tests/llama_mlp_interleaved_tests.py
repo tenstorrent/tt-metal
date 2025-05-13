@@ -166,13 +166,11 @@ def test_w2_interleaved_current_pcfg(device, seq_len):
     assert passed, msg
 
 
-pytest.mark.parametrize(
+@pytest.mark.parametrize(
     "device_params",
     [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL}],
     indirect=True,
 )
-
-
 @pytest.mark.parametrize(
     "seq_len",
     SEQ_LENS,
