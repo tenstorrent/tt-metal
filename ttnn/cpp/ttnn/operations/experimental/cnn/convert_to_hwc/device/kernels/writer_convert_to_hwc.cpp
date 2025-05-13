@@ -42,8 +42,8 @@ void kernel_main() {
         cb_wait_front(cb_in_transpose, 1);
         const uint64_t l1_read_addr = get_noc_addr(get_read_ptr(cb_in_transpose));
         copy_padded_sticks<channel_size, TILE_STICK_SIZE_BYTES, TILE_SIZE>(l1_read_addr, l1_write_addr);
+        noc_async_read_barrier();
         cb_pop_front(cb_in_transpose, 1);
         l1_write_addr += l1_write_addr_stride;  // skip some number of sticks if splitting writers across cores
     }
-    noc_async_read_barrier();
 }
