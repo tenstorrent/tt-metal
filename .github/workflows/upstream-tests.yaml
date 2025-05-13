@@ -172,8 +172,13 @@ jobs:
     needs:
       - get-image-tags
       - build-images
+    strategy:
+      matrix:
+        bh-card:
+          - P100
+          - P150
     runs-on:
-      - BH
+      - ${{ matrix.bh-card }}
       - in-service
       - cloud-virtual-machine
     steps:

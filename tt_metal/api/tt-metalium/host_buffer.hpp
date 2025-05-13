@@ -8,14 +8,13 @@
 #include <tt_stl/overloaded.hpp>
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/assert.hpp>
+#include <tt-metalium/memory_pin.hpp>
 
 #include <functional>
 #include <memory>
 #include <typeinfo>
 #include <utility>
 #include <vector>
-
-#include "ttnn/tensor/host_buffer/memory_pin.hpp"
 
 namespace tt::tt_metal {
 
