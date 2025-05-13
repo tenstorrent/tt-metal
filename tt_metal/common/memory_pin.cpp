@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/tensor/host_buffer/memory_pin.hpp"
+#include <tt-metalium/memory_pin.hpp>
 
 #include <functional>
 #include <utility>

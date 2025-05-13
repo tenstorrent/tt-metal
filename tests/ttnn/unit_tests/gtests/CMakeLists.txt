@@ -41,6 +41,7 @@ set(TTNN_TENSOR_UNIT_TESTS_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/tensor/common_tensor_test_utils.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/tensor/test_create_tensor.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/tensor/test_host_buffer.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/tensor/test_distributed_host_buffer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/tensor/test_tensor_layout.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/tensor/test_create_tensor_multi_device.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/tensor/test_create_tensor_with_layout.cpp
