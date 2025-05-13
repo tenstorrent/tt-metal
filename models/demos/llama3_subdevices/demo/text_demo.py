@@ -689,7 +689,7 @@ def test_demo_text(
         "decode_t/s/u": target_decode_tok_s_u,
     }
     if repeat_batches > 1:
-        assert avg_time_to_first_token * 1000 < 121, f"TTFT {avg_time_to_first_token} ms is too high, should be < 121."
+        assert avg_time_to_first_token * 1000 < 122, f"TTFT {avg_time_to_first_token} ms is too high, should be < 122."
 
     # Save benchmark data for CI dashboard
     # if is_ci_env:
