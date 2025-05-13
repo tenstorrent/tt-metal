@@ -4,12 +4,9 @@
 
 #pragma once
 
-#include <tt-metalium/control_plane.hpp>
-#include <tt-metalium/dev_msgs.h>
 #include <tt-metalium/fabric_host_interface.h>
 #include <tt-metalium/fabric_types.hpp>
 #include <tt-metalium/metal_soc_descriptor.h>
-#include <tt-metalium/tt_backend_api_types.hpp>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
@@ -25,8 +22,6 @@
 
 #include "assert.hpp"
 #include "core_coord.hpp"
-#include "llrt/hal.hpp"
-#include "llrt/rtoptions.hpp"
 #include <umd/device/cluster.h>
 #include <umd/device/device_api_metal.h>
 #include <umd/device/tt_cluster_descriptor.h>
@@ -40,9 +35,15 @@
 
 namespace tt {
 enum class ARCH;
+namespace llrt {
+class RunTimeOptions;
+}
 namespace tt_fabric {
 class ControlPlane;
-}  // namespace tt_fabric
+}
+namespace tt_metal {
+class Hal;
+}
 }  // namespace tt
 struct tt_device_params;
 

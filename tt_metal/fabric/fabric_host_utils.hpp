@@ -7,6 +7,7 @@
 #include <stdint.h>
 #include <tt-metalium/fabric_edm_types.hpp>
 #include <tt-metalium/fabric_types.hpp>
+#include <tt-metalium/mesh_graph.hpp>                   // FabricType
 #include <umd/device/types/cluster_descriptor_types.h>  // chip_id_t
 #include <tt-metalium/erisc_datamover_builder.hpp>
 #include "tt_metal/impl/context/metal_context.hpp"
