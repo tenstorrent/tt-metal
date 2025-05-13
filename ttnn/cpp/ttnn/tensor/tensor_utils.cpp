@@ -115,8 +115,9 @@ Tensor transform(const Tensor& tensor, const std::function<Tensor(const Tensor&)
         TT_FATAL(host_storage != nullptr, "transform function must return a host tensor");
         transformed_buffers.push_back(std::move(host_storage->buffer));
     }
+    TensorSpec reference_spec = transformed_specs.front();
     MultiDeviceHostStorage transformed_storage(std::move(transformed_buffers), std::move(transformed_specs));
-    return Tensor(std::move(transformed_storage), tensor.get_tensor_spec(), tensor.get_distributed_tensor_config());
+    return Tensor(std::move(transformed_storage), reference_spec, tensor.get_distributed_tensor_config());
 }
 
 void apply(const Tensor& tensor, const std::function<void(const Tensor&)>& callable) {
