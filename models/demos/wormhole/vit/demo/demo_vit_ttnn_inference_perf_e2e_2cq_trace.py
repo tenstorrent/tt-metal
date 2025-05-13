@@ -3,23 +3,13 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
-
 import torch
 from loguru import logger
 
 import ttnn
-
-from models.demos.vit.tt import ttnn_optimized_sharded_vit_wh
-from models.utility_functions import is_blackhole
-
-from models.utility_functions import (
-    disable_persistent_kernel_cache,
-    profiler,
-)
-
-from models.demos.wormhole.vit.demo.vit_test_infra import create_test_infra
-
+from models.demos.vit.tests.vit_test_infra import create_test_infra
 from models.perf.perf_utils import prep_perf_report
+from models.utility_functions import disable_persistent_kernel_cache, is_blackhole, profiler
 
 try:
     from tracy import signpost
@@ -27,21 +17,6 @@ try:
     use_signpost = True
 except ModuleNotFoundError:
     use_signpost = False
-
-#################
-import os
-
-os.environ["TTNN_CONFIG_OVERRIDES"] = '{"enable_fast_runtime_mode": true}'
-#################
-
-
-def get_expected_times(functional_vit):
-    return {
-        ttnn_optimized_sharded_vit_wh: (11, 0.02),
-    }[functional_vit]
-
-
-####
 
 
 def run_trace_2cq_model(device, test_infra, num_warmup_iterations, num_measurement_iterations):
@@ -149,7 +124,6 @@ def test_vit(device, use_program_cache):
     test_infra = create_test_infra(
         device,
         batch_size,
-        # final_output_mem_config=ttnn.L1_MEMORY_CONFIG,
     )
 
     ttnn.synchronize_device(device)
@@ -159,11 +133,6 @@ def test_vit(device, use_program_cache):
 
     run_trace_2cq_model(device, test_infra, num_warmup_iterations, num_measurement_iterations)
 
-    ## ??
-    # enable_persistent_kernel_cache()
-
-    #####
-    #####
     first_iter_time = profiler.get(f"compile") + profiler.get(f"cache")
 
     # ensuring inference time fluctuations is not noise
@@ -178,10 +147,10 @@ def test_vit(device, use_program_cache):
         expected_compile_time=0,
         expected_inference_time=0,
         comments="",
-        inference_time_cpu=0.0,
+        inference_time_cpu=0,
     )
 
-    model_name = f"ttnn_vit_base_batch_size{batch_size}"
+    model_name = f"ttnn_vit_base_batch_size_{batch_size}"
     comments = ""
     logger.info(f"{model_name} {comments} inference time (avg): {inference_time_avg}")
     logger.info(f"{model_name} compile time: {compile_time}")

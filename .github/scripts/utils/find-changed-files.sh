@@ -22,6 +22,10 @@ while IFS= read -r FILE; do
         CMakeLists.txt|**/CMakeLists.txt|**/*.cmake)
             CMAKE_CHANGED=true
             ;;
+	tt_metal/sfpi-version.sh)
+	    # Read in by a cmake file
+            CMAKE_CHANGED=true
+            ;;
         .clang-tidy|**/.clang-tidy)
             CLANG_TIDY_CONFIG_CHANGED=true
             ;;

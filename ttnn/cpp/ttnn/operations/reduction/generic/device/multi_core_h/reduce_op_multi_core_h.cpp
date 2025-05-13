@@ -63,7 +63,6 @@ operation::ProgramWithCallbacks reduce_multi_core_h(
     }
 
     uint32_t src0_cb_index = CBIndex::c_0;
-    CBHandle cb_src0;
     uint32_t src1_cb_index = CBIndex::c_1;
     CBHandle cb_src1 = 0;
     if (in_sharded) {
@@ -73,7 +72,7 @@ operation::ProgramWithCallbacks reduce_multi_core_h(
             tt_metal::CircularBufferConfig(
                 num_input_tiles * src0_single_tile_size, {{src0_cb_index, src0_cb_data_format}})
                 .set_page_size(src0_cb_index, src0_single_tile_size);
-        cb_src0 = tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
+        tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
 
         tt_metal::CircularBufferConfig cb_src1_config =
             tt_metal::CircularBufferConfig(
@@ -87,7 +86,7 @@ operation::ProgramWithCallbacks reduce_multi_core_h(
             tt_metal::CircularBufferConfig(
                 num_input_tiles * src0_single_tile_size, {{src0_cb_index, src0_cb_data_format}})
                 .set_page_size(src0_cb_index, src0_single_tile_size);
-        cb_src0 = tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
+        tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
     }
 
     uint32_t scaler_cb_index = CBIndex::c_2;

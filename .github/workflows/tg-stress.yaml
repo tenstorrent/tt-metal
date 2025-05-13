@@ -27,6 +27,7 @@ on:
 
 jobs:
   stress-4u:
+    if: ${{ inputs.topology-4u }}
     runs-on:
       - ${{ inputs.extra-tag }}
       - config-tg
@@ -73,6 +74,7 @@ jobs:
       - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
         if: always()
   stress-6u:
+    if: ${{ inputs.topology-6u }}
     runs-on:
       - ${{ inputs.extra-tag }}
       - topology-6u
@@ -107,7 +109,10 @@ jobs:
       - name: Run stress tests
         timeout-minutes: 360
         run: |
-          pytest models/demos/llama3_subdevices/demo/demo_decode.py -k "stress-test"
+          for i in {1..5}; do
+            echo "🔁 Run #$i"
+            timeout --preserve-status 1200 pytest models/demos/llama3_subdevices/demo/demo_decode.py -k "nd-hang-test"
+          done
       - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
         if: ${{ failure() }}
         with:

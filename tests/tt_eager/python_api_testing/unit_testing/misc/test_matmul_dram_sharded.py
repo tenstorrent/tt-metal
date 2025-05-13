@@ -6,7 +6,6 @@ import pytest
 from loguru import logger
 from models.utility_functions import (
     is_wormhole_b0,
-    is_grayskull,
     is_blackhole,
     skip_for_wormhole_b0,
     skip_for_blackhole,
@@ -44,7 +43,8 @@ def find_max_subblock(out_block_h, out_block_w):
     return best_h, best_w, max_product
 
 
-def pad_to_dram_banks(num, lcm=32 * 12):
+def pad_to_dram_banks(num, num_banks):
+    lcm = 32 * num_banks
     remainder = num % lcm
     if remainder == 0:
         return num
@@ -71,15 +71,11 @@ def run_test_matmul_in1_dram_sharded(
     function_level_defaults,
     use_program_cache,
 ):
-    if is_grayskull() and (N == 4096 or K == 32768):
-        pytest.skip("Skipping too large tensor test on Grayskull")
-
-    if is_grayskull() or is_blackhole():
-        N_padded = N
-        num_banks = 8
+    if is_blackhole():
+        num_banks = device.dram_grid_size().x  # need to match harvesting of dram
     else:
-        N_padded = pad_to_dram_banks(N)
         num_banks = 12
+    N_padded = pad_to_dram_banks(N, num_banks)
 
     in0_shape = [1, 1, M, K]
     in1_shape = [1, 1, K, N]
@@ -151,18 +147,12 @@ def run_test_matmul_in1_dram_sharded(
         fused_activation=None,
     )
 
-    if is_grayskull():
-        compute_kernel_config = ttnn.GrayskullComputeKernelConfig(
-            math_fidelity=fidelity,
-            math_approx_mode=True,
-        )
-    else:
-        compute_kernel_config = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=fidelity,
-            math_approx_mode=True,
-            fp32_dest_acc_en=True,
-            packer_l1_acc=True,
-        )
+    compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+        math_fidelity=fidelity,
+        math_approx_mode=True,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=True,
+    )
 
     if has_bias:
         output_t = ttnn.linear(
@@ -196,7 +186,6 @@ def run_test_matmul_in1_dram_sharded(
     assert passing
 
 
-@skip_for_blackhole("Failing on harvested BH, see #21087")
 @pytest.mark.parametrize(
     "fidelity",
     [
@@ -299,15 +288,11 @@ def run_test_matmul_in1_dram_sharded_mm_chain(
     function_level_defaults,
     use_program_cache,
 ):
-    if is_grayskull() and (N == 4096 or K == 32768):
-        pytest.skip("Skipping too large tensor test on Grayskull")
-
-    if is_grayskull() or is_blackhole():
-        N_padded = N
-        num_banks = 8
+    if is_blackhole():
+        num_banks = device.dram_grid_size().x  # need to match harvesting of dram
     else:
-        N_padded = pad_to_dram_banks(N)
         num_banks = 12
+    N_padded = pad_to_dram_banks(N, num_banks)
 
     in0_shape = [1, 1, M, K]
     in1_shape = [1, 1, K, N]
@@ -355,18 +340,12 @@ def run_test_matmul_in1_dram_sharded_mm_chain(
         fused_activation=None,
     )
 
-    if is_grayskull():
-        compute_kernel_config = ttnn.GrayskullComputeKernelConfig(
-            math_fidelity=fidelity,
-            math_approx_mode=True,
-        )
-    else:
-        compute_kernel_config = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=fidelity,
-            math_approx_mode=True,
-            fp32_dest_acc_en=True,
-            packer_l1_acc=True,
-        )
+    compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+        math_fidelity=fidelity,
+        math_approx_mode=True,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=True,
+    )
 
     # 1st mm
     output_t = ttnn.matmul(
@@ -402,7 +381,6 @@ def run_test_matmul_in1_dram_sharded_mm_chain(
     assert True
 
 
-@skip_for_blackhole("Failing on harvested BH, see #21421")
 @pytest.mark.parametrize(
     "fidelity",
     [
@@ -459,7 +437,6 @@ def test_matmul_in1_dram_sharded_with_mm_chain(
     )
 
 
-@skip_for_blackhole("Failing on harvested BH, see #21422")
 @pytest.mark.parametrize("packer_l1_acc", [True, False], ids=["pack_l1", "no_pack_l1"])
 @pytest.mark.parametrize(
     "fp32_acc_mode",
@@ -480,7 +457,7 @@ def test_matmul_in1_dram_sharded_with_mm_chain(
     "M, K, N, activation, in0_sharded, fuse_batch",
     [
         (1024, 1024, 1024, None, True, True),
-        (1024, 8192, 4096, None, False, False),
+        (1024, 4096, 2048, None, False, False),
     ],
 )
 def test_matmul_2d_in1_dram_sharded(
@@ -497,12 +474,11 @@ def test_matmul_2d_in1_dram_sharded(
     fuse_batch,
     function_level_defaults,
 ):
-    if is_grayskull() or is_blackhole():
-        N_padded = N
-        num_banks = 8
+    if is_blackhole():
+        num_banks = device.dram_grid_size().x  # need to match harvesting of dram
     else:
-        N_padded = pad_to_dram_banks(N)
         num_banks = 12
+    N_padded = pad_to_dram_banks(N, num_banks)
 
     if fuse_batch:
         in0_shape = [1, 1, M, K]
@@ -512,7 +488,7 @@ def test_matmul_2d_in1_dram_sharded(
     in1_shard_shape = [K, N_padded // num_banks]
     bias_shape = [1, 1, N]
     bias_shard_shape = [32, N_padded // num_banks]
-    grid_size = (8, 4)
+    grid_size = (4, 4)
 
     in0_block_h = M // grid_size[1] // 32
     in0_block_w = K // grid_size[0] // 32
@@ -590,18 +566,12 @@ def test_matmul_2d_in1_dram_sharded(
         fuse_batch=fuse_batch,
     )
 
-    if is_grayskull():
-        compute_kernel_config = ttnn.GrayskullComputeKernelConfig(
-            math_fidelity=fidelity,
-            math_approx_mode=True,
-        )
-    else:
-        compute_kernel_config = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=fidelity,
-            math_approx_mode=True,
-            fp32_dest_acc_en=fp32_acc_mode,
-            packer_l1_acc=packer_l1_acc,
-        )
+    compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+        math_fidelity=fidelity,
+        math_approx_mode=True,
+        fp32_dest_acc_en=fp32_acc_mode,
+        packer_l1_acc=packer_l1_acc,
+    )
     if has_bias:
         output_t = ttnn.linear(
             in0_t,

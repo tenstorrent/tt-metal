@@ -31,6 +31,9 @@ mypy==1.9.0
 # For all Llama3 demo tests
 git+https://github.com/tenstorrent/llama-models.git@tt_metal_tag
 
+# For Mistral-7B-v0.3 demo tests
+protobuf==3.20.0
+
 # testing
 pytest==7.2.2
 pytest-timeout==2.2.0
@@ -90,3 +93,4 @@ dash==2.15.0
 pandas==2.0.3
 plotly==5.18.0
 seaborn==0.13.2
+medpy==0.5.2 # Required for vanilla unet

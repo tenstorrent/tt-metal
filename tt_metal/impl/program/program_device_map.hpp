@@ -16,7 +16,12 @@ namespace tt::tt_metal {
 
 using transfer_info_cores = std::variant<CoreCoord, CoreRange>;
 
-std::vector<std::pair<transfer_info_cores, uint32_t>> extract_dst_noc_multicast_info(
+struct multicast_transfer_info {
+    transfer_info_cores cores;
+    uint32_t num_dests;
+};
+
+std::vector<multicast_transfer_info> extract_dst_noc_multicast_info(
     IDevice* device, const std::vector<CoreRange>& ranges, const CoreType core_type);
 struct transfer_info {
     std::uint32_t dst_base_addr;

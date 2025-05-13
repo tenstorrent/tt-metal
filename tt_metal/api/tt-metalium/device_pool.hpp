@@ -20,7 +20,6 @@
 #include <tt-metalium/control_plane.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/dispatch_core_common.hpp>
-#include <tt-metalium/system_memory_manager.hpp>
 #include <umd/device/types/cluster_descriptor_types.h>
 
 namespace tt {
@@ -59,9 +58,6 @@ public:
     bool close_device(chip_id_t device_id);
     void close_devices(const std::vector<tt_metal::IDevice*>& devices, bool skip_synchronize = false);
     bool is_device_active(chip_id_t id) const;
-    void register_worker_thread_for_device(tt_metal::IDevice* device, std::thread::id worker_thread_id);
-    void unregister_worker_thread_for_device(tt_metal::IDevice* device);
-    const std::unordered_set<std::thread::id>& get_worker_thread_ids() const;
     void init_profiler() const;
     void initialize_fabric_and_dispatch_fw() const;
 
@@ -78,14 +74,8 @@ private:
     bool initialize_fabric_and_dispatch_fw_ = false;
 
     std::mutex lock;
-    // TODO replace std::vector<std::unique_ptr<IDevice>> with stl::SlotMap<v1::DeviceKey, Device> when removing v0
     std::vector<std::unique_ptr<tt_metal::IDevice>> devices;
-    // Used to track worker thread handles (1 worker thread created per device)
-    // when we need to check if a call is made from an application thread or a
-    // worker thread
-    std::unordered_map<tt_metal::IDevice*, std::thread::id> device_to_worker_thread_id;
-    std::unordered_set<std::thread::id> worker_thread_ids;
-    std::thread::id device_pool_creation_thread_id;
+
     bool skip_remote_devices;
     // Issue #19729: use_max_eth_core_count_on_all_devices_ is a workaround
     // to allow TT-Mesh Workload dispatch to target active ethernet cores.
@@ -97,8 +87,10 @@ private:
     std::unordered_map<uint32_t, uint32_t> completion_queue_reader_to_cpu_core_map;
     void init_firmware_on_active_devices() const;
     void activate_device(chip_id_t id);
+
     // Initialize state on the host for this device
     void initialize_host(tt_metal::IDevice* dev) const;
+
     // Initialize state for activated devices
     void initialize_active_devices() const;
     void add_devices_to_pool(const std::vector<chip_id_t>& device_ids);

@@ -131,9 +131,16 @@ jobs:
     needs: build-artifact
     secrets: inherit
     uses: ./.github/workflows/models-post-commit.yaml
+    strategy:
+      fail-fast: false
+      matrix:
+        test-group: [
+          { runner-label: P100 },
+          { runner-label: P150 },
+        ]
     with:
       arch: blackhole
-      runner-label: ${{ inputs.runner-label || 'BH' }}
+      runner-label: ${{ matrix.test-group.runner-label }}
       timeout: 20
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}

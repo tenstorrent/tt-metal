@@ -20,7 +20,7 @@
 #include "allocator_types.hpp"
 #include "buffer_types.hpp"
 #include "core_coord.hpp"
-#include "dispatch_settings.hpp"
+#include "dispatch/dispatch_settings.hpp"
 #include "hal.hpp"
 #include <tt_stl/strong_type.hpp>
 #include "sub_device_manager.hpp"

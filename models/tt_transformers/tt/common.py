@@ -3,9 +3,11 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import math
+
 import torch
-import ttnn
 from loguru import logger
+
+import ttnn
 
 
 class HostEmbedding(torch.nn.Module):
@@ -118,20 +120,17 @@ def preprocess_inputs_prefill(
     decoding_pos = []
     prefill_lens = []
 
-    # Always prefill the nearest power of 2 for each user. This means that the majority of cases we will prefill more tokens than needed.
+    # Pad each prompt to the maximum length among all prompts.
     # To avoid issues, we keep track of the decoding position to decode correctly the user's prompt
     for i, encoded in enumerate(encoded_prompts):
-        # Prefill size is nearest power of 2
-        prefill_seq_len = max(2 ** math.ceil(math.log(len(encoded), 2)), 128)
-
         # Initial prefill tensors full of pad tokens
-        input_tokens_prefill_i = torch.full((1, prefill_seq_len), 0, dtype=torch.int32)
+        input_tokens_prefill_i = torch.full((1, max_prompt_len), 0, dtype=torch.int32)
         input_tokens_prefill_i[0, : len(encoded[:])] = torch.tensor(encoded[:]).to(input_tokens_prefill_i)
         input_tokens_prefill.append(input_tokens_prefill_i)
 
         # Keep the correct decoding position of each user
         decoding_pos.append(len(encoded))
-        prefill_lens.append(prefill_seq_len)
+        prefill_lens.append(max_prompt_len)
 
     return (
         input_tokens_prefill,
@@ -492,3 +491,45 @@ def pad_to_size(x: torch.Tensor, dim: int, size: int) -> torch.Tensor:
 
     padded_x = torch.nn.functional.pad(x, pad, mode="constant", value=0)
     return padded_x
+
+
+def create_tt_model(
+    mesh_device,
+    instruct,
+    max_batch_size,
+    optimizations,
+    max_seq_len,
+    paged_attention_config: PagedAttentionConfig = None,
+    dtype=ttnn.bfloat8_b,
+    state_dict=None,
+    num_layers=None,
+):
+    from models.tt_transformers.tt.model import Transformer
+    from models.tt_transformers.tt.model_config import ModelArgs
+
+    tt_model_args = ModelArgs(
+        mesh_device,
+        instruct=instruct,
+        max_batch_size=max_batch_size,
+        optimizations=optimizations,
+        max_seq_len=max_seq_len,
+    )
+    if num_layers is not None:
+        tt_model_args.n_layers = num_layers
+
+    # Avoid loading state_dict for every DP model
+    if not state_dict:
+        state_dict = tt_model_args.load_state_dict()
+
+    model = Transformer(
+        args=tt_model_args,
+        mesh_device=mesh_device,
+        dtype=dtype,
+        state_dict=state_dict,
+        weight_cache_path=tt_model_args.weight_cache_path(dtype),
+        paged_attention_config=paged_attention_config,
+    )
+
+    tt_kv_cache = [l.attention.layer_past for l in model.layers] if paged_attention_config else None
+
+    return tt_model_args, model, tt_kv_cache, state_dict

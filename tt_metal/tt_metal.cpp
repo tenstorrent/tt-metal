@@ -32,11 +32,11 @@
 #include <variant>
 
 #include "buffer_types.hpp"
-#include "circular_buffer_types.hpp"
+#include "circular_buffer_config.hpp"
 #include "data_types.hpp"
 #include "device.hpp"
 #include "impl/context/metal_context.hpp"
-#include "dispatch_settings.hpp"
+#include "dispatch/dispatch_settings.hpp"
 #include "hal_types.hpp"
 #include "kernel_types.hpp"
 #include "lightmetal/host_api_capture_helpers.hpp"
@@ -45,8 +45,8 @@
 #include "llrt.hpp"
 #include "logger.hpp"
 #include "tt-metalium/program.hpp"
+#include "program/program_impl.hpp"
 #include "semaphore.hpp"
-#include "system_memory_manager.hpp"
 #include "tracy/Tracy.hpp"
 #include <umd/device/tt_xy_pair.h>
 #include <umd/device/types/xy_pair.h>
@@ -321,7 +321,7 @@ bool WriteToDeviceDRAMChannel(IDevice* device, int dram_channel, uint32_t addres
         "Cannot write to reserved DRAM region, addresses [0, {}) are reserved!",
         device->allocator()->get_base_allocator_addr(HalMemType::DRAM));
     tt::tt_metal::MetalContext::instance().get_cluster().write_dram_vec(
-        host_buffer, tt_target_dram{device->id(), dram_channel, 0}, address);
+        host_buffer, device->id(), dram_channel, address);
     return pass;
 }
 
@@ -330,7 +330,7 @@ bool ReadFromDeviceDRAMChannel(
     bool pass = true;
     tt::tt_metal::MetalContext::instance().get_cluster().dram_barrier(device->id());
     tt::tt_metal::MetalContext::instance().get_cluster().read_dram_vec(
-        host_buffer, size, tt_target_dram{device->id(), dram_channel, 0}, address);
+        host_buffer, size, device->id(), dram_channel, address);
     return pass;
 }
 
@@ -427,21 +427,6 @@ void CloseDevices(const std::map<chip_id_t, IDevice*>& devices) {
         devices_to_close.push_back(device);
     }
     tt::DevicePool::instance().close_devices(devices_to_close);
-}
-
-bool InWorkerThread() {
-    // These are values are cached per thread. in_worker_thread is a 1:1 function of the thread_id.
-    // Therefore it does not need to be recomputed or looked up using the worker_thread_ids each time.
-    // This is a performance optimization, since looking up the thread id inside worker_thread_ids for
-    // each function call significantly degrades runtime perf.
-    thread_local static bool in_worker_thread = false;
-    thread_local static bool is_thread_status_checked = false;
-    if (not is_thread_status_checked) {
-        auto worker_thread_ids = tt::DevicePool::instance().get_worker_thread_ids();
-        in_worker_thread = worker_thread_ids.find(std::this_thread::get_id()) != worker_thread_ids.end();
-        is_thread_status_checked = true;
-    }
-    return in_worker_thread;
 }
 
 void print_page(
@@ -548,7 +533,21 @@ void WriteToDeviceInterleavedContiguous(const Buffer& buffer, tt::stl::Span<cons
 
 void WriteToDevice(Buffer& buffer, tt::stl::Span<const uint8_t> host_buffer) {
     ZoneScoped;
-    if (buffer.buffer_layout() == TensorMemoryLayout::INTERLEAVED ||
+    if (buffer.is_nd_sharded()) {
+        TT_FATAL(buffer.is_l1(), "Buffer with BufferDistributionSpec must be L1 for WriteToDevice!");
+        const auto& [banks, bank_mapping_in_bytes] = buffer.get_bank_data_mapping();
+        for (size_t i = 0; i < banks.size(); i++) {
+            const auto virtual_core = buffer.device()->virtual_core_from_logical_core(banks[i], buffer.core_type());
+            for (const auto& chunk_mapping_in_bytes : bank_mapping_in_bytes[i]) {
+                // TODO: subspan is in elements; here 1 element is 1 byte (ie. uint8_t) so using bytes here is fine
+                auto chunk_span = tt::stl::MakeConstSpan(
+                    host_buffer.subspan(chunk_mapping_in_bytes.src, chunk_mapping_in_bytes.size));
+                llrt::write_hex_vec_to_core(
+                    buffer.device()->id(), virtual_core, chunk_span, buffer.address() + chunk_mapping_in_bytes.dst);
+            }
+        }
+    } else if (
+        buffer.buffer_layout() == TensorMemoryLayout::INTERLEAVED ||
         buffer.buffer_layout() == TensorMemoryLayout::SINGLE_BANK) {
         WriteToDeviceInterleavedContiguous(buffer, host_buffer);
     } else if (is_sharded(buffer.buffer_layout())) {
@@ -657,7 +656,22 @@ void ReadFromDeviceSharded(Buffer& buffer, uint8_t* host_buffer, bool shard_orde
 
 void ReadFromDevice(Buffer& buffer, uint8_t* host_buffer, bool shard_order) {
     ZoneScoped;
-    if (buffer.buffer_layout() == TensorMemoryLayout::INTERLEAVED ||
+    if (buffer.is_nd_sharded()) {
+        TT_FATAL(buffer.is_l1(), "Buffer with BufferDistributionSpec must be L1 for ReadFromDevice!");
+        const auto& [banks, bank_mapping_in_bytes] = buffer.get_bank_data_mapping();
+        for (size_t i = 0; i < banks.size(); i++) {
+            const auto virtual_core = buffer.device()->virtual_core_from_logical_core(banks[i], buffer.core_type());
+            for (const auto& chunk_mapping_in_bytes : bank_mapping_in_bytes[i]) {
+                // Using cluster read_core API (as opposed to ReadFromDeviceL1) because it is inplace
+                tt::tt_metal::MetalContext::instance().get_cluster().read_core(
+                    host_buffer + chunk_mapping_in_bytes.src,
+                    chunk_mapping_in_bytes.size,
+                    tt_cxy_pair(buffer.device()->id(), virtual_core),
+                    buffer.address() + chunk_mapping_in_bytes.dst);
+            }
+        }
+    } else if (
+        buffer.buffer_layout() == TensorMemoryLayout::INTERLEAVED ||
         buffer.buffer_layout() == TensorMemoryLayout::SINGLE_BANK) {
         ReadFromDeviceInterleavedContiguous(buffer, host_buffer);
     } else if (is_sharded(buffer.buffer_layout())) {
@@ -730,7 +744,7 @@ void LaunchProgram(IDevice* device, Program& program, bool wait_until_cores_done
         }
         detail::CompileProgram(device, program);
         if (!program.is_finalized()) {
-            program_dispatch::finalize_program_offsets(program, device);
+            program.finalize_offsets(device);
         }
 
         detail::WriteRuntimeArgsToDevice(device, program, force_slow_dispatch);
@@ -877,7 +891,7 @@ void WriteRuntimeArgsToDevice(IDevice* device, Program& program, bool force_slow
     for (uint32_t index = 0; index < hal.get_programmable_core_type_count(); index++) {
         CoreType core_type = hal.get_core_type(index);
         uint32_t processor_classes = hal.get_processor_classes_count(index);
-        for (const auto& kg : program.get_kernel_groups(index)) {
+        for (const auto& kg : program.impl().get_kernel_groups(index)) {
             uint32_t kernel_config_base = kg->launch_msg.kernel_config.kernel_config_base[index];
             for (const CoreRange& core_range : kg->core_ranges.ranges()) {
                 for (auto x = core_range.start_coord.x; x <= core_range.end_coord.x; x++) {

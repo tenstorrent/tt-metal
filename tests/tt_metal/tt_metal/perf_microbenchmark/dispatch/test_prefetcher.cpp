@@ -7,7 +7,6 @@
 #include <fmt/base.h>
 #include <stdint.h>
 #include <stdio.h>
-#include <tt-metalium/dispatch_settings.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_align.hpp>
 #include <tt-metalium/tt_metal.hpp>
@@ -33,7 +32,6 @@
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/assert.hpp>
 #include <tt-metalium/buffer_types.hpp>
-#include <tt-metalium/command_queue_common.hpp>
 #include "common.h"
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/data_types.hpp>
@@ -44,7 +42,8 @@
 #include <tt-metalium/logger.hpp>
 #include "noc/noc_parameters.h"
 #include <tt-metalium/program.hpp>
-#include <tt-metalium/system_memory_manager.hpp>
+#include "impl/dispatch/command_queue_common.hpp"
+#include "impl/dispatch/dispatch_settings.hpp"
 #include "test_common.hpp"
 #include "impl/context/metal_context.hpp"
 #include "tt_metal/impl/dispatch/kernels/cq_commands.hpp"

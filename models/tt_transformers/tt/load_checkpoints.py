@@ -2,13 +2,14 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import json
 import os
+from pathlib import Path
+
 import torch
+from loguru import logger
 from safetensors.torch import load_file as safetensors_load_file
 from tqdm import tqdm
-import json
-from pathlib import Path
-from loguru import logger
 
 
 # TODO Update function for large models: For 1 layer tests we only want to load 1 checkpoint file, instead of all.
@@ -156,10 +157,9 @@ def is_param_replicated_across_shards(key: str) -> bool:
     """
     if key.startswith("vision_model."):
         return any(keyword in key for keyword in ("ln", "gate", "embed", "c_proj.bias"))
-    elif key.startswith("text_model."):
-        return any(keyword in key for keyword in ("norm", "gate"))
     else:
-        raise ValueError(f"Unknown model parameter name: {key}")
+        # for Meta checkpoint keys, key either starts with "text_model." or contains no such prefix; both cases are handled here
+        return any(keyword in key for keyword in ("norm", "gate"))
 
 
 def load_sharded_checkpoints(checkpoints, n_layers):

@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "metal_context.hpp"
-#include <tt-metalium/dispatch_settings.hpp>
+#include "dispatch/dispatch_settings.hpp"
 #include "tt_metal/impl/allocator/l1_banking_allocator.hpp"
 #include "tt_metal/impl/dispatch/topology.hpp"
 #include "tt_metal/impl/debug/dprint_server.hpp"

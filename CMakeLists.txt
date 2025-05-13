@@ -30,6 +30,11 @@ project(
 message(STATUS "Metalium version: ${PROJECT_VERSION}")
 message(STATUS "Building Unified Library for all architectures, thanks to blozano-tt")
 
+message(STATUS "Build type: ${CMAKE_BUILD_TYPE}")
+# FIXME: Why are we setting these ourselves?
+set(CMAKE_CXX_FLAGS_RELEASE "-O3")
+set(CMAKE_CXX_FLAGS_DEBUG "-O0 -g -DDEBUG")
+set(CMAKE_CXX_FLAGS_RELWITHDEBINFO "-O3 -g -DDEBUG")
 # Defining build types is the pervue of the top-level project
 if(PROJECT_IS_TOP_LEVEL)
     include(sanitizers)
@@ -82,12 +87,6 @@ endif()
 
 include(compilers)
 CHECK_COMPILERS()
-
-message(STATUS "Build type: ${CMAKE_BUILD_TYPE}")
-set(CMAKE_CXX_FLAGS_RELEASE "-O3")
-set(CMAKE_CXX_FLAGS_DEBUG "-O0 -g -DDEBUG")
-set(CMAKE_CXX_FLAGS_RELWITHDEBINFO "-O3 -g -DDEBUG")
-set(CMAKE_CXX_FLAGS_CI "-O3 -DDEBUG")
 
 # We're not currently using C++20 modules, so don't bother scanning for them
 set(CMAKE_CXX_SCAN_FOR_MODULES FALSE)
@@ -175,20 +174,18 @@ add_compile_options(
     -Werror
     # The following list is not indicative of what we _desire_ only the status quo to build.
     -Wno-deprecated-declarations
-    -Wno-pessimizing-move
-    -Wno-range-loop-construct
-    -Wno-unused-but-set-variable
+    # Vars that are used only in Asserts will appear as dead stores in builds
+    # where the preprocessor has stripped away the assert.
+    "$<$<CONFIG:Release>:-Wno-unused-but-set-variable>"
     -Wno-unused-function
     -Wno-unused-variable
     "$<$<CXX_COMPILER_ID:Clang>:-Wno-c++11-narrowing>"
-    "$<$<CXX_COMPILER_ID:Clang>:-Wno-deprecated-this-capture>"
     "$<$<CXX_COMPILER_ID:Clang>:-Wno-deprecated-volatile>"
     "$<$<CXX_COMPILER_ID:Clang>:-Wno-for-loop-analysis>"
     "$<$<CXX_COMPILER_ID:Clang>:-Wno-logical-op-parentheses>"
     "$<$<CXX_COMPILER_ID:Clang>:-Wno-mismatched-tags>"
     "$<$<CXX_COMPILER_ID:Clang>:-Wno-missing-braces>"
     "$<$<CXX_COMPILER_ID:Clang>:-Wno-reorder-ctor>"
-    "$<$<CXX_COMPILER_ID:Clang>:-Wno-shift-op-parentheses>"
     "$<$<CXX_COMPILER_ID:Clang>:-Wno-unused-lambda-capture>"
     "$<$<CXX_COMPILER_ID:Clang>:-Wno-unused-local-typedef>"
     "$<$<CXX_COMPILER_ID:Clang>:-Wno-unused-private-field>"
