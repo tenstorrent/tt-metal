@@ -76,19 +76,21 @@ def run_bert_question_and_answering_inference(
 
     device.disable_and_clear_program_cache()
 
+    profiler.start(f"preprocessing_parameter")
+    parameters = preprocess_model_parameters(
+        model_name=tt_model_name,
+        initialize_model=lambda: transformers.BertForQuestionAnswering.from_pretrained(
+            model_name, torchscript=False
+        ).eval(),
+        custom_preprocessor=bert.custom_preprocessor,
+        device=device,
+    )
+    profiler.end(f"preprocessing_parameter")
+    preprocessing_parameter = profiler.get("preprocessing_parameter")
+
     for iteration in range(iterations):
         profiler.start(f"iteration_{iteration}")
-        profiler.start(f"preprocessing_parameter")
-        parameters = preprocess_model_parameters(
-            model_name=tt_model_name,
-            initialize_model=lambda: transformers.BertForQuestionAnswering.from_pretrained(
-                model_name, torchscript=False
-            ).eval(),
-            custom_preprocessor=bert.custom_preprocessor,
-            device=device,
-        )
-        profiler.end(f"preprocessing_parameter")
-
+        profiler.start(f"end_to_end_inference_{iteration}")
         context, question = load_inputs(input_path, batch_size)
 
         preprocess_params, _, postprocess_params = nlp._sanitize_parameters()
@@ -131,16 +133,17 @@ def run_bert_question_and_answering_inference(
             parameters=parameters,
         )
         profiler.end(f"inference_time")
+        profiler.start(f"post_processing_output_to_string")
 
-        profiler.start(f"inference_result_to_torch")
         tt_output = (
             ttnn.to_torch(ttnn.from_device(tt_output)).reshape(batch_size, 1, sequence_size, -1).to(torch.float32)
         )
 
         tt_start_logits = tt_output[..., :, 0].squeeze(1)
         tt_end_logits = tt_output[..., :, 1].squeeze(1)
-        profiler.end(f"inference_result_to_torch")
-        profiler.start(f"post_processing_output_to_string")
+
+        profiler.end(f"end_to_end_inference_{iteration}")
+
         model_answers = {}
         for i in range(batch_size):
             tt_res = {
@@ -158,20 +161,20 @@ def run_bert_question_and_answering_inference(
         profiler.end("post_processing_output_to_string")
         profiler.end(f"iteration_{iteration}")
         measurements = {
-            "preprocessing_parameter": profiler.get("preprocessing_parameter"),
+            "preprocessing_parameter": preprocessing_parameter,
             "preprocessing_input": profiler.get("preprocessing_input"),
             "inference_time": profiler.get("inference_time"),
             "post_processing": profiler.get("post_processing_output_to_string"),
-            "inference_result_to_torch": profiler.get("inference_result_to_torch"),
+            "end_to_end_inference": profiler.get(f"end_to_end_inference_{iteration}"),
             "iteration": profiler.get(f"iteration_{iteration}"),
         }
 
         logger.info(f"tt_model_name: {tt_model_name}")
-        logger.info(f"preprocessing_parameter Iteration {iteration}: {measurements['preprocessing_parameter']} s")
+        logger.info(f"preprocessing_parameter: {measurements['preprocessing_parameter']} s")
         logger.info(f"preprocessing_input Iteration {iteration}: {measurements['preprocessing_input']} s")
         logger.info(f"inference_time Iteration {iteration}: {measurements['inference_time']} s")
         logger.info(f"post_processing Iteration {iteration}: {measurements['post_processing']} s")
-        logger.info(f"inference_result_to_torch Iteration {iteration}: {measurements['inference_result_to_torch']} s")
+        logger.info(f"End to end inference Iteration {iteration}: {measurements['end_to_end_inference']} s")
         logger.info(f"iteration_{iteration} total time: {measurements['iteration']} s")
         profiler.clear()
         device.enable_program_cache()
@@ -283,10 +286,15 @@ def run_bert_question_and_answering_inference_squad_v2(
 
 @pytest.mark.parametrize("model_name", ["phiyodr/bert-large-finetuned-squad2"])
 @pytest.mark.parametrize("bert", [ttnn_optimized_bert, ttnn_bert, ttnn_optimized_sharded_bert])
+@pytest.mark.parametrize(
+    "n_iterations",
+    ((5),),
+)
 def test_demo(
     input_path,
     model_name,
     bert,
+    n_iterations,
     model_location_generator,
     device,
     use_program_cache,
@@ -302,7 +310,7 @@ def test_demo(
         bert=bert,
         model_location_generator=model_location_generator,
         input_path=input_path,
-        iterations=5,
+        iterations=n_iterations,
     )
 
 
