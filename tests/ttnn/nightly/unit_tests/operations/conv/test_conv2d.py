@@ -116,14 +116,6 @@ def run_conv(
 
     if output_layout == ttnn.ROW_MAJOR_LAYOUT and activations_dtype == ttnn.bfloat8_b:
         pytest.skip("Row major layout not compatible with bfloat8_b")
-    if (
-        shard_layout == ttnn.TensorMemoryLayout.HEIGHT_SHARDED
-        and output_channels > 256
-        and output_layout == ttnn.ROW_MAJOR_LAYOUT
-    ):
-        pytest.xfail(
-            "Untilize_out is not supported when out_c > 256 for Height Sharded. https://github.com/tenstorrent/tt-metal/issues/18633"
-        )
     if slice_config and activations_dtype != ttnn.bfloat16:
         pytest.xfail("Conv2d with DRAM Slicing only supports BFloat16 for activation dtype")
 
@@ -280,7 +272,7 @@ def run_conv(
     out = out.reshape(total_batch_size, out_height, out_width, out.shape[-1])
     out = out[:, :, :, :output_channels]
 
-    out = torch.permute(out, (0, 3, 1, 2))
+    ref = torch.permute(ref, (0, 2, 3, 1))
 
     if not fp32_accum:
         pcc = 0.985
@@ -296,6 +288,7 @@ def run_conv(
         # tanh has a range of -1 to 1. So discrepancies in output values which are close to 0 tend to disproportionately affect the PCC.
         pcc = pcc * 0.99
 
+    torch.set_printoptions(precision=3, sci_mode=False)
     if fast_compare:
         passing, pcc_msg = check_with_fast_pcc_without_tensor_printout(out, ref, pcc=pcc)
         logger.info(f"PCC = {pcc_msg}. Threshold = {pcc}")
@@ -2587,6 +2580,7 @@ def test_model_k_256x256(
         (1, 128, 128, 120, 160, 3, 3, 1, 1, 1, 1, HS, None),
         (1, 256, 128, 60, 80, 3, 3, 1, 1, 1, 1, HS, None),
         (1, 256, 256, 60, 80, 3, 3, 1, 1, 1, 1, HS, None),
+        (1, 288, 288, 60, 80, 3, 3, 1, 1, 1, 1, HS, None),
         (1, 512, 256, 30, 40, 3, 3, 1, 1, 1, 1, HS, None),
         (1, 512, 512, 30, 40, 3, 3, 1, 1, 1, 1, BS, None),
         (1, 256, 512, 60, 80, 3, 3, 1, 1, 1, 1, BS, {"act_block_h": 32}),
@@ -2605,7 +2599,7 @@ def test_model_k_256x256(
     [ttnn.bfloat16, ttnn.bfloat8_b],
 )
 @pytest.mark.parametrize("math_fidelity", [ttnn.MathFidelity.LoFi])
-@pytest.mark.parametrize("output_layout", [ttnn.TILE_LAYOUT])
+@pytest.mark.parametrize("output_layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT])
 def test_conv_for_vanilla_unet(
     device,
     torch_tensor_map,
