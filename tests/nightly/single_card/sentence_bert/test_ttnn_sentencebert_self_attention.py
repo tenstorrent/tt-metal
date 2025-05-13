@@ -1,0 +1,1 @@
+../../../ttnn/integration_tests/sentence_bert/test_ttnn_sentencebert_self_attention.py
