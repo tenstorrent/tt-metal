@@ -280,9 +280,9 @@ void MeshGraph::initialize_from_yaml(const std::string& mesh_graph_desc_file_pat
                 mesh_edge_ports_to_chip_id[mesh_id][{RoutingDirection::E, chan_id++}] = chip_id;
             }
         }
-        // WEST, start from SW corner
+        // WEST, start from NW corner
         chan_id = 0;
-        for (std::uint32_t chip_id = 0; chip_id < (mesh_size - mesh_ew_size); chip_id += mesh_ew_size) {
+        for (std::uint32_t chip_id = 0; chip_id < mesh_size; chip_id += mesh_ew_size) {
             for (std::uint32_t i = 0; i < this->chip_spec_.num_eth_ports_per_direction; i++) {
                 mesh_edge_ports_to_chip_id[mesh_id][{RoutingDirection::W, chan_id++}] = chip_id;
             }
