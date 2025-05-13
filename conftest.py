@@ -146,7 +146,7 @@ def model_location_generator(is_ci_v2_env):
         internal_weka_path = Path("/mnt/MLPerf") / model_folder / model_version
         has_internal_weka = internal_weka_path.exists()
 
-        download_from_ci_v2 = download_if_ci_v2
+        download_from_ci_v2 = download_if_ci_v2 and is_ci_v2_env
 
         if download_from_ci_v2:
             assert (
