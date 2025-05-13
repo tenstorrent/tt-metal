@@ -123,6 +123,7 @@ def assert_quality(
     num_devices: int | None = None,
     pcc: float | None = None,
     mse: float | None = None,
+    relative_rmse: float | None = None,
     shard_dim: int | None = None,
 ) -> None:
     if isinstance(a, ttnn.Tensor):
@@ -136,6 +137,7 @@ def assert_quality(
         if num_devices is not None:
             assert shard_dim == 0
             a = a[0 : a.shape[0] // num_devices, ...]
+
     if isinstance(b, ttnn.Tensor):
         b = to_torch(
             b,
@@ -167,14 +169,22 @@ def assert_quality(
     mean_a = a.mean().item()
     mean_b = b.mean().item()
 
-    mse_calculated = torch.nn.functional.mse_loss(a, b).item()
+    relative_rmse_found = torch.nn.functional.mse_loss(a, b).sqrt().item() / std_a
+
+    if mse is not None:
+        relative_rmse = math.sqrt(mse) / std_a
 
     logger.info(f"μ₁ = {mean_a:.3g}, μ₂ = {mean_b:.3g}, σ₁ = {std_a:.3g}, σ₂ = {std_b:.3g}")
-    logger.info(f"PCC = {pcc_calculated * 100:.4f} %, MSE = {mse_calculated:.3g}, β = {beta * 100:.0f} %")
-    if pcc is not None:
-        assert pcc_calculated >= pcc, f"PCC = {pcc_calculated * 100:.4f} % >= {pcc * 100:.4f} %"
-    if mse is not None:
-        assert mse_calculated <= mse, f"MSE = {mse_calculated:.3g} <= {mse:.3g}"
+    logger.info(
+        f"PCC = {pcc_calculated * 100:.4f} %, β = {beta * 100:.1f} %, RMSE/σ₁ = {relative_rmse_found * 100:.1f} %"
+    )
+    if pcc is not None and pcc_calculated < pcc:
+        msg = f"PCC = {pcc_calculated * 100:.4f} % >= {pcc * 100:.4f} %"
+        raise Exception(msg)  # noqa: TRY002
+
+    if relative_rmse is not None and relative_rmse_found > relative_rmse:
+        msg = f"RMSE/σ₁ = {relative_rmse_found * 100:.1f} % <= {relative_rmse * 100:.1f} %"
+        raise Exception(msg)  # noqa: TRY002
 
 
 def all_gather(
