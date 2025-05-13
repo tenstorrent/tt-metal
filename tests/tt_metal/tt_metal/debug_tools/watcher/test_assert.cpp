@@ -188,7 +188,7 @@ static void RunTest(
             "Device {} {} core(x={:2},y={:2}) virtual(x={:2},y={:2}): {} tripped an assert on line {}. Current kernel: "
             "{}.",
             device->id(),
-            (riscv_type == DebugErisc) ? "active ethnet" : "worker",
+            (riscv_type == DebugErisc) ? "acteth" : "worker",
             logical_core.x,
             logical_core.y,
             virtual_core.x,
@@ -216,7 +216,7 @@ static void RunTest(
             "kernel completing with pending NOC transactions (missing {} barrier). Current kernel: "
             "{}.",
             device->id(),
-            (riscv_type == DebugErisc) ? "active ethnet" : "worker",
+            (riscv_type == DebugErisc) ? "acteth" : "worker",
             logical_core.x,
             logical_core.y,
             virtual_core.x,

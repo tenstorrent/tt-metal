@@ -239,7 +239,7 @@ void RunTestOnCore(WatcherFixture* fixture, IDevice* device, CoreCoord &core, bo
                 "bytes from local L1[{:#08x}] to Unknown core w/ virtual coords {} [addr=0x{:08x}] (NOC target "
                 "address did not map to any known Tensix/Ethernet/DRAM/PCIE core).",
                 device->id(),
-                (is_eth_core) ? "active ethnet" : "worker",
+                (is_eth_core) ? "acteth" : "worker",
                 core.x,
                 core.y,
                 virtual_core.x,
@@ -256,7 +256,7 @@ void RunTestOnCore(WatcherFixture* fixture, IDevice* device, CoreCoord &core, bo
                 "bytes from local L1[{:#08x}] to Tensix core w/ virtual coords {} L1[addr=0x{:08x}] (invalid address "
                 "alignment in NOC transaction).",
                 device->id(),
-                (is_eth_core) ? "active ethnet" : "worker",
+                (is_eth_core) ? "acteth" : "worker",
                 core.x,
                 core.y,
                 virtual_core.x,
@@ -275,7 +275,7 @@ void RunTestOnCore(WatcherFixture* fixture, IDevice* device, CoreCoord &core, bo
                 "bytes to local L1[{:#08x}] from Tensix core w/ virtual coords {} L1[addr=0x{:08x}] (invalid address "
                 "alignment in NOC transaction).",
                 device->id(),
-                (is_eth_core) ? "active ethnet" : "worker",
+                (is_eth_core) ? "acteth" : "worker",
                 core.x,
                 core.y,
                 virtual_core.x,
@@ -293,7 +293,7 @@ void RunTestOnCore(WatcherFixture* fixture, IDevice* device, CoreCoord &core, bo
                 "bytes from local L1[{:#08x}] to Tensix core w/ virtual coords {} L1[addr=0x{:08x}] (NOC target "
                 "overwrites mailboxes).",
                 device->id(),
-                (is_eth_core) ? "active ethnet" : "worker",
+                (is_eth_core) ? "acteth" : "worker",
                 core.x,
                 core.y,
                 virtual_core.x,
@@ -311,7 +311,7 @@ void RunTestOnCore(WatcherFixture* fixture, IDevice* device, CoreCoord &core, bo
                 "bytes to local L1[{:#08x}] from Tensix core w/ virtual coords {} L1[addr=0x{:08x}] (Local L1 "
                 "overwrites mailboxes).",
                 device->id(),
-                (is_eth_core) ? "active ethnet" : "worker",
+                (is_eth_core) ? "acteth" : "worker",
                 core.x,
                 core.y,
                 virtual_core.x,
@@ -328,7 +328,7 @@ void RunTestOnCore(WatcherFixture* fixture, IDevice* device, CoreCoord &core, bo
                 "from local L1[{:#08x}] to DRAM core w/ virtual coords {} DRAM[addr=0x{:08x}] (inline dw writes do not "
                 "support DRAM destination addresses).",
                 device->id(),
-                (is_eth_core) ? "active ethnet" : "worker",
+                (is_eth_core) ? "acteth" : "worker",
                 core.x,
                 core.y,
                 virtual_core.x,
