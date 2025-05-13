@@ -67,35 +67,53 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_convert_to_hwc(const Te
     const auto cb_in_tiled =
         create_circular_buffer(cb_in_tiled_id, cb_in_tiled_total_size, cb_in_tiled_page_size, intermediary_format);
 
-    const uint32_t cb_in_transpose_id = tt::CBIndex::c_2;
     const uint32_t cb_in_transpose_total_size = tt::div_up(input_shard_width, TILE_WIDTH) * intermediary_tile_size;
     const uint32_t cb_in_transpose_page_size = intermediary_tile_size;
-    const auto cb_in_transpose = create_circular_buffer(
-        cb_in_transpose_id, cb_in_transpose_total_size, cb_in_transpose_page_size, intermediary_format);
 
-    const uint32_t cb_out_id = tt::CBIndex::c_3;
+    const uint32_t cb_in_transpose_id0 = tt::CBIndex::c_2;
+    const auto cb_in_transpose0 = create_circular_buffer(
+        cb_in_transpose_id0, cb_in_transpose_total_size, cb_in_transpose_page_size, intermediary_format);
+
+    const uint32_t cb_in_transpose_id1 = tt::CBIndex::c_3;
+    const auto cb_in_transpose1 = create_circular_buffer(
+        cb_in_transpose_id1, cb_in_transpose_total_size, cb_in_transpose_page_size, intermediary_format);
+
+    const uint32_t cb_out_id = tt::CBIndex::c_4;
     const tt::DataFormat output_format = input_format;
     const uint32_t cb_out_total_size = cb_in_total_size;  // same size as input
     const uint32_t cb_out_page_size = input_shard_height * input_element_size;
     const auto cb_out =
         create_circular_buffer(cb_out_id, cb_out_total_size, cb_out_page_size, output_format, output.buffer());
 
-    std::vector<uint32_t> reader_compile_time_args = {cb_in_id};
-    std::vector<uint32_t> writer_compile_time_args = {cb_in_transpose_id, cb_out_id, C, input_shard_width};
+    const uint32_t total_tiles_writer0 = total_tiles_per_core / 2;
+    const uint32_t total_tiles_writer1 = total_tiles_per_core - total_tiles_writer0;
+    uint32_t output_stride_sticks = 32;
+
+    tt::log_info(
+        "total tiles = {} / {}, output stride sticks = {}",
+        total_tiles_writer0,
+        total_tiles_writer1,
+        output_stride_sticks);
+
+    std::vector<uint32_t> writer_compile_time_args0 = {
+        cb_in_transpose_id0, cb_out_id, C, input_shard_width, output_stride_sticks};
+    std::vector<uint32_t> writer_compile_time_args1 = {
+        cb_in_transpose_id1, cb_out_id, C, input_shard_width, output_stride_sticks};
+    tt::log_info("{} {}", writer_compile_time_args0, writer_compile_time_args1);
     std::vector<uint32_t> compute_compile_time_args = {
-        cb_in_id, cb_in_tiled_id, cb_in_transpose_id, total_tiles_per_core, input_shard_height};
+        cb_in_id, cb_in_tiled_id, cb_in_transpose_id0, cb_in_transpose_id1, total_tiles_per_core, input_shard_height};
 
-    auto reader_kernel_id = tt::tt_metal::CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/experimental/cnn/convert_to_hwc/device/kernels/reader_convert_to_hwc.cpp",
-        input_core_grid,
-        tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
-
-    auto writer_kernel_id = tt::tt_metal::CreateKernel(
+    auto writer_kernel_id0 = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/cnn/convert_to_hwc/device/kernels/writer_convert_to_hwc.cpp",
         input_core_grid,
-        tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
+        tt::tt_metal::ReaderDataMovementConfig(writer_compile_time_args0));
+
+    auto writer_kernel_id1 = tt::tt_metal::CreateKernel(
+        program,
+        "ttnn/cpp/ttnn/operations/experimental/cnn/convert_to_hwc/device/kernels/writer_convert_to_hwc.cpp",
+        input_core_grid,
+        tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args1));
 
     auto compute_kernel_id = tt::tt_metal::CreateKernel(
         program,

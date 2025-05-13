@@ -48,9 +48,10 @@ namespace NAMESPACE {
 void MAIN {
     constexpr uint32_t cb_in = get_compile_time_arg_val(0);
     constexpr uint32_t cb_tiled_in = get_compile_time_arg_val(1);
-    constexpr uint32_t cb_transpose_in = get_compile_time_arg_val(2);
-    constexpr uint32_t total_tiles = get_compile_time_arg_val(3);
-    constexpr uint32_t total_sticks_per_block = get_compile_time_arg_val(4);
+    constexpr uint32_t cb_transpose_in0 = get_compile_time_arg_val(2);
+    constexpr uint32_t cb_transpose_in1 = get_compile_time_arg_val(3);
+    constexpr uint32_t total_tiles = get_compile_time_arg_val(4);
+    constexpr uint32_t total_sticks_per_block = get_compile_time_arg_val(5);
 
     cb_push_back(cb_in, total_sticks_per_block);
 
@@ -58,18 +59,19 @@ void MAIN {
     tilize(cb_in, total_tiles, total_sticks_per_block, cb_tiled_in);
     tilize_uninit(cb_in, cb_tiled_in);
 
-    pack_untilize_init(cb_in, cb_transpose_in);
-    transpose_wh_init(cb_in, cb_transpose_in);
+    pack_untilize_init(cb_in, cb_transpose_in0);
+    transpose_wh_init(cb_in, cb_transpose_in0);
     pack_untilize_dst_init_short<1>(cb_in);
 
     constexpr int BATCH_SIZE = 8;
     constexpr uint32_t num_batches = total_tiles / BATCH_SIZE;
     constexpr uint32_t leftover = total_tiles % BATCH_SIZE;
-    for (uint32_t idx = 0; idx < num_batches; idx++) {
-        transpose<BATCH_SIZE>(cb_tiled_in, cb_transpose_in);
-    }
-    for (uint32_t idx = 0; idx < leftover; idx++) {
+    for (uint32_t idx = 0; idx < total_tiles; idx++) {
+        const uint32_t cb_transpose_in = idx % 2 == 0 ? cb_transpose_in0 : cb_transpose_in1;
         transpose<1>(cb_tiled_in, cb_transpose_in);
     }
+    // for (uint32_t idx = 0; idx < leftover; idx++) {
+    // transpose<1>(cb_tiled_in, cb_transpose_in0);
+    //}
 }
 }  // namespace NAMESPACE
