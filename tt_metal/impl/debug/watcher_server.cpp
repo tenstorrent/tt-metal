@@ -121,14 +121,11 @@ void create_log_file() {
     fprintf(f, "\tA single character status is in the FW, other characters clarify where, eg:\n");
     fprintf(f, "\t\tNRW is \"noc read wait\"\n");
     fprintf(f, "\t\tNWD is \"noc write done\"\n");
-    fprintf(f, "\tnoc<n>:<risc>{a, l}=an L1 address used by NOC<n> by <riscv> (eg, local src address)\n");
-    fprintf(f, "\tnoc<n>:<riscv>{(x,y), a, l}=NOC<n> unicast address used by <riscv>\n");
-    fprintf(f, "\tnoc<n>:<riscv>{(x1,y1)-(x2,y2), a, l}=NOC<n> multicast address used by <riscv>\n");
     fprintf(
         f,
-        "\trmsg:<c>=brisc host run message, D/H device/host dispatch; brisc NOC ID; I/G/D init/go/done; | separator; "
+        "\trmsg(brisc host run message): D/H device/host dispatch; brisc NOC ID; I/G/D init/go/done; | separator; "
         "B/b enable/disable brisc; N/n enable/disable ncrisc; T/t enable/disable TRISC\n");
-    fprintf(f, "\tsmsg:<c>=slave run message, I/G/D for NCRISC, TRISC0, TRISC1, TRISC2\n");
+    fprintf(f, "\tsmsg(slave run message): I/G/D for NCRISC, TRISC0, TRISC1, TRISC2\n");
     fprintf(f, "\tk_ids:<brisc id>|<ncrisc id>|<trisc id> (ID map to file at end of section)\n");
     fprintf(f, "\n");
     fflush(f);
