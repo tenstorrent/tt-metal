@@ -4,6 +4,8 @@
 
 #include <cstdint>
 #include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/host_buffer.hpp>
+#include <tt-metalium/memory_pin.hpp>
 #include <tt_stl/span.hpp>
 #include <tt_stl/overloaded.hpp>
 
@@ -13,9 +15,6 @@
 #include <utility>
 #include <variant>
 #include <vector>
-
-#include "ttnn/tensor/host_buffer/host_buffer.hpp"
-#include "ttnn/tensor/host_buffer/memory_pin.hpp"
 
 namespace tt::tt_metal {
 

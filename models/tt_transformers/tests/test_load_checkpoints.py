@@ -2,19 +2,16 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-##### Python imports #####
-from loguru import logger
-import os
-from pathlib import Path
-import regex as re
 import json
 import math
+import os
+from pathlib import Path
+
+import regex as re
+import torch
+from loguru import logger
 from tqdm import tqdm
 
-##### Pytorch imports #####
-import torch
-
-##### TTNN imports #####
 from models.tt_transformers.tt.load_checkpoints import load_sharded_checkpoints
 
 # get the absolute path to this file

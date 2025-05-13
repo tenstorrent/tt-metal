@@ -2,26 +2,26 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import ttnn
 import time
+
 import pytest
 import torch
 from loguru import logger
-from torchvision import transforms, datasets
 from torch.utils.data import DataLoader
-
+from torchvision import datasets, transforms
 from ttnn.model_preprocessing import preprocess_model_parameters
-from models.perf.perf_utils import prep_perf_report
-from models.utility_functions import (
-    enable_persistent_kernel_cache,
-    disable_persistent_kernel_cache,
-)
-from models.utility_functions import is_grayskull, is_wormhole_b0
-from models.perf.device_perf_utils import run_device_perf, check_device_perf, prep_device_perf_report
 
+import ttnn
 from models.demos.mnist.reference.mnist import MnistModel
 from models.demos.mnist.tt import tt_mnist
-
+from models.perf.device_perf_utils import check_device_perf, prep_device_perf_report, run_device_perf
+from models.perf.perf_utils import prep_perf_report
+from models.utility_functions import (
+    disable_persistent_kernel_cache,
+    enable_persistent_kernel_cache,
+    is_grayskull,
+    is_wormhole_b0,
+)
 
 transform = transforms.Compose([transforms.ToTensor()])
 test_dataset = datasets.MNIST(root="./data", train=False, transform=None, download=True)

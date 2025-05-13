@@ -2,8 +2,9 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import ttnn
 from pathlib import Path
+
+import ttnn
 
 OP_KEYS = (
     # Inputs

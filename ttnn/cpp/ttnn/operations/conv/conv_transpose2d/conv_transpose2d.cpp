@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <cstdint>
 #include <optional>
 #include <utility>
 
@@ -65,18 +66,14 @@ Tensor _transform_weights_for_conv_transpose2d(const Tensor& conv_weight_tensor,
                 }
             }
         }
-        return Tensor(
-            tt::tt_metal::HostStorage{tt::tt_metal::host_buffer::create(std::move(owned_buffer))},
-            output_shape,
-            dtype,
-            Layout::ROW_MAJOR);
+        return Tensor(tt::tt_metal::HostBuffer(std::move(owned_buffer)), output_shape, dtype, Layout::ROW_MAJOR);
     };
     auto convert_tensor = [&compute](const auto& conv_weight_tensor) {
         return std::visit(
             [&compute](auto&& storage) -> Tensor {
                 using StorageType = std::decay_t<decltype(storage)>;
                 if constexpr (std::is_same_v<StorageType, tt::tt_metal::HostStorage>) {
-                    return compute(tt::tt_metal::host_buffer::get_as<T>(storage.buffer));
+                    return compute(storage.buffer.template view_as<T>());
                 } else {
                     TT_THROW("Unsupported storage type");
                 }
@@ -266,9 +263,13 @@ Result conv_transpose2d(
         get_num_cores_nhw_from_parallel_config(largest_parallel_config),
         get_num_cores_channels_from_parallel_config(largest_parallel_config));
 
+    const uint32_t input_channels_alignment = get_input_channels_alignment(
+        input_tensor_post_tm.memory_config().memory_layout(),
+        input_tensor.layout(),
+        mm_conv,
+        input_tensor_post_tm.memory_config());
     uint32_t in_channels_padded = tt::round_up(
-        in_channels,
-        get_num_cores_channels_from_parallel_config(parallel_config) * conv_config.input_channels_alignment);
+        in_channels, get_num_cores_channels_from_parallel_config(parallel_config) * input_channels_alignment);
     uint32_t nhw_out_padded_ntile = get_num_cores_nhw_from_parallel_config(output_parallel_config) *
                                     conv_out_memory_config.shard_spec().value().shape[0] / tt::constants::TILE_HEIGHT;
     auto opt_conv_op_block_config = determine_per_core_conv_block_config(
@@ -291,7 +292,7 @@ Result conv_transpose2d(
         tie(weight_tensor_on_device, bias_tensor_on_device) = prepare_conv_weights_biases_and_move_to_device(
             transform_weights_for_conv_transpose2d(weight_tensor, mirror_kernel),
             bias_tensor,
-            conv_config.input_channels_alignment,
+            input_channels_alignment,
             conv_config.weights_dtype,
             opt_conv_op_block_config.act_block_w_ntiles,
             opt_conv_op_block_config.out_subblock_w_ntiles,

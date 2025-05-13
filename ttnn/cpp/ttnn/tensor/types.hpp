@@ -20,7 +20,7 @@
 #include <tt_stl/reflection.hpp>
 #include <tt_stl/span.hpp>
 #include "ttnn/distributed/distributed_tensor_config.hpp"
-#include "cpp/ttnn/tensor/enum_types.hpp"
+#include "ttnn/tensor/enum_types.hpp"
 
 #include "ttnn/tensor/shape/shape.hpp"
 

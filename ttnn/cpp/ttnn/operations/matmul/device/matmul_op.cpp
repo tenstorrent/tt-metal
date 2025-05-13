@@ -1240,23 +1240,6 @@ std::tuple<uint32_t, uint32_t> get_matmul_subblock_params(
     return {1, 1};
 }
 
-void add_stagger_defines_if_needed(
-    const tt::ARCH arch, const int num_cores, std::map<string, string>& mm_kernel_defines) {
-    // Empirically deduced di/dt problems appear for matmuls using more than 48
-    // cores; when there is 48 cores or less, we never enable stagger since the
-    // delay impacts op performance
-    constexpr uint32_t WH_B0_MM_MAX_CORES_NO_STAGGER = 48;
-
-    // Apply stagger delay on Wormhole B0 on odd rows, so that only half of cores
-    // start doing work at once. This is done to mitigate di/dt issues, in case
-    // the environment var is set. See issue #9857.
-    const bool enable_stagger = std::getenv("TT_ENABLE_MATMUL_STAGGER");
-    if (enable_stagger && arch == tt::ARCH::WORMHOLE_B0 && num_cores > WH_B0_MM_MAX_CORES_NO_STAGGER) {
-        mm_kernel_defines["MM_STAGGER_ODD_ROWS"] = "1";
-        log_warning(tt::LogOp, "Stagger enabled for matmul op using {} cores.", num_cores);
-    }
-}
-
 }  // namespace bmm_op_utils
 
 namespace ttnn {
@@ -1423,6 +1406,31 @@ Tensor matmul(
         .at(0);
 }
 
+std::vector<Tensor> matmul_batched_weights(
+    const Tensor& input_tensor_a,
+    const std::vector<Tensor>& input_tensors_b,
+    const std::optional<const Tensor>& bias,
+    const struct Matmul& parameters,
+    const QueueId queue_id,
+    const std::optional<Tensor>& optional_output_tensor) {
+    std::vector<std::optional<const Tensor>> optional_input_tensors = {};
+    if (bias.has_value()) {
+        optional_input_tensors.push_back(bias.value());
+    } else {
+        optional_input_tensors.push_back(std::nullopt);
+    }
+
+    std::vector<Tensor> input_tensors = input_tensors_b;
+    input_tensors.insert(input_tensors.begin(), input_tensor_a);
+
+    return operation::run(
+        create_matmul_struct(input_tensor_a, input_tensors_b[0], parameters, {optional_output_tensor}),
+        input_tensors,
+        optional_input_tensors,
+        {optional_output_tensor},
+        queue_id);
+}
+
 void check_tensor_in_grid(const Tensor& tensor, const CoreCoord& grid_size) {
     // Validate tensor is within grid if sharded and not in DRAM
     if (tensor.memory_config().is_sharded() && tensor.memory_config().buffer_type() != BufferType::DRAM) {
@@ -1441,7 +1449,6 @@ void Matmul::validate(
     const std::vector<Tensor>& input_tensors,
     const std::vector<std::optional<const Tensor>>& optional_input_tensors,
     const std::vector<std::optional<Tensor>>& optional_output_tensors) const {
-    TT_FATAL(input_tensors.size() == 2, "Error");
     const auto& input_tensor_a = input_tensors.at(0);
     const auto& input_tensor_b = input_tensors.at(1);
     const auto& a_shape = input_tensor_a.get_logical_shape();
@@ -1556,6 +1563,39 @@ void Matmul::validate(
     }
     MatmulProgramConfig chosen_program_config =
         get_program_config(input_tensor_a, input_tensor_b, bias_single_tile_size, this);
+
+    if (std::holds_alternative<MatmulMultiCoreReuseMultiCast1DProgramConfig>(chosen_program_config) &&
+        this->global_cb.has_value() && input_tensor_b.is_sharded() && input_tensor_b.buffer()->is_dram()) {
+        for (uint32_t i = 1; i < input_tensors.size(); ++i) {
+            TT_FATAL(
+                input_tensor_b.get_logical_shape() == input_tensors[i].get_logical_shape(),
+                "for multi-tensor matmul, all weight tensors must have the same logical_shape, {} is not equal to {}",
+                input_tensor_b.get_logical_shape(),
+                input_tensors[i].get_logical_shape());
+            TT_FATAL(
+                input_tensor_b.get_padded_shape() == input_tensors[i].get_padded_shape(),
+                "for multi-tensor matmul, all weight tensors must have the same padded_shape {} is not equal to {}",
+                input_tensor_b.get_padded_shape(),
+                input_tensors[i].get_padded_shape());
+            TT_FATAL(
+                input_tensor_b.get_tensor_spec() == input_tensors[i].get_tensor_spec(),
+                "for multi-tensor matmul, all weight tensors must have the same tensor_spec {} is not equal to {}",
+                input_tensor_b.get_tensor_spec(),
+                input_tensors[i].get_tensor_spec());
+            TT_FATAL(
+                input_tensor_b.get_layout() == input_tensors[i].get_layout(),
+                "for multi-tensor matmul, all weight tensors must have the same layout {} is not equal to {}",
+                input_tensor_b.get_layout(),
+                input_tensors[i].get_layout());
+            TT_FATAL(
+                input_tensor_b.get_dtype() == input_tensors[i].get_dtype(),
+                "for multi-tensor matmul, all weight tensors must have the same _dtype {} is not equal to {}",
+                input_tensor_b.get_dtype(),
+                input_tensors[i].get_dtype());
+        }
+    } else {
+        TT_FATAL(input_tensors.size() == 2, "Error");
+    }
 
     if (optional_bias.has_value()) {
         const auto& bias = optional_bias.value();
@@ -2161,9 +2201,12 @@ std::vector<ttnn::TensorSpec> Matmul::compute_output_specs(
                             ShardOrientation::ROW_MAJOR};
                         mem_config = mem_config.with_shard_spec(shard_spec);
                     }
-                    return {TensorSpec(
+                    // support for multi-tensor output
+                    const ttnn::TensorSpec tensor_spec(
                         output_shape,
-                        TensorLayout(output_dtype.value(), PageConfig(output_layout, output_tile), mem_config))};
+                        TensorLayout(output_dtype.value(), PageConfig(output_layout, output_tile), mem_config));
+                    std::vector<ttnn::TensorSpec> output_tensor_specs(input_tensors.size() - 1, tensor_spec);
+                    return output_tensor_specs;
                 } else if constexpr (std::is_same_v<
                                          ProgramConfigType,
                                          MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig>) {
@@ -2378,11 +2421,12 @@ operation::CacheableMeshWorkload<std::vector<Tensor>> Matmul::create_mesh_worklo
                 return create_homogenous_mesh_workload(mcast_mm_program, tensor_coords);
 
             } else if constexpr (std::is_same_v<ProgramConfigType, MatmulMultiCoreReuseMultiCast1DProgramConfig>) {
+                const std::vector<Tensor> input_tensors_b(input_tensors.begin() + 1, input_tensors.end());
                 auto mcast_mm_program = matmul_multi_core_reuse_mcast_1d_optimized(
                     input_tensor_a,
-                    input_tensor_b,
+                    input_tensors_b,
                     bias,
-                    output_tensor,
+                    output_tensors,
                     broadcast_batch,
                     program_config.compute_with_storage_grid_size,
                     this->compute_kernel_config.value(),
