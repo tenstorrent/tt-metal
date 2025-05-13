@@ -141,6 +141,7 @@ def create_tt_model(
         weight_cache_path=tt_model_args.weight_cache_path(dtype),
         paged_attention_config=paged_attention_config,
         mode="prefill",
+        enable_prefetcher_performance_mode=True,
     )
 
     if use_paged_kv_cache:
