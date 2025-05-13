@@ -90,7 +90,6 @@ def run_bert_question_and_answering_inference(
 
     for iteration in range(iterations):
         profiler.start(f"iteration_{iteration}")
-        profiler.start(f"end_to_end_inference_{iteration}")
         context, question = load_inputs(input_path, batch_size)
 
         preprocess_params, _, postprocess_params = nlp._sanitize_parameters()
@@ -116,6 +115,7 @@ def run_bert_question_and_answering_inference(
         )
 
         position_ids = positional_ids(config, bert_input.input_ids)
+        profiler.start(f"end_to_end_inference_{iteration}")
         profiler.start(f"preprocessing_input")
         ttnn_bert_inputs = bert.preprocess_inputs(
             bert_input["input_ids"],
@@ -139,10 +139,10 @@ def run_bert_question_and_answering_inference(
             ttnn.to_torch(ttnn.from_device(tt_output)).reshape(batch_size, 1, sequence_size, -1).to(torch.float32)
         )
 
+        profiler.end(f"end_to_end_inference_{iteration}")
+
         tt_start_logits = tt_output[..., :, 0].squeeze(1)
         tt_end_logits = tt_output[..., :, 1].squeeze(1)
-
-        profiler.end(f"end_to_end_inference_{iteration}")
 
         model_answers = {}
         for i in range(batch_size):
