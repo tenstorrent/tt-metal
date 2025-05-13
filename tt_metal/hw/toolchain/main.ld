@@ -193,6 +193,10 @@ SECTIONS
     *(.got.plt) *(.igot.plt) *(.got) *(.igot)
     . = ALIGN(4);
     __ldm_data_end = .;
+#if defined(COMPILE_FOR_NRISC)
+      ASSERT(_Z11kernel_initm == __kernel_text_start, "kernel text start mismatch");
+      ASSERT(__kernel_init_local_l1_base == __kernel_data_lma, "data lma mismatch");
+#endif
   } :data
   SECTION(.empty.ctors.dtors, .data)
   {
