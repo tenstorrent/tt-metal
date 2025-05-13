@@ -2,14 +2,15 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import pytest
-import ttnn
 import time
+
+import pytest
 import torch
 from loguru import logger
 
+import ttnn
+from models.demos.mobilenetv2.tests.mobilenetv2_e2e_performant import MobileNetV2Trace2CQ
 from models.utility_functions import run_for_wormhole_b0
-from models.experimental.mobilenetv2.tests.mobilenetv2_e2e_performant import MobileNetV2Trace2CQ
 
 
 @run_for_wormhole_b0()

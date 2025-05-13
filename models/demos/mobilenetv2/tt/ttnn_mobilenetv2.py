@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
-from models.experimental.mobilenetv2.tt.common import TtMobileNetV2Conv2D, TtInvertedResidual
+from models.demos.mobilenetv2.tt.common import TtInvertedResidual, TtMobileNetV2Conv2D
 
 
 class TtMobileNetV2:
@@ -212,7 +212,6 @@ class TtMobileNetV2:
             (model_params["fused_conv_34_weight"], model_params["fused_conv_34_bias"]),
             device,
             batchsize,
-            reshard_if_not_optimal=True,
             width_shard=True,
         )
         self.l1_weight = model_params["classifier_1_weight"]
