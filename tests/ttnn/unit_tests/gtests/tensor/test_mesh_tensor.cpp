@@ -275,8 +275,8 @@ TEST_P(MeshTensorWriteTest, WriteMultiDeviceHostTensor) {
         std::get_if<tt::tt_metal::MultiDeviceHostStorage>(&output_host_tensor.get_storage());
     ASSERT_NE(output_multi_device_host_storage, nullptr);
     std::vector<ttnn::Shape> output_host_shapes;
-    for (const auto& spec : output_multi_device_host_storage->specs) {
-        output_host_shapes.push_back(spec.logical_shape());
+    for (size_t i = 0; i < output_multi_device_host_storage->num_buffers(); i++) {
+        output_host_shapes.push_back(output_multi_device_host_storage->get_tensor_spec(i).logical_shape());
     }
     EXPECT_THAT(output_host_shapes, ElementsAreArray(shape_matchers));
 

@@ -122,14 +122,14 @@ void dump_multi_device_host_storage(
 
     if (std::holds_alternative<ReplicateTensor>(strategy)) {
         dump_host_storage(output_file, storage.get_buffer(0), dtype);
-        auto spec = storage.specs.at(0);
+        auto spec = storage.get_tensor_spec(0);
         dump_tensor_spec(spec, output_file);
     } else {
         for (int i = 0; i < num_buffers; i++) {
             dump_host_storage(output_file, storage.get_buffer(i), dtype);
         }
-        for (const auto& spec : storage.specs) {
-            dump_tensor_spec(spec, output_file);
+        for (int i = 0; i < num_buffers; i++) {
+            dump_tensor_spec(storage.get_tensor_spec(i), output_file);
         }
     }
 }

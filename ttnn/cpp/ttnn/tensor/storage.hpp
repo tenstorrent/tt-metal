@@ -8,6 +8,7 @@
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/host_buffer.hpp>
 
+#include "tt-metalium/distributed_host_buffer.hpp"
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/tensor/tensor_spec.hpp"
 
@@ -53,66 +54,33 @@ struct DeviceStorage {
     bool is_uniform_storage() const;
 };
 
-struct MultiDeviceHostStorage {
-    std::vector<HostBuffer> buffers;
-    std::vector<TensorSpec> specs;
-
-    friend void swap(MultiDeviceHostStorage& first, MultiDeviceHostStorage& second) noexcept {
-        // enable ADL (not necessary, but good practice)
-        using std::swap;
-
-        swap(first.buffers, second.buffers);
-        swap(first.specs, second.specs);
-    }
-
+class MultiDeviceHostStorage {
+public:
     MultiDeviceHostStorage() = default;
-    MultiDeviceHostStorage(std::vector<HostBuffer> buffers_, std::vector<TensorSpec> specs_) :
-        buffers(std::move(buffers_)), specs(std::move(specs_)) {}
-    MultiDeviceHostStorage(MultiDeviceHostStorage&& other) noexcept { swap(*this, other); }
-    // unfotunately we need to have this code written manually.
-    MultiDeviceHostStorage(const MultiDeviceHostStorage& other) {
-        buffers = other.buffers;
-        specs = other.specs;
-    }
-
-    MultiDeviceHostStorage& operator=(const MultiDeviceHostStorage& other) {
-        MultiDeviceHostStorage temp(other);
-        swap(*this, temp);
-        return *this;
-    }
-
-    MultiDeviceHostStorage& operator=(MultiDeviceHostStorage&& other) noexcept {
-        swap(*this, other);
-        return *this;
-    }
-
-    bool operator==(const MultiDeviceHostStorage& other) {
-        return this->buffers == other.buffers and this->specs == other.specs;
-    }
+    MultiDeviceHostStorage(std::vector<HostBuffer> buffers, std::vector<TensorSpec> specs) :
+        buffers_(std::move(buffers)), specs_(std::move(specs)) {}
 
     static constexpr auto attribute_names = std::forward_as_tuple();
     auto attribute_values() const { return std::forward_as_tuple(); }
 
-    HostBuffer get_buffer(int buffer_index) const {
-        TT_FATAL(buffer_index < buffers.size(), "Buffer not found for buffer_index {}", buffer_index);
-        return buffers[buffer_index];
-    }
+    // Returns `HostBuffer` at position `buffer_index`;
+    HostBuffer get_buffer(int buffer_index) const;
 
-    HostBuffer& get_buffer(int buffer_index) {
-        TT_FATAL(buffer_index < buffers.size(), "Buffer not found for buffer_index {}", buffer_index);
-        return buffers[buffer_index];
-    }
+    // Returns `TensorSpec` at position `spec_index`;
+    TensorSpec get_tensor_spec(int spec_index) const;
 
-    TensorSpec get_tensor_spec(int spec_index) const {
-        TT_FATAL(spec_index < specs.size(), "Spec for device {} not found in spec list", spec_index);
-        return specs[spec_index];
-    }
+    // Returns the number of `HostBuffer`s in the storage;
+    size_t num_buffers() const;
 
-    uint32_t num_buffers() const { return buffers.size(); }
+    // Returns true if all `HostBuffer`s are allocated;
+    bool is_allocated() const;
 
-    bool is_allocated() const {
-        return std::all_of(buffers.begin(), buffers.end(), [](auto&& buffer) { return buffer.is_allocated(); });
-    }
+    // Deallocates all `HostBuffer`s;
+    bool deallocate();
+
+private:
+    std::vector<HostBuffer> buffers_;
+    std::vector<TensorSpec> specs_;
 };
 
 using Storage = std::variant<HostStorage, DeviceStorage, MultiDeviceHostStorage>;

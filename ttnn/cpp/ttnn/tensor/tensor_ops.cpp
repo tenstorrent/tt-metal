@@ -116,12 +116,13 @@ Tensor tensor_to_layout(const Tensor& input_tensor, Layout target_layout, distri
             tt::stl::overloaded{
                 [&](const HostStorage& s) { return tensor_impl::to_layout_wrapper(input_tensor, target_layout); },
                 [&](const MultiDeviceHostStorage& s) {
-                    std::vector<Tensor> shards(s.buffers.size());
-                    for (std::size_t shard_idx = 0; shard_idx < s.buffers.size(); ++shard_idx) {
+                    // TODO: #22045 - Move to `transform` and use OMP parallel for.
+                    std::vector<Tensor> shards(s.num_buffers());
+                    for (std::size_t shard_idx = 0; shard_idx < s.num_buffers(); ++shard_idx) {
                         // Multi-Thread Host tilization of shards.
                         mesh_device->enqueue_to_thread_pool([shard_idx, &s, &shards, target_layout]() {
                             ZoneScopedN("HostTilize");
-                            Tensor shard(s.buffers[shard_idx], s.specs[shard_idx]);
+                            Tensor shard(s.get_buffer(shard_idx), s.get_tensor_spec(shard_idx));
                             shards[shard_idx] = tensor_impl::to_layout_wrapper(shard, target_layout);
                         });
                     }

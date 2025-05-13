@@ -440,8 +440,8 @@ HostBuffer get_host_buffer_from_tensor(const Tensor& tt_tensor, const bool padde
         tt::stl::overloaded{
             [](const HostStorage& storage) { return storage.buffer; },
             [](const MultiDeviceHostStorage& storage) {
-                TT_FATAL(storage.buffers.size() == 1, "Can't get a single buffer from multi device host storage");
-                return storage.buffers[0];
+                TT_FATAL(storage.num_buffers() == 1, "Can't get a single buffer from multi device host storage");
+                return storage.get_buffer(0);
             },
             [&tt_tensor](auto&&) -> HostBuffer {
                 TT_THROW(

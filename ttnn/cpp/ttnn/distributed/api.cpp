@@ -48,7 +48,7 @@ std::vector<Tensor> get_device_tensors(const Tensor& tensor) {
         auto& host_storage = std::get<tt::tt_metal::MultiDeviceHostStorage>(tensor.get_storage());
         const Tile tile = tensor.get_tensor_spec().tile();
         for (int i = 0; i < host_storage.num_buffers(); ++i) {
-            tensors.push_back(Tensor{host_storage.get_buffer(i), host_storage.specs[i]});
+            tensors.push_back(Tensor{host_storage.get_buffer(i), host_storage.get_tensor_spec(i)});
         }
         return tensors;
     } else if (std::holds_alternative<tt::tt_metal::DeviceStorage>(tensor.get_storage())) {
