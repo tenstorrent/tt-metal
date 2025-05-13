@@ -41,10 +41,6 @@ CBHandle CreateCircularBuffer(
 }  // namespace experimental
 
 namespace program_dispatch {
-void assemble_device_commands(
-    ProgramCommandSequence& program_command_sequence, Program& program, IDevice* device, SubDeviceId sub_device_id);
-template <typename T>
-void finalize_program_offsets(T& workload_type, IDevice* device);
 template <typename WorkloadType, typename DeviceType>
 uint32_t program_base_addr_on_core(
     WorkloadType& workload, DeviceType generic_device, HalProgrammableCoreType core_type);
@@ -145,7 +141,6 @@ public:
     const std::vector<Semaphore>& semaphores() const;
 
     KernelGroup* kernels_on_core(const CoreCoord& core, uint32_t programmable_core_type_index);
-    std::vector<std::shared_ptr<KernelGroup>>& get_kernel_groups(uint32_t programmable_core_type_index);
     std::unordered_map<KernelHandle, std::shared_ptr<Kernel>>& get_kernels(uint32_t programmable_core_type_index);
     void add_buffer(std::shared_ptr<Buffer> buf);
     void release_buffers();
@@ -227,20 +222,11 @@ private:
 
     void add_semaphore(const CoreRangeSet& crs, uint32_t semaphore_id, uint32_t init_value, CoreType core_type);
 
-    void set_launch_msg_sem_offsets();
-    void populate_dispatch_data(IDevice* device);
-    const ProgramTransferInfo& get_program_transfer_info() const noexcept;
-    std::shared_ptr<Buffer> get_kernels_buffer(IDevice* device) const noexcept;
-    std::vector<uint32_t>& get_program_config_sizes() const noexcept;
     bool runs_on_noc_unicast_only_cores();
     bool runs_on_noc_multicast_only_cores();
     std::unordered_map<uint64_t, ProgramCommandSequence>& get_cached_program_command_sequences() noexcept;
     bool kernel_binary_always_stored_in_ringbuffer();
 
-    friend void program_dispatch::assemble_device_commands(
-        ProgramCommandSequence& program_command_sequence, Program& program, IDevice* device, SubDeviceId sub_device_id);
-    template <typename WorkloadType, typename DeviceType>
-    friend uint32_t program_dispatch::program_base_addr_on_core(WorkloadType&, DeviceType, HalProgrammableCoreType);
     friend HWCommandQueue;
     friend EnqueueProgramCommand;
     friend distributed::MeshWorkload;
