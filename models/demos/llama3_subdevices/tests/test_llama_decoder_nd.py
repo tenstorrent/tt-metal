@@ -135,14 +135,6 @@ def test_llama_decoder_same(
         strategy=ttnn.ShardStrategy.WIDTH,
         use_height_and_width_as_shard_shape=True,
     )
-    residual_buffer = ttnn.as_tensor(
-        torch.zeros((1, 1, 32, 2048)),
-        device=mesh_device,
-        layout=ttnn.TILE_LAYOUT,
-        dtype=ttnn.bfloat16,
-        memory_config=residual_memory_config,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-    )
 
     # input = torch.randn(1, 32, 4096)
     pt_decode_input = (torch.rand(batch_size, seqlen, model_args.dim) * 2) - 1
@@ -173,7 +165,14 @@ def test_llama_decoder_same(
         mesh_device.set_sub_device_stall_group([prefetcher_setup.worker_sub_device_id])
 
         # Run TT model
-        res = residual_buffer
+        res = ttnn.as_tensor(
+            torch.zeros((1, 1, 32, 2048)),
+            device=mesh_device,
+            layout=ttnn.TILE_LAYOUT,
+            dtype=ttnn.bfloat16,
+            memory_config=residual_memory_config,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        )
         tt_out, res = tt_model(
             decode_input,
             res,

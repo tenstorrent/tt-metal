@@ -469,7 +469,6 @@ def run_rms_fuse_impl(
             residual_input_tensor=residual_tensor[i],
             stats=tt_stats,
         )
-        print(tt_stats)
         tt_out_array.append(tt_out)
     for i in range(num_iters):
         tt_out_torch = ttnn.to_torch(
@@ -480,9 +479,9 @@ def run_rms_fuse_impl(
             residual_out_torch = ttnn.to_torch(
                 residual_tensor[i],
                 mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(0, 3), mesh_shape=(1, num_devices)),
-            )
+            )[0].unsqueeze(0)
             ref_res_add = input_tensor_torch[i] + residual_torch[i]
-            passing, output = comp_pcc(residual_out_torch, ref_res_add, 0.999)
+            passing, output = comp_pcc(residual_out_torch, ref_res_add, 0.9999)
             if not passing:
                 mesh_device.reset_sub_device_stall_group()
             logger.info(output)

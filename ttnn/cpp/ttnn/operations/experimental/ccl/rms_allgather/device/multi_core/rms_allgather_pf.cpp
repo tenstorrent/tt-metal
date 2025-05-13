@@ -135,8 +135,9 @@ operation::ProgramWithCallbacks frmsnorm_multi_core_sharded(
     // Tensor Info
     const auto input_tensor_cores = a.memory_config().shard_spec()->grid;
     const auto output_tensor_cores = output.memory_config().shard_spec()->grid;
-    const auto output_tensor_shard_shape = output.memory_config().shard_spec()->shape;
-    const auto output_tensor_shard_num_pages = output_tensor_shard_shape[0] * output_tensor_shard_shape[1] / TILE_HW;
+    const auto stats_tensor_cores = stats.value().memory_config().shard_spec()->grid;
+    const auto stats_tensor_shard_shape = stats.value().memory_config().shard_spec()->shape;
+    const auto stats_tensor_shard_num_pages = stats_tensor_shard_shape[0] * stats_tensor_shard_shape[1] / TILE_HW;
 
     // L1 Scratch CB Creation
     const size_t packet_size_bytes = tt::tt_fabric::get_1d_fabric_config().channel_buffer_size_bytes;
@@ -890,12 +891,12 @@ operation::ProgramWithCallbacks frmsnorm_multi_core_sharded(
 
     CoreCoord drain_sync_core;
     auto input_cores_vec = corerange_to_cores(input_tensor_cores, std::nullopt, true);
-    auto output_cores_vec = corerange_to_cores(output_tensor_cores, std::nullopt, true);
-    auto cores_per_device = output_cores_vec.size() + ring_size - 1 / ring_size;
-    uint32_t start_core_index_for_device = output_cores_vec.size() / ring_size * ring_index;
+    auto stats_cores_vec = corerange_to_cores(stats_tensor_cores, std::nullopt, true);
+    auto cores_per_device = stats_cores_vec.size() + ring_size - 1 / ring_size;
+    uint32_t start_core_index_for_device = stats_cores_vec.size() / ring_size * ring_index;
     uint32_t end_core_index_for_device = start_core_index_for_device + cores_per_device;
-    auto output_cores_this_device = std::vector<CoreCoord>(
-        output_cores_vec.begin() + start_core_index_for_device, output_cores_vec.begin() + end_core_index_for_device);
+    auto stats_cores_this_device = std::vector<CoreCoord>(
+        stats_cores_vec.begin() + start_core_index_for_device, stats_cores_vec.begin() + end_core_index_for_device);
 
     for (uint32_t i = 0; i < cores.size(); ++i) {
         const auto& core = cores[i];
@@ -1000,23 +1001,23 @@ operation::ProgramWithCallbacks frmsnorm_multi_core_sharded(
             stats.value().buffer()->address()  // tensor_address0
         };
 
-        if (i < num_links) {
+        if (i == 0) {
             // Add RT values for the all gather core to all_gather_rts
             // Will be appended to the end of writer rt args
             uint32_t base_pages_per_worker = 1 / num_links;
             uint32_t remainder = 1 % num_links;
             uint32_t input_tile_id_start = i * base_pages_per_worker + std::min(i, remainder);
             uint32_t input_tile_id_end = (i + 1) * base_pages_per_worker + std::min(i + 1, remainder);
-            uint32_t output_first_core_tile_start_offset =
-                (ring_index + input_tile_id_start) % output_tensor_shard_num_pages;
-            std::vector<uint32_t> output_tensor_cores_x;
-            std::vector<uint32_t> output_tensor_cores_y;
-            for (uint32_t i = input_tile_id_start / output_tensor_shard_num_pages;
-                 i < (input_tile_id_end + output_tensor_shard_num_pages - 1) / output_tensor_shard_num_pages;
+            uint32_t stats_first_core_tile_start_offset =
+                (ring_index + input_tile_id_start) % stats_tensor_shard_num_pages;
+            std::vector<uint32_t> stats_tensor_cores_x;
+            std::vector<uint32_t> stats_tensor_cores_y;
+            for (uint32_t i = input_tile_id_start / stats_tensor_shard_num_pages;
+                 i < (input_tile_id_end + stats_tensor_shard_num_pages - 1) / stats_tensor_shard_num_pages;
                  i++) {
-                auto this_core = mesh_device->worker_core_from_logical_core(output_cores_this_device[i]);
-                output_tensor_cores_x.push_back(this_core.x);
-                output_tensor_cores_y.push_back(this_core.y);
+                auto this_core = mesh_device->worker_core_from_logical_core(stats_cores_this_device[i]);
+                stats_tensor_cores_x.push_back(this_core.x);
+                stats_tensor_cores_y.push_back(this_core.y);
             }
             if (i == 0) {
                 // drain sync core is the first worker core
@@ -1024,14 +1025,14 @@ operation::ProgramWithCallbacks frmsnorm_multi_core_sharded(
             }
 
             std::vector<uint32_t> base_rt_args = {
-                output_first_core_tile_start_offset,  // first_core_tile_start_offset
-                output_tensor_cores_x.size(),         // num_cores
-                drain_sync_core.x,                    // out_ready_sem_noc0_x
-                drain_sync_core.y                     // out_ready_sem_noc0_y
+                stats_first_core_tile_start_offset,  // first_core_tile_start_offset
+                stats_tensor_cores_x.size(),         // num_cores
+                drain_sync_core.x,                   // out_ready_sem_noc0_x
+                drain_sync_core.y                    // out_ready_sem_noc0_y
             };
             all_gather_rts.insert(all_gather_rts.end(), base_rt_args.begin(), base_rt_args.end());
-            all_gather_rts.insert(all_gather_rts.end(), output_tensor_cores_x.begin(), output_tensor_cores_x.end());
-            all_gather_rts.insert(all_gather_rts.end(), output_tensor_cores_y.begin(), output_tensor_cores_y.end());
+            all_gather_rts.insert(all_gather_rts.end(), stats_tensor_cores_x.begin(), stats_tensor_cores_x.end());
+            all_gather_rts.insert(all_gather_rts.end(), stats_tensor_cores_y.begin(), stats_tensor_cores_y.end());
 
             all_gather_rts.push_back(forward_device.has_value());
             if (forward_device.has_value()) {
@@ -1217,7 +1218,7 @@ operation::ProgramWithCallbacks frmsnorm_multi_core_sharded(
             const auto src_buffer_a = input_tensors.at(0).buffer();
             const auto b_tensor = optional_input_tensors.at(0);
             const auto gamma_tensor = optional_input_tensors.at(1);
-            const auto stats_tensor = optional_input_tensors.at(2);
+            const auto stats_tensor = optional_input_tensors.at(2).value();
             const auto dst_buffer = output_tensors.at(0).buffer();
             bool skip_write_back =
                 output_tensors.at(0).shard_spec().value() == input_tensors.at(0).shard_spec().value();
@@ -1235,13 +1236,13 @@ operation::ProgramWithCallbacks frmsnorm_multi_core_sharded(
                 if (writer_kernel_id == writer_mcast_sender_kernels_id) {
                     auto& runtime_args = writer_sender_args_by_core[core.x][core.y];
                     runtime_args[8] = semaphore.address();
-                    runtime_args[10] = optional_input_tensors.at(2).value().buffer()->address();
+                    runtime_args[10] = stats_tensor.buffer()->address();
                     // runtime_args[0] holds the start of the post arguments, apply that offset
                     runtime_args[runtime_args[0] + 2] = gamma_address;
                 } else if (writer_kernel_id == writer_mcast_receiver_kernels_id) {
                     auto& runtime_args = writer_receiver_args_by_core[core.x][core.y];
                     runtime_args[8] = semaphore.address();
-                    runtime_args[10] = optional_input_tensors.at(2).value().buffer()->address();
+                    runtime_args[10] = stats_tensor.buffer()->address();
                     runtime_args[runtime_args[0] + 2] = gamma_address;
                 }
             }
@@ -1260,10 +1261,8 @@ operation::ProgramWithCallbacks frmsnorm_multi_core_sharded(
             } else {
                 UpdateDynamicCircularBufferAddress(program, cb_output, *dst_buffer);
             }
-            if (stats_tensor.has_value()) {
-                const auto stats_buffer = optional_input_tensors.at(2).value().buffer();
-                UpdateDynamicCircularBufferAddress(program, cb_stats, *stats_buffer);
-            }
+            const auto stats_buffer = stats_tensor.buffer();
+            UpdateDynamicCircularBufferAddress(program, cb_stats, *stats_buffer);
         };
 
     return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_arguments_callback};
