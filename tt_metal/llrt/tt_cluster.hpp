@@ -105,6 +105,8 @@ public:
 
     size_t number_of_devices() const { return this->cluster_desc_->get_number_of_chips(); }
 
+    const std::unordered_set<chip_id_t>& all_chip_ids() const { return this->cluster_desc_->get_all_chips(); };
+
     size_t number_of_pci_devices() const { return this->cluster_desc_->get_chips_with_mmio().size(); }
 
     // TODO: UMD will eventually consolidate ethernet coordinates and unique ids, we can remove the ethernet coord
