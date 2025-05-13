@@ -6,9 +6,11 @@
 #include "ttnn/operations/math.hpp"
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/constants.hpp>
+#include <tt-metalium/hal.hpp>
 #include <tt-metalium/util.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/math.hpp>
+#include <tt-metalium/bfloat16.hpp>
 #include "ttnn/operation.hpp"
 
 using namespace tt::tt_metal;
@@ -186,10 +188,6 @@ operation::ProgramWithCallbacks argmax_single_core(
     return {std::move(program), override_runtime_args_callback};
 }
 
-// NOC transactions need to be 32B aligned.
-// So, for bfloat16 dtype, we need at least 16 units per core to avoid unaligned accesses.
-constexpr uint32_t min_red_dim_units_per_core = 16;
-
 /*
  * Design of argmax_multi_core:
  *
@@ -289,6 +287,7 @@ operation::ProgramWithCallbacks argmax_multi_core(
     const tt::tt_metal::IDevice* device = output.device();
 
     // Distribute work to cores
+    const auto min_red_dim_units_per_core = hal::get_noc_payload_width() / bfloat16::SIZEOF;
     auto [all_cores, cores0, cores1, red_dim_units0, red_dim_units1] =
         distribute_work_to_cores(device, red_dim_units, min_red_dim_units_per_core, sub_core_grids);
 
