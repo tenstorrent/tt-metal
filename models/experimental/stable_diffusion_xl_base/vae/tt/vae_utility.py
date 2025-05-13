@@ -6,7 +6,10 @@ import ttnn
 
 
 def get_DRAM_GN_config(module_path, idx):
-    if "mid_block" in module_path:
+    if module_path is None:
+        core_y = 4
+        num_out_blocks = 64
+    elif "mid_block" in module_path:
         core_y = 4
         num_out_blocks = 4
     else:
@@ -33,7 +36,10 @@ def get_DRAM_GN_config(module_path, idx):
 
 
 def get_DRAM_conv_config(module_path, idx):
-    if "mid_block" in module_path:
+    if module_path is None:
+        slice_type = None
+        num_slices = 1
+    elif "mid_block" in module_path:
         slice_type = None
         num_slices = 1
     else:

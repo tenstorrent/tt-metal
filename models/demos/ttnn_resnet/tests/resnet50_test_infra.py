@@ -2,28 +2,20 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from loguru import logger
+import copy
 import os
+
 import pytest
 import torch
 import torchvision
-import copy
+from loguru import logger
+from ttnn.model_preprocessing import preprocess_model_parameters
 
 import ttnn
-from ttnn.model_preprocessing import (
-    preprocess_model_parameters,
-)
-from models.utility_functions import (
-    is_blackhole,
-    is_wormhole_b0,
-    is_grayskull,
-    divup,
-)
-
-from tests.ttnn.utils_for_testing import check_with_pcc
 from models.demos.ttnn_resnet.tt.custom_preprocessing import create_custom_mesh_preprocessor
-
 from models.demos.ttnn_resnet.tt.ttnn_functional_resnet50 import resnet50
+from models.utility_functions import divup, is_blackhole, is_grayskull, is_wormhole_b0
+from tests.ttnn.utils_for_testing import check_with_pcc
 
 
 def load_resnet50_model(model_location_generator):

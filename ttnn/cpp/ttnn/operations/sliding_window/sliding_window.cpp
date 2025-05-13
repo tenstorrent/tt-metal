@@ -969,7 +969,6 @@ std::tuple<std::vector<std::vector<std::vector<uint16_t>>>, int> generate_inplac
         int num_cores = num_cores_x * num_cores_y;
         CoreCoord noc_00 = core_id_to_noc_coords(0);
         int max_ref_size = 0;  // track the max remote ref size for sizing the remote temp tensor
-        int core = 0;
         for (const auto& core_config : config) {
             std::vector<std::vector<uint16_t>> flat_data(2, std::vector<uint16_t>(max_len, 0));
             uint32_t idx1 = 0, idx2 = 0;
@@ -1010,7 +1009,6 @@ std::tuple<std::vector<std::vector<std::vector<uint16_t>>>, int> generate_inplac
 
             flattened_config[0].emplace_back(std::move(flat_data[0]));
             flattened_config[1].emplace_back(std::move(flat_data[1]));
-            core++;
             max_ref_size = std::max(max_ref_size, ref_size);
         }
 
@@ -1187,9 +1185,9 @@ Tensor construct_on_host_config_tensor(
     const auto factor = get_repeat_factor_for_replicating_nhw_config_across_grid(p_config);
     auto repeat_config = replicate_config(config_vector, factor);
 
-    auto config_buffer = tt::tt_metal::host_buffer::create<uint16_t>(std::move(repeat_config));
+    auto config_buffer = tt::tt_metal::HostBuffer(std::move(repeat_config));
     config_shape = ttnn::Shape({config_shape[0] * factor, config_shape[1]});
-    return Tensor(tt::tt_metal::HostStorage{config_buffer}, config_shape, DataType::UINT16, Layout::ROW_MAJOR);
+    return Tensor(std::move(config_buffer), config_shape, DataType::UINT16, Layout::ROW_MAJOR);
 }
 
 Tensor move_config_tensor_to_device(

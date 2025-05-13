@@ -11,4 +11,4 @@ ARCH_NAME=blackhole TT_METAL_SLOW_DISPATCH_MODE=1 ./tests/scripts/run_cpp_fd2_te
 ./build/test/tt_metal/unit_tests_dispatch --gtest_filter=CommandQueueProgramFixture.*
 ./build/test/tt_metal/unit_tests_dispatch --gtest_filter=RandomProgramFixture.*
 ./build/test/tt_metal/unit_tests_dispatch --gtest_filter=CommandQueueSingleCardBufferFixture.* # Tests EnqueueRead/EnqueueWrite Buffer from DRAM/L1
-./build/test/tt_metal/unit_tests_api_blackhole --gtest_filter=*SimpleDram*:*SimpleL1* # Executable is dependent on arch (provided through GitHub CI workflow scripts)
+ TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/unit_tests_api_blackhole --gtest_filter=*SimpleDram*:*SimpleL1* # Executable is dependent on arch (provided through GitHub CI workflow scripts)

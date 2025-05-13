@@ -627,36 +627,23 @@ Tensor _polyval(
 }
 
 Tensor ExecuteGCD::invoke(
-    const Tensor& input_a, const Tensor& input_b, const std::optional<MemoryConfig>& output_mem_config) {
-    Tensor input_a_abs = ttnn::abs(input_a);
-    Tensor input_b_abs = ttnn::abs(input_b);
-    Tensor a_gt_b = ttnn::gt(input_a_abs, input_b_abs);
-    Tensor min = ttnn::where(a_gt_b, input_b_abs, input_a_abs);
-    Tensor max = ttnn::where(a_gt_b, input_a_abs, input_b_abs);
-    a_gt_b.deallocate();
-    // https://en.wikipedia.org/wiki/Lam%C3%A9%27s_theorem
-    // While 186 is the theoretical maximum iterations for numbers within the floating point range according to Lame's
-    // theorem, in practice when evaluating gcd of consecutive Fibonacci numbers coerced to floating point, the
-    // maximum number of iterations reached is only 14 because the remainder converges to 0 much more quickly. In
-    // addition, limited precision in bfloat16 format decreases support for input to the range [-1024, 1024]
-    constexpr std::size_t max_iterations = 14;
-    for (std::size_t iteration = 0; iteration < max_iterations; ++iteration) {
-        Tensor isz = ttnn::eqz(min);
-        //  0's in min are replaced with 1
-        Tensor rem = ttnn::remainder(max, ttnn::where(isz, isz, min));
-        max = ttnn::where(isz, max, min);
-        min = rem;
-    }
-    return max;
+    QueueId queue_id,
+    const Tensor& input_tensor_a,
+    const Tensor& input_tensor_b,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& optional_output_tensor) {
+    return BinaryOperationSfpu<operations::binary::BinaryOpType::GCD>::invoke(
+        queue_id, input_tensor_a, input_tensor_b, std::nullopt, memory_config, optional_output_tensor);
 }
 
 Tensor ExecuteLCM::invoke(
-    const Tensor& input_a, const Tensor& input_b, const std::optional<MemoryConfig>& output_mem_config) {
-    Tensor val = ttnn::multiply(input_a, input_b, std::nullopt, output_mem_config);
-    Tensor tmp_result = ttnn::gcd(input_a, input_b);
-    Tensor result = ttnn::divide(val, tmp_result, std::nullopt, output_mem_config);
-    result = ttnn::abs(result);
-    return result;
+    QueueId queue_id,
+    const Tensor& input_tensor_a,
+    const Tensor& input_tensor_b,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& optional_output_tensor) {
+    return BinaryOperationSfpu<operations::binary::BinaryOpType::LCM>::invoke(
+        queue_id, input_tensor_a, input_tensor_b, std::nullopt, memory_config, optional_output_tensor);
 }
 
 // power - floating point exponent

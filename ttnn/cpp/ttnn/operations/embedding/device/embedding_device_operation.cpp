@@ -24,15 +24,15 @@ void Embeddings::validate(const std::vector<Tensor> &input_tensors) const {
     TT_FATAL(weights.get_layout() == Layout::ROW_MAJOR, "Error");
     TT_FATAL(a.get_dtype() == DataType::UINT32 or a.get_dtype() == DataType::BFLOAT16, "Input must be UINT32 or BFLOAT16");
     TT_FATAL(weights.get_dtype() == DataType::BFLOAT16, "Weights tensor must have BFLOAT16 dtype");
-    TT_FATAL(a.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED, "Embedding does not currently support sharded inputs");
-    TT_FATAL(weights.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED, "Embedding does not currently support sharded weights");
+    TT_FATAL(a.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED, "Embedding does not currently support sharded inputs");
+    TT_FATAL(weights.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED, "Embedding does not currently support sharded weights");
 
     TT_FATAL(weights.get_padded_shape()[0] == 1 && weights.get_padded_shape()[1] == 1, "First two dimensions for the weights must be 1");
     if (this->tilized) {
         TT_FATAL(a.get_padded_shape()[-1] % TILE_HEIGHT == 0, "Input tensor width {} must be a multiple of tile height {} to have the output tensor tilized", a.get_padded_shape()[-1], TILE_HEIGHT);
         TT_FATAL(weights.get_padded_shape()[-1] % TILE_WIDTH == 0, "Number of columns in table {} must be factor of tile width {}", weights.get_padded_shape()[-1], TILE_WIDTH);
-        if (is_sharded(this->output_mem_config.memory_layout)) {
-            const auto& shard_spec = this->output_mem_config.shard_spec;
+        if (is_sharded(this->output_mem_config.memory_layout())) {
+            const auto& shard_spec = this->output_mem_config.shard_spec();
             TT_FATAL(shard_spec.has_value(), "Sharded memory config must have a shard spec");
             TT_FATAL(shard_spec->shape[0] % TILE_HEIGHT == 0, "Shard height {} must be a multiple of tile height {} to have the output tensor tilized", shard_spec->shape[0], TILE_HEIGHT);
             TT_FATAL(shard_spec->shape[1] % TILE_WIDTH == 0, "Shard width {} must be a multiple of tile width {} to have the output tensor tilized", shard_spec->shape[1], TILE_WIDTH);
@@ -40,7 +40,7 @@ void Embeddings::validate(const std::vector<Tensor> &input_tensors) const {
             TT_FATAL(weights.get_padded_shape()[-1] % shard_spec->shape[1] == 0, "Number of columns in table {} must be factor of shard width {}", weights.get_padded_shape()[-1], shard_spec->shape[1]);
         }
     } else {
-        TT_FATAL(this->output_mem_config.memory_layout == TensorMemoryLayout::INTERLEAVED, "Embedding only supports interleaved RM outputs");
+        TT_FATAL(this->output_mem_config.memory_layout() == TensorMemoryLayout::INTERLEAVED, "Embedding only supports interleaved RM outputs");
         TT_FATAL(!is_block_float(this->output_dtype), "Output cannot be a block float dtype when not tilized");
     }
     if(a.get_layout() == Layout::ROW_MAJOR) {

@@ -10,6 +10,7 @@
 #include "mod_div_lib.h"
 
 #include "compute_kernel_api/eltwise_unary/sfpu_split_includes.h"
+#include "tt_metal/fabric/hw/inc/edm_fabric/compile_time_arg_tmp.hpp"
 
 namespace NAMESPACE {
 
@@ -154,6 +155,13 @@ void MAIN {
     constexpr bool untilize_out = get_compile_time_arg_val(15);                // untilize output
     constexpr bool in1_is_dram_interleaved = get_compile_time_arg_val(16);     // in1 is in dram
     constexpr bool in1_is_dram_sharded = get_compile_time_arg_val(17);
+    constexpr uint32_t OUTPUT_CB_ARRAY_IDX = 18;
+    constexpr std::array<uint32_t, batch> mm_out_cb_ids =
+        fill_array_with_next_n_args<uint32_t, OUTPUT_CB_ARRAY_IDX, batch>();
+    constexpr uint32_t INTERM_CB_ARRAY_IDX = OUTPUT_CB_ARRAY_IDX + batch;
+    constexpr std::array<uint32_t, batch> mm_partials_cb_ids =
+        fill_array_with_next_n_args<uint32_t, INTERM_CB_ARRAY_IDX, batch>();
+
     constexpr uint32_t ring_size = num_blocks;
     constexpr bool in1_is_dram = in1_is_dram_interleaved || in1_is_dram_sharded;
 
@@ -174,26 +182,6 @@ void MAIN {
     constexpr uint32_t in2_cb_id = tt::CBIndex::c_2;
     constexpr uint32_t sync_cb = tt::CBIndex::c_3;
     constexpr uint32_t sync_cb2 = tt::CBIndex::c_4;
-    constexpr uint32_t out_cb_id = tt::CBIndex::c_5;
-    constexpr uint32_t mm_partials_cb_id = tt::CBIndex::c_6;
-
-    constexpr uint32_t mm_out_cb_id = untilize_out ? mm_partials_cb_id : out_cb_id;
-
-#ifdef ENABLE_GLOBAL_CB
-    uint32_t in1_cb_start_addr = 0;
-    uint32_t in1_rd_ptr_start_addr = 0;
-    uint32_t curr_in1_block_index = 0;
-    bool in1_tensor_split = 0;
-    uint32_t next_in1_block_index;
-    uint32_t next_in1_rd_ptr_addr;
-
-    UNPACK((in1_cb_start_addr = get_local_cb_start_addr(in1_cb_id)));
-    UNPACK((in1_rd_ptr_start_addr = get_local_cb_rd_ptr(in1_cb_id)));
-    UNPACK((curr_in1_block_index = ring_idx));
-    UNPACK((in1_tensor_split = is_tensor_split(in1_cb_id, in1_tensor_size_bytes)));
-
-    UNPACK((update_rd_ptr_to_ring_index(in1_cb_id, in1_block_size_bytes, ring_idx, in1_tensor_split)));
-#endif
 
 #ifdef SFPU_OP_INIT_ACTIVATION
     SFPU_OP_INIT_ACTIVATION
@@ -208,8 +196,25 @@ void MAIN {
     constexpr bool spill = num_blocks > 1 && (out_block_num_tiles / out_subblock_num_tiles) > 1;
 
     mm_block_init(
-        in0_cb_id, in1_cb_id, mm_partials_cb_id, in1_transpose_tile, out_subblock_w, out_subblock_h, in0_block_w);
+        in0_cb_id, in1_cb_id, mm_partials_cb_ids[0], in1_transpose_tile, out_subblock_w, out_subblock_h, in0_block_w);
     for (uint32_t b = 0; b < batch; b++) {
+#ifdef ENABLE_GLOBAL_CB
+        uint32_t in1_cb_start_addr = 0;
+        uint32_t in1_rd_ptr_start_addr = 0;
+        uint32_t curr_in1_block_index = 0;
+        bool in1_tensor_split = 0;
+        uint32_t next_in1_block_index;
+        uint32_t next_in1_rd_ptr_addr;
+
+        UNPACK((in1_cb_start_addr = get_local_cb_start_addr(in1_cb_id)));
+        UNPACK((in1_rd_ptr_start_addr = get_local_cb_rd_ptr(in1_cb_id)));
+        UNPACK((curr_in1_block_index = ring_idx));
+        UNPACK((in1_tensor_split = is_tensor_split(in1_cb_id, in1_tensor_size_bytes)));
+        UNPACK((update_rd_ptr_to_ring_index(in1_cb_id, in1_block_size_bytes, ring_idx, in1_tensor_split)));
+#endif
+        const uint32_t mm_out_cb_id = mm_out_cb_ids[b];
+        const uint32_t mm_partials_cb_id = mm_partials_cb_ids[b];
+
         bool enable_reload = false;
         uint32_t out_num_tiles_to_wait = out_subblock_num_tiles;
 
@@ -346,11 +351,6 @@ void MAIN {
 
                     } else if (spill) {
                         tile_regs_commit();
-                        // Wait for tiles in output buffer to be written out since interm and output share memory
-                        if (block == 0) {
-                            cb_reserve_back(out_cb_id, out_num_tiles_to_wait);
-                            out_num_tiles_to_wait += out_subblock_num_tiles;
-                        }
                         // Move partial result to interm buffer
                         cb_reserve_back(mm_partials_cb_id, out_subblock_num_tiles);
                         tile_regs_wait();
@@ -405,16 +405,10 @@ void MAIN {
         // Release in1
         cb_reserve_back(sync_cb, 1);
         cb_push_back(sync_cb, 1);
-        cb_pop_front(in1_cb_id, in1_block_num_tiles * num_blocks);
+        UNPACK((update_local_cb_rd_ptr(in1_cb_id, in1_rd_ptr_start_addr)));  // reset rd_ptr back to the initial addr
+        UNPACK((update_rd_ptr_to_ring_index(
+            in1_cb_id, in1_block_size_bytes, ring_size, in1_tensor_split)));  // update to next tensor addr
 #endif
-
-        if constexpr (batch > 1) {
-            // reconfigure init for matmul
-            mm_block_init_short(in0_cb_id, in1_cb_id, in1_transpose_tile, out_subblock_w, out_subblock_h, in0_block_w);
-
-            // reconfigure unpacker df for src A
-            reconfig_data_format_srca(mm_partials_cb_id, in1_cb_id);
-        }
     }
 }
 }  // namespace NAMESPACE

@@ -67,12 +67,12 @@ ttnn::Tensor perform_reshape_on_2D_RM(
     auto intermediate_mem_config = tensor.memory_config();
     auto intermediate_out_memory_config = memory_config;
     if (tensor.memory_config().is_sharded()) {
-        auto temp_memory_config = tensor.memory_config();
-        temp_memory_config.memory_layout = TensorMemoryLayout::INTERLEAVED;
+        MemoryConfig temp_memory_config{TensorMemoryLayout::INTERLEAVED, tensor.memory_config().buffer_type()};
         temp_tensor = ttnn::sharded_to_interleaved(queue_id, tensor, temp_memory_config, std::nullopt);
     }
     if (memory_config.is_sharded()) {
-        intermediate_out_memory_config.memory_layout = TensorMemoryLayout::INTERLEAVED;
+        intermediate_out_memory_config =
+            MemoryConfig{TensorMemoryLayout::INTERLEAVED, intermediate_out_memory_config.buffer_type()};
     }
     // Guaranteed to be interleaved
     // We are guaranteed to be working 2D->2D in this function
@@ -228,8 +228,7 @@ ttnn::Tensor reshape_tiled(
     auto tensor3d = PerformView(tensor, input_tensor_shape_3d, input_padded_shape_3d);
 
     if (tensor.memory_config().is_sharded()) {
-        auto working_input_memory_config = tensor.memory_config();
-        working_input_memory_config.memory_layout = TensorMemoryLayout::INTERLEAVED;
+        MemoryConfig working_input_memory_config{TensorMemoryLayout::INTERLEAVED, tensor.memory_config().buffer_type()};
         tensor3d = ttnn::sharded_to_interleaved(queue_id, tensor, working_input_memory_config, std::nullopt);
     }
 
@@ -239,7 +238,8 @@ ttnn::Tensor reshape_tiled(
 
     MemoryConfig working_output_memory_config = memory_config;
     if (memory_config.is_sharded()) {
-        working_output_memory_config.memory_layout = TensorMemoryLayout::INTERLEAVED;
+        working_output_memory_config =
+            MemoryConfig{TensorMemoryLayout::INTERLEAVED, working_output_memory_config.buffer_type()};
     }
 
     auto output_tensor_3d =

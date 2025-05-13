@@ -122,9 +122,9 @@ operation::ProgramWithCallbacks reduce_nc_factory(
     //                      DataMovementKernel SetUp
     ////////////////////////////////////////////////////////////////////////////
     std::vector<uint32_t> reader_compile_time_args = {
-        static_cast<uint32_t>(input.memory_config().buffer_type == BufferType::DRAM), input_granularity};
+        static_cast<uint32_t>(input.memory_config().buffer_type() == BufferType::DRAM), input_granularity};
     std::vector<uint32_t> writer_compile_time_args = {
-        static_cast<uint32_t>(output.memory_config().buffer_type == BufferType::DRAM), input_granularity};
+        static_cast<uint32_t>(output.memory_config().buffer_type() == BufferType::DRAM), input_granularity};
     const auto reader_kernel_file =
         "ttnn/cpp/ttnn/operations/experimental/reduction/fast_reduce_nc/device/kernels/reader_reduce_nc.cpp";
     const auto writer_kernel_file =

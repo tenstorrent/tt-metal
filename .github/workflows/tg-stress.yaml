@@ -27,6 +27,7 @@ on:
 
 jobs:
   stress-4u:
+    if: ${{ inputs.topology-4u }}
     runs-on:
       - ${{ inputs.extra-tag }}
       - config-tg
@@ -73,6 +74,7 @@ jobs:
       - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
         if: always()
   stress-6u:
+    if: ${{ inputs.topology-6u }}
     runs-on:
       - ${{ inputs.extra-tag }}
       - topology-6u

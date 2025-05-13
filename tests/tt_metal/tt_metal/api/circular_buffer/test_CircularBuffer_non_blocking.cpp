@@ -17,7 +17,7 @@
 
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/buffer_types.hpp>
-#include <tt-metalium/circular_buffer_types.hpp>
+#include <tt-metalium/circular_buffer_config.hpp>
 #include "device_fixture.hpp"
 #include "gtest/gtest.h"
 #include <tt-metalium/kernel_types.hpp>

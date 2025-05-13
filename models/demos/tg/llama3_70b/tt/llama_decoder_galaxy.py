@@ -3,17 +3,12 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from typing import List
-import ttnn
 
+import ttnn
+from models.demos.t3000.llama2_70b.tt.llama_common import ShardTensor2dMesh
 from models.demos.tg.llama3_70b.tt.llama_attention_galaxy import TtLlamaAttention_galaxy
+from models.demos.tg.llama3_70b.tt.llama_common import tt_distributed_rmsnorm, tt_sharded_distributed_rmsnorm
 from models.demos.tg.llama3_70b.tt.llama_mlp_galaxy import TtLlamaMLP_galaxy
-from models.demos.t3000.llama2_70b.tt.llama_common import (
-    ShardTensor2dMesh,
-)
-from models.demos.tg.llama3_70b.tt.llama_common import (
-    tt_sharded_distributed_rmsnorm,
-    tt_distributed_rmsnorm,
-)
 
 
 class TtLlamaDecoder_galaxy:

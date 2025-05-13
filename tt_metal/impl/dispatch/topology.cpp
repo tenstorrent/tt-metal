@@ -43,6 +43,7 @@
 #include "tt-metalium/program.hpp"
 #include <tt_stl/span.hpp>
 #include <tt-metalium/fabric.hpp>
+#include "system_memory_manager.hpp"
 #include "tt_metal/fabric/fabric_host_utils.hpp"
 #include <umd/device/tt_core_coordinates.h>
 #include <umd/device/tt_xy_pair.h>
@@ -582,6 +583,16 @@ std::vector<DispatchKernelNode> generate_nodes(const std::set<chip_id_t>& device
 
                 // Pull nodes from the template, updating their index and device id
                 for (DispatchKernelNode node : *nodes_for_one_mmio) {
+                    TT_ASSERT(
+                        node.device_id < template_id_to_device_id.size(),
+                        "Device id {} out of bounds (max = {})",
+                        node.device_id,
+                        template_id_to_device_id.size());
+                    TT_ASSERT(
+                        node.servicing_device_id < template_id_to_device_id.size(),
+                        "Servicing device id {} out of bounds (max = {})",
+                        node.servicing_device_id,
+                        template_id_to_device_id.size());
                     node.device_id = template_id_to_device_id[node.device_id];
                     node.servicing_device_id = template_id_to_device_id[node.servicing_device_id];
                     increment_node_ids(node, index_offset);
@@ -684,13 +695,23 @@ void populate_fd_kernels(const std::vector<DispatchKernelNode>& nodes) {
 
     // Connect the graph with upstream/downstream kernels
     for (const auto& node : nodes) {
-        for (int idx = 0; idx < k_dispatch_max_upstream_kernels; idx++) {
+        for (int idx = 0; idx < node.upstream_ids.size(); idx++) {
             if (node.upstream_ids[idx] >= 0) {
+                TT_ASSERT(
+                    node.upstream_ids[idx] < node_id_to_kernel.size(),
+                    "Upstream kernel id {} out of bounds (max = {})",
+                    node.upstream_ids[idx],
+                    node_id_to_kernel.size());
                 node_id_to_kernel.at(node.id)->AddUpstreamKernel(node_id_to_kernel.at(node.upstream_ids[idx]));
             }
         }
-        for (int idx = 0; idx < k_dispatch_max_downstream_kernels; idx++) {
+        for (int idx = 0; idx < node.downstream_ids.size(); idx++) {
             if (node.downstream_ids[idx] >= 0) {
+                TT_ASSERT(
+                    node.downstream_ids[idx] < node_id_to_kernel.size(),
+                    "Downstream kernel id {} out of bounds (max = {})",
+                    node.downstream_ids[idx],
+                    node_id_to_kernel.size());
                 node_id_to_kernel.at(node.id)->AddDownstreamKernel(node_id_to_kernel.at(node.downstream_ids[idx]));
             }
         }
@@ -1056,7 +1077,7 @@ bool check_dateline(
     return false;
 }
 
-std::unique_ptr<Program> create_and_compile_1d_fabric_program(IDevice* device, FabricConfig fabric_config) {
+std::unique_ptr<Program> create_and_compile_tt_fabric_program(IDevice* device, FabricConfig fabric_config) {
     using namespace tt_fabric;
     std::unique_ptr<Program> fabric_program_ptr;
     auto control_plane = tt::tt_metal::MetalContext::instance().get_cluster().get_control_plane();
@@ -1067,9 +1088,8 @@ std::unique_ptr<Program> create_and_compile_1d_fabric_program(IDevice* device, F
     std::unordered_map<RoutingDirection, chip_id_t> chip_neighbors;
     std::unordered_map<chan_id_t, tt::tt_fabric::FabricEriscDatamoverBuilder> edm_builders;
     auto routing_directions = {RoutingDirection::N, RoutingDirection::S, RoutingDirection::E, RoutingDirection::W};
-    Topology topology = get_1d_topology(fabric_config);
+    Topology topology = get_tt_fabric_topology(fabric_config);
     tt::tt_fabric::set_routing_mode(topology);
-
     if (device->is_mmio_capable() &&
         (tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type() == tt::ClusterType::TG)) {
         // skip lauching on gateways for TG
@@ -1110,7 +1130,7 @@ std::unique_ptr<Program> create_and_compile_1d_fabric_program(IDevice* device, F
     }
 
     fabric_program_ptr = std::make_unique<Program>();
-    const auto edm_config = get_1d_fabric_config();
+    const auto edm_config = get_tt_fabric_config();
     auto soc_desc = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(device->id());
 
     // Refactor this once mesh_id has row/col control
@@ -1137,7 +1157,8 @@ std::unique_ptr<Program> create_and_compile_1d_fabric_program(IDevice* device, F
                 edm_config,
                 true,
                 false,
-                is_dateline);
+                is_dateline,
+                control_plane->routing_direction_to_eth_direction(direction));
             edm_builders.insert({eth_chan, edm_builder});
         }
     }
@@ -1200,6 +1221,17 @@ std::unique_ptr<Program> create_and_compile_1d_fabric_program(IDevice* device, F
     } else {
         connect_downstream_builders(RoutingDirection::N, RoutingDirection::S);
         connect_downstream_builders(RoutingDirection::E, RoutingDirection::W);
+        if (edm_config.topology == Topology::Mesh) {
+            connect_downstream_builders(RoutingDirection::N, RoutingDirection::E);
+            connect_downstream_builders(RoutingDirection::N, RoutingDirection::W);
+            connect_downstream_builders(RoutingDirection::S, RoutingDirection::E);
+            connect_downstream_builders(RoutingDirection::S, RoutingDirection::W);
+        }
+    }
+
+    std::map<string, string> defines = {};
+    if (edm_config.topology == Topology::Mesh) {
+        defines["FABRIC_2D"] = "";
     }
 
     for (auto& [eth_chan, edm_builder] : edm_builders) {
@@ -1228,6 +1260,7 @@ std::unique_ptr<Program> create_and_compile_1d_fabric_program(IDevice* device, F
             tt::tt_metal::EthernetConfig{
                 .noc = tt_metal::NOC::NOC_0,
                 .compile_args = eth_sender_ct_args,
+                .defines = defines,
                 .opt_level = tt::tt_metal::KernelBuildOptLevel::O3});
 
         tt::tt_metal::SetRuntimeArgs(*fabric_program_ptr, eth_sender_kernel, eth_logical_core, edm_kernel_rt_args);
@@ -1239,8 +1272,8 @@ std::unique_ptr<Program> create_and_compile_1d_fabric_program(IDevice* device, F
 
 std::unique_ptr<Program> create_and_compile_fabric_program(IDevice* device) {
     auto fabric_config = tt::tt_metal::MetalContext::instance().get_cluster().get_fabric_config();
-    if (tt_fabric::is_1d_fabric_config(fabric_config)) {
-        return create_and_compile_1d_fabric_program(device, fabric_config);
+    if (tt_fabric::is_tt_fabric_config(fabric_config)) {
+        return create_and_compile_tt_fabric_program(device, fabric_config);
     } else if (tt_fabric::is_2d_fabric_config(fabric_config)) {
         return create_and_compile_2d_fabric_program(device, fabric_config);
     }
@@ -1249,7 +1282,8 @@ std::unique_ptr<Program> create_and_compile_fabric_program(IDevice* device) {
 
 void configure_fabric_cores(IDevice* device) {
     auto fabric_config = tt::tt_metal::MetalContext::instance().get_cluster().get_fabric_config();
-    if (tt_fabric::is_2d_fabric_config(fabric_config)) {
+    // temporary. this needs to be removed once we deprecate pull routers.
+    if (fabric_config == tt::tt_metal::FabricConfig::FABRIC_2D) {
         configure_2d_fabric_cores(device);
     }
 }
