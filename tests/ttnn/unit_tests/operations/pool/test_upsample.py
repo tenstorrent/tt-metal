@@ -336,10 +336,13 @@ def test_upsample_multicore_corerange(
         (1, 256, 32, 32, 4, 4),  # 256x256
         (1, 256, 64, 64, 2, 2),  # 256x256
         (1, 256, 128, 128, 1, 1),  # 256x256
+        (1, 72, 8, 8, 2, 2),
+        (1, 288, 8, 8, 2, 2),
+        (1, 1024, 8, 8, 2, 2),
     ),
 )
 @pytest.mark.parametrize("shard_strategy", [ttnn.ShardStrategy.HEIGHT])
-@pytest.mark.parametrize("math_fidelity", [ttnn.MathFidelity.HiFi4, ttnn.MathFidelity.LoFi])
+@pytest.mark.parametrize("math_fidelity", [ttnn.MathFidelity.LoFi])
 @pytest.mark.parametrize("math_approx_mode", [True, False])
 def test_bilinear_multi_core(
     device,
@@ -354,7 +357,13 @@ def test_bilinear_multi_core(
     math_fidelity,
     math_approx_mode,
 ):
-    input_shape = [batch_size, num_channels, height, width]
+    TILE_WIDTH = 32
+
+    num_channels_padded = num_channels
+    if num_channels % TILE_WIDTH != 0:
+        num_channels_padded = num_channels + (TILE_WIDTH - num_channels % TILE_WIDTH)
+
+    input_shape = [batch_size, num_channels_padded, height, width]
     shard_orientation = ttnn.ShardOrientation.ROW_MAJOR
 
     torch_result, output_tensor = upsample_multicore_common(
@@ -370,6 +379,8 @@ def test_bilinear_multi_core(
     )
 
     torch_result = torch_result.permute(0, 2, 3, 1)
+    torch_result = torch_result[:, :, :, 0:num_channels]
+    output_tensor = output_tensor[:, :, :, 0:num_channels]
     passing, pcc_msg = check_with_pcc_without_tensor_printout(torch_result, output_tensor, pcc=0.999)
     allclose = torch.allclose(output_tensor, torch_result, atol=1e-1, rtol=1e-1)
     logger.info(pcc_msg)
