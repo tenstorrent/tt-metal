@@ -224,35 +224,25 @@ const std::string& RunTimeOptions::get_kernel_dir() const {
 const std::string& RunTimeOptions::get_system_kernel_dir() const { return this->system_kernel_dir; }
 
 void RunTimeOptions::ParseWatcherEnv() {
-    watcher_interval_ms = 0;
     const char* watcher_enable_str = getenv("TT_METAL_WATCHER");
-    watcher_enabled = (watcher_enable_str != nullptr);
-    if (watcher_enabled) {
+    if (watcher_enable_str != nullptr) {
         int sleep_val = 0;
         sscanf(watcher_enable_str, "%d", &sleep_val);
         if (strstr(watcher_enable_str, "ms") == nullptr) {
             sleep_val *= 1000;
         }
-        watcher_interval_ms = sleep_val;
+        watcher_settings.enabled = true;
+        watcher_settings.interval_ms = sleep_val;
     }
 
-    const char* watcher_dump_all_str = getenv("TT_METAL_WATCHER_DUMP_ALL");
-    watcher_dump_all = (watcher_dump_all_str != nullptr);
-
-    const char* watcher_append_str = getenv("TT_METAL_WATCHER_APPEND");
-    watcher_append = (watcher_append_str != nullptr);
-
-    const char* watcher_noinline_str = getenv("TT_METAL_WATCHER_NOINLINE");
-    watcher_noinline = (watcher_noinline_str != nullptr);
-
-    const char* watcher_phys_str = getenv("TT_METAL_WATCHER_PHYS_COORDS");
-    watcher_phys_coords = (watcher_phys_str != nullptr);
-
-    const char* watcher_text_start_str = getenv("TT_METAL_WATCHER_TEXT_START");
-    watcher_text_start = (watcher_text_start_str != nullptr);
-
+    watcher_settings.dump_all = (getenv("TT_METAL_WATCHER_DUMP_ALL") != nullptr);
+    watcher_settings.append = (getenv("TT_METAL_WATCHER_APPEND") != nullptr);
+    watcher_settings.noinline = (getenv("TT_METAL_WATCHER_NOINLINE") != nullptr);
+    watcher_settings.phys_coords = (getenv("TT_METAL_WATCHER_PHYS_COORDS") != nullptr);
+    watcher_settings.text_start = (getenv("TT_METAL_WATCHER_TEXT_START") != nullptr);
+    watcher_settings.skip_logging = (getenv("TT_METAL_WATCHER_SKIP_LOGGING") != nullptr);
     // Auto unpause is for testing only, no env var.
-    watcher_auto_unpause = false;
+    watcher_settings.auto_unpause = false;
 
     // Any watcher features to disabled based on env var.
     std::set all_features = {
@@ -275,7 +265,7 @@ void RunTimeOptions::ParseWatcherEnv() {
     if (watcher_debug_delay_str != nullptr) {
         sscanf(watcher_debug_delay_str, "%u", &watcher_debug_delay);
         // Assert watcher is also enabled (TT_METAL_WATCHER=1)
-        TT_ASSERT(watcher_enabled, "TT_METAL_WATCHER_DEBUG_DELAY requires TT_METAL_WATCHER");
+        TT_ASSERT(watcher_settings.enabled, "TT_METAL_WATCHER_DEBUG_DELAY requires TT_METAL_WATCHER");
         // Assert TT_METAL_WATCHER_DISABLE_NOC_SANITIZE is either not set or set to 0
         TT_ASSERT(
             watcher_disabled_features.find(watcher_noc_sanitize_str) == watcher_disabled_features.end(),
