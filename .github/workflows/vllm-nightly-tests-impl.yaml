@@ -78,7 +78,7 @@ jobs:
         with:
           repository: tenstorrent/vllm
           path: docker-job/vllm
-          ref: ppetrovic/best-of
+          ref: dev
           fetch-depth: 1
 
       - name: 📀 Install vLLM
