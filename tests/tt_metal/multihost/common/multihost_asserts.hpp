@@ -105,7 +105,7 @@ inline int multihost_main(int argc, char** argv) {
     int local_rc = RUN_ALL_TESTS();
     fmt::print("Rank {}: local rc = {}\n", *context->rank(), local_rc);
     // Propagate the worst return code to all ranks
-    ASSERT_EQ_ALL_RANKS(local_rc, context);
+    ASSERT_EQ_ALL_RANKS(local_rc, context);  // TODO: fix it for fault tolerance tests
     return local_rc;
 }
 

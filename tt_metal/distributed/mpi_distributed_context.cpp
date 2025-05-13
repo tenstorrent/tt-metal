@@ -5,6 +5,7 @@
 
 #include "mpi_distributed_context.hpp"
 #include <mpi.h>
+#include <mpi-ext.h>
 #include <algorithm>
 #include <limits>
 #include "assert.hpp"
@@ -429,7 +430,7 @@ void MPIContext::revoke_and_shrink() {
     }
 
     MPI_Comm new_comm = MPI_COMM_NULL;
-    MPI_CHECK(MPI_Comm_shrink(comm_, &new_comm));
+    MPI_CHECK(MPIX_Comm_shrink(comm_, &new_comm));
 
     MPI_Comm_set_errhandler(new_comm, MPI_ERRORS_RETURN);
 

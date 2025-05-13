@@ -7,39 +7,50 @@
 #include "common/multihost_asserts.hpp"
 
 TEST(FaultTolerance, shrink_after_rank_failure) {
-    // -------- initial communicator wrapped by DistributedContext ----------
-    auto ctx = tt::tt_metal::distributed::multihost::DistributedContext::create(0, nullptr);
-    using DistributedException = tt::tt_metal::distributed::multihost::DistributedException;
-    using Rank = tt::tt_metal::distributed::multihost::Rank;
-    using Tag = tt::tt_metal::distributed::multihost::Tag;
-    using Size = tt::tt_metal::distributed::multihost::Size;
+    using tt::tt_metal::distributed::multihost::DistributedContext;
+    using tt::tt_metal::distributed::multihost::DistributedException;
+    using tt::tt_metal::distributed::multihost::Rank;
+
+    //----------------------------------------------------------------------
+    // 0 · Create world communicator and install MPI_ERRORS_RETURN
+    //----------------------------------------------------------------------
+    auto ctx = DistributedContext::create(0, nullptr);
+
     const int world = *ctx->size();
     const int me = *ctx->rank();
-    constexpr int kill_rank = 1;
+    const int victim_rank = 1;  // rank to kill (if exists)
 
-    // -------- induce failure on 'kill_rank' ------------------------------
-    if (me == kill_rank) {
-        // Give everybody else time to reach the barrier → clean fail pattern
+    //----------------------------------------------------------------------
+    // 1 · Simulate a hard failure on one rank
+    //----------------------------------------------------------------------
+    if (world > 1 && me == victim_rank) {
         std::this_thread::sleep_for(std::chrono::milliseconds(200));
-        ctx->abort(322);  // never returns
+        // Use SIGKILL so only *this* process dies; MPI_Abort would kill all
+        raise(SIGKILL);  // never returns
     }
 
+    //----------------------------------------------------------------------
+    // 2 · First collective detects the failure (throws DistributedException)
+    //----------------------------------------------------------------------
     try {
-        ctx->barrier();  // ULFM barrier handshake
+        ctx->barrier();  // may throw or return error
     } catch (const DistributedException& e) {
+        // 2a · Repair the communicator for every *surviving* rank
         ctx->revoke_and_shrink();
-
-        const int new_world = *ctx->size();
-        const int lost = world - new_world;
-
-        // -------- assertions --------------------------------------------------
-        EXPECT_EQ(lost, 1);                   // exactly one failed
-        EXPECT_EQ_ALL_RANKS(new_world, ctx);  // survivors agree on size
     }
 
-    // Ranks < kill_rank survive; others died.
-    // First collective after the death must detect the revoke.
+    //----------------------------------------------------------------------
+    // 3 · All survivors now run on the shrunken communicator
+    //----------------------------------------------------------------------
+    const int new_world = *ctx->size();
+    const int lost = world - new_world;
 
-    // Barrier on new communicator to ensure test exits cleanly
+    EXPECT_EQ(lost, world > 1 ? 1 : 0);   // exactly one failed if >1 ranks
+    EXPECT_EQ_ALL_RANKS(new_world, ctx);  // survivors agree
+                                          // (macro from sync_helpers.hpp)
+
+    //----------------------------------------------------------------------
+    // 4 · Final barrier on the repaired communicator
+    //----------------------------------------------------------------------
     ctx->barrier();
 }
