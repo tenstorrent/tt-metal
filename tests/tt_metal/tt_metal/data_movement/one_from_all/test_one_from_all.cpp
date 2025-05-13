@@ -159,7 +159,7 @@ bool run_dm(IDevice* device, const OneFromAllConfig& test_config) {
 /* ========== Test case for one from all data movement; Test id = 6 ========== */
 TEST_F(DeviceFixture, TensixDataMovementOneFromAllPacketSizes) {
     // Parameters
-    uint32_t max_transactions = 64;
+    uint32_t max_transactions = 256;
     uint32_t max_transaction_size_pages = 64;
     uint32_t page_size_bytes = 32;  // =Flit size: 32 bytes for WH, 64 for BH
     if (arch_ == tt::ARCH::BLACKHOLE) {
@@ -173,7 +173,7 @@ TEST_F(DeviceFixture, TensixDataMovementOneFromAllPacketSizes) {
 
     uint32_t l1_size = 1024 * 1024;  // 1MB
 
-    for (uint32_t num_of_transactions = 1; num_of_transactions <= max_transactions; num_of_transactions *= 2) {
+    for (uint32_t num_of_transactions = 1; num_of_transactions <= max_transactions; num_of_transactions *= 4) {
         for (uint32_t transaction_size_pages = 1; transaction_size_pages <= max_transaction_size_pages;
              transaction_size_pages *= 2) {
             if (num_of_transactions * transaction_size_pages * page_size_bytes * total_subordinate_cores >=
