@@ -57,11 +57,14 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           MAX_ATTEMPTS=3
-          read original_trigger conclusion <<< $(gh api /repos/tenstorrent/tt-metal/actions/runs/${{ steps.get-run-id-and-attempt.outputs.run-id }}/attempts/${{ steps.get-run-id-and-attempt.outputs.attempt-number }} --jq '.event + " " + .conclusion')
+          read original_trigger conclusion workflow_name <<< $(gh api /repos/tenstorrent/tt-metal/actions/runs/${{ steps.get-run-id-and-attempt.outputs.run-id }}/attempts/${{ steps.get-run-id-and-attempt.outputs.attempt-number }} --jq '.event + " " + .conclusion + " " + .name')
+          caller_branch_name=$(gh api /repos/tenstorrent/tt-metal/actions/runs/${{ steps.get-run-id-and-attempt.outputs.run-id }} --jq '.head_branch')
+          echo "caller workflow branch name: $caller_branch_name"
+
           if [[ "${{ steps.get-run-id-and-attempt.outputs.attempt-number }}" -ge "$MAX_ATTEMPTS" ]]; then
             echo "::notice title=no-continue-max-tries::This workflow has exceeded max tries. Not re-trying"
             should_continue=false
-          elif [[ "$original_trigger" == "workflow_dispatch" ]]; then
+          elif [[ "$original_trigger" == "workflow_dispatch" && "$workflow_name" != "All post-commit tests (with retries)" ]]; then
             echo "::notice title=no-continue-is-on-branch::This workflow was a workflow dispatched on a branch, not main. Not re-trying"
             should_continue=false
           elif [[ "$conclusion" != "failure" ]]; then
@@ -72,13 +75,50 @@ jobs:
           fi
 
           echo "should-continue=$should_continue" >> "$GITHUB_OUTPUT"
-      - name: Re-run failed jobs
+          echo "caller_branch_name=$caller_branch_name" >> "$GITHUB_OUTPUT"
+      - name: Determine if test failures exist
+        id: determine-if-test-failures-exist
         if: ${{ steps.determine-should-continue.outputs.should-continue == 'true' }}
+        env:
+          GH_TOKEN: ${{ secrets.RETRY_WORKFLOW_TOKEN }}
+        shell: bash
+        run: |
+          echo "should_rerun=true" >> "$GITHUB_OUTPUT"
+          # If the caller branch is not main, we need to check for test failures
+          # We only want to re-run if there are no test failures
+          # If the caller branch is main, we can just re-run the workflow
+          if [[ "${{ steps.determine-should-continue.outputs.caller_branch_name }}" != "main" ]]; then
+            echo "Checking for test failures on non-main branch: ${{ steps.determine-should-continue.outputs.caller_branch_name }}"
+
+            while read -r job; do
+              job_id=$(echo "$job" | jq -r '.id')
+              job_conclusion=$(echo "$job" | jq -r '.conclusion')
+
+              # Only read annotations for failed jobs
+              if [[ "$job_conclusion" == "failure" ]]; then
+                echo "Checking annotations for failed job $job_id to see if we have test or infra failures"
+                annotations=$(gh api /repos/tenstorrent/tt-metal/check-runs/$job_id/annotations)
+
+                # Check each annotation for non-infra failures
+                while read -r annotation; do
+                  level=$(echo "$annotation" | jq -r '.annotation_level')
+                  path=$(echo "$annotation" | jq -r '.path')
+
+                  if [[ "$level" == "failure" && "$path" != ".github"* ]]; then
+                    echo "::notice title=no-continue-test-failure::This workflow failed a test on job https://github.com/tenstorrent/tt-metal/actions/runs/${{ steps.get-run-id-and-attempt.outputs.run-id }}/job/$job_id Not re-trying"
+                    echo "should_rerun=false" >> "$GITHUB_OUTPUT"
+                    exit 0
+                  fi
+                done < <(echo "$annotations" | jq -c '.[]')
+              fi
+            done < <(gh api /repos/tenstorrent/tt-metal/actions/runs/${{ steps.get-run-id-and-attempt.outputs.run-id }}/attempts/${{ steps.get-run-id-and-attempt.outputs.attempt-number }}/jobs --paginate | jq -c '.jobs[] | {id: .id, conclusion: .conclusion}')
+          fi
+      - name: Re-run failed jobs
+        if: ${{ steps.determine-if-test-failures-exist.outputs.should_rerun == 'true' }}
         env:
           GH_TOKEN: ${{ secrets.RETRY_WORKFLOW_TOKEN }}
         run: |
           echo "Re-running jobs here"
-          # gh api /repos/tenstorrent/tt-metal/actions/runs/${{ steps.get-run-id-and-attempt.outputs.run-id }}/timing
           gh api --method POST \
             -H "Accept: application/vnd.github+json" \
             -H "X-GitHub-Api-Version: 2022-11-28" \
