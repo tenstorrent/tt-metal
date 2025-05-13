@@ -57,18 +57,18 @@ void MuxKernel::GenerateDependentConfigs() {
     TT_ASSERT(upstream_kernels_.size() <= tt::packet_queue::MAX_SWITCH_FAN_IN && upstream_kernels_.size() > 0);
     uint32_t num_upstream_dispatchers = 0;
     for (int idx = 0; idx < upstream_kernels_.size(); idx++) {
-        FDKernel* k = upstream_kernels_[idx];
+        std::shared_ptr<FDKernel> k = upstream_kernels_[idx];
         dependent_config_.remote_rx_x[idx] = k->GetVirtualCore().x;
         dependent_config_.remote_rx_y[idx] = k->GetVirtualCore().y;
         dependent_config_.input_packetize_log_page_size[idx] =
             DispatchSettings::DISPATCH_BUFFER_LOG_PAGE_SIZE;  // Does this ever change?
-        if (auto dispatch_kernel = dynamic_cast<DispatchKernel*>(k)) {
+        if (auto dispatch_kernel = std::dynamic_pointer_cast<DispatchKernel>(k)) {
             dependent_config_.input_packetize[idx] = 0x1;
             dependent_config_.input_packetize_upstream_sem[idx] =
                 dispatch_kernel->GetStaticConfig().my_downstream_cb_sem_id;
             dependent_config_.remote_rx_queue_id[idx] = 1;
             num_upstream_dispatchers++;
-        } else if (auto tunneler_kernel = dynamic_cast<EthTunnelerKernel*>(k)) {
+        } else if (auto tunneler_kernel = std::dynamic_pointer_cast<EthTunnelerKernel>(k)) {
             // Don't need to packetize input from tunneler
             dependent_config_.input_packetize[idx] = 0x0;
             dependent_config_.input_packetize_upstream_sem[idx] = 0;
@@ -86,9 +86,9 @@ void MuxKernel::GenerateDependentConfigs() {
 
     // Downstream, expect TUNNELER
     TT_ASSERT(downstream_kernels_.size() == 1);
-    FDKernel* ds = downstream_kernels_[0];
-    auto tunneler_kernel = dynamic_cast<EthTunnelerKernel*>(ds);
-    TT_ASSERT(ds);
+    std::shared_ptr<FDKernel> ds = downstream_kernels_[0];
+    auto tunneler_kernel = std::dynamic_pointer_cast<EthTunnelerKernel>(ds);
+    TT_ASSERT(tunneler_kernel != nullptr);
     dependent_config_.remote_tx_queue_start_addr_words =
         tunneler_kernel->GetStaticConfig().in_queue_start_addr_words.value() +
         (tunneler_kernel->GetStaticConfig().vc_count.value() - 1) *

@@ -9,6 +9,7 @@
 #include <utility>
 #include <variant>
 #include <vector>
+#include <memory>
 
 #include "assert.hpp"
 #include "device.hpp"
@@ -81,7 +82,7 @@ void EthRouterKernel::GenerateStaticConfigs() {
             static_config_.output_depacketize_local_sem[idx] =
                 tt::tt_metal::CreateSemaphore(*program_, logical_core_, 0, GetCoreType());
             // Forwward VCs are the ones that don't connect to a prefetch
-            if (auto pk = dynamic_cast<PrefetchKernel*>(downstream_kernels_[idx])) {
+            if (auto pk = std::dynamic_pointer_cast<PrefetchKernel>(downstream_kernels_[idx])) {
                 static_config_.fwd_vc_count = this->static_config_.fwd_vc_count.value() - 1;
             }
         }
@@ -100,13 +101,13 @@ void EthRouterKernel::GenerateDependentConfigs() {
 
         // Downstream, expect US_TUNNELER_REMOTE
         TT_ASSERT(downstream_kernels_.size() == 1);
-        auto tunneler_kernel = dynamic_cast<EthTunnelerKernel*>(downstream_kernels_[0]);
-        TT_ASSERT(tunneler_kernel);
+        auto tunneler_kernel = std::dynamic_pointer_cast<EthTunnelerKernel>(downstream_kernels_[0]);
+        TT_ASSERT(tunneler_kernel != nullptr);
 
-        uint32_t router_id = tunneler_kernel->GetRouterId(this, true);
+        uint32_t router_id = tunneler_kernel->GetRouterId(shared_from_this(), true);
         for (int idx = 0; idx < upstream_kernels_.size(); idx++) {
-            auto prefetch_kernel = dynamic_cast<PrefetchKernel*>(upstream_kernels_[idx]);
-            TT_ASSERT(prefetch_kernel);
+            auto prefetch_kernel = std::dynamic_pointer_cast<PrefetchKernel>(upstream_kernels_[idx]);
+            TT_ASSERT(prefetch_kernel != nullptr);
             dependent_config_.remote_tx_x[idx] = tunneler_kernel->GetVirtualCore().x;
             dependent_config_.remote_tx_y[idx] = tunneler_kernel->GetVirtualCore().y;
             dependent_config_.remote_tx_queue_id[idx] = idx + tt::packet_queue::MAX_SWITCH_FAN_IN * router_id;
@@ -135,25 +136,26 @@ void EthRouterKernel::GenerateDependentConfigs() {
     } else {
         // Upstream, expect US_TUNNELER_LOCAL
         TT_ASSERT(upstream_kernels_.size() == 1);
-        auto us_tunneler_kernel = dynamic_cast<EthTunnelerKernel*>(upstream_kernels_[0]);
-        TT_ASSERT(us_tunneler_kernel);
+        auto us_tunneler_kernel = std::dynamic_pointer_cast<EthTunnelerKernel>(upstream_kernels_[0]);
+        TT_ASSERT(us_tunneler_kernel != nullptr);
         // Upstream queues connect to the upstream tunneler, as many queues as we have VCs
         for (int idx = 0; idx < static_config_.vc_count.value(); idx++) {
             dependent_config_.remote_rx_x[idx] = us_tunneler_kernel->GetVirtualCore().x;
             dependent_config_.remote_rx_y[idx] = us_tunneler_kernel->GetVirtualCore().y;
             // Queue id starts counting after the input VCs
-            dependent_config_.remote_rx_queue_id[idx] = us_tunneler_kernel->GetRouterQueueIdOffset(this, false) + idx;
+            dependent_config_.remote_rx_queue_id[idx] =
+                us_tunneler_kernel->GetRouterQueueIdOffset(shared_from_this(), false) + idx;
             dependent_config_.remote_rx_network_type[idx] = (uint32_t)tt::packet_queue::DispatchRemoteNetworkType::NOC0;
         }
 
         // Downstream, expect PREFETCH_D/US_TUNNELER_REMOTE
         TT_ASSERT(downstream_kernels_.size() <= tt::packet_queue::MAX_SWITCH_FAN_OUT && downstream_kernels_.size() > 0);
-        std::vector<PrefetchKernel*> prefetch_kernels;
-        EthTunnelerKernel* ds_tunneler_kernel = nullptr;
-        for (auto k : downstream_kernels_) {
-            if (auto pk = dynamic_cast<PrefetchKernel*>(k)) {
+        std::vector<std::shared_ptr<PrefetchKernel>> prefetch_kernels;
+        std::shared_ptr<EthTunnelerKernel> ds_tunneler_kernel = nullptr;
+        for (const auto& k : downstream_kernels_) {
+            if (auto pk = std::dynamic_pointer_cast<PrefetchKernel>(k)) {
                 prefetch_kernels.push_back(pk);
-            } else if (auto tk = dynamic_cast<EthTunnelerKernel*>(k)) {
+            } else if (auto tk = std::dynamic_pointer_cast<EthTunnelerKernel>(k)) {
                 ds_tunneler_kernel = tk;
             } else {
                 TT_FATAL(false, "Unexpected kernel type downstream of ROUTER");
@@ -162,7 +164,7 @@ void EthRouterKernel::GenerateDependentConfigs() {
 
         // Populate remote_tx_* for prefetch kernels, assume they are connected "first"
         uint32_t remote_idx = 0;
-        for (auto prefetch_kernel : prefetch_kernels) {
+        for (const auto& prefetch_kernel : prefetch_kernels) {
             dependent_config_.remote_tx_x[remote_idx] = prefetch_kernel->GetVirtualCore().x;
             dependent_config_.remote_tx_y[remote_idx] = prefetch_kernel->GetVirtualCore().y;
             dependent_config_.remote_tx_queue_id[remote_idx] = 0;  // Prefetch queue id always 0
@@ -184,7 +186,7 @@ void EthRouterKernel::GenerateDependentConfigs() {
                 dependent_config_.remote_tx_x[remote_idx] = ds_tunneler_kernel->GetVirtualCore().x;
                 dependent_config_.remote_tx_y[remote_idx] = ds_tunneler_kernel->GetVirtualCore().y;
                 dependent_config_.remote_tx_queue_id[remote_idx] =
-                    ds_tunneler_kernel->GetRouterQueueIdOffset(this, true) + idx;
+                    ds_tunneler_kernel->GetRouterQueueIdOffset(shared_from_this(), true) + idx;
                 dependent_config_.remote_tx_network_type[remote_idx] =
                     (uint32_t)tt::packet_queue::DispatchRemoteNetworkType::NOC0;
                 dependent_config_.remote_tx_queue_start_addr_words[remote_idx] =

@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <vector>
-
+#include <memory>
 #include "assert.hpp"
 #include "control_plane.hpp"
 #include "dispatch/kernel_config/dispatch.hpp"
@@ -61,13 +61,13 @@ void FabricRouterVC::GenerateDependentConfigs() {
         const auto& [routing_plane_rev, fabric_router_rev] = routers_rev.front();
 
         bool valid_path{false};
-        if (auto prefetch_us = dynamic_cast<PrefetchKernel*>(us_kernel);
-            auto prefetch_ds = dynamic_cast<PrefetchKernel*>(ds_kernel)) {
+        if (auto prefetch_us = std::dynamic_pointer_cast<PrefetchKernel>(us_kernel);
+            auto prefetch_ds = std::dynamic_pointer_cast<PrefetchKernel>(ds_kernel)) {
             valid_path = true;
         }
 
-        if (auto dispatch_us = dynamic_cast<DispatchKernel*>(us_kernel);
-            auto dispatch_ds = dynamic_cast<DispatchKernel*>(ds_kernel)) {
+        if (auto dispatch_us = std::dynamic_pointer_cast<DispatchKernel>(us_kernel);
+            auto dispatch_ds = std::dynamic_pointer_cast<DispatchKernel>(ds_kernel)) {
             valid_path = true;
         }
 
