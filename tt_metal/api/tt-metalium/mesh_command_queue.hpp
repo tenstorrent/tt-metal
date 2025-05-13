@@ -27,7 +27,7 @@
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/mesh_trace.hpp>
 #include <tt-metalium/mesh_trace_id.hpp>
-#include <tt-metalium/host_mesh_buffer.hpp>
+#include <tt-metalium/distributed_host_buffer.hpp>
 #include <tt-metalium/mesh_workload.hpp>
 #include <tt-metalium/multi_producer_single_consumer_queue.hpp>
 #include <tt-metalium/sub_device_types.hpp>
@@ -99,10 +99,10 @@ public:
         const std::shared_ptr<MeshBuffer>& mesh_buffer,
         const std::vector<ShardDataTransfer>& shard_data_transfers,
         bool blocking) = 0;
-    // TODO: remove `host_buffer_shape` once it is integrated into `HostMeshBuffer` directly.
+    // TODO: remove `host_buffer_shape` once it is integrated into `DistributedHostBuffer` directly.
     virtual void enqueue_write(
         const std::shared_ptr<MeshBuffer>& mesh_buffer,
-        const HostMeshBuffer& host_buffer,
+        const DistributedHostBuffer& host_buffer,
         const MeshShape& host_buffer_shape,
         bool blocking) = 0;
 
@@ -116,7 +116,7 @@ public:
     // TODO: does "enqueue" make sense anymore? Return the object by value instead.
     // TODO: specify a way to "filter" shards we are interested in?
     virtual void enqueue_read(
-        const std::shared_ptr<MeshBuffer>& mesh_buffer, HostMeshBuffer& host_buffer, bool blocking) = 0;
+        const std::shared_ptr<MeshBuffer>& mesh_buffer, DistributedHostBuffer& host_buffer, bool blocking) = 0;
 
     virtual MeshEvent enqueue_record_event(
         tt::stl::Span<const SubDeviceId> sub_device_ids = {},

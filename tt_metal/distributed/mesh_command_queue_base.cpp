@@ -230,14 +230,14 @@ void MeshCommandQueueBase::enqueue_write_shards(
 
 void MeshCommandQueueBase::enqueue_write(
     const std::shared_ptr<MeshBuffer>& mesh_buffer,
-    const HostMeshBuffer& host_buffer,
+    const DistributedHostBuffer& host_buffer,
     const MeshShape& host_buffer_shape,
     bool blocking) {
     // Iterate over global coordinates; skip host-remote coordinates, as per `host_buffer` configuration.
     std::vector<ShardDataTransfer> shard_data_transfers;
     for (const auto& host_buffer_coord : MeshCoordinateRange(host_buffer_shape)) {
         const int linear_index = to_linear_index(host_buffer_shape, host_buffer_coord);
-        auto buf = host_buffer.get_buffer(linear_index);
+        auto buf = host_buffer.get_shard(linear_index);
         if (buf.has_value()) {
             shard_data_transfers.push_back(
                 {.shard_coord = host_buffer_coord,
@@ -268,11 +268,11 @@ void MeshCommandQueueBase::enqueue_read_shards(
 }
 
 void MeshCommandQueueBase::enqueue_read(
-    const std::shared_ptr<MeshBuffer>& buffer, HostMeshBuffer& host_buffer, bool blocking) {
+    const std::shared_ptr<MeshBuffer>& buffer, DistributedHostBuffer& host_buffer, bool blocking) {
     std::vector<ShardDataTransfer> shard_data_transfers;
     for (const auto& coord : MeshCoordinateRange(buffer->device()->shape())) {
         const int linear_index = to_linear_index(buffer->device()->shape(), coord);
-        auto buf = host_buffer.get_buffer(linear_index);
+        auto buf = host_buffer.get_shard(linear_index);
         if (buf.has_value()) {
             shard_data_transfers.push_back(
                 {.shard_coord = coord,

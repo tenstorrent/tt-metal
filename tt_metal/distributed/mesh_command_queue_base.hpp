@@ -51,7 +51,7 @@ public:
         bool blocking) override;
     void enqueue_write(
         const std::shared_ptr<MeshBuffer>& mesh_buffer,
-        const HostMeshBuffer& host_buffer,
+        const DistributedHostBuffer& host_buffer,
         const MeshShape& host_buffer_shape,
         bool blocking) override;
 
@@ -63,7 +63,7 @@ public:
         bool blocking) override;
 
     void enqueue_read(
-        const std::shared_ptr<MeshBuffer>& mesh_buffer, HostMeshBuffer& host_buffer, bool blocking) override;
+        const std::shared_ptr<MeshBuffer>& mesh_buffer, DistributedHostBuffer& host_buffer, bool blocking) override;
 };
 
 }  // namespace tt::tt_metal::distributed
