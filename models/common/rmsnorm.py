@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 import ttnn
+import torch
 from models.common.lightweightmodule import LightweightModule
 
 
@@ -65,9 +66,15 @@ class RMSNorm(LightweightModule):
             else:
                 weight_name = f"layers.{layer_num}.{weight_key}.weight"
 
-        torch_weight = (
-            state_dict[weight_name].unsqueeze(0).view(1, 1, dim).reshape([1, 1, dim // SHARD_HEIGHT, SHARD_HEIGHT])
-        )
+
+        if weight_key == "ffn_norm":
+            torch_weight = (
+                torch.ones((1, 1, dim // SHARD_HEIGHT, SHARD_HEIGHT), dtype=torch.float32)
+            )
+        else:
+            torch_weight = (
+                state_dict[weight_name].unsqueeze(0).view(1, 1, dim).reshape([1, 1, dim // SHARD_HEIGHT, SHARD_HEIGHT])
+            )
 
         cache_name = None if weight_cache_path is None else weight_cache_path / weight_name
 
