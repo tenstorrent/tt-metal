@@ -161,7 +161,8 @@ tt::tt_metal::operation::ProgramWithCallbacks bilinear_multi_core(
         next_cb_index++, program, all_cores, in_cb_pagesize, in_cb_npages, input_cb_data_format, halo_in.buffer());
 
     // first intermediate CB
-    uint32_t in1_cb_pagesize = std::min(tt::constants::TILE_WIDTH * input.element_size() * 8, input_stick_nbytes);
+    uint32_t in1_cb_pagesize =
+        std::min(tt::constants::TILE_WIDTH * input.element_size() * MAX_TILES_PER_REDUCTION, input_stick_nbytes);
     uint32_t in_cb_id1 = next_cb_index++;
     tt::tt_metal::create_cb(
         in_cb_id1,
