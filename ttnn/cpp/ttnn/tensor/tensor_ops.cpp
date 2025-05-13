@@ -126,7 +126,7 @@ Tensor tensor_to_layout(const Tensor& input_tensor, Layout target_layout, distri
                         });
                     }
                     mesh_device->wait_for_thread_pool();
-                    return ttnn::distributed::aggregate_as_tensor(shards, s.strategy);
+                    return ttnn::distributed::aggregate_as_tensor(shards, input_tensor.get_distributed_tensor_config());
                 },
                 [&](const DeviceStorage& s) -> Tensor { TT_THROW("Unexpected storage type"); },
             },

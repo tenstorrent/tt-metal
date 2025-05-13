@@ -29,9 +29,8 @@ MemoryConfig DeviceStorage::memory_config() const {
 
 DeviceStorage::DeviceStorage(
     std::shared_ptr<distributed::MeshBuffer> mesh_buffer_,
-    DistributedTensorConfig strategy_,
     std::vector<std::pair<distributed::MeshCoordinate, TensorSpec>> specs_) :
-    strategy(std::move(strategy_)), specs(std::move(specs_)), mesh_buffer(std::move(mesh_buffer_)) {}
+    specs(std::move(specs_)), mesh_buffer(std::move(mesh_buffer_)) {}
 
 Buffer* DeviceStorage::get_buffer() const {
     if (this->mesh_buffer.get() != nullptr) {

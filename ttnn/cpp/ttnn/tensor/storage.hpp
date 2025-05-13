@@ -25,8 +25,6 @@ struct HostStorage {
 };
 
 struct DeviceStorage {
-    // TODO: come up with a better abstraction for this.
-    DistributedTensorConfig strategy;
     std::vector<std::pair<distributed::MeshCoordinate, TensorSpec>> specs;
 
     std::shared_ptr<Buffer> buffer;
@@ -36,7 +34,6 @@ struct DeviceStorage {
     DeviceStorage(std::shared_ptr<Buffer> buffer_);
     DeviceStorage(
         std::shared_ptr<distributed::MeshBuffer> mesh_buffer_,
-        DistributedTensorConfig strategy_,
         std::vector<std::pair<distributed::MeshCoordinate, TensorSpec>> specs_);
 
     MemoryConfig memory_config() const;
@@ -57,30 +54,23 @@ struct DeviceStorage {
 };
 
 struct MultiDeviceHostStorage {
-    DistributedTensorConfig strategy;
     std::vector<HostBuffer> buffers;
     std::vector<TensorSpec> specs;
-    mutable std::mutex mtx;
 
-    friend void swap(MultiDeviceHostStorage& first, MultiDeviceHostStorage& second) {
-        std::scoped_lock lock(first.mtx, second.mtx);
+    friend void swap(MultiDeviceHostStorage& first, MultiDeviceHostStorage& second) noexcept {
         // enable ADL (not necessary, but good practice)
         using std::swap;
 
-        swap(first.strategy, second.strategy);
         swap(first.buffers, second.buffers);
         swap(first.specs, second.specs);
     }
 
     MultiDeviceHostStorage() = default;
-    MultiDeviceHostStorage(
-        DistributedTensorConfig strategy_, std::vector<HostBuffer> buffers_, std::vector<TensorSpec> specs_) :
-        strategy(strategy_), buffers(std::move(buffers_)), specs(std::move(specs_)) {}
-    MultiDeviceHostStorage(MultiDeviceHostStorage&& other) { swap(*this, other); }
+    MultiDeviceHostStorage(std::vector<HostBuffer> buffers_, std::vector<TensorSpec> specs_) :
+        buffers(std::move(buffers_)), specs(std::move(specs_)) {}
+    MultiDeviceHostStorage(MultiDeviceHostStorage&& other) noexcept { swap(*this, other); }
     // unfotunately we need to have this code written manually.
     MultiDeviceHostStorage(const MultiDeviceHostStorage& other) {
-        std::scoped_lock lock(other.mtx);
-        strategy = other.strategy;
         buffers = other.buffers;
         specs = other.specs;
     }
@@ -91,45 +81,36 @@ struct MultiDeviceHostStorage {
         return *this;
     }
 
-    MultiDeviceHostStorage& operator=(MultiDeviceHostStorage&& other) {
+    MultiDeviceHostStorage& operator=(MultiDeviceHostStorage&& other) noexcept {
         swap(*this, other);
         return *this;
     }
 
     bool operator==(const MultiDeviceHostStorage& other) {
-        return this->strategy == other.strategy and this->buffers == other.buffers and this->specs == other.specs;
+        return this->buffers == other.buffers and this->specs == other.specs;
     }
 
     static constexpr auto attribute_names = std::forward_as_tuple();
     auto attribute_values() const { return std::forward_as_tuple(); }
 
     HostBuffer get_buffer(int buffer_index) const {
-        std::lock_guard<std::mutex> lock(mtx);
         TT_FATAL(buffer_index < buffers.size(), "Buffer not found for buffer_index {}", buffer_index);
         return buffers[buffer_index];
     }
 
     HostBuffer& get_buffer(int buffer_index) {
-        std::lock_guard<std::mutex> lock(mtx);
         TT_FATAL(buffer_index < buffers.size(), "Buffer not found for buffer_index {}", buffer_index);
         return buffers[buffer_index];
     }
 
     TensorSpec get_tensor_spec(int spec_index) const {
-        std::lock_guard<std::mutex> lock(mtx);
         TT_FATAL(spec_index < specs.size(), "Spec for device {} not found in spec list", spec_index);
         return specs[spec_index];
     }
 
-    uint32_t num_buffers() const {
-        std::lock_guard<std::mutex> lock(mtx);
-        return buffers.size();
-    }
+    uint32_t num_buffers() const { return buffers.size(); }
 
     bool is_allocated() const {
-        // not sure what is better mutex for each buffer 10 times or one here.
-        // I think this one is better.
-        std::lock_guard<std::mutex> lock(mtx);
         return std::all_of(buffers.begin(), buffers.end(), [](auto&& buffer) { return buffer.is_allocated(); });
     }
 };
