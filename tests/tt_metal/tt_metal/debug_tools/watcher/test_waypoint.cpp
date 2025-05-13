@@ -127,7 +127,7 @@ void RunTest(WatcherFixture* fixture, IDevice* device) {
         }
     }
     if (has_idle_eth_cores) {
-        KernelHandle ierisc_kid0, ierisc_kid1;
+        KernelHandle ierisc_kid0{}, ierisc_kid1{};
         std::set<CoreRange> eth_core_ranges;
         for (const auto& core : device->get_inactive_ethernet_cores()) {
             eth_core_ranges.insert(CoreRange(core, core));

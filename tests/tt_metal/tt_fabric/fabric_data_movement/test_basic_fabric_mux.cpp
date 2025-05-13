@@ -155,8 +155,8 @@ std::vector<chip_id_t> get_physical_chip_sequence(uint32_t num_seq_chips) {
 
     if (chip_0_neigbors.size() == 2) {
         // find the other neighbor chip and direction
-        tt_fabric::RoutingDirection other_chip_dir;
-        chip_id_t other_chip;
+        tt_fabric::RoutingDirection other_chip_dir{};
+        chip_id_t other_chip{};
         for (const auto& [dir, chip] : chip_0_neigbors) {
             if (chip != 0) {
                 other_chip_dir = dir;
