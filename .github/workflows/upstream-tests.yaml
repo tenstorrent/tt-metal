@@ -183,7 +183,7 @@ jobs:
       - cloud-virtual-machine
     steps:
       - name: Run image
-        timeout-minutes: 45
+        timeout-minutes: 30
         run: docker run -v /dev/hugepages-1G:/dev/hugepages-1G --device /dev/tenstorrent ${{ needs.get-image-tags.outputs.bh-image-tag }}
       - name: Run profiler image
         timeout-minutes: 10
