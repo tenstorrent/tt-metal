@@ -58,7 +58,7 @@ void bind_gather_tosa_operation(py::module& module) {
             index_tensor_ttnn = ttnn.from_torch(index_tensor, ttnn.uint16, layout=ttnn.Layout.TILE, device=device)
 
             # Perform the gather operation
-            gathered_tensor = ttnn.experimental.tosa.gather(input_tensor_ttnn, index_tensor_ttnn)
+            gathered_tensor = ttnn.experimental.tosa_gather(input_tensor_ttnn, index_tensor_ttnn)
 
             # Equivalent to PyTorch: gathered_tensor = torch.gather(input_tensor, dim=1, index=indices.unsqueeze(-1).expand(-1, -1, C))
     )doc";
@@ -73,10 +73,7 @@ void bind_gather_tosa_operation(py::module& module) {
                const ttnn::Tensor& input_tensor,
                const ttnn::Tensor& input_index_tensor,
                const std::optional<tt::tt_metal::MemoryConfig>& memory_config,
-               QueueId queue_id) -> Tensor {
-                // return input_tensor;
-                return self(queue_id, input_tensor, input_index_tensor, memory_config);
-            },
+               QueueId queue_id) -> Tensor { return self(queue_id, input_tensor, input_index_tensor, memory_config); },
             py::arg("input").noconvert(),
             py::arg("index"),
             py::kw_only(),

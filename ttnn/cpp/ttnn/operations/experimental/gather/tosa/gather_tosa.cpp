@@ -29,7 +29,6 @@ Tensor pre_gather_transform_input_tensor(
     }
     // If dim is not last dimension transpose it
     const Tensor transposed_tensor = ttnn::transpose(input_tensor, dim, -1, input_tensor.memory_config());
-
     // If input is not rank 4 transform it to 4D
     const Tensor transformed_tensor = reduction_common::transform_to_4d_tensor(transposed_tensor, true);
 
