@@ -88,14 +88,6 @@ bool run_dm(IDevice* device, const OneToOneConfig& test_config) {
         (uint32_t)test_config.page_size_bytes,
         (uint32_t)test_config.test_id};
 
-    vector<uint32_t> receiver_compile_args = {
-        (uint32_t)master_l1_byte_address,
-        (uint32_t)subordinate_l1_byte_address,
-        (uint32_t)test_config.num_of_transactions,
-        (uint32_t)test_config.transaction_size_pages,
-        (uint32_t)test_config.page_size_bytes,
-        (uint32_t)test_config.test_id};
-
     // Kernels
     auto sender_kernel = CreateKernel(
         program,
@@ -106,24 +98,13 @@ bool run_dm(IDevice* device, const OneToOneConfig& test_config) {
             .noc = NOC::RISCV_0_default,
             .compile_args = sender_compile_args});
 
-    auto receiver_kernel = CreateKernel(
-        program,
-        "tests/tt_metal/tt_metal/data_movement/one_to_one/kernels/receiver.cpp",
-        subordinate_core_set,
-        DataMovementConfig{
-            .processor = DataMovementProcessor::RISCV_1,
-            .noc = NOC::RISCV_1_default,
-            .compile_args = receiver_compile_args});
-
     // Semaphores
     CoreRangeSet sem_core_set = subordinate_core_set.merge<CoreRangeSet>(master_core_set);
     const uint32_t sem_id = CreateSemaphore(program, sem_core_set, 0);
     CoreCoord physical_subordinate_core = device->worker_core_from_logical_core(test_config.subordinate_core_coord);
 
     // Runtime Arguments
-    SetRuntimeArgs(
-        program, sender_kernel, master_core_set, {sem_id, physical_subordinate_core.x, physical_subordinate_core.y});
-    SetRuntimeArgs(program, receiver_kernel, subordinate_core_set, {sem_id});
+    SetRuntimeArgs(program, sender_kernel, master_core_set, {sem_id, physical_subordinate_core.x, physical_subordinate_core.y});
 
     // Assign unique id
     log_info("Running Test ID: {}, Run ID: {}", test_config.test_id, unit_tests::dm::runtime_host_id);
@@ -162,20 +143,21 @@ bool run_dm(IDevice* device, const OneToOneConfig& test_config) {
 /* ========== Test case for one to one data movement; Test id = 4 ========== */
 TEST_F(DeviceFixture, TensixDataMovementOneToOnePacketSizes) {
     // Parameters
-    uint32_t max_transactions = 64;
+    uint32_t max_transactions = 256;
     uint32_t max_transaction_size_pages = 64;
-    uint32_t page_size_bytes = 32;  // =Flit size: 32 bytes for WH, 64 for BH
-    if (arch_ == tt::ARCH::BLACKHOLE) {
-        page_size_bytes *= 2;
-    }
+    uint32_t page_size_bytes = arch_ == tt::ARCH::BLACKHOLE ? 64 : 32;  // =Flit size: 32 bytes for WH, 64 for BH
 
     // Cores
     CoreCoord master_core_coord = {0, 0};
     CoreCoord subordinate_core_coord = {1, 1};
 
-    for (uint32_t num_of_transactions = 1; num_of_transactions <= max_transactions; num_of_transactions *= 2) {
+    for (uint32_t num_of_transactions = 1; num_of_transactions <= max_transactions; num_of_transactions *= 4) {
         for (uint32_t transaction_size_pages = 1; transaction_size_pages <= max_transaction_size_pages;
              transaction_size_pages *= 2) {
+            if (num_of_transactions * transaction_size_pages * page_size_bytes >= 1024 * 1024) {
+                continue;
+            }
+
             // Test config
             unit_tests::dm::core_to_core::OneToOneConfig test_config = {
                 .test_id = 4,
