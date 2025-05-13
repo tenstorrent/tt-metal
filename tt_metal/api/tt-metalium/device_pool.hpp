@@ -56,7 +56,7 @@ public:
     tt_metal::IDevice* get_active_device(chip_id_t device_id) const;
     std::vector<tt_metal::IDevice*> get_all_active_devices() const;
     bool close_device(chip_id_t device_id);
-    void close_devices(const std::vector<tt_metal::IDevice*>& devices, bool skip_synchronize = false);
+    bool close_devices(const std::vector<tt_metal::IDevice*>& devices, bool skip_synchronize = false);
     bool is_device_active(chip_id_t id) const;
     void init_profiler() const;
     void initialize_fabric_and_dispatch_fw() const;
