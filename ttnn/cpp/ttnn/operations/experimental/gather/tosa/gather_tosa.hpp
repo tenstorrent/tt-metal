@@ -16,7 +16,6 @@ struct ExecuteTosaGather {
         const Tensor& input_index_tensor,
         const std::optional<tt::tt_metal::MemoryConfig>& memory_config);
 };
-
 }  // namespace ttnn::operations::experimental::tosa::gather
 
 namespace ttnn::experimental::tosa {
