@@ -285,11 +285,11 @@ def run_test_sdpa_decode_multi_pos(
         K_slice = K[:, :, :padded_layer_len, :]  # b, nkv, S, d
         K_slice = torch.cat(
             [K_slice[:, i : i + 1, :, :].repeat(1, nh // nkv, 1, 1) for i in range(nkv)], dim=1
-        )  # b, nh, d, S
+        )  # b, nh, S, d
         V_slice = V[:, :, :padded_layer_len, :]  # b, nkv, S, d
         V_slice = torch.cat(
             [V_slice[:, i : i + 1, :, :].repeat(1, nh // nkv, 1, 1) for i in range(nkv)], dim=1
-        )  # b, nh, d, S
+        )  # b, nh, S, d
         attn_mask_slice = attn_mask[:, :nh, :, :]  # b, nh, 1, S
 
         expect = torch.nn.functional.scaled_dot_product_attention(
@@ -473,11 +473,11 @@ def run_test_sdpa_decode_single_iter(
     K_slice = K[:, :, :padded_layer_len, :]  # b, nkv, S, d
     K_slice = torch.cat(
         [K_slice[:, i : i + 1, :, :].repeat(1, nh // nkv, 1, 1) for i in range(nkv)], dim=1
-    )  # b, nh, d, S
+    )  # b, nh, S, d
     V_slice = V[:, :, :padded_layer_len, :]  # b, nkv, S, d
     V_slice = torch.cat(
         [V_slice[:, i : i + 1, :, :].repeat(1, nh // nkv, 1, 1) for i in range(nkv)], dim=1
-    )  # b, nh, d, S
+    )  # b, nh, S, d
     attn_mask_slice = attn_mask[:, :nh, :, :]  # b, nh, 1, S
     expect = torch.nn.functional.scaled_dot_product_attention(
         Q_slice, K_slice, V_slice, attn_mask_slice, scale=scale, is_causal=False
@@ -803,11 +803,11 @@ def run_test_sdpa_decode_paged_attention(
         K_slice = K[:, :, :padded_layer_len, :]  # b, nkv, S, d
         K_slice = torch.cat(
             [K_slice[:, i : i + 1, :, :].repeat(1, nh // nkv, 1, 1) for i in range(nkv)], dim=1
-        )  # b, nh, d, S
+        )  # b, nh, S, d
         V_slice = V[:, :, :padded_layer_len, :]  # b, nkv, S, d
         V_slice = torch.cat(
             [V_slice[:, i : i + 1, :, :].repeat(1, nh // nkv, 1, 1) for i in range(nkv)], dim=1
-        )  # b, nh, d, S
+        )  # b, nh, S, d
         attn_mask_slice = attn_mask[:, :nh, :, :]  # b, nh, 1, S
 
         expect = torch.nn.functional.scaled_dot_product_attention(
@@ -989,11 +989,11 @@ def run_test_sdpa_decode_paged_attention_single_iter(
     K_slice = K[:, :, :padded_layer_len, :]  # b, nkv, S, d
     K_slice = torch.cat(
         [K_slice[:, i : i + 1, :, :].repeat(1, nh // nkv, 1, 1) for i in range(nkv)], dim=1
-    )  # b, nh, d, S
+    )  # b, nh, S, d
     V_slice = V[:, :, :padded_layer_len, :]  # b, nkv, S, d
     V_slice = torch.cat(
         [V_slice[:, i : i + 1, :, :].repeat(1, nh // nkv, 1, 1) for i in range(nkv)], dim=1
-    )  # b, nh, d, S
+    )  # b, nh, S, d
 
     attn_mask = torch.zeros((b, padded_num_heads, 1, padded_layer_len))
     for i in range(b):
