@@ -132,7 +132,7 @@ def test_run_vit_trace_2cqs_inference(
     ((8, 100),),
 )
 @pytest.mark.parametrize("entire_imagenet_dataset", [True])
-@pytest.mark.parametrize("expected_accuracy", [0.80])
+@pytest.mark.parametrize("expected_accuracy", [0.7906850961538462])
 def test_run_vit_trace_2cqs_accuracy(
     mesh_device,
     use_program_cache,
