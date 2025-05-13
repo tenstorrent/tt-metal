@@ -733,7 +733,7 @@ class ModelArgs:
                 out_subblock_h=1,  # Must be divisible by per_core_M
                 out_subblock_w=1,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4
                 per_core_M=max(
-                    1, 8 if seq_len >= self.MAX_QKV_MM_SEQ_LEN else seq_len // self.tile_size // 8  # 8 rows
+                    1, 8 if seq_len >= self.MAX_QKV_MM_SEQ_LEN else math.ceil(seq_len / self.tile_size / 8)  # 8 rows
                 ),  # M / TILE_HEIGHT / Grid_Size (dynamic based on seqlen)
                 per_core_N=math.ceil(self.qkv_size / self.cluster_shape[1] / 32 / 8),  # N / TILE_WIDTH / grid width
                 transpose_mcast=False,
