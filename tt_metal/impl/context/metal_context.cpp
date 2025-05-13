@@ -196,7 +196,7 @@ void MetalContext::clear_dram_state(chip_id_t device_id) {
     std::vector<uint32_t> zero_vec(dram_size_per_channel / sizeof(uint32_t), 0);
     for (int channel = 0; channel < num_dram_channels; ++channel) {
         tt::tt_metal::MetalContext::instance().get_cluster().write_dram_vec(
-            zero_vec, tt_target_dram{device_id, channel, 0}, start_address);
+            zero_vec, device_id, channel, start_address);
 
         cluster_->dram_barrier(device_id);
     }
