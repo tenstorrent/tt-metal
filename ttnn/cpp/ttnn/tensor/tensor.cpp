@@ -720,8 +720,7 @@ void write_tensor(const Tensor& host_tensor, Tensor device_tensor, QueueId cq_id
             "write_tensor only supports host_tensor to device_tensor data transfer");
         TT_FATAL(host_tensor.get_logical_shape() == device_tensor.get_logical_shape(), "Error");
         TT_FATAL(host_tensor.get_dtype() == device_tensor.get_dtype(), "Error");
-        TT_FATAL(
-            host_tensor.get_tensor_spec().page_config() == device_tensor.get_tensor_spec().page_config(), "Error");
+        TT_FATAL(host_tensor.get_tensor_spec().page_config() == device_tensor.get_tensor_spec().page_config(), "Error");
         std::visit(
             tt::stl::overloaded{
                 [cq_id, &host_tensor, &device_tensor](const DeviceStorage& device_storage) {
@@ -744,8 +743,7 @@ void write_tensor(const Tensor& host_tensor, Tensor device_tensor, QueueId cq_id
                     if (auto mesh_device = device_tensor.mesh_device()) {
                         tt::tt_metal::memcpy(mesh_device->mesh_command_queue(*cq_id), device_tensor, host_data);
                     } else {
-                        tt::tt_metal::memcpy(
-                            device_tensor.device()->command_queue(*cq_id), device_tensor, host_data);
+                        tt::tt_metal::memcpy(device_tensor.device()->command_queue(*cq_id), device_tensor, host_data);
                     }
                 },
                 [](auto&& s) { TT_THROW("Unreachable"); }},
