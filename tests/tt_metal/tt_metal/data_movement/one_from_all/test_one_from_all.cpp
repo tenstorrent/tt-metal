@@ -161,10 +161,7 @@ TEST_F(DeviceFixture, TensixDataMovementOneFromAllPacketSizes) {
     // Parameters
     uint32_t max_transactions = 256;
     uint32_t max_transaction_size_pages = 64;
-    uint32_t page_size_bytes = 32;  // =Flit size: 32 bytes for WH, 64 for BH
-    if (arch_ == tt::ARCH::BLACKHOLE) {
-        page_size_bytes *= 2;
-    }
+    uint32_t page_size_bytes = arch_ == tt::ARCH::BLACKHOLE ? 64 : 32;  // =Flit size: 32 bytes for WH, 64 for BH
 
     // Cores
     CoreCoord master_core_coord = {0, 0};
