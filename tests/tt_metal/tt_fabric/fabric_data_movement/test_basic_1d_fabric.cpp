@@ -32,6 +32,7 @@
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/fabric.hpp>
 #include "tt_metal/fabric/hw/inc/tt_fabric_status.h"
+#include "tt_metal/fabric/fabric_host_utils.hpp"
 #include "umd/device/tt_core_coordinates.h"
 
 namespace tt::tt_fabric {
@@ -148,9 +149,12 @@ void RunTestUnicastRaw(BaseFabricFixture* fixture, uint32_t num_hops, RoutingDir
     fabric_hops[direction] = num_hops;
 
     tt::tt_metal::distributed::MeshShape mesh_shape;
-    const auto edm_config = get_tt_fabric_config();
-    uint32_t is_2d_fabric = edm_config.topology == Topology::Mesh;
     chan_id_t edm_port;
+
+    const auto* fabric_context = control_plane->get_fabric_context();
+    const auto topology = fabric_context->get_fabric_topology();
+    const auto* edm_config = fabric_context->get_fabric_router_config();
+    uint32_t is_2d_fabric = topology == Topology::Mesh;
 
     if (!is_2d_fabric) {
         // Find a device with enough neighbours in the specified directions
@@ -237,7 +241,7 @@ void RunTestUnicastRaw(BaseFabricFixture* fixture, uint32_t num_hops, RoutingDir
     // test parameters
     uint32_t packet_header_address = 0x25000;
     uint32_t source_l1_buffer_address = 0x30000;
-    uint32_t packet_payload_size_bytes = edm_config.topology == Topology::Mesh ? 2048 : 4096;
+    uint32_t packet_payload_size_bytes = topology == Topology::Mesh ? 2048 : 4096;
     uint32_t num_packets = 10;
     uint32_t test_results_address = 0x100000;
     uint32_t test_results_size_bytes = 128;
@@ -246,11 +250,7 @@ void RunTestUnicastRaw(BaseFabricFixture* fixture, uint32_t num_hops, RoutingDir
 
     // common compile time args for sender and receiver
     std::vector<uint32_t> compile_time_args = {
-        test_results_address,
-        test_results_size_bytes,
-        target_address,
-        0 /* mcast_mode */,
-        edm_config.topology == Topology::Mesh};
+        test_results_address, test_results_size_bytes, target_address, 0 /* mcast_mode */, topology == Topology::Mesh};
 
     std::map<string, string> defines = {};
     if (is_2d_fabric) {
@@ -282,17 +282,17 @@ void RunTestUnicastRaw(BaseFabricFixture* fixture, uint32_t num_hops, RoutingDir
         num_hops};
 
     // append the EDM connection rt args
-    const auto sender_channel = edm_config.topology == Topology::Mesh ? edm_direction : 0;
+    const auto sender_channel = topology == Topology::Mesh ? edm_direction : 0;
     tt::tt_fabric::SenderWorkerAdapterSpec edm_connection = {
         .edm_noc_x = edm_eth_core.x,
         .edm_noc_y = edm_eth_core.y,
-        .edm_buffer_base_addr = edm_config.sender_channels_base_address[sender_channel],
-        .num_buffers_per_channel = edm_config.sender_channels_num_buffers[sender_channel],
-        .edm_l1_sem_addr = edm_config.sender_channels_local_flow_control_semaphore_address[sender_channel],
-        .edm_connection_handshake_addr = edm_config.sender_channels_connection_semaphore_address[sender_channel],
-        .edm_worker_location_info_addr = edm_config.sender_channels_worker_conn_info_base_address[sender_channel],
-        .buffer_size_bytes = edm_config.channel_buffer_size_bytes,
-        .buffer_index_semaphore_id = edm_config.sender_channels_buffer_index_semaphore_address[sender_channel],
+        .edm_buffer_base_addr = edm_config->sender_channels_base_address[sender_channel],
+        .num_buffers_per_channel = edm_config->sender_channels_num_buffers[sender_channel],
+        .edm_l1_sem_addr = edm_config->sender_channels_local_flow_control_semaphore_address[sender_channel],
+        .edm_connection_handshake_addr = edm_config->sender_channels_connection_semaphore_address[sender_channel],
+        .edm_worker_location_info_addr = edm_config->sender_channels_worker_conn_info_base_address[sender_channel],
+        .buffer_size_bytes = edm_config->channel_buffer_size_bytes,
+        .buffer_index_semaphore_id = edm_config->sender_channels_buffer_index_semaphore_address[sender_channel],
         .persistent_fabric = true,
         .edm_direction = edm_direction};
 
@@ -391,13 +391,14 @@ void RunTestUnicastConnAPI(BaseFabricFixture* fixture, uint32_t num_hops, Routin
 
     auto receiver_noc_encoding =
         tt::tt_metal::MetalContext::instance().hal().noc_xy_encoding(receiver_virtual_core.x, receiver_virtual_core.y);
-    const auto edm_config = get_tt_fabric_config();
-    uint32_t is_2d_fabric = edm_config.topology == Topology::Mesh;
+
+    const auto topology = control_plane->get_fabric_context()->get_fabric_topology();
+    uint32_t is_2d_fabric = topology == Topology::Mesh;
 
     // test parameters
     uint32_t packet_header_address = 0x25000;
     uint32_t source_l1_buffer_address = 0x30000;
-    uint32_t packet_payload_size_bytes = edm_config.topology == Topology::Mesh ? 2048 : 4096;
+    uint32_t packet_payload_size_bytes = topology == Topology::Mesh ? 2048 : 4096;
     uint32_t num_packets = 10;
     uint32_t test_results_address = 0x100000;
     uint32_t test_results_size_bytes = 128;
@@ -406,11 +407,7 @@ void RunTestUnicastConnAPI(BaseFabricFixture* fixture, uint32_t num_hops, Routin
 
     // common compile time args for sender and receiver
     std::vector<uint32_t> compile_time_args = {
-        test_results_address,
-        test_results_size_bytes,
-        target_address,
-        0 /* mcast_mode */,
-        edm_config.topology == Topology::Mesh};
+        test_results_address, test_results_size_bytes, target_address, 0 /* mcast_mode */, topology == Topology::Mesh};
 
     std::map<string, string> defines = {};
     if (is_2d_fabric) {
@@ -544,13 +541,13 @@ void RunTestMCastConnAPI(BaseFabricFixture* fixture) {
     auto receiver_noc_encoding =
         tt::tt_metal::MetalContext::instance().hal().noc_xy_encoding(receiver_virtual_core.x, receiver_virtual_core.y);
 
-    const auto edm_config = get_tt_fabric_config();
-    uint32_t is_2d_fabric = edm_config.topology == Topology::Mesh;
+    const auto topology = control_plane->get_fabric_context()->get_fabric_topology();
+    uint32_t is_2d_fabric = topology == Topology::Mesh;
 
     // test parameters
     uint32_t packet_header_address = 0x25000;
     uint32_t source_l1_buffer_address = 0x30000;
-    uint32_t packet_payload_size_bytes = edm_config.topology == Topology::Mesh ? 2048 : 4096;
+    uint32_t packet_payload_size_bytes = topology == Topology::Mesh ? 2048 : 4096;
     uint32_t num_packets = 100;
     uint32_t test_results_address = 0x100000;
     uint32_t test_results_size_bytes = 128;
@@ -559,11 +556,7 @@ void RunTestMCastConnAPI(BaseFabricFixture* fixture) {
 
     // common compile time args for sender and receiver
     std::vector<uint32_t> compile_time_args = {
-        test_results_address,
-        test_results_size_bytes,
-        target_address,
-        1 /* mcast_mode */,
-        edm_config.topology == Topology::Mesh};
+        test_results_address, test_results_size_bytes, target_address, 1 /* mcast_mode */, topology == Topology::Mesh};
 
     std::map<string, string> defines = {};
     if (is_2d_fabric) {

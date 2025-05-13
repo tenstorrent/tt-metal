@@ -12,10 +12,12 @@
 
 namespace tt::tt_fabric {
 
+class FabricContext;
+
 class ControlPlane {
 public:
     explicit ControlPlane(const std::string& mesh_graph_desc_yaml_file);
-    ~ControlPlane() = default;
+    ~ControlPlane();
     void initialize_from_mesh_graph_desc_file(const std::string& mesh_graph_desc_file);
 
     void write_routing_tables_to_chip(mesh_id_t mesh_id, chip_id_t chip_id) const;
@@ -70,6 +72,12 @@ public:
     void set_routing_mode(uint16_t mode);
     uint16_t get_routing_mode() const;
 
+    void initialize_fabric_context();
+
+    FabricContext* get_fabric_context() const;
+
+    void clear_fabric_context();
+
 private:
     uint16_t routing_mode_ = 0;  // ROUTING_MODE_UNDEFINED
     std::unique_ptr<RoutingTableGenerator> routing_table_generator_;
@@ -100,5 +108,7 @@ private:
 
     // Takes RoutingTableGenerator table and converts to routing tables for each ethernet port
     void convert_fabric_routing_table_to_chip_routing_table();
+
+    std::unique_ptr<FabricContext> fabric_context_ = nullptr;
 };
 }  // namespace tt::tt_fabric
