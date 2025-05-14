@@ -302,17 +302,6 @@ function filterRunsByDate(runs, days) {
 }
 
 /**
- * Filters workflows based on configurations and tracks failed ones
- * @param {Array<Object>} workflowConfigs - Array of workflow configurations
- * @param {Map<string, Array<Object>>} workflowData - Map of workflow data
- * @param {number} days - Number of days to look back
- * @returns {Object} Object containing filtered workflows and failed workflow names
- */
-async function filterWorkflows(workflowConfigs, workflowData, days) {
-  // ... rest of the code ...
-}
-
-/**
  * Main function to run the action
  */
 async function run() {
