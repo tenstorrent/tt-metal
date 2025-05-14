@@ -8,7 +8,7 @@
 
 namespace ttml::ops {
 
-struct NTKAwareScalingParams {
+struct RopeScalingParams {
     uint32_t original_context_length = 0U;
     float scaling_factor = 0.0F;
     float high_freq_factor = 0.0F;
@@ -26,19 +26,19 @@ struct RotaryEmbeddingParams {
     uint32_t head_dim = 0U;
     float theta = 10000.0F;
 
-    NTKAwareScalingParams ntk_aware_scaling_params;
+    RopeScalingParams rope_scaling_params;
 };
 
 autograd::TensorPtr rope(const autograd::TensorPtr& input, const RotaryEmbeddingParams& rope_params);
 
 std::pair<ttnn::Tensor, ttnn::Tensor> gen_freqs(
-    uint32_t head_dim, uint32_t sequence_length, float theta, const NTKAwareScalingParams& ntk_params);
+    uint32_t head_dim, uint32_t sequence_length, float theta, const RopeScalingParams& rope_scaling_params);
 
 RotaryEmbeddingParams build_rope_params(
     uint32_t sequence_length,
     uint32_t head_dim,
     float theta = 10000.0F,
-    NTKAwareScalingParams ntk_aware_scaling_params = NTKAwareScalingParams{});
+    RopeScalingParams rope_scaling_params = RopeScalingParams{});
 // Throws an exception if the input is bad, parameters are bad, or the two are
 // incompatible with one another.
 void validate_rope_input_and_params(const autograd::TensorPtr& input, const RotaryEmbeddingParams& rope_params);

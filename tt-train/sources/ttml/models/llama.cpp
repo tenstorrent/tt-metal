@@ -59,13 +59,13 @@ Llama::Llama(const LlamaConfig& config) {
         tok_emb = std::make_shared<ttml::modules::Embedding>(vocab_size_divisible_by_32, embedding_dim);
     }
 
-    // Create NTK-aware scaling params if they are set
-    ops::NTKAwareScalingParams ntk_params;
+    // Create RoPE scaling params if they are set
+    ops::RopeScalingParams rope_scaling_params;
     if (config.scaling_factor != 0.0F && config.original_context_length != 0U) {
-        ntk_params.original_context_length = config.original_context_length;
-        ntk_params.scaling_factor = config.scaling_factor;
-        ntk_params.high_freq_factor = config.high_freq_factor;
-        ntk_params.low_freq_factor = config.low_freq_factor;
+        rope_scaling_params.original_context_length = config.original_context_length;
+        rope_scaling_params.scaling_factor = config.scaling_factor;
+        rope_scaling_params.high_freq_factor = config.high_freq_factor;
+        rope_scaling_params.low_freq_factor = config.low_freq_factor;
 
         fmt::print("    RoPE scaling enabled:\n");
         fmt::print("        Scaling factor: {}\n", config.scaling_factor);
@@ -78,7 +78,7 @@ Llama::Llama(const LlamaConfig& config) {
         /*sequence_length=*/max_sequence_length,
         /*head_dim=*/embedding_dim / num_heads,
         /*theta=*/theta,
-        /*ntk_aware_scaling_params=*/ntk_params);
+        /*rope_scaling_params=*/rope_scaling_params);
     blocks.reserve(num_blocks);
     for (uint32_t block_idx = 0; block_idx < num_blocks; ++block_idx) {
         blocks.push_back(std::make_shared<ttml::modules::LlamaBlock>(
