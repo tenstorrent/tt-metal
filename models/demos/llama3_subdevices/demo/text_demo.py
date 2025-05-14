@@ -285,6 +285,15 @@ def test_demo_text(
     prefill_enable_trace = True  # repeat_batches > 1
     print_to_file = False  # Enable this flag to print the output of all users to a file
 
+    # Creat batch output file
+    benchmark_data = BenchmarkData()
+    profiler_step_name = "tg-llama-demo-prefill-e2e"
+    timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    output_directory = "models/demos/llama3_subdevices/demo/output"
+    os.makedirs(output_directory, exist_ok=True)
+    os.chmod(output_directory, 0o755)
+    output_filename = f"{output_directory}/demo_user_output_{timestamp}.txt"
+
     # Override parameters from command line if they are provided
     # input_prompts = request.config.getoption("--input_prompts") or input_prompts
     # if request.config.getoption("--instruct") in [
