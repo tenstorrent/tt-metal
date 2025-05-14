@@ -36,6 +36,7 @@ void MAIN {
     constexpr bool use_joint_mask = get_compile_time_arg_val(19) == 1;
     constexpr uint32_t mask_chunk_0 = get_compile_time_arg_val(20);
     constexpr uint32_t mask_chunk_1 = get_compile_time_arg_val(21);
+    constexpr uint32_t scale_fp32 = get_compile_time_arg_val(22);
 
     uint32_t argidx = 0;
     const uint32_t local_batch_start = get_arg_val<uint32_t>(argidx++);
@@ -54,8 +55,8 @@ void MAIN {
     constexpr uint32_t cb_k_in = tt::CBIndex::c_1;
     constexpr uint32_t cb_v_in = tt::CBIndex::c_2;
     constexpr uint32_t cb_mask_in = tt::CBIndex::c_3;
-    constexpr uint32_t cb_scale_in = tt::CBIndex::c_4;
     constexpr uint32_t cb_identity_scale_in = tt::CBIndex::c_5;
+    constexpr uint32_t cb_col_identity = tt::CBIndex::c_7;
 
     constexpr uint32_t cb_qk_im = tt::CBIndex::c_24;
     constexpr uint32_t cb_out_im_A = tt::CBIndex::c_25;
@@ -102,7 +103,7 @@ void MAIN {
                         true /*transpose*/);
 
                     /* QK *= SCALE */
-                    mul_block_bcast_scalar_inplace<cb_qk_im, cb_scale_in, qk_chunk_tiles>();
+                    // mul_block_bcast_scalar_inplace<cb_qk_im, cb_scale_in, qk_chunk_tiles>();
 
                     if constexpr (use_joint_mask) {
                         if ((k_chunk == mask_chunk_0) || (k_chunk == mask_chunk_1)) {
@@ -112,7 +113,6 @@ void MAIN {
                         }
                     }
 
-                    /* Compute max and sum for softmax */
                     reconfig_data_format(cb_qk_im, cb_identity_scale_in);
                     reduce_c<
                         PoolType::MAX,
@@ -120,25 +120,28 @@ void MAIN {
                         cb_qk_im,
                         cb_identity_scale_in,
                         Sq_chunk_t,
-                        Sk_chunk_t>(alias_cur_max);
-
-                    if (k_chunk > 0) {
-                        max_block_inplace<Sq_chunk_t>(alias_cur_max, alias_prev_max);
-                    }
+                        Sk_chunk_t>(alias_cur_max, alias_prev_max, k_chunk > 0);
 
                     /* QK -= cb_cur_max */
                     /* QK = exp(QK)*/
-                    sub_exp_block_bcast_cols_inplace<cb_qk_im, Sq_chunk_t, Sk_chunk_t>(alias_cur_max);
+                    sub_exp_block_bcast_cols_inplace<cb_qk_im, Sq_chunk_t, Sk_chunk_t, scale_fp32>(
+                        alias_cur_max, alias_cur_sum);
 
                     /* cb_cur_sum = sum(cb_qk_im, dim=-1) */
-                    reduce_c<
-                        PoolType::SUM,
-                        ReduceDim::REDUCE_ROW,
-                        cb_qk_im,
-                        cb_identity_scale_in,
-                        Sq_chunk_t,
-                        Sk_chunk_t>(alias_cur_sum);
+                    /**
+                     * DEBUG: Use matml_reduce instead of reduce_sum for 6µs speedup. Still experimental, not robust.
+                     * matmul_reduce has a hardcoded matmul config for the performance test case shapes.
+                     */
 
+                    // reduce_c<
+                    //     PoolType::SUM,
+                    //     ReduceDim::REDUCE_ROW,
+                    //     cb_qk_im,
+                    //     cb_identity_scale_in,
+                    //     Sq_chunk_t,
+                    //     Sk_chunk_t>(alias_cur_sum);
+
+                    cb_wait_front(cb_qk_im, qk_chunk_tiles);
                     /* OUT_IM = QK @ V_CHUNK */
                     matmul_blocks(
                         cb_qk_im,
@@ -161,34 +164,35 @@ void MAIN {
                     /* OUT_ACC += OUT_IM */
                     if (k_chunk > 0) {
                         /* cb_exp_max_diff = torch.exp(cb_prev_max - cb_cur_max) */
-                        sub_exp_block(alias_prev_max, alias_cur_max, cb_exp_max_diff, Sq_chunk_t);
+                        // sub_exp_block(alias_prev_max, alias_cur_max, cb_scale_in, cb_exp_max_diff, Sq_chunk_t);
+                        sub_exp_block<scale_fp32>(alias_prev_max, alias_cur_max, cb_exp_max_diff, Sq_chunk_t);
                         cb_pop_front(alias_prev_max, Sq_chunk_t);
 
                         /* cb_prev_sum *= cb_exp_max_diff */
-                        mul_block_inplace(alias_prev_sum, cb_exp_max_diff, Sq_chunk_t);
+                        mul_block_bcast_cols_inplace(alias_prev_sum, cb_exp_max_diff, Sq_chunk_t);
                         /* cb_cur_sum += cb_prev_sum */
                         add_block_inplace(alias_cur_sum, alias_prev_sum, Sq_chunk_t);
 
-                        /* cb_out_accumulate_im *= cb_exp_max_diff */
-                        mul_block_bcast_cols_inplace<Sq_chunk_t, DHt>(alias_mm2_prev_out, cb_exp_max_diff);
-                        add_block_inplace(alias_mm2_cur_out, alias_mm2_prev_out, out_chunk_tiles);
+                        mul_block_bcast_cols<Sq_chunk_t, DHt>(
+                            alias_mm2_prev_out, cb_exp_max_diff, alias_mm2_cur_out, true);
                     }
 
-                    // Swap ping-pong buffers
+                    // Swap alias_prev_sum and alias_cur_sum
                     std::swap(alias_prev_sum, alias_cur_sum);
                     std::swap(alias_mm2_prev_out, alias_mm2_cur_out);
                     std::swap(alias_prev_max, alias_cur_max);
                 }
 
+                matmul_reduce<Sq_chunk_t>(cb_col_identity, alias_prev_sum);
                 /* cb_cur_sum = 1.0 / cb_cur_sum */
                 recip_block_inplace(alias_prev_sum, Sq_chunk_t);
 
                 /* cb_out_accumulate_im *= cb_cur_sum */
-                mul_block_bcast_cols_inplace<Sq_chunk_t, DHt>(alias_mm2_prev_out, alias_prev_sum);
                 pack_reconfig_data_format(cb_out);
-                copy_block(alias_mm2_prev_out, cb_out, out_chunk_tiles);
+                mul_block_bcast_cols<Sq_chunk_t, DHt>(alias_mm2_prev_out, alias_prev_sum, cb_out, false);
 
                 cb_pop_front(cb_q_in, q_chunk_tiles);
+                // free up cb_prev_max after K chunks
                 cb_pop_front(alias_prev_max, Sq_chunk_t);
             }
         }

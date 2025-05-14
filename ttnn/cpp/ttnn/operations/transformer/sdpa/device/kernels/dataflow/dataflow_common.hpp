@@ -12,14 +12,9 @@ constexpr uint32_t get_barrier_read_threshold() {
     return ((512 / num_readers) * (1024 + 128)) / tile_bytes;
 }
 
-template <uint32_t tile_bytes>
-void fill_tile_zeros(uint32_t cb_id, uint32_t tile_id) {
-    static_assert(tile_bytes % 4 == 0, "tile_bytes must be a multiple of 4");
-
-    uint64_t zeros_noc_addr = get_noc_addr(MEM_ZEROS_BASE);
-    uint32_t write_addr = get_write_ptr(cb_id) + tile_id * tile_bytes;
+void fill_zeros_async(uint32_t write_addr, uint32_t tile_bytes) {
     volatile tt_l1_ptr uint32_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(write_addr);
-
+    uint64_t zeros_noc_addr = get_noc_addr(MEM_ZEROS_BASE);
     // Fill tile with zeros
     uint32_t bytes_left = tile_bytes;
     for (;;) {
@@ -31,6 +26,14 @@ void fill_tile_zeros(uint32_t cb_id, uint32_t tile_id) {
             break;
         }
     }
+}
+
+template <uint32_t tile_bytes>
+void fill_tile_zeros(uint32_t cb_id, uint32_t tile_id) {
+    static_assert(tile_bytes % 4 == 0, "tile_bytes must be a multiple of 4");
+
+    uint32_t write_addr = get_write_ptr(cb_id) + tile_id * tile_bytes;
+    fill_zeros_async(write_addr, tile_bytes);
     noc_async_read_barrier();
 }
 
@@ -500,8 +503,11 @@ struct CatAddrGenerator {
             uint32_t tile_id = second_shape.id_of(d0, d1, adjusted_seq, d3);
             noc_async_read_tile(tile_id, second_reader, dst_addr);
             return 1;
+        } else {
+            // fill with zeros
+            fill_zeros_async(dst_addr, first_reader.page_size);
+            return 1;
         }
-        return 0;
     }
 
     uint32_t maybe_write_tile(uint32_t d0, uint32_t d1, uint32_t d2, uint32_t d3, uint32_t src_addr) const {
