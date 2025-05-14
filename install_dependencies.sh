@@ -103,6 +103,7 @@ ub_buildtime_packages()
      libc++abi-17-dev \
      build-essential \
      xz-utils \
+     flex \
     )
 }
 
