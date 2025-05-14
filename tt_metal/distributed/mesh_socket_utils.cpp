@@ -70,10 +70,9 @@ std::shared_ptr<MeshBuffer> create_socket_config_buffer(
             is_sender ? connection.sender_core.device_coord : connection.receiver_core.device_coord;
         const auto& socket_core = is_sender ? connection.sender_core.core_coord : connection.receiver_core.core_coord;
         TT_FATAL(
-            socket_cores_per_device[socket_device].find(socket_core) == socket_cores_per_device[socket_device].end(),
+            socket_cores_per_device[socket_device].insert(socket_core).second,
             "Cannot reuse sender or receiver cores in a single socket.");
         all_cores_set.insert(socket_core);
-        socket_cores_per_device[socket_device].insert(socket_core);
     }
 
     auto all_cores = CoreRangeSet(all_cores_set);
