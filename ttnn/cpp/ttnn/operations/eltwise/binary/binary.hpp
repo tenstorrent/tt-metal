@@ -29,7 +29,7 @@ struct BinaryOperation {
         tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> post_activations = {},
         tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> lhs_activations = {},
         tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> rhs_activations = {},
-        const std::optional<bool>& use_legacy = std::nullopt);
+        const std::optional<bool>& use_legacy = false);
 
     static Tensor invoke(
         QueueId queue_id,
@@ -41,7 +41,7 @@ struct BinaryOperation {
         tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> post_activations = {},
         tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> lhs_activations = {},
         tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> rhs_activations = {},
-        const std::optional<bool>& use_legacy = std::nullopt);
+        const std::optional<bool>& use_legacy = false);
 };
 
 template <BinaryOpType binary_op_type>
@@ -56,7 +56,7 @@ struct RelationalBinary {
         tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> post_activations = {},
         tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> lhs_activations = {},
         tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> rhs_activations = {},
-        const std::optional<bool>& use_legacy = std::nullopt);
+        const std::optional<bool>& use_legacy = false);
 
     static Tensor invoke(
         QueueId queue_id,
@@ -68,7 +68,7 @@ struct RelationalBinary {
         tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> post_activations = {},
         tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> lhs_activations = {},
         tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> rhs_activations = {},
-        const std::optional<bool>& use_legacy = std::nullopt);
+        const std::optional<bool>& use_legacy = false);
 
     // rhs - tensor combination not available on Pytorch for this op
     static Tensor invoke(
@@ -89,7 +89,7 @@ struct InplaceRelationalBinary {
         tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> post_activations = {},
         tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> lhs_activations = {},
         tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> rhs_activations = {},
-        std::optional<bool> use_legacy = std::nullopt);
+        std::optional<bool> use_legacy = false);
 
     static Tensor invoke(
         QueueId queue_id,
@@ -98,7 +98,7 @@ struct InplaceRelationalBinary {
         tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> post_activations = {},
         tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> lhs_activations = {},
         tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> rhs_activations = {},
-        std::optional<bool> use_legacy = std::nullopt);
+        std::optional<bool> use_legacy = false);
 };
 
 template <BinaryOpType binary_op_type>
@@ -110,7 +110,7 @@ struct InplaceLogicalBinary {
         tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> post_activations = {},
         tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> lhs_activations = {},
         tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> rhs_activations = {},
-        std::optional<bool> use_legacy = std::nullopt);
+        std::optional<bool> use_legacy = false);
 };
 
 template <BinaryOpType binary_op_type>
@@ -122,7 +122,7 @@ struct InplaceBinaryOperation {
         tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> post_activations = {},
         tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> lhs_activations = {},
         tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> rhs_activations = {},
-        std::optional<bool> use_legacy = std::nullopt);
+        std::optional<bool> use_legacy = false);
 
     static Tensor invoke(
         QueueId queue_id,
@@ -131,7 +131,7 @@ struct InplaceBinaryOperation {
         tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> post_activations = {},
         tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> lhs_activations = {},
         tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> rhs_activations = {},
-        std::optional<bool> use_legacy = std::nullopt);
+        std::optional<bool> use_legacy = false);
 };
 
 template <BinaryOpType binary_op_type>
@@ -146,7 +146,7 @@ struct BinaryOperationSfpu {
         tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> post_activations = {},
         tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> lhs_activations = {},
         tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> rhs_activations = {},
-        std::optional<bool> use_legacy = std::nullopt);
+        std::optional<bool> use_legacy = false);
 };
 
 }  // namespace binary
