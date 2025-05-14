@@ -141,6 +141,8 @@ class TtTransformerBlock(LightweightModule):
         # attn_in_sharded=norm(x+h), h = x+h happens implicitly
         if self.layer_num == 0:
             # In the first layer we "make" the h tensor from the original x keeping it alive
+            # Note this works because layer 0 has a bfloat16 input while other layers use bfloat8
+            # since we want residual to be bfloat16
             attn_in_sharded, _ = self.attention_norm(x, None, mode)
             h = x
         else:
