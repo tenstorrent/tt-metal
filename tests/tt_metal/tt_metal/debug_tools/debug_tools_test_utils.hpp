@@ -34,42 +34,90 @@ inline void DumpFile(string file_name) {
     }
 }
 
-// Wildcard is '?', just like a glob.
-inline bool StringCompareWithWildcard(const std::string_view str, const std::string_view pattern) {
-    size_t pattern_size = pattern.size();
-    if (pattern_size != str.size())
-        return false;
-    for (int idx = 0; idx < pattern_size; idx++) {
-        if (str[idx] != pattern[idx] && pattern[idx] != '?') {
-            return false;
+std::string_view::size_type FloatingGlobEndsAt(const std::string_view haystack,
+                                               const std::string_view needle,
+                                               unsigned globs);
+
+// Check of pattern matches at the beginning of str.
+inline std::string_view::size_type AnchoredGlobEndsAt(const std::string_view str,
+                                                      const std::string_view pattern,
+                                                      unsigned globs) {
+    if (str.size() + globs < pattern.size()) {
+        return str.npos;
+    }
+
+    for (std::string_view::size_type idx = 0; idx != pattern.size(); idx++) {
+        if (pattern[idx] == '*') {
+            auto result = FloatingGlobEndsAt(str.substr(idx), pattern.substr(idx + 1), globs - 1);
+            if (result != str.npos) {
+                // An empty suffix matches the whole string.
+                result = result ? result + idx : str.size();
+            }
+            return result;
+        } else if (idx >= str.size()) {
+            return str.npos;
+        } else if (pattern[idx] == '?') {
+            continue;
+        } else if (str[idx] != pattern[idx]) {
+            return str.npos;
         }
     }
-    return true;
+    return pattern.size();;
 }
 
-// Check if haystack contains needle, return true. needle may contain
-// '?' to match any character (just like glob).
-inline bool StringContainsWithWildcard(std::string_view haystack, std::string_view needle) {
-    size_t needle_size = needle.size();
-    if (needle_size == 0 || needle.front() == '?') {
-        // The needle is empty, or begins with '?', fail in order to
-        // force test to be fixed.
-        return false;
-    }
-    if (needle_size > haystack.size()) {
-        return false;
+// Look for needle in haystack. We look backwards through haystack, so
+// that glob use will find the longest match.
+inline std::string_view::size_type FloatingGlobEndsAt(const std::string_view haystack,
+                                                      const std::string_view needle,
+                                                      unsigned globs) {
+    if (needle.empty()) {
+        // Empty needle matches at end.
+        return haystack.size();
     }
     char first = needle.front();
-
-    for (size_t idx = 0, limit = haystack.size() - needle_size;
-         (idx = haystack.find(first, idx)) <= limit; idx++) {
-        std::string_view substr(&haystack[idx], needle_size);
-        if (StringCompareWithWildcard(substr, needle)) {
-            return true;
-        }
+    if (first == '*') {
+        // '*' at front, handle as an anchored glob.
+        return AnchoredGlobEndsAt(haystack, needle, globs);
+    }
+    if (haystack.size() + globs < needle.size()) {
+        return haystack.npos;
     }
 
-    return false;
+    for (std::string_view::size_type idx = haystack.size() + globs - needle.size();; idx--) {
+        if (first != '?') {
+            // no wildcard at front, scan for first char to begin search.
+            idx = haystack.rfind(first, idx);
+            if (idx == haystack.npos) {
+                break;
+            }
+        }
+        // Try an anchored match here.
+        auto result = AnchoredGlobEndsAt(haystack.substr(idx), needle, globs);
+        if (result != haystack.npos) {
+            return result + idx;
+        }
+        if (!idx)
+            break;
+    }
+
+    return haystack.npos;
+}
+
+// Count the number of '*' characters.
+inline unsigned GlobCount(const std::string_view glob) {
+    unsigned count = 0;
+    for (std::string_view::size_type idx = 0; (idx = glob.find('*', idx)) != glob.npos; idx++)
+        count++;
+    return count;
+}
+// str matches pattern, allowing '?' and '*' globbing.
+inline bool StringMatchesGlob(const std::string_view str, const std::string_view pattern) {
+    return AnchoredGlobEndsAt(str, pattern, GlobCount(pattern)) == str.size();
+}
+
+// haystack contains needle, allowing '?' and '*' globbing.
+inline bool StringContainsGlob(const std::string_view haystack, const std::string_view needle) {
+    return FloatingGlobEndsAt(haystack, needle, GlobCount(needle)) != haystack.npos;
 }
 
 // Check whether the given file contains a list of strings in any order. Doesn't check for
@@ -99,7 +147,7 @@ inline bool FileContainsAllStrings(string file_name, const std::vector<string> &
         // Check for all target strings in the current line
         std::vector<std::string_view> found_on_current_line;
         for (const auto &s : must_contain_set) {
-            if (StringContainsWithWildcard(line, s)) {
+            if (StringContainsGlob(line, s)) {
                 found_on_current_line.push_back(s);
             }
         }
@@ -149,7 +197,7 @@ inline bool FileContainsAllStringsInOrder(string file_name, const std::vector<st
 
         // Check for all target strings in the current line
         for (; !must_contain_queue.empty(); must_contain_queue.pop_front()) {
-            if (!StringContainsWithWildcard(line, must_contain_queue.front())) {
+            if (!StringContainsGlob(line, must_contain_queue.front())) {
                 break;
             }
         }
@@ -190,7 +238,7 @@ inline bool FilesMatchesString(string file_name, const string& expected) {
     int line_num = 0;
     while (getline(file, line_a) && getline(expect_stream, line_b)) {
         line_num++;
-        if (!StringCompareWithWildcard(line_a, line_b)) {
+        if (!StringMatchesGlob(line_a, line_b)) {
             tt::log_info(
                 tt::LogTest,
                 "Test Error: Line {} of {} did not match expected:\n\t{}\n\t{}",
