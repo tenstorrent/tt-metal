@@ -16,8 +16,8 @@ using Tag = tt::tt_metal::distributed::multihost::Tag;
 ttnn::Tensor synchronize_tensor(const ttnn::Tensor& tensor);
 void synchronize_parameters(const serialization::NamedParameters& parameters);
 
-void send_tensor(const ttnn::Tensor& tensor, Rank dest, Tag tag = Tag{-1});
-void recv_tensor(ttnn::Tensor& tensor, Rank source, Tag tag = Tag{-1});
+void send_tensor(const ttnn::Tensor& tensor, Rank dest, Tag tag = Tag{0});
+void recv_tensor(ttnn::Tensor& tensor, Rank source, Tag tag = Tag{0});
 void broadcast_tensor(ttnn::Tensor& tensor, Rank root);
 void broadcast_tensor_to_group(ttnn::Tensor& tensor, Rank root, std::span<Rank> client_ranks);
 
