@@ -105,5 +105,5 @@ jobs:
       - name: Handle failed workflows
         run: |
           echo "The following workflows have failed:"
-          echo '${{ needs.analyze-data.outputs.failed_workflows }}'
+          echo '${{ needs.analyze-data.outputs.failed_workflows }}' | jq -r '.[]'
           # Add any additional failure handling steps here

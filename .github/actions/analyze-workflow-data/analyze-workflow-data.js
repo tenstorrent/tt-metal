@@ -127,11 +127,39 @@ async function handlePushRuns(mainBranchRuns, github, context) {
 }
 
 /**
+ * Generate a summary box showing all workflows and their latest status
+ */
+function generateSummaryBox(grouped) {
+  const summaryRows = [];
+  for (const [name, runs] of grouped.entries()) {
+    const mainBranchRuns = runs
+      .filter(r => r.head_branch === 'main')
+      .sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+    const lastMainRun = mainBranchRuns[0];
+    const status = lastMainRun?.conclusion === 'success' ? '✅' : '❌';
+    summaryRows.push(`| ${name} | ${status} |`);
+  }
+
+  return [
+    '## Quick Summary',
+    '| Workflow | Latest Status |',
+    '|----------|---------------|',
+    ...summaryRows,
+    ''  // Empty line for better readability
+  ].join('\n');
+}
+
+/**
  * Build the markdown report for all grouped runs.
  * Adds a horizontal rule between each workflow section.
  */
 async function buildReport(grouped, github, context) {
-  const reportParts = ['# Workflow Summary\n'];
+  const reportParts = [
+    '# Workflow Summary\n',
+    generateSummaryBox(grouped),
+    '---\n'  // Separator between summary and detailed sections
+  ];
+
   for (const [name, runs] of grouped.entries()) {
     const successes = runs.filter(r => r.conclusion === 'success');
     const mainBranchRuns = runs
