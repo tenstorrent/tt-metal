@@ -18,6 +18,7 @@ struct RotaryEmbeddingLlamaFusedQK {
     const MemoryConfig q_output_mem_config;
     const MemoryConfig k_output_mem_config;
     const ttnn::DeviceComputeKernelConfig compute_kernel_config;
+    const bool is_row_major;
 
     void validate(const std::vector<Tensor>& input_tensors) const;
     std::vector<ttnn::TensorSpec> compute_output_specs(const std::vector<Tensor>& input_tensors) const;

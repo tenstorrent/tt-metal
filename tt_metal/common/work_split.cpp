@@ -169,6 +169,7 @@ CoreRangeSet num_cores_to_corerangeset_in_subcoregrids(
     CoreCoord current_start_core = start_core;
     CoreCoord current_end_core = start_core;
     uint32_t remaining_cores = target_num_cores;
+    uint32_t cores_collected = 0;  // Track the number of cores we've collected
 
     auto process_row_wise = [&](const CoreRange& subcoregrid) {
         uint32_t subcoregrid_width = subcoregrid.grid_size().x;
@@ -178,30 +179,33 @@ CoreRangeSet num_cores_to_corerangeset_in_subcoregrids(
                 break;
             }
 
+            uint32_t x_start = (y == current_start_core.y) ? current_start_core.x : subcoregrid.start_coord.x;
             uint32_t current_width =
-                std::min(static_cast<uint32_t>(subcoregrid.end_coord.x - current_start_core.x + 1), remaining_cores);
+                std::min(static_cast<uint32_t>(subcoregrid.end_coord.x - x_start + 1), remaining_cores);
 
-            if (current_width < subcoregrid_width) {
-                if (current_start_core != current_end_core) {
-                    result_coreranges.push_back(CoreRange(current_start_core, current_end_core));
-                }
-
-                current_end_core = CoreCoord(current_start_core.x + current_width - 1, y);
-                remaining_cores -= current_width;
-
-                result_coreranges.push_back(
-                    CoreRange(CoreCoord(current_start_core.x, y), CoreCoord(current_end_core.x, y)));
-
-                current_start_core = CoreCoord(subcoregrid.start_coord.x, y + 1);
-                current_end_core = current_start_core;
-            } else {
-                current_end_core = CoreCoord(subcoregrid.end_coord.x, y);
-                remaining_cores -= current_width;
+            if (current_start_core != current_end_core &&
+                !(current_start_core.y == y && current_start_core.x == x_start)) {
+                result_coreranges.push_back(CoreRange(current_start_core, current_end_core));
+                cores_collected +=
+                    (current_end_core.x - current_start_core.x + 1) * (current_end_core.y - current_start_core.y + 1);
+                current_start_core = CoreCoord(x_start, y);
+            } else if (current_start_core.y != y || current_start_core.x != x_start) {
+                current_start_core = CoreCoord(x_start, y);
             }
-        }
 
-        if (current_start_core != current_end_core) {
-            result_coreranges.push_back(CoreRange(current_start_core, current_end_core));
+            current_end_core = CoreCoord(x_start + current_width - 1, y);
+            remaining_cores -= current_width;
+
+            if (y == subcoregrid.end_coord.y || remaining_cores == 0) {
+                result_coreranges.push_back(CoreRange(current_start_core, current_end_core));
+                cores_collected +=
+                    (current_end_core.x - current_start_core.x + 1) * (current_end_core.y - current_start_core.y + 1);
+
+                if (y < subcoregrid.end_coord.y && remaining_cores > 0) {
+                    current_start_core = CoreCoord(subcoregrid.start_coord.x, y + 1);
+                    current_end_core = current_start_core;
+                }
+            }
         }
     };
 
@@ -213,30 +217,33 @@ CoreRangeSet num_cores_to_corerangeset_in_subcoregrids(
                 break;
             }
 
+            uint32_t y_start = (x == current_start_core.x) ? current_start_core.y : subcoregrid.start_coord.y;
             uint32_t current_height =
-                std::min(static_cast<uint32_t>(subcoregrid.end_coord.y - current_start_core.y + 1), remaining_cores);
+                std::min(static_cast<uint32_t>(subcoregrid.end_coord.y - y_start + 1), remaining_cores);
 
-            if (current_height < subcoregrid_height) {
-                if (current_start_core != current_end_core) {
-                    result_coreranges.push_back(CoreRange(current_start_core, current_end_core));
-                }
-
-                current_end_core = CoreCoord(x, current_start_core.y + current_height - 1);
-                remaining_cores -= current_height;
-
-                result_coreranges.push_back(
-                    CoreRange(CoreCoord(x, current_start_core.y), CoreCoord(x, current_end_core.y)));
-
-                current_start_core = CoreCoord(x + 1, subcoregrid.start_coord.y);
-                current_end_core = current_start_core;
-            } else {
-                current_end_core = CoreCoord(x, subcoregrid.end_coord.y);
-                remaining_cores -= current_height;
+            if (current_start_core != current_end_core &&
+                !(current_start_core.x == x && current_start_core.y == y_start)) {
+                result_coreranges.push_back(CoreRange(current_start_core, current_end_core));
+                cores_collected +=
+                    (current_end_core.x - current_start_core.x + 1) * (current_end_core.y - current_start_core.y + 1);
+                current_start_core = CoreCoord(x, y_start);
+            } else if (current_start_core.x != x || current_start_core.y != y_start) {
+                current_start_core = CoreCoord(x, y_start);
             }
-        }
 
-        if (current_start_core != current_end_core) {
-            result_coreranges.push_back(CoreRange(current_start_core, current_end_core));
+            current_end_core = CoreCoord(x, y_start + current_height - 1);
+            remaining_cores -= current_height;
+
+            if (x == subcoregrid.end_coord.x || remaining_cores == 0) {
+                result_coreranges.push_back(CoreRange(current_start_core, current_end_core));
+                cores_collected +=
+                    (current_end_core.x - current_start_core.x + 1) * (current_end_core.y - current_start_core.y + 1);
+
+                if (x < subcoregrid.end_coord.x && remaining_cores > 0) {
+                    current_start_core = CoreCoord(x + 1, subcoregrid.start_coord.y);
+                    current_end_core = current_start_core;
+                }
+            }
         }
     };
 
@@ -244,6 +251,8 @@ CoreRangeSet num_cores_to_corerangeset_in_subcoregrids(
     for (const auto& subcoregrid : sub_core_grids.ranges()) {
         if (subcoregrid.contains(start_core)) {
             start_core_found = true;
+            current_start_core = start_core;
+            current_end_core = start_core;
         } else {
             if (!start_core_found) {
                 continue;
@@ -260,7 +269,11 @@ CoreRangeSet num_cores_to_corerangeset_in_subcoregrids(
         }
     }
 
-    TT_FATAL(remaining_cores == 0, "Failed to split target number of cores into CoreRangeSet");
+    TT_FATAL(
+        cores_collected == target_num_cores,
+        "Failed to collect the requested number of cores. Collected: {} Requested: {}",
+        cores_collected,
+        target_num_cores);
 
     return CoreRangeSet(std::move(result_coreranges));
 }
