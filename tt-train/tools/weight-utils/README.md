@@ -5,13 +5,14 @@ various Huggingface models into a format suitable for use in tt-train.
 
 ## Setup
 
-Install the required dependencies:
+Install the required dependencies in a dedicated Python virtual environment:
 
-```
+``` shell
+TT_TRAIN_WEIGHT_UTILS_VENV=$(git rev-parse --show-toplevel)/tt-train/tools/weight-utils/.venv
+python -m venv $TT_TRAIN_WEIGHT_UTILS_VENV
+source $TT_TRAIN_WEIGHT_UTILS_VENV/bin/activate
 pip install -r requirements.txt
 ```
-
-All dependencies are listed in the requirements.txt file.
 
 # Llama 3
 
