@@ -3,11 +3,12 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import os
-import torch
+
 import requests
+import torch
 from ultralytics import YOLO
 
-from models.experimental.functional_yolov9c.reference.yolov9c import YoloV9
+from models.demos.yolov9c.reference.yolov9c import YoloV9
 
 
 def load_coco_class_names():
