@@ -694,13 +694,15 @@ int main(int argc, char **argv) {
             }
         },
         config.transformer_config);
+
     if (!save_and_exit_path.empty()) {
         if (std::filesystem::exists(save_and_exit_path)) {
             throw std::runtime_error("Model path already exists: " + save_and_exit_path);
         }
         fmt::println("Saving model and exiting");
         ttml::serialization::MsgPackFile serializer;
-        ttml::serialization::write_module(serializer, "llama", model.get());
+        std::string model_prefix = (config.model_type == "llama") ? "llama" : "transformer";
+        ttml::serialization::write_module(serializer, model_prefix, model.get());
         serializer.serialize(save_and_exit_path);
         fmt::println("Model saved to {}", save_and_exit_path);
         std::exit(0);
