@@ -1477,12 +1477,8 @@ void pytensor_module(py::module& m_tensor) {
                 return std::visit(
                     tt::stl::overloaded{
                         [](const DeviceStorage& s) -> uint32_t {
-                            if (s.mesh_buffer) {
-                                return s.mesh_buffer->address();
-                            } else {
-                                TT_FATAL(s.buffer != nullptr, "Tensor is not allocated.");
-                                return s.buffer->address();
-                            }
+                            TT_FATAL(s.mesh_buffer != nullptr, "Tensor is not allocated.");
+                            return s.mesh_buffer->address();
                         },
                         [&](auto&&) -> uint32_t {
                             TT_THROW(
