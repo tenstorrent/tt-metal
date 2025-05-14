@@ -951,10 +951,10 @@ std::unique_ptr<Program> create_and_compile_2d_fabric_program(IDevice* device, F
     std::uint32_t router_mask = 0;
     const auto* control_plane = tt::tt_metal::MetalContext::instance().get_cluster().get_control_plane();
     auto [mesh_id, chip_id] = control_plane->get_mesh_chip_id_from_physical_chip_id(device->id());
-    auto* fabric_context = control_plane->get_fabric_context();
+    auto& fabric_context = control_plane->get_fabric_context();
 
     auto router_chans_and_direction = control_plane->get_active_fabric_eth_channels(mesh_id, chip_id);
-    fabric_context->set_num_fabric_initialized_routers(device->id(), router_chans_and_direction.size());
+    fabric_context.set_num_fabric_initialized_routers(device->id(), router_chans_and_direction.size());
     if (router_chans_and_direction.empty()) {
         return nullptr;
     }
@@ -966,7 +966,7 @@ std::unique_ptr<Program> create_and_compile_2d_fabric_program(IDevice* device, F
     }
 
     auto master_router_chan = (uint32_t)(router_chans_and_direction.begin()->first);
-    fabric_context->set_fabric_master_router_chan(device->id(), master_router_chan);
+    fabric_context.set_fabric_master_router_chan(device->id(), master_router_chan);
 
     // setup runtime args
     std::vector<uint32_t> router_runtime_args = {
@@ -1062,8 +1062,8 @@ void build_tt_fabric_program(
     std::pair<mesh_id_t, chip_id_t> mesh_chip_id = control_plane->get_mesh_chip_id_from_physical_chip_id(device->id());
     const bool is_TG = (tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type() == tt::ClusterType::TG);
     auto soc_desc = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(device->id());
-    const auto* fabric_context = control_plane->get_fabric_context();
-    const auto* edm_config = fabric_context->get_fabric_router_config();
+    const auto& fabric_context = control_plane->get_fabric_context();
+    const auto& edm_config = fabric_context.get_fabric_router_config();
 
     if (is_TG && device->is_mmio_capable()) {
         auto router_chans_and_direction =
@@ -1079,7 +1079,7 @@ void build_tt_fabric_program(
                 eth_logical_core,
                 device->id(),
                 remote_chip_id,
-                *edm_config,
+                edm_config,
                 true,  /* enable_persistent_mode */
                 false, /* build_in_worker_connection_mode */
                 false, /* is_dateline */
@@ -1122,12 +1122,12 @@ void build_tt_fabric_program(
     }
 
     if (active_fabric_eth_channels.empty()) {
-        TT_THROW("Need atleast 1 active fabric eth channel in atleast 1 direction, found none");
+        TT_THROW("Need at least 1 active fabric eth channel in atleast 1 direction, found none");
         return;
     }
 
-    const bool wrap_around_mesh = fabric_context->is_wrap_around_mesh();
-    const auto topology = fabric_context->get_fabric_topology();
+    const bool wrap_around_mesh = fabric_context.is_wrap_around_mesh();
+    const auto topology = fabric_context.get_fabric_topology();
 
     for (const auto& [direction, remote_chip_id] : chip_neighbors) {
         bool is_dateline = check_dateline(
@@ -1146,7 +1146,7 @@ void build_tt_fabric_program(
                 eth_logical_core,
                 device->id(),
                 remote_chip_id,
-                *edm_config,
+                edm_config,
                 true,  /* enable_persistent_mode */
                 false, /* build_in_worker_connection_mode */
                 is_dateline,
@@ -1223,17 +1223,17 @@ std::unique_ptr<Program> create_and_compile_tt_fabric_program(IDevice* device) {
     std::unordered_map<tt::tt_fabric::chan_id_t, tt::tt_fabric::FabricEriscDatamoverBuilder> edm_builders;
 
     const auto* control_plane = tt::tt_metal::MetalContext::instance().get_cluster().get_control_plane();
-    auto* fabric_context = control_plane->get_fabric_context();
+    auto& fabric_context = control_plane->get_fabric_context();
 
     build_tt_fabric_program(device, fabric_program_ptr.get(), edm_builders);
-    fabric_context->set_num_fabric_initialized_routers(device->id(), edm_builders.size());
+    fabric_context.set_num_fabric_initialized_routers(device->id(), edm_builders.size());
     if (edm_builders.empty()) {
         return nullptr;
     }
 
     // for now it doesnt matter which channel is the master, so just pick the 1st in the map
     auto master_router_chan = edm_builders.begin()->first;
-    fabric_context->set_fabric_master_router_chan(device->id(), master_router_chan);
+    fabric_context.set_fabric_master_router_chan(device->id(), master_router_chan);
 
     uint32_t router_channels_mask = 0;
     for (const auto& [router_chan, _] : edm_builders) {
@@ -1241,7 +1241,7 @@ std::unique_ptr<Program> create_and_compile_tt_fabric_program(IDevice* device) {
     }
 
     std::map<string, string> defines = {};
-    const auto topology = fabric_context->get_fabric_topology();
+    const auto topology = fabric_context.get_fabric_topology();
     if (topology == tt::tt_fabric::Topology::Mesh) {
         defines["FABRIC_2D"] = "";
     }
@@ -1291,7 +1291,7 @@ void configure_fabric_cores(IDevice* device) {
     const auto* control_plane = tt::tt_metal::MetalContext::instance().get_cluster().get_control_plane();
     const auto [mesh_id, chip_id] = control_plane->get_mesh_chip_id_from_physical_chip_id(device->id());
     const auto router_chans_and_direction = control_plane->get_active_fabric_eth_channels(mesh_id, chip_id);
-    const auto addresses_to_clear = control_plane->get_fabric_context()->get_fabric_router_addresses_to_clear();
+    const auto addresses_to_clear = control_plane->get_fabric_context().get_fabric_router_addresses_to_clear();
     for (const auto& [router_chan, _] : router_chans_and_direction) {
         CoreCoord router_logical_core = soc_desc.get_eth_core_for_channel(router_chan, CoordSystem::LOGICAL);
         for (const auto& address : addresses_to_clear) {

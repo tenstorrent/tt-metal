@@ -1025,26 +1025,18 @@ void ControlPlane::set_routing_mode(uint16_t mode) {
 
 uint16_t ControlPlane::get_routing_mode() const { return this->routing_mode_; }
 
-void ControlPlane::initialize_fabric_context() {
+void ControlPlane::initialize_fabric_context(tt_metal::FabricConfig fabric_config) {
     TT_FATAL(this->fabric_context_ == nullptr, "Trying to re-initialize fabric context");
-    auto fabric_config = tt::tt_metal::MetalContext::instance().get_cluster().get_fabric_config();
     this->fabric_context_ = std::make_unique<FabricContext>(fabric_config);
 }
 
-FabricContext* ControlPlane::get_fabric_context() const {
+FabricContext& ControlPlane::get_fabric_context() const {
     TT_FATAL(this->fabric_context_ != nullptr, "Trying to get un-initialized fabric context");
-    return this->fabric_context_.get();
+    return *this->fabric_context_.get();
 }
 
 void ControlPlane::clear_fabric_context() { this->fabric_context_.reset(nullptr); }
 
-ControlPlane::~ControlPlane() {
-    this->routing_table_generator_.reset(nullptr);
-    this->logical_mesh_chip_id_to_physical_chip_id_mapping_.clear();
-    this->router_port_directions_to_physical_eth_chan_map_.clear();
-    this->intra_mesh_routing_tables_.clear();
-    this->inter_mesh_routing_tables_.clear();
-    this->fabric_context_.reset(nullptr);
-}
+ControlPlane::~ControlPlane() = default;
 
 }  // namespace tt::tt_fabric

@@ -152,9 +152,9 @@ void RunTestUnicastRaw(BaseFabricFixture* fixture, uint32_t num_hops, RoutingDir
     tt::tt_metal::distributed::MeshShape mesh_shape;
     chan_id_t edm_port;
 
-    const auto* fabric_context = control_plane->get_fabric_context();
-    const auto topology = fabric_context->get_fabric_topology();
-    const auto* edm_config = fabric_context->get_fabric_router_config();
+    const auto& fabric_context = control_plane->get_fabric_context();
+    const auto topology = fabric_context.get_fabric_topology();
+    const auto& edm_config = fabric_context.get_fabric_router_config();
     uint32_t is_2d_fabric = topology == Topology::Mesh;
 
     if (!is_2d_fabric) {
@@ -287,13 +287,13 @@ void RunTestUnicastRaw(BaseFabricFixture* fixture, uint32_t num_hops, RoutingDir
     tt::tt_fabric::SenderWorkerAdapterSpec edm_connection = {
         .edm_noc_x = edm_eth_core.x,
         .edm_noc_y = edm_eth_core.y,
-        .edm_buffer_base_addr = edm_config->sender_channels_base_address[sender_channel],
-        .num_buffers_per_channel = edm_config->sender_channels_num_buffers[sender_channel],
-        .edm_l1_sem_addr = edm_config->sender_channels_local_flow_control_semaphore_address[sender_channel],
-        .edm_connection_handshake_addr = edm_config->sender_channels_connection_semaphore_address[sender_channel],
-        .edm_worker_location_info_addr = edm_config->sender_channels_worker_conn_info_base_address[sender_channel],
-        .buffer_size_bytes = edm_config->channel_buffer_size_bytes,
-        .buffer_index_semaphore_id = edm_config->sender_channels_buffer_index_semaphore_address[sender_channel],
+        .edm_buffer_base_addr = edm_config.sender_channels_base_address[sender_channel],
+        .num_buffers_per_channel = edm_config.sender_channels_num_buffers[sender_channel],
+        .edm_l1_sem_addr = edm_config.sender_channels_local_flow_control_semaphore_address[sender_channel],
+        .edm_connection_handshake_addr = edm_config.sender_channels_connection_semaphore_address[sender_channel],
+        .edm_worker_location_info_addr = edm_config.sender_channels_worker_conn_info_base_address[sender_channel],
+        .buffer_size_bytes = edm_config.channel_buffer_size_bytes,
+        .buffer_index_semaphore_id = edm_config.sender_channels_buffer_index_semaphore_address[sender_channel],
         .persistent_fabric = true,
         .edm_direction = edm_direction};
 
@@ -393,7 +393,7 @@ void RunTestUnicastConnAPI(BaseFabricFixture* fixture, uint32_t num_hops, Routin
     auto receiver_noc_encoding =
         tt::tt_metal::MetalContext::instance().hal().noc_xy_encoding(receiver_virtual_core.x, receiver_virtual_core.y);
 
-    const auto topology = control_plane->get_fabric_context()->get_fabric_topology();
+    const auto topology = control_plane->get_fabric_context().get_fabric_topology();
     uint32_t is_2d_fabric = topology == Topology::Mesh;
 
     // test parameters
@@ -542,7 +542,7 @@ void RunTestMCastConnAPI(BaseFabricFixture* fixture) {
     auto receiver_noc_encoding =
         tt::tt_metal::MetalContext::instance().hal().noc_xy_encoding(receiver_virtual_core.x, receiver_virtual_core.y);
 
-    const auto topology = control_plane->get_fabric_context()->get_fabric_topology();
+    const auto topology = control_plane->get_fabric_context().get_fabric_topology();
     uint32_t is_2d_fabric = topology == Topology::Mesh;
 
     // test parameters

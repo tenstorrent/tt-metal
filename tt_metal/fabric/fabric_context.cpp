@@ -26,7 +26,7 @@ bool FabricContext::check_for_wrap_around_mesh() const {
     auto* control_plane = tt::tt_metal::MetalContext::instance().get_cluster().get_control_plane();
     auto mesh_id = control_plane->get_user_physical_mesh_ids()[0];
 
-    // we can wrap around mesh if the corner chip (logical chip 0) as exactly 2 connections
+    // we can wrap around mesh if the corner chip (logical chip 0) has exactly 2 connections
     const uint32_t corner_chip_id = 0;
     uint32_t corner_chip_connections = 0;
     for (const auto& direction : FabricContext::routing_directions) {
@@ -80,11 +80,22 @@ FabricContext::FabricContext(tt::tt_metal::FabricConfig fabric_config) {
     }
 }
 
+bool FabricContext::is_wrap_around_mesh() const { return this->wrap_around_mesh_; }
+
+tt::tt_fabric::Topology FabricContext::get_fabric_topology() const { return this->topology_; }
+
+size_t FabricContext::get_fabric_channel_buffer_size_bytes() const { return this->channel_buffer_size_bytes_; }
+
+tt::tt_fabric::FabricEriscDatamoverConfig& FabricContext::get_fabric_router_config() const {
+    TT_FATAL(this->router_config_ != nullptr, "Error, fabric router config is uninitialized");
+    return *this->router_config_.get();
+};
+
 void FabricContext::set_num_fabric_initialized_routers(chip_id_t chip_id, size_t num_routers) {
     auto it = this->num_initialized_routers_.find(chip_id);
     TT_FATAL(
         it == this->num_initialized_routers_.end(),
-        "Error, tried to num initialized routers again for the same device");
+        "Error, tried to set num initialized routers again for the same device");
     this->num_initialized_routers_[chip_id] = num_routers;
 }
 
@@ -106,6 +117,42 @@ chan_id_t FabricContext::get_fabric_master_router_chan(chip_id_t chip_id) const 
     auto it = this->master_router_chans_.find(chip_id);
     TT_FATAL(it != this->master_router_chans_.end(), "Error, querying master router channel for an unknown device");
     return it->second;
+}
+
+std::vector<size_t> FabricContext::get_fabric_router_addresses_to_clear() const {
+    if (is_tt_fabric_config(this->fabric_config_)) {
+        return {this->router_config_->edm_local_sync_address};
+    } else {
+        return {tt::tt_metal::hal::get_erisc_l1_unreserved_base()};
+    }
+}
+
+std::pair<uint32_t, uint32_t> FabricContext::get_fabric_router_sync_address_and_status(chip_id_t chip_id) const {
+    if (is_tt_fabric_config(this->fabric_config_)) {
+        return std::make_pair(
+            this->router_config_->edm_status_address, tt::tt_fabric::EDMStatus::LOCAL_HANDSHAKE_COMPLETE);
+    } else {
+        return std::make_pair(
+            tt::tt_metal::hal::get_erisc_l1_unreserved_base(), get_num_fabric_initialized_routers(chip_id));
+    }
+}
+
+std::optional<std::pair<uint32_t, tt::tt_fabric::EDMStatus>> FabricContext::get_fabric_router_ready_address_and_signal()
+    const {
+    if (is_tt_fabric_config(this->fabric_config_)) {
+        return std::make_pair(this->router_config_->edm_status_address, tt::tt_fabric::EDMStatus::READY_FOR_TRAFFIC);
+    } else {
+        return std::nullopt;
+    }
+}
+
+std::pair<uint32_t, uint32_t> FabricContext::get_fabric_router_termination_address_and_signal() const {
+    if (is_tt_fabric_config(this->fabric_config_)) {
+        return std::make_pair(
+            this->router_config_->termination_signal_address, tt::tt_fabric::TerminationSignal::IMMEDIATELY_TERMINATE);
+    } else {
+        return std::make_pair(tt::tt_metal::hal::get_erisc_l1_unreserved_base(), 0);
+    }
 }
 
 }  // namespace tt::tt_fabric

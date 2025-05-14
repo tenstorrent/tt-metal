@@ -149,11 +149,11 @@ struct FabricMuxConfig {
     }
 
     std::vector<uint32_t> get_fabric_mux_compile_time_args() const {
-        const auto* fabric_router_config = tt::tt_metal::MetalContext::instance()
+        const auto& fabric_router_config = tt::tt_metal::MetalContext::instance()
                                                .get_cluster()
                                                .get_control_plane()
                                                ->get_fabric_context()
-                                               ->get_fabric_router_config();
+                                               .get_fabric_router_config();
         return std::vector<uint32_t>{
             this->num_full_size_channels,
             this->num_buffers_full_size_channel,
@@ -167,8 +167,8 @@ struct FabricMuxConfig {
             this->flow_control_base_address,
             this->full_size_channels_base_address,
             this->local_fabric_router_status_address,
-            fabric_router_config->edm_status_address,
-            fabric_router_config->sender_channels_num_buffers[0],
+            fabric_router_config.edm_status_address,
+            fabric_router_config.sender_channels_num_buffers[0],
             this->num_full_size_channel_iters,
             this->num_iters_between_teardown_checks};
     }

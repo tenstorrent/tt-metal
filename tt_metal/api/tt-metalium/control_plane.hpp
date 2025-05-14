@@ -9,6 +9,7 @@
 #include <tt-metalium/fabric_host_interface.h>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/mesh_coord.hpp>
+#include <tt-metalium/fabric_types.hpp>
 
 namespace tt::tt_fabric {
 
@@ -72,9 +73,9 @@ public:
     void set_routing_mode(uint16_t mode);
     uint16_t get_routing_mode() const;
 
-    void initialize_fabric_context();
+    void initialize_fabric_context(tt_metal::FabricConfig fabric_config);
 
-    FabricContext* get_fabric_context() const;
+    FabricContext& get_fabric_context() const;
 
     void clear_fabric_context();
 
