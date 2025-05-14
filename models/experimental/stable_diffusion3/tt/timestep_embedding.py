@@ -12,6 +12,7 @@ import os
 import ttnn
 from models.experimental.stable_diffusion3.tt.linear import TtLinear, TtLinearParameters
 
+from . import utils
 from .substate import substate
 
 
@@ -115,7 +116,7 @@ class _TimestepEmbedding:
 
     def __call__(self, x: ttnn.Tensor) -> ttnn.Tensor:
         x = self._linear_1(x)
-        x = ttnn.silu(x)
+        x = utils.silu(x)
         return self._linear_2(x)
 
     @property
