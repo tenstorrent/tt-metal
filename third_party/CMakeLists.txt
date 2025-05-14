@@ -283,29 +283,42 @@ processorcount(NPROC)
 if(NPROC EQUAL 0)
     set(NPROC 1)
 endif()
+
+set(ULFM_PREFIX ${CMAKE_BINARY_DIR}/openmpi-ulfm-install)
+set(ULFM_BUILD_DIR ${CMAKE_BINARY_DIR}/openmpi-ulfm-build)
+
+set(ULFM_SO ${ULFM_PREFIX}/lib/libmpi.so) # use symlink, most installs provide it
+# If your 'make install' omits the symlink, switch to libmpi.so.40
+# set(ULFM_SO ${ULFM_PREFIX}/lib/libmpi.so.40)
+
 ExternalProject_Add(
     openmpi_ulfm_build
-    SOURCE_DIR
-        ${OpenMPI-ULFM_SOURCE_DIR} # CPM cache
-    BINARY_DIR
-        ${CMAKE_BINARY_DIR}/openmpi-ulfm-build # out‑of‑tree
-    INSTALL_DIR ${CMAKE_BINARY_DIR}/openmpi-ulfm-install
-    # --- 0. guarantee a clean source tree -------------------------------
-    # (runs only if config.status is present; ignores error otherwise)
-    PATCH_COMMAND
-        ${CMAKE_COMMAND} -E chdir <SOURCE_DIR> make distclean || true
-    # --- 1. generate configure script -----------------------------------
+    PREFIX ${CMAKE_BINARY_DIR}/ompi
+    SOURCE_DIR ${OpenMPI-ULFM_SOURCE_DIR}
+    BINARY_DIR ${CMAKE_BINARY_DIR}/openmpi-ulfm-build
+    INSTALL_DIR ${ULFM_PREFIX}
     CONFIGURE_COMMAND
-        ${CMAKE_COMMAND} -E chdir <SOURCE_DIR> ./autogen.pl
-    # --- 2. configure (out‑of‑tree) ---------------------------------
-    COMMAND
-        ${CMAKE_COMMAND} -E chdir <BINARY_DIR> <SOURCE_DIR>/configure --prefix=<INSTALL_DIR> --with-ft=ulfm
-        --disable-dlopen
-    # --- 3. build & install ---------------------------------------------
+        ${CMAKE_COMMAND} -E chdir <SOURCE_DIR> ./autogen.pl && ${CMAKE_COMMAND} -E chdir <BINARY_DIR>
+        <SOURCE_DIR>/configure --prefix=<INSTALL_DIR> --with-ft=ulfm --disable-dlopen
     BUILD_COMMAND
         ${CMAKE_COMMAND} -E chdir <BINARY_DIR> make -j${NPROC}
     INSTALL_COMMAND
         ${CMAKE_COMMAND} -E chdir <BINARY_DIR> make install
-    UPDATE_COMMAND
-        "" # skip git pulls on incremental builds
+    STEP_TARGETS
+        build
+        install
+    BUILD_BYPRODUCTS
+        ${ULFM_SO} # <-- EXACT path ninja must wait for
+)
+
+add_library(OpenMPI::MPI SHARED IMPORTED GLOBAL)
+add_dependencies(OpenMPI::MPI openmpi_ulfm_build) # Depend on the external project target
+
+set_target_properties(
+    OpenMPI::MPI
+    PROPERTIES
+        IMPORTED_LOCATION
+            "${ULFM_PREFIX}/lib/libmpi.so"
+        INTERFACE_INCLUDE_DIRECTORIES
+            "${ULFM_PREFIX}/include"
 )

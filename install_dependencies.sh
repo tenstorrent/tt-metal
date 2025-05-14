@@ -85,7 +85,6 @@ ub_runtime_packages()
      libc++-17-dev \
      libc++abi-17-dev \
      libstdc++6 \
-     openmpi-bin \
     )
 }
 
@@ -104,7 +103,6 @@ ub_buildtime_packages()
      libc++abi-17-dev \
      build-essential \
      xz-utils \
-     libopenmpi-dev \
     )
 }
 
