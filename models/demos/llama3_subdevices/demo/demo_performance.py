@@ -425,7 +425,7 @@ def run_llama3_decode_performance(
     "mesh_device",
     [
         {"N150": (1, 1), "N300": (1, 2), "T3K": (1, 8), "TG": (8, 4)}.get(
-            os.environ.get("FAKE_DEVICE"), len(ttnn.get_device_ids())
+            os.environ.get("MESH_DEVICE"), len(ttnn.get_device_ids())
         )
     ],
     indirect=True,
@@ -464,7 +464,7 @@ def test_llama_decode_performance(
         pytest.skip("Do not run the 'long-context' or accuracy tests on CI to reduce load")
 
     # TODO: Remove this once all batch sizes are supported on TG
-    if os.environ.get("FAKE_DEVICE") == "TG" and batch_size not in [1, 32]:
+    if os.environ.get("MESH_DEVICE") == "TG" and batch_size not in [1, 32]:
         pytest.skip("TG only supports batch 1 and 32")
 
     if paged_attention:

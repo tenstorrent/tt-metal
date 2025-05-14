@@ -413,6 +413,10 @@ class TtModelArgs:
         if self.num_devices == 32:
             self.use_prefetcher = True
 
+        assert not os.getenv(
+            "FAKE_DEVICE"
+        ), "FAKE_DEVICE has been renamed to MESH_DEVICE for consistency with vLLM, please update your environment variables and run again."
+
         # Set up prefetcher stuff
         _, _, _, self.pf_receiver_cores_list, _, _, _, _ = get_core_ranges(12, 2, False)
 
