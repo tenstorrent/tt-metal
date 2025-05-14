@@ -12,9 +12,9 @@
 #include <ttnn/tensor/shape/shape.hpp>
 #include <ttnn/tensor/xtensor/conversion_utils.hpp>
 #include <ttnn/tensor/xtensor/partition.hpp>
-#include <xtensor/xarray.hpp>
-#include <xtensor/xio.hpp>
-#include <xtensor/xshape.hpp>
+#include <xtensor/containers/xarray.hpp>
+#include <xtensor/core/xshape.hpp>
+#include <xtensor/io/xio.hpp>
 
 template <typename T>
 struct fmt::formatter<xt::xarray<T>> : fmt::formatter<std::string> {
