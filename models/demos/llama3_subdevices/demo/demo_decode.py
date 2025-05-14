@@ -432,6 +432,7 @@ def run_llama3_demo(
         # Execute trace
         ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=False)
         tt_out_tok_cpu = tt_out_tok.cpu(blocking=True, cq_id=0)
+        tt_output_torch = ttnn.to_torch(ttnn.get_device_tensors(tt_out_tok_cpu)[0])[0, 0, 0, :]
         iteration_time = time() - iteration_time_start
 
         # Update current pos and mat idxs on host and send to device
@@ -441,14 +442,6 @@ def run_llama3_demo(
             current_pos += 1
         # ttnn.synchronize_device(mesh_device)
         # Write to host
-        tt_output_torch = ttnn.to_torch(
-            tt_out_tok_cpu,
-            mesh_composer=ttnn.ConcatMesh2dToTensor(
-                mesh_device,
-                dims=(3, 1),
-                mesh_shape=model_args.cluster_shape,
-            ),
-        )[0, 0, 0, :batch_size]
         # Append the generated token to the list of outputs
         if iteration in range(len(encoded_prompts[0])):
             all_outputs.append(encoded_prompts[0][iteration])  # Update list of TT outputs
