@@ -140,7 +140,7 @@ async function generateSummaryBox(grouped, github, context) {
       .sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
     const lastMainRun = mainBranchRuns[0];
     const lastMainPassing = lastMainRun?.conclusion === 'success' ? '✅' : '❌';
-    const eventTypes = [...new Set(runs.map(r => r.event))].join(', ');
+    const eventTypes = [...new Set(runs.map(r => r.event === 'workflow_dispatch' ? 'wkflw_disp' : r.event))].join(', ');
     const workflowFile = runs[0]?.path;
     const workflowLink = workflowFile
       ? `https://github.com/${context.repo.owner}/${context.repo.repo}/actions/workflows/${workflowFile}?query=branch%3Amain`
@@ -184,7 +184,7 @@ async function generateSummaryBox(grouped, github, context) {
     const row = `| [${name}](${workflowLink}) | ${eventTypes || 'unknown'} | ${runs.length} | ${successes.length} | ${successRate} | ${lastMainPassing} | ${failureSha} | ${failureRun} | ${failurePr} | ${failureTitle} |`;
 
     if (eventTypes.includes('schedule')) {
-      scheduleRows.push(row + ` ${lastGoodSha} | ${earliestBadSha} |`);
+      scheduleRows.push(row + ` ${earliestBadSha} | ${lastGoodSha} |`);
     } else {
       pushRows.push(row);
     }
@@ -200,8 +200,8 @@ async function generateSummaryBox(grouped, github, context) {
 
   const scheduleTable = [
     '## Scheduled Workflows',
-    '| Workflow | Event Type(s) | Total Runs | Successful Runs | Success Rate | Last Run on `main` | Failed SHA | Failed Run | Failed PR | PR Title | Last Good SHA | Earliest Bad SHA |',
-    '|----------|---------------|------------|-----------------|--------------|-------------------|------------|------------|-----------|-----------|---------------|------------------|',
+    '| Workflow | Event Type(s) | Total Runs | Successful Runs | Success Rate | Last Run on `main` | Failed SHA | Failed Run | Failed PR | PR Title | Earliest Bad SHA | Last Good SHA |',
+    '|----------|---------------|------------|-----------------|--------------|-------------------|------------|------------|-----------|-----------|------------------|---------------|',
     ...scheduleRows,
     ''  // Empty line for better readability
   ].join('\n');
@@ -211,40 +211,12 @@ async function generateSummaryBox(grouped, github, context) {
 
 /**
  * Build the markdown report for all grouped runs.
- * Adds a horizontal rule between each workflow section.
  */
 async function buildReport(grouped, github, context) {
-  const reportParts = [
+  return [
     '# Workflow Summary\n',
-    await generateSummaryBox(grouped, github, context),
-    '---\n'  // Separator between summary and detailed sections
-  ];
-
-  for (const [name, runs] of grouped.entries()) {
-    const successes = runs.filter(r => r.conclusion === 'success');
-    const mainBranchRuns = runs
-      .filter(r => r.head_branch === 'main')
-      .sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
-    const lastMainRun = mainBranchRuns[0];
-    const lastMainPassing = lastMainRun?.conclusion === 'success' ? '✅' : '❌';
-    // Add workflow summary
-    reportParts.push(generateWorkflowSummary(name, runs, successes, context, lastMainPassing));
-    // Show detailed runs only if latest run on main is failing
-    if (lastMainRun && lastMainRun.conclusion !== 'success') {
-      if (lastMainRun.event === 'schedule') {
-        const scheduledMainRuns = mainBranchRuns.filter(r => r.event === 'schedule');
-        const scheduledReport = await handleScheduledRuns(scheduledMainRuns, github, context);
-        if (scheduledReport) reportParts.push(scheduledReport);
-      } else if (lastMainRun.event === 'push') {
-        const pushMainRuns = mainBranchRuns.filter(r => r.event === 'push');
-        const pushReport = await handlePushRuns(pushMainRuns, github, context);
-        if (pushReport) reportParts.push(pushReport);
-      }
-    }
-    // Add a horizontal rule after each workflow section
-    reportParts.push('---');
-  }
-  return reportParts.join('\n');
+    await generateSummaryBox(grouped, github, context)
+  ].join('\n');
 }
 
 /**
