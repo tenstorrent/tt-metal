@@ -57,20 +57,43 @@ async function fetchPRInfo(github, context, commitSha) {
  *   - successes: Array of successful runs
  *   - eventTypes: Comma-separated string of unique event types
  *   - successRate: Percentage of successful runs (e.g., "95.00%")
- *   - totalRuns: Total number of runs
- *   - successfulRuns: Number of successful runs
+ *   - totalRuns: Total number of unique runs (excluding retries)
+ *   - successfulRuns: Number of successful unique runs
+ *   - totalAttempts: Total number of attempts including retries
+ *   - retryCount: Number of retry attempts
  */
 function getWorkflowStats(runs) {
-  const successes = runs.filter(r => r.conclusion === 'success');
-  const eventTypes = [...new Set(runs.map(r => r.event))].join(', ');
-  const successRate = runs.length === 0 ? "N/A" : (successes.length / runs.length * 100).toFixed(SUCCESS_RATE_DECIMAL_PLACES) + "%";
+  // Group runs by their original run ID to handle retries
+  const uniqueRuns = new Map();
+  let totalAttempts = 0;
+  let retryCount = 0;
+
+  for (const run of runs) {
+    totalAttempts++;
+    if (run.run_attempt > 1) {
+      retryCount++;
+    }
+
+    // Use the original run ID as the key
+    const originalRunId = run.run_attempt > 1 ? run.id - (run.run_attempt - 1) : run.id;
+    if (!uniqueRuns.has(originalRunId)) {
+      uniqueRuns.set(originalRunId, run);
+    }
+  }
+
+  const uniqueRunsArray = Array.from(uniqueRuns.values());
+  const successes = uniqueRunsArray.filter(r => r.conclusion === 'success');
+  const eventTypes = [...new Set(uniqueRunsArray.map(r => r.event))].join(', ');
+  const successRate = uniqueRunsArray.length === 0 ? "N/A" : (successes.length / uniqueRunsArray.length * 100).toFixed(SUCCESS_RATE_DECIMAL_PLACES) + "%";
 
   return {
     successes,
     eventTypes,
     successRate,
-    totalRuns: runs.length,
-    successfulRuns: successes.length
+    totalRuns: uniqueRunsArray.length,
+    successfulRuns: successes.length,
+    totalAttempts,
+    retryCount
   };
 }
 
@@ -143,7 +166,7 @@ async function generateSummaryBox(grouped, github, context) {
     const lastMainPassing = lastMainRun?.conclusion === 'success' ? SUCCESS_EMOJI : FAILURE_EMOJI;
     const workflowLink = getWorkflowLink(context, runs[0]?.path);
 
-    const failureInfo = {
+    const runInfo = {
       sha: EMPTY_VALUE,
       run: EMPTY_VALUE,
       pr: EMPTY_VALUE,
@@ -152,28 +175,29 @@ async function generateSummaryBox(grouped, github, context) {
       earliestBadSha: EMPTY_VALUE
     };
 
-    if (lastMainRun && lastMainRun.conclusion !== 'success') {
+    if (lastMainRun) {
       const prInfo = await fetchPRInfo(github, context, lastMainRun.head_sha);
-      failureInfo.sha = `\`${lastMainRun.head_sha.substring(0, SHA_SHORT_LENGTH)}\``;
-      failureInfo.run = `[Run](${lastMainRun.html_url})`;
-      failureInfo.pr = prInfo.prNumber;
-      failureInfo.title = prInfo.prTitle;
+      runInfo.sha = `\`${lastMainRun.head_sha.substring(0, SHA_SHORT_LENGTH)}\``;
+      runInfo.run = `[Run](${lastMainRun.html_url})${lastMainRun.run_attempt > 1 ? ` (Attempt ${lastMainRun.run_attempt})` : ''}`;
+      runInfo.pr = prInfo.prNumber;
+      runInfo.title = prInfo.prTitle;
 
       // Find good/bad commits for both push and scheduled runs
       const mainRuns = mainBranchRuns.filter(r => r.event === lastMainRun.event || r.event === 'workflow_dispatch');
       const { lastGoodSha, earliestBadSha } = findGoodBadCommits(mainRuns);
-      failureInfo.lastGoodSha = lastGoodSha;
-      failureInfo.earliestBadSha = earliestBadSha;
+      runInfo.lastGoodSha = lastGoodSha;
+      // Only show earliest bad SHA for failing workflows
+      runInfo.earliestBadSha = lastMainRun.conclusion !== 'success' ? earliestBadSha : EMPTY_VALUE;
     }
 
-    const row = `| [${name}](${workflowLink}) | ${stats.eventTypes || 'unknown'} | ${stats.totalRuns} | ${stats.successfulRuns} | ${stats.successRate} | ${lastMainPassing} | ${failureInfo.sha} | ${failureInfo.run} | ${failureInfo.pr} | ${failureInfo.title} | ${failureInfo.earliestBadSha} | ${failureInfo.lastGoodSha} |`;
+    const row = `| [${name}](${workflowLink}) | ${stats.eventTypes || 'unknown'} | ${stats.totalRuns} (${stats.totalAttempts} attempts) | ${stats.successfulRuns} | ${stats.successRate} | ${lastMainPassing} | ${runInfo.sha} | ${runInfo.run} | ${runInfo.pr} | ${runInfo.title} | ${runInfo.earliestBadSha} | ${runInfo.lastGoodSha} |`;
     rows.push(row);
   }
 
   return [
     '## Workflow Summary',
-    '| Workflow | Event Type(s) | Total Runs | Successful Runs | Success Rate | Last Run on `main` | Failed SHA | Failed Run | Failed PR | PR Title | Earliest Bad SHA | Last Good SHA |',
-    '|----------|---------------|------------|-----------------|--------------|-------------------|------------|------------|-----------|-----------|------------------|---------------|',
+    '| Workflow | Event Type(s) | Total Runs | Successful Runs | Success Rate | Last Run on `main` | Last SHA | Last Run | Last PR | PR Title | Earliest Bad SHA | Last Good SHA |',
+    '|----------|---------------|------------|-----------------|--------------|-------------------|----------|----------|---------|-----------|------------------|---------------|',
     ...rows,
     ''  // Empty line for better readability
   ].join('\n');
