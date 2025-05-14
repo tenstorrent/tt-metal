@@ -16,6 +16,7 @@ from collections import Counter
 import ipdb
 import json
 import os
+import sys
 
 msgpack_numpy.patch()
 
@@ -140,7 +141,8 @@ def dump_model(args):
 
     if not args.meta_style:
         print("Using interleaved state dict")
-        hf_state_dict = fix_hf_state_dict_for_rope(hf_model.config.head_dim)
+        head_dim = hf_model.config.hidden_size // hf_model.config.num_attention_heads
+        hf_state_dict = fix_hf_state_dict_for_rope(head_dim)
     else:
         print("Using non-interleaved state dict")
         hf_state_dict = hf_model.state_dict()
@@ -326,12 +328,13 @@ if __name__ == "__main__":
 
     if args.dump_tokenizer_path is not None:
         tweak_and_dump_tokenizer(args)
+        sys.exit(0)
 
     if args.input_path is not None and args.output_path is not None:
         dump_model(args)
     elif not args.dump_tokenizer_path:
         print("Nothing to do. Please either specify --dump_tokenizer_path or both of --input_path and --output_path.")
-        exit(1)
+        sys.exit(1)
     elif any([args.input_path, args.output_path]) and not all([args.input_path, args.output_path]):
         print("Note: both of input_path and output_path are required to export the weights.")
-        exit(1)
+        sys.exit(1)
