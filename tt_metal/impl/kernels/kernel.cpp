@@ -450,7 +450,7 @@ void DataMovementKernel::read_binaries(IDevice* device) {
     // TODO: from HAL
     auto load_type =
         (riscv_id == 1 && (device->arch() == tt::ARCH::GRAYSKULL || device->arch() == tt::ARCH::WORMHOLE_B0))
-            ? ll_api::memory::Loading::CONTIGUOUS
+            ? ll_api::memory::Loading::CONTIGUOUS_XIP
             : ll_api::memory::Loading::CONTIGUOUS_XIP;
     ll_api::memory const& binary_mem = llrt::get_risc_binary(
         build_state.get_target_out_path(this->kernel_full_name_),
