@@ -55,27 +55,24 @@ async function fetchPRInfo(github, context, commitSha) {
  * @param {Array<object>} runs - Array of workflow run objects
  * @returns {object} Statistics object containing:
  *   - eventTypes: Comma-separated string of unique event types
- *   - successRate: Percentage of total runs that succeeded (including re-runs)
- *   - uniqueSuccessRate: Percentage of unique runs that succeeded (excluding re-runs)
- *   - retryRate: Percentage of successful runs that had re-runs
- *   - uniqueRuns: Number of unique runs (excluding re-runs)
- *   - totalRuns: Total number of runs including re-runs
- *   - successfulRuns: Number of successful runs (including re-runs)
+ *   - successRate: Percentage of unique runs that succeeded (3/5 in example)
+ *   - uniqueSuccessRate: Percentage of runs that succeeded without retries (1/5 in example)
+ *   - retryRate: Percentage of successful runs that required retries (2/3 in example)
+ *   - uniqueRuns: Number of runs without any attempts
+ *   - totalRuns: Total number of runs including attempts
+ *   - successfulRuns: Number of successful unique runs
  */
 function getWorkflowStats(runs) {
   // Group runs by their original run ID to handle retries and reruns
   const uniqueRuns = new Map();
   let totalRuns = 0;
-  let totalSuccesses = 0;
+  let successfulRuns = 0;
   let successfulRunsWithRetries = 0;
-  let totalSuccessfulUniqueRuns = 0;
+  let successfulRunsWithoutRetries = 0;
 
-  // First pass: identify all unique runs and their retries
+  // First pass: identify all unique runs and their attempts
   for (const run of runs) {
     totalRuns++;
-    if (run.conclusion === 'success') {
-      totalSuccesses++;
-    }
 
     // Calculate the original run ID by subtracting (run_attempt - 1) from the current run ID
     const originalRunId = run.run_attempt > 1 ? run.id - (run.run_attempt - 1) : run.id;
@@ -83,41 +80,44 @@ function getWorkflowStats(runs) {
     if (!uniqueRuns.has(originalRunId)) {
       uniqueRuns.set(originalRunId, {
         run,
-        hasRetries: false,
-        attempts: 1,
-        isSuccessful: run.conclusion === 'success'
+        attempts: 0,
+        isSuccessful: false,
+        requiredRetry: false,
+        succeededOnFirstTry: false
       });
     } else {
-      // This is either a retry or a rerun
+      // This is an attempt
       const existingRun = uniqueRuns.get(originalRunId);
       existingRun.attempts++;
-      if (run.run_attempt > 1) {
-        existingRun.hasRetries = true;
+    }
+
+    // Update run status
+    const runInfo = uniqueRuns.get(originalRunId);
+    if (run.conclusion === 'success') {
+      if (!runInfo.isSuccessful) {
+        runInfo.isSuccessful = true;
+        successfulRuns++;
       }
-      // If any attempt succeeds, mark the run as successful
-      if (run.conclusion === 'success') {
-        existingRun.isSuccessful = true;
+      if (run.run_attempt === 1) {
+        runInfo.succeededOnFirstTry = true;
+        successfulRunsWithoutRetries++;
+      } else {
+        runInfo.requiredRetry = true;
       }
     }
   }
 
-  // Count successful unique runs and those with retries
-  for (const runInfo of uniqueRuns.values()) {
-    if (runInfo.isSuccessful) {
-      totalSuccessfulUniqueRuns++;
-      if (runInfo.hasRetries) {
-        successfulRunsWithRetries++;
-      }
-    }
-  }
+  // Count successful runs that required retries
+  successfulRunsWithRetries = Array.from(uniqueRuns.values())
+    .filter(r => r.isSuccessful && r.requiredRetry).length;
 
   const uniqueRunsArray = Array.from(uniqueRuns.values()).map(r => r.run);
   const eventTypes = [...new Set(uniqueRunsArray.map(r => r.event))].join(', ');
 
   // Calculate rates
-  const successRate = totalRuns === 0 ? "N/A" : (totalSuccesses / totalRuns * 100).toFixed(SUCCESS_RATE_DECIMAL_PLACES) + "%";
-  const uniqueSuccessRate = uniqueRunsArray.length === 0 ? "N/A" : (totalSuccessfulUniqueRuns / uniqueRunsArray.length * 100).toFixed(SUCCESS_RATE_DECIMAL_PLACES) + "%";
-  const retryRate = totalSuccessfulUniqueRuns === 0 ? "N/A" : (successfulRunsWithRetries / totalSuccessfulUniqueRuns * 100).toFixed(SUCCESS_RATE_DECIMAL_PLACES) + "%";
+  const successRate = uniqueRunsArray.length === 0 ? "N/A" : (successfulRuns / uniqueRunsArray.length * 100).toFixed(SUCCESS_RATE_DECIMAL_PLACES) + "%";
+  const uniqueSuccessRate = uniqueRunsArray.length === 0 ? "N/A" : (successfulRunsWithoutRetries / uniqueRunsArray.length * 100).toFixed(SUCCESS_RATE_DECIMAL_PLACES) + "%";
+  const retryRate = successfulRuns === 0 ? "N/A" : (successfulRunsWithRetries / successfulRuns * 100).toFixed(SUCCESS_RATE_DECIMAL_PLACES) + "%";
 
   return {
     eventTypes,
@@ -126,7 +126,7 @@ function getWorkflowStats(runs) {
     retryRate,
     uniqueRuns: uniqueRunsArray.length,
     totalRuns,
-    successfulRuns: totalSuccesses
+    successfulRuns
   };
 }
 
@@ -235,14 +235,14 @@ async function generateSummaryBox(grouped, github, context) {
     const workflowLink = getWorkflowLink(context, runs[0]?.path);
     const runInfo = await getLastRunInfo(mainBranchRuns, github, context);
 
-    const row = `| [${name}](${workflowLink}) | ${stats.eventTypes || 'unknown'} | ${stats.totalRuns} | ${stats.uniqueRuns} | ${stats.successfulRuns} | ${stats.successRate} | ${stats.retryRate} | ${runInfo.status} | ${runInfo.sha} | ${runInfo.run} | ${runInfo.pr} | ${runInfo.title} | ${runInfo.earliestBadSha} | ${runInfo.lastGoodSha} |`;
+    const row = `| [${name}](${workflowLink}) | ${stats.eventTypes || 'unknown'} | ${stats.totalRuns} | ${stats.uniqueRuns} | ${stats.successfulRuns} | ${stats.successRate} | ${stats.uniqueSuccessRate} | ${stats.retryRate} | ${runInfo.status} | ${runInfo.sha} | ${runInfo.run} | ${runInfo.pr} | ${runInfo.title} | ${runInfo.earliestBadSha} | ${runInfo.lastGoodSha} |`;
     rows.push(row);
   }
 
   return [
     '## Workflow Summary',
-    '| Workflow | Event Type(s) | Total Runs | Unique Runs | Successful Runs | Success Rate | Retry Rate | Last Run on `main` | Last SHA | Last Run | Last PR | PR Title | Earliest Bad SHA | Last Good SHA |',
-    '|----------|---------------|------------|-------------|-----------------|--------------|------------|-------------------|----------|----------|---------|-----------|------------------|---------------|',
+    '| Workflow | Event Type(s) | Total Runs | Unique Runs | Successful Runs | Success Rate | Unique Success Rate | Retry Rate | Last Run on `main` | Last SHA | Last Run | Last PR | PR Title | Earliest Bad SHA | Last Good SHA |',
+    '|----------|---------------|------------|-------------|-----------------|--------------|-------------------|------------|-------------------|----------|----------|---------|-----------|------------------|---------------|',
     ...rows,
     ''  // Empty line for better readability
   ].join('\n');
