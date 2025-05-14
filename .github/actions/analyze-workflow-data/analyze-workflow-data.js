@@ -261,7 +261,7 @@ async function generateSummaryBox(grouped, github, context) {
  * @returns {Promise<string>} Complete markdown report
  */
 async function buildReport(grouped, github, context) {
-  const days = core.getInput('days', { required: false }) || DEFAULT_LOOKBACK_DAYS;
+  const days = parseInt(core.getInput('days') || DEFAULT_LOOKBACK_DAYS, 10);
   return [
     `# Workflow Summary (Last ${days} Days)\n`,
     await generateSummaryBox(grouped, github, context),
@@ -286,28 +286,28 @@ async function buildReport(grouped, github, context) {
 }
 
 /**
- * Main entrypoint for the action.
- * Loads cached workflow data, filters by workflow configurations, and generates a summary report.
- *
- * The action:
- * 1. Loads workflow data from cache
- * 2. Filters workflows based on provided configurations
- * 3. Generates a summary report with push and scheduled workflow tables
- * 4. Sets outputs for failed workflows and the report
- *
- * @throws {Error} If cache file is not found or required inputs are missing
+ * Main function to run the action
  */
 async function run() {
   try {
-    // Get cache path from input
+    // Get inputs
     const cachePath = core.getInput('cache-path', { required: true });
+    const workflowConfigs = JSON.parse(core.getInput('workflow_configs', { required: true }));
+    const days = parseInt(core.getInput('days') || DEFAULT_LOOKBACK_DAYS, 10);
+
+    // Validate inputs
     if (!fs.existsSync(cachePath)) {
       throw new Error(`Cache file not found at ${cachePath}`);
+    }
+    if (!Array.isArray(workflowConfigs)) {
+      throw new Error('Workflow configs must be a JSON array');
+    }
+    if (isNaN(days) || days <= 0) {
+      throw new Error('Days must be a positive number');
     }
 
     // Load cached data
     const grouped = JSON.parse(fs.readFileSync(cachePath, 'utf8'));
-    const workflowConfigs = JSON.parse(core.getInput('workflow_configs', { required: true }));
 
     // Track failed workflows
     const failedWorkflows = [];
@@ -318,14 +318,18 @@ async function run() {
       for (const [name, runs] of grouped) {
         if ((config.wkflw_name && name === config.wkflw_name) ||
             (config.wkflw_prefix && name.startsWith(config.wkflw_prefix))) {
-          filteredGrouped.set(name, runs);
+          // Filter runs by date range
+          const filteredRuns = filterRunsByDate(runs, days);
+          if (filteredRuns.length > 0) {
+            filteredGrouped.set(name, filteredRuns);
 
-          // Check if latest run on main is failing
-          const mainBranchRuns = runs
-            .filter(r => r.head_branch === 'main')
-            .sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
-          if (mainBranchRuns[0]?.conclusion !== 'success') {
-            failedWorkflows.push(name);
+            // Check if latest run on main is failing
+            const mainBranchRuns = filteredRuns
+              .filter(r => r.head_branch === 'main')
+              .sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+            if (mainBranchRuns[0]?.conclusion !== 'success') {
+              failedWorkflows.push(name);
+            }
           }
         }
       }
@@ -342,6 +346,7 @@ async function run() {
     core.setOutput('report', report);
 
     await core.summary.addRaw(report).write();
+
   } catch (error) {
     core.setFailed(error.message);
   }
