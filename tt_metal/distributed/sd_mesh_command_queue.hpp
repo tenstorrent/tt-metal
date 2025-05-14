@@ -11,14 +11,16 @@ namespace tt::tt_metal::distributed {
 class SDMeshCommandQueue final : public MeshCommandQueueBase {
 protected:
     void write_shard_to_device(
-        Buffer* shard_view,
+        const MeshBuffer& buffer,
+        const MeshCoordinate& device_coord,
         const void* src,
-        const BufferRegion& region,
+        const std::optional<BufferRegion>& region,
         tt::stl::Span<const SubDeviceId> sub_device_ids = {}) override;
     void read_shard_from_device(
-        Buffer* shard_view,
+        const MeshBuffer& buffer,
+        const MeshCoordinate& device_coord,
         void* dst,
-        const BufferRegion& region,
+        const std::optional<BufferRegion>& region,
         std::unordered_map<IDevice*, uint32_t>& num_txns_per_device,
         tt::stl::Span<const SubDeviceId> sub_device_ids = {}) override;
     void submit_memcpy_request(std::unordered_map<IDevice*, uint32_t>& num_txns_per_device, bool blocking) override;
