@@ -1,5 +1,7 @@
 // Analyze Workflow Data GitHub Action
-// This action analyzes cached workflow run data and generates a report
+// This action analyzes cached workflow run data and generates a summary report of workflow statuses.
+// It provides two tables: one for push-triggered workflows and another for scheduled workflows.
+// For scheduled workflows, it also tracks the last known good commit and earliest bad commit.
 //
 // See: https://docs.github.com/en/rest/actions/workflow-runs?apiVersion=2022-11-28
 
@@ -16,11 +18,15 @@ const FAILURE_EMOJI = '❌';
 const EMPTY_VALUE = '—';
 
 /**
- * Fetch PR information for a commit, including PR number, title, and author.
- * @param {object} github - Octokit client
+ * Fetches PR information associated with a commit.
+ *
+ * @param {object} github - Octokit client instance
  * @param {object} context - GitHub Actions context
- * @param {string} commitSha - Commit SHA
- * @returns {Promise<object>} PR info or placeholders
+ * @param {string} commitSha - Full SHA of the commit to look up
+ * @returns {Promise<object>} Object containing:
+ *   - prNumber: Markdown link to the PR (e.g., [#123](url))
+ *   - prTitle: Title of the PR or EMPTY_VALUE if not found
+ *   - prAuthor: GitHub username of the PR author or 'unknown'
  */
 async function fetchPRInfo(github, context, commitSha) {
   try {
@@ -44,9 +50,15 @@ async function fetchPRInfo(github, context, commitSha) {
 }
 
 /**
- * Get workflow statistics including success rate and event types
- * @param {Array} runs - Array of workflow runs
- * @returns {object} Statistics about the workflow runs
+ * Calculates statistics for a set of workflow runs.
+ *
+ * @param {Array<object>} runs - Array of workflow run objects
+ * @returns {object} Statistics object containing:
+ *   - successes: Array of successful runs
+ *   - eventTypes: Comma-separated string of unique event types
+ *   - successRate: Percentage of successful runs (e.g., "95.00%")
+ *   - totalRuns: Total number of runs
+ *   - successfulRuns: Number of successful runs
  */
 function getWorkflowStats(runs) {
   const successes = runs.filter(r => r.conclusion === 'success');
@@ -63,10 +75,11 @@ function getWorkflowStats(runs) {
 }
 
 /**
- * Get the workflow link for a given workflow file
+ * Generates a GitHub Actions workflow URL.
+ *
  * @param {object} context - GitHub Actions context
- * @param {string} workflowFile - Path to the workflow file
- * @returns {string} URL to the workflow
+ * @param {string} workflowFile - Path to the workflow file relative to .github/workflows/
+ * @returns {string} Full URL to the workflow in GitHub Actions
  */
 function getWorkflowLink(context, workflowFile) {
   return workflowFile
@@ -75,9 +88,12 @@ function getWorkflowLink(context, workflowFile) {
 }
 
 /**
- * Find the last good and earliest bad commits for scheduled runs
- * @param {Array} scheduledMainRuns - Array of scheduled runs on main branch
- * @returns {object} Last good and earliest bad commit SHAs
+ * Analyzes scheduled runs to find the last good and earliest bad commits.
+ *
+ * @param {Array<object>} scheduledMainRuns - Array of scheduled runs on main branch, sorted by date (newest first)
+ * @returns {object} Object containing:
+ *   - lastGoodSha: Short SHA of the last successful run (e.g., `a1b2c3d`)
+ *   - earliestBadSha: Short SHA of the earliest failing run (e.g., `e4f5g6h`)
  */
 function findGoodBadCommits(scheduledMainRuns) {
   let lastGoodSha = EMPTY_VALUE;
@@ -101,24 +117,15 @@ function findGoodBadCommits(scheduledMainRuns) {
 }
 
 /**
- * Generate a row for the workflow summary table
- * @param {object} params - Parameters for generating the row
- * @returns {string} Markdown table row
- */
-function generateWorkflowRow({ name, workflowLink, stats, lastMainPassing, failureInfo }) {
-  const baseRow = `| [${name}](${workflowLink}) | ${stats.eventTypes || 'unknown'} | ${stats.totalRuns} | ${stats.successfulRuns} | ${stats.successRate} | ${lastMainPassing} | ${failureInfo.sha} | ${failureInfo.run} | ${failureInfo.pr} | ${failureInfo.title} |`;
-
-  return failureInfo.isScheduled
-    ? baseRow + ` ${failureInfo.earliestBadSha} | ${failureInfo.lastGoodSha} |`
-    : baseRow;
-}
-
-/**
- * Generate a summary box showing all workflows and their latest status
+ * Generates summary tables for push and scheduled workflows.
+ *
+ * @param {Map<string, Array<object>>} grouped - Map of workflow names to their runs
+ * @param {object} github - Octokit client instance
+ * @param {object} context - GitHub Actions context
+ * @returns {Promise<string>} Markdown table for all workflows
  */
 async function generateSummaryBox(grouped, github, context) {
-  const pushRows = [];
-  const scheduleRows = [];
+  const rows = [];
 
   for (const [name, runs] of grouped.entries()) {
     const mainBranchRuns = runs
@@ -142,8 +149,7 @@ async function generateSummaryBox(grouped, github, context) {
       pr: EMPTY_VALUE,
       title: EMPTY_VALUE,
       lastGoodSha: EMPTY_VALUE,
-      earliestBadSha: EMPTY_VALUE,
-      isScheduled: stats.eventTypes.includes('schedule')
+      earliestBadSha: EMPTY_VALUE
     };
 
     if (lastMainRun && lastMainRun.conclusion !== 'success') {
@@ -153,50 +159,33 @@ async function generateSummaryBox(grouped, github, context) {
       failureInfo.pr = prInfo.prNumber;
       failureInfo.title = prInfo.prTitle;
 
-      if (lastMainRun.event === 'schedule') {
-        const scheduledMainRuns = mainBranchRuns.filter(r => r.event === 'schedule' || r.event === 'workflow_dispatch');
-        const { lastGoodSha, earliestBadSha } = findGoodBadCommits(scheduledMainRuns);
-        failureInfo.lastGoodSha = lastGoodSha;
-        failureInfo.earliestBadSha = earliestBadSha;
-      }
+      // Find good/bad commits for both push and scheduled runs
+      const mainRuns = mainBranchRuns.filter(r => r.event === lastMainRun.event || r.event === 'workflow_dispatch');
+      const { lastGoodSha, earliestBadSha } = findGoodBadCommits(mainRuns);
+      failureInfo.lastGoodSha = lastGoodSha;
+      failureInfo.earliestBadSha = earliestBadSha;
     }
 
-    const row = generateWorkflowRow({
-      name,
-      workflowLink,
-      stats,
-      lastMainPassing,
-      failureInfo
-    });
-
-    if (failureInfo.isScheduled) {
-      scheduleRows.push(row);
-    } else {
-      pushRows.push(row);
-    }
+    const row = `| [${name}](${workflowLink}) | ${stats.eventTypes || 'unknown'} | ${stats.totalRuns} | ${stats.successfulRuns} | ${stats.successRate} | ${lastMainPassing} | ${failureInfo.sha} | ${failureInfo.run} | ${failureInfo.pr} | ${failureInfo.title} | ${failureInfo.earliestBadSha} | ${failureInfo.lastGoodSha} |`;
+    rows.push(row);
   }
 
-  const pushTable = [
-    '## Push Event Workflows',
-    '| Workflow | Event Type(s) | Total Runs | Successful Runs | Success Rate | Last Run on `main` | Failed SHA | Failed Run | Failed PR | PR Title |',
-    '|----------|---------------|------------|-----------------|--------------|-------------------|------------|------------|-----------|-----------|',
-    ...pushRows,
-    ''  // Empty line for better readability
-  ].join('\n');
-
-  const scheduleTable = [
-    '## Scheduled Workflows',
+  return [
+    '## Workflow Summary',
     '| Workflow | Event Type(s) | Total Runs | Successful Runs | Success Rate | Last Run on `main` | Failed SHA | Failed Run | Failed PR | PR Title | Earliest Bad SHA | Last Good SHA |',
     '|----------|---------------|------------|-----------------|--------------|-------------------|------------|------------|-----------|-----------|------------------|---------------|',
-    ...scheduleRows,
+    ...rows,
     ''  // Empty line for better readability
   ].join('\n');
-
-  return [pushTable, scheduleTable].join('\n');
 }
 
 /**
- * Build the markdown report for all grouped runs.
+ * Builds the complete markdown report.
+ *
+ * @param {Map<string, Array<object>>} grouped - Map of workflow names to their runs
+ * @param {object} github - Octokit client instance
+ * @param {object} context - GitHub Actions context
+ * @returns {Promise<string>} Complete markdown report
  */
 async function buildReport(grouped, github, context) {
   const days = core.getInput('days', { required: false }) || DEFAULT_LOOKBACK_DAYS;
@@ -209,6 +198,14 @@ async function buildReport(grouped, github, context) {
 /**
  * Main entrypoint for the action.
  * Loads cached workflow data, filters by workflow configurations, and generates a summary report.
+ *
+ * The action:
+ * 1. Loads workflow data from cache
+ * 2. Filters workflows based on provided configurations
+ * 3. Generates a summary report with push and scheduled workflow tables
+ * 4. Sets outputs for failed workflows and the report
+ *
+ * @throws {Error} If cache file is not found or required inputs are missing
  */
 async function run() {
   try {
