@@ -55,18 +55,20 @@ async function fetchPRInfo(github, context, commitSha) {
  * @param {Array<object>} runs - Array of workflow run objects
  * @returns {object} Statistics object containing:
  *   - eventTypes: Comma-separated string of unique event types
- *   - successRate: Percentage of total runs that succeeded (e.g., "95.00%")
- *   - retryRate: Percentage of unique runs that had retries (e.g., "20.00%")
- *   - uniqueRuns: Number of unique runs (excluding retries and reruns)
- *   - totalRuns: Total number of runs including retries and reruns
- *   - successfulRuns: Number of successful runs (including retries)
+ *   - successRate: Percentage of total runs that succeeded (including re-runs)
+ *   - uniqueSuccessRate: Percentage of unique runs that succeeded (excluding re-runs)
+ *   - retryRate: Percentage of successful runs that had re-runs
+ *   - uniqueRuns: Number of unique runs (excluding re-runs)
+ *   - totalRuns: Total number of runs including re-runs
+ *   - successfulRuns: Number of successful runs (including re-runs)
  */
 function getWorkflowStats(runs) {
   // Group runs by their original run ID to handle retries and reruns
   const uniqueRuns = new Map();
   let totalRuns = 0;
   let totalSuccesses = 0;
-  let runsWithRetries = 0;
+  let successfulRunsWithRetries = 0;
+  let totalSuccessfulUniqueRuns = 0;
 
   // First pass: identify all unique runs and their retries
   for (const run of runs) {
@@ -82,7 +84,8 @@ function getWorkflowStats(runs) {
       uniqueRuns.set(originalRunId, {
         run,
         hasRetries: false,
-        attempts: 1
+        attempts: 1,
+        isSuccessful: run.conclusion === 'success'
       });
     } else {
       // This is either a retry or a rerun
@@ -91,20 +94,35 @@ function getWorkflowStats(runs) {
       if (run.run_attempt > 1) {
         existingRun.hasRetries = true;
       }
+      // If any attempt succeeds, mark the run as successful
+      if (run.conclusion === 'success') {
+        existingRun.isSuccessful = true;
+      }
     }
   }
 
-  // Count how many unique runs had retries
-  runsWithRetries = Array.from(uniqueRuns.values()).filter(r => r.hasRetries).length;
+  // Count successful unique runs and those with retries
+  for (const runInfo of uniqueRuns.values()) {
+    if (runInfo.isSuccessful) {
+      totalSuccessfulUniqueRuns++;
+      if (runInfo.hasRetries) {
+        successfulRunsWithRetries++;
+      }
+    }
+  }
 
   const uniqueRunsArray = Array.from(uniqueRuns.values()).map(r => r.run);
   const eventTypes = [...new Set(uniqueRunsArray.map(r => r.event))].join(', ');
+
+  // Calculate rates
   const successRate = totalRuns === 0 ? "N/A" : (totalSuccesses / totalRuns * 100).toFixed(SUCCESS_RATE_DECIMAL_PLACES) + "%";
-  const retryRate = uniqueRunsArray.length === 0 ? "N/A" : (runsWithRetries / uniqueRunsArray.length * 100).toFixed(SUCCESS_RATE_DECIMAL_PLACES) + "%";
+  const uniqueSuccessRate = uniqueRunsArray.length === 0 ? "N/A" : (totalSuccessfulUniqueRuns / uniqueRunsArray.length * 100).toFixed(SUCCESS_RATE_DECIMAL_PLACES) + "%";
+  const retryRate = totalSuccessfulUniqueRuns === 0 ? "N/A" : (successfulRunsWithRetries / totalSuccessfulUniqueRuns * 100).toFixed(SUCCESS_RATE_DECIMAL_PLACES) + "%";
 
   return {
     eventTypes,
     successRate,
+    uniqueSuccessRate,
     retryRate,
     uniqueRuns: uniqueRunsArray.length,
     totalRuns,
