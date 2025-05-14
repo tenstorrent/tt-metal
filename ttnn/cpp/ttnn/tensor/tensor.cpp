@@ -156,11 +156,7 @@ void Tensor::deallocate_impl(bool force) {
             // The underlying data can still be shared across tensors.
             tt::stl::overloaded{
                 [this](HostStorage& host_storage) { host_storage.buffer.deallocate(); },
-                [this](MultiDeviceHostStorage& host_storage) {
-                    for (auto& host_buffer : host_storage.buffers) {
-                        host_buffer.deallocate();
-                    }
-                },
+                [this](MultiDeviceHostStorage& host_storage) { host_storage.deallocate(); },
                 [this, force, &can_deallocate](DeviceStorage& storage) {
                     if (can_deallocate(storage.mesh_buffer, force)) {
                         storage.mesh_buffer->deallocate();
@@ -696,7 +692,7 @@ Tensor allocate_tensor_on_mesh(const TensorSpec& tensor_spec, distributed::MeshD
     for (const auto& coord : distributed::MeshCoordinateRange(mesh_device->shape())) {
         specs.push_back(std::make_pair(coord, tensor_spec));
     }
-    DeviceStorage device_storage(std::move(mesh_buffer), ReplicateTensor(), std::move(specs));
+    DeviceStorage device_storage(std::move(mesh_buffer), std::move(specs));
     return Tensor(std::move(device_storage), tensor_spec, ReplicateTensor{});
 }
 
