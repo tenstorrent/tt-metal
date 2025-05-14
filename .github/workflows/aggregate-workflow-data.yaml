@@ -80,7 +80,7 @@ jobs:
         id: analyze
         uses: ./.github/actions/analyze-workflow-data
         with:
-          days: ${{ github.event.inputs.days || 1 }}
+          days: ${{ github.event.inputs.days || 15 }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           cache-path: ${{ github.workspace }}/workflow-data.json
           workflow_configs: |

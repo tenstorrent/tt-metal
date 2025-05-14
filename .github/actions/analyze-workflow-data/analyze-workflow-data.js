@@ -202,7 +202,10 @@ async function getLastRunInfo(mainBranchRuns, github, context) {
   }
 
   const prInfo = await fetchPRInfo(github, context, lastMainRun.head_sha);
+  // Current approach: filter by event type
   const mainRuns = mainBranchRuns.filter(r => r.event === lastMainRun.event || r.event === 'workflow_dispatch');
+  // Alternative approach: include all runs on main branch
+  // const mainRuns = mainBranchRuns;
   const { lastGoodSha, earliestBadSha } = findGoodBadCommits(mainRuns, context);
 
   return {
