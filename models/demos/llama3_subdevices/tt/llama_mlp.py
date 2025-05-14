@@ -25,6 +25,15 @@ def pad_to_next_multiple(tensor):
     return padded_tensor
 
 
+def get_prefill_mlp_activation_height_w2(seq_len):
+    """Find largest divisor of of seq_len that is <= 16384."""
+    if 16384 >= seq_len:
+        return seq_len
+    for i in range(min(16384, seq_len), 0, -1):
+        if seq_len % i == 0:
+            return i
+
+
 class TtLlamaMLP(LightweightModule):
     def __init__(
         self,
@@ -79,7 +88,7 @@ class TtLlamaMLP(LightweightModule):
             layout=ttnn.TILE_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             # Temporarily disable caching this weight for CI
-            # cache_file_name=cache_name(name),
+            cache_file_name=cache_name(name),
         )
 
         self.four_bit_mlp = args.optimizations.bfp4_mlp
@@ -262,6 +271,9 @@ class TtLlamaMLP(LightweightModule):
         )
         # ttnn.deallocate(w3_out)
         # ttnn.deallocate(w1_out)
+
+        activation_height = get_prefill_mlp_activation_height_w2(seq_len)
+        w2_in = ttnn.reshape(w2_in, (1, seq_len // activation_height, activation_height, -1))
 
         w2_out = ttnn.linear(
             w2_in_gathered,
