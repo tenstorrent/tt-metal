@@ -31,7 +31,7 @@ jobs:
       image: ${{ inputs.docker-image }}
       env:
         ARCH_NAME: ${{ inputs.arch }}
-        # LOGURU_LEVEL: INFO
+        LOGURU_LEVEL: INFO
         PYTHONPATH: /work
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
