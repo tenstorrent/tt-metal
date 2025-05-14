@@ -55,7 +55,10 @@ void kernel_main() {
         reinterpret_cast<tt_l1_ptr fabric_push_client_queue_t*>(FABRIC_ROUTER_CLIENT_QUEUE_START);
     zero_l1_buf((tt_l1_ptr uint32_t*)client_queue, sizeof(fabric_push_client_queue_t));
 #endif
+
+#ifdef ARCH_WORMHOLE
     rtos_context_switch_ptr = (void (*)())RtosTable[0];
+#endif
 
     uint32_t rt_args_idx = 0;
     sync_val = get_arg_val<uint32_t>(rt_args_idx++);
@@ -106,7 +109,7 @@ void kernel_main() {
     fvcc_inbound_state.init(
         FVCC_IN_BUF_START,
         (uint32_t)&fvcc_outbound_state.remote_rdptr,
-        (((uint64_t)gk_message_addr_h << 32) | gk_message_addr_l) + offsetof(gatekeeper_info_t, gk_msg_buf));
+        get_noc_addr_helper(gk_message_addr_h, gk_message_addr_l) + offsetof(gatekeeper_info_t, gk_msg_buf));
 #endif
 
     if (!wait_all_src_dest_ready(&router_state, timeout_cycles)) {

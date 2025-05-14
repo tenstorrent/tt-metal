@@ -75,7 +75,11 @@ FORCE_INLINE void check_worker_connections(
 // !!!FORCE_INLINE could potentially cause stack corruption as seen in the past
 inline void wait_for_notification(uint32_t address, uint32_t value) {
     volatile tt_l1_ptr uint32_t* poll_addr = (volatile tt_l1_ptr uint32_t*)address;
+    // WATCHER_RING_BUFFER_PUSH(0xdeadbeef);
+    // WATCHER_RING_BUFFER_PUSH(address);
+    // WATCHER_RING_BUFFER_PUSH(value);
     while (*poll_addr != value) {
+        invalidate_l1_cache();
         // context switch while waiting to allow slow dispatch traffic to go through
         run_routing();
     }
@@ -86,6 +90,17 @@ inline void notify_master_router(uint32_t master_eth_chan, uint32_t address) {
     // send semaphore increment to master router on this device.
     // semaphore notifies all other routers that this router has completed
     // startup handshake with its ethernet peer.
+    // WATCHER_RING_BUFFER_PUSH(0xdeadbeef);
+    // WATCHER_RING_BUFFER_PUSH((uint32_t)noc_index);
+    // WATCHER_RING_BUFFER_PUSH((uint32_t)master_eth_chan);
+    WATCHER_RING_BUFFER_PUSH(0xfacefeed);
+
+    // WATCHER_RING_BUFFER_PUSH((uint32_t)&(eth_chan_to_noc_xy[0][0]));
+
+    for (uint32_t i = 0; i < 12; i++) {
+        WATCHER_RING_BUFFER_PUSH(eth_chan_to_noc_xy[0][i]);
+    }
+
     uint64_t dest_addr = get_noc_addr_helper(eth_chan_to_noc_xy[noc_index][master_eth_chan], address);
     noc_fast_atomic_increment<DM_DEDICATED_NOC, true>(
         noc_index,
@@ -103,12 +118,13 @@ inline void notify_master_router(uint32_t master_eth_chan, uint32_t address) {
 inline void notify_slave_routers(
     uint32_t router_eth_chans_mask, uint32_t master_eth_chan, uint32_t address, uint32_t notification) {
     uint32_t remaining_cores = router_eth_chans_mask;
-    for (uint32_t i = 0; i < 16; i++) {
+    for (uint32_t i = 0; i < 12; i++) {  // todo fix for bh vs wh
         if (remaining_cores == 0) {
             break;
         }
         if ((remaining_cores & (0x1 << i)) && (master_eth_chan != i)) {
             uint64_t dest_addr = get_noc_addr_helper(eth_chan_to_noc_xy[noc_index][i], address);
+            WAYPOINT("THIN");
             noc_inline_dw_write(dest_addr, notification);
             remaining_cores &= ~(0x1 << i);
         }

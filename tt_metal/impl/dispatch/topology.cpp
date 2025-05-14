@@ -1240,6 +1240,7 @@ std::unique_ptr<Program> create_and_compile_tt_fabric_program(IDevice* device, F
         std::vector<uint32_t> eth_sender_ct_args = edm_builder.get_compile_time_args();
         uint32_t is_local_handshake_master = eth_chan == master_edm_chan;
 
+        std::cout << "Num edm chans: " << num_edm_chans << std::endl;
         eth_sender_ct_args.push_back(is_local_handshake_master);
         eth_sender_ct_args.push_back(master_edm_chan);
         eth_sender_ct_args.push_back(num_edm_chans);
@@ -1252,6 +1253,12 @@ std::unique_ptr<Program> create_and_compile_tt_fabric_program(IDevice* device, F
             detail::WriteToDeviceL1(
                 device, eth_logical_core, edm_config.edm_local_sync_address, router_zero_buf, CoreType::ETH);
         }
+
+        std::cout << "Fabric EDM ct args: " << std::endl;
+        for (const auto& arg : eth_sender_ct_args) {
+            std::cout << arg << "\t";
+        }
+        std::cout << "\n" << std::endl;
 
         auto eth_sender_kernel = tt::tt_metal::CreateKernel(
             *fabric_program_ptr,

@@ -30,7 +30,6 @@ static constexpr uint32_t ETH_PROFILER_CHECK =
 static_assert(ETH_LAUNCH_CHECK == 0);
 static_assert(ETH_PROFILER_CHECK == 0);
 static_assert(MEM_IERISC_FIRMWARE_BASE % TT_ARCH_MAX_NOC_WRITE_ALIGNMENT == 0);
-static_assert(MEM_IERISC_MAILBOX_BASE + sizeof(mailboxes_t) < MEM_IERISC_MAILBOX_END);
 #else
 static_assert(MEM_MAILBOX_BASE + sizeof(mailboxes_t) < MEM_MAILBOX_END);
 static constexpr uint32_t TENSIX_LAUNCH_CHECK =

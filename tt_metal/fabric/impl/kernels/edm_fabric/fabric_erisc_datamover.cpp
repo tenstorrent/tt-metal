@@ -975,6 +975,7 @@ void run_fabric_edm_main_loop(
     // improve performance. The value of 32 was chosen somewhat empirically and then raised up slightly.
 
     while (!got_immediate_termination_signal(termination_signal_ptr)) {
+        invalidate_l1_cache();
         bool got_graceful_termination = got_graceful_termination_signal(termination_signal_ptr);
         if (got_graceful_termination) {
             DPRINT << "EDM Graceful termination\n";
@@ -1710,28 +1711,38 @@ void kernel_main() {
 
     *edm_status_ptr = tt::tt_fabric::EDMStatus::REMOTE_HANDSHAKE_COMPLETE;
 
+    WAYPOINT("HAND");
+
     if constexpr (wait_for_host_signal) {
         if constexpr (is_local_handshake_master) {
+            WAYPOINT("BUL0");
             wait_for_notification((uint32_t)edm_local_sync_ptr, num_local_edms - 1);
             notify_slave_routers(
                 edm_channels_mask, local_handshake_master_eth_chan, (uint32_t)edm_local_sync_ptr, num_local_edms);
         } else {
+            WAYPOINT("BUL1");
             notify_master_router(local_handshake_master_eth_chan, (uint32_t)edm_local_sync_ptr);
+            WAYPOINT("BULX");
             wait_for_notification((uint32_t)edm_local_sync_ptr, num_local_edms);
         }
 
         *edm_status_ptr = tt::tt_fabric::EDMStatus::LOCAL_HANDSHAKE_COMPLETE;
 
         wait_for_notification((uint32_t)edm_status_ptr, tt::tt_fabric::EDMStatus::READY_FOR_TRAFFIC);
+        WAYPOINT("BUL2");
 
         if constexpr (is_local_handshake_master) {
+            WAYPOINT("BUL3");
             notify_slave_routers(
                 edm_channels_mask,
                 local_handshake_master_eth_chan,
                 (uint32_t)edm_status_ptr,
                 tt::tt_fabric::EDMStatus::READY_FOR_TRAFFIC);
         }
+        WAYPOINT("BUL4");
     }
+
+    WAYPOINT("SHAK");
 
     if constexpr (is_2d_fabric) {
         uint32_t has_downstream_edm = has_downstream_edm_vc0_buffer_connection & 0xF;
@@ -1764,7 +1775,9 @@ void kernel_main() {
         }
     }
 
+    WAYPOINT("DANG");
     wait_for_static_connection_to_ready(local_sender_channel_worker_interfaces);
+    WAYPOINT("BANG");
 
     //////////////////////////////
     //////////////////////////////

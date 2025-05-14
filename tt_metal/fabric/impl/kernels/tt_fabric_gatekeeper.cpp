@@ -34,12 +34,18 @@ uint32_t gk_message_pending;
 
 inline void notify_all_routers(uint32_t notification) {
     uint32_t remaining_cores = router_mask;
-    for (uint32_t i = 0; i < 16; i++) {
+// fix this
+#ifdef ARCH_BLACKHOLE
+    uint32_t total_routers = 16;
+#else
+    uint32_t total_routers = 12;
+#endif
+    for (uint32_t i = 0; i < total_routers; i++) {
         if (remaining_cores == 0) {
             break;
         }
         if (remaining_cores & (0x1 << i)) {
-            uint64_t dest_addr = ((uint64_t)eth_chan_to_noc_xy[noc_index][i] << 32) | FABRIC_ROUTER_SYNC_SEM;
+            uint64_t dest_addr = get_noc_addr_helper(eth_chan_to_noc_xy[noc_index][i], FABRIC_ROUTER_SYNC_SEM);
             noc_inline_dw_write(dest_addr, notification);
             remaining_cores &= ~(0x1 << i);
         }
@@ -63,8 +69,8 @@ inline void get_routing_tables() {
     if (temp_mask) {
         for (uint32_t i = 0; i < 4; i++) {
             if (temp_mask & 0x1) {
-                uint64_t router_config_addr = ((uint64_t)eth_chan_to_noc_xy[noc_index][channel] << 32) |
-                                              eth_l1_mem::address_map::FABRIC_ROUTER_CONFIG_BASE;
+                uint64_t router_config_addr = get_noc_addr_helper(
+                    eth_chan_to_noc_xy[noc_index][channel], eth_l1_mem::address_map::FABRIC_ROUTER_CONFIG_BASE);
                 noc_async_read_one_packet(
                     router_config_addr,
                     (uint32_t)&routing_table[routing_plane],
@@ -169,7 +175,7 @@ inline void socket_open(packet_header_t* packet) {
             // If remote receive socket already opened,
             // set send socket state to active and return.
             handle->status_notification_addr =
-                ((uint64_t)packet->session.ack_offset_h << 32) | packet->session.ack_offset_l;
+                get_noc_addr_helper(packet->session.ack_offset_h, packet->session.ack_offset_l);
             set_socket_active(handle);
             DPRINT << "GK: Receiver Available " << (uint32_t)handle->socket_id << ENDL();
             return;
@@ -186,12 +192,12 @@ inline void socket_open(packet_header_t* packet) {
             handle->socket_direction = packet->packet_parameters.socket_parameters.socket_direction;
             handle->routing_plane = packet->packet_parameters.socket_parameters.routing_plane;
             handle->status_notification_addr =
-                ((uint64_t)packet->session.ack_offset_h << 32) | packet->session.ack_offset_l;
+                get_noc_addr_helper(packet->session.ack_offset_h, packet->session.ack_offset_l);
             handle->socket_state = SocketState::OPENING;
 
             if (handle->socket_direction == SOCKET_DIRECTION_RECV) {
                 handle->pull_notification_adddr =
-                    ((uint64_t)packet->session.target_offset_h << 32) | packet->session.target_offset_l;
+                    get_noc_addr_helper(packet->session.target_offset_h, packet->session.target_offset_l);
                 handle->sender_dev_id = packet->routing.src_dev_id;
                 handle->sender_mesh_id = packet->routing.src_mesh_id;
                 handle->rcvr_dev_id = routing_table[0].my_device_id;
@@ -241,7 +247,7 @@ inline void socket_open_for_connect(packet_header_t* packet) {
             handle->socket_type = packet->packet_parameters.socket_parameters.socket_type;
             handle->socket_direction = SOCKET_DIRECTION_SEND;
             handle->pull_notification_adddr =
-                ((uint64_t)packet->session.target_offset_h << 32) | packet->session.target_offset_l;
+                get_noc_addr_helper(packet->session.target_offset_h, packet->session.target_offset_l);
             handle->routing_plane = packet->packet_parameters.socket_parameters.routing_plane;
             handle->socket_state = SocketState::OPENING;
             handle->sender_dev_id = routing_table[0].my_device_id;
@@ -283,7 +289,7 @@ inline void socket_connect(packet_header_t* packet) {
             }
             found_sender = true;
             handle->pull_notification_adddr =
-                ((uint64_t)packet->session.target_offset_h << 32) | packet->session.target_offset_l;
+                get_noc_addr_helper(packet->session.target_offset_h, packet->session.target_offset_l);
             handle->socket_state = SocketState::ACTIVE;
             set_socket_active(handle);
             DPRINT << "GK: Found Send Socket " << (uint32_t)handle->socket_id << ENDL();
@@ -397,9 +403,8 @@ inline void process_pending_socket() {
                 message->packet_header.packet_parameters.socket_parameters.routing_plane = handle->routing_plane;
                 tt_fabric_add_header_checksum((packet_header_t*)&message->packet_header);
 
-                router_addr =
-                    ((uint64_t)get_next_hop_router_noc_xy(&message->packet_header, handle->routing_plane) << 32) |
-                    FVCC_OUT_BUF_START;
+                router_addr = get_noc_addr_helper(
+                    get_next_hop_router_noc_xy(&message->packet_header, handle->routing_plane), FVCC_OUT_BUF_START);
 
                 if (send_gk_message(router_addr, &message->packet_header)) {
                     DPRINT << "GK: Sending Connect to " << (uint32_t)handle->sender_dev_id << ENDL();

@@ -848,6 +848,7 @@ void Device::initialize_and_launch_firmware() {
         uint32_t virtual_non_worker_cores_idx = 0;
         for (tt::umd::CoreCoord core : eth_cores) {
             auto virtual_core = this->virtual_core_from_physical_core({core.x, core.y});
+            std::cout << "Virtual core: " << virtual_core.str() << std::endl;
             core_info->virtual_non_worker_cores[virtual_non_worker_cores_idx++] = {virtual_core.x, virtual_core.y, AddressableCoreType::ETH};
         }
 
@@ -863,6 +864,11 @@ void Device::initialize_and_launch_firmware() {
                 core_info->virtual_non_worker_cores[virtual_non_worker_cores_idx++] = {
                     virtual_core.x, virtual_core.y, AddressableCoreType::DRAM};
             }
+        }
+
+        for (uint32_t idx = 0; idx < MAX_VIRTUAL_NON_WORKER_CORES; idx++) {
+            std::cout << "Virtual non worker core: " << std::hex << (uint32_t)core_info->virtual_non_worker_cores[idx].x
+                      << ", " << (uint32_t)core_info->virtual_non_worker_cores[idx].y << std::dec << std::endl;
         }
     }
 
@@ -950,6 +956,7 @@ void Device::initialize_and_launch_firmware() {
         CoreCoord phys_eth_core = this->ethernet_core_from_logical_core(eth_core);
         core_info->absolute_logical_x = eth_core.x;
         core_info->absolute_logical_y = eth_core.y;
+        std::cout << "Eth core " << phys_eth_core.str() << std::endl;
         tt::llrt::write_hex_vec_to_core(
             this->id(), phys_eth_core, core_info_vec, this->get_dev_addr(phys_eth_core, HalL1MemAddrType::CORE_INFO));
         this->initialize_firmware(HalProgrammableCoreType::ACTIVE_ETH, phys_eth_core, &launch_msg, &go_msg);

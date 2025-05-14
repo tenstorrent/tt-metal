@@ -893,12 +893,16 @@ TEST_F(CommandQueueMultiDeviceProgramFixture, ActiveEthKernelsDirectSendAllConne
             for (const auto& sender_core : sender_device->get_active_ethernet_cores(true)) {
                 if (not tt::tt_metal::MetalContext::instance().get_cluster().is_ethernet_link_up(
                         sender_device->id(), sender_core)) {
+                    std::cout << "Link down" << std::endl;
                     continue;
                 }
                 auto [device_id, receiver_core] = sender_device->get_connected_ethernet_core(sender_core);
                 if (receiver_device->id() != device_id) {
                     continue;
                 }
+                std::cout << "Sender device " << sender_device->id() << " core " << sender_core.str()
+                          << " receiver device " << receiver_device->id() << " core " << receiver_core.str()
+                          << std::endl;
                 ASSERT_TRUE(unit_tests::erisc::direct_send::eth_direct_sender_receiver_kernels(
                     static_cast<DispatchFixture*>(this),
                     sender_device,

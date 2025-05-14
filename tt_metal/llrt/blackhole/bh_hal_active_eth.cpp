@@ -20,6 +20,7 @@
 #include "llrt/hal.hpp"
 #include <umd/device/tt_core_coordinates.h>
 #include "noc/noc_parameters.h"
+#include "eth_l1_address_map.h"
 
 #define GET_ETH_MAILBOX_ADDRESS_HOST(x) ((std::uint64_t)&(((mailboxes_t*)MEM_AERISC_MAILBOX_BASE)->x))
 

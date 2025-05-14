@@ -4,7 +4,6 @@
 
 #pragma once
 
-// TODO: WH only, need to move this to generated code path for BH support
 uint16_t eth_chan_to_noc_xy[2][16] __attribute__((used)) = {
     {
         // noc=0

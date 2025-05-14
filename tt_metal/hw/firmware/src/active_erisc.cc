@@ -145,6 +145,7 @@ int main() {
                 int index = static_cast<std::underlying_type<EthProcessorTypes>::type>(EthProcessorTypes::DM0);
                 void (*kernel_address)(uint32_t) = (void (*)(uint32_t))(
                     mailboxes->launch[mailboxes->launch_msg_rd_ptr].kernel_config.kernel_text_offset[index]);
+                // WATCHER_RING_BUFFER_PUSH((uint32_t)kernel_address);
                 (*kernel_address)((uint32_t)kernel_address);
 
                 RECORD_STACK_USAGE();

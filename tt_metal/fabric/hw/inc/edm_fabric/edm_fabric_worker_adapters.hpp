@@ -173,7 +173,9 @@ struct WorkerToFabricEdmSenderImpl {
         if constexpr (USER_DEFINED_NUM_BUFFER_SLOTS) {
             while (distance_behind<EDM_NUM_BUFFER_SLOTS>(
                        BufferPtr{static_cast<uint8_t>(*this->from_remote_buffer_slot_rdptr_ptr)},
-                       BufferPtr{static_cast<uint8_t>(this->buffer_slot_wrptr)}) >= this->num_buffers_per_channel);
+                       BufferPtr{static_cast<uint8_t>(this->buffer_slot_wrptr)}) >= this->num_buffers_per_channel) {
+                invalidate_l1_cache();
+            }
         } else {
             const auto first_rdptr = *this->from_remote_buffer_slot_rdptr_ptr;
             auto buffer_ptr_wrap = 2 * this->num_buffers_per_channel;
@@ -182,7 +184,9 @@ struct WorkerToFabricEdmSenderImpl {
                                  BufferPtr{static_cast<uint8_t>(this->buffer_slot_wrptr)},
                                  buffer_ptr_wrap) < this->num_buffers_per_channel;
             if (!has_space) {
-                while (first_rdptr == *this->from_remote_buffer_slot_rdptr_ptr);
+                while (first_rdptr == *this->from_remote_buffer_slot_rdptr_ptr) {
+                    invalidate_l1_cache();
+                }
             }
         }
     }
@@ -270,16 +274,19 @@ struct WorkerToFabricEdmSenderImpl {
             reinterpret_cast<uint64_t>(&(worker_location_info_ptr->worker_teardown_semaphore_address));
         const uint64_t connection_worker_xy_address =
             dest_noc_addr_coord_only | reinterpret_cast<uint64_t>(&(worker_location_info_ptr->worker_xy));
+        WAYPOINT("NAVY");
         noc_inline_dw_write<false, posted>(
             dest_edm_location_info_addr,
             reinterpret_cast<size_t>(from_remote_buffer_slot_rdptr_ptr),
             0xf,
             WORKER_HANDSHAKE_NOC);
+        WAYPOINT("BITU");
         noc_inline_dw_write<false, posted>(
             edm_teardown_semaphore_address_address,
             reinterpret_cast<size_t>(worker_teardown_addr),
             0xf,
             WORKER_HANDSHAKE_NOC);
+        WAYPOINT("BOBY");
         noc_inline_dw_write<false, posted>(
             connection_worker_xy_address, WorkerXY(my_x[0], my_y[0]).to_uint32(), 0xf, WORKER_HANDSHAKE_NOC);
     }
@@ -293,6 +300,7 @@ struct WorkerToFabricEdmSenderImpl {
         noc_async_read_barrier();
         const uint64_t edm_connection_handshake_noc_addr =
             get_noc_addr(this->edm_noc_x, this->edm_noc_y, edm_connection_handshake_l1_addr);
+        WAYPOINT("MAMA");
         noc_inline_dw_write<false, posted>(
             edm_connection_handshake_noc_addr, open_connection_value, 0xf, WORKER_HANDSHAKE_NOC);
         this->buffer_slot_wrptr = *this->buffer_slot_wrptr_ptr;
@@ -307,6 +315,7 @@ struct WorkerToFabricEdmSenderImpl {
     void open() {
         open_start<posted, WORKER_HANDSHAKE_NOC>();
         open_finish<posted, WORKER_HANDSHAKE_NOC>();
+        WAYPOINT("BUBU");
     }
 
     // Advanced usage API:
@@ -320,10 +329,12 @@ struct WorkerToFabricEdmSenderImpl {
             ~(uint64_t)NOC_COORDINATE_MASK;
 
         const uint64_t dest_edm_connection_state_addr = dest_noc_addr_coord_only | edm_connection_handshake_l1_addr;
+        WAYPOINT("DADA");
         noc_inline_dw_write(dest_edm_connection_state_addr, close_connection_request_value);
 
         // buffer index stored at location after handshake addr
         const uint64_t remote_buffer_index_addr = dest_noc_addr_coord_only | edm_buffer_index_addr;
+        WAYPOINT("SHAL");
         noc_inline_dw_write(remote_buffer_index_addr, this->buffer_slot_wrptr);
     }
 
@@ -386,15 +397,18 @@ private:
     FORCE_INLINE void update_edm_buffer_slot_wrptr(uint8_t noc = noc_index) {
         if constexpr (stateful_api) {
             if constexpr (enable_ring_support) {
+                WAYPOINT("SHXX");
                 noc_inline_dw_write_with_state<true, false, true>(
                     this->buffer_slot_wrptr, this->edm_buffer_slot_wrptr_addr, this->sync_noc_cmd_buf, noc);
             } else {
+                WAYPOINT("IMZA");
                 noc_inline_dw_write_with_state<false, false, true>(
                     this->buffer_slot_wrptr, 0, this->sync_noc_cmd_buf, noc);
             }
         } else {
             const uint64_t noc_sem_addr =
                 get_noc_addr(this->edm_noc_x, this->edm_noc_y, this->edm_buffer_slot_wrptr_addr, noc);
+            WAYPOINT("BROL");
             noc_inline_dw_write(noc_sem_addr, this->buffer_slot_wrptr, 0xf, noc);
         }
     }
