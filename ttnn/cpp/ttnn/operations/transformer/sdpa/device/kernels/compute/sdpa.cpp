@@ -63,7 +63,6 @@ void MAIN {
     constexpr uint32_t cb_k_in = tt::CBIndex::c_1;
     constexpr uint32_t cb_v_in = tt::CBIndex::c_2;
     constexpr uint32_t cb_mask_in = tt::CBIndex::c_3;
-    constexpr uint32_t cb_scale_in = tt::CBIndex::c_4;
     constexpr uint32_t cb_identity_scale_in = tt::CBIndex::c_5;
     constexpr uint32_t cb_col_identity = tt::CBIndex::c_7;
 
@@ -195,6 +194,7 @@ void MAIN {
                     //     Sq_chunk_t,
                     //     Sk_chunk_t>(alias_cur_sum);
 
+                    cb_wait_front(cb_qk_im, qk_chunk_tiles);
                     /* OUT_IM = QK @ V_CHUNK */
                     matmul_blocks(
                         cb_qk_im,
@@ -236,13 +236,11 @@ void MAIN {
                     std::swap(alias_prev_max, alias_cur_max);
                 }
 
-                matmul_reduce<cb_qk_im, cb_col_identity, Sq_chunk_t, Sk_chunk_t>(alias_prev_sum);
-
+                matmul_reduce<Sq_chunk_t>(cb_col_identity, alias_prev_sum);
                 /* cb_cur_sum = 1.0 / cb_cur_sum */
                 recip_block_inplace(alias_prev_sum, Sq_chunk_t);
 
                 /* cb_out_accumulate_im *= cb_cur_sum */
-                // NOTE: PCC bug if we modify below function to directy output to cb_out.
                 pack_reconfig_data_format(cb_out);
                 mul_block_bcast_cols<Sq_chunk_t, DHt>(alias_mm2_prev_out, alias_prev_sum, cb_out, false);
 
