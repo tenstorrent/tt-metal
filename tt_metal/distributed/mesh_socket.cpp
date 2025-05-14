@@ -12,11 +12,12 @@ std::pair<MeshSocket, MeshSocket> MeshSocket::create_sockets(
     const std::shared_ptr<MeshDevice>& receiver,
     const SocketConfig& config) {
     auto l1_alignment = MetalContext::instance().hal().get_alignment(HalMemType::L1);
-    auto sender_config_buffer = create_socket_config_buffer(sender, config, true /* is_sender */);
-    auto recv_config_buffer = create_socket_config_buffer(receiver, config, false /* is_sender */);
+    auto sender_config_buffer = create_socket_config_buffer(sender, config, SocketEndpoint::SENDER);
+    auto recv_config_buffer = create_socket_config_buffer(receiver, config, SocketEndpoint::RECEIVER);
     auto socket_data_buffer = create_socket_data_buffer(receiver, config);
-    write_socket_configs(sender_config_buffer, recv_config_buffer, socket_data_buffer, config, true /* is_sender */);
-    write_socket_configs(recv_config_buffer, sender_config_buffer, socket_data_buffer, config, false /* is_sender */);
+    write_socket_configs(sender_config_buffer, recv_config_buffer, socket_data_buffer, config, SocketEndpoint::SENDER);
+    write_socket_configs(
+        recv_config_buffer, sender_config_buffer, socket_data_buffer, config, SocketEndpoint::RECEIVER);
     auto sender_socket = MeshSocket(
         nullptr,  // The sender socket does not have a data-buffer allocated
         sender_config_buffer,

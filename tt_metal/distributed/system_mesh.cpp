@@ -53,38 +53,10 @@ SystemMesh::Impl::Impl() : physical_coordinates_(get_system_mesh_coordinate_tran
 const MeshShape& SystemMesh::Impl::get_shape() const { return physical_coordinates_.shape(); }
 
 chip_id_t SystemMesh::Impl::get_physical_device_id(const MeshCoordinate& coord) const {
-    const MeshShape& system_shape = this->get_shape();
-    TT_FATAL(
-        coord.dims() == system_shape.dims(),
-        "Coordinate dimensions mismatch: {} != {}",
-        coord.dims(),
-        system_shape.dims());
-    for (size_t i = 0; i < coord.dims(); ++i) {
-        TT_FATAL(
-            coord[i] < system_shape[i],
-            "Coordinate at index {} out of bounds; mesh shape {}, coordinate {}",
-            i,
-            system_shape,
-            coord);
-    }
     return physical_coordinates_.at(coord).chip_id();
 }
 
 uint32_t SystemMesh::Impl::get_physical_mesh_id(const MeshCoordinate& coord) const {
-    const MeshShape& system_shape = this->get_shape();
-    TT_FATAL(
-        coord.dims() == system_shape.dims(),
-        "Coordinate dimensions mismatch: {} != {}",
-        coord.dims(),
-        system_shape.dims());
-    for (size_t i = 0; i < coord.dims(); ++i) {
-        TT_FATAL(
-            coord[i] < system_shape[i],
-            "Coordinate at index {} out of bounds; mesh shape {}, coordinate {}",
-            i,
-            system_shape,
-            coord);
-    }
     return physical_coordinates_.at(coord).mesh_id();
 }
 

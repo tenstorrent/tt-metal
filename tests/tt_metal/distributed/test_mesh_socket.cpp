@@ -21,7 +21,7 @@ using MeshSocketTest = T3000MeshDeviceFixture;
 using MeshSocketTest1DFabric = T3000MeshDevice1DFabricFixture;
 using MeshSocketTest2DFabric = T3000MeshDevice2DFabricFixture;
 
-struct socket_core_mapping {
+struct SocketCoreMapping {
     CoreCoord sender_core;
     CoreCoord receiver_core;
     CoreRange worker_cores;
@@ -220,7 +220,7 @@ void test_single_device_socket_with_workers(
     std::size_t socket_fifo_size,
     std::size_t page_size,
     std::size_t data_size,
-    tt::stl::Span<socket_core_mapping> socket_core_mappings,
+    tt::stl::Span<SocketCoreMapping> socket_core_mappings,
     bool final_ack) {
     CoreRangeSet used_cores;
     uint32_t num_used_cores = 0;
@@ -1985,7 +1985,7 @@ TEST_F(MeshSocketTest, SingleConnectionSingleDeviceSocketWithCBs) {
 
 TEST_F(MeshSocketTest, SingleConnectionSingleDeviceSocketWithWorkersFinalAck) {
     auto md0 = mesh_device_->create_submesh(MeshShape(1, 1), MeshCoordinate(0, 0));
-    std::vector<socket_core_mapping> socket_core_mappings = {
+    std::vector<SocketCoreMapping> socket_core_mappings = {
         {.sender_core = {0, 0},
          .receiver_core = {1, 0},
          .worker_cores = CoreRange({0, 1}, {3, 2}),
@@ -1999,7 +1999,7 @@ TEST_F(MeshSocketTest, SingleConnectionSingleDeviceSocketWithWorkersFinalAck) {
 
 TEST_F(MeshSocketTest, SingleConnectionSingleDeviceSocketWithWorkersLoopAck) {
     auto md0 = mesh_device_->create_submesh(MeshShape(1, 1), MeshCoordinate(0, 0));
-    std::vector<socket_core_mapping> socket_core_mappings = {
+    std::vector<SocketCoreMapping> socket_core_mappings = {
         {.sender_core = {0, 0},
          .receiver_core = {1, 0},
          .worker_cores = CoreRange({0, 1}, {3, 2}),
@@ -2017,7 +2017,7 @@ TEST_F(MeshSocketTest, SingleConnectionSingleDeviceSocketWithWorkersLoopAck) {
 
 TEST_F(MeshSocketTest, MultiConnectionSingleDeviceSocketWithWorkersFinalAck) {
     auto md0 = mesh_device_->create_submesh(MeshShape(1, 1), MeshCoordinate(0, 0));
-    std::vector<socket_core_mapping> socket_core_mappings = {
+    std::vector<SocketCoreMapping> socket_core_mappings = {
         {.sender_core = {0, 0},
          .receiver_core = {1, 0},
          .worker_cores = CoreRange({0, 1}, {1, 2}),
@@ -2036,7 +2036,7 @@ TEST_F(MeshSocketTest, MultiConnectionSingleDeviceSocketWithWorkersFinalAck) {
 
 TEST_F(MeshSocketTest, MultiConnectionSingleDeviceSocketWithWorkersLoopAck) {
     auto md0 = mesh_device_->create_submesh(MeshShape(1, 1), MeshCoordinate(0, 0));
-    std::vector<socket_core_mapping> socket_core_mappings = {
+    std::vector<SocketCoreMapping> socket_core_mappings = {
         {.sender_core = {0, 0},
          .receiver_core = {1, 0},
          .worker_cores = CoreRange({0, 1}, {1, 2}),
