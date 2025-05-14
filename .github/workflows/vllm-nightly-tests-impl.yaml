@@ -57,6 +57,7 @@ jobs:
         LD_LIBRARY_PATH: /work/build/lib
         LOGURU_LEVEL: INFO
         HF_HUB_OFFLINE: 1
+        HF_HOME: /mnt/MLPerf/huggingface
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - /dev/hugepages-1G:/dev/hugepages-1G
@@ -108,9 +109,7 @@ jobs:
             export TT_LLAMA_TEXT_VER="llama3_subdevices"
           fi
 
-          # HuggingFace weights
-          export HF_HOME=/mnt/MLPerf/huggingface
-
+          # Set TT Cache path
           MODEL_ID="${{ matrix.test-group.model }}"
           MODEL_NAME="${MODEL_ID/\//--}"
           export TT_CACHE_PATH="$HF_HOME/tt_cache/$MODEL_NAME"
