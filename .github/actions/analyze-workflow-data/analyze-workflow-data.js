@@ -65,14 +65,14 @@ async function fetchPRInfo(github, context, commitSha) {
 function getWorkflowStats(runs) {
   // Group runs by their original run ID to handle retries and reruns
   const uniqueRuns = new Map();
-  let totalRuns = 0;
-  let successfulRuns = 0;
-  let successfulRunsWithoutRetries = 0;
-  let successfulRunsWithRetries = 0;
+  let totalRunsIncludingRetries = 0;
+  let totalSuccessfulUniqueRuns = 0;
+  let successfulUniqueRunsOnFirstTry = 0;
+  let successfulUniqueRunsWithRetries = 0;
 
   // First pass: identify all unique runs and their attempts
   for (const run of runs) {
-    totalRuns++;
+    totalRunsIncludingRetries++;
 
     // Calculate the original run ID by subtracting (run_attempt - 1) from the current run ID
     const originalRunId = run.run_attempt > 1 ? run.id - (run.run_attempt - 1) : run.id;
@@ -103,14 +103,14 @@ function getWorkflowStats(runs) {
     const lastAttempt = runInfo.lastAttempt;
     if (lastAttempt.conclusion === 'success') {
       runInfo.isSuccessful = true;
-      successfulRuns++;
+      totalSuccessfulUniqueRuns++;
 
       if (lastAttempt.run_attempt === 1) {
         runInfo.succeededOnFirstTry = true;
-        successfulRunsWithoutRetries++;
+        successfulUniqueRunsOnFirstTry++;
       } else {
         runInfo.requiredRetry = true;
-        successfulRunsWithRetries++;
+        successfulUniqueRunsWithRetries++;
       }
     }
   }
@@ -119,9 +119,9 @@ function getWorkflowStats(runs) {
   const eventTypes = [...new Set(uniqueRunsArray.map(r => r.event))].join(', ');
 
   // Calculate rates
-  const successRate = uniqueRunsArray.length === 0 ? "N/A" : (successfulRuns / uniqueRunsArray.length * 100).toFixed(SUCCESS_RATE_DECIMAL_PLACES) + "%";
-  const uniqueSuccessRate = uniqueRunsArray.length === 0 ? "N/A" : (successfulRunsWithoutRetries / uniqueRunsArray.length * 100).toFixed(SUCCESS_RATE_DECIMAL_PLACES) + "%";
-  const retryRate = successfulRuns === 0 ? "N/A" : (successfulRunsWithRetries / successfulRuns * 100).toFixed(SUCCESS_RATE_DECIMAL_PLACES) + "%";
+  const successRate = uniqueRunsArray.length === 0 ? "N/A" : (totalSuccessfulUniqueRuns / uniqueRunsArray.length * 100).toFixed(SUCCESS_RATE_DECIMAL_PLACES) + "%";
+  const uniqueSuccessRate = uniqueRunsArray.length === 0 ? "N/A" : (successfulUniqueRunsOnFirstTry / uniqueRunsArray.length * 100).toFixed(SUCCESS_RATE_DECIMAL_PLACES) + "%";
+  const retryRate = totalSuccessfulUniqueRuns === 0 ? "N/A" : (successfulUniqueRunsWithRetries / totalSuccessfulUniqueRuns * 100).toFixed(SUCCESS_RATE_DECIMAL_PLACES) + "%";
 
   return {
     eventTypes,
@@ -129,8 +129,8 @@ function getWorkflowStats(runs) {
     uniqueSuccessRate,
     retryRate,
     uniqueRuns: uniqueRunsArray.length,
-    totalRuns,
-    successfulRuns
+    totalRuns: totalRunsIncludingRetries,
+    successfulRuns: totalSuccessfulUniqueRuns
   };
 }
 
@@ -270,15 +270,16 @@ async function buildReport(grouped, github, context) {
     `# Workflow Summary (Last ${days} Days) - Generated at ${timestamp}\n`,
     await generateSummaryBox(grouped, github, context),
     '\n## Column Descriptions\n',
+    'A unique run represents a single workflow execution, which may have multiple retry attempts. For example, if a workflow fails and is retried twice, this counts as one unique run with three attempts (initial run + two retries).\n',
     '| Column | Description |',
     '|--------|-------------|',
     '| Workflow | Name of the workflow with link to its GitHub Actions page |',
     '| Event Type(s) | Types of events that trigger this workflow (e.g., push, pull_request, schedule) |',
-    '| Total Runs | Total number of PR checks including all attempts |',
-    '| Successful Runs | Number of PRs that passed the workflow (including those that passed after retries) |',
-    '| Success Rate | Percentage of PRs that passed the workflow (e.g., 3/5 PRs passed = 60%) |',
-    '| Unique Success Rate | Percentage of PRs that passed on their first attempt without retries (e.g., 1/5 PRs passed without retries = 20%) |',
-    '| Retry Rate | Percentage of successful PRs that required retries to pass (e.g., 2/3 successful PRs needed retries = 66.67%) |',
+    '| Total Runs | Total number of workflow runs including all retry attempts (e.g., 1 unique run with 2 retries = 3 total runs) |',
+    '| Successful Runs | Number of unique workflow runs that eventually succeeded, regardless of whether they needed retries |',
+    '| Success Rate | Percentage of unique workflow runs that eventually succeeded (e.g., 3/5 unique runs succeeded = 60%) |',
+    '| Unique Success Rate | Percentage of unique workflow runs that succeeded on their first attempt without needing retries (e.g., 1/5 unique runs succeeded on first try = 20%) |',
+    '| Retry Rate | Percentage of successful unique runs that needed retries to succeed (e.g., of 3 successful unique runs, 2 needed retries = 66.67%) |',
     '| Last Run on `main` | Status of the most recent run on the main branch (✅ for success, ❌ for failure) |',
     '| Last SHA | Short SHA of the most recent run on main |',
     '| Last Run | Link to the most recent run on main, with attempt number if applicable |',
