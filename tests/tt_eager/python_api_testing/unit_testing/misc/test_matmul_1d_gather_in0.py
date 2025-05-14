@@ -362,8 +362,8 @@ def run_multi_core_matmul_1d(
             dtype=output_dtype,
         )
     signpost("stop")
+    breakpoint()
     tt_out = ttnn.to_torch(output_t)
-    # breakpoint()
     pt_out = in0 @ in1
 
     if activation:
@@ -796,6 +796,20 @@ def test_multi_core_matmul_1d_gs(
             32,
             2048,
             1280,
+            ttnn.bfloat8_b,
+            ttnn.bfloat8_b,
+            ttnn.bfloat16,
+            ttnn.MathFidelity.HiFi2,
+            True,
+            True,
+            PREFETCHER_NOC1_GRID,
+            False,
+        ),
+        (
+            1,
+            32,
+            2048,
+            1280,
             ttnn.bfloat16,
             ttnn.bfloat8_b,
             ttnn.bfloat8_b,
@@ -863,6 +877,7 @@ def test_multi_core_matmul_1d_gs(
         ),
     ],
     ids=[
+        "qkv_rm",
         "qkv",
         "do",
         "ff13",
