@@ -458,8 +458,7 @@ BinaryNgDeviceOperation::invoke(
 
     DataType dtype_a = input_tensor_a.get_dtype();
     DataType dtype_b = input_tensor_b.get_dtype();
-    bool device_check = input_tensor_a.device()->arch() != tt::ARCH::GRAYSKULL;
-    bool is_sfpu_op = (utils::is_binary_sfpu_op(binary_op_type, dtype_a, dtype_b) && device_check);
+    bool is_sfpu_op = (utils::is_binary_sfpu_op(binary_op_type, dtype_a, dtype_b));
     bool is_quant_op = utils::is_quant_op(binary_op_type);
     return {
         operation_attributes_t{
@@ -492,8 +491,7 @@ BinaryNgDeviceOperation::invoke(
     tt::stl::Span<const unary::UnaryWithParam> rhs_activations,
     tt::stl::Span<const unary::UnaryWithParam> post_activations) {
     DataType dtype_a = input_tensor_a.get_dtype();
-    bool device_check = input_tensor_a.device()->arch() != tt::ARCH::GRAYSKULL;
-    bool is_sfpu_op = (utils::is_binary_sfpu_op(binary_op_type, dtype_a, dtype_a) && device_check);
+    bool is_sfpu_op = (utils::is_binary_sfpu_op(binary_op_type, dtype_a, dtype_a));
     bool is_quant_op = utils::is_quant_op(binary_op_type);
     return {
         operation_attributes_t{
