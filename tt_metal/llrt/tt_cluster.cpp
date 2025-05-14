@@ -1264,16 +1264,12 @@ void Cluster::set_internal_routing_info_for_ethernet_cores(bool enable_internal_
     std::vector<chip_id_t> mmio_devices = target_mmio_devices;
     if (mmio_devices.size() == 0) {
         mmio_devices.reserve(this->number_of_pci_devices());
-        for (auto chip_id : this->driver_->get_target_device_ids()) {
-            if (this->cluster_desc_->is_chip_mmio_capable(chip_id)) {
-                mmio_devices.emplace_back(chip_id);
-            }
+        for (auto chip_id : this->driver_->get_target_mmio_device_ids()) {
+            mmio_devices.emplace_back(chip_id);
         }
     }
-    for (auto chip_id : this->driver_->get_target_device_ids()) {
-        if (this->cluster_desc_->is_chip_remote(chip_id)) {
-            non_mmio_devices.emplace_back(chip_id);
-        }
+    for (auto chip_id : this->driver_->get_target_remote_device_ids()) {
+        non_mmio_devices.emplace_back(chip_id);
     }
 
     if (enable_internal_routing) {
