@@ -210,7 +210,16 @@ void PagedUpdateCacheDeviceOperation::validate(
             validateFusedUpdateTensors(input_tensors.at(1), input_tensors.at(3));
         }
     } else if (this->op_type == PagedUpdateCacheOpType::FILL) {
-        validateFillOperation(input_tensors.at(0), input_tensors.at(1), input_tensors.at(2), this->batch_idx);
+        // Validate based on batch_idx_fallback for the host-side check
+        validateFillOperation(input_tensors.at(0), input_tensors.at(1), input_tensors.at(2), this->batch_idx_fallback);
+        if (this->batch_idx_tensor_opt.has_value()) {
+            const auto& tensor = this->batch_idx_tensor_opt.value();
+            TT_FATAL(tensor.volume() == 1, "Batch idx tensor must have a single element");
+            TT_FATAL(
+                tensor.get_dtype() == DataType::UINT32 || tensor.get_dtype() == DataType::INT32,
+                "Batch idx tensor must be an integer type");
+            // Add any other necessary validation for the tensor itself
+        }
     }
 }
 
@@ -265,7 +274,8 @@ operation::ProgramWithCallbacks PagedUpdateCacheDeviceOperation::create_program(
                 const auto& cache_tensor = input_tensors.at(0);
                 const auto& input_tensor = input_tensors.at(1);
                 const auto& page_table = input_tensors.at(2);
-                return detail::paged_fill_cache_multi_core(cache_tensor, input_tensor, page_table, this->batch_idx);
+                return detail::paged_fill_cache_multi_core(
+                    cache_tensor, input_tensor, page_table, this->batch_idx_tensor_opt, this->batch_idx_fallback);
             }
     };
 }
