@@ -161,7 +161,7 @@ async function buildReport(grouped, github, context) {
 
 /**
  * Main entrypoint for the action.
- * Loads cached workflow data, filters by workflow name or prefix, and generates a summary report.
+ * Loads cached workflow data, filters by workflow configurations, and generates a summary report.
  */
 async function run() {
   try {
@@ -172,22 +172,47 @@ async function run() {
     }
     // Load cached data
     const grouped = JSON.parse(fs.readFileSync(cachePath, 'utf8'));
-    // Get matrix inputs
-    const workflowName = core.getInput('workflow_name');
-    const namePrefix = core.getInput('name_prefix');
-    // Filter the grouped data for this job
-    const filteredGrouped = [];
-    for (const [name, runs] of grouped) {
-      if (workflowName && name === workflowName) {
-        filteredGrouped.push([name, runs]);
-      } else if (namePrefix && name.startsWith(namePrefix)) {
-        filteredGrouped.push([name, runs]);
+    // Get workflow configurations
+    const workflowConfigs = JSON.parse(core.getInput('workflow_configs', { required: true }));
+
+    // Track failed workflows
+    const failedWorkflows = [];
+
+    // Filter and process each workflow configuration
+    const filteredGrouped = new Map();
+    for (const config of workflowConfigs) {
+      for (const [name, runs] of grouped) {
+        if (config.wkflw_name && name === config.wkflw_name) {
+          filteredGrouped.set(name, runs);
+          // Check if latest run on main is failing
+          const mainBranchRuns = runs
+            .filter(r => r.head_branch === 'main')
+            .sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+          if (mainBranchRuns[0]?.conclusion !== 'success') {
+            failedWorkflows.push(name);
+          }
+        } else if (config.wkflw_prefix && name.startsWith(config.wkflw_prefix)) {
+          filteredGrouped.set(name, runs);
+          // Check if latest run on main is failing
+          const mainBranchRuns = runs
+            .filter(r => r.head_branch === 'main')
+            .sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+          if (mainBranchRuns[0]?.conclusion !== 'success') {
+            failedWorkflows.push(name);
+          }
+        }
       }
     }
+
     // Create authenticated Octokit client for PR info
     const octokit = github.getOctokit(core.getInput('GITHUB_TOKEN', { required: true }));
     // Generate report
-    const report = await buildReport(new Map(filteredGrouped), octokit, github.context);
+    const report = await buildReport(filteredGrouped, octokit, github.context);
+
+    // Set outputs
+    core.setOutput('failed_workflows', JSON.stringify(failedWorkflows));
+    core.setOutput('report', report);
+
     await core.summary.addRaw(report).write();
   } catch (error) {
     core.setFailed(error.message);

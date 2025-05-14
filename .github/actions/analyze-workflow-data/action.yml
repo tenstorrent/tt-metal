@@ -3,17 +3,30 @@ description: 'Analyzes cached workflow run data and generates a report'
 
 inputs:
   cache-path:
-    description: 'Path to the cached workflow data file'
+    description: 'Path to the cached workflow data file. This file should contain the workflow run data in JSON format.'
     required: true
   GITHUB_TOKEN:
-    description: 'GitHub token for API access'
+    description: 'GitHub token for API access. Used to fetch PR information and workflow details.'
     required: true
-  workflow_name:
-    description: 'Exact workflow name to match'
-    required: false
-  name_prefix:
-    description: 'Workflow name prefix to match'
-    required: false
+  workflow_configs:
+    description: |
+      JSON array of workflow configurations. Each config object should have:
+      - display: Human-readable name for the workflow group
+      - wkflw_name: Exact workflow name to match (mutually exclusive with wkflw_prefix)
+      - wkflw_prefix: Prefix to match workflow names (mutually exclusive with wkflw_name)
+
+      Example:
+      [
+        {"display": "All post-commit tests", "wkflw_name": "All post-commit tests"},
+        {"display": "(TG) prefix", "wkflw_prefix": "(TG)"}
+      ]
+    required: true
+
+outputs:
+  failed_workflows:
+    description: 'JSON array of workflow names that have failed their latest run on the main branch'
+  report:
+    description: 'The generated workflow report in markdown format, containing workflow statistics and failure details'
 
 runs:
   using: 'node20'
