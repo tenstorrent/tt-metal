@@ -235,14 +235,14 @@ async function generateSummaryBox(grouped, github, context) {
     const workflowLink = getWorkflowLink(context, runs[0]?.path);
     const runInfo = await getLastRunInfo(mainBranchRuns, github, context);
 
-    const row = `| [${name}](${workflowLink}) | ${stats.eventTypes || 'unknown'} | ${stats.totalRuns} | ${stats.uniqueRuns} | ${stats.successfulRuns} | ${stats.successRate} | ${stats.uniqueSuccessRate} | ${stats.retryRate} | ${runInfo.status} | ${runInfo.sha} | ${runInfo.run} | ${runInfo.pr} | ${runInfo.title} | ${runInfo.earliestBadSha} | ${runInfo.lastGoodSha} |`;
+    const row = `| [${name}](${workflowLink}) | ${stats.eventTypes || 'unknown'} | ${stats.totalRuns} | ${stats.successfulRuns} | ${stats.successRate} | ${stats.uniqueSuccessRate} | ${stats.retryRate} | ${runInfo.status} | ${runInfo.sha} | ${runInfo.run} | ${runInfo.pr} | ${runInfo.title} | ${runInfo.earliestBadSha} | ${runInfo.lastGoodSha} |`;
     rows.push(row);
   }
 
   return [
     '## Workflow Summary',
-    '| Workflow | Event Type(s) | Total Runs | Unique Runs | Successful Runs | Success Rate | Unique Success Rate | Retry Rate | Last Run on `main` | Last SHA | Last Run | Last PR | PR Title | Earliest Bad SHA | Last Good SHA |',
-    '|----------|---------------|------------|-------------|-----------------|--------------|-------------------|------------|-------------------|----------|----------|---------|-----------|------------------|---------------|',
+    '| Workflow | Event Type(s) | Total Runs | Successful Runs | Success Rate | Unique Success Rate | Retry Rate | Last Run on `main` | Last SHA | Last Run | Last PR | PR Title | Earliest Bad SHA | Last Good SHA |',
+    '|----------|---------------|------------|-----------------|--------------|-------------------|------------|-------------------|----------|----------|---------|-----------|------------------|---------------|',
     ...rows,
     ''  // Empty line for better readability
   ].join('\n');
@@ -260,7 +260,24 @@ async function buildReport(grouped, github, context) {
   const days = core.getInput('days', { required: false }) || DEFAULT_LOOKBACK_DAYS;
   return [
     `# Workflow Summary (Last ${days} Days)\n`,
-    await generateSummaryBox(grouped, github, context)
+    await generateSummaryBox(grouped, github, context),
+    '\n## Column Descriptions\n',
+    '| Column | Description |',
+    '|--------|-------------|',
+    '| Workflow | Name of the workflow with link to its GitHub Actions page |',
+    '| Event Type(s) | Types of events that trigger this workflow (e.g., push, pull_request, schedule) |',
+    '| Total Runs | Total number of PR checks including all attempts |',
+    '| Successful Runs | Number of PRs that passed the workflow (including those that passed after retries) |',
+    '| Success Rate | Percentage of PRs that passed the workflow (e.g., 3/5 PRs passed = 60%) |',
+    '| Unique Success Rate | Percentage of PRs that passed on their first attempt without retries (e.g., 1/5 PRs passed without retries = 20%) |',
+    '| Retry Rate | Percentage of successful PRs that required retries to pass (e.g., 2/3 successful PRs needed retries = 66.67%) |',
+    '| Last Run on `main` | Status of the most recent run on the main branch (✅ for success, ❌ for failure) |',
+    '| Last SHA | Short SHA of the most recent run on main |',
+    '| Last Run | Link to the most recent run on main, with attempt number if applicable |',
+    '| Last PR | Link to the PR associated with the most recent run, if any |',
+    '| PR Title | Title of the PR associated with the most recent run, if any |',
+    '| Earliest Bad SHA | Short SHA of the earliest failing run on main (only shown if last run failed) |',
+    '| Last Good SHA | Short SHA of the last successful run on main |'
   ].join('\n');
 }
 
