@@ -347,9 +347,12 @@ async function run() {
     // Filter and process each workflow configuration
     const filteredGrouped = new Map();
     for (const config of workflowConfigs) {
+      core.info(`Processing config: ${JSON.stringify(config)}`);
       for (const [name, runs] of grouped) {
+        core.info(`Checking workflow: ${name}`);
         if ((config.wkflw_name && name === config.wkflw_name) ||
             (config.wkflw_prefix && name.startsWith(config.wkflw_prefix))) {
+          core.info(`Matched workflow: ${name} with config: ${JSON.stringify(config)}`);
           // Filter runs by date range
           const filteredRuns = filterRunsByDate(runs, days);
           if (filteredRuns.length > 0) {
