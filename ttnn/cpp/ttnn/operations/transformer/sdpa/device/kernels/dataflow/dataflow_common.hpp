@@ -12,6 +12,28 @@ constexpr uint32_t get_barrier_read_threshold() {
     return ((512 / num_readers) * (1024 + 128)) / tile_bytes;
 }
 
+template <uint32_t tile_bytes>
+void fill_tile_zeros(uint32_t cb_id, uint32_t tile_id) {
+    static_assert(tile_bytes % 4 == 0, "tile_bytes must be a multiple of 4");
+
+    uint64_t zeros_noc_addr = get_noc_addr(MEM_ZEROS_BASE);
+    uint32_t write_addr = get_write_ptr(cb_id) + tile_id * tile_bytes;
+    volatile tt_l1_ptr uint32_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(write_addr);
+
+    // Fill tile with zeros
+    uint32_t bytes_left = tile_bytes;
+    for (;;) {
+        uint32_t read_size = bytes_left > MEM_ZEROS_SIZE ? MEM_ZEROS_SIZE : bytes_left;
+        noc_async_read(zeros_noc_addr, write_addr, read_size);
+        write_addr += read_size;
+        bytes_left -= read_size;
+        if (bytes_left == 0) {
+            break;
+        }
+    }
+    noc_async_read_barrier();
+}
+
 template <uint32_t num_heads, uint32_t block_size_t, uint32_t Wt>
 uint32_t virtual_seq_tile_id_to_physical_tile_id(
     uint32_t seq_tile_idx, uint32_t cur_head, const volatile tt_l1_ptr uint32_t* const page_table_ptr) {
@@ -51,7 +73,7 @@ public:
     }
 };
 
-template <bool is_dram = true>
+template <bool is_dram = true, uint32_t tile_bytes>
 void read_chunk_with_padding(
     const InterleavedAddrGenFast<is_dram>& reader,
     const uint32_t cb_id,
@@ -60,7 +82,6 @@ void read_chunk_with_padding(
     const uint32_t src_cols,
     const uint32_t dst_rows,
     const uint32_t dst_cols,
-    const uint32_t tile_bytes,
     const uint32_t barrier_threshold,
     const bool transpose = false) {
     /*
@@ -90,6 +111,16 @@ void read_chunk_with_padding(
                 noc_async_read_barrier();
                 barrier_count = 0;
             }
+        }
+    }
+
+    // Zero out the padding
+    for (uint32_t row = 0; row < dst_rows; ++row) {
+        for (uint32_t col = 0; col < dst_cols; ++col) {
+            if (row < src_rows && col < src_cols) {
+                continue;
+            }
+            fill_tile_zeros<tile_bytes>(cb_id, row * dst_cols + col);
         }
     }
     noc_async_read_barrier();
@@ -145,28 +176,6 @@ template <uint32_t tile_bytes>
 void copy_tile(uint64_t noc_read_addr_base, uint32_t q_write_ptr_base, uint32_t src_tile_id, uint32_t dst_tile_id) {
     noc_async_read(
         noc_read_addr_base + src_tile_id * tile_bytes, q_write_ptr_base + dst_tile_id * tile_bytes, tile_bytes);
-}
-
-template <uint32_t tile_bytes>
-void fill_tile_zeros(uint32_t cb_id, uint32_t tile_id) {
-    static_assert(tile_bytes % 4 == 0, "tile_bytes must be a multiple of 4");
-
-    uint64_t zeros_noc_addr = get_noc_addr(MEM_ZEROS_BASE);
-    uint32_t write_addr = get_write_ptr(cb_id) + tile_id * tile_bytes;
-    volatile tt_l1_ptr uint32_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(write_addr);
-
-    // Fill tile with zeros
-    uint32_t bytes_left = tile_bytes;
-    for (;;) {
-        uint32_t read_size = bytes_left > MEM_ZEROS_SIZE ? MEM_ZEROS_SIZE : bytes_left;
-        noc_async_read(zeros_noc_addr, write_addr, read_size);
-        write_addr += read_size;
-        bytes_left -= read_size;
-        if (bytes_left == 0) {
-            break;
-        }
-    }
-    noc_async_read_barrier();
 }
 
 template <uint32_t tile_bytes>

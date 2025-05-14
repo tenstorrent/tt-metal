@@ -145,16 +145,8 @@ void kernel_main() {
                 const uint32_t q_row_tile_count = q_row_end_tile - q_row_start_tile;
                 const uint32_t q_tile_id = q_tile_shape.id_of(nb, nq, q_row_start_tile, 0);
 
-                read_chunk_with_padding(
-                    q_reader,
-                    cb_q_in,
-                    q_tile_id,
-                    q_row_tile_count,
-                    DHt,
-                    Sq_chunk_t,
-                    DHt,
-                    q_tile_bytes,
-                    barrier_threshold);
+                read_chunk_with_padding<is_dram, q_tile_bytes>(
+                    q_reader, cb_q_in, q_tile_id, q_row_tile_count, DHt, Sq_chunk_t, DHt, barrier_threshold);
 
                 if constexpr (is_chunked) {
                     q_chunk = chunked_q_chunk_offset + q_chunk;
@@ -198,7 +190,7 @@ void kernel_main() {
                             true  // transpose=true for K reads
                         );
                     } else {
-                        read_chunk_with_padding(
+                        read_chunk_with_padding<is_dram, k_tile_bytes>(
                             k_reader,
                             cb_k_in,
                             k_start_tile_id,
@@ -206,7 +198,6 @@ void kernel_main() {
                             DHt,
                             Sk_chunk_t,
                             DHt,
-                            k_tile_bytes,
                             barrier_threshold,
                             true  // transpose=true for K reads
                         );
@@ -259,7 +250,7 @@ void kernel_main() {
                             page_table_ptr,
                             false);
                     } else {
-                        read_chunk_with_padding(
+                        read_chunk_with_padding<is_dram, v_tile_bytes>(
                             v_reader,
                             cb_v_in,
                             k_start_tile_id,
@@ -267,7 +258,6 @@ void kernel_main() {
                             DHt,
                             Sk_chunk_t,
                             DHt,
-                            v_tile_bytes,
                             barrier_threshold,
                             false);
                     }
