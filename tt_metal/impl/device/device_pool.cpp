@@ -729,10 +729,16 @@ bool DevicePool::close_devices(const std::vector<IDevice*>& devices, bool skip_s
     detail::ProfilerSync(ProfilerSyncState::CLOSE_DEVICE);
 
     tt::tt_metal::MetalContext::instance().get_cluster().set_internal_routing_info_for_ethernet_cores(false);
+
+    bool pass = true;
+    std::vector<IDevice*> prev_active_devices;
     for (const auto& dev_id : devices_to_close) {
         auto dev = tt::DevicePool::instance().get_active_device(dev_id);
-        dev->close();
+        prev_active_devices.push_back(dev);
+        pass &= dev->close();
     }
+    // After this point devices are no longer active and only basic functions such as id, mmio device, etc. can
+    // be queried from the Device. prev_active_devices saves previously active devices for additional termination steps.
 
     // Terminate sent to each device. Wait for dispatch to finish
     for (const auto& dev_id : devices_to_close) {
@@ -751,7 +757,7 @@ bool DevicePool::close_devices(const std::vector<IDevice*>& devices, bool skip_s
         const auto edm_config = tt_fabric::get_tt_fabric_config();
 
         auto fabric_router_sync_sem_addr = edm_config.termination_signal_address;
-        for (const auto& dev : this->get_all_active_devices()) {
+        for (const auto& dev : prev_active_devices) {
             if (dev->is_mmio_capable() &&
                 (tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type() == tt::ClusterType::TG)) {
                 // 1d fabric is not launched on TG gateways
@@ -777,7 +783,7 @@ bool DevicePool::close_devices(const std::vector<IDevice*>& devices, bool skip_s
         auto control_plane = tt::tt_metal::MetalContext::instance().get_cluster().get_control_plane();
         std::vector<uint32_t> master_router_terminate(1, 0);
         auto fabric_router_sync_sem_addr = tt::tt_metal::hal::get_erisc_l1_unreserved_base();
-        for (const auto& dev : this->get_all_active_devices()) {
+        for (const auto& dev : prev_active_devices) {
             auto [mesh_id, chip_id] = control_plane->get_mesh_chip_id_from_physical_chip_id(dev->id());
 
             auto router_chans_and_direction = control_plane->get_active_fabric_eth_channels(mesh_id, chip_id);
