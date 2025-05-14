@@ -631,6 +631,9 @@ def test_llama_TG_perf_device(
     ), f"Expected {len(perf_targets)} operations, got {len(kernel_duration_per_instance_averaged_dict_compilation)}. If the number or type of operations changed, expected times must be updated."
 
     passing = True
+    logger.info(
+        "[TODO] NOTE: THE DEVICE TEST BEING MEASURED IS NOT RUN WITH TRACE MODE. OP-TO-OP TIMES ARE NOT ACCURATE"
+    )
     for op_code_with_id in kernel_duration_per_instance_averaged_dict_compilation.keys():
         if op_code_with_id in perf_targets:
             op_name = perf_targets[op_code_with_id]["op_name"]
@@ -695,9 +698,7 @@ def test_llama_TG_perf_device(
                 - perf_targets[op_code_with_id]["kernel_duration_relative_margin"]
                 * perf_targets[op_code_with_id]["kernel_duration"]
             )
-            logger.info(
-                "[TODO] NOTE: THE DEVICE TEST BEING MEASURED IS NOT RUN WITH TRACE MODE. OP-TO-OP TIMES ARE NOT ACCURATE"
-            )
+
             if avg_kernel_duration > upper_limit:
                 passing = False
                 logger.info(
