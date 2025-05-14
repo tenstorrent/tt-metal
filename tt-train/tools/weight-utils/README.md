@@ -54,7 +54,7 @@ uv run tinyllama_export.py [-i INPUT_PATH] [-o OUTPUT_PATH] [--hf_model HF_MODEL
 ## Synopsis
 
 ``` shell
-uv run gpt2_export.py INPUT_FILE OUTPUT_FILE
+uv run gpt2_export.py INPUT_FILE OUTPUT_FILE [-t DUMP_TOKENIZER_PATH]
 ```
 
 ## Details
@@ -62,3 +62,6 @@ uv run gpt2_export.py INPUT_FILE OUTPUT_FILE
   - Path to the input msgpack file containing the existing GPT-2 weights.
 - `OUTPUT_FILE`
   - Path where the updated msgpack file will be saved.
+- `-t, --dump_tokenizer_path=PATH`
+  - Path to the output tokenizer file. If not given, the tokenizer will not be
+    exported.
