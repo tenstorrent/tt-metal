@@ -41,12 +41,14 @@ void kernel_launch(uint32_t kernel_base_addr) {
 #else
     extern uint32_t __kernel_init_local_l1_base[];
     extern uint32_t __kernel_text_start[];
+#if !defined(NCRISC_FIRMWARE_KERNEL_SPLIT)
+    extern uint32_t __kernel_data_lma[];
     auto lma_1 = (kernel_base_addr + (uint32_t)__kernel_init_local_l1_base -
                   (uint32_t)__kernel_text_start);
-    extern uint32_t __kernel_data_lma[];
     auto lma_2 = (uint32_t)__kernel_data_lma;
     if (lma_1 != lma_2)
         return;
+#endif
     do_crt1((uint32_t tt_l1_ptr*)(kernel_base_addr + (uint32_t)__kernel_init_local_l1_base -
                                   (uint32_t)__kernel_text_start));
 
