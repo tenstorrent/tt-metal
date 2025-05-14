@@ -66,8 +66,7 @@ ttnn::Tensor InterleavedToShardedOperation::invoke(
         },
         grid);
     ShardSpec shard_spec(grid_set, shard_shape, shard_orientation);
-    MemoryConfig sharded_mem_config =
-        MemoryConfig{.memory_layout = shard_scheme, .buffer_type = BufferType::L1, .shard_spec = shard_spec};
+    MemoryConfig sharded_mem_config = MemoryConfig{shard_scheme, BufferType::L1, shard_spec};
 
     return operation::run(
                InterleavedToShardedDeviceOperation{

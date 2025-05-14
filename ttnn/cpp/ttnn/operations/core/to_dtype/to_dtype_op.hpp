@@ -24,25 +24,15 @@ inline Tensor convert_to_cpp_supported_dtype(const Tensor& input_tensor) {
     auto input_dtype = input_tensor.get_dtype();
 
     auto buffer = std::visit(
-        [](auto&& storage) -> tt::tt_metal::HostBuffer {
-            using T = std::decay_t<decltype(storage)>;
-            if constexpr (std::is_same_v<T, tt::tt_metal::HostStorage>) {
-                return storage.buffer;
-            } else if constexpr (std::is_same_v<T, tt::tt_metal::DeviceStorage>) {
-                TT_THROW("Device input_tensor cannot be converted to torch");
-            } else if constexpr (std::is_same_v<T, tt::tt_metal::MultiDeviceHostStorage>) {
-                TT_THROW(
-                    "Tensor MultiDeviceHostStorage cannot be converted to torch directly. Use composer(..) "
-                    "functionality.");
-            } else {
-                tt::tt_metal::raise_unsupported_storage<T>();
-            }
+        tt::stl::overloaded{
+            [](const tt::tt_metal::HostStorage& storage) -> tt::tt_metal::HostBuffer { return storage.buffer; },
+            [](const auto& storage) -> tt::tt_metal::HostBuffer { TT_THROW("Unsupported storage type."); },
         },
         input_tensor.get_storage());
 
     auto create_tensor = [&](tt::tt_metal::HostBuffer&& buffer, DataType dtype) -> Tensor {
         return Tensor(
-            tt::tt_metal::HostStorage{std::move(buffer)},
+            std::move(buffer),
             TensorSpec(
                 input_tensor.get_logical_shape(),
                 tt::tt_metal::TensorLayout::fromPaddedShape(
@@ -57,14 +47,12 @@ inline Tensor convert_to_cpp_supported_dtype(const Tensor& input_tensor) {
         tt::stl::Span<const uint32_t> uint32_data = tt::tt_metal::host_buffer::get_as<uint32_t>(buffer);
         auto float_unpacked_data =
             unpack_bfp8_tiles_into_float_vec(uint32_data, /*row_major_output=*/false, /*is_exp_a=*/false);
-        return create_tensor(
-            tt::tt_metal::host_buffer::create<float>(std::move(float_unpacked_data)), DataType::FLOAT32);
+        return create_tensor(tt::tt_metal::HostBuffer(std::move(float_unpacked_data)), DataType::FLOAT32);
     } else if (input_dtype == DataType::BFLOAT4_B) {
         tt::stl::Span<const uint32_t> uint32_data = tt::tt_metal::host_buffer::get_as<uint32_t>(buffer);
         auto float_unpacked_data =
             unpack_bfp4_tiles_into_float_vec(uint32_data, /*row_major_output=*/false, /*is_exp_a=*/false);
-        return create_tensor(
-            tt::tt_metal::host_buffer::create<float>(std::move(float_unpacked_data)), DataType::FLOAT32);
+        return create_tensor(tt::tt_metal::HostBuffer(std::move(float_unpacked_data)), DataType::FLOAT32);
     } else {
         return input_tensor;
     }
@@ -90,19 +78,6 @@ std::vector<NewT> cast(tt::stl::Span<const OldT> input_buffer) {
 }
 
 template <typename T>
-Tensor create_owned_tensor(
-    std::vector<T>&& data, const Shape& logical_shape, const Shape& padded_shape, DataType data_type, Layout layout) {
-    auto buffer = tt::tt_metal::host_buffer::create(std::move(data));
-    auto storage = tt::tt_metal::HostStorage{std::move(buffer)};
-    return Tensor(
-        std::move(storage),
-        TensorSpec(
-            logical_shape,
-            tt::tt_metal::TensorLayout::fromPaddedShape(
-                data_type, tt::tt_metal::PageConfig(layout), MemoryConfig{}, logical_shape, padded_shape)));
-}
-
-template <typename T>
 Tensor create_tensor_from_span(
     tt::stl::Span<const T> input_buffer,
     const Shape& logical_shape,
@@ -112,48 +87,47 @@ Tensor create_tensor_from_span(
     switch (dtype) {
         case DataType::UINT16: {
             auto data = cast<uint16_t, T>(input_buffer);
-            return create_owned_tensor(std::move(data), logical_shape, padded_shape, dtype, Layout::ROW_MAJOR)
+            return Tensor(
+                       tt::tt_metal::HostBuffer(std::move(data)), logical_shape, padded_shape, dtype, Layout::ROW_MAJOR)
                 .to_layout(input_layout);
         }
         case DataType::INT32: {
             auto data = cast<int32_t, T>(input_buffer);
-            return create_owned_tensor(std::move(data), logical_shape, padded_shape, dtype, Layout::ROW_MAJOR)
+            return Tensor(
+                       tt::tt_metal::HostBuffer(std::move(data)), logical_shape, padded_shape, dtype, Layout::ROW_MAJOR)
                 .to_layout(input_layout);
         }
         case DataType::UINT32: {
             auto data = cast<uint32_t, T>(input_buffer);
-            return create_owned_tensor(std::move(data), logical_shape, padded_shape, dtype, Layout::ROW_MAJOR)
+            return Tensor(
+                       tt::tt_metal::HostBuffer(std::move(data)), logical_shape, padded_shape, dtype, Layout::ROW_MAJOR)
                 .to_layout(input_layout);
         }
         case DataType::FLOAT32: {
             auto data = cast<float, T>(input_buffer);
-            return create_owned_tensor(std::move(data), logical_shape, padded_shape, dtype, Layout::ROW_MAJOR)
+            return Tensor(
+                       tt::tt_metal::HostBuffer(std::move(data)), logical_shape, padded_shape, dtype, Layout::ROW_MAJOR)
                 .to_layout(input_layout);
         }
         case DataType::BFLOAT16: {
             auto data = cast<::bfloat16, T>(input_buffer);
-            return create_owned_tensor(std::move(data), logical_shape, padded_shape, dtype, Layout::ROW_MAJOR)
+            return Tensor(
+                       tt::tt_metal::HostBuffer(std::move(data)), logical_shape, padded_shape, dtype, Layout::ROW_MAJOR)
                 .to_layout(input_layout);
         }
         case DataType::BFLOAT8_B:
         case DataType::BFLOAT4_B: {
             auto data = cast<float, T>(input_buffer);
-            auto buffer = tt::tt_metal::host_buffer::create<float>(std::move(data));
-            auto tensor = Tensor(
-                              tt::tt_metal::HostStorage{std::move(buffer)},
-                              logical_shape,
-                              padded_shape,
-                              DataType::FLOAT32,
-                              Layout::ROW_MAJOR)
+            auto buffer = tt::tt_metal::HostBuffer(std::move(data));
+            auto tensor = Tensor(std::move(buffer), logical_shape, padded_shape, DataType::FLOAT32, Layout::ROW_MAJOR)
                               .to_layout(Layout::TILE);
             tt::stl::Span<const float> output_float_data = tt::tt_metal::host_buffer::get_as<float>(tensor);
             auto output_packed_data =
                 dtype == DataType::BFLOAT8_B
                     ? pack_fp32_vec_as_bfp8_tiles(output_float_data, /*row_major_input=*/false, /*is_exp_a=*/false)
                     : pack_fp32_vec_as_bfp4_tiles(output_float_data, /*row_major_input=*/false, /*is_exp_a=*/false);
-            auto output_buffer = tt::tt_metal::host_buffer::create<uint32_t>(std::move(output_packed_data));
             return Tensor(
-                tt::tt_metal::HostStorage{std::move(output_buffer)},
+                tt::tt_metal::HostBuffer(std::move(output_packed_data)),
                 logical_shape,
                 padded_shape,
                 dtype,
@@ -200,8 +174,8 @@ inline Tensor convert_to_dtype(const Tensor& input_tensor, const Layout& input_l
     TT_FATAL(!is_device_tensor(input_tensor), "to_dtype only supports host tensors");
 
     // TODO: #15840 - Treat multi-device host vs owned/borrowed tensors uniformly.
-    return distributed::is_multi_device_host_tensor(input_tensor) ? transform(input_tensor, convert_dtype)
-                                                                  : convert_dtype(input_tensor);
+    return tt::tt_metal::is_multi_device_host_tensor(input_tensor) ? transform(input_tensor, convert_dtype)
+                                                                   : convert_dtype(input_tensor);
 }
 
 }  // namespace detail
@@ -221,7 +195,7 @@ struct ToDtype {
         auto row_major_input_tensor = input_tensor.to_layout(ttnn::ROW_MAJOR_LAYOUT);
 
         // TODO: #15840 - Treat multi-device host vs owned/borrowed tensors uniformly.
-        auto intermediate_tensor = distributed::is_multi_device_host_tensor(row_major_input_tensor)
+        auto intermediate_tensor = tt::tt_metal::is_multi_device_host_tensor(row_major_input_tensor)
                                        ? transform(row_major_input_tensor, detail::convert_to_cpp_supported_dtype)
                                        : detail::convert_to_cpp_supported_dtype(row_major_input_tensor);
         return detail::convert_to_dtype(intermediate_tensor, input_layout, dtype);

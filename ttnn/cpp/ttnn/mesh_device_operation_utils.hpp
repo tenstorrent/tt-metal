@@ -37,7 +37,8 @@ void filter_tensor_shards(
     const std::vector<ttnn::MeshCoordinate>& tensor_coordinates, TensorReturnValue& tensor_return_value) {
     tt::stl::reflection::visit_object_of_type<Tensor>(
         [&](const Tensor& tensor_to_return) {
-            auto& tensor_storage = std::get<tt::tt_metal::DeviceStorage>(tensor_to_return.tensor_attributes->storage);
+            auto& tensor_storage =
+                std::get<tt::tt_metal::DeviceStorage>(tensor_to_return.tensor_attributes->get_storage());
 
             auto coord_it = tensor_coordinates.cbegin();
             auto storage_it = tensor_storage.specs.begin();
@@ -72,7 +73,7 @@ inline bool is_subset_of(const std::vector<MeshCoordinate>& a, const std::vector
     // Check if b_set is a subset of a_set
     // This is true if every range in b_set is completely contained in some range
     // in a_set
-    bool is_subset;
+    bool is_subset = false;
     for (const auto& b_range : b_set.ranges()) {
         is_subset = false;
         for (const auto& a_range : a_set.ranges()) {

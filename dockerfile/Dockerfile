@@ -10,6 +10,7 @@ ENV DEBIAN_FRONTEND=noninteractive
 
 # Install runtime deps
 COPY /install_dependencies.sh /opt/tt_metal_infra/scripts/docker/install_dependencies.sh
+COPY /tt_metal/sfpi-version.sh /opt/tt_metal_infra/scripts/docker/sfpi-version.sh
 RUN /bin/bash /opt/tt_metal_infra/scripts/docker/install_dependencies.sh --docker --mode runtime
 
 #############################################################
@@ -144,7 +145,7 @@ RUN mkdir -p /tmp/taskflow \
     && make -C /tmp/taskflow/build install \
     && rm -rf /tmp/taskflow
 
-ARG XTENSOR_XTL_VERSION=0.7.7
+ARG XTENSOR_XTL_VERSION=0.8.0
 RUN mkdir -p /tmp/xtensor_xtl \
     && wget -O /tmp/xtensor_xtl/xtensor_xtl-${XTENSOR_XTL_VERSION}.tar.gz "https://github.com/xtensor-stack/xtl/archive/refs/tags/${XTENSOR_XTL_VERSION}.tar.gz" \
     && tar -xzf /tmp/xtensor_xtl/xtensor_xtl-${XTENSOR_XTL_VERSION}.tar.gz -C /tmp/xtensor_xtl --strip-components=1 \
@@ -157,7 +158,7 @@ RUN mkdir -p /tmp/xtensor_xtl \
     && rm -rf /tmp/xtensor_xtl
 
 # xtensor problematic
-#ARG XTENSOR_VERSION=0.25.0
+#ARG XTENSOR_VERSION=0.26.0
 #RUN mkdir -p /tmp/xtensor \
 #    && wget -O /tmp/xtensor/xtensor-${XTENSOR_VERSION}.tar.gz "https://github.com/xtensor-stack/xtensor/archive/refs/tags/${XTENSOR_VERSION}.tar.gz" \
 #    && tar -xzf /tmp/xtensor/xtensor-${XTENSOR_VERSION}.tar.gz -C /tmp/xtensor --strip-components=1 \
@@ -170,7 +171,7 @@ RUN mkdir -p /tmp/xtensor_xtl \
 #    && rm -rf /tmp/xtensor
 
 # Issue arises - No blas
-#ARG XTENSOR_BLAS_VERSION=0.21.0
+#ARG XTENSOR_BLAS_VERSION=0.22.0
 #RUN mkdir -p /tmp/xtensor_blas \
 #    && wget -O /tmp/xtensor_blas/xtensor_blas-${XTENSOR_BLAS_VERSION}.tar.gz "https://github.com/xtensor-stack/xtensor-blas/archive/refs/tags/${XTENSOR_BLAS_VERSION}.tar.gz" \
 #    && tar -xzf /tmp/xtensor_blas/xtensor_blas-${XTENSOR_BLAS_VERSION}.tar.gz -C /tmp/xtensor_blas --strip-components=1 \

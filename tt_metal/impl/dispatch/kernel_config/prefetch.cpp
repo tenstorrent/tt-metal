@@ -4,7 +4,6 @@
 #include "prefetch.hpp"
 
 #include <host_api.hpp>
-#include <tt-metalium/dispatch_settings.hpp>
 #include <tt_metal.hpp>
 #include <array>
 #include <map>
@@ -14,10 +13,11 @@
 #include <vector>
 
 #include "assert.hpp"
-#include "command_queue_common.hpp"
+#include "dispatch/command_queue_common.hpp"
 #include "device.hpp"
 #include "dispatch.hpp"
 #include "dispatch/kernel_config/fd_kernel.hpp"
+#include "dispatch/dispatch_settings.hpp"
 #include "dispatch_core_common.hpp"
 #include "dispatch_s.hpp"
 #include "eth_router.hpp"
@@ -26,6 +26,7 @@
 #include "impl/context/metal_context.hpp"
 #include <umd/device/tt_core_coordinates.h>
 #include <umd/device/types/xy_pair.h>
+#include "dispatch/system_memory_manager.hpp"
 #include "utils.hpp"
 
 using namespace tt::tt_metal;
@@ -241,7 +242,7 @@ void PrefetchKernel::GenerateDependentConfigs() {
             TT_ASSERT(found_dispatch && found_dispatch_s);
         } else {
             // No dispatch_s, just write 0s to the configs dependent on it
-            TT_ASSERT(found_dispatch && ~found_dispatch_s);
+            TT_ASSERT(found_dispatch && !found_dispatch_s);
             dependent_config_.downstream_s_logical_core = UNUSED_LOGICAL_CORE;
             dependent_config_.downstream_dispatch_s_cb_sem_id = UNUSED_SEM_ID;
         }
@@ -341,7 +342,7 @@ void PrefetchKernel::GenerateDependentConfigs() {
             TT_ASSERT(found_dispatch && found_dispatch_s);
         } else {
             // No dispatch_s, just write 0s to the configs dependent on it
-            TT_ASSERT(found_dispatch && ~found_dispatch_s);
+            TT_ASSERT(found_dispatch && !found_dispatch_s);
             dependent_config_.downstream_s_logical_core = UNUSED_LOGICAL_CORE;
             dependent_config_.downstream_dispatch_s_cb_sem_id =
                 MetalContext::instance().get_dispatch_query_manager().dispatch_s_enabled()

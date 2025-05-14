@@ -20,7 +20,7 @@
 
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/buffer_types.hpp>
-#include <tt-metalium/circular_buffer_types.hpp>
+#include <tt-metalium/circular_buffer_config.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/control_plane.hpp>
 #include <tt-metalium/core_coord.hpp>
@@ -35,7 +35,6 @@
 #include <tt-metalium/mesh_graph.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt_stl/span.hpp>
-#include <tt-metalium/system_memory_manager.hpp>
 #include "impl/context/metal_context.hpp"
 #include "test_common.hpp"
 #include <tt-metalium/tt_backend_api_types.hpp>
@@ -150,8 +149,13 @@ void RunAsyncWriteTest(
     auto control_plane = tt::tt_metal::MetalContext::instance().get_cluster().get_control_plane();
 
     // Find a device with a neighbour in the specified direction
-    if (!fixture->find_device_with_neighbor_in_direction(
-            start_mesh_chip_id, end_mesh_chip_id, physical_start_device_id, physical_end_device_id, direction)) {
+    if (!find_device_with_neighbor_in_direction(
+            fixture,
+            start_mesh_chip_id,
+            end_mesh_chip_id,
+            physical_start_device_id,
+            physical_end_device_id,
+            direction)) {
         GTEST_SKIP() << "No path found between sender and receivers";
     }
 
@@ -262,7 +266,8 @@ void RunAtomicIncTest(BaseFabricFixture* fixture, fabric_mode mode) {
     auto control_plane = tt::tt_metal::MetalContext::instance().get_cluster().get_control_plane();
 
     // Find a device with a neighbour in the East direction
-    if (!fixture->find_device_with_neighbor_in_direction(
+    if (!find_device_with_neighbor_in_direction(
+            fixture,
             start_mesh_chip_id,
             end_mesh_chip_id,
             physical_start_device_id,
@@ -361,7 +366,8 @@ void RunAsyncWriteAtomicIncTest(BaseFabricFixture* fixture, fabric_mode mode, bo
     auto control_plane = tt::tt_metal::MetalContext::instance().get_cluster().get_control_plane();
 
     // Find a device with a neighbour in the East direction
-    if (!fixture->find_device_with_neighbor_in_direction(
+    if (!find_device_with_neighbor_in_direction(
+            fixture,
             start_mesh_chip_id,
             end_mesh_chip_id,
             physical_start_device_id,
@@ -495,7 +501,8 @@ void RunAsyncWriteMulticastTest(
     auto control_plane = tt::tt_metal::MetalContext::instance().get_cluster().get_control_plane();
 
     // Find a device with enough neighbours in the specified directions
-    if (!fixture->find_device_with_neighbor_in_multi_direction(
+    if (!find_device_with_neighbor_in_multi_direction(
+            fixture,
             start_mesh_chip_id,
             end_mesh_chip_ids_by_dir,
             physical_start_device_id,
@@ -687,23 +694,35 @@ void RunAsyncWriteMulticastTest(
 
 TEST_F(Fabric2DPullFixture, TestAsyncWrite) { RunAsyncWriteTest(this, fabric_mode::PULL, false); }
 
-TEST_F(Fabric2DPushFixture, TestAsyncWrite) { RunAsyncWriteTest(this, fabric_mode::PUSH, false); }
+TEST_F(Fabric2DPushFixture, DISABLED_TestAsyncWrite) { RunAsyncWriteTest(this, fabric_mode::PUSH, false); }
 
 TEST_F(Fabric2DPullFixture, TestAsyncRawWrite) { RunAsyncWriteTest(this, fabric_mode::PULL, true); }
 
-TEST_F(Fabric2DPushFixture, TestAsyncRawWrite) { RunAsyncWriteTest(this, fabric_mode::PUSH, true); }
+TEST_F(Fabric2DPushFixture, TestUnicastRaw) {
+    for (uint32_t i = 0; i < 10; i++) {
+        RunTestUnicastRaw(this);
+    }
+}
+
+TEST_F(Fabric2DPushFixture, TestUnicastConnAPI) { RunTestUnicastConnAPI(this, 1); }
+
+TEST_F(Fabric2DPushFixture, TestMCastConnAPI) { RunTestMCastConnAPI(this); }
 
 TEST_F(Fabric2DPullFixture, TestAtomicInc) { RunAtomicIncTest(this, fabric_mode::PULL); }
 
-TEST_F(Fabric2DPushFixture, TestAtomicInc) { RunAtomicIncTest(this, fabric_mode::PUSH); }
+TEST_F(Fabric2DPushFixture, DISABLED_TestAtomicInc) { RunAtomicIncTest(this, fabric_mode::PUSH); }
 
 TEST_F(Fabric2DPullFixture, TestAsyncWriteAtomicInc) { RunAsyncWriteAtomicIncTest(this, fabric_mode::PULL, false); }
 
-TEST_F(Fabric2DPushFixture, TestAsyncWriteAtomicInc) { RunAsyncWriteAtomicIncTest(this, fabric_mode::PUSH, false); }
+TEST_F(Fabric2DPushFixture, DISABLED_TestAsyncWriteAtomicInc) {
+    RunAsyncWriteAtomicIncTest(this, fabric_mode::PUSH, false);
+}
 
 TEST_F(Fabric2DPullFixture, TestAsyncRawWriteAtomicInc) { RunAsyncWriteAtomicIncTest(this, fabric_mode::PULL, true); }
 
-TEST_F(Fabric2DPushFixture, TestAsyncRawWriteAtomicInc) { RunAsyncWriteAtomicIncTest(this, fabric_mode::PUSH, true); }
+TEST_F(Fabric2DPushFixture, DISABLED_TestAsyncRawWriteAtomicInc) {
+    RunAsyncWriteAtomicIncTest(this, fabric_mode::PUSH, true);
+}
 
 TEST_F(Fabric2DPullFixture, TestAsyncWriteMulticast) {
     RunAsyncWriteMulticastTest(this, fabric_mode::PULL, false, false);

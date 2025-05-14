@@ -42,8 +42,8 @@ Tensor convert_tensor(const Tensor& input_tensor, compute_& compute) {
     TT_FATAL(!is_device_tensor(input_tensor), "convert_tensor only supports host tensors");
 
     // TODO: #15840 - Treat multi-device host vs owned/borrowed tensors uniformly.
-    return ttnn::distributed::is_multi_device_host_tensor(input_tensor) ? transform(input_tensor, convert_tensor)
-                                                                        : convert_tensor(input_tensor);
+    return is_multi_device_host_tensor(input_tensor) ? transform(input_tensor, convert_tensor)
+                                                     : convert_tensor(input_tensor);
 }
 
 template <typename Func, typename... Args>
@@ -75,31 +75,22 @@ Tensor create_tensor_from_owned_buffer(
     tt::tt_metal::HostBuffer buf, DataType& output_dtype, ttnn::Shape& output_shape) {
     if constexpr (std::is_same<T, float>::value) {
         if (output_dtype == DataType::BFLOAT8_B || output_dtype == DataType::BFLOAT4_B) {
-            auto tensor = Tensor(
-                              std::move(tt::tt_metal::HostStorage{std::move(buf)}),
-                              output_shape,
-                              DataType::FLOAT32,
-                              Layout::ROW_MAJOR)
-                              .to_layout(Layout::TILE);
+            auto tensor =
+                Tensor(std::move(buf), output_shape, DataType::FLOAT32, Layout::ROW_MAJOR).to_layout(Layout::TILE);
             auto output_float_data = tt::tt_metal::host_buffer::get_as<float>(tensor);
             auto output_packed_data =
                 output_dtype == DataType::BFLOAT8_B
                     ? pack_fp32_vec_as_bfp8_tiles(output_float_data, /*row_major_input=*/false, /*is_exp_a=*/false)
                     : pack_fp32_vec_as_bfp4_tiles(output_float_data, /*row_major_input=*/false, /*is_exp_a=*/false);
-            auto output_uint32_buffer = tt::tt_metal::host_buffer::create<uint32_t>(std::move(output_packed_data));
-            return Tensor(
-                std::move(tt::tt_metal::HostStorage{std::move(output_uint32_buffer)}),
-                output_shape,
-                output_dtype,
-                Layout::TILE);
+            auto output_uint32_buffer = tt::tt_metal::HostBuffer(std::move(output_packed_data));
+            return Tensor(std::move(output_uint32_buffer), output_shape, output_dtype, Layout::TILE);
         }
     } else {
         TT_FATAL(
             (output_dtype != DataType::BFLOAT8_B) || (output_dtype != DataType::BFLOAT4_B),
             "Unsupported output datatype");
     }
-    auto rm_tensor =
-        Tensor(std::move(tt::tt_metal::HostStorage{std::move(buf)}), output_shape, output_dtype, Layout::ROW_MAJOR);
+    auto rm_tensor = Tensor(std::move(buf), output_shape, output_dtype, Layout::ROW_MAJOR);
     return rm_tensor.to_layout(Layout::TILE);
 }
 
@@ -136,7 +127,7 @@ Tensor to_weight_special_padding_tile_layout(
             }
         }
         return create_tensor_from_owned_buffer<T>(
-            tt::tt_metal::host_buffer::create<T>(std::move(output_buffer)), output_dtype, output_shape);
+            tt::tt_metal::HostBuffer(std::move(output_buffer)), output_dtype, output_shape);
     };
     return convert_tensor<T>(conv_weight_tensor, compute);
 }
@@ -176,7 +167,7 @@ Tensor to_weight_tile_layout(
             }
         }
         return create_tensor_from_owned_buffer<T>(
-            tt::tt_metal::host_buffer::create<T>(std::move(output_buffer)), output_dtype, output_shape);
+            tt::tt_metal::HostBuffer(std::move(output_buffer)), output_dtype, output_shape);
     };
 
     return convert_tensor<T>(conv_weight_tensor, compute);
@@ -249,7 +240,7 @@ Tensor to_weight_tile_layout_block_sharded(
             }
         }
         return create_tensor_from_owned_buffer<T>(
-            tt::tt_metal::host_buffer::create<T>(std::move(output_buffer)), output_dtype, output_shape);
+            tt::tt_metal::HostBuffer(std::move(output_buffer)), output_dtype, output_shape);
     };
     return convert_tensor<T>(conv_weight_tensor, compute);
 }
@@ -296,7 +287,7 @@ Tensor to_bias_tile_layout_block_sharded(
             }
         }
         return create_tensor_from_owned_buffer<T>(
-            tt::tt_metal::host_buffer::create<T>(std::move(output_buffer)), output_dtype, output_shape);
+            tt::tt_metal::HostBuffer(std::move(output_buffer)), output_dtype, output_shape);
     };
 
     return convert_tensor<T>(conv_bias_tensor, compute);
@@ -377,10 +368,7 @@ static Tensor conv_group_weight_zero_pad_helper(
             }
         }
         return Tensor(
-            tt::tt_metal::HostStorage{tt::tt_metal::host_buffer::create<T>(std::move(output_buffer))},
-            output_weight_shape,
-            output_dtype,
-            Layout::ROW_MAJOR);
+            tt::tt_metal::HostBuffer(std::move(output_buffer)), output_weight_shape, output_dtype, Layout::ROW_MAJOR);
     };
 
     return convert_tensor<T>(weight, pad_weight);
@@ -416,12 +404,11 @@ static Tensor conv_depthwise_weight_bcast_helper(
                     }
                 }
             }
-            auto output_tensor = Tensor(
-                tt::tt_metal::HostStorage{tt::tt_metal::host_buffer::create<T>(std::move(output_buffer))},
+            return Tensor(
+                tt::tt_metal::HostBuffer(std::move(output_buffer)),
                 output_weight_shape,
                 output_dtype,
                 Layout::ROW_MAJOR);
-            return output_tensor;
         };
     return convert_tensor<T>(conv_weight_tensor, compute);
 }
@@ -591,14 +578,14 @@ static OptimizedConvBlockConfig get_opt_block_config(
         conv_config.transpose_shards ? ShardOrientation::COL_MAJOR : ShardOrientation::ROW_MAJOR;
 
     if (input_memory_config.is_sharded() && !conv_config.reshard_if_not_optimal) {
-        conv_config.shard_layout = input_memory_config.memory_layout;
+        conv_config.shard_layout = input_memory_config.memory_layout();
     }
     ParallelConfig parallel_config;
-    if (input_memory_config.shard_spec.has_value() && !conv_config.reshard_if_not_optimal) {
+    if (input_memory_config.shard_spec().has_value() && !conv_config.reshard_if_not_optimal) {
         parallel_config = {
-            .grid = input_memory_config.shard_spec.value().grid,
-            .shard_scheme = input_memory_config.memory_layout,
-            .shard_orientation = input_memory_config.shard_spec.value().orientation};
+            .grid = input_memory_config.shard_spec().value().grid,
+            .shard_scheme = input_memory_config.memory_layout(),
+            .shard_orientation = input_memory_config.shard_spec().value().orientation};
     } else {
         parallel_config = determine_parallel_config(
             conv_config.shard_layout.value(),
@@ -645,12 +632,13 @@ static OptimizedConvBlockConfig get_opt_block_config(
         get_num_cores_nhw_from_parallel_config(largest_parallel_config),
         get_num_cores_channels_from_parallel_config(parallel_config));
 
-    uint32_t in_channels_padded = tt::round_up(
-        in_channels,
-        get_num_cores_channels_from_parallel_config(parallel_config) * conv_config.input_channels_alignment);
+    const uint32_t in_channels_alignment = get_input_channels_alignment(
+        conv_config.shard_layout.value(), input_tensor_layout, mm_conv, input_memory_config);
+    uint32_t in_channels_padded =
+        tt::round_up(in_channels, get_num_cores_channels_from_parallel_config(parallel_config) * in_channels_alignment);
 
     uint32_t nhw_out_padded_ntile_per_core =
-        conv_out_memory_config.shard_spec.value().shape[0] / tt::constants::TILE_HEIGHT;
+        conv_out_memory_config.shard_spec().value().shape[0] / tt::constants::TILE_HEIGHT;
 
     return determine_per_core_conv_block_config(
         parallel_config,
@@ -680,7 +668,7 @@ ttnn::Tensor prepare_bias_on_device(
     uint32_t out_channel_padding = out_channels_padded - out_channels;
 
     ttnn::Tensor bias_tensor_ = bias_tensor;
-    bool is_bias_tensor_is_on_device = ttnn::is_tensor_on_device_or_multidevice(bias_tensor_);
+    bool is_bias_tensor_is_on_device = tt::tt_metal::is_device_tensor(bias_tensor_);
     if (!is_bias_tensor_is_on_device) {
         bias_tensor_ = ttnn::operations::core::to_device(bias_tensor_, device, std::nullopt);
     }
@@ -731,9 +719,7 @@ ttnn::Tensor prepare_bias_on_device(
     }
     bias_tensor_ = ttnn::tilize(
         bias_tensor_,
-        ttnn::MemoryConfig(
-            {.memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED,
-             .buffer_type = tt::tt_metal::BufferType::DRAM}),
+        ttnn::MemoryConfig(tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::DRAM),
         bias_dtype,
         true);
 
@@ -783,7 +769,7 @@ std::pair<ttnn::Tensor, std::optional<ttnn::Tensor>> prepare_conv_weights_biases
         has_bias);
 
     // Convert weight tensor to 0 padded shape if groups > 1
-    if (groups > 1 and is_tensor_on_device_or_multidevice(weight_tensor_)) {
+    if (groups > 1 and is_device_tensor(weight_tensor_)) {
         TT_THROW(
             "Grouped Convolution not supported when weights are on device. Please move the weights tensor to host");
     }
@@ -936,9 +922,7 @@ std::pair<ttnn::Tensor, std::optional<ttnn::Tensor>> prepare_conv_weights_biases
     }
     weight_tensor_ = ttnn::tilize(
         weight_tensor_,
-        ttnn::MemoryConfig(
-            {.memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED,
-             .buffer_type = tt::tt_metal::BufferType::DRAM}),
+        ttnn::MemoryConfig(tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::DRAM),
         weights_bias_dtype,
         true);
 
@@ -1003,7 +987,7 @@ std::pair<ttnn::Tensor, std::optional<ttnn::Tensor>> prepare_conv_weights_biases
         input_width,
         has_bias);
     TT_FATAL(
-        !is_tensor_on_device_or_multidevice(weight_tensor_),
+        !is_device_tensor(weight_tensor_),
         "prepare_conv_weights_biases_and_move_to_device is not supported when the weights tensor is on the device");
     // Convert weight tensor to 0 padded shape if groups > 1
     if (!is_conv1d and groups > 1) {
@@ -1071,7 +1055,7 @@ std::pair<ttnn::Tensor, std::optional<ttnn::Tensor>> prepare_conv_weights_biases
 
     if (bias_tensor.has_value()) {
         bias_tensor_ = bias_tensor.value();
-        bool is_bias_tensor_is_on_device = ttnn::is_tensor_on_device_or_multidevice(bias_tensor_);
+        bool is_bias_tensor_is_on_device = tt::tt_metal::is_device_tensor(bias_tensor_);
         if (!is_bias_tensor_is_on_device) {
             TT_FATAL(
                 bias_tensor_.get_logical_shape()[3] == out_channels,
@@ -1167,15 +1151,15 @@ ttnn::Tensor prepare_conv_weights(
         conv_config.transpose_shards ? ShardOrientation::COL_MAJOR : ShardOrientation::ROW_MAJOR;
 
     if (input_memory_config.is_sharded() && !conv_config.reshard_if_not_optimal) {
-        conv_config.shard_layout = input_memory_config.memory_layout;
+        conv_config.shard_layout = input_memory_config.memory_layout();
     }
 
     ParallelConfig parallel_config;
-    if (input_memory_config.shard_spec.has_value() && !conv_config.reshard_if_not_optimal) {
+    if (input_memory_config.shard_spec().has_value() && !conv_config.reshard_if_not_optimal) {
         parallel_config = {
-            .grid = input_memory_config.shard_spec.value().grid,
-            .shard_scheme = input_memory_config.memory_layout,
-            .shard_orientation = input_memory_config.shard_spec.value().orientation};
+            .grid = input_memory_config.shard_spec().value().grid,
+            .shard_scheme = input_memory_config.memory_layout(),
+            .shard_orientation = input_memory_config.shard_spec().value().orientation};
     } else {
         parallel_config = determine_parallel_config(
             conv_config.shard_layout.value(),
@@ -1195,10 +1179,12 @@ ttnn::Tensor prepare_conv_weights(
     ParallelConfig output_parallel_config = determine_output_parallel_config(
         parallel_config, device->compute_with_storage_grid_size(), out_channels, mm_conv);
 
+    const uint32_t input_channels_alignment = get_input_channels_alignment(
+        conv_config.shard_layout.value(), input_tensor_layout, mm_conv, input_memory_config);
     std::optional<const ttnn::Tensor> bias_tensor = std::nullopt;
     ttnn::Tensor weight_tensor_on_device = weight_tensor;
     std::optional<ttnn::Tensor> bias_tensor_on_device = bias_tensor;
-    if (weight_tensor.is_device_tensor() || conv_config.preprocess_weights_on_device) {
+    if (is_device_tensor(weight_tensor) || conv_config.preprocess_weights_on_device) {
         if (!conv_config.preprocess_weights_on_device) {
             log_warning(
                 tt::LogOp,
@@ -1215,7 +1201,7 @@ ttnn::Tensor prepare_conv_weights(
         tie(weight_tensor_on_device, bias_tensor_on_device) = prepare_conv_weights_biases_on_device(
             weight_tensor,
             bias_tensor,
-            conv_config.input_channels_alignment,
+            input_channels_alignment,
             conv_config.weights_dtype,
             opt_conv_op_block_config.act_block_w_ntiles,
             opt_conv_op_block_config.out_subblock_w_ntiles,
@@ -1230,7 +1216,7 @@ ttnn::Tensor prepare_conv_weights(
         tie(weight_tensor_on_device, bias_tensor_on_device) = prepare_conv_weights_biases_and_move_to_device(
             weight_tensor,
             bias_tensor,
-            conv_config.input_channels_alignment,
+            input_channels_alignment,
             conv_config.weights_dtype,
             opt_conv_op_block_config.act_block_w_ntiles,
             opt_conv_op_block_config.out_subblock_w_ntiles,
@@ -1297,15 +1283,15 @@ ttnn::Tensor prepare_conv_bias(
         conv_config.transpose_shards ? ShardOrientation::COL_MAJOR : ShardOrientation::ROW_MAJOR;
 
     if (input_memory_config.is_sharded() && !conv_config.reshard_if_not_optimal) {
-        conv_config.shard_layout = input_memory_config.memory_layout;
+        conv_config.shard_layout = input_memory_config.memory_layout();
     }
     CoreCoord compute_grid = device->compute_with_storage_grid_size();
     ParallelConfig parallel_config;
-    if (input_memory_config.shard_spec.has_value() && !conv_config.reshard_if_not_optimal) {
+    if (input_memory_config.shard_spec().has_value() && !conv_config.reshard_if_not_optimal) {
         parallel_config = {
-            .grid = input_memory_config.shard_spec.value().grid,
-            .shard_scheme = input_memory_config.memory_layout,
-            .shard_orientation = input_memory_config.shard_spec.value().orientation};
+            .grid = input_memory_config.shard_spec().value().grid,
+            .shard_scheme = input_memory_config.memory_layout(),
+            .shard_orientation = input_memory_config.shard_spec().value().orientation};
     } else {
         parallel_config = determine_parallel_config(
             conv_config.shard_layout.value(),
@@ -1328,7 +1314,7 @@ ttnn::Tensor prepare_conv_bias(
     ttnn::Tensor bias_tensor_ = bias_tensor;
     TT_FATAL(bias_tensor_.get_logical_shape()[3] == out_channels, "Bias must have the same length as output channels");
 
-    if (bias_tensor_.is_device_tensor()) {
+    if (tt::tt_metal::is_device_tensor(bias_tensor_)) {
         bias_tensor_ = prepare_bias_on_device(
             bias_tensor_,
             conv_config.weights_dtype,

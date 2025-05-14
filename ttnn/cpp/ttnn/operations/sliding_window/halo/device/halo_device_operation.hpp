@@ -7,7 +7,6 @@
 #include <string>
 #include <tuple>
 
-// #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/run_operation.hpp"
 #include "ttnn/operations/sliding_window/sliding_window.hpp"
 

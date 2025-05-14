@@ -8,10 +8,6 @@ on:
           required: true
           type: string
           default: 'BH'
-      run-ttnn-tests:
-          description: "Run ttnn unit and L2 test suite"
-          default: false
-          type: boolean
   workflow_call:
     inputs:
       runner-label:
@@ -21,9 +17,6 @@ on:
           default: 'BH'
   schedule:
     - cron: "0 */12 * * *"  # Every day at 0:00 and 12:00 UTC
-    - cron: "0 8 * * 6"     # Runs at 8am UTC every Saturday
-
-run-name: ${{ (github.event.schedule == '0 8 * * 6' || (github.event_name == 'workflow_dispatch' && inputs.run-ttnn-tests)) && '(Blackhole) Blackhole nightly tests (with ttnn+L2)' || '(Blackhole) Blackhole nightly tests' }}  # Dynamically change name based on day
 
 jobs:
   build-artifact:
@@ -42,7 +35,6 @@ jobs:
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
   ttnn-unit-tests:
     needs: build-artifact
-    if: github.event.schedule == '0 8 * * 6' || (github.event_name == 'workflow_dispatch' && inputs.run-ttnn-tests)  # Only run ttnn on the weekends or if workflow manually triggered with ttnn enabled
     secrets: inherit
     uses: ./.github/workflows/ttnn-post-commit.yaml
     with:
@@ -53,13 +45,30 @@ jobs:
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
   ttnn-l2-tests:
     needs: build-artifact
-    if: github.event.schedule == '0 8 * * 6' || (github.event_name == 'workflow_dispatch' && inputs.run-ttnn-tests)  # Only run L2 on the weekends or if workflow manually triggered with ttnn enabled
     secrets: inherit
     uses: ./.github/workflows/tt-metal-l2-nightly-impl.yaml
     with:
       arch: blackhole
       runner-label: ${{ inputs.runner-label || 'BH' }}
       timeout: 120
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+  ttnn-stress-tests:
+    needs: build-artifact
+    secrets: inherit
+    uses: ./.github/workflows/ttnn-stress-tests-impl.yaml
+    strategy:
+      fail-fast: false
+      matrix:
+        test-group: [
+          { runner-label: P100 },
+          { runner-label: P150 },
+        ]
+    with:
+      arch: blackhole
+      runner-label: ${{ matrix.test-group.runner-label }}
+      timeout: 45
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}

@@ -864,7 +864,7 @@ def generate_reports(ops, deviceOps, traceOps, signposts, logFolder, outputFolde
                                 * float(rowDict["PM COMPUTE [ns]"])
                                 / float(rowDict["DEVICE KERNEL DURATION [ns]"])
                             )
-                            rowDict["PM FPU UTIL (%)"] = round(fpu_util, 1)
+                            rowDict["PM FPU UTIL (%)"] = round(fpu_util, 3)
                         except ZeroDivisionError:
                             rowDict["PM FPU UTIL (%)"] = 0.0
 

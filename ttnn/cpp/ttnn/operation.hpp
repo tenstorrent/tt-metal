@@ -247,8 +247,7 @@ struct ProfilerInfo {
     std::optional<std::string> parallelization_strategy;
 };
 
-inline auto DEFAULT_OUTPUT_MEMORY_CONFIG =
-    MemoryConfig{.memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED, .buffer_type = BufferType::DRAM};
+inline MemoryConfig DEFAULT_OUTPUT_MEMORY_CONFIG;
 
 static void set_default_operation_output_memory_config(const MemoryConfig& memory_config) {
     DEFAULT_OUTPUT_MEMORY_CONFIG = memory_config;
@@ -450,9 +449,8 @@ constexpr bool implements_get_parallelization_strategy() {
 
 template <typename ConcreteOperation>
 auto default_create_output_tensors(
-    const ConcreteOperation& operation,
-    const Tensors& input_tensors,
-    const OptionalTensors& optional_output_tensors) -> ProgramOutputTensors<ConcreteOperation> {
+    const ConcreteOperation& operation, const Tensors& input_tensors, const OptionalTensors& optional_output_tensors)
+    -> ProgramOutputTensors<ConcreteOperation> {
     using OutputTensors = ProgramOutputTensors<ConcreteOperation>;
     OutputTensors output_tensors;
 

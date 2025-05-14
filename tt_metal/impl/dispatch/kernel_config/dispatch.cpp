@@ -4,7 +4,6 @@
 #include "dispatch.hpp"
 
 #include <host_api.hpp>
-#include <tt-metalium/dispatch_settings.hpp>
 #include <tt_metal.hpp>
 #include <array>
 #include <map>
@@ -14,11 +13,12 @@
 #include <vector>
 
 #include "assert.hpp"
-#include "command_queue_common.hpp"
+#include "dispatch/command_queue_common.hpp"
 #include "demux.hpp"
 #include "device.hpp"
 #include "dispatch/kernel_config/fd_kernel.hpp"
 #include "dispatch/kernels/packet_queue_ctrl.hpp"
+#include "dispatch/dispatch_settings.hpp"
 #include "dispatch_core_common.hpp"
 #include "dispatch_s.hpp"
 #include "hal_types.hpp"
@@ -27,6 +27,7 @@
 #include "impl/context/metal_context.hpp"
 #include "rtoptions.hpp"
 #include <umd/device/types/xy_pair.h>
+#include "dispatch/system_memory_manager.hpp"
 #include "utils.hpp"
 
 using namespace tt::tt_metal;

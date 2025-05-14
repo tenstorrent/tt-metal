@@ -1,5 +1,5 @@
 add_library(tt_stl INTERFACE)
-add_library(TT:STL ALIAS tt_stl)
+add_library(TT::STL ALIAS tt_stl)
 
 # FIXME: TT-STL should support down to C++17 (so that TT-Metalium can), but we have headers (eg: <reflect>) in our
 #        public API that is pushing C++20 on consumers

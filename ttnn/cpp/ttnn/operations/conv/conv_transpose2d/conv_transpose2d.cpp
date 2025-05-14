@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <cstdint>
 #include <optional>
 #include <utility>
 
@@ -65,18 +66,14 @@ Tensor _transform_weights_for_conv_transpose2d(const Tensor& conv_weight_tensor,
                 }
             }
         }
-        return Tensor(
-            tt::tt_metal::HostStorage{tt::tt_metal::host_buffer::create(std::move(owned_buffer))},
-            output_shape,
-            dtype,
-            Layout::ROW_MAJOR);
+        return Tensor(tt::tt_metal::HostBuffer(std::move(owned_buffer)), output_shape, dtype, Layout::ROW_MAJOR);
     };
     auto convert_tensor = [&compute](const auto& conv_weight_tensor) {
         return std::visit(
             [&compute](auto&& storage) -> Tensor {
                 using StorageType = std::decay_t<decltype(storage)>;
                 if constexpr (std::is_same_v<StorageType, tt::tt_metal::HostStorage>) {
-                    return compute(tt::tt_metal::host_buffer::get_as<T>(storage.buffer));
+                    return compute(storage.buffer.template view_as<T>());
                 } else {
                     TT_THROW("Unsupported storage type");
                 }
@@ -87,9 +84,8 @@ Tensor _transform_weights_for_conv_transpose2d(const Tensor& conv_weight_tensor,
         !is_device_tensor(conv_weight_tensor), "transform_weights_for_conv_transpose2d only supports host tensors");
 
     // TODO: #15840 - Treat multi-device host vs owned/borrowed tensors uniformly.
-    return ttnn::distributed::is_multi_device_host_tensor(conv_weight_tensor)
-               ? transform(conv_weight_tensor, convert_tensor)
-               : convert_tensor(conv_weight_tensor);
+    return tt::tt_metal::is_multi_device_host_tensor(conv_weight_tensor) ? transform(conv_weight_tensor, convert_tensor)
+                                                                         : convert_tensor(conv_weight_tensor);
 }
 
 Tensor transform_weights_for_conv_transpose2d(const Tensor& conv_weight_tensor, bool mirror_kernel) {
@@ -202,8 +198,8 @@ Result conv_transpose2d(
             full_input_width,
             compute_grid_size,
             input_tensor.layout(),
-            ttnn::is_tensor_on_device_or_multidevice(input_tensor) ? std::make_optional(input_tensor.memory_config())
-                                                                   : std::nullopt,
+            tt::tt_metal::is_device_tensor(input_tensor) ? std::make_optional(input_tensor.memory_config())
+                                                         : std::nullopt,
             kernel_size,
             groups,
             bias_tensor.has_value(),
@@ -229,7 +225,7 @@ Result conv_transpose2d(
     Tensor halo_output;
     if (!mm_conv) {
         sliding_window_config.num_cores_nhw = get_num_cores_nhw_from_parallel_config(parallel_config);
-        sliding_window_config.core_range_set = input_tensor_post_tm.memory_config().shard_spec.value().grid;
+        sliding_window_config.core_range_set = input_tensor_post_tm.memory_config().shard_spec().value().grid;
         sliding_window_config.snap_to_tile = true;
 
         halo_output = ttnn::halo(
@@ -267,11 +263,15 @@ Result conv_transpose2d(
         get_num_cores_nhw_from_parallel_config(largest_parallel_config),
         get_num_cores_channels_from_parallel_config(largest_parallel_config));
 
+    const uint32_t input_channels_alignment = get_input_channels_alignment(
+        input_tensor_post_tm.memory_config().memory_layout(),
+        input_tensor.layout(),
+        mm_conv,
+        input_tensor_post_tm.memory_config());
     uint32_t in_channels_padded = tt::round_up(
-        in_channels,
-        get_num_cores_channels_from_parallel_config(parallel_config) * conv_config.input_channels_alignment);
+        in_channels, get_num_cores_channels_from_parallel_config(parallel_config) * input_channels_alignment);
     uint32_t nhw_out_padded_ntile = get_num_cores_nhw_from_parallel_config(output_parallel_config) *
-                                    conv_out_memory_config.shard_spec.value().shape[0] / tt::constants::TILE_HEIGHT;
+                                    conv_out_memory_config.shard_spec().value().shape[0] / tt::constants::TILE_HEIGHT;
     auto opt_conv_op_block_config = determine_per_core_conv_block_config(
         parallel_config,
         opt_conv_op_parallel_config,
@@ -284,7 +284,7 @@ Result conv_transpose2d(
         get_fp32_dest_acc_en(compute_config),
         conv_config.enable_split_reader);
 
-    bool weight_is_on_device = ttnn::is_tensor_on_device_or_multidevice(weight_tensor);
+    bool weight_is_on_device = tt::tt_metal::is_device_tensor(weight_tensor);
     ttnn::Tensor weight_tensor_on_device = weight_tensor;
     std::optional<ttnn::Tensor> bias_tensor_on_device = bias_tensor;
     if (!weight_is_on_device) {
@@ -292,7 +292,7 @@ Result conv_transpose2d(
         tie(weight_tensor_on_device, bias_tensor_on_device) = prepare_conv_weights_biases_and_move_to_device(
             transform_weights_for_conv_transpose2d(weight_tensor, mirror_kernel),
             bias_tensor,
-            conv_config.input_channels_alignment,
+            input_channels_alignment,
             conv_config.weights_dtype,
             opt_conv_op_block_config.act_block_w_ntiles,
             opt_conv_op_block_config.out_subblock_w_ntiles,

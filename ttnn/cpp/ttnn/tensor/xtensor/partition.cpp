@@ -9,11 +9,11 @@
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/tensor/xtensor/conversion_utils.hpp"
 #include <type_traits>
-#include <xtensor/xadapt.hpp>
-#include <xtensor/xdynamic_view.hpp>
-#include <xtensor/xstorage.hpp>
-#include <xtensor/xtensor_forward.hpp>
-#include <xtensor/xview.hpp>
+#include <xtensor/containers/xadapt.hpp>
+#include <xtensor/views/xdynamic_view.hpp>
+#include <xtensor/containers/xstorage.hpp>
+#include <xtensor/core/xtensor_forward.hpp>
+#include <xtensor/views/xview.hpp>
 
 namespace ttnn::experimental::xtensor {
 namespace {
@@ -225,7 +225,7 @@ std::vector<Tensor> chunk_impl(
             // Create chunks pinned to the original buffer.
             auto& [data, shape] = chunk;
             tt::tt_metal::HostBuffer chunk_buffer(data, buffer.pin());
-            return Tensor(tt::tt_metal::HostStorage(std::move(chunk_buffer)), TensorSpec(shape, layout));
+            return Tensor(std::move(chunk_buffer), TensorSpec(shape, layout));
         });
         return tensors;
     } else {

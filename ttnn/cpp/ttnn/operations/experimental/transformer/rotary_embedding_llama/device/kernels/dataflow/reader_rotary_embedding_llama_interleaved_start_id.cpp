@@ -27,6 +27,7 @@ void kernel_main() {
     constexpr uint32_t n_heads = get_compile_time_arg_val(8);
     constexpr uint32_t Ht = get_compile_time_arg_val(9);
     constexpr uint32_t Wt = get_compile_time_arg_val(10);
+    constexpr bool freq_per_head = get_compile_time_arg_val(11) == 1;
 
     const uint32_t my_seq_tiles = seq_t_end - seq_t_start;
     const uint32_t my_cos_sin_tiles = my_seq_tiles * Wt;
@@ -98,7 +99,12 @@ void kernel_main() {
                 cb_reserve_back(input_cb_id, Wt);
                 uint32_t input_l1_write_addr = get_write_ptr(input_cb_id);
                 uint32_t input_curr_idx = batch_id * n_heads * Ht * Wt + head_num * Ht * Wt + seq_tile * Wt;
-                uint32_t cos_sin_curr_idx = batch_id * Ht * Wt + seq_tile * Wt;  // Does not depend on n_heads
+                uint32_t cos_sin_curr_idx;
+                if constexpr (freq_per_head) {
+                    cos_sin_curr_idx = head_num * Ht * Wt + seq_tile * Wt;
+                } else {
+                    cos_sin_curr_idx = seq_tile * Wt;
+                }
                 for (uint32_t j = 0; j < Wt; ++j) {
                     // Read input into CB
                     noc_async_read_tile(input_curr_idx, s0, input_l1_write_addr);

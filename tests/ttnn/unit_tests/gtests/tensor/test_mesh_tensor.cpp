@@ -88,7 +88,6 @@ TEST_F(MeshTensorTest, ReplicateOwnedTensor) {
     // Write host tensor to device.
     Tensor device_tensor =
         tensor_impl::to_device_mesh_tensor_wrapper(input_host_tensor, mesh_device_.get(), MemoryConfig{});
-    EXPECT_TRUE(distributed::is_mesh_buffer_tensor(device_tensor));
     EXPECT_EQ(device_tensor.get_tensor_spec().logical_shape(), shape);
 
     auto* device_storage = std::get_if<tt::tt_metal::DeviceStorage>(&device_tensor.get_storage());
@@ -122,7 +121,6 @@ TEST_F(MeshTensorTest, GetDeviceTensors) {
 
     Tensor device_tensor =
         tensor_impl::to_device_mesh_tensor_wrapper(input_host_tensor, mesh_device_.get(), MemoryConfig{});
-    EXPECT_TRUE(distributed::is_mesh_buffer_tensor(device_tensor));
     auto* device_storage = std::get_if<tt::tt_metal::DeviceStorage>(&device_tensor.get_storage());
     ASSERT_NE(device_storage, nullptr);
     EXPECT_NE(device_storage->mesh_buffer, nullptr);
@@ -161,10 +159,8 @@ TEST_F(MeshTensorTestT3K, AggregateAsTensor) {
 
     Tensor device_tensor1 =
         tensor_impl::to_device_mesh_tensor_wrapper(input_host_tensor, mesh_device_.get(), MemoryConfig{});
-    EXPECT_TRUE(distributed::is_mesh_buffer_tensor(device_tensor1));
     Tensor device_tensor2 =
         tensor_impl::to_device_mesh_tensor_wrapper(input_host_tensor, mesh_device_.get(), MemoryConfig{});
-    EXPECT_TRUE(distributed::is_mesh_buffer_tensor(device_tensor2));
 
     auto device_tensors1 = get_device_tensors(device_tensor1);
     auto device_tensors2 = get_device_tensors(device_tensor2);
@@ -259,8 +255,6 @@ TEST_P(MeshTensorWriteTest, WriteMultiDeviceHostTensor) {
                 input_host_tensor_sharded, mesh_device_.get(), MemoryConfig{});
         }
     }();
-
-    EXPECT_TRUE(distributed::is_mesh_buffer_tensor(device_tensor));
 
     auto* device_storage = std::get_if<tt::tt_metal::DeviceStorage>(&device_tensor.get_storage());
     ASSERT_NE(device_storage, nullptr);

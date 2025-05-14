@@ -6,7 +6,7 @@
 
 #include <tt-metalium/assert.hpp>
 #include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
-#include "cpp/ttnn/tensor/types.hpp"
+#include "ttnn/tensor/types.hpp"
 
 using namespace tt::tt_metal;
 
@@ -203,6 +203,9 @@ std::map<std::string, std::string> get_defines_fp32(
             if (input_a_dtype == DataType::INT32 && input_b_dtype == DataType::INT32) {
                 new_defines.insert({"SUB_INT32_INIT", "sub_int32_tile_init();"});
                 op_name = "sub_int32_tile";
+            } else if (input_a_dtype == DataType::UINT16 && input_b_dtype == DataType::UINT16) {
+                new_defines.insert({"SUB_UINT16_INIT", fmt::format("sub_uint16_tile_init();")});
+                op_name = "sub_uint16_tile";
             } else {
                 new_defines.insert({"BINOP_INIT", "sub_binary_tile_init();"});
                 op_name = "sub_binary_tile";
@@ -225,8 +228,13 @@ std::map<std::string, std::string> get_defines_fp32(
             op_name = "div_binary_tile";
             break;
         case BinaryOpType::BITWISE_AND:
-            new_defines.insert({"BITWISE_INIT", fmt::format("binary_bitwise_tile_init();")});
-            op_name = "and_binary_tile";
+            if (input_a_dtype == DataType::UINT16 && input_b_dtype == DataType::UINT16) {
+                new_defines.insert({"BITWISE_UINT16_INIT", fmt::format("binary_bitwise_tile_init();")});
+                op_name = "bitwise_and_uint16_binary_tile";
+            } else {
+                new_defines.insert({"BITWISE_INIT", fmt::format("binary_bitwise_tile_init();")});
+                op_name = "bitwise_and_binary_tile";
+            }
             break;
         case BinaryOpType::BITWISE_OR:
             new_defines.insert({"BITWISE_INIT", fmt::format("binary_bitwise_tile_init();")});
@@ -259,6 +267,14 @@ std::map<std::string, std::string> get_defines_fp32(
             } else {
                 op_name = "binary_min_tile";
             }
+            break;
+        case BinaryOpType::GCD:
+            new_defines.insert({"BINOP_INIT", fmt::format("gcd_tile_init();")});
+            op_name = "gcd_tile";
+            break;
+        case BinaryOpType::LCM:
+            new_defines.insert({"BINOP_INIT", fmt::format("lcm_tile_init();")});
+            op_name = "lcm_tile";
             break;
         case BinaryOpType::LOGADDEXP:
             // PRE_IN0_0 ===> Applies prescaling for first input

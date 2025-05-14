@@ -5,10 +5,11 @@
 #pragma once
 
 #include <memory>
-#include "tt-metalium/mesh_coord.hpp"
+#include <tt-metalium/mesh_coord.hpp>
+#include <tt-metalium/host_buffer.hpp>
+
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/tensor/tensor_spec.hpp"
-#include "ttnn/tensor/host_buffer/host_buffer.hpp"
 
 namespace tt::tt_metal {
 
@@ -19,10 +20,6 @@ struct HostStorage {
 
     static constexpr auto attribute_names = std::forward_as_tuple();
     auto attribute_values() const { return std::forward_as_tuple(); }
-
-    void insert_buffer(const HostBuffer& buffer_) { this->buffer = buffer_; }
-
-    HostBuffer get_buffer() const { return this->buffer; }
 
     bool is_allocated() const { return buffer.is_allocated(); }
 };
@@ -43,7 +40,6 @@ struct DeviceStorage {
         std::vector<std::pair<distributed::MeshCoordinate, TensorSpec>> specs_);
 
     MemoryConfig memory_config() const;
-    void insert_buffer(const std::shared_ptr<Buffer>& buffer_);
     Buffer* get_buffer() const;
     std::shared_ptr<distributed::MeshBuffer> get_mesh_buffer() const;
 
@@ -107,14 +103,6 @@ struct MultiDeviceHostStorage {
     static constexpr auto attribute_names = std::forward_as_tuple();
     auto attribute_values() const { return std::forward_as_tuple(); }
 
-    // Helper Functions - Getters and setters to get/modify storage attributes. These are needed to
-    // preinitialize empty tensor handles and use/populate them in the worker threads.
-    void insert_buffer_and_spec_for_device(int buffer_index, const HostBuffer& buffer, TensorSpec spec) {
-        std::lock_guard<std::mutex> lock(mtx);
-        buffers[buffer_index] = buffer;
-        specs[buffer_index] = std::move(spec);
-    }
-
     HostBuffer get_buffer(int buffer_index) const {
         std::lock_guard<std::mutex> lock(mtx);
         TT_FATAL(buffer_index < buffers.size(), "Buffer not found for buffer_index {}", buffer_index);
@@ -147,10 +135,5 @@ struct MultiDeviceHostStorage {
 };
 
 using Storage = std::variant<HostStorage, DeviceStorage, MultiDeviceHostStorage>;
-
-template <typename T>
-constexpr void raise_unsupported_storage() {
-    static_assert(tt::stl::concepts::always_false_v<T>, "Unsupported Storage");
-}
 
 }  // namespace tt::tt_metal

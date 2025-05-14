@@ -56,15 +56,15 @@ def _get_rich_table(
         row_cells = []
         for col_idx in range(cols):
             try:
-                device = mesh_device.get_device(row_idx, col_idx)
+                device_id = mesh_device.get_device_id(ttnn.MeshCoordinate(row_idx, col_idx))
             except Exception as e:
                 logger.error("Error fetching device from MeshDevice at row {}, col {}: {}.", row_idx, col_idx, e)
-                device = None
+                device_id = None
 
             try:
-                device_id = f"Dev. ID: {device.id()}" if device else "Empty"
+                device_id = f"Dev. ID: {device_id}" if device_id is not None else "Empty"
                 coords = f"({row_idx}, {col_idx})"
-                annotation = annotate_cell(device) if annotate_cell and device else ""
+                annotation = annotate_cell(device_id) if annotate_cell and device_id is not None else ""
 
                 cell_content = Text(f"{device_id}\n{coords}\n{annotation}", justify="center")
                 cell_content.truncate(CELL_SIZE * 3, overflow="ellipsis")  # 3 lines max
@@ -72,7 +72,7 @@ def _get_rich_table(
                 logger.error("Error formatting cell content at row {}, col {}: {}.", row_idx, col_idx, e)
                 cell_content = Text("Error", justify="center")
 
-            cell_style = style_cell(device) if style_cell and device else None
+            cell_style = style_cell(device_id) if style_cell and device_id is not None else None
             cell = Align(cell_content, "center", vertical="middle")
             if cell_style:
                 cell.style = cell_style
@@ -97,15 +97,15 @@ def visualize_mesh_device(mesh_device: "ttnn.MeshDevice", tensor: "ttnn.Tensor" 
             logger.error(f"Error getting devices for tensor: {e}")
             mapped_devices = set()
 
-        def color_mapped_devices(device):
+        def color_mapped_devices(device_id):
             try:
-                return Style(bgcolor="dark_green") if device.id() in mapped_devices else None
+                return Style(bgcolor="dark_green") if device_id in mapped_devices else None
             except Exception as e:
                 logger.error(f"Error getting device ID: {e}")
                 return None
 
-        def annotate_with_tensor_shape(device):
-            return f"{tensor.shape}" if device.id() in mapped_devices else ""
+        def annotate_with_tensor_shape(device_id):
+            return f"{tensor.shape}" if device_id in mapped_devices else ""
 
         style_cell = color_mapped_devices
         annotate_cell = annotate_with_tensor_shape

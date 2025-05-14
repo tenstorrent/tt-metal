@@ -557,7 +557,7 @@ DebugPrintServerContext::~DebugPrintServerContext() {
     // Wait for the thread to end, with a timeout
     auto future = std::async(std::launch::async, &std::thread::join, print_server_thread_);
     if (future.wait_for(std::chrono::seconds(2)) == std::future_status::timeout) {
-        TT_THROW("Timed out waiting on debug print thread to terminate.");
+        tt::log_fatal("Timed out waiting on debug print thread to terminate.");
     }
     delete print_server_thread_;
     print_server_thread_ = nullptr;

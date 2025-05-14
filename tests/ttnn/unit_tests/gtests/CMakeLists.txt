@@ -17,6 +17,7 @@ set(TTNN_UNIT_TESTS_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/test_sliding_window_infra.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/test_conv2d.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/common_test_utils.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/test_generic_op.cpp
 )
 
 set(TTNN_CCL_UNIT_TESTS_SRC
@@ -40,6 +41,7 @@ set(TTNN_TENSOR_UNIT_TESTS_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/tensor/common_tensor_test_utils.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/tensor/test_create_tensor.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/tensor/test_host_buffer.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/tensor/test_distributed_host_buffer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/tensor/test_tensor_layout.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/tensor/test_create_tensor_multi_device.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/tensor/test_create_tensor_with_layout.cpp

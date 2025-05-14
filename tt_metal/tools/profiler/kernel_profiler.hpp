@@ -252,7 +252,9 @@ __attribute__((noinline)) void finish_profiler() {
     if (profiler_control_buffer[PROFILER_DONE] == 1) {
         return;
     }
-    while (!profiler_control_buffer[DRAM_PROFILER_ADDRESS]);
+    while (!profiler_control_buffer[DRAM_PROFILER_ADDRESS]) {
+        invalidate_l1_cache();
+    }
     uint32_t core_flat_id = profiler_control_buffer[FLAT_ID];
     uint32_t profiler_core_count_per_dram = profiler_control_buffer[CORE_COUNT_PER_DRAM];
 
@@ -321,7 +323,9 @@ __attribute__((noinline)) void quick_push() {
     mark_time_at_index_inlined(wIndex, hash);
     wIndex += PROFILER_L1_MARKER_UINT32_SIZE;
 
-    while (!profiler_control_buffer[DRAM_PROFILER_ADDRESS]);
+    while (!profiler_control_buffer[DRAM_PROFILER_ADDRESS]) {
+        invalidate_l1_cache();
+    }
     uint32_t core_flat_id = profiler_control_buffer[FLAT_ID];
     uint32_t profiler_core_count_per_dram = profiler_control_buffer[CORE_COUNT_PER_DRAM];
 

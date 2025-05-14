@@ -783,6 +783,18 @@ std::set<std::pair<chan_id_t, eth_chan_directions>> ControlPlane::get_active_fab
     return active_fabric_eth_channels;
 }
 
+eth_chan_directions ControlPlane::get_eth_chan_direction(mesh_id_t mesh_id, chip_id_t chip_id, int chan) const {
+    for (const auto& [direction, eth_chans] :
+         this->router_port_directions_to_physical_eth_chan_map_[mesh_id][chip_id]) {
+        for (const auto& eth_chan : eth_chans) {
+            if (chan == eth_chan) {
+                return this->routing_direction_to_eth_direction(direction);
+            }
+        }
+    }
+    TT_THROW("Cannot Find Ethernet Channel Direction");
+}
+
 std::vector<std::pair<chip_id_t, chan_id_t>> ControlPlane::get_fabric_route(
     mesh_id_t src_mesh_id,
     chip_id_t src_chip_id,
@@ -986,5 +998,18 @@ void ControlPlane::print_ethernet_channels() const {
     }
     log_debug(tt::LogFabric, "{}", ss.str());
 }
+
+void ControlPlane::set_routing_mode(uint16_t mode) {
+    if (!(this->routing_mode_ == 0 || this->routing_mode_ == mode)) {
+        tt::log_warning(
+            tt::LogFabric,
+            "Control Plane: Routing mode already set to {}. Setting to {}",
+            (uint16_t)this->routing_mode_,
+            (uint16_t)mode);
+    }
+    this->routing_mode_ = mode;
+}
+
+uint16_t ControlPlane::get_routing_mode() const { return this->routing_mode_; }
 
 }  // namespace tt::tt_fabric

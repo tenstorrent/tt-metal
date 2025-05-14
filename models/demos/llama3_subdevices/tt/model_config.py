@@ -26,7 +26,7 @@ from pathlib import Path
 from enum import Enum, auto
 from tqdm import tqdm
 from dataclasses import dataclass
-from models.tt_transformers.tt.load_checkpoints import (
+from models.demos.llama3_subdevices.tt.load_checkpoints import (
     load_meta_state_dict,
     load_hf_state_dict,
     convert_hf_to_meta,
@@ -542,7 +542,7 @@ class TtModelArgs:
 
         self.tokenizer = None if dummy_weights else self.create_tokenizer()
 
-        device = mesh_device.get_devices()[0] if mesh_device is not None else None
+        device = mesh_device if mesh_device is not None else None
         self.cluster_shape = list(mesh_device.shape)
         self.is_galaxy = self.num_devices == 32
         if device is not None:  # Avoid issue with test_llama_torch.py not having a device
@@ -639,7 +639,7 @@ class TtModelArgs:
             )
 
             self.model_config["DECODE_SAMPLING_INPUT_MEMCFG"] = ttnn.create_sharded_memory_config(
-                shape=(1, 1, self.max_batch_size, 32),
+                shape=(1, 1, max(self.max_batch_size, self.tile_size), self.tile_size),
                 core_grid=shard_grid,
                 strategy=ttnn.ShardStrategy.WIDTH,
                 orientation=ttnn.ShardOrientation.ROW_MAJOR,

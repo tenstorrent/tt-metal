@@ -8,7 +8,7 @@
 #include <pybind11/stl.h>
 
 #include "moreh_nll_loss_unreduced_backward.hpp"
-#include "cpp/pybind11/decorators.hpp"
+#include "ttnn-pybind/decorators.hpp"
 
 namespace py = pybind11;
 

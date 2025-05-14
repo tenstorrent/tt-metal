@@ -83,7 +83,7 @@ constexpr size_t packed_buffer_size_bytes<bfloat4_b>(size_t volume_unpacked_data
 //                                  Layout converters
 // ======================================================================================
 template <typename T>
-inline std::vector<T> convert_layout_row_major_to_tile(
+std::vector<T> convert_layout_row_major_to_tile(
     const Shape2D& shape, const Tile& tile, tt::stl::Span<const T> data_to_convert) {
     if (shape.width() * shape.height() == 0) {
         return std::vector<T>();
@@ -113,7 +113,7 @@ inline std::vector<T> convert_layout_row_major_to_tile(
 }
 
 template <typename T>
-inline std::vector<T> convert_layout_tile_to_row_major(
+std::vector<T> convert_layout_tile_to_row_major(
     const Shape2D& shape, const Tile& tile, tt::stl::Span<const T> data_to_convert) {
     auto tile_shape = tile.get_tile_shape();
     auto face_shape = tile.get_face_shape();
@@ -156,15 +156,9 @@ std::vector<T> encode_tensor_data(std::vector<T>&& logical_data, const TensorSpe
 template <typename T>
 std::vector<T> decode_tensor_data(std::vector<T>&& physical_data, const TensorSpec& tensor_spec);
 
-// ======================================================================================
-//                                      Validators
-// ======================================================================================
-void validate_on_device_dtype_and_layout(const ttnn::Shape& shape, DataType dtype, Layout layout);
-// -----------------------------------------------------------------------------------------------------------------------------------------------
 // ===============================================================================================================================================
 //                                                              High Level APIs
 // ===============================================================================================================================================
-// -----------------------------------------------------------------------------------------------------------------------------------------------
 
 // ======================================================================================
 //                           Data reader, writer, and initializers

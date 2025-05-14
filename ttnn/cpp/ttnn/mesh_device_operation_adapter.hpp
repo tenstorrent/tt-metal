@@ -166,7 +166,9 @@ struct MeshDeviceOperationAdapter {
                 // tensor_args_t for Op contains input_tensors attributes (mirror what's done in
                 // OldInfraDeviceOperation)
                 return tt::tt_metal::operation::OpPerformanceModelGeneral(
-                    tensor_args.input_tensors, tensor_return_value);
+                    tensor_args.input_tensors,
+                    tensor_return_value,
+                    1 /* ideal_compute_cycles: specify as 1, since op perf model is not provided*/);
             } else {
                 // tensor_args_t does not comply with interface used by OldInfraDeviceOperation, use default performance
                 // model

@@ -4,12 +4,9 @@
 
 import torch
 import torchvision
+from ttnn.model_preprocessing import convert_torch_model_to_ttnn_model, fold_batch_norm2d_into_conv2d
 
 import ttnn
-from ttnn.model_preprocessing import (
-    fold_batch_norm2d_into_conv2d,
-    convert_torch_model_to_ttnn_model,
-)
 from models.utility_functions import pad_and_fold_conv_filters_for_unity_stride
 
 
