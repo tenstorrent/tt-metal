@@ -8,7 +8,7 @@ This test suite addresses the functionality and performance (i.e. bandwidth) of 
 | DRAM Unary    | 0-3   | Transactions between DRAM and a single Tensix core.                                  |
 | One to One    | 4     | Write transactions between two Tensix cores.                                         |
 | One From One  | 5     | Read transactions between two Tensix cores.                                          |
-| One From All  | 6     | Read transactions between one gatherer Tensix core and multiple sender Tensix cores. |
+| One From All  | 15    | Read transactions between one gatherer Tensix core and multiple sender Tensix cores. |
 
 ## Running Tests
 ### C++ Gtests
