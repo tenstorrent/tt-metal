@@ -47,7 +47,7 @@ std::vector<distributed::MeshCoordinate> TensorAttributes::determine_distributio
         tt::stl::overloaded{
             [&mesh_shape](const HostStorage&) { return mesh_shape.mesh_size(); },
             [&mesh_shape](const DeviceStorage& s) { return s.specs.size(); },
-            [&mesh_shape](const MultiDeviceHostStorage& s) { return s.buffers.size(); },
+            [&mesh_shape](const MultiDeviceHostStorage& s) { return s.num_buffers(); },
         },
         storage_);
 

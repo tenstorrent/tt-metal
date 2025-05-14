@@ -46,9 +46,8 @@ std::vector<Tensor> get_device_tensors(const Tensor& tensor) {
     if (std::holds_alternative<tt::tt_metal::MultiDeviceHostStorage>(tensor.get_storage())) {
         std::vector<ttnn::Tensor> tensors;
         auto& host_storage = std::get<tt::tt_metal::MultiDeviceHostStorage>(tensor.get_storage());
-        const Tile tile = tensor.get_tensor_spec().tile();
         for (int i = 0; i < host_storage.num_buffers(); ++i) {
-            tensors.push_back(Tensor{host_storage.get_buffer(i), host_storage.specs[i]});
+            tensors.push_back(Tensor{host_storage.get_buffer(i), host_storage.get_tensor_spec(i)});
         }
         return tensors;
     } else if (std::holds_alternative<tt::tt_metal::DeviceStorage>(tensor.get_storage())) {
@@ -57,7 +56,7 @@ std::vector<Tensor> get_device_tensors(const Tensor& tensor) {
             std::vector<ttnn::Tensor> tensors;
             tensors.reserve(device_storage.specs.size());
             for (const auto& [coord, shard_spec] : device_storage.specs) {
-                DeviceStorage shard_storage(mesh_buffer, AllGatherTensor{}, {std::make_pair(coord, shard_spec)});
+                DeviceStorage shard_storage(mesh_buffer, {std::make_pair(coord, shard_spec)});
                 tensors.push_back(Tensor(std::move(shard_storage), shard_spec, AllGatherTensor{}));
             }
             return tensors;
@@ -102,7 +101,7 @@ Tensor aggregate_as_tensor(
                     shard_tile.get_width());
             }
         }
-        auto storage = MultiDeviceHostStorage{config, std::move(host_owned_buffers), specs};
+        auto storage = MultiDeviceHostStorage{std::move(host_owned_buffers), specs};
         return Tensor(std::move(storage), reference_shard.get_tensor_spec(), config);
     } else if (storage_type == StorageType::DEVICE) {
         auto mesh_buffer = std::get<DeviceStorage>(reference_shard.get_storage()).mesh_buffer;
@@ -126,7 +125,7 @@ Tensor aggregate_as_tensor(
             specs.begin(), specs.end(), [](const auto& a, const auto& b) { return a.first == b.first; });
         TT_FATAL(duplicate == specs.end(), "Found a tensor shard at duplicate coordiante {0}", duplicate->first);
 
-        auto storage = DeviceStorage(mesh_buffer, AllGatherTensor{}, specs);
+        auto storage = DeviceStorage(mesh_buffer, specs);
         return Tensor(std::move(storage), reference_shard.get_tensor_spec(), AllGatherTensor{});
     } else {
         TT_THROW(

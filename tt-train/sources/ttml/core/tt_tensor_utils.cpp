@@ -153,8 +153,7 @@ template <class T, ttnn::DataType TensorType>
             shape, ttnn::TensorLayout(TensorType, ttnn::PageConfig(ttnn::Layout::ROW_MAJOR), ttnn::MemoryConfig{})));
     }
     auto distributed_tensor_config = tt::tt_metal::get_distributed_tensor_config(config);
-    auto storage = tt::tt_metal::MultiDeviceHostStorage(
-        distributed_tensor_config, std::move(host_owned_buffers), host_owned_specs);
+    auto storage = tt::tt_metal::MultiDeviceHostStorage(std::move(host_owned_buffers), host_owned_specs);
 
     // remove possible paddings from the shape (it conflicts with ROW MAJOR)
     auto output = ttnn::Tensor(std::move(storage), host_owned_specs[0], distributed_tensor_config);
