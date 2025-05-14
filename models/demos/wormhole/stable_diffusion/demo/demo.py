@@ -219,21 +219,18 @@ def run_demo_inference(device, reset_seeds, input_path, num_prompts, num_inferen
 
             iter += 1
 
-        latents = ttnn.to_torch(ttnn_latents).to(torch.float32)
-
         # scale and decode the image latents with vae
-        latents = 1 / 0.18215 * latents
+        latents = 1 / 0.18215 * ttnn_latents
 
         # on blackhole, we use the original vae decoder until #20760 is fixed
         if not is_blackhole():
-            latents_tt = ttnn.from_torch(
-                latents.permute([0, 2, 3, 1]), device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16
-            )
-            ttnn_output = tt_vae.decode(latents_tt)
+            latents = ttnn.permute(latents, [0, 2, 3, 1])
+            ttnn_output = tt_vae.decode(latents)
             ttnn_output = ttnn.reshape(ttnn_output, [1, image_size[0], image_size[1], ttnn_output.shape[3]])
             ttnn_output = ttnn.permute(ttnn_output, [0, 3, 1, 2])
             image = ttnn.to_torch(ttnn_output)
         else:
+            latents = ttnn.to_torch(latents).to(torch.float32)
             image = vae.decode(latents).sample
 
         profiler.end(f"inference_prompt_{i}")
@@ -403,21 +400,18 @@ def run_interactive_demo_inference(device, num_inference_steps, image_size=(256,
             iter += 1
         print(f"Time taken for {iter} iterations: total: {total_accum:.3f}")
 
-        latents = ttnn.to_torch(ttnn_latents).to(torch.float32)
-
         # scale and decode the image latents with vae
-        latents = 1 / 0.18215 * latents
+        latents = 1 / 0.18215 * ttnn_latents
 
         # on blackhole, we use the original vae decoder until #20760 is fixed
         if not is_blackhole():
-            latents_tt = ttnn.from_torch(
-                latents.permute([0, 2, 3, 1]), device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16
-            )
-            ttnn_output = tt_vae.decode(latents_tt)
+            latents = ttnn.permute(latents, [0, 2, 3, 1])
+            ttnn_output = tt_vae.decode(latents)
             ttnn_output = ttnn.reshape(ttnn_output, [1, image_size[0], image_size[1], ttnn_output.shape[3]])
             ttnn_output = ttnn.permute(ttnn_output, [0, 3, 1, 2])
             image = ttnn.to_torch(ttnn_output)
         else:
+            latents = ttnn.to_torch(latents).to(torch.float32)
             image = vae.decode(latents).sample
 
         # Image post-processing
@@ -574,20 +568,18 @@ def run_demo_inference_diffusiondb(
 
             iter += 1
 
-        latents = ttnn.to_torch(ttnn_latents).to(torch.float32)
         # scale and decode the image latents with vae
-        latents = 1 / 0.18215 * latents
+        latents = 1 / 0.18215 * ttnn_latents
 
         # on blackhole, we use the original vae decoder until #20760 is fixed
         if not is_blackhole():
-            latents_tt = ttnn.from_torch(
-                latents.permute([0, 2, 3, 1]), device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16
-            )
-            ttnn_output = tt_vae.decode(latents_tt)
+            latents = ttnn.permute(latents, [0, 2, 3, 1])
+            ttnn_output = tt_vae.decode(latents)
             ttnn_output = ttnn.reshape(ttnn_output, [1, image_size[0], image_size[1], ttnn_output.shape[3]])
             ttnn_output = ttnn.permute(ttnn_output, [0, 3, 1, 2])
             image = ttnn.to_torch(ttnn_output)
         else:
+            latents = ttnn.to_torch(latents).to(torch.float32)
             image = vae.decode(latents).sample
 
         # Image post-processing
