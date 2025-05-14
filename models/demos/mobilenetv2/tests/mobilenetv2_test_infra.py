@@ -3,22 +3,22 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import os
-import ttnn
+
 import torch
 from loguru import logger
+
+import ttnn
+from models.demos.mobilenetv2.reference.mobilenetv2 import Mobilenetv2
+from models.demos.mobilenetv2.tt.model_preprocessing import create_mobilenetv2_model_parameters
+from models.demos.mobilenetv2.tt.ttnn_mobilenetv2 import TtMobileNetV2
+from models.utility_functions import divup, is_wormhole_b0
 from tests.ttnn.utils_for_testing import assert_with_pcc
-from models.utility_functions import is_wormhole_b0, divup
-from models.experimental.mobilenetv2.reference.mobilenetv2 import Mobilenetv2
-from models.experimental.mobilenetv2.tt.ttnn_mobilenetv2 import TtMobileNetV2
-from models.experimental.mobilenetv2.tt.model_preprocessing import (
-    create_mobilenetv2_model_parameters,
-)
 
 
 def load_torch_model():
-    weights_path = "models/experimental/mobilenetv2/mobilenet_v2-b0353104.pth"
+    weights_path = "models/demos/mobilenetv2/mobilenet_v2-b0353104.pth"
     if not os.path.exists(weights_path):
-        os.system("bash models/experimental/mobilenetv2/weights_download.sh")
+        os.system("bash models/demos/mobilenetv2/weights_download.sh")
 
     state_dict = torch.load(weights_path)
     ds_state_dict = {k: v for k, v in state_dict.items()}
