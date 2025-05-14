@@ -68,6 +68,7 @@ function getWorkflowStats(runs) {
   let totalSuccesses = 0;
   let runsWithRetries = 0;
 
+  // First pass: identify all unique runs and their retries
   for (const run of runs) {
     totalRuns++;
     if (run.conclusion === 'success') {
@@ -76,14 +77,20 @@ function getWorkflowStats(runs) {
     // Use the original run ID as the key, considering both retries and reruns
     const originalRunId = run.run_attempt > 1 ? run.id - (run.run_attempt - 1) : run.id;
     if (!uniqueRuns.has(originalRunId)) {
-      uniqueRuns.set(originalRunId, run);
+      uniqueRuns.set(originalRunId, {
+        run,
+        hasRetries: false
+      });
     } else if (run.run_attempt > 1) {
-      // If this is a retry, increment the counter for this unique run
-      runsWithRetries++;
+      // Mark this unique run as having retries
+      uniqueRuns.get(originalRunId).hasRetries = true;
     }
   }
 
-  const uniqueRunsArray = Array.from(uniqueRuns.values());
+  // Count how many unique runs had retries
+  runsWithRetries = Array.from(uniqueRuns.values()).filter(r => r.hasRetries).length;
+
+  const uniqueRunsArray = Array.from(uniqueRuns.values()).map(r => r.run);
   const eventTypes = [...new Set(uniqueRunsArray.map(r => r.event))].join(', ');
   const successRate = totalRuns === 0 ? "N/A" : (totalSuccesses / totalRuns * 100).toFixed(SUCCESS_RATE_DECIMAL_PLACES) + "%";
   const retryRate = uniqueRunsArray.length === 0 ? "N/A" : (runsWithRetries / uniqueRunsArray.length * 100).toFixed(SUCCESS_RATE_DECIMAL_PLACES) + "%";
