@@ -16,6 +16,7 @@
 #include <utility>
 #include <variant>
 #include <vector>
+#include <random>
 
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/data_types.hpp>
@@ -35,6 +36,20 @@
 
 namespace tt::tt_fabric {
 namespace fabric_router_tests {
+std::random_device rd;  // Non-deterministic seed source
+std::mt19937 global_rng(rd());
+
+std::vector<uint32_t> get_random_numbers_from_range(uint32_t start, uint32_t end, uint32_t count) {
+    std::vector<uint32_t> range(end - start + 1);
+
+    // generate the range
+    std::iota(range.begin(), range.end(), start);
+
+    // shuffle the range
+    std::shuffle(range.begin(), range.end(), global_rng);
+
+    return std::vector<uint32_t>(range.begin(), range.begin() + count);
+}
 
 bool find_device_with_neighbor_in_direction(
     BaseFabricFixture* fixture,
@@ -128,42 +143,88 @@ void RunTestUnicastRaw(BaseFabricFixture* fixture, uint32_t num_hops, RoutingDir
     std::unordered_map<RoutingDirection, uint32_t> fabric_hops;
     std::unordered_map<RoutingDirection, std::vector<std::pair<mesh_id_t, chip_id_t>>> end_mesh_chip_ids_by_dir;
     chip_id_t src_physical_device_id;
+    chip_id_t dst_physical_device_id;
     std::unordered_map<RoutingDirection, std::vector<chip_id_t>> physical_end_device_ids_by_dir;
     fabric_hops[direction] = num_hops;
-    // Find a device with enough neighbours in the specified directions
-    if (!find_device_with_neighbor_in_multi_direction(
-            fixture,
-            src_mesh_chip_id,
-            end_mesh_chip_ids_by_dir,
-            src_physical_device_id,
-            physical_end_device_ids_by_dir,
-            fabric_hops)) {
-        GTEST_SKIP() << "No path found between sender and receivers";
+
+    tt::tt_metal::distributed::MeshShape mesh_shape;
+    const auto edm_config = get_tt_fabric_config();
+    uint32_t is_2d_fabric = edm_config.topology == Topology::Mesh;
+    chan_id_t edm_port;
+
+    if (!is_2d_fabric) {
+        // Find a device with enough neighbours in the specified directions
+        if (!find_device_with_neighbor_in_multi_direction(
+                fixture,
+                src_mesh_chip_id,
+                end_mesh_chip_ids_by_dir,
+                src_physical_device_id,
+                physical_end_device_ids_by_dir,
+                fabric_hops)) {
+            GTEST_SKIP() << "No path found between sender and receivers";
+        }
+        mesh_shape = control_plane->get_physical_mesh_shape(src_mesh_chip_id.first);
+        dst_physical_device_id = physical_end_device_ids_by_dir[direction][num_hops - 1];
+        dst_mesh_chip_id = end_mesh_chip_ids_by_dir[direction][num_hops - 1];
+
+        // get a port to connect to
+        std::set<chan_id_t> eth_chans = control_plane->get_active_fabric_eth_channels_in_direction(
+            src_mesh_chip_id.first, src_mesh_chip_id.second, direction);
+        if (eth_chans.size() == 0) {
+            GTEST_SKIP() << "No active eth chans to connect to";
+        }
+
+        // Pick a port from end of the list. On T3K, there are missimg routing planes due to FD tunneling
+        edm_port = *std::prev(eth_chans.end());
+
+    } else {
+        auto devices = fixture->get_devices();
+        auto num_devices = devices.size();
+        // create a list of available deive ids in a random order
+        // In 2D routing the source and desitnation devices can be anywhere on the mesh.
+        auto random_dev_list = get_random_numbers_from_range(0, devices.size() - 1, devices.size());
+
+        // pick the first two in the list to be src and dst devices for the test.
+        src_physical_device_id = devices[random_dev_list[0]]->id();
+        dst_physical_device_id = devices[random_dev_list[1]]->id();
+        src_mesh_chip_id = control_plane->get_mesh_chip_id_from_physical_chip_id(src_physical_device_id);
+        dst_mesh_chip_id = control_plane->get_mesh_chip_id_from_physical_chip_id(dst_physical_device_id);
+        mesh_shape = control_plane->get_physical_mesh_shape(src_mesh_chip_id.first);
+
+        auto routers = control_plane->get_routers_to_chip(
+            src_mesh_chip_id.first, src_mesh_chip_id.second, dst_mesh_chip_id.first, dst_mesh_chip_id.second);
+        if (routers.size() == 0) {
+            log_info(
+                tt::LogTest,
+                "No fabric routers between Src MeshId {} ChipId {} - Dst MeshId {} ChipId {}",
+                src_mesh_chip_id.first,
+                src_mesh_chip_id.second,
+                dst_mesh_chip_id.first,
+                dst_mesh_chip_id.second);
+
+            GTEST_SKIP() << "Skipping Test";
+        }
+
+        auto vritual_router = routers[0].second;
+        auto logical_router =
+            tt::tt_metal::MetalContext::instance().get_cluster().get_logical_ethernet_core_from_virtual(
+                src_physical_device_id, vritual_router);
+        edm_port = logical_router.y;
     }
 
-    chip_id_t dst_physical_device_id = physical_end_device_ids_by_dir[direction][num_hops - 1];
-    dst_mesh_chip_id = end_mesh_chip_ids_by_dir[direction][num_hops - 1];
-
-    tt::log_info(tt::LogTest, "mesh/chip ids {}", end_mesh_chip_ids_by_dir[direction]);
-    tt::log_info(tt::LogTest, "physical device ids {}", physical_end_device_ids_by_dir[direction]);
+    tt::log_info(tt::LogTest, "mesh dimensions {:x}", mesh_shape.dims());
+    tt::log_info(tt::LogTest, "mesh size {:x}", mesh_shape.mesh_size());
+    tt::log_info(tt::LogTest, "mesh dimension 0 {:x}", mesh_shape[0]);
+    tt::log_info(tt::LogTest, "mesh dimension 1 {:x}", mesh_shape[1]);
     tt::log_info(tt::LogTest, "Src MeshId {} ChipId {}", src_mesh_chip_id.first, src_mesh_chip_id.second);
     tt::log_info(tt::LogTest, "Dst MeshId {} ChipId {}", dst_mesh_chip_id.first, dst_mesh_chip_id.second);
-    tt::log_info(tt::LogTest, "Dst Device is {} hops in direction: {}", num_hops, direction);
-
-    // get a port to connect to
-    std::set<chan_id_t> eth_chans = control_plane->get_active_fabric_eth_channels_in_direction(
-        src_mesh_chip_id.first, src_mesh_chip_id.second, direction);
-    if (eth_chans.size() == 0) {
-        GTEST_SKIP() << "No active eth chans to connect to";
-    }
-
-    // Pick a port from end of the list. On T3K, there are missimg routing planes due to FD tunneling
-    auto edm_port = *std::prev(eth_chans.end());
 
     auto edm_direction =
         control_plane->get_eth_chan_direction(src_mesh_chip_id.first, src_mesh_chip_id.second, edm_port);
     CoreCoord edm_eth_core = tt::tt_metal::MetalContext::instance().get_cluster().get_virtual_eth_core_from_channel(
         src_physical_device_id, edm_port);
+
+    tt::log_info(tt::LogTest, "Using edm port {} in direction {}", edm_port, edm_direction);
 
     auto* sender_device = DevicePool::instance().get_active_device(src_physical_device_id);
     auto* receiver_device = DevicePool::instance().get_active_device(dst_physical_device_id);
@@ -172,9 +233,6 @@ void RunTestUnicastRaw(BaseFabricFixture* fixture, uint32_t num_hops, RoutingDir
 
     auto receiver_noc_encoding =
         tt::tt_metal::MetalContext::instance().hal().noc_xy_encoding(receiver_virtual_core.x, receiver_virtual_core.y);
-
-    const auto edm_config = get_tt_fabric_config();
-    uint32_t is_2d_fabric = edm_config.topology == Topology::Mesh;
 
     // test parameters
     uint32_t packet_header_address = 0x25000;
@@ -210,11 +268,6 @@ void RunTestUnicastRaw(BaseFabricFixture* fixture, uint32_t num_hops, RoutingDir
             .noc = tt_metal::NOC::RISCV_0_default,
             .compile_args = compile_time_args,
             .defines = defines});
-
-    auto mesh_shape = control_plane->get_physical_mesh_shape(src_mesh_chip_id.first);
-    tt::log_info(tt::LogTest, "mesh dimensions {:x}", mesh_shape.dims());
-    tt::log_info(tt::LogTest, "mesh dimension 0 {:x}", mesh_shape[0]);
-    tt::log_info(tt::LogTest, "mesh dimension 1 {:x}", mesh_shape[1]);
 
     std::vector<uint32_t> sender_runtime_args = {
         packet_header_address,

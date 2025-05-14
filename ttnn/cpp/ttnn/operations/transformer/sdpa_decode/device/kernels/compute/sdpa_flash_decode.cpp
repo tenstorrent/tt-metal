@@ -250,9 +250,6 @@ void MAIN {
                     cb_pop_front(cb_m_in, Sq_chunk_t);
                     copy_block(cb_cur_max, cb_prev_max, Sq_chunk_t);
                     copy_block(cb_cur_sum, cb_prev_sum, Sq_chunk_t);
-#ifndef ARCH_WORMHOLE
-                    UNPACK(asm volatile("fence"));  // #19201 BH hang workaround
-#endif
                 }
             }
 

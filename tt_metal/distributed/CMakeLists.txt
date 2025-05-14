@@ -15,6 +15,7 @@ set(DISTRIBUTED_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/mesh_workload_utils.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/system_mesh.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/mpi_distributed_context.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/distributed_host_buffer.cpp
 )
 
 find_package(MPI REQUIRED)

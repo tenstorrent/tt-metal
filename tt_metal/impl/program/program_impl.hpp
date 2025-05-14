@@ -293,6 +293,7 @@ private:
     friend Program;
     friend Internal_;
     friend distributed::MeshWorkload;
+    friend distributed::MeshWorkloadImpl;
 };
 
 }  // namespace detail

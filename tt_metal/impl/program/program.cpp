@@ -147,13 +147,7 @@ size_t KernelCompileHash(const std::shared_ptr<Kernel>& kernel, JitBuildOptions&
         build_key,
         std::to_string(std::hash<tt_hlk_desc>{}(build_options.hlk_desc)),
         kernel->compute_hash(),
-        tt::tt_metal::MetalContext::instance().rtoptions().get_watcher_enabled());
-
-    for (int i = 0; i < llrt::RunTimeDebugFeatureCount; i++) {
-        compile_hash_str += "_";
-        compile_hash_str +=
-            tt::tt_metal::MetalContext::instance().rtoptions().get_feature_hash_string((llrt::RunTimeDebugFeatures)i);
-    }
+        tt::tt_metal::MetalContext::instance().rtoptions().get_compile_hash_string());
     size_t compile_hash = std::hash<std::string>{}(compile_hash_str);
 
 #ifdef GENERATE_HASH_LOG
@@ -1386,6 +1380,8 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
                     const std::string kernel_path_suffix = kernel->name() + "/" + std::to_string(kernel_hash) + "/";
                     kernel->set_full_name(kernel_path_suffix);
                     build_options.set_name(kernel_path_suffix);
+
+                    kernel->register_kernel_elf_paths_with_watcher(*device);
 
                     if (enable_persistent_kernel_cache && kernel->binaries_exist_on_disk(device)) {
                         if (not detail::HashLookup::inst().exists(kernel_hash)) {

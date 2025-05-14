@@ -78,7 +78,7 @@ template <typename DType>
 void EnqueueWriteMeshBuffer(
     MeshCommandQueue& mesh_cq,
     std::shared_ptr<MeshBuffer>& mesh_buffer,
-    std::vector<DType>& src,
+    const std::vector<DType>& src,
     bool blocking = false) {
     mesh_cq.enqueue_write_mesh_buffer(mesh_buffer, src.data(), blocking);
 }
