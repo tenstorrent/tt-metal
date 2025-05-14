@@ -156,11 +156,7 @@ void Tensor::deallocate_impl(bool force) {
             // The underlying data can still be shared across tensors.
             tt::stl::overloaded{
                 [this](HostStorage& host_storage) { host_storage.buffer.deallocate(); },
-                [this](MultiDeviceHostStorage& host_storage) {
-                    for (auto& host_buffer : host_storage.buffers) {
-                        host_buffer.deallocate();
-                    }
-                },
+                [this](MultiDeviceHostStorage& host_storage) { host_storage.deallocate(); },
                 [this, force, &can_deallocate](DeviceStorage& storage) {
                     if (can_deallocate(storage.mesh_buffer, force)) {
                         storage.mesh_buffer->deallocate();
@@ -515,8 +511,9 @@ StorageType Tensor::storage_type() const {
 ttnn::Shape Tensor::strides() const { return ttnn::Shape(tt::tt_metal::compute_strides(this->get_padded_shape())); }
 
 uint32_t Tensor::volume() const { return get_padded_shape().volume(); }
-
-uint32_t Tensor::get_logical_volume() const { return get_logical_shape().volume(); }
+uint64_t Tensor::logical_volume() const { return get_logical_shape().volume(); }
+uint64_t Tensor::padded_volume() const { return get_padded_shape().volume(); }
+uint64_t Tensor::get_logical_volume() const { return get_logical_shape().volume(); }
 
 bool Tensor::is_scalar() const {
     const ttnn::Shape logical_shape = this->get_logical_shape();
@@ -696,7 +693,7 @@ Tensor allocate_tensor_on_mesh(const TensorSpec& tensor_spec, distributed::MeshD
     for (const auto& coord : distributed::MeshCoordinateRange(mesh_device->shape())) {
         specs.push_back(std::make_pair(coord, tensor_spec));
     }
-    DeviceStorage device_storage(std::move(mesh_buffer), ReplicateTensor(), std::move(specs));
+    DeviceStorage device_storage(std::move(mesh_buffer), std::move(specs));
     return Tensor(std::move(device_storage), tensor_spec, ReplicateTensor{});
 }
 
@@ -720,8 +717,7 @@ void write_tensor(const Tensor& host_tensor, Tensor device_tensor, QueueId cq_id
             "write_tensor only supports host_tensor to device_tensor data transfer");
         TT_FATAL(host_tensor.get_logical_shape() == device_tensor.get_logical_shape(), "Error");
         TT_FATAL(host_tensor.get_dtype() == device_tensor.get_dtype(), "Error");
-        TT_FATAL(
-            host_tensor.get_tensor_spec().page_config() == device_tensor.get_tensor_spec().page_config(), "Error");
+        TT_FATAL(host_tensor.get_tensor_spec().page_config() == device_tensor.get_tensor_spec().page_config(), "Error");
         std::visit(
             tt::stl::overloaded{
                 [cq_id, &host_tensor, &device_tensor](const DeviceStorage& device_storage) {
@@ -744,8 +740,7 @@ void write_tensor(const Tensor& host_tensor, Tensor device_tensor, QueueId cq_id
                     if (auto mesh_device = device_tensor.mesh_device()) {
                         tt::tt_metal::memcpy(mesh_device->mesh_command_queue(*cq_id), device_tensor, host_data);
                     } else {
-                        tt::tt_metal::memcpy(
-                            device_tensor.device()->command_queue(*cq_id), device_tensor, host_data);
+                        tt::tt_metal::memcpy(device_tensor.device()->command_queue(*cq_id), device_tensor, host_data);
                     }
                 },
                 [](auto&& s) { TT_THROW("Unreachable"); }},
@@ -773,6 +768,7 @@ Tensor set_tensor_id(const Tensor& tensor) {
 };
 
 const Storage& Tensor::storage() const { return this->tensor_attributes->get_storage(); }
+Storage& Tensor::storage() { return this->tensor_attributes->get_storage(); }
 
 const ttnn::Shape& Tensor::logical_shape() const { return this->tensor_attributes->get_tensor_spec().logical_shape(); }
 

@@ -382,24 +382,12 @@ void DevicePool::activate_device(chip_id_t id) {
             worker_core_thread_core,
             completion_queue_reader_core,
             this->worker_l1_size);
-        if (!this->firmware_built_keys.contains(
-                BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_key)) {
-            BuildEnvManager::get_instance().build_firmware(device->build_id());
-            this->firmware_built_keys.insert(
-                BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_key);
-        }
         this->devices.emplace_back(std::unique_ptr<IDevice>(device));
     } else {
         log_debug(tt::LogMetal, "DevicePool re-initialize device {}", id);
         if (not device->is_initialized()) {
             device->initialize(
                 num_hw_cqs, this->l1_small_size, this->trace_region_size, this->worker_l1_size, this->l1_bank_remap);
-            if (!this->firmware_built_keys.contains(
-                    BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_key)) {
-                BuildEnvManager::get_instance().build_firmware(device->build_id());
-                this->firmware_built_keys.insert(
-                    BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_key);
-            }
         } else {
             TT_THROW("Cannot re-initialize device {}, must first call close()", id);
         }
@@ -670,21 +658,20 @@ bool DevicePool::close_device(chip_id_t device_id) {
     // Currently can only call this on mmio chips, once we split dispatch kernel shutdown
     // from device close, we can call this on remote devices too
     ZoneScoped;
-    tt::tt_metal::MetalContext::instance().get_cluster().set_internal_routing_info_for_ethernet_cores(false);
-    bool pass = true;
     const auto& mmio_device_id =
         tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(device_id);
+    std::vector<IDevice*> devices_to_close;
     for (const auto& mmio_controlled_device_id :
          tt::tt_metal::MetalContext::instance().get_cluster().get_devices_controlled_by_mmio_device(mmio_device_id)) {
         auto device = get_device(mmio_controlled_device_id);
         if (device && device->is_initialized()) {
-            pass &= device->close();
+            devices_to_close.push_back(device);
         }
     }
-    return pass;
+    return close_devices(devices_to_close);
 }
 
-void DevicePool::close_devices(const std::vector<IDevice*>& devices, bool skip_synchronize) {
+bool DevicePool::close_devices(const std::vector<IDevice*>& devices, bool skip_synchronize) {
     // Ordered, because we need to shutdown tunnels from the farthest to the closest.
     std::vector<chip_id_t> devices_to_close;
 
@@ -788,10 +775,12 @@ void DevicePool::close_devices(const std::vector<IDevice*>& devices, bool skip_s
     detail::ProfilerSync(ProfilerSyncState::CLOSE_DEVICE);
 
     tt::tt_metal::MetalContext::instance().get_cluster().set_internal_routing_info_for_ethernet_cores(false);
+    bool pass = true;
     for (const auto& dev_id : devices_to_close) {
         auto dev = tt::DevicePool::instance().get_active_device(dev_id);
-        dev->close();
+        pass &= dev->close();
     }
+    return pass;
 }
 
 DevicePool::~DevicePool() {

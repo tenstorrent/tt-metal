@@ -77,6 +77,18 @@ struct TargetSelection {
     bool prepend_device_core_risc;
 };
 
+struct WatcherSettings {
+    bool enabled = false;
+    bool dump_all = false;
+    bool append = false;
+    bool auto_unpause = false;
+    bool noinline = false;
+    bool phys_coords = false;
+    bool text_start = false;
+    bool skip_logging = false;
+    int interval_ms = 0;
+};
+
 class RunTimeOptions {
     bool is_root_dir_env_var_set = false;
     std::string root_dir;
@@ -90,14 +102,7 @@ class RunTimeOptions {
 
     bool build_map_enabled = false;
 
-    bool watcher_enabled = false;
-    int watcher_interval_ms;
-    bool watcher_dump_all = false;
-    bool watcher_append = false;
-    bool watcher_auto_unpause = false;
-    bool watcher_noinline = false;
-    bool watcher_phys_coords = false;
-    bool watcher_text_start = false;
+    WatcherSettings watcher_settings;
     bool record_noc_transfer_data = false;
 
     TargetSelection feature_targets[RunTimeDebugFeatureCount];
@@ -176,22 +181,24 @@ public:
 
     // Info from watcher environment variables, setters included so that user
     // can override with a SW call.
-    inline bool get_watcher_enabled() const { return watcher_enabled; }
-    inline void set_watcher_enabled(bool enabled) { watcher_enabled = enabled; }
-    inline int get_watcher_interval() const { return watcher_interval_ms; }
-    inline void set_watcher_interval(int interval_ms) { watcher_interval_ms = interval_ms; }
-    inline int get_watcher_dump_all() const { return watcher_dump_all; }
-    inline void set_watcher_dump_all(bool dump_all) { watcher_dump_all = dump_all; }
-    inline int get_watcher_append() const { return watcher_append; }
-    inline void set_watcher_append(bool append) { watcher_append = append; }
-    inline int get_watcher_auto_unpause() const { return watcher_auto_unpause; }
-    inline void set_watcher_auto_unpause(bool auto_unpause) { watcher_auto_unpause = auto_unpause; }
-    inline int get_watcher_noinline() const { return watcher_noinline; }
-    inline void set_watcher_noinline(bool noinline) { watcher_noinline = noinline; }
-    inline int get_watcher_phys_coords() const { return watcher_phys_coords; }
-    inline void set_watcher_phys_coords(bool phys_coords) { watcher_phys_coords = phys_coords; }
-    inline int get_watcher_text_start() const { return watcher_text_start; }
-    inline void set_watcher_text_start(bool text_start) { watcher_text_start = text_start; }
+    inline bool get_watcher_enabled() const { return watcher_settings.enabled; }
+    inline void set_watcher_enabled(bool enabled) { watcher_settings.enabled = enabled; }
+    inline int get_watcher_interval() const { return watcher_settings.interval_ms; }
+    inline void set_watcher_interval(int interval_ms) { watcher_settings.interval_ms = interval_ms; }
+    inline int get_watcher_dump_all() const { return watcher_settings.dump_all; }
+    inline void set_watcher_dump_all(bool dump_all) { watcher_settings.dump_all = dump_all; }
+    inline int get_watcher_append() const { return watcher_settings.append; }
+    inline void set_watcher_append(bool append) { watcher_settings.append = append; }
+    inline int get_watcher_auto_unpause() const { return watcher_settings.auto_unpause; }
+    inline void set_watcher_auto_unpause(bool auto_unpause) { watcher_settings.auto_unpause = auto_unpause; }
+    inline int get_watcher_noinline() const { return watcher_settings.noinline; }
+    inline void set_watcher_noinline(bool noinline) { watcher_settings.noinline = noinline; }
+    inline int get_watcher_phys_coords() const { return watcher_settings.phys_coords; }
+    inline void set_watcher_phys_coords(bool phys_coords) { watcher_settings.phys_coords = phys_coords; }
+    inline bool get_watcher_text_start() const { return watcher_settings.text_start; }
+    inline void set_watcher_text_start(bool text_start) { watcher_settings.text_start = text_start; }
+    inline bool get_watcher_skip_logging() const { return watcher_settings.skip_logging; }
+    inline void set_watcher_skip_logging(bool skip_logging) { watcher_settings.skip_logging = skip_logging; }
     inline const std::set<std::string>& get_watcher_disabled_features() const { return watcher_disabled_features; }
     inline bool watcher_status_disabled() const { return watcher_feature_disabled(watcher_waypoint_str); }
     inline bool watcher_noc_sanitize_disabled() const { return watcher_feature_disabled(watcher_noc_sanitize_str); }
@@ -278,7 +285,7 @@ public:
     inline void set_validate_kernel_binaries(bool val) { validate_kernel_binaries = val; }
 
     // Returns the string representation for hash computation.
-    inline std::string get_feature_hash_string(RunTimeDebugFeatures feature) {
+    inline std::string get_feature_hash_string(RunTimeDebugFeatures feature) const {
         switch (feature) {
             case RunTimeDebugFeatureDprint: return std::to_string(get_feature_enabled(feature));
             case RunTimeDebugFeatureReadDebugDelay:
@@ -292,6 +299,14 @@ public:
             case RunTimeDebugFeatureDisableL1DataCache: return std::to_string(get_feature_enabled(feature));
             default: return "";
         }
+    }
+    inline std::string get_compile_hash_string() const {
+        std::string compile_hash_str = fmt::format("{}_{}", get_watcher_enabled(), get_kernels_early_return());
+        for (int i = 0; i < RunTimeDebugFeatureCount; i++) {
+            compile_hash_str += "_";
+            compile_hash_str += get_feature_hash_string((llrt::RunTimeDebugFeatures)i);
+        }
+        return compile_hash_str;
     }
 
     // Used for both watcher and dprint servers, this dev option (no corresponding env var) sets

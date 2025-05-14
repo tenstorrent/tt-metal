@@ -16,6 +16,7 @@
 #include <tt-metalium/mesh_command_queue.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/mesh_event.hpp>
+#include <tt-metalium/mesh_socket.hpp>
 #include <tt-metalium/mesh_trace_id.hpp>
 #include <tt-metalium/mesh_workload.hpp>
 #include <tt-metalium/sub_device_types.hpp>
@@ -77,7 +78,7 @@ template <typename DType>
 void EnqueueWriteMeshBuffer(
     MeshCommandQueue& mesh_cq,
     std::shared_ptr<MeshBuffer>& mesh_buffer,
-    std::vector<DType>& src,
+    const std::vector<DType>& src,
     bool blocking = false) {
     mesh_cq.enqueue_write_mesh_buffer(mesh_buffer, src.data(), blocking);
 }

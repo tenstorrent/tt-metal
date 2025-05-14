@@ -598,7 +598,9 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_width_sh
     if (packer_l1_acc) {
         compute_defines["PACKER_L1_ACC"] = "1";
     }
-
+    if (weight_block_w_ntiles <= 8) {
+        compute_defines["PACKER_UNTILIZE"] = "1";
+    }
     ttnn::operations::compute_throttle_utils::throttle_mm_perf(device->arch(), all_cores.num_cores(), compute_defines);
 
     for (auto elem : compute_defines) {

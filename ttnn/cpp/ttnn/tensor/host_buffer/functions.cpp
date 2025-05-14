@@ -19,10 +19,10 @@ HostBuffer get_host_buffer(const Tensor& tensor) {
             [](const HostStorage& storage) { return storage.buffer; },
             [](const MultiDeviceHostStorage& storage) {
                 TT_FATAL(
-                    storage.buffers.size() == 1,
+                    storage.num_buffers() == 1,
                     "Can't get a single buffer from multi device host storage, got {}",
-                    storage.buffers.size());
-                return storage.buffers[0];
+                    storage.num_buffers());
+                return storage.get_buffer(0);
             },
             [](const auto&) -> HostBuffer { TT_THROW("Tensor must have HostStorage or MultiDeviceHostStorage"); },
         },
