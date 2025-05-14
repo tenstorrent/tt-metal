@@ -72,7 +72,7 @@ ttnn::Tensor PagedFillCacheOperation::invoke(
     const Tensor& cache_tensor,
     const Tensor& input_tensor,
     const Tensor& page_table,
-    std::optional<const Tensor> batch_idx_tensor,
+    const std::optional<const Tensor>& batch_idx_tensor,
     const uint32_t batch_idx_fallback,
     std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config = std::nullopt) {
     auto kernel_config_val = init_device_compute_kernel_config(input_tensor.device()->arch(), compute_kernel_config);
