@@ -286,10 +286,7 @@ endif()
 
 set(ULFM_PREFIX ${CMAKE_BINARY_DIR}/openmpi-ulfm-install)
 set(ULFM_BUILD_DIR ${CMAKE_BINARY_DIR}/openmpi-ulfm-build)
-
-set(ULFM_SO ${ULFM_PREFIX}/lib/libmpi.so) # use symlink, most installs provide it
-# If your 'make install' omits the symlink, switch to libmpi.so.40
-# set(ULFM_SO ${ULFM_PREFIX}/lib/libmpi.so.40)
+set(ULFM_LIB ${ULFM_PREFIX}/lib/libmpi.so)
 
 ExternalProject_Add(
     openmpi_ulfm_build
@@ -307,18 +304,49 @@ ExternalProject_Add(
     STEP_TARGETS
         build
         install
-    BUILD_BYPRODUCTS
-        ${ULFM_SO} # <-- EXACT path ninja must wait for
+    #    BUILD_BYPRODUCTS
+    #        ${ULFM_LIB} # <-- EXACT path ninja must wait for
 )
 
-add_library(OpenMPI::MPI SHARED IMPORTED GLOBAL)
-add_dependencies(OpenMPI::MPI openmpi_ulfm_build) # Depend on the external project target
+add_custom_command(
+    OUTPUT
+        ${ULFM_LIB}
+    COMMAND
+        /usr/bin/echo "void dummy_mpi(void){}" | ${CMAKE_C_COMPILER} -shared -x c - -o ${ULFM_LIB}
+    VERBATIM
+    COMMENT "Building stub libmpi.so"
+)
+add_custom_target(fake_mpi ALL DEPENDS ${ULFM_LIB})
 
+add_library(OpenMPI::MPI SHARED IMPORTED GLOBAL)
+add_dependencies(OpenMPI::MPI fake_mpi)
+
+file(
+    MAKE_DIRECTORY
+        ${ULFM_BUILD_DIR}/ompi/include
+        ${ULFM_PREFIX}/include
+        ${ULFM_PREFIX}/lib
+)
+
+add_dependencies(OpenMPI::MPI openmpi_ulfm_build-install)
+
+set_property(
+    TARGET
+        openmpi_ulfm_build
+    APPEND
+    PROPERTY
+        BUILD_BYPRODUCTS
+            ${ULFM_LIB}
+)
+
+# 3. set properties
+#    · IMPORTED_LOCATION — literal path (needs BUILD_BYPRODUCTS)
+#    · INTERFACE_INCLUDE_DIRECTORIES — *generator expression* (no quotes!)
 set_target_properties(
     OpenMPI::MPI
     PROPERTIES
         IMPORTED_LOCATION
-            "${ULFM_PREFIX}/lib/libmpi.so"
+            ${ULFM_LIB}
         INTERFACE_INCLUDE_DIRECTORIES
-            "${ULFM_PREFIX}/include"
+            $<BUILD_INTERFACE:${ULFM_PREFIX}/include>
 )

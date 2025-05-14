@@ -16,7 +16,7 @@ set(DISTRIBUTED_SRC
 )
 
 add_library(distributed OBJECT ${DISTRIBUTED_SRC})
-
+add_dependencies(distributed openmpi_ulfm_build-build)
 target_link_libraries(
     distributed
     PUBLIC
