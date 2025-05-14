@@ -34,7 +34,7 @@ void BM_ConvertLayout_RowMajorToTiledSwizzled(benchmark::State& state) {
     auto& input_data = GetInputData();
     for (auto _ : state) {
         auto out = convert_layout<float>(
-            tt::stl::MakeConstSpan(input_data),
+            tt::stl::make_const_span(input_data),
             shape,
             TensorLayoutType::LIN_ROW_MAJOR,
             TensorLayoutType::TILED_SWIZZLED);
@@ -48,7 +48,10 @@ void BM_ConvertLayout_RowMajorToTiledNfaces(benchmark::State& state) {
     auto& input_data = GetInputData();
     for (auto _ : state) {
         auto out = convert_layout<float>(
-            tt::stl::MakeConstSpan(input_data), shape, TensorLayoutType::LIN_ROW_MAJOR, TensorLayoutType::TILED_NFACES);
+            tt::stl::make_const_span(input_data),
+            shape,
+            TensorLayoutType::LIN_ROW_MAJOR,
+            TensorLayoutType::TILED_NFACES);
         benchmark::DoNotOptimize(out.data());
         benchmark::ClobberMemory();
     }
@@ -59,11 +62,11 @@ void BM_ConvertLayout_TiledSwizzledToRowMajor(benchmark::State& state) {
     // Pre-convert input_data to TILED_SWIZZLED for a fair benchmark
     auto& input_data = GetInputData();
     static std::vector<float> tiled_data = convert_layout<float>(
-        tt::stl::MakeConstSpan(input_data), shape, TensorLayoutType::LIN_ROW_MAJOR, TensorLayoutType::TILED_SWIZZLED);
+        tt::stl::make_const_span(input_data), shape, TensorLayoutType::LIN_ROW_MAJOR, TensorLayoutType::TILED_SWIZZLED);
 
     for (auto _ : state) {
         auto out = convert_layout<float>(
-            tt::stl::MakeConstSpan(tiled_data),
+            tt::stl::make_const_span(tiled_data),
             shape,
             TensorLayoutType::TILED_SWIZZLED,
             TensorLayoutType::LIN_ROW_MAJOR);
@@ -77,11 +80,11 @@ void BM_ConvertLayout_TiledSwizzledToTiledNFaces(benchmark::State& state) {
     // Pre-convert input_data to TILED_SWIZZLED
     auto& input_data = GetInputData();
     static std::vector<float> tiled_data = convert_layout<float>(
-        tt::stl::MakeConstSpan(input_data), shape, TensorLayoutType::LIN_ROW_MAJOR, TensorLayoutType::TILED_SWIZZLED);
+        tt::stl::make_const_span(input_data), shape, TensorLayoutType::LIN_ROW_MAJOR, TensorLayoutType::TILED_SWIZZLED);
 
     for (auto _ : state) {
         auto out = convert_layout<float>(
-            tt::stl::MakeConstSpan(tiled_data),
+            tt::stl::make_const_span(tiled_data),
             shape,
             TensorLayoutType::TILED_SWIZZLED,
             TensorLayoutType::TILED_NFACES);
@@ -95,11 +98,11 @@ void BM_ConvertLayout_TiledNFacesToRowMajor(benchmark::State& state) {
     // Pre-convert input_data to TILED_NFACES
     auto& input_data = GetInputData();
     static std::vector<float> nfaces_data = convert_layout<float>(
-        tt::stl::MakeConstSpan(input_data), shape, TensorLayoutType::LIN_ROW_MAJOR, TensorLayoutType::TILED_NFACES);
+        tt::stl::make_const_span(input_data), shape, TensorLayoutType::LIN_ROW_MAJOR, TensorLayoutType::TILED_NFACES);
 
     for (auto _ : state) {
         auto out = convert_layout<float>(
-            tt::stl::MakeConstSpan(nfaces_data),
+            tt::stl::make_const_span(nfaces_data),
             shape,
             TensorLayoutType::TILED_NFACES,
             TensorLayoutType::LIN_ROW_MAJOR);
@@ -113,11 +116,11 @@ void BM_ConvertLayout_TiledNFacesToTiledSwizzled(benchmark::State& state) {
     // Pre-convert input_data to TILED_NFACES
     auto& input_data = GetInputData();
     static std::vector<float> nfaces_data = convert_layout<float>(
-        tt::stl::MakeConstSpan(input_data), shape, TensorLayoutType::LIN_ROW_MAJOR, TensorLayoutType::TILED_NFACES);
+        tt::stl::make_const_span(input_data), shape, TensorLayoutType::LIN_ROW_MAJOR, TensorLayoutType::TILED_NFACES);
 
     for (auto _ : state) {
         auto out = convert_layout<float>(
-            tt::stl::MakeConstSpan(nfaces_data),
+            tt::stl::make_const_span(nfaces_data),
             shape,
             TensorLayoutType::TILED_NFACES,
             TensorLayoutType::TILED_SWIZZLED);

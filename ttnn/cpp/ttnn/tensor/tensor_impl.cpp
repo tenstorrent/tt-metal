@@ -1044,7 +1044,7 @@ std::vector<T> encode_tensor_data(std::vector<T>&& logical_data, const TensorSpe
 
     if (tensor_spec.layout() == Layout::TILE) {
         return tensor_impl::convert_layout_row_major_to_tile(
-            physical_shape, tensor_spec.tile(), tt::stl::MakeConstSpan(row_major_physical_data));
+            physical_shape, tensor_spec.tile(), tt::stl::make_const_span(row_major_physical_data));
     }
     return row_major_physical_data;
 }
@@ -1077,7 +1077,7 @@ std::vector<T> decode_tensor_data(std::vector<T>&& physical_data, const TensorSp
     auto row_major_physical_data = [&tensor_spec, &physical_shape](std::vector<T>&& physical_data) {
         if (tensor_spec.layout() == Layout::TILE) {
             return tensor_impl::convert_layout_tile_to_row_major(
-                physical_shape, tensor_spec.tile(), tt::stl::MakeConstSpan(physical_data));
+                physical_shape, tensor_spec.tile(), tt::stl::make_const_span(physical_data));
         } else {
             return std::move(physical_data);
         }

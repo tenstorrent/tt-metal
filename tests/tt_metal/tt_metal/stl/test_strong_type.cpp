@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <gtest/gtest.h>
+#include <gmock/gmock.h>
 #include <tt_stl/strong_type.hpp>
 #include <memory>
 #include <set>
@@ -10,8 +10,6 @@
 #include <string>
 #include <unordered_set>
 #include <utility>
-
-#include "gmock/gmock.h"
 
 using MyIntId = tt::stl::StrongType<int, struct MyIntIdTag>;
 using MyStringId = tt::stl::StrongType<std::string, struct MyStringIdTag>;

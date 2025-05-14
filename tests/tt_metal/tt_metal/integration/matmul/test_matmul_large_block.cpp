@@ -378,14 +378,14 @@ bool matmul_large_block(
     } else {
         auto activations_tilized = tilize_swizzled(tensor.get_values(), M * 32, K * 32);
         auto activations_tile_layout =
-            convert_layout_tile_swizzled_to_tile_nfaces(tt::stl::MakeConstSpan(activations_tilized));
+            convert_layout_tile_swizzled_to_tile_nfaces(tt::stl::make_const_span(activations_tilized));
         activations = pack_bfloat16_vec_into_uint32_vec(activations_tile_layout);
     }
     fixture->WriteBuffer(device, src0_dram_buffer, activations);
 
     auto identity = create_identity_matrix(K * 32, N * 32, std::min(K, N) * 32);  // bflaot16 32x32 identity
     auto identity_tilized = tilize_swizzled<bfloat16>(identity, K * 32, N * 32);
-    auto weights_tile_layout = convert_layout_tile_swizzled_to_tile_nfaces(tt::stl::MakeConstSpan(identity_tilized));
+    auto weights_tile_layout = convert_layout_tile_swizzled_to_tile_nfaces(tt::stl::make_const_span(identity_tilized));
     auto weights = pack_bfloat16_vec_into_uint32_vec(weights_tile_layout);
     fixture->WriteBuffer(device, src1_dram_buffer, weights);
 
@@ -418,7 +418,7 @@ bool matmul_large_block(
             tt_metal::print_faces(result_bfp16, "Result");
         }
     } else {
-        auto result_flat_layout = convert_layout_tile_nfaces_to_tile_swizzled(tt::stl::MakeConstSpan(result_bfp16));
+        auto result_flat_layout = convert_layout_tile_nfaces_to_tile_swizzled(tt::stl::make_const_span(result_bfp16));
         auto result_untilized = untilize_swizzled(result_flat_layout, M * 32, N * 32);
         pass &= (golden == result_untilized);
         if (not pass) {
