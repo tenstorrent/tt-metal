@@ -130,7 +130,9 @@ async function handlePushRuns(mainBranchRuns, github, context) {
  * Generate a summary box showing all workflows and their latest status
  */
 async function generateSummaryBox(grouped, github, context) {
-  const summaryRows = [];
+  const pushRows = [];
+  const scheduleRows = [];
+
   for (const [name, runs] of grouped.entries()) {
     const successes = runs.filter(r => r.conclusion === 'success');
     const mainBranchRuns = runs
@@ -149,6 +151,8 @@ async function generateSummaryBox(grouped, github, context) {
     let failureRun = '—';
     let failurePr = '—';
     let failureTitle = '—';
+    let lastGoodSha = '—';
+    let earliestBadSha = '—';
 
     if (lastMainRun && lastMainRun.conclusion !== 'success') {
       const prInfo = await fetchPRInfo(github, context, lastMainRun.head_sha);
@@ -156,18 +160,53 @@ async function generateSummaryBox(grouped, github, context) {
       failureRun = `[Run](${lastMainRun.html_url})`;
       failurePr = prInfo.prNumber;
       failureTitle = prInfo.prTitle;
+
+      // For scheduled runs, find the last good and earliest bad commits
+      if (lastMainRun.event === 'schedule') {
+        const scheduledMainRuns = mainBranchRuns.filter(r => r.event === 'schedule');
+        let foundGood = false;
+        let foundBad = false;
+
+        for (const run of scheduledMainRuns) {
+          if (!foundGood && run.conclusion === 'success') {
+            lastGoodSha = `\`${run.head_sha.substring(0, 7)}\``;
+            foundGood = true;
+          }
+          if (!foundBad && run.conclusion !== 'success') {
+            earliestBadSha = `\`${run.head_sha.substring(0, 7)}\``;
+            foundBad = true;
+          }
+          if (foundGood && foundBad) break;
+        }
+      }
     }
 
-    summaryRows.push(`| [${name}](${workflowLink}) | ${eventTypes || 'unknown'} | ${runs.length} | ${successes.length} | ${successRate} | ${lastMainPassing} | ${failureSha} | ${failureRun} | ${failurePr} | ${failureTitle} |`);
+    const row = `| [${name}](${workflowLink}) | ${eventTypes || 'unknown'} | ${runs.length} | ${successes.length} | ${successRate} | ${lastMainPassing} | ${failureSha} | ${failureRun} | ${failurePr} | ${failureTitle} |`;
+
+    if (eventTypes.includes('schedule')) {
+      scheduleRows.push(row + ` ${lastGoodSha} | ${earliestBadSha} |`);
+    } else {
+      pushRows.push(row);
+    }
   }
 
-  return [
-    '## Quick Summary',
+  const pushTable = [
+    '## Push Event Workflows',
     '| Workflow | Event Type(s) | Total Runs | Successful Runs | Success Rate | Last Run on `main` | Failed SHA | Failed Run | Failed PR | PR Title |',
     '|----------|---------------|------------|-----------------|--------------|-------------------|------------|------------|-----------|-----------|',
-    ...summaryRows,
+    ...pushRows,
     ''  // Empty line for better readability
   ].join('\n');
+
+  const scheduleTable = [
+    '## Scheduled Workflows',
+    '| Workflow | Event Type(s) | Total Runs | Successful Runs | Success Rate | Last Run on `main` | Failed SHA | Failed Run | Failed PR | PR Title | Last Good SHA | Earliest Bad SHA |',
+    '|----------|---------------|------------|-----------------|--------------|-------------------|------------|------------|-----------|-----------|---------------|------------------|',
+    ...scheduleRows,
+    ''  // Empty line for better readability
+  ].join('\n');
+
+  return [pushTable, scheduleTable].join('\n');
 }
 
 /**
