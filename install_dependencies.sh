@@ -104,6 +104,11 @@ ub_buildtime_packages()
      build-essential \
      xz-utils \
      flex \
+     autoconf
+     automake \
+     libtool \
+     libevent-dev \
+     bison \
     )
 }
 
