@@ -19,7 +19,7 @@ PREFILL_OP_END_INDEX = 37
 
 perf_targets = {
     "LayerNormPreAllGather_0": {
-        "op_name": "LayerNormPreAllGather_0",
+        "op_name": "0-LayerNormPreAllGather_0",
         "kernel_duration": 38267.59375,
         "op_to_op": 1.0,
         "non-overlapped-dispatch-time": 0.0,
@@ -28,7 +28,7 @@ perf_targets = {
         "dispatch_duration_relative_margin": 0.2,
     },
     "AllGatherAsync_0": {
-        "op_name": "AllGatherAsync_0",
+        "op_name": "1-AllGatherAsync_0",
         "kernel_duration": 32891.84375,
         "op_to_op": 1.0,
         "non-overlapped-dispatch-time": 0.0,
@@ -37,7 +37,7 @@ perf_targets = {
         "dispatch_duration_relative_margin": 0.2,
     },
     "LayerNormPostAllGather_0": {
-        "op_name": "LayerNormPostAllGather_0",
+        "op_name": "2-LayerNormPostAllGather_0",
         "kernel_duration": 43788.59375,
         "op_to_op": 1.0,
         "non-overlapped-dispatch-time": 0.0,
@@ -46,7 +46,7 @@ perf_targets = {
         "dispatch_duration_relative_margin": 0.2,
     },
     "Matmul_0": {
-        "op_name": "QKV_MM",
+        "op_name": "3-QKV_MM",
         "kernel_duration": 45011,
         "op_to_op": 1.0,
         "non-overlapped-dispatch-time": 0.0,
@@ -55,7 +55,7 @@ perf_targets = {
         "dispatch_duration_relative_margin": 0.1,
     },
     "ReduceScatterAsync_0": {
-        "op_name": "ReduceScatterAsync_QKV",
+        "op_name": "4-ReduceScatterAsync_QKV",
         "kernel_duration": 86927.59375,
         "op_to_op": 1.0,
         "non-overlapped-dispatch-time": 0.0,
@@ -64,7 +64,7 @@ perf_targets = {
         "dispatch_duration_relative_margin": 0.3,
     },
     "AllGatherAsync_1": {
-        "op_name": "AllGatherAsync_QKV",
+        "op_name": "5-AllGatherAsync_QKV",
         "kernel_duration": 47736.06250,
         "op_to_op": 1.0,
         "non-overlapped-dispatch-time": 0.0,
@@ -73,7 +73,7 @@ perf_targets = {
         "dispatch_duration_relative_margin": 0.3,
     },
     "NlpCreateHeadsDeviceOperation_0": {
-        "op_name": "CreateQKVHeads",
+        "op_name": "6-CreateQKVHeads",
         "kernel_duration": 21994.00000,
         "op_to_op": 1.0,
         "non-overlapped-dispatch-time": 0.0,
@@ -82,7 +82,7 @@ perf_targets = {
         "dispatch_duration_relative_margin": 0.3,
     },
     "UnaryDeviceOperation_0": {
-        "op_name": "typecast_0",
+        "op_name": "7-typecast_0",
         "kernel_duration": 4378.00000,
         "op_to_op": 1.0,
         "non-overlapped-dispatch-time": 0.0,
@@ -91,7 +91,7 @@ perf_targets = {
         "dispatch_duration_relative_margin": 0.3,
     },
     "RotaryEmbeddingLlama_0": {
-        "op_name": "rotary_emb_Q",
+        "op_name": "8-rotary_emb_Q",
         "kernel_duration": 30278.00000,
         "op_to_op": 1.0,
         "non-overlapped-dispatch-time": 0.0,
@@ -100,7 +100,7 @@ perf_targets = {
         "dispatch_duration_relative_margin": 0.3,
     },
     "UnaryDeviceOperation_1": {
-        "op_name": "typecast_1",
+        "op_name": "9-typecast_1",
         "kernel_duration": 2092.00000,
         "op_to_op": 1.0,
         "non-overlapped-dispatch-time": 0.0,
@@ -109,7 +109,7 @@ perf_targets = {
         "dispatch_duration_relative_margin": 0.3,
     },
     "RotaryEmbeddingLlama_1": {
-        "op_name": "rotary_emb_K",
+        "op_name": "10-rotary_emb_K",
         "kernel_duration": 14203.00000,
         "op_to_op": 1.0,
         "non-overlapped-dispatch-time": 0.0,
@@ -118,7 +118,7 @@ perf_targets = {
         "dispatch_duration_relative_margin": 0.3,
     },
     "UnaryDeviceOperation_2": {
-        "op_name": "typecast_2",
+        "op_name": "11-typecast_2",
         "kernel_duration": 2037,
         "op_to_op": 1.0,
         "non-overlapped-dispatch-time": 0.0,
@@ -127,7 +127,7 @@ perf_targets = {
         "dispatch_duration_relative_margin": 0.3,
     },
     "UnaryDeviceOperation_3": {
-        "op_name": "typecast_3",
+        "op_name": "12-typecast_3",
         "kernel_duration": 1898,
         "op_to_op": 1.0,
         "non-overlapped-dispatch-time": 0.0,
@@ -136,7 +136,7 @@ perf_targets = {
         "dispatch_duration_relative_margin": 0.3,
     },
     "CloneOperation_0": {
-        "op_name": "clone0",
+        "op_name": "13-clone_0",
         "kernel_duration": 1602,
         "op_to_op": 1.0,
         "non-overlapped-dispatch-time": 0.0,
@@ -145,7 +145,7 @@ perf_targets = {
         "dispatch_duration_relative_margin": 0.3,
     },
     "CloneOperation_1": {
-        "op_name": "clone1",
+        "op_name": "14-clone_1",
         "kernel_duration": 1648,
         "op_to_op": 1.0,
         "non-overlapped-dispatch-time": 0.0,
@@ -154,7 +154,7 @@ perf_targets = {
         "dispatch_duration_relative_margin": 0.3,
     },
     "PagedUpdateCacheDeviceOperation_0": {
-        "op_name": "update_cache_K",
+        "op_name": "15-update_cache_K",
         "kernel_duration": 2309,
         "op_to_op": 1.0,
         "non-overlapped-dispatch-time": 0.0,
@@ -163,7 +163,7 @@ perf_targets = {
         "dispatch_duration_relative_margin": 0.3,
     },
     "PagedUpdateCacheDeviceOperation_1": {
-        "op_name": "update_cache_V",
+        "op_name": "16-update_cache_V",
         "kernel_duration": 2272,
         "op_to_op": 1.0,
         "non-overlapped-dispatch-time": 0.0,
@@ -172,7 +172,7 @@ perf_targets = {
         "dispatch_duration_relative_margin": 0.3,
     },
     "UnaryDeviceOperation_4": {
-        "op_name": "typecast_4",
+        "op_name": "17-typecast_4",
         "kernel_duration": 3906,
         "op_to_op": 1.0,
         "non-overlapped-dispatch-time": 0.0,
@@ -181,7 +181,7 @@ perf_targets = {
         "dispatch_duration_relative_margin": 0.3,
     },
     "ScaledDotProductAttention_0": {
-        "op_name": "sdpa",
+        "op_name": "18-sdpa",
         "kernel_duration": 30324,
         "op_to_op": 1.0,
         "non-overlapped-dispatch-time": 0.0,
@@ -190,7 +190,7 @@ perf_targets = {
         "dispatch_duration_relative_margin": 0.3,
     },
     "NLPConcatHeadsDeviceOperation_0": {
-        "op_name": "concat_heads",
+        "op_name": "19-concat_heads",
         "kernel_duration": 17667,
         "op_to_op": 1.0,
         "non-overlapped-dispatch-time": 0.0,
@@ -199,7 +199,7 @@ perf_targets = {
         "dispatch_duration_relative_margin": 0.3,
     },
     "Matmul_1": {
-        "op_name": "matmul_attn_out",
+        "op_name": "20-matmul_attn_out",
         "kernel_duration": 37818,
         "op_to_op": 1.0,
         "non-overlapped-dispatch-time": 0.0,
@@ -208,7 +208,7 @@ perf_targets = {
         "dispatch_duration_relative_margin": 0.3,
     },
     "ReduceScatterAsync_1": {
-        "op_name": "ReduceScatterAsync_attn_out",
+        "op_name": "21-ReduceScatterAsync_attn_out",
         "kernel_duration": 140123.75,
         "op_to_op": 1.0,
         "non-overlapped-dispatch-time": 0.0,
@@ -217,7 +217,7 @@ perf_targets = {
         "dispatch_duration_relative_margin": 0.3,
     },
     "AllGatherAsync_2": {
-        "op_name": "AllGatherAsync_attn_out",
+        "op_name": "22-AllGatherAsync_attn_out",
         "kernel_duration": 55735.78125,
         "op_to_op": 1.0,
         "non-overlapped-dispatch-time": 0.0,
@@ -226,7 +226,7 @@ perf_targets = {
         "dispatch_duration_relative_margin": 0.3,
     },
     "BinaryDeviceOperation_0": {
-        "op_name": "sum_attn_out",
+        "op_name": "23-sum_attn_out",
         "kernel_duration": 8376,
         "op_to_op": 1.0,
         "non-overlapped-dispatch-time": 0.0,
@@ -235,7 +235,7 @@ perf_targets = {
         "dispatch_duration_relative_margin": 0.3,
     },
     "LayerNormPreAllGather_1": {
-        "op_name": "PreRMS_1",
+        "op_name": "24-LayerNormPreAllGather_1",
         "kernel_duration": 38247.56250,
         "op_to_op": 1.0,
         "non-overlapped-dispatch-time": 0.0,
@@ -244,7 +244,7 @@ perf_targets = {
         "dispatch_duration_relative_margin": 0.3,
     },
     "AllGatherAsync_3": {
-        "op_name": "AllGatherAsync_1",
+        "op_name": "25-AllGatherAsync_1",
         "kernel_duration": 60116.59375,
         "op_to_op": 1.0,
         "non-overlapped-dispatch-time": 0.0,
@@ -253,7 +253,7 @@ perf_targets = {
         "dispatch_duration_relative_margin": 0.3,
     },
     "LayerNormPostAllGather_1": {
-        "op_name": "PostRMS_1",
+        "op_name": "26-LayerNormPostAllGather_1",
         "kernel_duration": 43798.56250,
         "op_to_op": 1.0,
         "non-overlapped-dispatch-time": 0.0,
@@ -262,7 +262,7 @@ perf_targets = {
         "dispatch_duration_relative_margin": 0.3,
     },
     "Matmul_2": {
-        "op_name": "matmul_ffn_1",
+        "op_name": "27-matmul_ffn_1",
         "kernel_duration": 61404,
         "op_to_op": 1.0,
         "non-overlapped-dispatch-time": 0.0,
@@ -271,7 +271,7 @@ perf_targets = {
         "dispatch_duration_relative_margin": 0.3,
     },
     "ReduceScatterAsync_2": {
-        "op_name": "ReduceScatterAsync_ffn_1",
+        "op_name": "28-ReduceScatterAsync_ffn_1",
         "kernel_duration": 162106.15625,
         "op_to_op": 1.0,
         "non-overlapped-dispatch-time": 0.0,
@@ -280,7 +280,7 @@ perf_targets = {
         "dispatch_duration_relative_margin": 0.3,
     },
     "Matmul_3": {
-        "op_name": "matmul_ffn_3",
+        "op_name": "29-matmul_ffn_3",
         "kernel_duration": 61444,
         "op_to_op": 1.0,
         "non-overlapped-dispatch-time": 0.0,
@@ -289,7 +289,7 @@ perf_targets = {
         "dispatch_duration_relative_margin": 0.3,
     },
     "ReduceScatterAsync_3": {
-        "op_name": "ReduceScatterAsync_ffn_3",
+        "op_name": "30-ReduceScatterAsync_ffn_3",
         "kernel_duration": 159490.96875,
         "op_to_op": 1.0,
         "non-overlapped-dispatch-time": 0.0,
@@ -298,7 +298,7 @@ perf_targets = {
         "dispatch_duration_relative_margin": 0.3,
     },
     "BinaryDeviceOperation_1": {
-        "op_name": "binary_mul_ffn_1_3",
+        "op_name": "31-binary_mul_ffn_1_3",
         "kernel_duration": 7327,
         "op_to_op": 1.0,
         "non-overlapped-dispatch-time": 0.0,
@@ -307,7 +307,7 @@ perf_targets = {
         "dispatch_duration_relative_margin": 0.3,
     },
     "AllGatherAsync_4": {
-        "op_name": "AllGatherAsync_ffn_2",
+        "op_name": "32-AllGatherAsync_ffn_2",
         "kernel_duration": 62734.12500,
         "op_to_op": 1.0,
         "non-overlapped-dispatch-time": 0.0,
@@ -316,7 +316,7 @@ perf_targets = {
         "dispatch_duration_relative_margin": 0.3,
     },
     "Matmul_4": {
-        "op_name": "matmul_ffn_2",
+        "op_name": "33-matmul_ffn_2",
         "kernel_duration": 115297,
         "op_to_op": 1.0,
         "non-overlapped-dispatch-time": 0.0,
@@ -325,7 +325,7 @@ perf_targets = {
         "dispatch_duration_relative_margin": 0.3,
     },
     "ReduceScatterAsync_4": {
-        "op_name": "reduce_scatter_ffn_2",
+        "op_name": "34-reduce_scatter_ffn_2",
         "kernel_duration": 290734.34375,
         "op_to_op": 1.0,
         "non-overlapped-dispatch-time": 0.0,
@@ -334,7 +334,7 @@ perf_targets = {
         "dispatch_duration_relative_margin": 0.3,
     },
     "AllGatherAsync_5": {
-        "op_name": "all_gather_ffn_2",
+        "op_name": "35-all_gather_ffn_2",
         "kernel_duration": 63895.56250,
         "op_to_op": 1.0,
         "non-overlapped-dispatch-time": 0.0,
@@ -343,7 +343,7 @@ perf_targets = {
         "dispatch_duration_relative_margin": 0.3,
     },
     "BinaryDeviceOperation_2": {
-        "op_name": "binary_sum_mlp",
+        "op_name": "36-binary_sum_mlp",
         "kernel_duration": 8590,
         "op_to_op": 1.0,
         "non-overlapped-dispatch-time": 0.0,
