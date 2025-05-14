@@ -30,9 +30,11 @@ public:
     Impl();
 
     const MeshShape& get_shape() const;
+    MeshCoordinate get_global_device_coordinate(int physical_device_id) const;
     std::vector<chip_id_t> get_mapped_physical_device_ids(
         const MeshShape& shape, const std::optional<MeshCoordinate>& offset = std::nullopt) const;
     chip_id_t get_physical_device_id(const MeshCoordinate& coord) const;
+    uint32_t get_physical_mesh_id(const MeshCoordinate& coord) const;
 };
 
 // Implementation of public methods
@@ -51,21 +53,20 @@ SystemMesh::Impl::Impl() : physical_coordinates_(get_system_mesh_coordinate_tran
 const MeshShape& SystemMesh::Impl::get_shape() const { return physical_coordinates_.shape(); }
 
 chip_id_t SystemMesh::Impl::get_physical_device_id(const MeshCoordinate& coord) const {
-    const MeshShape& system_shape = this->get_shape();
-    TT_FATAL(
-        coord.dims() == system_shape.dims(),
-        "Coordinate dimensions mismatch: {} != {}",
-        coord.dims(),
-        system_shape.dims());
-    for (size_t i = 0; i < coord.dims(); ++i) {
-        TT_FATAL(
-            coord[i] < system_shape[i],
-            "Coordinate at index {} out of bounds; mesh shape {}, coordinate {}",
-            i,
-            system_shape,
-            coord);
-    }
     return physical_coordinates_.at(coord).chip_id();
+}
+
+uint32_t SystemMesh::Impl::get_physical_mesh_id(const MeshCoordinate& coord) const {
+    return physical_coordinates_.at(coord).mesh_id();
+}
+
+MeshCoordinate SystemMesh::Impl::get_global_device_coordinate(int physical_device_id) const {
+    for (const auto& [logical_coordinate, physical_mesh_coordinate] : physical_coordinates_) {
+        if (physical_mesh_coordinate.chip_id() == physical_device_id) {
+            return logical_coordinate;
+        }
+    }
+    TT_THROW("Physical device ID {} not found in the system mesh", physical_device_id);
 }
 
 std::vector<chip_id_t> SystemMesh::Impl::get_mapped_physical_device_ids(
@@ -189,7 +190,15 @@ chip_id_t SystemMesh::get_physical_device_id(const MeshCoordinate& coord) const 
     return pimpl_->get_physical_device_id(coord);
 }
 
+uint32_t SystemMesh::get_physical_mesh_id(const MeshCoordinate& coord) const {
+    return pimpl_->get_physical_mesh_id(coord);
+}
+
 const MeshShape& SystemMesh::get_shape() const { return pimpl_->get_shape(); }
+
+MeshCoordinate SystemMesh::get_global_device_coordinate(int physical_device_id) const {
+    return pimpl_->get_global_device_coordinate(physical_device_id);
+}
 
 std::vector<chip_id_t> SystemMesh::get_mapped_physical_device_ids(
     const MeshShape& shape, const std::optional<MeshCoordinate>& offset) const {

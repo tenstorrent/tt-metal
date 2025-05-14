@@ -207,6 +207,7 @@ FORCE_INLINE void remote_cb_wait_front(uint32_t cb_id, uint32_t num_pages) {
     volatile tt_l1_ptr uint32_t* pages_sent_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(remote_cb.aligned_pages_acked_ptr - L1_ALIGNMENT);
     do {
+        invalidate_l1_cache();
         pages_acked = *pages_acked_ptr;
         pages_sent = *pages_sent_ptr;
         num_pages_recv = pages_sent - pages_acked;
@@ -257,6 +258,7 @@ FORCE_INLINE void remote_cb_reserve_back(uint32_t cb_id, uint32_t num_pages) {
 
     for (uint32_t i = 0; i < num_receivers; ++i) {
         do {
+            invalidate_l1_cache();
             uint32_t pages_acked = *pages_acked_ptr;
             uint32_t pages_sent = *pages_sent_ptr;
             uint32_t sent_minus_ack = pages_sent - pages_acked;

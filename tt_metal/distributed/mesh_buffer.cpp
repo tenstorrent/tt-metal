@@ -101,7 +101,7 @@ std::shared_ptr<MeshBuffer> MeshBuffer::create(
             device_local_config.buffer_layout,
             device_local_config.shard_parameters,
             device_local_config.bottom_up,
-            /*sub_device_id=*/std::nullopt,  // TODO: sub_device_id is unsupported
+            device_local_config.sub_device_id,
             device_local_config.buffer_distribution_spec);
 
         mesh_buffer = std::shared_ptr<MeshBuffer>(new MeshBuffer(
