@@ -307,9 +307,10 @@ void DevicePool::initialize_active_devices() const {
 
     // Activate fabric (must be before FD)
     FabricConfig fabric_config = tt::tt_metal::MetalContext::instance().get_cluster().get_fabric_config();
-    if (tt_fabric::is_1d_fabric_config(fabric_config) || tt_fabric::is_2d_fabric_config(fabric_config)) {
+    if (tt_fabric::is_tt_fabric_config(fabric_config) || tt_fabric::is_2d_fabric_config(fabric_config)) {
         log_info(tt::LogMetal, "Initializing Fabric");
         if (tt_fabric::is_2d_fabric_config(fabric_config)) {
+            // TODO: need to write routing tables for unified 2d fabric.
             // write routing tables to all ethernet cores
             tt::tt_metal::MetalContext::instance()
                 .get_cluster()
@@ -321,7 +322,7 @@ void DevicePool::initialize_active_devices() const {
         for (const auto& dev : active_devices) {
             dev->init_fabric();
         }
-        log_info(tt::LogMetal, "Fabric Initialized");
+        log_info(tt::LogMetal, "Fabric Initialized with config {}", fabric_config);
     }
 
     // Activate FD kernels
@@ -381,24 +382,12 @@ void DevicePool::activate_device(chip_id_t id) {
             worker_core_thread_core,
             completion_queue_reader_core,
             this->worker_l1_size);
-        if (!this->firmware_built_keys.contains(
-                BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_key)) {
-            BuildEnvManager::get_instance().build_firmware(device->build_id());
-            this->firmware_built_keys.insert(
-                BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_key);
-        }
         this->devices.emplace_back(std::unique_ptr<IDevice>(device));
     } else {
         log_debug(tt::LogMetal, "DevicePool re-initialize device {}", id);
         if (not device->is_initialized()) {
             device->initialize(
                 num_hw_cqs, this->l1_small_size, this->trace_region_size, this->worker_l1_size, this->l1_bank_remap);
-            if (!this->firmware_built_keys.contains(
-                    BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_key)) {
-                BuildEnvManager::get_instance().build_firmware(device->build_id());
-                this->firmware_built_keys.insert(
-                    BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_key);
-            }
         } else {
             TT_THROW("Cannot re-initialize device {}, must first call close()", id);
         }
@@ -474,7 +463,7 @@ void DevicePool::add_devices_to_pool(const std::vector<chip_id_t>& device_ids) {
 
     FabricConfig fabric_config = tt::tt_metal::MetalContext::instance().get_cluster().get_fabric_config();
     // Only can launch Fabric if all devices are active
-    if (tt_fabric::is_1d_fabric_config(fabric_config) || tt_fabric::is_2d_fabric_config(fabric_config)) {
+    if (tt_fabric::is_tt_fabric_config(fabric_config) || tt_fabric::is_2d_fabric_config(fabric_config)) {
         for (int i = 0; i < tt::tt_metal::MetalContext::instance().get_cluster().number_of_devices(); i++) {
             if (not _inst->is_device_active(i)) {
                 // Fabric currently requires all devices to be active
@@ -491,9 +480,9 @@ void DevicePool::add_devices_to_pool(const std::vector<chip_id_t>& device_ids) {
 
 void DevicePool::wait_for_fabric_router_sync() const {
     FabricConfig fabric_config = tt::tt_metal::MetalContext::instance().get_cluster().get_fabric_config();
-    if (tt_fabric::is_1d_fabric_config(fabric_config)) {
+    if (tt_fabric::is_tt_fabric_config(fabric_config)) {
         auto control_plane = tt::tt_metal::MetalContext::instance().get_cluster().get_control_plane();
-        const auto edm_config = tt_fabric::get_1d_fabric_config();
+        const auto edm_config = tt_fabric::get_tt_fabric_config();
         std::vector<uint32_t> signal(1, tt::tt_fabric::EDMStatus::READY_FOR_TRAFFIC);
 
         auto wait_for_handshake = [&](IDevice* dev) {
@@ -669,21 +658,20 @@ bool DevicePool::close_device(chip_id_t device_id) {
     // Currently can only call this on mmio chips, once we split dispatch kernel shutdown
     // from device close, we can call this on remote devices too
     ZoneScoped;
-    tt::tt_metal::MetalContext::instance().get_cluster().set_internal_routing_info_for_ethernet_cores(false);
-    bool pass = true;
     const auto& mmio_device_id =
         tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(device_id);
+    std::vector<IDevice*> devices_to_close;
     for (const auto& mmio_controlled_device_id :
          tt::tt_metal::MetalContext::instance().get_cluster().get_devices_controlled_by_mmio_device(mmio_device_id)) {
         auto device = get_device(mmio_controlled_device_id);
         if (device && device->is_initialized()) {
-            pass &= device->close();
+            devices_to_close.push_back(device);
         }
     }
-    return pass;
+    return close_devices(devices_to_close);
 }
 
-void DevicePool::close_devices(const std::vector<IDevice*>& devices, bool skip_synchronize) {
+bool DevicePool::close_devices(const std::vector<IDevice*>& devices, bool skip_synchronize) {
     // Ordered, because we need to shutdown tunnels from the farthest to the closest.
     std::vector<chip_id_t> devices_to_close;
 
@@ -731,13 +719,13 @@ void DevicePool::close_devices(const std::vector<IDevice*>& devices, bool skip_s
     }
     // Terminate fabric routers
     FabricConfig fabric_config = tt::tt_metal::MetalContext::instance().get_cluster().get_fabric_config();
-    if (tt_fabric::is_1d_fabric_config(fabric_config)) {
+    if (tt_fabric::is_tt_fabric_config(fabric_config)) {
         auto control_plane = tt::tt_metal::MetalContext::instance().get_cluster().get_control_plane();
         std::vector<uint32_t> signal(1, tt::tt_fabric::TerminationSignal::IMMEDIATELY_TERMINATE);
         static constexpr std::size_t edm_buffer_size =
             tt::tt_fabric::FabricEriscDatamoverBuilder::default_packet_payload_size_bytes +
             sizeof(tt::tt_fabric::PacketHeader);
-        const auto edm_config = tt_fabric::get_1d_fabric_config();
+        const auto edm_config = tt_fabric::get_tt_fabric_config();
 
         auto fabric_router_sync_sem_addr = edm_config.termination_signal_address;
         for (const auto& dev : this->get_all_active_devices()) {
@@ -787,10 +775,12 @@ void DevicePool::close_devices(const std::vector<IDevice*>& devices, bool skip_s
     detail::ProfilerSync(ProfilerSyncState::CLOSE_DEVICE);
 
     tt::tt_metal::MetalContext::instance().get_cluster().set_internal_routing_info_for_ethernet_cores(false);
+    bool pass = true;
     for (const auto& dev_id : devices_to_close) {
         auto dev = tt::DevicePool::instance().get_active_device(dev_id);
-        dev->close();
+        pass &= dev->close();
     }
+    return pass;
 }
 
 DevicePool::~DevicePool() {

@@ -116,8 +116,6 @@ foreach(ARCH IN LISTS ARCHS)
                     -o ${HW_OUTPUT_DIR}/${HW_OUTPUT_FILE} ${CMAKE_CURRENT_SOURCE_DIR}/toolchain/main.ld
                 DEPENDS
                     ${CMAKE_CURRENT_SOURCE_DIR}/toolchain/main.ld
-                    ${CMAKE_CURRENT_SOURCE_DIR}/toolchain/memory.ld
-                    ${CMAKE_CURRENT_SOURCE_DIR}/toolchain/sections.ld
                     ${DEV_MEM_MAP}
                 COMMENT "Preprocessing toolchain/${HW_OUTPUT_FILE}"
                 VERBATIM
@@ -139,10 +137,10 @@ function(get_alias INPUT_STRING OUTPUT_VAR)
 endfunction()
 
 # Define the compiler command
-set(GPP_CMD ${PROJECT_SOURCE_DIR}/runtime/sfpi/compiler/bin/riscv32-unknown-elf-g++)
+set(GPP_CMD ${PROJECT_SOURCE_DIR}/runtime/sfpi/compiler/bin/riscv32-tt-elf-g++)
 
 # May switch to this someday
-# set(GPP_CMD /opt/tenstorrent/sfpi/compiler/bin/riscv32-unknown-elf-g++)
+# set(GPP_CMD /opt/tenstorrent/sfpi/compiler/bin/riscv32-tt-elf-g++)
 
 set(GPP_DEFINES -DTENSIX_FIRMWARE)
 
@@ -282,7 +280,6 @@ if(CMAKE_VERSION VERSION_GREATER_EQUAL 3.23)
                 ckernels/blackhole/metal/llk_api/llk_math_unary_sfpu_api.h
                 ckernels/blackhole/metal/llk_api/llk_sfpu/ckernel_sfpu_abs.h
                 ckernels/blackhole/metal/llk_api/llk_sfpu/ckernel_sfpu_comp.h
-                ckernels/blackhole/metal/llk_api/llk_sfpu/ckernel_sfpu_converter.h
                 ckernels/blackhole/metal/llk_api/llk_sfpu/ckernel_sfpu_exp.h
                 ckernels/blackhole/metal/llk_api/llk_sfpu/ckernel_sfpu_exp2.h
                 ckernels/blackhole/metal/llk_api/llk_sfpu/ckernel_sfpu_expm1.h
@@ -315,7 +312,6 @@ if(CMAKE_VERSION VERSION_GREATER_EQUAL 3.23)
                 ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_ceil.h
                 ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_clamp.h
                 ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_comp.h
-                ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_converter.h
                 ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_copy_dest_values.h
                 ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_cumsum.h
                 ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_dropout.h
@@ -379,7 +375,6 @@ if(CMAKE_VERSION VERSION_GREATER_EQUAL 3.23)
                 ckernels/blackhole/metal/llk_api/llk_math_unary_datacopy_api.h
                 ckernels/blackhole/metal/llk_api/llk_pack_api.h
                 ckernels/blackhole/metal/llk_api/llk_param_structs.h
-                ckernels/blackhole/metal/llk_api/llk_sfpu/ckernel_sfpu_converter.h
                 ckernels/blackhole/metal/llk_api/llk_sfpu/ckernel_sfpu_exp.h
                 ckernels/blackhole/metal/llk_api/llk_sfpu/ckernel_sfpu_recip.h
                 ckernels/blackhole/metal/llk_api/llk_sfpu/llk_math_eltwise_unary_sfpu_exp.h
@@ -403,7 +398,6 @@ if(CMAKE_VERSION VERSION_GREATER_EQUAL 3.23)
                 ckernels/wormhole_b0/metal/llk_api/llk_math_unary_datacopy_api.h
                 ckernels/wormhole_b0/metal/llk_api/llk_pack_api.h
                 ckernels/wormhole_b0/metal/llk_api/llk_param_structs.h
-                ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_converter.h
                 ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_exp.h
                 ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_recip.h
                 ckernels/wormhole_b0/metal/llk_api/llk_sfpu/llk_math_eltwise_unary_sfpu_exp.h

@@ -19,7 +19,7 @@ using namespace ttnn::operations::binary_ng;
 uint32_t extract_nD_dims(const Tensor& x, const int out_rank) {
     const auto& shape = x.get_logical_shape();
     uint32_t nD_dim = 1;
-    if (out_rank >= 5) {
+    if (out_rank >= 5 && shape.rank() >= 5) {
         for (int i = -5; i >= -out_rank; --i) {
             auto dim = shape[i];
             nD_dim *= dim;
@@ -234,7 +234,7 @@ void set_or_update_runtime_arguments(
     const uint32_t tile_width = c.tensor_spec().tile().get_width();
     const uint32_t tile_hw = tile_height * tile_width;
     const uint32_t c_num_tiles = c.volume() / tile_hw;
-    uint32_t c_shard_height, c_shard_width, num_shards_per_width;
+    uint32_t c_shard_height{}, c_shard_width{}, num_shards_per_width{};
 
     ShardShapeGenerator a_shard_shape_generator;
     ShardShapeGenerator b_shard_shape_generator;

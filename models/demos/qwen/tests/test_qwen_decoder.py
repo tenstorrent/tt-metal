@@ -1,23 +1,18 @@
 # SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
-import torch
-import pytest
-from loguru import logger
 import os
+
+import pytest
+import torch
+from loguru import logger
+
 import ttnn
-from models.demos.qwen.tt.qwen_common import (
-    precompute_freqs,
-    get_single_rot_mat,
-)
-from models.demos.qwen.tt.qwen_decoder import TtTransformerBlock
-from models.demos.qwen.tt.model_config import TtModelArgs
 from models.demos.qwen.reference.model import TransformerBlock
-from models.utility_functions import (
-    comp_pcc,
-    comp_allclose,
-)
-from models.utility_functions import skip_for_grayskull
+from models.demos.qwen.tt.model_config import TtModelArgs
+from models.demos.qwen.tt.qwen_common import get_single_rot_mat, precompute_freqs
+from models.demos.qwen.tt.qwen_decoder import TtTransformerBlock
+from models.utility_functions import comp_allclose, comp_pcc, skip_for_grayskull
 
 
 @torch.no_grad()

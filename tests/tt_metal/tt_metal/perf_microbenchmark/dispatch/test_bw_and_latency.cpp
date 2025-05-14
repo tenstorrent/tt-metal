@@ -25,8 +25,7 @@
 #include <vector>
 
 #include <tt-metalium/assert.hpp>
-#include <tt-metalium/circular_buffer_types.hpp>
-#include <tt-metalium/command_queue_common.hpp>
+#include <tt-metalium/circular_buffer_config.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/data_types.hpp>
 #include <tt-metalium/dispatch_core_common.hpp>
@@ -38,6 +37,7 @@
 #include "test_common.hpp"
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "impl/context/metal_context.hpp"
+#include "impl/dispatch/command_queue_common.hpp"
 #include "umd/device/tt_core_coordinates.h"
 #include "umd/device/tt_xy_pair.h"
 #include "umd/device/types/xy_pair.h"

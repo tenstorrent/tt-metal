@@ -5,7 +5,7 @@
 #include <math.h>
 
 #include "tt-metalium/circular_buffer.hpp"
-#include "tt-metalium/circular_buffer_types.hpp"
+#include "tt-metalium/circular_buffer_config.hpp"
 #include "upsample_op.hpp"
 #include "ttnn/operations/math.hpp"
 #include "ttnn/operations/cb_utils.hpp"
@@ -77,6 +77,7 @@ tt::tt_metal::operation::ProgramWithCallbacks bilinear_multi_core(
     tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.get_dtype());
     tt::DataFormat output_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.get_dtype());
 
+    TT_FATAL(input.get_padded_shape()[-1] % 32 == 0, "input channels should be divisible by 32");
     // NOTE: input is assumed to have channels last format: {N, H, W, C}, {N, 1, H * W, C}, {1, 1, N * H * W, C}
     // NOTE: Bfp8_b/TILE is not yet supported
     uint32_t input_stick_nbytes = input.get_padded_shape()[-1] * input.element_size();
@@ -97,6 +98,10 @@ tt::tt_metal::operation::ProgramWithCallbacks bilinear_multi_core(
     uint32_t ncores = shard_spec.num_cores();
     uint32_t ncores_x = device->compute_with_storage_grid_size().x;
     uint32_t ncores_nhw = ncores;
+    constexpr uint32_t MAX_TILES_PER_REDUCTION = 8;
+    uint32_t input_block_size_bytes = input_stick_nbytes;
+    input_block_size_bytes =
+        std::min(input_block_size_bytes, MAX_TILES_PER_REDUCTION * tt::constants::TILE_WIDTH * input.element_size());
 
     auto out_shard_spec = output.shard_spec().value();
     TT_FATAL(
@@ -148,20 +153,22 @@ tt::tt_metal::operation::ProgramWithCallbacks bilinear_multi_core(
     uint32_t buffering_factor = 2;  // only apply to intermediate buffers
 
     // input data is in a sharded CB
-    uint32_t aligned_input_stick_nbytes = round_up_to_mul32(input_stick_nbytes);
-    uint32_t in_cb_pagesize = aligned_input_stick_nbytes;
+    uint32_t in_cb_pagesize = input_stick_nbytes;
     uint32_t in_cb_npages = halo_shard_shape[0];
+    uint32_t in_ntiles_c = (uint32_t)std::ceil((float)input_shape[3] / constants::TILE_WIDTH);
 
     auto [in_cb_id, cb_src0] = tt::tt_metal::create_cb(
         next_cb_index++, program, all_cores, in_cb_pagesize, in_cb_npages, input_cb_data_format, halo_in.buffer());
 
     // first intermediate CB
+    uint32_t in1_cb_pagesize =
+        std::min(tt::constants::TILE_WIDTH * input.element_size() * MAX_TILES_PER_REDUCTION, input_stick_nbytes);
     uint32_t in_cb_id1 = next_cb_index++;
     tt::tt_metal::create_cb(
         in_cb_id1,
         program,
         all_cores,
-        in_cb_pagesize,
+        in1_cb_pagesize,
         4 * buffering_factor,
         input_cb_data_format);  // since 4 pixels per page are needed for intermediate tensor.
 
@@ -188,8 +195,9 @@ tt::tt_metal::operation::ProgramWithCallbacks bilinear_multi_core(
         in_scalar_cb_id2, program, all_cores, in_scalar_cb_pagesize, in_scalar_cb_npages, input_cb_data_format);
 
     // output sharded CB with upsampled data
-    uint32_t out_cb_pagesize = round_up_to_mul32(output_stick_nbytes);  // aligned output stick n bytes
-    uint32_t out_cb_npages = output_nsticks_per_core;
+    uint32_t out_cb_pagesize = tt::constants::TILE_WIDTH * output.element_size();
+    uint32_t out_cb_npages = output.shard_spec().value().shape[0] * in_ntiles_c;
+
     auto [out_cb_id, out_cb] = tt::tt_metal::create_cb(
         next_cb_index++, program, all_cores, out_cb_pagesize, out_cb_npages, output_cb_data_format, output.buffer());
 
@@ -215,6 +223,8 @@ tt::tt_metal::operation::ProgramWithCallbacks bilinear_multi_core(
     uint32_t y_index_u32 = *reinterpret_cast<uint32_t*>(&y_index);
     uint32_t x_index_compute_u32 = *reinterpret_cast<uint32_t*>(&x_index_compute);
 
+    uint32_t num_input_width_blocks =
+        std::ceil((float)(input_shape[3]) / (MAX_TILES_PER_REDUCTION * tt::constants::TILE_WIDTH));
     std::vector<uint32_t> reader_compile_time_args = {
         in_cb_id,
         in_cb_id1,
@@ -224,6 +234,8 @@ tt::tt_metal::operation::ProgramWithCallbacks bilinear_multi_core(
         y_index_u32,
         x_index_compute_u32,
         1,
+        num_input_width_blocks,
+        input_block_size_bytes,
     };
 
     std::vector<uint32_t> writer_compile_time_args = {
@@ -235,6 +247,8 @@ tt::tt_metal::operation::ProgramWithCallbacks bilinear_multi_core(
         y_index_u32,
         x_index_compute_u32,
         0,
+        num_input_width_blocks,
+        input_block_size_bytes,
     };
 
     string writer_kernel_fname, reader_kernel_fname, compute_kernel_fname;
@@ -245,7 +259,6 @@ tt::tt_metal::operation::ProgramWithCallbacks bilinear_multi_core(
         "ttnn/cpp/ttnn/operations/pool/upsample/device/kernels/dataflow/reader_bilinear_multi_core_sharded.cpp");
     compute_kernel_fname = std::string("ttnn/cpp/ttnn/operations/pool/upsample/device/kernels/compute/bilinear.cpp");
 
-    uint32_t in_ntiles_c = (uint32_t)std::ceil((float)input_shape[3] / constants::TILE_WIDTH);
     std::vector<uint32_t> compute_compile_time_args = {
         in_cb_id1,
         in_cb_id2,
@@ -257,6 +270,8 @@ tt::tt_metal::operation::ProgramWithCallbacks bilinear_multi_core(
         scale_factor_h * scale_factor_w,
         (uint32_t)std::ceil((float)output_shape[3] / constants::TILE_WIDTH),
         output_nsticks_per_core,  // loop count with blocks
+        num_input_width_blocks,
+        input_block_size_bytes,
     };
 
     auto reader_kernel = CreateKernel(

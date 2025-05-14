@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -9,8 +9,8 @@
 #include <functional>
 #include <vector>
 
-#include "ttnn/tensor/host_buffer/host_buffer.hpp"
-#include "ttnn/tensor/host_buffer/memory_pin.hpp"
+#include <tt-metalium/host_buffer.hpp>
+#include <tt-metalium/memory_pin.hpp>
 
 namespace tt::tt_metal {
 namespace {

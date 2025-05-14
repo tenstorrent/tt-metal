@@ -8,12 +8,100 @@ from functools import partial
 import torch
 import ttnn
 from tests.sweep_framework.sweep_utils.utils import gen_shapes
-from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
+from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt, gen_constant
 
 from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
 from models.utility_functions import torch_random
 
 # Ref: https://github.com/tenstorrent/pytorch2.0_ttnn/blob/main/docs/operations/aten.mul.Tensor.md
+
+# Test to check for cases with inputs that give inf in pytorch and not in TTNN because 'inf' threshold is different for Torch and TTNN. Hence, this is tested separately.
+# pytorch gives 'inf' for values beyond ±3.4e38 but in TTNN, we get inf when the value exceeds ±3.41e38
+parameters = {
+    "check_inf_cases": {
+        "input_shape": [
+            {"self": [1, 1, 1, 10], "other": -3.4028234663852886e38},
+            {"self": [1, 1, 1, 12], "other": -3.4028234663852886e38},
+            {"self": [1, 1, 1, 14], "other": -3.4028234663852886e38},
+            {"self": [1, 1, 1, 15], "other": -3.4028234663852886e38},
+            {"self": [1, 1, 1, 17], "other": -3.4028234663852886e38},
+            {"self": [1, 1, 1, 1], "other": -3.4028234663852886e38},
+            {"self": [1, 1, 1, 201], "other": -3.4028234663852886e38},
+            {"self": [1, 1, 1, 2048], "other": -3.4028234663852886e38},
+            {"self": [1, 1, 1, 256], "other": -3.3895313892515355e38},
+            {"self": [1, 1, 1, 25], "other": -3.4028234663852886e38},
+            {"self": [1, 1, 1, 2], "other": -3.4028234663852886e38},
+            {"self": [1, 1, 1, 5], "other": -3.4028234663852886e38},
+            {"self": [1, 1, 1, 6], "other": -3.4028234663852886e38},
+            {"self": [1, 1, 1, 7], "other": -3.3895313892515355e38},
+            {"self": [1, 1, 1, 8], "other": -3.3895313892515355e38},
+            {"self": [1, 1, 1, 9], "other": -3.4028234663852886e38},
+        ],
+        "input_a_dtype": [ttnn.bfloat16],
+        "input_a_layout": [ttnn.TILE_LAYOUT],
+        "input_a_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
+    },
+}
+
+
+def run(
+    input_shape,
+    input_a_dtype,
+    input_a_layout,
+    input_a_memory_config,
+    *,
+    device,
+) -> list:
+    torch.manual_seed(0)
+
+    torch_input_tensor_a = gen_constant(input_shape["self"], 1.0)
+
+    input_tensor_a = ttnn.from_torch(
+        torch_input_tensor_a,
+        dtype=input_a_dtype,
+        layout=input_a_layout,
+        device=device,
+        memory_config=input_a_memory_config,
+    )
+
+    start_time = start_measuring_time()
+    result = ttnn.mul(input_tensor_a, input_shape["other"])
+    e2e_perf = stop_measuring_time(start_time)
+    expected_result = ttnn.full(
+        input_shape["self"], fill_value=input_shape["other"], dtype=input_a_dtype, layout=input_a_layout, device=device
+    )
+
+    check = ttnn.eq(expected_result, result)
+    check_one_tensor = ttnn.to_torch(check)
+    check_one_result = torch.all(check_one_tensor == 1.0).item()
+
+    torch_input_tensor_a = gen_constant(input_shape["self"], -1.0)
+
+    input_tensor_a = ttnn.from_torch(
+        torch_input_tensor_a,
+        dtype=input_a_dtype,
+        layout=input_a_layout,
+        device=device,
+        memory_config=input_a_memory_config,
+    )
+
+    start_time = start_measuring_time()
+    result = ttnn.mul(input_tensor_a, input_shape["other"])
+    e2e_perf = stop_measuring_time(start_time)
+    expected_result = ttnn.full(
+        input_shape["self"],
+        fill_value=-1 * input_shape["other"],
+        dtype=input_a_dtype,
+        layout=input_a_layout,
+        device=device,
+    )
+    check = ttnn.eq(expected_result, result)
+    check_m_one_tensor = ttnn.to_torch(check)
+    check_m_one_result = torch.all(check_m_one_tensor == 1.0).item()
+
+    status = check_one_result and check_m_one_result
+    return [(status, "1.0" if status else "0.0"), e2e_perf]
+
 
 # Parameters provided to the test vector generator are defined here.
 # They are defined as dict-type suites that contain the arguments to the run function as keys, and lists of possible inputs as values.

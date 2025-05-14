@@ -62,10 +62,10 @@ void run_create_tensor_test(tt::tt_metal::distributed::MeshDevice* device, const
     ASSERT_EQ(input_buf_size_datums * datum_size_bytes, tensor_spec.compute_packed_buffer_size_bytes());
     auto input_buffer = tt::tt_metal::tensor_impl::allocate_mesh_buffer_on_device(device, tensor_spec);
 
-    auto input_storage = tt::tt_metal::DeviceStorage{
-        input_buffer, DistributedTensorConfig{}, {{tt::tt_metal::distributed::MeshCoordinate{0, 0}, tensor_spec}}};
+    auto input_storage =
+        tt::tt_metal::DeviceStorage{input_buffer, {{tt::tt_metal::distributed::MeshCoordinate{0, 0}, tensor_spec}}};
 
-    Tensor input_tensor = Tensor(input_storage, input_shape, dtype, Layout::TILE);
+    Tensor input_tensor = Tensor(input_storage, tensor_spec, ReplicateTensor{});
 
     ttnn::write_buffer(io_cq, input_tensor, {host_data});
 

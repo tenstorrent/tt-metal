@@ -40,10 +40,10 @@ operation::ProgramWithCallbacks pad_rm_reader_writer(
     uint32_t pad_value_const_buffer_size = 32;  // noc transfers in chunks of 32
     uint32_t pad_value_const_buffer_nbytes = pad_value_const_buffer_size * a.element_size();
     auto pad_value_const_buffer =
-        tt::tt_metal::host_buffer::create(std::vector<bfloat16>(pad_value_const_buffer_size, bfloat16(pad_value)));
+        tt::tt_metal::HostBuffer(std::vector<bfloat16>(pad_value_const_buffer_size, bfloat16(pad_value)));
     const Tensor pad_value_const_tensor =
         Tensor(
-            tt::tt_metal::HostStorage{pad_value_const_buffer},
+            std::move(pad_value_const_buffer),
             ttnn::Shape({1, 1, 1, pad_value_const_buffer_size}),
             DataType::BFLOAT16,
             Layout::ROW_MAJOR)
@@ -467,12 +467,12 @@ operation::ProgramWithCallbacks pad_rm_reader_writer_multi_core(
     uint32_t pad_value_const_buffer_size = 32;  // noc transfers in chunks of 32
     uint32_t pad_value_const_buffer_nbytes = pad_value_const_buffer_size * a.element_size();
     auto pad_value_const_buffer =
-        tt::tt_metal::host_buffer::create(std::vector<bfloat16>(pad_value_const_buffer_size, bfloat16(pad_value)));
+        tt::tt_metal::HostBuffer(std::vector<bfloat16>(pad_value_const_buffer_size, bfloat16(pad_value)));
     // NOTE: The const buffer is always in L1
     // TODO: make a local buffer for each core?
     const Tensor pad_value_const_tensor =
         Tensor(
-            tt::tt_metal::HostStorage{pad_value_const_buffer},
+            std::move(pad_value_const_buffer),
             ttnn::Shape({1, 1, 1, pad_value_const_buffer_size}),
             DataType::BFLOAT16,
             Layout::ROW_MAJOR)
