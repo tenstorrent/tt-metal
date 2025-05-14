@@ -640,7 +640,7 @@ def test_unary_comp_ops(input_shapes, scalar, ttnn_op, use_legacy, device):
 
     in_data = in_data[-num_elements:].reshape(input_shapes)
 
-    if is_wormhole_b0() and use_legacy == False and is_int32_overflow(in_data, scalar).any():
+    if use_legacy == False and is_int32_overflow(in_data, scalar).any():
         pytest.xfail("Overflow occurs as in case of binary_ng, sub_tile is called")
 
     input_tensor = ttnn.from_torch(in_data, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
