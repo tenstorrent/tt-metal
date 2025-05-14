@@ -25,6 +25,11 @@ struct ProgramCommandSequence {
         void* dst;
         uint32_t size;
     };
+    struct LaunchMsgData {
+        bool is_multicast;
+        launch_msg_t original_msg;
+        launch_msg_t* msg_ptr;
+    };
     HostMemDeviceCommand preamble_command_sequence;
     uint32_t current_stall_seq_idx = 0;
     HostMemDeviceCommand stall_command_sequences[2];
@@ -38,7 +43,7 @@ struct ProgramCommandSequence {
     // Note: some RTAs may be have their RuntimeArgsData modified so the source-of-truth of their data is the command
     // sequence. They won't be listed in rta_updates.
     std::vector<RtaUpdate> rta_updates;
-    std::vector<launch_msg_t*> launch_messages;
+    std::vector<LaunchMsgData> launch_messages;
     std::vector<CQDispatchWritePackedCmd*> launch_msg_write_packed_cmd_ptrs;
     std::vector<CQDispatchWritePackedCmd*> unicast_launch_msg_write_packed_cmd_ptrs;
     CQDispatchGoSignalMcastCmd* mcast_go_signal_cmd_ptr;
@@ -51,11 +56,11 @@ struct ProgramCommandSequence {
             [](int acc, const HostMemDeviceCommand& cmd) { return cmd.size_bytes() + acc; });
     }
 
-    uint32_t get_one_shot_fetch_size(bool stall_first, bool stall_before_program) const {
+    uint32_t get_one_shot_fetch_size(bool stall_first, bool stall_before_program, bool send_binary) const {
         uint32_t one_shot_fetch_size =
             ((stall_before_program || stall_first) ? stall_command_sequences[current_stall_seq_idx].size_bytes() : 0) +
             preamble_command_sequence.size_bytes() + program_config_buffer_command_sequence.size_bytes() +
-            get_rt_args_size() + program_binary_command_sequence.size_bytes() +
+            get_rt_args_size() + (send_binary ? program_binary_command_sequence.size_bytes() : 0) +
             launch_msg_command_sequence.size_bytes() + go_msg_command_sequence.size_bytes();
         return one_shot_fetch_size;
     }
