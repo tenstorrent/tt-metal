@@ -203,7 +203,7 @@ class OpTestBase:
 
             logger.info(f"Iteration = {i}, done!")
 
-        catch_on_fail = False
+        catch_nd_on_fail = True
         if self.determinism_check_enabled:
             for nd_output_id in range(num_devices):
                 device_idx = self.device_ids[nd_output_id]
@@ -211,8 +211,8 @@ class OpTestBase:
                     f"Number of non-deterministic outputs on device {device_idx} is {num_nd_outputs[nd_output_id]}"
                 )
                 if num_nd_outputs[nd_output_id] > 0:
-                    catch_on_fail = True
-        assert catch_on_fail
+                    catch_nd_on_fail = False
+        assert catch_nd_on_fail
 
 
 def get_blackhole_grid_size():
