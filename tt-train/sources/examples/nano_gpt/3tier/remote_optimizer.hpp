@@ -1,9 +1,11 @@
+// SPDX-FileCopyrightText: (c) 2025 Tenstorrent AI ULC
+//
+// SPDX-License-Identifier: Apache-2.0
 
 #include <string>
 
 #include "autograd/auto_context.hpp"
 #include "core/distributed/distributed.hpp"
-#include "core/distributed/mpi_context.hpp"
 #include "optimizers/optimizer_base.hpp"
 
 using SortedParameters = std::map<std::string, ttml::autograd::TensorPtr>;
@@ -12,7 +14,7 @@ class RemoteOptimizer : public ttml::optimizers::OptimizerBase {
 public:
     RemoteOptimizer(ttml::serialization::NamedParameters parameters, int aggregator_rank) :
         ttml::optimizers::OptimizerBase(std::move(parameters)) {
-        m_aggregator_rank = aggregator_rank;
+        m_aggregator_rank = ttml::core::distributed::Rank{aggregator_rank};
         m_sorted_parameters = SortedParameters(m_parameters.begin(), m_parameters.end());
     }
 
@@ -55,7 +57,6 @@ public:
 
     void send_gradients() {
         auto& ctx = ttml::autograd::ctx();
-        auto& mpi_ctx = ctx.get_mpi_context();
         for (auto& [name, tensor_ptr] : m_sorted_parameters) {
             if (tensor_ptr->get_requires_grad() && tensor_ptr->is_grad_initialized()) {
                 auto grad = tensor_ptr->get_grad();
@@ -65,15 +66,11 @@ public:
     }
 
     void receive_weights() {
-        fmt::println("[worker] sorted parameters size: {}", m_sorted_parameters.size());
         for (auto& [name, tensor_ptr] : m_sorted_parameters) {
             auto tensor = tensor_ptr->get_value();
-            fmt::println("[worker] receiving weights {}", name);
             ttml::core::distributed::recv_tensor(tensor, m_aggregator_rank);
-            fmt::println("[worker] received weights {}", name);
             tensor_ptr->set_value(tensor);
         }
-        fmt::println("[worker] received weights");
     }
 
     void set_lr(float lr) override {
@@ -85,6 +82,6 @@ public:
 
 private:
     size_t m_steps{0};
-    int m_aggregator_rank{0};
     SortedParameters m_sorted_parameters;
+    ttml::core::distributed::Rank m_aggregator_rank{0};
 };

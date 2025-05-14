@@ -4,20 +4,18 @@
 
 #pragma once
 
+#include <core/ttnn_all_includes.hpp>
 #include <memory>
 #include <random>
-#include <tt_stl/indestructible.hpp>
 
 #include "core/mesh_device.hpp"
 #include "graph.hpp"
 
-namespace ttml::core::distributed {
-class MPIContext;
-}
-
 namespace ttml::autograd {
 
 enum class GradMode { ENABLED, DISABLED };
+
+using DistributedContext = tt::tt_metal::distributed::multihost::DistributedContext;
 
 class AutoContext {
 public:
@@ -55,8 +53,22 @@ public:
 
     void close_device();
 
-    void init_mpi_context(int argc, char** argv);
-    [[nodiscard]] core::distributed::MPIContext& get_mpi_context() const;
+    // DistributedContext& AutoContext::get_distributed_context() const {
+    //     if (!m_distributed_context) {
+    //         throw std::runtime_error("DistributedContext is not initialized.");
+    //     }
+    //     return *m_distributed_context;
+    // }
+
+    // void AutoContext::initialize_distributed_context(int argc, char** argv) {
+    //     if (m_distributed_context) {
+    //         throw std::runtime_error("MPIContext is already initialized.");
+    //     }
+    //     m_distributed_context = DistributedContext::create(argc, argv);
+    // }
+
+    void initialize_distributed_context(int argc, char** argv);
+    [[nodiscard]] DistributedContext& get_distributed_context() const;
 
 private:
     AutoContext();
@@ -69,7 +81,7 @@ private:
     tt::tt_metal::distributed::MeshShape m_mesh_shape = tt::tt_metal::distributed::MeshShape(1, 1);
     std::unique_ptr<core::MeshDevice> m_device;
 
-    std::unique_ptr<ttml::core::distributed::MPIContext> m_mpi_context;
+    std::shared_ptr<DistributedContext> m_distributed_context;
 
     friend class tt::stl::Indestructible<AutoContext>;
 };

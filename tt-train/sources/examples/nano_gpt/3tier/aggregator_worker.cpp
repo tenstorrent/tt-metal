@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: (c) 2025 Tenstorrent AI ULC
+//
+// SPDX-License-Identifier: Apache-2.0
+
 #include <fmt/core.h>
 
 #include <CLI/CLI.hpp>
@@ -5,16 +9,16 @@
 // TODO: improve include path
 
 #include "../utils.hpp"
-#include "autograd/auto_context.hpp"
 #include "config.hpp"
 #include "core/distributed/distributed.hpp"
-#include "core/distributed/mpi_context.hpp"
 #include "datasets/utils.hpp"
 #include "models/gpt2.hpp"
 #include "tokenizers/bpe_tokenizer.hpp"
 #include "tokenizers/char_tokenizer.hpp"
 
 using SortedParameters = std::map<std::string, ttml::autograd::TensorPtr>;
+using Rank = ttml::core::distributed::Rank;
+using Tag = ttml::core::distributed::Tag;
 
 uint32_t get_steps_per_dataset(const TrainingConfig &config) {
     std::string text;
@@ -60,10 +64,9 @@ uint32_t get_steps_per_dataset(const TrainingConfig &config) {
 
 void send_aggregated_gradients_from_workers_to_optimizer(const SortedParameters &sorted_model_parameters, int workers) {
     auto &ctx = ttml::autograd::ctx();
-    auto &mpi_ctx = ctx.get_mpi_context();
+    auto &distributed_ctx = ctx.get_distributed_context();
 
-    uint32_t optimizer_rank = mpi_ctx.get_rank() + 1U;
-    fmt::print("Rank {}: Sending aggregated gradients to optimizer with rank {}\n", mpi_ctx.get_rank(), optimizer_rank);
+    Rank optimizer_rank{*distributed_ctx.rank() + 1};
 
     assert(workers > 0);
     for (auto &[name, tensor_ptr] : sorted_model_parameters) {
@@ -73,11 +76,11 @@ void send_aggregated_gradients_from_workers_to_optimizer(const SortedParameters 
 
         // TODO: allow usage of tensor from model parameters (avoids redundant storage of a model)
         auto tensor = ttnn::empty_like(tensor_ptr->get_value());
-        ttml::core::distributed::recv_tensor(tensor, 0);
+        ttml::core::distributed::recv_tensor(tensor, ttml::core::distributed::Rank{0});
 
-        for (uint32_t worker_id = 1U; worker_id < workers; ++worker_id) {
+        for (int worker_id = 1; worker_id < workers; ++worker_id) {
             auto tensor_to_add = ttnn::empty_like(tensor_ptr->get_value());
-            ttml::core::distributed::recv_tensor(tensor_to_add, worker_id);
+            ttml::core::distributed::recv_tensor(tensor_to_add, ttml::core::distributed::Rank{worker_id});
             tensor = ttnn::add(tensor, tensor_to_add);
         }
         tensor = ttnn::multiply(tensor, 1.0F / static_cast<float>(workers));
@@ -88,13 +91,10 @@ void send_aggregated_gradients_from_workers_to_optimizer(const SortedParameters 
 
 void send_weights_from_optimizer_to_workers(const SortedParameters &sorted_model_parameters, int workers) {
     auto &ctx = ttml::autograd::ctx();
-    auto &mpi_ctx = ctx.get_mpi_context();
+    auto &distributed_ctx = ctx.get_distributed_context();
 
-    uint32_t optimizer_rank = mpi_ctx.get_rank() + 1U;
-    fmt::println("[aggregator] Rank {}: Receiving weights and sending to workers", mpi_ctx.get_rank(), optimizer_rank);
+    Rank optimizer_rank{*distributed_ctx.rank() + 1};
     assert(workers > 0);
-
-    fmt::println("Sorted model parameters size: {}", sorted_model_parameters.size());
 
     for (auto &[name, tensor_ptr] : sorted_model_parameters) {
         if (!tensor_ptr->get_requires_grad()) {
@@ -102,27 +102,20 @@ void send_weights_from_optimizer_to_workers(const SortedParameters &sorted_model
         }
 
         auto tensor = tensor_ptr->get_value();
-        fmt::println("[aggregator] Rank {}: Receiving weights {} from optimizer", mpi_ctx.get_rank(), name);
-        ttml::core::distributed::recv_tensor(tensor, optimizer_rank);
-        fmt::println("[aggregator] Rank {}: Received weights {} from optimizer", mpi_ctx.get_rank(), name);
-
-        fmt::println("[aggregator] Rank {}: Sending weights {} to workers({})", mpi_ctx.get_rank(), name, workers);
-        for (uint32_t worker_id = 0; worker_id < workers; ++worker_id) {
-            ttml::core::distributed::send_tensor(tensor, worker_id);
+        ttml::core::distributed::recv_tensor(tensor, ttml::core::distributed::Rank{optimizer_rank});
+        for (int worker_id = 0; worker_id < workers; ++worker_id) {
+            ttml::core::distributed::send_tensor(tensor, ttml::core::distributed::Rank{worker_id});
         }
-
-        fmt::println("[aggregator] Rank {}: Sent weights {} to all workers", mpi_ctx.get_rank(), name);
     }
-    fmt::println("[aggregator] Rank {}: send_weights_from_optimizer_to_workers done!", mpi_ctx.get_rank());
 }
 
 int main(int argc, char **argv) {
     auto &ctx = ttml::autograd::ctx();
-    ctx.init_mpi_context(argc, argv);
-    auto &mpi_ctx = ctx.get_mpi_context();
+    ctx.initialize_distributed_context(argc, argv);
+    auto &distributed_ctx = ctx.get_distributed_context();
 
     CLI::App app{"Multihost Example"};
-    fmt::print("Size {}, Rank {}: Initializing MPI context\n", mpi_ctx.get_size(), mpi_ctx.get_rank());
+    fmt::print("Size {}, Rank {}: Initializing MPI context\n", *distributed_ctx.size(), *distributed_ctx.rank());
     argv = app.ensure_utf8(argv);
 
     std::string config_name = std::string(CONFIGS_FOLDER) + "/training_shakespear_nanogpt_3tier.yaml";
@@ -139,7 +132,7 @@ int main(int argc, char **argv) {
     auto steps_per_dataset = get_steps_per_dataset(config);
     fmt::println(
         "[aggregator] Rank {}: Epochs {}: Steps per dataset: {} max steps: {}",
-        mpi_ctx.get_rank(),
+        *distributed_ctx.rank(),
         config.num_epochs,
         steps_per_dataset,
         config.max_steps);
@@ -158,23 +151,18 @@ int main(int argc, char **argv) {
     uint32_t global_step = 0;
     for (uint32_t epoch = 0; epoch < config.num_epochs; ++epoch) {
         for (uint32_t step = 0; step < steps_per_dataset; ++step, ++global_step) {
-            fmt::println("[aggregator] Rank {}: Step {} in progress", mpi_ctx.get_rank(), global_step);
             send_aggregated_gradients_from_workers_to_optimizer(sorted_model_parameters, workers);
             send_weights_from_optimizer_to_workers(sorted_model_parameters, workers);
             if (global_step >= config.max_steps) {
                 break;
             }
-            fmt::println("[aggregator] Rank {}: Step {} done", mpi_ctx.get_rank(), global_step);
         }
         if (global_step >= config.max_steps) {
             break;
         }
-        fmt::print("[aggregator] Rank {}: Training epoch {} finished\n", mpi_ctx.get_rank(), epoch);
     }
 
-    fmt::print("[aggregator] Rank {}: Training finished\n", mpi_ctx.get_rank());
-    mpi_ctx.barrier();
-    mpi_ctx.finalize();
-    fmt::print("Rank {}: Finalized MPI context\n", mpi_ctx.get_rank());
+    distributed_ctx.barrier();
+    fmt::print("Rank {}: Finalized MPI context\n", *distributed_ctx.rank());
     return 0;
 }

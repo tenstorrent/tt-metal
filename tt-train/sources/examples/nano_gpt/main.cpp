@@ -469,10 +469,10 @@ int main(int argc, char **argv) {
 
     if (config.enable_mpi) {
         auto &ctx = ttml::autograd::ctx();
-        ctx.init_mpi_context(argc, argv);
+        ctx.initialize_distributed_context(argc, argv);
 
-        auto &mpi_ctx = ctx.get_mpi_context();
-        fmt::print("Size {}, Rank {}: Initializing MPI context\n", mpi_ctx.get_size(), mpi_ctx.get_rank());
+        auto &distributed_ctx = ctx.get_distributed_context();
+        fmt::print("Size {}, Rank {}: Initializing MPI context\n", *distributed_ctx.size(), *distributed_ctx.rank());
 
         // disable wandb for now in case of mpi example
         enable_wandb = false;
@@ -556,8 +556,8 @@ int main(int argc, char **argv) {
     // set seed
     ttml::autograd::ctx().set_seed(config.seed);
     if (config.enable_mpi) {
-        auto rank = ttml::autograd::ctx().get_mpi_context().get_rank();
-        auto seed = config.seed + rank;
+        int rank = *ttml::autograd::ctx().get_distributed_context().rank();
+        auto seed = config.seed + static_cast<uint32_t>(rank);
         ttml::autograd::ctx().set_seed(seed);
     }
     auto schedule_func = schedulers.at(config.scheduler_type);
@@ -898,10 +898,9 @@ int main(int argc, char **argv) {
 
     if (config.enable_mpi) {
         auto &ctx = ttml::autograd::ctx();
-        auto &mpi_ctx = ctx.get_mpi_context();
-        mpi_ctx.barrier();
-        mpi_ctx.finalize();
-        fmt::print("Rank {}: Finalizing MPI context\n", mpi_ctx.get_rank());
+        auto &distributed_ctx = ctx.get_distributed_context();
+        distributed_ctx.barrier();
+        fmt::print("Rank {}: Finalizing MPI context\n", *distributed_ctx.rank());
     }
 
     if (enable_wandb) {

@@ -1,5 +1,8 @@
+// SPDX-FileCopyrightText: (c) 2025 Tenstorrent AI ULC
+//
+// SPDX-License-Identifier: Apache-2.0
+
 #include <CLI/CLI.hpp>
-#include <tt-train/sources/examples/demo_multihost/roles/worker.hpp>
 
 // TODO: improve include path
 #include "../utils.hpp"

@@ -15,16 +15,14 @@
 
 #include "autograd/auto_context.hpp"
 #include "core/distributed/distributed.hpp"
-#include "core/distributed/mpi_context.hpp"
 #include "core/tt_tensor_utils.hpp"
-#include "datasets/dataloader.hpp"
-#include "datasets/generators.hpp"
 #include "optimizers/adamw.hpp"
-#include "roles/optimizer.hpp"
-#include "roles/worker.hpp"
 
 constexpr int WORKER_RANK = 1;
 constexpr int AGGREGATOR_RANK = 0;
+
+using Rank = ttml::core::distributed::Rank;
+using Tag = ttml::core::distributed::Tag;
 
 struct board_entry {
     std::string pci_dev_id;
@@ -102,11 +100,11 @@ std::vector<board_entry> get_tt_smi_boards() {
 
 void print_tt_smi() {
     auto& ctx = ttml::autograd::ctx();
-    auto& mpi_ctx = ctx.get_mpi_context();
-    auto rank = mpi_ctx.get_rank();
+    auto& distributed_ctx = ctx.get_distributed_context();
+    auto rank = distributed_ctx.rank();
     try {
         std::vector<board_entry> boards = get_tt_smi_boards();
-        fmt::print("Rank {}: Parsed boards:\n", rank);
+        fmt::print("Rank {}: Parsed boards:\n", *rank);
         for (const auto& b : boards) {
             fmt::print(
                 "PCI Dev ID:      {}\n"
@@ -127,128 +125,48 @@ void print_tt_smi() {
 void test_send_recv_tensor() {
     fmt::print("test_send_recv_tensor started\n");
     auto& ctx = ttml::autograd::ctx();
-    auto& mpi_ctx = ctx.get_mpi_context();
-    auto rank = mpi_ctx.get_rank();
-    auto size = mpi_ctx.get_size();
-    fmt::print("Rank {}:, Testing send/recv tensor\n", rank);
+    auto& distributed_ctx = ctx.get_distributed_context();
+    auto rank = distributed_ctx.rank();
+    auto size = distributed_ctx.size();
+    fmt::print("Rank {}:, Testing send/recv tensor\n", *rank);
     auto& device = ctx.get_device();
-    if (size < 2) {
+    if (*size < 2) {
         fmt::print("This example requires at least 2 processes.\n");
         return;
     }
     auto shape = ttml::core::create_shape({1, 1, 2, 3});
-    if (rank == 0) {
+    if (*rank == 0) {
         auto tensor = ttml::core::ones(shape, &device);
         auto vec_ones = ttml::core::to_vector(tensor);
-        fmt::print("Rank {}, vector size: {}\n", rank, vec_ones.size());
-        fmt::print("Rank {}: sending tensor: [{}]\n", rank, vec_ones);
-        ttml::core::distributed::send_tensor(tensor, 1);
+        fmt::print("Rank {}, vector size: {}\n", *rank, vec_ones.size());
+        fmt::print("Rank {}: sending tensor: [{}]\n", *rank, vec_ones);
+        ttml::core::distributed::send_tensor(tensor, Rank{1});
         fmt::print("Rank {}: sent tensor\n", rank);
-    } else if (rank == 1) {
+    } else if (*rank == 1) {
         auto tensor = ttml::core::zeros(shape, &device);
         auto vec_zeros = ttml::core::to_vector(tensor);
-        fmt::print("Rank {}: original tensor: [{}]\n", rank, vec_zeros);
-        ttml::core::distributed::recv_tensor(tensor, 0);
+        fmt::print("Rank {}: original tensor: [{}]\n", *rank, vec_zeros);
+        ttml::core::distributed::recv_tensor(tensor, Rank{0});
         auto vec = ttml::core::to_vector(tensor);
-        fmt::print("Rank {}: received tensor: [{}]\n", rank, vec);
-    }
-}
-
-struct LinearRegressionParameters {
-    const size_t training_samples_count = 128000;
-    const uint32_t num_features = 64;
-    const uint32_t num_targets = 32;
-    const float noise = 0.0F;
-    const bool bias = true;
-    const uint32_t batch_size = 128;
-    const int num_epochs = 10;
-};
-
-void regression_training() {
-    auto& ctx = ttml::autograd::ctx();
-    auto& device = ctx.get_device();
-    auto& mpi_ctx = ctx.get_mpi_context();
-    int rank = mpi_ctx.get_rank();
-
-    LinearRegressionParameters params{};
-    auto training_params = ttml::datasets::MakeRegressionParams{
-        .n_samples = params.training_samples_count,
-        .n_features = params.num_features,
-        .n_targets = params.num_targets,
-        .noise = params.noise,
-        .bias = params.bias,
-    };
-
-    auto model = std::make_shared<ttml::modules::LinearLayer>(params.num_features, params.num_targets);
-
-    if (rank == WORKER_RANK) {
-        fmt::print("Worker rank {} initializing worker\n", rank);
-        auto train_dataset = ttml::datasets::make_regression(training_params);
-
-        std::function<roles::BatchType(std::vector<roles::DatasetSample> && samples)> collate_fn =
-            [&params, &device](std::vector<roles::DatasetSample>&& samples) {
-                const uint32_t batch_size = samples.size();
-                std::vector<float> data;
-                std::vector<float> targets;
-                data.reserve(params.batch_size * params.num_features);
-                targets.reserve(params.batch_size * params.num_targets);
-                for (auto& [features, target] : samples) {
-                    std::move(features.begin(), features.end(), std::back_inserter(data));
-                    std::move(target.begin(), target.end(), std::back_inserter(targets));
-                }
-                auto feature_shape = ttml::core::create_shape({params.batch_size, 1, 1, params.num_features});
-                auto target_shape = ttml::core::create_shape({params.batch_size, 1, 1, params.num_targets});
-                auto data_tensor =
-                    ttml::autograd::create_tensor(ttml::core::from_vector<float>(data, feature_shape, &device));
-                auto targets_tensor =
-                    ttml::autograd::create_tensor(ttml::core::from_vector(targets, target_shape, &device));
-                return std::make_pair(data_tensor, targets_tensor);
-            };
-
-        auto train_dataloader = roles::DataLoader(train_dataset, params.batch_size, /* shuffle */ true, collate_fn);
-        roles::Worker worker(train_dataloader, model, AGGREGATOR_RANK);
-        for (int i = 0; i < params.num_epochs; i++) {
-            fmt::print("Rank {}: Training epoch {}\n", rank, i);
-            worker.training_step();
-        }
-        fmt::print("Rank {}: Training finished\n", rank);
-    }
-    if (rank == AGGREGATOR_RANK) {
-        // use optimizer now
-        roles::Optimizer optimizer(model, rank, WORKER_RANK);
-
-        for (int i = 0; i < params.num_epochs; i++) {
-            fmt::print("Rank {}: Optimizer epoch {}\n", rank, i);
-            for (int _ = 0; _ < params.training_samples_count / params.batch_size; _++) {
-                optimizer.optimization_step();
-                optimizer.send_weights();
-            }
-            fmt::print("Rank {}: Optimizer epoch {} finished\n", rank, i);
-        }
-
-        fmt::print("Rank {}: Optimizer finished\n", rank);
+        fmt::print("Rank {}: received tensor: [{}]\n", *rank, vec);
     }
 }
 
 int main(int argc, char** argv) {
     auto& ctx = ttml::autograd::ctx();
-    ctx.init_mpi_context(argc, argv);
-    auto& mpi_ctx = ctx.get_mpi_context();
+    ctx.initialize_distributed_context(argc, argv);
+    auto& distributed_ctx = ctx.get_distributed_context();
     CLI::App app{"Multihost Example"};
-    fmt::print("Size {}, Rank {}: Initializing MPI context\n", mpi_ctx.get_size(), mpi_ctx.get_rank());
+    fmt::print("Size {}, Rank {}: Initializing MPI context\n", *distributed_ctx.size(), *distributed_ctx.rank());
     argv = app.ensure_utf8(argv);
 
     bool print_tt_smi_output = false;
     bool run_test_send_recv_tensor = false;
-    bool run_regression_training = true;
 
     // app.add_option("-c,--config", config_name, "Yaml Config name")->default_val(config_name);
     app.add_option("-t,--tt_smi", print_tt_smi_output, "print tt-smi on all hosts")->default_val(print_tt_smi_output);
     app.add_option("--run_test_send_recv_tensor", run_test_send_recv_tensor, "run simple send recv tensor test")
         ->default_val(run_test_send_recv_tensor);
-    app.add_option("--run_regression_training", run_regression_training, "runs regression training")
-        ->default_val(run_regression_training);
-
     CLI11_PARSE(app, argc, argv);
 
     if (print_tt_smi_output) {
@@ -257,12 +175,8 @@ int main(int argc, char** argv) {
     if (run_test_send_recv_tensor) {
         test_send_recv_tensor();
     }
-    if (run_regression_training) {
-        regression_training();
-    }
 
-    mpi_ctx.barrier();
-    mpi_ctx.finalize();
-    fmt::print("Rank {}: Finalized MPI context\n", mpi_ctx.get_rank());
+    distributed_ctx.barrier();
+    fmt::print("Rank {}: Finalized MPI context\n", *distributed_ctx.rank());
     return 0;
 }
