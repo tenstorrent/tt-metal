@@ -140,7 +140,7 @@ async function generateSummaryBox(grouped, github, context) {
       .sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
     const lastMainRun = mainBranchRuns[0];
     const lastMainPassing = lastMainRun?.conclusion === 'success' ? '✅' : '❌';
-    const eventTypes = [...new Set(runs.map(r => r.event === 'workflow_dispatch' ? 'wkflw_disp' : r.event))].join(', ');
+    const eventTypes = [...new Set(runs.map(r => r.event))].join(', ');
     const workflowFile = runs[0]?.path;
     const workflowLink = workflowFile
       ? `https://github.com/${context.repo.owner}/${context.repo.repo}/actions/workflows/${workflowFile}?query=branch%3Amain`
@@ -163,7 +163,8 @@ async function generateSummaryBox(grouped, github, context) {
 
       // For scheduled runs, find the last good and earliest bad commits
       if (lastMainRun.event === 'schedule') {
-        const scheduledMainRuns = mainBranchRuns.filter(r => r.event === 'schedule');
+        // Include both scheduled and manually triggered runs on main branch
+        const scheduledMainRuns = mainBranchRuns.filter(r => r.event === 'schedule' || r.event === 'workflow_dispatch');
         let foundGood = false;
         let foundBad = false;
 
@@ -213,8 +214,9 @@ async function generateSummaryBox(grouped, github, context) {
  * Build the markdown report for all grouped runs.
  */
 async function buildReport(grouped, github, context) {
+  const days = core.getInput('days', { required: false }) || '15';
   return [
-    '# Workflow Summary\n',
+    `# Workflow Summary (Last ${days} Days)\n`,
     await generateSummaryBox(grouped, github, context)
   ].join('\n');
 }
