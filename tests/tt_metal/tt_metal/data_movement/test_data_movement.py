@@ -23,6 +23,15 @@ test_id_to_name = {
     3: "DRAM Directed Ideal",
     4: "One to One Packet Sizes",
     5: "One from One Packet Sizes",
+    6: "One to All 2x2 Packet Sizes",
+    7: "One to All 4x4 Packet Sizes",
+    8: "One to All 10x10 Packet Sizes",
+    9: "One to All Multicast 2x2 Packet Sizes",
+    10: "One to All Multicast 5x5 Packet Sizes",
+    11: "One to All Multicast 11x10 Packet Sizes",
+    12: "One to All Multicast Linked 2x2 Packet Sizes",
+    13: "One to All Multicast Linked 5x5 Packet Sizes",
+    14: "One to All Multicast Linked 11x10 Packet Sizes",
 }
 
 # Correspondng test bounds for each arch, test id, riscv core
@@ -53,6 +62,33 @@ test_bounds = {
         5: {
             "riscv_1": {"latency": {"lower": 200, "upper": 5000}, "bandwidth": 0.1},
         },
+        6: {
+            "riscv_0": {"latency": {"lower": 200, "upper": 70000}, "bandwidth": 0.4},
+        },
+        7: {
+            "riscv_0": {"latency": {"lower": 200, "upper": 30000}, "bandwidth": 1.0},
+        },
+        8: {
+            "riscv_0": {"latency": {"lower": 2000, "upper": 2000000}, "bandwidth": 1.0},
+        },
+        9: {
+            "riscv_0": {"latency": {"lower": 200, "upper": 300000}, "bandwidth": 0.1},
+        },
+        10: {
+            "riscv_0": {"latency": {"lower": 200, "upper": 70000}, "bandwidth": 0.1},
+        },
+        11: {
+            "riscv_0": {"latency": {"lower": 200, "upper": 200000}, "bandwidth": 0.04},
+        },
+        12: {
+            "riscv_0": {"latency": {"lower": 200, "upper": 30000}, "bandwidth": 0.1},
+        },
+        13: {
+            "riscv_0": {"latency": {"lower": 200, "upper": 30000}, "bandwidth": 0.1},
+        },
+        14: {
+            "riscv_0": {"latency": {"lower": 200, "upper": 100000}, "bandwidth": 0.04},
+        },
     },
     "blackhole": {
         0: {
@@ -77,6 +113,33 @@ test_bounds = {
         },
         5: {
             "riscv_1": {"latency": {"lower": 300, "upper": 4700}, "bandwidth": 0.17},
+        },
+        6: {
+            "riscv_0": {"latency": {"lower": 200, "upper": 70000}, "bandwidth": 0.4},
+        },
+        7: {
+            "riscv_0": {"latency": {"lower": 200, "upper": 300000}, "bandwidth": 1.0},
+        },
+        8: {
+            "riscv_0": {"latency": {"lower": 2000, "upper": 2000000}, "bandwidth": 1.0},
+        },
+        9: {
+            "riscv_0": {"latency": {"lower": 200, "upper": 30000}, "bandwidth": 0.1},
+        },
+        10: {
+            "riscv_0": {"latency": {"lower": 200, "upper": 70000}, "bandwidth": 0.1},
+        },
+        11: {
+            "riscv_0": {"latency": {"lower": 200, "upper": 200000}, "bandwidth": 0.04},
+        },
+        12: {
+            "riscv_0": {"latency": {"lower": 200, "upper": 30000}, "bandwidth": 0.1},
+        },
+        13: {
+            "riscv_0": {"latency": {"lower": 200, "upper": 30000}, "bandwidth": 0.1},
+        },
+        14: {
+            "riscv_0": {"latency": {"lower": 200, "upper": 100000}, "bandwidth": 0.04},
         },
     },
 }
