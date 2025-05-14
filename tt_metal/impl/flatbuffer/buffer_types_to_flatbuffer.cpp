@@ -84,7 +84,7 @@ flatbuffers::Offset<flatbuffer::CircularBufferConfig> to_flatbuffer(
         config.buffer_size());
 }
 
-// TODO: Opportunity to share with TTNN. This was straight up copied from tensor_types_to_flatbuffer.cpp
+// TODO: Opportunity to share with TTNN. This was straight up copied from tensor_spec_flatbuffer.cpp
 
 flatbuffer::ShardOrientation to_flatbuffer(ShardOrientation orientation) {
     switch (orientation) {

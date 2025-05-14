@@ -1,0 +1,43 @@
+include "tensor_spec.fbs";
+include "mesh_shape.fbs";
+include "mesh_coordinate.fbs";
+
+namespace ttnn.flatbuffer;
+
+union TensorBuffer {
+    InlineStorage = 1,
+    // Reserved for future use to refer to external storage.
+}
+
+// Stores `TensorBuffer` in the same file as the `Tensor` "inline".
+struct InlineStorage {
+    offset: uint64;
+    size: uint64;
+}
+
+table TensorShard {
+    tensor_spec: TensorSpec;
+    buffer: TensorBuffer;
+    mesh_coordinate: MeshCoordinate;
+}
+
+union TensorType {
+    ReplicatedTensor = 1,
+    ShardedTensor = 2,
+}
+
+table ReplicatedTensor {
+    tensor_spec: TensorSpec;
+    buffer: TensorBuffer;
+}
+
+table ShardedTensor {
+    mesh_shape: MeshShape;
+    shards: [TensorShard];
+}
+
+table Tensor {
+    tensor_type: TensorType;
+}
+
+root_type Tensor;

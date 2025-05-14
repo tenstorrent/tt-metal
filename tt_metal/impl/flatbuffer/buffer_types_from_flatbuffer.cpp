@@ -87,7 +87,7 @@ CircularBufferConfig from_flatbuffer(
     return config;
 }
 
-// TODO: Opportunity to share with TTNN. This was straight up copied from tensor_types_from_flatbuffer.cpp
+// TODO: Opportunity to share with TTNN. This was straight up copied from tensor_spec_flatbuffer.cpp
 
 ShardOrientation from_flatbuffer(flatbuffer::ShardOrientation orientation) {
     switch (orientation) {
