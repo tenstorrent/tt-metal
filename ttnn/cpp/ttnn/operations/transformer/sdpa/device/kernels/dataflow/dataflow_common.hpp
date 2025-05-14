@@ -120,7 +120,8 @@ void read_chunk_with_padding(
             if (row < src_rows && col < src_cols) {
                 continue;
             }
-            fill_tile_zeros<tile_bytes>(cb_id, row * dst_cols + col);
+            uint32_t tile_id = transpose ? col * dst_rows + row : row * dst_cols + col;
+            fill_tile_zeros<tile_bytes>(cb_id, tile_id);
         }
     }
     noc_async_read_barrier();
