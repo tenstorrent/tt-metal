@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <tt-metalium/constants.hpp>
-#include "cpp/ttnn-pybind/decorators.hpp"
+#include "ttnn-pybind/decorators.hpp"
 
 #include "ttnn/operations/conv/conv2d/conv2d_pybind.hpp"
 #include "ttnn/operations/sliding_window/sliding_window_pybind.hpp"
@@ -397,7 +397,6 @@ void py_bind_conv2d(py::module& module) {
             DataType,
             DataType,
             string,
-            uint32_t,
             bool,
             bool,
             uint32_t,
@@ -419,7 +418,6 @@ void py_bind_conv2d(py::module& module) {
         py::arg("dtype") = DataType::BFLOAT16,
         py::arg("weights_dtype") = DataType::BFLOAT16,
         py::arg("activation") = "",
-        py::arg("input_channels_alignment") = 32,
         py::arg("deallocate_activation") = false,
         py::arg("reallocate_halo_output") = true,
         py::arg("act_block_h_override") = 0,
@@ -453,10 +451,6 @@ void py_bind_conv2d(py::module& module) {
         Empty string means no activation function.
         Supported activation function strings are:
         relu, silu, mish, sigmoid, sigmoid_approx, tanh, log, softplus, gelu, sqrt
-    )doc");
-    py_conv_config.def_readwrite("input_channels_alignment", &Conv2dConfig::input_channels_alignment, R"doc(
-        The channels dimension of the input tensor is aligned to this value.
-        Must be either 8, 16, 24 or 32.
     )doc");
     py_conv_config.def_readwrite("deallocate_activation", &Conv2dConfig::deallocate_activation, R"doc(
         Boolean that indicates whether the activation tensor should be deallocated after the conv op is done.

@@ -164,6 +164,7 @@ public:
     std::size_t num_program_cache_entries() override;
 
     HalProgrammableCoreType get_programmable_core_type(CoreCoord virtual_core) const override;
+    HalMemType get_mem_type_of_core(CoreCoord virtual_core) const override;
 
     uint8_t num_noc_mcast_txns(SubDeviceId sub_device_id) const override;
     uint8_t num_noc_unicast_txns(SubDeviceId sub_device_id) const override;
@@ -263,6 +264,7 @@ private:
     std::vector<int32_t> l1_bank_offset_map_;
     std::vector<uint16_t> dram_bank_to_noc_xy_;
     std::vector<uint16_t> l1_bank_to_noc_xy_;
+    std::shared_ptr<Buffer> dram_debug_buffer_;
 
     program_cache::detail::ProgramCache program_cache_;
 

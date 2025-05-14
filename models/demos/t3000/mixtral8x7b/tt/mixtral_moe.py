@@ -3,9 +3,10 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
+
 import ttnn
-from ttnn import ShardTensorToMesh, ReplicateTensorToMesh
 from models.common.lightweightmodule import LightweightModule
+from ttnn import ReplicateTensorToMesh, ShardTensorToMesh
 
 
 class TtMoeLayer(LightweightModule):

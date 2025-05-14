@@ -26,7 +26,7 @@
 #include "impl/context/metal_context.hpp"
 #include "jit_build/build.hpp"
 #include "metal_soc_descriptor.h"
-#include "system_memory_manager.hpp"
+#include "dispatch/system_memory_manager.hpp"
 #include <umd/device/tt_core_coordinates.h>
 
 namespace tt::tt_metal {

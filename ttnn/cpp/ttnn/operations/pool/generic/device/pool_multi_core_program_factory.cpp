@@ -4,7 +4,7 @@
 
 #include "pool_op.hpp"
 #include "tt-metalium/circular_buffer.hpp"
-#include "tt-metalium/circular_buffer_types.hpp"
+#include "tt-metalium/circular_buffer_config.hpp"
 #include "ttnn/operations/cb_utils.hpp"
 #include "ttnn/operations/pool/pool_utils.hpp"
 
@@ -78,10 +78,8 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
 
     TT_FATAL(nblocks == 1, "Multiple blocks not yet supported");
 
-    uint32_t tile_w = tt::constants::TILE_WIDTH;
     if (input_shape[3] < tt::constants::TILE_WIDTH) {
         TT_FATAL(input_shape[3] == 16, "Error");
-        tile_w = tt::constants::FACE_WIDTH;
     }
     uint32_t out_w_loop_count = std::ceil((float)out_w / nblocks);
 
@@ -415,7 +413,7 @@ Pool2D::MultiCore::cached_program_t Pool2D::MultiCore::create(
 
     auto parallel_config = sliding_window::ParallelConfig{
         .grid = input.shard_spec().value().grid,
-        .shard_scheme = input.memory_config().memory_layout,
+        .shard_scheme = input.memory_config().memory_layout(),
         .shard_orientation = input.shard_spec().value().orientation,
     };
 
@@ -423,7 +421,7 @@ Pool2D::MultiCore::cached_program_t Pool2D::MultiCore::create(
     uint32_t out_h = output_shape[1];
     uint32_t out_w = output_shape[2];
 
-    bool is_block_sharded = input.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED;
+    bool is_block_sharded = input.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED;
 
     auto pad_metadata = sliding_window::generate_pad_metadata(sliding_window_config);
     auto op_trace_metadata = sliding_window::generate_op_trace_metadata(sliding_window_config);

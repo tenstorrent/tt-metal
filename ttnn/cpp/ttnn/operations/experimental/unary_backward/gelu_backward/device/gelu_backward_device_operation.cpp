@@ -55,10 +55,10 @@ void GeluBackwardDeviceOperation::validate_on_program_cache_miss(
         "Operands to GELU_BW need to be allocated in buffers on the device. Buffer is null.");
 
     TT_FATAL(
-        input_tensor.memory_config().memory_layout == out_memory_config.memory_layout,
+        input_tensor.memory_config().memory_layout() == out_memory_config.memory_layout(),
         "GELU_BW operation requires Input and Output memory layout to match. Input layout: {}, Output layout: {}",
-        static_cast<int>(input_tensor.memory_config().memory_layout),
-        static_cast<int>(out_memory_config.memory_layout));
+        static_cast<int>(input_tensor.memory_config().memory_layout()),
+        static_cast<int>(out_memory_config.memory_layout()));
 
     TT_FATAL(!input_tensor.is_sharded(), "GELU_BW operation does not support sharded input tensor.");
 
@@ -69,10 +69,10 @@ void GeluBackwardDeviceOperation::validate_on_program_cache_miss(
         static_cast<int>(input_tensor.get_layout()));
 
     TT_FATAL(
-        input_tensor.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED,
+        input_tensor.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
         "GELU_BW operation requires Interleaved memory layout when working with non-sharded input tensor. Input "
         "memory layout: `{}`",
-        static_cast<int>(input_tensor.memory_config().memory_layout));
+        static_cast<int>(input_tensor.memory_config().memory_layout()));
 
     if (preallocated_input_grad.has_value()) {
         const auto computed_output_shape = compute_output_specs(args, tensor_args).logical_shape();

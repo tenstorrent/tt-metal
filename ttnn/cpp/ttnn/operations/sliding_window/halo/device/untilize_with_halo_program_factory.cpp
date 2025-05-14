@@ -24,7 +24,7 @@ namespace ttnn::operations::data_movement::detail {
 // Circular buffer indices should be assigned right before their creation.
 struct CBIndices {
     // Invalid value for cb id is 32, number greater than the maximum number of index circular buffer can have.
-    // Not assigning get_next_cb_index() value before creating cb will throw exception in circular_buffer_types.cpp
+    // Not assigning get_next_cb_index() value before creating cb will throw exception in circular_buffer_config.cpp
     // which can be used as a reminder.
     uint32_t src_cb_id = 32;
     uint32_t pad_cb_id = 32;
@@ -216,8 +216,8 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core(
         gather_config_buffer1->size() / num_cores,
         gather_config_buffer1);
 
-    const bool is_block_sharded = input_tensor.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED;
-    const bool is_width_sharded = input_tensor.memory_config().memory_layout == TensorMemoryLayout::WIDTH_SHARDED;
+    const bool is_block_sharded = input_tensor.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED;
+    const bool is_width_sharded = input_tensor.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED;
 
     auto aligned_input_nstick_nbytes = out_stick_nbytes;
     if (out_stick_nbytes % input_tensor.buffer()->alignment() != 0) {
@@ -470,8 +470,8 @@ operation::ProgramWithCallbacks inplace_untilize_with_halo_multi_core(
         remote_config_buffer->size() / num_cores,
         remote_config_buffer);
 
-    const bool is_block_sharded = input_tensor.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED;
-    const bool is_width_sharded = input_tensor.memory_config().memory_layout == TensorMemoryLayout::WIDTH_SHARDED;
+    const bool is_block_sharded = input_tensor.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED;
+    const bool is_width_sharded = input_tensor.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED;
 
     int32_t in_out_buffer_start_delta = max_out_nsticks_per_core - input_npages;
     if (!skip_untilize) {

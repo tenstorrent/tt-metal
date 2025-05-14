@@ -1,23 +1,17 @@
 # SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
-import torch
-import pytest
-from loguru import logger
 import os
-import ttnn
-from models.tt_transformers.tt.common import (
-    sample_host,
-    PagedAttentionConfig,
-)
-from models.tt_transformers.tt.model_config import ModelArgs, DecodersPrecision, CheckpointType
-from models.tt_transformers.tt.model import Transformer
 
-from models.utility_functions import (
-    comp_pcc,
-    comp_allclose,
-)
-from models.utility_functions import skip_for_grayskull, skip_for_blackhole
+import pytest
+import torch
+from loguru import logger
+
+import ttnn
+from models.tt_transformers.tt.common import PagedAttentionConfig, sample_host
+from models.tt_transformers.tt.model import Transformer
+from models.tt_transformers.tt.model_config import CheckpointType, DecodersPrecision, ModelArgs
+from models.utility_functions import comp_allclose, comp_pcc, skip_for_blackhole, skip_for_grayskull
 
 
 @torch.no_grad()
@@ -211,12 +205,13 @@ def test_model_inference(
         else:
             encoded_prompts = [model_args.encode_prompt(prompt, instruct=False) for prompt in prompts]
 
+    reference_model = None
     if run_ref_pt:
         reference_model = model_args.reference_transformer()
         reference_model.load_state_dict(reference_state_dict)
 
     # Embedding on host
-    embd = model_args.reference_embedding()
+    embd = model_args.reference_embedding(reference_model)
     embd.load_state_dict({"emb.weight": state_dict[f"{state_dict_prefix}tok_embeddings.weight"]})
 
     generation_start_pos = 0

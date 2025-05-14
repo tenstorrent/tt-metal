@@ -215,15 +215,14 @@ void Cluster::generate_cluster_descriptor() {
     // Cluster descriptor yaml not available for Blackhole bring up
     if (this->target_type_ == TargetDevice::Simulator) {
         // Passing simulator reported physical devices as logical devices.
-        this->mock_cluster_desc_ptr_ =
-            tt_ClusterDescriptor::create_mock_cluster(tt_SimulationDevice::detect_available_device_ids(), this->arch_);
+        this->mock_cluster_desc_ptr_ = tt_ClusterDescriptor::create_mock_cluster({0}, this->arch_);
         this->cluster_desc_ = this->mock_cluster_desc_ptr_.get();
     } else {
         this->cluster_desc_ = this->driver_->get_cluster_description();
     }
     this->cluster_type_ = Cluster::get_cluster_type_from_cluster_desc(this->rtoptions_, this->cluster_desc_);
 
-    if (this->arch_ == tt::ARCH::BLACKHOLE) {
+    if (this->target_type_ != TargetDevice::Simulator && this->arch_ == tt::ARCH::BLACKHOLE) {
         TT_FATAL(
             this->cluster_desc_->get_noc_translation_table_en().at(0),
             "Running Metal on Blackhole requires FW >= 80.18.0.0");
@@ -274,14 +273,41 @@ void Cluster::generate_cluster_descriptor() {
     }
 }
 
+void Cluster::validate_harvesting_masks() const {
+    // Metal expects all chips to have same number of harvested cores for a given core type
+    std::optional<tt::umd::HarvestingMasks> harvesting_mask_tracker = std::nullopt;
+    for (const auto device_id : this->user_exposed_chip_ids()) {
+        tt::umd::HarvestingMasks masks = sdesc_per_chip_.at(device_id).harvesting_masks;
+        if (!harvesting_mask_tracker.has_value()) {
+            harvesting_mask_tracker = masks;
+        } else {
+            TT_FATAL(
+                std::popcount(masks.tensix_harvesting_mask) ==
+                    std::popcount(harvesting_mask_tracker->tensix_harvesting_mask),
+                "Number of harvested Tensix mismatch across devices");
+            TT_FATAL(
+                std::popcount(masks.dram_harvesting_mask) ==
+                    std::popcount(harvesting_mask_tracker->dram_harvesting_mask),
+                "Number of harvested Dram mismatch across devices");
+            TT_FATAL(
+                std::popcount(masks.eth_harvesting_mask) == std::popcount(harvesting_mask_tracker->eth_harvesting_mask),
+                "Number of harvested Eth mismatch across devices");
+            TT_FATAL(
+                std::popcount(masks.pcie_harvesting_mask) ==
+                    std::popcount(harvesting_mask_tracker->pcie_harvesting_mask),
+                "Number of harvested Pcie mismatch across devices");
+        }
+    }
+}
+
 void Cluster::initialize_device_drivers() {
     this->open_driver();
     this->generate_cluster_descriptor();
     this->get_metal_desc_from_tt_desc();
+    this->validate_harvesting_masks();
 
     for (const auto &[mmio_device_id, controlled_devices] : this->devices_grouped_by_assoc_mmio_device_) {
         this->assign_mem_channels_to_devices(mmio_device_id, controlled_devices);
-        auto masks = this->driver_->get_soc_descriptor(mmio_device_id).harvesting_masks;
     }
 
     tt_device_params default_params;
@@ -323,11 +349,9 @@ const std::unordered_map<CoreCoord, int32_t>& Cluster::get_virtual_routing_to_pr
 }
 
 void Cluster::open_driver(const bool &skip_driver_allocs) {
-    std::unique_ptr<tt_device> device_driver;
+    std::unique_ptr<tt::umd::Cluster> device_driver;
     if (this->target_type_ == TargetDevice::Silicon) {
         std::set<chip_id_t> chips_set;
-        const std::string sdesc_path = get_soc_description_file(this->arch_, this->target_type_);
-        // umd::Cluster::detect_available_device_ids only lists MMIO device ids, since we need remote chip ids
         // generate the cluster desc and pull chip ids from there
         auto temp_cluster_desc = tt::umd::Cluster::create_cluster_descriptor();
         if (rtoptions_.is_visible_device_specified()) {
@@ -336,27 +360,25 @@ void Cluster::open_driver(const bool &skip_driver_allocs) {
             std::unordered_set<chip_id_t> all_chips = temp_cluster_desc->get_all_chips();
             chips_set.insert(all_chips.begin(), all_chips.end());
         }
-        // This is the target/desired number of mem channels per arch/device.
-        // Silicon driver will attempt to open this many hugepages as channels per mmio chip,
-        // and assert if workload uses more than available.
-        uint32_t num_host_mem_ch_per_mmio_device = std::min(HOST_MEM_CHANNELS, (uint32_t)chips_set.size());
-        // This will remove harvested rows/cols from the soc descriptor
-        const bool perform_harvesting = true;
-        const bool clean_system_resources = true;
-        device_driver = std::make_unique<tt::umd::Cluster>(
-            sdesc_path,
-            chips_set,
-            num_host_mem_ch_per_mmio_device,
-            skip_driver_allocs,
-            clean_system_resources,
-            perform_harvesting);
-
         // Adding this check is a workaround for current UMD bug that only uses this getter to populate private metadata
         // that is later expected to be populated by unrelated APIs
         // TT_FATAL(device_driver->get_target_mmio_device_ids().size() == 1, "Only one target mmio device id allowed.");
+        // This is the target/desired number of mem channels per arch/device.
+        // Silicon driver will attempt to open this many hugepages as channels per mmio chip,
+        // and assert if workload uses more than available.
+        uint32_t num_devices = tt::umd::Cluster::create_cluster_descriptor()->get_all_chips().size();
+        uint32_t num_host_mem_ch_per_mmio_device = std::min(HOST_MEM_CHANNELS, num_devices);
+        device_driver = std::make_unique<tt::umd::Cluster>(tt::umd::ClusterOptions{
+            .num_host_mem_ch_per_mmio_device = num_host_mem_ch_per_mmio_device,
+            .sdesc_path = get_soc_description_file(this->arch_, this->target_type_),
+            .target_devices = chips_set,
+        });
     } else if (this->target_type_ == TargetDevice::Simulator) {
-        auto simulator_directory = rtoptions_.get_simulator_path();
-        device_driver = std::make_unique<tt_SimulationDevice>(simulator_directory);
+        device_driver = std::make_unique<tt::umd::Cluster>(tt::umd::ClusterOptions{
+            .chip_type = tt::umd::ChipType::SIMULATION,
+            .target_devices = {0},
+            .simulator_directory = rtoptions_.get_simulator_path(),
+        });
     }
 
     barrier_address_params barrier_params;
@@ -470,9 +492,14 @@ void Cluster::generate_virtual_to_umd_coord_mapping() {
                  get_soc_desc(chip_id).get_cores(CoreType::PCIE, CoordSystem::TRANSLATED)) {
                 this->virtual_pcie_cores_[chip_id].insert({core.x, core.y});
             }
-            for (const tt::umd::CoreCoord& core :
-                 get_soc_desc(chip_id).get_cores(CoreType::DRAM, CoordSystem::TRANSLATED)) {
-                this->virtual_dram_cores_[chip_id].insert({core.x, core.y});
+            for (auto dram_channel = 0; dram_channel < this->get_soc_desc(chip_id).get_num_dram_views();
+                 dram_channel++) {
+                auto worker_dram_ep = this->get_soc_desc(chip_id).get_preferred_worker_core_for_dram_view(dram_channel);
+                auto eth_dram_ep = this->get_soc_desc(chip_id).get_preferred_eth_core_for_dram_view(dram_channel);
+                this->virtual_dram_cores_[chip_id].insert({worker_dram_ep.x, worker_dram_ep.y});
+                if (worker_dram_ep != eth_dram_ep) {
+                    this->virtual_dram_cores_[chip_id].insert({eth_dram_ep.x, eth_dram_ep.y});
+                }
             }
         }
     }
@@ -611,50 +638,44 @@ void Cluster::assert_risc_reset_at_core(const tt_cxy_pair& core, const TensixSof
     this->driver_->assert_risc_reset_at_core(core.chip, core_coord, soft_resets);
 }
 
-void Cluster::write_dram_vec(std::vector<uint32_t> &vec, tt_target_dram dram, uint64_t addr, bool small_access) const {
-    int chip_id, d_view, d_subchannel;
-    std::tie(chip_id, d_view, d_subchannel) = dram;
-    const metal_SocDescriptor &desc_to_use = get_soc_desc(chip_id);
+void Cluster::write_dram_vec(
+    std::vector<uint32_t>& vec, chip_id_t device_id, int dram_view, uint64_t addr, bool small_access) const {
+    const metal_SocDescriptor& desc_to_use = get_soc_desc(device_id);
     TT_FATAL(
-        d_view < desc_to_use.get_num_dram_views(),
+        dram_view < desc_to_use.get_num_dram_views(),
         "Bounds-Error -- dram_view={} is outside of num_dram_views={}",
-        d_view,
+        dram_view,
         desc_to_use.get_num_dram_views());
-    int d_chan = desc_to_use.get_channel_for_dram_view(d_view);
-    TT_ASSERT(
-        d_subchannel < desc_to_use.get_dram_cores().at(d_chan).size(),
-        "Trying to address dram sub channel that doesnt exist in the device descriptor");
-    tt::umd::CoreCoord dram_core_coord =
-        desc_to_use.get_dram_core_for_channel(d_chan, d_subchannel, CoordSystem::TRANSLATED);
-    tt_cxy_pair dram_core = tt_cxy_pair(chip_id, dram_core_coord.x, dram_core_coord.y);
-    size_t offset = desc_to_use.get_address_offset(d_view);
+
+    CoreCoord dram_core_coord = desc_to_use.get_preferred_worker_core_for_dram_view(dram_view);
+    tt_cxy_pair dram_core = tt_cxy_pair(device_id, dram_core_coord.x, dram_core_coord.y);
+    size_t offset = desc_to_use.get_address_offset(dram_view);
     write_core(
         vec.data(),
         vec.size() * sizeof(uint32_t),
-        tt_cxy_pair(chip_id, dram_core.x, dram_core.y),
+        tt_cxy_pair(device_id, dram_core.x, dram_core.y),
         addr + offset,
         small_access);
 }
 
 void Cluster::read_dram_vec(
-    std::vector<uint32_t> &vec, uint32_t sz_in_bytes, tt_target_dram dram, uint64_t addr, bool small_access) const {
-    int chip_id, d_view, d_subchannel;
-    std::tie(chip_id, d_view, d_subchannel) = dram;
-    const metal_SocDescriptor &desc_to_use = get_soc_desc(chip_id);
+    std::vector<uint32_t>& vec,
+    uint32_t sz_in_bytes,
+    chip_id_t device_id,
+    int dram_view,
+    uint64_t addr,
+    bool small_access) const {
+    const metal_SocDescriptor& desc_to_use = get_soc_desc(device_id);
     TT_FATAL(
-        d_view < desc_to_use.get_num_dram_views(),
+        dram_view < desc_to_use.get_num_dram_views(),
         "Bounds-Error -- dram_view={} is outside of num_dram_views={}",
-        d_view,
+        dram_view,
         desc_to_use.get_num_dram_views());
-    int d_chan = desc_to_use.get_channel_for_dram_view(d_view);
-    TT_ASSERT(
-        d_subchannel < desc_to_use.get_dram_cores().at(d_chan).size(),
-        "Trying to address dram sub channel that doesnt exist in the device descriptor");
-    tt::umd::CoreCoord dram_core_coord =
-        desc_to_use.get_dram_core_for_channel(d_chan, d_subchannel, CoordSystem::TRANSLATED);
-    tt_cxy_pair dram_core = tt_cxy_pair(chip_id, dram_core_coord.x, dram_core_coord.y);
-    size_t offset = desc_to_use.get_address_offset(d_view);
-    read_core(vec, sz_in_bytes, tt_cxy_pair(chip_id, dram_core.x, dram_core.y), addr + offset, small_access);
+
+    CoreCoord dram_core_coord = desc_to_use.get_preferred_worker_core_for_dram_view(dram_view);
+    tt_cxy_pair dram_core = tt_cxy_pair(device_id, dram_core_coord.x, dram_core_coord.y);
+    size_t offset = desc_to_use.get_address_offset(dram_view);
+    read_core(vec, sz_in_bytes, tt_cxy_pair(device_id, dram_core.x, dram_core.y), addr + offset, small_access);
 }
 
 void Cluster::write_core(

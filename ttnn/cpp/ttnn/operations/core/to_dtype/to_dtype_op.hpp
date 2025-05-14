@@ -32,7 +32,7 @@ inline Tensor convert_to_cpp_supported_dtype(const Tensor& input_tensor) {
 
     auto create_tensor = [&](tt::tt_metal::HostBuffer&& buffer, DataType dtype) -> Tensor {
         return Tensor(
-            tt::tt_metal::HostStorage{std::move(buffer)},
+            std::move(buffer),
             TensorSpec(
                 input_tensor.get_logical_shape(),
                 tt::tt_metal::TensorLayout::fromPaddedShape(
@@ -47,14 +47,12 @@ inline Tensor convert_to_cpp_supported_dtype(const Tensor& input_tensor) {
         tt::stl::Span<const uint32_t> uint32_data = tt::tt_metal::host_buffer::get_as<uint32_t>(buffer);
         auto float_unpacked_data =
             unpack_bfp8_tiles_into_float_vec(uint32_data, /*row_major_output=*/false, /*is_exp_a=*/false);
-        return create_tensor(
-            tt::tt_metal::host_buffer::create<float>(std::move(float_unpacked_data)), DataType::FLOAT32);
+        return create_tensor(tt::tt_metal::HostBuffer(std::move(float_unpacked_data)), DataType::FLOAT32);
     } else if (input_dtype == DataType::BFLOAT4_B) {
         tt::stl::Span<const uint32_t> uint32_data = tt::tt_metal::host_buffer::get_as<uint32_t>(buffer);
         auto float_unpacked_data =
             unpack_bfp4_tiles_into_float_vec(uint32_data, /*row_major_output=*/false, /*is_exp_a=*/false);
-        return create_tensor(
-            tt::tt_metal::host_buffer::create<float>(std::move(float_unpacked_data)), DataType::FLOAT32);
+        return create_tensor(tt::tt_metal::HostBuffer(std::move(float_unpacked_data)), DataType::FLOAT32);
     } else {
         return input_tensor;
     }
@@ -80,19 +78,6 @@ std::vector<NewT> cast(tt::stl::Span<const OldT> input_buffer) {
 }
 
 template <typename T>
-Tensor create_owned_tensor(
-    std::vector<T>&& data, const Shape& logical_shape, const Shape& padded_shape, DataType data_type, Layout layout) {
-    auto buffer = tt::tt_metal::host_buffer::create(std::move(data));
-    auto storage = tt::tt_metal::HostStorage{std::move(buffer)};
-    return Tensor(
-        std::move(storage),
-        TensorSpec(
-            logical_shape,
-            tt::tt_metal::TensorLayout::fromPaddedShape(
-                data_type, tt::tt_metal::PageConfig(layout), MemoryConfig{}, logical_shape, padded_shape)));
-}
-
-template <typename T>
 Tensor create_tensor_from_span(
     tt::stl::Span<const T> input_buffer,
     const Shape& logical_shape,
@@ -102,48 +87,47 @@ Tensor create_tensor_from_span(
     switch (dtype) {
         case DataType::UINT16: {
             auto data = cast<uint16_t, T>(input_buffer);
-            return create_owned_tensor(std::move(data), logical_shape, padded_shape, dtype, Layout::ROW_MAJOR)
+            return Tensor(
+                       tt::tt_metal::HostBuffer(std::move(data)), logical_shape, padded_shape, dtype, Layout::ROW_MAJOR)
                 .to_layout(input_layout);
         }
         case DataType::INT32: {
             auto data = cast<int32_t, T>(input_buffer);
-            return create_owned_tensor(std::move(data), logical_shape, padded_shape, dtype, Layout::ROW_MAJOR)
+            return Tensor(
+                       tt::tt_metal::HostBuffer(std::move(data)), logical_shape, padded_shape, dtype, Layout::ROW_MAJOR)
                 .to_layout(input_layout);
         }
         case DataType::UINT32: {
             auto data = cast<uint32_t, T>(input_buffer);
-            return create_owned_tensor(std::move(data), logical_shape, padded_shape, dtype, Layout::ROW_MAJOR)
+            return Tensor(
+                       tt::tt_metal::HostBuffer(std::move(data)), logical_shape, padded_shape, dtype, Layout::ROW_MAJOR)
                 .to_layout(input_layout);
         }
         case DataType::FLOAT32: {
             auto data = cast<float, T>(input_buffer);
-            return create_owned_tensor(std::move(data), logical_shape, padded_shape, dtype, Layout::ROW_MAJOR)
+            return Tensor(
+                       tt::tt_metal::HostBuffer(std::move(data)), logical_shape, padded_shape, dtype, Layout::ROW_MAJOR)
                 .to_layout(input_layout);
         }
         case DataType::BFLOAT16: {
             auto data = cast<::bfloat16, T>(input_buffer);
-            return create_owned_tensor(std::move(data), logical_shape, padded_shape, dtype, Layout::ROW_MAJOR)
+            return Tensor(
+                       tt::tt_metal::HostBuffer(std::move(data)), logical_shape, padded_shape, dtype, Layout::ROW_MAJOR)
                 .to_layout(input_layout);
         }
         case DataType::BFLOAT8_B:
         case DataType::BFLOAT4_B: {
             auto data = cast<float, T>(input_buffer);
-            auto buffer = tt::tt_metal::host_buffer::create<float>(std::move(data));
-            auto tensor = Tensor(
-                              tt::tt_metal::HostStorage{std::move(buffer)},
-                              logical_shape,
-                              padded_shape,
-                              DataType::FLOAT32,
-                              Layout::ROW_MAJOR)
+            auto buffer = tt::tt_metal::HostBuffer(std::move(data));
+            auto tensor = Tensor(std::move(buffer), logical_shape, padded_shape, DataType::FLOAT32, Layout::ROW_MAJOR)
                               .to_layout(Layout::TILE);
             tt::stl::Span<const float> output_float_data = tt::tt_metal::host_buffer::get_as<float>(tensor);
             auto output_packed_data =
                 dtype == DataType::BFLOAT8_B
                     ? pack_fp32_vec_as_bfp8_tiles(output_float_data, /*row_major_input=*/false, /*is_exp_a=*/false)
                     : pack_fp32_vec_as_bfp4_tiles(output_float_data, /*row_major_input=*/false, /*is_exp_a=*/false);
-            auto output_buffer = tt::tt_metal::host_buffer::create<uint32_t>(std::move(output_packed_data));
             return Tensor(
-                tt::tt_metal::HostStorage{std::move(output_buffer)},
+                tt::tt_metal::HostBuffer(std::move(output_packed_data)),
                 logical_shape,
                 padded_shape,
                 dtype,
