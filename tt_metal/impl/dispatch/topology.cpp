@@ -1122,7 +1122,7 @@ void build_tt_fabric_program(
     }
 
     if (active_fabric_eth_channels.empty()) {
-        TT_THROW("Need at least 1 active fabric eth channel in atleast 1 direction, found none");
+        // Need at least 1 active fabric eth channel in at least 1 direction with a neighbor
         return;
     }
 
