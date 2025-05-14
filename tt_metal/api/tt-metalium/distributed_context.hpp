@@ -100,11 +100,6 @@ struct is_supported_dtype<T, std::void_t<decltype(dtype_of_v<T>)>> : std::true_t
 template <typename T>
 inline constexpr bool is_supported_dtype_v = is_supported_dtype<T>::value;
 
-template <typename T>
-tt::stl::Span<std::byte> as_bytes(tt::stl::Span<T> view) {
-    return tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(view.data()), view.size() * sizeof(T));
-}
-
 using Rank = tt::stl::StrongType<int, struct RankTag>;
 using Tag = tt::stl::StrongType<int, struct TagTag>;
 using Color = tt::stl::StrongType<int, struct ColorTag>;
