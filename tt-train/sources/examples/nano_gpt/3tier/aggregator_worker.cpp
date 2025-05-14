@@ -9,9 +9,11 @@
 // TODO: improve include path
 
 #include "../utils.hpp"
+#include "autograd/module_base.hpp"
 #include "config.hpp"
 #include "core/distributed/distributed.hpp"
 #include "datasets/utils.hpp"
+#include "models/distributed/gpt2.hpp"
 #include "models/gpt2.hpp"
 #include "tokenizers/bpe_tokenizer.hpp"
 #include "tokenizers/char_tokenizer.hpp"
@@ -120,9 +122,16 @@ int main(int argc, char **argv) {
 
     std::string config_name = std::string(CONFIGS_FOLDER) + "/training_shakespear_nanogpt_3tier.yaml";
 
+    bool ddp = false;
+    bool enable_tp = false;
     app.add_option("-c,--config", config_name, "Yaml Config name")->default_val(config_name);
+    app.add_option("-d,--ddp", ddp, "Enable DDP")->default_val(ddp);
+    app.add_option("-p,--tp", enable_tp, "Enable TP")->default_val(enable_tp);
 
     CLI11_PARSE(app, argc, argv);
+
+    // tensor parallel is not supported yet
+    initialize_device(ddp, enable_tp);
 
     auto yaml_config = YAML::LoadFile(config_name);
     TrainingConfig config = parse_config(yaml_config);
@@ -140,7 +149,13 @@ int main(int argc, char **argv) {
     auto *device = &ttml::autograd::ctx().get_device();
     device->enable_program_cache();
 
-    auto model = ttml::models::gpt2::create(config.transformer_config);
+    auto create_model = [enable_tp](const auto &config) -> std::shared_ptr<ttml::autograd::ModuleBase> {
+        if (enable_tp) {
+            return ttml::models::distributed::gpt2::create(config);
+        }
+        return ttml::models::gpt2::create(config);
+    };
+    auto model = create_model(config.transformer_config);
 
     auto model_parameters = model->parameters();
     auto sorted_model_parameters = SortedParameters(model_parameters.begin(), model_parameters.end());

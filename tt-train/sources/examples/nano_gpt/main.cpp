@@ -426,10 +426,10 @@ TrainingConfig parse_config(const YAML::Node &yaml_config) {
         throw std::runtime_error("Unknown model type: " + config.model_type);
     }
 
-    auto mpi_config = yaml_config["mpi_config"];
-    config.enable_mpi = mpi_config["enabled"].as<bool>(false);
-    config.num_mpi_workers = mpi_config["num_workers"].as<uint32_t>(0U);
-
+    if (auto mpi_config = yaml_config["mpi_config"]) {
+        config.enable_mpi = mpi_config["enabled"].as<bool>(false);
+        config.num_mpi_workers = mpi_config["num_workers"].as<uint32_t>(0U);
+    }
     return config;
 }
 
@@ -443,7 +443,7 @@ int main(int argc, char **argv) {
     CLI::App app{"NanoGPT Example"};
     argv = app.ensure_utf8(argv);
 
-    std::string config_name = std::string(CONFIGS_FOLDER) + "/training_shakespear_nanogpt_3tier.yaml";
+    std::string config_name = std::string(CONFIGS_FOLDER) + "/training_shakespear_nanogpt.yaml";
     std::string run_name = "";
     bool is_eval = false;
     bool add_time_to_name = true;
@@ -476,6 +476,14 @@ int main(int argc, char **argv) {
 
         // disable wandb for now in case of mpi example
         enable_wandb = false;
+    }
+
+    // needs more validation for TP
+    if (ddp) {
+        fmt::println("Distributed data parallel is enabled");
+    }
+    if (enable_tp) {
+        fmt::println("Tensor parallel is enabled");
     }
 
     fmt::print("MPI config:\n");
@@ -844,6 +852,9 @@ int main(int argc, char **argv) {
                 optimizer->step();
                 scheduler->step();
                 auto global_step = optimizer->get_steps();
+                if (config.enable_mpi) {
+                    fmt::print("[Rank {}]", *ttml::autograd::ctx().get_distributed_context().rank());
+                }
                 fmt::print("Step: {}, Loss: {}\n", global_step, gradient_accumulator_helper.average_loss());
                 loss_meter.update(gradient_accumulator_helper.average_loss());
 

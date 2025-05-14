@@ -12,6 +12,7 @@
 #include "config.hpp"
 #include "core/distributed/distributed.hpp"
 #include "datasets/utils.hpp"
+#include "models/distributed/gpt2.hpp"
 #include "models/gpt2.hpp"
 #include "optimizers/adamw.hpp"
 #include "tokenizers/bpe_tokenizer.hpp"
@@ -67,8 +68,6 @@ void send_weights_to_aggregator(const SortedParameters &sorted_model_parameters)
 
     assert(*distributed_ctx.rank() > 0);
     int aggregator_rank = *distributed_ctx.rank() - 1;
-    fmt::print(
-        "[optimizer] Rank {}: Sending weights to aggregator with rank {}\n", *distributed_ctx.rank(), aggregator_rank);
     for (auto &[name, tensor_ptr] : sorted_model_parameters) {
         if (!tensor_ptr->get_requires_grad()) {
             continue;
@@ -107,9 +106,16 @@ int main(int argc, char **argv) {
 
     std::string config_name = std::string(CONFIGS_FOLDER) + "/training_shakespear_nanogpt_3tier.yaml";
 
+    bool ddp = false;
+    bool enable_tp = false;
     app.add_option("-c,--config", config_name, "Yaml Config name")->default_val(config_name);
+    app.add_option("-d,--ddp", ddp, "Enable DDP")->default_val(ddp);
+    app.add_option("-p,--tp", enable_tp, "Enable TP")->default_val(enable_tp);
 
     CLI11_PARSE(app, argc, argv);
+
+    // tensor parallel is not supported yet
+    initialize_device(ddp, enable_tp);
 
     auto yaml_config = YAML::LoadFile(config_name);
     TrainingConfig config = parse_config(yaml_config);
@@ -125,7 +131,13 @@ int main(int argc, char **argv) {
     auto *device = &ctx.get_device();
     device->enable_program_cache();
 
-    auto model = ttml::models::gpt2::create(config.transformer_config);
+    auto create_model = [enable_tp](const auto &config) -> std::shared_ptr<ttml::autograd::ModuleBase> {
+        if (enable_tp) {
+            return ttml::models::distributed::gpt2::create(config);
+        }
+        return ttml::models::gpt2::create(config);
+    };
+    auto model = create_model(config.transformer_config);
 
     auto model_parameters = model->parameters();
     auto sorted_model_parameters = SortedParameters(model_parameters.begin(), model_parameters.end());

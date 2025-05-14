@@ -30,6 +30,6 @@ echo "executables and config file succesfully copied"
 
 echo "Running nano_gpt 3tier demo..."
 mpirun --hostfile ~/mpi_hosts \
-  -np 2 /bin/bash -c 'cd /home/ttuser/git/tt-metal && TT_METAL_HOME=/home/ttuser/git/tt-metal TT_METAL_LOGGER_LEVEL=FATAL ./tt-train/build/sources/examples/nano_gpt/nano_gpt' \
-  : -np 1 /bin/bash -c 'cd /home/ttuser/git/tt-metal && TT_METAL_HOME=/home/ttuser/git/tt-metal TT_METAL_LOGGER_LEVEL=FATAL ./tt-train/build/sources/examples/nano_gpt/nano_gpt_aggregator' \
-  : -np 1 /bin/bash -c 'cd /home/ttuser/git/tt-metal && TT_METAL_HOME=/home/ttuser/git/tt-metal TT_METAL_LOGGER_LEVEL=FATAL ./tt-train/build/sources/examples/nano_gpt/nano_gpt_optimizer'
+  -np 2 /bin/bash -c 'cd /home/ttuser/git/tt-metal && TT_METAL_HOME=/home/ttuser/git/tt-metal TT_METAL_LOGGER_LEVEL=FATAL ./tt-train/build/sources/examples/nano_gpt/nano_gpt -c tt-train/configs/training_shakespear_nanogpt_3tier.yaml' \
+  : -np 1 /bin/bash -c 'cd /home/ttuser/git/tt-metal && TT_METAL_HOME=/home/ttuser/git/tt-metal TT_METAL_LOGGER_LEVEL=FATAL ./tt-train/build/sources/examples/nano_gpt/nano_gpt_aggregator -c tt-train/configs/training_shakespear_nanogpt_3tier.yaml' \
+  : -np 1 /bin/bash -c 'cd /home/ttuser/git/tt-metal && TT_METAL_HOME=/home/ttuser/git/tt-metal TT_METAL_LOGGER_LEVEL=FATAL ./tt-train/build/sources/examples/nano_gpt/nano_gpt_optimizer -c tt-train/configs/training_shakespear_nanogpt_3tier.yaml'
