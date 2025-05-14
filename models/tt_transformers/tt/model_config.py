@@ -338,8 +338,9 @@ def parse_decoder_json(json_file_path, default_optimization=ModelOptimizations.p
             raise ValueError("Invalid JSON format: Missing 'decoders' key")
 
         num_decoders = max(int(decoder_id) for decoder_id in config_data["decoders"].keys()) + 1
-        decoder_conf = default_optimization(model_name)
-        decoders_precision = DecodersPrecision(num_decoders, "model", decoder_conf)
+        placeholder_model_name = "model"
+        decoder_conf = default_optimization(placeholder_model_name)
+        decoders_precision = DecodersPrecision(num_decoders, placeholder_model_name, decoder_conf)
 
         for decoder_id, settings in config_data["decoders"].items():
             decoder_id = int(decoder_id)
