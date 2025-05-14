@@ -198,22 +198,22 @@ public:
     template <class T>
         requires is_supported_dtype_v<T>
     void all_reduce(tt::stl::Span<T> send_buf, tt::stl::Span<T> recv_buf, ReduceOp op) const {
-        all_reduce(as_bytes(send_buf), as_bytes(recv_buf), op, dtype_of_v<T>);
+        all_reduce(as_writable_bytes(send_buf), as_writable_bytes(recv_buf), op, dtype_of_v<T>);
     }
     template <class T>
         requires is_supported_dtype_v<T>
     void reduce(tt::stl::Span<T> send_buf, tt::stl::Span<T> recv_buf, ReduceOp op, Rank root) const {
-        reduce(as_bytes(send_buf), as_bytes(recv_buf), op, dtype_of_v<T>, root);
+        reduce(as_writable_bytes(send_buf), as_writable_bytes(recv_buf), op, dtype_of_v<T>, root);
     }
     template <class T>
         requires is_supported_dtype_v<T>
     void scan(tt::stl::Span<T> send_buf, tt::stl::Span<T> recv_buf, ReduceOp op) const {
-        scan(as_bytes(send_buf), as_bytes(recv_buf), op, dtype_of_v<T>);
+        scan(as_writable_bytes(send_buf), as_writable_bytes(recv_buf), op, dtype_of_v<T>);
     }
     template <class T>
         requires is_supported_dtype_v<T>
     void reduce_scatter(tt::stl::Span<T> send_buf, tt::stl::Span<T> recv_buf, ReduceOp op) const {
-        reduce_scatter(as_bytes(send_buf), as_bytes(recv_buf), op, dtype_of_v<T>);
+        reduce_scatter(as_writable_bytes(send_buf), as_writable_bytes(recv_buf), op, dtype_of_v<T>);
     }
 
     //--- Communicator management -------------------------------------------
