@@ -6,7 +6,6 @@ import torch
 import pytest
 import ttnn
 from tests.ttnn.unit_tests.operations.eltwise.backward.utility_funcs import compare_pcc, data_gen_with_range
-from models.utility_functions import skip_for_grayskull
 
 
 @pytest.mark.parametrize(
@@ -45,7 +44,6 @@ def test_bw_unary_fmod(input_shapes, scalar, device):
         (torch.Size([1, 3, 320, 384])),
     ),
 )
-@skip_for_grayskull("#ToDo: GS implementation needs to be done for binary fmod backward")
 def test_bw_binary_fmod(input_shapes, device):
     in_data, input_tensor = data_gen_with_range(input_shapes, -100, 100, device, True)
     other_data, other_tensor = data_gen_with_range(input_shapes, -50, 50, device, True)
