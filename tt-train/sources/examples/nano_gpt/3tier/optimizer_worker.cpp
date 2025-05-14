@@ -131,6 +131,11 @@ int main(int argc, char **argv) {
     auto *device = &ctx.get_device();
     device->enable_program_cache();
 
+    auto &vocab_size = config.transformer_config.vocab_size;
+    auto num_devices = static_cast<uint32_t>(device->num_devices());
+    auto should_be_divisible_by = (enable_tp ? num_devices : 1U) * 32U;
+    vocab_size = round_up_to_tile(vocab_size, should_be_divisible_by);
+
     auto create_model = [enable_tp](const auto &config) -> std::shared_ptr<ttml::autograd::ModuleBase> {
         if (enable_tp) {
             return ttml::models::distributed::gpt2::create(config);

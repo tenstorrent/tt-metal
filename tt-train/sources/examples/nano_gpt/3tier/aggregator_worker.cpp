@@ -79,14 +79,12 @@ void send_aggregated_gradients_from_workers_to_optimizer(const SortedParameters 
         // TODO: allow usage of tensor from model parameters (avoids redundant storage of a model)
         auto tensor = ttnn::empty_like(tensor_ptr->get_value());
         ttml::core::distributed::recv_tensor(tensor, ttml::core::distributed::Rank{0});
-
         for (int worker_id = 1; worker_id < workers; ++worker_id) {
             auto tensor_to_add = ttnn::empty_like(tensor_ptr->get_value());
             ttml::core::distributed::recv_tensor(tensor_to_add, ttml::core::distributed::Rank{worker_id});
             tensor = ttnn::add(tensor, tensor_to_add);
         }
         tensor = ttnn::multiply(tensor, 1.0F / static_cast<float>(workers));
-
         ttml::core::distributed::send_tensor(tensor, optimizer_rank);
     }
 }
@@ -139,15 +137,13 @@ int main(int argc, char **argv) {
     fmt::println("Aggregator config setup finished");
 
     auto steps_per_dataset = get_steps_per_dataset(config);
-    fmt::println(
-        "[aggregator] Rank {}: Epochs {}: Steps per dataset: {} max steps: {}",
-        *distributed_ctx.rank(),
-        config.num_epochs,
-        steps_per_dataset,
-        config.max_steps);
-
     auto *device = &ttml::autograd::ctx().get_device();
     device->enable_program_cache();
+
+    auto &vocab_size = config.transformer_config.vocab_size;
+    auto num_devices = static_cast<uint32_t>(device->num_devices());
+    auto should_be_divisible_by = (enable_tp ? num_devices : 1U) * 32U;
+    vocab_size = round_up_to_tile(vocab_size, should_be_divisible_by);
 
     auto create_model = [enable_tp](const auto &config) -> std::shared_ptr<ttml::autograd::ModuleBase> {
         if (enable_tp) {
