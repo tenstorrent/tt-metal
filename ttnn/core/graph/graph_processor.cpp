@@ -7,7 +7,6 @@
 #include "ttnn/graph/graph_consts.hpp"
 #include "ttnn/types.hpp"
 #include "ttnn/core.hpp"
-#include "ttnn/graph/graph_consts.hpp"
 #include <cxxabi.h>
 #include <memory>
 #include <string>
