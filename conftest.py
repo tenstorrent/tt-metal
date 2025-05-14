@@ -110,17 +110,17 @@ class CIv2ModelDownloadUtils_:
     @staticmethod
     def download_from_ci_v2_cache(
         model_path,
-        dest_dir_suffix="",
+        download_dir_suffix="",
         endpoint_prefix="http://large-file-cache.large-file-cache.svc.cluster.local//mldata/model_checkpoints/pytorch/huggingface",
     ):
         assert model_path, f"model_path cannot be empty when downloading - what is wrong with you?: {model_path}"
 
         # RK: Will this be portable? LOL
-        dest_path = Path("/tmp/ttnn_model_cache/") / dest_dir_suffix
+        download_dir = Path("/tmp/ttnn_model_cache/") / download_dir_suffix
 
-        dest_path.mkdir(parents=True, exist_ok=True)
+        download_dir.mkdir(parents=True, exist_ok=True)
 
-        download_dir_str = str(dest_path)
+        download_dir_str = str(download_dir)
 
         # Add trailing slash to model_path if it doesn't have one, as wget
         # seems to not download recursively via subprocess if it doesn't have
@@ -136,7 +136,7 @@ class CIv2ModelDownloadUtils_:
             text=True,
         )
 
-        return dest_path
+        return download_dir / Path(model_path)
 
 
 @pytest.fixture(scope="session")
@@ -156,7 +156,7 @@ def model_location_generator(is_ci_v2_env):
                 not model_subdir
             ), f"model_subdir is set to {model_subdir}, but we don't support further levels of directories in the large file cache in CIv2"
             civ2_download_path = CIv2ModelDownloadUtils_.download_from_ci_v2_cache(
-                model_version, dest_dir_suffix="model_weights"
+                model_version, download_dir_suffix="model_weights"
             )
             logger.info(f"For model location, using CIv2 large file cache: {civ2_download_path}")
             return civ2_download_path
