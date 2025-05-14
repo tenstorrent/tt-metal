@@ -21,7 +21,7 @@ inline void calculate_comp(uint exponent_size_8) {
 
         // a[i] == 0
         if constexpr (COMP_MODE == SfpuType::equal_zero) {
-            v_if(_sfpu_is_fp16_zero_(v, exponent_size_8)) { v = one; }
+            v_if(_sfpu_is_fp16_zero_(v, exponent_size_8)) { v = one; }  // true
             v_else { v = zero; }
             v_endif;
         }

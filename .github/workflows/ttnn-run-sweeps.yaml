@@ -29,13 +29,23 @@ on:
           - eltwise.unary.log2.log2_sharded
           - eltwise.unary.nez.nez_sharded
           - eltwise.unary.relu6.relu6_sharded
+          - composite.binary.rsub.rsub_survey_test
+          - composite.binary.polyval.polyval_survey_test
+          - composite.binary.bias_gelu.bias_gelu_survey_test
+          - composite.binary.floor_div.floor_div_survey_test
+          - composite.binary.prelu.prelu_survey_test
+          - composite.binary.pow.pow_survey_test
+          - composite.binary.bitwise_and.bitwise_and_survey_test
           - composite.binary.gcd.gcd
+          - composite.binary.gcd.gcd_survey_test
+          - composite.binary.lcm.lcm_survey_test
           - composite.binary.lcm.lcm
           - eltwise.unary.abs.abs_pytorch2
           - eltwise.unary.relu.relu
           - eltwise.unary.relu.relu_pytorch2
           - eltwise.unary.gelu.gelu
           - eltwise.unary.gelu.gelu_pytorch2
+          - eltwise.unary.hardsigmoid.hardsigmoid_pytorch2
           - eltwise.unary.hardsigmoid.hardsigmoid_pytorch2
           - eltwise.unary.leaky_relu.leaky_relu_pytorch2
           - eltwise.unary.abs.abs
