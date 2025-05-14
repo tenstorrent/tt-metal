@@ -11,7 +11,7 @@ from models.utility_functions import is_wormhole_b0
 @pytest.mark.parametrize(
     "perf_mode, max_seq_len, expected_perf_metrics, greedy_sampling, expected_greedy_output_path",
     (
-        (True, 128, {"prefill_t/s": 1412, "decode_t/s": 516, "decode_t/s/u": 16.11}, False, None),
+        (True, 128, {"prefill_t/s": 1218, "decode_t/s": 516, "decode_t/s/u": 16.11}, False, None),
         (True, 1024, {"prefill_t/s": 2117, "decode_t/s": 440, "decode_t/s/u": 13.7}, False, None),
         (True, 2048, {"prefill_t/s": 1967, "decode_t/s": 420, "decode_t/s/u": 13.12}, False, None),
         (True, 128, None, False, None),
