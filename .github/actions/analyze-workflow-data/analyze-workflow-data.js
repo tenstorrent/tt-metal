@@ -151,11 +151,12 @@ function getWorkflowLink(context, workflowFile) {
  * Analyzes scheduled runs to find the last good and earliest bad commits.
  *
  * @param {Array<object>} scheduledMainRuns - Array of scheduled runs on main branch, sorted by date (newest first)
+ * @param {object} context - GitHub Actions context
  * @returns {object} Object containing:
  *   - lastGoodSha: Short SHA of the last successful run (e.g., `a1b2c3d`)
  *   - earliestBadSha: Short SHA of the earliest failing run (e.g., `e4f5g6h`)
  */
-function findGoodBadCommits(scheduledMainRuns) {
+function findGoodBadCommits(scheduledMainRuns, context) {
   let lastGoodSha = EMPTY_VALUE;
   let earliestBadSha = EMPTY_VALUE;
   let foundGood = false;
@@ -202,7 +203,7 @@ async function getLastRunInfo(mainBranchRuns, github, context) {
 
   const prInfo = await fetchPRInfo(github, context, lastMainRun.head_sha);
   const mainRuns = mainBranchRuns.filter(r => r.event === lastMainRun.event || r.event === 'workflow_dispatch');
-  const { lastGoodSha, earliestBadSha } = findGoodBadCommits(mainRuns);
+  const { lastGoodSha, earliestBadSha } = findGoodBadCommits(mainRuns, context);
 
   return {
     status: lastMainRun.conclusion === 'success' ? SUCCESS_EMOJI : FAILURE_EMOJI,
