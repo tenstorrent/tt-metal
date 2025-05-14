@@ -133,6 +133,7 @@ __attribute__((optimize("jump-tables"))) FORCE_INLINE void execute_chip_unicast_
     }
     switch (noc_send_type) {
         case tt::tt_fabric::NocSendType::NOC_UNICAST_WRITE: {
+            ASSERT(payload_size_bytes > 0);
             const auto dest_address = header.command_fields.unicast_write.noc_address;
             noc_async_write_one_packet_with_trid<false, false>(
                 payload_start_address,
@@ -145,6 +146,7 @@ __attribute__((optimize("jump-tables"))) FORCE_INLINE void execute_chip_unicast_
         } break;
 
         case tt::tt_fabric::NocSendType::NOC_MULTICAST_WRITE: {
+            ASSERT(payload_size_bytes > 0);
             // TODO: confirm if we need to adjust dest core count if we span eth or dram cores
             const auto mcast_dest_address = get_noc_multicast_addr(
                 header.command_fields.mcast_write.noc_x_start,
@@ -263,6 +265,7 @@ FORCE_INLINE void forward_payload_to_downstream_edm(
     // This is a good place to print the packet header for debug if you are trying to inspect packets
     // because it is before we start manipulating the header for forwarding
     update_packet_header_for_next_hop(packet_header, cached_routing_fields);
+    ASSERT(payload_size_bytes + sizeof(PACKET_HEADER_TYPE) > 0);
     downstream_edm_interface.template send_payload_non_blocking_from_address_with_trid<
         enable_ring_support,
         tt::tt_fabric::edm_to_downstream_noc,

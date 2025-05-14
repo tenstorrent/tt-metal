@@ -90,6 +90,11 @@ void append_fabric_connection_rt_args(
     CoreCoord fabric_router_virtual_core =
         tt::tt_metal::MetalContext::instance().get_cluster().get_virtual_eth_core_from_channel(
             src_chip_id, fabric_router_channel);
+    auto logical_ethernet_core =
+        tt::tt_metal::MetalContext::instance().get_cluster().get_logical_ethernet_core_from_virtual(
+            src_chip_id, fabric_router_virtual_core);
+    size_t connected_ethernet_channel_id = logical_ethernet_core.y;
+    TT_FATAL(logical_ethernet_core.x == 0, "Grabbed wrong coord field");
 
     const auto sender_channel = edm_config.topology == Topology::Mesh ? router_direction : 0;
     tt::tt_fabric::SenderWorkerAdapterSpec edm_connection = {
@@ -102,6 +107,7 @@ void append_fabric_connection_rt_args(
         .edm_worker_location_info_addr = edm_config.sender_channels_worker_conn_info_base_address[sender_channel],
         .buffer_size_bytes = edm_config.channel_buffer_size_bytes,
         .buffer_index_semaphore_id = edm_config.sender_channels_buffer_index_semaphore_address[sender_channel],
+        .connected_ethernet_channel_id = connected_ethernet_channel_id,
         .persistent_fabric = true,
         .edm_direction = router_direction};
 

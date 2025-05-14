@@ -319,6 +319,16 @@ void append_worker_to_fabric_edm_sender_rt_args(
     size_t sender_worker_buffer_index_semaphore_id,
     std::vector<uint32_t>& args_out) {
     auto edm_noc_xy = tt::tt_fabric::WorkerXY(connection.edm_noc_x, connection.edm_noc_y);
+
+    TT_FATAL(
+        (sender_worker_flow_control_semaphore_id & 0xFFFF) == sender_worker_flow_control_semaphore_id,
+        "sender_worker_flow_control_semaphore_id is not being interpreted as a semaphore ID for worker connection");
+    uint32_t my_fc_stream_id_ll_sender_worker_flow_control_semaphore_id =
+        sender_worker_flow_control_semaphore_id | (connection.connected_ethernet_channel_id << 16);
+    TT_FATAL(
+        connection.connected_ethernet_channel_id >= 0,
+        "connected_ethernet_channel_id was not initialized properly. Must be >= 0");
+
     const std::vector<uint32_t> values = {
         connection.persistent_fabric,
         connection.edm_direction,
@@ -330,7 +340,7 @@ void append_worker_to_fabric_edm_sender_rt_args(
         connection.edm_worker_location_info_addr,
         connection.buffer_size_bytes,
         connection.buffer_index_semaphore_id,
-        sender_worker_flow_control_semaphore_id,
+        my_fc_stream_id_ll_sender_worker_flow_control_semaphore_id,
         sender_worker_terminate_semaphore_id,
         sender_worker_buffer_index_semaphore_id};
     args_out.reserve(args_out.size() + (values.size() / sizeof(size_t)));
@@ -432,6 +442,14 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args() const
         log_trace(tt::LogTest, "Receiver {} channel address: {}", i, this->local_receiver_channels_buffer_address[i]);
     }
 
+    // TODO: promote to user-configurable parameter (user could be just control plane based on arch in this case)
+    // specifies if we do spin waits on eth_txq_busy in send_next_data
+    const bool eth_txq_spin_wait_send_next_data = false;
+    const bool eth_txq_spin_wait_receiver_send_completion_ack = false;
+
+    // TODO: allow specification per eth txq
+    const size_t default_num_eth_txq_data_packet_accept_ahead = 32;
+
     size_t num_sender_channels = config.num_used_sender_channels;
     size_t num_receiver_channels = config.num_used_receiver_channels;
     auto ct_args = std::vector<uint32_t>{
@@ -507,6 +525,11 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args() const
         FabricEriscDatamoverConfig::sender_completed_packet_header_cb_size_headers,
         config.topology == Topology::Mesh,
         this->direction,
+
+        eth_txq_spin_wait_send_next_data,
+        eth_txq_spin_wait_receiver_send_completion_ack,
+        default_num_eth_txq_data_packet_accept_ahead,
+
         // Special marker to help with identifying misalignment bugs
         0x00c0ffee};
 
@@ -757,7 +780,8 @@ FabricEriscDatamoverBuilder FabricEriscDatamoverBuilder::build(
     }
 }
 
-SenderWorkerAdapterSpec FabricEriscDatamoverBuilder::build_connection_to_worker_channel() const {
+SenderWorkerAdapterSpec FabricEriscDatamoverBuilder::build_connection_to_worker_channel(
+    size_t ethernet_channel_id) const {
     if (this->enable_persistent_mode) {
         log_trace(tt::LogOp, "Building connection to persistent fabric");
     } else {
@@ -779,6 +803,7 @@ SenderWorkerAdapterSpec FabricEriscDatamoverBuilder::build_connection_to_worker_
         this->config.sender_channels_worker_conn_info_base_address[worker_chan],
         this->config.channel_buffer_size_bytes,
         this->sender_channels_buffer_index_semaphore_id[worker_chan],
+        ethernet_channel_id,
         this->enable_persistent_mode,
         this->direction};
 }

@@ -15,7 +15,6 @@
 // ETH TXQ SELECTION
 
 constexpr uint32_t DEFAULT_ETH_TXQ = 0;
-constexpr uint32_t DEFAULT_NUM_ETH_TXQ_DATA_PACKET_ACCEPT_AHEAD = 32;
 
 // STREAM REGISTER ASSIGNMENT
 // senders update this stream
@@ -42,6 +41,13 @@ constexpr uint32_t to_sender_2_pkts_completed_id = 9;
 constexpr uint32_t to_sender_3_pkts_completed_id = 10;
 // receivers updates the reg on this stream
 constexpr uint32_t to_sender_4_pkts_completed_id = 11;
+
+constexpr uint32_t receiver_channel_0_free_slots_stream_id = 12;
+constexpr uint32_t receiver_channel_1_free_slots_stream_id = 14;
+
+// sender_channel_0_slots_written_stream_id defined in edm_fabric_worker_adapters.hpp
+constexpr uint32_t sender_channel_1_free_slots_stream_id = 17;
+constexpr uint32_t sender_channel_2_free_slots_stream_id = 18;
 
 constexpr size_t MAX_NUM_RECEIVER_CHANNELS = 2;
 constexpr size_t MAX_NUM_SENDER_CHANNELS = 5;
@@ -173,7 +179,15 @@ constexpr size_t sender_4_completed_packet_header_cb_size_headers =
 constexpr size_t is_2d_fabric = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 56);
 constexpr size_t my_direction = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 57);
 
-constexpr size_t SPECIAL_MARKER_0_IDX = MAIN_CT_ARGS_START_IDX + 58;
+// If true, the sender channel will spin inside send_next_data until the eth_txq is not busy, rather than checking
+// eth_txq_is_busy() being false as a prerequisite for sending the next packet
+constexpr bool ETH_TXQ_SPIN_WAIT_SEND_NEXT_DATA = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 58) != 0;
+constexpr bool ETH_TXQ_SPIN_WAIT_RECEIVER_SEND_COMPLETION_ACK =
+    get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 59) != 0;
+
+constexpr size_t DEFAULT_NUM_ETH_TXQ_DATA_PACKET_ACCEPT_AHEAD = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 60);
+
+constexpr size_t SPECIAL_MARKER_0_IDX = MAIN_CT_ARGS_START_IDX + 61;
 constexpr size_t SPECIAL_MARKER_0 = 0x00c0ffee;
 static_assert(
     !SPECIAL_MARKER_CHECK_ENABLED || get_compile_time_arg_val(SPECIAL_MARKER_0_IDX) == SPECIAL_MARKER_0,

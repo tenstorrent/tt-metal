@@ -429,6 +429,7 @@ void generate_sender_worker_kernels(
     log_trace(tt::LogTest, "last_message_semaphore_address: {}", local_worker_last_message_semaphore_id);
     log_trace(
         tt::LogTest, "Sender communicating with EDM: x={}, y={}", (uint32_t)edm_noc_core.x, (uint32_t)edm_noc_core.y);
+    TT_FATAL(worker_fabric_connection.connected_ethernet_channel_id != -1, "Connected Ethernet Channel ID is -1");
     std::vector<uint32_t> sender_worker_writer_runtime_args{
         worker_fabric_connection.edm_buffer_base_addr,
         worker_fabric_connection.edm_l1_sem_addr,
@@ -445,7 +446,8 @@ void generate_sender_worker_kernels(
         local_worker_last_message_semaphore_id,
         worker_buffer_index_semaphore_id,
         worker_fabric_connection.persistent_fabric ? 1 : 0,
-        worker_fabric_connection.buffer_index_semaphore_id};
+        worker_fabric_connection.buffer_index_semaphore_id,
+        worker_fabric_connection.connected_ethernet_channel_id};
 
     if (std::holds_alternative<mcast_send>(mode)) {
         sender_worker_writer_runtime_args.push_back(std::get<mcast_send>(mode).distance);
@@ -551,7 +553,11 @@ bool RunLoopbackTest(
     static constexpr std::size_t edm_buffer_size =
         tt::tt_fabric::FabricEriscDatamoverBuilder::default_packet_payload_size_bytes + PACKET_HEADER_SIZE_BYTES;
 
-    auto chip0_worker_fabric_connection = chip_0_edm_builder.build_connection_to_worker_channel();
+    CoreCoord ethernet_core_virtual = CoreCoord{chip_0_edm_builder.my_noc_x, chip_0_edm_builder.my_noc_y};
+    const auto connected_ethernet_channel_id = sender_device->logical_core_from_ethernet_core(ethernet_core_virtual).y;
+    TT_FATAL(sender_device->logical_core_from_ethernet_core(ethernet_core_virtual).x == 0, "Grabbed wrong coord field");
+    auto chip0_worker_fabric_connection =
+        chip_0_edm_builder.build_connection_to_worker_channel(connected_ethernet_channel_id);
     ////////////////////////////////////////////////////////////////////////////
     // Build Workers
     ////////////////////////////////////////////////////////////////////////////
@@ -2781,6 +2787,16 @@ void Run1DFabricPacketSendTest(
 
             std::vector<uint32_t> worker_ct_args = {params.line_sync, params.line_sync};
 
+            TT_FATAL(
+                std::any_of(
+                    worker_cores_vec.begin(),
+                    worker_cores_vec.end(),
+                    [&sync_core_coord](const CoreCoord& core) {
+                        return core.x == sync_core_coord.x && core.y == sync_core_coord.y;
+                    }),
+                "Atleast one worker core must be mapped onto sync core: x={}, y={}",
+                sync_core_coord.x,
+                sync_core_coord.y);
             auto worker_kernel_id = tt_metal::CreateKernel(
                 program,
                 "tests/ttnn/unit_tests/gtests/ccl/kernels/edm_fabric_writer.cpp",

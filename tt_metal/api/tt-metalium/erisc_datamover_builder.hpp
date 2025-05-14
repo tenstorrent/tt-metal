@@ -156,6 +156,7 @@ struct SenderWorkerAdapterSpec {
     size_t edm_worker_location_info_addr = 0;  // The EDM's location for `EDMChannelWorkerLocationInfo`
     size_t buffer_size_bytes = 0;
     size_t buffer_index_semaphore_id = 0;  // the semaphore ID on the EDM, not the worker
+    int connected_ethernet_channel_id = -1;
     bool persistent_fabric = false;
     eth_chan_directions edm_direction = eth_chan_directions::EAST;
 };
@@ -220,7 +221,7 @@ public:
         bool dateline_connection = false,
         eth_chan_directions direction = eth_chan_directions::EAST);
 
-    [[nodiscard]] SenderWorkerAdapterSpec build_connection_to_worker_channel() const;
+    [[nodiscard]] SenderWorkerAdapterSpec build_connection_to_worker_channel(size_t ethernet_channel_id) const;
     [[nodiscard]] SenderWorkerAdapterSpec build_connection_to_fabric_channel(uint32_t vc);
 
     [[nodiscard]] std::vector<uint32_t> get_compile_time_args() const;
