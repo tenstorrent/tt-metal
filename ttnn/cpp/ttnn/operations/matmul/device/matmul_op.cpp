@@ -2203,7 +2203,11 @@ std::vector<ttnn::TensorSpec> Matmul::compute_output_specs(
                     }
                     // support for multi-tensor output
                     const ttnn::TensorSpec tensor_spec(
-                        output_shape, TensorLayout(output_dtype.value(), PageConfig(Layout::ROW_MAJOR), mem_config));
+                        output_shape,
+                        TensorLayout(
+                            output_dtype.value(),
+                            this->untilize_out ? PageConfig(Layout::ROW_MAJOR) : PageConfig(output_layout, output_tile),
+                            mem_config));
                     std::vector<ttnn::TensorSpec> output_tensor_specs(input_tensors.size() - 1, tensor_spec);
                     return output_tensor_specs;
                 } else if constexpr (std::is_same_v<
