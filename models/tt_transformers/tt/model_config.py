@@ -535,6 +535,8 @@ class ModelArgs:
                 local_params = "LLAMA3_2_11B_PARAMS"
             elif "3.1-70B" in self.CKPT_DIR:
                 local_params = "LLAMA3_1_70B_PARAMS"
+            elif "3.3-70B" in self.CKPT_DIR:
+                local_params = "LLAMA3_1_70B_PARAMS"
             elif "3.2-90B" in self.CKPT_DIR:
                 local_params = "LLAMA3_2_90B_PARAMS"
             else:
