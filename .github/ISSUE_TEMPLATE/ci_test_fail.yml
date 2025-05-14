@@ -7,8 +7,8 @@ body:
     id: pipeline_name
     attributes:
       label: "Pipeline Name"
-      description: "Name of the failing pipeline (e.g., test, build, lint)"
-      placeholder: "e.g., metal-nightly-tests"
+      description: "Name of the failing pipeline"
+      placeholder: "e.g. (TG) TG unit tests"
     validations:
       required: true
 
@@ -17,7 +17,7 @@ body:
     attributes:
       label: "Test Name"
       description: "Name of the failing test"
-      placeholder: "e.g., test_galaxy_link_reliability"
+      placeholder: "e.g., TG-UMD-tests"
     validations:
       required: true
 
@@ -26,14 +26,14 @@ body:
     attributes:
       label: "Path to Test in Repo"
       description: "Relative file path in the repo where the test is defined"
-      placeholder: "e.g., tests/galaxy/test_link.py"
+      placeholder: "e.g., tt_metal/third_party/umd/tests/galaxy/test_umd_concurrent_threads.cpp"
     validations:
       required: true
 
   - type: dropdown
     id: is_nd
     attributes:
-      label: "Is this a Non-Deterministic (ND) Failure?"
+      label: "Is this a Non-Deterministic (ND) failure?"
       options:
         - "Yes"
         - "No"
@@ -43,7 +43,7 @@ body:
   - type: dropdown
     id: hang
     attributes:
-      label: "Did the Test Hang?"
+      label: "Is this a hang?"
       options:
         - "Yes"
         - "No"
@@ -53,7 +53,7 @@ body:
   - type: dropdown
     id: timeout
     attributes:
-      label: "Did the Test Timeout?"
+      label: "Is this a timeout?"
       options:
         - "Yes"
         - "No"
@@ -66,11 +66,6 @@ body:
       label: "Failure Signature Snippet"
       description: "Paste the relevant portion of the error or log output"
       render: shell
-      placeholder: |
-        Traceback (most recent call last):
-          File "...", line ..., in ...
-            assert ...
-        AssertionError: ...
     validations:
       required: true
 
