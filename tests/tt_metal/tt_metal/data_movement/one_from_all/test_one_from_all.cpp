@@ -156,7 +156,7 @@ bool run_dm(IDevice* device, const OneFromAllConfig& test_config) {
 }
 }  // namespace unit_tests::dm::core_to_core
 
-/* ========== Test case for one from all data movement; Test id = 6 ========== */
+/* ========== Test case for one from all data movement; Test id = 15 ========== */
 TEST_F(DeviceFixture, TensixDataMovementOneFromAllPacketSizes) {
     // Parameters
     uint32_t max_transactions = 256;
@@ -180,7 +180,7 @@ TEST_F(DeviceFixture, TensixDataMovementOneFromAllPacketSizes) {
 
             // Test config
             unit_tests::dm::core_to_core::OneFromAllConfig test_config = {
-                .test_id = 6,
+                .test_id = 15,
                 .master_core_coord = master_core_coord,
                 .subordinate_core_set = subordinate_core_set,
                 .num_of_transactions = num_of_transactions,
