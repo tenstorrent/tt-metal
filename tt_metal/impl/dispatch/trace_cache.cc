@@ -206,7 +206,22 @@ float AllocNode::get_weight(const Container& indexed_items, Method method) const
     return (indexed_items[this->last_use_].*method)();
 }
 
-void dump_allocator(const std::list<AllocNode> allocator, const std::list<std::list<AllocNode>::iterator> lru) {
+void dump_allocator(const std::list<AllocNode>& allocator, const std::list<std::list<AllocNode>::iterator>& lru) {
+    // Check consistency
+    fprintf(stderr, "check consistency: %ld\n", allocator.size());
+    if (allocator.begin() != allocator.end()) {
+        std::uint32_t addr = allocator.begin()->get_addr() + allocator.begin()->get_size();
+        for (auto it = allocator.begin(); it != allocator.end(); it++) {
+            fprintf(stderr, "check: %d %d\n", it->get_addr(), it->get_size());
+            if (addr != it->get_addr() + it->get_size()) {
+                fprintf(stderr, "Failed: %d %d %d\n", addr, it->get_addr(), it->get_size());
+                exit(0);
+            }
+
+            addr -= it->get_size();
+        }
+    }
+
     fprintf(stderr, "Allocator:\n");
     for (const auto& node : allocator) {
         std::uint32_t pgm_id = node.get_pgm_id();
@@ -744,28 +759,51 @@ void WorkerBufferManager::allocate_in_hole(
     } else {
         // Is there a hole?  Which side does it go on?  Merge if adjacent
         std::uint32_t base_addr = alloc_it->get_addr() + alloc_it->get_size();
-        bool hole_top = false;
-        if (alloc_it != this->allocator_.begin()) {
-            auto prev_it = std::prev(alloc_it);
-            if (prev_it->get_weight(trace, &TraceNode::get_weight) <
-                alloc_it->get_weight(trace, &TraceNode::get_weight)) {
-                hole_top = true;
-            } else {
-                hole_top = false;
-            }
-        }
-        if (hole_top) {
+
+        if (freed_size == size_needed) {
+            // Perfect fit
             alloc_addr = base_addr;
-            auto new_it = this->allocator_.insert(alloc_it, {base_addr + size_needed, freed_size - size_needed});
-            this->lru_.push_front(new_it);
-            new_it = this->allocator_.insert(alloc_it, {pgm_id, alloc_addr, size_needed, trace_idx});
-            this->lru_.push_back(new_it);
-        } else {
-            alloc_addr = base_addr + freed_size - size_needed;
             auto new_it = this->allocator_.insert(alloc_it, {pgm_id, alloc_addr, size_needed, trace_idx});
             this->lru_.push_back(new_it);
-            new_it = this->allocator_.insert(alloc_it, {base_addr, freed_size - size_needed});
-            this->lru_.push_front(new_it);
+        } else {
+            bool hole_top = false;
+            assert(alloc_it != this->allocator_.end());
+            if (alloc_it != this->allocator_.begin()) {
+                auto prev_it = std::prev(alloc_it);
+                if (prev_it->get_weight(trace, &TraceNode::get_weight) <
+                    alloc_it->get_weight(trace, &TraceNode::get_weight)) {
+                    hole_top = true;
+                } else {
+                    hole_top = false;
+                }
+            }
+
+            std::uint32_t hole_size = freed_size - size_needed;
+            if (hole_top) {
+                alloc_addr = base_addr;
+                auto above_it = std::prev(alloc_it);
+                if (above_it->is_free()) {
+                    // This should be rare.  When freeing, we walk LRU from oldest to newest and
+                    // put free blocks at the oldest side, so they should be hit first
+                    above_it->set_size(above_it->get_size() + hole_size);
+                    above_it->set_addr(base_addr + size_needed);
+                } else {
+                    auto new_it = this->allocator_.insert(alloc_it, {base_addr + size_needed, hole_size});
+                    this->lru_.push_front(new_it);
+                }
+                auto new_it = this->allocator_.insert(alloc_it, {pgm_id, alloc_addr, size_needed, trace_idx});
+                this->lru_.push_back(new_it);
+            } else {
+                alloc_addr = base_addr + hole_size;
+                auto new_it = this->allocator_.insert(alloc_it, {pgm_id, alloc_addr, size_needed, trace_idx});
+                this->lru_.push_back(new_it);
+                if (alloc_it->is_free()) {
+                    alloc_it->set_size(alloc_it->get_size() + hole_size);
+                } else {
+                    new_it = this->allocator_.insert(alloc_it, {base_addr, hole_size});
+                    this->lru_.push_front(new_it);
+                }
+            }
         }
     }
 
@@ -937,7 +975,6 @@ void WorkerBufferManager::alloc_heap(std::vector<TraceNode>& trace, const std::v
                     commit_preallocations(pre_alloc_addr_top, uncommitted_it, trace);
                     eviction_mode = try_to_reenter_preallocation_mode(
                         pre_alloc_addr_top, pre_alloc_addr, uncommitted_it, trace_idx, trace);
-
                     continue;  // Reprocess this trace_idx
                 } else {
                     pre_alloc_addr -= size_needed;
