@@ -1108,7 +1108,7 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
                                : tt::DataFormat::Float16_b;
     uint32_t datum_size_bytes = 2;  // bfloat16
 
-    TT_ASSERT(out_data_format == in_data_format && "input and output must be the same data format");
+    TT_FATAL(out_data_format == in_data_format, "input and output must be the same data format");
 
     // tile sizes
     uint32_t in_single_tile_size = tt::tt_metal::detail::TileSize(in_data_format);
@@ -1134,8 +1134,8 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
     uint32_t per_core_M_group_1 = H / num_cores_r;
     uint32_t per_core_M_group_2 = 0;
     uint32_t per_core_N = W / num_cores_c;
-    TT_ASSERT(H % num_cores_r == 0 && "width * height must be divisible by num_cores.y");
-    TT_ASSERT(W % num_cores_c == 0 && "channels must be divisible by num_cores.x");
+    TT_FATAL(H % num_cores_r == 0, "width * height must be divisible by num_cores.y");
+    TT_FATAL(W % num_cores_c == 0, "channels must be divisible by num_cores.x");
     uint32_t per_core_Mt_group_1 = per_core_M_group_1 / TILE_HEIGHT;
     uint32_t per_core_Mt_group_2 = 0;
     uint32_t per_core_Nt = (per_core_N + TILE_WIDTH - 1) / TILE_WIDTH;
@@ -1152,6 +1152,9 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
     uint32_t num_batches_per_core_group_1 = num_batches > num_shards_r ? num_batches / num_shards_r : 1;
     uint32_t num_batches_per_core_group_2 = num_batches_per_core_group_1;  // need this to be non-zero even if unused
     uint32_t num_groups_per_core = num_groups > num_shards_c ? num_groups / num_shards_c : 1;
+    TT_FATAL(
+        (num_groups / num_cores_r) * group_size % 32 == 0,
+        "(num_groups/cores_x)*(num_channels/num_groups) must be divisible by 32");
 
     // subblock
     uint32_t num_rows_per_batch_per_core_group_1 = per_core_M_group_1 / num_batches_per_core_group_1;
@@ -1201,31 +1204,30 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
     bool untilize_out = output.get_layout() == Layout::ROW_MAJOR;
 
     TT_ASSERT(per_core_N % num_datum_row_per_group == 0);
-    TT_ASSERT(per_core_M_group_1 % TILE_HEIGHT == 0);
+    TT_FATAL(per_core_M_group_1 % TILE_HEIGHT == 0, "per_core_M divides Tile Height");
     if (per_core_M_group_2 > 0) {
-        TT_ASSERT(per_core_M_group_2 % TILE_HEIGHT == 0);
+        TT_FATAL(per_core_M_group_2 % TILE_HEIGHT == 0, "per_core_M divides Tile Height");
     }
     if (per_core_N != W) {
-        TT_ASSERT(per_core_N * num_cores_c == W);
+        TT_FATAL(per_core_N * num_cores_c == W, "cores_x mus divide Channels");
         // TT_ASSERT(per_core_M_group_1 * num_cores_r == H); TODO VASH
     }
 
-    TT_ASSERT(per_core_M_group_1 % TILE_HEIGHT == 0 && "per_core_M must be divisble by TILE_HEIGHT");
+    TT_FATAL(per_core_M_group_1 % TILE_HEIGHT == 0, "per_core_M must be divisble by TILE_HEIGHT");
     if (per_core_M_group_2 > 0) {
-        TT_ASSERT(per_core_M_group_2 % TILE_HEIGHT == 0 && "per_core_M must be divisble by TILE_HEIGHT");
+        TT_FATAL(per_core_M_group_2 % TILE_HEIGHT == 0, "per_core_M must be divisble by TILE_HEIGHT");
     }
 
-    TT_ASSERT(W % num_groups == 0 && "Tensor W must be divisble by num_groups");
-    TT_ASSERT(W % per_core_N == 0 && "W dim must be divisible by per_core_N");
+    TT_FATAL(W % num_groups == 0, "Tensor W must be divisble by num_groups");
+    TT_FATAL(W % per_core_N == 0, "W dim must be divisible by per_core_N");
     if (num_batches < num_shards_r) {
-        TT_ASSERT(H % per_core_M_group_1 == 0 && "H dim must be divisible by per_core_M");
-        TT_ASSERT(
-            num_shards_r % num_batches == 0 && "number of cores in a full column must be divisible by num_batches");
+        TT_FATAL(H % per_core_M_group_1 == 0, "H dim must be divisible by per_core_M");
+        TT_FATAL(num_shards_r % num_batches == 0, "number of cores in a full column must be divisible by num_batches");
     }
     if (num_groups >= num_shards_c) {
-        TT_ASSERT(num_groups % num_shards_c == 0 && "num_groups must be divisible by number of cores in a full row");
+        TT_FATAL(num_groups % num_shards_c == 0, "num_groups must be divisible by number of cores in a full row");
     } else {
-        TT_ASSERT(num_shards_c % num_groups == 0 && "number of cores in a full row must be divisible by num_groups");
+        TT_FATAL(num_shards_c % num_groups == 0, "number of cores in a full row must be divisible by num_groups");
     }
 
     log_debug(tt::LogOp, "num_cores: {}", num_cores);
@@ -1255,14 +1257,12 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
     log_debug(tt::LogOp, "num_subblocks_w: {}", num_subblocks_w);
     log_debug(tt::LogOp, "reader_repack_output: {}", reader_repack_output);
 
-    TT_ASSERT(
-        per_core_M_group_1 % num_batches_per_core_group_1 == 0 && "per_core_M height must be div by per_core_batch");
+    TT_FATAL(per_core_M_group_1 % num_batches_per_core_group_1 == 0, "per_core_M height must be div by per_core_batch");
     if (per_core_M_group_2 > 0) {
-        TT_ASSERT(
-            per_core_M_group_2 % num_batches_per_core_group_2 == 0 &&
-            "per_core_M height must be div by per_core_batch");
+        TT_FATAL(
+            per_core_M_group_2 % num_batches_per_core_group_2 == 0, "per_core_M height must be div by per_core_batch");
     }
-    TT_ASSERT(W % num_groups == 0 && "tensor width must be divisible by num_groups!");
+    TT_FATAL(W % num_groups == 0, "tensor width must be divisible by num_groups!");
     // if (shard_orientation == ShardOrientation::ROW_MAJOR and num_groups_per_core == 1) {
     //     TT_FATAL(false, "VASH TODO");
     // 	TT_ASSERT(
@@ -1298,8 +1298,8 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
     // }
 
     if (input_mask.has_value()) {
-        TT_ASSERT(
-            input_mask.value().get_padded_shape()[3] == block_wt * TILE_WIDTH &&
+        TT_FATAL(
+            input_mask.value().get_padded_shape()[3] == block_wt * TILE_WIDTH,
             "input mask must have the same width as block_wt");
     }
 
