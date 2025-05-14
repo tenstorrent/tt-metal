@@ -132,12 +132,10 @@ std::vector<std::vector<std::vector<std::pair<chip_id_t, mesh_id_t>>>> RoutingTa
                     }
                 } else if (dist[connected_mesh_id] == dist[current_mesh_id] + 1) {
                     // another possible path discovered
-                    for (auto& path : paths[current_mesh_id]) {
+                    for (auto path : paths[current_mesh_id]) {
+                        path.push_back({chip_in_mesh, connected_mesh_id});
                         paths[connected_mesh_id].push_back(path);
                     }
-
-                    paths[connected_mesh_id][paths[connected_mesh_id].size() - 1].push_back(
-                        {chip_in_mesh, connected_mesh_id});
                 }
             }
         }
@@ -160,6 +158,8 @@ void RoutingTableGenerator::generate_intermesh_routing_table(
     const InterMeshConnectivity& inter_mesh_connectivity, const IntraMeshConnectivity& /*intra_mesh_connectivity*/) {
     for (mesh_id_t src_mesh_id = 0; src_mesh_id < this->inter_mesh_table_.size(); src_mesh_id++) {
         auto paths = get_paths_to_all_meshes(src_mesh_id, inter_mesh_connectivity);
+        std::uint32_t ew_size = this->mesh_graph_->get_mesh_ew_size(src_mesh_id);
+        std::uint32_t ns_size = this->mesh_graph_->get_mesh_ns_size(src_mesh_id);
         for (chip_id_t src_chip_id = 0; src_chip_id < this->inter_mesh_table_[src_mesh_id].size(); src_chip_id++) {
             for (mesh_id_t dst_mesh_id = 0; dst_mesh_id < this->inter_mesh_table_.size(); dst_mesh_id++) {
                 if (dst_mesh_id == src_mesh_id) {
@@ -169,7 +169,9 @@ void RoutingTableGenerator::generate_intermesh_routing_table(
                 }
                 auto& candidate_paths = paths[dst_mesh_id];
                 std::uint32_t min_load = std::numeric_limits<std::uint32_t>::max();
+                std::uint32_t min_distance = std::numeric_limits<std::uint32_t>::max();
                 TT_ASSERT(candidate_paths.size() > 0, "Expecting at least one path to target mesh");
+                // TODO: This exit_chip_id doesn't make sense since it is always chip 0
                 chip_id_t exit_chip_id = candidate_paths[0][1].first;
                 mesh_id_t next_mesh_id = candidate_paths[0][1].second;
                 for (auto& path : candidate_paths) {
@@ -184,12 +186,30 @@ void RoutingTableGenerator::generate_intermesh_routing_table(
                         next_mesh_id = candidate_next_mesh_id;
                         break;
                     }
-                    const auto& edge =
-                        inter_mesh_connectivity[src_mesh_id][candidate_exit_chip_id].at(candidate_next_mesh_id);
-                    if (edge.weight < min_load) {
-                        min_load = edge.weight;
+                    // TODO: Ideally this should take into account the shortest path through all of the meshes to get to
+                    // the target mesh This is a simple implementation that only considers the shortest path to the next
+                    // mesh
+                    std::uint32_t ew_distance = std::abs(
+                        static_cast<std::int32_t>(src_chip_id % ew_size) -
+                        static_cast<std::int32_t>(candidate_exit_chip_id % ew_size));
+                    std::uint32_t ns_distance = std::abs(
+                        static_cast<std::int32_t>(src_chip_id / ew_size) -
+                        static_cast<std::int32_t>(candidate_exit_chip_id / ew_size));
+                    std::uint32_t distance = ew_distance + ns_distance;
+                    if (distance < min_distance) {
+                        // optimization for latency, always use the shortest path to next mesh, regardless of load on
+                        // the edge
                         exit_chip_id = candidate_exit_chip_id;
                         next_mesh_id = candidate_next_mesh_id;
+                        min_distance = distance;
+                    } else if (distance == min_distance) {
+                        const auto& edge =
+                            inter_mesh_connectivity[src_mesh_id][candidate_exit_chip_id].at(candidate_next_mesh_id);
+                        if (edge.weight < min_load) {
+                            min_load = edge.weight;
+                            exit_chip_id = candidate_exit_chip_id;
+                            next_mesh_id = candidate_next_mesh_id;
+                        }
                     }
                 }
 
