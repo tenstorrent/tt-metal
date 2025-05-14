@@ -82,6 +82,7 @@ jobs:
       options: >
         --group-add 1457
         --tmpfs /tmp
+        --network=host
     defaults:
       run:
         shell: bash

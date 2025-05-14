@@ -33,7 +33,9 @@ jobs:
       volumes:
         - /work
         - /dev/hugepages-1G:/dev/hugepages-1G
-      options: --device /dev/tenstorrent
+      options: >
+        --device /dev/tenstorrent
+        --network=host
     defaults:
       run:
         shell: bash
