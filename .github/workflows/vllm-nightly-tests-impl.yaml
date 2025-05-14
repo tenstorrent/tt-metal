@@ -99,14 +99,13 @@ jobs:
           if [[ "${{ matrix.test-group.runner-label }}" == "config-t3000" ]]; then
             export WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml
             export MESH_DEVICE="T3K"
-            export DISPATCH_CORE_AXIS="row"
             export TT_LLAMA_TEXT_VER="tt_transformers"
           fi
 
           if [[ "${{ matrix.test-group.runner-label }}" == "config-tg" ]]; then
             export MESH_DEVICE="TG"
-            export DISPATCH_CORE_AXIS="col"
             export TT_LLAMA_TEXT_VER="llama3_subdevices"
+            export OVERRIDE_TT_CONFIG="--override_tt_config \"{\"dispatch_core_axis\": \"col\", \"sample_on_device_mode\": \"all\", \"fabric_config\": \"FABRIC_1D\"}\""
           fi
 
           # Set TT Cache path
@@ -134,7 +133,7 @@ jobs:
 
           python3 vllm/examples/server_example_tt.py \
             --model ${{ matrix.test-group.model }} \
-            --override_tt_config "{\"dispatch_core_axis\": \"$DISPATCH_CORE_AXIS\", \"sample_on_device_mode\": \"all\", \"fabric_config\": \"FABRIC_1D\"}" \
+            $OVERRIDE_TT_CONFIG \
             > ./output/vllm_server.log 2>&1 &
 
       - name: ⏰ Wait for server to be ready
