@@ -1,5 +1,8 @@
 name: Aggregate Workflow Data
 on:
+  push:
+    branches:
+      - mchiou/0-aggregate-workflow-report
   schedule:
     - cron: '0 * * * *' # every hour
   workflow_dispatch:
@@ -77,7 +80,7 @@ jobs:
         id: analyze
         uses: ./.github/actions/analyze-workflow-data
         with:
-          days: ${{ github.event.inputs.days || 15 }}
+          days: ${{ github.event.inputs.days || 1 }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           cache-path: ${{ github.workspace }}/workflow-data.json
           workflow_configs: |
