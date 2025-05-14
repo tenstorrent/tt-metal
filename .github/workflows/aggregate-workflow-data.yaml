@@ -10,7 +10,7 @@ on:
       days:
         description: 'Number of days to look back for workflow runs'
         required: false
-        default: '15'
+        default: '1'
 
 jobs:
   fetch-data:
