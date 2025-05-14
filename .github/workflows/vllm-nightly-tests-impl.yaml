@@ -23,8 +23,8 @@ jobs:
             name: "vLLM test: Llama-3.1-8B-Instruct @ T3K",
             arch: wormhole_b0,
             model: "meta-llama/Llama-3.1-8B-Instruct",
-            server_timeout: 10,
-            benchmark_timeout: 10,
+            server_timeout: 5,
+            benchmark_timeout: 5,
             runner-label: config-t3000,
             co-owner-1_id: U08E1JCDVNX, # Pavle Petrovic
             co-owner-2_id: U08CEGF78ET, # Salar Hosseini Khorasgani
@@ -95,7 +95,6 @@ jobs:
       - name: 🚀 Run server
         timeout-minutes: 1
         run: |
-          # Platform environment variables
           if [[ "${{ matrix.test-group.runner-label }}" == "config-t3000" ]]; then
             export WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml
             export MESH_DEVICE="T3K"
@@ -105,7 +104,7 @@ jobs:
           if [[ "${{ matrix.test-group.runner-label }}" == "config-tg" ]]; then
             export MESH_DEVICE="TG"
             export TT_LLAMA_TEXT_VER="llama3_subdevices"
-            export OVERRIDE_TT_CONFIG="--override_tt_config {\"dispatch_core_axis\": \"col\", \"sample_on_device_mode\": \"all\", \"fabric_config\": \"FABRIC_1D\"}"
+            OVERRIDE_TT_CONFIG=(--override_tt_config '{"dispatch_core_axis": "col", "sample_on_device_mode": "all", "fabric_config": "FABRIC_1D"}')
           fi
 
           # Set TT Cache path
@@ -133,7 +132,7 @@ jobs:
 
           python3 vllm/examples/server_example_tt.py \
             --model ${{ matrix.test-group.model }} \
-            $OVERRIDE_TT_CONFIG \
+            "${OVERRIDE_TT_CONFIG[@]}" \
             > ./output/vllm_server.log 2>&1 &
 
       - name: ⏰ Wait for server to be ready
