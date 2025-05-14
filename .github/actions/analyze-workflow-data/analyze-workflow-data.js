@@ -129,21 +129,42 @@ async function handlePushRuns(mainBranchRuns, github, context) {
 /**
  * Generate a summary box showing all workflows and their latest status
  */
-function generateSummaryBox(grouped) {
+async function generateSummaryBox(grouped, github, context) {
   const summaryRows = [];
   for (const [name, runs] of grouped.entries()) {
+    const successes = runs.filter(r => r.conclusion === 'success');
     const mainBranchRuns = runs
       .filter(r => r.head_branch === 'main')
       .sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
     const lastMainRun = mainBranchRuns[0];
-    const status = lastMainRun?.conclusion === 'success' ? '✅' : '❌';
-    summaryRows.push(`| ${name} | ${status} |`);
+    const lastMainPassing = lastMainRun?.conclusion === 'success' ? '✅' : '❌';
+    const eventTypes = [...new Set(runs.map(r => r.event))].join(', ');
+    const workflowFile = runs[0]?.path;
+    const workflowLink = workflowFile
+      ? `https://github.com/${context.repo.owner}/${context.repo.repo}/actions/workflows/${workflowFile}?query=branch%3Amain`
+      : `https://github.com/${context.repo.owner}/${context.repo.repo}/actions`;
+    const successRate = runs.length === 0 ? "N/A" : (successes.length / runs.length * 100).toFixed(2) + "%";
+
+    let failureSha = '—';
+    let failureRun = '—';
+    let failurePr = '—';
+    let failureTitle = '—';
+
+    if (lastMainRun && lastMainRun.conclusion !== 'success') {
+      const prInfo = await fetchPRInfo(github, context, lastMainRun.head_sha);
+      failureSha = `\`${lastMainRun.head_sha.substring(0, 7)}\``;
+      failureRun = `[Run](${lastMainRun.html_url})`;
+      failurePr = prInfo.prNumber;
+      failureTitle = prInfo.prTitle;
+    }
+
+    summaryRows.push(`| [${name}](${workflowLink}) | ${eventTypes || 'unknown'} | ${runs.length} | ${successes.length} | ${successRate} | ${lastMainPassing} | ${failureSha} | ${failureRun} | ${failurePr} | ${failureTitle} |`);
   }
 
   return [
     '## Quick Summary',
-    '| Workflow | Latest Status |',
-    '|----------|---------------|',
+    '| Workflow | Event Type(s) | Total Runs | Successful Runs | Success Rate | Last Run on `main` | Failed SHA | Failed Run | Failed PR | PR Title |',
+    '|----------|---------------|------------|-----------------|--------------|-------------------|------------|------------|-----------|-----------|',
     ...summaryRows,
     ''  // Empty line for better readability
   ].join('\n');
@@ -156,7 +177,7 @@ function generateSummaryBox(grouped) {
 async function buildReport(grouped, github, context) {
   const reportParts = [
     '# Workflow Summary\n',
-    generateSummaryBox(grouped),
+    await generateSummaryBox(grouped, github, context),
     '---\n'  // Separator between summary and detailed sections
   ];
 
