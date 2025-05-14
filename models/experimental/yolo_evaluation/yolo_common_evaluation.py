@@ -218,7 +218,7 @@ def evaluation(
         else:
             ttnn_im = im.permute((0, 2, 3, 1))
 
-        if model_name == "YOLOv11":  # only for YOLOv11
+        if model_name in ["YOLOv11", "YOLOv9c", "YOLOv10"]:
             ttnn_im = ttnn_im.reshape(
                 1,
                 1,
@@ -229,12 +229,12 @@ def evaluation(
             ttnn_im = ttnn.from_torch(ttnn_im, dtype=input_dtype, layout=input_layout, device=device)
 
         if model_type != "torch_model":
-            preprocessed_images.append(ttnn_im)  # Append preprocessed image to list
+            preprocessed_images.append((ttnn_im, im, im0s))
         else:
-            preprocessed_images.append(im)
+            preprocessed_images.append((im, im, im0s))
 
     # Model inference loop
-    for im in preprocessed_images:
+    for ttnn_im, im, im0s in preprocessed_images:
         if model_type == "torch_model":
             preds = model(im)
             if model_name == "YOLOv4":
@@ -243,20 +243,24 @@ def evaluation(
                 y1, y2, y3 = gen_yolov4_boxes_confs(preds)
                 output = get_region_boxes([y1, y2, y3])
         else:
-            preds = model._execute_yolov4_trace_2cqs_inference(im)
-            if model_name == "YOLOv11":
+            if model_name in ["YOLOv11", "YOLOv9c", "YOLOv10"]:
+                preds = model(ttnn_im)
                 preds = ttnn.to_torch(preds, dtype=torch.float32)
             elif model_name == "YOLOv4":
+                preds = model._execute_yolov4_trace_2cqs_inference(ttnn_im)
                 result_boxes = preds[0]
                 result_confs = preds[1]
                 output = [result_boxes.to(torch.float16), result_confs.to(torch.float16)]
             else:
+                preds = model(ttnn_im)
                 preds[0] = ttnn.to_torch(preds[0], dtype=torch.float32)
 
         if model_name == "YOLOv4":
             from models.demos.yolov4.post_processing import post_processing
 
             results = post_processing(img, 0.3, 0.4, output)
+        elif model_name == "YOLOv10":
+            results = postprocess(preds, im, im0s, batch, classes, model_name=model_name, conf=0.5)[0]
         else:
             results = postprocess(preds, im, im0s, batch, classes)[0]
 
@@ -375,4 +379,74 @@ def test_run_yolov4_eval(
         save_dir=save_dir,
         model_name=model_name,
         additional_layer=None,
+    )
+
+
+@pytest.mark.parametrize(
+    "model_type",
+    [("tt_model"), ("torch_model")],
+)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
+@pytest.mark.parametrize("res", [(640, 640)])
+def test_yolov8s_world(device, model_type, res, reset_seeds):
+    from models.experimental.yolov8s_world.reference import yolov8s_world
+    from models.experimental.yolov8s_world.tt.ttnn_yolov8s_world import TtYOLOWorld
+    from models.experimental.yolov8s_world.tt.ttnn_yolov8s_world_utils import (
+        create_custom_preprocessor,
+        attempt_load,
+        move_to_device,
+    )
+
+    from ttnn.model_preprocessing import preprocess_model_parameters
+
+    if model_type == "torch_model":
+        model = attempt_load("yolov8s-world.pt", map_location="cpu")
+    else:
+        weights_torch_model = attempt_load("yolov8s-world.pt", map_location="cpu")
+        torch_model = yolov8s_world.YOLOWorld(model_torch=weights_torch_model)
+
+        state_dict = weights_torch_model.state_dict()
+        ds_state_dict = {k: v for k, v in state_dict.items()}
+        new_state_dict = {}
+        for (name1, parameter1), (name2, parameter2) in zip(torch_model.state_dict().items(), ds_state_dict.items()):
+            new_state_dict[name1] = parameter2
+
+        torch_model.load_state_dict(new_state_dict)
+        torch_model = torch_model.model
+
+        parameters = preprocess_model_parameters(
+            initialize_model=lambda: torch_model, custom_preprocessor=create_custom_preprocessor(device)
+        )
+
+        for i in [12, 15, 19, 22]:
+            parameters["model"][i]["attn"]["gl"]["weight"] = ttnn.to_device(
+                parameters["model"][i]["attn"]["gl"]["weight"], device=device
+            )
+            parameters["model"][i]["attn"]["gl"]["bias"] = ttnn.to_device(
+                parameters["model"][i]["attn"]["gl"]["bias"], device=device
+            )
+            parameters["model"][i]["attn"]["bias"] = ttnn.to_device(
+                parameters["model"][i]["attn"]["bias"], device=device
+            )
+
+        parameters["model"][16] = move_to_device(parameters["model"][16], device)
+
+        parameters["model"][23]["cv4"] = move_to_device(parameters["model"][23]["cv4"], device)
+
+        model = TtYOLOWorld(device=device, parameters=parameters)
+
+    input_dtype = ttnn.bfloat16
+    input_layout = ttnn.ROW_MAJOR_LAYOUT
+
+    save_dir = "models/experimental/yolov8s_world/demo/runs"
+
+    evaluation(
+        device=device,
+        res=res,
+        model_type=model_type,
+        model=model,
+        parameters=None,
+        input_dtype=input_dtype,
+        input_layout=input_layout,
+        save_dir=save_dir,
     )

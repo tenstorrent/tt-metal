@@ -96,8 +96,9 @@ struct NdShardSpec {
 
 class MemoryConfig final {
 public:
-    MemoryConfig() = default; // Interleaved DRAM
-    explicit MemoryConfig(TensorMemoryLayout memory_layout,
+    MemoryConfig() = default;  // Interleaved DRAM
+    explicit MemoryConfig(
+        TensorMemoryLayout memory_layout,
         BufferType buffer_type = BufferType::DRAM,
         std::optional<ShardSpec> shard_spec = std::nullopt);
     explicit MemoryConfig(BufferType buffer_type,
@@ -134,11 +135,11 @@ private:
 
 std::ostream& operator<<(std::ostream& os, const MemoryConfig& config);
 
-bool operator==(const MemoryConfig &config_a, const MemoryConfig &config_b);
-bool operator!=(const MemoryConfig &config_a, const MemoryConfig &config_b);
+bool operator==(const MemoryConfig& config_a, const MemoryConfig& config_b);
+bool operator!=(const MemoryConfig& config_a, const MemoryConfig& config_b);
 
-} // namespace tt_metal
-} // namespace tt
+}  // namespace tt_metal
+}  // namespace tt
 
 template <>
 struct tt::stl::json::to_json_t<tt::tt_metal::MemoryConfig> {

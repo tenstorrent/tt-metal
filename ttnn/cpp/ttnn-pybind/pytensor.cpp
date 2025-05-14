@@ -10,7 +10,7 @@
 #include <memory>
 
 #include "small_vector_caster.hpp"  // NOLINT - for pybind11 SmallVector binding support.
-#include "ttnn/tensor/host_buffer/host_buffer.hpp"
+#include <tt-metalium/host_buffer.hpp>
 #include "ttnn/tensor/tensor.hpp"
 #include <tt-metalium/graph_tracking.hpp>
 #include <tt_stl/overloaded.hpp>
@@ -364,7 +364,7 @@ HostBuffer create_row_major_host_buffer(
     if (padded_output) {
         if (tensor_spec.layout() == Layout::TILE) {
             auto data = tensor_impl::convert_layout_tile_to_row_major(
-                tensor_spec.physical_shape(), tensor_spec.tile(), tt::stl::MakeConstSpan(host_buffer.view_as<T>()));
+                tensor_spec.physical_shape(), tensor_spec.tile(), tt::stl::make_const_span(host_buffer.view_as<T>()));
             return HostBuffer(std::move(data));
         }
         return host_buffer;

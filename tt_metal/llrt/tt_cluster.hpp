@@ -4,12 +4,9 @@
 
 #pragma once
 
-#include <tt-metalium/control_plane.hpp>
-#include <tt-metalium/dev_msgs.h>
 #include <tt-metalium/fabric_host_interface.h>
 #include <tt-metalium/fabric_types.hpp>
 #include <tt-metalium/metal_soc_descriptor.h>
-#include <tt-metalium/tt_backend_api_types.hpp>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
@@ -25,8 +22,6 @@
 
 #include "assert.hpp"
 #include "core_coord.hpp"
-#include "llrt/hal.hpp"
-#include "llrt/rtoptions.hpp"
 #include <umd/device/cluster.h>
 #include <umd/device/device_api_metal.h>
 #include <umd/device/tt_cluster_descriptor.h>
@@ -40,9 +35,15 @@
 
 namespace tt {
 enum class ARCH;
+namespace llrt {
+class RunTimeOptions;
+}
 namespace tt_fabric {
 class ControlPlane;
-}  // namespace tt_fabric
+}
+namespace tt_metal {
+class Hal;
+}
 }  // namespace tt
 struct tt_device_params;
 
@@ -104,6 +105,8 @@ public:
 
     size_t number_of_devices() const { return this->cluster_desc_->get_number_of_chips(); }
 
+    const std::unordered_set<chip_id_t>& all_chip_ids() const { return this->cluster_desc_->get_all_chips(); };
+
     size_t number_of_pci_devices() const { return this->cluster_desc_->get_chips_with_mmio().size(); }
 
     // TODO: UMD will eventually consolidate ethernet coordinates and unique ids, we can remove the ethernet coord
@@ -141,11 +144,12 @@ public:
         const TensixSoftResetOptions& soft_resets = TENSIX_ASSERT_SOFT_RESET) const;
 
     void write_dram_vec(
-        std::vector<uint32_t>& vec, tt_target_dram dram, uint64_t addr, bool small_access = false) const;
+        std::vector<uint32_t>& vec, chip_id_t device_id, int dram_view, uint64_t addr, bool small_access = false) const;
     void read_dram_vec(
         std::vector<uint32_t>& vec,
         uint32_t size_in_bytes,
-        tt_target_dram dram,
+        chip_id_t device_id,
+        int dram_view,
         uint64_t addr,
         bool small_access = false) const;
 

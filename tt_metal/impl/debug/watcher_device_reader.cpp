@@ -54,7 +54,7 @@ namespace {  // Helper functions
 // Helper function to get string rep of riscv type
 const char* get_riscv_name(const CoreCoord& core, uint32_t type) {
     switch (type) {
-        case DebugBrisc: return "brisc";
+        case DebugBrisc: return " brisc";
         case DebugNCrisc: return "ncrisc";
         case DebugErisc: return "erisc";
         case DebugIErisc: return "ierisc";
@@ -300,7 +300,7 @@ void WatcherDeviceReader::Dump(FILE* file) {
     }
 
     for (auto k_id : used_kernel_names) {
-        fprintf(f, "k_id[%d]: %s\n", k_id.first, kernel_names[k_id.first].c_str());
+        fprintf(f, "k_id[%3d]: %s\n", k_id.first, kernel_names[k_id.first].c_str());
     }
 
     // Print stack usage report for this device/dump
@@ -312,7 +312,7 @@ void WatcherDeviceReader::Dump(FILE* file) {
             uint16_t stack_size = get_riscv_stack_size(info.core, risc_id_and_stack_info.first);
             fprintf(
                 f,
-                "\n\t%s highest stack usage: %d/%d, on core %s, running kernel %s",
+                "\n\t%s highest stack usage: %4d/%4d, on core %s, running kernel %s",
                 riscv_name,
                 info.stack_usage,
                 stack_size,
@@ -391,7 +391,7 @@ void WatcherDeviceReader::DumpCore(CoreDescriptor& logical_core, bool is_active_
     virtual_core.type = logical_core.type;
 
     // Print device id, core coords (logical)
-    string core_type = is_eth_core ? (is_active_eth_core ? "active ethnet" : "idle ethnet") : "worker";
+    string core_type = is_eth_core ? (is_active_eth_core ? "acteth" : "idleth") : "worker";
     string core_coord_str = fmt::format(
         "core(x={:2},y={:2}) virtual(x={:2},y={:2})",
         logical_core.coord.x,
@@ -481,18 +481,18 @@ void WatcherDeviceReader::DumpCore(CoreDescriptor& logical_core, bool is_active_
     if (is_eth_core) {
         fprintf(
             f,
-            "k_id:%d",
+            "k_id:%3d",
             mbox_data->launch[launch_msg_read_ptr].kernel_config.watcher_kernel_ids[DISPATCH_CLASS_ETH_DM0]);
         if (tt::tt_metal::MetalContext::instance().get_cluster().arch() == ARCH::BLACKHOLE) {
             fprintf(
                 f,
-                "|%d",
+                "|%3d",
                 mbox_data->launch[launch_msg_read_ptr].kernel_config.watcher_kernel_ids[DISPATCH_CLASS_ETH_DM1]);
         }
     } else {
         fprintf(
             f,
-            "k_ids:%d|%d|%d",
+            "k_ids:%3d|%3d|%3d",
             mbox_data->launch[launch_msg_read_ptr].kernel_config.watcher_kernel_ids[DISPATCH_CLASS_TENSIX_DM0],
             mbox_data->launch[launch_msg_read_ptr].kernel_config.watcher_kernel_ids[DISPATCH_CLASS_TENSIX_DM1],
             mbox_data->launch[launch_msg_read_ptr].kernel_config.watcher_kernel_ids[DISPATCH_CLASS_TENSIX_COMPUTE]);
@@ -885,7 +885,7 @@ void WatcherDeviceReader::DumpLaunchMessage(CoreDescriptor& core, const mailboxe
         }
     }
 
-    fprintf(f, " h_id:%d ", launch_msg->kernel_config.host_assigned_id);
+    fprintf(f, " h_id:%3d ", launch_msg->kernel_config.host_assigned_id);
 
     if (!is_eth) {
         fprintf(f, "smsg:");
