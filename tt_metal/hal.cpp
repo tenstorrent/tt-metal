@@ -64,6 +64,4 @@ float get_nan() { return tt::tt_metal::MetalContext::instance().hal().get_nan();
 
 float get_inf() { return tt::tt_metal::MetalContext::instance().hal().get_inf(); }
 
-uint32_t get_noc_payload_width() { return tt::tt_metal::MetalContext::instance().hal().get_noc_payload_width(); }
-
 }  // namespace tt::tt_metal::hal

@@ -98,11 +98,4 @@ float get_nan();
  */
 float get_inf();
 
-/**
- * @brief Uses the hardware abstraction layer to fetch the NoC payload width.
- *
- * @return NoC payload width
- */
-uint32_t get_noc_payload_width();
-
 }  // namespace tt::tt_metal::hal
