@@ -51,7 +51,7 @@ Tensor pre_gather_transform_input_tensor(
 }
 
 Tensor pre_gather_transform_input_index_tensor(const Tensor& input_tensor, const int8_t dim, const uint32_t C) {
-    if (input_tensor.get_logical_shape() == ttnn::Shape{1}) {
+    if (input_tensor.get_logical_shape().rank() == 1) {
         // Early exit for scalar tensors, return the same tensor
         return input_tensor;
     }
@@ -105,7 +105,7 @@ Tensor ExecuteTosaGather::invoke(
     const Tensor& input_tensor,
     const Tensor& input_index_tensor,
     const std::optional<tt::tt_metal::MemoryConfig>& memory_config) {
-    // TOSA Gather const params
+    // TOSA Gather constraints
     constexpr int8_t dim = 1;
     constexpr bool sparse_grad = false;
     constexpr size_t input_tensor_rank_constrain = 3;
@@ -117,7 +117,10 @@ Tensor ExecuteTosaGather::invoke(
     const ttnn::Shape original_input_tensor_lshape = input_tensor.get_logical_shape();  // [N, K, C]
     const auto input_tensor_rank = input_tensor.get_padded_shape().rank();
     TT_FATAL(
-        input_tensor_rank == input_tensor_rank_constrain, "Input tensor rank must be 3, got: {}", input_tensor_rank);
+        input_tensor_rank == input_tensor_rank_constrain,
+        "Input tensor rank must be {}, got: {}",
+        input_tensor_rank_constrain,
+        input_tensor_rank);
     const auto N = original_input_tensor_lshape[0];
     const auto K = original_input_tensor_lshape[1];
     const auto C = original_input_tensor_lshape[-1];
@@ -127,7 +130,8 @@ Tensor ExecuteTosaGather::invoke(
     const auto input_index_tensor_rank = input_index_tensor.get_padded_shape().rank();
     TT_FATAL(
         input_index_tensor_rank == input_index_tensor_rank_constrain,
-        "Index tensor rank must be 2, got: {}",
+        "Index tensor rank must be {}, got: {}",
+        input_index_tensor_rank_constrain,
         input_index_tensor_rank);
     TT_FATAL(
         N == original_input_index_tensor_lshape[0],
@@ -135,10 +139,10 @@ Tensor ExecuteTosaGather::invoke(
     const auto W = original_input_index_tensor_lshape[1];
 
     // Check for early exit for empty tensors tensors
-    if (original_input_tensor_lshape == ttnn::Shape{}) {
+    if (original_input_tensor_lshape.rank() == 0) {
         return input_tensor;
     }
-    if (original_input_index_tensor_lshape == ttnn::Shape{}) {
+    if (original_input_index_tensor_lshape.rank() == 0) {
         return input_index_tensor;
     }
 
