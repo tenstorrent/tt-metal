@@ -11,8 +11,8 @@ namespace ttml::ops {
 struct NTKAwareScalingParams {
     uint32_t original_context_length = 0U;
     float scaling_factor = 0.0F;
-    float high_freq_factor;
-    float low_freq_factor;
+    float high_freq_factor = 0.0F;
+    float low_freq_factor = 0.0F;
 };
 
 struct RotaryEmbeddingParams {
