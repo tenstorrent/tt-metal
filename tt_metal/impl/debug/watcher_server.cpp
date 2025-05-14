@@ -284,7 +284,7 @@ void watcher_init(chip_id_t device_id) {
 
     // Initialize stack usage data to unset
     for (int idx = 0; idx < DebugNumUniqueRiscs; idx++) {
-        data->stack_usage.max_usage[idx] = watcher::DEBUG_SANITIZE_NOC_SENTINEL_OK_16;
+        data->stack_usage.cpu[idx].min_free = 0;
     }
 
     // Initialize debug ring buffer to a known init val, we'll check against this to see if any
