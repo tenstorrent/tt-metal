@@ -53,21 +53,8 @@ public:
 
     void close_device();
 
-    // DistributedContext& AutoContext::get_distributed_context() const {
-    //     if (!m_distributed_context) {
-    //         throw std::runtime_error("DistributedContext is not initialized.");
-    //     }
-    //     return *m_distributed_context;
-    // }
-
-    // void AutoContext::initialize_distributed_context(int argc, char** argv) {
-    //     if (m_distributed_context) {
-    //         throw std::runtime_error("MPIContext is already initialized.");
-    //     }
-    //     m_distributed_context = DistributedContext::create(argc, argv);
-    // }
-
     void initialize_distributed_context(int argc, char** argv);
+
     [[nodiscard]] DistributedContext& get_distributed_context() const;
 
 private:
