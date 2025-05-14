@@ -291,8 +291,8 @@ def dump_tokenizer(tokenizer_path):
     GPT2Tokenizer.from_pretrained("gpt2", cache_dir=cache_dir)
 
     output_dir = os.path.dirname(tokenizer_path)
-    if output_dir and not os.path.exists(output_dir):
-        os.makedirs(output_dir)
+    if output_dir:
+        os.makedirs(output_dir, exist_ok=True)
 
     # Find tokenizer.json in the cache directory
     tokenizer_json_path = None

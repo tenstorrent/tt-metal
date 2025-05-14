@@ -58,8 +58,8 @@ def tweak_and_dump_tokenizer(args):
         tokenizer_dict["model"]["merges"] = new_merges
 
     output_dir = os.path.dirname(args.dump_tokenizer_path)
-    if output_dir and not os.path.exists(output_dir):
-        os.makedirs(output_dir)
+    if output_dir:
+        os.makedirs(output_dir, exist_ok=True)
 
     tokenizer_path = args.dump_tokenizer_path
     with open(tokenizer_path, "w") as f:
@@ -171,17 +171,11 @@ def dump_model(args):
             "attention_norm/gamma/value/data": "input_layernorm.weight",
             "mlp_norm/gamma/value/data": "post_attention_layernorm.weight",
             "attention/q_linear/weight/value/data": "self_attn.q_proj.weight",
-            # "attention/q_linear/bias/value/data": None,
             "attention/kv_linear/weight/value/data": ["self_attn.k_proj.weight", "self_attn.v_proj.weight"],
-            # "attention/kv_linear/bias/value/data": None,
             "attention/out_linear/weight/value/data": "self_attn.o_proj.weight",
-            # "attention/out_linear/bias/value/data": None,
             "mlp/w1/weight/value/data": "mlp.gate_proj.weight",
-            # "mlp/w1/bias/value/data": None,
             "mlp/w2/weight/value/data": "mlp.down_proj.weight",
-            # "mlp/w2/bias/value/data": None,
             "mlp/w3/weight/value/data": "mlp.up_proj.weight",
-            # "mlp/w3/bias/value/data": None,
         }
 
         if rest in block_key_map:

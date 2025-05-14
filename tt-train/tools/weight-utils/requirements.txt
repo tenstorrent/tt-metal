@@ -1,5 +1,6 @@
 ipdb
+msgpack
 msgpack-numpy
 numpy
-torch
-transformers
+tokenizers==0.21.1
+transformers==4.51.3
