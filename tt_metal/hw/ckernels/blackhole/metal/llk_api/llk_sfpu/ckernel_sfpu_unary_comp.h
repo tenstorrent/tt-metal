@@ -34,9 +34,7 @@ inline void calculate_unary_ne(uint value) {
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
 inline void calculate_unary_eq(uint value) {
     // SFPU microcode
-    Converter c_value;
-    c_value.u = value;
-    vFloat s = c_value.f;
+    vFloat s = Converter::as_float(value);
 
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
@@ -54,9 +52,7 @@ inline void calculate_unary_eq(uint value) {
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
 inline void calculate_unary_gt(uint value) {
     // SFPU microcode
-    Converter c_value;
-    c_value.u = value;
-    vFloat s = c_value.f;
+    vFloat s = Converter::as_float(value);
 
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
@@ -74,9 +70,7 @@ inline void calculate_unary_gt(uint value) {
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
 inline void calculate_unary_lt(uint value) {
     // SFPU microcode
-    Converter c_value;
-    c_value.u = value;
-    vFloat s = c_value.f;
+    vFloat s = Converter::as_float(value);
 
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
