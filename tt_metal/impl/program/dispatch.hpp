@@ -133,7 +133,7 @@ void update_traced_program_dispatch_commands(
     ProgramBinaryStatus program_binary_status,
     std::pair<bool, int> unicast_go_signal_update = {false, -1});
 
-TraceNode create_trace_node(detail::ProgramImpl& program, IDevice* device);
+TraceNode create_trace_node(detail::ProgramImpl& program, IDevice* device, uint32_t num_workers);
 
 void write_program_command_sequence(
     const ProgramCommandSequence& program_command_sequence,

@@ -2185,10 +2185,12 @@ void write_program_command_sequence(
     }
 }
 
-TraceNode create_trace_node(ProgramImpl& program, IDevice* device) {
+TraceNode create_trace_node(ProgramImpl& program, IDevice* device, uint32_t num_workers) {
     std::vector<SubDeviceId> sub_device_ids{program.determine_sub_device_ids(device)};
     program.generate_trace_dispatch_commands(device);
     uint64_t command_hash = *device->get_active_sub_device_manager_id();
+    SubDeviceId sub_device_id = *sub_device_ids.begin();
+    uint32_t sub_device_index = *sub_device_id;
 
     // By using the traced command sequence, we know the RTA data source-of-truth isn't this command sequence (it's in a
     // regular cached program command sequence), so rta_updates includes all the RTAs.
@@ -2236,7 +2238,8 @@ TraceNode create_trace_node(ProgramImpl& program, IDevice* device) {
     return TraceNode{
         program.shared_from_this(),
         program.get_runtime_id(),
-        sub_device_ids[0],
+        sub_device_id,
+        num_workers,
         std::move(rta_data),
         std::move(all_cb_configs_payloads)};
 }

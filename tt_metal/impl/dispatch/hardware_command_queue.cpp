@@ -39,6 +39,7 @@
 #include "tt_metal/impl/trace/dispatch.hpp"
 #include <umd/device/tt_xy_pair.h>
 #include "data_collection.hpp"
+#include "simple_trace_allocator.hpp"
 
 namespace tt {
 namespace tt_metal {
@@ -427,6 +428,8 @@ void HWCommandQueue::enqueue_program(Program& program, bool blocking) {
     ZoneScopedN("HWCommandQueue_enqueue_program");
     std::vector<SubDeviceId> sub_device_ids = {program.determine_sub_device_ids(device_)};
     TT_FATAL(sub_device_ids.size() == 1, "Programs must be executed on a single sub-device");
+    auto sub_device_id = sub_device_ids[0];
+    auto sub_device_index = *sub_device_id;
     // Finalize Program: Compute relative offsets for data structures (semaphores, kernel binaries, etc) in L1
     program.finalize_offsets(device_);
 
@@ -450,7 +453,15 @@ void HWCommandQueue::enqueue_program(Program& program, bool blocking) {
     program.set_last_used_command_queue_for_testing(this);
 
     if (this->manager_.get_bypass_mode()) {
-        this->trace_nodes_.push_back(program_dispatch::create_trace_node(program.impl(), device_));
+        uint32_t num_workers = 0;
+
+        if (program.runs_on_noc_multicast_only_cores()) {
+            num_workers += device_->num_worker_cores(HalProgrammableCoreType::TENSIX, sub_device_id);
+        }
+        if (program.runs_on_noc_unicast_only_cores()) {
+            num_workers += device_->num_worker_cores(HalProgrammableCoreType::ACTIVE_ETH, sub_device_id);
+        }
+        this->trace_nodes_.push_back(program_dispatch::create_trace_node(program.impl(), device_, num_workers));
         return;
     }
 
@@ -467,8 +478,6 @@ void HWCommandQueue::enqueue_program(Program& program, bool blocking) {
         }
     }
 #endif
-    auto sub_device_id = sub_device_ids[0];
-    auto sub_device_index = *sub_device_id;
 
     // Snapshot of expected workers from previous programs, used for dispatch_wait cmd generation.
     uint32_t expected_workers_completed = this->expected_num_workers_completed_[sub_device_index];
@@ -713,66 +722,35 @@ void HWCommandQueue::record_begin(const uint32_t tid, const std::shared_ptr<Trac
     this->manager_.set_bypass_mode(true, true);  // start trace capture
 }
 
-// Allocate space for program binaries and other data in the worker config ring buffer.
-void HWCommandQueue::allocate_trace_programs() {
-    const auto& hal = MetalContext::instance().hal();
-    uint32_t expected_workers_completed = 0;
-    for (auto& node : this->trace_nodes_) {
-        auto& program = *node.program;
-        auto sub_device_id = node.sub_device_id;
-        auto sub_device_index = *sub_device_id;
-        uint32_t num_workers = 0;
-        if (program.runs_on_noc_multicast_only_cores()) {
-            num_workers += device_->num_worker_cores(HalProgrammableCoreType::TENSIX, sub_device_id);
-        }
-        if (program.runs_on_noc_unicast_only_cores()) {
-            num_workers += device_->num_worker_cores(HalProgrammableCoreType::ACTIVE_ETH, sub_device_id);
-        }
-        program_dispatch::ProgramDispatchMetadata dispatch_metadata;
-        // Reserve space for this program in the kernel config ring buffer
-        program_dispatch::reserve_space_in_kernel_config_buffer(
-            this->config_buffer_mgr_[sub_device_index],
-            program.get_program_config_sizes(),
-            program.get_program_binary_status(device_->id()),
-            num_workers,
-            expected_workers_completed,
-            dispatch_metadata);
-        uint32_t index = hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX);
-        ProgramConfig& program_config = program.get_program_config(index);
-
-        node.dispatch_metadata.binary_kernel_config_addrs = dispatch_metadata.kernel_config_addrs;
-        node.dispatch_metadata.nonbinary_kernel_config_addrs = dispatch_metadata.kernel_config_addrs;
-        node.dispatch_metadata.sync_count = dispatch_metadata.sync_count;
-        node.dispatch_metadata.stall_first = dispatch_metadata.stall_first;
-        node.dispatch_metadata.stall_before_program = dispatch_metadata.stall_before_program;
-
-        // Allocate non-binaries before binaries for tensix. Non-tensix doesn't use a ringbuffer for binaries, so its
-        // addresses don't need adjustment.
-        node.dispatch_metadata.binary_kernel_config_addrs[index].addr += program_config.kernel_text_offset;
-
-        expected_workers_completed += num_workers;
-    }
-}
-
 void HWCommandQueue::record_end() {
-    allocate_trace_programs();
+    const auto& hal = MetalContext::instance().hal();
+    uint32_t worker_ringbuffer_start =
+        hal.get_dev_addr(HalProgrammableCoreType::TENSIX, tt::tt_metal::HalL1MemAddrType::KERNEL_CONFIG);
+    uint32_t worker_ringbuffer_size = device_->allocator()->get_config().l1_unreserved_base - worker_ringbuffer_start;
+    SimpleTraceAllocator allocator{
+        worker_ringbuffer_start,
+        worker_ringbuffer_size,
+        hal.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::KERNEL_CONFIG),
+        hal.get_dev_size(HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::KERNEL_CONFIG)};
+    std::vector<TraceNode*> trace_node_ptrs;
+    trace_node_ptrs.reserve(this->trace_nodes_.size());
+    for (auto& node : this->trace_nodes_) {
+        trace_node_ptrs.push_back(&node);
+    }
+    allocator.allocate_trace_programs(trace_node_ptrs);
     for (auto& node : this->trace_nodes_) {
         auto sub_device_id = node.sub_device_id;
         auto& program = *node.program;
 
         // Snapshot of expected workers from previous programs, used for dispatch_wait cmd generation.
         uint32_t expected_workers_completed = this->trace_ctx_->descriptors[sub_device_id].num_completion_worker_cores;
-        // Compute the total number of workers this program uses
-        uint32_t num_workers = 0;
         if (program.runs_on_noc_multicast_only_cores()) {
             this->trace_ctx_->descriptors[sub_device_id].num_traced_programs_needing_go_signal_multicast++;
-            num_workers += device_->num_worker_cores(HalProgrammableCoreType::TENSIX, sub_device_id);
         }
         if (program.runs_on_noc_unicast_only_cores()) {
             this->trace_ctx_->descriptors[sub_device_id].num_traced_programs_needing_go_signal_unicast++;
-            num_workers += device_->num_worker_cores(HalProgrammableCoreType::ACTIVE_ETH, sub_device_id);
         }
-        this->trace_ctx_->descriptors[sub_device_id].num_completion_worker_cores += num_workers;
+        this->trace_ctx_->descriptors[sub_device_id].num_completion_worker_cores += node.num_workers;
 
         RecordProgramRun(program.get_id());
 
