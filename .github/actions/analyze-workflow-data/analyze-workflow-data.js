@@ -286,6 +286,33 @@ async function buildReport(grouped, github, context) {
 }
 
 /**
+ * Filters workflow runs by date range
+ * @param {Array<Object>} runs - Array of workflow runs
+ * @param {number} days - Number of days to look back
+ * @returns {Array<Object>} Filtered runs within the date range
+ */
+function filterRunsByDate(runs, days) {
+  const cutoffDate = new Date();
+  cutoffDate.setDate(cutoffDate.getDate() - days);
+
+  return runs.filter(run => {
+    const runDate = new Date(run.created_at);
+    return runDate >= cutoffDate;
+  });
+}
+
+/**
+ * Filters workflows based on configurations and tracks failed ones
+ * @param {Array<Object>} workflowConfigs - Array of workflow configurations
+ * @param {Map<string, Array<Object>>} workflowData - Map of workflow data
+ * @param {number} days - Number of days to look back
+ * @returns {Object} Object containing filtered workflows and failed workflow names
+ */
+async function filterWorkflows(workflowConfigs, workflowData, days) {
+  // ... rest of the code ...
+}
+
+/**
  * Main function to run the action
  */
 async function run() {
