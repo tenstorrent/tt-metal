@@ -328,8 +328,7 @@ void set_or_update_runtime_arguments(
                 auto b_shard_shape = b_shard_shape_generator(core);
                 b_num_tiles = b_shard_shape[0] * b_shard_shape[1];
             }
-            // for the specific case of subtile no_bcast type, writer no longer needs b's information
-            // for other cases, it remains needing b's information for now.
+            // TODO: after transition, remove b from writer completely
             std::array writer_runtime_args = {
                 b->buffer()->address(),
                 c.buffer()->address(),
@@ -635,46 +634,6 @@ BinaryNgDeviceOperation::ProgramFactory::cached_program_t BinaryNgDeviceOperatio
         kernel_config.reader_kernel = CMAKE_UNIQUE_NAMESPACE::get_reader_kernel_name_and_defines(
             operation_attributes.subtile_broadcast_type, reader_defines);
         writer_kernel = KernelName::WriterNoBcastSplit;
-        // if (operation_attributes.subtile_broadcast_type == SubtileBroadcastType::NONE) {
-        //     kernel_config.reader_kernel = KernelName::ReaderNoBcastSplit;
-        //     writer_kernel = KernelName::WriterNoBcastSplit;
-        // } else if (
-        //     operation_attributes.subtile_broadcast_type == SubtileBroadcastType::ROW_A ||
-        //     operation_attributes.subtile_broadcast_type == SubtileBroadcastType::ROW_B) {
-        //     reader_defines["SRC_BCAST"] =
-        //         operation_attributes.subtile_broadcast_type == SubtileBroadcastType::ROW_A ? "1" : "0";
-        //     reader_defines["SRC_BCAST_B"] =
-        //         operation_attributes.subtile_broadcast_type == SubtileBroadcastType::ROW_B ? "1" : "0";
-        //     kernel_config.reader_kernel = KernelName::ReaderRowBcastSplit;
-        //     writer_kernel = KernelName::WriterNoBcastSplit;
-        // } else if (
-        //     operation_attributes.subtile_broadcast_type == SubtileBroadcastType::COL_A ||
-        //     operation_attributes.subtile_broadcast_type == SubtileBroadcastType::COL_B) {
-        //     reader_defines["SRC_BCAST"] =
-        //         operation_attributes.subtile_broadcast_type == SubtileBroadcastType::COL_A ? "1" : "0";
-        //     reader_defines["SRC_BCAST_B"] =
-        //         operation_attributes.subtile_broadcast_type == SubtileBroadcastType::COL_B ? "1" : "0";
-        //     kernel_config.reader_kernel = KernelName::ReaderColBcastSplit;
-        //     writer_kernel = KernelName::WriterNoBcastSplit;
-        // } else if (
-        //     operation_attributes.subtile_broadcast_type == SubtileBroadcastType::ROW_B_COL_A ||
-        //     operation_attributes.subtile_broadcast_type == SubtileBroadcastType::ROW_A_COL_B) {
-        //     reader_defines["SRC_BCAST_COL"] =
-        //         operation_attributes.subtile_broadcast_type == SubtileBroadcastType::ROW_B_COL_A ? "1" : "0";
-        //     reader_defines["SRC_BCAST_ROW_B"] =
-        //         operation_attributes.subtile_broadcast_type == SubtileBroadcastType::ROW_B_COL_A ? "1" : "0";
-        //     kernel_config.reader_kernel = KernelName::ReaderRowBColABcastSplit;
-        //     writer_kernel = KernelName::WriterNoBcastSplit;
-        // } else if (
-        //     operation_attributes.subtile_broadcast_type == SubtileBroadcastType::SCALAR_A ||
-        //     operation_attributes.subtile_broadcast_type == SubtileBroadcastType::SCALAR_B) {
-        //     reader_defines["SRC_BCAST"] =
-        //         operation_attributes.subtile_broadcast_type == SubtileBroadcastType::SCALAR_A ? "1" : "0";
-        //     reader_defines["SRC_BCAST_B"] =
-        //         operation_attributes.subtile_broadcast_type == SubtileBroadcastType::SCALAR_B ? "1" : "0";
-        //     kernel_config.reader_kernel = KernelName::ReaderScalarBcastSplit;
-        //     writer_kernel = KernelName::WriterNoBcastSplit;
-        // }
     }
 
     auto writer_kernel_id = tt_metal::CreateKernel(
