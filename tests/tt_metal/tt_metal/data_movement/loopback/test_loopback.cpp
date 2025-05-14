@@ -16,7 +16,7 @@ using namespace tt::test_utils;
 
 namespace unit_tests::dm::core_loopback {
 
-constexpr uint32_t START_ID = 15;
+constexpr uint32_t START_ID = 16;
 
 // Test config, i.e. test parameters
 struct LoopbackConfig {

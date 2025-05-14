@@ -3,6 +3,7 @@
 This test suite addresses the functionality and performance (i.e. bandwidth) of various data movement scenarios.
 
 ## Tests in the Test Suite
+
 | Name                 | ID(s) | Description                                                                          |
 | ----------           | ----- | ----------------------------------------------------                                 |
 | DRAM Unary           | 0-3   | Transactions between DRAM and a single Tensix core.                                  |
