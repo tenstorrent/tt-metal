@@ -120,22 +120,6 @@ def test_llama_decoder_same(
         ),
     )
 
-    core_grid_ln, grid_offset = (8, 2), ttnn.CoreCoord(1, 0)
-    core_range = ttnn.CoreRange(
-        grid_offset, ttnn.CoreCoord(core_grid_ln[1] + grid_offset.x - 1, core_grid_ln[0] + grid_offset.y - 1)
-    )
-    num_cores_ln = core_grid_ln[0] * core_grid_ln[1]
-    residual_memory_config = ttnn.create_sharded_memory_config(
-        shape=(1, 1, 32, 2048 // num_cores_ln),
-        core_grid=ttnn.CoreRangeSet(
-            {
-                core_range,
-            }
-        ),
-        strategy=ttnn.ShardStrategy.WIDTH,
-        use_height_and_width_as_shard_shape=True,
-    )
-
     # input = torch.randn(1, 32, 4096)
     pt_decode_input = (torch.rand(batch_size, seqlen, model_args.dim) * 2) - 1
     tt_decode_input = pt_decode_input.clone()
@@ -144,7 +128,6 @@ def test_llama_decoder_same(
         tt_decode_input,
         model_args.model_config["DECODE_RESIDUAL_MEMCFG"],
     )
-    print(decode_input)
 
     # Get cos/sin matrices for the current position of each user
     rot_mats = rope_setup.get_rot_mats(current_pos)
@@ -165,14 +148,7 @@ def test_llama_decoder_same(
         mesh_device.set_sub_device_stall_group([prefetcher_setup.worker_sub_device_id])
 
         # Run TT model
-        res = ttnn.as_tensor(
-            torch.zeros((1, 1, 32, 2048)),
-            device=mesh_device,
-            layout=ttnn.TILE_LAYOUT,
-            dtype=ttnn.bfloat16,
-            memory_config=residual_memory_config,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-        )
+        res = None
         tt_out, res = tt_model(
             decode_input,
             res,

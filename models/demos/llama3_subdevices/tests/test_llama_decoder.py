@@ -199,7 +199,6 @@ def test_llama_decoder_inference(
         decode_input = model_args.prepare_residual_tensor_decode(
             tt_decode_input,
             model_args.model_config["DECODE_RESIDUAL_MEMCFG"],
-            input_dtype=ttnn.bfloat16,
         )
 
         # Get cos/sin matrices for the current position of each user
