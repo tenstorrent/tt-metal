@@ -53,8 +53,6 @@ void MAIN {
     constexpr uint32_t total_tiles = get_compile_time_arg_val(4);
     constexpr uint32_t total_sticks_per_block = get_compile_time_arg_val(5);
 
-    cb_push_back(cb_in, total_sticks_per_block);
-
     tilize_init(cb_in, total_tiles, cb_tiled_in);
     tilize(cb_in, total_tiles, total_sticks_per_block, cb_tiled_in);
     tilize_uninit(cb_in, cb_tiled_in);

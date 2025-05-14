@@ -110,39 +110,8 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_convert_to_hwc(const Te
         input_core_grid, std::nullopt, a.shard_spec()->orientation == tt::tt_metal::ShardOrientation::ROW_MAJOR);
 
     tt::log_debug(tt::LogType::LogOp, "Running op with C={}, HW={}, shard_shape={}", C, HW, a.shard_spec()->shape);
-
     TT_FATAL(input_shard_height <= TILE_HEIGHT, "Shard height must be 32 or smaller");
     TT_FATAL(input_shard_width % TILE_WIDTH == 0, "Shard width must be multiple of tile width");
-
-    const uint32_t total_tiles_per_core = tt::div_up(input_shard_width, TILE_HEIGHT);
-
-    if (is_input_in_dram) {
-        const auto dram_input_cores = corerange_to_cores(
-            a.shard_spec()->grid,
-            std::nullopt,
-            a.shard_spec()->orientation == tt::tt_metal::ShardOrientation::ROW_MAJOR);
-        const auto remote_core_type = a.buffer()->core_type();
-        const auto remote_address = a.buffer()->address();
-        const auto remote_buffer_type = a.buffer()->buffer_type();
-        auto [runtime_args_for_each_core, total_num_sticks, local_stride_bytes, remote_stride_bytes] =
-            compute_width_sharded_reshard_runtime_args(
-                {input_shard_height, input_shard_width},
-                a.shard_spec()->shape,
-                dram_input_cores,
-                input_cores,
-                remote_buffer_type,
-                remote_core_type,
-                a.device(),
-                2);
-        tt::log_info(
-            "runtime args(size={}) = {}, total_num_sticks={}, local_stride={}, remote_stride={}",
-            runtime_args_for_each_core.size(),
-            runtime_args_for_each_core[0],
-            total_num_sticks,
-            local_stride_bytes,
-            remote_stride_bytes);
-        tt::log_debug(tt::LogType::LogOp, "Processing {} tiles per core", total_tiles_per_core);
-    }
 
     const auto create_circular_buffer = [&program, &input_core_grid](
                                             uint32_t index,
@@ -150,12 +119,6 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_convert_to_hwc(const Te
                                             uint32_t page_size,
                                             const tt::DataFormat& format,
                                             tt::tt_metal::Buffer* buffer = nullptr) -> tt::tt_metal::CBHandle {
-        tt::log_debug(
-            tt::LogType::LogOp,
-            "Creating CB at index {} with total size {} B and page size {} B",
-            index,
-            total_size,
-            page_size);
         auto config = tt::tt_metal::CircularBufferConfig(total_size, {{index, format}}).set_page_size(index, page_size);
         if (buffer != nullptr) {
             config = config.set_globally_allocated_address(*buffer);
@@ -199,12 +162,41 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_convert_to_hwc(const Te
         create_circular_buffer(cb_out_id, cb_out_total_size, cb_out_page_size, output_format, output.buffer());
 
     // Divide work between data movement cores
+    const uint32_t total_tiles_per_core = tt::div_up(input_shard_width, TILE_HEIGHT);
     const uint32_t total_tiles_writer0 = tt::div_up(total_tiles_per_core, 2);
     const uint32_t total_tiles_writer1 = total_tiles_per_core - total_tiles_writer0;
     uint32_t output_stride_sticks = TILE_WIDTH;  // needed to stride output address when doing split writers
 
+    const auto dram_input_cores = corerange_to_cores(
+        a.shard_spec()->grid, std::nullopt, a.shard_spec()->orientation == tt::tt_metal::ShardOrientation::ROW_MAJOR);
+    const auto remote_core_type = a.buffer()->core_type();
+    const auto remote_address = a.buffer()->address();
+    const auto remote_buffer_type = a.buffer()->buffer_type();
+    auto [runtime_args_for_each_core, total_num_sticks, local_stride_bytes, remote_stride_bytes] =
+        compute_width_sharded_reshard_runtime_args(
+            {input_shard_height, input_shard_width},  // local_shard_shape
+            a.shard_spec()->shape,                    // remote_shard_shape
+            input_cores,
+            dram_input_cores,
+            remote_buffer_type,
+            remote_core_type,
+            a.device(),
+            2);
+    tt::log_info("total num sticks? = {}", total_num_sticks);
+    uint32_t dram_read_stride_bytes = remote_stride_bytes;
+    uint32_t dram_write_stride_bytes = local_stride_bytes;
+
     std::vector<uint32_t> writer_compile_time_args0 = {
-        cb_in_transpose_id0, cb_out_id, C, input_shard_width, total_tiles_writer0, output_stride_sticks, 0};
+        cb_in_transpose_id0,
+        cb_out_id,
+        C,
+        input_shard_width,
+        total_tiles_writer0,
+        output_stride_sticks,
+        0,
+        dram_write_stride_bytes,
+        dram_read_stride_bytes};
+
     std::vector<uint32_t> writer_compile_time_args1 = {
         cb_in_transpose_id1,
         cb_out_id,
@@ -212,7 +204,10 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_convert_to_hwc(const Te
         input_shard_width,
         total_tiles_writer1,
         output_stride_sticks,
-        output_stride_sticks};
+        output_stride_sticks,
+        dram_write_stride_bytes,
+        dram_read_stride_bytes};
+
     std::vector<uint32_t> compute_compile_time_args = {
         cb_in_id, cb_in_tiled_id, cb_in_transpose_id0, cb_in_transpose_id1, total_tiles_per_core, input_shard_height};
 
@@ -238,15 +233,58 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_convert_to_hwc(const Te
             .math_approx_mode = false,
             .compile_args = compute_compile_time_args});
 
-    auto set_runtime_args = [cb_in, cb_out, is_input_in_dram](
+    auto set_runtime_args = [cb_in,
+                             cb_out,
+                             is_input_in_dram,
+                             input_cores,
+                             C,
+                             runtime_args_for_each_core,
+                             writer_kernel_id0,
+                             writer_kernel_id1,
+                             remote_address,
+                             dram_read_stride_bytes,
+                             dram_write_stride_bytes](
                                 tt::tt_metal::Program& program, const Tensor& a, const Tensor& output) {
-        if (!is_input_in_dram) {
+        if (is_input_in_dram) {
+            // Split work across each kernel along tensor height since this is the best way to split work evenly
+            const uint32_t total_num_sticks_kernel_0 = C / 2;
+            const uint32_t total_num_sticks_kernel_1 = C - total_num_sticks_kernel_0;
+            tt::log_info("input cores = {}", input_cores);
+            for (uint32_t core_idx = 0; core_idx < input_cores.size(); core_idx++) {
+                const auto& args_for_all_segments = runtime_args_for_each_core[core_idx];
+                std::vector<uint32_t> runtime_args_0 = {remote_address, args_for_all_segments.size()};
+                std::vector<uint32_t> runtime_args_1 = {remote_address, args_for_all_segments.size()};
+                for (const auto& args : args_for_all_segments) {
+                    const std::vector<uint32_t> segment_kernel_0 = {
+                        args.write_size, args.read_offset, args.bank_id, args.write_offset};
+                    runtime_args_0.insert(runtime_args_0.end(), segment_kernel_0.begin(), segment_kernel_0.end());
+
+                    // Adjust read and write offsets to the correct stick address because we are splitting work across 2
+                    // kernels
+                    const uint32_t adjusted_read_offset =
+                        args.read_offset + total_num_sticks_kernel_0 * dram_write_stride_bytes;
+                    const uint32_t adjusted_write_offset =
+                        args.write_offset + total_num_sticks_kernel_0 * dram_read_stride_bytes;
+
+                    const std::vector<uint32_t> segment_kernel_1 = {
+                        args.write_size, adjusted_read_offset, args.bank_id, adjusted_write_offset};
+                    runtime_args_1.insert(runtime_args_1.end(), segment_kernel_1.begin(), segment_kernel_1.end());
+                }
+                tt::log_info("set runtime args... {} {}", runtime_args_0, runtime_args_1);
+                SetRuntimeArgs(program, writer_kernel_id0, input_cores[core_idx], runtime_args_0);
+                SetRuntimeArgs(program, writer_kernel_id1, input_cores[core_idx], runtime_args_1);
+            }
+        } else {
             tt::tt_metal::Buffer* a_buffer = a.buffer();
             UpdateDynamicCircularBufferAddress(program, cb_in, *a_buffer);
         }
         tt::tt_metal::Buffer* output_buffer = output.buffer();
+        UpdateDynamicCircularBufferAddress(program, cb_out, *output_buffer);
     };
+    tt::log_info("setting runtime arg");
     set_runtime_args(program, a, output);
+
+    tt::log_info("done setting runtime arg");
 
     auto override_runtime_arguments_callback = [set_runtime_args](
                                                    const void* operation,
@@ -259,6 +297,6 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_convert_to_hwc(const Te
     };
 
     return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_arguments_callback};
-}  // namespace ttnn::operations::experimental::cnn::detail
+}
 
 }  // namespace ttnn::operations::experimental::cnn::detail
