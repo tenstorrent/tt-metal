@@ -721,35 +721,61 @@ bool DevicePool::close_devices(const std::vector<IDevice*>& devices, bool skip_s
     FabricConfig fabric_config = tt::tt_metal::MetalContext::instance().get_cluster().get_fabric_config();
     if (tt_fabric::is_tt_fabric_config(fabric_config)) {
         auto control_plane = tt::tt_metal::MetalContext::instance().get_cluster().get_control_plane();
-        std::vector<uint32_t> signal(1, tt::tt_fabric::TerminationSignal::IMMEDIATELY_TERMINATE);
-        static constexpr std::size_t edm_buffer_size =
-            tt::tt_fabric::FabricEriscDatamoverBuilder::default_packet_payload_size_bytes +
-            sizeof(tt::tt_fabric::PacketHeader);
+        std::vector<uint32_t> terminate_signal(1, tt::tt_fabric::TerminationSignal::IMMEDIATELY_TERMINATE);
         const auto edm_config = tt_fabric::get_tt_fabric_config();
 
-        auto fabric_router_sync_sem_addr = edm_config.termination_signal_address;
-        for (const auto& dev : this->get_all_active_devices()) {
-            if (dev->is_mmio_capable() &&
-                (tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type() == tt::ClusterType::TG)) {
-                // 1d fabric is not launched on TG gateways
-                continue;
-            }
-            auto [mesh_id, chip_id] = control_plane->get_mesh_chip_id_from_physical_chip_id(dev->id());
+        // Iterate over all the devices and run the signal processing function for each master fabric router
+        auto process_signals_for_master_routers =
+            [this, control_plane](const std::function<void(IDevice*, const CoreCoord&)>& signal_handler_func) {
+                for (const auto& dev : this->get_all_active_devices()) {
+                    if (dev->is_mmio_capable() &&
+                        (tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type() ==
+                         tt::ClusterType::TG)) {
+                        // 1d fabric is not launched on TG gateways
+                        continue;
+                    }
+                    auto [mesh_id, chip_id] = control_plane->get_mesh_chip_id_from_physical_chip_id(dev->id());
 
-            auto router_chans_and_direction = control_plane->get_active_fabric_eth_channels(mesh_id, chip_id);
-            if (router_chans_and_direction.empty()) {
-                continue;
-            }
+                    auto router_chans_and_direction = control_plane->get_active_fabric_eth_channels(mesh_id, chip_id);
+                    if (router_chans_and_direction.empty()) {
+                        continue;
+                    }
 
-            tt_fabric::chan_id_t fabric_master_router_chan = router_chans_and_direction.begin()->first;
+                    tt_fabric::chan_id_t fabric_master_router_chan = router_chans_and_direction.begin()->first;
 
-            CoreCoord virtual_eth_core =
-                tt::tt_metal::MetalContext::instance().get_cluster().get_virtual_eth_core_from_channel(
-                    dev->id(), fabric_master_router_chan);
-            auto fabric_master_router_core = dev->logical_core_from_ethernet_core(virtual_eth_core);
+                    CoreCoord virtual_eth_core =
+                        tt::tt_metal::MetalContext::instance().get_cluster().get_virtual_eth_core_from_channel(
+                            dev->id(), fabric_master_router_chan);
+                    auto fabric_master_router_core = dev->logical_core_from_ethernet_core(virtual_eth_core);
+                    signal_handler_func(dev, fabric_master_router_core);
+                }
+            };
+
+        auto send_termination_signal = [&terminate_signal,
+                                        fabric_router_sync_sem_addr = edm_config.termination_signal_address](
+                                           IDevice* dev, const CoreCoord& fabric_master_router_core) {
             tt_metal::detail::WriteToDeviceL1(
-                dev, fabric_master_router_core, fabric_router_sync_sem_addr, signal, CoreType::ETH);
-        }
+                dev, fabric_master_router_core, fabric_router_sync_sem_addr, terminate_signal, CoreType::ETH);
+        };
+
+        auto poll_for_termination_completion = [edm_status_addr = edm_config.edm_status_address](
+                                                   IDevice* dev, const CoreCoord& fabric_master_router_core) {
+            std::vector<uint32_t> termination_signal(1, tt::tt_fabric::EDMStatus::STARTED);
+            while (termination_signal[0] != tt::tt_fabric::EDMStatus::TERMINATED) {
+                tt_metal::detail::ReadFromDeviceL1(
+                    dev,
+                    fabric_master_router_core,
+                    edm_status_addr,
+                    sizeof(uint32_t),
+                    termination_signal,
+                    CoreType::ETH);
+            }
+        };
+        // send the terminate signals to all the master routers
+        process_signals_for_master_routers(send_termination_signal);
+        // wait for the termination signals to processed
+        process_signals_for_master_routers(poll_for_termination_completion);
+
     } else if (tt_fabric::is_2d_fabric_config(fabric_config)) {
         auto control_plane = tt::tt_metal::MetalContext::instance().get_cluster().get_control_plane();
         std::vector<uint32_t> master_router_terminate(1, 0);
