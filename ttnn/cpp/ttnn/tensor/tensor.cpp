@@ -13,7 +13,7 @@
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/buffer_types.hpp>
 #include <tt_stl/overloaded.hpp>
-#include "storage.hpp"
+#include "ttnn/tensor/storage.hpp"
 
 #include "tt-metalium/mesh_device_view.hpp"
 #include "ttnn/distributed/distributed_tensor_config.hpp"

@@ -2,9 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "graph_processor.hpp"
-#include "graph_argument_serializer.hpp"
-#include "graph_consts.hpp"
+#include "ttnn/graph/graph_processor.hpp"
+#include "ttnn/graph/graph_argument_serializer.hpp"
+#include "ttnn/graph/graph_consts.hpp"
 #include "ttnn/types.hpp"
 #include "ttnn/core.hpp"
 #include "ttnn/graph/graph_consts.hpp"
