@@ -32,13 +32,13 @@
 #include <tt-metalium/multi_producer_single_consumer_queue.hpp>
 #include <tt-metalium/sub_device_types.hpp>
 #include <tt-metalium/vector_aligned.hpp>
-#include <tt-metalium/worker_config_buffer.hpp>
 #include <umd/device/tt_core_coordinates.h>
 
 namespace tt {
 namespace tt_metal {
 class IDevice;
 class SystemMemoryManager;
+class WorkerConfigBufferMgr;
 namespace distributed {
 class MeshDevice;
 class MeshWorkload;

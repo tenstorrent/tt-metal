@@ -11,6 +11,7 @@
 
 #include "dispatch/dispatch_settings.hpp"
 #include "dispatch/launch_message_ring_buffer_state.hpp"
+#include "dispatch/worker_config_buffer.hpp"
 
 namespace tt::tt_metal::distributed {
 
