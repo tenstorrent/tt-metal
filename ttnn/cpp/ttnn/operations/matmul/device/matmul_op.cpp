@@ -1637,6 +1637,10 @@ void Matmul::validate(
             (this->output_dtype.value() == DataType::BFLOAT16) || (this->output_dtype.value() == DataType::FLOAT32),
             "Unsupported data type: {}",
             this->output_dtype.value());
+        TT_FATAL(
+            std::holds_alternative<MatmulMultiCoreReuseMultiCast1DProgramConfig>(chosen_program_config),
+            "Untilize out is not supported for this program config: {}",
+            typeid(chosen_program_config).name());
     }
 
     std::visit(
