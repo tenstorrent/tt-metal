@@ -319,7 +319,7 @@ def parse_optimizations(string):
     return apply_settings
 
 
-def parse_decoder_json(json_file_path):
+def parse_decoder_json(json_file_path, default_optimization=ModelOptimizations.performance):
     """
     Reads a JSON file and returns a DecodersPrecision instance.
     """
@@ -338,7 +338,8 @@ def parse_decoder_json(json_file_path):
             raise ValueError("Invalid JSON format: Missing 'decoders' key")
 
         num_decoders = max(int(decoder_id) for decoder_id in config_data["decoders"].keys()) + 1
-        decoders_precision = DecodersPrecision(num_decoders, "model")
+        decoder_conf = default_optimization(model_name)
+        decoders_precision = DecodersPrecision(num_decoders, "model", decoder_conf)
 
         for decoder_id, settings in config_data["decoders"].items():
             decoder_id = int(decoder_id)
