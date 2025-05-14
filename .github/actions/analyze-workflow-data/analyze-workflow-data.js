@@ -141,6 +141,12 @@ async function generateSummaryBox(grouped, github, context) {
     const lastMainRun = mainBranchRuns[0];
     const lastMainPassing = lastMainRun?.conclusion === 'success' ? '✅' : '❌';
     const eventTypes = [...new Set(runs.map(r => r.event))].join(', ');
+
+    // Skip workflows that only have workflow_dispatch as their event type
+    if (eventTypes === 'workflow_dispatch') {
+      continue;
+    }
+
     const workflowFile = runs[0]?.path;
     const workflowLink = workflowFile
       ? `https://github.com/${context.repo.owner}/${context.repo.repo}/actions/workflows/${workflowFile}?query=branch%3Amain`
