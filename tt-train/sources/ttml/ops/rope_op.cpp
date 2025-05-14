@@ -96,11 +96,10 @@ E apply_ntk_aware_scaling(const E& freqs, const NTKAwareScalingParams& scaling_p
 
     // if we're between the low and high freqs, use the smoothly interpolated mid-freqs,
     // otherwise use low_freqs for the low freq wavelengths and high_freqs otherwise.
-    auto ret = xt::where(
+    return xt::where(
         (wavelengths < low_freq_wavelength) && (wavelengths > high_freq_wavelength),
         mid_freqs,
         xt::where(wavelengths > low_freq_wavelength, low_freqs, high_freqs));
-    return ret;
 }
 
 // trans_mat, sin_cache, cos_cache are all precomputed and stored somewhere in
