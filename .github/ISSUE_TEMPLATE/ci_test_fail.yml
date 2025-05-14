@@ -78,10 +78,8 @@ body:
       required: true
 
   - type: textarea
-    id: failure_snippet
+    id: info
     attributes:
       label: "Additional info"
       description: "Any additional info"
       render: shell
-    validations:
-      required: false
