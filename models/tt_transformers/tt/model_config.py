@@ -358,7 +358,6 @@ def parse_decoder_json(json_file_path, default_optimization=ModelOptimizations.p
             custom_opt = ModelOptimizations({"TensorPrecision": tensor_precision, "OpFidelity": op_fidelity})
             decoders_precision.set_decoder_conf(decoder_id, custom_opt)
 
-        breakpoint()
         return decoders_precision
 
     except Exception as e:
