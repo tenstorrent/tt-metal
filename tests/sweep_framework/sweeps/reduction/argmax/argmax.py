@@ -5,10 +5,11 @@
 from typing import Optional, Tuple
 from functools import partial
 
+import pytest
 import torch
 import random
 import ttnn
-from tests.sweep_framework.sweep_utils.utils import gen_shapes, sanitize_shape_rm
+from tests.sweep_framework.sweep_utils.utils import gen_shapes, sanitize_shape_rm, gen_pytest_parametrize_args
 from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
 
 from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
@@ -93,11 +94,7 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
     return False, None
 
 
-# This is the run instructions for the test, defined by the developer.
-# The run function must take the above-defined parameters as inputs.
-# The runner will call this run function with each test vector, and the returned results from this function will be stored.
-# If you defined a mesh_device_fixture above, the object you yielded will be passed into this function as 'device'. Otherwise, it will be the default ttnn device opened by the infra.
-def run(
+def run_argmax(
     input_shape,
     dim,
     keepdim,
@@ -110,9 +107,6 @@ def run(
 ) -> list:
     data_seed = random.randint(0, 20000000)
     torch.manual_seed(data_seed)
-
-    if input_a_dtype == ttnn.float32 and ttnn.device.is_grayskull(device):
-        return [(False, "Dest Fp32 mode is not supported for arch grayskull"), 0]
 
     if input_layout == ttnn.ROW_MAJOR_LAYOUT:
         input_shape = sanitize_shape_rm(input_shape)
@@ -133,12 +127,74 @@ def run(
     )
 
     start_time = start_measuring_time()
-    output_tensor = ttnn.argmax(input_tensor_a, dim=dim, memory_config=output_memory_config)
+    output_tensor = ttnn.argmax(input_tensor_a, dim=dim, keepdim=keepdim, memory_config=output_memory_config)
     e2e_perf = stop_measuring_time(start_time)
 
-    if dim:
-        output_tensor = ttnn.to_torch(output_tensor).squeeze(dim=dim - 1)
-    else:
-        ouptut_tensor = ttnn.to_torch(output_tensor).squeeze()
+    output_tensor = ttnn.to_torch(output_tensor)
 
-    return [check_with_pcc(torch_output_tensor, output_tensor, 0.999), e2e_perf]
+    result, msg = check_with_pcc(torch_output_tensor, output_tensor, 0.999)
+    return result, msg, e2e_perf
+
+
+# This is the run instructions for the test, defined by the developer.
+# The run function must take the above-defined parameters as inputs.
+# The runner will call this run function with each test vector, and the returned results from this function will be stored.
+# If you defined a mesh_device_fixture above, the object you yielded will be passed into this function as 'device'. Otherwise, it will be the default ttnn device opened by the infra.
+def run(
+    input_shape,
+    dim,
+    keepdim,
+    input_a_dtype,
+    input_layout,
+    input_a_memory_config,
+    output_memory_config,
+    *,
+    device,
+) -> list:
+    return run_argmax(
+        input_shape,
+        dim,
+        keepdim,
+        input_a_dtype,
+        input_layout,
+        input_a_memory_config,
+        output_memory_config,
+        device=device,
+    )
+
+
+@pytest.mark.parametrize(**gen_pytest_parametrize_args(parameters, invalidate_vector))
+def test_argmax(
+    device,
+    input_shape,
+    dim,
+    keepdim,
+    input_a_dtype,
+    input_layout,
+    input_a_memory_config,
+    output_memory_config,
+):
+    test_vector = {
+        "input_shape": input_shape,
+        "dim": dim,
+        "keepdim": keepdim,
+        "input_a_dtype": input_a_dtype,
+        "input_layout": input_layout,
+        "input_a_memory_config": input_a_memory_config,
+        "output_memory_config": output_memory_config,
+    }
+    result, reason = invalidate_vector(test_vector)
+    if result:
+        pytest.skip(reason)
+    result, msg, _perf = run_argmax(
+        input_shape,
+        dim,
+        keepdim,
+        input_a_dtype,
+        input_layout,
+        input_a_memory_config,
+        output_memory_config,
+        device=device,
+    )
+    if not result:
+        assert False, msg
