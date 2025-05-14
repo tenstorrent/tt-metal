@@ -314,7 +314,7 @@ ProgramConfig& MeshWorkloadImpl::get_program_config(uint32_t index) {
     TT_FATAL(
         programs_.size() and is_finalized(),
         "Program Configs can only be queried if a MeshWorkload is populated and finalized.");
-    return programs_.begin()->second.get_program_config(index);
+    return programs_.begin()->second.impl().get_program_config(index);
 }
 
 uint32_t MeshWorkloadImpl::get_sem_base_addr(
