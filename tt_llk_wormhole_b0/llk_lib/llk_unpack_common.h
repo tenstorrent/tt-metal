@@ -20,6 +20,20 @@
 using namespace ckernel;
 using namespace ckernel::unpacker;
 
+// If `x` is the result of loading from memory, placing `consume_discard(x)` somewhere
+// will ensure that code after `consume_discard(x)` doesn't start until the load is complete.
+#define consume_discard(x) __asm volatile("andi x0, %0, 0" : : "r"((x)) : "memory")
+
+// This function stores a value to memory, and then immediately reads it back.
+// The load result will not be available until the store has completed.
+// This will make sure any subsequent instruction will see the store as complete.
+static inline __attribute__((always_inline)) uint32_t store_then_load(volatile uint32_t *addr, uint32_t to_store)
+{
+    uint32_t result;
+    __asm volatile("sw %2, %1; lw %0, %1" : "=r"(result) : "m"(*addr), "r"(to_store));
+    return result;
+}
+
 void _llk_zero_buffer_(const std::uint32_t base_address, const std::uint32_t size)
 {
     TT_SETDMAREG(0, 0, 0, LO_16(p_gpr_unpack::OPERAND_OFFSET_ADDR));
@@ -39,16 +53,25 @@ inline void _llk_unpack_get_tile_(std::uint32_t address, std::uint32_t *p_tile)
 {
     std::uint32_t byte_address = (address) << 4;
 
-    if constexpr (mail2math)
+    if constexpr (mail2math || mail2pack)
     {
-        semaphore_post(semaphore::UNPACK_OPERAND_SYNC);
-        mailbox_write(ThreadId::MathThreadId, byte_address);
-    }
+        if constexpr (mail2math && mail2pack)
+        {
+            semaphore_post(semaphore::UNPACK_OPERAND_SYNC);
+        }
 
-    if constexpr (mail2pack)
-    {
-        semaphore_post(semaphore::UNPACK_OPERAND_SYNC);
-        mailbox_write(ThreadId::PackThreadId, byte_address);
+        uint32_t sem_tmp = store_then_load(&pc_buf_base[PC_BUF_SEMAPHORE_BASE + semaphore::UNPACK_OPERAND_SYNC], 0);
+        consume_discard(sem_tmp);
+
+        if constexpr (mail2math)
+        {
+            mailbox_write(ThreadId::MathThreadId, byte_address);
+        }
+
+        if constexpr (mail2pack)
+        {
+            mailbox_write(ThreadId::PackThreadId, byte_address);
+        }
     }
 
     *p_tile = byte_address;
