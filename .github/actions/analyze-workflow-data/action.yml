@@ -3,7 +3,7 @@ description: 'Analyzes cached workflow run data and generates a report'
 
 inputs:
   cache-path:
-    description: 'Path to the cached workflow data file. This file should contain the workflow run data in JSON format.'
+    description: 'Path to the cached workflow data file'
     required: true
   GITHUB_TOKEN:
     description: 'GitHub token for API access. Used to fetch PR information and workflow details.'
@@ -21,6 +21,10 @@ inputs:
         {"display": "(TG) prefix", "wkflw_prefix": "(TG)"}
       ]
     required: true
+  days:
+    description: 'Number of days to look back for workflow data'
+    required: false
+    default: '15'
 
 outputs:
   failed_workflows:
