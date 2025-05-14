@@ -394,8 +394,8 @@ void matmul_blocks(
     cb_push_back(out_cb, output_num_tiles);
 }
 
-template <uint32_t in0_cb, uint32_t in1_cb, uint32_t M, uint32_t K>
-void matmul_reduce(const uint32_t& out_cb) {
+template <uint32_t M>
+void matmul_reduce(uint32_t in1_cb, const uint32_t& out_cb) {
     DeviceZoneScopedN("MATMUL_REDUCE");
     // precondition: in0_cb has M*K produced
     // preconditino: in1_cb has K*N produced
@@ -409,27 +409,6 @@ void matmul_reduce(const uint32_t& out_cb) {
     constexpr uint32_t subblock_h = STATS_GRANULARITY;
     constexpr uint32_t in0_num_subblocks = M >> LOG2_STATS_GRANULARITY;
 
-    // /**
-    //  * Use DST accumulation to add tiles together to get an Mx1 output.
-    //  */
-    // add_tiles_init(in0_cb, in0_cb, true);
-    // cb_wait_front(in0_cb, M * K);
-    // cb_reserve_back(out_cb, M);
-
-    // uint32_t in0_index = 0;
-    // for (uint32_t in0_subblock = 0; in0_subblock < in0_num_subblocks; in0_subblock++) {
-    //     acquire_dst();
-    //     for (uint32_t row = 0; row < subblock_h; row++) {
-    //         for (uint32_t col = 0; col < K; col += 2) {
-    //             add_tiles(in0_cb, in0_cb, in0_index, in0_index + 1, row);
-    //             in0_index += 2;
-    //         }
-    //         pack_tile(row, out_cb);
-    //     }
-    //     release_dst();
-    // }
-    // cb_push_back(out_cb, M);
-
     /**
      * Use matmul on Mx1 input to reduce rows within tile to produce Mx1 output.
      */
@@ -440,7 +419,7 @@ void matmul_reduce(const uint32_t& out_cb) {
     constexpr uint32_t output_num_tiles = M * N;
     constexpr uint32_t out_subblock_num_tiles = subblock_h * subblock_w;
 
-    reconfig_data_format(in1_cb, in0_cb);
+    reconfig_data_format(in1_cb, out_cb);
     cb_wait_front(in1_cb, N);
     cb_wait_front(out_cb, M);
 
