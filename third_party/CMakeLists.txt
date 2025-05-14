@@ -68,6 +68,7 @@ CPMAddPackage(
         "YAML_CPP_BUILD_TESTS OFF"
         "YAML_CPP_BUILD_TOOLS OFF"
         "YAML_BUILD_SHARED_LIBS OFF"
+    CUSTOM_CACHE_KEY "0_8_0_patched"
 )
 
 ############################################################################################################################
@@ -135,6 +136,7 @@ CPMAddPackage(
     OPTIONS
         "CMAKE_BUILD_TYPE Release"
         "CMAKE_MESSAGE_LOG_LEVEL NOTICE"
+    CUSTOM_CACHE_KEY "0_12_0_patched"
 )
 
 ############################################################################################################################
@@ -172,6 +174,7 @@ CPMAddPackage(
     OPTIONS
         "CMAKE_MESSAGE_LOG_LEVEL NOTICE"
         "XTL_ENABLE_TESTS OFF"
+    CUSTOM_CACHE_KEY "0_8_0_patched"
 )
 CPMAddPackage(
     NAME xtensor
@@ -182,6 +185,7 @@ CPMAddPackage(
     OPTIONS
         "CMAKE_MESSAGE_LOG_LEVEL NOTICE"
         "XTENSOR_ENABLE_TESTS OFF"
+    CUSTOM_CACHE_KEY "0_26_0_patched"
 )
 CPMAddPackage(
     NAME xtensor-blas
@@ -192,6 +196,7 @@ CPMAddPackage(
     OPTIONS
         "CMAKE_MESSAGE_LOG_LEVEL NOTICE"
         "XTENSOR_ENABLE_TESTS OFF"
+    CUSTOM_CACHE_KEY "0_22_0_patched"
 )
 
 ############################################################################################################################

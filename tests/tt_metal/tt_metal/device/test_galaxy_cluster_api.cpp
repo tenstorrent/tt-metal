@@ -14,7 +14,6 @@
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/device.hpp>
 #include "galaxy_fixture.hpp"
-#include <tt-metalium/system_memory_manager.hpp>
 #include "impl/context/metal_context.hpp"
 #include "umd/device/types/cluster_descriptor_types.h"
 #include "umd/device/types/xy_pair.h"

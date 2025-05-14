@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 import gc
+from loguru import logger
 import torch
 import pytest
 import ttnn
@@ -12,7 +13,8 @@ from models.utility_functions import torch_random
 
 
 @pytest.mark.parametrize("input_shape, module_path", [((1, 320), "time_embedding"), ((1, 2816), "add_embedding")])
-def test_embedding(device, input_shape, module_path, use_program_cache, reset_seeds):
+@pytest.mark.parametrize("linear_weights_dtype", [ttnn.bfloat16])
+def test_embedding(device, input_shape, module_path, use_program_cache, reset_seeds, linear_weights_dtype):
     unet = UNet2DConditionModel.from_pretrained(
         "stabilityai/stable-diffusion-xl-base-1.0", torch_dtype=torch.float32, use_safetensors=True, subfolder="unet"
     )
@@ -23,7 +25,7 @@ def test_embedding(device, input_shape, module_path, use_program_cache, reset_se
     torch_embedding = eval("unet." + module_path)
     assert torch_embedding is not None, f"{module_path} is not a valid UNet module"
 
-    tt_embedding = TtTimestepEmbedding(device, state_dict, module_path)
+    tt_embedding = TtTimestepEmbedding(device, state_dict, module_path, linear_weights_dtype=linear_weights_dtype)
 
     torch_input_tensor = torch_random(input_shape, -0.1, 0.1, dtype=torch.float32)
     torch_output_tensor = torch_embedding(torch_input_tensor)
@@ -41,4 +43,5 @@ def test_embedding(device, input_shape, module_path, use_program_cache, reset_se
     del unet
     gc.collect()
 
-    assert_with_pcc(torch_output_tensor, output_tensor, 0.999)
+    _, pcc_message = assert_with_pcc(torch_output_tensor, output_tensor, 0.999)
+    logger.info(f"PCC is {pcc_message}")

@@ -59,6 +59,7 @@ def process_profile_results(packet_size, num_packets, channel_count, benchmark_t
         link_stats_fname = PROFILER_LOGS_DIR / "eth_link_stats.csv"
         df = pd.read_csv(link_stats_fname)
 
+    results = []
     for device_id in devices_data["devices"]:
         for core, core_data in devices_data["devices"][device_id]["cores"].items():
             if core == "DEVICE":
@@ -225,6 +226,7 @@ def write_results_to_csv(file_name, test_latency):
         append_to_csv(file_name, add_newline=True)
         append_to_csv(file_name, header)
 
+    mean = 0
     for sender_info, data_to_write in results_per_sender_link.items():
         receiver_info, benchmark_type, num_packets, packet_size, measurements, link_stats = data_to_write
         assert len(measurements) == len(link_stats)

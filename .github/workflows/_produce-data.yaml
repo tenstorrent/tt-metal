@@ -99,13 +99,13 @@ jobs:
           echo "::notice title=target-workflow-link::The workflow being analyzed is available at https://github.com/tenstorrent/tt-metal/actions/runs/$run_id/attempts/$attempt_number"
       - name: Get API rate limit status
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ secrets.TTBOT_DOCS_ACCESS }}
         run: |
           echo "[Info] Grabbing API rate limit status"
           gh api rate_limit
       - name: Output auxiliary values
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ secrets.TTBOT_DOCS_ACCESS }}
         run: |
           echo "Sleeping for 60 seconds for github to fully sync the workflow run before calling the API"
           sleep 60
@@ -119,7 +119,7 @@ jobs:
       - name: Collect workflow artifact and job logs
         shell: bash
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ secrets.TTBOT_DOCS_ACCESS }}
         run: |
           ./infra/data_collection/github/download_cicd_logs_and_artifacts.sh --workflow-run-id ${{ steps.get-run-id-and-attempt.outputs.run-id }} --attempt-number ${{ steps.get-run-id-and-attempt.outputs.attempt-number }}
           find generated/cicd/ -type f

@@ -219,11 +219,28 @@ void HWCommandQueue::enqueue_read_buffer(
     ZoneScopedN("HWCommandQueue_read_buffer");
     TT_FATAL(!this->manager_.get_bypass_mode(), "Enqueue Read Buffer cannot be used with tracing");
     Buffer& buffer_obj = get_buffer_object(buffer);
+
+    // This is to make sure we block on the same sub_device_ids at the end
+    // TODO: enqueue_read_from_core will call select_sub_device_ids every loop which will have minor overhead
     sub_device_ids = buffer_dispatch::select_sub_device_ids(this->device_, sub_device_ids);
 
-    // TODO: When reading from L1, modify this function to use enqueue_read_from_core_l1
-
-    if (is_sharded(buffer_obj.buffer_layout())) {
+    if (buffer_obj.is_nd_sharded()) {
+        TT_FATAL(buffer_obj.is_l1(), "Buffer with BufferDistributionSpec must be L1 for enqueue_read_buffer!");
+        const auto& [banks, bank_mapping_in_bytes] = buffer_obj.get_bank_data_mapping();
+        for (size_t i = 0; i < banks.size(); i++) {
+            const auto virtual_core =
+                buffer_obj.device()->virtual_core_from_logical_core(banks[i], buffer_obj.core_type());
+            for (const auto& chunk_mapping_in_bytes : bank_mapping_in_bytes[i]) {
+                enqueue_read_from_core(
+                    virtual_core,
+                    (char*)dst + chunk_mapping_in_bytes.src,
+                    buffer_obj.address() + chunk_mapping_in_bytes.dst,
+                    chunk_mapping_in_bytes.size,
+                    false,
+                    sub_device_ids);
+            }
+        }
+    } else if (is_sharded(buffer_obj.buffer_layout())) {
         // Forward data from each core to the completion queue.
         // Then have the completion queue reader thread copy this data to user space.
         auto dispatch_params = buffer_dispatch::initialize_sharded_buf_read_dispatch_params(
@@ -288,11 +305,37 @@ void HWCommandQueue::enqueue_write_buffer(
         src);
     Buffer& buffer_obj = get_buffer_object(buffer);
 
+    // This is to make sure we block on the same sub_device_ids at the end
+    // TODO: enqueue_write_to_core will call select_sub_device_ids every loop which will have minor overhead
     sub_device_ids = buffer_dispatch::select_sub_device_ids(this->device_, sub_device_ids);
-    auto dispatch_core_type = MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_type();
 
-    buffer_dispatch::write_to_device_buffer(
-        data, buffer_obj, region, this->id_, this->expected_num_workers_completed_, dispatch_core_type, sub_device_ids);
+    if (buffer_obj.is_nd_sharded()) {
+        TT_FATAL(buffer_obj.is_l1(), "Buffer with BufferDistributionSpec must be L1 for enqueue_write_buffer!");
+        const auto& [banks, bank_mapping_in_bytes] = buffer_obj.get_bank_data_mapping();
+        for (size_t i = 0; i < banks.size(); i++) {
+            const auto virtual_core =
+                buffer_obj.device()->virtual_core_from_logical_core(banks[i], buffer_obj.core_type());
+            for (const auto& chunk_mapping_in_bytes : bank_mapping_in_bytes[i]) {
+                enqueue_write_to_core(
+                    virtual_core,
+                    (char*)data + chunk_mapping_in_bytes.src,
+                    buffer_obj.address() + chunk_mapping_in_bytes.dst,
+                    chunk_mapping_in_bytes.size,
+                    false,
+                    sub_device_ids);
+            }
+        }
+    } else {
+        auto dispatch_core_type = MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_type();
+        buffer_dispatch::write_to_device_buffer(
+            data,
+            buffer_obj,
+            region,
+            this->id_,
+            this->expected_num_workers_completed_,
+            dispatch_core_type,
+            sub_device_ids);
+    }
 
     if (blocking) {
         this->finish(sub_device_ids);
@@ -303,25 +346,21 @@ CoreType HWCommandQueue::get_dispatch_core_type() {
     return MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_type();
 }
 
-void HWCommandQueue::enqueue_read_from_core_l1(
+void HWCommandQueue::enqueue_read_from_core(
     const CoreCoord& virtual_core,
     void* dst,
     DeviceAddr address,
     uint32_t size_bytes,
     bool blocking,
     tt::stl::Span<const SubDeviceId> sub_device_ids) {
-    ZoneScopedN("HWCommandQueue_enqueue_read_from_core_l1");
+    ZoneScopedN("HWCommandQueue_enqueue_read_from_core");
 
-    const HalProgrammableCoreType core_type = this->device_->get_programmable_core_type(virtual_core);
-    TT_FATAL(
-        address + size_bytes <= MetalContext::instance().hal().get_dev_addr(core_type, HalL1MemAddrType::BASE) +
-                                    MetalContext::instance().hal().get_dev_size(core_type, HalL1MemAddrType::BASE),
-        "Region to read from in L1 is out of bounds");
+    device_dispatch::validate_core_read_write_bounds(this->device_, virtual_core, address, size_bytes);
 
     sub_device_ids = buffer_dispatch::select_sub_device_ids(this->device_, sub_device_ids);
 
     if (size_bytes > 0) {
-        device_dispatch::L1ReadDispatchParams dispatch_params(
+        device_dispatch::CoreReadDispatchParams dispatch_params{
             virtual_core,
             address,
             size_bytes,
@@ -329,11 +368,11 @@ void HWCommandQueue::enqueue_read_from_core_l1(
             this->id_,
             this->get_dispatch_core_type(),
             this->expected_num_workers_completed_,
-            sub_device_ids);
-        device_dispatch::issue_l1_read_command_sequence(dispatch_params);
+            sub_device_ids};
+        device_dispatch::issue_core_read_command_sequence(dispatch_params);
 
         this->issued_completion_q_reads_.push(
-            std::make_shared<CompletionReaderVariant>(std::in_place_type<ReadL1DataDescriptor>, dst, size_bytes));
+            std::make_shared<CompletionReaderVariant>(std::in_place_type<ReadCoreDataDescriptor>, dst, size_bytes));
         this->increment_num_entries_in_completion_q();
     }
 
@@ -342,43 +381,26 @@ void HWCommandQueue::enqueue_read_from_core_l1(
     }
 }
 
-void HWCommandQueue::enqueue_write_to_core_l1(
+void HWCommandQueue::enqueue_write_to_core(
     const CoreCoord& virtual_core,
     const void* src,
     DeviceAddr address,
     uint32_t size_bytes,
     bool blocking,
     tt::stl::Span<const SubDeviceId> sub_device_ids) {
-    ZoneScopedN("HWCommandQueue_enqueue_write_to_core_l1");
-
-    const HalProgrammableCoreType core_type = this->device_->get_programmable_core_type(virtual_core);
-    TT_FATAL(
-        address + size_bytes <= MetalContext::instance().hal().get_dev_addr(core_type, HalL1MemAddrType::BASE) +
-                                    MetalContext::instance().hal().get_dev_size(core_type, HalL1MemAddrType::BASE),
-        "Region to write to in L1 is out of bounds");
+    ZoneScopedN("HWCommandQueue_enqueue_write_to_core");
 
     sub_device_ids = buffer_dispatch::select_sub_device_ids(this->device_, sub_device_ids);
 
-    while (size_bytes > 0) {
-        const uint32_t size_bytes_to_write =
-            std::min(size_bytes, calculate_max_prefetch_data_size_bytes(this->get_dispatch_core_type()));
-
-        device_dispatch::L1WriteDispatchParams dispatch_params{
-            virtual_core,
-            address,
-            size_bytes_to_write,
-            this->device_,
-            this->id_,
-            this->get_dispatch_core_type(),
-            this->expected_num_workers_completed_,
-            sub_device_ids,
-            src};
-        device_dispatch::issue_l1_write_command_sequence(dispatch_params);
-
-        size_bytes -= size_bytes_to_write;
-        address += size_bytes_to_write;
-        src = (uint8_t*)src + size_bytes_to_write;
-    }
+    device_dispatch::write_to_core(
+        this->device_,
+        virtual_core,
+        src,
+        address,
+        size_bytes,
+        this->id_,
+        this->expected_num_workers_completed_,
+        sub_device_ids);
 
     if (blocking) {
         this->finish(sub_device_ids);
@@ -390,16 +412,16 @@ void HWCommandQueue::enqueue_program(Program& program, bool blocking) {
     std::vector<SubDeviceId> sub_device_ids = {program.determine_sub_device_ids(device_)};
     TT_FATAL(sub_device_ids.size() == 1, "Programs must be executed on a single sub-device");
     // Finalize Program: Compute relative offsets for data structures (semaphores, kernel binaries, etc) in L1
-    program_dispatch::finalize_program_offsets(program, device_);
+    program.finalize_offsets(device_);
 
     if (program.get_program_binary_status(device_->id()) == ProgramBinaryStatus::NotSent) {
         // Write program binaries to device if it hasn't previously been cached
         program.allocate_kernel_bin_buf_on_device(device_);
-        if (program.get_program_transfer_info().binary_data.size()) {
-            const BufferRegion buffer_region(0, program.get_kernels_buffer(device_)->size());
+        if (program.impl().get_program_transfer_info().binary_data.size()) {
+            const BufferRegion buffer_region(0, program.impl().get_kernels_buffer(device_)->size());
             this->enqueue_write_buffer(
-                *program.get_kernels_buffer(device_),
-                program.get_program_transfer_info().binary_data.data(),
+                *program.impl().get_kernels_buffer(device_),
+                program.impl().get_program_transfer_info().binary_data.data(),
                 buffer_region,
                 false);
         }
@@ -414,12 +436,12 @@ void HWCommandQueue::enqueue_program(Program& program, bool blocking) {
 #ifdef DEBUG
     if (tt::tt_metal::MetalContext::instance().rtoptions().get_validate_kernel_binaries()) {
         TT_FATAL(!this->manager_.get_bypass_mode(), "Tracing cannot be used while validating program binaries");
-        if (const auto buffer = program.get_kernels_buffer(device_)) {
+        if (const auto buffer = program.impl().get_kernels_buffer(device_)) {
             std::vector<uint32_t> read_data(buffer->page_size() * buffer->num_pages() / sizeof(uint32_t));
             const BufferRegion region(0, buffer->size());
             this->enqueue_read_buffer(*buffer, read_data.data(), region, true);
             TT_FATAL(
-                program.get_program_transfer_info().binary_data == read_data,
+                program.impl().get_program_transfer_info().binary_data == read_data,
                 "Binary for program to be executed is corrupted. Another program likely corrupted this binary");
         }
     }
@@ -479,12 +501,12 @@ void HWCommandQueue::enqueue_program(Program& program, bool blocking) {
 #ifdef DEBUG
     if (tt::tt_metal::MetalContext::instance().rtoptions().get_validate_kernel_binaries()) {
         TT_FATAL(!this->manager_.get_bypass_mode(), "Tracing cannot be used while validating program binaries");
-        if (const auto buffer = program.get_kernels_buffer(device_)) {
+        if (const auto buffer = program.impl().get_kernels_buffer(device_)) {
             std::vector<uint32_t> read_data(buffer->page_size() * buffer->num_pages() / sizeof(uint32_t));
             const BufferRegion region(0, buffer->size());
             this->enqueue_read_buffer(*buffer, read_data.data(), region, true);
             TT_FATAL(
-                program.get_program_transfer_info().binary_data == read_data,
+                program.impl().get_program_transfer_info().binary_data == read_data,
                 "Binary for program that executed is corrupted. This program likely corrupted its own binary.");
         }
     }
@@ -493,7 +515,7 @@ void HWCommandQueue::enqueue_program(Program& program, bool blocking) {
     log_trace(
         tt::LogMetal,
         "Created EnqueueProgramCommand (active_cores: {} bypass_mode: {} expected_workers_completed: {})",
-        program.get_program_transfer_info().num_active_cores,
+        program.impl().get_program_transfer_info().num_active_cores,
         this->manager_.get_bypass_mode(),
         expected_workers_completed);
 }
@@ -615,9 +637,9 @@ void HWCommandQueue::read_completion_queue() {
                             ZoneScopedN("CompletionQueueReadEvent");
                             event_dispatch::read_events_from_completion_queue(
                                 read_descriptor, mmio_device_id, channel, this->id_, this->manager_);
-                        } else if constexpr (std::is_same_v<T, ReadL1DataDescriptor>) {
-                            ZoneScopedN("CompletionQueueReadL1Data");
-                            device_dispatch::read_l1_data_from_completion_queue(
+                        } else if constexpr (std::is_same_v<T, ReadCoreDataDescriptor>) {
+                            ZoneScopedN("CompletionQueueReadCoreData");
+                            device_dispatch::read_core_data_from_completion_queue(
                                 read_descriptor,
                                 mmio_device_id,
                                 channel,

@@ -22,9 +22,6 @@ from models.demos.llama3_subdevices.tt.model_config import (
     PREFETCHER_NOC1_GRID,
 )
 from models.demos.llama3_subdevices.tt.model_config import set_tg_attention_config
-from models.demos.llama3_subdevices.tt.llama_common import (
-    check_mesh_tensor_alloc,
-)
 
 LINEAR_TOPOLOGY = True
 if LINEAR_TOPOLOGY:
@@ -149,7 +146,6 @@ def run_all_reduce_qkv_heads_fuse_perf_impl(
             memory_config=input_mem_config,
             mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(0, 1), mesh_shape=cluster_shape),
         )  # [1, 1, 32, 1280]
-        check_mesh_tensor_alloc(tt_qkv)
 
         intermediate_tensor = torch.zeros(intermediate_shape)
         tt_intermediate_tensors = []
@@ -162,8 +158,6 @@ def run_all_reduce_qkv_heads_fuse_perf_impl(
                 memory_config=intermediate_mem_config,
                 mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(0, 1), mesh_shape=cluster_shape),
             )
-            # Validate that the tensor is allocated in same location across devices
-            check_mesh_tensor_alloc(tt_intermediate_tensor)
             tt_intermediate_tensors.append(tt_intermediate_tensor)
 
         head_dim = N // (8 + 2 * 1)

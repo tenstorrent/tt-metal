@@ -133,8 +133,7 @@ TEST_P(Conv2DFixture, Conv2DCalculateCorrectly) {
         /*device_id=*/0, l1_small_size);
 
     try {
-        MemoryConfig dram_mem_config =
-            MemoryConfig{.memory_layout = TensorMemoryLayout::INTERLEAVED, .buffer_type = BufferType::DRAM};
+        MemoryConfig dram_mem_config = MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM};
 
         // (N,Ci,H,W)
         Shape dimensions{param.batch_size, param.input_channels, param.input_height, param.input_width};

@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 import gc
+from loguru import logger
 import torch
 import pytest
 import ttnn
@@ -17,8 +18,9 @@ from models.utility_functions import torch_random
         ((1, 320, 128, 128), (1, 1280)),
     ],
 )
+@pytest.mark.parametrize("conv_weights_dtype", [ttnn.bfloat16])
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
-def test_downblock2d(device, temb_shape, input_shape, use_program_cache, reset_seeds):
+def test_downblock2d(device, temb_shape, input_shape, use_program_cache, reset_seeds, conv_weights_dtype):
     unet = UNet2DConditionModel.from_pretrained(
         "stabilityai/stable-diffusion-xl-base-1.0", torch_dtype=torch.float32, use_safetensors=True, subfolder="unet"
     )
@@ -27,7 +29,7 @@ def test_downblock2d(device, temb_shape, input_shape, use_program_cache, reset_s
     state_dict = unet.state_dict()
 
     torch_downblock = unet.down_blocks[0]
-    tt_downblock = TtDownBlock2D(device, state_dict, f"down_blocks.0")
+    tt_downblock = TtDownBlock2D(device, state_dict, f"down_blocks.0", conv_weights_dtype=conv_weights_dtype)
 
     torch_input_tensor = torch_random(input_shape, -0.1, 0.1, dtype=torch.float32)
     torch_temb_tensor = torch_random(temb_shape, -0.1, 0.1, dtype=torch.float32)
@@ -55,4 +57,5 @@ def test_downblock2d(device, temb_shape, input_shape, use_program_cache, reset_s
     del unet, tt_downblock
     gc.collect()
 
-    assert_with_pcc(torch_output_tensor, output_tensor, 0.994)
+    _, pcc_message = assert_with_pcc(torch_output_tensor, output_tensor, 0.997)
+    logger.info(f"PCC is {pcc_message}")

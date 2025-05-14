@@ -59,25 +59,25 @@ void RunningStatistics::validate_on_program_cache_miss(
 
     TT_FATAL(batch_mean.get_layout() == Layout::TILE, "batch_mean tensor must be tilized");
     TT_FATAL(
-        batch_mean.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED,
+        batch_mean.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
         "batch_mean tensor must be interleaved");
 
     TT_FATAL(batch_var.get_layout() == Layout::TILE, "batch_var tensor must be tilized");
     TT_FATAL(
-        batch_var.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED,
+        batch_var.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
         "batch_var tensor must be interleaved");
 
     if (running_mean.has_value()) {
         TT_FATAL(running_mean.value().get_layout() == Layout::TILE, "running_mean tensor must be tilized");
         TT_FATAL(
-            running_mean.value().memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED,
+            running_mean.value().memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
             "running_mean tensor must be interleaved");
     }
 
     if (running_var.has_value()) {
         TT_FATAL(running_var.value().get_layout() == Layout::TILE, "running_var tensor must be tilized");
         TT_FATAL(
-            running_var.value().memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED,
+            running_var.value().memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
             "running_var tensor must be interleaved");
     }
 

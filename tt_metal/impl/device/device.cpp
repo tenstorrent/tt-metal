@@ -41,8 +41,9 @@
 #include "assert.hpp"
 #include "buffer_types.hpp"
 #include "command_queue.hpp"
-#include "command_queue_common.hpp"
+#include "dispatch/command_queue_common.hpp"
 #include "common/core_assignment.hpp"
+#include "program/program_impl.hpp"
 #include "core_coord.hpp"
 #include "device.hpp"
 #include "impl/context/metal_context.hpp"
@@ -60,7 +61,7 @@
 #include "profiler_types.hpp"
 #include "tt-metalium/program.hpp"
 #include <tt_stl/strong_type.hpp>
-#include "system_memory_manager.hpp"
+#include "dispatch/system_memory_manager.hpp"
 #include "trace_buffer.hpp"
 #include "tracy/Tracy.hpp"
 #include "tt_memory.h"
@@ -85,6 +86,10 @@ namespace tt_metal {
 
 uint64_t IDevice::get_dev_addr(CoreCoord virtual_core, HalL1MemAddrType addr_type) const {
     return MetalContext::instance().hal().get_dev_addr(this->get_programmable_core_type(virtual_core), addr_type);
+}
+
+uint64_t IDevice::get_dev_size(CoreCoord virtual_core, HalL1MemAddrType addr_type) const {
+    return MetalContext::instance().hal().get_dev_size(this->get_programmable_core_type(virtual_core), addr_type);
 }
 
 void IDevice::set_program_cache_misses_allowed(bool allowed) {
@@ -787,13 +792,24 @@ void Device::initialize_and_launch_firmware() {
     core_info->l1_unreserved_start = this->allocator()->get_base_allocator_addr(tt_metal::HalMemType::L1);
 
     const std::vector<tt::umd::CoreCoord>& pcie_cores = soc_d.get_cores(CoreType::PCIE, soc_d.get_umd_coord_system());
-    const std::vector<tt::umd::CoreCoord>& dram_cores = soc_d.get_cores(
-        CoreType::DRAM, soc_d.get_umd_coord_system());  // make these translated and then convert to physical
+    // There are multiple NoC endpoints for DRAM, but not all are exposed through the API. Watcher will flag endpoints
+    // that are not exposed as invalid transactions. This helps to avoid BH issue highlighted by SYS-592 where writing
+    // to multiple DRAM endpoints can hang the card.
+    std::unordered_set<tt::umd::CoreCoord> dram_cores;
+    for (uint32_t dram_channel = 0; dram_channel < this->num_dram_channels(); dram_channel++) {
+        auto worker_dram_ep = soc_d.get_preferred_worker_core_for_dram_view(dram_channel);
+        auto eth_dram_ep = soc_d.get_preferred_eth_core_for_dram_view(dram_channel);
+        auto physical_worker_dram_ep =
+            soc_d.translate_coord_to(worker_dram_ep, CoordSystem::TRANSLATED, CoordSystem::PHYSICAL);
+        auto physical_eth_dram_ep =
+            soc_d.translate_coord_to(eth_dram_ep, CoordSystem::TRANSLATED, CoordSystem::PHYSICAL);
+        dram_cores.insert(physical_worker_dram_ep);
+        dram_cores.insert(physical_eth_dram_ep);
+    }
+
     const std::vector<tt::umd::CoreCoord>& eth_cores =
         soc_d.get_cores(CoreType::ETH, CoordSystem::PHYSICAL);  // make these translated and then convert to physical
-    // The SOC descriptor can list a dram core multiple times, depending on how GDDR is assigned to banks
-    // Get a list of unique DRAM cores.
-    std::unordered_set<CoreCoord> unique_dram_cores(dram_cores.begin(), dram_cores.end());
+
     TT_ASSERT(
         pcie_cores.size() + dram_cores.size() + eth_cores.size() <= MAX_PHYSICAL_NON_WORKER_CORES,
         "Detected more pcie/dram/eth cores than fit in the device mailbox.");
@@ -812,8 +828,8 @@ void Device::initialize_and_launch_firmware() {
     // sanitization errors because it appears as a mixed use of physical and virtual To workaround this, skip over
     // populating `non_worker_cores` for BH DRAM when virtualization is enabled
     int non_worker_cores_idx = 0;
-    bool skip_physical_dram_pcie = this->arch() == ARCH::BLACKHOLE and hal.is_coordinate_virtualization_enabled();
-    if (not skip_physical_dram_pcie) {
+    bool skip_physical = this->arch() == ARCH::BLACKHOLE and hal.is_coordinate_virtualization_enabled();
+    if (not skip_physical) {
         for (tt::umd::CoreCoord core : pcie_cores) {
             tt::umd::CoreCoord translated_coord =
                 soc_d.translate_coord_to(tt_xy_pair(core.x, core.y), CoordSystem::PHYSICAL, CoordSystem::VIRTUAL);
@@ -822,9 +838,9 @@ void Device::initialize_and_launch_firmware() {
         for (tt::umd::CoreCoord core : dram_cores) {
             core_info->non_worker_cores[non_worker_cores_idx++] = {core.x, core.y, AddressableCoreType::DRAM};
         }
-    }
-    for (tt::umd::CoreCoord core : eth_cores) {
-        core_info->non_worker_cores[non_worker_cores_idx++] = {core.x, core.y, AddressableCoreType::ETH};
+        for (tt::umd::CoreCoord core : eth_cores) {
+            core_info->non_worker_cores[non_worker_cores_idx++] = {core.x, core.y, AddressableCoreType::ETH};
+        }
     }
 
     if (hal.is_coordinate_virtualization_enabled()) {
@@ -841,11 +857,11 @@ void Device::initialize_and_launch_firmware() {
                 core_info->virtual_non_worker_cores[virtual_non_worker_cores_idx++] = {
                     virtual_core.x, virtual_core.y, AddressableCoreType::PCIE};
             }
-            auto translated_dram_cores = soc_d.get_cores(CoreType::DRAM, CoordSystem::TRANSLATED);
 
-            for (const CoreCoord& core : translated_dram_cores) {
+            for (const CoreCoord& core : dram_cores) {
+                auto virtual_core = this->virtual_core_from_physical_core({core.x, core.y});
                 core_info->virtual_non_worker_cores[virtual_non_worker_cores_idx++] = {
-                    core.x, core.y, AddressableCoreType::DRAM};
+                    virtual_core.x, virtual_core.y, AddressableCoreType::DRAM};
             }
         }
     }
@@ -1109,7 +1125,7 @@ void Device::configure_command_queue_programs() {
     configure_dispatch_cores(this);
 
     // Run the cq program
-    program_dispatch::finalize_program_offsets(command_queue_program, this);
+    command_queue_program.finalize_offsets(this);
     detail::ConfigureDeviceWithProgram(this, command_queue_program, true);
     tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(this->id());
 }
@@ -1145,8 +1161,8 @@ void Device::init_command_queue_device() {
         const auto& logical_dispatch_cores = logical_cores[index];
         CoreType core_type = hal.get_core_type(index);
         for (const CoreCoord &logical_dispatch_core : logical_dispatch_cores) {
-            launch_msg_t msg = command_queue_program.kernels_on_core(logical_dispatch_core, index)->launch_msg;
-            go_msg_t go_msg = command_queue_program.kernels_on_core(logical_dispatch_core, index)->go_msg;
+            launch_msg_t msg = command_queue_program.impl().kernels_on_core(logical_dispatch_core, index)->launch_msg;
+            go_msg_t go_msg = command_queue_program.impl().kernels_on_core(logical_dispatch_core, index)->go_msg;
             CoreCoord virtual_core = this->virtual_core_from_logical_core(logical_dispatch_core, core_type);
             tt::llrt::write_launch_msg_to_core(this->id(), virtual_core, &msg, &go_msg, this->get_dev_addr(virtual_core, HalL1MemAddrType::LAUNCH));
         }
@@ -1168,7 +1184,7 @@ void Device::init_fabric() {
 
     configure_fabric_cores(this);
 
-    program_dispatch::finalize_program_offsets(*fabric_program_, this);
+    fabric_program_->finalize_offsets(this);
 
     detail::WriteRuntimeArgsToDevice(this, *fabric_program_, this->using_fast_dispatch());
     detail::ConfigureDeviceWithProgram(this, *fabric_program_, this->using_fast_dispatch());
@@ -1183,8 +1199,9 @@ void Device::init_fabric() {
         CoreType core_type = hal.get_core_type(programmable_core_type_index);
         for (const auto& logical_core : logical_cores_used_in_program[programmable_core_type_index]) {
             launch_msg_t* msg =
-                &fabric_program_->kernels_on_core(logical_core, programmable_core_type_index)->launch_msg;
-            go_msg_t* go_msg = &fabric_program_->kernels_on_core(logical_core, programmable_core_type_index)->go_msg;
+                &fabric_program_->impl().kernels_on_core(logical_core, programmable_core_type_index)->launch_msg;
+            go_msg_t* go_msg =
+                &fabric_program_->impl().kernels_on_core(logical_core, programmable_core_type_index)->go_msg;
             msg->kernel_config.host_assigned_id = fabric_program_->get_runtime_id();
 
             auto physical_core = this->virtual_core_from_logical_core(logical_core, core_type);
@@ -1192,6 +1209,7 @@ void Device::init_fabric() {
                 this->id(), physical_core, msg, go_msg, this->get_dev_addr(physical_core, HalL1MemAddrType::LAUNCH));
         }
     }
+    log_info(tt::LogMetal, "Fabric initialized on Device {}", this->id_);
 }
 
 bool Device::initialize(
@@ -1229,8 +1247,6 @@ bool Device::initialize(
         hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::BASE) +
             hal.get_dev_size(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::BASE) - worker_l1_size,
         max_alignment);
-    BuildEnvManager::get_instance().add_build_env(this->id(), this->num_hw_cqs());
-    this->initialize_cluster();
     this->initialize_default_sub_device_state(
         l1_small_size, trace_region_size, worker_l1_unreserved_start, l1_bank_remap);
     this->generate_device_bank_to_noc_tables();
@@ -1266,6 +1282,9 @@ bool Device::close() {
     dispatch_firmware_active_ = false;
 
     tt_metal::detail::DumpDeviceProfileResults(this, ProfilerDumpState::LAST_CLOSE_DEVICE);
+
+    this->disable_and_clear_program_cache();
+    this->set_program_cache_misses_allowed(true);
 
     sub_device_manager_tracker_.reset(nullptr);
 
@@ -1329,8 +1348,6 @@ bool Device::close() {
     this->compute_cores_.clear();
     this->storage_only_cores_.clear();
     this->ethernet_cores_.clear();
-    this->disable_and_clear_program_cache();
-    this->set_program_cache_misses_allowed(true);
     this->command_queue_programs_.clear();
     this->command_queues_.clear();
     this->sysmem_manager_.reset();
@@ -1825,6 +1842,15 @@ HalProgrammableCoreType Device::get_programmable_core_type(CoreCoord virtual_cor
     }
 
     return HalProgrammableCoreType::IDLE_ETH;
+}
+
+HalMemType Device::get_mem_type_of_core(CoreCoord virtual_core) const {
+    if (!tt::tt_metal::MetalContext::instance().get_cluster().is_ethernet_core(virtual_core, this->id_) &&
+        !tt::tt_metal::MetalContext::instance().get_cluster().is_worker_core(virtual_core, this->id_)) {
+        return HalMemType::DRAM;
+    } else {
+        return HalMemType::L1;
+    }
 }
 
 std::shared_ptr<distributed::MeshDevice> Device::get_mesh_device() { return mesh_device.lock(); }
