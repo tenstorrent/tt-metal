@@ -49,25 +49,14 @@ static const char* get_buffer_location_name(BufferType buffer_type, int device_i
 
 bool is_l1_impl(BufferType buffer_type) { return buffer_type == BufferType::L1 or buffer_type == BufferType::L1_SMALL; }
 
-void validate_buffer_size_and_page_size(
+void validate_buffer_parameters(
     DeviceAddr size,
     DeviceAddr page_size,
     const BufferType& /*buffer_type*/,
     const TensorMemoryLayout& buffer_layout,
     const std::optional<ShardSpecBuffer>& shard_parameters,
     const std::optional<BufferDistributionSpec>& buffer_distribution_spec) {
-    if (size == 0) {
-        return;
-    }
-
-    bool valid_page_size = (size % page_size == 0);
-    TT_FATAL(
-        valid_page_size,
-        "For valid non-interleaved buffers page size {} must equal buffer size {}. For interleaved-buffers page size "
-        "should be divisible by buffer size",
-        page_size,
-        size);
-
+    // Validate shard parameters are correct; only one of shard_parameters or buffer_distribution_spec can be set
     if (is_sharded(buffer_layout)) {
         if (buffer_distribution_spec.has_value()) {
             TT_FATAL(
@@ -86,9 +75,22 @@ void validate_buffer_size_and_page_size(
             shard_parameters == std::nullopt, "Buffer was specified as not sharded but has shard_parameters specified");
         TT_FATAL(
             shard_parameters == std::nullopt, "Buffer was specified as not sharded but has shard_parameters specified");
-        if (buffer_layout == TensorMemoryLayout::SINGLE_BANK) {
-            TT_FATAL(page_size == size, "Contiguous buffer must be one contiguous page");
-        }
+    }
+
+    if (size == 0) {
+        return;
+    }
+
+    if (buffer_layout == TensorMemoryLayout::SINGLE_BANK) {
+        TT_FATAL(page_size == size, "Contiguous buffer must be one contiguous page");
+    } else {
+        TT_FATAL(
+            size % page_size == 0,
+            "For valid non-interleaved buffers page size {} must equal buffer size {}. For interleaved-buffers page "
+            "size "
+            "should be divisible by buffer size",
+            page_size,
+            size);
     }
 }
 
@@ -304,23 +306,22 @@ Buffer::Buffer(
     } else {
         this->allocator_ = device->allocator().get();
     }
-    if (size != 0) {
-        validate_buffer_size_and_page_size(
-            size, page_size, buffer_type, buffer_layout, shard_parameters, buffer_distribution_spec);
-    }
+    validate_buffer_parameters(size, page_size, buffer_type, buffer_layout, shard_parameters, buffer_distribution_spec);
     unique_id_ = next_unique_id.fetch_add(1);
 }
 
-std::shared_ptr<Buffer> Buffer::create_buffer(
+std::shared_ptr<Buffer> Buffer::create(
     IDevice* device,
     DeviceAddr size,
     DeviceAddr page_size,
     const BufferType buffer_type,
     const TensorMemoryLayout buffer_layout,
     const std::optional<ShardSpecBuffer>& shard_parameters,
-    const std::optional<BufferDistributionSpec>& buffer_distribution_spec,
     const std::optional<bool> bottom_up,
-    const std::optional<SubDeviceId> sub_device_id) {
+    const std::optional<SubDeviceId> sub_device_id,
+    const std::optional<BufferDistributionSpec>& buffer_distribution_spec) {
+    LIGHT_METAL_TRACE_FUNCTION_ENTRY();
+
     auto buffer = std::make_shared<Buffer>(
         device,
         size,
@@ -341,23 +342,6 @@ std::shared_ptr<Buffer> Buffer::create_buffer(
 
     buffer->allocate_impl();
 
-    return buffer;
-}
-
-std::shared_ptr<Buffer> Buffer::create(
-    IDevice* device,
-    DeviceAddr size,
-    DeviceAddr page_size,
-    const BufferType buffer_type,
-    const TensorMemoryLayout buffer_layout,
-    const std::optional<ShardSpecBuffer>& shard_parameters,
-    const std::optional<bool> bottom_up,
-    const std::optional<SubDeviceId> sub_device_id) {
-    LIGHT_METAL_TRACE_FUNCTION_ENTRY();
-
-    auto buffer = Buffer::create_buffer(
-        device, size, page_size, buffer_type, buffer_layout, shard_parameters, std::nullopt, bottom_up, sub_device_id);
-
     LIGHT_METAL_TRACE_FUNCTION_CALL(
         CaptureBufferCreate,
         buffer,
@@ -369,7 +353,8 @@ std::shared_ptr<Buffer> Buffer::create(
         buffer_layout,
         shard_parameters,
         bottom_up,
-        sub_device_id);
+        sub_device_id,
+        buffer_distribution_spec);
 
     return buffer;
 }
@@ -383,7 +368,8 @@ std::shared_ptr<Buffer> Buffer::create(
     const TensorMemoryLayout buffer_layout,
     const std::optional<ShardSpecBuffer>& shard_parameters,
     const std::optional<bool> bottom_up,
-    const std::optional<SubDeviceId> sub_device_id) {
+    const std::optional<SubDeviceId> sub_device_id,
+    const std::optional<BufferDistributionSpec>& buffer_distribution_spec) {
     LIGHT_METAL_TRACE_FUNCTION_ENTRY();
     auto buffer = std::make_shared<Buffer>(
         device,
@@ -392,7 +378,7 @@ std::shared_ptr<Buffer> Buffer::create(
         buffer_type,
         buffer_layout,
         shard_parameters,
-        std::nullopt,
+        buffer_distribution_spec,
         bottom_up,
         sub_device_id,
         false /* owns data */,
@@ -412,32 +398,10 @@ std::shared_ptr<Buffer> Buffer::create(
         buffer_layout,
         shard_parameters,
         bottom_up,
-        sub_device_id);
+        sub_device_id,
+        buffer_distribution_spec);
 
     return buffer;
-}
-
-std::shared_ptr<Buffer> Buffer::create(
-    IDevice* device,
-    DeviceAddr size,
-    DeviceAddr page_size,
-    const BufferType buffer_type,
-    const BufferDistributionSpec& buffer_distribution_spec,
-    const std::optional<bool> bottom_up,
-    const std::optional<SubDeviceId> sub_device_id) {
-    // TODO: buffer_layout should not be needed with BufferDistributionSpec since layout is implicit in the spec
-    // - ie. It's possible to fully unify interleaved and sharding
-    // - For now, pass TensorMemoryLayout::BLOCK_SHARDED as the most sensible option
-    return Buffer::create_buffer(
-        device,
-        size,
-        page_size,
-        buffer_type,
-        TensorMemoryLayout::BLOCK_SHARDED,
-        std::nullopt,
-        buffer_distribution_spec,
-        bottom_up,
-        sub_device_id);
 }
 
 void Buffer::allocate_impl() {
