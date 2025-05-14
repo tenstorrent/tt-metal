@@ -54,21 +54,24 @@ async function fetchPRInfo(github, context, commitSha) {
  *
  * @param {Array<object>} runs - Array of workflow run objects
  * @returns {object} Statistics object containing:
- *   - successes: Array of successful runs
  *   - eventTypes: Comma-separated string of unique event types
  *   - successRate: Percentage of successful runs (e.g., "95.00%")
- *   - uniqueRuns: Number of unique runs (excluding retries)
- *   - totalRuns: Total number of runs including retries
+ *   - uniqueRuns: Number of unique runs (excluding retries and reruns)
+ *   - totalRuns: Total number of runs including retries and reruns
  *   - successfulRuns: Number of successful unique runs
  */
 function getWorkflowStats(runs) {
-  // Group runs by their original run ID to handle retries
+  // Group runs by their original run ID to handle retries and reruns
   const uniqueRuns = new Map();
   let totalRuns = 0;
+  let totalSuccesses = 0;
 
   for (const run of runs) {
     totalRuns++;
-    // Use the original run ID as the key
+    if (run.conclusion === 'success') {
+      totalSuccesses++;
+    }
+    // Use the original run ID as the key, considering both retries and reruns
     const originalRunId = run.run_attempt > 1 ? run.id - (run.run_attempt - 1) : run.id;
     if (!uniqueRuns.has(originalRunId)) {
       uniqueRuns.set(originalRunId, run);
@@ -76,17 +79,15 @@ function getWorkflowStats(runs) {
   }
 
   const uniqueRunsArray = Array.from(uniqueRuns.values());
-  const successes = uniqueRunsArray.filter(r => r.conclusion === 'success');
   const eventTypes = [...new Set(uniqueRunsArray.map(r => r.event))].join(', ');
-  const successRate = uniqueRunsArray.length === 0 ? "N/A" : (successes.length / uniqueRunsArray.length * 100).toFixed(SUCCESS_RATE_DECIMAL_PLACES) + "%";
+  const successRate = totalRuns === 0 ? "N/A" : (totalSuccesses / totalRuns * 100).toFixed(SUCCESS_RATE_DECIMAL_PLACES) + "%";
 
   return {
-    successes,
     eventTypes,
     successRate,
     uniqueRuns: uniqueRunsArray.length,
     totalRuns,
-    successfulRuns: successes.length
+    successfulRuns: uniqueRunsArray.filter(r => r.conclusion === 'success').length
   };
 }
 
@@ -133,6 +134,43 @@ function findGoodBadCommits(scheduledMainRuns) {
 }
 
 /**
+ * Gets information about the last run on main branch.
+ *
+ * @param {Array<object>} mainBranchRuns - Array of runs on main branch, sorted by date (newest first)
+ * @param {object} github - Octokit client instance
+ * @param {object} context - GitHub Actions context
+ * @returns {Promise<object>} Object containing run information
+ */
+async function getLastRunInfo(mainBranchRuns, github, context) {
+  const lastMainRun = mainBranchRuns[0];
+  if (!lastMainRun) {
+    return {
+      status: EMPTY_VALUE,
+      sha: EMPTY_VALUE,
+      run: EMPTY_VALUE,
+      pr: EMPTY_VALUE,
+      title: EMPTY_VALUE,
+      lastGoodSha: EMPTY_VALUE,
+      earliestBadSha: EMPTY_VALUE
+    };
+  }
+
+  const prInfo = await fetchPRInfo(github, context, lastMainRun.head_sha);
+  const mainRuns = mainBranchRuns.filter(r => r.event === lastMainRun.event || r.event === 'workflow_dispatch');
+  const { lastGoodSha, earliestBadSha } = findGoodBadCommits(mainRuns);
+
+  return {
+    status: lastMainRun.conclusion === 'success' ? SUCCESS_EMOJI : FAILURE_EMOJI,
+    sha: `\`${lastMainRun.head_sha.substring(0, SHA_SHORT_LENGTH)}\``,
+    run: `[Run](${lastMainRun.html_url})${lastMainRun.run_attempt > 1 ? ` (#${lastMainRun.run_attempt})` : ''}`,
+    pr: prInfo.prNumber,
+    title: prInfo.prTitle,
+    lastGoodSha,
+    earliestBadSha: lastMainRun.conclusion !== 'success' ? earliestBadSha : EMPTY_VALUE
+  };
+}
+
+/**
  * Generates summary tables for push and scheduled workflows.
  *
  * @param {Map<string, Array<object>>} grouped - Map of workflow names to their runs
@@ -155,35 +193,10 @@ async function generateSummaryBox(grouped, github, context) {
       continue;
     }
 
-    const lastMainRun = mainBranchRuns[0];
-    const lastMainPassing = lastMainRun?.conclusion === 'success' ? SUCCESS_EMOJI : FAILURE_EMOJI;
     const workflowLink = getWorkflowLink(context, runs[0]?.path);
+    const runInfo = await getLastRunInfo(mainBranchRuns, github, context);
 
-    const runInfo = {
-      sha: EMPTY_VALUE,
-      run: EMPTY_VALUE,
-      pr: EMPTY_VALUE,
-      title: EMPTY_VALUE,
-      lastGoodSha: EMPTY_VALUE,
-      earliestBadSha: EMPTY_VALUE
-    };
-
-    if (lastMainRun) {
-      const prInfo = await fetchPRInfo(github, context, lastMainRun.head_sha);
-      runInfo.sha = `\`${lastMainRun.head_sha.substring(0, SHA_SHORT_LENGTH)}\``;
-      runInfo.run = `[Run](${lastMainRun.html_url})${lastMainRun.run_attempt > 1 ? ` (#${lastMainRun.run_attempt})` : ''}`;
-      runInfo.pr = prInfo.prNumber;
-      runInfo.title = prInfo.prTitle;
-
-      // Find good/bad commits for both push and scheduled runs
-      const mainRuns = mainBranchRuns.filter(r => r.event === lastMainRun.event || r.event === 'workflow_dispatch');
-      const { lastGoodSha, earliestBadSha } = findGoodBadCommits(mainRuns);
-      runInfo.lastGoodSha = lastGoodSha;
-      // Only show earliest bad SHA for failing workflows
-      runInfo.earliestBadSha = lastMainRun.conclusion !== 'success' ? earliestBadSha : EMPTY_VALUE;
-    }
-
-    const row = `| [${name}](${workflowLink}) | ${stats.eventTypes || 'unknown'} | ${stats.totalRuns} | ${stats.uniqueRuns} | ${stats.successfulRuns} | ${stats.successRate} | ${lastMainPassing} | ${runInfo.sha} | ${runInfo.run} | ${runInfo.pr} | ${runInfo.title} | ${runInfo.earliestBadSha} | ${runInfo.lastGoodSha} |`;
+    const row = `| [${name}](${workflowLink}) | ${stats.eventTypes || 'unknown'} | ${stats.totalRuns} | ${stats.uniqueRuns} | ${stats.successfulRuns} | ${stats.successRate} | ${runInfo.status} | ${runInfo.sha} | ${runInfo.run} | ${runInfo.pr} | ${runInfo.title} | ${runInfo.earliestBadSha} | ${runInfo.lastGoodSha} |`;
     rows.push(row);
   }
 
