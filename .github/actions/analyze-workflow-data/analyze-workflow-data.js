@@ -55,20 +55,20 @@ async function fetchPRInfo(github, context, commitSha) {
  * @param {Array<object>} runs - Array of workflow run objects
  * @returns {object} Statistics object containing:
  *   - eventTypes: Comma-separated string of unique event types
- *   - successRate: Percentage of unique runs that succeeded (3/5 in example)
- *   - uniqueSuccessRate: Percentage of runs that succeeded without retries (1/5 in example)
- *   - retryRate: Percentage of successful runs that required retries (2/3 in example)
- *   - uniqueRuns: Number of runs without any attempts
+ *   - successRate: Percentage of runs that succeeded (based on last attempt)
+ *   - uniqueSuccessRate: Percentage of runs that succeeded on first attempt
+ *   - retryRate: Percentage of successful runs that required retries
+ *   - uniqueRuns: Number of unique runs (excluding attempts)
  *   - totalRuns: Total number of runs including attempts
- *   - successfulRuns: Number of successful unique runs
+ *   - successfulRuns: Number of runs that succeeded (based on last attempt)
  */
 function getWorkflowStats(runs) {
   // Group runs by their original run ID to handle retries and reruns
   const uniqueRuns = new Map();
   let totalRuns = 0;
   let successfulRuns = 0;
-  let successfulRunsWithRetries = 0;
   let successfulRunsWithoutRetries = 0;
+  let successfulRunsWithRetries = 0;
 
   // First pass: identify all unique runs and their attempts
   for (const run of runs) {
@@ -83,33 +83,37 @@ function getWorkflowStats(runs) {
         attempts: 0,
         isSuccessful: false,
         requiredRetry: false,
-        succeededOnFirstTry: false
+        succeededOnFirstTry: false,
+        lastAttempt: run
       });
     } else {
       // This is an attempt
       const existingRun = uniqueRuns.get(originalRunId);
       existingRun.attempts++;
-    }
 
-    // Update run status
-    const runInfo = uniqueRuns.get(originalRunId);
-    if (run.conclusion === 'success') {
-      if (!runInfo.isSuccessful) {
-        runInfo.isSuccessful = true;
-        successfulRuns++;
-      }
-      if (run.run_attempt === 1) {
-        runInfo.succeededOnFirstTry = true;
-        successfulRunsWithoutRetries++;
-      } else {
-        runInfo.requiredRetry = true;
+      // Update last attempt if this is a newer attempt
+      if (run.run_attempt > existingRun.lastAttempt.run_attempt) {
+        existingRun.lastAttempt = run;
       }
     }
   }
 
-  // Count successful runs that required retries
-  successfulRunsWithRetries = Array.from(uniqueRuns.values())
-    .filter(r => r.isSuccessful && r.requiredRetry).length;
+  // Second pass: determine final status based on last attempt
+  for (const runInfo of uniqueRuns.values()) {
+    const lastAttempt = runInfo.lastAttempt;
+    if (lastAttempt.conclusion === 'success') {
+      runInfo.isSuccessful = true;
+      successfulRuns++;
+
+      if (lastAttempt.run_attempt === 1) {
+        runInfo.succeededOnFirstTry = true;
+        successfulRunsWithoutRetries++;
+      } else {
+        runInfo.requiredRetry = true;
+        successfulRunsWithRetries++;
+      }
+    }
+  }
 
   const uniqueRunsArray = Array.from(uniqueRuns.values()).map(r => r.run);
   const eventTypes = [...new Set(uniqueRunsArray.map(r => r.event))].join(', ');
