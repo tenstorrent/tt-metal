@@ -104,7 +104,8 @@ struct CommandConstants {
 enum DispatchWriteOffsets {
     DISPATCH_WRITE_OFFSET_ZERO = 0,
     DISPATCH_WRITE_OFFSET_TENSIX_L1_CONFIG_BASE = 1,
-    DISPATCH_WRITE_OFFSET_ETH_L1_CONFIG_BASE = 2,
+    DISPATCH_WRITE_OFFSET_TENSIX_BINARY_L1_CONFIG_BASE = 2,
+    DISPATCH_WRITE_OFFSET_ETH_L1_CONFIG_BASE = 3,
 };
 
 uint32_t configure_rta_offsets_for_kernel_groups(
@@ -367,10 +368,11 @@ void insert_empty_program_dispatch_preamble_cmd(ProgramCommandSequence& program_
     // Initialize an empty preamble command in the Program Dispatch Cmd Sequence, which will be
     // updated with the correct write offsets when the program is enqueued
     tt::tt_metal::DeviceCommandCalculator calculator;
-    calculator.add_dispatch_set_write_offsets();
+    calculator.add_dispatch_set_write_offsets(4);
     const uint32_t preamble_cmd_sizeB = calculator.write_offset_bytes();
     program_command_sequence.preamble_command_sequence = HostMemDeviceCommand(preamble_cmd_sizeB);
-    program_command_sequence.preamble_command_sequence.add_dispatch_set_write_offsets(0, 0, 0);
+    static constexpr uint32_t write_offsets[4] = {0, 0, 0, 0};
+    program_command_sequence.preamble_command_sequence.add_dispatch_set_write_offsets(write_offsets);
 }
 
 void insert_stall_cmds(
@@ -1219,7 +1221,7 @@ public:
                 kernel_bins_cmd.dispatch_subcmds.size(),
                 kernel_bins_cmd.dispatch_subcmds,
                 0,
-                DISPATCH_WRITE_OFFSET_TENSIX_L1_CONFIG_BASE);
+                DISPATCH_WRITE_OFFSET_TENSIX_BINARY_L1_CONFIG_BASE);
             device_command_sequence.add_prefetch_relay_paged_packed(
                 kernel_bins_cmd.data_aligned_sizeB,
                 kernel_bins_cmd.prefetch_subcmds,
@@ -1494,8 +1496,9 @@ public:
                      tt::align(num_sub_cmds_in_cmd * sizeof(CQDispatchWritePackedMulticastSubCmd), l1_alignment)) /
                     sizeof(uint32_t);
                 for (uint32_t i = 0; i < num_sub_cmds_in_cmd; ++i) {
-                    program_command_sequence.launch_messages.push_back(
-                        (launch_msg_t*)((uint32_t*)device_command_sequence.data() + curr_sub_cmd_data_offset_words));
+                    launch_msg_t* msg_ptr =
+                        (launch_msg_t*)((uint32_t*)device_command_sequence.data() + curr_sub_cmd_data_offset_words);
+                    program_command_sequence.launch_messages.emplace_back(true, *msg_ptr, msg_ptr);
                     curr_sub_cmd_data_offset_words += launch_msg_size_words;
                 }
             }
@@ -1525,8 +1528,9 @@ public:
                      tt::align(num_sub_cmds_in_cmd * sizeof(CQDispatchWritePackedUnicastSubCmd), l1_alignment)) /
                     sizeof(uint32_t);
                 for (uint32_t i = 0; i < num_sub_cmds_in_cmd; ++i) {
-                    program_command_sequence.launch_messages.push_back(
-                        (launch_msg_t*)((uint32_t*)device_command_sequence.data() + curr_sub_cmd_data_offset_words));
+                    launch_msg_t* msg_ptr =
+                        (launch_msg_t*)((uint32_t*)device_command_sequence.data() + curr_sub_cmd_data_offset_words);
+                    program_command_sequence.launch_messages.emplace_back(false, *msg_ptr, msg_ptr);
                     curr_sub_cmd_data_offset_words += launch_msg_size_words;
                 }
             }
@@ -1826,10 +1830,10 @@ void update_program_dispatch_commands(
     ZoneScopedN("program_loaded_on_device");
 
     static constexpr uint32_t wait_count_offset = (sizeof(CQPrefetchCmd) + offsetof(CQDispatchCmd, wait.count));
-    static constexpr uint32_t tensix_l1_write_offset_offset =
-        (sizeof(CQPrefetchCmd) + offsetof(CQDispatchCmd, set_write_offset.offset1));
-    static constexpr uint32_t eth_l1_write_offset_offset =
-        (sizeof(CQPrefetchCmd) + offsetof(CQDispatchCmd, set_write_offset.offset2));
+    static constexpr uint32_t write_offsets_offset = (sizeof(CQPrefetchCmd) + sizeof(CQDispatchCmd));
+    static constexpr uint32_t tensix_l1_write_offset_offset = write_offsets_offset + sizeof(uint32_t);
+    static constexpr uint32_t tensix_l1_binary_write_offset_offset = write_offsets_offset + sizeof(uint32_t) * 2;
+    static constexpr uint32_t eth_l1_write_offset_offset = write_offsets_offset + sizeof(uint32_t) * 3;
     static constexpr uint32_t program_host_id_offset =
         (sizeof(CQPrefetchCmd) + offsetof(CQDispatchCmd, set_write_offset.program_host_id));
     // Update Stall Command Sequence
@@ -1850,6 +1854,10 @@ void update_program_dispatch_commands(
     const auto& hal = MetalContext::instance().hal();
     cached_program_command_sequence.preamble_command_sequence.update_cmd_sequence(
         tensix_l1_write_offset_offset,
+        &dispatch_md.kernel_config_addrs[hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX)],
+        sizeof(uint32_t));
+    cached_program_command_sequence.preamble_command_sequence.update_cmd_sequence(
+        tensix_l1_binary_write_offset_offset,
         &dispatch_md.kernel_config_addrs[hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX)],
         sizeof(uint32_t));
     // May truncate to fit the space.
@@ -1899,7 +1907,7 @@ void update_program_dispatch_commands(
     }
 
     // Update launch messages
-    for (auto& launch_msg : cached_program_command_sequence.launch_messages) {
+    for (auto& [is_multicast, original_launch_msg, launch_msg] : cached_program_command_sequence.launch_messages) {
         for (uint32_t i = 0; i < dispatch_md.kernel_config_addrs.size(); i++) {
             launch_msg->kernel_config.kernel_config_base[i] = dispatch_md.kernel_config_addrs[i].addr;
         }
@@ -1953,18 +1961,22 @@ void update_traced_program_dispatch_commands(
     CoreCoord dispatch_core,
     CoreType dispatch_core_type,
     SubDeviceId sub_device_id,
-    const ProgramDispatchMetadata& dispatch_md,
     ProgramBinaryStatus program_binary_status,
     std::pair<bool, int> unicast_go_signal_update) {
     uint32_t i = 0;
     ZoneScopedN("program_loaded_on_device");
+    const auto& hal = MetalContext::instance().hal();
     const ProgramImpl& program = *trace_node.program;
+    const TraceDispatchMetadata& dispatch_md = trace_node.dispatch_metadata;
+
+    uint32_t tensix_index = hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX);
+    const ProgramConfig& program_config = program.get_program_config(tensix_index);
 
     static constexpr uint32_t wait_count_offset = (sizeof(CQPrefetchCmd) + offsetof(CQDispatchCmd, wait.count));
-    static constexpr uint32_t tensix_l1_write_offset_offset =
-        (sizeof(CQPrefetchCmd) + offsetof(CQDispatchCmd, set_write_offset.offset1));
-    static constexpr uint32_t eth_l1_write_offset_offset =
-        (sizeof(CQPrefetchCmd) + offsetof(CQDispatchCmd, set_write_offset.offset2));
+    static constexpr uint32_t write_offsets_offset = (sizeof(CQPrefetchCmd) + sizeof(CQDispatchCmd));
+    static constexpr uint32_t tensix_l1_write_offset_offset = write_offsets_offset + sizeof(uint32_t);
+    static constexpr uint32_t tensix_l1_binary_write_offset_offset = write_offsets_offset + sizeof(uint32_t) * 2;
+    static constexpr uint32_t eth_l1_write_offset_offset = write_offsets_offset + sizeof(uint32_t) * 3;
     static constexpr uint32_t program_host_id_offset =
         (sizeof(CQPrefetchCmd) + offsetof(CQDispatchCmd, set_write_offset.program_host_id));
     // Update Stall Command Sequence
@@ -1982,11 +1994,16 @@ void update_traced_program_dispatch_commands(
         wait_count_offset, &(dispatch_md.sync_count), sizeof(uint32_t));
 
     // Update preamble based on kernel config ring buffer slot
-    const auto& hal = MetalContext::instance().hal();
     cached_program_command_sequence.preamble_command_sequence.update_cmd_sequence(
         tensix_l1_write_offset_offset,
-        &dispatch_md.kernel_config_addrs[hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX)],
+        &dispatch_md
+             .nonbinary_kernel_config_addrs[hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX)],
         sizeof(uint32_t));
+    // Offsets baked into the commands include the kernel text offset.
+    uint32_t binary_write_offset =
+        dispatch_md.binary_kernel_config_addrs[tensix_index].addr - program_config.kernel_text_offset;
+    cached_program_command_sequence.preamble_command_sequence.update_cmd_sequence(
+        tensix_l1_binary_write_offset_offset, &binary_write_offset, sizeof(uint32_t));
     // May truncate to fit the space.
     static_assert(
         std::is_same_v<uint16_t, decltype(std::declval<CQDispatchCmd>().set_write_offset.program_host_id)>,
@@ -1997,13 +2014,13 @@ void update_traced_program_dispatch_commands(
     if (hal.get_programmable_core_type_count() >= 2) {
         cached_program_command_sequence.preamble_command_sequence.update_cmd_sequence(
             eth_l1_write_offset_offset,
-            &dispatch_md.kernel_config_addrs[hal.get_programmable_core_type_index(HalProgrammableCoreType::ACTIVE_ETH)],
+            &dispatch_md.nonbinary_kernel_config_addrs[hal.get_programmable_core_type_index(
+                HalProgrammableCoreType::ACTIVE_ETH)],
             sizeof(uint32_t));
     }
 
     // Update CB Configs
-    uint32_t index = hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX);
-    uint32_t remote_offset_index = program.get_program_config(index).local_cb_size / sizeof(uint32_t);
+    uint32_t remote_offset_index = program.get_program_config(tensix_index).local_cb_size / sizeof(uint32_t);
     TT_ASSERT(
         trace_node.cb_configs_payloads.size() ==
         cached_program_command_sequence.circular_buffers_on_core_ranges.size());
@@ -2024,11 +2041,20 @@ void update_traced_program_dispatch_commands(
     }
 
     // Update launch messages
-    for (auto& launch_msg : cached_program_command_sequence.launch_messages) {
-        for (uint32_t i = 0; i < dispatch_md.kernel_config_addrs.size(); i++) {
-            launch_msg->kernel_config.kernel_config_base[i] = dispatch_md.kernel_config_addrs[i].addr;
+    for (auto& [is_multicast, original_launch_msg, launch_msg] : cached_program_command_sequence.launch_messages) {
+        *launch_msg = original_launch_msg;
+        for (uint32_t i = 0; i < dispatch_md.nonbinary_kernel_config_addrs.size(); i++) {
+            launch_msg->kernel_config.kernel_config_base[i] = dispatch_md.nonbinary_kernel_config_addrs[i].addr;
         }
         launch_msg->kernel_config.host_assigned_id = trace_node.program_runtime_id;
+        if (is_multicast) {
+            for (uint32_t i = 0; i < NUM_PROCESSORS_PER_CORE_TYPE; i++) {
+                // Adjust the kernel text offset to account for the difference between the RTA and binary base.
+                launch_msg->kernel_config.kernel_text_offset[i] =
+                    original_launch_msg.kernel_config.kernel_text_offset[i] + binary_write_offset -
+                    dispatch_md.nonbinary_kernel_config_addrs[tensix_index].addr;
+            }
+        }
     }
     // Update launch message addresses to reflect new launch_msg slot in ring buffer
     uint32_t multicast_cores_launch_msg_addr =
@@ -2075,9 +2101,11 @@ void write_program_command_sequence(
     uint32_t command_queue_id,
     CoreType dispatch_core_type,
     bool stall_first,
-    bool stall_before_program) {
+    bool stall_before_program,
+    bool send_binary) {
     // Check if it's possible to write all commands in a single fetch queue entry
-    uint32_t one_shot_fetch_size = program_command_sequence.get_one_shot_fetch_size(stall_first, stall_before_program);
+    uint32_t one_shot_fetch_size =
+        program_command_sequence.get_one_shot_fetch_size(stall_first, stall_before_program, send_binary);
     bool one_shot = one_shot_fetch_size <=
                     MetalContext::instance().dispatch_mem_map(dispatch_core_type).max_prefetch_command_size();
     if (one_shot) {
@@ -2134,10 +2162,12 @@ void write_program_command_sequence(
             program_command_sequence.stall_command_sequences[curr_stall_seq_idx].size_bytes());
     }
 
-    // Write the program binary
-    write_data_to_cq(
-        program_command_sequence.program_binary_command_sequence.data(),
-        program_command_sequence.program_binary_command_sequence.size_bytes());
+    if (send_binary) {
+        // Write the program binary
+        write_data_to_cq(
+            program_command_sequence.program_binary_command_sequence.data(),
+            program_command_sequence.program_binary_command_sequence.size_bytes());
+    }
 
     // Write the launch message
     write_data_to_cq(

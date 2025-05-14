@@ -129,10 +129,11 @@ TEST(DeviceCommandTest, AddDispatchSetGoSignalNocData) {
 
 TEST(DeviceCommandTest, AddDispatchSetWriteOffsets) {
     DeviceCommandCalculator calculator;
-    calculator.add_dispatch_set_write_offsets();
+    calculator.add_dispatch_set_write_offsets(4);
 
     HostMemDeviceCommand command(calculator.write_offset_bytes());
-    command.add_dispatch_set_write_offsets(0, 0, 0);
+    std::vector<uint32_t> offsets(4);
+    command.add_dispatch_set_write_offsets(offsets);
     EXPECT_EQ(command.size_bytes(), command.write_offset_bytes());
 }
 
