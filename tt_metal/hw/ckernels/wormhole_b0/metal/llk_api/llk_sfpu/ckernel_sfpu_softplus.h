@@ -6,7 +6,7 @@
 
 #include "ckernel.h"
 #include "ckernel_defs.h"
-#include "ckernel_sfpu_converter.h"
+#include "sfpu/ckernel_sfpu_converter.h"
 
 using namespace sfpi;
 
@@ -77,9 +77,9 @@ inline void calculate_softplus_body(vFloat beta, vFloat beta_reciprocal, vFloat 
 
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
 inline void calculate_softplus(uint param0, uint param1, uint param2) {
-    vFloat beta = Converter::to_float(param0);
-    vFloat beta_reciprocal = Converter::to_float(param1);
-    vFloat threshold = Converter::to_float(param2);
+    vFloat beta = Converter::as_float(param0);
+    vFloat beta_reciprocal = Converter::as_float(param1);
+    vFloat threshold = Converter::as_float(param2);
     for (int d = 0; d < ITERATIONS; d++) {
         calculate_softplus_body<APPROXIMATION_MODE>(beta, beta_reciprocal, threshold);
         dst_reg++;
