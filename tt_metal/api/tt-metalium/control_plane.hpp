@@ -110,6 +110,6 @@ private:
     // Takes RoutingTableGenerator table and converts to routing tables for each ethernet port
     void convert_fabric_routing_table_to_chip_routing_table();
 
-    std::unique_ptr<FabricContext> fabric_context_ = nullptr;
+    std::unique_ptr<FabricContext> fabric_context_;
 };
 }  // namespace tt::tt_fabric
