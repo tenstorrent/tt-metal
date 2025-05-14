@@ -29,6 +29,9 @@ enum class KernelName {
     ReaderNoBcastSplit,
     WriterNoBcastSplit,
     ReaderRowBcastSplit,
+    ReaderColBcastSplit,
+    ReaderRowBColABcastSplit,
+    ReaderScalarBcastSplit,
 };
 
 struct BinaryNgKernelConfig {

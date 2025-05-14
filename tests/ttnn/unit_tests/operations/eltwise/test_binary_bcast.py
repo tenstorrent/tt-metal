@@ -1913,13 +1913,15 @@ def test_binary_subtile_no_bcast(a_shape, b_shape, device):
 
 
 profile_a_b_shape_pairs = [
-    # ((32, 32), (1, 32)),
-    # ((1280, 320), (1, 320)),
-    # ((8192, 8192), (1, 8192)),
-    # [[1, 1, 8192, 8192], [1, 1, 8192, 8192]],
-    # [[1, 4, 2048, 8192], [1, 1, 2048, 8192]],
-    # [[4, 1, 2048, 8192], [1, 1, 2048, 8192]],
-    [[4, 4, 2048, 2048], [1, 1, 2048, 2048]],
+    # [[8192, 8192], [8192, 8192]],
+    # [[1, 8192], [8192, 8192]],
+    # [[8192, 8192], [1, 8192]],
+    # [[8192, 1], [8192, 8192]],
+    # [[8192, 8192], [8192, 1]],
+    # [[1, 8192], [8192, 1]],
+    # [[8192, 1], [1, 8192]],
+    # [[1, 1], [8192, 8192]],
+    [[8192, 8192], [1, 1]],
 ]
 
 
@@ -1962,6 +1964,124 @@ def test_binary_bcast_profile(device, dtype_pt, dtype_tt, a_and_b_shape, memory_
 
         torch.testing.assert_close(torch_result, output)
         ttnn.synchronize_device(device)
+
+
+@pytest.mark.parametrize(
+    "a_shape, b_shape",
+    [
+        [[1, 1, 320, 1], [1, 1, 320, 320]],
+        # a bcast, b no bcast
+        [[1, 1, 320, 1], [1, 4, 320, 320]],
+        [[1, 1, 320, 1], [4, 1, 320, 320]],
+        [[1, 1, 320, 1], [4, 4, 320, 320]],
+        [[4, 1, 320, 1], [1, 1, 320, 320]],
+        [[1, 4, 320, 1], [1, 1, 320, 320]],
+        [[4, 4, 320, 1], [1, 1, 320, 320]],
+        [[1, 4, 320, 1], [4, 1, 320, 320]],
+        [[4, 1, 320, 1], [1, 4, 320, 320]],
+        [[4, 4, 320, 1], [4, 4, 320, 320]],
+        # a no bcast, b bcast
+        [[1, 1, 320, 320], [1, 4, 320, 1]],
+        [[1, 1, 320, 320], [4, 1, 320, 1]],
+        [[1, 1, 320, 320], [4, 4, 320, 1]],
+        [[4, 1, 320, 320], [1, 1, 320, 1]],
+        [[1, 4, 320, 320], [1, 1, 320, 1]],
+        [[4, 4, 320, 320], [1, 1, 320, 1]],
+        [[1, 4, 320, 320], [4, 1, 320, 1]],
+        [[4, 1, 320, 320], [1, 4, 320, 1]],
+        [[4, 4, 320, 320], [4, 4, 320, 1]],
+    ],
+)
+def test_binary_subtile_col_bcast(a_shape, b_shape, device):
+    torch.manual_seed(0)
+
+    torch_input_tensor_a, input_tensor_a = rand_bf16_gen(a_shape, device)
+    torch_input_tensor_b, input_tensor_b = rand_bf16_gen(b_shape, device)
+
+    torch_output_tensor = torch_input_tensor_a + torch_input_tensor_b
+
+    output_tensor = ttnn.add(input_tensor_a, input_tensor_b, memory_config=ttnn.DRAM_MEMORY_CONFIG, use_legacy=False)
+    output_tensor = ttnn.to_torch(output_tensor)
+
+    assert output_tensor.shape == torch_output_tensor.shape
+    assert ttnn.pearson_correlation_coefficient(torch_output_tensor, output_tensor) >= 0.99988
+
+
+@pytest.mark.parametrize(
+    "a_shape, b_shape",
+    [
+        [[1, 1, 1, 1], [1, 1, 320, 320]],
+        [[1, 1, 320, 320], [1, 1, 1, 1]],
+        # a scalar, b no bcast
+        [[1, 1, 1, 1], [1, 4, 320, 320]],
+        [[1, 1, 1, 1], [4, 1, 320, 320]],
+        [[1, 1, 1, 1], [4, 4, 320, 320]],
+        [[1, 4, 1, 1], [1, 1, 320, 320]],
+        [[4, 1, 1, 1], [1, 1, 320, 320]],
+        [[4, 4, 1, 1], [1, 1, 320, 320]],
+        # # a no bast, b scalar
+        [[1, 1, 320, 320], [1, 4, 1, 1]],
+        [[1, 1, 320, 320], [4, 1, 1, 1]],
+        [[1, 1, 320, 320], [4, 4, 1, 1]],
+        [[1, 4, 320, 320], [1, 1, 1, 1]],
+        [[4, 1, 320, 320], [1, 1, 1, 1]],
+        [[4, 4, 320, 320], [1, 1, 1, 1]],
+    ],
+)
+def test_binary_subtile_scalar_bcast(a_shape, b_shape, device):
+    torch.manual_seed(0)
+
+    torch_input_tensor_a, input_tensor_a = rand_bf16_gen(a_shape, device)
+    torch_input_tensor_b, input_tensor_b = rand_bf16_gen(b_shape, device)
+
+    torch_output_tensor = torch_input_tensor_a + torch_input_tensor_b
+
+    output_tensor = ttnn.add(input_tensor_a, input_tensor_b, memory_config=ttnn.DRAM_MEMORY_CONFIG, use_legacy=False)
+    output_tensor = ttnn.to_torch(output_tensor)
+
+    assert output_tensor.shape == torch_output_tensor.shape
+    assert ttnn.pearson_correlation_coefficient(torch_output_tensor, output_tensor) >= 0.99988
+
+
+@pytest.mark.parametrize(
+    "a_shape, b_shape",
+    [
+        [[1, 1, 320, 1], [1, 1, 1, 320]],
+        # a col, b row
+        [[1, 1, 320, 1], [1, 4, 1, 320]],
+        [[1, 1, 320, 1], [4, 1, 1, 320]],
+        [[1, 1, 320, 1], [4, 4, 1, 320]],
+        [[4, 1, 320, 1], [1, 1, 1, 320]],
+        [[1, 4, 320, 1], [1, 1, 1, 320]],
+        [[4, 4, 320, 1], [1, 1, 1, 320]],
+        [[1, 4, 320, 1], [4, 1, 1, 320]],
+        [[4, 1, 320, 1], [1, 4, 1, 320]],
+        [[4, 4, 320, 1], [4, 4, 1, 320]],
+        # a row, b col
+        [[1, 1, 1, 320], [1, 4, 320, 1]],
+        [[1, 1, 1, 320], [4, 1, 320, 1]],
+        [[1, 1, 1, 320], [4, 4, 320, 1]],
+        [[4, 1, 1, 320], [1, 1, 320, 1]],
+        [[1, 4, 1, 320], [1, 1, 320, 1]],
+        [[4, 4, 1, 320], [1, 1, 320, 1]],
+        [[1, 4, 1, 320], [4, 1, 320, 1]],
+        [[4, 1, 1, 320], [1, 4, 320, 1]],
+        [[4, 4, 1, 320], [4, 4, 320, 1]],
+    ],
+)
+def test_binary_subtile_row_b_col_a_bcast(a_shape, b_shape, device):
+    torch.manual_seed(0)
+
+    torch_input_tensor_a, input_tensor_a = rand_bf16_gen(a_shape, device)
+    torch_input_tensor_b, input_tensor_b = rand_bf16_gen(b_shape, device)
+
+    torch_output_tensor = torch_input_tensor_a + torch_input_tensor_b
+
+    output_tensor = ttnn.add(input_tensor_a, input_tensor_b, memory_config=ttnn.DRAM_MEMORY_CONFIG, use_legacy=False)
+    output_tensor = ttnn.to_torch(output_tensor)
+
+    assert output_tensor.shape == torch_output_tensor.shape
+    assert ttnn.pearson_correlation_coefficient(torch_output_tensor, output_tensor) >= 0.99988
 
 
 @pytest.mark.parametrize(

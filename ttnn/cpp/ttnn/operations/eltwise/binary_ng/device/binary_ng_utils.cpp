@@ -112,11 +112,17 @@ std::string get_kernel_file_path(KernelName kernel_name, bool is_sfpu) {
 
     switch (kernel_name) {
         case KernelName::ReaderNoBcastSplit:
-            return fmt::format(dataflow, root, "reader_interleaved_no_bcast_split.cpp");
+            return fmt::format(dataflow, root, "split/reader_interleaved_no_bcast_split.cpp");
         case KernelName::ReaderRowBcastSplit:
-            return fmt::format(dataflow, root, "reader_interleaved_row_bcast_split.cpp");
+            return fmt::format(dataflow, root, "split/reader_interleaved_row_bcast_split.cpp");
+        case KernelName::ReaderColBcastSplit:
+            return fmt::format(dataflow, root, "split/reader_interleaved_col_bcast_split.cpp");
+        case KernelName::ReaderRowBColABcastSplit:
+            return fmt::format(dataflow, root, "split/reader_interleaved_row_col_mixed_bcast_split.cpp");
+        case KernelName::ReaderScalarBcastSplit:
+            return fmt::format(dataflow, root, "split/reader_interleaved_scalar_bcast_split.cpp");
         case KernelName::WriterNoBcastSplit:
-            return fmt::format(dataflow, root, "writer_interleaved_no_bcast_split.cpp");
+            return fmt::format(dataflow, root, "split/writer_interleaved_no_bcast_split.cpp");
         case KernelName::ReaderNoBcast: return fmt::format(dataflow, root, "reader_interleaved_no_bcast.cpp");
         case KernelName::ReaderRowBcast: return fmt::format(dataflow, root, "reader_interleaved_row_bcast.cpp");
         case KernelName::ReaderColBcast: return fmt::format(dataflow, root, "reader_interleaved_col_bcast.cpp");
