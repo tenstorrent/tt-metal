@@ -123,11 +123,9 @@ class TtLlamaRotarySetup(LightweightModule):
         assert len(position_idxs.shape) == 1, "position idxs must be a [batch] tensor"
         assert position_idxs.shape[0] == 32, "position idxs must be a [32] tensor"
         # repeating twice at every 8th position for fused kv rope
-        position_idxs_0 = position_idxs[:8].repeat(2)
-        position_idxs_1 = position_idxs[8:16].repeat(2)
-        position_idxs_2 = position_idxs[16:24].repeat(2)
-        position_idxs_3 = position_idxs[24:32].repeat(2)
-        position_idxs = torch.cat([position_idxs_0, position_idxs_1, position_idxs_2, position_idxs_3], dim=0)
+        position_idxs = position_idxs.view(-1, 8) # [4, 8]
+        position_idxs = position_idxs.repeat(1, 2) # [4, 16]
+        position_idxs = position_idxs.view(-1) # [64]
 
         batch = position_idxs.shape[0]
         position_idxs = position_idxs.reshape(1, batch)  # [1, 1, 1, batch]
