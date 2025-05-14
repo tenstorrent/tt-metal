@@ -181,7 +181,25 @@ def test_sdpa_perf(device, b, nh, nkv, s, d, q_chunk_size, k_chunk_size, dtype):
     if nh == 8 and q_chunk_size == 128 and k_chunk_size == 128:
         pytest.skip("Can cause OOM if profiling is enabled.")
     ttnn.device.DisablePersistentKernelCache()
-    run_sdpa_noncausal(device, b, nh, nkv, s, d, q_chunk_size, k_chunk_size, dtype, use_mask=False, grid=grid, mse=1e-3)
+    run_sdpa_noncausal(device, b, nh, nkv, s, d, q_chunk_size, k_chunk_size, dtype, use_mask=False, grid=None, mse=1e-3)
+
+
+def test_sdpa_benchmark(device):
+    num_tokens = 16384
+    hidden_dim = 2048
+    dtype = ttnn.bfloat16
+    for causal in [True, False]:
+        for head_dim in [64, 128]:
+            nh = hidden_dim // head_dim
+            for s in [512, 1024, 2048, 4096, 8192, 16384]:
+                b = num_tokens // s
+                # Start sweep for this config
+                for q_chunk_size in [32, 64]:
+                    for k_chunk_size in [32, 64]:
+                        if causal:
+                            run_test_sdpa_tt(device, b, nh, nh, s, head_dim, q_chunk_size, k_chunk_size, dtype)
+                        else:
+                            run_sdpa_noncausal(device, b, nh, nh, s, head_dim, q_chunk_size, k_chunk_size, dtype)
 
 
 @skip_for_blackhole("Mismatching on BH, see #12349")

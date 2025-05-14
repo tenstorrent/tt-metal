@@ -393,6 +393,7 @@ operation::ProgramWithCallbacks sdpa_multi_core(
         (std::uint32_t)use_provided_mask,
         (std::uint32_t)use_padded_mask,
         (uint32_t)is_chunked,
+        scale_union.u,
     };
 
     std::map<string, string> defines;
