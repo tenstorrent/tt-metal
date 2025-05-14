@@ -33,6 +33,7 @@
 #include "impl/context/metal_context.hpp"
 #include <tt-metalium/fabric.hpp>
 #include "tt_metal/fabric/fabric_host_utils.hpp"
+#include "tt_metal/fabric/fabric_context.hpp"
 #include "tt_metal/impl/debug/noc_logging.hpp"
 #include "tt_metal/impl/debug/watcher_server.hpp"
 #include "tt_metal/impl/dispatch/topology.hpp"

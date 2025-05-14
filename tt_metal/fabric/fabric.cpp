@@ -21,6 +21,7 @@
 #include <umd/device/types/xy_pair.h>
 
 #include "fabric_host_utils.hpp"
+#include "fabric_context.hpp"
 
 namespace tt {
 namespace tt_metal {

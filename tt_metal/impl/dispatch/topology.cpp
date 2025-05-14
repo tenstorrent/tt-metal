@@ -45,6 +45,8 @@
 #include <tt-metalium/fabric.hpp>
 #include "system_memory_manager.hpp"
 #include "tt_metal/fabric/fabric_host_utils.hpp"
+#include "tt_metal/fabric/fabric_context.hpp"
+#include "tt_metal/fabric/hw/inc/fabric_routing_mode.h"
 #include <umd/device/tt_core_coordinates.h>
 #include <umd/device/tt_xy_pair.h>
 #include "utils.hpp"
@@ -1124,7 +1126,7 @@ void build_tt_fabric_program(
         return;
     }
 
-    const bool wrap_around_mesh = fabric_context->enable_wrap_around_mesh();
+    const bool wrap_around_mesh = fabric_context->is_wrap_around_mesh();
     const auto topology = fabric_context->get_fabric_topology();
 
     for (const auto& [direction, remote_chip_id] : chip_neighbors) {
