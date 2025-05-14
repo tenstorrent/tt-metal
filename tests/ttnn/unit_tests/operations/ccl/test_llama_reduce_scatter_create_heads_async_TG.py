@@ -200,7 +200,6 @@ def run_reduce_scatter_test(
         # scattered_output = torch.chunk(output, chunks=num_devices_scatter, dim=dim)
         # scattered_output = torch.cat(scattered_output, dim=1)
 
-        # breakpoint()
         tt_input = ttnn.from_torch(
             input,
             device=mesh_device,
@@ -226,8 +225,6 @@ def run_reduce_scatter_test(
             tt_intermediate_tensors_list.append(tt_intermediate)
         check_mesh_tensor_alloc(tt_input)
         tt_input_tensors_list.append(tt_input)
-
-        # breakpoint()
 
     ccl_sub_device_crs = subdevice_shard_cores_grid if use_regular_grid is not None else SUB_DEVICE_CRS
     worker_sub_device = ttnn.SubDevice(
@@ -356,7 +353,9 @@ def run_reduce_scatter_test(
             failed_indices = torch.where(tt_torch_tensor_q != output_tensor_q_goldens_list[tensor_index])
             break
 
-        eq, output_results = comp_pcc(tt_torch_tensor_k, output_tensor_k_goldens_list[tensor_index], expected_pcc)
+        eq, output_results = comp_pcc(
+            tt_torch_tensor_k[:, :, 0, :].unsqueeze(2), output_tensor_k_goldens_list[tensor_index], expected_pcc
+        )
         logger.info(f"Output k tensor {tensor_index} has result {output_results}")
         if not eq:
             passed = False
@@ -364,7 +363,9 @@ def run_reduce_scatter_test(
             failed_indices = torch.where(tt_torch_tensor_k != output_tensor_k_goldens_list[tensor_index])
             break
 
-        eq, output_results = comp_pcc(tt_torch_tensor_v, output_tensor_v_goldens_list[tensor_index], expected_pcc)
+        eq, output_results = comp_pcc(
+            tt_torch_tensor_v[:, :, 0, :].unsqueeze(2), output_tensor_v_goldens_list[tensor_index], expected_pcc
+        )
         logger.info(f"Output v tensor {tensor_index} has result {output_results}")
         if not eq:
             passed = False

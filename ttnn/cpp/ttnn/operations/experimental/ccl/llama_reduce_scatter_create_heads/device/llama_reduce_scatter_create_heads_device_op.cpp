@@ -69,8 +69,6 @@ LlamaReduceScatterCreateHeadsDeviceOperation::compute_output_specs(
     const auto batch = attributes.slice_size;
     const auto head_dim = attributes.head_dim;
     const Shape q_output_shape({input_shape[0], batch, attributes.num_heads, head_dim});
-    const Shape v_output_shape({input_shape[0], batch, attributes.num_kv_heads, head_dim});
-    const Shape k_output_shape = v_output_shape;
     CoreRangeSet q_shard_grid, k_shard_grid, v_shard_grid;
     auto sub_core_grid = attributes.qkv_memory_config.value().shard_spec()->grid;
     auto start_core_coord = sub_core_grid.bounding_box().start_coord;
@@ -94,8 +92,8 @@ LlamaReduceScatterCreateHeadsDeviceOperation::compute_output_specs(
     v_shard_grid = tt::tt_metal::num_cores_to_corerangeset_in_subcoregrids(next_core_coord, batch, sub_core_grid, true);
 
     tt::tt_metal::ShardSpec q_shard_spec{q_shard_grid, {attributes.num_heads, head_dim}};
-    tt::tt_metal::ShardSpec k_shard_spec{k_shard_grid, {attributes.num_kv_heads, head_dim}};
-    tt::tt_metal::ShardSpec v_shard_spec{v_shard_grid, {attributes.num_kv_heads, head_dim}};
+    tt::tt_metal::ShardSpec k_shard_spec{k_shard_grid, {attributes.num_heads, head_dim}};
+    tt::tt_metal::ShardSpec v_shard_spec{v_shard_grid, {attributes.num_heads, head_dim}};
     tt::tt_metal::MemoryConfig q_mem_config = attributes.qkv_memory_config.value().with_shard_spec(q_shard_spec);
     tt::tt_metal::MemoryConfig k_mem_config = attributes.qkv_memory_config.value().with_shard_spec(k_shard_spec);
     tt::tt_metal::MemoryConfig v_mem_config = attributes.qkv_memory_config.value().with_shard_spec(v_shard_spec);
@@ -106,11 +104,11 @@ LlamaReduceScatterCreateHeadsDeviceOperation::compute_output_specs(
             tt::tt_metal::TensorLayout(
                 input_tensor.get_dtype(), tt::tt_metal::PageConfig(input_tensor.get_layout()), q_mem_config)),
         TensorSpec(
-            k_output_shape,
+            q_output_shape,
             tt::tt_metal::TensorLayout(
                 input_tensor.get_dtype(), tt::tt_metal::PageConfig(input_tensor.get_layout()), k_mem_config)),
         TensorSpec(
-            v_output_shape,
+            q_output_shape,
             tt::tt_metal::TensorLayout(
                 input_tensor.get_dtype(), tt::tt_metal::PageConfig(input_tensor.get_layout()), v_mem_config))};
 }
