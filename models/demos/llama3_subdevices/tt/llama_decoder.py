@@ -139,8 +139,15 @@ class TtTransformerBlock(LightweightModule):
         ), f"decoder input memcfg mismatch: {x.memory_config()} != {skip_mem_cfg}"
         # Norms take fractured inputs and output replicated across devices
         # attn_in_sharded=norm(x+h), h = x+h happens implicitly
-        attn_in_sharded, _ = self.attention_norm(x, h, mode)
-        # x.deallocate(True)
+        if self.layer_num == 0:
+            # In the first layer we "make" the h tensor from the original x keeping it alive
+            attn_in_sharded, _ = self.attention_norm(x, None, mode)
+            h = x
+        else:
+            # In subsequent Layers we take the h tensor from before and modify it in place
+            # The x can be deleted in this case
+            attn_in_sharded, _ = self.attention_norm(x, h, mode)
+            x.deallocate(True)
         attn_out = self.attention.forward(
             attn_in_sharded,
             current_pos,
@@ -160,6 +167,7 @@ class TtTransformerBlock(LightweightModule):
         if self.layer_num == self.n_layers - 1:
             out = ttnn.add(ff_out, h, memory_config=skip_mem_cfg)  # , dtype=ttnn.bfloat16)
             ff_out.deallocate(True)
+            h.deallocate(True)
+            return out, None
         else:
-            out = ff_out
-        return out, h  # fractured across devices
+            return ff_out, h
