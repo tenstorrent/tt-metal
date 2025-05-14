@@ -511,8 +511,9 @@ StorageType Tensor::storage_type() const {
 ttnn::Shape Tensor::strides() const { return ttnn::Shape(tt::tt_metal::compute_strides(this->get_padded_shape())); }
 
 uint32_t Tensor::volume() const { return get_padded_shape().volume(); }
-
-uint32_t Tensor::get_logical_volume() const { return get_logical_shape().volume(); }
+uint64_t Tensor::logical_volume() const { return get_logical_shape().volume(); }
+uint64_t Tensor::padded_volume() const { return get_padded_shape().volume(); }
+uint64_t Tensor::get_logical_volume() const { return get_logical_shape().volume(); }
 
 bool Tensor::is_scalar() const {
     const ttnn::Shape logical_shape = this->get_logical_shape();
@@ -767,6 +768,7 @@ Tensor set_tensor_id(const Tensor& tensor) {
 };
 
 const Storage& Tensor::storage() const { return this->tensor_attributes->get_storage(); }
+Storage& Tensor::storage() { return this->tensor_attributes->get_storage(); }
 
 const ttnn::Shape& Tensor::logical_shape() const { return this->tensor_attributes->get_tensor_spec().logical_shape(); }
 
