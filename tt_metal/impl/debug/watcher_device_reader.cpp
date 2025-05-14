@@ -309,36 +309,37 @@ void WatcherDeviceReader::Dump(FILE* file) {
         for (auto& risc_id_and_stack_info : highest_stack_usage) {
             stack_usage_info_t& info = risc_id_and_stack_info.second;
             const char* riscv_name = get_riscv_name(info.core.coord, risc_id_and_stack_info.first);
-            uint16_t stack_size = get_riscv_stack_size(info.core, risc_id_and_stack_info.first);
+            // Threshold of free space for warning.
+            constexpr uint32_t min_threshold = 64;
             fprintf(
                 f,
-                "\n\t%s highest stack usage: %4d/%4d, on core %s, running kernel %s",
+                "\n\t%s highest stack usage: %u bytes free, on core %s, running kernel %s",
                 riscv_name,
-                info.stack_usage,
-                stack_size,
+                info.stack_free,
                 info.core.coord.str().c_str(),
                 kernel_names[info.kernel_id].c_str());
-            if (info.stack_usage >= stack_size) {
+            if (info.stack_free == 0) {
+                // We had no free stack, this probably means we
+                // overflowed, but it could be a remarkable coincidence.
                 fprintf(f, " (OVERFLOW)");
                 log_fatal(
-                    "Watcher detected stack overflow on Device {} Core {}: {}! Kernel {} uses {}/{} of the stack.",
+                    "Watcher detected stack overflow on Device {} Core {}: "
+                    "{}! Kernel {} uses (at least) all of the stack.",
                     device_id,
                     info.core.coord.str(),
                     riscv_name,
-                    kernel_names[info.kernel_id].c_str(),
-                    info.stack_usage,
-                    stack_size);
-            } else if (stack_size - info.stack_usage <= std::min(32, stack_size / 10)) {
+                    kernel_names[info.kernel_id].c_str());
+            } else if (info.stack_free < min_threshold) {
                 fprintf(f, " (Close to overflow)");
                 log_warning(
-                    "Watcher detected stack usage within 10\% of max on Device {} Core {}: {}! Kernel {} uses "
-                    "{}/{} of the stack.",
+                    "Watcher detected stack had fewer than {} bytes free on Device {} Core {}: "
+                    "{}! Kernel {} leaves {} bytes unused.",
+                    min_threshold,
                     device_id,
                     info.core.coord.str(),
                     riscv_name,
                     kernel_names[info.kernel_id].c_str(),
-                    info.stack_usage,
-                    stack_size);
+                    info.stack_free);
             }
         }
         fprintf(f, "\n");
@@ -967,11 +968,11 @@ void WatcherDeviceReader::DumpSyncRegs(CoreDescriptor& core) {
 void WatcherDeviceReader::DumpStackUsage(CoreDescriptor& core, const mailboxes_t* mbox_data) {
     const debug_stack_usage_t* stack_usage_mbox = &mbox_data->watcher.stack_usage;
     for (int risc_id = 0; risc_id < DebugNumUniqueRiscs; risc_id++) {
-        uint16_t stack_usage = stack_usage_mbox->max_usage[risc_id];
-        if (stack_usage != watcher::DEBUG_SANITIZE_NOC_SENTINEL_OK_16) {
-            if (stack_usage > highest_stack_usage[static_cast<riscv_id_t>(risc_id)].stack_usage) {
-                highest_stack_usage[static_cast<riscv_id_t>(risc_id)] = {
-                    core, stack_usage, stack_usage_mbox->watcher_kernel_id[risc_id]};
+        const auto &usage = stack_usage_mbox->cpu[risc_id];
+        if (usage.min_free) {
+            auto &slot = highest_stack_usage[static_cast<riscv_id_t>(risc_id)];
+            if (usage.min_free <= slot.stack_free) {
+                slot = {core, usage.min_free - 1, stack_usage_mbox->cpu[risc_id].watcher_kernel_id};
             }
         }
     }
