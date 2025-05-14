@@ -21,7 +21,7 @@ jobs:
   metalium-basic:
     runs-on: ${{ format('tt-beta-ubuntu-2204-{0}-large-stable', inputs.runner) }}
     container:
-      image: ${{ inputs.docker-image || 'docker-image-unresolved!'}}
+      image: harbor.ci.tenstorrent.net/${{ inputs.docker-image || 'docker-image-unresolved!'}}
       env:
         ASAN_OPTIONS: "color=always"
         TSAN_OPTIONS: "color=always"
