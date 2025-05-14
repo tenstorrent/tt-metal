@@ -57,23 +57,17 @@ async function fetchPRInfo(github, context, commitSha) {
  *   - successes: Array of successful runs
  *   - eventTypes: Comma-separated string of unique event types
  *   - successRate: Percentage of successful runs (e.g., "95.00%")
- *   - totalRuns: Total number of unique runs (excluding retries)
+ *   - uniqueRuns: Number of unique runs (excluding retries)
+ *   - totalRuns: Total number of runs including retries
  *   - successfulRuns: Number of successful unique runs
- *   - totalAttempts: Total number of attempts including retries
- *   - retryCount: Number of retry attempts
  */
 function getWorkflowStats(runs) {
   // Group runs by their original run ID to handle retries
   const uniqueRuns = new Map();
-  let totalAttempts = 0;
-  let retryCount = 0;
+  let totalRuns = 0;
 
   for (const run of runs) {
-    totalAttempts++;
-    if (run.run_attempt > 1) {
-      retryCount++;
-    }
-
+    totalRuns++;
     // Use the original run ID as the key
     const originalRunId = run.run_attempt > 1 ? run.id - (run.run_attempt - 1) : run.id;
     if (!uniqueRuns.has(originalRunId)) {
@@ -90,10 +84,9 @@ function getWorkflowStats(runs) {
     successes,
     eventTypes,
     successRate,
-    totalRuns: uniqueRunsArray.length,
-    successfulRuns: successes.length,
-    totalAttempts,
-    retryCount
+    uniqueRuns: uniqueRunsArray.length,
+    totalRuns,
+    successfulRuns: successes.length
   };
 }
 
@@ -178,7 +171,7 @@ async function generateSummaryBox(grouped, github, context) {
     if (lastMainRun) {
       const prInfo = await fetchPRInfo(github, context, lastMainRun.head_sha);
       runInfo.sha = `\`${lastMainRun.head_sha.substring(0, SHA_SHORT_LENGTH)}\``;
-      runInfo.run = `[Run](${lastMainRun.html_url})${lastMainRun.run_attempt > 1 ? ` (Attempt ${lastMainRun.run_attempt})` : ''}`;
+      runInfo.run = `[Run](${lastMainRun.html_url})${lastMainRun.run_attempt > 1 ? ` (#${lastMainRun.run_attempt})` : ''}`;
       runInfo.pr = prInfo.prNumber;
       runInfo.title = prInfo.prTitle;
 
@@ -190,14 +183,14 @@ async function generateSummaryBox(grouped, github, context) {
       runInfo.earliestBadSha = lastMainRun.conclusion !== 'success' ? earliestBadSha : EMPTY_VALUE;
     }
 
-    const row = `| [${name}](${workflowLink}) | ${stats.eventTypes || 'unknown'} | ${stats.totalRuns} (${stats.totalAttempts} attempts) | ${stats.successfulRuns} | ${stats.successRate} | ${lastMainPassing} | ${runInfo.sha} | ${runInfo.run} | ${runInfo.pr} | ${runInfo.title} | ${runInfo.earliestBadSha} | ${runInfo.lastGoodSha} |`;
+    const row = `| [${name}](${workflowLink}) | ${stats.eventTypes || 'unknown'} | ${stats.totalRuns} | ${stats.uniqueRuns} | ${stats.successfulRuns} | ${stats.successRate} | ${lastMainPassing} | ${runInfo.sha} | ${runInfo.run} | ${runInfo.pr} | ${runInfo.title} | ${runInfo.earliestBadSha} | ${runInfo.lastGoodSha} |`;
     rows.push(row);
   }
 
   return [
     '## Workflow Summary',
-    '| Workflow | Event Type(s) | Total Runs | Successful Runs | Success Rate | Last Run on `main` | Last SHA | Last Run | Last PR | PR Title | Earliest Bad SHA | Last Good SHA |',
-    '|----------|---------------|------------|-----------------|--------------|-------------------|----------|----------|---------|-----------|------------------|---------------|',
+    '| Workflow | Event Type(s) | Total Runs | Unique Runs | Successful Runs | Success Rate (unique) | Last Run on `main` | Last SHA | Last Run | Last PR | PR Title | Earliest Bad SHA | Last Good SHA |',
+    '|----------|---------------|------------|-------------|-----------------|----------------------|-------------------|----------|----------|---------|-----------|------------------|---------------|',
     ...rows,
     ''  // Empty line for better readability
   ].join('\n');
