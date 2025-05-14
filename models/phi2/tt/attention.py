@@ -10,6 +10,8 @@ import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.tt_transformers.tt.ccl import tt_all_reduce, tt_all_gather
 from models.tt_transformers.tt.model_config import TensorGroup, OpGroup
+from models.tt_transformers.tt.common import num_to_core_range_set
+
 
 
 class Attention(LightweightModule):
@@ -239,16 +241,24 @@ class Attention(LightweightModule):
         pt_wo = self.state_dict[f"{wo_str}.weight"].transpose(-1, -2).unsqueeze(0).unsqueeze(0)
         self.pt_wo = pt_wo
 
-        wo_mem_config = configuration.create_dram_sharded_mem_config(
-            (configuration.n_heads * configuration.head_dim) // configuration.num_devices, configuration.dim
+        #wo_mem_config = configuration.create_dram_sharded_mem_config(
+        #    (configuration.n_heads * configuration.head_dim) // configuration.num_devices, configuration.dim
+        #)
+
+        shard_spec = ttnn.ShardSpec(
+            num_to_core_range_set(self.num_devices),
+            (1280, 1280),
+            ttnn.ShardOrientation.ROW_MAJOR
         )
+        wo_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.DRAM, shard_spec)
+
 
         self.wo = ttnn.as_tensor(
             pt_wo,
             dtype=self.wo_dtype,
             layout=ttnn.TILE_LAYOUT,
             device=self.mesh_device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG if (self.use_fused_all_gather_matmul or self.TG) else wo_mem_config,
+            memory_config=wo_mem_config,
             mesh_mapper=ttnn.ShardTensor2dMesh(
                 self.mesh_device,
                 dims=(2, 3) if (self.use_fused_all_gather_matmul or self.TG) else (3, 2),
@@ -522,15 +532,32 @@ class Attention(LightweightModule):
 
 
             projector = ttnn.from_torch(
-               torch.randn((1536, 2560), dtype=torch.bfloat16),  # or actual trained weights
+               torch.eye(1536, 1280),  # or actual trained weights
                dtype=ttnn.bfloat4_b,
                layout=ttnn.TILE_LAYOUT,
                device=self.mesh_device,
                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
             )
-            projected_attn_output = ttnn.matmul(attn_output, projector, memory_config=ttnn.L1_MEMORY_CONFIG)
+            #shard_spec = ttnn.ShardSpec(
+            #   num_to_core_range_set(self.num_devices),
+            #   (32, 1536),
+            #   ttnn.ShardOrientation.ROW_MAJOR
+            #)
+            #attn_output_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.DRAM, shard_spec)
+            projected_attn_output = ttnn.matmul(attn_output, projector)
+            shard_spec = ttnn.ShardSpec(
+               num_to_core_range_set(self.num_devices),
+               (32, 640),
+               ttnn.ShardOrientation.ROW_MAJOR
+            )
+            projected_output_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, shard_spec)
+            projected_attn_output = ttnn.interleaved_to_sharded(projected_attn_output, projected_output_mem_config)
+            #projected_mem_config =  ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.DRAM, shard_spec)
             #print("output layout", ttnn.get_tensor_layout(attn_output))
-
+            print("projected mem", projected_attn_output.memory_config())
+            print("wo mem", self.wo.memory_config())
+            #print("projected", projected_attn_output)
+            #print("wo", self.wo)
             #self.wo = ttnn.as_tensor(
                 #self.pt_wo,
                 #dtype=self.wo_dtype,
@@ -547,12 +574,20 @@ class Attention(LightweightModule):
                 #),
             #)
 
+
+            shard_spec = ttnn.ShardSpec(
+               num_to_core_range_set(self.num_devices),
+               (32, 640),
+               ttnn.ShardOrientation.ROW_MAJOR
+            )
+            attn_output_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, shard_spec)
+
             # TODO: Fix this once self.TG supports dram-sharded matmuls
             dense_out_sharded = ttnn.matmul(
                 projected_attn_output,
                 self.wo,
                 core_grid=ttnn.CoreGrid(y=4, x=8) if self.TG else None,
-                #program_config=self.model_config["ATTN_OUTPUT_PROGCFG"] if not self.TG else None,
+                program_config=self.model_config["ATTN_OUTPUT_PROGCFG"] if not self.TG else None,
                 memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG if self.TG else attn_output_cat.memory_config(),
                 dtype=ttnn.bfloat8_b if self.TG else None,
                 compute_kernel_config=self.li_o_decode_compute_kernel_cfg,
