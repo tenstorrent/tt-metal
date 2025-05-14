@@ -275,6 +275,7 @@ void set_or_update_runtime_arguments(
     }
 
     for (uint32_t i = 0, start_tile_id = 0; i < num_cores_total; i++) {
+        // tt::log_info(tt::LogOp, "********  start_tile_id : {}", start_tile_id);
         const auto& core = cores[i];
 
         uint32_t a_num_tiles = 0;
