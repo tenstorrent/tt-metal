@@ -41,6 +41,7 @@ void MAIN {
     constexpr uint32_t use_provided_mask = get_compile_time_arg_val(23) == 1;
     constexpr uint32_t use_padded_mask = get_compile_time_arg_val(24) == 1;
     constexpr uint32_t is_chunked = get_compile_time_arg_val(25) == 1;
+    constexpr uint32_t scale_fp32 = get_compile_time_arg_val(26);
 
     const uint32_t core_id = get_arg_val<uint32_t>(0);
     const uint32_t local_batch_start = get_arg_val<uint32_t>(1);
@@ -177,7 +178,8 @@ void MAIN {
 
                     /* QK -= cb_cur_max */
                     /* QK = exp(QK)*/
-                    sub_exp_block_bcast_cols_inplace<cb_qk_im, Sq_chunk_t, Sk_chunk_t>(alias_cur_max, alias_cur_sum);
+                    sub_exp_block_bcast_cols_inplace<cb_qk_im, Sq_chunk_t, Sk_chunk_t, scale_fp32>(
+                        alias_cur_max, alias_cur_sum);
 
                     /* cb_cur_sum = sum(cb_qk_im, dim=-1) */
                     /**
@@ -216,7 +218,7 @@ void MAIN {
                     if (k_chunk > 0) {
                         /* cb_exp_max_diff = torch.exp(cb_prev_max - cb_cur_max) */
                         // sub_exp_block(alias_prev_max, alias_cur_max, cb_scale_in, cb_exp_max_diff, Sq_chunk_t);
-                        sub_exp_block(alias_prev_max, alias_cur_max, cb_exp_max_diff, Sq_chunk_t);
+                        sub_exp_block<scale_fp32>(alias_prev_max, alias_cur_max, cb_exp_max_diff, Sq_chunk_t);
                         cb_pop_front(alias_prev_max, Sq_chunk_t);
 
                         /* cb_prev_sum *= cb_exp_max_diff */
