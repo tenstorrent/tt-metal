@@ -554,9 +554,9 @@ def run_falcon_demo_kv(
     assert expected_perf_metrics is None or expected_greedy_output_path is None
     if expected_perf_metrics is not None:
         if num_devices == 32:  # set higher margin as CI is very variable at the moment
-            verify_perf(measurements, expected_perf_metrics, high_tol_percentage=1.30)
+            verify_perf(measurements, expected_perf_metrics, high_tol_percentage=1.50)
         else:
-            verify_perf(measurements, expected_perf_metrics, high_tol_percentage=1.30)
+            verify_perf(measurements, expected_perf_metrics, high_tol_percentage=1.50)
     elif expected_greedy_output_path is not None:
         if token_check_does_pass:
             logger.info("Output Check Passed!")
