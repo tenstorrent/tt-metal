@@ -3,27 +3,20 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
-from loguru import logger
 import torch
+from loguru import logger
+
 import ttnn
-
 from models.demos.t3000.llama2_70b.reference.llama.llama import Llama
-from models.demos.tg.llama3_70b.tt.llama_model_galaxy import TtLlamaModel_galaxy
-from models.demos.tg.llama3_70b.tt.llama_common import setup_llama_env
 from models.demos.t3000.llama2_70b.tt.llama_common import (
-    check_mesh_device,
     BASE_URL,
-    should_skip_model_load,
     ConcatMesh2DToTensor,
+    check_mesh_device,
+    should_skip_model_load,
 )
-
-from models.utility_functions import (
-    profiler,
-    skip_for_grayskull,
-    profiler,
-    enable_persistent_kernel_cache,
-)
-from models.demos.tg.llama3_70b.tt.llama_common import PytorchLlamaModel
+from models.demos.tg.llama3_70b.tt.llama_common import PytorchLlamaModel, setup_llama_env
+from models.demos.tg.llama3_70b.tt.llama_model_galaxy import TtLlamaModel_galaxy
+from models.utility_functions import enable_persistent_kernel_cache, profiler, skip_for_grayskull
 
 
 def get_reference_model(

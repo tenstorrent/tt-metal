@@ -14,6 +14,8 @@ target_sources(
         tt_backend_api_types.cpp
         work_split.cpp
         thread_pool.cpp
+        host_buffer.cpp
+        memory_pin.cpp
 )
 
 target_include_directories(

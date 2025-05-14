@@ -7,6 +7,7 @@
 #include <stdint.h>
 #include <tt-metalium/fabric_edm_types.hpp>
 #include <tt-metalium/fabric_types.hpp>
+#include <tt-metalium/mesh_graph.hpp>                   // FabricType
 #include <umd/device/types/cluster_descriptor_types.h>  // chip_id_t
 #include <tt-metalium/erisc_datamover_builder.hpp>
 #include "tt_metal/impl/context/metal_context.hpp"
@@ -15,11 +16,13 @@
 #include <vector>
 
 namespace tt::tt_fabric {
-
-bool is_1d_fabric_config(tt::tt_metal::FabricConfig fabric_config);
+uint32_t get_fabric_router_buffer_size(tt::tt_fabric::Topology topology);
+uint32_t get_sender_channel_count(tt::tt_fabric::Topology topology);
+uint32_t get_downstream_edm_count(tt::tt_fabric::Topology topology);
+bool is_tt_fabric_config(tt::tt_metal::FabricConfig fabric_config);
 bool is_2d_fabric_config(tt::tt_metal::FabricConfig fabric_config);
 
-Topology get_1d_topology(tt::tt_metal::FabricConfig fabric_config);
+Topology get_tt_fabric_topology(tt::tt_metal::FabricConfig fabric_config);
 void set_routing_mode(uint16_t routing_mode);
 void set_routing_mode(Topology topology, uint32_t dimension = 1);
 

@@ -3,35 +3,25 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from enum import Enum
-import torch
-import ttnn
-from loguru import logger
+
 import numpy as np
+import torch
+from loguru import logger
 from sklearn.metrics import top_k_accuracy_score
 
-from models.demos.falcon7b_common.tt.falcon_causallm import TtFalconCausalLM
-
-from models.demos.falcon7b_common.tt.falcon_common import (
-    PytorchFalconCausalLM,
-)
-
+import ttnn
 from models.demos.falcon7b_common.tests.test_utils import (
-    get_rand_falcon_inputs,
     concat_device_out_layer_present,
-    load_hf_model,
-    get_num_devices,
     dump_device_profiler,
+    get_num_devices,
+    get_rand_falcon_inputs,
+    load_hf_model,
 )
-
-from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
-    get_atol_rtol_pcc,
-)
-
-from models.utility_functions import (
-    tt_tensors_to_torch_tensors,
-    profiler,
-)
+from models.demos.falcon7b_common.tt.falcon_causallm import TtFalconCausalLM
+from models.demos.falcon7b_common.tt.falcon_common import PytorchFalconCausalLM
 from models.perf.perf_utils import prep_perf_report
+from models.utility_functions import profiler, tt_tensors_to_torch_tensors
+from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import get_atol_rtol_pcc
 
 
 def get_inputs_on_device(llm_mode, tt_FalconCausalLM, model_input, kv_cache_len, seq_len, batch, kv_len):

@@ -5,11 +5,12 @@
 from typing import Optional, Tuple
 
 import torch
+from torch import nn
+
 import ttnn
 from models.demos.falcon7b_common.tt.falcon_attention import TtFalconAttentionDecode, TtFalconAttentionPrefill
 from models.demos.falcon7b_common.tt.falcon_mlp import TtFalconMLPDecode, TtFalconMLPPrefill
 from models.demos.falcon7b_common.tt.model_utils import get_weights_cached, layernorm
-from torch import nn
 
 
 class TtFalconDecoderLayer(nn.Module):

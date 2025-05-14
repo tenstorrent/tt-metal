@@ -1,9 +1,11 @@
 # SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
-import pytest
 import os
+
+import pytest
 from loguru import logger
+
 from models.utility_functions import skip_for_grayskull
 
 

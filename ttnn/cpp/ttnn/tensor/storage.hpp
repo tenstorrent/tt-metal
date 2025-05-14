@@ -5,10 +5,11 @@
 #pragma once
 
 #include <memory>
-#include "tt-metalium/mesh_coord.hpp"
+#include <tt-metalium/mesh_coord.hpp>
+#include <tt-metalium/host_buffer.hpp>
+
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/tensor/tensor_spec.hpp"
-#include "ttnn/tensor/host_buffer/host_buffer.hpp"
 
 namespace tt::tt_metal {
 

@@ -40,7 +40,7 @@ ttnn::Shape infer_dims_for_reshape(const Tensor& tensor, tt::stl::Span<const int
     }
     if (has_zero && index_of_negative_1 != -1) {
         std::string error_msg = "cannot reshape tensor of 0 elements into shape (";
-        for(auto & s: shape) {
+        for (auto& s : shape) {
             error_msg += std::to_string(s) + ",";
         }
         error_msg += ") because the unspecified dimension size -1 can be any value and is ambiguous";
@@ -108,8 +108,7 @@ Tensor transform(const Tensor& tensor, const std::function<Tensor(const Tensor&)
         input_tensors.begin(), input_tensors.end(), std::back_inserter(output_tensors), [&](const auto& device_tensor) {
             return transform_func(device_tensor);
         });
-    return ttnn::distributed::aggregate_as_tensor(
-        output_tensors, ttnn::distributed::get_distributed_tensor_config_from_tensor(tensor));
+    return ttnn::distributed::aggregate_as_tensor(output_tensors, tensor.get_distributed_tensor_config());
 }
 
 void apply(const Tensor& tensor, const std::function<void(const Tensor&)>& callable) {
@@ -126,7 +125,7 @@ Tensor get_shard_for_device(const Tensor& tensor, IDevice* target_device, std::o
     return std::visit(
         tt::stl::overloaded{
             [buffer_index](const MultiDeviceHostStorage& s) {
-                return Tensor{HostStorage{s.get_buffer(buffer_index.value())}, s.get_tensor_spec(buffer_index.value())};
+                return Tensor{s.get_buffer(buffer_index.value()), s.get_tensor_spec(buffer_index.value())};
             },
             [&tensor](const HostStorage& s) { return tensor; },
             [&tensor](const DeviceStorage& s) { return tensor; },

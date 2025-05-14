@@ -449,9 +449,8 @@ constexpr bool implements_get_parallelization_strategy() {
 
 template <typename ConcreteOperation>
 auto default_create_output_tensors(
-    const ConcreteOperation& operation,
-    const Tensors& input_tensors,
-    const OptionalTensors& optional_output_tensors) -> ProgramOutputTensors<ConcreteOperation> {
+    const ConcreteOperation& operation, const Tensors& input_tensors, const OptionalTensors& optional_output_tensors)
+    -> ProgramOutputTensors<ConcreteOperation> {
     using OutputTensors = ProgramOutputTensors<ConcreteOperation>;
     OutputTensors output_tensors;
 
