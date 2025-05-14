@@ -108,8 +108,8 @@ Tensor ExecuteTosaGather::invoke(
     // TOSA Gather constraints
     constexpr int8_t dim = 1;
     constexpr bool sparse_grad = false;
-    constexpr size_t input_tensor_rank_constrain = 3;
-    constexpr size_t input_index_tensor_rank_constrain = 2;
+    constexpr size_t input_tensor_rank_constraint = 3;
+    constexpr size_t input_index_tensor_rank_constraint = 2;
     const std::optional<Tensor> optional_output_tensor_value = std::nullopt;
     const auto memory_config_value = memory_config.has_value() ? memory_config.value() : input_tensor.memory_config();
 
@@ -117,9 +117,9 @@ Tensor ExecuteTosaGather::invoke(
     const ttnn::Shape original_input_tensor_lshape = input_tensor.get_logical_shape();  // [N, K, C]
     const auto input_tensor_rank = input_tensor.get_padded_shape().rank();
     TT_FATAL(
-        input_tensor_rank == input_tensor_rank_constrain,
+        input_tensor_rank == input_tensor_rank_constraint,
         "Input tensor rank must be {}, got: {}",
-        input_tensor_rank_constrain,
+        input_tensor_rank_constraint,
         input_tensor_rank);
     const auto N = original_input_tensor_lshape[0];
     const auto K = original_input_tensor_lshape[1];
@@ -129,9 +129,9 @@ Tensor ExecuteTosaGather::invoke(
     const auto original_input_index_tensor_lshape = input_index_tensor.get_logical_shape();  // [N, W]
     const auto input_index_tensor_rank = input_index_tensor.get_padded_shape().rank();
     TT_FATAL(
-        input_index_tensor_rank == input_index_tensor_rank_constrain,
+        input_index_tensor_rank == input_index_tensor_rank_constraint,
         "Index tensor rank must be {}, got: {}",
-        input_index_tensor_rank_constrain,
+        input_index_tensor_rank_constraint,
         input_index_tensor_rank);
     TT_FATAL(
         N == original_input_index_tensor_lshape[0],
