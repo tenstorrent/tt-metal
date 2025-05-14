@@ -695,10 +695,16 @@ bool DevicePool::close_devices(const std::vector<IDevice*>& devices, bool skip_s
     detail::ProfilerSync(ProfilerSyncState::CLOSE_DEVICE);
 
     tt::tt_metal::MetalContext::instance().get_cluster().set_internal_routing_info_for_ethernet_cores(false);
+
+    bool pass = true;
+    std::vector<IDevice*> prev_active_devices;
     for (const auto& dev_id : devices_to_close) {
         auto dev = tt::DevicePool::instance().get_active_device(dev_id);
-        dev->close();
+        prev_active_devices.push_back(dev);
+        pass &= dev->close();
     }
+    // After this point devices are no longer active and only basic functions such as id, mmio device, etc. can
+    // be queried from the Device. prev_active_devices saves previously active devices for additional termination steps.
 
     // Terminate sent to each device. Wait for dispatch to finish
     for (const auto& dev_id : devices_to_close) {
