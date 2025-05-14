@@ -1,13 +1,4 @@
-# /// script
-# requires-python = ">=3.11"
-# dependencies = [
-#     "ipdb",
-#     "msgpack-numpy",
-#     "numpy",
-#     "torch",
-#     "transformers",
-# ]
-# ///
+#!/usr/bin/env python3
 
 # SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 #
@@ -28,35 +19,15 @@ import os
 
 msgpack_numpy.patch()
 
-parser = argparse.ArgumentParser()
-parser.add_argument(
-    "-i",
-    "--input_path",
-    type=str,
-    default="data/tinyllama_init.msgpack",
-    help="Path to the dumped original weights file",
-)
-parser.add_argument(
-    "-o", "--output_path", type=str, default="data/tinyllama_exported.msgpack", help="Path to the output weights file"
-)
-parser.add_argument("--hf_model", type=str, default="TinyLlama/TinyLlama_v1.1", help="name of the HF model")
-parser.add_argument(
-    "--meta_style", action="store_true", help="The model is in the Meta style (QKV projections have dims interleaved.)"
-)
-parser.add_argument("-t", "--dump_tokenizer_path", type=str, default=None, help="Path to the output tokenizer file")
-parser.set_defaults(meta_style=False)
-
-args = parser.parse_args()
-
 
 @ipdb.iex
-def tweak_and_dump_tokenizer():
+def tweak_and_dump_tokenizer(args):
     """
     Get the tokenizer JSON and modify the decoder part to remove the strip clause.
     This function loads the tokenizer from the HF model, modifies its configuration,
     and saves it to a JSON file.
     """
-    tokenizer = AutoTokenizer.from_pretrained(parser.parse_args().hf_model)
+    tokenizer = AutoTokenizer.from_pretrained(args.hf_model)
     assert args.dump_tokenizer_path is not None
 
     # Get the tokenizer configuration as a dictionary
@@ -97,8 +68,8 @@ def tweak_and_dump_tokenizer():
 
 
 @ipdb.iex
-def dump_model():
-    hf_model = AutoModelForCausalLM.from_pretrained(parser.parse_args().hf_model)
+def dump_model(args):
+    hf_model = AutoModelForCausalLM.from_pretrained(args.hf_model)
 
     def fix_hf_state_dict_for_rope(head_dim=64):
         def unpermute_proj(w: np.ndarray, n_heads: int = 32) -> np.ndarray:
@@ -211,7 +182,7 @@ def dump_model():
             # "mlp/w3/bias/value/data": None,
         }
 
-        if block_key_map.get(rest):
+        if rest in block_key_map:
             if isinstance(block_key_map[rest], list):
                 prefixed = [hf_prefix + k for k in block_key_map[rest]]
                 return prefixed
@@ -327,11 +298,37 @@ def dump_model():
 
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "-i",
+        "--input_path",
+        type=str,
+        default="data/tinyllama_init.msgpack",
+        help="Path to the dumped original weights file",
+    )
+    parser.add_argument(
+        "-o",
+        "--output_path",
+        type=str,
+        default="data/tinyllama_exported.msgpack",
+        help="Path to the output weights file",
+    )
+    parser.add_argument("--hf_model", type=str, default="TinyLlama/TinyLlama_v1.1", help="name of the HF model")
+    parser.add_argument(
+        "--meta_style",
+        action="store_true",
+        help="The model is in the Meta style (QKV projections have dims interleaved.)",
+    )
+    parser.add_argument("-t", "--dump_tokenizer_path", type=str, default=None, help="Path to the output tokenizer file")
+    parser.set_defaults(meta_style=False)
+
+    args = parser.parse_args()
+
     if args.dump_tokenizer_path is not None:
-        tweak_and_dump_tokenizer()
+        tweak_and_dump_tokenizer(args)
 
     if args.input_path is not None and args.output_path is not None:
-        dump_model()
+        dump_model(args)
     elif not args.dump_tokenizer_path:
         print("Nothing to do. Please either specify --dump_tokenizer_path or both of --input_path and --output_path.")
         exit(1)

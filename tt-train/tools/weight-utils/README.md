@@ -1,18 +1,17 @@
 # Weight export utilities for tt-train
 
 This folder contains a collection of scripts for exporting the weights of
-various Huggingface models into a format suitable for use in tt-train. It is
-recommended to run these scripts with [`uv`](https://docs.astral.sh/uv/) which
-will automatically bring in their dependencies. If you prefer to run with plain
-Python, you must install the dependencies (listed below) first and replace `uv
-run` with your Python interpreter in the commands given below.
+various Huggingface models into a format suitable for use in tt-train.
 
-# Dependencies
-- ipdb
-- msgpack-numpy
-- numpy
-- torch
-- transformers
+## Setup
+
+Install the required dependencies:
+
+```
+pip install -r requirements.txt
+```
+
+All dependencies are listed in the requirements.txt file.
 
 # Llama 3
 
@@ -22,7 +21,7 @@ of models.
 ## Synopsis
 
 ``` shell
-uv run tinyllama_export.py [-i INPUT_PATH] [-o OUTPUT_PATH] [--hf_model HF_MODEL]
+python llama_export.py [-i INPUT_PATH] [-o OUTPUT_PATH] [--hf_model HF_MODEL]
                 [--meta_style] [-t DUMP_TOKENIZER_PATH]
 ```
 
@@ -54,13 +53,13 @@ uv run tinyllama_export.py [-i INPUT_PATH] [-o OUTPUT_PATH] [--hf_model HF_MODEL
 ## Synopsis
 
 ``` shell
-uv run gpt2_export.py INPUT_FILE OUTPUT_FILE [-t DUMP_TOKENIZER_PATH]
+python gpt2_export.py -i INPUT_FILE -o OUTPUT_FILE [-t DUMP_TOKENIZER_PATH]
 ```
 
 ## Details
-- `INPUT_FILE`
+- `-i, --input_file=PATH`
   - Path to the input msgpack file containing the existing GPT-2 weights.
-- `OUTPUT_FILE`
+- `-o, --output_file=PATH`
   - Path where the updated msgpack file will be saved.
 - `-t, --dump_tokenizer_path=PATH`
   - Path to the output tokenizer file. If not given, the tokenizer will not be
