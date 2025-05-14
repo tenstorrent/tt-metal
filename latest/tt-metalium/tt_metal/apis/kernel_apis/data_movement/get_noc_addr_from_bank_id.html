@@ -4,12 +4,12 @@
   <meta charset="utf-8" /><meta name="generator" content="Docutils 0.18.1: http://docutils.sourceforge.net/" />
 
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>noc_semaphore_wait &mdash; TT-Metalium  documentation</title>
+  <title>get_noc_addr_from_bank_id &mdash; TT-Metalium  documentation</title>
       <link rel="stylesheet" href="../../../../_static/pygments.css" type="text/css" />
       <link rel="stylesheet" href="../../../../_static/css/theme.css" type="text/css" />
       <link rel="stylesheet" href="../../../../_static/tt_theme.css" type="text/css" />
     <link rel="shortcut icon" href="../../../../_static/favicon.png"/>
-    <link rel="canonical" href="/tt-metal/latest/tt-metalium/tt_metal/apis/kernel_apis/data_movement/noc_semaphore_wait.html" />
+    <link rel="canonical" href="/tt-metal/latest/tt-metalium/tt_metal/apis/kernel_apis/data_movement/get_noc_addr_from_bank_id.html" />
   <!--[if lt IE 9]>
     <script src="../../../../_static/js/html5shiv.min.js"></script>
   <![endif]-->
@@ -23,8 +23,8 @@
     <script src="../../../../_static/js/theme.js"></script>
     <link rel="index" title="Index" href="../../../../genindex.html" />
     <link rel="search" title="Search" href="../../../../search.html" />
-    <link rel="next" title="noc_semaphore_inc" href="noc_semaphore_inc.html" />
-    <link rel="prev" title="noc_semaphore_set" href="noc_semaphore_set.html" /> 
+    <link rel="next" title="Ordering (NOC, CMD_BUF, VC)" href="ordering.html" />
+    <link rel="prev" title="get_noc_addr" href="get_noc_addr.html" /> 
 </head>
 
 <body class="wy-body-for-nav"> 
@@ -69,10 +69,10 @@
 <li class="toctree-l4"><a class="reference internal" href="noc_async_write_multicast.html">noc_async_write_multicast</a></li>
 <li class="toctree-l4"><a class="reference internal" href="noc_semaphore_set_multicast.html">noc_semaphore_set_multicast</a></li>
 <li class="toctree-l4"><a class="reference internal" href="noc_semaphore_set.html">noc_semaphore_set</a></li>
-<li class="toctree-l4 current"><a class="current reference internal" href="#">noc_semaphore_wait</a></li>
+<li class="toctree-l4"><a class="reference internal" href="noc_semaphore_wait.html">noc_semaphore_wait</a></li>
 <li class="toctree-l4"><a class="reference internal" href="noc_semaphore_inc.html">noc_semaphore_inc</a></li>
 <li class="toctree-l4"><a class="reference internal" href="get_noc_addr.html">get_noc_addr</a></li>
-<li class="toctree-l4"><a class="reference internal" href="get_noc_addr_from_bank_id.html">get_noc_addr_from_bank_id</a></li>
+<li class="toctree-l4 current"><a class="current reference internal" href="#">get_noc_addr_from_bank_id</a></li>
 <li class="toctree-l4"><a class="reference internal" href="ordering.html">Ordering (NOC, CMD_BUF, VC)</a></li>
 </ul>
 </li>
@@ -111,9 +111,9 @@
           <li class="breadcrumb-item"><a href="../../index.html">APIs</a></li>
           <li class="breadcrumb-item"><a href="../../kernel_apis.html">Kernel APIs</a></li>
           <li class="breadcrumb-item"><a href="data_movement.html">Data Movement APIs</a></li>
-      <li class="breadcrumb-item active">noc_semaphore_wait</li>
+      <li class="breadcrumb-item active">get_noc_addr_from_bank_id</li>
       <li class="wy-breadcrumbs-aside">
-            <a href="../../../../_sources/tt_metal/apis/kernel_apis/data_movement/noc_semaphore_wait.rst.txt" rel="nofollow"> View page source</a>
+            <a href="../../../../_sources/tt_metal/apis/kernel_apis/data_movement/get_noc_addr_from_bank_id.rst.txt" rel="nofollow"> View page source</a>
       </li>
   </ul>
   <hr/>
@@ -121,40 +121,54 @@
           <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
            <div itemprop="articleBody">
              
-  <section id="noc-semaphore-wait">
-<h1>noc_semaphore_wait<a class="headerlink" href="#noc-semaphore-wait" title="Permalink to this heading"></a>
+  <section id="get-noc-addr-from-bank-id">
+<h1>get_noc_addr_from_bank_id<a class="headerlink" href="#get-noc-addr-from-bank-id" title="Permalink to this heading"></a>
 </h1>
 <dl class="cpp function">
-<dt class="sig sig-object cpp" id="_CPPv418noc_semaphore_waitPV8uint32_t8uint32_t">
-<span class="target" id="dataflow__api_8h_1a4f714cc4a08a2eaac5e3f7fae9d1383a"></span><span class="kt"><span class="pre">void</span></span><span class="w"> </span><span class="sig-name descname"><span class="n"><span class="pre">noc_semaphore_wait</span></span></span><span class="sig-paren">(</span><span class="k"><span class="pre">volatile</span></span><span class="w"> </span><span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="p"><span class="pre">*</span></span><span class="n sig-param"><span class="pre">sem_addr</span></span>, <span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">val</span></span><span class="sig-paren">)</span><a class="headerlink" href="#_CPPv418noc_semaphore_waitPV8uint32_t8uint32_t" title="Permalink to this definition"></a><br>
+<dt class="sig sig-object cpp" id="_CPPv4I_bE25get_noc_addr_from_bank_id8uint64_t8uint32_t8uint32_t7uint8_t">
+<span class="k"><span class="pre">template</span></span><span class="p"><span class="pre">&lt;</span></span><span class="kt"><span class="pre">bool</span></span><span class="w"> </span><span class="sig-name descname"><span class="n"><span class="pre">DRAM</span></span></span><span class="p"><span class="pre">&gt;</span></span><br><span class="target" id="dataflow__api__addrgen_8h_1afc3f8b4dc67a0610cafdafd77d70ee69"></span><span class="n"><span class="pre">uint64_t</span></span><span class="w"> </span><span class="sig-name descname"><span class="n"><span class="pre">get_noc_addr_from_bank_id</span></span></span><span class="sig-paren">(</span><span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">bank_id</span></span>, <span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">bank_address_offset</span></span>, <span class="n"><span class="pre">uint8_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">noc</span></span><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="n"><span class="pre">noc_index</span></span><span class="sig-paren">)</span><a class="headerlink" href="#_CPPv4I_bE25get_noc_addr_from_bank_id8uint64_t8uint32_t8uint32_t7uint8_t" title="Permalink to this definition"></a><br>
 </dt>
 <dd>
-<p>A blocking call that waits until the value of a local L1 memory address on the Tensix core executing this function becomes equal to a target value. This L1 memory address is used as a semaphore of size 4 Bytes, as a synchronization mechanism. Also, see <em>noc_semaphore_set</em>.</p>
-<p>Return value: None</p>
+<p>Get an encoding for a noc address using DRAM/L1 bank id. Uses addrgen tables to convert bank_ids to physical NOC coordinates</p>
+<p>Return value: uint64_t</p>
 <p></p>
 <table class="docutils align-default">
 <thead>
 <tr class="row-odd">
 <th class="head"><p>Argument   </p></th>
 <th class="head"><p>Description   </p></th>
-<th class="head"><p>Type   </p></th>
-<th class="head"><p>Valid Range   </p></th>
-<th class="head"><p>Required    </p></th>
+<th class="head"><p>Data type   </p></th>
+<th class="head"><p>Valid range   </p></th>
+<th class="head"><p>required    </p></th>
 </tr>
 </thead>
 <tbody>
 <tr class="row-even">
-<td><p>sem_addr   </p></td>
-<td><p>Semaphore address in local L1 memory   </p></td>
+<td><p>bank_id   </p></td>
+<td><p>DRAM/L1 bank id   </p></td>
+<td><p>uint32_t   </p></td>
+<td><p>Refer to relevant yaml in “tt_metal/soc_descriptors”   </p></td>
+<td><p>True    </p></td>
+</tr>
+<tr class="row-odd">
+<td><p>bank_address_offset   </p></td>
+<td><p>DRAM/L1 bank address offset   </p></td>
 <td><p>uint32_t   </p></td>
 <td><p>0..1MB   </p></td>
 <td><p>True    </p></td>
 </tr>
+<tr class="row-even">
+<td><p>noc   </p></td>
+<td><p>Which NOC to use for the transaction   </p></td>
+<td><p>uint8_t   </p></td>
+<td><p>0 or 1   </p></td>
+<td><p>False    </p></td>
+</tr>
 <tr class="row-odd">
-<td><p>val   </p></td>
-<td><p>The target value of the semaphore   </p></td>
-<td><p>uint32_t   </p></td>
-<td><p>Any uint32_t value   </p></td>
+<td><p>DRAM (template argument)   </p></td>
+<td><p>Signifies if address is from DRAM or L1   </p></td>
+<td><p>bool   </p></td>
+<td><p>True or False   </p></td>
 <td><p>True   </p></td>
 </tr>
 </tbody>
@@ -170,8 +184,8 @@
            </div>
           </div>
           <footer><div class="rst-footer-buttons" role="navigation" aria-label="Footer">
-        <a href="noc_semaphore_set.html" class="btn btn-neutral float-left" title="noc_semaphore_set" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
-        <a href="noc_semaphore_inc.html" class="btn btn-neutral float-right" title="noc_semaphore_inc" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
+        <a href="get_noc_addr.html" class="btn btn-neutral float-left" title="get_noc_addr" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
+        <a href="ordering.html" class="btn btn-neutral float-right" title="Ordering (NOC, CMD_BUF, VC)" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
     </div>
 
   <hr/>
