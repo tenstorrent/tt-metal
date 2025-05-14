@@ -276,7 +276,7 @@ operation::ProgramWithCallbacks topk_multicore_interleaved(
     tt::DataFormat index_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(index_tensor.get_dtype());
 
     auto first_core_range = sub_core_grids.ranges().at(0);
-    auto first_core_range_set = ttnn::CoreRangeSet(first_core_range);
+    auto first_core_range_set = CoreRangeSet(first_core_range);
 
     uint32_t input_tile_size = tile_size(input_cb_data_format);
     uint32_t value_tile_size = tile_size(value_cb_data_format);

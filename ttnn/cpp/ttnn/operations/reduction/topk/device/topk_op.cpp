@@ -17,7 +17,7 @@ static inline bool verify_multi_core_cost(
     uint16_t min_dim,
     uint16_t max_dim,
     uint32_t k,
-    CoreRangeSet core_range_set) {
+    const CoreRangeSet& core_range_set) {
     auto device = input_tensors.at(0).device();
     tt::DataFormat value_cb_data_format =
         tt::tt_metal::datatype_to_dataformat_converter(input_tensors.at(0).get_dtype());
