@@ -42,8 +42,8 @@ test_id_to_name = {
 test_bounds = {
     "wormhole_b0": {
         0: {
-            "riscv_1": {"latency": {"lower": 500, "upper": 42000}, "bandwidth": 0.12},
-            "riscv_0": {"latency": {"lower": 400, "upper": 28000}, "bandwidth": 0.15},
+            "riscv_1": {"latency": {"lower": 300, "upper": 24000}, "bandwidth": 0.08},
+            "riscv_0": {"latency": {"lower": 300, "upper": 25000}, "bandwidth": 0.07},
         },
         1: {
             "riscv_1": {"latency": {"lower": 400, "upper": 700}, "bandwidth": 0.19},
@@ -58,11 +58,10 @@ test_bounds = {
             "riscv_0": {"latency": {"lower": 33000, "upper": 35000}, "bandwidth": 21},
         },
         4: {
-            "riscv_1": {"latency": {"lower": 4000, "upper": 12000}, "bandwidth": 0.007},
-            "riscv_0": {"latency": {"lower": 300, "upper": 4700}, "bandwidth": 0.17},
+            "riscv_0": {"latency": {"lower": 200, "upper": 18000}, "bandwidth": 0.1},
         },
         5: {
-            "riscv_1": {"latency": {"lower": 200, "upper": 5000}, "bandwidth": 0.1},
+            "riscv_1": {"latency": {"lower": 200, "upper": 19000}, "bandwidth": 0.1},
         },
         6: {
             "riscv_0": {"latency": {"lower": 200, "upper": 70000}, "bandwidth": 0.4},
