@@ -340,22 +340,25 @@ def parse_decoder_json(json_file_path, default_optimization=ModelOptimizations.p
         num_decoders = max(int(decoder_id) for decoder_id in config_data["decoders"].keys()) + 1
         placeholder_model_name = "model"
         decoder_conf = default_optimization(placeholder_model_name)
+        default_tensor_dtype_settings = decoder_conf.tensor_dtype_settings
+        default_op_fidelity_settings = decoder_conf.op_fidelity_settings
         decoders_precision = DecodersPrecision(num_decoders, placeholder_model_name, decoder_conf)
 
         for decoder_id, settings in config_data["decoders"].items():
             decoder_id = int(decoder_id)
 
             tensor_precision = {
-                TensorGroup[key]: PrecisionSetting[value] for key, value in settings.get("precision_cfg", {}).items()
-            }
+                TensorGroup[key]: PrecisionSetting[value] for key, value in settings.get("precision_cfg").items()
+            } if "precision_cfg" in settings else default_tensor_dtype_settings
 
             op_fidelity = {
-                OpGroup[key]: MathFidelitySetting[value] for key, value in settings.get("fidelity_cfg", {}).items()
-            }
+                OpGroup[key]: MathFidelitySetting[value] for key, value in settings.get("fidelity_cfg").items()
+            } if "fidelity_cfg" in settings else default_op_fidelity_settings
 
             custom_opt = ModelOptimizations({"TensorPrecision": tensor_precision, "OpFidelity": op_fidelity})
             decoders_precision.set_decoder_conf(decoder_id, custom_opt)
 
+        breakpoint()
         return decoders_precision
 
     except Exception as e:
