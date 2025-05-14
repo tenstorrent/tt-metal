@@ -79,7 +79,7 @@ class TtLlamaMLP(LightweightModule):
             layout=ttnn.TILE_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             # Temporarily disable caching this weight for CI
-            # cache_file_name=cache_name(name),
+            cache_file_name=cache_name(name),
         )
 
         self.four_bit_mlp = args.optimizations.bfp4_mlp
@@ -263,6 +263,7 @@ class TtLlamaMLP(LightweightModule):
         # ttnn.deallocate(w3_out)
         # ttnn.deallocate(w1_out)
 
+        w2_in_gathered = ttnn.reshape(w2_in_gathered, (1, 1, seq_len, -1))
         w2_out = ttnn.linear(
             w2_in_gathered,
             self.w2_interleaved,
