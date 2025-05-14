@@ -51,13 +51,19 @@ tt::tt_fabric::Topology FabricContext::get_topology() const {
     return tt::tt_fabric::Topology::Linear;
 }
 
-uint32_t FabricContext::get_channel_buffer_size_bytes() const {
+size_t FabricContext::get_packet_header_size_bytes() const {
     if (this->topology_ == Topology::Mesh) {
-        return tt::tt_fabric::FabricEriscDatamoverBuilder::default_mesh_packet_payload_size_bytes +
-               sizeof(tt::tt_fabric::LowLatencyMeshPacketHeader);
+        return sizeof(tt::tt_fabric::LowLatencyMeshPacketHeader);
     } else {
-        return tt::tt_fabric::FabricEriscDatamoverBuilder::default_packet_payload_size_bytes +
-               sizeof(tt::tt_fabric::PacketHeader);
+        return sizeof(tt::tt_fabric::PacketHeader);
+    }
+}
+
+size_t FabricContext::get_max_payload_size_bytes() const {
+    if (this->topology_ == Topology::Mesh) {
+        return tt::tt_fabric::FabricEriscDatamoverBuilder::default_mesh_packet_payload_size_bytes;
+    } else {
+        return tt::tt_fabric::FabricEriscDatamoverBuilder::default_packet_payload_size_bytes;
     }
 }
 
@@ -70,7 +76,10 @@ FabricContext::FabricContext(tt::tt_metal::FabricConfig fabric_config) {
 
     this->wrap_around_mesh_ = this->check_for_wrap_around_mesh();
     this->topology_ = this->get_topology();
-    this->channel_buffer_size_bytes_ = this->get_channel_buffer_size_bytes();
+
+    this->packet_header_size_bytes_ = this->get_packet_header_size_bytes();
+    this->max_payload_size_bytes_ = this->get_max_payload_size_bytes();
+    this->channel_buffer_size_bytes_ = this->packet_header_size_bytes_ + this->max_payload_size_bytes_;
 
     if (is_tt_fabric_config(this->fabric_config_)) {
         this->router_config_ = std::make_unique<tt::tt_fabric::FabricEriscDatamoverConfig>(
@@ -83,6 +92,10 @@ FabricContext::FabricContext(tt::tt_metal::FabricConfig fabric_config) {
 bool FabricContext::is_wrap_around_mesh() const { return this->wrap_around_mesh_; }
 
 tt::tt_fabric::Topology FabricContext::get_fabric_topology() const { return this->topology_; }
+
+size_t FabricContext::get_fabric_packet_header_size_bytes() const { return this->packet_header_size_bytes_; }
+
+size_t FabricContext::get_fabric_max_payload_size_bytes() const { return this->max_payload_size_bytes_; }
 
 size_t FabricContext::get_fabric_channel_buffer_size_bytes() const { return this->channel_buffer_size_bytes_; }
 

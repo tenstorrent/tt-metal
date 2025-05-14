@@ -26,6 +26,8 @@ public:
 
     tt::tt_fabric::Topology get_fabric_topology() const;
 
+    size_t get_fabric_packet_header_size_bytes() const;
+    size_t get_fabric_max_payload_size_bytes() const;
     size_t get_fabric_channel_buffer_size_bytes() const;
 
     tt::tt_fabric::FabricEriscDatamoverConfig& get_fabric_router_config() const;
@@ -47,13 +49,16 @@ public:
 private:
     bool check_for_wrap_around_mesh() const;
     tt::tt_fabric::Topology get_topology() const;
-    uint32_t get_channel_buffer_size_bytes() const;
+    size_t get_packet_header_size_bytes() const;
+    size_t get_max_payload_size_bytes() const;
 
     bool initialized_ = false;
     tt::tt_metal::FabricConfig fabric_config_{};
 
     bool wrap_around_mesh_ = false;
     tt::tt_fabric::Topology topology_{};
+    size_t packet_header_size_bytes_ = 0;
+    size_t max_payload_size_bytes_ = 0;
     size_t channel_buffer_size_bytes_ = 0;
     std::unique_ptr<tt::tt_fabric::FabricEriscDatamoverConfig> router_config_ = nullptr;
     std::unordered_map<chip_id_t, chan_id_t> master_router_chans_{};
