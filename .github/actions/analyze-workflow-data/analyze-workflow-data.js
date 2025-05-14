@@ -74,16 +74,23 @@ function getWorkflowStats(runs) {
     if (run.conclusion === 'success') {
       totalSuccesses++;
     }
-    // Use the original run ID as the key, considering both retries and reruns
+
+    // Calculate the original run ID by subtracting (run_attempt - 1) from the current run ID
     const originalRunId = run.run_attempt > 1 ? run.id - (run.run_attempt - 1) : run.id;
+
     if (!uniqueRuns.has(originalRunId)) {
       uniqueRuns.set(originalRunId, {
         run,
-        hasRetries: false
+        hasRetries: false,
+        attempts: 1
       });
-    } else if (run.run_attempt > 1) {
-      // Mark this unique run as having retries
-      uniqueRuns.get(originalRunId).hasRetries = true;
+    } else {
+      // This is either a retry or a rerun
+      const existingRun = uniqueRuns.get(originalRunId);
+      existingRun.attempts++;
+      if (run.run_attempt > 1) {
+        existingRun.hasRetries = true;
+      }
     }
   }
 
