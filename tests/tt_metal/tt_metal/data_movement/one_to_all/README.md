@@ -30,12 +30,12 @@ Test expectations are that pcc checks pass and sufficient test attribute data is
 Each test case uses bfloat16 as L1 data format and flit size (32B for WH, 64B for BH) as page size.
 Each test case has multiple runs, and each run has a unique runtime host id, assigned by a global counter.
 
-1. TensixDataMovementOneToAll2x2PacketSizes: Tests one to all on a 2x2 grid.
-2. TensixDataMovementOneToAll4x4PacketSizes: Tests one to all on a 4x4 grid.
-3. TensixDataMovementOneToAll10x10PacketSizes: Tests one to all on a 10x10 grid.
-4. TensixDataMovementOneToAllMulticast2x2PacketSizes: Tests one to all multicast on a 2x2 grid.
-5. TensixDataMovementOneToAllMulticast5x5PacketSizes: Tests one to all multicast on a 5x5 grid.
-6. TensixDataMovementOneToAllMulticast11x10PacketSizes: Tests one to all multicast on a 11x10 grid.
-7. TensixDataMovementOneToAllMulticastLinked2x2PacketSizes: Tests one to all linked multicast on a 2x2 grid.
-8. TensixDataMovementOneToAllMulticastLinked5x5PacketSizes: Tests one to all linked multicast on a 5x5 grid.
-9. TensixDataMovementOneToAllMulticastLinked11x10PacketSizes: Tests one to all linked multicast on a 11x10 grid.
+1. One to All 2x2 Packet Sizes: Tests one to all on a 2x2 grid.
+2. One to All 4x4 Packet Sizes: Tests one to all on a 4x4 grid.
+3. One to All 10x10 Packet Sizes: Tests one to all on a 10x10 grid.
+4. One to All Multicast 2x2 Packet Sizes: Tests one to all multicast on a 2x2 grid.
+5. One to All Multicast 5x5 Packet Sizes: Tests one to all multicast on a 5x5 grid.
+6. One to All Multicast 11x10 Packet Sizes: Tests one to all multicast on a 11x10 grid.
+7. One to All Multicast Linked 2x2 Packet Sizes: Tests one to all linked multicast on a 2x2 grid.
+8. One to All Multicast Linked 5x5 Packet Sizes: Tests one to all linked multicast on a 5x5 grid.
+9. One to All Multicast Linked 11x10 Packet Sizes: Tests one to all linked multicast on a 11x10 grid.

@@ -57,17 +57,18 @@ bool run_dm(IDevice* device, const OneToAllConfig& test_config) {
     const uint32_t transaction_size_bytes = test_config.transaction_size_pages * test_config.page_size_bytes;
 
     CoreRangeSet master_core_set({CoreRange(test_config.master_core_coord)});
-    CoreRangeSet slave_core_set(
+    CoreRangeSet subordinate_core_set(
         {CoreRange(CoreCoord(0, 0), CoreCoord(test_config.grid_size.x - 1, test_config.grid_size.y - 1))});
     CoreCoord start_coord = device->worker_core_from_logical_core(CoreCoord(0, 0));
     CoreCoord end_coord =
         device->worker_core_from_logical_core(CoreCoord(test_config.grid_size.x - 1, test_config.grid_size.y - 1));
     if (!test_config.loopback) {
-        slave_core_set = slave_core_set.subtract(master_core_set);
+        subordinate_core_set = subordinate_core_set.subtract(master_core_set);
     }
-    uint32_t num_slaves = slave_core_set.num_cores();
-    uint32_t total_sender_size_bytes = test_config.transaction_size_pages * test_config.page_size_bytes * num_slaves;
-    uint32_t total_sender_size_pages = test_config.transaction_size_pages * num_slaves;
+    uint32_t num_subordinates = subordinate_core_set.num_cores();
+    uint32_t total_sender_size_bytes =
+        test_config.transaction_size_pages * test_config.page_size_bytes * num_subordinates;
+    uint32_t total_sender_size_pages = test_config.transaction_size_pages * num_subordinates;
 
     auto master_shard_parameters = ShardSpecBuffer(
         master_core_set,
@@ -85,52 +86,37 @@ bool run_dm(IDevice* device, const OneToAllConfig& test_config) {
     });
     uint32_t master_l1_byte_address = master_l1_buffer->address();
 
-    auto slave_shard_parameters = ShardSpecBuffer(
-        slave_core_set,
+    auto subordinate_shard_parameters = ShardSpecBuffer(
+        subordinate_core_set,
         {1, transaction_size_bytes / 2},
         ShardOrientation::ROW_MAJOR,
         {1, test_config.page_size_bytes / 2},
         {1, total_sender_size_pages});
-    auto slave_l1_buffer = CreateBuffer(ShardedBufferConfig{
+    auto subordinate_l1_buffer = CreateBuffer(ShardedBufferConfig{
         .device = device,
         .size = total_sender_size_bytes,
         .page_size = test_config.page_size_bytes,
         .buffer_type = BufferType::L1,
         .buffer_layout = TensorMemoryLayout::WIDTH_SHARDED,
-        .shard_parameters = std::move(slave_shard_parameters),
+        .shard_parameters = std::move(subordinate_shard_parameters),
     });
-    uint32_t slave_l1_byte_address = slave_l1_buffer->address();
+    uint32_t subordinate_l1_byte_address = subordinate_l1_buffer->address();
 
     // Compile-time arguments for kernels
-    // log_info("sender master_l1_byte_address = {}", master_l1_byte_address);
-    // log_info("sender slave_l1_byte_address = {}", slave_l1_byte_address);
-    // log_info("sender num_of_transactions = {}", test_config.num_of_transactions);
-    // log_info("sender transaction_size_pages = {}", test_config.transaction_size_pages);
-    // log_info("sender page_size_bytes = {}", test_config.page_size_bytes);
-    // log_info("sender test_id = {}", test_config.test_id);
-    // log_info("sender number of slaves = {}", num_slaves);
-    // log_info("sender total_sender_size_bytes = {}", total_sender_size_bytes);
-    // log_info("sender is_linked = {}", test_config.is_linked);
     vector<uint32_t> sender_compile_args = {
         (uint32_t)master_l1_byte_address,
-        (uint32_t)slave_l1_byte_address,
+        (uint32_t)subordinate_l1_byte_address,
         (uint32_t)test_config.num_of_transactions,
         (uint32_t)test_config.transaction_size_pages,
         (uint32_t)test_config.page_size_bytes,
         (uint32_t)test_config.test_id,
-        (uint32_t)num_slaves,
+        (uint32_t)num_subordinates,
         (uint32_t)total_sender_size_bytes,
         (uint32_t)test_config.is_linked};
 
-    // log_info("receiver master_l1_byte_address = {}", master_l1_byte_address);
-    // log_info("receiver slave_l1_byte_address = {}", slave_l1_byte_address);
-    // log_info("receiver num_of_transactions = {}", test_config.num_of_transactions);
-    // log_info("receiver transaction_size_pages = {}", test_config.transaction_size_pages);
-    // log_info("receiver page_size_bytes = {}", test_config.page_size_bytes);
-    // log_info("receiver test_id = {}", test_config.test_id);
     vector<uint32_t> receiver_compile_args = {
         (uint32_t)master_l1_byte_address,
-        (uint32_t)slave_l1_byte_address,
+        (uint32_t)subordinate_l1_byte_address,
         (uint32_t)test_config.num_of_transactions,
         (uint32_t)test_config.transaction_size_pages,
         (uint32_t)test_config.page_size_bytes,
@@ -148,12 +134,12 @@ bool run_dm(IDevice* device, const OneToAllConfig& test_config) {
             .compile_args = sender_compile_args});
 
     // Semaphores
-    CoreRangeSet sem_core_set = slave_core_set.merge<CoreRangeSet>(master_core_set);
+    CoreRangeSet sem_core_set = subordinate_core_set.merge<CoreRangeSet>(master_core_set);
     const uint32_t sem_id = CreateSemaphore(program, sem_core_set, 0);
 
     // Runtime Arguments
     std::vector<uint32_t> master_run_args = {sem_id, start_coord.x, start_coord.y, end_coord.x, end_coord.y};
-    for (auto& core : corerange_to_cores(slave_core_set)) {
+    for (auto& core : corerange_to_cores(subordinate_core_set)) {
         if (!test_config.loopback &&
             (core.x == test_config.master_core_coord.x && core.y == test_config.master_core_coord.y)) {
             continue;
@@ -177,7 +163,7 @@ bool run_dm(IDevice* device, const OneToAllConfig& test_config) {
 
     // Golden output
     vector<uint32_t> packed_golden = packed_input;
-    for (uint32_t i = 1; i < num_slaves; i++) {
+    for (uint32_t i = 1; i < num_subordinates; i++) {
         packed_golden.insert(packed_golden.end(), packed_input.begin(), packed_input.end());
     }
 
@@ -187,7 +173,7 @@ bool run_dm(IDevice* device, const OneToAllConfig& test_config) {
     detail::LaunchProgram(device, program);
 
     vector<uint32_t> packed_output;
-    detail::ReadFromBuffer(slave_l1_buffer, packed_output);
+    detail::ReadFromBuffer(subordinate_l1_buffer, packed_output);
     // Results comparison
     bool pcc = is_close_packed_vectors<bfloat16, uint32_t>(
         packed_output, packed_golden, [&](const bfloat16& a, const bfloat16& b) { return is_close(a, b); });
