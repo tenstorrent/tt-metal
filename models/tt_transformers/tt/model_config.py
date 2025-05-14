@@ -34,9 +34,9 @@ from models.tt_transformers.tt.load_checkpoints import (
 )
 from models.utility_functions import is_blackhole, is_wormhole_b0, nearest_32
 
-
 # models which require an overriding decoder precision and fidelity file
-REQUIRES_PERFORMANCE_DECODER_CONFIG = ["Llama-3.1-8B-Instruct"]
+REQUIRES_PERFORMANCE_DECODER_CONFIG = ["Llama3.1-8B-Instruct"]
+PERFORMANCE_DECODER_CONFIG_FILENAME = "performance_decoder_config.json"
 
 
 class TensorGroup(Enum):
@@ -2313,11 +2313,13 @@ class DecodersPrecision:
 
     @classmethod
     def performance(cls, num_decoders, model_name):
-        breakpoint()
         if model_name in REQUIRES_PERFORMANCE_DECODER_CONFIG:
             model_params_dir = Path(__file__).parent.parent
-            decoder_config_path = model_params_dir / model_name / "performance_decoder_config.json"
+            decoder_config_path = model_params_dir / "model_params" / model_name / PERFORMANCE_DECODER_CONFIG_FILENAME
             inst = parse_decoder_json(decoder_config_path)
+            logger.info(
+                f"Model {model_name} requires specific TensorPrecision and OpFidelity configuration, using {decoder_config_path}"
+            )
         else:
             inst = cls(num_decoders, model_name, ModelOptimizations.performance(model_name))
         inst.__name__ = "performance"
