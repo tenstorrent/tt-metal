@@ -362,7 +362,6 @@ def run_multi_core_matmul_1d(
             dtype=output_dtype,
         )
     signpost("stop")
-    breakpoint()
     tt_out = ttnn.to_torch(output_t)
     pt_out = in0 @ in1
 
