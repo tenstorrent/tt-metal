@@ -698,49 +698,282 @@ void HWCommandQueue::record_begin(const uint32_t tid, const std::shared_ptr<Trac
     this->manager_.set_bypass_mode(true, true);  // start trace capture
 }
 
-// Allocate space for program binaries and other data in the worker config ring buffer.
-void HWCommandQueue::allocate_trace_programs() {
+class SimpleTraceAllocator {
+public:
+    SimpleTraceAllocator(
+        uint32_t worker_ringbuffer_start,
+        uint32_t worker_ringbuffer_size,
+        uint32_t active_eth_ringbuffer_start,
+        uint32_t active_eth_ringbuffer_size) :
+        worker_region_allocator_(worker_ringbuffer_size, extra_data_),
+        active_eth_region_allocator_(active_eth_ringbuffer_size, extra_data_),
+        worker_ringbuffer_start_(worker_ringbuffer_start),
+        active_eth_ringbuffer_start_(active_eth_ringbuffer_start) {}
+
+    void allocate_trace_programs(IDevice* device, std::vector<TraceNode>& trace_nodes);
+
+private:
+    struct ExtraData {
+        std::array<std::optional<uint32_t>, 2> next_use_idx;
+        std::optional<uint32_t> sync_idx;
+        uint32_t sync_count;
+    };
+
+    struct MemoryUsage {
+        uint32_t trace_idx;
+        uint32_t data_type;
+        uint32_t size;
+    };
+    static bool intersects(uint32_t begin_1, uint32_t size_1, uint32_t begin_2, uint32_t size_2) {
+        return (begin_1 < begin_2 + size_2) && (begin_2 < begin_1 + size_1);
+    }
+
+    static std::optional<uint32_t> merge_syncs(std::optional<uint32_t> sync_1, std::optional<uint32_t> sync_2) {
+        if (sync_1.has_value() && sync_2.has_value()) {
+            return std::max(sync_1.value(), sync_2.value());
+        } else if (sync_1.has_value()) {
+            return sync_1;
+        } else {
+            return sync_2;
+        }
+    }
+
+    class RegionAllocator {
+    public:
+        RegionAllocator(uint32_t ringbuffer_size, std::vector<ExtraData>& extra_data) :
+            ringbuffer_size_(ringbuffer_size), extra_data_(extra_data) {}
+
+        void set_trace_nodes(std::vector<TraceNode>* trace_nodes) { trace_nodes_ = trace_nodes; }
+
+        std::pair<std::optional<uint32_t>, uint32_t> allocate_region(
+            uint32_t size, uint32_t trace_idx, uint32_t data_type);
+
+        void add_region(uint64_t program_id, uint32_t addr) { program_ids_memory_map_[program_id] = addr; }
+
+        void update_region_trace_idx(uint64_t region_addr, uint32_t trace_idx) {
+            auto it = regions_.find(region_addr);
+            if (it != regions_.end()) {
+                it->second.trace_idx = trace_idx;
+            }
+        }
+
+        std::optional<uint32_t> get_region(uint64_t program_id) {
+            auto it = program_ids_memory_map_.find(program_id);
+            if (it != program_ids_memory_map_.end()) {
+                return it->second;
+            }
+            return std::nullopt;
+        }
+
+    private:
+        uint32_t ringbuffer_size_;
+        std::map<uint64_t, uint32_t> program_ids_memory_map_;
+        std::map<uint32_t, MemoryUsage> regions_;
+        std::vector<ExtraData>& extra_data_;
+        std::vector<TraceNode>* trace_nodes_ = nullptr;
+    };
+
+    RegionAllocator worker_region_allocator_;
+    RegionAllocator active_eth_region_allocator_;
+
+    std::vector<ExtraData> extra_data_;
+
+    uint32_t worker_ringbuffer_start_;
+    uint32_t active_eth_ringbuffer_start_;
+};
+
+std::pair<std::optional<uint32_t>, uint32_t> SimpleTraceAllocator::RegionAllocator::allocate_region(
+    uint32_t size, uint32_t trace_idx, uint32_t data_type) {
+    std::optional<uint32_t> best_addr;
+    float best_cost = 999999995904;
+    std::optional<uint32_t> best_region_sync_idx;
+    uint32_t addr = 0;
+    auto outer_it = regions_.begin();
+    if (size == 0) {
+        return {std::nullopt, 0};
+    }
+
+    // TODO: sweepline algorithm, so the best postion can be calculated in linear time relative to the number of
+    // regions.
+    while (true) {
+        if (addr + size > ringbuffer_size_) {
+            break;
+        }
+        float cost = 0;
+        std::optional<uint32_t> region_sync_idx;
+        bool now_in_use = false;
+        // outer_it must be the first region that could possibly overlap [addr, addr + size), since in the last
+        // iteration we selected addr as the first address after the old version of outer_it.
+        for (auto it = outer_it; it != regions_.end(); ++it) {
+            auto region = *it;
+            if (region.first >= addr + size) {
+                break;
+            }
+            if (intersects(addr, size, region.first, region.second.size)) {
+                if (region.second.trace_idx == trace_idx) {
+                    now_in_use = true;
+                    break;
+                }
+                auto& next_use_idx = extra_data_[region.second.trace_idx].next_use_idx[region.second.data_type];
+                if (next_use_idx.has_value()) {
+                    if (*next_use_idx == trace_idx) {
+                        cost += 10000000000;
+                    } else {
+                        cost += region.second.size * 1.0f / (*next_use_idx - trace_idx);
+                    }
+                }
+                region_sync_idx = merge_syncs(region_sync_idx, region.second.trace_idx);
+            }
+        }
+        if (!now_in_use) {
+            if (region_sync_idx.has_value()) {
+                constexpr uint32_t kDesiredWriteAhead = 4;
+                constexpr uint32_t kStallBadness = 100000000;
+                int region_idx_diff = trace_idx - *region_sync_idx;
+                if (region_idx_diff < kDesiredWriteAhead) {
+                    // Stall badness is exponential
+                    cost += kStallBadness * (1 << (kDesiredWriteAhead - region_idx_diff));
+                }
+            }
+            if (cost < best_cost) {
+                best_cost = cost;
+                best_addr = addr;
+                best_region_sync_idx = region_sync_idx;
+            }
+            if (cost == 0) {
+                break;
+            }
+        }
+        if (outer_it == regions_.end()) {
+            break;
+        }
+        addr = outer_it->first + outer_it->second.size;
+        outer_it++;
+    }
+
+    if (!best_addr.has_value()) {
+        TT_FATAL(
+            false,
+            "Failed to allocate region for trace program. Program ID: {}. Size: {}. Trace index: {}",
+            (*trace_nodes_)[trace_idx].program->get_id(),
+            size,
+            trace_idx);
+        return {std::nullopt, 0};
+    }
+
+    auto it = regions_.begin();
+    while (it != regions_.end()) {
+        if (intersects(*best_addr, size, it->first, it->second.size)) {
+            program_ids_memory_map_.erase((*trace_nodes_)[it->second.trace_idx].program->get_id());
+            it = regions_.erase(it);
+        } else {
+            ++it;
+        }
+    }
+    regions_[*best_addr] = {trace_idx, data_type, size};
+    return {best_region_sync_idx, *best_addr};
+}
+
+void SimpleTraceAllocator::allocate_trace_programs(IDevice* device, std::vector<TraceNode>& trace_nodes) {
     const auto& hal = MetalContext::instance().hal();
     uint32_t expected_workers_completed = 0;
-    for (auto& node : this->trace_nodes_) {
+    worker_region_allocator_.set_trace_nodes(&trace_nodes);
+    active_eth_region_allocator_.set_trace_nodes(&trace_nodes);
+    std::map<uint64_t, uint32_t> program_ids_use_map;
+    extra_data_.resize(trace_nodes.size());
+    enum { kNonBinary, kBinary };
+    for (int i = trace_nodes.size() - 1; i >= 0; i--) {
+        auto& node = trace_nodes[i];
+        auto it = program_ids_use_map.find(node.program->get_id());
+        if (it != program_ids_use_map.end()) {
+            extra_data_[i].next_use_idx[kBinary] = it->second;
+        }
+        program_ids_use_map[node.program->get_id()] = i;
+    }
+
+    std::optional<uint32_t> last_active_eth_sync_idx;
+    for (size_t i = 0; i < trace_nodes.size(); i++) {
+        auto& node = trace_nodes[i];
         auto& program = *node.program;
         auto sub_device_id = node.sub_device_id;
         auto sub_device_index = *sub_device_id;
+        uint32_t index = hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX);
+        ProgramConfig& program_config = node.program->get_program_config(index);
+        uint32_t non_binary_size = program_config.kernel_text_offset;
+        uint32_t binary_size = program_config.kernel_text_size;
+
+        auto [rta_sync_idx, rta_addr] = worker_region_allocator_.allocate_region(non_binary_size, i, kNonBinary);
+
+        std::optional<uint32_t> binary_sync_idx;
+        uint32_t binary_addr = 0;
+
+        if (auto mem_addr = worker_region_allocator_.get_region(node.program->get_id())) {
+            binary_addr = *mem_addr;
+            node.dispatch_metadata.send_binary = false;
+            worker_region_allocator_.update_region_trace_idx(*mem_addr, i);
+        } else {
+            auto res = worker_region_allocator_.allocate_region(binary_size, i, kBinary);
+            binary_sync_idx = res.first;
+            binary_addr = res.second;
+            worker_region_allocator_.add_region(node.program->get_id(), binary_addr);
+        }
+
+        extra_data_[i].sync_idx = merge_syncs(rta_sync_idx, binary_sync_idx);
+
+        bool has_active_eth_kernel = program.runs_on_noc_unicast_only_cores();
+        uint32_t eth_nonbinary_size =
+            node.program
+                ->get_program_config_sizes()[hal.get_programmable_core_type_index(HalProgrammableCoreType::ACTIVE_ETH)];
+        auto [ethernet_rta_sync_idx, ethernet_rta_addr] =
+            active_eth_region_allocator_.allocate_region(eth_nonbinary_size, i, kNonBinary);
+
+        extra_data_[i].sync_idx = merge_syncs(extra_data_[i].sync_idx, ethernet_rta_sync_idx);
+        node.dispatch_metadata.nonbinary_kernel_config_addrs.push_back({.addr = rta_addr + worker_ringbuffer_start_});
+        node.dispatch_metadata.nonbinary_kernel_config_addrs.push_back(
+            {.addr = ethernet_rta_addr + active_eth_ringbuffer_start_});
+        node.dispatch_metadata.nonbinary_kernel_config_addrs.push_back({.addr = 0});
+        node.dispatch_metadata.binary_kernel_config_addrs.push_back({.addr = binary_addr + worker_ringbuffer_start_});
+        node.dispatch_metadata.binary_kernel_config_addrs.push_back({.addr = 0});
+        node.dispatch_metadata.binary_kernel_config_addrs.push_back({.addr = 0});
         uint32_t num_workers = 0;
         if (program.runs_on_noc_multicast_only_cores()) {
-            num_workers += device_->num_worker_cores(HalProgrammableCoreType::TENSIX, sub_device_id);
+            num_workers += device->num_worker_cores(HalProgrammableCoreType::TENSIX, sub_device_id);
         }
         if (program.runs_on_noc_unicast_only_cores()) {
-            num_workers += device_->num_worker_cores(HalProgrammableCoreType::ACTIVE_ETH, sub_device_id);
+            num_workers += device->num_worker_cores(HalProgrammableCoreType::ACTIVE_ETH, sub_device_id);
         }
-        program_dispatch::ProgramDispatchMetadata dispatch_metadata;
-        // Reserve space for this program in the kernel config ring buffer
-        program_dispatch::reserve_space_in_kernel_config_buffer(
-            this->config_buffer_mgr_[sub_device_index],
-            program.get_program_config_sizes(),
-            program.get_program_binary_status(device_->id()),
-            num_workers,
-            expected_workers_completed,
-            dispatch_metadata);
-        uint32_t index = hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX);
-        ProgramConfig& program_config = program.get_program_config(index);
+        extra_data_[i].sync_count = expected_workers_completed + num_workers;
+        int sync_idx = static_cast<int>(i) - 6;
+        if (extra_data_[i].sync_idx.has_value()) {
+            sync_idx = std::max(sync_idx, static_cast<int>(extra_data_[i].sync_idx.value()));
+        }
+        if (has_active_eth_kernel) {
+            if (last_active_eth_sync_idx.has_value()) {
+                sync_idx = std::max(sync_idx, static_cast<int>(last_active_eth_sync_idx.value()));
+            }
+            last_active_eth_sync_idx = extra_data_[i].sync_idx;
+            node.dispatch_metadata.send_binary = true;
+        }
 
-        node.dispatch_metadata.binary_kernel_config_addrs = dispatch_metadata.kernel_config_addrs;
-        node.dispatch_metadata.nonbinary_kernel_config_addrs = dispatch_metadata.kernel_config_addrs;
-        node.dispatch_metadata.sync_count = dispatch_metadata.sync_count;
-        node.dispatch_metadata.stall_first = dispatch_metadata.stall_first;
-        node.dispatch_metadata.stall_before_program = dispatch_metadata.stall_before_program;
-
-        // Allocate non-binaries before binaries for tensix. Non-tensix doesn't use a ringbuffer for binaries, so its
-        // addresses don't need adjustment.
-        node.dispatch_metadata.binary_kernel_config_addrs[index].addr += program_config.kernel_text_offset;
-
+        if (sync_idx >= 0) {
+            node.dispatch_metadata.sync_count = extra_data_[sync_idx].sync_count;
+            node.dispatch_metadata.stall_first = true;
+        }
         expected_workers_completed += num_workers;
     }
 }
 
 void HWCommandQueue::record_end() {
-    allocate_trace_programs();
+    const auto& hal = MetalContext::instance().hal();
+    uint32_t worker_ringbuffer_start =
+        hal.get_dev_addr(HalProgrammableCoreType::TENSIX, tt::tt_metal::HalL1MemAddrType::KERNEL_CONFIG);
+    uint32_t worker_ringbuffer_size = device_->allocator()->get_config().l1_unreserved_base - worker_ringbuffer_start;
+    SimpleTraceAllocator allocator{
+        worker_ringbuffer_start,
+        worker_ringbuffer_size,
+        hal.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::KERNEL_CONFIG),
+        hal.get_dev_size(HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::KERNEL_CONFIG)};
+    allocator.allocate_trace_programs(this->device_, this->trace_nodes_);
     for (auto& node : this->trace_nodes_) {
         auto sub_device_id = node.sub_device_id;
         auto& program = *node.program;
