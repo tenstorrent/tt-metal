@@ -61,6 +61,33 @@ test_bounds = {
         5: {
             "riscv_1": {"latency": {"lower": 200, "upper": 5000}, "bandwidth": 0.1},
         },
+        6: {
+            "riscv_0": {"latency": {"lower": 200, "upper": 70000}, "bandwidth": 0.4},
+        },
+        7: {
+            "riscv_0": {"latency": {"lower": 200, "upper": 30000}, "bandwidth": 1.0},
+        },
+        8: {
+            "riscv_0": {"latency": {"lower": 2000, "upper": 2000000}, "bandwidth": 1.0},
+        },
+        9: {
+            "riscv_0": {"latency": {"lower": 200, "upper": 300000}, "bandwidth": 0.1},
+        },
+        10: {
+            "riscv_0": {"latency": {"lower": 200, "upper": 70000}, "bandwidth": 0.1},
+        },
+        11: {
+            "riscv_0": {"latency": {"lower": 200, "upper": 200000}, "bandwidth": 0.04},
+        },
+        12: {
+            "riscv_0": {"latency": {"lower": 200, "upper": 30000}, "bandwidth": 0.1},
+        },
+        13: {
+            "riscv_0": {"latency": {"lower": 200, "upper": 30000}, "bandwidth": 0.1},
+        },
+        14: {
+            "riscv_0": {"latency": {"lower": 200, "upper": 100000}, "bandwidth": 0.04},
+        },
     },
     "blackhole": {
         0: {
@@ -85,6 +112,33 @@ test_bounds = {
         },
         5: {
             "riscv_1": {"latency": {"lower": 300, "upper": 4700}, "bandwidth": 0.17},
+        },
+        6: {
+            "riscv_0": {"latency": {"lower": 200, "upper": 70000}, "bandwidth": 0.4},
+        },
+        7: {
+            "riscv_0": {"latency": {"lower": 200, "upper": 300000}, "bandwidth": 1.0},
+        },
+        8: {
+            "riscv_0": {"latency": {"lower": 2000, "upper": 2000000}, "bandwidth": 1.0},
+        },
+        9: {
+            "riscv_0": {"latency": {"lower": 200, "upper": 30000}, "bandwidth": 0.1},
+        },
+        10: {
+            "riscv_0": {"latency": {"lower": 200, "upper": 70000}, "bandwidth": 0.1},
+        },
+        11: {
+            "riscv_0": {"latency": {"lower": 200, "upper": 200000}, "bandwidth": 0.04},
+        },
+        12: {
+            "riscv_0": {"latency": {"lower": 200, "upper": 30000}, "bandwidth": 0.1},
+        },
+        13: {
+            "riscv_0": {"latency": {"lower": 200, "upper": 30000}, "bandwidth": 0.1},
+        },
+        14: {
+            "riscv_0": {"latency": {"lower": 200, "upper": 100000}, "bandwidth": 0.04},
         },
     },
 }
