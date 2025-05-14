@@ -7,7 +7,7 @@
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "noc_nonblocking_api.h"
-#include "ckernel_sfpu_converter.h"
+#include "sfpu/ckernel_sfpu_converter.h"
 
 using namespace sfpi;
 
@@ -28,9 +28,7 @@ inline void calculate_fill(const float value) {
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
 inline void calculate_fill_bitcast(const uint32_t value_bit_mask) {
     // SFPU microcode
-    Converter c_value;
-    c_value.u = value_bit_mask;
-    vFloat fill_val = c_value.f;
+    vFloat fill_val = Converter::as_float(value_bit_mask);
 
     for (int d = 0; d < ITERATIONS; d++) {
         dst_reg[0] = fill_val;
