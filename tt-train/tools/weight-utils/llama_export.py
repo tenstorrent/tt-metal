@@ -8,6 +8,10 @@
 #     "transformers",
 # ]
 # ///
+
+# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+#
+# SPDX-License-Identifier: Apache-2.0
 import argparse
 import numpy as np
 from transformers import AutoModelForCausalLM, AutoTokenizer
