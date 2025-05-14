@@ -28,8 +28,7 @@ inline Tensor unary_impl(
     DataType output_dtype = (op_chain[0].op_type == UnaryOpType::TYPECAST)
                                 ? static_cast<DataType>(op_chain[0].params[1])
                                 : input_tensor.get_dtype();
-    auto arch = input_tensor.device()->arch();
-    bool preserve_fp32_precision = (arch != tt::ARCH::GRAYSKULL) and (input_tensor.get_dtype() == DataType::FLOAT32);
+    bool preserve_fp32_precision = input_tensor.get_dtype() == DataType::FLOAT32;
     bool fp32_dest_acc_en = preserve_fp32_precision or output_dtype == DataType::UINT32 or
                             output_dtype == DataType::INT32 or output_dtype == DataType::FLOAT32 or
                             input_tensor.get_dtype() == DataType::UINT32 or input_tensor.get_dtype() == DataType::INT32;
@@ -243,7 +242,6 @@ Tensor Softplus::invoke(
     const float threshold,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor) {
-    TT_ASSERT(input.device()->arch() != tt::ARCH::GRAYSKULL, "Softplus is not currently supported on Grayskull");
     return detail::unary_impl(
         queue_id,
         input,
