@@ -325,6 +325,7 @@ Tensor _swish(const Tensor& a, const std::optional<MemoryConfig>& output_mem_con
     return ttnn::silu(a);
 }
 
+<<<<<<< HEAD
 Tensor ExecuteTrunc::invoke(
     QueueId queue_id,
     const Tensor& input,
@@ -354,6 +355,8 @@ Tensor ExecuteTrunc::invoke(
     return ExecuteTrunc::invoke(DefaultQueueId, input, output_mem_config, std::move(output_tensor));
 }
 
+=======
+>>>>>>> 3d5ae43dea (Add trunc as LLK op)
 // Function variance of whole tensor.
 // Tensor variance(const Tensor& y,const Tensor& mean_y);
 Tensor _variance_impl(
