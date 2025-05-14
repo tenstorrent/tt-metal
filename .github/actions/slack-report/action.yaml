@@ -11,7 +11,7 @@ runs:
   using: "composite"
   steps:
     - name: Report Github Pipeline Status Slack Action
-      if: ${{ github.ref == 'refs/heads/main' }}
+      # if: ${{ github.ref == 'refs/heads/main' }}
       uses: slackapi/slack-github-action@v1.26.0
       with:
         payload: |
