@@ -1128,3 +1128,36 @@ if(WITH_PYTHON_BINDINGS)
             "${TARGET_LINK_LIBRARIES_PYBIND}"
     )
 endif()
+
+if(WITH_PYTHON_BINDINGS)
+    # Install .so into src files for pybinds implementation
+    install(
+        TARGETS
+            ttnn
+        ARCHIVE
+            DESTINATION ${CMAKE_INSTALL_LIBDIR}
+        LIBRARY
+            DESTINATION ${CMAKE_INSTALL_LIBDIR}
+            COMPONENT tar
+    )
+
+    install(
+        TARGETS
+            ttnn
+            DESTINATION
+            ${PROJECT_SOURCE_DIR}/ttnn/ttnn
+            COMPONENT
+            tt_pybinds
+    )
+else()
+    #when we don't build python bindings, we generate a dynamic library ttnncpp
+    install(
+        TARGETS
+            ttnncpp
+        ARCHIVE
+            DESTINATION ${CMAKE_INSTALL_LIBDIR}
+        LIBRARY
+            DESTINATION ${CMAKE_INSTALL_LIBDIR}
+            COMPONENT tar
+    )
+endif()
