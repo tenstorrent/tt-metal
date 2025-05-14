@@ -54,7 +54,7 @@ jobs:
           pytest tests/didt/test_ff1_matmul.py::test_ff1_matmul -k "without_gelu and 1chips" --didt-workload-iterations 100 --determinism-check-interval 1
           pytest tests/didt/test_ff1_matmul.py::test_ff1_matmul -k "with_gelu and 1chips" --didt-workload-iterations 100 --determinism-check-interval 1
           pytest tests/didt/test_lm_head_matmul.py::test_lm_head_matmul -k "1chips" --didt-workload-iterations 100 --determinism-check-interval 1
-      - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
+      - uses: tenstorrent/tt-metal/.github/actions/slack-report@rd/didt_ci_tests
         if: ${{ failure() }}
         with:
           slack_webhook_url: ${{ secrets.SLACK_WEBHOOK_URL }}
