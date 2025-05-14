@@ -163,11 +163,13 @@ function findGoodBadCommits(scheduledMainRuns) {
 
   for (const run of scheduledMainRuns) {
     if (!foundGood && run.conclusion === 'success') {
-      lastGoodSha = `\`${run.head_sha.substring(0, SHA_SHORT_LENGTH)}\``;
+      const shortSha = run.head_sha.substring(0, SHA_SHORT_LENGTH);
+      lastGoodSha = `[\`${shortSha}\`](https://github.com/${context.repo.owner}/${context.repo.repo}/commit/${run.head_sha})`;
       foundGood = true;
     }
     if (!foundBad && run.conclusion !== 'success') {
-      earliestBadSha = `\`${run.head_sha.substring(0, SHA_SHORT_LENGTH)}\``;
+      const shortSha = run.head_sha.substring(0, SHA_SHORT_LENGTH);
+      earliestBadSha = `[\`${shortSha}\`](https://github.com/${context.repo.owner}/${context.repo.repo}/commit/${run.head_sha})`;
       foundBad = true;
     }
     if (foundGood && foundBad) break;
@@ -204,7 +206,7 @@ async function getLastRunInfo(mainBranchRuns, github, context) {
 
   return {
     status: lastMainRun.conclusion === 'success' ? SUCCESS_EMOJI : FAILURE_EMOJI,
-    sha: `\`${lastMainRun.head_sha.substring(0, SHA_SHORT_LENGTH)}\``,
+    sha: `[\`${lastMainRun.head_sha.substring(0, SHA_SHORT_LENGTH)}\`](https://github.com/${context.repo.owner}/${context.repo.repo}/commit/${lastMainRun.head_sha})`,
     run: `[Run](${lastMainRun.html_url})${lastMainRun.run_attempt > 1 ? ` (#${lastMainRun.run_attempt})` : ''}`,
     pr: prInfo.prNumber,
     title: prInfo.prTitle,
@@ -262,8 +264,9 @@ async function generateSummaryBox(grouped, github, context) {
  */
 async function buildReport(grouped, github, context) {
   const days = parseInt(core.getInput('days') || DEFAULT_LOOKBACK_DAYS, 10);
+  const timestamp = new Date().toISOString();
   return [
-    `# Workflow Summary (Last ${days} Days)\n`,
+    `# Workflow Summary (Last ${days} Days) - Generated at ${timestamp}\n`,
     await generateSummaryBox(grouped, github, context),
     '\n## Column Descriptions\n',
     '| Column | Description |',
