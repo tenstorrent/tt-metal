@@ -8,9 +8,26 @@ from models.tt_transformers.tt.ccl import tt_distributed_rmsnorm, tt_sharded_dis
 
 
 class DistributedNorm(LightweightModule):
-    def __init__(self, norm, args, TG=False):
+    def __init__(
+        self,
+        norm,
+        args,
+        TG=False,
+        from_remote_semaphore_handles=None,
+        to_remote_semaphore_handles=None,
+        worker_sub_device_id=None,
+    ):
         self.norm = norm
         self.args = args
+
+        if worker_sub_device_id is not None:
+            self.use_fabric_ccl = True
+        else:
+            self.use_fabric_ccl = False
+
+        self.from_remote_semaphore_handles = from_remote_semaphore_handles
+        self.to_remote_semaphore_handles = to_remote_semaphore_handles
+        self.worker_sub_device_id = worker_sub_device_id
 
         if TG:
             core_grid_ln = (
@@ -56,6 +73,9 @@ class DistributedNorm(LightweightModule):
                     ln_sharded_input_memcfg=self.gather_in_mem_cfg,
                     ln_sharded_progcfg=self.ln_prg_cfg,
                     ln_sharded_stats_memcfg=self.ln_sharded_stats_memcfg,
+                    from_remote_semaphore_handles=self.from_remote_semaphore_handles,
+                    to_remote_semaphore_handles=self.to_remote_semaphore_handles,
+                    worker_sub_device_id=self.worker_sub_device_id,
                 )
             else:
                 return tt_distributed_rmsnorm(
@@ -64,13 +84,30 @@ class DistributedNorm(LightweightModule):
                     gamma=self.norm.weight_distributed,
                     mesh_device=self.args.mesh_device,
                     compute_kernel_config=self.ln_cfg,
+                    from_remote_semaphore_handles=self.from_remote_semaphore_handles,
+                    to_remote_semaphore_handles=self.to_remote_semaphore_handles,
+                    worker_sub_device_id=self.worker_sub_device_id,
                 )
 
         input_mem_cfg = self.norm.sharded_output_config if mode == "decode" else ttnn.DRAM_MEMORY_CONFIG
 
         # Distributed norm already performs a gather
         if self.args.is_multichip and not self.args.is_distributed_norm(mode):
-            x = ttnn.all_gather(x, dim=3, num_links=1, topology=self.args.ccl_topology(), memory_config=input_mem_cfg)
+            if self.use_fabric_ccl:
+                x = ttnn.experimental.all_gather_async(
+                    x,
+                    dim=3,
+                    num_links=1,
+                    mesh_device=self.args.mesh_device,
+                    memory_config=input_mem_cfg,
+                    topology=self.args.ccl_topology(),
+                    multi_device_global_semaphore=self.from_remote_semaphore_handles,
+                    subdevice_id=self.worker_sub_device_id,
+                )
+            else:
+                x = ttnn.all_gather(
+                    x, dim=3, num_links=1, topology=self.args.ccl_topology(), memory_config=input_mem_cfg
+                )
         else:
             x = ttnn.to_memory_config(x, input_mem_cfg)
 
@@ -78,6 +115,20 @@ class DistributedNorm(LightweightModule):
 
         # Distributed norm requires a gather
         if self.args.is_distributed_norm(mode):
-            x = ttnn.all_gather(x, dim=3, num_links=1, topology=self.args.ccl_topology())
+            if self.use_fabric_ccl:
+                x = ttnn.experimental.all_gather_async(
+                    x,
+                    dim=3,
+                    num_links=1,
+                    mesh_device=self.args.mesh_device,
+                    memory_config=input_mem_cfg,
+                    topology=self.args.ccl_topology(),
+                    multi_device_global_semaphore=self.from_remote_semaphore_handles,
+                    subdevice_id=self.worker_sub_device_id,
+                )
+            else:
+                x = ttnn.all_gather(
+                    x, dim=3, num_links=1, topology=self.args.ccl_topology(), memory_config=input_mem_cfg
+                )
 
         return x

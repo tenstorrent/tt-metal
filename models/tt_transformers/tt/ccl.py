@@ -224,7 +224,16 @@ def tt_all_gather(
     return gathered
 
 
-def tt_distributed_rmsnorm(inp, epsilon, gamma, mesh_device, compute_kernel_config):
+def tt_distributed_rmsnorm(
+    inp,
+    epsilon,
+    gamma,
+    mesh_device,
+    compute_kernel_config,
+    from_remote_semaphore_handles=None,
+    to_remote_semaphore_handles=None,
+    worker_sub_device_id=None,
+):
     # Run distributed rmsnorm part 1
     tt_stats = ttnn.rms_norm_pre_all_gather(inp, compute_kernel_config=compute_kernel_config, dtype=ttnn.bfloat16)
     padded_shape = (1, 1, inp.shape[-2], 32)
@@ -236,6 +245,9 @@ def tt_distributed_rmsnorm(inp, epsilon, gamma, mesh_device, compute_kernel_conf
         cluster_axis=1,
         num_links=1,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        from_remote_semaphore_handles=from_remote_semaphore_handles,
+        to_remote_semaphore_handles=to_remote_semaphore_handles,
+        worker_sub_device_id=worker_sub_device_id,
     )
 
     tt_stats.deallocate(True)
@@ -252,7 +264,16 @@ def tt_distributed_rmsnorm(inp, epsilon, gamma, mesh_device, compute_kernel_conf
 
 
 def tt_sharded_distributed_rmsnorm(
-    inp, epsilon, gamma, mesh_device, ln_sharded_input_memcfg, ln_sharded_progcfg, ln_sharded_stats_memcfg
+    inp,
+    epsilon,
+    gamma,
+    mesh_device,
+    ln_sharded_input_memcfg,
+    ln_sharded_progcfg,
+    ln_sharded_stats_memcfg,
+    from_remote_semaphore_handles=None,
+    to_remote_semaphore_handles=None,
+    worker_sub_device_id=None,
 ):
     inp = ttnn.to_memory_config(inp, memory_config=ln_sharded_input_memcfg)
 
@@ -268,6 +289,9 @@ def tt_sharded_distributed_rmsnorm(
         mesh_device=mesh_device,
         memory_config=ln_sharded_stats_memcfg,
         topology=ttnn.Topology.Linear,
+        from_remote_semaphore_handles=from_remote_semaphore_handles,
+        to_remote_semaphore_handles=to_remote_semaphore_handles,
+        worker_sub_device_id=worker_sub_device_id,
     )
 
     # Run distributed rmsnorm part 2

@@ -21,6 +21,9 @@ class LMHead(LightweightModule):
         state_dict_prefix,
         weight_cache_path,
         max_columns_per_device=128256 // 4,  # larger values per device lead to OOM or hangs
+        from_remote_semaphore_handles=None,
+        to_remote_semaphore_handles=None,
+        worker_sub_device_id=None,
     ):
         super().__init__()
         self.args = args
@@ -31,6 +34,14 @@ class LMHead(LightweightModule):
         self.num_devices = args.num_devices
 
         size_per_device = self.vocab_size // self.num_devices
+        self.from_remote_semaphore_handles = from_remote_semaphore_handles
+        self.to_remote_semaphore_handles = to_remote_semaphore_handles
+        self.worker_sub_device_id = worker_sub_device_id
+
+        if worker_sub_device_id is not None:
+            self.use_fabric_ccl = True
+        else:
+            self.use_fabric_ccl = False
 
         if args.is_galaxy:
             size_per_device = self.padded_vocab_size // self.num_devices
@@ -155,6 +166,9 @@ class LMHead(LightweightModule):
             dtype=self.args.ccl_dtype,
             sharded=False,
             use_composite=True,
+            from_remote_semaphore_handles=self.from_remote_semaphore_handles,
+            to_remote_semaphore_handles=self.to_remote_semaphore_handles,
+            worker_sub_device_id=self.worker_sub_device_id,
         )
 
         return output

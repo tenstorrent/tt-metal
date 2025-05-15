@@ -116,6 +116,9 @@ class Transformer(LightweightModule):
             ),
             args,
             args.is_galaxy,
+            from_remote_semaphore_handles=self.from_remote_semaphore_handles,
+            to_remote_semaphore_handles=self.to_remote_semaphore_handles,
+            worker_sub_device_id=self.worker_sub_device_id,
         )
 
         self.lm_head = LMHead(
@@ -126,6 +129,9 @@ class Transformer(LightweightModule):
             state_dict_prefix=state_dict_prefix,
             weight_cache_path=weight_cache_path,
             max_columns_per_device=self.args.max_columns_per_device_lm_head,
+            from_remote_semaphore_handles=self.from_remote_semaphore_handles,
+            to_remote_semaphore_handles=self.to_remote_semaphore_handles,
+            worker_sub_device_id=self.worker_sub_device_id,
         )
 
     def prepare_inputs_prefill(self, tokens, start_pos=0, page_table=None, chunk_page_table=None):
@@ -355,7 +361,19 @@ class Transformer(LightweightModule):
                     topology=self.args.ccl_topology(),
                 )
             else:
-                tt_logits = ttnn.all_gather(tt_logits, dim=3, num_links=1, topology=self.args.ccl_topology())
+                if not self.use_fabric_ccl:
+                    tt_logits = ttnn.all_gather(tt_logits, dim=3, num_links=1, topology=self.args.ccl_topology())
+                else:
+                    tt_logits = ttnn.experimental.all_gather_async(
+                        tt_logits,
+                        dim=3,
+                        num_links=1,
+                        mesh_device=self.mesh_device,
+                        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                        topology=self.args.ccl_topology(),
+                        multi_device_global_semaphore=self.from_remote_semaphore_handles,
+                        subdevice_id=self.worker_sub_device_id,
+                    )
         tt_logits = ttnn.untilize(tt_logits, use_multicore=True)
 
         if argmax_on_device:
