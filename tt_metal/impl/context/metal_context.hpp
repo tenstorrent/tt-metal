@@ -59,7 +59,10 @@ public:
     }
 
     void initialize(
-        const DispatchCoreConfig& dispatch_core_config, uint8_t num_hw_cqs, const BankMapping& l1_bank_remap);
+        const DispatchCoreConfig& dispatch_core_config,
+        uint8_t num_hw_cqs,
+        const BankMapping& l1_bank_remap,
+        bool minimal = false);
 
     // Control plane accessors
     tt::tt_fabric::ControlPlane& get_control_plane();
