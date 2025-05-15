@@ -1715,6 +1715,8 @@ void kernel_main() {
             wait_for_notification((uint32_t)edm_local_sync_ptr, num_local_edms - 1);
             notify_slave_routers(
                 edm_channels_mask, local_handshake_master_eth_chan, (uint32_t)edm_local_sync_ptr, num_local_edms);
+            // clear the local sync ptr for reuse during teardown
+            *edm_local_sync_ptr = 0;
         } else {
             notify_master_router(local_handshake_master_eth_chan, (uint32_t)edm_local_sync_ptr);
             wait_for_notification((uint32_t)edm_local_sync_ptr, num_local_edms);
@@ -1816,6 +1818,14 @@ void kernel_main() {
     ncrisc_noc_counters_init();
 
     if constexpr (wait_for_host_signal) {
+        // When tearing down, only the master router receives the teardown signal from host
+        // This master core coordinates with the other routers on the local device to propagate the
+        // teardown signal:
+        // 1. Master receives the teardown signal from host
+        // 2. Master sends the teardown signal to the other routers on the local device
+        // 3. The other routers then ack that they are out of the main loop and are "here"
+        //   3b. Meanwhile, the master waits for the acks from all of the other routers
+        // 4. Master signals to host that it's done teardown by setting the status to terminated
         if constexpr (is_local_handshake_master) {
             notify_slave_routers(
                 edm_channels_mask,
@@ -1823,11 +1833,20 @@ void kernel_main() {
                 (uint32_t)termination_signal_ptr,
                 *termination_signal_ptr);
             noc_async_write_barrier();
+            wait_for_notification((uint32_t)edm_local_sync_ptr, num_local_edms - 1);
+            *edm_local_sync_ptr = 0;
+            *edm_status_ptr = tt::tt_fabric::EDMStatus::TERMINATED;
+            DPRINT << "EDM DONE\n";
+            WAYPOINT("DONE");
+        } else {
+            *edm_status_ptr = tt::tt_fabric::EDMStatus::TERMINATED;
+            notify_master_router(local_handshake_master_eth_chan, (uint32_t)edm_local_sync_ptr);
+            DPRINT << "EDM DONE\n";
+            WAYPOINT("DONE");
         }
+    } else {
+        DPRINT << "EDM DONE\n";
+        WAYPOINT("DONE");
+        *edm_status_ptr = tt::tt_fabric::EDMStatus::TERMINATED;
     }
-
-    *edm_status_ptr = tt::tt_fabric::EDMStatus::TERMINATED;
-
-    DPRINT << "EDM DONE\n";
-    WAYPOINT("DONE");
 }
