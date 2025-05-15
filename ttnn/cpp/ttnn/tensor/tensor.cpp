@@ -149,15 +149,21 @@ void Tensor::deallocate_impl(bool force) {
 
     ZoneScopedN("TensorDeallocate");
     // GraphTracker::instance().track_function_start("Tensor::deallocate", *this, force);
-    auto* device_storage = std::get_if<DeviceStorage>(&tensor_attributes->get_storage());
-    if (device_storage != nullptr && can_deallocate(tensor_attributes, force)) {
-        if (can_deallocate(device_storage->mesh_buffer, force)) {
-            device_storage->mesh_buffer->deallocate();
-        } else if (can_deallocate(device_storage->buffer, force)) {
-            DeallocateBuffer(*(device_storage->buffer));
-        }
-        device_storage->mesh_buffer.reset();
-        device_storage->buffer.reset();
+    if (can_deallocate(tensor_attributes, force)) {
+        std::visit(
+            tt::stl::overloaded{
+                [](HostStorage&) {},
+                [](MultiDeviceHostStorage&) {},
+                [this, force, &can_deallocate](DeviceStorage& storage) {
+                    if (can_deallocate(storage.mesh_buffer, force)) {
+                        storage.mesh_buffer->deallocate();
+                    } else if (can_deallocate(storage.buffer, force)) {
+                        DeallocateBuffer(*(storage.buffer));
+                    }
+                    storage.mesh_buffer.reset();
+                    storage.buffer.reset();
+                }},
+            this->tensor_attributes->get_storage());
     }
     // GraphTracker::instance().track_function_end();
 }
