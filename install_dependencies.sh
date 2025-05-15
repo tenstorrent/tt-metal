@@ -109,7 +109,6 @@ ub_buildtime_packages()
      libtool \
      libevent-dev \
      bison \
-     git \
     )
 }
 
@@ -264,6 +263,7 @@ install_mpi_uflm(){
 
     OMPI_TAG="v5.0.7"
     SRC_DIR="${HOME}/src/ompi-${OMPI_TAG}"
+    #PREFIX="/usr/local"          # change this if you prefer another location
     PREFIX="/opt/openmpi/5.0.7"
     NPROC=$(nproc)
 
@@ -272,7 +272,12 @@ install_mpi_uflm(){
     # -----------------------------------------------------------------------------
     # 1. Install build prerequisites
     # -----------------------------------------------------------------------------
-    # do nothing for now
+    info "Installing build prerequisites (apt)…"
+    apt-get update -qq
+    apt-get install -y build-essential gfortran git pkg-config \
+        libevent-dev libhwloc-dev m4 flex bison autoconf automake libtool
+
+
 
     # -----------------------------------------------------------------------------
     # 2. Clone (or refresh) the Open MPI source tree
