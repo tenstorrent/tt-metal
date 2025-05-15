@@ -273,7 +273,7 @@ class TtLlamaMLP(LightweightModule):
         # ttnn.deallocate(w1_out)
 
         activation_height = get_prefill_mlp_activation_height_w2(seq_len)
-        w2_in = ttnn.reshape(w2_in, (1, seq_len // activation_height, activation_height, -1))
+        w2_in_gathered = ttnn.reshape(w2_in_gathered, (1, seq_len // activation_height, activation_height, -1))
 
         w2_out = ttnn.linear(
             w2_in_gathered,
