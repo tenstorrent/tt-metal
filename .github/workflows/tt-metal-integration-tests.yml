@@ -41,11 +41,16 @@ jobs:
           if [ "${{ github.event.pull_request.head.repo.full_name }}" != "${{ github.repository }}" ]; then
             echo "PR is from a fork: ${{ github.event.pull_request.head.repo.full_name }}"
 
+            # Extract the contributor's username from the fork's full name
+            contributor_name=$(echo "${{ github.event.pull_request.head.repo.full_name }}" | cut -d'/' -f1)
+            echo "Contributor's username: $contributor_name"
+
+            remote_url="https://github.com/${{ github.event.pull_request.head.repo.full_name }}.git"
             echo "Adding contributor's fork as remote..."
-            git remote add fork https://github.com/${{ github.event.pull_request.head.repo.full_name }}.git
+            git remote add $contributor_name $remote_url || echo "Remote already exists"
 
             echo "Fetching branch '${{ github.head_ref }}' from fork..."
-            git fetch fork ${{ github.head_ref }}
+            git fetch $contributor_name ${{ github.head_ref }}
 
             echo "Checking out the fork branch"
             git checkout FETCH_HEAD
