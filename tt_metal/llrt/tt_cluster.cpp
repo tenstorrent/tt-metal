@@ -90,7 +90,7 @@ inline std::string get_soc_description_file(
 namespace tt {
 
 ClusterType Cluster::get_cluster_type_from_cluster_desc(
-    const llrt::RunTimeOptions& rtoptions, const tt_ClusterDescriptor* cluster_desc, tt_device* driver) {
+    const llrt::RunTimeOptions& rtoptions, const tt_ClusterDescriptor* cluster_desc) {
     if (rtoptions.get_simulator_enabled()) {
         tt_SimulationDeviceInit init(rtoptions.get_simulator_path());
         auto arch = init.get_arch_name();
@@ -106,22 +106,16 @@ ClusterType Cluster::get_cluster_type_from_cluster_desc(
             rtoptions, tt::umd::Cluster::create_cluster_descriptor().get());
     }
     ClusterType cluster_type = ClusterType::INVALID;
-    std::set<chip_id_t> chip_ids;
-    if (driver != nullptr) {
-        chip_ids.insert(driver->get_target_device_ids().begin(), driver->get_target_device_ids().end());
-    } else {
-        chip_ids.insert(cluster_desc->get_all_chips().begin(), cluster_desc->get_all_chips().end());
-    }
-    for (auto& chip_id : chip_ids) {
+    for (auto& chip_id : cluster_desc->get_all_chips()) {
         if (cluster_desc->get_board_type(chip_id) == BoardType::GALAXY) {
             cluster_type = ClusterType::TG;
             break;
         }
     }
-    TT_ASSERT(chip_ids.size() > 0, "No chips detected in the cluster");
-    auto board_type = cluster_desc->get_board_type(*chip_ids.begin());
+    TT_ASSERT(cluster_desc->get_all_chips().size() > 0, "No chips detected in the cluster");
+    auto board_type = cluster_desc->get_board_type(*cluster_desc->get_all_chips().begin());
     bool all_same_board = true;
-    for (auto& chip_id : chip_ids) {
+    for (auto& chip_id : cluster_desc->get_all_chips()) {
         if (cluster_desc->get_board_type(chip_id) != board_type) {
             all_same_board = false;
             break;
@@ -130,7 +124,7 @@ ClusterType Cluster::get_cluster_type_from_cluster_desc(
 
     if (all_same_board) {
         if (board_type == BoardType::N300) {
-            if (chip_ids.size() == 8) {
+            if (cluster_desc->get_all_chips().size() == 8) {
                 cluster_type = ClusterType::T3K;
             } else {
                 cluster_type = ClusterType::N300;
@@ -138,15 +132,15 @@ ClusterType Cluster::get_cluster_type_from_cluster_desc(
         } else if (board_type == BoardType::N150) {
             cluster_type = ClusterType::N150;
         } else if (board_type == BoardType::P100) {
-            if (chip_ids.size() == 1) {
+            if (cluster_desc->get_all_chips().size() == 1) {
                 cluster_type = ClusterType::P100;
             }
         } else if (board_type == BoardType::P150) {
-            if (chip_ids.size() == 1) {
+            if (cluster_desc->get_all_chips().size() == 1) {
                 cluster_type = ClusterType::P150;
-            } else if (chip_ids.size() == 2) {
+            } else if (cluster_desc->get_all_chips().size() == 2) {
                 cluster_type = ClusterType::P150_X2;
-            } else if (chip_ids.size() == 4) {
+            } else if (cluster_desc->get_all_chips().size() == 4) {
                 cluster_type = ClusterType::P150_X4;
             }
         } else if (board_type == BoardType::UBB) {
@@ -212,34 +206,13 @@ BoardType Cluster::get_board_type(chip_id_t chip_id) const {
 bool Cluster::is_base_routing_fw_enabled() const { return Cluster::is_base_routing_fw_enabled(this->cluster_type_); }
 
 void Cluster::generate_cluster_descriptor() {
-    // Cluster descriptor yaml not available for Blackhole bring up
-    if (this->target_type_ == TargetDevice::Simulator) {
-        // Passing simulator reported physical devices as logical devices.
-        this->mock_cluster_desc_ptr_ = tt_ClusterDescriptor::create_mock_cluster({0}, this->arch_);
-        this->cluster_desc_ = this->mock_cluster_desc_ptr_.get();
-    } else {
-        this->cluster_desc_ = this->driver_->get_cluster_description();
-    }
+    this->cluster_desc_ = this->driver_->get_cluster_description();
     this->cluster_type_ = Cluster::get_cluster_type_from_cluster_desc(this->rtoptions_, this->cluster_desc_);
 
     if (this->target_type_ != TargetDevice::Simulator && this->arch_ == tt::ARCH::BLACKHOLE) {
         TT_FATAL(
             this->cluster_desc_->get_noc_translation_table_en().at(0),
             "Running Metal on Blackhole requires FW >= 80.18.0.0");
-    }
-
-    // Use cluster descriptor to map MMIO device id to all devices on the same card (including the MMIO device)
-    if (this->target_type_ == TargetDevice::Simulator) {
-        std::set<chip_id_t> dummy_card = {0};
-        this->devices_grouped_by_assoc_mmio_device_[0] = dummy_card;
-        this->device_to_mmio_device_[0] = 0;
-    } else {
-        for (chip_id_t device_id : this->driver_->get_target_device_ids()) {
-            chip_id_t closest_mmio_device_id = this->cluster_desc_->get_closest_mmio_capable_chip(device_id);
-            std::set<chip_id_t> &device_ids = this->devices_grouped_by_assoc_mmio_device_[closest_mmio_device_id];
-            device_ids.insert(device_id);
-            this->device_to_mmio_device_[device_id] = closest_mmio_device_id;
-        }
     }
 
     uint32_t total_num_hugepages = tt::umd::get_num_hugepages();
@@ -306,7 +279,7 @@ void Cluster::initialize_device_drivers() {
     this->get_metal_desc_from_tt_desc();
     this->validate_harvesting_masks();
 
-    for (const auto &[mmio_device_id, controlled_devices] : this->devices_grouped_by_assoc_mmio_device_) {
+    for (const auto& [mmio_device_id, controlled_devices] : this->cluster_desc_->get_chips_grouped_by_closest_mmio()) {
         this->assign_mem_channels_to_devices(mmio_device_id, controlled_devices);
     }
 
@@ -321,7 +294,7 @@ void Cluster::assert_risc_reset() {
 }
 
 void Cluster::assign_mem_channels_to_devices(
-    chip_id_t mmio_device_id, const std::set<chip_id_t> &controlled_device_ids) {
+    chip_id_t mmio_device_id, const std::unordered_set<chip_id_t>& controlled_device_ids) {
     // g_MAX_HOST_MEM_CHANNELS (4) is defined in tt::umd::Cluster and denotes the max number of host memory channels per
     // MMIO device Metal currently assigns 1 channel per device. See https://github.com/tenstorrent/tt-metal/issues/4087
     // One WH gateway should have 8 remote deivces in its control group.
@@ -351,11 +324,19 @@ const std::unordered_map<CoreCoord, int32_t>& Cluster::get_virtual_routing_to_pr
 void Cluster::open_driver(const bool &skip_driver_allocs) {
     std::unique_ptr<tt::umd::Cluster> device_driver;
     if (this->target_type_ == TargetDevice::Silicon) {
-        std::set<chip_id_t> chips_set;
+        std::unordered_set<chip_id_t> chips_set;
         // generate the cluster desc and pull chip ids from there
         auto temp_cluster_desc = tt::umd::Cluster::create_cluster_descriptor();
         if (rtoptions_.is_visible_device_specified()) {
-            chips_set.emplace(rtoptions_.get_visible_device());
+            int desired_logical_id = -1;
+            for (auto& [logical_id, pci_id] : temp_cluster_desc->get_chips_with_mmio()) {
+                if (pci_id == rtoptions_.get_visible_device()) {
+                    desired_logical_id = logical_id;
+                    break;
+                }
+            }
+            TT_ASSERT(desired_logical_id != -1, "Visible device not found in cluster descriptor");
+            chips_set.emplace(desired_logical_id);
         } else {
             std::unordered_set<chip_id_t> all_chips = temp_cluster_desc->get_all_chips();
             chips_set.insert(all_chips.begin(), all_chips.end());
@@ -415,8 +396,6 @@ Cluster::~Cluster() {
     this->driver_->close_device();
 
     this->sdesc_per_chip_.clear();
-    this->devices_grouped_by_assoc_mmio_device_.clear();
-    this->device_to_mmio_device_.clear();
     this->device_to_host_mem_channel_.clear();
     this->device_eth_routing_info_.clear();
     this->tunnels_from_mmio_device.clear();
@@ -424,7 +403,8 @@ Cluster::~Cluster() {
 }
 
 std::unordered_map<chip_id_t, eth_coord_t> Cluster::get_user_chip_ethernet_coordinates() const {
-    auto user_chip_ethernet_coordinates = this->cluster_desc_->get_chip_locations();
+    auto user_chip_ethernet_coordinates =
+        filter_chip_collection_by_opened_chips(this->cluster_desc_->get_chip_locations());
     if (this->is_galaxy_cluster()) {
         std::erase_if(user_chip_ethernet_coordinates, [this](const auto& entry) {
             return this->cluster_desc_->get_board_type(entry.first) != BoardType::GALAXY;
@@ -434,7 +414,7 @@ std::unordered_map<chip_id_t, eth_coord_t> Cluster::get_user_chip_ethernet_coord
 }
 
 std::unordered_map<chip_id_t, eth_coord_t> Cluster::get_all_chip_ethernet_coordinates() const {
-    return this->cluster_desc_->get_chip_locations();
+    return filter_chip_collection_by_opened_chips(this->cluster_desc_->get_chip_locations());
 }
 
 size_t Cluster::number_of_user_devices() const {
@@ -615,16 +595,7 @@ std::unordered_map<int, int> Cluster::get_worker_logical_to_virtual_y(chip_id_t 
     return worker_logical_to_virtual_y;
 }
 
-int Cluster::get_device_aiclk(const chip_id_t& chip_id) const {
-    if (this->device_to_mmio_device_.find(chip_id) != this->device_to_mmio_device_.end()) {
-        // get_clocks returns MMIO device ID -> clock frequency
-        // There is one driver per MMIO device, so we use that to index returned map
-        chip_id_t mmio_device_id = this->device_to_mmio_device_.at(chip_id);
-        return this->driver_->get_clocks().at(mmio_device_id);
-    }
-    TT_THROW("Cannot get frequency for device {} that is not initialized!", chip_id);
-    return 0;
-}
+int Cluster::get_device_aiclk(const chip_id_t& chip_id) const { return this->driver_->get_chip(chip_id)->get_clock(); }
 
 void Cluster::deassert_risc_reset_at_core(const tt_cxy_pair& core, const TensixSoftResetOptions& soft_resets) const {
     const metal_SocDescriptor &soc_desc = this->get_soc_desc(core.chip);
@@ -869,7 +840,7 @@ std::unordered_map<chip_id_t, std::vector<CoreCoord>> Cluster::get_ethernet_core
 }
 #define MAX_TUNNEL_DEPTH 4
 void Cluster::set_tunnels_from_mmio_device() {
-    for (const auto &[mmio_chip_id, physical_chip_id] : this->cluster_desc_->get_chips_with_mmio()) {
+    for (const auto& mmio_chip_id : this->driver_->get_target_mmio_device_ids()) {
         std::vector<std::vector<chip_id_t>> tunnels_from_mmio = {};
         const auto &all_eth_connections = this->cluster_desc_->get_ethernet_connections();
         TT_ASSERT(this->cluster_desc_->is_chip_mmio_capable(mmio_chip_id));
@@ -879,7 +850,7 @@ void Cluster::set_tunnels_from_mmio_device() {
             continue;
         }
 
-        std::set<chip_id_t> device_ids = get_devices_controlled_by_mmio_device(mmio_chip_id);
+        auto device_ids = get_devices_controlled_by_mmio_device(mmio_chip_id);
         device_ids.erase(mmio_chip_id);
 
         if (device_ids.size() == 0) {
@@ -1027,7 +998,9 @@ void Cluster::disable_ethernet_cores_with_retrain() {
 
 void Cluster::reserve_ethernet_cores_for_tunneling() {
     const char *TT_METAL_SLOW_DISPATCH_MODE = std::getenv("TT_METAL_SLOW_DISPATCH_MODE");
-    for (const auto &[assoc_mmio_device, devices] : this->devices_grouped_by_assoc_mmio_device_) {
+    for (const auto& [assoc_mmio_device, devices] :
+         filter_chip_collection_by_opened_chips(this->cluster_desc_->get_chips_grouped_by_closest_mmio())) {
+        std::cout << "assoc_mmio_device: " << assoc_mmio_device << " devices size " << devices.size() << std::endl;
         for (const auto &chip_id : devices) {
             if (this->device_eth_routing_info_.find(chip_id) == this->device_eth_routing_info_.end()) {
                 this->device_eth_routing_info_.insert({chip_id, {}});
@@ -1316,14 +1289,12 @@ void Cluster::set_internal_routing_info_for_ethernet_cores(bool enable_internal_
     std::vector<chip_id_t> mmio_devices = target_mmio_devices;
     if (mmio_devices.size() == 0) {
         mmio_devices.reserve(this->number_of_pci_devices());
-        for (const auto &[assoc_mmio_device, devices] : this->devices_grouped_by_assoc_mmio_device_) {
-            mmio_devices.emplace_back(assoc_mmio_device);
+        for (auto chip_id : this->driver_->get_target_mmio_device_ids()) {
+            mmio_devices.emplace_back(chip_id);
         }
     }
-    for (const auto &mmio_chip_id : mmio_devices) {
-        for (const auto &chip_id : this->devices_grouped_by_assoc_mmio_device_.at(mmio_chip_id)) {
-            non_mmio_devices.emplace_back(chip_id);
-        }
+    for (auto chip_id : this->driver_->get_target_remote_device_ids()) {
+        non_mmio_devices.emplace_back(chip_id);
     }
 
     if (enable_internal_routing) {
@@ -1378,7 +1349,8 @@ uint32_t Cluster::get_mmio_device_max_tunnel_depth(chip_id_t mmio_device) const 
     TT_ASSERT(
         (this->get_associated_mmio_device(mmio_device) == mmio_device), "Called mmio device api on non-mmio device");
     uint32_t depth = 0;
-    for (const auto &[assoc_mmio_device, devices] : this->devices_grouped_by_assoc_mmio_device_) {
+    for (const auto& [assoc_mmio_device, devices] :
+         filter_chip_collection_by_opened_chips(this->cluster_desc_->get_chips_grouped_by_closest_mmio())) {
         for (const auto &chip_id : devices) {
             if (chip_id == assoc_mmio_device) {
                 continue;
