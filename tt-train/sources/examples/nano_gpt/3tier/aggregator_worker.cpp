@@ -107,7 +107,7 @@ int main(int argc, char **argv) {
     auto model_parameters = model->parameters();
     auto sorted_model_parameters = SortedParameters(model_parameters.begin(), model_parameters.end());
 
-    auto workers = config.num_mpi_workers;
+    auto workers = config.num_mh_workers;
 
     auto workers_and_aggregator_ranks =
         three_tier_arch::get_workers_and_aggregator_ranks(static_cast<uint32_t>(*distributed_ctx.rank()));

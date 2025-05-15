@@ -35,7 +35,7 @@ struct TrainingConfig {
     ttml::models::gpt2::TransformerConfig transformer_config;
 
     bool enable_mpi = false;
-    uint32_t num_mpi_workers = 1U;
+    uint32_t num_mh_workers = 1U;
 };
 
 TrainingConfig parse_config(const YAML::Node &yaml_config);

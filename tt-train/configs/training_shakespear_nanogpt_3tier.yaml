@@ -24,7 +24,7 @@ training_config:
     experimental:
       use_composite_layernorm: false
 
-mpi_config:
+multihost_config:
   enabled: true
   num_workers: 2
 

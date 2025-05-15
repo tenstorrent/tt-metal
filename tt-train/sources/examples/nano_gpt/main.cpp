@@ -390,7 +390,7 @@ struct TrainingConfig {
 
     // mpi config
     bool enable_mpi = false;
-    uint32_t num_mpi_workers = 0U;
+    uint32_t num_mh_workers = 0U;
 };
 
 TrainingConfig parse_config(const YAML::Node &yaml_config) {
@@ -426,9 +426,9 @@ TrainingConfig parse_config(const YAML::Node &yaml_config) {
         throw std::runtime_error("Unknown model type: " + config.model_type);
     }
 
-    if (auto mpi_config = yaml_config["mpi_config"]) {
-        config.enable_mpi = mpi_config["enabled"].as<bool>(false);
-        config.num_mpi_workers = mpi_config["num_workers"].as<uint32_t>(0U);
+    if (auto multihost_config = yaml_config["multihost_config"]) {
+        config.enable_mpi = multihost_config["enabled"].as<bool>(false);
+        config.num_mh_workers = multihost_config["num_workers"].as<uint32_t>(0U);
     }
     return config;
 }
@@ -489,7 +489,7 @@ int main(int argc, char **argv) {
     if (config.enable_mpi) {
         fmt::print("MPI config:\n");
         fmt::print("  enable_mpi: {}\n", config.enable_mpi);
-        fmt::print("  num_mpi_workers: {}\n", config.num_mpi_workers);
+        fmt::print("  num_mh_workers: {}\n", config.num_mh_workers);
     } else {
         fmt::print("Not MPI run.\n");
     }
@@ -750,7 +750,7 @@ int main(int argc, char **argv) {
     auto select_optimizer =
         [&model, &adamw_params, &config](bool use_moreh_adamw) -> std::unique_ptr<ttml::optimizers::OptimizerBase> {
         if (config.enable_mpi) {
-            return std::make_unique<RemoteOptimizer>(get_model_parameters(model), config.num_mpi_workers);
+            return std::make_unique<RemoteOptimizer>(get_model_parameters(model), config.num_mh_workers);
         } else if (use_moreh_adamw) {
             return std::make_unique<ttml::optimizers::MorehAdamW>(get_model_parameters(model), adamw_params);
         } else {
@@ -766,9 +766,9 @@ int main(int argc, char **argv) {
         if (!optimizer_ptr) {
             throw std::runtime_error("Optimizer is not RemoteOptimizer");
         }
-        fmt::println("[worker] Remote optimizer receiving weights from rank {}", config.num_mpi_workers);
+        fmt::println("[worker] Remote optimizer receiving weights from rank {}", config.num_mh_workers);
         optimizer_ptr->receive_weights();
-        fmt::println("[worker] Remote optimizer received weights from rank {}", config.num_mpi_workers);
+        fmt::println("[worker] Remote optimizer received weights from rank {}", config.num_mh_workers);
     } else {
         // otherwise proceed with normal loading training state if necessary
         if (!config.model_path.empty() && std::filesystem::exists(config.model_path)) {
