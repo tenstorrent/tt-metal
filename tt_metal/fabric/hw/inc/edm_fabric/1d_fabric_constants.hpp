@@ -170,10 +170,21 @@ constexpr size_t sender_3_completed_packet_header_cb_size_headers =
 constexpr size_t sender_4_completed_packet_header_cb_address = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 54);
 constexpr size_t sender_4_completed_packet_header_cb_size_headers =
     get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 55);
-constexpr size_t is_2d_fabric = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 56);
-constexpr size_t my_direction = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 57);
+constexpr std::array<bool, NUM_SENDER_CHANNELS> is_sender_channel_serviced = {
+    get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 56) != 0,
+    get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 57) != 0,
+    get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 58) != 0,
+    get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 59) != 0,
+    get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 60) != 0};
 
-constexpr size_t SPECIAL_MARKER_0_IDX = MAIN_CT_ARGS_START_IDX + 58;
+constexpr std::array<bool, NUM_RECEIVER_CHANNELS> is_receiver_channel_serviced = {
+    get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 61) != 0,
+    get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 62) != 0};
+
+constexpr size_t is_2d_fabric = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 63);
+constexpr size_t my_direction = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 64);
+
+constexpr size_t SPECIAL_MARKER_0_IDX = MAIN_CT_ARGS_START_IDX + 65;
 constexpr size_t SPECIAL_MARKER_0 = 0x00c0ffee;
 static_assert(
     !SPECIAL_MARKER_CHECK_ENABLED || get_compile_time_arg_val(SPECIAL_MARKER_0_IDX) == SPECIAL_MARKER_0,
