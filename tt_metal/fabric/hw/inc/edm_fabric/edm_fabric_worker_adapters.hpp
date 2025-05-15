@@ -54,7 +54,6 @@ struct WorkerToFabricEdmSenderImpl {
     static constexpr uint32_t open_connection_value = 1;
     static constexpr uint32_t close_connection_request_value = 2;
     // HACK: Need a way to properly set this up
-    inline static uint32_t worker_credits_stream_id_counter = 63;
 
     WorkerToFabricEdmSenderImpl() : from_remote_buffer_free_slots_ptr(nullptr) {}
 
@@ -76,8 +75,9 @@ struct WorkerToFabricEdmSenderImpl {
             reinterpret_cast<volatile uint32_t* const>(get_semaphore<my_core_type>(writer_send_sem_id));
 
         // DEAD CODE
-        const StreamId my_fc_stream_channel_id = StreamId{
-            worker_credits_stream_id_counter - (my_fc_stream_id_ll_sender_worker_flow_control_semaphore_id >> 16)};
+        // Workers don't have a local stream ID, so we set to a placeholder (unused) value until the worker and EDM
+        // codepaths are split
+        const StreamId my_fc_stream_channel_id = StreamId{std::numeric_limits<uint32_t>::max()};
 
         auto worker_teardown_sem_addr =
             reinterpret_cast<volatile uint32_t* const>(get_semaphore<my_core_type>(get_arg_val<uint32_t>(arg_idx++)));
@@ -134,11 +134,14 @@ struct WorkerToFabricEdmSenderImpl {
         worker_credits_stream_id(worker_credits_stream_id.get()),
 
         edm_buffer_local_free_slots_read_ptr(
-            IS_WORKER ? 0 :
-            reinterpret_cast<volatile tt_reg_ptr uint32_t*>(get_stream_reg_read_addr(this->worker_credits_stream_id))),
+            IS_WORKER ? 0
+                      : reinterpret_cast<volatile tt_reg_ptr uint32_t*>(
+                            get_stream_reg_read_addr(this->worker_credits_stream_id))),
         edm_buffer_remote_free_slots_update_addr(get_stream_reg_write_addr(sender_channel_credits_stream_id)),
         edm_buffer_local_free_slots_update_ptr(
-            reinterpret_cast<volatile tt_reg_ptr uint32_t*>(get_stream_reg_write_addr(this->worker_credits_stream_id))),
+            IS_WORKER ? 0
+                      : reinterpret_cast<volatile tt_reg_ptr uint32_t*>(
+                            get_stream_reg_write_addr(this->worker_credits_stream_id))),
         edm_connection_handshake_l1_addr(
             connected_to_persistent_fabric
                 ? edm_connection_handshake_l1_id
@@ -159,7 +162,9 @@ struct WorkerToFabricEdmSenderImpl {
         sync_noc_cmd_buf(sync_noc_cmd_buf),
         direction(direction) {
         if (!IS_WORKER) {
-            init_ptr_val(this->worker_credits_stream_id, 0);
+            // The EDM is guaranteed to know the number of free slots of the downstream EDM
+            // becausen all EDMs are brought up/initialized at the same time
+            init_ptr_val(this->worker_credits_stream_id, EDM_NUM_BUFFER_SLOTS);
         }
         ASSERT(buffer_size_bytes > 0);
         if constexpr (USER_DEFINED_NUM_BUFFER_SLOTS) {
@@ -253,18 +258,15 @@ struct WorkerToFabricEdmSenderImpl {
     void open_start() {
         const auto dest_noc_addr_coord_only = get_noc_addr(this->edm_noc_x, this->edm_noc_y, 0);
 
-        ASSERT(remote_buffer_index_addr > 0);
         /// DOUBLE CHECK THE READ BACK I RTHINK I AM MISSING CONN INFO READ BACK????
         tt::tt_fabric::EDMChannelWorkerLocationInfo* worker_location_info_ptr =
             reinterpret_cast<tt::tt_fabric::EDMChannelWorkerLocationInfo*>(edm_worker_location_info_addr);
-        worker_location_info_ptr->edm_the_real_local_read_counter = 0;
-        worker_location_info_ptr->edm_read_counter = 0;
         if constexpr (IS_WORKER) {
             const uint64_t remote_buffer_index_addr = dest_noc_addr_coord_only | edm_buffer_index_addr;
             // piggy back off of worker_teardown_addr just to temporarily store the read-back write pointer
             // then once we get it we will use that address for the teardown ack
             // Note this is safe because only the worker can initiate teardown (and it will not do it until)
-            // some time atleast after it copied the wrptr out of the worker_teardown_addr 
+            // some time atleast after it copied the wrptr out of the worker_teardown_addr
             noc_async_read(
                 remote_buffer_index_addr,
                 reinterpret_cast<size_t>(this->worker_teardown_addr),
@@ -336,7 +338,6 @@ struct WorkerToFabricEdmSenderImpl {
             this->buffer_slot_write_counter.index = BufferIndex{static_cast<uint8_t>(this->buffer_slot_write_counter.counter % static_cast<uint32_t>(this->num_buffers_per_channel))};
             this->buffer_slot_index = this->buffer_slot_write_counter.get_buffer_index();
         } else {
-            increment_local_update_ptr_val(worker_credits_stream_id, *from_remote_buffer_free_slots_ptr);
             DPRINT << "worker_credits_stream_id=" << (uint32_t)worker_credits_stream_id << "\n";
         }
 
@@ -346,11 +347,9 @@ struct WorkerToFabricEdmSenderImpl {
 
         const auto dest_noc_addr_coord_only = get_noc_addr(this->edm_noc_x, this->edm_noc_y, 0);
         const uint64_t edm_write_ptr =
-            dest_noc_addr_coord_only |
-            reinterpret_cast<size_t>(
-                edm_worker_location_info_addr +
-                offsetof(tt::tt_fabric::EDMChannelWorkerLocationInfo, edm_read_counter));
-        ASSERT(*this->worker_teardown_addr <= 8);
+            dest_noc_addr_coord_only | reinterpret_cast<size_t>(
+                                           edm_worker_location_info_addr +
+                                           offsetof(tt::tt_fabric::EDMChannelWorkerLocationInfo, edm_read_counter));
 
         noc_inline_dw_write<false, posted>(
             edm_connection_handshake_noc_addr, open_connection_value, 0xf, WORKER_HANDSHAKE_NOC);
@@ -436,8 +435,8 @@ struct WorkerToFabricEdmSenderImpl {
     // TODO: keep a local copy that we use during the lifetime of the channel to avoid repeated L1 reads
     // EDM ONLY
     volatile tt_l1_ptr uint32_t* buffer_slot_index_ptr;
-    BufferIndex buffer_slot_index{0};   
-    
+    BufferIndex buffer_slot_index{0};
+
     // WORKER ONLY
     ChannelCounter<EDM_NUM_BUFFER_SLOTS> buffer_slot_write_counter;
 

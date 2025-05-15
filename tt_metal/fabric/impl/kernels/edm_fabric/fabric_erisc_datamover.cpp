@@ -645,9 +645,7 @@ FORCE_INLINE void establish_worker_connection(
     // Send the difference of the current free slots vs the cached value from teardown
     // This should always be a value >= 0
     // TODO: Should we skip if 0?
-    ASSERT(
-        get_ptr_val(stream_id) >=
-        static_cast<int32_t>(local_sender_channel_worker_interface.worker_location_info_ptr->edm_read_counter));
+    ASSERT(get_ptr_val(stream_id) <= static_cast<int32_t>(SENDER_NUM_BUFFERS));
     // ASSERT(
     //     local_sender_channel_worker_interface.local_write_counter.counter >=
     //     local_sender_channel_worker_interface.worker_location_info_ptr->edm_the_real_local_read_counter);
@@ -871,7 +869,7 @@ void run_receiver_channel_step(
     } else {
         increment_local_update_ptr_val<to_receiver_pkts_sent_id>(-pkts_received_since_last_check);
         // Ack counter does not get used to index a buffer slot, so we skip the buffer index increment
-        // and only increment the counter 
+        // and only increment the counter
         ack_counter.counter += pkts_received_since_last_check;
     }
 
@@ -1751,59 +1749,6 @@ void kernel_main() {
                 .template setup_edm_noc_cmd_buf<
                     tt::tt_fabric::edm_to_downstream_noc,
                     tt::tt_fabric::forward_and_local_write_noc_vc>();
-// =======
-    //     new (&downstream_edm_noc_interfaces[0]) tt::tt_fabric::EdmToEdmSender<SENDER_NUM_BUFFERS>(
-    //         // persistent_mode -> hardcode to false because for EDM -> EDM
-    //         //  connections we must always use semaphore lookup
-    //         false,
-    //         downstream_edm_vc0_noc_x,
-    //         downstream_edm_vc0_noc_y,
-    //         downstream_edm_vc0_buffer_base_address,
-    //         SENDER_NUM_BUFFERS,
-    //         downstream_edm_vc0_semaphore_id,
-    //         downstream_edm_vc0_worker_registration_id,
-    //         downstream_edm_vc0_worker_location_info_address,
-    //         channel_buffer_size,
-    //         local_sender_channel_1_connection_buffer_index_id,
-    //         reinterpret_cast<volatile uint32_t* const>(edm_vc0_forwarding_semaphore_address),
-    //         reinterpret_cast<volatile uint32_t* const>(edm_vc0_teardown_semaphore_address),
-    //         downstream_vc0_noc_interface_buffer_index_local_addr,
-    //         sender_channel_1_free_slots_stream_id,
-    //         StreamId{receiver_channel_0_free_slots_stream_id},
-    //         receiver_channel_forwarding_data_cmd_buf_ids[0],
-    //         receiver_channel_forwarding_sync_cmd_buf_ids[0]);
-    //     downstream_edm_noc_interfaces[0]
-    //         .template setup_edm_noc_cmd_buf<
-    //             tt::tt_fabric::edm_to_downstream_noc,
-    //             tt::tt_fabric::forward_and_local_write_noc_vc>();
-    // }
-    // if constexpr (enable_ring_support) {
-    //     if (has_downstream_edm_vc1_buffer_connection) {
-    //         new (&downstream_edm_noc_interfaces[1]) tt::tt_fabric::EdmToEdmSender<SENDER_NUM_BUFFERS>(
-    //             // persistent_mode -> hardcode to false because for EDM -> EDM
-    //             //  connections we must always use semaphore lookup
-    //             false,
-    //             downstream_edm_vc1_noc_x,
-    //             downstream_edm_vc1_noc_y,
-    //             downstream_edm_vc1_buffer_base_address,
-    //             SENDER_NUM_BUFFERS,
-    //             downstream_edm_vc1_semaphore_id,
-    //             downstream_edm_vc1_worker_registration_id,
-    //             downstream_edm_vc1_worker_location_info_address,
-    //             channel_buffer_size,
-    //             local_sender_channel_2_connection_buffer_index_id,
-    //             reinterpret_cast<volatile uint32_t* const>(edm_vc1_forwarding_semaphore_address),
-    //             reinterpret_cast<volatile uint32_t* const>(edm_vc1_teardown_semaphore_address),
-    //             downstream_vc1_noc_interface_buffer_index_local_addr,
-    //             sender_channel_2_free_slots_stream_id,
-    //             StreamId{receiver_channel_1_free_slots_stream_id},
-    //             receiver_channel_forwarding_data_cmd_buf_ids[1],
-    //             receiver_channel_forwarding_sync_cmd_buf_ids[1]);
-    //         downstream_edm_noc_interfaces[1]
-    //             .template setup_edm_noc_cmd_buf<
-    //                 tt::tt_fabric::edm_to_downstream_noc,
-    //                 tt::tt_fabric::forward_and_local_write_noc_vc>();
-// >>>>>>> 3460de9e69 (Co-authored-by: Sean Nijjar <sean.nijjar@gmail.com>)
         }
     }
     for (uint8_t i = 0; i < NUM_RECEIVER_CHANNELS; i++) {
@@ -1845,30 +1790,12 @@ void kernel_main() {
     WriteTransactionIdTracker<RECEIVER_NUM_BUFFERS, NUM_TRANSACTION_IDS, NUM_TRANSACTION_IDS>
         receiver_channel_1_trid_tracker;
 
-// <<<<<<< HEAD
-//     // For 1D fabric, init edm interfaces early.
-//     // Doing it later (around 2D) in the code affects bandwidth tests.
-//     // This is a startup artifact, since in a real operation, this init code will be long gone w.r.t actual work.
-//     // But since bandwidth tests are sensitive to fast startup, keeping it here.
-//     // Context switch may also be playing a factor here.
-//     // The eth sender/receiver handskake beneath this block does context switches. So if bandwidth test catches
-//     // us at the wrong time, we might be in base context.
-//     if constexpr (!is_2d_fabric) {
-//         if (has_downstream_edm_vc0_buffer_connection) {
-//             for (auto& downstream_edm_noc_interface : downstream_edm_noc_interfaces) {
-//                 downstream_edm_noc_interface.template open<true, tt::tt_fabric::worker_handshake_noc>();
-//                 *downstream_edm_noc_interface.from_remote_buffer_slot_rdptr_ptr = 0;
-//                 ASSERT(*downstream_edm_noc_interface.from_remote_buffer_slot_rdptr_ptr == 0);
-//             }
-// =======
     if constexpr (!is_2d_fabric) {
-        if (has_downstream_edm_vc0_buffer_connection) {
-            for (auto& downstream_edm_noc_interface : downstream_edm_noc_interfaces) {
-                downstream_edm_noc_interface.template open<true, tt::tt_fabric::worker_handshake_noc>();
-                init_ptr_val(downstream_edm_noc_interface.worker_credits_stream_id, SENDER_NUM_BUFFERS);
-                ASSERT(get_ptr_val(downstream_edm_noc_interface.worker_credits_stream_id) == SENDER_NUM_BUFFERS);
-// >>>>>>> 3460de9e69 (Co-authored-by: Sean Nijjar <sean.nijjar@gmail.com>)
-            }
+        const size_t start = !has_downstream_edm_vc0_buffer_connection;
+        const size_t end = has_downstream_edm_vc1_buffer_connection + 1;
+        for (size_t i = start; i < end; i++) {
+            downstream_edm_noc_interfaces[i].template open<true, tt::tt_fabric::worker_handshake_noc>();
+            ASSERT(get_ptr_val(downstream_edm_noc_interfaces[i].worker_credits_stream_id) == SENDER_NUM_BUFFERS);
         }
     }
 
