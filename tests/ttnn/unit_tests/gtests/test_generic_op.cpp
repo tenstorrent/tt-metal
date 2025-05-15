@@ -436,11 +436,10 @@ TEST_F(TTNNFixtureWithDevice, DISABLED_TestGenericOpMatmul) {
     Tensor golden = ttnn::matmul(
         input_tensor_a,
         input_tensor_b,
-        false,                                  // transpose_a
-        false,                                  // transpose_b
-        std::nullopt,                           // memory_config
-        std::nullopt,                           // dtype
-        matmul::MatmulMultiCoreProgramConfig{}  // program_config to indicate we want multi-core
+        false,         // transpose_a
+        false,         // transpose_b
+        std::nullopt,  // memory_config
+        std::nullopt,  // dtype
     );
 
     tt::log_info(tt::LogTest, "Running matmul generic test");
