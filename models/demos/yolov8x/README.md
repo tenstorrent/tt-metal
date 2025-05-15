@@ -18,14 +18,10 @@ The entry point to yolov8x model is YOLOv8x in
 
 ### Use the following commands for 640x640 to run the :
 
-- model :
-```bash
-pytest tests/ttnn/integration_tests/yolov8x/test_yolov8x.py::test_yolov8x_640
-```
 
-- e2e perf(1.86 fps) :
+- yolov8x demo :
 ```bash
-pytest models/demos/yolov8x/tests/test_perf_yolov8x.py::test_yolov8x
+pytest models/demos/yolov8x/demo/demo.py
 ```
 
 - e2e perf with trace(40 fps):
@@ -38,10 +34,6 @@ pytest models/demos/yolov8x/tests/test_e2e_performant.py
 pytest models/demos/yolov8x/tests/test_perf_yolov8x.py::test_perf_device_bare_metal_yolov8x`
 ```
 
-- yolov8x demo :
-```bash
-pytest models/demos/yolov8x/demo/demo.py
-```
 
 #### Note: The post-processing is performed using PyTorch.
 
@@ -53,5 +45,3 @@ A runs folder will be created inside the `models/demos/yolov8x/demo/` directory.
 
 ## Additional Information:
 The tests can be run with  randomly initialized weights and pre-trained real weights.  To run only for the pre-trained weights, specify pretrained_weight_true when running the tests.
-
-### Owner: [Sabira](https://github.com/sabira-mcw), [Saichand](https://github.com/tenstorrent/tt-metal/pulls/saichandax)
