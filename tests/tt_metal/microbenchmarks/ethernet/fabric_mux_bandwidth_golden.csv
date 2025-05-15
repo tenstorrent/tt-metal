@@ -1,7 +1,7 @@
 Test name,Num full size channels,Num header only channels,Num buffers full size channel,Num buffers header only channel,Num packets,Packet payload size bytes,Num full size channel iters,Num iters b/w teardown checks,Bandwidth (B/c)
-full_size_channels,1,0,8,0,10000,4096,1,32,9.63445
-full_size_channels,2,0,8,0,10000,4096,1,32,9.48998
-full_size_channels,4,0,8,0,10000,4096,1,32,9.62938
+full_size_channels,1,0,8,0,10000,4096,1,32,9.91359
+full_size_channels,2,0,8,0,10000,4096,1,32,9.3868
+full_size_channels,4,0,8,0,10000,4096,1,32,9.50695
 full_size_channels,8,0,8,0,10000,4096,1,32,9.65443
 full_size_channel_packet_size,8,0,8,0,10000,16,1,32,0.158602
 full_size_channel_packet_size,8,0,8,0,10000,1024,1,32,3.13676
