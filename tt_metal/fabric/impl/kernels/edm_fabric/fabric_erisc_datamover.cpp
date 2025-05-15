@@ -529,6 +529,7 @@ FORCE_INLINE void receiver_forward_packet(
         }
     } else if constexpr (std::is_same_v<ROUTING_FIELDS_TYPE, tt::tt_fabric::LowLatencyRoutingFields>) {
         uint32_t routing = cached_routing_fields.value & tt::tt_fabric::LowLatencyRoutingFields::FIELD_MASK;
+        WATCHER_RING_BUFFER_PUSH(routing);
         uint16_t payload_size_bytes = packet_start->payload_size_bytes;
         switch (routing) {
             case tt::tt_fabric::LowLatencyRoutingFields::WRITE_ONLY:
@@ -543,7 +544,7 @@ FORCE_INLINE void receiver_forward_packet(
                     packet_start, payload_size_bytes, cached_routing_fields, downstream_edm_interface, transaction_id);
                 execute_chip_unicast_to_local_chip(packet_start, payload_size_bytes, transaction_id, rx_channel_id);
                 break;
-            default: ASSERT(false);
+            default: WAYPOINT("FAKE"); ASSERT(false);
         }
     }
 }
@@ -709,10 +710,12 @@ void run_sender_channel_step(
             to_sender_packets_completed_streams[sender_channel_index], -completions_since_last_check);
         if constexpr (!enable_first_level_ack) {
             if constexpr (SKIP_CONNECTION_LIVENESS_CHECK) {
+                WAYPOINT("ASB3");
                 local_sender_channel_worker_interface.template update_worker_copy_of_read_ptr<enable_ring_support>(
                     sender_rdptr.get_ptr());
             } else {
                 if (channel_connection_established) {
+                    WAYPOINT("ASB4");
                     local_sender_channel_worker_interface.template update_worker_copy_of_read_ptr<enable_ring_support>(
                         sender_rdptr.get_ptr());
                 }
@@ -729,10 +732,12 @@ void run_sender_channel_step(
         if (acks_since_last_check > 0) {
             sender_ackptr.increment_n(acks_since_last_check);
             if constexpr (SKIP_CONNECTION_LIVENESS_CHECK) {
+                WAYPOINT("ASB5");
                 local_sender_channel_worker_interface.template update_worker_copy_of_read_ptr<enable_ring_support>(
                     sender_ackptr.get_ptr());
             } else {
                 if (channel_connection_established) {
+                    WAYPOINT("ASB6");
                     local_sender_channel_worker_interface.template update_worker_copy_of_read_ptr<enable_ring_support>(
                         sender_ackptr.get_ptr());
                 }
@@ -749,6 +754,7 @@ void run_sender_channel_step(
             check_worker_connections<enable_ring_support, enable_first_level_ack>(
                 local_sender_channel_worker_interface, channel_connection_established);
         }
+        WAYPOINT("BHAS");
     }
 };
 
@@ -774,6 +780,7 @@ void run_receiver_channel_step(
     auto pkts_received_since_last_check = get_ptr_val<to_receiver_pkts_sent_id>();
     if constexpr (enable_first_level_ack) {
         bool pkts_received = pkts_received_since_last_check > 0;
+        WAYPOINT("QRT");
         ASSERT(receiver_channel_pointers.completion_ptr.distance_behind(ack_counter) < RECEIVER_NUM_BUFFERS);
         if (pkts_received) {
             // currently only support processing one packet at a time, so we only decrement by 1
@@ -785,11 +792,14 @@ void run_receiver_channel_step(
         increment_local_update_ptr_val<to_receiver_pkts_sent_id>(-pkts_received_since_last_check);
         ack_counter.increment_n(pkts_received_since_last_check);
     }
+    WAYPOINT("SQRT");
 
     auto& wr_sent_counter = receiver_channel_pointers.wr_sent_counter;
     bool unwritten_packets = !wr_sent_counter.is_caught_up_to(ack_counter);
     if (unwritten_packets) {
         auto receiver_buffer_index = wr_sent_counter.get_buffer_index();
+        WATCHER_RING_BUFFER_PUSH(0xdeadbeef);
+        WATCHER_RING_BUFFER_PUSH((uint32_t)receiver_buffer_index);
         tt_l1_ptr PACKET_HEADER_TYPE* packet_header = const_cast<PACKET_HEADER_TYPE*>(
             local_receiver_channel.template get_packet_header<PACKET_HEADER_TYPE>(receiver_buffer_index));
 
@@ -816,20 +826,25 @@ void run_receiver_channel_step(
             // need this ifdef since the packet header for 1D does not have router_buffer field in it.
             hop_cmd = packet_header->route_buffer[cached_routing_fields.value];
 #endif
+            WAYPOINT("BQRT");
             can_send_to_all_local_chip_receivers = can_forward_packet_completely(hop_cmd, downstream_edm_interface);
         } else {
+            WAYPOINT("CQRT");
             can_send_to_all_local_chip_receivers =
                 can_forward_packet_completely(cached_routing_fields, downstream_edm_interface[receiver_channel]);
         }
         bool trid_flushed = receiver_channel_trid_tracker.transaction_flushed(receiver_buffer_index);
         if (can_send_to_all_local_chip_receivers && trid_flushed) {
             did_something = true;
+            WAYPOINT("DQRT");
             uint8_t trid = receiver_channel_trid_tracker.update_buffer_slot_to_next_trid_and_advance_trid_counter(
                 receiver_buffer_index);
             if constexpr (is_2d_fabric) {
+                WAYPOINT("EQRT");
                 receiver_forward_packet(
                     packet_header, cached_routing_fields, downstream_edm_interface, trid, rx_channel_id, hop_cmd);
             } else {
+                WAYPOINT("FQRT");
                 receiver_forward_packet(
                     packet_header,
                     cached_routing_fields,
@@ -840,6 +855,8 @@ void run_receiver_channel_step(
             wr_sent_counter.increment();
         }
     }
+
+    WAYPOINT("TQRT");
 
     if constexpr (!fuse_receiver_flush_and_completion_ptr) {
         auto& wr_flush_counter = receiver_channel_pointers.wr_flush_counter;
@@ -1014,7 +1031,9 @@ void run_fabric_edm_main_loop(
                 sender_channel_packet_recorders[0],
                 channel_connection_established[0],
                 0);
+            WAYPOINT("EAD");
             if constexpr (!dateline_connection) {
+                WAYPOINT("XAD");
                 run_receiver_channel_step<
                     enable_packet_header_recording,
                     enable_fabric_counters,
@@ -1049,8 +1068,10 @@ void run_fabric_edm_main_loop(
                     receiver_channel_packet_recorders[1],
                     receiver_channel_1_trid_tracker,
                     1);
+                WAYPOINT("TAD");
             }
 
+            WAYPOINT("YAD");
             run_sender_channel_step<
                 enable_packet_header_recording,
                 enable_fabric_counters,
@@ -1066,6 +1087,7 @@ void run_fabric_edm_main_loop(
                 sender_channel_packet_recorders[1],
                 channel_connection_established[1],
                 1);
+            WAYPOINT("FAD");
             if constexpr (is_2d_fabric) {
                 run_sender_channel_step<
                     enable_packet_header_recording,
@@ -1082,6 +1104,7 @@ void run_fabric_edm_main_loop(
                     sender_channel_packet_recorders[2],
                     channel_connection_established[2],
                     2);
+                WAYPOINT("GAD");
                 run_sender_channel_step<
                     enable_packet_header_recording,
                     enable_fabric_counters,
@@ -1097,6 +1120,7 @@ void run_fabric_edm_main_loop(
                     sender_channel_packet_recorders[3],
                     channel_connection_established[3],
                     3);
+                WAYPOINT("KAD");
             }
             if constexpr (enable_ring_support && !dateline_connection) {
                 run_sender_channel_step<
@@ -1114,8 +1138,11 @@ void run_fabric_edm_main_loop(
                     sender_channel_packet_recorders[NUM_SENDER_CHANNELS - 1],
                     channel_connection_established[NUM_SENDER_CHANNELS - 1],
                     NUM_SENDER_CHANNELS - 1);
+                WAYPOINT("JAD");
             }
         }
+
+        WAYPOINT("QAD");
 
         if (did_something) {
             did_nothing_count = 0;
@@ -1136,9 +1163,12 @@ void __attribute__((noinline)) wait_for_static_connection_to_ready(
         local_sender_channel_worker_interfaces) {
     for (size_t i = 0; i < NUM_SENDER_CHANNELS; i++) {
         if (sender_ch_live_check_skip[i]) {
-            while (!connect_is_requested(*local_sender_channel_worker_interfaces[i].connection_live_semaphore));
+            while (!connect_is_requested(*local_sender_channel_worker_interfaces[i].connection_live_semaphore)) {
+                invalidate_l1_cache();
+            }
             establish_connection<enable_ring_support, enable_first_level_ack>(
                 local_sender_channel_worker_interfaces[i]);
+            WAYPOINT("CHAN");
         }
     }
 }
@@ -1223,6 +1253,32 @@ void __attribute__((noinline)) init_local_sender_channel_worker_interfaces(
 }
 
 void kernel_main() {
+    eth_chan_to_noc_xy[0][0] = (((25 << NOC_ADDR_NODE_ID_BITS) | 20) << NOC_COORD_REG_OFFSET);
+    eth_chan_to_noc_xy[0][1] = (((25 << NOC_ADDR_NODE_ID_BITS) | 21) << NOC_COORD_REG_OFFSET);
+    eth_chan_to_noc_xy[0][2] = (((25 << NOC_ADDR_NODE_ID_BITS) | 22) << NOC_COORD_REG_OFFSET);
+    eth_chan_to_noc_xy[0][3] = (((25 << NOC_ADDR_NODE_ID_BITS) | 23) << NOC_COORD_REG_OFFSET);
+    eth_chan_to_noc_xy[0][4] = (((25 << NOC_ADDR_NODE_ID_BITS) | 24) << NOC_COORD_REG_OFFSET);
+    eth_chan_to_noc_xy[0][5] = (((25 << NOC_ADDR_NODE_ID_BITS) | 25) << NOC_COORD_REG_OFFSET);
+    eth_chan_to_noc_xy[0][6] = (((25 << NOC_ADDR_NODE_ID_BITS) | 26) << NOC_COORD_REG_OFFSET);
+    eth_chan_to_noc_xy[0][7] = (((25 << NOC_ADDR_NODE_ID_BITS) | 27) << NOC_COORD_REG_OFFSET);
+    eth_chan_to_noc_xy[0][8] = (((25 << NOC_ADDR_NODE_ID_BITS) | 28) << NOC_COORD_REG_OFFSET);
+    eth_chan_to_noc_xy[0][9] = (((25 << NOC_ADDR_NODE_ID_BITS) | 29) << NOC_COORD_REG_OFFSET);
+    eth_chan_to_noc_xy[0][10] = (((25 << NOC_ADDR_NODE_ID_BITS) | 30) << NOC_COORD_REG_OFFSET);
+    eth_chan_to_noc_xy[0][11] = (((25 << NOC_ADDR_NODE_ID_BITS) | 31) << NOC_COORD_REG_OFFSET);
+
+    eth_chan_to_noc_xy[1][0] = (((25 << NOC_ADDR_NODE_ID_BITS) | 20) << NOC_COORD_REG_OFFSET);
+    eth_chan_to_noc_xy[1][1] = (((25 << NOC_ADDR_NODE_ID_BITS) | 21) << NOC_COORD_REG_OFFSET);
+    eth_chan_to_noc_xy[1][2] = (((25 << NOC_ADDR_NODE_ID_BITS) | 22) << NOC_COORD_REG_OFFSET);
+    eth_chan_to_noc_xy[1][3] = (((25 << NOC_ADDR_NODE_ID_BITS) | 23) << NOC_COORD_REG_OFFSET);
+    eth_chan_to_noc_xy[1][4] = (((25 << NOC_ADDR_NODE_ID_BITS) | 24) << NOC_COORD_REG_OFFSET);
+    eth_chan_to_noc_xy[1][5] = (((25 << NOC_ADDR_NODE_ID_BITS) | 25) << NOC_COORD_REG_OFFSET);
+    eth_chan_to_noc_xy[1][6] = (((25 << NOC_ADDR_NODE_ID_BITS) | 26) << NOC_COORD_REG_OFFSET);
+    eth_chan_to_noc_xy[1][7] = (((25 << NOC_ADDR_NODE_ID_BITS) | 27) << NOC_COORD_REG_OFFSET);
+    eth_chan_to_noc_xy[1][8] = (((25 << NOC_ADDR_NODE_ID_BITS) | 28) << NOC_COORD_REG_OFFSET);
+    eth_chan_to_noc_xy[1][9] = (((25 << NOC_ADDR_NODE_ID_BITS) | 29) << NOC_COORD_REG_OFFSET);
+    eth_chan_to_noc_xy[1][10] = (((25 << NOC_ADDR_NODE_ID_BITS) | 30) << NOC_COORD_REG_OFFSET);
+    eth_chan_to_noc_xy[1][11] = (((25 << NOC_ADDR_NODE_ID_BITS) | 31) << NOC_COORD_REG_OFFSET);
+
     eth_txq_reg_write(DEFAULT_ETH_TXQ, ETH_TXQ_DATA_PACKET_ACCEPT_AHEAD, DEFAULT_NUM_ETH_TXQ_DATA_PACKET_ACCEPT_AHEAD);
     //
     // COMMON CT ARGS (not specific to sender or receiver)
@@ -1717,6 +1773,7 @@ void kernel_main() {
         if constexpr (is_local_handshake_master) {
             WAYPOINT("BUL0");
             wait_for_notification((uint32_t)edm_local_sync_ptr, num_local_edms - 1);
+            WAYPOINT("BULZ");
             notify_slave_routers(
                 edm_channels_mask, local_handshake_master_eth_chan, (uint32_t)edm_local_sync_ptr, num_local_edms);
         } else {
@@ -1727,6 +1784,8 @@ void kernel_main() {
         }
 
         *edm_status_ptr = tt::tt_fabric::EDMStatus::LOCAL_HANDSHAKE_COMPLETE;
+
+        WAYPOINT("JUGS");
 
         wait_for_notification((uint32_t)edm_status_ptr, tt::tt_fabric::EDMStatus::READY_FOR_TRAFFIC);
         WAYPOINT("BUL2");

@@ -56,6 +56,7 @@ void kernel_main() {
 
     status_ptr[0] = tt::tt_fabric::DrainerStatus::READY_FOR_TRAFFIC;
     while (!got_immediate_termination_signal(termination_signal_ptr)) {
+        invalidate_l1_cache();
         if (worker_interface.has_unsent_payload()) {
             auto& local_wrptr = worker_interface.local_wrptr;
             local_wrptr.increment();
@@ -65,6 +66,7 @@ void kernel_main() {
             worker_interface.template update_worker_copy_of_read_ptr<false>(local_rdptr.get_ptr());
         }
         check_worker_connections(worker_interface, connection_established);
+        WAYPOINT("CHAS");
     }
 
     noc_async_write_barrier();

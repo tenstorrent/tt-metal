@@ -72,6 +72,7 @@ public:
 
     template <typename T>
     [[nodiscard]] FORCE_INLINE volatile T* get_packet_header(const BufferIndex& buffer_index) const {
+        WATCHER_RING_BUFFER_PUSH(this->buffer_addresses[buffer_index]);
         return reinterpret_cast<volatile T*>(this->buffer_addresses[buffer_index]);
     }
 
@@ -161,7 +162,7 @@ struct EdmChannelWorkerInterface {
 
     template <bool enable_ring_support>
     FORCE_INLINE void update_worker_copy_of_read_ptr(BufferPtr new_ptr_val) {
-        WAYPOINT("XJQZ");
+        // WAYPOINT("XJQZ");
         noc_inline_dw_write<false, true>(
             this->cached_worker_semaphore_address, new_ptr_val, 0xf, tt::tt_fabric::worker_handshake_noc);
     }

@@ -306,7 +306,7 @@
 
 ////
 
-#define NOC_NODE_ID_MASK ((((uint64_t)0x1) << NOC_ADDR_NODE_ID_BITS) - 1)
+#define NOC_NODE_ID_MASK ((((uint64_t)0x1) << NOC_ADDR_NODE_ID_BITS) - 1)  // 63 -> 0x3F
 #define NOC_LOCAL_ADDR_MASK ((((uint64_t)0x1) << NOC_ADDR_LOCAL_BITS) - 1)
 
 #define NOC_LOCAL_ADDR_OFFSET(addr) ((addr) & NOC_LOCAL_ADDR_MASK)

@@ -95,6 +95,7 @@ void forward_data(
         local_rdptr.increment();
 
         if (channel_connection_established) {
+            WAYPOINT("ASB2");
             worker_interface.template update_worker_copy_of_read_ptr<false>(local_rdptr.get_ptr());
         }
 
@@ -102,6 +103,7 @@ void forward_data(
     }
 
     check_worker_connections(worker_interface, channel_connection_established);
+    WAYPOINT("THAS");
 }
 
 void kernel_main() {
