@@ -4,7 +4,7 @@
 
 #define COMPILE_FOR_ERISC
 
-#include <dev_msgs.h>
+#include "dev_msgs.h"
 #include <cstddef>
 #include <cstdint>
 #include <vector>

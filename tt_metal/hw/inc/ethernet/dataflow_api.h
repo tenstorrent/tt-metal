@@ -5,7 +5,7 @@
 #pragma once
 
 #include "risc_common.h"
-#include <dev_msgs.h>
+#include "dev_msgs.h"
 #include "eth_l1_address_map.h"
 #include "risc_common.h"
 #include "tt_eth_api.h"
