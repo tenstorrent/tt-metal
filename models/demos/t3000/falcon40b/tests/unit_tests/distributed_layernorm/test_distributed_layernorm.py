@@ -151,14 +151,14 @@ class TtDistributedLayernorm:
             total_count += count_local
             counts.append(count_local)
 
-            meanx_local = ttnn.sum(xs[i], 3, scaler=1.0 / counts[i])
+            meanx_local = ttnn.sum(xs[i], dim=3, keepdim=True, scaler=1.0 / counts[i])
             meanxs.append(meanx_local)
 
         # meanx2 = torch.mean(torch.square(xs), dim=-1, keepdim=True)
         meanx2s = []
         for i in range(num_devices):
             x2_local = ttnn.pow(xs[i], 2)
-            meanx2_local = ttnn.sum(x2_local, dim=3, scaler=1.0 / counts[i])
+            meanx2_local = ttnn.sum(x2_local, dim=3, keepdim=True, scaler=1.0 / counts[i])
             meanx2s.append(meanx2_local)
 
         # AllReduce meanx and meanx2
@@ -180,6 +180,7 @@ class TtDistributedLayernorm:
                 ttnn.sum(
                     meanxs[i],
                     dim=3,
+                    keepdim=True,
                     scaler=1.0 / total_count,
                 )
             )
@@ -202,6 +203,7 @@ class TtDistributedLayernorm:
                 ttnn.sum(
                     meanx2s[i],
                     dim=3,
+                    keepdim=True,
                     scaler=1.0 / total_count,
                 )
             )

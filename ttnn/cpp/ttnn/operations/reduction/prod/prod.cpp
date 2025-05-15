@@ -105,13 +105,16 @@ Tensor ProdOperation::invoke(
         // Then unsqueeze back to ND, and move the reduction dim back to its original position
 
         // First, permute the target reduction dim to the third last position
+        const int third_last_dim_idx = input_a.get_logical_shape().rank() - 3;
+        const bool permute_required = third_last_dim_idx != positive_dim;
+
         ttnn::SmallVector<int64_t> post_permute_dims(input_a.get_logical_shape().rank());
         std::iota(post_permute_dims.begin(), post_permute_dims.end(), 0);
-
-        const int third_last_dim_idx = input_a.get_logical_shape().rank() - 3;
         std::swap(post_permute_dims[third_last_dim_idx], post_permute_dims[positive_dim]);
 
-        ttnn::Tensor permuted = ttnn::permute(input_a, post_permute_dims, output_mem_config);
+        // Tensor with target reduction dim at third last position
+        ttnn::Tensor permuted =
+            permute_required ? ttnn::permute(input_a, post_permute_dims, output_mem_config) : input_a;
 
         // Now squeeze to 4D and do the 4D prod.
         // Dim0 grows to include the rest of the dimensions, and our "third last" dim moves into dim1, which is our 4D
@@ -127,7 +130,9 @@ Tensor ProdOperation::invoke(
         result = ttnn::reshape(result, output_shape);
 
         // Can now permute the reduced dim to the correct position
-        result = ttnn::permute(result, post_permute_dims, output_mem_config);
+        if (permute_required) {
+            result = ttnn::permute(result, post_permute_dims, output_mem_config);
+        }
 
         if (!keepdim) {
             result = ttnn::squeeze(result, positive_dim);
