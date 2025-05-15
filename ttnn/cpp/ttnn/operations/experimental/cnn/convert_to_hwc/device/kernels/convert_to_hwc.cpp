@@ -4,8 +4,6 @@
 
 #include <cstdint>
 
-#include "debug/dprint.h"  // required in all kernels using DPRINT
-
 #include "compute_kernel_api/pack_untilize.h"
 #include "compute_kernel_api/transpose_wh.h"
 #include "compute_kernel_api/tilize.h"
@@ -35,7 +33,6 @@ FORCE_INLINE void transpose(uint32_t cb_in, uint32_t cb_out) {
 FORCE_INLINE void tilize(
     uint32_t cb_in, uint32_t total_tiles_per_block, uint32_t total_sticks_per_block, uint32_t cb_out) {
     cb_wait_front(cb_in, total_sticks_per_block);
-
     cb_reserve_back(cb_out, total_tiles_per_block);
 
     tilize_block(cb_in, total_tiles_per_block, cb_out);
@@ -52,6 +49,11 @@ void MAIN {
     constexpr uint32_t cb_transpose_in1 = get_compile_time_arg_val(3);
     constexpr uint32_t total_tiles = get_compile_time_arg_val(4);
     constexpr uint32_t total_sticks_per_block = get_compile_time_arg_val(5);
+    constexpr uint32_t is_input_in_dram = get_compile_time_arg_val(6);
+
+    if constexpr (!is_input_in_dram) {
+        cb_push_back(cb_in, total_sticks_per_block);
+    }
 
     tilize_init(cb_in, total_tiles, cb_tiled_in);
     tilize(cb_in, total_tiles, total_sticks_per_block, cb_tiled_in);
@@ -65,5 +67,6 @@ void MAIN {
         const uint32_t cb_transpose_in = idx % 2 == 0 ? cb_transpose_in0 : cb_transpose_in1;
         transpose<1>(cb_tiled_in, cb_transpose_in);
     }
+    pack_untilize_uninit(cb_transpose_in0);
 }
 }  // namespace NAMESPACE

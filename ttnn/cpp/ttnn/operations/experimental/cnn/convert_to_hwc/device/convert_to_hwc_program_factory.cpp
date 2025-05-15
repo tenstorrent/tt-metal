@@ -96,20 +96,14 @@ compute_width_sharded_reshard_runtime_args(
 tt::tt_metal::operation::ProgramWithCallbacks multi_core_convert_to_hwc(const Tensor& a, Tensor& output) {
     tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
 
-    const auto input_shape = a.get_logical_shape();
-
-    const auto C = input_shape[2];
-    const auto HW = input_shape[3];
-
+    // If we are pulling from DRAM we infer the shard shape by using the output shard spec
     const bool is_input_in_dram = a.buffer()->core_type() == CoreType::DRAM;
-
     const auto input_shard_height = is_input_in_dram ? output.shard_spec()->shape[1] : a.shard_spec()->shape[0];
     const auto input_shard_width = is_input_in_dram ? output.shard_spec()->shape[0] : a.shard_spec()->shape[1];
     const auto input_core_grid = is_input_in_dram ? output.shard_spec()->grid : a.shard_spec()->grid;
     const auto input_cores = corerange_to_cores(
         input_core_grid, std::nullopt, a.shard_spec()->orientation == tt::tt_metal::ShardOrientation::ROW_MAJOR);
 
-    tt::log_debug(tt::LogType::LogOp, "Running op with C={}, HW={}, shard_shape={}", C, HW, a.shard_spec()->shape);
     TT_FATAL(input_shard_height <= TILE_HEIGHT, "Shard height must be 32 or smaller");
     TT_FATAL(input_shard_width % TILE_WIDTH == 0, "Shard width must be multiple of tile width");
 
@@ -172,44 +166,57 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_convert_to_hwc(const Te
     const auto remote_core_type = a.buffer()->core_type();
     const auto remote_address = a.buffer()->address();
     const auto remote_buffer_type = a.buffer()->buffer_type();
-    auto [runtime_args_for_each_core, total_num_sticks, local_stride_bytes, remote_stride_bytes] =
+    const auto [runtime_args_for_each_core, total_num_sticks, dram_write_stride_bytes, dram_read_stride_bytes] =
         compute_width_sharded_reshard_runtime_args(
-            {input_shard_height, input_shard_width},  // local_shard_shape
-            a.shard_spec()->shape,                    // remote_shard_shape
+            {input_shard_height, input_shard_width},
+            a.shard_spec()->shape,  // dram shard shape
             input_cores,
             dram_input_cores,
             remote_buffer_type,
             remote_core_type,
             a.device(),
             2);
-    tt::log_info("total num sticks? = {}", total_num_sticks);
-    uint32_t dram_read_stride_bytes = remote_stride_bytes;
-    uint32_t dram_write_stride_bytes = local_stride_bytes;
+
+    // Split work across each kernel along tensor height since this is the best way to split work evenly
+    const uint32_t total_num_sticks_kernel_0 = input_shard_height / 2;
+    const uint32_t total_num_sticks_kernel_1 = input_shard_height - total_num_sticks_kernel_0;
 
     std::vector<uint32_t> writer_compile_time_args0 = {
+        cb_in_id,
         cb_in_transpose_id0,
         cb_out_id,
-        C,
+        input_shard_height,
         input_shard_width,
         total_tiles_writer0,
         output_stride_sticks,
         0,
+        is_input_in_dram,
         dram_write_stride_bytes,
-        dram_read_stride_bytes};
+        dram_read_stride_bytes,
+        total_num_sticks_kernel_0};
 
     std::vector<uint32_t> writer_compile_time_args1 = {
+        cb_in_id,
         cb_in_transpose_id1,
         cb_out_id,
-        C,
+        input_shard_height,
         input_shard_width,
         total_tiles_writer1,
         output_stride_sticks,
         output_stride_sticks,
+        is_input_in_dram,
         dram_write_stride_bytes,
-        dram_read_stride_bytes};
+        dram_read_stride_bytes,
+        total_num_sticks_kernel_1};
 
     std::vector<uint32_t> compute_compile_time_args = {
-        cb_in_id, cb_in_tiled_id, cb_in_transpose_id0, cb_in_transpose_id1, total_tiles_per_core, input_shard_height};
+        cb_in_id,
+        cb_in_tiled_id,
+        cb_in_transpose_id0,
+        cb_in_transpose_id1,
+        total_tiles_per_core,
+        input_shard_height,
+        is_input_in_dram};
 
     auto writer_kernel_id0 = tt::tt_metal::CreateKernel(
         program,
@@ -237,19 +244,16 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_convert_to_hwc(const Te
                              cb_out,
                              is_input_in_dram,
                              input_cores,
-                             C,
                              runtime_args_for_each_core,
                              writer_kernel_id0,
                              writer_kernel_id1,
+                             total_num_sticks_kernel_0,
+                             total_num_sticks_kernel_1,
                              remote_address,
                              dram_read_stride_bytes,
                              dram_write_stride_bytes](
                                 tt::tt_metal::Program& program, const Tensor& a, const Tensor& output) {
         if (is_input_in_dram) {
-            // Split work across each kernel along tensor height since this is the best way to split work evenly
-            const uint32_t total_num_sticks_kernel_0 = C / 2;
-            const uint32_t total_num_sticks_kernel_1 = C - total_num_sticks_kernel_0;
-            tt::log_info("input cores = {}", input_cores);
             for (uint32_t core_idx = 0; core_idx < input_cores.size(); core_idx++) {
                 const auto& args_for_all_segments = runtime_args_for_each_core[core_idx];
                 std::vector<uint32_t> runtime_args_0 = {remote_address, args_for_all_segments.size()};
