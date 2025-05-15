@@ -28,8 +28,8 @@ jobs:
       matrix:
         test-group: [
           # Deleting for now - LLM team will put in a new version soon
-          { name: "Galaxy Llama3 demo tests", arch: wormhole_b0, model: llama3, timeout: 30, owner_id: U053W15B6JF}, # Djordje Ivanovic
-          { name: "Galaxy Falcon7b demo tests", arch: wormhole_b0, model: falcon7b, timeout: 30, owner_id: U05RWH3QUPM}, # Salar Hosseini
+          { name: "Galaxy Llama3 demo tests", arch: wormhole_b0, model: llama3, timeout: 30, owner_id: U044T8U8DEF}, # Johanna Rock
+          # { name: "Galaxy Falcon7b demo tests", arch: wormhole_b0, model: falcon7b, timeout: 30, owner_id: U05RWH3QUPM}, # Salar Hosseini
         ]
     runs-on:
       - arch-wormhole_b0

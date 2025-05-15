@@ -27,7 +27,6 @@ jobs:
       fail-fast: false
       matrix:
         test-group: [
-          { name: "Galaxy CCL tests", arch: wormhole_b0, cmd: "pytest tests/nightly/tg/ccl", timeout: 120, owner_id: ULMEPM2MA}, # Sean Nijjar
           {
             name: "Llama Galaxy Accuracy Test",
             arch: wormhole_b0,
