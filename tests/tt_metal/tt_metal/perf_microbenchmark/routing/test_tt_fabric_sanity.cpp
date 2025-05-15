@@ -52,6 +52,8 @@
 #include "umd/device/tt_core_coordinates.h"
 #include "umd/device/types/xy_pair.h"
 #include <tt-metalium/utils.hpp>
+#include "tt_metal/fabric/fabric_host_utils.hpp"
+#include "tt_metal/fabric/hw/inc/fabric_routing_mode.h"
 
 using std::vector;
 using namespace tt;
@@ -408,7 +410,7 @@ struct test_board_t {
 
         for (auto& [chip_id, neighbor_cnt] : n_hop_neighbors_cnt) {
             uint32_t temp_neighbor_cnt = UINT32_MAX;
-            chip_id_t selected_chip_id;
+            chip_id_t selected_chip_id{};
 
             // check if the key exists, since it could have been erased if the chip id has already been picked
             if (!chip_n_hop_neighbors.contains(chip_id)) {
@@ -1552,9 +1554,15 @@ int main(int argc, char **argv) {
     uint32_t num_available_devices, num_allocated_devices = 0;
 
     std::map<string, string> defines;
+    uint16_t routing_mode;
     if (!push_mode) {
         defines["FVC_MODE_PULL"] = "";
+        routing_mode = (ROUTING_MODE_MESH | ROUTING_MODE_2D | ROUTING_MODE_PULL);
+    } else {
+        routing_mode = (ROUTING_MODE_MESH | ROUTING_MODE_2D | ROUTING_MODE_PUSH | ROUTING_MODE_LOW_LATENCY);
     }
+    tt::tt_fabric::set_routing_mode(routing_mode);
+    defines["ROUTING_MODE"] = std::to_string(static_cast<int>(routing_mode));
 
     if (benchmark_mode) {
         prng_seed = 100;

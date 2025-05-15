@@ -702,9 +702,9 @@ void InitDeviceProfiler(IDevice* device) {
 
         if (tt_metal_device_profiler_map.find(device_id) == tt_metal_device_profiler_map.end()) {
             if (firstInit.exchange(false)) {
-                tt_metal_device_profiler_map.emplace(device_id, DeviceProfiler(true));
+                tt_metal_device_profiler_map.emplace(device_id, DeviceProfiler(device, true));
             } else {
-                tt_metal_device_profiler_map.emplace(device_id, DeviceProfiler(false));
+                tt_metal_device_profiler_map.emplace(device_id, DeviceProfiler(device, false));
             }
         }
 

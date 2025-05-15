@@ -10,6 +10,7 @@ target_sources(
         erisc_datamover_builder.cpp
         fabric.cpp
         fabric_host_utils.cpp
+        fabric_context.cpp
 )
 
 target_sources(
@@ -22,6 +23,8 @@ target_sources(
             hw/inc/tt_fabric_api.h
             hw/inc/tt_fabric.h
             hw/inc/tt_fabric_interface.h
+            hw/inc/tt_fabric_mux.hpp
+            hw/inc/tt_fabric_mux_interface.hpp
             hw/inc/eth_chan_noc_mapping.h
             hw/inc/fabric_routing_mode.h
             hw/inc/edm_fabric/edm_fabric_flow_control_helpers.hpp

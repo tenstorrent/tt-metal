@@ -6,7 +6,7 @@
 #include <variant>
 
 #include "ttnn/distributed/distributed_tensor_config.hpp"
-#include "ttnn/tensor/host_buffer/host_buffer.hpp"
+#include <tt-metalium/host_buffer.hpp>
 #include "ttnn/tensor/storage.hpp"
 #include "ttnn/tensor/tensor_attributes.hpp"
 #include "ttnn/tensor/tensor_spec.hpp"
@@ -47,7 +47,7 @@ std::vector<distributed::MeshCoordinate> TensorAttributes::determine_distributio
         tt::stl::overloaded{
             [&mesh_shape](const HostStorage&) { return mesh_shape.mesh_size(); },
             [&mesh_shape](const DeviceStorage& s) { return s.specs.size(); },
-            [&mesh_shape](const MultiDeviceHostStorage& s) { return s.buffers.size(); },
+            [&mesh_shape](const MultiDeviceHostStorage& s) { return s.num_buffers(); },
         },
         storage_);
 

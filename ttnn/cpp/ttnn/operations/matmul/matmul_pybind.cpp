@@ -468,6 +468,81 @@ void py_module(py::module& module) {
             py::arg("global_cb") = std::nullopt,
             py::arg("sub_device_id") = std::nullopt,
         });
+
+    bind_registered_operation(
+        module,
+        ::ttnn::matmul_batched_weights,
+        R"doc(
+        performs matrix multiplication for a single input tensor a with multiple tensors b, return a vector of output tensors.
+
+        Args:
+            input_tensor_a (ttnn.Tensor): the first tensor to be multiplied. Needs to be on the device.
+            input_tensors_b (ttnn.Tensor): the second tensor vector to be multiplied. Needs to be on the device.
+
+        Keyword Args:
+            bias (ttnn.Tensor, optional): the bias tensor to be added. If specified, needs to be on the device. Defaults to `None`.
+            transpose_a (bool, optional): Whether to transpose input_tensor_a. Defaults to `False`.
+            transpose_b (bool, optional): Whether to transpose input_tensor_b. Defaults to `False`.
+            memory_config (ttnn.MemoryConfig, optional): the memory configuration of the output tensor. Defaults to `None`, which will result in using `ttnn.DRAM_MEMORY_CONFIG`.
+            dtype (ttnn.DataType, optional): the data type of the output tensor. Defaults to `None`.
+            program_config (MatmulProgramConfig, optional): the program configuration for the matmul operation. Defaults to `None`.
+            activation (str, optional): the activation function to be applied. Defaults to `None`.
+            compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional): the compute kernel configuration for the matmul operation. Defaults to `None`.
+            core_grid (ttnn.CoreGrid, optional): the grid on which to distribute the sharded tensor on (writes to the cores L1s). Defaults to `None`.
+            output_tile (List of [int], optional): Specifies the output tile configuration. Defaults to `None`.
+            optional_output_tensor (ttnn.Tensor, optional): User provided on-device output tensor where the result of linear is to be written. Defaults to `None`.
+
+        Returns:
+            ttnn.Tensor: the output tensor.
+        )doc",
+        ttnn::pybind_overload_t{
+            [](decltype(::ttnn::matmul_batched_weights)& self,
+               const ttnn::Tensor& input_tensor_a,
+               const std::vector<ttnn::Tensor>& input_tensors_b,
+               const bool transpose_a,
+               const bool transpose_b,
+               const std::optional<const ttnn::MemoryConfig>& memory_config,
+               const std::optional<const DataType> dtype,
+               const std::optional<const MatmulProgramConfig>& program_config,
+               const std::optional<const std::string>& activation,
+               const std::optional<const DeviceComputeKernelConfig> compute_kernel_config,
+               const std::optional<const ttnn::CoreGrid> core_grid,
+               const std::optional<const tt::tt_metal::Tile>& output_tile,
+               std::optional<Tensor>& optional_output_tensor,
+               const std::optional<const GlobalCircularBuffer>& global_cb,
+               const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) -> std::vector<ttnn::Tensor> {
+                return self(
+                    input_tensor_a,
+                    input_tensors_b,
+                    transpose_a,
+                    transpose_b,
+                    memory_config,
+                    dtype,
+                    program_config,
+                    activation,
+                    compute_kernel_config,
+                    core_grid,
+                    output_tile,
+                    optional_output_tensor,
+                    global_cb,
+                    sub_device_id);
+            },
+            py::arg("input_tensor_a"),
+            py::arg("input_tensors_b"),
+            py::kw_only(),
+            py::arg("transpose_a") = false,
+            py::arg("transpose_b") = false,
+            py::arg("memory_config") = std::nullopt,
+            py::arg("dtype") = std::nullopt,
+            py::arg("program_config") = std::nullopt,
+            py::arg("activation") = std::nullopt,
+            py::arg("compute_kernel_config") = std::nullopt,
+            py::arg("core_grid") = std::nullopt,
+            py::arg("output_tile") = std::nullopt,
+            py::arg("optional_output_tensor") = std::nullopt,
+            py::arg("global_cb") = std::nullopt,
+            py::arg("sub_device_id") = std::nullopt,
+        });
 }
 
 }  // namespace matmul

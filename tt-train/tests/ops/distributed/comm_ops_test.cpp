@@ -5,7 +5,7 @@
 #include "ops/distributed/comm_ops.hpp"
 
 #include <gtest/gtest.h>
-#include <umd/device/tt_cluster_descriptor.h>
+#include <umd/device/cluster.h>
 
 #include <core/ttnn_all_includes.hpp>
 #include <core/xtensor_utils.hpp>
