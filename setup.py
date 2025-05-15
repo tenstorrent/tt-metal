@@ -177,6 +177,8 @@ class CMakeBuild(build_ext):
             "_ttnn.so",
             "libtt_metal.so",
             "libdevice.so",
+            "libmpi.so",
+            "libmpi.so.*",
         ]
         runtime_patterns = [
             "hw/**/*",
@@ -234,6 +236,8 @@ class CMakeBuild(build_ext):
             "tools/profiler/*",
             "soc_descriptors/*.yaml",
         ]
+        copy_tree_with_patterns(build_dir / "bin", "./openmpi/5.0.7/bin", "*")
+        copy_tree_with_patterns(build_dir / "lib", "./openmpi/5.0.7/lib", lib_patterns)
         copy_tree_with_patterns(build_dir / "lib", self.build_lib + "/ttnn/build/lib", lib_patterns)
         copy_tree_with_patterns(build_dir, self.build_lib + "/ttnn/build/lib", ["sfpi-version.json"])
         copy_tree_with_patterns(

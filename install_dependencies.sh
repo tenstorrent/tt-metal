@@ -264,7 +264,8 @@ install_mpi_uflm(){
     SRC_DIR="${HOME}/src/ompi-${OMPI_TAG}"
     #PREFIX="/usr/local"          # change this if you prefer another location
     #PREFIX="/opt/openmpi/5.0.7"
-    PREFIX="openmpi/5.0.7"
+    CUR_DIR=$(basename "$PWD")
+    PREFIX="${CUR_DIR}/openmpi/5.0.7"
     NPROC=$(nproc)
 
     info() { printf '\033[1;34m==> %s\033[0m\n' "$*"; }
