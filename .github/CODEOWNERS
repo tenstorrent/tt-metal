@@ -84,7 +84,7 @@ ttnn/ttnn/operations/conv2d.py @tenstorrent/metalium-developers-convolutions
 ttnn/ttnn/operations/pool.py @tenstorrent/metalium-developers-convolutions
 ttnn/**/kernels/ # Removes the owners above from owning kernels unless specified afterwards
 ttnn/**/CMakeLists.txt @tenstorrent/metalium-developers-ttnn-core @tenstorrent/metalium-developers-infra
-ttnn/cpp/ttnn/tensor/ @tenstorrent/metalium-developers-ttnn-core
+ttnn/core/tensor/ @tenstorrent/metalium-developers-ttnn-core
 
 ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/moreh*/ @razorback3 @dongjin-na @cfjchu @ayerofieiev-tt @dmakoviichuk-tt
 ttnn/cpp/ttnn/deprecated/tt_lib/csrc/ @ayerofieiev-tt @razorback3 @dongjin-na
