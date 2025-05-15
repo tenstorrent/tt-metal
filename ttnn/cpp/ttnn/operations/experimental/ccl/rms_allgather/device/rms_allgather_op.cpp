@@ -32,6 +32,8 @@ tt::tt_metal::operation::Hash RMSAllGather::compute_program_hash(
         this->output_mem_config,
         this->topology,
         this->cluster_axis,
+        optional_input_tensors.at(0).has_value(),
+        optional_input_tensors.at(1).has_value(),
         input_shape,
         input_memory_layout,
         input_dtype,
