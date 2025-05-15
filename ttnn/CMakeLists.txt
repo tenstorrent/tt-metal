@@ -72,6 +72,7 @@ target_link_libraries(
         TT::Metalium
         xtensor
         FlatBuffers::FlatBuffers
+        Boost::algorithm
 )
 
 ##################################################
