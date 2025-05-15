@@ -61,6 +61,8 @@ def is_supported(tensor_rank, dim, ttnn_dtype):
         ([2, 3, 5, 33, 128], 0),
         ([2, 3, 5, 33, 128], 1),
         ([2, 3, 5, 33, 128], 2),
+        # ([1, 151936], -1),
+        # ([1, 19], -1)
     ],
 )
 @pytest.mark.parametrize(
@@ -140,6 +142,7 @@ def test_cumsum(size, dim, dtypes, device):
         ([2, 3, 5, 33, 128], 0),
         ([2, 3, 5, 33, 128], 1),
         ([2, 3, 5, 33, 128], 2),
+        ([1, 151936], -1),
     ],
 )
 @pytest.mark.parametrize(
