@@ -2146,8 +2146,7 @@ void py_module(py::module& module) {
         ttnn::fmod,
         R"doc(Performs an eltwise-fmod operation.)doc",
         R"doc(\mathrm{{output\_tensor}} = \verb|fmod|(\mathrm{{input\_tensor\_a,input\_tensor\_b}}))doc",
-        R"doc(BFLOAT16, FLOAT32)doc",
-        R"doc(Support provided only for WH_B0.)doc");
+        R"doc(BFLOAT16, FLOAT32)doc");
 
     detail::bind_binary_overload_operation(
         module,
