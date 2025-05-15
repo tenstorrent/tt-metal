@@ -311,10 +311,10 @@ install_mpi_uflm(){
     info "Building with $NPROC job(s)…"
     make -j"$NPROC"
 
-    info "Installing to $PREFIX (sudo)…"
-    sudo make install
+    info "Installing to $PREFIX "
+    make install
     if command -v ldconfig &>/dev/null; then
-        sudo ldconfig      # refresh linker cache
+        ldconfig      # refresh linker cache
     fi
     popd >/dev/null
 
