@@ -54,6 +54,9 @@ inline void _llk_unpack_get_tile_(std::uint32_t address, std::uint32_t *p_tile)
 
     if constexpr (mail2math || mail2pack)
     {
+        // We only need to make sure the last semaphore_post happens before mailbox write.
+        // When we need to do 2 semaphore posts the first one is a general one, the second
+        // one is done using store_then_load. When we need only one, this one is skipped.
         if constexpr (mail2math && mail2pack)
         {
             semaphore_post(semaphore::UNPACK_OPERAND_SYNC);
