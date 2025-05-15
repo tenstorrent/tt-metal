@@ -10,7 +10,7 @@ MeshDevice::MeshDevice(tt::tt_metal::distributed::MeshShape shape) :
     m_mesh_device(ttnn::distributed::open_mesh_device(
         shape,
         DEFAULT_L1_SMALL_SIZE,
-        DEFAULT_TRACE_REGION_SIZE,
+        10000000U,
         /* num_command_queues*/ 1,
         tt::tt_metal::DispatchCoreConfig{})) {
     assert(m_mesh_device);

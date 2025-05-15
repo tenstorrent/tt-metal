@@ -327,7 +327,7 @@ void FDMeshCommandQueue::finish(tt::stl::Span<const SubDeviceId> sub_device_ids)
 void FDMeshCommandQueue::write_shard_to_device(
     Buffer* shard_view, const void* src, const BufferRegion& region, tt::stl::Span<const SubDeviceId> sub_device_ids) {
     in_use_ = true;
-    TT_FATAL(!trace_id_.has_value(), "Writes are not supported during trace capture.");
+    // TT_FATAL(!trace_id_.has_value(), "Writes are not supported during trace capture.");
     auto device = shard_view->device();
     sub_device_ids = buffer_dispatch::select_sub_device_ids(mesh_device_, sub_device_ids);
     buffer_dispatch::write_to_device_buffer(

@@ -335,4 +335,55 @@ template tt::tt_metal::Tensor from_xtensor<uint32_t, ttnn::DataType::UINT32>(
     const XTensorToMeshVariant<uint32_t>& composer,
     ttnn::Layout layout);
 
+// Helper for static_assert to make it dependent on a template parameter
+template <class>
+inline constexpr bool always_false_v = false;
+
+// New overload for creating host-side tensors from xt::xarray
+template <class InputT, ttnn::DataType OutputTensorType>
+tt::tt_metal::Tensor from_xtensor(const xt::xarray<InputT>& x_tensor, ttnn::Layout layout) {
+    auto shape = ttnn::experimental::xtensor::get_shape_from_xarray(x_tensor);
+    std::vector<InputT> data_vec(x_tensor.begin(), x_tensor.end());  // Copy xt::xarray data to std::vector
+
+    if constexpr (std::is_same_v<InputT, float>) {
+        // Handles float input to various output tensor types like BFLOAT16, FLOAT32, etc.
+        // Relies on `create_owned_buffer_from_vector_of_floats` to produce the correct buffer type.
+        auto owned_buffer = create_owned_buffer_from_vector_of_floats(data_vec, OutputTensorType);
+        auto storage = tt::tt_metal::HostStorage{std::move(owned_buffer)};
+        return ttnn::Tensor{std::move(storage), shape, OutputTensorType, layout};
+    } else if constexpr (
+        (std::is_same_v<InputT, uint32_t> && OutputTensorType == ttnn::DataType::UINT32) ||
+        (std::is_same_v<InputT, int32_t> && OutputTensorType == ttnn::DataType::INT32)) {
+        // Handles direct mapping from InputT vector to tensor of OutputTensorType.
+        // Relies on `ttml_create_owned_tensor` which expects vector of the specific type.
+        return ttml_create_owned_tensor(std::move(data_vec), shape, OutputTensorType, layout);
+    } else {
+        // This static_assert provides a compile-time error for unhandled (InputT, OutputTensorType) combinations.
+        static_assert(
+            always_false_v<InputT>,
+            "from_xtensor (host): Unsupported InputT type or (InputT, OutputTensorType) combination. "
+            "Please add an explicit instantiation and ensure the logic for this combination is handled in the "
+            "template.");
+        // Fallback runtime error, though static_assert should ideally catch issues at compile time.
+        throw std::logic_error(fmt::format(
+            "Runtime check: Unsupported (InputT, OutputTensorType) for host from_xtensor: InputT={}, "
+            "OutputTensorType={}",
+            typeid(InputT).name(),
+            static_cast<int>(OutputTensorType)));
+    }
+}
+
+// Explicit instantiations for the new host-side from_xtensor overload
+template tt::tt_metal::Tensor from_xtensor<float, ttnn::DataType::BFLOAT16>(
+    const xt::xarray<float>& tensor, ttnn::Layout layout);
+
+template tt::tt_metal::Tensor from_xtensor<float, ttnn::DataType::FLOAT32>(
+    const xt::xarray<float>& tensor, ttnn::Layout layout);
+
+template tt::tt_metal::Tensor from_xtensor<uint32_t, ttnn::DataType::UINT32>(
+    const xt::xarray<uint32_t>& tensor, ttnn::Layout layout);
+
+template tt::tt_metal::Tensor from_xtensor<int32_t, ttnn::DataType::INT32>(
+    const xt::xarray<int32_t>& tensor, ttnn::Layout layout);
+
 }  // namespace ttml::core

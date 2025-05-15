@@ -850,7 +850,9 @@ void copy_to_mesh_tensor(const Tensor& host_tensor, Tensor& mesh_tensor, ttnn::Q
     TT_FATAL(host_tensor.get_dtype() == mesh_tensor.get_dtype(), "Host tensor has different dtype");
     TT_FATAL(
         host_tensor.get_tensor_spec().page_config() == mesh_tensor.get_tensor_spec().page_config(),
-        "Host tensor has different page config");
+        "Host and mesh tensors page configs differ: {} (host) vs {} (mesh)",
+        host_tensor.get_tensor_spec().page_config(),
+        mesh_tensor.get_tensor_spec().page_config());
 
     const auto& tensor_spec = mesh_tensor.get_tensor_spec();
     auto mesh_buffer = std::get<DeviceStorage>(mesh_tensor.get_storage()).mesh_buffer;

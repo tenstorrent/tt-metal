@@ -17,16 +17,16 @@
 #include "datasets/dataloader.hpp"
 #include "datasets/in_memory_token_dataset.hpp"
 #include "datasets/utils.hpp"
-#include "models/common/transformer_common.hpp"
+#include "fmt/base.h"
 #include "models/distributed/gpt2.hpp"
 #include "models/distributed/llama.hpp"
 #include "models/gpt2.hpp"
 #include "models/llama.hpp"
-#include "ops/binary_ops.hpp"
 #include "ops/losses.hpp"
 #include "optimizers/adamw.hpp"
 #include "tokenizers/bpe_tokenizer.hpp"
 #include "tokenizers/char_tokenizer.hpp"
+#include "ttnn/operations/trace.hpp"
 #include "utils.hpp"
 
 namespace {
@@ -580,12 +580,20 @@ int main(int argc, char **argv) {
     auto *device = &ttml::autograd::ctx().get_device();
     device->enable_program_cache();
 
-    struct CachedHostData {
+    struct SampleTensorPtrs {
+        // data and targets are allocated only once in the first sample; after that they're simply copied.
+        ttml::autograd::TensorPtr data = nullptr;
+        ttml::autograd::TensorPtr targets = nullptr;
+        ttml::autograd::TensorPtr masks_tensor = nullptr;
+    };
+    SampleTensorPtrs sample_tensor_ptrs;
+
+    struct CachedData {
         std::vector<uint32_t> data;
         std::vector<int32_t> targets;
-        ttml::autograd::TensorPtr masks_tensor;
     };
-    CachedHostData cached_data;
+    CachedData cached_data;
+
     std::vector<float> mask;
     auto num_heads = std::visit([](auto &&arg) { return arg.num_heads; }, config.transformer_config);
     mask.reserve(sequence_length * sequence_length);
@@ -594,11 +602,12 @@ int main(int argc, char **argv) {
             mask.push_back(i >= j ? 1.0F : 0.0F);
         }
     }
-    cached_data.masks_tensor = ttml::autograd::create_tensor(
+    sample_tensor_ptrs.masks_tensor = ttml::autograd::create_tensor(
         ttml::core::from_vector(mask, ttml::core::create_shape({1, 1, sequence_length, sequence_length}), device));
 
     std::function<BatchType(std::vector<DatasetSample> && samples)> collate_fn =
-        [sequence_length, num_heads, device, &cached_data, ddp](std::vector<DatasetSample> &&samples) {
+        [sequence_length, num_heads, device, &cached_data, &sample_tensor_ptrs, ddp](
+            std::vector<DatasetSample> &&samples) {
             auto start_timer = std::chrono::high_resolution_clock::now();
             const uint32_t batch_size = samples.size();
             std::vector<uint32_t> &data = cached_data.data;
@@ -613,43 +622,57 @@ int main(int argc, char **argv) {
                 std::copy(features.begin(), features.end(), std::back_inserter(data));
                 std::copy(target_span.begin(), target_span.end(), std::back_inserter(targets));
             }
+
+            auto data_xt = xt::adapt(data, {batch_size, 1U, 1U, sequence_length});
+            auto targets_xt = xt::adapt(targets, {batch_size * sequence_length});
+
             auto end_timer = std::chrono::high_resolution_clock::now();
             auto duration = std::chrono::duration_cast<std::chrono::microseconds>(end_timer - start_timer).count();
             fmt::print("dataloader host only step time {} ms\n", (double)duration / 1000.);
 
-            auto create_data_and_targets = [&]() -> std::tuple<TensorPtr, TensorPtr> {
+            auto create_device_data_and_targets = [&]() -> std::tuple<TensorPtr, TensorPtr> {
+                ttml::autograd::TensorPtr data_tensor = nullptr;
+                ttml::autograd::TensorPtr targets_tensor = nullptr;
                 if (ddp) {
-                    auto data_xtensor = xt::adapt(data, {batch_size, 1U, 1U, sequence_length});
                     auto data_composer = ttml::core::ShardXTensorToMesh<uint32_t>(device->shape(), 0);
-                    auto data_tensor =
+                    data_tensor =
                         ttml::autograd::create_tensor(ttml::core::from_xtensor<uint32_t, ttnn::DataType::UINT32>(
-                            data_xtensor, device, data_composer, ttnn::Layout::ROW_MAJOR));
+                            data_xt, device, data_composer, ttnn::Layout::ROW_MAJOR));
 
-                    auto targets_xtensor = xt::adapt(targets, {batch_size * sequence_length});
                     auto targets_composer = ttml::core::ShardXTensorToMesh<int32_t>(device->shape(), 0);
-                    auto targets_tt_tensor = ttml::core::from_xtensor<int32_t, ttnn::DataType::INT32>(
-                        targets_xtensor, device, targets_composer);
-                    auto targets_tensor = ttml::autograd::create_tensor(targets_tt_tensor);
-                    return {data_tensor, targets_tensor};
+                    auto targets_tt_tensor =
+                        ttml::core::from_xtensor<int32_t, ttnn::DataType::INT32>(targets_xt, device, targets_composer);
+                    targets_tensor = ttml::autograd::create_tensor(targets_tt_tensor);
+                } else {
+                    data_tensor =
+                        ttml::autograd::create_tensor(ttml::core::from_xtensor<uint32_t, ttnn::DataType::UINT32>(
+                            data_xt, device, ttnn::Layout::ROW_MAJOR));
+                    targets_tensor = ttml::autograd::create_tensor(
+                        ttml::core::from_xtensor<int32_t, ttnn::DataType::INT32>(targets_xt, device));
                 }
-
-                auto data_tensor =
-                    ttml::autograd::create_tensor(ttml::core::from_vector<uint32_t, ttnn::DataType::UINT32>(
-                        data,
-                        ttml::core::create_shape({batch_size, 1, 1, sequence_length}),
-                        device,
-                        ttnn::Layout::ROW_MAJOR));
-                auto targets_tensor =
-                    ttml::autograd::create_tensor(ttml::core::from_vector<int32_t, ttnn::DataType::INT32>(
-                        targets, ttnn::Shape({batch_size * sequence_length}), device));
                 return {data_tensor, targets_tensor};
             };
 
-            auto [data_tensor, targets_tensor] = create_data_and_targets();
+            if (sample_tensor_ptrs.data == nullptr || sample_tensor_ptrs.targets == nullptr) {
+                auto [data_tensor, targets_tensor] = create_device_data_and_targets();
+                sample_tensor_ptrs.data = data_tensor;
+                sample_tensor_ptrs.targets = targets_tensor;
+            } else {
+                // copy data to existing allocated tensors
+                auto host_data =
+                    ttml::core::from_xtensor<uint32_t, ttnn::DataType::UINT32>(data_xt, ttnn::Layout::ROW_MAJOR);
+                auto host_targets = ttml::core::from_xtensor<int32_t, ttnn::DataType::INT32>(targets_xt);
+                // FIXME: does this handle sharding appropriately?
+                // this is what ttnn uses, but unclear on whether it's applicable to our configs.
+                tt::tt_metal::write_tensor(host_data, sample_tensor_ptrs.data->get_value());
+                tt::tt_metal::write_tensor(host_targets, sample_tensor_ptrs.targets->get_value());
+            }
+
             end_timer = std::chrono::high_resolution_clock::now();
             duration = std::chrono::duration_cast<std::chrono::microseconds>(end_timer - start_timer).count();
             fmt::print("dataloader step time {} ms\n", (double)duration / 1000.);
-            return std::make_tuple(data_tensor, targets_tensor, cached_data.masks_tensor);
+            return std::make_tuple(
+                sample_tensor_ptrs.data, sample_tensor_ptrs.targets, sample_tensor_ptrs.masks_tensor);
         };
 
     LossAverageMeter loss_meter;
@@ -753,6 +776,9 @@ int main(int argc, char **argv) {
         return loss_float / static_cast<float>(loss_xtensors.size());
     };
 
+    std::optional<ttnn::MeshTraceId> trace_id;
+    ttml::autograd::TensorPtr loss_tensor = nullptr;
+
     const uint32_t num_epochs = config.num_epochs;
     auto gradient_accumulator_helper = GradientAccumulator(config.gradient_accumulation_steps);
     for (uint32_t epoch = 0; epoch < num_epochs; ++epoch) {
@@ -761,12 +787,39 @@ int main(int argc, char **argv) {
             if (gradient_accumulator_helper.should_zero_grad()) {
                 optimizer->zero_grad();
             }
-            auto output = run_model(model, features, masks);
-            auto loss = ttml::ops::nll_loss(output, target);
-            loss = gradient_accumulator_helper.scale(loss);
-            float loss_float = get_loss_value(loss);
 
-            loss->backward();
+            // I hypothesize that all of the autograd ptrs will be created and
+            // linked in the first pass; we save a reference to the loss tensor
+            // with run_fwd on the first pass as well, so we should have the
+            // same graph in memory. Now successive executions of run_fwd should
+            // touch the same ttnn::Tensors over which we computed in the first
+            // pass. I think that everything should line up, but it remains to
+            // be seen.
+
+            auto run_fwd = [&]() {
+                namespace trace = ttnn::operations::trace;
+                if (!trace_id.has_value()) {
+                    fmt::println("tracing");
+                    trace_id = trace::begin_trace_capture(device, ttnn::DefaultQueueId);
+                    // assert that everything is on device
+                    fmt::println("Features storage type {}", features->get_value().storage_type());
+                    fmt::println("Masks storage type {}", masks->get_value().storage_type());
+                    auto output = run_model(model, features, masks);
+                    auto loss = ttml::ops::nll_loss(output, target);
+                    loss_tensor = gradient_accumulator_helper.scale(loss);
+                    trace::end_trace_capture(device, *trace_id, ttnn::DefaultQueueId);
+                    fmt::println("completed trace");
+                } else {
+                    fmt::println("executing trace");
+                    trace::execute_trace(device, *trace_id, ttnn::DefaultQueueId, /*blocking=*/true);
+                    fmt::println("executed trace");
+                }
+            };
+
+            run_fwd();
+
+            float loss_float = get_loss_value(loss_tensor);
+            loss_tensor->backward();
             ttml::autograd::ctx().reset_graph();
 
             auto samples = features->get_value().get_logical_shape()[0];
@@ -820,6 +873,8 @@ int main(int argc, char **argv) {
             break;
         }
     }
+
+    ttnn::operations::trace::release_trace(device, *trace_id);
 
     if (!config.model_path.empty()) {
         save_training_state(config.model_path, model, scheduler, "transformer", "adamw");

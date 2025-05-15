@@ -86,4 +86,8 @@ tt::tt_metal::Tensor from_xtensor(
     const XTensorToMeshVariant<T>& composer,
     ttnn::Layout layout = ttnn::Layout::TILE);
 
+// New overload for creating host-side tensors from xt::xarray
+template <class InputT, ttnn::DataType OutputTensorType>
+tt::tt_metal::Tensor from_xtensor(const xt::xarray<InputT>& x_tensor, ttnn::Layout layout = ttnn::Layout::TILE);
+
 }  // namespace ttml::core
