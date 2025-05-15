@@ -857,7 +857,7 @@ int main(int argc, char **argv) {
                 scheduler->step();
                 auto global_step = optimizer->get_steps();
                 if (config.enable_mpi) {
-                    fmt::print("[Rank {}]", *ttml::autograd::ctx().get_distributed_context().rank());
+                    fmt::print("[Rank {}] ", *ttml::autograd::ctx().get_distributed_context().rank());
                 }
                 fmt::print("Step: {}, Loss: {}\n", global_step, gradient_accumulator_helper.average_loss());
                 loss_meter.update(gradient_accumulator_helper.average_loss());
