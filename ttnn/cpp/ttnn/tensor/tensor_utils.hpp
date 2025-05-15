@@ -59,7 +59,7 @@ void apply(const Tensor& tensor, const std::function<void(const Tensor&)>& calla
 template <class T>
 uint32_t get_batch_size(const T& shape) {
     uint32_t result = 1;
-    for (auto i = 0; i < shape.rank() - 2; i++) {
+    for (int i = 0; i < (int)shape.rank() - 2; i++) {
         result *= shape[i];
     }
     return result;

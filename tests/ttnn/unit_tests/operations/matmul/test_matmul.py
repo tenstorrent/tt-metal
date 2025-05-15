@@ -8,9 +8,8 @@ import torch
 import math
 import ttnn
 
-from models.utility_functions import comp_pcc
+from models.utility_functions import comp_pcc, is_blackhole, skip_for_blackhole
 from tests.ttnn.utils_for_testing import assert_with_pcc
-from models.utility_functions import skip_for_grayskull, is_wormhole_b0, is_grayskull, is_blackhole, run_for_wormhole_b0
 
 
 def find_max_subblock(out_block_h, out_block_w):
@@ -93,7 +92,6 @@ def test_pytorch_2_0_failed_cases(device, m, k, n):
     assert_with_pcc(z_t, z)
 
 
-@run_for_wormhole_b0()
 @pytest.mark.parametrize("device_params", [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL}], indirect=True)
 @pytest.mark.parametrize("m", [256])
 @pytest.mark.parametrize("k", [256])
@@ -195,7 +193,7 @@ def test_matmul_reuse_config_sharded_fd_column(
     assert_with_pcc(pt_out, output_tensor, expected_pcc)
 
 
-@run_for_wormhole_b0()
+@skip_for_blackhole("TinyTile Matmul needs to be fixed on BH. Issue #22103")
 @pytest.mark.parametrize("b", [2])
 @pytest.mark.parametrize("h", [3])
 @pytest.mark.parametrize("m", [256])
@@ -303,7 +301,7 @@ def pad_to_dram_banks(num, tile_w, lcm=32 * 12):
     return padded_number
 
 
-@run_for_wormhole_b0()
+@skip_for_blackhole("TinyTile Matmul needs to be fixed on BH. Issue #22103")
 @pytest.mark.parametrize("k", [1024])
 @pytest.mark.parametrize("n", [1280])
 @pytest.mark.parametrize("has_bias", [False, True])
@@ -317,12 +315,11 @@ def test_matmul_in1_dram_sharded_tiny_tile(
 ):
     # PCC issue when height not equal to tile height
     m = tile_h
-    if is_grayskull():
-        n_padded = n
-        num_banks = 8
+    if is_blackhole():
+        num_banks = device.dram_grid_size().x  # need to match harvesting of dram
     else:
         num_banks = 12
-        n_padded = pad_to_dram_banks(n, tile_w, tile_w * num_banks)
+    n_padded = pad_to_dram_banks(n, tile_w, tile_w * num_banks)
 
     in0_shape = [1, 1, m, k]
     in1_shape = [1, 1, k, n]
@@ -396,18 +393,12 @@ def test_matmul_in1_dram_sharded_tiny_tile(
         fused_activation=None,
     )
 
-    if is_grayskull():
-        compute_kernel_config = ttnn.GrayskullComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.LoFi,
-            math_approx_mode=True,
-        )
-    else:
-        compute_kernel_config = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.LoFi,
-            math_approx_mode=True,
-            fp32_dest_acc_en=True,
-            packer_l1_acc=True,
-        )
+    compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.LoFi,
+        math_approx_mode=True,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=True,
+    )
 
     if has_bias:
         output_t = ttnn.linear(
@@ -528,18 +519,12 @@ def run_matmul_2d_multiple_output_blocks_per_core(
         fuse_batch=fuse_batch,
     )
 
-    if is_grayskull():
-        compute_kernel_config = ttnn.GrayskullComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.LoFi,
-            math_approx_mode=True,
-        )
-    else:
-        compute_kernel_config = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.LoFi,
-            math_approx_mode=True,
-            fp32_dest_acc_en=False,
-            packer_l1_acc=True,
-        )
+    compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.LoFi,
+        math_approx_mode=True,
+        fp32_dest_acc_en=False,
+        packer_l1_acc=True,
+    )
     if out_sharded:
         out_mem_config = ttnn.MemoryConfig(
             memory_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
@@ -574,7 +559,6 @@ def run_matmul_2d_multiple_output_blocks_per_core(
     assert_with_pcc(pt_out, output_tensor, 0.999)
 
 
-@run_for_wormhole_b0()
 @pytest.mark.parametrize("b", [1, 2])
 @pytest.mark.parametrize("m", [512])
 @pytest.mark.parametrize("k", [512])
@@ -602,8 +586,9 @@ def test_matmul_2d_multiple_output_blocks_per_core(
     use_program_cache,
 ):
     compute_grid_size = device.compute_with_storage_grid_size()
-    grid_size = [compute_grid_size.x, compute_grid_size.y]
-    if grid_size[1] < 8:
+    required_size = 8  # input tensor sizes are too small to be subdivided on larger grids
+    grid_size = [min(required_size, compute_grid_size.x), min(required_size, compute_grid_size.y)]
+    if grid_size[1] < required_size:
         pytest.skip("device does not have 8x8 grid")
 
     for _ in range(2):
@@ -699,18 +684,12 @@ def run_matmul_2d_tiny_tile(
         fused_activation=None,
     )
 
-    if is_grayskull():
-        compute_kernel_config = ttnn.GrayskullComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.LoFi,
-            math_approx_mode=True,
-        )
-    else:
-        compute_kernel_config = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.LoFi,
-            math_approx_mode=True,
-            fp32_dest_acc_en=False,
-            packer_l1_acc=True,
-        )
+    compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.LoFi,
+        math_approx_mode=True,
+        fp32_dest_acc_en=False,
+        packer_l1_acc=True,
+    )
     if out_sharded:
         out_mem_config = ttnn.MemoryConfig(
             memory_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
@@ -751,7 +730,7 @@ def run_matmul_2d_tiny_tile(
     assert_with_pcc(pt_out, output_tensor, 0.999)
 
 
-@run_for_wormhole_b0()
+@skip_for_blackhole("TinyTile Matmul needs to be fixed on BH. Issue #22103")
 @pytest.mark.parametrize("m", [512])
 @pytest.mark.parametrize("k", [512])
 @pytest.mark.parametrize("n", [768])
@@ -863,18 +842,12 @@ def run_matmul_1d_tiny_tile(
         mcast_in0=True,
     )
 
-    if is_grayskull():
-        compute_kernel_config = ttnn.GrayskullComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.LoFi,
-            math_approx_mode=True,
-        )
-    else:
-        compute_kernel_config = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.LoFi,
-            math_approx_mode=True,
-            fp32_dest_acc_en=False,
-            packer_l1_acc=True,
-        )
+    compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.LoFi,
+        math_approx_mode=True,
+        fp32_dest_acc_en=False,
+        packer_l1_acc=True,
+    )
     if out_sharded:
         out_mem_config = ttnn.MemoryConfig(
             memory_layout=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
@@ -915,7 +888,7 @@ def run_matmul_1d_tiny_tile(
     assert_with_pcc(pt_out, output_tensor, 0.999)
 
 
-@run_for_wormhole_b0()
+@skip_for_blackhole("TinyTile Matmul needs to be fixed on BH. Issue #22103")
 @pytest.mark.parametrize("m", [128])
 @pytest.mark.parametrize("k", [1024])
 @pytest.mark.parametrize("n", [1024])
@@ -1077,18 +1050,12 @@ def run_matmul_1d_multiple_output_blocks_per_core(
         mcast_in0=mcast_in0,
     )
 
-    if is_grayskull():
-        compute_kernel_config = ttnn.GrayskullComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.LoFi,
-            math_approx_mode=True,
-        )
-    else:
-        compute_kernel_config = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.LoFi,
-            math_approx_mode=True,
-            fp32_dest_acc_en=False,
-            packer_l1_acc=True,
-        )
+    compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.LoFi,
+        math_approx_mode=True,
+        fp32_dest_acc_en=False,
+        packer_l1_acc=True,
+    )
     if out_sharded:
         if mcast_in0:
             out_mem_config = ttnn.MemoryConfig(
@@ -1130,7 +1097,6 @@ def run_matmul_1d_multiple_output_blocks_per_core(
     assert_with_pcc(pt_out, output_tensor, 0.999)
 
 
-@run_for_wormhole_b0()
 @pytest.mark.parametrize("m", [256])
 @pytest.mark.parametrize("k", [1024])
 @pytest.mark.parametrize("n", [2048])
@@ -1345,7 +1311,6 @@ def test_padded_1d_matmul(device, side, has_program_config):
 
 
 # fmt: off
-@pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported on WH and BH")
 @pytest.mark.parametrize("m_size,k_size,n_size", [
     (1, 2, 2),
     (1, 2, 4),
@@ -1375,7 +1340,6 @@ def test_matmul_with_matched_width_height(device, m_size, k_size, n_size):
 
 
 # fmt: off
-@pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported on WH and BH")
 @pytest.mark.parametrize("k_size, n_size", [
     (2, 4),
     (4, 2),
@@ -1403,8 +1367,6 @@ def test_matmul_with_matched_width_height_from_1D(device, k_size, n_size):
     assert_with_pcc(torch_output_tensor, output, 0.9999)
 
 
-@pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported on WH and BH")
-@pytest.mark.skip(reason="ttnn.reshape doesn't support reshaping the input tensors used in this test")
 @pytest.mark.parametrize("w", [(4), (2)])
 def test_matmul_does_dot_product(device, w):
     torch.manual_seed(0)
@@ -1413,22 +1375,19 @@ def test_matmul_does_dot_product(device, w):
     torch_input_tensor_b = torch.zeros((w,), dtype=torch.bfloat16).uniform_(-0.1, 0.1)
     torch_output_tensor = torch.matmul(torch_input_tensor_a, torch_input_tensor_b)
 
-    input_tensor_a = ttnn.from_torch(torch_input_tensor_a)
-    input_tensor_b = ttnn.from_torch(torch_input_tensor_b)
-    input_tensor_a = ttnn.to_device(input_tensor_a, device)
-    input_tensor_b = ttnn.to_device(input_tensor_b, device)
+    input_tensor_a = ttnn.from_torch(torch_input_tensor_a, layout=ttnn.TILE_LAYOUT, device=device)
+    input_tensor_b = ttnn.from_torch(torch_input_tensor_b, layout=ttnn.TILE_LAYOUT, device=device)
     output = ttnn.matmul(input_tensor_a, input_tensor_b)
     output = ttnn.from_device(output)
 
     output = ttnn.to_torch(output)
 
     assert torch_output_tensor.shape == ()
-    assert output.shape == (32,)
-    assert torch.allclose(torch_output_tensor, output[0], atol=1e-2)
+    assert output.shape == ()
+    assert torch.allclose(torch_output_tensor, output, atol=1e-2)
 
 
 # fmt: off
-@pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported on WH and BH")
 @pytest.mark.parametrize("n_size,c,h,w", [
     (1, 1, 2, 4),
     (1, 1, 4, 2),
@@ -1454,7 +1413,6 @@ def test_matmul_with_matched_width_height_4D(device, n_size, c, h, w):
 
 
 # fmt: off
-@pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported on WH and BH")
 @pytest.mark.parametrize("n_size,c,h,w", [
     (1, 1, 2, 2),
     (1, 1, 4, 4),
@@ -1479,7 +1437,6 @@ def test_matmul_same_shape_and_valid(device, n_size, c, h, w):
 
 
 # fmt: off
-@pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported on WH and BH")
 @pytest.mark.parametrize("input_a,input_b", [
         ([1.0,2.0,3.0],[3.0,4.0,5.0])
     ])
@@ -1506,7 +1463,6 @@ def test_matmul_same_shape_but_invalid(device, input_a, input_b):
     assert "The width of the first tensor must be equal to the height of the second tensor" in str(exception.value)
 
 
-@pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported on WH and BH")
 def test_tutorial_matmul(device):
     torch.manual_seed(0)
 
@@ -1527,7 +1483,6 @@ def test_tutorial_matmul(device):
     assert_with_pcc(torch_output_tensor, output, pcc=0.999)
 
 
-@pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported on WH and BH")
 def test_tutorial_matmul_inputs_and_output_in_l1_memory(device):
     torch.manual_seed(0)
 
@@ -1552,7 +1507,6 @@ def test_tutorial_matmul_inputs_and_output_in_l1_memory(device):
     assert_with_pcc(torch_output_tensor, output, pcc=0.999)
 
 
-@pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported on WH and BH")
 def test_tutorial_matmul_with_inputs_and_output_in_l1_memory_and_user_specified_core_grid(device):
     torch.manual_seed(0)
 
@@ -1580,7 +1534,6 @@ def test_tutorial_matmul_with_inputs_and_output_in_l1_memory_and_user_specified_
     assert_with_pcc(torch_output_tensor, output, pcc=0.999)
 
 
-@pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported on WH and BH")
 @pytest.mark.parametrize(
     "batch_size_0, batch_size_1, m_size, k_size, n_size, bcast_batch, input_a_sharded_memory_config_args, input_b_sharded_memory_config_args",
     [
@@ -1716,7 +1669,6 @@ def test_sharded_matmul(
     assert_with_pcc(torch_output_tensor, output, pcc=0.999)
 
 
-@pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported on WH and BH")
 @pytest.mark.parametrize("batch_size", [1, 7])
 def test_matmul_with_core_grid(device, batch_size):
     torch.manual_seed(0)
@@ -1742,7 +1694,6 @@ def test_matmul_with_core_grid(device, batch_size):
     assert_with_pcc(torch_output_tensor, output_tensor, 0.999)
 
 
-@pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported on WH and BH")
 @pytest.mark.parametrize("batch_size", [1, 8])
 @pytest.mark.parametrize("m_size", [30, 61])
 @pytest.mark.parametrize("k_size", [1023, 2048])
@@ -1767,7 +1718,6 @@ def test_wide_matmul_with_argument_for_core_grid_set_to_device_grid(device, batc
     assert_with_pcc(torch_output_tensor, output_tensor, 0.997)
 
 
-@pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported on WH and BH")
 @pytest.mark.parametrize("batch_size", [1, 8])
 @pytest.mark.parametrize("m_size", [1024, 2048])
 @pytest.mark.parametrize("k_size", [1023, 2048])
@@ -1792,7 +1742,6 @@ def test_tall_matmul_with_argument_for_core_grid_set_to_device_grid(device, batc
     assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.997)
 
 
-@pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported on WH and BH")
 @pytest.mark.parametrize("batch_size", [1, 8])
 @pytest.mark.parametrize("m_size", [31, 63])
 @pytest.mark.parametrize("k_size", [1024, 2048])
@@ -1851,7 +1800,6 @@ def test_matmul_with_transpose_a_or_b(device, n_size, c, m, k, n, transpose_a, t
 ##########################
 # MODEL SPECIFIC MATMULS #
 ##########################
-@pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported on WH and BH")
 @pytest.mark.parametrize("batch_size", [1])
 @pytest.mark.parametrize("m_size", [128])
 @pytest.mark.parametrize("k_size", [4544])
@@ -1877,7 +1825,6 @@ def test_falcon_query_key_value_matmul(device, batch_size, m_size, k_size, n_siz
     assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.996)
 
 
-@run_for_wormhole_b0()
 @pytest.mark.parametrize(
     "in0_dtype, in1_dtype, num_activation_cores, num_compute_cores, has_bias, config, M, K, N",
     [
