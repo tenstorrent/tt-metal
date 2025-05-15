@@ -2019,6 +2019,9 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_gather_in0(
         (std::uint32_t)in1_shard_width_in_dram,
     };
 
+    /* compute kernel args */
+    const bool spill = num_blocks > 1 && (out_block_tiles / out_subblock_num_tiles) > 1;
+    TT_FATAL(!spill || !untilize_out, "untilize_out is not supported for spill cases");
     std::vector<uint32_t> compute_kernel_args = {
         in0_block_w,             // in0_block_w
         in0_num_subblocks,       // in0_num_subblocks

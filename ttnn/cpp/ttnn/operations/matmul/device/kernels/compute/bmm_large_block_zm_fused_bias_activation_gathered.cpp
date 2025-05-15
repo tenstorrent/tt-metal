@@ -194,7 +194,6 @@ void MAIN {
 #endif
 
     constexpr bool spill = num_blocks > 1 && (out_block_num_tiles / out_subblock_num_tiles) > 1;
-    static_assert(!spill || !untilize_out, "untilize output is not supported for spill cases.");
 
     mm_block_init(
         in0_cb_id, in1_cb_id, mm_partials_cb_ids[0], in1_transpose_tile, out_subblock_w, out_subblock_h, in0_block_w);
