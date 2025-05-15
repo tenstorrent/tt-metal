@@ -677,12 +677,13 @@ TEST_F(Fabric1DFixture, TestEDMConnectionStressTestQuick) {
 
     // For each epoch, run with increasing number of workers
     log_debug(tt::LogTest, "Starting EDM connection stress test");
+    auto compute_with_storage_grid_size = sender_device->compute_with_storage_grid_size();
+    size_t num_rows = compute_with_storage_grid_size.y;
+    size_t num_cols = compute_with_storage_grid_size.x;
     for (size_t iter = 0; iter < 10; iter++) {
         log_debug(tt::LogTest, "iter {}", iter);
         for (size_t num_workers : {1, 3}) {
             log_debug(tt::LogTest, "num_workers {}", num_workers);
-            size_t num_rows = 7;
-            size_t num_cols = 8 - (num_workers - 1);
             for (size_t r : {0, 4, 5, 6}) {
                 for (size_t c = 0; c < num_cols; c++) {
                     log_debug(tt::LogTest, "r={}, c={}", r, c);
@@ -785,13 +786,6 @@ TEST_F(Fabric1DFixture, TestEDMConnectionStressTestQuick) {
                         worker_args.push_back(i % stall_durations_cycles.size());
                         worker_args.push_back(i % packet_sizes.size());
                         worker_args.push_back(i % message_counts.size());
-
-                        auto worker_flow_semaphore_id =
-                            tt_metal::CreateSemaphore(program, worker_logical_cores_vec[i], 0);
-                        auto worker_teardown_semaphore_id =
-                            tt_metal::CreateSemaphore(program, worker_logical_cores_vec[i], 0);
-                        auto worker_buffer_index_semaphore_id =
-                            tt_metal::CreateSemaphore(program, worker_logical_cores_vec[i], 0);
 
                         append_fabric_connection_rt_args(
                             sender_device->id(),

@@ -5,7 +5,6 @@
 #include "tt_metal/api/tt-metalium/fabric_edm_packet_header.hpp"
 #include "ttnn/cpp/ttnn/operations/ccl/common/interpreter_backends/kernel_common/noc_addr.hpp"
 #include "dataflow_api.h"
-// #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/edm_fabric_worker_adapters.hpp"
 
 #include "tt_metal/fabric/hw/inc/edm_fabric/edm_fabric_flow_control_helpers.hpp"
@@ -39,7 +38,6 @@ void kernel_main() {
     size_t arg_idx = 0;
 
     const size_t fabric_write_dest_bank_addr = get_arg_val<uint32_t>(arg_idx++);
-    // const size_t packet_payload_size_bytes = get_arg_val<uint32_t>(arg_idx++);
     const size_t fabric_write_dest_noc_x = get_arg_val<uint32_t>(arg_idx++);
     const size_t fabric_write_dest_noc_y = get_arg_val<uint32_t>(arg_idx++);
 
@@ -137,4 +135,5 @@ void kernel_main() {
     }
 
     noc_async_write_barrier();
+    noc_async_atomic_barrier();
 }
