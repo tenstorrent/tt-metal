@@ -29,6 +29,7 @@
 #include "ttnn/operations/data_movement/repeat_interleave/repeat_interleave_pybind.hpp"
 #include "ttnn/operations/data_movement/reshape_on_device/reshape_pybind.hpp"
 #include "ttnn/operations/data_movement/reshape_view/reshape_pybind.hpp"
+#include "ttnn/operations/data_movement/roll/roll_pybind.hpp"
 #include "ttnn/operations/data_movement/view/view_pybind.hpp"
 #include "ttnn/operations/data_movement/sharded_partial/interleaved_to_sharded_partial/interleaved_to_sharded_partial_pybind.hpp"
 #include "ttnn/operations/data_movement/sharded_partial/sharded_to_interleaved_partial/sharded_to_interleaved_partial_pybind.hpp"
@@ -86,6 +87,7 @@ void py_module(py::module& module) {
     py_bind_squeeze(module);
     py_bind_stack(module);
     py_bind_unsqueeze(module);
+    py_bind_roll(module);
 }
 }  // namespace data_movement
 }  // namespace operations
