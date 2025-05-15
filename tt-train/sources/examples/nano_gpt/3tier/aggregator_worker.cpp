@@ -6,9 +6,6 @@
 
 #include <CLI/CLI.hpp>
 
-// TODO: improve include path
-
-#include "../utils.hpp"
 #include "autograd/module_base.hpp"
 #include "common.hpp"
 #include "core/distributed/distributed.hpp"
@@ -83,7 +80,7 @@ int main(int argc, char **argv) {
     CLI11_PARSE(app, argc, argv);
 
     // tensor parallel is not supported yet
-    initialize_device(ddp, enable_tp);
+    three_tier_arch::initialize_device(ddp, enable_tp);
 
     auto yaml_config = YAML::LoadFile(config_name);
     three_tier_arch::TrainingConfig config = three_tier_arch::parse_config(yaml_config);
@@ -97,7 +94,7 @@ int main(int argc, char **argv) {
     auto &vocab_size = config.transformer_config.vocab_size;
     auto num_devices = static_cast<uint32_t>(device->num_devices());
     auto should_be_divisible_by = (enable_tp ? num_devices : 1U) * 32U;
-    vocab_size = round_up_to_tile(vocab_size, should_be_divisible_by);
+    vocab_size = three_tier_arch::round_up_to_tile(vocab_size, should_be_divisible_by);
 
     auto create_model = [enable_tp](const auto &config) -> std::shared_ptr<ttml::autograd::ModuleBase> {
         if (enable_tp) {

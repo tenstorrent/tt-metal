@@ -104,4 +104,26 @@ uint32_t get_steps_per_dataset(const TrainingConfig &config) {
     return steps_per_dataset;
 }
 
+std::string read_file_to_str(const std::string &file_path) {
+    std::ifstream file(file_path);
+    if (!file.is_open()) {
+        throw std::runtime_error("Failed to open file: " + file_path);
+    }
+
+    std::stringstream buffer;
+    buffer << file.rdbuf();
+    return buffer.str();
+}
+
+uint32_t round_up_to_tile(uint32_t value, uint32_t tile_size) {
+    return (value + tile_size - 1) / tile_size * tile_size;
+}
+
+void initialize_device(bool ddp, bool tp) {
+    if (ddp || tp) {
+        // currently supports only N300 device
+        ttml::autograd::ctx().set_mesh_shape(tt::tt_metal::distributed::MeshShape(1, 2));
+    }
+}
+
 }  // namespace three_tier_arch

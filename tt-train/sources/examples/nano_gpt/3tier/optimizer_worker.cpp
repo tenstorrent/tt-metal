@@ -6,8 +6,6 @@
 
 #include <CLI/CLI.hpp>
 
-// TODO: improve include path
-#include "../utils.hpp"
 #include "autograd/auto_context.hpp"
 #include "common.hpp"
 #include "core/distributed/distributed.hpp"
@@ -72,7 +70,7 @@ int main(int argc, char **argv) {
     CLI11_PARSE(app, argc, argv);
 
     // tensor parallel is not supported yet
-    initialize_device(ddp, enable_tp);
+    three_tier_arch::initialize_device(ddp, enable_tp);
 
     auto yaml_config = YAML::LoadFile(config_name);
     three_tier_arch::TrainingConfig config = three_tier_arch::parse_config(yaml_config);

@@ -44,4 +44,10 @@ uint32_t get_steps_per_dataset(const TrainingConfig &config);
 
 std::vector<ttml::core::distributed::Rank> get_workers_and_aggregator_ranks(uint32_t workers);
 
+std::string read_file_to_str(const std::string &file_path);
+
+uint32_t round_up_to_tile(uint32_t value, uint32_t tile_size = 32U);
+
+void initialize_device(bool ddp, bool tp);
+
 }  // namespace three_tier_arch

@@ -10,13 +10,11 @@ set(MAIN_SOURCES
 set(OPTIMIZER_SOURCES
     3tier/optimizer_worker.cpp
     3tier/common.cpp
-    utils.cpp
 )
 
 set(AGGREGATOR_SOURCES
     3tier/aggregator_worker.cpp
     3tier/common.cpp
-    utils.cpp
 )
 
 add_executable(nano_gpt ${MAIN_SOURCES})
