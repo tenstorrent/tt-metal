@@ -10,7 +10,7 @@ export WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml
 ```
 
 ## Introduction
-YOLOv8 is the latest iteration in the YOLO series of real-time object detectors, offering cutting-edge performance in terms of accuracy and speed. Building upon the advancements of previous YOLO versions, YOLOv8 introduces new features and optimizations that make it an ideal choice for various object detection tasks in a wide range of applications.
+YOLOv8 is one of the recent iterations in the YOLO series of real-time object detectors, offering cutting-edge performance in terms of accuracy and speed.
 
 ## Details
 The entry point to yolov8x model is YOLOv8x in
