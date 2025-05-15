@@ -150,10 +150,6 @@ jobs:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-#   profiler-regression:
-#     needs: build-artifact-profiler
-#     uses: ./.github/workflows/run-profiler-regression.yaml
-#     secrets: inherit
 #   build-and-test-wheels:
 #     uses: Check all-post-commit yaml for directions
 #     secrets: inherit
