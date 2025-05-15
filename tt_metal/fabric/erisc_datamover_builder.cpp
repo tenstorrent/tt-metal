@@ -139,6 +139,9 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(std::size_t channel_buffe
     }
     tt::tt_fabric::set_routing_mode(topology);
 
+    // TODO: add +1 for Blackhole
+    this->num_used_riscv_cores = FabricEriscDatamoverConfig::num_riscv_cores;
+
     for (uint32_t i = 0; i < this->num_used_receiver_channels; i++) {
         TT_FATAL(
             (receivers_completed_packet_header_cb_address[i] % eth_word_l1_alignment == 0),
@@ -231,12 +234,16 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(std::size_t channel_buffe
     for (uint32_t i = 0; i < this->num_used_sender_channels; i++) {
         this->sender_channels_num_buffers[i] = num_sender_buffer_slots;
         this->sender_channels_size_bytes[i] = channel_buffer_size_bytes * num_sender_buffer_slots;
-        this->is_sender_channel_serviced[i] = true;
+        for (uint32_t j = 0; j < this->num_used_riscv_cores; j++) {
+            this->is_sender_channel_serviced[j][i] = true;
+        }
     }
     for (uint32_t i = 0; i < this->num_used_receiver_channels; i++) {
         this->receiver_channels_num_buffers[i] = num_receiver_buffer_slots;
         this->receiver_channels_size_bytes[i] = channel_buffer_size_bytes * num_receiver_buffer_slots;
-        this->is_receiver_channel_serviced[i] = true;
+        for (uint32_t j = 0; j < this->num_used_riscv_cores; j++) {
+            this->is_receiver_channel_serviced[j][i] = true;
+        }
     }
 
     uint32_t buffer_addr = buffer_region_start;
@@ -416,7 +423,7 @@ FabricEriscDatamoverBuilder::FabricEriscDatamoverBuilder(
         false);
 }
 
-std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args() const {
+std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args(const size_t riscv_id) const {
     const bool is_handshake_master = this->my_chip_id < this->peer_chip_id;
     TT_ASSERT(this->my_chip_id != this->peer_chip_id);
     TT_ASSERT(
@@ -507,13 +514,13 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args() const
         FabricEriscDatamoverConfig::sender_completed_packet_header_cb_size_headers,
         config.senders_completed_packet_header_cb_address[4],
         FabricEriscDatamoverConfig::sender_completed_packet_header_cb_size_headers,
-        config.is_sender_channel_serviced[0],
-        config.is_sender_channel_serviced[1],
-        config.is_sender_channel_serviced[2],
-        config.is_sender_channel_serviced[3],
-        config.is_sender_channel_serviced[4],
-        config.is_receiver_channel_serviced[0],
-        config.is_receiver_channel_serviced[1],
+        config.is_sender_channel_serviced[riscv_id][0],
+        config.is_sender_channel_serviced[riscv_id][1],
+        config.is_sender_channel_serviced[riscv_id][2],
+        config.is_sender_channel_serviced[riscv_id][3],
+        config.is_sender_channel_serviced[riscv_id][4],
+        config.is_receiver_channel_serviced[riscv_id][0],
+        config.is_receiver_channel_serviced[riscv_id][1],
         config.topology == Topology::Mesh,
         this->direction,
         // Special marker to help with identifying misalignment bugs

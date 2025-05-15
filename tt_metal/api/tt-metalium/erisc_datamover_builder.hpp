@@ -48,6 +48,7 @@ struct FabricEriscDatamoverConfig {
     static constexpr std::size_t max_downstream_edms = std::max(num_downstream_edms, num_downstream_edms_2d);
     static constexpr uint32_t num_virtual_channels = 2;
 
+    static constexpr std::size_t num_riscv_cores = 1;  // 2 for BH
     static constexpr std::size_t field_size = 16;
     static constexpr std::size_t buffer_alignment = 32;
     static constexpr std::size_t eth_word_l1_alignment = 16;
@@ -83,7 +84,7 @@ struct FabricEriscDatamoverConfig {
     std::array<std::size_t, num_sender_channels> senders_completed_packet_header_cb_address;
 
     // ----------- Sender Channels
-    std::array<bool, num_sender_channels> is_sender_channel_serviced;
+    std::array<std::array<bool, num_sender_channels>, num_riscv_cores> is_sender_channel_serviced;
 
     std::array<std::size_t, num_sender_channels> sender_channels_buffer_index_address;
     // Connection info layout:
@@ -102,7 +103,7 @@ struct FabricEriscDatamoverConfig {
     static_assert(sizeof(tt::tt_fabric::EDMChannelWorkerLocationInfo) % field_size == 0);
 
     // ----------- Receiver Channels
-    std::array<bool, num_receiver_channels> is_receiver_channel_serviced;
+    std::array<std::array<bool, num_receiver_channels>, num_riscv_cores> is_receiver_channel_serviced;
 
     std::array<std::size_t, max_downstream_edms> receiver_channels_local_buffer_index_address;
     // persistent mode field
@@ -130,6 +131,7 @@ struct FabricEriscDatamoverConfig {
     std::size_t num_used_sender_channels = 0;
     std::size_t num_used_receiver_channels = 0;
     std::size_t num_fwd_paths = 0;
+    std::size_t num_used_riscv_cores = 0;
 
     Topology topology = Topology::Linear;
 
@@ -227,7 +229,7 @@ public:
     [[nodiscard]] SenderWorkerAdapterSpec build_connection_to_worker_channel() const;
     [[nodiscard]] SenderWorkerAdapterSpec build_connection_to_fabric_channel(uint32_t vc);
 
-    [[nodiscard]] std::vector<uint32_t> get_compile_time_args() const;
+    [[nodiscard]] std::vector<uint32_t> get_compile_time_args(const size_t riscv_id = 0) const;
 
     [[nodiscard]] std::vector<uint32_t> get_runtime_args() const;
 
