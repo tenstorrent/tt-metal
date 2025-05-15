@@ -172,34 +172,205 @@ def test_sdpa_tt_small_chunks(device, b, nh, nkv, s, d, q_chunk_size, k_chunk_si
 @pytest.mark.parametrize("q_chunk_size", [256], ids=["q256"])
 @pytest.mark.parametrize("k_chunk_size", [512], ids=["k512"])
 @pytest.mark.parametrize(
-    "b, nh, nkv, s, d",
-    ([1, 3, 3, 44 * 1024, 128],),  # Llama2-70B
+    "b, nh, nkv, s, d, grid",
+    (
+        [1, 3, 3, 44 * 1024, 128, None],  # Llama2-70B
+        [1, 1, 1, 2048, 128, (1, 1)],
+    ),
+    ids=["full-grid", "single-core"],
 )
-def test_sdpa_perf(device, b, nh, nkv, s, d, q_chunk_size, k_chunk_size, dtype):
+def test_sdpa_perf(device, b, nh, nkv, s, d, q_chunk_size, k_chunk_size, dtype, grid):
     if (s % q_chunk_size != 0) or (s % k_chunk_size != 0):
         pytest.skip("s must be divisible by q_chunk_size and k_chunk_size")
     if nh == 8 and q_chunk_size == 128 and k_chunk_size == 128:
         pytest.skip("Can cause OOM if profiling is enabled.")
     ttnn.device.DisablePersistentKernelCache()
-    run_sdpa_noncausal(device, b, nh, nkv, s, d, q_chunk_size, k_chunk_size, dtype, use_mask=False, grid=None, mse=1e-3)
+    run_sdpa_noncausal(device, b, nh, nkv, s, d, q_chunk_size, k_chunk_size, dtype, use_mask=False, grid=grid, mse=1e-3)
+
+
+from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
+from models.perf.device_perf_utils import run_device_perf_detailed
+from tt_metal.tools.profiler.process_model_log import run_device_profiler, get_latest_ops_log_filename
+import pandas as pd
+
+
+def test_sdpa_benchmark_detailed():
+    command = "pytest tests/tt_eager/python_api_testing/unit_testing/misc/test_scaled_dot_product_attention.py::test_sdpa_benchmark"
+    cols = ["ATTRIBUTES", "INPUT_0_W", "INPUT_0_Z", "INPUT_0_Y", "INPUT_0_X", "DEVICE KERNEL DURATION [ns]"]
+    op_name = "ScaledDotProductAttention"
+    warmup_iters = 0  # 5 iterations per device
+    step_name = "SDPA"
+    subdir = "sdpa"
+
+    run_device_profiler(command, subdir)
+    # r = post_process_ops_log(subdir, cols, sum_vals=False)
+    filename = get_latest_ops_log_filename(subdir)
+    df = pd.read_csv(filename)
+    df["is_causal"] = (
+        df["ATTRIBUTES"]
+        .str.extract(r"'is_causal':\s*('true'|'false')", expand=False)  # → "true"/"false"/NaN
+        .map({"'true'": True, "'false'": False})  # → bool/NaN
+    )
+
+    # TODO: Drop rows with NaN in device kernel duration?
+    keep = ["INPUT_0_W", "INPUT_0_Z", "INPUT_0_Y", "INPUT_0_X", "is_causal", "DEVICE KERNEL DURATION [ns]"]
+    df = df[keep]
+    group_cols = ["INPUT_0_W", "INPUT_0_Z", "INPUT_0_Y", "INPUT_0_X", "is_causal"]
+    result = (
+        df.groupby(group_cols, as_index=False)["DEVICE KERNEL DURATION [ns]"]
+        .min()
+        .rename(columns={"DEVICE KERNEL DURATION [ns]": "min_kernel_duration_ns"})
+    )
+
+    import matplotlib.pyplot as plt
+    import numpy as np
+    import pandas as pd
+    import pathlib
+
+    df = result
+    # Rename columns
+    df = df.rename(
+        columns={
+            "INPUT_0_W": "batch",
+            "INPUT_0_Z": "num_heads",
+            "INPUT_0_Y": "seq_len",
+            "INPUT_0_X": "head_dim",
+        }
+    )
+
+    # Calculate TFLOP/s
+    def flops(row):
+        B = row.batch
+        H = row.num_heads
+        L = row.seq_len
+        D = row.head_dim
+        causal_multiplier = 1 + row.is_causal.astype(int)
+        return 4 * L**2 * D * H * B / causal_multiplier
+
+    df["tflops"] = flops(df) / df["min_kernel_duration_ns"] / 1e3  # ns → s, flop → Tflop
+    print(df)
+
+    # ------------------------------------------------------------------------------
+    # 2.  Plot (6 sub‑plots, 2 × 3 grid)
+    # ------------------------------------------------------------------------------
+    # Color map for different algorithms
+    palette = {
+        "TTNN": "#1f77b4",
+        "FlashAttention‑2": "#ff7f0e",
+        "FlashAttention‑3": "#9467bd",
+        "Triton": "#2ca02c",
+        "cuDNN": "#d62728",
+    }
+
+    seq_order = [512, 1024, 2048, 4096, 8192, 16384]  # for tick labels
+    head_order = [64, 128, 256]
+
+    fig, axes = plt.subplots(2, 3, figsize=(12, 8), sharey="row")
+
+    for j_head, head_dim in enumerate(head_order):
+        for i_causal, causal in enumerate([False, True]):
+            ax = axes[i_causal, j_head]
+            data = df[df["head_dim"] == head_dim][df["is_causal"] == causal]
+            # breakpoint()
+
+            # Group data by sequence length for the bar plot
+            bar_width = 0.15
+            x_positions = np.arange(len(seq_order))
+
+            # Only one implementation (TTNN) in our case
+            ys = []
+            for seq_len in seq_order:
+                seq_data = data[data["seq_len"] == seq_len]
+                if len(seq_data) > 0:
+                    ys.append(seq_data["tflops"].values[0])
+                else:
+                    ys.append(np.nan)
+
+            ax.bar(
+                x_positions,
+                ys,
+                width=bar_width,
+                label="TTNN" if i_causal == 0 and j_head == 0 else "_nolegend_",
+                color=palette["TTNN"],
+            )
+
+            # axes cosmetics ------------------------------------------------------
+            ax.set_xticks(x_positions)
+            ax.set_xticklabels([f"{l//1024}k" if l >= 1024 else str(l) for l in seq_order], rotation=0)
+            ax.set_xlabel("Sequence length")
+            if j_head == 0:
+                ax.set_ylabel("Speed (TFLOP/s)")
+            title = "Forward, " + ("with causal mask" if causal else "without causal mask") + f", head dim {head_dim}"
+            ax.set_title(title, fontsize=9)
+
+    # unified legend --------------------------------------------------------------
+    handles, labels = axes[0, 0].get_legend_handles_labels()
+    fig.legend(handles, labels, loc="upper center", ncol=len(labels), frameon=False)
+
+    fig.suptitle("Attention forward speed (FP16/BF16) on Wormhole", y=0.99, fontsize=12)
+    fig.tight_layout(rect=[0, 0, 1, 0.97])
+    plt.savefig("attention_speed_grid.png", dpi=300)
 
 
 def test_sdpa_benchmark(device):
+    dtype = ttnn.bfloat16
+
+    def create_device_tensors(b, nh, s, d):
+        Q = fa_rand(b, nh, s, d)
+        K = fa_rand(b, nh, s, d)
+        V = fa_rand(b, nh, s, d)
+        tt_Q = ttnn.from_torch(Q, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device, pad_value=0.0)
+        tt_K = ttnn.from_torch(K, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device, pad_value=0.0)
+        tt_V = ttnn.from_torch(V, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device, pad_value=0.0)
+        return tt_Q, tt_K, tt_V
+
+    compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.HiFi2,
+        math_approx_mode=True,
+        fp32_dest_acc_en=False,
+        packer_l1_acc=False,
+    )
     num_tokens = 16384
     hidden_dim = 2048
-    dtype = ttnn.bfloat16
+    # for causal in [True]:
     for causal in [True, False]:
-        for head_dim in [64, 128]:
+        # for head_dim in [64]:
+        for head_dim in [64, 128, 256]:
             nh = hidden_dim // head_dim
+            # for s in [512]:
             for s in [512, 1024, 2048, 4096, 8192, 16384]:
                 b = num_tokens // s
+                tt_Q, tt_K, tt_V = create_device_tensors(b, nh, s, head_dim)
                 # Start sweep for this config
-                for q_chunk_size in [32, 64]:
-                    for k_chunk_size in [32, 64]:
-                        if causal:
-                            run_test_sdpa_tt(device, b, nh, nh, s, head_dim, q_chunk_size, k_chunk_size, dtype)
-                        else:
-                            run_sdpa_noncausal(device, b, nh, nh, s, head_dim, q_chunk_size, k_chunk_size, dtype)
+                # for q_chunk_size in [64]:
+                for q_chunk_size in [64, 128, 256, 512]:
+                    # for k_chunk_size in [64]:
+                    for k_chunk_size in [64, 128, 256, 512]:
+                        print(
+                            f"Running test for config: b={b}, nh={nh}, s={s}, head_dim={head_dim}, q_chunk_size={q_chunk_size}, k_chunk_size={k_chunk_size}, dtype={dtype}, causal={causal}"
+                        )
+                        program_config = ttnn.SDPAProgramConfig(
+                            compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
+                            q_chunk_size=q_chunk_size,
+                            k_chunk_size=k_chunk_size,
+                            exp_approx_mode=False,
+                        )
+                        try:
+                            tt_back = ttnn.transformer.scaled_dot_product_attention(
+                                tt_Q,
+                                tt_K,
+                                tt_V,
+                                is_causal=causal,
+                                program_config=program_config,
+                                compute_kernel_config=compute_kernel_config,
+                            )
+                        except Exception as e:
+                            logger.error(
+                                f"Error running test for config: b={b}, nh={nh}, s={s}, head_dim={head_dim}, q_chunk_size={q_chunk_size}, k_chunk_size={k_chunk_size}, dtype={dtype}, causal={causal}"
+                            )
+                            logger.error(f"Error: {e}")
+
+                ttnn.DumpDeviceProfiler(device)
 
 
 @skip_for_blackhole("Mismatching on BH, see #12349")
