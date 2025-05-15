@@ -227,10 +227,10 @@ class Generator:
             "kv_cache": kv_cache,
             "argmax_on_device": argmax_on_device,
         }
-        if enable_trace:
-            tt_logits = self._easy_trace_text(**decode_kwargs)
-        else:
-            tt_logits = self._decode_forward_no_trace_text(**decode_kwargs)
+        #if enable_trace:
+            #tt_logits = self._easy_trace_text(**decode_kwargs)
+        #else:
+        tt_logits = self._decode_forward_no_trace_text(**decode_kwargs)
 
         if read_from_device:
             to_host = self.read_decode_output(tt_logits, B, is_tokens=(sampling_params is not None))
@@ -312,11 +312,13 @@ class Generator:
             device_inputs_i = copy_host_to_device(host_inputs, mesh_device=self.model_args[i].mesh_device)
             device_inputs.append(device_inputs_i)
 
+        print("model", self.model)
         for i in range(self.data_parallel):
             trace_id = ttnn.begin_trace_capture(self.model_args[i].mesh_device, cq_id=0)
             trace_ids[i] = trace_id
             user_kv_cache = kv_cache[i] if kv_cache is not None else None
             transformed_inputs = self.model[i].transform_decode_inputs_device(*(device_inputs[i]))
+            #print("transformerd_inputs", transformed_inputs)
             tt_out_trace.append(
                 self.model[i].ttnn_decode_forward(
                     *transformed_inputs, kv_cache=user_kv_cache, argmax_on_device=argmax_on_device
