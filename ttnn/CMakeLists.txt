@@ -853,7 +853,7 @@ set(TTNN_PUBLIC_LINK_LIBRARIES
 
 set(TTNN_PRECOMPILED_HEADERS
     ${PROJECT_SOURCE_DIR}/tt_stl/tt_stl/reflection.hpp
-    cpp/ttnn/operation.hpp
+    api/ttnn/operation.hpp
     ${PROJECT_SOURCE_DIR}/tt_metal/third_party/tracy/public/tracy/Tracy.hpp
     <functional>
     <map>
