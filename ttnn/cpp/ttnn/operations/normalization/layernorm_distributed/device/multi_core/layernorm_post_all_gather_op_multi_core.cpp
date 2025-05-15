@@ -8,7 +8,7 @@
 
 #include "cpp/ttnn/operations/normalization/layernorm_distributed/device/layernorm_post_all_gather_op.hpp"
 #include <tt-metalium/work_split.hpp>
-#include "tt-metalium/circular_buffer_types.hpp"
+#include "tt-metalium/circular_buffer_config.hpp"
 #include "ttnn/operations/math.hpp"
 
 #include <tt-metalium/host_api.hpp>
@@ -409,10 +409,10 @@ tt::tt_metal::operation::ProgramWithCallbacks layernorm_post_allgather_multi_cor
             .set_page_size(tt::CBIndex::c_14, out_single_tile_size);
     CreateCircularBuffer(program, all_cores, cb_out0_config);
 
-    // Log all circular buffers with program.circular_buffers_on_corerange(all_cores), which returns
+    // Log all circular buffers with program.circular_buffers(), which returns
     // std::vector<std::shared_ptr<CircularBuffer>>
 
-    for (const auto& cb : program.circular_buffers_on_corerange(*all_cores.ranges().begin())) {
+    for (const auto& cb : program.circular_buffers()) {
         for (const auto index : cb->buffer_indices()) {
             tt::log_debug("cb_id {}", index);
             tt::log_debug("page_size: {}", cb->page_size(index));

@@ -1,4 +1,5 @@
 [![tt-metal CI](https://github.com/tenstorrent/tt-metal/actions/workflows/all-post-commit-workflows.yaml/badge.svg)](https://github.com/tenstorrent/tt-metal/actions/workflows/all-post-commit-workflows.yaml)
+[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/tenstorrent/tt-metal)
 
 <div align="center">
 
@@ -37,6 +38,9 @@
 | [Falcon 7B (DP=8)](./models/demos/t3000/falcon7b)             | 256   | [QuietBox](https://tenstorrent.com/hardware/tt-quietbox) | 88        | 15.5  | 26              | 3968.0 | [v0.58.0-rc22](https://github.com/tenstorrent/tt-metal/tree/v0.58.0-rc22) |                                                                                                   |
 | [Falcon 7B (DP=32)](./models/demos/tg/falcon7b)               | 1024  | [Galaxy](https://tenstorrent.com/hardware/galaxy)        | 223       | 4.8   | 26              | 4915.2 | [v0.56.0-rc6](https://github.com/tenstorrent/tt-metal/tree/v0.56.0-rc6) |                                                                                                   |
 | [Falcon 40B (TP=8)](./models/demos/t3000/falcon40b)           | 32    | [QuietBox](https://tenstorrent.com/hardware/tt-quietbox) |           | 11.9   | 36              | 380.8  | [v0.58.0-rc22](https://github.com/tenstorrent/tt-metal/tree/v0.58.0-rc22)  |                                                                                                   |
+| [Llama 3.1 8B](./models/tt_transformers)                         | 32     | [p100](https://tenstorrent.com/hardware/blackhole)        | 87*       | 26.5*   |               | 848.0*   | [v0.59.0-rc3](https://github.com/tenstorrent/tt-metal/tree/v0.59.0-rc3) | [8a43c88](https://github.com/tenstorrent/vllm/tree/8a43c881edeff6647b127cf3668f30749ed9d2e9) |
+| [Llama 3.1 8B](./models/tt_transformers)                         | 32     | [p150](https://tenstorrent.com/hardware/blackhole)        | 69*       | 29.1*   |               | 931.2*   | [v0.59.0-rc3](https://github.com/tenstorrent/tt-metal/tree/v0.59.0-rc3) | [8a43c88](https://github.com/tenstorrent/vllm/tree/8a43c881edeff6647b127cf3668f30749ed9d2e9) |
+| [Llama 3.1 8B (DP=2)](./models/tt_transformers)                  | 64     | [2 x p150](https://tenstorrent.com/hardware/blackhole)        | 64*       | 18.6*   |               | 1190.4*  | [v0.59.0-rc3](https://github.com/tenstorrent/tt-metal/tree/v0.59.0-rc3) | [8a43c88](https://github.com/tenstorrent/vllm/tree/8a43c881edeff6647b127cf3668f30749ed9d2e9) |
 | [Llama 3.1 8B](./models/tt_transformers)                         | 32     | [n150](https://tenstorrent.com/hardware/wormhole)        | 104       | 24.6  | 23              | 787.2   | [v0.57.0-rc71](https://github.com/tenstorrent/tt-metal/tree/v0.57.0-rc71) | [3f59287](https://github.com/tenstorrent/vllm/tree/3f5928794134645d27c57053f140b1aa059cb887) |
 | [Llama 3.2 1B](./models/tt_transformers)                         | 32     | [n150](https://tenstorrent.com/hardware/wormhole)        | 23        | 67.6  | 160             | 2163.2   | [v0.57.0-rc23](https://github.com/tenstorrent/tt-metal/tree/v0.57.0-rc23) | [f8b5b72](https://github.com/tenstorrent/vllm/tree/f8b5b72960f44262a24fef35cc15ed79ba290d71) |
 | [Llama 3.2 3B](./models/tt_transformers)                         | 32     | [n150](https://tenstorrent.com/hardware/wormhole)        | 53       | 43.5  | 60              | 1392.0   | [v0.57.0-rc71](https://github.com/tenstorrent/tt-metal/tree/v0.57.0-rc71) | [3f59287](https://github.com/tenstorrent/vllm/tree/3f5928794134645d27c57053f140b1aa059cb887) |
@@ -52,6 +56,8 @@
 > - TP = Tensor Parallel, DP = Data Parallel; Defines parallelization factors across multiple devices.
 > - The reported LLM performance is for an input sequence length (number of rows filled in the KV cache) of 128 for all models except Mamba (which can accept any sequence length).
 > - The t/s/u reported is the throughput of the first token generated after prefill, i.e. 1 / inter token latency.
+> - Performance numbers were collected using the tt-metal model demos (accessible via the model links). If running with a vLLM inference server, performance may be different.
+> - \* Blackhole software optimization is under active development.  Please join us in shaping the future of open source AI! <br> [\[Discord\]](https://discord.gg/tenstorrent) [\[Developer Hub\]](https://tenstorrent.com/developers)
 
 ## Speech-to-Text
 

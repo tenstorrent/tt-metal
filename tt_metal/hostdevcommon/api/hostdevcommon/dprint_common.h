@@ -26,11 +26,9 @@ using CommonDataFormat = DataFormat;
 constexpr static std::uint32_t DPRINT_BUFFER_SIZE = 204;  // per thread
 // TODO: when device specific headers specify number of processors
 // (and hal abstracts them on host), get these from there
-#if defined(COMPILE_FOR_ERISC) || defined(COMPILE_FOR_IDLE_ERISC)
-constexpr static std::uint32_t DPRINT_BUFFERS_COUNT = 1;
-#else
+// DPRINT_BUFFERS_COUNT should be less for eth cores but this file doesn't use compile time defines on host
+// and we need the addresses to be the same between host and device
 constexpr static std::uint32_t DPRINT_BUFFERS_COUNT = 5;
-#endif
 
 // Used to index into the DPRINT buffers. Erisc is separate because it only has one buffer.
 enum DebugPrintHartIndex : unsigned int {

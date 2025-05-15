@@ -9,10 +9,10 @@
 #include <utility>
 
 #include "tensor.hpp"
-#include "cpp/ttnn-pybind/json_class.hpp"
+#include "ttnn-pybind/json_class.hpp"
 #include "export_enum.hpp"
 
-#include "ttnn/tensor/host_buffer/host_buffer.hpp"
+#include <tt-metalium/host_buffer.hpp>
 #include "ttnn/tensor/serialization.hpp"
 #include "ttnn/tensor/tensor_impl.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"

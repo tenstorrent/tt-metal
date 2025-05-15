@@ -25,8 +25,11 @@
 #include "kernel_types.hpp"
 #include "mesh_coord.hpp"
 #include "mesh_device.hpp"
+#include "mesh_workload_impl.hpp"
 #include "program/program_device_map.hpp"
+#include "program/program_impl.hpp"
 #include "tt-metalium/program.hpp"
+#include "tt_metal/impl/program/program_impl.hpp"
 #include "semaphore.hpp"
 #include "sub_device_types.hpp"
 #include "tt_metal/impl/dispatch/device_command.hpp"
@@ -57,14 +60,14 @@ std::optional<MeshCoordinateRange> find_intersection(
 
 }  // namespace
 
-MeshWorkload::MeshWorkload() {
+MeshWorkloadImpl::MeshWorkloadImpl() {
     // A MeshWorkload tracks maintains its own handles to kernels across all
     // encapsulated programs
     kernel_groups_.resize(MetalContext::instance().hal().get_programmable_core_type_count());
     kernels_.resize(MetalContext::instance().hal().get_programmable_core_type_count());
 }
 
-void MeshWorkload::add_program(const MeshCoordinateRange& device_range, Program&& program) {
+void MeshWorkloadImpl::add_program(const MeshCoordinateRange& device_range, Program&& program) {
     auto potential_intersection = find_intersection(programs_, device_range);
     TT_FATAL(
         !potential_intersection,
@@ -74,14 +77,14 @@ void MeshWorkload::add_program(const MeshCoordinateRange& device_range, Program&
     programs_[device_range] = std::move(program);
 }
 
-void MeshWorkload::compile_program(const MeshCoordinateRange& device_range, MeshDevice* mesh_device) {
+void MeshWorkloadImpl::compile_program(const MeshCoordinateRange& device_range, MeshDevice* mesh_device) {
     auto& program = programs_.at(device_range);
     program.compile(mesh_device);
     program.allocate_circular_buffers(mesh_device);
     tt::tt_metal::detail::ValidateCircularBufferRegion(program, mesh_device);
 }
 
-void MeshWorkload::compile(MeshDevice* mesh_device) {
+void MeshWorkloadImpl::compile(MeshDevice* mesh_device) {
     // Multi-Step Compile:
     // 1. Compile Kernel Binaries
     // 2. Allocate and Validate CBs
@@ -97,10 +100,10 @@ void MeshWorkload::compile(MeshDevice* mesh_device) {
         }
         mesh_device->wait_for_thread_pool();
     }
-    program_dispatch::finalize_program_offsets(*this, mesh_device);
+    finalize_offsets(mesh_device);
 }
 
-void MeshWorkload::load_binaries(MeshCommandQueue& mesh_cq) {
+void MeshWorkloadImpl::load_binaries(MeshCommandQueue& mesh_cq) {
     // Load binaries for all programs to their respective devices in
     // the Mesh. Only done when the MeshWorkload is enqueued for the first
     // time.
@@ -116,7 +119,8 @@ void MeshWorkload::load_binaries(MeshCommandQueue& mesh_cq) {
         // Allocate kernel binary buffers of max size across all devices, to ensure we have lock step allocation.
         uint32_t max_kernel_bin_buf_size = 0;
         for (auto& [device_range, program] : programs_) {
-            uint32_t curr_kernel_bin_size = program.get_program_transfer_info().binary_data.size() * sizeof(uint32_t);
+            uint32_t curr_kernel_bin_size =
+                program.impl().get_program_transfer_info().binary_data.size() * sizeof(uint32_t);
             max_kernel_bin_buf_size = std::max(max_kernel_bin_buf_size, curr_kernel_bin_size);
         }
         // In production cases, max_kernel_bin_buf_size will always be non-zero (programs have kernels). This check is
@@ -137,7 +141,8 @@ void MeshWorkload::load_binaries(MeshCommandQueue& mesh_cq) {
                 MeshBuffer::create(global_kernel_bin_buf_config, device_local_kernel_bin_buf_config, mesh_device);
             // Iterate over the sub-grids and EnqueueWriteMeshBuffer to each sub-grid that runs an individual program
             for (auto& [device_range, program] : this->programs_) {
-                std::size_t kernel_bin_size = program.get_program_transfer_info().binary_data.size() * sizeof(uint32_t);
+                std::size_t kernel_bin_size =
+                    program.impl().get_program_transfer_info().binary_data.size() * sizeof(uint32_t);
                 global_kernel_bin_buf_config.size = kernel_bin_size;
                 auto kernel_bin_buf_view = MeshBuffer::create(
                     global_kernel_bin_buf_config,
@@ -146,7 +151,10 @@ void MeshWorkload::load_binaries(MeshCommandQueue& mesh_cq) {
                     kernel_bin_buf_->address());
 
                 mesh_device->mesh_command_queue().enqueue_write_shard_to_sub_grid(
-                    *kernel_bin_buf_view, program.get_program_transfer_info().binary_data.data(), device_range, false);
+                    *kernel_bin_buf_view,
+                    program.impl().get_program_transfer_info().binary_data.data(),
+                    device_range,
+                    false);
 
                 std::shared_ptr<Buffer> buffer_view = Buffer::create(
                     mesh_device,
@@ -164,18 +172,18 @@ void MeshWorkload::load_binaries(MeshCommandQueue& mesh_cq) {
     }
 }
 
-ProgramBinaryStatus MeshWorkload::get_program_binary_status(std::size_t mesh_id) const {
+ProgramBinaryStatus MeshWorkloadImpl::get_program_binary_status(std::size_t mesh_id) const {
     if (program_binary_status_.find(mesh_id) != program_binary_status_.end()) {
         return program_binary_status_.at(mesh_id);
     }
     return ProgramBinaryStatus::NotSent;
 }
 
-void MeshWorkload::set_program_binary_status(std::size_t mesh_id, ProgramBinaryStatus status) {
+void MeshWorkloadImpl::set_program_binary_status(std::size_t mesh_id, ProgramBinaryStatus status) {
     program_binary_status_[mesh_id] = status;
 }
 
-void MeshWorkload::generate_dispatch_commands(MeshCommandQueue& mesh_cq) {
+void MeshWorkloadImpl::generate_dispatch_commands(MeshCommandQueue& mesh_cq) {
     // Generate Dispatch Commands for each Program in the MeshWorkload.
     // These commands will be updated based on MeshDevice state when the
     // workload is enqueued.
@@ -185,7 +193,7 @@ void MeshWorkload::generate_dispatch_commands(MeshCommandQueue& mesh_cq) {
     }
 }
 
-bool MeshWorkload::runs_on_noc_multicast_only_cores() {
+bool MeshWorkloadImpl::runs_on_noc_multicast_only_cores() {
     // Return true if any program in the MeshWorkload runs on cores
     // that can be multicasted to
     bool ret = false;
@@ -195,7 +203,7 @@ bool MeshWorkload::runs_on_noc_multicast_only_cores() {
     return ret;
 }
 
-bool MeshWorkload::runs_on_noc_unicast_only_cores() {
+bool MeshWorkloadImpl::runs_on_noc_unicast_only_cores() {
     // Return true if any program in the MeshWorkload runs on cores
     // that can only be unicasted to
     bool ret = false;
@@ -205,7 +213,7 @@ bool MeshWorkload::runs_on_noc_unicast_only_cores() {
     return ret;
 }
 
-bool MeshWorkload::kernel_binary_always_stored_in_ringbuffer() {
+bool MeshWorkloadImpl::kernel_binary_always_stored_in_ringbuffer() {
     // Return true if kernel binaries cannot be placed in a ring buffer for
     // any program in the MeshWorkload
     bool stored_in_ring_buf = true;
@@ -215,7 +223,7 @@ bool MeshWorkload::kernel_binary_always_stored_in_ringbuffer() {
     return stored_in_ring_buf;
 }
 
-std::unordered_map<KernelHandle, std::shared_ptr<Kernel>>& MeshWorkload::get_kernels(
+std::unordered_map<KernelHandle, std::shared_ptr<Kernel>>& MeshWorkloadImpl::get_kernels(
     uint32_t programmable_core_type_index) {
     // Get all kernels across all programs in the MeshWorkload
     if (kernels_.at(programmable_core_type_index).empty()) {
@@ -231,13 +239,13 @@ std::unordered_map<KernelHandle, std::shared_ptr<Kernel>>& MeshWorkload::get_ker
     return kernels_.at(programmable_core_type_index);
 }
 
-std::vector<std::shared_ptr<KernelGroup>>& MeshWorkload::get_kernel_groups(uint32_t programmable_core_type_index) {
+std::vector<std::shared_ptr<KernelGroup>>& MeshWorkloadImpl::get_kernel_groups(uint32_t programmable_core_type_index) {
     // Get all kernel groups across all programs in the MeshWorkload
     if (kernel_groups_.at(programmable_core_type_index).empty()) {
         uint32_t device_range_idx = 0;
         for (auto& [device_range, program] : programs_) {
             const uint32_t device_range_handle = (device_range_idx++) << 16;
-            for (auto& kg : program.get_kernel_groups(programmable_core_type_index)) {
+            for (auto& kg : program.impl().get_kernel_groups(programmable_core_type_index)) {
                 for (auto& optional_kernel_id : kg->kernel_ids) {
                     if (optional_kernel_id.has_value()) {
                         optional_kernel_id = (device_range_handle | optional_kernel_id.value());
@@ -250,7 +258,7 @@ std::vector<std::shared_ptr<KernelGroup>>& MeshWorkload::get_kernel_groups(uint3
     return kernel_groups_.at(programmable_core_type_index);
 }
 
-std::vector<Semaphore>& MeshWorkload::semaphores() {
+std::vector<Semaphore>& MeshWorkloadImpl::semaphores() {
     // Get all semaphores across all programs in the MeshWorkload
     if (not semaphores_.size()) {
         for (auto& [device_range, program] : programs_) {
@@ -260,24 +268,24 @@ std::vector<Semaphore>& MeshWorkload::semaphores() {
     return semaphores_;
 }
 
-std::vector<uint32_t> MeshWorkload::get_program_config_sizes() {
+std::vector<uint32_t> MeshWorkloadImpl::get_program_config_sizes() {
     // Get the config sizes for all L1 Program Data Structures
     std::vector<uint32_t> global_program_config_sizes;
     for (auto& program_on_grid : programs_) {
         if (global_program_config_sizes.size()) {
             for (int i = 0; i < global_program_config_sizes.size(); i++) {
                 TT_FATAL(
-                    global_program_config_sizes[i] == program_on_grid.second.get_program_config_sizes()[i],
+                    global_program_config_sizes[i] == program_on_grid.second.impl().get_program_config_sizes()[i],
                     "Expected config sizes to be identical across all programs in a MeshWorkload.");
             }
         } else {
-            global_program_config_sizes = program_on_grid.second.get_program_config_sizes();
+            global_program_config_sizes = program_on_grid.second.impl().get_program_config_sizes();
         }
     }
     return global_program_config_sizes;
 }
 
-std::unordered_set<SubDeviceId> MeshWorkload::determine_sub_device_ids(MeshDevice* mesh_device) {
+std::unordered_set<SubDeviceId> MeshWorkloadImpl::determine_sub_device_ids(MeshDevice* mesh_device) {
     // Get the sub device ids for all program across all devices in the Workload
     std::unordered_set<SubDeviceId> sub_devices_;
     for (auto& [device_range, program] : programs_) {
@@ -290,26 +298,26 @@ std::unordered_set<SubDeviceId> MeshWorkload::determine_sub_device_ids(MeshDevic
     return sub_devices_;
 }
 
-ProgramCommandSequence& MeshWorkload::get_dispatch_cmds_for_program(Program& program, uint64_t command_hash) {
+ProgramCommandSequence& MeshWorkloadImpl::get_dispatch_cmds_for_program(Program& program, uint64_t command_hash) {
     // Get the dispatch commands associated with this program
     return program.get_cached_program_command_sequences().at(command_hash);
 }
 
 // The functions below are for testing purposes only
-void MeshWorkload::set_last_used_command_queue_for_testing(MeshCommandQueue* mesh_cq) {
+void MeshWorkloadImpl::set_last_used_command_queue_for_testing(MeshCommandQueue* mesh_cq) {
     last_used_command_queue_ = mesh_cq;
 }
 
-MeshCommandQueue* MeshWorkload::get_last_used_command_queue() const { return last_used_command_queue_; }
+MeshCommandQueue* MeshWorkloadImpl::get_last_used_command_queue() const { return last_used_command_queue_; }
 
-ProgramConfig& MeshWorkload::get_program_config(uint32_t index) {
+ProgramConfig& MeshWorkloadImpl::get_program_config(uint32_t index) {
     TT_FATAL(
         programs_.size() and is_finalized(),
         "Program Configs can only be queried if a MeshWorkload is populated and finalized.");
-    return programs_.begin()->second.get_program_config(index);
+    return programs_.begin()->second.impl().get_program_config(index);
 }
 
-uint32_t MeshWorkload::get_sem_base_addr(
+uint32_t MeshWorkloadImpl::get_sem_base_addr(
     std::shared_ptr<MeshDevice>& mesh_device, CoreCoord /*logical_core*/, CoreType core_type) {
     HalProgrammableCoreType programmable_core_type =
         ::tt::tt_metal::detail::hal_programmable_core_type_from_core_type(core_type);
@@ -319,7 +327,7 @@ uint32_t MeshWorkload::get_sem_base_addr(
                .sem_offset;
 }
 
-uint32_t MeshWorkload::get_sem_size(
+uint32_t MeshWorkloadImpl::get_sem_size(
     std::shared_ptr<MeshDevice>& mesh_device, CoreCoord logical_core, CoreType core_type) {
     uint32_t sem_size = 0;
     uint32_t program_idx = 0;
@@ -334,7 +342,7 @@ uint32_t MeshWorkload::get_sem_size(
     return sem_size;
 }
 
-uint32_t MeshWorkload::get_cb_base_addr(
+uint32_t MeshWorkloadImpl::get_cb_base_addr(
     std::shared_ptr<MeshDevice>& mesh_device, CoreCoord /*logical_core*/, CoreType core_type) {
     HalProgrammableCoreType programmable_core_type =
         ::tt::tt_metal::detail::hal_programmable_core_type_from_core_type(core_type);
@@ -344,7 +352,7 @@ uint32_t MeshWorkload::get_cb_base_addr(
                .cb_offset;
 }
 
-uint32_t MeshWorkload::get_cb_size(
+uint32_t MeshWorkloadImpl::get_cb_size(
     std::shared_ptr<MeshDevice>& mesh_device, CoreCoord logical_core, CoreType core_type) {
     uint32_t cb_size = 0;
     uint32_t program_idx = 0;
@@ -357,6 +365,81 @@ uint32_t MeshWorkload::get_cb_size(
         program_idx++;
     }
     return cb_size;
+}
+
+void MeshWorkloadImpl::finalize_offsets(MeshDevice* mesh_device) {
+    if (is_finalized()) {
+        return;
+    }
+
+    tt::tt_metal::detail::KernelsGetter kernels_getter =
+        [this](uint32_t index) -> std::unordered_map<KernelHandle, std::shared_ptr<Kernel>>& {
+        return this->get_kernels(index);
+    };
+
+    tt::tt_metal::detail::KernelGroupsGetter kernel_groups_getter =
+        [this](uint32_t index) -> std::vector<std::shared_ptr<KernelGroup>>& { return this->get_kernel_groups(index); };
+
+    tt::tt_metal::detail::SemaphoresGetter semaphores_getter = [this]() -> const std::vector<Semaphore>& {
+        return this->semaphores();
+    };
+
+    // Create a span with all programs
+    std::vector<tt::tt_metal::detail::ProgramImpl*> program_impls;
+    program_impls.reserve(programs_.size());
+    for (auto& [_, program] : programs_) {
+        program_impls.push_back(&program.impl());
+    }
+    tt::stl::Span<tt::tt_metal::detail::ProgramImpl*> programs(program_impls.data(), program_impls.size());
+
+    tt::tt_metal::detail::ProgramImpl::finalize_program_offsets(
+        mesh_device, kernels_getter, kernel_groups_getter, semaphores_getter, programs);
+
+    set_finalized();
+}
+
+// MeshWorkload PIMPL Implementation
+
+MeshWorkload::MeshWorkload() : pimpl_(std::make_unique<MeshWorkloadImpl>()) {}
+MeshWorkload::~MeshWorkload() = default;
+MeshWorkload::MeshWorkload(MeshWorkload&& other) noexcept = default;
+MeshWorkload& MeshWorkload::operator=(MeshWorkload&& other) noexcept = default;
+
+void MeshWorkload::add_program(const MeshCoordinateRange& device_range, Program&& program) {
+    pimpl_->add_program(device_range, std::move(program));
+}
+
+std::unordered_map<MeshCoordinateRange, Program>& MeshWorkload::get_programs() { return pimpl_->get_programs(); }
+
+const std::unordered_map<MeshCoordinateRange, Program>& MeshWorkload::get_programs() const {
+    return pimpl_->get_programs();
+}
+
+// For testing purposes only
+void MeshWorkload::set_last_used_command_queue_for_testing(MeshCommandQueue* mesh_cq) {
+    pimpl_->set_last_used_command_queue_for_testing(mesh_cq);
+}
+
+MeshCommandQueue* MeshWorkload::get_last_used_command_queue() const { return pimpl_->get_last_used_command_queue(); }
+
+uint32_t MeshWorkload::get_sem_base_addr(
+    std::shared_ptr<MeshDevice>& mesh_device, CoreCoord logical_core, CoreType core_type) {
+    return pimpl_->get_sem_base_addr(mesh_device, logical_core, core_type);
+}
+
+uint32_t MeshWorkload::get_sem_size(
+    std::shared_ptr<MeshDevice>& mesh_device, CoreCoord logical_core, CoreType core_type) {
+    return pimpl_->get_sem_size(mesh_device, logical_core, core_type);
+}
+
+uint32_t MeshWorkload::get_cb_base_addr(
+    std::shared_ptr<MeshDevice>& mesh_device, CoreCoord logical_core, CoreType core_type) {
+    return pimpl_->get_cb_base_addr(mesh_device, logical_core, core_type);
+}
+
+uint32_t MeshWorkload::get_cb_size(
+    std::shared_ptr<MeshDevice>& mesh_device, CoreCoord logical_core, CoreType core_type) {
+    return pimpl_->get_cb_size(mesh_device, logical_core, core_type);
 }
 
 }  // namespace tt::tt_metal::distributed

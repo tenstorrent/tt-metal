@@ -8,10 +8,8 @@
 #include <optional>
 
 #include <tt-metalium/kernel_types.hpp>
-#include <tt-metalium/circular_buffer_types.hpp>
+#include <tt-metalium/circular_buffer_config.hpp>
 #include <tt-metalium/semaphore.hpp>
-#include <tt-metalium/worker_config_buffer.hpp>
-#include <tt-metalium/dev_msgs.h>
 #include <tt-metalium/program_descriptors.hpp>
 
 namespace tt {
@@ -41,10 +39,6 @@ CBHandle CreateCircularBuffer(
 }  // namespace experimental
 
 namespace program_dispatch {
-void assemble_device_commands(
-    ProgramCommandSequence& program_command_sequence, Program& program, IDevice* device, SubDeviceId sub_device_id);
-template <typename T>
-void finalize_program_offsets(T& workload_type, IDevice* device);
 template <typename WorkloadType, typename DeviceType>
 uint32_t program_base_addr_on_core(
     WorkloadType& workload, DeviceType generic_device, HalProgrammableCoreType core_type);
@@ -52,6 +46,7 @@ uint32_t program_base_addr_on_core(
 
 namespace distributed {
 class MeshWorkload;
+class MeshWorkloadImpl;
 }  // namespace distributed
 
 class JitBuildOptions;
@@ -71,48 +66,6 @@ std::shared_ptr<CircularBuffer> GetCircularBuffer(const Program& program, CBHand
 
 class Internal_;
 }  // namespace detail
-
-using kernel_id_array_t = std::array<std::optional<KernelHandle>, DISPATCH_CLASS_MAX>;
-
-struct KernelGroup {
-    uint32_t programmable_core_type_index;
-    CoreRangeSet core_ranges;
-    kernel_id_array_t kernel_ids;
-    uint32_t rta_sizes[DISPATCH_CLASS_MAX];
-    uint32_t total_rta_size;
-    uint32_t kernel_text_offsets[NUM_PROCESSORS_PER_CORE_TYPE];
-    uint32_t kernel_bin_sizes[NUM_PROCESSORS_PER_CORE_TYPE];
-    launch_msg_t launch_msg;
-    go_msg_t go_msg;
-
-    KernelGroup();
-    KernelGroup(
-        const detail::ProgramImpl& program,
-        uint32_t programmable_core_type_index,
-        kernel_id_array_t kernel_ids,
-        bool erisc_is_idle,
-        uint32_t max_local_cb_end_index,
-        uint32_t min_remote_cb_start_index,
-        const CoreRangeSet& new_ranges);
-
-    uint32_t get_programmable_core_type_index() const;
-
-    CoreType get_core_type() const;
-};
-
-// Contains the program's worker memory map
-struct ProgramConfig {
-    uint32_t rta_offset;
-    std::array<uint32_t, DISPATCH_CLASS_MAX> crta_offsets;
-    std::array<uint32_t, DISPATCH_CLASS_MAX> crta_sizes;
-    uint32_t sem_offset;
-    uint32_t sem_size;
-    uint32_t cb_offset;
-    uint32_t cb_size;
-    uint32_t local_cb_size;
-    uint32_t kernel_text_offset;  // offset of first kernel bin
-    uint32_t kernel_text_size;    // max size of all kernel bins across all kernel groups
-};
 
 // Represents the status of Program Kernel Binaries in Device DRAM with respect to the dispatcher
 enum class ProgramBinaryStatus : uint8_t {
@@ -144,19 +97,9 @@ public:
 
     const std::vector<Semaphore>& semaphores() const;
 
-    KernelGroup* kernels_on_core(const CoreCoord& core, uint32_t programmable_core_type_index);
-    std::vector<std::shared_ptr<KernelGroup>>& get_kernel_groups(uint32_t programmable_core_type_index);
     std::unordered_map<KernelHandle, std::shared_ptr<Kernel>>& get_kernels(uint32_t programmable_core_type_index);
     void add_buffer(std::shared_ptr<Buffer> buf);
     void release_buffers();
-    std::vector<std::shared_ptr<CircularBuffer>> circular_buffers_on_core(const CoreCoord& core) const;
-
-    std::vector<std::shared_ptr<CircularBuffer>> circular_buffers_on_corerange(const CoreRange& cr) const;
-
-    std::vector<CoreRange> circular_buffers_unique_coreranges() const;
-
-    std::vector<std::reference_wrapper<const Semaphore>> semaphores_on_core(
-        const CoreCoord& core, CoreType core_type) const;
 
     size_t num_semaphores() const;
     void init_semaphores(
@@ -172,14 +115,12 @@ public:
 
     void allocate_circular_buffers(const IDevice* device);
 
+    void finalize_offsets(IDevice* device);
     bool is_finalized() const;
-    void set_finalized();
     ProgramBinaryStatus get_program_binary_status(std::size_t device_id) const;
     void set_program_binary_status(std::size_t device_id, ProgramBinaryStatus status);
     void allocate_kernel_bin_buf_on_device(IDevice* device);
     std::shared_ptr<Kernel> get_kernel(KernelHandle kernel_id) const;
-
-    ProgramConfig& get_program_config(uint32_t programmable_core_type_index);
 
     // debug/test
     uint32_t get_sem_base_addr(IDevice* device, CoreCoord logical_core, CoreType core_type);
@@ -191,6 +132,8 @@ public:
     const std::vector<SubDeviceId>& determine_sub_device_ids(const IDevice* device);
     void set_kernels_bin_buffer(const std::shared_ptr<Buffer>& buffer);
     uint32_t get_cb_memory_size() const;
+    detail::ProgramImpl& impl() { return *pimpl_; }
+    const detail::ProgramImpl& impl() const { return *pimpl_; }
 
 private:
     std::unique_ptr<detail::ProgramImpl> pimpl_;
@@ -225,25 +168,15 @@ private:
 
     void add_semaphore(const CoreRangeSet& crs, uint32_t semaphore_id, uint32_t init_value, CoreType core_type);
 
-    void set_launch_msg_sem_offsets();
-    void populate_dispatch_data(IDevice* device);
-    const ProgramTransferInfo& get_program_transfer_info() const noexcept;
-    std::shared_ptr<Buffer> get_kernels_buffer(IDevice* device) const noexcept;
-    std::vector<uint32_t>& get_program_config_sizes() const noexcept;
     bool runs_on_noc_unicast_only_cores();
     bool runs_on_noc_multicast_only_cores();
     std::unordered_map<uint64_t, ProgramCommandSequence>& get_cached_program_command_sequences() noexcept;
     bool kernel_binary_always_stored_in_ringbuffer();
 
-    friend void program_dispatch::assemble_device_commands(
-        ProgramCommandSequence& program_command_sequence, Program& program, IDevice* device, SubDeviceId sub_device_id);
-    template <typename T>
-    friend void program_dispatch::finalize_program_offsets(T&, IDevice*);
-    template <typename WorkloadType, typename DeviceType>
-    friend uint32_t program_dispatch::program_base_addr_on_core(WorkloadType&, DeviceType, HalProgrammableCoreType);
     friend HWCommandQueue;
     friend EnqueueProgramCommand;
     friend distributed::MeshWorkload;
+    friend distributed::MeshWorkloadImpl;
     friend detail::Internal_;
 };
 

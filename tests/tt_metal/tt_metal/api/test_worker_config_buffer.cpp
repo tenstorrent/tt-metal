@@ -7,7 +7,6 @@
 #include <stdlib.h>
 #include <time.h>
 #include <tt-metalium/logger.hpp>
-#include <tt-metalium/worker_config_buffer.hpp>
 #include <cstddef>
 #include <deque>
 #include <utility>
@@ -15,6 +14,7 @@
 
 #include "env_lib.hpp"
 #include "gtest/gtest.h"
+#include "impl/dispatch/worker_config_buffer.hpp"
 
 using std::vector;
 using namespace tt::tt_metal;

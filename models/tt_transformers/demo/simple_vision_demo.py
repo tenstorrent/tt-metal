@@ -3,28 +3,27 @@
 
 from pathlib import Path
 from typing import Optional
-from loguru import logger
-
-from PIL import Image as PIL_Image
 
 import llama_models.llama3.reference_impl.generation as llama_reference_generation
-from llama_models.llama3.api.tokenizer import Tokenizer
 from llama_models.llama3.api.chat_format import ChatFormat
 from llama_models.llama3.api.datatypes import ImageMedia, UserMessage
-
+from llama_models.llama3.api.tokenizer import Tokenizer
+from loguru import logger
+from PIL import Image as PIL_Image
 from pkg_resources import resource_filename
 
 IMG_PATH = Path(resource_filename("llama_models", "scripts/resources/"))
 
-import torch
-import pytest
 import os
-import ttnn
 import time
 
-from models.tt_transformers.tt.generator import Generator
-from models.perf.benchmarking_utils import BenchmarkProfiler
+import pytest
+import torch
+
+import ttnn
 from models.demos.utils.llm_demo_utils import create_benchmark_data, verify_perf
+from models.perf.benchmarking_utils import BenchmarkProfiler
+from models.tt_transformers.tt.generator import Generator
 
 
 def get_batch_sampler(temperature, top_p, tokenizer):
@@ -45,8 +44,8 @@ def get_batch_sampler(temperature, top_p, tokenizer):
 def create_multimodal_model(
     mesh_device, max_batch_size, max_seq_len, dtype=ttnn.bfloat16, use_paged_kv_cache=False, checkpoint=None
 ):
-    from models.tt_transformers.tt.multimodal.llama_vision_model import CrossAttentionTransformer
     from models.tt_transformers.tt.model_config import ModelArgs
+    from models.tt_transformers.tt.multimodal.llama_vision_model import CrossAttentionTransformer
 
     tt_model_args = ModelArgs(mesh_device, max_batch_size=max_batch_size)
     assert tt_model_args.is_vision(), "This model is multimodal"

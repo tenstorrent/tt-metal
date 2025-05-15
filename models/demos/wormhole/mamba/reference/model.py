@@ -39,14 +39,16 @@ Glossary:
 
 """
 from __future__ import annotations
-import math
+
 import json
+import math
+from dataclasses import dataclass
 from typing import Optional
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from dataclasses import dataclass
-from einops import rearrange, repeat, einsum
+from einops import einsum, rearrange, repeat
 
 
 @dataclass
@@ -147,7 +149,7 @@ class Mamba(nn.Module):
             model: Mamba model with weights loaded
 
         """
-        from transformers.utils import WEIGHTS_NAME, CONFIG_NAME
+        from transformers.utils import CONFIG_NAME, WEIGHTS_NAME
         from transformers.utils.hub import cached_file
 
         def load_config_hf(model_name):

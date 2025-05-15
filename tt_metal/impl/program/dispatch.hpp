@@ -10,7 +10,6 @@
 #include <tt-metalium/program.hpp>
 #include <stdint.h>
 #include <vector_aligned.hpp>
-#include <worker_config_buffer.hpp>
 #include <array>
 #include <memory>
 #include <unordered_map>
@@ -21,7 +20,9 @@
 #include "dev_msgs.h"
 #include "dispatch/dispatch_settings.hpp"
 #include "kernel_types.hpp"
+#include "program_impl.hpp"
 #include "sub_device_types.hpp"
+#include "dispatch/worker_config_buffer.hpp"
 
 enum class CoreType;
 
@@ -107,7 +108,7 @@ void reserve_space_in_kernel_config_buffer(
     ProgramDispatchMetadata& dispatch_md);
 
 void update_program_dispatch_commands(
-    Program& program,
+    detail::ProgramImpl& program,
     ProgramCommandSequence& cached_program_command_sequence,
     uint32_t multicast_cores_launch_message_wptr,
     uint32_t unicast_cores_launch_message_wptr,

@@ -33,7 +33,7 @@ binary_fns = {
     "sub",
     "rsub",
     "mul",
-    "div",
+    "divide",
     "bias_gelu",
 }
 
@@ -135,7 +135,7 @@ def rand_bf16_gen(shape, device, *, min=0, max=1, memory_config=ttnn.DRAM_MEMORY
         parameters({"logaddexp", "logaddexp2"}, {floor_lhs_ceil_rhs_cos_post}),
         parameters({"ge", "lt", "le"}, {exp_floor_lhs_exp_rhs, log_lhs_sqrt_abs_post}),
         parameters({"logical_and", "logical_or", "logical_xor", "bias_gelu"}, {log_lhs_sqrt_abs_post}),
-        parameters({"div"}, {exp_post, tanh_post, exp2_post, expm1_post, i0_post, tan_post}),
+        parameters({"divide"}, {exp_post, tanh_post, exp2_post, expm1_post, i0_post, tan_post}),
         parameters({"sub"}, {log_post, log2_post, log10_post}),
         parameters({"ldexp"}, {erfinv_post, tan_post, floor_post, ceil_post}),
         parameters({"squared_difference"}, {erfinv_post, i0_post}),
@@ -149,7 +149,7 @@ def test_binary_scalar_ops(a_shape, b_shape, ttnn_fn, activations, device):
     lhs, rhs, post = ([getattr(ttnn.UnaryOpType, op) for op in ops] for ops in activations)
     golden_lhs, golden_rhs, golden_post = ((activation_fns[op] for op in ops) for ops in activations)
     # make 0 exclusive for rhs of div
-    min, max = (1, 0) if ttnn_fn == "div" else (0, 1)
+    min, max = (1, 0) if ttnn_fn == "divide" else (0, 1)
 
     a_pt, a_tt = rand_bf16_gen(a_shape, device)
     b_pt, b_tt = rand_bf16_gen(b_shape, device, min=min, max=max)
@@ -197,7 +197,7 @@ activation_with_param_fns = {
         (torch.Size([5, 1, 1, 64]), torch.Size([1, 3, 128, 1])),
     ),
 )
-@pytest.mark.parametrize("ttnn_fn", ("add", "sub", "mul", "div"))
+@pytest.mark.parametrize("ttnn_fn", ("add", "sub", "mul", "divide"))
 @pytest.mark.parametrize(
     "post_activations",
     (
@@ -215,7 +215,7 @@ def test_binary_scalar_ops_with_unary_param(a_shape, b_shape, ttnn_fn, post_acti
     post = [(getattr(ttnn.UnaryOpType, op), param) for op, param in post_activations]
     golden_post = ((lambda x: activation_with_param_fns[op](x, param)) for op, param in post_activations)
     # make 0 exclusive for rhs of div
-    min, max = (1, 0) if ttnn_fn == "div" else (0, 1)
+    min, max = (1, 0) if ttnn_fn == "divide" else (0, 1)
 
     a_pt, a_tt = rand_bf16_gen(a_shape, device)
     b_pt, b_tt = rand_bf16_gen(b_shape, device, min=min, max=max)
@@ -512,7 +512,7 @@ def test_binary_sharded_core_grid(device, a_shape, b_shape, sharded_core_grid, m
         ttnn.add,
         ttnn.sub,
         ttnn.mul,
-        ttnn.div,
+        ttnn.divide,
         ttnn.rsub,
         ttnn.eq,
         ttnn.ne,
@@ -580,7 +580,7 @@ def test_binary_sfpu_ops(input_shapes, dtype, ttnn_fn, device):
         ttnn.add,
         ttnn.sub,
         ttnn.mul,
-        ttnn.div,
+        ttnn.divide,
         ttnn.rsub,
         ttnn.eq,
         ttnn.ne,
@@ -762,7 +762,7 @@ binary_inplace_fns = {
     "add_",
     "sub_",
     "mul_",
-    "div_",
+    "divide_",
     "rsub_",
     "gt_",
     "lt_",
@@ -818,7 +818,7 @@ def test_inplace_binary_ops_with_tensor(a_shape, b_shape, ttnn_fn, activations, 
     ttnn_op = getattr(ttnn, ttnn_fn)
     lhs, rhs, post = ([getattr(ttnn.UnaryOpType, op) for op in ops] for ops in activations)
     golden_lhs, golden_rhs, golden_post = ((activation_fns[op] for op in ops) for ops in activations)
-    min, max = (1, 0) if ttnn_fn == "div_" else (0, 1)
+    min, max = (1, 0) if ttnn_fn == "divide_" else (0, 1)
 
     torch_input_tensor_a, input_tensor_a = rand_bf16_gen(a_shape, device)
     torch_input_tensor_b, input_tensor_b = rand_bf16_gen(b_shape, device, min=min, max=max)
@@ -1010,7 +1010,7 @@ def test_inplace_binary_ops_invalid_bcast(a_shape, b_shape, ttnn_fn, device):
         "add_",
         "sub_",
         "mul_",
-        "div_",
+        "divide_",
         "rsub_",
         "gt_",
         "lt_",
@@ -1241,7 +1241,7 @@ def test_binary_sharded_small_tile(a_shape, b_shape, shard_type, shard_size, cor
         ttnn.add,
         ttnn.sub,
         ttnn.mul,
-        # ttnn.div,
+        # ttnn.divide,
         # ttnn.rsub,
         ttnn.eq,
         ttnn.ne,

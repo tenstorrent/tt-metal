@@ -115,6 +115,7 @@ from ttnn._ttnn.events import (
     MeshEvent,
     record_event,
     wait_for_event,
+    event_synchronize,
 )
 
 from ttnn._ttnn.operations.trace import (
@@ -187,6 +188,14 @@ from ttnn.types import (
     BinaryOpType,
     BcastOpMath,
     BcastOpDim,
+    CBFormatDescriptor,
+    CBDescriptor,
+    ReaderConfigDescriptor,
+    WriterConfigDescriptor,
+    ComputeConfigDescriptor,
+    KernelDescriptor,
+    SemaphoreDescriptor,
+    ProgramDescriptor,
 )
 
 from ttnn.device import (

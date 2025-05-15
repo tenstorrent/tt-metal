@@ -5,7 +5,7 @@
 #include "ttnn/operations/embedding_backward/device/embedding_backward_device_operation.hpp"
 
 #include <tt-metalium/constants.hpp>
-#include "cpp/ttnn/run_operation.hpp"
+#include "ttnn/run_operation.hpp"
 
 using namespace tt::constants;
 using namespace std;
