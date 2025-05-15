@@ -126,9 +126,6 @@ ControlPlane::ControlPlane(const std::string& mesh_graph_desc_file) {
 
     // Initialize the control plane routers based on mesh graph
     this->initialize_from_mesh_graph_desc_file(mesh_graph_desc_file);
-
-    // Printing, only enabled with log_debug
-    this->print_ethernet_channels();
 }
 
 chip_id_t ControlPlane::get_physical_chip_id_from_eth_coord(const eth_coord_t& eth_coord) const {
@@ -374,6 +371,21 @@ void ControlPlane::initialize_from_mesh_graph_desc_file(const std::string& mesh_
         this->logical_mesh_chip_id_to_physical_chip_id_mapping_.push_back(
             this->get_mesh_physical_chip_ids(mesh_ns_size, mesh_ew_size, nw_chip_physical_id));
         this->validate_mesh_connections(0);
+    } else if (mesh_graph_desc_filename == "t3k_split_mesh_graph_descriptor.yaml") {
+        this->logical_mesh_chip_id_to_physical_chip_id_mapping_.push_back({
+            this->get_physical_chip_id_from_eth_coord({0, 0, 0, 0, 0}),
+            this->get_physical_chip_id_from_eth_coord({0, 1, 0, 0, 0}),
+            this->get_physical_chip_id_from_eth_coord({0, 0, 1, 0, 0}),
+            this->get_physical_chip_id_from_eth_coord({0, 1, 1, 0, 0}),
+        });
+        this->logical_mesh_chip_id_to_physical_chip_id_mapping_.push_back({
+            this->get_physical_chip_id_from_eth_coord({0, 2, 0, 0, 0}),
+            this->get_physical_chip_id_from_eth_coord({0, 3, 0, 0, 0}),
+            this->get_physical_chip_id_from_eth_coord({0, 2, 1, 0, 0}),
+            this->get_physical_chip_id_from_eth_coord({0, 3, 1, 0, 0}),
+        });
+        this->validate_mesh_connections(0);
+        this->validate_mesh_connections(1);
     } else if (
         mesh_graph_desc_filename == "t3k_mesh_graph_descriptor.yaml" ||
         mesh_graph_desc_filename == "n150_mesh_graph_descriptor.yaml" ||

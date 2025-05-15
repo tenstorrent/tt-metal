@@ -2,15 +2,15 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "graph_trace_utils.hpp"
+#include "ttnn/graph/graph_trace_utils.hpp"
 
 #include <cstdlib>  // std::strtoul
 #include <string>
 
 #include <nlohmann/json.hpp>
 
-#include "graph_consts.hpp"
-#include "graph_processor.hpp"
+#include "ttnn/graph/graph_consts.hpp"
+#include "ttnn/graph/graph_processor.hpp"
 #include <tt-metalium/assert.hpp>
 
 namespace ttnn::graph {

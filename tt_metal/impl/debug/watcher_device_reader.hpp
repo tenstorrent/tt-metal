@@ -6,7 +6,7 @@
 
 #include <core_coord.hpp>
 // FIXME: ARCH_NAME specific, needed for several pointer types here
-#include <dev_msgs.h>
+#include "dev_msgs.h"
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
