@@ -275,8 +275,13 @@ void generate_edm_kernels_for_ring_or_linear_topology(
         if (is_clockwise_direction_edm_enabled) {
             auto eth_sender_core = topology_config.eth_sender_cores.at(i);
             log_trace(tt::LogOp, "EDM CLOCKWISE KERNEL RT ARGS: ");
-            auto eth_sender_kernel =
-                generate_edm_kernel(program, device, clockwise_edm_builders.at(i), eth_sender_core, sender_noc);
+            auto eth_sender_kernel = generate_edm_kernel(
+                program,
+                device,
+                clockwise_edm_builders.at(i),
+                eth_sender_core,
+                tt::tt_metal::DataMovementProcessor::RISCV_0,
+                sender_noc);
             log_trace(
                 tt::LogOp,
                 "RingIndex: {}. Link {}. Clockwise EDM Core (x={},y={})",
@@ -291,7 +296,12 @@ void generate_edm_kernels_for_ring_or_linear_topology(
             log_trace(tt::LogOp, "EDM COUNTER CLOCKWISE KERNEL RT ARGS: ");
             auto eth_receiver_core = topology_config.eth_receiver_cores.at(i);
             auto eth_receiver_kernel = generate_edm_kernel(
-                program, device, counter_clockwise_edm_builders.at(i), eth_receiver_core, receiver_noc);
+                program,
+                device,
+                counter_clockwise_edm_builders.at(i),
+                eth_receiver_core,
+                tt::tt_metal::DataMovementProcessor::RISCV_0,
+                receiver_noc);
             log_trace(
                 tt::LogOp,
                 "RingIndex: {}. Link {}. Counter-clockwise EDM Core (x={},y={})",
@@ -352,6 +362,7 @@ tt::tt_metal::KernelHandle generate_edm_kernel(
     const IDevice* device,
     const tt::tt_fabric::FabricEriscDatamoverBuilder& edm_builder,
     const CoreCoord& eth_core,
+    const tt::tt_metal::DataMovementProcessor risc_id,
     tt::tt_metal::NOC noc_id) {
     return generate_edm_kernel_impl(
         program,
@@ -359,7 +370,7 @@ tt::tt_metal::KernelHandle generate_edm_kernel(
         edm_builder,
         "tt_metal/fabric/impl/kernels/edm_fabric/fabric_erisc_datamover.cpp",
         eth_core,
-        static_cast<tt::tt_metal::DataMovementProcessor>(edm_builder.risc_id),
+        risc_id,
         noc_id,
         tt::tt_metal::KernelBuildOptLevel::O3);
 }
@@ -369,6 +380,7 @@ tt::tt_metal::KernelHandle generate_edm_kernel(
     const IDevice* device,
     const ccl::EriscDatamoverBuilder& edm_builder,
     const CoreCoord& eth_core,
+    const tt::tt_metal::DataMovementProcessor risc_id,
     tt::tt_metal::NOC noc_id) {
     return generate_edm_kernel_impl(
         program,
@@ -376,7 +388,7 @@ tt::tt_metal::KernelHandle generate_edm_kernel(
         edm_builder,
         "ttnn/cpp/ttnn/operations/ccl/kernels/edm/erisc_datamover.cpp",
         eth_core,
-        tt::tt_metal::DataMovementProcessor::RISCV_0,
+        risc_id,
         noc_id);
 }
 

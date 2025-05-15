@@ -306,14 +306,30 @@ EdmLineFabricOpInterface::EdmLineFabricOpInterface(
             auto& backward_direction_edm = edm_builders_backward_direction.at(device_sequence[i]->id());
 
             for (size_t l = 0; l < num_links; l++) {
+                using namespace tt::tt_metal;
                 if (is_bh) {
-                    forward_direction_edm.at(l).at(0).connect_to_downstream_edm(backward_direction_edm.at(l).at(1));
-                    backward_direction_edm.at(l).at(0).connect_to_downstream_edm(forward_direction_edm.at(l).at(1));
-                    forward_direction_edm.at(l).at(1).connect_to_downstream_edm(backward_direction_edm.at(l).at(0));
-                    backward_direction_edm.at(l).at(1).connect_to_downstream_edm(forward_direction_edm.at(l).at(0));
+                    forward_direction_edm.at(l)
+                        .at((int)DataMovementProcessor::RISCV_0)
+                        .connect_to_downstream_edm(
+                            backward_direction_edm.at(l).at((int)DataMovementProcessor::RISCV_1));
+                    backward_direction_edm.at(l)
+                        .at((int)DataMovementProcessor::RISCV_0)
+                        .connect_to_downstream_edm(forward_direction_edm.at(l).at((int)DataMovementProcessor::RISCV_1));
+                    forward_direction_edm.at(l)
+                        .at((int)DataMovementProcessor::RISCV_1)
+                        .connect_to_downstream_edm(
+                            backward_direction_edm.at(l).at((int)DataMovementProcessor::RISCV_0));
+                    backward_direction_edm.at(l)
+                        .at((int)DataMovementProcessor::RISCV_1)
+                        .connect_to_downstream_edm(forward_direction_edm.at(l).at((int)DataMovementProcessor::RISCV_0));
                 } else {
-                    forward_direction_edm.at(l).at(0).connect_to_downstream_edm(backward_direction_edm.at(l).at(0));
-                    backward_direction_edm.at(l).at(0).connect_to_downstream_edm(forward_direction_edm.at(l).at(0));
+                    forward_direction_edm.at(l)
+                        .at((int)DataMovementProcessor::RISCV_0)
+                        .connect_to_downstream_edm(
+                            backward_direction_edm.at(l).at((int)DataMovementProcessor::RISCV_0));
+                    backward_direction_edm.at(l)
+                        .at((int)DataMovementProcessor::RISCV_0)
+                        .connect_to_downstream_edm(forward_direction_edm.at(l).at((int)DataMovementProcessor::RISCV_0));
                 }
             }
         }
@@ -432,14 +448,30 @@ EdmLineFabricOpInterface::EdmLineFabricOpInterface(
             auto& backward_direction_edm = edm_builders_backward_direction.at(local_device->id());
 
             for (size_t l = 0; l < this->num_links; l++) {
+                using namespace tt::tt_metal;
                 if (is_bh) {
-                    forward_direction_edm.at(l).at(0).connect_to_downstream_edm(backward_direction_edm.at(l).at(1));
-                    backward_direction_edm.at(l).at(0).connect_to_downstream_edm(forward_direction_edm.at(l).at(1));
-                    forward_direction_edm.at(l).at(1).connect_to_downstream_edm(backward_direction_edm.at(l).at(0));
-                    backward_direction_edm.at(l).at(1).connect_to_downstream_edm(forward_direction_edm.at(l).at(0));
+                    forward_direction_edm.at(l)
+                        .at((int)DataMovementProcessor::RISCV_0)
+                        .connect_to_downstream_edm(
+                            backward_direction_edm.at(l).at((int)DataMovementProcessor::RISCV_1));
+                    backward_direction_edm.at(l)
+                        .at((int)DataMovementProcessor::RISCV_0)
+                        .connect_to_downstream_edm(forward_direction_edm.at(l).at((int)DataMovementProcessor::RISCV_1));
+                    forward_direction_edm.at(l)
+                        .at((int)DataMovementProcessor::RISCV_1)
+                        .connect_to_downstream_edm(
+                            backward_direction_edm.at(l).at((int)DataMovementProcessor::RISCV_0));
+                    backward_direction_edm.at(l)
+                        .at((int)DataMovementProcessor::RISCV_1)
+                        .connect_to_downstream_edm(forward_direction_edm.at(l).at((int)DataMovementProcessor::RISCV_0));
                 } else {
-                    forward_direction_edm.at(l).at(0).connect_to_downstream_edm(backward_direction_edm.at(l).at(0));
-                    backward_direction_edm.at(l).at(0).connect_to_downstream_edm(forward_direction_edm.at(l).at(0));
+                    forward_direction_edm.at(l)
+                        .at((int)DataMovementProcessor::RISCV_0)
+                        .connect_to_downstream_edm(
+                            backward_direction_edm.at(l).at((int)DataMovementProcessor::RISCV_0));
+                    backward_direction_edm.at(l)
+                        .at((int)DataMovementProcessor::RISCV_0)
+                        .connect_to_downstream_edm(forward_direction_edm.at(l).at((int)DataMovementProcessor::RISCV_0));
                 }
             }
         }
@@ -518,6 +550,7 @@ void EdmLineFabricOpInterface::build_kernels() const {
                             device,
                             edm_builder_for_risc_core,
                             edm_builder_for_risc_core.my_eth_core_logical,
+                            static_cast<tt::tt_metal::DataMovementProcessor>(edm_builder_for_risc_core.risc_id),
                             tt::tt_metal::NOC::NOC_0);
                     }
                 }
