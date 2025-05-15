@@ -34,7 +34,6 @@ from models.tt_transformers.tt.load_checkpoints import (
 )
 from models.utility_functions import is_blackhole, is_wormhole_b0, nearest_32
 
-
 # file names for performance and accuracy mode override files
 PERFORMANCE_DECODER_CONFIG_FILENAME = "performance_decoder_config.json"
 ACCURACY_DECODER_CONFIG_FILENAME = "accuracy_decoder_config.json"
@@ -348,13 +347,17 @@ def parse_decoder_json(json_file_path, default_optimization=ModelOptimizations.p
         for decoder_id, settings in config_data["decoders"].items():
             decoder_id = int(decoder_id)
 
-            tensor_precision = {
-                TensorGroup[key]: PrecisionSetting[value] for key, value in settings.get("precision_cfg").items()
-            } if "precision_cfg" in settings else default_tensor_dtype_settings
+            tensor_precision = (
+                {TensorGroup[key]: PrecisionSetting[value] for key, value in settings.get("precision_cfg").items()}
+                if "precision_cfg" in settings
+                else default_tensor_dtype_settings
+            )
 
-            op_fidelity = {
-                OpGroup[key]: MathFidelitySetting[value] for key, value in settings.get("fidelity_cfg").items()
-            } if "fidelity_cfg" in settings else default_op_fidelity_settings
+            op_fidelity = (
+                {OpGroup[key]: MathFidelitySetting[value] for key, value in settings.get("fidelity_cfg").items()}
+                if "fidelity_cfg" in settings
+                else default_op_fidelity_settings
+            )
 
             custom_opt = ModelOptimizations({"TensorPrecision": tensor_precision, "OpFidelity": op_fidelity})
             decoders_precision.set_decoder_conf(decoder_id, custom_opt)
@@ -2373,8 +2376,7 @@ class DecodersPrecision:
         decoder_config_path = model_params_dir / "model_params" / model_name / decoder_config_filename
         inst = None
         if decoder_config_path.exists():
-            inst = parse_decoder_json(decoder_config_path,
-                                      default_optimization=optimization_level)
+            inst = parse_decoder_json(decoder_config_path, default_optimization=optimization_level)
             logger.info(
                 f"Model {model_name} requires specific TensorPrecision and OpFidelity configuration, using {decoder_config_path}"
             )
