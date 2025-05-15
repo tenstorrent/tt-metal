@@ -30,7 +30,8 @@ public:
         std::optional<size_t> desired_num_links = std::nullopt,
         bool build_in_worker_connection_mode = false,
         Topology topology = Topology::Linear,
-        bool is_galaxy = false);
+        bool is_galaxy = false,
+        bool is_bh = false);
 
     // Invocable per chip if we want to collectively build the fabric by building this separately per chip
     // (and implicitly building the fabric that way)
@@ -42,7 +43,8 @@ public:
         bool enable_persistent_mode,
         std::optional<size_t> desired_num_links,
         bool build_in_worker_connection_mode = false,
-        Topology topology = Topology::Linear);
+        Topology topology = Topology::Linear,
+        bool is_bh = false);
 
     static EdmLineFabricOpInterface build_program_builder_worker_connection_fabric(
         const std::vector<tt::tt_metal::IDevice*>& device_sequence,
@@ -106,9 +108,11 @@ public:
 
     void set_firmware_context_switch_interval(size_t interval);
 
-    // Device ID -> EDM Builders
-    std::unordered_map<size_t, std::vector<tt::tt_fabric::FabricEriscDatamoverBuilder>> edm_builders_forward_direction;
-    std::unordered_map<size_t, std::vector<tt::tt_fabric::FabricEriscDatamoverBuilder>> edm_builders_backward_direction;
+    // Device ID -> EDM Builders for each eth core for each Risc core
+    std::unordered_map<size_t, std::vector<std::vector<tt::tt_fabric::FabricEriscDatamoverBuilder>>>
+        edm_builders_forward_direction;
+    std::unordered_map<size_t, std::vector<std::vector<tt::tt_fabric::FabricEriscDatamoverBuilder>>>
+        edm_builders_backward_direction;
 
 private:
     // Device ID -> link index

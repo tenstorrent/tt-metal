@@ -310,6 +310,7 @@ tt::tt_metal::KernelHandle generate_edm_kernel_impl(
     const EDMBuilder& edm_builder,
     const std::string& kernel_path,
     const CoreCoord& eth_core,
+    tt::tt_metal::DataMovementProcessor risc_id,
     tt::tt_metal::NOC noc_id,
     std::optional<tt::tt_metal::KernelBuildOptLevel> opt_level = std::nullopt) {
     edm_builder.dump_to_log();
@@ -323,7 +324,8 @@ tt::tt_metal::KernelHandle generate_edm_kernel_impl(
         log_trace(tt::LogOp, "\t{}", s);
     }
 
-    auto kernel_config = tt::tt_metal::EthernetConfig{.noc = noc_id, .compile_args = eth_sender_ct_args};
+    auto kernel_config =
+        tt::tt_metal::EthernetConfig{.noc = noc_id, .processor = risc_id, .compile_args = eth_sender_ct_args};
     if (opt_level.has_value()) {
         kernel_config.opt_level = opt_level.value();
     }
@@ -357,6 +359,7 @@ tt::tt_metal::KernelHandle generate_edm_kernel(
         edm_builder,
         "tt_metal/fabric/impl/kernels/edm_fabric/fabric_erisc_datamover.cpp",
         eth_core,
+        static_cast<tt::tt_metal::DataMovementProcessor>(edm_builder.risc_id),
         noc_id,
         tt::tt_metal::KernelBuildOptLevel::O3);
 }
@@ -368,7 +371,13 @@ tt::tt_metal::KernelHandle generate_edm_kernel(
     const CoreCoord& eth_core,
     tt::tt_metal::NOC noc_id) {
     return generate_edm_kernel_impl(
-        program, device, edm_builder, "ttnn/cpp/ttnn/operations/ccl/kernels/edm/erisc_datamover.cpp", eth_core, noc_id);
+        program,
+        device,
+        edm_builder,
+        "ttnn/cpp/ttnn/operations/ccl/kernels/edm/erisc_datamover.cpp",
+        eth_core,
+        tt::tt_metal::DataMovementProcessor::RISCV_0,
+        noc_id);
 }
 
 ccl::EriscDatamoverBuilder create_erisc_datamover_builder(
