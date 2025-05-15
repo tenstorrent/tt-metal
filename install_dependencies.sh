@@ -260,11 +260,11 @@ install_mpi_uflm(){
     #  * works on Debian/Ubuntu/RHEL/Fedora with either gcc or clang toolchains
     # -----------------------------------------------------------------------------
     set -euo pipefail
-
     OMPI_TAG="v5.0.7"
     SRC_DIR="${HOME}/src/ompi-${OMPI_TAG}"
     #PREFIX="/usr/local"          # change this if you prefer another location
-    PREFIX="/opt/openmpi/5.0.7"
+    #PREFIX="/opt/openmpi/5.0.7"
+    PREFIX="openmpi/5.0.7"
     NPROC=$(nproc)
 
     info() { printf '\033[1;34m==> %s\033[0m\n' "$*"; }
@@ -283,7 +283,7 @@ install_mpi_uflm(){
     # 2. Clone (or refresh) the Open MPI source tree
     # -----------------------------------------------------------------------------
     info "Cloning Open MPI source tree ${OMPI_TAG}…"
-    mkdir -p "$(dirname \"$SRC_DIR\")"
+    mkdir -p "$SRC_DIR"
     if [[ -d "$SRC_DIR" ]]; then
         info "Existing source tree found, refreshing…"
         git -C "$SRC_DIR" fetch --tags origin

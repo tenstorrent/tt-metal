@@ -19,7 +19,8 @@ set(DISTRIBUTED_SRC
 )
 
 add_library(distributed OBJECT ${DISTRIBUTED_SRC})
-set(MPI_ROOT "/opt/openmpi/5.0.7")
+#set(MPI_ROOT "/opt/openmpi/5.0.7")
+set(MPI_ROOT "${TT_METAL_HOME}/openmpi/5.0.7")
 find_package(MPI REQUIRED)
 message(STATUS "MPI_C_INCLUDE_DIRS: ${MPI_C_INCLUDE_DIRS}")
 message(STATUS "MPI_C_LIBRARIES: ${MPI_C_LIBRARIES}")
