@@ -2,10 +2,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "graph_pybind.hpp"
+#include "ttnn/graph/graph_pybind.hpp"
 
-#include "graph_processor.hpp"
-#include "graph_trace_utils.hpp"
+#include "ttnn/graph/graph_processor.hpp"
+#include "ttnn/graph/graph_trace_utils.hpp"
 
 #include "pybind11/stl.h"
 

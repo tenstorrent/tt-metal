@@ -10,7 +10,6 @@
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/circular_buffer_config.hpp>
 #include <tt-metalium/semaphore.hpp>
-#include <tt-metalium/worker_config_buffer.hpp>
 #include <tt-metalium/program_descriptors.hpp>
 
 namespace tt {

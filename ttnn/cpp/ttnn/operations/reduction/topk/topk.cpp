@@ -36,7 +36,8 @@ std::vector<Tensor> post_topk_transform_tensor(
     const uint32_t k,
     const uint32_t adjusted_k,
     const Shape& original_lshape,
-    const MemoryConfig& input_memory_config) {
+    const MemoryConfig& input_memory_config,
+    const CoreRangeSet& sub_core_grids) {
     auto input_shape = input_tensor.get_padded_shape();
     const auto orig_rank = input_shape.rank();
 
@@ -107,6 +108,7 @@ std::vector<Tensor> ExecuteTopK::invoke(
     const bool largest,
     const bool sorted,
     const std::optional<MemoryConfig>& memory_config,
+    const std::optional<CoreRangeSet>& sub_core_grids,
     std::optional<std::tuple<Tensor, Tensor>> optional_output_tensors) {
     ttnn::Shape original_lshape = input_tensor.get_logical_shape();
 
@@ -115,6 +117,8 @@ std::vector<Tensor> ExecuteTopK::invoke(
     const bool is_rank_le_4d = rank <= 4;
 
     auto input_memory_config = memory_config.value_or(input_tensor.memory_config());
+    auto used_sub_core_grids = sub_core_grids.value_or(ttnn::CoreRangeSet(
+        ttnn::CoreRange(ttnn::CoreCoord(0, 0), input_tensor.device()->compute_with_storage_grid_size())));
 
     // K must be a supported shape
     uint32_t adjusted_k = CMAKE_UNIQUE_NAMESPACE::get_nearest_supported_k_value(k);
@@ -127,7 +131,7 @@ std::vector<Tensor> ExecuteTopK::invoke(
         transformed_tensor, largest ? std::numeric_limits<float>::min() : std::numeric_limits<float>::max());
 
     auto output_tensor_vec = tt::tt_metal::operation::run(
-        TopK{adjusted_k, -1, largest, sorted, input_memory_config},
+        TopK{adjusted_k, -1, largest, sorted, input_memory_config, used_sub_core_grids},
         {padded_tensor},
         {},
         optional_output_tensors.has_value()
@@ -143,7 +147,8 @@ std::vector<Tensor> ExecuteTopK::invoke(
         k,
         adjusted_k,
         original_lshape,
-        input_memory_config);
+        input_memory_config,
+        used_sub_core_grids);
 }
 
 }  // namespace ttnn::operations::reduction

@@ -20,7 +20,7 @@
 #include "tt_align.hpp"
 #include "tt_metal/impl/dispatch/device_command.hpp"
 #include "tt_metal/impl/trace/dispatch.hpp"
-#include "worker_config_buffer.hpp"
+#include "dispatch/worker_config_buffer.hpp"
 
 namespace tt::tt_metal::trace_dispatch {
 
