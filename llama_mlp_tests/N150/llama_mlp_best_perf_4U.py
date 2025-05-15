@@ -56,6 +56,207 @@ def create_dram_sharded_mem_config(k, n):
     return ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.DRAM, shard_spec)
 
 
+def gen_w1_pcfg_new(height):
+    if height < 4096:
+        return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+            compute_with_storage_grid_size=(7, 10),
+            in0_block_w=8,
+            out_subblock_h=1,  # Must be divisible by per_core_M
+            out_subblock_w=4,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4
+            per_core_M=max(
+                1, 8 if height >= 2048 else height // TILE_SIZE // 8  # 8 rows
+            ),  # M / TILE_HEIGHT / Grid_Size (dynamic based on seqlen)
+            per_core_N=math.ceil(28672 / 8 / 32 / 7),  # N / TILE_WIDTH / grid width
+            transpose_mcast=False,
+            fused_activation=None,
+            fuse_batch=height <= 2048,
+        )
+
+    if height == 4096:
+        return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+            compute_with_storage_grid_size=(7, 7),
+            in0_block_w=4,
+            out_subblock_h=1,
+            out_subblock_w=8,
+            out_block_h=19,
+            out_block_w=16,
+            per_core_M=19,
+            per_core_N=16,
+            transpose_mcast=False,
+            fused_activation=None,
+            fuse_batch=False,
+        )
+    if height == 6144:
+        return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+            compute_with_storage_grid_size=(7, 7),
+            in0_block_w=4,
+            out_subblock_h=1,
+            out_subblock_w=8,
+            out_block_h=14,
+            out_block_w=16,
+            per_core_M=28,
+            per_core_N=16,
+            transpose_mcast=False,
+            fused_activation=None,
+            fuse_batch=False,
+        )
+    if height == 8192:
+        return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+            compute_with_storage_grid_size=(7, 7),
+            in0_block_w=4,
+            out_subblock_h=1,
+            out_subblock_w=8,
+            out_block_h=19,
+            out_block_w=16,
+            per_core_M=38,
+            per_core_N=16,
+            transpose_mcast=False,
+            fused_activation=None,
+            fuse_batch=False,
+        )
+
+    if height == 10240:
+        return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+            compute_with_storage_grid_size=(7, 7),
+            in0_block_w=4,
+            out_subblock_h=1,
+            out_subblock_w=8,
+            out_block_h=12,
+            out_block_w=16,
+            per_core_M=48,
+            per_core_N=16,
+            transpose_mcast=False,
+            fused_activation=None,
+            fuse_batch=False,
+        )
+    if height == 12288:
+        return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+            compute_with_storage_grid_size=(7, 7),
+            in0_block_w=4,
+            out_subblock_h=1,
+            out_subblock_w=8,
+            out_block_h=14,
+            out_block_w=16,
+            per_core_M=56,
+            per_core_N=16,
+            transpose_mcast=False,
+            fused_activation=None,
+            fuse_batch=False,
+        )
+    if height == 14336:
+        return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+            compute_with_storage_grid_size=(7, 7),
+            in0_block_w=4,
+            out_subblock_h=1,
+            out_subblock_w=8,
+            out_block_h=16,
+            out_block_w=16,
+            per_core_M=64,
+            per_core_N=16,
+            transpose_mcast=False,
+            fused_activation=None,
+            fuse_batch=False,
+        )
+    if height == 16384:
+        return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+            compute_with_storage_grid_size=(7, 7),
+            in0_block_w=4,
+            out_subblock_h=1,
+            out_subblock_w=8,
+            out_block_h=15,
+            out_block_w=16,
+            per_core_M=75,
+            per_core_N=16,
+            transpose_mcast=False,
+            fused_activation=None,
+            fuse_batch=False,
+        )
+    if height == 24576:
+        return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+            compute_with_storage_grid_size=(7, 7),
+            in0_block_w=4,
+            out_subblock_h=1,
+            out_subblock_w=8,
+            out_block_h=16,
+            out_block_w=16,
+            per_core_M=112,
+            per_core_N=16,
+            transpose_mcast=False,
+            fused_activation=None,
+            fuse_batch=False,
+        )
+    if height == 32768:
+        return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+            compute_with_storage_grid_size=(7, 7),
+            in0_block_w=4,
+            out_subblock_h=1,
+            out_subblock_w=8,
+            out_block_h=15,
+            out_block_w=16,
+            per_core_M=150,
+            per_core_N=16,
+            transpose_mcast=False,
+            fused_activation=None,
+            fuse_batch=False,
+        )
+    if height == 51200:
+        return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+            compute_with_storage_grid_size=(7, 7),
+            in0_block_w=4,
+            out_subblock_h=1,
+            out_subblock_w=8,
+            out_block_h=10,
+            out_block_w=16,
+            per_core_M=230,
+            per_core_N=16,
+            transpose_mcast=False,
+            fused_activation=None,
+            fuse_batch=False,
+        )
+    if height == 65536:
+        return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+            compute_with_storage_grid_size=(7, 7),
+            in0_block_w=4,
+            out_subblock_h=1,
+            out_subblock_w=8,
+            out_block_h=15,
+            out_block_w=16,
+            per_core_M=300,
+            per_core_N=16,
+            transpose_mcast=False,
+            fused_activation=None,
+            fuse_batch=False,
+        )
+    if height == 86016:
+        return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+            compute_with_storage_grid_size=(7, 7),
+            in0_block_w=4,
+            out_subblock_h=1,
+            out_subblock_w=8,
+            out_block_h=12,
+            out_block_w=16,
+            per_core_M=384,
+            per_core_N=16,
+            transpose_mcast=False,
+            fused_activation=None,
+            fuse_batch=False,
+        )
+    if height == 131072:
+        return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+            compute_with_storage_grid_size=(7, 7),
+            in0_block_w=4,
+            out_subblock_h=1,
+            out_subblock_w=8,
+            out_block_h=16,
+            out_block_w=16,
+            per_core_M=592,
+            per_core_N=16,
+            transpose_mcast=False,
+            fused_activation=None,
+            fuse_batch=False,
+        )
+
+
 @pytest.mark.parametrize(
     "device_params",
     [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL}],
@@ -70,7 +271,8 @@ def create_dram_sharded_mem_config(k, n):
 ###################################################################################
 def test_w1(device, seq_len):
     activations = (
-        torch.randn((1, seq_len // 1024, 1024, 2048)) if (seq_len >= 1024) else torch.randn((1, 1, seq_len, 2048))
+        # torch.randn((1, seq_len // 1024, 1024, 2048)) if (seq_len >= 1024) else torch.randn((1, 1, seq_len, 2048))
+        torch.randn((1, 1, seq_len, 2048))
     )
     w1 = torch.randn((1, 1, 2048, 3584))
 
@@ -87,7 +289,8 @@ def test_w1(device, seq_len):
         w1,
         device=device,
         dtype=ttnn.bfloat4_b,
-        memory_config=create_dram_sharded_mem_config(2048, 3584),
+        # memory_config=create_dram_sharded_mem_config(2048, 3584),
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
         layout=ttnn.TILE_LAYOUT,
     )
 
@@ -101,7 +304,7 @@ def test_w1(device, seq_len):
             packer_l1_acc=True,
             dst_full_sync_en=True,
         ),
-        program_config=generate_w1_w3_program_config(seq_len),
+        program_config=gen_w1_pcfg_new(seq_len),
         dtype=ttnn.bfloat8_b,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
@@ -125,7 +328,15 @@ def gen_w2_pcfg_new(height):
             fuse_batch=height <= 2048,
         )
 
-    per_core_M = math.ceil(height / 224)
+    # For very large activation heights (arbitrarily chosen to be > 320) we want the per_core_M to have many divisors
+    # so that there are many options for out_block_h and out_block_w. Padding to the next multiple of 8 ensures that
+    # per_core_M can at least be divisible by 2, 4, and 8 in addition to 1 and itself.
+    #
+    # If the number is less than or equal to 320 we still wouldn't want it to be prime so we'll add one if thats the case.
+    next_multiple_of_8 = lambda x: int(x + (8 - x % 8) % 8)
+    add_one_if_prime = lambda n: n + 1 if n > 1 and all(n % i != 0 for i in range(2, int(n**0.5) + 1)) else n
+    total_per_core_out_M = add_one_if_prime(math.ceil(height / (7 * TILE_SIZE)))
+    per_core_M = next_multiple_of_8(total_per_core_out_M) if total_per_core_out_M > 320 else total_per_core_out_M
     per_core_N = 10
 
     # Want out_block_h and out_block_w such that:
@@ -180,7 +391,7 @@ def gen_w2_pcfg_new(height):
         else:
             out_block_w = 10
             out_block_h = out_block_h_if_w_10
-
+    # breakpoint()
     return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
         compute_with_storage_grid_size=(7, 7),
         in0_block_w=4,
@@ -250,15 +461,17 @@ def largest_divisor_less_than_y(x, y):
     SEQ_LENS,
 )
 def test_w2(device, seq_len):
-    activations = torch.randn(
-        (
-            1,
-            1,
-            seq_len // largest_divisor_less_than_y(seq_len, 16384),
-            largest_divisor_less_than_y(seq_len, 16384),
-            3584,
-        )
-    )
+    # activations = torch.randn(
+    #     (
+    #         1,
+    #         1,
+    #         seq_len // largest_divisor_less_than_y(seq_len, 16384),
+    #         largest_divisor_less_than_y(seq_len, 16384),
+    #         3584,
+    #     )
+    # )
+
+    activations = torch.randn(1, 1, seq_len, 3584)
 
     w2 = torch.randn((1, 1, 3584, 2048))
 
