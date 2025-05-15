@@ -110,6 +110,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_convert_to_hwc(const Te
         output_stride_sticks,
         0,
         is_input_in_dram,
+        true,
         dram_write_stride_bytes,
         dram_read_stride_bytes,
         total_num_sticks_kernel_0};
@@ -124,6 +125,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_convert_to_hwc(const Te
         output_stride_sticks,
         output_stride_sticks,
         is_input_in_dram,
+        false,
         dram_write_stride_bytes,
         dram_read_stride_bytes,
         total_num_sticks_kernel_1};

@@ -52,10 +52,11 @@ void kernel_main() {
 
     static_assert(hw % TILE_SIZE == 0, "Shard width must be multiple of tile width");
 
-    constexpr uint32_t is_input_in_dram = get_compile_time_arg_val(8);
-    constexpr uint32_t dram_write_stride_bytes = get_compile_time_arg_val(9);
-    constexpr uint32_t dram_read_stride_bytes = get_compile_time_arg_val(10);
-    constexpr uint32_t input_sticks_per_core = get_compile_time_arg_val(11);
+    constexpr bool is_input_in_dram = get_compile_time_arg_val(8);
+    constexpr bool should_wait = get_compile_time_arg_val(9);
+    constexpr uint32_t dram_write_stride_bytes = get_compile_time_arg_val(10);
+    constexpr uint32_t dram_read_stride_bytes = get_compile_time_arg_val(11);
+    constexpr uint32_t input_sticks_per_core = get_compile_time_arg_val(12);
 
     if constexpr (is_input_in_dram) {
         const uint32_t dram_base_read_addr = get_arg_val<uint32_t>(0);
@@ -71,8 +72,12 @@ void kernel_main() {
                 copy_size, get_write_ptr(cb_in), write_offset, bank_id, dram_base_read_addr, read_offset);
         }
         noc_async_read_barrier();
-        cb_push_back(cb_in, channels);  // FIXME: We should be able to push 'input_sticks_per_core' here but due to a
-                                        // race when using the same CB from two writers it will occaionsally hang
+
+        // One writer must wait until the other has pushed to avoid a race that will trigger a hang
+        if constexpr (should_wait) {
+            cb_wait_front(cb_in, input_sticks_per_core);
+        }
+        cb_push_back(cb_in, input_sticks_per_core);
     }
 
     constexpr uint32_t channel_size = channels * ELEMENT_SIZE_BYTES;
