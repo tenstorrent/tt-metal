@@ -151,10 +151,10 @@ def test_binary_fmod_bf16_fp32_check(
     device,
     testing_dtype,
 ):
-    torch_input_tensor_a = generate_torch_tensor([64, 640], -1000, 100, step=0.56, dtype=getattr(torch, testing_dtype))
-    torch_input_tensor_b = generate_torch_tensor([64, 640], -100, 1000, step=0.99, dtype=getattr(torch, testing_dtype))
+    torch_input_tensor_a = generate_torch_tensor([1, 3], -1000, 100, step=900, dtype=getattr(torch, testing_dtype))
+    torch_input_tensor_b = torch.full([1, 3], 0.0, dtype=getattr(torch, testing_dtype))
     torch_output_tensor = torch.fmod(torch_input_tensor_a, torch_input_tensor_b)
-    print("Torch inputs : \n", torch_input_tensor_a, torch_input_tensor_b)
+    print("Torch inputs : \nA : \t\t\t\t", torch_input_tensor_a, "\nB : \t\t\t\t", torch_input_tensor_b)
 
     input_tensor_a = ttnn.from_torch(
         torch_input_tensor_a, dtype=getattr(ttnn, testing_dtype), layout=ttnn.TILE_LAYOUT, device=device
@@ -162,6 +162,7 @@ def test_binary_fmod_bf16_fp32_check(
     input_tensor_b = ttnn.from_torch(
         torch_input_tensor_b, dtype=getattr(ttnn, testing_dtype), layout=ttnn.TILE_LAYOUT, device=device
     )
+    print("Torch inputs : \nA : \t\t\t\t", input_tensor_a, "\nB : \t\t\t\t", input_tensor_b)
     output = ttnn.fmod(input_tensor_a, input_tensor_b)
     output = ttnn.to_torch(output)
     print("Torch Result vs TT Result :\n", torch_output_tensor, output)
