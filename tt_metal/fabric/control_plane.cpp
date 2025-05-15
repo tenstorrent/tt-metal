@@ -37,6 +37,7 @@
 #include <umd/device/tt_xy_pair.h>
 #include <umd/device/types/cluster_descriptor_types.h>
 #include <umd/device/types/xy_pair.h>
+#include "tt_metal/fabric/fabric_context.hpp"
 
 namespace tt::tt_fabric {
 
@@ -1023,5 +1024,19 @@ void ControlPlane::set_routing_mode(uint16_t mode) {
 }
 
 uint16_t ControlPlane::get_routing_mode() const { return this->routing_mode_; }
+
+void ControlPlane::initialize_fabric_context(tt_metal::FabricConfig fabric_config) {
+    TT_FATAL(this->fabric_context_ == nullptr, "Trying to re-initialize fabric context");
+    this->fabric_context_ = std::make_unique<FabricContext>(fabric_config);
+}
+
+FabricContext& ControlPlane::get_fabric_context() const {
+    TT_FATAL(this->fabric_context_ != nullptr, "Trying to get un-initialized fabric context");
+    return *this->fabric_context_.get();
+}
+
+void ControlPlane::clear_fabric_context() { this->fabric_context_.reset(nullptr); }
+
+ControlPlane::~ControlPlane() = default;
 
 }  // namespace tt::tt_fabric
