@@ -47,9 +47,6 @@ def test_mse_loss(device, input_shapes, loss_mode):
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
 
-    if loss_mode[0] != "none":
-        output_tensor = output_tensor[0, 0, 0, 0]
-
     assert_with_pcc(torch_output_tensor, output_tensor, 0.9999)
 
 
@@ -88,8 +85,5 @@ def test_l1_loss(device, input_shapes, loss_mode):
     output_tensor = ttnn.l1_loss(input_tensor_a, input_tensor_b, reduction=loss_mode[1])
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
-
-    if loss_mode[0] != "none":
-        output_tensor = output_tensor[0, 0, 0, 0]
 
     assert_with_pcc(torch_output_tensor, output_tensor, 0.9999)
