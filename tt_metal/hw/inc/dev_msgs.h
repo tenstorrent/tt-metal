@@ -52,6 +52,7 @@ static constexpr uint32_t PROFILER_RISC_COUNT = 5;
 constexpr uint32_t RUN_MSG_INIT = 0x40;
 constexpr uint32_t RUN_MSG_GO = 0x80;
 constexpr uint32_t RUN_MSG_RESET_READ_PTR = 0xc0;
+constexpr uint32_t RUN_MSG_RESET_READ_PTR_FROM_HOST = 0xe0;
 constexpr uint32_t RUN_MSG_DONE = 0;
 
 // 0x80808000 is a micro-optimization, calculated with 1 riscv insn
