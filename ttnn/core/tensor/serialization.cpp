@@ -18,8 +18,8 @@
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/distributed/types.hpp"
-#include "ttnn/tensor/flatbuffer/tensor_types_from_flatbuffer.hpp"
-#include "ttnn/tensor/flatbuffer/tensor_types_to_flatbuffer.hpp"
+#include "tensor/flatbuffer/tensor_types_from_flatbuffer.hpp"
+#include "tensor/flatbuffer/tensor_types_to_flatbuffer.hpp"
 
 namespace tt::tt_metal {
 
