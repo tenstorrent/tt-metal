@@ -757,7 +757,12 @@ void RunTestUnicastConnAPI(BaseFabricFixture* fixture, uint32_t num_hops, Routin
     EXPECT_EQ(sender_bytes, receiver_bytes);
 }
 
-void RunTestMCastConnAPI(BaseFabricFixture* fixture) {
+void RunTestMCastConnAPI(
+    BaseFabricFixture* fixture,
+    RoutingDirection fwd_dir,
+    uint32_t fwd_hops,
+    RoutingDirection bwd_dir,
+    uint32_t bwd_hops) {
     CoreCoord sender_logical_core = {0, 0};
     CoreCoord receiver_logical_core = {1, 0};
 
@@ -777,29 +782,56 @@ void RunTestMCastConnAPI(BaseFabricFixture* fixture) {
         GTEST_SKIP() << "No mesh found for 3 chip mcast test";
     }
 
-    chip_id_t src_chip_id = 1;
-    chip_id_t left_chip_id = 0;
-    chip_id_t right_chip_id = 2;
-    // for this test, logical chip id 1 is the sender, 0 is the left receiver and 1 is the right receiver
-    auto src_phys_chip_id =
-        control_plane->get_physical_chip_id_from_mesh_chip_id(std::make_pair(mesh_id.value(), src_chip_id));
-    auto left_recv_phys_chip_id =
-        control_plane->get_physical_chip_id_from_mesh_chip_id(std::make_pair(mesh_id.value(), left_chip_id));
-    auto right_recv_phys_chip_id =
-        control_plane->get_physical_chip_id_from_mesh_chip_id(std::make_pair(mesh_id.value(), right_chip_id));
+    // Find a device num_hops away in specified direction.
+    std::pair<mesh_id_t, chip_id_t> src_mesh_chip_id;
+    std::unordered_map<RoutingDirection, uint32_t> fabric_hops;
+    std::unordered_map<RoutingDirection, std::vector<std::pair<mesh_id_t, chip_id_t>>> end_mesh_chip_ids_by_dir;
+    chip_id_t src_phys_chip_id;
+    std::unordered_map<RoutingDirection, std::vector<chip_id_t>> physical_end_device_ids_by_dir;
+    fabric_hops[fwd_dir] = fwd_hops;
+    fabric_hops[bwd_dir] = bwd_hops;
+
+    tt::tt_metal::distributed::MeshShape mesh_shape;
+    const auto topology = control_plane->get_fabric_context().get_fabric_topology();
+    uint32_t is_2d_fabric = topology == Topology::Mesh;
+
+    // Get the mcast sender device and mcast receiver devices that satisfy the input number of hops in forward and
+    // backward directions.
+    if (!find_device_with_neighbor_in_multi_direction(
+            fixture,
+            src_mesh_chip_id,
+            end_mesh_chip_ids_by_dir,
+            src_phys_chip_id,
+            physical_end_device_ids_by_dir,
+            fabric_hops)) {
+        log_info(
+            tt::LogTest,
+            "No Mcast destinations found for {} hops in {} and {} hops in {}",
+            fwd_hops,
+            fwd_dir,
+            bwd_hops,
+            bwd_dir);
+        GTEST_SKIP() << "Skipping Test";
+    }
+
+    mesh_shape = control_plane->get_physical_mesh_shape(src_mesh_chip_id.first);
+    auto left_recv_phys_chip_id = physical_end_device_ids_by_dir[fwd_dir][fwd_hops - 1];
+    auto left_first_hop_phys_chip_id = physical_end_device_ids_by_dir[fwd_dir][0];
+    auto right_recv_phys_chip_id = physical_end_device_ids_by_dir[bwd_dir][bwd_hops - 1];
+    auto right_first_hop_phys_chip_id = physical_end_device_ids_by_dir[bwd_dir][0];
 
     auto* sender_device = DevicePool::instance().get_active_device(src_phys_chip_id);
     auto* left_recv_device = DevicePool::instance().get_active_device(left_recv_phys_chip_id);
     auto* right_recv_device = DevicePool::instance().get_active_device(right_recv_phys_chip_id);
+
+    auto left_mesh_chip_id = end_mesh_chip_ids_by_dir[fwd_dir][fwd_hops - 1];
+    auto right_mesh_chip_id = end_mesh_chip_ids_by_dir[bwd_dir][bwd_hops - 1];
 
     CoreCoord sender_virtual_core = sender_device->worker_core_from_logical_core(sender_logical_core);
     CoreCoord receiver_virtual_core = left_recv_device->worker_core_from_logical_core(receiver_logical_core);
 
     auto receiver_noc_encoding =
         tt::tt_metal::MetalContext::instance().hal().noc_xy_encoding(receiver_virtual_core.x, receiver_virtual_core.y);
-
-    const auto topology = control_plane->get_fabric_context().get_fabric_topology();
-    uint32_t is_2d_fabric = topology == Topology::Mesh;
 
     // test parameters
     auto worker_mem_map = generate_worker_mem_map(sender_device, topology);
@@ -834,10 +866,14 @@ void RunTestMCastConnAPI(BaseFabricFixture* fixture) {
             .compile_args = compile_time_args,
             .defines = defines});
 
-    auto mesh_shape = control_plane->get_physical_mesh_shape(mesh_id.value());
     tt::log_info(tt::LogTest, "mesh dimensions {:x}", mesh_shape.dims());
     tt::log_info(tt::LogTest, "mesh dimension 0 {:x}", mesh_shape[0]);
     tt::log_info(tt::LogTest, "mesh dimension 1 {:x}", mesh_shape[1]);
+    tt::log_info(tt::LogTest, "Mcast Src MeshId {} ChipId {}", src_mesh_chip_id.first, src_mesh_chip_id.second);
+    tt::log_info(tt::LogTest, "Mcast Fwd Dst MeshId {} ChipId {}", left_mesh_chip_id.first, left_mesh_chip_id.second);
+    tt::log_info(tt::LogTest, "Mcast Fwd Dst Device is {} hops in direction: {}", fwd_hops, fwd_dir);
+    tt::log_info(tt::LogTest, "Mcast Bwd Dst MeshId {} ChipId {}", right_mesh_chip_id.first, right_mesh_chip_id.second);
+    tt::log_info(tt::LogTest, "Mcast Bwd Dst Device is {} hops in direction: {}", bwd_hops, bwd_dir);
 
     std::vector<uint32_t> sender_runtime_args = {
         worker_mem_map.packet_header_address,
@@ -847,19 +883,19 @@ void RunTestMCastConnAPI(BaseFabricFixture* fixture) {
         receiver_noc_encoding,
         time_seed,
         mesh_shape[1],
-        src_chip_id,
-        left_chip_id,
+        src_mesh_chip_id.second,
+        left_mesh_chip_id.second,
         mesh_id.value(),
-        1, /* mcast_fwd_hops */
+        fwd_hops, /* mcast_fwd_hops */
     };
 
     // append the EDM connection rt args for fwd connection
     append_fabric_connection_rt_args(
-        src_phys_chip_id, right_recv_phys_chip_id, 0, sender_program, {sender_logical_core}, sender_runtime_args);
-    sender_runtime_args.push_back(right_chip_id);
-    sender_runtime_args.push_back(1); /* mcast_bwd_hops */
+        src_phys_chip_id, left_first_hop_phys_chip_id, 0, sender_program, {sender_logical_core}, sender_runtime_args);
+    sender_runtime_args.push_back(right_mesh_chip_id.second);
+    sender_runtime_args.push_back(bwd_hops); /* mcast_bwd_hops */
     append_fabric_connection_rt_args(
-        src_phys_chip_id, left_recv_phys_chip_id, 0, sender_program, {sender_logical_core}, sender_runtime_args);
+        src_phys_chip_id, right_first_hop_phys_chip_id, 0, sender_program, {sender_logical_core}, sender_runtime_args);
 
     tt_metal::SetRuntimeArgs(sender_program, sender_kernel, sender_logical_core, sender_runtime_args);
 
