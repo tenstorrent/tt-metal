@@ -24,11 +24,12 @@ namespace tt::tt_fabric {
 bool is_tt_fabric_config(tt::tt_metal::FabricConfig fabric_config) {
     return fabric_config == tt::tt_metal::FabricConfig::FABRIC_1D ||
            fabric_config == tt::tt_metal::FabricConfig::FABRIC_1D_RING ||
-           fabric_config == tt::tt_metal::FabricConfig::FABRIC_2D_PUSH;
+           fabric_config == tt::tt_metal::FabricConfig::FABRIC_2D_PUSH ||
+           fabric_config == tt::tt_metal::FabricConfig::FABRIC_2D_TORUS;
 }
 
 bool is_2d_fabric_config(tt::tt_metal::FabricConfig fabric_config) {
-    return fabric_config == tt::tt_metal::FabricConfig::FABRIC_2D ||
+    return fabric_config == tt::tt_metal::FabricConfig::FABRIC_2D_TORUS ||
            fabric_config == tt::tt_metal::FabricConfig::FABRIC_2D_PUSH;
 }
 

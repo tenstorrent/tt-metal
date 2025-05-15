@@ -276,7 +276,9 @@ class T3000MeshDevice2DFabricFixture : public MeshDeviceFixtureBase {
 protected:
     T3000MeshDevice2DFabricFixture() :
         MeshDeviceFixtureBase(Config{
-            .mesh_device_types = {MeshDeviceType::T3000}, .num_cqs = 1, .fabric_config = FabricConfig::FABRIC_2D}) {}
+            .mesh_device_types = {MeshDeviceType::T3000},
+            .num_cqs = 1,
+            .fabric_config = FabricConfig::FABRIC_2D_PUSH}) {}
 };
 
 }  // namespace tt::tt_metal
