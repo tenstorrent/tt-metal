@@ -47,7 +47,10 @@ public:
     const DispatchMemMap& dispatch_mem_map(const CoreType& core_type) const;  // DispatchMemMap for specific core type.
 
     void initialize(
-        const DispatchCoreConfig& dispatch_core_config, uint8_t num_hw_cqs, const BankMapping& l1_bank_remap);
+        const DispatchCoreConfig& dispatch_core_config,
+        uint8_t num_hw_cqs,
+        const BankMapping& l1_bank_remap,
+        bool minimal = false);
 
 private:
     friend class tt::stl::Indestructible<MetalContext>;

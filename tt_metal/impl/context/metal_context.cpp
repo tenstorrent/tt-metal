@@ -19,7 +19,10 @@
 namespace tt::tt_metal {
 
 void MetalContext::initialize(
-    const DispatchCoreConfig& dispatch_core_config, uint8_t num_hw_cqs, const BankMapping& l1_bank_remap) {
+    const DispatchCoreConfig& dispatch_core_config,
+    uint8_t num_hw_cqs,
+    const BankMapping& l1_bank_remap,
+    bool minimal) {
     // Settings that affect FW build can also trigger a re-initialization
     auto fw_compile_hash = std::hash<std::string>{}(rtoptions_.get_compile_hash_string());
     if (initialized_) {
@@ -48,6 +51,11 @@ void MetalContext::initialize(
         std::make_unique<DispatchMemMap>(CoreType::WORKER, num_hw_cqs);
     dispatch_mem_map_[magic_enum::enum_integer(CoreType::ETH)] =
         std::make_unique<DispatchMemMap>(CoreType::ETH, num_hw_cqs);
+
+    // Minimal setup, don't initialize FW/Dispatch/etc.
+    if (minimal) {
+        return;
+    }
 
     // TODO: Move FW, fabric, dispatch init here
     auto all_devices = cluster_->all_chip_ids();
@@ -79,6 +87,32 @@ void MetalContext::initialize(
         // clear_launch_messages_on_eth_cores(device_id);
     }
 
+    // Populate FD topology across all devices
+    if (rtoptions_.get_fast_dispatch()) {
+        std::set<chip_id_t> all_devices_set(all_devices.begin(), all_devices.end());
+        // TODO: enable this when dispatch init/teardown moves to MetalContext
+        // populate_fd_kernels(all_devices_set, num_hw_cqs);
+    }
+
+    // Initialize debug tools, reset cores, init FW
+    for (chip_id_t device_id : all_devices) {
+        // Init debug tools
+        ClearNocData(device_id);
+        DprintServerAttach(device_id);
+        watcher_init(device_id);
+
+        // TODO: as optimization, investigate removing all this call for already initialized devivces
+        if (!tt_metal::MetalContext::instance().rtoptions().get_skip_reset_cores_on_init()) {
+            // reset_cores();
+        }
+
+        // initialize_and_launch_firmware(device_id);
+
+        // Watcher needs to init before FW since FW needs watcher mailboxes to be set up, and needs to attach after FW
+        // starts since it also writes to watcher mailboxes.
+        // watcher_attach(device_id);
+    }
+
     // Register teardown function, but only once.
     if (not teardown_registered_) {
         std::atexit([]() { MetalContext::instance().teardown(); });
@@ -88,6 +122,15 @@ void MetalContext::initialize(
 
 void MetalContext::teardown() {
     initialized_ = false;
+
+    auto all_devices = cluster_->all_chip_ids();
+    for (chip_id_t device_id : all_devices) {
+        DprintServerDetach(device_id);
+        // watcher_detach(device_id);
+        // Assert cores
+
+        cluster_->l1_barrier(device_id);
+    }
 
     for (auto& mem_map : dispatch_mem_map_) {
         if (mem_map) {

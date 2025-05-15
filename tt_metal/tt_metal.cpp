@@ -987,7 +987,7 @@ IDevice* CreateDevice(
 IDevice* CreateDeviceMinimal(
     chip_id_t device_id, const uint8_t num_hw_cqs, const DispatchCoreConfig& dispatch_core_config) {
     ZoneScoped;
-    tt::tt_metal::MetalContext::instance().initialize(dispatch_core_config, num_hw_cqs, {});
+    tt::tt_metal::MetalContext::instance().initialize(dispatch_core_config, num_hw_cqs, {}, true);
     auto dev = new Device(device_id, num_hw_cqs, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, {}, true);
     tt::tt_metal::MetalContext::instance().get_cluster().set_internal_routing_info_for_ethernet_cores(true);
     return dev;
