@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "tt_metal/api/tt-metalium/fabric_edm_packet_header.hpp"
-#include "ttnn/cpp/ttnn/operations/ccl/common/interpreter_backends/kernel_common/noc_addr.hpp"
 #include "dataflow_api.h"
 #include "tt_metal/fabric/hw/inc/edm_fabric/edm_fabric_worker_adapters.hpp"
 
@@ -86,7 +85,7 @@ void kernel_main() {
     tt::tt_fabric::ChipSendType chip_send_type = CHIP_UNICAST;
 
     setup_packet_header(pkt_hdr_fwd, num_fwd_hops, chip_send_type);
-    auto noc0_dest_addr_fwd = safe_get_noc_addr(
+    auto noc0_dest_addr_fwd = get_noc_addr(
         static_cast<uint8_t>(fabric_write_dest_noc_x),
         static_cast<uint8_t>(fabric_write_dest_noc_y),
         fabric_write_dest_bank_addr,
