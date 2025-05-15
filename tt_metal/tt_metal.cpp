@@ -9,7 +9,6 @@
 #include <device_impl.hpp>
 #include <device_pool.hpp>
 #include <global_circular_buffer.hpp>
-#include <global_circular_buffer_impl.hpp>
 #include <global_semaphore.hpp>
 #include <host_api.hpp>
 #include <kernel.hpp>
