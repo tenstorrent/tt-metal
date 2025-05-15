@@ -267,11 +267,11 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(std::size_t channel_buffe
         std::accumulate(
             this->sender_channels_size_bytes.begin(),
             this->sender_channels_size_bytes.begin() + this->num_used_sender_channels,
-            0) +
+            0ul) +
                 std::accumulate(
                     this->receiver_channels_size_bytes.begin(),
                     this->receiver_channels_size_bytes.begin() + this->num_used_receiver_channels,
-                    0) <=
+                    0ul) <=
             this->available_channel_buffering_space,
         "Internal error when computing channel sizes. Total channel size exceeds available space");
     TT_FATAL(
