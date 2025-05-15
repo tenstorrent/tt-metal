@@ -245,7 +245,7 @@ install_sfpi() {
 }
 
 install_mpi_uflm(){
-
+    apt-get install -y --no-install-recommends curl
     DEB_URL="https://github.com/dmakoviichuk-tt/mpi-ulfm/releases/download/v5.0.7-ulfm/openmpi-ulfm_5.0.7-1_amd64.deb"
     DEB_FILE="$(basename "$DEB_URL")"
 
