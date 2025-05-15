@@ -2221,7 +2221,7 @@ std::vector<ttnn::TensorSpec> Matmul::compute_output_specs(
                         output_shape,
                         TensorLayout(
                             output_dtype.value(),
-                            this->untilize_out ? PageConfig(Layout::ROW_MAJOR) : PageConfig(output_layout, output_tile),
+                            this->untilize_out ? PageConfig(output_layout) : PageConfig(output_layout, output_tile),
                             mem_config));
                     std::vector<ttnn::TensorSpec> output_tensor_specs(input_tensors.size() - 1, tensor_spec);
                     return output_tensor_specs;

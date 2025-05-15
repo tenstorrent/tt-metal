@@ -203,7 +203,7 @@ Tensor MatmulOperation::invoke(
             memory_config.has_value() ? memory_config.value() : ttnn::DRAM_MEMORY_CONFIG,
             dtype,
             compute_kernel_config,
-            /*untilize_out=*/untilize_out,
+            untilize_out,
             user_core_coord,
             get_fused_activation(activation),
             user_run_batched,
