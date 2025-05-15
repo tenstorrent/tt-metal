@@ -33,7 +33,7 @@ body:
   - type: dropdown
     id: is_nd
     attributes:
-      label: "Is this a Non-Deterministic (ND) failure?"
+      label: "Non-Deterministic (ND) failure?"
       options:
         - "Yes"
         - "No"
@@ -43,20 +43,11 @@ body:
   - type: dropdown
     id: hang
     attributes:
-      label: "Is this a hang?"
+      label: "Failure type"
       options:
-        - "Yes"
-        - "No"
-    validations:
-      required: true
-
-  - type: dropdown
-    id: timeout
-    attributes:
-      label: "Is this a timeout?"
-      options:
-        - "Yes"
-        - "No"
+        - "Hang"
+        - "Timeout"
+        - "Other"
     validations:
       required: true
 
