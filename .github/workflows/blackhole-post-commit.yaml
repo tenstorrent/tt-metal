@@ -151,6 +151,17 @@ jobs:
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
 
+  ttnn-unit-tests:
+    needs: build-artifact
+    secrets: inherit
+    uses: ./.github/workflows/ttnn-post-commit.yaml
+    with:
+      arch: blackhole
+      runner-label: ${{ inputs.runner-label || 'BH' }}
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+
   ttnn-stress-tests:
     needs: build-artifact
     secrets: inherit
