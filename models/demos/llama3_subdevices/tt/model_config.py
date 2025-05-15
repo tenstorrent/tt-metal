@@ -725,6 +725,7 @@ class TtModelArgs:
             )
 
             def w2_prg_config(activation_height):
+                # For sequence lengths < 4096, we use this config as it performs better that what would be generated below
                 if activation_height < 4096:
                     return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
                         compute_with_storage_grid_size=(7, 10),
@@ -740,8 +741,19 @@ class TtModelArgs:
                         fuse_batch=activation_height <= 2048,
                     )
 
-                # Using 224 to decide per_core_M as 224 = TILE_SIZE * core_grid_y. core_grid_y = 7
-                per_core_M = math.ceil(activation_height / 224)
+                # For very large activation heights (arbitrarily chosen to be > 320) we want the per_core_M to have many divisors
+                # so that there are many options for out_block_h and out_block_w. Padding to the next multiple of 8 ensures that
+                # per_core_M can at least be divisible by 2, 4, and 8 in addition to 1 and itself.
+                #
+                # If the number is less than or equal to 320 we still wouldn't want it to be prime so we'll add one if thats the case.
+                next_multiple_of_8 = lambda x: int(x + (8 - x % 8) % 8)
+                add_one_if_prime = (
+                    lambda n: n + 1 if n > 1 and all(n % i != 0 for i in range(2, int(n**0.5) + 1)) else n
+                )
+                total_per_core_out_M = add_one_if_prime(math.ceil(activation_height / (7 * self.tile_size)))
+                per_core_M = (
+                    next_multiple_of_8(total_per_core_out_M) if total_per_core_out_M > 320 else total_per_core_out_M
+                )
                 per_core_N = 10
 
                 # Want out_block_h and out_block_w such that:
