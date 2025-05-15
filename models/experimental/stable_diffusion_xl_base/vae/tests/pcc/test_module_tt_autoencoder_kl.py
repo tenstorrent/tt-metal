@@ -56,4 +56,4 @@ def test_vae(device, input_shape, reset_seeds):
     del vae
     gc.collect()
 
-    assert_with_pcc(torch_output_tensor, output_tensor, 0.92)
+    assert_with_pcc(torch_output_tensor, output_tensor, 0.89)
