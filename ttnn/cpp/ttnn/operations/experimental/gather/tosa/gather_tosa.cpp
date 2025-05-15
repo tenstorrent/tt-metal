@@ -23,11 +23,7 @@ namespace CMAKE_UNIQUE_NAMESPACE {
 
 Tensor pre_gather_transform_input_tensor(
     const Tensor& input_tensor, const int8_t dim, const ttnn::Shape& index_tensor_logical_shape) {
-    if (input_tensor.get_logical_shape() == ttnn::Shape{1}) {
-        // Early exit for scalar tensors, return the same tensor
-        return input_tensor;
-    }
-    // If dim is not last dimension transpose it
+    // Transpose tensor
     const Tensor transposed_tensor = ttnn::transpose(input_tensor, dim, -1, input_tensor.memory_config());
     // If input is not rank 4 transform it to 4D
     const Tensor transformed_tensor = reduction_common::transform_to_4d_tensor(transposed_tensor, true);
@@ -44,10 +40,7 @@ Tensor pre_gather_transform_input_tensor(
         index_tensor_logical_shape[2],
         transformed_tensor.get_logical_shape()[-1]};
 
-    const Tensor sliced_tensor =
-        ttnn::slice(transformed_tensor, start_index, end_index, step, input_tensor.memory_config());
-
-    return ttnn::fill_implicit_tile_padding(sliced_tensor, std::numeric_limits<float>::min());
+    return ttnn::slice(transformed_tensor, start_index, end_index, step, input_tensor.memory_config());
 }
 
 Tensor pre_gather_transform_input_index_tensor(const Tensor& input_tensor, const int8_t dim, const uint32_t C) {
@@ -77,7 +70,7 @@ Tensor pre_gather_transform_input_index_tensor(const Tensor& input_tensor, const
     transformed_tensor = transformed_tensor.to_device(device);
     // --- --- ---
 
-    return ttnn::fill_implicit_tile_padding(transformed_tensor, 0);
+    return transformed_tensor;
 }
 
 Tensor post_gather_transform_tensor(
