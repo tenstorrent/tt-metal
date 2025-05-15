@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "graph_argument_serializer.hpp"
+#include "ttnn/graph/graph_argument_serializer.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/matmul/device/matmul_op.hpp"
 #include "ttnn/types.hpp"

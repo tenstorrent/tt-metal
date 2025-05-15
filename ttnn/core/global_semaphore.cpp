@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "global_semaphore.hpp"
+#include "ttnn/global_semaphore.hpp"
 
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/global_semaphore.hpp>
