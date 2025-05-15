@@ -19,11 +19,11 @@ endfunction()
 
 CPMAddPackage(
     NAME Boost
-    VERSION 1.86.0
+    VERSION 1.88.0
     URL
-        https://github.com/boostorg/boost/releases/download/boost-1.86.0/boost-1.86.0-cmake.tar.xz
+        https://github.com/boostorg/boost/releases/download/boost-1.88.0/boost-1.88.0-cmake.tar.xz
         URL_HASH
-        SHA256=2c5ec5edcdff47ff55e27ed9560b0a0b94b07bd07ed9928b476150e16b0efc57
+        SHA256=f48b48390380cfb94a629872346e3a81370dc498896f16019ade727ab72eb1ec
     OPTIONS
         "BOOST_ENABLE_CMAKE ON"
         "BOOST_SKIP_INSTALL_RULES ON"
