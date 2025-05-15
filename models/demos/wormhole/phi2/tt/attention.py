@@ -577,7 +577,7 @@ class Attention(LightweightModule):
 
             shard_spec = ttnn.ShardSpec(
                num_to_core_range_set(self.num_devices),
-               (32, 640),
+               (32, 1280),
                ttnn.ShardOrientation.ROW_MAJOR
             )
             attn_output_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, shard_spec)
@@ -588,7 +588,7 @@ class Attention(LightweightModule):
                 self.wo,
                 core_grid=ttnn.CoreGrid(y=4, x=8) if self.TG else None,
                 program_config=self.model_config["ATTN_OUTPUT_PROGCFG"] if not self.TG else None,
-                memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG if self.TG else attn_output_cat.memory_config(),
+                memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG if self.TG else attn_output_mem_config,
                 dtype=ttnn.bfloat8_b if self.TG else None,
                 compute_kernel_config=self.li_o_decode_compute_kernel_cfg,
             )

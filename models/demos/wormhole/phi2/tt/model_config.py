@@ -605,7 +605,7 @@ class ModelArgs:
                     m=self.tile_padded_batch_rows,
                     k=(self.n_heads * self.head_dim) // self.num_devices,
                     n=self.dim,
-                    num_cores=self.n_heads // self.num_devices,
+                    num_cores=2,
                 )
             )
 
