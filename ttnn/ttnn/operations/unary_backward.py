@@ -823,7 +823,7 @@ def _golden_function(grad_tensor, input_tensor, exponent, *args, **kwargs):
     pyt_y.backward(gradient=grad_tensor)
 
     if exponent != 0:
-        input_tensor.grad[input_tensor < 0] = float("inf")
+        input_tensor.grad.masked_fill_(input_tensor < 0, float("inf"))
 
     return [input_tensor.grad]
 
