@@ -439,7 +439,7 @@ TEST_F(TTNNFixtureWithDevice, DISABLED_TestGenericOpMatmul) {
         false,         // transpose_a
         false,         // transpose_b
         std::nullopt,  // memory_config
-        std::nullopt,  // dtype
+        std::nullopt   // dtype
     );
 
     tt::log_info(tt::LogTest, "Running matmul generic test");
