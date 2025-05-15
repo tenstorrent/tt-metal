@@ -4,15 +4,18 @@ set(MAIN_SOURCES
     main.cpp
     utils.cpp
     3tier/remote_optimizer.cpp
+    3tier/common.cpp
 )
 
 set(OPTIMIZER_SOURCES
     3tier/optimizer_worker.cpp
+    3tier/common.cpp
     utils.cpp
 )
 
 set(AGGREGATOR_SOURCES
     3tier/aggregator_worker.cpp
+    3tier/common.cpp
     utils.cpp
 )
 
