@@ -90,6 +90,21 @@ def test_convert_to_hwc(device, C, HW, core_grid, padded_sharded_dim):
             32,
         ),
         (
+            84480,
+            ttnn.CoreRangeSet(
+                {
+                    ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(5, 0)),
+                }
+            ),
+            ttnn.CoreRangeSet(
+                {
+                    ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 3)),
+                }
+            ),
+            14080,
+            2656,
+        ),
+        (
             168960,
             ttnn.CoreRangeSet(
                 {
@@ -110,6 +125,18 @@ def test_convert_to_hwc(device, C, HW, core_grid, padded_sharded_dim):
 def test_convert_to_hwc_dram(
     device, C, HW, input_core_grid, output_core_grid, input_padded_sharded_dim, output_padded_sharded_dim
 ):
+    worker_num_cores = device.compute_with_storage_grid_size().x * device.compute_with_storage_grid_size().y
+    requested_num_cores = output_core_grid.num_cores()
+    if worker_num_cores < requested_num_cores:
+        pytest.skip(f"Not enough cores to run test case (need {requested_num_cores} but have {worker_num_cores})")
+
+    dram_num_cores = device.dram_grid_size().x * device.dram_grid_size().y
+    requested_num_dram_cores = input_core_grid.num_cores()
+    if dram_num_cores < requested_num_dram_cores:
+        pytest.skip(
+            f"Not enough DRAM cores to run test case (need {requested_num_dram_cores} but have {dram_num_cores})"
+        )
+
     input_tensor = torch.randn([1, 1, C, HW], dtype=torch.bfloat16)
     expected = input_tensor.transpose(2, 3)
 
