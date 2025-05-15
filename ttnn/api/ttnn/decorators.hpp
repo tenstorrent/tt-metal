@@ -151,7 +151,7 @@ private:
             requires { operation_t::invoke(std::forward<decltype(args)>(args)...); },
             "Primitive Operation must implement invoke() method to be invoked.");
         ZoneScopedN("Run primitive ttnn operation");
-        ZoneName(static_cast<const char*>(cpp_fully_qualified_name.data.data()), cpp_fully_qualified_name.size());
+        ZoneName(static_cast<const char*>(cpp_fully_qualified_name.data), cpp_fully_qualified_name.size());
         auto [operation_attributes, tensors_args] = operation_t::invoke(std::forward<decltype(args)>(args)...);
         return ttnn::device_operation::detail::invoke<operation_t>(queue_id, operation_attributes, tensors_args);
     }
@@ -171,7 +171,7 @@ private:
     template <typename... args_t>
     auto invoke_composite(args_t&&... args) const {
         ZoneScopedN("Run composite ttnn operation ");
-        ZoneName(static_cast<const char*>(cpp_fully_qualified_name.data.data()), cpp_fully_qualified_name.size());
+        ZoneName(static_cast<const char*>(cpp_fully_qualified_name.data), cpp_fully_qualified_name.size());
         return operation_t::invoke(std::forward<decltype(args)>(args)...);
     }
 };
