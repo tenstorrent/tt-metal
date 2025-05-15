@@ -98,7 +98,6 @@ void Tensor::init(Storage storage, TensorSpec tensor_spec, DistributedTensorConf
         if (device_storage->mesh_buffer != nullptr) {
             mesh_device_ = device_storage->mesh_buffer->device();
         }
-        device_ = device_storage->get_device();
     }
 }
 
@@ -108,7 +107,6 @@ Tensor& Tensor::operator=(const Tensor& other) {
         this->tensor_attributes = other.tensor_attributes;
     }
     this->mesh_device_ = other.mesh_device_;
-    this->device_ = other.device_;
     return *this;
 }
 
@@ -118,13 +116,11 @@ Tensor& Tensor::operator=(Tensor&& other) noexcept {
         this->tensor_attributes = std::move(other.tensor_attributes);
     }
     this->mesh_device_ = std::move(other.mesh_device_);
-    this->device_ = std::move(other.device_);
     return *this;
 }
 
 Tensor::Tensor(const Tensor& other) : tensor_id(other.tensor_id), tensor_attributes(other.tensor_attributes) {
     this->mesh_device_ = other.mesh_device_;
-    this->device_ = other.device_;
 }
 
 Tensor::~Tensor() {

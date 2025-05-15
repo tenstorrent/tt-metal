@@ -46,9 +46,10 @@ public:
     // Can be safely passed between threads when the tensor is copied
     std::shared_ptr<TensorAttributes> tensor_attributes = nullptr;
 
-    // Tensor gets worker queue handle through the device
+    // Shorthand for checking if this Tensor is allocated on MeshDevice. If set, is never nullptr.
+    // If not set, the tensor can either be on host or allocated on a single device.
+    // TODO: #21099 - This won't be needed after the migration to MeshDevice is complete.
     std::optional<distributed::MeshDevice*> mesh_device_ = std::nullopt;
-    std::optional<IDevice*> device_ = std::nullopt;
 
     // ======================================================================================
     //                                  Hi Level APIs
