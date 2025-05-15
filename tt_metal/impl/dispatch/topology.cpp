@@ -583,16 +583,17 @@ std::vector<DispatchKernelNode> generate_nodes(const std::set<chip_id_t>& device
 
                 // Pull nodes from the template, updating their index and device id
                 for (DispatchKernelNode node : *nodes_for_one_mmio) {
+                    int32_t num_devices = template_id_to_device_id.size();
                     TT_ASSERT(
-                        node.device_id < template_id_to_device_id.size(),
+                        node.device_id < num_devices,
                         "Device id {} out of bounds (max = {})",
                         node.device_id,
-                        template_id_to_device_id.size());
+                        num_devices);
                     TT_ASSERT(
-                        node.servicing_device_id < template_id_to_device_id.size(),
+                        node.servicing_device_id < num_devices,
                         "Servicing device id {} out of bounds (max = {})",
                         node.servicing_device_id,
-                        template_id_to_device_id.size());
+                        num_devices);
                     node.device_id = template_id_to_device_id[node.device_id];
                     node.servicing_device_id = template_id_to_device_id[node.servicing_device_id];
                     increment_node_ids(node, index_offset);
