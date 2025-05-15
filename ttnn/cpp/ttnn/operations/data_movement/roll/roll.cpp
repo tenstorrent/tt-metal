@@ -12,21 +12,18 @@
 namespace ttnn::operations::data_movement {
 
 ttnn::Tensor RollOperation::invoke(
-    const ttnn::Tensor& input_tensor, const ttnn::SmallVector<int>& shift, const ttnn::SmallVector<int>& input_dims) {
-    std::vector<int> shifts(shift.begin(), shift.end());
-    std::vector<int> dims(input_dims.begin(), input_dims.end());
-
+    const ttnn::Tensor& input_tensor, const ttnn::SmallVector<int>& shifts, const ttnn::SmallVector<int>& input_dims) {
     ttnn::Tensor result = input_tensor;
     auto size = result.get_logical_shape();
     int num_dims = size.rank();
 
     TT_FATAL(
-        !shifts.empty() && shifts.size() == dims.size(),
+        !shifts.empty() && shifts.size() == input_dims.size(),
         "Roll expects shifts {} and dims {} to have the same length",
         shifts.size(),
-        dims.size());
+        input_dims.size());
 
-    for (int dim : dims) {
+    for (int dim : input_dims) {
         TT_FATAL(
             dim >= -num_dims && dim < num_dims,
             "Invalid dimension index {}. The dimension must be within the range [{}, {}].",
@@ -35,11 +32,11 @@ ttnn::Tensor RollOperation::invoke(
             num_dims - 1);
     }
 
-    std::vector<int> adjusted_shifts = shifts;
+    std::vector<int> adjusted_shifts(shifts.begin(), shifts.end());
 
     for (size_t i = 0; i < adjusted_shifts.size(); ++i) {
         int shift = adjusted_shifts[i];
-        int dim = dims[i];
+        int dim = input_dims[i];
 
         int shift_size = input_tensor.get_logical_shape()[dim];
         adjusted_shifts[i] = ((shift % shift_size) + shift_size) % shift_size;
@@ -48,7 +45,7 @@ ttnn::Tensor RollOperation::invoke(
     const ttnn::SmallVector<int> stride_vector(num_dims, 1);
 
     for (size_t i = 0; i < adjusted_shifts.size(); ++i) {
-        int dim = dims[i];
+        int dim = input_dims[i];
 
         if (dim < 0) {
             dim += num_dims;
