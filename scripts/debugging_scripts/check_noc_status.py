@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 # SPDX-FileCopyrightText: (c) 2025 Tenstorrent AI ULC
 #
 # SPDX-License-Identifier: Apache-2.0
@@ -6,10 +7,13 @@
 Script Name: check_noc_status.py
 
 Usage:
-    ./scripts/debugging_scripts/check_noc_status.py <elf-file>
+    scripts/debugging_scripts/check_noc_status.py <elf-file> [-v]
 
 Arguments:
-    <elf-file>    Path to risc firmware elf file
+    <elf-file>  Path to risc firmware elf file
+
+Options:
+    -v  If true includes passed tests in optput. Default: False
 
 Description:
     This script checks if there are any mismatches between values of number of NOC transactions
@@ -17,16 +21,21 @@ Description:
     these mismatches across all available devices and locations.
 """
 
-from ttexalens.tt_exalens_init import init_ttexalens
-from ttexalens.tt_exalens_lib import read_riscv_memory, read_tensix_register
-from ttexalens import util
-from elftools.elf.elffile import ELFFile
-from ttexalens.parse_elf import decode_symbols
-from ttexalens.context import Context
-from docopt import docopt
-
 import sys
 import os
+
+try:
+    from ttexalens.tt_exalens_init import init_ttexalens
+    from ttexalens.tt_exalens_lib import read_riscv_memory, read_tensix_register
+    from ttexalens import util
+    from ttexalens.parse_elf import decode_symbols
+    from ttexalens.context import Context
+except:
+    print("No tt-exalens detected. Please install tt-exalens with:\n ./scripts/install_debugger.sh")
+    sys.exit(1)
+
+from elftools.elf.elffile import ELFFile
+from docopt import docopt
 
 
 def get_symbols_from_elf(elf_path: str, context: Context) -> dict[str, int]:
@@ -73,7 +82,7 @@ def check_noc_status(symbols: dict[str, int], context: Context, risc_id: int = 0
                     reg_val = read_tensix_register(loc, reg, device_id, context)
                     var_val = read_riscv_memory(loc, address, noc_id, risc_id, device_id, context)
                 except Exception as e:
-                    summary[(device_id, loc)] = f"{util.CLR_WARN}{e}{util.CLR_END}"
+                    summary[(device_id, loc)] = str(e)
                     error = True
                     break
 
@@ -88,28 +97,41 @@ def check_noc_status(symbols: dict[str, int], context: Context, risc_id: int = 0
 
             # If core passed the inspection, write passed
             if passed and not error:
-                summary[(device_id, loc)] = f"{util.CLR_GREEN}PASSED{util.CLR_END}"
+                summary[(device_id, loc)] = "PASSED"
 
     return summary
 
 
-def print_summary(summary: dict) -> None:
+def print_summary(summary: dict, verbose: bool = False) -> None:
     """Prints summary of checking NOC transactions status"""
+    all_passed = True
     for key in summary.keys():
+        if not verbose and summary[key] == "PASSED":
+            continue
+
         device_id, loc = key
         util.INFO(f"Device: {device_id}, loc: {loc}", end=" ")
         if isinstance(summary[key], str):
-            print(summary[key])
+            if summary[key] == "PASSED":
+                print(f"{util.CLR_GREEN}{summary[key]}{util.CLR_END}")
+            else:
+                all_passed = False
+                util.WARN(summary[key])
         else:
+            all_passed = False
             util.ERROR("FAILED")
             for elem in summary[key]:
                 reg, var, reg_val, var_val = elem
                 util.ERROR(f"\tMismatch between {reg} and {var} -> {reg_val} != {var_val}")
 
+    if all_passed:
+        print(f"\n{util.CLR_GREEN}All tests passed!{util.CLR_END}")
+
 
 def main():
     args = docopt(__doc__, argv=sys.argv[1:])
     elf_path = args["<elf-file>"]
+    verbose = True if args["-v"] else False
 
     if not os.path.exists(elf_path):
         util.ERROR(f"File {elf_path} does not exist")
@@ -123,7 +145,7 @@ def main():
     noc_id = 0  # For now we only use noc0
 
     summary = check_noc_status(symbols, context, risc_id, noc_id)
-    print_summary(summary)
+    print_summary(summary, verbose)
 
 
 if __name__ == "__main__":
