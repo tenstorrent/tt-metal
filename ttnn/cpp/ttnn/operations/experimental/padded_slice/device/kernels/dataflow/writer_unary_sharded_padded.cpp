@@ -34,7 +34,5 @@ void kernel_main() {
         noc_async_read(pad_noc_addr, write_addr, pad_size_bytes);
         write_addr += padded_row_size_bytes;
     }
-    // cb_reserve_back(cb_id_out, num_units);
-    // cb_push_back(cb_id_out, num_units);
     cb_wait_front(cb_id_out, num_units);
 }
