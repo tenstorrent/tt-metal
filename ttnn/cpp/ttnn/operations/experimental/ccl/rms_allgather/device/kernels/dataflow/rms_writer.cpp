@@ -172,10 +172,10 @@ void kernel_main() {
         }
 
         // 4. global semaphore reset
-        *out_ready_sem_bank_addr_ptr = 0;
+        noc_semaphore_set(out_ready_sem_bank_addr_ptr, 0);
         // Signal the other local cores that the semaphore has returned
 
-        *stats_set_semaphore_addr_ptr = VALID;
+        noc_semaphore_set(stats_set_semaphore_addr_ptr, VALID);
         noc_semaphore_set_multicast_loopback_src(
             stats_set_semaphore_addr, stats_set_semaphore_noc_addr, num_blocks, false, false);
         noc_async_write_barrier();

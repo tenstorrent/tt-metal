@@ -436,7 +436,8 @@ def test_tg_trace_rms_fuse(
 @pytest.mark.parametrize("fused_add", [True, False])
 @pytest.mark.parametrize("mesh_device", [pytest.param((8, 4), id="8x4_grid")], indirect=True)
 @pytest.mark.parametrize("input_dtype", [ttnn.bfloat8_b, ttnn.bfloat16])
-@pytest.mark.parametrize("residual_dtype", [ttnn.bfloat8_b, ttnn.bfloat16])
+@pytest.mark.parametrize("residual_dtype", [ttnn.bfloat16])
+@pytest.mark.parametrize("output_dtype", [ttnn.bfloat8_b, ttnn.bfloat16])
 @pytest.mark.parametrize(
     "device_params",
     [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}],
@@ -456,6 +457,7 @@ def test_rms_fuse(
     fused_add,
     input_dtype,
     residual_dtype,
+    output_dtype,
     topology,
 ):
     run_rms_fuse_impl(
@@ -469,6 +471,7 @@ def test_rms_fuse(
         output_shard_grid,
         topology,
         fused_add,
+        output_dtype=output_dtype,
         num_iters=num_iters,
         input_dtype=input_dtype,
         residual_dtype=residual_dtype,
