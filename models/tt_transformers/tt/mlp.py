@@ -13,7 +13,18 @@ from models.tt_transformers.tt.model_config import OpGroup, TensorGroup
 
 class MLP(LightweightModule):
     def __init__(
-        self, mesh_device, args, state_dict, weight_cache_path, layer_num, dtype, model_config, state_dict_prefix=None
+        self,
+        mesh_device,
+        args,
+        state_dict,
+        weight_cache_path,
+        layer_num,
+        dtype,
+        model_config,
+        state_dict_prefix=None,
+        from_remote_semaphore_handles=None,
+        to_remote_semaphore_handles=None,
+        worker_sub_device_id=None,
     ):
         super().__init__()
 
@@ -28,6 +39,14 @@ class MLP(LightweightModule):
         pad_hidden_dim = lambda tensor, dim: pad_to_size(tensor, dim=dim, size=args.hidden_dim)
         # If pading was applied (e.g. via env var), add the unpadded hidden dim to the cache name to avoid loading incorrect weights
         hidden_dim_string = f".hidden_dim_{args.hidden_dim}" if args.hidden_dim != args.unpadded_hidden_dim else ""
+        if worker_sub_device_id is not None:
+            self.use_fabric_ccl = True
+        else:
+            self.use_fabric_ccl = False
+
+        self.from_remote_semaphore_handles = from_remote_semaphore_handles
+        self.to_remote_semaphore_handles = to_remote_semaphore_handles
+        self.worker_sub_device_id = worker_sub_device_id
 
         if args.dummy_weights:
             cache_name = lambda _: None
@@ -237,6 +256,9 @@ class MLP(LightweightModule):
             dtype=self.args.ccl_dtype,
             use_composite=True if self.dim == 8192 else False,
             topology=self.args.ccl_topology(),
+            from_remote_semaphore_handles=self.from_remote_semaphore_handles,
+            to_remote_semaphore_handles=self.to_remote_semaphore_handles,
+            worker_sub_device_id=self.worker_sub_device_id,
         )
 
         # Ensure dim 0 and 1 are 1

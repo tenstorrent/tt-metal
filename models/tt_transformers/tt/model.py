@@ -27,6 +27,7 @@ class Transformer(LightweightModule):
         weight_cache_path,
         paged_attention_config=None,
         use_paged_kv_cache=False,
+        use_fabric_ccl=False,
     ):
         super().__init__()
         self.args = args
@@ -38,6 +39,30 @@ class Transformer(LightweightModule):
         self.model_config = args.get_model_config()
         self.grid_size = self.args.max_grid_size
         state_dict_prefix = args.get_state_dict_prefix("", None)
+
+        self.use_fabric_ccl = use_fabric_ccl
+        if use_fabric_ccl:
+            self.compute_grid_size = mesh_device.compute_with_storage_grid_size()
+            self.ccl_sub_device_crs = ttnn.CoreRangeSet(
+                {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(compute_grid_size.x - 1, compute_grid_size.y - 1))}
+            )
+            self.worker_sub_device = ttnn.SubDevice([ccl_sub_device_crs])
+            self.worker_sub_device_id = ttnn.SubDeviceId(0)
+            self.sub_device_stall_group = [worker_sub_device_id]
+            self.sub_device_manager = mesh_device.create_sub_device_manager([worker_sub_device], 0)
+            self.mesh_device.load_sub_device_manager(sub_device_manager)
+            # create global semaphore handles
+            self.from_remote_semaphore_handles = [
+                ttnn.create_global_semaphore(mesh_device, ccl_sub_device_crs, 0) for _ in range(num_iters)
+            ]
+            self.to_remote_semaphore_handles = [
+                ttnn.create_global_semaphore(mesh_device, ccl_sub_device_crs, 0) for _ in range(num_iters)
+            ]
+            self.mesh_device.set_sub_device_stall_group([worker_sub_device_id])
+        else:
+            self.from_remote_semaphore_handles = None
+            self.to_remote_semaphore_handles = None
+            self.worker_sub_device_id = None
 
         self.embd = Embedding(
             mesh_device=mesh_device,
@@ -69,6 +94,9 @@ class Transformer(LightweightModule):
                 transformation_mats=self.trans_mats_dict,
                 paged_attention_config=paged_attention_config,
                 use_paged_kv_cache=use_paged_kv_cache,
+                from_remote_semaphore_handles=self.from_remote_semaphore_handles,
+                to_remote_semaphore_handles=self.to_remote_semaphore_handles,
+                worker_sub_device_id=self.worker_sub_device_id,
             )
             for i in tqdm(range(self.n_layers))
         ]

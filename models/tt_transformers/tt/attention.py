@@ -24,6 +24,9 @@ class Attention(LightweightModule):
         configuration,
         paged_attention_config=None,
         use_paged_kv_cache=False,
+        from_remote_semaphore_handles=None,
+        to_remote_semaphore_handles=None,
+        worker_sub_device_id=None,
     ):
         super().__init__()
 
@@ -49,6 +52,15 @@ class Attention(LightweightModule):
         self.batch_size_per_device_group = (
             max(self.max_batch_size // self.num_device_groups, 1) if self.TG else self.max_batch_size
         )
+
+        self.from_remote_semaphore_handles = from_remote_semaphore_handles
+        self.to_remote_semaphore_handles = to_remote_semaphore_handles
+        self.worker_sub_device_id = worker_sub_device_id
+
+        if worker_sub_device_id is not None:
+            self.use_fabric_ccl = True
+        else:
+            self.use_fabric_ccl = False
 
         self.n_local_heads = self.n_heads // self.num_devices_per_group
         self.n_local_kv_heads = self.n_kv_heads // self.num_devices_per_group
@@ -505,6 +517,9 @@ class Attention(LightweightModule):
                 num_links=2,
                 memory_config=self.model_config["GATHER_USERS_MEMCFG"](list(self.mesh_device.shape)[1]),
                 sharded=True,
+                from_remote_semaphore_handles=self.from_remote_semaphore_handles,
+                to_remote_semaphore_handles=self.to_remote_semaphore_handles,
+                worker_sub_device_id=self.worker_sub_device_id,
                 # dtype=self.ccl_dtype,  # Running bf16 until we have SDPA output bfp8 df; otherwise we have two sharded to interleaved/interleaved to sharded conversions
             )
             if self.TG:

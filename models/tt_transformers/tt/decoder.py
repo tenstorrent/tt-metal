@@ -22,6 +22,9 @@ class TransformerBlock(LightweightModule):
         transformation_mats,
         paged_attention_config=None,
         use_paged_kv_cache=False,
+        from_remote_semaphore_handles=None,
+        to_remote_semaphore_handles=None,
+        worker_sub_device_id=None,
     ):
         super().__init__()
 
@@ -51,6 +54,9 @@ class TransformerBlock(LightweightModule):
             configuration=args,
             paged_attention_config=paged_attention_config,
             use_paged_kv_cache=use_paged_kv_cache,
+            from_remote_semaphore_handles=from_remote_semaphore_handles,
+            to_remote_semaphore_handles=to_remote_semaphore_handles,
+            worker_sub_device_id=worker_sub_device_id,
         )
         self.feed_forward = MLP(
             mesh_device=mesh_device,
@@ -60,6 +66,9 @@ class TransformerBlock(LightweightModule):
             layer_num=layer_num,
             dtype=dtype,
             model_config=self.model_config,
+            from_remote_semaphore_handles=from_remote_semaphore_handles,
+            to_remote_semaphore_handles=to_remote_semaphore_handles,
+            worker_sub_device_id=worker_sub_device_id,
         )
         self.attention_norm = DistributedNorm(
             RMSNorm(

@@ -18,6 +18,9 @@ def tt_all_reduce(
     sharded=False,
     dtype=ttnn.bfloat16,
     use_composite=False,
+    from_remote_semaphore_handles=None,
+    to_remote_semaphore_handles=None,
+    worker_sub_device_id=None,
 ):
     # N150
     if list(mesh_device.shape) == [1, 1] or (cluster_axis == 1 and 1 in list(mesh_device.shape)):
@@ -30,20 +33,39 @@ def tt_all_reduce(
             input_tensor, (1, 1, original_shape[-4] * original_shape[-3] * original_shape[-2], original_shape[-1])
         )
 
+    if worker_sub_device_id is not None:
+        use_fabric_ccl = True
+    else:
+        use_fabric_ccl = False
+
     # N300 and T3K: reduce_scatter
     if 1 in list(mesh_device.shape):
         if input_tensor.is_sharded() and not sharded:
             input_tensor_sharded = input_tensor
             input_tensor = ttnn.sharded_to_interleaved(input_tensor_sharded, ttnn.L1_MEMORY_CONFIG)
             input_tensor_sharded.deallocate(True)
-        reduced = ttnn.reduce_scatter(
-            input_tensor,
-            dim=dim,
-            math_op=ttnn.ReduceType.Sum,
-            num_links=num_reduce_scatter_links,
-            topology=topology,
-            memory_config=memory_config,
-        )
+
+        if not use_fabric_ccl:
+            reduced = ttnn.reduce_scatter(
+                input_tensor,
+                dim=dim,
+                math_op=ttnn.ReduceType.Sum,
+                num_links=num_reduce_scatter_links,
+                topology=topology,
+                memory_config=memory_config,
+            )
+        else:
+            reduced = ttnn.experimental.reduce_scatter_async(
+                input_tensor,
+                dim=dim,
+                from_remote_multi_device_global_semaphore=from_remote_semaphore_handles,
+                to_remote_multi_device_global_semaphore=to_remote_semaphore_handles,
+                math_op=ttnn.ReduceType.Sum,
+                num_links=num_reduce_scatter_links,
+                memory_config=memory_config,
+                topology=topology,
+                subdevice_id=worker_sub_device_id,
+            )
         input_tensor.deallocate(True)
         return reduced
 
@@ -82,26 +104,51 @@ def tt_all_reduce(
         gathered_tensor.deallocate(True)
     else:
         input_mem_cfg = input_tensor.memory_config()
-        reduced_tensor = ttnn.reduce_scatter(
-            input_tensor,
-            dim=dim,
-            num_links=num_reduce_scatter_links,
-            cluster_axis=cluster_axis,
-            mesh_device=mesh_device,
-            math_op=ttnn.ReduceType.Sum,
-            topology=topology,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG if not sharded else memory_config,
-        )
-
-        reduced_tensor = ttnn.all_gather(
-            reduced_tensor,
-            dim,
-            num_links=num_all_gather_links,
-            cluster_axis=cluster_axis,
-            mesh_device=mesh_device,
-            topology=topology,
-            memory_config=input_mem_cfg,
-        )
+        if not use_fabric_ccl:
+            reduced_tensor = ttnn.reduce_scatter(
+                input_tensor,
+                dim=dim,
+                num_links=num_reduce_scatter_links,
+                cluster_axis=cluster_axis,
+                mesh_device=mesh_device,
+                math_op=ttnn.ReduceType.Sum,
+                topology=topology,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG if not sharded else memory_config,
+            )
+        else:
+            reduced_tensor = ttnn.experimental.reduce_scatter_async(
+                input_tensor,
+                dim=dim,
+                from_remote_multi_device_global_semaphore=from_remote_semaphore_handles,
+                to_remote_multi_device_global_semaphore=to_remote_semaphore_handles,
+                math_op=ttnn.ReduceType.Sum,
+                num_links=num_reduce_scatter_links,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG if not sharded else memory_config,
+                topology=topology,
+                subdevice_id=worker_sub_device_id,
+            )
+        if not use_fabric_ccl:
+            reduced_tensor = ttnn.all_gather(
+                reduced_tensor,
+                dim,
+                num_links=num_all_gather_links,
+                cluster_axis=cluster_axis,
+                mesh_device=mesh_device,
+                topology=topology,
+                memory_config=input_mem_cfg,
+            )
+        else:
+            reduced_tensor = ttnn.experimental.all_gather_async(
+                reduced_tensor,
+                dim,
+                cluster_axis=cluster_axis,
+                mesh_device=mesh_device,
+                memory_config=input_mem_cfg,
+                topology=topology,
+                multi_device_global_semaphore=from_remote_semaphore_handles,
+                subdevice_id=worker_sub_device_id,
+                num_preferred_links=num_all_gather_links,
+            )
 
     # Reshape the reduced tensor to the original shape
     reduced_tensor = ttnn.reshape(reduced_tensor, original_shape)
@@ -119,7 +166,15 @@ def tt_all_gather(
     sharded=False,
     topology=ttnn.Topology.Linear,
     dtype=ttnn.bfloat16,
+    from_remote_semaphore_handles=None,
+    to_remote_semaphore_handles=None,
+    worker_sub_device_id=None,
 ):
+    if worker_sub_device_id is not None:
+        use_fabric_ccl = True
+    else:
+        use_fabric_ccl = False
+
     # N150
     if list(mesh_device.shape) == (1, 1) or (cluster_axis == 1 and 1 in list(mesh_device.shape)):
         return input_tensor
@@ -143,15 +198,28 @@ def tt_all_gather(
             memory_config=memory_config,
         )
     else:
-        gathered = ttnn.all_gather(
-            input_tensor,
-            dim,
-            num_links=num_links,
-            cluster_axis=cluster_axis,
-            mesh_device=mesh_device,
-            topology=topology,
-            memory_config=memory_config,
-        )
+        if not use_fabric_ccl:
+            gathered = ttnn.all_gather(
+                input_tensor,
+                dim,
+                num_links=num_links,
+                cluster_axis=cluster_axis,
+                mesh_device=mesh_device,
+                topology=topology,
+                memory_config=memory_config,
+            )
+        else:
+            tt_out_tensor = ttnn.experimental.all_gather_async(
+                input_tensor,
+                dim,
+                cluster_axis=cluster_axis,
+                mesh_device=mesh_device,
+                memory_config=memory_config,
+                topology=topology,
+                multi_device_global_semaphore=from_remote_semaphore_handles,
+                subdevice_id=worker_sub_device_id,
+                num_preferred_links=num_links,
+            )
     input_tensor.deallocate(True)
     return gathered
 
