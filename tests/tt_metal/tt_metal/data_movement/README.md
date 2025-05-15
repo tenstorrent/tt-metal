@@ -24,7 +24,7 @@ TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/unit_tests_data_movement
 
 To run a single test, add a gtest filter with the name of the test. Example:
 ```
-TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/unit_tests_data_movement gtest_filter="*TensixDataMovementDRAMInterleavedPacketSizes*"
+TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/unit_tests_data_movement --gtest_filter="*TensixDataMovementDRAMInterleavedPacketSizes*"
 ```
 
 ### Pytest
