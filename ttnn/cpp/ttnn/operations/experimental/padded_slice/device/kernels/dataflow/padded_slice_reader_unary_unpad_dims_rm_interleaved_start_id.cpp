@@ -32,7 +32,6 @@ void kernel_main() {
 
     uint32_t src_stick_id = start_id;
     uint32_t sticks_read = 0;
-
 #ifdef DEBUG
     DPRINT << "src_addr: " << src_addr << ", padded_stick_size: " << padded_stick_size
            << ", unpadded_stick_size: " << unpadded_stick_size << ", stick_size_offset: " << stick_size_offset
@@ -60,12 +59,7 @@ void kernel_main() {
         for (uint32_t i = 0; i < num_read_per_barrier and sticks_read < num_sticks_per_core; ++i) {
             sticks_read++;
             uint64_t src_noc_addr = get_noc_addr(src_stick_id, s0);
-            noc_async_read(src_noc_addr, src_buffer_l1_addr, padded_stick_size);
-            if constexpr (misalignment != 0) {
-                noc_async_read_barrier();
-                tt::data_movement::common::tt_memmove<false, false, false, 0>(
-                    src_buffer_l1_addr, src_buffer_l1_addr + misalignment, unpadded_stick_size);
-            }
+            noc_async_read(src_noc_addr, src_buffer_l1_addr, unpadded_stick_size);
             src_buffer_l1_addr += stick_size_offset;
             src_stick_id++;
             for (uint32_t j = 0; j < num_dims; j++) {
