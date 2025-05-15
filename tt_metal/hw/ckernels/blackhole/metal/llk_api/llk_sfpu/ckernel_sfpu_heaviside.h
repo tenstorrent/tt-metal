@@ -6,7 +6,7 @@
 
 #include "ckernel.h"
 #include "ckernel_defs.h"
-#include "ckernel_sfpu_converter.h"
+#include "sfpu/ckernel_sfpu_converter.h"
 
 using namespace sfpi;
 
@@ -16,9 +16,7 @@ namespace sfpu {
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
 inline void calculate_heaviside(uint value) {
     // SFPU microcode
-    Converter c_value;
-    c_value.u = value;
-    vFloat s = c_value.f;
+    vFloat s = Converter::as_float(value);
 
 #pragma GCC unroll 0
     for (int d = 0; d < ITERATIONS; d++) {

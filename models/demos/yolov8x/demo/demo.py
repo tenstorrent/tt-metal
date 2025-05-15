@@ -177,13 +177,18 @@ def test_demo(device, source, model_type, res, use_weights_from_ultralytics):
 
         im = preprocess(im0s, res=res)
 
-        ttnn_im = im.permute((0, 2, 3, 1))
-        ttnn_im = ttnn.from_torch(ttnn_im, dtype=ttnn.bfloat16)
+        # pad input channels to 16 to avoid slow interleaved2sharded codepath for 3/8 channels
+        ttnn_input = torch.nn.functional.pad(im, (0, 0, 0, 0, 0, 13, 0, 0), value=0)
+        ttnn_input = ttnn_input.permute((0, 2, 3, 1))
+        ttnn_input = ttnn_input.reshape(
+            1, 1, ttnn_input.shape[0] * ttnn_input.shape[1] * ttnn_input.shape[2], ttnn_input.shape[3]
+        )
+        ttnn_input = ttnn.from_torch(ttnn_input, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
 
         if model_type == "torch_model":
             preds = model(im)
         else:
-            preds = model(x=ttnn_im)
+            preds = model(x=ttnn_input)
             preds[0] = ttnn.to_torch(preds[0], dtype=torch.float32)
 
         results = postprocess(preds, im, im0s, batch, names)[0]

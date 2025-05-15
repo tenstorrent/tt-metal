@@ -26,18 +26,6 @@ from tracy import signpost
 from models.demos.llama3_subdevices.tt.prefetcher_common import get_core_ranges
 
 
-def get_buffer_address(tensor):
-    device_tensors = ttnn.get_device_tensors(tensor)
-    buffer_addr = device_tensors[0].buffer_address()
-
-    if len(device_tensors) > 1:
-        for i in range(1, len(device_tensors)):
-            addr = device_tensors[i].buffer_address()
-            assert addr == buffer_addr, f"Expected buffer address on device {i} to be same as device 0"
-
-    return buffer_addr
-
-
 def run_prefetcher_mm(
     device,
     num_tensors,
@@ -159,7 +147,7 @@ def run_prefetcher_mm(
     tt_tensors = tt_tensors_all[:num_tensors]
 
     # Set up the tensor addrs
-    tensor_addrs = torch.tensor([get_buffer_address(x) for x in tt_tensors_all])
+    tensor_addrs = torch.tensor([x.buffer_address() for x in tt_tensors_all])
     tensor_addrs = tensor_addrs.repeat(len(dram_cores), 1)
     tensor_addrs_mem_config = ttnn.MemoryConfig(
         ttnn.TensorMemoryLayout.HEIGHT_SHARDED,

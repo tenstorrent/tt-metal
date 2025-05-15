@@ -13,7 +13,7 @@
 #include <tt-metalium/command_queue.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/mesh_coord.hpp>
-#include "distributed_tensor.hpp"
+#include "ttnn/distributed/distributed_tensor.hpp"
 #include "ttnn/distributed/api.hpp"
 #include "ttnn/distributed/types.hpp"
 

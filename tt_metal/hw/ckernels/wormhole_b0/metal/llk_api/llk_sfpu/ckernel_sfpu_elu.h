@@ -10,7 +10,7 @@
 
 #include "sfpi.h"
 #include "ckernel_sfpu_exp.h"
-#include "ckernel_sfpu_converter.h"
+#include "sfpu/ckernel_sfpu_converter.h"
 
 using namespace sfpi;
 
@@ -20,9 +20,7 @@ namespace sfpu {
 template <bool APPROXIMATION_MODE>
 inline void calculate_elu(uint slope) {
     // SFPU microcode
-    Converter c_slope;
-    c_slope.u = slope;
-    vFloat s = c_slope.f;
+    vFloat s = Converter::as_float(slope);
 
 #pragma GCC unroll 0
     for (int d = 0; d < 8; d++) {

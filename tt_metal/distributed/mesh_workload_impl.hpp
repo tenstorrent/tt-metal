@@ -7,6 +7,7 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/mesh_buffer.hpp>
+#include "program/program_impl.hpp"
 
 namespace tt::tt_metal::distributed {
 using RuntimeArgsPerCore = std::vector<std::vector<RuntimeArgsData>>;
