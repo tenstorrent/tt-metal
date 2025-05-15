@@ -3,95 +3,15 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "convert_to_hwc_program_factory.hpp"
+
 #include "tt-metalium/tt_backend_api_types.hpp"
+
 #include "ttnn/tensor/types.hpp"
+#include "ttnn/operations/data_movement/sharded/sharded_common.hpp"
 
 namespace ttnn::operations::experimental::cnn::detail {
 
 using namespace tt::constants;
-
-struct WidthShardedRuntimeArgs {
-    uint32_t write_size;
-    uint32_t read_offset;
-    uint32_t bank_id;
-    uint32_t write_offset;
-};
-
-std::tuple<std::vector<std::vector<WidthShardedRuntimeArgs>>, uint32_t, uint32_t, uint32_t>
-compute_width_sharded_reshard_runtime_args(
-    const std::array<uint32_t, 2>& local_shard_shape,
-    const std::array<uint32_t, 2>& remote_shard_shape,
-    const std::vector<CoreCoord>& local_cores,
-    const std::vector<CoreCoord>& remote_cores,
-    const BufferType& remote_buffer_type,
-    const CoreType& remote_core_type,
-    IDevice* device,
-    uint32_t element_size) {
-    const uint32_t num_local_shards = local_cores.size();
-    const uint32_t num_remote_shards = remote_cores.size();
-
-    const uint32_t local_shard_height = local_shard_shape[0];
-    const uint32_t local_shard_width = local_shard_shape[1];
-    const uint32_t remote_shard_height = remote_shard_shape[0];
-    const uint32_t remote_shard_width = remote_shard_shape[1];
-
-    using WidthShardedRuntimeArgsForSingleCore = std::vector<WidthShardedRuntimeArgs>;
-
-    TT_FATAL(local_shard_height == remote_shard_height, "Unexpected mismatch in shard heights");
-
-    const uint32_t total_num_sticks = local_shard_height;
-    const uint32_t local_stride_bytes = element_size * local_shard_width;
-    const uint32_t remote_stride_bytes = element_size * remote_shard_width;
-
-    std::vector<WidthShardedRuntimeArgsForSingleCore> runtime_args_for_each_core;
-
-    bool is_final_transfer = false;
-    uint32_t local_shard_offset = 0;
-    uint32_t remote_shard_offset = 0;
-    uint32_t current_remote_core_idx = 0;
-    for (uint32_t current_local_core_idx = 0; current_local_core_idx < local_cores.size(); current_local_core_idx++) {
-        const auto& core = local_cores[current_local_core_idx];
-        WidthShardedRuntimeArgsForSingleCore core_args;
-        while (local_shard_offset < local_shard_width) {
-            const uint32_t remaining_input = local_shard_width - local_shard_offset;
-            const uint32_t remaining_output = remote_shard_width - remote_shard_offset;
-
-            // The last core might have some garbage in it because of uneven shards
-            is_final_transfer = (current_local_core_idx >= local_cores.size() - 1) &&
-                                (current_remote_core_idx >= remote_cores.size() - 1);
-            const uint32_t transfer_size =
-                is_final_transfer ? remaining_output : std::min(remaining_input, remaining_output);
-
-            const auto bank_id = device->allocator()->get_bank_ids_from_logical_core(
-                remote_buffer_type, remote_cores[current_remote_core_idx])[0];
-            core_args.emplace_back(
-                element_size * transfer_size,
-                element_size * local_shard_offset,
-                bank_id,
-                element_size * remote_shard_offset);
-
-            local_shard_offset += transfer_size;
-            remote_shard_offset += transfer_size;
-
-            // If the current output shard is full, move to the next one
-            if (remote_shard_offset == remote_shard_width) {
-                ++current_remote_core_idx;
-                remote_shard_offset = 0;
-            }
-            if (is_final_transfer) {
-                break;
-            }
-        }
-        local_shard_offset = 0;
-        runtime_args_for_each_core.push_back(core_args);
-    }
-
-    TT_FATAL(
-        runtime_args_for_each_core.size() == num_local_shards,
-        "Expect to have one set of runtime args per local core");  // sanity check
-
-    return {runtime_args_for_each_core, total_num_sticks, local_stride_bytes, remote_stride_bytes};
-}
 
 tt::tt_metal::operation::ProgramWithCallbacks multi_core_convert_to_hwc(const Tensor& a, Tensor& output) {
     tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
@@ -167,7 +87,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_convert_to_hwc(const Te
     const auto remote_address = a.buffer()->address();
     const auto remote_buffer_type = a.buffer()->buffer_type();
     const auto [runtime_args_for_each_core, total_num_sticks, dram_write_stride_bytes, dram_read_stride_bytes] =
-        compute_width_sharded_reshard_runtime_args(
+        data_movement::detail::compute_width_sharding_reshard_segments(
             {input_shard_height, input_shard_width},
             a.shard_spec()->shape,  // dram shard shape
             input_cores,
@@ -177,7 +97,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_convert_to_hwc(const Te
             a.device(),
             2);
 
-    // Split work across each kernel along tensor height since this is the best way to split work evenly
+    // Split DRAM read across each kernel along tensor height since this is the best way to split work evenly
     const uint32_t total_num_sticks_kernel_0 = input_shard_height / 2;
     const uint32_t total_num_sticks_kernel_1 = input_shard_height - total_num_sticks_kernel_0;
 
@@ -274,7 +194,6 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_convert_to_hwc(const Te
                         args.write_size, adjusted_read_offset, args.bank_id, adjusted_write_offset};
                     runtime_args_1.insert(runtime_args_1.end(), segment_kernel_1.begin(), segment_kernel_1.end());
                 }
-                tt::log_info("set runtime args... {} {}", runtime_args_0, runtime_args_1);
                 SetRuntimeArgs(program, writer_kernel_id0, input_cores[core_idx], runtime_args_0);
                 SetRuntimeArgs(program, writer_kernel_id1, input_cores[core_idx], runtime_args_1);
             }
@@ -285,10 +204,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_convert_to_hwc(const Te
         tt::tt_metal::Buffer* output_buffer = output.buffer();
         UpdateDynamicCircularBufferAddress(program, cb_out, *output_buffer);
     };
-    tt::log_info("setting runtime arg");
     set_runtime_args(program, a, output);
-
-    tt::log_info("done setting runtime arg");
 
     auto override_runtime_arguments_callback = [set_runtime_args](
                                                    const void* operation,
