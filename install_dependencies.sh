@@ -103,12 +103,6 @@ ub_buildtime_packages()
      libc++abi-17-dev \
      build-essential \
      xz-utils \
-     flex \
-     autoconf
-     automake \
-     libtool \
-     libevent-dev \
-     bison \
     )
 }
 
@@ -251,72 +245,22 @@ install_sfpi() {
 }
 
 install_mpi_uflm(){
-    #!/usr/bin/env bash
-    # -----------------------------------------------------------------------------
-    #  Open MPI 5.0.7 one‑shot build‑and‑install script
-    #  * clones source into $HOME/src/ompi‑v5.0.7 (shallow + sub‑modules)
-    #  * builds with all CPUs, ULFM fault‑tolerance enabled
-    #  * installs into /usr/local (requires sudo for the install step)
-    #  * works on Debian/Ubuntu/RHEL/Fedora with either gcc or clang toolchains
-    # -----------------------------------------------------------------------------
-    set -euo pipefail
-    OMPI_TAG="v5.0.7"
-    SRC_DIR="${HOME}/src/ompi-${OMPI_TAG}"
-    #PREFIX="/usr/local"          # change this if you prefer another location
-    #PREFIX="/opt/openmpi/5.0.7"
-    PREFIX="${PWD}/openmpi/5.0.7"
-    NPROC=$(nproc)
 
-    info() { printf '\033[1;34m==> %s\033[0m\n' "$*"; }
+    DEB_URL="https://github.com/dmakoviichuk-tt/mpi-ulfm/releases/download/v5.0.7-ulfm/openmpi-ulfm_5.0.7-1_amd64.deb"
+    DEB_FILE="$(basename "$DEB_URL")"
 
-    # -----------------------------------------------------------------------------
-    # 1. Install build prerequisites
-    # -----------------------------------------------------------------------------
-    info "Installing build prerequisites (apt)…"
-    apt-get update -qq
-    apt-get install -y build-essential gfortran git pkg-config \
-        libevent-dev libhwloc-dev m4 flex bison autoconf automake libtool
+    # 1. Create temp workspace
+    TMP_DIR="$(mktemp -d)"
+    cleanup() { rm -rf "$TMP_DIR"; }
+    trap cleanup EXIT INT TERM
 
+    echo "→ Downloading $DEB_FILE …"
+    curl -L --fail -o "$TMP_DIR/$DEB_FILE" "$DEB_URL"
 
+    # 2. Install
+    echo "→ Installing $DEB_FILE …"
 
-    # -----------------------------------------------------------------------------
-    # 2. Clone (or refresh) the Open MPI source tree
-    # -----------------------------------------------------------------------------
-    info "Cloning Open MPI source tree ${OMPI_TAG}…"
-    if [[ -d "$SRC_DIR" ]]; then
-        info "Existing source tree found, refreshing…"
-        git -C "$SRC_DIR" fetch --tags origin
-        git -C "$SRC_DIR" checkout "$OMPI_TAG"
-        git -C "$SRC_DIR" submodule sync --recursive
-        git -C "$SRC_DIR" submodule update --init --recursive
-    else
-        git clone --branch "$OMPI_TAG" --depth 1 --recurse-submodules \
-                https://github.com/open-mpi/ompi.git "$SRC_DIR"
-    fi
-
-    # -----------------------------------------------------------------------------
-    # 3. Build and install
-    # -----------------------------------------------------------------------------
-    pushd "$SRC_DIR" >/dev/null
-    info "Bootstrapping autotools…"
-    ./autogen.pl
-
-    info "Configuring (prefix $PREFIX)…"
-    ./configure --prefix="$PREFIX" \
-                --disable-dlopen \
-                --with-ft=ulfm \
-                --enable-mpirun-prefix-by-default
-
-    info "Building with $NPROC job(s)…"
-    make -j"$NPROC"
-
-    info "Installing to $PREFIX "
-    make install
-    if command -v ldconfig &>/dev/null; then
-        ldconfig      # refresh linker cache
-    fi
-    popd >/dev/null
-
+    sudo apt install -y "$TMP_DIR/$DEB_FILE"
 }
 
 # We don't really want to have hugepages dependency
