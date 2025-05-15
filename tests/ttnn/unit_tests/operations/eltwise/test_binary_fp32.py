@@ -6,10 +6,8 @@ import torch
 import ttnn
 
 import pytest
-from models.utility_functions import skip_for_grayskull
 
 
-@skip_for_grayskull("Unsupported dtype for Grayskull")
 @pytest.mark.parametrize(
     "ttnn_function",
     [
@@ -32,7 +30,6 @@ def test_fp32(device, ttnn_function):
     assert status
 
 
-@skip_for_grayskull("Unsupported dtype for Grayskull")
 @pytest.mark.parametrize(
     "ttnn_function",
     [
@@ -54,7 +51,6 @@ def test_int32(device, ttnn_function):
     assert status
 
 
-@skip_for_grayskull("Unsupported dtype for Grayskull")
 @pytest.mark.parametrize(
     "ttnn_function",
     [
@@ -75,7 +71,6 @@ def test_mul_fp32(device, ttnn_function):
     assert status
 
 
-@skip_for_grayskull("Unsupported dtype for Grayskull")
 @pytest.mark.parametrize(
     "ttnn_function",
     [
@@ -102,7 +97,6 @@ def test_div_fp32(device, ttnn_function):
     assert status
 
 
-@skip_for_grayskull("Unsupported dtype for Grayskull")
 @pytest.mark.parametrize(
     "ttnn_function",
     [
@@ -160,7 +154,6 @@ def test_div_bf16(device, ttnn_function):
     assert status
 
 
-@skip_for_grayskull("Unsupported dtype for Grayskull")
 @pytest.mark.parametrize(
     "ttnn_function",
     [
@@ -181,7 +174,6 @@ def test_pow_fp32(device, ttnn_function):
     assert status
 
 
-@skip_for_grayskull("Unsupported dtype for Grayskull")
 def test_squared_sum_fp32_activ(device):
     x_torch = torch.ones([1, 1, 64, 64], dtype=torch.float32)
     y_torch = torch.ones([1, 1, 64, 64], dtype=torch.float32) * 4
@@ -195,7 +187,6 @@ def test_squared_sum_fp32_activ(device):
     assert status
 
 
-@skip_for_grayskull("Unsupported dtype for Grayskull")
 @pytest.mark.parametrize(
     "ttnn_function",
     [
@@ -229,7 +220,6 @@ def test_add_fp32_input_activ(device, ttnn_function, shape):
     assert status
 
 
-@skip_for_grayskull("Unsupported dtype for Grayskull")
 @pytest.mark.parametrize(
     "ttnn_function",
     [
@@ -250,7 +240,6 @@ def test_logaddexp_fp32(device, ttnn_function):
     assert status
 
 
-@skip_for_grayskull("Unsupported dtype for Grayskull")
 @pytest.mark.parametrize(
     "ttnn_function",
     [
@@ -271,7 +260,6 @@ def test_logaddexp2_fp32(device, ttnn_function):
     assert status
 
 
-@skip_for_grayskull("Unsupported dtype for Grayskull")
 @pytest.mark.parametrize(
     "ttnn_function",
     [
@@ -292,7 +280,6 @@ def test_ldexp_fp32(device, ttnn_function):
     assert status
 
 
-@skip_for_grayskull("Unsupported dtype for Grayskull")
 @pytest.mark.parametrize(
     "ttnn_function",
     [
@@ -313,7 +300,6 @@ def test_bias_gelu_fp32(device, ttnn_function):
     assert status
 
 
-@skip_for_grayskull("Unsupported dtype for Grayskull")
 @pytest.mark.parametrize(
     "ttnn_function",
     [
@@ -334,7 +320,6 @@ def test_squared_difference_fp32(device, ttnn_function):
     assert status
 
 
-@skip_for_grayskull("Unsupported dtype for Grayskull")
 @pytest.mark.parametrize(
     "ttnn_function",
     [
@@ -357,7 +342,6 @@ def test_logical_fp32(device, ttnn_function):
     assert status
 
 
-@skip_for_grayskull("Unsupported dtype for Grayskull")
 @pytest.mark.parametrize(
     "ttnn_function",
     [
@@ -383,7 +367,6 @@ def test_relational_fp32(device, ttnn_function):
     assert status
 
 
-@skip_for_grayskull("Unsupported dtype for Grayskull")
 @pytest.mark.parametrize(
     "ttnn_function",
     [
@@ -406,7 +389,6 @@ def test_bitwise(device, ttnn_function):
     assert status
 
 
-@skip_for_grayskull("Unsupported dtype for Grayskull")
 @pytest.mark.parametrize(
     "ttnn_function",
     [
@@ -427,7 +409,6 @@ def test_bitwise_left_shift(device, ttnn_function):
     assert status
 
 
-@skip_for_grayskull("Unsupported dtype for Grayskull")
 @pytest.mark.parametrize(
     "ttnn_function",
     [

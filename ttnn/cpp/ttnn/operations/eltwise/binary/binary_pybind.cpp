@@ -2139,15 +2139,13 @@ void py_module(py::module& module) {
         module,
         ttnn::fmod,
         R"doc(Performs an eltwise-fmod operation. Formula : a - a.div(b, rounding_mode=trunc) * b.)doc",
-        R"doc(BFLOAT16)doc",
-        R"doc(Support provided only for WH_B0.)doc");
+        R"doc(BFLOAT16)doc");
 
     detail::bind_binary_overload_operation(
         module,
         ttnn::remainder,
         R"doc(Performs an eltwise-modulus operation. Formula : a - a.div(b, rounding_mode=floor) * b.)doc",
-        R"doc(BFLOAT16)doc",
-        R"doc(Support provided only for WH_B0.)doc");
+        R"doc(BFLOAT16)doc");
 
     detail::bind_inplace_operation(
         module,

@@ -9,7 +9,7 @@ import ttnn
 from tests.ttnn.unit_tests.operations.eltwise.backward.utility_funcs import (
     compare_pcc,
 )
-from models.utility_functions import skip_for_grayskull, torch_random
+from models.utility_functions import torch_random
 from itertools import product as parameters
 from functools import partial
 from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
@@ -106,7 +106,6 @@ def rand_bf16_gen(shape, device, *, min=0, max=1, memory_config=ttnn.DRAM_MEMORY
     return pt, tt
 
 
-@skip_for_grayskull("Possible accuracy issues with grayskull")
 @pytest.mark.parametrize(
     "a_shape, b_shape",
     (
@@ -496,7 +495,6 @@ def test_binary_sharded_core_grid(device, a_shape, b_shape, sharded_core_grid, m
     assert ttnn.pearson_correlation_coefficient(out_tt_sharded, out_pt) >= 0.99988
 
 
-@skip_for_grayskull("Requires wormhole_b0 to run")
 @pytest.mark.parametrize(
     "input_shapes",
     (
@@ -564,7 +562,6 @@ def test_binary_sfpu_ops(input_shapes, dtype, ttnn_fn, device):
     assert status >= 0.999
 
 
-@skip_for_grayskull("Requires wormhole_b0 to run")
 @pytest.mark.parametrize(
     "input_shapes",
     (
@@ -640,7 +637,6 @@ def test_binary_sfpu_opt_out(input_shapes, dtype, ttnn_fn, device):
     assert status >= 0.999
 
 
-@skip_for_grayskull("Requires wormhole_b0 to run")
 @pytest.mark.parametrize(
     "input_shapes",
     (
@@ -695,7 +691,6 @@ def test_binary_sfpu_bitwise_ops(input_shapes, dtype, ttnn_fn, device):
     assert status >= 0.999
 
 
-@skip_for_grayskull("Requires wormhole_b0 to run")
 @pytest.mark.parametrize(
     "input_shapes",
     (
@@ -811,7 +806,6 @@ binary_inplace_fns = {
         parameters({"mul_"}, {log_lhs_sqrt_abs_post}),
     ),
 )
-@skip_for_grayskull("Possible accuracy issues with grayskull")
 def test_inplace_binary_ops_with_tensor(a_shape, b_shape, ttnn_fn, activations, device):
     torch.manual_seed(0)
 
@@ -930,7 +924,6 @@ def test_bf4b_bf8b(a_shape, b_shape, input_dtype, pcc, ttnn_fn, device):
     assert ttnn.pearson_correlation_coefficient(torch_output_tensor, output_tensor) >= pcc
 
 
-@skip_for_grayskull("Requires wormhole_b0 to run")
 @pytest.mark.parametrize(
     "input_shapes",
     (
@@ -1032,7 +1025,6 @@ def test_inplace_binary_ops_invalid_bcast(a_shape, b_shape, ttnn_fn, device):
         torch.Size([920, 1, 256]),
     ),
 )
-@skip_for_grayskull("Possible accuracy issues with grayskull")
 @pytest.mark.parametrize("scalar", [-0.25, -16.5, 0.0, 0.05, 1.7, 19.0])
 def test_inplace_binary_with_scalar(a_shape, scalar, ttnn_fn, device):
     torch.manual_seed(0)
@@ -1083,7 +1075,6 @@ def test_binary_opt_output_invalid_bcast(a_shape, b_shape, out_shape, ttnn_fn, d
         ttnn_op(input_tensor_a, input_tensor_b, queue_id=cq_id, output_tensor=out_tt, use_legacy=False)
 
 
-@skip_for_grayskull()
 @pytest.mark.parametrize(
     "dtype_pt, dtype_tt",
     (

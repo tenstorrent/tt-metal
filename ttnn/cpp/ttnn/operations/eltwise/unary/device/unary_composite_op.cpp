@@ -347,8 +347,6 @@ Tensor ExecuteTrunc::invoke(
     const Tensor& input,
     const std::optional<MemoryConfig>& output_mem_config,
     std::optional<Tensor> output_tensor) {
-    auto arch = input.device()->arch();
-    TT_FATAL(arch != tt::ARCH::GRAYSKULL, "Op is not supported on Grayskull");
     output_tensor = output_tensor.value_or(ttnn::empty_like(input));
     Tensor floor_res = ttnn::floor(queue_id, input, output_mem_config);
     ttnn::where(
@@ -861,9 +859,6 @@ Tensor _normalize_global(const Tensor& y, const std::optional<MemoryConfig>& out
 }
 
 Tensor _frac(const Tensor& input, const std::optional<MemoryConfig>& output_mem_config) {
-    auto arch = input.device()->arch();
-    TT_FATAL(
-        arch == tt::ARCH::WORMHOLE_B0 or arch == tt::ARCH::BLACKHOLE, "Op is only supported on Wormhole or Blackhole");
     Tensor trunc_res = ttnn::trunc(input);
     Tensor result = ttnn::subtract(input, trunc_res, std::nullopt, output_mem_config);
     return result;
