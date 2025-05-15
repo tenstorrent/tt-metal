@@ -34,9 +34,10 @@ from models.tt_transformers.tt.load_checkpoints import (
 )
 from models.utility_functions import is_blackhole, is_wormhole_b0, nearest_32
 
-# models which require an overriding decoder precision and fidelity file
-REQUIRES_PERFORMANCE_DECODER_CONFIG = ["Llama3.1-8B-Instruct"]
+
+# file names for performance and accuracy mode override files
 PERFORMANCE_DECODER_CONFIG_FILENAME = "performance_decoder_config.json"
+ACCURACY_DECODER_CONFIG_FILENAME = "accuracy_decoder_config.json"
 
 
 class TensorGroup(Enum):
@@ -2311,21 +2312,13 @@ class HfModelWrapper:
 class DecodersPrecision:
     @classmethod
     def accuracy(cls, num_decoders, model_name):
-        inst = cls(num_decoders, model_name, ModelOptimizations.accuracy(model_name))
+        inst = cls._precision_factory(num_decoders, model_name, ModelOptimizations.accuracy)
         inst.__name__ = "accuracy"
         return inst
 
     @classmethod
     def performance(cls, num_decoders, model_name):
-        if model_name in REQUIRES_PERFORMANCE_DECODER_CONFIG:
-            model_params_dir = Path(__file__).parent.parent
-            decoder_config_path = model_params_dir / "model_params" / model_name / PERFORMANCE_DECODER_CONFIG_FILENAME
-            inst = parse_decoder_json(decoder_config_path)
-            logger.info(
-                f"Model {model_name} requires specific TensorPrecision and OpFidelity configuration, using {decoder_config_path}"
-            )
-        else:
-            inst = cls(num_decoders, model_name, ModelOptimizations.performance(model_name))
+        inst = cls._precision_factory(num_decoders, model_name, ModelOptimizations.performance)
         inst.__name__ = "performance"
         return inst
 
@@ -2362,6 +2355,33 @@ class DecodersPrecision:
         self._full_name = " | ".join(
             f"Decoder {decoder_id}: {conf._full_name}" for decoder_id, conf in self.decoder_optimizations.items()
         )
+
+    @classmethod
+    def _precision_factory(cls, num_decoders, model_name, optimization_level):
+        # use respective configuration for each optimization level
+        decoder_config_filename = None
+        match optimization_level:
+            case ModelOptimizations.accuracy:
+                decoder_config_filename = ACCURACY_DECODER_CONFIG_FILENAME
+            case ModelOptimizations.performance:
+                decoder_config_filename = PERFORMANCE_DECODER_CONFIG_FILENAME
+            case _:
+                raise ValueError(f"optimization_level ({optimization_level}) not implemented")
+
+        # check if decoder config exists, if it exists load it else use optimization_level
+        model_params_dir = Path(__file__).parent.parent
+        decoder_config_path = model_params_dir / "model_params" / model_name / decoder_config_filename
+        inst = None
+        if decoder_config_path.exists():
+            inst = parse_decoder_json(decoder_config_path,
+                                      default_optimization=optimization_level)
+            logger.info(
+                f"Model {model_name} requires specific TensorPrecision and OpFidelity configuration, using {decoder_config_path}"
+            )
+        else:
+            inst = cls(num_decoders, model_name, optimization_level(model_name))
+
+        return inst
 
 
 def num_to_corerange(x):
