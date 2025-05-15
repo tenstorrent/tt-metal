@@ -37,6 +37,7 @@ This configuration uses bfp4 MLP and bfp8 attention weights for all models excep
 | Llama3.2-90B      | T3K         | 87        | 99        | 6             | 5535      |
 | Qwen2.5-7B        | N300        | 86        | 97        | 31.0          | 89        |
 | Qwen2.5-72B       | T3K         | 99        | 100       | 15.2          | 225       |
+| Phi2              | N300        | 97        | 98        | 1.06          | 46.28     |
 | Phi3.5-mini       | N150        |           |           | 43.2          | 98        |
 | Phi3.5-mini       | N300        |           |           | 57.8          | 62        |
 | Phi3.5-mini       | T3K         |           |           | 48.8          | 51        |
@@ -72,6 +73,7 @@ Llama 3 models test as insensitive to attention precision and so we use bfp8 att
 | Llama3.2-90B      | T3K         | 97        | 100       | 6             | 5600      |
 | Qwen2.5-7B        | N300        | 86        | 97        | 31.3          | 86        |
 | Qwen2.5-72B       | T3K         | 99        | 100       | 15.1          | 216       |
+| Phi2              | N300        | 97        | 98        | 1.05          | 48.87     |
 | Phi3.5-mini       | N150        |           |           | 38.8          | 92        |
 | Phi3.5-mini       | N300        |           |           | 53.9          | 63        |
 | Phi3.5-mini       | T3K         |           |           | 48.6          | 53        |
@@ -130,6 +132,7 @@ This configuration uses bfp4 MLP FF1+FF3 for all models. **Batch_size=32 and pre
 | Llama3.1-70B   | TG     |               |               |
 | Qwen2.5-7B     | N300   |               |               |
 | Qwen2.5-72B    | T3K    |               |               |
+| Phi2           | N300   | 33.7          | 50.28         |
 
 # Llama 3 model precision and math fidelity
 
