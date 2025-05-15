@@ -8,7 +8,9 @@ Also note that all the performance metrics below were taken for a maximum genera
 
 ## Performance
 
-This configuration uses bfp4 MLP and bfp8 attention weights for all models except Qwen-2.5-7B, which uses bfp8 MLP and bfp16 attention weights.
+This configuration uses bfp4 MLP and bfp8 attention weights for all models except:
+* Qwen-2.5-7B, which uses bfp8 MLP and bfp16 attention weights in all decoder layers
+* Llama-3.1-8B which uses bfp8 MLP in only the 32nd decoder layer and bfp4 MLP elsewhere
 
 | Model             | Device      | Top-1 (%) | Top-5 (%) | Speed (t/s/u) | TTFT (ms) |
 |-------------------|-------------|-----------|-----------|---------------|-----------|
