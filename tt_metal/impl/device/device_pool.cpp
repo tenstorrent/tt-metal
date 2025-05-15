@@ -306,9 +306,9 @@ void DevicePool::initialize_host(IDevice* dev) const {
         TT_ASSERT(dev->num_hw_cqs() == 1, "num_hw_cqs must be 1 in slow dispatch");
     }
 
-    ClearNocData(dev->id());
-    DprintServerAttach(dev->id());
-    watcher_init(dev->id());
+    // ClearNocData(dev->id());
+    // DprintServerAttach(dev->id());
+    // watcher_init(dev->id());
 
     // TODO: as optimization, investigate removing all this call for already initialized devivces
     if (!tt_metal::MetalContext::instance().rtoptions().get_skip_reset_cores_on_init()) {
@@ -499,7 +499,7 @@ void DevicePool::add_devices_to_pool(const std::vector<chip_id_t>& device_ids) {
         }
     }
 
-    this->using_fast_dispatch = (std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr);
+    this->using_fast_dispatch = tt::tt_metal::MetalContext::instance().rtoptions().get_fast_dispatch();
     if (this->using_fast_dispatch) {
         populate_fd_kernels(devices_to_activate, this->num_hw_cqs);
     }
