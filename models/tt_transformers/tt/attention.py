@@ -304,7 +304,7 @@ class Attention(LightweightModule):
         self.layer_past = [
             ttnn.as_tensor(
                 cache_k,
-                dtype=ttnn.bfloat8_b,
+                dtype=ttnn.bfloat16,
                 layout=self.model_config["ATTN_W_LAYOUT_TILE"],
                 device=self.mesh_device,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -468,15 +468,20 @@ class Attention(LightweightModule):
             keys_shards = ttnn.get_device_tensors(keys)
             page_table_val = ttnn.to_torch(ttnn.get_device_tensors(page_table)[0])[0]
             current_pos_val = ttnn.to_torch(ttnn.get_device_tensors(current_pos)[0])[0]
-            cur_page = int(current_pos_val.item() // block_size)
-            local_block_ids = page_table_val[page_table_val == cur_page].unique()
-            assert len(local_block_ids) == 1
-            global_block_id = int(local_block_ids[0])
 
             new_keys_shards = []
 
-            total_blocks = len(keys_shards) * keys_shards[0].shape[0]
-            high_precision_block_ids = set(range(total_blocks - 100, total_blocks))
+            cur_page = int(current_pos_val.item() // block_size)
+            page_table_val = ttnn.to_torch(ttnn.get_device_tensors(page_table)[0])[0]
+
+            N = 513
+            start_vpage = max(0, cur_page - N + 1)
+            end_vpage = cur_page + 1
+            virtual_pages = list(range(start_vpage, end_vpage))
+            physical_local_block_ids = page_table_val[start_vpage:end_vpage].tolist()
+
+            # Set of physical block IDs to keep in high precision
+            high_precision_block_ids = set(physical_local_block_ids)
 
             for shard_index, shard in enumerate(keys_shards):
                 processed_blocks = []
@@ -723,7 +728,7 @@ class Attention(LightweightModule):
         else:
             keys_BKSD, values_BKSD = self.layer_past[0], self.layer_past[1]
 
-        self.k_cache_dtype = ttnn.bfloat8_b
+        self.k_cache_dtype = ttnn.bfloat16
         self.v_cache_dtype = ttnn.bfloat8_b
 
         # ---- K ----

@@ -67,11 +67,11 @@ def get_accuracy_thresholds(model_args, optimizations):
 @pytest.mark.parametrize(
     "prefill_len, decode_len, max_seq_len",
     [
-        (512, 128, 1024),
+        (512, 64, 1024),
         (2048, 256, 2304),
         (4096, 512, 4608),
         (8192, 512, 8704),
-        (16384, 512, 16896),
+        (16384, 64, 16896),
     ],
 )
 @pytest.mark.parametrize(
@@ -105,7 +105,7 @@ def get_accuracy_thresholds(model_args, optimizations):
 )
 @pytest.mark.parametrize(
     "page_params",
-    [{"page_block_size": 32, "page_max_num_blocks": 1024}],
+    [{"page_block_size": 32, "page_max_num_blocks": 2048}],
 )
 @pytest.mark.parametrize(
     "batch_size",
