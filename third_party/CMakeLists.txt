@@ -291,7 +291,7 @@ endif()
 
 set(ULFM_PREFIX ${CMAKE_BINARY_DIR}/openmpi-ulfm-install)
 set(ULFM_BUILD_DIR ${CMAKE_BINARY_DIR}/openmpi-ulfm-build)
-set(ULFM_LIB ${ULFM_PREFIX}/lib/libmpi.so)
+set(ULFM_LIB ${ULFM_PREFIX}/lib/libmpi.so.40)
 
 ExternalProject_Add(
     openmpi_ulfm_build
@@ -319,7 +319,7 @@ add_custom_command(
     COMMAND
         /usr/bin/echo "void dummy_mpi(void){}" | ${CMAKE_C_COMPILER} -shared -x c - -o ${ULFM_LIB}
     VERBATIM
-    COMMENT "Building stub libmpi.so"
+    COMMENT "Building stub libmpi.so.40"
 )
 add_custom_target(fake_mpi ALL DEPENDS ${ULFM_LIB})
 
