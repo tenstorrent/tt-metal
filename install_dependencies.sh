@@ -283,7 +283,6 @@ install_mpi_uflm(){
     # 2. Clone (or refresh) the Open MPI source tree
     # -----------------------------------------------------------------------------
     info "Cloning Open MPI source tree ${OMPI_TAG}…"
-    mkdir -p "$SRC_DIR"
     if [[ -d "$SRC_DIR" ]]; then
         info "Existing source tree found, refreshing…"
         git -C "$SRC_DIR" fetch --tags origin
