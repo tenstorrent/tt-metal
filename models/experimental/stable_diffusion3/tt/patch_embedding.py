@@ -11,14 +11,14 @@ from dataclasses import dataclass
 import torch
 import ttnn
 
-from .conv2d import TtConv2d, TtConv2dParameters
+from .patch_embedding_conv2d import TtPatchEmbeddingConv2d, TtPatchEmbeddingConv2dParameters
 from .substate import substate
 from .utils import from_torch_fast
 
 
 @dataclass
 class TtPatchEmbedParameters:
-    proj: TtConv2dParameters
+    proj: TtPatchEmbeddingConv2dParameters
     pos_embed: ttnn.Tensor
 
     @classmethod
@@ -37,7 +37,7 @@ class TtPatchEmbedParameters:
             )
 
         return cls(
-            proj=TtConv2dParameters.from_torch(
+            proj=TtPatchEmbeddingConv2dParameters.from_torch(
                 substate(state, "proj"),
                 dtype=ttnn.bfloat16,
                 hidden_dim_padding=hidden_dim_padding,
@@ -59,7 +59,7 @@ class TtPatchEmbed:
         super().__init__()
 
         self._pos_embed_max_size = parameters.pos_embed_max_size
-        self._proj = TtConv2d(parameters.proj, device=mesh_device)
+        self._proj = TtPatchEmbeddingConv2d(parameters.proj, device=mesh_device)
         self._pos_embed = parameters.pos_embed
         self._patch_size = 2
 
