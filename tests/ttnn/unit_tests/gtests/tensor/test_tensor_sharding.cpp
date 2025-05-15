@@ -1371,4 +1371,9 @@ INSTANTIATE_TEST_SUITE_P(
             .shape = Shape({3 * 32, 4 * 32, 5 * 32}),
             .shard_shape = Shape({32, 32, 32}),
             .layout = Layout::TILE,
+        },
+        NDShardingParams{
+            .shape = Shape({20, 20, 20}),
+            .shard_shape = Shape({10, 10, 10}),
+            .layout = Layout::ROW_MAJOR,
         }));

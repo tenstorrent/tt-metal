@@ -260,10 +260,7 @@ Shape2D TensorLayout::get_logical_shard_shape() const {
 
 Shape2D TensorLayout::get_physical_shard_shape() const {
     if (auto& nd_shard_spec = memory_config_.nd_shard_spec()) {
-        size_t width =
-            nd_shard_spec->physical_shard_shape.empty() ? 1 : nd_shard_spec->physical_shard_shape.view().back();
-        size_t height = nd_shard_spec->physical_shard_shape.volume() / width;
-        return Shape2D{height, width};
+        return Shape2D{nd_shard_spec->physical_shard_shape[-2], nd_shard_spec->physical_shard_shape[-1]};
     }
 
     TT_FATAL(
