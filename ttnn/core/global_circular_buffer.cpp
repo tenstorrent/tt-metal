@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "global_circular_buffer.hpp"
+#include "ttnn/global_circular_buffer.hpp"
 
 #include <memory>
 #include <tt-metalium/global_circular_buffer_impl.hpp>
