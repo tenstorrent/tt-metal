@@ -6,6 +6,7 @@
 
 #include <tt_stl/overloaded.hpp>
 
+#include "tt-metalium/distributed_host_buffer.hpp"
 #include "ttnn/distributed/api.hpp"
 #include "ttnn/tensor/host_buffer/functions.hpp"
 #include "ttnn/tensor/storage.hpp"
@@ -104,27 +105,56 @@ Tensor transform(const Tensor& tensor, const std::function<Tensor(const Tensor&)
     TT_FATAL(is_multi_device_host_tensor(tensor), "transform only supports multi-device host tensors");
     const auto& storage = std::get<MultiDeviceHostStorage>(tensor.storage());
 
-    std::vector<TensorSpec> transformed_specs;
-    std::vector<HostBuffer> transformed_buffers;
-    transformed_buffers.reserve(storage.num_buffers());
-    transformed_specs.reserve(storage.num_buffers());
-    for (size_t i = 0; i < storage.num_buffers(); i++) {
-        Tensor transformed_tensor_shard = transform_func(Tensor(storage.get_buffer(i), storage.get_tensor_spec(i)));
-        transformed_specs.push_back(transformed_tensor_shard.get_tensor_spec());
-        auto* host_storage = std::get_if<HostStorage>(&transformed_tensor_shard.get_storage());
-        TT_FATAL(host_storage != nullptr, "transform function must return a host tensor");
-        transformed_buffers.push_back(std::move(host_storage->buffer));
+    if (storage.is_distributed_buffer()) {
+        const auto& distributed_buffer = storage.get_distributed_buffer();
+        std::optional<TensorSpec> transformed_spec;
+        DistributedHostBuffer transformed_buffer = distributed_buffer.transform([&](const HostBuffer& buffer) {
+            auto transformed_tensor = transform_func(Tensor(buffer, tensor.get_tensor_spec()));
+            auto* host_storage = std::get_if<HostStorage>(&transformed_tensor.get_storage());
+            TT_FATAL(host_storage != nullptr, "transform function must return a host tensor");
+            if (transformed_spec.has_value()) {
+                TT_FATAL(
+                    *transformed_spec == transformed_tensor.get_tensor_spec(), "All shards must have the same spec");
+            } else {
+                transformed_spec = transformed_tensor.get_tensor_spec();
+            }
+            return std::move(host_storage->buffer);
+        });
+        transformed_spec = transformed_spec.value_or(tensor.get_tensor_spec());
+        return Tensor(
+            MultiDeviceHostStorage(std::move(transformed_buffer), *transformed_spec),
+            *transformed_spec,
+            tensor.get_distributed_tensor_config());
+    } else {
+        const auto& host_buffers = storage.get_host_buffers();
+        std::vector<TensorSpec> transformed_specs;
+        std::vector<HostBuffer> transformed_buffers;
+        transformed_buffers.reserve(host_buffers.size());
+        transformed_specs.reserve(host_buffers.size());
+        for (size_t i = 0; i < host_buffers.size(); i++) {
+            Tensor transformed_tensor_shard = transform_func(Tensor(host_buffers[i], storage.get_tensor_spec(i)));
+            transformed_specs.push_back(transformed_tensor_shard.get_tensor_spec());
+            auto* host_storage = std::get_if<HostStorage>(&transformed_tensor_shard.get_storage());
+            TT_FATAL(host_storage != nullptr, "transform function must return a host tensor");
+            transformed_buffers.push_back(std::move(host_storage->buffer));
+        }
+        TensorSpec reference_spec = transformed_specs.front();
+        MultiDeviceHostStorage transformed_storage(std::move(transformed_buffers), std::move(transformed_specs));
+        return Tensor(std::move(transformed_storage), reference_spec, tensor.get_distributed_tensor_config());
     }
-    TensorSpec reference_spec = transformed_specs.front();
-    MultiDeviceHostStorage transformed_storage(std::move(transformed_buffers), std::move(transformed_specs));
-    return Tensor(std::move(transformed_storage), reference_spec, tensor.get_distributed_tensor_config());
 }
 
 void apply(const Tensor& tensor, const std::function<void(const Tensor&)>& callable) {
     TT_FATAL(is_multi_device_host_tensor(tensor), "apply only supports multi-device host tensors");
     const auto& storage = std::get<MultiDeviceHostStorage>(tensor.storage());
-    for (size_t i = 0; i < storage.num_buffers(); i++) {
-        callable(Tensor(storage.get_buffer(i), storage.get_tensor_spec(i)));
+    if (storage.is_distributed_buffer()) {
+        const auto& distributed_buffer = storage.get_distributed_buffer();
+        distributed_buffer.apply([&](const HostBuffer& buffer) { callable(Tensor(buffer, tensor.get_tensor_spec())); });
+    } else {
+        const auto& host_buffers = storage.get_host_buffers();
+        for (size_t i = 0; i < host_buffers.size(); i++) {
+            callable(Tensor(host_buffers[i], storage.get_tensor_spec(i)));
+        }
     }
 }
 

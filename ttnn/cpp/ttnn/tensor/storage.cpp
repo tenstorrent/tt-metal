@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <algorithm>
+#include <vector>
 
 #include "tt-metalium/mesh_coord.hpp"
 
@@ -74,9 +75,46 @@ bool DeviceStorage::is_uniform_storage() const {
            std::all_of(specs.begin(), specs.end(), [this](const auto& spec) { return spec.second == specs[0].second; });
 }
 
+MultiDeviceHostStorage::MultiDeviceHostStorage(DistributedHostBuffer distributed_buffer, TensorSpec spec) :
+    storage_(std::move(distributed_buffer)) {
+    specs_.push_back(std::move(spec));
+}
+
+MultiDeviceHostStorage::MultiDeviceHostStorage(std::vector<HostBuffer> buffers, std::vector<TensorSpec> specs) :
+    storage_(std::move(buffers)), specs_(std::move(specs)) {}
+
 HostBuffer MultiDeviceHostStorage::get_buffer(int buffer_index) const {
-    TT_FATAL(buffer_index < buffers_.size(), "Buffer not found for buffer_index {}", buffer_index);
-    return buffers_[buffer_index];
+    return std::visit(
+        tt::stl::overloaded{
+            [buffer_index](const DistributedHostBuffer& distributed_buffer) {
+                TT_FATAL(
+                    distributed_buffer.shape().mesh_size() == 1 && buffer_index == 0,
+                    "Only support getting shard 0 from distributed buffer of unit shape");
+                return *distributed_buffer.get_shard(
+                    distributed::MeshCoordinate::zero_coordinate(distributed_buffer.shape().dims()));
+            },
+            [buffer_index](const std::vector<HostBuffer>& host_buffers) {
+                TT_FATAL(
+                    buffer_index < host_buffers.size(),
+                    "Buffer index {} out of bounds {}",
+                    buffer_index,
+                    host_buffers.size());
+                return host_buffers[buffer_index];
+            },
+        },
+        storage_);
+}
+
+bool MultiDeviceHostStorage::is_distributed_buffer() const {
+    return std::holds_alternative<DistributedHostBuffer>(storage_);
+}
+
+const DistributedHostBuffer& MultiDeviceHostStorage::get_distributed_buffer() const {
+    return std::get<DistributedHostBuffer>(storage_);
+}
+
+const std::vector<HostBuffer>& MultiDeviceHostStorage::get_host_buffers() const {
+    return std::get<std::vector<HostBuffer>>(storage_);
 }
 
 TensorSpec MultiDeviceHostStorage::get_tensor_spec(int spec_index) const {
@@ -84,16 +122,36 @@ TensorSpec MultiDeviceHostStorage::get_tensor_spec(int spec_index) const {
     return specs_[spec_index];
 }
 
-size_t MultiDeviceHostStorage::num_buffers() const { return buffers_.size(); }
-
-bool MultiDeviceHostStorage::is_allocated() const {
-    return std::all_of(buffers_.begin(), buffers_.end(), [](auto&& buffer) { return buffer.is_allocated(); });
+size_t MultiDeviceHostStorage::num_buffers() const {
+    return std::visit(
+        tt::stl::overloaded{
+            [](const DistributedHostBuffer& distributed_buffer) { return distributed_buffer.shape().mesh_size(); },
+            [](const std::vector<HostBuffer>& host_buffers) { return host_buffers.size(); },
+        },
+        storage_);
 }
-
+bool MultiDeviceHostStorage::is_allocated() const {
+    return std::visit(
+        tt::stl::overloaded{
+            [](const DistributedHostBuffer& distributed_buffer) { return distributed_buffer.is_allocated(); },
+            [](const std::vector<HostBuffer>& host_buffers) {
+                return std::all_of(
+                    host_buffers.begin(), host_buffers.end(), [](const auto& buffer) { return buffer.is_allocated(); });
+            },
+        },
+        storage_);
+}
 void MultiDeviceHostStorage::deallocate() {
-    for (auto& buffer : buffers_) {
-        buffer.deallocate();
-    }
+    std::visit(
+        tt::stl::overloaded{
+            [](DistributedHostBuffer& distributed_buffer) { distributed_buffer.deallocate(); },
+            [](std::vector<HostBuffer>& host_buffers) {
+                for (auto& buffer : host_buffers) {
+                    buffer.deallocate();
+                }
+            },
+        },
+        storage_);
 }
 
 }  // namespace tt::tt_metal

@@ -56,9 +56,12 @@ struct DeviceStorage {
 
 class MultiDeviceHostStorage {
 public:
-    MultiDeviceHostStorage() = default;
-    MultiDeviceHostStorage(std::vector<HostBuffer> buffers, std::vector<TensorSpec> specs) :
-        buffers_(std::move(buffers)), specs_(std::move(specs)) {}
+    // Creates a `MultiDeviceHostStorage` from a list of `HostBuffer`s and `TensorSpec`s.
+    MultiDeviceHostStorage(std::vector<HostBuffer> buffers, std::vector<TensorSpec> specs);
+
+    // Creates a `MultiDeviceHostStorage` from a `DistributedHostBuffer` and a `TensorSpec`.
+    // To support lock-step behavior across multiple hosts, `TensorSpec` is enforced to be uniform across all shards.
+    MultiDeviceHostStorage(DistributedHostBuffer distributed_buffer, TensorSpec spec);
 
     static constexpr auto attribute_names = std::forward_as_tuple();
     auto attribute_values() const { return std::forward_as_tuple(); }
@@ -68,6 +71,13 @@ public:
 
     // Returns `TensorSpec` at position `spec_index`;
     TensorSpec get_tensor_spec(int spec_index) const;
+
+    // Returns the `DistributedHostBuffer` that contains all the `HostBuffer`s.
+    bool is_distributed_buffer() const;
+
+    const DistributedHostBuffer& get_distributed_buffer() const;
+
+    const std::vector<HostBuffer>& get_host_buffers() const;
 
     // Returns the number of `HostBuffer`s in the storage;
     size_t num_buffers() const;
@@ -79,7 +89,8 @@ public:
     void deallocate();
 
 private:
-    std::vector<HostBuffer> buffers_;
+    // TODO: migrate all usages of std::vector<HostBuffer> to DistributedHostBuffer.
+    std::variant<std::vector<HostBuffer>, DistributedHostBuffer> storage_;
     std::vector<TensorSpec> specs_;
 };
 

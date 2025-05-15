@@ -582,6 +582,7 @@ Tensor to_host_mesh_tensor(const Tensor& tensor, bool blocking, ttnn::QueueId cq
     }
     // Wait for allocations to complete
     tensor.mesh_device()->wait_for_thread_pool();
+
     // Point shard_data_transfers to their associated host memory, which was allocated
     // through the thread-pool.
     for (std::size_t shard_idx = 0; shard_idx < num_buffers; shard_idx++) {
@@ -720,20 +721,20 @@ Tensor to_device<bfloat8_b>(
     return to_device<uint32_t>(tensor, target_device, memory_config, cq_id);
 }
 
-template <typename T>
+namespace {
+
 DeviceStorage replicate_to_mesh_buffer(
     const HostStorage& storage,
     distributed::MeshDevice* mesh_device,
     const std::shared_ptr<distributed::MeshBuffer>& mesh_buffer,
     const TensorSpec& tensor_spec,
     ttnn::QueueId cq_id) {
-    auto data_to_write = host_buffer::get_as<T>(storage.buffer);
+    const auto data_to_write = storage.buffer.view_bytes();
     const auto expected_packed_buffer_size_bytes = tensor_spec.compute_packed_buffer_size_bytes();
-    const auto input_size_bytes = data_to_write.size() * sizeof(T);
     TT_FATAL(
-        input_size_bytes == expected_packed_buffer_size_bytes,
+        data_to_write.size() == expected_packed_buffer_size_bytes,
         "Host data with total size {}B does not match expected size {}B of device buffer!",
-        input_size_bytes,
+        data_to_write.size(),
         expected_packed_buffer_size_bytes);
 
     mesh_device->mesh_command_queue(*cq_id).enqueue_write_mesh_buffer(
@@ -747,7 +748,6 @@ DeviceStorage replicate_to_mesh_buffer(
     return DeviceStorage(mesh_buffer, std::move(specs));
 }
 
-template <typename T>
 DeviceStorage shard_to_mesh_buffer(
     const MultiDeviceHostStorage& storage,
     distributed::MeshDevice* mesh_device,
@@ -755,6 +755,16 @@ DeviceStorage shard_to_mesh_buffer(
     const TensorSpec& tensor_spec,
     const std::vector<distributed::MeshCoordinate>& coords,
     ttnn::QueueId cq_id) {
+    if (storage.is_distributed_buffer()) {
+        mesh_device->mesh_command_queue(*cq_id).enqueue_write(
+            mesh_buffer, storage.get_distributed_buffer(), /*blocking=*/false);
+        std::vector<std::pair<distributed::MeshCoordinate, TensorSpec>> specs;
+        for (const auto& coord : storage.get_distributed_buffer().shard_coords()) {
+            specs.push_back(std::make_pair(coord, tensor_spec));
+        }
+        return DeviceStorage(mesh_buffer, std::move(specs));
+    }
+
     const auto& mesh_shape = mesh_device->shape();
     TT_FATAL(
         coords.size() == storage.num_buffers(),
@@ -774,15 +784,12 @@ DeviceStorage shard_to_mesh_buffer(
         specs.push_back(std::make_pair(coords[i], shard_tensor_spec));
         const auto& shard_host_buffer = storage.get_buffer(i);
 
-        const auto& shard_buffer = mesh_buffer->get_device_buffer(coords[i]);
-
-        auto data_to_write = host_buffer::get_as<T>(shard_host_buffer);
+        auto data_to_write = shard_host_buffer.view_bytes();
         const auto expected_packed_buffer_size_bytes = shard_tensor_spec.compute_packed_buffer_size_bytes();
-        const auto input_size_bytes = data_to_write.size() * sizeof(T);
         TT_FATAL(
-            input_size_bytes == expected_packed_buffer_size_bytes,
+            data_to_write.size() == expected_packed_buffer_size_bytes,
             "Host data with total size {}B does not match expected size {}B of device buffer!",
-            input_size_bytes,
+            data_to_write.size(),
             expected_packed_buffer_size_bytes);
         TT_FATAL(
             expected_packed_buffer_size_bytes <= tensor_spec.compute_packed_buffer_size_bytes(),
@@ -790,13 +797,15 @@ DeviceStorage shard_to_mesh_buffer(
         shard_data_transfers.push_back(distributed::MeshCommandQueue::ShardDataTransfer{
             .shard_coord = coords[i],
             .host_data = const_cast<void*>(reinterpret_cast<const void*>(data_to_write.data())),
-            .region = BufferRegion(0, input_size_bytes)});
+            .region = BufferRegion(0, data_to_write.size())});
     }
 
     mesh_device->mesh_command_queue(*cq_id).enqueue_write_shards(mesh_buffer, shard_data_transfers, /*blocking=*/false);
 
     return DeviceStorage(mesh_buffer, std::move(specs));
 }
+
+}  // namespace
 
 template <typename T>
 DeviceStorage to_device_mesh_buffer(
@@ -809,13 +818,13 @@ DeviceStorage to_device_mesh_buffer(
         tt::stl::overloaded{
             [&mesh_buffer, &tensor_spec, cq_id](const HostStorage& storage) {
                 // Replicate data across devices in a mesh.
-                return replicate_to_mesh_buffer<T>(storage, mesh_buffer->device(), mesh_buffer, tensor_spec, cq_id);
+                return replicate_to_mesh_buffer(storage, mesh_buffer->device(), mesh_buffer, tensor_spec, cq_id);
             },
             [&mesh_buffer, &tensor_spec, cq_id, &host_tensor_attributes](const MultiDeviceHostStorage& storage) {
                 // Shard multi device host shards across devices in a mesh.
                 auto* mesh_device = mesh_buffer->device();
                 auto coords = host_tensor_attributes.determine_distribution(mesh_device->shape());
-                return shard_to_mesh_buffer<T>(storage, mesh_device, mesh_buffer, tensor_spec, coords, cq_id);
+                return shard_to_mesh_buffer(storage, mesh_device, mesh_buffer, tensor_spec, coords, cq_id);
             },
             [](const auto& s) -> DeviceStorage { TT_THROW("Unexpected storage type {}", tt::stl::get_type_name(s)); }},
         host_storage);

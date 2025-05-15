@@ -46,8 +46,15 @@ std::vector<Tensor> get_device_tensors(const Tensor& tensor) {
     if (std::holds_alternative<tt::tt_metal::MultiDeviceHostStorage>(tensor.get_storage())) {
         std::vector<ttnn::Tensor> tensors;
         auto& host_storage = std::get<tt::tt_metal::MultiDeviceHostStorage>(tensor.get_storage());
-        for (int i = 0; i < host_storage.num_buffers(); ++i) {
-            tensors.push_back(Tensor{host_storage.get_buffer(i), host_storage.get_tensor_spec(i)});
+        if (host_storage.is_distributed_buffer()) {
+            const auto& distributed_buffer = host_storage.get_distributed_buffer();
+            distributed_buffer.apply(
+                [&](const HostBuffer& buffer) { tensors.push_back(Tensor{buffer, tensor.get_tensor_spec()}); });
+        } else {
+            const auto& host_buffers = host_storage.get_host_buffers();
+            for (int i = 0; i < host_buffers.size(); ++i) {
+                tensors.push_back(Tensor{host_buffers[i], host_storage.get_tensor_spec(i)});
+            }
         }
         return tensors;
     } else if (std::holds_alternative<tt::tt_metal::DeviceStorage>(tensor.get_storage())) {

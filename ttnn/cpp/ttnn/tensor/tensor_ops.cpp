@@ -4,6 +4,7 @@
 
 #include "tensor_ops.hpp"
 
+#include "tt-metalium/distributed_host_buffer.hpp"
 #include "tt_stl/overloaded.hpp"
 #include "ttnn/tensor/storage.hpp"
 #include "ttnn/tensor/tensor.hpp"
@@ -117,17 +118,57 @@ Tensor tensor_to_layout(const Tensor& input_tensor, Layout target_layout, distri
                 [&](const HostStorage& s) { return tensor_impl::to_layout_wrapper(input_tensor, target_layout); },
                 [&](const MultiDeviceHostStorage& s) {
                     // TODO: #22045 - Move to `transform` and use OMP parallel for.
-                    std::vector<Tensor> shards(s.num_buffers());
-                    for (std::size_t shard_idx = 0; shard_idx < s.num_buffers(); ++shard_idx) {
-                        // Multi-Thread Host tilization of shards.
-                        mesh_device->enqueue_to_thread_pool([shard_idx, &s, &shards, target_layout]() {
-                            ZoneScopedN("HostTilize");
-                            Tensor shard(s.get_buffer(shard_idx), s.get_tensor_spec(shard_idx));
-                            shards[shard_idx] = tensor_impl::to_layout_wrapper(shard, target_layout);
-                        });
+                    if (s.is_distributed_buffer()) {
+                        const auto& distributed_buffer = s.get_distributed_buffer();
+                        std::optional<TensorSpec> transformed_spec;
+                        std::mutex transformed_buffer_mutex;
+                        DistributedHostBuffer transformed_buffer =
+                            distributed_buffer.transform([&](const HostBuffer& buffer) {
+                                // Multi-Thread Host tilization of shards.
+                                HostBuffer transformed_buffer;
+                                mesh_device->enqueue_to_thread_pool([&]() {
+                                    ZoneScopedN("HostTilize");
+                                    Tensor transformed_tensor = tensor_impl::to_layout_wrapper(
+                                        Tensor(buffer, input_tensor.get_tensor_spec()), target_layout);
+                                    TT_FATAL(
+                                        transformed_tensor.storage_type() == StorageType::HOST,
+                                        "Unexpected storage type");
+                                    transformed_buffer = std::get<HostStorage>(transformed_tensor.get_storage()).buffer;
+                                    {
+                                        std::lock_guard<std::mutex> lock(transformed_buffer_mutex);
+                                        if (transformed_spec.has_value()) {
+                                            TT_FATAL(
+                                                *transformed_spec == transformed_tensor.get_tensor_spec(),
+                                                "All shards must have the same spec");
+                                        } else {
+                                            transformed_spec = transformed_tensor.get_tensor_spec();
+                                        }
+                                    }
+                                });
+                                return transformed_buffer;
+                            });
+                        mesh_device->wait_for_thread_pool();
+                        transformed_spec = transformed_spec.value_or(input_tensor.get_tensor_spec());
+                        return Tensor(
+                            MultiDeviceHostStorage(std::move(transformed_buffer), *transformed_spec),
+                            *transformed_spec,
+                            input_tensor.get_distributed_tensor_config());
+                    } else {
+                        const auto& host_buffers = s.get_host_buffers();
+                        std::vector<Tensor> shards(host_buffers.size());
+                        for (std::size_t shard_idx = 0; shard_idx < host_buffers.size(); ++shard_idx) {
+                            // Multi-Thread Host tilization of shards.
+                            mesh_device->enqueue_to_thread_pool(
+                                [shard_idx, &s, &shards, target_layout, &host_buffers]() {
+                                    ZoneScopedN("HostTilize");
+                                    Tensor shard(host_buffers[shard_idx], s.get_tensor_spec(shard_idx));
+                                    shards[shard_idx] = tensor_impl::to_layout_wrapper(shard, target_layout);
+                                });
+                        }
+                        mesh_device->wait_for_thread_pool();
+                        return ttnn::distributed::aggregate_as_tensor(
+                            shards, input_tensor.get_distributed_tensor_config());
                     }
-                    mesh_device->wait_for_thread_pool();
-                    return ttnn::distributed::aggregate_as_tensor(shards, input_tensor.get_distributed_tensor_config());
                 },
                 [&](const DeviceStorage& s) -> Tensor { TT_THROW("Unexpected storage type"); },
             },
