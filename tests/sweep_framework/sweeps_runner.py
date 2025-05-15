@@ -10,6 +10,7 @@ import datetime
 import os
 import json
 import enlighten
+import csv
 from tt_metal.tools.profiler.process_ops_logs import get_device_data_generate_report
 from tt_metal.tools.profiler.common import PROFILER_LOGS_DIR
 from multiprocessing import Process
@@ -21,8 +22,113 @@ import framework.tt_smi_util as tt_smi_util
 from elasticsearch import Elasticsearch, NotFoundError
 from framework.elastic_config import *
 from framework.sweeps_logger import sweeps_logger as logger
+import datetime
 
 ARCH = os.getenv("ARCH_NAME")
+
+
+def file_handler():
+    current_directory = os.getcwd()
+    current_timestamp = datetime.datetime.now()
+    str_timestamp = current_timestamp.strftime("%Y-%m-%d_%H-%M-%S")
+    file_path = os.path.join(current_directory, "results", f"test_fail_{str_timestamp}.txt")
+    csv_file_path = os.path.join(current_directory, "results", f"test_results_{str_timestamp}.csv")
+    print(f"******** Results will be saved to: {csv_file_path} ********")
+
+    if os.path.exists(file_path):
+        os.remove(file_path)
+    if os.path.exists(csv_file_path):
+        os.remove(csv_file_path)
+    return file_path, csv_file_path
+
+
+txt_file, csv_file = file_handler()
+
+
+def write_to_file(file_path, test_vector, status, message):
+    with open(file_path, "a") as f:
+        binary_op = test_vector.get("binary_op", {})
+        input_dtype = test_vector.get("input_dtype", {})
+        input_mem_config = test_vector.get("input_mem_config", {})
+        input_a_layout = test_vector.get("input_a_layout", "unknown")
+        input_b_layout = test_vector.get("input_b_layout", "unknown")
+
+        op = binary_op.get("tt_op", "unknown")
+        input_a_dtype = input_dtype.get("input_a_dtype", "unknown")
+        input_b_dtype = input_dtype.get("input_b_dtype", "unknown")
+        a_mem = input_mem_config.get("a_mem", "unknown")
+        b_mem = input_mem_config.get("b_mem", "unknown")
+
+        f.write(
+            f"{op} : ({input_a_dtype}, {input_b_dtype}) - ({input_a_layout}, {input_b_layout}) - ({a_mem}, {b_mem}) - {message}\n"
+        )
+
+
+def write_to_csv_file(file_path, test_vector, status, message):
+    with open(file_path, "a", newline="") as f:
+        writer = csv.writer(f)
+
+        f.seek(0, 2)
+        if f.tell() == 0:
+            writer.writerow(
+                [
+                    "op",
+                    "input_a_shape",
+                    "input_b_shape",
+                    "input_a_dtype",
+                    "input_b_dtype",
+                    "input_a_layout",
+                    "input_b_layout",
+                    "a_mem",
+                    "b_mem",
+                    "message",
+                ]
+            )
+
+        binary_op = test_vector.get("binary_op", {})
+        input_shape = test_vector.get("input_shape", {})
+        input_dtype = test_vector.get("input_dtype", {})
+        input_mem_config = test_vector.get("input_mem_config", {})
+        input_a_layout = test_vector.get("input_a_layout", "unknown")
+        input_b_layout = test_vector.get("input_b_layout", "unknown")
+
+        op = binary_op.get("tt_op", "unknown")
+        input_a_shape = input_shape.get("self", "unknown")
+        input_b_shape = input_shape.get("other", "unknown")
+        input_a_dtype = input_dtype.get("input_a_dtype", "unknown")
+        input_b_dtype = input_dtype.get("input_b_dtype", "unknown")
+        a_mem = input_mem_config.get("a_mem", "unknown")
+        b_mem = input_mem_config.get("b_mem", "unknown")
+
+        writer.writerow(
+            [
+                op,
+                input_a_shape,
+                input_b_shape,
+                input_a_dtype,
+                input_b_dtype,
+                input_a_layout,
+                input_b_layout,
+                a_mem,
+                b_mem,
+                message,
+            ]
+        )
+
+
+def write_status_to_csv_file(file_path, message):
+    with open(file_path, "a", newline="") as f:
+        writer = csv.writer(f)
+
+        f.seek(0, 2)
+        if f.tell() == 0:
+            writer.writerow(
+                [
+                    "status",
+                ]
+            )
+
+        writer.writerow([message])
 
 
 def git_hash():
@@ -95,6 +201,24 @@ def run(test_module, input_queue, output_queue):
                 output_queue.put([status, message, e2e_perf, perf_result])
             else:
                 output_queue.put([status, message, e2e_perf, None])
+
+            if status:
+                # write_to_file(txt_file, test_vector, status, message)
+                write_to_csv_file(csv_file, test_vector, status, message)
+
+            # print("-----------------------")
+            # print("current parameter ", test_vector)
+            # print("STATUS", status)
+            # print("message", message)
+
+            if not status:
+                write_to_csv_file(csv_file, test_vector, status, "failed")
+
+            #     print("********* FAILED *********")
+            #     print("current parameter ", test_vector)
+            #     print("STATUS", status)
+            #     print("message", message)
+            #     print("**************************")
     except Empty as e:
         try:
             # Run teardown in mesh_device_fixture
@@ -402,6 +526,17 @@ def run_sweeps(module_name, suite_name, vector_id):
                     results = execute_suite(test_module, test_vectors, pbar_manager, suite_name)
                     logger.info(f"Completed tests for module {module_name}, suite {suite_name}.")
                     logger.info(f"Tests Executed - {len(results)}")
+                    pass_count = fail_count = 0
+                    # count "PASS" & "FAIL" cases
+                    for result in results:
+                        if result["status"] == TestStatus.PASS:  # Compare against the enum member TestStatus.PASS
+                            pass_count += 1
+                        else:
+                            fail_count += 1
+                    write_status_to_csv_file(
+                        csv_file,
+                        f"Completed tests for module {module_name}, suite {suite_name}. Tests Executed - {len(results)}, Pass: {pass_count} , Fail: {fail_count}",
+                    )
                     export_test_results(header_info, results)
             except Exception as e:
                 logger.info(e)
