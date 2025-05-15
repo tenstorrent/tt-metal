@@ -190,7 +190,8 @@ Tensor MatmulOperation::invoke(
     }
     bool user_run_batched = detail::is_input_batched(input_tensor_b.get_logical_shape());
     const bool untilize_out =
-        std::holds_alternative<MatmulMultiCoreReuseMultiCast1DProgramConfig>(program_config.value())
+        program_config.has_value() &&
+                std::holds_alternative<MatmulMultiCoreReuseMultiCast1DProgramConfig>(program_config.value())
             ? std::get<MatmulMultiCoreReuseMultiCast1DProgramConfig>(program_config.value()).untilize_out
             : false;
     return bound_matmul(
