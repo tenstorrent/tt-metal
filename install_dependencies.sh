@@ -109,6 +109,7 @@ ub_buildtime_packages()
      libtool \
      libevent-dev \
      bison \
+     git \
     )
 }
 
