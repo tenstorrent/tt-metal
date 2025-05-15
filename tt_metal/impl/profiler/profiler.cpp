@@ -916,16 +916,16 @@ void DeviceProfiler::dumpResults(
         const auto USE_FAST_DISPATCH = std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr;
         if (USE_FAST_DISPATCH) {
             if (state == ProfilerDumpState::LAST_CLOSE_DEVICE || state == ProfilerDumpState::FORCE_UMD_READ) {
-                if (rtoptions.get_profiler_do_dispatch_cores() || state == ProfilerDumpState::FORCE_UMD_READ) {
-                    tt_metal::detail::ReadFromBuffer(*output_dram_buffer_ptr, profile_buffer);
-                }
+                // if (rtoptions.get_profiler_do_dispatch_cores() || state == ProfilerDumpState::FORCE_UMD_READ) {
+                tt_metal::detail::ReadFromBuffer(*output_dram_buffer_ptr, profile_buffer);
+                //}
             } else {
                 issue_fd_read_from_profiler_buffer(output_dram_buffer, device, profile_buffer);
             }
         } else {
-            if (state != ProfilerDumpState::LAST_CLOSE_DEVICE) {
-                tt_metal::detail::ReadFromBuffer(*output_dram_buffer_ptr, profile_buffer);
-            }
+            // if (state != ProfilerDumpState::LAST_CLOSE_DEVICE) {
+            tt_metal::detail::ReadFromBuffer(*output_dram_buffer_ptr, profile_buffer);
+            //}
         }
         for (const auto& worker_core : worker_cores) {
             resetControlBuffers(device, worker_core, state);

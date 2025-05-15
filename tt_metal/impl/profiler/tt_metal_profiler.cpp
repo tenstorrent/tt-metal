@@ -182,19 +182,8 @@ void syncDeviceHost(IDevice* device, CoreCoord logical_core, bool doHeader) {
             .defines = kernel_defines});
 
     // Using MeshDevice APIs if the current device is managed by MeshDevice
-    if (tt::DevicePool::instance().is_dispatch_firmware_active()) {
-        if (auto mesh_device = device->get_mesh_device()) {
-            auto device_coord = mesh_device->get_view().find_device(device_id);
-            distributed::MeshWorkload workload;
-            workload.add_program(distributed::MeshCoordinateRange(device_coord, device_coord), std::move(sync_program));
-            distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, false);
-        } else {
-            EnqueueProgram(device->command_queue(), sync_program, false);
-        }
-    } else {
-        tt_metal::detail::LaunchProgram(
-            device, sync_program, false /* wait_until_cores_done */, /* force_slow_dispatch */ true);
-    }
+    tt_metal::detail::LaunchProgram(
+        device, sync_program, false /* wait_until_cores_done */, /* force_slow_dispatch */ true);
 
     std::filesystem::path output_dir = std::filesystem::path(get_profiler_logs_dir());
     std::filesystem::path log_path = output_dir / "sync_device_info.csv";
@@ -221,15 +210,7 @@ void syncDeviceHost(IDevice* device, CoreCoord logical_core, bool doHeader) {
             &sinceStart, tt_cxy_pair(device_id, core), control_addr);
         writeTimes[i] = (TracyGetCpuTime() - writeStart);
     }
-    if (tt::DevicePool::instance().is_dispatch_firmware_active()) {
-        if (auto mesh_device = device->get_mesh_device()) {
-            mesh_device->mesh_command_queue().finish();
-        } else {
-            Finish(device->command_queue());
-        }
-    } else {
-        tt_metal::detail::WaitProgramDone(device, sync_program, false);
-    }
+    tt_metal::detail::WaitProgramDone(device, sync_program, false);
 
     log_info("SYNC PROGRAM FINISH IS DONE ON {}", device_id);
     if ((smallestHostime[device_id] == 0) || (smallestHostime[device_id] > hostStartTime)) {
@@ -674,7 +655,9 @@ void ProfilerSync(ProfilerSyncState state) {
 
     if (state == ProfilerSyncState::CLOSE_DEVICE and do_sync_on_close) {
         do_sync_on_close = false;
-        // If at least one sender reciever pair has been found
+        auto device_0 = tt::DevicePool::instance().get_active_device(0);
+        syncDeviceHost(device_0, SYNC_CORE, false);
+        //  If at least one sender reciever pair has been found
         if (first_connected_device_id != -1) {
             syncAllDevices(first_connected_device_id);
         }
@@ -874,7 +857,7 @@ void DumpDeviceProfileResults(
         if (tt_metal_device_profiler_map.find(device_id) != tt_metal_device_profiler_map.end()) {
             if (state != ProfilerDumpState::LAST_CLOSE_DEVICE) {
                 if (deviceHostTimePair.find(device_id) != deviceHostTimePair.end()) {
-                    syncDeviceHost(device, SYNC_CORE, false);
+                    // syncDeviceHost(device, SYNC_CORE, false);
                 }
             }
             tt_metal_device_profiler_map.at(device_id).setDeviceArchitecture(device->arch());
