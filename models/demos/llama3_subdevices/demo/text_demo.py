@@ -19,7 +19,7 @@ from models.tt_transformers.tt.common import (
     preprocess_inputs_prefill,
     PagedAttentionConfig,
 )
-from models.perf.benchmarking_utils import BenchmarkProfiler
+from models.perf.benchmarking_utils import BenchmarkProfiler, BenchmarkData
 
 
 def load_and_cache_context(context_url, cache_dir, max_length=None):
