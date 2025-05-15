@@ -12,76 +12,33 @@ using SortedParameters = std::map<std::string, ttml::autograd::TensorPtr>;
 
 class RemoteOptimizer : public ttml::optimizers::OptimizerBase {
 public:
-    RemoteOptimizer(ttml::serialization::NamedParameters parameters, int aggregator_rank) :
-        ttml::optimizers::OptimizerBase(std::move(parameters)) {
-        m_aggregator_rank = ttml::core::distributed::Rank{aggregator_rank};
-        m_sorted_parameters = SortedParameters(m_parameters.begin(), m_parameters.end());
-    }
+    RemoteOptimizer(ttml::serialization::NamedParameters parameters, int aggregator_rank);
 
-    void zero_grad() override {
-        for (auto& [name, tensor_ptr] : m_parameters) {
-            if (tensor_ptr->get_requires_grad() && tensor_ptr->is_grad_initialized()) {
-                // i don't see a reason why not to set it to empty
-                tensor_ptr->set_grad(ttnn::Tensor());
-            }
-        }
-    }
+    void zero_grad() override;
 
-    void step() override {
-        m_steps++;
-        send_gradients();
-        receive_weights();
-    }
+    void step() override;
 
-    [[nodiscard]] ttml::serialization::StateDict get_state_dict() const override {
-        ttml::serialization::StateDict dict;
-        dict["steps"] = m_steps;
-        return dict;
-    }
+    [[nodiscard]] ttml::serialization::StateDict get_state_dict() const override;
 
-    void set_state_dict(const ttml::serialization::StateDict& dict) override {
-        m_steps = ttml::serialization::get_value_type<size_t>(dict, "steps");
-    }
+    void set_state_dict(const ttml::serialization::StateDict& dict) override;
 
-    [[nodiscard]] size_t get_steps() const override {
-        return m_steps;
-    }
+    [[nodiscard]] size_t get_steps() const override;
 
-    void set_steps(size_t steps) override {
-        m_steps = steps;
-    }
+    void set_steps(size_t steps) override;
 
-    SortedParameters get_sorted_parameters() const {
-        return m_sorted_parameters;
-    }
+    SortedParameters get_sorted_parameters() const;
 
-    void send_gradients() {
-        auto& ctx = ttml::autograd::ctx();
-        for (auto& [name, tensor_ptr] : m_sorted_parameters) {
-            if (tensor_ptr->get_requires_grad() && tensor_ptr->is_grad_initialized()) {
-                auto grad = tensor_ptr->get_grad();
-                ttml::core::distributed::send_tensor(grad, m_aggregator_rank);
-            }
-        }
-    }
+    void send_gradients();
 
-    void receive_weights() {
-        for (auto& [name, tensor_ptr] : m_sorted_parameters) {
-            auto tensor = tensor_ptr->get_value();
-            ttml::core::distributed::recv_tensor(tensor, m_aggregator_rank);
-            tensor_ptr->set_value(tensor);
-        }
-    }
+    void receive_weights();
 
-    void set_lr(float lr) override {
-    }
+    void set_lr(float lr) override;
 
-    [[nodiscard]] float get_lr() const override {
-        return 0.F;
-    }
+    [[nodiscard]] float get_lr() const override;
 
 private:
     size_t m_steps{0};
     SortedParameters m_sorted_parameters;
     ttml::core::distributed::Rank m_aggregator_rank{0};
+    std::shared_ptr<ttml::autograd::DistributedContext> m_distributed_ctx;
 };

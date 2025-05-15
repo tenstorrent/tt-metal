@@ -6,7 +6,6 @@
 
 // TODO: improve include path
 #include "../utils.hpp"
-#include "autograd/auto_context.hpp"
 #include "core/distributed/distributed.hpp"
 #include "datasets/utils.hpp"
 #include "models/gpt2.hpp"
@@ -14,6 +13,9 @@
 #include "tokenizers/char_tokenizer.hpp"
 
 constexpr auto gpt2_tokenizer_file_name = "/gpt2-tokenizer.json";
+
+// namespace name can't start with a digit
+namespace three_tier_arch {
 
 struct TrainingConfig {
     std::string project_name;
@@ -80,3 +82,56 @@ TrainingConfig parse_config(const YAML::Node &yaml_config) {
 
     return config;
 }
+
+std::vector<ttml::core::distributed::Rank> get_workers_and_aggregator_ranks(uint32_t workers) {
+    std::vector<ttml::core::distributed::Rank> ranks;
+    ranks.reserve(workers + 1U);
+    for (uint32_t i = 0; i <= workers; ++i) {
+        ranks.push_back(ttml::core::distributed::Rank{static_cast<int>(i)});
+    }
+    return ranks;
+}
+
+uint32_t get_steps_per_dataset(const TrainingConfig &config) {
+    std::string text;
+    std::variant<std::string, std::vector<uint32_t>> text_or_tokens;
+    try {
+        text = read_file_to_str(config.data_path);
+        // check file extension:
+        if (config.data_path.ends_with(".txt")) {
+            text_or_tokens = read_file_to_str(config.data_path);
+        } else {
+            text_or_tokens = ttml::datasets::load_tokens_from_space_separated_file(config.data_path);
+        }
+    } catch (const std::exception &e) {
+        std::cerr << e.what() << std::endl;
+        return -1;
+    }
+    auto sequence_length = config.transformer_config.max_sequence_length;
+
+    auto create_dataset_and_tokenizer =
+        [](const auto &text, const auto sequence_length, const auto &tokenizer_path, const auto &tokenizer_type) {
+            if (tokenizer_type == "char") {
+                return ttml::datasets::create_in_memory_token_dataset<ttml::tokenizers::CharTokenizer>(
+                    std::get<0>(text), sequence_length);
+            } else if (tokenizer_type == "bpe") {
+                return std::visit(
+                    [&](const auto &tokens) {
+                        return ttml::datasets::create_in_memory_token_dataset<ttml::tokenizers::BPETokenizer>(
+                            tokens, sequence_length, tokenizer_path);
+                    },
+                    text);
+            } else {
+                throw std::runtime_error("Unknown tokenizer type: " + tokenizer_type);
+            }
+        };
+
+    auto [dataset, tokenizer] =
+        create_dataset_and_tokenizer(text_or_tokens, sequence_length, config.tokenizer_path, config.tokenizer_type);
+
+    auto dataset_size = dataset.get_size();
+    auto steps_per_dataset = dataset_size / (config.batch_size * config.gradient_accumulation_steps);
+    return steps_per_dataset;
+}
+
+}  // namespace three_tier_arch

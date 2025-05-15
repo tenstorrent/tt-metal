@@ -9,7 +9,7 @@
 // TODO: improve include path
 #include "../utils.hpp"
 #include "autograd/auto_context.hpp"
-#include "config.hpp"
+#include "common.hpp"
 #include "core/distributed/distributed.hpp"
 #include "datasets/utils.hpp"
 #include "models/distributed/gpt2.hpp"
@@ -20,77 +20,29 @@
 
 using SortedParameters = std::map<std::string, ttml::autograd::TensorPtr>;
 
-uint32_t get_steps_per_dataset(const TrainingConfig &config) {
-    std::string text;
-    std::variant<std::string, std::vector<uint32_t>> text_or_tokens;
-    try {
-        text = read_file_to_str(config.data_path);
-        // check file extension:
-        if (config.data_path.ends_with(".txt")) {
-            text_or_tokens = read_file_to_str(config.data_path);
-        } else {
-            text_or_tokens = ttml::datasets::load_tokens_from_space_separated_file(config.data_path);
-        }
-    } catch (const std::exception &e) {
-        std::cerr << e.what() << std::endl;
-        return -1;
-    }
-    auto sequence_length = config.transformer_config.max_sequence_length;
-
-    auto create_dataset_and_tokenizer =
-        [](const auto &text, const auto sequence_length, const auto &tokenizer_path, const auto &tokenizer_type) {
-            if (tokenizer_type == "char") {
-                return ttml::datasets::create_in_memory_token_dataset<ttml::tokenizers::CharTokenizer>(
-                    std::get<0>(text), sequence_length);
-            } else if (tokenizer_type == "bpe") {
-                return std::visit(
-                    [&](const auto &tokens) {
-                        return ttml::datasets::create_in_memory_token_dataset<ttml::tokenizers::BPETokenizer>(
-                            tokens, sequence_length, tokenizer_path);
-                    },
-                    text);
-            } else {
-                throw std::runtime_error("Unknown tokenizer type: " + tokenizer_type);
-            }
-        };
-
-    auto [dataset, tokenizer] =
-        create_dataset_and_tokenizer(text_or_tokens, sequence_length, config.tokenizer_path, config.tokenizer_type);
-
-    auto dataset_size = dataset.get_size();
-    auto steps_per_dataset = dataset_size / (config.batch_size * config.gradient_accumulation_steps);
-    return steps_per_dataset;
-}
-
-void send_weights_to_aggregator(const SortedParameters &sorted_model_parameters) {
-    auto &ctx = ttml::autograd::ctx();
-    auto &distributed_ctx = ctx.get_distributed_context();
-
-    assert(*distributed_ctx.rank() > 0);
-    int aggregator_rank = *distributed_ctx.rank() - 1;
+void send_weights_to_aggregator(
+    const ttml::autograd::DistributedContext &ctx, const SortedParameters &sorted_model_parameters) {
+    auto aggregator_rank = ttml::core::distributed::Rank(*ctx.rank() - 1);
     for (auto &[name, tensor_ptr] : sorted_model_parameters) {
         if (!tensor_ptr->get_requires_grad()) {
             continue;
         }
 
         auto tensor = tensor_ptr->get_value();
-        ttml::core::distributed::send_tensor(tensor, ttml::core::distributed::Rank{aggregator_rank});
+        ttml::core::distributed::send_tensor(ctx, tensor, aggregator_rank);
     }
 }
 
-void receive_gradients_from_aggregator(const SortedParameters &sorted_model_parameters) {
-    auto &ctx = ttml::autograd::ctx();
-    auto &distributed_ctx = ctx.get_distributed_context();
-
-    assert(*distributed_ctx.rank() > 0);
-    int aggregator_rank = *distributed_ctx.rank() - 1;
+void receive_gradients_from_aggregator(
+    const ttml::autograd::DistributedContext &ctx, const SortedParameters &sorted_model_parameters) {
+    auto aggregator_rank = ttml::core::distributed::Rank(*ctx.rank() - 1);
     for (auto &[name, tensor_ptr] : sorted_model_parameters) {
         if (!tensor_ptr->get_requires_grad()) {
             continue;
         }
 
         auto tensor = ttnn::empty_like(tensor_ptr->get_value());
-        ttml::core::distributed::recv_tensor(tensor, ttml::core::distributed::Rank{aggregator_rank});
+        ttml::core::distributed::recv_tensor(ctx, tensor, aggregator_rank);
         tensor_ptr->set_grad(tensor);
     }
 }
@@ -106,6 +58,11 @@ int main(int argc, char **argv) {
 
     std::string config_name = std::string(CONFIGS_FOLDER) + "/training_shakespear_nanogpt_3tier.yaml";
 
+    std::vector<ttml::core::distributed::Rank> aggregator_and_optimizer_ranks = {
+        ttml::core::distributed::Rank(*distributed_ctx.rank() - 1), distributed_ctx.rank()};
+
+    auto aggregator_and_optimizer_ctx = distributed_ctx.create_sub_context(aggregator_and_optimizer_ranks);
+
     bool ddp = false;
     bool enable_tp = false;
     app.add_option("-c,--config", config_name, "Yaml Config name")->default_val(config_name);
@@ -118,9 +75,9 @@ int main(int argc, char **argv) {
     initialize_device(ddp, enable_tp);
 
     auto yaml_config = YAML::LoadFile(config_name);
-    TrainingConfig config = parse_config(yaml_config);
+    three_tier_arch::TrainingConfig config = three_tier_arch::parse_config(yaml_config);
 
-    auto steps_per_dataset = get_steps_per_dataset(config);
+    auto steps_per_dataset = three_tier_arch::get_steps_per_dataset(config);
     fmt::println(
         "[optimizer] Rank {}: Epochs {}: Steps per dataset: {} max steps: {}",
         *distributed_ctx.rank(),
@@ -163,14 +120,14 @@ int main(int argc, char **argv) {
 
     auto optimizer = select_optimizer(config.use_moreh_adamw);
 
-    send_weights_to_aggregator(sorted_model_parameters);
+    send_weights_to_aggregator(*aggregator_and_optimizer_ctx, sorted_model_parameters);
 
     uint32_t global_step = 0;
     for (uint32_t epoch = 0; epoch < config.num_epochs; ++epoch) {
         for (uint32_t step = 0; step < steps_per_dataset; ++step, ++global_step) {
-            receive_gradients_from_aggregator(sorted_model_parameters);
+            receive_gradients_from_aggregator(*aggregator_and_optimizer_ctx, sorted_model_parameters);
             optimizer->step();
-            send_weights_to_aggregator(sorted_model_parameters);
+            send_weights_to_aggregator(*aggregator_and_optimizer_ctx, sorted_model_parameters);
             if (global_step >= config.max_steps) {
                 break;
             }

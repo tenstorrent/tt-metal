@@ -10,7 +10,7 @@
 
 #include "../utils.hpp"
 #include "autograd/module_base.hpp"
-#include "config.hpp"
+#include "common.hpp"
 #include "core/distributed/distributed.hpp"
 #include "datasets/utils.hpp"
 #include "models/distributed/gpt2.hpp"
@@ -22,55 +22,12 @@ using SortedParameters = std::map<std::string, ttml::autograd::TensorPtr>;
 using Rank = ttml::core::distributed::Rank;
 using Tag = ttml::core::distributed::Tag;
 
-uint32_t get_steps_per_dataset(const TrainingConfig &config) {
-    std::string text;
-    std::variant<std::string, std::vector<uint32_t>> text_or_tokens;
-    try {
-        text = read_file_to_str(config.data_path);
-        // check file extension:
-        if (config.data_path.ends_with(".txt")) {
-            text_or_tokens = read_file_to_str(config.data_path);
-        } else {
-            text_or_tokens = ttml::datasets::load_tokens_from_space_separated_file(config.data_path);
-        }
-    } catch (const std::exception &e) {
-        std::cerr << e.what() << std::endl;
-        return -1;
-    }
-    auto sequence_length = config.transformer_config.max_sequence_length;
-
-    auto create_dataset_and_tokenizer =
-        [](const auto &text, const auto sequence_length, const auto &tokenizer_path, const auto &tokenizer_type) {
-            if (tokenizer_type == "char") {
-                return ttml::datasets::create_in_memory_token_dataset<ttml::tokenizers::CharTokenizer>(
-                    std::get<0>(text), sequence_length);
-            } else if (tokenizer_type == "bpe") {
-                return std::visit(
-                    [&](const auto &tokens) {
-                        return ttml::datasets::create_in_memory_token_dataset<ttml::tokenizers::BPETokenizer>(
-                            tokens, sequence_length, tokenizer_path);
-                    },
-                    text);
-            } else {
-                throw std::runtime_error("Unknown tokenizer type: " + tokenizer_type);
-            }
-        };
-
-    auto [dataset, tokenizer] =
-        create_dataset_and_tokenizer(text_or_tokens, sequence_length, config.tokenizer_path, config.tokenizer_type);
-
-    auto dataset_size = dataset.get_size();
-    auto steps_per_dataset = dataset_size / (config.batch_size * config.gradient_accumulation_steps);
-    return steps_per_dataset;
-}
-
-void send_aggregated_gradients_from_workers_to_optimizer(const SortedParameters &sorted_model_parameters, int workers) {
-    auto &ctx = ttml::autograd::ctx();
-    auto &distributed_ctx = ctx.get_distributed_context();
-
-    Rank optimizer_rank{*distributed_ctx.rank() + 1};
-
-    assert(workers > 0);
+void send_aggregated_gradients_from_workers_to_optimizer(
+    const ttml::autograd::DistributedContext &workers_and_aggregator_ctx,
+    const ttml::autograd::DistributedContext &aggregator_and_optimizer_ctx,
+    const SortedParameters &sorted_model_parameters,
+    int workers) {
+    Rank optimizer_rank{*aggregator_and_optimizer_ctx.rank() + 1};
     for (auto &[name, tensor_ptr] : sorted_model_parameters) {
         if (!tensor_ptr->get_requires_grad()) {
             continue;
@@ -78,34 +35,31 @@ void send_aggregated_gradients_from_workers_to_optimizer(const SortedParameters 
 
         // TODO: allow usage of tensor from model parameters (avoids redundant storage of a model)
         auto tensor = ttnn::empty_like(tensor_ptr->get_value());
-        ttml::core::distributed::recv_tensor(tensor, ttml::core::distributed::Rank{0});
+        ttml::core::distributed::recv_tensor(workers_and_aggregator_ctx, tensor, ttml::core::distributed::Rank{0});
         for (int worker_id = 1; worker_id < workers; ++worker_id) {
             auto tensor_to_add = ttnn::empty_like(tensor_ptr->get_value());
-            ttml::core::distributed::recv_tensor(tensor_to_add, ttml::core::distributed::Rank{worker_id});
+            ttml::core::distributed::recv_tensor(
+                workers_and_aggregator_ctx, tensor_to_add, ttml::core::distributed::Rank{worker_id});
             tensor = ttnn::add(tensor, tensor_to_add);
         }
         tensor = ttnn::multiply(tensor, 1.0F / static_cast<float>(workers));
-        ttml::core::distributed::send_tensor(tensor, optimizer_rank);
+        ttml::core::distributed::send_tensor(aggregator_and_optimizer_ctx, tensor, optimizer_rank);
     }
 }
 
-void send_weights_from_optimizer_to_workers(const SortedParameters &sorted_model_parameters, int workers) {
-    auto &ctx = ttml::autograd::ctx();
-    auto &distributed_ctx = ctx.get_distributed_context();
-
-    Rank optimizer_rank{*distributed_ctx.rank() + 1};
-    assert(workers > 0);
-
+void send_weights_from_optimizer_to_workers(
+    const ttml::autograd::DistributedContext &workers_and_aggregator_ctx,
+    const ttml::autograd::DistributedContext &aggregator_and_optimizer_ctx,
+    const SortedParameters &sorted_model_parameters,
+    int workers) {
+    Rank optimizer_rank{*aggregator_and_optimizer_ctx.rank() + 1};
     for (auto &[name, tensor_ptr] : sorted_model_parameters) {
-        if (!tensor_ptr->get_requires_grad()) {
-            continue;
-        }
-
         auto tensor = tensor_ptr->get_value();
-        ttml::core::distributed::recv_tensor(tensor, ttml::core::distributed::Rank{optimizer_rank});
-        for (int worker_id = 0; worker_id < workers; ++worker_id) {
-            ttml::core::distributed::send_tensor(tensor, ttml::core::distributed::Rank{worker_id});
-        }
+        ttml::core::distributed::recv_tensor(
+            aggregator_and_optimizer_ctx, tensor, ttml::core::distributed::Rank{optimizer_rank});
+
+        ttml::core::distributed::broadcast_tensor(
+            workers_and_aggregator_ctx, tensor, workers_and_aggregator_ctx.rank());
     }
 }
 
@@ -132,11 +86,11 @@ int main(int argc, char **argv) {
     initialize_device(ddp, enable_tp);
 
     auto yaml_config = YAML::LoadFile(config_name);
-    TrainingConfig config = parse_config(yaml_config);
+    three_tier_arch::TrainingConfig config = three_tier_arch::parse_config(yaml_config);
 
     fmt::println("Aggregator config setup finished");
 
-    auto steps_per_dataset = get_steps_per_dataset(config);
+    auto steps_per_dataset = three_tier_arch::get_steps_per_dataset(config);
     auto *device = &ttml::autograd::ctx().get_device();
     device->enable_program_cache();
 
@@ -157,13 +111,27 @@ int main(int argc, char **argv) {
     auto sorted_model_parameters = SortedParameters(model_parameters.begin(), model_parameters.end());
 
     auto workers = config.num_mpi_workers;
-    send_weights_from_optimizer_to_workers(sorted_model_parameters, workers);
+
+    auto workers_and_aggregator_ranks =
+        three_tier_arch::get_workers_and_aggregator_ranks(static_cast<uint32_t>(*distributed_ctx.rank()));
+    auto workers_and_aggregator_ctx =
+        ttml::autograd::ctx().get_distributed_context().create_sub_context(workers_and_aggregator_ranks);
+
+    auto aggregator_and_optimizer_ranks = std::vector<ttml::core::distributed::Rank>{
+        distributed_ctx.rank(), ttml::core::distributed::Rank{*distributed_ctx.rank() + 1}};
+    auto aggregator_and_optimizer_ctx =
+        ttml::autograd::ctx().get_distributed_context().create_sub_context(aggregator_and_optimizer_ranks);
+
+    send_weights_from_optimizer_to_workers(
+        *workers_and_aggregator_ctx, *aggregator_and_optimizer_ctx, sorted_model_parameters, workers);
 
     uint32_t global_step = 0;
     for (uint32_t epoch = 0; epoch < config.num_epochs; ++epoch) {
         for (uint32_t step = 0; step < steps_per_dataset; ++step, ++global_step) {
-            send_aggregated_gradients_from_workers_to_optimizer(sorted_model_parameters, workers);
-            send_weights_from_optimizer_to_workers(sorted_model_parameters, workers);
+            send_aggregated_gradients_from_workers_to_optimizer(
+                *workers_and_aggregator_ctx, *aggregator_and_optimizer_ctx, sorted_model_parameters, workers);
+            send_weights_from_optimizer_to_workers(
+                *workers_and_aggregator_ctx, *aggregator_and_optimizer_ctx, sorted_model_parameters, workers);
             if (global_step >= config.max_steps) {
                 break;
             }

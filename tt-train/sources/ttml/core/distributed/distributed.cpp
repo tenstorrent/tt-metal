@@ -37,79 +37,35 @@ void synchronize_parameters(const serialization::NamedParameters& parameters) {
     }
 }
 
-void send_tensor(const ttnn::Tensor& tensor, Rank dest, Tag tag) {
-    auto* device = &autograd::ctx().get_device();
-    auto& distributed_ctx = autograd::ctx().get_distributed_context();
-    auto devices_count = device->get_devices().size();
-
+void send_tensor(const autograd::DistributedContext& ctx, const ttnn::Tensor& tensor, Rank dest, Tag tag) {
     auto cpu_tensor = tensor.cpu();
     auto buffers = ttml::core::get_bytes_from_cpu_tensor(cpu_tensor);
     for (auto buffer : buffers) {
-        distributed_ctx.send(buffer, dest, tag);
+        ctx.send(buffer, dest, tag);
     }
 }
 
-void recv_tensor(ttnn::Tensor& tensor, Rank source, Tag tag) {
-    auto* device = &autograd::ctx().get_device();
-    auto& distributed_ctx = autograd::ctx().get_distributed_context();
-
+void recv_tensor(const autograd::DistributedContext& ctx, ttnn::Tensor& tensor, Rank source, Tag tag) {
     auto cpu_tensor = tensor.cpu();
 
     auto buffers = ttml::core::get_bytes_from_cpu_tensor(cpu_tensor);
     for (auto buffer : buffers) {
-        distributed_ctx.recv(buffer, source, tag);
+        ctx.recv(buffer, source, tag);
     }
 
     ttnn::assign(cpu_tensor.to_device(tensor.device()), tensor);
 }
 
-void broadcast_tensor(ttnn::Tensor& tensor, Rank root) {
-    auto* device = &autograd::ctx().get_device();
-    auto& distributed_ctx = autograd::ctx().get_distributed_context();
-
+void broadcast_tensor(const autograd::DistributedContext& ctx, ttnn::Tensor& tensor, Rank root) {
     auto cpu_tensor = tensor.cpu();
 
     auto buffers = ttml::core::get_bytes_from_cpu_tensor(cpu_tensor);
 
     for (auto buffer : buffers) {
-        distributed_ctx.broadcast(buffer, root);
+        ctx.broadcast(buffer, root);
     }
-    if (distributed_ctx.rank() != root) {
+    if (ctx.rank() != root) {
         ttnn::assign(cpu_tensor.to_device(tensor.device()), tensor);
-    }
-}
-
-// @dmakoviichuk TODO: optimize it using split and broadcast
-void broadcast_tensor_to_group(ttnn::Tensor& tensor, Rank root, std::span<Rank> client_ranks) {
-    auto* device = &autograd::ctx().get_device();
-    auto& distributed_ctx = autograd::ctx().get_distributed_context();
-    Rank rank = distributed_ctx.rank();
-
-    if (rank == root) {
-        for (auto client_rank : client_ranks) {
-            send_tensor(tensor, client_rank);
-        }
-    } else if (std::find(client_ranks.begin(), client_ranks.end(), rank) != client_ranks.end()) {
-        recv_tensor(tensor, root);
-    }
-}
-
-// @dmakoviichuk TODO:
-// optimize this code
-void reduce_tensor(ttnn::Tensor& tensor, std::span<Rank> client_ranks) {
-    bool is_first = true;
-    ttnn::Tensor temp = ttnn::empty_like(tensor);
-    for (auto rank : client_ranks) {
-        if (is_first) {
-            // First client: receive directly into `tensor`
-            recv_tensor(tensor, rank);
-            is_first = false;
-        } else {
-            recv_tensor(temp, rank);
-
-            // Accumulate into the output tensor
-            tensor = ttnn::add(tensor, temp);
-        }
     }
 }
 

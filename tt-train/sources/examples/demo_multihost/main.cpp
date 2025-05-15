@@ -140,13 +140,13 @@ void test_send_recv_tensor() {
         auto vec_ones = ttml::core::to_vector(tensor);
         fmt::print("Rank {}, vector size: {}\n", *rank, vec_ones.size());
         fmt::print("Rank {}: sending tensor: [{}]\n", *rank, vec_ones);
-        ttml::core::distributed::send_tensor(tensor, Rank{1});
+        ttml::core::distributed::send_tensor(distributed_ctx, tensor, Rank{1});
         fmt::print("Rank {}: sent tensor\n", rank);
     } else if (*rank == 1) {
         auto tensor = ttml::core::zeros(shape, &device);
         auto vec_zeros = ttml::core::to_vector(tensor);
         fmt::print("Rank {}: original tensor: [{}]\n", *rank, vec_zeros);
-        ttml::core::distributed::recv_tensor(tensor, Rank{0});
+        ttml::core::distributed::recv_tensor(distributed_ctx, tensor, Rank{0});
         auto vec = ttml::core::to_vector(tensor);
         fmt::print("Rank {}: received tensor: [{}]\n", *rank, vec);
     }
