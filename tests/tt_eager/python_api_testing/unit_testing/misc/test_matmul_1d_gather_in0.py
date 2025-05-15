@@ -336,6 +336,7 @@ def run_multi_core_matmul_1d(
         mcast_in0=False,
         gather_in0=True,
         hop_cores=hop_core_range_set,
+        untilize_out=untilize_out,
     )
 
     if is_grayskull():

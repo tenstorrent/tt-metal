@@ -189,6 +189,10 @@ Tensor MatmulOperation::invoke(
         user_core_coord = CoreCoord(core_grid->x, core_grid->y);
     }
     bool user_run_batched = detail::is_input_batched(input_tensor_b.get_logical_shape());
+    const bool untilize_out =
+        std::holds_alternative<MatmulMultiCoreReuseMultiCast1DProgramConfig>(program_config.value())
+            ? std::get<MatmulMultiCoreReuseMultiCast1DProgramConfig>(program_config.value()).untilize_out
+            : false;
     return bound_matmul(
         input_tensor_a,
         input_tensor_b,
@@ -199,7 +203,7 @@ Tensor MatmulOperation::invoke(
             memory_config.has_value() ? memory_config.value() : ttnn::DRAM_MEMORY_CONFIG,
             dtype,
             compute_kernel_config,
-            /*untilize_out=*/false,
+            /*untilize_out=*/untilize_out,
             user_core_coord,
             get_fused_activation(activation),
             user_run_batched,
