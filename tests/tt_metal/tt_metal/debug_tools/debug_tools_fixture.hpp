@@ -73,9 +73,6 @@ protected:
         // Parent class tears down devices
         DebugToolsFixture::TearDown();
 
-        // Remove the DPrint output file after the test is finished.
-        std::remove(dprint_file_name.c_str());
-
         // Reset DPrint settings
         tt::tt_metal::MetalContext::instance().rtoptions().set_feature_cores(tt::llrt::RunTimeDebugFeatureDprint, {});
         tt::tt_metal::MetalContext::instance().rtoptions().set_feature_enabled(tt::llrt::RunTimeDebugFeatureDprint, false);
@@ -158,6 +155,12 @@ protected:
         tt::tt_metal::MetalContext::instance().rtoptions().set_watcher_noinline(true);
         tt::tt_metal::MetalContext::instance().rtoptions().set_test_mode_enabled(true);
         tt::watcher_clear_log();
+
+        // Need to reset watcher in case the previous test left it in a bad state
+        auto num_devices = tt::tt_metal::GetNumAvailableDevices();
+        for (unsigned int id = 0; id < num_devices; id++) {
+            watcher_init(id);
+        }
 
         // Parent class initializes devices and any necessary flags
         DebugToolsFixture::SetUp();
