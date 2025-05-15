@@ -361,7 +361,6 @@ def run_multi_core_matmul_1d(
             memory_config=output_sharded_mem_config,
             compute_kernel_config=compute_kernel_config,
             dtype=output_dtype,
-            untilize_out=untilize_out,
         )
     signpost("stop")
     tt_out = ttnn.to_torch(output_t)

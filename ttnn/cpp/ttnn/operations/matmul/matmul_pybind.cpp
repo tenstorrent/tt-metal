@@ -132,7 +132,8 @@ void py_module(py::module& module) {
                         bool mcast_in0,
                         bool gather_in0,
                         CoreRangeSet hop_cores,
-                        std::size_t num_global_cb_receivers) {
+                        std::size_t num_global_cb_receivers,
+                        bool untilize_out) {
                 // Set out_block_h and out_block_w to defaults if they are not provided
                 std::size_t actual_out_block_h = out_block_h.value_or(per_core_M);
                 std::size_t actual_out_block_w = out_block_w.value_or(per_core_N);
@@ -151,7 +152,8 @@ void py_module(py::module& module) {
                     mcast_in0,
                     gather_in0,
                     std::move(hop_cores),
-                    num_global_cb_receivers);
+                    num_global_cb_receivers,
+                    untilize_out);
             }),
             py::kw_only(),
             py::arg("compute_with_storage_grid_size"),
@@ -167,7 +169,8 @@ void py_module(py::module& module) {
             py::arg("mcast_in0").noconvert(),
             py::arg("gather_in0").noconvert() = false,
             py::arg("hop_cores").noconvert() = CoreRangeSet(),
-            py::arg("num_global_cb_receivers").noconvert() = 1)
+            py::arg("num_global_cb_receivers").noconvert() = 1,
+            py::arg("untilize_out").noconvert() = false)
         .def_readwrite(
             "compute_with_storage_grid_size",
             &MatmulMultiCoreReuseMultiCast1DProgramConfig::compute_with_storage_grid_size)
@@ -184,7 +187,8 @@ void py_module(py::module& module) {
         .def_readwrite("gather_in0", &MatmulMultiCoreReuseMultiCast1DProgramConfig::gather_in0)
         .def_readwrite("hop_cores", &MatmulMultiCoreReuseMultiCast1DProgramConfig::hop_cores)
         .def_readwrite(
-            "num_global_cb_receivers", &MatmulMultiCoreReuseMultiCast1DProgramConfig::num_global_cb_receivers);
+            "num_global_cb_receivers", &MatmulMultiCoreReuseMultiCast1DProgramConfig::num_global_cb_receivers)
+        .def_readwrite("untilize_out", &MatmulMultiCoreReuseMultiCast1DProgramConfig::untilize_out);
 
     auto matmul_multi_core_reuse_multicast_dram_sharded_program_config =
         tt_serializable_class<MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig>(
@@ -337,7 +341,6 @@ void py_module(py::module& module) {
                const ttnn::Tensor& input_tensor_b,
                const bool transpose_a,
                const bool transpose_b,
-               const bool untilize_out,
                const std::optional<const ttnn::MemoryConfig>& memory_config,
                const std::optional<const DataType> dtype,
                const std::optional<const MatmulProgramConfig>& program_config,
@@ -353,7 +356,6 @@ void py_module(py::module& module) {
                     input_tensor_b,
                     transpose_a,
                     transpose_b,
-                    untilize_out,
                     memory_config,
                     dtype,
                     program_config,
@@ -370,7 +372,6 @@ void py_module(py::module& module) {
             py::kw_only(),
             py::arg("transpose_a") = false,
             py::arg("transpose_b") = false,
-            py::arg("untilize_out") = false,
             py::arg("memory_config") = std::nullopt,
             py::arg("dtype") = std::nullopt,
             py::arg("program_config") = std::nullopt,

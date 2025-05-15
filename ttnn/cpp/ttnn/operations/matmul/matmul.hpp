@@ -42,7 +42,6 @@ struct MatmulOperation {
         const Tensor& input_tensor_b,
         const bool transpose_a = false,
         const bool transpose_b = false,
-        const bool untilize_out = false,
         const std::optional<const MemoryConfig>& memory_config = std::nullopt,
         const std::optional<const DataType> dtype = std::nullopt,
         const std::optional<const MatmulProgramConfig>& program_config = std::nullopt,
