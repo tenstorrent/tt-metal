@@ -1119,8 +1119,6 @@ def num_to_core_range_set(x):
 def test_slice_height_sharded_for_conv2d(device, dims, slice_dim, slice_size, cores, layout, orientation):
     strides = [1, 1, 1, 1]
     torch.manual_seed(2005)
-    # torch_input = torch.tensor(range(dims[1] * dims[2])).reshape(1, dims[1], dims[2], 1)
-    # torch_input = torch.broadcast_to(torch_input, dims)
     torch_input = torch.randint(-10, 10, dims)
     core_range = num_to_core_range_set(cores)
     num_slices = dims[slice_dim] // slice_size
@@ -1164,8 +1162,6 @@ def test_slice_height_sharded_for_conv2d(device, dims, slice_dim, slice_size, co
 def test_slice_block_sharded_for_conv2d(device, dims, slice_dim, slice_size, core_x, core_y, layout, orientation):
     strides = [1, 1, 1, 1]
     torch.manual_seed(2005)
-    # torch_input = torch.tensor(range(dims[1] * dims[2])).reshape(1, dims[1], dims[2], 1)
-    # torch_input = torch.broadcast_to(torch_input, dims)
     torch_input = torch.randint(-10, 10, dims)
     num_slices = dims[slice_dim] // slice_size
     ttnn_input = ttnn.from_torch(
