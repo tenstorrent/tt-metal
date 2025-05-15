@@ -5,7 +5,7 @@
 #include "tt_cluster.hpp"
 
 #include <core_coord.hpp>
-#include <dev_msgs.h>
+#include "dev_msgs.h"
 #include <logger.hpp>
 #include <metal_soc_descriptor.h>
 #include <algorithm>

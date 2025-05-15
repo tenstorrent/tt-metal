@@ -8,7 +8,7 @@
 // IWYU pragma: always_keep
 
 #include "dev_mem_map.h"
-#include <dev_msgs.h>
+#include "dev_msgs.h"
 #include "noc/noc_parameters.h"
 
 // Validate assumptions on mailbox layout on host compile

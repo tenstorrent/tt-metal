@@ -12,7 +12,7 @@
 #include "compile_time_args.h"
 #include "dev_mem_map.h"
 #include "hostdevcommon/kernel_structs.h"
-#include <dev_msgs.h>
+#include "dev_msgs.h"
 #include "noc/noc_parameters.h"
 #include "debug/dprint.h"
 #include "risc_common.h"

@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <dev_msgs.h>
+#include "dev_msgs.h"
 #include <device.hpp>
 #include <distributed.hpp>
 #include "tools/profiler/event_metadata.hpp"

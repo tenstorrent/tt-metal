@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <assert.hpp>
-#include <dev_msgs.h>
+#include "dev_msgs.h"
 #include <fmt/base.h>
 #include <fmt/ranges.h>
 #include <logger.hpp>

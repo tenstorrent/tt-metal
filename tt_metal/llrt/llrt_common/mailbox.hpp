@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include <dev_msgs.h>
+#include "dev_msgs.h"
 
 namespace tt::llrt_common {
 

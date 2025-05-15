@@ -6,7 +6,7 @@
 #include <circular_buffer_constants.h>  // For NUM_CIRCULAR_BUFFERS
 #include <core_coord.hpp>
 #include <ctype.h>
-#include <dev_msgs.h>
+#include "dev_msgs.h"
 #include <fmt/base.h>
 #include <logger.hpp>
 #include <metal_soc_descriptor.h>
