@@ -17,7 +17,9 @@ namespace py = pybind11;
 void bind_convert_to_hwc(py::module& module) {
     using OperationType = decltype(ttnn::experimental::convert_to_hwc);
 
-    const auto doc = R"doc(Convert a tensor from CHW format to HWC format)doc";
+    const auto doc = R"doc(
+    Convert a tensor from CHW channel ordering to HWC channel ordering.
+    )doc";
 
     ttnn::bind_registered_operation(
         module,
