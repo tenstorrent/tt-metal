@@ -488,7 +488,8 @@ bool Tensor::is_allocated() const {
     auto output = std::visit(
         tt::stl::overloaded{
             [](const DeviceStorage& storage) { return storage.is_allocated(); },
-            [](const auto&) { return true; },
+            [](const HostStorage&) { return true; },
+            [](const MultiDeviceHostStorage&) { return true; },
         },
         this->get_storage());
     return output;
