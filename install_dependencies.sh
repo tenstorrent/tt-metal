@@ -250,6 +250,87 @@ install_sfpi() {
     rm -rf $TEMP_DIR
 }
 
+install_mpi_uflm(){
+    #!/usr/bin/env bash
+    # -----------------------------------------------------------------------------
+    #  Open MPI 5.0.7 one‑shot build‑and‑install script
+    #  * clones source into $HOME/src/ompi‑v5.0.7 (shallow + sub‑modules)
+    #  * builds with all CPUs, ULFM fault‑tolerance enabled
+    #  * installs into /usr/local (requires sudo for the install step)
+    #  * works on Debian/Ubuntu/RHEL/Fedora with either gcc or clang toolchains
+    # -----------------------------------------------------------------------------
+    set -euo pipefail
+
+    OMPI_TAG="v5.0.7"
+    SRC_DIR="${HOME}/src/ompi-${OMPI_TAG}"
+    #PREFIX="/usr/local"          # change this if you prefer another location
+    PREFIX="/opt/openmpi/5.0.7"
+    NPROC=$(nproc)
+
+    info() { printf '\033[1;34m==> %s\033[0m\n' "$*"; }
+
+    # -----------------------------------------------------------------------------
+    # 1. Install build prerequisites
+    # -----------------------------------------------------------------------------
+    if command -v apt-get &>/dev/null; then
+        info "Installing build prerequisites (apt)…"
+        sudo apt-get update -qq
+        sudo apt-get install -y build-essential gfortran git pkg-config \
+            libevent-dev libhwloc-dev m4 flex bison autoconf automake libtool
+    elif command -v dnf &>/dev/null; then
+        info "Installing build prerequisites (dnf)…"
+        sudo dnf install -y gcc gcc-c++ gcc-gfortran git pkgconfig \
+            libevent-devel hwloc-devel m4 flex bison autoconf automake libtool make
+    elif command -v yum &>/dev/null; then
+        info "Installing build prerequisites (yum)…"
+        sudo yum groupinstall -y "Development Tools"
+        sudo yum install -y gcc-gfortran git pkgconfig \
+            libevent-devel hwloc-devel m4 flex bison autoconf automake libtool make
+    else
+        info "Unknown package manager – please install build dependencies manually."
+    fi
+
+    # -----------------------------------------------------------------------------
+    # 2. Clone (or refresh) the Open MPI source tree
+    # -----------------------------------------------------------------------------
+    info "Cloning Open MPI source tree ${OMPI_TAG}…"
+    mkdir -p "$(dirname \"$SRC_DIR\")"
+    if [[ -d "$SRC_DIR" ]]; then
+        info "Existing source tree found, refreshing…"
+        git -C "$SRC_DIR" fetch --tags origin
+        git -C "$SRC_DIR" checkout "$OMPI_TAG"
+        git -C "$SRC_DIR" submodule sync --recursive
+        git -C "$SRC_DIR" submodule update --init --recursive
+    else
+        git clone --branch "$OMPI_TAG" --depth 1 --recurse-submodules \
+                https://github.com/open-mpi/ompi.git "$SRC_DIR"
+    fi
+
+    # -----------------------------------------------------------------------------
+    # 3. Build and install
+    # -----------------------------------------------------------------------------
+    pushd "$SRC_DIR" >/dev/null
+    info "Bootstrapping autotools…"
+    ./autogen.pl
+
+    info "Configuring (prefix $PREFIX)…"
+    ./configure --prefix="$PREFIX" \
+                --disable-dlopen \
+                --with-ft=ulfm \
+                --enable-mpirun-prefix-by-default
+
+    info "Building with $NPROC job(s)…"
+    make -j"$NPROC"
+
+    info "Installing to $PREFIX (sudo)…"
+    sudo make install
+    if command -v ldconfig &>/dev/null; then
+        sudo ldconfig      # refresh linker cache
+    fi
+    popd >/dev/null
+
+}
+
 # We don't really want to have hugepages dependency
 # This could be removed in the future
 
@@ -273,11 +354,13 @@ install() {
             runtime)
                 prep_ubuntu_runtime
                 install_sfpi
+                install_mpi_uflm
                 ;;
             build)
                 prep_ubuntu_build
                 install_llvm
                 install_gcc
+                install_mpi_uflm
                 ;;
             baremetal)
                 prep_ubuntu_runtime
@@ -286,6 +369,7 @@ install() {
                 install_llvm
                 install_gcc
                 configure_hugepages
+                install_mpi_uflm
                 ;;
         esac
 

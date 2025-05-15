@@ -19,7 +19,11 @@ set(DISTRIBUTED_SRC
 )
 
 add_library(distributed OBJECT ${DISTRIBUTED_SRC})
-add_dependencies(distributed openmpi_ulfm_build-build)
+set(MPI_ROOT "/opt/openmpi/5.0.7")
+find_package(MPI REQUIRED)
+message(STATUS "MPI_INCLUDE_DIRS: ${OpenMPI_INCLUDE_DIRS}")
+message(STATUS "MPI_LIBRARIES: ${OpenMPI_LIBRARIES}")
+
 target_link_libraries(
     distributed
     PUBLIC
@@ -28,7 +32,7 @@ target_link_libraries(
         Metalium::Metal::Impl
         Metalium::Metal::LLRT
         TT::Metalium::HostDevCommon
-        OpenMPI::MPI
+        MPI::MPI_C
 )
 
 # print OpenMPI include directories
