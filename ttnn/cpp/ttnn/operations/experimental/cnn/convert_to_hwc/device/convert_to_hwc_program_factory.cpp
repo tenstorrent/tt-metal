@@ -75,7 +75,6 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_convert_to_hwc(const Te
     const auto cb_out =
         create_circular_buffer(cb_out_id, cb_out_total_size, cb_out_page_size, output_format, output.buffer());
 
-    // Divide work between data movement cores
     const uint32_t total_tiles_per_core = tt::div_up(input_shard_width, TILE_HEIGHT);
     const uint32_t total_tiles_writer0 = tt::div_up(total_tiles_per_core, 2);
     const uint32_t total_tiles_writer1 = total_tiles_per_core - total_tiles_writer0;
@@ -86,7 +85,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_convert_to_hwc(const Te
     const auto remote_core_type = a.buffer()->core_type();
     const auto remote_address = a.buffer()->address();
     const auto remote_buffer_type = a.buffer()->buffer_type();
-    const auto [runtime_args_for_each_core, total_num_sticks, dram_write_stride_bytes, dram_read_stride_bytes] =
+    const auto [runtime_args_for_each_core, _, dram_write_stride_bytes, dram_read_stride_bytes] =
         data_movement::detail::compute_width_sharding_reshard_segments(
             {input_shard_height, input_shard_width},
             a.shard_spec()->shape,  // dram shard shape

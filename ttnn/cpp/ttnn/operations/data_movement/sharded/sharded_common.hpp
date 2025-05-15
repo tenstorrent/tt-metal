@@ -20,6 +20,7 @@ struct WidthShardingReshardSegment {
     uint32_t write_offset;
 };
 
+// Precompute a set of reads/writes for each core needed to perform a width-sharded reshard operations
 std::tuple<std::vector<std::vector<WidthShardingReshardSegment>>, uint32_t, uint32_t, uint32_t>
 compute_width_sharding_reshard_segments(
     const std::array<uint32_t, 2>& local_shard_shape,
