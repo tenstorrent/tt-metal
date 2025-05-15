@@ -17,7 +17,6 @@ build
 build_*
 /python_env/
 CMakeUserPresets.json
-openmpi/
 /llk_out/
 /out/
 
