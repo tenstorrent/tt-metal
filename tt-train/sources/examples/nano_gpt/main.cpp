@@ -486,9 +486,13 @@ int main(int argc, char **argv) {
         fmt::println("Tensor parallel is enabled");
     }
 
-    fmt::print("MPI config:\n");
-    fmt::print("  enable_mpi: {}\n", config.enable_mpi);
-    fmt::print("  num_mpi_workers: {}\n", config.num_mpi_workers);
+    if (config.enable_mpi) {
+        fmt::print("MPI config:\n");
+        fmt::print("  enable_mpi: {}\n", config.enable_mpi);
+        fmt::print("  num_mpi_workers: {}\n", config.num_mpi_workers);
+    } else {
+        fmt::print("Not MPI run.\n");
+    }
 
     if (enable_wandb) {
         auto result = signal(SIGINT, signal_handler);

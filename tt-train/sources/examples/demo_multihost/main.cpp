@@ -163,7 +163,6 @@ int main(int argc, char** argv) {
     bool print_tt_smi_output = false;
     bool run_test_send_recv_tensor = false;
 
-    // app.add_option("-c,--config", config_name, "Yaml Config name")->default_val(config_name);
     app.add_option("-t,--tt_smi", print_tt_smi_output, "print tt-smi on all hosts")->default_val(print_tt_smi_output);
     app.add_option("--run_test_send_recv_tensor", run_test_send_recv_tensor, "run simple send recv tensor test")
         ->default_val(run_test_send_recv_tensor);
