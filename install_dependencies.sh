@@ -263,7 +263,6 @@ install_mpi_uflm(){
 
     OMPI_TAG="v5.0.7"
     SRC_DIR="${HOME}/src/ompi-${OMPI_TAG}"
-    #PREFIX="/usr/local"          # change this if you prefer another location
     PREFIX="/opt/openmpi/5.0.7"
     NPROC=$(nproc)
 
@@ -272,23 +271,7 @@ install_mpi_uflm(){
     # -----------------------------------------------------------------------------
     # 1. Install build prerequisites
     # -----------------------------------------------------------------------------
-    if command -v apt-get &>/dev/null; then
-        info "Installing build prerequisites (apt)…"
-        sudo apt-get update -qq
-        sudo apt-get install -y build-essential gfortran git pkg-config \
-            libevent-dev libhwloc-dev m4 flex bison autoconf automake libtool
-    elif command -v dnf &>/dev/null; then
-        info "Installing build prerequisites (dnf)…"
-        sudo dnf install -y gcc gcc-c++ gcc-gfortran git pkgconfig \
-            libevent-devel hwloc-devel m4 flex bison autoconf automake libtool make
-    elif command -v yum &>/dev/null; then
-        info "Installing build prerequisites (yum)…"
-        sudo yum groupinstall -y "Development Tools"
-        sudo yum install -y gcc-gfortran git pkgconfig \
-            libevent-devel hwloc-devel m4 flex bison autoconf automake libtool make
-    else
-        info "Unknown package manager – please install build dependencies manually."
-    fi
+    # do nothing for now
 
     # -----------------------------------------------------------------------------
     # 2. Clone (or refresh) the Open MPI source tree
