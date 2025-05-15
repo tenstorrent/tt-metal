@@ -147,6 +147,7 @@ std::vector<ttnn::TensorSpec> PaddedSliceDeviceOperation::compute_output_specs(
         auto output_shard_shape = this->output_mem_config.shard_spec().value().shape;
         out_shape[out_shape.size() - 1] = output_shard_shape[1];
     }
+
     ttnn::Shape output_tensor_shape(std::move(out_shape));
     tt::log_info("padded_slice : Output shape: {}", output_tensor_shape);
     tt::log_info("padded_slice : Output mem config: {}", this->output_mem_config);

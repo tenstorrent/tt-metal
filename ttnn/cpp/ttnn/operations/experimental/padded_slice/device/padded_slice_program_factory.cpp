@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "optional"
-#include "tt-metalium/circular_buffer_types.hpp"
 #include "tt-metalium/logger.hpp"
 #include "ttnn/operations/math.hpp"
 #include <tt-metalium/work_split.hpp>
@@ -13,7 +12,6 @@
 #include <tt-metalium/host_api.hpp>
 
 #include "padded_slice_op.hpp"
-#include "ttnn/tensor/enum_types.hpp"
 using namespace tt::constants;
 using namespace tt::tt_metal;
 
@@ -168,14 +166,24 @@ get_padded_slice_runtime_args_rm_sharded_output(
 
     tt::log_info("Input Buffer : {}", input_tensor.get_storage());
 
-    uint32_t input_row_size_bytes = input_shape[-1] * input_tensor.element_size();
-    uint32_t output_row_size_bytes = output_shard_shape[1] * input_tensor.element_size();
-    uint32_t output_row_size_elems = output_shard_shape[1];
-
     auto num_cores_total = cores.size();
 
     bool rm_orientation = output_shard_spec.orientation == ShardOrientation::ROW_MAJOR;
     bool is_block_sharded = output_tensor.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED;
+    uint32_t num_cores_channels = 1;
+    auto total_cores = output_shard_spec.grid;
+    if (is_block_sharded) {
+        if (rm_orientation) {
+            num_cores_channels = total_cores.bounding_box().grid_size().x;
+        } else {
+            num_cores_channels = total_cores.bounding_box().grid_size().y;
+        }
+    }
+    uint32_t input_page_size = input_shape[-1] * input_tensor.element_size();
+    uint32_t input_row_size_bytes = input_shape[-1] * input_tensor.element_size() / num_cores_channels;
+
+    uint32_t output_row_size_bytes = output_shard_shape[1] * input_tensor.element_size();
+    uint32_t output_row_size_elems = output_shard_shape[1];
 
     tt::log_debug("input_row_size_bytes: {}, output_row_size_bytes: {}", input_row_size_bytes, output_row_size_bytes);
     std::uint32_t num_dims = static_cast<std::uint32_t>(input_shape.rank());
@@ -224,18 +232,15 @@ get_padded_slice_runtime_args_rm_sharded_output(
     uint32_t start_addr = input_tensor.buffer()->address();
     std::vector<uint32_t> common_reader_kernel_args = {
         start_addr + begins_bytes - misalignment,  // read from nearest aligned address
+        input_page_size,
         input_row_size_bytes,
-        output_row_size_bytes,
         output_row_size_bytes_offset,
         num_dims,
         0,
         0,
         0,
         0};
-    // if (output_row_size_bytes > input_row_size_bytes) {
-    //     common_reader_kernel_args[1] = output_row_size_bytes;
-    //     common_reader_kernel_args[2] = input_row_size_bytes;
-    // }
+
     common_reader_kernel_args.insert(
         common_reader_kernel_args.end(), num_output_sticks_per_dim.begin(), num_output_sticks_per_dim.end());
     common_reader_kernel_args.insert(
@@ -268,18 +273,15 @@ get_padded_slice_runtime_args_rm_sharded_output(
 
         const uint32_t num_sticks_written = core_h_index * num_sticks_per_core;
         const uint32_t width_offset = core_w_index * output_row_size_bytes_offset;
-        tt::log_debug(" Core : {}, num_sticks_written: {}, width_offset: {}", core, num_sticks_written, width_offset);
 
         id_per_dim[0] = num_sticks_written % num_output_sticks_per_dim[0];
         uint32_t output_written = num_sticks_written / num_output_sticks_per_dim[0];
         uint32_t start_id = id_per_dim[0] + start_offset;
-        tt::log_debug("Output Written: {}, start_id: {}", output_written, start_id);
         for (uint32_t j = 1; j < num_dims; j++) {
             id_per_dim[j] = output_written % num_output_sticks_per_dim[j];
             output_written = output_written / num_output_sticks_per_dim[j];
             start_id += id_per_dim[j] * accumulated_total_per_dim[j - 1];
         }
-        tt::log_debug("Final Output Written: {}, start_id: {}", output_written, start_id);
 
         std::vector<uint32_t> reader_kernel_args = common_reader_kernel_args;
         reader_kernel_args[0] += width_offset;
@@ -328,7 +330,6 @@ operation::ProgramWithCallbacks padded_slice_rm_multi_core(
 
     tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.get_dtype());
 
-    uint32_t input_row_size_bytes = a.get_logical_shape()[-1] * a.element_size();
     uint32_t output_row_size_bytes = output_shape[-1] * a.element_size();
     auto output_shard_spec = output.shard_spec();
     bool is_output_sharded = output.is_sharded();
@@ -344,7 +345,20 @@ operation::ProgramWithCallbacks padded_slice_rm_multi_core(
         iter_cores = corerange_to_cores(total_cores, std::nullopt, rm_orientation);
         num_cores_total = total_cores.num_cores();
     }
-    (void)is_block_sharded;
+    uint32_t num_cores_channels = 1;
+    if (is_block_sharded) {
+        if (rm_orientation) {
+            num_cores_channels = total_cores.bounding_box().grid_size().x;
+        } else {
+            num_cores_channels = total_cores.bounding_box().grid_size().y;
+        }
+    }
+
+    TT_FATAL(
+        a.get_logical_shape()[3] % num_cores_channels == 0,
+        "Input tensor should be divisible by number of cores in channel dimension");
+    uint32_t input_row_size_bytes = a.get_logical_shape()[-1] * a.element_size();
+    input_row_size_bytes = input_row_size_bytes / num_cores_channels;
 
     tt::tt_metal::Buffer* dst_buffer = output.buffer();
     TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
