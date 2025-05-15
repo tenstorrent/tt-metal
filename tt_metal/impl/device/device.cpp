@@ -1093,13 +1093,6 @@ bool Device::close() {
 
     dispatch_firmware_active_ = false;
 
-    for (const auto& hw_command_queue : command_queues_) {
-        if (hw_command_queue->sysmem_manager().get_bypass_mode()) {
-            hw_command_queue->record_end();
-        }
-        hw_command_queue->terminate();
-    }
-
     tt_metal::detail::DumpDeviceProfileResults(this, ProfilerDumpState::LAST_CLOSE_DEVICE);
 
     this->disable_and_clear_program_cache();
