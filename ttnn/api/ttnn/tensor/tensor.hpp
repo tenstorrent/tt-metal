@@ -48,7 +48,7 @@ public:
 
     // Tensor gets worker queue handle through the device
     std::optional<distributed::MeshDevice*> mesh_device_ = std::nullopt;
-    std::vector<IDevice*> workers = {};
+    std::optional<IDevice*> device_ = std::nullopt;
 
     // ======================================================================================
     //                                  Hi Level APIs
@@ -168,8 +168,6 @@ public:
 
     void deallocate(bool force = false);
 
-    std::vector<IDevice*> get_workers(bool blocking = false) const;
-
     Tensor extract_shard(const CoreCoord& core) const;
     Tensor extract_shard(const uint32_t& core_id) const;
 
@@ -232,6 +230,8 @@ public:
     // TODO: #21099 - Remove the overload `mesh_device()`, and instead use `device()`.
     distributed::MeshDevice* mesh_device() const;
 
+    // Returns the device the tensor is allocated on.
+    // Throws if the tensor is not allocated on a device.
     IDevice* device() const;
 
     std::vector<IDevice*> active_physical_devices() const;
