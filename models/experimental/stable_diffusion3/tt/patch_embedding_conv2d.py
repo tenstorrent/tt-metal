@@ -14,7 +14,7 @@ from .utils import from_torch_fast
 
 
 @dataclass
-class TtConv2dParameters:
+class TtPatchEmbeddingConv2dParameters:
     weight: ttnn.Tensor
     bias: ttnn.Tensor | None
     out_channels: int
@@ -69,8 +69,10 @@ class TtConv2dParameters:
         )
 
 
-class TtConv2d:
-    def __init__(self, parameters: TtConv2dParameters, device) -> None:
+class TtPatchEmbeddingConv2d:
+    def __init__(
+        self, parameters: TtPatchEmbeddingConv2dParameters, device
+    ) -> None:
         self._weight = parameters.weight
         self._bias = parameters.bias
         self._unfold = torch.nn.Unfold(kernel_size=parameters.kernel_size, stride=parameters.kernel_size)

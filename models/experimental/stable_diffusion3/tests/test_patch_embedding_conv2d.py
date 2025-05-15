@@ -9,7 +9,7 @@ import pytest
 import torch
 import ttnn
 
-from ..tt.patch_embedding import TtConv2d, TtConv2dParameters
+from ..tt.patch_embedding import TtPatchEmbeddingConv2d, TtPatchEmbeddingConv2dParameters
 from ..tt.utils import assert_quality, to_torch
 
 TILE_SIZE = 32
@@ -76,14 +76,14 @@ def test_conv2d(
     else:
         hidden_dim_padding = 0
 
-    parameters = TtConv2dParameters.from_torch(
+    parameters = TtPatchEmbeddingConv2dParameters.from_torch(
         torch_model.state_dict(),
         dtype=dtype,
         hidden_dim_padding=hidden_dim_padding,
         out_channels=out_channels,
         device=mesh_device,
     )
-    tt_model = TtConv2d(parameters, mesh_device)
+    tt_model = TtPatchEmbeddingConv2d(parameters, mesh_device)
 
     torch_input_tensor = torch.randn((batch_size, in_channels, height, width))
 
