@@ -359,6 +359,9 @@ def run_demo_inference(
     latents = latents / pipeline.vae.config.scaling_factor
 
     if vae_on_device:
+        # Workaround for #22017
+        ttnn_device.disable_and_clear_program_cache()
+
         B, C, H, W = list(latents.shape)
         latents = torch.permute(latents, (0, 2, 3, 1))
         latents = latents.reshape(1, 1, B * H * W, C)
@@ -397,49 +400,26 @@ def run_demo_inference(
     ],
     ids=("with_classifier_free_guidance", "no_classifier_free_guidance"),
 )
+@pytest.mark.parametrize(
+    "vae_on_device",
+    [
+        (True),
+        (False),
+    ],
+    ids=("device_vae", "host_vae"),
+)
 def test_demo(
     device,
     use_program_cache,
     prompt,
     num_inference_steps,
     classifier_free_guidance,
+    vae_on_device,
 ):
     return run_demo_inference(
         device,
         prompt,
         num_inference_steps,
         classifier_free_guidance,
-        vae_on_device=False,
-    )
-
-
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 6 * 16384}], indirect=True)
-@pytest.mark.parametrize(
-    "prompt",
-    (("An astronaut riding a green horse"),),
-)
-@pytest.mark.parametrize(
-    "num_inference_steps",
-    ((50),),
-)
-@pytest.mark.parametrize(
-    "classifier_free_guidance",
-    [
-        (True),
-        (False),
-    ],
-    ids=("with_classifier_free_guidance", "no_classifier_free_guidance"),
-)
-def test_demo_with_vae(
-    device,
-    prompt,
-    num_inference_steps,
-    classifier_free_guidance,
-):
-    return run_demo_inference(
-        device,
-        prompt,
-        num_inference_steps,
-        classifier_free_guidance,
-        vae_on_device=True,
+        vae_on_device=vae_on_device,
     )
