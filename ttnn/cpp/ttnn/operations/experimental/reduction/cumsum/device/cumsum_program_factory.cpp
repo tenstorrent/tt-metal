@@ -130,16 +130,18 @@ CumSumDeviceOperation::ProgramFactory::cached_program_t CumSumDeviceOperation::P
     DataFormat in_df = datatype_to_dataformat_converter(output_dtype);
     DataFormat out_df = in_df;
 
+    uint32_t total_cb_size = 4 * single_tile_size;
+
     CircularBufferConfig cb_in_config =
-        CircularBufferConfig(single_tile_size, {{cb_in_index, in_df}}).set_page_size(cb_in_index, single_tile_size);
+        CircularBufferConfig(total_cb_size, {{cb_in_index, in_df}}).set_page_size(cb_in_index, single_tile_size);
 
     CircularBufferConfig cb_out_config =
-        CircularBufferConfig(single_tile_size, {{cb_out_index, out_df}}).set_page_size(cb_out_index, single_tile_size);
+        CircularBufferConfig(total_cb_size, {{cb_out_index, out_df}}).set_page_size(cb_out_index, single_tile_size);
 
-    CircularBufferConfig cb_zero_config = CircularBufferConfig(single_tile_size, {{cb_zero_index, out_df}})
-                                              .set_page_size(cb_zero_index, single_tile_size);
+    CircularBufferConfig cb_zero_config =
+        CircularBufferConfig(total_cb_size, {{cb_zero_index, out_df}}).set_page_size(cb_zero_index, single_tile_size);
 
-    CircularBufferConfig cb_intermed_config = CircularBufferConfig(single_tile_size, {{cb_intermed_index, out_df}})
+    CircularBufferConfig cb_intermed_config = CircularBufferConfig(total_cb_size, {{cb_intermed_index, out_df}})
                                                   .set_page_size(cb_intermed_index, single_tile_size);
 
     CreateCircularBuffer(
@@ -249,14 +251,35 @@ void CumSumDeviceOperation::ProgramFactory::override_runtime_arguments(
 
     const auto& input_dtype = input_tensor.dtype();
 
-    auto& unary_reader_kernel_id = cached_program.shared_variables.unary_reader_kernel_id;
-    auto& unary_writer_kernel_id = cached_program.shared_variables.unary_writer_kernel_id;
+    auto& cumsum_reader_kernel_id = cached_program.shared_variables.unary_reader_kernel_id;
+    auto& cumsum_writer_kernel_id = cached_program.shared_variables.unary_writer_kernel_id;
 
     auto& num_cores = cached_program.shared_variables.num_cores;
 
     auto& program = cached_program.program;
 
+    int num_cores_x = 1;
+    int num_cores_y = 1;
+
+    uint32_t input_buffer_addr = 0;
+    uint32_t output_buffer_addr = 0;
+
+    // Note: do not use full grid => we can't override program if we are not running
+    // the program on the specified core
+    // This is why we must specify where the progrma is running
+
     for (uint32_t i = 0; i < num_cores; i++) {
+        CoreCoord core = {i / num_cores_x, i % num_cores_x};
+
+        {
+            auto& runtime_args = GetRuntimeArgs(program, cumsum_reader_kernel_id, core);
+            runtime_args[0] = input_buffer_addr;
+        }
+
+        {
+            auto& runtime_args = GetRuntimeArgs(program, cumsum_writer_kernel_id, core);
+            runtime_args[0] = output_buffer_addr;
+        }
     }
 
     // Support for override_runtime_arguments() will be added in resolution of issue #21097
