@@ -487,6 +487,7 @@ if(CMAKE_VERSION VERSION_GREATER_EQUAL 3.23)
                 inc/debug/stack_usage.h
                 inc/debug/watcher_common.h
                 inc/debug/waypoint.h
+                inc/dev_msgs.h
                 inc/ethernet/dataflow_api.h
                 inc/ethernet/erisc.h
                 inc/ethernet/tt_eth_api.h
