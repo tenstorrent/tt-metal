@@ -174,10 +174,7 @@ struct MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig {
     std::optional<UnaryWithParam> fused_activation;
 };
 
-struct MatmulMultiCoreProgramConfig {};
-
 using MatmulProgramConfig = std::variant<
-    MatmulMultiCoreProgramConfig,
     MatmulMultiCoreReuseProgramConfig,
     MatmulMultiCoreReuseMultiCastProgramConfig,
     MatmulMultiCoreReuseMultiCast1DProgramConfig,
