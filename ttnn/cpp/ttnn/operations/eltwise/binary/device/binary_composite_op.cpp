@@ -467,25 +467,12 @@ Tensor run_fmod(
     const Tensor& input_b,
     const Tensor& division_result,
     const std::optional<MemoryConfig>& output_mem_config) {
-    Tensor mul_res = ttnn::multiply(division_result, input_b, std::nullopt, output_mem_config);
-    std::cout << "Mutiply division result with B : ";
-    mul_res.print();
-    std::cout << std::endl;
     Tensor result = ttnn::subtract(
         input_a,
         ttnn::multiply(division_result, input_b, std::nullopt, output_mem_config),
         std::nullopt,
         output_mem_config);
-    std::cout << "Subtract with A : ";
-    result.print();
-    std::cout << std::endl;
-    result = ttnn::where(ttnn::eq(input_a, input_b, std::nullopt, output_mem_config), 0.0f, result);
-    std::cout << "Replace with 0.0 if A==B : ";
-    result.print();
-    std::cout << std::endl;
-    // float t_nan = std::nanf("");
-    // if input_b = 0.0 --> nan
-    return result;
+    return ttnn::where(ttnn::eq(input_a, input_b, std::nullopt, output_mem_config), 0.0f, result);
 }
 
 // FMOD result = input − (other * trunc(input/other))
@@ -493,35 +480,16 @@ Tensor ExecuteBinaryFmod::invoke(
     const Tensor& input_a, const Tensor& input_b, const std::optional<MemoryConfig>& output_mem_config) {
     DataType input_dtype = input_a.get_dtype();
     Tensor div_res = ttnn::divide(input_a, input_b, std::nullopt, output_mem_config);
-    std::cout << "Divide a,b : ";
-    div_res.print();
-    std::cout << std::endl;
     div_res = ttnn::trunc(div_res, output_mem_config);
-    std::cout << "Round off using trunc : ";
-    div_res.print();
-    std::cout << std::endl;
     // No typecast for FP32 input
     if (input_dtype == DataType::FLOAT32 && input_b.get_dtype() == DataType::FLOAT32) {
         return run_fmod(input_a, input_b, div_res, output_mem_config);
     }
     // For bfloat16 with decimal values, need to typecast to FP32 to improve precision
     Tensor a = typecast(input_a, DataType::FLOAT32);
-    std::cout << "bf16 : Typecast Input A to FP32 Type ";
-    a.print();
-    std::cout << std::endl;
     Tensor b = typecast(input_b, DataType::FLOAT32);
-    std::cout << "bf16 : Typecast Input B to FP32 Type ";
-    b.print();
-    std::cout << std::endl;
     div_res = typecast(div_res, DataType::FLOAT32);
-    std::cout << "bf16 : Typecast div_res to FP32 Type ";
-    div_res.print();
-    std::cout << std::endl;
-    Tensor final = typecast(run_fmod(a, b, div_res, output_mem_config), input_dtype);
-    std::cout << "bf16 : Typecast final result to FP32 Type ";
-    final.print();
-    std::cout << std::endl;
-    return final;
+    return typecast(run_fmod(a, b, div_res, output_mem_config), input_dtype);
 }
 
 Tensor ExecuteBinaryFmod::invoke(

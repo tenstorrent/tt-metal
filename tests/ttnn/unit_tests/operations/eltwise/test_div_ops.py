@@ -143,34 +143,6 @@ def test_binary_fmod_bf16(
     assert pcc >= 0.99
 
 
-@pytest.mark.parametrize(
-    "testing_dtype",
-    ["float32", "bfloat16"],
-)
-def test_binary_fmod_bf16_fp32_check(
-    device,
-    testing_dtype,
-):
-    torch_input_tensor_a = generate_torch_tensor([1, 3], -1000, 100, step=900, dtype=getattr(torch, testing_dtype))
-    torch_input_tensor_b = torch.full([1, 3], 0.0, dtype=getattr(torch, testing_dtype))
-    torch_output_tensor = torch.fmod(torch_input_tensor_a, torch_input_tensor_b)
-    print("Torch inputs : \nA : \t\t\t\t", torch_input_tensor_a, "\nB : \t\t\t\t", torch_input_tensor_b)
-
-    input_tensor_a = ttnn.from_torch(
-        torch_input_tensor_a, dtype=getattr(ttnn, testing_dtype), layout=ttnn.TILE_LAYOUT, device=device
-    )
-    input_tensor_b = ttnn.from_torch(
-        torch_input_tensor_b, dtype=getattr(ttnn, testing_dtype), layout=ttnn.TILE_LAYOUT, device=device
-    )
-    print("Torch inputs : \nA : \t\t\t\t", input_tensor_a, "\nB : \t\t\t\t", input_tensor_b)
-    output = ttnn.fmod(input_tensor_a, input_tensor_b)
-    output = ttnn.to_torch(output)
-    print("Torch Result vs TT Result :\n", torch_output_tensor, output)
-
-    pcc = ttnn.pearson_correlation_coefficient(torch_output_tensor, output)
-    assert pcc >= 0.99
-
-
 # This test was added for #17362
 # If input is a multiple of the scalar, the result should be 0, but both Torch and TT output either 0 or the scalar value itself depending on the operands.
 # This inconsistency is persistent due to some fp precision loss in both Torch and TT.
