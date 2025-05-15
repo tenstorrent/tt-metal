@@ -56,6 +56,7 @@ def transpose(
         assert device.num_program_cache_entries() == expected_program_cache_size
 
 
+@run_for_blackhole()
 def test_fold_transpose(device, use_program_cache):
     N = 16
     C = 4
