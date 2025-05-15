@@ -6,18 +6,13 @@ inputs:
     description: "Path to pass containing gtest XML test report files"
     required: false
     default: "/work/generated/test_reports/"
-  metal-checkout-path:
-    description: "Path to checked out metal repository"
-    required: false
-    default: "/work"
 
 runs:
   using: "composite"
   steps:
     - name: Generate gtest failure messages
       id: generate-gtest-message
-      working-directory: ${{ inputs.metal-checkout-path }}
       shell: bash
       run: |
         set +e
-        python3 .github/scripts/data_analysis/print_gtest_annotations.py ${{ inputs.test-report-path }}
+        python3 ${GITHUB_ACTION_PATH}/print_gtest_annotations.py ${{ inputs.test-report-path }}

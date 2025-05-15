@@ -81,7 +81,6 @@ jobs:
         if: ${{ failure() }}
         with:
           test-report-path: generated/test_reports/
-          metal-checkout-path: ${{ github.workspace }}
       - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
         timeout-minutes: 10
         if: ${{ !cancelled() }}
