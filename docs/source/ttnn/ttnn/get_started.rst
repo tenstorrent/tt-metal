@@ -21,7 +21,7 @@ Install and build the project by following the instructions in the
 2. Explore Our Model Demos
 ^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-Get started with the model demo of your choice. You can test or verify configurations with one of numerous model demos. See the `model demo list
+Get started with the model of your choice. Install one of numerous configurations. See the `model demo list
 <https://github.com/tenstorrent/tt-metal?tab=readme-ov-file#llms>`_
 for details.
 
