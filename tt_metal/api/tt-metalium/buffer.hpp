@@ -192,6 +192,15 @@ class Buffer final {
     };
 
 public:
+    // Buffer::create APIs provide single entry point for creating buffers with ShardSpec or BufferDistributionSpec
+    // - Validation is done in Buffer constructor with validate_buffer_parameters
+    // - Only one of ShardSpec or BufferDistributionSpec can be set
+    // TODO: buffer_layout should not be needed with BufferDistributionSpec since layout is implicit in the spec
+    // - ie. It's possible to fully unify interleaved and sharding
+    // - For now, must pass TensorMemoryLayout::BLOCK_SHARDED (seems like the most sensible option)
+    // TODO: Unify Buffer parameters with MeshBuffer (ie. use DeviceLocalBufferConfig as well)
+    // - BufferDistributionSpec is added to the end with default std::nullopt value to avoid breaking existing usages
+    // - Eventually, do we even need to expose single-device Buffer::create to users?
     static std::shared_ptr<Buffer> create(
         IDevice* device,
         DeviceAddr size,
@@ -200,7 +209,8 @@ public:
         TensorMemoryLayout buffer_layout = TensorMemoryLayout::INTERLEAVED,
         const std::optional<ShardSpecBuffer>& shard_parameter = std::nullopt,
         std::optional<bool> bottom_up = std::nullopt,
-        std::optional<SubDeviceId> sub_device_id = std::nullopt);
+        std::optional<SubDeviceId> sub_device_id = std::nullopt,
+        const std::optional<BufferDistributionSpec>& buffer_distribution_spec = std::nullopt);
     static std::shared_ptr<Buffer> create(
         IDevice* device,
         DeviceAddr address,
@@ -210,20 +220,8 @@ public:
         TensorMemoryLayout buffer_layout = TensorMemoryLayout::INTERLEAVED,
         const std::optional<ShardSpecBuffer>& shard_parameter = std::nullopt,
         std::optional<bool> bottom_up = std::nullopt,
-        std::optional<SubDeviceId> sub_device_id = std::nullopt);
-
-    // Forked APIs for BufferDistributionSpec
-    // - Only usable for tensor allocation in OPs
-    // TODO: Need to support proper read/write for buffers with BufferDistributionSpec
-    static std::shared_ptr<Buffer> create(
-        IDevice* device,
-        DeviceAddr size,
-        DeviceAddr page_size,
-        BufferType buffer_type,
-        const BufferDistributionSpec& buffer_distribution_spec,
-        std::optional<bool> bottom_up = std::nullopt,
-        std::optional<SubDeviceId> sub_device_id = std::nullopt);
-    // TODO: Add create with address or just port over existing one?
+        std::optional<SubDeviceId> sub_device_id = std::nullopt,
+        const std::optional<BufferDistributionSpec>& buffer_distribution_spec = std::nullopt);
 
     Buffer(const Buffer& other) = delete;
     Buffer& operator=(const Buffer& other) = delete;
@@ -352,20 +350,6 @@ private:
     AllocationStatus allocation_status_ = AllocationStatus::ALLOCATION_REQUESTED;
     bool hooked_allocation_ = false;
     DeviceAddr address_ = 0;
-
-    // Private helper function to commonize code path for buffer creation with either ShardSpecBuffer or
-    // BufferDistributionSpec
-    // TODO: Delete if/when we remove ShardSpecBuffer
-    static std::shared_ptr<Buffer> create_buffer(
-        IDevice* device,
-        DeviceAddr size,
-        DeviceAddr page_size,
-        const BufferType buffer_type,
-        const TensorMemoryLayout buffer_layout,
-        const std::optional<ShardSpecBuffer>& shard_parameters,
-        const std::optional<BufferDistributionSpec>& buffer_distribution_spec,
-        const std::optional<bool> bottom_up,
-        const std::optional<SubDeviceId> sub_device_id);
 
     // These members must be only accessed on the device worker thread
     DeviceAddr page_size_;  // Size of unit being interleaved. For non-interleaved buffers: size == page_size

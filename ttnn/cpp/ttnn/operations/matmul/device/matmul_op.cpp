@@ -1647,6 +1647,17 @@ void Matmul::validate(
         [input_tensor_a, input_tensor_b, optional_bias, in0_tile_shape, in1_tile_shape, this](
             const auto& program_config) {
             using ProgramConfigType = std::decay_t<decltype(program_config)>;
+            if constexpr (
+                std::is_same_v<ProgramConfigType, MatmulMultiCoreReuseMultiCastProgramConfig> ||
+                std::is_same_v<ProgramConfigType, MatmulMultiCoreReuseMultiCast1DProgramConfig>) {
+                TT_FATAL(program_config.in0_block_w != 0, "in0_block_w is 0, which is not valid");
+                TT_FATAL(program_config.out_subblock_h != 0, "out_subblock_h is 0, which is not valid");
+                TT_FATAL(program_config.out_subblock_w != 0, "out_subblock_w is 0, which is not valid");
+                TT_FATAL(program_config.out_block_h != 0, "out_block_h is 0, which is not valid");
+                TT_FATAL(program_config.out_block_w != 0, "out_block_w is 0, which is not valid");
+                TT_FATAL(program_config.per_core_M != 0, "per_core_M is 0, which is not valid");
+                TT_FATAL(program_config.per_core_N != 0, "per_core_N is 0, which is not valid");
+            }
             // TODO: For 1D and 2D mcasts, we don't check if tensor is single core
             // or single row/col We can uplift these variants to skip mcasting to
             // support single core (1D) or single row/col (2D)

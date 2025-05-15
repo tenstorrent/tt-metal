@@ -127,7 +127,7 @@ void RunTest(WatcherFixture* fixture, IDevice* device) {
         }
     }
     if (has_idle_eth_cores) {
-        KernelHandle ierisc_kid0, ierisc_kid1;
+        KernelHandle ierisc_kid0{}, ierisc_kid1{};
         std::set<CoreRange> eth_core_ranges;
         for (const auto& core : device->get_inactive_ethernet_cores()) {
             eth_core_ranges.insert(CoreRange(core, core));
@@ -176,16 +176,16 @@ void RunTest(WatcherFixture* fixture, IDevice* device) {
                 if (tt::tt_metal::GetNumAvailableDevices() == 1 && !fixture->IsSlowDispatch()) {
                     // blank | prefetch, dispatch | tensix kernels
                     int k_id = 1 + 2 + 3;
-                    string k_id_s = fmt::format("{}", k_id);
+                    string k_id_s = fmt::format("{:3}", k_id);
                     if (device->arch() == ARCH::BLACKHOLE)
-                        k_id_s += fmt::format("|{}", k_id + 1);
+                        k_id_s += fmt::format("|{:3}", k_id + 1);
                 } else {
                     k_id_s = "";
                 }
                 expected = fmt::format(
-                    "Device {} {} ethnet core(x={:2},y={:2}) virtual(x={:2},y={:2}): {},{},   X,   X,   X  ",
+                    "Device {} {}eth core(x={:2},y={:2}) virtual(x={:2},y={:2}): {},{},   X,   X,   X  ",
                     device->id(),
-                    is_active ? "active" : "idle",
+                    is_active ? "act" : "idl",
                     logical_core.x,
                     logical_core.y,
                     virtual_core.x,
@@ -195,9 +195,9 @@ void RunTest(WatcherFixture* fixture, IDevice* device) {
                     // Active eth core only has one available erisc to test on.
                     (device->arch() == ARCH::BLACKHOLE and not is_active) ? waypoint : "   X");
                 if (device->arch() == ARCH::BLACKHOLE) {
-                    expected += fmt::format("rmsg:***|** h_id:0 smsg:* k_id:{}", k_id_s);
+                    expected += fmt::format("rmsg:***|** h_id:  0 smsg:* k_id:{}", k_id_s);
                 } else {
-                    expected += fmt::format("rmsg:***|* h_id:0 k_id:{}", k_id_s);
+                    expected += fmt::format("rmsg:***|* h_id:  0 k_id:{}", k_id_s);
                 }
             } else {
                 // Each different config has a different calculation for k_id, let's just do one. Fast Dispatch, one device.
@@ -205,12 +205,13 @@ void RunTest(WatcherFixture* fixture, IDevice* device) {
                 if (tt::tt_metal::GetNumAvailableDevices() == 1 && !fixture->IsSlowDispatch()) {
                     // blank | prefetch, dispatch
                     int k_id = 1 + 2;
-                    string k_id_s = fmt::format("{}|{}|{}", k_id, k_id+1, k_id+2);
+                    string k_id_s = fmt::format("{:3}|{:3}|{:3}", k_id, k_id + 1, k_id + 2);
                 } else {
                     k_id_s = "";
                 }
                 expected = fmt::format(
-                    "Device {} worker core(x={:2},y={:2}) virtual(x={:2},y={:2}): {},{},{},{},{}  rmsg:***|*** h_id:0 "
+                    "Device {} worker core(x={:2},y={:2}) virtual(x={:2},y={:2}): {},{},{},{},{}  rmsg:***|*** h_id:  "
+                    "0 "
                     "smsg:**** k_ids:{}",
                     device->id(),
                     logical_core.x,

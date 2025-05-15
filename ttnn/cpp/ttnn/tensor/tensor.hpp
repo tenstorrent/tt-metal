@@ -17,7 +17,7 @@
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "ttnn/common/queue_id.hpp"
 #include "ttnn/distributed/distributed_tensor_config.hpp"
-#include "ttnn/tensor/host_buffer/host_buffer.hpp"
+#include <tt-metalium/host_buffer.hpp>
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/tensor/storage.hpp"
 #include "ttnn/tensor/tensor_attributes.hpp"
@@ -181,30 +181,31 @@ public:
     // ======================================================================================
     //                                      Getters
     // ======================================================================================
-    // TODO: remove either get_<x> or <x> getters. They are now equivalent.
-    const Storage& get_storage() const;
-    Storage& get_storage();
-    DataType get_dtype() const;
-    Layout get_layout() const;
-    const ttnn::Shape& get_logical_shape() const;
-    const ttnn::Shape& get_padded_shape() const;
-    const TensorSpec& get_tensor_spec() const;
-    uint32_t get_logical_volume() const;
-    const DistributedTensorConfig& get_distributed_tensor_config() const;
+    // TODO: #22090 - Remove the following getters, after giving clients enough time to migrate.
+    [[deprecated("Use storage() instead")]] const Storage& get_storage() const;
+    [[deprecated("Use storage() instead")]] Storage& get_storage();
+    [[deprecated("Use dtype() instead")]] DataType get_dtype() const;
+    [[deprecated("Use layout() instead")]] Layout get_layout() const;
+    [[deprecated("Use logical_shape() instead")]] const ttnn::Shape& get_logical_shape() const;
+    [[deprecated("Use padded_shape() instead")]] const ttnn::Shape& get_padded_shape() const;
+    [[deprecated("Use tensor_spec() instead")]] const TensorSpec& get_tensor_spec() const;
+    [[deprecated("Use logical_volume() instead")]] uint64_t get_logical_volume() const;
+    [[deprecated("Use padded_volume() instead")]] uint32_t volume() const;
+    [[deprecated("Use distributed_tensor_config() instead")]] const DistributedTensorConfig&
+    get_distributed_tensor_config() const;
 
-    // ======================================================================================
-    // Non-Blocking Getters. Query attributes directly, without waiting for worker completion
-    // ======================================================================================
     const Storage& storage() const;
-    const ttnn::Shape& logical_shape() const;
-    const ttnn::Shape& padded_shape() const;
+    Storage& storage();
     DataType dtype() const;
     Layout layout() const;
+    const ttnn::Shape& logical_shape() const;
+    const ttnn::Shape& padded_shape() const;
     const TensorSpec& tensor_spec() const;
-    uint32_t volume() const;
+    uint64_t logical_volume() const;
+    uint64_t padded_volume() const;
+    const DistributedTensorConfig& distributed_tensor_config() const;
     const MemoryConfig& memory_config() const;
     const std::optional<ShardSpec>& shard_spec() const;
-    const DistributedTensorConfig& distributed_tensor_config() const;
 
     // ======================================================================================
     //                                      Extra Helper Functions
