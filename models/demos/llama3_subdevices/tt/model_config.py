@@ -726,21 +726,19 @@ class TtModelArgs:
                 fuse_batch=seq_len <= 2048,
             )
 
-            def w2_prg_config(activation_height):
+            def w2_prg_config(seq_len):
                 # For sequence lengths < 4096, we use this config as it performs better that what would be generated below
-                if activation_height < 4096:
+                if seq_len < 4096:
                     return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
                         compute_with_storage_grid_size=(7, 10),
                         in0_block_w=8,  # FIXME: optimize this config for prefill, careful use DI_DT_WORKAROUND if necessary
                         out_subblock_h=1,  # Must be divisible by per_core_M
                         out_subblock_w=2,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4
-                        per_core_M=max(
-                            1, 8 if activation_height >= 2048 else activation_height // self.tile_size // 8
-                        ),  # 8~10 rows
+                        per_core_M=max(1, 8 if seq_len >= 2048 else seq_len // self.tile_size // 8),  # 8~10 rows
                         per_core_N=math.ceil(2048 / 32 / 7),  # N / TILE_WIDTH / grid width
                         transpose_mcast=False,
                         fused_activation=None,
-                        fuse_batch=activation_height <= 2048,
+                        fuse_batch=seq_len <= 2048,
                     )
 
                 # For very large activation heights (arbitrarily chosen to be > 320) we want the per_core_M to have many divisors
@@ -752,7 +750,7 @@ class TtModelArgs:
                 add_one_if_prime = (
                     lambda n: n + 1 if n > 1 and all(n % i != 0 for i in range(2, int(n**0.5) + 1)) else n
                 )
-                total_per_core_out_M = add_one_if_prime(math.ceil(activation_height / (7 * self.tile_size)))
+                total_per_core_out_M = add_one_if_prime(math.ceil(seq_len / (7 * self.tile_size)))
                 per_core_M = (
                     next_multiple_of_8(total_per_core_out_M) if total_per_core_out_M > 320 else total_per_core_out_M
                 )
