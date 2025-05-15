@@ -645,8 +645,8 @@ static OptimizedConvBlockConfig get_opt_block_config(
         get_num_cores_nhw_from_parallel_config(largest_parallel_config),
         get_num_cores_channels_from_parallel_config(parallel_config));
 
-    const uint32_t in_channels_alignment = get_input_channels_alignment(
-        conv_config.shard_layout.value(), input_tensor_layout, mm_conv, input_memory_config);
+    const uint32_t in_channels_alignment =
+        get_input_channels_alignment(conv_config.shard_layout.value(), input_layout, mm_conv, input_memory_config);
     uint32_t in_channels_padded =
         tt::round_up(in_channels, get_num_cores_channels_from_parallel_config(parallel_config) * in_channels_alignment);
 
@@ -1193,8 +1193,8 @@ ttnn::Tensor prepare_conv_weights(
     ParallelConfig output_parallel_config = determine_output_parallel_config(
         parallel_config, device->compute_with_storage_grid_size(), out_channels, mm_conv);
 
-    const uint32_t input_channels_alignment = get_input_channels_alignment(
-        conv_config.shard_layout.value(), input_tensor_layout, mm_conv, input_memory_config);
+    const uint32_t input_channels_alignment =
+        get_input_channels_alignment(conv_config.shard_layout.value(), input_layout, mm_conv, input_memory_config);
     std::optional<const ttnn::Tensor> bias_tensor = std::nullopt;
     ttnn::Tensor weight_tensor_on_device = weight_tensor;
     std::optional<ttnn::Tensor> bias_tensor_on_device = bias_tensor;
