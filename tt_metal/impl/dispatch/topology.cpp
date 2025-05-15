@@ -1293,7 +1293,7 @@ void configure_fabric_cores(IDevice* device) {
     const auto router_chans_and_direction = control_plane->get_active_fabric_eth_channels(mesh_id, chip_id);
     const auto addresses_to_clear = control_plane->get_fabric_context().get_fabric_router_addresses_to_clear();
     for (const auto& [router_chan, _] : router_chans_and_direction) {
-        CoreCoord router_logical_core = soc_desc.get_eth_core_for_channel(router_chan, CoordSystem::LOGICAL);
+        auto router_logical_core = soc_desc.get_eth_core_for_channel(router_chan, CoordSystem::LOGICAL);
         for (const auto& address : addresses_to_clear) {
             tt::tt_metal::detail::WriteToDeviceL1(device, router_logical_core, address, router_zero_buf, CoreType::ETH);
         }
