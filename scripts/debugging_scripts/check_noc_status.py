@@ -7,11 +7,13 @@
 Script Name: check_noc_status.py
 
 Usage:
-    scripts/debugging_scripts/check_noc_status.py <elf-file>
-    scripts/debugging_scripts/check_noc_status.py <elf-file> -v
+    scripts/debugging_scripts/check_noc_status.py <elf-file> [-v]
 
 Arguments:
     <elf-file>  Path to risc firmware elf file
+
+Options:
+    -v  If true includes passed tests in optput. Default: False
 
 Description:
     This script checks if there are any mismatches between values of number of NOC transactions
