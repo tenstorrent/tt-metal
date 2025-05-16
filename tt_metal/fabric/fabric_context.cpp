@@ -44,6 +44,7 @@ tt::tt_fabric::Topology FabricContext::get_topology() const {
         case tt::tt_metal::FabricConfig::FABRIC_1D_RING: return tt::tt_fabric::Topology::Ring;
         case tt::tt_metal::FabricConfig::FABRIC_2D_PUSH: return tt::tt_fabric::Topology::Mesh;
         case tt::tt_metal::FabricConfig::FABRIC_2D: return tt::tt_fabric::Topology::Mesh;
+        case tt::tt_metal::FabricConfig::FABRIC_2D_DYNAMIC: return tt::tt_fabric::Topology::Mesh;
         case tt::tt_metal::FabricConfig::DISABLED:
         case tt::tt_metal::FabricConfig::CUSTOM:
             TT_THROW("Unsupported fabric config: {}", magic_enum::enum_name(this->fabric_config_));
@@ -84,6 +85,7 @@ FabricContext::FabricContext(tt::tt_metal::FabricConfig fabric_config) {
     if (is_tt_fabric_config(this->fabric_config_)) {
         this->router_config_ = std::make_unique<tt::tt_fabric::FabricEriscDatamoverConfig>(
             this->channel_buffer_size_bytes_, this->topology_);
+        set_routing_mode(this->topology_, this->fabric_config_);
     } else {
         this->router_config_ = nullptr;
     }

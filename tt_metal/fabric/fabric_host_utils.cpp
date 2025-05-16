@@ -24,12 +24,14 @@ namespace tt::tt_fabric {
 bool is_tt_fabric_config(tt::tt_metal::FabricConfig fabric_config) {
     return fabric_config == tt::tt_metal::FabricConfig::FABRIC_1D ||
            fabric_config == tt::tt_metal::FabricConfig::FABRIC_1D_RING ||
-           fabric_config == tt::tt_metal::FabricConfig::FABRIC_2D_PUSH;
+           fabric_config == tt::tt_metal::FabricConfig::FABRIC_2D_PUSH ||
+           fabric_config == tt::tt_metal::FabricConfig::FABRIC_2D_DYNAMIC;
 }
 
 bool is_2d_fabric_config(tt::tt_metal::FabricConfig fabric_config) {
     return fabric_config == tt::tt_metal::FabricConfig::FABRIC_2D ||
-           fabric_config == tt::tt_metal::FabricConfig::FABRIC_2D_PUSH;
+           fabric_config == tt::tt_metal::FabricConfig::FABRIC_2D_PUSH ||
+           fabric_config == tt::tt_metal::FabricConfig::FABRIC_2D_DYNAMIC;
 }
 
 uint32_t get_sender_channel_count(tt::tt_fabric::Topology topology) {
@@ -115,7 +117,7 @@ void set_routing_mode(uint16_t routing_mode) {
     control_plane->set_routing_mode(routing_mode);
 }
 
-void set_routing_mode(Topology topology, uint32_t dimension /*, take more*/) {
+void set_routing_mode(Topology topology, tt::tt_metal::FabricConfig fabric_config, uint32_t dimension /*, take more*/) {
     // TODO: take more parameters to set detail routing mode
     TT_FATAL(
         dimension == 1 || dimension == 2 || dimension == 3,
@@ -130,8 +132,11 @@ void set_routing_mode(Topology topology, uint32_t dimension /*, take more*/) {
     } else if (topology == Topology::Mesh) {
         mode |= (ROUTING_MODE_2D | ROUTING_MODE_MESH);
     }
-
-    mode |= ROUTING_MODE_LOW_LATENCY;
+    if (fabric_config == tt::tt_metal::FabricConfig::FABRIC_2D_DYNAMIC) {
+        mode |= ROUTING_MODE_DYNAMIC;
+    } else {
+        mode |= ROUTING_MODE_LOW_LATENCY;
+    }
     set_routing_mode(mode);
 }
 
