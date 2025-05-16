@@ -749,7 +749,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_multi_core_with_workers
                 log_trace(tt::LogOp, "pages_per_buffer[{}]: {}", w, pages_per_buffer.at(w));
                 log_trace(tt::LogOp, "max_pages_per_eth_l1_sender_buffer: {}", max_pages_per_eth_l1_sender_buffer);
             }
-            TT_ASSERT(std::accumulate(pages_per_buffer.begin(), pages_per_buffer.end(), 0) == pages_per_link.at(i));
+            TT_ASSERT(std::accumulate(pages_per_buffer.begin(), pages_per_buffer.end(), 0u) == pages_per_link.at(i));
 
             uint32_t bytes_per_chunk = 0, pages_per_chunk = 0, num_full_chunks = 0, rem_pages = 0;
             uint32_t link_size_bytes = pages_per_link.at(i) * input_page_size;

@@ -25,7 +25,7 @@ static inline tt::tt_metal::operation::ProgramWithCallbacks create_heads_combine
     TT_FATAL(heads_per_group.size() == output.size() && output.size() == 3, "Error");
 
     const uint32_t total_heads_per_group =
-        std::accumulate(heads_per_group.begin(), heads_per_group.end(), 0);  // num q heads + 2 * num_kv_heads
+        std::accumulate(heads_per_group.begin(), heads_per_group.end(), 0u);  // num q heads + 2 * num_kv_heads
     const uint32_t elements_per_group =
         head_dim * total_heads_per_group;  // head_dim * (num q heads + 2 * num kv heads)
     const uint32_t tiles_per_group =
