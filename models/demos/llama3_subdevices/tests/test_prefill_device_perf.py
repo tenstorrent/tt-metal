@@ -638,9 +638,6 @@ def test_llama_TG_perf_device(
         if op_code_with_id in perf_targets:
             op_name = perf_targets[op_code_with_id]["op_name"]
 
-            # Store the op index to better order the measurements in superset
-            benchmark_data.add_measurement(profiler, 0, step_name, f"{op_index}-op_index", op_index)
-
             # Dependent on the op_name we need to look at compile time or trace time for kernel duration
             if "AllGather" in op_code_with_id or "ReduceScatter" in op_code_with_id or "AllReduce" in op_code_with_id:
                 avg_kernel_duration = kernel_duration_per_instance_averaged_dict_trace[op_code_with_id]
@@ -652,23 +649,27 @@ def test_llama_TG_perf_device(
                 max_kernel_duration = kernel_duration_per_instance_max_dict_compilation[op_code_with_id]
 
             avg_dispatch_duration = dispatch_duration_per_instance_averaged_dict[op_code_with_id]
+            # Workaround: We are storing the op index in the "iteration" field of the measurement, to facilitate the graph in superset
+
             # average
-            benchmark_data.add_measurement(profiler, 0, step_name, op_name + "-model-kernel-avg", avg_kernel_duration)
             benchmark_data.add_measurement(
-                profiler, 0, step_name, op_name + "-model-op_to_op-avg", avg_dispatch_duration
+                profiler, op_index, step_name, op_name + "-model-kernel-avg", avg_kernel_duration
+            )
+            benchmark_data.add_measurement(
+                profiler, op_index, step_name, op_name + "-model-op_to_op-avg", avg_dispatch_duration
             )
 
             # min
             benchmark_data.add_measurement(
                 profiler,
-                0,
+                op_index,
                 step_name,
                 op_name + "-model-kernel-min",
                 min_kernel_duration,
             )
             benchmark_data.add_measurement(
                 profiler,
-                0,
+                op_index,
                 step_name,
                 op_name + "-model-op_to_op-min",
                 dispatch_duration_per_instance_min_dict[op_code_with_id],
@@ -677,14 +678,14 @@ def test_llama_TG_perf_device(
             # max
             benchmark_data.add_measurement(
                 profiler,
-                0,
+                op_index,
                 step_name,
                 op_name + "-model-kernel-max",
                 max_kernel_duration,
             )
             benchmark_data.add_measurement(
                 profiler,
-                0,
+                op_index,
                 step_name,
                 op_name + "-model-op_to_op-max",
                 dispatch_duration_per_instance_max_dict[op_code_with_id],
