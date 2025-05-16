@@ -18,8 +18,8 @@ set(DISTRIBUTED_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/distributed_host_buffer.cpp
 )
 
-find_package(MPI REQUIRED)
 add_library(distributed OBJECT ${DISTRIBUTED_SRC})
+add_dependencies(distributed openmpi_ulfm_build-build)
 target_link_libraries(
     distributed
     PUBLIC
@@ -28,5 +28,7 @@ target_link_libraries(
         Metalium::Metal::Impl
         Metalium::Metal::LLRT
         TT::Metalium::HostDevCommon
-        MPI::MPI_CXX
+        OpenMPI::MPI
 )
+
+# print OpenMPI include directories
