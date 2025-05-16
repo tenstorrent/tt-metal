@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "hostdevcommon/kernel_structs.h"
+#include "ttnn/common/constants.hpp"
 #include "ttnn/tensor/host_buffer/functions.hpp"
 #include <tt-metalium/work_split.hpp>
 #include "ttnn/operations/math.hpp"
@@ -129,6 +130,11 @@ Fold::MultiCoreTiledInterleaved::cached_program_t fold_multi_core_tiled_interlea
     tt::tt_metal::KernelHandle compute_kernel_id, compute_kernel_id_cliff;
     std::string compute_kernel_name =
         "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/pack_untilize.cpp";
+    if (ntiles_per_row > MAX_PACK_UNTILIZE_WIDTH) {
+        compute_kernel_name = "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/untilize.cpp";
+    }
+
+    std::cout << "compute_kernel_name: " << compute_kernel_name << std::endl;
 
     // Create main compute kernel
     compute_kernel_id = tt::tt_metal::CreateKernel(
@@ -185,7 +191,7 @@ Fold::MultiCoreTiledInterleaved::cached_program_t fold_multi_core_tiled_interlea
         };
         tt::tt_metal::SetRuntimeArgs(program, unary_reader_kernel_id, core, reader_runtime_args);
         tt::tt_metal::SetRuntimeArgs(program, unary_writer_kernel_id, core, writer_runtime_args);
-        tile_start_id += nblocks_per_core * ntiles_per_row;
+        tile_start_id += nblocks_per_core;
         cores_with_rtargs.push_back(core);
     }
 

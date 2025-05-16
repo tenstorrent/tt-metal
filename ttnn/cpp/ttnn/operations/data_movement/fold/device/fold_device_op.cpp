@@ -41,9 +41,6 @@ void validate_fold(
             (input_shape[-1] * input_tensor.element_size()) % 16 == 0,
             "Fold: Expect input tensor's pages to be multiples of 16 bytes.");
     } else if (is_tiled_interleaved) {
-        TT_FATAL(
-            input_tensor.get_logical_shape()[-1] <= 32,
-            "Fold: Expect tiled interleaved input tensor to have at most 32 channels.");
         TT_FATAL(input_shape[1] % stride_h == 0, "Error");
         TT_FATAL(input_shape[2] % stride_w == 0, "Error");
     } else {

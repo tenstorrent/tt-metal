@@ -84,6 +84,51 @@ def test_fold_with_permute_reshape_on_host(device, n, c, h, w, pad_h, pad_w, str
     assert_with_pcc(torch_output_tensor, torch_output_tensor_new, 1)
 
 
+def write_to_file(file_name, tensor):
+    tensor = tensor.float()
+    tensor = tensor.cpu().detach().numpy()
+    with open(file_name, "w") as f:
+        for i in range(1):
+            for j in range(tensor.shape[1]):
+                for k in range(tensor.shape[2]):
+                    for l in range(tensor.shape[3]):
+                        # f.write(str(round(tensor[i][j][k][l]), 2) + " ")
+                        f.write("{:.2f}".format(tensor[i][j][k][l]) + " ")
+                    f.write("\n")
+
+
+@pytest.mark.parametrize("batch_size", [1, 3])
+@pytest.mark.parametrize("channels", [1, 3, 9, 32, 54, 512])
+@pytest.mark.parametrize("hw", [(224, 224), (384, 512), (512, 672)])
+@pytest.mark.parametrize("stride", [(16, 16), (32, 32)])
+@pytest.mark.parametrize("input_layout", [ttnn.TILE_LAYOUT])
+def test_fold_with_permute_for_dram_tensor(device, batch_size, channels, hw, stride, input_layout):
+    height, width = hw
+    stride_h, stride_w = stride
+    torch_input_tensor = torch.rand((batch_size, channels, height, width), dtype=torch.bfloat16)
+    torch_input_tensor_nhwc = torch.permute(torch_input_tensor, (0, 2, 3, 1))
+    torch_output_tensor = torch.reshape(
+        torch_input_tensor_nhwc, (batch_size, height // stride_h, stride_h, width // stride_w, stride_w, channels)
+    )
+    torch_output_tensor = torch.permute(torch_output_tensor, (0, 1, 3, 2, 4, 5))
+    torch_output_tensor = torch.reshape(
+        torch_output_tensor, (batch_size, height // stride_h, width // stride_w, channels * stride_h * stride_w)
+    )
+    input_memory_config = ttnn.DRAM_MEMORY_CONFIG
+    tt_input_tensor = ttnn.from_torch(
+        torch_input_tensor_nhwc, layout=input_layout, device=device, memory_config=input_memory_config
+    )
+    tt_output_tensor = ttnn.fold(
+        tt_input_tensor,
+        stride_h,
+        stride_w,
+    )
+    tt_output_tensor = ttnn.to_torch(tt_output_tensor)
+    write_to_file("torch_output_tensor.txt", torch_output_tensor)
+    write_to_file("tt_output_tensor.txt", tt_output_tensor)
+    assert_with_pcc(torch_output_tensor, tt_output_tensor, 1)
+
+
 def pad_and_fold_with_permute_and_reshape_on_device(
     device, activation_pyt_nchw_tensor, pad_h, pad_w, stride_h, stride_w
 ):
