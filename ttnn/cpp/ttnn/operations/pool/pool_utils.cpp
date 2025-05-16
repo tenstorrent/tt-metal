@@ -43,6 +43,9 @@ uint32_t get_bf16_pool_scalar(
             if (scalars != nullptr) {
                 scalars->push_back(packed_first_value);
             }
+            if (sinchronization_indexes != nullptr) {
+                sinchronization_indexes->push_back(0);
+            }
             break;
         case Pool2DType::AVG_POOL2D:
             if (divisor_override.has_value()) {
@@ -50,6 +53,9 @@ uint32_t get_bf16_pool_scalar(
                 packed_first_value = bfloat16(value).to_packed();
                 if (scalars != nullptr) {
                     scalars->push_back(packed_first_value);
+                }
+                if (sinchronization_indexes != nullptr) {
+                    sinchronization_indexes->push_back(0);
                 }
             } else if (ceil_mode.value_or(false) && ceil_w.value_or(0) > 0) {
                 for (uint32_t i = 0; i < out_nhw_per_core.value(); i++) {
@@ -101,6 +107,9 @@ uint32_t get_bf16_pool_scalar(
                 packed_first_value = bfloat16(value).to_packed();
                 if (scalars != nullptr) {
                     scalars->push_back(packed_first_value);
+                }
+                if (sinchronization_indexes != nullptr) {
+                    sinchronization_indexes->push_back(0);
                 }
             }
             break;

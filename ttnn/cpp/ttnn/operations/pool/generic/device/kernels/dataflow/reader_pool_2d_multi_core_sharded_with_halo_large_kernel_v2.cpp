@@ -68,14 +68,13 @@ void kernel_main() {
     constexpr uint32_t in_one_cb_id = get_compile_time_arg_val(22);
     constexpr bool one_scalar_per_core = get_compile_time_arg_val(23);
     uint32_t scalar_index = 0;
-    uint32_t num_of_ele = reader_nindices;
     uint32_t scalars_cnt = 1;
+    uint32_t runtime_args_before = 1;
     if (!one_scalar_per_core) {
-        num_of_ele = get_arg_val<uint32_t>(0);
-        scalars_cnt = get_arg_val<uint32_t>(1);
+        scalars_cnt = get_arg_val<uint32_t>(0);
     }
 
-    DPRINT << "num_of_ele" << num_of_ele << ENDL();
+    DPRINT << "reader_nindices" << reader_nindices << ENDL();
     DPRINT << "scalars_cnt" << scalars_cnt << ENDL();
 
     if (reader_id == 0) {
@@ -107,15 +106,15 @@ void kernel_main() {
     constexpr uint32_t read_bytes =
         wide_reduction ? MAX_ELE_PER_REDUCTION : in_nbytes_c;  // in_cb is MAX_ELE_PER_REDUCTION for wide reductions
 
-    while (counter < num_of_ele || (reader_id == 0 && scalar_index < scalars_cnt && !one_scalar_per_core)) {
+    while (counter < reader_nindices || (reader_id == 0 && scalar_index < scalars_cnt && !one_scalar_per_core)) {
         if (reader_id == 0 && scalar_index < scalars_cnt && !one_scalar_per_core) {
-            uint32_t scalar_val = get_arg_val<uint32_t>(scalar_index + 2);
+            uint32_t scalar_val = get_arg_val<uint32_t>(scalar_index + runtime_args_before);
             cb_reserve_back(in_scalar_cb_id, 1);
             fill_with_val(get_write_ptr(in_scalar_cb_id), TILE_WIDTH, scalar_val >> 16);
             scalar_index++;
             cb_push_back(in_scalar_cb_id, 1);
         }
-        if (counter < num_of_ele || one_scalar_per_core) {
+        if (counter < reader_nindices || one_scalar_per_core) {
             for (uint32_t c_i = 0; c_i < in_nblocks_c; c_i++) {
                 const uint16_t top_left_local_index = reader_indices_ptr[counter];
                 uint32_t processed_rows = 0;
