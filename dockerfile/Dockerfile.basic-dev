@@ -3,7 +3,8 @@ FROM public.ecr.aws/ubuntu/ubuntu:${UBUNTU_VERSION} AS base
 # Re-declare ARG make it available in the build stage
 ARG UBUNTU_VERSION
 
-# I didn't find a better way to provide the version of the image
+# temporary solution
+
 RUN install_mpi_uflm(){
     apt-get install -y --no-install-recommends libhwloc15 libibverbs1
     DEB_URL="https://github.com/dmakoviichuk-tt/mpi-ulfm/releases/download/v5.0.7-ulfm/openmpi-ulfm_5.0.7-1_amd64.deb"
@@ -21,8 +22,9 @@ RUN install_mpi_uflm(){
     echo "→ Installing $DEB_FILE …"
 
     dpkg -i "$TMP_DIR/$DEB_FILE"
-    apt-get -f install
+    apt-get -y install
 }
+
 
 # Install basic tools to build
 # The Boost PPA is because TT-Metalium depends on a Boost too new for Ubuntu 22.04
