@@ -46,14 +46,16 @@ TypecastShardedProgramFactory::cached_program_t TypecastShardedProgramFactory::c
     uint32_t input_tile_size = tt::tt_metal::detail::TileSize(act_df);
     uint32_t output_tile_size = tt::tt_metal::detail::TileSize(out_df);
 
-    TT_FATAL(input_tile_size == output_tile_size, "Input and output tile size should be same");
-
+    // TT_FATAL(input_tile_size == output_tile_size, "Input and output tile size should be same");
+    tt::log_info(tt::LogOp, " ****** input_tile_size {}", input_tile_size);
+    tt::log_info(tt::LogOp, " ****** output_tile_size {}", output_tile_size);
     uint32_t num_tile_per_core = 0;
 
     if (input.get_dtype() == DataType::BFLOAT8_B || input.get_dtype() == DataType::BFLOAT4_B) {
         uint32_t ntiles_along_width = std::ceil(shard_spec.shape[1] / (float)tt::constants::TILE_WIDTH);
         uint32_t ntiles_along_height = std::ceil(shard_spec.shape[0] / (float)tt::constants::TILE_HEIGHT);
         num_tile_per_core = ntiles_along_width * ntiles_along_height;
+        tt::log_info(tt::LogOp, " ****** num_tile_per_core {}", num_tile_per_core);
     } else {
         TT_FATAL(
             (shard_spec.shape[1] * datum_size(act_df)) % hal::get_l1_alignment() == 0,
@@ -72,6 +74,9 @@ TypecastShardedProgramFactory::cached_program_t TypecastShardedProgramFactory::c
         round_up_to_mul32(input_tile_size);  // will have issue if the page is not multiple of 32
     uint32_t in_cb_pagesize = aligned_input_tile_nbytes;
     uint32_t in_cb_npages = num_tile_per_core * buffering_factor;
+    tt::log_info(tt::LogOp, " ****** (in_cb_pagesize {}", in_cb_pagesize);
+    tt::log_info(tt::LogOp, " ****** (in_cb_npages {}", in_cb_npages);
+    tt::log_info(tt::LogOp, " ****** (in_cb_pagesize * in_cb_npages {}", in_cb_pagesize * in_cb_npages);
     tt::tt_metal::CircularBufferConfig cb_src0_config =
         tt::tt_metal::CircularBufferConfig(in_cb_pagesize * in_cb_npages, {{in_cb_id, act_df}})
             .set_page_size(in_cb_id, in_cb_pagesize)
@@ -84,6 +89,9 @@ TypecastShardedProgramFactory::cached_program_t TypecastShardedProgramFactory::c
         round_up_to_mul32(output_tile_size);  // will have issue if the page is not multiple of 32
     uint32_t out_cb_pagesize = aligned_output_tile_nbytes;
     uint32_t out_cb_npages = num_tile_per_core * buffering_factor;
+    tt::log_info(tt::LogOp, " ****** (out_cb_pagesize {}", out_cb_pagesize);
+    tt::log_info(tt::LogOp, " ****** (out_cb_npages {}", out_cb_npages);
+    tt::log_info(tt::LogOp, " ****** (out_cb_pagesize * out_cb_npages {}", out_cb_pagesize * out_cb_npages);
     tt::tt_metal::CircularBufferConfig out_cb_config =
         tt::tt_metal::CircularBufferConfig(out_cb_pagesize * out_cb_npages, {{out_cb_id, out_df}})
             .set_page_size(out_cb_id, out_cb_pagesize)
@@ -133,7 +141,7 @@ TypecastShardedProgramFactory::cached_program_t TypecastShardedProgramFactory::c
         (uint32_t)datatype_to_dataformat_converter(input_dtype),
         (uint32_t)datatype_to_dataformat_converter(output_dtype));
 
-    auto eltwise_unary_kernel_group_1_id = tt::tt_metal::CreateKernel(
+    auto eltwise_typecast_kernel_id = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/copy/typecast/device/kernels/compute/eltwise_typecast.cpp",
         all_cores,

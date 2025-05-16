@@ -42,6 +42,10 @@ BinaryDeviceOperation::ElementWiseMultiCore::cached_program_t BinaryDeviceOperat
     tt::DataFormat dst_cb_data_format = tt_metal::datatype_to_dataformat_converter(output.get_dtype());
     uint32_t dst_single_tile_size = tt_metal::detail::TileSize(dst_cb_data_format);
 
+    tt::log_info(tt::LogOp, " ****** src0_single_tile_size {}", src0_single_tile_size);
+    tt::log_info(tt::LogOp, " ****** src1_single_tile_size {}", src1_single_tile_size);
+    tt::log_info(tt::LogOp, " ****** dst_single_tile_size {}", dst_single_tile_size);
+
     tt::DataFormat interim_cb0_format = src0_cb_data_format;
     tt::DataFormat interim_cb1_format = src1_cb_data_format;
 
@@ -68,11 +72,15 @@ BinaryDeviceOperation::ElementWiseMultiCore::cached_program_t BinaryDeviceOperat
         block_or_width_sharded = output.memory_config().memory_layout() != TensorMemoryLayout::HEIGHT_SHARDED;
     }
 
+    tt::log_info(tt::LogOp, " ****** block_or_width_sharded {}", block_or_width_sharded);
+
     uint32_t max_block_size = 1, num_tiles_per_shard = 0;
     if (shard_spec.has_value()) {
         num_tiles_per_shard = shard_spec.value().shape[0] * shard_spec.value().shape[1] / TILE_HW;
         max_block_size = find_max_block_size(num_tiles_per_shard);
     }
+    tt::log_info(tt::LogOp, " ****** num_tiles_per_shard {}", num_tiles_per_shard);
+    tt::log_info(tt::LogOp, " ****** max_block_size {}", max_block_size);
 
     tt_metal::Buffer* dst_buffer = output.buffer();
     TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
@@ -81,9 +89,12 @@ BinaryDeviceOperation::ElementWiseMultiCore::cached_program_t BinaryDeviceOperat
 
     uint32_t src0_cb_index = tt::CBIndex::c_0;
     uint32_t num_input_tiles = src0_sharded ? num_tiles_per_shard : 2 * max_block_size;
+    tt::log_info(tt::LogOp, " ****** num_input_tiles {}", num_input_tiles);
     tt_metal::CircularBufferConfig cb_src0_config =
         tt_metal::CircularBufferConfig(num_input_tiles * src0_single_tile_size, {{src0_cb_index, src0_cb_data_format}})
             .set_page_size(src0_cb_index, src0_single_tile_size);
+    tt::log_info(
+        tt::LogOp, " ****** num_input_tiles * src0_single_tile_size {}", num_input_tiles * src0_single_tile_size);
     if (src0_sharded) {
         cb_src0_config = cb_src0_config.set_globally_allocated_address(*a.buffer());
     }
@@ -129,9 +140,12 @@ BinaryDeviceOperation::ElementWiseMultiCore::cached_program_t BinaryDeviceOperat
 
     uint32_t output_cb_index = tt::CBIndex::c_2;
     uint32_t num_output_tiles = (out_sharded || block_or_width_sharded) ? num_tiles_per_shard : 2 * max_block_size;
+    tt::log_info(tt::LogOp, " ****** (out_sharded || block_or_width_sharded) num_output_tiles {}", num_output_tiles);
     tt_metal::CircularBufferConfig cb_output_config =
         tt_metal::CircularBufferConfig(num_output_tiles * dst_single_tile_size, {{output_cb_index, dst_cb_data_format}})
             .set_page_size(output_cb_index, dst_single_tile_size);
+    tt::log_info(
+        tt::LogOp, " ****** (num_output_tiles * dst_single_tile_size {}", num_output_tiles * dst_single_tile_size);
     if (out_sharded) {
         cb_output_config = cb_output_config.set_globally_allocated_address(*output.buffer());
     }
@@ -162,7 +176,10 @@ BinaryDeviceOperation::ElementWiseMultiCore::cached_program_t BinaryDeviceOperat
         "ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/dataflow/reader_binary_interleaved_start_id.cpp",
         all_device_cores,
         tt_metal::ReaderDataMovementConfig(reader_compile_time_args, reader_defines));
-
+    tt::log_info(
+        tt::LogOp,
+        "writerk block_or_width_sharded and not out_sharded {}",
+        (block_or_width_sharded and not out_sharded));
     KernelHandle unary_writer_kernel_id = tt_metal::CreateKernel(
         program,
         (block_or_width_sharded and not out_sharded)

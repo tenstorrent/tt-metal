@@ -27,10 +27,7 @@ void MAIN {
             copy_tile(input_cb, 0, 0);
 
             typecast_tile_init();
-
-#ifdef TYPECAST_LLK
             TYPECAST_LLK(0);
-#endif
 
             tile_regs_commit();
 
