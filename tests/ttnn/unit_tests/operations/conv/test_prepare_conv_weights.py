@@ -37,8 +37,6 @@ def prepare_conv_weights_func(
     ):
         pytest.skip("Skipping test because it won't fit in L1!")
 
-    if groups > 1 and on_device:
-        pytest.skip("Weights Preparation on device is not supported for convs with groups > 1")
     has_bias = False
     inp_shape = (batch_size, input_channels, input_height, input_width)
     conv_weight_shape = (output_channels, input_channels // groups, filter_height, filter_width)
