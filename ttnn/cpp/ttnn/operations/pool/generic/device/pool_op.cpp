@@ -181,7 +181,6 @@ std::tuple<Pool2D::operation_attributes_t, Pool2D::tensor_args_t> Pool2D::invoke
     Pool2DType pool_type,
     DataType output_dtype,
     MemoryConfig memory_config,
-    bool count_include_pad,
     std::optional<int32_t> divisor_override) {
     return {
         operation_attributes_t{
@@ -189,7 +188,6 @@ std::tuple<Pool2D::operation_attributes_t, Pool2D::tensor_args_t> Pool2D::invoke
             .pool_type_ = pool_type,
             .output_dtype_ = output_dtype,
             .memory_config_ = std::move(memory_config),
-            .count_include_pad_ = count_include_pad,
             .divisor_override_ = divisor_override},
         tensor_args_t{input_tensor}};
 }

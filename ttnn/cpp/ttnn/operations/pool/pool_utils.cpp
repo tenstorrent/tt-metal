@@ -22,11 +22,8 @@ std::vector<uint32_t> get_bf16_pool_scalar(
     uint32_t stride_h,
     uint32_t stride_w,
     uint32_t ceil_w,
-    uint32_t pad_h,
-    uint32_t pad_w,
     uint32_t out_x,
     uint32_t out_y,
-    bool count_include_pad,
     std::vector<uint32_t>& sinchronization_indexes,
     std::optional<uint32_t> out_nhw_per_core,
     std::optional<int32_t> divisor_override) {
@@ -45,14 +42,14 @@ std::vector<uint32_t> get_bf16_pool_scalar(
             if (divisor_override.has_value()) {
                 value = 1. / (float)divisor_override.value();
                 scalars.push_back(bfloat16(value).to_packed());
-            } else if ((ceil_mode && ceil_w > 0) || (!count_include_pad && (pad_h > 0 || pad_w > 0))) {
+            } else if (ceil_mode && ceil_w > 0) {
                 for (uint32_t i = 0; i < out_nhw_per_core.value(); i++) {
-                    int hstart = out_y * stride_h - pad_h;
-                    int wstart = out_x * stride_w - pad_w;
-                    int hend = ((hstart + (int)kernel_h) < (int)(in_h + pad_h + ceil_w)) ? hstart + (int)kernel_h
-                                                                                         : (int)(in_h + pad_h + ceil_w);
-                    int wend = ((wstart + (int)kernel_w) < (int)(in_w + pad_w + ceil_w)) ? wstart + (int)kernel_w
-                                                                                         : (int)(in_w + pad_w + ceil_w);
+                    int hstart = out_y * stride_h;
+                    int wstart = out_x * stride_w;
+                    int hend = ((hstart + (int)kernel_h) < (int)(in_h + ceil_w)) ? hstart + (int)kernel_h
+                                                                                 : (int)(in_h + ceil_w);
+                    int wend = ((wstart + (int)kernel_w) < (int)(in_w + ceil_w)) ? wstart + (int)kernel_w
+                                                                                 : (int)(in_w + ceil_w);
 
                     // Valid region (input-only, without pad)
                     int valid_hstart = (hstart > 0) ? hstart : 0;
