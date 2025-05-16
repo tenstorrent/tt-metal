@@ -15,11 +15,10 @@ class TtnnSentenceBertEmbeddings:
         self.LayerNorm = ttnn.layer_norm
 
     def __call__(self, input_ids: ttnn.Tensor, token_type_ids: ttnn.Tensor, position_ids: ttnn.Tensor, device):
-        if input_ids.is_sharded():
-            input_ids = ttnn.sharded_to_interleaved(input_ids, ttnn.L1_MEMORY_CONFIG)
-
+        input_ids_interleaved = ttnn.sharded_to_interleaved(input_ids, ttnn.L1_MEMORY_CONFIG)
+        ttnn.deallocate(input_ids)
         word_embeddings = self.word_embeddings(
-            input_ids,
+            input_ids_interleaved,
             weight=self.parameters.word_embeddings.weight,
             layout=ttnn.TILE_LAYOUT,
             memory_config=ttnn.L1_MEMORY_CONFIG,
