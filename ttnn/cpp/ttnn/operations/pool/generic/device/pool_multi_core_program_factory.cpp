@@ -490,6 +490,7 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         input_shape[3] / num_shards_c,
         split_reader,  // enable split reader
         0,             // split reader id
+        bf16_scalar,
         bf16_one_u32,
         bf16_init_value,
         in_nblocks_c,
