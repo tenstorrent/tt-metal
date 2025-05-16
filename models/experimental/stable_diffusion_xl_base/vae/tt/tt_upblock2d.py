@@ -9,7 +9,7 @@ from models.experimental.stable_diffusion_xl_base.vae.tt.tt_upsample2d import Tt
 
 
 class TtUpDecoderBlock2D(nn.Module):
-    def __init__(self, device, state_dict, module_path, has_upsample=False, conv_shortcut=False):
+    def __init__(self, device, state_dict, module_path, has_upsample=False, conv_shortcut=False, gn_fallback=False):
         super().__init__()
 
         num_layers = 3
@@ -19,7 +19,11 @@ class TtUpDecoderBlock2D(nn.Module):
         for i in range(num_layers):
             self.resnets.append(
                 TtResnetBlock2D(
-                    device, state_dict, f"{module_path}.resnets.{i}", conv_shortcut=conv_shortcut and (i == 0)
+                    device,
+                    state_dict,
+                    f"{module_path}.resnets.{i}",
+                    conv_shortcut=conv_shortcut and (i == 0),
+                    gn_fallback=gn_fallback,
                 )
             )
 
