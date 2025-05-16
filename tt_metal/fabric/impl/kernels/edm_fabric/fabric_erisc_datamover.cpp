@@ -251,12 +251,41 @@ write to the same receiver channel.
 // Data structures, types, enums, and constants
 ////////////////////////////////////////////////
 
+template <size_t OUTPUT_SIZE_ARRAY, size_t INPUT_ARRAY_SIZE>
+static constexpr auto collect_sender_channel_stream_ids_ordered(
+    const std::array<uint32_t, INPUT_ARRAY_SIZE>& input_array,
+    const std::array<uint32_t, OUTPUT_SIZE_ARRAY>& logical_map_array) -> std::array<uint32_t, OUTPUT_SIZE_ARRAY> {
+    std::array<uint32_t, OUTPUT_SIZE_ARRAY> output_array{};
+    for (size_t i = 0; i < OUTPUT_SIZE_ARRAY; i++) {
+        output_array[i] = input_array[logical_map_array[i]];
+    }
+    return output_array;
+}
+// TODO: pull this from CT args
+constexpr std::array<uint32_t, MAX_NUM_SENDER_CHANNELS> sender_channel_free_slots_stream_ids_logical_default = {
+    0, 1, 2, 3, 4};
+constexpr auto trimmed_logical_stream_id_map =
+    take_first_n_elements<NUM_SENDER_CHANNELS, MAX_NUM_SENDER_CHANNELS, uint32_t>(
+        sender_channel_free_slots_stream_ids_logical_default);
+
 // Defined here because sender_channel_0_free_slots_stream_id does not come from
 // 1d_fabric_constants.hpp
-static constexpr std::array<uint32_t, MAX_NUM_SENDER_CHANNELS> sender_channel_free_slots_stream_ids = {
+static constexpr std::array<uint32_t, MAX_NUM_SENDER_CHANNELS> sender_channel_free_slots_stream_ids /*_logical*/ = {
     WorkerToFabricEdmSenderImpl<0>::sender_channel_0_free_slots_stream_id,
     sender_channel_1_free_slots_stream_id,
-    sender_channel_2_free_slots_stream_id};
+    sender_channel_2_free_slots_stream_id,
+    sender_channel_3_free_slots_stream_id,
+    sender_channel_4_free_slots_stream_id};
+
+static constexpr std::array<uint32_t, NUM_ROUTER_CARDINAL_DIRECTIONS> receiver_channel_free_slots_stream_ids = {
+    receiver_channel_0_free_slots_from_east_stream_id,
+    receiver_channel_0_free_slots_from_west_stream_id,
+    receiver_channel_0_free_slots_from_north_stream_id,
+    receiver_channel_0_free_slots_from_south_stream_id};
+
+// static constexpr std::array<uint32_t, NUM_SENDER_CHANNELS> sender_channel_free_slots_stream_ids =
+//     collect_sender_channel_stream_ids_ordered(
+//         sender_channel_free_slots_stream_ids_logical, trimmed_logical_stream_id_map);
 
 /*
  * Tracks receiver channel pointers (from sender side)
@@ -935,6 +964,11 @@ bool all_channels_drained(
                                     get_ptr_val<to_sender_packets_acked_streams[2]>() == 0 &&
                                     get_ptr_val<to_sender_packets_completed_streams[2]>() == 0);
     }
+    if constexpr (is_2d_fabric) {
+        eth_buffers_drained = eth_buffers_drained &&
+                              get_ptr_val<sender_channel_free_slots_stream_ids[3]>() == SENDER_NUM_BUFFERS &&
+                              get_ptr_val<sender_channel_free_slots_stream_ids[4]>() == SENDER_NUM_BUFFERS;
+    }
     return eth_buffers_drained;
 }
 
@@ -993,7 +1027,7 @@ void run_fabric_edm_main_loop(
     while (!got_immediate_termination_signal(termination_signal_ptr)) {
         bool got_graceful_termination = got_graceful_termination_signal(termination_signal_ptr);
         if (got_graceful_termination) {
-            DPRINT << "EDM Graceful termination\n";
+            // DPRINT << "EDM Graceful termination\n";
             bool all_drained = all_channels_drained<
                 RECEIVER_NUM_BUFFERS,
                 NUM_RECEIVER_CHANNELS,
@@ -1225,6 +1259,7 @@ void __attribute__((noinline)) init_local_sender_channel_worker_interfaces(
 #endif
     if constexpr (NUM_SENDER_CHANNELS == 3 || NUM_SENDER_CHANNELS == 5) {
         {
+            static_assert(NUM_SENDER_CHANNELS > VC1_SENDER_CHANNEL);
             auto connection_live_semaphore_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t* const>(
                 local_sender_connection_live_semaphore_addresses[VC1_SENDER_CHANNEL]);
             auto connection_worker_info_ptr = reinterpret_cast<volatile tt::tt_fabric::EDMChannelWorkerLocationInfo*>(
@@ -1263,6 +1298,12 @@ void kernel_main() {
     init_ptr_val<sender_channel_free_slots_stream_ids[0]>(SENDER_NUM_BUFFERS);
     init_ptr_val<sender_channel_free_slots_stream_ids[1]>(SENDER_NUM_BUFFERS);
     init_ptr_val<sender_channel_free_slots_stream_ids[2]>(SENDER_NUM_BUFFERS);
+    init_ptr_val<receiver_channel_0_free_slots_from_east_stream_id>(SENDER_NUM_BUFFERS);
+    init_ptr_val<receiver_channel_0_free_slots_from_west_stream_id>(SENDER_NUM_BUFFERS);
+    init_ptr_val<receiver_channel_0_free_slots_from_north_stream_id>(SENDER_NUM_BUFFERS);
+    init_ptr_val<receiver_channel_0_free_slots_from_south_stream_id>(SENDER_NUM_BUFFERS);
+    init_ptr_val<receiver_channel_1_free_slots_from_downstream_stream_id>(SENDER_NUM_BUFFERS);
+
     if constexpr (is_2d_fabric) {
         init_ptr_val<sender_channel_free_slots_stream_ids[3]>(SENDER_NUM_BUFFERS);
         init_ptr_val<sender_channel_free_slots_stream_ids[4]>(SENDER_NUM_BUFFERS);
@@ -1539,6 +1580,7 @@ void kernel_main() {
         // Only bit 0 is set for 1D
         // upto 3 bits set for 2D. 0, 1, 2, 3 for East, West, North, South downstream connections.
         uint32_t has_downstream_edm = has_downstream_edm_vc0_buffer_connection & 0xF;
+        // DPRINT << "\thas_downstream_edm: " << (uint32_t)has_downstream_edm << "\n";
         uint32_t edm_index = 0;
         while (has_downstream_edm) {
             if (has_downstream_edm & 0x1) {
@@ -1558,6 +1600,13 @@ void kernel_main() {
                     *reinterpret_cast<volatile uint32_t* const>(local_sem_address_for_acks) = 0;
                     *reinterpret_cast<volatile uint32_t* const>(teardown_sem_address) = 0;
                 }
+                auto downstream_direction = edm_index;
+                // DPRINT << "\t\tds dir: " << (uint32_t)downstream_direction << "\n";
+                // DPRINT << "\t\ts_ch_slots_id[my_dir + 1]: "
+                //        << (uint32_t)sender_channel_free_slots_stream_ids[my_direction + 1] << "\n";
+                // DPRINT << "\t\tr_ch_slots_id[ds_dir]: "
+                //        << (uint32_t)receiver_channel_free_slots_stream_ids[downstream_direction] << "\n";
+
                 new (&downstream_edm_noc_interfaces[edm_index]) tt::tt_fabric::EdmToEdmSender<SENDER_NUM_BUFFERS>(
                     // persistent_mode -> hardcode to false for 1D because for 1D, EDM -> EDM
                     // connections we must always use semaphore lookup
@@ -1581,8 +1630,18 @@ void kernel_main() {
                     reinterpret_cast<volatile uint32_t* const>(teardown_sem_address),
                     downstream_vc0_noc_interface_buffer_index_local_addr,  // keep common, since its a scratch noc read
                                                                            // dest.
-                    sender_channel_1_free_slots_stream_id,
-                    StreamId{receiver_channel_0_free_slots_stream_id},
+                    // Since we are the same direction, we're always going to send to the same stream
+                    // reg for each downstream router because we are allocating sender channels by
+                    // producer direction.
+                    //
+                    // We add 1 because sender_channel[0] is for (non-forwarded) traffic from our local chip's NoC, so
+                    // we skip that first one. The first forwarded direction is the next one so we start there.
+                    sender_channel_free_slots_stream_ids[my_direction + 1],
+
+                    // This is our local stream register for the copy of the downstream router's
+                    // free slots
+                    StreamId{receiver_channel_free_slots_stream_ids
+                                 [downstream_direction]},  // StreamId{receiver_channel_0_free_slots_stream_id},
                     receiver_channel_forwarding_data_cmd_buf_ids[0],
                     receiver_channel_forwarding_sync_cmd_buf_ids[0]);
                 downstream_edm_noc_interfaces[edm_index]
@@ -1632,7 +1691,7 @@ void kernel_main() {
                     reinterpret_cast<volatile uint32_t* const>(teardown_sem_address),
                     downstream_vc1_noc_interface_buffer_index_local_addr,
                     sender_channel_2_free_slots_stream_id,
-                    StreamId{receiver_channel_1_free_slots_stream_id},
+                    StreamId{receiver_channel_1_free_slots_from_downstream_stream_id},
                     receiver_channel_forwarding_data_cmd_buf_ids[1],
                     receiver_channel_forwarding_sync_cmd_buf_ids[1]);
             downstream_edm_noc_interfaces[NUM_USED_RECEIVER_CHANNELS - 1]
@@ -1758,6 +1817,7 @@ void kernel_main() {
     //        MAIN LOOP
     //////////////////////////////
     //////////////////////////////
+    DPRINT << "Main Loop my y|x " << (uint32_t)((my_y[0] << 6) | my_x[0]) << "\n";
     run_fabric_edm_main_loop<
         enable_packet_header_recording,
         enable_fabric_counters,
