@@ -13,7 +13,8 @@ void SplitFusedQKVAndSplitHeadsDeviceOperation::validate_with_output_tensors(
     const auto& input_tensor = input_tensors.at(0);
     const auto batch_size = input_tensor.get_padded_shape()[0];
     // TODO: See issue #1744
-    TT_FATAL((input_tensor.get_padded_shape() == ttnn::Shape({batch_size, 1, 384, 3072})), "Unsupported input shape");
+    // TT_FATAL((input_tensor.get_padded_shape() == ttnn::Shape({batch_size, 1, 384, 3072})), "Unsupported input
+    // shape");
     TT_FATAL(input_tensor.storage_type() == tt::tt_metal::StorageType::DEVICE, "Operands to TM need to be on device!");
     TT_FATAL(input_tensor.buffer() != nullptr, "Operands to TM need to be allocated in buffers on device!");
     TT_FATAL(
