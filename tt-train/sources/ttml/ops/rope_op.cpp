@@ -39,12 +39,12 @@ void validate_rope_input_and_params(const autograd::TensorPtr& input, const Rota
             params.sequence_length));
     }
 
-    auto trans_mat_shape = params.trans_mat.get_logical_shape();
+    auto trans_mat_shape = params.trans_mat.logical_shape();
     auto trig_param_shapes = std::array{
-        params.cos_cache.get_logical_shape(),
-        params.sin_cache.get_logical_shape(),
-        params.neg_cos_cache.get_logical_shape(),
-        params.neg_sin_cache.get_logical_shape()};
+        params.cos_cache.logical_shape(),
+        params.sin_cache.logical_shape(),
+        params.neg_cos_cache.logical_shape(),
+        params.neg_sin_cache.logical_shape()};
 
     auto expected_trig_shape = ttnn::Shape{1U, 1U, input_seq_len, input_head_dim};
     if (!std::ranges::all_of(
@@ -54,10 +54,10 @@ void validate_rope_input_and_params(const autograd::TensorPtr& input, const Rota
             "cos_cache: {}, sin_cache: {}, neg_cos_cache: {}, neg_sin_cache: {}",
             input_seq_len,
             input_head_dim,
-            params.cos_cache.get_logical_shape(),
-            params.sin_cache.get_logical_shape(),
-            params.neg_cos_cache.get_logical_shape(),
-            params.neg_sin_cache.get_logical_shape()));
+            params.cos_cache.logical_shape(),
+            params.sin_cache.logical_shape(),
+            params.neg_cos_cache.logical_shape(),
+            params.neg_sin_cache.logical_shape()));
     }
 
     auto expected_trans_mat_shape = ttnn::Shape{1U, 1U, ttnn::TILE_SIZE, ttnn::TILE_SIZE};
@@ -105,8 +105,8 @@ E apply_rope_scaling(const E& freqs, const RopeScalingParams& scaling_params) {
 // the module hierarchy and passed to the operation.
 autograd::TensorPtr rope(const autograd::TensorPtr& input, const RotaryEmbeddingParams& params) {
     validate_rope_input_and_params(input, params);
-    auto input_tensor = input->get_value();
-    auto input_logical_shape = input_tensor.get_logical_shape();
+  
+    auto input_logical_shape = input->get_value().logical_shape();
     auto num_batch = input_logical_shape[0];
     auto num_heads = input_logical_shape[1];
     auto seq_len = input_logical_shape[2];
@@ -114,7 +114,7 @@ autograd::TensorPtr rope(const autograd::TensorPtr& input, const RotaryEmbedding
     auto device = &autograd::ctx().get_device();
 
     auto squish_batch = [num_batch, num_heads, seq_len, head_dim](const ttnn::Tensor& input) {
-        auto shape = input.get_logical_shape();
+        auto shape = input.logical_shape();
         auto seq_len = shape[2];
         auto head_dim = shape[3];
         auto unbatched_input = ttnn::reshape(input, ttnn::Shape{1U, num_batch * num_heads, seq_len, head_dim});

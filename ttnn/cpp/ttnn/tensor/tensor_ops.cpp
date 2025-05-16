@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tensor_ops.hpp"
+#include "ttnn/tensor/tensor_ops.hpp"
 
 #include "tt_stl/overloaded.hpp"
 #include "ttnn/tensor/storage.hpp"
@@ -73,17 +73,6 @@ Tensor tensor_cpu(const Tensor& input_tensor, bool blocking, QueueId cq_id) {
         return output;
     }
 
-    auto workers = input_tensor.get_workers(blocking);
-    if (not workers.size()) {
-        // Tensor is on host and does not have a worker group.
-        // Return immediately. If this is a result of .cpu() called twice,
-        // tensor accessors will stall until tensor is populated.
-        auto output = tt::tt_metal::set_tensor_id(input_tensor);
-        GraphTracker::instance().track_function_end(output);
-        return output;
-    }
-
-    TT_FATAL(workers.size() == 1, "Unexpected number of workers");
     Tensor host_tensor = tensor_impl::to_host_wrapper(input_tensor, blocking, cq_id);
     host_tensor = tt::tt_metal::set_tensor_id(host_tensor);
     GraphTracker::instance().track_function_end(host_tensor);

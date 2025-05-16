@@ -100,7 +100,7 @@ inline void notify_master_router(uint32_t master_eth_chan, uint32_t address) {
 }
 
 // !!!FORCE_INLINE could potentially cause stack corruption as seen in the past
-inline void notify_slave_routers(
+inline void notify_subordinate_routers(
     uint32_t router_eth_chans_mask, uint32_t master_eth_chan, uint32_t address, uint32_t notification) {
     uint32_t remaining_cores = router_eth_chans_mask;
     for (uint32_t i = 0; i < 16; i++) {

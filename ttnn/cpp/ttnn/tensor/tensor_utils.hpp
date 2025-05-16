@@ -50,16 +50,10 @@ Tensor transform(const Tensor& tensor, const std::function<Tensor(const Tensor&)
 // Given a multi-device host tensor and a callable, applies the function to all per-device tensors.
 void apply(const Tensor& tensor, const std::function<void(const Tensor&)>& callable);
 
-// This function is used in legacy context of launching per-device work via push_work threads.
-// This won't be supported. In the long-term, tensor shards for Device tensors should be referred to using
-// `MeshCoordinate`.
-[[deprecated]] Tensor get_shard_for_device(
-    const Tensor& tensor, IDevice* target_device, std::optional<int> buffer_index = std::nullopt);
-
 template <class T>
 uint32_t get_batch_size(const T& shape) {
     uint32_t result = 1;
-    for (auto i = 0; i < shape.rank() - 2; i++) {
+    for (int i = 0; i < (int)shape.rank() - 2; i++) {
         result *= shape[i];
     }
     return result;

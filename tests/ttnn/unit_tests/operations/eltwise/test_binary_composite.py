@@ -13,7 +13,7 @@ from tests.ttnn.unit_tests.operations.eltwise.backward.utility_funcs import (
     compare_equal,
 )
 from tests.ttnn.utils_for_testing import assert_with_pcc
-from models.utility_functions import is_grayskull, skip_for_grayskull, skip_for_blackhole
+from models.utility_functions import is_grayskull, skip_for_grayskull
 from tests.tt_eager.python_api_testing.sweep_tests import (
     comparison_funcs,
 )
@@ -185,7 +185,6 @@ def test_binary_subalpha_ttnn(input_shapes, alpha, device):
     assert comp_pass
 
 
-@skip_for_blackhole("Fails on BH. Issue #19642")
 @pytest.mark.parametrize("accurate_mode", [False, True])
 @pytest.mark.parametrize("round_mode", [None, "trunc", "floor"])
 @pytest.mark.parametrize(
@@ -204,8 +203,8 @@ def test_binary_div_ttnn(accurate_mode, round_mode, input_shapes, device):
         in_data1, input_tensor1 = data_gen_with_range(input_shapes, -100, 100, device)
         in_data2, input_tensor2 = data_gen_with_range(input_shapes, -150, -1, device)
     else:
-        in_data1, input_tensor1 = data_gen_with_range(input_shapes, -100, 100, device)
-        in_data2, input_tensor2 = data_gen_with_range(input_shapes, -100, 100, device)
+        in_data1, input_tensor1 = data_gen_with_range(input_shapes, -200, 150, device)
+        in_data2, input_tensor2 = data_gen_with_range(input_shapes, -120, 200, device)
 
     output_tensor = ttnn.div(input_tensor1, input_tensor2, accurate_mode=accurate_mode, round_mode=round_mode)
     golden_function = ttnn.get_golden_function(ttnn.div)
@@ -233,8 +232,8 @@ def test_binary_div_ttnn_ci(accurate_mode, round_mode, input_shapes, device):
         in_data1, input_tensor1 = data_gen_with_range(input_shapes, -1e6, 1e6, device)
         in_data2, input_tensor2 = data_gen_with_range(input_shapes, -1e6, -1, device)
     else:
-        in_data1, input_tensor1 = data_gen_with_range(input_shapes, -1e6, 1e6, device)
-        in_data2, input_tensor2 = data_gen_with_range(input_shapes, -1e6, 1e6, device)
+        in_data1, input_tensor1 = data_gen_with_range(input_shapes, -2e6, 1e6, device)
+        in_data2, input_tensor2 = data_gen_with_range(input_shapes, -1e6, 2e6, device)
 
     output_tensor = ttnn.div(input_tensor1, input_tensor2, accurate_mode=accurate_mode, round_mode=round_mode)
     golden_function = ttnn.get_golden_function(ttnn.div)
@@ -263,8 +262,8 @@ def test_binary_div_ttnn_opt(accurate_mode, round_mode, input_shapes, device):
         in_data1, input_tensor1 = data_gen_with_range(input_shapes, -100, 100, device)
         in_data2, input_tensor2 = data_gen_with_range(input_shapes, -150, -1, device)
     else:
-        in_data1, input_tensor1 = data_gen_with_range(input_shapes, -100, 100, device)
-        in_data2, input_tensor2 = data_gen_with_range(input_shapes, -100, 100, device)
+        in_data1, input_tensor1 = data_gen_with_range(input_shapes, -200, 100, device)
+        in_data2, input_tensor2 = data_gen_with_range(input_shapes, -150, 200, device)
 
     _, output_tensor = data_gen_with_range(input_shapes, -1, 1, device)
 

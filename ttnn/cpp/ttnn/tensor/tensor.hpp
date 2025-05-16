@@ -46,9 +46,10 @@ public:
     // Can be safely passed between threads when the tensor is copied
     std::shared_ptr<TensorAttributes> tensor_attributes = nullptr;
 
-    // Tensor gets worker queue handle through the device
+    // Shorthand for checking if this Tensor is allocated on MeshDevice. If set, is never nullptr.
+    // If not set, the tensor can either be on host or allocated on a single device.
+    // TODO: #21099 - This won't be needed after the migration to MeshDevice is complete.
     std::optional<distributed::MeshDevice*> mesh_device_ = std::nullopt;
-    std::vector<IDevice*> workers = {};
 
     // ======================================================================================
     //                                  Hi Level APIs
@@ -166,9 +167,9 @@ public:
     std::string write_to_string() const;
     void print() const;
 
+    // Deallocates device-side Tensor storage.
+    // If the tensor is on host, does nothing.
     void deallocate(bool force = false);
-
-    std::vector<IDevice*> get_workers(bool blocking = false) const;
 
     Tensor extract_shard(const CoreCoord& core) const;
     Tensor extract_shard(const uint32_t& core_id) const;
@@ -181,30 +182,31 @@ public:
     // ======================================================================================
     //                                      Getters
     // ======================================================================================
-    // TODO: remove either get_<x> or <x> getters. They are now equivalent.
-    const Storage& get_storage() const;
-    Storage& get_storage();
-    DataType get_dtype() const;
-    Layout get_layout() const;
-    const ttnn::Shape& get_logical_shape() const;
-    const ttnn::Shape& get_padded_shape() const;
-    const TensorSpec& get_tensor_spec() const;
-    uint32_t get_logical_volume() const;
-    const DistributedTensorConfig& get_distributed_tensor_config() const;
+    // TODO: #22090 - Remove the following getters, after giving clients enough time to migrate.
+    [[deprecated("Use storage() instead")]] const Storage& get_storage() const;
+    [[deprecated("Use storage() instead")]] Storage& get_storage();
+    [[deprecated("Use dtype() instead")]] DataType get_dtype() const;
+    [[deprecated("Use layout() instead")]] Layout get_layout() const;
+    [[deprecated("Use logical_shape() instead")]] const ttnn::Shape& get_logical_shape() const;
+    [[deprecated("Use padded_shape() instead")]] const ttnn::Shape& get_padded_shape() const;
+    [[deprecated("Use tensor_spec() instead")]] const TensorSpec& get_tensor_spec() const;
+    [[deprecated("Use logical_volume() instead")]] uint64_t get_logical_volume() const;
+    [[deprecated("Use padded_volume() instead")]] uint32_t volume() const;
+    [[deprecated("Use distributed_tensor_config() instead")]] const DistributedTensorConfig&
+    get_distributed_tensor_config() const;
 
-    // ======================================================================================
-    // Non-Blocking Getters. Query attributes directly, without waiting for worker completion
-    // ======================================================================================
     const Storage& storage() const;
-    const ttnn::Shape& logical_shape() const;
-    const ttnn::Shape& padded_shape() const;
+    Storage& storage();
     DataType dtype() const;
     Layout layout() const;
+    const ttnn::Shape& logical_shape() const;
+    const ttnn::Shape& padded_shape() const;
     const TensorSpec& tensor_spec() const;
-    uint32_t volume() const;
+    uint64_t logical_volume() const;
+    uint64_t padded_volume() const;
+    const DistributedTensorConfig& distributed_tensor_config() const;
     const MemoryConfig& memory_config() const;
     const std::optional<ShardSpec>& shard_spec() const;
-    const DistributedTensorConfig& distributed_tensor_config() const;
 
     // ======================================================================================
     //                                      Extra Helper Functions
@@ -231,6 +233,8 @@ public:
     // TODO: #21099 - Remove the overload `mesh_device()`, and instead use `device()`.
     distributed::MeshDevice* mesh_device() const;
 
+    // Returns the device the tensor is allocated on.
+    // Throws if the tensor is not allocated on a device.
     IDevice* device() const;
 
     std::vector<IDevice*> active_physical_devices() const;

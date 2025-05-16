@@ -1,14 +1,47 @@
 project(nano_gpt)
 
-set(SOURCES
+set(MAIN_SOURCES
     main.cpp
     utils.cpp
+    3tier/remote_optimizer.cpp
+    3tier/common.cpp
 )
 
-add_executable(nano_gpt ${SOURCES})
+set(OPTIMIZER_SOURCES
+    3tier/optimizer_worker.cpp
+    3tier/common.cpp
+)
+
+set(AGGREGATOR_SOURCES
+    3tier/aggregator_worker.cpp
+    3tier/common.cpp
+)
+
+add_executable(nano_gpt ${MAIN_SOURCES})
 target_link_libraries(nano_gpt PRIVATE ttml)
-add_definitions(-DDATA_FOLDER="${CMAKE_SOURCE_DIR}/data")
-add_definitions(-DCONFIGS_FOLDER="${CMAKE_SOURCE_DIR}/configs")
+add_executable(nano_gpt_aggregator ${AGGREGATOR_SOURCES})
+target_link_libraries(nano_gpt_aggregator PRIVATE ttml)
+add_executable(nano_gpt_optimizer ${OPTIMIZER_SOURCES})
+target_link_libraries(nano_gpt_optimizer PRIVATE ttml)
+
+target_compile_definitions(
+    nano_gpt
+    PRIVATE
+        DATA_FOLDER="${CMAKE_SOURCE_DIR}/data"
+        CONFIGS_FOLDER="${CMAKE_SOURCE_DIR}/configs"
+)
+target_compile_definitions(
+    nano_gpt_aggregator
+    PRIVATE
+        DATA_FOLDER="${CMAKE_SOURCE_DIR}/data"
+        CONFIGS_FOLDER="${CMAKE_SOURCE_DIR}/configs"
+)
+target_compile_definitions(
+    nano_gpt_optimizer
+    PRIVATE
+        DATA_FOLDER="${CMAKE_SOURCE_DIR}/data"
+        CONFIGS_FOLDER="${CMAKE_SOURCE_DIR}/configs"
+)
 
 # Define the target file location
 set(SHAKESPEARE_URL "https://raw.githubusercontent.com/karpathy/char-rnn/master/data/tinyshakespeare/input.txt")
