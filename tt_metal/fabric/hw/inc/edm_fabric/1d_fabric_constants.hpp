@@ -47,6 +47,8 @@ constexpr uint32_t receiver_channel_1_free_slots_stream_id = 14;
 
 constexpr uint32_t sender_channel_1_free_slots_stream_id = 17;
 constexpr uint32_t sender_channel_2_free_slots_stream_id = 18;
+constexpr uint32_t sender_channel_3_free_slots_stream_id = 19;
+constexpr uint32_t sender_channel_4_free_slots_stream_id = 20;
 
 constexpr size_t MAX_NUM_RECEIVER_CHANNELS = 2;
 constexpr size_t MAX_NUM_SENDER_CHANNELS = 5;
@@ -209,6 +211,8 @@ constexpr size_t RX_CH_FWD_DATA_CMD_BUF_IDS_START_IDX = RX_CH_FWD_NOC_IDS_START_
 constexpr size_t RX_CH_FWD_SYNC_CMD_BUF_IDS_START_IDX = RX_CH_FWD_DATA_CMD_BUF_IDS_START_IDX + NUM_RECEIVER_CHANNELS;
 constexpr size_t RX_CH_LOCAL_WRITE_NOC_ID_IDX = RX_CH_FWD_SYNC_CMD_BUF_IDS_START_IDX + NUM_RECEIVER_CHANNELS;
 constexpr size_t RX_CH_LOCAL_WRITE_CMD_BUF_ID_IDX = RX_CH_LOCAL_WRITE_NOC_ID_IDX + NUM_RECEIVER_CHANNELS;
+constexpr size_t SENDER_CHANNEL_LOGICAL_STREAM_IDS_MAP_START_IDX =
+    RX_CH_LOCAL_WRITE_CMD_BUF_ID_IDX + NUM_RECEIVER_CHANNELS;
 
 constexpr std::array<size_t, NUM_RECEIVER_CHANNELS> receiver_channel_forwarding_noc_ids =
     fill_array_with_next_n_args<size_t, RX_CH_FWD_NOC_IDS_START_IDX, NUM_RECEIVER_CHANNELS>();
@@ -221,8 +225,11 @@ constexpr std::array<size_t, NUM_RECEIVER_CHANNELS> receiver_channel_local_write
 constexpr std::array<uint8_t, NUM_RECEIVER_CHANNELS> receiver_channel_local_write_cmd_buf_ids =
     fill_array_with_next_n_args<uint8_t, RX_CH_LOCAL_WRITE_CMD_BUF_ID_IDX, NUM_RECEIVER_CHANNELS>();
 
+constexpr std::array<size_t, NUM_SENDER_CHANNELS> sender_channel_logical_stream_ids_map =
+    fill_array_with_next_n_args<size_t, SENDER_CHANNEL_LOGICAL_STREAM_IDS_MAP_START_IDX, NUM_SENDER_CHANNELS>();
+
 // TODO: Add a special marker in CT args so we don't misalign unintentionally
-constexpr size_t EDM_NOC_VC_IDX = RX_CH_LOCAL_WRITE_CMD_BUF_ID_IDX + NUM_RECEIVER_CHANNELS;
+constexpr size_t EDM_NOC_VC_IDX = SENDER_CHANNEL_LOGICAL_STREAM_IDS_MAP_START_IDX + NUM_SENDER_CHANNELS;
 constexpr size_t SPECIAL_MARKER_1_IDX = EDM_NOC_VC_IDX + 1;
 constexpr size_t SPECIAL_MARKER_1 = 0x10c0ffee;
 static_assert(

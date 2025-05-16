@@ -251,12 +251,34 @@ write to the same receiver channel.
 // Data structures, types, enums, and constants
 ////////////////////////////////////////////////
 
+template <size_t OUTPUT_SIZE_ARRAY, size_t INPUT_ARRAY_SIZE>
+static constexpr auto collect_sender_channel_stream_ids_ordered(
+    const std::array<uint32_t, INPUT_ARRAY_SIZE>& input_array,
+    const std::array<uint32_t, OUTPUT_SIZE_ARRAY>& logical_map_array) -> std::array<uint32_t, OUTPUT_SIZE_ARRAY> {
+    std::array<uint32_t, OUTPUT_SIZE_ARRAY> output_array{};
+    for (size_t i = 0; i < OUTPUT_SIZE_ARRAY; i++) {
+        output_array[i] = input_array[logical_map_array[i]];
+    }
+    return output_array;
+}
+// TODO: pull this from CT args
+constexpr std::array<uint32_t, MAX_NUM_SENDER_CHANNELS> sender_channel_free_slots_stream_ids_logical_default = {
+    0, 1, 2, 3, 4};
+constexpr auto trimmed_logical_stream_id_map =
+    take_first_n_elements<NUM_SENDER_CHANNELS, MAX_NUM_SENDER_CHANNELS, uint32_t>(
+        sender_channel_free_slots_stream_ids_logical_default);
+
 // Defined here because sender_channel_0_free_slots_stream_id does not come from
 // 1d_fabric_constants.hpp
-static constexpr std::array<uint32_t, MAX_NUM_SENDER_CHANNELS> sender_channel_free_slots_stream_ids = {
+static constexpr std::array<uint32_t, MAX_NUM_SENDER_CHANNELS> sender_channel_free_slots_stream_ids_logical = {
     WorkerToFabricEdmSenderImpl<0>::sender_channel_0_free_slots_stream_id,
     sender_channel_1_free_slots_stream_id,
-    sender_channel_2_free_slots_stream_id};
+    sender_channel_2_free_slots_stream_id,
+    sender_channel_3_free_slots_stream_id};
+
+static constexpr std::array<uint32_t, NUM_SENDER_CHANNELS> sender_channel_free_slots_stream_ids =
+    collect_sender_channel_stream_ids_ordered(
+        sender_channel_free_slots_stream_ids_logical, trimmed_logical_stream_id_map);
 
 /*
  * Tracks receiver channel pointers (from sender side)
@@ -935,6 +957,11 @@ bool all_channels_drained(
                                     get_ptr_val<to_sender_packets_acked_streams[2]>() == 0 &&
                                     get_ptr_val<to_sender_packets_completed_streams[2]>() == 0);
     }
+    if constexpr (is_2d_fabric) {
+        eth_buffers_drained = eth_buffers_drained &&
+                              get_ptr_val<sender_channel_free_slots_stream_ids[3]>() == SENDER_NUM_BUFFERS &&
+                              get_ptr_val<sender_channel_free_slots_stream_ids[4]>() == SENDER_NUM_BUFFERS;
+    }
     return eth_buffers_drained;
 }
 
@@ -1581,7 +1608,7 @@ void kernel_main() {
                     reinterpret_cast<volatile uint32_t* const>(teardown_sem_address),
                     downstream_vc0_noc_interface_buffer_index_local_addr,  // keep common, since its a scratch noc read
                                                                            // dest.
-                    sender_channel_1_free_slots_stream_id,
+                    downstream_logical_persistent_streams[edm_index],      // sender_channel_1_free_slots_stream_id,
                     StreamId{receiver_channel_0_free_slots_stream_id},
                     receiver_channel_forwarding_data_cmd_buf_ids[0],
                     receiver_channel_forwarding_sync_cmd_buf_ids[0]);
