@@ -3,27 +3,40 @@ FROM public.ecr.aws/ubuntu/ubuntu:${UBUNTU_VERSION} AS base
 # Re-declare ARG make it available in the build stage
 ARG UBUNTU_VERSION
 
+# I didn't find a better way to provide the version of the image
+RUN install_mpi_uflm(){
+    apt-get install -y --no-install-recommends libhwloc15 libibverbs1
+    DEB_URL="https://github.com/dmakoviichuk-tt/mpi-ulfm/releases/download/v5.0.7-ulfm/openmpi-ulfm_5.0.7-1_amd64.deb"
+    DEB_FILE="$(basename "$DEB_URL")"
+
+    # 1. Create temp workspace
+    TMP_DIR="$(mktemp -d)"
+    cleanup() { rm -rf "$TMP_DIR"; }
+    trap cleanup EXIT INT TERM
+
+    echo "→ Downloading $DEB_FILE …"
+    wget -q --show-progress -O "$TMP_DIR/$DEB_FILE" "$DEB_URL"
+
+    # 2. Install
+    echo "→ Installing $DEB_FILE …"
+
+    dpkg -i "$TMP_DIR/$DEB_FILE"
+    apt-get -f install
+}
 
 # Install basic tools to build
 # The Boost PPA is because TT-Metalium depends on a Boost too new for Ubuntu 22.04
 # It should not be used in 24.04.
-RUN set -eux; \
-    # add Boost PPA only on 22.04
-    if [ "$UBUNTU_VERSION" = "22.04" ]; then \
-        apt-get update; \
-        apt-get install -y --no-install-recommends software-properties-common; \
+RUN apt-get update && apt-get install -y \
+    software-properties-common \
+    && if [ "${UBUNTU_VERSION}" = "22.04" ]; then \
         add-apt-repository -y ppa:mhier/libboost-latest; \
-    fi; \
-    # basic toolchain + wget needed below
-    apt-get update; \
-    apt-get install -y --no-install-recommends \
-        cmake ninja-build g++-12 build-essential \
-        wget ca-certificates libhwloc15 libibverbs1; \
-    # download & install ULFM build (fix deps in same layer)
-    DEB_URL="https://github.com/dmakoviichuk-tt/mpi-ulfm/releases/download/v5.0.7-ulfm/openmpi-ulfm_5.0.7-1_amd64.deb"; \
-    wget -qO /tmp/ompi.deb "$DEB_URL"; \
-    dpkg -i /tmp/ompi.deb || true; \
-    apt-get -y --fix-broken install; \
-    rm -f /tmp/ompi.deb; \
-    # cleanup
-    rm -rf /var/lib/apt/lists/*
+    fi \
+    && apt-get update && apt-get install -y \
+    cmake \
+    ninja-build \
+    g++-12 \
+    build-essential \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN install_mpi_uflm
