@@ -1150,7 +1150,8 @@ void build_tt_fabric_program(
             check_dateline(
                 *control_plane, topology, mesh_chip_id.first, mesh_chip_id.second, remote_chip_id, wrap_around_mesh);
 
-        const auto& curr_edm_config = fabric_context.get_fabric_router_config(is_dateline);
+        const auto& curr_edm_config = is_dateline ? fabric_context.get_fabric_dateline_router_config()
+                                                  : fabric_context.get_fabric_router_config();
 
         for (const auto& eth_chan : active_fabric_eth_channels[direction]) {
             auto eth_logical_core = soc_desc.get_eth_core_for_channel(eth_chan, CoordSystem::LOGICAL);
