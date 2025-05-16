@@ -10,7 +10,7 @@
 #if defined(WATCHER_ENABLED) && !(defined(WATCHER_DISABLE_STACK_USAGE) || defined(COMPILE_FOR_ERISC) || \
                                   defined(FORCE_WATCHER_OFF))
 
-#define STACK_DIRTY_PATTERN 0xBABABABA
+#if defined(KERNEL_BUILD)
 
 static inline uint32_t get_stack_base() {
 #if defined(COMPILE_FOR_BRISC)
@@ -40,6 +40,30 @@ static inline uint32_t get_stack_base() {
 #endif
 }
 
+constexpr uint32_t stack_usage_pattern = 0xBABABABA;
+static inline void mark_stack_usage() {
+    uint32_t *base = (uint32_t tt_l1_ptr *)get_stack_base();
+    uint32_t tt_l1_ptr *ptr;
+    asm ("mv %0,sp" : "=r"(ptr));
+
+    while (ptr != base)
+        *--ptr = stack_usage_pattern;
+}
+
+static inline int measure_stack_usage() {
+    uint32_t *base = (uint32_t tt_l1_ptr *)get_stack_base();
+
+    uint32_t tt_l1_ptr* stack_ptr = base;
+    // We don't need to check size here, as we know we'll hit a
+    // non-dirty value at some point (a set of return addresses).
+    while (*stack_ptr == stack_usage_pattern)
+        stack_ptr++;
+    uint32_t stack_free = (stack_ptr - base) * sizeof (uint32_t);
+    return stack_free + 1;
+}
+
+#else // !KERNEL_BUILD
+
 static inline uint32_t get_dispatch_class() {
 #if defined(COMPILE_FOR_BRISC)
     return DISPATCH_CLASS_TENSIX_DM0;
@@ -57,45 +81,32 @@ static inline uint32_t get_dispatch_class() {
 #endif
 }
 
-void dirty_stack_memory() {
-    uint32_t *base = (uint32_t tt_l1_ptr *)get_stack_base();
-    uint32_t tt_l1_ptr *ptr;
-    asm ("mv %0,sp" : "=r"(ptr));
+// stack_free is offset by 1
+static inline void record_stack_usage(uint32_t stack_free) {
+    if (!stack_free)
+        // not computed
+        return;
 
-    while (ptr != base)
-        *--ptr = STACK_DIRTY_PATTERN;
-}
-
-void record_stack_usage() {
-    uint32_t *base = (uint32_t tt_l1_ptr *)get_stack_base();
-
-    uint32_t tt_l1_ptr* stack_ptr = base;
-    // We don't need to check size here, as we know we'll hit a
-    // non-dirty value at some point (a set of return addresses).
-    while (*stack_ptr == STACK_DIRTY_PATTERN)
-        stack_ptr++;
-    uint32_t stack_free = (stack_ptr - base) * sizeof (uint32_t);
     unsigned idx = debug_get_which_riscv();
     debug_stack_usage_t::usage_t tt_l1_ptr* usage = &GET_MAILBOX_ADDRESS_DEV(watcher.stack_usage)->cpu[idx];
     // min_free is initialized to zero, which we want to compare as
-    // least noteworthy, and a free stack of zero as the most
+    // least noteworthy, and an ofset free stack of one as the most
     // noteworthy. Decrement the former, so zero wraps around before
     // checking. (The cast to uint32_t isn't necessary, but conveys
     // meaning.)
-    if (uint32_t(usage->min_free) - 1 > stack_free) {
-        usage->min_free = stack_free + 1;
+    if (uint32_t(usage->min_free) - 1 >= stack_free) {
+        usage->min_free = stack_free;
         unsigned launch_idx = *GET_MAILBOX_ADDRESS_DEV(launch_msg_rd_ptr);
         launch_msg_t tt_l1_ptr* launch_msg = GET_MAILBOX_ADDRESS_DEV(launch[launch_idx]);
         usage->watcher_kernel_id = launch_msg->kernel_config.watcher_kernel_ids[get_dispatch_class()];
     }
 }
-
-#define DIRTY_STACK_MEMORY() dirty_stack_memory()
-#define RECORD_STACK_USAGE() record_stack_usage()
+#endif // KERNEL_BUILD
 
 #else  // !WATCHER_ENABLED
 
-#define DIRTY_STACK_MEMORY()
-#define RECORD_STACK_USAGE()
+static inline void mark_stack_usage() {}
+static inline int measure_stack_usage() { return 0; }
+static inline void record_stack_usage(uint32_t) {}
 
 #endif  // WATCHER_ENABLED
