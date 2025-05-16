@@ -6,17 +6,6 @@ import ttnn
 from models.demos.vit.tests.vit_test_infra import create_test_infra
 
 
-def buffer_address(tensor):
-    addr = []
-    for ten in ttnn.get_device_tensors(tensor):
-        addr.append(ten.buffer_address())
-    return addr
-
-
-# TODO: Create ttnn apis for this
-ttnn.buffer_address = buffer_address
-
-
 class VitTrace2CQ:
     def __init__(self):
         ...
@@ -68,12 +57,12 @@ class VitTrace2CQ:
         self.test_infra.input_tensor = ttnn.to_memory_config(self.tt_image_res, self.input_mem_config)
         self.op_event = ttnn.record_event(device, 0)
         self.test_infra.output_tensor.deallocate(force=True)
-        trace_input_addr = ttnn.buffer_address(self.test_infra.input_tensor)
+        trace_input_addr = self.test_infra.input_tensor.buffer_address()
         self.tid = ttnn.begin_trace_capture(device, cq_id=0)
         self.test_infra.run()
         self.input_tensor = ttnn.allocate_tensor_on_device(spec, device)
         ttnn.end_trace_capture(device, self.tid, cq_id=0)
-        assert trace_input_addr == ttnn.buffer_address(self.input_tensor)
+        assert trace_input_addr == self.input_tensor.buffer_address()
 
     def execute_vit_trace_2cqs_inference(self, tt_inputs_host=None):
         ttnn.wait_for_event(1, self.op_event)

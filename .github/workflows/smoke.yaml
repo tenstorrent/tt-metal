@@ -25,7 +25,7 @@ jobs:
         || fromJSON(format('["{0}", "in-service", "cloud-virtual-machine"]', inputs.runner))
       }}
     container:
-      image: ${{ inputs.docker-image || 'docker-image-unresolved!'}}
+      image: ${{ (inputs.runner == 'N150' || inputs.runner == 'N300' || inputs.runner == 'N300-llmbox') && 'harbor.ci.tenstorrent.net/' || '' }}${{ inputs.docker-image || 'docker-image-unresolved!' }}
       env:
         ASAN_OPTIONS: "color=always"
         TSAN_OPTIONS: "color=always"

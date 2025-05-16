@@ -13,11 +13,10 @@
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/buffer_types.hpp>
 #include <tt_stl/overloaded.hpp>
-#include "storage.hpp"
+#include "ttnn/tensor/storage.hpp"
 
 #include "tt-metalium/mesh_device_view.hpp"
 #include "ttnn/distributed/distributed_tensor_config.hpp"
-#include "ttnn/tensor/storage.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/tensor/tensor_impl.hpp"
 #include "ttnn/tensor/tensor_impl_wrapper.hpp"
@@ -156,11 +155,7 @@ void Tensor::deallocate_impl(bool force) {
             // The underlying data can still be shared across tensors.
             tt::stl::overloaded{
                 [this](HostStorage& host_storage) { host_storage.buffer.deallocate(); },
-                [this](MultiDeviceHostStorage& host_storage) {
-                    for (auto& host_buffer : host_storage.buffers) {
-                        host_buffer.deallocate();
-                    }
-                },
+                [this](MultiDeviceHostStorage& host_storage) { host_storage.deallocate(); },
                 [this, force, &can_deallocate](DeviceStorage& storage) {
                     if (can_deallocate(storage.mesh_buffer, force)) {
                         storage.mesh_buffer->deallocate();
@@ -515,8 +510,9 @@ StorageType Tensor::storage_type() const {
 ttnn::Shape Tensor::strides() const { return ttnn::Shape(tt::tt_metal::compute_strides(this->get_padded_shape())); }
 
 uint32_t Tensor::volume() const { return get_padded_shape().volume(); }
-
-uint32_t Tensor::get_logical_volume() const { return get_logical_shape().volume(); }
+uint64_t Tensor::logical_volume() const { return get_logical_shape().volume(); }
+uint64_t Tensor::padded_volume() const { return get_padded_shape().volume(); }
+uint64_t Tensor::get_logical_volume() const { return get_logical_shape().volume(); }
 
 bool Tensor::is_scalar() const {
     const ttnn::Shape logical_shape = this->get_logical_shape();
@@ -696,7 +692,7 @@ Tensor allocate_tensor_on_mesh(const TensorSpec& tensor_spec, distributed::MeshD
     for (const auto& coord : distributed::MeshCoordinateRange(mesh_device->shape())) {
         specs.push_back(std::make_pair(coord, tensor_spec));
     }
-    DeviceStorage device_storage(std::move(mesh_buffer), ReplicateTensor(), std::move(specs));
+    DeviceStorage device_storage(std::move(mesh_buffer), std::move(specs));
     return Tensor(std::move(device_storage), tensor_spec, ReplicateTensor{});
 }
 
@@ -771,6 +767,7 @@ Tensor set_tensor_id(const Tensor& tensor) {
 };
 
 const Storage& Tensor::storage() const { return this->tensor_attributes->get_storage(); }
+Storage& Tensor::storage() { return this->tensor_attributes->get_storage(); }
 
 const ttnn::Shape& Tensor::logical_shape() const { return this->tensor_attributes->get_tensor_spec().logical_shape(); }
 

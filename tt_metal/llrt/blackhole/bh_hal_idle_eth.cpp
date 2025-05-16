@@ -6,7 +6,7 @@
 #define COMPILE_FOR_ERISC
 
 #include "tt_align.hpp"
-#include <dev_msgs.h>
+#include "dev_msgs.h"
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>

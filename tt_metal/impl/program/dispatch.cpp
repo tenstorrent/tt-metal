@@ -60,7 +60,7 @@
 #include <umd/device/types/xy_pair.h>
 #include "util.hpp"
 #include "vector_aligned.hpp"
-#include "worker_config_buffer.hpp"
+#include "dispatch/worker_config_buffer.hpp"
 #include "tt_metal/distributed/mesh_workload_impl.hpp"
 
 namespace tt {
