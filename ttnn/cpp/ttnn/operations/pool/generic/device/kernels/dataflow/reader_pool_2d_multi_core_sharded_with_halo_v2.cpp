@@ -66,13 +66,12 @@ void kernel_main() {
     constexpr uint32_t npages_to_reserve = 1;
     uint32_t counter = reader_id;
     uint32_t scalar_index = 0;
-    uint32_t num_of_ele = reader_nindices;
     uint32_t scalars_cnt = 1;
+    uint32_t runtime_args_before = 1;
     if (!one_scalar_per_core) {
-        num_of_ele = get_arg_val<uint32_t>(0);
-        scalars_cnt = get_arg_val<uint32_t>(1);
+        scalars_cnt = get_arg_val<uint32_t>(0);
     }
-    DPRINT << "num of ele" << num_of_ele << ENDL();
+    DPRINT << "num of ele" << reader_nindices << ENDL();
     DPRINT << "scalars_cnt" << scalars_cnt << ENDL();
 
     if (reader_id == 0) {
@@ -82,16 +81,16 @@ void kernel_main() {
         scalar_index++;
     }
 
-    while (counter < num_of_ele || (reader_id == 0 && scalar_index < scalars_cnt && !one_scalar_per_core)) {
+    while (counter < reader_nindices || (reader_id == 0 && scalar_index < scalars_cnt && !one_scalar_per_core)) {
         if (reader_id == 0 && scalar_index < scalars_cnt && !one_scalar_per_core) {
-            uint32_t scalar_val = get_arg_val<uint32_t>(scalar_index + 2);
+            uint32_t scalar_val = get_arg_val<uint32_t>(scalar_index + runtime_args_before);
             cb_reserve_back(in_scalar_cb_id, 1);
             DPRINT << "pushed " << scalar_index << ENDL();
             fill_with_val(get_write_ptr(in_scalar_cb_id), TILE_WIDTH, scalar_val >> 16);
             scalar_index++;
             cb_push_back(in_scalar_cb_id, 1);
         }
-        if (counter < num_of_ele || one_scalar_per_core) {
+        if (counter < reader_nindices || one_scalar_per_core) {
             cb_reserve_back(in_cb_id, npages_to_reserve);
             uint32_t out_l1_write_addr = get_write_ptr(in_cb_id);
             uint16_t top_left_local_index = reader_indices_ptr[counter++];
