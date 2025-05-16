@@ -183,8 +183,9 @@ constexpr std::array<bool, NUM_RECEIVER_CHANNELS> is_receiver_channel_serviced =
 
 constexpr size_t is_2d_fabric = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 63);
 constexpr size_t my_direction = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 64);
+constexpr size_t num_eth_ports = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 65);
 
-constexpr size_t SPECIAL_MARKER_0_IDX = MAIN_CT_ARGS_START_IDX + 65;
+constexpr size_t SPECIAL_MARKER_0_IDX = MAIN_CT_ARGS_START_IDX + 66;
 constexpr size_t SPECIAL_MARKER_0 = 0x00c0ffee;
 static_assert(
     !SPECIAL_MARKER_CHECK_ENABLED || get_compile_time_arg_val(SPECIAL_MARKER_0_IDX) == SPECIAL_MARKER_0,

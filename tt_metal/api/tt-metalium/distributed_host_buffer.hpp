@@ -65,12 +65,6 @@ public:
     using ApplyFn = std::function<void(const HostBuffer& buffer, size_t linear_index)>;
     void apply(const ApplyFn& fn);
 
-    // Returns true if the buffer is allocated.
-    bool is_allocated() const;
-
-    // Deallocates the underlying data storage.
-    void deallocate();
-
 private:
     DistributedHostBuffer(
         std::function<std::optional<size_t>(size_t)> global_to_local_index, std::vector<HostBuffer> local_buffers) :
