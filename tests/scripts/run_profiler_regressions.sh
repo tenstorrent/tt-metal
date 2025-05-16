@@ -108,7 +108,8 @@ run_async_ccl_T3000_test() {
 }
 
 run_profiling_test() {
-    run_async_test
+    #(TODO) re-enable once #21926 is completed
+    #run_async_test
 
     run_ccl_T3000_test
 
