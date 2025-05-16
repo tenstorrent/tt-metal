@@ -219,6 +219,19 @@ void ClearProfilerControlBuffer(IDevice* device);
 void InitDeviceProfiler(IDevice* device);
 
 /**
+ * Allocate profiling DRAM buffers
+ *
+ * Return value: void
+ *
+ * | Argument      | Description                                       | Type            | Valid Range               |
+ * Required |
+ * |---------------|---------------------------------------------------|-----------------|---------------------------|----------|
+ * | device        | The device holding the program being profiled.    | IDevice*        |                           |
+ * True     |
+ * */
+void AllocateDramProfilerBuffer(IDevice* device);
+
+/**
  * Sync TT devices with host
  *
  * Return value: void
