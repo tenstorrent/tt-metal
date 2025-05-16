@@ -1307,7 +1307,9 @@ void ProgramImpl::generate_trace_dispatch_commands(IDevice* device) {
     }
 }
 
-void Program::allocate_kernel_bin_buf_on_device(IDevice* device) { internal_->allocate_kernel_bin_buf_on_device(device); }
+void Program::allocate_kernel_bin_buf_on_device(IDevice* device) {
+    internal_->allocate_kernel_bin_buf_on_device(device);
+}
 
 void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
     //ZoneScoped;
@@ -1554,11 +1556,13 @@ const std::vector<std::shared_ptr<CircularBuffer>>& detail::ProgramImpl::circula
     return circular_buffers_;
 }
 
-const std::vector<std::shared_ptr<CircularBuffer>> &Program::circular_buffers() const { return internal_->circular_buffers(); }
+const std::vector<std::shared_ptr<CircularBuffer>>& Program::circular_buffers() const {
+    return internal_->circular_buffers();
+}
 
 const std::vector<Semaphore>& detail::ProgramImpl::semaphores() const { return semaphores_; }
 
-const std::vector< Semaphore > & Program::semaphores() const { return internal_->semaphores(); }
+const std::vector<Semaphore>& Program::semaphores() const { return internal_->semaphores(); }
 
 void detail::ProgramImpl::add_buffer(std::shared_ptr<Buffer> buf) { owned_buffer_pool.push_back(std::move(buf)); }
 
@@ -1584,10 +1588,16 @@ void detail::ProgramImpl::set_finalized() { this->finalized_ = true; }
 
 bool Program::is_finalized() const { return internal_->is_finalized(); }
 
-ProgramBinaryStatus Program::get_program_binary_status(std::size_t device_id) const { return internal_->get_program_binary_status(device_id); }
-void Program::set_program_binary_status(std::size_t device_id, ProgramBinaryStatus status) { internal_->set_program_binary_status(device_id, status); }
+ProgramBinaryStatus Program::get_program_binary_status(std::size_t device_id) const {
+    return internal_->get_program_binary_status(device_id);
+}
+void Program::set_program_binary_status(std::size_t device_id, ProgramBinaryStatus status) {
+    internal_->set_program_binary_status(device_id, status);
+}
 
-const std::vector<SubDeviceId> &Program::determine_sub_device_ids(const IDevice* device) { return internal_->determine_sub_device_ids(device); }
+const std::vector<SubDeviceId>& Program::determine_sub_device_ids(const IDevice* device) {
+    return internal_->determine_sub_device_ids(device);
+}
 
 const ProgramTransferInfo& detail::ProgramImpl::get_program_transfer_info() const noexcept {
     return program_transfer_info;

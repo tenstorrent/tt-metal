@@ -908,9 +908,12 @@ void SimpleTraceAllocator::allocate_trace_programs(IDevice* device, std::vector<
         for (auto& core_type : {HalProgrammableCoreType::TENSIX, HalProgrammableCoreType::ACTIVE_ETH}) {
             uint32_t index = hal.get_programmable_core_type_index(core_type);
             ProgramConfig& program_config = node.program->get_program_config(index);
-            uint32_t non_binary_size = core_type == HalProgrammableCoreType::TENSIX ? program_config.kernel_text_offset : node.program->get_program_config_sizes()[index];
+            uint32_t non_binary_size = core_type == HalProgrammableCoreType::TENSIX
+                                           ? program_config.kernel_text_offset
+                                           : node.program->get_program_config_sizes()[index];
             uint32_t binary_size = program_config.kernel_text_size;
-            auto & allocator = core_type == HalProgrammableCoreType::TENSIX ? worker_region_allocator_ : active_eth_region_allocator_;
+            auto& allocator =
+                core_type == HalProgrammableCoreType::TENSIX ? worker_region_allocator_ : active_eth_region_allocator_;
 
             auto [rta_sync_idx, rta_addr] = allocator.allocate_region(non_binary_size, i, kNonBinary);
 
@@ -918,7 +921,8 @@ void SimpleTraceAllocator::allocate_trace_programs(IDevice* device, std::vector<
 
             uint32_t binary_addr = 0;
 
-            // Only tensix binaries are stored in the kernel config buffer. Active ethernet binaries have a fixed address.
+            // Only tensix binaries are stored in the kernel config buffer. Active ethernet binaries have a fixed
+            // address.
             if (core_type == HalProgrammableCoreType::TENSIX) {
                 if (auto mem_addr = allocator.get_region(node.program->get_id())) {
                     binary_addr = *mem_addr;
@@ -927,8 +931,8 @@ void SimpleTraceAllocator::allocate_trace_programs(IDevice* device, std::vector<
                 } else {
                     auto res = allocator.allocate_region(binary_size, i, kBinary);
                     if (!res.second.has_value()) {
-                        // Clear the allocator and try again. Should succeed unless the total size of the program is larger than
-                        // the config buffer.
+                        // Clear the allocator and try again. Should succeed unless the total size of the program is
+                        // larger than the config buffer.
                         allocator.reset_allocator();
                         std::tie(rta_sync_idx, rta_addr) = allocator.allocate_region(non_binary_size, i, kNonBinary);
                         res = allocator.allocate_region(binary_size, i, kBinary);
@@ -943,7 +947,8 @@ void SimpleTraceAllocator::allocate_trace_programs(IDevice* device, std::vector<
                 }
             }
             TT_ASSERT(rta_addr.has_value(), "Failed to allocate non-binary region");
-            auto& ringbuffer_start = core_type == HalProgrammableCoreType::TENSIX ? worker_ringbuffer_start_ : active_eth_ringbuffer_start_;
+            auto& ringbuffer_start =
+                core_type == HalProgrammableCoreType::TENSIX ? worker_ringbuffer_start_ : active_eth_ringbuffer_start_;
             node.dispatch_metadata.nonbinary_kernel_config_addrs[index] = {.addr = *rta_addr + ringbuffer_start};
             node.dispatch_metadata.binary_kernel_config_addrs[index] = {.addr = binary_addr + ringbuffer_start};
         }
@@ -966,7 +971,8 @@ void SimpleTraceAllocator::allocate_trace_programs(IDevice* device, std::vector<
         if (sync_idx.has_value()) {
             final_sync_idx = std::max(final_sync_idx, static_cast<int>(sync_idx.value()));
         }
-        // Do adjustments to the sync index to ensure we don't overwrite the previous ethernet binary (since ethernet doesn't use the ringbuffer).
+        // Do adjustments to the sync index to ensure we don't overwrite the previous ethernet binary (since ethernet
+        // doesn't use the ringbuffer).
         if (has_active_eth_kernel) {
             if (last_active_eth_sync_idx.has_value()) {
                 final_sync_idx = std::max(final_sync_idx, static_cast<int>(last_active_eth_sync_idx.value()));
