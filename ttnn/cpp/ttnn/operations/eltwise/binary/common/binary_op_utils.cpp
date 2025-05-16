@@ -212,8 +212,13 @@ std::map<std::string, std::string> get_defines_fp32(
             }
             break;
         case BinaryOpType::MUL:
-            new_defines.insert({"BINOP_INIT", fmt::format("mul_binary_tile_init();")});
-            op_name = "mul_binary_tile";
+            if (input_a_dtype == DataType::UINT16 && input_b_dtype == DataType::UINT16) {
+                new_defines.insert({"MUL_UINT16_INIT", fmt::format("mul_uint16_tile_init();")});
+                op_name = "mul_uint16_tile";
+            } else {
+                new_defines.insert({"BINOP_INIT", fmt::format("mul_binary_tile_init();")});
+                op_name = "mul_binary_tile";
+            }
             break;
         case BinaryOpType::RSUB:
             new_defines.insert({"BINOP_INIT", fmt::format("rsub_binary_tile_init();")});
