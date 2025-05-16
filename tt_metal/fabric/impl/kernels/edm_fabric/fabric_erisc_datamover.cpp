@@ -1015,7 +1015,12 @@ template <
     size_t NUM_SENDER_CHANNELS>
 bool all_channels_drained(
     std::array<tt::tt_fabric::EthChannelBuffer<RECEIVER_NUM_BUFFERS>, NUM_RECEIVER_CHANNELS>& local_receiver_channels,
-    std::array<tt::tt_fabric::EthChannelBuffer<SENDER_NUM_BUFFERS>, NUM_SENDER_CHANNELS>& local_sender_channels,
+    // std::array<tt::tt_fabric::EthChannelBuffer<SENDER_NUM_BUFFERS>, NUM_SENDER_CHANNELS>& local_sender_channels,
+    tt::tt_fabric::EthChannelBuffer<SENDER_NUM_BUFFERS>& local_sender_channel_vc0_0,
+    tt::tt_fabric::EthChannelBuffer<SENDER_NUM_BUFFERS>& local_sender_channel_vc0_1,
+    tt::tt_fabric::EthChannelBuffer<SENDER_NUM_BUFFERS>& local_sender_channel_vc0_2,
+    tt::tt_fabric::EthChannelBuffer<SENDER_NUM_BUFFERS>& local_sender_channel_vc0_3,
+    tt::tt_fabric::EthChannelBuffer<SENDER_NUM_BUFFERS>& local_sender_channel_vc1_0,
     std::array<tt::tt_fabric::EdmChannelWorkerInterface<SENDER_NUM_BUFFERS>, NUM_SENDER_CHANNELS>&
         local_sender_channel_worker_interfaces,
     std::array<ReceiverChannelPointers<RECEIVER_NUM_BUFFERS>, NUM_RECEIVER_CHANNELS>& receiver_channel_pointers) {
@@ -1069,7 +1074,13 @@ template <
     size_t MAX_NUM_RECEIVER_CHANNELS>
 void run_fabric_edm_main_loop(
     std::array<tt::tt_fabric::EthChannelBuffer<RECEIVER_NUM_BUFFERS>, NUM_RECEIVER_CHANNELS>& local_receiver_channels,
-    std::array<tt::tt_fabric::EthChannelBuffer<SENDER_NUM_BUFFERS>, NUM_SENDER_CHANNELS>& local_sender_channels,
+    // std::array<tt::tt_fabric::EthChannelBuffer<SENDER_NUM_BUFFERS>, NUM_SENDER_CHANNELS>& local_sender_channels,
+    tt::tt_fabric::EthChannelBuffer<SENDER_NUM_BUFFERS>& local_sender_channel_vc0_0,
+    tt::tt_fabric::EthChannelBuffer<SENDER_NUM_BUFFERS>& local_sender_channel_vc0_1,
+    tt::tt_fabric::EthChannelBuffer<SENDER_NUM_BUFFERS>& local_sender_channel_vc0_2,
+    tt::tt_fabric::EthChannelBuffer<SENDER_NUM_BUFFERS>& local_sender_channel_vc0_3,
+    tt::tt_fabric::EthChannelBuffer<SENDER_NUM_BUFFERS>& local_sender_channel_vc1_0,
+
     std::array<tt::tt_fabric::EdmChannelWorkerInterface<SENDER_NUM_BUFFERS>, NUM_SENDER_CHANNELS>&
         local_sender_channel_worker_interfaces,
     std::array<tt::tt_fabric::EdmToEdmSender<SENDER_NUM_BUFFERS>, NUM_USED_RECEIVER_CHANNELS>&
@@ -1114,7 +1125,12 @@ void run_fabric_edm_main_loop(
                 SENDER_NUM_BUFFERS,
                 NUM_SENDER_CHANNELS>(
                 local_receiver_channels,
-                local_sender_channels,
+                // local_sender_channels,
+                local_sender_channel_vc0_0,
+                local_sender_channel_vc0_1,
+                local_sender_channel_vc0_2,
+                local_sender_channel_vc0_3,
+                local_sender_channel_vc1_0,
                 local_sender_channel_worker_interfaces,
                 receiver_channel_pointers);
 
@@ -1135,7 +1151,9 @@ void run_fabric_edm_main_loop(
                 SENDER_NUM_BUFFERS,
                 to_receiver_packets_sent_streams[VC0_RECEIVER_CHANNEL],
                 sender_ch_live_check_skip[0]>(
-                local_sender_channels[0],
+                // local_sender_channels[0],
+                local_sender_channel_vc0_0,
+
                 local_sender_channel_worker_interfaces[0],
                 outbound_to_receiver_channel_pointers[VC0_RECEIVER_CHANNEL],
                 remote_receiver_channels[VC0_RECEIVER_CHANNEL],
@@ -1187,7 +1205,9 @@ void run_fabric_edm_main_loop(
                 SENDER_NUM_BUFFERS,
                 to_receiver_packets_sent_streams[VC0_RECEIVER_CHANNEL],
                 sender_ch_live_check_skip[1]>(
-                local_sender_channels[1],
+                // local_sender_channels[1],
+                local_sender_channel_vc0_1,
+
                 local_sender_channel_worker_interfaces[1],
                 outbound_to_receiver_channel_pointers[VC0_RECEIVER_CHANNEL],
                 remote_receiver_channels[VC0_RECEIVER_CHANNEL],
@@ -1203,7 +1223,9 @@ void run_fabric_edm_main_loop(
                     SENDER_NUM_BUFFERS,
                     to_receiver_packets_sent_streams[VC0_RECEIVER_CHANNEL],
                     sender_ch_live_check_skip[2]>(
-                    local_sender_channels[2],
+                    // local_sender_channels[2],
+                    local_sender_channel_vc0_2,
+
                     local_sender_channel_worker_interfaces[2],
                     outbound_to_receiver_channel_pointers[VC0_RECEIVER_CHANNEL],
                     remote_receiver_channels[VC0_RECEIVER_CHANNEL],
@@ -1218,7 +1240,9 @@ void run_fabric_edm_main_loop(
                     SENDER_NUM_BUFFERS,
                     to_receiver_packets_sent_streams[VC0_RECEIVER_CHANNEL],
                     sender_ch_live_check_skip[3]>(
-                    local_sender_channels[3],
+                    // local_sender_channels[3],
+                    local_sender_channel_vc0_3,
+
                     local_sender_channel_worker_interfaces[3],
                     outbound_to_receiver_channel_pointers[VC0_RECEIVER_CHANNEL],
                     remote_receiver_channels[VC0_RECEIVER_CHANNEL],
@@ -1235,7 +1259,9 @@ void run_fabric_edm_main_loop(
                     SENDER_NUM_BUFFERS,
                     to_receiver_packets_sent_streams[VC1_RECEIVER_CHANNEL],
                     sender_ch_live_check_skip[NUM_SENDER_CHANNELS - 1]>(
-                    local_sender_channels[NUM_SENDER_CHANNELS - 1],
+                    // local_sender_channels[NUM_SENDER_CHANNELS - 1],
+                    local_sender_channel_vc1_0,
+
                     local_sender_channel_worker_interfaces[NUM_SENDER_CHANNELS - 1],
                     outbound_to_receiver_channel_pointers[VC1_RECEIVER_CHANNEL],
                     remote_receiver_channels[VC1_RECEIVER_CHANNEL],
@@ -1637,7 +1663,47 @@ void kernel_main() {
 
     std::array<tt::tt_fabric::EthChannelBuffer<RECEIVER_NUM_BUFFERS>, NUM_RECEIVER_CHANNELS> remote_receiver_channels;
     std::array<tt::tt_fabric::EthChannelBuffer<RECEIVER_NUM_BUFFERS>, NUM_RECEIVER_CHANNELS> local_receiver_channels;
-    std::array<tt::tt_fabric::EthChannelBuffer<SENDER_NUM_BUFFERS>, NUM_SENDER_CHANNELS> local_sender_channels;
+    // unroll so each sender channel has its own number of buffer slots
+    // std::array<tt::tt_fabric::EthChannelBuffer<SENDER_NUM_BUFFERS>, NUM_SENDER_CHANNELS> local_sender_channels;
+    tt::tt_fabric::EthChannelBuffer<SENDER_NUM_BUFFERS> local_sender_channel_vc0_0(
+        local_sender_buffer_addresses[0],
+        channel_buffer_size,
+        sizeof(PACKET_HEADER_TYPE),
+        /* eth_transaction_ack_word_addr */ 0,
+        /* channel_id */ 0);
+    tt::tt_fabric::EthChannelBuffer<SENDER_NUM_BUFFERS> local_sender_channel_vc0_1(
+        local_sender_buffer_addresses[1],
+        channel_buffer_size,
+        sizeof(PACKET_HEADER_TYPE),
+        /* eth_transaction_ack_word_addr */ 0,
+        /* channel_id */ 1);
+    tt::tt_fabric::EthChannelBuffer<SENDER_NUM_BUFFERS> local_sender_channel_vc0_2;
+    tt::tt_fabric::EthChannelBuffer<SENDER_NUM_BUFFERS> local_sender_channel_vc0_3;
+    if constexpr (is_2d_fabric) {
+        new (&local_sender_channel_vc0_2) tt::tt_fabric::EthChannelBuffer<SENDER_NUM_BUFFERS>(
+            local_sender_buffer_addresses[2],
+            channel_buffer_size,
+            sizeof(PACKET_HEADER_TYPE),
+            /* eth_transaction_ack_word_addr */ 0,
+            /* channel_id */ 2);
+        new (&local_sender_channel_vc0_3) tt::tt_fabric::EthChannelBuffer<SENDER_NUM_BUFFERS>(
+            local_sender_buffer_addresses[3],
+            channel_buffer_size,
+            sizeof(PACKET_HEADER_TYPE),
+            /* eth_transaction_ack_word_addr */ 0,
+            /* channel_id */ 3);
+    }
+    tt::tt_fabric::EthChannelBuffer<SENDER_NUM_BUFFERS> local_sender_channel_vc1_0;
+    if constexpr (enable_ring_support && !dateline_connection) {
+        new (&local_sender_channel_vc1_0) tt::tt_fabric::EthChannelBuffer<SENDER_NUM_BUFFERS>(
+            local_sender_buffer_addresses[NUM_SENDER_CHANNELS - 1],
+            channel_buffer_size,
+            sizeof(PACKET_HEADER_TYPE),
+            /* eth_transaction_ack_word_addr */ 0,
+            /* channel_id */ NUM_SENDER_CHANNELS - 1);
+    }
+
+    // unroll so each sender-worker interface has its own number of buffer slots
     std::array<tt::tt_fabric::EdmChannelWorkerInterface<SENDER_NUM_BUFFERS>, NUM_SENDER_CHANNELS>
         local_sender_channel_worker_interfaces;
     std::array<size_t, NUM_SENDER_CHANNELS> local_sender_flow_control_semaphores =
@@ -1671,6 +1737,7 @@ void kernel_main() {
         connection_worker_info_ptr->edm_rdptr = 0;
     }
 
+    // no need to unroll if we assume downstream connected channels have same buffer slots
     std::array<tt::tt_fabric::EdmToEdmSender<SENDER_NUM_BUFFERS>, NUM_USED_RECEIVER_CHANNELS>
         downstream_edm_noc_interfaces;
     if (has_downstream_edm_vc0_buffer_connection) {
@@ -1790,14 +1857,14 @@ void kernel_main() {
             receiver_channel_base_id + i);
     }
 
-    for (uint8_t i = 0; i < NUM_SENDER_CHANNELS; i++) {
-        new (&local_sender_channels[i]) tt::tt_fabric::EthChannelBuffer<SENDER_NUM_BUFFERS>(
-            local_sender_buffer_addresses[i],
-            channel_buffer_size,
-            sizeof(PACKET_HEADER_TYPE),
-            0,  // For sender channels there is no eth_transaction_ack_word_addr because they don't send acks
-            i);
-    }
+    // for (uint8_t i = 0; i < NUM_SENDER_CHANNELS; i++) {
+    //     new (&local_sender_channels[i]) tt::tt_fabric::EthChannelBuffer<SENDER_NUM_BUFFERS>(
+    //         local_sender_buffer_addresses[i],
+    //         channel_buffer_size,
+    //         sizeof(PACKET_HEADER_TYPE),
+    //         0,  // For sender channels there is no eth_transaction_ack_word_addr because they don't send acks
+    //         i);
+    // }
     init_local_sender_channel_worker_interfaces(
         local_sender_connection_live_semaphore_addresses,
         local_sender_connection_info_addresses,
@@ -1917,7 +1984,12 @@ void kernel_main() {
         MAX_NUM_SENDER_CHANNELS,
         MAX_NUM_RECEIVER_CHANNELS>(
         local_receiver_channels,
-        local_sender_channels,
+        // local_sender_channels,
+        local_sender_channel_vc0_0,
+        local_sender_channel_vc0_1,
+        local_sender_channel_vc0_2,
+        local_sender_channel_vc0_3,
+        local_sender_channel_vc1_0,
         local_sender_channel_worker_interfaces,
         downstream_edm_noc_interfaces,
         remote_receiver_channels,
