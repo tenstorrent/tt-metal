@@ -131,7 +131,7 @@ EdmLineFabricOpInterface::EdmLineFabricOpInterface(
                     "Building forward direction EDM on chip {} on link {}",
                     src_device->id(),
                     edm_builders_forward_direction[src_device->id()].size());
-                tt::log_info(
+                tt::log_debug(
                     "src_device {}, dest_device {}, is_dateline {}", src_device->id(), dest_device->id(), dateline);
                 edm_builders_forward_direction[src_device->id()].push_back(
                     tt::tt_fabric::FabricEriscDatamoverBuilder::build(
