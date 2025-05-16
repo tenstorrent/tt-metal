@@ -1093,6 +1093,8 @@ void build_tt_fabric_program(
     std::unordered_map<RoutingDirection, std::set<chan_id_t>> active_fabric_eth_channels;
     std::unordered_map<RoutingDirection, chip_id_t> chip_neighbors;
     uint32_t num_intra_chip_neighbors = 0;
+    const auto topology = fabric_context.get_fabric_topology();
+    bool is_2D_routing = topology == Topology::Mesh;
 
     for (const auto& direction : tt::tt_fabric::FabricContext::routing_directions) {
         auto active_eth_chans = control_plane->get_active_fabric_eth_channels_in_direction(
@@ -1107,13 +1109,25 @@ void build_tt_fabric_program(
             // we assume that all neighbors in a direction are the same
             num_intra_chip_neighbors++;
         }
-        TT_FATAL(!neighbors.empty(), "No neighbors found for direction {} but has active eth channels", direction);
-
         // assume same neighbor per direction
         TT_FATAL(neighbors.size() == 1, "Multiple neighbor meshes per direction is unsupported");
         TT_FATAL(
             std::set<chip_id_t>(neighbors.begin()->second.begin(), neighbors.begin()->second.end()).size() == 1,
             "Multiple neighbors per direction is currently unsupported");
+
+        // 1D fabric only supports intramesh connections apart from TG gateways
+        if (!is_2D_routing) {
+            uint32_t has_inter_mesh_connections = intra_chip_neighbors == neighbors.end();
+            if (is_TG && has_inter_mesh_connections) {
+                // if active eth channels are found but no neighbor on the same mesh, then the neighbor should be the
+                // gateway
+                TT_FATAL(
+                    active_eth_chans.size() == 1, "Found more than one active eth link b/w mmio and remote chip on TG");
+            } else {
+                TT_FATAL(!has_inter_mesh_connections, "1D routing does not support intermesh connections");
+            }
+        }
+
         std::pair<mesh_id_t, chip_id_t> neighbor_mesh_chip_id = {
             neighbors.begin()->first, neighbors.begin()->second[0]};
         chip_neighbors[direction] = control_plane->get_physical_chip_id_from_mesh_chip_id(neighbor_mesh_chip_id);
@@ -1127,7 +1141,6 @@ void build_tt_fabric_program(
     }
 
     const bool wrap_around_mesh = fabric_context.is_wrap_around_mesh(mesh_chip_id.first);
-    const auto topology = fabric_context.get_fabric_topology();
 
     for (const auto& [direction, remote_physical_chip_id] : chip_neighbors) {
         auto [remote_mesh_id, remote_chip_id] =
@@ -1196,7 +1209,7 @@ void build_tt_fabric_program(
         }
     };
 
-    if (topology == Topology::Mesh) {
+    if (is_2D_routing) {
         // 2D Routing
         connect_downstream_builders(RoutingDirection::N, RoutingDirection::S);
         connect_downstream_builders(RoutingDirection::E, RoutingDirection::W);
