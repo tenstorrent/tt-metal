@@ -559,6 +559,8 @@ Result conv2d_L1(
             }
         }
 
+        tt::log_info("shard_spec: {}", input_tensor_post_tm.shard_spec());
+
         // call conv micro op
         auto conv_output = optimized_conv_new(
             input_tensor_post_tm,

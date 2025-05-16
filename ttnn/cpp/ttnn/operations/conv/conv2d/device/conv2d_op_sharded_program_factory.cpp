@@ -31,7 +31,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_width_sh
     const Tensor& b,
     const ttnn::Shape& ashape,
     std::optional<const Tensor> bias,
-    const std::optional<const Tensor>& conv_reader_indices,
+    // const std::optional<const Tensor>& conv_reader_indices,
     const sliding_window::SlidingWindowConfig& sliding_window_config,
     uint32_t output_channels,
     uint32_t groups,
@@ -377,7 +377,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
     const Tensor& b,
     const ttnn::Shape& ashape,
     std::optional<const Tensor> bias,
-    const std::optional<const Tensor>& conv_reader_indices,
+    // const std::optional<const Tensor>& conv_reader_indices,
     const sliding_window::SlidingWindowConfig& sliding_window_config,
     uint32_t output_channels,
     uint32_t groups,
@@ -412,8 +412,6 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
     uint32_t out_block_h_ntiles = parallelization_config.per_core_out_matrix_height_ntile;
     uint32_t out_subblock_h_ntiles = block_config.out_subblock_h_ntiles;
     uint32_t out_subblock_w_ntiles = block_config.out_subblock_w_ntiles;
-
-    auto conv_reader_indices_storage = conv_reader_indices.value().device_storage();
 
     tt::DataFormat act_df = tt_metal::datatype_to_dataformat_converter(a.get_dtype());
     tt::DataFormat weight_df = tt_metal::datatype_to_dataformat_converter(b.get_dtype());
@@ -928,6 +926,10 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
         "per_core_out_matrix_height_ntiles {} should be divisible by act_block_h_ntiles {}",
         per_core_out_matrix_height_ntiles,
         act_block_h_ntiles);
+    tt::log_info(
+        "per_core_out_matrix_height_ntiles {} act_block_h_ntiles {}",
+        per_core_out_matrix_height_ntiles,
+        act_block_h_ntiles);
     uint32_t num_blocks_act_h_per_core = per_core_out_matrix_height_ntiles / act_block_h_ntiles;
     // TT_FATAL(per_core_out_matrix_height_ntiles % out_block_h_ntiles == 0);
     // uint32_t num_blocks_out_h_per_core = per_core_out_matrix_height_ntiles / out_block_h_ntiles;
@@ -949,6 +951,48 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
     }
     uint32_t act_block_h_datums_last_block =
         (per_core_out_matrix_height_ntiles - (num_blocks_act_h_per_core - 1) * act_block_h_ntiles) * TILE_HEIGHT;
+
+    ttnn::operations::sliding_window::ParallelConfig parallel_config;
+    parallel_config.grid = a.shard_spec().value().grid;
+    parallel_config.shard_scheme = a.memory_config().memory_layout();
+    parallel_config.shard_orientation = a.shard_spec().value().orientation;
+    auto pad_metadata = ttnn::operations::sliding_window::generate_pad_metadata(sliding_window_config);
+    auto op_trace_metadata = ttnn::operations::sliding_window::generate_op_trace_metadata(sliding_window_config);
+    auto shard_boundaries =
+        ttnn::operations::sliding_window::generate_shard_boundaries(sliding_window_config, op_trace_metadata);
+    auto conv_sharded_input_top_left_indices = ttnn::operations::sliding_window::generate_sliding_window_op_config2(
+        op_trace_metadata,
+        shard_boundaries,
+        stride_w,
+        num_blocks_act_h_per_core,
+        act_block_h_datums,
+        act_block_h_datums_last_block > act_block_h_datums ? act_block_h_datums : act_block_h_datums_last_block,
+        true,
+        true);
+    // auto conv_sharded_input_top_left_indices = ttnn::operations::sliding_window::generate_sliding_window_op_config(
+    //     op_trace_metadata,
+    //     shard_boundaries,
+    //     // stride_w,
+    //     // num_blocks_act_h_per_core,
+    //     // act_block_h_datums,
+    //     // act_block_h_datums_last_block > act_block_h_datums ? act_block_h_datums : act_block_h_datums_last_block,
+    //     true,
+    //     true);
+    // tt::log_info("conv_sharded_input_top_left_indices {}", conv_sharded_input_top_left_indices);
+    // create sharded ttnn config tensors
+    DataType indices_tt_dtype = DataType::UINT16;
+    // For 2d convs, each core in a column or row share the same specs
+    CoreCoord grid_size = parallel_config.grid.bounding_box().grid_size();
+
+    bool is_block_sharded = a.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED;
+
+    auto conv_reader_indices_tensor = ttnn::operations::sliding_window::construct_on_host_config_tensor(
+        conv_sharded_input_top_left_indices, sliding_window_config, parallel_config);
+    // tt::log_info("conv_reader_indices_tensor {}", conv_reader_indices_tensor.get_logical_shape());
+    conv_reader_indices_tensor = ttnn::operations::sliding_window::move_config_tensor_to_device(
+        conv_reader_indices_tensor, parallel_config, is_block_sharded, a.device());
+
+    auto conv_reader_indices_storage = conv_reader_indices_tensor.device_storage();
 
     log_debug(LogOp, "total_num_cores_per_weight_slice: {}", total_num_cores_per_weight_slice);
     log_debug(LogOp, "num_blocks_act_h_per_core: {}", num_blocks_act_h_per_core);
@@ -1281,7 +1325,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
             cb_indices.get_next_cb_index(),
             program,
             all_cores,
-            out_block_h_datums * 2,
+            conv_sharded_input_top_left_indices[0].size(),
             1,
             tt::DataFormat::Float16_b,
             conv_reader_indices_storage.get_buffer());
@@ -1749,6 +1793,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
             const std::vector<Tensor>& input_tensors,
             const std::vector<std::optional<const Tensor>>& optional_input_tensors,
             const std::vector<Tensor>& output_tensors) {
+            // tt::log_info("HIT");
             // Reader config indices is an optional static sharded tensor, so no need to update address
             TT_FATAL(output_tensors.size() == 1, "Error");
 
@@ -1819,22 +1864,9 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
     parallel_config.shard_orientation = a.shard_spec().value().orientation;
 
     // create conv config tensors
-    auto pad_metadata = ttnn::operations::sliding_window::generate_pad_metadata(sliding_window_config);
-    auto op_trace_metadata = ttnn::operations::sliding_window::generate_op_trace_metadata(sliding_window_config);
-    auto shard_boundaries =
-        ttnn::operations::sliding_window::generate_shard_boundaries(sliding_window_config, op_trace_metadata);
-    auto conv_sharded_input_top_left_indices = ttnn::operations::sliding_window::generate_sliding_window_op_config(
-        op_trace_metadata, shard_boundaries, true, true);
-    // create sharded ttnn config tensors
-    DataType indices_tt_dtype = DataType::UINT16;
-    // For 2d convs, each core in a column or row share the same specs
-    CoreCoord grid_size = parallel_config.grid.bounding_box().grid_size();
-
-    bool is_block_sharded = a.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED;
-    auto conv_reader_indices_tensor = ttnn::operations::sliding_window::construct_on_host_config_tensor(
-        conv_sharded_input_top_left_indices, sliding_window_config, parallel_config);
-    conv_reader_indices_tensor = ttnn::operations::sliding_window::move_config_tensor_to_device(
-        conv_reader_indices_tensor, parallel_config, is_block_sharded, a.device());
+    // uint32_t per_core_out_matrix_height_ntiles = parallelization_config.per_core_out_matrix_height_ntile;
+    // uint32_t act_block_h_ntiles = block_config.act_block_h_ntiles;
+    // uint32_t num_blocks_act_h_per_core = per_core_out_matrix_height_ntiles / act_block_h_ntiles;
 
     if (parallel_config.shard_scheme == TensorMemoryLayout::WIDTH_SHARDED) {
         return multi_core_optimized_conv_width_sharded_v2_impl(
@@ -1843,7 +1875,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
             b,
             ttnn::Shape(input_tensor_shape),
             bias,
-            conv_reader_indices_tensor,
+            // conv_reader_indices_tensor,
             sliding_window_config,
             output_channels,
             groups,
@@ -1865,7 +1897,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
         b,
         ttnn::Shape(input_tensor_shape),
         bias,
-        conv_reader_indices_tensor,
+        // conv_reader_indices_tensor,
         sliding_window_config,
         output_channels,
         groups,

@@ -151,6 +151,16 @@ std::vector<std::vector<uint16_t>> generate_sliding_window_op_config(
     bool pad_tile = false,
     bool pad_cores = false);
 
+std::vector<std::vector<uint16_t>> generate_sliding_window_op_config2(
+    const std::vector<uint32_t>& op_trace_metadata,
+    const std::vector<ShardBoundary>& shard_boundaries,
+    uint32_t stride_w,
+    uint32_t num_blocks_act_h_per_core,
+    uint32_t act_block_h_datums,
+    uint32_t act_block_h_datums_last_block,
+    bool pad_tile = false,
+    bool pad_cores = false);
+
 std::vector<uint16_t> flatten(const std::vector<std::vector<uint16_t>>& input, uint32_t extend_with_zeroes = 0);
 
 uint32_t get_repeat_factor_for_replicating_nhw_config_across_grid(const ParallelConfig& p_config);

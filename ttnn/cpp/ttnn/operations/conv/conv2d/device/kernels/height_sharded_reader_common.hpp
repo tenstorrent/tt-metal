@@ -38,37 +38,64 @@ FORCE_INLINE void read_sticks(
     uint32_t reader_offset,
     uint32_t& l1_write_addr_act,
     uint32_t& reader_idx) {
-    for (uint32_t bhd = 0; bhd < act_block_h_datums_read_curr; bhd++) {
-        // local read from reader_index + reader_offset;
-        uint32_t two_reader_indices = packed_reader_indices_ptr[reader_idx];
-        uint32_t reader_idx_1 = two_reader_indices & 0xffff;
-        uint32_t reader_idx_2 = two_reader_indices >> 16;
+        if (true) {
+            DPRINT << "true" << ENDL();
+            uint32_t two_reader_indices = packed_reader_indices_ptr[reader_idx];
+            uint32_t num_elems = two_reader_indices & 0xffff;
+            uint32_t stride_w = two_reader_indices >> 16;
 
-        if constexpr (dilation_w == 1) {
-            uint32_t act_l1_offset = reader_offset + (reader_idx_1 * conv_act_c_read_bytes);
-            noc_async_read_one_packet_with_state<true>(act_l1_offset, l1_write_addr_act);
-            l1_write_addr_act += (coalesced_read_bytes + act_block_w_extra_align_bytes);
+            DPRINT << num_elems << " num elems" << ENDL();
 
-            act_l1_offset = reader_offset + (reader_idx_2 * conv_act_c_read_bytes);
-            noc_async_read_one_packet_with_state<true>(act_l1_offset, l1_write_addr_act);
-            l1_write_addr_act += (coalesced_read_bytes + act_block_w_extra_align_bytes);
+            while (num_elems--) {
+                reader_idx++;
+                uint32_t two_reader_indices = packed_reader_indices_ptr[reader_idx];
+                uint32_t start_ind = two_reader_indices & 0xffff;
+                uint32_t end_ind = two_reader_indices >> 16;
+
+                DPRINT << " start_ind " << start_ind << " end_ind " << end_ind << ENDL();
+
+                for (uint32_t ind = start_ind; ind <= end_ind; ind += stride_w) {
+                    uint32_t act_l1_offset = reader_offset + (ind * conv_act_c_read_bytes);
+                    noc_async_read_one_packet_with_state<true>(act_l1_offset, l1_write_addr_act);
+                    l1_write_addr_act += (coalesced_read_bytes + act_block_w_extra_align_bytes);
+                    // DPRINT << ind << " " << (act_l1_offset - start_reader_offset) / conv_act_c_read_bytes <<
+                    // ENDL();
+                }
+            }
+            reader_idx++;
         } else {
-            uint32_t act_l1_offset = reader_offset + (reader_idx_1 * conv_act_c_read_bytes);
-            for (uint32_t inner = 0; inner < weight_size_w; inner++) {
-                noc_async_read_one_packet_with_state<true>(act_l1_offset, l1_write_addr_act);
-                l1_write_addr_act += conv_act_c_read_bytes;
-                act_l1_offset += stride_w_bytes;
-            }
-            l1_write_addr_act += act_block_w_extra_align_bytes;
+            for (uint32_t bhd = 0; bhd < act_block_h_datums_read_curr; bhd++) {
+                // local read from reader_index + reader_offset;
+                uint32_t two_reader_indices = packed_reader_indices_ptr[reader_idx];
+                uint32_t reader_idx_1 = two_reader_indices & 0xffff;
+                uint32_t reader_idx_2 = two_reader_indices >> 16;
 
-            act_l1_offset = reader_offset + (reader_idx_2 * conv_act_c_read_bytes);
-            for (uint32_t inner = 0; inner < weight_size_w; inner++) {
-                noc_async_read_one_packet_with_state<true>(act_l1_offset, l1_write_addr_act);
-                l1_write_addr_act += conv_act_c_read_bytes;
-                act_l1_offset += stride_w_bytes;
+                if constexpr (dilation_w == 1) {
+                    uint32_t act_l1_offset = reader_offset + (reader_idx_1 * conv_act_c_read_bytes);
+                    noc_async_read_one_packet_with_state<true>(act_l1_offset, l1_write_addr_act);
+                    l1_write_addr_act += (coalesced_read_bytes + act_block_w_extra_align_bytes);
+
+                    act_l1_offset = reader_offset + (reader_idx_2 * conv_act_c_read_bytes);
+                    noc_async_read_one_packet_with_state<true>(act_l1_offset, l1_write_addr_act);
+                    l1_write_addr_act += (coalesced_read_bytes + act_block_w_extra_align_bytes);
+                } else {
+                    uint32_t act_l1_offset = reader_offset + (reader_idx_1 * conv_act_c_read_bytes);
+                    for (uint32_t inner = 0; inner < weight_size_w; inner++) {
+                        noc_async_read_one_packet_with_state<true>(act_l1_offset, l1_write_addr_act);
+                        l1_write_addr_act += conv_act_c_read_bytes;
+                        act_l1_offset += stride_w_bytes;
+                    }
+                    l1_write_addr_act += act_block_w_extra_align_bytes;
+
+                    act_l1_offset = reader_offset + (reader_idx_2 * conv_act_c_read_bytes);
+                    for (uint32_t inner = 0; inner < weight_size_w; inner++) {
+                        noc_async_read_one_packet_with_state<true>(act_l1_offset, l1_write_addr_act);
+                        l1_write_addr_act += conv_act_c_read_bytes;
+                        act_l1_offset += stride_w_bytes;
+                    }
+                    l1_write_addr_act += act_block_w_extra_align_bytes;
+                }
+                reader_idx++;
             }
-            l1_write_addr_act += act_block_w_extra_align_bytes;
         }
-        reader_idx++;
-    }
 }

@@ -4,6 +4,7 @@
 
 #include "dataflow_api.h"
 #include "height_sharded_reader_common.hpp"
+#include "dprint.h"
 
 void kernel_main() {
     constexpr uint32_t dilation_h = get_compile_time_arg_val(0);
@@ -21,7 +22,7 @@ void kernel_main() {
     constexpr uint32_t act_num_blocks_h = get_compile_time_arg_val(11);
     constexpr uint32_t act_block_h_datums_last_block = get_compile_time_arg_val(20);
 
-    constexpr uint32_t act_block_h_datums_read_last_block =
+    constexpr uint32_t act_block_h_datums_read_last_block =  // broj citanja u poslednjem aktivacionom bloku
         act_block_h_datums_last_block > act_block_h_datums ? act_block_h_datums / 2 : act_block_h_datums_last_block / 2;
     constexpr uint32_t act_block_h_datums_second_reader = get_compile_time_arg_val(21);
     constexpr uint32_t act_block_h_datums_second_reader_read = act_block_h_datums_second_reader / 2;
@@ -73,17 +74,22 @@ void kernel_main() {
 
     constexpr uint32_t stride_w_bytes = dilation_w * conv_act_c_read_bytes;
     uint32_t start_reader_idx = 0;
+    DPRINT << "act_num_blocks_h " << act_num_blocks_h << ENDL();
     for (uint32_t bh = 0; bh < act_num_blocks_h; bh++) {
         uint32_t reader_offset = act_l1_read_addr;
+        uint32_t start_reader_offset = reader_offset;
         for (uint32_t outer = 0; outer < window_outer; outer++) {
+            DPRINT << "row" << ENDL();
             // Reset reader_idx to finish act_block_h_datums
             reader_idx = start_reader_idx;
+            DPRINT << "  start_reader_idx: " << start_reader_idx << ENDL();
 
             cb_reserve_back(cb_id_act, act_block_num_tiles);
             uint32_t l1_write_addr_act = get_write_ptr(cb_id_act);
 
             uint32_t act_block_h_datums_read_curr =
                 bh == act_num_blocks_h - 1 ? act_block_h_datums_read_last_block : act_block_h_datums_read;
+            DPRINT << "act_block_h_datums_read_curr " << act_block_h_datums_read_curr << ENDL();
 
             read_sticks<
                 dilation_w,

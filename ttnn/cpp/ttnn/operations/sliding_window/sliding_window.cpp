@@ -1106,6 +1106,137 @@ std::vector<std::vector<uint16_t>> generate_sliding_window_op_config(
             }
         }
     }
+    // tt::log_info("sharded_input_top_left_indices: {}", sharded_input_top_left_indices);
+    return sharded_input_top_left_indices;
+}
+
+std::vector<std::vector<uint16_t>> generate_sliding_window_op_config2(
+    const std::vector<uint32_t>& op_trace_metadata,
+    const std::vector<ShardBoundary>& shard_boundaries,
+    uint32_t stride_w,
+    uint32_t num_blocks_act_h_per_core,
+    uint32_t act_block_h_datums,
+    uint32_t act_block_h_datums_last_block,
+    bool pad_tile,
+    bool pad_cores) {
+    // tt::log_info("op_trace_metadata {}", op_trace_metadata);
+    // tt::log_info("shard_boundaries {}", shard_boundaries);
+    std::vector<std::vector<uint16_t>> sharded_input_top_left_indices;
+    for (const auto& item : shard_boundaries) {
+        const auto& [output_shard_start, output_shard_end] = item.output_range;  // 0, 31
+        const auto& [input_shard_start, input_shard_end] = item.input_range;     // 0, 71
+        std::vector<uint16_t> local_top_left_indices;
+        // sanity check
+        if (output_shard_start >= op_trace_metadata.size()) {
+            // this core has no output
+            continue;
+        }
+        TT_ASSERT(input_shard_start == op_trace_metadata[output_shard_start]);
+        uint32_t cur_block = -1;
+        uint32_t act_block_h_datums_read_curr = 0;
+        uint32_t cur_ind = 0;
+        uint32_t num_segments = 0;
+        bool start_new_block = true;
+        uint32_t num_segments_ind = 0;
+        // 0 1 2 3 6 7 8 9
+        // tt::log_info("novi core {}", output_shard_end - output_shard_start);
+        for (size_t i = output_shard_start; i < output_shard_end + 1; i++) {
+            if (start_new_block) {
+                cur_block++;
+                act_block_h_datums_read_curr =
+                    cur_block == num_blocks_act_h_per_core - 1 ? act_block_h_datums_last_block : act_block_h_datums;
+                // tt::log_info("do kraja {}", act_block_h_datums_read_curr);
+                local_top_left_indices.push_back(0);
+                num_segments_ind = local_top_left_indices.size() - 1;
+                local_top_left_indices.push_back(stride_w);
+                local_top_left_indices.push_back(op_trace_metadata[i] - op_trace_metadata[output_shard_start]);
+                start_new_block = false;
+            } else {
+                if (op_trace_metadata[i] - op_trace_metadata[output_shard_start] != cur_ind + stride_w) {
+                    local_top_left_indices.push_back(cur_ind);
+                    num_segments++;
+                    local_top_left_indices.push_back(op_trace_metadata[i] - op_trace_metadata[output_shard_start]);
+                }
+            }
+            act_block_h_datums_read_curr--;
+            cur_ind = op_trace_metadata[i] - op_trace_metadata[output_shard_start];
+
+            if (!act_block_h_datums_read_curr || i == output_shard_end) {  // zavrsio si blok
+                // tt::log_info("kraj bloka");
+                local_top_left_indices.push_back(cur_ind);
+                num_segments++;
+                local_top_left_indices[num_segments_ind] = num_segments;
+                num_segments = 0;
+                start_new_block = true;
+            }
+            // tt::log_info("vec: {}", local_top_left_indices);
+        }
+        sharded_input_top_left_indices.push_back(local_top_left_indices);
+        // tt::log_info("sharded_input_top_left_indices {}", sharded_input_top_left_indices);
+    }
+    // tt::log_info("pre splita: {}", sharded_input_top_left_indices);
+    if (pad_tile) {
+        // Pad indices to tile-multiple
+        for (size_t i = 0; i < sharded_input_top_left_indices.size(); i++) {
+            uint32_t extend_with_zeroes = (32 - sharded_input_top_left_indices[i].size() % 32) % 32;
+            if (extend_with_zeroes > 0) {
+                std::vector<uint16_t> extend_v(extend_with_zeroes, 0);
+                sharded_input_top_left_indices[i].insert(
+                    sharded_input_top_left_indices[i].end(), extend_v.begin(), extend_v.end());
+            }
+        }
+    }
+    if (pad_cores) {
+        uint32_t indices_length_per_core = sharded_input_top_left_indices[0].size();
+        for (uint32_t core_idx = 0; core_idx < shard_boundaries.size(); core_idx++) {
+            // Pad indices for this core if not equal to other cores
+            if (sharded_input_top_left_indices.size() == core_idx) {
+                sharded_input_top_left_indices.push_back(std::vector<uint16_t>());
+            }
+            TT_FATAL(
+                core_idx < sharded_input_top_left_indices.size(),
+                "Invalid core_idx {} for sharded_input_top_left_indices",
+                core_idx);
+            uint32_t indices_length_this_core = sharded_input_top_left_indices[core_idx].size();
+            if (indices_length_per_core - indices_length_this_core > 0) {
+                std::vector<uint16_t> extend_v(indices_length_per_core - indices_length_this_core, 0);
+                sharded_input_top_left_indices[core_idx].insert(
+                    sharded_input_top_left_indices[core_idx].end(), extend_v.begin(), extend_v.end());
+            }
+        }
+    }
+    // tt::log_info("sharded_input_top_left_indices: {}", sharded_input_top_left_indices);
+    // tt::log_info("new arr: {}", split_segment_data(sharded_input_top_left_indices, num_act_blocks));
+    //     std::vector<std::vector<uint16_t>> vector_temp = {{{2, 1, 0, 15, 18, 33, 2, 1, 36, 51, 54, 69}, {2, 1, 0, 15,
+    //     18, 33, 2, 1, 36, 51, 54, 69}, {2, 1, 0, 15, 18, 33, 2, 1, 36, 51, 54, 69}, {2, 1, 0, 15, 18, 33, 2, 1, 36,
+    //     51, 54, 69}, {2, 1, 0, 15, 18, 33, 2, 1, 36, 51, 54, 69}, {2, 1, 0, 15, 18, 33, 2, 1, 36, 51, 54, 69}, {2, 1,
+    //     0, 15, 18, 33, 2, 1, 36, 51, 54, 69}, {2, 1, 0, 15, 18, 33, 2, 1, 36, 51, 54, 69}, {2, 1, 0, 15, 18, 33, 2,
+    //     1, 36, 51, 54, 69}, {2, 1, 0, 15, 18, 33, 2, 1, 36, 51, 54, 69}, {2, 1, 0, 15, 18, 33, 2, 1, 36, 51, 54, 69},
+    //     {2, 1, 0, 15, 18, 33, 2, 1, 36, 51, 54, 69}, {2, 1, 0, 15, 18, 33, 2, 1, 36, 51, 54, 69}, {2, 1, 0, 15, 18,
+    //     33, 2, 1, 36, 51, 54, 69}, {2, 1, 0, 15, 18, 33, 2, 1, 36, 51, 54, 69}, {2, 1, 0, 15, 18, 33, 2, 1, 36, 51,
+    //     54, 69}, {2, 1, 0, 15, 18, 33, 2, 1, 36, 51, 54, 69}, {2, 1, 0, 15, 18, 33, 2, 1, 36, 51, 54, 69}, {2, 1, 0,
+    //     15, 18, 33, 2, 1, 36, 51, 54, 69}, {2, 1, 0, 15, 18, 33, 2, 1, 36, 51, 54, 69}, {2, 1, 0, 15, 18, 33, 2, 1,
+    //     36, 51, 54, 69}, {2, 1, 0, 15, 18, 33, 2, 1, 36, 51, 54, 69}, {2, 1, 0, 15, 18, 33, 2, 1, 36, 51, 54, 69},
+    //     {2, 1, 0, 15, 18, 33, 2, 1, 36, 51, 54, 69}, {2, 1, 0, 15, 18, 33, 2, 1, 36, 51, 54, 69}, {2, 1, 0, 15, 18,
+    //     33, 2, 1, 36, 51, 54, 69}, {2, 1, 0, 15, 18, 33, 2, 1, 36, 51, 54, 69}, {2, 1, 0, 15, 18, 33, 2, 1, 36, 51,
+    //     54, 69}, {2, 1, 0, 15, 18, 33, 2, 1, 36, 51, 54, 69}, {2, 1, 0, 15, 18, 33, 2, 1, 36, 51, 54, 69}, {2, 1, 0,
+    //     15, 18, 33, 2, 1, 36, 51, 54, 69}, {2, 1, 0, 15, 18, 33, 2, 1, 36, 51, 54, 69}, {2, 1, 0, 15, 18, 33, 2, 1,
+    //     36, 51, 54, 69}, {2, 1, 0, 15, 18, 33, 2, 1, 36, 51, 54, 69}, {2, 1, 0, 15, 18, 33, 2, 1, 36, 51, 54, 69},
+    //     {2, 1, 0, 15, 18, 33, 2, 1, 36, 51, 54, 69}, {2, 1, 0, 15, 18, 33, 2, 1, 36, 51, 54, 69}, {2, 1, 0, 15, 18,
+    //     33, 2, 1, 36, 51, 54, 69}, {2, 1, 0, 15, 18, 33, 2, 1, 36, 51, 54, 69}, {2, 1, 0, 15, 18, 33, 2, 1, 36, 51,
+    //     54, 69}, {2, 1, 0, 15, 18, 33, 2, 1, 36, 51, 54, 69}, {2, 1, 0, 15, 18, 33, 2, 1, 36, 51, 54, 69}, {2, 1, 0,
+    //     15, 18, 33, 2, 1, 36, 51, 54, 69}, {2, 1, 0, 15, 18, 33, 2, 1, 36, 51, 54, 69}, {2, 1, 0, 15, 18, 33, 2, 1,
+    //     36, 51, 54, 69}, {2, 1, 0, 15, 18, 33, 2, 1, 36, 51, 54, 69}, {2, 1, 0, 15, 18, 33, 2, 1, 36, 51, 54, 69},
+    //     {2, 1, 0, 15, 18, 33, 2, 1, 36, 51, 54, 69}, {2, 1, 0, 15, 18, 33, 2, 1, 36, 51, 54, 69}, {2, 1, 0, 15, 18,
+    //     33, 2, 1, 36, 51, 54, 69}, {2, 1, 0, 15, 18, 33, 2, 1, 36, 51, 54, 69}, {2, 1, 0, 15, 18, 33, 2, 1, 36, 51,
+    //     54, 69}, {2, 1, 0, 15, 18, 33, 2, 1, 36, 51, 54, 69}, {2, 1, 0, 15, 18, 33, 2, 1, 36, 51, 54, 69}, {2, 1, 0,
+    //     15, 18, 33, 2, 1, 36, 51, 54, 69}, {2, 1, 0, 15, 18, 33, 2, 1, 36, 51, 54, 69}, {2, 1, 0, 15, 18, 33, 2, 1,
+    //     36, 51, 54, 69}, {2, 1, 0, 15, 18, 33, 2, 1, 36, 51, 54, 69}, {2, 1, 0, 15, 18, 33, 2, 1, 36, 51, 54, 69},
+    //     {2, 1, 0, 15, 18, 33, 2, 1, 36, 51, 54, 69}, {2, 1, 0, 15, 18, 33, 2, 1, 36, 51, 54, 69}, {2, 1, 0, 15, 18,
+    //     33, 2, 1, 36, 51, 54, 69}, {2, 1, 0, 15, 18, 33, 2, 1, 36, 51, 54, 69}, {2, 1, 0, 15, 18, 33, 2, 1, 36, 51,
+    //     54, 69},
+    // }};
+    //     return vector_temp;
     return sharded_input_top_left_indices;
 }
 
