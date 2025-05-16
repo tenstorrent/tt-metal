@@ -512,7 +512,7 @@ void WriteToDeviceInterleavedContiguous(const Buffer& buffer, tt::stl::Span<cons
     uint32_t bank_index = 0;
     int data_index = 0;
     std::vector<uint32_t> page;
-    page.resize(page_size / sizeof(uint32_t));
+    page.resize(std::max<uint32_t>(page_size / sizeof(uint32_t), 1));
     for (int page_index = 0; page_index < num_pages; page_index++) {
         const DeviceAddr address = CalculateAddressDeviceInterleavedContiguous(buffer, bank_index, page_index);
         std::memcpy(page.data(), host_buffer.data() + data_index, page_size);
