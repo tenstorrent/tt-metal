@@ -11,6 +11,9 @@
 #include <random>
 #include "gmock/gmock.h"
 #include <tt-metalium/fabric.hpp>
+#include <tt-metalium/control_plane.hpp>
+#include "tt_metal/fabric/fabric_context.hpp"
+#include "impl/context/metal_context.hpp"
 #include "tt_metal/hw/inc/socket.h"
 #include "tt_metal/test_utils/stimulus.hpp"
 #include <tt-metalium/system_mesh.hpp>
@@ -555,8 +558,11 @@ void test_single_connection_multi_device_socket(
     auto recv_virtual_coord = md1->worker_core_from_logical_core(recv_logical_coord);
 
     auto l1_alignment = MetalContext::instance().hal().get_alignment(HalMemType::L1);
-    auto fabric_max_packet_size =
-        tt::tt_fabric::get_tt_fabric_config().channel_buffer_size_bytes - sizeof(tt::tt_fabric::PacketHeader);
+    auto fabric_max_packet_size = tt::tt_metal::MetalContext::instance()
+                                      .get_cluster()
+                                      .get_control_plane()
+                                      ->get_fabric_context()
+                                      .get_fabric_max_payload_size_bytes();
 
     // Create Socket between Sender and Receiver
     SocketConnection socket_connection = {
@@ -754,8 +760,11 @@ void test_single_connection_multi_device_socket_with_workers(
     auto output_virtual_coord = md1->worker_core_from_logical_core(output_logical_coord);
 
     auto l1_alignment = MetalContext::instance().hal().get_alignment(HalMemType::L1);
-    auto fabric_max_packet_size =
-        tt::tt_fabric::get_tt_fabric_config().channel_buffer_size_bytes - sizeof(tt::tt_fabric::PacketHeader);
+    auto fabric_max_packet_size = tt::tt_metal::MetalContext::instance()
+                                      .get_cluster()
+                                      .get_control_plane()
+                                      ->get_fabric_context()
+                                      .get_fabric_max_payload_size_bytes();
     // Create Socket between Sender and Receiver
     SocketConnection socket_connection = {
         .sender_core = {MeshCoordinate(0, 0), sender_logical_coord},
@@ -940,8 +949,11 @@ std::shared_ptr<Program> create_sender_program(
     chip_id_t sender_physical_device_id,
     chip_id_t recv_physical_device_id) {
     static constexpr auto packet_header_size_bytes = sizeof(tt::tt_fabric::PacketHeader);
-    auto fabric_max_packet_size =
-        tt::tt_fabric::get_tt_fabric_config().channel_buffer_size_bytes - sizeof(tt::tt_fabric::PacketHeader);
+    auto fabric_max_packet_size = tt::tt_metal::MetalContext::instance()
+                                      .get_cluster()
+                                      .get_control_plane()
+                                      ->get_fabric_context()
+                                      .get_fabric_max_payload_size_bytes();
     const auto reserved_packet_header_CB_index = tt::CB::c_in0;
     auto sender_program = std::make_shared<Program>();
     auto sender_kernel = CreateKernel(

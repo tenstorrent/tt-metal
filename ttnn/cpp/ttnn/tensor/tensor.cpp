@@ -94,24 +94,15 @@ void Tensor::init(Storage storage, TensorSpec tensor_spec, DistributedTensorConf
     tensor_attributes = std::make_shared<TensorAttributes>(
         std::move(storage), std::move(tensor_spec), std::move(distributed_tensor_config));
 
-    ZoneScoped;
-    std::visit(
-        [&](auto&& storage) {
-            using StorageType = std::decay_t<decltype(storage)>;
-            if constexpr (std::is_same_v<StorageType, DeviceStorage>) {
-                if (storage.mesh_buffer != nullptr) {
-                    mesh_device_ = storage.mesh_buffer->device();
-                }
-                workers = {storage.get_device()};
-            }
-        },
-        tensor_attributes->get_storage());
+    if (auto* device_storage = std::get_if<DeviceStorage>(&tensor_attributes->get_storage());
+        device_storage != nullptr && device_storage->mesh_buffer != nullptr) {
+        mesh_device_ = device_storage->mesh_buffer->device();
+    }
 }
 
 Tensor& Tensor::operator=(const Tensor& other) {
     this->tensor_id = other.tensor_id;
     if (this->tensor_attributes != other.tensor_attributes) {
-        this->workers = other.workers;
         this->tensor_attributes = other.tensor_attributes;
     }
     this->mesh_device_ = other.mesh_device_;
@@ -121,15 +112,13 @@ Tensor& Tensor::operator=(const Tensor& other) {
 Tensor& Tensor::operator=(Tensor&& other) noexcept {
     this->tensor_id = std::move(other.tensor_id);
     if (this->tensor_attributes != other.tensor_attributes) {
-        this->workers = std::move(other.workers);
         this->tensor_attributes = std::move(other.tensor_attributes);
     }
     this->mesh_device_ = std::move(other.mesh_device_);
     return *this;
 }
 
-Tensor::Tensor(const Tensor& other) :
-    tensor_id(other.tensor_id), workers(other.workers), tensor_attributes(other.tensor_attributes) {
+Tensor::Tensor(const Tensor& other) : tensor_id(other.tensor_id), tensor_attributes(other.tensor_attributes) {
     this->mesh_device_ = other.mesh_device_;
 }
 
@@ -151,11 +140,9 @@ void Tensor::deallocate_impl(bool force) {
     // GraphTracker::instance().track_function_start("Tensor::deallocate", *this, force);
     if (can_deallocate(tensor_attributes, force)) {
         std::visit(
-            // TODO: #21604 - Host-side buffers do not support "forced" deallocation.
-            // The underlying data can still be shared across tensors.
             tt::stl::overloaded{
-                [this](HostStorage& host_storage) { host_storage.buffer.deallocate(); },
-                [this](MultiDeviceHostStorage& host_storage) { host_storage.deallocate(); },
+                [](HostStorage&) {},
+                [](MultiDeviceHostStorage&) {},
                 [this, force, &can_deallocate](DeviceStorage& storage) {
                     if (can_deallocate(storage.mesh_buffer, force)) {
                         storage.mesh_buffer->deallocate();
@@ -168,34 +155,6 @@ void Tensor::deallocate_impl(bool force) {
             this->tensor_attributes->get_storage());
     }
     // GraphTracker::instance().track_function_end();
-}
-
-std::vector<IDevice*> Tensor::get_workers(bool blocking) const {
-    ZoneScoped;
-    // Initialize an empty worker vector (remains empty for host side storage)
-    std::vector<IDevice*> workers = {};
-
-    std::visit(
-        [this, blocking, &workers](auto&& storage) {
-            using StorageType = std::decay_t<decltype(storage)>;
-            // Assign workers only to device tensors
-            if constexpr (std::is_same_v<StorageType, DeviceStorage>) {
-                // Either explictly syncing or workers are pre-populated (this will happen for device tensors if using
-                // the correct APIs).
-                TT_FATAL(
-                    blocking or (this->workers.size() == 1),
-                    "Worker Handles for tensor must be populated or blocking = true must be set in get_workers().");
-                if (this->workers.size() != 1) {
-                    // Not populated - sync.
-                    workers = std::vector<IDevice*>{this->device()};
-                } else {
-                    // Already populated.
-                    workers = this->workers;
-                }
-            }
-        },
-        this->tensor_attributes->get_storage());
-    return workers;
 }
 
 DataType Tensor::get_dtype() const { return dtype(); }
@@ -493,7 +452,13 @@ Tensor Tensor::reshape(const ttnn::Shape& new_logical_shape, const ttnn::Shape& 
 
 bool Tensor::is_allocated() const {
     ZoneScoped;
-    auto output = std::visit([](auto&& storage) -> bool { return storage.is_allocated(); }, this->get_storage());
+    auto output = std::visit(
+        tt::stl::overloaded{
+            [](const DeviceStorage& storage) { return storage.is_allocated(); },
+            [](const HostStorage&) { return true; },
+            [](const MultiDeviceHostStorage&) { return true; },
+        },
+        this->get_storage());
     return output;
 }
 
@@ -697,9 +662,7 @@ Tensor allocate_tensor_on_mesh(const TensorSpec& tensor_spec, distributed::MeshD
 }
 
 void write_tensor(const Tensor& host_tensor, Tensor device_tensor, QueueId cq_id) {
-    // Top level wrapper to copy a host tensor to a preallocated device tensor
-    TT_ASSERT(device_tensor.workers.size(), "Workers must be specified for device_tensor in write_tensor");
-
+    TT_FATAL(device_tensor.storage_type() == StorageType::DEVICE, "Destination tensor must be on device");
     TT_FATAL(
         host_tensor.storage_type() == StorageType::HOST or host_tensor.storage_type() == StorageType::MULTI_DEVICE_HOST,
         "write_tensor only supports host_tensor to device_tensor data transfer");
@@ -710,41 +673,36 @@ void write_tensor(const Tensor& host_tensor, Tensor device_tensor, QueueId cq_id
         return;
     }
 
-    for (int worker_index = 0; worker_index < device_tensor.workers.size(); ++worker_index) {
-        TT_FATAL(
-            device_tensor.storage_type() == StorageType::DEVICE,
-            "write_tensor only supports host_tensor to device_tensor data transfer");
-        TT_FATAL(host_tensor.get_logical_shape() == device_tensor.get_logical_shape(), "Error");
-        TT_FATAL(host_tensor.get_dtype() == device_tensor.get_dtype(), "Error");
-        TT_FATAL(host_tensor.get_tensor_spec().page_config() == device_tensor.get_tensor_spec().page_config(), "Error");
-        std::visit(
-            tt::stl::overloaded{
-                [cq_id, &host_tensor, &device_tensor](const DeviceStorage& device_storage) {
-                    // Copying from host to a single device.
-                    const void* host_data = std::visit(
-                        tt::stl::overloaded{
-                            [](const HostStorage& host_storage) -> const void* {
-                                return host_storage.buffer.view_bytes().data();
-                            },
-                            [](const MultiDeviceHostStorage& host_storage) -> const void* {
-                                TT_ASSERT(
-                                    host_storage.num_buffers() == 1,
-                                    "Cannot copy multi-buffer host storage to a single device");
-                                auto buffer = host_storage.get_buffer(0);
-                                return buffer.view_bytes().data();
-                            },
-                            [](auto&&) -> const void* { TT_THROW("Unreachable"); },
+    TT_FATAL(host_tensor.get_logical_shape() == device_tensor.get_logical_shape(), "Error");
+    TT_FATAL(host_tensor.get_dtype() == device_tensor.get_dtype(), "Error");
+    TT_FATAL(host_tensor.get_tensor_spec().page_config() == device_tensor.get_tensor_spec().page_config(), "Error");
+    std::visit(
+        tt::stl::overloaded{
+            [cq_id, &host_tensor, &device_tensor](const DeviceStorage& device_storage) {
+                // Copying from host to a single device.
+                const void* host_data = std::visit(
+                    tt::stl::overloaded{
+                        [](const HostStorage& host_storage) -> const void* {
+                            return host_storage.buffer.view_bytes().data();
                         },
-                        host_tensor.get_storage());
-                    if (auto mesh_device = device_tensor.mesh_device()) {
-                        tt::tt_metal::memcpy(mesh_device->mesh_command_queue(*cq_id), device_tensor, host_data);
-                    } else {
-                        tt::tt_metal::memcpy(device_tensor.device()->command_queue(*cq_id), device_tensor, host_data);
-                    }
-                },
-                [](auto&& s) { TT_THROW("Unreachable"); }},
-            device_tensor.get_storage());
-    }
+                        [](const MultiDeviceHostStorage& host_storage) -> const void* {
+                            TT_ASSERT(
+                                host_storage.num_buffers() == 1,
+                                "Cannot copy multi-buffer host storage to a single device");
+                            auto buffer = host_storage.get_buffer(0);
+                            return buffer.view_bytes().data();
+                        },
+                        [](auto&&) -> const void* { TT_THROW("Unreachable"); },
+                    },
+                    host_tensor.get_storage());
+                if (auto mesh_device = device_tensor.mesh_device()) {
+                    tt::tt_metal::memcpy(mesh_device->mesh_command_queue(*cq_id), device_tensor, host_data);
+                } else {
+                    tt::tt_metal::memcpy(device_tensor.device()->command_queue(*cq_id), device_tensor, host_data);
+                }
+            },
+            [](auto&& s) { TT_THROW("Unreachable"); }},
+        device_tensor.get_storage());
 }
 
 std::vector<IDevice*> Tensor::active_physical_devices() const {

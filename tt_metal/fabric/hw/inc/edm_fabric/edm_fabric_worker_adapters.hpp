@@ -92,7 +92,7 @@ struct WorkerToFabricEdmSenderImpl {
             write_at_cmd_buf);
     }
 
-    void init(
+    FORCE_INLINE void init(
         bool connected_to_persistent_fabric,
         uint8_t direction,
         uint8_t edm_worker_x,

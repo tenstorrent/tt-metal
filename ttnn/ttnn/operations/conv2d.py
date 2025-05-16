@@ -26,6 +26,68 @@ def get_conv_output_dim(input, window, stride=1, pad=0, dilation=1):
 
 
 # TODO: remove this function after #21040 is fixed
+def prepare_conv_transpose2d_weights(*args, **kwargs):
+    """
+    TTNN ConvTranspose2D applies preprocessing to the weights tensors before performing the conv_tranpose2D operation, to convert the weights into a format suitable for the operation.
+    This can be applied just once to the weights and bias tensors, and the resulting tensors can be reused for multiple invocations of the same operation.
+    The exact format of the weights and bias tensors depends on the input tensor parameters and the sharding scheme.
+
+    :param ttnn.Tensor weight_tensor: the weight tensor in PyTorch Conv2d format.
+    :param ttnn.MemoryConfig input_memory_config: the memory configuration for the input tensor.
+    :param ttnn.Tensor input_layout: the layout of the input tensor.
+    :param ttnn.Tensor weights_format: the format of the weights tensor. Currently only supports IOHW. (in_channels, out_channels, kernel_height, kernel_width)
+    :param int: in_channels:  number of input channels.
+    :param int: out_channels:  number of output channels.
+    :param int: batch_size:  batch size.
+    :param int: input_height:  height of the input tensor.
+    :param int: input_width:  width of the input tensor.
+    :param tuple[int  , int] kernel_size: size of the convolving kernel.
+    :param tuple[int, int] stride: stride of the cross-correlation.
+    :param tuple[int, int] or tuple[int, int, int, int]) padding: zero-padding added to both sides of the input. [pad_height, pad_width] or [pad_top, pad_bottom, pad_left, pad_right].
+    :param tuple[int, int] dilation: spacing between kernel elements.
+    :param bool has_bias:  whether the convolution has a bias term.
+    :param int groups:  number of blocked connections from input channels to output channels.
+    :param ttnn.Conv2dConfig, None conv_config: configuration for convolution. Default: None
+    :param ttnn.DeviceComputeKernelConfig, None compute_config: configuration for compute kernel. Default: None
+
+    :return: The preprocessed weight tensor on device
+    :rtype: [ttnn.Tensor]: The preprocessed bias tensor on device
+    """
+    return ttnn._ttnn.operations.conv.prepare_conv_transpose2d_weights(*args, **kwargs)
+
+
+# TODO: remove this function after #21040 is fixed
+def prepare_conv_transpose2d_bias(*args, **kwargs):
+    """
+    TTNN ConvTranspose2D applies preprocessing to the bias tensors before performing the convolution operation, to convert the bias into a format suitable for the operation.
+    This can be applied just once to the weights and bias tensors, and the resulting tensors can be reused for multiple invocations of the same convolution operation.
+    The exact format of the weights and bias tensors depends on the input tensor parameters and the sharding scheme.
+
+    :param ttnn.Tensor bias: the bias tensor in PyTorch Conv2d format.
+    :param ttnn.MemoryConfig input_memory_config: the memory configuration for the input tensor.
+    :param ttnn.Tensor input_layout: the layout of the input tensor.
+    :param int: in_channels:  number of input channels.
+    :param int: out_channels:  number of output channels.
+    :param int: batch_size:  batch size.
+    :param int: input_height:  height of the input tensor.
+    :param int: input_width:  width of the input tensor.
+    :param tuple[int  , int] kernel_size: size of the convolving kernel.
+    :param tuple[int, int] stride: stride of the cross-correlation.
+    :param tuple[int, int] or tuple[int, int, int, int]) padding: zero-padding added to both sides of the input. [pad_height, pad_width] or [pad_top, pad_bottom, pad_left, pad_right].
+    :param tuple[int, int] dilation: spacing between kernel elements.
+    :param ttnn.IDevice device:  the device to use.
+    :param int groups:  number of blocked connections from input channels to output channels.
+    :param ttnn.Conv2dConfig, None conv_config: configuration for convolution. Default: None
+    :param ttnn.DeviceComputeKernelConfig, None compute_config: configuration for compute kernel. Default: None
+
+    :return: The preprocessed bias tensor on device
+    :rtype: [ttnn.Tensor]: The preprocessed bias tensor on device
+
+    """
+    return ttnn._ttnn.operations.conv.prepare_conv_transpose2d_bias(*args, **kwargs)
+
+
+# TODO: remove this function after #21040 is fixed
 def prepare_conv_weights(*args, **kwargs):
     """
     TTNN Conv2D applies preprocessing to the weights tensors before performing the convolution operation, to convert the weights into a format suitable for the operation.
@@ -66,13 +128,12 @@ def prepare_conv_bias(*args, **kwargs):
     :param ttnn.Tensor bias: the bias tensor in PyTorch Conv2d format.
     :param ttnn.MemoryConfig input_memory_config: the memory configuration for the input tensor.
     :param ttnn.Tensor input_layout: the layout of the input tensor.
-    :param ttnn.Tensor weights_format: the format of the weights tensor. Currently only supports OIHW. (out_channels, in_channels, kernel_height, kernel_width)
-    :param int in_channels:  number of input channels.
-    :param int out_channels:  number of output channels.
-    :param int batch_size:  batch size.
-    :param int input_height:  height of the input tensor.
-    :param int input_width:  width of the input tensor.
-    :param tuple[int, int] kernel_size: size of the convolving kernel.
+    :param int: in_channels:  number of input channels.
+    :param int: out_channels:  number of output channels.
+    :param int: batch_size:  batch size.
+    :param int: input_height:  height of the input tensor.
+    :param int: input_width:  width of the input tensor.
+    :param tuple[int  , int] kernel_size: size of the convolving kernel.
     :param tuple[int, int] stride: stride of the cross-correlation.
     :param tuple[int, int] or tuple[int, int, int, int]) padding: zero-padding added to both sides of the input. [pad_height, pad_width] or [pad_top, pad_bottom, pad_left, pad_right].
     :param tuple[int, int] dilation: spacing between kernel elements.
