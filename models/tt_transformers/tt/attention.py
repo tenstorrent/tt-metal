@@ -464,7 +464,6 @@ class Attention(LightweightModule):
                 return safe_ttnn_concat(result_chunks, dim=dim, max_chunk_size=max_chunk_size)
 
             block_size = self.paged_attention_config.block_size
-            mesh_device = self.mesh_device
             keys_shards = ttnn.get_device_tensors(keys)
             page_table_val = ttnn.to_torch(ttnn.get_device_tensors(page_table)[0])[0]
             current_pos_val = ttnn.to_torch(ttnn.get_device_tensors(current_pos)[0])[0]
@@ -472,9 +471,8 @@ class Attention(LightweightModule):
             new_keys_shards = []
 
             cur_page = int(current_pos_val.item() // block_size)
-            page_table_val = ttnn.to_torch(ttnn.get_device_tensors(page_table)[0])[0]
 
-            N = 513
+            N = 18
             start_vpage = max(0, cur_page - N + 1)
             end_vpage = cur_page + 1
             virtual_pages = list(range(start_vpage, end_vpage))
@@ -493,7 +491,7 @@ class Attention(LightweightModule):
                         slice_end=[block_id + 1, shard.shape[1], shard.shape[2], shard.shape[3]],
                     )
 
-                    global_block_index = shard_index * shard.shape[0] + block_id
+                    global_block_index = block_id
 
                     if global_block_index in high_precision_block_ids:
                         block_bfp8 = ttnn.typecast(block, dtype=ttnn.bfloat8_b)
