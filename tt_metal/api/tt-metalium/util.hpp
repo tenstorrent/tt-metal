@@ -39,7 +39,6 @@ inline DeviceAddr SizeBytesPerBank(
 
 inline NOC GetPreferredNOCForDRAMRead(ARCH arch) {
     switch (arch) {
-        case ARCH::GRAYSKULL: return NOC::NOC_1;
         case ARCH::WORMHOLE_B0:
         default: return NOC::NOC_0;
     }
@@ -47,7 +46,6 @@ inline NOC GetPreferredNOCForDRAMRead(ARCH arch) {
 
 inline NOC GetPreferredNOCForDRAMWrite(ARCH arch) {
     switch (arch) {
-        case ARCH::GRAYSKULL: return NOC::NOC_0;
         case ARCH::WORMHOLE_B0:
         default: return NOC::NOC_1;
     }

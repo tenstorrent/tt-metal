@@ -226,7 +226,6 @@ ALWI void abs_tile(uint32_t idst) { MATH((llk_math_eltwise_unary_sfpu_abs<APPROX
  */
 ALWI void abs_tile_init() { MATH((llk_math_eltwise_unary_sfpu_abs_init<APPROX>())); }
 
-#ifndef ARCH_GRAYSKULL
 // clang-format off
 /**
  * Performs element-wise computation of absolute value on each element of a tile
@@ -244,7 +243,6 @@ ALWI void abs_tile_init() { MATH((llk_math_eltwise_unary_sfpu_abs_init<APPROX>()
  */
  // clang-format on
 ALWI void abs_tile_int32(uint32_t idst) { MATH((llk_math_eltwise_unary_sfpu_abs_int32<APPROX>(idst))); }
-#endif
 
 // clang-format off
 /**

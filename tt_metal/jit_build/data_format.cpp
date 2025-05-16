@@ -225,8 +225,6 @@ DataFormat get_single_pack_src_format(
     } else if (data_format == DataFormat::Fp8_e4m3) {
         pack_src_format = DataFormat::Float16;
     } else if (fp32_dest_acc_en) {
-        TT_FATAL(arch != tt::ARCH::GRAYSKULL, "Dest Fp32 mode is not supported for arch grayskull");
-
         if (is_bfp_format(data_format)) {
             pack_src_format = bfp8_pack_precise
                                   ? DataFormat::Float32
@@ -248,7 +246,6 @@ DataFormat get_single_pack_src_format(
         }
     } else if (int_fpu_en) {
         TT_THROW("Integer math is not supported");
-        // TT_FATAL(arch != tt::ARCH::GRAYSKULL, "Integer math is not supported for arch grayskull");
         // If output is integer, then pack_src_format is integer as conversion in packer is not supported
         // If output if float, then pack_src_format is Float32 as sfpu outut if Float32
         if (tt::is_integer_format(data_format)) {
@@ -284,13 +281,7 @@ DataFormat get_single_pack_src_format(
             pack_src_format = data_format;
         }
     } else {
-        // Inputs and outputs are different exponent widths, gs/wha0 only support this mode for fp16
-        if (arch != tt::ARCH::WORMHOLE_B0 && arch != tt::ARCH::BLACKHOLE) {
-            TT_FATAL(
-                (data_format == DataFormat::Float16_b) || (data_format == DataFormat::Float16),
-                "Exponent width conversion is only supported for float16 formats for grayskull/wormhole_a0");
-        }
-
+        // Inputs and outputs are different exponent widths
         // Pack_src_format is the same data format as output data format, but with same exponent width as input data
         // format A/B format mixing only occurs at packer level
         DataFormat pack_src_format_tmp = data_format;
