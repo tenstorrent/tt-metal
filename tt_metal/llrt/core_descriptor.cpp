@@ -45,20 +45,18 @@ inline std::string get_core_descriptor_file(
     bool targeting_sim = tt_metal::MetalContext::instance().rtoptions().get_simulator_enabled();
     if (targeting_sim) {
         switch (arch) {
-            case tt::ARCH::Invalid:
+            default:
                 throw std::runtime_error(
                     "Invalid arch not supported");  // will be overwritten in tt_global_state constructor
-            case tt::ARCH::GRAYSKULL: return core_desc_dir + "grayskull_versim_1x1_arch.yaml";
             case tt::ARCH::WORMHOLE_B0: return core_desc_dir + "wormhole_b0_versim_1x1_arch.yaml";
             case tt::ARCH::BLACKHOLE: return core_desc_dir + "blackhole_simulation_1x2_arch.yaml";
             case tt::ARCH::QUASAR: TT_THROW("No core descriptor for Quasar"); break;
         };
     } else {
         switch (arch) {
-            case tt::ARCH::Invalid:
+            default:
                 throw std::runtime_error(
                     "Invalid arch not supported");  // will be overwritten in tt_global_state constructor
-            case tt::ARCH::GRAYSKULL: return core_desc_dir + "grayskull_120_arch.yaml";
             case tt::ARCH::WORMHOLE_B0:
                 return core_desc_dir + (dispatch_core_config.get_core_type() == CoreType::ETH
                                             ? "wormhole_b0_80_arch_eth_dispatch.yaml"
@@ -91,9 +89,6 @@ const core_descriptor_t& get_core_descriptor_config(
     if (num_harvested_on_axis > 2) {
         TT_THROW(
             "At most two rows or cols can be harvested, but detected {} along harvested axis", num_harvested_on_axis);
-    }
-    if (num_harvested_on_axis == 1 and arch == tt::ARCH::GRAYSKULL) {
-        TT_THROW("One row harvested Grayskull is not supported");
     }
 
     std::string product_name = get_product_name(arch, num_harvested_on_axis);

@@ -274,9 +274,7 @@ void Kernel::validate_runtime_args_size(
     size_t num_unique_rt_args, size_t num_common_rt_args, const CoreCoord &logical_core) {
     uint32_t total_rt_args = (num_unique_rt_args + num_common_rt_args);
     auto arch = MetalContext::instance().hal().get_arch();
-    uint32_t idle_eth_max_runtime_args =
-        (arch == tt::ARCH::GRAYSKULL) ? 0
-                                      : MetalContext::instance().hal().get_dev_size(
+    uint32_t idle_eth_max_runtime_args = MetalContext::instance().hal().get_dev_size(
                                             HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::KERNEL_CONFIG) /
                                             sizeof(uint32_t);
     uint32_t max_rt_args = is_idle_eth() ? idle_eth_max_runtime_args : max_runtime_args;
@@ -454,7 +452,7 @@ void DataMovementKernel::read_binaries(IDevice* device) {
         device->build_id(), tensix_core_type, dm_class_idx, riscv_id);
     // TODO: from HAL
     auto load_type =
-        (riscv_id == 1 && (device->arch() == tt::ARCH::GRAYSKULL || device->arch() == tt::ARCH::WORMHOLE_B0))
+        (riscv_id == 1) && (device->arch() == tt::ARCH::WORMHOLE_B0)
             ? ll_api::memory::Loading::CONTIGUOUS
             : ll_api::memory::Loading::CONTIGUOUS_XIP;
     ll_api::memory const& binary_mem = llrt::get_risc_binary(

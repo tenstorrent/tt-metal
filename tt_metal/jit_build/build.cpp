@@ -52,7 +52,6 @@ namespace tt::tt_metal {
 
 static std::string get_string_aliased_arch_lowercase(tt::ARCH arch) {
     switch (arch) {
-        case tt::ARCH::GRAYSKULL: return "grayskull"; break;
         case tt::ARCH::WORMHOLE_B0: return "wormhole"; break;
         case tt::ARCH::BLACKHOLE: return "blackhole"; break;
         default: return "invalid"; break;
@@ -159,7 +158,6 @@ void JitBuildEnv::init(
     // Flags
     string common_flags;
     switch (arch) {
-        case ARCH::GRAYSKULL: common_flags = "-mcpu=tt-gs "; break;
         case ARCH::WORMHOLE_B0: common_flags = "-mcpu=tt-wh "; break;
         case ARCH::BLACKHOLE: common_flags = "-mcpu=tt-bh -fno-rvtt-sfpu-replay "; break;
         default: TT_ASSERT(false, "Invalid arch"); break;
@@ -181,7 +179,6 @@ void JitBuildEnv::init(
 
     // Defines
     switch (arch) {
-        case ARCH::GRAYSKULL: this->defines_ = "-DARCH_GRAYSKULL "; break;
         case ARCH::WORMHOLE_B0: this->defines_ = "-DARCH_WORMHOLE "; break;
         case ARCH::BLACKHOLE: this->defines_ = "-DARCH_BLACKHOLE "; break;
         default: break;
