@@ -31,6 +31,7 @@ struct prefetch_static_config_t {
     std::optional<uint32_t> scratch_db_base;
     std::optional<uint32_t> scratch_db_size;
     std::optional<uint32_t> downstream_sync_sem_id;
+    std::optional<uint32_t> ringbuffer_size;
 
     // Used for prefetch_d
     std::optional<uint32_t> cmddat_q_pages;

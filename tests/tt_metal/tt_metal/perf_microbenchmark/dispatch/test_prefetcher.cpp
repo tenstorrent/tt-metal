@@ -2066,6 +2066,7 @@ void configure_for_single_chip(
         0,
         0,
         0,
+        scratch_db_size_g,
     };
 
     constexpr NOC my_noc_index = NOC::NOC_0;
