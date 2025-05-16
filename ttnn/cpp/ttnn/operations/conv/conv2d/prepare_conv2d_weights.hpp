@@ -67,7 +67,7 @@ template <typename T>
 ttnn::Tensor prepare_conv_weights(
     const ttnn::Tensor& weight_tensor,
     const ttnn::MemoryConfig& input_memory_config,
-    Layout input_tensor_layout,
+    Layout input_layout,
     const std::string& weights_format,
     uint32_t in_channels,
     uint32_t out_channels,
@@ -89,7 +89,7 @@ template <typename T>
 ttnn::Tensor prepare_conv_bias(
     const ttnn::Tensor& bias_tensor,
     const ttnn::MemoryConfig& input_memory_config,
-    Layout input_tensor_layout,
+    Layout input_layout,
     uint32_t in_channels,
     uint32_t out_channels,
     uint32_t batch_size,

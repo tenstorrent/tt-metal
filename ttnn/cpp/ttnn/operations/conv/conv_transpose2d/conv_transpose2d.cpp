@@ -11,7 +11,7 @@
 #include "ttnn/operations/matmul/matmul.hpp"
 #include "ttnn/operations/conv/conv_transpose2d/conv_transpose2d.hpp"
 #include "ttnn/operations/conv/conv2d/conv2d_utils.hpp"
-#include "ttnn/operations/conv/conv2d/prepare_conv2d_weights.hpp"
+#include "ttnn/operations/conv/conv_transpose2d/prepare_conv_transpose2d_weights.hpp"
 #include "ttnn/operations/sliding_window/halo/halo.hpp"
 
 namespace ttnn {
@@ -22,85 +22,6 @@ using sliding_window::ParallelConfig;
 using sliding_window::SlidingWindowConfig;
 
 namespace conv_transpose2d {
-
-template <typename T>
-Tensor _transform_weights_for_conv_transpose2d(const Tensor& conv_weight_tensor, bool mirror_kernel = true) {
-    auto in_w_shape = conv_weight_tensor.get_padded_shape();
-    auto dtype = conv_weight_tensor.dtype();
-    // in_w_shape = {in_channels, out_channels, kernel_height, kernel_width}
-    // out_w_shape = {out_channels, in_channels, kernel_height, kernel_width}
-    // Flip kernel_height and kernel_width
-    auto compute = [&in_w_shape, &dtype, mirror_kernel](const auto& input_buffer) {
-        auto in_channels = in_w_shape[0];
-        auto out_channels = in_w_shape[1];
-        auto kernel_height = in_w_shape[2];
-        auto kernel_width = in_w_shape[3];
-        ttnn::Shape output_shape{out_channels, in_channels, kernel_height, kernel_width};
-        auto owned_buffer = std::vector<T>(output_shape.volume());
-
-        for (auto out_channels_index = 0; out_channels_index < out_channels; out_channels_index++) {
-            auto output_weight_out_channel_base_idx = out_channels_index * in_channels * kernel_height * kernel_width;
-            auto input_weight_out_channel_base_idx = out_channels_index * kernel_height * kernel_width;
-            for (auto in_channels_index = 0; in_channels_index < in_channels; in_channels_index++) {
-                auto output_weight_in_channel_base_idx = in_channels_index * kernel_height * kernel_width;
-                auto input_weight_in_channel_base_idx = in_channels_index * kernel_height * kernel_width * out_channels;
-
-                for (auto in_kernel_height_index = 0; in_kernel_height_index < kernel_height;
-                     in_kernel_height_index++) {
-                    auto out_buffer_kh_index =
-                        mirror_kernel ? kernel_height - in_kernel_height_index - 1 : in_kernel_height_index;
-                    auto in_height_offset = in_kernel_height_index * kernel_width;
-                    auto out_height_offset = out_buffer_kh_index * kernel_width;
-                    for (auto in_kernel_width_index = 0; in_kernel_width_index < kernel_width;
-                         in_kernel_width_index++) {
-                        auto out_buffer_kw_index =
-                            mirror_kernel ? kernel_width - in_kernel_width_index - 1 : in_kernel_width_index;
-
-                        auto in_idx = input_weight_out_channel_base_idx + input_weight_in_channel_base_idx +
-                                      in_height_offset + in_kernel_width_index;
-                        auto out_idx = output_weight_out_channel_base_idx + output_weight_in_channel_base_idx +
-                                       out_height_offset + out_buffer_kw_index;
-
-                        owned_buffer[out_idx] = input_buffer[in_idx];
-                    }
-                }
-            }
-        }
-        return Tensor(tt::tt_metal::HostBuffer(std::move(owned_buffer)), output_shape, dtype, Layout::ROW_MAJOR);
-    };
-    auto convert_tensor = [&compute](const auto& conv_weight_tensor) {
-        return std::visit(
-            [&compute](auto&& storage) -> Tensor {
-                using StorageType = std::decay_t<decltype(storage)>;
-                if constexpr (std::is_same_v<StorageType, tt::tt_metal::HostStorage>) {
-                    return compute(storage.buffer.template view_as<T>());
-                } else {
-                    TT_THROW("Unsupported storage type");
-                }
-            },
-            conv_weight_tensor.get_storage());
-    };
-    TT_FATAL(
-        !is_device_tensor(conv_weight_tensor), "transform_weights_for_conv_transpose2d only supports host tensors");
-
-    // TODO: #15840 - Treat multi-device host vs owned/borrowed tensors uniformly.
-    return tt::tt_metal::is_multi_device_host_tensor(conv_weight_tensor) ? transform(conv_weight_tensor, convert_tensor)
-                                                                         : convert_tensor(conv_weight_tensor);
-}
-
-Tensor transform_weights_for_conv_transpose2d(const Tensor& conv_weight_tensor, bool mirror_kernel) {
-    switch (conv_weight_tensor.get_dtype()) {
-        case DataType::BFLOAT16:
-            return _transform_weights_for_conv_transpose2d<::bfloat16>(conv_weight_tensor, mirror_kernel);
-        case DataType::FLOAT32:
-            return _transform_weights_for_conv_transpose2d<float>(conv_weight_tensor, mirror_kernel);
-        case DataType::UINT32:
-            return _transform_weights_for_conv_transpose2d<uint32_t>(conv_weight_tensor, mirror_kernel);
-        default:
-            TT_THROW(
-                "Unsupported data type for transform_weights_for_conv_transpose2d", conv_weight_tensor.get_dtype());
-    }
-};
 
 template <typename T>
 Result conv_transpose2d(
