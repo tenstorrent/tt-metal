@@ -35,8 +35,8 @@ class TtVaeDecoderParameters:
         device: ttnn.Device,
     ) -> TtVaeDecoderParameters:
         return cls(
-            conv_in=TtConv2dParameters.from_torch(substate(state, "conv_in"), dtype=dtype),
-            conv_out=TtConv2dParameters.from_torch(substate(state, "conv_out"), dtype=dtype),
+            conv_in=TtConv2dParameters.from_torch(substate(state, "conv_in"), dtype=dtype, device=device),
+            conv_out=TtConv2dParameters.from_torch(substate(state, "conv_out"), dtype=dtype, device=device),
             conv_norm_out=TtGroupNormParameters.from_torch(
                 substate(state, "conv_norm_out"), dtype=dtype, device=device
             ),
@@ -93,7 +93,7 @@ class TtUpDecoderBlock2DParameters:
                 TtResnetBlock2DParameters.from_torch(s, dtype=dtype, device=device)
                 for s in indexed_substates(state, "resnets")
             ],
-            upsampler=TtConv2dParameters.from_torch(substate(state, "upsamplers.0.conv"), dtype=dtype)
+            upsampler=TtConv2dParameters.from_torch(substate(state, "upsamplers.0.conv"), dtype=dtype, device=device)
             if has_substate(state, "upsamplers.0.conv")
             else None,
         )
@@ -189,9 +189,9 @@ class TtResnetBlock2DParameters:
         return cls(
             norm1=TtGroupNormParameters.from_torch(substate(state, "norm1"), dtype=dtype, device=device),
             norm2=TtGroupNormParameters.from_torch(substate(state, "norm2"), dtype=dtype, device=device),
-            conv1=TtConv2dParameters.from_torch(substate(state, "conv1"), dtype=dtype),
-            conv2=TtConv2dParameters.from_torch(substate(state, "conv2"), dtype=dtype),
-            conv_shortcut=TtConv2dParameters.from_torch(substate(state, "conv_shortcut"), dtype=dtype)
+            conv1=TtConv2dParameters.from_torch(substate(state, "conv1"), dtype=dtype, device=device),
+            conv2=TtConv2dParameters.from_torch(substate(state, "conv2"), dtype=dtype, device=device),
+            conv_shortcut=TtConv2dParameters.from_torch(substate(state, "conv_shortcut"), dtype=dtype, device=device)
             if has_substate(state, "conv_shortcut")
             else None,
         )
