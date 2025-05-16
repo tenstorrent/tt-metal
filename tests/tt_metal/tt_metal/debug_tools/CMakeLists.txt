@@ -18,6 +18,7 @@ set(UNIT_TESTS_DEBUG_TOOLS_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/watcher/test_noc_sanitize.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/watcher/test_pause.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/watcher/test_ringbuf.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/watcher/test_stack_usage.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/watcher/test_waypoint.cpp
 )
 
