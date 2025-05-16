@@ -2,8 +2,9 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import ttnn
 import math
+
+import ttnn
 from models.experimental.yolo_common.yolo_utils import determine_num_cores, get_core_grid_from_num_cores
 
 
@@ -21,7 +22,7 @@ def interleaved_to_sharded(x):
     return ttnn.reshard(x, shardspec) if x.is_sharded() else ttnn.interleaved_to_sharded(x, shardspec)
 
 
-class TtYolov10Conv2D:
+class TtYolov10_Conv2D:
     def __init__(
         self,
         conv,
@@ -152,7 +153,7 @@ class Conv:
         self.enable_act = enable_act
         if not self.enable_identity:
             activation = "silu"
-        self.conv = TtYolov10Conv2D(
+        self.conv = TtYolov10_Conv2D(
             parameter.conv,
             conv_pt.conv,
             device=device,
