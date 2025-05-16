@@ -1595,7 +1595,7 @@ public:
             index_bitmask |= 1 << sub_device_index;
             device_command_sequence.add_notify_dispatch_s_go_signal_cmd(
                 program_transfer_info.num_active_cores > 0, index_bitmask);
-            dispatcher_for_go_signal = DispatcherSelect::DISPATCH_SUBORDINATE;
+            dispatcher_for_go_signal = DispatcherSelect::DISPATCH_SLAVE;
         } else {
             // Wait Noc Write Barrier, wait for binaries/configs and launch_msg to be written to worker cores
             if (program_transfer_info.num_active_cores > 0) {
@@ -2105,7 +2105,7 @@ void reset_worker_dispatch_state_on_device(
                 index_bitmask |= 1 << i;
             }
             command_sequence.add_notify_dispatch_s_go_signal_cmd(false, index_bitmask);
-            dispatcher_for_go_signal = DispatcherSelect::DISPATCH_SUBORDINATE;
+            dispatcher_for_go_signal = DispatcherSelect::DISPATCH_SLAVE;
         }
         go_msg_t reset_launch_message_read_ptr_go_signal;
         reset_launch_message_read_ptr_go_signal.signal = RUN_MSG_RESET_READ_PTR;
@@ -2166,7 +2166,7 @@ void set_num_worker_sems_on_dispatch(
     const uint32_t cmd_sequence_sizeB = calculator.write_offset_bytes();
     void* cmd_region = manager.issue_queue_reserve(cmd_sequence_sizeB, cq_id);
     HugepageDeviceCommand command_sequence(cmd_region, cmd_sequence_sizeB);
-    command_sequence.add_dispatch_set_num_worker_sems(num_worker_sems, DispatcherSelect::DISPATCH_SUBORDINATE);
+    command_sequence.add_dispatch_set_num_worker_sems(num_worker_sems, DispatcherSelect::DISPATCH_SLAVE);
     manager.issue_queue_push_back(cmd_sequence_sizeB, cq_id);
     manager.fetch_queue_reserve_back(cq_id);
     manager.fetch_queue_write(cmd_sequence_sizeB, cq_id);
@@ -2183,7 +2183,7 @@ void set_go_signal_noc_data_on_dispatch(
     void* cmd_region = manager.issue_queue_reserve(cmd_sequence_sizeB, cq_id);
     HugepageDeviceCommand command_sequence(cmd_region, cmd_sequence_sizeB);
     DispatcherSelect dispatcher_for_go_signal =
-        MetalContext::instance().get_dispatch_query_manager().dispatch_s_enabled() ? DispatcherSelect::DISPATCH_SUBORDINATE
+        MetalContext::instance().get_dispatch_query_manager().dispatch_s_enabled() ? DispatcherSelect::DISPATCH_SLAVE
                                                                                    : DispatcherSelect::DISPATCH_MASTER;
     command_sequence.add_dispatch_set_go_signal_noc_data(go_signal_noc_data, dispatcher_for_go_signal);
     manager.issue_queue_push_back(cmd_sequence_sizeB, cq_id);

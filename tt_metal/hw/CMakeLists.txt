@@ -7,7 +7,7 @@ set(PROCS
     brisc
     ncrisc
     ierisc
-    subordinate_ierisc
+    slave_ierisc
     trisc=0
     trisc=1
     trisc=2
