@@ -31,7 +31,6 @@ static Tensor pool2d_invoke(
     std::array<uint32_t, 2> padding,
     std::optional<std::array<uint32_t, 2>> dilation = std::nullopt,
     bool ceil_mode = false,
-    bool count_include_pad = true,
     std::optional<int32_t> divisor_override = std::nullopt,
     const std::optional<const MemoryConfig>& memory_config = std::nullopt,
     const std::optional<const TensorMemoryLayout> applied_shard_scheme = std::nullopt,
@@ -162,7 +161,6 @@ static Tensor pool2d_invoke(
         pool_type,
         DataType::BFLOAT16,  // input_tensor.dtype(), // currently only bfp16 output is supported
         out_memory_config,
-        count_include_pad,
         divisor_override);
 
     if (memory_config.has_value() && memory_config.value() != out_memory_config) {
@@ -200,7 +198,6 @@ Tensor MaxPool2DOp::invoke(
         padding,
         dilation,
         ceil_mode,
-        true,  // count_include_pad
         std::nullopt,  // divisor_override
         memory_config,
         applied_shard_scheme,
@@ -218,7 +215,6 @@ Tensor AvgPool2DOp::invoke(
     std::array<uint32_t, 2> stride,
     std::array<uint32_t, 2> padding,
     bool ceil_mode,
-    bool count_include_pad,
     std::optional<int32_t> divisor_override,
     const std::optional<const MemoryConfig>& memory_config,
     const std::optional<const TensorMemoryLayout> applied_shard_scheme,
@@ -236,7 +232,6 @@ Tensor AvgPool2DOp::invoke(
         padding,
         std::nullopt, // dilation
         ceil_mode,
-        count_include_pad,
         divisor_override,
         memory_config,
         applied_shard_scheme,
