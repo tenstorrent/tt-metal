@@ -45,7 +45,6 @@ constexpr uint32_t to_sender_4_pkts_completed_id = 11;
 constexpr uint32_t receiver_channel_0_free_slots_stream_id = 12;
 constexpr uint32_t receiver_channel_1_free_slots_stream_id = 14;
 
-// sender_channel_0_slots_written_stream_id defined in edm_fabric_worker_adapters.hpp
 constexpr uint32_t sender_channel_1_free_slots_stream_id = 17;
 constexpr uint32_t sender_channel_2_free_slots_stream_id = 18;
 

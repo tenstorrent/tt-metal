@@ -158,28 +158,16 @@ struct ChannelCounter {
     uint32_t counter = 0;
     BufferIndex index{0};
 
-    FORCE_INLINE BufferIndex get_buffer_index() const {
-        // if constexpr (IS_POW2_NUM_BUFFERS) {
-        //     return BufferIndex{static_cast<uint8_t>(counter & (NUM_BUFFERS - 1))};
-        // } else {
-            return index;
-        // }
-    }
+    FORCE_INLINE BufferIndex get_buffer_index() const { return index; }
 
     FORCE_INLINE void increment() {
         counter++;
-        // if constexpr (IS_POW2_NUM_BUFFERS) {
-            index = BufferIndex{wrap_increment<NUM_BUFFERS>(index.get())};
-        // } else {
-        //     index = BufferIndex{wrap_increment(index.get(), )};
-        // }
+        index = BufferIndex{wrap_increment<NUM_BUFFERS>(index.get())};
     }
 
     FORCE_INLINE void increment_n(uint32_t n) {
         counter += n;
-        // if constexpr (!IS_POW2_NUM_BUFFERS) {
-            index = BufferIndex{wrap_increment_n<NUM_BUFFERS>(index.get(), n)};
-        // }
+        index = BufferIndex{wrap_increment_n<NUM_BUFFERS>(index.get(), n)};
     }
 
     FORCE_INLINE bool is_caught_up_to(const ChannelCounter& leading_counter) const {

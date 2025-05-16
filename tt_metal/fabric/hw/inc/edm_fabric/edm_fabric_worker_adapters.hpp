@@ -297,7 +297,6 @@ struct WorkerToFabricEdmSenderImpl {
     void open_start() {
         const auto dest_noc_addr_coord_only = get_noc_addr(this->edm_noc_x, this->edm_noc_y, 0);
 
-        /// DOUBLE CHECK THE READ BACK I RTHINK I AM MISSING CONN INFO READ BACK????
         tt::tt_fabric::EDMChannelWorkerLocationInfo* worker_location_info_ptr =
             reinterpret_cast<tt::tt_fabric::EDMChannelWorkerLocationInfo*>(edm_worker_location_info_addr);
         if constexpr (IS_WORKER) {
@@ -357,7 +356,6 @@ struct WorkerToFabricEdmSenderImpl {
             dest_noc_addr_coord_only | reinterpret_cast<uint64_t>(&(worker_location_info_ptr->worker_xy));
         noc_inline_dw_write<false, posted>(
             connection_worker_xy_address, WorkerXY(my_x[0], my_y[0]).to_uint32(), 0xf, WORKER_HANDSHAKE_NOC);
-        // WAYPOINT("FOSD");
     }
 
     // Advanced usage API:
@@ -422,7 +420,6 @@ struct WorkerToFabricEdmSenderImpl {
         }
         const uint64_t dest_edm_connection_state_addr = dest_noc_addr_coord_only | edm_connection_handshake_l1_addr;
         noc_inline_dw_write(dest_edm_connection_state_addr, close_connection_request_value);
-        // WAYPOINT("FCSD");
     }
 
     // Advanced usage API:
@@ -525,7 +522,8 @@ private:
         } else {
             if (IS_WORKER) {
                 buffer_slot_write_counter.counter++;
-                this->buffer_slot_index = BufferIndex{wrap_increment(this->buffer_slot_index.get(), this->num_buffers_per_channel)};;//buffer_slot_write_counter.get_buffer_index();
+                this->buffer_slot_index =
+                    BufferIndex{wrap_increment(this->buffer_slot_index.get(), this->num_buffers_per_channel)};
                 this->edm_buffer_addr =
                     this->edm_buffer_base_addr + (this->get_buffer_slot_index() * this->buffer_size_bytes);
             } else {

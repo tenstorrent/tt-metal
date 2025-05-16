@@ -346,7 +346,6 @@ FORCE_INLINE void send_next_data(
     //             channel sync
 
     uint32_t src_addr = sender_buffer_channel.get_cached_next_buffer_slot_addr();
-    // uint32_t src_addr = sender_buffer_channel.get_buffer_address(local_sender_write_counter.get_buffer_index());
 
     volatile auto* pkt_header = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(src_addr);
     ASSERT(tt::tt_fabric::is_valid(*const_cast<PACKET_HEADER_TYPE*>(pkt_header)));
@@ -646,30 +645,6 @@ FORCE_INLINE void establish_worker_connection(
     // This should always be a value >= 0
     // TODO: Should we skip if 0?
     ASSERT(get_ptr_val(stream_id) <= static_cast<int32_t>(SENDER_NUM_BUFFERS));
-    // ASSERT(
-    //     local_sender_channel_worker_interface.local_write_counter.counter >=
-    //     local_sender_channel_worker_interface.worker_location_info_ptr->edm_the_real_local_read_counter);
-    // WATCHER_RING_BUFFER_PUSH(local_sender_channel_worker_interface.local_write_counter.counter);
-    // WATCHER_RING_BUFFER_PUSH(local_sender_channel_worker_interface.worker_location_info_ptr->edm_the_real_local_read_counter);
-    // ASSERT(
-    //     local_sender_channel_worker_interface.local_write_counter.counter -
-    //         local_sender_channel_worker_interface.worker_location_info_ptr->edm_the_real_local_read_counter <=
-    //     SENDER_NUM_BUFFERS);
-
-    DPRINT << "establish connection\n";
-    DPRINT << "local_write_counter.counter="
-           << (uint32_t)local_sender_channel_worker_interface.local_write_counter.counter << "\n";
-    DPRINT << "edm_the_real_local_read_counter="
-           << (uint32_t)local_sender_channel_worker_interface.worker_location_info_ptr->edm_the_real_local_read_counter
-           << "\n";
-    DPRINT << "edm_read_counter="
-           << (uint32_t)local_sender_channel_worker_interface.worker_location_info_ptr->edm_read_counter
-           << "\n";
-    DPRINT
-        << "addr "
-        << (uint32_t)(&local_sender_channel_worker_interface.worker_location_info_ptr->edm_the_real_local_read_counter)
-        << "\n";
-    DPRINT << "ptr_val=" << (uint32_t)get_ptr_val(stream_id) << "\n";
     local_sender_channel_worker_interface.template notify_worker_of_read_counter_update<enable_ring_support>();
 }
 
@@ -695,11 +670,7 @@ FORCE_INLINE void check_worker_connections(
         // In such a case like that, we still want to formally teardown the connection to keep things clean
         uint32_t cached = *local_sender_channel_worker_interface.connection_live_semaphore;
         if (connect_is_requested(cached)) {
-            // if constexpr (enable_fabric_counters) {
-            //     sender_channel_counters->add_connection();
-            // }
             channel_connection_established = true;
-            DPRINT << "establish connection with worker\n";
             establish_worker_connection(local_sender_channel_worker_interface, stream_id);
         }
     } else if (local_sender_channel_worker_interface.has_worker_teardown_request()) {
@@ -796,25 +767,18 @@ void run_sender_channel_step(
     // we are guaranteed to see equal to or greater the number of acks than completions
     if constexpr (enable_first_level_ack) {
         auto acks_since_last_check = get_ptr_val(to_sender_packets_acked_streams[sender_channel_index]);
-        // auto& sender_ack_counter = local_sender_channel_worker_interface.local_ack_counter;
         if (acks_since_last_check > 0) {
-            // sender_ack_counter += acks_since_last_check;
             if constexpr (SKIP_CONNECTION_LIVENESS_CHECK) {
                 local_sender_channel_worker_interface.template update_persistent_connection_copy_of_free_slots<enable_ring_support>();
             } else {
                 if (channel_connection_established) {
                     local_sender_channel_worker_interface
-                        .template notify_worker_of_read_counter_update<enable_ring_support>();//completions_since_last_check);
+                        .template notify_worker_of_read_counter_update<enable_ring_support>();
                 } else {
                     ASSERT(
                         local_sender_channel_worker_interface.local_write_counter.counter >
                         (SENDER_NUM_BUFFERS - get_ptr_val(sender_channel_free_slots_stream_id)));
                     ASSERT(SENDER_NUM_BUFFERS >= get_ptr_val(sender_channel_free_slots_stream_id));
-                    ASSERT(
-                        local_sender_channel_worker_interface.local_write_counter.counter -
-                            local_sender_channel_worker_interface.worker_location_info_ptr
-                                ->edm_the_real_local_read_counter <=
-                        SENDER_NUM_BUFFERS);
                     local_sender_channel_worker_interface.worker_location_info_ptr->edm_local_write_counter =
                         local_sender_channel_worker_interface.local_write_counter.counter -
                         (SENDER_NUM_BUFFERS - get_ptr_val(sender_channel_free_slots_stream_id));
@@ -1231,7 +1195,6 @@ void __attribute__((noinline)) wait_for_static_connection_to_ready(
     for (size_t i = 0; i < NUM_SENDER_CHANNELS; i++) {
         if (sender_ch_live_check_skip[i]) {
             while (!connect_is_requested(*local_sender_channel_worker_interfaces[i].connection_live_semaphore));
-            DPRINT << "establish connection with EDM\n";
             establish_edm_connection(local_sender_channel_worker_interfaces[i], sender_channel_free_slots_stream_ids[i]);
         }
     }
@@ -1352,40 +1315,6 @@ void kernel_main() {
     } else {
         erisc::datamover::handshake::receiver_side_start(handshake_addr);
     }
-
-    // DPRINT << "SENDER_NUM_BUFFERS: " << (uint32_t)SENDER_NUM_BUFFERS << "\n";
-    // DPRINT << "RECEIVER_NUM_BUFFERS: " << (uint32_t)RECEIVER_NUM_BUFFERS << "\n";
-    // DPRINT << "local_sender_0_channel_address: " << (uint32_t)local_sender_0_channel_address << "\n";
-    // DPRINT << "local_sender_channel_0_connection_info_addr: " << (uint32_t)local_sender_channel_0_connection_info_addr
-    //        << "\n";
-    // DPRINT << "local_sender_1_channel_address: " << (uint32_t)local_sender_1_channel_address << "\n";
-    // DPRINT << "local_sender_channel_1_connection_info_addr: " << (uint32_t)local_sender_channel_1_connection_info_addr
-    //        << "\n";
-    // DPRINT << "local_sender_2_channel_address: " << (uint32_t)local_sender_2_channel_address << "\n";
-    // DPRINT << "local_sender_channel_2_connection_info_addr: " << (uint32_t)local_sender_channel_2_connection_info_addr
-    //        << "\n";
-    // if constexpr (is_2d_fabric) {
-    //     DPRINT << "local_sender_3_channel_address: " << (uint32_t)local_sender_3_channel_address << "\n";
-    //     DPRINT << "local_sender_channel_3_connection_info_addr: "
-    //            << (uint32_t)local_sender_channel_3_connection_info_addr << "\n";
-    //     DPRINT << "local_sender_4_channel_address: " << (uint32_t)local_sender_4_channel_address << "\n";
-    //     DPRINT << "local_sender_channel_4_connection_info_addr: "
-    //            << (uint32_t)local_sender_channel_4_connection_info_addr << "\n";
-    // }
-    // DPRINT << "local_receiver_0_channel_buffer_address: " << (uint32_t)local_receiver_0_channel_buffer_address << "\n";
-    // DPRINT << "remote_receiver_0_channel_buffer_address: " << (uint32_t)remote_receiver_0_channel_buffer_address
-    //        << "\n";
-    // DPRINT << "local_receiver_1_channel_buffer_address: " << (uint32_t)local_receiver_1_channel_buffer_address << "\n";
-    // DPRINT << "remote_receiver_1_channel_buffer_address: " << (uint32_t)remote_receiver_1_channel_buffer_address
-    //        << "\n";
-    // DPRINT << "remote_sender_0_channel_address: " << (uint32_t)remote_sender_0_channel_address << "\n";
-    // DPRINT << "remote_sender_1_channel_address: " << (uint32_t)remote_sender_1_channel_address << "\n";
-    // DPRINT << "remote_sender_2_channel_address: " << (uint32_t)remote_sender_2_channel_address << "\n";
-    // if constexpr (is_2d_fabric) {
-    //     DPRINT << "remote_sender_3_channel_address: " << (uint32_t)remote_sender_3_channel_address << "\n";
-    //     DPRINT << "remote_sender_4_channel_address: " << (uint32_t)remote_sender_4_channel_address << "\n";
-    // }
-    // DPRINT << "forward_and_local_write_noc_vc: " << (uint32_t)tt::tt_fabric::forward_and_local_write_noc_vc << ENDL();
 
     // TODO: CONVERT TO SEMAPHORE
     volatile auto termination_signal_ptr =
@@ -1644,7 +1573,6 @@ void kernel_main() {
 
     std::array<tt::tt_fabric::EdmToEdmSender<SENDER_NUM_BUFFERS>, NUM_USED_RECEIVER_CHANNELS>
         downstream_edm_noc_interfaces;
-// <<<<<<< HEAD
     if (has_downstream_edm_vc0_buffer_connection) {
         // Only bit 0 is set for 1D
         // upto 3 bits set for 2D. 0, 1, 2, 3 for East, West, North, South downstream connections.
@@ -1687,12 +1615,12 @@ void kernel_main() {
 #else
                     local_sender_channel_1_connection_buffer_index_id,
 #endif
-                    reinterpret_cast<volatile uint32_t* const>(local_sem_address_for_acks), // DOUBLE CHECK THIS
-                    reinterpret_cast<volatile uint32_t* const>(teardown_sem_address),       // DOUBLE CHECK THIS
+                    reinterpret_cast<volatile uint32_t* const>(local_sem_address_for_acks),
+                    reinterpret_cast<volatile uint32_t* const>(teardown_sem_address),
                     downstream_vc0_noc_interface_buffer_index_local_addr,  // keep common, since its a scratch noc read
                                                                            // dest.
-                    sender_channel_1_free_slots_stream_id,              /// ADDED THIS
-                    StreamId{receiver_channel_0_free_slots_stream_id},  /// ADDED THIS
+                    sender_channel_1_free_slots_stream_id,
+                    StreamId{receiver_channel_0_free_slots_stream_id},
                     receiver_channel_forwarding_data_cmd_buf_ids[0],
                     receiver_channel_forwarding_sync_cmd_buf_ids[0]);
                 downstream_edm_noc_interfaces[edm_index]
@@ -1738,11 +1666,11 @@ void kernel_main() {
 #else
                     local_sender_channel_2_connection_buffer_index_id,
 #endif
-                    reinterpret_cast<volatile uint32_t* const>(local_sem_address_for_acks),  // DOUBLE CHECK
-                    reinterpret_cast<volatile uint32_t* const>(teardown_sem_address),        // DOUBLE CHECK
+                    reinterpret_cast<volatile uint32_t* const>(local_sem_address_for_acks),
+                    reinterpret_cast<volatile uint32_t* const>(teardown_sem_address),
                     downstream_vc1_noc_interface_buffer_index_local_addr,
-                    sender_channel_2_free_slots_stream_id,                 /// ADDED THIS
-                    StreamId{receiver_channel_1_free_slots_stream_id},     /// ADDED THIS
+                    sender_channel_2_free_slots_stream_id,
+                    StreamId{receiver_channel_1_free_slots_stream_id},
                     receiver_channel_forwarding_data_cmd_buf_ids[1],
                     receiver_channel_forwarding_sync_cmd_buf_ids[1]);
             downstream_edm_noc_interfaces[NUM_USED_RECEIVER_CHANNELS - 1]

@@ -72,17 +72,12 @@ struct EDMChannelWorkerLocationInfo {
     uint32_t align_pad_7;
     uint32_t align_pad_8;
 
-    uint32_t edm_read_counter = 0;  // actually free slots: TODO rename
+    uint32_t edm_read_counter = 0;
     uint32_t align_pad_9;  // Padding added for safe reading over noc
     uint32_t align_pad_10;
-    uint32_t align_pad_11 = 0;
-
-    uint32_t edm_the_real_local_read_counter = 0;  // actually free slots: TODO rename
-    uint32_t align_pad_12;                         // Padding added for safe reading over noc
-    uint32_t align_pad_13;
-    uint32_t align_pad_14 = 0;
+    uint32_t align_pad_11;
 };
 
-static_assert(sizeof(EDMChannelWorkerLocationInfo) <= 80);
+static_assert(sizeof(EDMChannelWorkerLocationInfo) <= 64);
 
 }  // namespace tt::tt_fabric
