@@ -18,15 +18,16 @@ RUN apt-get update && apt-get install -y \
     build-essential \
     && rm -rf /var/lib/apt/lists/*
 
+
 # Install mpi-ulfm
-RUN apt-get install -y --no-install-recommends libhwloc15 libibverbs1 \
-    DEB_URL="https://github.com/dmakoviichuk-tt/mpi-ulfm/releases/download/v5.0.7-ulfm/openmpi-ulfm_5.0.7-1_amd64.deb" \
-    DEB_FILE="$(basename "$DEB_URL")" \
-    TMP_DIR="$(mktemp -d)" \
-    cleanup() { rm -rf "$TMP_DIR"; } \
-    trap cleanup EXIT INT TERM \
-    echo "→ Downloading $DEB_FILE …" \
-    wget -q --show-progress -O "$TMP_DIR/$DEB_FILE" "$DEB_URL" \
-    echo "→ Installing $DEB_FILE …" \
-    dpkg -i "$TMP_DIR/$DEB_FILE" \
-    apt-get -y install
+RUN set -eux; \
+    apt-get update; \
+    apt-get install -y --no-install-recommends \
+        wget ca-certificates libhwloc15 libibverbs1; \
+    TMP_DIR="$(mktemp -d)"; \
+    DEB_URL="https://github.com/dmakoviichuk-tt/mpi-ulfm/releases/download/v5.0.7-ulfm/openmpi-ulfm_5.0.7-1_amd64.deb"; \
+    wget -qO "$TMP_DIR/ompi.deb" "$DEB_URL"; \
+    dpkg -i "$TMP_DIR/ompi.deb" || true; \
+    apt-get -y --fix-broken install; \
+    rm -rf "$TMP_DIR"; \
+    rm -rf /var/lib/apt/lists/*
