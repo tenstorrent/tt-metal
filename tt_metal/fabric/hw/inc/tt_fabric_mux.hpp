@@ -26,7 +26,7 @@ using FabricMuxChannelWorkerInterface = EdmChannelWorkerInterface<FABRIC_MUX_CHA
 using FabricMuxChannelClientLocationInfo = EDMChannelWorkerLocationInfo;
 
 template <uint8_t FABRIC_MUX_CHANNEL_NUM_BUFFERS>
-using WorkerToFabricMuxSender = WorkerToFabricEdmSenderImpl<FABRIC_MUX_CHANNEL_NUM_BUFFERS>;
+using WorkerToFabricMuxSender = WorkerToFabricEdmSenderImpl<false, FABRIC_MUX_CHANNEL_NUM_BUFFERS>;
 
 using FabricMuxStatus = EDMStatus;
 

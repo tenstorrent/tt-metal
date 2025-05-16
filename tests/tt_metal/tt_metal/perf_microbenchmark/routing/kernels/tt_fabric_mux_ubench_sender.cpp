@@ -25,6 +25,7 @@ constexpr size_t fabric_mux_status_address = get_compile_time_arg_val(9);
 
 constexpr bool is_master_sender = get_compile_time_arg_val(10);
 constexpr bool is_full_size_channel_sender = get_compile_time_arg_val(11);
+constexpr uint8_t fabric_channel_id = get_compile_time_arg_val(12);
 
 constexpr uint8_t num_hops = 1;
 
@@ -61,6 +62,7 @@ void kernel_main() {
     auto mux_connection_handle = tt::tt_fabric::build_connection_to_fabric_endpoint<fabric_mux_num_buffers_per_channel>(
         fabric_mux_x,
         fabric_mux_y,
+        fabric_channel_id,
         fabric_mux_num_buffers_per_channel,
         fabric_mux_channel_buffer_size_bytes,
         fabric_mux_channel_base_address,

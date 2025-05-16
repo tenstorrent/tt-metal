@@ -8,6 +8,7 @@
 #include "tt_metal/fabric/hw/inc/tt_fabric_utils.h"
 #include "tt_metal/api/tt-metalium/fabric_edm_packet_header.hpp"
 #include "tt_metal/fabric/hw/inc/tt_fabric_mux_interface.hpp"
+#include "tt_metal/fabric/hw/inc/edm_fabric/fabric_stream_regs.hpp"
 
 #include <cstddef>
 #include <array>
@@ -57,6 +58,7 @@ void setup_channel(
         0, /* unused, eth_transaction_ack_word_addr */
         channel_id);
     channel_base_address += NUM_BUFFERS * buffer_size_bytes;
+    init_ptr_val(channel_id, NUM_BUFFERS);
 
     auto connection_worker_info_ptr =
         reinterpret_cast<volatile tt::tt_fabric::FabricMuxChannelClientLocationInfo*>(connection_info_address);
@@ -102,6 +104,7 @@ void forward_data(
     }
 
     check_worker_connections(worker_interface, channel_connection_established);
+    local_update_ptr_val(channel_id, 0);
 }
 
 void kernel_main() {

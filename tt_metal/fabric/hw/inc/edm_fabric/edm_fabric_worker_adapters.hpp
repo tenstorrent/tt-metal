@@ -39,7 +39,7 @@ namespace tt::tt_fabric {
  * As the adapter writes into the EDM, it updates the local wrptr. As the EDM reads from its local L1 channel buffer,
  * it will notify the worker/adapter (here) by updating the worker remote_rdptr to carry the value of the EDM rdptr.
  */
-template <uint8_t EDM_NUM_BUFFER_SLOTS = 0>
+template <bool I_USE_STREAM_REG_FOR_CREDIT_RECEIVE, uint8_t EDM_NUM_BUFFER_SLOTS = 0>
 struct WorkerToFabricEdmSenderImpl {
     static constexpr bool ENABLE_STATEFUL_WRITE_CREDIT_TO_DOWNSTREAM_EDM = true;
     static constexpr uint32_t sender_channel_0_free_slots_stream_id = 16;
@@ -47,7 +47,7 @@ struct WorkerToFabricEdmSenderImpl {
     // Temporary flag to distinguish between worker and EDM users of this adapter until we split it into
     // two separate adapters (they've started diverging quite a bit by now)
     //  --> Not splitting yet though to avoid change conflict issues with some other in flight changes
-    static constexpr bool IS_WORKER = !USER_DEFINED_NUM_BUFFER_SLOTS;
+    static constexpr bool IS_WORKER = !I_USE_STREAM_REG_FOR_CREDIT_RECEIVE;
     static constexpr bool IS_POW2_NUM_BUFFERS = USER_DEFINED_NUM_BUFFER_SLOTS && is_power_of_2(EDM_NUM_BUFFER_SLOTS);
     static constexpr size_t BUFFER_SLOT_PTR_WRAP = EDM_NUM_BUFFER_SLOTS * 2;
     static constexpr uint32_t unused_connection_value = 0;
@@ -134,13 +134,14 @@ struct WorkerToFabricEdmSenderImpl {
         this->worker_credits_stream_id = worker_credits_stream_id.get();
 
         this->edm_buffer_local_free_slots_read_ptr =
-            IS_WORKER ? 0 :
-            reinterpret_cast<volatile tt_reg_ptr uint32_t*>(get_stream_reg_read_addr(this->worker_credits_stream_id));
+            !I_USE_STREAM_REG_FOR_CREDIT_RECEIVE ? 0
+                                                 : reinterpret_cast<volatile tt_reg_ptr uint32_t*>(
+                                                       get_stream_reg_read_addr(this->worker_credits_stream_id));
         this->edm_buffer_remote_free_slots_update_addr = get_stream_reg_write_addr(sender_channel_credits_stream_id);
         this->edm_buffer_local_free_slots_update_ptr =
-            IS_WORKER ? 0
-                      : reinterpret_cast<volatile tt_reg_ptr uint32_t*>(
-                            get_stream_reg_write_addr(this->worker_credits_stream_id));
+            !I_USE_STREAM_REG_FOR_CREDIT_RECEIVE ? 0
+                                                 : reinterpret_cast<volatile tt_reg_ptr uint32_t*>(
+                                                       get_stream_reg_write_addr(this->worker_credits_stream_id));
         this->edm_connection_handshake_l1_addr =
             connected_to_persistent_fabric
                 ? edm_connection_handshake_l1_id
@@ -160,7 +161,7 @@ struct WorkerToFabricEdmSenderImpl {
         this->data_noc_cmd_buf = data_noc_cmd_buf;
         this->sync_noc_cmd_buf = sync_noc_cmd_buf;
 
-        if (!IS_WORKER) {
+        if (I_USE_STREAM_REG_FOR_CREDIT_RECEIVE) {
             // The EDM is guaranteed to know the number of free slots of the downstream EDM
             // becausen all EDMs are brought up/initialized at the same time
             init_ptr_val(this->worker_credits_stream_id, EDM_NUM_BUFFER_SLOTS);
@@ -226,7 +227,7 @@ struct WorkerToFabricEdmSenderImpl {
     }
 
     FORCE_INLINE bool edm_has_space_for_packet() const {
-        if constexpr (IS_WORKER) {
+        if constexpr (!I_USE_STREAM_REG_FOR_CREDIT_RECEIVE) {
             return (this->buffer_slot_write_counter.counter - *this->from_remote_buffer_free_slots_ptr) <
                    this->num_buffers_per_channel;
         } else {
@@ -299,7 +300,7 @@ struct WorkerToFabricEdmSenderImpl {
 
         tt::tt_fabric::EDMChannelWorkerLocationInfo* worker_location_info_ptr =
             reinterpret_cast<tt::tt_fabric::EDMChannelWorkerLocationInfo*>(edm_worker_location_info_addr);
-        if constexpr (IS_WORKER) {
+        if constexpr (!I_USE_STREAM_REG_FOR_CREDIT_RECEIVE) {
             const uint64_t remote_buffer_index_addr = dest_noc_addr_coord_only | edm_buffer_index_addr;
             // piggy back off of worker_teardown_addr just to temporarily store the read-back write pointer
             // then once we get it we will use that address for the teardown ack
@@ -328,7 +329,7 @@ struct WorkerToFabricEdmSenderImpl {
                 edm_worker_location_info_addr +
                 offsetof(tt::tt_fabric::EDMChannelWorkerLocationInfo, worker_semaphore_address));
         // write the address of our local copy of read counter (that EDM is supposed to update)
-        if constexpr (IS_WORKER) {
+        if constexpr (!I_USE_STREAM_REG_FOR_CREDIT_RECEIVE) {
             noc_inline_dw_write<false, posted>(
                 dest_edm_location_info_addr,
                 reinterpret_cast<size_t>(from_remote_buffer_free_slots_ptr),
@@ -370,7 +371,7 @@ struct WorkerToFabricEdmSenderImpl {
         // Order here is important
         // We need to write our read counter value to the register before we signal the EDM
         // As EDM will potentially increment the register as well
-        if constexpr (IS_WORKER) {
+        if constexpr (!I_USE_STREAM_REG_FOR_CREDIT_RECEIVE) {
             this->buffer_slot_write_counter.counter = *this->worker_teardown_addr;
             this->buffer_slot_write_counter.index = BufferIndex{static_cast<uint8_t>(this->buffer_slot_write_counter.counter % static_cast<uint32_t>(this->num_buffers_per_channel))};
             this->buffer_slot_index = this->buffer_slot_write_counter.get_buffer_index();
@@ -411,7 +412,7 @@ struct WorkerToFabricEdmSenderImpl {
             get_noc_addr(this->edm_noc_x, this->edm_noc_y, 0) & ~(uint64_t)NOC_COORDINATE_MASK;
 
         // buffer index stored at location after handshake addr
-        if (IS_WORKER) {
+        if (!I_USE_STREAM_REG_FOR_CREDIT_RECEIVE) {
             const uint64_t remote_buffer_index_addr = dest_noc_addr_coord_only | edm_buffer_index_addr;
             noc_inline_dw_write(remote_buffer_index_addr, this->buffer_slot_write_counter.counter);
         } else {
@@ -508,7 +509,7 @@ private:
                 get_noc_addr(this->edm_noc_x, this->edm_noc_y, this->edm_buffer_remote_free_slots_update_addr, noc);
             noc_inline_dw_write(noc_sem_addr, (-1) << REMOTE_DEST_BUF_WORDS_FREE_INC, 0xf, noc);
         }
-        if constexpr (!IS_WORKER) {
+        if constexpr (I_USE_STREAM_REG_FOR_CREDIT_RECEIVE) {
             // Write to the atomic increment stream register (write of -1 will subtract 1)
             *edm_buffer_local_free_slots_update_ptr = (-1) << REMOTE_DEST_BUF_WORDS_FREE_INC;
         }
@@ -520,7 +521,7 @@ private:
         if constexpr (USER_DEFINED_NUM_BUFFER_SLOTS) {
             this->buffer_slot_index = BufferIndex{wrap_increment<EDM_NUM_BUFFER_SLOTS>(this->buffer_slot_index.get())};
         } else {
-            if (IS_WORKER) {
+            if (!I_USE_STREAM_REG_FOR_CREDIT_RECEIVE) {
                 buffer_slot_write_counter.counter++;
                 this->buffer_slot_index =
                     BufferIndex{wrap_increment(this->buffer_slot_index.get(), this->num_buffers_per_channel)};
@@ -621,9 +622,9 @@ private:
     }
 };
 
-using WorkerToFabricEdmSender = WorkerToFabricEdmSenderImpl<0>;
+using WorkerToFabricEdmSender = WorkerToFabricEdmSenderImpl<false, 0>;
 
 template <uint8_t EDM_SENDER_CHANNEL_NUM_BUFFERS>
-using EdmToEdmSender = WorkerToFabricEdmSenderImpl<EDM_SENDER_CHANNEL_NUM_BUFFERS>;
+using EdmToEdmSender = WorkerToFabricEdmSenderImpl<true, EDM_SENDER_CHANNEL_NUM_BUFFERS>;
 
 }  // namespace tt::tt_fabric
