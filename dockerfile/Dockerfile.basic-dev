@@ -3,10 +3,6 @@ FROM public.ecr.aws/ubuntu/ubuntu:${UBUNTU_VERSION} AS base
 # Re-declare ARG make it available in the build stage
 ARG UBUNTU_VERSION
 
-# temporary solution
-
-
-
 # Install basic tools to build
 # The Boost PPA is because TT-Metalium depends on a Boost too new for Ubuntu 22.04
 # It should not be used in 24.04.
@@ -21,15 +17,16 @@ RUN apt-get update && apt-get install -y \
     g++-12 \
     build-essential \
     && rm -rf /var/lib/apt/lists/*
+
 # Install mpi-ulfm
-RUN apt-get install -y --no-install-recommends libhwloc15 libibverbs1
-RUN    DEB_URL="https://github.com/dmakoviichuk-tt/mpi-ulfm/releases/download/v5.0.7-ulfm/openmpi-ulfm_5.0.7-1_amd64.deb"
-RUN    DEB_FILE="$(basename "$DEB_URL")"
-RUN    TMP_DIR="$(mktemp -d)"
-RUN    cleanup() { rm -rf "$TMP_DIR"; }
-RUN    trap cleanup EXIT INT TERM
-RUN    echo "→ Downloading $DEB_FILE …"
-RUN    wget -q --show-progress -O "$TMP_DIR/$DEB_FILE" "$DEB_URL"
-RUN    echo "→ Installing $DEB_FILE …"
-RUN    dpkg -i "$TMP_DIR/$DEB_FILE"
-RUN    apt-get -y install
+RUN apt-get install -y --no-install-recommends libhwloc15 libibverbs1 \
+    DEB_URL="https://github.com/dmakoviichuk-tt/mpi-ulfm/releases/download/v5.0.7-ulfm/openmpi-ulfm_5.0.7-1_amd64.deb" \
+    DEB_FILE="$(basename "$DEB_URL")" \
+    TMP_DIR="$(mktemp -d)" \
+    cleanup() { rm -rf "$TMP_DIR"; } \
+    trap cleanup EXIT INT TERM \
+    echo "→ Downloading $DEB_FILE …" \
+    wget -q --show-progress -O "$TMP_DIR/$DEB_FILE" "$DEB_URL" \
+    echo "→ Installing $DEB_FILE …" \
+    dpkg -i "$TMP_DIR/$DEB_FILE" \
+    apt-get -y install
