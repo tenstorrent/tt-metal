@@ -28,7 +28,7 @@ perf_targets = {
         "op_name": "RMS_0",
         "kernel_duration": 18530.621527777777,
         "op_to_op": 839.6666666666666,
-        "non-overlapped-dispatch-time": 7260,
+        "non-overlapped-dispatch-time": 8380,
         "kernel_duration_relative_margin": 0.05,
         "op_to_op_duration_relative_margin": 0.2,
         "dispatch_duration_relative_margin": 0.2,
@@ -37,7 +37,7 @@ perf_targets = {
         "op_name": "RMS_1",
         "kernel_duration": 18100.121527777777,
         "op_to_op": 816.2222222222222,
-        "non-overlapped-dispatch-time": 7694.8,
+        "non-overlapped-dispatch-time": 8139.7,
         "kernel_duration_relative_margin": 0.05,
         "op_to_op_duration_relative_margin": 0.2,
         "dispatch_duration_relative_margin": 0.2,
@@ -768,7 +768,7 @@ def test_llama_TG_perf_device_non_overlapped_dispatch(
     df = merge_device_rows(df)
     # Exclude compilaton and capture trace runs
     df_model = df[int(len(df) / 3 * 2) :]
-    df_layers = df_model[DECODER_OP_START_INDEX:DECODER_OP_END_INDEX]
+    df_layers = df_model[DECODER_OP_START_INDEX : DECODER_OP_END_INDEX + 1]
     all_layers_raw_dict = df_layers[["OP CODE", "DEVICE KERNEL DURATION [ns]", "OP TO OP LATENCY [ns]"]].to_dict(
         orient="records"
     )
