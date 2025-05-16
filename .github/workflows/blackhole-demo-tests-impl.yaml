@@ -36,8 +36,9 @@ jobs:
             owner_id: U03PUAKE719 # Miguel Tairum
           }
         ]
+        runner: [gh01, gh02, gh03, gh04, gh05, gh06]
     name: ${{ matrix.test-group.name }}
-    runs-on: ["${{ inputs.runner-label }}", "pipeline-perf", "gh01"]
+    runs-on: ["${{ inputs.runner-label }}", "pipeline-perf", "${{ matrix.runner }}"]
     steps:
       - name: ⬇️ Checkout
         uses: actions/checkout@v4
