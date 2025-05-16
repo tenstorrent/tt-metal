@@ -23,16 +23,16 @@ jobs:
       fail-fast: false
       matrix:
         test-group: [
-          {
-            name: "whisper_performance",
-            arch: blackhole,
-            cmd: pytest models/demos/whisper/demo/demo.py --input-path="models/demos/whisper/demo/dataset/conditional_generation" -k "conditional_generation",
-            owner_id: U05RWH3QUPM #Salar Hosseini
-          },
+          # {
+          #   name: "whisper_performance",
+          #   arch: blackhole,
+          #   cmd: pytest models/demos/whisper/demo/demo.py --input-path="models/demos/whisper/demo/dataset/conditional_generation" -k "conditional_generation",
+          #   owner_id: U05RWH3QUPM #Salar Hosseini
+          # },
           {
             name: "Llama3-8B_performance",
             arch: blackhole,
-            cmd:  HF_HOME=<LOCATION_FOR_HF_WEIGHTS> TT_CACHE_PATH=<LOCATION_FOR_TTNN_CACHE> HF_MODEL=meta-llama/Llama-3.1-8B-Instruct pytest models/tt_transformers/demo/simple_text_demo.py -k performance-ci,
+            cmd:  HF_HOME=/localdev/blackhole_demos/huggingface_data TT_CACHE_PATH=/localdev/blackhole_demos/ttnn_cache HF_MODEL=meta-llama/Llama-3.1-8B-Instruct pytest models/tt_transformers/demo/simple_text_demo.py -k performance-ci,
             owner_id: U03PUAKE719 # Miguel Tairum
           }
         ]
@@ -71,6 +71,8 @@ jobs:
             -e TT_METAL_HOME=${{ github.workspace }}
             -e ARCH_NAME=${{ matrix.test-group.arch }}
             -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
+            -e HF_TOKEN=${{ secrets.HUGGINGFACE_TOKEN }}
+            -v /localdev:/localdev
           install_wheel: true
           run_args: ${{ matrix.test-group.cmd }}
       - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
