@@ -1130,7 +1130,7 @@ void run_fabric_edm_main_loop(
 
             // There are some cases, mainly for performance, where we don't want to switch between sender channels
             // so we interoduce this to provide finer grain control over when we disable the automatic switching
-            if constexpr (risc_id == 0) {
+            if constexpr (is_sender_channel_serviced[0]) {
                 run_sender_channel_step<
                     enable_packet_header_recording,
                     enable_fabric_counters,
@@ -1147,7 +1147,7 @@ void run_fabric_edm_main_loop(
                     channel_connection_established[0],
                     0);
             }
-            if constexpr ((is_bw && risc_id == 1) || !is_bw) {
+            if constexpr (is_receiver_channel_serviced[0]) {
                 if constexpr (!dateline_connection) {
                     run_receiver_channel_step<
                         enable_packet_header_recording,
@@ -1167,6 +1167,8 @@ void run_fabric_edm_main_loop(
                         0,
                         port_direction_table);
                 }
+            }
+            if constexpr (is_receiver_channel_serviced[1]) {
                 if constexpr (enable_ring_support) {
                     run_receiver_channel_step<
                         enable_packet_header_recording,
@@ -1188,7 +1190,7 @@ void run_fabric_edm_main_loop(
                 }
             }
 
-            if constexpr (risc_id == 0) {
+            if constexpr (is_sender_channel_serviced[1]) {
                 run_sender_channel_step<
                     enable_packet_header_recording,
                     enable_fabric_counters,
@@ -1204,7 +1206,9 @@ void run_fabric_edm_main_loop(
                     sender_channel_packet_recorders[1],
                     channel_connection_established[1],
                     1);
-                if constexpr (is_2d_fabric) {
+            }
+            if constexpr (is_2d_fabric) {
+                if constexpr (is_sender_channel_serviced[2]) {
                     run_sender_channel_step<
                         enable_packet_header_recording,
                         enable_fabric_counters,
@@ -1220,6 +1224,8 @@ void run_fabric_edm_main_loop(
                         sender_channel_packet_recorders[2],
                         channel_connection_established[2],
                         2);
+                }
+                if constexpr (is_sender_channel_serviced[3]) {
                     run_sender_channel_step<
                         enable_packet_header_recording,
                         enable_fabric_counters,
@@ -1236,7 +1242,9 @@ void run_fabric_edm_main_loop(
                         channel_connection_established[3],
                         3);
                 }
-                if constexpr (enable_ring_support && !dateline_connection) {
+            }
+            if constexpr (enable_ring_support && !dateline_connection) {
+                if constexpr (is_sender_channel_serviced[NUM_SENDER_CHANNELS - 1]) {
                     run_sender_channel_step<
                         enable_packet_header_recording,
                         enable_fabric_counters,
