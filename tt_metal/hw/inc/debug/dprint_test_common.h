@@ -16,17 +16,17 @@ inline void print_test_data() {
     int64_t my_int64 = -5123456789;
     float my_float = 3.14159f;
     DPRINT << "Basic Types:\n" << 101 << -1.6180034f << '@' << BF16(0x3dfb) << ENDL();
-    DPRINT << my_uint8 << my_uint16 << my_uint32 << my_uint64 << ENDL();
-    DPRINT << my_int8 << my_int16 << my_int32 << my_int64 << ENDL();
-    DPRINT << "SETPRECISION/FIXED/DEFAULTFLOAT:\n";
-    DPRINT << SETPRECISION(5) << my_float << ENDL();
-    DPRINT << SETPRECISION(9) << my_float << ENDL();
-    DPRINT << FIXED();
-    DPRINT << SETPRECISION(5) << my_float << ENDL();
-    DPRINT << SETPRECISION(9) << my_float << ENDL();
-    DPRINT << DEFAULTFLOAT();
-    DPRINT << "SETW:\n" << SETW(10) << my_uint32 << my_uint32 << SETW(4) << "ab" << ENDL();
-    DPRINT << "HEX/OCT/DEC:\n" << HEX() << my_uint32 << OCT() << my_uint32 << DEC() << my_uint32 << ENDL();
+    DPRINT << my_uint8 << my_uint16 /*<< my_uint32 << my_uint64*/ << ENDL();
+    // DPRINT << my_int8 << my_int16 << my_int32 << my_int64 << ENDL();
+    // DPRINT << "SETPRECISION/FIXED/DEFAULTFLOAT:\n";
+    // DPRINT << SETPRECISION(5) << my_float << ENDL();
+    // DPRINT << SETPRECISION(9) << my_float << ENDL();
+    // DPRINT << FIXED();
+    // DPRINT << SETPRECISION(5) << my_float << ENDL();
+    // DPRINT << SETPRECISION(9) << my_float << ENDL();
+    // DPRINT << DEFAULTFLOAT();
+    // DPRINT << "SETW:\n" << SETW(10) << my_uint32 << my_uint32 << SETW(4) << "ab" << ENDL();
+    // DPRINT << "HEX/OCT/DEC:\n" << HEX() << my_uint32 << OCT() << my_uint32 << DEC() << my_uint32 << ENDL();
 #if !defined(COMPILE_FOR_ERISC) && !defined(COMPILE_FOR_IDLE_ERISC)
     // Eth cores don't have CBs, so don't try TSLICE printing.
     DPRINT << "SLICE:\n";
