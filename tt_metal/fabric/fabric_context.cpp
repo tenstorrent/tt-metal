@@ -106,6 +106,10 @@ tt::tt_fabric::FabricEriscDatamoverConfig& FabricContext::get_fabric_router_conf
     return *this->router_config_.get();
 };
 
+tt::tt_fabric::FabricEriscDatamoverConfig FabricContext::get_fabric_router_config(bool is_dateline) const {
+    return tt::tt_fabric::FabricEriscDatamoverConfig(this->channel_buffer_size_bytes_, this->topology_, is_dateline);
+};
+
 void FabricContext::set_num_fabric_initialized_routers(chip_id_t chip_id, size_t num_routers) {
     auto it = this->num_initialized_routers_.find(chip_id);
     TT_FATAL(

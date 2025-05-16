@@ -1138,6 +1138,8 @@ void build_tt_fabric_program(
             control_plane->get_mesh_chip_id_from_physical_chip_id(remote_chip_id).second,
             wrap_around_mesh);
 
+        const auto& curr_edm_config = fabric_context.get_fabric_router_config(is_dateline);
+
         for (const auto& eth_chan : active_fabric_eth_channels[direction]) {
             auto eth_logical_core = soc_desc.get_eth_core_for_channel(eth_chan, CoordSystem::LOGICAL);
             auto edm_builder = tt::tt_fabric::FabricEriscDatamoverBuilder::build(
@@ -1146,7 +1148,7 @@ void build_tt_fabric_program(
                 eth_logical_core,
                 device->id(),
                 remote_chip_id,
-                edm_config,
+                curr_edm_config,
                 true,  /* enable_persistent_mode */
                 false, /* build_in_worker_connection_mode */
                 is_dateline,
