@@ -20,8 +20,8 @@ from tt_metal.tools.profiler.process_model_log import (
 from models.demos.llama3_subdevices.demo.demo_decode import run_llama3_demo
 from models.demos.llama3_subdevices.demo.demo_decode import LlamaOptimizations
 
-DECODE_OP_START_INDEX = 4
-DECODE_OP_END_INDEX = -11
+DECODER_OP_START_INDEX = 4
+DECODER_OP_END_INDEX = -13
 
 perf_targets = {
     "RMSAllGather_0": {
@@ -178,28 +178,10 @@ perf_targets = {
         "dispatch_duration_relative_margin": 0.3,
     },
     "BinaryDeviceOperation_0": {
-        "op_name": "Binary_Residual_0",
-        "kernel_duration": 1059,
-        "op_to_op": 725.6666666666666,
-        "non-overlapped-dispatch-time": 6316.8,
-        "kernel_duration_relative_margin": 0.25,
-        "op_to_op_duration_relative_margin": 0.2,
-        "dispatch_duration_relative_margin": 0.2,
-    },
-    "BinaryDeviceOperation_1": {
         "op_name": "Binary_Mult_Silu",
         "kernel_duration": 2923.5555555555557,
         "op_to_op": 661.0,
         "non-overlapped-dispatch-time": 6111.2,
-        "kernel_duration_relative_margin": 0.1,
-        "op_to_op_duration_relative_margin": 0.2,
-        "dispatch_duration_relative_margin": 0.2,
-    },
-    "BinaryDeviceOperation_2": {
-        "op_name": "Binary_Residual_1",
-        "kernel_duration": 1052,
-        "op_to_op": 731.4444444444445,
-        "non-overlapped-dispatch-time": 6751.9,
         "kernel_duration_relative_margin": 0.1,
         "op_to_op_duration_relative_margin": 0.2,
         "dispatch_duration_relative_margin": 0.2,
@@ -214,9 +196,6 @@ perf_targets = {
         "dispatch_duration_relative_margin": 0.5,
     },
 }
-
-DECODER_OP_START_IDX = 4
-DECODER_OP_END_IDX = -11
 
 
 @pytest.mark.parametrize(
@@ -498,8 +477,8 @@ def test_llama_TG_perf_device(
     df_model_trace = df[int(len(df) / 3 * 2) :]
 
     # Excluding model embeddings and lmhead+sampling ops
-    df_layers_compilation = df_model_compilation[DECODE_OP_START_INDEX:DECODE_OP_END_INDEX]
-    df_layers_trace = df_model_trace[DECODE_OP_START_INDEX:DECODE_OP_END_INDEX]
+    df_layers_compilation = df_model_compilation[DECODER_OP_START_INDEX:DECODER_OP_END_INDEX]
+    df_layers_trace = df_model_trace[DECODER_OP_START_INDEX:DECODER_OP_END_INDEX]
     # Use layers 2-9 for verifying against targets for more stability
     df_first_layer_compilation = df_layers_compilation[: int(len(df_layers_compilation) / num_layers)]
     df_first_layer_trace = df_layers_trace[: int(len(df_layers_trace) / num_layers)]
@@ -789,7 +768,7 @@ def test_llama_TG_perf_device_non_overlapped_dispatch(
     df = merge_device_rows(df)
     # Exclude compilaton and capture trace runs
     df_model = df[int(len(df) / 3 * 2) :]
-    df_layers = df_model[DECODE_OP_START_INDEX:DECODE_OP_END_INDEX]
+    df_layers = df_model[DECODER_OP_START_INDEX:DECODER_OP_END_INDEX]
     all_layers_raw_dict = df_layers[["OP CODE", "DEVICE KERNEL DURATION [ns]", "OP TO OP LATENCY [ns]"]].to_dict(
         orient="records"
     )
