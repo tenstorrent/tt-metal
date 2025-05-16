@@ -200,12 +200,6 @@ run_mamba_perf() {
 
 }
 
-run_yolov10x_perf() {
-
-  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto --disable-warnings  models/demos/yolov10/demo/demo.py --timeout 600
-
-}
-
 run_whisper_perf() {
 
   # Whisper conditional generation
