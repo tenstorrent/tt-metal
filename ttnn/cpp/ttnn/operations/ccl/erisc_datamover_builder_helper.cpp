@@ -16,6 +16,7 @@ namespace ttnn::ccl {
 std::vector<CoreCoord> reorder_connected_sockets(
     const tt::tt_metal::IDevice* local_device,
     const std::vector<CoreCoord>& connected_sockets,
+    const bool use_closest_sockets,
     const std::vector<CoreCoord>& originated_eth_cores = {}) {
     // Prepare storage
     std::vector<CoreCoord> reordered_connected_sockets;
@@ -32,7 +33,7 @@ std::vector<CoreCoord> reorder_connected_sockets(
     }
 
     if (connected_sockets.size() > 1) {
-        if (originated_eth_cores.size() > 0) {
+        if (use_closest_sockets && originated_eth_cores.size() > 0) {
             // Sort by manhattan distance to the originated eth cores.
             // originated_eth_cores.size() cores in ethernet_cores_logical_virtual are
             // sorted based on their distance to the originated_eth_cores.
@@ -80,7 +81,8 @@ EdmLineFabricOpInterface::EdmLineFabricOpInterface(
     std::optional<size_t> desired_num_links,
     bool build_in_worker_connection_mode,
     Topology topology,
-    bool is_galaxy) :
+    bool is_galaxy,
+    bool use_closest_sockets) :
     device_sequence(device_sequence), programs(program_sequence) {
     if (topology == Topology::Ring) {
         TT_FATAL(device_sequence.size() > 2, "Ring topology only supports more than 2 devices");
@@ -130,9 +132,10 @@ EdmLineFabricOpInterface::EdmLineFabricOpInterface(
             const auto& src_device_sockets = src_device->get_ethernet_sockets(dest_device->id());
             const auto& dest_device_sockets = dest_device->get_ethernet_sockets(src_device->id());
             // re-order the connected_sockets based on virtual coords
-            auto reordered_src_device_sockets = reorder_connected_sockets(src_device, src_device_sockets, orig_cores);
+            auto reordered_src_device_sockets =
+                reorder_connected_sockets(src_device, src_device_sockets, use_closest_sockets, orig_cores);
             auto reordered_dest_device_sockets =
-                reorder_connected_sockets(dest_device, dest_device_sockets, orig_cores);
+                reorder_connected_sockets(dest_device, dest_device_sockets, use_closest_sockets, orig_cores);
             orig_cores.clear();
 
             std::vector<CoreCoord> local_link_cores;
@@ -346,7 +349,8 @@ EdmLineFabricOpInterface::EdmLineFabricOpInterface(
     bool enable_persistent_mode,
     std::optional<size_t> desired_num_links,
     bool build_in_worker_connection_mode,
-    Topology topology) :
+    Topology topology,
+    bool use_closest_sockets) :
     device_sequence({local_device}), programs({program}) {
     static constexpr std::size_t edm_buffer_size =
         tt::tt_fabric::FabricEriscDatamoverBuilder::default_packet_payload_size_bytes +
@@ -362,11 +366,6 @@ EdmLineFabricOpInterface::EdmLineFabricOpInterface(
         log_trace(tt::LogOp, "\tConnect[BACKWARD]: {} -> {}", local_device->id(), backward_device.value()->id());
     }
 
-    // Construct the builders
-    std::array<std::pair<tt::tt_metal::IDevice*, std::optional<tt::tt_metal::IDevice*>>, 2> device_pairs = {
-        std::pair<tt::tt_metal::IDevice*, std::optional<tt::tt_metal::IDevice*>>{local_device, forward_device},
-        std::pair<tt::tt_metal::IDevice*, std::optional<tt::tt_metal::IDevice*>>{local_device, backward_device}};
-
     static_assert(EdmLineFabricOpInterface::Direction::FORWARD < 2);
     static_assert(EdmLineFabricOpInterface::Direction::BACKWARD < 2);
     std::array<std::unordered_map<size_t, std::vector<tt::tt_fabric::FabricEriscDatamoverBuilder>>*, 2>
@@ -377,7 +376,8 @@ EdmLineFabricOpInterface::EdmLineFabricOpInterface(
     // Create pair of physically clothest sockets
     std::vector<CoreCoord> forward_connected_sockets;
     std::vector<CoreCoord> backward_connected_sockets;
-    std::vector<std::vector<CoreCoord>> clothest_pairs;
+    std::vector<std::vector<CoreCoord>> clothest_pairs(2);
+    const CoreCoord FakeCore(std::numeric_limits<size_t>::max(), std::numeric_limits<size_t>::max());
     if (!forward_device.has_value() || !backward_device.has_value()) {
         // Line edge case, local_device is last device
         auto connected_sockets = forward_device.has_value()
@@ -388,9 +388,11 @@ EdmLineFabricOpInterface::EdmLineFabricOpInterface(
             connected_sockets.begin(), connected_sockets.end(), [](const auto& a, const auto& b) { return a.x < b.x; });
         for (const auto& logi_core : connected_sockets) {
             if (forward_device.has_value()) {
-                clothest_pairs.push_back({logi_core, CoreCoord(-1, -1)});
+                clothest_pairs[EdmLineFabricOpInterface::Direction::FORWARD].push_back(logi_core);
+                clothest_pairs[EdmLineFabricOpInterface::Direction::BACKWARD].push_back(FakeCore);
             } else {
-                clothest_pairs.push_back({CoreCoord(-1, -1), logi_core});
+                clothest_pairs[EdmLineFabricOpInterface::Direction::FORWARD].push_back(FakeCore);
+                clothest_pairs[EdmLineFabricOpInterface::Direction::BACKWARD].push_back(logi_core);
             }
         }
     } else {
@@ -419,13 +421,16 @@ EdmLineFabricOpInterface::EdmLineFabricOpInterface(
             for (const auto& bwd_logi_core : backward_connected_sockets) {
                 CoreCoord bwd_virtual = local_device->virtual_core_from_logical_core(bwd_logi_core, CoreType::ETH);
                 size_t idx = find_closest_index(forward_connected_sockets, bwd_virtual);
-                clothest_pairs.push_back({forward_connected_sockets[idx], bwd_logi_core});
+                clothest_pairs[EdmLineFabricOpInterface::Direction::FORWARD].push_back(forward_connected_sockets[idx]);
+                clothest_pairs[EdmLineFabricOpInterface::Direction::BACKWARD].push_back(bwd_logi_core);
             }
         } else {
             for (const auto& fwd_logi_core : forward_connected_sockets) {
                 CoreCoord fwd_virtual = local_device->virtual_core_from_logical_core(fwd_logi_core, CoreType::ETH);
                 size_t idx = find_closest_index(backward_connected_sockets, fwd_virtual);
-                clothest_pairs.push_back({fwd_logi_core, backward_connected_sockets[idx]});
+                clothest_pairs[EdmLineFabricOpInterface::Direction::FORWARD].push_back(fwd_logi_core);
+                clothest_pairs[EdmLineFabricOpInterface::Direction::BACKWARD].push_back(
+                    backward_connected_sockets[idx]);
             }
         }
     }
@@ -433,25 +438,46 @@ EdmLineFabricOpInterface::EdmLineFabricOpInterface(
     std::optional<size_t> counted_num_links = std::nullopt;
     std::optional<size_t> obtained_channel_buffer_size = std::nullopt;
     const size_t max_num_links = desired_num_links.value_or(std::numeric_limits<std::size_t>::max());
+    for (uint32_t i = 0; i < 2; i++) {
+        Direction dir = static_cast<Direction>(i);
+        auto& remote_device = dir == FORWARD ? forward_device : backward_device;
+        if (!remote_device.has_value()) {
+            continue;
+        }
+        auto& edm_builders = *edm_builders_maps[dir];
+        TT_FATAL(edm_builders.size() == 0, "EDM builders already exist for this device");
+        edm_builders.clear();
 
-    for (uint32_t i = 0; i < std::min(max_num_links, clothest_pairs.size()); i++) {
-        for (uint32_t j = 0; j < 2; j++) {
-            Direction dir = static_cast<Direction>(j);
-            auto& core = clothest_pairs[i][dir];
-            if ((core.x == -1 && core.y == -1) || !local_device->is_active_ethernet_core(core, true)) {
+        std::vector<CoreCoord> reordered_connected_sockets;
+        if (use_closest_sockets) {
+            reordered_connected_sockets = clothest_pairs[dir];
+        } else {
+            const auto connected_sockets = local_device->get_ethernet_sockets(remote_device.value()->id());
+            // re-order the connected_sockets based on virtual coords
+            reordered_connected_sockets =
+                reorder_connected_sockets(local_device, connected_sockets, use_closest_sockets);
+        }
+        for (uint32_t j = 0;
+             j < reordered_connected_sockets.size() && edm_builders[local_device->id()].size() < max_num_links;
+             j++) {
+            auto core = reordered_connected_sockets[j];
+            if ((core.x == std::numeric_limits<size_t>::max() && core.y == std::numeric_limits<size_t>::max()) ||
+                !local_device->is_active_ethernet_core(core, true)) {
                 continue;
             }
-            auto& edm_builders = *edm_builders_maps[dir];
-            auto& device = dir == FORWARD ? forward_device : backward_device;
-            if (!device.has_value()) {
-                continue;
-            }
+            log_trace(
+                tt::LogOp,
+                "DEBUG: build EDM: device: {}, &program: {}: core-logi(x={},y={})",
+                local_device->id(),
+                (void*)program,
+                core.x,
+                core.y);
             edm_builders[local_device->id()].push_back(tt::tt_fabric::FabricEriscDatamoverBuilder::build(
                 local_device,
                 *program,
                 core,
                 local_device->id(),
-                device.value()->id(),
+                remote_device.value()->id(),
                 config,
                 enable_persistent_mode,
                 build_in_worker_connection_mode));
@@ -510,9 +536,16 @@ EdmLineFabricOpInterface EdmLineFabricOpInterface::build_program_builder_worker_
     const std::vector<tt::tt_metal::Program*>& program_sequence,
     bool enable_persistent_mode,
     std::optional<size_t> desired_num_links,
-    Topology topology) {
+    Topology topology,
+    bool use_closest_sockets) {
     return EdmLineFabricOpInterface(
-        device_sequence, program_sequence, enable_persistent_mode, desired_num_links, true, topology);
+        device_sequence,
+        program_sequence,
+        enable_persistent_mode,
+        desired_num_links,
+        true,
+        topology,
+        use_closest_sockets);
 }
 
 EdmLineFabricOpInterface EdmLineFabricOpInterface::build_program_builder_worker_connection_fabric(
@@ -522,7 +555,8 @@ EdmLineFabricOpInterface EdmLineFabricOpInterface::build_program_builder_worker_
     tt::tt_metal::Program* program,
     bool enable_persistent_mode,
     std::optional<size_t> desired_num_links,
-    Topology topology) {
+    Topology topology,
+    bool use_closest_sockets) {
     return EdmLineFabricOpInterface(
         local_device,
         forward_device == nullptr ? std::nullopt : std::optional<tt::tt_metal::IDevice*>(forward_device),
@@ -531,7 +565,8 @@ EdmLineFabricOpInterface EdmLineFabricOpInterface::build_program_builder_worker_
         enable_persistent_mode,
         desired_num_links,
         true,
-        topology);
+        topology,
+        use_closest_sockets);
 }
 
 void EdmLineFabricOpInterface::build_kernels() const {
@@ -667,7 +702,8 @@ void initialize_edm_fabric(
     distributed::MeshDevice* mesh_device,
     bool wrap_fabric_around_mesh,
     std::optional<size_t> context_switch_interval_override,
-    Topology topology) {
+    Topology topology,
+    bool use_closest_sockets) {
     if (wrap_fabric_around_mesh) {
         auto devices = mesh_device->get_view().get_ring_devices();
         std::vector<tt::tt_metal::Program*> program_ptrs;
@@ -679,7 +715,7 @@ void initialize_edm_fabric(
                 return &p;
             });
         EdmLineFabricOpInterface fabric_device_builders =
-            EdmLineFabricOpInterface(devices, program_ptrs, true, std::nullopt, false, topology);
+            EdmLineFabricOpInterface(devices, program_ptrs, true, std::nullopt, false, topology, use_closest_sockets);
         if (context_switch_interval_override.has_value()) {
             fabric_device_builders.set_firmware_context_switch_interval(context_switch_interval_override.value());
         }
@@ -712,7 +748,13 @@ void initialize_edm_fabric(
                     return &p;
                 });
             row_fabric_lines.push_back(EdmLineFabricOpInterface(
-                mesh_device->get_view().get_row_views()[i], program_ptrs, true, std::nullopt, false, topology));
+                mesh_device->get_view().get_row_views()[i],
+                program_ptrs,
+                true,
+                std::nullopt,
+                false,
+                topology,
+                use_closest_sockets));
             if (context_switch_interval_override.has_value()) {
                 row_fabric_lines.back().set_firmware_context_switch_interval(context_switch_interval_override.value());
             }
@@ -725,7 +767,13 @@ void initialize_edm_fabric(
                 program_ptrs.push_back(&programs[r][i]);
             }
             col_fabric_lines.push_back(EdmLineFabricOpInterface(
-                mesh_device->get_view().get_column_views()[i], program_ptrs, true, std::nullopt, false, topology));
+                mesh_device->get_view().get_column_views()[i],
+                program_ptrs,
+                true,
+                std::nullopt,
+                false,
+                topology,
+                use_closest_sockets));
             if (context_switch_interval_override.has_value()) {
                 col_fabric_lines.back().set_firmware_context_switch_interval(context_switch_interval_override.value());
             }
