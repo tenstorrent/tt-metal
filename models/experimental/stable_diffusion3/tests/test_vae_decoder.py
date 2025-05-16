@@ -33,7 +33,7 @@ from ..tt.vae_decoder import TtGroupNorm, TtGroupNormParameters, TtVaeDecoder, T
     ],
 )
 def test_vae_decoder(
-    *, device: ttnn.Device, model_name, use_program_cache: bool, use_tracing: bool, image_size: int
+    *, device: ttnn.Device, model_name: str, use_program_cache: bool, use_tracing: bool, image_size: int
 ) -> None:
     if use_program_cache:
         ttnn.enable_program_cache(device)
