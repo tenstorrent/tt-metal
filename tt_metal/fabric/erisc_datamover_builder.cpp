@@ -274,15 +274,12 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
         this->sender_channels_num_buffers[i] = skip_current_channel ? 0 : num_sender_buffer_slots;
         this->sender_channels_size_bytes[i] =
             skip_current_channel ? 0 : channel_buffer_size_bytes * num_sender_buffer_slots;
-
-        tt::log_info("Sender {} channel_size: {}", i, this->sender_channels_size_bytes[i]);
     }
     for (uint32_t i = 0; i < this->num_used_receiver_channels; i++) {
         bool skip_current_channel = (i == non_dataline_receiver_channel_idx && is_dateline);
         this->receiver_channels_num_buffers[i] = skip_current_channel ? 0 : num_receiver_buffer_slots;
         this->receiver_channels_size_bytes[i] =
             skip_current_channel ? 0 : channel_buffer_size_bytes * num_receiver_buffer_slots;
-        tt::log_info("Receiver {} channel_size: {}", i, this->receiver_channels_size_bytes[i]);
     }
 
     uint32_t buffer_addr = buffer_region_start;
@@ -493,6 +490,10 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args() const
     size_t sender_channel_num_buffers = this->sender_channels_num_buffers[0];
     size_t receiver_channel_num_buffers =
         this->dateline_connection ? this->receiver_channels_num_buffers[1] : this->receiver_channels_num_buffers[0];
+
+    TT_FATAL(sender_channel_num_buffers > 0, "Sender channel num buffers must be greater than 0");
+    TT_FATAL(receiver_channel_num_buffers > 0, "Receiver channel num buffers must be greater than 0");
+
     auto ct_args = std::vector<uint32_t>{
         num_sender_channels,
         num_receiver_channels,
