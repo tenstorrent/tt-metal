@@ -30,7 +30,7 @@ on:
         required: false
         type: boolean
         default: false
-      single-card-nightly:
+      single-card-ttnn-models-frequent:
         required: false
         type: boolean
         default: false
@@ -46,7 +46,15 @@ jobs:
     secrets: inherit
     with:
       build-type: ${{ inputs.build-type }}
-      tracy: ${{ inputs.build-with-tracy }}
+      build-wheel: true
+      version: "22.04"
+  build-artifact-profiler:
+    uses: ./.github/workflows/build-artifact.yaml
+    secrets: inherit
+    if: ${{ inputs.build-with-tracy }}
+    with:
+      build-type: ${{ inputs.build-type }}
+      tracy: true
       build-wheel: true
       version: "22.04"
   single-card-demo-tests:
@@ -69,15 +77,15 @@ jobs:
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
     if: ${{ inputs.single-card-perf-models }}
   single-card-perf-device-models-tests:
-    needs: build-artifact
+    needs: build-artifact-profiler
     secrets: inherit
     uses: ./.github/workflows/perf-device-models-impl.yaml
     if: ${{ inputs.single-card-perf-device-models }}
     with:
-      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
-      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-  single-card-nightly:
+      docker-image: ${{ needs.build-artifact-profiler.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact-profiler.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact-profiler.outputs.wheel-artifact-name }}
+  single-card-ttnn-models-frequent:
     needs: build-artifact
     secrets: inherit
     uses: ./.github/workflows/fast-dispatch-full-regressions-and-models-impl.yaml
@@ -85,7 +93,7 @@ jobs:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-    if: ${{ inputs.single-card-nightly }}
+    if: ${{ inputs.single-card-ttnn-models-frequent }}
   cpp-unit-tests:
     if: ${{ inputs.cpp-unit }}
     needs: build-artifact
