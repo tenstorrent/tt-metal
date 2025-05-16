@@ -94,7 +94,7 @@ void init_sync_registers() {
 
 int main(int argc, char *argv[]) {
     configure_csr();
-    mark_stack_memory();
+    mark_stack_usage();
     WAYPOINT("I");
 
     do_crt1((uint32_t tt_l1_ptr *)PREPROCESSOR_EXPAND(MEM_TRISC, COMPILE_FOR_TRISC, _INIT_LOCAL_L1_BASE_SCRATCH));
@@ -158,7 +158,7 @@ int main(int argc, char *argv[]) {
         void (*kernel_address)(uint32_t) = (void (*)(uint32_t))
             (kernel_config_base + launch_msg->kernel_config.kernel_text_offset[index]);
         (*kernel_address)((uint32_t)kernel_address);
-        record_stack_memory(discover_stack_usage());
+        record_stack_usage(discover_stack_usage());
         WAYPOINT("D");
 
         // Signal completion

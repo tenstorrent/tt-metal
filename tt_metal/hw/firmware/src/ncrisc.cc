@@ -98,7 +98,7 @@ void l1_to_ncrisc_iram_copy_wait() {
 
 int main(int argc, char *argv[]) {
     configure_csr();
-    mark_stack_memory();
+    mark_stack_usage();
     WAYPOINT("I");
 
     do_crt1((uint32_t tt_l1_ptr *)MEM_NCRISC_INIT_LOCAL_L1_BASE_SCRATCH);
@@ -156,7 +156,7 @@ int main(int argc, char *argv[]) {
         mailboxes->ncrisc_halt.resume_addr = (uint32_t)kernel_init;
         notify_brisc_and_halt_to_iram(RUN_SYNC_MSG_WAITING_FOR_RESET, (uint32_t)kernel_address);
 #endif
-        record_stack_memory(discover_stack_usage());
+        record_stack_usage(discover_stack_usage());
         WAYPOINT("D");
 
         signal_ncrisc_completion();

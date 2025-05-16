@@ -325,7 +325,7 @@ inline void barrier_remote_cb_interface_setup(uint8_t noc_index, uint32_t end_cb
 
 int main() {
     configure_csr();
-    mark_stack_memory();
+    mark_stack_usage();
     WAYPOINT("I");
 
     do_crt1((uint32_t*)MEM_BRISC_INIT_LOCAL_L1_BASE_SCRATCH);
@@ -454,7 +454,7 @@ int main() {
                 void (*kernel_address)(uint32_t) = (void (*)(uint32_t))
                     (kernel_config_base + launch_msg_address->kernel_config.kernel_text_offset[index]);
                 (*kernel_address)((uint32_t)kernel_address);
-                record_stack_memory(discover_stack_usage());
+                record_stack_usage(discover_stack_usage());
             } else {
 #if defined(PROFILE_KERNEL)
                 // This was not initialized in the kernel

@@ -10,8 +10,7 @@
 #if defined(WATCHER_ENABLED) && !(defined(WATCHER_DISABLE_STACK_USAGE) || defined(COMPILE_FOR_ERISC) || \
                                   defined(FORCE_WATCHER_OFF))
 
-#if defined(KERNEL_BUILD)
-#define STACK_DIRTY_PATTERN 0xBABABABA
+#if true || defined(KERNEL_BUILD)
 
 static inline uint32_t get_stack_base() {
 #if defined(COMPILE_FOR_BRISC)
@@ -41,13 +40,14 @@ static inline uint32_t get_stack_base() {
 #endif
 }
 
-static inline void mark_stack_memory() {
+constexpr uint32_t stack_usage_pattern = 0xBABABABA;
+static inline void mark_stack_usage() {
     uint32_t *base = (uint32_t tt_l1_ptr *)get_stack_base();
     uint32_t tt_l1_ptr *ptr;
     asm ("mv %0,sp" : "=r"(ptr));
 
     while (ptr != base)
-        *--ptr = STACK_DIRTY_PATTERN;
+        *--ptr = stack_usage_pattern;
 }
 
 static inline int discover_stack_usage() {
@@ -56,13 +56,13 @@ static inline int discover_stack_usage() {
     uint32_t tt_l1_ptr* stack_ptr = base;
     // We don't need to check size here, as we know we'll hit a
     // non-dirty value at some point (a set of return addresses).
-    while (*stack_ptr == STACK_DIRTY_PATTERN)
+    while (*stack_ptr == stack_usage_pattern)
         stack_ptr++;
     uint32_t stack_free = (stack_ptr - base) * sizeof (uint32_t);
     return stack_free + 1;
 }
 
-#else // !KERNEL_BUILD
+//#else // !KERNEL_BUILD
 
 static inline uint32_t get_dispatch_class() {
 #if defined(COMPILE_FOR_BRISC)
@@ -101,7 +101,7 @@ static inline void record_stack_usage(uint32_t stack_free) {
 
 #else  // !WATCHER_ENABLED
 
-static inline void mark_stack_memory() {
+static inline void mark_stack_usage() {
 }
 static inline int discover_stack_usage() {
     return 0;
