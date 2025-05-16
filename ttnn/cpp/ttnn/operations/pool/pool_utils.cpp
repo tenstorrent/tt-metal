@@ -126,6 +126,9 @@ uint32_t get_bf16_pool_scalar(
             if (scalars != nullptr) {
                 scalars->push_back(packed_first_value);
             }
+            if (sinchronization_indexes != nullptr) {
+                sinchronization_indexes->push_back(0);
+            }
             break;
         case Pool2DType::AVG_POOL2D:
             if (divisor_override.has_value()) {
