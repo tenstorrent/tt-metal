@@ -336,7 +336,9 @@ void Cluster::open_driver(const bool &skip_driver_allocs) {
                 }
             }
             TT_ASSERT(desired_logical_id != -1, "Visible device not found in cluster descriptor");
-            chips_set.emplace(desired_logical_id);
+            for (auto& chip_id : temp_cluster_desc->get_chips_grouped_by_closest_mmio().at(desired_logical_id)) {
+                chips_set.emplace(chip_id);
+            }
         } else {
             std::unordered_set<chip_id_t> all_chips = temp_cluster_desc->get_all_chips();
             chips_set.insert(all_chips.begin(), all_chips.end());
@@ -403,8 +405,7 @@ Cluster::~Cluster() {
 }
 
 std::unordered_map<chip_id_t, eth_coord_t> Cluster::get_user_chip_ethernet_coordinates() const {
-    auto user_chip_ethernet_coordinates =
-        filter_chip_collection_by_opened_chips(this->cluster_desc_->get_chip_locations());
+    auto user_chip_ethernet_coordinates = this->cluster_desc_->get_chip_locations();
     if (this->is_galaxy_cluster()) {
         std::erase_if(user_chip_ethernet_coordinates, [this](const auto& entry) {
             return this->cluster_desc_->get_board_type(entry.first) != BoardType::GALAXY;
@@ -414,7 +415,7 @@ std::unordered_map<chip_id_t, eth_coord_t> Cluster::get_user_chip_ethernet_coord
 }
 
 std::unordered_map<chip_id_t, eth_coord_t> Cluster::get_all_chip_ethernet_coordinates() const {
-    return filter_chip_collection_by_opened_chips(this->cluster_desc_->get_chip_locations());
+    return this->cluster_desc_->get_chip_locations();
 }
 
 size_t Cluster::number_of_user_devices() const {
@@ -998,8 +999,7 @@ void Cluster::disable_ethernet_cores_with_retrain() {
 
 void Cluster::reserve_ethernet_cores_for_tunneling() {
     const char *TT_METAL_SLOW_DISPATCH_MODE = std::getenv("TT_METAL_SLOW_DISPATCH_MODE");
-    for (const auto& [assoc_mmio_device, devices] :
-         filter_chip_collection_by_opened_chips(this->cluster_desc_->get_chips_grouped_by_closest_mmio())) {
+    for (const auto& [assoc_mmio_device, devices] : this->cluster_desc_->get_chips_grouped_by_closest_mmio()) {
         std::cout << "assoc_mmio_device: " << assoc_mmio_device << " devices size " << devices.size() << std::endl;
         for (const auto &chip_id : devices) {
             if (this->device_eth_routing_info_.find(chip_id) == this->device_eth_routing_info_.end()) {
@@ -1349,8 +1349,7 @@ uint32_t Cluster::get_mmio_device_max_tunnel_depth(chip_id_t mmio_device) const 
     TT_ASSERT(
         (this->get_associated_mmio_device(mmio_device) == mmio_device), "Called mmio device api on non-mmio device");
     uint32_t depth = 0;
-    for (const auto& [assoc_mmio_device, devices] :
-         filter_chip_collection_by_opened_chips(this->cluster_desc_->get_chips_grouped_by_closest_mmio())) {
+    for (const auto& [assoc_mmio_device, devices] : this->cluster_desc_->get_chips_grouped_by_closest_mmio()) {
         for (const auto &chip_id : devices) {
             if (chip_id == assoc_mmio_device) {
                 continue;

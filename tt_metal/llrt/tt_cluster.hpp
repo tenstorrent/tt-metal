@@ -112,7 +112,7 @@ public:
     // TODO: UMD will eventually consolidate ethernet coordinates and unique ids, we can remove the ethernet coord
     // getter after that change is in
     const std::unordered_map<chip_id_t, uint64_t> get_unique_chip_ids() const {
-        return filter_chip_collection_by_opened_chips(this->cluster_desc_->get_chip_unique_ids());
+        return this->cluster_desc_->get_chip_unique_ids();
     }
     std::unordered_map<chip_id_t, eth_coord_t> get_all_chip_ethernet_coordinates() const;
 
@@ -264,7 +264,7 @@ public:
 
     std::unordered_map<chip_id_t, std::unordered_map<ethernet_channel_t, std::tuple<chip_id_t, ethernet_channel_t>>>
     get_ethernet_connections() const {
-        return filter_chip_collection_by_opened_chips(this->cluster_desc_->get_ethernet_connections());
+        return this->cluster_desc_->get_ethernet_connections();
     }
 
     // Returns MMIO device ID (logical) that controls given `device_id`. If `device_id` is MMIO device it is returned.
@@ -356,22 +356,6 @@ private:
 
     // Set tunnels from mmio
     void set_tunnels_from_mmio_device();
-
-    template <typename T>
-    std::unordered_map<chip_id_t, T> filter_chip_collection_by_opened_chips(
-        const std::unordered_map<chip_id_t, T>& collection) const {
-        auto chips = this->driver_->get_target_device_ids();
-        std::cout << "chips size: " << chips.size() << std::endl;
-        std::unordered_map<chip_id_t, T> filtered_collection;
-        for (const auto& chip : chips) {
-            auto it = collection.find(chip);
-            if (it != collection.end()) {
-                std::cout << "chip: " << chip << std::endl;
-                filtered_collection.emplace(chip, it->second);
-            }
-        }
-        return filtered_collection;
-    }
 
     ARCH arch_;
     TargetDevice target_type_;
