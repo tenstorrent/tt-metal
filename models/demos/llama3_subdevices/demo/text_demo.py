@@ -105,7 +105,7 @@ def create_tt_model(
     tt_model_args = TtModelArgs(
         mesh_device,
         instruct=instruct,
-        max_batch_size=max_batch_size,
+        max_batch_size=32,
         optimizations=optimizations,
         max_seq_len=max_seq_len,
     )
@@ -305,11 +305,11 @@ def test_demo_text(
     """
 
     # TODO: Remove this once all batch sizes are supported on TG
-    if os.environ.get("MESH_DEVICE") == "TG" and batch_size not in [32]:
+    if os.environ.get("MESH_DEVICE") == "TG" and batch_size not in [1, 32]:
         pytest.skip("Llama TG only supports batch-32")
 
     enable_trace = True  # Use tracing for better perf
-    prefill_enable_trace = repeat_batches > 1
+    prefill_enable_trace = True  # repeat_batches > 1
     print_to_file = False  # Enable this flag to print the output of all users to a file
 
     # Override parameters from command line if they are provided
@@ -420,39 +420,45 @@ def test_demo_text(
         if batch_idx == 0:
             logger.info("Starting prefill warmup...")
             profiler.start(f"compile_prefill", iteration=batch_idx)
-
-            logits = generator.prefill_forward_text(
-                input_tokens_prefill_pt[0].unsqueeze(0),  # Just warmup prefill for 1 user
-                page_table=page_table,
-                kv_cache=tt_kv_cache,
-                prompt_lens=decoding_pos,
-                enable_trace=prefill_enable_trace,
-            )
+            try:
+                logits = generator.prefill_forward_text(
+                    input_tokens_prefill_pt,  # Just warmup prefill for 1 user
+                    page_table=page_table,
+                    kv_cache=tt_kv_cache,
+                    prompt_lens=decoding_pos,
+                    enable_trace=prefill_enable_trace,
+                )
+            except Exception as e:
+                logger.error(f"Error during prefill warmup: {str(e)}")
+                raise e
             profiler.end(f"compile_prefill", iteration=batch_idx)
             logger.info("Finished prefill warmup")
 
         logger.info(f"Starting prefill...")
 
         profiler.start(f"inference_prefill", iteration=batch_idx)
-
-        logits = generator.prefill_forward_text(
-            input_tokens_prefill_pt[0].unsqueeze(0),
-            page_table=page_table,
-            kv_cache=tt_kv_cache,
-            prompt_lens=decoding_pos,
-            enable_trace=prefill_enable_trace,
-        )
+        try:
+            logits = generator.prefill_forward_text(
+                input_tokens_prefill_pt,
+                page_table=page_table,
+                kv_cache=tt_kv_cache,
+                prompt_lens=decoding_pos,
+                enable_trace=prefill_enable_trace,
+            )
+        except Exception as e:
+            logger.error(f"Error during prefill: {str(e)}")
+            raise e
         prefilled_token = logits.view(-1, 1)  # torch.argmax(logits, dim=-1)
         profiler.end(f"inference_prefill", iteration=batch_idx)
         logger.info(f"Prefill finished")
 
         if prefilled_token.shape[0] != 32:
-            prefilled_token = prefilled_token.repeat(batch_size, 1)
+            prefilled_token = prefilled_token.repeat(32, 1)
 
         # Keep track of generated outputs to print out every iteration
         all_outputs = [encoded_prompts[b][: prefill_lens[b]] for b in range(batch_size)]
         for user in range(batch_size):
-            user_tok = int(prefilled_token[0].item())
+            user_tok = int(prefilled_token[user].item())
             all_outputs[user].append(user_tok)
         # print("Prefill outputs:", [tokenizer.decode(output) for output in all_outputs])
         # model.tt_ccl.close()
@@ -460,7 +466,7 @@ def test_demo_text(
         user_done = [False] * batch_size  # Keeps track when a user reaches EoD token
 
         # TODO Argmax on device is only supported for batch_size=1
-        argmax_on_device = True  # False if (batch_size > 1 or sampling_params["temperature"] != 0) else True
+        argmax_on_device = batch_size == 1  # False if (batch_size > 1 or sampling_params["temperature"] != 0) else True
 
         if argmax_on_device:
             device_sampling_params = SamplingParams(temperature=0.0, top_k=-1, top_p=1.0)
@@ -468,8 +474,9 @@ def test_demo_text(
             device_sampling_params = None
 
         # Initial positions
-        current_pos = torch.tensor([decoding_pos[0] for b in range(batch_size)])
-
+        current_pos = torch.tensor([decoding_pos[b] for b in range(batch_size)])
+        if batch_size == 1:
+            current_pos = current_pos.repeat(32)
         # Start decoding
         iteration = 0
         users_decoding = True
@@ -499,7 +506,7 @@ def test_demo_text(
                     page_table=page_table,
                     kv_cache=tt_kv_cache,
                     sampling_params=device_sampling_params,
-                    reset_inputs=iteration == 0,
+                    reset_inputs=iteration == 0 or batch_size > 1,
                 )
             except Exception as e:
                 logger.error(f"Error during decoding: {str(e)}")
@@ -512,6 +519,7 @@ def test_demo_text(
                 profiler.end(f"inference_decode_time_{iteration}", iteration=batch_idx)
                 decode_iteration_time = profiler.get_duration(f"inference_decode_time_{iteration}", iteration=batch_idx)
             tt_output_torch = out_tok_cpu
+            out_tok = tt_output_torch
 
             # Always print perf after every iteration
             tokens_per_second_per_user = 1 / decode_iteration_time
@@ -524,7 +532,10 @@ def test_demo_text(
 
             # Save output token to print out later
             for user in range(batch_size):
-                user_tok = tt_output_torch.tolist()[0]
+                if batch_size == 1:
+                    user_tok = tt_output_torch.tolist()[0]
+                else:
+                    user_tok = tt_output_torch.tolist()[user][0]
                 if (
                     user_tok not in tokenizer.stop_tokens and user_done[user] == False
                 ):  # Read until an eos token (e.g. <|eot_id|>); create_tokenizer adds stop_tokens to HF tokenizers
@@ -540,7 +551,7 @@ def test_demo_text(
 
             # Print out generated outputs for each user at the end of every iteration
             if not is_ci_env:
-                for user in range(1):
+                for user in range(batch_size):
                     text = "".join(tokenizer.decode(all_outputs[user]))
                     if len(text) > 100:
                         text = "..." + text[-97:]
@@ -578,7 +589,6 @@ def test_demo_text(
                         logger.info(
                             f"\n==REPEAT BATCH {batch_idx}\n==USER {i} - PROMPT\n{short_prompt} \n==USER {i} - OUTPUT\n{text_after_prompt.strip()}\n"
                         )
-                    break
                 profiler.end(f"log_saving_file", iteration=batch_idx)
 
         num_tokens_generated_decode.append(iteration)  # Save the number of tokens generated for each repeat batch
