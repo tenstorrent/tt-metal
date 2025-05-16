@@ -342,6 +342,11 @@ operation::ProgramWithCallbacks slice_write_rm_sharded_input_multi_core(
     uint32_t output_row_size_bytes = output_shape[-1] * output.element_size();
     uint32_t input_row_size_bytes = shard_spec.shape[1] * input.element_size();
 
+    auto src_buffer_alignment = input.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM
+                                    ? hal::get_dram_alignment()
+                                    : hal::get_l1_alignment();
+    uint32_t input_row_size_bytes_offset = tt::round_up(input_row_size_bytes, src_buffer_alignment);
+
     uint32_t max_read_size = 4096;
     if (is_height_sharded) {
         TT_FATAL(output_row_size_bytes == input_row_size_bytes, "Input & output should have the same row size");
@@ -380,8 +385,8 @@ operation::ProgramWithCallbacks slice_write_rm_sharded_input_multi_core(
         output_cb_data_format);
     tt::tt_metal::CircularBufferConfig cb_src0_config =
         tt::tt_metal::CircularBufferConfig(
-            num_input_sticks_per_core * input_row_size_bytes, {{src0_cb_index, input_cb_data_format}})
-            .set_page_size(src0_cb_index, input_row_size_bytes)
+            num_input_sticks_per_core * input_row_size_bytes_offset, {{src0_cb_index, input_cb_data_format}})
+            .set_page_size(src0_cb_index, input_row_size_bytes_offset)
             .set_globally_allocated_address(*input.buffer());
 
     auto input_cb_handle = tt::tt_metal::CreateCircularBuffer(program, input_cores, cb_src0_config);
