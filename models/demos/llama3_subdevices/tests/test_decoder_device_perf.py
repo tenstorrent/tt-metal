@@ -22,6 +22,9 @@ from models.demos.llama3_subdevices.demo.demo_decode import LlamaOptimizations
 
 DECODER_OP_START_INDEX = 4
 DECODER_OP_END_INDEX = -13
+if "TT_METAL_KERNELS_EARLY_RETURN" in os.environ:
+    # Last layer has 1 extra layer, if early return omit last 12 instead of 13
+    DECODER_OP_END_INDEX = -12
 
 perf_targets = {
     "RMSAllGather_0": {
@@ -768,7 +771,8 @@ def test_llama_TG_perf_device_non_overlapped_dispatch(
     df = merge_device_rows(df)
     # Exclude compilaton and capture trace runs
     df_model = df[int(len(df) / 3 * 2) :]
-    df_layers = df_model[DECODER_OP_START_INDEX : DECODER_OP_END_INDEX + 1]
+    # Add 1 as early return means
+    df_layers = df_model[DECODER_OP_START_INDEX:DECODER_OP_END_INDEX]
     all_layers_raw_dict = df_layers[["OP CODE", "DEVICE KERNEL DURATION [ns]", "OP TO OP LATENCY [ns]"]].to_dict(
         orient="records"
     )
