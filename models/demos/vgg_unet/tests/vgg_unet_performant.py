@@ -4,7 +4,7 @@
 
 
 import ttnn
-from models.experimental.functional_vgg_unet.tests.vgg_unet_test_infra import create_test_infra
+from models.demos.vgg_unet.tests.vgg_unet_test_infra import create_test_infra
 
 try:
     from tracy import signpost
