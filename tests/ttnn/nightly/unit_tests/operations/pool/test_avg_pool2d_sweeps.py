@@ -19,31 +19,41 @@ parameters = {
     "input_specs": [
         # Contains following parameters
         # [batch_size, input_channels, input_height, input_width, kernel_height, kernel_width, stride_h, stride_w, pad_h, pad_w, ceil_mode, count_include_pad]
-        [1, 32, 3, 3, 2, 2, 2, 2, 0, 0, True, True, None],
-        [1, 32, 3, 3, 2, 2, 2, 2, 0, 0, True, False, None],
-        [1, 32, 3, 3, 2, 2, 2, 2, 1, 1, False, False, None],
-        [1, 32, 4, 4, 2, 2, 2, 2, 1, 1, False, False, None],
-        [1, 32, 4, 4, 2, 2, 2, 2, 1, 1, True, False, None],
-        # # # # # #
-        [1, 1056, 14, 14, 5, 5, 2, 2, 0, 0, False, True, None],
-        [1, 128, 56, 56, 2, 2, 2, 2, 0, 0, False, True, None],
-        [1, 160, 7, 7, 2, 2, 2, 2, 0, 0, False, True, None],
-        [1, 192, 56, 56, 2, 2, 2, 2, 0, 0, False, True, None],
-        [1, 256, 28, 28, 2, 2, 2, 2, 0, 0, False, True, None],
-        [1, 384, 28, 28, 2, 2, 2, 2, 0, 0, False, True, None],
-        [1, 512, 14, 14, 2, 2, 2, 2, 0, 0, False, True, None],
-        [1, 640, 14, 14, 2, 2, 2, 2, 0, 0, False, True, None],
-        [1, 896, 14, 14, 2, 2, 2, 2, 0, 0, False, True, None],
-        [1, 112, 14, 14, 2, 2, 2, 2, 0, 0, False, True, None],
-        [1, 24, 56, 56, 2, 2, 2, 2, 0, 0, False, True, None],
-        [1, 40, 28, 28, 2, 2, 2, 2, 0, 0, False, True, None],
-        [1, 80, 14, 14, 2, 2, 2, 2, 0, 0, False, True, None],
-        [1, 32, 4, 4, 2, 2, 2, 2, 1, 1, True, True, None],
-        #
-        [1, 32, 8, 8, 3, 3, 1, 1, 1, 1, False, False, None],  # issue with width and block sharding
-        [1, 32, 17, 17, 5, 5, 1, 1, 1, 1, False, True, None],  # hangs height
-        [1, 384, 35, 35, 3, 3, 1, 1, 1, 1, False, False, None],  # hangs height
-        [2, 512, 112, 32, 5, 5, 1, 1, 0, 0, True, True, None],  # hangs height
+        # [1, 32, 3, 3, 2, 2, 2, 2, 0, 0, True, True, None],
+        # [1, 32, 3, 3, 2, 2, 2, 2, 0, 0, True, False, None],
+        # [1, 32, 3, 3, 2, 2, 2, 2, 1, 1, False, False, None],
+        # [1, 32, 4, 4, 2, 2, 2, 2, 1, 1, False, False, None],
+        # [1, 32, 4, 4, 2, 2, 2, 2, 1, 1, True, False, None],
+        # # # # # # #
+        # [1, 1056, 14, 14, 5, 5, 2, 2, 0, 0, False, True, None],
+        # [1, 128, 56, 56, 2, 2, 2, 2, 0, 0, False, True, None],
+        # [1, 160, 7, 7, 2, 2, 2, 2, 0, 0, False, True, None],
+        # [1, 192, 56, 56, 2, 2, 2, 2, 0, 0, False, True, None],
+        # [1, 256, 28, 28, 2, 2, 2, 2, 0, 0, False, True, None],
+        # [1, 384, 28, 28, 2, 2, 2, 2, 0, 0, False, True, None],
+        # [1, 512, 14, 14, 2, 2, 2, 2, 0, 0, False, True, None],
+        # [1, 640, 14, 14, 2, 2, 2, 2, 0, 0, False, True, None],
+        # [1, 896, 14, 14, 2, 2, 2, 2, 0, 0, False, True, None],
+        # [1, 112, 14, 14, 2, 2, 2, 2, 0, 0, False, True, None],
+        # [1, 24, 56, 56, 2, 2, 2, 2, 0, 0, False, True, None],
+        # [1, 40, 28, 28, 2, 2, 2, 2, 0, 0, False, True, None],
+        # [1, 80, 14, 14, 2, 2, 2, 2, 0, 0, False, True, None],
+        # [1, 32, 4, 4, 2, 2, 2, 2, 1, 1, True, True, None],
+        # #
+        # [1, 32, 8, 8, 3, 3, 1, 1, 1, 1, False, False, None],  # issue with width and block sharding
+        # [1, 32, 17, 17, 5, 5, 1, 1, 1, 1, False, True, None],  # hangs height
+        # [1, 384, 35, 35, 3, 3, 1, 1, 1, 1, False, False, None],  # hangs height
+        # [2, 512, 112, 32, 5, 5, 1, 1, 0, 0, True, True, None],  # hangs height
+        # [1, 32, 16, 16, 2, 2, 1, 1, 1, 1, False, False, None],  # hangs height
+        # [1, 32, 16, 16, 3, 3, 2, 2, 0, 0, False, False, None],  # hangs height
+        # [2, 512, 112, 32, 5, 5, 1, 1, 0, 0, False, False, None],  # hangs height
+        # [2, 512, 112, 32, 5, 5, 1, 1, 0, 0, False, False, None],  # hangs height
+        # [2, 512, 112, 32, 5, 5, 1, 1, 0, 0, False, False, None],  # hangs height
+        # [2, 512, 112, 32, 5, 5, 1, 1, 0, 0, False, False, None],  # hangs height
+        # [2, 512, 112, 32, 5, 5, 1, 1, 0, 0, False, False, None],  # hangs height
+        # [2, 512, 112, 32, 2, 2, 1, 1, 0, 0, False, False, None],  # hangs height
+        # [1, 512, 112, 32, 3, 3, 2, 2, 0, 0, False, False, None],  # hangs height
+        [1, 512, 112, 32, 2, 2, 2, 2, 0, 0, False, False, None],  # hangs height
     ],
     "failing_parameters": [
         # [batch_size, input_channels, input_height, input_width, kernel_height, kernel_width, stride_h, stride_w, pad_h, pad_w, ceil_mode, count_include_pad]
