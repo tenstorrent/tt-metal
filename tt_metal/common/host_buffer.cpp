@@ -2,18 +2,14 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <cstdint>
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/host_buffer.hpp>
 #include <tt-metalium/memory_pin.hpp>
 #include <tt_stl/span.hpp>
 #include <tt_stl/overloaded.hpp>
 
-#include <functional>
 #include <memory>
-#include <typeinfo>
 #include <utility>
-#include <variant>
 #include <vector>
 
 namespace tt::tt_metal {
@@ -47,8 +43,6 @@ tt::stl::Span<std::byte> HostBuffer::view_bytes() & noexcept { return view_; }
 
 tt::stl::Span<const std::byte> HostBuffer::view_bytes() const& noexcept { return view_; }
 
-bool HostBuffer::is_allocated() const { return pin_ != nullptr; }
-
 bool HostBuffer::is_borrowed() const { return is_borrowed_; }
 
 HostBuffer HostBuffer::deep_copy() const {
@@ -62,13 +56,6 @@ HostBuffer HostBuffer::deep_copy() const {
 }
 
 MemoryPin HostBuffer::pin() const { return pin_; }
-
-void HostBuffer::deallocate() {
-    pin_ = MemoryPin();
-    view_ = tt::stl::Span<std::byte>();
-    type_info_ = nullptr;
-    is_borrowed_ = false;
-}
 
 bool operator==(const HostBuffer& a, const HostBuffer& b) noexcept {
     auto a_view = a.view_bytes();

@@ -20,21 +20,12 @@ using ::testing::IsEmpty;
 using ::testing::Pointwise;
 using ::testing::SizeIs;
 
-TEST(DistributedHostBufferTest, OwnedLifecycle) {
-    // TODO: #21604 - Is "allocate" / "deallocate" meaningful for host buffers?
+TEST(DistributedHostBufferTest, Basic) {
     auto buffer = DistributedHostBuffer::create(3);
-
-    EXPECT_FALSE(buffer.is_allocated());
 
     buffer.emplace_shard(0, HostBuffer(std::vector<int>{1, 2, 3}));
     buffer.emplace_shard(1, HostBuffer(std::vector<int>{4, 5, 6}));
     buffer.emplace_shard(2, HostBuffer(std::vector<int>{7, 8, 9}));
-
-    EXPECT_TRUE(buffer.is_allocated());
-
-    buffer.deallocate();
-
-    EXPECT_FALSE(buffer.is_allocated());
 }
 
 TEST(DistributedHostBufferTest, ShardedWithInvalidLocalShape) {

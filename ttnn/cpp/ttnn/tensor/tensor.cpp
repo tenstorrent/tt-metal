@@ -151,11 +151,9 @@ void Tensor::deallocate_impl(bool force) {
     // GraphTracker::instance().track_function_start("Tensor::deallocate", *this, force);
     if (can_deallocate(tensor_attributes, force)) {
         std::visit(
-            // TODO: #21604 - Host-side buffers do not support "forced" deallocation.
-            // The underlying data can still be shared across tensors.
             tt::stl::overloaded{
-                [this](HostStorage& host_storage) { host_storage.buffer.deallocate(); },
-                [this](MultiDeviceHostStorage& host_storage) { host_storage.deallocate(); },
+                [](HostStorage&) {},
+                [](MultiDeviceHostStorage&) {},
                 [this, force, &can_deallocate](DeviceStorage& storage) {
                     if (can_deallocate(storage.mesh_buffer, force)) {
                         storage.mesh_buffer->deallocate();
@@ -493,7 +491,13 @@ Tensor Tensor::reshape(const ttnn::Shape& new_logical_shape, const ttnn::Shape& 
 
 bool Tensor::is_allocated() const {
     ZoneScoped;
-    auto output = std::visit([](auto&& storage) -> bool { return storage.is_allocated(); }, this->get_storage());
+    auto output = std::visit(
+        tt::stl::overloaded{
+            [](const DeviceStorage& storage) { return storage.is_allocated(); },
+            [](const HostStorage&) { return true; },
+            [](const MultiDeviceHostStorage&) { return true; },
+        },
+        this->get_storage());
     return output;
 }
 
