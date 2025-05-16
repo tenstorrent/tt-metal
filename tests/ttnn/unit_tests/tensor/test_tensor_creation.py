@@ -188,13 +188,13 @@ grid_size = [8, 7]
             ),
         ),
         (
-            (1, 1, 1, 96),
+            (1, 1, 5, 96),
             ttnn.MemoryConfig(
                 ttnn.TensorMemoryLayout.WIDTH_SHARDED,
                 ttnn.BufferType.L1,
                 ttnn.ShardSpec(
                     ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 0))}),
-                    [1, 64],
+                    [5, 64],
                     ttnn.ShardOrientation.ROW_MAJOR,
                 ),
             ),

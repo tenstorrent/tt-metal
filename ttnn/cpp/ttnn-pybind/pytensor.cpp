@@ -822,17 +822,24 @@ void pytensor_module(py::module& m_tensor) {
             py::init<>([](const py::object& tensor,
                           std::optional<DataType> data_type,
                           const std::unordered_map<std::string, std::string>& strategy,
-                          const std::optional<Tile>& tile) {
+                          const std::optional<Tile>& tile,
+                          const std::optional<MemoryConfig>& mem_config) {
                 if (py::isinstance<py::list>(tensor)) {
                     return detail::convert_python_tensors_to_tt_tensors(tensor, data_type, tile, strategy);
                 }
                 return detail::convert_python_tensor_to_tt_tensor(
-                    tensor, data_type, /*optional_layout=*/std::nullopt, tile, MemoryConfig{}, /*device=*/nullptr);
+                    tensor,
+                    data_type,
+                    /*optional_layout=*/std::nullopt,
+                    tile,
+                    mem_config.value_or(MemoryConfig{}),
+                    /*device=*/nullptr);
             }),
             py::arg("tensor"),
             py::arg("data_type") = std::nullopt,
             py::arg("strategy") = std::unordered_map<std::string, std::string>(),
             py::arg("tile") = std::nullopt,
+            py::arg("mem_config") = std::nullopt,
             py::return_value_policy::move,
             R"doc(
                 +--------------+------------------------+
@@ -843,6 +850,8 @@ void pytensor_module(py::module& m_tensor) {
                 | data_type    | TT Tensor data type    |
                 +--------------+------------------------+
                 | tile         | TT Tile Spec           |
+                +--------------+------------------------+
+                | mem_config   | TT Memory Config       |
                 +--------------+------------------------+
 
                 Example of creating a TT Tensor that uses torch.Tensor's storage as its own storage:

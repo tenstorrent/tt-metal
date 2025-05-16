@@ -304,14 +304,14 @@ def from_torch(
     if mesh_mapper:
         shards = mesh_mapper.map(tensor)
         if tile is not None:
-            tensor = ttnn.Tensor(shards, dtype, mesh_mapper.config(), tile)
+            tensor = ttnn.Tensor(shards, dtype, mesh_mapper.config(), tile, memory_config)
         else:
-            tensor = ttnn.Tensor(shards, dtype, mesh_mapper.config())
+            tensor = ttnn.Tensor(shards, dtype, mesh_mapper.config(), None, memory_config)
     else:
         if tile is not None:
-            tensor = ttnn.Tensor(tensor, dtype, {}, tile)
+            tensor = ttnn.Tensor(tensor, dtype, {}, tile, memory_config)
         else:
-            tensor = ttnn.Tensor(tensor, dtype)
+            tensor = ttnn.Tensor(tensor, dtype, {}, None, memory_config)
 
     if layout is not None and not (dtype == ttnn.bfloat8_b or dtype == ttnn.bfloat4_b):
         if pad_value is not None:
