@@ -273,7 +273,15 @@ TEST_P(KernelAddrGenTests, SingleCoreReshard) {
         /*
          * Create input data and runtime arguments, then execute
          */
-        std::vector<uint32_t> compile_time_args = {};
+        const auto& input_buffer_distribution_spec =
+            input_mesh_buffer->device_local_config().buffer_distribution_spec.value();
+        const auto& output_buffer_distribution_spec =
+            output_mesh_buffer->device_local_config().buffer_distribution_spec.value();
+        std::vector<uint32_t> compile_time_args = {
+            input_buffer_distribution_spec.get_tensor_shape_in_pages()[0],
+            input_buffer_distribution_spec.get_tensor_shape_in_pages()[1],
+            input_buffer_distribution_spec.get_tensor_shape_in_pages()[2],
+        };
 
         KernelHandle reshard_kernel_id = CreateKernel(
             program,
@@ -283,6 +291,11 @@ TEST_P(KernelAddrGenTests, SingleCoreReshard) {
                 .processor = DataMovementProcessor::RISCV_0,
                 .noc = NOC::RISCV_0_default,
                 .compile_args = compile_time_args});
+
+        std::vector<uint32_t> runtime_args = {
+            input_bank_base_address,
+        };
+        SetRuntimeArgs(program, reshard_kernel_id, core, runtime_args);
 
         auto mesh_work_load = tt::tt_metal::distributed::CreateMeshWorkload();
         AddProgramToMeshWorkload(
