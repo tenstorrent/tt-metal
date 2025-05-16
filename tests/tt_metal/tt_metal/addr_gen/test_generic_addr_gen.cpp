@@ -7,7 +7,6 @@
 #include <fmt/format.h>
 
 #include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
-#include "dispatch/system_memory_manager.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
 
 #include <tt-metalium/shape.hpp>
@@ -213,44 +212,39 @@ TEST_P(KernelAddrGenTests, SingleCoreReshard) {
     const auto& params = GetParam();
 
     // Create input and output replicated mesh buffers across generic mesh device; tests will only use first device
-    const auto [mesh_buffer, output_mesh_buffer] =
+    const auto [input_mesh_buffer, output_mesh_buffer] =
         create_replicated_input_and_output_mesh_buffers_from_inputs(params, mesh_device_.get());
 
     // Extract local single-device buffer (ie. shard_view) concepts for testing
     const tt::tt_metal::distributed::MeshCoordinate mesh_coordinate{0, 0};
-    const auto shard_view = mesh_buffer->get_device_buffer(mesh_coordinate);
-    const auto local_device = shard_view->device();
-    const auto host_size_in_bytes = mesh_buffer->device_local_size();
-    const auto bank_base_address = mesh_buffer->address();
-    const auto output_bank_base_address = output_mesh_buffer->address();
+    const auto input_shard_view = input_mesh_buffer->get_device_buffer(mesh_coordinate);
+    const auto output_shard_view = output_mesh_buffer->get_device_buffer(mesh_coordinate);
+    const auto local_device = input_shard_view->device();
 
-    // Initialize local device buffer to 0
+    const auto host_size_in_bytes = input_mesh_buffer->device_local_size();
+    ASSERT_EQ(host_size_in_bytes, output_mesh_buffer->device_local_size());
+
+    const auto input_bank_base_address = input_mesh_buffer->address();
+    const auto output_bank_base_address = output_mesh_buffer->address();
+    ASSERT_NE(input_bank_base_address, output_bank_base_address);
+
+    // Input and output buffers may not have the same aligned size per bank
+    // Initialize input local device buffers to 0
     {
-        std::vector<uint32_t> zeros_vector(shard_view->aligned_size_per_bank() / sizeof(uint32_t), 0);
+        std::vector<uint32_t> zeros_vector(input_shard_view->aligned_size_per_bank() / sizeof(uint32_t), 0);
         for (const auto& core : corerange_to_cores(params.input_shard_spec.grid)) {
             tt::tt_metal::detail::WriteToDeviceL1(
-                local_device, core, bank_base_address, zeros_vector, shard_view->core_type());
+                local_device, core, input_bank_base_address, zeros_vector, input_shard_view->core_type());
         }
     }
 
-    // Clear out command queue
+    // Initialize output local device buffers to 0
     {
-        uint16_t channel =
-            tt::tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(local_device->id());
-        chip_id_t mmio_device_id =
-            tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(local_device->id());
-        uint32_t cq_size = local_device->sysmem_manager().get_cq_size();
-        uint32_t cq_start = MetalContext::instance().dispatch_mem_map().get_host_command_queue_addr(
-            CommandQueueHostAddrType::UNRESERVED);
-
-        std::vector<uint32_t> cq_zeros((cq_size - cq_start) / sizeof(uint32_t), 0);
-
-        tt::tt_metal::MetalContext::instance().get_cluster().write_sysmem(
-            cq_zeros.data(),
-            (cq_size - cq_start),
-            get_absolute_cq_offset(channel, 0, cq_size) + cq_start,
-            mmio_device_id,
-            channel);
+        std::vector<uint32_t> zeros_vector(output_shard_view->aligned_size_per_bank() / sizeof(uint32_t), 0);
+        for (const auto& core : corerange_to_cores(params.output_shard_spec.grid)) {
+            tt::tt_metal::detail::WriteToDeviceL1(
+                local_device, core, output_bank_base_address, zeros_vector, output_shard_view->core_type());
+        }
     }
 
     // Create src vector
@@ -263,20 +257,71 @@ TEST_P(KernelAddrGenTests, SingleCoreReshard) {
             .shard_coord = tt::tt_metal::distributed::MeshCoordinate{0, 0},
             .host_data = const_cast<void*>(reinterpret_cast<const void*>(src.data())),
         }};
-        mesh_device_->mesh_command_queue().enqueue_write_shards(mesh_buffer, shard_data_transfer, /*blocking=*/false);
+        mesh_device_->mesh_command_queue().enqueue_write_shards(
+            input_mesh_buffer, shard_data_transfer, /*blocking=*/false);
         Finish(mesh_device_->mesh_command_queue());
     }
 
-    // Validate output
+    /* LAUNCH PROGRAM ON DEVICE
+     *
+     */
     {
-        // Initialize dst vector
-        std::vector<uint8_t> dst(host_size_in_bytes / sizeof(uint8_t), 0);
+        auto program = CreateProgram();
+
+        constexpr CoreCoord core = {0, 0};
+
+        /*
+         * Create input data and runtime arguments, then execute
+         */
+        std::vector<uint32_t> compile_time_args = {};
+
+        KernelHandle reshard_kernel_id = CreateKernel(
+            program,
+            "tests/tt_metal/tt_metal/addr_gen/kernels/reader_writer_reshard.cpp",
+            core,
+            DataMovementConfig{
+                .processor = DataMovementProcessor::RISCV_0,
+                .noc = NOC::RISCV_0_default,
+                .compile_args = compile_time_args});
+
+        auto mesh_work_load = tt::tt_metal::distributed::CreateMeshWorkload();
+        AddProgramToMeshWorkload(
+            mesh_work_load, std::move(program), (tt::tt_metal::distributed::MeshCoordinateRange)mesh_coordinate);
+        EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), mesh_work_load, false);
+
+        // EnqueueProgram and block until finished
+        tt::log_info("Started program");
+        Finish(mesh_device_->mesh_command_queue());
+        tt::log_info("finished program");
+    }
+
+    // Initialize dst vector
+    std::vector<uint8_t> dst(host_size_in_bytes / sizeof(uint8_t), 0);
+
+    // Validate output buffer matches src vector
+    {
         tt::log_info("Reading with: FDMeshCommandQueue enqueue_read_shards");
         std::vector<tt::tt_metal::distributed::MeshCommandQueue::ShardDataTransfer> shard_data_transfer{{
             .shard_coord = tt::tt_metal::distributed::MeshCoordinate{0, 0},
             .host_data = const_cast<void*>(reinterpret_cast<const void*>(dst.data())),
         }};
-        mesh_device_->mesh_command_queue().enqueue_read_shards(shard_data_transfer, mesh_buffer, /*blocking=*/false);
+        mesh_device_->mesh_command_queue().enqueue_read_shards(
+            shard_data_transfer, output_mesh_buffer, /*blocking=*/false);
+        Finish(mesh_device_->mesh_command_queue());
+
+        // Validate read results are correct
+        EXPECT_EQ(src, dst);
+    }
+
+    // Validate input buffer matches src vector (ie. unmodified after kernel read/writes)
+    {
+        tt::log_info("Reading with: FDMeshCommandQueue enqueue_read_shards");
+        std::vector<tt::tt_metal::distributed::MeshCommandQueue::ShardDataTransfer> shard_data_transfer{{
+            .shard_coord = tt::tt_metal::distributed::MeshCoordinate{0, 0},
+            .host_data = const_cast<void*>(reinterpret_cast<const void*>(dst.data())),
+        }};
+        mesh_device_->mesh_command_queue().enqueue_read_shards(
+            shard_data_transfer, input_mesh_buffer, /*blocking=*/false);
         Finish(mesh_device_->mesh_command_queue());
 
         // Validate read results are correct
