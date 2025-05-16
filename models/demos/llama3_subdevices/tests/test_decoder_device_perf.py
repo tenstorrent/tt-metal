@@ -23,7 +23,7 @@ from models.demos.llama3_subdevices.demo.demo_decode import LlamaOptimizations
 DECODER_OP_START_INDEX = 4
 DECODER_OP_END_INDEX = -13
 if "TT_METAL_KERNELS_EARLY_RETURN" in os.environ:
-    # Last layer has 1 extra layer, if early return omit last 12 instead of 13
+    # Last layer has 1 extra op, if early return omit last 12 ops instead of 13
     DECODER_OP_END_INDEX = -12
 
 perf_targets = {
