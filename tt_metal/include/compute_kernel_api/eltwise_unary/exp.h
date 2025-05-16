@@ -38,9 +38,14 @@ ALWI void exp_tile_init() {
  * | fast_and_approx | Computation to be done faster and approximate                              | bool     |                                                       | False    |
  */
 // clang-format on
-template <bool approx = true, bool fast_and_approx = true, int iterations = 8, bool scale_en = false>
-ALWI void exp_tile(uint32_t idst, int vector_mode = (int)VectorMode::RC, uint16_t scale = 0) {
-    MATH((llk_math_eltwise_unary_sfpu_exponential<approx, fast_and_approx, iterations, scale_en>(
+template <
+    bool approx = true,
+    bool fast_and_approx = true,
+    int iterations = 8,
+    bool scale_en = false,
+    bool skip_positive_check = false>
+ALWI void exp_tile(uint32_t idst, int vector_mode = (int)VectorMode::RC, uint16_t scale = 0x3F80) {
+    MATH((llk_math_eltwise_unary_sfpu_exponential<approx, fast_and_approx, iterations, scale_en, skip_positive_check>(
         idst, vector_mode, iterations, scale)));
 }
 

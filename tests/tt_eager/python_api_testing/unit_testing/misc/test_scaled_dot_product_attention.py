@@ -42,7 +42,7 @@ def run_test_sdpa_tt(
         compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
         q_chunk_size=q_chunk_size,
         k_chunk_size=k_chunk_size,
-        exp_approx_mode=False,
+        exp_approx_mode=True,
     )
 
     if use_high_precision_compute:
@@ -99,7 +99,7 @@ def run_sdpa_noncausal(
         compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
         q_chunk_size=q_chunk_size,
         k_chunk_size=k_chunk_size,
-        exp_approx_mode=False,
+        exp_approx_mode=True,
     )
 
     compute_kernel_config = ttnn.WormholeComputeKernelConfig(
@@ -250,20 +250,20 @@ def test_sdpa_tt_small_chunks(device, b, nh, nkv, s, d, q_chunk_size, k_chunk_si
 @pytest.mark.parametrize("q_chunk_size", [256], ids=["q256"])
 @pytest.mark.parametrize("k_chunk_size", [512], ids=["k512"])
 @pytest.mark.parametrize(
-    "b, nh, nkv, s, d, grid",
+    "b, nh, nkv, s, d",
     (
-        [1, 3, 3, 44 * 1024, 128, None],  # Llama2-70B
-        [1, 1, 1, 2048, 128, (1, 1)],
+        [1, 3, 3, 44 * 1024, 128],  # Llama2-70B
+        [1, 1, 1, 2048, 128],
     ),
     ids=["full-grid", "single-core"],
 )
-def test_sdpa_perf(device, b, nh, nkv, s, d, q_chunk_size, k_chunk_size, dtype, grid):
+def test_sdpa_perf(device, b, nh, nkv, s, d, q_chunk_size, k_chunk_size, dtype):
     if (s % q_chunk_size != 0) or (s % k_chunk_size != 0):
         pytest.skip("s must be divisible by q_chunk_size and k_chunk_size")
     if nh == 8 and q_chunk_size == 128 and k_chunk_size == 128:
         pytest.skip("Can cause OOM if profiling is enabled.")
     ttnn.device.DisablePersistentKernelCache()
-    run_sdpa_noncausal(device, b, nh, nkv, s, d, q_chunk_size, k_chunk_size, dtype, use_mask=False, grid=grid)
+    run_sdpa_noncausal(device, b, nh, nkv, s, d, q_chunk_size, k_chunk_size, dtype, use_mask=False)
 
 
 @skip_for_blackhole("Mismatching on BH, see #12349")
@@ -417,7 +417,7 @@ def run_test_chunked_sdpa(
         compute_with_storage_grid_size=grid_size or device.compute_with_storage_grid_size(),
         q_chunk_size=q_chunk_size,
         k_chunk_size=k_chunk_size,
-        exp_approx_mode=False,
+        exp_approx_mode=True,
     )
 
     if use_high_precision_compute:
@@ -644,7 +644,7 @@ def run_test_joint_sdpa(
         compute_with_storage_grid_size=grid_size or device.compute_with_storage_grid_size(),
         q_chunk_size=q_chunk_size,
         k_chunk_size=k_chunk_size,
-        exp_approx_mode=False,
+        exp_approx_mode=True,
     )
 
     if use_high_precision_compute:
@@ -1073,7 +1073,7 @@ def test_sdpa_benchmark(device):
                             compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
                             q_chunk_size=q_chunk_size,
                             k_chunk_size=k_chunk_size,
-                            exp_approx_mode=False,
+                            exp_approx_mode=True,
                         )
                         try:
                             tt_back = ttnn.transformer.scaled_dot_product_attention(

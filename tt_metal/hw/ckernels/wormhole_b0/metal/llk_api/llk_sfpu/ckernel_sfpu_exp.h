@@ -20,9 +20,15 @@ namespace sfpu {
 
 sfpi_inline vFloat sfpu_exp(vFloat val) { return _sfpu_exp_(val); }
 
-template <bool APPROXIMATION_MODE, bool FAST_APPROX = true, bool SCALE_EN = false, int ITERATIONS = 8>
-void calculate_exponential(const uint iterations = ITERATIONS, const uint exp_base_scale_factor = 0) {
-    _calculate_exponential_<APPROXIMATION_MODE, SCALE_EN, ITERATIONS, FAST_APPROX>(iterations, exp_base_scale_factor);
+template <
+    bool APPROXIMATION_MODE,
+    bool FAST_APPROX = true,
+    bool SCALE_EN = false,
+    int ITERATIONS = 8,
+    bool SKIP_POSITIVE_CHECK = false>
+void calculate_exponential(const uint iterations = ITERATIONS, const uint exp_base_scale_factor = 0x3F80) {
+    _calculate_exponential_<APPROXIMATION_MODE, SCALE_EN, ITERATIONS, FAST_APPROX, SKIP_POSITIVE_CHECK>(
+        iterations, exp_base_scale_factor);
 }
 
 template <bool APPROXIMATION_MODE>
