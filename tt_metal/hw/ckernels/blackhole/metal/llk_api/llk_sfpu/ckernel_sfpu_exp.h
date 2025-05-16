@@ -19,9 +19,15 @@ namespace sfpu {
 
 sfpi_inline vFloat sfpu_exp(vFloat val) { return _sfpu_exp_(val); }
 
-template <bool APPROXIMATION_MODE, bool SCALE_EN = false, int ITERATIONS = 8, bool FAST_APPROX = true>
-void calculate_exponential(const uint iterations = ITERATIONS, const uint exp_base_scale_factor = 0) {
-    _calculate_exponential_<APPROXIMATION_MODE, SCALE_EN, ITERATIONS, FAST_APPROX>(iterations, exp_base_scale_factor);
+template <
+    bool APPROXIMATION_MODE,
+    bool FAST_APPROX = true,
+    bool SCALE_EN = false,
+    int ITERATIONS = 8,
+    bool SKIP_POSITIVE_CHECK = false>
+void calculate_exponential(const uint iterations = ITERATIONS, const uint exp_base_scale_factor = 0x3F80) {
+    _calculate_exponential_<APPROXIMATION_MODE, SCALE_EN, ITERATIONS, FAST_APPROX, SKIP_POSITIVE_CHECK>(
+        iterations, exp_base_scale_factor);
 }
 
 template <bool APPROXIMATION_MODE>
@@ -76,9 +82,9 @@ sfpi_inline vFloat calculate_exponential_body_improved(vFloat val) {
     return out;
 }
 
-template <bool APPROXIMATION_MODE, bool FAST_APPROX = true>
+template <bool APPROXIMATION_MODE, bool FAST_APPROX = true, uint32_t scale = 0x3F800000>
 void exp_init() {
-    _init_exponential_<APPROXIMATION_MODE, FAST_APPROX>();
+    _init_exponential_<APPROXIMATION_MODE, FAST_APPROX, scale>();
 }
 
 }  // namespace sfpu
