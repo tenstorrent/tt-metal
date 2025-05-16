@@ -25,7 +25,6 @@
 #include "fabric_host_interface.h"
 #include "fabric_types.hpp"
 #include "hal.hpp"
-#include "hal_types.hpp"
 #include "host_api.hpp"
 #include "logger.hpp"
 #include "profiler_types.hpp"
@@ -37,12 +36,20 @@
 #include "tt_metal/impl/debug/noc_logging.hpp"
 #include "tt_metal/impl/debug/watcher_server.hpp"
 #include "tt_metal/impl/dispatch/topology.hpp"
-#include "tt_metal/jit_build/build_env_manager.hpp"
+#include "tt_metal/impl/dispatch/system_memory_manager.hpp"
 #include <umd/device/tt_core_coordinates.h>
 
 using namespace tt::tt_metal;
 
 namespace tt {
+
+namespace llrt {
+
+namespace internal_ {
+void wait_until_cores_done(
+    chip_id_t device_id, int run_state, std::unordered_set<CoreCoord>& not_done_phys_cores, int timeout_ms);
+}  // namespace internal_
+}  // namespace llrt
 
 namespace device_cpu_allocator {
 std::unordered_map<int, std::vector<uint32_t>> get_cpu_cores_per_numa_node(std::unordered_set<uint32_t>& free_cores) {
@@ -356,6 +363,7 @@ void DevicePool::initialize_active_devices() const {
             }
         }
     }
+    _inst->dispatch_firmware_active_ = true;
 }
 
 void DevicePool::activate_device(chip_id_t id) {
@@ -619,6 +627,26 @@ std::vector<IDevice* > DevicePool::get_all_active_devices() const {
     return user_devices;
 }
 
+void DevicePool::teardown_fd(const std::unordered_set<chip_id_t>& devices_to_close) {
+    for (const auto& dev_id : devices_to_close) {
+        // Device is still active at this point
+        auto dev = tt::DevicePool::instance().get_active_device(dev_id);
+        if (!dev->using_fast_dispatch()) {
+            continue;
+        }
+
+        for (int cq_id = 0; cq_id < dev->num_hw_cqs(); cq_id++) {
+            auto& cq = dev->command_queue(cq_id);
+            if (cq.sysmem_manager().get_bypass_mode()) {
+                cq.record_end();
+            }
+            cq.terminate();
+        }
+    }
+}
+
+bool DevicePool::is_dispatch_firmware_active() const { return this->dispatch_firmware_active_; }
+
 bool DevicePool::close_device(chip_id_t device_id) {
     // Sync and close one device
     // Currently can only call this on mmio chips, once we split dispatch kernel shutdown
@@ -684,6 +712,20 @@ bool DevicePool::close_devices(const std::vector<IDevice*>& devices, bool skip_s
         }
     }
 
+    dispatch_firmware_active_ = false;
+    teardown_fd(std::unordered_set<chip_id_t>(devices_to_close.begin(), devices_to_close.end()));
+    // Terminate sent to each device. Wait for dispatch to finish. MMIO only to prevent clogging SD path.
+    // Dispatch kernels internally have a sync at the end to ensure all credits are returned
+    for (const auto& dev_id : devices_to_close) {
+        auto dev = tt::DevicePool::instance().get_active_device(dev_id);
+        if (!dev->is_mmio_capable() || !dev->using_fast_dispatch()) {
+            continue;
+        }
+
+        auto dispatch_cores = tt::tt_metal::get_virtual_dispatch_cores(dev_id);
+        tt::llrt::internal_::wait_until_cores_done(dev_id, RUN_MSG_GO, dispatch_cores, 0);
+    }
+
     // Terminate fabric routers
     const auto fabric_config = tt::tt_metal::MetalContext::instance().get_cluster().get_fabric_config();
     if (tt::tt_fabric::is_tt_fabric_config(fabric_config) || tt::tt_fabric::is_2d_fabric_config(fabric_config)) {
@@ -708,11 +750,33 @@ bool DevicePool::close_devices(const std::vector<IDevice*>& devices, bool skip_s
     detail::ProfilerSync(ProfilerSyncState::CLOSE_DEVICE);
 
     tt::tt_metal::MetalContext::instance().get_cluster().set_internal_routing_info_for_ethernet_cores(false);
+
     bool pass = true;
     for (const auto& dev_id : devices_to_close) {
         auto dev = tt::DevicePool::instance().get_active_device(dev_id);
         pass &= dev->close();
     }
+
+    // At this point the routing core clients (dispatch) have been terminated
+    // Terminate worker routing cores on device. Remaining ethernet cores will get reset during init
+    for (const auto& dev_id : devices_to_close) {
+        const auto mmio_device_id =
+            tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(dev_id);
+        auto routing_cores = tt::tt_metal::get_virtual_dispatch_routing_cores(dev_id);
+        for (const auto& core : routing_cores) {
+            if (tt::tt_metal::MetalContext::instance().get_cluster().is_ethernet_core(core, dev_id)) {
+                continue;
+            }
+            log_debug(
+                tt::LogMetal,
+                "Resetting dispatch routing core {} on Device {} when closing Device {}",
+                core.str(),
+                mmio_device_id,
+                dev_id);
+            tt::tt_metal::MetalContext::instance().get_cluster().assert_risc_reset_at_core(tt_cxy_pair(dev_id, core));
+        }
+    }
+
     return pass;
 }
 
