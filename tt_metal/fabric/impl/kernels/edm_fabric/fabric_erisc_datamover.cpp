@@ -875,7 +875,6 @@ template <
     typename WriteTridTracker>
 void run_receiver_channel_step(
     tt::tt_fabric::EthChannelBuffer<RECEIVER_NUM_BUFFERS>& local_receiver_channel,
-    std::array<tt::tt_fabric::EthChannelBuffer<SENDER_NUM_BUFFERS>, NUM_SENDER_CHANNELS>& remote_sender_channels,
     std::array<tt::tt_fabric::EdmToEdmSender<SENDER_NUM_BUFFERS>, NUM_USED_RECEIVER_CHANNELS>& downstream_edm_interface,
     volatile tt::tt_fabric::EdmFabricReceiverChannelCounters* receiver_channel_counters_ptr,
     ReceiverChannelPointers<RECEIVER_NUM_BUFFERS>& receiver_channel_pointers,
@@ -1075,7 +1074,6 @@ void run_fabric_edm_main_loop(
         local_sender_channel_worker_interfaces,
     std::array<tt::tt_fabric::EdmToEdmSender<SENDER_NUM_BUFFERS>, NUM_USED_RECEIVER_CHANNELS>&
         downstream_edm_noc_interfaces,
-    std::array<tt::tt_fabric::EthChannelBuffer<SENDER_NUM_BUFFERS>, NUM_SENDER_CHANNELS>& remote_sender_channels,
     std::array<tt::tt_fabric::EthChannelBuffer<RECEIVER_NUM_BUFFERS>, NUM_RECEIVER_CHANNELS>& remote_receiver_channels,
     volatile tt::tt_fabric::TerminationSignal* termination_signal_ptr,
     std::array<volatile tt::tt_fabric::EdmFabricReceiverChannelCounters*, MAX_NUM_RECEIVER_CHANNELS>
@@ -1155,7 +1153,6 @@ void run_fabric_edm_main_loop(
                     to_receiver_packets_sent_streams[0],
                     0>(
                     local_receiver_channels[0],
-                    remote_sender_channels,
                     downstream_edm_noc_interfaces,
                     receiver_channel_counters_ptrs[0],
                     receiver_channel_pointers[0],
@@ -1174,7 +1171,6 @@ void run_fabric_edm_main_loop(
                     to_receiver_packets_sent_streams[1],
                     1>(
                     local_receiver_channels[1],
-                    remote_sender_channels,
                     downstream_edm_noc_interfaces,
                     receiver_channel_counters_ptrs[1],
                     receiver_channel_pointers[1],
@@ -1641,7 +1637,6 @@ void kernel_main() {
 
     std::array<tt::tt_fabric::EthChannelBuffer<RECEIVER_NUM_BUFFERS>, NUM_RECEIVER_CHANNELS> remote_receiver_channels;
     std::array<tt::tt_fabric::EthChannelBuffer<RECEIVER_NUM_BUFFERS>, NUM_RECEIVER_CHANNELS> local_receiver_channels;
-    std::array<tt::tt_fabric::EthChannelBuffer<SENDER_NUM_BUFFERS>, NUM_SENDER_CHANNELS> remote_sender_channels;
     std::array<tt::tt_fabric::EthChannelBuffer<SENDER_NUM_BUFFERS>, NUM_SENDER_CHANNELS> local_sender_channels;
     std::array<tt::tt_fabric::EdmChannelWorkerInterface<SENDER_NUM_BUFFERS>, NUM_SENDER_CHANNELS>
         local_sender_channel_worker_interfaces;
@@ -1802,12 +1797,6 @@ void kernel_main() {
             sizeof(PACKET_HEADER_TYPE),
             0,  // For sender channels there is no eth_transaction_ack_word_addr because they don't send acks
             i);
-        new (&remote_sender_channels[i]) tt::tt_fabric::EthChannelBuffer<SENDER_NUM_BUFFERS>(
-            remote_sender_buffer_addresses[i],
-            channel_buffer_size,
-            sizeof(PACKET_HEADER_TYPE),
-            0,  // For sender channels there is no eth_transaction_ack_word_addr because they don't send acks
-            i);
     }
     init_local_sender_channel_worker_interfaces(
         local_sender_connection_live_semaphore_addresses,
@@ -1931,7 +1920,6 @@ void kernel_main() {
         local_sender_channels,
         local_sender_channel_worker_interfaces,
         downstream_edm_noc_interfaces,
-        remote_sender_channels,
         remote_receiver_channels,
         termination_signal_ptr,
         {receiver_0_channel_counters_ptr, receiver_1_channel_counters_ptr},
