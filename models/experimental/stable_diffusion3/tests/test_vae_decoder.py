@@ -132,15 +132,8 @@ def test_vae_decoder_norm(
     torch_model = torch.nn.GroupNorm(num_groups=group_count, num_channels=channels)
     torch_model.eval()
 
-    parameters = TtGroupNormParameters.from_torch(torch_model.state_dict(), device=device, dtype=ttnn_dtype)
-    tt_model = TtGroupNorm(
-        parameters,
-        num_groups=group_count,
-        eps=torch_model.eps,
-        batch_size=batch_size,
-        input_width=width,
-        input_height=height,
-    )
+    parameters = TtGroupNormParameters.from_torch(torch_model.state_dict(), device=device)
+    tt_model = TtGroupNorm(parameters, eps=torch_model.eps, num_groups=group_count)
 
     torch.manual_seed(0)
 
