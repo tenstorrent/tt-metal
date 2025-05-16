@@ -67,7 +67,7 @@ uint32_t sumIDs[SUM_COUNT] __attribute__((used));
 
 int main() {
     configure_csr();
-    DIRTY_STACK_MEMORY();
+    mark_stack_memory();
     WAYPOINT("I");
     do_crt1((uint32_t*)MEM_AERISC_INIT_LOCAL_L1_BASE_SCRATCH);
 
@@ -147,7 +147,7 @@ int main() {
                     mailboxes->launch[mailboxes->launch_msg_rd_ptr].kernel_config.kernel_text_offset[index]);
                 (*kernel_address)((uint32_t)kernel_address);
 
-                RECORD_STACK_USAGE();
+                record_stack_memory(discover_stack_usage());
                 WAYPOINT("D");
             }
 
