@@ -746,7 +746,8 @@ private:
 
         void set_trace_nodes(std::vector<TraceNode>* trace_nodes) { trace_nodes_ = trace_nodes; }
 
-        std::pair<std::optional<uint32_t>, uint32_t> allocate_region(
+        // Returns sync_idx and address.
+        std::pair<std::optional<uint32_t>, std::optional<uint32_t>> allocate_region(
             uint32_t size, uint32_t trace_idx, uint32_t data_type);
 
         void add_region(uint64_t program_id, uint32_t addr) { program_ids_memory_map_[program_id] = addr; }
@@ -766,6 +767,11 @@ private:
             return std::nullopt;
         }
 
+        void reset_allocator() {
+            program_ids_memory_map_.clear();
+            regions_.clear();
+        }
+
     private:
         uint32_t ringbuffer_size_;
         std::map<uint64_t, uint32_t> program_ids_memory_map_;
@@ -783,7 +789,7 @@ private:
     uint32_t active_eth_ringbuffer_start_;
 };
 
-std::pair<std::optional<uint32_t>, uint32_t> SimpleTraceAllocator::RegionAllocator::allocate_region(
+std::pair<std::optional<uint32_t>, std::optional<uint32_t>> SimpleTraceAllocator::RegionAllocator::allocate_region(
     uint32_t size, uint32_t trace_idx, uint32_t data_type) {
     std::optional<uint32_t> best_addr;
     float best_cost = 999999995904;
@@ -853,13 +859,7 @@ std::pair<std::optional<uint32_t>, uint32_t> SimpleTraceAllocator::RegionAllocat
     }
 
     if (!best_addr.has_value()) {
-        TT_FATAL(
-            false,
-            "Failed to allocate region for trace program. Program ID: {}. Size: {}. Trace index: {}",
-            (*trace_nodes_)[trace_idx].program->get_id(),
-            size,
-            trace_idx);
-        return {std::nullopt, 0};
+        return {std::nullopt, best_addr};
     }
 
     auto it = regions_.begin();
@@ -872,7 +872,7 @@ std::pair<std::optional<uint32_t>, uint32_t> SimpleTraceAllocator::RegionAllocat
         }
     }
     regions_[*best_addr] = {trace_idx, data_type, size};
-    return {best_region_sync_idx, *best_addr};
+    return {best_region_sync_idx, best_addr};
 }
 
 void SimpleTraceAllocator::allocate_trace_programs(IDevice* device, std::vector<TraceNode>& trace_nodes) {
@@ -887,6 +887,7 @@ void SimpleTraceAllocator::allocate_trace_programs(IDevice* device, std::vector<
         auto& node = trace_nodes[i];
         auto it = program_ids_use_map.find(node.program->get_id());
         if (it != program_ids_use_map.end()) {
+            // Binary is reused, but the nonbinary is not.
             extra_data_[i].next_use_idx[kBinary] = it->second;
         }
         program_ids_use_map[node.program->get_id()] = i;
@@ -925,13 +926,25 @@ void SimpleTraceAllocator::allocate_trace_programs(IDevice* device, std::vector<
                     allocator.update_region_trace_idx(*mem_addr, i);
                 } else {
                     auto res = allocator.allocate_region(binary_size, i, kBinary);
-                    sync_idx = merge_syncs(res.first, sync_idx);
-                    binary_addr = res.second;
+                    if (!res.second.has_value()) {
+                        // Clear the allocator and try again. Should succeed unless the total size of the program is larger than
+                        // the config buffer.
+                        allocator.reset_allocator();
+                        std::tie(rta_sync_idx, rta_addr) = allocator.allocate_region(non_binary_size, i, kNonBinary);
+                        res = allocator.allocate_region(binary_size, i, kBinary);
+                        TT_ASSERT(res.second.has_value(), "Failed to allocate binary region");
+                        TT_ASSERT(i > 0, "Failed to allocate binary region on first program");
+                        sync_idx = merge_syncs(sync_idx, i - 1);
+                    } else {
+                        sync_idx = merge_syncs(res.first, sync_idx);
+                    }
+                    binary_addr = *res.second;
                     allocator.add_region(node.program->get_id(), binary_addr);
                 }
             }
+            TT_ASSERT(rta_addr.has_value(), "Failed to allocate non-binary region");
             auto& ringbuffer_start = core_type == HalProgrammableCoreType::TENSIX ? worker_ringbuffer_start_ : active_eth_ringbuffer_start_;
-            node.dispatch_metadata.nonbinary_kernel_config_addrs[index] = {.addr = rta_addr + ringbuffer_start};
+            node.dispatch_metadata.nonbinary_kernel_config_addrs[index] = {.addr = *rta_addr + ringbuffer_start};
             node.dispatch_metadata.binary_kernel_config_addrs[index] = {.addr = binary_addr + ringbuffer_start};
         }
 
