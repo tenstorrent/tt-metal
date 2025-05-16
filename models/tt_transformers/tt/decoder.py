@@ -42,6 +42,11 @@ class TransformerBlock(LightweightModule):
         self.current = 0
         self.model_config = args.get_model_config()
 
+        if worker_sub_device_id is not None:
+            self.use_fabric_ccl = True
+        else:
+            self.use_fabric_ccl = False
+
         self.layer_num = layer_num
 
         self.attention = Attention(
@@ -86,6 +91,9 @@ class TransformerBlock(LightweightModule):
             ),
             args,
             TG=args.is_galaxy,
+            from_remote_semaphore_handles=from_remote_semaphore_handles,
+            to_remote_semaphore_handles=to_remote_semaphore_handles,
+            worker_sub_device_id=worker_sub_device_id,
         )
         self.ff_norm = DistributedNorm(
             RMSNorm(
@@ -103,6 +111,9 @@ class TransformerBlock(LightweightModule):
             ),
             args,
             TG=args.is_galaxy,
+            from_remote_semaphore_handles=from_remote_semaphore_handles,
+            to_remote_semaphore_handles=to_remote_semaphore_handles,
+            worker_sub_device_id=worker_sub_device_id,
         )
 
     def forward(
