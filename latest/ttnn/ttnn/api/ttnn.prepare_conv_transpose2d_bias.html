@@ -4,12 +4,12 @@
   <meta charset="utf-8" /><meta name="generator" content="Docutils 0.18.1: http://docutils.sourceforge.net/" />
 
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>ttnn.prepare_conv_bias &mdash; TT-NN  documentation</title>
+  <title>ttnn.prepare_conv_transpose2d_bias &mdash; TT-NN  documentation</title>
       <link rel="stylesheet" href="../../_static/pygments.css" type="text/css" />
       <link rel="stylesheet" href="../../_static/css/theme.css" type="text/css" />
       <link rel="stylesheet" href="../../_static/tt_theme.css" type="text/css" />
     <link rel="shortcut icon" href="../../_static/favicon.png"/>
-    <link rel="canonical" href="/tt-metal/latest/ttnn/ttnn/api/ttnn.prepare_conv_bias.html" />
+    <link rel="canonical" href="/tt-metal/latest/ttnn/ttnn/api/ttnn.prepare_conv_transpose2d_bias.html" />
   <!--[if lt IE 9]>
     <script src="../../_static/js/html5shiv.min.js"></script>
   <![endif]-->
@@ -23,8 +23,8 @@
     <script src="../../_static/js/theme.js"></script>
     <link rel="index" title="Index" href="../../genindex.html" />
     <link rel="search" title="Search" href="../../search.html" />
-    <link rel="next" title="ttnn.prepare_conv_transpose2d_weights" href="ttnn.prepare_conv_transpose2d_weights.html" />
-    <link rel="prev" title="ttnn.prepare_conv_weights" href="ttnn.prepare_conv_weights.html" /> 
+    <link rel="next" title="ttnn.Conv2dConfig" href="ttnn.Conv2dConfig.html" />
+    <link rel="prev" title="ttnn.prepare_conv_transpose2d_weights" href="ttnn.prepare_conv_transpose2d_weights.html" /> 
 </head>
 
 <body class="wy-body-for-nav"> 
@@ -81,9 +81,9 @@
 <li class="toctree-l4"><a class="reference internal" href="ttnn.experimental.conv3d.html">ttnn.experimental.conv3d</a></li>
 <li class="toctree-l4"><a class="reference internal" href="ttnn.conv_transpose2d.html">ttnn.conv_transpose2d</a></li>
 <li class="toctree-l4"><a class="reference internal" href="ttnn.prepare_conv_weights.html">ttnn.prepare_conv_weights</a></li>
-<li class="toctree-l4 current"><a class="current reference internal" href="#">ttnn.prepare_conv_bias</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.prepare_conv_bias.html">ttnn.prepare_conv_bias</a></li>
 <li class="toctree-l4"><a class="reference internal" href="ttnn.prepare_conv_transpose2d_weights.html">ttnn.prepare_conv_transpose2d_weights</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.prepare_conv_transpose2d_bias.html">ttnn.prepare_conv_transpose2d_bias</a></li>
+<li class="toctree-l4 current"><a class="current reference internal" href="#">ttnn.prepare_conv_transpose2d_bias</a></li>
 <li class="toctree-l4"><a class="reference internal" href="ttnn.Conv2dConfig.html">ttnn.Conv2dConfig</a></li>
 <li class="toctree-l4"><a class="reference internal" href="ttnn.Conv2dSliceConfig.html">ttnn.Conv2dSliceConfig</a></li>
 </ul>
@@ -132,9 +132,9 @@
   <ul class="wy-breadcrumbs">
       <li><a href="../../index.html" class="icon icon-home" aria-label="Home"></a></li>
           <li class="breadcrumb-item"><a href="../api.html">APIs</a></li>
-      <li class="breadcrumb-item active">ttnn.prepare_conv_bias</li>
+      <li class="breadcrumb-item active">ttnn.prepare_conv_transpose2d_bias</li>
       <li class="wy-breadcrumbs-aside">
-            <a href="../../_sources/ttnn/api/ttnn.prepare_conv_bias.rst.txt" rel="nofollow"> View page source</a>
+            <a href="../../_sources/ttnn/api/ttnn.prepare_conv_transpose2d_bias.rst.txt" rel="nofollow"> View page source</a>
       </li>
   </ul>
   <hr/>
@@ -142,15 +142,15 @@
           <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
            <div itemprop="articleBody">
              
-  <section id="ttnn-prepare-conv-bias">
-<h1>ttnn.prepare_conv_bias<a class="headerlink" href="#ttnn-prepare-conv-bias" title="Permalink to this heading"></a>
+  <section id="ttnn-prepare-conv-transpose2d-bias">
+<h1>ttnn.prepare_conv_transpose2d_bias<a class="headerlink" href="#ttnn-prepare-conv-transpose2d-bias" title="Permalink to this heading"></a>
 </h1>
 <span class="target" id="id1"></span><dl class="py function">
-<dt class="sig sig-object py" id="ttnn.prepare_conv_bias">
-<span class="sig-prename descclassname"><span class="pre">ttnn.</span></span><span class="sig-name descname"><span class="pre">prepare_conv_bias</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="o"><span class="pre">*</span></span><span class="n"><span class="pre">args</span></span></em>, <em class="sig-param"><span class="o"><span class="pre">**</span></span><span class="n"><span class="pre">kwargs</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#ttnn.prepare_conv_bias" title="Permalink to this definition"></a>
+<dt class="sig sig-object py" id="ttnn.prepare_conv_transpose2d_bias">
+<span class="sig-prename descclassname"><span class="pre">ttnn.</span></span><span class="sig-name descname"><span class="pre">prepare_conv_transpose2d_bias</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="o"><span class="pre">*</span></span><span class="n"><span class="pre">args</span></span></em>, <em class="sig-param"><span class="o"><span class="pre">**</span></span><span class="n"><span class="pre">kwargs</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#ttnn.prepare_conv_transpose2d_bias" title="Permalink to this definition"></a>
 </dt>
 <dd>
-<p>TTNN Conv2D applies preprocessing to the bias tensors before performing the convolution operation, to convert the bias into a format suitable for the operation.
+<p>TTNN ConvTranspose2D applies preprocessing to the bias tensors before performing the convolution operation, to convert the bias into a format suitable for the operation.
 This can be applied just once to the weights and bias tensors, and the resulting tensors can be reused for multiple invocations of the same convolution operation.
 The exact format of the weights and bias tensors depends on the input tensor parameters and the sharding scheme.</p>
 <dl class="field-list simple">
@@ -197,8 +197,8 @@ The exact format of the weights and bias tensors depends on the input tensor par
            </div>
           </div>
           <footer><div class="rst-footer-buttons" role="navigation" aria-label="Footer">
-        <a href="ttnn.prepare_conv_weights.html" class="btn btn-neutral float-left" title="ttnn.prepare_conv_weights" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
-        <a href="ttnn.prepare_conv_transpose2d_weights.html" class="btn btn-neutral float-right" title="ttnn.prepare_conv_transpose2d_weights" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
+        <a href="ttnn.prepare_conv_transpose2d_weights.html" class="btn btn-neutral float-left" title="ttnn.prepare_conv_transpose2d_weights" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
+        <a href="ttnn.Conv2dConfig.html" class="btn btn-neutral float-right" title="ttnn.Conv2dConfig" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
     </div>
 
   <hr/>
