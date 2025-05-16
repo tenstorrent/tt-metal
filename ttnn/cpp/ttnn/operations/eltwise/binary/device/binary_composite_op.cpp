@@ -476,6 +476,7 @@ Tensor run_fmod(
 }
 
 // FMOD result = input − (other * trunc(input/other))
+// When inputs are of data type BF16 and when input_b==0, expected is nan, but FMOD gives inf
 Tensor ExecuteBinaryFmod::invoke(
     const Tensor& input_a, const Tensor& input_b, const std::optional<MemoryConfig>& output_mem_config) {
     DataType input_dtype = input_a.get_dtype();
