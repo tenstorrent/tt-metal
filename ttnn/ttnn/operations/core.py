@@ -303,15 +303,9 @@ def from_torch(
 
     if mesh_mapper:
         shards = mesh_mapper.map(tensor)
-        if tile is not None:
-            tensor = ttnn.Tensor(shards, dtype, mesh_mapper.config(), tile, memory_config)
-        else:
-            tensor = ttnn.Tensor(shards, dtype, mesh_mapper.config(), None, memory_config)
+        tensor = ttnn.Tensor(shards, dtype, mesh_mapper.config(), tile, memory_config)
     else:
-        if tile is not None:
-            tensor = ttnn.Tensor(tensor, dtype, {}, tile, memory_config)
-        else:
-            tensor = ttnn.Tensor(tensor, dtype, {}, None, memory_config)
+        tensor = ttnn.Tensor(tensor, dtype, {}, tile, memory_config)
 
     if layout is not None and not (dtype == ttnn.bfloat8_b or dtype == ttnn.bfloat4_b):
         if pad_value is not None:
@@ -319,8 +313,6 @@ def from_torch(
         tensor = ttnn.to_layout(tensor, layout, device=device)
 
     if device is not None:
-        if memory_config is None:
-            memory_config = ttnn.DRAM_MEMORY_CONFIG
         tensor = ttnn.to_device(tensor, device, memory_config=memory_config, cq_id=cq_id)
 
     if logical_shape is not None and logical_shape != tensor.shape and mesh_mapper is None:
