@@ -46,9 +46,9 @@ namespace utils {
         case BinaryOpType::GCD:
         case BinaryOpType::LCM:
         case BinaryOpType::LEFT_SHIFT:
-        case BinaryOpType::RIGHT_SHIFT:
+        case BinaryOpType::RIGHT_SHIFT: return (a == DataType::INT32 && b == DataType::INT32);
         case BinaryOpType::BITWISE_XOR:
-        case BinaryOpType::BITWISE_OR: return (a == DataType::INT32 && b == DataType::INT32);
+        case BinaryOpType::BITWISE_OR:
         case BinaryOpType::BITWISE_AND: return ((a == DataType::INT32 && b == DataType::INT32) || (a == DataType::UINT16 && b == DataType::UINT16));
         case BinaryOpType::MAXIMUM:
         case BinaryOpType::MINIMUM:
