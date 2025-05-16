@@ -65,7 +65,6 @@ inline __attribute__((always_inline)) void signal_subordinate_idle_erisc_complet
 
 int main(int argc, char *argv[]) {
     configure_csr();
-    DIRTY_STACK_MEMORY();
     WAYPOINT("I");
     do_crt1((uint32_t *)MEM_SUBORDINATE_IERISC_INIT_LOCAL_L1_BASE_SCRATCH);
 
@@ -96,8 +95,9 @@ int main(int argc, char *argv[]) {
         int index = static_cast<std::underlying_type<EthProcessorTypes>::type>(EthProcessorTypes::DM1);
         void (*kernel_address)(uint32_t) = (void (*)(uint32_t))
             (kernel_config_base + mailboxes->launch[mailboxes->launch_msg_rd_ptr].kernel_config.kernel_text_offset[index]);
+        mark_stack_usage();
         (*kernel_address)((uint32_t)kernel_address);
-        RECORD_STACK_USAGE();
+        record_stack_usage(discover_stack_usage());
         WAYPOINT("D");
 
         signal_subordinate_idle_erisc_completion();
