@@ -50,7 +50,8 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
 
     const bool is_paged_attention = page_table_tensor.has_value();
 
-    const auto q_shape = input_tensor_q.get_padded_shape();
+    auto q_shape = input_tensor_q.get_padded_shape();
+    q_shape[2] = tt::round_up(q_shape[2], tt::constants::TILE_HEIGHT);  // round up for row major Q tensor.
     const auto q_shape_unpadded = input_tensor_q.get_logical_shape();
     const auto k_shape = input_tensor_k.get_padded_shape();
     // Use k_shape for S and DH since Q might be different for decode

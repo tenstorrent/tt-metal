@@ -19,7 +19,7 @@ void ScaledDotProductAttentionDecode::validate(
     for (auto& input_tensor : input_tensors) {
         TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Operands to SDPA need to be on device!");
         TT_FATAL(input_tensor.buffer() != nullptr, "Operands to SDPA need to be allocated in buffers on device!");
-        TT_FATAL((input_tensor.get_layout() == Layout::TILE), "Inputs to SDPA must be tilized");
+        // TT_FATAL((input_tensor.get_layout() == Layout::TILE), "Inputs to SDPA must be tilized");
         TT_FATAL(
             input_tensor.get_dtype() == DataType::BFLOAT16 || input_tensor.get_dtype() == DataType::BFLOAT8_B ||
                 input_tensor.get_dtype() == DataType::BFLOAT4_B,
@@ -210,6 +210,8 @@ void ScaledDotProductAttentionDecode::validate(
 std::vector<TensorSpec> ScaledDotProductAttentionDecode::compute_output_specs(
     const std::vector<Tensor>& input_tensors) const {
     auto& input = input_tensors.at(0);
+    tt::log_info("LLONG input.get_logical_shape(): {}", input.get_logical_shape());
+    tt::log_info("LLONG input.get_padded_shape(): {}", input.get_padded_shape());
     return {TensorSpec(
         input.get_logical_shape(), TensorLayout(input.get_dtype(), PageConfig(Layout::TILE), output_mem_config))};
 }

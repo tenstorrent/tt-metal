@@ -958,10 +958,10 @@ def run_test_sdpa_decode_paged_attention_single_iter(
         Q[:, :, :nh],
         device=device,
         dtype=q_dtype,
-        layout=ttnn.TILE_LAYOUT,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
         memory_config=height_sharded_memcfg if sharded_in else dram_memcfg,
     )
-
+    breakpoint()
     start_indices_tt = ttnn.Tensor(torch.tensor(start_indices), ttnn.int32).to(device)
 
     tt_back = ttnn.transformer.paged_scaled_dot_product_attention_decode(
