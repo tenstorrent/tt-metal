@@ -32,7 +32,7 @@ from models.demos.llama3_subdevices.tt.llama_ccl import TT_CCL
 )
 @pytest.mark.parametrize(
     "seq_len",
-    (128,),
+    (128, 4096),
 )
 @pytest.mark.parametrize(
     "batch_size",
