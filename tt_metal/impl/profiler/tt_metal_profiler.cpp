@@ -358,7 +358,8 @@ void peekDeviceData(IDevice* device, std::vector<CoreCoord>& worker_cores) {
     ZoneName(zoneName.c_str(), zoneName.size());
     if (tt_metal_device_profiler_map.find(device_id) != tt_metal_device_profiler_map.end()) {
         tt_metal_device_profiler_map.at(device_id).device_sync_new_events.clear();
-        tt_metal_device_profiler_map.at(device_id).dumpResults(device, worker_cores, ProfilerDumpState::FORCE_UMD_READ);
+        tt_metal_device_profiler_map.at(device_id).dumpResults(
+            device, worker_cores, ProfilerDumpState::FORCE_UMD_READ, ProfilerDataBufferSource::L1);
         for (auto& event : tt_metal_device_profiler_map.at(device_id).device_events) {
             if (event.zone_name.find("SYNC-ZONE") != std::string::npos) {
                 ZoneScopedN("Adding_device_sync_event");
@@ -672,6 +673,56 @@ void ClearProfilerControlBuffer(IDevice* device) {
 #endif
 }
 
+void AllocateDramProfilerBuffer(IDevice* device) {
+#if defined(TRACY_ENABLE)
+    ZoneScoped;
+    auto device_id = device->id();
+    CoreCoord logical_grid_size = device->logical_grid_size();
+    TracySetCpuTime(TracyGetCpuTime());
+
+    if (getDeviceProfilerState()) {
+        uint32_t dramBankCount =
+            tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(device_id).get_num_dram_views();
+        uint32_t coreCountPerDram = tt::tt_metal::MetalContext::instance()
+                                        .get_cluster()
+                                        .get_soc_desc(device_id)
+                                        .profiler_ceiled_core_count_perf_dram_bank;
+
+        uint32_t pageSize = PROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC * PROFILER_RISC_COUNT * coreCountPerDram;
+
+        auto mesh_device = device->get_mesh_device();
+        auto& profiler = tt_metal_device_profiler_map.at(device_id);
+        if (profiler.output_dram_buffer.get_buffer() == nullptr && mesh_device) {
+            // If buffer is not allocated, trying to re-use a buffer already allocated for another device within a
+            // single MeshDevice
+            for (auto neighbor_device : mesh_device->get_devices()) {
+                auto neighbor_profiler_it = tt_metal_device_profiler_map.find(neighbor_device->id());
+                if (neighbor_profiler_it != tt_metal_device_profiler_map.end()) {
+                    auto& neighbor_profiler = neighbor_profiler_it->second;
+                    if (neighbor_profiler.output_dram_buffer.get_buffer() != nullptr) {
+                        profiler.output_dram_buffer = neighbor_profiler.output_dram_buffer;
+                        break;
+                    }
+                }
+            }
+        }
+        if (profiler.output_dram_buffer.get_buffer() == nullptr) {
+            tt::tt_metal::InterleavedBufferConfig dram_config{
+                .device = mesh_device ? mesh_device.get() : device,
+                .size = pageSize * dramBankCount,
+                .page_size = pageSize,
+                .buffer_type = tt::tt_metal::BufferType::DRAM};
+            profiler.output_dram_buffer = distributed::AnyBuffer::create(dram_config);
+            profiler.profile_buffer.resize(profiler.output_dram_buffer.get_buffer()->size() / sizeof(uint32_t));
+        }
+        auto output_dram_buffer_ptr = tt_metal_device_profiler_map.at(device_id).output_dram_buffer.get_buffer();
+
+        std::vector<uint32_t> control_buffer(kernel_profiler::PROFILER_L1_CONTROL_VECTOR_SIZE, 0);
+        control_buffer[kernel_profiler::DRAM_PROFILER_ADDRESS] = output_dram_buffer_ptr->address();
+        setControlBuffer(device, control_buffer);
+    }
+#endif
+}
 void InitDeviceProfiler(IDevice* device) {
 #if defined(TRACY_ENABLE)
     ZoneScoped;
@@ -691,48 +742,6 @@ void InitDeviceProfiler(IDevice* device) {
                 tt_metal_device_profiler_map.emplace(device_id, DeviceProfiler(device, false));
             }
         }
-        // tt_metal_device_profiler_map.at(device_id).dumpResults(device, {{18,18}}, ProfilerDumpState::NORMAL);
-
-        // uint32_t dramBankCount =
-        // tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(device_id).get_num_dram_views();
-        // uint32_t coreCountPerDram = tt::tt_metal::MetalContext::instance()
-        //.get_cluster()
-        //.get_soc_desc(device_id)
-        //.profiler_ceiled_core_count_perf_dram_bank;
-
-        // uint32_t pageSize = PROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC * PROFILER_RISC_COUNT * coreCountPerDram;
-
-        // auto mesh_device = device->get_mesh_device();
-        // auto& profiler = tt_metal_device_profiler_map.at(device_id);
-        // if (profiler.output_dram_buffer.get_buffer() == nullptr && mesh_device) {
-        //// If buffer is not allocated, trying to re-use a buffer already allocated for another device within a
-        //// single MeshDevice
-        // for (auto neighbor_device : mesh_device->get_devices()) {
-        // auto neighbor_profiler_it = tt_metal_device_profiler_map.find(neighbor_device->id());
-        // if (neighbor_profiler_it != tt_metal_device_profiler_map.end()) {
-        // auto& neighbor_profiler = neighbor_profiler_it->second;
-        // if (neighbor_profiler.output_dram_buffer.get_buffer() != nullptr) {
-        // profiler.output_dram_buffer = neighbor_profiler.output_dram_buffer;
-        // break;
-        //}
-        //}
-        //}
-        //}
-        // if (profiler.output_dram_buffer.get_buffer() == nullptr) {
-        // tt::tt_metal::InterleavedBufferConfig dram_config{
-        //.device = mesh_device ? mesh_device.get() : device,
-        //.size = pageSize * dramBankCount,
-        //.page_size = pageSize,
-        //.buffer_type = tt::tt_metal::BufferType::DRAM};
-        // profiler.output_dram_buffer = distributed::AnyBuffer::create(dram_config);
-        // profiler.profile_buffer.resize(profiler.output_dram_buffer.get_buffer()->size() / sizeof(uint32_t));
-        //}
-        // auto output_dram_buffer_ptr = tt_metal_device_profiler_map.at(device_id).output_dram_buffer.get_buffer();
-
-        std::vector<uint32_t> control_buffer(kernel_profiler::PROFILER_L1_CONTROL_VECTOR_SIZE, 0);
-        // control_buffer[kernel_profiler::DRAM_PROFILER_ADDRESS] = output_dram_buffer_ptr->address();
-        control_buffer[kernel_profiler::DRAM_PROFILER_ADDRESS] = 0;
-        setControlBuffer(device, control_buffer);
     }
 #endif
 }
@@ -857,13 +866,9 @@ void DumpDeviceProfileResults(
         auto device_id = device->id();
 
         if (tt_metal_device_profiler_map.find(device_id) != tt_metal_device_profiler_map.end()) {
-            if (state != ProfilerDumpState::LAST_CLOSE_DEVICE) {
-                if (deviceHostTimePair.find(device_id) != deviceHostTimePair.end()) {
-                    // syncDeviceHost(device, SYNC_CORE, false);
-                }
-            }
             tt_metal_device_profiler_map.at(device_id).setDeviceArchitecture(device->arch());
-            tt_metal_device_profiler_map.at(device_id).dumpResults(device, worker_cores, state, metadata);
+            tt_metal_device_profiler_map.at(device_id).dumpResults(
+                device, worker_cores, state, ProfilerDataBufferSource::DRAM, metadata);
             if (state == ProfilerDumpState::LAST_CLOSE_DEVICE) {
                 // Process is ending, no more device dumps are coming, reset your ref on the buffer so deallocate is the
                 // last owner. Sync program also contains a buffer so it is safter to release it here

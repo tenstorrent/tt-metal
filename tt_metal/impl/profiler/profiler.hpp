@@ -260,7 +260,8 @@ public:
     void dumpResults(
         IDevice* device,
         const std::vector<CoreCoord>& worker_cores,
-        ProfilerDumpState state = ProfilerDumpState::NORMAL,
+        const ProfilerDumpState state = ProfilerDumpState::NORMAL,
+        const ProfilerDataBufferSource data_source = ProfilerDataBufferSource::DRAM,
         const std::optional<ProfilerOptionalMetadata>& metadata = {});
 
     // Push device results to tracy
