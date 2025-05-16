@@ -212,8 +212,13 @@ std::map<std::string, std::string> get_defines_fp32(
             }
             break;
         case BinaryOpType::MUL:
-            new_defines.insert({"BINOP_INIT", fmt::format("mul_binary_tile_init();")});
-            op_name = "mul_binary_tile";
+            if (input_a_dtype == DataType::UINT16 && input_b_dtype == DataType::UINT16) {
+                new_defines.insert({"MUL_UINT16_INIT", fmt::format("mul_uint16_tile_init();")});
+                op_name = "mul_uint16_tile";
+            } else {
+                new_defines.insert({"BINOP_INIT", fmt::format("mul_binary_tile_init();")});
+                op_name = "mul_binary_tile";
+            }
             break;
         case BinaryOpType::RSUB:
             new_defines.insert({"BINOP_INIT", fmt::format("rsub_binary_tile_init();")});
@@ -237,12 +242,22 @@ std::map<std::string, std::string> get_defines_fp32(
             }
             break;
         case BinaryOpType::BITWISE_OR:
-            new_defines.insert({"BITWISE_INIT", fmt::format("binary_bitwise_tile_init();")});
-            op_name = "or_binary_tile";
+            if (input_a_dtype == DataType::UINT16 && input_b_dtype == DataType::UINT16) {
+                new_defines.insert({"BITWISE_UINT16_INIT", fmt::format("binary_bitwise_tile_init();")});
+                op_name = "bitwise_or_uint16_binary_tile";
+            } else {
+                new_defines.insert({"BITWISE_INIT", fmt::format("binary_bitwise_tile_init();")});
+                op_name = "bitwise_or_binary_tile";
+            }
             break;
         case BinaryOpType::BITWISE_XOR:
-            new_defines.insert({"BITWISE_INIT", fmt::format("binary_bitwise_tile_init();")});
-            op_name = "xor_binary_tile";
+            if (input_a_dtype == DataType::UINT16 && input_b_dtype == DataType::UINT16) {
+                new_defines.insert({"BITWISE_UINT16_INIT", fmt::format("binary_bitwise_tile_init();")});
+                op_name = "bitwise_xor_uint16_binary_tile";
+            } else {
+                new_defines.insert({"BITWISE_INIT", fmt::format("binary_bitwise_tile_init();")});
+                op_name = "bitwise_xor_binary_tile";
+            }
             break;
         case BinaryOpType::LEFT_SHIFT:
             new_defines.insert({"SHIFT_INIT", fmt::format("binary_shift_tile_init();")});

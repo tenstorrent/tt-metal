@@ -16,44 +16,45 @@ add_library(TT::NN::Core ALIAS ttnn_core)
 
 target_compile_definitions(ttnn_core PUBLIC "$<$<CXX_COMPILER_ID:GNU>:DISABLE_NAMESPACE_STATIC_ASSERT>")
 
-GENERATE_FBS_HEADER(${CMAKE_CURRENT_SOURCE_DIR}/core/tensor/flatbuffer/tensor_types.fbs)
+GENERATE_FBS_HEADER(${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/tensor/flatbuffer/tensor_types.fbs)
 target_sources(
     ttnn_core
     PRIVATE
         ${FBS_GENERATED_HEADER_FILE}
+        core/distributed/api.cpp
+        core/distributed/distributed_tensor_config.cpp
+        core/distributed/distributed_tensor.cpp
+        core/distributed/distributed_tensor_config.cpp
+        core/graph/graph_processor.cpp
+        core/graph/graph_argument_serializer.cpp
+        core/graph/graph_trace_utils.cpp
         core/async_runtime.cpp
         core/cluster.cpp
         core/config.cpp
         core/core.cpp
         core/device.cpp
-        core/distributed/api.cpp
-        core/distributed/distributed_tensor.cpp
-        core/distributed/distributed_tensor_config.cpp
-        core/distributed/distributed_tensor_config.cpp
         core/events.cpp
         core/global_circular_buffer.cpp
         core/global_semaphore.cpp
-        core/graph/graph_argument_serializer.cpp
-        core/graph/graph_processor.cpp
-        core/graph/graph_trace_utils.cpp
-        core/old_infra_device_operation.cpp
         core/run_operation.cpp
-        core/tensor/flatbuffer/tensor_types_from_flatbuffer.cpp
-        core/tensor/flatbuffer/tensor_types_to_flatbuffer.cpp
-        core/tensor/host_buffer/functions.cpp
-        core/tensor/layout/alignment.cpp
-        core/tensor/layout/page_config.cpp
-        core/tensor/layout/tensor_layout.cpp
-        core/tensor/serialization.cpp
-        core/tensor/storage.cpp
-        core/tensor/tensor.cpp
-        core/tensor/tensor_attributes.cpp
-        core/tensor/tensor_impl.cpp
-        core/tensor/tensor_ops.cpp
-        core/tensor/tensor_spec.cpp
-        core/tensor/tensor_utils.cpp
-        core/tensor/types.cpp
-        core/tensor/xtensor/partition.cpp
+        core/old_infra_device_operation.cpp
+        # FIXME(afuller): Move these files
+        cpp/ttnn/tensor/tensor_attributes.cpp
+        cpp/ttnn/tensor/tensor_impl.cpp
+        cpp/ttnn/tensor/tensor.cpp
+        cpp/ttnn/tensor/tensor_ops.cpp
+        cpp/ttnn/tensor/types.cpp
+        cpp/ttnn/tensor/storage.cpp
+        cpp/ttnn/tensor/tensor_spec.cpp
+        cpp/ttnn/tensor/tensor_utils.cpp
+        cpp/ttnn/tensor/host_buffer/functions.cpp
+        cpp/ttnn/tensor/serialization.cpp
+        cpp/ttnn/tensor/layout/alignment.cpp
+        cpp/ttnn/tensor/layout/page_config.cpp
+        cpp/ttnn/tensor/layout/tensor_layout.cpp
+        cpp/ttnn/tensor/xtensor/partition.cpp
+        cpp/ttnn/tensor/flatbuffer/tensor_types_to_flatbuffer.cpp
+        cpp/ttnn/tensor/flatbuffer/tensor_types_from_flatbuffer.cpp
 )
 target_include_directories(
     ttnn_core
@@ -61,10 +62,9 @@ target_include_directories(
         api
     PRIVATE
         api/ttnn
-        core
-        ${CMAKE_CURRENT_BINARY_DIR}/flatbuffers
         cpp # FIXME: Depend on the Ops needed (make the circular obvious)
         . # FIXME: Depend on the Ops needed (make the circular obvious)
+        ${CMAKE_CURRENT_BINARY_DIR}/flatbuffers
 )
 target_link_libraries(
     ttnn_core
@@ -290,6 +290,7 @@ set(TTNN_OP_SRCS
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/conv/conv2d/device/conv2d_op_sharded_program_factory.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/conv/conv2d/device/conv2d_op_width_sharded_program_factory.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/conv/conv_transpose2d/conv_transpose2d.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/conv/conv_transpose2d/prepare_conv_transpose2d_weights.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/conv/conv2d/prepare_conv2d_weights.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/conv/conv1d/conv1d.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/conv3d/conv3d.cpp
