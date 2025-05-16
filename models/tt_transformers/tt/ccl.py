@@ -66,6 +66,8 @@ def tt_all_reduce(
                 topology=topology,
                 subdevice_id=worker_sub_device_id,
             )
+
+            ttnn.synchronize_device(mesh_device)
         input_tensor.deallocate(True)
         return reduced
 
@@ -127,6 +129,7 @@ def tt_all_reduce(
                 topology=topology,
                 subdevice_id=worker_sub_device_id,
             )
+            ttnn.synchronize_device(mesh_device)
         if not use_fabric_ccl:
             reduced_tensor = ttnn.all_gather(
                 reduced_tensor,
@@ -149,7 +152,7 @@ def tt_all_reduce(
                 subdevice_id=worker_sub_device_id,
                 num_preferred_links=num_all_gather_links,
             )
-
+            ttnn.synchronize_device(mesh_device)
     # Reshape the reduced tensor to the original shape
     reduced_tensor = ttnn.reshape(reduced_tensor, original_shape)
 
@@ -220,6 +223,7 @@ def tt_all_gather(
                 subdevice_id=worker_sub_device_id,
                 num_preferred_links=num_links,
             )
+            ttnn.synchronize_device(mesh_device)
     input_tensor.deallocate(True)
     return gathered
 

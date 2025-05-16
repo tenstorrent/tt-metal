@@ -374,6 +374,7 @@ class Transformer(LightweightModule):
                         multi_device_global_semaphore=self.from_remote_semaphore_handles,
                         subdevice_id=self.worker_sub_device_id,
                     )
+                    ttnn.synchronize_device(self.mesh_device)
         tt_logits = ttnn.untilize(tt_logits, use_multicore=True)
 
         if argmax_on_device:
