@@ -111,6 +111,7 @@ void MAIN {
     constexpr uint32_t out_cb_id = get_compile_time_arg_val(13);
     constexpr uint32_t interm_cb_id = get_compile_time_arg_val(14);
     constexpr uint32_t in_one_cb_id = get_compile_time_arg_val(15);
+    constexpr bool one_scalar_per_core = get_compile_time_arg_val(16);
 
     constexpr bool is_partial_tile = in_c < 32;
     static_assert((!is_partial_tile || (in_c == 16)), "Partial tile must have c_dim 16");
@@ -139,10 +140,18 @@ void MAIN {
     DPRINT << "scalar cnt " << scalar_cnt << ENDL();
     DPRINT << "num_od_ele " << num_od_ele << ENDL();
     uint32_t diff_index = 0;
-    uint32_t time_for_change = get_arg_val<uint32_t>(2 + diff_index);
-    for (uint32_t i = 0; i < num_od_ele; ++i) {
+    uint32_t time_for_change = 0;
+    if (!one_scalar_per_core) {
+        num_of_ele = get_arg_val<uint32_t>(0);
+        scalar_cnt = get_arg_val<uint32_t>(1);
+        time_for_change = get_arg_val<uint32_t>(2 + diff_index);
+    }
+    if (one_scalar_per_core) {
+        cb_wait_front(in_scalar_cb_id, 1);
+    }
+    for (uint32_t i = 0; i < num_of_ele; ++i) {
         DPRINT << "i " << i << ENDL();
-        if (i == time_for_change) {
+        if (i == time_for_change && !one_scalar_per_core) {
             DPRINT << "change " << ENDL();
             cb_wait_front(in_scalar_cb_id, 1);
             if (diff_index < scalar_cnt - 1) {
@@ -197,10 +206,13 @@ void MAIN {
         reduce_h_fused<partial_iter_output_tiles, is_partial_tile, max_rows_for_reduction>(
             interm_cb_id, REDUCE_OP == PoolType::MAX ? in_scalar_cb_id : in_one_cb_id, out_cb_id);
         // prepare for the next iteration if not last element
-        if (((i + 1) == time_for_change) || (i == (num_od_ele - 1))) {
+        if ((((i + 1) == time_for_change) || (i == (num_of_ele - 1))) && !one_scalar_per_core) {
             DPRINT << "popped the old num " << ENDL();
             cb_pop_front(in_scalar_cb_id, 1);
         }
+    }
+    if (one_scalar_per_core) {
+        cb_pop_front(in_scalar_cb_id, 1);
     }
     DPRINT << "compute ends" << ENDL();
 }

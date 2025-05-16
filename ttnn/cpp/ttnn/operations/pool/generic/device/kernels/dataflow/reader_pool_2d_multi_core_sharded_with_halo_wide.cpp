@@ -45,21 +45,23 @@ void kernel_main() {
 
     constexpr uint32_t split_reader = get_compile_time_arg_val(7);
     constexpr uint32_t reader_id = get_compile_time_arg_val(8);
+    constexpr uint32_t bf16_scalar = get_compile_time_arg_val(9);
 
     // compile time args
     // BF16 value packed in UINT32. For maxpool, value is 1, for avgpool value is 1/kernel_size.
 
-    constexpr uint32_t in_nblocks_c = get_compile_time_arg_val(11);
+    constexpr uint32_t in_nblocks_c = get_compile_time_arg_val(12);
 
-    constexpr uint32_t ceil_pad_w = get_compile_time_arg_val(14);
+    constexpr uint32_t ceil_pad_w = get_compile_time_arg_val(15);
 
     constexpr uint32_t TILE_WIDTH = 32;
     constexpr uint32_t MAX_ELE_PER_REDUCTION = 512;  // TILE_WIDTH * 8 * numbytes
 
-    constexpr uint32_t in_cb_id = (reader_id == 1) ? get_compile_time_arg_val(16) : get_compile_time_arg_val(15);
-    constexpr uint32_t in_shard_cb_id = get_compile_time_arg_val(17);
-    constexpr uint32_t in_reader_indices_cb_id = get_compile_time_arg_val(18);
-    constexpr uint32_t in_scalar_cb_id = get_compile_time_arg_val(19);
+    constexpr uint32_t in_cb_id = (reader_id == 1) ? get_compile_time_arg_val(17) : get_compile_time_arg_val(16);
+    constexpr uint32_t in_shard_cb_id = get_compile_time_arg_val(18);
+    constexpr uint32_t in_reader_indices_cb_id = get_compile_time_arg_val(19);
+    constexpr uint32_t in_scalar_cb_id = get_compile_time_arg_val(20);
+    constexpr bool one_scalar_per_core = get_compile_time_arg_val(23);
     const uint32_t in_l1_read_base_addr = get_read_ptr(in_shard_cb_id);
     uint32_t reader_indices_l1_addr = get_read_ptr(in_reader_indices_cb_id);
     volatile tt_l1_ptr uint16_t* reader_indices_ptr =
@@ -70,19 +72,31 @@ void kernel_main() {
     constexpr uint32_t npages_to_reserve = 1;
     uint32_t counter = reader_id;
     constexpr uint32_t read_bytes = MAX_ELE_PER_REDUCTION;
-    uint32_t num_of_ele = get_arg_val<uint32_t>(0);
-    uint32_t scalars_cnt = get_arg_val<uint32_t>(1);
     uint32_t scalar_index = 0;
+    uint32_t num_of_ele = reader_nindices;
+    uint32_t scalars_cnt = 1;
+    if (!one_scalar_per_core) {
+        num_of_ele = get_arg_val<uint32_t>(0);
+        scalars_cnt = get_arg_val<uint32_t>(1);
+    }
     DPRINT << "scalars_cnt: " << scalars_cnt << ENDL();
-    while (counter < num_of_ele || (reader_id == 0 && scalar_index < scalars_cnt)) {
-        if (reader_id == 0 && scalar_index < scalars_cnt) {
+
+    if (reader_id == 0) {
+        cb_reserve_back(in_scalar_cb_id, 1);
+        fill_with_val(get_write_ptr(in_scalar_cb_id), TILE_WIDTH, bf16_scalar >> 16);
+        scalar_index++;
+        cb_push_back(in_scalar_cb_id, 1);
+    }
+
+    while (counter < num_of_ele || (reader_id == 0 && scalar_index < scalars_cnt && !one_scalar_per_core)) {
+        if (reader_id == 0 && scalar_index < scalars_cnt && !one_scalar_per_core) {
             uint32_t scalar_val = get_arg_val<uint32_t>(scalar_index + 2);
             cb_reserve_back(in_scalar_cb_id, 1);
             fill_with_val(get_write_ptr(in_scalar_cb_id), TILE_WIDTH, scalar_val >> 16);
             scalar_index++;
             cb_push_back(in_scalar_cb_id, 1);
         }
-        if (counter < num_of_ele) {
+        if (counter < num_of_ele || one_scalar_per_core) {
             const uint16_t top_left_local_index = reader_indices_ptr[counter++];
             for (uint32_t c_i = 0; c_i < in_nblocks_c; ++c_i) {
                 cb_reserve_back(in_cb_id, npages_to_reserve);
