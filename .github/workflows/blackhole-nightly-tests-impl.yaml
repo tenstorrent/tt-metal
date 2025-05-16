@@ -21,9 +21,11 @@ jobs:
       fail-fast: false
       matrix:
         test-group: [
-            { model: whisper, card: BH, owner_id: U05RWH3QUPM, arch: blackhole },  #Salar Hosseini
+            { model: whisper, card: BH, owner_id: U05RWH3QUPM, arch: blackhole,
+            cmd: pytest tests/nightly/single_card/whisper,
+            },  #Salar Hosseini
             { model: llama3.1-8b, card: BH, owner_id: U03PUAKE719, arch: blackhole,
-              cmd: HF_HOME=<LOCATION_FOR_HF_WEIGHTS> TT_CACHE_PATH=<LOCATION_FOR_TTNN_CACHE> HF_MODEL=meta-llama/Llama-3.1-8B-Instruct pytest models/tt_transformers/demo/simple_text_demo.py -k performance-ci-stress-1
+              cmd: HF_HOME=<LOCATION_FOR_HF_WEIGHTS> TT_CACHE_PATH=<LOCATION_FOR_TTNN_CACHE> HF_MODEL=meta-llama/Llama-3.1-8B-Instruct pytest models/tt_transformers/demo/simple_text_demo.py -k performance-ci-stress-1,
             },  #Miguel Tairum
           ]
     name: Nightly ${{ matrix.test-group.card }} ${{ matrix.test-group.model }}
@@ -52,12 +54,8 @@ jobs:
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
 
       - name: Run frequent reg tests scripts
-        timeout-minutes: 30
-        run: pytest tests/nightly/single_card/${{ matrix.test-group.model }}
-
-      - name: Run model stress tests
         timeout-minutes: 120
-        run: ${{ matrix.test-group.cmd || 'echo "${{ matrix.test-group.model }} doesn't run stress tests"' }}
+        run: ${{ matrix.test-group.cmd }}
       - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
         timeout-minutes: 10
         if: ${{ !cancelled() }}
