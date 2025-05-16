@@ -467,3 +467,48 @@ def test_run_max_pool_mem_config(device, dtype, input_spec, memory_config):
         ceil_mode=ceil_mode,
         memory_config=memory_config,
     )
+
+
+@pytest.mark.parametrize(
+    "batch_size, input_channels, input_height, input_width, kernel_height, kernel_width, stride_h, strid_w, pad_h, pad_w, dilation_h, dilation_w, ceil_mode",
+    [
+        (1, 64, 128, 128, 3, 3, 2, 2, 1, 1, 1, 1, False),
+    ],
+)
+@pytest.mark.parametrize("dtype", parameters["max_pool2d_short_sweep_suite"]["dtype"])
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
+def test_max_pool2d_transfuser(
+    device,
+    dtype,
+    batch_size,
+    input_channels,
+    input_height,
+    input_width,
+    kernel_height,
+    kernel_width,
+    stride_h,
+    strid_w,
+    pad_h,
+    pad_w,
+    dilation_h,
+    dilation_w,
+    ceil_mode,
+):
+    run_max_pool2d(
+        batch_size,
+        input_channels,
+        input_height,
+        input_width,
+        kernel_height,
+        kernel_width,
+        stride_h,
+        strid_w,
+        pad_h,
+        pad_w,
+        dilation_h,
+        dilation_w,
+        dtype,
+        device,
+        sharding=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ceil_mode=ceil_mode,
+    )
