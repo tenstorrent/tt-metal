@@ -57,7 +57,7 @@ void append_fabric_connection_rt_args(
     const auto& fabric_context = control_plane->get_fabric_context();
     auto topology = fabric_context.get_fabric_topology();
     bool is_2d_fabric = topology == Topology::Mesh;
-    if (is_2d_fabric) {
+    if (!is_2d_fabric) {
         TT_FATAL(
             src_mesh_id == dst_mesh_id,
             "Currently only the chips on the same mesh are supported for 1D fabric. Src mesh id: {}, Dst mesh id: {}",
