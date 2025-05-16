@@ -28,11 +28,8 @@ std::vector<uint32_t> get_bf16_pool_scalar(
     uint32_t stride_h,
     uint32_t stride_w,
     uint32_t ceil_w,
-    uint32_t pad_h,
-    uint32_t pad_w,
     uint32_t out_stick_x_start,
     uint32_t out_stick_y_start,
-    bool count_include_pad,
     std::vector<uint32_t>& sinchronization_indexes,
     std::optional<uint32_t> out_nhw_per_core,
     std::optional<int32_t> divisor_override);

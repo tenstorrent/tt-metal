@@ -34,7 +34,6 @@ def run_avg_pool2d(
     padding,
     ceil_mode,
     divisor_override,
-    count_include_pad,
     shard_scheme,
 ):
     ## Test setup for both.
@@ -54,7 +53,7 @@ def run_avg_pool2d(
         stride,
         padding,
         ceil_mode=ceil_mode,
-        count_include_pad=count_include_pad,
+        count_include_pad=True,
         divisor_override=divisor_override,
     )
 
@@ -70,7 +69,6 @@ def run_avg_pool2d(
         padding=padding,
         ceil_mode=ceil_mode,
         divisor_override=divisor_override,
-        count_include_pad=count_include_pad,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         applied_shard_scheme=shard_scheme,
     )
@@ -137,10 +135,6 @@ def run_avg_pool2d(
     ],
 )
 @pytest.mark.parametrize(
-    "count_include_pad",
-    [True],
-)
-@pytest.mark.parametrize(
     "divisor_override",
     [
         None,
@@ -167,7 +161,6 @@ def test_run_avg_pool2d(
     stride,
     padding,
     ceil_mode,
-    count_include_pad,
     divisor_override,
     shard_scheme,
 ):
@@ -183,7 +176,6 @@ def test_run_avg_pool2d(
         stride,
         padding,
         ceil_mode=ceil_mode,
-        count_include_pad=count_include_pad,
         divisor_override=divisor_override,
         shard_scheme=shard_scheme,
     )

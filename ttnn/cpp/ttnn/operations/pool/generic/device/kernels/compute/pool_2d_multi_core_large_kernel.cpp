@@ -111,15 +111,6 @@ void MAIN {
     constexpr uint32_t out_cb_id = get_compile_time_arg_val(13);
     constexpr uint32_t interm_cb_id = get_compile_time_arg_val(14);
     constexpr uint32_t in_one_cb_id = get_compile_time_arg_val(15);
-    constexpr uint32_t kernel_h = get_compile_time_arg_val(16);
-    constexpr uint32_t kernel_w = get_compile_time_arg_val(17);
-    constexpr uint32_t in_h = get_compile_time_arg_val(18);
-    constexpr uint32_t in_w = get_compile_time_arg_val(19);
-    constexpr uint32_t pad_h = get_compile_time_arg_val(20);
-    constexpr uint32_t pad_w = get_compile_time_arg_val(21);
-    constexpr uint32_t stride_h = get_compile_time_arg_val(22);
-    constexpr uint32_t stride_w = get_compile_time_arg_val(23);
-    constexpr uint32_t ceil_w = get_compile_time_arg_val(24);
 
     constexpr bool is_partial_tile = in_c < 32;
     static_assert((!is_partial_tile || (in_c == 16)), "Partial tile must have c_dim 16");
