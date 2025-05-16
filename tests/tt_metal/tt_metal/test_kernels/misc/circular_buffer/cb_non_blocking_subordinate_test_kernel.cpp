@@ -21,7 +21,7 @@ void kernel_main() {
     size_t arg_idx = 0;
 
     auto master_sem_addr = reinterpret_cast<volatile uint32_t*>(get_semaphore(get_arg_val<uint32_t>(arg_idx++)));
-    auto slave_sem_addr = reinterpret_cast<volatile uint32_t*>(get_semaphore(get_arg_val<uint32_t>(arg_idx++)));
+    auto subordinate_sem_addr = reinterpret_cast<volatile uint32_t*>(get_semaphore(get_arg_val<uint32_t>(arg_idx++)));
 
     std::array<uint32_t, n_cbs> output_buffer_addrs;
     for (size_t i = 0; i < n_cbs; i++) {
@@ -35,7 +35,7 @@ void kernel_main() {
         for (int32_t j = 0; j < n_pages; j++) {
             // First level signal indicates the writer has pushed new pages to the CB
             noc_semaphore_wait(master_sem_addr, 1);
-            noc_semaphore_set(slave_sem_addr, 1);
+            noc_semaphore_set(subordinate_sem_addr, 1);
 
             for (int32_t k = 0; k < n_pages; k++) {
                 auto result = cb_pages_available_at_front(i, k);
@@ -49,7 +49,7 @@ void kernel_main() {
             }
             // Second level signal indicates "alignment pages". We signal back that we are
             // done processing this step
-            noc_semaphore_set(slave_sem_addr, 2);
+            noc_semaphore_set(subordinate_sem_addr, 2);
 
             if (j > 0) {
                 // snap back to alignment

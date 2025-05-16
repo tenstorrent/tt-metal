@@ -287,7 +287,7 @@ target_sources(
             tools/profiler/kernel_profiler.hpp
             # Kernel sources
             impl/dispatch/kernels/cq_dispatch.cpp
-            impl/dispatch/kernels/cq_dispatch_slave.cpp
+            impl/dispatch/kernels/cq_dispatch_subordinate.cpp
             impl/dispatch/kernels/cq_prefetch.cpp
             impl/dispatch/kernels/packet_demux.cpp
             impl/dispatch/kernels/packet_mux.cpp

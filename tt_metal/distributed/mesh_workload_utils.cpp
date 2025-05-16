@@ -61,7 +61,7 @@ void write_go_signal(
         go_signal_cmd_sequence.add_notify_dispatch_s_go_signal_cmd(
             0,                                   /* wait */
             index_bitmask /* index_bitmask */);  // When running on sub devices, we must account for this
-        dispatcher_for_go_signal = DispatcherSelect::DISPATCH_SLAVE;
+        dispatcher_for_go_signal = DispatcherSelect::DISPATCH_SUBORDINATE;
     }
     go_signal_cmd_sequence.add_dispatch_go_signal_mcast(
         expected_num_workers_completed,

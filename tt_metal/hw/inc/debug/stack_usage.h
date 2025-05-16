@@ -21,7 +21,7 @@ uint32_t get_stack_size() {
 #if COMPILE_FOR_IDLE_ERISC == 0
     return MEM_IERISC_STACK_SIZE;
 #elif COMPILE_FOR_IDLE_ERISC == 1
-    return MEM_SLAVE_IERISC_STACK_SIZE;
+    return MEM_SUBORDINATE_IERISC_STACK_SIZE;
 #else
 #error "idle erisc get_stack_size unknown"
 #endif
@@ -49,7 +49,7 @@ uint32_t get_stack_top() {
 #if COMPILE_FOR_IDLE_ERISC == 0
     return MEM_IERISC_STACK_TOP;
 #elif COMPILE_FOR_IDLE_ERISC == 1
-    return MEM_SLAVE_IERISC_STACK_TOP;
+    return MEM_SUBORDINATE_IERISC_STACK_TOP;
 #else
 #error "idle erisc get_stack_top unknown"
 #endif

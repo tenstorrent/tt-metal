@@ -22,7 +22,7 @@ if(CMAKE_VERSION VERSION_GREATER_EQUAL 3.23)
                 src/idle_erisck.cc
                 src/ncrisc.cc
                 src/ncrisck.cc
-                src/slave_idle_erisc.cc
+                src/subordinate_idle_erisc.cc
                 src/tdma_xmov.c
                 src/trisc.cc
                 src/trisck.cc
