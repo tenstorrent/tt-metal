@@ -3,12 +3,16 @@
 This test suite addresses the functionality and performance (i.e. bandwidth) of various data movement scenarios.
 
 ## Tests in the Test Suite
-| Name          | ID(s) | Description                                                                          |
-| ----------    | ----- | ------------------------------------------------------------------------------------ |
-| DRAM Unary    | 0-3   | Transactions between DRAM and a single Tensix core.                                  |
-| One to One    | 4     | Write transactions between two Tensix cores.                                         |
-| One From One  | 5     | Read transactions between two Tensix cores.                                          |
-| One From All  | 15    | Read transactions between one gatherer Tensix core and multiple sender Tensix cores. |
+
+| Name                 | ID(s) | Description                                                                          |
+| ----------           | ----- | ----------------------------------------------------                                 |
+| DRAM Unary           | 0-3   | Transactions between DRAM and a single Tensix core.                                  |
+| One to One           | 4     | Write transactions between two Tensix cores.                                         |
+| One From One         | 5     | Read transactions between two Tensix cores.                                          |
+| One to all           | 6-8   | Writes transaction from one core to all cores.                                       |
+| One to all Multicast | 9-14  | Writes transaction from one core to all cores using multicast.                       |
+| One From All         | 15    | Read transactions between one gatherer Tensix core and multiple sender Tensix cores. |
+| Loopback             | 16    | Does a loopback operation where one cores writes to itself.                          |
 
 ## Running Tests
 ### C++ Gtests

@@ -33,6 +33,7 @@ test_id_to_name = {
     13: "One to All Multicast Linked 5x5 Packet Sizes",
     14: "One to All Multicast Linked 11x10 Packet Sizes",
     15: "One from All Packet Sizes",
+    16: "Loopback Packet Sizes",
 }
 
 # Correspondng test bounds for each arch, test id, riscv core
@@ -93,6 +94,9 @@ test_bounds = {
         15: {
             "riscv_1": {"latency": {"lower": 700, "upper": 120000}, "bandwidth": 0.7},
         },
+        16: {
+            "riscv_0": {"latency": {"lower": 50, "upper": 30000}, "bandwidth": 0.4},
+        },
     },
     "blackhole": {
         0: {
@@ -147,6 +151,9 @@ test_bounds = {
         },
         15: {
             "riscv_1": {"latency": {"lower": 800, "upper": 135000}, "bandwidth": 1.19},
+        },
+        16: {
+            "riscv_0": {"latency": {"lower": 50, "upper": 30000}, "bandwidth": 0.4},
         },
     },
 }
