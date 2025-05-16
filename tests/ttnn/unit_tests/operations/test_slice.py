@@ -9,15 +9,8 @@ import torch
 import ttnn
 from models.utility_functions import is_grayskull
 from tests.ttnn.utils_for_testing import assert_with_pcc
-
+from .test_utils import round_up
 import math
-
-
-def round_up(a, b):
-    """
-    Round up a to the nearest multiple of b
-    """
-    return b * math.ceil(a / b)
 
 
 def run_slice_rm_sharded(device, n, c, h, w):
