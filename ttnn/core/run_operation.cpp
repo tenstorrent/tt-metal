@@ -25,14 +25,13 @@ namespace detail {
 
 IDevice* get_device(const Tensors& input_tensors, const OptionalConstTensors& optional_input_tensors) {
     for (auto& input_tensor : input_tensors) {
-        if (std::holds_alternative<DeviceStorage>(input_tensor.tensor_attributes->get_storage())) {
-            return input_tensor.workers.at(0);
+        if (input_tensor.storage_type() == StorageType::DEVICE) {
+            return input_tensor.device_storage().get_device();
         }
     }
     for (auto& optional_input_tensor : optional_input_tensors) {
-        if (optional_input_tensor.has_value() and
-            std::holds_alternative<DeviceStorage>(optional_input_tensor.value().tensor_attributes->get_storage())) {
-            return optional_input_tensor.value().workers.at(0);
+        if (optional_input_tensor.has_value() and optional_input_tensor->storage_type() == StorageType::DEVICE) {
+            return optional_input_tensor->device_storage().get_device();
         }
     }
     auto device = ttnn::operations::experimental::auto_format::AutoFormat::GetDefaultDevice();
