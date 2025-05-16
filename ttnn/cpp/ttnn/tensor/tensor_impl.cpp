@@ -730,7 +730,6 @@ DeviceStorage replicate_to_mesh_buffer(
     auto data_to_write = host_buffer::get_as<T>(storage.buffer);
     const auto expected_packed_buffer_size_bytes = tensor_spec.compute_packed_buffer_size_bytes();
     const auto input_size_bytes = data_to_write.size() * sizeof(T);
-
     TT_FATAL(
         input_size_bytes == expected_packed_buffer_size_bytes,
         "Host data with total size {}B does not match expected size {}B of device buffer!",
