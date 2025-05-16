@@ -91,15 +91,4 @@ void DistributedHostBuffer::apply(const ApplyFn& fn) {
     }
 }
 
-bool DistributedHostBuffer::is_allocated() const {
-    return std::all_of(
-        local_buffers_.begin(), local_buffers_.end(), [](const HostBuffer& b) { return b.is_allocated(); });
-}
-
-void DistributedHostBuffer::deallocate() {
-    for (auto& buffer : local_buffers_) {
-        buffer.deallocate();
-    }
-}
-
 }  // namespace tt::tt_metal

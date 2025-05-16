@@ -166,6 +166,8 @@ public:
     std::string write_to_string() const;
     void print() const;
 
+    // Deallocates device-side Tensor storage.
+    // If the tensor is on host, does nothing.
     void deallocate(bool force = false);
 
     std::vector<IDevice*> get_workers(bool blocking = false) const;

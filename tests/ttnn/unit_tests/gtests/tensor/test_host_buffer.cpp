@@ -23,15 +23,13 @@ using ::testing::Pointwise;
 TEST(HostBufferTest, Empty) {
     HostBuffer buffer;
 
-    EXPECT_FALSE(buffer.is_allocated());
     EXPECT_FALSE(buffer.is_borrowed());
     EXPECT_TRUE(buffer.view_bytes().empty());
 }
 
-TEST(HostBufferTest, OwnedLifecycle) {
+TEST(HostBufferTest, BasicOwned) {
     HostBuffer buffer(std::vector<int>{1, 2, 3});
 
-    EXPECT_TRUE(buffer.is_allocated());
     EXPECT_FALSE(buffer.is_borrowed());
     EXPECT_THAT(buffer.view_as<int>(), Pointwise(Eq(), {1, 2, 3}));
 
@@ -39,19 +37,9 @@ TEST(HostBufferTest, OwnedLifecycle) {
     writable_view[1] = 5;
 
     EXPECT_THAT(buffer.view_as<int>(), Pointwise(Eq(), {1, 5, 3}));
-
-    buffer.deallocate();
-
-    EXPECT_FALSE(buffer.is_allocated());
-    EXPECT_TRUE(buffer.view_bytes().empty());
 }
 
-TEST(HostBufferTest, IncorrectCast) {
-    HostBuffer buffer(std::vector<int>{1, 2, 3});
-    EXPECT_ANY_THROW({ buffer.view_as<float>(); });
-}
-
-TEST(HostBufferTest, BorrowedLifecycle) {
+TEST(HostBufferTest, BasicBorrowed) {
     int num_increments = 0;
     int num_decrements = 0;
     std::vector<int> vec = {1, 2, 3};
@@ -61,21 +49,17 @@ TEST(HostBufferTest, BorrowedLifecycle) {
 
     EXPECT_EQ(num_increments, 1);
     EXPECT_EQ(num_decrements, 0);
-    EXPECT_TRUE(buffer.is_allocated());
     EXPECT_TRUE(buffer.is_borrowed());
     EXPECT_THAT(buffer.view_as<int>(), Pointwise(Eq(), {1, 2, 3}));
 
     auto writable_view = buffer.view_as<int>();
     writable_view[1] = 5;
     EXPECT_THAT(buffer.view_as<int>(), Pointwise(Eq(), {1, 5, 3}));
+}
 
-    buffer.deallocate();
-
-    EXPECT_EQ(num_increments, 1);
-    EXPECT_EQ(num_decrements, 1);
-    EXPECT_FALSE(buffer.is_allocated());
-    EXPECT_FALSE(buffer.is_borrowed());
-    EXPECT_TRUE(buffer.view_bytes().empty());
+TEST(HostBufferTest, IncorrectCast) {
+    HostBuffer buffer(std::vector<int>{1, 2, 3});
+    EXPECT_ANY_THROW({ buffer.view_as<float>(); });
 }
 
 TEST(HostBufferTest, MakePinFromOwned) {
@@ -90,12 +74,6 @@ TEST(HostBufferTest, MakePinFromOwned) {
     auto writable_view = buffer.view_as<int>();
     writable_view[1] = 5;
     EXPECT_THAT(buffer.view_as<int>(), Pointwise(Eq(), {1, 5, 3}));
-    EXPECT_THAT(borrowed.view_as<int>(), Pointwise(Eq(), {1, 5, 3}));
-
-    buffer.deallocate();
-
-    EXPECT_FALSE(buffer.is_allocated());
-    EXPECT_TRUE(borrowed.is_allocated());
     EXPECT_THAT(borrowed.view_as<int>(), Pointwise(Eq(), {1, 5, 3}));
 }
 

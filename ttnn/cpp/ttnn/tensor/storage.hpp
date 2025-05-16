@@ -7,6 +7,7 @@
 #include <memory>
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/host_buffer.hpp>
+#include <tuple>
 
 #include "tt-metalium/distributed_host_buffer.hpp"
 #include "ttnn/tensor/types.hpp"
@@ -21,8 +22,6 @@ struct HostStorage {
 
     static constexpr auto attribute_names = std::forward_as_tuple();
     auto attribute_values() const { return std::forward_as_tuple(); }
-
-    bool is_allocated() const { return buffer.is_allocated(); }
 };
 
 struct DeviceStorage {
@@ -71,12 +70,6 @@ public:
 
     // Returns the number of `HostBuffer`s in the storage;
     size_t num_buffers() const;
-
-    // Returns true if all `HostBuffer`s are allocated;
-    bool is_allocated() const;
-
-    // Deallocates all `HostBuffer`s;
-    void deallocate();
 
 private:
     std::vector<HostBuffer> buffers_;
