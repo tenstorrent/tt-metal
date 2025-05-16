@@ -23,7 +23,7 @@ uint32_t get_sender_channel_count(tt::tt_fabric::Topology topology);
 uint32_t get_downstream_edm_count(tt::tt_fabric::Topology topology);
 
 void set_routing_mode(uint16_t routing_mode);
-void set_routing_mode(Topology topology, uint32_t dimension = 1);
+void set_routing_mode(Topology topology, tt::tt_metal::FabricConfig fabric_config, uint32_t dimension = 1);
 
 FabricType get_fabric_type(tt::tt_metal::FabricConfig fabric_config, tt::ClusterType cluster_type);
 
