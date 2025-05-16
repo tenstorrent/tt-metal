@@ -9,7 +9,9 @@ from models.tt_transformers.tt.attention import Attention
 class VisionAttention(Attention):
     def __init__(self, *args, **kwargs):
         kwargs["causal_mask"] = False
+        # [INFO] disabling kv cache for vision attention needs both of `use_kv_cache` and `use_paged_kv_cache` to be set to False, True
         kwargs["use_kv_cache"] = False
+        kwargs["use_paged_kv_cache"] = True
         super().__init__(*args, **kwargs)
 
     def forward(self, x, cu_seqlens, rot_mats, user_id=0, page_table=None, chunk_page_table=None, chunk_start_idx=None):

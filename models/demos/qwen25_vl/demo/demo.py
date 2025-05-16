@@ -237,6 +237,12 @@ def test_demo(
     ]:  # If the flag is provided, use it. Take an int instead of bool due to parser limitations
         stop_at_eos = request.config.getoption("--stop_at_eos")
 
+    if paged_attention:
+        page_cache_max_seq_len = page_params["page_block_size"] * page_params["page_max_num_blocks"] / batch_size
+        assert (
+            max_seq_len <= page_cache_max_seq_len
+        ), f"max_seq_len ({max_seq_len}) needs to be <= than page_cache_max_seq_len ({page_cache_max_seq_len})"
+
     if not stop_at_eos:
         logger.info(f"The decode generation will only stop at the max_generated_tokens limit == {max_generated_tokens}")
 
