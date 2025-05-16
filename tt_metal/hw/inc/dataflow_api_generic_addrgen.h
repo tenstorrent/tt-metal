@@ -4,7 +4,7 @@
 
 #pragma once
 
-// #include "debug/assert.h"
+#include <tt-metalium/assert.hpp>
 
 namespace addr_gen_utils {
 
@@ -90,8 +90,12 @@ struct ShardedAccessor {
     static constexpr DSpec DSPEC_CONSTANTS{};
 
     std::pair<size_t, size_t> get_bank_and_offset(uint32_t page_id) const {
-        // ASSERT(page_id <= DSPEC_CONSTANTS.tensor_volume, "Page id {} must be less than tensor volume {}!", page_id,
-        // DSPEC_CONSTANTS.tensor_volume);
+        // Check if page_id is within bounds of total tensor volume
+        TT_FATAL(
+            page_id <= DSPEC_CONSTANTS.tensor_volume,
+            "Page id {} must be less than tensor volume {}!",
+            page_id,
+            DSPEC_CONSTANTS.tensor_volume);
 
         std::cout << "page_coord: ";
         std::cout << "page_id: " << page_id << std::endl;
@@ -104,8 +108,16 @@ struct ShardedAccessor {
     }
 
     std::pair<size_t, size_t> get_bank_and_offset(const std::array<uint32_t, DSPEC_CONSTANTS.rank> page_coord) const {
-        // ASSERT(page_coord[0] < DSPEC_CONSTANTS.tensor_shape[0],
-        //               "page_coord[0] must be less than tensor_shape[0]!");
+        // Check if page_coord is within bounds of tensor shape at each dimension
+        for (size_t i = 0; i < DSPEC_CONSTANTS.rank; ++i) {
+            TT_FATAL(
+                page_coord[i] <= DSPEC_CONSTANTS.tensor_shape[i],
+                "Page coord {} must be less than tensor shape {} at rank {}!",
+                page_coord[i],
+                DSPEC_CONSTANTS.tensor_shape[i],
+                i);
+        }
+
         std::cout << "page_coord: ";
         for (size_t i = 0; i < DSPEC_CONSTANTS.rank; ++i) {
             std::cout << page_coord[i] << " ";
