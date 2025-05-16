@@ -717,7 +717,7 @@ private:
         // The index of the trace node When each type of data from this trace node is next used.
         std::array<std::optional<uint32_t>, 2> next_use_idx;
         // The sync value reached when this trace node finishes executing.
-        uint32_t sync_count;
+        uint32_t finished_sync_count;
     };
 
     struct MemoryUsage {
@@ -943,7 +943,7 @@ void SimpleTraceAllocator::allocate_trace_programs(IDevice* device, std::vector<
         if (program.runs_on_noc_unicast_only_cores()) {
             num_workers += device->num_worker_cores(HalProgrammableCoreType::ACTIVE_ETH, sub_device_id);
         }
-        extra_data_[i].sync_count = expected_workers_completed + num_workers;
+        extra_data_[i].finished_sync_count = expected_workers_completed + num_workers;
 
         // Subtract 1 because we don't want to overwrite watcher data for the last program to complete executing.
         constexpr uint32_t max_queued_programs = launch_msg_buffer_num_entries - 1;
@@ -962,8 +962,8 @@ void SimpleTraceAllocator::allocate_trace_programs(IDevice* device, std::vector<
             node.dispatch_metadata.send_binary = true;
         }
 
-        if (sync_idx >= 0) {
-            node.dispatch_metadata.sync_count = extra_data_[final_sync_idx].sync_count;
+        if (final_sync_idx >= 0) {
+            node.dispatch_metadata.sync_count = extra_data_[final_sync_idx].finished_sync_count;
             node.dispatch_metadata.stall_first = true;
         }
         expected_workers_completed += num_workers;
