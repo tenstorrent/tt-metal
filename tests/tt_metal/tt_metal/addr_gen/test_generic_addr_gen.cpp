@@ -32,9 +32,9 @@ struct ExpectedBankAndOffset {
 
 template <ExpectedDSpec ExpectedDSpecVal, ExpectedBankAndOffset... ExpectedBankAndOffsetVals>
 struct AddrGenExpected {
-    static constexpr ExpectedDSpec dspec = ExpectedDSpecVal;
-    static constexpr std::array<ExpectedBankAndOffset, sizeof...(ExpectedBankAndOffsetVals)> bank_and_offset = {
-        ExpectedBankAndOffsetVals...};
+    static constexpr auto dspec = ExpectedDSpecVal;
+    static constexpr auto bank_and_offset =
+        std::array<ExpectedBankAndOffset, sizeof...(ExpectedBankAndOffsetVals)>{ExpectedBankAndOffsetVals...};
 };
 
 template <typename Inputs, typename Expected>
