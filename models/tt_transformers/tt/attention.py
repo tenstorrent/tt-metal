@@ -801,13 +801,22 @@ class Attention(LightweightModule):
 
         # Non fused All Gather Matmul
         if self.use_fused_all_gather_matmul:  # is true for Ring topology
-            attn_output_11SH = ttnn.all_gather(
-                attn_output_11SH,
-                dim=3,
-                num_links=1,
-                topology=self.ccl_topology,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            )
+            if self.use_fabric_ccl:
+                attn_output_11SH = ttnn.experimental.all_gather_async(
+                    attn_output_11SH,
+                    dim=3,
+                    multi_device_global_semaphore=self.from_remote_semaphore_handles,
+                    num_links=1,
+                    topology=self.ccl_topology,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    subdevice_id=self.worker_sub_device_id,
+                )
+            else:
+                attn_output_11SH = ttnn.all_gather(
+                    attn_output_11SH,
+                    dim=3,
+                    num_links=1,
+                )
 
         output_11SH = ttnn.linear(
             attn_output_11SH,
@@ -834,6 +843,9 @@ class Attention(LightweightModule):
                 topology=self.ccl_topology,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 dtype=self.ccl_dtype,
+                from_remote_semaphore_handles=self.from_remote_semaphore_handles,
+                to_remote_semaphore_handles=self.to_remote_semaphore_handles,
+                worker_sub_device_id=self.worker_sub_device_id,
             )
 
         return output_11SH

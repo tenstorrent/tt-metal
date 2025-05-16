@@ -119,14 +119,13 @@ class DistributedNorm(LightweightModule):
                 x = ttnn.experimental.all_gather_async(
                     x,
                     dim=3,
+                    multi_device_global_semaphore=self.from_remote_semaphore_handles,
                     num_links=1,
-                    mesh_device=self.args.mesh_device,
                     memory_config=input_mem_cfg,
                     topology=self.args.ccl_topology(),
-                    multi_device_global_semaphore=self.from_remote_semaphore_handles,
                     subdevice_id=self.worker_sub_device_id,
                 )
-                ttnn.synchronize_device(mesh_device)
+                ttnn.synchronize_device(self.args.mesh_device)
             else:
                 x = ttnn.all_gather(
                     x, dim=3, num_links=1, topology=self.args.ccl_topology(), memory_config=input_mem_cfg

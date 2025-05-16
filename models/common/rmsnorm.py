@@ -50,11 +50,26 @@ class RMSNorm(LightweightModule):
         sharded_output_config=None,
         output_mem_config=None,
         ccl_topology=ttnn.Topology.Ring,
+        from_remote_semaphore_handles=None,
+        to_remote_semaphore_handles=None,
+        worker_sub_device_id=None,
     ):
         super().__init__()
         self.eps = eps
         self.is_distributed = is_distributed
         self.ccl_topology = ccl_topology
+
+        if worker_sub_device_id is None:
+            print("worker_sub_device_id is None, don't use fabric ccl")
+            self.use_fabric_ccl = False
+        else:
+            print("worker_sub_device_id is not None, use fabric ccl")
+            self.use_fabric_ccl = True
+
+        self.from_remote_semaphore_handles = from_remote_semaphore_handles
+        self.to_remote_semaphore_handles = to_remote_semaphore_handles
+        self.worker_sub_device_id = worker_sub_device_id
+        self.device = device
 
         if state_dict_prefix:
             weight_name = f"{state_dict_prefix}{weight_key}.weight"
@@ -143,13 +158,25 @@ class RMSNorm(LightweightModule):
         # Run distributed rmsnorm part 1
         tt_stats = ttnn.rms_norm_pre_all_gather(inp, compute_kernel_config=compute_kernel_config, dtype=ttnn.bfloat16)
         # AllGather stats
-        tt_stats = ttnn.all_gather(
-            tt_stats,
-            dim=3,
-            num_links=1,
-            topology=self.ccl_topology,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
+        if not self.use_fabric_ccl:
+            tt_stats = ttnn.all_gather(
+                tt_stats,
+                dim=3,
+                num_links=1,
+                topology=self.ccl_topology,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+        else:
+            tt_stats = ttnn.experimental.all_gather_async(
+                tt_stats,
+                dim=3,
+                multi_device_global_semaphore=self.from_remote_semaphore_handles,
+                num_links=1,
+                topology=self.ccl_topology,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                subdevice_id=self.worker_sub_device_id,
+            )
+            ttnn.synchronize_device(self.device)
         # Run distributed rmsnorm part 2
         tt_out = ttnn.rms_norm_post_all_gather(
             inp,
