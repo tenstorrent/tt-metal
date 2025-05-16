@@ -86,14 +86,4 @@ TensorSpec MultiDeviceHostStorage::get_tensor_spec(int spec_index) const {
 
 size_t MultiDeviceHostStorage::num_buffers() const { return buffers_.size(); }
 
-bool MultiDeviceHostStorage::is_allocated() const {
-    return std::all_of(buffers_.begin(), buffers_.end(), [](auto&& buffer) { return buffer.is_allocated(); });
-}
-
-void MultiDeviceHostStorage::deallocate() {
-    for (auto& buffer : buffers_) {
-        buffer.deallocate();
-    }
-}
-
 }  // namespace tt::tt_metal
