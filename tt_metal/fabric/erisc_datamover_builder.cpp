@@ -494,6 +494,9 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args() const
     TT_FATAL(sender_channel_num_buffers > 0, "Sender channel num buffers must be greater than 0");
     TT_FATAL(receiver_channel_num_buffers > 0, "Receiver channel num buffers must be greater than 0");
 
+    log_info("this->sender_channels_num_buffers[0]: {}", this->sender_channels_num_buffers[0]);
+    log_info("this->sender_channels_num_buffers[1]: {}", this->sender_channels_num_buffers[1]);
+
     auto ct_args = std::vector<uint32_t>{
         num_sender_channels,
         num_receiver_channels,
@@ -509,7 +512,11 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args() const
         this->handshake_address,
         this->channel_buffer_size,
 
-        sender_channel_num_buffers,
+        this->sender_channels_num_buffers[0],
+        this->sender_channels_num_buffers[1],
+        this->sender_channels_num_buffers[1],
+        this->sender_channels_num_buffers[1],
+        this->sender_channels_num_buffers[1],
         receiver_channel_num_buffers,
 
         config.sender_channels_base_address[0],
