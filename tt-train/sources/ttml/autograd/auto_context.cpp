@@ -78,4 +78,19 @@ void AutoContext::set_mesh_shape(tt::tt_metal::distributed::MeshShape shape) {
 tt::tt_metal::distributed::MeshShape AutoContext::get_mesh_shape() const {
     return m_mesh_shape;
 }
+
+DistributedContext& AutoContext::get_distributed_context() const {
+    if (!m_distributed_context) {
+        throw std::runtime_error("DistributedContext is not initialized.");
+    }
+    return *m_distributed_context;
+}
+
+void AutoContext::initialize_distributed_context(int argc, char** argv) {
+    if (m_distributed_context) {
+        throw std::runtime_error("MPIContext is already initialized.");
+    }
+    m_distributed_context = DistributedContext::create(argc, argv);
+}
+
 }  // namespace ttml::autograd

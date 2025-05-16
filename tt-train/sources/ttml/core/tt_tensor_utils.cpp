@@ -89,6 +89,27 @@ tt::tt_metal::Tensor ttml_create_owned_tensor(
     return {std::move(buffer), shape, data_type, layout};
 }
 
+std::vector<tt::tt_metal::HostBuffer> get_as(const ttnn::Tensor& tensor) {
+    return std::visit(
+        [](auto&& storage) -> std::vector<tt::tt_metal::HostBuffer> {
+            using StorageType = std::decay_t<decltype(storage)>;
+            if constexpr (std::is_same_v<StorageType, tt::tt_metal::HostStorage>) {
+                return {storage.buffer};
+            } else if constexpr (std::is_same_v<StorageType, tt::tt_metal::MultiDeviceHostStorage>) {
+                auto num_buffers = storage.num_buffers();
+                std::vector<tt::tt_metal::HostBuffer> buffers;
+                buffers.reserve(num_buffers);
+                for (uint32_t i = 0; i < num_buffers; ++i) {
+                    buffers.push_back(storage.get_buffer(i));
+                }
+                return buffers;
+            } else {
+                throw std::runtime_error("Tensor must be on host");
+            }
+        },
+        tensor.get_storage());
+}
+
 }  // namespace
 namespace ttml::core {
 
@@ -332,4 +353,17 @@ template tt::tt_metal::Tensor from_xtensor<uint32_t, ttnn::DataType::UINT32>(
     const XTensorToMeshVariant<uint32_t>& composer,
     ttnn::Layout layout);
 
+std::vector<std::span<std::byte>> get_bytes_from_cpu_tensor(ttnn::Tensor& tensor) {
+    std::vector<std::span<std::byte>> res;
+    auto cpu_tensor = tensor;
+    auto buffers = get_as(cpu_tensor);
+
+    res.reserve(buffers.size());
+    for (auto& buffer : buffers) {
+        auto view = buffer.view_bytes();
+        auto span = std::as_writable_bytes(std::span{view.begin(), view.end()});
+        res.push_back(span);
+    }
+    return res;
+}
 }  // namespace ttml::core
