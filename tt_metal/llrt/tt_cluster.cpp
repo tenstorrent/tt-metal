@@ -318,6 +318,33 @@ const std::unordered_map<CoreCoord, int32_t>& Cluster::get_virtual_routing_to_pr
     return this->virtual_routing_to_profiler_flat_id_.at(this->get_board_type(chip_id));
 }
 
+std::unordered_set<int> split_string(const char* str, char delimiter) {
+    std::unordered_set<int> tokens;
+    const char* token = str;
+    while (*token != '\0') {
+        // Parse the device id (integer)
+        int num;
+        if (sscanf(token, "%d", &num) != 1) {
+            // Skip invalid entries
+            token = strchr(token, ',');
+            if (token != nullptr) {
+                token++;
+            }
+            continue;
+        }
+
+        tokens.insert(num);
+
+        // Move to the next token after delimiter
+        token = strchr(token, ',');
+        if (token == nullptr) {
+            break;
+        }
+        token++;  // Skip the delimiter
+    }
+    return tokens;
+}
+
 void Cluster::open_driver(const bool &skip_driver_allocs) {
     std::unique_ptr<tt::umd::Cluster> device_driver;
     if (this->target_type_ == TargetDevice::Silicon) {
@@ -326,9 +353,18 @@ void Cluster::open_driver(const bool &skip_driver_allocs) {
         // and assert if workload uses more than available.
         uint32_t num_devices = tt::umd::Cluster::create_cluster_descriptor()->get_all_chips().size();
         uint32_t num_host_mem_ch_per_mmio_device = std::min(HOST_MEM_CHANNELS, num_devices);
+
+        // Parse visible devices from TT_METAL_VISIBLE_DEVICES environment variable
+        std::unordered_set<chip_id_t> target_chip_ids;
+        const char* visible_devices_str = std::getenv("TT_METAL_VISIBLE_DEVICES");
+        if (visible_devices_str != nullptr) {
+            target_chip_ids = split_string(visible_devices_str, ',');
+        }
+
         device_driver = std::make_unique<tt::umd::Cluster>(tt::umd::ClusterOptions{
             .num_host_mem_ch_per_mmio_device = num_host_mem_ch_per_mmio_device,
             .sdesc_path = get_soc_description_file(this->arch_, this->target_type_),
+            .target_devices = target_chip_ids,
         });
     } else if (this->target_type_ == TargetDevice::Simulator) {
         device_driver = std::make_unique<tt::umd::Cluster>(tt::umd::ClusterOptions{
