@@ -59,6 +59,15 @@ jobs:
             runs-on: ["arch-wormhole_b0", "${{ inputs.topology }}", "${{ inputs.extra-tag }}", "bare-metal", "pipeline-perf"],
             owner_id: U044T8U8DEF # Johanna Rock
           },
+          {
+            name: "Galaxy Llama 70B prefill perf tests",
+            arch: wormhole_b0,
+            cmd: "FAKE_DEVICE=TG LLAMA_DIR=/mnt/MLPerf/tt_dnn-models/llama/Llama3.3-70B-Instruct/ pytest models/demos/llama3_subdevices/tests/test_prefill_device_perf.py::test_llama_TG_perf_device ; fail+=$?",
+            timeout: 100,
+            tracy: true,
+            runs-on: ["arch-wormhole_b0", "${{ inputs.topology }}", "${{ inputs.extra-tag }}", "bare-metal", "pipeline-perf"],
+            owner_id: U03PUAKE719 # Miguel Tairum
+          },
           # { See GH Issue #22164
           #   name: "Llama Galaxy Perf Unit Tests",
           #   arch: wormhole_b0,
