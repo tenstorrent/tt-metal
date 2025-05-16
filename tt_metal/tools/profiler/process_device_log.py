@@ -362,9 +362,10 @@ def get_dispatch_core_ops(timeseries):
     for masterOpID, subordinateOpID in zip(
         riscData[masterRisc]["orderedOpIDs"], riscData[subordinateRisc]["orderedOpIDs"]
     ):
-        opsDict[masterOpID] = {
+        opsDict[masterOpID] = (
             riscData[masterRisc]["ops"][masterOpID] + riscData[subordinateRisc]["ops"][subordinateOpID]
-        }
+        )
+
         opsDict[masterOpID].sort(key=lambda x: x[1])
 
     ops = []
