@@ -1193,8 +1193,7 @@ void setup_test_with_persistent_fabric(
     ttnn::ccl::Topology topology = ttnn::ccl::Topology::Linear,
     size_t switch_interval = 0,
     bool loopback_on_last_device = false,
-    bool is_galaxy = false,
-    bool is_bh = false) {
+    bool is_galaxy = false) {
     if (enable_persistent_fabric) {
         log_info(tt::LogTest, "Enabling persistent fabric");
         fabric_programs = std::vector<Program>(devices.size());
@@ -1209,14 +1208,7 @@ void setup_test_with_persistent_fabric(
     }
 
     line_fabric = ttnn::ccl::EdmLineFabricOpInterface(
-        devices,
-        fabric_program_ptrs,
-        enable_persistent_fabric,
-        num_links.value_or(1),
-        false,
-        topology,
-        is_galaxy,
-        is_bh);
+        devices, fabric_program_ptrs, enable_persistent_fabric, num_links.value_or(1), false, topology, is_galaxy);
     line_fabric->set_firmware_context_switch_interval(switch_interval);
     if (loopback_on_last_device) {
         for (auto& edm_builder : line_fabric->edm_builders_backward_direction.at(devices.back()->id())) {
@@ -1226,7 +1218,7 @@ void setup_test_with_persistent_fabric(
                 devices.back()->id(),
                 edm_builder.my_noc_x,
                 edm_builder.my_noc_y);
-            if (is_bh) {
+            if (devices[0]->arch() == tt::ARCH::BLACKHOLE) {
                 edm_builder[(int)DataMovementProcessor::RISCV_0].connect_to_downstream_edm(
                     edm_builder[(int)tt::tt_metal::DataMovementProcessor::RISCV_1]);
                 edm_builder[(int)DataMovementProcessor::RISCV_1].connect_to_downstream_edm(

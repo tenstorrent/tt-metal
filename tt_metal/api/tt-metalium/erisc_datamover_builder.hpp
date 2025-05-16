@@ -116,7 +116,10 @@ struct FabricEriscDatamoverConfig {
     std::size_t buffer_region_start;
     std::size_t available_channel_buffering_space;
 
-    FabricEriscDatamoverConfig(std::size_t channel_buffer_size_bytes, Topology topology = Topology::Linear);
+    FabricEriscDatamoverConfig(
+        std::size_t channel_buffer_size_bytes,
+        Topology topology = Topology::Linear,
+        tt::ARCH arch = tt::ARCH::WORMHOLE_B0);
 
     std::size_t channel_buffer_size_bytes = 0;
 
@@ -213,7 +216,7 @@ public:
         bool enable_persistent_mode,
         bool build_in_worker_connection_mode = false,
         bool dateline_connection = false,
-        bool is_bh = false,
+        tt::ARCH arch = tt::ARCH::WORMHOLE_B0,
         size_t risc_id = 0);
 
     static FabricEriscDatamoverBuilder build(
@@ -226,7 +229,6 @@ public:
         bool enable_persistent_mode,
         bool build_in_worker_connection_mode = false,
         bool dateline_connection = false,
-        bool is_bh = false,
         size_t risc_id = 0,
         eth_chan_directions direction = eth_chan_directions::EAST);
 
@@ -317,7 +319,7 @@ public:
     bool fuse_receiver_flush_and_completion_ptr = true;
     bool dateline_connection = false;
     bool wait_for_host_signal = false;
-    bool is_bh = false;
+    tt::ARCH arch = tt::ARCH::WORMHOLE_B0;
 };
 
 }  // namespace tt::tt_fabric

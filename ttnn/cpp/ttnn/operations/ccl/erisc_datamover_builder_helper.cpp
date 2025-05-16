@@ -50,8 +50,7 @@ EdmLineFabricOpInterface::EdmLineFabricOpInterface(
     std::optional<size_t> desired_num_links,
     bool build_in_worker_connection_mode,
     Topology topology,
-    bool is_galaxy,
-    bool is_bh) :
+    bool is_galaxy) :
     device_sequence(device_sequence), programs(program_sequence) {
     if (topology == Topology::Ring) {
         TT_FATAL(device_sequence.size() > 2, "Ring topology only supports more than 2 devices");
@@ -127,7 +126,8 @@ EdmLineFabricOpInterface::EdmLineFabricOpInterface(
             for (size_t l = 0; l < this->num_links; l++) {
                 std::vector<tt::tt_fabric::FabricEriscDatamoverBuilder> fwd_edm_builders_for_risc;
                 std::vector<tt::tt_fabric::FabricEriscDatamoverBuilder> bwd_edm_builders_for_risc;
-                for (size_t risc_id = 0; risc_id < (is_bh ? 2 : 1); risc_id++) {
+                for (size_t risc_id = 0; risc_id < (device_sequence.front()->arch() == tt::ARCH::BLACKHOLE ? 2 : 1);
+                     risc_id++) {
                     log_trace(
                         tt::LogOp,
                         "Building forward direction EDM on chip {} on risc_{} on link {}",
@@ -144,7 +144,6 @@ EdmLineFabricOpInterface::EdmLineFabricOpInterface(
                         enable_persistent_mode,
                         build_in_worker_connection_mode,
                         dateline,
-                        is_bh,
                         risc_id));
 
                     log_trace(
@@ -163,7 +162,6 @@ EdmLineFabricOpInterface::EdmLineFabricOpInterface(
                         enable_persistent_mode,
                         build_in_worker_connection_mode,
                         dateline,
-                        is_bh,
                         risc_id));
                 }
                 edm_builders_forward_direction[src_device->id()].emplace_back(fwd_edm_builders_for_risc);
@@ -307,7 +305,7 @@ EdmLineFabricOpInterface::EdmLineFabricOpInterface(
 
             for (size_t l = 0; l < num_links; l++) {
                 using namespace tt::tt_metal;
-                if (is_bh) {
+                if (device_sequence.front()->arch() == tt::ARCH::BLACKHOLE) {
                     forward_direction_edm.at(l)
                         .at((int)DataMovementProcessor::RISCV_0)
                         .connect_to_downstream_edm(
@@ -346,8 +344,7 @@ EdmLineFabricOpInterface::EdmLineFabricOpInterface(
     bool enable_persistent_mode,
     std::optional<size_t> desired_num_links,
     bool build_in_worker_connection_mode,
-    Topology topology,
-    bool is_bh) :
+    Topology topology) :
     device_sequence({local_device}), programs({program}) {
     static constexpr std::size_t edm_buffer_size =
         tt::tt_fabric::FabricEriscDatamoverBuilder::default_packet_payload_size_bytes +
@@ -405,7 +402,7 @@ EdmLineFabricOpInterface::EdmLineFabricOpInterface(
                 break;
             }
             std::vector<tt::tt_fabric::FabricEriscDatamoverBuilder> edm_builders_for_risc;
-            for (size_t risc_id = 0; risc_id < (is_bh ? 2 : 1); risc_id++) {
+            for (size_t risc_id = 0; risc_id < (local_device->arch() == tt::ARCH::BLACKHOLE ? 2 : 1); risc_id++) {
                 log_trace(
                     tt::LogOp,
                     "DEBUG: build EDM: device: {}, &program: {}: core-logi(x={},y={}), risc_id: {}",
@@ -424,7 +421,6 @@ EdmLineFabricOpInterface::EdmLineFabricOpInterface(
                     enable_persistent_mode,
                     build_in_worker_connection_mode,
                     false,
-                    is_bh,
                     risc_id));
             }
             edm_builders[local_device->id()].emplace_back(edm_builders_for_risc);
@@ -449,7 +445,7 @@ EdmLineFabricOpInterface::EdmLineFabricOpInterface(
 
             for (size_t l = 0; l < this->num_links; l++) {
                 using namespace tt::tt_metal;
-                if (is_bh) {
+                if (local_device->arch() == tt::ARCH::BLACKHOLE) {
                     forward_direction_edm.at(l)
                         .at((int)DataMovementProcessor::RISCV_0)
                         .connect_to_downstream_edm(
