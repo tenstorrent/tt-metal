@@ -992,7 +992,6 @@ void Device::init_command_queue_device() {
             sub_device_manager_tracker_->get_active_sub_device_manager()->num_sub_devices(),
             sub_device_manager_tracker_->get_active_sub_device_manager()->noc_mcast_unicast_data());
     }
-    dispatch_firmware_active_ = true;
 }
 
 void Device::init_fabric() {
@@ -1090,8 +1089,6 @@ bool Device::close() {
     if (not this->initialized_) {
         TT_THROW("Cannot close device {} that has not been initialized!", this->id_);
     }
-
-    dispatch_firmware_active_ = false;
 
     tt_metal::detail::DumpDeviceProfileResults(this, ProfilerDumpState::LAST_CLOSE_DEVICE);
 

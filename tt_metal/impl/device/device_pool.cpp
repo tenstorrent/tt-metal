@@ -363,6 +363,7 @@ void DevicePool::initialize_active_devices() const {
             }
         }
     }
+    _inst->dispatch_firmware_active_ = true;
 }
 
 void DevicePool::activate_device(chip_id_t id) {
@@ -644,6 +645,8 @@ void DevicePool::teardown_fd(const std::unordered_set<chip_id_t>& devices_to_clo
     }
 }
 
+bool DevicePool::is_dispatch_firmware_active() const { return this->dispatch_firmware_active_; }
+
 bool DevicePool::close_device(chip_id_t device_id) {
     // Sync and close one device
     // Currently can only call this on mmio chips, once we split dispatch kernel shutdown
@@ -709,12 +712,13 @@ bool DevicePool::close_devices(const std::vector<IDevice*>& devices, bool skip_s
         }
     }
 
+    dispatch_firmware_active_ = false;
     teardown_fd(std::unordered_set<chip_id_t>(devices_to_close.begin(), devices_to_close.end()));
     // Terminate sent to each device. Wait for dispatch to finish. MMIO only to prevent clogging SD path.
     // Dispatch kernels internally have a sync at the end to ensure all credits are returned
     for (const auto& dev_id : devices_to_close) {
         auto dev = tt::DevicePool::instance().get_active_device(dev_id);
-        if (!dev->is_mmio_capable()) {
+        if (!dev->is_mmio_capable() || !dev->using_fast_dispatch()) {
             continue;
         }
 
