@@ -44,10 +44,3 @@ target_link_libraries(
         TT::Metalium::HostDevCommon
         OpenMPI::MPI
 )
-
-set_target_properties(
-    distributed
-    PROPERTIES
-        INSTALL_RPATH
-            "${ULFM_PREFIX}/lib"
-)
