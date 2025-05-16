@@ -35,7 +35,14 @@ permissions:
   packages: write
   checks: write
 
-run-name: All post-commit tests${{ (github.event_name == 'workflow_dispatch' && inputs.with-retries) && ' (with retries)' || ''}}
+run-name: >-
+  ${{
+    github.event_name == 'push'
+      && format('All post-commit tests - {0}', github.event.head_commit.message)
+      || (github.event_name == 'workflow_dispatch' && inputs.with-retries
+          && 'All post-commit tests (with retries)')
+      || 'All post-commit tests'
+  }}
 jobs:
   build-artifact:
     uses: ./.github/workflows/build-artifact.yaml
