@@ -85,6 +85,8 @@ FabricContext::FabricContext(tt::tt_metal::FabricConfig fabric_config) {
     if (is_tt_fabric_config(this->fabric_config_)) {
         this->router_config_ = std::make_unique<tt::tt_fabric::FabricEriscDatamoverConfig>(
             this->channel_buffer_size_bytes_, this->topology_);
+        this->dateline_router_config_ = std::make_unique<tt::tt_fabric::FabricEriscDatamoverConfig>(
+            this->channel_buffer_size_bytes_, this->topology_, true);
         set_routing_mode(this->topology_, this->fabric_config_);
     } else {
         this->router_config_ = nullptr;
@@ -106,8 +108,9 @@ tt::tt_fabric::FabricEriscDatamoverConfig& FabricContext::get_fabric_router_conf
     return *this->router_config_.get();
 };
 
-tt::tt_fabric::FabricEriscDatamoverConfig FabricContext::get_fabric_router_config(bool is_dateline) const {
-    return tt::tt_fabric::FabricEriscDatamoverConfig(this->channel_buffer_size_bytes_, this->topology_, is_dateline);
+tt::tt_fabric::FabricEriscDatamoverConfig FabricContext::get_fabric_dateline_router_config() const {
+    TT_FATAL(this->dateline_router_config_ != nullptr, "Error, fabric dateline router config is uninitialized");
+    return *this->dateline_router_config_.get();
 };
 
 void FabricContext::set_num_fabric_initialized_routers(chip_id_t chip_id, size_t num_routers) {
