@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
-from models.demos.yolov10.tt.common import Conv
+from models.experimental.yolov10.tt.common import Conv
 
 
 class TtnnCIB:
@@ -28,6 +28,7 @@ class TtnnCIB:
             parameters.cv1[2],
             self.conv_pt.cv1[2],
             use_1d_systolic_array=False,
+            # auto_shard=True,
         )
 
         self.conv3 = Conv(
