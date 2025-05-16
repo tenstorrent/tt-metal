@@ -335,11 +335,11 @@ void DeviceCommand<hugepage_write>::add_dispatch_go_signal_mcast(
 
 template <bool hugepage_write>
 void DeviceCommand<hugepage_write>::add_notify_dispatch_s_go_signal_cmd(uint8_t wait, uint16_t index_bitmask) {
-    // Command to have dispatch_master send a notification to dispatch_slave
+    // Command to have dispatch_master send a notification to dispatch_subordinate
     this->add_prefetch_relay_inline(true, sizeof(CQDispatchCmd), DispatcherSelect::DISPATCH_MASTER);
     auto initialize_sem_update_cmd = [&](CQDispatchCmd* sem_update_cmd) {
         *sem_update_cmd = {};
-        sem_update_cmd->base.cmd_id = CQ_DISPATCH_NOTIFY_SLAVE_GO_SIGNAL;
+        sem_update_cmd->base.cmd_id = CQ_DISPATCH_NOTIFY_SUBORDINATE_GO_SIGNAL;
         sem_update_cmd->notify_dispatch_s_go_signal.wait = wait;
         sem_update_cmd->notify_dispatch_s_go_signal.index_bitmask = index_bitmask;
     };
@@ -473,7 +473,7 @@ void DeviceCommand<hugepage_write>::add_dispatch_set_go_signal_noc_data(
         DispatchSettings::DISPATCH_GO_SIGNAL_NOC_DATA_ENTRIES);
     auto data_sizeB = noc_mcast_unicast_data.size() * sizeof(uint32_t);
     uint32_t lengthB = sizeof(CQDispatchCmd) + data_sizeB;
-    if (dispatcher_type == DispatcherSelect::DISPATCH_SLAVE) {
+    if (dispatcher_type == DispatcherSelect::DISPATCH_SUBORDINATE) {
         constexpr uint32_t dispatch_page_size = 1 << DispatchSettings::DISPATCH_S_BUFFER_LOG_PAGE_SIZE;
         TT_FATAL(
             lengthB <= dispatch_page_size,

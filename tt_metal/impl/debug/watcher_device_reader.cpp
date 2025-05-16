@@ -58,7 +58,7 @@ const char* get_riscv_name(const CoreCoord& core, uint32_t type) {
         case DebugNCrisc: return "ncrisc";
         case DebugErisc: return "erisc";
         case DebugIErisc: return "ierisc";
-        case DebugSlaveIErisc: return "slave_ierisc";
+        case DebugSubordinateIErisc: return "subordinate_ierisc";
         case DebugTrisc0: return "trisc0";
         case DebugTrisc1: return "trisc1";
         case DebugTrisc2: return "trisc2";
@@ -813,7 +813,7 @@ void WatcherDeviceReader::DumpRunState(CoreDescriptor& core, const launch_msg_t*
 void WatcherDeviceReader::DumpLaunchMessage(CoreDescriptor& core, const mailboxes_t* mbox_data) {
     bool is_eth = (core.type == CoreType::ETH);
     const launch_msg_t* launch_msg = get_valid_launch_message(mbox_data);
-    const slave_sync_msg_t* slave_sync = &mbox_data->slave_sync;
+    const subordinate_sync_msg_t* subordinate_sync = &mbox_data->subordinate_sync;
     fprintf(f, "rmsg:");
     if (launch_msg->kernel_config.mode == DISPATCH_MODE_DEV) {
         fprintf(f, "D");
@@ -889,14 +889,14 @@ void WatcherDeviceReader::DumpLaunchMessage(CoreDescriptor& core, const mailboxe
 
     if (!is_eth) {
         fprintf(f, "smsg:");
-        DumpRunState(core, launch_msg, slave_sync->dm1);
-        DumpRunState(core, launch_msg, slave_sync->trisc0);
-        DumpRunState(core, launch_msg, slave_sync->trisc1);
-        DumpRunState(core, launch_msg, slave_sync->trisc2);
+        DumpRunState(core, launch_msg, subordinate_sync->dm1);
+        DumpRunState(core, launch_msg, subordinate_sync->trisc0);
+        DumpRunState(core, launch_msg, subordinate_sync->trisc1);
+        DumpRunState(core, launch_msg, subordinate_sync->trisc2);
         fprintf(f, " ");
     } else if (tt::tt_metal::MetalContext::instance().get_cluster().arch() == ARCH::BLACKHOLE) {
         fprintf(f, "smsg:");
-        DumpRunState(core, launch_msg, slave_sync->dm1);
+        DumpRunState(core, launch_msg, subordinate_sync->dm1);
         fprintf(f, " ");
     }
 }
@@ -1053,7 +1053,7 @@ string WatcherDeviceReader::GetKernelName(CoreDescriptor& core, const launch_msg
         case DebugBrisc: return kernel_names[launch_msg->kernel_config.watcher_kernel_ids[DISPATCH_CLASS_TENSIX_DM0]];
         case DebugErisc:
         case DebugIErisc: return kernel_names[launch_msg->kernel_config.watcher_kernel_ids[DISPATCH_CLASS_ETH_DM0]];
-        case DebugSlaveIErisc:
+        case DebugSubordinateIErisc:
             return kernel_names[launch_msg->kernel_config.watcher_kernel_ids[DISPATCH_CLASS_ETH_DM1]];
         case DebugNCrisc: return kernel_names[launch_msg->kernel_config.watcher_kernel_ids[DISPATCH_CLASS_TENSIX_DM1]];
         case DebugTrisc0:
