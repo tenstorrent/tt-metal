@@ -347,12 +347,16 @@ void Finish(CommandQueue& cq, tt::stl::Span<const SubDeviceId> sub_device_ids) {
     LIGHT_METAL_TRACE_FUNCTION_CALL(CaptureFinish, cq, sub_device_ids);
     detail::DispatchStateCheck(true);
     cq.finish(sub_device_ids);
-    TT_ASSERT(
-        !(DPrintServerHangDetected()), "Command Queue could not finish: device hang due to unanswered DPRINT WAIT.");
-    TT_ASSERT(
-        !(tt::watcher_server_killed_due_to_error()),
-        "Command Queue could not finish: device hang due to illegal NoC transaction. See {} for details.",
-        tt::watcher_get_log_file_name());
+    // If in testing mode, don't need to check dprint/watcher errors, since the tests will induce/handle them.
+    if (!MetalContext::instance().rtoptions().get_test_mode_enabled()) {
+        TT_FATAL(
+            !(DPrintServerHangDetected()),
+            "Command Queue could not finish: device hang due to unanswered DPRINT WAIT.");
+        TT_FATAL(
+            !(tt::watcher_server_killed_due_to_error()),
+            "Command Queue could not finish: device hang due to illegal NoC transaction. See {} for details.",
+            tt::watcher_get_log_file_name());
+    }
 }
 
 void EnqueueTrace(CommandQueue& cq, uint32_t trace_id, bool blocking) {
