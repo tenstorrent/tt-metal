@@ -137,6 +137,7 @@ def run_avg_pool2d(
 @pytest.mark.parametrize(
     "shard_scheme",
     [
+        None,
         ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
         ttnn.TensorMemoryLayout.WIDTH_SHARDED,
         ttnn.TensorMemoryLayout.BLOCK_SHARDED,
