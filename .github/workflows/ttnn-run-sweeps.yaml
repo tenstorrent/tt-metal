@@ -432,6 +432,17 @@ on:
           - eltwise.binary_backward.remainder_bw.remainder_bw
           - eltwise.binary_backward.rsub_bw.rsub_bw
           - eltwise.binary_backward.squared_difference_bw.squared_difference_bw
+          - eltwise.binary_ng.binary_ng
+          - eltwise.binary_ng.binary_ng_sub
+          - eltwise.binary_ng.binary_ng_mul
+          - eltwise.binary_ng.binary_ng_div
+          - eltwise.binary_ng.binary_ng_rsub
+          - eltwise.binary_ng.binary_ng_pow
+          - eltwise.binary_ng.binary_ng_activ
+          - eltwise.binary_ng.binary_ng_exp_ops
+          - eltwise.binary_ng.binary_ng_relational
+          - eltwise.binary_ng.binary_ng_logical
+          - eltwise.binary_ng.binary_ng_bitwise
           - eltwise.composite.binary.addalpha.addalpha
           - eltwise.composite.binary.subalpha.subalpha
           - eltwise.composite.binary.minimum.minimum
