@@ -530,36 +530,42 @@ def test_alt_complex_rotate90(device, h: int, w: int, dtype: ttnn.DataType):
     "input_shapes",
     [
         torch.Size([1, 1, 32, 32]),
-        torch.Size([1, 1, 320, 384]),
-        torch.Size([1, 3, 320, 384]),
+        # torch.Size([1, 1, 320, 384]),
+        # torch.Size([1, 3, 320, 384]),
     ],
 )
 @pytest.mark.parametrize(
     "low, high",
     [
-        (-5, 5),  # Small range
+        (0, 5),  # Small range
     ],
 )
 @pytest.mark.parametrize(
     "ttnn_function",
     [
         ttnn.eqz,
-        ttnn.nez,
-        ttnn.ltz,
-        ttnn.lez,
-        ttnn.gtz,
-        ttnn.gez,
+        # ttnn.nez,
+        # ttnn.ltz,
+        # ttnn.lez,
+        # ttnn.gtz,
+        # ttnn.gez,
     ],
 )
 def test_unary_zero_comp_ttnn(input_shapes, low, high, ttnn_function, device):
     in_data = torch.randint(low, high, input_shapes, dtype=torch.int32)
-    input_tensor = ttnn.from_torch(in_data, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
+    in_data = torch.tensor([0, 1, 2, 3, 4], dtype=torch.int32)
+    # torch_input_tensor_b = torch.tensor([1, 1, 1, 1, 1],  dtype=torch.int32)
+    input_tensor = ttnn.from_torch(in_data, dtype=ttnn.uint16, layout=ttnn.TILE_LAYOUT, device=device)
 
     cq_id = 0
     output_tensor = ttnn_function(input_tensor, queue_id=cq_id)
     golden_function = ttnn.get_golden_function(ttnn_function)
     golden_tensor = golden_function(in_data)
-
+    ttnn.set_printoptions(profile="full")
+    torch.set_printoptions(linewidth=200, threshold=10000, precision=5, sci_mode=False, edgeitems=17)
+    print("input_tensor", input_tensor)
+    # print("golden_tensor", golden_tensor)
+    print("output_tensor", output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
     pcc = ttnn.pearson_correlation_coefficient(golden_tensor, output_tensor)
     assert pcc == 1

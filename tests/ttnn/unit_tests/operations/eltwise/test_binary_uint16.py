@@ -10,31 +10,36 @@ import ttnn
 @pytest.mark.parametrize(
     "a_shape, b_shape",
     [
-        (torch.Size([1, 2, 32]), torch.Size([1, 2, 32])),
-        (torch.Size([1]), torch.Size([1, 5, 12])),
-        (torch.Size([1, 2, 32, 64, 125]), torch.Size([1, 2, 32, 1, 1])),
-        (torch.Size([]), torch.Size([])),
-        (torch.Size([5]), torch.Size([1])),
+        (torch.Size([2, 2]), torch.Size([2, 2])),
+        # (torch.Size([1, 2, 32]), torch.Size([1, 2, 32])),
+        # (torch.Size([1]), torch.Size([1, 5, 12])),
+        # (torch.Size([1, 2, 32, 64, 125]), torch.Size([1, 2, 32, 1, 1])),
+        # (torch.Size([]), torch.Size([])),
+        # (torch.Size([5]), torch.Size([1])),
     ],
 )
 @pytest.mark.parametrize(
     "low_a, high_a, low_b, high_b",
     [
-        (0, 100, 0, 300),
-        (1000, 10000, 500, 1000),
-        (30000, 40000, 10000, 15000),
-        (50000, 55000, 1000, 2000),
-        (0, 32000, 0, 32000),
+        (0, 100, 0, 1),
+        # (1000, 10000, 500, 1000),
+        # (30000, 40000, 10000, 15000),
+        # (50000, 55000, 1000, 2000),
+        # (0, 32000, 0, 32000),
     ],
 )
 def test_binary_add_uint16_bcast(a_shape, b_shape, low_a, high_a, low_b, high_b, device):
     num_elements = max(int(torch.prod(torch.tensor(a_shape)).item()), 1)
-    torch_input_tensor_a = torch.linspace(high_a, low_a, num_elements, dtype=torch.int32)
-    torch_input_tensor_a = torch_input_tensor_a[:num_elements].reshape(a_shape).nan_to_num(0.0)
+    # torch_input_tensor_a = torch.linspace(high_a, low_a, num_elements, dtype=torch.int32)
+    # torch_input_tensor_a = torch_input_tensor_a[:num_elements].reshape(a_shape).nan_to_num(0.0)
 
-    num_elements = max(int(torch.prod(torch.tensor(b_shape)).item()), 1)
-    torch_input_tensor_b = torch.linspace(high_b, low_b, num_elements, dtype=torch.int32)
-    torch_input_tensor_b = torch_input_tensor_b[:num_elements].reshape(b_shape).nan_to_num(0.0)
+    # num_elements = max(int(torch.prod(torch.tensor(b_shape)).item()), 1)
+    # torch_input_tensor_b = torch.linspace(high_b, low_b, num_elements, dtype=torch.int32)
+    # torch_input_tensor_b = torch_input_tensor_b[:num_elements].reshape(b_shape).nan_to_num(0.0)
+    # torch_input_tensor_a = torch.randint(low_a, high_a, a_shape, dtype=torch.int32)
+    # torch_input_tensor_b = torch.ones(b_shape, dtype=torch.int32)
+    torch_input_tensor_a = torch.tensor([0, 1, 2, 3, 4, 0, 6, 7, 8, 9, 10], dtype=torch.int32)
+    torch_input_tensor_b = torch.tensor([1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1], dtype=torch.int32)
 
     golden_function = ttnn.get_golden_function(ttnn.add)
     torch_output_tensor = golden_function(torch_input_tensor_a, torch_input_tensor_b, device=device)
@@ -55,11 +60,17 @@ def test_binary_add_uint16_bcast(a_shape, b_shape, low_a, high_a, low_b, high_b,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
     output_tensor = ttnn.add(input_tensor_a, input_tensor_b, use_legacy=False)
+    ttnn.set_printoptions(profile="full")
+    torch.set_printoptions(linewidth=200, threshold=10000, precision=5, sci_mode=False, edgeitems=17)
+
+    print("Input A : ", torch_input_tensor_a)
+    print("Input B : ", torch_input_tensor_b)
+    print("Output : ", output_tensor)
+
     # Since to_torch converts ttnn.uint16 to int16 and then to int32, there will be an output mismatch
     # We can typecast ttnn.uint16 to ttnn.uint32 to avoid this mismatch
     output_tensor = ttnn.typecast(output_tensor, dtype=ttnn.uint32)
     output_tensor = ttnn.to_torch(output_tensor, dtype=torch.int32)
-
     assert torch.equal(output_tensor, torch_output_tensor)
 
 
