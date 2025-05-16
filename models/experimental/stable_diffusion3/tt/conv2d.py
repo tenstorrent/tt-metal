@@ -81,7 +81,7 @@ class TtConv2d:
         x: ttnn.Tensor,
         *,
         conv_config: ttnn.Conv2dConfig | None = None,
-        memory_config: ttnn.MemoryConfig | None,
+        memory_config: ttnn.MemoryConfig | None = None,
     ) -> tuple[ttnn.Tensor, list[int]]:
         batch_size = x.shape[0]
 
@@ -118,7 +118,7 @@ class TtConv2d:
     def __call__(
         self,
         x: ttnn.Tensor,
-        memory_config: ttnn.MemoryConfig | None,
+        memory_config: ttnn.MemoryConfig | None = None,
     ) -> ttnn.Tensor:
         result, shape = self.call_without_reshape(x, memory_config=memory_config)
         return result.reshape(shape)
