@@ -2,9 +2,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "device_impl.hpp"
+
 #include <core_descriptor.hpp>
 #include "dev_msgs.h"
-#include <device_impl.hpp>
 #include <device_pool.hpp>
 #include <host_api.hpp>
 #include <magic_enum/magic_enum.hpp>
