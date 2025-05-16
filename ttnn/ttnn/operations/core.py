@@ -278,9 +278,6 @@ def from_torch(
         if memory_config.shard_spec is None:
             raise RuntimeError("ttnn.from_torch: Shard spec must not be None for sharded tensors")
 
-        if memory_config.shard_spec.mode == ttnn.ShardMode.LOGICAL:
-            return ttnn.Tensor(tensor, dtype, device, layout, memory_config, tile)
-
     if dtype == ttnn.bfloat8_b or dtype == ttnn.bfloat4_b:
         if layout != ttnn.TILE_LAYOUT:
             raise RuntimeError("ttnn.from_torch: bfloat8_b/bfloat4_b requires TILE_LAYOUT!")
@@ -289,17 +286,16 @@ def from_torch(
         if device is None:
             raise RuntimeError("ttnn.from_torch: device must be specified when memory_config is specified")
 
-    if pad_value is not None:
-        if layout != ttnn.TILE_LAYOUT:
-            raise RuntimeError("ttnn.from_torch: layout must be TILE_LAYOUT when pad_value is specified")
-
     if mesh_mapper:
         shards = mesh_mapper.map(tensor)
-        return ttnn.Tensor(shards, dtype, layout, memory_config, tile, pad_value, mesh_mapper.config()).to_device(
-            device, memory_config
+        return ttnn.to_device(
+            ttnn.Tensor(shards, dtype, layout, memory_config, tile, pad_value, mesh_mapper.config()),
+            device,
+            memory_config=memory_config,
+            cq_id=cq_id,
         )
     else:
-        return ttnn.Tensor(tensor, dtype, device, layout, memory_config, tile, pad_value)
+        return ttnn.Tensor(tensor, dtype, device, layout, memory_config, tile, cq_id, pad_value)
 
 
 def _golden_function(tensor, *, torch_rank=None, **kwargs):

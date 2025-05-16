@@ -72,6 +72,7 @@ Tensor create_typed_tt_tensor_from_py_data(
     const std::function<void()>& on_creation_callback,
     const std::function<void()>& on_destruction_callback,
     const bool force_disable_borrow,
+    ttnn::QueueId cq_id,
     float pad_value) {
     TT_FATAL(
         !tensor_spec.memory_config().is_sharded() or tensor_spec.memory_config().shard_spec().has_value(),
@@ -90,12 +91,12 @@ Tensor create_typed_tt_tensor_from_py_data(
             on_destruction_callback,
             tensor_spec.tile());
         if (device != nullptr) {
-            output = output.to_device(device, tensor_spec.memory_config());
+            output = output.to_device(device, tensor_spec.memory_config(), cq_id);
         }
         return output;
     } else {
         return Tensor::from_span(
-            tt::stl::Span<const T>(pydata_span), tensor_spec, device, ttnn::DefaultQueueId, static_cast<T>(pad_value));
+            tt::stl::Span<const T>(pydata_span), tensor_spec, device, cq_id, static_cast<T>(pad_value));
     }
 }
 
@@ -106,6 +107,7 @@ Tensor create_tt_tensor_from_py_data(
     const bool force_disable_borrow,
     const std::function<void()>& on_creation_callback,
     const std::function<void()>& on_destruction_callback,
+    ttnn::QueueId cq_id,
     float pad_value) {
     auto create_concrete = [&]<typename T>() {
         return create_typed_tt_tensor_from_py_data<T>(
@@ -115,6 +117,7 @@ Tensor create_tt_tensor_from_py_data(
             on_creation_callback,
             on_destruction_callback,
             force_disable_borrow,
+            cq_id,
             pad_value);
     };
     switch (tensor_spec.data_type()) {
@@ -145,6 +148,7 @@ Tensor convert_python_tensor_to_tt_tensor(
     const std::optional<Tile>& optional_tile,
     const MemoryConfig& memory_config,
     MeshDevice* device,
+    ttnn::QueueId cq_id,
     float pad_value,
     const bool force_disable_borrow = false) {
     GraphTracker::instance().track_function_start(
@@ -155,6 +159,7 @@ Tensor convert_python_tensor_to_tt_tensor(
         optional_tile,
         memory_config,
         device,
+        cq_id,
         pad_value,
         force_disable_borrow);
     py::object torch = py::module_::import("torch");
@@ -327,6 +332,7 @@ Tensor convert_python_tensor_to_tt_tensor(
         force_disable_borrow,
         on_creation_callback,
         on_destruction_callback,
+        cq_id,
         pad_value);
 
     output = tt::tt_metal::set_tensor_id(output);
@@ -340,6 +346,7 @@ Tensor convert_python_tensors_to_tt_tensors(
     std::optional<Layout> optional_layout,
     const std::optional<Tile>& optional_tile,
     const MemoryConfig& memory_config,
+    ttnn::QueueId cq_id,
     float pad_value,
     const std::unordered_map<std::string, std::string>& strategy) {
     GraphTracker::instance().track_function_start(
@@ -360,6 +367,7 @@ Tensor convert_python_tensors_to_tt_tensors(
             optional_tile,
             memory_config,
             /*device=*/nullptr,
+            cq_id,
             pad_value,
             /*force_disable_borrow=*/true));
     }
@@ -884,6 +892,7 @@ void pytensor_module(py::module& m_tensor) {
                         optional_layout,
                         optional_tile,
                         optional_memory_config.value_or(MemoryConfig{}),
+                        ttnn::DefaultQueueId,
                         pad_value.value_or(0.0f),
                         strategy);
                 }
@@ -894,6 +903,7 @@ void pytensor_module(py::module& m_tensor) {
                     optional_tile,
                     optional_memory_config.value_or(MemoryConfig{}),
                     /*device=*/nullptr,
+                    ttnn::DefaultQueueId,
                     pad_value.value_or(0.0f));
             }),
             py::arg("tensor"),
@@ -937,6 +947,7 @@ void pytensor_module(py::module& m_tensor) {
                           Layout layout,
                           const std::optional<MemoryConfig>& mem_config,
                           const std::optional<Tile>& tile,
+                          ttnn::QueueId cq_id,
                           std::optional<float> pad_value) {
                 return detail::convert_python_tensor_to_tt_tensor(
                     python_tensor,
@@ -945,6 +956,7 @@ void pytensor_module(py::module& m_tensor) {
                     tile,
                     mem_config.value_or(MemoryConfig{}),
                     device,
+                    cq_id,
                     pad_value.value_or(0.0f));
             }),
             py::arg("tensor"),
@@ -953,6 +965,7 @@ void pytensor_module(py::module& m_tensor) {
             py::arg("layout").noconvert() = Layout::ROW_MAJOR,
             py::arg("mem_config").noconvert() = std::nullopt,
             py::arg("tile").noconvert() = std::nullopt,
+            py::arg("cq_id") = ttnn::DefaultQueueId,
             py::arg("pad_value") = std::nullopt,
             py::return_value_policy::move,
             R"doc(
@@ -970,6 +983,8 @@ void pytensor_module(py::module& m_tensor) {
                 | mem_config   | TT memory_config       |
                 +--------------+------------------------+
                 | tile         | TT Tile Spec           |
+                +--------------+------------------------+
+                | cq_id        | TT Command Queue ID    |
                 +--------------+------------------------+
                 | pad_value    | Padding value          |
                 +--------------+------------------------+
