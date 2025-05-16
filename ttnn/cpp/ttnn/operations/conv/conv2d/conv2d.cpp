@@ -561,7 +561,7 @@ Result conv2d_L1(
 
         bool enable_split_reader = conv_config.enable_split_reader;
         if (enable_split_reader && opt_conv_op_block_config.act_block_h_ntiles == 1) {
-            // If the activation block height is 1, we can enable split reader.
+            // If the activation block height is 1, we can't enable split reader.
             enable_split_reader = false;
             log_warning(
                 tt::LogOp,
