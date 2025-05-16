@@ -261,6 +261,16 @@ def test_sigmoid(device, h, w, vector_mode, approx_mode):
     )
 
 
+@pytest.mark.parametrize("h", [1024])
+@pytest.mark.parametrize("w", [128])
+@pytest.mark.parametrize("approx_mode", [True, False])
+@pytest.mark.parametrize("vector_mode", [2])
+def test_sigmoid_fruit_kiwi(device, h, w, vector_mode, approx_mode):
+    run_unary_with_approx_mode_test(
+        device, h, w, ttnn.sigmoid, vector_mode=vector_mode, approx_mode=approx_mode, pcc=0.999
+    )
+
+
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
 def test_asinh(device, h, w):
