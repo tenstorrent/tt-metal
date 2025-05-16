@@ -1,6 +1,8 @@
 # SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
 
+
 # SPDX-License-Identifier: Apache-2.0
+
 
 import argparse
 import sys
@@ -15,12 +17,14 @@ from tt_metal.tools.profiler.common import PROFILER_LOGS_DIR
 from multiprocessing import Process
 from faster_fifo import Queue
 from queue import Empty
+import csv
 import subprocess
 from framework.statuses import TestStatus, VectorValidity, VectorStatus
 import framework.tt_smi_util as tt_smi_util
 from elasticsearch import Elasticsearch, NotFoundError
 from framework.elastic_config import *
 from framework.sweeps_logger import sweeps_logger as logger
+
 
 ARCH = os.getenv("ARCH_NAME")
 
@@ -48,7 +52,7 @@ def get_devices(test_module):
 
 
 def gather_single_test_perf(device, test_passed):
-    if device.get_num_devices() > 1:
+    if not isinstance(device, ttnn.Device):
         logger.error("Multi-device perf is not supported. Failing.")
         return None
     ttnn.DumpDeviceProfiler(device)
@@ -67,8 +71,18 @@ def gather_single_test_perf(device, test_passed):
         return opPerfData[0]
 
 
-def run(test_module, input_queue, output_queue):
+def run(test_module, input_queue, output_queue, suite_name=""):
     device_generator = get_devices(test_module)
+    log_file = f"binary_ng_BH/output_log_{suite_name}.csv"
+    log_file_full = f"binary_ng_BH/binary_ng_BH_full/output_log_{suite_name}.csv"
+
+    # Open the file in write mode to clear its contents
+    os.makedirs(os.path.dirname(log_file), exist_ok=True)
+    with open(log_file, "w") as f:
+        pass  # This will empty the file
+    os.makedirs(os.path.dirname(log_file_full), exist_ok=True)
+    with open(log_file_full, "w") as f:
+        pass  # This will empty the file
     try:
         device, device_name = next(device_generator)
         logger.info(f"Opened device configuration, {device_name}.")
@@ -95,6 +109,62 @@ def run(test_module, input_queue, output_queue):
                 output_queue.put([status, message, e2e_perf, perf_result])
             else:
                 output_queue.put([status, message, e2e_perf, None])
+            print("----------")
+            print("test_vector ", test_vector)
+            print("status ", status)
+            print("message ", message)
+            print("----------")
+            print(log_file)
+            # log_file = "/home/ubuntu/tt-metal/output_log.csv"
+            data = {
+                "input_a_dtype": test_vector["input_dtype"]["input_a_dtype"],
+                "input_b_dtype": test_vector["input_dtype"]["input_b_dtype"],
+                "a_mem": test_vector["input_mem_config"]["a_mem"],
+                "b_mem": test_vector["input_mem_config"]["b_mem"],
+                "status": status,
+            }
+            data_full = {
+                "input_a_dtype": test_vector["input_dtype"]["input_a_dtype"],
+                "input_b_dtype": test_vector["input_dtype"]["input_b_dtype"],
+                "a_mem": test_vector["input_mem_config"]["a_mem"],
+                "b_mem": test_vector["input_mem_config"]["b_mem"],
+                "status": status,
+                "message": message,
+            }
+
+            # Write to CSV
+            file_exists = False
+            try:
+                with open(log_file, "r"):
+                    file_exists = True
+            except FileNotFoundError:
+                pass
+
+            with open(log_file, "a", newline="") as f:
+                writer = csv.DictWriter(f, fieldnames=data.keys())
+
+                # Write header only if the file does not exist
+                if not file_exists:
+                    writer.writeheader()
+
+                # Write data row
+                writer.writerow(data)
+            file_exists = False
+            try:
+                with open(log_file_full, "r"):
+                    file_exists = True
+            except FileNotFoundError:
+                pass
+
+            with open(log_file_full, "a", newline="") as f:
+                writer = csv.DictWriter(f, fieldnames=data_full.keys())
+
+                # Write header only if the file does not exist
+                if not file_exists:
+                    writer.writeheader()
+
+                # Write data row
+                writer.writerow(data_full)
     except Empty as e:
         try:
             # Run teardown in mesh_device_fixture
@@ -133,7 +203,7 @@ def execute_suite(test_module, test_vectors, pbar_manager, suite_name):
             test_vector.pop("status")
             test_vector.pop("validity")
             if p is None and len(test_vectors) > 1:
-                p = Process(target=run, args=(test_module, input_queue, output_queue))
+                p = Process(target=run, args=(test_module, input_queue, output_queue, suite_name))
                 p.start()
             try:
                 if MEASURE_PERF:
@@ -150,7 +220,7 @@ def execute_suite(test_module, test_vectors, pbar_manager, suite_name):
                     logger.info(
                         "Executing test on parent process (to allow debugger support) because there is only one test vector. Hang detection is disabled."
                     )
-                    run(test_module, input_queue, output_queue)
+                    run(test_module, input_queue, output_queue, suite_name)
                 response = output_queue.get(block=True, timeout=timeout)
                 status, message, e2e_perf, device_perf = response[0], response[1], response[2], response[3]
                 if status and MEASURE_DEVICE_PERF and device_perf is None:
