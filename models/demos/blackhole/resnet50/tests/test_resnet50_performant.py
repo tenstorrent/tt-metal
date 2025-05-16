@@ -5,6 +5,7 @@
 import pytest
 
 import ttnn
+from models.demos.ttnn_resnet.tests.demo_utils import skip_resnet_if_blackhole_p100
 from models.demos.ttnn_resnet.tests.resnet50_performant import (
     run_resnet50_2cqs_inference,
     run_resnet50_inference,
@@ -24,6 +25,7 @@ from models.utility_functions import run_for_blackhole
 def test_run_resnet50_inference(
     device, use_program_cache, batch_size, act_dtype, weight_dtype, math_fidelity, model_location_generator
 ):
+    skip_resnet_if_blackhole_p100(device)
     run_resnet50_inference(device, batch_size, act_dtype, weight_dtype, math_fidelity, model_location_generator)
 
 
@@ -43,6 +45,7 @@ def test_run_resnet50_trace_inference(
     math_fidelity,
     model_location_generator,
 ):
+    skip_resnet_if_blackhole_p100(device)
     run_resnet50_trace_inference(
         device,
         batch_size,
@@ -63,6 +66,7 @@ def test_run_resnet50_trace_inference(
 def test_run_resnet50_2cqs_inference(
     device, use_program_cache, batch_size, act_dtype, weight_dtype, math_fidelity, model_location_generator
 ):
+    skip_resnet_if_blackhole_p100(device)
     run_resnet50_2cqs_inference(device, batch_size, act_dtype, weight_dtype, math_fidelity, model_location_generator)
 
 
@@ -84,6 +88,7 @@ def test_run_resnet50_trace_2cqs_inference(
     math_fidelity,
     model_location_generator,
 ):
+    skip_resnet_if_blackhole_p100(device)
     run_resnet50_trace_2cqs_inference(
         device,
         batch_size,
