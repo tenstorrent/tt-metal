@@ -322,6 +322,18 @@ Tensor FoldOperation::invoke(
                 .at(0);
         }
     }
+    if (!input_tensor.is_sharded() && input_tensor.get_layout() == Layout::TILE) {
+        auto batch_size = input_tensor.get_logical_shape()[0];
+        auto input_height = input_tensor.get_logical_shape()[1];
+        auto input_width = input_tensor.get_logical_shape()[2];
+        auto in_channels = input_tensor.get_logical_shape()[3];
+        auto output_tensor =
+            ttnn::prim::fold(queue_id, input_tensor, stride_h, stride_w, output_shape, pad_c, pad_h, pad_w);
+        return ttnn::reshape(
+            output_tensor,
+            ttnn::Shape(
+                {batch_size, input_height / stride_h, input_width / stride_w, (in_channels)*stride_h * stride_w}));
+    }
     return ttnn::prim::fold(queue_id, input_tensor, stride_h, stride_w, output_shape, pad_c, pad_h, pad_w);
 }
 

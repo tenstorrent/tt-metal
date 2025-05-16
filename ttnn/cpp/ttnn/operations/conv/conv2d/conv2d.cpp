@@ -25,6 +25,7 @@
 #include "ttnn/operations/matmul/matmul.hpp"
 #include "ttnn/operations/sliding_window/halo/halo.hpp"
 #include "ttnn/operations/sliding_window/sliding_window.hpp"
+#include "ttnn/operations/data_movement/fold/fold.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/data_movement/move/move.hpp"
 #include "ttnn/operations/experimental/slice_write/slice_write.hpp"
@@ -377,7 +378,7 @@ Result conv2d_DRAM(
 template <typename T>
 Result conv2d_L1(
     QueueId queue_id,
-    const ttnn::Tensor& input_tensor,
+    const ttnn::Tensor& input_tensor_,
     const ttnn::Tensor& weight_tensor,
     T* device,
     uint32_t in_channels,
@@ -396,7 +397,21 @@ Result conv2d_L1(
     const std::optional<const MemoryConfig>& memory_config) {
     Conv2dConfig conv_config = conv_config_.value_or(Conv2dConfig());
     std::array<uint32_t, 4> padding_n4 = sliding_window::get_pair_n4_padding(padding);
-    const bool mm_conv = use_matmul_for_1x1_conv(kernel_size, stride, padding_n4, dilation, groups, conv_config);
+    auto input_tensor = input_tensor_;
+    bool mm_conv = use_matmul_for_1x1_conv(kernel_size, stride, padding_n4, dilation, groups, conv_config);
+    bool is_large_kernel = is_large_kernel_with_easy_matmul(
+        input_tensor.layout(), input_height, input_width, kernel_size, stride, padding_n4, dilation);
+    if (is_large_kernel) {
+        // Fold the input tensor to reduce spatial dimensions by stride factors, effectively converting
+        // a large kernel convolution into a matmul operation.
+        input_tensor = ttnn::fold(input_tensor, stride[0], stride[1]);
+        input_height = input_height / stride[0];
+        input_width = input_width / stride[1];
+        stride = {1, 1};
+        kernel_size = {1, 1};
+        in_channels = in_channels * kernel_size[0] * kernel_size[1];
+        mm_conv = true;
+    }
     auto [output_height, output_width] =
         calculate_output_image_size({input_height, input_width}, kernel_size, stride, padding_n4, dilation);
 
@@ -487,6 +502,7 @@ Result conv2d_L1(
                 opt_conv_op_block_config.act_block_h_ntiles,
                 input_width,
                 bias_tensor.has_value(),
+                is_large_kernel,
                 true);
         } else {
             tie(weight_tensor_on_device, bias_tensor_on_device) = prepare_conv_weights_biases_on_device(
@@ -502,7 +518,8 @@ Result conv2d_L1(
                 groups,
                 opt_conv_op_block_config.act_block_h_ntiles,
                 input_width,
-                bias_tensor.has_value());
+                bias_tensor.has_value(),
+                is_large_kernel);
         }
     }
 
@@ -623,7 +640,6 @@ Result conv2d_L1(
         if (memory_config.has_value() && memory_config.value() != matmul_output.memory_config()) {
             matmul_output = ttnn::to_memory_config(matmul_output, memory_config.value(), std::nullopt);
         }
-
         return {matmul_output, output_height, output_width, weight_tensor_on_device, bias_tensor_on_device};
     }
 }
