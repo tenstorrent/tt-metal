@@ -1677,8 +1677,9 @@ FORCE_INLINE
 void noc_async_read_barrier_with_trid(uint32_t trid, uint8_t noc = noc_index) {
     WAYPOINT("NBTW");
     RECORD_NOC_EVENT(NocEventType::READ_BARRIER_WITH_TRID);
-    while (!ncrisc_noc_read_with_transaction_id_flushed(noc, trid))
+    while (!ncrisc_noc_read_with_transaction_id_flushed(noc, trid)) {
         continue;
+    }
     invalidate_l1_cache();
     WAYPOINT("NBTD");
 }
@@ -1806,8 +1807,9 @@ FORCE_INLINE void noc_async_write_one_packet_with_trid(
 FORCE_INLINE
 void noc_async_write_barrier_with_trid(uint32_t trid, uint8_t noc = noc_index) {
     WAYPOINT("NWTW");
-    while (!ncrisc_noc_nonposted_write_with_transaction_id_flushed(noc, trid))
+    while (!ncrisc_noc_nonposted_write_with_transaction_id_flushed(noc, trid)) {
         continue;
+    }
     invalidate_l1_cache();
     WAYPOINT("NWTD");
 }
