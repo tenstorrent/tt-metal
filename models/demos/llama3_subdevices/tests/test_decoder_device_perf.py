@@ -26,8 +26,8 @@ DECODER_OP_END_INDEX = -13
 perf_targets = {
     "RMSAllGather_0": {
         "op_name": "RMS_0",
-        "kernel_duration": 18763.21875,
-        "op_to_op": 781.8888888888889,
+        "kernel_duration": 18530.621527777777,
+        "op_to_op": 839.6666666666666,
         "non-overlapped-dispatch-time": 7260,
         "kernel_duration_relative_margin": 0.05,
         "op_to_op_duration_relative_margin": 0.2,
@@ -35,8 +35,8 @@ perf_targets = {
     },
     "RMSAllGather_1": {
         "op_name": "RMS_1",
-        "kernel_duration": 18590.774305555555,
-        "op_to_op": 747.8888888888889,
+        "kernel_duration": 18100.121527777777,
+        "op_to_op": 816.2222222222222,
         "non-overlapped-dispatch-time": 7694.8,
         "kernel_duration_relative_margin": 0.05,
         "op_to_op_duration_relative_margin": 0.2,
@@ -62,7 +62,7 @@ perf_targets = {
     },
     "Matmul_0": {
         "op_name": "QKV_MM",
-        "kernel_duration": 10623,
+        "kernel_duration": 8556.222222222223,
         "op_to_op": 716.4444444444445,
         "non-overlapped-dispatch-time": 6102.0,
         "kernel_duration_relative_margin": 0.05,
@@ -80,7 +80,7 @@ perf_targets = {
     },
     "Matmul_2": {
         "op_name": "FF1_MM",
-        "kernel_duration": 10829,
+        "kernel_duration": 9483.888888888889,
         "op_to_op": 711.8888888888889,
         "non-overlapped-dispatch-time": 5380.6,
         "kernel_duration_relative_margin": 0.05,
@@ -89,7 +89,7 @@ perf_targets = {
     },
     "Matmul_3": {
         "op_name": "FF3_MM",
-        "kernel_duration": 10682.444444444445,
+        "kernel_duration": 9435.333333333334,
         "op_to_op": 688.7777777777778,
         "non-overlapped-dispatch-time": 6144.8,
         "kernel_duration_relative_margin": 0.05,
@@ -144,7 +144,7 @@ perf_targets = {
     "LlamaReduceScatterDeviceOperation_1": {
         "op_name": "ReduceScatter_FF3",
         "kernel_duration": 9817.020833333334,
-        "op_to_op": 655.1111111111111,
+        "op_to_op": 812.1111111111111,
         "non-overlapped-dispatch-time": 7359.9,
         "kernel_duration_relative_margin": 0.05,
         "op_to_op_duration_relative_margin": 0.2,
