@@ -90,14 +90,14 @@ void MAIN {
     constexpr bool neginf_srca_maxpool = (REDUCE_OP == PoolType::MAX) ? true : false;
     constexpr bool zero_srca_avgpool = (REDUCE_OP == PoolType::SUM) ? true : false;
 
-    uint32_t num_of_ele = nsticks_per_core;
     uint32_t scalar_cnt = 1;
     uint32_t diff_index = 0;
     uint32_t time_for_change = 0;
+    uint32_t runtime_args_before = 1;
     if (!one_scalar_per_core) {
-        num_of_ele = get_arg_val<uint32_t>(0);
-        scalar_cnt = get_arg_val<uint32_t>(1);
-        time_for_change = get_arg_val<uint32_t>(2 + diff_index);
+        scalar_cnt = get_arg_val<uint32_t>(0);
+        time_for_change = get_arg_val<uint32_t>(runtime_args_before + diff_index);
+        DPRINT << "time for change " << time_for_change << ENDL();
     }
 
     // In case we have <=16 sticks we will use only upper two faces of the tile.
@@ -124,14 +124,14 @@ void MAIN {
     if (one_scalar_per_core) {
         cb_wait_front(in_scalar_cb_id, 1);
     }
-    for (uint32_t i = 0; i < num_of_ele; i++) {
+    for (uint32_t i = 0; i < nsticks_per_core; i++) {
         DPRINT << "i " << i << ENDL();
         if (i == time_for_change && !one_scalar_per_core) {
             cb_wait_front(in_scalar_cb_id, 1);
             DPRINT << "change " << ENDL();
             if (diff_index < scalar_cnt - 1) {
                 diff_index++;
-                time_for_change = get_arg_val<uint32_t>(2 + diff_index);
+                time_for_change = get_arg_val<uint32_t>(runtime_args_before + diff_index);
                 DPRINT << "next change coming on " << time_for_change << ENDL();
             }
         }
@@ -161,6 +161,10 @@ void MAIN {
             num_faces_in_tile,
             neginf_srca_maxpool,
             zero_srca_avgpool>(in_cb_id_0, in_cb_id_1, in_scalar_cb_id, i, out_cb_id);
+            if (!one_scalar_per_core && ((i + 1 == time_for_change) || i + 1 == nsticks_per_core)) {
+            DPRINT << "popped the old num " << ENDL();
+            cb_pop_front(in_scalar_cb_id, 1);
+        }
     }
     if (one_scalar_per_core) {
         cb_pop_front(in_scalar_cb_id, 1);

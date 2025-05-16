@@ -392,6 +392,7 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
                     num_of_ele = out_nhw_per_core;
                 } else {
                     num_of_ele = total_elems_per_c_shards[channel];
+                    // num_of_ele = out_nhw_per_core;
                 }
                 std::vector<uint32_t> sync_indices;
                 std::vector<uint32_t> scalar_values;
@@ -415,13 +416,13 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
                     &scalar_values);
 
                 uint32_t scalar_cnt = scalar_values.size();
-                std::vector<uint32_t> runtime_args_reader = {num_of_ele, scalar_cnt};
+                std::vector<uint32_t> runtime_args_reader = {scalar_cnt};
                 for (int j = 0; j < scalar_cnt; j++) {
                     runtime_args_reader.push_back(scalar_values[j] << 16);
                 }
 
                 uint32_t sync_steps = sync_indices.size();
-                std::vector<uint32_t> runtime_args_compute = {num_of_ele / nblocks, scalar_cnt};
+                std::vector<uint32_t> runtime_args_compute = {scalar_cnt};
                 for (int j = 0; j < sync_steps; j++) {
                     runtime_args_compute.push_back(sync_indices[j]);
                 }
@@ -432,7 +433,7 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
                 channel++;
                 if (channel % num_shards_c == 0) {
                     channel = 0;
-                    uint32_t delta_x = x + out_nhw_per_core;
+                    uint32_t delta_x = x + num_of_ele;
                     x = delta_x % out_h;
                     if (delta_x / out_h != 0) {
                         uint32_t delta_y = y + delta_x / out_h;
