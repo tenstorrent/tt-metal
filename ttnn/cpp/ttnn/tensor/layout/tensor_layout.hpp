@@ -69,9 +69,7 @@ public:
     Shape2D get_physical_shard_shape() const;
 
     TensorLayout with_memory_config(MemoryConfig memory_config) const {
-        TensorLayout result = *this;
-        result.memory_config_ = std::move(memory_config);
-        return result;
+        return TensorLayout(dtype_, page_config_, memory_config, alignment_);
     }
 
     bool operator==(const TensorLayout&) const = default;

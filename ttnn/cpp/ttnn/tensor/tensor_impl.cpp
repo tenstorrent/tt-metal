@@ -728,16 +728,25 @@ DeviceStorage replicate_to_mesh_buffer(
     const TensorSpec& tensor_spec,
     ttnn::QueueId cq_id) {
     auto data_to_write = host_buffer::get_as<T>(storage.buffer);
+    auto data_ptr = data_to_write.data();
     const auto expected_packed_buffer_size_bytes = tensor_spec.compute_packed_buffer_size_bytes();
-    const auto input_size_bytes = data_to_write.size() * sizeof(T);
+    auto input_size_bytes = data_to_write.size() * sizeof(T);
+
+    std::vector<T> padded_data;
+    if (input_size_bytes < expected_packed_buffer_size_bytes) {
+        padded_data.resize(expected_packed_buffer_size_bytes / sizeof(T));
+        std::memcpy(padded_data.data(), data_ptr, input_size_bytes);
+        data_ptr = padded_data.data();
+        input_size_bytes = padded_data.size() * sizeof(T);
+    }
+
     TT_FATAL(
         input_size_bytes == expected_packed_buffer_size_bytes,
         "Host data with total size {}B does not match expected size {}B of device buffer!",
         input_size_bytes,
         expected_packed_buffer_size_bytes);
 
-    mesh_device->mesh_command_queue(*cq_id).enqueue_write_mesh_buffer(
-        mesh_buffer, data_to_write.data(), /*blocking=*/false);
+    mesh_device->mesh_command_queue(*cq_id).enqueue_write_mesh_buffer(mesh_buffer, data_ptr, /*blocking=*/false);
 
     std::vector<std::pair<distributed::MeshCoordinate, TensorSpec>> specs;
     specs.reserve(mesh_device->shape().mesh_size());
