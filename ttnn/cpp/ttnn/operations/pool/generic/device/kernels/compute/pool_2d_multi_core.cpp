@@ -122,14 +122,14 @@ void MAIN {
     if (one_scalar_per_core) {
         cb_wait_front(in_scalar_cb_id, 1);
     }
-    for (uint32_t i = 0; i < num_of_ele; i++) {
+    for (uint32_t i = 0; i < nsticks_per_core; i++) {
         DPRINT << "i " << i << ENDL();
         if (i == time_for_change && !one_scalar_per_core) {
             cb_wait_front(in_scalar_cb_id, 1);
             DPRINT << "change " << ENDL();
             if (diff_index < scalar_cnt - 1) {
                 diff_index++;
-                time_for_change = get_arg_val<uint32_t>(2 + diff_index);
+                time_for_change = get_arg_val<uint32_t>(runtime_args_before + diff_index);
                 DPRINT << "next change coming on " << time_for_change << ENDL();
             }
         }
