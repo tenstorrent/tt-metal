@@ -74,7 +74,9 @@ jobs:
             -e HF_TOKEN=${{ secrets.HUGGINGFACE_TOKEN }}
             -v /localdev:/localdev
           install_wheel: true
-          run_args: ${{ matrix.test-group.cmd }}
+          run_args: |
+            pip install -r ${{ github.workspace }}/models/tt_transformers/requirements.txt
+            ${{ matrix.test-group.cmd }}
       - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
         timeout-minutes: 10
         if: ${{ !cancelled() }}
