@@ -73,20 +73,29 @@ void PaddedSliceDeviceOperation::validate_with_output_tensors(
     const auto& input_tensor_a = input_tensors.at(0);
     TT_FATAL(input_tensor_a.storage_type() == StorageType::DEVICE, "Operands to unpad need to be on device!");
     TT_FATAL(input_tensor_a.buffer() != nullptr, "Operands to unpad need to be allocated in buffers on device!");
-    TT_FATAL(input_tensor_a.get_layout() == Layout::TILE || input_tensor_a.get_layout() == Layout::ROW_MAJOR, "Error");
+    TT_FATAL(input_tensor_a.get_layout() == Layout::ROW_MAJOR, "Input to padded_slice must be in row major layout");
     TT_FATAL(
         input_tensor_a.get_padded_shape().rank() == this->padded_slice_start.rank() &&
             this->padded_slice_start.rank() == this->padded_slice_end.rank(),
         "Error");
     for (uint32_t i = 0; i < input_tensor_a.get_padded_shape().rank(); i++) {
-        TT_FATAL(this->padded_slice_start[i] < input_tensor_a.get_padded_shape()[i], "Error");
+        TT_FATAL(
+            this->padded_slice_start[i] < input_tensor_a.get_padded_shape()[i],
+            "Starts {} must be less than the shape of the tensor {} at index {}",
+            this->padded_slice_start[i],
+            input_tensor_a.get_padded_shape()[i],
+            i);
         TT_FATAL(
             this->padded_slice_end[i] <= input_tensor_a.get_padded_shape()[i],
             "Ends {} must be less than or equal to the shape of the tensor {}",
             this->padded_slice_end[i],
             input_tensor_a.get_padded_shape()[i]);
         // Check if start shape is <= end shape
-        TT_FATAL(this->padded_slice_start[i] <= this->padded_slice_end[i], "Error");
+        TT_FATAL(
+            this->padded_slice_start[i] <= this->padded_slice_end[i],
+            "Slice start {} must be less than or equal to the end {}",
+            this->padded_slice_start[i],
+            this->padded_slice_end[i]);
     }
     if (!output_tensors.empty() && output_tensors[0].has_value()) {
         const auto output_shape_required = compute_output_specs(input_tensors)[0].logical_shape();
@@ -98,19 +107,7 @@ void PaddedSliceDeviceOperation::validate_with_output_tensors(
             out_tensor.get_padded_shape());
     }
     auto output_tensor_shape = this->compute_output_specs(input_tensors)[0].logical_shape();
-    if (has_step) {  // if all ones modify before passing in to function
-        TT_FATAL(
-            input_tensor_a.get_layout() == Layout::ROW_MAJOR,
-            "Strided padded_slice is only supported for row major layout");
-        TT_FATAL(!input_tensor_a.is_sharded(), "Strided padded_slice is not supported for sharded tensor");
-        TT_FATAL(
-            input_tensor_a.get_dtype() == DataType::BFLOAT16, "Strided padded_slice is only supported for BFLOAT16");
-        TT_FATAL(
-            step.size() == this->padded_slice_end.rank(),
-            "Number of steps {} must match number of ends/starts {}",
-            step.size(),
-            this->padded_slice_end.rank());
-    }
+    TT_FATAL(!has_step, "Padded slice does not support strided slices");
     if (input_tensor_a.get_layout() == Layout::TILE) {
         TT_FATAL(input_tensor_a.volume() % TILE_HW == 0, "Error");
         TT_FATAL(
@@ -149,8 +146,6 @@ std::vector<ttnn::TensorSpec> PaddedSliceDeviceOperation::compute_output_specs(
     }
 
     ttnn::Shape output_tensor_shape(std::move(out_shape));
-    tt::log_info("padded_slice : Output shape: {}", output_tensor_shape);
-    tt::log_info("padded_slice : Output mem config: {}", this->output_mem_config);
     auto tensor_layout = TensorLayout::fromPaddedShape(
         input_tensor.get_dtype(),
         PageConfig(Layout::ROW_MAJOR),
