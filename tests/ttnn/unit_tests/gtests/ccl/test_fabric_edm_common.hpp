@@ -1218,7 +1218,15 @@ void setup_test_with_persistent_fabric(
                 devices.back()->id(),
                 edm_builder.my_noc_x,
                 edm_builder.my_noc_y);
-            edm_builder.connect_to_downstream_edm(edm_builder);
+            if (devices[0]->arch() == tt::ARCH::BLACKHOLE) {
+                edm_builder[(int)DataMovementProcessor::RISCV_0].connect_to_downstream_edm(
+                    edm_builder[(int)tt::tt_metal::DataMovementProcessor::RISCV_1]);
+                edm_builder[(int)DataMovementProcessor::RISCV_1].connect_to_downstream_edm(
+                    edm_builder[(int)tt::tt_metal::DataMovementProcessor::RISCV_0]);
+            } else {
+                edm_builder[(int)DataMovementProcessor::RISCV_0].connect_to_downstream_edm(
+                    edm_builder[(int)DataMovementProcessor::RISCV_0]);
+            }
         }
     }
 
@@ -1404,9 +1412,19 @@ int TestLoopbackEntrypoint(
     // Create the loopback connection on the second device
     chip_1_edm_builder.connect_to_downstream_edm(chip_1_edm_builder);
     auto local_edm_kernel = ttnn::ccl::generate_edm_kernel(
-        fabric_sender_program, sender_device, chip_0_edm_builder, eth_sender_core, NOC::NOC_0);
+        fabric_sender_program,
+        sender_device,
+        chip_0_edm_builder,
+        eth_sender_core,
+        DataMovementProcessor::RISCV_0,
+        NOC::NOC_0);
     auto remote_edm_kernel = ttnn::ccl::generate_edm_kernel(
-        fabric_receiver_program, receiver_device, chip_1_edm_builder, eth_receiver_core, NOC::NOC_0);
+        fabric_receiver_program,
+        receiver_device,
+        chip_1_edm_builder,
+        eth_receiver_core,
+        DataMovementProcessor::RISCV_0,
+        NOC::NOC_0);
 
     if (enable_persistent_fabric) {
         tt::tt_metal::detail::CompileProgram(sender_device, fabric_sender_program);

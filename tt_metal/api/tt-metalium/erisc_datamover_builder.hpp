@@ -48,6 +48,7 @@ struct FabricEriscDatamoverConfig {
     static constexpr std::size_t max_downstream_edms = std::max(num_downstream_edms, num_downstream_edms_2d);
     static constexpr uint32_t num_virtual_channels = 2;
 
+    static constexpr std::size_t num_riscv_cores = 1;  // 2 for BH
     static constexpr std::size_t field_size = 16;
     static constexpr std::size_t buffer_alignment = 32;
     static constexpr std::size_t eth_word_l1_alignment = 16;
@@ -83,6 +84,8 @@ struct FabricEriscDatamoverConfig {
     std::array<std::size_t, num_sender_channels> senders_completed_packet_header_cb_address;
 
     // ----------- Sender Channels
+    std::array<std::array<bool, num_sender_channels>, num_riscv_cores> is_sender_channel_serviced;
+
     std::array<std::size_t, num_sender_channels> sender_channels_buffer_index_address;
     // Connection info layout:
     // 0: buffer_index_rdptr -> Tells EDM the address in worker L1 to update EDM's copy of channel rdptr
@@ -100,6 +103,8 @@ struct FabricEriscDatamoverConfig {
     static_assert(sizeof(tt::tt_fabric::EDMChannelWorkerLocationInfo) % field_size == 0);
 
     // ----------- Receiver Channels
+    std::array<std::array<bool, num_receiver_channels>, num_riscv_cores> is_receiver_channel_serviced;
+
     std::array<std::size_t, max_downstream_edms> receiver_channels_local_buffer_index_address;
     // persistent mode field
     std::array<std::size_t, max_downstream_edms> receiver_channels_downstream_flow_control_semaphore_address;
@@ -111,7 +116,10 @@ struct FabricEriscDatamoverConfig {
     std::size_t buffer_region_start;
     std::size_t available_channel_buffering_space;
 
-    FabricEriscDatamoverConfig(std::size_t channel_buffer_size_bytes, Topology topology = Topology::Linear);
+    FabricEriscDatamoverConfig(
+        std::size_t channel_buffer_size_bytes,
+        Topology topology = Topology::Linear,
+        tt::ARCH arch = tt::ARCH::WORMHOLE_B0);
 
     std::size_t channel_buffer_size_bytes = 0;
 
@@ -126,6 +134,7 @@ struct FabricEriscDatamoverConfig {
     std::size_t num_used_sender_channels = 0;
     std::size_t num_used_receiver_channels = 0;
     std::size_t num_fwd_paths = 0;
+    std::size_t num_used_riscv_cores = 0;
 
     Topology topology = Topology::Linear;
 
@@ -206,7 +215,9 @@ public:
         eth_chan_directions direction,
         bool enable_persistent_mode,
         bool build_in_worker_connection_mode = false,
-        bool dateline_connection = false);
+        bool dateline_connection = false,
+        tt::ARCH arch = tt::ARCH::WORMHOLE_B0,
+        size_t risc_id = 0);
 
     static FabricEriscDatamoverBuilder build(
         tt::tt_metal::IDevice* device,
@@ -218,12 +229,13 @@ public:
         bool enable_persistent_mode,
         bool build_in_worker_connection_mode = false,
         bool dateline_connection = false,
+        size_t risc_id = 0,
         eth_chan_directions direction = eth_chan_directions::EAST);
 
     [[nodiscard]] SenderWorkerAdapterSpec build_connection_to_worker_channel() const;
     [[nodiscard]] SenderWorkerAdapterSpec build_connection_to_fabric_channel(uint32_t vc);
 
-    [[nodiscard]] std::vector<uint32_t> get_compile_time_args() const;
+    [[nodiscard]] std::vector<uint32_t> get_compile_time_args(const size_t riscv_id = 0) const;
 
     [[nodiscard]] std::vector<uint32_t> get_runtime_args() const;
 
@@ -248,6 +260,7 @@ public:
     //    protected:
     friend class EdmLineFabricOpInterface;
     CoreCoord my_eth_core_logical;
+    size_t risc_id = 0;
     size_t my_noc_x = 0;
     size_t my_noc_y = 0;
 
@@ -306,6 +319,7 @@ public:
     bool fuse_receiver_flush_and_completion_ptr = true;
     bool dateline_connection = false;
     bool wait_for_host_signal = false;
+    tt::ARCH arch = tt::ARCH::WORMHOLE_B0;
 };
 
 }  // namespace tt::tt_fabric

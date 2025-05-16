@@ -121,7 +121,8 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(Topology topology) {
     this->available_channel_buffering_space = max_l1_loading_size - buffer_region_start;
 }
 
-FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(std::size_t channel_buffer_size_bytes, Topology topology) :
+FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
+    std::size_t channel_buffer_size_bytes, Topology topology, tt::ARCH arch) :
     FabricEriscDatamoverConfig(topology) {
     this->num_used_sender_channels = get_sender_channel_count(topology);
     if (topology == Topology::Mesh) {
@@ -138,6 +139,9 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(std::size_t channel_buffe
         this->num_used_receiver_channels -= 1;
         this->num_fwd_paths -= 1;
     }
+
+    // TODO: add +1 for Blackhole
+    this->num_used_riscv_cores = FabricEriscDatamoverConfig::num_riscv_cores;
 
     for (uint32_t i = 0; i < this->num_used_receiver_channels; i++) {
         TT_FATAL(
@@ -231,10 +235,16 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(std::size_t channel_buffe
     for (uint32_t i = 0; i < this->num_used_sender_channels; i++) {
         this->sender_channels_num_buffers[i] = num_sender_buffer_slots;
         this->sender_channels_size_bytes[i] = channel_buffer_size_bytes * num_sender_buffer_slots;
+        for (uint32_t j = 0; j < this->num_used_riscv_cores; j++) {
+            this->is_sender_channel_serviced[j][i] = true;
+        }
     }
     for (uint32_t i = 0; i < this->num_used_receiver_channels; i++) {
         this->receiver_channels_num_buffers[i] = num_receiver_buffer_slots;
         this->receiver_channels_size_bytes[i] = channel_buffer_size_bytes * num_receiver_buffer_slots;
+        for (uint32_t j = 0; j < this->num_used_riscv_cores; j++) {
+            this->is_receiver_channel_serviced[j][i] = true;
+        }
     }
 
     uint32_t buffer_addr = buffer_region_start;
@@ -375,7 +385,9 @@ FabricEriscDatamoverBuilder::FabricEriscDatamoverBuilder(
     eth_chan_directions direction,
     bool enable_persistent_mode,
     bool build_in_worker_connection_mode,
-    bool dateline_connection) :
+    bool dateline_connection,
+    tt::ARCH arch,
+    size_t risc_id) :
     my_eth_core_logical(my_eth_core_logical),
     my_noc_x(my_noc_x),
     my_noc_y(my_noc_y),
@@ -407,14 +419,16 @@ FabricEriscDatamoverBuilder::FabricEriscDatamoverBuilder(
     edm_status_ptr(config.edm_status_address),
     enable_persistent_mode(enable_persistent_mode),
     build_in_worker_connection_mode(build_in_worker_connection_mode),
-    dateline_connection(dateline_connection) {
+    dateline_connection(dateline_connection),
+    arch(arch),
+    risc_id(risc_id) {
     std::fill(
         sender_channel_connection_liveness_check_disable_array.begin(),
         sender_channel_connection_liveness_check_disable_array.end(),
         false);
 }
 
-std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args() const {
+std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args(const size_t riscv_id) const {
     const bool is_handshake_master = this->my_chip_id < this->peer_chip_id;
     TT_ASSERT(this->my_chip_id != this->peer_chip_id);
     TT_ASSERT(
@@ -507,6 +521,13 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args() const
         FabricEriscDatamoverConfig::sender_completed_packet_header_cb_size_headers,
         config.senders_completed_packet_header_cb_address[4],
         FabricEriscDatamoverConfig::sender_completed_packet_header_cb_size_headers,
+        config.is_sender_channel_serviced[riscv_id][0],
+        config.is_sender_channel_serviced[riscv_id][1],
+        config.is_sender_channel_serviced[riscv_id][2],
+        config.is_sender_channel_serviced[riscv_id][3],
+        config.is_sender_channel_serviced[riscv_id][4],
+        config.is_receiver_channel_serviced[riscv_id][0],
+        config.is_receiver_channel_serviced[riscv_id][1],
         config.topology == Topology::Mesh,
         this->direction,
         soc_desc.get_num_eth_channels(),
@@ -616,6 +637,7 @@ FabricEriscDatamoverBuilder FabricEriscDatamoverBuilder::build(
     bool enable_persistent_mode,
     bool build_in_worker_connection_mode,
     bool dateline_connection,
+    size_t risc_id,
     eth_chan_directions direction) {
     std::array<size_t, FabricEriscDatamoverConfig::num_sender_channels> sender_channels_buffer_index_semaphore_id;
     std::array<size_t, FabricEriscDatamoverConfig::num_sender_channels> sender_channels_flow_control_semaphore_id;
@@ -721,7 +743,9 @@ FabricEriscDatamoverBuilder FabricEriscDatamoverBuilder::build(
             direction,
             enable_persistent_mode,
             build_in_worker_connection_mode,
-            dateline_connection);
+            dateline_connection,
+            device->arch(),
+            risc_id);
 
     } else {
         for (uint32_t i = 0; i < FabricEriscDatamoverConfig::num_receiver_channels; i++) {
@@ -756,7 +780,10 @@ FabricEriscDatamoverBuilder FabricEriscDatamoverBuilder::build(
             config,
             direction,
             enable_persistent_mode,
-            dateline_connection);
+            build_in_worker_connection_mode,
+            dateline_connection,
+            device->arch(),
+            risc_id);
     }
 }
 
