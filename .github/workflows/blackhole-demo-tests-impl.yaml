@@ -32,7 +32,7 @@ jobs:
           {
             name: "Llama3-8B_performance",
             arch: blackhole,
-            cmd:  HF_HOME=<LOCATION_FOR_HF_WEIGHTS> HF_MODEL=meta-llama/Llama-3.1-8B-Instruct pytest models/tt_transformers/demo/simple_text_demo.py -k performance-ci,
+            cmd:  HF_HOME=<LOCATION_FOR_HF_WEIGHTS> TT_CACHE_PATH=<LOCATION_FOR_TTNN_CACHE> HF_MODEL=meta-llama/Llama-3.1-8B-Instruct pytest models/tt_transformers/demo/simple_text_demo.py -k performance-ci,
             owner_id: U03PUAKE719 # Miguel Tairum
           }
         ]
