@@ -62,7 +62,7 @@ static inline int discover_stack_usage() {
     return stack_free + 1;
 }
 
-#else // ! KERNEL_BUILD
+#else // !KERNEL_BUILD
 
 static inline uint32_t get_dispatch_class() {
 #if defined(COMPILE_FOR_BRISC)
@@ -97,6 +97,7 @@ static inline void record_stack_usage(uint32_t stack_free) {
         usage->watcher_kernel_id = launch_msg->kernel_config.watcher_kernel_ids[get_dispatch_class()];
     }
 }
+#endif // KERNEL_BUILD
 
 #else  // !WATCHER_ENABLED
 
