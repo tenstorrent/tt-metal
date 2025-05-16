@@ -198,7 +198,7 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
     constexpr std::array<std::pair<size_t, size_t>, 2> ring_buffer_slot_options = {
         std::pair<size_t, size_t>{8, 8}, std::pair<size_t, size_t>{4, 8}};
     constexpr std::array<std::pair<size_t, size_t>, 2> ring_buffer_slot_options_dateline = {
-        std::pair<size_t, size_t>{8, 24}, std::pair<size_t, size_t>{8, 16}};
+        std::pair<size_t, size_t>{8, 16}, std::pair<size_t, size_t>{8, 8}};
 
     size_t num_sender_buffer_slots;
     size_t num_receiver_buffer_slots;
@@ -223,8 +223,8 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
     auto num_alive_sender_channels = is_dateline ? this->num_used_sender_channels - 1 : this->num_used_sender_channels;
     auto num_alive_receiver_channels =
         is_dateline ? this->num_used_receiver_channels - 1 : this->num_used_receiver_channels;
-    auto non_dataline_sender_channel_idx = 2;
-    auto non_dataline_receiver_channel_idx = 0;
+    auto non_dateline_sender_channel_idx = 2;
+    auto non_dateline_receiver_channel_idx = 0;
 
     if (topology == Topology::Ring) {
         if (is_dateline) {
@@ -270,13 +270,13 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
         available_channel_buffering_space);
 
     for (uint32_t i = 0; i < this->num_used_sender_channels; i++) {
-        bool skip_current_channel = (i == non_dataline_sender_channel_idx && is_dateline);
+        bool skip_current_channel = (i == non_dateline_sender_channel_idx && is_dateline);
         this->sender_channels_num_buffers[i] = skip_current_channel ? 0 : num_sender_buffer_slots;
         this->sender_channels_size_bytes[i] =
             skip_current_channel ? 0 : channel_buffer_size_bytes * num_sender_buffer_slots;
     }
     for (uint32_t i = 0; i < this->num_used_receiver_channels; i++) {
-        bool skip_current_channel = (i == non_dataline_receiver_channel_idx && is_dateline);
+        bool skip_current_channel = (i == non_dateline_receiver_channel_idx && is_dateline);
         this->receiver_channels_num_buffers[i] = skip_current_channel ? 0 : num_receiver_buffer_slots;
         this->receiver_channels_size_bytes[i] =
             skip_current_channel ? 0 : channel_buffer_size_bytes * num_receiver_buffer_slots;
@@ -297,7 +297,7 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
     log_trace(tt::LogOp, "Available channel buffering space: {}", this->available_channel_buffering_space);
 
     for (uint32_t i = 0; i < this->num_used_sender_channels; i++) {
-        bool skip_current_channel = (i == non_dataline_sender_channel_idx && is_dateline);
+        bool skip_current_channel = (i == non_dateline_sender_channel_idx && is_dateline);
         if (!skip_current_channel) {
             TT_FATAL(
                 this->sender_channels_size_bytes[i] > 0,
@@ -306,7 +306,7 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
         }
     }
     for (uint32_t i = 0; i < this->num_used_receiver_channels; i++) {
-        bool skip_current_channel = (i == non_dataline_receiver_channel_idx && is_dateline);
+        bool skip_current_channel = (i == non_dateline_receiver_channel_idx && is_dateline);
         if (!skip_current_channel) {
             TT_FATAL(
                 this->receiver_channels_size_bytes[i] > 0,
