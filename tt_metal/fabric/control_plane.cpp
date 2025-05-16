@@ -612,7 +612,15 @@ void ControlPlane::configure_routing_tables_for_fabric_ethernet_channels() {
                     physical_chip_id);
             for (const auto& [connected_mesh_id, edge] : inter_mesh_connectivity[mesh_id][chip_id]) {
                 // Loop over edges connected chip ids, they could connect to different chips for intermesh traffic
+                // edge.connected_chip_ids is a vector of chip ids, that is populated per port. Since we push all
+                // connected ports into the map when we visit a chip id, we should skip if we have already visited this
+                // chip id
+                std::unordered_set<chip_id_t> visited_chip_ids;
                 for (const auto& logical_connected_chip_id : edge.connected_chip_ids) {
+                    if (visited_chip_ids.count(logical_connected_chip_id)) {
+                        continue;
+                    }
+                    visited_chip_ids.insert(logical_connected_chip_id);
                     const auto& physical_connected_chip_id =
                         this->logical_mesh_chip_id_to_physical_chip_id_mapping_[connected_mesh_id]
                                                                                [logical_connected_chip_id];
@@ -888,6 +896,22 @@ stl::Span<const chip_id_t> ControlPlane::get_intra_chip_neighbors(
         }
     }
     return {};
+}
+
+std::unordered_map<mesh_id_t, std::vector<chip_id_t>> ControlPlane::get_chip_neighbors(
+    mesh_id_t src_mesh_id, chip_id_t src_chip_id, RoutingDirection routing_direction) const {
+    std::unordered_map<mesh_id_t, std::vector<chip_id_t>> neighbors;
+    auto intra_neighbors = this->get_intra_chip_neighbors(src_mesh_id, src_chip_id, routing_direction);
+    if (!intra_neighbors.empty()) {
+        neighbors[src_mesh_id].insert(neighbors[src_mesh_id].end(), intra_neighbors.begin(), intra_neighbors.end());
+    }
+    for (const auto& [mesh_id, routing_edge] :
+         this->routing_table_generator_->get_inter_mesh_connectivity()[src_mesh_id][src_chip_id]) {
+        if (routing_edge.port_direction == routing_direction) {
+            neighbors[mesh_id] = routing_edge.connected_chip_ids;
+        }
+    }
+    return neighbors;
 }
 
 size_t ControlPlane::get_num_active_fabric_routers(mesh_id_t mesh_id, chip_id_t chip_id) const {

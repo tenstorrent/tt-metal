@@ -16,26 +16,30 @@
 
 namespace tt::tt_fabric {
 
-bool FabricContext::check_for_wrap_around_mesh() const {
-    if (tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type() == tt::ClusterType::TG) {
-        // skip wrapping around mesh for TG since the corner chips connected to the gateway will be
-        // using that link to route dispatch or any other traffic
-        return false;
-    }
+std::unordered_map<mesh_id_t, bool> FabricContext::check_for_wrap_around_mesh() const {
+    std::unordered_map<mesh_id_t, bool> wrap_around_mesh;
 
     auto* control_plane = tt::tt_metal::MetalContext::instance().get_cluster().get_control_plane();
-    auto mesh_id = control_plane->get_user_physical_mesh_ids()[0];
-
-    // we can wrap around mesh if the corner chip (logical chip 0) has exactly 2 connections
-    const uint32_t corner_chip_id = 0;
-    uint32_t corner_chip_connections = 0;
-    for (const auto& direction : FabricContext::routing_directions) {
-        if (!control_plane->get_intra_chip_neighbors(mesh_id, corner_chip_id, direction).empty()) {
-            corner_chip_connections++;
+    auto mesh_ids = control_plane->get_user_physical_mesh_ids();
+    for (const auto& mesh_id : mesh_ids) {
+        if (tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type() == tt::ClusterType::TG) {
+            // skip wrapping around mesh for TG since the corner chips connected to the gateway will be
+            // using that link to route dispatch or any other traffic
+            wrap_around_mesh[mesh_id] = false;
+            continue;
         }
-    }
+        // we can wrap around mesh if the corner chip (logical chip 0) has exactly 2 connections
+        const uint32_t corner_chip_id = 0;
+        uint32_t corner_chip_connections = 0;
+        for (const auto& direction : FabricContext::routing_directions) {
+            if (!control_plane->get_intra_chip_neighbors(mesh_id, corner_chip_id, direction).empty()) {
+                corner_chip_connections++;
+            }
+        }
 
-    return (corner_chip_connections == 2);
+        wrap_around_mesh[mesh_id] = (corner_chip_connections == 2);
+    }
+    return wrap_around_mesh;
 }
 
 tt::tt_fabric::Topology FabricContext::get_topology() const {
@@ -91,7 +95,11 @@ FabricContext::FabricContext(tt::tt_metal::FabricConfig fabric_config) {
     }
 }
 
-bool FabricContext::is_wrap_around_mesh() const { return this->wrap_around_mesh_; }
+bool FabricContext::is_wrap_around_mesh(mesh_id_t mesh_id) const {
+    auto it = this->wrap_around_mesh_.find(mesh_id);
+    TT_FATAL(it != this->wrap_around_mesh_.end(), "Querying wrap around mesh for an unknown mesh id");
+    return it->second;
+}
 
 tt::tt_fabric::Topology FabricContext::get_fabric_topology() const { return this->topology_; }
 
