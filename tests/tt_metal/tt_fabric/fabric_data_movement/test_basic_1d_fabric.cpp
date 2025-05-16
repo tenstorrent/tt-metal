@@ -765,6 +765,7 @@ void RunTestMCastConnAPI(
     uint32_t bwd_hops) {
     CoreCoord sender_logical_core = {0, 0};
     CoreCoord receiver_logical_core = {1, 0};
+    std::vector<tt_metal::Program> receiver_programs;
 
     auto control_plane = tt::tt_metal::MetalContext::instance().get_cluster().get_control_plane();
 
@@ -901,26 +902,40 @@ void RunTestMCastConnAPI(
 
     std::vector<uint32_t> receiver_runtime_args = {worker_mem_map.packet_payload_size_bytes, num_packets, time_seed};
 
-    // Create the receiver program for validation
-    auto receiver_program = tt_metal::CreateProgram();
-    auto receiver_kernel = tt_metal::CreateKernel(
-        receiver_program,
-        "tests/tt_metal/tt_metal/perf_microbenchmark/routing/kernels/tt_fabric_1d_rx.cpp",
-        {receiver_logical_core},
-        tt_metal::DataMovementConfig{
-            .processor = tt_metal::DataMovementProcessor::RISCV_0,
-            .noc = tt_metal::NOC::RISCV_0_default,
-            .compile_args = compile_time_args});
+    // Create and launch the receiver program for validation on all mcast receiver devices
+    for (auto& [routing_direction, physical_end_device_ids] : physical_end_device_ids_by_dir) {
+        for (auto physical_end_device_id : physical_end_device_ids) {
+            auto* receiver_device = DevicePool::instance().get_active_device(physical_end_device_id);
+            // Create the receiver program for validation
+            auto receiver_program = tt_metal::CreateProgram();
+            auto receiver_kernel = tt_metal::CreateKernel(
+                receiver_program,
+                "tests/tt_metal/tt_metal/perf_microbenchmark/routing/kernels/tt_fabric_1d_rx.cpp",
+                {receiver_logical_core},
+                tt_metal::DataMovementConfig{
+                    .processor = tt_metal::DataMovementProcessor::RISCV_0,
+                    .noc = tt_metal::NOC::RISCV_0_default,
+                    .compile_args = compile_time_args});
 
-    tt_metal::SetRuntimeArgs(receiver_program, receiver_kernel, receiver_logical_core, receiver_runtime_args);
+            tt_metal::SetRuntimeArgs(receiver_program, receiver_kernel, receiver_logical_core, receiver_runtime_args);
+            fixture->RunProgramNonblocking(receiver_device, receiver_program);
+            receiver_programs.push_back(std::move(receiver_program));
+            log_info(tt::LogTest, "{} Rx Launched on physical device {}", routing_direction, physical_end_device_id);
+        }
+    }
 
-    // Launch sender and receiver programs and wait for them to finish
-    fixture->RunProgramNonblocking(left_recv_device, receiver_program);
-    fixture->RunProgramNonblocking(right_recv_device, receiver_program);
+    // Launch sender program and wait for sender to finish
     fixture->RunProgramNonblocking(sender_device, sender_program);
     fixture->WaitForSingleProgramDone(sender_device, sender_program);
-    fixture->WaitForSingleProgramDone(right_recv_device, receiver_program);
-    fixture->WaitForSingleProgramDone(left_recv_device, receiver_program);
+
+    // Wait for receivers to finish
+    for (auto [routing_direction, physical_end_device_ids] : physical_end_device_ids_by_dir) {
+        for (uint32_t i = 0; i < physical_end_device_ids.size(); i++) {
+            auto* receiver_device = DevicePool::instance().get_active_device(physical_end_device_ids[i]);
+            fixture->WaitForSingleProgramDone(receiver_device, receiver_programs[i]);
+        }
+    }
+    log_info(tt::LogTest, "All Receivers Finished");
 
     // Validate the status and packets processed by sender and receiver
     std::vector<uint32_t> sender_status;
@@ -935,35 +950,36 @@ void RunTestMCastConnAPI(
         sender_status,
         CoreType::WORKER);
 
-    tt_metal::detail::ReadFromDeviceL1(
-        left_recv_device,
-        receiver_logical_core,
-        worker_mem_map.test_results_address,
-        worker_mem_map.test_results_size_bytes,
-        left_recv_status,
-        CoreType::WORKER);
-
-    tt_metal::detail::ReadFromDeviceL1(
-        right_recv_device,
-        receiver_logical_core,
-        worker_mem_map.test_results_address,
-        worker_mem_map.test_results_size_bytes,
-        right_recv_status,
-        CoreType::WORKER);
-
     EXPECT_EQ(sender_status[TT_FABRIC_STATUS_INDEX], TT_FABRIC_STATUS_PASS);
-    EXPECT_EQ(left_recv_status[TT_FABRIC_STATUS_INDEX], TT_FABRIC_STATUS_PASS);
-    EXPECT_EQ(right_recv_status[TT_FABRIC_STATUS_INDEX], TT_FABRIC_STATUS_PASS);
 
     uint64_t sender_bytes =
         ((uint64_t)sender_status[TT_FABRIC_WORD_CNT_INDEX + 1] << 32) | sender_status[TT_FABRIC_WORD_CNT_INDEX];
-    uint64_t left_recv_bytes =
-        ((uint64_t)left_recv_status[TT_FABRIC_WORD_CNT_INDEX + 1] << 32) | left_recv_status[TT_FABRIC_WORD_CNT_INDEX];
-    uint64_t right_recv_bytes =
-        ((uint64_t)right_recv_status[TT_FABRIC_WORD_CNT_INDEX + 1] << 32) | right_recv_status[TT_FABRIC_WORD_CNT_INDEX];
 
-    EXPECT_EQ(sender_bytes, left_recv_bytes);
-    EXPECT_EQ(left_recv_bytes, right_recv_bytes);
+    for (auto [routing_direction, physical_end_device_ids] : physical_end_device_ids_by_dir) {
+        for (uint32_t i = 0; i < physical_end_device_ids.size(); i++) {
+            log_info(
+                tt::LogTest,
+                "Checking Status of {} Rx on physical device {}",
+                routing_direction,
+                physical_end_device_ids[i]);
+
+            auto* receiver_device = DevicePool::instance().get_active_device(physical_end_device_ids[i]);
+            std::vector<uint32_t> recv_status;
+
+            tt_metal::detail::ReadFromDeviceL1(
+                receiver_device,
+                receiver_logical_core,
+                worker_mem_map.test_results_address,
+                worker_mem_map.test_results_size_bytes,
+                recv_status,
+                CoreType::WORKER);
+            EXPECT_EQ(recv_status[TT_FABRIC_STATUS_INDEX], TT_FABRIC_STATUS_PASS);
+            uint64_t recv_bytes =
+                ((uint64_t)recv_status[TT_FABRIC_WORD_CNT_INDEX + 1] << 32) | recv_status[TT_FABRIC_WORD_CNT_INDEX];
+
+            EXPECT_EQ(sender_bytes, recv_bytes);
+        }
+    }
 }
 
 TEST_F(Fabric1DFixture, TestUnicastRaw) { RunTestUnicastRaw(this, 1); }
