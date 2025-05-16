@@ -20,7 +20,7 @@ def allocate_tensor_on_device_like(
 def to_torch(
     tensor: torch.Tensor,
     *,
-    mesh_device: ttnn.MeshDevice | None = None,
+    mesh_device: ttnn.MeshDevice | None = None,  # this is only used to construct a mesh composer
     dtype: torch.dtype | None = None,
     mesh_composer: ttnn.MeshToTensor | None = None,
     shard_dim: int | None = None,
@@ -29,7 +29,7 @@ def to_torch(
     if shard_dim is not None:
         mesh_composer = ttnn.ConcatMeshToTensor(mesh_device, dim=shard_dim)
 
-    if mesh_composer is None:
+    if mesh_composer is None and tensor.storage_type() == ttnn.StorageType.MULTI_DEVICE:
         tensor = ttnn.get_device_tensor(tensor, tensor.device().id())
 
     result = ttnn.to_torch(tensor, mesh_composer=mesh_composer)
@@ -64,11 +64,13 @@ def from_torch_fast(
     mesh_mapper: ttnn.TensorToMesh | None = None,
     shard_dim: int | None = None,
 ) -> ttnn.Tensor:
-    if shard_dim is not None:
-        mesh_mapper = ttnn.ShardTensorToMesh(device, dim=shard_dim)
-
-    if isinstance(device, ttnn.MeshDevice) and mesh_mapper is None:
-        mesh_mapper = ttnn.ReplicateTensorToMesh(device)
+    if isinstance(device, ttnn.MeshDevice):
+        if shard_dim is not None:
+            mesh_mapper = ttnn.ShardTensorToMesh(device, dim=shard_dim)
+        if mesh_mapper is None:
+            mesh_mapper = ttnn.ReplicateTensorToMesh(device)
+    else:
+        mesh_mapper = None
 
     float32_in = t.dtype == torch.float32
     float32_out = dtype == ttnn.float32 or (dtype is None and float32_in)
