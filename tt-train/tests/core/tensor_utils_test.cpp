@@ -187,7 +187,7 @@ TEST_F(TensorUtilsTest, TestOnes_1) {
     auto* device = &ttml::autograd::ctx().get_device();
     auto shape = ttml::core::create_shape({1, 2, 3, 4});
     auto tensor_zeros = ttml::core::zeros(shape, device);
-    auto tensor_ones = ttml::core::ones(tensor_zeros.get_logical_shape(), device);
+    auto tensor_ones = ttml::core::ones(tensor_zeros.logical_shape(), device);
     auto tensor_vec = ttml::core::to_vector(tensor_ones);
     for (auto& val : tensor_vec) {
         EXPECT_EQ(val, 1.F);

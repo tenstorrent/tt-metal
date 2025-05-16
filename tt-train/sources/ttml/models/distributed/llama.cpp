@@ -23,7 +23,7 @@ void initialize_weights(DistributedLlama& model) {
     for (auto& [name, tensor_ptr] : params) {
         const auto& tensor = tensor_ptr->get_value();
         if (name.find("weight") != std::string::npos) {
-            auto tensor_shape = tensor.get_logical_shape();
+            auto tensor_shape = tensor.logical_shape();
             auto* device = &autograd::ctx().get_device();
             auto num_devices = static_cast<uint32_t>(device->num_devices());
             tensor_shape[0] *= num_devices;
@@ -32,7 +32,7 @@ void initialize_weights(DistributedLlama& model) {
             tensor_ptr->set_value(
                 core::from_xtensor<float, ttnn::DataType::BFLOAT16>(weight_xtensor, device, shard_composer));
         } else if (name.find("bias") != std::string::npos) {
-            init::constant_init(tensor_ptr, tensor.get_logical_shape(), 0.F);
+            init::constant_init(tensor_ptr, tensor.logical_shape(), 0.F);
         }
     }
 }
