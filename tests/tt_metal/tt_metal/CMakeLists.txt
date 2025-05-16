@@ -60,6 +60,7 @@ foreach(TEST_SRC ${TT_METAL_TESTS_SRCS})
     list(APPEND METAL_TEST_TARGETS ${TEST})
 endforeach()
 
+add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/addr_gen)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/api)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/data_movement)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/debug_tools)
@@ -79,6 +80,8 @@ add_custom_target(
     DEPENDS
         ${METAL_TEST_TARGETS}
         metal_perf_microbenchmark_tests
+        unit_tests_addr_gen_wormhole_b0
+        unit_tests_addr_gen_blackhole
         unit_tests_api_wormhole_b0
         unit_tests_api_blackhole
         unit_tests_data_movement
