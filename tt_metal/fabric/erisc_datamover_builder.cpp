@@ -323,11 +323,6 @@ void append_worker_to_fabric_edm_sender_rt_args(
     TT_FATAL(
         (sender_worker_flow_control_semaphore_id & 0xFFFF) == sender_worker_flow_control_semaphore_id,
         "sender_worker_flow_control_semaphore_id is not being interpreted as a semaphore ID for worker connection");
-    uint32_t my_fc_stream_id_ll_sender_worker_flow_control_semaphore_id =
-        sender_worker_flow_control_semaphore_id | (connection.connected_ethernet_channel_id << 16);
-    TT_FATAL(
-        connection.connected_ethernet_channel_id >= 0,
-        "connected_ethernet_channel_id was not initialized properly. Must be >= 0");
 
     const std::vector<uint32_t> values = {
         connection.persistent_fabric,
@@ -340,7 +335,7 @@ void append_worker_to_fabric_edm_sender_rt_args(
         connection.edm_worker_location_info_addr,
         connection.buffer_size_bytes,
         connection.buffer_index_semaphore_id,
-        my_fc_stream_id_ll_sender_worker_flow_control_semaphore_id,
+        sender_worker_flow_control_semaphore_id,
         sender_worker_terminate_semaphore_id,
         sender_worker_buffer_index_semaphore_id};
     args_out.reserve(args_out.size() + (values.size() / sizeof(size_t)));
@@ -780,8 +775,7 @@ FabricEriscDatamoverBuilder FabricEriscDatamoverBuilder::build(
     }
 }
 
-SenderWorkerAdapterSpec FabricEriscDatamoverBuilder::build_connection_to_worker_channel(
-    size_t ethernet_channel_id) const {
+SenderWorkerAdapterSpec FabricEriscDatamoverBuilder::build_connection_to_worker_channel() const {
     if (this->enable_persistent_mode) {
         log_trace(tt::LogOp, "Building connection to persistent fabric");
     } else {
@@ -803,7 +797,6 @@ SenderWorkerAdapterSpec FabricEriscDatamoverBuilder::build_connection_to_worker_
         this->config.sender_channels_worker_conn_info_base_address[worker_chan],
         this->config.channel_buffer_size_bytes,
         this->sender_channels_buffer_index_semaphore_id[worker_chan],
-        ethernet_channel_id,
         this->enable_persistent_mode,
         this->direction};
 }

@@ -458,8 +458,6 @@ void kernel_main() {
             if (sync_noc_x == my_x[0] && sync_noc_y == my_y[0]) {
                 // Sanity check to ensure we don't receive more acks than expected
                 if (*reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sync_bank_addr) != second_finish_sync_val) {
-                    DPRINT << "Sync bank addr: " << (uint32_t)*reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sync_bank_addr)
-                           << " != " << (uint32_t)second_finish_sync_val << "\n";
                     while(1);
                 }
                 ASSERT(*reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sync_bank_addr) == second_finish_sync_val);

@@ -430,9 +430,8 @@ tt::tt_fabric::SenderWorkerAdapterSpec EdmLineFabricOpInterface::uniquely_connec
 
     CoreCoord ethernet_core_virtual =
         CoreCoord{edm_builders.at(next_link).my_noc_x, edm_builders.at(next_link).my_noc_y};
-    const auto connected_ethernet_channel_id = device->logical_core_from_ethernet_core(ethernet_core_virtual).y;
     TT_FATAL(device->logical_core_from_ethernet_core(ethernet_core_virtual).x == 0, "Grabbed wrong coord field");
-    return edm_builders.at(next_link).build_connection_to_worker_channel(connected_ethernet_channel_id);
+    return edm_builders.at(next_link).build_connection_to_worker_channel();
 }
 
 EdmLineFabricOpInterface EdmLineFabricOpInterface::build_program_builder_worker_connection_fabric(

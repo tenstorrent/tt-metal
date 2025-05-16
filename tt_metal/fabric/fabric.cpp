@@ -107,7 +107,6 @@ void append_fabric_connection_rt_args(
         .edm_worker_location_info_addr = edm_config.sender_channels_worker_conn_info_base_address[sender_channel],
         .buffer_size_bytes = edm_config.channel_buffer_size_bytes,
         .buffer_index_semaphore_id = edm_config.sender_channels_buffer_index_semaphore_address[sender_channel],
-        .connected_ethernet_channel_id = connected_ethernet_channel_id,
         .persistent_fabric = true,
         .edm_direction = router_direction};
 

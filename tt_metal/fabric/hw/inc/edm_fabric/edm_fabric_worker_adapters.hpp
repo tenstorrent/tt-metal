@@ -16,7 +16,6 @@
 #include "tt_metal/hw/inc/utils/utils.h"
 #include "tt_metal/hw/inc/wormhole/core_config.h"
 #include "debug/assert.h"
-#include "debug/dprint.h"
 #include <cstdint>
 #include <array>
 
@@ -70,8 +69,7 @@ struct WorkerToFabricEdmSenderImpl {
         const auto edm_worker_location_info_addr = get_arg_val<uint32_t>(arg_idx++);
         const uint16_t buffer_size_bytes = get_arg_val<uint32_t>(arg_idx++);
         const auto edm_buffer_index_addr = get_arg_val<uint32_t>(arg_idx++);
-        const auto my_fc_stream_id_ll_sender_worker_flow_control_semaphore_id = get_arg_val<uint32_t>(arg_idx++);
-        const size_t writer_send_sem_id = my_fc_stream_id_ll_sender_worker_flow_control_semaphore_id & 0xFFFF;
+        const auto writer_send_sem_id = get_arg_val<uint32_t>(arg_idx++);
         auto writer_send_sem_addr =
             reinterpret_cast<volatile uint32_t* const>(get_semaphore<my_core_type>(writer_send_sem_id));
 
@@ -143,14 +141,14 @@ struct WorkerToFabricEdmSenderImpl {
             IS_WORKER ? 0
                       : reinterpret_cast<volatile tt_reg_ptr uint32_t*>(
                             get_stream_reg_write_addr(this->worker_credits_stream_id));
-        this->edm_connection_handshake_l1_addr = 
+        this->edm_connection_handshake_l1_addr =
             connected_to_persistent_fabric
                 ? edm_connection_handshake_l1_id
                 : get_semaphore<ProgrammableCoreType::ACTIVE_ETH>(edm_connection_handshake_l1_id);
         this->edm_worker_location_info_addr = edm_worker_location_info_addr;
-        this->edm_buffer_index_addr = 
-            connected_to_persistent_fabric ? edm_buffer_index_id
-                                           : get_semaphore<ProgrammableCoreType::ACTIVE_ETH>(edm_buffer_index_id);
+        this->edm_buffer_index_addr = connected_to_persistent_fabric
+                                          ? edm_buffer_index_id
+                                          : get_semaphore<ProgrammableCoreType::ACTIVE_ETH>(edm_buffer_index_id);
         this->from_remote_buffer_free_slots_ptr = from_remote_buffer_free_slots_ptr;
         this->worker_teardown_addr = worker_teardown_addr;
         this->edm_buffer_base_addr = edm_buffer_base_addr;
@@ -210,10 +208,10 @@ struct WorkerToFabricEdmSenderImpl {
             from_remote_buffer_free_slots_ptr,
             worker_teardown_addr,
             local_buffer_index_addr,
+            sender_channel_credits_stream_id,
             worker_credits_stream_id,
             data_noc_cmd_buf,
             sync_noc_cmd_buf);
-
     }
 
     template <uint8_t EDM_TO_DOWNSTREAM_NOC = noc_index, uint8_t EDM_TO_DOWNSTREAM_NOC_VC = NOC_UNICAST_WRITE_VC>
@@ -378,8 +376,6 @@ struct WorkerToFabricEdmSenderImpl {
             this->buffer_slot_write_counter.counter = *this->worker_teardown_addr;
             this->buffer_slot_write_counter.index = BufferIndex{static_cast<uint8_t>(this->buffer_slot_write_counter.counter % static_cast<uint32_t>(this->num_buffers_per_channel))};
             this->buffer_slot_index = this->buffer_slot_write_counter.get_buffer_index();
-        } else {
-            DPRINT << "worker_credits_stream_id=" << (uint32_t)worker_credits_stream_id << "\n";
         }
 
         // write-back the read counter
@@ -513,7 +509,6 @@ private:
         } else {
             const uint64_t noc_sem_addr =
                 get_noc_addr(this->edm_noc_x, this->edm_noc_y, this->edm_buffer_remote_free_slots_update_addr, noc);
-            DPRINT << "Notifying EDM of free slots update at address " << (uint64_t)noc_sem_addr << ", noc=" << (uint32_t)noc << "\n";
             noc_inline_dw_write(noc_sem_addr, (-1) << REMOTE_DEST_BUF_WORDS_FREE_INC, 0xf, noc);
         }
         if constexpr (!IS_WORKER) {
