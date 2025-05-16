@@ -99,7 +99,9 @@ uint32_t get_bf16_pool_scalar(
             } else {
                 value = 1. / (float)(kernel_h * kernel_w);
                 packed_first_value = bfloat16(value).to_packed();
-                scalars->push_back(packed_first_value);
+                if (scalars != nullptr) {
+                    scalars->push_back(packed_first_value);
+                }
             }
             break;
         default: TT_FATAL(false, "Unsupported pool operation type");
