@@ -714,8 +714,9 @@ public:
 
 private:
     struct ExtraData {
+        // The index of the trace node When each type of data from this trace node is next used.
         std::array<std::optional<uint32_t>, 2> next_use_idx;
-        std::optional<uint32_t> sync_idx;
+        // The sync value reached when this trace node finishes executing.
         uint32_t sync_count;
     };
 
@@ -918,7 +919,7 @@ void SimpleTraceAllocator::allocate_trace_programs(IDevice* device, std::vector<
             worker_region_allocator_.add_region(node.program->get_id(), binary_addr);
         }
 
-        extra_data_[i].sync_idx = merge_syncs(rta_sync_idx, binary_sync_idx);
+        auto sync_idx = merge_syncs(rta_sync_idx, binary_sync_idx);
 
         bool has_active_eth_kernel = program.runs_on_noc_unicast_only_cores();
         uint32_t eth_nonbinary_size =
@@ -927,7 +928,7 @@ void SimpleTraceAllocator::allocate_trace_programs(IDevice* device, std::vector<
         auto [ethernet_rta_sync_idx, ethernet_rta_addr] =
             active_eth_region_allocator_.allocate_region(eth_nonbinary_size, i, kNonBinary);
 
-        extra_data_[i].sync_idx = merge_syncs(extra_data_[i].sync_idx, ethernet_rta_sync_idx);
+        sync_idx = merge_syncs(sync_idx, ethernet_rta_sync_idx);
         node.dispatch_metadata.nonbinary_kernel_config_addrs.push_back({.addr = rta_addr + worker_ringbuffer_start_});
         node.dispatch_metadata.nonbinary_kernel_config_addrs.push_back(
             {.addr = ethernet_rta_addr + active_eth_ringbuffer_start_});
@@ -943,20 +944,26 @@ void SimpleTraceAllocator::allocate_trace_programs(IDevice* device, std::vector<
             num_workers += device->num_worker_cores(HalProgrammableCoreType::ACTIVE_ETH, sub_device_id);
         }
         extra_data_[i].sync_count = expected_workers_completed + num_workers;
-        int sync_idx = static_cast<int>(i) - 6;
-        if (extra_data_[i].sync_idx.has_value()) {
-            sync_idx = std::max(sync_idx, static_cast<int>(extra_data_[i].sync_idx.value()));
+
+        // Subtract 1 because we don't want to overwrite watcher data for the last program to complete executing.
+        constexpr uint32_t max_queued_programs = launch_msg_buffer_num_entries - 1;
+
+        // Do adjustments to the sync index to ensure we don't overflow the launch message buffer.
+        int final_sync_idx = static_cast<int>(i) - max_queued_programs;
+        if (sync_idx.has_value()) {
+            final_sync_idx = std::max(final_sync_idx, static_cast<int>(sync_idx.value()));
         }
+        // Do adjustments to the sync index to ensure we don't overwrite the previous ethernet binary (since ethernet doesn't use the ringbuffer).
         if (has_active_eth_kernel) {
             if (last_active_eth_sync_idx.has_value()) {
-                sync_idx = std::max(sync_idx, static_cast<int>(last_active_eth_sync_idx.value()));
+                final_sync_idx = std::max(final_sync_idx, static_cast<int>(last_active_eth_sync_idx.value()));
             }
             last_active_eth_sync_idx = i;
             node.dispatch_metadata.send_binary = true;
         }
 
         if (sync_idx >= 0) {
-            node.dispatch_metadata.sync_count = extra_data_[sync_idx].sync_count;
+            node.dispatch_metadata.sync_count = extra_data_[final_sync_idx].sync_count;
             node.dispatch_metadata.stall_first = true;
         }
         expected_workers_completed += num_workers;
