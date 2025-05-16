@@ -191,9 +191,117 @@ def test_sdpa_perf(device, b, nh, nkv, s, d, q_chunk_size, k_chunk_size, dtype, 
 from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
 from models.perf.device_perf_utils import run_device_perf_detailed
 from tt_metal.tools.profiler.process_model_log import run_device_profiler, get_latest_ops_log_filename
-import pandas as pd
 
 
+@pytest.mark.skip()
+def test_combine():
+    import matplotlib.pyplot as plt
+    import numpy as np
+    import pandas as pd
+
+    old_df = pd.read_csv("old_sdpa.csv")
+    new_df = pd.read_csv("new_sdpa.csv")
+
+    fig, axes = plt.subplots(2, 3, figsize=(12, 8), sharey="row")
+
+    # For side-by-side bars
+    bar_width = 0.35
+    seq_order = [512, 1024, 2048, 4096, 8192, 16384]  # for tick labels
+    head_order = [64, 128, 256]
+
+    # Set up bar positions - shifted left/right depending on df
+    bar_shifts = {"old": -bar_width / 2, "new": bar_width / 2}
+
+    for df_idx, (df_name, df) in enumerate([("old", old_df), ("new", new_df)]):
+        # Rename columns
+        df = df.rename(
+            columns={
+                "INPUT_0_W": "batch",
+                "INPUT_0_Z": "num_heads",
+                "INPUT_0_Y": "seq_len",
+                "INPUT_0_X": "head_dim",
+            }
+        )
+
+        # Calculate TFLOP/s
+        def flops(row):
+            B = row.batch
+            H = row.num_heads
+            L = row.seq_len
+            D = row.head_dim
+            causal_multiplier = 1 + row.is_causal.astype(int)
+            return 4 * L**2 * D * H * B / causal_multiplier
+
+        df["tflops"] = flops(df) / df["min_kernel_duration_ns"] / 1e3  # ns → s, flop → Tflop
+        print(df)
+
+        # ------------------------------------------------------------------------------
+        # Color map for different algorithms
+        palette = {
+            "new": "#1f77b4",
+            "old": "#ff7f0e",
+        }
+
+        for j_head, head_dim in enumerate(head_order):
+            for i_causal, causal in enumerate([False, True]):
+                ax = axes[i_causal, j_head]
+                data = df[df["head_dim"] == head_dim][df["is_causal"] == causal]
+
+                # Base positions for sequence lengths
+                x_positions = np.arange(len(seq_order))
+
+                # Shift positions based on whether this is old or new data
+                shifted_positions = x_positions + bar_shifts[df_name]
+
+                # Only one implementation (TTNN) in our case
+                ys = []
+                for seq_len in seq_order:
+                    seq_data = data[data["seq_len"] == seq_len]
+                    if len(seq_data) > 0:
+                        ys.append(seq_data["tflops"].values[0])
+                    else:
+                        ys.append(np.nan)
+
+                ax.bar(
+                    shifted_positions,
+                    ys,
+                    width=bar_width,
+                    label=df_name if i_causal == 0 and j_head == 0 else "_nolegend_",
+                    color=palette[df_name],
+                )
+
+                # Add value labels on top of each bar
+                for i, y in enumerate(ys):
+                    if not np.isnan(y):
+                        value_text = f"{y:.1f}"
+
+                        ax.text(shifted_positions[i], y, value_text, ha="center", va="bottom", fontsize=8, rotation=45)
+
+                # axes cosmetics ------------------------------------------------------
+                # Only set these once (for the first df)
+                if df_idx == 0:
+                    ax.set_xticks(x_positions)
+                    ax.set_xticklabels([f"{l//1024}k" if l >= 1024 else str(l) for l in seq_order], rotation=0)
+                    ax.set_xlabel("Sequence length")
+                    if j_head == 0:
+                        ax.set_ylabel("Speed (TFLOP/s)")
+                    title = (
+                        "Forward, "
+                        + ("with causal mask" if causal else "without causal mask")
+                        + f", head dim {head_dim}"
+                    )
+                    ax.set_title(title, fontsize=9)
+
+    # unified legend --------------------------------------------------------------
+    handles, labels = axes[0, 0].get_legend_handles_labels()
+    fig.legend(handles, labels, loc="upper center", bbox_to_anchor=(0.5, 0.03), ncol=len(labels), frameon=False)
+
+    fig.suptitle("Attention forward speed (FP16/BF16) on Wormhole", y=0.96, fontsize=12)
+    fig.tight_layout(rect=[0, 0.05, 1, 0.96])
+    plt.savefig("attention_speed_grid.png", dpi=300)
+
+
+@pytest.mark.skip()
 def test_sdpa_benchmark_detailed():
     command = "pytest tests/tt_eager/python_api_testing/unit_testing/misc/test_scaled_dot_product_attention.py::test_sdpa_benchmark"
     cols = ["ATTRIBUTES", "INPUT_0_W", "INPUT_0_Z", "INPUT_0_Y", "INPUT_0_X", "DEVICE KERNEL DURATION [ns]"]
@@ -205,6 +313,8 @@ def test_sdpa_benchmark_detailed():
     run_device_profiler(command, subdir)
     # r = post_process_ops_log(subdir, cols, sum_vals=False)
     filename = get_latest_ops_log_filename(subdir)
+    import pandas as pd
+
     df = pd.read_csv(filename)
     df["is_causal"] = (
         df["ATTRIBUTES"]
@@ -222,10 +332,9 @@ def test_sdpa_benchmark_detailed():
         .rename(columns={"DEVICE KERNEL DURATION [ns]": "min_kernel_duration_ns"})
     )
 
+    result.to_csv("new_sdpa.csv", index=False)
     import matplotlib.pyplot as plt
     import numpy as np
-    import pandas as pd
-    import pathlib
 
     df = result
     # Rename columns
@@ -305,13 +414,14 @@ def test_sdpa_benchmark_detailed():
 
     # unified legend --------------------------------------------------------------
     handles, labels = axes[0, 0].get_legend_handles_labels()
-    fig.legend(handles, labels, loc="upper center", ncol=len(labels), frameon=False)
+    fig.legend(handles, labels, loc="upper center", bbox_to_anchor=(0.5, 0.03), ncol=len(labels), frameon=False)
 
-    fig.suptitle("Attention forward speed (FP16/BF16) on Wormhole", y=0.99, fontsize=12)
-    fig.tight_layout(rect=[0, 0, 1, 0.97])
+    fig.suptitle("Attention forward speed (FP16/BF16) on Wormhole", y=0.96, fontsize=12)
+    fig.tight_layout(rect=[0, 0.05, 1, 0.96])
     plt.savefig("attention_speed_grid.png", dpi=300)
 
 
+@pytest.mark.skip()
 def test_sdpa_benchmark(device):
     dtype = ttnn.bfloat16
 
