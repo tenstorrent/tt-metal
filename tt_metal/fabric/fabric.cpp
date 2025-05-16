@@ -51,21 +51,17 @@ void append_fabric_connection_rt_args(
 
     auto* control_plane = tt::tt_metal::MetalContext::instance().get_cluster().get_control_plane();
 
-    // for now, both the src and dest chips should be on the same mesh
     auto [src_mesh_id, src_logical_chip_id] = control_plane->get_mesh_chip_id_from_physical_chip_id(src_chip_id);
     auto [dst_mesh_id, dst_logical_chip_id] = control_plane->get_mesh_chip_id_from_physical_chip_id(dst_chip_id);
-    TT_FATAL(
-        src_mesh_id == dst_mesh_id,
-        "Currently only the chips on the same mesh are supported. Src mesh id: {}, Dst mesh id: {}",
-        src_mesh_id,
-        dst_mesh_id);
 
     auto routing_directions = {RoutingDirection::N, RoutingDirection::S, RoutingDirection::E, RoutingDirection::W};
     std::optional<std::set<chan_id_t>> candidate_ethernet_cores;
     // mimic the 1d fabric connection setup steps to correctly find the candidate links
     for (const auto& direction : routing_directions) {
-        auto neighbors = control_plane->get_intra_chip_neighbors(src_mesh_id, src_logical_chip_id, direction);
-        if (neighbors.empty() || neighbors[0] != dst_logical_chip_id) {
+        // This assumes all neighbor chips to the dst mesh are the same
+        auto neighbors = control_plane->get_chip_neighbors(src_mesh_id, src_logical_chip_id, direction);
+        auto neighbor_mesh_chips = neighbors.find(dst_mesh_id);
+        if (neighbor_mesh_chips == neighbors.end() || neighbor_mesh_chips->second[0] != dst_logical_chip_id) {
             continue;
         }
 
