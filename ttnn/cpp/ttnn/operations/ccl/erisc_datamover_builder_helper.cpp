@@ -427,6 +427,10 @@ tt::tt_fabric::SenderWorkerAdapterSpec EdmLineFabricOpInterface::uniquely_connec
     TT_FATAL(edm_builders.size() > 0, "No EDM builders found for device {}", device->id());
     TT_FATAL(
         next_link < edm_builders.size(), "Next link index {} is out of bounds for device {}", next_link, device->id());
+
+    CoreCoord ethernet_core_virtual =
+        CoreCoord{edm_builders.at(next_link).my_noc_x, edm_builders.at(next_link).my_noc_y};
+    TT_FATAL(device->logical_core_from_ethernet_core(ethernet_core_virtual).x == 0, "Grabbed wrong coord field");
     return edm_builders.at(next_link).build_connection_to_worker_channel();
 }
 

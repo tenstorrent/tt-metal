@@ -88,6 +88,11 @@ void append_fabric_connection_rt_args(
     CoreCoord fabric_router_virtual_core =
         tt::tt_metal::MetalContext::instance().get_cluster().get_virtual_eth_core_from_channel(
             src_chip_id, fabric_router_channel);
+    auto logical_ethernet_core =
+        tt::tt_metal::MetalContext::instance().get_cluster().get_logical_ethernet_core_from_virtual(
+            src_chip_id, fabric_router_virtual_core);
+    size_t connected_ethernet_channel_id = logical_ethernet_core.y;
+    TT_FATAL(logical_ethernet_core.x == 0, "Grabbed wrong coord field");
 
     const auto& fabric_context = control_plane->get_fabric_context();
     const auto& edm_config = fabric_context.get_fabric_router_config();

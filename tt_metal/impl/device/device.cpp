@@ -1177,6 +1177,24 @@ void Device::init_command_queue_device() {
 }
 
 void Device::init_fabric() {
+    auto validate_base_routing_fw_status_matches_expected = [this](const auto& hal) {
+        // If there is no base routing FW expected, we should confirm it's not enabled
+        constexpr uint32_t base_routing_fw_enabled_address = 0x104c;
+
+        bool is_base_routing_fw_enabled = hal.get_is_base_routing_fw_enabled();
+        const auto& expected_value_error_string = is_base_routing_fw_enabled ? "enabled" : "disabled";
+        for (const auto& logical_eth_core : this->ethernet_cores()) {
+            auto core_virtual = this->ethernet_core_from_logical_core(logical_eth_core);
+            auto ret = tt::llrt::read_hex_vec_from_core(
+                this->id(), core_virtual, base_routing_fw_enabled_address, sizeof(uint32_t));
+            TT_FATAL(
+                ret.size() > 0 && bool(ret[0]) == !is_base_routing_fw_enabled,
+                "Base routing firmware is expected to be {} on device {} but it is not",
+                expected_value_error_string,
+                this->id_);
+        }
+    };
+
     fabric_program_ = create_and_compile_fabric_program(this);
     if (fabric_program_ == nullptr) {
         return;
@@ -1194,6 +1212,9 @@ void Device::init_fabric() {
     tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(this->id());
     std::vector<std::vector<CoreCoord>> logical_cores_used_in_program = fabric_program_->logical_cores();
     const auto& hal = MetalContext::instance().hal();
+
+    validate_base_routing_fw_status_matches_expected(hal);
+
     for (uint32_t programmable_core_type_index = 0; programmable_core_type_index < logical_cores_used_in_program.size();
          programmable_core_type_index++) {
         CoreType core_type = hal.get_core_type(programmable_core_type_index);

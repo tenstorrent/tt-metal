@@ -14,7 +14,7 @@ static constexpr bool enable_start_synchronization = get_compile_time_arg_val(0)
 static constexpr bool enable_finish_synchronization = get_compile_time_arg_val(1) != 0;
 static constexpr bool enable_any_synchronization = enable_start_synchronization || enable_finish_synchronization;
 
-FORCE_INLINE void line_sync(
+__attribute__((noinline)) static void line_sync(
     FabricConnectionManager& fabric_connection,
     bool sync_forward,
     bool sync_backward,
@@ -74,7 +74,7 @@ static FORCE_INLINE void setup_packet_header(
 }
 
 template <tt::tt_fabric::NocSendType T>
-static void send_packets(
+__attribute__((noinline)) static void send_packets(
     FabricConnectionManager& fabric_connection,
     volatile PACKET_HEADER_TYPE* pkt_hdr_fwd,
     volatile PACKET_HEADER_TYPE* pkt_hdr_bwd,
@@ -87,7 +87,7 @@ static void send_packets(
 }
 
 template <>
-FORCE_INLINE void send_packets<tt::tt_fabric::NocSendType::NOC_UNICAST_WRITE>(
+__attribute__((noinline)) void send_packets<tt::tt_fabric::NocSendType::NOC_UNICAST_WRITE>(
     FabricConnectionManager& fabric_connection,
     volatile PACKET_HEADER_TYPE* pkt_hdr_fwd,
     volatile PACKET_HEADER_TYPE* pkt_hdr_bwd,
@@ -137,7 +137,7 @@ FORCE_INLINE void send_packets<tt::tt_fabric::NocSendType::NOC_UNICAST_WRITE>(
 }
 
 template <>
-void send_packets<tt::tt_fabric::NocSendType::NOC_UNICAST_ATOMIC_INC>(
+__attribute__((noinline)) void send_packets<tt::tt_fabric::NocSendType::NOC_UNICAST_ATOMIC_INC>(
     FabricConnectionManager& fabric_connection,
     volatile PACKET_HEADER_TYPE* pkt_hdr_fwd,
     volatile PACKET_HEADER_TYPE* pkt_hdr_bwd,
@@ -223,7 +223,7 @@ void send_packets<tt::tt_fabric::NocSendType::NOC_UNICAST_ATOMIC_INC>(
 }
 
 template <>
-void send_packets<tt::tt_fabric::NocSendType::NOC_FUSED_UNICAST_ATOMIC_INC>(
+__attribute__((noinline)) void send_packets<tt::tt_fabric::NocSendType::NOC_FUSED_UNICAST_ATOMIC_INC>(
     FabricConnectionManager& fabric_connection,
     volatile PACKET_HEADER_TYPE* pkt_hdr_fwd,
     volatile PACKET_HEADER_TYPE* pkt_hdr_bwd,
@@ -457,6 +457,9 @@ void kernel_main() {
 
             if (sync_noc_x == my_x[0] && sync_noc_y == my_y[0]) {
                 // Sanity check to ensure we don't receive more acks than expected
+                if (*reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sync_bank_addr) != second_finish_sync_val) {
+                    while(1);
+                }
                 ASSERT(*reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sync_bank_addr) == second_finish_sync_val);
                 // reset the global semaphore in case it is used in a op/kernel invocation
                 *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sync_bank_addr) = 0;

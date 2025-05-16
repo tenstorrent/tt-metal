@@ -9,6 +9,7 @@
 #include "tt_metal/fabric/hw/inc/edm_fabric/edm_fabric_worker_adapters.hpp"
 #include "tests/ttnn/unit_tests/gtests/ccl/kernels/test_kernels.common.hpp"
 #include "ttnn/cpp/ttnn/operations/ccl/common/interpreter_backends/kernel_common/noc_addr.hpp"
+#include "tt_metal/fabric/hw/inc/edm_fabric/fabric_stream_regs.hpp"
 
 struct unicast_mode {
     uint8_t distance;
@@ -69,6 +70,7 @@ void kernel_main() {
 
     // TODO: move to semaphore
     auto edm_buffer_index_sem_id = get_arg_val<uint32_t>(arg_idx++);
+    size_t my_fc_stream_channel_id = get_arg_val<uint32_t>(arg_idx++);
     ASSERT(edm_buffer_index_sem_id < 8);
     auto edm_buffer_index_id = edm_buffer_index_sem_id;
     ASSERT(worker_buffer_index_semaphore_addr != reinterpret_cast<size_t>(writer_send_sem_addr));
@@ -102,7 +104,9 @@ void kernel_main() {
         edm_buffer_index_id,
         writer_send_sem_addr,
         worker_teardown_sem_addr,
-        worker_buffer_index_semaphore_addr);
+        worker_buffer_index_semaphore_addr,
+        tt::tt_fabric::WorkerToFabricEdmSenderImpl<0>::sender_channel_0_free_slots_stream_id,
+        StreamId{my_fc_stream_channel_id});
 
     sender.open();
 

@@ -133,6 +133,7 @@ private:
     bool eth_fw_is_cooperative_ = false;  // set when eth riscs have to context switch
     std::unordered_set<AddressableCoreType> virtualized_core_types_;
     HalTensixHarvestAxis tensix_harvest_axis_;
+    bool is_base_routing_fw_enabled_ = false;
 
     float eps_ = 0.0f;
     float nan_ = 0.0f;
@@ -211,6 +212,7 @@ public:
         return this->virtualized_core_types_;
     }
     HalTensixHarvestAxis get_tensix_harvest_axis() const { return tensix_harvest_axis_; }
+    bool get_is_base_routing_fw_enabled() const { return this->is_base_routing_fw_enabled_; }
     uint32_t get_programmable_core_type_count() const;
     HalProgrammableCoreType get_programmable_core_type(uint32_t core_type_index) const;
     uint32_t get_programmable_core_type_index(HalProgrammableCoreType programmable_core_type_index) const;
