@@ -89,10 +89,16 @@ void MAIN {
     constexpr bool neginf_srca_maxpool = (REDUCE_OP == PoolType::MAX) ? true : false;
     constexpr bool zero_srca_avgpool = (REDUCE_OP == PoolType::SUM) ? true : false;
 
-    uint32_t num_od_ele = get_arg_val<uint32_t>(0);
-    uint32_t scalar_cnt = get_arg_val<uint32_t>(1);
+    uint32_t num_of_ele = nsticks_per_core;
+    uint32_t scalar_cnt = 1;
     uint32_t diff_index = 0;
-    uint32_t time_for_change = get_arg_val<uint32_t>(2 + diff_index);
+    uint32_t time_for_change = 0;
+    if (!one_scalar_per_core) {
+        num_of_ele = get_arg_val<uint32_t>(0);
+        scalar_cnt = get_arg_val<uint32_t>(1);
+        time_for_change = get_arg_val<uint32_t>(2 + diff_index);
+    }
+
     // In case we have <=16 sticks we will use only upper two faces of the tile.
     // In this case we can configure reduce to only process as many rows as needed.
     // In case #sticks > 16 we need bottom two faces as well, and we need to configure reduce to
@@ -121,6 +127,24 @@ void MAIN {
             UNPACK((llk_unpack_tilizeA_B_init<neginf_srca_maxpool, true, false, zero_srca_avgpool>(
                 in_cb_id_0, curr_scalar_cb_id, max_tiles_per_iter, num_faces_in_tile, face_r_dim, 1)));
         }
+    DPRINT << "scalar cnt " << scalar_cnt << ENDL();
+
+    if (one_scalar_per_core) {
+        cb_wait_front(in_scalar_cb_id, 1);
+    }
+    for (uint32_t i = 0; i < num_of_ele; i++) {
+        DPRINT << "i " << i << ENDL();
+        if (i == time_for_change && !one_scalar_per_core) {
+            cb_wait_front(in_scalar_cb_id, 1);
+            DPRINT << "change " << ENDL();
+            if (diff_index < scalar_cnt - 1) {
+                diff_index++;
+                time_for_change = get_arg_val<uint32_t>(2 + diff_index);
+                DPRINT << "next change coming on " << time_for_change << ENDL();
+            }
+        }
+        // DPRINT << "i " << i << ENDL();
+        //  perform the reduction over the first N - 1 whole chunks
         for (uint32_t b_i = 0; b_i < in_nblocks_c - 1; ++b_i) {
             reduce_h_fused<
                 max_tiles_per_iter,
