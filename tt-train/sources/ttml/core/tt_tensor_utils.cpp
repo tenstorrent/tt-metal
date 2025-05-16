@@ -96,7 +96,13 @@ std::vector<tt::tt_metal::HostBuffer> get_as(const ttnn::Tensor& tensor) {
             if constexpr (std::is_same_v<StorageType, tt::tt_metal::HostStorage>) {
                 return {storage.buffer};
             } else if constexpr (std::is_same_v<StorageType, tt::tt_metal::MultiDeviceHostStorage>) {
-                return storage.buffers;
+                auto num_buffers = storage.num_buffers();
+                std::vector<tt::tt_metal::HostBuffer> buffers;
+                buffers.reserve(num_buffers);
+                for (uint32_t i = 0; i < num_buffers; ++i) {
+                    buffers.push_back(storage.get_buffer(i));
+                }
+                return buffers;
             } else {
                 throw std::runtime_error("Tensor must be on host");
             }
