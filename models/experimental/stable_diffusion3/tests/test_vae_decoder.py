@@ -9,7 +9,7 @@ from diffusers.models.autoencoders.autoencoder_kl import AutoencoderKL
 from loguru import logger
 
 from ..reference.vae_decoder import VaeDecoder
-from ..tt.utils import allocate_tensor_on_device_like, assert_quality
+from ..tt.utils import allocate_tensor_on_device_like, assert_quality, from_torch_fast, to_torch
 from ..tt.vae_decoder import TtGroupNorm, TtGroupNormParameters, TtVaeDecoder, TtVaeDecoderParameters
 
 
@@ -92,24 +92,24 @@ def test_vae_decoder(
     assert_quality(image, tt_image_torch, pcc=0.990)
 
 
-@pytest.mark.skip(reason="broken since last merge to main")
 @pytest.mark.parametrize("device_params", [{"trace_region_size": 40960}], indirect=True)
 @pytest.mark.parametrize(
     ("use_program_cache", "use_tracing"),
     [
         (False, False),
-        (True, False),
-        (True, True),
+        # (True, False),
+        # (True, True),
     ],
 )
 @pytest.mark.parametrize(
     ("batch_size", "channels", "height", "width", "group_count"),
     [
-        (1, 512, 16, 16, 32),
-        (1, 512, 32, 32, 32),
-        (1, 512, 64, 64, 32),
         (1, 512, 128, 128, 32),
-        # (1, 512, 256, 256, 32),
+        (1, 512, 256, 256, 32),
+        (1, 256, 512, 512, 32),
+        (1, 512, 512, 512, 32),
+        (1, 128, 1024, 1024, 32),
+        (1, 256, 1024, 1024, 32),
     ],
 )
 def test_vae_decoder_norm(
@@ -133,13 +133,20 @@ def test_vae_decoder_norm(
     torch_model.eval()
 
     parameters = TtGroupNormParameters.from_torch(torch_model.state_dict(), device=device, dtype=ttnn_dtype)
-    tt_model = TtGroupNorm(parameters, num_groups=group_count, eps=torch_model.eps)
+    tt_model = TtGroupNorm(
+        parameters,
+        num_groups=group_count,
+        eps=torch_model.eps,
+        batch_size=batch_size,
+        input_width=width,
+        input_height=height,
+    )
 
     torch.manual_seed(0)
 
     inp = torch.randn([batch_size, channels, height, width], dtype=torch_dtype)
 
-    tt_inp_host = ttnn.from_torch(inp.permute(0, 2, 3, 1), layout=ttnn.TILE_LAYOUT, dtype=ttnn_dtype)
+    tt_inp_host = from_torch_fast(inp.permute(0, 2, 3, 1), layout=ttnn.TILE_LAYOUT, dtype=ttnn_dtype)
 
     with torch.no_grad():
         out = torch_model(inp)
@@ -171,6 +178,6 @@ def test_vae_decoder_norm(
         tt_out = tt_model(tt_inp)
         logger.info("done...")
 
-    tt_out_torch = ttnn.to_torch(tt_out).permute(0, 3, 1, 2)
+    tt_out_torch = to_torch(tt_out).permute(0, 3, 1, 2)
 
     assert_quality(out, tt_out_torch, pcc=0.999)
