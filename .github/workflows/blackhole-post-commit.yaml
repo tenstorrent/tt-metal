@@ -12,6 +12,10 @@ on:
           description: 'Enable watcher in BH Post commit'
           default: false
           type: boolean
+      enable-ttnn-unit-tests:
+          description: 'Enable ttnn unit tests'
+          default: false
+          type: boolean
   workflow_dispatch:
     inputs:
       runner-label:
@@ -31,6 +35,10 @@ on:
           - TSan
       enable-watcher:
         description: 'Enable watcher in BH Post commit'
+        default: false
+        type: boolean
+      enable-ttnn-unit-tests:
+        description: 'Enable ttnn unit tests'
         default: false
         type: boolean
   schedule:
@@ -153,6 +161,7 @@ jobs:
 
   ttnn-unit-tests:
     needs: build-artifact
+    if: ${{ inputs.enable-ttnn-unit-tests || github.event_name == 'schedule' }}
     secrets: inherit
     uses: ./.github/workflows/ttnn-post-commit.yaml
     with:
