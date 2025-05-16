@@ -210,14 +210,14 @@ RMSNormForwardProgramFactory::cached_program_t RMSNormForwardProgramFactory::cre
 
     tt::tt_metal::Program program{};
 
-    tt::DataFormat input_data_format = datatype_to_dataformat_converter(input.get_dtype());
+    tt::DataFormat input_data_format = datatype_to_dataformat_converter(input.dtype());
     TT_FATAL(input_data_format == tt::DataFormat::Float16_b, "Input data format must be Float16_b");
 
     uint32_t bfloat16_single_tile_size_bytes = tt::tt_metal::detail::TileSize(tt::DataFormat::Float16_b);
     uint32_t float32_single_tile_size_bytes = tt::tt_metal::detail::TileSize(tt::DataFormat::Float32);
 
-    auto padded_tensor_shape = input.get_padded_shape();
-    auto padded_tensor_volume = input.volume();
+    auto padded_tensor_shape = input.padded_shape();
+    auto padded_tensor_volume = input.padded_volume();
     TT_FATAL(
         padded_tensor_volume % tt::constants::TILE_HW == 0, "Padded input tensor volume must be divisible by TILE_HW");
     TT_FATAL(padded_tensor_shape.rank() == 4U, "Input tensor must be 4D");
@@ -230,7 +230,7 @@ RMSNormForwardProgramFactory::cached_program_t RMSNormForwardProgramFactory::cre
     uint32_t num_cores_x = compute_with_storage_grid_size.x;
     uint32_t num_cores_y = compute_with_storage_grid_size.y;
 
-    uint32_t num_inner = input.get_logical_shape()[-1];
+    uint32_t num_inner = input.logical_shape()[-1];
 
     // compile arguments
     uint32_t packed_scaler = pack_two_bfloat16_to_uint32(1.F / static_cast<float>(num_inner));
