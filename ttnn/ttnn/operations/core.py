@@ -288,7 +288,7 @@ def from_torch(
 
     if mesh_mapper:
         shards = mesh_mapper.map(tensor)
-        tensor = ttnn.Tensor(shards, dtype, layout, memory_config, tile, pad_value, mesh_mapper.config())
+        tensor = ttnn.Tensor(shards, dtype, mesh_mapper.config(), tile, layout, memory_config, pad_value)
         if device is not None:
             tensor = ttnn.to_device(tensor, device, memory_config=memory_config, cq_id=cq_id)
         return tensor

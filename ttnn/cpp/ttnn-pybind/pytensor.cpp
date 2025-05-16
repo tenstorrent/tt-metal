@@ -880,11 +880,11 @@ void pytensor_module(py::module& m_tensor) {
         .def(
             py::init<>([](const py::object& tensor,
                           std::optional<DataType> data_type,
+                          const std::unordered_map<std::string, std::string>& strategy,
+                          const std::optional<Tile>& optional_tile,
                           std::optional<Layout> optional_layout,
                           const std::optional<MemoryConfig>& optional_memory_config,
-                          const std::optional<Tile>& optional_tile,
-                          std::optional<float> pad_value,
-                          const std::unordered_map<std::string, std::string>& strategy) {
+                          std::optional<float> pad_value) {
                 if (py::isinstance<py::list>(tensor)) {
                     return detail::convert_python_tensors_to_tt_tensors(
                         tensor,
@@ -908,11 +908,11 @@ void pytensor_module(py::module& m_tensor) {
             }),
             py::arg("tensor"),
             py::arg("data_type") = std::nullopt,
+            py::arg("strategy") = std::unordered_map<std::string, std::string>(),
+            py::arg("tile") = std::nullopt,
             py::arg("layout") = std::nullopt,
             py::arg("mem_config") = std::nullopt,
-            py::arg("tile") = std::nullopt,
             py::arg("pad_value") = std::nullopt,
-            py::arg("strategy") = std::unordered_map<std::string, std::string>(),
             py::return_value_policy::move,
             R"doc(
                 +--------------+------------------------+
@@ -922,15 +922,15 @@ void pytensor_module(py::module& m_tensor) {
                 +--------------+------------------------+
                 | data_type    | TT Tensor data type    |
                 +--------------+------------------------+
+                | strategy     | TT Strategy            |
+                +--------------+------------------------+
+                | tile         | TT Tile Spec           |
+                +--------------+------------------------+
                 | layout       | TT Layout              |
                 +--------------+------------------------+
                 | mem_config   | TT Memory Config       |
                 +--------------+------------------------+
-                | tile         | TT Tile Spec           |
-                +--------------+------------------------+
                 | pad_value    | TT Pad Value           |
-                +--------------+------------------------+
-                | strategy     | TT Strategy            |
                 +--------------+------------------------+
 
                 Example of creating a TT Tensor that uses torch.Tensor's storage as its own storage:
