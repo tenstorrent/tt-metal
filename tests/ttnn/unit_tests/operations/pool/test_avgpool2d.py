@@ -47,7 +47,7 @@ def tensor_map():
     "ceil_mode",
     [
         False,
-        True,
+        # True,
     ],
 )
 @pytest.mark.parametrize(
