@@ -306,3 +306,6 @@ class Qwen2ForCausalLM(Generator):
 
     def allocate_kv_cache(self, *args, **kwargs):
         return allocate_vllm_kv_cache(*args, **kwargs, dp_model=self.model, tt_cache_path=self.cache_path)
+
+
+Qwen3ForCausalLM = Qwen2ForCausalLM

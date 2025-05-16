@@ -96,6 +96,26 @@ run_t3000_qwen25_tests() {
   fi
 }
 
+run_t3000_qwen3_tests() {
+  # Record the start time
+  fail=0
+  start_time=$(date +%s)
+
+  echo "LOG_METAL: Running run_t3000_qwen3_tests"
+  wh_arch_yaml=wormhole_b0_80_arch_eth_dispatch.yaml
+  qwen32b=/mnt/MLPerf/tt_dnn-models/qwen/Qwen3-32B-Instruct
+
+  HF_MODEL=$qwen32b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/demo/simple_text_demo.py --timeout 3600; fail+=$?
+
+  # Record the end time
+  end_time=$(date +%s)
+  duration=$((end_time - start_time))
+  echo "LOG_METAL: run_t3000_qwen3_tests $duration seconds to complete"
+  if [[ $fail -ne 0 ]]; then
+    exit 1
+  fi
+}
+
 run_t3000_llama3_vision_tests() {
   # Record the start time
   fail=0

@@ -169,7 +169,53 @@ run_t3000_llama3_perplexity_tests_t3000() {
   fi
 }
 
+run_t3000_qwen25_perplexity_tests() {
+  # Record the start time
+  fail=0
+  start_time=$(date +%s)
+
+  echo "LOG_METAL: Running run_t3000_qwen25_perplexity_tests"
+  wh_arch_yaml=wormhole_b0_80_arch_eth_dispatch.yaml
+  qwen72b=/mnt/MLPerf/tt_dnn-models/qwen/Qwen2.5-72B-Instruct
+
+  HF_MODEL=$qwen72b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/tests/test_accuracy.py --timeout 3600; fail+=$?
+
+  # Record the end time
+  end_time=$(date +%s)
+  duration=$((end_time - start_time))
+  echo "LOG_METAL: run_t3000_qwen25_perplexity_tests $duration seconds to complete"
+  if [[ $fail -ne 0 ]]; then
+    exit 1
+  fi
+}
+
+run_t3000_qwen3_perpelxity_tests() {
+  # Record the start time
+  fail=0
+  start_time=$(date +%s)
+
+  echo "LOG_METAL: Running run_t3000_qwen3_perpelxity_tests"
+  wh_arch_yaml=wormhole_b0_80_arch_eth_dispatch.yaml
+  qwen32b=/mnt/MLPerf/tt_dnn-models/qwen/Qwen3-32B-Instruct
+
+  HF_MODEL=$qwen32b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/tests/test_accuracy.py --timeout 3600; fail+=$?
+
+  # Record the end time
+  end_time=$(date +%s)
+  duration=$((end_time - start_time))
+  echo "LOG_METAL: run_t3000_qwen3_perpelxity_tests $duration seconds to complete"
+  if [[ $fail -ne 0 ]]; then
+    exit 1
+  fi
+}
+
 run_t3000_tests() {
+  # Run Qwen2.5 perplexity tests
+  run_t3000_qwen25_perplexity_tests
+
+  # Run Qwen3 perplexity tests
+  run_t3000_qwen3_perplexity_tests
+
   # Run Falcon-7B perplexity tests
   run_t3000_falcon7b_perplexity_tests
 

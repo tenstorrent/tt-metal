@@ -65,6 +65,7 @@ class TransformerBlock(LightweightModule):
             RMSNorm(
                 device=mesh_device,
                 dim=args.dim,
+                eps=args.norm_eps,
                 state_dict=state_dict,
                 state_dict_prefix=args.get_state_dict_prefix("", layer_num),
                 weight_cache_path=None if args.dummy_weights else weight_cache_path,
@@ -82,6 +83,7 @@ class TransformerBlock(LightweightModule):
             RMSNorm(
                 device=mesh_device,
                 dim=args.dim,
+                eps=args.norm_eps,
                 state_dict=state_dict,
                 state_dict_prefix=args.get_state_dict_prefix("", layer_num),
                 weight_cache_path=None if args.dummy_weights else weight_cache_path,
