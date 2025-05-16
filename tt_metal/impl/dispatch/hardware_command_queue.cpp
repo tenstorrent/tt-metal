@@ -951,7 +951,7 @@ void SimpleTraceAllocator::allocate_trace_programs(IDevice* device, std::vector<
             if (last_active_eth_sync_idx.has_value()) {
                 sync_idx = std::max(sync_idx, static_cast<int>(last_active_eth_sync_idx.value()));
             }
-            last_active_eth_sync_idx = extra_data_[i].sync_idx;
+            last_active_eth_sync_idx = i;
             node.dispatch_metadata.send_binary = true;
         }
 
