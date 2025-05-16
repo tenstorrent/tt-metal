@@ -893,9 +893,8 @@ std::unique_ptr<Program> create_and_compile_cq_program(IDevice* device) {
             case FDKernelType::VIRTUAL:
                 // Not a real kernel
                 break;
-            default:
-                TT_FATAL(
-                    false,
+            case FDKernelType::UNSET:
+                TT_THROW(
                     "Unknown kernel type {} {} on Device {}",
                     magic_enum::enum_name(node_and_kernel->GetKernelType()),
                     typeid(*node_and_kernel).name(),
