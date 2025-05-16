@@ -325,7 +325,6 @@ inline void barrier_remote_cb_interface_setup(uint8_t noc_index, uint32_t end_cb
 
 int main() {
     configure_csr();
-    DIRTY_STACK_MEMORY();
     WAYPOINT("I");
 
     do_crt1((uint32_t*)MEM_BRISC_INIT_LOCAL_L1_BASE_SCRATCH);
@@ -451,10 +450,10 @@ int main() {
                 barrier_remote_cb_interface_setup(noc_index, end_cb_index);
                 start_ncrisc_kernel_run(enables);
                 int index = static_cast<std::underlying_type<TensixProcessorTypes>::type>(TensixProcessorTypes::DM0);
-                void (*kernel_address)(uint32_t) = (void (*)(uint32_t))
+                uint32_t (*kernel_address)(uint32_t) = (uint32_t (*)(uint32_t))
                     (kernel_config_base + launch_msg_address->kernel_config.kernel_text_offset[index]);
-                (*kernel_address)((uint32_t)kernel_address);
-                RECORD_STACK_USAGE();
+                auto stack_free = (*kernel_address)((uint32_t)kernel_address);
+                record_stack_usage(stack_free);
             } else {
 #if defined(PROFILE_KERNEL)
                 // This was not initialized in the kernel
