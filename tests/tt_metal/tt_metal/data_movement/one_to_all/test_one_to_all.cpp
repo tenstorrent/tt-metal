@@ -277,6 +277,12 @@ TEST_F(DeviceFixture, TensixDataMovementOneToAll10x10PacketSizes) {
     uint32_t same_grid_size = cs_grid_size.x > cs_grid_size.y ? cs_grid_size.y : cs_grid_size.x;
     CoreCoord grid_size = {same_grid_size, same_grid_size};
 
+    // Limit the grid size to 100 cores because the max allowed kernel args is 256
+    if (grid_size.x * grid_size.y > 100) {
+        uint32_t smaller_dim = grid_size.x > grid_size.y ? grid_size.y : grid_size.x;
+        grid_size = {smaller_dim, smaller_dim};
+    }
+
     for (uint32_t num_of_transactions = 1; num_of_transactions <= max_transactions; num_of_transactions *= 4) {
         for (uint32_t transaction_size_pages = 1; transaction_size_pages <= max_transaction_size_pages;
              transaction_size_pages *= 2) {
@@ -389,6 +395,12 @@ TEST_F(DeviceFixture, TensixDataMovementOneToAllMulticast11x10PacketSizes) {
     NOC noc_id = NOC::NOC_0;
     bool is_linked = false;
 
+    // Limit the grid size to 100 cores because the max allowed kernel args is 256
+    if (grid_size.x * grid_size.y > 100) {
+        uint32_t smaller_dim = grid_size.x > grid_size.y ? grid_size.y : grid_size.x;
+        grid_size = {smaller_dim, smaller_dim};
+    }
+
     for (uint32_t num_of_transactions = 1; num_of_transactions <= max_transactions; num_of_transactions *= 4) {
         for (uint32_t transaction_size_pages = 1; transaction_size_pages <= max_transaction_size_pages;
              transaction_size_pages *= 2) {
@@ -500,6 +512,12 @@ TEST_F(DeviceFixture, TensixDataMovementOneToAllMulticastLinked11x10PacketSizes)
         devices_.at(0)->compute_with_storage_grid_size().x, devices_.at(0)->compute_with_storage_grid_size().y};
     NOC noc_id = NOC::NOC_0;
     bool is_linked = true;
+
+    // Limit the grid size to 100 cores because the max allowed kernel args is 256
+    if (grid_size.x * grid_size.y > 100) {
+        uint32_t smaller_dim = grid_size.x > grid_size.y ? grid_size.y : grid_size.x;
+        grid_size = {smaller_dim, smaller_dim};
+    }
 
     for (uint32_t num_of_transactions = 1; num_of_transactions <= max_transactions; num_of_transactions *= 4) {
         for (uint32_t transaction_size_pages = 1; transaction_size_pages <= max_transaction_size_pages;
