@@ -13,8 +13,7 @@ void kernel_main() {
     constexpr uint32_t K = get_compile_time_arg_val(5);
     constexpr uint32_t Kt = get_compile_time_arg_val(6);
 
-    uint32_t start_ht = get_arg_val<uint32_t>(0);
-    uint32_t start_wt = get_arg_val<uint32_t>(1);
+    uint32_t start_wt = get_arg_val<uint32_t>(0);
 
     constexpr uint32_t values_cb_index = tt::CBIndex::c_16;
     constexpr uint32_t output_ind_cb_index = tt::CBIndex::c_17;

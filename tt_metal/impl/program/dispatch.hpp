@@ -10,7 +10,6 @@
 #include <tt-metalium/program.hpp>
 #include <stdint.h>
 #include <vector_aligned.hpp>
-#include <worker_config_buffer.hpp>
 #include <array>
 #include <memory>
 #include <unordered_map>
@@ -23,6 +22,7 @@
 #include "kernel_types.hpp"
 #include "program_impl.hpp"
 #include "sub_device_types.hpp"
+#include "dispatch/worker_config_buffer.hpp"
 
 enum class CoreType;
 
