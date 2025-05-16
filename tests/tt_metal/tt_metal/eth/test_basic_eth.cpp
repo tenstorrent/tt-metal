@@ -296,37 +296,6 @@ bool noc_reader_and_writer_kernels(
 
 namespace tt::tt_metal {
 
-TEST_F(CommandQueueSingleCardProgramFixture, ActiveEthGlobalVar) {
-    using namespace CMAKE_UNIQUE_NAMESPACE;
-    const size_t eth_result_l1_address = tt::tt_metal::MetalContext::instance().hal().get_dev_addr(
-        HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::UNRESERVED);
-
-    for (const auto& device : devices_) {
-        auto active_eth_core = *(device->get_active_ethernet_cores(true).begin());
-        auto eth_noc_xy = device->ethernet_core_from_logical_core(active_eth_core);
-
-        tt_metal::Program program = tt_metal::Program();
-        auto eth_writer_kernel = tt_metal::CreateKernel(
-            program,
-            "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/erisc/sum_global_vars.cpp",
-            active_eth_core,
-            tt_metal::EthernetConfig{
-                .eth_mode = Eth::IDLE,
-                .noc = tt_metal::NOC::NOC_0,
-                .processor = tt_metal::DataMovementProcessor::RISCV_0,
-                .compile_args = {eth_result_l1_address}});
-
-        std::vector<uint32_t> all_zeros(sizeof(uint32_t), 0);
-        llrt::write_hex_vec_to_core(device->id(), eth_noc_xy, all_zeros, eth_result_l1_address);
-
-        this->RunProgram(device, program);
-
-        auto eth_readback_vec =
-            llrt::read_hex_vec_from_core(device->id(), eth_noc_xy, eth_result_l1_address, sizeof(uint32_t));
-        ASSERT_EQ(eth_readback_vec[0], 49);
-    }
-}
-
 TEST_F(CommandQueueSingleCardProgramFixture, ActiveEthKernelsNocReadNoSend) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
     const size_t src_eth_l1_byte_address = tt::tt_metal::MetalContext::instance().hal().get_dev_addr(

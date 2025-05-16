@@ -86,6 +86,7 @@ HalCoreInfoType create_active_eth_mem_map() {
             .local_init_addr = MEM_AERISC_INIT_LOCAL_L1_BASE_SCRATCH,
             .fw_launch_addr = SLAVE_IERISC_RESET_PC,
             .fw_launch_addr_value = MEM_AERISC_FIRMWARE_BASE,
+            .memory_load = ll_api::memory::Loading::CONTIGUOUS_XIP,
         };
         processor_classes[processor_class_idx] = processor_types;
     }
