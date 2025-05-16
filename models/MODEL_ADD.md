@@ -28,14 +28,17 @@ The solution? Break your PRs up. The recommended flow is the following:
   - Only need to run post-commit and ttnn integration tests.
 - (1 PR) The performance tests.
   - Only need to run model and device perf, and you could use [Pipeline
-    select](https://github.com/tenstorrent/tt-metal/actions/workflows/pipeline-select.yaml)
+    select](https://github.com/tenstorrent/tt-metal/actions/workflows/pipeline-select.yaml).
+    Note that you must select to build with Tracy if you run the device perf
+    pipeline.
 - (1 PR) The demo test.
   - Only need to run demo tests.
 
-Note that the [Tests for new
-models](https://github.com/tenstorrent/tt-metal/actions/workflows/full-new-models-suite.yaml)
-will run all pipelines above, except for post-commit. There should be little
-need to run this pipeline if you follow the workflow above.
+Note that the [Pipeline
+select](https://github.com/tenstorrent/tt-metal/actions/workflows/pipeline-select.yaml)
+can run all single-card pipelines above, except for post-commit. Note that
+there should be little need to run this pipeline with all options on if you
+follow the workflow above.
 
 So the total number of pipelines you run is the same, but you only need to run
 the specific pipeline(s) at each PR step.
