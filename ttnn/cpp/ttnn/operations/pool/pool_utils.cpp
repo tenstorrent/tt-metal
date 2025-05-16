@@ -10,52 +10,63 @@
 
 namespace ttnn::operations::pool {
 // Return a single bf16 scalar for the pool type in u32 (packed in the least 16 bits)
-std::vector<uint32_t> get_bf16_pool_scalar(
+// For the maxpool it is 1, for the avg pool it is 1/kernel_size or the first scalar in from the vector
+uint32_t get_bf16_pool_scalar(
     Pool2DType pool_type,
-    uint32_t in_h,
-    uint32_t in_w,
     uint32_t kernel_h,
     uint32_t kernel_w,
-    bool ceil_mode,
-    uint32_t out_h,
-    uint32_t out_w,
-    uint32_t stride_h,
-    uint32_t stride_w,
-    uint32_t ceil_w,
-    uint32_t out_x,
-    uint32_t out_y,
-    std::vector<uint32_t>& sinchronization_indexes,
+    std::optional<uint32_t> in_h,
+    std::optional<uint32_t> in_w,
+    std::optional<uint32_t> out_h,
+    std::optional<uint32_t> out_w,
+    std::optional<uint32_t> stride_h,
+    std::optional<uint32_t> stride_w,
+    std::optional<bool> ceil_mode,
+    std::optional<uint32_t> ceil_w,
+    std::optional<uint32_t> out_x,
+    std::optional<uint32_t> out_y,
+    std::optional<int32_t> divisor_override,
     std::optional<uint32_t> out_nhw_per_core,
-    std::optional<int32_t> divisor_override) {
-    std::vector<uint32_t> scalars;
+    std::vector<uint32_t>* sinchronization_indexes,
+    std::vector<uint32_t>* scalars) {
     float value;
-    float previous_value = 0.;
     bool first_scalar = true;
+    uint32_t packed_first_value;
     uint32_t last_area_signature = 0;
+    uint32_t out_x_stick = out_x.value_or(0);
+    uint32_t out_y_stick = out_y.value_or(0);
 
     switch (pool_type) {
         case Pool2DType::MAX_POOL2D:
             value = 1.;
-            scalars.push_back(bfloat16(value).to_packed());
+            packed_first_value = bfloat16(value).to_packed();
+            if (scalars != nullptr) {
+                scalars->push_back(packed_first_value);
+            }
             break;
         case Pool2DType::AVG_POOL2D:
             if (divisor_override.has_value()) {
                 value = 1. / (float)divisor_override.value();
-                scalars.push_back(bfloat16(value).to_packed());
-            } else if (ceil_mode && ceil_w > 0) {
+                packed_first_value = bfloat16(value).to_packed();
+                if (scalars != nullptr) {
+                    scalars->push_back(packed_first_value);
+                }
+            } else if (ceil_mode.value_or(false) && ceil_w.value_or(0) > 0) {
                 for (uint32_t i = 0; i < out_nhw_per_core.value(); i++) {
-                    int hstart = out_y * stride_h;
-                    int wstart = out_x * stride_w;
-                    int hend = ((hstart + (int)kernel_h) < (int)(in_h + ceil_w)) ? hstart + (int)kernel_h
-                                                                                 : (int)(in_h + ceil_w);
-                    int wend = ((wstart + (int)kernel_w) < (int)(in_w + ceil_w)) ? wstart + (int)kernel_w
-                                                                                 : (int)(in_w + ceil_w);
+                    int hstart = out_y_stick * stride_h.value_or(1);
+                    int wstart = out_x_stick * stride_w.value_or(1);
+                    int hend = ((hstart + (int)kernel_h) < (int)(in_h.value_or(0) + ceil_w.value_or(0)))
+                                   ? hstart + (int)kernel_h
+                                   : (int)(in_h.value_or(0) + ceil_w.value_or(0));
+                    int wend = ((wstart + (int)kernel_w) < (int)(in_w.value_or(0) + ceil_w.value_or(0)))
+                                   ? wstart + (int)kernel_w
+                                   : (int)(in_w.value_or(0) + ceil_w.value_or(0));
 
                     // Valid region (input-only, without pad)
                     int valid_hstart = (hstart > 0) ? hstart : 0;
                     int valid_wstart = (wstart > 0) ? wstart : 0;
-                    int valid_hend = (hend < (int)in_h) ? hend : (int)in_h;
-                    int valid_wend = (wend < (int)in_w) ? wend : (int)in_w;
+                    int valid_hend = (hend < (int)in_h.value_or(0)) ? hend : (int)in_h.value_or(0);
+                    int valid_wend = (wend < (int)in_w.value_or(0)) ? wend : (int)in_w.value_or(0);
 
                     int pool_h = valid_hend - valid_hstart;
                     int pool_w = valid_wend - valid_wstart;
@@ -67,26 +78,33 @@ std::vector<uint32_t> get_bf16_pool_scalar(
 
                     // Add new scalar if padding config changes
                     if (first_scalar || area_signature != last_area_signature) {
-                        scalars.push_back(bfloat16(value).to_packed());
-                        sinchronization_indexes.push_back(i);
+                        if (first_scalar) {
+                            packed_first_value = bfloat16(value).to_packed();
+                        }
+                        if (scalars != nullptr) {
+                            scalars->push_back(bfloat16(value).to_packed());
+                        }
+                        if (sinchronization_indexes != nullptr) {
+                            sinchronization_indexes->push_back(i);
+                        }
                         first_scalar = false;
                     }
                     last_area_signature = area_signature;
 
-                    out_x = (out_x + 1) % out_h;
-                    if (out_x == 0) {
-                        out_y = (out_y + 1) % out_w;
+                    out_x_stick = (out_x_stick + 1) % out_h.value_or(0);
+                    if (out_x_stick == 0) {
+                        out_y_stick = (out_y_stick + 1) % out_w.value_or(0);
                     }
                 }
-
             } else {
                 value = 1. / (float)(kernel_h * kernel_w);
-                scalars.push_back(bfloat16(value).to_packed());
+                packed_first_value = bfloat16(value).to_packed();
+                scalars->push_back(packed_first_value);
             }
             break;
         default: TT_FATAL(false, "Unsupported pool operation type");
     }
-    return scalars;
+    return packed_first_value;
 }
 
 // Return a single bf16 init value for the pool type in u32 (packed in the least 16 bits)

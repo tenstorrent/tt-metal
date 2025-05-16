@@ -47,26 +47,34 @@ void kernel_main() {
 
     constexpr uint32_t split_reader = get_compile_time_arg_val(7);
     constexpr uint32_t reader_id = get_compile_time_arg_val(8);
-    constexpr uint32_t bf16_one_u32 = get_compile_time_arg_val(9);
-    constexpr uint32_t bf16_init_value = get_compile_time_arg_val(10);
 
-    constexpr uint32_t in_nblocks_c = get_compile_time_arg_val(11);
-    constexpr uint32_t in_cb_sz = get_compile_time_arg_val(12);
-    constexpr uint32_t max_rows_for_reduction = get_compile_time_arg_val(13);
-    constexpr uint32_t ceil_pad_w = get_compile_time_arg_val(14);
+    constexpr uint32_t bf16_scalar = get_compile_time_arg_val(9);
+    constexpr uint32_t bf16_one_u32 = get_compile_time_arg_val(10);
+    constexpr uint32_t bf16_init_value = get_compile_time_arg_val(11);
+
+    constexpr uint32_t in_nblocks_c = get_compile_time_arg_val(12);
+    constexpr uint32_t in_cb_sz = get_compile_time_arg_val(13);
+    constexpr uint32_t max_rows_for_reduction = get_compile_time_arg_val(14);
+    constexpr uint32_t ceil_pad_w = get_compile_time_arg_val(15);
 
     constexpr uint32_t TILE_WIDTH = 32;
     constexpr uint32_t MAX_ELE_PER_REDUCTION = 512;  // TILE_WIDTH * 8 * numbytes
 
-    constexpr uint32_t in_cb_id = (reader_id == 1) ? get_compile_time_arg_val(16) : get_compile_time_arg_val(15);
-    constexpr uint32_t in_shard_cb_id = get_compile_time_arg_val(17);
-    constexpr uint32_t in_reader_indices_cb_id = get_compile_time_arg_val(18);
-    constexpr uint32_t in_scalar_cb_id = get_compile_time_arg_val(19);
-    constexpr uint32_t interm_reduction_cb_id = get_compile_time_arg_val(20);
-    constexpr uint32_t in_one_cb_id = get_compile_time_arg_val(21);
+    constexpr uint32_t in_cb_id = (reader_id == 1) ? get_compile_time_arg_val(17) : get_compile_time_arg_val(16);
+    constexpr uint32_t in_shard_cb_id = get_compile_time_arg_val(18);
+    constexpr uint32_t in_reader_indices_cb_id = get_compile_time_arg_val(19);
+    constexpr uint32_t in_scalar_cb_id = get_compile_time_arg_val(20);
+    constexpr uint32_t interm_reduction_cb_id = get_compile_time_arg_val(21);
+    constexpr uint32_t in_one_cb_id = get_compile_time_arg_val(22);
+    constexpr bool one_scalar_per_core = get_compile_time_arg_val(23);
     uint32_t scalar_index = 0;
-    uint32_t num_of_ele = get_arg_val<uint32_t>(0);
-    uint32_t scalars_cnt = get_arg_val<uint32_t>(1);
+    uint32_t num_of_ele = reader_nindices;
+    uint32_t scalars_cnt = 1;
+    if (!one_scalar_per_core) {
+        num_of_ele = get_arg_val<uint32_t>(0);
+        scalars_cnt = get_arg_val<uint32_t>(1);
+    }
+
     DPRINT << "num_of_ele" << num_of_ele << ENDL();
     DPRINT << "scalars_cnt" << scalars_cnt << ENDL();
 
@@ -75,7 +83,11 @@ void kernel_main() {
         // fill interm buffer with init_value
         fill_with_val(get_write_ptr(interm_reduction_cb_id), in_cb_sz, bf16_init_value);
 
-        if (scalars_cnt > 0 || get_arg_val<uint32_t>(1) != bf16_one_u32) {
+        cb_reserve_back(in_scalar_cb_id, 1);
+        fill_with_val(get_write_ptr(in_scalar_cb_id), TILE_WIDTH, bf16_scalar >> 16);
+        cb_push_back(in_scalar_cb_id, 1);
+        scalar_index++;
+        if (bf16_scalar != bf16_one_u32 || !one_scalar_per_core) {
             // Pool operation is not maxpool
             fill_with_val(get_write_ptr(in_one_cb_id), TILE_WIDTH, bf16_one_u16);
         }
@@ -95,15 +107,15 @@ void kernel_main() {
     constexpr uint32_t read_bytes =
         wide_reduction ? MAX_ELE_PER_REDUCTION : in_nbytes_c;  // in_cb is MAX_ELE_PER_REDUCTION for wide reductions
 
-    while (counter < num_of_ele || (reader_id == 0 && scalar_index < scalars_cnt)) {
-        if (reader_id == 0 && scalar_index < scalars_cnt) {
+    while (counter < num_of_ele || (reader_id == 0 && scalar_index < scalars_cnt && !one_scalar_per_core)) {
+        if (reader_id == 0 && scalar_index < scalars_cnt && !one_scalar_per_core) {
             uint32_t scalar_val = get_arg_val<uint32_t>(scalar_index + 2);
             cb_reserve_back(in_scalar_cb_id, 1);
             fill_with_val(get_write_ptr(in_scalar_cb_id), TILE_WIDTH, scalar_val >> 16);
             scalar_index++;
             cb_push_back(in_scalar_cb_id, 1);
         }
-        if (counter < num_of_ele) {
+        if (counter < num_of_ele || one_scalar_per_core) {
             for (uint32_t c_i = 0; c_i < in_nblocks_c; c_i++) {
                 const uint16_t top_left_local_index = reader_indices_ptr[counter];
                 uint32_t processed_rows = 0;

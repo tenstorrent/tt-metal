@@ -278,6 +278,7 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
      */
     float one = 1.;
     uint32_t bf16_one_u32 = *reinterpret_cast<uint32_t*>(&one);
+    uint32_t bf16_scalar = get_bf16_pool_scalar(pool_type, kernel_size_h, kernel_size_w) << 16;
     uint32_t bf16_init_value = get_bf16_pool_init_value(pool_type);
 
     std::vector<uint32_t> reader0_ct_args = {
@@ -290,6 +291,7 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         input_shape[3] / num_shards_c,
         split_reader,  // enable split reader
         0,             // split reader id
+        bf16_scalar,
         bf16_one_u32,
         bf16_init_value,
         in_nblocks_c,
@@ -388,38 +390,42 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
                 num_of_ele = out_nhw_per_core;
             }
             std::vector<uint32_t> sync_indices;
-            std::vector<uint32_t> scalar_values = get_bf16_pool_scalar(
+            std::vector<uint32_t> scalar_values;
+            uint32_t first_scalar = get_bf16_pool_scalar(
                 pool_type,
-                in_h,
-                in_w,
                 kernel_size_h,
                 kernel_size_w,
-                ceil_mode,
+                in_h,
+                in_w,
                 out_h,
                 out_w,
                 stride_h,
                 stride_w,
+                ceil_mode,
                 ceil_pad_w,
                 x,
                 y,
-                sync_indices,
+                divisor_override,
                 num_of_ele,
-                divisor_override);
+                &sync_indices,
+                &scalar_values);
 
             uint32_t scalar_cnt = scalar_values.size();
-            std::vector<uint32_t> runtime_args_reader = {num_of_ele, scalar_cnt};
-            for (int j = 0; j < scalar_cnt; j++) {
-                runtime_args_reader.push_back(scalar_values[j] << 16);
-            }
+            if (first_scalar != bf16_scalar || scalar_cnt > 1) {
+                std::vector<uint32_t> runtime_args_reader = {num_of_ele, scalar_cnt};
+                for (int j = 0; j < scalar_cnt; j++) {
+                    runtime_args_reader.push_back(scalar_values[j] << 16);
+                }
 
-            uint32_t sync_steps = sync_indices.size();
-            std::vector<uint32_t> runtime_args_compute = {num_of_ele / nblocks, scalar_cnt};
-            for (int j = 0; j < sync_steps; j++) {
-                runtime_args_compute.push_back(sync_indices[j]);
+                uint32_t sync_steps = sync_indices.size();
+                std::vector<uint32_t> runtime_args_compute = {num_of_ele / nblocks, scalar_cnt};
+                for (int j = 0; j < sync_steps; j++) {
+                    runtime_args_compute.push_back(sync_indices[j]);
+                }
+                tt::tt_metal::SetRuntimeArgs(program, compute_kernel, *iterator, runtime_args_compute);
+                tt::tt_metal::SetRuntimeArgs(program, reader0_kernel, *iterator, runtime_args_reader);
+                tt::tt_metal::SetRuntimeArgs(program, reader1_kernel, *iterator, runtime_args_reader);
             }
-            tt::tt_metal::SetRuntimeArgs(program, compute_kernel, *iterator, runtime_args_compute);
-            tt::tt_metal::SetRuntimeArgs(program, reader0_kernel, *iterator, runtime_args_reader);
-            tt::tt_metal::SetRuntimeArgs(program, reader1_kernel, *iterator, runtime_args_reader);
             channel++;
             if (channel % num_shards_c == 0) {
                 channel = 0;

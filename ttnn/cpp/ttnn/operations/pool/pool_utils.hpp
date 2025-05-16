@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
+#include <cstddef>
 #include <cstdint>
 #include <string>
 #include <map>
@@ -16,23 +17,24 @@ enum class Pool2DType {
     AVG_POOL2D = 1,
 };
 
-std::vector<uint32_t> get_bf16_pool_scalar(
+uint32_t get_bf16_pool_scalar(
     Pool2DType pool_type,
-    uint32_t in_h,
-    uint32_t in_w,
-    uint32_t kernel_size_h,
-    uint32_t kernel_size_w,
-    bool ceil_mode,
-    uint32_t out_h,
-    uint32_t out_w,
-    uint32_t stride_h,
-    uint32_t stride_w,
-    uint32_t ceil_w,
-    uint32_t out_stick_x_start,
-    uint32_t out_stick_y_start,
-    std::vector<uint32_t>& sinchronization_indexes,
-    std::optional<uint32_t> out_nhw_per_core,
-    std::optional<int32_t> divisor_override);
+    uint32_t kernel_h,
+    uint32_t kernel_w,
+    std::optional<uint32_t> in_h = std::nullopt,
+    std::optional<uint32_t> in_w = std::nullopt,
+    std::optional<uint32_t> out_h = std::nullopt,
+    std::optional<uint32_t> out_w = std::nullopt,
+    std::optional<uint32_t> stride_h = std::nullopt,
+    std::optional<uint32_t> stride_w = std::nullopt,
+    std::optional<bool> ceil_mode = std::nullopt,
+    std::optional<uint32_t> ceil_w = std::nullopt,
+    std::optional<uint32_t> out_x = std::nullopt,
+    std::optional<uint32_t> out_y = std::nullopt,
+    std::optional<int32_t> divisor_override = std::nullopt,
+    std::optional<uint32_t> out_nhw_per_core = std::nullopt,
+    std::vector<uint32_t>* sinchronization_indexes = nullptr,
+    std::vector<uint32_t>* scalars = nullptr);
 uint32_t get_bf16_pool_init_value(Pool2DType pool_type);
 std::map<std::string, std::string> get_defines(Pool2DType pool_type);
 
