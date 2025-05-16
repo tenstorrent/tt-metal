@@ -898,44 +898,44 @@ void SimpleTraceAllocator::allocate_trace_programs(IDevice* device, std::vector<
         auto& program = *node.program;
         auto sub_device_id = node.sub_device_id;
         auto sub_device_index = *sub_device_id;
-        uint32_t index = hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX);
-        ProgramConfig& program_config = node.program->get_program_config(index);
-        uint32_t non_binary_size = program_config.kernel_text_offset;
-        uint32_t binary_size = program_config.kernel_text_size;
 
-        auto [rta_sync_idx, rta_addr] = worker_region_allocator_.allocate_region(non_binary_size, i, kNonBinary);
+        std::optional<uint32_t> sync_idx;
+        uint32_t programmable_core_count_ = hal.get_programmable_core_type_count();
+        node.dispatch_metadata.binary_kernel_config_addrs.resize(programmable_core_count_);
+        node.dispatch_metadata.nonbinary_kernel_config_addrs.resize(programmable_core_count_);
 
-        std::optional<uint32_t> binary_sync_idx;
-        uint32_t binary_addr = 0;
+        for (auto& core_type : {HalProgrammableCoreType::TENSIX, HalProgrammableCoreType::ACTIVE_ETH}) {
+            uint32_t index = hal.get_programmable_core_type_index(core_type);
+            ProgramConfig& program_config = node.program->get_program_config(index);
+            uint32_t non_binary_size = core_type == HalProgrammableCoreType::TENSIX ? program_config.kernel_text_offset : node.program->get_program_config_sizes()[index];
+            uint32_t binary_size = program_config.kernel_text_size;
+            auto & allocator = core_type == HalProgrammableCoreType::TENSIX ? worker_region_allocator_ : active_eth_region_allocator_;
 
-        if (auto mem_addr = worker_region_allocator_.get_region(node.program->get_id())) {
-            binary_addr = *mem_addr;
-            node.dispatch_metadata.send_binary = false;
-            worker_region_allocator_.update_region_trace_idx(*mem_addr, i);
-        } else {
-            auto res = worker_region_allocator_.allocate_region(binary_size, i, kBinary);
-            binary_sync_idx = res.first;
-            binary_addr = res.second;
-            worker_region_allocator_.add_region(node.program->get_id(), binary_addr);
+            auto [rta_sync_idx, rta_addr] = allocator.allocate_region(non_binary_size, i, kNonBinary);
+
+            sync_idx = merge_syncs(sync_idx, rta_sync_idx);
+
+            uint32_t binary_addr = 0;
+
+            // Only tensix binaries are stored in the kernel config buffer. Active ethernet binaries have a fixed address.
+            if (core_type == HalProgrammableCoreType::TENSIX) {
+                if (auto mem_addr = allocator.get_region(node.program->get_id())) {
+                    binary_addr = *mem_addr;
+                    node.dispatch_metadata.send_binary = false;
+                    allocator.update_region_trace_idx(*mem_addr, i);
+                } else {
+                    auto res = allocator.allocate_region(binary_size, i, kBinary);
+                    sync_idx = merge_syncs(res.first, sync_idx);
+                    binary_addr = res.second;
+                    allocator.add_region(node.program->get_id(), binary_addr);
+                }
+            }
+            auto& ringbuffer_start = core_type == HalProgrammableCoreType::TENSIX ? worker_ringbuffer_start_ : active_eth_ringbuffer_start_;
+            node.dispatch_metadata.nonbinary_kernel_config_addrs[index] = {.addr = rta_addr + ringbuffer_start};
+            node.dispatch_metadata.binary_kernel_config_addrs[index] = {.addr = binary_addr + ringbuffer_start};
         }
 
-        auto sync_idx = merge_syncs(rta_sync_idx, binary_sync_idx);
-
         bool has_active_eth_kernel = program.runs_on_noc_unicast_only_cores();
-        uint32_t eth_nonbinary_size =
-            node.program
-                ->get_program_config_sizes()[hal.get_programmable_core_type_index(HalProgrammableCoreType::ACTIVE_ETH)];
-        auto [ethernet_rta_sync_idx, ethernet_rta_addr] =
-            active_eth_region_allocator_.allocate_region(eth_nonbinary_size, i, kNonBinary);
-
-        sync_idx = merge_syncs(sync_idx, ethernet_rta_sync_idx);
-        node.dispatch_metadata.nonbinary_kernel_config_addrs.push_back({.addr = rta_addr + worker_ringbuffer_start_});
-        node.dispatch_metadata.nonbinary_kernel_config_addrs.push_back(
-            {.addr = ethernet_rta_addr + active_eth_ringbuffer_start_});
-        node.dispatch_metadata.nonbinary_kernel_config_addrs.push_back({.addr = 0});
-        node.dispatch_metadata.binary_kernel_config_addrs.push_back({.addr = binary_addr + worker_ringbuffer_start_});
-        node.dispatch_metadata.binary_kernel_config_addrs.push_back({.addr = 0});
-        node.dispatch_metadata.binary_kernel_config_addrs.push_back({.addr = 0});
         uint32_t num_workers = 0;
         if (program.runs_on_noc_multicast_only_cores()) {
             num_workers += device->num_worker_cores(HalProgrammableCoreType::TENSIX, sub_device_id);
