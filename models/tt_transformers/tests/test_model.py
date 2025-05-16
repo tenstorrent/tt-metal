@@ -67,6 +67,9 @@ from models.utility_functions import comp_allclose, comp_pcc, skip_for_blackhole
     ],
     indirect=True,
 )
+@pytest.mark.parametrize(
+    "device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING}], indirect=True, ids=["ring"]
+)
 def test_model_inference(
     weights,
     layers,

@@ -81,7 +81,7 @@ class ModelOptimizations:
         70B+ models still use bfp4 MLPs and BFP8 attention in this configuration
         """
         base_model_name = model_name.split("B-")[0] + "B" if "B-" in model_name else model_name
-        if base_model_name in ["Llama3.1-70B", "Llama3.2-90B", "DeepSeek-R1-Distill-Llama-70B", "Qwen2.5-72B"]:
+        if base_model_name in ["Llama3.3-70B", "Llama3.2-90B", "DeepSeek-R1-Distill-Llama-70B", "Qwen2.5-72B"]:
             logger.info(
                 f"{model_name} is >70B and large models test insensitive precision, using BFP4 MLPs and BFP8 attention even in accuracy mode"
             )
@@ -392,7 +392,7 @@ class ModelArgs:
         "LLAMA3_2_3B_PARAMS": "models/tt_transformers/model_params/Llama3.2-3B-Instruct",
         "LLAMA3_1_8B_PARAMS": "models/tt_transformers/model_params/Llama3.1-8B-Instruct",
         "LLAMA3_2_11B_PARAMS": "models/tt_transformers/model_params/Llama3.2-11B-Vision-Instruct",
-        "LLAMA3_1_70B_PARAMS": "models/tt_transformers/model_params/Llama3.1-70B-Instruct",
+        "LLAMA3_1_70B_PARAMS": "models/tt_transformers/model_params/Llama3.3-70B-Instruct",
         "LLAMA3_2_90B_PARAMS": "models/tt_transformers/model_params/Llama3.2-90B-Vision-Instruct",
     }
 
@@ -533,8 +533,6 @@ class ModelArgs:
                 local_params = "LLAMA3_1_8B_PARAMS"
             elif "3.2-11B" in self.CKPT_DIR:
                 local_params = "LLAMA3_2_11B_PARAMS"
-            elif "3.1-70B" in self.CKPT_DIR:
-                local_params = "LLAMA3_1_70B_PARAMS"
             elif "3.3-70B" in self.CKPT_DIR:
                 local_params = "LLAMA3_1_70B_PARAMS"
             elif "3.2-90B" in self.CKPT_DIR:
@@ -554,7 +552,7 @@ class ModelArgs:
                 "Llama3.2-3B": {"N150": 8, "N300": 128, "T3K": 128, "TG": 128, "P150x4": 128},
                 "Llama3.1-8B": {"N150": 4, "N300": 64, "T3K": 128, "TG": 128, "P150x4": 128},
                 "Llama3.2-11B": {"N150": 4, "N300": 64, "T3K": 128, "TG": 128, "P150x4": 128},
-                "Llama3.1-70B": {"N150": None, "N300": None, "T3K": 32, "TG": 128, "P150x4": 128},
+                "Llama3.3-70B": {"N150": None, "N300": None, "T3K": 32, "TG": 128, "P150x4": 128},
                 "Llama3.2-90B": {"N150": None, "N300": None, "T3K": 32, "TG": 128, "P150x4": 128},
                 "DeepSeek-R1-Distill-Llama-70B": {"N150": None, "N300": None, "T3K": 32, "TG": 128, "P150x4": 128},
                 "Qwen2.5-7B": {"N150": 4, "N300": 64, "T3K": 128, "TG": 128, "P150x4": 128},
@@ -1497,8 +1495,8 @@ class ModelArgs:
         elif "3.2-11B" in checkpoint_dir:
             self.model_name = "Llama3.2-11B" + ("-Instruct" if self.instruct else "")
             self.rope_scaling_factor = 8  # shared with 3.1-8B
-        elif "3.1-70B" in checkpoint_dir:
-            self.model_name = "Llama3.1-70B" + ("-Instruct" if self.instruct else "")
+        elif "3.3-70B" in checkpoint_dir:
+            self.model_name = "Llama3.3-70B" + ("-Instruct" if self.instruct else "")
             self.rope_scaling_factor = 8
             self.is_70b = True  # self.dim == 8192 and self.n_layers == 80
         elif "3.2-90B" in checkpoint_dir:

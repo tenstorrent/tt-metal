@@ -193,13 +193,24 @@ def tt_all_gather(
             input_tensor = ttnn.to_memory_config(input_tensor, memory_config, dtype)  # to sharded
 
     if cluster_axis is None:
-        gathered = ttnn.all_gather(
-            input_tensor,
-            dim,
-            num_links=num_links,
-            topology=topology,
-            memory_config=memory_config,
-        )
+        if not use_fabric_ccl:
+            gathered = ttnn.all_gather(
+                input_tensor,
+                dim,
+                num_links=num_links,
+                topology=topology,
+                memory_config=memory_config,
+            )
+        else:
+            gathered = ttnn.experimental.all_gather_async(
+                input_tensor,
+                dim,
+                multi_device_global_semaphore=from_remote_semaphore_handles,
+                num_links=num_links,
+                topology=topology,
+                memory_config=memory_config,
+                subdevice_id=worker_sub_device_id,
+            )
     else:
         if not use_fabric_ccl:
             gathered = ttnn.all_gather(

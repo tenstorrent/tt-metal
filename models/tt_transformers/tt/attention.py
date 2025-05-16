@@ -493,17 +493,46 @@ class Attention(LightweightModule):
             attn_output_cat = ttnn.to_memory_config(
                 attn_output_cat, self.model_config["ATTN_ALL_GATHER_MATMUL_OUTPUT_MEMCFG"]
             )
-            _, dense_out_sharded, _ = ttnn.experimental.all_gather_matmul(
+
+            # print(attn_output_cat.shape)
+            attn_output = tt_all_gather(
                 attn_output_cat,
-                self.wo,
+                self.mesh_device,
+                cluster_axis=None,
                 dim=3,
-                all_gather_core_grid_offset=(0, 4),
                 num_links=1,
+                # memory_config=self.model_config["ATTN_ALL_GATHER_MATMUL_OUTPUT_MEMCFG"],
+                from_remote_semaphore_handles=self.from_remote_semaphore_handles,
+                to_remote_semaphore_handles=self.to_remote_semaphore_handles,
+                worker_sub_device_id=self.worker_sub_device_id,
+            )
+            # print(attn_output.memory_config())
+            # print(self.wo.memory_config())
+
+            # print(attn_output.shape)
+            # print(self.wo.shape)
+            dense_out_sharded = ttnn.matmul(
+                attn_output,
+                self.wo,
                 program_config=self.model_config["ATTN_ALL_GATHER_MATMUL_PROGCFG"],
                 compute_kernel_config=self.li_o_decode_compute_kernel_cfg,
-                memory_config_ag=self.model_config["ATTN_ALL_GATHER_MATMUL_OUTPUT_MEMCFG"],
-                memory_config_mm=self.model_config["DECODE_RESIDUAL_MEMCFG"],
+                memory_config=self.model_config["DECODE_RESIDUAL_MEMCFG"],
             )
+
+            attn_output = ttnn.to_memory_config(attn_output, self.model_config["ATTN_ALL_GATHER_MATMUL_OUTPUT_MEMCFG"])
+            # print(dense_out_sharded.shape)
+
+            # _, dense_out_sharded, _ = ttnn.experimental.all_gather_matmul(
+            #     attn_output_cat,
+            #     self.wo,
+            #     dim=3,
+            #     all_gather_core_grid_offset=(0, 4),
+            #     num_links=1,
+            #     program_config=self.model_config["ATTN_ALL_GATHER_MATMUL_PROGCFG"],
+            #     compute_kernel_config=self.li_o_decode_compute_kernel_cfg,
+            #     memory_config_ag=self.model_config["ATTN_ALL_GATHER_MATMUL_OUTPUT_MEMCFG"],
+            #     memory_config_mm=self.model_config["DECODE_RESIDUAL_MEMCFG"],
+            # )
             ttnn.deallocate(attn_output_cat)
             dense_out_sharded = ttnn.to_memory_config(dense_out_sharded, self.model_config["DECODE_RESIDUAL_MEMCFG"])
             return dense_out_sharded

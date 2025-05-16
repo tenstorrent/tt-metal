@@ -460,7 +460,7 @@ def test_demo_text(
 
     if is_ci_env:
         llama_dir = os.getenv("LLAMA_DIR", "")
-        is_31_70b = "3.1-70B" in llama_dir
+        is_31_70b = "3.3-70B" in llama_dir
         is_32_1b = "3.2-1B" in llama_dir
         is_31_8b = "3.1-8B" in llama_dir
         if num_devices == 32 and (data_parallel > 4 or (data_parallel == 4 and not is_31_70b)):
@@ -792,7 +792,7 @@ def test_demo_text(
     )
 
     # Benchmark targets
-    supported_models = ["Llama3.2-1B", "Llama3.2-3B", "Llama3.1-8B", "Llama3.2-11B", "Llama3.1-70B", "Mistral-7B"]
+    supported_models = ["Llama3.2-1B", "Llama3.2-3B", "Llama3.1-8B", "Llama3.2-11B", "Llama3.3-70B", "Mistral-7B"]
     supported_devices = ["N150", "P100", "P150", "P300", "N300", "P150x4", "T3K", "TG"]
 
     tt_device_name = model_args[0].device_name
@@ -835,8 +835,8 @@ def test_demo_text(
             "T3K_Llama3.2-11B": 45,  # TODO Update target
             "TG_Llama3.2-11B": 45,  # TODO Update target
             #
-            "T3K_Llama3.1-70B": 20,  # TODO Update target
-            "TG_Llama3.1-70B": 20,  # TODO Update target
+            "T3K_Llama3.3-70B": 20,  # TODO Update target
+            "TG_Llama3.3-70B": 20,  # TODO Update target
             #
             "N150_Mistral-7B": 23,
             "N300_Mistral-7B": 38,  # TODO Update target

@@ -27,7 +27,7 @@ class Transformer(LightweightModule):
         weight_cache_path,
         paged_attention_config=None,
         use_paged_kv_cache=False,
-        use_fabric_ccl=False,
+        use_fabric_ccl=True,
     ):
         super().__init__()
         self.args = args
@@ -59,10 +59,12 @@ class Transformer(LightweightModule):
             self.from_remote_semaphore_handles = ttnn.create_global_semaphore(mesh_device, self.ccl_sub_device_crs, 0)
             self.to_remote_semaphore_handles = ttnn.create_global_semaphore(mesh_device, self.ccl_sub_device_crs, 0)
             self.mesh_device.set_sub_device_stall_group([self.worker_sub_device_id])
+            print("USING FABRIC CCL")
         else:
             self.from_remote_semaphore_handles = None
             self.to_remote_semaphore_handles = None
             self.worker_sub_device_id = None
+            print("NOT USING FABRIC CCL")
 
         self.embd = Embedding(
             mesh_device=mesh_device,
