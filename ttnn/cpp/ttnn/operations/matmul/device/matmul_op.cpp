@@ -606,8 +606,8 @@ inline MatmulProgramConfig create_simple_matmul_program_config(
     }
     bool transpose_mcast = input_tensor_a.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED &&
                            input_tensor_a.shard_spec().value().orientation == ShardOrientation::COL_MAJOR;
-    uint32_t out_block_h = per_core_M;
-    uint32_t out_block_w = per_core_N;
+    uint32_t out_block_h;
+    uint32_t out_block_w;
     bool fp32_dest_acc_en = get_fp32_dest_acc_en(compute_kernel_config);
     if (all_dram_interleaved) {
         in0_block_w = !transpose_mcast ? (Kt % num_cores_x == 0 ? Kt / num_cores_x : 1)
@@ -627,7 +627,19 @@ inline MatmulProgramConfig create_simple_matmul_program_config(
         out_block_h = mutlti_dim_per_core_factor[0];
         out_block_w = mutlti_dim_per_core_factor[1];
         in0_block_w = mutlti_dim_per_core_factor[2];
+    } else {
+        if (num_blocks_x > num_cores_x) {
+            num_blocks_x = num_cores_x;
+            per_core_N = tt::div_up(Nt, num_blocks_x);
+        }
+        if (num_blocks_y > num_cores_y) {
+            num_blocks_y = num_cores_y;
+            per_core_M = tt::div_up(Mt, num_blocks_y);
+        }
+        out_block_h = per_core_M;
+        out_block_w = per_core_N;
     }
+
     bool per_core_N_equals_subblock_w_constraint = mem_config.is_sharded();
     auto subblock_hw = bmm_op_utils::get_matmul_subblock_params(
         out_block_h, out_block_w, false, per_core_N_equals_subblock_w_constraint, fp32_dest_acc_en);
