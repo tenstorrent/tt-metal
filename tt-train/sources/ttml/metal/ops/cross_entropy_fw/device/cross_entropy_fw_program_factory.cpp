@@ -211,14 +211,14 @@ CrossEntropyForwardProgramFactory::cached_program_t CrossEntropyForwardProgramFa
 
     tt::tt_metal::Program program{};
 
-    tt::DataFormat input_data_format = datatype_to_dataformat_converter(input.get_dtype());
+    tt::DataFormat input_data_format = datatype_to_dataformat_converter(input.dtype());
     TT_FATAL(input_data_format == tt::DataFormat::Float16_b, "Input data format must be Float16_b");
 
     uint32_t bfloat16_single_tile_size_bytes = tt::tt_metal::detail::TileSize(tt::DataFormat::Float16_b);
     uint32_t float32_single_tile_size_bytes = tt::tt_metal::detail::TileSize(tt::DataFormat::Float32);
 
-    auto padded_tensor_shape = input.get_padded_shape();
-    auto padded_tensor_volume = input.volume();
+    auto padded_tensor_shape = input.padded_shape();
+    auto padded_tensor_volume = input.padded_volume();
 
     TT_FATAL(
         padded_tensor_volume % tt::constants::TILE_HW == 0, "Padded input tensor volume must be divisible by TILE_HW");
@@ -231,7 +231,7 @@ CrossEntropyForwardProgramFactory::cached_program_t CrossEntropyForwardProgramFa
     uint32_t total_rows_to_process = NC * Ht;
 
     // get size of target indexes inner dimension
-    uint32_t target_indexes_inner_dim_size = target.get_logical_shape()[-1] * target.element_size();
+    uint32_t target_indexes_inner_dim_size = target.logical_shape()[-1] * target.element_size();
     // read target indexes by pages(32 indexes in page)
     uint32_t uint32_read_page_size = tt::datum_size(tt::DataFormat::UInt32) * kPageElementsNumber;
 
@@ -241,7 +241,7 @@ CrossEntropyForwardProgramFactory::cached_program_t CrossEntropyForwardProgramFa
     uint32_t num_cores_y = compute_with_storage_grid_size.y;
 
     // get the number of inner dimension
-    uint32_t num_inner = input.get_logical_shape()[-1];  // (N, 1, C, H)
+    uint32_t num_inner = input.logical_shape()[-1];  // (N, 1, C, H)
 
     // mask_w - this mask used to avoid calculation of extra data(data which will be added to create full tile 32x32)??
     uint32_t mask_w = num_inner % tt::constants::TILE_WIDTH;  // width index of first trash value in tile
