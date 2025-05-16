@@ -37,7 +37,6 @@
 #include "tt_metal/impl/debug/watcher_server.hpp"
 #include "tt_metal/impl/dispatch/topology.hpp"
 #include "tt_metal/impl/dispatch/system_memory_manager.hpp"
-#include "tt_metal/jit_build/build_env_manager.hpp"
 #include <umd/device/tt_core_coordinates.h>
 
 using namespace tt::tt_metal;
@@ -627,6 +626,24 @@ std::vector<IDevice* > DevicePool::get_all_active_devices() const {
     return user_devices;
 }
 
+void DevicePool::teardown_fd(const std::unordered_set<chip_id_t>& devices_to_close) {
+    for (const auto& dev_id : devices_to_close) {
+        // Device is still active at this point
+        auto dev = tt::DevicePool::instance().get_active_device(dev_id);
+        if (!dev->using_fast_dispatch()) {
+            continue;
+        }
+
+        for (int cq_id = 0; cq_id < dev->num_hw_cqs(); cq_id++) {
+            auto& cq = dev->command_queue(cq_id);
+            if (cq.sysmem_manager().get_bypass_mode()) {
+                cq.record_end();
+            }
+            cq.terminate();
+        }
+    }
+}
+
 bool DevicePool::close_device(chip_id_t device_id) {
     // Sync and close one device
     // Currently can only call this on mmio chips, once we split dispatch kernel shutdown
@@ -692,22 +709,15 @@ bool DevicePool::close_devices(const std::vector<IDevice*>& devices, bool skip_s
         }
     }
 
-    detail::ProfilerSync(ProfilerSyncState::CLOSE_DEVICE);
-
-    tt::tt_metal::MetalContext::instance().get_cluster().set_internal_routing_info_for_ethernet_cores(false);
-
-    bool pass = true;
-    std::vector<IDevice*> prev_active_devices;
+    teardown_fd(std::unordered_set<chip_id_t>(devices_to_close.begin(), devices_to_close.end()));
+    // Terminate sent to each device. Wait for dispatch to finish. MMIO only to prevent clogging SD path.
+    // Dispatch kernels internally have a sync at the end to ensure all credits are returned
     for (const auto& dev_id : devices_to_close) {
         auto dev = tt::DevicePool::instance().get_active_device(dev_id);
-        prev_active_devices.push_back(dev);
-        pass &= dev->close();
-    }
-    // After this point devices are no longer active and only basic functions such as id, mmio device, etc. can
-    // be queried from the Device. prev_active_devices saves previously active devices for additional termination steps.
+        if (!dev->is_mmio_capable()) {
+            continue;
+        }
 
-    // Terminate sent to each device. Wait for dispatch to finish
-    for (const auto& dev_id : devices_to_close) {
         auto dispatch_cores = tt::tt_metal::get_virtual_dispatch_cores(dev_id);
         tt::llrt::internal_::wait_until_cores_done(dev_id, RUN_MSG_GO, dispatch_cores, 0);
     }
@@ -731,6 +741,16 @@ bool DevicePool::close_devices(const std::vector<IDevice*>& devices, bool skip_s
             tt_metal::detail::WriteToDeviceL1(
                 dev, master_router_logical_core, termination_signal_address, termination_signal, CoreType::ETH);
         }
+    }
+
+    detail::ProfilerSync(ProfilerSyncState::CLOSE_DEVICE);
+
+    tt::tt_metal::MetalContext::instance().get_cluster().set_internal_routing_info_for_ethernet_cores(false);
+
+    bool pass = true;
+    for (const auto& dev_id : devices_to_close) {
+        auto dev = tt::DevicePool::instance().get_active_device(dev_id);
+        pass &= dev->close();
     }
 
     // At this point the routing core clients (dispatch) have been terminated

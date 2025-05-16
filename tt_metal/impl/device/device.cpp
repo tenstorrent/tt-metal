@@ -548,8 +548,8 @@ void Device::reset_cores() {
     for (const auto& eth_core : this->get_inactive_ethernet_cores()) {
         CoreCoord virtual_core = this->ethernet_core_from_logical_core(eth_core);
         if (erisc_app_still_running(virtual_core)) {
-            erisc_send_exit_signal(virtual_core, true /* is_idle_eth */);
-            device_to_early_exit_cores[this->id()].insert(virtual_core);
+            tt::tt_metal::MetalContext::instance().get_cluster().assert_risc_reset_at_core(
+                tt_cxy_pair(this->id(), virtual_core));
         }
     }
 
@@ -574,7 +574,7 @@ void Device::reset_cores() {
         for (uint32_t x = 0; x < grid_size.x; x++) {
             CoreCoord logical_core(x, y);
             CoreCoord worker_core = this->worker_core_from_logical_core(logical_core);
-            if (this->storage_only_cores_.find(logical_core) == this->storage_only_cores_.end()) {
+            if (!this->storage_only_cores_.contains(logical_core)) {
                 tt::tt_metal::MetalContext::instance().get_cluster().assert_risc_reset_at_core(
                     tt_cxy_pair(this->id(), worker_core));
             }
@@ -1093,13 +1093,6 @@ bool Device::close() {
 
     dispatch_firmware_active_ = false;
 
-    for (const auto& hw_command_queue : command_queues_) {
-        if (hw_command_queue->sysmem_manager().get_bypass_mode()) {
-            hw_command_queue->record_end();
-        }
-        hw_command_queue->terminate();
-    }
-
     tt_metal::detail::DumpDeviceProfileResults(this, ProfilerDumpState::LAST_CLOSE_DEVICE);
 
     this->disable_and_clear_program_cache();
@@ -1121,7 +1114,7 @@ bool Device::close() {
             CoreCoord worker_core = this->worker_core_from_logical_core(logical_core);
 
             if (!dispatch_cores.contains(worker_core) && !routing_cores.contains(worker_core)) {
-                if (this->storage_only_cores_.find(logical_core) == this->storage_only_cores_.end()) {
+                if (!this->storage_only_cores_.contains(logical_core)) {
                     tt::tt_metal::MetalContext::instance().get_cluster().assert_risc_reset_at_core(
                         tt_cxy_pair(this->id(), worker_core));
                 }
