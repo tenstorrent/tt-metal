@@ -418,8 +418,8 @@ OptimizedConvBlockConfig determine_per_core_conv_block_config(
     uint32_t act_block_w_ntiles = act_block_w / 32;
     uint32_t out_block_h_ntiles = conv_op_parallel_config.per_core_out_matrix_height_ntile;
     uint32_t weight_block_w_ntiles = conv_op_parallel_config.per_core_out_matrix_width_ntile;
-    auto [out_subblock_h_ntiles, out_subblock_w_ntiles] =
-        determine_largest_subblock_size(act_block_h_ntiles, weight_block_w_ntiles, fp32_accum, split_reader_enabled);
+    auto [out_subblock_h_ntiles, out_subblock_w_ntiles] = determine_largest_subblock_size(
+        act_block_h_ntiles, weight_block_w_ntiles, fp32_accum, act_block_h_ntiles > 1 && split_reader_enabled);
     return {
         .act_block_h_ntiles = act_block_h_ntiles,
         .act_block_w_ntiles = act_block_w_ntiles,
