@@ -186,7 +186,7 @@ models/demos/**/*resnet*  @tt-aho @tenstorrent/metalium-developers-convolutions
 models/experimental/ @sminakov-tt @dgomezTT @jmalone-tt @ayerofieiev-tt @uaydonat
 models/experimental/functional_unet @esmalTT @uaydonat @tenstorrent/metalium-developers-convolutions
 models/demos/ufld_v2 @tenstorrent/cse-developer-ttnn
-models/experimental/functional_vgg_unet @tenstorrent/cse-developer-ttnn
+models/demos/vgg_unet @tenstorrent/cse-developer-ttnn
 models/experimental/openpdn_mnist @tenstorrent/cse-developer-ttnn
 models/experimental/functional_vanilla_unet @tenstorrent/cse-developer-ttnn
 models/experimental/sentence_bert @tenstorrent/cse-developer-ttnn
@@ -201,7 +201,7 @@ models/demos/utils/llm_demo_utils.py @skhorasganiTT @mtairum @uaydonat
 models/experimental/stable_diffusion_xl_base @mbezuljTT @pavlepopovic @ipotkonjak-tt @tenstorrent/metalium-developers-convolutions
 models/demos/mobilenetv2 @tenstorrent/cse-developer-ttnn
 models/experimental/yolov8s_world @tenstorrent/cse-developer-ttnn
-models/experimental/yolov10 @tenstorrent/cse-developer-ttnn
+models/demos/yolov10 @tenstorrent/cse-developer-ttnn
 models/demos/yolov9c @tenstorrent/cse-developer-ttnn
 models/demos/yolov8x @tenstorrent/cse-developer-ttnn
 
