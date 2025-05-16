@@ -78,7 +78,6 @@ struct Pool2D {
         Pool2DType pool_type,
         DataType output_dtype,
         MemoryConfig memory_config,
-        bool count_include_pad,
         std::optional<int32_t> divisor_override);
 };
 
