@@ -36,7 +36,7 @@ public:
     chip_id_t get_physical_chip_id_from_mesh_chip_id(const std::pair<mesh_id_t, chip_id_t>& mesh_chip_id) const;
 
     std::vector<mesh_id_t> get_user_physical_mesh_ids() const;
-    tt::tt_metal::distributed::MeshShape get_physical_mesh_shape(mesh_id_t mesh_id) const;
+    MeshShape get_physical_mesh_shape(mesh_id_t mesh_id) const;
 
     // Return valid ethernet channels on the specificed routing plane
     std::vector<chan_id_t> get_valid_eth_chans_on_routing_plane(
@@ -81,15 +81,17 @@ public:
 
 private:
     uint16_t routing_mode_ = 0;  // ROUTING_MODE_UNDEFINED
+    // TODO: remove this from local node control plane. Can get it from the global control plane
     std::unique_ptr<RoutingTableGenerator> routing_table_generator_;
-    std::vector<std::vector<chip_id_t>> logical_mesh_chip_id_to_physical_chip_id_mapping_;
-    // map[mesh_id][chip_id][direction] has a list of ethernet channels in that direction
-    std::vector<std::vector<std::unordered_map<RoutingDirection, std::vector<chan_id_t>>>>
+
+    std::map<FabricMeshId, chip_id_t> logical_mesh_chip_id_to_physical_chip_id_mapping_;
+    // map[mesh_fabric_id][direction] has a vector of ethernet channels in that direction
+    std::map<FabricMeshId, std::unordered_map<RoutingDirection, std::vector<chan_id_t>>>
         router_port_directions_to_physical_eth_chan_map_;
-    // tables[mesh_id][chip_id][eth_chan]
-    std::vector<std::vector<std::vector<std::vector<chan_id_t>>>>
+    // tables[mesh_fabric_id][eth_chan]
+    std::map<FabricMeshId, std::vector<std::vector<chan_id_t>>>
         intra_mesh_routing_tables_;  // table that will be written to each ethernet core
-    std::vector<std::vector<std::vector<std::vector<chan_id_t>>>>
+    std::map<FabricMeshId, std::vector<std::vector<chan_id_t>>>
         inter_mesh_routing_tables_;  // table that will be written to each ethernet core
 
     // Tries to get a valid downstream channel from the candidate_target_chans
@@ -112,4 +114,23 @@ private:
 
     std::unique_ptr<FabricContext> fabric_context_;
 };
+
+class GlobalControlPlane {
+public:
+    explicit GlobalControlPlane(const std::string& mesh_graph_desc_yaml_file);
+    ~GlobalControlPlane() = default;
+
+    void initialize_host_mapping();
+
+    tt::tt_fabric::ControlPlane* get_local_node_control_plane() { return control_plane_.get(); }
+
+private:
+    std::unique_ptr<RoutingTableGenerator> routing_table_generator_;
+    // Host rank to sub mesh shape
+    std::unordered_map<uint32_t, std::vector<MeshCoordinate>> host_rank_to_sub_mesh_shape_;
+    std::unique_ptr<tt::tt_fabric::ControlPlane> control_plane_;
+
+    std::string mesh_graph_desc_file_;
+};
+
 }  // namespace tt::tt_fabric
