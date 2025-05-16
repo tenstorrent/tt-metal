@@ -54,6 +54,17 @@ void append_fabric_connection_rt_args(
     auto [src_mesh_id, src_logical_chip_id] = control_plane->get_mesh_chip_id_from_physical_chip_id(src_chip_id);
     auto [dst_mesh_id, dst_logical_chip_id] = control_plane->get_mesh_chip_id_from_physical_chip_id(dst_chip_id);
 
+    const auto& fabric_context = control_plane->get_fabric_context();
+    auto topology = fabric_context.get_fabric_topology();
+    bool is_2d_fabric = topology == Topology::Mesh;
+    if (is_2d_fabric) {
+        TT_FATAL(
+            src_mesh_id == dst_mesh_id,
+            "Currently only the chips on the same mesh are supported for 1D fabric. Src mesh id: {}, Dst mesh id: {}",
+            src_mesh_id,
+            dst_mesh_id);
+    }
+
     auto routing_directions = {RoutingDirection::N, RoutingDirection::S, RoutingDirection::E, RoutingDirection::W};
     std::optional<std::set<chan_id_t>> candidate_ethernet_cores;
     // mimic the 1d fabric connection setup steps to correctly find the candidate links
@@ -67,6 +78,7 @@ void append_fabric_connection_rt_args(
 
         candidate_ethernet_cores =
             control_plane->get_active_fabric_eth_channels_in_direction(src_mesh_id, src_logical_chip_id, direction);
+        break;
     }
 
     TT_FATAL(
@@ -85,9 +97,8 @@ void append_fabric_connection_rt_args(
         tt::tt_metal::MetalContext::instance().get_cluster().get_virtual_eth_core_from_channel(
             src_chip_id, fabric_router_channel);
 
-    const auto& fabric_context = control_plane->get_fabric_context();
     const auto& edm_config = fabric_context.get_fabric_router_config();
-    const auto sender_channel = fabric_context.get_fabric_topology() == Topology::Mesh ? router_direction : 0;
+    const auto sender_channel = is_2d_fabric ? router_direction : 0;
     tt::tt_fabric::SenderWorkerAdapterSpec edm_connection = {
         .edm_noc_x = fabric_router_virtual_core.x,
         .edm_noc_y = fabric_router_virtual_core.y,
