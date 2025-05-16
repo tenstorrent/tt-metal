@@ -4,12 +4,9 @@
 
 #pragma once
 
-#include <tt-metalium/control_plane.hpp>
-#include <tt-metalium/dev_msgs.h>
 #include <tt-metalium/fabric_host_interface.h>
 #include <tt-metalium/fabric_types.hpp>
 #include <tt-metalium/metal_soc_descriptor.h>
-#include <tt-metalium/tt_backend_api_types.hpp>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
@@ -25,8 +22,6 @@
 
 #include "assert.hpp"
 #include "core_coord.hpp"
-#include "llrt/hal.hpp"
-#include "llrt/rtoptions.hpp"
 #include <umd/device/cluster.h>
 #include <umd/device/device_api_metal.h>
 #include <umd/device/tt_cluster_descriptor.h>
@@ -40,9 +35,15 @@
 
 namespace tt {
 enum class ARCH;
+namespace llrt {
+class RunTimeOptions;
+}
 namespace tt_fabric {
 class ControlPlane;
-}  // namespace tt_fabric
+}
+namespace tt_metal {
+class Hal;
+}
 }  // namespace tt
 struct tt_device_params;
 
@@ -104,6 +105,8 @@ public:
 
     size_t number_of_devices() const { return this->cluster_desc_->get_number_of_chips(); }
 
+    const std::unordered_set<chip_id_t>& all_chip_ids() const { return this->cluster_desc_->get_all_chips(); };
+
     size_t number_of_pci_devices() const { return this->cluster_desc_->get_chips_with_mmio().size(); }
 
     // TODO: UMD will eventually consolidate ethernet coordinates and unique ids, we can remove the ethernet coord
@@ -141,11 +144,12 @@ public:
         const TensixSoftResetOptions& soft_resets = TENSIX_ASSERT_SOFT_RESET) const;
 
     void write_dram_vec(
-        std::vector<uint32_t>& vec, tt_target_dram dram, uint64_t addr, bool small_access = false) const;
+        std::vector<uint32_t>& vec, chip_id_t device_id, int dram_view, uint64_t addr, bool small_access = false) const;
     void read_dram_vec(
         std::vector<uint32_t>& vec,
         uint32_t size_in_bytes,
-        tt_target_dram dram,
+        chip_id_t device_id,
+        int dram_view,
         uint64_t addr,
         bool small_access = false) const;
 
@@ -162,29 +166,26 @@ public:
         bool small_access = false) const;
 
     std::optional<std::tuple<uint32_t, uint32_t>> get_tlb_data(const tt_cxy_pair& target) const {
-        tt::umd::Cluster* device = dynamic_cast<tt::umd::Cluster*>(driver_.get());
         tt::umd::CoreCoord target_coord = get_soc_desc(target.chip).get_coord_at(target, CoordSystem::TRANSLATED);
-        return device->get_tlb_data_from_target(target.chip, target_coord);
+        auto tlb_configuration = driver_->get_tlb_configuration(target.chip, target_coord);
+        return std::tuple((uint32_t)tlb_configuration.tlb_offset, (uint32_t)tlb_configuration.size);
     }
 
     std::function<void(uint32_t, uint32_t, const uint8_t*)> get_fast_pcie_static_tlb_write_callable(int chip_id) const {
         chip_id_t mmio_device_id = device_to_mmio_device_.at(chip_id);
-        tt::umd::Cluster* device = dynamic_cast<tt::umd::Cluster*>(driver_.get());
-        return device->get_fast_pcie_static_tlb_write_callable(mmio_device_id);
+        return driver_->get_fast_pcie_static_tlb_write_callable(mmio_device_id);
     }
 
     // Returns a writer object which holds a pointer to a static tlb
     // Allows for fast writes when targeting same device core by only doing the lookup once and avoiding repeated stack
     // traversals
     tt::Writer get_static_tlb_writer(tt_cxy_pair target) const {
-        tt::umd::Cluster* device = dynamic_cast<tt::umd::Cluster*>(driver_.get());
         tt::umd::CoreCoord target_coord = get_soc_desc(target.chip).get_coord_at(target, CoordSystem::TRANSLATED);
-        return device->get_static_tlb_writer(target.chip, target_coord);
+        return driver_->get_static_tlb_writer(target.chip, target_coord);
     }
 
     std::uint32_t get_numa_node_for_device(uint32_t device_id) const {
         uint32_t mmio_device_id = this->get_associated_mmio_device(device_id);
-        tt::umd::Cluster* device = dynamic_cast<tt::umd::Cluster*>(driver_.get());
         return driver_->get_numa_node_for_pcie_device(mmio_device_id);
     }
 
@@ -359,7 +360,7 @@ private:
     TargetDevice target_type_;
 
     // There is a single device driver for all connected chips. It might contain multiple MMIO devices/cards.
-    std::unique_ptr<tt_device> driver_;
+    std::unique_ptr<tt::umd::Cluster> driver_;
 
     // Need to hold reference to cluster descriptor to detect total number of devices available in cluster
     // UMD static APIs `detect_available_device_ids` and `detect_number_of_chips` only returns number of MMIO mapped

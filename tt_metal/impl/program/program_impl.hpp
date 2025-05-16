@@ -2,6 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#pragma once
+
 #include "program_command_sequence.hpp"
 
 #include "tt-metalium/buffer.hpp"
@@ -10,7 +12,7 @@
 #include "tt-metalium/circular_buffer_config.hpp"
 #include "tt-metalium/command_queue.hpp"
 #include "tt-metalium/core_coord.hpp"
-#include "tt-metalium/dev_msgs.h"              // DISPATCH_CLASS_MAX
+#include "dev_msgs.h"                          // DISPATCH_CLASS_MAX
 #include "tt-metalium/hal_types.hpp"           // HalProgrammableCoreType
 #include "tt-metalium/kernel.hpp"              // Kernel
 #include "tt-metalium/kernel_types.hpp"        // KernelHandle
@@ -45,6 +47,58 @@ class JitBuildOptions;
 namespace experimental {
 class GlobalCircularBuffer;
 }
+
+namespace program_dispatch {
+
+void assemble_device_commands(
+    ProgramCommandSequence& program_command_sequence,
+    detail::ProgramImpl& program,
+    IDevice* device,
+    SubDeviceId sub_device_id);
+
+}
+
+using kernel_id_array_t = std::array<std::optional<KernelHandle>, DISPATCH_CLASS_MAX>;
+
+struct KernelGroup {
+    uint32_t programmable_core_type_index;
+    CoreRangeSet core_ranges;
+    kernel_id_array_t kernel_ids;
+    uint32_t rta_sizes[DISPATCH_CLASS_MAX];
+    uint32_t total_rta_size;
+    uint32_t kernel_text_offsets[NUM_PROCESSORS_PER_CORE_TYPE];
+    uint32_t kernel_bin_sizes[NUM_PROCESSORS_PER_CORE_TYPE];
+    launch_msg_t launch_msg;
+    go_msg_t go_msg;
+
+    KernelGroup();
+    KernelGroup(
+        const detail::ProgramImpl& program,
+        uint32_t programmable_core_type_index,
+        kernel_id_array_t kernel_ids,
+        bool erisc_is_idle,
+        uint32_t max_local_cb_end_index,
+        uint32_t min_remote_cb_start_index,
+        const CoreRangeSet& new_ranges);
+
+    uint32_t get_programmable_core_type_index() const;
+
+    CoreType get_core_type() const;
+};
+
+// Contains the program's worker memory map
+struct ProgramConfig {
+    uint32_t rta_offset;
+    std::array<uint32_t, DISPATCH_CLASS_MAX> crta_offsets;
+    std::array<uint32_t, DISPATCH_CLASS_MAX> crta_sizes;
+    uint32_t sem_offset;
+    uint32_t sem_size;
+    uint32_t cb_offset;
+    uint32_t cb_size;
+    uint32_t local_cb_size;
+    uint32_t kernel_text_offset;  // offset of first kernel bin
+    uint32_t kernel_text_size;    // max size of all kernel bins across all kernel groups
+};
 
 namespace detail {
 
@@ -148,6 +202,8 @@ public:
         const KernelGroupsGetter& kernel_groups_getter,
         const SemaphoresGetter& semaphores_getter,
         tt::stl::Span<ProgramImpl*> programs);
+
+    std::vector<uint32_t>& get_program_config_sizes() noexcept { return program_config_sizes_; }
 
 private:
     CommandQueue* last_used_command_queue_for_testing = nullptr;
@@ -265,9 +321,21 @@ private:
     void set_program_offsets_and_sizes(uint32_t index, const ProgramOffsetsState& state);
     void set_program_attrs_across_core_types(IDevice* device);
 
+    const ProgramTransferInfo& get_program_transfer_info() const noexcept;
+    std::shared_ptr<Buffer> get_kernels_buffer(IDevice* device) const noexcept;
+
+    friend void program_dispatch::assemble_device_commands(
+        ProgramCommandSequence& program_command_sequence,
+        ProgramImpl& program,
+        IDevice* device,
+        SubDeviceId sub_device_id);
+
+    friend HWCommandQueue;
     friend EnqueueProgramCommand;
     friend Program;
     friend Internal_;
+    friend distributed::MeshWorkload;
+    friend distributed::MeshWorkloadImpl;
 };
 
 }  // namespace detail

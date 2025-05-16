@@ -51,12 +51,12 @@ public:
         size_t worker_l1_size = DEFAULT_WORKER_L1_SIZE,
         bool init_profiler = true,
         bool use_max_eth_core_count_on_all_devices = false,
-        bool initialize_fabric_and_dispatch_fw = true) noexcept;
+        bool initialize_fabric_and_dispatch_fw = true);
 
     tt_metal::IDevice* get_active_device(chip_id_t device_id) const;
     std::vector<tt_metal::IDevice*> get_all_active_devices() const;
     bool close_device(chip_id_t device_id);
-    void close_devices(const std::vector<tt_metal::IDevice*>& devices, bool skip_synchronize = false);
+    bool close_devices(const std::vector<tt_metal::IDevice*>& devices, bool skip_synchronize = false);
     bool is_device_active(chip_id_t id) const;
     void init_profiler() const;
     void initialize_fabric_and_dispatch_fw() const;

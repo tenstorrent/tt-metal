@@ -1240,23 +1240,6 @@ std::tuple<uint32_t, uint32_t> get_matmul_subblock_params(
     return {1, 1};
 }
 
-void add_stagger_defines_if_needed(
-    const tt::ARCH arch, const int num_cores, std::map<string, string>& mm_kernel_defines) {
-    // Empirically deduced di/dt problems appear for matmuls using more than 48
-    // cores; when there is 48 cores or less, we never enable stagger since the
-    // delay impacts op performance
-    constexpr uint32_t WH_B0_MM_MAX_CORES_NO_STAGGER = 48;
-
-    // Apply stagger delay on Wormhole B0 on odd rows, so that only half of cores
-    // start doing work at once. This is done to mitigate di/dt issues, in case
-    // the environment var is set. See issue #9857.
-    const bool enable_stagger = std::getenv("TT_ENABLE_MATMUL_STAGGER");
-    if (enable_stagger && arch == tt::ARCH::WORMHOLE_B0 && num_cores > WH_B0_MM_MAX_CORES_NO_STAGGER) {
-        mm_kernel_defines["MM_STAGGER_ODD_ROWS"] = "1";
-        log_warning(tt::LogOp, "Stagger enabled for matmul op using {} cores.", num_cores);
-    }
-}
-
 }  // namespace bmm_op_utils
 
 namespace ttnn {
@@ -1660,6 +1643,17 @@ void Matmul::validate(
         [input_tensor_a, input_tensor_b, optional_bias, in0_tile_shape, in1_tile_shape, this](
             const auto& program_config) {
             using ProgramConfigType = std::decay_t<decltype(program_config)>;
+            if constexpr (
+                std::is_same_v<ProgramConfigType, MatmulMultiCoreReuseMultiCastProgramConfig> ||
+                std::is_same_v<ProgramConfigType, MatmulMultiCoreReuseMultiCast1DProgramConfig>) {
+                TT_FATAL(program_config.in0_block_w != 0, "in0_block_w is 0, which is not valid");
+                TT_FATAL(program_config.out_subblock_h != 0, "out_subblock_h is 0, which is not valid");
+                TT_FATAL(program_config.out_subblock_w != 0, "out_subblock_w is 0, which is not valid");
+                TT_FATAL(program_config.out_block_h != 0, "out_block_h is 0, which is not valid");
+                TT_FATAL(program_config.out_block_w != 0, "out_block_w is 0, which is not valid");
+                TT_FATAL(program_config.per_core_M != 0, "per_core_M is 0, which is not valid");
+                TT_FATAL(program_config.per_core_N != 0, "per_core_N is 0, which is not valid");
+            }
             // TODO: For 1D and 2D mcasts, we don't check if tensor is single core
             // or single row/col We can uplift these variants to skip mcasting to
             // support single core (1D) or single row/col (2D)

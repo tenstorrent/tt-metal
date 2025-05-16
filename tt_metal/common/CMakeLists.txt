@@ -14,6 +14,8 @@ target_sources(
         tt_backend_api_types.cpp
         work_split.cpp
         thread_pool.cpp
+        host_buffer.cpp
+        memory_pin.cpp
 )
 
 target_include_directories(
@@ -37,6 +39,7 @@ target_link_libraries(
         umd::device
         simde::simde
     PRIVATE
+        Metalium::Metal::Hardware
         Tracy::TracyClient
         TT::Metalium::HostDevCommon
         yaml-cpp::yaml-cpp

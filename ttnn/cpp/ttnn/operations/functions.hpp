@@ -6,6 +6,7 @@
 
 #include <iterator>
 #include <tt-metalium/math.hpp>
+#include <tt-metalium/host_buffer.hpp>
 #include <tt_stl/overloaded.hpp>
 #include <optional>
 #include <random>
@@ -15,7 +16,6 @@
 #include <ttnn/tensor/types.hpp>
 #include <ttnn/tensor/tensor_impl.hpp>
 #include "ttnn/common/constants.hpp"
-#include "ttnn/tensor/host_buffer/host_buffer.hpp"
 
 namespace ttnn {
 
