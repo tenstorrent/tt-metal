@@ -85,6 +85,8 @@ ub_runtime_packages()
      libc++-17-dev \
      libc++abi-17-dev \
      libstdc++6 \
+     libhwloc15 \
+     libibverbs1 \
     )
 }
 
@@ -260,7 +262,7 @@ install_mpi_uflm(){
     echo "→ Installing $DEB_FILE …"
 
     dpkg -i "$TMP_DIR/$DEB_FILE"
-    sudo apt-get -f install
+    apt-get -f install
 }
 
 # We don't really want to have hugepages dependency
