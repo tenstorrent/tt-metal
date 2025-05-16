@@ -1193,7 +1193,8 @@ void setup_test_with_persistent_fabric(
     ttnn::ccl::Topology topology = ttnn::ccl::Topology::Linear,
     size_t switch_interval = 0,
     bool loopback_on_last_device = false,
-    bool is_galaxy = false) {
+    bool is_galaxy = false,
+    bool is_bh = false) {
     if (enable_persistent_fabric) {
         log_info(tt::LogTest, "Enabling persistent fabric");
         fabric_programs = std::vector<Program>(devices.size());
@@ -1208,7 +1209,14 @@ void setup_test_with_persistent_fabric(
     }
 
     line_fabric = ttnn::ccl::EdmLineFabricOpInterface(
-        devices, fabric_program_ptrs, enable_persistent_fabric, num_links.value_or(1), false, topology, is_galaxy);
+        devices,
+        fabric_program_ptrs,
+        enable_persistent_fabric,
+        num_links.value_or(1),
+        false,
+        topology,
+        is_galaxy,
+        is_bh);
     line_fabric->set_firmware_context_switch_interval(switch_interval);
     if (loopback_on_last_device) {
         for (auto& edm_builder : line_fabric->edm_builders_backward_direction.at(devices.back()->id())) {
@@ -1218,7 +1226,15 @@ void setup_test_with_persistent_fabric(
                 devices.back()->id(),
                 edm_builder.my_noc_x,
                 edm_builder.my_noc_y);
-            edm_builder.connect_to_downstream_edm(edm_builder);
+            if (is_bh) {
+                edm_builder[(int)DataMovementProcessor::RISCV_0].connect_to_downstream_edm(
+                    edm_builder[(int)tt::tt_metal::DataMovementProcessor::RISCV_1]);
+                edm_builder[(int)DataMovementProcessor::RISCV_1].connect_to_downstream_edm(
+                    edm_builder[(int)tt::tt_metal::DataMovementProcessor::RISCV_0]);
+            } else {
+                edm_builder[(int)DataMovementProcessor::RISCV_0].connect_to_downstream_edm(
+                    edm_builder[(int)DataMovementProcessor::RISCV_0]);
+            }
         }
     }
 
@@ -1404,9 +1420,19 @@ int TestLoopbackEntrypoint(
     // Create the loopback connection on the second device
     chip_1_edm_builder.connect_to_downstream_edm(chip_1_edm_builder);
     auto local_edm_kernel = ttnn::ccl::generate_edm_kernel(
-        fabric_sender_program, sender_device, chip_0_edm_builder, eth_sender_core, NOC::NOC_0);
+        fabric_sender_program,
+        sender_device,
+        chip_0_edm_builder,
+        eth_sender_core,
+        DataMovementProcessor::RISCV_0,
+        NOC::NOC_0);
     auto remote_edm_kernel = ttnn::ccl::generate_edm_kernel(
-        fabric_receiver_program, receiver_device, chip_1_edm_builder, eth_receiver_core, NOC::NOC_0);
+        fabric_receiver_program,
+        receiver_device,
+        chip_1_edm_builder,
+        eth_receiver_core,
+        DataMovementProcessor::RISCV_0,
+        NOC::NOC_0);
 
     if (enable_persistent_fabric) {
         tt::tt_metal::detail::CompileProgram(sender_device, fabric_sender_program);

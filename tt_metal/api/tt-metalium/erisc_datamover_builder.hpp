@@ -212,7 +212,9 @@ public:
         eth_chan_directions direction,
         bool enable_persistent_mode,
         bool build_in_worker_connection_mode = false,
-        bool dateline_connection = false);
+        bool dateline_connection = false,
+        bool is_bh = false,
+        size_t risc_id = 0);
 
     static FabricEriscDatamoverBuilder build(
         tt::tt_metal::IDevice* device,
@@ -224,6 +226,8 @@ public:
         bool enable_persistent_mode,
         bool build_in_worker_connection_mode = false,
         bool dateline_connection = false,
+        bool is_bh = false,
+        size_t risc_id = 0,
         eth_chan_directions direction = eth_chan_directions::EAST);
 
     [[nodiscard]] SenderWorkerAdapterSpec build_connection_to_worker_channel() const;
@@ -254,6 +258,7 @@ public:
     //    protected:
     friend class EdmLineFabricOpInterface;
     CoreCoord my_eth_core_logical;
+    size_t risc_id = 0;
     size_t my_noc_x = 0;
     size_t my_noc_y = 0;
 
@@ -312,6 +317,7 @@ public:
     bool fuse_receiver_flush_and_completion_ptr = true;
     bool dateline_connection = false;
     bool wait_for_host_signal = false;
+    bool is_bh = false;
 };
 
 }  // namespace tt::tt_fabric

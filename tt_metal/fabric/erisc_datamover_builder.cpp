@@ -384,7 +384,9 @@ FabricEriscDatamoverBuilder::FabricEriscDatamoverBuilder(
     eth_chan_directions direction,
     bool enable_persistent_mode,
     bool build_in_worker_connection_mode,
-    bool dateline_connection) :
+    bool dateline_connection,
+    bool is_bh,
+    size_t risc_id) :
     my_eth_core_logical(my_eth_core_logical),
     my_noc_x(my_noc_x),
     my_noc_y(my_noc_y),
@@ -416,7 +418,9 @@ FabricEriscDatamoverBuilder::FabricEriscDatamoverBuilder(
     edm_status_ptr(config.edm_status_address),
     enable_persistent_mode(enable_persistent_mode),
     build_in_worker_connection_mode(build_in_worker_connection_mode),
-    dateline_connection(dateline_connection) {
+    dateline_connection(dateline_connection),
+    is_bh(is_bh),
+    risc_id(risc_id) {
     std::fill(
         sender_channel_connection_liveness_check_disable_array.begin(),
         sender_channel_connection_liveness_check_disable_array.end(),
@@ -525,6 +529,8 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args(const s
         config.is_receiver_channel_serviced[riscv_id][1],
         config.topology == Topology::Mesh,
         this->direction,
+        this->is_bh,
+        this->risc_id,
         soc_desc.get_num_eth_channels(),
         // Special marker to help with identifying misalignment bugs
         0x00c0ffee};
@@ -632,6 +638,8 @@ FabricEriscDatamoverBuilder FabricEriscDatamoverBuilder::build(
     bool enable_persistent_mode,
     bool build_in_worker_connection_mode,
     bool dateline_connection,
+    bool is_bh,
+    size_t risc_id,
     eth_chan_directions direction) {
     std::array<size_t, FabricEriscDatamoverConfig::num_sender_channels> sender_channels_buffer_index_semaphore_id;
     std::array<size_t, FabricEriscDatamoverConfig::num_sender_channels> sender_channels_flow_control_semaphore_id;
@@ -737,7 +745,9 @@ FabricEriscDatamoverBuilder FabricEriscDatamoverBuilder::build(
             direction,
             enable_persistent_mode,
             build_in_worker_connection_mode,
-            dateline_connection);
+            dateline_connection,
+            is_bh,
+            risc_id);
 
     } else {
         for (uint32_t i = 0; i < FabricEriscDatamoverConfig::num_receiver_channels; i++) {
@@ -772,7 +782,9 @@ FabricEriscDatamoverBuilder FabricEriscDatamoverBuilder::build(
             config,
             direction,
             enable_persistent_mode,
-            dateline_connection);
+            dateline_connection,
+            is_bh,
+            risc_id);
     }
 }
 
