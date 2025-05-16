@@ -1637,6 +1637,10 @@ void Matmul::validate(
             (this->output_dtype.value() == DataType::BFLOAT16) || (this->output_dtype.value() == DataType::FLOAT32),
             "Unsupported data type: {}",
             this->output_dtype.value());
+        TT_FATAL(
+            std::holds_alternative<MatmulMultiCoreReuseMultiCast1DProgramConfig>(chosen_program_config),
+            "Untilize out is not supported for this program config: {}",
+            typeid(chosen_program_config).name());
     }
 
     std::visit(
@@ -2215,7 +2219,10 @@ std::vector<ttnn::TensorSpec> Matmul::compute_output_specs(
                     // support for multi-tensor output
                     const ttnn::TensorSpec tensor_spec(
                         output_shape,
-                        TensorLayout(output_dtype.value(), PageConfig(output_layout, output_tile), mem_config));
+                        TensorLayout(
+                            output_dtype.value(),
+                            this->untilize_out ? PageConfig(output_layout) : PageConfig(output_layout, output_tile),
+                            mem_config));
                     std::vector<ttnn::TensorSpec> output_tensor_specs(input_tensors.size() - 1, tensor_spec);
                     return output_tensor_specs;
                 } else if constexpr (std::is_same_v<
