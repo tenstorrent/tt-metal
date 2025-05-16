@@ -296,7 +296,8 @@ void create_worker_kernel(
         mux_kernel_config.get_connection_handshake_address(channel_type, worker_id),
         mux_kernel_config.get_flow_control_address(channel_type, worker_id),
         mux_kernel_config.get_buffer_index_address(channel_type, worker_id),
-        mux_kernel_config.get_status_address()};
+        mux_kernel_config.get_status_address(),
+        mux_kernel_config.get_channel_credits_stream_id(channel_type, worker_id)};
 
     // virtual coordinates will be the same for the receiver device
     // hence, we can use the noc encoding derived using current device

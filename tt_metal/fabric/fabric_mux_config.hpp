@@ -177,6 +177,16 @@ struct FabricMuxConfig {
 
     size_t get_termination_signal_address() const { return this->termination_signal_address; }
 
+    size_t get_channel_credits_stream_id(FabricMuxChannelType channel_type, uint8_t channel_id) const {
+        size_t stream_id = channel_id;
+
+        if (channel_type == FabricMuxChannelType::HEADER_ONLY_CHANNEL) {
+            stream_id += this->num_full_size_channels;
+        }
+
+        return stream_id;
+    }
+
     size_t get_channel_base_address(FabricMuxChannelType channel_type, uint8_t channel_id) const {
         if (channel_type == FabricMuxChannelType::FULL_SIZE_CHANNEL) {
             return this->full_size_channels_base_address + (channel_id * this->full_size_channel_size_bytes);

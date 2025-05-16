@@ -120,13 +120,12 @@ private:
     uint8_t channel_id;
 };
 
-
 // Note that this class implements a mix of interfaces and will need to be separated to just be different
-// interface types altogether. 
-// 
+// interface types altogether.
+//
 // The two types of interfaces implemented/supported here are hardcoded by producer type (EDM or Worker)
 // but they should be split based on credit exchange protocol (read/write counter vs free slots)
-// Additionally, a nice to have would be if we could further create types for different credit 
+// Additionally, a nice to have would be if we could further create types for different credit
 // storage mechanisms (e.g. L1 vs stream registers)
 //
 template <uint8_t NUM_BUFFERS>
@@ -176,7 +175,7 @@ struct EdmChannelWorkerInterface {
             0xf,
             tt::tt_fabric::worker_handshake_noc);
     }
-    template <bool enable_ring_support>
+
     FORCE_INLINE void notify_worker_of_read_counter_update() {
         noc_inline_dw_write<false, true>(
             this->cached_worker_semaphore_address,

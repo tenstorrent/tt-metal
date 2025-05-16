@@ -519,6 +519,10 @@ private:
 
     FORCE_INLINE void advance_buffer_slot_write_index() {
         if constexpr (USER_DEFINED_NUM_BUFFER_SLOTS) {
+            if (!I_USE_STREAM_REG_FOR_CREDIT_RECEIVE) {
+                // Mux uses this path
+                buffer_slot_write_counter.counter++;
+            }
             this->buffer_slot_index = BufferIndex{wrap_increment<EDM_NUM_BUFFER_SLOTS>(this->buffer_slot_index.get())};
         } else {
             if (!I_USE_STREAM_REG_FOR_CREDIT_RECEIVE) {

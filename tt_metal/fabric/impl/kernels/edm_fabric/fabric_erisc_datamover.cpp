@@ -637,47 +637,11 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) void receiver_forward_pack
         default: __builtin_unreachable();
     }
 }
-FORCE_INLINE void establish_worker_connection(
-    tt::tt_fabric::EdmChannelWorkerInterface<SENDER_NUM_BUFFERS>& local_sender_channel_worker_interface,
-    uint32_t stream_id) {
-    local_sender_channel_worker_interface.cache_producer_noc_addr();
-    // Send the difference of the current free slots vs the cached value from teardown
-    // This should always be a value >= 0
-    // TODO: Should we skip if 0?
-    ASSERT(get_ptr_val(stream_id) <= static_cast<int32_t>(SENDER_NUM_BUFFERS));
-    local_sender_channel_worker_interface.template notify_worker_of_read_counter_update<enable_ring_support>();
-}
 
 FORCE_INLINE void establish_edm_connection(
     tt::tt_fabric::EdmChannelWorkerInterface<SENDER_NUM_BUFFERS>& local_sender_channel_worker_interface,
     uint32_t stream_id) {
     local_sender_channel_worker_interface.cache_producer_noc_addr();
-
-}
-
-FORCE_INLINE void check_worker_connections(
-    tt::tt_fabric::EdmChannelWorkerInterface<SENDER_NUM_BUFFERS>& local_sender_channel_worker_interface,
-    bool& channel_connection_established,
-    uint32_t stream_id) {
-    if (!channel_connection_established) {
-        // Can get rid of one of these two checks if we duplicate the logic above here in the function
-        // and depending on which of the two versions we are in (the connected version or disconnected version)
-        // We also check if the interface has a teardown request in case worker
-        // 1. opened connection
-        // 2. sent of all packets (EDM sender channel was sufficiently empty)
-        // 3. closed the connection
-        //
-        // In such a case like that, we still want to formally teardown the connection to keep things clean
-        uint32_t cached = *local_sender_channel_worker_interface.connection_live_semaphore;
-        if (connect_is_requested(cached)) {
-            channel_connection_established = true;
-            establish_worker_connection(local_sender_channel_worker_interface, stream_id);
-        }
-    } else if (local_sender_channel_worker_interface.has_worker_teardown_request()) {
-        channel_connection_established = false;
-        // Cache the current free slots
-        local_sender_channel_worker_interface.template teardown_worker_connection<true>();
-    }
 }
 
 ////////////////////////////////////
@@ -751,8 +715,7 @@ void run_sender_channel_step(
                 // instead because these connections will be read/write counter based instead
                 local_sender_channel_worker_interface.increment_local_read_counter(completions_since_last_check);
                 if (channel_connection_established) {
-                    local_sender_channel_worker_interface
-                        .template notify_worker_of_read_counter_update<enable_ring_support>();
+                    local_sender_channel_worker_interface.notify_worker_of_read_counter_update();
                 } else {
                     local_sender_channel_worker_interface.copy_read_counter_to_worker_location_info();
                     // If not connected, we update the read counter in L1 as well so the next connecting worker
@@ -772,8 +735,7 @@ void run_sender_channel_step(
                 local_sender_channel_worker_interface.template update_persistent_connection_copy_of_free_slots<enable_ring_support>();
             } else {
                 if (channel_connection_established) {
-                    local_sender_channel_worker_interface
-                        .template notify_worker_of_read_counter_update<enable_ring_support>();
+                    local_sender_channel_worker_interface.notify_worker_of_read_counter_update();
                 } else {
                     ASSERT(
                         local_sender_channel_worker_interface.local_write_counter.counter >

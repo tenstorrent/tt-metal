@@ -30,4 +30,9 @@ using WorkerToFabricMuxSender = WorkerToFabricEdmSenderImpl<false, FABRIC_MUX_CH
 
 using FabricMuxStatus = EDMStatus;
 
+// Because the mux to producer (worker) (ack) path uses counters, we initialize our EdmChannelWorkerInterface
+// (the interface from mux ack to worker) to start at 0. **Note** that if this is every updated to be free slots
+// based instead, we'd initialize to num buffer slots (NUM_EDM_BUFFERS) instead.
+constexpr size_t MUX_TO_WORKER_INTERFACE_STARTING_READ_COUNTER_VALUE = 0;
+
 }  // namespace tt::tt_fabric
