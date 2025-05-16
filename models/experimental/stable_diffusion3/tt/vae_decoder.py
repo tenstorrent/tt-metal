@@ -326,8 +326,9 @@ class TtAttention:
 
 @dataclass
 class TtGroupNormParameters:
-    weight: ttnn.Tensor | None = None
-    bias: ttnn.Tensor | None = None
+    weight: ttnn.Tensor | None
+    bias: ttnn.Tensor | None
+    device: ttnn.Device
 
     @classmethod
     def from_torch(
@@ -344,60 +345,102 @@ class TtGroupNormParameters:
             bias=from_torch_fast(state["bias"], layout=ttnn.TILE_LAYOUT, dtype=dtype, device=device)
             if "bias" in state
             else None,
+            device=device,
         )
 
     @property
     def channels(self) -> int:
-        return self.weight.shape[1]
+        return self.weight.shape[0]
 
 
 class TtGroupNorm:
-    def __init__(self, parameters: TtGroupNormParameters, *, num_groups: int, eps: float) -> None:
+    def __init__(
+        self,
+        parameters: TtGroupNormParameters,
+        *,
+        num_groups: int,
+        eps: float,
+        batch_size: int,
+        input_width: int,
+        input_height: int,
+    ) -> None:
         super().__init__()
 
         self._eps = eps
         self._weight = parameters.weight
         self._bias = parameters.bias
+        self._device = parameters.device
         self._num_groups = num_groups
 
-        # if input_memory_config.memory_layout == ttnn.TensorMemoryLayout.BLOCK_SHARDED:
-        #     num_cores_across_channel = self.group_norm_core_grid.y
-        # elif input_memory_config.memory_layout == ttnn.TensorMemoryLayout.HEIGHT_SHARDED:
-        #     num_cores_across_channel = 1
-        # else:
-        #     num_cores_across_channel = int(self.group_norm_core_grid.x * self.group_norm_core_grid.y)
-        num_cores_across_channel = 8
+        k_device = 256 * self._device.core_grid.x * self._device.core_grid.y
+        self._inplace = input_width * input_height <= k_device  # a heuristic
 
-        device = parameters.weight.device()
+        if self._inplace:
+            (
+                self._memory_config,
+                self._core_grid,
+            ) = ttnn.determine_expected_group_norm_sharded_config_and_grid_size(
+                device=self._device,
+                num_channels=parameters.channels,
+                num_groups=self._num_groups,
+                input_nhw=batch_size * input_height * input_width,
+                is_height_sharded=False,
+            )
+            self._num_out_blocks = 1
+
+            # if input_memory_config.memory_layout == ttnn.TensorMemoryLayout.BLOCK_SHARDED:
+            #     grid_y = self.group_norm_core_grid.y
+            # elif input_memory_config.memory_layout == ttnn.TensorMemoryLayout.HEIGHT_SHARDED:
+            #     grid_y = 1
+            # else:
+            #     grid_y = int(self.group_norm_core_grid.x * self.group_norm_core_grid.y)
+        else:
+            # https://github.com/tenstorrent/tt-metal/issues/22149#issuecomment-2884093864
+            h = parameters.channels // self._num_groups * self._num_groups
+            assert h % 32 == 0
+            grid_y = self._device.core_grid.y
+            while h // grid_y % 32 != 0:
+                grid_y -= 1
+
+            self._core_grid = ttnn.CoreGrid(x=self._device.core_grid.x, y=grid_y)
+            k_grid = 256 * self._core_grid.x * self._core_grid.y
+            self._num_out_blocks = -(-input_width * input_height // k_grid)  # a heuristic
+            self._memory_config = ttnn.DRAM_MEMORY_CONFIG
 
         torch_weight = ttnn.create_group_norm_weight_bias_rm(
-            ttnn.to_torch(parameters.weight), parameters.channels, num_cores_across_channel
+            ttnn.to_torch(parameters.weight),
+            parameters.channels,
+            self._core_grid.y,
         )
         torch_bias = ttnn.create_group_norm_weight_bias_rm(
-            ttnn.to_torch(parameters.bias), parameters.channels, num_cores_across_channel
+            ttnn.to_torch(parameters.bias),
+            parameters.channels,
+            self._core_grid.y,
         )
         torch_norm_input_mask = ttnn.create_group_norm_input_mask(
-            parameters.channels, num_groups, num_cores_across_channel
+            parameters.channels,
+            num_groups,
+            self._core_grid.y,
         )
         self._weight = ttnn.from_torch(
             torch_weight,
             dtype=ttnn.bfloat16,
             layout=ttnn.ROW_MAJOR_LAYOUT,
-            device=device,
+            device=self._device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         self._bias = ttnn.from_torch(
             torch_bias,
             dtype=ttnn.bfloat16,
             layout=ttnn.ROW_MAJOR_LAYOUT,
-            device=device,
+            device=self._device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         self._norm_input_mask = ttnn.from_torch(
             torch_norm_input_mask,
             dtype=ttnn.bfloat8_b,
             layout=ttnn.TILE_LAYOUT,
-            device=device,
+            device=self._device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
@@ -405,34 +448,25 @@ class TtGroupNorm:
         [batch_size, height, width, channels] = list(x.shape)
 
         x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
+        x = x.reshape([batch_size, 1, width * height, channels])
 
-        (
-            memory_config,
-            core_grid,
-        ) = ttnn.determine_expected_group_norm_sharded_config_and_grid_size(
-            device=x.device(),
-            num_channels=channels,
-            num_groups=self._num_groups,
-            input_nhw=batch_size * height * width,
-            is_height_sharded=False,
-        )
+        if self._inplace:
+            x = ttnn.to_memory_config(x, self._memory_config)
+            x = ttnn.reallocate(x)
+        else:
+            x = ttnn.tilize_with_zero_padding(x, use_multicore=True)
 
-        x = ttnn.reshape(x, [batch_size, 1, width * height, channels])
-        x = ttnn.to_memory_config(x, memory_config)
-        x = ttnn.reallocate(x)
-
-        ttnn.group_norm(
+        x = ttnn.group_norm(
             x,
             weight=self._weight,
             bias=self._bias,
             input_mask=self._norm_input_mask,
             num_groups=self._num_groups,
             epsilon=self._eps,
-            core_grid=core_grid,
-            memory_config=memory_config,
-            inplace=True,
+            core_grid=self._core_grid,
+            memory_config=self._memory_config,
+            inplace=self._inplace,
+            num_out_blocks=self._num_out_blocks,
         )
 
-        x = x.reshape([batch_size, height, width, channels])
-        x = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
-        return ttnn.to_layout(x, ttnn.TILE_LAYOUT)
+        return x.reshape([batch_size, height, width, channels])
