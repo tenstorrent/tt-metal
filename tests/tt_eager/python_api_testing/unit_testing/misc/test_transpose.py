@@ -56,7 +56,6 @@ def transpose(
         assert device.num_program_cache_entries() == expected_program_cache_size
 
 
-@run_for_blackhole()
 def test_fold_transpose(device, use_program_cache):
     N = 16
     C = 4
@@ -64,15 +63,14 @@ def test_fold_transpose(device, use_program_cache):
     W = 224
     input_shape = (N, C, H, W)
     ## 64
-    grid = ttnn.CoreRangeSet(
-        {
-            ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(9, 5)),
-            ttnn.CoreRange(ttnn.CoreCoord(0, 6), ttnn.CoreCoord(3, 6)),
-        }
-    )
+
+    compute_grid_size = device.compute_with_storage_grid_size()
+    num_cores = min(N, compute_grid_size.x * compute_grid_size.y)
+    shard_grid = ttnn.num_cores_to_corerangeset(num_cores, compute_grid_size, True)
+
     sharded_config = ttnn.create_sharded_memory_config_(
         input_shape,
-        grid,
+        shard_grid,
         ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
         ttnn.ShardOrientation.ROW_MAJOR,
     )
