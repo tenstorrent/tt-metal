@@ -1103,7 +1103,9 @@ void build_tt_fabric_program(
         auto neighbors = control_plane->get_chip_neighbors(mesh_chip_id.first, mesh_chip_id.second, direction);
         auto intra_chip_neighbors = neighbors.find(mesh_chip_id.first);
         if (intra_chip_neighbors != neighbors.end()) {
-            num_intra_chip_neighbors += intra_chip_neighbors->second.size();
+            // only count the number of unique intra chip neighbors
+            // we assume that all neighbors in a direction are the same
+            num_intra_chip_neighbors++;
         }
         TT_FATAL(!neighbors.empty(), "No neighbors found for direction {} but has active eth channels", direction);
 
@@ -1194,22 +1196,25 @@ void build_tt_fabric_program(
         }
     };
 
-    // if the wrap around mesh flag is set and this chip is a corner chip, fold the internal connections
-    if (wrap_around_mesh && num_intra_chip_neighbors == 2) {
+    if (topology == Topology::Mesh) {
+        // 2D Routing
+        connect_downstream_builders(RoutingDirection::N, RoutingDirection::S);
+        connect_downstream_builders(RoutingDirection::E, RoutingDirection::W);
+        connect_downstream_builders(RoutingDirection::N, RoutingDirection::E);
+        connect_downstream_builders(RoutingDirection::N, RoutingDirection::W);
+        connect_downstream_builders(RoutingDirection::S, RoutingDirection::E);
+        connect_downstream_builders(RoutingDirection::S, RoutingDirection::W);
+    } else if (wrap_around_mesh && num_intra_chip_neighbors == 2) {
+        // 1D Routing wrap the corner chips, fold the internal connections
         auto it = chip_neighbors.begin();
         auto dir1 = it->first;
         it++;
         auto dir2 = it->first;
         connect_downstream_builders(dir1, dir2);
     } else {
+        // 1D Routing
         connect_downstream_builders(RoutingDirection::N, RoutingDirection::S);
         connect_downstream_builders(RoutingDirection::E, RoutingDirection::W);
-        if (topology == Topology::Mesh) {
-            connect_downstream_builders(RoutingDirection::N, RoutingDirection::E);
-            connect_downstream_builders(RoutingDirection::N, RoutingDirection::W);
-            connect_downstream_builders(RoutingDirection::S, RoutingDirection::E);
-            connect_downstream_builders(RoutingDirection::S, RoutingDirection::W);
-        }
     }
 
     return;
