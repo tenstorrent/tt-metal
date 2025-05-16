@@ -3,6 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "gtest/gtest.h"
+#include "gmock/gmock.h"
+#include <fmt/format.h>
+
 #include <tt-metalium/shape.hpp>
 #include "tt_metal/hw/inc/dataflow_api_generic_addrgen.h"
 
@@ -97,4 +100,38 @@ TYPED_TEST(AddrGenTests, LookUp) {
         EXPECT_EQ(bank_id, expected_bank_and_offset.bank_id);
         EXPECT_EQ(bank_offset, expected_bank_and_offset.bank_offset);
     }
+}
+
+TEST(AddrGenTests, OutOfBoundsPageAccess) {
+    using dspec_t = addr_gen_test_params::test_params_1::inputs::dspec;
+    constexpr auto dspec_val = dspec_t{};
+
+    // Create sharded accessor
+    auto sharded_accessor = ShardedAccessor<dspec_t>{};
+
+    // Out of bounds page id and page coord
+    constexpr auto out_of_bounds_page_id = dspec_val.tensor_volume + 1;
+    auto out_of_bounds_page_coord = dspec_val.tensor_shape;
+    out_of_bounds_page_coord[0] = dspec_val.tensor_shape[0] + 1;
+
+    EXPECT_THAT(
+        std::function<void()>([sharded_accessor, dspec_val]() {
+            // Out of bounds page id
+            constexpr auto out_of_bounds_page_id = dspec_val.tensor_volume + 1;
+            const auto _ = sharded_accessor.get_bank_and_offset(out_of_bounds_page_id);
+        }),
+        ThrowsMessage<std::runtime_error>(::testing::HasSubstr(fmt::format(
+            "Page id {} must be less than tensor volume {}!", out_of_bounds_page_id, dspec_val.tensor_volume))));
+
+    EXPECT_THAT(
+        std::function<void()>([sharded_accessor, dspec_val]() {
+            // Out of bounds page coord
+            auto out_of_bounds_page_coord = dspec_val.tensor_shape;
+            out_of_bounds_page_coord[0] = dspec_val.tensor_shape[0] + 1;
+            const auto _ = sharded_accessor.get_bank_and_offset(out_of_bounds_page_coord);
+        }),
+        ThrowsMessage<std::runtime_error>(::testing::HasSubstr(fmt::format(
+            "Page coord {} must be less than tensor shape {} at rank 0!",
+            out_of_bounds_page_coord[0],
+            dspec_val.tensor_shape[0]))));
 }
