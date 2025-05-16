@@ -60,10 +60,10 @@ class RMSNorm(LightweightModule):
         self.ccl_topology = ccl_topology
 
         if worker_sub_device_id is None:
-            print("worker_sub_device_id is None, don't use fabric ccl")
+            # print("worker_sub_device_id is None, don't use fabric ccl")
             self.use_fabric_ccl = False
         else:
-            print("worker_sub_device_id is not None, use fabric ccl")
+            # print("worker_sub_device_id is not None, use fabric ccl")
             self.use_fabric_ccl = True
 
         self.from_remote_semaphore_handles = from_remote_semaphore_handles
