@@ -78,7 +78,6 @@ class TtLlamaMLP(LightweightModule):
             mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=dim, mesh_shape=args.cluster_shape),
             layout=ttnn.TILE_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            # Temporarily disable caching this weight for CI
             cache_file_name=cache_name(name),
         )
 
@@ -95,7 +94,13 @@ class TtLlamaMLP(LightweightModule):
         self.w2 = as_sharded_tensor("w2_sharded", ttnn.bfloat8_b, dim=w2_dim)
         self.w3 = as_sharded_tensor("w3_sharded", ttnn.bfloat4_b if self.four_bit_mlp else ttnn.bfloat8_b, dim=w1_dim)
 
+        self.w1_interleaved = as_interleaved_tensor(
+            "w1_interleaved", ttnn.bfloat4_b if self.four_bit_mlp else ttnn.bfloat8_b, dim=w1_dim
+        )
         self.w2_interleaved = as_interleaved_tensor("w2_interleaved", ttnn.bfloat8_b, dim=w2_dim)
+        self.w3_interleaved = as_interleaved_tensor(
+            "w3_interleaved", ttnn.bfloat4_b if self.four_bit_mlp else ttnn.bfloat8_b, dim=w1_dim
+        )
 
         if tt_ccl.mode == "decode":
             self.prefetch(prefetcher_setup, tt_ccl)
@@ -211,16 +216,17 @@ class TtLlamaMLP(LightweightModule):
         HF reference: self.down_proj(self.act_fn(self.gate_proj(x)) * self.up_proj(x))
         """
         seq_len = x.shape[-2]
-        if seq_len >= 1024:
-            # Reshape input to to fit on device and parallelize computation
-            x = ttnn.reshape(x, [1, seq_len // 1024, 1024, -1])
-        pc_1 = self.model_config["PREFILL_MLP_W1_W3_PRG_CONFIG"](seq_len)
+        use_w1_w3_interleaved = seq_len >= 4096
+        pc_1 = self.model_config["PREFILL_MLP_W1_W3_PRG_CONFIG"](seq_len, use_w1_w3_interleaved)
         pc_2 = self.model_config["PREFILL_MLP_W2_PRG_CONFIG"](seq_len)
-        pc_3 = self.model_config["PREFILL_MLP_W1_W3_PRG_CONFIG"](seq_len)
+        pc_3 = self.model_config["PREFILL_MLP_W1_W3_PRG_CONFIG"](seq_len, use_w1_w3_interleaved)
+
+        if 1024 <= seq_len < 4096:
+            x = ttnn.reshape(x, (1, seq_len // 1024, 1024, -1))
 
         w1_out = ttnn.linear(
             x,
-            self.w1,
+            self.w1_interleaved if use_w1_w3_interleaved else self.w1,
             compute_kernel_config=(
                 self.args.compute_kernel_config_lofi
                 if self.four_bit_mlp
@@ -235,7 +241,7 @@ class TtLlamaMLP(LightweightModule):
         )
         w3_out = ttnn.linear(
             x,
-            self.w3,
+            self.w3_interleaved if use_w1_w3_interleaved else self.w3,
             compute_kernel_config=(
                 self.args.compute_kernel_config_lofi
                 if self.four_bit_mlp
@@ -263,7 +269,6 @@ class TtLlamaMLP(LightweightModule):
         # ttnn.deallocate(w3_out)
         # ttnn.deallocate(w1_out)
 
-        w2_in_gathered = ttnn.reshape(w2_in_gathered, (1, 1, seq_len, -1))
         w2_out = ttnn.linear(
             w2_in_gathered,
             self.w2_interleaved,
@@ -271,17 +276,11 @@ class TtLlamaMLP(LightweightModule):
             dtype=ttnn.bfloat8_b,
             program_config=pc_2,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            # core_grid=ttnn.CoreGrid(y=8, x=4),  # FIXME: validate on TG ttnn.CoreGrid(y=8, x=8) if not pc_2 else None,
         )
 
         ttnn.deallocate(w2_in)
         w2_out_reduced = self.tt_ccl.line_all_reduce(
             w2_out, cluster_axis=0, num_links=3, memory_config=ttnn.DRAM_MEMORY_CONFIG, buffer_key="FF2"
-        )
-
-        original_shape = w2_out_reduced.shape
-        w2_out_reduced = ttnn.reshape(
-            w2_out_reduced, (1, 1, original_shape[-4] * original_shape[-3] * original_shape[-2], original_shape[-1])
         )
 
         # ttnn.deallocate(w2_out)

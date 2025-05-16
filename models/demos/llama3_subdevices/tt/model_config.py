@@ -710,21 +710,56 @@ class TtModelArgs:
             else:
                 self.model_config["ATTN_ALL_GATHER_MATMUL_PROGCFG"] = None
 
-            self.model_config[
-                "PREFILL_MLP_W1_W3_PRG_CONFIG"
-            ] = lambda seq_len: ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-                compute_with_storage_grid_size=(7, 10),
-                in0_block_w=8,
-                out_subblock_h=1,  # Must be divisible by per_core_M
-                out_subblock_w=4,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4
-                per_core_M=max(
-                    1, 8 if seq_len >= 2048 else seq_len // self.tile_size // 8  # 8 rows
-                ),  # M / TILE_HEIGHT / Grid_Size (dynamic based on seqlen)
-                per_core_N=math.ceil(self.hidden_dim / self.cluster_shape[0] / 32 / 7),  # N / TILE_WIDTH / grid width
-                transpose_mcast=False,
-                fused_activation=None,
-                fuse_batch=seq_len <= 2048,
-            )
+            def w1_w3_prg_config(seq_len, use_interleaved):
+                if not use_interleaved:
+                    return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+                        compute_with_storage_grid_size=(7, 10),
+                        in0_block_w=8,
+                        out_subblock_h=1,  # Must be divisible by per_core_M
+                        out_subblock_w=4,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4
+                        per_core_M=max(
+                            1, 8 if seq_len >= 2048 else seq_len // self.tile_size // 8  # 8 rows
+                        ),  # M / TILE_HEIGHT / Grid_Size (dynamic based on seqlen)
+                        per_core_N=math.ceil(28672 / 8 / 32 / 7),  # N / TILE_WIDTH / grid width
+                        transpose_mcast=False,
+                        fused_activation=None,
+                        fuse_batch=seq_len <= 2048,
+                    )
+
+                per_core_M = math.ceil(seq_len / self.tile_size / 7)
+                add_one_if_prime = (
+                    lambda n: n + 1 if n > 1 and all(n % i != 0 for i in range(2, int(n**0.5) + 1)) else n
+                )
+                # Would like for per_core_M to not be prime as it will give us more options for out_block_h
+                per_core_M = add_one_if_prime(per_core_M)
+
+                if per_core_M < 20:
+                    out_block_h = per_core_M
+                elif all(per_core_M % i != 0 for i in range(10, 20)):
+                    per_core_M = (per_core_M + 15) & ~15
+                    out_block_h = 16
+                else:
+                    divisors = []
+                    for i in range(10, 20):
+                        if per_core_M % i == 0:
+                            divisors.append(i)
+                    out_block_h = min(divisors, key=lambda x: abs(x - 16))
+
+                return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+                    compute_with_storage_grid_size=(7, 7),
+                    in0_block_w=4,
+                    out_subblock_h=1,
+                    out_subblock_w=8,
+                    out_block_h=out_block_h,
+                    out_block_w=16,
+                    per_core_M=per_core_M,
+                    per_core_N=16,
+                    transpose_mcast=False,
+                    fused_activation=None,
+                    fuse_batch=False,
+                )
+
+            self.model_config["PREFILL_MLP_W1_W3_PRG_CONFIG"] = w1_w3_prg_config
 
             def w2_prg_config(seq_len):
                 # For sequence lengths < 4096, we use this config as it performs better that what would be generated below
