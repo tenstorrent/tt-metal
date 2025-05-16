@@ -58,6 +58,7 @@
 #include "ttnn/operations/matmul/matmul_pybind.hpp"
 #include "ttnn/operations/moreh/moreh_pybind.hpp"
 #include "ttnn/operations/normalization/normalization_pybind.hpp"
+#include "ttnn/operations/point_to_point/point_to_point_pybind.hpp"
 #include "ttnn/operations/pool/downsample/downsample_pybind.hpp"
 #include "ttnn/operations/pool/generic/generic_pools_pybind.hpp"
 #include "ttnn/operations/pool/global_avg_pool/global_avg_pool_pybind.hpp"
@@ -187,6 +188,9 @@ void py_module(py::module& module) {
 
     auto m_generic = module.def_submodule("generic", "ttnn generic operation interface");
     generic::bind_generic_operation(m_generic);
+    
+    auto m_point_to_point = module.def_submodule("point_to_point", "point_to_point operations");
+    point_to_point::py_bind_point_to_point(m_point_to_point);
 }
 }  // namespace ttnn::operations
 
