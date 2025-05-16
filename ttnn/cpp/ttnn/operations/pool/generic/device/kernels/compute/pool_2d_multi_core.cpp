@@ -70,6 +70,7 @@ void MAIN {
     constexpr uint32_t in_cb_id_1 = get_compile_time_arg_val(11);
     constexpr uint32_t in_scalar_cb_id = get_compile_time_arg_val(12);
     constexpr uint32_t out_cb_id = get_compile_time_arg_val(13);
+    constexpr bool one_scalar_per_core = get_compile_time_arg_val(16);
 
     constexpr bool is_partial_tile = in_c < 32;
     static_assert((!is_partial_tile || (in_c == 16)), "Partial tile must have c_dim 16");
@@ -87,17 +88,27 @@ void MAIN {
     constexpr bool neginf_srca_maxpool = (REDUCE_OP == PoolType::MAX) ? true : false;
     constexpr bool zero_srca_avgpool = (REDUCE_OP == PoolType::SUM) ? true : false;
 
-    uint32_t num_od_ele = get_arg_val<uint32_t>(0);
-    uint32_t scalar_cnt = get_arg_val<uint32_t>(1);
+    uint32_t num_of_ele = nsticks_per_core;
+    uint32_t scalar_cnt = 1;
     uint32_t diff_index = 0;
-    uint32_t time_for_change = get_arg_val<uint32_t>(2 + diff_index);
+    uint32_t time_for_change = 0;
+    if (!one_scalar_per_core) {
+        num_of_ele = get_arg_val<uint32_t>(0);
+        scalar_cnt = get_arg_val<uint32_t>(1);
+        time_for_change = get_arg_val<uint32_t>(2 + diff_index);
+    }
+
     tilizeA_B_reduce_init<neginf_srca_maxpool, zero_srca_avgpool>(
         in_cb_id_0, in_scalar_cb_id, max_tiles_per_iter, out_cb_id, num_faces_in_tile, window_size_hw);
     pack_untilize_dst_init_short<max_tiles_per_iter>(out_cb_id, num_out_rows, num_faces_in_tile);
     DPRINT << "scalar cnt " << scalar_cnt << ENDL();
-    for (uint32_t i = 0; i < num_od_ele; i++) {
+
+    if (one_scalar_per_core) {
+        cb_wait_front(in_scalar_cb_id, 1);
+    }
+    for (uint32_t i = 0; i < num_of_ele; i++) {
         DPRINT << "i " << i << ENDL();
-        if (i == time_for_change) {
+        if (i == time_for_change && !one_scalar_per_core) {
             cb_wait_front(in_scalar_cb_id, 1);
             DPRINT << "change " << ENDL();
             if (diff_index < scalar_cnt - 1) {
@@ -116,10 +127,13 @@ void MAIN {
         reduce_h_fused<partial_iter_output_tiles, is_partial_tile, split_reader, window_size_hw>(
             in_cb_id_0, in_cb_id_1, in_scalar_cb_id, i, out_cb_id);
 
-        if (i + 1 == time_for_change || i == num_od_ele - 1) {
+        if ((((i + 1) == time_for_change) || (i == (num_of_ele - 1))) && !one_scalar_per_core) {
             DPRINT << "popped the old num " << ENDL();
             cb_pop_front(in_scalar_cb_id, 1);
         }
+    }
+    if (one_scalar_per_core) {
+        cb_pop_front(in_scalar_cb_id, 1);
     }
 }
 
