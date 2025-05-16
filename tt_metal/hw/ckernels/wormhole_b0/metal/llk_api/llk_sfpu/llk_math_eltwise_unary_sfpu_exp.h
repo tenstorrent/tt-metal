@@ -12,11 +12,16 @@ namespace ckernel {
 
 // New LLK SFPU APIs
 
-template <bool APPROXIMATE, bool FAST_APPROX = true, int ITERATIONS = 8, bool SCALE_EN = false>
+template <
+    bool APPROXIMATE,
+    bool FAST_APPROX = true,
+    int ITERATIONS = 8,
+    bool SCALE_EN = false,
+    bool SKIP_POSITIVE_CHECK = false>
 inline void llk_math_eltwise_unary_sfpu_exponential(
-    uint dst_index, int vector_mode = (int)VectorMode::RC, int param0 = ITERATIONS, int param1 = 0) {
+    uint dst_index, int vector_mode = (int)VectorMode::RC, int param0 = ITERATIONS, int param1 = 0x3F80) {
     llk_math_eltwise_unary_sfpu_params<APPROXIMATE>(
-        ckernel::sfpu::calculate_exponential<APPROXIMATE, FAST_APPROX, SCALE_EN>,
+        ckernel::sfpu::calculate_exponential<APPROXIMATE, FAST_APPROX, SCALE_EN, ITERATIONS, SKIP_POSITIVE_CHECK>,
         dst_index,
         vector_mode,
         param0,
