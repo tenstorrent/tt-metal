@@ -30,8 +30,7 @@ public:
     size_t get_fabric_max_payload_size_bytes() const;
     size_t get_fabric_channel_buffer_size_bytes() const;
 
-    tt::tt_fabric::FabricEriscDatamoverConfig& get_fabric_router_config() const;
-    tt::tt_fabric::FabricEriscDatamoverConfig get_fabric_dateline_router_config() const;
+    tt::tt_fabric::FabricEriscDatamoverConfig& get_fabric_router_config(bool is_dateline = false) const;
 
     void set_num_fabric_initialized_routers(chip_id_t chip_id, size_t num_routers);
     uint32_t get_num_fabric_initialized_routers(chip_id_t chip_id) const;
