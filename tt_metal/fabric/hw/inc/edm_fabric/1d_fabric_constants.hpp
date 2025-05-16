@@ -176,8 +176,9 @@ constexpr size_t my_direction = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX 
 // EXPERIMENTAL. Make use of BH's 2 risc cores on eth core
 constexpr bool is_bh = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 58) != 0;
 constexpr size_t risc_id = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 59);
+constexpr size_t num_eth_ports = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 60);
 
-constexpr size_t SPECIAL_MARKER_0_IDX = MAIN_CT_ARGS_START_IDX + 60;
+constexpr size_t SPECIAL_MARKER_0_IDX = MAIN_CT_ARGS_START_IDX + 61;
 constexpr size_t SPECIAL_MARKER_0 = 0x00c0ffee;
 static_assert(
     !SPECIAL_MARKER_CHECK_ENABLED || get_compile_time_arg_val(SPECIAL_MARKER_0_IDX) == SPECIAL_MARKER_0,

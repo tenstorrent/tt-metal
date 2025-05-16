@@ -50,7 +50,7 @@ enum CQDispatchCmdId : uint8_t {
     CQ_DISPATCH_CMD_SET_WRITE_OFFSET = 12,  // set the offset to add to all non-host destination addresses (relocation)
     CQ_DISPATCH_CMD_TERMINATE = 13,         // quit
     CQ_DISPATCH_CMD_SEND_GO_SIGNAL = 14,
-    CQ_DISPATCH_NOTIFY_SLAVE_GO_SIGNAL = 15,
+    CQ_DISPATCH_NOTIFY_SUBORDINATE_GO_SIGNAL = 15,
     CQ_DISPATCH_SET_NUM_WORKER_SEMS = 16,
     CQ_DISPATCH_SET_GO_SIGNAL_NOC_DATA = 17,
     CQ_DISPATCH_CMD_MAX_COUNT,  // for checking legal IDs
@@ -63,7 +63,7 @@ enum GoSignalMcastSettings : uint8_t {
 
 enum DispatcherSelect : uint8_t {
     DISPATCH_MASTER = 0,
-    DISPATCH_SLAVE = 1,
+    DISPATCH_SUBORDINATE = 1,
 };
 
 //////////////////////////////////////////////////////////////////////////////
@@ -332,7 +332,7 @@ struct CQDispatchGoSignalMcastCmd {
     uint32_t wait_stream;  // Index of the stream to wait on
 } __attribute__((packed));
 
-struct CQDispatchNotifySlaveGoSignalCmd {
+struct CQDispatchNotifySubordinateGoSignalCmd {
     // sends a counter update to dispatch_s when it sees this cmd
     uint8_t wait;  // if true, issue a write barrier before sending signal to dispatch_s
     uint16_t index_bitmask;
@@ -366,7 +366,7 @@ struct CQDispatchCmd {
         CQDispatchSetWriteOffsetCmd set_write_offset;
         CQDispatchGoSignalMcastCmd mcast;
         CQDispatchSetUnicastOnlyCoresCmd set_unicast_only_cores;
-        CQDispatchNotifySlaveGoSignalCmd notify_dispatch_s_go_signal;
+        CQDispatchNotifySubordinateGoSignalCmd notify_dispatch_s_go_signal;
         CQDispatchSetNumWorkerSemsCmd set_num_worker_sems;
         CQDispatchSetGoSignalNocDataCmd set_go_signal_noc_data;
     } __attribute__((packed));

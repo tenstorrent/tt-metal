@@ -6,6 +6,7 @@
 
 #include "conv_transpose2d_pybind.hpp"
 #include "conv_transpose2d.hpp"
+#include "prepare_conv_transpose2d_weights.hpp"
 
 namespace py = pybind11;
 
@@ -216,6 +217,96 @@ void py_bind_conv_transpose2d(py::module& module) {
             py::arg("return_output_dim") = false,
             py::arg("return_weights_and_bias") = false,
             py::arg("queue_id") = DefaultQueueId});
+
+    module.def(
+        "prepare_conv_transpose2d_weights",
+        prepare_conv_transpose2d_weights<ttnn::IDevice>,
+        py::kw_only(),
+        py::arg("weight_tensor"),
+        py::arg("input_memory_config"),
+        py::arg("input_layout"),
+        py::arg("weights_format"),
+        py::arg("in_channels"),
+        py::arg("out_channels"),
+        py::arg("batch_size"),
+        py::arg("input_height"),
+        py::arg("input_width"),
+        py::arg("kernel_size"),
+        py::arg("stride"),
+        py::arg("padding"),
+        py::arg("dilation"),
+        py::arg("has_bias"),
+        py::arg("groups"),
+        py::arg("device"),
+        py::arg("conv_config") = std::nullopt,
+        py::arg("compute_config") = std::nullopt,
+        py::arg("mirror_kernel") = true);
+
+    module.def(
+        "prepare_conv_transpose2d_weights",
+        prepare_conv_transpose2d_weights<ttnn::MeshDevice>,
+        py::kw_only(),
+        py::arg("weight_tensor"),
+        py::arg("input_memory_config"),
+        py::arg("input_layout"),
+        py::arg("weights_format"),
+        py::arg("in_channels"),
+        py::arg("out_channels"),
+        py::arg("batch_size"),
+        py::arg("input_height"),
+        py::arg("input_width"),
+        py::arg("kernel_size"),
+        py::arg("stride"),
+        py::arg("padding"),
+        py::arg("dilation"),
+        py::arg("has_bias"),
+        py::arg("groups"),
+        py::arg("device"),
+        py::arg("conv_config") = std::nullopt,
+        py::arg("compute_config") = std::nullopt,
+        py::arg("mirror_kernel") = true);
+
+    module.def(
+        "prepare_conv_transpose2d_bias",
+        prepare_conv_transpose2d_bias<ttnn::IDevice>,
+        py::kw_only(),
+        py::arg("bias_tensor"),
+        py::arg("input_memory_config"),
+        py::arg("input_layout"),
+        py::arg("in_channels"),
+        py::arg("out_channels"),
+        py::arg("batch_size"),
+        py::arg("input_height"),
+        py::arg("input_width"),
+        py::arg("kernel_size"),
+        py::arg("stride"),
+        py::arg("padding"),
+        py::arg("dilation"),
+        py::arg("groups"),
+        py::arg("device"),
+        py::arg("conv_config") = std::nullopt,
+        py::arg("compute_config") = std::nullopt);
+
+    module.def(
+        "prepare_conv_transpose2d_bias",
+        prepare_conv_transpose2d_bias<ttnn::MeshDevice>,
+        py::kw_only(),
+        py::arg("bias_tensor"),
+        py::arg("input_memory_config"),
+        py::arg("input_layout"),
+        py::arg("in_channels"),
+        py::arg("out_channels"),
+        py::arg("batch_size"),
+        py::arg("input_height"),
+        py::arg("input_width"),
+        py::arg("kernel_size"),
+        py::arg("stride"),
+        py::arg("padding"),
+        py::arg("dilation"),
+        py::arg("groups"),
+        py::arg("device"),
+        py::arg("conv_config") = std::nullopt,
+        py::arg("compute_config") = std::nullopt);
 }
 
 }  // namespace conv_transpose2d
