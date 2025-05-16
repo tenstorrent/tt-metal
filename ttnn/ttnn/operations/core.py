@@ -281,17 +281,9 @@ def from_torch(
         if memory_config.shard_spec.mode == ttnn.ShardMode.LOGICAL:
             return ttnn.Tensor(tensor, dtype, device, layout, memory_config, tile)
 
-    logical_shape = None
-    padded_shape = None
     if dtype == ttnn.bfloat8_b or dtype == ttnn.bfloat4_b:
         if layout != ttnn.TILE_LAYOUT:
             raise RuntimeError("ttnn.from_torch: bfloat8_b/bfloat4_b requires TILE_LAYOUT!")
-        # Tilize tensor
-        tensor = ttnn.from_torch(tensor, layout=ttnn.TILE_LAYOUT, tile=tile, pad_value=pad_value, mesh_mapper=None)
-        logical_shape = tensor.shape
-        padded_shape = tensor.padded_shape
-        tensor = tensor.reshape(tensor.padded_shape)
-        tensor = ttnn.to_torch(tensor)
 
     if memory_config is not None:
         if device is None:
@@ -303,22 +295,11 @@ def from_torch(
 
     if mesh_mapper:
         shards = mesh_mapper.map(tensor)
-        tensor = ttnn.Tensor(shards, dtype, mesh_mapper.config(), tile, memory_config)
+        return ttnn.Tensor(shards, dtype, layout, memory_config, tile, pad_value, mesh_mapper.config()).to_device(
+            device, memory_config
+        )
     else:
-        tensor = ttnn.Tensor(tensor, dtype, {}, tile, memory_config)
-
-    if layout is not None and not (dtype == ttnn.bfloat8_b or dtype == ttnn.bfloat4_b):
-        if pad_value is not None:
-            tensor = tensor.pad_to_tile(pad_value)
-        tensor = ttnn.to_layout(tensor, layout, device=device)
-
-    if device is not None:
-        tensor = ttnn.to_device(tensor, device, memory_config=memory_config, cq_id=cq_id)
-
-    if logical_shape is not None and logical_shape != tensor.shape and mesh_mapper is None:
-        tensor = ttnn.reshape(tensor, logical_shape, padded_shape)
-
-    return tensor
+        return ttnn.Tensor(tensor, dtype, device, layout, memory_config, tile, pad_value)
 
 
 def _golden_function(tensor, *, torch_rank=None, **kwargs):
