@@ -5,7 +5,7 @@
 #include <cstdint>
 #include <utility>
 
-#include "cpp/ttnn/tensor/types.hpp"
+#include "ttnn/tensor/types.hpp"
 #include "llama_reduce_scatter_create_heads_device_op.hpp"
 #include "cpp/ttnn/operations/data_movement/common/common.hpp"
 #include <tt-metalium/work_split.hpp>

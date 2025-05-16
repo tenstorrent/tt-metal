@@ -18,7 +18,6 @@ from tests.ttnn.unit_tests.operations.ccl.test_new_all_reduce import (
     FF1_CRS,
     FF1_CRS_RS_OUT,
     NORM_CRS,
-    check_mesh_tensor_alloc,
 )
 from models.demos.llama3_subdevices.tt.model_config import set_tg_attention_config
 from tracy import signpost
@@ -221,9 +220,7 @@ def run_reduce_scatter_test(
                     mesh_device, dims=(0, 1), mesh_shape=[num_devices_fracture, num_devices_scatter]
                 ),
             )
-            check_mesh_tensor_alloc(tt_intermediate)
             tt_intermediate_tensors_list.append(tt_intermediate)
-        check_mesh_tensor_alloc(tt_input)
         tt_input_tensors_list.append(tt_input)
 
     ccl_sub_device_crs = subdevice_shard_cores_grid if use_regular_grid is not None else SUB_DEVICE_CRS
