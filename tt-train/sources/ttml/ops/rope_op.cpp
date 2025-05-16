@@ -105,7 +105,7 @@ E apply_rope_scaling(const E& freqs, const RopeScalingParams& scaling_params) {
 // the module hierarchy and passed to the operation.
 autograd::TensorPtr rope(const autograd::TensorPtr& input, const RotaryEmbeddingParams& params) {
     validate_rope_input_and_params(input, params);
-  
+
     auto input_logical_shape = input->get_value().logical_shape();
     auto num_batch = input_logical_shape[0];
     auto num_heads = input_logical_shape[1];
@@ -127,7 +127,7 @@ autograd::TensorPtr rope(const autograd::TensorPtr& input, const RotaryEmbedding
     };
 
     auto out_tensor = ttnn::experimental::rotary_embedding_llama(
-        squish_batch(input_tensor),
+        squish_batch(input->get_value()),
         params.cos_cache,
         params.sin_cache,
         params.trans_mat,
