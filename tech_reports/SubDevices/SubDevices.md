@@ -35,7 +35,7 @@ Each Sub-Device can be any combination of cores and core types. It could be only
 <!-- ![example_sub_device_grouping](images/example_sub_device_grouping.png){width=15 height=15} -->
 <img src="images/example_sub_device_grouping.png" style="width:400px;"/>
 
-Figure 1. Example sub-devices where the red sub-device is a contiguous grid of worker cores, purple is a discontiguous set of worker cores, yellow is a sub-device of only ethernet cores, and blue is a sub-device of worker and ethernet cores.
+Figure 1. Example sub-devices where the red sub-device is a contiguous grid of worker cores, purple is a discontiguous set of worker cores, blue is a sub-device of only ethernet cores, and yellow is a sub-device of worker and ethernet cores.
 
 To create a sub-device, we need to provide a list of cores by HalProgrammableCoreType, where the first index of the list are Tensix cores, the second index are Active Eth cores, etc. The order is based on the HalProgrammableCoreType enum. This api is expected to change as the device core coords are expected to be augmented to contain the core type in addition to the coords. With this change, then it would not matter what order the cores are passed in since they'd contain their core type.
 
