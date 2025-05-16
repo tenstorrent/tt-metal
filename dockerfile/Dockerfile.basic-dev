@@ -21,23 +21,15 @@ RUN apt-get update && apt-get install -y \
     g++-12 \
     build-essential \
     && rm -rf /var/lib/apt/lists/*
-
-
-RUN apt-get install -y --no-install-recommends libhwloc15 libibverbs1 \
-    DEB_URL="https://github.com/dmakoviichuk-tt/mpi-ulfm/releases/download/v5.0.7-ulfm/openmpi-ulfm_5.0.7-1_amd64.deb" \
-    DEB_FILE="$(basename "$DEB_URL")" \
-
-    # 1. Create temp workspace
-    TMP_DIR="$(mktemp -d)" \
-    cleanup() { rm -rf "$TMP_DIR"; } \
-    trap cleanup EXIT INT TERM \
-
-    echo "→ Downloading $DEB_FILE …" \
-    wget -q --show-progress -O "$TMP_DIR/$DEB_FILE" "$DEB_URL" \
-
-    # 2. Install
-    echo "→ Installing $DEB_FILE …" \
-
-    dpkg -i "$TMP_DIR/$DEB_FILE" \
-    apt-get -y install
-#
+# Install mpi-ulfm
+RUN apt-get install -y --no-install-recommends libhwloc15 libibverbs1
+RUN    DEB_URL="https://github.com/dmakoviichuk-tt/mpi-ulfm/releases/download/v5.0.7-ulfm/openmpi-ulfm_5.0.7-1_amd64.deb"
+RUN    DEB_FILE="$(basename "$DEB_URL")"
+RUN    TMP_DIR="$(mktemp -d)"
+RUN    cleanup() { rm -rf "$TMP_DIR"; }
+RUN    trap cleanup EXIT INT TERM
+RUN    echo "→ Downloading $DEB_FILE …"
+RUN    wget -q --show-progress -O "$TMP_DIR/$DEB_FILE" "$DEB_URL"
+RUN    echo "→ Installing $DEB_FILE …"
+RUN    dpkg -i "$TMP_DIR/$DEB_FILE"
+RUN    apt-get -y install
