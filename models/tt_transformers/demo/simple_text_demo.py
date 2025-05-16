@@ -20,6 +20,7 @@ from models.tt_transformers.tt.common import (
     create_tt_model,
     preprocess_inputs_prefill,
     sample_host,
+    validate_paged_attention_capacity,
 )
 from models.tt_transformers.tt.generator import Generator, SamplingParams
 from models.tt_transformers.tt.model_config import DecodersPrecision, parse_decoder_json
@@ -540,12 +541,13 @@ def test_demo_text(
         ), f"Prompt prefill tokens ({max_encoded_prompt_len}) + maximum number of decoded iterations ({max_generated_tokens}) needs to be <= than max_seq_len ({max_seq_len})"
 
         if paged_attention:
-            paged_cache_max_seq_len = (
-                page_params["page_block_size"] * page_params["page_max_num_blocks_per_dp"] / batch_size
+            validate_paged_attention_capacity(
+                page_block_size=page_params["page_block_size"],
+                page_max_num_blocks=page_params["page_max_num_blocks_per_dp"],
+                batch_size=batch_size,
+                required_tokens_per_user=max_generated_tokens + max_encoded_prompt_len,
             )
-            assert (
-                max_generated_tokens + max_encoded_prompt_len <= paged_cache_max_seq_len
-            ), f"max_generated_tokens ({max_generated_tokens}) needs to be <= than paged_cache_max_seq_len ({paged_cache_max_seq_len})"
+
         profiler.end(f"preprocess_prefill_inputs", iteration=batch_idx)
 
         # when doing repeating batches, set kv-caches to zero, to avoid context leaking
