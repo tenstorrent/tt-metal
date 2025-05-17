@@ -10,9 +10,12 @@
 
 import argparse
 import numpy as np
-from transformers import GPT2LMHeadModel
+from transformers import GPT2LMHeadModel, GPT2Tokenizer
 import msgpack
 import msgpack_numpy  # required for serializing numpy arrays
+import os
+import json
+import shutil
 
 # Patch msgpack to support numpy arrays.
 msgpack_numpy.patch()
@@ -281,9 +284,52 @@ def load_and_update(existing_file, output_file):
     print_transformer(existing_state)
 
 
+def dump_tokenizer(tokenizer_path):
+    cache_dir = "/tmp/gpt2_export"
+    os.makedirs(cache_dir, exist_ok=True)
+    GPT2Tokenizer.from_pretrained("gpt2", cache_dir=cache_dir)
+
+    output_dir = os.path.dirname(tokenizer_path)
+    if output_dir:
+        os.makedirs(output_dir, exist_ok=True)
+
+    # Find tokenizer.json in the cache directory
+    tokenizer_json_path = None
+    for root, _, files in os.walk(cache_dir):
+        if "tokenizer.json" in files:
+            tokenizer_json_path = os.path.join(root, "tokenizer.json")
+            break
+
+    if tokenizer_json_path is None:
+        raise FileNotFoundError("Could not find tokenizer.json in the cache directory")
+
+    shutil.copy(tokenizer_json_path, tokenizer_path)
+    print(f"GPT2 tokenizer saved to {tokenizer_path}")
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Update GPT-2 weights stored in a msgpack file with new GPT-2 state.")
-    parser.add_argument("input_file", type=str, help="Path to the input msgpack file containing the GPT-2 weights.")
-    parser.add_argument("output_file", type=str, help="Path where the updated msgpack file will be saved.")
+    parser.add_argument(
+        "-i",
+        "--input_file",
+        type=str,
+        help="Path to the input msgpack file containing the GPT-2 weights.",
+        default=None,
+    )
+    parser.add_argument(
+        "-o", "--output_file", type=str, help="Path where the updated msgpack file will be saved.", default=None
+    )
+
+    parser.add_argument("-t", "--dump_tokenizer_path", type=str, default=None, help="Path to the output tokenizer file")
     args = parser.parse_args()
-    load_and_update(args.input_file, args.output_file)
+
+    if not any([args.dump_tokenizer_path, args.input_file, args.output_file]):
+        print("Nothing to do. Please either specify --dump_tokenizer_path or both of --input_file and --output_file.")
+        exit(1)
+    if args.dump_tokenizer_path:
+        dump_tokenizer(args.dump_tokenizer_path)
+    if any([args.input_file, args.output_file]) and not all([args.input_file, args.output_file]):
+        print("Note: both of input_file and output_file are required to export the weights.")
+        exit(1)
+    if all([args.input_file, args.output_file]):
+        load_and_update(args.input_file, args.output_file)
