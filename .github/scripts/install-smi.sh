@@ -6,4 +6,4 @@
 set -e
 
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
-pip install git+https://github.com/tenstorrent/tt-smi.git
+pip install --no-cache-dir git+https://github.com/tenstorrent/tt-smi.git

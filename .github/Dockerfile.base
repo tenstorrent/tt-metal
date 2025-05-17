@@ -4,8 +4,7 @@ SHELL ["/bin/bash", "-c"]
 # Set environment variables
 ENV DEBIAN_FRONTEND=noninteractive
 
-# Install dependencies
-RUN apt-get update && apt-get install -y \
+RUN apt-get update && apt-get install -y --no-install-recommends \
     software-properties-common \
     build-essential \
     python3-dev \
@@ -29,6 +28,5 @@ RUN apt-get update && apt-get install -y \
     curl \
     jq \
     gh \
-    lcov
-
-RUN apt-get clean
+    lcov && \
+    apt-get clean && rm -rf /var/lib/apt/lists/*
