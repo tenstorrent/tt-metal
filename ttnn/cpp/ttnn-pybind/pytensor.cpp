@@ -70,8 +70,7 @@ Tensor create_typed_tt_tensor_from_py_data(
     const TensorSpec& tensor_spec,
     MeshDevice* device,
     const std::function<void()>& on_creation_callback,
-    const std::function<void()>& on_destruction_callback,
-    const bool force_disable_borrow) {
+    const std::function<void()>& on_destruction_callback) {
     TT_FATAL(
         !tensor_spec.memory_config().is_sharded() or tensor_spec.memory_config().shard_spec().has_value(),
         "Sharded tensors must have a shard spec when converting to tt tensors!");
@@ -81,7 +80,7 @@ Tensor create_typed_tt_tensor_from_py_data(
                                    tensor_spec.data_type() == convert_to_data_type<T>();
 
     tt::stl::Span<T> pydata_span(reinterpret_cast<T*>(py_data_ptr), tensor_spec.logical_shape().volume());
-    if (pydata_borrowable && !force_disable_borrow) {
+    if (pydata_borrowable) {
         auto output = Tensor::from_borrowed_data(
             pydata_span,
             tensor_spec.logical_shape(),
@@ -101,12 +100,11 @@ Tensor create_tt_tensor_from_py_data(
     std::size_t py_data_ptr,
     const TensorSpec& tensor_spec,
     MeshDevice* device,
-    const bool force_disable_borrow,
     const std::function<void()>& on_creation_callback,
     const std::function<void()>& on_destruction_callback) {
     auto create_concrete = [&]<typename T>() {
         return create_typed_tt_tensor_from_py_data<T>(
-            py_data_ptr, tensor_spec, device, on_creation_callback, on_destruction_callback, force_disable_borrow);
+            py_data_ptr, tensor_spec, device, on_creation_callback, on_destruction_callback);
     };
     switch (tensor_spec.data_type()) {
         case DataType::UINT8: return create_concrete.operator()<uint8_t>();
@@ -135,8 +133,7 @@ Tensor convert_python_tensor_to_tt_tensor(
     std::optional<Layout> optional_layout,
     const std::optional<Tile>& optional_tile,
     const MemoryConfig& memory_config,
-    MeshDevice* device,
-    const bool force_disable_borrow = false) {
+    MeshDevice* device) {
     GraphTracker::instance().track_function_start(
         "tt::tt_metal::detail::convert_python_tensor_to_tt_tensor",
         py_tensor,
@@ -144,8 +141,7 @@ Tensor convert_python_tensor_to_tt_tensor(
         optional_layout,
         optional_tile,
         memory_config,
-        device,
-        force_disable_borrow);
+        device);
     py::object torch = py::module_::import("torch");
     py::object np = py::module_::import("numpy");
 
@@ -222,8 +218,6 @@ Tensor convert_python_tensor_to_tt_tensor(
         num_elements = py::cast<std::size_t>(contiguous_py_tensor.attr("numel")());
         py_data_ptr = py::cast<std::size_t>(contiguous_py_tensor.attr("data_ptr")());
     } else if (py::isinstance(py_tensor, np.attr("ndarray"))) {
-        TT_FATAL(!force_disable_borrow, "Disabling borrowed buffers for numpy tensors is untested!");
-
         contiguous_py_tensor = np.attr("ascontiguousarray")(py_tensor);
 
         // Override the data type if there is a user-provided one
@@ -309,8 +303,8 @@ Tensor convert_python_tensor_to_tt_tensor(
     auto tensor_spec = TensorSpec(shape, TensorLayout(data_type, PageConfig(layout, optional_tile), memory_config));
     auto on_creation_callback = [tensor = contiguous_py_tensor] { tensor.inc_ref(); };
     auto on_destruction_callback = [tensor = contiguous_py_tensor] { tensor.dec_ref(); };
-    auto output = create_tt_tensor_from_py_data(
-        py_data_ptr, tensor_spec, device, force_disable_borrow, on_creation_callback, on_destruction_callback);
+    auto output =
+        create_tt_tensor_from_py_data(py_data_ptr, tensor_spec, device, on_creation_callback, on_destruction_callback);
 
     output = tt::tt_metal::set_tensor_id(output);
     GraphTracker::instance().track_function_end(output);
@@ -332,8 +326,7 @@ Tensor convert_python_tensors_to_tt_tensors(
             /*optional_layout=*/std::nullopt,
             tile,
             MemoryConfig{},
-            /*device=*/nullptr,
-            /*force_disable_borrow=*/true));
+            /*device=*/nullptr));
     }
     std::vector<HostBuffer> host_owned_buffers;
     std::vector<ttnn::TensorSpec> host_owned_specs;
