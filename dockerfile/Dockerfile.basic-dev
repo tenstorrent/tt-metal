@@ -21,13 +21,13 @@ RUN apt-get update && apt-get install -y \
 
 # Install mpi-ulfm
 RUN set -eux; \
-    apt-get update; \
-    apt-get install -y \
-        wget ca-certificates libhwloc15 libibverbs1; \
-    TMP_DIR="$(mktemp -d)"; \
-    DEB_URL="https://github.com/dmakoviichuk-tt/mpi-ulfm/releases/download/v5.0.7-ulfm/openmpi-ulfm_5.0.7-1_amd64.deb"; \
-    wget -qO "$TMP_DIR/ompi.deb" "$DEB_URL"; \
-    dpkg -i "$TMP_DIR/ompi.deb" || true; \
-    apt-get -y install \
-    rm -rf "$TMP_DIR" \
+    apt-get update && \
+    apt-get install -y --no-install-recommends \
+        wget ca-certificates libhwloc15 libibverbs1 && \
+    TMP_DIR="$(mktemp -d)" && \
+    DEB_URL="https://github.com/dmakoviichuk-tt/mpi-ulfm/releases/download/v5.0.7-ulfm/openmpi-ulfm_5.0.7-1_amd64.deb" && \
+    wget -qO "$TMP_DIR/ompi.deb" "$DEB_URL" && \
+    dpkg -i "$TMP_DIR/ompi.deb" || true && \
+    apt-get -y --fix-broken install && \
+    rm -rf "$TMP_DIR" && \
     rm -rf /var/lib/apt/lists/*
