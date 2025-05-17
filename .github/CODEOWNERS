@@ -204,6 +204,7 @@ models/experimental/yolov8s_world @tenstorrent/cse-developer-ttnn
 models/experimental/yolov10 @tenstorrent/cse-developer-ttnn
 models/demos/yolov9c @tenstorrent/cse-developer-ttnn
 models/demos/yolov8x @tenstorrent/cse-developer-ttnn
+models/experimental/swin_s @tenstorrent/cse-developer-ttnn
 
 # docs
 docs/Makefile @tenstorrent/metalium-developers-infra
