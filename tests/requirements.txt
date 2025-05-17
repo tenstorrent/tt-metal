@@ -1,3 +1,4 @@
+numpy==2.2.5
 pytest-cov==6.1.1
 pytest-randomly==3.16.0
 pytest-repeat==0.9.4
@@ -6,5 +7,3 @@ pytest-sugar==1.0.0
 pytest-timeout==2.4.0
 pytest==8.3.5
 torch==2.7.0
-torchaudio==2.7.0
-torchvision==0.22.0

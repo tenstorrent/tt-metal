@@ -5,7 +5,7 @@ SHELL ["/bin/bash", "-c"]
 ENV DEBIAN_FRONTEND=noninteractive
 
 # Install dependencies
-RUN apt-get update && apt-get install -y \
+RUN apt-get update && apt-get install -y --no-install-recommends \
     ssh \
     rsync \
     sudo \
@@ -17,10 +17,8 @@ RUN apt-get update && apt-get install -y \
     python3-venv \
     python3-pip \
     clangd \
-    xxd
-
-# Clean up
-RUN apt-get clean
+    xxd && \
+    apt-get clean && rm -rf /var/lib/apt/lists/*
 
 # Copy scripts into the image
 COPY .github/scripts/ /home/

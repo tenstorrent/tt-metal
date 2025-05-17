@@ -7,6 +7,9 @@ import pytest
 import requests
 import subprocess
 import sys
+import time
+
+from requests.exceptions import ConnectionError, Timeout, RequestException
 
 from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
 from helpers.log_utils import _format_log
@@ -82,29 +85,63 @@ def download_headers():
         sys.exit(1)
 
     # Download headers
+    RETRIES = 3
+    RETRY_DELAY = 2  # seconds
+
+    def download_with_retries(url, header):
+        delay = RETRY_DELAY
+        for attempt in range(1, RETRIES + 1):
+            try:
+                print(f"Attempt {attempt}: Downloading {header} from {url}...")
+                response = requests.get(url, timeout=10)
+
+                # Check for HTTP errors (like 404)
+                if response.status_code == 200:
+                    with open(os.path.join(HEADER_DIR, header), "wb") as f:
+                        f.write(response.content)
+                    return True
+                elif response.status_code == 429:
+                    retry_after = response.headers.get("Retry-After")
+                    if retry_after:
+                        wait_time = int(retry_after)
+                        print(
+                            f"Rate limited. Waiting {wait_time} seconds (from Retry-After header)..."
+                        )
+                    else:
+                        wait_time = delay
+                        print(
+                            f"Rate limited. Waiting {wait_time} seconds (exponential backoff)..."
+                        )
+                        delay *= 2
+                        time.sleep(wait_time)
+                else:
+                    print(f"HTTP error {response.status_code} for {url}")
+                    return False  # don't retry for non-200 responses
+
+            except (ConnectionError, Timeout) as e:
+                print(f"Attempt {attempt} failed due to network issue: {e}")
+                if attempt < RETRIES:
+                    time.sleep(delay)
+                    delay *= 2
+            except RequestException as e:
+                print(f"Non-retriable error on attempt {attempt}: {e}")
+                return False  # Other errors: don't retry
+        return False
+
     for header in HEADERS:
         header_url = f"{BASE_URL}/{header}"
         specific_header_url = f"{specific_url}/{header}" if specific_url else None
 
-        try:
-            print(f"Downloading {header} from {header_url}...")
-            response = requests.get(header_url, timeout=10)
-            response.raise_for_status()
-            with open(os.path.join(HEADER_DIR, header), "wb") as f:
-                f.write(response.content)
-        except requests.RequestException:
-            if specific_header_url:
-                try:
-                    print(f"Retrying {header} from {specific_header_url}...")
-                    response = requests.get(specific_header_url, timeout=10)
-                    response.raise_for_status()
-                    with open(os.path.join(HEADER_DIR, header), "wb") as f:
-                        f.write(response.content)
-                except requests.RequestException:
-                    print(f"Failed to download {header}")
-                    sys.exit(1)
-            else:
-                print(f"Failed to download {header}")
+        # Try primary URL
+        if not download_with_retries(header_url, header):
+            # Fallback to specific URL
+            if specific_header_url and not download_with_retries(
+                specific_header_url, header
+            ):
+                print(f"Failed to download {header} after trying both URLs")
+                sys.exit(1)
+            elif not specific_header_url:
+                print(f"Failed to download {header} after retries from primary URL")
                 sys.exit(1)
 
     # Create the stamp file to indicate headers are downloaded
