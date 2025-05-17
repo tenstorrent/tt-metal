@@ -23,7 +23,7 @@ def get_expected_times(name):
 @pytest.mark.models_performance_bare_metal
 @pytest.mark.models_performance_virtual_machine
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
-@pytest.mark.parametrize("input_tensor", [torch.rand((1, 640, 640, 3))], ids=["input_tensor"])
+@pytest.mark.parametrize("input_tensor", [torch.rand((1, 3, 640, 640))], ids=["input_tensor"])
 @pytest.mark.parametrize(
     "use_weights_from_ultralytics",
     [True],
@@ -42,8 +42,19 @@ def test_yolov8s(device, input_tensor, use_weights_from_ultralytics):
     parameters = custom_preprocessor(device, state_dict, inp_h=inp_h, inp_w=inp_w)
     ttnn_model = TtYolov8sModel(device=device, parameters=parameters, res=(inp_h, inp_w))
 
-    input_tensor = torch.nn.functional.pad(input_tensor, (0, 13, 0, 0, 0, 0, 0, 0), value=0)
-    ttnn_input = ttnn.from_torch(input_tensor, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    # input_tensor = torch.nn.functional.pad(input_tensor, (0, 13, 0, 0, 0, 0, 0, 0), value=0)
+    # ttnn_input = ttnn.from_torch(input_tensor, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+
+    n, c, h, w = input_tensor.shape
+    if c == 3:
+        c = 16
+    input_mem_config = ttnn.create_sharded_memory_config(
+        [n, c, h, w],
+        ttnn.CoreGrid(x=8, y=8),
+        ttnn.ShardStrategy.HEIGHT,
+    )
+    ttnn_input = ttnn.from_torch(input_tensor, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
+    ttnn_input = ttnn_input.to(device, input_mem_config)
 
     logger.info(f"Compiling model with warmup run")
     profiler.start(f"inference_and_compile_time")

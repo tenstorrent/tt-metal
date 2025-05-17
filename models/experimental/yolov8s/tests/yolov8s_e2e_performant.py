@@ -73,8 +73,6 @@ class Yolov8sTrace2CQ:
         assert trace_input_addr == self.input_tensor.buffer_address()
 
     def execute_yolov8s_trace_2cqs_inference(self, tt_inputs_host=None):
-        ttnn.wait_for_event(1, self.op_event)
-
         ttnn.copy_host_to_device_tensor(tt_inputs_host, self.tt_image_res, 1)
         self.write_event = ttnn.record_event(self.device, 1)
         ttnn.wait_for_event(0, self.write_event)

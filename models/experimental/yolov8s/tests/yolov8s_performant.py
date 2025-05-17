@@ -119,6 +119,7 @@ def run_yolov8s_trace_2cqs_inference(
     test_infra.run()
     test_infra.validate()
     test_infra.dealloc_output()
+    ttnn.DumpDeviceProfiler(device)
 
     # Optimized run
     ttnn.wait_for_event(1, op_event)
@@ -129,6 +130,7 @@ def run_yolov8s_trace_2cqs_inference(
     op_event = ttnn.record_event(device, 0)
     test_infra.run()
     test_infra.validate()
+    ttnn.DumpDeviceProfiler(device)
 
     # Capture
     ttnn.wait_for_event(1, op_event)
@@ -144,6 +146,7 @@ def run_yolov8s_trace_2cqs_inference(
     input_tensor = ttnn.allocate_tensor_on_device(spec, device)
     ttnn.end_trace_capture(device, tid, cq_id=0)
     assert trace_input_addr == input_tensor.buffer_address()
+    ttnn.DumpDeviceProfiler(device)
 
     # More optimized run with caching
     if use_signpost:
