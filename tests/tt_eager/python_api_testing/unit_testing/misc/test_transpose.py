@@ -19,10 +19,7 @@ def random_torch_tensor(dtype, shape):
         return torch.randint(0, 100, shape).to(torch.int16)
     if dtype == ttnn.int32:
         return torch.randint(-2**31, 2**31, shape, dtype=torch.int32)
-    if dtype == ttnn.float32:
-        return torch.rand(shape, dtype=torch.float32)
-    if dtype == ttnn.bfloat16:
-        return torch.rand(shape).bfloat16().float()
+    return torch.rand(shape).bfloat16().float()
 
 
 def transpose(
