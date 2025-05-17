@@ -23,7 +23,7 @@ RUN apt-get update && apt-get install -y \
 RUN set -eux; \
     apt-get update && \
     apt-get install -y --no-install-recommends \
-        wget ca-certificates libhwloc15 libibverbs1 && \
+        wget ca-certificates && \
     TMP_DIR="$(mktemp -d)" && \
     DEB_URL="https://github.com/dmakoviichuk-tt/mpi-ulfm/releases/download/v5.0.7-ulfm/openmpi-ulfm_5.0.7-1_amd64.deb" && \
     wget -qO "$TMP_DIR/ompi.deb" "$DEB_URL" && \
