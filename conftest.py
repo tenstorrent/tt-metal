@@ -131,7 +131,20 @@ class CIv2ModelDownloadUtils_:
         endpoint = f"{endpoint_prefix}/{model_path}"
 
         subprocess.run(
-            ["wget", "-r", "-nH", "-x", "--cut-dirs=5", "-np", "-R", "index.html*", "-P", download_dir_str, endpoint],
+            [
+                "wget",
+                "-r",
+                "-nH",
+                "-x",
+                "--cut-dirs=5",
+                "-np",
+                "-R",
+                "--progress=dot:giga",
+                "index.html*",
+                "-P",
+                download_dir_str,
+                endpoint,
+            ],
             check=True,
             text=True,
         )
