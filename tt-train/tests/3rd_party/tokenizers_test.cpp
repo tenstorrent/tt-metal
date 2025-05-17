@@ -7,6 +7,7 @@
 #include <tokenizers_cpp.h>
 
 #include <chrono>
+#include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <string>
@@ -64,7 +65,11 @@ TEST(HuggingFaceTokenizer, ExampleUsage) {
 }
 
 TEST(HuggingFaceTokenizer, TinyLlama) {
-    auto blob = load_bytes_from_file(get_test_data_dir() + "/tinyllama_tokenizer.json");
+    std::string tinyllama_path = get_test_data_dir() + "/tinyllama_tokenizer.json";
+    if (!std::filesystem::exists(tinyllama_path)) {
+        GTEST_SKIP() << "Skipping TinyLlama test - tokenizer file not found at: " << tinyllama_path;
+    }
+    auto blob = load_bytes_from_file(tinyllama_path);
     auto tok = Tokenizer::FromBlobJSON(blob);
     std::string prompt = "What is the capital of Canada?";
     std::vector<int> ids = tok->Encode(prompt);
