@@ -1186,12 +1186,18 @@ uint32_t process_paged_to_ringbuffer_cmd(uint32_t cmd_ptr, uint32_t& downstream_
     uint32_t length = cmd->paged_to_ringbuffer.length;
     uint8_t flags = cmd->paged_to_ringbuffer.flags;
 
+    /*DPRINT << "paged_to_ringbuffer: base_addr: " << HEX() << base_addr << ", length: " << DEC() << length << ",
+       start_page: " << start_page
+           << ", log2_page_size: " << static_cast<int>(log2_page_size) << ENDL();*/
+
     if (flags & CQ_PREFETCH_PAGED_TO_RING_BUFFER_FLAG_RESET_TO_START) {
         ringbuffer_wp = scratch_db_base;
     }
 
     ASSERT(length % DRAM_ALIGNMENT == 0);
     ASSERT(length + ringbuffer_wp <= scratch_db_end);
+
+    ringbuffer_offset = ringbuffer_wp - scratch_db_base;  // this is to avoid inserting offset command after cache load
 
     const bool is_dram = true;
     InterleavedPow2AddrGen<is_dram> addr_gen{.bank_base_address = base_addr, .log_base_2_of_page_size = log2_page_size};
@@ -1213,7 +1219,7 @@ uint32_t process_paged_to_ringbuffer_cmd(uint32_t cmd_ptr, uint32_t& downstream_
 
     ringbuffer_wp = scratch_read_addr;
 
-    // The consumer will perforam a read barrier.
+    // The consumer will perform a read barrier.
 
     return CQ_PREFETCH_CMD_BARE_MIN_SIZE;
 }
@@ -1223,6 +1229,8 @@ uint32_t process_set_ringbuffer_offset(uint32_t cmd_ptr) {
     uint32_t offset = cmd->set_ringbuffer_offset.offset;
 
     ringbuffer_offset = offset;
+
+    // DPRINT << "set_ringbuffer_offset: " << offset << ENDL();
 
     return CQ_PREFETCH_CMD_BARE_MIN_SIZE;
 }
@@ -1237,6 +1245,7 @@ void process_relay_ringbuffer_sub_cmds(uint32_t count, uint32_t* l1_cache) {
     for (uint32_t i = 0; i < count - 1; i++) {
         uint32_t start = ringbuffer_start + sub_cmd->start;
         uint32_t length = sub_cmd->length;
+        // DPRINT << "subcmd#: " << i << " start: " << HEX() << start << " length: " << DEC() << length << ENDL();
 
         uint32_t npages = write_pages_to_dispatcher<0, false>(downstream_data_ptr, start, length);
 
@@ -1245,6 +1254,7 @@ void process_relay_ringbuffer_sub_cmds(uint32_t count, uint32_t* l1_cache) {
     }
     uint32_t start = ringbuffer_start + sub_cmd->start;
     uint32_t length = sub_cmd->length;
+    // DPRINT << "subcmd#: " << count - 1 << " start: " << HEX() << start << " length: " << DEC() << length << ENDL();
     uint32_t npages = write_pages_to_dispatcher<1, false>(downstream_data_ptr, start, length);
 
     // One page was acquired w/ the cmd in CMD_RELAY_INLINE_NOFLUSH with 16 bytes written
@@ -1258,7 +1268,9 @@ uint32_t process_relay_ringbuffer_cmd(uint32_t cmd_ptr, uint32_t& downstream__da
     uint32_t count = cmd->relay_ringbuffer.count;
     uint32_t sub_cmds_length = count * sizeof(CQPrefetchRelayRingbufferSubCmd);
     uint32_t stride = cmd->relay_ringbuffer.stride;
-    // DPRINT << "relay_ringbuffer: " << count << " " << cmd->relay_ringbuffer.stride << ENDL();
+    /*DPRINT << "relay_ringbuffer: " << count << " " << cmd->relay_ringbuffer.stride
+           << " ringbuffer_offset: " << ringbuffer_offset << " ringbuffer_wp (idx): " << ringbuffer_wp - scratch_db_base
+           << " downstream_data_ptr: " << HEX() << downstream_data_ptr << DEC() << ENDL();*/
 
     uint32_t data_ptr = cmd_ptr + sizeof(CQPrefetchCmd);
     uint32_t remaining = cmddat_q_end - data_ptr;
@@ -1295,6 +1307,10 @@ static uint32_t process_exec_buf_relay_ringbuffer_cmd(
     uint32_t count = cmd->relay_ringbuffer.count;
     uint32_t sub_cmds_length = count * sizeof(CQPrefetchRelayRingbufferSubCmd);
     uint32_t stride = cmd->relay_ringbuffer.stride;
+
+    /*DPRINT << "exec_buf_relay_ringbuffer: " << count << " " << cmd->relay_ringbuffer.stride
+           << " ringbuffer_offset: " << ringbuffer_offset << " ringbuffer_wp (idx): " << ringbuffer_wp - scratch_db_base
+           << " downstream_data_ptr: " << HEX() << downstream_data_ptr << DEC() << ENDL();*/
 
     copy_into_l1_cache(cmd_ptr, sub_cmds_length, l1_cache, exec_buf_state, stride);
 
@@ -1421,7 +1437,7 @@ bool process_cmd(
             break;
 
         case CQ_PREFETCH_CMD_RELAY_RINGBUFFER:
-            // DPRINT << "relay paged packed" << ENDL();
+            // DPRINT << "relay ringbuffer" << ENDL();
             if (exec_buf) {
                 stride = process_exec_buf_relay_ringbuffer_cmd(cmd_ptr, downstream_data_ptr, l1_cache, exec_buf_state);
             } else {

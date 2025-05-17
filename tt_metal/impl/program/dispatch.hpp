@@ -44,6 +44,11 @@ struct ProgramDispatchMetadata {
     uint32_t sync_count;
     uint32_t stall_first;
     uint32_t stall_before_program;
+
+    struct {
+        bool is_cached;
+        uint32_t offset;
+    } prefetcher_cache_info;
 };
 
 uint32_t configure_rta_offsets_for_kernel_groups(
