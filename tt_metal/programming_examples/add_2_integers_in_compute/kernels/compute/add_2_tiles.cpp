@@ -42,7 +42,7 @@ void MAIN {
 
     tile_regs_acquire();  // acquire 8 tile registers
 
-    print_full_tile(cb_in0);
+    print_full_tile(cb_in1);
     add_tiles(cb_in0, cb_in1, 0, 0, 0);
 
     tile_regs_commit();  // signal the packer
