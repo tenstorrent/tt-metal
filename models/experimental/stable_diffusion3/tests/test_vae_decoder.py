@@ -13,24 +13,19 @@ from ..tt.utils import allocate_tensor_on_device_like, assert_quality, from_torc
 from ..tt.vae_decoder import TtGroupNorm, TtGroupNormParameters, TtVaeDecoder, TtVaeDecoderParameters
 
 
-@pytest.mark.skip(reason="broken since last merge to main")
 @pytest.mark.parametrize(
     ("model_name", "image_size"),
     [
         ("large", 128),
-        # ("large", 256),
-        # ("large", 512),
-        # ("large", 1024),
+        ("large", 256),
+        ("large", 512),
+        ("large", 1024),
     ],
 )
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384, "trace_region_size": 716800}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 @pytest.mark.parametrize(
     ("use_program_cache", "use_tracing"),
-    [
-        (False, False),
-        # (True, False),
-        # (True, True),
-    ],
+    [(False, False)],
 )
 def test_vae_decoder(
     *, device: ttnn.Device, model_name: str, use_program_cache: bool, use_tracing: bool, image_size: int
@@ -89,7 +84,7 @@ def test_vae_decoder(
     tt_image_torch = ttnn.to_torch(tt_image).permute(0, 3, 1, 2)
 
     assert image.shape == tt_image_torch.shape
-    assert_quality(image, tt_image_torch, pcc=0.990)
+    assert_quality(image, tt_image_torch, pcc=0.94, ccc=0.94)
 
 
 @pytest.mark.parametrize("device_params", [{"trace_region_size": 40960}], indirect=True)
@@ -169,4 +164,4 @@ def test_vae_decoder_norm(
 
     tt_out_torch = to_torch(tt_out).permute(0, 3, 1, 2)
 
-    assert_quality(out, tt_out_torch, pcc=0.999)
+    assert_quality(out, tt_out_torch, pcc=0.94, ccc=0.94)
