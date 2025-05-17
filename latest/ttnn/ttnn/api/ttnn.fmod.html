@@ -20,6 +20,8 @@
         <script src="../../_static/doctools.js?v=888ff710"></script>
         <script src="../../_static/sphinx_highlight.js?v=4825356b"></script>
         <script crossorigin="anonymous" integrity="sha256-Ae2Vz/4ePdIu6ZyI/5ZGsYnb+m0JlOmKPjt6XZ9JJkA=" src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
+        <script>window.MathJax = {"tex": {"inlineMath": [["$", "$"], ["\\(", "\\)"]], "processEscapes": true}, "options": {"ignoreHtmlClass": "tex2jax_ignore|mathjax_ignore|document", "processHtmlClass": "tex2jax_process|mathjax_process|math|output_area"}}</script>
+        <script defer="defer" src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
     <script src="../../_static/js/theme.js"></script>
     <link rel="index" title="Index" href="../../genindex.html" />
     <link rel="search" title="Search" href="../../search.html" />
@@ -212,7 +214,9 @@
 <span class="sig-prename descclassname"><span class="pre">ttnn.</span></span><span class="sig-name descname"><span class="pre">fmod</span></span><em class="property"><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="pre">Operation(python_fully_qualified_name='ttnn.fmod',</span> <span class="pre">function=&lt;ttnn._ttnn.operations.binary.fmod_t</span> <span class="pre">object&gt;,</span> <span class="pre">preprocess_golden_function_inputs=&lt;function</span> <span class="pre">default_preprocess_golden_function_inputs&gt;,</span> <span class="pre">golden_function=&lt;function</span> <span class="pre">_golden_function_fmod&gt;,</span> <span class="pre">postprocess_golden_function_outputs=&lt;function</span> <span class="pre">default_postprocess_golden_function_outputs&gt;,</span> <span class="pre">is_cpp_operation=True,</span> <span class="pre">is_experimental=False)</span></em><a class="headerlink" href="#ttnn.fmod" title="Permalink to this definition"></a>
 </dt>
 <dd>
-<p>a - a.div(b, rounding_mode=trunc) * b.</p>
+<p>Performs an eltwise-fmod operation.</p>
+<div class="math notranslate nohighlight">
+\[\mathrm{{output\_tensor}} = \verb|fmod|(\mathrm{{input\_tensor\_a,input\_tensor\_b}})\]</div>
 <dl class="field-list simple">
 <dt class="field-odd">Parameters<span class="colon">:</span>
 </dt>
@@ -246,7 +250,7 @@
 </thead>
 <tbody>
 <tr class="row-even">
-<td><p>BFLOAT16</p></td>
+<td><p>BFLOAT16, FLOAT32</p></td>
 <td><p>TILE</p></td>
 <td><p>2, 3, 4</p></td>
 </tr>
@@ -263,13 +267,6 @@
 </pre></div>
 </div>
 </div>
-<dl class="field-list simple">
-<dt class="field-odd">Type<span class="colon">:</span>
-</dt>
-<dd class="field-odd">
-<p>Performs an eltwise-fmod operation. Formula</p>
-</dd>
-</dl>
 </dd>
 </dl>
 
