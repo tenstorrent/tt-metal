@@ -4,8 +4,6 @@
 
 #pragma once
 
-#include <optional>
-
 #include "autograd/module_base.hpp"
 #include "ops/rope_op.hpp"
 
@@ -13,8 +11,7 @@ namespace ttml::modules::distributed {
 
 class DistributedLlamaMLP : public autograd::ModuleBase {
 public:
-    DistributedLlamaMLP(
-        uint32_t embedding_size, float dropout_prob, std::optional<uint32_t> intermediate_dim = std::nullopt);
+    DistributedLlamaMLP(uint32_t embedding_size, float dropout_prob);
     autograd::TensorPtr operator()(const autograd::TensorPtr& input) override;
 
 private:
@@ -31,8 +28,7 @@ public:
         uint32_t num_heads,
         uint32_t num_groups,
         const ops::RotaryEmbeddingParams& rope_params,
-        float dropout_prob = 0.0F,
-        std::optional<uint32_t> intermediate_dim = std::nullopt);
+        float dropout_prob = 0.0F);
 
     autograd::TensorPtr operator()(const autograd::TensorPtr& input, const autograd::TensorPtr& mask) override;
 

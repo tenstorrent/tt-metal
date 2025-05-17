@@ -257,7 +257,6 @@ void generate(
     // In case you need a pad token
     auto pad_token_id = 0U;
     auto original_vocab_size = tokenizer.get_vocab_size();
-    fmt::println("Original tokenizer vocab size: {}", original_vocab_size);
     auto *device = &ttml::autograd::ctx().get_device();
     auto num_devices = static_cast<uint32_t>(device->num_devices());
     // this is workaround for tensor parallel case, we need to have vocab size divisible by 32 per device
@@ -451,7 +450,6 @@ int main(int argc, char **argv) {
     bool enable_wandb = true;
     bool ddp = false;
     bool enable_tp = false;
-    std::string save_and_exit_path = "";
     app.add_option("-c,--config", config_name, "Yaml Config name")->default_val(config_name);
     app.add_option("-e,--eval", is_eval, "Is evaluation")->default_val(is_eval);
     app.add_option("-t,--add_time_to_name", add_time_to_name, "Add time to run name")->default_val(add_time_to_name);
@@ -459,8 +457,6 @@ int main(int argc, char **argv) {
     app.add_option("-d,--ddp", ddp, "Enable DDP")->default_val(ddp);
     app.add_option("-p,--tp", enable_tp, "Enable TP")->default_val(enable_tp);
     app.add_option("-n,--name", run_name, "Run name")->default_val(run_name);
-    app.add_option("-s,--save_and_exit", save_and_exit_path, "Save and exit (path to dumped msgpack)")
-        ->default_val(save_and_exit_path);
     CLI11_PARSE(app, argc, argv);
 
     if (ddp && enable_tp) {
@@ -619,7 +615,6 @@ int main(int argc, char **argv) {
 
     auto [dataset, tokenizer] =
         create_dataset_and_tokenizer(text_or_tokens, sequence_length, config.tokenizer_path, config.tokenizer_type);
-    fmt::print("Tokenizer path: {}\n", config.tokenizer_path);
     fmt::print("Dataset size: {}\n", dataset.get_size());
     fmt::print("Vocab size: {}\n", tokenizer->get_vocab_size());
     fmt::print("Tokenizer type: {}\n", config.tokenizer_type);
@@ -737,47 +732,6 @@ int main(int argc, char **argv) {
         },
         config.transformer_config);
 
-    if (!save_and_exit_path.empty()) {
-        if (std::filesystem::exists(save_and_exit_path)) {
-            throw std::runtime_error("Model path already exists: " + save_and_exit_path);
-        }
-        fmt::println("Saving model and exiting");
-        ttml::serialization::MsgPackFile serializer;
-        std::string model_prefix = (config.model_type == "llama") ? "llama" : "transformer";
-        ttml::serialization::write_module(serializer, model_prefix, model.get());
-        serializer.serialize(save_and_exit_path);
-        fmt::println("Model saved to {}", save_and_exit_path);
-        std::exit(0);
-    }
-
-    // Load model parameters if in eval mode and model path exists
-    if (is_eval && !config.model_path.empty() && std::filesystem::exists(config.model_path)) {
-        fmt::print("Loading model from {}\n", config.model_path);
-        std::string model_name = (config.model_type == "llama") ? "llama" : "transformer";
-        fmt::print("Loading model parameters\n");
-        load_model_parameters(config.model_path, model, model_name);
-        fmt::print("Model loaded\n");
-    }
-
-    if (is_eval) {
-        fmt::print("\nEvaluation started\n");
-        for (;;) {
-            generate(
-                model,
-                *tokenizer,
-                std::visit([](auto &&arg) { return arg.max_sequence_length; }, config.transformer_config),
-                num_heads,
-                sequence_length,
-                enable_tp,
-                eval_config.temperature,
-                eval_config.repetition_penalty,
-                eval_config.top_k,
-                eval_config.top_p);
-        }
-        fmt::print("\nEvaluation finished\n");
-        return 0;
-    }
-
     auto adamw_params = ttml::optimizers::AdamWConfig();
     adamw_params.lr = config.learning_rate;
     adamw_params.weight_decay = config.weight_decay;
@@ -819,10 +773,7 @@ int main(int argc, char **argv) {
         // otherwise proceed with normal loading training state if necessary
         if (!config.model_path.empty() && std::filesystem::exists(config.model_path)) {
             fmt::print("Loading model from {}\n", config.model_path);
-            std::string model_name = (config.model_type == "llama") ? "llama" : "transformer";
-            fmt::print("Loading training state\n");
-            std::string optimizer_name = "adamw";
-            load_training_state(config.model_path, model, scheduler, model_name, optimizer_name);
+            load_training_state(config.model_path, model, scheduler, "transformer", "adamw");
             fmt::print("Model loaded after {} steps\n", optimizer->get_steps());
         }
     }
@@ -833,6 +784,25 @@ int main(int argc, char **argv) {
 
     if (config.enable_mpi && config.use_clip_grad_norm) {
         throw std::logic_error("Clip grad norm is not supported with 3 tier training");
+    }
+
+    if (is_eval) {
+        fmt::print("\nEvaluation started\n");
+        for (;;) {
+            generate(
+                model,
+                *tokenizer,
+                std::visit([](auto &&arg) { return arg.max_sequence_length; }, config.transformer_config),
+                num_heads,
+                sequence_length,
+                enable_tp,
+                eval_config.temperature,
+                eval_config.repetition_penalty,
+                eval_config.top_k,
+                eval_config.top_p);
+        }
+        fmt::print("\nEvaluation finished\n");
+        return 0;
     }
 
     auto get_samples_count = [&config](uint32_t global_step) {
