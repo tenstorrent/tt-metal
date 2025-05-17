@@ -195,4 +195,73 @@ TEST_F(DeviceFixture, TensixDataMovementOneToOnePacketSizes) {
     }
 }
 
+/* ========== Test case for one to one data movement; Test id = 50 ========== */  // Arbitrary test id (should ideally
+                                                                                  // be 5)
+
+/*
+    This test case is for directed ideal data movement from one L1 to another L1.
+        1. Largest/most performant transaction size
+        2. Large enough number of transactions to amortize the cycles for initialization
+        3. Core locations with minimal number of hops
+*/
+
+TEST_F(DeviceFixture, TensixDataMovementOneToOneDirectedIdeal) {
+    uint32_t test_id = 50;  // Arbitrary test id (should ideally be 5)
+
+    // Parameters
+    /*
+        L1 Capacity: 1.5 MB (I think, might be wrong)
+        - Max transaction size
+            = 4 * 32 pages
+            = 128 pages * 32 (or 64) bytes/page
+            = 4096 bytes for WH; 8192 bytes for BH
+        - Max total transaction size
+            = 180 * 8192 bytes
+            = 1474560 bytes
+            = 1.4 MB = L1 capacity
+    */
+    uint32_t num_of_transactions = 128;
+    uint32_t transaction_size_pages = 4 * 32;
+    uint32_t page_size_bytes = 32;  // (=flit size): 32 bytes for WH, 64 for BH -> // Question: Would this work better
+                                    // as a constant defined in a common file?
+    if (arch_ == tt::ARCH::BLACKHOLE) {
+        page_size_bytes *= 2;
+    }
+
+    // Cores
+    /*
+        Any two cores that are next to each other on the torus
+
+        Question: Would it be worth testing this with several pairs of adjacent cores to see if the performance is
+       consistent?
+    */
+    CoreCoord master_core_coord = {0, 0};
+    CoreCoord subordinate_core_coord = {0, 1};
+
+    // Test Config
+    unit_tests::dm::core_to_core::OneToOneConfig test_config = {
+        .test_id = test_id,
+        .master_core_coord = master_core_coord,
+        .subordinate_core_coord = subordinate_core_coord,
+        .num_of_transactions = num_of_transactions,
+        .transaction_size_pages = transaction_size_pages,
+        .page_size_bytes = page_size_bytes,
+        .l1_data_format = DataFormat::Float16_b,
+    };
+
+    // Run
+    for (unsigned int id = 0; id < num_devices_; id++) {
+        EXPECT_TRUE(run_dm(devices_.at(id), test_config));
+    }
+}
+
+/*
+    NOTES/QUESTIONS:
+    - 180 transactions is too high -> Using 128 for now
+        - Is there a way to calculate the max number of transactions that fit into L1? How much does L1 even store
+   again? Excluding the space allocated for things like semaphores, etc.
+        - Also why did this configuration work for test_unary_dram but not for this one?
+        - Is there an automated way to determine the max number of transactions that fit into L1?
+*/
+
 }  // namespace tt::tt_metal
