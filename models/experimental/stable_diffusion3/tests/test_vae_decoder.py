@@ -95,11 +95,7 @@ def test_vae_decoder(
 @pytest.mark.parametrize("device_params", [{"trace_region_size": 40960}], indirect=True)
 @pytest.mark.parametrize(
     ("use_program_cache", "use_tracing"),
-    [
-        (False, False),
-        # (True, False),
-        # (True, True),
-    ],
+    [(True, True)],
 )
 @pytest.mark.parametrize(
     ("batch_size", "channels", "height", "width", "group_count"),
