@@ -233,6 +233,69 @@ void DeviceCommand<hugepage_write>::add_prefetch_relay_paged_packed(
 }
 
 template <bool hugepage_write>
+void DeviceCommand<hugepage_write>::add_prefetch_paged_to_ringbuffer(
+    const CQPrefetchPagedToRingbufferCmd& paged_to_ringbuffer_info) {
+    uint32_t increment_sizeB = tt::align(sizeof(CQPrefetchCmd), this->pcie_alignment);
+    auto initialize_paged_to_ringbuffer_cmd = [&](CQPrefetchCmd* paged_to_ringbuffer_cmd) {
+        paged_to_ringbuffer_cmd->base.cmd_id = CQ_PREFETCH_CMD_PAGED_TO_RINGBUFFER;
+        paged_to_ringbuffer_cmd->paged_to_ringbuffer = paged_to_ringbuffer_info;
+    };
+    CQPrefetchCmd* paged_to_ringbuffer_cmd_dst = this->reserve_space<CQPrefetchCmd*>(increment_sizeB);
+
+    if constexpr (hugepage_write) {
+        alignas(MEMCPY_ALIGNMENT) CQPrefetchCmd paged_to_ringbuffer_cmd;
+        initialize_paged_to_ringbuffer_cmd(&paged_to_ringbuffer_cmd);
+        this->memcpy(paged_to_ringbuffer_cmd_dst, &paged_to_ringbuffer_cmd, sizeof(CQPrefetchCmd));
+    } else {
+        initialize_paged_to_ringbuffer_cmd(paged_to_ringbuffer_cmd_dst);
+    }
+}
+
+template <bool hugepage_write>
+void DeviceCommand<hugepage_write>::add_prefetch_set_ringbuffer_offset(uint32_t offset) {
+    uint32_t increment_sizeB = tt::align(sizeof(CQPrefetchCmd), this->pcie_alignment);
+    auto initialize_set_ringbuffer_offset_cmd = [&](CQPrefetchCmd* set_ringbuffer_offset_cmd) {
+        set_ringbuffer_offset_cmd->base.cmd_id = CQ_PREFETCH_CMD_SET_RINGBUFFER_OFFSET;
+        set_ringbuffer_offset_cmd->set_ringbuffer_offset.offset = offset;
+    };
+    CQPrefetchCmd* set_ringbuffer_offset_cmd_dst = this->reserve_space<CQPrefetchCmd*>(increment_sizeB);
+
+    if constexpr (hugepage_write) {
+        alignas(MEMCPY_ALIGNMENT) CQPrefetchCmd set_ringbuffer_offset_cmd;
+        initialize_set_ringbuffer_offset_cmd(&set_ringbuffer_offset_cmd);
+        this->memcpy(set_ringbuffer_offset_cmd_dst, &set_ringbuffer_offset_cmd, sizeof(CQPrefetchCmd));
+    } else {
+        initialize_set_ringbuffer_offset_cmd(set_ringbuffer_offset_cmd_dst);
+    }
+}
+
+template <bool hugepage_write>
+void DeviceCommand<hugepage_write>::add_prefetch_relay_ringbuffer(
+    uint32_t num_sub_cmds, const std::vector<CQPrefetchRelayRingbufferSubCmd>& sub_cmds, uint32_t offset_idx) {
+    static_assert(sizeof(CQPrefetchRelayRingbufferSubCmd) % sizeof(uint32_t) == 0);
+
+    uint32_t sub_cmds_sizeB = num_sub_cmds * sizeof(CQPrefetchRelayRingbufferSubCmd);
+    uint32_t increment_sizeB = tt::align(sub_cmds_sizeB + sizeof(CQPrefetchCmd), this->pcie_alignment);
+    auto initialize_relay_ringbuffer_cmd = [&](CQPrefetchCmd* relay_ringbuffer_cmd) {
+        relay_ringbuffer_cmd->base.cmd_id = CQ_PREFETCH_CMD_RELAY_RINGBUFFER;
+        relay_ringbuffer_cmd->relay_ringbuffer.count = num_sub_cmds;
+        relay_ringbuffer_cmd->relay_ringbuffer.stride = increment_sizeB;
+    };
+
+    CQPrefetchCmd* relay_ringbuffer_cmd_dst = this->reserve_space<CQPrefetchCmd*>(increment_sizeB);
+
+    if constexpr (hugepage_write) {
+        alignas(MEMCPY_ALIGNMENT) CQPrefetchCmd relay_ringbuffer_cmd;
+        initialize_relay_ringbuffer_cmd(&relay_ringbuffer_cmd);
+        this->memcpy(relay_ringbuffer_cmd_dst, &relay_ringbuffer_cmd, sizeof(CQPrefetchCmd));
+    } else {
+        initialize_relay_ringbuffer_cmd(relay_ringbuffer_cmd_dst);
+    }
+
+    this->memcpy((char*)relay_ringbuffer_cmd_dst + sizeof(CQPrefetchCmd), &sub_cmds[offset_idx], sub_cmds_sizeB);
+}
+
+template <bool hugepage_write>
 template <bool flush_prefetch, bool inline_data>
 void DeviceCommand<hugepage_write>::add_dispatch_write_linear(
     uint8_t num_mcast_dests,

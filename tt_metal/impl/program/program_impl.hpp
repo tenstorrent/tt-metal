@@ -54,8 +54,8 @@ void assemble_device_commands(
     ProgramCommandSequence& program_command_sequence,
     detail::ProgramImpl& program,
     IDevice* device,
-    SubDeviceId sub_device_id);
-
+    SubDeviceId sub_device_id,
+    uint64_t prefetcher_cache_sizeB = 0);
 }
 
 using kernel_id_array_t = std::array<std::optional<KernelHandle>, DISPATCH_CLASS_MAX>;
@@ -191,6 +191,7 @@ public:
     uint32_t get_cb_size(IDevice* device, CoreCoord logical_core, CoreType core_type) const;
     void set_last_used_command_queue_for_testing(CommandQueue* queue);
     CommandQueue* get_last_used_command_queue() const;
+    CommandQueue* get_last_used_command_queue();
     void populate_dispatch_data(IDevice* device);
 
     void finalize_offsets(IDevice* device);
@@ -328,7 +329,8 @@ private:
         ProgramCommandSequence& program_command_sequence,
         ProgramImpl& program,
         IDevice* device,
-        SubDeviceId sub_device_id);
+        SubDeviceId sub_device_id,
+        uint64_t prefetcher_cache_sizeB);
 
     friend HWCommandQueue;
     friend EnqueueProgramCommand;

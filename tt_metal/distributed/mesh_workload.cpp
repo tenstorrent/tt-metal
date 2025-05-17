@@ -188,8 +188,14 @@ void MeshWorkloadImpl::generate_dispatch_commands(MeshCommandQueue& mesh_cq) {
     // These commands will be updated based on MeshDevice state when the
     // workload is enqueued.
     auto mesh_device = mesh_cq.device();
+    uint32_t max_program_size = 0;
+    std::vector<ProgramCommandSequence> program_command_sequences;
     for (auto& [device_range, program] : programs_) {
-        program.generate_dispatch_commands(mesh_device);
+        program_command_sequences.push_back(program.generate_dispatch_commands(mesh_device));
+        max_program_size = std::max(max_program_size, program_command_sequences.back().kernel_bins_sizeB);
+    }
+    for (auto& cmd_seq : program_command_sequences) {
+        cmd_seq.kernel_bins_sizeB = max_program_size;
     }
 }
 

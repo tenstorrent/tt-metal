@@ -109,7 +109,7 @@ public:
 
     void compile(IDevice* device, bool force_slow_dispatch = false);
 
-    void generate_dispatch_commands(IDevice* device);
+    ProgramCommandSequence& generate_dispatch_commands(IDevice* device, uint64_t prefetcher_cache_sizeB = 0);
 
     void invalidate_circular_buffer_allocation();
 

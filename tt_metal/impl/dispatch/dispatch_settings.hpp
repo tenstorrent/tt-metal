@@ -158,6 +158,7 @@ public:
     uint32_t prefetch_max_cmd_size_;
     uint32_t prefetch_cmddat_q_size_;
     uint32_t prefetch_scratch_db_size_;
+    uint32_t prefetch_ringbuffer_size_;
     uint32_t prefetch_d_buffer_size_;
     uint32_t prefetch_d_pages_;  // prefetch_d_buffer_size_ / PREFETCH_D_BUFFER_LOG_PAGE_SIZE
 
