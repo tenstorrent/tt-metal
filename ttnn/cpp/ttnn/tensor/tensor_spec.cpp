@@ -31,7 +31,7 @@ void validate_shard_spec_with_tensor_shape(const TensorSpec& tensor_spec) {
     if (memory_config.memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED) {
         TT_FATAL(
             physical_width == physical_shard_width,
-            "Shard width {} must match physical width {} for height sharded",
+            "Physical shard width {} must match physical width {} for height sharded",
             physical_shard_width,
             physical_width);
         uint32_t num_shards = div_up(physical_height, physical_shard_height);
