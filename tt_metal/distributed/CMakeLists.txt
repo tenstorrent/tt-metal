@@ -19,7 +19,28 @@ set(DISTRIBUTED_SRC
 )
 
 add_library(distributed OBJECT ${DISTRIBUTED_SRC})
-add_dependencies(distributed openmpi_ulfm_build-build)
+
+set(ULFM_PREFIX /opt/openmpi-v5.0.7-ulfm)
+set(ULFM_LIB ${ULFM_PREFIX}/lib/libmpi.so.40)
+
+add_library(OpenMPI::MPI SHARED IMPORTED GLOBAL)
+
+set_target_properties(
+    OpenMPI::MPI
+    PROPERTIES
+        EXCLUDE_FROM_ALL
+            TRUE
+)
+
+set_target_properties(
+    OpenMPI::MPI
+    PROPERTIES
+        IMPORTED_LOCATION
+            ${ULFM_LIB}
+        INTERFACE_INCLUDE_DIRECTORIES
+            ${ULFM_PREFIX}/include
+)
+
 target_link_libraries(
     distributed
     PUBLIC
@@ -30,5 +51,3 @@ target_link_libraries(
         TT::Metalium::HostDevCommon
         OpenMPI::MPI
 )
-
-# print OpenMPI include directories
