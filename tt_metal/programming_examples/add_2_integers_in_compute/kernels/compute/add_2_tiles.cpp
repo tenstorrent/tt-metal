@@ -42,7 +42,6 @@ void MAIN {
 
     tile_regs_acquire();  // acquire 8 tile registers
 
-    print_full_tile(cb_in1);
     add_tiles(cb_in0, cb_in1, 0, 0, 0);
 
     tile_regs_commit();  // signal the packer
@@ -54,6 +53,7 @@ void MAIN {
     cb_pop_front(cb_in0, 1);
     cb_pop_front(cb_in1, 1);
 
+    print_full_tile(cb_out0);
     cb_push_back(cb_out0, 1);
 }
 }  // namespace NAMESPACE
