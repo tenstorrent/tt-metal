@@ -65,11 +65,7 @@ TEST(HuggingFaceTokenizer, ExampleUsage) {
 }
 
 TEST(HuggingFaceTokenizer, TinyLlama) {
-    std::string tinyllama_path = get_test_data_dir() + "/tinyllama_tokenizer.json";
-    if (!std::filesystem::exists(tinyllama_path)) {
-        GTEST_SKIP() << "Skipping TinyLlama test - tokenizer file not found at: " << tinyllama_path;
-    }
-    auto blob = load_bytes_from_file(tinyllama_path);
+    auto blob = load_bytes_from_file(get_test_data_dir() + "/tinyllama-tokenizer.json");
     auto tok = Tokenizer::FromBlobJSON(blob);
     std::string prompt = "What is the capital of Canada?";
     std::vector<int> ids = tok->Encode(prompt);
