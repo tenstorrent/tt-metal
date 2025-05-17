@@ -79,7 +79,7 @@ def test_permute_on_4D_tensor_with_smaller_tuple_size(device, h, w, dtype):
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.int32])
 def test_permute_on_less_than_4D(device, perm, dtype):
     torch.manual_seed(2005)
-    tuple_shape = tuple([32 * (value + 1) for value in perm])
+    shape = tuple([32 * (value + 1) for value in perm])
     torch_input_tensor = random_torch_tensor(dtype, shape)
     torch_output_tensor = torch.permute(torch_input_tensor, perm)
 
