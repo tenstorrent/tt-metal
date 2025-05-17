@@ -62,16 +62,16 @@ class TtVaeDecoder:
         self._conv_out = TtConv2d(parameters.conv_out, padding=(1, 1))
 
     def __call__(self, x: ttnn.Tensor) -> ttnn.Tensor:
-        x = self._conv_in(x)
+        x = self._conv_in(x, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         x = self._mid_block(x)
 
         for up_block in self._up_blocks:
             x = up_block(x)
 
-        x = self._conv_norm_out(x)
+        x = self._conv_norm_out(x, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
         x = ttnn.silu(x)
-        return self._conv_out(x)
+        return self._conv_out(x, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
 
 @dataclass
@@ -118,7 +118,7 @@ class TtUpDecoderBlock2D:
         if self._upsampler_conv is not None:
             x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
             x = ttnn.upsample(x, 2)
-            x = self._upsampler_conv(x)
+            x = self._upsampler_conv(x, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
         return x
 
@@ -222,15 +222,15 @@ class TtResnetBlock2D:
         x = self.norm1(x)
 
         x = ttnn.silu(x)
-        x = self.conv1(x)
+        x = self.conv1(x, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
         x = self.norm2(x)
 
         x = ttnn.silu(x)
-        x = self.conv2(x)
+        x = self.conv2(x, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
         if self.conv_shortcut is not None:
-            residual = self.conv_shortcut(residual)
+            residual = self.conv_shortcut(residual, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
         return residual + x
 
@@ -464,7 +464,7 @@ class TtGroupNorm:
 
         return self._preparation
 
-    def __call__(self, x: ttnn.Tensor) -> ttnn.Tensor:
+    def __call__(self, x: ttnn.Tensor, *, memory_config: ttnn.MemoryConfig | None = None) -> ttnn.Tensor:
         [batch_size, height, width, channels] = list(x.shape)
 
         prep = self._prepare(
@@ -491,9 +491,15 @@ class TtGroupNorm:
             num_groups=self._num_groups,
             epsilon=self._eps,
             core_grid=prep.core_grid,
-            memory_config=prep.memory_config,
+            # memory_config=memory_config if memory_config is not None else prep.memory_config,
             inplace=self._inplace,
             num_out_blocks=self._num_out_blocks,
         )
+
+        # to_layout does not work with block sharded tensors
+        if memory_config is None:
+            memory_config = ttnn.DRAM_MEMORY_CONFIG
+        x = ttnn.to_memory_config(x, memory_config)
+        x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
 
         return x.reshape([batch_size, height, width, channels])
