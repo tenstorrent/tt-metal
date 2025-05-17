@@ -168,7 +168,7 @@ def test_permute_5d(device, shape, perm, dtype):
     input_a = random_torch_tensor(dtype, shape)
     torch_output = torch.permute(input_a, perm)
 
-    tt_input = ttnn.from_torch(input_a, device=device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16)
+    tt_input = ttnn.from_torch(input_a, device=device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=dtype)
 
     tt_output = ttnn.permute(tt_input, perm)
     tt_output = ttnn.to_torch(tt_output)
@@ -430,7 +430,7 @@ def test_permutations_5d_fixed_w(device, shape, perm, dtype):
 def test_permute_adversarial(device, shape, perm, dtype):
     torch.manual_seed(2005)
     torch_tensor = random_torch_tensor(dtype, shape)
-    input_tensor = ttnn.from_torch(torch_tensor, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=device)
+    input_tensor = ttnn.from_torch(torch_tensor, layout=ttnn.TILE_LAYOUT, dtype=dtype, device=device)
     output_tensor = ttnn.permute(input_tensor, perm)
     output_tensor = ttnn.to_torch(output_tensor)
     torch_output = torch.permute(torch_tensor, perm)
@@ -446,7 +446,7 @@ def test_permute_adversarial(device, shape, perm, dtype):
 def test_permute_4d_fixed_w(device, shape, perm, dtype):
     torch.manual_seed(2005)
     torch_tensor = random_torch_tensor(dtype, shape)
-    input_tensor = ttnn.from_torch(torch_tensor, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=device)
+    input_tensor = ttnn.from_torch(torch_tensor, layout=ttnn.TILE_LAYOUT, dtype=dtype, device=device)
     output_tensor = ttnn.permute(input_tensor, perm)
     output_tensor = ttnn.to_torch(output_tensor)
     torch_output = torch.permute(torch_tensor, perm)
