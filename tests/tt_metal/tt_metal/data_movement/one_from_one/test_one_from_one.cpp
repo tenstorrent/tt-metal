@@ -139,20 +139,21 @@ bool run_dm(IDevice* device, const OneFromOneConfig& test_config) {
 /* ========== Test case for one from one data movement; Test id = 5 ========== */
 TEST_F(DeviceFixture, TensixDataMovementOneFromOnePacketSizes) {
     // Parameters
-    uint32_t max_transactions = 64;
+    uint32_t max_transactions = 256;
     uint32_t max_transaction_size_pages = 64;
-    uint32_t page_size_bytes = 32;  // =Flit size: 32 bytes for WH, 64 for BH
-    if (arch_ == tt::ARCH::BLACKHOLE) {
-        page_size_bytes *= 2;
-    }
+    uint32_t page_size_bytes = arch_ == tt::ARCH::BLACKHOLE ? 64 : 32;  // =Flit size: 32 bytes for WH, 64 for BH
 
     // Cores
     CoreCoord master_core_coord = {0, 0};
     CoreCoord subordinate_core_coord = {1, 1};
 
-    for (uint32_t num_of_transactions = 1; num_of_transactions <= max_transactions; num_of_transactions *= 2) {
+    for (uint32_t num_of_transactions = 1; num_of_transactions <= max_transactions; num_of_transactions *= 4) {
         for (uint32_t transaction_size_pages = 1; transaction_size_pages <= max_transaction_size_pages;
              transaction_size_pages *= 2) {
+            if (num_of_transactions * transaction_size_pages * page_size_bytes >= 1024 * 1024) {
+                continue;
+            }
+
             // Test config
             unit_tests::dm::core_to_core::OneFromOneConfig test_config = {
                 .test_id = 5,
