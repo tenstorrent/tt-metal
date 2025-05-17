@@ -6,6 +6,8 @@
 #include "compute_kernel_api/eltwise_binary.h"
 #include "compute_kernel_api/tile_move_copy.h"
 
+#include "debug/dprint_pages.h"
+
 namespace NAMESPACE {
 void MAIN {
     constexpr auto cb_in0 = tt::CBIndex::c_0;
@@ -21,6 +23,7 @@ void MAIN {
 
     tile_regs_acquire();  // acquire 8 tile registers
 
+    print_full_tile(cb_in0);
     add_tiles(cb_in0, cb_in1, 0, 0, 0);
 
     tile_regs_commit();  // signal the packer
