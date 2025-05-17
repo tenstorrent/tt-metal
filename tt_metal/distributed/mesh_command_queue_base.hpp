@@ -55,7 +55,6 @@ public:
     void enqueue_write(
         const std::shared_ptr<MeshBuffer>& mesh_buffer,
         const DistributedHostBuffer& host_buffer,
-        const MeshShape& host_buffer_shape,
         bool blocking) override;
 
     // MeshBuffer Read APIs
@@ -64,9 +63,11 @@ public:
         const std::vector<ShardDataTransfer>& shard_data_transfers,
         const std::shared_ptr<MeshBuffer>& mesh_buffer,
         bool blocking) override;
-
     void enqueue_read(
-        const std::shared_ptr<MeshBuffer>& mesh_buffer, DistributedHostBuffer& host_buffer, bool blocking) override;
+        const std::shared_ptr<MeshBuffer>& mesh_buffer,
+        DistributedHostBuffer& host_buffer,
+        const std::optional<std::unordered_set<MeshCoordinate>>& shards,
+        bool blocking) override;
 };
 
 }  // namespace tt::tt_metal::distributed
