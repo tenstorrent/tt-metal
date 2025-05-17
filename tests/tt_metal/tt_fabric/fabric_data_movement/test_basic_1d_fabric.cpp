@@ -536,18 +536,22 @@ void RunTestUnicastRaw(BaseFabricFixture* fixture, uint32_t num_hops, RoutingDir
         dst_mesh_chip_id.first,
         num_hops};
 
+    static const size_t risc_id = 0;
+
     // append the EDM connection rt args
     const auto sender_channel = topology == Topology::Mesh ? edm_direction : 0;
     tt::tt_fabric::SenderWorkerAdapterSpec edm_connection = {
         .edm_noc_x = edm_eth_core.x,
         .edm_noc_y = edm_eth_core.y,
-        .edm_buffer_base_addr = edm_config.sender_channels_base_address[sender_channel],
-        .num_buffers_per_channel = edm_config.sender_channels_num_buffers[sender_channel],
-        .edm_l1_sem_addr = edm_config.sender_channels_local_flow_control_semaphore_address[sender_channel],
-        .edm_connection_handshake_addr = edm_config.sender_channels_connection_semaphore_address[sender_channel],
-        .edm_worker_location_info_addr = edm_config.sender_channels_worker_conn_info_base_address[sender_channel],
-        .buffer_size_bytes = edm_config.channel_buffer_size_bytes,
-        .buffer_index_semaphore_id = edm_config.sender_channels_buffer_index_semaphore_address[sender_channel],
+        .edm_buffer_base_addr = edm_config.sender_channels_base_address[risc_id][sender_channel],
+        .num_buffers_per_channel = edm_config.sender_channels_num_buffers[risc_id][sender_channel],
+        .edm_l1_sem_addr = edm_config.sender_channels_local_flow_control_semaphore_address[risc_id][sender_channel],
+        .edm_connection_handshake_addr =
+            edm_config.sender_channels_connection_semaphore_address[risc_id][sender_channel],
+        .edm_worker_location_info_addr =
+            edm_config.sender_channels_worker_conn_info_base_address[risc_id][sender_channel],
+        .buffer_size_bytes = edm_config.channel_buffer_size_bytes[risc_id],
+        .buffer_index_semaphore_id = edm_config.sender_channels_buffer_index_semaphore_address[risc_id][sender_channel],
         .persistent_fabric = true,
         .edm_direction = edm_direction};
 

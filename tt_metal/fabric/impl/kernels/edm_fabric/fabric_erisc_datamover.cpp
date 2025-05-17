@@ -1267,10 +1267,12 @@ void run_fabric_edm_main_loop(
         if (did_something) {
             did_nothing_count = 0;
         } else {
-            if (did_nothing_count++ > SWITCH_INTERVAL) {
-                did_nothing_count = 0;
-                // shouldn't do noc counter sync since we are not incrementing them
-                run_routing_without_noc_sync();
+            if constexpr (enable_context_switch) {
+                if (did_nothing_count++ > SWITCH_INTERVAL) {
+                    did_nothing_count = 0;
+                    // shouldn't do noc counter sync since we are not incrementing them
+                    run_routing_without_noc_sync();
+                }
             }
         }
     }
@@ -1395,10 +1397,12 @@ void kernel_main() {
         init_ptr_val<to_sender_packets_completed_streams[4]>(0);
     }
 
-    if constexpr (is_handshake_sender) {
-        erisc::datamover::handshake::sender_side_start(handshake_addr, DEFAULT_HANDSHAKE_CONTEXT_SWITCH_TIMEOUT);
-    } else {
-        erisc::datamover::handshake::receiver_side_start(handshake_addr);
+    if constexpr (enable_handshake) {
+        if constexpr (is_handshake_sender) {
+            erisc::datamover::handshake::sender_side_start(handshake_addr, DEFAULT_HANDSHAKE_CONTEXT_SWITCH_TIMEOUT);
+        } else {
+            erisc::datamover::handshake::receiver_side_start(handshake_addr);
+        }
     }
 
     DPRINT << "SENDER_NUM_BUFFERS: " << (uint32_t)SENDER_NUM_BUFFERS << "\n";
@@ -1710,7 +1714,7 @@ void kernel_main() {
                                                       ? local_sem_for_teardown_from_downstream_edm[edm_index]
                                                       : get_semaphore<ProgrammableCoreType::ACTIVE_ETH>(
                                                             local_sem_for_teardown_from_downstream_edm[edm_index]);
-                if constexpr (is_2d_fabric) {
+                if constexpr (is_2d_fabric && enable_handshake) {
                     // reset the handshake addresses to 0
                     *reinterpret_cast<volatile uint32_t* const>(local_sem_address_for_acks) = 0;
                     *reinterpret_cast<volatile uint32_t* const>(teardown_sem_address) = 0;
@@ -1759,7 +1763,7 @@ void kernel_main() {
                 is_2d_fabric ? local_sem_for_teardown_from_downstream_edm[NUM_USED_RECEIVER_CHANNELS - 1]
                              : get_semaphore<ProgrammableCoreType::ACTIVE_ETH>(
                                    local_sem_for_teardown_from_downstream_edm[NUM_USED_RECEIVER_CHANNELS - 1]);
-            if constexpr (is_2d_fabric) {
+            if constexpr (is_2d_fabric && enable_handshake) {
                 // reset the handshake addresses to 0
                 *reinterpret_cast<volatile uint32_t* const>(local_sem_address_for_acks) = 0;
                 *reinterpret_cast<volatile uint32_t* const>(teardown_sem_address) = 0;
@@ -1850,64 +1854,69 @@ void kernel_main() {
         }
     }
 
-    if constexpr (is_handshake_sender) {
-        erisc::datamover::handshake::sender_side_finish(handshake_addr, DEFAULT_HANDSHAKE_CONTEXT_SWITCH_TIMEOUT);
-    } else {
-        erisc::datamover::handshake::receiver_side_finish(handshake_addr, DEFAULT_HANDSHAKE_CONTEXT_SWITCH_TIMEOUT);
-    }
-
-    *edm_status_ptr = tt::tt_fabric::EDMStatus::REMOTE_HANDSHAKE_COMPLETE;
-
-    if constexpr (wait_for_host_signal) {
-        if constexpr (is_local_handshake_master) {
-            wait_for_notification((uint32_t)edm_local_sync_ptr, num_local_edms - 1);
-            notify_subordinate_routers(
-                edm_channels_mask, local_handshake_master_eth_chan, (uint32_t)edm_local_sync_ptr, num_local_edms);
+    if constexpr (enable_context_switch) {
+        if constexpr (is_handshake_sender) {
+            erisc::datamover::handshake::sender_side_finish(handshake_addr, DEFAULT_HANDSHAKE_CONTEXT_SWITCH_TIMEOUT);
         } else {
-            notify_master_router(local_handshake_master_eth_chan, (uint32_t)edm_local_sync_ptr);
-            wait_for_notification((uint32_t)edm_local_sync_ptr, num_local_edms);
+            erisc::datamover::handshake::receiver_side_finish(handshake_addr, DEFAULT_HANDSHAKE_CONTEXT_SWITCH_TIMEOUT);
         }
 
-        *edm_status_ptr = tt::tt_fabric::EDMStatus::LOCAL_HANDSHAKE_COMPLETE;
+        *edm_status_ptr = tt::tt_fabric::EDMStatus::REMOTE_HANDSHAKE_COMPLETE;
 
-        wait_for_notification((uint32_t)edm_status_ptr, tt::tt_fabric::EDMStatus::READY_FOR_TRAFFIC);
-
-        if constexpr (is_local_handshake_master) {
-            notify_subordinate_routers(
-                edm_channels_mask,
-                local_handshake_master_eth_chan,
-                (uint32_t)edm_status_ptr,
-                tt::tt_fabric::EDMStatus::READY_FOR_TRAFFIC);
-        }
-    }
-
-    if constexpr (is_2d_fabric) {
-        uint32_t has_downstream_edm = has_downstream_edm_vc0_buffer_connection & 0xF;
-        uint32_t edm_index = 0;
-        while (has_downstream_edm) {
-            if (has_downstream_edm & 0x1) {
-                // open connections with available downstream edms
-                downstream_edm_noc_interfaces[edm_index].template open<true, tt::tt_fabric::worker_handshake_noc>();
-                *downstream_edm_noc_interfaces[edm_index].from_remote_buffer_slot_rdptr_ptr = 0;
+        if constexpr (wait_for_host_signal) {
+            if constexpr (is_local_handshake_master) {
+                wait_for_notification((uint32_t)edm_local_sync_ptr, num_local_edms - 1);
+                notify_subordinate_routers(
+                    edm_channels_mask, local_handshake_master_eth_chan, (uint32_t)edm_local_sync_ptr, num_local_edms);
+            } else {
+                notify_master_router(local_handshake_master_eth_chan, (uint32_t)edm_local_sync_ptr);
+                wait_for_notification((uint32_t)edm_local_sync_ptr, num_local_edms);
             }
-            edm_index++;
-            has_downstream_edm >>= 1;
-        }
-        if constexpr (enable_ring_support) {
-            bool connect_ring = false;
-            if constexpr (my_direction == eth_chan_directions::EAST) {
-                connect_ring = (has_downstream_edm_vc0_buffer_connection & (0x1 << eth_chan_directions::WEST)) != 0;
-            } else if constexpr (my_direction == eth_chan_directions::WEST) {
-                connect_ring = (has_downstream_edm_vc0_buffer_connection & (0x1 << eth_chan_directions::EAST)) != 0;
-            } else if constexpr (my_direction == eth_chan_directions::NORTH) {
-                connect_ring = (has_downstream_edm_vc0_buffer_connection & (0x1 << eth_chan_directions::SOUTH)) != 0;
-            } else if constexpr (my_direction == eth_chan_directions::SOUTH) {
-                connect_ring = (has_downstream_edm_vc0_buffer_connection & (0x1 << eth_chan_directions::NORTH)) != 0;
+
+            *edm_status_ptr = tt::tt_fabric::EDMStatus::LOCAL_HANDSHAKE_COMPLETE;
+
+            wait_for_notification((uint32_t)edm_status_ptr, tt::tt_fabric::EDMStatus::READY_FOR_TRAFFIC);
+
+            if constexpr (is_local_handshake_master) {
+                notify_subordinate_routers(
+                    edm_channels_mask,
+                    local_handshake_master_eth_chan,
+                    (uint32_t)edm_status_ptr,
+                    tt::tt_fabric::EDMStatus::READY_FOR_TRAFFIC);
             }
-            if (connect_ring) {
-                downstream_edm_noc_interfaces[NUM_USED_RECEIVER_CHANNELS - 1]
-                    .template open<true, tt::tt_fabric::worker_handshake_noc>();
-                *downstream_edm_noc_interfaces[NUM_USED_RECEIVER_CHANNELS - 1].from_remote_buffer_slot_rdptr_ptr = 0;
+        }
+
+        if constexpr (is_2d_fabric) {
+            uint32_t has_downstream_edm = has_downstream_edm_vc0_buffer_connection & 0xF;
+            uint32_t edm_index = 0;
+            while (has_downstream_edm) {
+                if (has_downstream_edm & 0x1) {
+                    // open connections with available downstream edms
+                    downstream_edm_noc_interfaces[edm_index].template open<true, tt::tt_fabric::worker_handshake_noc>();
+                    *downstream_edm_noc_interfaces[edm_index].from_remote_buffer_slot_rdptr_ptr = 0;
+                }
+                edm_index++;
+                has_downstream_edm >>= 1;
+            }
+            if constexpr (enable_ring_support) {
+                bool connect_ring = false;
+                if constexpr (my_direction == eth_chan_directions::EAST) {
+                    connect_ring = (has_downstream_edm_vc0_buffer_connection & (0x1 << eth_chan_directions::WEST)) != 0;
+                } else if constexpr (my_direction == eth_chan_directions::WEST) {
+                    connect_ring = (has_downstream_edm_vc0_buffer_connection & (0x1 << eth_chan_directions::EAST)) != 0;
+                } else if constexpr (my_direction == eth_chan_directions::NORTH) {
+                    connect_ring =
+                        (has_downstream_edm_vc0_buffer_connection & (0x1 << eth_chan_directions::SOUTH)) != 0;
+                } else if constexpr (my_direction == eth_chan_directions::SOUTH) {
+                    connect_ring =
+                        (has_downstream_edm_vc0_buffer_connection & (0x1 << eth_chan_directions::NORTH)) != 0;
+                }
+                if (connect_ring) {
+                    downstream_edm_noc_interfaces[NUM_USED_RECEIVER_CHANNELS - 1]
+                        .template open<true, tt::tt_fabric::worker_handshake_noc>();
+                    *downstream_edm_noc_interfaces[NUM_USED_RECEIVER_CHANNELS - 1].from_remote_buffer_slot_rdptr_ptr =
+                        0;
+                }
             }
         }
     }

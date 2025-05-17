@@ -168,7 +168,7 @@ struct FabricMuxConfig {
             this->full_size_channels_base_address,
             this->local_fabric_router_status_address,
             fabric_router_config.edm_status_address,
-            fabric_router_config.sender_channels_num_buffers[0],
+            fabric_router_config.sender_channels_num_buffers[0][0],
             this->num_full_size_channel_iters,
             this->num_iters_between_teardown_checks};
     }

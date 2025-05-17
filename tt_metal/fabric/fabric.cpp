@@ -42,7 +42,8 @@ void append_fabric_connection_rt_args(
     uint32_t link_idx,
     tt::tt_metal::Program& worker_program,
     const CoreCoord& worker_core,
-    std::vector<uint32_t>& worker_args) {
+    std::vector<uint32_t>& worker_args,
+    const size_t risc_id) {
     TT_FATAL(
         src_chip_id != dst_chip_id,
         "Expected different src and dst chip ids but got same, src: {}, dst: {}",
@@ -95,13 +96,15 @@ void append_fabric_connection_rt_args(
     tt::tt_fabric::SenderWorkerAdapterSpec edm_connection = {
         .edm_noc_x = fabric_router_virtual_core.x,
         .edm_noc_y = fabric_router_virtual_core.y,
-        .edm_buffer_base_addr = edm_config.sender_channels_base_address[sender_channel],
-        .num_buffers_per_channel = edm_config.sender_channels_num_buffers[sender_channel],
-        .edm_l1_sem_addr = edm_config.sender_channels_local_flow_control_semaphore_address[sender_channel],
-        .edm_connection_handshake_addr = edm_config.sender_channels_connection_semaphore_address[sender_channel],
-        .edm_worker_location_info_addr = edm_config.sender_channels_worker_conn_info_base_address[sender_channel],
-        .buffer_size_bytes = edm_config.channel_buffer_size_bytes,
-        .buffer_index_semaphore_id = edm_config.sender_channels_buffer_index_semaphore_address[sender_channel],
+        .edm_buffer_base_addr = edm_config.sender_channels_base_address[risc_id][sender_channel],
+        .num_buffers_per_channel = edm_config.sender_channels_num_buffers[risc_id][sender_channel],
+        .edm_l1_sem_addr = edm_config.sender_channels_local_flow_control_semaphore_address[risc_id][sender_channel],
+        .edm_connection_handshake_addr =
+            edm_config.sender_channels_connection_semaphore_address[risc_id][sender_channel],
+        .edm_worker_location_info_addr =
+            edm_config.sender_channels_worker_conn_info_base_address[risc_id][sender_channel],
+        .buffer_size_bytes = edm_config.channel_buffer_size_bytes[risc_id],
+        .buffer_index_semaphore_id = edm_config.sender_channels_buffer_index_semaphore_address[risc_id][sender_channel],
         .persistent_fabric = true,
         .edm_direction = router_direction};
 
