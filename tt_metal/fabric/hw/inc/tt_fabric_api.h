@@ -501,7 +501,7 @@ void fabric_set_mcast_route(
     } else if (n_num_hops) {
         fabric_set_route<true>(packet_header, eth_chan_directions::NORTH, 0, n_num_hops);
     } else if (s_num_hops) {
-        fabric_set_route<true>(packet_header, eth_chan_directions::NORTH, 0, s_num_hops);
+        fabric_set_route<true>(packet_header, eth_chan_directions::SOUTH, 0, s_num_hops);
     }
 }
 

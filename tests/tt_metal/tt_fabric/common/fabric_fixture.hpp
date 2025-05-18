@@ -111,7 +111,12 @@ void RunTestUnicastRaw(
 void RunTestUnicastConnAPI(
     BaseFabricFixture* fixture, uint32_t num_hops = 1, RoutingDirection direction = RoutingDirection::E);
 
-void RunTestMCastConnAPI(BaseFabricFixture* fixture);
+void RunTestMCastConnAPI(
+    BaseFabricFixture* fixture,
+    RoutingDirection fwd_dir = RoutingDirection::W,
+    uint32_t fwd_hops = 1,
+    RoutingDirection bwd_dir = RoutingDirection::E,
+    uint32_t bwd_hops = 1);
 
 void RunTestLineMcast(
     BaseFabricFixture* fixture, RoutingDirection unicast_dir, const std::vector<McastRoutingInfo>& mcast_routing_info);
