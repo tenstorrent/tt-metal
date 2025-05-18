@@ -262,7 +262,7 @@ install_mpi_uflm(){
     # 2. Install
     echo "→ Installing $DEB_FILE …"
     apt-get update -qq
-    apt-get install -y "$TMP_DIR/$DEB_FILE"
+    apt-get install -f -y "$TMP_DIR/$DEB_FILE"
 }
 
 # We don't really want to have hugepages dependency
