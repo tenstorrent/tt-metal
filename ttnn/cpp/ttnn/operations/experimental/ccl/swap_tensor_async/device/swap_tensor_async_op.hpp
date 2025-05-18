@@ -103,6 +103,8 @@ SwapTensorAsync create_swap_tensor_async_struct(
 // Swap Tensor Variants
 tt::tt_metal::operation::ProgramWithCallbacks swap_tensor_async_llama_sharded(
     const Tensor& input_tensor,
+    const std::optional<Tensor>& priority_tensor_a,
+    const std::optional<Tensor>& priority_tensor_b,
     std::optional<IDevice*> forward_device,
     std::optional<IDevice*> backward_device,
     Tensor& output_tensor,
@@ -119,6 +121,16 @@ namespace ccl {
 
 Tensor swap_tensor_async(
     const Tensor& input_tensor,
+    const global_semaphore::MultiDeviceGlobalSemaphore& multi_device_global_semaphore,
+    const uint32_t num_links = 1,
+    const std::optional<MemoryConfig>& memory_config = std::nullopt,
+    const ttnn::ccl::Topology topology = ttnn::ccl::Topology::Ring,
+    std::optional<tt::tt_metal::SubDeviceId> sub_device_id = std::nullopt);
+
+Tensor swap_tensor_async(
+    const Tensor& input_tensor,
+    const Tensor& priority_tensor_a,
+    const Tensor& priority_tensor_b,
     const global_semaphore::MultiDeviceGlobalSemaphore& multi_device_global_semaphore,
     const uint32_t num_links = 1,
     const std::optional<MemoryConfig>& memory_config = std::nullopt,

@@ -9,6 +9,7 @@
 #include "cpp/ttnn/operations/experimental/ccl/all_gather_async/device/kernels/minimal_ccl_common.hpp"
 #include <cstdint>
 #include <utility>
+#include "debug/dprint.h"
 
 using address_t = uint32_t;
 
@@ -25,6 +26,8 @@ constexpr uint32_t tensor0_page_size = get_compile_time_arg_val(5);
 constexpr uint32_t num_targets_forward_direction = get_compile_time_arg_val(6);
 constexpr uint32_t num_targets_backward_direction = get_compile_time_arg_val(7);
 constexpr bool dynamic_alternate = get_compile_time_arg_val(8);
+constexpr uint32_t priority_tensor_cb_index = get_compile_time_arg_val(9);
+constexpr bool check_priority_tensor = get_compile_time_arg_val(10);
 constexpr uint32_t num_max_targets = std::max(num_targets_forward_direction, num_targets_backward_direction);
 constexpr uint32_t num_sync_targets_forward = dynamic_alternate ? num_max_targets : num_targets_forward_direction;
 constexpr uint32_t num_sync_targets_backward = dynamic_alternate ? num_max_targets : num_targets_backward_direction;
@@ -47,6 +50,14 @@ void kernel_main() {
     uint32_t out_ready_sem_wait_value = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t link = get_arg_val<uint32_t>(arg_idx++);
 
+    uint32_t priority_tensor_a_addr = 0;
+    uint32_t priority_tensor_b_addr = 0;
+    Priority priority = Priority::INVALID;
+    if constexpr (check_priority_tensor) {
+        priority_tensor_a_addr = get_arg_val<uint32_t>(arg_idx++);
+        priority_tensor_b_addr = get_arg_val<uint32_t>(arg_idx++);
+    }
+
     tt_l1_ptr uint32_t* core_noc_x = (tt_l1_ptr uint32_t*)(get_arg_addr(arg_idx));
     arg_idx += num_cores;
     tt_l1_ptr uint32_t* core_noc_y = (tt_l1_ptr uint32_t*)(get_arg_addr(arg_idx));
@@ -61,6 +72,11 @@ void kernel_main() {
             arg_idx);
     if (fabric_connection.is_logically_connected()) {
         fabric_connection.open_finish();
+    }
+
+    if constexpr (check_priority_tensor) {
+        priority = static_cast<Priority>(
+            get_priority<priority_tensor_cb_index>(priority_tensor_a_addr, priority_tensor_b_addr));
     }
 
     // packet header cb
@@ -100,15 +116,18 @@ void kernel_main() {
         // Within-shard offset
         noc0_dest_noc_addr += shard_tile_id * tensor0_page_size;
 
-        // This issues a flush barrier
-        write_and_advance_local_read_address_for_fabric_write(
-            noc0_dest_noc_addr,
-            pkt_hdr_forward,
-            pkt_hdr_backward,
-            fabric_connection,
-            l1_read_addr,
-            num_tiles_to_read_this_core * tensor0_page_size,
-            true);
+        // If the priority is low, we can skip ALL writes
+        if (priority != Priority::LOW) {
+            // This issues a flush barrier
+            write_and_advance_local_read_address_for_fabric_write(
+                noc0_dest_noc_addr,
+                pkt_hdr_forward,
+                pkt_hdr_backward,
+                fabric_connection,
+                l1_read_addr,
+                num_tiles_to_read_this_core * tensor0_page_size,
+                priority != Priority::HIGH);  // Skip local write if priority is NOT high
+        }
         if constexpr (dynamic_alternate) {
             std::swap(
                 pkt_hdr_forward->routing_fields.value,

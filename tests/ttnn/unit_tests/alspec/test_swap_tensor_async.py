@@ -17,7 +17,6 @@ from tests.ttnn.unit_tests.operations.ccl.test_ccl_common import (
 from tests.tt_eager.python_api_testing.unit_testing.misc.test_matmul_1d_gather_in0 import (
     round_up,
 )
-from models.perf.benchmarking_utils import BenchmarkProfiler
 from tracy import signpost
 
 
@@ -40,7 +39,7 @@ def run_swap_tensor_impl(
     num_links,
     input_num_cores,
     output_num_cores,
-    output_dtype=None,
+    use_priority=False,
     num_iters=1,
     enable_async=False,
     trace_mode=False,
@@ -50,9 +49,7 @@ def run_swap_tensor_impl(
     num_devices = mesh_device.get_num_devices()
 
     assert num_devices == 2, f"Only 2 devices are supported for swap tensor test, got {num_devices}"
-
-    if output_dtype is None:
-        output_dtype = input_dtype
+    assert cluster_shape == (2, 1), f"Only (2, 1) cluster shape is supported for swap tensor test, got {cluster_shape}"
 
     if num_iters < 1:
         pytest.fail("num_iters must be >= 1")
@@ -65,6 +62,9 @@ def run_swap_tensor_impl(
 
     if enable_async:
         logger.info(f"Using Async Mode for Swap Tensor Op Dispatch")
+
+    if use_priority:
+        logger.info(f"Using Priority Tensors for Swap Tensor Op")
 
     ##################################
     ##### Set up fabric stuff
@@ -130,26 +130,91 @@ def run_swap_tensor_impl(
     )
     check_mesh_tensor_alloc(tt_input_tensor)
 
+    # Set up the priorities
+    priorities = []
+    priorities_tt = []
+    possible_priorities = [0, 1, 2]
+    MAX_PRIORITY_TENSORS = 10
+    if use_priority:
+        for _ in range(min(MAX_PRIORITY_TENSORS, num_iters)):
+            # Randomly select 2 valid priorities from the possible priorities
+            temp_priorities = possible_priorities.copy()
+            priority_a = temp_priorities.pop(torch.randint(0, len(temp_priorities), (1,)).item())
+            priority_b = temp_priorities.pop(torch.randint(0, len(temp_priorities), (1,)).item())
+
+            priorities.append((priority_a, priority_b))
+
+            # Each device has a (ttnn.TILE_SIZE, ttnn.TILE_SIZE) priority tensor
+            # priority_tensor_a -> self priority
+            # priority_tensor_b -> other device's priority
+            priority_a = torch.tensor(priority_a).view(1, 1, 1, 1).repeat(1, 1, ttnn.TILE_SIZE, ttnn.TILE_SIZE)
+            priority_b = torch.tensor(priority_b).view(1, 1, 1, 1).repeat(1, 1, ttnn.TILE_SIZE, ttnn.TILE_SIZE)
+
+            # Priority tensor A from the perspective of the first device
+            priority_a_tt = ttnn.from_torch(
+                torch.concat([priority_a, priority_b], dim=0),
+                device=mesh_device,
+                layout=ttnn.TILE_LAYOUT,
+                dtype=ttnn.int32,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(0, None), mesh_shape=cluster_shape),
+            )
+
+            # Priority tensor B from the perspective of the second device
+            priority_b_tt = ttnn.from_torch(
+                torch.concat([priority_b, priority_a], dim=0),
+                device=mesh_device,
+                layout=ttnn.TILE_LAYOUT,
+                dtype=ttnn.int32,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(0, None), mesh_shape=cluster_shape),
+            )
+
+            priorities_tt.append((priority_a_tt, priority_b_tt))
+
     # Swap-Tensor Golden
     output_tensor_goldens_list = []
     for i in range(num_iters):
-        # Flipping is the same as swapping, when num_devices = 2
-        output_tensor_goldens_list.append(torch.flip(input_tensor, [0]))
+        if use_priority:
+            priority = priorities[i % MAX_PRIORITY_TENSORS]
+            if priority[0] > priority[1]:
+                # Device 0 has higher priority
+                output_tensor_golden = input_tensor[0:1, ...].repeat(2, 1, 1, 1)
+                output_tensor_goldens_list.append(output_tensor_golden)
+            else:
+                # Device 1 has higher priority
+                output_tensor_golden = input_tensor[1:2, ...].repeat(2, 1, 1, 1)
+                output_tensor_goldens_list.append(output_tensor_golden)
+        else:
+            # Flipping is the same as swapping, when num_devices = 2
+            output_tensor_goldens_list.append(torch.flip(input_tensor, [0]))
 
     ##################################
     ##### Run the op
     ##################################
-    def run_op(n_iters, store_all_results=True):
+    def run_op(n_iters, store_all_results=True, use_priority=use_priority):
         outs = []
         for i in range(n_iters):
-            out = ttnn.experimental.swap_tensor_async(
-                tt_input_tensor,
-                multi_device_global_semaphore=ccl_semaphore_handles[i % num_buffers],
-                memory_config=output_mem_config,
-                topology=swap_tensor_topology,
-                num_links=num_links,
-                subdevice_id=worker_sub_device_id,
-            )
+            if use_priority:
+                out = ttnn.experimental.swap_tensor_async(
+                    tt_input_tensor,
+                    priorities_tt[i % MAX_PRIORITY_TENSORS][0],
+                    priorities_tt[i % MAX_PRIORITY_TENSORS][1],
+                    multi_device_global_semaphore=ccl_semaphore_handles[i % num_buffers],
+                    memory_config=output_mem_config,
+                    topology=swap_tensor_topology,
+                    num_links=num_links,
+                    subdevice_id=worker_sub_device_id,
+                )
+            else:
+                out = ttnn.experimental.swap_tensor_async(
+                    tt_input_tensor,
+                    multi_device_global_semaphore=ccl_semaphore_handles[i % num_buffers],
+                    memory_config=output_mem_config,
+                    topology=swap_tensor_topology,
+                    num_links=num_links,
+                    subdevice_id=worker_sub_device_id,
+                )
             if not trace_mode:
                 ttnn.synchronize_device(mesh_device)
             if store_all_results:
@@ -243,6 +308,13 @@ def run_swap_tensor_impl(
     ],
 )
 @pytest.mark.parametrize(
+    "use_priority",
+    [
+        True,
+        False,
+    ],
+)
+@pytest.mark.parametrize(
     "num_iters",
     [
         50,
@@ -274,6 +346,7 @@ def test_swap_tensor(
     num_links,
     input_num_cores,
     output_num_cores,
+    use_priority,
     num_iters,
     enable_async,
     trace_mode,
@@ -287,6 +360,7 @@ def test_swap_tensor(
         num_links,
         input_num_cores,
         output_num_cores,
+        use_priority=use_priority,
         num_iters=num_iters,
         enable_async=enable_async,
         trace_mode=trace_mode,

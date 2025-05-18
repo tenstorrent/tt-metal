@@ -21,4 +21,24 @@ ttnn::Tensor ExecuteSwapTensorAsync::invoke(
         input_tensor, multi_device_global_semaphore, num_links, memory_config, topology, subdevice_id);
 }
 
+ttnn::Tensor ExecuteSwapTensorAsync::invoke(
+    const ttnn::Tensor& input_tensor,
+    const ttnn::Tensor& priority_tensor_a,
+    const ttnn::Tensor& priority_tensor_b,
+    const global_semaphore::MultiDeviceGlobalSemaphore& multi_device_global_semaphore,
+    const uint32_t num_links,
+    const std::optional<ttnn::MemoryConfig>& memory_config,
+    const ttnn::ccl::Topology topology,
+    std::optional<tt::tt_metal::SubDeviceId> subdevice_id) {
+    return ttnn::operations::experimental::ccl::swap_tensor_async(
+        input_tensor,
+        priority_tensor_a,
+        priority_tensor_b,
+        multi_device_global_semaphore,
+        num_links,
+        memory_config,
+        topology,
+        subdevice_id);
+}
+
 }  // namespace ttnn::operations::experimental::ccl

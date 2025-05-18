@@ -88,6 +88,8 @@ std::tuple<CoreRangeSet, std::vector<CoreCoord>> swap_tensor_choose_worker_cores
 
 tt::tt_metal::operation::ProgramWithCallbacks swap_tensor_async_llama_sharded(
     const Tensor& input_tensor,
+    const std::optional<Tensor>& priority_tensor_a,
+    const std::optional<Tensor>& priority_tensor_b,
     std::optional<IDevice*> forward_device,
     std::optional<IDevice*> backward_device,
     Tensor& output_tensor,
@@ -97,6 +99,11 @@ tt::tt_metal::operation::ProgramWithCallbacks swap_tensor_async_llama_sharded(
     ccl::Topology topology,
     const GlobalSemaphore& semaphore,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
+    bool check_priority_tensor = false;
+    if (priority_tensor_a.has_value() && priority_tensor_b.has_value()) {
+        check_priority_tensor = true;
+    }
+
     tt::tt_metal::Program program{};
     IDevice* device = input_tensor.device();
     const bool enable_persistent_fabric_mode = true;
@@ -187,6 +194,28 @@ tt::tt_metal::operation::ProgramWithCallbacks swap_tensor_async_llama_sharded(
             .set_page_size(reserved_packet_header_CB_index, packet_header_size_bytes);
     auto reserved_packet_header_CB_handle =
         tt::tt_metal::CreateCircularBuffer(program, sender_worker_core_range, cb_reserved_packet_header_config);
+
+    // Create CB for the priority tensor
+    uint32_t priority_tensor_cb_index = tt::CBIndex::c_2;
+    tt::tt_metal::CBHandle cb_priority_tensor;
+    if (check_priority_tensor) {
+        tt::DataFormat priority_tensor_cb_data_format =
+            tt::tt_metal::datatype_to_dataformat_converter(priority_tensor_a.value().get_dtype());
+        tt::tt_metal::Tile priority_tensor_tile = priority_tensor_a.value().get_tensor_spec().tile();
+        uint32_t priority_tensor_single_tile_size = priority_tensor_tile.get_tile_size(priority_tensor_cb_data_format);
+
+        uint32_t priority_tensor_CB_num_tiles = 2;  // One for each of the two priority tensors (one tile each)
+        uint32_t priority_tensor_cb_size = priority_tensor_single_tile_size * priority_tensor_CB_num_tiles;
+
+        tt::tt_metal::CircularBufferConfig priority_tensor_cb_config =
+            tt::tt_metal::CircularBufferConfig(
+                priority_tensor_cb_size, {{priority_tensor_cb_index, priority_tensor_cb_data_format}})
+                .set_page_size(priority_tensor_cb_index, priority_tensor_single_tile_size)
+                .set_tile_dims(priority_tensor_cb_index, priority_tensor_tile);
+
+        cb_priority_tensor =
+            tt::tt_metal::CreateCircularBuffer(program, sender_worker_core_range, priority_tensor_cb_config);
+    }
 
     // kernel setup
     auto input_cores_vec = corerange_to_cores(input_tensor_cores, std::nullopt, true);
@@ -294,15 +323,17 @@ tt::tt_metal::operation::ProgramWithCallbacks swap_tensor_async_llama_sharded(
 
     // Writer
     std::vector<uint32_t> writer_compile_args = {
-        ring_index,                               // my_chip_id
-        reserved_packet_header_CB_index,          // reserved_packet_header_cb_id
-        num_packet_headers_storable,              // num_packet_headers_storable
-        src0_cb_index,                            // cb0_id
-        num_pages_per_packet,                     // packet_size_in_pages
-        op_config.get_page_size(),                // tensor0_page_size
-        num_targets_forward,                      // num_targets_forward_direction
-        num_targets_backward,                     // num_targets_backward_direction
-        static_cast<uint32_t>(dynamic_alternate)  // dynamic_alternate
+        ring_index,                                    // my_chip_id
+        reserved_packet_header_CB_index,               // reserved_packet_header_cb_id
+        num_packet_headers_storable,                   // num_packet_headers_storable
+        src0_cb_index,                                 // cb0_id
+        num_pages_per_packet,                          // packet_size_in_pages
+        op_config.get_page_size(),                     // tensor0_page_size
+        num_targets_forward,                           // num_targets_forward_direction
+        num_targets_backward,                          // num_targets_backward_direction
+        static_cast<uint32_t>(dynamic_alternate),      // dynamic_alternate
+        priority_tensor_cb_index,                      // priority_tensor_cb_index
+        static_cast<uint32_t>(check_priority_tensor),  // check_priority_tensor
     };
     log_trace(tt::LogOp, "Writer Compile Args:");
     auto worker_sender_writer_kernel_id = tt::tt_metal::CreateKernel(
@@ -371,6 +402,12 @@ tt::tt_metal::operation::ProgramWithCallbacks swap_tensor_async_llama_sharded(
             out_ready_sem_wait_value,             // out_ready_sem_wait_value
             link,                                 // link
         };
+
+        if (check_priority_tensor) {
+            writer_rt_args.push_back(priority_tensor_a->buffer()->address());  // priority_tensor_cb_addr
+            writer_rt_args.push_back(priority_tensor_b->buffer()->address());  // priority_tensor_cb_addr
+        }
+
         writer_rt_args.insert(writer_rt_args.end(), output_tensor_cores_x.begin(), output_tensor_cores_x.end());
         writer_rt_args.insert(writer_rt_args.end(), output_tensor_cores_y.begin(), output_tensor_cores_y.end());
 
@@ -395,7 +432,7 @@ tt::tt_metal::operation::ProgramWithCallbacks swap_tensor_async_llama_sharded(
     }
 
     auto override_runtime_arguments_callback =
-        [worker_sender_reader_kernel_id, worker_sender_writer_kernel_id, sender_worker_cores](
+        [worker_sender_reader_kernel_id, worker_sender_writer_kernel_id, sender_worker_cores, check_priority_tensor](
             const void* operation,
             Program& program,
             const std::vector<Tensor>& input_tensors,
@@ -403,6 +440,13 @@ tt::tt_metal::operation::ProgramWithCallbacks swap_tensor_async_llama_sharded(
             const std::vector<Tensor>& output_tensors) {
             const auto& input = input_tensors[0];
             const auto& output = output_tensors[0];
+
+            uint32_t priority_tensor_a_addr = 0;
+            uint32_t priority_tensor_b_addr = 0;
+            if (check_priority_tensor) {
+                priority_tensor_a_addr = input_tensors[1].buffer()->address();
+                priority_tensor_b_addr = input_tensors[2].buffer()->address();
+            }
 
             auto semaphore = static_cast<const ttnn::SwapTensorAsync*>(operation)->semaphore;
 
@@ -417,6 +461,11 @@ tt::tt_metal::operation::ProgramWithCallbacks swap_tensor_async_llama_sharded(
                 auto& worker_writer_sender_runtime_args = worker_writer_sender_runtime_args_by_core[core.x][core.y];
                 worker_writer_sender_runtime_args[0] = output.buffer()->address();
                 worker_writer_sender_runtime_args[1] = semaphore.address();
+
+                if (check_priority_tensor) {
+                    worker_writer_sender_runtime_args[10] = priority_tensor_a_addr;
+                    worker_writer_sender_runtime_args[11] = priority_tensor_b_addr;
+                }
             }
         };
 

@@ -61,7 +61,10 @@ SwapTensorAsync create_swap_tensor_async_struct(
 
 void SwapTensorAsync::validate_with_output_tensors(
     const std::vector<Tensor>& input_tensors, const std::vector<std::optional<Tensor>>& output_tensors) const {
-    TT_FATAL(input_tensors.size() == 1, "Error, Input tensor size should be 1 but has {}", input_tensors.size());
+    TT_FATAL(
+        input_tensors.size() == 1 || input_tensors.size() == 3,
+        "Error, Input tensor size should be 1 or 3 but has {}",
+        input_tensors.size());
     const auto& input_tensor = input_tensors[0];
     const auto& layout = input_tensors[0].get_layout();
     const auto& dtype = input_tensors[0].get_dtype();
@@ -138,6 +141,46 @@ void SwapTensorAsync::validate_with_output_tensors(
             "Error, Output tensor memory layout should be same as input tensor memory layout but has {}",
             output_tensor.value().memory_config().memory_layout);
     }
+
+    // Validate the priority tensors if provided
+    if (input_tensors.size() > 1) {
+        const auto& priority_tensor_a = input_tensors[1];
+        const auto& priority_tensor_b = input_tensors[2];
+
+        TT_FATAL(
+            priority_tensor_a.storage_type() == StorageType::DEVICE, "Operands to swap_tensor need to be on device!");
+        TT_FATAL(
+            priority_tensor_b.storage_type() == StorageType::DEVICE, "Operands to swap_tensor need to be on device!");
+
+        TT_FATAL(
+            priority_tensor_a.get_layout() == layout,
+            "Error, Priority tensor A layout should be same as input tensor layout but has {}",
+            priority_tensor_a.get_layout());
+        TT_FATAL(
+            priority_tensor_b.get_layout() == layout,
+            "Error, Priority tensor B layout should be same as input tensor layout but has {}",
+            priority_tensor_b.get_layout());
+
+        TT_FATAL(
+            priority_tensor_a.get_dtype() == DataType::INT32,
+            "Error, Priority tensor A dtype should be INT32 but has {}",
+            priority_tensor_a.get_dtype());
+        TT_FATAL(
+            priority_tensor_b.get_dtype() == DataType::INT32,
+            "Error, Priority tensor B dtype should be INT32 but has {}",
+            priority_tensor_b.get_dtype());
+
+        TT_FATAL(
+            priority_tensor_a.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED &&
+                priority_tensor_a.memory_config().is_dram(),
+            "Error, Priority tensor A should be DRAM Interleaved but has {}",
+            priority_tensor_a.memory_config());
+        TT_FATAL(
+            priority_tensor_b.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED &&
+                priority_tensor_b.memory_config().is_dram(),
+            "Error, Priority tensor B should be DRAM Interleaved but has {}",
+            priority_tensor_b.memory_config());
+    }
 }
 
 std::vector<ttnn::TensorSpec> SwapTensorAsync::compute_output_specs(const std::vector<Tensor>& input_tensors) const {
@@ -162,11 +205,18 @@ tt::tt_metal::operation::ProgramWithCallbacks SwapTensorAsync::create_program(
 
     log_trace(tt::LogOp, "version: {}", static_cast<uint32_t>(version));
 
+    const std::optional<Tensor> priority_tensor_a =
+        input_tensors.size() > 1 ? std::make_optional(input_tensors[1]) : std::nullopt;
+    const std::optional<Tensor> priority_tensor_b =
+        input_tensors.size() > 2 ? std::make_optional(input_tensors[2]) : std::nullopt;
+
     switch (version) {
         case SwapTensorAsyncVersion::MINIMAL_SHARDED:
         default:
             return swap_tensor_async_llama_sharded(
                 input_tensors[0],
+                priority_tensor_a,
+                priority_tensor_b,
                 this->forward_device,
                 this->backward_device,
                 output_tensors[0],
@@ -245,6 +295,55 @@ Tensor swap_tensor_async(
                 optional_output_tensors);
         },
         {input_tensor},
+        output_tensors);
+    return output_tensors.at(0);
+}
+
+Tensor swap_tensor_async(
+    const Tensor& input_tensor,
+    const Tensor& priority_tensor_a,
+    const Tensor& priority_tensor_b,
+    const global_semaphore::MultiDeviceGlobalSemaphore& multi_device_global_semaphore,
+    const uint32_t num_links,
+    const std::optional<MemoryConfig>& memory_config,
+    const ttnn::ccl::Topology topology,
+    std::optional<tt::tt_metal::SubDeviceId> sub_device_id) {
+    TT_FATAL(
+        std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr,
+        "swap_tensor_async op is only supported for Fast Dispatch");
+    auto devices = input_tensor.get_workers();
+    uint32_t num_devices = devices.size();
+    TT_FATAL(num_devices > 1, "swap_tensor_async op will only work for num_devices > 1, but has {}", num_devices);
+    ttnn::ccl::Topology ccl_topology = topology;
+
+    if (num_devices == 2) {
+        ccl_topology = ttnn::ccl::Topology::Linear;
+    }
+    std::vector<Tensor> output_tensors = {Tensor(tt::tt_metal::operation::get_workers_for_op_output({input_tensor}))};
+
+    tt::log_debug(
+        tt::LogOp, "DEBUG: creating line_fabric with num devices: {}, num links: {}", devices.size(), num_links);
+    tt::log_debug(tt::LogOp, "DEBUG: line_fabric is created");
+
+    std::vector<GlobalSemaphore> semaphores = multi_device_global_semaphore.global_semaphores;
+
+    tt::tt_metal::operation::launch_op(
+        [num_links, num_devices, memory_config, devices, ccl_topology, semaphores, sub_device_id](
+            const std::vector<Tensor>& input_tensors,
+            const std::vector<std::optional<const Tensor>>& optional_input_tensors,
+            const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
+            const auto& input_tensor = input_tensors.at(0);
+            const auto& priority_tensor_a = input_tensors.at(1);
+            const auto& priority_tensor_b = input_tensors.at(2);
+
+            return tt::tt_metal::operation::run(
+                ttnn::ccl::swap_tensor_detail::create_swap_tensor_async_struct(
+                    input_tensor, num_links, memory_config, devices, ccl_topology, semaphores, sub_device_id),
+                {input_tensor, priority_tensor_a, priority_tensor_b},
+                optional_input_tensors,
+                optional_output_tensors);
+        },
+        {input_tensor, priority_tensor_a, priority_tensor_b},
         output_tensors);
     return output_tensors.at(0);
 }

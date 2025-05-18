@@ -10,6 +10,56 @@
 #include <cstdint>
 #include <utility>
 
+// Enum to hold high/low priority
+enum class Priority {
+    LOW = 0,
+    HIGH = 1,
+    INVALID = 2,
+};
+
+// Function to compare two priority tensors (self and other) and return which one has higher priority
+template <uint32_t priority_tensor_cb_index>
+FORCE_INLINE uint32_t get_priority(const uint32_t priority_tensor_a_addr, const uint32_t priority_tensor_b_addr) {
+    // Set up the AddrGen
+    constexpr uint32_t tile_hw = get_tile_hw(priority_tensor_cb_index);
+    const uint32_t single_tile_size_bytes = get_tile_size(priority_tensor_cb_index);
+    const DataFormat data_format = get_dataformat(priority_tensor_cb_index);
+    const InterleavedAddrGenFast<true, tile_hw> addr_gen_a = {
+        .bank_base_address = priority_tensor_a_addr, .page_size = single_tile_size_bytes, .data_format = data_format};
+    const InterleavedAddrGenFast<true, tile_hw> addr_gen_b = {
+        .bank_base_address = priority_tensor_b_addr, .page_size = single_tile_size_bytes, .data_format = data_format};
+
+    // Read the priority tensors
+    int32_t priority_a = 0;
+    int32_t priority_b = 0;
+    uint32_t l1_write_addr = 0;
+    uint32_t tile_idx = 0;
+
+    cb_reserve_back(priority_tensor_cb_index, 1);
+    l1_write_addr = get_write_ptr(priority_tensor_cb_index);
+    noc_async_read_tile(tile_idx, addr_gen_a, l1_write_addr);
+    noc_async_read_barrier();
+    cb_push_back(priority_tensor_cb_index, 1);
+    priority_a = *(uint32_t*)l1_write_addr;
+
+    cb_reserve_back(priority_tensor_cb_index, 1);
+    l1_write_addr = get_write_ptr(priority_tensor_cb_index);
+    noc_async_read_tile(tile_idx, addr_gen_b, l1_write_addr);
+    noc_async_read_barrier();
+    cb_push_back(priority_tensor_cb_index, 1);
+    priority_b = *(uint32_t*)l1_write_addr;
+
+    // Compare the priority tensors
+    if (priority_a > priority_b) {
+        return static_cast<uint32_t>(Priority::HIGH);
+    } else if (priority_a < priority_b) {
+        return static_cast<uint32_t>(Priority::LOW);
+    } else {
+        ASSERT(priority_a != priority_b);  // Only asserts when watcher is enabled
+        return static_cast<uint32_t>(Priority::INVALID);
+    }
+}
+
 FORCE_INLINE void write_and_advance_local_read_address_for_fabric_write(
     uint64_t noc0_dest_noc_addr,
     volatile PACKET_HEADER_TYPE* pkt_hdr_forward,
