@@ -43,29 +43,9 @@ def test_yolov8s_640(device, input_tensor, use_weights_from_ultralytics):
     parameters = custom_preprocessor(device, state_dict, inp_h=inp_h, inp_w=inp_w)
     ttnn_model = TtYolov8sModel(device=device, parameters=parameters, res=(inp_h, inp_w))
 
-    """
-    core_grid = ttnn.CoreGrid(y=8, x=8)
-    n, c, h, w = input_tensor.shape
-    # sharded mem config for fold input
-    num_cores = core_grid.x * core_grid.y
-    shard_h = (n * w * h + num_cores - 1) // num_cores
-    grid_size = core_grid
-    grid_coord = ttnn.CoreCoord(grid_size.x - 1, grid_size.y - 1)
-    shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), grid_coord)})
-    shard_spec = ttnn.ShardSpec(shard_grid, (shard_h, 16), ttnn.ShardOrientation.ROW_MAJOR)
-    input_mem_config = ttnn.MemoryConfig(
-        ttnn.types.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.types.BufferType.L1, shard_spec
-    )
-    torch_input_tensor = input_tensor.permute(0, 2, 3, 1)
-    torch_input_tensor = torch_input_tensor.reshape(1, 1, h * w * n, c)
-    tt_input = ttnn.from_torch(torch_input_tensor, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
-    tt_input = ttnn.pad(tt_input, [1, 1, n * h * w, 16], [0, 0, 0, 0], 0)
-    ttnn_input = tt_input.to(device, input_mem_config)
-    """
-
     n, c, h, w = input_tensor.shape
     if c == 3:
-        c = 16
+        c = 8
     input_mem_config = ttnn.create_sharded_memory_config(
         [n, c, h, w],
         ttnn.CoreGrid(x=8, y=8),
