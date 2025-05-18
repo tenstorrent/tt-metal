@@ -495,7 +495,8 @@ Tensor ExecuteBinaryFmod::invoke(
 
 Tensor ExecuteBinaryFmod::invoke(
     const Tensor& input, float scalar, const std::optional<MemoryConfig>& output_mem_config) {
-    return ttnn::unary_fmod(input, scalar);
+    return ttnn::operations::unary::ExecuteUnaryWithFloatParameter<ttnn::operations::unary::UnaryOpType::FMOD>::invoke(
+        ttnn::DefaultQueueId, input, scalar, output_mem_config);
 }
 
 Tensor _floor_div_overload(const Tensor& input_a, float value, const std::optional<MemoryConfig>& output_mem_config) {
