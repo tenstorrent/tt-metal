@@ -113,7 +113,7 @@ class TtConv:
         is_detect_cv2=False,
         width_shard=False,
         act_blocks=32,
-        enable_act_double_buffer=False,
+        enable_act_double_buffer=True,
         enable_split_reader=False,
         reshard_if_not_optimal=False,
         batch_size=1,
@@ -177,6 +177,7 @@ class TtConv:
 
         if self.bfloat8:
             conv_config.weights_dtype = ttnn.bfloat8_b
+            conv_config.dtype = ttnn.bfloat8_b
 
         return conv_config
 
@@ -276,7 +277,9 @@ class TtBottleneck:
         ttnn.deallocate(cv1)
 
         if self.tilize:
-            x = ttnn.to_layout(x, ttnn.TILE_LAYOUT, device=self.device, memory_config=ttnn.L1_MEMORY_CONFIG)
+            x = ttnn.to_layout(
+                x, ttnn.TILE_LAYOUT, device=self.device, memory_config=ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat8_b
+            )
 
         return ttnn.add(x, cv2, memory_config=ttnn.L1_MEMORY_CONFIG) if self.shortcut else cv2
 
@@ -354,7 +357,7 @@ class TtC2f:
         if use_signpost:
             signpost(header="C2F")
         cv1, out_h, out_w = self.cv1(x)
-        cv1 = ttnn.to_memory_config(cv1, memory_config=ttnn.L1_MEMORY_CONFIG)
+        cv1 = ttnn.to_memory_config(cv1, memory_config=ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat8_b)
         cv1 = ttnn.to_layout(cv1, ttnn.ROW_MAJOR_LAYOUT)
 
         y = [
@@ -366,12 +369,12 @@ class TtC2f:
             z = self.bottleneck_modules[i](y[-1])
             y.append(z)
 
-        y[0] = ttnn.to_layout(y[0], layout=ttnn.TILE_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)
-        y[1] = ttnn.to_layout(y[1], layout=ttnn.TILE_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)
+        y[0] = ttnn.to_layout(y[0], layout=ttnn.TILE_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat8_b)
+        y[1] = ttnn.to_layout(y[1], layout=ttnn.TILE_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat8_b)
 
         if not self.shortcut:
             for i in range(2, len(y)):
-                y[i] = ttnn.sharded_to_interleaved(y[i], ttnn.L1_MEMORY_CONFIG)
+                y[i] = ttnn.sharded_to_interleaved(y[i], ttnn.L1_MEMORY_CONFIG, output_dtype=ttnn.bfloat8_b)
 
         x = ttnn.concat(y, 3, memory_config=ttnn.L1_MEMORY_CONFIG)
 
@@ -661,7 +664,7 @@ class TtDetectionModel:
 
     def __call__(self, x):
         N, C, H, W = x.shape
-        min_channels = 16
+        min_channels = 8
         if C < min_channels:
             channel_padding_needed = min_channels - C
             nchw = ttnn.pad(x, ((0, 0), (0, channel_padding_needed), (0, 0), (0, 0)), value=0.0)

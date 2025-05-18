@@ -64,7 +64,7 @@ class Yolov8TestInfra:
 
         n, c, h, w = torch_input_tensor.shape
         if c == 3:
-            c = 16
+            c = 8
         input_mem_config = ttnn.create_sharded_memory_config(
             [n, c, h, w],
             ttnn.CoreGrid(x=8, y=8),
