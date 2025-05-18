@@ -557,7 +557,8 @@ class TtDetectionModel:
             parameters,
             "model.0",
             input_params=conv_config["input_params"][0],
-            act_block_h=True,
+            act_block_h=False,
+            enable_split_reader=True,
             deallocate_activation=True,
         )
         self.conv_1 = TtConv(
@@ -565,7 +566,8 @@ class TtDetectionModel:
             parameters,
             "model.1",
             input_params=conv_config["input_params"][1],
-            act_block_h=True,
+            act_block_h=False,
+            enable_split_reader=True,
             block_shard=True,
         )
         self.c2f_2 = TtC2f(
