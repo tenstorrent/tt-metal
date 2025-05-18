@@ -38,6 +38,16 @@
         "cacheVariables": {
           "CMAKE_CXX_CLANG_TIDY": {"value": "clang-tidy-17;--fix"}
         }
+      },
+      {
+        "name": "gcc",
+        "inherits": "default",
+        "description": "Build with GCC",
+        "binaryDir": "${sourceDir}/.build/gcc",
+        "cacheVariables": {
+          "BUILD_TT_TRAIN": {"value": "OFF"}
+        },
+        "toolchainFile": "cmake/x86_64-linux-gcc-12-toolchain.cmake"
       }
     ],
     "buildPresets": [
@@ -45,6 +55,12 @@
         "name": "dev",
         "configurePreset": "default",
         "configuration": "RelWithDebInfo",
+        "targets": ["all"]
+      },
+      {
+        "name": "dev-gcc",
+        "configurePreset": "gcc",
+        "configuration": "Release",
         "targets": ["all"]
       },
       {

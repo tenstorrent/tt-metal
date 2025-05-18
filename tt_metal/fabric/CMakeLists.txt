@@ -10,6 +10,7 @@ target_sources(
         erisc_datamover_builder.cpp
         fabric.cpp
         fabric_host_utils.cpp
+        fabric_context.cpp
 )
 
 target_sources(

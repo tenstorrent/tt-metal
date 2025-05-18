@@ -346,7 +346,7 @@ Tensor convert_python_tensors_to_tt_tensors(
         host_owned_specs.push_back(shard.get_tensor_spec());
     }
     auto distributed_tensor_config = get_distributed_tensor_config(strategy);
-    auto storage = MultiDeviceHostStorage{distributed_tensor_config, std::move(host_owned_buffers), host_owned_specs};
+    auto storage = MultiDeviceHostStorage{std::move(host_owned_buffers), host_owned_specs};
 
     auto output = Tensor(std::move(storage), tt_shards.at(0).get_tensor_spec(), distributed_tensor_config);
     output = tt::tt_metal::set_tensor_id(output);
@@ -364,7 +364,7 @@ HostBuffer create_row_major_host_buffer(
     if (padded_output) {
         if (tensor_spec.layout() == Layout::TILE) {
             auto data = tensor_impl::convert_layout_tile_to_row_major(
-                tensor_spec.physical_shape(), tensor_spec.tile(), tt::stl::MakeConstSpan(host_buffer.view_as<T>()));
+                tensor_spec.physical_shape(), tensor_spec.tile(), tt::stl::make_const_span(host_buffer.view_as<T>()));
             return HostBuffer(std::move(data));
         }
         return host_buffer;
@@ -440,8 +440,8 @@ HostBuffer get_host_buffer_from_tensor(const Tensor& tt_tensor, const bool padde
         tt::stl::overloaded{
             [](const HostStorage& storage) { return storage.buffer; },
             [](const MultiDeviceHostStorage& storage) {
-                TT_FATAL(storage.buffers.size() == 1, "Can't get a single buffer from multi device host storage");
-                return storage.buffers[0];
+                TT_FATAL(storage.num_buffers() == 1, "Can't get a single buffer from multi device host storage");
+                return storage.get_buffer(0);
             },
             [&tt_tensor](auto&&) -> HostBuffer {
                 TT_THROW(
@@ -1477,12 +1477,8 @@ void pytensor_module(py::module& m_tensor) {
                 return std::visit(
                     tt::stl::overloaded{
                         [](const DeviceStorage& s) -> uint32_t {
-                            if (s.mesh_buffer) {
-                                return s.mesh_buffer->address();
-                            } else {
-                                TT_FATAL(s.buffer != nullptr, "Tensor is not allocated.");
-                                return s.buffer->address();
-                            }
+                            TT_FATAL(s.mesh_buffer != nullptr, "Tensor is not allocated.");
+                            return s.mesh_buffer->address();
                         },
                         [&](auto&&) -> uint32_t {
                             TT_THROW(

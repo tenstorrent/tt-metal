@@ -11,6 +11,7 @@
 
 #include "dispatch/dispatch_settings.hpp"
 #include "dispatch/launch_message_ring_buffer_state.hpp"
+#include "dispatch/worker_config_buffer.hpp"
 
 namespace tt::tt_metal::distributed {
 
@@ -152,14 +153,16 @@ private:
 
 protected:
     void write_shard_to_device(
-        Buffer* shard_view,
+        const MeshBuffer& buffer,
+        const MeshCoordinate& device_coord,
         const void* src,
-        const BufferRegion& region,
+        const std::optional<BufferRegion>& region,
         tt::stl::Span<const SubDeviceId> sub_device_ids = {}) override;
     void read_shard_from_device(
-        Buffer* shard_view,
+        const MeshBuffer& buffer,
+        const MeshCoordinate& device_coord,
         void* dst,
-        const BufferRegion& region,
+        const std::optional<BufferRegion>& region,
         std::unordered_map<IDevice*, uint32_t>& num_txns_per_device,
         tt::stl::Span<const SubDeviceId> sub_device_ids = {}) override;
     void submit_memcpy_request(std::unordered_map<IDevice*, uint32_t>& num_txns_per_device, bool blocking) override;
@@ -177,6 +180,8 @@ public:
     WorkerConfigBufferMgr& get_config_buffer_mgr(uint32_t index) override { return config_buffer_mgr_[index]; };
     void enqueue_mesh_workload(MeshWorkload& mesh_workload, bool blocking) override;
 
+    // TODO: This will error out for SD mesh command queues
+    // - Need to add equivalent APIs for SD and expose via mesh command queue base or mesh command queue
     void enqueue_write_shard_to_core(
         const DeviceMemoryAddress& address,
         const void* src,

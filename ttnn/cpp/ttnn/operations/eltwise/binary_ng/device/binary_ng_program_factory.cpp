@@ -234,7 +234,7 @@ void set_or_update_runtime_arguments(
     const uint32_t tile_width = c.tensor_spec().tile().get_width();
     const uint32_t tile_hw = tile_height * tile_width;
     const uint32_t c_num_tiles = c.volume() / tile_hw;
-    uint32_t c_shard_height, c_shard_width, num_shards_per_width;
+    uint32_t c_shard_height{}, c_shard_width{}, num_shards_per_width{};
 
     ShardShapeGenerator a_shard_shape_generator;
     ShardShapeGenerator b_shard_shape_generator;
@@ -285,9 +285,9 @@ void set_or_update_runtime_arguments(
         } else if (core_group_2.contains(core)) {
             c_num_tiles = num_tiles_per_core_group_2;
         } else {
-            handle_args(program, reader_kernel_id, core, std::array<uint32_t, 13>{0});
+            handle_args(program, reader_kernel_id, core, std::array<uint32_t, 18>{0});
             handle_args(program, writer_kernel_id, core, std::array<uint32_t, 14>{0});
-            handle_args(program, compute_kernel_id, core, std::array<uint32_t, 3>{0});
+            handle_args(program, compute_kernel_id, core, std::array<uint32_t, 4>{0});
             continue;
         }
 

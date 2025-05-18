@@ -2,6 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "control_plane.hpp"
+#include "fabric_host_utils.hpp"
+
 #include <tt-metalium/fabric_edm_types.hpp>
 #include <tt-metalium/fabric_types.hpp>
 #include <tt-metalium/assert.hpp>
@@ -13,18 +16,22 @@
 #include <set>
 #include <vector>
 #include <algorithm>
+#include "tt_metal/fabric/fabric_host_utils.hpp"
 #include "fabric/hw/inc/fabric_routing_mode.h"
 
 namespace tt::tt_fabric {
 
-uint32_t get_fabric_router_buffer_size(tt::tt_fabric::Topology topology) {
-    if (topology == Topology::Mesh) {
-        return tt::tt_fabric::FabricEriscDatamoverBuilder::default_mesh_packet_payload_size_bytes +
-               sizeof(tt::tt_fabric::LowLatencyMeshPacketHeader);
-    } else {
-        return tt::tt_fabric::FabricEriscDatamoverBuilder::default_packet_payload_size_bytes +
-               sizeof(tt::tt_fabric::PacketHeader);
-    }
+bool is_tt_fabric_config(tt::tt_metal::FabricConfig fabric_config) {
+    return fabric_config == tt::tt_metal::FabricConfig::FABRIC_1D ||
+           fabric_config == tt::tt_metal::FabricConfig::FABRIC_1D_RING ||
+           fabric_config == tt::tt_metal::FabricConfig::FABRIC_2D_PUSH ||
+           fabric_config == tt::tt_metal::FabricConfig::FABRIC_2D_DYNAMIC;
+}
+
+bool is_2d_fabric_config(tt::tt_metal::FabricConfig fabric_config) {
+    return fabric_config == tt::tt_metal::FabricConfig::FABRIC_2D ||
+           fabric_config == tt::tt_metal::FabricConfig::FABRIC_2D_PUSH ||
+           fabric_config == tt::tt_metal::FabricConfig::FABRIC_2D_DYNAMIC;
 }
 
 uint32_t get_sender_channel_count(tt::tt_fabric::Topology topology) {
@@ -41,30 +48,6 @@ uint32_t get_downstream_edm_count(tt::tt_fabric::Topology topology) {
     } else {
         return FabricEriscDatamoverConfig::num_downstream_edms;
     }
-}
-
-bool is_tt_fabric_config(tt::tt_metal::FabricConfig fabric_config) {
-    return fabric_config == tt::tt_metal::FabricConfig::FABRIC_1D ||
-           fabric_config == tt::tt_metal::FabricConfig::FABRIC_1D_RING ||
-           fabric_config == tt::tt_metal::FabricConfig::FABRIC_2D_PUSH;
-}
-
-bool is_2d_fabric_config(tt::tt_metal::FabricConfig fabric_config) {
-    return fabric_config == tt::tt_metal::FabricConfig::FABRIC_2D ||
-           fabric_config == tt::tt_metal::FabricConfig::FABRIC_2D_PUSH;
-}
-
-Topology get_tt_fabric_topology(tt::tt_metal::FabricConfig fabric_config) {
-    switch (fabric_config) {
-        case tt::tt_metal::FabricConfig::FABRIC_1D: return tt::tt_fabric::Topology::Linear;
-        case tt::tt_metal::FabricConfig::FABRIC_1D_RING: return tt::tt_fabric::Topology::Ring;
-        case tt::tt_metal::FabricConfig::FABRIC_2D_PUSH: return tt::tt_fabric::Topology::Mesh;
-        case tt::tt_metal::FabricConfig::DISABLED:
-        case tt::tt_metal::FabricConfig::FABRIC_2D:
-        case tt::tt_metal::FabricConfig::CUSTOM:
-            TT_THROW("Unsupported fabric config for 1D: {}", magic_enum::enum_name(fabric_config));
-    }
-    return tt::tt_fabric::Topology::Linear;
 }
 
 FabricType get_fabric_type(tt::tt_metal::FabricConfig fabric_config, tt::ClusterType cluster_type) {
@@ -134,7 +117,7 @@ void set_routing_mode(uint16_t routing_mode) {
     control_plane->set_routing_mode(routing_mode);
 }
 
-void set_routing_mode(Topology topology, uint32_t dimension /*, take more*/) {
+void set_routing_mode(Topology topology, tt::tt_metal::FabricConfig fabric_config, uint32_t dimension /*, take more*/) {
     // TODO: take more parameters to set detail routing mode
     TT_FATAL(
         dimension == 1 || dimension == 2 || dimension == 3,
@@ -149,8 +132,11 @@ void set_routing_mode(Topology topology, uint32_t dimension /*, take more*/) {
     } else if (topology == Topology::Mesh) {
         mode |= (ROUTING_MODE_2D | ROUTING_MODE_MESH);
     }
-
-    mode |= ROUTING_MODE_LOW_LATENCY;
+    if (fabric_config == tt::tt_metal::FabricConfig::FABRIC_2D_DYNAMIC) {
+        mode |= ROUTING_MODE_DYNAMIC;
+    } else {
+        mode |= ROUTING_MODE_LOW_LATENCY;
+    }
     set_routing_mode(mode);
 }
 

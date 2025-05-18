@@ -1637,12 +1637,27 @@ void Matmul::validate(
             (this->output_dtype.value() == DataType::BFLOAT16) || (this->output_dtype.value() == DataType::FLOAT32),
             "Unsupported data type: {}",
             this->output_dtype.value());
+        TT_FATAL(
+            std::holds_alternative<MatmulMultiCoreReuseMultiCast1DProgramConfig>(chosen_program_config),
+            "Untilize out is not supported for this program config: {}",
+            typeid(chosen_program_config).name());
     }
 
     std::visit(
         [input_tensor_a, input_tensor_b, optional_bias, in0_tile_shape, in1_tile_shape, this](
             const auto& program_config) {
             using ProgramConfigType = std::decay_t<decltype(program_config)>;
+            if constexpr (
+                std::is_same_v<ProgramConfigType, MatmulMultiCoreReuseMultiCastProgramConfig> ||
+                std::is_same_v<ProgramConfigType, MatmulMultiCoreReuseMultiCast1DProgramConfig>) {
+                TT_FATAL(program_config.in0_block_w != 0, "in0_block_w is 0, which is not valid");
+                TT_FATAL(program_config.out_subblock_h != 0, "out_subblock_h is 0, which is not valid");
+                TT_FATAL(program_config.out_subblock_w != 0, "out_subblock_w is 0, which is not valid");
+                TT_FATAL(program_config.out_block_h != 0, "out_block_h is 0, which is not valid");
+                TT_FATAL(program_config.out_block_w != 0, "out_block_w is 0, which is not valid");
+                TT_FATAL(program_config.per_core_M != 0, "per_core_M is 0, which is not valid");
+                TT_FATAL(program_config.per_core_N != 0, "per_core_N is 0, which is not valid");
+            }
             // TODO: For 1D and 2D mcasts, we don't check if tensor is single core
             // or single row/col We can uplift these variants to skip mcasting to
             // support single core (1D) or single row/col (2D)
@@ -2204,7 +2219,10 @@ std::vector<ttnn::TensorSpec> Matmul::compute_output_specs(
                     // support for multi-tensor output
                     const ttnn::TensorSpec tensor_spec(
                         output_shape,
-                        TensorLayout(output_dtype.value(), PageConfig(output_layout, output_tile), mem_config));
+                        TensorLayout(
+                            output_dtype.value(),
+                            this->untilize_out ? PageConfig(output_layout) : PageConfig(output_layout, output_tile),
+                            mem_config));
                     std::vector<ttnn::TensorSpec> output_tensor_specs(input_tensors.size() - 1, tensor_spec);
                     return output_tensor_specs;
                 } else if constexpr (std::is_same_v<

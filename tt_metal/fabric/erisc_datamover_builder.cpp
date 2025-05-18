@@ -22,6 +22,7 @@
 #include <variant>
 #include <vector>
 
+#include "impl/context/metal_context.hpp"
 #include "tt_metal/fabric/fabric_host_utils.hpp"
 #include "core_coord.hpp"
 #include "fabric_edm_types.hpp"
@@ -137,7 +138,6 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(std::size_t channel_buffe
         this->num_used_receiver_channels -= 1;
         this->num_fwd_paths -= 1;
     }
-    tt::tt_fabric::set_routing_mode(topology);
 
     for (uint32_t i = 0; i < this->num_used_receiver_channels; i++) {
         TT_FATAL(
@@ -267,11 +267,11 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(std::size_t channel_buffe
         std::accumulate(
             this->sender_channels_size_bytes.begin(),
             this->sender_channels_size_bytes.begin() + this->num_used_sender_channels,
-            0) +
+            0ul) +
                 std::accumulate(
                     this->receiver_channels_size_bytes.begin(),
                     this->receiver_channels_size_bytes.begin() + this->num_used_receiver_channels,
-                    0) <=
+                    0ul) <=
             this->available_channel_buffering_space,
         "Internal error when computing channel sizes. Total channel size exceeds available space");
     TT_FATAL(
@@ -434,6 +434,8 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args() const
 
     size_t num_sender_channels = config.num_used_sender_channels;
     size_t num_receiver_channels = config.num_used_receiver_channels;
+    auto& soc_desc = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(this->my_chip_id);
+
     auto ct_args = std::vector<uint32_t>{
         num_sender_channels,
         num_receiver_channels,
@@ -507,6 +509,7 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args() const
         FabricEriscDatamoverConfig::sender_completed_packet_header_cb_size_headers,
         config.topology == Topology::Mesh,
         this->direction,
+        soc_desc.get_num_eth_channels(),
         // Special marker to help with identifying misalignment bugs
         0x00c0ffee};
 

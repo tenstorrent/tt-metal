@@ -1,11 +1,13 @@
 set(UNIT_TESTS_DISTRIBUTED_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/test_end_to_end_eltwise.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/test_distributed_host_buffer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/test_mesh_buffer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/test_mesh_coord.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/test_mesh_device.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/test_mesh_device_reshape.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/test_mesh_device_view.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/test_mesh_workload.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/test_mesh_socket.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/test_mesh_sub_device.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/test_mesh_allocator.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/test_mesh_events.cpp

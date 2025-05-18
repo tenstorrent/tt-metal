@@ -1241,11 +1241,15 @@ void bind_binary_overload_operation(
     py::module& module,
     const binary_operation_t& operation,
     const std::string& description,
+    const std::string& math,
     const std::string& supported_dtype = "BFLOAT16",
     const std::string& note = " ") {
     auto doc = fmt::format(
         R"doc(
         {2}
+
+        .. math::
+            {3}
 
         Args:
             input_tensor_a (ttnn.Tensor): the input tensor.
@@ -1266,20 +1270,22 @@ void bind_binary_overload_operation(
                * - Dtypes
                  - Layouts
                  - Ranks
-               * - {3}
+               * - {4}
                  - TILE
                  - 2, 3, 4
 
-            {4}
+            {5}
 
         Example:
             >>> tensor1 = ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
             >>> tensor2 = ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
             >>> output = {1}(tensor1, tensor2/scalar)
+
         )doc",
         operation.base_name(),
         operation.python_fully_qualified_name(),
         description,
+        math,
         supported_dtype,
         note);
 
@@ -1782,7 +1788,7 @@ void py_module(py::module& module) {
         R"doc(Multiplies :attr:`input_tensor_a` by :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
         R"doc(\mathrm{{output\_tensor}}_i = \mathrm{{input\_tensor\_a}}_i * \mathrm{{input\_tensor\_b}}_i)doc",
         R"doc(: :code:`'None'` | :code:`'relu'`. )doc",
-        R"doc(BFLOAT16, BFLOAT8_B)doc");
+        R"doc(BFLOAT16, BFLOAT8_B, UINT16 (range: 0 - 65535))doc");
 
     detail::bind_binary_inplace_operation(
         module,
@@ -1927,7 +1933,7 @@ void py_module(py::module& module) {
         R"doc(Perform bitwise_or operation on :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
         R"doc(\mathrm{{output\_tensor}}_i = \verb|bitwise_or|(\mathrm{{input\_tensor\_a, input\_tensor\_b}}))doc",
         ". ",
-        R"doc(INT32)doc");
+        R"doc(INT32, UINT16 (range: 0 - 65535))doc");
 
     detail::bind_bitwise_binary_ops_operation(
         module,
@@ -1935,7 +1941,7 @@ void py_module(py::module& module) {
         R"doc(Perform bitwise_xor operation on :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
         R"doc(\mathrm{{output\_tensor}}_i = \verb|bitwise_xor|(\mathrm{{input\_tensor\_a, input\_tensor\_b}}))doc",
         ". ",
-        R"doc(INT32)doc");
+        R"doc(INT32, UINT16 (range: 0 - 65535))doc");
 
     detail::bind_bitwise_binary_ops_operation(
         module,
@@ -2138,14 +2144,16 @@ void py_module(py::module& module) {
     detail::bind_binary_overload_operation(
         module,
         ttnn::fmod,
-        R"doc(Performs an eltwise-fmod operation. Formula : a - a.div(b, rounding_mode=trunc) * b.)doc",
-        R"doc(BFLOAT16)doc",
+        R"doc(Performs an eltwise-fmod operation.)doc",
+        R"doc(\mathrm{{output\_tensor}} = \verb|fmod|(\mathrm{{input\_tensor\_a,input\_tensor\_b}}))doc",
+        R"doc(BFLOAT16, FLOAT32)doc",
         R"doc(Support provided only for WH_B0.)doc");
 
     detail::bind_binary_overload_operation(
         module,
         ttnn::remainder,
-        R"doc(Performs an eltwise-modulus operation. Formula : a - a.div(b, rounding_mode=floor) * b.)doc",
+        R"doc(Performs an eltwise-modulus operation.)doc",
+        R"doc(\mathrm{{output\_tensor}} = \verb|remainder|(\mathrm{{input\_tensor\_a,input\_tensor\_b}}))doc",
         R"doc(BFLOAT16)doc",
         R"doc(Support provided only for WH_B0.)doc");
 

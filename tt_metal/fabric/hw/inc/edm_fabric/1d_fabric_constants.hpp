@@ -173,7 +173,9 @@ constexpr size_t sender_4_completed_packet_header_cb_size_headers =
 constexpr size_t is_2d_fabric = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 56);
 constexpr size_t my_direction = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 57);
 
-constexpr size_t SPECIAL_MARKER_0_IDX = MAIN_CT_ARGS_START_IDX + 58;
+constexpr size_t num_eth_ports = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 58);
+
+constexpr size_t SPECIAL_MARKER_0_IDX = MAIN_CT_ARGS_START_IDX + 59;
 constexpr size_t SPECIAL_MARKER_0 = 0x00c0ffee;
 static_assert(
     !SPECIAL_MARKER_CHECK_ENABLED || get_compile_time_arg_val(SPECIAL_MARKER_0_IDX) == SPECIAL_MARKER_0,

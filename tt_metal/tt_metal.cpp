@@ -5,11 +5,10 @@
 #include <allocator.hpp>
 #include <circular_buffer.hpp>
 #include <circular_buffer_constants.h>
-#include <dev_msgs.h>
+#include "dev_msgs.h"
 #include <device_impl.hpp>
 #include <device_pool.hpp>
 #include <global_circular_buffer.hpp>
-#include <global_circular_buffer_impl.hpp>
 #include <global_semaphore.hpp>
 #include <host_api.hpp>
 #include <kernel.hpp>
@@ -122,8 +121,8 @@ DataMovementConfigStatus CheckDataMovementConfig(
     for (const auto& core_range : core_ranges.ranges()) {
         for (auto x = core_range.start_coord.x; x <= core_range.end_coord.x; x++) {
             for (auto y = core_range.start_coord.y; y <= core_range.end_coord.y; y++) {
-                const KernelGroup* kernel_group =
-                    program.kernels_on_core(CoreCoord(x, y), hal.get_programmable_core_type_index(programmable_core));
+                const KernelGroup* kernel_group = program.impl().kernels_on_core(
+                    CoreCoord(x, y), hal.get_programmable_core_type_index(programmable_core));
                 if (kernel_group != nullptr) {
                     bool local_noc0_in_use = false;
                     bool local_noc1_in_use = false;
@@ -176,7 +175,7 @@ std::optional<uint32_t> get_semaphore_id(const Program &program, const CoreRange
     for (auto x = core_range.start_coord.x; x <= core_range.end_coord.x; x++) {
         for (auto y = core_range.start_coord.y; y <= core_range.end_coord.y; y++) {
             CoreCoord logical_core(x, y);
-            auto semaphores = program.semaphores_on_core(logical_core, core_type);
+            auto semaphores = program.impl().semaphores_on_core(logical_core, core_type);
             if (semaphores.size() == NUM_SEMAPHORES) {
                 TT_THROW(
                     "Cannot add semaphore on core {}. Max number of semaphores ({}) reached!",
@@ -540,7 +539,7 @@ void WriteToDevice(Buffer& buffer, tt::stl::Span<const uint8_t> host_buffer) {
             const auto virtual_core = buffer.device()->virtual_core_from_logical_core(banks[i], buffer.core_type());
             for (const auto& chunk_mapping_in_bytes : bank_mapping_in_bytes[i]) {
                 // TODO: subspan is in elements; here 1 element is 1 byte (ie. uint8_t) so using bytes here is fine
-                auto chunk_span = tt::stl::MakeConstSpan(
+                auto chunk_span = tt::stl::make_const_span(
                     host_buffer.subspan(chunk_mapping_in_bytes.src, chunk_mapping_in_bytes.size));
                 llrt::write_hex_vec_to_core(
                     buffer.device()->id(), virtual_core, chunk_span, buffer.address() + chunk_mapping_in_bytes.dst);
@@ -766,8 +765,9 @@ void LaunchProgram(IDevice* device, Program& program, bool wait_until_cores_done
              programmable_core_type_index++) {
             CoreType core_type = hal.get_core_type(programmable_core_type_index);
             for (const auto& logical_core : logical_cores_used_in_program[programmable_core_type_index]) {
-                launch_msg_t* msg = &program.kernels_on_core(logical_core, programmable_core_type_index)->launch_msg;
-                go_msg_t* go_msg = &program.kernels_on_core(logical_core, programmable_core_type_index)->go_msg;
+                launch_msg_t* msg =
+                    &program.impl().kernels_on_core(logical_core, programmable_core_type_index)->launch_msg;
+                go_msg_t* go_msg = &program.impl().kernels_on_core(logical_core, programmable_core_type_index)->go_msg;
                 msg->kernel_config.host_assigned_id = program.get_runtime_id();
 
                 auto physical_core = device->virtual_core_from_logical_core(logical_core, core_type);
@@ -831,18 +831,19 @@ bool ConfigureDeviceWithProgram(IDevice* device, Program& program, bool force_sl
         const auto& logical_cores = logical_cores_used_in_program[index];
         CoreType core_type = hal.get_core_type(index);
         for (const auto& logical_core : logical_cores) {
-            KernelGroup* kernel_group = program.kernels_on_core(logical_core, index);
+            KernelGroup* kernel_group = program.impl().kernels_on_core(logical_core, index);
             CoreCoord physical_core = device->virtual_core_from_logical_core(logical_core, core_type);
             ConfigureKernelGroup(program, index, kernel_group, device, logical_core);
             // TODO: add support for CB for ethernet cores
             if (core_type == CoreType::WORKER) {
-                const auto& cbs_on_core = program.circular_buffers_on_core(logical_core);
+                const auto& cbs_on_core = program.impl().circular_buffers_on_core(logical_core);
                 if (cbs_on_core.size()) {
                     // CircularBufferConfigVec -- common across all kernels, so written once to the core
                     std::vector<uint32_t> circular_buffer_config_vec(
-                        program.get_program_config(index).cb_size / sizeof(uint32_t));
+                        program.impl().get_program_config(index).cb_size / sizeof(uint32_t));
 
-                    uint32_t remote_offset_index = program.get_program_config(index).local_cb_size / sizeof(uint32_t);
+                    uint32_t remote_offset_index =
+                        program.impl().get_program_config(index).local_cb_size / sizeof(uint32_t);
                     for (const auto& circular_buffer : cbs_on_core) {
                         for (uint32_t buffer_index : circular_buffer->local_buffer_indices()) {
                             uint32_t base_index = buffer_index * UINT32_WORDS_PER_LOCAL_CIRCULAR_BUFFER_CONFIG;
@@ -865,7 +866,7 @@ bool ConfigureDeviceWithProgram(IDevice* device, Program& program, bool force_sl
                         }
                     }  // PROF_END("CBS")
                     uint64_t kernel_config_base = hal.get_dev_addr(index, HalL1MemAddrType::KERNEL_CONFIG);
-                    uint64_t addr = kernel_config_base + program.get_program_config(index).cb_offset;
+                    uint64_t addr = kernel_config_base + program.impl().get_program_config(index).cb_offset;
                     llrt::write_hex_vec_to_core(device_id, physical_core, circular_buffer_config_vec, addr);
                 }
             }

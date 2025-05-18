@@ -6,12 +6,12 @@ mcast_FullRing,noc_unicast_write,2048,4,1,False,False,False,3.8789005970924775,1
 mcast_FullRing,noc_unicast_write,4096,4,1,False,False,False,6.463968526701578,1578117.3160892525
 mcast_FullRing,noc_unicast_write,4096,4,2,False,False,False,6.369396195780156,1555028.3681103897
 mcast_FullRing,noc_unicast_write,16,8,1,False,False,False,0.02798334424354788,None
-mcast_FullRing,noc_unicast_write,2048,8,1,False,False,False,2.715,None
+mcast_FullRing,noc_unicast_write,2048,8,1,False,False,False,2.775,None
 mcast_FullRing,noc_unicast_write,4096,8,1,False,False,False,5.193611184406907,1267971.4805680925
 mcast_SaturateChipToChipRing,noc_unicast_write,16,4,1,False,False,False,0.03719374481643661,2324609.0510272877
 mcast_SaturateChipToChipRing,noc_unicast_write,2048,4,1,False,False,False,4.319495779858247,2109128.7987589096
 mcast_SaturateChipToChipRing,noc_unicast_write,4096,4,1,False,False,False,7.714125507353006,1883331.422693605
-mcast_SaturateChipToChipRing,noc_unicast_write,4096,4,2,False,False,False,7.494734793277337,1829769.2366399749
+mcast_SaturateChipToChipRing,noc_unicast_write,4096,4,2,False,False,False,7.53,1829769.2366399749
 mcast_Linear,noc_unicast_write,16,4,1,False,False,True,0.04070835514755211,None
 mcast_Linear,noc_unicast_write,2048,4,1,False,False,True,5.202727001228433,None
 mcast_Linear,noc_unicast_write,4096,4,1,False,False,True,10.187630485489342,2487214.4739964213
@@ -32,7 +32,7 @@ mcast_RingAsLinear,noc_unicast_write,2048,4,1,True,True,True,3.34760837124068,16
 mcast_RingAsLinear,noc_unicast_write,4096,4,1,True,True,True,5.896078351453614,1439472.253772855
 mcast_Linear,noc_unicast_write,16,4,2,False,False,True,0.04067922896767386,2542451.8104796163
 mcast_Linear,noc_unicast_write,2048,4,2,False,False,True,5.198977075874692,2538563.0253294394
-mcast_Linear,noc_unicast_write,4096,4,2,False,False,True,10.008589647262456,2443503.3318511853
+mcast_Linear,noc_unicast_write,4096,4,2,False,False,True,10.03,2443503.3318511853
 mcast_RingAsLinear,noc_unicast_write,16,4,2,False,False,True,0.02929080820571008,1830675.51285688
 mcast_RingAsLinear,noc_unicast_write,2048,4,2,False,False,True,3.2584494164887556,1591039.7541449002
 mcast_RingAsLinear,noc_unicast_write,4096,4,2,False,False,True,5.81315176979408,1419226.506297383

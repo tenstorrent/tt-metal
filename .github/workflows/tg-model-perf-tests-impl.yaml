@@ -43,21 +43,31 @@ jobs:
           },  # Austin Ho
           {
             name: "Galaxy Llama 70B model perf tests",
-            model-type: "Llama 70B",
             arch: wormhole_b0,
-            runs-on: ["arch-wormhole_b0", "${{ inputs.topology }}", "${{ inputs.extra-tag }}", "bare-metal", "pipeline-perf"],
-            cmd: './tests/scripts/run_tests.sh --tt-arch wormhole_b0 --pipeline-type tg_llama_model_perf_tg_device --dispatch-mode ""',
-            owner_id: U044T8U8DEF # Johanna Rock
-          },
-          {
-            name: "Llama Galaxy Perf Unit Tests",
-            arch: wormhole_b0,
-            cmd: 'pytest models/demos/llama3_subdevices/tests/tg_perf_unit_tests',
+            cmd: "TT_METAL_ENABLE_ERISC_IRAM=1 FAKE_DEVICE=TG LLAMA_DIR=/mnt/MLPerf/tt_dnn-models/llama/Llama3.3-70B-Instruct/ pytest models/demos/llama3_subdevices/tests/test_decoder_device_perf.py::test_llama_TG_perf_device",
             timeout: 100,
             tracy: true,
             runs-on: ["arch-wormhole_b0", "${{ inputs.topology }}", "${{ inputs.extra-tag }}", "bare-metal", "pipeline-perf"],
-            owner_id: U071CKL4AFK # Ammar Vora
+            owner_id: U044T8U8DEF # Johanna Rock
           },
+          {
+            name: "Galaxy Llama 70B model dispatch perf tests",
+            arch: wormhole_b0,
+            cmd: "TT_METAL_KERNELS_EARLY_RETURN=1 TT_METAL_ENABLE_ERISC_IRAM=1 FAKE_DEVICE=TG LLAMA_DIR=/mnt/MLPerf/tt_dnn-models/llama/Llama3.3-70B-Instruct/ pytest models/demos/llama3_subdevices/tests/test_decoder_device_perf.py::test_llama_TG_perf_device_non_overlapped_dispatch",
+            timeout: 100,
+            tracy: true,
+            runs-on: ["arch-wormhole_b0", "${{ inputs.topology }}", "${{ inputs.extra-tag }}", "bare-metal", "pipeline-perf"],
+            owner_id: U044T8U8DEF # Johanna Rock
+          },
+          # { See GH Issue #22164
+          #   name: "Llama Galaxy Perf Unit Tests",
+          #   arch: wormhole_b0,
+          #   cmd: 'pytest models/demos/llama3_subdevices/tests/tg_perf_unit_tests',
+          #   timeout: 100,
+          #   tracy: true,
+          #   runs-on: ["arch-wormhole_b0", "${{ inputs.topology }}", "${{ inputs.extra-tag }}", "bare-metal", "pipeline-perf"],
+          #   owner_id: U071CKL4AFK # Ammar Vora
+          # },
         ]
     name: ${{ matrix.test-group.name }}
     env:
@@ -105,7 +115,7 @@ jobs:
           run_args: |
             ${{ matrix.test-group.cmd }}
       - name: Save environment data
-        if: ${{ (matrix.test-group.name == 'Llama Galaxy Perf Unit Tests' || matrix.test-group.name == 'Galaxy Llama 70B model perf tests') && !cancelled() }}
+        if: ${{ (matrix.test-group.name == 'Llama Galaxy Perf Unit Tests' || matrix.test-group.name == 'Galaxy Llama 70B model perf tests'  || matrix.test-group.name == 'Galaxy Llama 70B model dispatch perf tests') && !cancelled() }}
         uses: ./.github/actions/docker-run
         with:
           docker_image: ${{ inputs.docker-image }}
@@ -117,7 +127,7 @@ jobs:
           install_wheel: true
           run_args: python3 .github/scripts/data_analysis/create_benchmark_with_environment_json.py
       - name: Upload benchmark data
-        if: ${{ (matrix.test-group.name == 'Llama Galaxy Perf Unit Tests' || matrix.test-group.name == 'Galaxy Llama 70B model perf tests') && !cancelled() }}
+        if: ${{ (matrix.test-group.name == 'Llama Galaxy Perf Unit Tests' || matrix.test-group.name == 'Galaxy Llama 70B model perf tests' || matrix.test-group.name == 'Galaxy Llama 70B model dispatch perf tests') && !cancelled() }}
         uses: ./.github/actions/upload-data-via-sftp
         with:
           ssh-private-key: ${{ secrets.SFTP_BENCHMARK_WRITER_KEY }}
@@ -126,7 +136,7 @@ jobs:
           hostname: ${{ secrets.SFTP_BENCHMARK_WRITER_HOSTNAME }}
       - name: Check perf report exists
         id: check-perf-report
-        if: ${{ !(matrix.test-group.name == 'Llama Galaxy Perf Unit Tests'|| matrix.test-group.name == 'Galaxy Llama 70B model perf tests') && !cancelled() }}
+        if: ${{ !(matrix.test-group.name == 'Llama Galaxy Perf Unit Tests'|| matrix.test-group.name == 'Galaxy Llama 70B model perf tests' || matrix.test-group.name == 'Galaxy Llama 70B model dispatch perf tests') && !cancelled() }}
         run: |
           TODAY=$(date +%Y_%m_%d)
           PERF_REPORT_FILENAME_MODELS="Models_Perf_${TODAY}.csv"

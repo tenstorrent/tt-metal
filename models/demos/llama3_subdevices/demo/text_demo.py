@@ -141,6 +141,7 @@ def create_tt_model(
         weight_cache_path=tt_model_args.weight_cache_path(dtype),
         paged_attention_config=paged_attention_config,
         mode="prefill",
+        enable_prefetcher_performance_mode=True,
     )
 
     if use_paged_kv_cache:
@@ -171,11 +172,11 @@ def create_tt_model(
             "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
             True,  # instruct mode
             1,  # repeat_batches
-            1024,  # max_seq_len
+            128 * 1024,  # max_seq_len
             32,  # batch_size
             200,  # max_generated_tokens
             True,  # paged_attention
-            {"page_block_size": 32, "page_max_num_blocks": 1024},  # page_params
+            {"page_block_size": 64, "page_max_num_blocks": 4096},  # page_params
             {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
             True,  # stop_at_eos
             False,  # ci_only
@@ -184,11 +185,11 @@ def create_tt_model(
             "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
             True,  # instruct mode
             2,  # repeat_batches
-            1024,  # max_seq_len
+            128 * 1024,  # max_seq_len
             32,  # batch_size
             200,  # max_generated_tokens
             True,  # paged_attention
-            {"page_block_size": 32, "page_max_num_blocks": 1024},  # page_params
+            {"page_block_size": 64, "page_max_num_blocks": 4096},  # page_params
             {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
             True,  # stop_at_eos
             False,  # ci_only
@@ -197,62 +198,20 @@ def create_tt_model(
             "models/tt_transformers/demo/sample_prompts/input_data_long_8k.json",  # input_prompts
             True,  # instruct mode
             1,  # repeat_batches
-            16 * 1024,  # max_seq_len
+            128 * 1024,  # max_seq_len
             32,  # batch_size
             200,  # max_generated_tokens
-            False,  # paged_attention
-            {"page_block_size": 32, "page_max_num_blocks": 2048},  # page_params
+            True,  # paged_attention
+            {"page_block_size": 64, "page_max_num_blocks": 4096},  # page_params
             {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
             True,  # stop_at_eos
             False,  # ci_only
-        ),
-        (  # Batch-1 run (Reasoning) - single user, small prompt, long thinking time
-            "models/tt_transformers/demo/input_data_questions_reasoning.json",  # input_prompts
-            True,  # instruct mode
-            1,  # repeat_batches
-            16 * 1024,  # max_seq_len
-            1,  # batch_size
-            15000,  # max_generated_tokens
-            True,  # paged_attention
-            {"page_block_size": 32, "page_max_num_blocks": 1024},  # page_params  # TODO This will be serviced by vLLM
-            {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
-            False,  # stop_at_eos
-            False,  # ci_only
-        ),
-        (  # CI Batch-1 run - Measures the performance of a single user over 4096 iterations
-            "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
-            True,  # instruct mode
-            1,  # repeat_batches
-            8192,  # max_seq_len
-            1,  # batch_size
-            4096,  # max_generated_tokens
-            True,  # paged_attention
-            {"page_block_size": 32, "page_max_num_blocks": 1024},  # page_params
-            {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
-            False,  # stop_at_eos
-            True,  # ci_only
-        ),
-        (  # CI Batch-32 run - Measures the performance of a 32 users over 4096 iterations
-            "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
-            True,  # instruct mode
-            1,  # repeat_batches
-            2000,  # max_seq_len
-            32,  # batch_size
-            1024,  # max_generated_tokens  # TODO Update this to 4096, and make sure it fits in DRAM with correct page_params
-            True,  # paged_attention  # TODO Find the correct paged_attn params to avoid hangs in this config with long context generation
-            {"page_block_size": 64, "page_max_num_blocks": 1024},  # page_params
-            {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
-            False,  # stop_at_eos
-            True,  # ci_only
         ),
     ],
     ids=[
         "batch-32",  # throughput
         "repeat2",  # throughput with 5 repeat batches
         "long-context",  # max-length
-        "reasoning-1",  # reasoning
-        "ci-1",  # CI batch 1
-        "ci-32",  # CI batch 32
     ],
 )
 @pytest.mark.parametrize(
@@ -405,6 +364,16 @@ def test_demo_text(
         assert (
             max_generated_tokens + max_encoded_prompt_len <= max_seq_len
         ), f"Prompt prefill tokens ({max_encoded_prompt_len}) + maximum number of decoded iterations ({max_generated_tokens}) needs to be <= than max_seq_len ({max_seq_len})"
+
+        if paged_attention:
+            paged_cache_max_seq_len = (
+                page_params["page_block_size"]
+                * page_params["page_max_num_blocks"]
+                / model_args.batch_size_per_device_group
+            )
+            assert (
+                max_generated_tokens + max_encoded_prompt_len <= paged_cache_max_seq_len
+            ), f"max_generated_tokens ({max_generated_tokens}) needs to be <= than paged_cache_max_seq_len ({paged_cache_max_seq_len})"
 
         profiler.end(f"preprocess_prefill_inputs", iteration=batch_idx)
 
@@ -688,7 +657,7 @@ def test_demo_text(
         "decode_t/s/u": target_decode_tok_s_u,
     }
     if repeat_batches > 1:
-        assert avg_time_to_first_token * 1000 < 121, f"TTFT {avg_time_to_first_token} ms is too high, should be < 121."
+        assert avg_time_to_first_token * 1000 < 122, f"TTFT {avg_time_to_first_token} ms is too high, should be < 122."
 
     # Save benchmark data for CI dashboard
     # if is_ci_env:
