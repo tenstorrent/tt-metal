@@ -26,7 +26,7 @@ void kernel_main() {
     const uint32_t out_addr = get_read_ptr(cb_id_out);
     volatile tt_l1_ptr uint16_t* pad_ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(pad_addr);
     for (uint32_t i = 0; i < num_elements_per_row; ++i) {
-        pad_ptr[i] = 0;  // Changing this to any other value causes a hang. Figure out why.
+        pad_ptr[i] = 0;  // https://github.com/tenstorrent/tt-metal/issues/22286
     }
     uint32_t write_addr = out_addr + unpadded_row_size_bytes;
     uint64_t pad_noc_addr = get_noc_addr(pad_addr + unpadded_row_size_bytes);
