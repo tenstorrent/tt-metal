@@ -135,6 +135,13 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
     }
 
     for (uint32_t risc_id = 0; risc_id < this->num_used_riscv_cores; risc_id++) {
+        // TODO: update appropriately for each RISC-V core
+        this->enable_context_switch[risc_id] = true;
+        this->enable_handshake[risc_id] = true;
+        this->enable_interrupts[risc_id] = true;
+        this->sender_txq_id[risc_id] = risc_id;
+        this->receiver_rxq_id[risc_id] = risc_id;
+
         this->num_used_sender_channels[risc_id] = get_sender_channel_count(topology);
         if (topology == Topology::Mesh) {
             // For 2D there is no forwarding to self but we are still initialize the settings for it.
@@ -259,9 +266,6 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
 
     uint32_t buffer_addr = buffer_region_start;
     for (uint32_t risc_id = 0; risc_id < this->num_used_riscv_cores; risc_id++) {
-        this->enable_context_switch[risc_id] = true;
-        this->enable_handshake[risc_id] = true;
-        this->enable_interrupts[risc_id] = true;
         for (uint32_t i = 0; i < this->num_used_sender_channels[risc_id]; i++) {
             this->sender_channels_num_buffers[risc_id][i] = num_sender_buffer_slots;
             this->sender_channels_size_bytes[risc_id][i] = channel_buffer_size_bytes * num_sender_buffer_slots;
@@ -479,6 +483,7 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args(const s
 
     size_t num_sender_channels = config.num_used_sender_channels[risc_id];
     size_t num_receiver_channels = config.num_used_receiver_channels[risc_id];
+    size_t num_fwd_paths = config.num_fwd_paths[risc_id];
     auto& soc_desc = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(this->my_chip_id);
 
     auto ct_args = std::vector<uint32_t>{
@@ -562,6 +567,8 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args(const s
         config.enable_handshake[risc_id],
         config.enable_context_switch[risc_id],
         config.enable_interrupts[risc_id],
+        config.sender_txq_id[risc_id],
+        config.receiver_rxq_id[risc_id],
         config.topology == Topology::Mesh,
         this->direction,
         soc_desc.get_num_eth_channels(),

@@ -145,6 +145,8 @@ struct FabricEriscDatamoverConfig {
     std::array<std::size_t, num_riscv_cores> num_used_sender_channels = {0};
     std::array<std::size_t, num_riscv_cores> num_used_receiver_channels = {0};
     std::array<std::size_t, num_riscv_cores> num_fwd_paths = {0};
+    std::array<std::size_t, num_riscv_cores> sender_txq_id = {0};
+    std::array<std::size_t, num_riscv_cores> receiver_rxq_id = {0};
     std::size_t num_used_riscv_cores = 0;
 
     Topology topology = Topology::Linear;
