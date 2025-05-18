@@ -23,6 +23,7 @@ echo "Running fabric unit tests now...";
 
 TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric2D*Fixture.*"
 ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric2D*Fixture.*"
+./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="FabricMuxFixture.*"
 
 #############################################
 # FABRIC SANITY TESTS                       #
@@ -52,18 +53,13 @@ TESTS=(
      # Async Write with Push Router
     "12 --fabric_command 1 --board_type n300 --data_kb_per_tx 600 --push_router"
     "13 --fabric_command 1 --board_type n300 --data_kb_per_tx 10 --num_src_endpoints 8 --num_dest_endpoints 8 --num_links 16 --benchmark --push_router"
-    "14 --fabric_command 1 --board_type n300 --data_kb_per_tx 600 --metal_fabric_init_level 1 --push_router"
-    "15 --fabric_command 1 --board_type n300 --data_kb_per_tx 10 --num_src_endpoints 8 --num_dest_endpoints 8 --num_links 16 --benchmark --metal_fabric_init_level 1 --push_router"
      # Async Write Mcast with Push Router
-    "16 --fabric_command 1 --board_type n300 --data_kb_per_tx 600 --num_links 16 --e_depth 1 --push_router"
-    "17 --fabric_command 1 --board_type n300 --data_kb_per_tx 600 --num_links 16 --w_depth 1 --push_router"
-    "18 --fabric_command 1 --board_type n300 --data_kb_per_tx 600 --num_links 16 --e_depth 1 --push_router --metal_fabric_init_level 1"
+    "14 --fabric_command 1 --board_type n300 --data_kb_per_tx 600 --num_links 16 --e_depth 1 --push_router"
+    "15 --fabric_command 1 --board_type n300 --data_kb_per_tx 600 --num_links 16 --w_depth 1 --push_router"
      # Atomic Inc with Push Router
-    "19 --fabric_command 64 --board_type n300 --data_kb_per_tx 600 --push_router"
-    "20 --fabric_command 64 --board_type n300 --data_kb_per_tx 600 --metal_fabric_init_level 1 --push_router"
+    "16 --fabric_command 64 --board_type n300 --data_kb_per_tx 600 --push_router"
      # Async Write Atomic Inc with Push Router
-    "21 --fabric_command 65 --board_type n300 --data_kb_per_tx 600 --push_router"
-    "22 --fabric_command 65 --board_type n300 --data_kb_per_tx 600 --metal_fabric_init_level 1 --push_router"
+    "17 --fabric_command 65 --board_type n300 --data_kb_per_tx 600 --push_router"
 )
 
 for TEST in "${TESTS[@]}"; do

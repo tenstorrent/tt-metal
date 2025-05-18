@@ -6,6 +6,8 @@ import ttnn
 import torch
 from loguru import logger
 from typing import List
+from collections import defaultdict
+
 from llama_models.llama3.api.datatypes import (
     InterleavedTextMedia,
     StopReason,
@@ -17,13 +19,26 @@ from llama_models.llama3.reference_impl.generation import (
 )
 from models.tt_transformers.tt.common import (
     copy_host_to_device,
-    get_padded_prefill_len,
     num_blocks_in_seq,
     get_block_size,
     get_max_prefill_chunk_size,
 )
 
 from models.tt_transformers.tt.generator import SamplingParams
+
+
+def get_padded_prefill_len(seq_len):
+    """
+    Get the padded prefill length for a given sequence length.
+    This is used to pad the sequence length to the nearest power of 2.
+    """
+    if seq_len <= 128:
+        return 128
+    if seq_len <= 1024:
+        return 1024
+    else:
+        # return next power of 2 greater than seq_len
+        return 2 ** (seq_len - 1).bit_length()
 
 
 class Generator:
@@ -47,6 +62,9 @@ class Generator:
             self.model_args = self.model_args[0]
         if isinstance(self.model, List):
             self.model = self.model[0]
+        self.trace_id_prefill = defaultdict(lambda: None)
+        self.trace_inputs_prefill = defaultdict(lambda: None)
+        self.trace_output_prefill = defaultdict(lambda: None)
 
     def prefill_forward_text(
         self,
@@ -54,7 +72,7 @@ class Generator:
         page_table=None,
         kv_cache=None,
         prompt_lens=None,
-        enable_trace=False,
+        enable_trace=True,
         sampling_params=SamplingParams(temperature=0.0, top_k=-1, top_p=1.0),
     ):
         assert sampling_params.temperature == 0, "Currently only supporting greedy decoding (temperature=0) on device"
@@ -82,7 +100,7 @@ class Generator:
                 [tokens[user_id : user_id + 1, :seq_len], torch.zeros(1, prefill_seq_len - seq_len).long()], dim=-1
             )
             if page_table is not None:
-                page_table_user = self._get_prefill_user_page_table(page_table, kv_cache, seq_len)
+                page_table_user = self._get_prefill_user_page_table(page_table, kv_cache, prefill_seq_len)
             prefill_kwargs = {
                 "tokens": prefill_ids,
                 "page_table": page_table_user if page_table is not None else None,
@@ -91,7 +109,7 @@ class Generator:
                 "last_token_idx": last_token_idx,
             }
             if enable_trace:
-                tt_logits = self._easy_trace_prefill(**prefill_kwargs)
+                tt_logits = self._easy_trace_prefill(**prefill_kwargs, prefill_seq_len=prefill_seq_len)
             else:
                 tt_logits = self.prefill_forward_single_user_text(**prefill_kwargs)
 
@@ -188,23 +206,23 @@ class Generator:
 
             return logits
 
-    def _easy_trace_prefill(self, tokens, last_token_idx, page_table=None, kv_cache=None, user_id=0):
+    def _easy_trace_prefill(self, tokens, last_token_idx, prefill_seq_len, page_table=None, kv_cache=None, user_id=0):
         """
         Tracing is easy! Just call this method and we'll handle tracing for you.
         """
-        if not hasattr(self, "trace_id_prefill"):
+        if self.trace_id_prefill[prefill_seq_len] is None:
             trace_id, tt_out_trace, *device_inputs = self._capture_trace_prefill(
                 tokens, last_token_idx, page_table=page_table, kv_cache=kv_cache, user_id=user_id
             )
-            self.trace_id_prefill = trace_id
-            self.trace_inputs_prefill = device_inputs
-            self.trace_output_prefill = tt_out_trace
+            self.trace_id_prefill[prefill_seq_len] = trace_id
+            self.trace_inputs_prefill[prefill_seq_len] = device_inputs
+            self.trace_output_prefill[prefill_seq_len] = tt_out_trace
 
         logger.info("Executing prefill trace")
         tt_out_trace = self._prefill_forward_trace_text(
-            self.trace_id_prefill,
-            self.trace_inputs_prefill,
-            self.trace_output_prefill,
+            self.trace_id_prefill[prefill_seq_len],
+            self.trace_inputs_prefill[prefill_seq_len],
+            self.trace_output_prefill[prefill_seq_len],
             tokens,
             page_table=page_table,
         )
@@ -287,6 +305,7 @@ class Generator:
         enable_trace=True,
         read_from_device=True,
         sampling_params: SamplingParams = None,  # Should be None if not greedy decoding / sampling on device.
+        reset_inputs=True,
     ):
         assert (
             sampling_params is None or sampling_params.temperature == 0
@@ -304,7 +323,7 @@ class Generator:
             "argmax_on_device": argmax_on_device,
         }
         if enable_trace:
-            tt_logits = self._easy_trace_text(**decode_kwargs)
+            tt_logits = self._easy_trace_text(**decode_kwargs, reset_inputs=reset_inputs)
         else:
             tt_logits = self._decode_forward_no_trace_text(**decode_kwargs)
 
@@ -325,13 +344,13 @@ class Generator:
         Performs text decode step.
         Returns tt_logits on device
         """
-        tt_tokens, tt_current_pos, tt_rot_mats, tt_page_table = self.model.prepare_inputs_decode(
+        tt_tokens, tt_current_pos, rot_mat_idxs, tt_page_table = self.model.prepare_inputs_decode(
             tokens, current_pos, page_table
         )
         tt_logits = self.model.ttnn_decode_forward(
             tt_tokens,
             tt_current_pos,
-            rot_mats=tt_rot_mats,
+            rot_mat_idxs=rot_mat_idxs,
             page_table=tt_page_table,
             kv_cache=kv_cache,
             argmax_on_device=argmax_on_device,
@@ -359,13 +378,11 @@ class Generator:
 
         # Get inputs ready for trace run
         host_inputs = self.model.prepare_decode_inputs_host(tokens, current_pos, page_table=page_table)
-
         device_inputs = copy_host_to_device(host_inputs, mesh_device=self.mesh_device)
 
         trace_id = ttnn.begin_trace_capture(self.mesh_device, cq_id=0)
-        transformed_inputs = self.model.transform_decode_inputs_device(*device_inputs)
         tt_out_trace = self.model.ttnn_decode_forward(
-            *transformed_inputs, kv_cache=kv_cache, argmax_on_device=argmax_on_device
+            *device_inputs, kv_cache=kv_cache, argmax_on_device=argmax_on_device
         )
 
         ttnn.end_trace_capture(self.mesh_device, trace_id, cq_id=0)
@@ -384,13 +401,6 @@ class Generator:
         """
         Executes the trace for the decode_forward method but does not read back outputs.
         """
-        host_inputs = self.model.prepare_decode_inputs_host(tokens, current_pos, page_table)
-
-        device_inputs = copy_host_to_device(
-            host_tensors=host_inputs,
-            device_tensors=device_inputs,
-        )
-
         ttnn.execute_trace(self.mesh_device, trace_id, cq_id=0, blocking=False)
 
         return tt_out_trace
@@ -402,6 +412,7 @@ class Generator:
         page_table=None,
         kv_cache=None,
         argmax_on_device=False,
+        reset_inputs=False,
     ):
         """
         Tracing is easy! Just call this method and we'll handle tracing for you.
@@ -414,6 +425,12 @@ class Generator:
             self.trace_inputs_text = device_inputs
             self.trace_output_text = tt_out_trace
 
+        if reset_inputs:
+            host_inputs = self.model.prepare_decode_inputs_host(tokens, current_pos, page_table)
+            device_inputs = copy_host_to_device(
+                host_tensors=host_inputs,
+                device_tensors=self.trace_inputs_text,
+            )
         trace_logits_rm = self._decode_forward_trace_text(
             self.trace_id_text,
             self.trace_inputs_text,

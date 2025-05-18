@@ -11,7 +11,10 @@
 
 #include <flatbuffers/flatbuffers.h>
 
+#include <tt_stl/overloaded.hpp>
+
 #include "ttnn/tensor/host_buffer/functions.hpp"
+#include "ttnn/tensor/storage.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/distributed/types.hpp"
@@ -24,6 +27,20 @@ using MeshDevice = distributed::MeshDevice;
 
 namespace {
 
+void validate_version(uint8_t version_id) {
+    TT_FATAL(
+        version_id >= 5,
+        "Version {} is no longer supported. Please update your saved data to the supported version (5).",
+        version_id);
+    TT_FATAL(
+        version_id <= VERSION_ID,
+        "Version mismatch: the serialized tensor was created with version {} but is "
+        "being loaded by a loader with version {}. Please update your saved data or your "
+        "loader so that both versions match.",
+        version_id,
+        VERSION_ID);
+}
+
 struct FileCloser {
     void operator()(FILE* file) const {
         if (file) {
@@ -34,55 +51,7 @@ struct FileCloser {
     }
 };
 
-struct Padding {
-    enum class PadValue { Any, Zero, Infinity, NegativeInfinity };
-    struct PadDimension {
-        std::size_t front;
-        std::size_t back;
-    };
-    std::size_t rank_;
-    std::array<PadDimension, MAX_NUM_DIMENSIONS> pad_dimensions_;
-    PadValue pad_value_ = PadValue::Any;
-};
-
-struct LegacyShape {
-    std::size_t rank_;
-    std::array<uint32_t, MAX_NUM_DIMENSIONS> dimensions_;
-    Padding padding_;
-
-    LegacyShape() = default;
-    LegacyShape(const ttnn::Shape& logical_shape, const ttnn::Shape& padded_shape) {
-        rank_ = padded_shape.rank();
-        padding_.rank_ = padded_shape.rank();
-        for (int index = 0; index < padded_shape.rank(); index++) {
-            int shape_index = index + static_cast<int>(logical_shape.size()) - static_cast<int>(padded_shape.size());
-            int dimension = shape_index >= 0 ? logical_shape[shape_index] : 1;
-            int padded_dimension = padded_shape[index];
-            this->dimensions_[index] = padded_dimension;
-            this->padding_.pad_dimensions_[index] = {
-                .front = 0, .back = static_cast<size_t>(padded_dimension - dimension)};
-        }
-    }
-
-    ttnn::Shape logical_shape() const {
-        ttnn::SmallVector<uint32_t> values(rank_);
-        for (size_t i = 0; i < values.size(); i++) {
-            auto [front_pad, back_pad] = padding_.pad_dimensions_[i];
-            values[i] = dimensions_[i] - front_pad - back_pad;
-        }
-        return ttnn::Shape(std::move(values));
-    }
-
-    ttnn::Shape padded_shape() const {
-        ttnn::SmallVector<uint32_t> values(rank_);
-        for (size_t i = 0; i < values.size(); i++) {
-            values[i] = dimensions_[i];
-        }
-        return ttnn::Shape(std::move(values));
-    }
-};
-
-static constexpr uint64_t SENTINEL_VALUE = std::numeric_limits<uint64_t>::max();
+constexpr uint64_t SENTINEL_VALUE = std::numeric_limits<uint64_t>::max();
 
 void safe_fread(void* buffer, size_t size, size_t count, FILE* file) {
     if (fread(buffer, size, count, file) != count) {
@@ -118,30 +87,33 @@ TensorSpec load_tensor_spec(FILE* input_file) {
     return ttnn::from_flatbuffer(spec);
 }
 
-void dump_owned_storage(FILE* output_file, const OwnedStorage& storage) {
-    std::visit(
-        [output_file]<typename T>(const owned_buffer::Buffer<T>& generic_buffer) {
-            const auto buffer = owned_buffer::get_as<T>(generic_buffer);
-            uint64_t size = buffer.size();
-            safe_fwrite(&size, sizeof(size), 1, output_file);
-            safe_fwrite(buffer.data(), sizeof(T) * size, 1, output_file);
-        },
-        storage.buffer);
-}
+void dump_host_storage(FILE* output_file, const HostStorage& storage, DataType dtype) {
+    // TODO: #16067 - When dumping storage, we should not care about dtype.
+    // We should dump the `size` of raw bytes, not the size of logical elements.
+    const size_t element_size = [dtype]() {
+        switch (dtype) {
+            case DataType::BFLOAT16: return sizeof(::bfloat16);
+            case DataType::FLOAT32: return sizeof(float);
+            case DataType::UINT8: return sizeof(uint8_t);
+            case DataType::UINT16: return sizeof(uint16_t);
+            case DataType::INT32: return sizeof(int32_t);
+            // Block float types are encoded as uint32_t.
+            case DataType::BFLOAT8_B:
+            case DataType::BFLOAT4_B:
+            case DataType::UINT32: return sizeof(uint32_t);
+            case DataType::INVALID: TT_THROW("Unsupported DataType");
+        }
+        TT_THROW("Unreachable");
+    }();
 
-void dump_borrowed_storage(FILE* output_file, const BorrowedStorage& storage) {
-    std::visit(
-        [output_file]<typename T>(const borrowed_buffer::Buffer<T>& generic_buffer) {
-            const auto buffer = borrowed_buffer::get_as<T>(generic_buffer);
-            uint64_t size = buffer.size();
-            safe_fwrite(&size, sizeof(size), 1, output_file);
-            safe_fwrite(buffer.data(), sizeof(T) * size, 1, output_file);
-        },
-        storage.buffer);
+    auto raw_bytes = storage.buffer.view_bytes();
+    uint64_t size = raw_bytes.size() / element_size;
+    safe_fwrite(&size, sizeof(size), 1, output_file);
+    safe_fwrite(raw_bytes.data(), raw_bytes.size(), 1, output_file);
 }
 
 void dump_multi_device_host_storage(
-    FILE* output_file, const MultiDeviceHostStorage& storage, const DistributedTensorConfig& strategy) {
+    FILE* output_file, const MultiDeviceHostStorage& storage, const DistributedTensorConfig& strategy, DataType dtype) {
     uint64_t num_buffers = storage.num_buffers();
     safe_fwrite(&num_buffers, sizeof(num_buffers), 1, output_file);
 
@@ -149,73 +121,58 @@ void dump_multi_device_host_storage(
     safe_fwrite(&strategy, sizeof(strategy), 1, output_file);
 
     if (std::holds_alternative<ReplicateTensor>(strategy)) {
-        std::visit(
-            [output_file]<typename T>(const owned_buffer::Buffer<T>& generic_buffer) {
-                const auto buffer = owned_buffer::get_as<T>(generic_buffer);
-                uint64_t size = buffer.size();
-                safe_fwrite(&size, sizeof(size), 1, output_file);
-                safe_fwrite(buffer.begin(), sizeof(T) * size, 1, output_file);
-            },
-            storage.get_buffer(0));
-        auto spec = storage.specs.at(0);
+        dump_host_storage(output_file, storage.get_buffer(0), dtype);
+        auto spec = storage.get_tensor_spec(0);
         dump_tensor_spec(spec, output_file);
     } else {
         for (int i = 0; i < num_buffers; i++) {
-            std::visit(
-                [output_file]<typename T>(const owned_buffer::Buffer<T>& generic_buffer) {
-                    const auto buffer = owned_buffer::get_as<T>(generic_buffer);
-                    uint64_t size = buffer.size();
-                    safe_fwrite(&size, sizeof(size), 1, output_file);
-                    safe_fwrite(buffer.begin(), sizeof(T) * size, 1, output_file);
-                },
-                storage.get_buffer(i));
+            dump_host_storage(output_file, storage.get_buffer(i), dtype);
         }
-        for (const auto& spec : storage.specs) {
-            dump_tensor_spec(spec, output_file);
+        for (int i = 0; i < num_buffers; i++) {
+            dump_tensor_spec(storage.get_tensor_spec(i), output_file);
         }
     }
 }
 
 template <typename T>
-OwnedStorage load_owned_storage(FILE* input_file) {
+HostStorage load_host_storage(FILE* input_file) {
     uint64_t size = 0;
     safe_fread(&size, sizeof(size), 1, input_file);
-    auto buffer = owned_buffer::create<T>(size);
-    safe_fread(buffer.begin(), sizeof(T) * size, 1, input_file);
+    std::vector<T> data(size);
+    safe_fread(data.data(), sizeof(T) * size, 1, input_file);
+    auto buffer = HostBuffer(std::move(data));
     return {buffer};
 }
 
+// Helper type to bundle storage and strategy together.
+struct DistributedStorage {
+    Storage storage;
+    DistributedTensorConfig strategy;
+};
+
 template <typename T>
-MultiDeviceHostStorage load_multi_device_host_storage(
-    FILE* input_file, DataType data_type, Layout layout, MeshDevice* mesh_device, uint8_t version_id) {
+DistributedStorage load_multi_device_host_storage(
+    FILE* input_file, DataType data_type, Layout layout, MeshDevice* mesh_device) {
     uint64_t num_buffers = 0;
     DistributedTensorConfig strategy;
     safe_fread(&num_buffers, sizeof(num_buffers), 1, input_file);
     safe_fread(&strategy, sizeof(strategy), 1, input_file);
 
-    std::vector<OwnedBuffer> buffers;
+    std::vector<HostBuffer> buffers;
     std::vector<ttnn::TensorSpec> specs;
     if (std::holds_alternative<ReplicateTensor>(strategy)) {
         uint64_t size = 0;
         safe_fread(&size, sizeof(size), 1, input_file);
-        auto buffer = owned_buffer::create<T>(size);
-        safe_fread(buffer.begin(), sizeof(T) * size, 1, input_file);
-        buffers.push_back(buffer);
-        auto spec = [&] {
-            if (version_id >= 5) {
-                return load_tensor_spec(input_file);
-            }
-            auto shape = LegacyShape{};
-            safe_fread(&shape, sizeof(shape), 1, input_file);
-            return TensorSpec(
-                shape.logical_shape(),
-                TensorLayout::fromPaddedShape(
-                    data_type, PageConfig(layout), MemoryConfig{}, shape.logical_shape(), shape.padded_shape()));
-        }();
+        std::vector<T> data(size);
+        safe_fread(data.data(), sizeof(T) * size, 1, input_file);
+        HostBuffer buffer = HostBuffer(std::move(data));
+        buffers.push_back(std::move(buffer));
+        auto spec = load_tensor_spec(input_file);
         specs.push_back(spec);
 
-        for (std::size_t i = 1; i < mesh_device->num_devices(); ++i) {
-            buffers.push_back(owned_buffer::Buffer<T>{buffer.get_ptr()});
+        auto num_devices = mesh_device ? mesh_device->num_devices() : 1;
+        for (std::size_t i = 1; i < num_devices; ++i) {
+            buffers.push_back(buffers[0]);
             specs.push_back(spec);
         }
 
@@ -223,178 +180,71 @@ MultiDeviceHostStorage load_multi_device_host_storage(
         for (std::size_t i = 0; i < num_buffers; ++i) {
             uint64_t size = 0;
             safe_fread(&size, sizeof(size), 1, input_file);
-            auto buffer = owned_buffer::create<T>(size);
-            safe_fread(buffer.begin(), sizeof(T) * size, 1, input_file);
+            std::vector<T> data(size);
+            safe_fread(data.data(), sizeof(T) * size, 1, input_file);
+            auto buffer = HostBuffer(std::move(data));
             buffers.push_back(std::move(buffer));
         }
         for (std::size_t i = 0; i < num_buffers; ++i) {
-            if (version_id >= 5) {
-                specs.push_back(load_tensor_spec(input_file));
-            } else {
-                auto shape = LegacyShape{};
-                safe_fread(&shape, sizeof(shape), 1, input_file);
-                TensorSpec spec(
-                    shape.logical_shape(),
-                    TensorLayout::fromPaddedShape(
-                        data_type, PageConfig(layout), MemoryConfig{}, shape.logical_shape(), shape.padded_shape()));
-                specs.push_back(spec);
-            }
+            specs.push_back(load_tensor_spec(input_file));
         }
     }
 
-    return {strategy, buffers, specs};
+    return {MultiDeviceHostStorage{std::move(buffers), std::move(specs)}, strategy};
 }
 
-OwnedStorage load_owned_storage(FILE* input_file, DataType data_type) {
+HostStorage load_host_storage(FILE* input_file, DataType data_type) {
     if (data_type == DataType::UINT32 or data_type == DataType::BFLOAT8_B or data_type == DataType::BFLOAT4_B) {
         using T = std::uint32_t;
-        return load_owned_storage<T>(input_file);
+        return load_host_storage<T>(input_file);
     } else if (data_type == DataType::INT32) {
         using T = std::int32_t;
-        return load_owned_storage<T>(input_file);
+        return load_host_storage<T>(input_file);
     } else if (data_type == DataType::UINT8) {
         using T = std::uint8_t;
-        return load_owned_storage<T>(input_file);
+        return load_host_storage<T>(input_file);
     } else if (data_type == DataType::UINT16) {
         using T = std::uint16_t;
-        return load_owned_storage<T>(input_file);
+        return load_host_storage<T>(input_file);
     } else if (data_type == DataType::FLOAT32) {
         using T = float;
-        return load_owned_storage<T>(input_file);
+        return load_host_storage<T>(input_file);
     } else if (data_type == DataType::BFLOAT16) {
         using T = bfloat16;
-        return load_owned_storage<T>(input_file);
+        return load_host_storage<T>(input_file);
     } else {
         TT_THROW("Unsupported DataType");
     }
 }
 
-MultiDeviceHostStorage load_multi_device_host_storage(
-    FILE* input_file, DataType data_type, Layout layout, MeshDevice* mesh_device, uint8_t version_id) {
+DistributedStorage load_multi_device_host_storage(
+    FILE* input_file, DataType data_type, Layout layout, MeshDevice* mesh_device) {
     if (data_type == DataType::UINT32 or data_type == DataType::BFLOAT8_B or data_type == DataType::BFLOAT4_B) {
         using T = std::uint32_t;
-        return load_multi_device_host_storage<T>(input_file, data_type, layout, mesh_device, version_id);
+        return load_multi_device_host_storage<T>(input_file, data_type, layout, mesh_device);
     } else if (data_type == DataType::UINT16) {
         using T = std::uint16_t;
-        return load_multi_device_host_storage<T>(input_file, data_type, layout, mesh_device, version_id);
+        return load_multi_device_host_storage<T>(input_file, data_type, layout, mesh_device);
     } else if (data_type == DataType::FLOAT32) {
         using T = float;
-        return load_multi_device_host_storage<T>(input_file, data_type, layout, mesh_device, version_id);
+        return load_multi_device_host_storage<T>(input_file, data_type, layout, mesh_device);
     } else if (data_type == DataType::BFLOAT16) {
         using T = bfloat16;
-        return load_multi_device_host_storage<T>(input_file, data_type, layout, mesh_device, version_id);
+        return load_multi_device_host_storage<T>(input_file, data_type, layout, mesh_device);
     } else {
         TT_THROW("Unsupported DataType");
     }
 }
 
 template <typename T>
-Storage load_storage(
-    FILE* input_file, DataType data_type, Layout layout, StorageType storage_type, T device, uint8_t version_id) {
-    if (storage_type == StorageType::MULTI_DEVICE_HOST or storage_type == StorageType::MULTI_DEVICE) {
+DistributedStorage load_storage(
+    FILE* input_file, DataType data_type, Layout layout, StorageType storage_type, T device) {
+    if (storage_type == StorageType::MULTI_DEVICE_HOST or storage_type == StorageType::DEVICE) {
         if constexpr (std::is_same_v<T, MeshDevice*>) {
-            return load_multi_device_host_storage(input_file, data_type, layout, device, version_id);
-        } else {
-            TT_THROW("MeshDevice is required for MULTI_DEVICE_HOST storage");
-        }
-    } else {
-        return load_owned_storage(input_file, data_type);
-    }
-}
-
-template <typename T>
-Tensor load_tensor_helper_legacy_impl(FILE* input_file, T device, uint8_t version_id) {
-    auto shape = LegacyShape{};
-    DataType data_type;
-    Layout layout;
-    StorageType storage_type;
-    safe_fread(&shape, sizeof(shape), 1, input_file);
-    safe_fread(&data_type, sizeof(data_type), 1, input_file);
-    safe_fread(&layout, sizeof(layout), 1, input_file);
-    safe_fread(&storage_type, sizeof(storage_type), 1, input_file);
-
-    bool has_memory_config = false;
-    MemoryConfig memory_config =
-        MemoryConfig{.memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED, .buffer_type = BufferType::DRAM};
-
-    if (version_id >= 2) {
-        safe_fread(&has_memory_config, sizeof(has_memory_config), 1, input_file);
-        if (has_memory_config) {
-            memory_config = tt::tt_metal::load_memory_config(input_file);
+            return load_multi_device_host_storage(input_file, data_type, layout, device);
         }
     }
-
-    auto storage = load_storage(input_file, data_type, layout, storage_type, device, version_id);
-
-    auto tensor = Tensor(
-        std::move(storage),
-        TensorSpec(
-            shape.logical_shape(),
-            TensorLayout::fromPaddedShape(
-                data_type, layout, MemoryConfig{}, shape.logical_shape(), shape.padded_shape())));
-    if (device != nullptr) {
-        tensor = tensor.to_device(device, memory_config);
-    } else if (has_memory_config) {
-        tt::log_warning("Memory config is ignored when loading the tensor because device is not provided");
-    }
-    return tensor;
-}
-
-// Used before VERSION_ID was introduced
-template <typename T>
-Tensor load_tensor_helper_very_legacy_impl(FILE* input_file, T device) {
-    auto shape = LegacyShape{};
-    DataType data_type;
-    Layout layout;
-    safe_fread(&shape, sizeof(shape), 1, input_file);
-    safe_fread(&data_type, sizeof(data_type), 1, input_file);
-    safe_fread(&layout, sizeof(layout), 1, input_file);
-
-    auto storage = load_owned_storage(input_file, data_type);
-    auto tensor = Tensor(
-        std::move(storage),
-        TensorSpec(
-            shape.logical_shape(),
-            TensorLayout::fromPaddedShape(
-                data_type, layout, MemoryConfig{}, shape.logical_shape(), shape.padded_shape())));
-    if (device != nullptr) {
-        tensor = tensor.to_device(device);
-    }
-    return tensor;
-}
-
-// Used before flatbuffer serialization, aka VERSION_ID < 5
-MemoryConfig load_memory_config_legacy_impl(FILE* input_file, uint8_t version_id) {
-    TensorMemoryLayout memory_layout;
-    BufferType buffer_type;
-    bool has_shard_spec;
-    safe_fread(&memory_layout, sizeof(memory_layout), 1, input_file);
-    safe_fread(&buffer_type, sizeof(buffer_type), 1, input_file);
-    safe_fread(&has_shard_spec, sizeof(has_shard_spec), 1, input_file);
-
-    std::optional<ShardSpec> shard_spec = std::nullopt;
-    if (has_shard_spec) {
-        uint64_t num_core_ranges;
-        std::set<CoreRange> core_ranges;
-        std::array<uint32_t, 2> shape;
-        ShardOrientation orientation;
-
-        safe_fread(&num_core_ranges, sizeof(num_core_ranges), 1, input_file);
-        for (auto index = 0; index < num_core_ranges; index++) {
-            CoreRange core_range{{}, {}};
-            safe_fread(&core_range, sizeof(core_range), 1, input_file);
-            core_ranges.insert(core_range);
-        }
-        safe_fread(&shape, sizeof(shape), 1, input_file);
-        safe_fread(&orientation, sizeof(orientation), 1, input_file);
-        if (version_id <= 3) {
-            // Read halo for backward compatibility.
-            bool halo;
-            safe_fread(&halo, sizeof(halo), 1, input_file);
-        }
-        shard_spec = {CoreRangeSet{core_ranges}, shape, orientation};
-    }
-    return MemoryConfig{memory_layout, buffer_type, shard_spec};
+    return DistributedStorage{load_host_storage(input_file, data_type), ReplicateTensor{}};
 }
 
 template <typename T>
@@ -407,30 +257,20 @@ Tensor load_tensor_helper(const std::string& file_name, T device) {
 
     std::size_t read_sentinel;
     safe_fread(&read_sentinel, sizeof(read_sentinel), 1, input_file);
-    if (read_sentinel != SENTINEL_VALUE) {
-        fseek(input_file, 0, SEEK_SET);
-        return load_tensor_helper_very_legacy_impl(input_file, device);
-    }
+    TT_FATAL(
+        read_sentinel == SENTINEL_VALUE,
+        "Sentinel value is not valid. The tensor data in {} is corrupted and cannot be loaded.",
+        file_name);
 
     std::uint8_t version_id = 0;
     safe_fread(&version_id, sizeof(version_id), 1, input_file);
-    if (version_id > VERSION_ID) {
-        TT_THROW(
-            "Version mismatch: the serialized tensor was created with version {} but is being loaded by a loader with "
-            "version {}. Please update your saved data or your loader so that both versions match.",
-            version_id,
-            VERSION_ID);
-    }
-
-    if (version_id < 5) {
-        return load_tensor_helper_legacy_impl(input_file, device, version_id);
-    }
+    validate_version(version_id);
 
     auto spec = load_tensor_spec(input_file);
-    StorageType storage_type = StorageType::OWNED;
+    StorageType storage_type = StorageType::HOST;
     safe_fread(&storage_type, sizeof(storage_type), 1, input_file);
-    auto storage = load_storage(input_file, spec.data_type(), spec.layout(), storage_type, device, version_id);
-    Tensor tensor(std::move(storage), spec);
+    auto storage = load_storage(input_file, spec.data_type(), spec.layout(), storage_type, device);
+    Tensor tensor(std::move(storage.storage), spec, storage.strategy);
     if (device != nullptr) {
         tensor = tensor.to_device(device, spec.memory_config());
     }
@@ -455,29 +295,24 @@ void dump_tensor(
     auto storage_type = tensor.storage_type();
     safe_fwrite(&storage_type, sizeof(storage_type), 1, output_file);
 
-    bool is_on_device = is_tensor_on_device_or_multidevice(tensor);
+    bool is_on_device = is_device_tensor(tensor);
     Tensor tensor_to_dump = tensor;
     if (is_on_device) {
         tensor_to_dump = tensor_to_dump.cpu();
     }
 
     std::visit(
-        [output_file, &strategy](const auto& storage) {
-            using StorageType = std::decay_t<decltype(storage)>;
-            if constexpr (std::is_same_v<StorageType, OwnedStorage>) {
-                dump_owned_storage(output_file, storage);
-            } else if constexpr (std::is_same_v<StorageType, BorrowedStorage>) {
-                dump_borrowed_storage(output_file, storage);
-            } else if constexpr (std::is_same_v<StorageType, DeviceStorage>) {
+        tt::stl::overloaded{
+            [output_file, dtype = tensor.get_dtype()](const HostStorage& storage) {
+                dump_host_storage(output_file, storage, dtype);
+            },
+            [output_file, dtype = tensor.get_dtype()](const DeviceStorage& storage) {
                 TT_THROW("Device storage isn't supported");
-            } else if constexpr (std::is_same_v<StorageType, MultiDeviceStorage>) {
-                TT_THROW("Device storage isn't supported");
-            } else if constexpr (std::is_same_v<StorageType, MultiDeviceHostStorage>) {
+            },
+            [output_file, &strategy, dtype = tensor.get_dtype()](const MultiDeviceHostStorage& storage) {
                 auto distribute_config = get_distributed_tensor_config(strategy);
-                dump_multi_device_host_storage(output_file, storage, distribute_config);
-            } else {
-                raise_unsupported_storage<StorageType>();
-            }
+                dump_multi_device_host_storage(output_file, storage, distribute_config, dtype);
+            },
         },
         tensor_to_dump.get_storage());
 }
@@ -512,19 +347,7 @@ void dump_memory_config(const std::string& file_name, const MemoryConfig& memory
 MemoryConfig load_memory_config(FILE* input_file) {
     std::uint8_t version_id;
     safe_fread(&version_id, sizeof(version_id), 1, input_file);
-
-    // Allow only backward compatible versions
-    if (version_id > VERSION_ID) {
-        TT_THROW(
-            "Version mismatch: the serialized memory config was created with version {} but is being loaded by a "
-            "loader with version {}. Please update your saved data or your loader so that both versions match.",
-            version_id,
-            VERSION_ID);
-    }
-
-    if (version_id < 5) {
-        return load_memory_config_legacy_impl(input_file, version_id);
-    }
+    validate_version(version_id);
 
     uint64_t bin_size = 0;
     safe_fread(&bin_size, sizeof(bin_size), 1, input_file);

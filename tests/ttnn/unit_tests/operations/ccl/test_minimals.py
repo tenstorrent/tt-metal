@@ -6,14 +6,11 @@ import torch
 import pytest
 from loguru import logger
 import ttnn
-from tests.tt_eager.python_api_testing.unit_testing.misc.test_matmul_1d_gather_in0 import (
+from models.demos.llama3_subdevices.tt.model_config import (
     PREFETCHER_NOC1_GRID,
 )
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal, comp_pcc
 from models.utility_functions import skip_for_grayskull
-from tests.ttnn.unit_tests.operations.ccl.test_ccl_common import (
-    create_global_semaphore_with_same_address,
-)
 
 from tests.ttnn.unit_tests.operations.ccl.fusion_subtests.rms_test import (
     run_rms_trace,
@@ -90,7 +87,6 @@ def run_all_gather_impl(
     input_shard_grid,
     all_gather_topology,
     num_iters=1,
-    enable_async=False,
     trace_mode=False,
     output_shard_shape=None,
     output_shard_grid=None,
@@ -98,11 +94,6 @@ def run_all_gather_impl(
 ):
     if num_iters < 1:
         pytest.fail("num_iters must be >= 1")
-    # Use Async mode based on test input config
-    mesh_device.enable_async(enable_async)
-
-    if enable_async:
-        logger.info(f"Using Async Mode for All Gather Op Dispatch")
 
     compute_grid_size = mesh_device.compute_with_storage_grid_size()
     ccl_sub_device_crs = ttnn.CoreRangeSet(
@@ -120,9 +111,7 @@ def run_all_gather_impl(
     mesh_device.set_sub_device_stall_group(sub_device_stall_group)
 
     # create global semaphore handles
-    ccl_semaphore_handles = [
-        create_global_semaphore_with_same_address(mesh_device, ccl_sub_device_crs, 0) for _ in range(num_iters)
-    ]
+    ccl_semaphore_handles = [ttnn.create_global_semaphore(mesh_device, ccl_sub_device_crs, 0) for _ in range(num_iters)]
 
     ### For sharded all gather only
     if bool(input_shard_shape) != bool(input_shard_grid) and bool(tensor_mem_layout) != bool(input_shard_grid):
@@ -176,12 +165,10 @@ def run_all_gather_impl(
         input_tensors = torch.chunk(output_tensor, num_devices, dim)
         tt_input_tensors = []
         for i, t in enumerate(input_tensors):
-            tt_input_tensors.append(
-                ttnn.Tensor(t, input_dtype).to(layout).to(mesh_device.get_devices()[i], input_mem_config)
-            )
-            logger.info(f"using device {mesh_device.get_devices()[i].id()}")
+            tt_input_tensors.append(ttnn.Tensor(t, input_dtype).to(layout))
+            logger.info(f"using device {mesh_device.get_device_ids()[i]}")
 
-        input_tensor_mesh = ttnn.aggregate_as_tensor(tt_input_tensors)
+        input_tensor_mesh = ttnn.aggregate_as_tensor(tt_input_tensors).to(mesh_device, input_mem_config)
 
         input_tensor_mesh_list.append(input_tensor_mesh)
 
@@ -232,11 +219,9 @@ def run_all_gather_impl(
                 logger.error(f"output mismatch for tensor {i}")
                 passed = False
 
-    for i in range(num_devices):
-        assert (
-            mesh_device.get_devices()[i].num_program_cache_entries() == 1
-            or mesh_device.get_devices()[i].num_program_cache_entries() == num_iters
-        ), f"Device {i} has {mesh_device.get_devices()[i].num_program_cache_entries()} program cache entries"
+    assert (
+        mesh_device.num_program_cache_entries() == 1 or mesh_device.num_program_cache_entries() == num_iters
+    ), f"Device has {mesh_device.num_program_cache_entries()} program cache entries"
 
     mesh_device.reset_sub_device_stall_group()
 
@@ -308,7 +293,6 @@ def run_all_gather_impl(
     ],
 )
 @pytest.mark.parametrize("num_iters", [8])
-@pytest.mark.parametrize("enable_async", [True])
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
 def test_all_gather_only(
     t3k_mesh_device,
@@ -321,7 +305,6 @@ def test_all_gather_only(
     num_iters,
     use_program_cache,
     function_level_defaults,
-    enable_async,
     input_shard_shape,
     input_shard_grid,
     output_shard_shape,
@@ -342,7 +325,6 @@ def test_all_gather_only(
         input_shard_grid,
         all_gather_topology=ttnn.Topology.Linear,
         num_iters=num_iters,
-        enable_async=enable_async,
         output_shard_shape=output_shard_shape,
         output_shard_grid=output_shard_grid,
         tensor_mem_layout=tensor_mem_layout,
@@ -374,7 +356,6 @@ def test_all_gather_only(
 @pytest.mark.parametrize("num_links", [1])
 @pytest.mark.parametrize("use_new_version", [True])
 @pytest.mark.parametrize("num_iters, warmup_iters", [[100, 10]])
-@pytest.mark.parametrize("enable_async", [True])
 @pytest.mark.parametrize("trace_mode", [True])
 @pytest.mark.parametrize(
     "device_params",
@@ -396,7 +377,6 @@ def test_tg_trace_rms_fuse(
     warmup_iters,
     use_program_cache,
     function_level_defaults,
-    enable_async,
     input_shard_grid,
     output_shard_grid,
     trace_mode,
@@ -414,7 +394,6 @@ def test_tg_trace_rms_fuse(
         output_shard_grid,
         ttnn.Topology.Linear,
         num_iters=num_iters,
-        enable_async=enable_async,
         warmup_iters=warmup_iters,
         profiler=profiler,
         use_new_version=use_new_version,
@@ -451,7 +430,6 @@ def test_tg_trace_rms_fuse(
 )
 @pytest.mark.parametrize("num_links", [1])
 @pytest.mark.parametrize("num_iters", [20])
-@pytest.mark.parametrize("enable_async", [True])
 @pytest.mark.parametrize("mesh_device", [pytest.param((8, 4), id="8x4_grid")], indirect=True)
 @pytest.mark.parametrize(
     "device_params",
@@ -466,7 +444,6 @@ def test_rms_fuse(
     num_iters,
     use_program_cache,
     function_level_defaults,
-    enable_async,
     input_shard_grid,
     output_shard_grid,
 ):
@@ -481,7 +458,6 @@ def test_rms_fuse(
         output_shard_grid,
         ttnn.Topology.Linear,
         num_iters=num_iters,
-        enable_async=enable_async,
     )
 
 
@@ -494,7 +470,7 @@ def test_rms_fuse(
             4,
             [1, 32, 32, 128],
             1,
-            ttnn.TILE_LAYOUT,
+            ttnn.ROW_MAJOR_LAYOUT,
             (32, 128),
             ttnn.CoreRangeSet(
                 {
@@ -502,12 +478,34 @@ def test_rms_fuse(
                     ttnn.CoreRange(ttnn.CoreCoord(1, 2), ttnn.CoreCoord(2, 2)),
                 }
             ),
-            (32, 128),
+            (32, 64),
             ttnn.CoreRangeSet(
-                {
-                    ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(3, 1)),
-                    ttnn.CoreRange(ttnn.CoreCoord(1, 2), ttnn.CoreCoord(2, 2)),
-                }
+                [
+                    ttnn.CoreRange(ttnn.CoreCoord(6, 6), ttnn.CoreCoord(6, 6)),
+                    ttnn.CoreRange(ttnn.CoreCoord(6, 7), ttnn.CoreCoord(6, 7)),
+                    ttnn.CoreRange(ttnn.CoreCoord(6, 9), ttnn.CoreCoord(6, 9)),
+                    ttnn.CoreRange(ttnn.CoreCoord(6, 0), ttnn.CoreCoord(6, 0)),
+                    ttnn.CoreRange(ttnn.CoreCoord(6, 1), ttnn.CoreCoord(6, 1)),
+                    ttnn.CoreRange(ttnn.CoreCoord(6, 2), ttnn.CoreCoord(6, 2)),
+                    ttnn.CoreRange(ttnn.CoreCoord(6, 4), ttnn.CoreCoord(6, 4)),
+                    ttnn.CoreRange(ttnn.CoreCoord(6, 5), ttnn.CoreCoord(6, 5)),
+                    ttnn.CoreRange(ttnn.CoreCoord(5, 5), ttnn.CoreCoord(5, 5)),
+                    ttnn.CoreRange(ttnn.CoreCoord(5, 6), ttnn.CoreCoord(5, 6)),
+                    ttnn.CoreRange(ttnn.CoreCoord(5, 7), ttnn.CoreCoord(5, 7)),
+                    ttnn.CoreRange(ttnn.CoreCoord(5, 9), ttnn.CoreCoord(5, 9)),
+                    ttnn.CoreRange(ttnn.CoreCoord(5, 0), ttnn.CoreCoord(5, 0)),
+                    ttnn.CoreRange(ttnn.CoreCoord(5, 1), ttnn.CoreCoord(5, 1)),
+                    ttnn.CoreRange(ttnn.CoreCoord(5, 2), ttnn.CoreCoord(5, 2)),
+                    ttnn.CoreRange(ttnn.CoreCoord(5, 4), ttnn.CoreCoord(5, 4)),
+                    ttnn.CoreRange(ttnn.CoreCoord(1, 4), ttnn.CoreCoord(1, 4)),
+                    ttnn.CoreRange(ttnn.CoreCoord(1, 5), ttnn.CoreCoord(1, 5)),
+                    ttnn.CoreRange(ttnn.CoreCoord(1, 9), ttnn.CoreCoord(1, 9)),
+                    ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(1, 0)),
+                    ttnn.CoreRange(ttnn.CoreCoord(2, 0), ttnn.CoreCoord(2, 0)),
+                    ttnn.CoreRange(ttnn.CoreCoord(2, 4), ttnn.CoreCoord(2, 4)),
+                    ttnn.CoreRange(ttnn.CoreCoord(2, 5), ttnn.CoreCoord(2, 5)),
+                    ttnn.CoreRange(ttnn.CoreCoord(2, 9), ttnn.CoreCoord(2, 9)),
+                ]
             ),
             ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
         ),
@@ -522,11 +520,16 @@ def test_rms_fuse(
     ],
 )
 @pytest.mark.parametrize("num_iters, warmup_iters", [[75, 5]])
-@pytest.mark.parametrize("enable_async", [True])
 @pytest.mark.parametrize("trace_mode", [True])
 @pytest.mark.parametrize(
     "device_params",
-    [{"trace_region_size": 23887872, "fabric_config": ttnn.FabricConfig.FABRIC_1D}],
+    [
+        {
+            "trace_region_size": 23887872,
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+            "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
+        }
+    ],
     indirect=True,
 )
 @pytest.mark.parametrize("mesh_device", [pytest.param((8, 4), id="8x4_grid")], indirect=True)
@@ -542,7 +545,6 @@ def test_concat_fuse(
     warmup_iters,
     use_program_cache,
     function_level_defaults,
-    enable_async,
     input_shard_shape,
     input_shard_grid,
     output_shard_shape,
@@ -566,7 +568,6 @@ def test_concat_fuse(
         all_gather_topology=ttnn.Topology.Linear,
         warmup_iters=warmup_iters,
         num_iters=num_iters,
-        enable_async=enable_async,
         output_shard_shape=output_shard_shape,
         output_shard_grid=output_shard_grid,
         tensor_mem_layout=tensor_mem_layout,

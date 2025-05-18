@@ -9,9 +9,6 @@ import ttnn
 import math
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal, comp_pcc
 from models.utility_functions import skip_for_grayskull
-from tests.ttnn.unit_tests.operations.ccl.test_ccl_common import (
-    create_global_semaphore_with_same_address,
-)
 from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
 from tracy import signpost
 
@@ -31,7 +28,6 @@ def run_rms_trace(
     output_shard_grid,
     all_gather_topology,
     num_iters=1,
-    enable_async=True,
     input_dtype=ttnn.bfloat8_b,
     layout=ttnn.TILE_LAYOUT,
     topology=ttnn.Topology.Linear,
@@ -41,7 +37,6 @@ def run_rms_trace(
     profiler=BenchmarkProfiler(),
 ):
     ccl_sub_device_crs = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 1))})
-    mesh_device.enable_async(enable_async)
     worker_sub_device = ttnn.SubDevice(
         [
             ccl_sub_device_crs,
@@ -319,14 +314,12 @@ def run_rms_fuse_impl(
     output_shard_grid,
     all_gather_topology,
     num_iters=1,
-    enable_async=False,
     input_dtype=ttnn.bfloat8_b,
     layout=ttnn.TILE_LAYOUT,
     topology=ttnn.Topology.Linear,
     epsilon=1e-05,
 ):
     ccl_sub_device_crs = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 1))})
-    mesh_device.enable_async(enable_async)
     worker_sub_device = ttnn.SubDevice(
         [
             ccl_sub_device_crs,

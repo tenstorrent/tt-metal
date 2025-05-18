@@ -40,21 +40,10 @@ ttnn::Tensor allocate_tensor_on_device(
     const Shape& shape,
     DataType data_type,
     Layout layout,
-    IDevice* device,
-    const std::optional<MemoryConfig>& memory_config);
-
-ttnn::Tensor allocate_tensor_on_device(
-    const Shape& shape,
-    DataType data_type,
-    Layout layout,
     MeshDevice* mesh_device,
     const std::optional<MemoryConfig>& memory_config);
 
-ttnn::Tensor allocate_tensor_on_device(const ttnn::TensorSpec& spec, IDevice* device);
 ttnn::Tensor allocate_tensor_on_device(const ttnn::TensorSpec& spec, MeshDevice* device);
-
-void copy_host_to_device_tensor(
-    const ttnn::Tensor& host_tensor, ttnn::Tensor device_tensor, ttnn::QueueId cq_id = ttnn::DefaultQueueId);
 
 ttnn::Tensor from_device(const ttnn::Tensor& tensor, bool blocking = true, ttnn::QueueId cq_id = ttnn::DefaultQueueId);
 
@@ -72,11 +61,9 @@ using operations::core::squeeze_from_4D;
 using operations::core::to_device;
 using operations::core::unsqueeze_to_4D;
 
-constexpr auto to_dtype =
-    ttnn::register_operation_with_auto_launch_op<"ttnn::to_dtype", ttnn::operations::core::ToDtype>();
+constexpr auto to_dtype = ttnn::register_operation<"ttnn::to_dtype", ttnn::operations::core::ToDtype>();
 constexpr auto to_memory_config =
-    ttnn::register_operation_with_auto_launch_op<"ttnn::to_memory_config", ttnn::operations::core::ToMemoryConfig>();
-constexpr auto to_layout =
-    ttnn::register_operation_with_auto_launch_op<"ttnn::to_layout", ttnn::operations::core::ToLayout>();
+    ttnn::register_operation<"ttnn::to_memory_config", ttnn::operations::core::ToMemoryConfig>();
+constexpr auto to_layout = ttnn::register_operation<"ttnn::to_layout", ttnn::operations::core::ToLayout>();
 
 }  // namespace ttnn

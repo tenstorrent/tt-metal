@@ -7,7 +7,7 @@
 #include <pybind11/pybind11.h>
 
 #include "moreh_nll_loss.hpp"
-#include "cpp/pybind11/decorators.hpp"
+#include "ttnn-pybind/decorators.hpp"
 
 namespace py = pybind11;
 

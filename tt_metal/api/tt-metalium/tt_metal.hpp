@@ -39,9 +39,6 @@ namespace detail {
 
 bool DispatchStateCheck(bool isFastDispatch);
 
-bool InWorkerThread();
-inline bool InMainThread() { return not InWorkerThread(); }
-
 // Call before CreateDevices to enable fabric, which uses all free ethernet cores
 void InitializeFabricConfig(FabricConfig fabric_config);
 
@@ -53,7 +50,10 @@ std::map<chip_id_t, IDevice*> CreateDevices(
     const size_t trace_region_size = DEFAULT_TRACE_REGION_SIZE,
     const tt_metal::DispatchCoreConfig& dispatch_core_config = tt_metal::DispatchCoreConfig{},
     const std::vector<uint32_t>& l1_bank_remap = {},
-    const size_t worker_l1_size = DEFAULT_WORKER_L1_SIZE);
+    const size_t worker_l1_size = DEFAULT_WORKER_L1_SIZE,
+    bool init_profiler = true,
+    bool use_max_eth_core_count_on_all_devices = false,
+    bool initialize_fabric_and_dispatch_fw = true);
 
 void CloseDevices(const std::map<chip_id_t, IDevice*>& devices);
 
@@ -92,6 +92,7 @@ void WriteToBuffer(std::shared_ptr<Buffer> buffer, const std::vector<DType>& hos
     WriteToBuffer(*buffer, host_buffer);
 }
 
+// TODO: Remove shard_order from this function
 void ReadFromBuffer(Buffer& buffer, uint8_t* host_buffer, bool shard_order = false);
 /**
  * Copies data from a buffer into a host buffer
@@ -255,7 +256,10 @@ void DumpDeviceProfileResults(
  * | device        | The device holding the program being profiled.    | Device * |                           | True |
  * | satate        | Dumpprofiler various states                       | ProfilerDumpState |                  | False |
  * */
-void DumpDeviceProfileResults(IDevice* device, ProfilerDumpState = ProfilerDumpState::NORMAL, const std::optional<ProfilerOptionalMetadata>& metadata = {});
+void DumpDeviceProfileResults(
+    IDevice* device,
+    ProfilerDumpState = ProfilerDumpState::NORMAL,
+    const std::optional<ProfilerOptionalMetadata>& metadata = {});
 
 /**
  * Set the directory for device-side CSV logs produced by the profiler instance in the tt-metal module
@@ -281,6 +285,22 @@ void SetDeviceProfilerDir(const std::string& output_dir = "");
  * */
 void FreshProfilerDeviceLog();
 
+/**
+ * Generate a (unique) per device ID for a program (potentially) running across multiple devices. The generated ID is
+ * used by the performance profiler.
+ *
+ * Return value: uint32_t
+ *
+ * | Argument             | Description                                                                         |  Data
+ * type            | Valid range              | required |
+ * |----------------------|-------------------------------------------------------------------------------------|-----------------------|--------------------------|----------|
+ * | base_program_id      | ID assigned to a program or an op by the user, for use by the performance profiler  |
+ * uint32_t              | 0 - 2^21 - 1             | yes      | | device_id            | The device id this op will be
+ * launched on (0 if this op runs on host only)          | uint32_t              | 0 - 2^32 - 1             | yes      |
+ * | is_host_fallback_op  | (Optional): Specifies if this op runs entirely on host                              | bool
+ * |                          | no       |
+ */
+uint32_t EncodePerDeviceProgramID(uint32_t base_program_id, uint32_t device_id, bool is_host_fallback_op = false);
 /**
  * Copies data from a host buffer into a buffer within the device DRAM channel
  *
@@ -363,6 +383,5 @@ bool ReadFromDeviceL1(
 
 bool ReadRegFromDevice(IDevice* device, const CoreCoord& logical_core, uint32_t address, uint32_t& regval);
 
-void SynchronizeWorkerThreads(const std::vector<IDevice*>& workers);
 }  // namespace detail
 }  // namespace tt::tt_metal

@@ -5,10 +5,10 @@
 #include <boost/move/utility_core.hpp>
 #include <gtest/gtest.h>
 #include <tt-metalium/bfloat16.hpp>
-#include <xtensor/xbuilder.hpp>
-#include <xtensor/xiterator.hpp>
-#include <xtensor/xlayout.hpp>
-#include <xtensor/xtensor_simd.hpp>
+#include <xtensor/generators/xbuilder.hpp>
+#include <xtensor/core/xiterator.hpp>
+#include <xtensor/core/xlayout.hpp>
+#include <xtensor/utils/xtensor_simd.hpp>
 #include <xtl/xiterator_base.hpp>
 #include <algorithm>
 #include <cstdint>
@@ -24,7 +24,6 @@
 #include <tt_stl/span.hpp>
 #include "tests/ttnn/unit_tests/gtests/ttnn_test_fixtures.hpp"
 #include <tt-metalium/tile.hpp>
-#include "ttnn/any_device.hpp"
 #include "ttnn/tensor/enum_types.hpp"
 #include "ttnn/tensor/layout/page_config.hpp"
 #include "ttnn/tensor/layout/tensor_layout.hpp"
@@ -157,9 +156,9 @@ TYPED_TEST(VectorConversionTest, RoundtripWithShardedLayout) {
             convert_to_data_type<TypeParam>(),
             Layout::TILE,
             MemoryConfig{
-                .memory_layout = TensorMemoryLayout::HEIGHT_SHARDED,
-                .buffer_type = BufferType::L1,
-                .shard_spec = ShardSpec{
+                TensorMemoryLayout::HEIGHT_SHARDED,
+                BufferType::L1,
+                ShardSpec{
                     ttnn::CoreRangeSet{ttnn::CoreRange{ttnn::CoreCoord{0, 0}, ttnn::CoreCoord{63, 63}}},
                     /*shard_shape_=*/{49, 30},
                     ShardOrientation::ROW_MAJOR,
@@ -223,7 +222,7 @@ TYPED_TEST(BorrowedStorageVectorConversionTest, Roundtrip) {
         EXPECT_EQ(ctor_count, 1);
         EXPECT_EQ(dtor_count, 0);
         {
-            Tensor copy(tensor.get_storage(), tensor.get_tensor_spec());
+            Tensor copy(tensor.get_storage(), tensor.get_tensor_spec(), tensor.get_distributed_tensor_config());
             EXPECT_EQ(ctor_count, 2);
             EXPECT_EQ(dtor_count, 0);
         }
@@ -233,7 +232,6 @@ TYPED_TEST(BorrowedStorageVectorConversionTest, Roundtrip) {
         EXPECT_THAT(tensor.get_logical_shape(), Eq(shape)) << "for shape: " << shape;
         EXPECT_THAT(tensor.get_dtype(), Eq(convert_to_data_type<TypeParam>())) << "for shape: " << shape;
         EXPECT_THAT(tensor.get_layout(), Eq(Layout::ROW_MAJOR)) << "for shape: " << shape;
-        EXPECT_EQ(tensor.storage_type(), StorageType::BORROWED) << "for shape: " << shape;
 
         auto output = tensor.template to_vector<TypeParam>();
 
@@ -256,7 +254,7 @@ TYPED_TEST(BorrowedStorageVectorConversionTest, Callbacks) {
     EXPECT_EQ(ctor_count, 1);
     EXPECT_EQ(dtor_count, 0);
     {
-        Tensor copy(tensor.get_storage(), tensor.get_tensor_spec());
+        Tensor copy(tensor.get_storage(), tensor.get_tensor_spec(), tensor.get_distributed_tensor_config());
         EXPECT_EQ(ctor_count, 2);
         EXPECT_EQ(dtor_count, 0);
     }
@@ -337,7 +335,9 @@ TEST_F(DeviceVectorConversionTest, RoundtripWithMemoryConfig) {
     auto input = arange<float>(0, shape.volume(), 1);
 
     TensorSpec spec(
-        shape, TensorLayout(DataType::FLOAT32, Layout::ROW_MAJOR, MemoryConfig{.buffer_type = BufferType::L1}));
+        shape,
+        TensorLayout(
+            DataType::FLOAT32, Layout::ROW_MAJOR, MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::L1}));
     auto output = Tensor::from_vector(input, spec, device_);
 
     EXPECT_TRUE(is_device_tensor(output));

@@ -38,9 +38,9 @@ enum class HalL1MemAddrType : uint8_t {
     LOCAL,
     BANK_TO_NOC_SCRATCH,
     APP_SYNC_INFO,
-    TILE_HEADER_BUFFER,
     APP_ROUTING_INFO,
     RETRAIN_COUNT,
+    RETRAIN_FORCE,
     FABRIC_ROUTER_CONFIG,
     COUNT  // Keep this last so it always indicates number of enum options
 };
@@ -48,5 +48,7 @@ enum class HalL1MemAddrType : uint8_t {
 enum class HalDramMemAddrType : uint8_t { DRAM_BARRIER = 0, COUNT = 1 };
 
 enum class HalMemType : uint8_t { L1 = 0, DRAM = 1, HOST = 2, COUNT = 3 };
+
+enum class HalTensixHarvestAxis : uint8_t { ROW = 0x1, COL = 0x2 };
 
 }  // namespace tt::tt_metal

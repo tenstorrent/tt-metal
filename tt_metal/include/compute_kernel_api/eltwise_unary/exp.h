@@ -34,10 +34,10 @@ ALWI void exp_tile_init() {
  *
  * | Argument        | Description                                                                | Type     | Valid Range                                           | Required |
  * |-----------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
- * | tile_index      | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     | 
+ * | tile_index      | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
  * | fast_and_approx | Computation to be done faster and approximate                              | bool     |                                                       | False    |
  */
- // clang-format on
+// clang-format on
 template <bool fast_and_approx = false>
 ALWI void exp_tile(uint32_t idst) {
     MATH((llk_math_eltwise_unary_sfpu_exponential<fast_and_approx>(idst)));

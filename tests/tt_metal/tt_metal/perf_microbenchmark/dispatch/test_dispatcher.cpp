@@ -25,13 +25,12 @@
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/assert.hpp>
 #include <tt-metalium/buffer_types.hpp>
-#include <tt-metalium/command_queue_common.hpp>
 #include "common.h"
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/data_types.hpp>
 #include <tt-metalium/device.hpp>
-#include <tt-metalium/dispatch_mem_map.hpp>
-#include <tt-metalium/dispatch_settings.hpp>
+#include "impl/dispatch/command_queue_common.hpp"
+#include "impl/dispatch/dispatch_settings.hpp"
 #include <tt-metalium/kernel_types.hpp>
 #include "llrt.hpp"
 #include <tt-metalium/logger.hpp>
@@ -464,7 +463,9 @@ int main(int argc, char** argv) {
 
         // Want different buffers on each core, instead use big buffer and self-manage it
         uint32_t dispatch_l1_unreserved_base =
-            DispatchMemMap::get(CoreType::WORKER).get_device_command_queue_addr(CommandQueueDeviceAddrType::UNRESERVED);
+            MetalContext::instance()
+                .dispatch_mem_map(CoreType::WORKER)
+                .get_device_command_queue_addr(CommandQueueDeviceAddrType::UNRESERVED);
         uint32_t l1_buf_base = tt::align(dispatch_l1_unreserved_base, dispatch_buffer_page_size_g);
         TT_ASSERT((l1_buf_base & (dispatch_buffer_page_size_g - 1)) == 0);
 
@@ -553,13 +554,16 @@ int main(int argc, char** argv) {
         const uint32_t prefetch_sync_sem = spoof_prefetch_core_sem_1_id;
 
         const uint32_t host_completion_queue_wr_ptr =
-            DispatchMemMap::get(CoreType::WORKER)
+            MetalContext::instance()
+                .dispatch_mem_map(CoreType::WORKER)
                 .get_host_command_queue_addr(CommandQueueHostAddrType::COMPLETION_Q_WR);
         const uint32_t dev_completion_queue_wr_ptr =
-            DispatchMemMap::get(CoreType::WORKER)
+            MetalContext::instance()
+                .dispatch_mem_map(CoreType::WORKER)
                 .get_device_command_queue_addr(CommandQueueDeviceAddrType::COMPLETION_Q_WR);
         const uint32_t dev_completion_queue_rd_ptr =
-            DispatchMemMap::get(CoreType::WORKER)
+            MetalContext::instance()
+                .dispatch_mem_map(CoreType::WORKER)
                 .get_device_command_queue_addr(CommandQueueDeviceAddrType::COMPLETION_Q_RD);
 
         std::vector<uint32_t> dispatch_compile_args = {
@@ -601,6 +605,9 @@ int main(int argc, char** argv) {
             0,
             0,
             0,
+            0,     // unused for single device - used to "virtualize" the number of eth cores across devices
+            0,     // unused for single device - used to "virtualize" the number of eth cores across devices
+            0,     // unused for single device - used to "virtualize" the number of eth cores across devices
             true,  // is_dram_variant
             true,  // is_host_variant
         };

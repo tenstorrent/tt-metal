@@ -9,7 +9,6 @@
 #include <memory>
 #include <thread>
 
-#include <tt-metalium/worker_config_buffer.hpp>
 #include <tt-metalium/trace_buffer.hpp>
 #include <tt-metalium/command_queue_interface.hpp>
 
@@ -20,6 +19,8 @@ namespace tt::tt_metal {
 class Event;
 class Program;
 class Kernel;
+class SystemMemoryManager;
+class WorkerConfigBufferMgr;
 
 class CommandQueue {
 public:
@@ -76,7 +77,8 @@ public:
 
 struct ReadBufferDescriptor;
 struct ReadEventDescriptor;
-
-using CompletionReaderVariant = std::variant<std::monostate, ReadBufferDescriptor, ReadEventDescriptor>;
+struct ReadCoreDataDescriptor;
+using CompletionReaderVariant =
+    std::variant<std::monostate, ReadBufferDescriptor, ReadEventDescriptor, ReadCoreDataDescriptor>;
 
 }  // namespace tt::tt_metal

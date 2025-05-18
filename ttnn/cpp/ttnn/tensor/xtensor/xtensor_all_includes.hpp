@@ -4,17 +4,16 @@
 
 #pragma once
 
-#include <xtensor-blas/xlinalg.hpp>
-#include <xtensor/xadapt.hpp>
-#include <xtensor/xarray.hpp>
-#include <xtensor/xbuffer_adaptor.hpp>
-#include <xtensor/xbuilder.hpp>
-#include <xtensor/xexpression.hpp>
-#include <xtensor/xio.hpp>
-#include <xtensor/xrandom.hpp>
-#include <xtensor/xslice.hpp>
-#include <xtensor/xstrided_view.hpp>
-#include <xtensor/xtensor.hpp>
-#include <xtensor/xview.hpp>
-#include <xtensor/xmanipulation.hpp>
-#include <xtensor/xtensor_forward.hpp>
+#include <xtensor/containers/xadapt.hpp>
+#include <xtensor/containers/xarray.hpp>
+#include <xtensor/containers/xbuffer_adaptor.hpp>
+#include <xtensor/generators/xbuilder.hpp>
+#include <xtensor/core/xexpression.hpp>
+#include <xtensor/io/xio.hpp>
+#include <xtensor/generators/xrandom.hpp>
+#include <xtensor/views/xslice.hpp>
+#include <xtensor/views/xstrided_view.hpp>
+#include <xtensor/containers/xtensor.hpp>
+#include <xtensor/views/xview.hpp>
+#include <xtensor/misc/xmanipulation.hpp>
+#include <xtensor/core/xtensor_forward.hpp>

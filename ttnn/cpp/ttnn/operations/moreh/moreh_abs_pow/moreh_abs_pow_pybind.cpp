@@ -5,7 +5,7 @@
 #include "moreh_abs_pow_pybind.hpp"
 
 #include "moreh_abs_pow.hpp"
-#include "pybind11/decorators.hpp"
+#include "ttnn-pybind/decorators.hpp"
 
 namespace ttnn::operations::moreh::moreh_abs_pow {
 void bind_moreh_abs_pow_operation(py::module& module) {

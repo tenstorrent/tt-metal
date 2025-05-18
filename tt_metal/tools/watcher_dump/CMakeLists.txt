@@ -4,7 +4,7 @@ target_link_libraries(
     PRIVATE
         Metalium::Metal
         Metalium::Metal::LLRT
-        TT:STL
+        TT::STL
 )
 target_include_directories(
     watcher_dump

@@ -5,11 +5,10 @@
 #include <allocator.hpp>
 #include <circular_buffer.hpp>
 #include <circular_buffer_constants.h>
-#include <dev_msgs.h>
+#include "dev_msgs.h"
 #include <device_impl.hpp>
 #include <device_pool.hpp>
 #include <global_circular_buffer.hpp>
-#include <global_circular_buffer_impl.hpp>
 #include <global_semaphore.hpp>
 #include <host_api.hpp>
 #include <kernel.hpp>
@@ -32,11 +31,11 @@
 #include <variant>
 
 #include "buffer_types.hpp"
-#include "circular_buffer_types.hpp"
+#include "circular_buffer_config.hpp"
 #include "data_types.hpp"
 #include "device.hpp"
 #include "impl/context/metal_context.hpp"
-#include "dispatch_settings.hpp"
+#include "dispatch/dispatch_settings.hpp"
 #include "hal_types.hpp"
 #include "kernel_types.hpp"
 #include "lightmetal/host_api_capture_helpers.hpp"
@@ -45,12 +44,13 @@
 #include "llrt.hpp"
 #include "logger.hpp"
 #include "tt-metalium/program.hpp"
+#include "program/program_impl.hpp"
 #include "semaphore.hpp"
-#include "system_memory_manager.hpp"
 #include "tracy/Tracy.hpp"
 #include <umd/device/tt_xy_pair.h>
 #include <umd/device/types/xy_pair.h>
 #include "utils.hpp"
+#include "fabric/hw/inc/fabric_routing_mode.h"
 
 namespace tt {
 
@@ -121,8 +121,8 @@ DataMovementConfigStatus CheckDataMovementConfig(
     for (const auto& core_range : core_ranges.ranges()) {
         for (auto x = core_range.start_coord.x; x <= core_range.end_coord.x; x++) {
             for (auto y = core_range.start_coord.y; y <= core_range.end_coord.y; y++) {
-                const KernelGroup* kernel_group =
-                    program.kernels_on_core(CoreCoord(x, y), hal.get_programmable_core_type_index(programmable_core));
+                const KernelGroup* kernel_group = program.impl().kernels_on_core(
+                    CoreCoord(x, y), hal.get_programmable_core_type_index(programmable_core));
                 if (kernel_group != nullptr) {
                     bool local_noc0_in_use = false;
                     bool local_noc1_in_use = false;
@@ -175,7 +175,7 @@ std::optional<uint32_t> get_semaphore_id(const Program &program, const CoreRange
     for (auto x = core_range.start_coord.x; x <= core_range.end_coord.x; x++) {
         for (auto y = core_range.start_coord.y; y <= core_range.end_coord.y; y++) {
             CoreCoord logical_core(x, y);
-            auto semaphores = program.semaphores_on_core(logical_core, core_type);
+            auto semaphores = program.impl().semaphores_on_core(logical_core, core_type);
             if (semaphores.size() == NUM_SEMAPHORES) {
                 TT_THROW(
                     "Cannot add semaphore on core {}. Max number of semaphores ({}) reached!",
@@ -320,7 +320,7 @@ bool WriteToDeviceDRAMChannel(IDevice* device, int dram_channel, uint32_t addres
         "Cannot write to reserved DRAM region, addresses [0, {}) are reserved!",
         device->allocator()->get_base_allocator_addr(HalMemType::DRAM));
     tt::tt_metal::MetalContext::instance().get_cluster().write_dram_vec(
-        host_buffer, tt_target_dram{device->id(), dram_channel, 0}, address);
+        host_buffer, device->id(), dram_channel, address);
     return pass;
 }
 
@@ -329,7 +329,7 @@ bool ReadFromDeviceDRAMChannel(
     bool pass = true;
     tt::tt_metal::MetalContext::instance().get_cluster().dram_barrier(device->id());
     tt::tt_metal::MetalContext::instance().get_cluster().read_dram_vec(
-        host_buffer, size, tt_target_dram{device->id(), dram_channel, 0}, address);
+        host_buffer, size, device->id(), dram_channel, address);
     return pass;
 }
 
@@ -384,11 +384,26 @@ std::map<chip_id_t, IDevice*> CreateDevices(
     const size_t trace_region_size,
     const DispatchCoreConfig& dispatch_core_config,
     const std::vector<uint32_t>& /*l1_bank_remap*/,
-    const size_t worker_l1_size) {
+    const size_t worker_l1_size,
+    bool init_profiler,
+    bool use_max_eth_core_count_on_all_devices,
+    bool initialize_fabric_and_dispatch_fw) {
+    // Issue #19729: use_max_eth_core_count_on_all_devices is a workaround
+    // to allow TT-Mesh Workload dispatch to target active ethernet cores.
     ZoneScoped;
     bool is_galaxy = tt::tt_metal::MetalContext::instance().get_cluster().is_galaxy_cluster();
     tt::DevicePool::initialize(
-        device_ids, num_hw_cqs, l1_small_size, trace_region_size, dispatch_core_config, {}, worker_l1_size);
+        device_ids,
+        num_hw_cqs,
+        l1_small_size,
+        trace_region_size,
+        dispatch_core_config,
+        {},
+        worker_l1_size,
+        init_profiler,
+        use_max_eth_core_count_on_all_devices,
+        initialize_fabric_and_dispatch_fw);
+
     const auto devices = tt::DevicePool::instance().get_all_active_devices();
     std::map<chip_id_t, IDevice*> ret_devices;
     // Only include the mmio device in the active devices set returned to the caller if we are not running
@@ -411,21 +426,6 @@ void CloseDevices(const std::map<chip_id_t, IDevice*>& devices) {
         devices_to_close.push_back(device);
     }
     tt::DevicePool::instance().close_devices(devices_to_close);
-}
-
-bool InWorkerThread() {
-    // These are values are cached per thread. in_worker_thread is a 1:1 function of the thread_id.
-    // Therefore it does not need to be recomputed or looked up using the worker_thread_ids each time.
-    // This is a performance optimization, since looking up the thread id inside worker_thread_ids for
-    // each function call significantly degrades runtime perf.
-    thread_local static bool in_worker_thread = false;
-    thread_local static bool is_thread_status_checked = false;
-    if (not is_thread_status_checked) {
-        auto worker_thread_ids = tt::DevicePool::instance().get_worker_thread_ids();
-        in_worker_thread = worker_thread_ids.find(std::this_thread::get_id()) != worker_thread_ids.end();
-        is_thread_status_checked = true;
-    }
-    return in_worker_thread;
 }
 
 void print_page(
@@ -532,7 +532,21 @@ void WriteToDeviceInterleavedContiguous(const Buffer& buffer, tt::stl::Span<cons
 
 void WriteToDevice(Buffer& buffer, tt::stl::Span<const uint8_t> host_buffer) {
     ZoneScoped;
-    if (buffer.buffer_layout() == TensorMemoryLayout::INTERLEAVED ||
+    if (buffer.is_nd_sharded()) {
+        TT_FATAL(buffer.is_l1(), "Buffer with BufferDistributionSpec must be L1 for WriteToDevice!");
+        const auto& [banks, bank_mapping_in_bytes] = buffer.get_bank_data_mapping();
+        for (size_t i = 0; i < banks.size(); i++) {
+            const auto virtual_core = buffer.device()->virtual_core_from_logical_core(banks[i], buffer.core_type());
+            for (const auto& chunk_mapping_in_bytes : bank_mapping_in_bytes[i]) {
+                // TODO: subspan is in elements; here 1 element is 1 byte (ie. uint8_t) so using bytes here is fine
+                auto chunk_span = tt::stl::make_const_span(
+                    host_buffer.subspan(chunk_mapping_in_bytes.src, chunk_mapping_in_bytes.size));
+                llrt::write_hex_vec_to_core(
+                    buffer.device()->id(), virtual_core, chunk_span, buffer.address() + chunk_mapping_in_bytes.dst);
+            }
+        }
+    } else if (
+        buffer.buffer_layout() == TensorMemoryLayout::INTERLEAVED ||
         buffer.buffer_layout() == TensorMemoryLayout::SINGLE_BANK) {
         WriteToDeviceInterleavedContiguous(buffer, host_buffer);
     } else if (is_sharded(buffer.buffer_layout())) {
@@ -641,7 +655,22 @@ void ReadFromDeviceSharded(Buffer& buffer, uint8_t* host_buffer, bool shard_orde
 
 void ReadFromDevice(Buffer& buffer, uint8_t* host_buffer, bool shard_order) {
     ZoneScoped;
-    if (buffer.buffer_layout() == TensorMemoryLayout::INTERLEAVED ||
+    if (buffer.is_nd_sharded()) {
+        TT_FATAL(buffer.is_l1(), "Buffer with BufferDistributionSpec must be L1 for ReadFromDevice!");
+        const auto& [banks, bank_mapping_in_bytes] = buffer.get_bank_data_mapping();
+        for (size_t i = 0; i < banks.size(); i++) {
+            const auto virtual_core = buffer.device()->virtual_core_from_logical_core(banks[i], buffer.core_type());
+            for (const auto& chunk_mapping_in_bytes : bank_mapping_in_bytes[i]) {
+                // Using cluster read_core API (as opposed to ReadFromDeviceL1) because it is inplace
+                tt::tt_metal::MetalContext::instance().get_cluster().read_core(
+                    host_buffer + chunk_mapping_in_bytes.src,
+                    chunk_mapping_in_bytes.size,
+                    tt_cxy_pair(buffer.device()->id(), virtual_core),
+                    buffer.address() + chunk_mapping_in_bytes.dst);
+            }
+        }
+    } else if (
+        buffer.buffer_layout() == TensorMemoryLayout::INTERLEAVED ||
         buffer.buffer_layout() == TensorMemoryLayout::SINGLE_BANK) {
         ReadFromDeviceInterleavedContiguous(buffer, host_buffer);
     } else if (is_sharded(buffer.buffer_layout())) {
@@ -714,7 +743,7 @@ void LaunchProgram(IDevice* device, Program& program, bool wait_until_cores_done
         }
         detail::CompileProgram(device, program);
         if (!program.is_finalized()) {
-            program_dispatch::finalize_program_offsets(program, device);
+            program.finalize_offsets(device);
         }
 
         detail::WriteRuntimeArgsToDevice(device, program, force_slow_dispatch);
@@ -736,8 +765,9 @@ void LaunchProgram(IDevice* device, Program& program, bool wait_until_cores_done
              programmable_core_type_index++) {
             CoreType core_type = hal.get_core_type(programmable_core_type_index);
             for (const auto& logical_core : logical_cores_used_in_program[programmable_core_type_index]) {
-                launch_msg_t* msg = &program.kernels_on_core(logical_core, programmable_core_type_index)->launch_msg;
-                go_msg_t* go_msg = &program.kernels_on_core(logical_core, programmable_core_type_index)->go_msg;
+                launch_msg_t* msg =
+                    &program.impl().kernels_on_core(logical_core, programmable_core_type_index)->launch_msg;
+                go_msg_t* go_msg = &program.impl().kernels_on_core(logical_core, programmable_core_type_index)->go_msg;
                 msg->kernel_config.host_assigned_id = program.get_runtime_id();
 
                 auto physical_core = device->virtual_core_from_logical_core(logical_core, core_type);
@@ -801,18 +831,19 @@ bool ConfigureDeviceWithProgram(IDevice* device, Program& program, bool force_sl
         const auto& logical_cores = logical_cores_used_in_program[index];
         CoreType core_type = hal.get_core_type(index);
         for (const auto& logical_core : logical_cores) {
-            KernelGroup* kernel_group = program.kernels_on_core(logical_core, index);
+            KernelGroup* kernel_group = program.impl().kernels_on_core(logical_core, index);
             CoreCoord physical_core = device->virtual_core_from_logical_core(logical_core, core_type);
             ConfigureKernelGroup(program, index, kernel_group, device, logical_core);
             // TODO: add support for CB for ethernet cores
             if (core_type == CoreType::WORKER) {
-                const auto& cbs_on_core = program.circular_buffers_on_core(logical_core);
+                const auto& cbs_on_core = program.impl().circular_buffers_on_core(logical_core);
                 if (cbs_on_core.size()) {
                     // CircularBufferConfigVec -- common across all kernels, so written once to the core
                     std::vector<uint32_t> circular_buffer_config_vec(
-                        program.get_program_config(index).cb_size / sizeof(uint32_t));
+                        program.impl().get_program_config(index).cb_size / sizeof(uint32_t));
 
-                    uint32_t remote_offset_index = program.get_program_config(index).local_cb_size / sizeof(uint32_t);
+                    uint32_t remote_offset_index =
+                        program.impl().get_program_config(index).local_cb_size / sizeof(uint32_t);
                     for (const auto& circular_buffer : cbs_on_core) {
                         for (uint32_t buffer_index : circular_buffer->local_buffer_indices()) {
                             uint32_t base_index = buffer_index * UINT32_WORDS_PER_LOCAL_CIRCULAR_BUFFER_CONFIG;
@@ -835,7 +866,7 @@ bool ConfigureDeviceWithProgram(IDevice* device, Program& program, bool force_sl
                         }
                     }  // PROF_END("CBS")
                     uint64_t kernel_config_base = hal.get_dev_addr(index, HalL1MemAddrType::KERNEL_CONFIG);
-                    uint64_t addr = kernel_config_base + program.get_program_config(index).cb_offset;
+                    uint64_t addr = kernel_config_base + program.impl().get_program_config(index).cb_offset;
                     llrt::write_hex_vec_to_core(device_id, physical_core, circular_buffer_config_vec, addr);
                 }
             }
@@ -861,7 +892,7 @@ void WriteRuntimeArgsToDevice(IDevice* device, Program& program, bool force_slow
     for (uint32_t index = 0; index < hal.get_programmable_core_type_count(); index++) {
         CoreType core_type = hal.get_core_type(index);
         uint32_t processor_classes = hal.get_processor_classes_count(index);
-        for (const auto& kg : program.get_kernel_groups(index)) {
+        for (const auto& kg : program.impl().get_kernel_groups(index)) {
             uint32_t kernel_config_base = kg->launch_msg.kernel_config.kernel_config_base[index];
             for (const CoreRange& core_range : kg->core_ranges.ranges()) {
                 for (auto x = core_range.start_coord.x; x <= core_range.end_coord.x; x++) {
@@ -921,23 +952,6 @@ void WriteRuntimeArgsToDevice(IDevice* device, Program& program, bool force_slow
 void CompileProgram(IDevice* device, Program& program, bool force_slow_dispatch) {
     ZoneScoped;
     program.compile(device, force_slow_dispatch);
-}
-
-void SynchronizeWorkerThreads(const std::vector<IDevice*>& workers) {
-    if (tt::tt_metal::detail::InWorkerThread()) {
-        // Early exit if in a worker thread, since waiting for the worker
-        // queue to become empty inside a worker thread leads to a deadlock
-        // Synchronizing in a worker thread should be a nop by definition
-        return;
-    }
-    // Push empty work to threads and ensure its been picked up
-    for (auto target_device : workers) {
-        target_device->push_work([]() {});
-    }
-    // Block until work has been picked up, to flush the queue
-    for (auto target_device : workers) {
-        while (not target_device->is_worker_queue_empty());
-    }
 }
 
 }  // namespace detail
@@ -1018,6 +1032,11 @@ KernelHandle CreateDataMovementKernel(
         kernel_name);
 
     std::shared_ptr<Kernel> kernel = std::make_shared<DataMovementKernel>(kernel_src, core_range_set, config);
+    auto control_plane = tt::tt_metal::MetalContext::instance().get_cluster().get_control_plane();
+    auto mode = control_plane->get_routing_mode();
+    if (mode != ROUTING_MODE_UNDEFINED) {
+        kernel->add_defines({{"ROUTING_MODE", std::to_string(static_cast<int>(mode))}});
+    }
     return detail::AddKernel(program, kernel, HalProgrammableCoreType::TENSIX);
 }
 
@@ -1042,6 +1061,11 @@ KernelHandle CreateEthernetKernel(
     const bool are_both_noc_in_use = data_movement_config_status.noc0_in_use && data_movement_config_status.noc1_in_use;
 
     std::shared_ptr<Kernel> kernel = std::make_shared<EthernetKernel>(kernel_src, core_range_set, config);
+    auto control_plane = tt::tt_metal::MetalContext::instance().get_cluster().get_control_plane();
+    auto mode = control_plane->get_routing_mode();
+    if (mode != ROUTING_MODE_UNDEFINED) {
+        kernel->add_defines({{"ROUTING_MODE", std::to_string(static_cast<int>(mode))}});
+    }
 
     TT_FATAL(
         utils::underlying_type<DataMovementProcessor>(config.processor) <

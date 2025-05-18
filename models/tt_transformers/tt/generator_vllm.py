@@ -4,21 +4,21 @@
 
 import os
 from typing import List, Union
-import torch
-import PIL
-from tqdm import tqdm
-from llama_models.llama3.api.chat_format import create_vision_mask
-import ttnn
 
+import PIL
+import torch
+from llama_models.llama3.api.chat_format import create_vision_mask
+from tqdm import tqdm
+from vllm.inputs import INPUT_REGISTRY, DecoderOnlyInputs, EncoderDecoderInputs, InputContext
+from vllm.model_executor.models.interfaces import SupportsMultiModal
+from vllm.model_executor.models.mllama import MLLAMA_IMAGE_TOKEN, MLLAMA_IMAGE_TOKEN_ID
+
+import ttnn
+from models.tt_transformers.demo.simple_vision_demo import create_multimodal_model
 from models.tt_transformers.tt.generator import Generator
 from models.tt_transformers.tt.model import Transformer
 from models.tt_transformers.tt.model_config import DecodersPrecision, ModelArgs
-from models.tt_transformers.demo.simple_vision_demo import create_multimodal_model
 from models.utility_functions import nearest_32
-
-from vllm.inputs import INPUT_REGISTRY, DecoderOnlyInputs, EncoderDecoderInputs, InputContext
-from vllm.model_executor.models.interfaces import SupportsMultiModal
-from vllm.model_executor.models.mllama import MLLAMA_IMAGE_TOKEN_ID, MLLAMA_IMAGE_TOKEN
 
 
 def generate_submeshes(mesh_device, data_parallel):
@@ -288,6 +288,38 @@ class Qwen2ForCausalLM(Generator):
             mesh_device,
             max_batch_size,
             max_seq_len=131072,
+            n_layers=n_layers,
+            dtype=ttnn.bfloat8_b,
+            optimizations=DecodersPrecision.performance,
+        )
+        return cls(tt_model, model_args, mesh_device)
+
+    @property
+    def cache_path(self):
+        return self.model_args[0].model_cache_path
+
+    def prefill_forward(self, *args, **kwargs):
+        return super().prefill_forward_text(*args, **kwargs)
+
+    def decode_forward(self, *args, **kwargs):
+        return super().decode_forward_text(*args, **kwargs)
+
+    def allocate_kv_cache(self, *args, **kwargs):
+        return allocate_vllm_kv_cache(*args, **kwargs, dp_model=self.model, tt_cache_path=self.cache_path)
+
+
+class MistralForCausalLM(Generator):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+    @classmethod
+    def initialize_vllm_model(cls, hf_config, mesh_device, max_batch_size, n_layers=None, tt_data_parallel=1):
+        tt_model, model_args = initialize_vllm_text_transformer(
+            hf_config,
+            tt_data_parallel,
+            mesh_device,
+            max_batch_size,
+            max_seq_len=32768,
             n_layers=n_layers,
             dtype=ttnn.bfloat8_b,
             optimizations=DecodersPrecision.performance,

@@ -47,7 +47,7 @@ from models.demos.llama3_subdevices.tt.llama_ccl import TT_CCL
 )
 @pytest.mark.parametrize(
     "page_params",
-    [{"page_block_size": 32, "page_max_num_blocks": 1024}],
+    [{"page_block_size": 64, "page_max_num_blocks": 4096}],
 )
 @pytest.mark.parametrize(
     "batch_size",
@@ -79,7 +79,6 @@ def test_llama_decoder_inference(
     ensure_gc,
 ):
     dtype = ttnn.bfloat8_b
-    mesh_device.enable_async(True)
 
     model_args = TtModelArgs(mesh_device, max_batch_size=batch_size, max_seq_len=max_seq_len, dummy_weights=False)
     model_args.n_layers = 1

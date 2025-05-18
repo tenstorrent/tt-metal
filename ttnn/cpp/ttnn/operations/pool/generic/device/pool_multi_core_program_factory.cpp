@@ -4,7 +4,7 @@
 
 #include "pool_op.hpp"
 #include "tt-metalium/circular_buffer.hpp"
-#include "tt-metalium/circular_buffer_types.hpp"
+#include "tt-metalium/circular_buffer_config.hpp"
 #include "ttnn/operations/cb_utils.hpp"
 #include "ttnn/operations/pool/pool_utils.hpp"
 
@@ -39,7 +39,7 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
     // This should allocate a DRAM buffer on the device
     IDevice* device = input.device();
     tt::tt_metal::Buffer* src_dram_buffer = input.buffer();
-    auto reader_indices_buffer = reader_indices.device_buffer();
+    auto reader_indices_storage = reader_indices.device_storage();
     tt::tt_metal::Buffer* dst_dram_buffer = output.buffer();
 
     const auto input_shape = input.get_padded_shape();
@@ -78,10 +78,8 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
 
     TT_FATAL(nblocks == 1, "Multiple blocks not yet supported");
 
-    uint32_t tile_w = tt::constants::TILE_WIDTH;
     if (input_shape[3] < tt::constants::TILE_WIDTH) {
         TT_FATAL(input_shape[3] == 16, "Error");
-        tile_w = tt::constants::FACE_WIDTH;
     }
     uint32_t out_w_loop_count = std::ceil((float)out_w / nblocks);
 
@@ -153,7 +151,7 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         in_reader_indices_cb_pagesize,
         in_reader_indices_cb_npages,
         indices_df,
-        &*reader_indices_buffer);
+        reader_indices_storage.get_buffer());
 
     log_debug(
         tt::LogOp,
@@ -234,7 +232,7 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         log_debug(tt::LogOp, "in_scalar_cb :: PS = {}, NP = {}", in_scalar_cb_pagesize, in_scalar_cb_npages);
         log_debug(tt::LogOp, "out_cb :: PS = {}, NP = {}", out_cb_pagesize, out_cb_npages);
         log_debug(tt::LogOp, "in_addr: {}", src_dram_buffer->address());
-        log_debug(tt::LogOp, "in_reader_indices_addr: {}", reader_indices_buffer->address());
+        log_debug(tt::LogOp, "in_reader_indices_addr: {}", reader_indices_storage.get_buffer()->address());
         log_debug(tt::LogOp, "out_addr: {}", dst_dram_buffer->address());
         log_debug(tt::LogOp, "kernel_size_h: {}", kernel_size_h);
         log_debug(tt::LogOp, "kernel_size_w: {}", kernel_size_w);
@@ -392,7 +390,7 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
 
     auto compute_kernel = CreateKernel(program, compute_kernel_fname, core_range, compute_config);
 
-    // Capture reader_indices_buffer to cache this with the program
+    // Capture reader_indices_storage to cache this with the program
     return {
         std::move(program),
         {.reader0_kernel = reader0_kernel,
@@ -401,7 +399,7 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
          .cb_out = cb_out,
          .ncores = ncores,
          .ncores_w = ncores_w,
-         .reader_indices_buffer = reader_indices_buffer}};
+         .reader_indices_storage = reader_indices_storage}};
 }
 
 Pool2D::MultiCore::cached_program_t Pool2D::MultiCore::create(
@@ -415,7 +413,7 @@ Pool2D::MultiCore::cached_program_t Pool2D::MultiCore::create(
 
     auto parallel_config = sliding_window::ParallelConfig{
         .grid = input.shard_spec().value().grid,
-        .shard_scheme = input.memory_config().memory_layout,
+        .shard_scheme = input.memory_config().memory_layout(),
         .shard_orientation = input.shard_spec().value().orientation,
     };
 
@@ -423,7 +421,7 @@ Pool2D::MultiCore::cached_program_t Pool2D::MultiCore::create(
     uint32_t out_h = output_shape[1];
     uint32_t out_w = output_shape[2];
 
-    bool is_block_sharded = input.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED;
+    bool is_block_sharded = input.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED;
 
     auto pad_metadata = sliding_window::generate_pad_metadata(sliding_window_config);
     auto op_trace_metadata = sliding_window::generate_op_trace_metadata(sliding_window_config);

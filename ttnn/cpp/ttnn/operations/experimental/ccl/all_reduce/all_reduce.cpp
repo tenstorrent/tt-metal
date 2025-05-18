@@ -21,4 +21,17 @@ ttnn::Tensor ExecuteAllReduce::invoke(
         input_tensor, math_op, num_links, out_memory_config, topology, num_workers, num_buffers_per_channel);
 }
 
+std::vector<ttnn::Tensor> ExecuteAllReduce::invoke(
+    const std::vector<ttnn::Tensor>& input_tensors,
+    ttnn::operations::reduction::ReduceType math_op,
+    const uint32_t num_links,
+    const std::optional<ttnn::MemoryConfig>& memory_config,
+    ttnn::ccl::Topology topology,
+    const std::optional<size_t> num_workers,
+    const std::optional<size_t> num_buffers_per_channel) {
+    MemoryConfig out_memory_config = memory_config.value_or(input_tensors.at(0).memory_config());
+    return ttnn::operations::experimental::ccl::all_reduce(
+        input_tensors, math_op, num_links, out_memory_config, topology, num_workers, num_buffers_per_channel);
+}
+
 }  // namespace ttnn::operations::experimental::ccl

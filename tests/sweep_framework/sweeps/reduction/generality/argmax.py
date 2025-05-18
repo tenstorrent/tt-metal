@@ -25,12 +25,13 @@ parameters = {
         "tensor_shape": list(itertools.product(DIM_SIZES, repeat=rank)),
         "dim": [None] + [rank, -1] if rank > 0 else [],
         "keepdim": [True, False],
+        "use_multicore": [True, False],
     }
     for rank in range(5)
 }
 
 
-def run_argmax(device, tensor_shape, dim, keepdim) -> list:
+def run_argmax(device, tensor_shape, dim, keepdim, use_multicore) -> list:
     """
     Test the compatibility of the torch and ttnn output for the given operation and different
     tensor shapes and dim values.
@@ -59,7 +60,11 @@ def run_argmax(device, tensor_shape, dim, keepdim) -> list:
     ttnn_errored = False
     ttnn_error_msg = ""
     try:
-        ttnn_result = ttnn_op(ttnn_tensor, dim=dim, keepdim=keepdim) if dim is not None else ttnn_op(ttnn_tensor)
+        ttnn_result = (
+            ttnn_op(ttnn_tensor, dim=dim, keepdim=keepdim, use_multicore=use_multicore)
+            if dim is not None
+            else ttnn_op(ttnn_tensor, use_multicore=use_multicore)
+        )
     except RuntimeError as e:
         ttnn_errored = True
         ttnn_error_msg = str(e)
@@ -80,7 +85,7 @@ def run_argmax(device, tensor_shape, dim, keepdim) -> list:
     pcc_result, msg = check_with_pcc(torch_result, ttnn_result, 0.99)
 
     if not pcc_result:
-        return (False, msg + f"mismatch in allclose: torch: {torch_result}, ttnn: {ttnn_result}")
+        return (False, msg + f"mismatch in pcc: torch: {torch_result}, ttnn: {ttnn_result}")
 
     # Convert torch dtype from uint64 to int32
     # Note: torch does not have uint32
@@ -99,12 +104,14 @@ def test_argmax(
     tensor_shape,
     dim,
     keepdim,
+    use_multicore,
 ):
     result, error_msg = run_argmax(
         device,
         tensor_shape,
         dim,
         keepdim,
+        use_multicore,
     )
     assert result, error_msg
 
@@ -113,6 +120,7 @@ def run(
     tensor_shape,
     dim,
     keepdim,
+    use_multicore,
     *,
     device,
 ) -> list:
@@ -121,4 +129,5 @@ def run(
         tensor_shape,
         dim,
         keepdim,
+        use_multicore,
     )

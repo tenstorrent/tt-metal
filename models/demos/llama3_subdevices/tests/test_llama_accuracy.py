@@ -89,7 +89,7 @@ def get_accuracy_thresholds(model_name: str, device_name: str, optimizations: Ll
 )
 @pytest.mark.parametrize(
     "page_params",
-    [{"page_block_size": 32, "page_max_num_blocks": 1024}],
+    [{"page_block_size": 64, "page_max_num_blocks": 4096}],
 )
 @pytest.mark.parametrize(
     "batch_size",
@@ -128,8 +128,6 @@ def test_tt_model_acc(
         pytest.skip("CI test only runs vs reference file")
 
     dtype = ttnn.bfloat8_b
-
-    mesh_device.enable_async(True)
 
     # Load model args and tokenizer
     model_args = TtModelArgs(

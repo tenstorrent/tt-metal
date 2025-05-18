@@ -63,21 +63,18 @@ DeviceAddr GlobalSemaphore::address() const { return buffer_.get_buffer()->addre
 void GlobalSemaphore::reset_semaphore_value(uint32_t reset_value) const {
     // Write the initial value to the semaphore to the device
     // Only block for the slow dispatch case
-    auto* device = device_;
-    device->push_work([device, reset_value, num_cores = cores_.num_cores(), buffer = buffer_] {
-        std::vector<uint32_t> host_buffer(num_cores, reset_value);
-        if (device->using_slow_dispatch()) {
-            detail::WriteToBuffer(*buffer.get_buffer(), host_buffer);
-            tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(device->id());
+
+    std::vector<uint32_t> host_buffer(cores_.num_cores(), reset_value);
+    if (device_->using_slow_dispatch()) {
+        detail::WriteToBuffer(*buffer_.get_buffer(), host_buffer);
+        tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(device_->id());
+    } else {
+        if (auto mesh_buffer = buffer_.get_mesh_buffer()) {
+            distributed::EnqueueWriteMeshBuffer(mesh_buffer->device()->mesh_command_queue(), mesh_buffer, host_buffer);
         } else {
-            if (auto mesh_buffer = buffer.get_mesh_buffer()) {
-                distributed::EnqueueWriteMeshBuffer(
-                    mesh_buffer->device()->mesh_command_queue(), mesh_buffer, host_buffer);
-            } else {
-                EnqueueWriteBuffer(device->command_queue(), *buffer.get_buffer(), host_buffer, false);
-            }
+            EnqueueWriteBuffer(device_->command_queue(), *buffer_.get_buffer(), host_buffer, false);
         }
-    });
+    }
 }
 
 }  // namespace tt::tt_metal

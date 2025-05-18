@@ -30,7 +30,7 @@ struct ExecuteGroupNorm {
 }  // namespace normalization
 }  // namespace operations
 
-constexpr auto group_norm = ttnn::
-    register_operation_with_auto_launch_op<"ttnn::group_norm", ttnn::operations::normalization::ExecuteGroupNorm>();
+constexpr auto group_norm =
+    ttnn::register_operation<"ttnn::group_norm", ttnn::operations::normalization::ExecuteGroupNorm>();
 
 }  // namespace ttnn

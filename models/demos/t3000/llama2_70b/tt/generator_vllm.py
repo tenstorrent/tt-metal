@@ -2,21 +2,17 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import json
 from dataclasses import dataclass
 from pathlib import Path
-import json
+
 import torch
 from tqdm import tqdm
 
 import ttnn
-
-from models.demos.t3000.llama2_70b.tt.llama_generation import TtLlamaModelForGeneration
-from models.demos.t3000.llama2_70b.tt.llama_common import (
-    load_llama_state_dict,
-    setup_llama_env,
-    check_mesh_device,
-)
 from models.demos.t3000.llama2_70b.reference.llama.llama.model import ModelArgs as ReferenceModelArgs
+from models.demos.t3000.llama2_70b.tt.llama_common import check_mesh_device, load_llama_state_dict, setup_llama_env
+from models.demos.t3000.llama2_70b.tt.llama_generation import TtLlamaModelForGeneration
 
 
 class TtLlamaForCausalLM(TtLlamaModelForGeneration):

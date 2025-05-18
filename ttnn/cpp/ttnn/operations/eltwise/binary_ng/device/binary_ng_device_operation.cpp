@@ -14,8 +14,11 @@ bool is_binary_sfpu_op(BinaryOpType val, DataType a, DataType b) {
     using enum DataType;
     switch (val) {
         case ADD:
-        case SUB: return ((a == FLOAT32 && b == FLOAT32) || (a == INT32 && b == INT32));
-        case MUL:
+            return (
+                (a == FLOAT32 && b == FLOAT32) || (a == INT32 && b == INT32) || (a == UINT32 && b == UINT32) ||
+                (a == UINT16 && b == UINT16));
+        case SUB: return ((a == FLOAT32 && b == FLOAT32) || (a == INT32 && b == INT32) || (a == UINT16 && b == UINT16));
+        case MUL: return ((a == FLOAT32 && b == FLOAT32) || (a == UINT16 && b == UINT16));
         case DIV:
         case RSUB:
         case LOGADDEXP:
@@ -25,18 +28,20 @@ bool is_binary_sfpu_op(BinaryOpType val, DataType a, DataType b) {
         case LOGICAL_OR:
         case LOGICAL_XOR:
         case LOGICAL_AND:
-        case BIAS_GELU:
+        case BIAS_GELU: return (a == FLOAT32 && b == FLOAT32);
         case GT:
         case LT:
         case GTE:
         case LTE:
         case EQ:
-        case NE: return (a == FLOAT32 && b == FLOAT32);
+        case NE: return ((a == FLOAT32 && b == FLOAT32) || (a == INT32 && b == INT32));
+        case LCM:
+        case GCD:
         case LEFT_SHIFT:
-        case RIGHT_SHIFT:
+        case RIGHT_SHIFT: return (a == INT32 && b == INT32);
         case BITWISE_XOR:
-        case BITWISE_AND:
-        case BITWISE_OR: return (a == INT32 && b == INT32);
+        case BITWISE_OR:
+        case BITWISE_AND: return ((a == INT32 && b == INT32) || (a == UINT16 && b == UINT16));
         case QUANT:
         case REQUANT:
         case DEQUANT:
@@ -186,14 +191,14 @@ void BinaryNgDeviceOperation::validate_on_program_cache_miss(
     bool tensor_a_sharded = input_tensor_a.memory_config().is_sharded();
     if (not tensor_a_sharded) {
         TT_FATAL(
-            input_tensor_a.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED,
+            input_tensor_a.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
             "LHS operand must be either sharded or interleaved");
     }
 
     bool output_sharded = attributes.memory_config.is_sharded();
     if (not output_sharded) {
         TT_FATAL(
-            attributes.memory_config.memory_layout == TensorMemoryLayout::INTERLEAVED,
+            attributes.memory_config.memory_layout() == TensorMemoryLayout::INTERLEAVED,
             "Output must be interleaved or sharded");
     }
 
@@ -208,7 +213,7 @@ void BinaryNgDeviceOperation::validate_on_program_cache_miss(
 
         if (not tensor_b_sharded) {
             TT_FATAL(
-                input_tensor_b->memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED,
+                input_tensor_b->memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
                 "RHS operand must be either sharded or interleaved");
         }
     }
@@ -217,32 +222,32 @@ void BinaryNgDeviceOperation::validate_on_program_cache_miss(
     if (tensor_a_sharded) {
         if (tensor_b_sharded) {
             validate_sharding(
-                input_tensor_a.memory_config().memory_layout,
+                input_tensor_a.memory_config().memory_layout(),
                 *input_tensor_a.shard_spec(),
-                input_tensor_b->memory_config().memory_layout,
+                input_tensor_b->memory_config().memory_layout(),
                 *input_tensor_b->shard_spec(),
                 attributes.subtile_broadcast_type);
         }
         if (output_sharded) {
             validate_sharding(
-                input_tensor_a.memory_config().memory_layout,
+                input_tensor_a.memory_config().memory_layout(),
                 *input_tensor_a.shard_spec(),
-                attributes.memory_config.memory_layout,
-                attributes.memory_config.shard_spec.value_or(*input_tensor_a.shard_spec()),
+                attributes.memory_config.memory_layout(),
+                attributes.memory_config.shard_spec().value_or(*input_tensor_a.shard_spec()),
                 attributes.subtile_broadcast_type);
         }
     } else if (tensor_b_sharded) {
         if (output_sharded) {
             validate_sharding(
-                input_tensor_b->memory_config().memory_layout,
+                input_tensor_b->memory_config().memory_layout(),
                 *input_tensor_b->shard_spec(),
-                attributes.memory_config.memory_layout,
-                attributes.memory_config.shard_spec.value_or(*input_tensor_b->shard_spec()),
+                attributes.memory_config.memory_layout(),
+                attributes.memory_config.shard_spec().value_or(*input_tensor_b->shard_spec()),
                 attributes.subtile_broadcast_type);
         }
     } else if (output_sharded) {
         TT_FATAL(
-            attributes.memory_config.shard_spec.has_value(),
+            attributes.memory_config.shard_spec().has_value(),
             "Sharded output memory config must have shard spec if neither input is sharded");
     }
 }
@@ -363,16 +368,20 @@ BinaryNgDeviceOperation::spec_return_value_t BinaryNgDeviceOperation::compute_ou
     }
 
     if (attributes.memory_config.is_sharded()) {
-        const auto& [memory_layout, buffer_type, shard_spec] = attributes.memory_config;
-        const auto& input_a_shard_spec = input_tensor_a.memory_config().shard_spec;
-        const auto& input_b_shard_spec = tensor_b.has_value() ? tensor_b->memory_config().shard_spec : std::nullopt;
+        const auto& memory_layout = attributes.memory_config.memory_layout();
+        const auto& buffer_type = attributes.memory_config.buffer_type();
+        const auto& shard_spec = attributes.memory_config.shard_spec();
+        const auto& input_a_shard_spec = input_tensor_a.memory_config().shard_spec();
+        const auto& input_b_shard_spec = tensor_b.has_value() ? tensor_b->memory_config().shard_spec() : std::nullopt;
         const auto& output_shard_spec = shard_spec.has_value()           ? *shard_spec
                                         : input_a_shard_spec.has_value() ? *input_a_shard_spec
                                                                          : *input_b_shard_spec;
         return TensorSpec(
             output_shape,
             TensorLayout(
-                attributes.get_dtype(), PageConfig(Layout::TILE), {memory_layout, buffer_type, output_shard_spec}));
+                attributes.get_dtype(),
+                PageConfig(Layout::TILE),
+                MemoryConfig(memory_layout, buffer_type, output_shard_spec)));
     }
 
     return TensorSpec(

@@ -33,7 +33,7 @@ Tensor MorehClipGradNorm::invoke(
     const std::optional<const Tensor>& total_norm,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
-    auto device = inputs.at(0).device();
+    auto device = inputs.at(0).mesh_device();
     const auto compute_kernel_config_val =
         init_device_compute_kernel_config(device->arch(), compute_kernel_config, MathFidelity::HiFi4);
 
@@ -81,7 +81,7 @@ Tensor MorehClipGradNorm::invoke(
 
     if (error_if_nonfinite) {
         const auto fp32_total_norm = tt::tt_metal::tensor_impl::cast_vec<float>(
-                                         tt::tt_metal::owned_buffer::get_as<bfloat16>(output_total_norm.cpu()))
+                                         tt::tt_metal::host_buffer::get_as<bfloat16>(output_total_norm.cpu()))
                                          .at(0);
         TT_FATAL(
             std::isfinite(fp32_total_norm),

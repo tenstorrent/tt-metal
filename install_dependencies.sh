@@ -85,6 +85,7 @@ ub_runtime_packages()
      libc++-17-dev \
      libc++abi-17-dev \
      libstdc++6 \
+     openmpi-bin \
     )
 }
 
@@ -103,6 +104,7 @@ ub_buildtime_packages()
      libc++abi-17-dev \
      build-essential \
      xz-utils \
+     libopenmpi-dev \
     )
 }
 
@@ -161,7 +163,7 @@ prep_ubuntu_build()
     echo "Preparing ubuntu ..."
     # Update the list of available packages
     apt-get update
-    apt-get install -y --no-install-recommends ca-certificates gpg lsb-release wget software-properties-common gnupg
+    apt-get install -y --no-install-recommends ca-certificates gpg lsb-release wget software-properties-common gnupg jq
     # The below is to bring cmake from kitware
     wget -O - https://apt.kitware.com/keys/kitware-archive-latest.asc 2>/dev/null | gpg --dearmor - | tee /usr/share/keyrings/kitware-archive-keyring.gpg >/dev/null
     echo "deb [signed-by=/usr/share/keyrings/kitware-archive-keyring.gpg] https://apt.kitware.com/ubuntu/ $UBUNTU_CODENAME main" | tee /etc/apt/sources.list.d/kitware.list >/dev/null
@@ -216,9 +218,31 @@ install_gcc() {
 }
 
 install_sfpi() {
-    TEMP_DIR=$(mktemp -d)
-    wget -P $TEMP_DIR  https://github.com/tenstorrent/sfpi/releases/download/v6.9.0/sfpi-x86_64-Linux.deb
-    apt-get install -y $TEMP_DIR/sfpi-x86_64-Linux.deb
+    local version_file=$(dirname $0)/tt_metal/sfpi-version.sh
+    if ! [[ -r $version_file ]] ; then
+	version_file=$(dirname $0)/sfpi-version.sh
+	if ! [[ -r $version_file ]] ; then
+	    echo "sfpi-version.sh not found" >&2
+	    exit 1
+	fi
+    fi
+    local $(grep -v '^#' $version_file)
+    local sfpi_arch_os=$(uname -m)_$(uname -s)
+    local sfpi_deb_md5=$(eval echo "\$sfpi_${sfpi_arch_os}_deb_md5")
+    if [ -z "$sfpi_deb_md5" ] ; then
+	echo "SFPI debian package for ${sfpi_arch_os} is not available" >&2
+	exit 1
+    fi
+    local TEMP_DIR=$(mktemp -d)
+    wget -P $TEMP_DIR "$sfpi_url/$sfpi_version/sfpi-${sfpi_arch_os}.deb"
+    if [ $(md5sum -b "${TEMP_DIR}/sfpi-${sfpi_arch_os}.deb" | cut -d' ' -f1) \
+	     != "$sfpi_deb_md5" ] ; then
+	echo "SFPI sfpi-${sfpi_arch_os}.deb md5 mismatch" >&2
+	rm -rf $TEMP_DIR
+	exit 1
+    fi
+    # we must select exactly this version
+    apt-get install -y --allow-downgrades $TEMP_DIR/sfpi-${sfpi_arch_os}.deb
     rm -rf $TEMP_DIR
 }
 
@@ -241,21 +265,22 @@ configure_hugepages() {
 install() {
     if [ $FLAVOR == "ubuntu" ]; then
         echo "Installing packages..."
-
 	case "$mode" in
             runtime)
                 prep_ubuntu_runtime
-		install_sfpi
+                install_sfpi
                 ;;
             build)
                 prep_ubuntu_build
                 install_llvm
-		install_gcc
+                install_gcc
                 ;;
             baremetal)
+                prep_ubuntu_runtime
+                install_sfpi
                 prep_ubuntu_build
                 install_llvm
-		install_gcc
+                install_gcc
                 configure_hugepages
                 ;;
         esac

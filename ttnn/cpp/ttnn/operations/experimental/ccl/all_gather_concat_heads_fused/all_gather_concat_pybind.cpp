@@ -7,11 +7,11 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 
-#include "cpp/pybind11/decorators.hpp"
+#include "ttnn-pybind/decorators.hpp"
 #include "ttnn/operations/experimental/ccl/all_gather_concat_heads_fused/all_gather_concat.hpp"
 #include "ttnn/operations/ccl/ccl_host_datastructures.hpp"
 #include "ttnn/distributed/types.hpp"
-#include "cpp/ttnn/global_semaphore.hpp"
+#include "ttnn/global_semaphore.hpp"
 
 namespace ttnn::operations::experimental::ccl {
 
@@ -32,10 +32,10 @@ void bind_all_gather_concat(pybind11::module& module, const ccl_operation_t& ope
                const int32_t dim,
                const uint32_t cluster_axis,
                const MeshDevice& mesh_device,
-               const global_semaphore::MultiDeviceGlobalSemaphore& multi_device_global_semaphore,
+               const GlobalSemaphore& global_semaphore,
                const uint32_t num_heads,
+               const ttnn::MemoryConfig& memory_config,
                const std::optional<uint32_t> num_links,
-               const std::optional<ttnn::MemoryConfig>& memory_config,
                const ttnn::ccl::Topology topology,
                std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
                QueueId queue_id) -> ttnn::Tensor {
@@ -46,10 +46,10 @@ void bind_all_gather_concat(pybind11::module& module, const ccl_operation_t& ope
                     dim,
                     cluster_axis,
                     mesh_device,
-                    multi_device_global_semaphore,
+                    global_semaphore,
                     num_heads,
-                    num_links,
                     memory_config,
+                    num_links,
                     topology,
                     subdevice_id);
             },
@@ -60,9 +60,9 @@ void bind_all_gather_concat(pybind11::module& module, const ccl_operation_t& ope
             py::arg("mesh_device"),
             py::arg("multi_device_global_semaphore"),
             py::arg("num_heads").noconvert(),
+            py::arg("memory_config"),
             py::kw_only(),
             py::arg("num_links") = 1,
-            py::arg("memory_config") = std::nullopt,
             py::arg("topology") = ttnn::ccl::Topology::Linear,
             py::arg("subdevice_id") = std::nullopt,
             py::arg("queue_id") = DefaultQueueId});

@@ -23,7 +23,7 @@ struct MorehClipGradNorm {
 }  // namespace ttnn::operations::moreh::moreh_clip_grad_norm
 
 namespace ttnn {
-constexpr auto moreh_clip_grad_norm = ttnn::register_operation_with_auto_launch_op<
+constexpr auto moreh_clip_grad_norm = ttnn::register_operation<
     "ttnn::moreh_clip_grad_norm",
     ttnn::operations::moreh::moreh_clip_grad_norm::MorehClipGradNorm>();
 }  // namespace ttnn

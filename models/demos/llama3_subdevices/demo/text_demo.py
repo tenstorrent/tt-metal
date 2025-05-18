@@ -18,10 +18,8 @@ from models.demos.llama3_subdevices.tt.model_config import LlamaOptimizations
 from models.tt_transformers.tt.common import (
     preprocess_inputs_prefill,
     PagedAttentionConfig,
-    sample_host,
 )
 from models.perf.benchmarking_utils import BenchmarkProfiler
-from models.demos.utils.llm_demo_utils import create_benchmark_data
 
 
 def load_and_cache_context(context_url, cache_dir, max_length=None):
@@ -143,6 +141,7 @@ def create_tt_model(
         weight_cache_path=tt_model_args.weight_cache_path(dtype),
         paged_attention_config=paged_attention_config,
         mode="prefill",
+        enable_prefetcher_performance_mode=True,
     )
 
     if use_paged_kv_cache:
@@ -173,11 +172,11 @@ def create_tt_model(
             "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
             True,  # instruct mode
             1,  # repeat_batches
-            1024,  # max_seq_len
+            128 * 1024,  # max_seq_len
             32,  # batch_size
             200,  # max_generated_tokens
             True,  # paged_attention
-            {"page_block_size": 32, "page_max_num_blocks": 1024},  # page_params
+            {"page_block_size": 64, "page_max_num_blocks": 4096},  # page_params
             {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
             True,  # stop_at_eos
             False,  # ci_only
@@ -186,11 +185,11 @@ def create_tt_model(
             "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
             True,  # instruct mode
             2,  # repeat_batches
-            1024,  # max_seq_len
+            128 * 1024,  # max_seq_len
             32,  # batch_size
             200,  # max_generated_tokens
             True,  # paged_attention
-            {"page_block_size": 32, "page_max_num_blocks": 1024},  # page_params
+            {"page_block_size": 64, "page_max_num_blocks": 4096},  # page_params
             {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
             True,  # stop_at_eos
             False,  # ci_only
@@ -199,62 +198,20 @@ def create_tt_model(
             "models/tt_transformers/demo/sample_prompts/input_data_long_8k.json",  # input_prompts
             True,  # instruct mode
             1,  # repeat_batches
-            16 * 1024,  # max_seq_len
+            128 * 1024,  # max_seq_len
             32,  # batch_size
             200,  # max_generated_tokens
-            False,  # paged_attention
-            {"page_block_size": 32, "page_max_num_blocks": 2048},  # page_params
+            True,  # paged_attention
+            {"page_block_size": 64, "page_max_num_blocks": 4096},  # page_params
             {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
             True,  # stop_at_eos
             False,  # ci_only
-        ),
-        (  # Batch-1 run (Reasoning) - single user, small prompt, long thinking time
-            "models/tt_transformers/demo/input_data_questions_reasoning.json",  # input_prompts
-            True,  # instruct mode
-            1,  # repeat_batches
-            16 * 1024,  # max_seq_len
-            1,  # batch_size
-            15000,  # max_generated_tokens
-            True,  # paged_attention
-            {"page_block_size": 32, "page_max_num_blocks": 1024},  # page_params  # TODO This will be serviced by vLLM
-            {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
-            False,  # stop_at_eos
-            False,  # ci_only
-        ),
-        (  # CI Batch-1 run - Measures the performance of a single user over 4096 iterations
-            "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
-            True,  # instruct mode
-            1,  # repeat_batches
-            8192,  # max_seq_len
-            1,  # batch_size
-            4096,  # max_generated_tokens
-            True,  # paged_attention
-            {"page_block_size": 32, "page_max_num_blocks": 1024},  # page_params
-            {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
-            False,  # stop_at_eos
-            True,  # ci_only
-        ),
-        (  # CI Batch-32 run - Measures the performance of a 32 users over 4096 iterations
-            "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
-            True,  # instruct mode
-            1,  # repeat_batches
-            2000,  # max_seq_len
-            32,  # batch_size
-            1024,  # max_generated_tokens  # TODO Update this to 4096, and make sure it fits in DRAM with correct page_params
-            True,  # paged_attention  # TODO Find the correct paged_attn params to avoid hangs in this config with long context generation
-            {"page_block_size": 64, "page_max_num_blocks": 1024},  # page_params
-            {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
-            False,  # stop_at_eos
-            True,  # ci_only
         ),
     ],
     ids=[
         "batch-32",  # throughput
         "repeat2",  # throughput with 5 repeat batches
         "long-context",  # max-length
-        "reasoning-1",  # reasoning
-        "ci-1",  # CI batch 1
-        "ci-32",  # CI batch 32
     ],
 )
 @pytest.mark.parametrize(
@@ -310,7 +267,6 @@ def test_demo_text(
     if os.environ.get("MESH_DEVICE") == "TG" and batch_size not in [32]:
         pytest.skip("Llama TG only supports batch-32")
 
-    mesh_device.enable_async(True)
     enable_trace = True  # Use tracing for better perf
     prefill_enable_trace = repeat_batches > 1
     print_to_file = False  # Enable this flag to print the output of all users to a file
@@ -409,6 +365,16 @@ def test_demo_text(
             max_generated_tokens + max_encoded_prompt_len <= max_seq_len
         ), f"Prompt prefill tokens ({max_encoded_prompt_len}) + maximum number of decoded iterations ({max_generated_tokens}) needs to be <= than max_seq_len ({max_seq_len})"
 
+        if paged_attention:
+            paged_cache_max_seq_len = (
+                page_params["page_block_size"]
+                * page_params["page_max_num_blocks"]
+                / model_args.batch_size_per_device_group
+            )
+            assert (
+                max_generated_tokens + max_encoded_prompt_len <= paged_cache_max_seq_len
+            ), f"max_generated_tokens ({max_generated_tokens}) needs to be <= than paged_cache_max_seq_len ({paged_cache_max_seq_len})"
+
         profiler.end(f"preprocess_prefill_inputs", iteration=batch_idx)
 
         # when doing repeating batches, set kv-caches to zero, to avoid context leaking
@@ -495,31 +461,18 @@ def test_demo_text(
 
             # Run decode forward
             try:
-                logits = generator.decode_forward_text(
+                out_tok_cpu = generator.decode_forward_text(
                     out_tok,
                     current_pos,
                     enable_trace=enable_trace,
                     page_table=page_table,
                     kv_cache=tt_kv_cache,
                     sampling_params=device_sampling_params,
+                    reset_inputs=iteration == 0,
                 )
             except Exception as e:
                 logger.error(f"Error during decoding: {str(e)}")
                 break
-
-            # Get the next token
-            if argmax_on_device:
-                out_tok = logits.unsqueeze(1)
-                for b in range(1, 32):
-                    out_tok[b][0] = 0
-            else:
-                # TODO Fix use case with temperature > 0
-                _, out_tok = sample_host(
-                    logits,
-                    temperature=sampling_params["temperature"],
-                    top_p=sampling_params["top_p"],
-                    on_host=True,
-                )
 
             if iteration == 0:  # First iteration will account the compile time
                 profiler.end(f"compile_decode", iteration=batch_idx)
@@ -527,19 +480,20 @@ def test_demo_text(
             else:
                 profiler.end(f"inference_decode_time_{iteration}", iteration=batch_idx)
                 decode_iteration_time = profiler.get_duration(f"inference_decode_time_{iteration}", iteration=batch_idx)
+            tt_output_torch = out_tok_cpu
 
             # Always print perf after every iteration
             tokens_per_second_per_user = 1 / decode_iteration_time
-            if repeat_batches == 1:
-                logger.info(
-                    f"Iteration {iteration}: {1000*decode_iteration_time:.0f}ms @ {tokens_per_second_per_user:.1f} tok/s/user ({batch_size*tokens_per_second_per_user:.1f} tok/s throughput)"
-                )
+            # if repeat_batches == 1:
+            logger.info(
+                f"Iteration {iteration}: {1000*decode_iteration_time:.0f}ms @ {tokens_per_second_per_user:.1f} tok/s/user ({batch_size*tokens_per_second_per_user:.1f} tok/s throughput)"
+            )
 
             current_pos += 1
 
             # Save output token to print out later
             for user in range(batch_size):
-                user_tok = out_tok[user].item()
+                user_tok = tt_output_torch.tolist()[0]
                 if (
                     user_tok not in tokenizer.stop_tokens and user_done[user] == False
                 ):  # Read until an eos token (e.g. <|eot_id|>); create_tokenizer adds stop_tokens to HF tokenizers
@@ -554,7 +508,7 @@ def test_demo_text(
                             users_decoding = False
 
             # Print out generated outputs for each user at the end of every iteration
-            if not is_ci_env and repeat_batches == 1:
+            if not is_ci_env:
                 for user in range(1):
                     text = "".join(tokenizer.decode(all_outputs[user]))
                     if len(text) > 100:
@@ -703,47 +657,47 @@ def test_demo_text(
         "decode_t/s/u": target_decode_tok_s_u,
     }
     if repeat_batches > 1:
-        assert avg_time_to_first_token * 1000 > 119, f"TTFT {avg_time_to_first_token} ms is too low, should be > 119."
+        assert avg_time_to_first_token * 1000 < 122, f"TTFT {avg_time_to_first_token} ms is too high, should be < 122."
 
     # Save benchmark data for CI dashboard
-    if is_ci_env:
-        # Instead of running warmup iterations, the demo profiles the initial compile iteration
-        bench_n_warmup_iter = {"inference_prefill": 0, "inference_decode": 1}
-        benchmark_data = create_benchmark_data(profiler, measurements, bench_n_warmup_iter, targets)
+    # if is_ci_env:
+    #     # Instead of running warmup iterations, the demo profiles the initial compile iteration
+    #     bench_n_warmup_iter = {"inference_prefill": 0, "inference_decode": 1}
+    #     benchmark_data = create_benchmark_data(profiler, measurements, bench_n_warmup_iter, targets)
 
-        # Save the decode performance of every iteration for plotting in superset
-        for i in range(1, iteration):
-            benchmark_data.add_measurement(
-                profiler,
-                0,
-                "inference_decode",
-                f"time_to_token_{i}",
-                profiler.get_duration(f"inference_decode_time_{i}") * 1000,
-                step_warm_up_num_iterations=None,
-                target=None,
-            )
+    #     # Save the decode performance of every iteration for plotting in superset
+    #     for i in range(1, iteration):
+    #         benchmark_data.add_measurement(
+    #             profiler,
+    #             0,
+    #             "inference_decode",
+    #             f"time_to_token_{i}",
+    #             profiler.get_duration(f"inference_decode_time_{i}") * 1000,
+    #             step_warm_up_num_iterations=None,
+    #             target=None,
+    #         )
 
-        # Also save the avg decode performance for the 128 iterations (excluding the compile time)
-        inference_decode_time_first_128 = sum(
-            profiler.get_duration(f"inference_decode_time_{i}") for i in range(1, 128)
-        )
-        benchmark_data.add_measurement(
-            profiler,
-            0,
-            "inference_decode",
-            "avg_decode_time_first_128",
-            inference_decode_time_first_128 * 1000 / 127,
-            step_warm_up_num_iterations=None,
-            target=None,
-        )
+    #     # Also save the avg decode performance for the 128 iterations (excluding the compile time)
+    #     inference_decode_time_first_128 = sum(
+    #         profiler.get_duration(f"inference_decode_time_{i}") for i in range(1, 128)
+    #     )
+    #     benchmark_data.add_measurement(
+    #         profiler,
+    #         0,
+    #         "inference_decode",
+    #         "avg_decode_time_first_128",
+    #         inference_decode_time_first_128 * 1000 / 127,
+    #         step_warm_up_num_iterations=None,
+    #         target=None,
+    #     )
 
-        benchmark_data.save_partial_run_json(
-            profiler,
-            run_type=f"{tt_device_name}-demo",
-            ml_model_name=model_args.base_model_name,
-            ml_model_type="llm",
-            num_layers=model_args.n_layers,
-            batch_size=batch_size,
-            input_sequence_length=max(prefill_lens),
-            output_sequence_length=num_tokens_generated_decode[0],
-        )
+    #     benchmark_data.save_partial_run_json(
+    #         profiler,
+    #         run_type=f"{tt_device_name}-demo",
+    #         ml_model_name=model_args.base_model_name,
+    #         ml_model_type="llm",
+    #         num_layers=model_args.n_layers,
+    #         batch_size=batch_size,
+    #         input_sequence_length=max(prefill_lens),
+    #         output_sequence_length=num_tokens_generated_decode[0],
+    #     )

@@ -28,8 +28,25 @@ std::vector<ttnn::TensorSpec> AllReduce::compute_output_specs(const std::vector<
     return std::vector<ttnn::TensorSpec>(input_tensors.size(), spec);
 }
 
-tt::tt_metal::operation::ProgramWithCallbacks AllReduce::create_program(
-    const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const {
+tt::tt_metal::operation::MeshWorkloadWithCallbacks AllReduce::create_mesh_workload(
+    const ttnn::MeshCoordinateRangeSet& tensor_coords,
+    const std::vector<Tensor>& input_tensors,
+    std::vector<Tensor>& output_tensors) const {
+    return ccl::create_mesh_workload_from_programs(
+        tensor_coords, input_tensors, output_tensors, [&, this](const ttnn::MeshCoordinate& coord) {
+            return create_program_at(coord, input_tensors, output_tensors);
+        });
+};
+
+tt::tt_metal::operation::ProgramWithCallbacks AllReduce::create_program_at(
+    const ttnn::MeshCoordinate& coord,
+    const std::vector<Tensor>& input_tensors,
+    std::vector<Tensor>& output_tensors) const {
+    auto target_device =
+        input_tensors[0].mesh_device() ? input_tensors[0].mesh_device()->get_device(coord) : input_tensors[0].device();
+    ttnn::ccl::SenderRecieverConfig config =
+        ttnn::ccl::get_device_sender_receiver_config(target_device, this->devices, this->topology);
+
     return ccl::reduce_scatter_detail::reduce_scatter_with_workers(
         input_tensors.at(0),
         output_tensors.at(0),
@@ -37,9 +54,10 @@ tt::tt_metal::operation::ProgramWithCallbacks AllReduce::create_program(
         0,
         this->num_links,
         this->ring_size,
-        this->ring_index,
-        this->receiver_device_id,
-        this->sender_device_id,
+        config.device_index,
+        target_device->id(),
+        config.receiver_device_id,
+        config.sender_device_id,
         this->topology,
         this->user_defined_num_workers,
         this->user_defined_num_buffers_per_channel);
@@ -127,7 +145,6 @@ static Tensor all_gather_local_reduce(
         "Falling back to unoptimized version (all_gather + local reduce) as the input tensor shape {} is not handled "
         "by optimized version",
         shape);
-
     if (num_devices == 2) {
         // 2 devices == n300 == linear topology
         topology = ttnn::ccl::Topology::Linear;
@@ -141,21 +158,84 @@ static Tensor all_gather_local_reduce(
 
     std::vector<int32_t> new_shape{1, merged_dim_size, shape[rank - 2], shape[rank - 1]};
     auto reshaped_tensor = ttnn::reshape(input_tensor, new_shape);
-
     const auto& gathered_tensor = tt::tt_metal::operation::run(
-        ttnn::ccl::all_gather_detail::create_all_gather_struct(
-            reshaped_tensor,
-            0,
-            num_links,
-            output_mem_config,
-            user_defined_num_workers,
-            user_defined_num_buffers_per_channel,
-            devices,
-            topology),
+        ttnn::AllGather{
+            .dim = 0,
+            .num_links = num_links,
+            .ring_size = num_devices,
+            .user_defined_num_workers = user_defined_num_workers,
+            .user_defined_num_buffers_per_channel = user_defined_num_buffers_per_channel,
+            .output_mem_config = output_mem_config,
+            .topology = topology,
+            .cluster_axis = std::nullopt,
+            .devices = devices},
         {reshaped_tensor});
 
     auto sum_tensor = ttnn::sum(gathered_tensor.at(0), 0);
     return ttnn::reshape(sum_tensor, shape);
+}
+
+static std::vector<Tensor> all_gather_local_reduce(
+    const std::vector<Tensor>& input_tensors,
+    uint32_t num_devices,
+    uint32_t num_links,
+    const MemoryConfig& output_mem_config,
+    const std::optional<size_t> user_defined_num_workers,
+    const std::optional<size_t> user_defined_num_buffers_per_channel,
+    const std::vector<IDevice*>& devices,
+    ttnn::ccl::Topology topology) {
+    auto shape = input_tensors.at(0).get_logical_shape();
+    auto rank = shape.rank();
+    log_warning(
+        tt::LogOp,
+        "Falling back to unoptimized version (all_gather + local reduce) as the input tensor shape {} is not handled "
+        "by optimized version",
+        shape);
+    if (num_devices == 2) {
+        // 2 devices == n300 == linear topology
+        topology = ttnn::ccl::Topology::Linear;
+    }
+
+    TT_FATAL(rank == 4, "Tensor rank must be 4, but has {} ", rank);
+    uint32_t merged_dim_size = 1;
+    for (uint32_t i = 2; i < rank; ++i) {
+        merged_dim_size *= shape[i - 2];
+    }
+
+    std::vector<int32_t> new_shape{1, merged_dim_size, shape[rank - 2], shape[rank - 1]};
+    std::vector<Tensor> reshaped_tensors;
+    reshaped_tensors.reserve(input_tensors.size());
+    for (const auto& input_tensor : input_tensors) {
+        reshaped_tensors.push_back(ttnn::reshape(input_tensor, new_shape));
+    }
+    std::vector<Tensor> gathered_tensors;
+    gathered_tensors.reserve(input_tensors.size());
+    for (const auto& reshaped_tensor : reshaped_tensors) {
+        const auto& gathered_tensor = tt::tt_metal::operation::run(
+            ttnn::AllGather{
+                .dim = 0,
+                .num_links = num_links,
+                .ring_size = num_devices,
+                .user_defined_num_workers = user_defined_num_workers,
+                .user_defined_num_buffers_per_channel = user_defined_num_buffers_per_channel,
+                .output_mem_config = output_mem_config,
+                .topology = topology,
+                .cluster_axis = std::nullopt,
+                .devices = devices},
+            {reshaped_tensor});
+        gathered_tensors.push_back(gathered_tensor.at(0));
+    }
+    std::vector<Tensor> reduced_tensors;
+    reduced_tensors.reserve(input_tensors.size());
+    for (const auto& gathered_tensor : gathered_tensors) {
+        reduced_tensors.push_back(ttnn::sum(gathered_tensor, 0));
+    }
+    std::vector<Tensor> output_tensors;
+    output_tensors.reserve(input_tensors.size());
+    for (const auto& reduced_tensor : reduced_tensors) {
+        output_tensors.push_back(ttnn::reshape(reduced_tensor, shape));
+    }
+    return output_tensors;
 }
 
 static Tensor reduce_scatter_all_gather(
@@ -179,31 +259,96 @@ static Tensor reduce_scatter_all_gather(
     }
 
     const auto& reduced_tensor = tt::tt_metal::operation::run(
-        ttnn::ccl::reduce_scatter_detail::create_reduce_scatter_struct(
-            input_tensor,
-            binary_op_type,
-            all_reduce_dim,
-            num_links,
-            output_mem_config,
-            user_defined_num_workers,
-            user_defined_num_buffers_per_channel,
-            devices,
-            topology),
+        ttnn::ReduceScatter{
+            .binary_op_type = binary_op_type,
+            .scatter_dim = all_reduce_dim,
+            .num_links = num_links,
+            .ring_size = num_devices,
+            .output_mem_config = output_mem_config,
+            .topology = topology,
+            .user_defined_num_workers = user_defined_num_workers,
+            .user_defined_num_buffers_per_channel = user_defined_num_buffers_per_channel,
+            .cluster_axis = std::nullopt,
+            .devices = devices},
         {input_tensor});
 
     const auto& gathered_tensor = tt::tt_metal::operation::run(
-        ttnn::ccl::all_gather_detail::create_all_gather_struct(
-            reduced_tensor.at(0),
-            all_reduce_dim,
-            num_links,
-            output_mem_config,
-            user_defined_num_workers,
-            user_defined_num_buffers_per_channel,
-            devices,
-            topology),
+        ttnn::AllGather{
+            .dim = all_reduce_dim,
+            .num_links = num_links,
+            .ring_size = num_devices,
+            .user_defined_num_workers = user_defined_num_workers,
+            .user_defined_num_buffers_per_channel = user_defined_num_buffers_per_channel,
+            .output_mem_config = output_mem_config,
+            .topology = topology,
+            .cluster_axis = std::nullopt,
+            .devices = devices},
         {reduced_tensor.at(0)});
 
     return gathered_tensor.at(0);
+}
+
+static std::vector<Tensor> reduce_scatter_all_gather(
+    const std::vector<Tensor>& input_tensors,
+    const ttnn::operations::binary::BinaryOpType binary_op_type,
+    uint32_t num_devices,
+    uint32_t num_links,
+    const MemoryConfig& output_mem_config,
+    const std::optional<size_t> user_defined_num_workers,
+    const std::optional<size_t> user_defined_num_buffers_per_channel,
+    const std::vector<IDevice*>& devices,
+    const ttnn::ccl::Topology& topology) {
+    auto shape = input_tensors.at(0).get_logical_shape();
+    auto rank = shape.rank();
+
+    uint32_t all_reduce_dim = -1;
+    for (uint32_t i = 0; i < rank; ++i) {
+        if (shape[i] % num_devices == 0) {
+            all_reduce_dim = i;
+        }
+    }
+
+    std::vector<Tensor> reduced_tensors;
+    reduced_tensors.reserve(input_tensors.size());
+    for (const auto& input_tensor : input_tensors) {
+        const auto& reduced_tensor = tt::tt_metal::operation::run(
+            ttnn::ReduceScatter{
+                .binary_op_type = binary_op_type,
+                .scatter_dim = all_reduce_dim,
+                .num_links = num_links,
+                .ring_size = num_devices,
+                .output_mem_config = output_mem_config,
+                .topology = topology,
+                .user_defined_num_workers = user_defined_num_workers,
+                .user_defined_num_buffers_per_channel = user_defined_num_buffers_per_channel,
+                .cluster_axis = std::nullopt,
+                .devices = devices},
+            {input_tensor});
+        reduced_tensors.push_back(reduced_tensor.at(0));
+    }
+    std::vector<Tensor> gathered_tensors;
+    gathered_tensors.reserve(input_tensors.size());
+    for (const auto& reduced_tensor : reduced_tensors) {
+        const auto& gathered_tensor = tt::tt_metal::operation::run(
+            ttnn::AllGather{
+                .dim = all_reduce_dim,
+                .num_links = num_links,
+                .ring_size = num_devices,
+                .user_defined_num_workers = user_defined_num_workers,
+                .user_defined_num_buffers_per_channel = user_defined_num_buffers_per_channel,
+                .output_mem_config = output_mem_config,
+                .topology = topology,
+                .cluster_axis = std::nullopt,
+                .devices = devices},
+            {reduced_tensor});
+        gathered_tensors.push_back(gathered_tensor.at(0));
+    }
+    std::vector<Tensor> output_tensors;
+    output_tensors.reserve(input_tensors.size());
+    for (const auto& gathered_tensor : gathered_tensors) {
+        output_tensors.push_back(ttnn::reshape(gathered_tensor, shape));
+    }
+    return output_tensors;
 }
 
 Tensor run_all_reduce(
@@ -249,6 +394,49 @@ Tensor run_all_reduce(
     }
 }
 
+std::vector<Tensor> run_all_reduce(
+    AllReduceStrategy strategy,
+    const std::vector<Tensor>& input_tensors,
+    const ttnn::operations::binary::BinaryOpType binary_op_type,
+    uint32_t num_devices,
+    uint32_t num_links,
+    const MemoryConfig& output_mem_config,
+    const std::optional<size_t> user_defined_num_workers,
+    const std::optional<size_t> user_defined_num_buffers_per_channel,
+    const std::vector<IDevice*>& devices,
+    const ttnn::ccl::Topology& topology) {
+    switch (strategy) {
+        case AllReduceStrategy::AllGatherLocalReduce:
+            return all_gather_local_reduce(
+                input_tensors,
+                num_devices,
+                num_links,
+                output_mem_config,
+                user_defined_num_workers,
+                user_defined_num_buffers_per_channel,
+                devices,
+                topology);
+        case AllReduceStrategy::ReduceScatterAllGather:
+            return reduce_scatter_all_gather(
+                input_tensors,
+                binary_op_type,
+                num_devices,
+                num_links,
+                output_mem_config,
+                user_defined_num_workers,
+                user_defined_num_buffers_per_channel,
+                devices,
+                topology);
+        case AllReduceStrategy::Invalid:
+        default:
+            TT_FATAL(
+                false,
+                "Invalid strategy selected {} for input tensor shape: {}",
+                strategy,
+                input_tensors.at(0).get_logical_shape());
+    }
+}
+
 Tensor all_reduce(
     const Tensor& input_tensor,
     ttnn::operations::reduction::ReduceType math_op,
@@ -262,50 +450,67 @@ Tensor all_reduce(
     TT_FATAL(
         std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr, "All Reduce op is only supported for Fast Dispatch");
 
-    auto devices = input_tensor.get_workers();
+    std::vector<IDevice*> devices = input_tensor.active_physical_devices();
     uint32_t num_devices = devices.size();
     TT_FATAL(num_devices > 1, "all_reduce op will only work for num_devices > 1, but has {}", num_devices);
 
-    std::vector<Tensor> output_tensors = {Tensor(tt::tt_metal::operation::get_workers_for_op_output({input_tensor}))};
-    tt::tt_metal::operation::launch_op(
-        [binary_op_type,
-         num_links,
-         num_devices,
-         output_mem_config,
-         topology,
-         devices,
-         user_defined_num_workers,
-         user_defined_num_buffers_per_channel](
-            const std::vector<Tensor>& input_tensors,
-            const std::vector<std::optional<const Tensor>>& optional_input_tensors,
-            const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
-            TT_FATAL(input_tensors.size() >= 1, "All reduce op expects an input tensor but it received none");
-            bool is_linear = topology == ttnn::ccl::Topology::Linear;
+    bool is_linear = topology == ttnn::ccl::Topology::Linear;
 
-            const auto& input_tensor = input_tensors.at(0);
+    // Choose the appropriate strategy
+    AllReduceStrategy strategy = choose_all_reduce_strategy(input_tensor, num_devices, num_links, topology);
 
-            // Choose the appropriate strategy
-            AllReduceStrategy strategy = choose_all_reduce_strategy(input_tensor, num_devices, num_links, topology);
+    // Run the selected all-reduce operation
+    return run_all_reduce(
+        strategy,
+        input_tensor,
+        binary_op_type,
+        num_devices,
+        num_links,
+        output_mem_config,
+        user_defined_num_workers,
+        user_defined_num_buffers_per_channel,
+        devices,
+        topology);
+}
 
-            // Run the selected all-reduce operation
-            Tensor result = run_all_reduce(
-                strategy,
-                input_tensor,
-                binary_op_type,
-                num_devices,
-                num_links,
-                output_mem_config,
-                user_defined_num_workers,
-                user_defined_num_buffers_per_channel,
-                devices,
-                topology);
+std::vector<Tensor> all_reduce(
+    const std::vector<Tensor>& input_tensors,
+    ttnn::operations::reduction::ReduceType math_op,
+    const uint32_t num_links,
+    const MemoryConfig& output_mem_config,
+    ttnn::ccl::Topology topology,
+    const std::optional<size_t> user_defined_num_workers,
+    const std::optional<size_t> user_defined_num_buffers_per_channel) {
+    using namespace CMAKE_UNIQUE_NAMESPACE;
+    ttnn::operations::binary::BinaryOpType binary_op_type = convert_reduce_type_to_eltwise_type(math_op);
+    TT_FATAL(
+        std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr, "All Reduce op is only supported for Fast Dispatch");
 
-            return {result};
-        },
-        {input_tensor},
-        output_tensors);
+    std::vector<IDevice*> devices;
+    devices.reserve(input_tensors.size());
+    for (const auto& input_tensor : input_tensors) {
+        devices.push_back(input_tensor.device());
+    }
+    uint32_t num_devices = devices.size();
+    TT_FATAL(num_devices > 1, "all_reduce op will only work for num_devices > 1, but has {}", num_devices);
 
-    return output_tensors.at(0);
+    bool is_linear = topology == ttnn::ccl::Topology::Linear;
+
+    // Choose the appropriate strategy
+    AllReduceStrategy strategy = choose_all_reduce_strategy(input_tensors.at(0), num_devices, num_links, topology);
+
+    // Run the selected all-reduce operation
+    return run_all_reduce(
+        strategy,
+        input_tensors,
+        binary_op_type,
+        num_devices,
+        num_links,
+        output_mem_config,
+        user_defined_num_workers,
+        user_defined_num_buffers_per_channel,
+        devices,
+        topology);
 }
 
 }  // namespace ccl

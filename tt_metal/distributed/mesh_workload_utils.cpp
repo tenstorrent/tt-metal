@@ -7,11 +7,10 @@
 #include "impl/context/metal_context.hpp"
 #include "dispatch/kernels/cq_commands.hpp"
 #include "dispatch_core_common.hpp"
-#include "dispatch_mem_map.hpp"
 #include "hal.hpp"
 #include "hal_types.hpp"
 #include <tt_stl/strong_type.hpp>
-#include "system_memory_manager.hpp"
+#include "dispatch/system_memory_manager.hpp"
 #include "tt_align.hpp"
 #include "tt_metal/distributed/mesh_workload_utils.hpp"
 #include "tt_metal/impl/dispatch/device_command.hpp"
@@ -31,8 +30,7 @@ void write_go_signal(
     uint32_t expected_num_workers_completed,
     CoreCoord dispatch_core,
     bool send_mcast,
-    bool send_unicasts,
-    int num_unicast_txns) {
+    bool send_unicasts) {
     uint32_t pcie_alignment = MetalContext::instance().hal().get_alignment(HalMemType::HOST);
     uint32_t cmd_sequence_sizeB = align(sizeof(CQPrefetchCmd) + sizeof(CQDispatchCmd), pcie_alignment) +
                                   MetalContext::instance().hal().get_alignment(HalMemType::HOST);
@@ -40,7 +38,6 @@ void write_go_signal(
     void* cmd_region = sysmem_manager.issue_queue_reserve(cmd_sequence_sizeB, cq_id);
 
     auto dispatch_core_config = MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_config();
-    CoreType dispatch_core_type = dispatch_core_config.get_core_type();
     auto sub_device_index = *sub_device_id;
 
     HugepageDeviceCommand go_signal_cmd_sequence(cmd_region, cmd_sequence_sizeB);
@@ -49,7 +46,7 @@ void write_go_signal(
     run_program_go_signal.master_x = dispatch_core.x;
     run_program_go_signal.master_y = dispatch_core.y;
     run_program_go_signal.dispatch_message_offset =
-        DispatchMemMap::get(dispatch_core_type).get_dispatch_message_update_offset(sub_device_index);
+        MetalContext::instance().dispatch_mem_map().get_dispatch_message_update_offset(sub_device_index);
 
     // When running with dispatch_s enabled:
     //   - dispatch_d must notify dispatch_s that a go signal can be sent
@@ -64,14 +61,14 @@ void write_go_signal(
         go_signal_cmd_sequence.add_notify_dispatch_s_go_signal_cmd(
             0,                                   /* wait */
             index_bitmask /* index_bitmask */);  // When running on sub devices, we must account for this
-        dispatcher_for_go_signal = DispatcherSelect::DISPATCH_SLAVE;
+        dispatcher_for_go_signal = DispatcherSelect::DISPATCH_SUBORDINATE;
     }
     go_signal_cmd_sequence.add_dispatch_go_signal_mcast(
         expected_num_workers_completed,
         *reinterpret_cast<uint32_t*>(&run_program_go_signal),
-        DispatchMemMap::get(dispatch_core_type).get_dispatch_stream_index(sub_device_index),
+        MetalContext::instance().dispatch_mem_map().get_dispatch_stream_index(sub_device_index),
         send_mcast ? device->num_noc_mcast_txns(sub_device_id) : 0,
-        send_unicasts ? ((num_unicast_txns > 0) ? num_unicast_txns : device->num_noc_unicast_txns(sub_device_id)) : 0,
+        send_unicasts ? device->num_virtual_eth_cores(sub_device_id) : 0,
         device->noc_data_start_index(sub_device_id, send_mcast, send_unicasts), /* noc_data_start_idx */
         dispatcher_for_go_signal);
 

@@ -106,13 +106,14 @@ jobs:
       matrix:
         platform: [
           "N300",
+          "N300-llmbox",
         ]
     uses: ./.github/workflows/smoke.yaml
     with:
       docker-image: ${{ needs.build-tsan.outputs.dev-docker-image }}
       package-artifact-name: ${{ needs.build-tsan.outputs.packages-artifact-name }}
       runner: ${{ matrix.platform }}
-      per-test-timeout: 5.5 # TSan can be slow; relax the timeout a bit
+      per-test-timeout: 10 # TSan can be slow; relax the timeout somewhat
 
   build-asan:
     if: ${{ github.ref_name == 'main' ||

@@ -12,7 +12,7 @@
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/circular_buffer_types.hpp>
+#include <tt-metalium/circular_buffer_config.hpp>
 
 #include "ttnn/operations/eltwise/binary/common/binary_op_types.hpp"
 #include "ttnn/operations/eltwise/binary/common/binary_op_utils.hpp"
@@ -632,6 +632,7 @@ operation::ProgramWithCallbacks reduce_scatter_with_workers(
     const uint32_t num_links,
     const uint32_t ring_size,
     const uint32_t ring_index,
+    chip_id_t target_device_id,
     const std::optional<chip_id_t> receiver_device_id,
     const std::optional<chip_id_t> sender_device_id,
     ttnn::ccl::Topology topology,
@@ -687,7 +688,8 @@ operation::ProgramWithCallbacks reduce_scatter_with_workers(
         edm_termination_mode);
     TT_ASSERT(num_edm_channels_per_link > 0);
 
-    const auto& device = input_tensor.device();
+    const auto& device =
+        input_tensor.mesh_device() ? input_tensor.mesh_device()->get_device(target_device_id) : input_tensor.device();
     auto const& topology_config = ttnn::ccl::RingTopology(
         device, topology, sender_device_id, receiver_device_id, num_links, ring_size, ring_index);
     bool is_linear = topology_config.is_linear;

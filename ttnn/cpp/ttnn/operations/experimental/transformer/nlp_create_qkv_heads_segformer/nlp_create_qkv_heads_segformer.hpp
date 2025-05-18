@@ -27,7 +27,7 @@ struct NLPCreateHeadsSegformerOperation {
 
 namespace experimental {
 
-constexpr auto nlp_create_qkv_heads_segformer = ttnn::register_operation_with_auto_launch_op<
+constexpr auto nlp_create_qkv_heads_segformer = ttnn::register_operation<
     "ttnn::experimental::nlp_create_qkv_heads_segformer",
     ttnn::operations::experimental::transformer::NLPCreateHeadsSegformerOperation>();
 

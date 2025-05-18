@@ -13,6 +13,7 @@
 #include "ttnn/operations/data_movement/concat/concat.hpp"
 
 #include "tt-metalium/hal.hpp"
+#include "ttnn/types.hpp"
 
 namespace ttnn {
 namespace ccl {
@@ -58,31 +59,82 @@ size_t LineTopology::get_distance_to_end_of_line(ttnn::ccl::EdmLineFabricOpInter
 
 ttnn::ccl::Topology LineTopology::topology() const { return ttnn::ccl::Topology::Linear; }
 
-std::tuple<uint32_t, std::optional<chip_id_t>, std::optional<chip_id_t>> get_device_index_and_sender_receiver_ids(
-    const Tensor& input_tensor, const std::vector<IDevice*>& devices, const ttnn::ccl::Topology& topology) {
+tt::tt_metal::operation::MeshWorkloadWithCallbacks create_mesh_workload_from_programs(
+    const ttnn::MeshCoordinateRangeSet& tensor_coords,
+    const std::vector<Tensor>& input_tensors,
+    std::vector<Tensor>& output_tensors,
+    const std::function<tt::tt_metal::operation::ProgramWithCallbacks(const ttnn::MeshCoordinate&)>& create_program) {
+    tt::tt_metal::operation::MeshWorkloadWithCallbacks workload_with_callbacks;
+    for (const auto& range : tensor_coords.ranges()) {
+        for (const auto& coord : range) {
+            const ttnn::MeshCoordinateRange program_range(coord, coord);
+            auto program_with_callbacks = create_program(coord);
+            workload_with_callbacks.workload.add_program(program_range, std::move(program_with_callbacks.program));
+            if (program_with_callbacks.override_runtime_arguments_callback.has_value()) {
+                workload_with_callbacks.per_program_callbacks.emplace(
+                    program_range, std::move(*program_with_callbacks.override_runtime_arguments_callback));
+            }
+        }
+    }
+    return workload_with_callbacks;
+}
+
+SenderRecieverConfig get_device_sender_receiver_config(
+    const IDevice* target_device, const std::vector<IDevice*>& devices, ttnn::ccl::Topology topology) {
     uint32_t num_devices = devices.size();
     bool is_linear = topology == ttnn::ccl::Topology::Linear;
-    uint32_t device_index = 0;  // Initialize device index
+    SenderRecieverConfig config;
     for (uint32_t i = 0; i < num_devices; ++i) {
-        if (devices.at(i) == input_tensor.device()) {
-            device_index = i;
+        if (devices.at(i) == target_device) {
+            config.device_index = i;
             bool is_last_chip_in_clockwise_direction = is_linear && i == (num_devices - 1);
             bool is_last_chip_in_counter_clockwise_direction = is_linear && i == 0;
 
-            std::optional<chip_id_t> receiver_device_id =
-                is_last_chip_in_clockwise_direction ? std::nullopt
-                                                    : std::optional<chip_id_t>(devices.at((i + 1) % num_devices)->id());
+            config.receiver_device_id = is_last_chip_in_clockwise_direction
+                                            ? std::nullopt
+                                            : std::optional<chip_id_t>(devices.at((i + 1) % num_devices)->id());
 
-            std::optional<chip_id_t> sender_device_id =
+            config.sender_device_id =
                 is_last_chip_in_counter_clockwise_direction
                     ? std::nullopt
                     : std::optional<chip_id_t>(devices.at((i + num_devices - 1) % num_devices)->id());
-
-            return {device_index, sender_device_id, receiver_device_id};
         }
     }
 
-    return {device_index, std::nullopt, std::nullopt};  // Return null if the device is not found
+    return config;
+}
+
+SenderRecieverConfig get_device_sender_receiver_config_in_ring(
+    const MeshCoordinate& mesh_coord,
+    const distributed::MeshDevice* mesh_device,
+    uint32_t cluster_axis,
+    int ring_size) {
+    SenderRecieverConfig config;
+    const auto& mesh_view = mesh_device->get_view();
+    TT_FATAL(
+        mesh_view.is_mesh_2d(),
+        "CLL operation invoked with cluster_axis API on >2D mesh, which is currently unsupported");
+    const auto view_index = (cluster_axis == 0) ? mesh_coord[1] : mesh_coord[0];
+    config.device_index = (cluster_axis == 0) ? mesh_coord[0] : mesh_coord[1];
+
+    auto get_chip_id = [&](std::size_t line_index) -> std::optional<chip_id_t> {
+        auto new_row = mesh_coord[0];
+        auto new_col = mesh_coord[1];
+        if (cluster_axis == 0) {
+            new_row = line_index % ring_size;
+        } else {
+            new_col = line_index % ring_size;
+        }
+        return mesh_view.find_device_id(MeshCoordinate(new_row, new_col));
+    };
+
+    bool is_last_chip_in_clockwise_direction = config.device_index == (ring_size - 1);
+    bool is_last_chip_in_counter_clockwise_direction = config.device_index == 0;
+    config.receiver_device_id =
+        is_last_chip_in_clockwise_direction ? std::nullopt : get_chip_id(config.device_index + 1);
+    config.sender_device_id =
+        is_last_chip_in_counter_clockwise_direction ? std::nullopt : get_chip_id(config.device_index + ring_size - 1);
+    return config;
 }
 
 std::vector<ttnn::Tensor> unpad_output_tensor(
@@ -217,15 +269,6 @@ void generate_edm_kernels_for_ring_or_linear_topology(
     std::optional<uint32_t> sender_device_id) {
     auto sender_noc = tt::tt_metal::detail::GetPreferredNOCForDRAMRead(tt::tt_metal::hal::get_arch());
     auto receiver_noc = tt::tt_metal::detail::GetPreferredNOCForDRAMWrite(tt::tt_metal::hal::get_arch());
-    uint32_t sender_socket_idx = 0;
-    uint32_t receiver_socket_idx = 0;
-    if (receiver_device_id == sender_device_id) {
-        if (topology_config.ring_index == 0) {
-            receiver_socket_idx = 1;
-        } else {
-            sender_socket_idx = 1;
-        }
-    }
     for (uint32_t i = 0; i < topology_config.num_links; ++i) {
         bool is_clockwise_direction_edm_enabled =
             !topology_config.is_linear || topology_config.ring_index != topology_config.ring_size - 1;

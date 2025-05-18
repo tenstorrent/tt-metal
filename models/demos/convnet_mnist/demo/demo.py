@@ -2,18 +2,18 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch
-import ttnn
-import pytest
-
 from pathlib import Path
-from loguru import logger
 
-from models.demos.convnet_mnist.tt.convnet_mnist import convnet_mnist, custom_preprocessor
+import pytest
+import torch
+from loguru import logger
+from ttnn.model_preprocessing import preprocess_model_parameters
+
+import ttnn
 from models.demos.convnet_mnist import convnet_mnist_preprocessing
 from models.demos.convnet_mnist.convnet_mnist_utils import get_test_data
+from models.demos.convnet_mnist.tt.convnet_mnist import convnet_mnist, custom_preprocessor
 from models.experimental.convnet_mnist.reference.convnet import ConvNet
-from ttnn.model_preprocessing import preprocess_model_parameters
 
 
 def model_location_generator(rel_path):

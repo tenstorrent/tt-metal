@@ -19,10 +19,10 @@ void IndexFillOperation::validate(
     TT_FATAL(input.storage_type() == StorageType::DEVICE, "Index fill: Input must be on device");
     TT_FATAL(input.buffer() != nullptr, "Index fill: Input must be allocated in buffer on device");
     TT_FATAL(
-        input.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED,
+        input.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
         "Index fill: Not currently supporting sharding");
     TT_FATAL(
-        operation_attributes.memory_config.memory_layout == TensorMemoryLayout::INTERLEAVED,
+        operation_attributes.memory_config.memory_layout() == TensorMemoryLayout::INTERLEAVED,
         "Index fill: Not currently supporting sharding");
     TT_FATAL(index.get_logical_shape().rank() == 1, "Index fill: Index tensor must be 1D!");
     TT_FATAL(dim < input.get_logical_shape().rank() && dim >= 0, "Index fill: Invalid dimension");

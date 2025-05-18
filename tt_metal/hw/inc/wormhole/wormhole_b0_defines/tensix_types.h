@@ -21,30 +21,25 @@
 /////////////
 // Global enums and defines
 ////////////
-typedef enum {
+enum xmov_direction_t {
     XMOV_L0_TO_L1 = 0,
     XMOV_L1_TO_L0 = 1,
     XMOV_L0_TO_L0 = 2,
     XMOV_L1_TO_L1 = 3,
-} xmov_direction_t;
+};
 
-typedef enum { TDMA_MOVER0 = 0, TDMA_MOVER1 = 1 } tdma_mover_id_t;
+enum tdma_mover_id_t { TDMA_MOVER0 = 0, TDMA_MOVER1 = 1 };
 
-typedef enum { MATH_HF = 1, MATH_AUTO = 2, MATH_LF = 4 } math_fidelity_t;
+enum math_fidelity_t { MATH_HF = 1, MATH_AUTO = 2, MATH_LF = 4 };
 
-typedef enum { RELU_NONE = 0, RELU_PLAIN = 1, RELU_THRESH = 2, RELU_MAX = 3 } relu_mode_t;
+enum relu_mode_t { RELU_NONE = 0, RELU_PLAIN = 1, RELU_THRESH = 2, RELU_MAX = 3 };
 
-typedef enum {
-    STOCH_RND_NONE = 0,
-    STOCH_RND_FPU = 1,
-    STOCH_RND_GASKET = 2,
-    STOCH_RND_PACKER = 4
-} stochastic_round_settings_t;
+enum stochastic_round_settings_t { STOCH_RND_NONE = 0, STOCH_RND_FPU = 1, STOCH_RND_GASKET = 2, STOCH_RND_PACKER = 4 };
 
 /////////////
 // TDMA Registers
 ////////////
-typedef struct {
+struct packer_config_t {
     uint32_t row_section_size : 16;
     uint32_t exp_section_size : 16;
     uint32_t tile_dst_addr : 32;
@@ -55,7 +50,7 @@ typedef struct {
     uint32_t in_data_format : 2;
     uint32_t reserved_2 : 22;
     uint32_t reserved_3 : 32;
-} packer_config_t;  // 16B
+};  // 16B
 
 struct fifo_ctl_t {
     uint32_t rd_ptr;
@@ -69,30 +64,30 @@ struct fifo_ctl_t {
 #endif
 };
 
-typedef struct {
+struct packer_config_u {
     uint32_t val[4];
     packer_config_t f;
-} packer_config_u;
+};
 
-typedef struct {
+struct mover_config_t {
     uint32_t src_addr : 32;
     uint32_t dst_addr : 32;
     uint32_t xfer_size : 32;
     uint32_t xfer_dir : 2;
     uint32_t reserved_0 : 30;
-} mover_config_t;  // 16B
+};  // 16B
 
-typedef struct {
+struct mover_config_u {
     uint32_t val[4];
     mover_config_t f;
-} mover_config_u;
+};
 
 /////////////
 // Data section structures
 /////////////
 
 // Tile descriptor
-typedef struct {
+struct tile_descriptor_t {
     uint32_t data_format : 4;
     uint32_t uncompressed : 1;
     uint32_t reserved_0 : 3;
@@ -105,12 +100,12 @@ typedef struct {
     uint32_t blobs_y_start : 32;
     uint32_t digest_type : 8;  // Not used
     uint32_t digest_size : 8;  // Not used
-} tile_descriptor_t;           // Unpack configuration
+};  // Unpack configuration
 
-typedef union {
+union tile_descriptor_u {
     uint32_t val[4];
     tile_descriptor_t f;
-} tile_descriptor_u;
+};
 
 struct TileHeader {
     // occupied part of the 16B line
@@ -137,7 +132,7 @@ struct TileHeader {
 
     std::size_t size() const { return 16; }
     const void* data() const { return this; }
-    typedef std::uint8_t value_type;
+    using value_type = std::uint8_t;
 
     bool operator!=(const TileHeader& rhs) const {
         bool result =

@@ -46,7 +46,7 @@ def prepare_dir_as_metal_home(ttnn_package_path, metal_home):
     # Firmware binaries need to be present
     runtime_hw_src = ttnn_package_path / "runtime" / "hw"
     if not runtime_hw_src.is_dir():
-        logger.fatal(
+        logger.error(
             f"{runtime_hw_src} seems to not exist as a directory. This should have been packaged during wheel creation"
         )
         sys.exit(1)
@@ -57,7 +57,7 @@ def prepare_dir_as_metal_home(ttnn_package_path, metal_home):
     runtime_sfpi_dest = metal_home / "runtime" / "sfpi"
     if SFPI_IS_BUNDLED:
         if not runtime_sfpi_src.is_dir():
-            logger.fatal(
+            logger.error(
                 f"{runtime_sfpi_src} seems to not exist as a directory. This should have been packaged during wheel creation"
             )
             sys.exit(1)
@@ -66,7 +66,7 @@ def prepare_dir_as_metal_home(ttnn_package_path, metal_home):
     if SFPI_IS_SYSTEM_PACKAGE:
         system_sfpi_path = Path("/opt/tenstorrent/sfpi")
         if not system_sfpi_path.is_dir():
-            logger.fatal(
+            logger.error(
                 f"SFPI system package not found at {system_sfpi_path}. Please install the SFPI system package."
             )
             sys.exit(1)
@@ -82,7 +82,7 @@ def prepare_dir_as_metal_home(ttnn_package_path, metal_home):
 
         if last_used_version == current_version:
             if not runtime_hw_dest.is_dir():
-                logger.fatal(
+                logger.error(
                     f"A .METAL_VERSION file exists in current working directory, but no {runtime_hw_dest} directory within it. Your installation may be corrupted."
                 )
                 sys.exit(1)

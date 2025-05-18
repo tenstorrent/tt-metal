@@ -39,6 +39,14 @@ set(METAL_OPS_FILES
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/rmsnorm_fw/device/rmsnorm_fw_device_operation.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/rmsnorm_fw/device/rmsnorm_fw_program_factory.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/rmsnorm_fw/device/rmsnorm_fw_program_factory.cpp
+    # CrossEntropy
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/cross_entropy_fw/cross_entropy_fw.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/cross_entropy_fw/cross_entropy_fw.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/cross_entropy_fw/device/cross_entropy_fw_device_operation_types.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/cross_entropy_fw/device/cross_entropy_fw_device_operation.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/cross_entropy_fw/device/cross_entropy_fw_device_operation.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/cross_entropy_fw/device/cross_entropy_fw_program_factory.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/cross_entropy_fw/device/cross_entropy_fw_program_factory.cpp
 )
 
 list(APPEND SOURCES ${METAL_OPS_FILES})
@@ -66,6 +74,7 @@ if(NOT TARGET Metalium::Metal)
         "$ENV{TT_METAL_HOME}/tt_stl"
         # TTNN
         "$ENV{TT_METAL_HOME}/ttnn"
+        "$ENV{TT_METAL_HOME}/ttnn/api"
         "$ENV{TT_METAL_HOME}/ttnn/cpp"
         "$ENV{TT_METAL_HOME}/ttnn/cpp/ttnn/deprecated"
         "${reflect_SOURCE_DIR}"
@@ -123,11 +132,15 @@ add_library(ttml STATIC ${SOURCES})
 
 target_include_directories(ttml PUBLIC ${PROJECT_SOURCE_DIR})
 
-find_package(Python REQUIRED Development)
+find_package(Python3 REQUIRED Development)
 
 foreach(lib ${BoostPackages})
     target_include_directories(ttml SYSTEM PUBLIC ${Boost${lib}_SOURCE_DIR}/include)
 endforeach()
+
+find_package(MPI REQUIRED)
+include_directories(${MPI_INCLUDE_PATH})
+target_link_libraries(ttml PUBLIC ${MPI_CXX_LIBRARIES})
 
 target_link_libraries(
     ttml
@@ -138,7 +151,7 @@ target_link_libraries(
         atomic
         Metalium::Metal
         Metalium::TTNN
-        Python::Python
+        Python3::Python
         fmt::fmt-header-only
         magic_enum::magic_enum
         yaml-cpp::yaml-cpp
@@ -153,6 +166,7 @@ target_link_libraries(
 
 message(STATUS "xtensor_SOURCE_DIR: ${xtensor_SOURCE_DIR}")
 message(STATUS "xtl_SOURCE_DIR: ${xtl_SOURCE_DIR}")
+message(STATUS "xtensor-blas_SOURCE_DIR: ${xtensor-blas_SOURCE_DIR}")
 
 message(STATUS "msgpack_SOURCE_DIR: ${msgpack_SOURCE_DIR}")
 target_include_directories(ttml PUBLIC ${msgpack_SOURCE_DIR}/include)

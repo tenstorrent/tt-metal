@@ -15,12 +15,12 @@ void NonZeroIndices::validate(const std::vector<Tensor>& input_tensors) const {
     auto input_tensor_a_shape = input_tensor_a.get_padded_shape();
     TT_FATAL(
         input_tensor_a_shape[0] == 1 and input_tensor_a_shape[1] == 1 and input_tensor_a_shape[2] == 1,
-        "Input should be 1D");
+        "The input shape must be 4D with the following form: 1, 1, 1, X.");
     TT_FATAL(input_tensor_a.get_layout() == Layout::ROW_MAJOR, "Currently only supporting row major layout");
     TT_FATAL(input_tensor_a.storage_type() == StorageType::DEVICE, "Operands to Non-zero need to be on device!");
     TT_FATAL(input_tensor_a.buffer() != nullptr, "Operands to Non-zero need to be allocated in buffers on device!");
     TT_FATAL(
-        input_tensor_a.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED,
+        input_tensor_a.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
         "Non-zero does not currently support sharding");
 }
 

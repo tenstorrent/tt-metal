@@ -718,7 +718,7 @@ operation::ProgramWithCallbacks transpose_hc_multi_core(
         bool stick_size_is_power_of_two = is_power_of_two_at_least_32(stick_size);
         reader_compile_time_args.push_back((std::uint32_t)stick_size_is_power_of_two);
         if (stick_size_is_power_of_two) {
-            uint32_t log2_stick_size = (std::uint32_t)log2(stick_size);
+            uint32_t log2_stick_size = (std::uint32_t)std::log2(stick_size);
             reader_compile_time_args.push_back((std::uint32_t)log2_stick_size);
         } else {
             reader_compile_time_args.push_back(stick_size);
@@ -737,7 +737,7 @@ operation::ProgramWithCallbacks transpose_hc_multi_core(
         bool stick_size_is_power_of_two = is_power_of_two_at_least_32(stick_size);
         writer_compile_time_args.push_back((std::uint32_t)stick_size_is_power_of_two);
         if (stick_size_is_power_of_two) {
-            uint32_t log2_stick_size = (std::uint32_t)log2(stick_size);
+            uint32_t log2_stick_size = (std::uint32_t)std::log2(stick_size);
             writer_compile_time_args.push_back((std::uint32_t)log2_stick_size);
         } else {
             writer_compile_time_args.push_back(stick_size);
@@ -882,7 +882,7 @@ std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_runtime
     }
 
     uint32_t curr_c = 0, curr_h = 0, curr_n = 0;
-    for (uint32_t i = 0, curr_sticks_read = 0, curr_sticks_write = 0; i < num_cores; i++) {
+    for (uint32_t i = 0, curr_sticks_read = 0; i < num_cores; i++) {
         CoreCoord core;
         if (row_major) {
             core = {i % num_cores_x, i / num_cores_x};
@@ -900,8 +900,6 @@ std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_runtime
         std::vector<uint32_t> writer_runtime_args;
 
         ret_val[i] = {reader_runtime_args, writer_runtime_args};
-
-        curr_sticks_write += num_sticks_per_core;
 
         for (uint32_t i = 0; i < num_sticks_per_core; ++i) {
             curr_c++;
@@ -987,7 +985,7 @@ std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_runtime
     uint32_t curr_C_shard = 0;
     uint32_t curr_H_shard = 0;
 
-    uint32_t curr_c = 0, curr_h = 0, curr_n = 0;
+    uint32_t curr_c = 0, curr_h = 0;
     for (uint32_t i = 0, curr_sticks_read = 0; i < num_cores; i++) {
         auto core = cores[i];
         uint32_t pre_core = curr_core;
@@ -1008,7 +1006,6 @@ std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_runtime
                 curr_h++;
                 curr_c = 0;
                 if (curr_h == H) {  // end of H dim
-                    curr_n++;
                     curr_c = 0;
                     curr_h = 0;
                     curr_sticks_read = curr_sticks_read - H + 1;
@@ -1056,9 +1053,6 @@ std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_runtime
         uint32_t num_non_repeat_cores = read_cores_indices.size();
         uint32_t read_stick_stride = read_stick_offset.size() > 1 ? read_stick_offset[1] - read_stick_offset[0] : 0;
 
-        bool has_second_batch = false;
-        uint32_t num_sticks_before_second_batch = 0;
-
         if (num_H_per_core == 1) {  // each core only has one H block or part of H block
             for (uint32_t i = 1; i < read_cores_indices.size(); ++i) {
                 if (read_cores_indices[i] == read_cores_indices[0]) {
@@ -1091,10 +1085,8 @@ std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_runtime
             // TODO: add the second batch args (num_non_repeat_cores, read_stick_offset, non_repeat_noc_x_values,
             // non_repeat_noc_y_values) to support multiple batch in a shard
             for (uint32_t j = 1; j < num_sticks_per_core; ++j) {
-                num_sticks_before_second_batch++;
                 if ((read_cores_indices[j - 1] == read_cores_indices[j]) and
                     (read_stick_offset[j] == read_stick_offset[j - 1] + stick_size_bytes)) {
-                    has_second_batch = true;
                     break;
                 }
             }
@@ -1248,7 +1240,7 @@ operation::ProgramWithCallbacks transpose_hc_multi_core_sharded(const Tensor& a,
         all_cores,
         tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args, reader_defines));
 
-    tt::tt_metal::KernelHandle writer_kernel_id;
+    tt::tt_metal::KernelHandle writer_kernel_id{};
     if (is_special_case) {
         std::vector<uint32_t> writer_compile_time_args = {
             (std::uint32_t)src0_cb_index, (std::uint32_t)output_cb_index, (std::uint32_t)stick_size_bytes};
@@ -1616,7 +1608,7 @@ operation::ProgramWithCallbacks transpose_wh_multi_core(const Tensor& a, Tensor&
         bool stick_size_is_power_of_two = is_power_of_two_at_least_32(stick_size);
         reader_compile_time_args.push_back((std::uint32_t)stick_size_is_power_of_two);
         if (stick_size_is_power_of_two) {
-            uint32_t log2_stick_size = (std::uint32_t)log2(stick_size);
+            uint32_t log2_stick_size = (std::uint32_t)std::log2(stick_size);
             reader_compile_time_args.push_back((std::uint32_t)log2_stick_size);
         } else {
             reader_compile_time_args.push_back(stick_size);
@@ -1639,7 +1631,7 @@ operation::ProgramWithCallbacks transpose_wh_multi_core(const Tensor& a, Tensor&
         bool stick_size_is_power_of_two = is_power_of_two_at_least_32(stick_size);
         writer_compile_time_args.push_back((std::uint32_t)stick_size_is_power_of_two);
         if (stick_size_is_power_of_two) {
-            uint32_t log2_stick_size = (std::uint32_t)log2(stick_size);
+            uint32_t log2_stick_size = (std::uint32_t)std::log2(stick_size);
             writer_compile_time_args.push_back((std::uint32_t)log2_stick_size);
         } else {
             writer_compile_time_args.push_back(stick_size);

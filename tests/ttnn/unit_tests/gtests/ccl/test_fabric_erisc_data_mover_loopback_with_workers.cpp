@@ -379,7 +379,7 @@ TEST(WorkerCclCommandProcessingKernelLocalMode, MultiInputReader_MultiPage0_Shar
 
 TEST(WorkerCclCommandProcessingKernelLocalMode, MultiInputReader_MultiPage0_Sharded_WithReshard0) {
     ttnn::Shape tensor_shape({1, 1, 32, 128});
-    Layout const layout = Layout::TILE;
+    const Layout layout = Layout::TILE;
     auto input_mem_config = MemoryConfig(
         TensorMemoryLayout::WIDTH_SHARDED,
         BufferType::L1,
@@ -409,7 +409,7 @@ TEST(WorkerCclCommandProcessingKernelLocalMode, MultiInputReader_MultiPage0_Shar
 
 TEST(WorkerCclCommandProcessingKernelLocalMode, MultiInputReader_MultiPage0_Sharded_WithReshard0_UniquePerStream) {
     ttnn::Shape tensor_shape({1, 1, 32, 128});
-    Layout const layout = Layout::TILE;
+    const Layout layout = Layout::TILE;
     size_t in_shard_grid_x = 1;
     size_t in_shard_grid_y = 1;
     size_t out_shard_grid_x = 4;
@@ -473,11 +473,11 @@ TEST(WorkerCclCommandProcessingKernelFabricUnicastMode, MultiInputReader_SingleP
     ttnn::Shape tensor_shape({1, 1, 32, 32});
     constexpr size_t distance_dest_device = 1;
     constexpr size_t num_devices = 4;
-    Layout const layout = Layout::TILE;
-    MemoryConfig const in0_memory_config = MemoryConfig(TensorMemoryLayout::INTERLEAVED, BufferType::DRAM);
-    MemoryConfig const in1_memory_config = MemoryConfig(TensorMemoryLayout::INTERLEAVED, BufferType::DRAM);
-    MemoryConfig const out0_memory_config = MemoryConfig(TensorMemoryLayout::INTERLEAVED, BufferType::DRAM);
-    MemoryConfig const out1_memory_config = MemoryConfig(TensorMemoryLayout::INTERLEAVED, BufferType::DRAM);
+    const Layout layout = Layout::TILE;
+    const MemoryConfig in0_memory_config = MemoryConfig(TensorMemoryLayout::INTERLEAVED, BufferType::DRAM);
+    const MemoryConfig in1_memory_config = MemoryConfig(TensorMemoryLayout::INTERLEAVED, BufferType::DRAM);
+    const MemoryConfig out0_memory_config = MemoryConfig(TensorMemoryLayout::INTERLEAVED, BufferType::DRAM);
+    const MemoryConfig out1_memory_config = MemoryConfig(TensorMemoryLayout::INTERLEAVED, BufferType::DRAM);
 
     auto num_elems = std::reduce(tensor_shape.cbegin(), tensor_shape.cend(), 1, std::multiplies<uint32_t>());
     Tensor input_tensor0 =
@@ -487,15 +487,6 @@ TEST(WorkerCclCommandProcessingKernelFabricUnicastMode, MultiInputReader_SingleP
             .to_layout(layout);
     Tensor output_tensor0 = ttnn::experimental::view(ttnn::ones(tensor_shape, DataType::UINT32, layout), tensor_shape);
     Tensor output_tensor1 = ttnn::experimental::view(ttnn::ones(tensor_shape, DataType::UINT32, layout), tensor_shape);
-
-    input_tensor0.set_tensor_spec(TensorSpec(
-        tensor_shape, TensorLayout(DataType::UINT32, PageConfig(layout, tt_metal::Tile()), in0_memory_config)));
-    input_tensor1.set_tensor_spec(TensorSpec(
-        tensor_shape, TensorLayout(DataType::UINT32, PageConfig(layout, tt_metal::Tile()), in1_memory_config)));
-    output_tensor0.set_tensor_spec(TensorSpec(
-        tensor_shape, TensorLayout(DataType::UINT32, PageConfig(layout, tt_metal::Tile()), out0_memory_config)));
-    output_tensor1.set_tensor_spec(TensorSpec(
-        tensor_shape, TensorLayout(DataType::UINT32, PageConfig(layout, tt_metal::Tile()), out1_memory_config)));
 
     size_t page_size = tile_size(DataFormat::RawUInt32);
 
@@ -512,10 +503,10 @@ TEST(WorkerCclCommandProcessingKernelFabricUnicastMode, MultiInputReader_SingleP
         worker_slice_shape,
         worker_slice_offset};
 
-    auto const in0_tensor_slice = tensor_slice;
-    auto const in1_tensor_slice = tensor_slice;
-    auto const out0_tensor_slice = tensor_slice;
-    auto const out1_tensor_slice = tensor_slice;
+    const auto in0_tensor_slice = tensor_slice;
+    const auto in1_tensor_slice = tensor_slice;
+    const auto out0_tensor_slice = tensor_slice;
+    const auto out1_tensor_slice = tensor_slice;
 
     ttnn::ccl::cmd::CclCommandDestArgs dest_args = ttnn::ccl::cmd::UnicastCommandDestArgs{distance_dest_device, true};
     auto pass = TestMultiInputReaderKernel(
@@ -826,8 +817,8 @@ TEST(
                         tensor_shape,
                         split_dim,
 
-                        // In this test we will have n stages with anywhere from 1 to 8 workers per stage (this will be
-                        // configurable)
+                        // In this test we will have n stages with anywhere from 1 to 8 workers per stage (this will
+                        // be configurable)
                         num_stages,
                         num_workers_per_stage,
                         slices_per_stage,
@@ -1391,14 +1382,32 @@ TEST(EdmFabric, BasicMcastThroughputTest_4_WithLineSync) {
 }
 
 TEST(EdmFabric, RingDeadlockStabilityTest) {
-    const size_t num_mcasts = 200000;
-    const size_t num_links = 1;
-    const size_t num_op_invocations = 5;
-    const bool line_sync = true;
-    log_trace(tt::LogTest, "Running RingDeadlockStabilityTest with forward mcast only");
-    RunRingDeadlockStabilityTestWithPersistentFabric(num_mcasts, num_links, num_op_invocations, true, false);
-    log_trace(tt::LogTest, "Running RingDeadlockStabilityTest with backward mcast only");
-    RunRingDeadlockStabilityTestWithPersistentFabric(num_mcasts, num_links, num_op_invocations, false, true);
-    log_trace(tt::LogTest, "Running RingDeadlockStabilityTest with forward and backward mcast");
-    RunRingDeadlockStabilityTestWithPersistentFabric(num_mcasts, num_links, num_op_invocations, true, true);
+    constexpr size_t num_mcasts = 200000;
+    constexpr size_t num_op_invocations = 5;
+    constexpr bool line_sync = true;
+    size_t num_links = 1;
+    std::vector<size_t> num_devices;
+    auto cluster_type = tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type();
+    if (cluster_type == tt::ClusterType::GALAXY) {
+        num_devices = {4, 8};
+        num_links = 4;
+    } else {
+        num_devices = {8};
+    }
+    for (const auto& num_devices : num_devices) {
+        log_trace(
+            tt::LogTest, "Running RingDeadlockStabilityTest with forward mcast only with {} devices", num_devices);
+        RunRingDeadlockStabilityTestWithPersistentFabric(
+            num_mcasts, num_links, num_devices, num_op_invocations, true, false);
+        log_trace(
+            tt::LogTest, "Running RingDeadlockStabilityTest with backward mcast only with {} devices", num_devices);
+        RunRingDeadlockStabilityTestWithPersistentFabric(
+            num_mcasts, num_links, num_devices, num_op_invocations, false, true);
+        log_trace(
+            tt::LogTest,
+            "Running RingDeadlockStabilityTest with forward and backward mcast with {} devices",
+            num_devices);
+        RunRingDeadlockStabilityTestWithPersistentFabric(
+            num_mcasts, num_links, num_devices, num_op_invocations, true, true);
+    }
 }

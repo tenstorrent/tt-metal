@@ -19,25 +19,12 @@ class TtnnAttention:
         nh_kd = self.key_dim * num_heads
         h = dim + nh_kd * 2
 
-        self.qkv = Conv(
-            device,
-            parameters.qkv,
-            self.conv_pt.qkv,
-            enable_identity=True,
-        )
+        self.qkv = Conv(device, parameters.qkv, self.conv_pt.qkv, enable_identity=True, activation_dtype=ttnn.bfloat16)
         self.proj = Conv(
-            device,
-            parameters.proj,
-            self.conv_pt.proj,
-            enable_identity=True,
+            device, parameters.proj, self.conv_pt.proj, enable_identity=True, activation_dtype=ttnn.bfloat16
         )
 
-        self.pe = Conv(
-            device,
-            parameters.pe,
-            self.conv_pt.pe,
-            enable_identity=True,
-        )
+        self.pe = Conv(device, parameters.pe, self.conv_pt.pe, enable_identity=True, use_1d_systolic_array=False)
 
     def __call__(self, input_tensor):
         B, C, H, W = (
@@ -49,41 +36,40 @@ class TtnnAttention:
         N = H * W
 
         qkv = self.qkv(input_tensor)
+        if qkv.is_sharded():
+            qkv = ttnn.sharded_to_interleaved(qkv, ttnn.L1_MEMORY_CONFIG)
         qkv = ttnn.permute(qkv, (0, 3, 1, 2))
-        qkv = ttnn.reshape(qkv, (1, qkv.shape[1], int(math.sqrt(qkv.shape[-1])), int(math.sqrt(qkv.shape[-1]))))
-        qkv = ttnn.reshape(qkv, (B, self.num_heads, self.key_dim * 2 + self.head_dim, N))
 
-        qkv = ttnn.to_layout(qkv, ttnn.ROW_MAJOR_LAYOUT)
+        qkv = ttnn.reshape(qkv, (B, 5, 128, qkv.shape[3]))
 
         q, k, v = qkv[:, :, :32, :], qkv[:, :, 32:64, :], qkv[:, :, 64:, :]
 
         q = ttnn.permute(q, (0, 1, 3, 2))
 
-        q = ttnn.to_layout(q, ttnn.TILE_LAYOUT)
-        k = ttnn.to_layout(k, ttnn.TILE_LAYOUT)
+        compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.LoFi,
+            math_approx_mode=True,
+            fp32_dest_acc_en=False,
+            packer_l1_acc=False,
+        )
 
-        attn = ttnn.matmul(q, k)
-        attn = attn * self.scale
+        attn = ttnn.matmul(q, k, compute_kernel_config=compute_kernel_config, memory_config=ttnn.L1_MEMORY_CONFIG)
+        attn = ttnn.multiply(attn, self.scale)
 
         attn = ttnn.softmax(attn, dim=-1)
 
-        v = ttnn.to_layout(v, ttnn.TILE_LAYOUT)
         attn = ttnn.permute(attn, (0, 1, 3, 2))
-        attn = ttnn.matmul(v, attn)
-        attn = ttnn.reshape(attn, (B, C, H, W))
+        attn = ttnn.matmul(v, attn, compute_kernel_config=compute_kernel_config, memory_config=ttnn.L1_MEMORY_CONFIG)
 
-        v = ttnn.reshape(v, (B, C, H, W))
+        attn = ttnn.reshape(attn, (1, 320, 1, 400))
+        attn = ttnn.permute(attn, (0, 2, 3, 1))
 
+        v = ttnn.reshape(v, (1, 320, 1, 400))
         v = ttnn.permute(v, (0, 2, 3, 1))
-        v = ttnn.reshape(v, (1, 1, v.shape[0] * v.shape[1] * v.shape[2], v.shape[3]))
 
         v = self.pe(v)
 
-        attn = ttnn.permute(attn, (0, 2, 3, 1))
-        attn = ttnn.reshape(attn, (1, 1, attn.shape[0] * attn.shape[1] * attn.shape[2], attn.shape[3]))
-
-        x = attn + v
+        x = ttnn.add(attn, v, memory_config=ttnn.L1_MEMORY_CONFIG)
 
         output = self.proj(x)
-
         return output

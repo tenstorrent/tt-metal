@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <assert.hpp>
-#include <dev_msgs.h>
+#include "dev_msgs.h"
 #include <fmt/base.h>
 #include <fmt/ranges.h>
 #include <logger.hpp>
@@ -40,9 +40,7 @@ using std::uint16_t;
 using std::uint32_t;
 using std::uint64_t;
 
-ll_api::memory const& get_risc_binary(
-    string const& path,
-    ll_api::memory::Loading loading) {
+const ll_api::memory& get_risc_binary(std::string_view path, ll_api::memory::Loading loading) {
     static struct {
       std::unordered_map<std::string, std::unique_ptr<ll_api::memory const>> map;
       std::mutex mutex;
@@ -50,7 +48,7 @@ ll_api::memory const& get_risc_binary(
     } cache;
 
     std::unique_lock lock(cache.mutex);
-    auto [slot, inserted] = cache.map.try_emplace(path);
+    auto [slot, inserted] = cache.map.try_emplace(std::string(path));
     ll_api::memory const* ptr = nullptr;
     if (inserted) {
       // We're the first with PATH. Create and insert.
@@ -113,15 +111,6 @@ void write_launch_msg_to_core(chip_id_t chip, const CoreCoord core, launch_msg_t
         tt::tt_metal::MetalContext::instance().get_cluster().write_core(
             go_msg, sizeof(go_msg_t), tt_cxy_pair(chip, core), go_addr);
     }
-}
-
-void print_worker_cores(chip_id_t chip_id) {
-    std::cout << std::endl << "worker cores: " << std::endl;
-    for (const CoreCoord& core : tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(chip_id).get_cores(
-             CoreType::TENSIX, CoordSystem::PHYSICAL)) {
-        std::cout << core.str() << " ";
-    }
-    std::cout << std::endl << std::endl;
 }
 
 ll_api::memory read_mem_from_core(chip_id_t chip, const CoreCoord &core, const ll_api::memory& mem, uint64_t local_init_addr) {

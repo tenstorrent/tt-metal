@@ -45,30 +45,30 @@ void Reduce::validate(const std::vector<Tensor>& input_tensors) const {
     if (this->dim == ReduceOpDim::H) {
         if (input_tensor.memory_config().is_sharded()) {
             TT_FATAL(
-                input_tensor.memory_config().memory_layout == TensorMemoryLayout::WIDTH_SHARDED,
+                input_tensor.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED,
                 "Illegal input memory config {} for sharded reduction along H!",
-                input_tensor.memory_config().memory_layout);
+                input_tensor.memory_config().memory_layout());
         } else {
             TT_FATAL(
-                input_tensor.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED,
+                input_tensor.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
                 "Illegal input memory config {} for reduction along H!",
-                input_tensor.memory_config().memory_layout);
+                input_tensor.memory_config().memory_layout());
         }
         TT_FATAL(
-            input_tensor.memory_config().memory_layout == this->output_mem_config.memory_layout,
+            input_tensor.memory_config().memory_layout() == this->output_mem_config.memory_layout(),
             "Illegal input memory config {} and output memory config {} for reduction along H!",
-            input_tensor.memory_config().memory_layout,
-            this->output_mem_config.memory_layout);
+            input_tensor.memory_config().memory_layout(),
+            this->output_mem_config.memory_layout());
     } else {
         TT_FATAL(
-            input_tensor.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED,
+            input_tensor.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
             "Illegal input memory config {} for reduction along {}!",
-            input_tensor.memory_config().memory_layout,
+            input_tensor.memory_config().memory_layout(),
             this->dim);
         TT_FATAL(
-            this->output_mem_config.memory_layout == TensorMemoryLayout::INTERLEAVED,
+            this->output_mem_config.memory_layout() == TensorMemoryLayout::INTERLEAVED,
             "Illegal output memory config {} for reduction along {}!",
-            this->output_mem_config.memory_layout,
+            this->output_mem_config.memory_layout(),
             this->dim);
     }
 }
@@ -102,7 +102,7 @@ std::vector<ttnn::TensorSpec> Reduce::compute_output_specs(const std::vector<Ten
     if (output_mem_config.is_sharded()) {
         auto shard_spec = input_tensor.shard_spec().value();  // TODO: This will segfault if input is not sharded...
         shard_spec.shape[0] = output_padded_shape.volume() / output_padded_shape[-1];
-        output_mem_config.shard_spec = shard_spec;
+        output_mem_config = output_mem_config.with_shard_spec(shard_spec);
     }
 
     return {ttnn::TensorSpec(
@@ -193,80 +193,60 @@ Tensor reduce(
         /*default_approx_mode=*/false,
         /*default_fp32_acc=*/true));
 
-    std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({input_tensor}))};
     if (is_multicore_hw) {
-        operation::launch_op(
-            [reduce_math, reduce_dim, pad_value, scaler, output_dtype, output_mem_config, config](
-                const std::vector<Tensor>& input_tensors,
-                const std::vector<std::optional<const Tensor>>& optional_input_tensors,
-                const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
-                const auto& input_tensor = input_tensors.at(0);
-                IDevice* device;
-
-                // Get the device
-                if (input_tensor.storage_type() != StorageType::DEVICE) {
-                    device = ttnn::operations::experimental::auto_format::AutoFormat::GetDefaultDevice();
-                    TT_ASSERT(device != nullptr, "Requires setting default device if no inputs to op are on device");
-                } else {
-                    device = input_tensor.device();
-                }
-                auto input_tensor_pad_shape =
-                    ttnn::operations::experimental::auto_format::AutoFormat::pad_to_tile_shape(
-                        input_tensor.get_padded_shape());
-                auto formatted_input_tensor = input_tensor;
-                if (!ttnn::operations::experimental::auto_format::AutoFormat::check_input_tensor_format(
-                        input_tensor, input_tensor_pad_shape)) {
-                    formatted_input_tensor =
-                        ttnn::operations::experimental::auto_format::AutoFormat::format_input_tensor(
-                            input_tensor, device, input_tensor_pad_shape, pad_value, Layout::TILE);
-                }
-                const Tensor output_tensor = operation::run(
-                                                 Reduce{
-                                                     reduce_math,
-                                                     ReduceOpDim::W,
-                                                     1.0,
-                                                     output_mem_config,
-                                                     output_dtype.value_or(input_tensor.get_dtype()),
-                                                     config},
-                                                 {formatted_input_tensor})
-                                                 .at(0);
-                return operation::run(
-                    Reduce{
-                        reduce_math,
-                        ReduceOpDim::H,
-                        scaler,
-                        output_mem_config,
-                        output_dtype.value_or(input_tensor.get_dtype()),
-                        config},
-                    {output_tensor});
-            },
-            {input_tensor},
-            output_tensors);
+        IDevice* device;
+        // Get the device
+        if (input_tensor.storage_type() != StorageType::DEVICE) {
+            device = ttnn::operations::experimental::auto_format::AutoFormat::GetDefaultDevice();
+            TT_ASSERT(device != nullptr, "Requires setting default device if no inputs to op are on device");
+        } else {
+            device = input_tensor.device();
+        }
+        auto input_tensor_pad_shape =
+            ttnn::operations::experimental::auto_format::AutoFormat::pad_to_tile_shape(input_tensor.get_padded_shape());
+        auto formatted_input_tensor = input_tensor;
+        if (!ttnn::operations::experimental::auto_format::AutoFormat::check_input_tensor_format(
+                input_tensor, input_tensor_pad_shape)) {
+            formatted_input_tensor = ttnn::operations::experimental::auto_format::AutoFormat::format_input_tensor(
+                input_tensor, device, input_tensor_pad_shape, pad_value, Layout::TILE);
+        }
+        const Tensor output_tensor = operation::run(
+                                         Reduce{
+                                             reduce_math,
+                                             ReduceOpDim::W,
+                                             1.0,
+                                             output_mem_config,
+                                             output_dtype.value_or(input_tensor.get_dtype()),
+                                             config},
+                                         {formatted_input_tensor})
+                                         .at(0);
+        return operation::run(
+                   Reduce{
+                       reduce_math,
+                       ReduceOpDim::H,
+                       scaler,
+                       output_mem_config,
+                       output_dtype.value_or(input_tensor.get_dtype()),
+                       config},
+                   {output_tensor})
+            .at(0);
     } else {
-        operation::launch_with_autoformat(
-            [reduce_math, reduce_dim, pad_value, scaler, output_dtype, output_mem_config, config](
-                const std::vector<Tensor>& input_tensors,
-                const std::vector<std::optional<const Tensor>>& optional_input_tensors,
-                const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
-                const auto& input_tensor = input_tensors.at(0);
-                return operation::run_with_autoformat(
-                    Reduce{
-                        reduce_math,
-                        reduce_dim,
-                        scaler,
-                        output_mem_config,
-                        output_dtype.value_or(input_tensor.get_dtype()),
-                        config},
-                    {input_tensor},
-                    {},
-                    {},
-                    pad_value);
-            },
-            {input_tensor},
-            output_tensors);
+        return operation::run_with_autoformat(
+                   Reduce{
+                       reduce_math,
+                       reduce_dim,
+                       scaler,
+                       output_mem_config,
+                       output_dtype.value_or(input_tensor.get_dtype()),
+                       config},
+                   {input_tensor},
+                   {},
+                   {},
+                   pad_value)
+            .at(0);
     }
-    return output_tensors.at(0);
 }
+
 }  // namespace tt_metal
 
 }  // namespace tt

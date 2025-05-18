@@ -25,21 +25,19 @@
 #include <vector>
 
 #include <tt-metalium/assert.hpp>
-#include <tt-metalium/circular_buffer_types.hpp>
-#include <tt-metalium/command_queue_common.hpp>
+#include <tt-metalium/circular_buffer_config.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/data_types.hpp>
 #include <tt-metalium/dispatch_core_common.hpp>
-#include <tt-metalium/dispatch_mem_map.hpp>
 #include <tt-metalium/hal_types.hpp>
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/logger.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt_stl/span.hpp>
-#include <tt-metalium/system_memory_manager.hpp>
 #include "test_common.hpp"
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "impl/context/metal_context.hpp"
+#include "impl/dispatch/command_queue_common.hpp"
 #include "umd/device/tt_core_coordinates.h"
 #include "umd/device/tt_xy_pair.h"
 #include "umd/device/types/xy_pair.h"
@@ -440,9 +438,9 @@ int main(int argc, char** argv) {
             vector<std::uint32_t> vec;
             vec.resize(page_size_g / sizeof(uint32_t));
 
-            CoreType core_type = get_dispatch_core_type();
             uint32_t dispatch_l1_unreserved_base =
-                DispatchMemMap::get(core_type).get_device_command_queue_addr(CommandQueueDeviceAddrType::UNRESERVED);
+                MetalContext::instance().dispatch_mem_map().get_device_command_queue_addr(
+                    CommandQueueDeviceAddrType::UNRESERVED);
             for (int i = 0; i < warmup_iterations_g; i++) {
                 if (source_mem_g == 4) {
                     tt::tt_metal::MetalContext::instance().get_cluster().read_core(

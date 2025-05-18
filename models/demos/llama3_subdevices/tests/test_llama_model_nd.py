@@ -36,7 +36,7 @@ from models.utility_functions import skip_for_blackhole
 )
 @pytest.mark.parametrize(
     "page_params",
-    [{"page_block_size": 32, "page_max_num_blocks": 1024}],
+    [{"page_block_size": 64, "page_max_num_blocks": 4096}],
 )
 @pytest.mark.parametrize(
     "batch_size",
@@ -84,7 +84,6 @@ def test_llama_model_inference(
     ensure_gc,
 ):
     dtype = ttnn.bfloat8_b
-    mesh_device.enable_async(True)
     mode_accuracy = optimizations == LlamaOptimizations.accuracy
     instruct = True
     dummy_weights = True

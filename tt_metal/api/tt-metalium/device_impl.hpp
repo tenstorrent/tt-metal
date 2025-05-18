@@ -12,17 +12,19 @@
 #include <hostdevcommon/kernel_structs.h>  // Leaked up to ttnn level from here
 #include <tt-metalium/work_executor_types.hpp>
 #include <tt-metalium/data_types.hpp>
-#include <tt-metalium/program_device_map.hpp>
 #include <tt-metalium/hal_types.hpp>
 #include <tt-metalium/command_queue_interface.hpp>
 #include <tt-metalium/command_queue.hpp>
-#include <tt-metalium/sub_device_manager_tracker.hpp>
 #include <tt-metalium/sub_device_types.hpp>
+#include <tt-metalium/sub_device.hpp>
 #include <tt-metalium/trace_buffer.hpp>
 #include <tt_stl/span.hpp>
 #include <tt-metalium/program_cache.hpp>
 
+class go_msg_t;
+class launch_msg_t;
 namespace tt::tt_metal {
+class SubDeviceManagerTracker;
 
 // A physical PCIexpress Tenstorrent device
 class Device : public IDevice {
@@ -89,6 +91,7 @@ public:
     std::tuple<chip_id_t, CoreCoord> get_connected_ethernet_core(CoreCoord eth_core) const override;
     std::vector<CoreCoord> get_ethernet_sockets(chip_id_t connected_chip_id) const override;
     bool is_inactive_ethernet_core(CoreCoord logical_core) const override;
+    uint32_t num_virtual_eth_cores(SubDeviceId sub_device_id) override;
 
     CoreCoord compute_with_storage_grid_size() const override;
 
@@ -150,19 +153,10 @@ public:
     void init_command_queue_device() override;
 
     void init_fabric() override;
-
+    void set_ethernet_core_count_on_dispatcher(uint32_t num_ethernet_cores);
+    uint32_t get_ethernet_core_count_on_dispatcher() const;
     // Puts device into reset
     bool close() override;
-
-    // Calls to enable_async are ignored in effort to forcefully disable async for single device use-cases
-    // MeshDevice calls force_enable_async directly avoiding enable_async call for multi-device use-case
-    void enable_async(bool enable) override;
-    void force_enable_async(bool enable);
-    void synchronize() override;
-    WorkExecutorMode get_worker_mode() override;
-    bool is_worker_queue_empty() const override;
-
-    void push_work(std::function<void()> work, bool blocking) override;
 
     // Program cache interface. Synchronize with worker worker threads before querying or
     // modifying this structure, since worker threads use this for compiling ops
@@ -172,8 +166,7 @@ public:
     std::size_t num_program_cache_entries() override;
 
     HalProgrammableCoreType get_programmable_core_type(CoreCoord virtual_core) const override;
-
-    std::vector<std::pair<transfer_info_cores, uint32_t>> extract_dst_noc_multicast_info(const std::vector<CoreRange>& ranges, const CoreType core_type) override;
+    HalMemType get_mem_type_of_core(CoreCoord virtual_core) const override;
 
     uint8_t num_noc_mcast_txns(SubDeviceId sub_device_id) const override;
     uint8_t num_noc_unicast_txns(SubDeviceId sub_device_id) const override;
@@ -197,6 +190,9 @@ public:
         tt::stl::Span<const SubDevice> sub_devices, DeviceAddr local_l1_size) override;
 
     bool is_mmio_capable() const override;
+    // TODO #20966: Remove these APIs
+    std::shared_ptr<distributed::MeshDevice> get_mesh_device() override;
+    void set_mesh_device(std::shared_ptr<distributed::MeshDevice> mesh_device) { this->mesh_device = mesh_device; };
 
 private:
     static constexpr uint32_t DEFAULT_NUM_SUB_DEVICES = 1;
@@ -219,12 +215,11 @@ private:
     void compile_command_queue_programs();
     void configure_command_queue_programs();
     void clear_l1_state();
+    void clear_dram_state();
     void clear_launch_messages_on_eth_cores();
     void get_associated_dispatch_virtual_cores(
         std::unordered_map<chip_id_t, std::unordered_set<CoreCoord>>& my_dispatch_cores,
         std::unordered_map<chip_id_t, std::unordered_set<CoreCoord>>& other_dispatch_cores);
-
-    void set_worker_mode(const WorkExecutorMode& mode);
 
     void generate_device_bank_to_noc_tables();
 
@@ -248,13 +243,12 @@ private:
 
     std::vector<std::unique_ptr<Program>> command_queue_programs_;
     bool using_fast_dispatch_ = false;
+    // TODO #20966: Remove this member
+    std::weak_ptr<distributed::MeshDevice> mesh_device;
 
     // Fabric program includes ethernet router kernel
     std::unique_ptr<Program> fabric_program_;
 
-    // Work Executor for this device - can asynchronously process host side work for
-    // all tasks scheduled on this device
-    std::unique_ptr<WorkExecutor> work_executor_;
     uint32_t worker_thread_core_ = 0;
     uint32_t completion_queue_reader_core_ = 0;
     std::unique_ptr<SystemMemoryManager> sysmem_manager_;
@@ -272,12 +266,14 @@ private:
     std::vector<int32_t> l1_bank_offset_map_;
     std::vector<uint16_t> dram_bank_to_noc_xy_;
     std::vector<uint16_t> l1_bank_to_noc_xy_;
+    std::shared_ptr<Buffer> dram_debug_buffer_;
 
     program_cache::detail::ProgramCache program_cache_;
 
     uint32_t trace_buffers_size_ = 0;
     bool uninitialized_error_fired_ =
         false;  // To avoid spam with warnings about calling Device methods when it's not initialized.
+    uint32_t ethernet_core_count_on_dispatcher_ = 0;
 };
 
 }  // namespace tt::tt_metal

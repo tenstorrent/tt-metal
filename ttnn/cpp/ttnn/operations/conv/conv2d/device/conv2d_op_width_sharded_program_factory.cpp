@@ -4,7 +4,7 @@
 
 #include <cstdint>
 #include "tt-metalium/circular_buffer.hpp"
-#include "tt-metalium/circular_buffer_types.hpp"
+#include "tt-metalium/circular_buffer_config.hpp"
 #include "ttnn/operations/cb_utils.hpp"
 #include "ttnn/operations/conv/conv2d/conv2d_op_program_factory_common.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
@@ -15,6 +15,7 @@
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/util.hpp>
 #include <tt-metalium/host_api.hpp>
+#include "ttnn/operations/compute_throttle_utils.hpp"
 
 using namespace tt::constants;
 
@@ -150,9 +151,9 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_width_sh
     // TODO: Can conv_act_c_blocks be same as num_blocks_act_w?
     auto shard_shape = a.shard_spec().value().shape;
 
-    CoreRangeSet input_cores = a.memory_config().shard_spec.value().grid;
-    CoreRangeSet output_cores = output.memory_config().shard_spec.value().grid;
-    CoreRangeSet all_cores = output.memory_config().shard_spec.value().grid;
+    CoreRangeSet input_cores = a.memory_config().shard_spec().value().grid;
+    CoreRangeSet output_cores = output.memory_config().shard_spec().value().grid;
+    CoreRangeSet all_cores = output.memory_config().shard_spec().value().grid;
     if (input_cores.num_cores() > output_cores.num_cores()) {
         all_cores = input_cores;
     }
@@ -176,7 +177,6 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_width_sh
         input_channels_padded % 16 == 0,
         "Expected input channels to be padded for 16 byte alignment in L1");  // TODO: For bfp16, check if its divisible
                                                                               // by 8 not 16.
-    // Always use split reader for first conv in resnet which has input channels = 16
     // TODO: Expose option to split readers for 1D convs to python?
     if (enable_split_reader) {
         TT_FATAL(not weight_width_sliced, "split reader does not work with 2d conv");
@@ -207,11 +207,9 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_width_sh
     uint32_t pad_h = (uint32_t)sliding_window_config.get_pad_h();
     uint32_t pad_w = (uint32_t)sliding_window_config.get_pad_w();
 
-    uint32_t input_size_h = conv_act_size_h + pad_h;
     uint32_t input_size_w = conv_act_size_w + pad_w;
     if (sliding_window_config.is_transpose) {
         auto input_shape = sliding_window_config.get_transposed_full_input_shape();
-        input_size_h = input_shape[1];
         input_size_w = input_shape[2];
     }
 
@@ -600,6 +598,10 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_width_sh
     if (packer_l1_acc) {
         compute_defines["PACKER_L1_ACC"] = "1";
     }
+    if (weight_block_w_ntiles <= 8) {
+        compute_defines["PACKER_UNTILIZE"] = "1";
+    }
+    ttnn::operations::compute_throttle_utils::throttle_mm_perf(device->arch(), all_cores.num_cores(), compute_defines);
 
     for (auto elem : compute_defines) {
         log_debug(LogOp, "compute_defines: {} = {}", elem.first, elem.second);
@@ -674,7 +676,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_width_sh
         act_block_num_tiles_split,
         act_tile_size);
 
-    auto conv_reader_indices_buffer = conv_reader_indices.value().device_buffer();
+    auto conv_reader_indices_storage = conv_reader_indices.value().device_storage();
 
     cb_indices.cb_for_reader_indices = cb_indices.get_next_cb_index();
     tt::tt_metal::create_cb(
@@ -684,7 +686,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_width_sh
         out_block_h_datums * 2,
         1,
         tt::DataFormat::Float16_b,
-        &*conv_reader_indices_buffer);
+        conv_reader_indices_storage.get_buffer());
 
     if (has_bias) {
         uint32_t bias_tile_size = tt_metal::detail::TileSize(bias_df);
@@ -917,7 +919,6 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_width_sh
         }
     }
 
-    // Capture conv_reader_indices_buffer to cache this with the program
     auto override_runtime_arguments_callback =
         [cb_input,
          cb_output,
@@ -925,7 +926,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_width_sh
          full_core_grid,
          weights_kernel_id,
          total_num_active_cores,
-         conv_reader_indices_buffer](
+         conv_reader_indices_storage](
             const void* operation,
             tt::tt_metal::Program& program,
             const std::vector<Tensor>& input_tensors,

@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/operations/sliding_window/halo/device/untilize_with_halo_v2_program_factory.hpp"
+#include "ttnn/operations/sliding_window/halo/device/untilize_with_halo_program_factory.hpp"
 #include "ttnn/operations/conv/conv2d/conv2d_utils.hpp"
 #include "ttnn/tensor/shape/shape.hpp"
 #include "ttnn/operations/sliding_window/halo/device/halo_device_operation.hpp"
@@ -29,9 +29,9 @@ void HaloDeviceOperation::validate(const std::vector<Tensor>& input_tensors) con
         TT_FATAL(input_tensor.volume() % tt::constants::TILE_HW == 0, "Error");
     }
     TT_FATAL(
-        input_tensor.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED ||
-            input_tensor.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED ||
-            input_tensor.memory_config().memory_layout == TensorMemoryLayout::WIDTH_SHARDED,
+        input_tensor.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED ||
+            input_tensor.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED ||
+            input_tensor.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED,
         "Only height, width or block sharded tensors are supported.");
     TT_FATAL(input_tensor.shard_spec().has_value(), "Shard spec should not be empty");
 }
@@ -60,14 +60,14 @@ std::vector<TensorSpec> HaloDeviceOperation::compute_output_specs(const std::vec
         input_tensor.get_dtype() == DataType::BFLOAT8_B ? DataType::BFLOAT16 : input_tensor.get_dtype();
 
     TT_FATAL(
-        input_tensor.memory_config().memory_layout == output_memory_config_.memory_layout,
+        input_tensor.memory_config().memory_layout() == output_memory_config_.memory_layout(),
         "{} {}",
         input_tensor.memory_config(),
         output_memory_config_);
 
-    if (input_tensor.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED) {
-        auto input_core_range = *(input_tensor.memory_config().shard_spec->grid.ranges().begin());
-        auto output_core_range = *(output_memory_config_.shard_spec->grid.ranges().begin());
+    if (input_tensor.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED) {
+        auto input_core_range = *(input_tensor.memory_config().shard_spec()->grid.ranges().begin());
+        auto output_core_range = *(output_memory_config_.shard_spec()->grid.ranges().begin());
         auto input_core_w = input_core_range.end_coord.y - input_core_range.start_coord.y + 1;
         auto output_core_w = output_core_range.end_coord.y - output_core_range.start_coord.y + 1;
         TT_FATAL(input_core_w == output_core_w, "Error");
@@ -75,18 +75,19 @@ std::vector<TensorSpec> HaloDeviceOperation::compute_output_specs(const std::vec
 
     if (this->in_place_) {
         tt::log_info(tt::LogAlways, "halo_device_operation - Using in-place mode so deallocating input buffer");
-        DeallocateBuffer(*input_tensor.buffer());
+        // TODO: `input_tensor` is const qualified, but Tensor::deallocate() is not.
+        // Find a nicer way to do this.
+        input_tensor.mesh_buffer()->deallocate();
     }
 
-    auto out_mem_config = output_memory_config_;
     std::array<uint32_t, 2> shard_shape = {
         tt::div_up(output_shape[0] * output_shape[2], config_.num_cores_nhw),
-        input_tensor.memory_config().shard_spec->shape[1]};
-    out_mem_config.shard_spec = ShardSpec{
-        output_memory_config_.shard_spec->grid,
+        input_tensor.memory_config().shard_spec()->shape[1]};
+    auto out_mem_config = output_memory_config_.with_shard_spec(ShardSpec{
+        output_memory_config_.shard_spec()->grid,
         shard_shape,
         shard_shape,
-        output_memory_config_.shard_spec->orientation};
+        output_memory_config_.shard_spec()->orientation});
     return {TensorSpec(output_shape, TensorLayout(output_dtype, PageConfig(Layout::ROW_MAJOR), out_mem_config))};
 }
 
@@ -97,13 +98,13 @@ operation::ProgramWithCallbacks HaloDeviceOperation::create_program(
     auto device = input_tensor.device();
 
     bool is_in_tiled = input_tensor.get_layout() == Layout::TILE;
-    bool is_block_sharded = input_tensor.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED;
+    bool is_block_sharded = input_tensor.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED;
 
     auto pad_metadata = sliding_window::generate_pad_metadata(config_);
     auto op_trace_metadata = sliding_window::generate_op_trace_metadata(config_);
     auto shard_boundaries = sliding_window::generate_shard_boundaries(config_, op_trace_metadata);
-    auto tensor_metadata = sliding_window::generate_tensor_metadata(
-        pad_metadata, config_, reshard_num_cores_nhw_, is_in_tiled || is_out_tiled_);
+    uint32_t input_shard_height = input_tensor.memory_config().shard_spec()->shape[0];
+    auto tensor_metadata = sliding_window::generate_tensor_metadata(pad_metadata, config_, input_shard_height);
 
     Program program = CreateProgram();
 
@@ -144,7 +145,7 @@ operation::ProgramWithCallbacks HaloDeviceOperation::create_program(
         int num_cores_c = conv::get_num_cores_channels_from_parallel_config(this->parallel_config_);
         int stick_size = input_tensor.get_padded_shape()[3] / num_cores_c;
 
-        return {data_movement::detail::inplace_untilize_with_halo_multi_core_v2(
+        return {data_movement::detail::inplace_untilize_with_halo_multi_core(
             program,
             input_tensor,
             pad_val_,
@@ -194,7 +195,7 @@ operation::ProgramWithCallbacks HaloDeviceOperation::create_program(
 
         Program program = CreateProgram();
 
-        return {data_movement::detail::untilize_with_halo_multi_core_v2(
+        return {data_movement::detail::untilize_with_halo_multi_core(
             program,
             input_tensor,
             pad_val_,
@@ -218,82 +219,60 @@ Tensor halo_op(
     uint32_t pad_val,
     bool remote_read,
     bool transpose_mcast,
-    uint32_t reshard_num_cores_nhw,
     const MemoryConfig& output_memory_config,
     bool is_out_tiled,
     bool in_place) {
     TT_FATAL(input_tensor.memory_config().is_sharded(), "Halo expects sharded input tensor");
     TT_FATAL(
-        input_tensor.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED ||
-            input_tensor.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED ||
-            input_tensor.memory_config().memory_layout == TensorMemoryLayout::WIDTH_SHARDED,
+        input_tensor.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED ||
+            input_tensor.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED ||
+            input_tensor.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED,
         "Only height, width or block sharded tensors are supported.");
     // NOTE: for HEIGHT_SHARDED, ncores_nhw == ncores
     //       for BLOCK_SHARDED, ncores_nhw is just the ncores along height dim (last tensor dim is split along
     //       width)
-    bool is_block_sharded = input_tensor.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED;
-    auto halo_func =
-        [config,
-         pad_val,
-         remote_read,
-         is_block_sharded,
-         transpose_mcast,
-         reshard_num_cores_nhw,
-         output_memory_config,
-         is_out_tiled,
-         in_place](
-            const std::vector<Tensor>& input_tensors,
-            const std::vector<std::optional<const Tensor>>& optional_input_tensors,
-            const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
-        auto input_tensor = input_tensors.at(0);
+    bool is_block_sharded = input_tensor.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED;
 
-        auto device = input_tensor.device();
+    auto device = input_tensor.device();
 
-        auto sliding_window_hash = config.get_hash();
-        if (!HaloDeviceOperation::sliding_window_max_out_nsticks_per_core.contains(sliding_window_hash)) {
-            auto op_trace_metadata = sliding_window::generate_op_trace_metadata(config);
-            auto shard_boundaries = sliding_window::generate_shard_boundaries(config, op_trace_metadata);
-            HaloDeviceOperation::sliding_window_max_out_nsticks_per_core.emplace(
-                sliding_window_hash, sliding_window::generate_max_out_nsticks_per_core(shard_boundaries));
-        }
+    auto sliding_window_hash = config.get_hash();
+    if (!HaloDeviceOperation::sliding_window_max_out_nsticks_per_core.contains(sliding_window_hash)) {
+        auto op_trace_metadata = sliding_window::generate_op_trace_metadata(config);
+        auto shard_boundaries = sliding_window::generate_shard_boundaries(config, op_trace_metadata);
+        HaloDeviceOperation::sliding_window_max_out_nsticks_per_core.emplace(
+            sliding_window_hash, sliding_window::generate_max_out_nsticks_per_core(shard_boundaries));
+    }
 
-        uint32_t max_out_nsticks_per_core =
-            HaloDeviceOperation::sliding_window_max_out_nsticks_per_core.at(sliding_window_hash);
-        uint32_t in_nsticks_per_core = input_tensor.memory_config().shard_spec->shape[0];
-        ParallelConfig p_config;
-        p_config.grid = input_tensor.shard_spec().value().grid;
-        p_config.shard_scheme = input_tensor.memory_config().memory_layout;
-        p_config.shard_orientation = input_tensor.shard_spec().value().orientation;
+    uint32_t max_out_nsticks_per_core =
+        HaloDeviceOperation::sliding_window_max_out_nsticks_per_core.at(sliding_window_hash);
+    uint32_t in_nsticks_per_core = input_tensor.memory_config().shard_spec()->shape[0];
+    ParallelConfig p_config;
+    p_config.grid = input_tensor.shard_spec().value().grid;
+    p_config.shard_scheme = input_tensor.memory_config().memory_layout();
+    p_config.shard_orientation = input_tensor.shard_spec().value().orientation;
 
-        if (in_place && in_nsticks_per_core > max_out_nsticks_per_core) {
-            tt::log_info(
-                tt::LogAlways,
-                "halo_device_operation - in place operation is not supported for parameterizations with "
-                "input shard size larger than output shard size, falling back to normal operation");
-            in_place = false;
-        }
+    if (in_place && in_nsticks_per_core > max_out_nsticks_per_core) {
+        tt::log_info(
+            tt::LogAlways,
+            "halo_device_operation - in place operation is not supported for parameterizations with "
+            "input shard size larger than output shard size, falling back to normal operation");
+        in_place = false;
+    }
 
-        return operation::run(
-            HaloDeviceOperation{
-                .config_ = config,
-                .parallel_config_ = p_config,
-                .pad_val_ = pad_val,
-                .remote_read_ = remote_read,
-                .transpose_mcast_ = transpose_mcast,
-                .reshard_num_cores_nhw_ = reshard_num_cores_nhw,
-                .max_out_nsticks_per_core_ = max_out_nsticks_per_core,
-                .in_nsticks_per_core_ = in_nsticks_per_core,
-                .output_memory_config_ = output_memory_config,
-                .is_out_tiled_ = is_out_tiled,
-                .in_place_ = in_place},
-            {input_tensor});
-    };
-
-    std::vector<Tensor> output_tensors = {
-        Tensor(tt::tt_metal::operation::get_workers_for_op_output({input_tensor}, {}))};
-    operation::launch_op(halo_func, {input_tensor}, output_tensors);
-
-    return output_tensors.at(0);
+    return operation::run(
+               HaloDeviceOperation{
+                   .config_ = config,
+                   .parallel_config_ = p_config,
+                   .pad_val_ = pad_val,
+                   .remote_read_ = remote_read,
+                   .transpose_mcast_ = transpose_mcast,
+                   .max_out_nsticks_per_core_ = max_out_nsticks_per_core,
+                   .in_nsticks_per_core_ = in_nsticks_per_core,
+                   .output_memory_config_ = output_memory_config,
+                   .is_out_tiled_ = is_out_tiled,
+                   .in_place_ = in_place},
+               {input_tensor})
+        .at(0);
 }
 
 }  // namespace ttnn::operations::sliding_window::halo

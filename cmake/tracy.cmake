@@ -5,11 +5,14 @@ if(NOT ENABLE_TRACY)
     # Stub Tracy::TracyClient to provide the headers which themselves provide stubs
     add_library(TracyClient INTERFACE)
     add_library(Tracy::TracyClient ALIAS TracyClient)
-    target_include_directories(TracyClient SYSTEM INTERFACE ${TRACY_HOME}/public)
+    target_include_directories(TracyClient SYSTEM INTERFACE "$<BUILD_INTERFACE:${TRACY_HOME}/public>")
     return()
 endif()
 
+set(DEFAULT_COMPONENT_NAME ${CMAKE_INSTALL_DEFAULT_COMPONENT_NAME})
+set(CMAKE_INSTALL_DEFAULT_COMPONENT_NAME tracy)
 add_subdirectory(${TRACY_HOME})
+set(CMAKE_INSTALL_DEFAULT_COMPONENT_NAME ${DEFAULT_COMPONENT_NAME})
 
 set_target_properties(
     TracyClient
@@ -25,7 +28,13 @@ set_target_properties(
 )
 
 target_compile_definitions(TracyClient PUBLIC TRACY_ENABLE)
-target_compile_options(TracyClient PUBLIC -fno-omit-frame-pointer)
+target_compile_options(
+    TracyClient
+    PUBLIC
+        -fno-omit-frame-pointer
+    PRIVATE
+        "$<$<CXX_COMPILER_ID:Clang>:-Wno-conditional-uninitialized>" # FIXME: Fix this upstream
+)
 target_link_options(TracyClient PUBLIC -rdynamic)
 
 # Our current fork of tracy does not have CMake support for these subdirectories

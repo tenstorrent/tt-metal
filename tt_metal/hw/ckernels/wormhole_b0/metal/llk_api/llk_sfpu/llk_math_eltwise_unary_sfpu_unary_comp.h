@@ -31,6 +31,25 @@ inline void llk_math_eltwise_unary_sfpu_unary_ne(uint dst_index, uint param0, in
         ckernel::sfpu::calculate_unary_ne<APPROXIMATE>, dst_index, vector_mode, param0);
 }
 
+// Unary equal
+template <bool APPROXIMATE>
+inline void llk_math_eltwise_unary_sfpu_unary_eq_int32(
+    uint dst_index, uint param0, int vector_mode = (int)VectorMode::RC) {
+    llk_math_eltwise_unary_sfpu_params<APPROXIMATE>(
+        ckernel::sfpu::calculate_comp_unary_int<APPROXIMATE, SfpuType::unary_eq>, dst_index, vector_mode, param0);
+}
+
+template <bool APPROXIMATE>
+inline void llk_math_eltwise_unary_sfpu_unary_eq_init() {
+    llk_math_eltwise_unary_sfpu_init<SfpuType::unary_eq, APPROXIMATE>();
+}
+
+template <bool APPROXIMATE>
+inline void llk_math_eltwise_unary_sfpu_unary_eq(uint dst_index, uint param0, int vector_mode = (int)VectorMode::RC) {
+    llk_math_eltwise_unary_sfpu_params<APPROXIMATE>(
+        ckernel::sfpu::calculate_unary_eq<APPROXIMATE>, dst_index, vector_mode, param0);
+}
+
 // Unary greater than
 template <bool APPROXIMATE>
 inline void llk_math_eltwise_unary_sfpu_unary_gt_init() {

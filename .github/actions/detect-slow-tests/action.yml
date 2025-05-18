@@ -18,5 +18,4 @@ runs:
       id: find-changed-files
       shell: bash
       run: |
-        env
         python3 ${GITHUB_ACTION_PATH}/detect-slow-tests.py ${{ inputs.report-dir }} ${{ inputs.threshold }}

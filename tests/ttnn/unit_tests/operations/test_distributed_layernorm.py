@@ -12,6 +12,7 @@ from models.utility_functions import tt2torch_tensor, get_devices_for_t3000, ski
 
 from loguru import logger
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_allclose, comp_pcc
+from ttnn import ShardTensorToMesh, ConcatMeshToTensor
 
 
 def reference_layernorm(x, gamma, beta, epsilon, is_rmsnorm):
@@ -22,46 +23,26 @@ def reference_layernorm(x, gamma, beta, epsilon, is_rmsnorm):
 
 
 def tt_distributed_layernorm(inp, gamma, beta, epsilon, is_rmsnorm, compute_kernel_config, stats_dtype):
-    n_devices = len(inp)
-
     # Run layernorm part 1
-    tt_stats = []
-    for d in range(n_devices):
-        if is_rmsnorm:
-            tt_stats.append(
-                ttnn.rms_norm_pre_all_gather(inp[d], compute_kernel_config=compute_kernel_config, dtype=stats_dtype)
-            )
-        else:
-            tt_stats.append(
-                ttnn.layer_norm_pre_all_gather(inp[d], compute_kernel_config=compute_kernel_config, dtype=stats_dtype)
-            )
+    if is_rmsnorm:
+        tt_stats = ttnn.rms_norm_pre_all_gather(inp, compute_kernel_config=compute_kernel_config, dtype=stats_dtype)
+    else:
+        tt_stats = ttnn.layer_norm_pre_all_gather(inp, compute_kernel_config=compute_kernel_config, dtype=stats_dtype)
 
-    tt_stats = ttnn.aggregate_as_tensor(tt_stats)
     # AllGather stats
     tt_stats = ttnn.all_gather(tt_stats, dim=3, num_links=1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
     # Run layernorm part 2
-    tt_stats = ttnn.get_device_tensors(tt_stats)
-    tt_out = []
-    for d in range(n_devices):
-        if is_rmsnorm:
-            tt_out.append(
-                ttnn.rms_norm_post_all_gather(
-                    inp[d], tt_stats[d], epsilon=epsilon, weight=gamma[d], compute_kernel_config=compute_kernel_config
-                )
-            )
-        else:
-            tt_out.append(
-                ttnn.layer_norm_post_all_gather(
-                    inp[d],
-                    tt_stats[d],
-                    epsilon=epsilon,
-                    weight=gamma[d],
-                    bias=beta[d],
-                    compute_kernel_config=compute_kernel_config,
-                )
-            )
-        tt_stats[d].deallocate(True)
+    if is_rmsnorm:
+        tt_out = ttnn.rms_norm_post_all_gather(
+            inp, tt_stats, epsilon=epsilon, weight=gamma, compute_kernel_config=compute_kernel_config
+        )
+    else:
+        tt_out = ttnn.layer_norm_post_all_gather(
+            inp, tt_stats, epsilon=epsilon, weight=gamma, bias=beta, compute_kernel_config=compute_kernel_config
+        )
+
+    tt_stats.deallocate(True)
     return tt_out
 
 
@@ -88,46 +69,37 @@ def run_distributed_layernorm(
     # reference impl
     out_torch = reference_layernorm(canon_inp, gamma, beta, epsilon, is_rmsnorm)
 
-    tt_inp = []
-    for d in range(n_devices):
-        tt_inp.append(
-            ttnn.as_tensor(
-                inp_chunked[d],
-                dtype=dtype,
-                device=mesh_device.get_devices()[d],
-                layout=ttnn.TILE_LAYOUT,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            )
-        )
+    tt_inp = ttnn.as_tensor(
+        canon_inp,
+        dtype=dtype,
+        device=mesh_device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ShardTensorToMesh(mesh_device, dim=-1),
+    )
 
-    tt_gamma = []
-    for d in range(n_devices):
-        tt_gamma.append(
-            ttnn.as_tensor(
-                gamma_chunked[d].reshape(1, 1, -1, 32),
-                dtype=ttnn.bfloat16,
-                device=mesh_device.get_devices()[d],
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            )
-        )
+    tt_gamma = ttnn.as_tensor(
+        gamma.reshape(n_devices, 1, -1, 32),
+        dtype=ttnn.bfloat16,
+        device=mesh_device,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ShardTensorToMesh(mesh_device, dim=0),
+    )
+    tt_beta = ttnn.as_tensor(
+        beta.reshape(n_devices, 1, -1, 32),
+        dtype=ttnn.bfloat16,
+        device=mesh_device,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ShardTensorToMesh(mesh_device, dim=0),
+    )
 
-    tt_beta = []
-    for d in range(n_devices):
-        tt_beta.append(
-            ttnn.as_tensor(
-                beta_chunked[d].reshape(1, 1, -1, 32),
-                dtype=ttnn.bfloat16,
-                device=mesh_device.get_devices()[d],
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            )
-        )
     for i in range(iterations):
         tt_out = tt_distributed_layernorm(
             tt_inp, tt_gamma, tt_beta, epsilon, is_rmsnorm, compute_kernel_config, stats_dtype
         )
-        tt_output_host = torch.concat([tt2torch_tensor(tt_o) for tt_o in tt_out], -1)
+        tt_output_host = ttnn.to_torch(tt_out, mesh_composer=ConcatMeshToTensor(mesh_device, dim=-1))
 
     passing, output_str = comp_allclose(tt_output_host, out_torch, rtol=1e-1, atol=1e-01)
     logger.debug(f"torch vs tt distributed layernorm = {output_str}")
@@ -160,10 +132,9 @@ def run_test_distributed_layernorm_with_program_cache_and_checks(
 
     run_distributed_layernorm(inp_shape, n_devices, is_rmsnorm, dtype, stats_dtype, mesh_device, iterations=iterations)
 
-    for d in mesh_device.get_devices():
-        assert d.num_program_cache_entries() == 3, "Program cache should have only 3 entries, but has " + str(
-            d.num_program_cache_entries()
-        )
+    assert mesh_device.num_program_cache_entries() == 3, "Program cache should have only 3 entries, but has " + str(
+        mesh_device.num_program_cache_entries()
+    )
 
 
 @skip_for_grayskull("Requires eth connected devices to run")

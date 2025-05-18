@@ -5,7 +5,7 @@
 #include <stdint.h>
 #include <array>
 #include "dataflow_api.h"
-#include "hw/inc/grayskull/tensix_types.h"
+#include "tensix_types.h"
 
 void kernel_main() {
     // WRITER RUNTIME ARGS

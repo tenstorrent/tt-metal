@@ -165,13 +165,10 @@ void dprint_tensix_dest_reg(int tile_id = 0) {
         // Determine the format of the data in the destination register
         uint32_t data_format_reg_field_value = READ_HW_CFG_0_REG_FIELD(ALU_FORMAT_SPEC_REG2_Dstacc);
 
-#ifndef ARCH_GRAYSKULL
-        // ALU_ACC_CTRL_Fp32 does not exist for GS
         if (READ_HW_CFG_0_REG_FIELD(ALU_ACC_CTRL_Fp32_enabled)) {
             data_format_reg_field_value =
                 (uint32_t)DataFormat::Float32;  // Override the data format to tt::DataFormat::Float32
         }
-#endif
 
         bool is_float32 = data_format_reg_field_value == (uint32_t)DataFormat::Float32;
         bool is_swizzled = false;

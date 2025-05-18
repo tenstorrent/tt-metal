@@ -216,7 +216,7 @@ void kernel_main() {
                             virtual_k_tile_row_num, cur_head, page_table_ptr);
                     for (uint32_t col = 0; col < DHt; ++col) {
                         noc_async_read_tile(physical_k_tile_id, k_reader, k_write_ptr_col);
-                        physical_k_tile_id += 1;                       // Go to next tile in row
+                        physical_k_tile_id += 1;                               // Go to next tile in row
                         k_write_ptr_col += Sk_chunk_t_dynamic * k_tile_bytes;  // Go to next column in CB
 
                         if (++barrier_count == barrier_threshold) {

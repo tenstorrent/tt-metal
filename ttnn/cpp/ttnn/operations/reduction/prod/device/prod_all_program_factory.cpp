@@ -26,11 +26,10 @@ tt::tt_metal::operation::ProgramWithCallbacks prod_single_core(
     // This should allocate a DRAM buffer on the device
     tt_metal::IDevice* device = a.device();
 
-    uint32_t src0_cb_index = 0;
     uint32_t num_input_tiles = 2;
     tt_metal::CircularBufferConfig cb_src0_config =
-        tt_metal::CircularBufferConfig(num_input_tiles * single_tile_size, {{src0_cb_index, cb_data_format}})
-            .set_page_size(src0_cb_index, single_tile_size);
+        tt_metal::CircularBufferConfig(num_input_tiles * single_tile_size, {{tt::CBIndex::c_0, cb_data_format}})
+            .set_page_size(tt::CBIndex::c_0, single_tile_size);
     auto cb_src0 = tt_metal::CreateCircularBuffer(program, core, cb_src0_config);
 
     tt_metal::CircularBufferConfig cb_inter_config =
@@ -84,7 +83,7 @@ tt::tt_metal::operation::ProgramWithCallbacks prod_single_core(
 
     SetRuntimeArgs(program, unary_reader_kernel_id, core, {src_buffer->address(), num_tiles, 0});
 
-    SetRuntimeArgs(program, unary_writer_kernel_id, core, {dst_buffer->address(), num_tiles, 0});
+    SetRuntimeArgs(program, unary_writer_kernel_id, core, {dst_buffer->address(), /*num_tiles=*/1, 0});
 
     auto override_runtime_args_callback = [unary_reader_kernel_id, unary_writer_kernel_id](
                                               const void* operation,
@@ -108,7 +107,6 @@ tt::tt_metal::operation::ProgramWithCallbacks prod_single_core(
             runtime_args[0] = dst_buffer->address();
         }
     };
-
     return {std::move(program), override_runtime_args_callback};
 }
 

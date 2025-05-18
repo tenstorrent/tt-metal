@@ -12,11 +12,9 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
 @pytest.mark.parametrize("shape", [[1, 3, 1024, 1024], (1, 1, 512, 512), (1, 3, 32, 32)])
-@pytest.mark.parametrize("enable_async", [True, False])
 @pytest.mark.parametrize("blocking", [True, False])
 @pytest.mark.parametrize("device_params", [{"trace_region_size": 200000}], indirect=True)
-def test_single_device_single_trace(device, shape, enable_async, blocking):
-    device.enable_async(enable_async)
+def test_single_device_single_trace(device, shape, blocking):
     device.enable_program_cache()
 
     # Preallocate activation tensors. These will be used when capturing and executing the trace
@@ -68,15 +66,12 @@ def test_single_device_single_trace(device, shape, enable_async, blocking):
         assert_with_pcc(ttnn_torch_output_tensor, torch_output_golden, pcc=0.99)
 
     ttnn.release_trace(device, tid)
-    device.enable_async(False)
 
 
 @pytest.mark.parametrize("shape", [(1, 1, 512, 512), (1, 1, 32, 32), (1, 3, 32, 32)])
-@pytest.mark.parametrize("enable_async", [True, False])
 @pytest.mark.parametrize("blocking", [True, False])
 @pytest.mark.parametrize("device_params", [{"trace_region_size": 266240}], indirect=True)
-def test_single_device_multi_trace(device, shape, enable_async, blocking):
-    device.enable_async(enable_async)
+def test_single_device_multi_trace(device, shape, blocking):
     device.enable_program_cache()
 
     # Preallocate activation tensors. These will be used when capturing and executing the trace
@@ -160,5 +155,3 @@ def test_single_device_multi_trace(device, shape, enable_async, blocking):
     # Release trace buffer once workload is complete
     ttnn.release_trace(device, tid)
     ttnn.release_trace(device, tid_1)
-
-    device.enable_async(False)

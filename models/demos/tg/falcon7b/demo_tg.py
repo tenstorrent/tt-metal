@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
+
 from models.demos.falcon7b_common.demo.demo import run_falcon_demo_kv
 from models.utility_functions import is_wormhole_b0
 
@@ -10,9 +11,9 @@ from models.utility_functions import is_wormhole_b0
 @pytest.mark.parametrize(
     "perf_mode, max_seq_len, expected_perf_metrics, greedy_sampling, expected_greedy_output_path",
     (
-        (True, 128, {"prefill_t/s": 14800, "decode_t/s": 3677, "decode_t/s/u": 3.59}, False, None),
-        (True, 1024, {"prefill_t/s": 19180, "decode_t/s": 3325, "decode_t/s/u": 3.25}, False, None),
-        (True, 2048, {"prefill_t/s": 13500, "decode_t/s": 3448, "decode_t/s/u": 3.37}, False, None),
+        (True, 128, {"prefill_t/s": 21200, "decode_t/s": 7475, "decode_t/s/u": 7.30}, False, None),
+        (True, 1024, {"prefill_t/s": 19180, "decode_t/s": 7127, "decode_t/s/u": 6.96}, False, None),
+        (True, 2048, {"prefill_t/s": 14500, "decode_t/s": 7219, "decode_t/s/u": 7.05}, False, None),
         (True, 128, None, False, None),
         (True, 1024, None, False, None),
         (True, 2048, None, False, None),
@@ -32,7 +33,6 @@ from models.utility_functions import is_wormhole_b0
         "default_mode_1024_stochastic",
     ],
 )
-@pytest.mark.parametrize("enable_async_mode", (True,), indirect=True)  # Option to run Falcon in Async mode
 @pytest.mark.parametrize(
     "mesh_device",
     ((8, 4),),
@@ -50,7 +50,6 @@ def test_demo_multichip(
     get_tt_cache_path,
     mesh_device,
     use_program_cache,
-    enable_async_mode,
     is_ci_env,
     ensure_devices_tg,
 ):

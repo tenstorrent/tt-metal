@@ -17,6 +17,5 @@ struct Clone {
 }  // namespace ttnn::operations::data_movement::clone
 
 namespace ttnn {
-constexpr auto clone =
-    ttnn::register_operation_with_auto_launch_op<"ttnn::clone", ttnn::operations::data_movement::clone::Clone>();
+constexpr auto clone = ttnn::register_operation<"ttnn::clone", ttnn::operations::data_movement::clone::Clone>();
 }  // namespace ttnn

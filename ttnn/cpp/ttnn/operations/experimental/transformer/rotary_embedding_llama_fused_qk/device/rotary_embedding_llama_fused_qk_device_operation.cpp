@@ -22,14 +22,12 @@ void RotaryEmbeddingLlamaFusedQK::validate(const std::vector<Tensor>& input_tens
 
     auto ref_device = q_input_tensor.device();
     for (const auto& input : input_tensors) {
-        TT_FATAL(
-            input.storage_type() == StorageType::DEVICE || input.storage_type() == StorageType::MULTI_DEVICE,
-            "Operands to rotary embedding need to be on device!");
+        TT_FATAL(input.storage_type() == StorageType::DEVICE, "Operands to rotary embedding need to be on device!");
         TT_FATAL(input.buffer() != nullptr, "Operands to rotary embedding need to be allocated in buffers on device!");
         TT_FATAL(input.device() == ref_device, "Operands to rotary embedding need to be on same device!");
         TT_FATAL((input.get_layout() == Layout::TILE), "Inputs to rotary embedding must be tilized");
         TT_FATAL(
-            (input.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED),
+            (input.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED),
             "inputs for RoPE must be HEIGHT_SHARDED.");
         TT_FATAL((input.get_dtype() == DataType::BFLOAT16), "Inputs to rotary embedding must be bfloat16");
     }
@@ -52,10 +50,10 @@ void RotaryEmbeddingLlamaFusedQK::validate(const std::vector<Tensor>& input_tens
     TT_FATAL(head_dim % TILE_WIDTH == 0, "Head dim must be a multiple of TILE_WIDTH");
 
     TT_FATAL(
-        q_input_tensor.memory_config().memory_layout == this->q_output_mem_config.memory_layout,
+        q_input_tensor.memory_config().memory_layout() == this->q_output_mem_config.memory_layout(),
         "Q Input tensor and Q output tensor must have same memory layout");
     TT_FATAL(
-        k_input_tensor.memory_config().memory_layout == this->k_output_mem_config.memory_layout,
+        k_input_tensor.memory_config().memory_layout() == this->k_output_mem_config.memory_layout(),
         "K Input tensor and K output tensor must have same memory layout");
 
     // check that q and k have same batch size and lesser that equal to 32

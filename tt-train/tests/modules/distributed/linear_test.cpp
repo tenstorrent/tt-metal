@@ -5,10 +5,11 @@
 #include "modules/distributed/linear.hpp"
 
 #include <gtest/gtest.h>
-#include <umd/device/tt_cluster_descriptor.h>
+#include <umd/device/cluster.h>
 
 #include <core/ttnn_all_includes.hpp>
 #include <core/xtensor_utils.hpp>
+#include <xtensor-blas/xlinalg.hpp>
 
 #include "autograd/auto_context.hpp"
 #include "core/distributed_mapping.hpp"

@@ -12,7 +12,7 @@
 #include <variant>
 #include <vector>
 
-#include <tt-metalium/circular_buffer_types.hpp>
+#include <tt-metalium/circular_buffer_config.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/data_types.hpp>
 #include "debug_tools_fixture.hpp"
@@ -158,7 +158,7 @@ SLICE:
 <TileSlice data truncated due to exceeding max count (32)>
 Tried printing CBIndex::c_1: Unsupported data format (Bfp2_b))";
 
-static void RunTest(DPrintFixture* fixture, IDevice* device) {
+void RunTest(DPrintFixture* fixture, IDevice* device) {
     // Set up program and command queue
     constexpr CoreCoord core = {0, 0}; // Print on first core only
     Program program = Program();

@@ -12,6 +12,7 @@
 #include <tt-metalium/bfloat16.hpp>
 #include "ttnn/operations/data_movement/reshape_on_device/reshape.hpp"
 #include "ttnn/operations/data_movement/bcast/bcast.hpp"
+#include "cpp/ttnn/operations/copy.hpp"
 #include "ttnn/operations/functions.hpp"
 #include "ttnn/operations/data_movement/slice/slice.hpp"
 #include "ttnn/operations/eltwise/unary/unary_composite.hpp"
@@ -478,10 +479,15 @@ Tensor ExecuteUnaryCompositeClip::invoke(
 
 // clamp
 Tensor ExecuteUnaryCompositeClamp::invoke(
-    const Tensor& a,
+    const Tensor& input_a,
     std::optional<float> min,
     std::optional<float> max,
     const std::optional<MemoryConfig>& output_mem_config) {
+    Tensor a = input_a;
+    if (input_a.get_dtype() == DataType::INT32) {
+        a = ttnn::typecast(a, DataType::FLOAT32);
+    }
+
     auto output_memory_config = output_mem_config.value_or(a.memory_config());
     TT_FATAL((max.has_value() || min.has_value()), "Only one of 'min' or 'max' can be None. Please provide one value");
     if (!max.has_value()) {
@@ -493,11 +499,12 @@ Tensor ExecuteUnaryCompositeClamp::invoke(
     } else if (min.value() > max.value()) {
         return full_like(a, max.value());
     }
-    Tensor a_max = ttnn::minimum(ttnn::DefaultQueueId, a, max.value(), std::nullopt, output_memory_config);
+
+    Tensor a_max = ttnn::minimum(a, max.value(), std::nullopt, output_memory_config);
     if (min.value() == 0.0f) {
         return ttnn::relu(a_max, output_memory_config);
     } else {
-        return ttnn::maximum(ttnn::DefaultQueueId, a_max, min.value(), std::nullopt, output_memory_config);
+        return ttnn::maximum(a_max, min.value(), std::nullopt, output_memory_config);
     }
 }
 
@@ -547,22 +554,22 @@ Tensor _hardtanh(
  *
  */
 // Function Selu - scaled exponential linear
-// use transformation y = scale *(max(0,x)) + min(0,alpha * (exp(X)-1)) by broadcast
+// use transformation y = scale *(max(0,x) + min(0,alpha * (exp(X)-1))) by broadcast
 // Ref: https://pytorch.org/docs/stable/generated/torch.nn.SELU.html
 Tensor _selu(
     const Tensor& x, const float scale, const float alpha, const std::optional<MemoryConfig>& output_mem_config) {
     // term 2
-    Tensor x_Exp_minus_1 = ttnn::expm1(x);
-    Tensor result_t2_ = ttnn::multiply(x_Exp_minus_1, alpha, std::nullopt, output_mem_config);
+    Tensor x_Exp_minus_1 = ttnn::expm1(x, output_mem_config);
+    Tensor result_t2_ = ttnn::multiply_(x_Exp_minus_1, alpha);
     x_Exp_minus_1.deallocate();
     Tensor result_term2 = ttnn::minimum(ttnn::DefaultQueueId, result_t2_, 0.0f, std::nullopt, output_mem_config);
     result_t2_.deallocate();
 
     // term 1
     Tensor x_max = ttnn::maximum(ttnn::DefaultQueueId, x, 0.0f, std::nullopt, output_mem_config);
-    Tensor result_term1 = ttnn::multiply(x_max, scale, std::nullopt, output_mem_config);
+    Tensor sum_max_term2 = ttnn::add_(x_max, result_term2);
     x_max.deallocate();
-    Tensor result_selu = ttnn::add(result_term1, result_term2, std::nullopt, output_mem_config);
+    Tensor result_selu = ttnn::multiply_(sum_max_term2, scale);
 
     return result_selu;
 }

@@ -19,7 +19,7 @@
 namespace ttnn::operations::core {
 
 ttnn::Tensor unsqueeze_to_4D(const ttnn::Tensor& tensor) {
-    if (distributed::is_multi_device_tensor(tensor)) {
+    if (tt::tt_metal::is_multi_device_host_tensor(tensor)) {
         return transform(tensor, [&](const Tensor& device_tensor) { return unsqueeze_to_4D(device_tensor); });
     }
 
@@ -66,23 +66,9 @@ ttnn::Tensor allocate_tensor_on_device(
     const Shape& shape,
     DataType data_type,
     Layout layout,
-    IDevice* device,
-    const std::optional<MemoryConfig>& memory_config) {
-    return allocate_tensor_on_device(
-        TensorSpec(
-            shape,
-            tt::tt_metal::TensorLayout(
-                data_type, tt::tt_metal::PageConfig(layout), memory_config.value_or(ttnn::DRAM_MEMORY_CONFIG))),
-        device);
-}
-
-ttnn::Tensor allocate_tensor_on_device(
-    const Shape& shape,
-    DataType data_type,
-    Layout layout,
     MeshDevice* mesh_device,
     const std::optional<MemoryConfig>& memory_config) {
-    return allocate_tensor_on_device(
+    return allocate_tensor_on_mesh(
         TensorSpec(
             shape,
             tt::tt_metal::TensorLayout(
@@ -90,16 +76,8 @@ ttnn::Tensor allocate_tensor_on_device(
         mesh_device);
 }
 
-ttnn::Tensor allocate_tensor_on_device(const ttnn::TensorSpec& spec, IDevice* device) {
-    return tt::tt_metal::allocate_tensor_on_devices(spec, {device});
-}
-
 ttnn::Tensor allocate_tensor_on_device(const ttnn::TensorSpec& spec, MeshDevice* mesh_device) {
-    return tt::tt_metal::allocate_tensor_on_devices(spec, mesh_device->get_devices());
-}
-
-void copy_host_to_device_tensor(const ttnn::Tensor& host_tensor, ttnn::Tensor device_tensor, QueueId cq_id) {
-    tt::tt_metal::write_tensor(std::move(host_tensor), std::move(device_tensor), cq_id);
+    return tt::tt_metal::allocate_tensor_on_mesh(spec, mesh_device);
 }
 
 ttnn::Tensor from_device(const ttnn::Tensor& tensor, bool blocking, QueueId cq_id) {

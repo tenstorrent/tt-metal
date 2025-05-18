@@ -42,10 +42,10 @@ using Parameters = std::map<std::string, ttnn::Tensor>;
 using ttnn::operations::unary::UnaryOpType;
 using ttnn::operations::unary::UnaryWithParam;
 
-ttnn::MemoryConfig l1_memory_config = ttnn::MemoryConfig{
-    .memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED, .buffer_type = tt::tt_metal::BufferType::L1};
-ttnn::MemoryConfig dram_memory_config = ttnn::MemoryConfig{
-    .memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED, .buffer_type = tt::tt_metal::BufferType::DRAM};
+ttnn::MemoryConfig l1_memory_config =
+    ttnn::MemoryConfig{tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::L1};
+ttnn::MemoryConfig dram_memory_config =
+    ttnn::MemoryConfig{tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::DRAM};
 
 ttnn::Tensor encoder(
     ttnn::Tensor&& hidden_states,
@@ -231,7 +231,8 @@ void test_bert() {
     using tt::tt_metal::Tensor;
 
     int device_id = 0;
-    auto device = tt::tt_metal::CreateDevice(device_id);
+    auto device_owner = tt::tt_metal::distributed::MeshDevice::create_unit_mesh(device_id);
+    auto device = device_owner.get();
     CoreCoord compute_grid_size = device->compute_with_storage_grid_size();
 
     if (compute_grid_size.x * compute_grid_size.y == 88) {
@@ -361,8 +362,6 @@ void test_bert() {
     run_bert();
     run_loop();
     device->disable_and_clear_program_cache();
-
-    TT_FATAL(tt::tt_metal::CloseDevice(device), "Error");
 }
 
 int main(int argc, char** argv) {

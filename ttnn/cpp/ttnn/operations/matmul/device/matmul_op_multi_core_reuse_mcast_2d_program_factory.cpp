@@ -14,6 +14,7 @@
 #include "ttnn/operation.hpp"
 #include "ttnn/operations/matmul/device/matmul_op.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
+#include "ttnn/operations/compute_throttle_utils.hpp"
 
 using namespace tt::constants;
 using namespace tt;
@@ -103,13 +104,13 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_mcast_in0_in1(
     uint32_t in0_block_tiles = out_block_h * in0_block_w;
     uint32_t in0_CB_tiles = in0_block_tiles;
     if (B * num_blocks > 1) {
-        in0_CB_tiles = in0_CB_tiles * 2;  // double buffer
+        in0_CB_tiles *= ttnn::operations::matmul::MCAST_INPUT_BUFFERING_DEPTH;
     }
     uint32_t in0_CB_size = in0_CB_tiles * in0_single_tile_size;
     uint32_t in1_block_tiles = out_block_w * in0_block_w;
     uint32_t in1_CB_tiles = in1_block_tiles;
     if (B * num_blocks > 1) {
-        in1_CB_tiles = in1_CB_tiles * 2;  // double buffer
+        in1_CB_tiles *= ttnn::operations::matmul::MCAST_INPUT_BUFFERING_DEPTH;
     }
     uint32_t in1_CB_size = in1_CB_tiles * in1_single_tile_size;
 
@@ -523,7 +524,9 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_mcast_in0_in1(
         mm_kernel_defines["IN1_TRANSPOSE_TILE"] = "1";
     }
 
-    bmm_op_utils::add_stagger_defines_if_needed(device->arch(), cores.size(), mm_kernel_defines);
+    ttnn::operations::compute_throttle_utils::add_stagger_defines_if_needed(
+        device->arch(), cores.size(), mm_kernel_defines);
+    ttnn::operations::compute_throttle_utils::throttle_mm_perf(device->arch(), cores.size(), mm_kernel_defines);
 
     if (in0_receiver_interleaved.num_cores() == 0) {
         mm_kernel_in0_sender_interleaved_defines["SKIP_MCAST"] = "1";

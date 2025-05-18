@@ -3,19 +3,12 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
-import ttnn
-
 import ttnn.torch_tracer
+
+import ttnn
+from models.demos.segformer.tests.perf.segformer_test_infra import SegformerTrace2CQ
 from models.perf.perf_utils import prep_perf_report
 from models.utility_functions import run_for_wormhole_b0
-from models.demos.segformer.tests.perf.segformer_test_infra import SegformerTrace2CQ
-
-
-def buffer_address(tensor):
-    addr = []
-    for t in ttnn.get_device_tensors(tensor):
-        addr.append(t.buffer_address())
-    return addr
 
 
 @run_for_wormhole_b0()

@@ -425,7 +425,7 @@ TEST_P(TilizeUntilizeTestsFixture, TilizeUntilize) {
             input, shape, from_layout, to_layout, tile_shape, face_shape, transpose_within_face, transpose_of_faces);
 
         auto converted_back = convert_layout(
-            tt::stl::MakeConstSpan(converted),
+            tt::stl::make_const_span(converted),
             shape,
             to_layout,
             from_layout,
@@ -434,7 +434,7 @@ TEST_P(TilizeUntilizeTestsFixture, TilizeUntilize) {
             transpose_within_face,
             transpose_of_faces);
 
-        auto converted_back_span = tt::stl::MakeConstSpan(converted_back);
+        auto converted_back_span = tt::stl::make_const_span(converted_back);
         ASSERT_EQ(input.size(), converted_back.size());
         ASSERT_TRUE(std::equal(input.begin(), input.end(), converted_back_span.begin()));
     };
@@ -488,7 +488,7 @@ TEST_P(ThrowableTilizeUntilizeFixture, TilizeUntilize) {
         using Type = decltype(type);
         std::vector<Type> input(input_size);
 
-        EXPECT_ANY_THROW(convert_layout(tt::stl::MakeConstSpan(input), shape, from_layout, to_layout));
+        EXPECT_ANY_THROW(convert_layout(tt::stl::make_const_span(input), shape, from_layout, to_layout));
     };
 
     // Test all interesting types

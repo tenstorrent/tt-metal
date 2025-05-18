@@ -40,10 +40,13 @@
 #include "ttnn/operations/experimental/ccl/ccl_experimental_pybind.hpp"
 #include "ttnn/operations/experimental/plusone/plusone_pybind.hpp"
 #include "ttnn/operations/experimental/dropout/dropout_pybind.hpp"
+#include "ttnn/operations/experimental/bcast_to/bcast_to_pybind.hpp"
+
 #include "ttnn/operations/experimental/reshape/view_pybind.hpp"
 #include "ttnn/operations/experimental/transformer/all_reduce_create_qkv_heads/all_reduce_create_qkv_heads_pybind.hpp"
 #include "ttnn/operations/experimental/unary_backward/gelu_backward/gelu_backward_pybind.hpp"
 #include "ttnn/operations/experimental/reduction/sort/sort_pybind.hpp"
+#include "ttnn/operations/experimental/gather/gather_pybind.hpp"
 
 namespace ttnn::operations::experimental {
 
@@ -95,14 +98,18 @@ void py_module(py::module& module) {
 
     gelu_backward::detail::bind_experimental_gelu_backward_operation(module);
 
-    reduction::detail::bind_reduction_sort_operation(module);
+    reduction::sort::detail::bind_reduction_sort_operation(module);
 
     reduction::detail::bind_cumsum_operation(module);
+
+    gather::detail::bind_gather_operation(module);
 
     // CCL ops
     auto m_experimental_ccl =
         module.def_submodule("ccl_experimental", "experimental collective communication operations");
     ccl::py_module(m_experimental_ccl);
+
+    broadcast_to::detail::py_bind_broadcast_to(module);
 }
 
 }  // namespace ttnn::operations::experimental

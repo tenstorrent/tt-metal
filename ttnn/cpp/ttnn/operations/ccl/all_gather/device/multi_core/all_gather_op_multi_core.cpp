@@ -213,23 +213,23 @@ static void emit_sharded_tensor_kernel_rt_args(IDevice* d, Tensor const& tensor,
 
 static bool shard_grid_is_transposed(Tensor const& t) {
     TT_FATAL(
-        t.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED ||
-            t.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED ||
-            t.memory_config().memory_layout == TensorMemoryLayout::WIDTH_SHARDED,
+        t.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED ||
+            t.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED ||
+            t.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED,
         "Unsupported memory layout {}.",
-        t.memory_config().memory_layout);
+        t.memory_config().memory_layout());
     bool shard_grid_transposed =
-        ((t.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED &&
+        ((t.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED &&
           t.shard_spec()->orientation == ShardOrientation::ROW_MAJOR) ||
-         ((t.memory_config().memory_layout == TensorMemoryLayout::WIDTH_SHARDED ||
-           t.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED) &&
+         ((t.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED ||
+           t.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED) &&
           t.shard_spec()->orientation == ShardOrientation::COL_MAJOR));
     return shard_grid_transposed;
 }
 
 static void emit_sharded_tensor_kernel_ct_args(IDevice* d, const Tensor& tensor, std::vector<uint32_t>& args) {
     std::ranges::copy(
-        std::vector<uint32_t>{static_cast<uint32_t>(tensor.memory_config().memory_layout)}, std::back_inserter(args));
+        std::vector<uint32_t>{static_cast<uint32_t>(tensor.memory_config().memory_layout())}, std::back_inserter(args));
     std::ranges::copy(ShardedAddrGenArgBuilder::emit_ct_args(tensor), std::back_inserter(args));
 };
 
@@ -247,6 +247,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_multi_core_with_workers
     const uint32_t num_links,
     const uint32_t ring_size,
     const uint32_t ring_index,
+    chip_id_t target_device_id,
     const std::optional<chip_id_t> receiver_device_id,
     const std::optional<chip_id_t> sender_device_id,
     ccl::Topology topology,
@@ -262,6 +263,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_multi_core_with_workers
         num_links,
         ring_size,
         ring_index,
+        target_device_id,
         receiver_device_id,
         sender_device_id,
         topology,
@@ -278,6 +280,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_multi_core_with_workers
     const uint32_t num_links,
     const uint32_t ring_size,
     const uint32_t ring_index,
+    chip_id_t target_device_id,
     const std::optional<chip_id_t> receiver_device_id,
     const std::optional<chip_id_t> sender_device_id,
     ccl::Topology topology,
@@ -301,7 +304,8 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_multi_core_with_workers
         num_edm_buffers_per_channel = user_defined_num_buffers_per_channel.value();
     }
 
-    const auto& device = input_tensor.device();
+    const auto& device =
+        input_tensor.mesh_device() ? input_tensor.mesh_device()->get_device(target_device_id) : input_tensor.device();
 
     /* All gather fusion */
     bool fuse_op = fused_op_signaler.has_value();
@@ -745,19 +749,17 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_multi_core_with_workers
                 log_trace(tt::LogOp, "pages_per_buffer[{}]: {}", w, pages_per_buffer.at(w));
                 log_trace(tt::LogOp, "max_pages_per_eth_l1_sender_buffer: {}", max_pages_per_eth_l1_sender_buffer);
             }
-            TT_ASSERT(std::accumulate(pages_per_buffer.begin(), pages_per_buffer.end(), 0) == pages_per_link.at(i));
+            TT_ASSERT(std::accumulate(pages_per_buffer.begin(), pages_per_buffer.end(), 0u) == pages_per_link.at(i));
 
-            uint32_t bytes_per_chunk = 0, pages_per_chunk = 0, num_full_chunks = 0, rem_bytes = 0, rem_pages = 0;
+            uint32_t bytes_per_chunk = 0, pages_per_chunk = 0, num_full_chunks = 0, rem_pages = 0;
             uint32_t link_size_bytes = pages_per_link.at(i) * input_page_size;
             if (pages_per_link.at(i) >= max_pages_per_chunk) {
                 bytes_per_chunk = max_buffer_per_chunk;
                 pages_per_chunk = max_pages_per_chunk;
                 TT_ASSERT(max_buffer_per_chunk == max_pages_per_chunk * input_page_size);
                 num_full_chunks = link_size_bytes / bytes_per_chunk;
-                rem_bytes = link_size_bytes % bytes_per_chunk;
                 rem_pages = pages_per_link.at(i) % max_pages_per_chunk;
             } else {
-                rem_bytes = link_size_bytes;
                 rem_pages = pages_per_link.at(i);
             }
 

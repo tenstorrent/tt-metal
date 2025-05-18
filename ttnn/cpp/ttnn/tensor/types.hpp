@@ -20,8 +20,7 @@
 #include <tt_stl/reflection.hpp>
 #include <tt_stl/span.hpp>
 #include "ttnn/distributed/distributed_tensor_config.hpp"
-#include "ttnn/tensor/host_buffer/types.hpp"
-#include "cpp/ttnn/tensor/enum_types.hpp"
+#include "ttnn/tensor/enum_types.hpp"
 
 #include "ttnn/tensor/shape/shape.hpp"
 
@@ -68,40 +67,77 @@ bool is_floating_point(DataType dtype);
 
 bool is_block_float(DataType dtype);
 
+// Enums are explicitly enumerated due to serialization dependency
+// TODO: #16067 - This shouldn't be needed. Serialize this enum to flatbuffer.
 enum class StorageType {
-    OWNED,
-    DEVICE,
-    BORROWED,           // for storing torch/numpy/etc tensors
-    MULTI_DEVICE,       // on-device storage for multi-device context
-    MULTI_DEVICE_HOST,  // host storage for multi-device context
+    HOST = 0,
+    DEVICE = 1,
+    MULTI_DEVICE_HOST = 4,  // host storage for multi-device context
 };
 
 tt::DataFormat datatype_to_dataformat_converter(DataType datatype);
 
 static constexpr std::size_t MAX_NUM_DIMENSIONS = 8;
 
-typedef std::array<uint32_t, 1> Array1D;
-typedef std::array<uint32_t, 2> Array2D;
-typedef std::array<uint32_t, 3> Array3D;
-typedef std::array<uint32_t, 4> Array4D;
-typedef std::array<uint32_t, 5> Array5D;
-typedef std::array<uint32_t, 6> Array6D;
-typedef std::array<uint32_t, 7> Array7D;
-typedef std::array<uint32_t, 8> Array8D;
+using Array1D = std::array<uint32_t, 1>;
+using Array2D = std::array<uint32_t, 2>;
+using Array3D = std::array<uint32_t, 3>;
+using Array4D = std::array<uint32_t, 4>;
+using Array5D = std::array<uint32_t, 5>;
+using Array6D = std::array<uint32_t, 6>;
+using Array7D = std::array<uint32_t, 7>;
+using Array8D = std::array<uint32_t, 8>;
 
-struct MemoryConfig {
-    TensorMemoryLayout memory_layout = TensorMemoryLayout::INTERLEAVED;  // Interleave the data across multiple banks
-    BufferType buffer_type = BufferType::DRAM;                           // Can be either DRAM or L1
-    std::optional<ShardSpec> shard_spec = std::nullopt;
+class MemoryConfig final {
+public:
+    MemoryConfig() = default;  // Interleaved DRAM
+    explicit MemoryConfig(
+        TensorMemoryLayout memory_layout,
+        BufferType buffer_type = BufferType::DRAM,
+        std::optional<ShardSpec> shard_spec = std::nullopt) :
+        memory_layout_(memory_layout), buffer_type_(buffer_type), shard_spec_(std::move(shard_spec)) {}
+    MemoryConfig(const MemoryConfig& other) = default;
+    MemoryConfig& operator=(const MemoryConfig& other) = default;
+    MemoryConfig(MemoryConfig&& other) noexcept = default;
+    MemoryConfig& operator=(MemoryConfig&& other) noexcept = default;
+
+    TensorMemoryLayout memory_layout() const { return memory_layout_; }
+    BufferType buffer_type() const { return buffer_type_; }
+    const std::optional<ShardSpec>& shard_spec() const { return shard_spec_; }
+
+    MemoryConfig with_shard_spec(std::optional<ShardSpec> shard_spec) const {
+        return MemoryConfig(memory_layout_, buffer_type_, std::move(shard_spec));
+    }
+
     bool is_sharded() const;
     bool is_l1() const;
     bool is_dram() const;
+
+    static constexpr auto attribute_names = std::forward_as_tuple("memory_layout", "buffer_type", "shard_spec");
+    auto attribute_values() const { return std::forward_as_tuple(memory_layout_, buffer_type_, shard_spec_); }
+
+    friend std::ostream& operator<<(std::ostream& os, const MemoryConfig& config);
+
+private:
+    TensorMemoryLayout memory_layout_ = TensorMemoryLayout::INTERLEAVED;  // Interleave the data across multiple banks
+    BufferType buffer_type_ = BufferType::DRAM;                           // Can be either DRAM or L1
+    std::optional<ShardSpec> shard_spec_ = std::nullopt;
 };
 
 std::ostream& operator<<(std::ostream& os, const MemoryConfig& config);
 
-bool operator==(const MemoryConfig &config_a, const MemoryConfig &config_b);
-bool operator!=(const MemoryConfig &config_a, const MemoryConfig &config_b);
+bool operator==(const MemoryConfig& config_a, const MemoryConfig& config_b);
+bool operator!=(const MemoryConfig& config_a, const MemoryConfig& config_b);
 
-} // namespace tt_metal
-} // namespace tt
+}  // namespace tt_metal
+}  // namespace tt
+
+template <>
+struct tt::stl::json::to_json_t<tt::tt_metal::MemoryConfig> {
+    nlohmann::json operator()(const tt::tt_metal::MemoryConfig& config) const;
+};
+
+template <>
+struct tt::stl::json::from_json_t<tt::tt_metal::MemoryConfig> {
+    tt::tt_metal::MemoryConfig operator()(const nlohmann::json& json_object) const;
+};

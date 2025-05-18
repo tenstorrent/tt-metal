@@ -5,13 +5,14 @@
 import pytest
 import torch
 from loguru import logger
+
 import ttnn
-from ttnn import ShardTensorToMesh
+from models.demos.falcon7b_common.tests.test_utils import get_num_devices, load_hf_model, tt_from_torch
 from models.demos.falcon7b_common.tt.falcon_mlp import TtFalconMLPDecode, TtFalconMLPPrefill
 from models.demos.falcon7b_common.tt.model_config import get_model_config
-from models.demos.falcon7b_common.tests.test_utils import load_hf_model, tt_from_torch, get_num_devices
-from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_allclose, comp_pcc
 from models.utility_functions import tt_tensors_to_torch_tensors
+from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_allclose, comp_pcc
+from ttnn import ShardTensorToMesh
 
 
 class PytorchFalconMLPModel(torch.nn.Module):
@@ -99,7 +100,6 @@ def run_test_FalconMLP_inference(
 
 
 @pytest.mark.parametrize("mesh_device", (1, 2, 4, (8, 4)), indirect=True, ids=["1chip", "2chip", "4chip", "32chipTG"])
-@pytest.mark.parametrize("enable_async_mode", (False, True), indirect=True)
 @pytest.mark.parametrize(
     "model_version, llm_mode, batch, seq_len, pcc",
     (
@@ -145,7 +145,6 @@ def test_FalconMLP_inference(
     model_location_generator,
     get_tt_cache_path,
     mesh_device,
-    enable_async_mode,
 ):
     model_config = get_model_config(model_config_str, seq_len, batch)
     tt_cache_path = get_tt_cache_path(
