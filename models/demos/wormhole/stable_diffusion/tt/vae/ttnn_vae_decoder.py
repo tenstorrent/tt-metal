@@ -128,6 +128,7 @@ class VaeDecoder:
             inplace=False,
             num_out_blocks=self.norm_num_blocks,
             epsilon=GROUPNORM_EPSILON,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
         hidden_states = ttnn.silu(hidden_states)
