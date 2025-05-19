@@ -276,7 +276,7 @@ void sub_exp_block(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t n
     // Postcondition: in0_cb and in1_cb has num_tiles produced
 
     sub_tiles_init(in0_cb, in1_cb);
-    exp_tile_init<EXP_APPROX_MODE, false>();
+    exp_tile_init<false, EXP_APPROX_MODE>();
     cb_wait_front(in0_cb, num_tiles);
     cb_wait_front(in1_cb, num_tiles);
     cb_reserve_back(out_cb, num_tiles);
@@ -289,7 +289,7 @@ void sub_exp_block(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t n
 
         sub_tiles(in0_cb, in1_cb, i, i, 0);
 
-        exp_tile<EXP_APPROX_MODE, false, 8, true, true>(0, (int)VectorMode::C, scale_bf16);
+        exp_tile<false, EXP_APPROX_MODE, true, true>(0, (int)VectorMode::C, scale_bf16);
 
         pack_tile(0, out_cb);
 

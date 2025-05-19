@@ -14,10 +14,10 @@ namespace ckernel {
 
 template <
     bool APPROXIMATE,
-    bool FAST_APPROX = true,
-    int ITERATIONS = 8,
+    bool FAST_APPROX,
     bool SCALE_EN = false,
-    bool SKIP_POSITIVE_CHECK = false>
+    bool SKIP_POSITIVE_CHECK = false,
+    int ITERATIONS = 8>
 inline void llk_math_eltwise_unary_sfpu_exponential(
     uint dst_index, int vector_mode = (int)VectorMode::RC, int param0 = ITERATIONS, int param1 = 0x3F80) {
     llk_math_eltwise_unary_sfpu_params<APPROXIMATE>(
@@ -28,7 +28,7 @@ inline void llk_math_eltwise_unary_sfpu_exponential(
         param1);
 }
 
-template <bool APPROXIMATE, bool FAST_APPROX = true, uint32_t scale = 0x3F800000>
+template <bool APPROXIMATE, bool FAST_APPROX, uint32_t scale = 0x3F800000>
 inline void llk_math_eltwise_unary_sfpu_exponential_init() {
     llk_math_eltwise_unary_sfpu_init<SfpuType::exponential, APPROXIMATE>(
         sfpu::exp_init<APPROXIMATE, FAST_APPROX, scale>);

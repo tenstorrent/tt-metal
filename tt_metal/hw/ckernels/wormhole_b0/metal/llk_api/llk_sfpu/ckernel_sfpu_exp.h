@@ -22,7 +22,7 @@ sfpi_inline vFloat sfpu_exp(vFloat val) { return _sfpu_exp_(val); }
 
 template <
     bool APPROXIMATION_MODE,
-    bool FAST_APPROX = true,
+    bool FAST_APPROX,
     bool SCALE_EN = false,
     int ITERATIONS = 8,
     bool SKIP_POSITIVE_CHECK = false>
@@ -83,7 +83,7 @@ sfpi_inline vFloat calculate_exponential_body_improved(vFloat val) {
     return out;
 }
 
-template <bool APPROXIMATION_MODE, bool FAST_APPROX = true, uint32_t scale = 0x3F800000>
+template <bool APPROXIMATION_MODE, bool FAST_APPROX, uint32_t scale = 0x3F800000>
 void exp_init() {
     _init_exponential_<APPROXIMATION_MODE, FAST_APPROX, scale>();
 }
