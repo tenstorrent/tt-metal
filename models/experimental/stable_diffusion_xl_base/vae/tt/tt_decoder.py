@@ -56,7 +56,7 @@ class TtDecoder(nn.Module):
         self.conv_out_bias = state_dict[f"decoder.conv_out.bias"]
 
         core_y, self.norm_blocks = get_DRAM_GN_config(None, 1)
-        self.norm_core_grid = ttnn.CoreGrid(y=core_y, x=8)
+        self.norm_core_grid = ttnn.CoreGrid(y=core_y, x=4)
 
         self.gamma_t, self.beta_t = prepare_gn_beta_gamma(
             device, norm_out_weights, norm_out_bias, self.norm_core_grid.y
