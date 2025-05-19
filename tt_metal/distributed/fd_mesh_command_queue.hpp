@@ -14,6 +14,8 @@
 #include "dispatch/worker_config_buffer.hpp"
 #include "mesh_trace.hpp"
 
+#include "trace/trace_node.hpp"
+
 namespace tt::tt_metal::distributed {
 
 struct MeshReadEventDescriptor;
@@ -42,25 +44,6 @@ private:
         tt::stl::Span<const SubDeviceId> sub_device_ids,
         bool notify_host,
         const std::optional<MeshCoordinateRange>& device_range = std::nullopt);
-    // Trace capture utility functions
-    // Captures dispatch commands associated with running a program on a Virtual Mesh subgrid
-    // inside the appropriate trace staging vector (corresponding to the specified subgrid)
-    void capture_program_trace_on_subgrid(
-        const MeshCoordinateRange& sub_grid,
-        ProgramCommandSequence& program_cmd_seq,
-        bool stall_first,
-        bool stall_before_program,
-        uint32_t program_runtime_id);
-    // For a given MeshWorkload, a subgrid is unused if no programs are run on it. Go signals
-    // must be sent to this subgrid, to ensure consistent global state across the Virtual Mesh.
-    // When running trace, the dispatch commands responsible for forwarding go signals must be
-    // captured on these subgrids.
-    void capture_go_signal_trace_on_unused_subgrids(
-        const MeshCoordinateRange& active_sub_grids,
-        const SubDeviceId& sub_device_id,
-        uint32_t expected_num_workers_completed,
-        bool mcast_go_signals,
-        bool unicast_go_signals);
     // Workload dispatch utility functions
     // Write dispatch commands associated with running a program on a Virtual Mesh subgrid
     void write_program_cmds_to_subgrid(
@@ -113,11 +96,18 @@ private:
     DispatchArray<uint32_t> expected_num_workers_completed_reset_;
     DispatchArray<tt::tt_metal::WorkerConfigBufferMgr> config_buffer_mgr_reset_;
 
+    struct MeshTraceNode {
+        std::vector<std::pair<MeshCoordinateRange, TraceNode>> trace_nodes;
+        bool multicast_go_signals{false};
+        bool unicast_go_signals{false};
+        SubDeviceId sub_device_id;
+    };
+
     // The following data structures are only popiulated when the MeshCQ is being used to trace workloads
     // i.e. between record_begin() and record_end() being called
     std::optional<MeshTraceId> trace_id_;
     std::shared_ptr<MeshTraceDescriptor> trace_ctx_;
-    std::vector<MeshTraceStagingMetadata> ordered_mesh_trace_md_;
+    std::vector<MeshTraceNode> trace_nodes_;
 
     CoreCoord dispatch_core_;
     CoreType dispatch_core_type_ = CoreType::WORKER;

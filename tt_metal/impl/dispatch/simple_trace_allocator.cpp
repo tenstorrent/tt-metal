@@ -252,6 +252,15 @@ void SimpleTraceAllocator::allocate_trace_programs_on_subdevice(
             node.dispatch_metadata.send_binary = true;
         }
 
+        if (!last_stall_idx.has_value()) {
+            // The first program to be dispatched should stall on 0, since there may be undetermined commands in the
+            // ringbuffer before this we want to wait for. In particular in the mesh device case we can add go messages
+            // for unused nodes before replaying the trace.
+            node.dispatch_metadata.sync_count = 0;
+            node.dispatch_metadata.stall_first = true;
+            last_stall_idx = -1;
+        }
+
         // Only one sync count can currently be specified, so pick the latest one.
         int sync_count_to_use = std::max(final_nonbinary_sync_idx, final_binary_sync_idx);
         if (final_nonbinary_sync_idx > last_stall_idx.value_or(-1)) {

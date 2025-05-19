@@ -20,6 +20,13 @@ constexpr uint32_t UncachedStallSequenceIdx = 0;
 constexpr uint32_t CachedStallSequenceIdx = 1;
 
 struct ProgramCommandSequence {
+    ProgramCommandSequence() = default;
+    ProgramCommandSequence(const ProgramCommandSequence&) = delete;
+    ProgramCommandSequence& operator=(const ProgramCommandSequence&) = delete;
+
+    ProgramCommandSequence(ProgramCommandSequence&&) = default;
+    ProgramCommandSequence& operator=(ProgramCommandSequence&&) = default;
+
     struct RtaUpdate {
         const void* src;
         void* dst;
