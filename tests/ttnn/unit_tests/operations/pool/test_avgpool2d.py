@@ -22,7 +22,6 @@ def randomize_tensor(tensor_map, tensor_shape):
         torch_tensor = tensor_map[tensor_shape]
     else:
         torch_tensor = torch.ones(tensor_shape, dtype=torch.bfloat16)
-
     return torch_tensor
 
 
@@ -78,7 +77,6 @@ def run_avg_pool2d(
     ttnn_output = ttnn_output.reshape(
         torch_output.shape[0], torch_output.shape[2], torch_output.shape[3], torch_output.shape[1]
     )
-    print("torch_output shape: ", torch_output.shape)
     ttnn_output = ttnn.permute(ttnn_output, (0, 3, 1, 2))  # N, C, H, W
     ttnn_output = ttnn.to_torch(ttnn_output)
 
@@ -133,7 +131,7 @@ def run_avg_pool2d(
 @pytest.mark.parametrize(
     "ceil_mode",
     [
-        # False,
+        False,
         True,
     ],
 )
@@ -141,19 +139,18 @@ def run_avg_pool2d(
     "divisor_override",
     [
         None,
-        # 10,
-        # 20,
-        # 5,
-        # 11,
-        # 15,
+        10,
+        20,
+        11,
+        15,
     ],
 )
 @pytest.mark.parametrize(
     "shard_scheme",
     [
         ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-        # ttnn.TensorMemoryLayout.WIDTH_SHARDED,
-        # ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.TensorMemoryLayout.BLOCK_SHARDED,
     ],
 )
 def test_run_avg_pool2d(
