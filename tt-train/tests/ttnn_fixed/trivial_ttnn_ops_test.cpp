@@ -238,3 +238,13 @@ TEST_F(TrivialTnnFixedTest, TestSumOverBatch_1) {
         EXPECT_NEAR(expected_value, resulting_vector[i], eps);
     }
 }
+
+TEST_F(TrivialTnnFixedTest, WriteTensorTest) {
+    auto* device = &ttml::autograd::ctx().get_device();
+    auto a = xt::ones<uint32_t>({20, 20});
+
+    auto a_host = ttml::core::from_xtensor<uint32_t, ttnn::DataType::UINT32>(a, ttnn::Layout::TILE);
+    auto a_device = ttnn::to_device(a_host, device, std::nullopt);
+
+    tt::tt_metal::write_tensor(a_host, a_device);
+}
