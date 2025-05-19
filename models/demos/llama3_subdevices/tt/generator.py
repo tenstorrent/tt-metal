@@ -89,7 +89,6 @@ class Generator:
                 page_table, torch.Tensor
             ), "page_table must be a torch.Tensor when passing into prefill_forward"
 
-            # only run 1 user prefill for now
         for user_id in range(batch):
             logger.info(f"Prefilling User {user_id + 1}")
             seq_len = prompt_lens[user_id]
