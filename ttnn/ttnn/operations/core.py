@@ -274,12 +274,20 @@ def from_torch(
         Tensor([[1.375, -1.30469, -0.714844],
             [-0.761719, 0.53125, -0.652344]], dtype=bfloat16)
     """
-    if memory_config is not None and memory_config.is_sharded():
-        if memory_config.shard_spec is None:
-            raise RuntimeError("ttnn.from_torch: Shard spec must not be None for sharded tensors")
+    if memory_config is not None:
+        if device is None:
+            raise RuntimeError("ttnn.from_torch: device must be specified when memory_config is specified")
 
-        if memory_config.shard_spec.mode == ttnn.ShardMode.LOGICAL:
-            return ttnn.Tensor(tensor, dtype, device, layout, memory_config, tile)
+        if memory_config.is_sharded():
+            if memory_config.shard_spec is None:
+                raise RuntimeError("ttnn.from_torch: Shard spec must not be None for sharded tensors")
+
+            if memory_config.shard_spec.mode == ttnn.ShardMode.LOGICAL:
+                return ttnn.Tensor(tensor, dtype, device, layout, memory_config, tile)
+
+    if pad_value is not None:
+        if layout != ttnn.TILE_LAYOUT:
+            raise RuntimeError("ttnn.from_torch: layout must be TILE_LAYOUT when pad_value is specified")
 
     logical_shape = None
     padded_shape = None
@@ -293,25 +301,17 @@ def from_torch(
         tensor = tensor.reshape(tensor.padded_shape)
         tensor = ttnn.to_torch(tensor)
 
-    if memory_config is not None:
-        if device is None:
-            raise RuntimeError("ttnn.from_torch: device must be specified when memory_config is specified")
-
-    if pad_value is not None:
-        if layout != ttnn.TILE_LAYOUT:
-            raise RuntimeError("ttnn.from_torch: layout must be TILE_LAYOUT when pad_value is specified")
-
+    tensor_creation_args = [tensor, dtype]
+    # TODO: (jjiang) - Try calling the ttnn sharding path directly and the tilize directly removing the need to reshape at the end after tilizing bfb, would likely avoid a lot of bugs
+    # TODO: (jjiang) - Could also extend the pytensor.cpp apis to support bfpb types and provide richer initialization options, removing the need for tilize, to_layout, and to_device
+    # much of the groundwork for that has already been done and it would likely just be a few fairly trivial function calls
     if mesh_mapper:
         shards = mesh_mapper.map(tensor)
-        if tile is not None:
-            tensor = ttnn.Tensor(shards, dtype, mesh_mapper.config(), tile)
-        else:
-            tensor = ttnn.Tensor(shards, dtype, mesh_mapper.config())
-    else:
-        if tile is not None:
-            tensor = ttnn.Tensor(tensor, dtype, {}, tile)
-        else:
-            tensor = ttnn.Tensor(tensor, dtype)
+        tensor_creation_args[0] = shards
+        tensor_creation_args.append(mesh_mapper.config())
+    if tile is not None:
+        tensor_creation_args.append(tile)
+    tensor = ttnn.Tensor(*tensor_creation_args)
 
     if layout is not None and not (dtype == ttnn.bfloat8_b or dtype == ttnn.bfloat4_b):
         if pad_value is not None:
