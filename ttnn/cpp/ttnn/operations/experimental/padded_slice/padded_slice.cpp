@@ -55,6 +55,11 @@ ttnn::Tensor PaddedSliceOperation::invoke(
         }
     }
 
+    TT_FATAL(no_step, "Steps != 1 are not supported for padded_slice.");
+    TT_FATAL(input_layout == Layout::ROW_MAJOR, "Only Row Major Inputs are supported for padded_slice.");
+    TT_FATAL(memory_config.is_sharded(), "Output Memory Config must be sharded. Use slice for non-sharded outputs.");
+    TT_FATAL(!input_tensor.memory_config().is_sharded(), " padded_slice does not support sharded inputs.");
+
     const auto& tile_shape = input_tensor.get_tensor_spec().tile().get_tile_shape();
 
     auto ret_adjustment([&](const ttnn::Tensor& ret_input_tensor) {
@@ -103,30 +108,7 @@ ttnn::Tensor PaddedSliceOperation::invoke(
     bool one_dimensional = input_rank == 1;
     bool handled_tile_alignment = one_dimensional ? true : check_handled_tile_alignment();
 
-    Tensor input = input_tensor;
-    rm_only =
-        (input_tensor.get_layout() == Layout::TILE &&
-         (!no_step || one_dimensional || input_tensor.is_sharded() || !handled_tile_alignment));
-    if (rm_only) {
-        if (!no_step) {
-            TT_FATAL(
-                input.get_dtype() != DataType::BFLOAT8_B, "Strided padded_slice is not supported for BFLOAT8 tensors");
-        }
-        TT_FATAL(
-            input.get_dtype() != DataType::UINT16,
-            "This padded_slice requires an implicit Tile->RM conversion and that is not currently supported for "
-            "uint16");
-        input = ttnn::to_layout(input, Layout::ROW_MAJOR, std::nullopt, memory_config, (IDevice*)nullptr);
-        if (one_dimensional) {
-            std::cout << "ONE D" << std::endl;
-        }
-    }
-
     ttnn::SmallVector<uint32_t> padded_ends = modified_ends;
-    if (input.layout() == Layout::TILE) {
-        padded_ends[input_rank - 2] = std::max(tt::round_up(padded_ends[input_rank - 2], tile_shape[0]), tile_shape[0]);
-        padded_ends[input_rank - 1] = std::max(tt::round_up(padded_ends[input_rank - 1], tile_shape[1]), tile_shape[1]);
-    }
 
     ttnn::SmallVector<uint32_t> actual_shape_vec, final_padded_shape_vec;
     actual_shape_vec.reserve(input_rank);
@@ -152,7 +134,8 @@ ttnn::Tensor PaddedSliceOperation::invoke(
 
     if (empty) {
         TT_FATAL(
-            input.storage_type() == StorageType::DEVICE, "Host tensor slice cannot return a scalar or empty tensor");
+            input_tensor.storage_type() == StorageType::DEVICE,
+            "Host tensor slice cannot return a scalar or empty tensor");
         return ttnn::empty(
             actual_shape, input_tensor.dtype(), input_tensor.layout(), input_tensor.mesh_device(), memory_config);
     }
@@ -161,7 +144,7 @@ ttnn::Tensor PaddedSliceOperation::invoke(
         tt::tt_metal::operation::run(
             PaddedSliceDeviceOperation{
                 ttnn::Shape(modified_begins), ttnn::Shape(padded_ends), ttnn::Shape(modified_step), memory_config},
-            {input},
+            {input_tensor},
             {},
             {optional_output_tensor},
             queue_id)
@@ -180,14 +163,7 @@ ttnn::Tensor PaddedSliceOperation::invoke(
 
     res = ttnn::experimental::view(res, actual_shape, final_padded_shape);
 
-    auto dim_needs_fill = [&input_shape, &actual_shape, &final_padded_shape](int i) {
-        return ((actual_shape[i] != final_padded_shape[i]) && (input_shape[i] != actual_shape[i]));
-    };
-
-    if (pad_value.has_value() && (dim_needs_fill(-1) || dim_needs_fill(-2))) {
-        res = ttnn::fill_implicit_tile_padding(res, pad_value.value());
-    }
-    return ret_adjustment(res);
+    return res;
 }
 
 template <typename T>

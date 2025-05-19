@@ -38,20 +38,6 @@ get_upper_start_offset(const Tensor& tensor, const ttnn::Shape& padded_slice_sta
     return start_offset;
 }
 
-uint32_t get_tiled_start_offset(const Tensor& input_tensor, const ttnn::Shape& padded_slice_start) {
-    using namespace tt::constants;
-    uint32_t num_input_pages = input_tensor.volume() / (TILE_HW);
-    const auto& shape = input_tensor.get_padded_shape();
-    uint32_t upper_dims_compressed = get_upper_dims_compressed(shape);
-    uint32_t num_pages_width = num_input_pages / (upper_dims_compressed * (shape[-2] / TILE_HEIGHT));
-
-    // offset for every dim except last 2
-    uint32_t start_offset = get_upper_start_offset(input_tensor, padded_slice_start);
-
-    start_offset += padded_slice_start[-2] / TILE_HEIGHT * num_pages_width + padded_slice_start[-1] / TILE_WIDTH;
-    return start_offset;
-}
-
 uint32_t get_rm_start_offset(const Tensor& tensor, const ttnn::Shape& padded_slice_start) {
     uint32_t start_offset = 0;
 
@@ -108,21 +94,6 @@ void PaddedSliceDeviceOperation::validate_with_output_tensors(
     }
     auto output_tensor_shape = this->compute_output_specs(input_tensors)[0].logical_shape();
     TT_FATAL(!has_step, "Padded slice does not support strided slices");
-    if (input_tensor_a.get_layout() == Layout::TILE) {
-        TT_FATAL(input_tensor_a.volume() % TILE_HW == 0, "Error");
-        TT_FATAL(
-            (output_tensor_shape[-2] % TILE_HEIGHT == 0) && (this->padded_slice_start[-2] % TILE_HEIGHT == 0),
-            "Can only padded_slice tilized tensor with height begin index aligned to tiles");
-        TT_FATAL(
-            (output_tensor_shape[-1] % TILE_WIDTH == 0) && (this->padded_slice_start[-1] % TILE_WIDTH == 0),
-            "Can only padded_slice tilized tensor with width begin index aligned to tiles");
-    } else if (input_tensor_a.get_layout() == Layout::ROW_MAJOR) {
-        if (has_step) {
-            for (uint32_t i = 0; i < input_tensor_a.get_padded_shape().rank(); i++) {
-                TT_FATAL(step[i] > 0, "Step({}) = {} should be positive", i, step[i]);
-            }
-        }
-    }
 }
 
 std::vector<ttnn::TensorSpec> PaddedSliceDeviceOperation::compute_output_specs(
