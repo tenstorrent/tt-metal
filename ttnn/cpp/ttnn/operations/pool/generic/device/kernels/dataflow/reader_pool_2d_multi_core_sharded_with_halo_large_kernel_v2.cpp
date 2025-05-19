@@ -81,11 +81,11 @@ void kernel_main() {
         constexpr uint32_t bf16_one_u16 = bf16_one_u32 >> 16;
         // fill interm buffer with init_value
         fill_with_val(get_write_ptr(interm_reduction_cb_id), in_cb_sz, bf16_init_value);
-
-        cb_reserve_back(in_scalar_cb_id, 1);
-        fill_with_val(get_write_ptr(in_scalar_cb_id), TILE_WIDTH, bf16_scalar >> 16);
-        cb_push_back(in_scalar_cb_id, 1);
-        scalar_index++;
+        if (one_scalar_per_core) {
+            cb_reserve_back(in_scalar_cb_id, 1);
+            fill_with_val(get_write_ptr(in_scalar_cb_id), TILE_WIDTH, bf16_scalar >> 16);
+            cb_push_back(in_scalar_cb_id, 1);
+        }
         if (bf16_scalar != bf16_one_u32 || !one_scalar_per_core) {
             // Pool operation is not maxpool
             fill_with_val(get_write_ptr(in_one_cb_id), TILE_WIDTH, bf16_one_u16);
