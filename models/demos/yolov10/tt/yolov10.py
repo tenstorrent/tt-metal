@@ -3,13 +3,13 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
-from models.experimental.yolov10.tt.scdown import TtnnSCDown
-from models.experimental.yolov10.tt.sppf import TtnnSPPF
-from models.experimental.yolov10.tt.psa import TtnnPSA
-from models.experimental.yolov10.tt.c2f import TtnnC2f
-from models.experimental.yolov10.tt.c2fcib import TtnnC2fCIB
-from models.experimental.yolov10.tt.v10detect import TtnnV10Detect
-from models.experimental.yolov10.tt.common import interleaved_to_sharded, Conv
+from models.demos.yolov10.tt.c2f import TtnnC2f
+from models.demos.yolov10.tt.c2fcib import TtnnC2fCIB
+from models.demos.yolov10.tt.common import Conv, interleaved_to_sharded
+from models.demos.yolov10.tt.psa import TtnnPSA
+from models.demos.yolov10.tt.scdown import TtnnSCDown
+from models.demos.yolov10.tt.sppf import TtnnSPPF
+from models.demos.yolov10.tt.v10detect import TtnnV10Detect
 from models.experimental.yolo_common.yolo_utils import concat
 
 
