@@ -53,12 +53,10 @@ struct ProgramCommandSequence {
 
     uint32_t get_one_shot_fetch_size(bool stall_first, bool stall_before_program) const {
         uint32_t one_shot_fetch_size =
-            (stall_first ? stall_command_sequences[current_stall_seq_idx].size_bytes() : 0) +
+            ((stall_before_program || stall_first) ? stall_command_sequences[current_stall_seq_idx].size_bytes() : 0) +
             preamble_command_sequence.size_bytes() + program_config_buffer_command_sequence.size_bytes() +
-            get_rt_args_size() +
-            (stall_before_program ? stall_command_sequences[current_stall_seq_idx].size_bytes() : 0) +
-            program_binary_command_sequence.size_bytes() + launch_msg_command_sequence.size_bytes() +
-            go_msg_command_sequence.size_bytes();
+            get_rt_args_size() + program_binary_command_sequence.size_bytes() +
+            launch_msg_command_sequence.size_bytes() + go_msg_command_sequence.size_bytes();
         return one_shot_fetch_size;
     }
 };
