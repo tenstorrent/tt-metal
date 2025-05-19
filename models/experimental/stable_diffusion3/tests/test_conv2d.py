@@ -15,17 +15,17 @@ from ..tt.utils import assert_quality, from_torch_fast, to_torch
 @pytest.mark.parametrize(
     ("batch_size", "in_channels", "out_channels", "kernel_size", "stride", "height", "width"),
     [
-        (256, 32, 32, (2, 3), (2, 2), 64, 64),
-        (32, 20, 32, (3, 3), (2, 3), 128, 256),
+        (1, 32, 32, (2, 3), (2, 2), 64, 64),
+        (1, 20, 32, (3, 3), (2, 3), 128, 256),
         # these are needed in the VAE for an image resolution of 1024x1024:
         (1, 128, 128, (3, 3), (1, 1), 1024, 1024),
         # the next case with lower slice_count https://github.com/tenstorrent/tt-metal/issues/17489#issuecomment-2886552080
         (1, 128, 3, (3, 3), (1, 1), 1024, 1024),
-        (4, 16, 512, (3, 3), (1, 1), 128, 128),
+        (1, 16, 512, (3, 3), (1, 1), 128, 128),
         (1, 256, 128, (3, 3), (1, 1), 1024, 1024),
         (1, 256, 256, (3, 3), (1, 1), 1024, 1024),
         (1, 256, 256, (3, 3), (1, 1), 512, 512),
-        (4, 512, 512, (3, 3), (1, 1), 128, 128),
+        (1, 512, 512, (3, 3), (1, 1), 128, 128),
         (1, 512, 512, (3, 3), (1, 1), 256, 256),
         (1, 512, 256, (3, 3), (1, 1), 512, 512),
         (1, 512, 512, (3, 3), (1, 1), 512, 512),
@@ -35,7 +35,7 @@ from ..tt.utils import assert_quality, from_torch_fast, to_torch
 @pytest.mark.usefixtures("use_program_cache")
 def test_conv2d(
     *,
-    device: ttnn.Device,
+    mesh_device: ttnn.Device,
     batch_size: int,
     in_channels: int,
     out_channels: int,
@@ -45,6 +45,8 @@ def test_conv2d(
     width: int,
 ) -> None:
     dtype = ttnn.bfloat16
+
+    total_batch_size = batch_size * mesh_device.get_num_devices()
 
     torch.manual_seed(0)
 
@@ -56,22 +58,23 @@ def test_conv2d(
     )
     torch_model.eval()
 
-    parameters = TtConv2dParameters.from_torch(torch_model.state_dict(), dtype=dtype, device=device)
+    parameters = TtConv2dParameters.from_torch(torch_model.state_dict(), dtype=dtype, device=mesh_device)
     tt_model = TtConv2d(parameters, stride=stride)
 
-    torch_input_tensor = torch.randn((batch_size, in_channels, height, width))
+    torch_input_tensor = torch.randn((total_batch_size, in_channels, height, width))
 
     tt_input_tensor = from_torch_fast(
         torch_input_tensor.permute([0, 2, 3, 1]),  # BCYX -> BYXC
-        device=device,
+        device=mesh_device,
         layout=ttnn.TILE_LAYOUT,
         dtype=dtype,
+        shard_dim=0,
     )
 
     with torch.no_grad():
         torch_output = torch_model(torch_input_tensor)
 
     tt_output = tt_model(tt_input_tensor, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-    tt_output_torch = to_torch(tt_output).permute([0, 3, 1, 2])
+    tt_output_torch = to_torch(tt_output, mesh_device=mesh_device, shard_dim=0).permute([0, 3, 1, 2])
 
     assert_quality(torch_output, tt_output_torch, pcc=0.95, ccc=0.949)

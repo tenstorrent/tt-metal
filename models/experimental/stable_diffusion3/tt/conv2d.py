@@ -9,6 +9,8 @@ from typing import TYPE_CHECKING
 
 import ttnn
 
+from .utils import from_torch_fast
+
 if TYPE_CHECKING:
     import torch
 
@@ -38,19 +40,23 @@ SLICE_COUNT_FACTOR = {
 class TtConv2dParameters:
     weight: ttnn.Tensor
     bias: ttnn.Tensor | None
-    device: ttnn.MeshDevice | ttnn.Device
+    device: ttnn.MeshDevice
 
     @classmethod
     def from_torch(
         cls,
         state: dict[str, torch.Tensor],
         *,
-        device: ttnn.MeshDevice | ttnn.Device,
+        device: ttnn.MeshDevice,
         dtype: ttnn.DataType | None = None,
     ) -> TtConv2dParameters:
+        mesh_mapper = ttnn.ReplicateTensorToMesh(device)
+
         return cls(
-            weight=ttnn.from_torch(state["weight"], dtype=dtype),
-            bias=ttnn.from_torch(state["bias"].reshape((1, 1, 1, -1)), dtype=dtype) if "bias" in state else None,
+            weight=from_torch_fast(state["weight"], dtype=dtype, mesh_mapper=mesh_mapper),
+            bias=from_torch_fast(state["bias"].reshape((1, 1, 1, -1)), dtype=dtype, mesh_mapper=mesh_mapper)
+            if "bias" in state
+            else None,
             device=device,
         )
 
@@ -110,37 +116,66 @@ class TtConv2d:
         if slice_count > 1:
             x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
 
-        x, [output_height, output_width], [prepared_weight, prepared_bias] = ttnn.conv2d(
-            input_tensor=x,
-            weight_tensor=self._weight,
-            bias_tensor=self._bias,
-            in_channels=self._in_channels,
-            out_channels=self._out_channels,
-            device=self._device,
-            kernel_size=self._kernel_size,
-            stride=self._stride,
-            padding=self._padding,
-            batch_size=batch_size,
-            input_height=height,
-            input_width=width,
-            return_output_dim=True,
-            return_weights_and_bias=True,
-            conv_config=conv_config,
-            memory_config=memory_config,
-            slice_config=(
-                ttnn.Conv2dSliceConfig(slice_type=ttnn.Conv2dSliceWidth, num_slices=slice_count)
-                if slice_count > 1
-                else None
-            ),
-        )
+        def call_conv2d(t: ttnn.Tensor, w: ttnn.Tensor, b: ttnn.Tensor | None) -> _Conv2dRawResult:
+            output, [output_height, output_width], [prepared_weight, prepared_bias] = ttnn.conv2d(
+                input_tensor=t,
+                weight_tensor=w,
+                bias_tensor=b,
+                in_channels=self._in_channels,
+                out_channels=self._out_channels,
+                device=t.device(),
+                kernel_size=self._kernel_size,
+                stride=self._stride,
+                padding=self._padding,
+                batch_size=batch_size,
+                input_height=height,
+                input_width=width,
+                return_output_dim=True,
+                return_weights_and_bias=True,
+                conv_config=conv_config,
+                memory_config=memory_config,
+                slice_config=(
+                    ttnn.Conv2dSliceConfig(slice_type=ttnn.Conv2dSliceWidth, num_slices=slice_count)
+                    if slice_count > 1
+                    else None
+                ),
+            )
+
+            return _Conv2dRawResult(
+                output=output,
+                output_height=output_height,
+                output_width=output_width,
+                prepared_weight=prepared_weight,
+                prepared_bias=prepared_bias,
+            )
+
+        results = [
+            call_conv2d(*t)
+            for t in zip(
+                ttnn.get_device_tensors(x),
+                ttnn.get_device_tensors(self._weight),
+                ttnn.get_device_tensors(self._bias)
+                if self._bias is not None
+                else [None] * len(ttnn.get_device_tensors(x)),
+                strict=True,
+            )
+        ]
+
+        if len(results) > 1:
+            x = ttnn.aggregate_as_tensor([result.output for result in results])
+            self._weight = ttnn.aggregate_as_tensor([result.prepared_weight for result in results])
+            self._bias = (
+                ttnn.aggregate_as_tensor([result.prepared_bias for result in results]) if self._bias is not None else None  # type: ignore
+            )
+        else:
+            x = results[0].output
+            self._weight = results[0].prepared_weight
+            self._bias = results[0].prepared_bias
 
         if slice_count > 1:
             x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
 
-        self._weight = prepared_weight
-        self._bias = prepared_bias
-
-        shape = [batch_size, output_height, output_width, self._out_channels]
+        shape = [batch_size, results[0].output_height, results[0].output_width, self._out_channels]
         return x, shape
 
     def __call__(
@@ -162,3 +197,12 @@ class TtConv2d:
     @property
     def kernel_size(self) -> tuple[int, int]:
         return self._kernel_size
+
+
+@dataclass
+class _Conv2dRawResult:
+    output: ttnn.Tensor
+    output_height: int
+    output_width: int
+    prepared_weight: ttnn.Tensor
+    prepared_bias: ttnn.Tensor | None
