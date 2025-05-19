@@ -2,21 +2,23 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import ttnn
 import time
-import torch
+
 import pytest
+import torch
 from loguru import logger
 from ultralytics import YOLO
+
+import ttnn
+from models.demos.yolov10.reference.yolov10 import YOLOv10
+from models.demos.yolov10.tt.model_preprocessing import create_yolov10x_input_tensors, create_yolov10x_model_parameters
+from models.demos.yolov10.tt.yolov10 import TtnnYolov10
+from models.perf.device_perf_utils import check_device_perf, prep_device_perf_report, run_device_perf
 from models.perf.perf_utils import prep_perf_report
-from models.experimental.yolov10.reference.yolov10 import YOLOv10
-from models.experimental.yolov10.tt.yolov10 import TtnnYolov10
-from models.utility_functions import run_for_wormhole_b0
-from models.utility_functions import enable_persistent_kernel_cache, disable_persistent_kernel_cache
-from models.perf.device_perf_utils import run_device_perf, check_device_perf, prep_device_perf_report
-from models.experimental.yolov10.tt.model_preprocessing import (
-    create_yolov10x_input_tensors,
-    create_yolov10x_model_parameters,
+from models.utility_functions import (
+    disable_persistent_kernel_cache,
+    enable_persistent_kernel_cache,
+    run_for_wormhole_b0,
 )
 
 
@@ -78,7 +80,7 @@ def test_perf(device, use_weights_from_ultralytics):
     expected_compile_time, expected_inference_time = get_expected_times("yolov10x")
 
     prep_perf_report(
-        model_name="models/experimental/yolov10",
+        model_name="models/demos/yolov10",
         batch_size=batch_size,
         inference_and_compile_time=inference_and_compile_time,
         inference_time=inference_time,
