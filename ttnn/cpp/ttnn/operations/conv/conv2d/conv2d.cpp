@@ -402,9 +402,8 @@ Result conv2d_L1(
     auto input_tensor = input_tensor_;
     auto weight_tensor = weight_tensor_;
     bool mm_conv = use_matmul_for_1x1_conv(kernel_size, stride, padding_n4, dilation, groups, conv_config);
-    bool is_large_kernel = is_large_kernel_with_easy_matmul(
-        input_tensor.layout(), input_height, input_width, kernel_size, stride, padding_n4, dilation);
-    if (is_large_kernel && !mm_conv) {
+    if (conv_config.enable_dram_fold && !mm_conv) {
+        std::cout << "Folding input and weight tensors" << std::endl;
         // Fold the input tensor to reduce spatial dimensions by stride factors, effectively converting
         // a large kernel convolution into a matmul operation.
         bool input_tensor_on_device = tt::tt_metal::is_device_tensor(input_tensor_);

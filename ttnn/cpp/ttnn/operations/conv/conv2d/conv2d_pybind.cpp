@@ -413,6 +413,7 @@ void py_bind_conv2d(py::module& module) {
             bool,
             bool,
             bool,
+            bool,
             bool>(),
         py::kw_only(),
         py::arg("dtype") = DataType::BFLOAT16,
@@ -430,6 +431,7 @@ void py_bind_conv2d(py::module& module) {
         py::arg("output_layout") = Layout::TILE,
         py::arg("preprocess_weights_on_device") = false,
         py::arg("always_preprocess_weights") = false,
+        py::arg("enable_dram_fold") = false,
         py::arg("enable_act_double_buffer") = false,
         py::arg("enable_weights_double_buffer") = false,
         py::arg("enable_split_reader") = false,
@@ -522,6 +524,22 @@ void py_bind_conv2d(py::module& module) {
 
         However, if this flag is set to true, the op will always preprocess the weights, even if they are on device.
         This is useful when the weights are on device, but in the PyTorch format [out_channels, in_channels, kernel_height, kernel_width].
+        )doc");
+    py_conv_config.def_readwrite("enable_dram_fold", &Conv2dConfig::enable_dram_fold, R"doc(
+        Enables input and weight tensor folding when strides match kernel dimensions.
+
+        When enabled, this optimization reshapes tensors as follows:
+        - Input tensor (NHWC format):
+          * From: (N, H, W, IC)
+          * To: (N, H/stride[0], W/stride[1], IC * kernel[0] * kernel[1])
+
+        - Weight tensor:
+          * From: (OC, IC, kernel[0], kernel[1])
+          * To: (1, 1, IC * kernel[0] * kernel[1], OC)
+
+        Note: This optimization is currently only applied when all of the following conditions are met:
+        1. The stride dimensions exactly match the kernel dimensions (stride[0] == kernel[0] and stride[1] == kernel[1])
+        2. The input tensor is stored in DRAM memory
         )doc");
     py_conv_config.def_readwrite("enable_act_double_buffer", &Conv2dConfig::enable_act_double_buffer, R"doc(
             Doubles the size of the Activation Circular Buffer to allow for double buffering, preventing stalls of the activation reader kernel.

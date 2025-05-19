@@ -70,6 +70,12 @@ struct Conv2dConfig {
     // If true, preprocess weights regarding of original location.
     bool always_preprocess_weights = false;
 
+    // If true, enables tensor folding optimization where:
+    // - Input tensor (NHWC) is reshaped to (N, H/stride[0], W/stride[1], C * stride[0] * stride[1])
+    // - Weight tensor (OC, IC, kernel[0], kernel[1]) is reshaped to (1, 1, OC, IC * kernel[0] * kernel[1])
+    // This optimization is only applied when strides match kernel dimensions
+    bool enable_dram_fold = false;
+
     // Doubles the size of the CBs for activation.
     // Increased perf, but increased L1 usage.
     bool enable_act_double_buffer = false;
@@ -101,6 +107,7 @@ struct Conv2dConfig {
         "transpose_shards",
         "output_layout",
         "preprocess_weights_on_device",
+        "enable_dram_fold",
         "enable_act_double_buffer",
         "enable_weights_double_buffer",
         "enable_split_reader",
@@ -122,6 +129,7 @@ struct Conv2dConfig {
             std::cref(this->transpose_shards),
             std::cref(this->output_layout),
             std::cref(this->preprocess_weights_on_device),
+            std::cref(this->enable_dram_fold),
             std::cref(this->enable_act_double_buffer),
             std::cref(this->enable_weights_double_buffer),
             std::cref(this->enable_split_reader),
