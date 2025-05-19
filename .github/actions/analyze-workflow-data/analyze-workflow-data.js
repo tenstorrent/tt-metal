@@ -202,18 +202,19 @@ async function getLastRunInfo(mainBranchRuns, github, context) {
   }
 
   const prInfo = await fetchPRInfo(github, context, lastMainRun.head_sha);
-  // Current approach: filter by event type
   const mainRuns = mainBranchRuns.filter(r => r.event === lastMainRun.event || r.event === 'workflow_dispatch');
-  // Alternative approach: include all runs on main branch
-  // const mainRuns = mainBranchRuns;
   const { lastGoodSha, earliestBadSha } = findGoodBadCommits(mainRuns, context);
+
+  const prTitleWithAuthor = prInfo.prTitle !== EMPTY_VALUE ?
+    `${prInfo.prTitle} - @${prInfo.prAuthor}` :
+    EMPTY_VALUE;
 
   return {
     status: lastMainRun.conclusion === 'success' ? SUCCESS_EMOJI : FAILURE_EMOJI,
     sha: `[\`${lastMainRun.head_sha.substring(0, SHA_SHORT_LENGTH)}\`](https://github.com/${context.repo.owner}/${context.repo.repo}/commit/${lastMainRun.head_sha})`,
     run: `[Run](${lastMainRun.html_url})${lastMainRun.run_attempt > 1 ? ` (#${lastMainRun.run_attempt})` : ''}`,
     pr: prInfo.prNumber,
-    title: prInfo.prTitle,
+    title: prTitleWithAuthor,
     lastGoodSha,
     earliestBadSha: lastMainRun.conclusion !== 'success' ? earliestBadSha : EMPTY_VALUE
   };
@@ -221,57 +222,71 @@ async function getLastRunInfo(mainBranchRuns, github, context) {
 
 /**
  * Generates summary tables for push and scheduled workflows.
- *
  * @param {Map<string, Array<object>>} grouped - Map of workflow names to their runs
  * @param {object} github - Octokit client instance
  * @param {object} context - GitHub Actions context
+ * @param {Array<object>} workflowConfigs - Array of workflow config objects
  * @returns {Promise<string>} Markdown table for all workflows
  */
-async function generateSummaryBox(grouped, github, context) {
+async function generateSummaryBox(grouped, github, context, workflowConfigs) {
   const rows = [];
 
-  for (const [name, runs] of grouped.entries()) {
-    const mainBranchRuns = runs
-      .filter(r => r.head_branch === 'main')
-      .sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+  // Process workflows in the order they appear in the config
+  for (const config of workflowConfigs) {
+    // Find matching workflows
+    const matchingWorkflows = Array.from(grouped.entries()).filter(([name]) => {
+      if (config.wkflw_name) {
+        return name === config.wkflw_name;
+      }
+      if (config.wkflw_prefix) {
+        return name.startsWith(config.wkflw_prefix);
+      }
+      return false;
+    });
 
-    const stats = getWorkflowStats(runs);
+    // Process each matching workflow
+    for (const [name, runs] of matchingWorkflows) {
+      const mainBranchRuns = runs
+        .filter(r => r.head_branch === 'main')
+        .sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
 
-    // Skip workflows that only have workflow_dispatch as their event type
-    if (stats.eventTypes === 'workflow_dispatch') {
-      continue;
+      const stats = getWorkflowStats(runs);
+
+      // Skip workflows that only have workflow_dispatch as their event type
+      if (stats.eventTypes === 'workflow_dispatch') {
+        continue;
+      }
+
+      const workflowLink = getWorkflowLink(context, runs[0]?.path);
+      const runInfo = await getLastRunInfo(mainBranchRuns, github, context);
+
+      const row = `| [${name}](${workflowLink}) | ${stats.eventTypes || 'unknown'} | ${stats.totalRuns} | ${stats.successfulRuns} | ${stats.successRate} | ${stats.uniqueSuccessRate} | ${runInfo.status} | ${runInfo.sha} | ${runInfo.run} | ${runInfo.pr} | ${runInfo.title} | ${runInfo.earliestBadSha} | ${runInfo.lastGoodSha} |`;
+      rows.push(row);
     }
-
-    const workflowLink = getWorkflowLink(context, runs[0]?.path);
-    const runInfo = await getLastRunInfo(mainBranchRuns, github, context);
-
-    const row = `| [${name}](${workflowLink}) | ${stats.eventTypes || 'unknown'} | ${stats.totalRuns} | ${stats.successfulRuns} | ${stats.successRate} | ${stats.uniqueSuccessRate} | ${stats.retryRate} | ${runInfo.status} | ${runInfo.sha} | ${runInfo.run} | ${runInfo.pr} | ${runInfo.title} | ${runInfo.earliestBadSha} | ${runInfo.lastGoodSha} |`;
-    rows.push(row);
   }
 
-  return [
-    '## Workflow Summary',
-    '| Workflow | Event Type(s) | Total Runs | Successful Runs | Success Rate | Unique Success Rate | Retry Rate | Last Run on `main` | Last SHA | Last Run | Last PR | PR Title | Earliest Bad SHA | Last Good SHA |',
-    '|----------|---------------|------------|-----------------|--------------|-------------------|------------|-------------------|----------|----------|---------|-----------|------------------|---------------|',
-    ...rows,
-    ''  // Empty line for better readability
-  ].join('\n');
+  // Generate the table header
+  const header = `| Workflow | Event Types | Total Runs | Successful Runs | Success Rate | First Try Success | Status | SHA | Run | PR | Title | Earliest Bad SHA | Last Good SHA |`;
+  const separator = `| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |`;
+
+  return `\n${header}\n${separator}\n${rows.join('\n')}\n`;
 }
 
 /**
  * Builds the complete markdown report.
- *
  * @param {Map<string, Array<object>>} grouped - Map of workflow names to their runs
  * @param {object} github - Octokit client instance
  * @param {object} context - GitHub Actions context
+ * @param {Array<object>} workflowConfigs - Array of workflow config objects
  * @returns {Promise<string>} Complete markdown report
  */
-async function buildReport(grouped, github, context) {
+async function buildReport(grouped, github, context, workflowConfigs) {
   const days = parseInt(core.getInput('days') || DEFAULT_LOOKBACK_DAYS, 10);
   const timestamp = new Date().toISOString();
+
   return [
     `# Workflow Summary (Last ${days} Days) - Generated at ${timestamp}\n`,
-    await generateSummaryBox(grouped, github, context),
+    await generateSummaryBox(grouped, github, context, workflowConfigs),
     '\n## Column Descriptions\n',
     'A unique run represents a single workflow execution, which may have multiple retry attempts. For example, if a workflow fails and is retried twice, this counts as one unique run with three attempts (initial run + two retries).\n',
     '\n### Success Rate Calculations\n',
@@ -280,25 +295,19 @@ async function buildReport(grouped, github, context) {
     '  - Example: 3 successful unique runs out of 5 total unique runs = 60% success rate\n',
     '- **Unique Success Rate**: (Number of unique runs that succeeded on first try / Total number of unique runs) × 100%\n',
     '  - Example: 1 unique run succeeded on first try out of 5 total unique runs = 20% unique success rate\n',
-    '- **Retry Rate**: (Number of successful unique runs that needed retries / Total number of successful unique runs) × 100%\n',
-    '  - Example: 2 successful unique runs needed retries out of 3 total successful unique runs = 66.67% retry rate\n',
-    '\nNote: Unique Success Rate + Retry Rate does not equal 100% because they measure different things:\n',
-    '- Unique Success Rate is based on all unique runs\n',
-    '- Retry Rate is based only on successful unique runs\n',
     '\n| Column | Description |',
     '|--------|-------------|',
     '| Workflow | Name of the workflow with link to its GitHub Actions page |',
     '| Event Type(s) | Types of events that trigger this workflow (e.g., push, pull_request, schedule) |',
-    '| Total Runs | Total number of workflow runs including all retry attempts (e.g., 1 unique run with 2 retries = 3 total runs) |',
-    '| Successful Runs | Number of unique workflow runs that eventually succeeded, regardless of whether they needed retries |',
-    '| Success Rate | Percentage of unique workflow runs that eventually succeeded (e.g., 3/5 unique runs succeeded = 60%) |',
-    '| Unique Success Rate | Percentage of unique workflow runs that succeeded on their first attempt without needing retries (e.g., 1/5 unique runs succeeded on first try = 20%) |',
-    '| Retry Rate | Percentage of successful unique runs that needed retries to succeed (e.g., of 3 successful unique runs, 2 needed retries = 66.67%) |',
+    '| Total Runs | Total number of workflow runs including all retry attempts |',
+    '| Successful Runs | Number of unique workflow runs that eventually succeeded |',
+    '| Success Rate | Percentage of unique workflow runs that eventually succeeded |',
+    '| Success Rate (no retries) | Percentage of unique workflow runs that succeeded on their first attempt |',
     '| Last Run on `main` | Status of the most recent run on the main branch (✅ for success, ❌ for failure) |',
     '| Last SHA | Short SHA of the most recent run on main |',
     '| Last Run | Link to the most recent run on main, with attempt number if applicable |',
     '| Last PR | Link to the PR associated with the most recent run, if any |',
-    '| PR Title | Title of the PR associated with the most recent run, if any |',
+    '| PR Title - Author | Title and author of the PR (e.g., "Fix bug - @username") |',
     '| Earliest Bad SHA | Short SHA of the earliest failing run on main (only shown if last run failed) |',
     '| Last Good SHA | Short SHA of the last successful run on main |'
   ].join('\n');
@@ -321,54 +330,101 @@ function filterRunsByDate(runs, days) {
 }
 
 /**
+ * Sorts workflows based on their names and prefixes, maintaining the exact order from configs.
+ * @param {Map<string, Array<object>>} grouped - Map of workflow names to their runs
+ * @param {Array<object>} workflowConfigs - Array of workflow config objects
+ * @returns {Map<string, Array<object>>} Sorted map of workflow names to their runs
+ */
+function sortWorkflows(grouped, workflowConfigs) {
+  // Create a map of workflow name to its index in the config array
+  const priorityMap = new Map();
+  workflowConfigs.forEach((config, index) => {
+    if (config.wkflw_name) {
+      priorityMap.set(config.wkflw_name, index);
+    }
+    if (config.wkflw_prefix) {
+      // For prefix matches, we'll use the index as priority
+      priorityMap.set(config.wkflw_prefix, index);
+    }
+  });
+
+  // Convert to array and sort based on priority
+  const sortedEntries = Array.from(grouped.entries())
+    .sort(([nameA], [nameB]) => {
+      // First try exact name match
+      const priorityA = priorityMap.get(nameA);
+      const priorityB = priorityMap.get(nameB);
+
+      if (priorityA !== undefined && priorityB !== undefined) {
+        return priorityA - priorityB;
+      }
+
+      // If one has priority and other doesn't, prioritize the one with priority
+      if (priorityA !== undefined) return -1;
+      if (priorityB !== undefined) return 1;
+
+      // For remaining items, check prefix matches
+      for (const config of workflowConfigs) {
+        if (config.wkflw_prefix) {
+          const aStartsWith = nameA.startsWith(config.wkflw_prefix);
+          const bStartsWith = nameB.startsWith(config.wkflw_prefix);
+          if (aStartsWith && !bStartsWith) return -1;
+          if (!aStartsWith && bStartsWith) return 1;
+          if (aStartsWith && bStartsWith) {
+            // If both match the same prefix, maintain original order
+            return 0;
+          }
+        }
+      }
+
+      // If no priority found, maintain original order
+      return 0;
+    });
+
+  return new Map(sortedEntries);
+}
+
+/**
  * Main function to run the action
  */
 async function run() {
   try {
     // Get inputs
     const cachePath = core.getInput('cache-path', { required: true });
-    const workflowConfigs = JSON.parse(core.getInput('workflow_configs', { required: true }));
     const days = parseInt(core.getInput('days') || DEFAULT_LOOKBACK_DAYS, 10);
+    const workflowConfigs = JSON.parse(core.getInput('workflow_configs', { required: true }));
 
     // Validate inputs
     if (!fs.existsSync(cachePath)) {
       throw new Error(`Cache file not found at ${cachePath}`);
     }
-    if (!Array.isArray(workflowConfigs)) {
-      throw new Error('Workflow configs must be a JSON array');
-    }
     if (isNaN(days) || days <= 0) {
       throw new Error('Days must be a positive number');
     }
+    if (!Array.isArray(workflowConfigs)) {
+      throw new Error('Workflow configs must be a JSON array');
+    }
 
     // Load cached data
-    const grouped = JSON.parse(fs.readFileSync(cachePath, 'utf8'));
+    const grouped = new Map(JSON.parse(fs.readFileSync(cachePath, 'utf8')));
 
     // Track failed workflows
     const failedWorkflows = [];
 
-    // Filter and process each workflow configuration
+    // Process each workflow
     const filteredGrouped = new Map();
-    for (const config of workflowConfigs) {
-      core.info(`Processing config: ${JSON.stringify(config)}`);
-      for (const [name, runs] of grouped) {
-        core.info(`Checking workflow: ${name}`);
-        if ((config.wkflw_name && name === config.wkflw_name) ||
-            (config.wkflw_prefix && name.startsWith(config.wkflw_prefix))) {
-          core.info(`Matched workflow: ${name} with config: ${JSON.stringify(config)}`);
-          // Filter runs by date range
-          const filteredRuns = filterRunsByDate(runs, days);
-          if (filteredRuns.length > 0) {
-            filteredGrouped.set(name, filteredRuns);
+    for (const [name, runs] of grouped) {
+      // Filter runs by date range
+      const filteredRuns = filterRunsByDate(runs, days);
+      if (filteredRuns.length > 0) {
+        filteredGrouped.set(name, filteredRuns);
 
-            // Check if latest run on main is failing
-            const mainBranchRuns = filteredRuns
-              .filter(r => r.head_branch === 'main')
-              .sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
-            if (mainBranchRuns[0]?.conclusion !== 'success') {
-              failedWorkflows.push(name);
-            }
-          }
+        // Check if latest run on main is failing
+        const mainBranchRuns = filteredRuns
+          .filter(r => r.head_branch === 'main')
+          .sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+        if (mainBranchRuns[0]?.conclusion !== 'success') {
+          failedWorkflows.push(name);
         }
       }
     }
@@ -377,7 +433,7 @@ async function run() {
     const octokit = github.getOctokit(core.getInput('GITHUB_TOKEN', { required: true }));
 
     // Generate report
-    const report = await buildReport(filteredGrouped, octokit, github.context);
+    const report = await buildReport(filteredGrouped, octokit, github.context, workflowConfigs);
 
     // Set outputs
     core.setOutput('failed_workflows', JSON.stringify(failedWorkflows));
