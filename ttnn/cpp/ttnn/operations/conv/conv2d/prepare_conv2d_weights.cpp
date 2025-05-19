@@ -1131,6 +1131,11 @@ ttnn::Tensor prepare_conv_weights(
         }
     }
     if (!conv_config.weights_dtype.has_value()) {
+        log_warning(
+            tt::LogOp,
+            "Conv2D prepare_weights was called with conv_config.weights_dtype not set. \n weights_dtype will be set to "
+            "the dtype of the input weights tensor. \n Weights & Bias must be the same dtype, so ensure that "
+            "conv_weights_dtype is set to the same dtype before calling prepare_bias.");
         conv_config.weights_dtype = weight_tensor.dtype();
     }
     auto opt_conv_op_block_config = get_opt_block_config(
@@ -1251,6 +1256,8 @@ ttnn::Tensor prepare_conv_bias(
     const std::optional<const Conv2dConfig>& conv_config_,
     const std::optional<const DeviceComputeKernelConfig>& compute_config_) {
     Conv2dConfig conv_config = conv_config_.value_or(Conv2dConfig());
+
+    TT_ASSERT(conv_config.weights_dtype.has_value(), "prepare_conv_bias requires conv_config.weights_dtype to be set.");
 
     std::array<uint32_t, 4> padding_n4 = sliding_window::get_pair_n4_padding(padding);
     const bool mm_conv = use_matmul_for_1x1_conv(kernel_size, stride, padding_n4, dilation, groups, conv_config);

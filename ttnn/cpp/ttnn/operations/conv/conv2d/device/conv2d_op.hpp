@@ -19,6 +19,9 @@ namespace conv2d {
 constexpr uint32_t l1_scratchpad_CB_size = 64;
 struct Conv2dConfig {
     tt::tt_metal::DataType dtype = tt::tt_metal::DataType::BFLOAT16;
+
+    // If set, the weights & bias tensors will be converted to this dtype after preprocessing.
+    // prepare_conv_bias needs this to always be set to the same dtype as the weights.
     std::optional<tt::tt_metal::DataType> weights_dtype = std::nullopt;
 
     // Either "relu" or ""
