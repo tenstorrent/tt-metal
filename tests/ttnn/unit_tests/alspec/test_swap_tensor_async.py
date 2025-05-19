@@ -13,7 +13,10 @@ from models.utility_functions import skip_for_grayskull
 from tests.ttnn.unit_tests.operations.ccl.test_ccl_common import (
     create_global_semaphore_with_same_address,
 )
-
+from tests.ttnn.unit_tests.alspec.alspec_common import (
+    create_multi_device_tensor,
+    read_multi_device_tensor,
+)
 from tests.tt_eager.python_api_testing.unit_testing.misc.test_matmul_1d_gather_in0 import (
     round_up,
 )
@@ -45,8 +48,8 @@ def run_swap_tensor_impl(
     trace_mode=False,
     validate_all=True,
 ):
-    cluster_shape = tuple(mesh_device.shape)
-    num_devices = mesh_device.get_num_devices()
+    cluster_shape = (2, 1)
+    num_devices = 2
 
     assert num_devices == 2, f"Only 2 devices are supported for swap tensor test, got {num_devices}"
     assert cluster_shape == (2, 1), f"Only (2, 1) cluster shape is supported for swap tensor test, got {cluster_shape}"
@@ -119,14 +122,14 @@ def run_swap_tensor_impl(
 
     logger.info(f"Input shape: {input_shape[2:]}, Padded shape: {[M, N_per_shard * input_num_cores]}")
     input_tensor = torch.randn(input_shape)
+    input_tensor = [input_tensor[i : i + 1, ...] for i in range(num_devices)]
 
-    tt_input_tensor = ttnn.from_torch(
+    tt_input_tensor = create_multi_device_tensor(
         input_tensor,
-        device=mesh_device,
+        mesh_device=mesh_device,
+        mem_config=input_mem_config,
         layout=ttnn.TILE_LAYOUT,
         dtype=input_dtype,
-        memory_config=input_mem_config,
-        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(0, 1), mesh_shape=cluster_shape),
     )
     check_mesh_tensor_alloc(tt_input_tensor)
 
@@ -151,24 +154,24 @@ def run_swap_tensor_impl(
             priority_b = torch.tensor(priority_b).view(1, 1, 1, 1).repeat(1, 1, ttnn.TILE_SIZE, ttnn.TILE_SIZE)
 
             # Priority tensor A from the perspective of the first device
-            priority_a_tt = ttnn.from_torch(
-                torch.concat([priority_a, priority_b], dim=0),
-                device=mesh_device,
+            priority_a_tt = create_multi_device_tensor(
+                [priority_a, priority_b],
+                mesh_device=mesh_device,
+                mem_config=ttnn.DRAM_MEMORY_CONFIG,
                 layout=ttnn.TILE_LAYOUT,
                 dtype=ttnn.int32,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(0, None), mesh_shape=cluster_shape),
             )
+            check_mesh_tensor_alloc(priority_a_tt)
 
             # Priority tensor B from the perspective of the second device
-            priority_b_tt = ttnn.from_torch(
-                torch.concat([priority_b, priority_a], dim=0),
-                device=mesh_device,
+            priority_b_tt = create_multi_device_tensor(
+                [priority_b, priority_a],
+                mesh_device=mesh_device,
+                mem_config=ttnn.DRAM_MEMORY_CONFIG,
                 layout=ttnn.TILE_LAYOUT,
                 dtype=ttnn.int32,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(0, None), mesh_shape=cluster_shape),
             )
+            check_mesh_tensor_alloc(priority_b_tt)
 
             priorities_tt.append((priority_a_tt, priority_b_tt))
 
@@ -179,15 +182,15 @@ def run_swap_tensor_impl(
             priority = priorities[i % MAX_PRIORITY_TENSORS]
             if priority[0] > priority[1]:
                 # Device 0 has higher priority
-                output_tensor_golden = input_tensor[0:1, ...].repeat(2, 1, 1, 1)
+                output_tensor_golden = [input_tensor[0], input_tensor[0]]
                 output_tensor_goldens_list.append(output_tensor_golden)
             else:
                 # Device 1 has higher priority
-                output_tensor_golden = input_tensor[1:2, ...].repeat(2, 1, 1, 1)
+                output_tensor_golden = [input_tensor[1], input_tensor[1]]
                 output_tensor_goldens_list.append(output_tensor_golden)
         else:
             # Flipping is the same as swapping, when num_devices = 2
-            output_tensor_goldens_list.append(torch.flip(input_tensor, [0]))
+            output_tensor_goldens_list.append(input_tensor[::-1])
 
     ##################################
     ##### Run the op
@@ -255,13 +258,9 @@ def run_swap_tensor_impl(
     ##### Validation
     ##################################
     def validate(tt_out_tensor, output_tensor):
-        for i, t in enumerate(ttnn.get_device_tensors(tt_out_tensor)):
-            # get_device_tensors returns row major, so we need to select the correct golden tensor
-            output_tensor_ = output_tensor[i].unsqueeze(0).unsqueeze(0)
-
-            tt_output_tensor = t.cpu().to_torch()
-            # logger.info(f"Checking for device {t.device().id()}")
-
+        for i, (tt_output_tensor, output_tensor_) in enumerate(
+            zip(read_multi_device_tensor(tt_out_tensor), output_tensor)
+        ):
             if input_dtype == ttnn.bfloat16:
                 eq, output = comp_pcc(tt_output_tensor, output_tensor_)
             else:
@@ -279,7 +278,7 @@ def run_swap_tensor_impl(
         output_tensor = output_tensor_goldens_list[-1]
         validate(tt_out_tensor, output_tensor)
 
-    for i in range(mesh_device.get_num_devices()):
+    for i in range(num_devices):
         assert (
             mesh_device.get_devices()[i].num_program_cache_entries() == 1
             or mesh_device.get_devices()[i].num_program_cache_entries() == num_iters
@@ -329,13 +328,6 @@ def run_swap_tensor_impl(
             "trace_region_size": 23887872,
             "fabric_config": ttnn.FabricConfig.FABRIC_1D,
         }
-    ],
-    indirect=True,
-)
-@pytest.mark.parametrize(
-    "mesh_device",
-    [
-        (2, 1),
     ],
     indirect=True,
 )
