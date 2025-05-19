@@ -940,8 +940,8 @@ std::pair<ttnn::Tensor, std::optional<ttnn::Tensor>> prepare_conv_weights_biases
             output_parallel_config,
             device);
         TT_ASSERT(
-            bias_tensor_.get_dtype() == weights_bias_dtype,
-            "Bias tensor should be in the dtype specified by Conv2dConfig");
+            bias_tensor_.get_dtype() == weight_tensor_.get_dtype(),
+            "Bias tensor should be in same dtype as the weights tensor.");
     }
     return {weight_tensor_, bias_tensor.has_value() ? bias_tensor_ : std::optional<ttnn::Tensor>()};
 }
