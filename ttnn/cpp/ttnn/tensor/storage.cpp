@@ -29,9 +29,8 @@ MemoryConfig DeviceStorage::memory_config() const {
 
 DeviceStorage::DeviceStorage(
     std::shared_ptr<distributed::MeshBuffer> mesh_buffer_,
-    DistributedTensorConfig strategy_,
     std::vector<std::pair<distributed::MeshCoordinate, TensorSpec>> specs_) :
-    strategy(std::move(strategy_)), specs(std::move(specs_)), mesh_buffer(std::move(mesh_buffer_)) {}
+    specs(std::move(specs_)), mesh_buffer(std::move(mesh_buffer_)) {}
 
 Buffer* DeviceStorage::get_buffer() const {
     if (this->mesh_buffer.get() != nullptr) {
@@ -74,5 +73,17 @@ bool DeviceStorage::is_uniform_storage() const {
     return specs.size() == mesh_buffer->device()->num_devices() &&
            std::all_of(specs.begin(), specs.end(), [this](const auto& spec) { return spec.second == specs[0].second; });
 }
+
+HostBuffer MultiDeviceHostStorage::get_buffer(int buffer_index) const {
+    TT_FATAL(buffer_index < buffers_.size(), "Buffer not found for buffer_index {}", buffer_index);
+    return buffers_[buffer_index];
+}
+
+TensorSpec MultiDeviceHostStorage::get_tensor_spec(int spec_index) const {
+    TT_FATAL(spec_index < specs_.size(), "Spec for device {} not found in spec list", spec_index);
+    return specs_[spec_index];
+}
+
+size_t MultiDeviceHostStorage::num_buffers() const { return buffers_.size(); }
 
 }  // namespace tt::tt_metal

@@ -23,8 +23,10 @@ namespace utils {
             return ((a == DataType::FLOAT32 && b == DataType::FLOAT32) || (a == DataType::INT32 && b == DataType::INT32)
                 || (a == DataType::UINT32 && b == DataType::UINT32) || (a == DataType::UINT16 && b == DataType::UINT16));
         case BinaryOpType::SUB:
-            return ((a == DataType::FLOAT32 && b == DataType::FLOAT32) || (a == DataType::INT32 && b == DataType::INT32) || (a == DataType::UINT16 && b == DataType::UINT16));
+            return ((a == DataType::FLOAT32 && b == DataType::FLOAT32) || (a == DataType::INT32 && b == DataType::INT32)
+                || (a == DataType::UINT16 && b == DataType::UINT16));
         case BinaryOpType::MUL:
+            return ((a == DataType::FLOAT32 && b == DataType::FLOAT32) || (a == DataType::UINT16 && b == DataType::UINT16));
         case BinaryOpType::DIV:
         case BinaryOpType::RSUB:
         case BinaryOpType::LOGADDEXP:
@@ -44,9 +46,9 @@ namespace utils {
         case BinaryOpType::GCD:
         case BinaryOpType::LCM:
         case BinaryOpType::LEFT_SHIFT:
-        case BinaryOpType::RIGHT_SHIFT:
+        case BinaryOpType::RIGHT_SHIFT: return (a == DataType::INT32 && b == DataType::INT32);
         case BinaryOpType::BITWISE_XOR:
-        case BinaryOpType::BITWISE_OR: return (a == DataType::INT32 && b == DataType::INT32);
+        case BinaryOpType::BITWISE_OR:
         case BinaryOpType::BITWISE_AND: return ((a == DataType::INT32 && b == DataType::INT32) || (a == DataType::UINT16 && b == DataType::UINT16));
         case BinaryOpType::MAXIMUM:
         case BinaryOpType::MINIMUM:

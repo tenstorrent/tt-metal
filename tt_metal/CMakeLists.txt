@@ -51,7 +51,6 @@ target_sources(
             api/tt-metalium/core_descriptor.hpp
             api/tt-metalium/data_format.hpp
             api/tt-metalium/data_types.hpp
-            api/tt-metalium/dev_msgs.h
             api/tt-metalium/device.hpp
             api/tt-metalium/device_impl.hpp
             api/tt-metalium/device_pool.hpp
@@ -61,7 +60,6 @@ target_sources(
             api/tt-metalium/fabric_host_interface.h
             api/tt-metalium/fabric_edm_packet_header.hpp
             api/tt-metalium/global_circular_buffer.hpp
-            api/tt-metalium/global_circular_buffer_impl.hpp
             api/tt-metalium/global_semaphore.hpp
             api/tt-metalium/graph_tracking.hpp
             api/tt-metalium/hal.hpp
@@ -103,7 +101,6 @@ target_sources(
             api/tt-metalium/utils.hpp
             api/tt-metalium/work_executor_types.hpp
             api/tt-metalium/work_split.hpp
-            api/tt-metalium/worker_config_buffer.hpp
             api/tt-metalium/distributed_context.hpp
 )
 
@@ -118,7 +115,6 @@ target_sources(
         BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
         FILES
             api/tt-metalium/circular_buffer_constants.h
-            api/tt-metalium/dev_msgs.h
             api/tt-metalium/fabric_host_interface.h
             api/tt-metalium/fabric_edm_packet_header.hpp
             core_descriptors/blackhole_140_arch.yaml
@@ -174,6 +170,7 @@ target_sources(
             third_party/tt_llk/tt_llk_blackhole/common/inc/sfpu/ckernel_sfpu_cast_fp32_to_fp16a.h
             third_party/tt_llk/tt_llk_blackhole/common/inc/sfpu/ckernel_sfpu_clamp.h
             third_party/tt_llk/tt_llk_blackhole/common/inc/sfpu/ckernel_sfpu_comp.h
+            third_party/tt_llk/tt_llk_blackhole/common/inc/sfpu/ckernel_sfpu_converter.h
             third_party/tt_llk/tt_llk_blackhole/common/inc/sfpu/ckernel_sfpu_cumsum.h
             third_party/tt_llk/tt_llk_blackhole/common/inc/sfpu/ckernel_sfpu_dropout.h
             third_party/tt_llk/tt_llk_blackhole/common/inc/sfpu/ckernel_sfpu_exp.h
@@ -238,6 +235,7 @@ target_sources(
             third_party/tt_llk/tt_llk_wormhole_b0/common/inc/sfpu/ckernel_sfpu_cast_fp32_to_fp16a.h
             third_party/tt_llk/tt_llk_wormhole_b0/common/inc/sfpu/ckernel_sfpu_clamp.h
             third_party/tt_llk/tt_llk_wormhole_b0/common/inc/sfpu/ckernel_sfpu_comp.h
+            third_party/tt_llk/tt_llk_wormhole_b0/common/inc/sfpu/ckernel_sfpu_converter.h
             third_party/tt_llk/tt_llk_wormhole_b0/common/inc/sfpu/ckernel_sfpu_cumsum.h
             third_party/tt_llk/tt_llk_wormhole_b0/common/inc/sfpu/ckernel_sfpu_dropout.h
             third_party/tt_llk/tt_llk_wormhole_b0/common/inc/sfpu/ckernel_sfpu_exp.h
@@ -288,7 +286,7 @@ target_sources(
             tools/profiler/kernel_profiler.hpp
             # Kernel sources
             impl/dispatch/kernels/cq_dispatch.cpp
-            impl/dispatch/kernels/cq_dispatch_slave.cpp
+            impl/dispatch/kernels/cq_dispatch_subordinate.cpp
             impl/dispatch/kernels/cq_prefetch.cpp
             impl/dispatch/kernels/packet_demux.cpp
             impl/dispatch/kernels/packet_mux.cpp

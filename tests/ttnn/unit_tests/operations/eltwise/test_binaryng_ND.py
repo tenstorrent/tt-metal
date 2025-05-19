@@ -45,7 +45,7 @@ import ttnn
         ttnn.add,
         ttnn.sub,
         ttnn.mul,
-        ttnn.div,
+        ttnn.divide,
         ttnn.rsub,
         ttnn.eq,
         ttnn.ne,
@@ -68,7 +68,7 @@ def test_ND_subtile_bcast(device, shapes, ttnn_fn):
 
     torch_input_tensor_a = torch.rand(shapes[0], dtype=torch.bfloat16) * 100 - 50
     torch_input_tensor_b = None
-    if ttnn_fn == ttnn.div:
+    if ttnn_fn == ttnn.divide:
         torch_input_tensor_b = torch.rand(shapes[1], dtype=torch.bfloat16) * 59 + 1
     else:
         torch_input_tensor_b = torch.rand(shapes[1], dtype=torch.bfloat16) * 100 - 50
@@ -112,7 +112,7 @@ def test_ND_subtile_bcast(device, shapes, ttnn_fn):
         ttnn.add,
         ttnn.sub,
         ttnn.mul,
-        ttnn.div,
+        ttnn.divide,
         ttnn.rsub,
         ttnn.eq,
         ttnn.ne,

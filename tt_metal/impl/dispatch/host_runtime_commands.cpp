@@ -191,7 +191,7 @@ void EnqueueTerminateCommand::process() {
         // Terminate dispatch_s if enabled
         cmd_region = this->manager.issue_queue_reserve(cmd_sequence_sizeB, this->command_queue_id);
         HugepageDeviceCommand dispatch_s_command_sequence(cmd_region, cmd_sequence_sizeB);
-        dispatch_s_command_sequence.add_dispatch_terminate(DispatcherSelect::DISPATCH_SLAVE);
+        dispatch_s_command_sequence.add_dispatch_terminate(DispatcherSelect::DISPATCH_SUBORDINATE);
         this->manager.issue_queue_push_back(cmd_sequence_sizeB, this->command_queue_id);
         this->manager.fetch_queue_reserve_back(this->command_queue_id);
         this->manager.fetch_queue_write(cmd_sequence_sizeB, this->command_queue_id);
@@ -347,12 +347,16 @@ void Finish(CommandQueue& cq, tt::stl::Span<const SubDeviceId> sub_device_ids) {
     LIGHT_METAL_TRACE_FUNCTION_CALL(CaptureFinish, cq, sub_device_ids);
     detail::DispatchStateCheck(true);
     cq.finish(sub_device_ids);
-    TT_ASSERT(
-        !(DPrintServerHangDetected()), "Command Queue could not finish: device hang due to unanswered DPRINT WAIT.");
-    TT_ASSERT(
-        !(tt::watcher_server_killed_due_to_error()),
-        "Command Queue could not finish: device hang due to illegal NoC transaction. See {} for details.",
-        tt::watcher_get_log_file_name());
+    // If in testing mode, don't need to check dprint/watcher errors, since the tests will induce/handle them.
+    if (!MetalContext::instance().rtoptions().get_test_mode_enabled()) {
+        TT_FATAL(
+            !(DPrintServerHangDetected()),
+            "Command Queue could not finish: device hang due to unanswered DPRINT WAIT.");
+        TT_FATAL(
+            !(tt::watcher_server_killed_due_to_error()),
+            "Command Queue could not finish: device hang due to illegal NoC transaction. See {} for details.",
+            tt::watcher_get_log_file_name());
+    }
 }
 
 void EnqueueTrace(CommandQueue& cq, uint32_t trace_id, bool blocking) {

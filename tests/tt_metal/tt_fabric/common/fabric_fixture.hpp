@@ -96,13 +96,30 @@ class Fabric2DPushFixture : public BaseFabricFixture {
     void SetUp() override { this->SetUpDevices(tt::tt_metal::FabricConfig::FABRIC_2D_PUSH); }
 };
 
+class Fabric2DDynamicFixture : public BaseFabricFixture {
+    void SetUp() override { this->SetUpDevices(tt::tt_metal::FabricConfig::FABRIC_2D_DYNAMIC); }
+};
+
+struct McastRoutingInfo {
+    RoutingDirection mcast_dir;
+    uint32_t num_mcast_hops;
+};
+
 void RunTestUnicastRaw(
     BaseFabricFixture* fixture, uint32_t num_hops = 1, RoutingDirection direction = RoutingDirection::E);
 
 void RunTestUnicastConnAPI(
     BaseFabricFixture* fixture, uint32_t num_hops = 1, RoutingDirection direction = RoutingDirection::E);
 
-void RunTestMCastConnAPI(BaseFabricFixture* fixture);
+void RunTestMCastConnAPI(
+    BaseFabricFixture* fixture,
+    RoutingDirection fwd_dir = RoutingDirection::W,
+    uint32_t fwd_hops = 1,
+    RoutingDirection bwd_dir = RoutingDirection::E,
+    uint32_t bwd_hops = 1);
+
+void RunTestLineMcast(
+    BaseFabricFixture* fixture, RoutingDirection unicast_dir, const std::vector<McastRoutingInfo>& mcast_routing_info);
 
 bool find_device_with_neighbor_in_multi_direction(
     BaseFabricFixture* fixture,
@@ -110,7 +127,8 @@ bool find_device_with_neighbor_in_multi_direction(
     std::unordered_map<RoutingDirection, std::vector<std::pair<mesh_id_t, chip_id_t>>>& dst_mesh_chip_ids_by_dir,
     chip_id_t& src_physical_device_id,
     std::unordered_map<RoutingDirection, std::vector<chip_id_t>>& dst_physical_device_ids_by_dir,
-    const std::unordered_map<RoutingDirection, uint32_t>& mcast_hops);
+    const std::unordered_map<RoutingDirection, uint32_t>& mcast_hops,
+    std::optional<RoutingDirection> incoming_direction = std::nullopt);
 
 bool find_device_with_neighbor_in_direction(
     BaseFabricFixture* fixture,
