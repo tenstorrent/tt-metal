@@ -10,6 +10,7 @@
 #include <tt-metalium/erisc_datamover_builder.hpp>
 #include "impl/context/metal_context.hpp"
 #include "tt_metal/fabric/fabric_context.hpp"
+#include <tt-metalium/control_plane.hpp>
 
 namespace tt::tt_fabric {
 
