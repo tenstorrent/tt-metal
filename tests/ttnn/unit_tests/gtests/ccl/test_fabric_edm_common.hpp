@@ -1216,8 +1216,8 @@ void setup_test_with_persistent_fabric(
                 tt::LogTest,
                 "Implementing loopback on device {} by connecting 1D fabric endpoint to itself at x={}, y={}",
                 devices.back()->id(),
-                edm_builder.my_noc_x,
-                edm_builder.my_noc_y);
+                edm_builder.begin()->my_noc_x,
+                edm_builder.begin()->my_noc_y);
             if (devices[0]->arch() == tt::ARCH::BLACKHOLE) {
                 edm_builder[(int)DataMovementProcessor::RISCV_0].connect_to_downstream_edm(
                     edm_builder[(int)tt::tt_metal::DataMovementProcessor::RISCV_1]);
