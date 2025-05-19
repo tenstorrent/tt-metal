@@ -24,4 +24,11 @@ ttnn::Tensor perform_transpose(
 
 ttnn::Tensor transform_to_4d_tensor(const ttnn::Tensor& input_tensor, const bool is_rank_le_4d);
 
+ttnn::Tensor recover_input_tensor(
+    const ttnn::Tensor& output_tensor,
+    const bool& rank_below_4,
+    const uint32_t& dim_x,
+    const uint32_t& dim_y,
+    const bool& is_dim_last);
+
 }  // namespace reduction_common
