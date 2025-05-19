@@ -99,7 +99,7 @@ def test_conv2d(
     )
 
     tt_output = tt_model(tt_input_tensor)
-    tt_output_torch = to_torch(tt_output, mesh_device=mesh_device, dtype=dtype, shard_dim=0)[
+    tt_output_torch = to_torch(tt_output, mesh_device=mesh_device, dtype=dtype, shard_dim=-1)[
         0:batch_size, :, :, 0:out_channels
     ]
     tt_output_torch = tt_output_torch.permute(0, 3, 1, 2)
