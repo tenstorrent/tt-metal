@@ -52,6 +52,7 @@ struct FabricEriscDatamoverConfig {
     static constexpr std::size_t field_size = 16;
     static constexpr std::size_t buffer_alignment = 32;
     static constexpr std::size_t eth_word_l1_alignment = 16;
+    static constexpr uint32_t default_iterations_between_ctx_switch_and_teardown_checks = 32;
     static_assert(((buffer_alignment - 1) & buffer_alignment) == 0);
     static constexpr bool enable_fabric_counters = false;
     static constexpr bool enable_fabric_pkt_header_recording = false;
@@ -154,6 +155,7 @@ struct FabricEriscDatamoverConfig {
     std::array<bool, num_riscv_cores> enable_handshake;
     std::array<bool, num_riscv_cores> enable_context_switch;
     std::array<bool, num_riscv_cores> enable_interrupts;
+    std::array<size_t, num_riscv_cores> iterations_between_ctx_switch_and_teardown_checks;
 
     // add the noc-usage and cmd_buf-usage here
     std::array<std::size_t, num_receiver_channels> receiver_channel_forwarding_noc_ids;

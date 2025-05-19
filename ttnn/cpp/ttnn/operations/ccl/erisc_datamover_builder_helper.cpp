@@ -652,18 +652,27 @@ void EdmLineFabricOpInterface::teardown_from_host(tt::tt_fabric::TerminationSign
     }
 }
 
-void EdmLineFabricOpInterface::set_firmware_context_switch_interval(size_t interval) {
-    for (auto& edm_builder : edm_builders_forward_direction) {
-        for (auto& edm_builders_for_link : edm_builder.second) {
-            for (auto& builder : edm_builders_for_link) {
-                builder.set_firmware_context_switch_interval(interval);
+void EdmLineFabricOpInterface::set_firmware_context_switch_interval(size_t interval, size_t risc_id) {
+    constexpr size_t ALL_RISCS = std::numeric_limits<size_t>::max();
+    for (auto& edm_builders : edm_builders_forward_direction) {
+        for (auto& edm_builders_for_eth : edm_builders.second) {
+            if (risc_id == ALL_RISCS) {
+                for (auto& builder_for_risc : edm_builders_for_eth) {
+                    builder_for_risc.set_firmware_context_switch_interval(interval);
+                }
+            } else if (risc_id < edm_builders_for_eth.size()) {
+                edm_builders_for_eth[risc_id].set_firmware_context_switch_interval(interval);
             }
         }
     }
-    for (auto& edm_builder : edm_builders_backward_direction) {
-        for (auto& edm_builders_for_link : edm_builder.second) {
-            for (auto& builder : edm_builders_for_link) {
-                builder.set_firmware_context_switch_interval(interval);
+    for (auto& edm_builders : edm_builders_backward_direction) {
+        for (auto& edm_builders_for_eth : edm_builders.second) {
+            if (risc_id == ALL_RISCS) {
+                for (auto& builder_for_risc : edm_builders_for_eth) {
+                    builder_for_risc.set_firmware_context_switch_interval(interval);
+                }
+            } else if (risc_id < edm_builders_for_eth.size()) {
+                edm_builders_for_eth[risc_id].set_firmware_context_switch_interval(interval);
             }
         }
     }

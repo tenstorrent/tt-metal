@@ -104,7 +104,7 @@ public:
     static void launch_mesh_fabric(MeshDevice* mesh_device);
     static void teardown_edm_fabric(MeshDevice* mesh_device);
 
-    void set_firmware_context_switch_interval(size_t interval);
+    void set_firmware_context_switch_interval(size_t interval, size_t risc_id = std::numeric_limits<size_t>::max());
 
     // Device ID -> EDM Builders for each eth core for each Risc core
     std::unordered_map<size_t, std::vector<std::vector<tt::tt_fabric::FabricEriscDatamoverBuilder>>>

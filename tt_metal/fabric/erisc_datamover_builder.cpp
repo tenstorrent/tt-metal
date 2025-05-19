@@ -141,6 +141,8 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
         this->enable_interrupts[risc_id] = true;
         this->sender_txq_id[risc_id] = risc_id;
         this->receiver_rxq_id[risc_id] = risc_id;
+        this->iterations_between_ctx_switch_and_teardown_checks[risc_id] =
+            FabricEriscDatamoverConfig::default_iterations_between_ctx_switch_and_teardown_checks;
 
         this->num_used_sender_channels[risc_id] = get_sender_channel_count(topology);
         if (topology == Topology::Mesh) {
@@ -222,8 +224,6 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
 
     size_t num_sender_buffer_slots;
     size_t num_receiver_buffer_slots;
-
-    // TODO: from here to validation should be called once for all RISC-V cores. then validate once
     auto get_optimal_num_slots =
         [this](auto& buffer_slot_options, size_t& num_sender_buffer_slots, size_t& num_receiver_buffer_slots) {
             for (auto& option : buffer_slot_options) {
@@ -569,6 +569,7 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args(const s
         config.enable_interrupts[risc_id],
         config.sender_txq_id[risc_id],
         config.receiver_rxq_id[risc_id],
+        config.iterations_between_ctx_switch_and_teardown_checks[risc_id],
         config.topology == Topology::Mesh,
         this->direction,
         soc_desc.get_num_eth_channels(),
