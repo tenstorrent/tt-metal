@@ -165,6 +165,7 @@ void MAIN {
         cb_pop_front(in_scalar_cb_id_0, 1);
     }
     if (one_scalar_per_core) {
+        DPRINT << "reelasing only one scalar value" << ENDL();
         cb_pop_front(in_scalar_cb_id, 1);
     }
 }
