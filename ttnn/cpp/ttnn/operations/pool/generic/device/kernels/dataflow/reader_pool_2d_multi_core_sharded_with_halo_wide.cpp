@@ -79,6 +79,7 @@ void kernel_main() {
         scalars_cnt = get_arg_val<uint32_t>(0);
     }
     DPRINT << "scalars_cnt: " << scalars_cnt << ENDL();
+    DPRINT << "reader_indices: " << reader_nindices << ENDL();
 
     if (reader_id == 0 && one_scalar_per_core) {
         cb_reserve_back(in_scalar_cb_id, 1);
