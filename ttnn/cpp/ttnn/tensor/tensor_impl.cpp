@@ -502,10 +502,10 @@ std::string to_string<bfloat4_b>(
 
 template <typename T>
 Tensor to_host_helper(const Tensor& tensor, bool blocking = true, ttnn::QueueId cq_id = ttnn::DefaultQueueId) {
-    TT_ASSERT(tensor.is_allocated(), "Buffer must be allocated on device!");
+    TT_FATAL(tensor.is_allocated(), "Buffer must be allocated on device!");
     auto device_buffer = tensor.buffer();
     auto device = tensor.device();
-    TT_ASSERT(device != nullptr && "Need device to be set copy data from device to host!");
+    TT_FATAL(device != nullptr, "Need device to be set copy data from device to host!");
     uint32_t size_in_bytes = device_buffer->size();
     std::vector<T> data_vec;
     const char* TT_METAL_SLOW_DISPATCH_MODE = std::getenv("TT_METAL_SLOW_DISPATCH_MODE");
@@ -547,7 +547,7 @@ Tensor to_host<bfloat8_b>(const Tensor& tensor, bool blocking, ttnn::QueueId cq_
 
 template <typename T>
 Tensor to_host_mesh_tensor(const Tensor& tensor, bool blocking, ttnn::QueueId cq_id) {
-    TT_ASSERT(tensor.is_allocated(), "Buffer must be allocated on device!");
+    TT_FATAL(tensor.is_allocated(), "Buffer must be allocated on device!");
     const auto& storage = std::get<DeviceStorage>(tensor.get_storage());
     const auto& mesh_buffer = storage.mesh_buffer;
     ttnn::MeshDevice* device = mesh_buffer->device();
@@ -687,7 +687,6 @@ Tensor to_device(const Tensor& tensor, IDevice* target_device, const MemoryConfi
     }
     TT_FATAL(tensor.storage_type() != StorageType::DEVICE, "Tensor is already on device!");
     TT_FATAL(target_device != nullptr, "Need target device in order to move tensor to device!");
-    TT_FATAL(tensor.is_allocated(), "Need data to exist in order to move it to device");
 
     TensorSpec tensor_spec(
         tensor.get_logical_shape(), tensor.get_tensor_spec().tensor_layout().with_memory_config(memory_config));
@@ -832,7 +831,6 @@ Tensor to_device_mesh_tensor(
     }
 
     TT_FATAL(mesh_device != nullptr, "Need target device in order to move tensor to device!");
-    TT_FATAL(tensor.is_allocated(), "Need data to exist in order to move it to device");
 
     TensorSpec tensor_spec(
         tensor.get_logical_shape(), tensor.get_tensor_spec().tensor_layout().with_memory_config(memory_config));
@@ -847,7 +845,7 @@ template <typename T>
 void copy_to_mesh_tensor(const Tensor& host_tensor, Tensor& mesh_tensor, ttnn::QueueId cq_id) {
     TT_FATAL(host_tensor.storage_type() != StorageType::DEVICE, "Host tensor is on device.");
     TT_FATAL(mesh_tensor.storage_type() == StorageType::DEVICE, "Mesh tensor is not on device.");
-    TT_FATAL(mesh_tensor.is_allocated(), "Need data to exist in order to move it to device");
+    TT_FATAL(mesh_tensor.is_allocated(), "Buffer must be allocated on device.");
 
     TT_FATAL(host_tensor.get_logical_shape() == mesh_tensor.get_logical_shape(), "Host tensor has different shape");
     TT_FATAL(host_tensor.get_dtype() == mesh_tensor.get_dtype(), "Host tensor has different dtype");

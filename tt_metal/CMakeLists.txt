@@ -51,7 +51,6 @@ target_sources(
             api/tt-metalium/core_descriptor.hpp
             api/tt-metalium/data_format.hpp
             api/tt-metalium/data_types.hpp
-            api/tt-metalium/dev_msgs.h
             api/tt-metalium/device.hpp
             api/tt-metalium/device_impl.hpp
             api/tt-metalium/device_pool.hpp
@@ -61,7 +60,6 @@ target_sources(
             api/tt-metalium/fabric_host_interface.h
             api/tt-metalium/fabric_edm_packet_header.hpp
             api/tt-metalium/global_circular_buffer.hpp
-            api/tt-metalium/global_circular_buffer_impl.hpp
             api/tt-metalium/global_semaphore.hpp
             api/tt-metalium/graph_tracking.hpp
             api/tt-metalium/hal.hpp
@@ -117,7 +115,6 @@ target_sources(
         BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
         FILES
             api/tt-metalium/circular_buffer_constants.h
-            api/tt-metalium/dev_msgs.h
             api/tt-metalium/fabric_host_interface.h
             api/tt-metalium/fabric_edm_packet_header.hpp
             core_descriptors/blackhole_140_arch.yaml
@@ -289,7 +286,7 @@ target_sources(
             tools/profiler/kernel_profiler.hpp
             # Kernel sources
             impl/dispatch/kernels/cq_dispatch.cpp
-            impl/dispatch/kernels/cq_dispatch_slave.cpp
+            impl/dispatch/kernels/cq_dispatch_subordinate.cpp
             impl/dispatch/kernels/cq_prefetch.cpp
             impl/dispatch/kernels/packet_demux.cpp
             impl/dispatch/kernels/packet_mux.cpp

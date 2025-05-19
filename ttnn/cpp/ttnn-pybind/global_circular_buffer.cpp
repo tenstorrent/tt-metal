@@ -4,7 +4,7 @@
 
 #include "global_circular_buffer.hpp"
 
-#include <tt-metalium/global_circular_buffer_impl.hpp>
+#include <tt-metalium/global_circular_buffer.hpp>
 #include "ttnn/global_circular_buffer.hpp"
 #include "pybind11/pybind11.h"
 
