@@ -42,13 +42,25 @@ constexpr uint32_t to_sender_3_pkts_completed_id = 10;
 // receivers updates the reg on this stream
 constexpr uint32_t to_sender_4_pkts_completed_id = 11;
 
-constexpr uint32_t receiver_channel_0_free_slots_stream_id = 12;
-constexpr uint32_t receiver_channel_1_free_slots_stream_id = 14;
+constexpr size_t NUM_ROUTER_CARDINAL_DIRECTIONS = 4;
+constexpr uint32_t receiver_channel_0_free_slots_from_east_stream_id = 12;
+constexpr uint32_t receiver_channel_0_free_slots_from_west_stream_id = 13;
+constexpr uint32_t receiver_channel_0_free_slots_from_north_stream_id = 14;
+constexpr uint32_t receiver_channel_0_free_slots_from_south_stream_id = 15;
 
-constexpr uint32_t sender_channel_1_free_slots_stream_id = 17;
-constexpr uint32_t sender_channel_2_free_slots_stream_id = 18;
-constexpr uint32_t sender_channel_3_free_slots_stream_id = 19;
-constexpr uint32_t sender_channel_4_free_slots_stream_id = 20;
+// For post-dateline connection. We only have one counter here because if we are
+// post-dateline, there is only one other possible post-dateline consumer that we
+// can forward to (the consumer in the same direction). Switching directions/turning
+// requires directing back to pre-dateline consumer channels (in those cases, we'd
+// use the receiver_channel_0_free_slots_* location). For the time being, this is
+// placeholder until 2D torus is implemented
+constexpr uint32_t receiver_channel_1_free_slots_from_downstream_stream_id = 16;
+
+// Slot 17 is defined in the edm_fabric_worker_adapter
+constexpr uint32_t sender_channel_1_free_slots_stream_id = 18;
+constexpr uint32_t sender_channel_2_free_slots_stream_id = 19;
+constexpr uint32_t sender_channel_3_free_slots_stream_id = 20;
+constexpr uint32_t sender_channel_4_free_slots_stream_id = 21;
 
 constexpr size_t MAX_NUM_RECEIVER_CHANNELS = 2;
 constexpr size_t MAX_NUM_SENDER_CHANNELS = 5;
@@ -229,7 +241,8 @@ constexpr std::array<size_t, NUM_SENDER_CHANNELS> sender_channel_logical_stream_
     fill_array_with_next_n_args<size_t, SENDER_CHANNEL_LOGICAL_STREAM_IDS_MAP_START_IDX, NUM_SENDER_CHANNELS>();
 
 // TODO: Add a special marker in CT args so we don't misalign unintentionally
-constexpr size_t EDM_NOC_VC_IDX = SENDER_CHANNEL_LOGICAL_STREAM_IDS_MAP_START_IDX + NUM_SENDER_CHANNELS;
+// constexpr size_t EDM_NOC_VC_IDX = SENDER_CHANNEL_LOGICAL_STREAM_IDS_MAP_START_IDX + NUM_SENDER_CHANNELS;
+constexpr size_t EDM_NOC_VC_IDX = RX_CH_LOCAL_WRITE_CMD_BUF_ID_IDX + NUM_RECEIVER_CHANNELS;
 constexpr size_t SPECIAL_MARKER_1_IDX = EDM_NOC_VC_IDX + 1;
 constexpr size_t SPECIAL_MARKER_1 = 0x10c0ffee;
 static_assert(

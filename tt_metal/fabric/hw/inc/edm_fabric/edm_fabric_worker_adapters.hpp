@@ -42,7 +42,7 @@ namespace tt::tt_fabric {
 template <bool I_USE_STREAM_REG_FOR_CREDIT_RECEIVE, uint8_t EDM_NUM_BUFFER_SLOTS = 0>
 struct WorkerToFabricEdmSenderImpl {
     static constexpr bool ENABLE_STATEFUL_WRITE_CREDIT_TO_DOWNSTREAM_EDM = true;
-    static constexpr uint32_t sender_channel_0_free_slots_stream_id = 16;
+    static constexpr uint32_t sender_channel_0_free_slots_stream_id = 17;
     static constexpr bool USER_DEFINED_NUM_BUFFER_SLOTS = EDM_NUM_BUFFER_SLOTS != 0;
     // Temporary flag to distinguish between worker and EDM users of this adapter until we split it into
     // two separate adapters (they've started diverging quite a bit by now)

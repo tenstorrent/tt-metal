@@ -152,8 +152,7 @@ struct EdmChannelWorkerInterface {
         cached_worker_semaphore_address(0),
         connection_live_semaphore(connection_live_semaphore),
         sender_sync_noc_cmd_buf(sender_sync_noc_cmd_buf) {
-        DPRINT << "EDM  my_x: " << (uint32_t)my_x[0] << ", my_y: " << (uint32_t)my_y[0] << " rdptr set to 0 at "
-               << (uint32_t)(void*)&(worker_location_info_ptr->edm_read_counter) << "\n";
+        DPRINT << "EDM  my_y|x: " << (uint32_t)((my_y[0] << 8) | my_y[0]) << "\n";
         *reinterpret_cast<volatile uint32_t*>(&(worker_location_info_ptr->edm_read_counter)) = edm_read_counter_initial_value;
     }
 

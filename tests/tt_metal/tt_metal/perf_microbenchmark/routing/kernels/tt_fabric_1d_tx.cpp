@@ -57,7 +57,10 @@ inline void send_packet(
     tt_l1_ptr uint32_t* last_word_addr =
         reinterpret_cast<tt_l1_ptr uint32_t*>(source_l1_buffer_address + packet_payload_size_bytes - 4);
 #endif
+    DPRINT << "Waiting for space for packet\n";
     connection.wait_for_empty_write_slot();
+    DPRINT << "Sending packet to " << (uint32_t)connection.direction << " with payload size "
+           << (uint32_t)packet_payload_size_bytes << "\n";
     connection.send_payload_without_header_non_blocking_from_address(
         source_l1_buffer_address, packet_payload_size_bytes);
     connection.send_payload_blocking_from_address((uint32_t)packet_header, sizeof(PACKET_HEADER_TYPE));
@@ -147,6 +150,7 @@ void kernel_main() {
 
     uint64_t start_timestamp = get_timestamp();
 
+    DPRINT << "Sending " << (uint32_t)num_packets << " packets\n";
     // loop over for num packets
     for (uint32_t i = 0; i < num_packets; i++) {
 #ifndef BENCHMARK_MODE
@@ -183,6 +187,7 @@ void kernel_main() {
         noc_dest_addr += packet_payload_size_bytes;
 #endif
     }
+    DPRINT << "Tearing down\n";
 
     uint64_t cycles_elapsed = get_timestamp() - start_timestamp;
 
