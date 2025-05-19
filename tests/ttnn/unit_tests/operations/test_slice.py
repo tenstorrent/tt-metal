@@ -1101,7 +1101,7 @@ def test_slice_height_sharded_for_conv2d(device, dims, slice_dim, slice_size, co
 
     strides = [1, 1, 1, 1]
     torch.manual_seed(2005)
-    torch_input = torch.randint(-10, 10, dims)
+    torch_input = torch.randint(-10, 10, dims).to(dtype=torch.bfloat16)
     core_range = ttnn.num_cores_to_corerangeset(cores, core_grid, orientation == ttnn.ShardOrientation.ROW_MAJOR)
     num_slices = dims[slice_dim] // slice_size
     ttnn_input = ttnn.from_torch(
@@ -1127,15 +1127,15 @@ def test_slice_height_sharded_for_conv2d(device, dims, slice_dim, slice_size, co
         this_ttnn_output = ttnn.padded_slice(ttnn_input, begins, ends, strides, memory_config=memory_config)
         output = ttnn.to_torch(this_ttnn_output)
         output = torch.reshape(output, this_torch_output.shape)
-        assert_with_pcc(this_torch_output, output, 0.9999)
+        assert torch.allclose(this_torch_output, output, atol=1e-2, rtol=1e-2)
 
 
 @pytest.mark.parametrize(
     "dims, slice_size, core_x, core_y",
     [
-        [[2, 64, 64, 256], 32, 4, 4],
-        [[2, 64, 64, 512], 16, 4, 4],
-        [[2, 16, 16, 1024], 4, 4, 4],
+        [[2, 64, 64, 292], 32, 4, 4],
+        [[2, 64, 64, 532], 16, 4, 4],
+        [[2, 16, 16, 1016], 4, 4, 4],
     ],
 )
 @pytest.mark.parametrize("slice_dim", [1, 2])
@@ -1148,7 +1148,7 @@ def test_slice_block_sharded_for_conv2d(device, dims, slice_dim, slice_size, cor
 
     strides = [1, 1, 1, 1]
     torch.manual_seed(2005)
-    torch_input = torch.randint(-10, 10, dims)
+    torch_input = torch.randint(-10, 10, dims).to(dtype=torch.bfloat16)
     num_slices = dims[slice_dim] // slice_size
     ttnn_input = ttnn.from_torch(
         torch_input, device=device, layout=layout, dtype=ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG
@@ -1172,4 +1172,4 @@ def test_slice_block_sharded_for_conv2d(device, dims, slice_dim, slice_size, cor
         this_ttnn_output = ttnn.padded_slice(ttnn_input, begins, ends, strides, memory_config=memory_config)
         output = ttnn.to_torch(this_ttnn_output)
         output = torch.reshape(output, this_torch_output.shape)
-        assert_with_pcc(this_torch_output, output, 0.9999)
+        assert torch.allclose(this_torch_output, output, atol=1e-2, rtol=1e-2)
