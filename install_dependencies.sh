@@ -85,6 +85,7 @@ ub_runtime_packages()
      libc++-17-dev \
      libc++abi-17-dev \
      libstdc++6 \
+     libevent-dev \
     )
 }
 
@@ -103,12 +104,7 @@ ub_buildtime_packages()
      libc++abi-17-dev \
      build-essential \
      xz-utils \
-     flex \
-     autoconf
-     automake \
-     libtool \
      libevent-dev \
-     bison \
     )
 }
 
@@ -250,6 +246,24 @@ install_sfpi() {
     rm -rf $TEMP_DIR
 }
 
+install_mpi_uflm(){
+    DEB_URL="https://github.com/dmakoviichuk-tt/mpi-ulfm/releases/download/v5.0.7-ulfm/openmpi-ulfm_5.0.7-1_amd64.deb"
+    DEB_FILE="$(basename "$DEB_URL")"
+
+    # 1. Create temp workspace
+    TMP_DIR="$(mktemp -d)"
+    cleanup() { rm -rf "$TMP_DIR"; }
+    trap cleanup EXIT INT TERM
+
+    echo "→ Downloading $DEB_FILE …"
+    wget -q --show-progress -O "$TMP_DIR/$DEB_FILE" "$DEB_URL"
+
+    # 2. Install
+    echo "→ Installing $DEB_FILE …"
+    apt-get update -qq
+    apt-get install -f -y "$TMP_DIR/$DEB_FILE"
+}
+
 # We don't really want to have hugepages dependency
 # This could be removed in the future
 
@@ -273,11 +287,13 @@ install() {
             runtime)
                 prep_ubuntu_runtime
                 install_sfpi
+                install_mpi_uflm
                 ;;
             build)
                 prep_ubuntu_build
                 install_llvm
                 install_gcc
+                install_mpi_uflm
                 ;;
             baremetal)
                 prep_ubuntu_runtime
@@ -286,6 +302,7 @@ install() {
                 install_llvm
                 install_gcc
                 configure_hugepages
+                install_mpi_uflm
                 ;;
         esac
 
