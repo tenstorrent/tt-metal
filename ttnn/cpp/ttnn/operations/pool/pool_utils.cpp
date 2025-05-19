@@ -23,9 +23,12 @@ uint32_t get_bf16_pool_scalar(
     std::optional<uint32_t> stride_h,
     std::optional<uint32_t> stride_w,
     std::optional<bool> ceil_mode,
+    std::optional<uint32_t> ceil_h,
     std::optional<uint32_t> ceil_w,
     std::optional<uint32_t> out_x,
     std::optional<uint32_t> out_y,
+    std::optional<uint32_t> pad_h,
+    std::optional<uint32_t> pad_w,
     std::optional<uint32_t> out_nhw_per_core,
     std::vector<uint32_t>* sinchronization_indexes,
     std::vector<uint32_t>* scalars) {
@@ -57,30 +60,41 @@ uint32_t get_bf16_pool_scalar(
                 if (sinchronization_indexes != nullptr) {
                     sinchronization_indexes->push_back(0);
                 }
-            } else if (ceil_mode.value_or(false) && ceil_w.value_or(0) > 0) {
+            } else if (ceil_mode.value_or(false) && (ceil_w.value_or(0) > 0 || ceil_h.value_or(0) > 0)) {
                 for (uint32_t i = 0; i < out_nhw_per_core.value(); i++) {
-                    int hstart = out_y_stick * stride_h.value_or(1);
-                    int wstart = out_x_stick * stride_w.value_or(1);
-                    int hend = ((hstart + (int)kernel_h) < (int)(in_h.value_or(0) + ceil_w.value_or(0)))
-                                   ? hstart + (int)kernel_h
-                                   : (int)(in_h.value_or(0) + ceil_w.value_or(0));
-                    int wend = ((wstart + (int)kernel_w) < (int)(in_w.value_or(0) + ceil_w.value_or(0)))
-                                   ? wstart + (int)kernel_w
-                                   : (int)(in_w.value_or(0) + ceil_w.value_or(0));
+                    // Initial kernel window start based on stride and padding
+                    int hstart = out_y_stick * stride_h.value_or(1) - pad_h.value_or(0);
+                    int wstart = out_x_stick * stride_w.value_or(1) - pad_w.value_or(0);
+                    int hend = hstart + kernel_h;
+                    int wend = wstart + kernel_w;
 
-                    // Valid region (input-only, without pad)
-                    int valid_hstart = (hstart > 0) ? hstart : 0;
-                    int valid_wstart = (wstart > 0) ? wstart : 0;
-                    int valid_hend = (hend < (int)in_h.value_or(0)) ? hend : (int)in_h.value_or(0);
-                    int valid_wend = (wend < (int)in_w.value_or(0)) ? wend : (int)in_w.value_or(0);
+                    // Clip kernel window to input bounds
+                    int valid_hstart = std::max(hstart, 0);
+                    int valid_wstart = std::max(wstart, 0);
+                    int valid_hend = std::min(hend, static_cast<int>(in_h.value_or(0)));
+                    int valid_wend = std::min(wend, static_cast<int>(in_w.value_or(0)));
 
-                    int pool_h = valid_hend - valid_hstart;
-                    int pool_w = valid_wend - valid_wstart;
-                    int pool_area = (pool_h > 0 && pool_w > 0) ? pool_h * pool_w : 0;
+                    int effective_h = valid_hend - valid_hstart;
+                    int effective_w = valid_wend - valid_wstart;
+
+                    int pool_area;
+                    if (true) {
+                        // Count how many *actual* kernel elements fall within the padded input bounds
+                        pool_area = (hend - hstart) * (wend - wstart);  // Total kernel size
+                        pool_area -= ((hend > in_h.value_or(0)) ? (hend - in_h.value_or(0)) : 0) * kernel_w;
+                        pool_area -= ((wend > in_w.value_or(0)) ? (wend - in_w.value_or(0)) : 0) * kernel_h;
+                        // Remove doubly subtracted corner if both overflows happened
+                        if (hend > in_h.value_or(0) && wend > in_w.value_or(0)) {
+                            pool_area += (hend - in_h.value_or(0)) * (wend - in_w.value_or(0));
+                        }
+                        pool_area = std::max(1, pool_area);  // Avoid division by zero
+                    } else {
+                        // Only include valid overlapping region
+                        pool_area = (effective_h > 0 && effective_w > 0) ? effective_h * effective_w : 0;
+                    }
 
                     float value = pool_area > 0 ? 1.f / (float)pool_area : 0.f;
-
-                    uint32_t area_signature = pool_h * pool_w;
+                    uint32_t area_signature = pool_area;
 
                     // Add new scalar if padding config changes
                     if (first_scalar || area_signature != last_area_signature) {
