@@ -64,6 +64,89 @@ class TokenAccuracy:
         return accuracy_top1, accuracy_top5
 
 
+class TokenAccuracy:
+    def __init__(self, test_id, input_prompts):
+        self.store_predicted_tokens = []
+        self.store_predicted_top5_tokens = []
+
+        if "accuracy" in test_id:
+            self.flag = True
+            import bz2
+
+            current_file_path = os.path.join(str(Path.cwd()), "models/tt_transformers/tests")
+            prompt_file = os.path.join(current_file_path, "tale-of-two-cities.txt.bz2")
+            with bz2.open(prompt_file, "rt", encoding="utf-8") as f:
+                text_data = f.read()
+            self.text_data = [text_data[3329 : 3329 + 3000]]
+        else:
+            self.flag = False
+            self.text_data = input_prompts
+
+    def new_data(self):
+        return self.text_data
+
+    def prepare_ref_tokens(self, tokenizer, input_prompts):
+        if self.flag:
+            encoded_data = tokenizer.encode(input_prompts[0])
+            input_prompts[0] = tokenizer.decode(encoded_data[0:200])
+            self.gt_tokens = encoded_data[200:]
+            return input_prompts
+        else:
+            return input_prompts
+
+    def top1n5_logits(self, generator, out_tok_t, current_pos_t, page_table, tt_kv_cache, device_sampling_params):
+        if self.flag:
+            # pass
+            logits_local = generator.decode_forward_text(
+                out_tok_t,
+                current_pos_t,
+                enable_trace=True,
+                page_table=page_table,
+                kv_cache=tt_kv_cache,
+                sampling_params=None,
+            )
+            _, tt_top5_tokens = torch.topk(logits_local, k=5, dim=-1)
+            self.top5_tokens = [tok.item() for tok in tt_top5_tokens.squeeze()]
+            _, tt_top1_token = torch.topk(logits_local, k=1, dim=-1)
+            return tt_top1_token.squeeze(1)
+        else:
+            logits = generator.decode_forward_text(
+                out_tok_t,
+                current_pos_t,
+                enable_trace=True,
+                page_table=page_table,
+                kv_cache=tt_kv_cache,
+                sampling_params=device_sampling_params,
+            )
+            return logits
+
+    def collect_tokens(self, out_tok):
+        if self.flag:
+            self.store_predicted_tokens.append(out_tok.item())
+            self.store_predicted_top5_tokens.append(self.top5_tokens)
+        else:
+            pass
+
+    def compute_accuracy(self):
+        if self.flag:
+            count = 0
+            count_t5 = 0
+            matching_sz = min(len(self.gt_tokens), len(self.store_predicted_tokens))
+            for i in range(matching_sz):
+                if self.gt_tokens[i] == self.store_predicted_tokens[i]:
+                    count += 1
+                for j in range(len(self.store_predicted_top5_tokens[i])):
+                    if self.gt_tokens[i] == self.store_predicted_top5_tokens[i][j]:
+                        count_t5 += 1
+            accuracy_top1 = count / matching_sz
+            accuracy_top5 = count_t5 / matching_sz
+
+        else:
+            accuracy_top1 = "not computed"
+            accuracy_top5 = "not computed"
+        return accuracy_top1, accuracy_top5
+
+
 def load_and_cache_context(context_url, cache_dir, max_length=None):
     cache_file = cache_dir / hashlib.md5(context_url.encode()).hexdigest()
 
@@ -594,6 +677,13 @@ def test_demo_text(
     # To simulate a deployment environment, the demo supports repeating batched prompts.
     # This loop will rotate the prompts between the users for each batch, to simulate users sending different requests
     # If batch_size=1, the same prompt is repeated for each batch
+    # test_id='accuracy'
+    token_acc = TokenAccuracy(test_id, input_prompts)
+    input_prompts = token_acc.new_data()
+
+    repeat_batch_prompts = []
+    for i in range(repeat_batches):
+        repeat_batch_prompts.append([input_prompts[(j + i) % len(input_prompts)] for j in range(len(input_prompts))])
 
     model_args, model, page_table, tt_kv_cache, tokenizer = prepare_generator_args(
         num_devices=num_devices,
@@ -641,6 +731,13 @@ def test_demo_text(
         ) = preprocess_inputs_prefill(
             input_prompts, tokenizer, model_args, instruct, max_generated_tokens, max_prefill_len=max_seq_len
         )
+
+        # query_sz = prefill_lens[0]//2
+        # gt_tokens = encoded_prompts[0][query_sz:]
+        # input_tokens_prefill_pt[0] = input_tokens_prefill_pt[0][:, :query_sz]
+        # encoded_prompts[0] = encoded_prompts[0][:query_sz]
+        # prefill_lens[0] = query_sz
+        # decoding_pos[0] = query_sz
 
         max_encoded_prompt_len = max(len(p) for p in encoded_prompts)
         assert (
@@ -738,6 +835,17 @@ def test_demo_text(
                 kv_cache=tt_kv_cache,
                 sampling_params=device_sampling_params,
             )
+            token_acc.collect_tokens(out_tok)
+
+            # Run decode forward
+            # logits = generator.decode_forward_text(
+            #     out_tok,
+            #     current_pos,
+            #     enable_trace=enable_trace,
+            #     page_table=page_table,
+            #     kv_cache=tt_kv_cache,
+            #     sampling_params=device_sampling_params,
+            # )
 
             # Get the next token
             if device_sampling_params is not None:
