@@ -758,8 +758,10 @@ void JitBuildState::link(const string& log_file, const string& out_dir, const Ji
     string cmd{"cd " + out_dir + " && " + env_.gpp_};
     string lflags = this->lflags_;
     if (tt::tt_metal::MetalContext::instance().rtoptions().get_build_map_enabled()) {
-        lflags += "-Wl,-Map=" + out_dir + "linker.map ";
+        lflags += "-Wl,-Map=" + out_dir + this->target_name_ + ".map ";
     }
+    if (char const *opts = getenv("TT_METAL_LINK_OPTIONS"))
+        lflags += std::string(opts) + " ";
 
     // Append user args
     cmd += fmt::format("-{} ", settings ? settings->get_linker_opt_level() : this->default_linker_opt_level_);
