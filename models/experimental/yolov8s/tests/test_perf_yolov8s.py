@@ -110,7 +110,7 @@ def test_yolov8s(device, input_tensor, use_weights_from_ultralytics):
 @pytest.mark.parametrize(
     "batch_size, expected_perf",
     [
-        [1, 142],
+        [1, 225],
     ],
 )
 @pytest.mark.models_device_performance_bare_metal

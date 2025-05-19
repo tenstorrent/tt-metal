@@ -658,7 +658,12 @@ class TtDetectionModel:
             input_params=c2f_configs["model.6"]["input_params"],
         )
         self.conv_7 = TtConv(
-            device, parameters, "model.7", input_params=conv_config["input_params"][3], block_shard=True
+            device,
+            parameters,
+            "model.7",
+            input_params=conv_config["input_params"][3],
+            block_shard=True,
+            reshard_if_not_optimal=False,
         )
         self.c2f_8 = TtC2f(
             device,
@@ -758,6 +763,7 @@ class TtDetectionModel:
         c2f_6, out_h, out_w = self.c2f_6(conv_5)
         ttnn.deallocate(conv_5)
         # c2f_6 = ttnn.reallocate(c2f_6, memory_config=ttnn.L1_MEMORY_CONFIG)
+        c2f_6 = ttnn.sharded_to_interleaved(c2f_6, ttnn.L1_MEMORY_CONFIG)
         conv_7, out_h, out_w = self.conv_7(c2f_6)
         # conv_7 = ttnn.sharded_to_interleaved(conv_7, ttnn.L1_MEMORY_CONFIG)
 
