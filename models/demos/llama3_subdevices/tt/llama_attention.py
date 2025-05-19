@@ -522,7 +522,7 @@ class TtLlamaAttention(LightweightModule):
         else:
             v_fill = v_heads_1VSD_8b
 
-        if self.TG:
+        if self.TG and not page_table:
             k_fill = self.prefill_prepare_tensor_for_kv_cache(k_fill, user_id)
             v_fill = self.prefill_prepare_tensor_for_kv_cache(v_fill, user_id)
         if page_table:
@@ -535,8 +535,17 @@ class TtLlamaAttention(LightweightModule):
             page_len = fill_page_table.shape[1] * block_size
             k_fill_sliced = k_fill[:, :, :page_len, :] if page_len < k_fill.shape[2] else k_fill
             v_fill_sliced = v_fill[:, :, :page_len, :] if page_len < v_fill.shape[2] else v_fill
-            ttnn.experimental.paged_fill_cache(keys_BKSD, k_fill_sliced, fill_page_table, batch_idx=user_id)
-            ttnn.experimental.paged_fill_cache(values_BKSD, v_fill_sliced, fill_page_table, batch_idx=user_id)
+            if isinstance(user_id, int):
+                user_id = ttnn.from_torch(
+                    torch.tensor([user_id], dtype=torch.int32),
+                    device=self.mesh_device,
+                    dtype=ttnn.int32,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                    mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+                )
+            ttnn.experimental.paged_fill_cache(keys_BKSD, k_fill_sliced, fill_page_table, batch_idx_tensor=user_id)
+            ttnn.experimental.paged_fill_cache(values_BKSD, v_fill_sliced, fill_page_table, batch_idx_tensor=user_id)
+
         else:
             ttnn.fill_cache(
                 keys_BKSD,

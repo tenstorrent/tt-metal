@@ -126,7 +126,6 @@ class TtLlamaRotarySetup(LightweightModule):
         position_idxs = position_idxs.view(-1, 8)  # [4, 8]
         position_idxs = position_idxs.repeat(1, 2)  # [4, 16]
         position_idxs = position_idxs.view(-1)  # [64]
-
         batch = position_idxs.shape[0]
         position_idxs = position_idxs.reshape(1, batch)  # [1, 1, 1, batch]
         assert position_idxs.shape == (1, batch), "position idxs must be a [1, batch] tensor"
