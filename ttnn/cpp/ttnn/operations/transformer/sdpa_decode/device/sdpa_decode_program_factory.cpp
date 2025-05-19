@@ -636,6 +636,7 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
         is_causal,
         use_attention_mask,
         max_dynamic_chunk_size,
+        tilize_q,
     };
 
     std::vector<uint32_t> writer_compile_time_args_common = {
