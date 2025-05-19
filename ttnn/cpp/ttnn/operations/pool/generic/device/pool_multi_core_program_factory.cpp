@@ -30,6 +30,7 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
     uint32_t stride_w,
     uint32_t pad_h,
     uint32_t pad_w,
+    uint32_t ceil_pad_h,
     uint32_t ceil_pad_w,
     bool ceil_mode,
     uint32_t dilation_h,
@@ -380,9 +381,10 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
     uint32_t num_of_ele = out_nhw_per_core;
     std::vector<uint32_t> total_elems_per_c_shards;
     for (int i = 0; i < num_shards_c; i++) {
-        total_elems_per_c_shards.push_back(out_h * out_w);
+        total_elems_per_c_shards.push_back(out_h * out_w * in_n);
     }
     uint32_t channel = 0;
+    uint32_t batch = 0;
     uint32_t index = 0;
     if (pool_type == Pool2DType::AVG_POOL2D) {
         for (uint32_t i = 0; i < all_cores.ranges().size(); ++i) {
@@ -392,7 +394,6 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
                     num_of_ele = out_nhw_per_core;
                 } else {
                     num_of_ele = total_elems_per_c_shards[channel];
-                    // num_of_ele = out_nhw_per_core;
                 }
                 std::vector<uint32_t> sync_indices;
                 std::vector<uint32_t> scalar_values;
@@ -408,9 +409,12 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
                     stride_h,
                     stride_w,
                     ceil_mode,
+                    ceil_pad_h,
                     ceil_pad_w,
                     x,
                     y,
+                    pad_h,
+                    pad_w,
                     num_of_ele,
                     &sync_indices,
                     &scalar_values);
@@ -439,9 +443,12 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
                         uint32_t delta_y = y + delta_x / out_h;
                         y = delta_y % out_w;
                         if (delta_y / out_w != 0) {
-                            channel += 1;
-                            x = 0;
-                            y = 0;
+                            batch++;
+                            if (batch % in_n == 0) {
+                                batch = 0;
+                                y = 0;
+                                x = 0;
+                            }
                         }
                     }
                 }
@@ -504,6 +511,7 @@ Pool2D::MultiCore::cached_program_t Pool2D::MultiCore::create(
     auto stride_w = sliding_window_config.stride_hw.second;
     auto pad_h = sliding_window_config.get_pad_h();
     auto pad_w = sliding_window_config.get_pad_w();
+    auto ceil_pad_h = sliding_window_config.get_ceil_pad_h();
     auto ceil_pad_w = sliding_window_config.get_ceil_pad_w();
     auto ceil_mode = sliding_window_config.ceil_mode;
     auto dilation_h = sliding_window_config.dilation_hw.first;
@@ -527,6 +535,7 @@ Pool2D::MultiCore::cached_program_t Pool2D::MultiCore::create(
         stride_w,
         pad_h,
         pad_w,
+        ceil_pad_h,
         ceil_pad_w,
         ceil_mode,
         dilation_h,

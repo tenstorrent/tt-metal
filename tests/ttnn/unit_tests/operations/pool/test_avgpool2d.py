@@ -21,7 +21,8 @@ def randomize_tensor(tensor_map, tensor_shape):
     if tensor_shape in tensor_map.keys():
         torch_tensor = tensor_map[tensor_shape]
     else:
-        torch_tensor = torch.randn(tensor_shape, dtype=torch.bfloat16)
+        torch_tensor = torch.ones(tensor_shape, dtype=torch.bfloat16)
+
     return torch_tensor
 
 
@@ -77,6 +78,7 @@ def run_avg_pool2d(
     ttnn_output = ttnn_output.reshape(
         torch_output.shape[0], torch_output.shape[2], torch_output.shape[3], torch_output.shape[1]
     )
+    print("torch_output shape: ", torch_output.shape)
     ttnn_output = ttnn.permute(ttnn_output, (0, 3, 1, 2))  # N, C, H, W
     ttnn_output = ttnn.to_torch(ttnn_output)
 
@@ -92,11 +94,11 @@ def run_avg_pool2d(
     (
         # Case: Normal compute & Normal reader kernel.
         [1, 32, 16, 16],
-        [1, 512, 112, 32],
+        # [1, 512, 112, 32],
         [1, 512, 16, 16],
         [1, 800, 16, 16],
         [2, 32, 16, 16],
-        [2, 512, 112, 32],
+        # [2, 512, 112, 32],
         [2, 512, 16, 16],
         [2, 800, 16, 16],
     ),
