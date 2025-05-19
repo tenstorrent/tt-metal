@@ -21,10 +21,7 @@ from models.demos.llama3_subdevices.demo.demo_decode import run_llama3_demo
 from models.demos.llama3_subdevices.demo.demo_decode import LlamaOptimizations
 
 DECODER_OP_START_INDEX = 4
-DECODER_OP_END_INDEX = -13
-if "TT_METAL_KERNELS_EARLY_RETURN" in os.environ:
-    # Last layer has 1 extra op, if early return omit last 12 ops instead of 13
-    DECODER_OP_END_INDEX = -12
+DECODER_OP_END_INDEX = -12
 
 perf_targets = {
     "RMSAllGather_0": {
@@ -483,6 +480,7 @@ def test_llama_TG_perf_device(
     df_layers_compilation = df_model_compilation[DECODER_OP_START_INDEX:DECODER_OP_END_INDEX]
     df_layers_trace = df_model_trace[DECODER_OP_START_INDEX:DECODER_OP_END_INDEX]
     # Use layers 2-9 for verifying against targets for more stability
+    assert len(df_layers_compilation) % num_layers == 0
     df_first_layer_compilation = df_layers_compilation[: int(len(df_layers_compilation) / num_layers)]
     df_first_layer_trace = df_layers_trace[: int(len(df_layers_trace) / num_layers)]
 
@@ -773,6 +771,8 @@ def test_llama_TG_perf_device_non_overlapped_dispatch(
     df_model = df[int(len(df) / 3 * 2) :]
     # Add 1 as early return means
     df_layers = df_model[DECODER_OP_START_INDEX:DECODER_OP_END_INDEX]
+    assert len(df_layers) % num_layers == 0
+
     all_layers_raw_dict = df_layers[["OP CODE", "DEVICE KERNEL DURATION [ns]", "OP TO OP LATENCY [ns]"]].to_dict(
         orient="records"
     )
