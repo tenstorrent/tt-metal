@@ -129,6 +129,7 @@ int main(int argc, char** argv) {
     bool disable_sends_for_interior_workers = std::stoi(argv[arg_idx++]);
     bool unidirectional_test = std::stoi(argv[arg_idx++]);
     bool senders_are_unidirectional = std::stoi(argv[arg_idx++]);
+    bool clothese_eth_core_selection = std::stoi(argv[arg_idx++]);
 
     // WriteThroughputStabilityTestWithPersistentFabricParams params;
     TestParams test_params;
@@ -144,6 +145,7 @@ int main(int argc, char** argv) {
     test_params.params.disable_end_workers_in_backward_direction = unidirectional_test;
     test_params.params.senders_are_unidirectional = senders_are_unidirectional;
     test_params.message_noc_type = message_noc_type;
+    test_params.params.clothese_eth_core_selection = clothese_eth_core_selection;
 
     auto rc = baseline_validate_test_environment(test_params.params);
     if (rc != 0) {
