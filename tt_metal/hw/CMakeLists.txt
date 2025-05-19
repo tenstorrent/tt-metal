@@ -296,8 +296,7 @@ if(CMAKE_VERSION VERSION_GREATER_EQUAL 3.23)
                 ckernels/wormhole_b0/metal/llk_api/llk_unpack_untilize_api.h
                 ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_abs.h
                 ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_add1.h
-                ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_add_int32.h
-                ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_add_uint16.h
+                ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_add_int.h
                 ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_alt_complex_rotate90.h
                 ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_binary.h
                 ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_binary_bitwise.h

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -6,7 +6,7 @@
 
 #include "compute_kernel_api/common_globals.h"
 #ifdef TRISC_MATH
-#include "llk_math_eltwise_binary_sfpu_add_uint16.h"
+#include "llk_math_eltwise_binary_sfpu_add_int.h"
 #define MAIN math_main()
 #define MATH(x) x
 #else
@@ -17,7 +17,7 @@ namespace ckernel {
 
 // clang-format off
 /**
- * Performs an elementwise add operation with the two uint16 inputs: y = add(x0,x1)
+ * Performs an elementwise add operation with the two integer inputs: y = add(x0,x1)
  * Output overwrites first operand in DST.
  *
  * The DST register buffer must be in acquired state via *acquire_dst* call. This call is blocking and is only available
@@ -31,15 +31,22 @@ namespace ckernel {
  * |-----------------------|-----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
  * | idst0                 | The index of the tile in DST register buffer to use as first operand        | uint32_t | Must be less than the size of the DST register buffer | True     |
  * | idst1                 | The index of the tile in DST register buffer to use as second operand       | uint32_t | Must be less than the size of the DST register buffer | True     |
+ * | sign_magnitude_format | Whether the Int32 values are in sign-magnitude format (not 2's complement)  | bool     |                                                       | False    |
  */
 // clang-format on
+template <bool sign_magnitude_format = false>
+ALWI void add_int32_tile(uint32_t idst0, uint32_t idst1) {
+    MATH((llk_math_eltwise_binary_sfpu_add_int<APPROX, sign_magnitude_format, InstrModLoadStore::INT32>(idst0, idst1)));
+}
+
+template <bool sign_magnitude_format = false>
 ALWI void add_uint16_tile(uint32_t idst0, uint32_t idst1) {
-    MATH((llk_math_eltwise_binary_sfpu_add_uint16<APPROX>(idst0, idst1)));
+    MATH((llk_math_eltwise_binary_sfpu_add_int<APPROX, sign_magnitude_format, InstrModLoadStore::LO16>(idst0, idst1)));
 }
 
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void add_uint16_tile_init() { MATH((llk_math_eltwise_binary_sfpu_add_uint16_init<APPROX>())); }
+ALWI void add_int_tile_init() { MATH((llk_math_eltwise_binary_sfpu_add_int_init<APPROX>())); }
 
 }  // namespace ckernel
