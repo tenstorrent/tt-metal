@@ -64,7 +64,8 @@ struct FabricEriscDatamoverConfig {
     std::size_t termination_signal_address = 0;  // pad extra bytes to match old EDM so handshake logic will still work
     std::size_t edm_local_sync_address = 0;
     std::size_t edm_status_address = 0;
-    bool shared_buffer_mode = true;  // shared buffer mode for multi-riscv core with single L1 region
+    // shared buffer mode is for multi-riscv core to have their own buffer on single L1 region
+    bool shared_buffer_mode = true;
 
     // Debug and Counters
     static constexpr std::size_t receiver_channel_counters_size_bytes =

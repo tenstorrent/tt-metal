@@ -263,6 +263,7 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
         "Total channel size of {} B exceeds available space of {} B",
         total_slot_count * channel_buffer_size_bytes,
         available_channel_buffering_space);
+    log_trace(tt::LogOp, "Available channel buffering space: {}", this->available_channel_buffering_space);
 
     uint32_t buffer_addr = buffer_region_start;
     for (uint32_t risc_id = 0; risc_id < this->num_used_riscv_cores; risc_id++) {
@@ -290,8 +291,6 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
             buffer_addr += this->receiver_channels_size_bytes[risc_id][i];
             log_trace(tt::LogOp, "Receiver {} channel_start: {}", i, this->receiver_channels_base_address[risc_id][i]);
         }
-
-        // log_trace(tt::LogOp, "Available channel buffering space: {}", this->available_channel_buffering_space);
 
         for (uint32_t i = 0; i < this->num_used_sender_channels[risc_id]; i++) {
             TT_FATAL(
