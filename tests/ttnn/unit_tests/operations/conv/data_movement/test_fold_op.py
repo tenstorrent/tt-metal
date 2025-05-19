@@ -97,13 +97,12 @@ def write_to_file(file_name, tensor):
                     f.write("\n")
 
 
-@pytest.mark.parametrize("batch_size", [1, 3])
-@pytest.mark.parametrize("channels", [1, 3, 9, 32, 54, 512])
-@pytest.mark.parametrize("hw", [(224, 224), (384, 512), (512, 672)])
+@pytest.mark.parametrize("nhw", [(1, 224, 224), (1, 384, 512), (1, 512, 672)])
+@pytest.mark.parametrize("channels", [1, 3, 9, 32, 54, 320])
 @pytest.mark.parametrize("stride", [(16, 16), (32, 32)])
-@pytest.mark.parametrize("input_layout", [ttnn.TILE_LAYOUT])
-def test_fold_with_permute_for_dram_tensor(device, batch_size, channels, hw, stride, input_layout):
-    height, width = hw
+@pytest.mark.parametrize("input_layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
+def test_fold_with_permute_for_dram_tensor(device, nhw, channels, stride, input_layout):
+    batch_size, height, width = nhw
     stride_h, stride_w = stride
     torch_input_tensor = torch.rand((batch_size, channels, height, width), dtype=torch.bfloat16)
     torch_input_tensor_nhwc = torch.permute(torch_input_tensor, (0, 2, 3, 1))
@@ -124,8 +123,6 @@ def test_fold_with_permute_for_dram_tensor(device, batch_size, channels, hw, str
         stride_w,
     )
     tt_output_tensor = ttnn.to_torch(tt_output_tensor)
-    write_to_file("torch_output_tensor.txt", torch_output_tensor)
-    write_to_file("tt_output_tensor.txt", tt_output_tensor)
     assert_with_pcc(torch_output_tensor, tt_output_tensor, 1)
 
 

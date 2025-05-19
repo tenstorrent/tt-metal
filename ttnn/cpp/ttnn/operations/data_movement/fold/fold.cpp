@@ -322,7 +322,7 @@ Tensor FoldOperation::invoke(
                 .at(0);
         }
     }
-    if (!input_tensor.is_sharded() && input_tensor.get_layout() == Layout::TILE) {
+    if (input_tensor.memory_config().is_dram()) {
         auto batch_size = input_tensor.get_logical_shape()[0];
         auto input_height = input_tensor.get_logical_shape()[1];
         auto input_width = input_tensor.get_logical_shape()[2];

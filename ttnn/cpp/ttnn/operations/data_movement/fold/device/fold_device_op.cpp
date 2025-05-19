@@ -113,8 +113,8 @@ std::tuple<Fold::operation_attributes_t, Fold::tensor_args_t> Fold::invoke(
     uint32_t pad_h,
     uint32_t pad_w) {
     bool is_sharded = input_tensor.is_sharded();
-    bool is_tiled_interleaved = (input_tensor.layout() == Layout::TILE) && (!input_tensor.is_sharded()) &&
-                                input_tensor.memory_config().is_dram();
+    bool is_tiled_interleaved =
+        input_tensor.storage_type() == StorageType::DEVICE && input_tensor.memory_config().is_dram();
     Fold::operation_attributes_t op_attr = {
         .stride_h = stride_h,
         .stride_w = stride_w,

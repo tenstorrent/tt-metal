@@ -6,6 +6,22 @@
 #include "dataflow_api.h"
 #include "cpp/ttnn/operations/data_movement/common/kernels/common.hpp"
 
+inline void print_bf16_pages(uint32_t l1_addr, uint32_t elts_per_page, uint32_t npages, uint32_t start = 0) {
+    volatile tt_l1_ptr uint16_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(l1_addr) + start * elts_per_page;
+    for (uint32_t page = 0; page < npages; ++page) {
+        DPRINT << start + page << ": ";
+        for (uint32_t j = 0; j < elts_per_page; ++j, ++ptr) {
+            DPRINT << BF16(*ptr) << " ";
+        }
+        DPRINT << ENDL();
+    }
+}
+
+#define dump(a)                                               \
+    do {                                                      \
+        DPRINT << "Activations: " << #a " = " << a << ENDL(); \
+    } while (false)
+
 void kernel_main() {
     // Compile-time arguments
     constexpr uint32_t batch_size = get_compile_time_arg_val(0);      // Number of batches
@@ -27,6 +43,7 @@ void kernel_main() {
     // Constants for tile dimensions
     constexpr uint32_t TILE_HEIGHT = 32;
     constexpr uint32_t TILE_WIDTH = 32;
+    // dump(stick_nbytes);
 
     // Initialize DRAM address generator
     const InterleavedAddrGen<true> d = {.bank_base_address = dst_addr, .page_size = stick_nbytes};

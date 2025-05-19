@@ -4,6 +4,7 @@
 
 #include "hostdevcommon/kernel_structs.h"
 #include "ttnn/common/constants.hpp"
+#include "ttnn/tensor/enum_types.hpp"
 #include "ttnn/tensor/host_buffer/functions.hpp"
 #include <tt-metalium/work_split.hpp>
 #include "ttnn/operations/math.hpp"
@@ -15,6 +16,7 @@
 #include "ttnn/operations/core/work_split/work_split_tilize.hpp"
 #include "ttnn/operation.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
+#include "ttnn/tensor/types.hpp"
 #include "ttnn/types.hpp"
 #include <tt-metalium/tt_align.hpp>
 #include "fold_device_op.hpp"
@@ -107,7 +109,7 @@ Fold::MultiCoreTiledInterleaved::cached_program_t fold_multi_core_tiled_interlea
     // Create writer kernel for circular buffer to DRAM data movement
     tt::tt_metal::KernelHandle unary_writer_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/data_movement/fold/device/kernels/dataflow/writer_cb2dram_row_major.cpp",
+        "ttnn/cpp/ttnn/operations/data_movement/fold/device/kernels/dataflow/writer_cb2dram_for_tiled_input.cpp",
         all_cores,
         tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 
@@ -134,7 +136,7 @@ Fold::MultiCoreTiledInterleaved::cached_program_t fold_multi_core_tiled_interlea
         compute_kernel_name = "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/untilize.cpp";
     }
 
-    std::cout << "compute_kernel_name: " << compute_kernel_name << std::endl;
+    tt::log_info("compute_kernel_name: {}", compute_kernel_name);
 
     // Create main compute kernel
     compute_kernel_id = tt::tt_metal::CreateKernel(
@@ -216,11 +218,107 @@ Fold::MultiCoreTiledInterleaved::cached_program_t fold_multi_core_tiled_interlea
     return {std::move(program), {unary_reader_kernel_id, unary_writer_kernel_id, cores_with_rtargs}};
 }
 
+Fold::MultiCoreTiledInterleaved::cached_program_t fold_multi_core_row_major_interleaved(
+    const Tensor& input_tensor, const Tensor& output, const uint32_t stride_h, const uint32_t stride_w) {
+    auto device = input_tensor.device();
+    auto program = tt::tt_metal::CreateProgram();
+
+    const uint32_t batch_size = input_tensor.get_logical_shape()[0];
+    const uint32_t input_height = input_tensor.get_logical_shape()[1];
+    const uint32_t input_width = input_tensor.get_logical_shape()[2];
+
+    Buffer* src0_buffer = input_tensor.buffer();
+    Buffer* dst_buffer = output.buffer();
+    TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
+
+    tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.get_dtype());
+    uint32_t single_tile_size = tt::tt_metal::detail::TileSize(cb_data_format);
+
+    // Calculate total input work
+    uint32_t total_input_work = batch_size * input_height * input_width;
+
+    // Get compute grid size and calculate work distribution
+    auto compute_grid_size = device->compute_with_storage_grid_size();
+    uint32_t num_cores_x = compute_grid_size.x;
+    uint32_t num_cores_y = compute_grid_size.y;
+    uint32_t num_cores_total = num_cores_x * num_cores_y;
+
+    // Calculate work per core based on input dimensions
+    uint32_t work_per_core = (total_input_work + num_cores_total - 1) / num_cores_total;
+
+    // Create core ranges
+    auto all_cores = CoreRange({0, 0}, {num_cores_x - 1, num_cores_y - 1});
+    auto cores = grid_to_cores(num_cores_total, num_cores_x, num_cores_y, true);
+
+    // Setup circular buffers
+    uint32_t cb_src0_index = tt::CBIndex::c_0;
+
+    // Calculate buffer sizes
+    uint32_t stick_nbytes = input_tensor.get_padded_shape()[3] * tt::datum_size(cb_data_format);
+    // align to DRAM read alignment.
+    uint32_t aligned_stick_nbytes = tt::align(stick_nbytes, hal::get_dram_alignment());
+
+    int double_buffer = 2;
+    // Create source circular buffer - sized for input work per core
+    auto src_cb_config = CircularBufferConfig(double_buffer * aligned_stick_nbytes, {{cb_src0_index, cb_data_format}})
+                             .set_page_size(cb_src0_index, aligned_stick_nbytes);
+    auto cb_src0 = CreateCircularBuffer(program, all_cores, src_cb_config);
+
+    bool src_stick_size_is_power_of_two = is_power_of_two_at_least_32(stick_nbytes);
+    uint32_t src_log2_stick_size = src_stick_size_is_power_of_two ? (std::uint32_t)log2(stick_nbytes) : 0;
+    // Create reader kernel
+    tt::tt_metal::KernelHandle reader_kernel_id = tt::tt_metal::CreateKernel(
+        program,
+        "ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/dataflow/reader_unary_stick_layout_interleaved_start_id.cpp",
+        all_cores,
+        tt::tt_metal::ReaderDataMovementConfig(
+            {cb_src0_index, 1, src_stick_size_is_power_of_two, src_log2_stick_size}));
+    // Create writer kernel
+    tt::tt_metal::KernelHandle writer_kernel_id = tt::tt_metal::CreateKernel(
+        program,
+        "ttnn/cpp/ttnn/operations/data_movement/fold/device/kernels/dataflow/writer_cb2dram_for_rm_input.cpp",
+        all_cores,
+        tt::tt_metal::WriterDataMovementConfig(
+            {batch_size,
+             input_width,
+             input_height,
+             stride_h,
+             stride_w,
+             stick_nbytes,
+             cb_src0_index,
+             src_stick_size_is_power_of_two,
+             src_log2_stick_size}));
+
+    // Set runtime arguments for each core
+    std::vector<CoreCoord> cores_with_rtargs;
+    for (uint32_t i = 0; i < cores.size(); i++) {
+        CoreCoord core = cores[i];
+        uint32_t start_input_work = i * work_per_core;
+        uint32_t end_input_work = std::min(start_input_work + work_per_core, total_input_work);
+
+        std::vector<uint32_t> reader_runtime_args = {
+            src0_buffer->address(), stick_nbytes, end_input_work - start_input_work + 1, start_input_work};
+        std::vector<uint32_t> writer_runtime_args = {dst_buffer->address(), start_input_work, end_input_work};
+
+        tt::tt_metal::SetRuntimeArgs(program, reader_kernel_id, core, reader_runtime_args);
+        tt::tt_metal::SetRuntimeArgs(program, writer_kernel_id, core, writer_runtime_args);
+        cores_with_rtargs.push_back(core);
+    }
+
+    return {std::move(program), {reader_kernel_id, writer_kernel_id, cores_with_rtargs}};
+}
+
 Fold::MultiCoreTiledInterleaved::cached_program_t Fold::MultiCoreTiledInterleaved::create(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& output_tensor) {
-    return fold_multi_core_tiled_interleaved(
+    if (tensor_args.input_tensor.get_layout() == Layout::TILE) {
+        tt::log_debug("Fold operation with tiled input");
+        return fold_multi_core_tiled_interleaved(
+            tensor_args.input_tensor, output_tensor, operation_attributes.stride_h, operation_attributes.stride_w);
+    }
+    tt::log_debug("Fold operation with row major input");
+    return fold_multi_core_row_major_interleaved(
         tensor_args.input_tensor, output_tensor, operation_attributes.stride_h, operation_attributes.stride_w);
 }
 
