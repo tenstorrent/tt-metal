@@ -2362,6 +2362,15 @@ void configure_for_single_chip(
         0,  // unused for single device - used to "virtualize" the number of eth cores across devices
         0,  // unused for single device - used to "virtualize" the number of eth cores across devices
         0,  // unused for single device - used to "virtualize" the number of eth cores across devices
+        0,
+        0,
+    };
+
+    std::map<std::string, std::string> dispatch_defines = {
+        {"DISPATCH_SHARED_REGION",
+         std::to_string(MetalContext::instance()
+                            .dispatch_mem_map(DISPATCH_CORE_TYPE)
+                            .get_device_command_queue_addr(CommandQueueDeviceAddrType::DISPATCH_SHARED_REGION))},
     };
 
     CoreCoord phys_upstream_from_dispatch_core = split_prefetcher_g ? phys_prefetch_d_core : phys_prefetch_core_g;
@@ -2388,7 +2397,8 @@ void configure_for_single_chip(
             device,
             my_noc_index,
             dispatch_upstream_noc_index,
-            my_noc_index);
+            my_noc_index,
+            dispatch_defines);
 
         // dispatch_h
         dispatch_compile_args[3] = dispatch_h_cb_sem;
@@ -2413,7 +2423,8 @@ void configure_for_single_chip(
             device,
             my_noc_index,
             dispatch_upstream_noc_index,
-            my_noc_index);
+            my_noc_index,
+            dispatch_defines);
 
         if (packetized_path_en_g) {
             uint32_t dispatch_relay_mux_queue_start_addr = dispatch_buffer_base;
@@ -2590,7 +2601,8 @@ void configure_for_single_chip(
             device,
             my_noc_index,
             dispatch_upstream_noc_index,
-            my_noc_index);
+            my_noc_index,
+            dispatch_defines);
     }
 }
 
