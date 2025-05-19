@@ -63,8 +63,8 @@ uint32_t get_bf16_pool_scalar(
             } else if (ceil_mode.value_or(false) && (ceil_w.value_or(0) > 0 || ceil_h.value_or(0) > 0)) {
                 for (uint32_t i = 0; i < out_nhw_per_core.value(); i++) {
                     // Initial kernel window start based on stride and padding
-                    int hstart = out_y_stick * stride_h.value_or(1) - pad_h.value_or(0);
-                    int wstart = out_x_stick * stride_w.value_or(1) - pad_w.value_or(0);
+                    int hstart = out_x_stick * stride_h.value_or(1) - pad_h.value_or(0);
+                    int wstart = out_y_stick * stride_w.value_or(1) - pad_w.value_or(0);
                     int hend = hstart + kernel_h;
                     int wend = wstart + kernel_w;
 

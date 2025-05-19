@@ -148,6 +148,7 @@ void MAIN {
         DPRINT << "time for change " << time_for_change << ENDL();
     }
     if (one_scalar_per_core) {
+        DPRINT << "waiting only one scalar value" << ENDL();
         cb_wait_front(in_scalar_cb_id, 1);
     }
     for (uint32_t i = 0; i < nsticks_per_core_by_nblocks; ++i) {
@@ -213,6 +214,7 @@ void MAIN {
         }
     }
     if (one_scalar_per_core) {
+        DPRINT << "releasing only one scalar value" << ENDL();
         cb_pop_front(in_scalar_cb_id, 1);
     }
     DPRINT << "compute ends" << ENDL();
