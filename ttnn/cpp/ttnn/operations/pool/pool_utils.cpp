@@ -15,6 +15,7 @@ uint32_t get_bf16_pool_scalar(
     Pool2DType pool_type,
     uint32_t kernel_h,
     uint32_t kernel_w,
+    std::optional<int32_t> divisor_override,
     std::optional<uint32_t> in_h,
     std::optional<uint32_t> in_w,
     std::optional<uint32_t> out_h,
@@ -25,7 +26,6 @@ uint32_t get_bf16_pool_scalar(
     std::optional<uint32_t> ceil_w,
     std::optional<uint32_t> out_x,
     std::optional<uint32_t> out_y,
-    std::optional<int32_t> divisor_override,
     std::optional<uint32_t> out_nhw_per_core,
     std::vector<uint32_t>* sinchronization_indexes,
     std::vector<uint32_t>* scalars) {
