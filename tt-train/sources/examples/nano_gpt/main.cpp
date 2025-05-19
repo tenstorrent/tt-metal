@@ -7,6 +7,7 @@
 #include <core/ttnn_all_includes.hpp>
 #include <csignal>
 #include <cstdint>
+#include <ttnn/operations/data_movement/copy/copy.hpp>
 #include <ttnn/tensor/tensor.hpp>
 #include <wandbcpp.hpp>
 
@@ -634,6 +635,7 @@ int main(int argc, char **argv) {
                 ttml::autograd::TensorPtr data_tensor = nullptr;
                 ttml::autograd::TensorPtr targets_tensor = nullptr;
                 if (ddp) {
+                    fmt::println("in ddp path");
                     auto data_composer = ttml::core::ShardXTensorToMesh<uint32_t>(device->shape(), 0);
                     data_tensor =
                         ttml::autograd::create_tensor(ttml::core::from_xtensor<uint32_t, ttnn::DataType::UINT32>(
@@ -644,6 +646,7 @@ int main(int argc, char **argv) {
                         ttml::core::from_xtensor<int32_t, ttnn::DataType::INT32>(targets_xt, device, targets_composer);
                     targets_tensor = ttml::autograd::create_tensor(targets_tt_tensor);
                 } else {
+                    fmt::println("in single-device path");
                     data_tensor =
                         ttml::autograd::create_tensor(ttml::core::from_xtensor<uint32_t, ttnn::DataType::UINT32>(
                             data_xt, device, ttnn::Layout::ROW_MAJOR));
@@ -661,11 +664,44 @@ int main(int argc, char **argv) {
                 // copy data to existing allocated tensors
                 auto host_data =
                     ttml::core::from_xtensor<uint32_t, ttnn::DataType::UINT32>(data_xt, ttnn::Layout::ROW_MAJOR);
-                auto host_targets = ttml::core::from_xtensor<int32_t, ttnn::DataType::INT32>(targets_xt);
+
+                // NOTE: for the tiled host_targets, we have to explicitly pad
+                // to a tile so that the busted write_tensor sees the correct
+                // amount of data in the host tensor. What it should actually do
+                // is recognize that the dst_tensor is padded to a tile shape
+                // and just write the significant parts of the tensor.
+                auto host_targets =
+                    ttml::core::from_xtensor<int32_t, ttnn::DataType::INT32>(targets_xt, ttnn::Layout::ROW_MAJOR);
+                host_targets = host_targets.pad_to_tile(0.0F);
+                host_targets = host_targets.to_layout(ttnn::Layout::TILE);
+
                 // FIXME: does this handle sharding appropriately?
                 // this is what ttnn uses, but unclear on whether it's applicable to our configs.
-                tt::tt_metal::write_tensor(host_data, sample_tensor_ptrs.data->get_value());
-                tt::tt_metal::write_tensor(host_targets, sample_tensor_ptrs.targets->get_value());
+                auto device_data_tensor = sample_tensor_ptrs.data->get_value();
+                auto device_targets_tensor = sample_tensor_ptrs.targets->get_value();
+                fmt::println("host data tensor info {}", host_data.get_tensor_spec());
+                fmt::println("device data tensor info {}", device_data_tensor.get_tensor_spec());
+                fmt::println("device data tensor storage {}", device_data_tensor.get_storage());
+
+                fmt::println("host targets tensor info {}", host_targets.get_tensor_spec());
+                fmt::println("device targets tensor info {}", device_targets_tensor.get_tensor_spec());
+                fmt::println("device targets tensor storage {}", device_targets_tensor.get_storage());
+
+                const auto device_packed_buffer_size_bytes =
+                    device_data_tensor.get_tensor_spec().compute_packed_buffer_size_bytes();
+                const auto host_packed_buffer_size_bytes =
+                    host_data.get_tensor_spec().compute_packed_buffer_size_bytes();
+
+                fmt::println(
+                    "data buffer sizes: {} (host) vs {} (device)",
+                    host_packed_buffer_size_bytes,
+                    device_packed_buffer_size_bytes);
+                fmt::println(
+                    "target buffer sizes: {} (host) vs {} (device)",
+                    host_targets.get_tensor_spec().compute_packed_buffer_size_bytes(),
+                    device_targets_tensor.get_tensor_spec().compute_packed_buffer_size_bytes());
+                tt::tt_metal::write_tensor(host_data, device_data_tensor);
+                tt::tt_metal::write_tensor(host_targets, device_targets_tensor);
             }
 
             end_timer = std::chrono::high_resolution_clock::now();
@@ -777,7 +813,7 @@ int main(int argc, char **argv) {
     };
 
     std::optional<ttnn::MeshTraceId> trace_id;
-    ttml::autograd::TensorPtr loss_tensor = nullptr;
+    ttml::autograd::TensorPtr output = nullptr;
 
     const uint32_t num_epochs = config.num_epochs;
     auto gradient_accumulator_helper = GradientAccumulator(config.gradient_accumulation_steps);
@@ -804,13 +840,19 @@ int main(int argc, char **argv) {
                     // assert that everything is on device
                     fmt::println("Features storage type {}", features->get_value().storage_type());
                     fmt::println("Masks storage type {}", masks->get_value().storage_type());
-                    auto output = run_model(model, features, masks);
-                    auto loss = ttml::ops::nll_loss(output, target);
-                    loss_tensor = gradient_accumulator_helper.scale(loss);
+                    output = run_model(model, features, masks);
                     trace::end_trace_capture(device, *trace_id, ttnn::DefaultQueueId);
+
+                    fmt::println("testing out trace execution immediately-post-trace");
+                    trace::execute_trace(device, *trace_id, ttnn::DefaultQueueId, /*blocking=*/true);
+                    fmt::println("executed test trace");
+                    trace::release_trace(device, *trace_id);
+                    fmt::println("released trace");
+                    trace_id = std::nullopt;
                     fmt::println("completed trace");
                 } else {
                     fmt::println("executing trace");
+                    // FIXME: hangs: why?
                     trace::execute_trace(device, *trace_id, ttnn::DefaultQueueId, /*blocking=*/true);
                     fmt::println("executed trace");
                 }
@@ -818,8 +860,11 @@ int main(int argc, char **argv) {
 
             run_fwd();
 
-            float loss_float = get_loss_value(loss_tensor);
-            loss_tensor->backward();
+            auto loss = ttml::ops::nll_loss(output, target);
+            loss = gradient_accumulator_helper.scale(loss);
+
+            float loss_float = get_loss_value(loss);
+            loss->backward();
             ttml::autograd::ctx().reset_graph();
 
             auto samples = features->get_value().get_logical_shape()[0];

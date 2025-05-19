@@ -727,6 +727,9 @@ DeviceStorage replicate_to_mesh_buffer(
     const std::shared_ptr<distributed::MeshBuffer>& mesh_buffer,
     const TensorSpec& tensor_spec,
     ttnn::QueueId cq_id) {
+    // NOTE: This doesn't handle tiling correctly. The host_buffer is returned
+    // WITHOUT tile padding, so we get an obvious size mismatch. I think what
+    // I'll need to do is add the padding myself for the host buffer.
     auto data_to_write = host_buffer::get_as<T>(storage.buffer);
     const auto expected_packed_buffer_size_bytes = tensor_spec.compute_packed_buffer_size_bytes();
     const auto input_size_bytes = data_to_write.size() * sizeof(T);
@@ -854,8 +857,40 @@ void copy_to_mesh_tensor(const Tensor& host_tensor, Tensor& mesh_tensor, ttnn::Q
         host_tensor.get_tensor_spec().page_config(),
         mesh_tensor.get_tensor_spec().page_config());
 
+    const auto& host_storage_variant = host_tensor.get_storage();
+    const auto& mesh_device_storage = std::get<DeviceStorage>(mesh_tensor.get_storage());
+
+    std::visit(
+        tt::stl::overloaded{
+            [&mesh_device_storage](const HostStorage& storage) {
+                TT_FATAL(
+                    std::holds_alternative<ReplicateTensor>(mesh_device_storage.strategy),
+                    "Host tensor uses HostStorage, but mesh tensor is not configured for replication.");
+            },
+            [&mesh_device_storage](const MultiDeviceHostStorage& storage) {
+                // Check if mesh_tensor is sharded (e.g. ShardTensor2D or other sharding strategies)
+                TT_FATAL(
+                    !std::holds_alternative<ReplicateTensor>(mesh_device_storage.strategy),
+                    "Host tensor uses MultiDeviceHostStorage, but mesh tensor is configured for replication instead of "
+                    "sharding.");
+                // TODO: Add more specific checks for sharding compatibility if needed,
+                // e.g. comparing shard_mesh dimensions or other parameters.
+                // For now, we just check that it's not ReplicateTensor.
+                if (std::holds_alternative<ShardTensor2D>(storage.strategy) &&
+                    std::holds_alternative<ShardTensor2D>(mesh_device_storage.strategy)) {
+                    const auto& host_shard_strategy = std::get<ShardTensor2D>(storage.strategy);
+                    const auto& mesh_shard_strategy = std::get<ShardTensor2D>(mesh_device_storage.strategy);
+                    // A more specific check could be added here if necessary, for example:
+                    // TT_FATAL(host_shard_strategy.shard_mesh == mesh_shard_strategy.shard_mesh, "Mismatched shard_mesh
+                    // between host and device MultiDeviceHostStorage strategies");
+                }
+            },
+            [](const auto& s) { TT_THROW("Unexpected storage type {} for host_tensor", tt::stl::get_type_name(s)); }},
+        host_storage_variant);
+
     const auto& tensor_spec = mesh_tensor.get_tensor_spec();
-    auto mesh_buffer = std::get<DeviceStorage>(mesh_tensor.get_storage()).mesh_buffer;
+    fmt::println("In copy_to_mesh: mesh_tensor buffer size: {}", tensor_spec.compute_packed_buffer_size_bytes());
+    auto mesh_buffer = mesh_device_storage.mesh_buffer;
     auto* mesh_device = mesh_buffer->device();
 
     DeviceStorage mesh_storage = std::visit(

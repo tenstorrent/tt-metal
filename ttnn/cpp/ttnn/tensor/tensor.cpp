@@ -704,7 +704,11 @@ void write_tensor(const Tensor& host_tensor, Tensor device_tensor, QueueId cq_id
         "write_tensor only supports host_tensor to device_tensor data transfer");
 
     auto& device_storage = std::get<DeviceStorage>(device_tensor.get_storage());
+    fmt::println(
+        "In write_tensor, device_tensor buffer size: {}",
+        device_tensor.get_tensor_spec().compute_packed_buffer_size_bytes());
     if (auto mesh_buffer = device_storage.mesh_buffer; mesh_buffer != nullptr) {
+        fmt::println("calling copy_to_mesh_tensor_wrapper");
         tensor_impl::copy_to_mesh_tensor_wrapper(host_tensor, device_tensor, cq_id);
         return;
     }
