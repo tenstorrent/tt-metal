@@ -82,7 +82,7 @@ class VaeDecoder:
 
         # groupnorm
         self.norm_num_blocks = norm_num_blocks
-        self.norm_grid_core = ttnn.CoreGrid(y=4, x=8)
+        self.norm_grid_core = ttnn.CoreGrid(y=4, x=4)
         (
             self.norm_input_mask,
             self.norm_weights,

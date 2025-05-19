@@ -29,7 +29,7 @@ class ResnetBlock:
 
         # groupnorm 1
         self.norm1_num_blocks = norm1_num_blocks
-        self.norm1_grid_core = ttnn.CoreGrid(y=4, x=8) if in_channels == 128 else ttnn.CoreGrid(y=8, x=8)
+        self.norm1_grid_core = ttnn.CoreGrid(y=4, x=4) if in_channels == 128 else ttnn.CoreGrid(y=8, x=8)
         (
             self.norm1_input_mask,
             self.norm1_weights,
@@ -56,7 +56,7 @@ class ResnetBlock:
 
         # groupnorm 2
         self.norm2_num_blocks = norm2_num_blocks
-        self.norm2_grid_core = ttnn.CoreGrid(y=4, x=8) if out_channels == 128 else ttnn.CoreGrid(y=8, x=8)
+        self.norm2_grid_core = ttnn.CoreGrid(y=4, x=4) if out_channels == 128 else ttnn.CoreGrid(y=8, x=8)
         (
             self.norm2_input_mask,
             self.norm2_weights,
