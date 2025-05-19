@@ -19,7 +19,7 @@ from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_f
         torch.Size([1, 3, 320, 384]),
     ),
 )
-@pytest.mark.parametrize("decimal", [-3, 6, -1])
+@pytest.mark.parametrize("decimal", [-3, 6, -1, ""])
 @pytest.mark.parametrize(
     "dtypes",
     [
@@ -43,9 +43,12 @@ def test_round_new(shape, dtypes, decimal, device):
     )
     torch_input_tensor = ttnn.to_torch(input_tensor)
     golden_function = ttnn.get_golden_function(ttnn.round)
-    torch_output_tensor = golden_function(torch_input_tensor, decimal)
-
-    output_tensor = ttnn.round(input_tensor, decimal)
+    if decimal == "" or decimal is None:
+        torch_output_tensor = golden_function(torch_input_tensor)
+        output_tensor = ttnn.round(input_tensor)
+    else:
+        torch_output_tensor = golden_function(torch_input_tensor, decimals=decimal)
+        output_tensor = ttnn.round(input_tensor, decimals=decimal)
     output_tensor = ttnn.to_torch(output_tensor)
 
     assert ttnn.pearson_correlation_coefficient(torch_output_tensor, output_tensor) >= 0.999
