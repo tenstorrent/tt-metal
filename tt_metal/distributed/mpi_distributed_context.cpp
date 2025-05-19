@@ -183,6 +183,13 @@ void MPIContext::set_current_world(const ContextPtr& ctx) {
 
 MPIContext::MPIContext(MPI_Comm comm) : comm_(comm) {
     MPI_Comm_set_errhandler(comm_, MPI_ERRORS_RETURN);  // don't abort on error
+    MPI_CHECK(MPI_Comm_group(comm_, &group_));
+    MPI_CHECK(MPI_Comm_rank(comm_, &rank_));
+    MPI_CHECK(MPI_Comm_size(comm_, &size_));
+}
+
+MPIContext::MPIContext(MPI_Comm comm, MPI_Group group) : comm_(comm), group_(group) {
+    MPI_Comm_set_errhandler(comm_, MPI_ERRORS_RETURN);  // don't abort on error
     MPI_CHECK(MPI_Comm_rank(comm_, &rank_));
     MPI_CHECK(MPI_Comm_size(comm_, &size_));
 }
@@ -375,11 +382,17 @@ void MPIContext::reduce_scatter(
         recv_buf.size(),
         expected_recv_bytes);
 
-    const int recv_count = static_cast<int>(recv_elems);
+    const int recv_count = static_cast<int>(recv_elems);  // per-rank element count
     check_size_fits_int(recv_count);
 
-    MPI_CHECK(MPI_Reduce_scatter(
-        send_buf.data(), recv_buf.data(), &recv_count, dtype_to_mpi(dtype), reduce_to_mpi(op), comm_));
+    // --- fixed call -------------------------------------------------------
+    MPI_CHECK(MPI_Reduce_scatter_block(
+        send_buf.data(),      // sendbuf
+        recv_buf.data(),      // recvbuf
+        recv_count,           // elements per rank
+        dtype_to_mpi(dtype),  // element datatype
+        reduce_to_mpi(op),    // operation (SUM, MAX, …)
+        comm_));              // communicator
 }
 
 void MPIContext::scan(
@@ -404,7 +417,7 @@ void MPIContext::scan(
 /* ---- communicator management ------------------------------------------ */
 
 ContextPtr MPIContext::duplicate() const {
-    MPI_Comm dup;
+    MPI_Comm dup = MPI_COMM_NULL;
     MPI_CHECK(MPI_Comm_dup(comm_, &dup));
     return std::make_shared<MPIContext>(dup);
 }
@@ -415,24 +428,37 @@ ContextPtr MPIContext::split(Color color, Key key) const {
     return std::make_shared<MPIContext>(split_comm);
 }
 
-ContextPtr MPIContext::create_sub_context(tt::stl::Span<Rank> ranks) const {
-    MPI_Group world_grp, sub_grp;
-    MPI_CHECK(MPI_Comm_group(comm_, &world_grp));
+ContextPtr MPIContext::create_sub_context(tt::stl::Span<int> ranks) const {
+    MPI_Group sub_grp = MPI_GROUP_NULL;
+    MPI_Comm sub_comm = MPI_COMM_NULL;
 
-    std::vector<int> int_ranks(ranks.size());
-    std::transform(ranks.begin(), ranks.end(), int_ranks.begin(),
-                   [](Rank r) { return *r; });
-
-    MPI_CHECK(MPI_Group_incl(world_grp, static_cast<int>(int_ranks.size()), int_ranks.data(), &sub_grp));
-
-    MPI_Comm sub_comm;
-    MPI_CHECK(MPI_Comm_create_group(comm_, sub_grp, 0 /*tag*/, &sub_comm));
-
-    // TODO: unsafe free calls. now mpi can throw
-    MPI_CHECK(MPI_Group_free(&sub_grp));
-    MPI_CHECK(MPI_Group_free(&world_grp));
-
+    MPI_CHECK(MPI_Group_incl(group_, static_cast<int>(ranks.size()), ranks.data(), &sub_grp));
+    if (MPI_Comm_create_group(comm_, sub_grp, 0 /*tag*/, &sub_comm) != MPI_SUCCESS) {
+        // sub_comm is not valid, we are not in the group
+        MPI_Group_free(&sub_grp);
+        throw MPIDistributedException(rank(), MPI_ERR_GROUP, "MPI_Comm_create_group failed: not in the group");
+    }
+    if (sub_comm == MPI_COMM_NULL) {
+        // we are not in the group
+        MPI_Group_free(&sub_grp);
+        throw MPIDistributedException(rank(), MPI_ERR_GROUP, "MPI_Comm_create_group returned empty comm");
+    }
+    MPI_Group_free(&sub_grp);
     return std::make_shared<MPIContext>(sub_comm);
+}
+
+void MPIContext::translate_ranks_to_other_ctx(
+    tt::stl::Span<int> ranks, const ContextPtr& other_ctx, tt::stl::Span<int> translated_ranks) const {
+    TT_FATAL(
+        ranks.size() == translated_ranks.size(),
+        "translate_ranks_to_other_ctx: ranks size {} != translated_ranks size {}",
+        ranks.size(),
+        translated_ranks.size());
+    auto mpi_context = std::dynamic_pointer_cast<MPIContext>(other_ctx);
+    TT_FATAL(mpi_context != nullptr, "translate_ranks_to_other_ctx: other_ctx is not a MPIContext");
+
+    MPI_CHECK(MPI_Group_translate_ranks(
+        group_, static_cast<int>(ranks.size()), ranks.data(), mpi_context->group(), translated_ranks.data()));
 }
 
 void MPIContext::abort(int error_code) const { MPI_Abort(comm_, error_code); }
@@ -451,13 +477,16 @@ void MPIContext::revoke_and_shrink() {
     }
 
     MPI_Comm new_comm = MPI_COMM_NULL;
+    MPI_Group new_group = MPI_GROUP_NULL;
     MPI_CHECK(MPIX_Comm_shrink(comm_, &new_comm));
+    MPI_Comm_group(new_comm, &new_group);
 
     MPI_Comm_set_errhandler(new_comm, MPI_ERRORS_RETURN);
 
     // overall probably I don't neet MPI_CHECK, we are recovering here. If we cannot recover, we should abort
     // and not throw an exception.
-    int new_rank = 0, new_size = 0;
+    int new_rank = 0;
+    int new_size = 0;
     MPI_Comm_rank(new_comm, &new_rank);
     MPI_Comm_size(new_comm, &new_size);
 
@@ -466,9 +495,10 @@ void MPIContext::revoke_and_shrink() {
 
     if (old_comm != MPI_COMM_NULL && old_comm != new_comm) {
         MPI_Comm_free(&old_comm);
+        MPI_Group_free(&group_);
     }
-
     this->comm_ = new_comm;
+    this->group_ = new_group;
     this->rank_ = new_rank;
     this->size_ = new_size;
 }
@@ -486,6 +516,7 @@ MPIContext::~MPIContext() {
         return;  // MPI_Finalize() already called
     }
     if (comm_ != MPI_COMM_WORLD && comm_ != MPI_COMM_NULL) {
+        MPI_Group_free(&group_);
         MPI_Comm_free(&comm_);
     }
 }

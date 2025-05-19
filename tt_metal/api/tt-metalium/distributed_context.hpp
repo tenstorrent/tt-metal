@@ -219,8 +219,9 @@ public:
     //--- Communicator management -------------------------------------------
     [[nodiscard]] virtual ContextPtr duplicate() const = 0;
     [[nodiscard]] virtual ContextPtr split(Color color, Key key) const = 0;
-    [[nodiscard]] virtual ContextPtr create_sub_context(tt::stl::Span<Rank> ranks) const = 0;
-
+    [[nodiscard]] virtual ContextPtr create_sub_context(tt::stl::Span<int> ranks) const = 0;
+    virtual void translate_ranks_to_other_ctx(
+        tt::stl::Span<int> ranks, const ContextPtr& other_ctx, tt::stl::Span<int> translated_ranks) const = 0;
     //--- Error handling -----------------------------------------------------
     virtual void abort(int error_code) const = 0;
 

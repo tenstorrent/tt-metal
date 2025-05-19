@@ -9,9 +9,9 @@ This directory contains **all integration and fault‑tolerance tests** for the 
 | Sub‑folder                   | Purpose                                                                                                                                                                                                                  | Typical launcher                                       |
 | ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------ |
 | **common/**                  | Utility code shared by all tests.  Includes:<br>• **sync\_helpers.hpp** – rank‑synchronised GoogleTest wrappers<br>• tooling helpers and mock objects                                                                    | *Header‑only* (no launcher)                            |
-| **fault\_tolerance\_tests/** | Tests that *deliberately* kill ranks/hosts and validate recovery logic (ULFM, communicator shrink, respawn, device hot‑plug).<br><br>Each test is compiled into its own binary so it can be invoked in a fresh ` /opt/openmpi-v5.0.7-ulfm/bin/mpirun --with-ft ulfm `. | ` /opt/openmpi-v5.0.7-ulfm/bin/mpirun --with-ft ulfm  -np <N> ./ft_case_X`                           |
-| **multi\_hosts\_tests/**     | End‑to‑end tests that require **one process per host** and access to hardware devices (mesh, fabric, RDMA). They verify cross‑host barriers, collective latency, and multi‑device kernels.                               | ` /opt/openmpi-v5.0.7-ulfm/bin/mpirun --with-ft ulfm  --hostfile hosts.txt -ppn 1 ./multihost_suite` |
-| **single\_host\_mp\_tests/** | Fast checks that need **multiple ranks** but run on a single box (no devices). Used to validate the distributed context, serializers, span wrappers, etc.                                                                | ` /opt/openmpi-v5.0.7-ulfm/bin/mpirun --with-ft ulfm  -np 8 ./single_host_mp_tests`                     |
+| **fault\_tolerance\_tests/** | Tests that *deliberately* kill ranks/hosts and validate recovery logic (ULFM, communicator shrink, respawn, device hot‑plug).<br><br>Each test is compiled into its own binary so it can be invoked in a fresh ` mpirun-ulfm --with-ft ulfm `. | ` mpirun-ulfm --with-ft ulfm  -np <N> ./ft_case_X`                           |
+| **multi\_hosts\_tests/**     | End‑to‑end tests that require **one process per host** and access to hardware devices (mesh, fabric, RDMA). They verify cross‑host barriers, collective latency, and multi‑device kernels.                               | ` mpirun-ulfm --with-ft ulfm  --hostfile hosts.txt -ppn 1 ./multihost_suite` |
+| **single\_host\_mp\_tests/** | Fast checks that need **multiple ranks** but run on a single box (no devices). Used to validate the distributed context, serializers, span wrappers, etc.                                                                | ` mpirun-ulfm --with-ft ulfm  -np 8 ./single_host_mp_tests`                     |
 
 
 ---
@@ -35,13 +35,13 @@ Targets created:
 ### 1 · Single‑host, multi‑process
 
 ```bash
- /opt/openmpi-v5.0.7-ulfm/bin/mpirun --with-ft ulfm  -np 8 ./single_host_suite --gtest_output=xml:results_single.xml
+ mpirun-ulfm --with-ft ulfm  -np 8 ./single_host_suite --gtest_output=xml:results_single.xml
 ```
 
 ### 2 · Multi‑host functional
 
 ```bash
- /opt/openmpi-v5.0.7-ulfm/bin/mpirun --with-ft ulfm  --hostfile hosts.txt -ppn 1 ./multi_hosts_suite \
+ mpirun-ulfm --with-ft ulfm  --hostfile hosts.txt -ppn 1 ./multi_hosts_suite \
        --gtest_filter=DeviceMesh.*
 ```
 
@@ -52,8 +52,8 @@ Targets created:
 Each binary is launched **independently** so that a forced abort doesn’t kill the rest of the suite:
 
 ```bash
- /opt/openmpi-v5.0.7-ulfm/bin/mpirun --with-ft ulfm  -np 4 ./ft_suite --gtest_filter=FaultTolerance.comm_recover
- /opt/openmpi-v5.0.7-ulfm/bin/mpirun --with-ft ulfm  -np 8 ./ft_suite --gtest_filter=FaultTolerance.rank_restart
+ mpirun-ulfm --with-ft ulfm  -np 4 ./ft_suite --gtest_filter=FaultTolerance.comm_recover
+ mpirun-ulfm --with-ft ulfm  -np 8 ./ft_suite --gtest_filter=FaultTolerance.rank_restart
 ```
 
 Scripts in `fault_tolerance_tests/run_all.sh` automate the sequence and consolidate XML reports.
@@ -75,7 +75,7 @@ Scripts in `fault_tolerance_tests/run_all.sh` automate the sequence and consolid
 ---
 
 ## Troubleshooting
-1. If you run it manually please make sure to never use system mpi. Use  /opt/openmpi-v5.0.7-ulfm/bin/mpirun --with-ft ulfm.
+1. If you run it manually please make sure to never use system mpi. Use  mpirun-ulfm --with-ft ulfm.
 2. Don't forget to turn on ULFM (`--with-ft ulfm`)
 
 Questions or patches: open an issue or ping `@dmakoviichuk-tt`

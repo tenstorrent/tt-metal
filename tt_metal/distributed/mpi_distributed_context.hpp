@@ -96,20 +96,28 @@ public:
     void scan(
         tt::stl::Span<std::byte> send_buf, tt::stl::Span<std::byte> recv_buf, ReduceOp op, DType dtype) const override;
 
+    void translate_ranks_to_other_ctx(
+        tt::stl::Span<int> ranks, const ContextPtr& other_ctx, tt::stl::Span<int> translated_ranks) const override;
+
     /* ------------- communicator management ------------- */
     [[nodiscard]] ContextPtr duplicate() const override;
     [[nodiscard]] ContextPtr split(Color color, Key key) const override;
-    [[nodiscard]] ContextPtr create_sub_context(tt::stl::Span<Rank> ranks) const override;
+    [[nodiscard]] ContextPtr create_sub_context(tt::stl::Span<int> ranks) const override;
     void abort(int error_code) const override;
     void revoke_and_shrink() override;
     [[nodiscard]] virtual bool is_revoked() override;
+
+    /* ----------------- mpi constructors ---------------- */
     explicit MPIContext(MPI_Comm comm);
+    explicit MPIContext(MPI_Comm comm, MPI_Group group);
     const MPI_Comm& comm() const { return comm_; }
+    const MPI_Group& group() const { return group_; }
 
     static void set_current_world(const ContextPtr& ctx);
 
 private:
     MPI_Comm comm_{MPI_COMM_NULL};
+    MPI_Group group_{MPI_GROUP_NULL};
     int      rank_{0};
     int      size_{0};
 
