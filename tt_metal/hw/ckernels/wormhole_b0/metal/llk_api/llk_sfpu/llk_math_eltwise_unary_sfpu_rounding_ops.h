@@ -6,7 +6,6 @@
 
 #include "llk_math_eltwise_unary_sfpu_init.h"
 #include "llk_math_eltwise_unary_sfpu_params.h"
-#include "ckernel_sfpu_rounding_ops.h"
 
 namespace ckernel {
 
