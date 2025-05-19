@@ -274,7 +274,8 @@ static constexpr std::array<uint32_t, MAX_NUM_SENDER_CHANNELS> sender_channel_fr
     WorkerToFabricEdmSenderImpl<0>::sender_channel_0_free_slots_stream_id,
     sender_channel_1_free_slots_stream_id,
     sender_channel_2_free_slots_stream_id,
-    sender_channel_3_free_slots_stream_id};
+    sender_channel_3_free_slots_stream_id,
+    sender_channel_4_free_slots_stream_id};
 
 static constexpr std::array<uint32_t, NUM_ROUTER_CARDINAL_DIRECTIONS> receiver_channel_free_slots_stream_ids = {
     receiver_channel_0_free_slots_from_east_stream_id,
@@ -1026,7 +1027,7 @@ void run_fabric_edm_main_loop(
     while (!got_immediate_termination_signal(termination_signal_ptr)) {
         bool got_graceful_termination = got_graceful_termination_signal(termination_signal_ptr);
         if (got_graceful_termination) {
-            DPRINT << "EDM Graceful termination\n";
+            // DPRINT << "EDM Graceful termination\n";
             bool all_drained = all_channels_drained<
                 RECEIVER_NUM_BUFFERS,
                 NUM_RECEIVER_CHANNELS,
@@ -1579,7 +1580,7 @@ void kernel_main() {
         // Only bit 0 is set for 1D
         // upto 3 bits set for 2D. 0, 1, 2, 3 for East, West, North, South downstream connections.
         uint32_t has_downstream_edm = has_downstream_edm_vc0_buffer_connection & 0xF;
-        DPRINT << "\thas_downstream_edm: " << (uint32_t)has_downstream_edm << "\n";
+        // DPRINT << "\thas_downstream_edm: " << (uint32_t)has_downstream_edm << "\n";
         uint32_t edm_index = 0;
         while (has_downstream_edm) {
             if (has_downstream_edm & 0x1) {
@@ -1600,11 +1601,11 @@ void kernel_main() {
                     *reinterpret_cast<volatile uint32_t* const>(teardown_sem_address) = 0;
                 }
                 auto downstream_direction = edm_index;
-                DPRINT << "\t\tds dir: " << (uint32_t)downstream_direction << "\n";
-                DPRINT << "\t\ts_ch_slots_id[my_dir + 1]: "
-                       << (uint32_t)sender_channel_free_slots_stream_ids[my_direction + 1] << "\n";
-                DPRINT << "\t\tr_ch_slots_id[ds_dir]: "
-                       << (uint32_t)receiver_channel_free_slots_stream_ids[downstream_direction] << "\n";
+                // DPRINT << "\t\tds dir: " << (uint32_t)downstream_direction << "\n";
+                // DPRINT << "\t\ts_ch_slots_id[my_dir + 1]: "
+                //        << (uint32_t)sender_channel_free_slots_stream_ids[my_direction + 1] << "\n";
+                // DPRINT << "\t\tr_ch_slots_id[ds_dir]: "
+                //        << (uint32_t)receiver_channel_free_slots_stream_ids[downstream_direction] << "\n";
 
                 new (&downstream_edm_noc_interfaces[edm_index]) tt::tt_fabric::EdmToEdmSender<SENDER_NUM_BUFFERS>(
                     // persistent_mode -> hardcode to false for 1D because for 1D, EDM -> EDM
@@ -1816,6 +1817,7 @@ void kernel_main() {
     //        MAIN LOOP
     //////////////////////////////
     //////////////////////////////
+    DPRINT << "Main Loop my y|x " << (uint32_t)((my_y[0] << 6) | my_x[0]) << "\n";
     run_fabric_edm_main_loop<
         enable_packet_header_recording,
         enable_fabric_counters,

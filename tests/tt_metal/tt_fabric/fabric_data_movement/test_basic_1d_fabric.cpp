@@ -283,7 +283,8 @@ void RunTestUnicastRaw(BaseFabricFixture* fixture, uint32_t num_hops, RoutingDir
         num_hops};
 
     // append the EDM connection rt args
-    const auto sender_channel = topology == Topology::Mesh ? edm_direction : 0;
+    // Sender channel 0 is the dedicated worker channel
+    const auto sender_channel = 0;  // topology == Topology::Mesh ? edm_direction : 0;
     tt::tt_fabric::SenderWorkerAdapterSpec edm_connection = {
         .edm_noc_x = edm_eth_core.x,
         .edm_noc_y = edm_eth_core.y,
