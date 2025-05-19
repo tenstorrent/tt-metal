@@ -225,7 +225,7 @@ perf_targets = {
         "op_to_op_duration_relative_margin": 0.2,
         "dispatch_duration_relative_margin": 0.3,
     },
-    "BinaryDeviceOperation_0": {
+    "BinaryNgDeviceOperation_0": {
         "op_name": "sum_attn_out",
         "kernel_duration": 8376,
         "op_to_op": 1.0,
@@ -297,7 +297,7 @@ perf_targets = {
         "op_to_op_duration_relative_margin": 0.2,
         "dispatch_duration_relative_margin": 0.3,
     },
-    "BinaryDeviceOperation_1": {
+    "BinaryNgDeviceOperation_1": {
         "op_name": "binary_mul_ffn_1_3",
         "kernel_duration": 7327,
         "op_to_op": 1.0,
@@ -342,7 +342,7 @@ perf_targets = {
         "op_to_op_duration_relative_margin": 0.2,
         "dispatch_duration_relative_margin": 0.3,
     },
-    "BinaryDeviceOperation_2": {
+    "BinaryNgDeviceOperation_2": {
         "op_name": "binary_sum_mlp",
         "kernel_duration": 8590,
         "op_to_op": 1.0,
@@ -500,18 +500,19 @@ def is_collective_op(op_code):
 # If all looks good, update the expected_kernel_times_dict and expected_dispatch_times_dict with the new average values
 # If the op list changed (new ops, less ops, fused ops), then update mapping_op_code_to_name and give the new ops meaningful names
 # Run at least once again to verify the new expected values are correct and margins hold
+@pytest.mark.parametrize("seqlen", [4096, 128])
 def test_llama_TG_perf_device(
     reset_seeds,
 ):
     profiler = BenchmarkProfiler()
     benchmark_data = BenchmarkData()
-    step_name = "tg-llama-prefill-device-perf-noTrace"
+    step_name = f"tg-llama-prefill-device-perf-{seqlen}-noTrace"
     batch_size = 1
-    subdir = "tg-llama-prefill-device-perf-default"
+    subdir = f"tg-llama-prefill-device-perf-{seqlen}-noTrace"
     num_iterations = 1
     num_layers = 1
 
-    command = f"pytest models/demos/llama3_subdevices/tests/unit_tests/test_llama_decoder_prefill.py"
+    command = f"pytest models/demos/llama3_subdevices/tests/unit_tests/test_llama_decoder_prefill.py -k {seqlen}"
     cols = ["DEVICE FW", "DEVICE KERNEL", "DEVICE BRISC KERNEL"]
     profiler.start("run")
     profiler.start(step_name)
