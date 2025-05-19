@@ -271,7 +271,7 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
      */
     float one = 1.;
     uint32_t bf16_one_u32 = *reinterpret_cast<uint32_t*>(&one);
-    uint32_t bf16_scalar = get_bf16_pool_scalar(pool_type, kernel_size_h, kernel_size_w) << 16;
+    uint32_t bf16_scalar = get_bf16_pool_scalar(pool_type, kernel_size_h, kernel_size_w, divisor_override) << 16;
     uint32_t bf16_init_value = get_bf16_pool_init_value(pool_type);
 
     std::vector<uint32_t> reader0_ct_args = {
@@ -298,7 +298,7 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         in_scalar_cb_id,
         max_pool_partials_cb_id,
         in_one_cb_id,
-        pool_type != Pool2DType::AVG_POOL2D};
+        pool_type != Pool2DType::AVG_POOL2D || ceil_mode == false || divisor_override.has_value()};
 
     std::vector<uint32_t> reader1_ct_args = {
         out_nhw_per_core,
@@ -324,7 +324,7 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         in_scalar_cb_id,
         max_pool_partials_cb_id,
         in_one_cb_id,
-        pool_type != Pool2DType::AVG_POOL2D};
+        pool_type != Pool2DType::AVG_POOL2D || ceil_mode == false || divisor_override.has_value()};
 
     std::string reader_kernel_fname;
     if (is_large_kernel) {
@@ -374,7 +374,7 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         out_cb_id,
         max_pool_partials_cb_id,
         in_one_cb_id,
-        pool_type != Pool2DType::AVG_POOL2D};
+        pool_type != Pool2DType::AVG_POOL2D || ceil_mode == false || divisor_override.has_value()};
 
     auto compute_config = tt::tt_metal::ComputeConfig{
         .math_fidelity = MathFidelity::HiFi4,
@@ -417,6 +417,7 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
                     pool_type,
                     kernel_size_h,
                     kernel_size_w,
+                    divisor_override,
                     in_h,
                     in_w,
                     out_h,
@@ -427,7 +428,6 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
                     ceil_pad_w,
                     x,
                     y,
-                    divisor_override,
                     num_of_ele,
                     &sync_indices,
                     &scalar_values);
