@@ -40,8 +40,8 @@ void MAIN {
     constexpr uint32_t out_in0_num_subblocks = get_compile_time_arg_val(13);
     constexpr uint32_t out_in1_num_subblocks = get_compile_time_arg_val(14);
     constexpr uint32_t out_num_blocks = get_compile_time_arg_val(15);
-    constexpr uint32_t num_cores_per_batch = get_compile_time_arg_val(16);
-    constexpr uint32_t k_chunk_size = get_compile_time_arg_val(17);
+    // constexpr uint32_t num_cores_per_batch = get_compile_time_arg_val(16);
+    // constexpr uint32_t k_chunk_size = get_compile_time_arg_val(17);
     constexpr uint32_t num_cores_per_head = get_compile_time_arg_val(18);
     constexpr uint32_t num_heads_per_core = get_compile_time_arg_val(19);
     constexpr bool is_causal = get_compile_time_arg_val(20) == 1;
@@ -59,7 +59,7 @@ void MAIN {
     constexpr uint32_t cb_identity_scale_in = tt::CBIndex::c_5;
     constexpr uint32_t cb_m_in = tt::CBIndex::c_6;
     constexpr uint32_t cb_l_in = tt::CBIndex::c_7;
-    constexpr uint32_t cb_q_tile = tt::CBIndex::c_10;
+    constexpr uint32_t cb_q_rm = tt::CBIndex::c_10;
 
     constexpr uint32_t cb_qk_im = tt::CBIndex::c_24;
     constexpr uint32_t cb_out_im = tt::CBIndex::c_25;
@@ -134,16 +134,16 @@ void MAIN {
     }
 
     if constexpr (tilize_q) {
-        mm_init(cb_q_tile, cb_k_in, cb_out_final);
-        tilize_init(cb_q_in, q_chunk_tiles, cb_q_tile);
+        mm_init(cb_q_in, cb_k_in, cb_out_final);
+        tilize_init(cb_q_rm, q_chunk_tiles, cb_q_in);
+        cb_wait_front(cb_q_rm, q_chunk_tiles);
     } else {
         mm_init(cb_q_in, cb_k_in, cb_out_final);
         cb_wait_front(cb_q_in, q_chunk_tiles);
     }
-    cb_wait_front(cb_q_in, q_chunk_tiles);
 
     if constexpr (tilize_q) {
-        tilize_block(cb_q_in, q_chunk_tiles, cb_q_tile);
+        tilize_block(cb_q_rm, q_chunk_tiles, cb_q_in);
     }
 
 #ifdef DYNAMIC_CHUNK_SIZE
@@ -167,103 +167,53 @@ void MAIN {
 #endif
 
     for (uint32_t cur_head_work = 0; cur_head_work < num_heads_per_core; ++cur_head_work) {
-        if constexpr (tilize_q) {
-            flash_attention_loop<
-                // Compile-time dimension parameters
-                St,
-                DHt,
-                Sq_chunk_t,
-                out_chunk_tiles,
-                // QK matmul block parameters
-                qk_in0_block_w,
-                qk_num_blocks,
-                // Output matmul block parameters
-                out_subblock_w,
-                out_subblock_h,
-                out_in0_num_subblocks,
-                out_in1_num_subblocks,
-                // Attention parameters
-                is_causal,
-                use_attention_mask,
-                // Circular buffer indices
-                cb_q_tile,
-                cb_k_in,
-                cb_v_in,
-                cb_mask_in,
-                cb_scale_in,
-                cb_identity_scale_in,
-                cb_qk_im,
-                cb_out_im,
-                cb_out_accumulate_im,
-                cb_cur_max,
-                cb_prev_max,
-                cb_cur_sum,
-                cb_prev_sum,
-                cb_exp_max_diff,
-                cb_out_o,
-                cb_out_m,
-                cb_out_l>(
-                k_chunk_start,
-                k_chunk_end,
-                Sk_chunk_t_dynamic,
-                qk_subblock_h_dynamic,
-                qk_subblock_w_dynamic,
-                qk_in0_num_subblocks_dynamic,
-                qk_in1_num_subblocks_dynamic,
-                out_in0_block_w_dynamic,
-                out_num_blocks_dynamic,
-                qk_chunk_tiles_dynamic,
-                do_reduce,
-                apply_mask_at_last_chunk);
-        } else {
-            flash_attention_loop<
-                // Compile-time dimension parameters
-                St,
-                DHt,
-                Sq_chunk_t,
-                out_chunk_tiles,
-                // QK matmul block parameters
-                qk_in0_block_w,
-                qk_num_blocks,
-                // Output matmul block parameters
-                out_subblock_w,
-                out_subblock_h,
-                out_in0_num_subblocks,
-                out_in1_num_subblocks,
-                // Attention parameters
-                is_causal,
-                use_attention_mask,
-                // Circular buffer indices
-                cb_q_in,
-                cb_k_in,
-                cb_v_in,
-                cb_mask_in,
-                cb_scale_in,
-                cb_identity_scale_in,
-                cb_qk_im,
-                cb_out_im,
-                cb_out_accumulate_im,
-                cb_cur_max,
-                cb_prev_max,
-                cb_cur_sum,
-                cb_prev_sum,
-                cb_exp_max_diff,
-                cb_out_o,
-                cb_out_m,
-                cb_out_l>(
-                k_chunk_start,
-                k_chunk_end,
-                Sk_chunk_t_dynamic,
-                qk_subblock_h_dynamic,
-                qk_subblock_w_dynamic,
-                qk_in0_num_subblocks_dynamic,
-                qk_in1_num_subblocks_dynamic,
-                out_in0_block_w_dynamic,
-                out_num_blocks_dynamic,
-                qk_chunk_tiles_dynamic,
-                do_reduce,
-                apply_mask_at_last_chunk);
-        }
+        flash_attention_loop<
+            // Compile-time dimension parameters
+            St,
+            DHt,
+            Sq_chunk_t,
+            out_chunk_tiles,
+            // QK matmul block parameters
+            qk_in0_block_w,
+            qk_num_blocks,
+            // Output matmul block parameters
+            out_subblock_w,
+            out_subblock_h,
+            out_in0_num_subblocks,
+            out_in1_num_subblocks,
+            // Attention parameters
+            is_causal,
+            use_attention_mask,
+            // Circular buffer indices
+            cb_q_in,
+            cb_k_in,
+            cb_v_in,
+            cb_mask_in,
+            cb_scale_in,
+            cb_identity_scale_in,
+            cb_qk_im,
+            cb_out_im,
+            cb_out_accumulate_im,
+            cb_cur_max,
+            cb_prev_max,
+            cb_cur_sum,
+            cb_prev_sum,
+            cb_exp_max_diff,
+            cb_out_o,
+            cb_out_m,
+            cb_out_l>(
+            k_chunk_start,
+            k_chunk_end,
+            Sk_chunk_t_dynamic,
+            qk_subblock_h_dynamic,
+            qk_subblock_w_dynamic,
+            qk_in0_num_subblocks_dynamic,
+            qk_in1_num_subblocks_dynamic,
+            out_in0_block_w_dynamic,
+            out_num_blocks_dynamic,
+            qk_chunk_tiles_dynamic,
+            do_reduce,
+            apply_mask_at_last_chunk);
 
         // do reduction across intermediates from other cores if this is the reduction core
         if (do_reduce) {
