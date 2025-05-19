@@ -7,6 +7,7 @@
 #include <memory>
 
 #include "program/program_impl.hpp"
+#include "dispatch/worker_config_buffer.hpp"
 
 namespace tt::tt_metal {
 
