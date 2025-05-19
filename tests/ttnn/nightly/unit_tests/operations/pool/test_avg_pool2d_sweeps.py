@@ -53,7 +53,8 @@ parameters = {
         # [2, 512, 112, 32, 5, 5, 1, 1, 0, 0, False, False, None],  # hangs height
         # [2, 512, 112, 32, 2, 2, 1, 1, 0, 0, False, False, None],  # hangs height
         # [1, 512, 112, 32, 3, 3, 2, 2, 0, 0, False, False, None],  # hangs height
-        [1, 512, 112, 32, 3, 3, 2, 2, 0, 0, True, True, None],  # hangs height
+        [2, 32, 16, 16, 9, 9, 2, 2, 2, 2, True, True, 5],  # hangs height
+        # [1, 32, 16, 16, 9, 9, 2, 2, 2, 2, True, True, None],  # hangs height
     ],
     "failing_parameters": [
         # [batch_size, input_channels, input_height, input_width, kernel_height, kernel_width, stride_h, stride_w, pad_h, pad_w, ceil_mode, count_include_pad]
